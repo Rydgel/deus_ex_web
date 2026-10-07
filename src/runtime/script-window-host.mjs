@@ -73,13 +73,18 @@ import {createInputConsole} from './script-input-console.mjs';
 import {createConsoleCommands} from './script-console-command.mjs';
 import {rootTickNative,moveTabGroupNative} from './script-window-root-tick.mjs';
 import {dispatchWindowSoundNative,windowPlaySound} from './script-window-sound.mjs';
-import {createWindowActorRefDispatcher} from './script-window-actor-refs.mjs';
+import {createWindowActorRefDispatcher, addActorReference, removeActorReference, isActorReferenceValid} from './script-window-actor-refs.mjs';
 import {writeWindowSceneFrame} from './script-window-scene-frame.mjs';
 import {rootRenderViewport} from './script-root-render-viewport.mjs';
 import {setToggleNative} from './script-window-toggle-set.mjs';
 import * as Timers from './script-window-timers.mjs';
 import * as Input from './script-window-input.mjs';
 import * as TK from './script-window-typed-keys.mjs';
+import * as VP from './script-window-viewport.mjs';
+import {writeWindowSceneFrame as writeViewportFrame} from './script-window-scene-frame.mjs';
+import {gcDrawPattern as gcDrawPatternBody} from './script-gc-draw-pattern.mjs';
+import {gcSetTileColor as gcSetTileColorBody} from './script-gc-set-tile-color.mjs';
+import {f32Bits as viewportF32Bits} from './script-gc-draw-model.mjs';
 import * as Mouse from './script-window-mouse.mjs';
 import {rootVectorToCoordinates,windowVectorToCoordinates} from './script-window-projection.mjs';
 import {activateButtonNative} from './script-window-activate-button.mjs';
@@ -129,6 +134,7 @@ const FAMILIES = Object.freeze({
   'extension.largetextwindow': {vtable: LT.LARGE_TEXT.vtable},
   'extension.editwindow': {vtable: ED.EDIT.vtable},
   'extension.listwindow': {vtable: LIST.LIST.vtable},
+  'extension.viewportwindow': {vtable: VP.VIEWPORT.vtable},
 });
 
 export class WindowHostBoundaryError extends Error {
@@ -150,7 +156,7 @@ export function nativeWindowFamily(cls) {
 /** Classes whose every function/state the HUD tree may reach. */
 const HUD_CLASS_PATHS = Object.freeze([
   ['Extension', ['scalewindow','scalemanagerwindow','clipwindow','scrollareawindow','window', 'textwindow', 'buttonwindow', 'togglewindow', 'tilewindow', 'tabgroupwindow',
-    'radioboxwindow', 'textlogwindow', 'modalwindow', 'rootwindow', 'computerwindow', 'largetextwindow', 'editwindow', 'listwindow', 'gc', 'extensionobject']],
+    'radioboxwindow', 'textlogwindow', 'modalwindow', 'rootwindow', 'computerwindow', 'largetextwindow', 'editwindow', 'listwindow', 'viewportwindow', 'gc', 'extensionobject']],
   ['DeusEx', ['deusexrootwindow', 'deusexhud', 'hudbasewindow', 'hudsharedborderwindow', 'hudammodisplay',
     'hudhitdisplay', 'crosshair', 'hudobjectbelt', 'hudobjectslot', 'hudactiveitemsdisplay',
     'hudactiveitemsborderbase', 'hudactiveaugsborder', 'hudactiveitemsborder', 'hudactiveitembase',
@@ -603,6 +609,7 @@ export async function createWindowHost({runtime, assets, player, gameConfig = nu
       case 'extension.largetextwindow': return LT.constructLargeTextWindow(W, win, constructWindowPart);
       case 'extension.editwindow': return ED.constructEditWindow(W, win, constructWindowPart);
       case 'extension.listwindow': return LIST.constructListWindow(W, win, constructWindowPart);
+      case 'extension.viewportwindow': return VP.constructViewportWindow(W, win);   // 0x10018af0
       default: return boundary(`Window family ${family} has no recovered constructor`);
     }
   }
@@ -670,6 +677,7 @@ export async function createWindowHost({runtime, assets, player, gameConfig = nu
       case 'extension.largetextwindow': return initLargeText(win, parent);
       case 'extension.editwindow': return ED.initEditWindow(W, win, parent, editEnv);
       case 'extension.listwindow': return LIST.initListWindow(W, win, parent, listEnv);
+      case 'extension.viewportwindow': return VP.initViewportWindow(W, win, parent, viewportEnv);   // 0x10049f10
       default: return boundary(`Window family ${familyOf(win)} has no recovered Init`);
     }
   }
@@ -701,7 +709,8 @@ export async function createWindowHost({runtime, assets, player, gameConfig = nu
   // ------------------------------------------------------------------
   const is = (win, ...keys) => keys.includes(familyOf(win));
   const V = {
-    convertVectorToCoordinates:(win,vector)=>is(win,'extension.rootwindow')?rootVectorToCoordinates(W,win,vector):windowVectorToCoordinates(W,win,vector),
+    convertVectorToCoordinates:(win,vector)=>is(win,'extension.rootwindow')?rootVectorToCoordinates(W,win,vector)
+      :is(win,'extension.viewportwindow')?VP.viewportVectorToCoordinates(W,win,vector):windowVectorToCoordinates(W,win,vector),
     childAdded: (win, child) => processScript(win, 'ChildAdded', [child]),            // 0x100034c0
     childRemoved(win, child) {                                                       // 0x100034e0 / 0x10042480
       if(is(win,'extension.scalemanagerwindow'))return S.managerChildRemoved(W,win,child,processScript);
@@ -847,6 +856,7 @@ export async function createWindowHost({runtime, assets, player, gameConfig = nu
         case 'extension.largetextwindow': return LT.largeTextDraw(W, win, gc);
         case 'extension.editwindow': return ED.editDraw(W, win, gc, editEnv);
         case 'extension.listwindow': return LIST.listDraw(W, win, gc, listEnv);        // 0x10033350
+        case 'extension.viewportwindow': return VP.viewportDraw(W, win, gc, viewportEnv);   // 0x1004a770
         case 'extension.scalewindow': return scaleDraw(W, win, gc);                     // 0x1003fb10 (no script DrawWindow)
         default: return processScript(win, 'DrawWindow', [gc]);                         // 0x10003bf0
       }
@@ -854,7 +864,8 @@ export async function createWindowHost({runtime, assets, player, gameConfig = nu
     scaleAttributesChanged:(win,...args)=>is(win,'extension.scalemanagerwindow')?SC.managerScaleAttributes(W,win,...args):processScript(win,'ScaleAttributesChanged',args,{result:false}),
     // XWindow::ClipAttributesChanged 0x10003f00 / ScrollArea 0x10043b50.
     clipAttributesChanged:(win,...args)=>is(win,'extension.scrollareawindow')?SC.scrollClipAttributes(W,win,...args):processScript(win,'ClipAttributesChanged',args,{result:false}),
-    postDraw: (win, gc) => processScript(win, 'PostDrawWindow', [gc]),                  // 0x10003c80
+    postDraw: (win, gc) => is(win, 'extension.viewportwindow') ? VP.viewportPostDraw(W, win, gc, viewportEnv)   // 0x1004af20
+      : processScript(win, 'PostDrawWindow', [gc]),                                    // 0x10003c80
     styleChanged: win => processScript(win, 'StyleChanged', []),                        // 0x10003d10
     mouseGrabLost: () => undefined,                                                     // 0x10003be0
     toggleChanged(win, button, toggle) {
@@ -1119,6 +1130,92 @@ export async function createWindowHost({runtime, assets, player, gameConfig = nu
     isFocusWindow: win => { const root = T.getRootWindow(W, win); return Boolean(root && W.ptr(root, T.ROOT.focus) === win); },
     windowDraw: (win, gc) => processScript(win, 'DrawWindow', [gc]),                  // XWindow::Draw 0x10003bf0
   };
+  // ------------------------------------------------------------------
+  // ViewportWindow (script-window-viewport.mjs, docs/script-window-viewport.md).
+  // Play's renderer stands behind GetRenderer: CreateMasterFrame allocates a
+  // heap FSceneNode image whose consumed fields ComputeRenderSize fills from
+  // the frame's camera and the player's FovAngle (the scene-frame
+  // translation), ClearZ marks the pass, DrawWorld queues a 'viewport' draw
+  // command in window order (the page draws the world from that camera into
+  // the frame's rectangle), FinishMasterFrame frees the image.
+  // ------------------------------------------------------------------
+  const playRenderer = {name: 'PlayRenderer'};
+  const viewportFrames = new Map();
+  const isDeletedActor = actor => Boolean(runtime.readNamed(actor, 'bDeleteMe'));
+  const viewportViews = (player, edit) => {
+    const views = [...runtime.readNamed(player, 'AdditionalViews')];
+    const result = edit(views);
+    runtime.writeNamed(player, 'AdditionalViews', views);
+    return result;
+  };
+  const viewportEnv = {
+    windowInit: (win, parent) => W.initWindow(win, parent),
+    windowDraw: (win, gc) => processScript(win, 'DrawWindow', [gc]),                  // XWindow::Draw 0x10003bf0
+    windowPostDraw: (win, gc) => processScript(win, 'PostDrawWindow', [gc]),          // XWindow::PostDraw 0x10003c80
+    getRootWindow: win => T.getRootWindow(W, win),
+    getPlayerPawn: win => { const root = T.getRootWindow(W, win); return root ? W.ptr(root, T.ROOT.parentPawn) : null; },
+    // XWindow AddActorRef 0x1004fe20 / RemoveActorRef 0x1004fea0 / IsActorValid 0x1004ff20.
+    addActorRef(win, actor) { const pawn = viewportEnv.getPlayerPawn(win); if (pawn) addActorReference(actorRefs.tableFor(pawn), actor, isDeletedActor); },
+    removeActorRef(win, actor) { const pawn = viewportEnv.getPlayerPawn(win); if (pawn) removeActorReference(actorRefs.tableFor(pawn), actor, isDeletedActor); },
+    isActorValid(win, actor) { const pawn = viewportEnv.getPlayerPawn(win); return pawn ? isActorReferenceValid(actorRefs.tableFor(pawn), actor, isDeletedActor) : false; },
+    actor: {
+      location: actor => runtime.readNamed(actor, 'Location').map(Math.fround),
+      rotation: actor => runtime.readNamed(actor, 'Rotation').map(v => v | 0),
+      viewRotation: actor => runtime.readNamed(actor, 'ViewRotation').map(v => v | 0),
+      eyeHeight: actor => Math.fround(runtime.readNamed(actor, 'EyeHeight')),
+      isPawn: actor => isA(actor, 'engine.pawn'),
+      isPlayerPawn: actor => isA(actor, 'engine.playerpawn'),
+      hidden: actor => runtime.readNamed(actor, 'bHidden') ? 1 : 0,
+      setHidden: (actor, value) => runtime.writeNamed(actor, 'bHidden', Boolean(value)),
+      behindView: actor => runtime.readNamed(actor, 'bBehindView') ? 1 : 0,
+      setBehindView: (actor, value) => runtime.writeNamed(actor, 'bBehindView', Boolean(value)),
+      fovBits: actor => f32BitsOf(runtime.readNamed(actor, 'FovAngle')),
+      setFovBits: (actor, value) => runtime.writeNamed(actor, 'FovAngle', bitsToF32(value)),
+      addAdditionalView: (player, actor) => viewportViews(player, views => VP.addAdditionalView(views, actor)),
+      removeAdditionalView: (player, actor) => viewportViews(player, views => VP.removeAdditionalView(views, actor)),
+    },
+    render: {
+      getRenderer: win => viewportEnv.getPlayerPawn(win) ? playRenderer : null,
+      createMasterFrame(_renderer, _viewport, location, rotation) {
+        const frame = {name: 'ViewportSceneNode'};
+        heap.allocate(frame, 0x300);
+        viewportFrames.set(frame, {location: [...location], rotation: [...rotation], clearZ: false});
+        return frame;
+      },
+      // FSceneNode::ComputeRenderSize reads Viewport->Actor->FovAngle, the
+      // window's fov while Draw holds it there.
+      computeRenderSize(frame) {
+        const camera = viewportFrames.get(frame), viewer = runtime.readNamed(runtime.readNamed(player, 'Player'), 'Actor') ?? player;
+        const width = W.i32(frame, 0xa8), height = W.i32(frame, 0xac);
+        camera.fov = Math.fround(runtime.readNamed(viewer, 'FovAngle'));
+        if (width > 0 && height > 0)
+          writeViewportFrame(W, frame, {location: camera.location, rotation: camera.rotation, width, height, fov: camera.fov});
+      },
+      clearZ(_viewport, frame) { viewportFrames.get(frame).clearZ = true; },
+      // URender::DrawWorld from the frame: the origin is bHidden now unless
+      // bShowActor, the player bBehindView unless it shows its weapons.
+      drawWorld(_renderer, frame, {origin}) {
+        const camera = viewportFrames.get(frame), viewer = runtime.readNamed(runtime.readNamed(player, 'Player'), 'Actor') ?? player;
+        drawCommands.push({kind: 'viewport', x: W.i32(frame, 0xb0), y: W.i32(frame, 0xb4), width: W.i32(frame, 0xa8), height: W.i32(frame, 0xac),
+          location: camera.location, rotation: camera.rotation, fov: camera.fov, clearZ: camera.clearZ,
+          hidden: origin && runtime.readNamed(origin, 'bHidden') ? [origin.name] : [],
+          behindView: Boolean(runtime.readNamed(viewer, 'bBehindView'))});
+      },
+      finishMasterFrame() {
+        for (const frame of viewportFrames.keys()) heap.free(frame);
+        viewportFrames.clear();
+      },
+    },
+    processScript: (win, event, args) => processScript(win, event, args),
+    gc: {
+      pushGC: gc => W.gc.push(gc),                                                   // XGC::PushGC 0x100278d0
+      setStyle: (gc, style) => W.gc.setStyle(gc, style),                             // 0x10027170
+      setTileColor: (gc, color) => gcSetTileColorBody(gc, color, W.gc.services),     // 0x100274f0
+      drawPattern: (gc, x, y, w, h, ox, oy, texture) =>                              // 0x10028a60
+        gcDrawPatternBody(gc, ...[x, y, w, h, ox, oy].map(viewportF32Bits), texture, W.gc.services),
+      popGC: gc => W.gc.pop(gc, -1),                                                 // 0x100279f0
+    },
+  };
   // XLargeTextWindow::SetText 0x1002d6b0 / AppendText 0x1002d730 and
   // XEditWindow::SetText 0x1001e260 / AppendText 0x1001e310: the TextWindow
   // exec bodies call these through vtable +0x11c / +0x120.
@@ -1255,6 +1352,9 @@ export async function createWindowHost({runtime, assets, player, gameConfig = nu
     'extension.largetextwindow': {members: win => LT.cleanUpLargeTextWindow(W, win, textCleanUp), destructor: win => LT.destroyLargeTextMembers(W, win)},
     // XListWindow::CleanUp 0x1002ead0 / ~XListWindow 0x10015de0.
     'extension.listwindow': {members: win => LIST.cleanUpListWindow(listEnv.L(win)), destructor: win => LIST.destroyListMembers(listEnv.L(win))},
+    // XViewportWindow::CleanUp 0x1004a070: SetViewportActor(NULL, TRUE, TRUE),
+    // then XWindow::CleanUp; ~XViewportWindow 0x10018a60 has no members.
+    'extension.viewportwindow': {members: win => VP.setViewportActor(W, win, null, 1, 1, viewportEnv)},
     // XEditWindow::CleanUp 0x1001d0b0 (undo records, then XLargeTextWindow's)
     // / ~XEditWindow 0x10014510 (the undo TArray, then ~XLargeTextWindow).
     'extension.editwindow': {
@@ -1391,6 +1491,18 @@ export async function createWindowHost({runtime, assets, player, gameConfig = nu
       const sound=dispatchWindowSoundNative(W,call);if(sound.handled)return sound;
       const reference=actorRefs(call);if(reference.handled)return reference;
       const command=inputConsole.playerConsoleCommand(call,consoleCommands);if(command.handled)return command;
+      // ViewportWindow 1940-1943 (the bodies that reach actor references and
+      // the player's AdditionalViews); the leaf setters are host natives.
+      if(call.index>=1940&&call.index<=1943){
+        const arg=(i,fallback)=>i<call.argumentCount?(refValue(call.evaluateArgument(i))??fallback):fallback;
+        const win=call.receiver,vec=v=>Array.isArray(v)?v.map(Math.fround):['x','y','z'].map(k=>Math.fround(v?.[`core.object.vector.${k}`]??0));
+        const rot=r=>Array.isArray(r)?r.map(v=>v|0):['pitch','yaw','roll'].map(k=>(r?.[`core.object.rotator.${k}`]??0)|0);
+        if(call.index===1940)VP.setViewportActor(W,win,arg(0,null),arg(1,true)?1:0,arg(2,true)?1:0,viewportEnv);   // exec 0x1004b380
+        else if(call.index===1941)VP.setViewportLocation(W,win,vec(arg(0,null)),arg(1,true)?1:0,viewportEnv);    // exec 0x1004b440
+        else if(call.index===1942)VP.setWatchActor(W,win,arg(0,null),arg(1,true)?1:0,viewportEnv);               // exec 0x1004b510
+        else VP.setViewportRotation(W,win,rot(arg(0,null)),viewportEnv);                                        // exec 0x1004b5a0
+        return {handled:true,value:undefined};
+      }
       if(call.index>=1720&&call.index<=1812){
         const list=LIST.dispatchListWindowNative(W,call,listEnv,refValue);if(list.handled)return list;
       }
