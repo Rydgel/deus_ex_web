@@ -167,3 +167,91 @@ negative; the translation throws), a count the wedge collapse never reaches
 (the original loops forever; the translation throws), subnormal or
 overflowing intermediates (the translation keeps the x87's wide exponent in
 doubles, untested).
+
+## Play
+
+Both mesh paths draw the LOD; `?meshLod=off` draws every mesh at full detail
+(main.mjs → sim-host `meshLod` → actor-mesh-sim `lod`).
+
+**Selection.** Per drawn binding, after Render.dll's admission and the
+OccludeBsp main set, `src/viewer/actor-mesh-lod.mjs` runs `selectLodMesh`
+with the master frame's Frame->Coords and FX (the same FSceneNode words
+OccludeBsp runs on, `sim-session.mjs` visibility), the player's FovAngle and
+its measured tangent float, the actor's Location and DrawScale (the
+mesh_reads block when it has them) and LODBias, and URender's shipped
+settings (`setLodSettings` changes them as MLOD/MLMODE/MLFIX would; only
+validation calls it). The requested count joins the pose in deciding a new
+GetFrame; GetFrame returns the count the rest uses.
+
+**CPU path** (`?gpuMesh=0`, and any binding off the GPU path): GetFrame's
+output stays unmorphed (a later frame's GetFrame or LOD reads it again); the
+morph runs on a copy, the kernel's `lod` facade resolves the corners and the
+lighting runs over the reduced faces (a dropped face becomes a zero-area
+`PF_Invisible` face, which adds nothing to the normals and is never drawn).
+The frame record's `lod` carries the resolved corners and wedge dwords; the
+page draws each corner at its resolved vertex with its U/V bytes
+(actor-mesh-draw.mjs). A dropped face collapses onto its group's first
+admitted corner (zero area, bounds unchanged); a group with no admitted face
+is hidden on both sides.
+
+**GPU path** (the default): the plan carries each channel's count and fill
+start, the record's `lodParams` the post-frame scalars (`lodMorphScalars`:
+count, start, flags, the 24-bit inverse), and the GPU passes do the rest
+(the morph, the corners, the normals, lighting and draw over the resolved
+corners; [GPU mesh](gpu-mesh.md#distance-lod)).
+
+**What stays different from the original:**
+
+* *Space of the morph.* Play's GetFrame runs with identity coords (world
+  space) and the lighting transforms to camera space as a separate stage at
+  24 bits (render-pass-precision.md "lighting camera transform"); the
+  original's GetFrame composes Frame->Coords into its matrix, so its morph
+  and lighting see camera-space floats. Counts, flags, start, alphas,
+  admitted faces, resolved corners and U/V bytes are the original's; the
+  morphed coordinates round in world space. Doing it in camera space would
+  need GetFrame's publication with the camera matrix for every drawn actor
+  whenever the view moves (on the CPU shadow too) and a draw path that takes
+  camera-space positions, per mirror frame as well; this is the existing
+  host-stage item, left open.
+* Mirror frames reuse the main frame's selection, pose and lighting (the
+  original runs DrawLodMesh per frame with that frame's coords).
+* The first-person weapon is not selected: its overlay frame has no LOD
+  inputs in Play; at its depth the original's ratio keeps it at full detail
+  (not measured).
+* GetFrame runs when the pose or the requested count changes, not every
+  frame (an existing Play rule); the morph and corners follow the detail
+  every frame it changes.
+* The particle and wire/orthographic branches are not ported.
+
+**Checks.** `node scripts/validate-lodmesh-lod-play.mjs [--map M] [--query
+gpuMesh=0]` (worker mode): from the start, four directions and twelve far
+actors, lod-probe.mjs reports each drawn binding's inputs and results; the
+same inputs through the original ranges must give the same detail bits,
+count, flags, start, admitted faces and vertices, and the page must draw
+them (the CPU geometry's corners, or the GPU corner pass's dwords). The GPU
+passes are compared with the CPU path by `validate-gpu-mesh` (below and
+[GPU mesh](gpu-mesh.md#distance-lod)).
+
+| Run (worker mode, Linux host) | Result |
+| --- | --- |
+| Island, GPU path | PASS: 108 drawn rows over 17 views, 13 meshes; 59 with the LOD flag and morphing, 8 below ModelVerts (down to 11); 102 GPU corner-pass comparisons |
+| Island, `gpuMesh=0` | PASS: the same 108 rows; 105 comparisons of the page's CPU geometry |
+| BatteryPark, GPU path | PASS: 99 drawn rows over 17 views, 8 meshes, all at full detail. The view writes did not change the drawn set (the boat, Anna, JC and near props in every view), which suggests the start's arrival camera holds the view; not investigated |
+| `validate-gpu-mesh` (Training, Island, `?sim=inline`) | PASS: on Island 293,583 final-pose components and 555,756 corner dwords equal the CPU path, colours 0 bytes off, visibility 0 mismatches; 201 LOD captures, all morphing, 96 with dropped faces (half of 16 far views at MLOD 2) |
+
+**Cost** (interleaved A/B on the Linux host, AMD Radeon 780M, Island's
+start idle at 1440×960, worker mode, GPU path, `?meshLod=off` against the
+default, medians; `.cache/ab-lod.mjs` over `profile-play-browser.mjs`):
+
+| | LOD off | LOD on |
+| --- | ---: | ---: |
+| page actors phase (4 pairs) | 0.43 ms | 0.46 ms |
+| worker actors phase (4 pairs) | 3.92 ms | 3.97 ms |
+| GPU per frame (3 pairs, `--gpu`) | 2.02 ms | 2.05 ms |
+| frame interval | 16.7 ms | 16.7 ms (vsync) |
+
+The first GPU version walked the per-vertex LOD lists whenever the LOD flag
+held and cost 2.00 → 2.86 ms per frame; the vertex and corner passes now
+take the exact lists unless the count is below ModelVerts (a morph alone
+keeps every corner's own vertex).
+

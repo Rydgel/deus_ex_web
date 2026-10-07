@@ -79,8 +79,9 @@ Frame cost and the 120 fps target are tracked in
   [conversation](docs/script-instructor-conversation.md),
   [conversation camera](docs/conversation-camera.md)).
 - Every visible actor mesh draws with original lighting
-  ([NPC mesh preview](docs/npc-mesh-preview.md), [mesh lighting](docs/mesh-lighting.md)).
-  Distance LOD remains unfinished.
+  ([NPC mesh preview](docs/npc-mesh-preview.md), [mesh lighting](docs/mesh-lighting.md))
+  and DrawLodMesh's distance LOD ([LOD](docs/script-lodmesh-lod.md); `?meshLod=off`
+  draws full detail).
 - Unit/format tests, real-data validation commands, and browser regression
   tests. Optional local native-DLL comparisons check translated routines against
   the original DLLs under an emulator ([native exec diff](docs/native-exec-diff.md),
@@ -127,7 +128,9 @@ keeps the dated record.
 - **Meshes:** original LOD-mesh lighting for NPCs, props and the first-person
   weapon, with every LightType ([mesh lighting](docs/mesh-lighting.md)), with
   GetFrame and lighting on the GPU, bit-exact with the CPU kernels
-  ([GPU mesh](docs/gpu-mesh.md)).
+  ([GPU mesh](docs/gpu-mesh.md)); DrawLodMesh's distance LOD (count
+  selection, vertex morph, collapsed faces and interpolated UVs, bit-equal to
+  Render.dll at the pass's 24 bits) on both paths ([LOD](docs/script-lodmesh-lod.md)).
 - **Visibility:** Render.dll's OccludeBsp, master frame, dynamics, moving
   brush tracker and mirror/sky child frames in the Rust core, bit-exact; Play
   draws each frame's polygons, mirrors, sky and fog surfaces from its own
@@ -158,11 +161,11 @@ keeps the dated record.
   sync ([lip sync](docs/lip-sync.md)).
 
 **Still open in Stage 4:** UnrealScript inside the render events at the
-pass's 24-bit precision; distance LOD in Play (Render.dll's selection, morph
-and reduced faces are translated bit-exact, [mesh LOD](docs/script-lodmesh-lod.md),
-not yet drawn); the security computers' camera views (the ViewportWindow
-family runs, its world pass is not drawn, [computer terminals](docs/script-window-computer-terminals.md));
-per-frame fog maps in mirror and sky frames; the darkest-pixel rounding and
+pass's 24-bit precision; the LOD morph's world-space rounding and per-mirror
+selection ([LOD](docs/script-lodmesh-lod.md#play)); the security computers'
+camera views (the ViewportWindow family runs, its world pass is not drawn,
+[computer terminals](docs/script-window-computer-terminals.md)); per-frame fog
+maps in mirror and sky frames; the darkest-pixel rounding and
 live scenes left by [visual acceptance](docs/visual-acceptance.md) (26 maps
 compared with the original's own frames at matched cameras and level time).
 

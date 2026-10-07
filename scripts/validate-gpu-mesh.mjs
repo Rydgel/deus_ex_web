@@ -8,7 +8,11 @@
  *   - colours: the kernel `light` run with the SetupForActor result the GPU
  *     used this frame, on the exact CPU pose;
  *   - environment: meshVertexNormalsInto and writeMeshEnvironmentUV;
- *   - visibility: three.js's own sphere test on the exact CPU spheres.
+ *   - visibility: three.js's own sphere test on the exact CPU spheres;
+ *   - the distance LOD (docs/gpu-mesh.md "Distance LOD"): for an actor the
+ *     LOD reduces, the final (morphed) pose and the resolved corner dwords
+ *     against actor-mesh-lod.mjs on the exact output, and the colours and
+ *     drawn test over its reduced faces.
  * On Island the walk then continues into MeetPaul: the player's mesh is
  * admitted mid-animation when the conversation turns on bBehindView, and
  * every frame after that is compared, so a slot whose first GPU pass a
@@ -57,8 +61,8 @@ const TOLERANCE={ulp:1,tweenUlp:2,byte:1,edgeOn:2**-20,uv:2**-20};
 const hook=`\nwindow.__deusValidation={get npc(){return npcPreview;},get gpu(){return gpuMesh;},
   get lighting(){return meshLighting;},get camera(){return camera;},get game(){return game;},THREE};\n`;
 
-async function capture(page,{frames,device,tolerance,admission}) {
-  return page.evaluate(async({frames,device,tolerance,admission})=>{
+async function capture(page,{frames,device,tolerance,admission,lodViews}) {
+  return page.evaluate(async({frames,device,tolerance,admission,lodViews})=>{
     const {accumulateFaceNormal}=await import('/src/runtime/mesh-lighting.mjs');
     const {meshVertexNormalsInto,writeMeshEnvironmentUV}=await import('/src/runtime/mesh-environment.mjs');
     const {certificateStats}=await import('/src/viewer/gpu-mesh-bounds.mjs');
@@ -69,7 +73,9 @@ async function capture(page,{frames,device,tolerance,admission}) {
     const report={captures:0,actors:0,vertices:0,components:0,exact:0,maxUlp:0,maxUlpTween:0,worstPosition:null,
       corners:0,maxByte:0,byteHistogram:[0,0,0],worstColor:null,drawnDisagreements:0,maxEdgeOn:0,excludedCorners:0,
       environmentVertices:0,maxNormalUlp:0,maxUV:0,groups:0,certified:0,ambiguous:0,visibilityMismatches:0,
-      coverage:{translucent:0,modulated:0,masked:0,environment:0,unlit:0,mixedUnlit:0,blend:0,tween:0,movingLights:0},fallbacks:{},errors:[]};
+      finalComponents:0,finalExact:0,maxFinalUlp:0,worstFinal:null,cornerWedges:0,wedgeMismatches:0,worstWedge:null,
+      coverage:{translucent:0,modulated:0,masked:0,environment:0,unlit:0,mixedUnlit:0,blend:0,tween:0,movingLights:0,lod:0,lodMorph:0,lodReduced:0},
+      fallbacks:{},errors:[]};
     const frustum=new THREE.Frustum(),matrix=new THREE.Matrix4();
     let focus=null;
     function compare(){
@@ -92,16 +98,29 @@ async function capture(page,{frames,device,tolerance,admission}) {
         if(focus&&actor.actor===focus){report.admission.captures++;if(tween)report.admission.tweenCaptures++;}
         // Visibility first: the exact spheres come from the CPU shadow.
         const output=state.exactOutput(),cpu=new Float32Array(output.buffer,output.byteOffset,V*3);
+        // The CPU LOD on the exact output: drawn positions, resolved corners
+        // and the lighting's reduced faces (null at full detail).
+        const lod=state.lodDrawn(),drawnPoints=lod?Float32Array.from(lod.positions):cpu;
+        const litFaces=lod?lod.lighting.faces:faces,litWords=lod?lod.lighting.faceWords:faceWords;
+        if(lod){report.coverage.lod++;if(lod.state.morph)report.coverage.lodMorph++;if(lod.resolved?.some(v=>v<0))report.coverage.lodReduced++;
+          const key=actor.summary.actor;report.lodActors??={};
+          report.lodActors[key]={count:lod.state.count,start:lod.state.start,morph:lod.state.morph,
+            dropped:lod.resolved?lod.resolved.filter((v,i)=>i%3===0&&v<0).length:0,faces:F};}
         for(const group of groups.values()){
           report.groups++;
-          const exact=frustum.intersectsSphere(group.exact.boundingSphere);
+          const exact=!group.lodEmpty&&frustum.intersectsSphere(group.exact.boundingSphere);
           if(exact!==group.mainVisible){report.visibilityMismatches++;(report.badVisibility??=[]).push({capture:report.captures,
             actor:actor.summary.actor,exact,main:group.mainVisible,box:[...group.viewBox].map(x=>+x.toFixed(2)),
             sphere:[...group.exact.boundingSphere.center.toArray().map(x=>+x.toFixed(2)),+group.exact.boundingSphere.radius.toFixed(2)]});}
         }
-        // Positions.
+        // Positions: the vertices this frame's GetFrame published (the main
+        // channel's count, which no blend slot exceeds; with the LOD a lower
+        // count leaves the rest as they were, unspecified in the original
+        // and never drawn or read).
+        const published=plan.channels.find(op=>op.channel<0)?.count??V;
+        report.unpublished=(report.unpublished??0)+(V-published);
         const gpuPose=device==='cpu'?null:gpu.read('pose',handle.vbase,V);
-        for(let i=0;i<V;i++)for(let k=0;k<3;k++){
+        for(let i=0;i<published;i++)for(let k=0;k<3;k++){
           const c=cpu[i*3+k],g=device==='cpu'?c:gpuPose[i*4+k];
           report.components++;
           if(Object.is(c,g)||c===g){report.exact++;continue;}
@@ -114,6 +133,25 @@ async function capture(page,{frames,device,tolerance,admission}) {
             report.worstPosition={actor:actor.summary.actor,vertex:i,axis:k,cpu:c,gpu:g,ulp:error,tween};
         }
         report.vertices+=V;
+        // The final pose (the morph pass) and the resolved corner dwords.
+        const gpuFinal=device==='cpu'?null:gpu.read('final',handle.vbase,V);
+        for(let i=0;i<published;i++)for(let k=0;k<3;k++){
+          const c=drawnPoints[i*3+k],g=device==='cpu'?c:gpuFinal[i*4+k];
+          report.finalComponents++;
+          if(Object.is(c,g)||c===g){report.finalExact++;continue;}
+          const error=Math.abs(g-c)/ulp(c);
+          report.maxFinalUlp=Math.max(report.maxFinalUlp,error);
+          if(!report.worstFinal||error>report.worstFinal.ulp)report.worstFinal={actor:actor.summary.actor,vertex:i,axis:k,cpu:c,gpu:g,ulp:error,lod:Boolean(lod)};
+        }
+        const gpuWedges=device==='cpu'?null:gpu.read('cornerWedges',handle.cbase,F*3);
+        for(let face=0;face<F;face++)for(let k=0;k<3;k++){
+          const wedge=faces[face].wedges[k];
+          const expected=(lod?.resolved?(lod.resolved[face*3]<0?0xffffffff:lod.scratch[wedge]):state.wedges[wedge])>>>0;
+          const got=device==='cpu'?expected:gpuWedges[face*3+k]>>>0;
+          report.cornerWedges++;
+          if(got!==expected){report.wedgeMismatches++;
+            report.worstWedge??={actor:actor.summary.actor,face,corner:k,expected:expected.toString(16),got:got.toString(16),lod:lod?.state??null};}
+        }
         // Coverage of face flags and actor state.
         const flags=faces.map(face=>face.flags);
         if(flags.some(x=>x&4))report.coverage.translucent++;
@@ -125,16 +163,18 @@ async function capture(page,{frames,device,tolerance,admission}) {
         // Environment normals and UVs (pose-dependent, independent of relight).
         if(state.hasEnvironment){
           report.coverage.environment++;
-          const indices=Uint32Array.from(faces.flatMap(face=>face.vertices)),normals=new Float32Array(V*3);
-          meshVertexNormalsInto(cpu,indices,normals);
+          const indices=Uint32Array.from(faces.flatMap((face,i)=>!lod?.resolved?face.vertices
+            :lod.resolved[i*3]>=0?[lod.resolved[i*3],lod.resolved[i*3+1],lod.resolved[i*3+2]]:[]));
+          const normals=new Float32Array(V*3);
+          meshVertexNormalsInto(drawnPoints,indices,normals);
           const gpuNormals=device==='cpu'?null:gpu.read('environment',handle.vbase,V);
           const uvs=device==='cpu'?null:gpu.environmentUVs(handle,cameraPosition);
           const uv=[0,0],relative=[0,0,0],normal=[0,0,0];
-          for(let i=0;i<V;i++){
+          for(let i=0;i<published;i++){
             for(let k=0;k<3;k++){
               const c=normals[i*3+k],g=device==='cpu'?c:gpuNormals[i*4+k];
               if(c!==g)report.maxNormalUlp=Math.max(report.maxNormalUlp,Math.abs(g-c)/ulp(c));
-              relative[k]=f32(cpu[i*3+k]-cameraPosition[k]);normal[k]=c;
+              relative[k]=f32(drawnPoints[i*3+k]-cameraPosition[k]);normal[k]=c;
             }
             writeMeshEnvironmentUV(uv,0,relative,normal);
             for(let k=0;k<2;k++){const g=device==='cpu'?uv[k]:uvs[i*4+k];report.maxUV=Math.max(report.maxUV,Math.abs(g-uv[k]));}
@@ -146,36 +186,36 @@ async function capture(page,{frames,device,tolerance,admission}) {
         const {setup,flags:actorFlags,unlit}=state.setup;
         if(setup.lights.some(light=>!light.light.values?.bStatic))report.coverage.movingLights++;
         const frame=lighting.frame;
-        const reference=npc.kernel.light({points:cpu,faces:faceWords,origin:frame.origin,axes:frame.axes,
+        const reference=npc.kernel.light({points:drawnPoints,faces:litWords,origin:frame.origin,axes:frame.axes,
           ambient:setup.ambient,scaleGlow:setup.scaleGlow,unlit,lights:setup.lights,flags:actorFlags});
         let deviceColors;
         if(device==='cpu'){
           const kernel=lighting.kernel;lighting.kernel=null;
-          try{deviceColors=lighting.lightMesh(actor.actor,Float32Array.from(cpu),faces,faceWords,state.setup).colors;}
+          try{deviceColors=lighting.lightMesh(actor.actor,Float32Array.from(drawnPoints),litFaces,litWords,state.setup).colors;}
           finally{lighting.kernel=kernel;}
         } else deviceColors=gpu.read('corners',handle.cbase,F*3);
         // The CPU's drawn test (kernel face loop, JavaScript form).
-        const cameraPoints=Array.from({length:V},(_,i)=>lighting.toCamera([cpu[i*3],cpu[i*3+1],cpu[i*3+2]]));
+        const cameraPoints=Array.from({length:V},(_,i)=>lighting.toCamera([drawnPoints[i*3],drawnPoints[i*3+1],drawnPoints[i*3+2]]));
         const accumulated=cameraPoints.map(()=>[0,0,0]),drawn=new Uint8Array(F);
         const gpuFaces=device==='cpu'?null:gpu.read('faces',handle.fbase,F);
         const excludedVertices=new Set();
         for(let face=0;face<F;face++){
-          const [a,b,c]=faces[face].vertices,p0=cameraPoints[a];
+          const [a,b,c]=litFaces[face].vertices,p0=cameraPoints[a];
           const unit=accumulateFaceNormal(p0,cameraPoints[b],cameraPoints[c],accumulated[a],accumulated[b],accumulated[c]);
           const dot=unit[0]*p0[0]+unit[1]*p0[1]+unit[2]*p0[2];
-          drawn[face]=!(faces[face].flags&1)&&(faces[face].flags&0x100||dot<0)?1:0;
+          drawn[face]=!(litFaces[face].flags&1)&&(litFaces[face].flags&0x100||dot<0)?1:0;
           if(device==='cpu')continue;
           const gpuDrawn=gpuFaces[face*4+3]>0.5?1:0;
           if(gpuDrawn!==drawn[face]){
             const relative=Math.abs(dot)/Math.hypot(...p0);
             report.drawnDisagreements++;report.maxEdgeOn=Math.max(report.maxEdgeOn,relative);
-            for(const vertex of faces[face].vertices)excludedVertices.add(vertex);
+            for(const vertex of litFaces[face].vertices)excludedVertices.add(vertex);
           }
         }
         for(let face=0;face<F;face++){
           if(!drawn[face])continue;
           for(let k=0;k<3;k++){
-            if(excludedVertices.has(faces[face].vertices[k])){report.excludedCorners++;continue;}
+            if(excludedVertices.has(litFaces[face].vertices[k])){report.excludedCorners++;continue;}
             report.corners++;
             for(let channel=0;channel<3;channel++){
               const expected=Math.round(reference[face*9+k*3+channel]*255);
@@ -189,6 +229,38 @@ async function capture(page,{frames,device,tolerance,admission}) {
           }
         }
       }
+    }
+    if(lodViews){
+      // The distance LOD: look at the farthest actor meshes (beyond 1,500
+      // units) in turn and compare a few frames each, so actors the LOD
+      // reduces, morphs and empties are compared.
+      const game=v.game,runtime=game.doors.scriptRuntime.runtime,player=game.player.collisionActor;
+      const eye=game.view().location,units=r=>Math.round(r*32768/Math.PI);
+      // The walk resumes from here afterwards.
+      const home=[...runtime.readNamed(player,'Location')],homeRotation=[...runtime.readNamed(player,'ViewRotation')];
+      const far=v.npc.actors.map(actor=>{let at=null;try{at=actor.location;}catch{}return {actor,at};})
+        .filter(entry=>entry.at).map(entry=>({...entry,distance:Math.hypot(...entry.at.map((x,i)=>x-eye[i]))}))
+        .filter(entry=>entry.distance>1500).sort((a,b)=>b.distance-a.distance);
+      const picks=[];
+      for(let k=0;k<lodViews&&far.length;k++)picks.push(far[Math.floor(k*far.length/lodViews)]);
+      report.lodViews=picks.length;
+      // Half the views with URender's MLOD at 2 (8 times the shipped 0.25):
+      // the counts drop far enough to drop faces and empty groups.
+      const settings=[null,{shapeLOD:2}];
+      for(const [n,{at}] of picks.entries()){
+        if(settings[n%2])v.npc.setLodSettings(settings[n%2]);else v.npc.resetLodSettings();
+        const now=game.view().location,d=at.map((x,i)=>x-now[i]);
+        runtime.writeNamed(player,'ViewRotation',[(units(Math.atan2(d[2],Math.hypot(d[0],d[1])))+65536)%65536,
+          (units(Math.atan2(d[1],d[0]))+65536)%65536,0]);
+        for(let frame=0;frame<24;frame++){
+          await new Promise(requestAnimationFrame);
+          const error=window.deusExViewer.framePhases(false).runtimeError;
+          if(error)throw new Error(`runtime error: ${error}`);
+          if(frame>=20){try{compare();}catch(error){report.errors.push(error.stack??String(error));}}
+        }
+      }
+      v.npc.resetLodSettings();
+      runtime.farMoveActor(player,home,0,1);runtime.writeNamed(player,'ViewRotation',homeRotation);
     }
     for(let frame=0,captured=0;captured<frames.length;frame++){
       await new Promise(requestAnimationFrame);
@@ -216,7 +288,7 @@ async function capture(page,{frames,device,tolerance,admission}) {
     // Decisions Play made during the captured run (not the checks above).
     report.certified=certificateStats.certified-certifiedBefore;report.ambiguous=certificateStats.ambiguous-ambiguousBefore;
     return report;
-  },{frames,device,tolerance,admission});
+  },{frames,device,tolerance,admission,lodViews});
 }
 
 const browser=await chromium.launch({args:[`--use-angle=${angle}`]});
@@ -243,7 +315,8 @@ try {
     await page.waitForTimeout(1500);
     await page.keyboard.down('KeyW');
     const admission=map==='01_NYC_UNATCOIsland'?{frames:90,maxFrames:20000}:null;
-    const report=await capture(page,{frames,device,tolerance:TOLERANCE,admission});
+    const report=await capture(page,{frames,device,tolerance:TOLERANCE,admission,
+      lodViews:map==='01_NYC_UNATCOIsland'?Number(option('lod-views',16)):0});
     await page.keyboard.up('KeyW');
     report.pageErrors=errors;
     const checks=[
@@ -253,6 +326,8 @@ try {
       ['edge-on drawn disagreements',report.maxEdgeOn<TOLERANCE.edgeOn],
       ['environment UV',report.maxUV<=TOLERANCE.uv],
       ['visibility',report.visibilityMismatches===0],
+      ['final pose ulp (morph pass)',report.maxFinalUlp<=TOLERANCE.tweenUlp],
+      ['resolved corner dwords',report.wedgeMismatches===0],
       ['no errors',!report.errors.length&&!errors.length],
       ['compared actors',report.actors>0&&report.corners>0],
       ...(admission?[['player admitted in behind view and compared while tweening',report.admission?.tweenCaptures>0]]:[]),
@@ -269,7 +344,7 @@ try {
 } finally {await browser.close();await server?.close();}
 // Face flags, animation modes and moving lights must all be exercised by the
 // maps compared in this run.
-const required=['translucent','modulated','masked','environment','mixedUnlit','blend','tween','movingLights'];
+const required=['translucent','modulated','masked','environment','mixedUnlit','blend','tween','movingLights','lod','lodMorph','lodReduced'];
 const missing=required.filter(name=>!(coverage[name]>0));
 console.log(JSON.stringify({coverage,missing}));
 // Coverage is a property of the full run over both maps (Training alone has

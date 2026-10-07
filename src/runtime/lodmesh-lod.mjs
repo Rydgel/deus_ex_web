@@ -146,31 +146,40 @@ export function selectLodMesh(topology, renderer, actor, coords, {fx, tanFactor}
  * float)` (FTransTexture +50). Returns the final `active`, `morph` and
  * `start` (+a4, 0 unless morphing began). */
 export function morphLodMesh(topology, selection, count, {vertex, setVertex, setAlpha}) {
+  const scalars = lodMorphScalars(topology, selection, count), {start, inverse} = scalars;
+  if (scalars.morph) {
+    const collapse = topology.collapsePoints;
+    for (let i = count - 1; i > start; i--) {
+      let alpha = r24((i - start) * inverse);
+      if (!(1 > alpha)) alpha = 1;
+      const target = collapse[i];
+      if (!target) { setAlpha(i, 0); continue; }
+      const t = vertex(target), v = vertex(i);
+      // X keeps its difference and product on the stack; Y and Z store
+      // them. At 24 bits these give the same values for floats.
+      const dx = r24(t[0] - v[0]), dy = f(r24(t[1] - v[1])), dz = f(r24(t[2] - v[2]));
+      const px = r24(dx * alpha), py = f(r24(dy * alpha)), pz = f(r24(dz * alpha));
+      setVertex(i, [f(r24(px + v[0])), f(r24(py + v[1])), f(r24(pz + v[2]))]);
+      setAlpha(i, f(alpha));
+    }
+  }
+  return {active: scalars.active, morph: scalars.morph, start, count};
+}
+
+/** The post-frame range's scalars without its vertex loop (the GPU mesh
+ * path runs the loop): the final flags, the start and the 24-bit inverse
+ * 1/(detail·LODMorph) the loop multiplies by (0 without a morph). */
+export function lodMorphScalars(topology, selection, count) {
   const N = topology.modelVerts, detail = selection.detail;
-  let {active, morph} = selection, start = 0;
+  let {active, morph} = selection, start = 0, inverse = 0;
   if (morph) {
     const lodMorph = f(topology.lodMorph);
     start = fistp(f(r24(r24(1 - lodMorph) * detail)));
     if (start >= count) morph = false;
-    else {
-      const inverse = r24(1 / r24(detail * lodMorph)), collapse = topology.collapsePoints;
-      for (let i = count - 1; i > start; i--) {
-        let alpha = r24((i - start) * inverse);
-        if (!(1 > alpha)) alpha = 1;
-        const target = collapse[i];
-        if (!target) { setAlpha(i, 0); continue; }
-        const t = vertex(target), v = vertex(i);
-        // X keeps its difference and product on the stack; Y and Z store
-        // them. At 24 bits these give the same values for floats.
-        const dx = r24(t[0] - v[0]), dy = f(r24(t[1] - v[1])), dz = f(r24(t[2] - v[2]));
-        const px = r24(dx * alpha), py = f(r24(dy * alpha)), pz = f(r24(dz * alpha));
-        setVertex(i, [f(r24(px + v[0])), f(r24(py + v[1])), f(r24(pz + v[2]))]);
-        setAlpha(i, f(alpha));
-      }
-    }
+    else inverse = r24(1 / r24(detail * lodMorph));
   }
   if (!morph && count >= N) active = false;
-  return {active, morph, start, count};
+  return {active, morph, start, count, inverse};
 }
 
 /** The face loop's corner selection. With `state.active` (0x10b0fc6f..

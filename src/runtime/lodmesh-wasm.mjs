@@ -144,6 +144,9 @@ function createLodFacade({work,current,lodSelect,uploadLodMesh,releaseLodMesh,lo
   };
   const lod={
     handleOf,
+    /** WORK's word and float views for `count` words (valid until the next
+     * kernel call that may grow memory). */
+    words(count){const views=work(count);return {words:views.words,floats:views.floats};},
     release(topology){const handle=handles.get(topology.collapsePoints);if(handle!==undefined){releaseLodMesh(handle);handles.delete(topology.collapsePoints);}},
     select(topology,renderer,actor,coords,{fx,tanFactor}){
       const words=work(38).words;

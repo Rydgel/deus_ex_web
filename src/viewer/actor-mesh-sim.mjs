@@ -22,6 +22,8 @@ import {meshFaceGroups,resolveMeshSkin} from './actor-mesh-skins.mjs';
 import {POLY} from '../unreal/geometry.mjs';
 import {TRAINING_NPC_IDENTITIES} from '../runtime/training-npc-identities.mjs';
 import {SETUP,setupSequence} from '../runtime/bsp-occlusion.mjs';
+import {createMeshLod,lodFrame} from './actor-mesh-lod.mjs';
+import {lodMorphScalars,RENDER_LOD_SETTINGS} from '../runtime/lodmesh-lod.mjs';
 
 // A binding's block of render.rs mesh_reads words (u32 indices).
 const MB={STATUS:0,MESH:1,STYLE:2,SCALEGLOW:3,LOCATION:4,PREPIVOT:7,DRAWSCALE:10,ANIMACTOR:11,POSE:12,LAST:29,LAST_VALID:46,
@@ -69,10 +71,35 @@ export function copyPositions(output,positions,indices){
   }
 }
 
+/** A draw group's corner vertices under the LOD (`resolved`: three vertices
+ * per mesh face, -1 for a face above the count), in the group's corner order
+ * (faces' corners 0, 2, 1). A face the LOD drops collapses to the group's
+ * first admitted corner, so it draws nothing and leaves the bounds alone;
+ * `group.lodEmpty` marks a group with no admitted face (it is not drawn).
+ * The page (actor-mesh-draw.mjs) builds the same corners. */
+export function lodCornerIndices(groupFaces,indices,resolved,group){
+  const out=group.lodIndices??=new Int32Array(indices.length);
+  let fill=-1;
+  for(const face of groupFaces)if(resolved[face*3]>=0){fill=resolved[face*3];break;}
+  group.lodEmpty=fill<0;
+  if(fill<0)fill=indices[0];
+  for(let n=0;n<groupFaces.length;n++){
+    const face=groupFaces[n]*3;
+    out[n*3]=resolved[face]>=0?resolved[face]:fill;
+    out[n*3+1]=resolved[face]>=0?resolved[face+2]:fill;
+    out[n*3+2]=resolved[face]>=0?resolved[face+1]:fill;
+  }
+  return out;
+}
+
+const countLevel=(level,count)=>{let n=0;for(const value of level)if(value<=count)n++;return n;};
+const countAdmitted=resolved=>{let n=0;for(let i=0;i<resolved.length;i+=3)if(resolved[i]>=0)n++;return n;};
+const countVertices=resolved=>{const seen=new Set();for(const v of resolved)if(v>=0)seen.add(v);return seen.size;};
+
 /** The plan as the page's gpu-mesh.mjs setPose reads it. */
 const plainPlan=plan=>({matrix:plan.matrix.map(row=>[...row]),origin:[...plan.origin],
   channels:plan.channels.map(op=>({channel:op.channel,tween:Boolean(op.tween),first:op.first,second:op.second,
-    blend:Boolean(op.blend),alpha:op.alpha,count:op.count,fill:Boolean(op.fill)}))});
+    blend:Boolean(op.blend),alpha:op.alpha,count:op.count,fill:op.fill?[...op.fill]:null}))});
 /** SetupForActor's result as gpu-mesh.mjs setLighting reads it. */
 const plainLighting=prepared=>({flags:prepared.flags,ambient:[...prepared.setup.ambient],scaleGlow:prepared.setup.scaleGlow,
   unlit:[...prepared.unlit],lights:prepared.setup.lights.map(light=>({location:[...light.location],rradius:light.rradius,
@@ -82,10 +109,10 @@ const plainLighting=prepared=>({flags:prepared.flags,ambient:[...prepared.setup.
  * GPU mesh layout (null: the CPU path); `onRecord` is not used here, the
  * caller collects update()'s records. */
 export async function createMeshBinding(runtime,actor,{id,originalObjectIndex,kernel=null,drawActor=false,visible=null,
-  childVisible=null,lighting=null,layout=null,reads=false,textures,meshKey=null}) {
+  childVisible=null,lighting=null,layout=null,reads=false,textures,meshKey=null,lod=true}) {
   const own=fieldAccessors(runtime,actor,['bHidden','bDeleteMe','Location','PrePivot','DrawScale','Mesh','Style',
     'ScaleGlow','bAnimByOwner','Owner','bParticles','Rotation','AnimSequence','AnimFrame','BlendAnimSequence',
-    'BlendAnimFrame','Name','bOnlyOwnerSee','bOwnerNoSee','DrawType']);
+    'BlendAnimFrame','Name','bOnlyOwnerSee','bOwnerNoSee','DrawType','LODBias']);
   const read=(object,name)=>object===actor&&Object.hasOwn(own,name)?own[name]():runtime.readNamed(object,name);
   const actorName=read(actor,'Name');
   const meshReference=read(actor,'Mesh');
@@ -101,6 +128,26 @@ export async function createMeshBinding(runtime,actor,{id,originalObjectIndex,ke
   const faceWords=new Uint32Array(faces.length*4);
   faces.forEach((face,i)=>faceWords.set([...face.vertices,face.flags>>>0],i*4));
   const hasEnvironment=faces.some(face=>face.flags&POLY.Environment);
+  // DrawLodMesh's distance LOD (actor-mesh-lod.mjs); null without it.
+  const meshLod=lod?createMeshLod(payload,faces,faceWords,{kernel}):null;
+  const fullCount=payload.frameVertexCount-(payload.scalarBits.get(0x184)|0);
+  // The last LOD inputs and results: the requested and returned counts, the
+  // detail bits, and the drawn state (drawn positions, resolved corners).
+  let lastRequested=fullCount,lastReturned=fullCount,lastDetail='off',lodDrawn=null,lastLod=null;
+  // The GPU path's last LOD state: the selection, its post-frame scalars
+  // while the LOD flag holds, and the parameters the page last received.
+  let lastSelection=null,gpuLodScalars=null,lastLodKey='full';
+  /** The LOD's post-frame state for GetFrame's last output (null: full
+   * resolution and unmorphed). */
+  function lodAfter(selection){
+    lodDrawn=selection?meshLod.after(selection,lastReturned,frame.output):null;
+    if(lodDrawn&&!lodDrawn.state.active&&!lodDrawn.state.morph)lodDrawn=null;
+  }
+  /** What the page needs to draw the LOD state: the resolved corners and
+   * wedge dwords (null at full resolution). */
+  const lodRecord=()=>({resolved:lodDrawn?.resolved?Int32Array.from(lodDrawn.resolved):null,
+    scratch:lodDrawn?.scratch?Uint32Array.from(lodDrawn.scratch):null,count:lastReturned,
+    state:lodDrawn?{...lodDrawn.state}:null});
   const key=meshKey??meshReference.key;
   // With a GPU layout the first GetFrame is planned now (the pose read at
   // admission) and the slot is allocated when the binding is complete, in
@@ -147,6 +194,7 @@ export async function createMeshBinding(runtime,actor,{id,originalObjectIndex,ke
     if(gpuHandle)layout.release(gpuHandle);
     if(block){arena.release(block,4*MB_WORDS);block=0;}
     cache.entries.clear();
+    meshLod?.dispose();
   };
   const pose=()=>{
     const animationActor=own.bAnimByOwner()?(own.Owner()??actor):actor;
@@ -162,11 +210,13 @@ export async function createMeshBinding(runtime,actor,{id,originalObjectIndex,ke
     :[read(animationActor,'AnimSequence'),...read(animationActor,'BlendAnimSequence')];
   const sameNames=(a,b)=>a.length===b.length&&a.every((value,index)=>Object.is(value,b[index]));
   // CPU path: the posed output as plain floats for the page.
-  const posedCopy=()=>new Float32Array(frame.output.buffer,frame.output.byteOffset,frame.output.byteLength/4).slice();
+  // With the LOD the drawn positions may be a morphed copy of the output.
+  const drawnPoints=()=>lodDrawn?.positions??new Float32Array(frame.output.buffer,frame.output.byteOffset,frame.output.byteLength/4);
+  const posedCopy=()=>drawnPoints().slice();
   let lastSetup=null,lastLitFrame=-1;
   function relight(prepared){
-    const points=new Float32Array(frame.output.buffer,frame.output.byteOffset,frame.output.byteLength/4);
-    const result=lighting.lightMesh(actor,points,faces,faceWords,prepared);
+    const points=drawnPoints(),topology=lodDrawn?.lighting??{faces,faceWords};
+    const result=lighting.lightMesh(actor,points,topology.faces,topology.faceWords,prepared);
     if(!result)return null;
     return {colors:result.colors.slice(),summary:{lights:result.setup.lights.length,flags:result.flags}};
   }
@@ -194,18 +244,24 @@ export async function createMeshBinding(runtime,actor,{id,originalObjectIndex,ke
       catch(error){gpuFallback=error.message;materializeLodMeshFrame(lastPlan);lastPlan=null;}
     }
     if(gpuHandle)for(const entry of groups.values()){
-      entry.vertices=[...new Set(entry.indices)].sort((a,b)=>a-b);
+      // With the LOD a corner may draw any vertex of its wedge collapse
+      // chain, morphed toward its collapse target: the boxes cover them all.
+      entry.vertices=meshLod?meshLod.closure(entry.faces):[...new Set(entry.indices)].sort((a,b)=>a-b);
       entry.boxes=keyframeBoxes(payload,entry.vertices);
       entry.channelBoxes=Array.from({length:5},()=>new Float64Array(6).fill(NaN));
       entry.viewBox=new Float64Array(6).fill(NaN);
       entry.exact={boundingBox:null,boundingSphere:null};
       entry.mainVisible=true;
     }
-    // CPU path: positions and three.js bounds of each group's corners.
+    // CPU path: positions and three.js bounds of each group's corners
+    // (with the LOD, the resolved corners: lodCornerIndices).
     const cpuBounds=()=>{
+      const points=drawnPoints(),bytes=new Uint8Array(points.buffer,points.byteOffset,points.byteLength);
       for(const group of groups.values()){
         group.positions??=new Float32Array(group.indices.length*3);
-        copyPositions(frame.output,group.positions,group.indices);
+        const indices=lodDrawn?.resolved?lodCornerIndices(group.faces,group.indices,lodDrawn.resolved,group):group.indices;
+        if(!lodDrawn?.resolved)group.lodEmpty=false;
+        copyPositions(bytes,group.positions,indices);
         setMeshBounds(group.bounds,group.positions);
         group.sphere.copy(group.bounds.boundingSphere);
       }
@@ -220,13 +276,19 @@ export async function createMeshBinding(runtime,actor,{id,originalObjectIndex,ke
     const scratchBounds=new Map();
     let spheresChanged=false;
     /** The exact CPU pose of the current plan and three.js's exact spheres. */
+    // The plan whose CPU pose frame.output holds (materialized once; a LOD
+    // change alone invalidates only the spheres).
+    let materializedPlan=null;
     function exactSpheres(){
       if(exactValid)return;
-      materializeLodMeshFrame(lastPlan);
+      if(materializedPlan!==lastPlan){materializeLodMeshFrame(lastPlan);materializedPlan=lastPlan;}
+      // The LOD's drawn corners, as the CPU path draws them.
+      const drawn=gpuLodScalars?meshLod.after(lastSelection,lastReturned,frame.output):null;
+      const points=drawn?new Uint8Array(drawn.positions.buffer,drawn.positions.byteOffset,drawn.positions.byteLength):frame.output;
       for(const group of groups.values()){
         let positions=scratchBounds.get(group);
         if(!positions)scratchBounds.set(group,positions=new Float32Array(group.indices.length*3));
-        copyPositions(frame.output,positions,group.indices);
+        copyPositions(points,positions,drawn?.resolved?lodCornerIndices(group.faces,group.indices,drawn.resolved,group):group.indices);
         setMeshBounds(group.exact,positions);
         // Transparent sorting uses the exact centre when it is known.
         group.sphere.copy(group.exact.boundingSphere);
@@ -249,7 +311,8 @@ export async function createMeshBinding(runtime,actor,{id,originalObjectIndex,ke
     }
     function decideGroups(frustum,assign){
       const whole=certifyFrustum(frustum,unionBox);
-      for(const group of groups.values())assign(group,whole>=0?whole===1:groupVisible(group,frustum));
+      // A group the LOD empties draws nothing.
+      for(const group of groups.values())assign(group,!group.lodEmpty&&(whole>=0?whole===1:groupVisible(group,frustum)));
     }
     function groupVisible(group,frustum){
       const certain=certifyFrustum(frustum,group.viewBox);
@@ -263,11 +326,13 @@ export async function createMeshBinding(runtime,actor,{id,originalObjectIndex,ke
     function toCpu(reason){
       if(mode!=='gpu')return;
       mode='cpu';gpuFallback=reason;summary.path=mode;summary.gpuFallback=reason;toCpuReason=reason;
-      if(lastPlan){materializeLodMeshFrame(lastPlan);lastPlan=null;}
+      if(lastPlan&&materializedPlan!==lastPlan)materializeLodMeshFrame(lastPlan);
+      lastPlan=null;
+      if(meshLod)lodAfter(gpuLodScalars?lastSelection:null);
       cpuBounds();
       layout.release(gpuHandle);gpuHandle=null;
     }
-    function planGpu(){
+    function planGpu(vertexCount=fullCount){
       // A slot's plans take effect when its GPU pass runs. Until the first
       // one has run, the actor has not been drawn and the GPU holds none of
       // its cache poses; a new plan would overwrite that first one, and a
@@ -275,7 +340,8 @@ export async function createMeshBinding(runtime,actor,{id,originalObjectIndex,ke
       // GetFrame happens when the actor is first drawn, so the cache
       // restarts: this plan is the first.
       if(layout.frame<firstPassFrame)for(const key of [...cache.entries.keys()])cache.flush(key);
-      lastPlan=planLodMeshFrame(payload,actor,coords,services,{output:frame.output});
+      lastPlan=planLodMeshFrame(payload,actor,coords,services,{output:frame.output,vertexCount});
+      lastReturned=lastPlan.vertexCount;
       exactValid=false;plannedFrame=layout.frame+1;
       try{layout.checkPose(gpuHandle,lastPlan);}
       catch(error){toCpu(error.message);return false;}
@@ -440,21 +506,31 @@ export async function createMeshBinding(runtime,actor,{id,originalObjectIndex,ke
           const bits=decision?.groups??groupBits();
           return bits.some(Boolean);
         }
-        for(const group of groups.values())if(frustum.intersectsSphere(group.bounds.boundingSphere))return true;
+        for(const group of groups.values())if(!group.lodEmpty&&frustum.intersectsSphere(group.bounds.boundingSphere))return true;
         return false;
       },
       /** Validation access (scripts/validate-gpu-mesh.mjs): this frame's
        * plan, lighting setup and GPU slot; `exactOutput()` replays the CPU
        * shadow to the exact CPU pose. Never used by Play. */
       gpuState:()=>({handle:gpuHandle,plan:lastPlan,plannedFrame,updated:mainCamera!==null,setup:lastSetup,litFrame:lastLitFrame,faces,faceWords,groups,hasEnvironment,
-        exactOutput:()=>{exactSpheres();return frame.output;},get exactValid(){return exactValid;}}),
+        exactOutput:()=>{exactSpheres();return frame.output;},get exactValid(){return exactValid;},
+        // The CPU LOD of the exact output (call exactOutput first): drawn
+        // positions, resolved corners, wedge dwords and lighting faces, or
+        // null at full detail; `wedges` the mesh's Wedges dwords.
+        lodDrawn:()=>gpuLodScalars?meshLod.after(lastSelection,lastReturned,frame.output):null,
+        lodParams:gpuLodScalars?{...gpuLodScalars}:null,wedges:meshLod?.topology.wedges??null}),
       get location(){return [...read(actor,'Location')];},get rotation(){return [...read(actor,'Rotation')];},
+      /** Validation access (lod-probe.mjs): the last update's LOD inputs,
+       * selection, returned count, final state and drawn faces. */
+      lodState:()=>lastLod?{...lastLod,mesh:meshReference.key,meshPackage:meshReference.asset?.name??null,meshIndex:meshReference.index??null,
+        actor:actorName,path:mode,drawn:drawnMain}:null,
       /** One main-frame update: the frame record for the page, or null when
        * the binding is disposed. With `view.pack` (mesh-frame-pack.mjs) the
        * record's plan and lighting are offsets into the frame's words. */
       update(view={}){
         if(disposed)return null;
         const record={id,visible:false,childOnly:false};drawnMain=false;
+        if(lastLod)lastLod.updated=false;
         // This frame's mesh_reads words (MB), or -1.
         const {u32,f32}=view.reads&&block?view.reads.views():{},at=u32&&u32[block>>2]&MS_OK?block>>2:-1;
         const verify=at>=0&&view.reads.verify;
@@ -514,13 +590,56 @@ export async function createMeshBinding(runtime,actor,{id,originalObjectIndex,ke
             throw new Error(`RENDER_SCAN=verify: ${actorName} pose changed is ${poseChanged} from mesh_reads, ${changed} by pose()`);
           poseChanged=changed;
         }
-        let posed=false;
-        if(poseChanged&&mode==='gpu'){if(planGpu())record.plan=view.pack?view.pack.plan(lastPlan):plainPlan(lastPlan);posed=true;}
-        if(poseChanged&&mode==='cpu'){
-          // A plan evaluated for this frame before a fallback already posed it.
-          if(!posed)getLodMeshFrame(payload,actor,coords,services,{output:frame.output});
-          cpuBounds();record.posed=posedCopy();
+        // DrawLodMesh's selection for the main frame (actor-mesh-lod.mjs):
+        // its count joins the pose in deciding a new GetFrame, its detail
+        // the morph (the CPU path runs it here, the GPU path in its passes).
+        let selection=null,lodInputs=null;
+        if(meshLod&&view.lodFrame){
+          const location=at>=0?[f32[at+MB.LOCATION],f32[at+MB.LOCATION+1],f32[at+MB.LOCATION+2]]:own.Location();
+          lodInputs={location,drawScale:at>=0?f32[at+MB.DRAWSCALE]:own.DrawScale(),lodBias:own.LODBias()};
+          selection=meshLod.select(view.lodFrame,lodInputs.location,lodInputs.drawScale,lodInputs.lodBias);
+          lastLod={frame:view.lodFrame,inputs:lodInputs,selection};
+          if(!selection.active)selection=null;
         }
+        const requested=selection?.requested??fullCount;
+        // The detail matters only to a morph; the flags and the count to all.
+        const detailKey=selection?`${selection.morph?bitsOf(selection.detail):0}`:'off';
+        const lodChanged=requested!==lastRequested||detailKey!==lastDetail;
+        lastDetail=detailKey;
+        let posed=false;
+        if((poseChanged||requested!==lastRequested)&&mode==='gpu'){
+          if(planGpu(requested))record.plan=view.pack?view.pack.plan(lastPlan):plainPlan(lastPlan);posed=true;
+        }
+        // The GPU path's LOD parameters after GetFrame (the morph and corner
+        // passes run them); the groups the reduced faces empty.
+        if(mode==='gpu'&&meshLod&&(posed||lodChanged)){
+          lastSelection=selection;
+          const scalars=selection?lodMorphScalars(meshLod.topology,selection,lastReturned):null;
+          gpuLodScalars=scalars?.active?scalars:null;
+          const params=gpuLodScalars?{count:scalars.count,start:scalars.start,active:true,morph:scalars.morph,inverse:Math.fround(scalars.inverse)}
+            :{count:meshLod.topology.modelVerts,start:0,active:false,morph:false,inverse:0};
+          const key=`${params.count}:${params.start}:${params.morph}:${params.active}:${bitsOf(params.inverse)}`;
+          if(key!==lastLodKey){
+            record.lodParams=params;lastLodKey=key;exactValid=false;
+            const level=meshLod.topology.faceLevel;
+            for(const group of groups.values())group.lodEmpty=params.active&&group.faces.every(face=>level[face]>params.count);
+          }
+        }
+        if((poseChanged||lodChanged)&&mode==='cpu'){
+          // A plan evaluated for this frame before a fallback already posed it.
+          if(!posed&&(poseChanged||requested!==lastRequested))
+            lastReturned=getLodMeshFrame(payload,actor,coords,services,{output:frame.output,vertexCount:requested}).vertexCount;
+          lodAfter(selection);
+          cpuBounds();record.posed=posedCopy();
+          if(meshLod)record.lod=lodRecord();
+        }
+        if(lastLod&&mode==='cpu')Object.assign(lastLod,{returned:lastReturned,state:lodDrawn?{...lodDrawn.state}:null,
+          admitted:lodDrawn?.resolved?countAdmitted(lodDrawn.resolved):faces.length,
+          vertices:lodDrawn?.resolved?countVertices(lodDrawn.resolved):null,updated:true});
+        else if(lastLod)Object.assign(lastLod,{returned:lastReturned,
+          state:gpuLodScalars?{active:true,morph:gpuLodScalars.morph,start:gpuLodScalars.start,count:gpuLodScalars.count}:null,
+          admitted:gpuLodScalars?countLevel(meshLod.topology.faceLevel,gpuLodScalars.count):faces.length,vertices:null,updated:true});
+        lastRequested=requested;
         let mainVisible;
         if(mode==='gpu'){
           mainVisible=false;
@@ -535,7 +654,7 @@ export async function createMeshBinding(runtime,actor,{id,originalObjectIndex,ke
         // Mirror frames reuse the main frame's lighting; a child-only actor
         // is lit the same way.
         if(lighting&&view.lit&&lighting.frame&&(childOnly||!view.frustum||(mode==='gpu'?mainVisible:[...groups.values()].some(group=>
-          view.frustum.intersectsSphere(group.bounds.boundingSphere))))){
+          !group.lodEmpty&&view.frustum.intersectsSphere(group.bounds.boundingSphere))))){
           if(mode==='gpu'){
             const prepared=lighting.setupMesh(actor,at>=0?setupFields(view.reads.views()):null);
             if(prepared){
@@ -578,7 +697,7 @@ export async function createMeshBinding(runtime,actor,{id,originalObjectIndex,ke
  * measured NPC identities keep their captured index. `player` is the player
  * actor or a getter for it (Player start logs a new player in). */
 export async function createActorMeshSim(runtime,assets,asset,{kernel,player:playerSource,lighting=null,layout=null,
-  childFrames=false,onCreate=()=>{},onRelease=()=>{}}={}) {
+  childFrames=false,lod=true,onCreate=()=>{},onRelease=()=>{}}={}) {
   const currentPlayer=typeof playerSource==='function'?playerSource:()=>playerSource??null;
   let kernelError=null;
   if(kernel===undefined) {
@@ -587,8 +706,11 @@ export async function createActorMeshSim(runtime,assets,asset,{kernel,player:pla
   }
   const textures=new TextureStore(assets);
   let nextId=1;
+  // URender's LOD settings (lodmesh-lod.mjs RENDER_LOD_SETTINGS; the
+  // console's MLOD, MLMODE and MLFIX change them in the original).
+  let lodSettings=RENDER_LOD_SETTINGS;
   const bind=async(actor,options)=>{
-    const binding=await createMeshBinding(runtime,actor,{id:nextId++,kernel,lighting,layout,textures,...options});
+    const binding=await createMeshBinding(runtime,actor,{id:nextId++,kernel,lighting,layout,textures,lod,...options});
     return binding;
   };
   const npcActors=[],propActors=[],errors=[];
@@ -810,8 +932,11 @@ export async function createActorMeshSim(runtime,assets,asset,{kernel,player:pla
         reconcile(reads);
         if(view.occlude){
           const occluded=view.occlude({bindings:actors,items:itemCandidates(view.items??[]),reads,levelIndex});
-          view={...view,main:occluded.main,children:occluded.children,cull:!occluded.children};
+          view={...view,main:occluded.main,children:occluded.children,cull:!occluded.children,lod:occluded.lod??view.lod};
         }
+        // The main frame's LOD inputs (Frame->Coords, FX, FovAngle), when the
+        // frame has them; mirror frames reuse the main frame's selection.
+        if(lod&&view.lod)view={...view,lodFrame:lodFrame(view.lod,lodSettings)};
         for(const binding of actors)records.push(binding.update(reads?{...view,reads}:view));
         drawItems(view.items??[],view,records);
       }finally{frameViewer=null;}
@@ -838,6 +963,15 @@ export async function createActorMeshSim(runtime,assets,asset,{kernel,player:pla
     },
     /** Every binding, item bindings included. */
     all,
+    /** URender::Exec's MLOD (+40, positive only), MLMODE (+48, non-negative)
+     * and MLFIX (+4c, non-negative) for the next frames; validation uses it
+     * to reach reduced counts. No console command calls it yet. */
+    setLodSettings({shapeLOD,mode,fix}={}){
+      lodSettings={...lodSettings,...(shapeLOD>0?{shapeLOD:Math.fround(shapeLOD)}:{}),...(mode>=0?{mode:mode|0}:{}),
+        ...(fix>=0?{fix:Math.fround(fix)}:{})};
+      return {...lodSettings};
+    },
+    resetLodSettings(){lodSettings=RENDER_LOD_SETTINGS;},
     /** Iterator item bindings in use (validation access). */
     itemSlots:()=>[...itemPools].map(([actor,pool])=>({actor:actor.name,ids:pool.map(entry=>entry.binding?.id??null)})),
     async ready(){await Promise.all(pending.values());},

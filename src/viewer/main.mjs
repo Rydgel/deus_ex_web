@@ -531,7 +531,7 @@ async function loadMap(name) {
     const hostOptions = { randomSeed, subtitles: subtitlePreference,
       stampScene: nextWorld.stampScene(), panZones: nextWorld.panZoneNames(), childFrames: nextWorld.mirrors.stats.planes > 0,
       gpu: nextGpuMesh?.capacities ?? null, weaponGpu: nextWeaponGpu?.capacities ?? null,
-      meshBackend: new URLSearchParams(location.search).get('meshBackend') };
+      meshBackend: new URLSearchParams(location.search).get('meshBackend'), meshLod: new URLSearchParams(location.search).get('meshLod') };
     // On the page the old map's audio unregisters its music before the next
     // map's runtime is built (the worker does the same at its load).
     if (!simClient) simHost?.disposeAudio?.();
@@ -567,6 +567,8 @@ async function loadMap(name) {
         itemStats:()=>actorSim.itemSlots?.().map(({actor,ids})=>({actor,slots:ids.length,
           drawn:ids.filter(id=>id!==null&&drawOf(id)?.root.visible).length}))??null,
         batchStats:()=>draw.batchStats(),proceduralTextures:()=>draw.proceduralTextures(),
+        /** Validation only (?sim=inline): URender's LOD settings (actor-mesh-sim.mjs). */
+        setLodSettings:settings=>actorSim.setLodSettings?.(settings)??null,resetLodSettings:()=>actorSim.resetLodSettings?.(),
         dispose(){draw.dispose();}};
     }
     const nextHud=nextGame?.hud?await createHudRenderer({assets,preload:nextHost.hudTextures}):null;
@@ -1152,6 +1154,18 @@ placeProbe(args) {
 laserProbe() {
   if (simClient) return simClient.call('laserProbe');
   return game ? laserProbe(game, simHost?.actorSim) : null;
+},
+/** Validation only: lod-probe.mjs (the actor mesh layer's DrawLodMesh LOD
+ * state) on the simulation side. */
+async lodProbe(args) {
+  if (simClient) return simClient.call('lodProbe', args);
+  return (await import('./lod-probe.mjs')).lodProbe(simHost?.actorSim, args);
+},
+/** Validation only: what the page's actor mesh layer draws under the LOD,
+ * per binding id (actor-mesh-draw.mjs lodStats). */
+meshLod() {
+  const draw = npcPreview?.draw;
+  return draw ? [...draw.bindings.values()].map(binding => binding.lodStats()) : null;
 },
 /** The page's fog pass (fog-pass.mjs): its last frame's counters and the
  * fog meshes it drew. */
