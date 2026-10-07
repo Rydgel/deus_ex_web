@@ -88,7 +88,7 @@ export async function createWeaponOverlaySim(runtime,assets,playerSource,{kernel
      * decision, the lighting frame's coordinates for the GPU passes, and the
      * actors the frame draws (render feedback). A submission whose binding is
      * still being prepared is skipped. */
-    frame({frustum,pack=null}){
+    frame({frustum,pack=null,lodFrame=null}){
       if(disposed)return null;
       if(error)throw error;
       // A reload's collection releases the old generation's weapons.
@@ -102,8 +102,11 @@ export async function createWeaponOverlaySim(runtime,assets,playerSource,{kernel
           const entry=prepare(command.actor);if(!entry)continue;
           const {binding}=entry;
           // Canvas.DrawActor -> URender::DrawActor lights the weapon as its
-          // own light sink in the main frame (docs/mesh-lighting.md).
-          const record=binding.update(pack?{lit:true,pack}:{lit:true});
+          // own light sink in the main frame (docs/mesh-lighting.md); its
+          // DrawActorSprite passes Frame->Coords to DrawMesh (0x10b25615), so
+          // DrawLodMesh selects it from the main frame's LOD inputs
+          // (`lodFrame`, actor-mesh-lod.mjs; docs/script-lodmesh-lod.md).
+          const record=binding.update({lit:true,...(pack?{pack}:{}),...(lodFrame?{lodFrame}:{})});
           // three.js's frustum test on the drawn groups (the CPU path's
           // posed bounds; the GPU path's group decisions).
           const decision=binding.passVisibility(frustum);
@@ -119,6 +122,8 @@ export async function createWeaponOverlaySim(runtime,assets,playerSource,{kernel
       layout?.endFrame();
       return {target:Boolean(target),draws,camera,drawn};
     },
+    /** The view model's bindings (validation: lod-probe.mjs). */
+    all:()=>[...entries.values()].map(entry=>entry.binding),
     dispose(){disposed=true;for(const entry of entries.values())entry.binding.dispose();entries.clear();},
   };
 }
