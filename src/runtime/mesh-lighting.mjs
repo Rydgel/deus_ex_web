@@ -299,8 +299,10 @@ export function finishSetup(manager, actor, scene, result, added) {
     // at the render pass's 24 bits, with this frame's Level.TimeSeconds,
     // the light noise's table A (Flicker, at the light's flicker key) and
     // the shared Strobe state; then the clamp to [0, 1].
-    const brightness = f(lightTypeBrightness(values, { timeSeconds: scene.levelInfo.timeSeconds, noise: scene.noise ?? ZERO_NOISE,
-      strobe: manager.strobe, flickerKey: light.flickerKey ?? 0 }));
+    // A Steady light keeps LightBrightness/255 (most lights; no call needed).
+    const brightness = type === 1 ? f((values.LightBrightness & 255) * f(1 / 255))
+      : f(lightTypeBrightness(values, { timeSeconds: scene.levelInfo.timeSeconds, noise: scene.noise ?? ZERO_NOISE,
+        strobe: manager.strobe, flickerKey: light.flickerKey ?? 0 }));
     const hsv = cachedHsv(values.LightHue, values.LightSaturation, 255);
     const constants = cachedConstants(values, levelBrightness, hsv);
     const color = brightness === f((values.LightBrightness & 255) * f(1 / 255)) ? constants.color

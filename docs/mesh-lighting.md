@@ -475,6 +475,17 @@ Strobe, per the census).
   `validate-mesh-lighting-play`, `validate-moving-light-effects(-play)`,
   `validate-light-spatial-play` and the unit tests pass.
 
+**Cost** (headless Chromium in worker mode, 1920×1080, interleaved rounds,
+medians; scratch `ab-browser.mjs`). 824a92b against 1869442 on UNATCO
+Island, six rounds each: the worker's frame 14.99 → 15.51 ms (its actor
+phase 3.51 → 3.72), the page 3.24 → 3.43 ms, within the run-to-run spread.
+The follow-up (0c4ff1f: the Strobe scan returns early when no flip can
+happen and builds the drawn-surface set only for a moving Strobe light;
+Steady lights skip the type call) against 824a92b, five rounds each: Island
+actor phase 4.05 → 3.89 ms (worker 16.00 → 15.90), Wan Chai Underworld
+(Pulse, Flicker and Strobe lights) 3.32 → 3.05 ms (worker 15.83 → 15.56).
+The type functions stay in JavaScript: no measurement names them.
+
 ## Not reproduced / open
 
 * Fog and volumetric lights (`PF_RenderFog`); Training's leaves have none.
