@@ -6,6 +6,7 @@ import { PF, accumulateFaceNormal, actorPolyFlags, createMeshLightManager, d3dDi
   lightsActor, setupAmbient, setupForActor, unlitColor, vertexNormalPlane } from '../runtime/mesh-lighting.mjs';
 import { handleOf, identityOfHandle } from '../runtime/script-object-handles.mjs';
 import { meshLightMode } from '../runtime/script-vm-meshlight.mjs';
+import { lightGlobals } from '../runtime/light-globals.mjs';
 import { renderScanMode } from '../runtime/script-vm-render.mjs';
 
 const f = Math.fround;
@@ -21,7 +22,9 @@ const LIGHT_FIELDS = ['LightType', 'LightEffect', 'LightBrightness', 'LightHue',
 export function createMeshLightingView(runtime, levelSource, { exportName, exportIndex = () => undefined, kernel = null,
   lineModel = () => null }) {
   const read = (object, name) => { try { return runtime.readNamed(object, name); } catch { return undefined; } };
-  const manager = createMeshLightManager();
+  // Strobe's state and the light noise are the light manager's, shared
+  // with the light maps and Galaxy (light-globals.mjs).
+  const globals = lightGlobals(runtime), manager = createMeshLightManager({ strobe: globals.strobe });
   // SetupForActor's Model.LineCheck (End the light, Start the actor, zero
   // extent, no extra node flags; 0x10b09583-0x10b0961f): with the brush
   // tracker, `lineModel()` gives Level->Model with the movers' fragment
@@ -77,6 +80,8 @@ export function createMeshLightingView(runtime, levelSource, { exportName, expor
     if (scanned) for (const name of LIGHT_FIELDS) if (Object.hasOwn(scanned.values, name)) values.read.set(name, scanned.values[name]);
     record = { actor, values, location: (scanned ? scanned.location : read(actor, 'Location') ?? [0, 0, 0]).map(f),
       index: lightIndex(actor) };
+    // Flicker's key (light-globals.mjs flickerKeyOf), looked up when read.
+    Object.defineProperty(record, 'flickerKey', { get() { return globals.flickerKeyOf(actor); } });
     frame.lights.set(actor, record);
     return record;
   };
@@ -127,6 +132,8 @@ export function createMeshLightingView(runtime, levelSource, { exportName, expor
   };
   const view = {
     manager,kernel,
+    /** Validation only: {name, records} of the actor whose setups are kept. */
+    watch: null,
     get frame() { return frame; },
     /** Validation access: this frame's light record of `actor`, made as
      * the JavaScript selection's lightOf makes it. The Rust selection fills
@@ -224,6 +231,7 @@ export function createMeshLightingView(runtime, levelSource, { exportName, expor
         bUnlit: Boolean(values.bUnlit), bSpecialLit: Boolean(v.bSpecialLit),
       }, scene = {
         levelInfo: { ambient: ambientOf(frame.levelInfo), brightness: frame.levelBrightness, timeSeconds: frame.timeSeconds },
+        noise: globals.noise,
         model: frame.model,
         lightOf: ref => {
           const name = exportName(ref), light = name && frame.byName.get(name);
@@ -240,12 +248,21 @@ export function createMeshLightingView(runtime, levelSource, { exportName, expor
       // SetupForActor's light choice runs in the Rust core when the script VM
       // has it (meshlight.rs); MESH_LIGHT=verify runs both and compares.
       const mode = meshLightMode(), rust = mode !== 'js' ? frame.meshLight : null;
+      const strobeBefore = view.watch?.name === actor.name ? [globals.strobe.time, globals.strobe.flag] : null;
       let setup;
       if (rust) {
         setup = rustSetup(rust, sink, scene);
         if (mode === 'verify') verifySetup(actor, setupForActor(manager, sink, scene), setup);
       } else setup = setupForActor(manager, sink, scene);
       const flags = polyFlags | setup.flags;
+      // Validation only (decal-probe.mjs meshLightProbe): one watched
+      // actor's light infos with the inputs their type functions read.
+      if (strobeBefore) view.watch.records.push({ timeSeconds: frame.timeSeconds, strobeBefore,
+        strobe: [globals.strobe.time, globals.strobe.flag], noiseA: globals.noise ? Array.from(globals.noise.A) : null,
+        levelBrightness: frame.levelBrightness, lights: setup.lights.map(info => ({ name: info.light.actor?.name,
+          flickerKey: info.light.flickerKey ?? 0, brightness: info.brightness, fade: info.tagFade, color: [...info.color],
+          values: Object.fromEntries(['LightType', 'LightBrightness', 'LightHue', 'LightSaturation', 'LightPeriod', 'LightPhase',
+            'LightRadius', 'LightEffect'].map(name => [name, info.light.values[name]])) })) });
       return { setup, flags, unlit: unlitColor(v.AmbientGlow, f(v.ScaleGlow)) };
     },
     /** One DrawLodMesh lighting pass. `points` are GetFrame's world-space

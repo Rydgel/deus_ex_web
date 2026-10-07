@@ -406,11 +406,15 @@ export async function createWorld(map, asset, assets, onProgress = () => {}, {ba
       };
     },
     /** The frame's light animation inputs from the simulation
-     * (sim-session.mjs `frame.light`: Level.TimeSeconds and the noise
-     * URender::PreRender advanced from the shared stream), before the frame's
-     * moving lights and texture animation use them. */
-    beginLightFrame({ timeSeconds, noise }) {
+     * (sim-session.mjs `frame.light`: Level.TimeSeconds, the noise
+     * URender::PreRender advanced from the shared stream and the frame's
+     * Strobe flag), before the frame's moving lights and texture animation
+     * use them. */
+    beginLightFrame({ timeSeconds, noise, strobe = null }) {
       lightFrame.advance(timeSeconds, noise);
+      // The simulation decides the frame's Strobe flag (light-globals.mjs):
+      // with the frame's own time stored, the page's Strobe calls keep it.
+      if (strobe) { lightFrame.strobe.time = Math.fround(timeSeconds); lightFrame.strobe.flag = strobe.flag; }
       lightFrameBegun = simFed = true;
       return lightFrame;
     },

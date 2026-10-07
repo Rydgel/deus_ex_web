@@ -15,6 +15,8 @@ import { createDecalDraw } from '../runtime/decal-draw.mjs';
 import { OCCLUSION_POINTS, OCCLUSION_SPRITE_KEYS } from '../runtime/bsp-occlusion.mjs';
 import { packDynamics, actorOcclusionMode } from './dynamics-candidates.mjs';
 import { createLightNoise, lightNoiseSnapshot } from '../runtime/static-lighting.mjs';
+import { lightGlobals } from '../runtime/light-globals.mjs';
+import { filterMovingLight, surfaceLightClass, worldLightRadius } from '../runtime/dynamic-lighting.mjs';
 import { dynamicActorRoute } from '../runtime/render-visibility.mjs';
 import { TRACKED_MOVER_MIRRORS } from './mirror-passes.mjs';
 
@@ -36,7 +38,7 @@ export const plainHudCommands = commands => commands.map(command => ({ texture: 
  * `events` is the ordered queue of what the simulation hands the page
  * between frames (the actor mesh layer's and the view model's creation and
  * release records, lighting changes); each frame() snapshot takes it. */
-export function createSimSession(game, { assets = null, events = [] } = {}) {
+export function createSimSession(game, { assets = null, events = [], exportName = null } = {}) {
   const runtime = game.doors.scriptRuntime.runtime;
   let failed = false, panZones = [], lastViewLocation = null, current = null, lipSync = null;
   // Inspect's free camera, from the page's plain camera state.
@@ -77,7 +79,57 @@ export function createSimSession(game, { assets = null, events = [] } = {}) {
   // "Time-varying moving lights"): its appFrand draws come from the game's
   // shared stream, after PlayerCalcView and before the PreRender event and
   // DrawWorld's draws. The page's light frame takes its tables.
-  const lightNoise = createLightNoise(() => runtime.rng.frand());
+  const lightNoise = createLightNoise(() => runtime.rng.frand()), lights = lightGlobals(runtime);
+  lights.noise = lightNoise;
+  // SetupForSurf's Strobe calls (light-globals.mjs `strobe`): the drawn
+  // surfaces whose light list holds a Strobe light (a class 1 light, set up
+  // every frame), and the moving Strobe lights that reach a drawn surface.
+  // Scripts never set Strobe (scripts/census-moving-lights.mjs), so the
+  // lists are taken once, from the lights that are Strobe at load.
+  let strobeSurfaces = null;
+  function lightMapStrobe(visible, scanned, timeSeconds) {
+    const level = runtime.levelFor(game.player.collisionActor), model = level.model;
+    const read = (actor, name) => runtime.readNamed(actor, name);
+    if (!strobeSurfaces) {
+      strobeSurfaces = new Map();
+      const byName = new Map();
+      for (const actor of level.actors) if (actor && !byName.has(actor.name)) byName.set(actor.name, actor);
+      const strobeOf = new Map();
+      const isStrobe = ref => {
+        if (!strobeOf.has(ref)) {
+          const actor = exportName ? byName.get(exportName(ref)) : null;
+          strobeOf.set(ref, actor && (read(actor, 'LightType') & 255) === 5 ? actor : null);
+        }
+        return strobeOf.get(ref);
+      };
+      model.surfaces.forEach((surface, index) => {
+        const lightMap = surface.lightMap >= 0 ? model.lightMaps[surface.lightMap] : null;
+        if (!lightMap || lightMap.lightActors == null || lightMap.lightActors < 0) return;
+        const found = [];
+        for (let i = lightMap.lightActors; i < model.lights.length && model.lights[i]; i++) { const actor = isStrobe(model.lights[i]); if (actor) found.push(actor); }
+        if (found.length) strobeSurfaces.set(index, found);
+      });
+    }
+    // The level surfaces drawn (the brush tracker's fragment nodes, past the
+    // level model's, are movers' polygons: their light maps are the movers').
+    const drawn = new Set();
+    for (const node of visible.nodes) if (node < model.nodes.length) drawn.add(model.nodes[node].surface);
+    const live = actor => {
+      const values = { LightType: read(actor, 'LightType'), LightBrightness: read(actor, 'LightBrightness'), bStatic: read(actor, 'bStatic'),
+        bNoDelete: read(actor, 'bNoDelete'), bDynamicLight: read(actor, 'bDynamicLight'), LightEffect: read(actor, 'LightEffect') };
+      return (values.LightType & 255) === 5 && surfaceLightClass(values) === 1;
+    };
+    let any = false;
+    for (const [surface, actors] of strobeSurfaces) if (drawn.has(surface) && actors.some(live)) { any = true; break; }
+    if (!any) for (const light of scanned ?? []) {
+      if ((light.values.LightType & 255) !== 5 || surfaceLightClass(light.values) !== 2) continue;
+      for (const surface of filterMovingLight(model, light.location, worldLightRadius(light.values), Boolean(light.values.bSpecialLit)))
+        if (drawn.has(surface)) { any = true; break; }
+      if (any) break;
+    }
+    // The Strobe function's test (0x10b05b30): a new TimeSeconds flips the flag.
+    if (any && lights.strobe.time !== timeSeconds) { lights.strobe.time = timeSeconds; lights.strobe.flag ^= 1; }
+  }
   // RenderIterator construction for the sprite scan: the iterator's
   // RenderInterface object, owned by the actor's native object. A pre-placed
   // actor hashes its owned objects by its measured GObjObjects index
@@ -410,6 +462,11 @@ export function createSimSession(game, { assets = null, events = [] } = {}) {
         try { occludeMain(); } catch (error) { failed = true; errors.push(plainError(error)); }
       }
       if (snapshot.begin && begun) { snapshot.begin.visibility = begun.visibility; snapshot.begin.sky = begun.sky; }
+      // The light maps' Strobe calls in this frame (SetupForSurf on the main
+      // frame's drawn surfaces), beside SetupForActor's and Galaxy's.
+      if (begun?.visibility && begun.light && !stopped()) {
+        try { lightMapStrobe(begun.visibility, live.lights, begun.light.timeSeconds); } catch (error) { failed = true; errors.push(plainError(error)); }
+      }
       time('actors');
       if (drawn) {
         const sky = !drawWorld ? null : input.play ? begun?.sky ?? null : input.inspect?.sky ?? null;
@@ -441,6 +498,9 @@ export function createSimSession(game, { assets = null, events = [] } = {}) {
       snapshot.audioMs = input.play ? game.takeAudioMs?.() ?? 0 : 0;
       time('hud');
       timings.hud -= snapshot.audioMs; timings.audio = snapshot.audioMs;
+      // The frame's Strobe flag for the page's light maps, after every
+      // simulation-side caller (light-globals.mjs).
+      if (begun?.light) begun.light.strobe = { time: lights.strobe.time, flag: lights.strobe.flag };
       snapshot.events = events.splice(0);
       snapshot.pack = pack.words();
       return snapshot;
@@ -639,6 +699,8 @@ export function createSimSession(game, { assets = null, events = [] } = {}) {
       if (!stopped()) {
         try {
           const timeSeconds = Math.fround(game.surfacePan().timeSeconds);
+          // Galaxy's Update reads the table A this PreRender replaces.
+          lights.previousA.set(lightNoise.A);
           lightNoise.update(timeSeconds);
           frame.light = { timeSeconds, noise: lightNoiseSnapshot(lightNoise) };
         } catch (error) { fail(error); }

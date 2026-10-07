@@ -294,8 +294,11 @@ Park and 1.0 on Everett (`play-frame-cost.md`).
 - **What stays in JavaScript.**
   - The GlobalLighting constants, through the reference's own
     `animatedLightConstants` and per-frame cache, called for every light of
-    each merged map in list order, so Strobe's shared flag flips on the same
-    frames. Their colour `tables` are now built at first use; the kernel
+    each merged map in list order. Strobe's shared flag arrives from the
+    simulation with the frame's light noise (`frame.light.strobe`, set in
+    `beginLightFrame` with its time), so these calls read it without
+    flipping it ([mesh lighting](mesh-lighting.md) "LightType functions,
+    Strobe and the noise"). Their colour `tables` are now built at first use; the kernel
     path never asks for them unless it must copy them (below).
   - The memo. The reference compares a string of each light's three colour
     steps and its noise input (`A<frameIndex>`, `W<noise version>` or

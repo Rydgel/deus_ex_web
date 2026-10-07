@@ -57,8 +57,10 @@ frame, whatever the word was before the first frame.
   init word (`0x037f`) separate from the per-frame word. Open: whether D3D's
   `DDSCL_FPUSETUP` (`0x1000b18e`) ran before URender::Init.
 * Galaxy Update's ambient-sound volume, which calls URender::GlobalLighting
-  from Audio->Update (`script-audio-live.mjs`): before PreRender, so it keeps
-  the double LightType form (`lightTypeBrightness` without `renderPass`).
+  from Audio->Update (`script-audio-live.mjs`): before PreRender, so it runs
+  the shared `lightTypeBrightness` with `precision: 'pc64'` (validated against
+  the oracle at `0x037f`, validate-light-animation's 2,560 game-thread
+  frames) and the previous frame's noise table A.
 * PlayerCalcView, CreateMasterFrame, Galaxy Update (lip sync, music), the
   level tick (physics, script Tick, ParticleGenerator.Tick → native 3017
   UpdateParticles, animation tick, TweenBlendAnim), AttachDecal/DetachDecal,

@@ -204,7 +204,13 @@ class MeshOracle(dyn.Oracle):
         self.write(light_vtable + 0x60, 'I', self.world_light_radius)
         lights = {}
         for light in scene['lights']:
-            actor = self.alloc(0x800)
+            # A light with a flicker key sits at an address whose low byte is
+            # that key (Flicker indexes the noise by it, 0x10b05af0).
+            if 'flickerKey' in light:
+                actor = self.alloc(0x900, align=0x100) + (light['flickerKey'] & 0xff)
+                self.cpu.mem_write(actor, bytes(0x800))
+            else:
+                actor = self.alloc(0x800)
             flags = ((1 if light.get('bStatic') else 0) | (0x80 if light.get('bDeleteMe') else 0)
                      | (0x400 if light.get('bLightChanged') else 0) | (0x80000 if light.get('bMovable') else 0))
             self.write(actor, 'I', light_vtable)
@@ -265,13 +271,22 @@ class MeshOracle(dyn.Oracle):
             link = self.alloc(0x20)
             self.write(link + 0xc, 'II', lights[ref], leaf_lights)
             leaf_lights = link
-        return {'frame': frame, 'viewport': viewport, 'actor': actor, 'lights': lights, 'leafLights': leaf_lights}
+        return {'frame': frame, 'viewport': viewport, 'actor': actor, 'lights': lights, 'leafLights': leaf_lights,
+                'levelInfo': level_info}
 
     def setup_frame(self, fixture, frame_case, scene):
         viewport = fixture['viewport']
         self.write(viewport + 0x70, 'd', frame_case['lastUpdateTime'])
         self.write(viewport + 0x84, 'i', frame_case['frameCount'])
         self.write(viewport + 0xb0, 'd', frame_case['currentTime'])
+        # The frame's Level.TimeSeconds, the light noise's table A (Flicker)
+        # and, once per run, Strobe's state (0x10b49ea4 time, 0x10b49ea8 flag).
+        if 'timeSeconds' in frame_case:
+            self.write(fixture['levelInfo'] + 0x478, 'I', frame_case['timeSeconds'])
+        if 'noiseA' in frame_case:
+            self.write(0x10b4fa44, '256I', *frame_case['noiseA'])
+        if 'strobe' in frame_case:
+            self.write(0x10b49ea4, 'II', *frame_case['strobe'])
         self.visibility = {int(key): value for key, value in frame_case.get('lineChecks', {}).items()}
         self.traced = []
         flags = self.call(SETUP_FOR_ACTOR, [fixture['frame'], fixture['actor'], fixture['leafLights'], 0],
@@ -295,6 +310,7 @@ class MeshOracle(dyn.Oracle):
                       this=LIGHT_MANAGER)
             vertices.append(list(self.read(result, '4I')))
         out = {'flags': flags, 'ambient': list(self.read(AMBIENT, '4I')), 'scaleGlow': self.read(SCALE_GLOW, 'I')[0],
+               'strobe': list(self.read(0x10b49ea4, 'II')),
                'infos': infos, 'tags': tags, 'traced': self.traced, 'vertices': vertices,
                'cache': self.cache_entries(scene['actor']['index'], ids)}
         self.call(FINISH_ACTOR, [], this=LIGHT_MANAGER)
@@ -314,6 +330,9 @@ class MeshOracle(dyn.Oracle):
                  self.read(data + 0x14 + i * 12, 'i')[0]] for i in range(count)]
 
     def setup(self, scene):
+        # GMath's trig table (Pulse and SubtlePulse read it), when supplied.
+        if scene.get('sines'):
+            self.gmath(scene['sines'])
         fixture = self.build_scene(scene)
         return [self.setup_frame(fixture, frame_case, scene) for frame_case in scene['frames']]
 

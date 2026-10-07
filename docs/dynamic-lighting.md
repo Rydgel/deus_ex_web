@@ -304,7 +304,10 @@ The LightType functions (table `0x10b2a284`, [static lighting](static-lighting.m
 (`0x10b05af0`) takes table A at the low byte of its first argument, the
 actor's address; Strobe (`0x10b05b30`) flips the global flag at `0x10b49ea8`
 whenever TimeSeconds differs from the time at `0x10b49ea4`, so only frames
-in which some Strobe light is set up flip it.
+in which some Strobe light is set up flip it. Light maps, mesh lighting and
+Galaxy share that state; Play keeps it in `light-globals.mjs` and the
+simulation decides each frame's flip (`lightMapStrobe`, [mesh
+lighting](mesh-lighting.md) "LightType functions, Strobe and the noise").
 
 **The noise and its random stream.** URender::PreRender (`0x10b14560`) calls
 the light manager's noise (`0x10b13080`, through `0x10b30a08`, at
@@ -426,11 +429,15 @@ memory.
   reaches ("Time-varying moving lights"). Cylinder and the spatially dynamic
   effects stay unlit with a note for class 2 (no class 2 light has them); the
   texture-palette LightTypes stay steady.
-* Flicker's key is the light's Level.Actors slot, not the actor's address
-  (unreproducible: it depends on the allocator's history). Strobe's flag
-  flips once per new TimeSeconds on the page for the light maps and,
-  separately, in the simulation for mesh lighting; the original's single flag
-  flips only on frames that set some Strobe light up.
+* Flicker's key is the light's export index (map actors) or Level.Actors
+  slot, low byte, not the actor's address (unreproducible: it depends on the
+  allocator's history).
+* Strobe's single flag (since 2026-10-07): the simulation flips it, once per
+  new TimeSeconds, on frames where a drawn surface lists a live Strobe light,
+  a moving Strobe light reaches a drawn surface, a drawn mesh sets one up or
+  Galaxy asks for one, and hands it to the page's light maps
+  ([mesh lighting](mesh-lighting.md) "LightType functions, Strobe and the
+  noise"). The movers' own polygons are not searched for Strobe lights.
 * Mesh and volumetric lighting (`LeafLights`, SetupForActor) remain part of the
   unsupported mesh lighting.
 * Class 2 lights that also sit in a surface's static `LightActors` list would

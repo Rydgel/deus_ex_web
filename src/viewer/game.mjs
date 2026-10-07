@@ -21,6 +21,7 @@ import { createPlayHud } from '../runtime/script-play-hud.mjs';
 import { inputKeyForCode } from './input-key-names.mjs';
 import { isMovingLightCandidate } from '../runtime/dynamic-lighting.mjs';
 import { loadTraceKernel } from '../runtime/trace-kernel.mjs';
+import { lightGlobals } from '../runtime/light-globals.mjs';
 
 /** Bind decoded resources to the renderer-independent simulation. */
 export async function createGame(map, asset, assets, { randomSeed = Math.floor(Date.now()/1000) >>> 0,
@@ -158,6 +159,17 @@ export async function createGame(map, asset, assets, { randomSeed = Math.floor(D
     nativeHud:presentation,queries:collision.queries, zoneAt: p => zones[pointZone(map.model, p)] ?? zoneDefault, onLightingChanged,
     musicLibrary});
   const levelTime=doors.scriptRuntime.runtime.namedReference(playerScene.level.actors[0],'TimeSeconds');
+  // Flicker's host key for every GlobalLighting caller (light-globals.mjs):
+  // a map-placed actor's export index, else its Level.Actors slot (low byte).
+  {
+    const exportIndexByName=new Map();
+    asset.pkg.exports.forEach((entry,i)=>{if(!exportIndexByName.has(entry.name))exportIndexByName.set(entry.name,i+1);});
+    const runtime=doors.scriptRuntime.runtime;
+    lightGlobals(runtime).flickerKeyOf=actor=>{
+      const ref=exportIndexByName.get(actor.name);
+      return (Number.isInteger(ref)?ref:runtime.levelFor(player.collisionActor).actors.indexOf(actor))&0xff;
+    };
+  }
   const levelDilation=doors.scriptRuntime.runtime.namedReference(playerScene.level.actors[0],'TimeDilation');
   // Conversation subtitles are DeusExPlayer.bSubtitles (globalconfig). The
   // original ConPlay.SetupEventSpeechPost shows the first-person panel when the
@@ -304,9 +316,9 @@ export async function createGame(map, asset, assets, { randomSeed = Math.floor(D
           Object.assign(values, { LightCone: read('LightCone'),
             Rotation: [...read(isPawn(actor) ? 'ViewRotation' : 'Rotation')] });
         // Flicker indexes the noise by the low byte of the actor's address
-        // (0x10b05af0); the host's stand-in is its Level.Actors slot.
-        const slot = entries ? entries[i] >>> RENDER_SHIFT : i;
-        lights.push({ actor, name: actor.name, location: [...read('Location')], values, flickerKey: slot & 0xff,
+        // (0x10b05af0); the host's stand-in (light-globals.mjs flickerKeyOf).
+        lights.push({ actor, name: actor.name, location: [...read('Location')], values,
+          flickerKey: (values.LightType & 255) === 4 ? lightGlobals(runtime).flickerKeyOf(actor) : 0,
           levelBrightness: runtime.readNamed(read('Level'), 'Brightness') });
       }
       return lights;

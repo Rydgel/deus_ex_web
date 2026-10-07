@@ -11,6 +11,7 @@
 import { x87load, x87double, x87neg, x87store, x87cmp, x87int32, x87ftol } from './script-vm.mjs';
 import { p24add as x87add, p24mul as x87mul, p24div as x87div, r24prod, r24sum } from './x87-pc24.mjs';
 import { fgetHsv, movingLightConstants, tableSqrt, worldLightRadius, fistp } from './dynamic-lighting.mjs';
+import { lightTypeBrightness } from './static-lighting.mjs';
 
 const f = Math.fround;
 const scratch = new DataView(new ArrayBuffer(4));
@@ -107,31 +108,9 @@ export function d3dDiffuse(light, scale = D3D_MAX_COLOR_SCALE) {
   return (0xff000000 | (channel(light[0]) << 16) | (channel(light[1]) << 8) | channel(light[2])) >>> 0;
 }
 
-// LightType functions (0x10b2a284) as URender::GlobalLighting (0x10b05e90)
-// applies them in realtime views. Pulse, Flicker, SubtlePulse and the
-// texture-palette types need tables that are not recovered; the caller gets
-// `unsupported` and the brightness is left as the steady value.
-export const LIGHT_TYPE_UNSUPPORTED = new Set([2, 4, 7, 8, 9]);
-// `renderPass`: the render pass's 24-bit Blink phase (SetupForActor). Galaxy's
-// ambient volume (script-audio-live.mjs) calls GlobalLighting from
-// Audio->Update, before PreRender, and keeps the double form.
-export function lightTypeBrightness(light, brightness, timeSeconds, strobe, renderPass = false) {
-  switch (light.LightType & 255) {
-    case 0: return 0;
-    case 3: { // Blink 0x10b05a90 (static-lighting.mjs lightTypeBrightness at 24 bits)
-      const phase = renderPass
-        ? x87ftol(x87add(x87div(x87mul(x87load(f(timeSeconds)), x87double(2293760)),
-          x87int32((light.LightPeriod & 255) + 1)), x87int32((light.LightPhase & 255) << 8)))
-        : Math.trunc(timeSeconds * 2293760 / ((light.LightPeriod & 255) + 1) + (light.LightPhase & 255) * 256);
-      return phase & 1 ? 0 : brightness;
-    }
-    case 5: { // Strobe 0x10b05b30: one global toggle per new Level.TimeSeconds.
-      if (strobe.last !== timeSeconds) { strobe.last = timeSeconds; strobe.on ^= 1; }
-      return strobe.on ? 0 : brightness;
-    }
-    default: return brightness;
-  }
-}
+// The texture-palette LightTypes (8, 9) are not translated (no map light
+// uses them; scripts/census-moving-lights.mjs) and stay steady.
+export const LIGHT_TYPE_UNSUPPORTED = new Set([8, 9]);
 
 /** Core's Sort<T> (0x10b0b830) over candidate lights, with
  * Compare(A, B) = A.key > B.key ? -1 : 1. Unstable, reproduced exactly. */
@@ -198,10 +177,12 @@ function cachedConstants(values, levelBrightness, hsv) {
 }
 
 /** One light manager per renderer: the per-call stamp, the per-actor visibility
- * caches (GCache items Index*256+0x30) and Strobe's global toggle. */
-export function createMeshLightManager() {
-  return { stamp: 0, caches: new Map(), strobe: { last: undefined, on: 0 }, diagnostics: new Set() };
+ * caches (GCache items Index*256+0x30) and Strobe's global state
+ * (light-globals.mjs; `strobe` shares the simulation's when given). */
+export function createMeshLightManager({ strobe = { time: 0, flag: 0 } } = {}) {
+  return { stamp: 0, caches: new Map(), strobe, diagnostics: new Set() };
 }
+const ZERO_NOISE = { A: new Float32Array(256) };
 
 /** FLightManager::SetupForActor (0x10b08c70) followed by the per-light
  * ComputeFromActor colour, for one draw of `actor` (the light sink).
@@ -312,9 +293,14 @@ export function finishSetup(manager, actor, scene, result, added) {
     if (result.lights.length >= 256) break; // (0x10b495c0 - 0x10b401c0) / 0x94 FLightInfo slots
     const type = values.LightType & 255;
     if (LIGHT_TYPE_UNSUPPORTED.has(type)) manager.diagnostics.add(`LightType ${type} function is not applied to mesh lighting`);
+    if (type === 4 && !scene.noise) manager.diagnostics.add('Flicker mesh lights read a zero noise table: no light noise is running');
     const levelBrightness = f(scene.levelInfo.brightness);
-    const brightness = f(lightTypeBrightness(values, f((values.LightBrightness & 255) * f(1 / 255)),
-      scene.levelInfo.timeSeconds, manager.strobe, true));
+    // ComputeFromActor's GlobalLighting (0x10b0611c): the LightType function
+    // at the render pass's 24 bits, with this frame's Level.TimeSeconds,
+    // the light noise's table A (Flicker, at the light's flicker key) and
+    // the shared Strobe state; then the clamp to [0, 1].
+    const brightness = f(lightTypeBrightness(values, { timeSeconds: scene.levelInfo.timeSeconds, noise: scene.noise ?? ZERO_NOISE,
+      strobe: manager.strobe, flickerKey: light.flickerKey ?? 0 }));
     const hsv = cachedHsv(values.LightHue, values.LightSaturation, 255);
     const constants = cachedConstants(values, levelBrightness, hsv);
     const color = brightness === f((values.LightBrightness & 255) * f(1 / 255)) ? constants.color
@@ -323,7 +309,7 @@ export function finishSetup(manager, actor, scene, result, added) {
     // stack for the three colour products.
     const fade = r24prod(tagFade, 1 / 255);
     result.lights.push({ light, location: scene.worldToCamera(light.location), radius: constants.radius,
-      rradius: constants.rradius, color: color.map(channel => f(fade * channel)) });
+      rradius: constants.rradius, color: color.map(channel => f(fade * channel)), brightness, tagFade });
   }
   return result;
 }
