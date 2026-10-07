@@ -66,14 +66,21 @@ Map exports, counted by class: `ATM`, `ComputerPublic`, `ComputerPersonal`,
 | ATM0 (`ATMWindow`) | Island | A wrong PIN is refused. 230023/4558 opens the withdraw screen with balance 200. Withdrawing 50 adds 50 to the player's `Credits` (500 → 550), leaves 150 and shows "50 CREDITS WITHDRAWN". Escape logs out to the login screen; a second Escape closes the ATM. |
 | ComputerPersonal0 (`NetworkTerminalPersonal`) | Island | KLloyd/squishy opens the e-mail screen (`01_EmailMenu_klloyd`, 2 messages, the first shown). GUEST logs in to "No Email Today!", because DeusExText has no `01_EmailMenu_GUEST`. Escape logs out; Escape on the login screen closes the terminal. |
 | ComputerPublic0 (`NetworkTerminalPublic`) | UNATCO HQ | Six bulletins with the first shown. Down shows the second. Escape closes the terminal and the computer turns off (`state Off`, `bOn = False`). |
-| ComputerSecurity1 (`NetworkTerminalSecurity`) | Island | NSF001/smashthestate logs in. `ComputerScreenSecurity` builds its choices, camera buttons and three camera windows, whose `ViewportWindow`s the host now admits ([script-window-viewport.md](script-window-viewport.md)). It then stops in the pan slider's `MenuUISliderButtonWindow.InitWindow` at ScaleManagerWindow native 1667 (SetMarginSpacing), which is not translated yet: **explicitly unsupported**. |
+| ComputerSecurity1 (`NetworkTerminalSecurity`) | Island | NSF001/smashthestate opens `ComputerScreenSecurity`. InitCameras binds view 1 to SecurityCamera5, DeusExMover10 and AutoTurretSmall0. Views 2 and 3 have no camera, so their `ViewportWindow`s are disabled. `SelectFirstCamera` selects view 1, and its Draw queues one world view from the camera, which is hidden ([script-window-viewport.md](script-window-viewport.md)). The pan slider's ScaleManager/Scale natives give `panMod` 1 ([script-window-scale-settings.md](script-window-scale-settings.md)). Left sets the camera's DesiredRotation yaw to ReplicatedRotation − 256, and the camera and the view turn to it. Equals zooms the view's fov from 90 to 88. Clicking the four choices turns the camera off, unlocks DeusExMover10, triggers it open (KeyNum 0 → 1) and sets the turret to attack enemies. 2 selects view 2. Escape logs out, and a second Escape closes the terminal. |
+
+`PanCamera` starts from the camera's `ReplicatedRotation`.
+`SecurityCamera.Tick` refreshes that rotation only at the end of its
+active, unalarmed path. At this terminal, SecurityCamera5 sees the player
+(`bPlayerSeen`, `bTrackPlayer`), so Tick returns before that refresh. Every
+pan therefore restarts from the same stale rotation, as the script is
+written: a second pan does not add to the first.
 
 Not driven yet:
 * the ATM disabled screen, hacking and the special-options screens;
-* every security computer's camera, door and turret choices (they sit
-  behind the pan slider's ScaleManager/Scale natives);
 * the camera image itself: Draw queues a `viewport` command, but the page's
   second camera pass is not implemented;
+* the hacked-login turret restriction (`GetSkillLevel() < 2 && bHacked`
+  disables the turret choice) and the special options;
 * the other maps' terminals.
 
 `XComputerWindow::VirtualKeyPressed` (`0x1000f530`) is reached by none of
