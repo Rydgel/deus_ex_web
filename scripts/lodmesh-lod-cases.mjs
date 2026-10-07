@@ -7,6 +7,7 @@
  * the Play probe checks. Inputs are float32 bit patterns so the oracle and
  * the translation read the same values. */
 import {readFile} from 'node:fs/promises';
+import {existsSync} from 'node:fs';
 import {parsePackage} from '../src/unreal/package.mjs';
 import {decodeLodMeshPayload} from '../src/runtime/lodmesh-payload.mjs';
 import {createLodMeshFrameCache,getLodMeshFrame} from '../src/runtime/lodmesh-frame.mjs';
@@ -98,6 +99,26 @@ function meshCases(topology) {
     add('returned-below-start',{...c,returnedCount:Math.max(1,Math.min(s.requested,start-2))});
   }
   return cases;
+}
+
+/** One mesh's oracle input for cases given as bit patterns (the Play
+ * probe's: settings, lodBiasBits, drawScaleBits, locationBits, fovBits,
+ * fxBits, coordsBits, tanBits, returnedCount). */
+export async function meshOracleSpec(root,pack,exportIndex,cases,{seed=0x5eed1000}={}) {
+  // A package in System, or a map's own (myLevel) meshes.
+  const file=[`${root}/System/${pack}.u`,`${root}/Maps/${pack}.dx`].find(path=>existsSync(path));
+  if(!file)throw new Error(`No package ${pack}`);
+  const bytes=await readFile(file),pkg=parsePackage(bytes);
+  const mesh=decodeLodMeshPayload(pkg,bytes,exportIndex),topology=lodMeshTopology(mesh);
+  const arrays={};
+  for(const offset of [0x12c,0x138,0x144,0x150,0x15c,0x168]){
+    const array=mesh.arrays.get(offset);
+    arrays[offset]={num:array.num,data:Buffer.from(array.data).toString('base64')};
+  }
+  const scalars={};
+  for(let offset=0x180;offset<=0x19c;offset+=4)scalars[offset]=mesh.scalarBits.get(offset)>>>0;
+  return {mesh,topology,spec:{name:`${pack}.${pkg.exports[exportIndex-1].name}`,arrays,scalars,frameVerts:mesh.frameVertexCount,
+    vertices:Buffer.from(frameBuffer(mesh,seed)).toString('base64'),cases}};
 }
 
 /** The validator's samples: per mesh the oracle's input (`spec`) and the

@@ -226,7 +226,11 @@ export function createSimSession(game, { assets = null, events = [] } = {}) {
     if (movers) mirrors.push(TRACKED_MOVER_MIRRORS);
     const occluded = performance.now();
     const fragments = decals ? decalDraw.frame(level, game.player.collisionActor, occlusionFramePtr(), result.stream) : null;
-    return { nodes: Uint32Array.from(nodes), zone: words[42], mirrors,
+    // DrawLodMesh's inputs from the master frame: Frame->Coords and FX
+    // (docs/script-lodmesh-lod.md "Play").
+    const frameFloats = new Float32Array(words.buffer, words.byteOffset, 19);
+    const lod = { coords: Array.from(frameFloats.subarray(0, 12)), fx: frameFloats[18] };
+    return { nodes: Uint32Array.from(nodes), zone: words[42], mirrors, lod,
       sky: result.children.some(child => child.kind === 'sky'), decals: fragments, movers,
       sprites: result.sprites.map(sprite => sprite.key),
       // Host timings (ms): the movers' Update, OccludeBsp with its decode
@@ -476,12 +480,15 @@ export function createSimSession(game, { assets = null, events = [] } = {}) {
         const children = drawn ? drawn.mayRender(view, requested) : false;
         // The main frame's dynamics run after the layer's reads; mirror child
         // frames then follow OccludeBsp's requests.
+        // The LOD's FovAngle is the viewport actor's (game.view()).
+        const fov = !inspect ? current?.view?.fov : undefined;
+        const lodOf = result => result?.lod && fov !== undefined ? { ...result.lod, fov } : null;
         const occlude = !inspect && pendingOcclusion ? args => {
           const result = occludeMain(args);
-          return { main: result.main, children: drawn ? drawn.mayRender(view, new Set(result.mirrors)) : false };
+          return { main: result.main, children: drawn ? drawn.mayRender(view, new Set(result.mirrors)) : false, lod: lodOf(result) };
         } : null;
         frame = actorScene.update({ lit: Boolean(meshLighting?.frame), frustum, camera: view, cull: !children, children,
-          items: inspect ? [] : live.meshItems, occlude, ...(pack ? { pack } : {}) });
+          items: inspect ? [] : live.meshItems, occlude, lod: inspect ? null : lodOf(current?.visibility), ...(pack ? { pack } : {}) });
       } catch (error) { failed = true; errors.push(plainError(error)); }
       return { errors, frame };
     },

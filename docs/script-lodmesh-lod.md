@@ -167,3 +167,46 @@ negative; the translation throws), a count the wedge collapse never reaches
 (the original loops forever; the translation throws), subnormal or
 overflowing intermediates (the translation keeps the x87's wide exponent in
 doubles, untested).
+
+## Play (WIP, 2026-10-07 handoff)
+
+State of the branch after the verified commit above (paused on request):
+
+* **CPU mesh path (`?gpuMesh=0`) — wired, partly verified.** The simulation
+  side (`src/viewer/actor-mesh-sim.mjs`, `src/viewer/actor-mesh-lod.mjs`)
+  selects per drawn binding from the main frame's master-frame Coords and FX
+  (`sim-session.mjs` visibility) and the player's FovAngle, calls GetFrame
+  with the requested count, morphs a copy of its output (GetFrame's own
+  output stays unmorphed for later frames), resolves the corners with the
+  kernel's `lod` facade, lights the reduced faces (dropped faces become
+  zero-area `PF_Invisible` faces) and sends `record.lod` (resolved corners,
+  wedge dwords) to the page, which draws the resolved corners and U/V bytes
+  (`actor-mesh-draw.mjs`; a dropped face collapses onto its group's first
+  admitted corner, a group with none is hidden). `?meshLod=off` (main.mjs →
+  sim-host `meshLod`) restores full detail. Mirror frames reuse the main
+  frame's selection; the view model is not LOD-selected (its depth makes it
+  full detail anyway — unverified).
+* **Verified so far:** `node scripts/validate-lodmesh-lod-play.mjs --query
+  gpuMesh=0` passed once on 01_NYC_UNATCOIsland in worker mode with the first
+  version of its views (9 drawn LOD rows over 3 views, 6 meshes, 3 reduced
+  topology, 3 morphing, none below ModelVerts): the probe's inputs through
+  the original ranges gave the same detail bits, count, flags, start,
+  admitted faces and vertices, and the page drew them. The validator now
+  also looks at the 8 farthest actor meshes; that run was stopped, so the
+  current version is **unverified**.
+* **GPU mesh path (the default) — not done.** It still draws full detail:
+  the selection runs only on the CPU path (`mode==='cpu'` in update), so Play
+  with the GPU path is unchanged. Design recorded for the next step: per-channel
+  GetFrame counts and fill starts in the pose pass (U9/U10), a morph pass into
+  a separate final-pose target (alpha in w; inverse and start from
+  `lodMorphScalars`-style CPU scalars), a corner-resolve pass writing the
+  packed wedge dwords per slot corner (FaceLevel, CollapseWedgeThus chain, U/V
+  lerp from the final pose's alpha), face/vertex/corner passes reading the
+  resolved corners (vertex and corner passes over a static superset adjacency
+  per vertex — every (face, corner) whose wedge chain reaches it — with a
+  match test while the LOD is active), the draw shader fetching vertex and
+  U/V from the corner dword, certificate boxes over each group's chain/target
+  closure, exact spheres from the LOD corners, and validate-gpu-mesh compares
+  for LOD-active actors.
+* **Not done:** cost measurement (interleaved A/B), gpu-mesh.md, README and
+  roadmap entries, a full Play pass on 02_NYC_BatteryPark.

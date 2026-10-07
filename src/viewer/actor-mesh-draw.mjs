@@ -22,7 +22,7 @@ import {copyMeshLightColors} from './mesh-light-colors.mjs';
 import {DRAW_VERTEX_DECLARATIONS} from './gpu-mesh.mjs';
 import {createActorBatches,BATCH_VERTEX_DECLARATIONS,BATCH_VERTEX_TAIL} from './actor-batches.mjs';
 import {groupCorners,resolveMeshSkin} from './actor-mesh-skins.mjs';
-import {copyPositions,setMeshBounds} from './actor-mesh-sim.mjs';
+import {copyPositions,lodCornerIndices,setMeshBounds} from './actor-mesh-sim.mjs';
 
 /** The decoded mesh of a creation record, shared by its bindings. */
 function meshSource(assets,cache,mesh) {
@@ -52,7 +52,7 @@ export function createMeshDraw(assets,creation,{gpu=null,texturePool,batches=nul
   const gpuUniform={value:mode==='gpu'?1:0};
   // The latest record's state, applied when the meshes exist.
   const latest={visible:Boolean(creation.visible),childOnly:false,material:null,posed:creation.posed,colors:null,groups:null,
-    spheres:creation.spheres};
+    spheres:creation.spheres,lod:null};
   const pendingPlans=[];
   function core(){
     if(disposed)return;
@@ -70,7 +70,9 @@ export function createMeshDraw(assets,creation,{gpu=null,texturePool,batches=nul
   const updateNormals=()=>{
     if(!latest.posed)return;
     points=latest.posed;normals??=new Float32Array(points.length);
-    meshVertexNormalsInto(points,faceIndices,normals);
+    // The LOD's admitted faces with their resolved corners.
+    const resolved=latest.lod?.resolved;
+    meshVertexNormalsInto(points,resolved?Uint32Array.from(resolved.filter((v,i)=>resolved[i-i%3]>=0)):faceIndices,normals);
   };
   const dispose=()=>{
     if(disposed)return;disposed=true;
@@ -105,13 +107,38 @@ export function createMeshDraw(assets,creation,{gpu=null,texturePool,batches=nul
     groups.forEach((group,i)=>{const at=i*4;group.geometry.boundingSphere.center.set(words[at],words[at+1],words[at+2]);
       group.geometry.boundingSphere.radius=words[at+3];});
   };
+  // The drawn corners: GetFrame's (or the LOD's morphed) positions at each
+  // corner's vertex, the LOD's resolved one (actor-mesh-sim.mjs
+  // lodCornerIndices); a group the LOD empties is not drawn.
   const cpuPositions=()=>{
+    const resolved=latest.lod?.resolved??null;
     for(const group of groups){
       const positions=group.geometry.getAttribute('position');
-      copyPositions(latest.posed,positions.array,group.indices);positions.needsUpdate=true;
+      const indices=resolved?lodCornerIndices(group.faces,group.indices,resolved,group):group.indices;
+      if(!resolved)group.lodEmpty=false;
+      copyPositions(latest.posed,positions.array,indices);positions.needsUpdate=true;
       setMeshBounds(group.geometry,positions.array);
+      if(mode==='cpu'){group.mesh.visible=!group.lodEmpty;if(group.twin)group.twin.visible=!group.lodEmpty&&group.split;}
     }
     if(creation.environment)updateNormals();
+  };
+  // The corners' U and V bytes: the LOD's packed wedge dwords, or the faces'.
+  const lodUVs=()=>{
+    const scratch=latest.lod?.scratch??null,{faces}=source;
+    for(const group of groups){
+      if(group.environment)continue;
+      const uv=group.geometry.getAttribute('uv');
+      let at=0;
+      for(const faceIndex of group.faces){
+        const face=faces[faceIndex];
+        for(const corner of [0,2,1]){
+          if(scratch){const word=scratch[face.wedges[corner]];uv.array[at]=((word>>>16)&255)/256;uv.array[at+1]=(word>>>24)/256;}
+          else{uv.array[at]=face.uv[corner][0]/256;uv.array[at+1]=face.uv[corner][1]/256;}
+          at+=2;
+        }
+      }
+      uv.needsUpdate=true;
+    }
   };
   const applyColors=colors=>{
     const words=new Uint32Array(colors.buffer,colors.byteOffset,colors.length);
@@ -159,9 +186,9 @@ export function createMeshDraw(assets,creation,{gpu=null,texturePool,batches=nul
     if(disposed||!ready||!root.visible||!creation.environment||!cameraPosition||mode!=='cpu'||!points)return false;
     const relative=[0,0,0],normal=[0,0,0];
     for(const group of groups)if(group.flags&POLY.Environment){
-      const uv=group.geometry.getAttribute('uv');
-      for(let i=0;i<group.indices.length;i++){
-        const at=group.indices[i]*3;
+      const uv=group.geometry.getAttribute('uv'),indices=latest.lod?.resolved&&group.lodIndices?group.lodIndices:group.indices;
+      for(let i=0;i<indices.length;i++){
+        const at=indices[i]*3;
         relative[0]=Math.fround(points[at]-cameraPosition[0]);relative[1]=Math.fround(points[at+1]-cameraPosition[1]);
         relative[2]=Math.fround(points[at+2]-cameraPosition[2]);
         normal[0]=normals[at];normal[1]=normals[at+1];normal[2]=normals[at+2];
@@ -281,6 +308,7 @@ export function createMeshDraw(assets,creation,{gpu=null,texturePool,batches=nul
     root.visible=latest.visible;
     if(!latest.visible){hideBatched();return;}
     if(latest.material)applyMaterial(latest.material);
+    if(latest.lod)lodUVs();
     if(mode==='cpu'&&latest.posed)cpuPositions();
     if(mode==='gpu'&&latest.groups)groups.forEach((group,i)=>showGroup(group,Boolean(latest.groups[i])));
     if(latest.colors)applyColors(latest.colors);
@@ -290,6 +318,17 @@ export function createMeshDraw(assets,creation,{gpu=null,texturePool,batches=nul
     .then(build).catch(error=>{onError({actor:`${actorName}`,message:error.message});dispose();});
   return {id,root,built,get ready(){return ready;},get path(){return mode;},dispose,updateView,
     get viewDependent(){return creation.environment&&mode==='cpu';},
+    /** Validation access (main.mjs meshLod): the faces this binding's
+     * geometry draws under the LOD and their distinct vertices, the groups
+     * the LOD empties and whether the root is shown. */
+    lodStats(){
+      const resolved=latest.lod?.resolved??null;
+      let faces=0;const vertices=new Set();
+      if(resolved)for(let i=0;i<resolved.length;i+=3){if(resolved[i]<0)continue;faces++;vertices.add(resolved[i]).add(resolved[i+1]).add(resolved[i+2]);}
+      return {id,path:mode,ready,visible:root.visible,lod:resolved?{count:latest.lod.count,faces,vertices:vertices.size,
+        emptyGroups:groups.filter(group=>group.lodEmpty).length}:null,
+        faces:source?.faces.length??null};
+    },
     /** Validation access: the GPU slot and the decoded faces. */
     get gpuHandle(){return gpuHandle;},get groups(){return groups;},get source(){return source;},
     /** One main-frame record (actor-mesh-sim.mjs update); `words` is the
@@ -305,6 +344,8 @@ export function createMeshDraw(assets,creation,{gpu=null,texturePool,batches=nul
       if(record.groups)latest.groups=record.groups;
       if(record.spheres)latest.spheres=record.spheres;
       if(record.colors)latest.colors=record.colors;
+      const lodChanged=record.lod!==undefined;
+      if(lodChanged)latest.lod=record.lod.resolved?record.lod:null;
       if(plan&&mode==='gpu'&&!record.toCpu){if(gpuHandle)gpu.setPose(gpuHandle,plan);else if(!source)pendingPlans.push(plan);}
       if(record.toCpu)toCpu();
       if(lighting&&gpuHandle&&!gpu.setLighting(gpuHandle,lighting))
@@ -313,6 +354,7 @@ export function createMeshDraw(assets,creation,{gpu=null,texturePool,batches=nul
       root.visible=record.visible;
       if(!record.visible){hideBatched();return false;}
       if(record.material)applyMaterial(record.material);
+      if(lodChanged)lodUVs();
       if(record.posed&&mode==='cpu')cpuPositions();
       if(record.spheres)setSpheres(record.spheres);
       if(mode==='gpu'&&latest.groups)groups.forEach((group,i)=>showGroup(group,Boolean(latest.groups[i])));

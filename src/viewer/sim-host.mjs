@@ -10,6 +10,8 @@
  * - `gpu`, `weaponGpu`: the capacities of the page's GPU mesh instances
  *   (gpu-mesh.mjs), or null where the page has none (the CPU path);
  * - `meshBackend`: 'javascript' keeps the JavaScript GetFrame kernel;
+ * - `meshLod`: 'off' draws every mesh at full detail (no DrawLodMesh
+ *   distance LOD, docs/script-lodmesh-lod.md);
  * - `musicLibrary`: Galaxy's music library service (galaxy-music-library.mjs
  *   connectMusicLibraryPort, the worklet's port), or null for the headless
  *   mirror. It outlives the map: `disposeAudio()` (also run by `dispose()`)
@@ -32,7 +34,7 @@ import { collectTrackerMovers, moverTrackerMode, trackerMoverSpec, trackerTextur
 import { readTexture } from '../unreal/textures.mjs';
 
 export async function createSimHost(map, asset, assets, { randomSeed, subtitles, stampScene, panZones, childFrames,
-  gpu = null, weaponGpu = null, meshBackend = null, musicLibrary = null, onConversationSpeech = null, onAudioVoice = null,
+  gpu = null, weaponGpu = null, meshBackend = null, meshLod = null, musicLibrary = null, onConversationSpeech = null, onAudioVoice = null,
   onProgress = () => {} }) {
   const events = [], notes = [];
   let game;
@@ -55,12 +57,12 @@ export async function createSimHost(map, asset, assets, { randomSeed, subtitles,
       { exportName, exportIndex: name => exportIndexByName.get(name),
         lineModel: () => occlusionNow?.tracker?.live() ? occlusionNow.lineModel() : null });
     // Player start logs in a new player; the layer follows the current one.
-    actorSim = await createActorMeshSim(runtime, assets, asset, { player, lighting: meshLighting, childFrames,
+    actorSim = await createActorMeshSim(runtime, assets, asset, { player, lighting: meshLighting, childFrames, lod: meshLod !== 'off',
       layout: gpu ? createGpuMeshLayout(gpu) : null,
       onCreate: creation => events.push({ kind: 'mesh-create', creation }), onRelease: id => events.push({ kind: 'mesh-release', id }),
       ...(meshBackend === 'javascript' ? { kernel: null } : {}) });
     meshLighting.kernel = actorSim.kernel;
-    notes.push(`${actorSim.summary.npcs} NPC and ${actorSim.summary.props} prop meshes render live original poses and original mesh lighting in Play. Distance LOD, Fatness, fog/volumetric lights and animated/procedural mesh skins remain unsupported.`);
+    notes.push(`${actorSim.summary.npcs} NPC and ${actorSim.summary.props} prop meshes render live original poses and original mesh lighting in Play. ${meshLod === 'off' ? 'Distance LOD is off (?meshLod=off). ' : ''}Fatness, fog/volumetric lights and animated/procedural mesh skins remain unsupported.`);
     for (const error of actorSim.summary.errors) notes.push(`${error.actor}: ${error.message}`);
   } catch (error) { notes.push(`Actor meshes unavailable: ${error.message}`); }
   const session = createSimSession(game, { assets, events });
