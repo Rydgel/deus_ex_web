@@ -44,11 +44,16 @@ export async function createSimHost(map, asset, assets, { randomSeed, subtitles,
   const runtime = game.doors.scriptRuntime.runtime, player = () => game.player.collisionActor;
   const exportName = ref => asset.pkg.exports[ref - 1]?.name;
   let meshLighting = null, actorSim = null;
+  // The BSP occlusion and brush tracker of the current level (buildOcclusion).
+  let occlusionNow = null;
   onProgress('Preparing original actor meshes…');
   try {
     const exportIndexByName = new Map(asset.pkg.exports.map((entry, i) => [entry.name, i + 1]));
+    // Its LineChecks see the movers where the brush tracker last left them
+    // (`occlusionNow`, below).
     meshLighting = createMeshLightingView(runtime, () => runtime.levelFor(player()),
-      { exportName, exportIndex: name => exportIndexByName.get(name) });
+      { exportName, exportIndex: name => exportIndexByName.get(name),
+        lineModel: () => occlusionNow?.tracker?.live() ? occlusionNow.lineModel() : null });
     // Player start logs in a new player; the layer follows the current one.
     actorSim = await createActorMeshSim(runtime, assets, asset, { player, lighting: meshLighting, childFrames,
       layout: gpu ? createGpuMeshLayout(gpu) : null,
@@ -97,6 +102,7 @@ export async function createSimHost(map, asset, assets, { randomSeed, subtitles,
     let current = null;
     const buildOcclusion = () => {
       current?.dispose();
+      occlusionNow = null;
       const level = runtime.levelFor(player()), index = new Map();
       level.actors.forEach((actor, i) => { if (actor && !index.has(actor.name)) index.set(actor.name, i); });
       const movers = (trackerMovers ?? []).filter(m => index.has(m.name)).sort((a, b) => index.get(a.name) - index.get(b.name));
@@ -113,6 +119,7 @@ export async function createSimHost(map, asset, assets, { randomSeed, subtitles,
         if (status) throw new Error(`the brush tracker's blocks are too small (status ${status})`);
       }
       session.setOcclusion(current, specs ? { names: movers.map(m => m.name), actors, indices: movers.map(m => index.get(m.name)) } : null);
+      occlusionNow = current;
     };
     buildOcclusion();
     session.setOcclusionRebuild(buildOcclusion);

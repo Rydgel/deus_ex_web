@@ -301,6 +301,32 @@ export function createBspOcclusion(kernel, model, { surfaceTextureFlags, zoneAct
     /** The moving brush tracker (brush-tracker.mjs) over this model, or
      * null without movers; `blocks` are the model's own. */
     tracker: trackerHost,
+    /** Level->Model as UModel::LineCheck traverses it now, the tracker's
+     * fragment nodes included (docs/brush-tracker.md "Collision": once
+     * NF_IsNew clears they are ordinary nodes of the level model): the
+     * fields ray.mjs traceRayFast reads (plane, front, back, vertexCount,
+     * NodeFlags) and rootOutside, read from this model's memory. A node
+     * object is made at its first read; take a new view after the tracker
+     * updated. */
+    lineModel() {
+      const count = trackerHost ? trackerHost.header(TRACKER.NODES_NUM) : nodeCount, made = new Map();
+      const u = words(), b = bytes(), fl = new Float32Array(memory.buffer);
+      const node = i => {
+        let n = made.get(i);
+        if (!n) {
+          const o = (nodes >>> 2) + 16 * i;
+          n = { plane: [fl[o], fl[o + 1], fl[o + 2], fl[o + 3]], back: u[o + 8] | 0, front: u[o + 9] | 0,
+            vertexCount: b[nodes + 64 * i + 54], flags: b[nodes + 64 * i + 55] };
+          made.set(i, n);
+        }
+        return n;
+      };
+      return { rootOutside: model.rootOutside, nodes: new Proxy([], { get(_, key) {
+        if (key === 'length') return count;
+        const i = typeof key === 'string' ? Number(key) : NaN;
+        return Number.isInteger(i) && i >= 0 && i < count ? node(i) : undefined;
+      } }) };
+    },
     blocks: { nodes, verts, points, surfs },
     /** Model.Zones[i].LastRenderTime bits. */
     zoneTime: i => words()[(zones >>> 2) + 4 * i + 1],

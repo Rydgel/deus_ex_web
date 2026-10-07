@@ -361,10 +361,12 @@ lists is not drawn.
 - **Precision.** The game thread's control word at LoadMap and SaveGame is
   not measured. Construction assumes PC64.
 - **Collision.** Once NF_IsNew clears, fragments are ordinary solid nodes of
-  Level->Model, and nothing in the level traces excludes them. The
-  original's level traces probably see movers where they were last
-  rendered. Play's collision uses the static model, so this needs a live
-  check (Stage 5).
+  Level->Model, and nothing in the level traces excludes them.
+  SetupForActor's LineCheck now runs over the tracked model in Play, and
+  Engine's UModel::LineCheck under Unicorn agrees on 366 checks
+  (validate-tracked-linecheck, [mesh lighting](mesh-lighting.md) "LineCheck
+  and the brush tracker"). Play's collision, AI and decal traces still use
+  the static model (Stage 5).
 - **SaveGame** (Stage 6). SaveGame deletes the tracker, saves, resets every
   mover's SavedPos to (−1, −1, −1) and builds a new tracker. Play has no
   SaveGame yet; `buildOcclusion` in `sim-host.mjs` is the rebuild to call.

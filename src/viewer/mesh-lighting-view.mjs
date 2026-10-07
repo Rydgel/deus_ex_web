@@ -1,5 +1,5 @@
 import { getAxes } from '../runtime/camera.mjs';
-import { traceRay } from '../runtime/ray.mjs';
+import { traceRay, traceRayFast } from '../runtime/ray.mjs';
 import { actorsEpoch } from '../runtime/base-epoch.mjs';
 import { movingLightLeaves, worldLightRadius } from '../runtime/dynamic-lighting.mjs';
 import { PF, accumulateFaceNormal, actorPolyFlags, createMeshLightManager, d3dDiffuse, finishSetup, lightVertex,
@@ -18,9 +18,19 @@ const LIGHT_FIELDS = ['LightType', 'LightEffect', 'LightBrightness', 'LightHue',
  * SetupForActor call per drawn actor per frame. `levelSource()` returns the
  * current Play level; `exportName(ref)` names a map export, since UModel.Lights
  * holds map export references. */
-export function createMeshLightingView(runtime, levelSource, { exportName, exportIndex = () => undefined, kernel = null }) {
+export function createMeshLightingView(runtime, levelSource, { exportName, exportIndex = () => undefined, kernel = null,
+  lineModel = () => null }) {
   const read = (object, name) => { try { return runtime.readNamed(object, name); } catch { return undefined; } };
   const manager = createMeshLightManager();
+  // SetupForActor's Model.LineCheck (End the light, Start the actor, zero
+  // extent, no extra node flags; 0x10b09583-0x10b0961f): with the brush
+  // tracker, `lineModel()` gives Level->Model with the movers' fragment
+  // nodes as the tracker last left them (bsp-occlusion.mjs lineModel), as
+  // the original's level model holds them; otherwise the static model.
+  const clear = (from, to) => {
+    const tracked = lineModel();
+    return (tracked ? traceRayFast(tracked, from, to) : traceRay(frame.model, from, to)) === null;
+  };
   let frame = null, frameCount = 0, lastTime = null, meshLightContext = null;
   // Level.Actors' name map and membership set change only when actorsEpoch
   // advances (base-epoch.mjs); they are rebuilt only then.
@@ -150,7 +160,7 @@ export function createMeshLightingView(runtime, levelSource, { exportName, expor
         index: handle => lightIndex(identityOfHandle(handle)),
         alive: handle => { const light = identityOfHandle(handle); return Boolean(light) && !read(light, 'bDeleteMe') && live.has(light); },
         light: handle => lightRecord(identityOfHandle(handle)),
-        trace: (from, to) => traceRay(frame.model, from, to) === null,
+        trace: (from, to) => clear(from, to),
       });
       // SetupDynamics (0x10b22d90) prepends candidates in level-actor order;
       // Filter prepends each onto the leaves it reaches.
@@ -222,7 +232,7 @@ export function createMeshLightingView(runtime, levelSource, { exportName, expor
         },
         leafLights: frame.leafLights.get(iLeaf) ?? [],
         current: record => lightRecord(record.actor),
-        lineCheck: light => traceRay(frame.model, location, light.location) === null,
+        lineCheck: light => clear(location, light.location),
         viewport: frame.viewport, rendMap: 5, noLighting: false,
         alive: light => !read(light.actor, 'bDeleteMe') && frame.live.has(light.actor),
         worldToCamera: point => view.toCamera(point),
