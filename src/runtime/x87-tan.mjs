@@ -59,3 +59,25 @@ export function x87TanCandidates(x) {
   if (distance <= band) return [double(truncated), double(truncated + 1n)];
   return [double(remainder > half ? truncated + 1n : truncated)];
 }
+
+/** The floats DrawLodMesh can store for appTan(`x`) (Render 0x10b0ebd0..
+ * 0x10b0ebe2, docs/script-lodmesh-lod.md): Core's appTan leaves FPTAN's
+ * extended result in ST0 and the caller's FSTP m32 rounds it once to a
+ * float (precision control does not apply to FPTAN or to a store). One
+ * candidate, or both neighbours (lower first) when the true tangent lies
+ * within the same 8-extended-unit band of a float rounding midpoint.
+ * scripts/validate-x87-tan-hardware.mjs measures it on real FPTAN. */
+export function x87TanFloatCandidates(x) {
+  if (!(x > 0 && x < Math.PI / 2) || !decompose(x)) return null;
+  const t = tanFixed(x);
+  if (t === null || t <= 0n) return null;
+  const width = t.toString(2).length, shift = BigInt(width - 24);
+  const truncated = t >> shift, remainder = t - (truncated << shift), half = 1n << (shift - 1n);
+  const band = 8n << BigInt(width - 64);
+  // A 24-bit mantissa times its power of two is exact in a double; the
+  // float's range holds every tangent of a FOV in (0, 180).
+  const float = mantissa => Math.fround(Number(mantissa) * 2 ** (width - 24 - Number(P)));
+  const distance = remainder > half ? remainder - half : half - remainder;
+  if (distance <= band) return [float(truncated), float(truncated + 1n)];
+  return [float(remainder > half ? truncated + 1n : truncated)];
+}

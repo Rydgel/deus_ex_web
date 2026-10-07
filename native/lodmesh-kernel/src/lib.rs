@@ -7,6 +7,8 @@
 //! normal range).
 use std::cell::RefCell;
 
+mod lod;
+
 #[derive(Clone, Copy)]
 struct Ext {
     sig: u64,
