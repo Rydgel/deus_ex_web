@@ -259,7 +259,9 @@ was left half done, and the HUD snapshot then read a destroyed window.
   serialized, except ULevel's `Actors` and the UObject header.
 * It is unmeasured whether the original collection unloads DeusExConText.
   Play keeps it as a persistent package and restores its conversation
-  objects to their load baseline.
+  objects (the mission list's whole loaded graph,
+  [binding](script-conversation-binding.md#loaded-graph)) to their load
+  baseline.
 * The in-place replacement's complete destructor on each old export (vtable
   `+0x0c` with 0) is not run. Play restores the export's serialized state
   instead.

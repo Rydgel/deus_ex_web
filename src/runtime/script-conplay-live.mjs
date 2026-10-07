@@ -89,7 +89,22 @@ export async function createLiveConPlayRuntime({runtime,assets,level,player,shel
     sounds.set(sound,{sound,bytes,format,mimeType:format==='mp3'?'audio/mpeg':'audio/wav',
       soundObject:sound.name,soundId:id,soundData:{array:{data:bytes,num:bytes.length}}});
   }
-  for(const {conversation} of [...conversations,...dataLinkConversations]){
+  // BarkManager.StartBark looks up BuildBarkName's "<BarkBindName or
+  // BindName>_Bark<mode>" in the pawn's ConListItems (FindConversationByName)
+  // and loads that conversation's speech through GetSpeechAudio. ConBindEvents
+  // filled those lists at PostPostBeginPlay, so a bark can reach exactly the
+  // bound conversations whose conName contains "_Bark" (FName comparison is
+  // case-insensitive).
+  const barkConversations=[],seenBarks=new Set();
+  for(const actor of level.actors){
+    if(!actor||!runtime.instances.has(actor))continue;
+    for(let item=get(actor,'ConListItems');item;item=get(item,'next')){
+      const conversation=get(item,'con');
+      if(seenBarks.has(conversation)||!String(get(conversation,'conName')).toLowerCase().includes('_bark'))continue;
+      seenBarks.add(conversation);barkConversations.push({conversation});
+    }
+  }
+  for(const {conversation} of [...conversations,...dataLinkConversations,...barkConversations]){
     const suffix=get(conversation,'audioPackageName');
     const context=get(conversation,'Outer').name.replace(/Text$/i,'');
     for(let event=get(conversation,'eventList');event;event=get(event,'nextEvent')){

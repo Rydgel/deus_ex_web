@@ -130,8 +130,10 @@ export async function prepareFaceConversations(runtime, { assets, level, package
     if (!descriptor.conOwnerName || !bindNames.has(lower(descriptor.conOwnerName))) continue;
     // Bark conversations are started by the AI system and skipped by
     // GetActiveConversation (DeusExPlayer.uc:7941). DataLink conversations play
-    // through the separate DataLink path. Neither is reached by the frob
-    // ConPlay selection, so preparing their graphs here is unnecessary.
+    // through the separate DataLink path. Neither is a frob ConPlay candidate;
+    // their graphs were attached with the mission list's load
+    // (ScriptRuntime.prepareConversations), where ConPlayBark and DataLinkPlay
+    // read them.
     if (lower(descriptor.conName).startsWith(lower(`${descriptor.conOwnerName}_Bark`))) continue;
     const conversation = await runtime.objects.resolve(conText, descriptor.ref);
     await runtime.prepareObject(conversation);
@@ -147,8 +149,14 @@ export async function prepareFaceConversations(runtime, { assets, level, package
   const isSpeakingActor = conSys.exportsByPath.get('conversation.isspeakingactor');
   if (isSpeakingActor) await runtime.prepareFunction(conSys, isSpeakingActor);
 
+  // Player start restores the conversation package's objects to their load
+  // baseline (docs/script-loadmap-gc.md): the face graphs above and every
+  // other object the mission list's load attached, such as the bark
+  // ConEventRandomLabel cycle state GetRandomLabel advances.
+  const restored = new Set(objects);
+  for (const loaded of runtime.conversationListObjects?.values() ?? []) for (const object of loaded) restored.add(object);
   // Preserve canonical ObjectProperty identities, copying owned typed values.
-  const baseline = [...objects].map(object => ({ object, fields:
+  const baseline = [...restored].map(object => ({ object, fields:
     runtime.instance(object).cls.propertyLink.filter(field => !field.key.startsWith('core.object.'))
       .map(field => [field, copyValue(field, runtime.fieldReference(object, field).get())]) }));
   const reset = () => {
