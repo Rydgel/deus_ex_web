@@ -16,7 +16,7 @@ import { OCCLUSION_POINTS, OCCLUSION_SPRITE_KEYS } from '../runtime/bsp-occlusio
 import { packDynamics, actorOcclusionMode } from './dynamics-candidates.mjs';
 import { createLightNoise, lightNoiseSnapshot } from '../runtime/static-lighting.mjs';
 import { dynamicActorRoute } from '../runtime/render-visibility.mjs';
-import { TRACKED_MOVER_MIRRORS } from './mirror-passes.mjs';
+import { TRACKED_MOVER_MIRRORS, childFramesMode } from './mirror-passes.mjs';
 
 /** A thrown error as plain data: structured clone drops an Error's own
  * properties (`travel`, `partial`). */
@@ -68,6 +68,9 @@ export function createSimSession(game, { assets = null, events = [] } = {}) {
   // rebuild Player start's LoadMap needs.
   let trackerMovers = null, rebuildOcclusion = null;
   const actorOcclusion = actorOcclusionMode() !== 'frustum';
+  // OccludeFrame's child frames (mirror and sky) with their own OccludeBsp;
+  // ?childFrames=off keeps the frustum-tested passes.
+  const childFrames = childFramesMode() !== 'off';
   // DrawFrame's decal block after the main frame's OccludeBsp
   // (decal-draw.mjs, docs/decals.md), with the kernel's frame words.
   let decalDraw = null, occlusionFramePtr = null;
@@ -192,12 +195,53 @@ export function createSimSession(game, { assets = null, events = [] } = {}) {
     }
   }
   const f32b = new Float32Array(3), u32b = new Uint32Array(f32b.buffer);
+  // A zone's SkyZone for the sky child frame (occlude.rs sky_coords): its
+  // Location, Rotation and Region.ZoneNumber.
+  function skyRecord(sky) {
+    if (!sky) return null;
+    const region = runtime.readNamed(sky, 'Region');
+    return { location: [...runtime.readNamed(sky, 'Location')], rotation: [...runtime.readNamed(sky, 'Rotation')],
+      zone: region?.['engine.actor.pointregion.zonenumber'] ?? 0 };
+  }
+  // A frame's drawn nodes (Uint32Array) and the tracked movers' polygon
+  // ordinals its draw lists hold, by mover name (null without the tracker),
+  // with each draw item's iZone alongside (`moverZones`: SetupForSurf's
+  // fog-zone test reads the item's zone) and each drawn polygon's surface
+  // pBase and vectors as the tracker holds them (`moverFacets`, by ordinal:
+  // SetupForSurf's light-map lattice of a dynamic surface).
+  function drawnOf(draw) {
+    const nodes = [];
+    for (const list of draw) for (const entry of list) for (const poly of entry.polys) nodes.push(poly.iNode);
+    let movers = null, moverZones = null, moverFacets = null;
+    if (trackerMovers && occlusion.tracker?.live()) {
+      movers = {}; moverZones = {}; moverFacets = {};
+      for (const list of draw) for (const entry of list) {
+        const owner = occlusion.tracker.surfOwner(entry.iSurf);
+        if (!owner) continue;
+        const name = trackerMovers.names[owner.tag - 0x40000000];
+        (movers[name] ??= []).push(owner.ordinal);
+        (moverZones[name] ??= []).push(entry.iZone);
+        (moverFacets[name] ??= {})[owner.ordinal] ??= occlusion.tracker.surfaceFacet(entry.iSurf);
+      }
+    }
+    return { nodes: Uint32Array.from(nodes), movers, moverZones, moverFacets };
+  }
+  // A span's pixel bounds [minX, startY, maxX, endY) (top-down), or null.
+  function spanBounds(span) {
+    let minX = Infinity, maxX = -Infinity, startY = Infinity, endY = -Infinity;
+    span.lines.forEach((line, i) => {
+      if (!line.length) return;
+      minX = Math.min(minX, line[0][0]); maxX = Math.max(maxX, line.at(-1)[1]);
+      startY = Math.min(startY, span.startY + i); endY = Math.max(endY, span.startY + i + 1);
+    });
+    return minX < maxX && startY < endY ? [minX, startY, maxX, endY] : null;
+  }
   function visibility(view, width, height, setupCount = -1) {
     const level = runtime.levelFor(game.player.collisionActor), info = level.actors[0];
     const moversStarted = performance.now();
     updateMovers();
     const moversMs = performance.now() - moversStarted;
-    occlusion.setZoneSkies(level.zoneModel.zoneActors.map(zone => Boolean(runtime.readNamed(zone ?? info, 'SkyZone'))));
+    occlusion.setZoneSkies(level.zoneModel.zoneActors.map(zone => skyRecord(runtime.readNamed(zone ?? info, 'SkyZone'))));
     const words = occlusion.master({ location: view.location, rotation: view.rotation, width, height, fov: view.fov }).frame;
     f32[0] = runtime.readNamed(info, 'TimeSeconds');
     // The decal block clips against the saved polygons' points (option
@@ -206,20 +250,9 @@ export function createSimSession(game, { assets = null, events = [] } = {}) {
     words[44] = ++drawWorlds; words[45] = u32[0];
     words[46] = 3 | (decals ? OCCLUSION_POINTS : 0) | (setupCount >= 0 ? OCCLUSION_SPRITE_KEYS : 0); words[47] = 0;
     const started = performance.now();
-    const result = occlusion.run(words, [], { setupCount, skipPoints: true }), nodes = [];
-    for (const list of result.draw) for (const entry of list) for (const poly of entry.polys) nodes.push(poly.iNode);
-    // The movers' polygons the draw lists hold (tracker surfaces): each
-    // mover's drawn polygon ordinals, by name.
-    let movers = null;
-    if (trackerMovers && occlusion.tracker?.live()) {
-      movers = {};
-      for (const list of result.draw) for (const entry of list) {
-        const owner = occlusion.tracker.surfOwner(entry.iSurf);
-        if (!owner) continue;
-        const name = trackerMovers.names[owner.tag - 0x40000000];
-        (movers[name] ??= []).push(owner.ordinal);
-      }
-    }
+    const result = occlusion.run(words, [], { setupCount, skipPoints: true,
+      children: childFrames ? { fov: view.fov, orthoZoom: 0 } : null });
+    const { nodes, movers, moverZones, moverFacets } = drawnOf(result.draw);
     // The mirror requests: a level node, or a tracked mover's polygon
     // (mirror-passes.mjs requestedGroup).
     const mirrors = [];
@@ -231,8 +264,19 @@ export function createSimSession(game, { assets = null, events = [] } = {}) {
     if (movers) mirrors.push(TRACKED_MOVER_MIRRORS);
     const occluded = performance.now();
     const fragments = decals ? decalDraw.frame(level, game.player.collisionActor, occlusionFramePtr(), result.stream) : null;
-    return { nodes: Uint32Array.from(nodes), zone: words[42], mirrors,
-      sky: result.children.some(child => child.kind === 'sky'), decals: fragments, movers,
+    // OccludeFrame's child frames: each one's visible nodes and mover
+    // polygons, its Frame->Sprite keys, the group a mirror frame looks
+    // through (a tracked mover's polygon) and its span's bounds.
+    const frames = result.frames.map(frame => {
+      const drawnHere = drawnOf(frame.draw);
+      const owner = frame.kind === 'mirror' && drawnHere.movers ? occlusion.tracker.surfOwner(occlusion.nodeSurf(frame.iNode)) : null;
+      return { index: frame.index, parent: frame.parent, kind: frame.kind, iNode: frame.iNode, recursion: frame.recursion,
+        group: owner ? `${trackerMovers.names[owner.tag - 0x40000000]}:${owner.ordinal}` : null,
+        bounds: spanBounds(frame.span), nodes: drawnHere.nodes, movers: drawnHere.movers,
+        sprites: frame.sprites.map(sprite => sprite.key) };
+    });
+    return { nodes, zone: words[42], mirrors, frames: childFrames ? frames : null, size: [width, height],
+      sky: result.children.some(child => child.kind === 'sky'), decals: fragments, movers, moverZones, moverFacets,
       sprites: result.sprites.map(sprite => sprite.key),
       // Host timings (ms): the movers' Update, OccludeBsp with its decode
       // (and the movers' draw lists), then the decal block.
@@ -249,15 +293,31 @@ export function createSimSession(game, { assets = null, events = [] } = {}) {
     if (!pending) return null;
     const entries = packDynamics(occlusion, { sprites: live.sprites, iterators: live.iterators, ...args });
     const result = visibility(pending.view, pending.width, pending.height, entries.length), main = new Set();
-    for (const sprite of live.sprites) sprite.main = false;
+    for (const sprite of live.sprites) { sprite.main = false; sprite.frames = null; }
     for (const key of result.sprites) {
       const entry = entries[key];
       if (entry.sprite) entry.sprite.main = true; else main.add(entry.binding.id);
     }
     result.main = main;
     delete result.sprites;
+    // Each child frame's Frame->Sprite: its bindings (`main`) and, on the
+    // sprite records, the frames that draw them; `children` every binding
+    // some child frame draws.
+    const children = new Set();
+    for (const frame of result.frames ?? []) {
+      frame.main = new Set();
+      for (const key of frame.sprites) {
+        const entry = entries[key];
+        if (entry.sprite) (entry.sprite.frames ??= []).push(frame.index);
+        else { frame.main.add(entry.binding.id); children.add(entry.binding.id); }
+      }
+      delete frame.sprites;
+    }
+    result.children = children;
     pending.frame.visibility = result;
     // DrawWorld draws the sky frame only when OccludeBsp made one.
+    // The SkyZone view stays for the sky frames inside mirror frames.
+    result.skyView = pending.frame.sky ?? null;
     if (!result.sky) pending.frame.sky = null;
     return result;
   }
@@ -343,13 +403,19 @@ export function createSimSession(game, { assets = null, events = [] } = {}) {
     moverState() {
       const tracker = occlusion?.tracker, last = current?.visibility ?? null;
       const frame = { nodes: last?.nodes?.length ?? null, moverMirrors: last?.mirrors?.filter(m => typeof m === 'string') ?? null,
-        ms: last?.ms ?? null };
+        ms: last?.ms ?? null,
+        // OccludeFrame's child frames: index, parent, kind, drawn nodes, actors and the group.
+        frames: last?.frames?.map(f => ({ index: f.index, parent: f.parent, kind: f.kind, nodes: f.nodes.length,
+          actors: f.main?.size ?? null, group: f.group ?? f.iNode, bounds: f.bounds })) ?? null };
       if (!trackerMovers || !tracker) return { tracker: false, ...frame };
       const drawn = last?.movers ?? null;
       return { tracker: tracker.live(), ...frame, admitted: trackerMovers.admitted ?? null, movers: trackerMovers.names.map((name, i) => ({ name,
         fragments: tracker.chain(i).length, drawn: drawn ? [...new Set(drawn[name] ?? [])].length : null,
         polygons: drawn ? [...new Set(drawn[name] ?? [])].sort((a, b) => a - b) : null })) };
     },
+    /** Validation (mover-probe.mjs): the last main frame's decal fragments
+     * (decal-draw.mjs groups: texture, view-space triangle positions). */
+    decalFragments() { return current?.visibility?.decals ?? null; },
     /** The kernel's decal facade and its frame-words pointer for the decal block. */
     setDecalKernel(kernel, framePtr) { decalDraw?.dispose(); decalDraw = kernel ? createDecalDraw(runtime, kernel) : null; occlusionFramePtr = framePtr; },
     setCoronas(scan) { coronaScan = scan; },
@@ -419,10 +485,11 @@ export function createSimSession(game, { assets = null, events = [] } = {}) {
       if (drawn) {
         const sky = !drawWorld ? null : input.play ? begun?.sky ?? null : input.inspect?.sky ?? null;
         const requested = input.play && begun?.visibility ? new Set(begun.visibility.mirrors) : null;
+        const frames = input.play ? begun?.visibility?.frames ?? null : null;
         const stamps = this.stamps({ size: { x: width, y: height }, drawWorld, sky, mirrors: input.mirrors, sprites, camera: inspect, requested,
-          actorPasses: Boolean(actorScene) && !stopped() });
+          actorPasses: Boolean(actorScene) && !stopped(), frames, rect: begun?.renderRect ?? null });
         collect(stamps.errors);
-        snapshot.stamps = { passDecisions: stamps.passDecisions, mainDecisions: stamps.mainDecisions };
+        snapshot.stamps = { passDecisions: stamps.passDecisions, mainDecisions: stamps.mainDecisions, skyDecisions: stamps.skyDecisions };
       }
       time('mirrors');
       if (drawWorld && input.play && coronaScan && view && !stopped()) {
@@ -482,8 +549,9 @@ export function createSimSession(game, { assets = null, events = [] } = {}) {
         // The main frame's dynamics run after the layer's reads; mirror child
         // frames then follow OccludeBsp's requests.
         const occlude = !inspect && pendingOcclusion ? args => {
-          const result = occludeMain(args);
-          return { main: result.main, children: drawn ? drawn.mayRender(view, new Set(result.mirrors)) : false };
+          const result = occludeMain({ ...args, childFrames });
+          return { main: result.main, children: result.frames ? result.children
+            : drawn ? drawn.mayRender(view, new Set(result.mirrors)) : false };
         } : null;
         frame = actorScene.update({ lit: Boolean(meshLighting?.frame), frustum, camera: view, cull: !children, children,
           items: inspect ? [] : live.meshItems, occlude, ...(pack ? { pack } : {}) });
@@ -495,13 +563,16 @@ export function createSimSession(game, { assets = null, events = [] } = {}) {
      * it, before the corona pass, the weapon and the HUD. Returns the actor
      * layer's decision for each mirror pass in draw order and, when mirrors
      * drew, the main frame's again. `size` is the drawing buffer's. */
-    stamps({ size, drawWorld, sky = null, mirrors = true, sprites = [], camera: inspect = null, actorPasses = true, requested = null }) {
+    stamps({ size, drawWorld, sky = null, mirrors = true, sprites = [], camera: inspect = null, actorPasses = true, requested = null,
+      frames = null, rect = null }) {
       const errors = [], passDecisions = [];
-      let mainDecisions = null;
+      let mainDecisions = null, skyDecisions = null;
       stamped = { movers: new Set(), sprites: new Set(), actors: new Set(), occluded: new Set(), bindings: new Map(),
-        weapon: new Set() };
+        weapon: new Set(), source: new Map(), drawn: new Set() };
       try {
-        const { passes, mirrored } = drawn.passes({ camera: inspect ?? camera, sky, drawWorld, size, mirrors, requested });
+        const { passes, mirrored } = drawn.passes({ camera: inspect ?? camera, sky, drawWorld, size, mirrors, requested,
+          frames: inspect ? null : frames, rect });
+        const byId = new Map((actorScene?.all() ?? []).map(binding => [binding.id, binding]));
         // `actorPasses`: the page applies the actor layer's mirror pass
         // decisions (no runtime error); otherwise its last state draws.
         const bindings = actorScene?.all() ?? [], lastMirror = passes.findLast(pass => pass.kind === 'mirror');
@@ -515,10 +586,36 @@ export function createSimSession(game, { assets = null, events = [] } = {}) {
           if (!trackerMovers) drawn.moversIn(pass, stamped.movers);
           if (pass.kind === 'main' && main) {
             for (const sprite of sprites) if (sprite.main) stamped.sprites.add(sprite.handle);
-            for (const binding of bindings)
-              if (main.has(binding.id) && !stamped.bindings.has(binding.id)) {
-                stamped.occluded.add(binding.actor); stamped.bindings.set(binding.id, binding.actor);
+            const frustum = drawn.frustum(pass.camera);
+            for (const binding of bindings) {
+              if (!main.has(binding.id)) continue;
+              if (!stamped.bindings.has(binding.id)) {
+                stamped.occluded.add(binding.actor); stamped.bindings.set(binding.id, binding.actor); stamped.source.set(binding.actor, 'main');
               }
+              if (binding.drawnIn(frustum, null)) stamped.drawn.add(binding.actor);
+            }
+            continue;
+          }
+          // A child frame's pass draws and stamps its own Frame->Sprite
+          // (DrawActorSprite, 0x10b25150), whatever three.js culls: an actor
+          // whose groups all lie outside the pass's view is stamped, not drawn.
+          if (pass.frame) {
+            const frame = pass.frame, ids = frame.main ?? new Set(), frustum = drawn.frustum(pass.camera);
+            for (const sprite of sprites) if (sprite.frames?.includes(frame.index)) stamped.sprites.add(sprite.handle);
+            const decisions = actorPasses && actorScene ? actorScene.framePasses(frustum, ids) : null;
+            for (const id of ids) {
+              const binding = byId.get(id);
+              if (!binding) continue;
+              if (!stamped.bindings.has(id)) {
+                stamped.occluded.add(binding.actor); stamped.bindings.set(id, binding.actor);
+                stamped.source.set(binding.actor, `${pass.kind} frame ${frame.index}`);
+              }
+              if (binding.drawnIn(frustum, decisions?.get(id) ?? { root: true })) stamped.drawn.add(binding.actor);
+            }
+            if (decisions) {
+              if (pass.kind === 'mirror') passDecisions.push(decisions); else skyDecisions = decisions;
+              if (pass === lastMirror || pass.kind === 'sky') mainDecisions = actorScene.framePasses(null, null);
+            }
             continue;
           }
           drawn.spritesIn(pass, sprites, stamped.sprites);
@@ -528,7 +625,7 @@ export function createSimSession(game, { assets = null, events = [] } = {}) {
           if (decisions) passDecisions.push(decisions);
           for (const binding of bindings)
             if (!stamped.bindings.has(binding.id) && binding.drawnIn(frustum, decisions?.get(binding.id) ?? null)) {
-              stamped.actors.add(binding.actor); stamped.bindings.set(binding.id, binding.actor);
+              stamped.actors.add(binding.actor); stamped.bindings.set(binding.id, binding.actor); stamped.source.set(binding.actor, pass.kind);
             }
           if (pass === lastMirror && actorPasses) mainDecisions = actorScene.passVisibility(null);
         }
@@ -548,7 +645,7 @@ export function createSimSession(game, { assets = null, events = [] } = {}) {
         // draw whatever their own bHidden).
         for (const actor of stamped.occluded) if (!stamped.actors.has(actor)) runtime.writeNamed(actor, 'LastRenderTime', time);
       } catch (error) { failed = true; errors.push(plainError(error)); }
-      return { errors, passDecisions, mainDecisions };
+      return { errors, passDecisions, mainDecisions, skyDecisions };
     },
     /** DrawFrame's corona pass, which closes the world frame
      * (corona-scan.mjs): the icons over the drawn size, the render rect's or
@@ -593,14 +690,20 @@ export function createSimSession(game, { assets = null, events = [] } = {}) {
       if (!stamped) return null;
       const name = value => typeof value === 'number' ? identityOfHandle(value)?.name ?? String(value)
         : typeof value === 'string' ? value : value.name;
+      // The actors three.js draws: a Frame->Sprite actor it culls in every
+      // pass that stamps it is stamped, not drawn.
       const actors = new Set();
-      for (const [id, actor] of stamped.bindings) if (built(id)) actors.add(actor);
+      for (const [id, actor] of stamped.bindings)
+        if (built(id) && (!stamped.occluded.has(actor) || stamped.drawn.has(actor))) actors.add(actor);
       const want = { movers: stamped.movers, sprites: new Set([...stamped.sprites].filter(handle => !skipped.has(handle))), actors };
       for (const kind of trackerMovers ? ['sprites', 'actors'] : ['movers', 'sprites', 'actors']) {
         const a = new Set([...want[kind]].map(name)), b = new Set([...drew[kind]].map(name));
         const onlySim = [...a].filter(x => !b.has(x)), onlyPage = [...b].filter(x => !a.has(x));
         if (onlySim.length || onlyPage.length)
-          return `${kind}: only the simulation side ${onlySim.join(',') || '-'}; only the page ${onlyPage.join(',') || '-'}`;
+          return `${kind}: only the simulation side ${onlySim.map(n => {
+            const source = kind === 'actors' ? [...stamped.source].find(([actor]) => actor.name === n)?.[1] : null;
+            return source ? `${n} (${source})` : n;
+          }).join(',') || '-'}; only the page ${onlyPage.join(',') || '-'}`;
       }
       return null;
     },
@@ -668,6 +771,7 @@ export function createSimSession(game, { assets = null, events = [] } = {}) {
             try { frame.visibility = visibility(frame.view, w, h); }
             catch (error) { fail(error); }
             // DrawWorld draws the sky frame only when OccludeBsp made one.
+            if (frame.visibility) frame.visibility.skyView = frame.sky ?? null;
             if (frame.visibility && !frame.visibility.sky) frame.sky = null;
           }
         }

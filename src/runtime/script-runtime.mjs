@@ -2974,6 +2974,12 @@ export class ScriptRuntime {
         read:(a,n)=>this.readNamed(a,n),
         write:(a,n,v)=>this.writeNamed(a,n,v),
         rand:typeof this.rng?.rand==='function'?()=>this.rng.rand():null,
+        // The Mover branch's AActor::SetBase(Owner, 1), the recovered one.
+        setBase:(a,target)=>{
+          const level=this.levelFor(a);
+          const dispatch=(x,name,args)=>this.dispatchSpawnedEvent(x===level?.hash?.levelInfo?level.actors[0]:x,name,args);
+          return setBase(a,target,dispatch,true);
+        },
       }),
     });
     if(call.record?.key==='engine.playerpawn.clienttravel'){

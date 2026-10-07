@@ -40,29 +40,29 @@ use core::ptr::{addr_of, addr_of_mut};
 // ---- header (host-filled; counters kept here) --------------------------------
 
 pub(crate) const H_NODES: usize = 0;
-const H_NODES_NUM: usize = 1;
+pub(crate) const H_NODES_NUM: usize = 1;
 const H_NODES_MAX: usize = 2;
 const H_TOP: usize = 3;
-const H_VERTS: usize = 4;
-const H_VERTS_NUM: usize = 5;
+pub(crate) const H_VERTS: usize = 4;
+pub(crate) const H_VERTS_NUM: usize = 5;
 const H_VERTS_MAX: usize = 6;
 const H_VTOP: usize = 7;
-const H_POINTS: usize = 8;
-const H_POINTS_NUM: usize = 9;
+pub(crate) const H_POINTS: usize = 8;
+pub(crate) const H_POINTS_NUM: usize = 9;
 const H_POINTS_MAX: usize = 10;
 const H_PTOP: usize = 11;
 const H_FIRST_POINT: usize = 12;
-const H_POINTS_CAP: usize = 13;
-const H_VECTORS: usize = 14;
-const H_VECTORS_NUM: usize = 15;
+pub(crate) const H_POINTS_CAP: usize = 13;
+pub(crate) const H_VECTORS: usize = 14;
+pub(crate) const H_VECTORS_NUM: usize = 15;
 const H_VECTORS_MAX: usize = 16;
 const H_VECTORS_TOP: usize = 17;
 const H_VECTORS_CAP: usize = 18;
 const H_SURFS: usize = 19;
-const H_SURFS_NUM: usize = 20;
+pub(crate) const H_SURFS_NUM: usize = 20;
 const H_SURFS_MAX: usize = 21;
 pub(crate) const H_SURFS_TOP: usize = 22;
-const H_DSURFS: usize = 23;
+pub(crate) const H_DSURFS: usize = 23;
 const H_SURFS_CAP: usize = 24;
 const H_MOVERS: usize = 25;
 const H_MOVER_COUNT: usize = 26;
@@ -88,6 +88,10 @@ const H_VERTS_CAP: usize = 47;
 pub(crate) const H_LIVE: usize = 48;
 const H_STATUS: usize = 49;
 const H_HELPER_CAP: usize = 50;
+/// Bumped by every Update that rebuilt a mover (and by construction's
+/// Update(NULL)): the host's sign that the level model changed (decal.rs
+/// `decal_model_sync`). Not an original field.
+pub(crate) const H_GENERATION: usize = 51;
 const H_WORDS: usize = 56;
 
 /// Header words; 49 is the last call's status (0 ok, 1 a block was too
@@ -105,6 +109,10 @@ fn h(i: usize) -> u32 {
 #[inline(always)]
 fn set_h(i: usize, v: u32) {
     unsafe { (*addr_of_mut!(HEADER))[i] = v }
+}
+/// A header word (decal.rs reads the tracked arrays through it).
+pub(crate) fn header(i: usize) -> u32 {
+    h(i)
 }
 /// The tracker exists (Level->BrushTracker): occlude.rs's SurfIsDynamic.
 pub(crate) fn surf_is_dynamic(i_surf: i32) -> bool {
@@ -228,6 +236,41 @@ fn round24(s: f64, e: f64) -> f64 {
 fn is_f32(x: f64) -> bool {
     (x as f32) as f64 == x || x.is_nan()
 }
+/// Veltkamp split: hi + lo == x, each with at most 26 significant bits.
+fn split(x: f64) -> (f64, f64) {
+    let c = 134217729.0 * x; // 2^27 + 1
+    let hi = c - (c - x);
+    (hi, x - hi)
+}
+/// a / b rounded once to a 24-bit significand (normal range), for a double
+/// operand (FDIV of a binary32 value by a double such as Core appTan's
+/// result): the double quotient decides unless it is a binary32 midpoint,
+/// where the sign of a - mid * b, computed exactly, does.
+fn div24(a: f64, b: f64) -> f64 {
+    let q = a / b;
+    let r = q as f32;
+    if !q.is_finite() || r as f64 == q {
+        return r as f64;
+    }
+    let rd = r as f64;
+    let bits = r.to_bits();
+    let other = if (rd > q) == (r > 0.0) { f32::from_bits(bits - 1) } else { f32::from_bits(bits + 1) } as f64;
+    let mid = (rd + other) * 0.5;
+    if q != mid {
+        return rd;
+    }
+    // mid * b exactly as p + e (Dekker), then the sign of a - p - e.
+    let p = mid * b;
+    let ((mh, ml), (bh, bl)) = (split(mid), split(b));
+    let e = ((mh * bh - p) + mh * bl + ml * bh) + ml * bl;
+    let residual = (a - p) - e; // a and p agree to within a factor of two: a - p is exact
+    let above = if b > 0.0 { residual > 0.0 } else { residual < 0.0 }; // the true quotient is above mid
+    if residual == 0.0 {
+        // An exact tie: round to even.
+        return if bits & 1 == 0 { rd } else { other };
+    }
+    if above == (other > rd) { other } else { rd }
+}
 
 impl Fp for P24 {
     fn ld(bits: u32) -> Self {
@@ -256,7 +299,10 @@ impl Fp for P24 {
         P24(round24(s, e))
     }
     fn div(self, o: Self) -> Self {
-        P24(((self.0 as f32) / (o.0 as f32)) as f64)
+        if is_f32(self.0) && is_f32(o.0) {
+            return P24(((self.0 as f32) / (o.0 as f32)) as f64);
+        }
+        P24(div24(self.0, o.0))
     }
     fn sqrt(self) -> Self {
         // The 64-bit root rounded to 24 bits: a square root of a binary32
@@ -287,13 +333,13 @@ fn lt<F: Fp>(a: F, b: F) -> bool {
 // ---- Core's FCoords -----------------------------------------------------------------
 
 /// An FCoords as float bits: Origin, XAxis, YAxis, ZAxis.
-type Coords = [[u32; 3]; 4];
+pub(crate) type Coords = [[u32; 3]; 4];
 const ONE: u32 = 0x3f80_0000;
-const UNIT: Coords = [[0, 0, 0], [ONE, 0, 0], [0, ONE, 0], [0, 0, ONE]];
+pub(crate) const UNIT: Coords = [[0, 0, 0], [ONE, 0, 0], [0, ONE, 0], [0, 0, ONE]];
 
 /// FVector::TransformVectorBy (Core 0x10119e40): ((v.x*A.x + v.y*A.y) +
 /// v.z*A.z) per axis A, each output stored.
-fn tvb<F: Fp>(v: [F; 3], c: &Coords) -> [u32; 3] {
+pub(crate) fn tvb<F: Fp>(v: [F; 3], c: &Coords) -> [u32; 3] {
     let mut out = [0; 3];
     for k in 0..3 {
         let a = c[1 + k];
@@ -301,7 +347,7 @@ fn tvb<F: Fp>(v: [F; 3], c: &Coords) -> [u32; 3] {
     }
     out
 }
-fn ld3<F: Fp>(v: [u32; 3]) -> [F; 3] {
+pub(crate) fn ld3<F: Fp>(v: [u32; 3]) -> [F; 3] {
     [F::ld(v[0]), F::ld(v[1]), F::ld(v[2])]
 }
 /// FCoords::operator*=(FCoords) (0x1011a710): the origin through
@@ -325,7 +371,7 @@ const fn neg(b: u32) -> u32 {
     b ^ 0x8000_0000
 }
 /// FCoords::operator*=(FRotator) (0x1011ac80): yaw, pitch, roll.
-fn mul_rotator<F: Fp>(c: &mut Coords, r: [i32; 3]) {
+pub(crate) fn mul_rotator<F: Fp>(c: &mut Coords, r: [i32; 3]) {
     let (p, y, l) = (r[0], r[1], r[2]);
     compose::<F>(c, &[[0; 3], [cos(y), sin(y), 0], [neg(sin(y)), cos(y), 0], [0, 0, ONE]]);
     compose::<F>(c, &[[0; 3], [cos(p), 0, sin(p)], [0, ONE, 0], [neg(sin(p)), 0, cos(p)]]);
@@ -821,6 +867,9 @@ fn update(actor: i32, pc64: bool) {
         e = next;
     }
     set_h(H_LIST_STALE, (head != -1) as u32);
+    if head != -1 {
+        set_h(H_GENERATION, h(H_GENERATION).wrapping_add(1));
+    }
 }
 
 /// MarkForUpdate (0x1037c4f0).

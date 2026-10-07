@@ -348,6 +348,10 @@ export async function createMeshBinding(runtime,actor,{id,originalObjectIndex,ke
      * docs/render-visibility.md), as update() decides it. */
     const admitted=(reads,at=blockAt(reads))=>at>=0?Boolean(reads.views().u32[at+MB.STATUS]&MS_DRAWN)
       :visible?visible(actor,own):(drawActor||!own.bHidden())&&!own.bDeleteMe();
+    /** Whether a child frame admits it (no excluded actor, no ViewTarget
+     * rule: the player in a mirror). */
+    const childAdmitted=(reads,at=blockAt(reads))=>Boolean(childVisible)&&(at>=0?Boolean(reads.views().u32[at+MB.STATUS]&MS_DRAWN_CHILD)
+      :childVisible(actor,own));
     // GetAnimSeq's last answer (setupSequence) for Setup's candidate.
     let setupName,setupHit=null;
     /** FDynamicSprite::Setup's candidate words (bsp-occlusion.mjs SETUP) at
@@ -377,7 +381,7 @@ export async function createMeshBinding(runtime,actor,{id,originalObjectIndex,ke
       if(name!==setupName){setupName=name;setupHit=setupSequence(payload.sequences,name);}
       u32[at+SETUP.SEQ]=setupHit?1:0;i32[at+SETUP.SEQ_START]=setupHit?.startFrame??0;i32[at+SETUP.SEQ_FRAMES]=setupHit?.numFrames??0;
     }
-    return {id,actor,creation,dispose,mesh:meshReference,payload,packSetup,admitted,get block(){return block;},
+    return {id,actor,creation,dispose,mesh:meshReference,payload,packSetup,admitted,childAdmitted,get block(){return block;},
       get viewDependent(){return hasEnvironment&&mode==='cpu';},
       get path(){return mode;},
       readMesh(){try{return own.Mesh();}catch{return undefined;}},
@@ -401,6 +405,20 @@ export async function createMeshBinding(runtime,actor,{id,originalObjectIndex,ke
         if(childOnly){if(frustum===null)return {root:false};}
         else if(!drawnMain)return null;
         if(mode!=='gpu')return childOnly?{root:true}:null;
+        if(frustum===null)return {root:true,groups:groupBits()};
+        const bits=[];decideGroups(frustum,(group,visible)=>bits.push(visible?1:0));
+        const spheres=spheresChanged?sphereWords():null;spheresChanged=false;
+        return {root:true,groups:bits,spheres};
+      },
+      /** A child frame's pass decision (`frustum` its camera's; null with
+       * `inFrame` null: the main frame again): drawn when its Frame->Sprite
+       * holds the binding, and then, on the GPU path, the groups the pass
+       * frustum keeps. Null when the frame did not pose it. */
+      framePass(frustum,inFrame){
+        if(disposed||(!drawnMain&&!childOnly))return null;
+        const root=frustum===null?drawnMain:inFrame;
+        if(!root)return {root:false};
+        if(mode!=='gpu')return {root:true};
         if(frustum===null)return {root:true,groups:groupBits()};
         const bits=[];decideGroups(frustum,(group,visible)=>bits.push(visible?1:0));
         const spheres=spheresChanged?sphereWords():null;spheresChanged=false;
@@ -443,12 +461,15 @@ export async function createMeshBinding(runtime,actor,{id,originalObjectIndex,ke
         let rootVisible=admitted(view.reads,at);
         if(verify)verifyReads(u32,f32,at);
         // `view.children`: mirror child frames will draw this frame.
-        childOnly=!rootVisible&&Boolean(view.children&&(at>=0?childVisible&&u32[at+MB.STATUS]&MS_DRAWN_CHILD:childVisible?.(actor,own)));
+        // A Set: the ids OccludeFrame's child frames draw (sim-session.mjs).
+        const childIds=view.children instanceof Set?view.children:null;
+        childOnly=!rootVisible&&Boolean(view.children&&(childIds?childIds.has(id)
+          :at>=0?childVisible&&u32[at+MB.STATUS]&MS_DRAWN_CHILD:childVisible?.(actor,own)));
         mainCamera=view.camera??null;
         // `view.main`: the ids in the main frame's Frame->Sprite (OccludeBsp,
         // docs/bsp-occlusion.md "Play"). An admitted actor outside it is not
         // drawn by the main frame; mirror child frames may still draw it.
-        if(view.main&&rootVisible&&!childOnly&&!view.main.has(id)){if(!view.children)return record;childOnly=true;}
+        if(view.main&&rootVisible&&!childOnly&&!view.main.has(id)){if(!view.children||childIds&&!childIds.has(id))return record;childOnly=true;}
         if(childOnly)rootVisible=true;
         if(!rootVisible)return record;
         // Render.dll only draws, and so only calls GetFrame for, actors in
@@ -805,6 +826,14 @@ export async function createActorMeshSim(runtime,assets,asset,{kernel,player:pla
     passVisibility(frustum){
       const decisions=new Map();
       for(const binding of all()){const decision=binding.passVisibility(frustum);if(decision)decisions.set(binding.id,decision);}
+      return decisions;
+    },
+    /** A child frame's pass decisions (OccludeFrame, sim-session.mjs
+     * stamps): every posed binding's, drawn when `ids` (its Frame->Sprite)
+     * holds it; `frustum` null and `ids` null: the main frame's again. */
+    framePasses(frustum,ids){
+      const decisions=new Map();
+      for(const binding of all()){const decision=binding.framePass(frustum,ids?ids.has(binding.id):true);if(decision)decisions.set(binding.id,decision);}
       return decisions;
     },
     /** Every binding, item bindings included. */

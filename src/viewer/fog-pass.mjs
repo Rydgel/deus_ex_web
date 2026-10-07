@@ -3,6 +3,7 @@ import { getAxes } from '../runtime/camera.mjs';
 import { movingLightConstants } from '../runtime/dynamic-lighting.mjs';
 import { coordsTransform, volumetricLight, fogMap, fogMapKernel } from '../runtime/volumetric-fog.mjs';
 import { displayRampGlsl } from './light-atlas.mjs';
+import { lightmapBasis } from '../unreal/lighting.mjs';
 
 /** Volumetric fog in Play (docs/volumetric-fog.md "Play"): the fog map of
  * every drawn light-mapped surface in a bFogZone zone, recomputed each frame
@@ -14,9 +15,13 @@ import { displayRampGlsl } from './light-atlas.mjs';
  * Host choices, noted: every volumetric light of the map is linked to every
  * fog surface (LeafVolumetricLighting's and OccludeBsp's culls only drop
  * lights that add nothing); volumetric lights use their steady LightBrightness
- * (GlobalLighting's LightType animation is not applied to them); mover
- * surfaces get no fog. The display ramp maps the finished frame after the
- * pass blends (display-ramp.mjs), unless ?gamma=material. */
+ * (GlobalLighting's LightType animation is not applied to them). A mover
+ * polygon (the brush tracker's surface) is fogged when the frame draws one
+ * of its fragments in a fog zone. Its lattice is the level surfaces' one
+ * over the tracker surface's pBase and vectors, with the light-map index
+ * taken from the mover's Brush (SetupForSurf, 0x10b06e2c..0x10b06e4a); the
+ * whole polygon draws that one fog map. The display ramp maps the finished
+ * frame after the pass blends (display-ramp.mjs), unless ?gamma=material. */
 export function createFogPass({ lightAtlas, levelBrightness, hsv, displayGamma, notes, kernel = null }) {
   const root = new THREE.Group(), surfaces = [], lights = [], pages = new Map();
   root.name = 'Volumetric fog'; root.matrixAutoUpdate = false;
@@ -53,11 +58,20 @@ export function createFogPass({ lightAtlas, levelBrightness, hsv, displayGamma, 
     };
     return m;
   }
+  /** A mover polygon's light-map grid: lighting.mjs geometry's p00, p10
+   * and p01 over the tracker surface's `facet` (pBase, vTextureU,
+   * vTextureV, vNormal) and the Brush's light-map index. */
+  function moverGrid(record, facet) {
+    const model = { points: [facet.slice(0, 3)], vectors: [facet.slice(3, 6), facet.slice(6, 9), facet.slice(9, 12)] };
+    const basis = lightmapBasis(model, { base: 0, textureU: 0, textureV: 1, normal: 2 }, record.lightMap);
+    const p00 = basis.point(0, 0), p10 = basis.point(1, 0), p01 = basis.point(0, 1);
+    return { start: p00.map(Math.fround), stepU: p10.map((v, i) => Math.fround(v - p00[i])), stepV: p01.map((v, i) => Math.fround(v - p00[i])) };
+  }
   return {
     root, stats,
     /** A light-mapped level surface in a fog zone: its light-map record, atlas
      * tile and the surface triangles' view positions, light UVs and bounds. */
-    addSurface(record, tile, positions, lightUV, lightBounds, surfaceIndex = -1) {
+    addSurface(record, tile, positions, lightUV, lightBounds, surfaceIndex = -1, mover = null) {
       const geometry = new THREE.BufferGeometry();
       geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
       geometry.setAttribute('lightUV', new THREE.Float32BufferAttribute(lightUV, 3));
@@ -65,8 +79,9 @@ export function createFogPass({ lightAtlas, levelBrightness, hsv, displayGamma, 
       geometry.computeBoundingSphere();
       const fogPage = page(tile.page.index), mesh = new THREE.Mesh(geometry, material(fogPage));
       mesh.matrixAutoUpdate = false; mesh.visible = false; mesh.renderOrder = 1;
-      root.add(mesh);
-      surfaces.push({ record, tile, mesh, fogPage, state: null, surfaceIndex });
+      // A mover polygon's pass follows its group (its brush-local positions).
+      (mover?.parent ?? root).add(mesh);
+      surfaces.push({ record, tile, mesh, fogPage, state: null, surfaceIndex, mover: mover ? mover.name : null });
       stats.surfaces = surfaces.length;
     },
     /** A light with VolumeRadius > 0 (class defaults merged). */
@@ -80,9 +95,13 @@ export function createFogPass({ lightAtlas, levelBrightness, hsv, displayGamma, 
      * rotation (FSceneNode Coords = ViewCoords / ViewRotation), `frustum`
      * the drawn view's three.js frustum, `drawn` (optional) the main
      * frame's drawn surfaces from OccludeBsp: SetupForSurf computes a fog
-     * map only for a surface DrawFrame draws. */
-    update(view, frustum, drawn = null) {
-      stats.drawn = 0; stats.texels = 0;
+     * map only for a surface DrawFrame draws. `movers`, `moverZones` and
+     * `moverFacets` (sim-session.mjs visibility, with the brush tracker) are
+     * the drawn mover polygons, their draw items' zones and their surfaces'
+     * pBase and vectors; `fogZone(zone)` whether a zone's actor is bFogZone.
+     * Without them movers get no fog. */
+    update(view, frustum, drawn = null, { movers = null, moverZones = null, moverFacets = null, fogZone = null } = {}) {
+      stats.drawn = 0; stats.texels = 0; stats.movers = 0; stats.moverCase = null;
       if (!surfaces.length || !lights.length) return;
       const [x, y, z] = getAxes(view.rotation.map(v => v | 0));
       // ViewCoords (0,1,0), (0,0,-1), (1,0,0) under the view rotation.
@@ -93,12 +112,35 @@ export function createFogPass({ lightAtlas, levelBrightness, hsv, displayGamma, 
       const state = { missFlag: 0 }, dirty = new Set();
       for (const surface of surfaces) {
         const { record, tile, mesh, fogPage } = surface;
-        if ((drawn && !drawn.has(surface.surfaceIndex)) || (frustum && !frustum.intersectsObject(mesh))) { mesh.visible = false; continue; }
-        const { grid } = record.fogGrid();
+        let grid;
+        if (surface.mover) {
+          const ordinals = movers?.[surface.mover], zones = moverZones?.[surface.mover];
+          const facet = moverFacets?.[surface.mover]?.[surface.surfaceIndex];
+          if (!ordinals || !fogZone || !facet || !ordinals.some((o, i) => o === surface.surfaceIndex && fogZone(zones[i]))) {
+            mesh.visible = false; continue;
+          }
+          grid = moverGrid(record, facet);
+        } else {
+          if ((drawn && !drawn.has(surface.surfaceIndex)) || (frustum && !frustum.intersectsObject(mesh))) { mesh.visible = false; continue; }
+          ({ grid } = record.fogGrid());
+        }
         const input = { grid: { base: grid.start, stepU: grid.stepU, stepV: grid.stepV }, width: record.width, height: record.height,
           coords, lights: frameLights, state };
-        const texels = kernel ? fogMapKernel(kernel, input) : fogMap(input);
+        const missFlag = state.missFlag, texels = kernel ? fogMapKernel(kernel, input) : fogMap(input);
         if (!texels) { mesh.visible = false; continue; }
+        if (surface.mover) {
+          stats.movers++;
+          // Validation (validate-volumetric-fog-play.mjs): the frame's most
+          // fogged mover surface, with the loop's inputs for the oracle.
+          let alpha = 0;
+          for (let t = 3; t < texels.length; t += 4) alpha += texels[t];
+          if (alpha && alpha > (stats.moverCase?.alpha ?? 0))
+            stats.moverCase = { mover: surface.mover, polygon: surface.surfaceIndex, alpha, missFlag, grid: input.grid,
+              width: record.width, height: record.height, coords, lights: lights.map(light => ({ location: coordsTransform(light.location, coords),
+                color: light.color, brightness: Math.fround(light.brightness), volumeRadius: light.values.VolumeRadius ?? 0,
+                volumeBrightness: light.values.VolumeBrightness ?? 64, volumeFog: light.values.VolumeFog ?? 0 })),
+              texels: Array.from(texels) };
+        }
         // BGRA texels into the RGBA page at the light tile, padding repeated.
         for (let row = -1; row <= record.height; row++) for (let col = -1; col <= record.width; col++) {
           const src = (Math.max(0, Math.min(record.height - 1, row)) * record.width + Math.max(0, Math.min(record.width - 1, col))) * 4;

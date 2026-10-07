@@ -74,7 +74,8 @@ export const TRACKER = Object.freeze({ NODES: 0, NODES_NUM: 1, NODES_MAX: 2, TOP
   SURFS_MAX: 21, SURFS_TOP: 22, DSURFS: 23, SURFS_CAP: 24, MOVERS: 25, MOVER_COUNT: 26, NODEMAPS: 27,
   NODEMAPS_NUM: 28, NODEMAPS_MAX: 29, OWNERS: 30, OWNERS_NUM: 31, OWNERS_MAX: 32, HELPER: 33, HELPER_NUM: 34,
   HELPER_MAX: 35, NODE_CURSOR: 36, VERT_CURSOR: 37, FREE_HEAD: 38, CURRENT: 39, NORMAL: 40, LIST_STALE: 43,
-  SCRATCH: 44, SCRATCH_BYTES: 45, NODES_CAP: 46, VERTS_CAP: 47, LIVE: 48, STATUS: 49, HELPER_CAP: 50, WORDS: 56 });
+  SCRATCH: 44, SCRATCH_BYTES: 45, NODES_CAP: 46, VERTS_CAP: 47, LIVE: 48, STATUS: 49, HELPER_CAP: 50,
+  GENERATION: 51, WORDS: 56 });
 /** Mover record words (MV per mover). */
 export const MOVER = Object.freeze({ TAG: 0, FLAGS: 1, LOCATION: 2, ROTATION: 5, PREPIVOT: 8, MAINSCALE: 11,
   POSTSCALE: 16, SAVEDPOS: 21, SAVEDROT: 24, MOVERLINK: 27, POLYS: 28, POLY_COUNT: 29, SPECIALLIT: 30, WORDS: 40 });
@@ -186,9 +187,70 @@ export function createTrackerHost(kernel, model, movers, { at, caps, block, word
       const u = words(), o = (dsurfs >>> 2) + DSURF.WORDS * (iSurf - top);
       return { tag: u[o + DSURF.ACTOR], ordinal: u[o + DSURF.BRUSHPOLY] };
     },
+    /** A tracker surface's pBase point and vTextureU, vTextureV and vNormal
+     * vectors (float values) where the last Update left them, flat
+     * [base, u, v, normal], or null for a level surface. */
+    surfaceFacet(iSurf) {
+      const top = h(TRACKER.SURFS_TOP);
+      if (!h(TRACKER.LIVE) || iSurf < top || iSurf >= h(TRACKER.SURFS_NUM)) return null;
+      const u = words(), f = new Float32Array(u.buffer), o = (dsurfs >>> 2) + DSURF.WORDS * (iSurf - top);
+      const point = (h(TRACKER.POINTS) >>> 2) + 3 * u[o + DSURF.PBASE], out = [f[point], f[point + 1], f[point + 2]];
+      for (const k of [DSURF.VTEXU, DSURF.VTEXV, DSURF.VNORMAL]) {
+        const at = (vectors >>> 2) + 3 * u[o + k];
+        out.push(f[at], f[at + 1], f[at + 2]);
+      }
+      return out;
+    },
     live: () => h(TRACKER.LIVE) !== 0,
   };
 }
 
 const f32 = new Float32Array(1), u32 = new Uint32Array(f32.buffer);
 function bits(value) { f32[0] = value; return u32[0]; }
+
+/** The level model as the tracker has filtered it (readModel's shape): every
+ * node, vert, point and vector the arrays hold now, the static surfaces
+ * with their PolyFlags, and each tracker surface (`dynamic`, `mover` its
+ * mover index) with its base point and vectors where the last Update
+ * left them. `occlusion` is the createBspOcclusion with the tracker over
+ * `model`; `memory` the kernel's. `originalNodes` is the node count before
+ * the tracker (UModel::PostLoad's Surf.Nodes reach only those). The decal
+ * kernel's model and trace model over the moved movers (docs/decals.md). */
+export function trackedModel(occlusion, model, memory) {
+  const t = occlusion.tracker, { nodes, verts, points } = occlusion.blocks, { vectors, dsurfs } = t.blocks;
+  const u = new Uint32Array(memory.buffer), i32 = new Int32Array(memory.buffer), b = new Uint8Array(memory.buffer);
+  const f = new Float32Array(memory.buffer), count = k => t.header(k), top = t.header(TRACKER.SURFS_TOP);
+  const range = n => Array.from({ length: n }, (_, i) => i);
+  const out = { ...model, originalNodes: count(TRACKER.TOP),
+    nodes: range(count(TRACKER.NODES_NUM)).map(i => {
+      const o = (nodes >>> 2) + 16 * i, at = nodes + 64 * i;
+      return { plane: [f[o], f[o + 1], f[o + 2], f[o + 3]], zoneMask: [u[o + 4], u[o + 5]], vertexPool: i32[o + 6],
+        surface: i32[o + 7], back: i32[o + 8], front: i32[o + 9], coplanar: i32[o + 10], collisionBound: i32[o + 11],
+        renderBound: i32[o + 12], zones: [b[at + 52], b[at + 53]], vertexCount: b[at + 54], flags: b[at + 55],
+        leaves: [i32[o + 14], i32[o + 15]] };
+    }),
+    vertices: range(count(TRACKER.VERTS_NUM)).map(i => ({ point: i32[(verts >>> 2) + 2 * i], side: i32[(verts >>> 2) + 2 * i + 1] })),
+    points: range(count(TRACKER.POINTS_NUM)).map(i => [f[(points >>> 2) + 3 * i], f[(points >>> 2) + 3 * i + 1], f[(points >>> 2) + 3 * i + 2]]),
+    vectors: range(count(TRACKER.VECTORS_NUM)).map(i => [f[(vectors >>> 2) + 3 * i], f[(vectors >>> 2) + 3 * i + 1], f[(vectors >>> 2) + 3 * i + 2]]),
+  };
+  out.surfaces = range(count(TRACKER.SURFS_NUM)).map(i => {
+    if (i < top) return model.surfaces[i];
+    const o = (dsurfs >>> 2) + DSURF.WORDS * (i - top);
+    return { texture: null, flags: u[o + DSURF.FLAGS], base: u[o + DSURF.PBASE], normal: u[o + DSURF.VNORMAL],
+      textureU: u[o + DSURF.VTEXU], textureV: u[o + DSURF.VTEXV], lightMap: i32[o + DSURF.LIGHTMAP],
+      brushPolygon: i32[o + DSURF.BRUSHPOLY], dynamic: true, mover: u[o + DSURF.ACTOR] - 0x40000000 };
+  });
+  return out;
+}
+
+/** `level.decalSource` for script-decal.mjs levelDecals: the tracked model
+ * (`trackedModel`), the tracker's generation, its first surface and point
+ * capacity, and each mover's surfaces with its actor's live Rotation
+ * (`actors[i]` is mover i's actor, `read(actor, name)` the runtime's read). */
+export function trackerDecalSource(occlusion, model, memory, actors, read) {
+  const t = occlusion.tracker, top = t.header(TRACKER.SURFS_TOP), surfaces = actors.map(() => []);
+  for (let s = top; s < t.header(TRACKER.SURFS_NUM); s++) surfaces[t.surfOwner(s).tag - 0x40000000]?.push(s);
+  const movers = actors.map((actor, i) => ({ actor, surfaces: surfaces[i], rotation: () => read(actor, 'Rotation') }));
+  return { firstSurface: top, pointCapacity: t.header(TRACKER.POINTS_CAP), generation: () => t.header(TRACKER.GENERATION),
+    model: () => trackedModel(occlusion, model, memory), movers: () => movers };
+}

@@ -9,10 +9,10 @@
  * each decal's surface at the render pass's 24-bit precision. The port gets
  * the same frame, surface, FDecal and polygon: its fragment's point count,
  * each point's camera-space position (its world point through Frame->Coords)
- * and U and V (its dot products over DrawScale) must be bit-equal. Mover
- * surfaces (the rotation by Mover->Rotation - MoverRotation) are not ported:
- * no shipped decal can attach to one (docs/decals.md), so those cases are
- * counted and skipped.
+ * and U and V (its dot products over DrawScale) must be bit-equal. On a
+ * Mover's surface the vertices first turn by Actor.Rotation - MoverRotation
+ * (decal.rs clip_decal), with the moving brush tracker's surfaces a reachable
+ * case.
  *
  *   node scripts/validate-decal-render.mjs
  */
@@ -126,8 +126,8 @@ const transformPoint = (p, c) => {
   return [3, 6, 9].map(k => f(f(f(dx * c[k]) + f(dy * c[k + 1])) + f(dz * c[k + 2])));
 };
 
-const input = kernel.alloc(4 * (43 + 3 * 24)), output = kernel.alloc(4 * 5 * 24);
-const totals = { frames: 0, children: 0, cases: 0, nonempty: 0, points: 0, mover: 0, maps: [] };
+const input = kernel.alloc(4 * 119), output = kernel.alloc(4 * 5 * 24);
+const totals = { frames: 0, children: 0, cases: 0, nonempty: 0, points: 0, mover: 0, moverTurned: 0, maps: [] };
 for (const [mapName, cams] of RUNS) {
   const { map, model } = await oracleModel(mapName);
   const request = { gameRoot: root, tangents, model, textures: TEXTURES, d3d: { colorBits: 32, fog: 0, draw: false },
@@ -141,11 +141,15 @@ for (const [mapName, cams] of RUNS) {
     const coords = frame.frame.coordsBits, uncoords = frame.frame.uncoordsBits, coordsF = coords.map(num);
     for (const c of frame.cases) {
       const spec = frame.decals[c.decal];
-      if (spec.surfActor?.mover) { totals.mover++; continue; }
       const item = frame.items.find(it => it.list === c.item[0] && it.index === c.item[1]);
       const poly = item.polys[c.poly];
       const words = [...coords, ...uncoords, ...spec.surfBaseBits, ...spec.surfNormalBits, ...spec.vertexBits.flat(),
         poly.points.length, ...poly.points.flatMap(p => p.slice(0, 3))];
+      // A Mover's surface: Actor.Rotation - MoverRotation (int32 each).
+      const mover = spec.surfActor?.mover ?? null;
+      while (words.length < 115) words.push(0);
+      words.push(mover ? 1 : 0, ...(mover ? mover.map((r, k) => (r - (spec.moverRotation?.[k] ?? 0)) | 0) : [0, 0, 0]));
+      if (mover) totals.mover++;
       new Uint32Array(kernel.memory.buffer, input, words.length).set(words.map(v => v >>> 0));
       const n = kernel.clipTest(input, output);
       const where = `${mapName} frame depth ${frame.depth} decal ${c.decal} item ${c.item} poly ${c.poly}`;
@@ -162,6 +166,7 @@ for (const [mapName, cams] of RUNS) {
         totals.points++;
       }
       cases++; totals.cases++; if (n) totals.nonempty++;
+      if (mover && n && mover.some((r, k) => r !== (spec.moverRotation?.[k] ?? 0))) totals.moverTurned++;
     }
   }
   totals.maps.push(`${mapName} ${cases} cases (${((performance.now() - started) / 1000).toFixed(1)} s)`);
@@ -170,4 +175,4 @@ kernel.free(input); kernel.free(output);
 assert.ok(totals.nonempty > 100 && totals.children > 0, 'the cases reach nonempty fragments and child frames');
 console.log(`validate-decal-render: ${totals.maps.join(', ')}; ${totals.frames} frames (${totals.children} children), ` +
   `${totals.cases} ClipDecal cases, ${totals.nonempty} nonempty, ${totals.points} points bit-equal (position, U, V); ` +
-  `${totals.mover} mover cases skipped; PASS`);
+  `${totals.mover} of them on Mover surfaces (${totals.moverTurned} nonempty and turned by Actor.Rotation - MoverRotation); PASS`);

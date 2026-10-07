@@ -8,7 +8,16 @@
 // fragments to the page, which draws them modulated (decal-scene.mjs). The
 // frame with the decal pass must be darker under the pawn than without it.
 //
-//   node scripts/validate-decals-play.mjs [--url http://...] [--query sim=inline] [--shot frame.png]
+// Movers (docs/decals.md "Movers", skipped with --mover off): the player
+// faces a tracked mover's largest fragment and a BulletHole is spawned on
+// it as TraceHitSpawner does (Owner the mover). AttachDecal's trace meets
+// the fragment in the tracked level model, the Mover branch bases the decal
+// on the mover, and the decal block draws it 0.75 units off the fragment's
+// plane; moving the mover 16 units up, then turning it, carries the drawn
+// fragments with the tracked surface (the synced model, then ClipDecal's
+// Rotation - MoverRotation).
+//
+//   node scripts/validate-decals-play.mjs [--url http://...] [--query sim=inline] [--shot frame.png] [--mover off]
 import assert from 'node:assert/strict';
 import {chromium} from '@playwright/test';
 import {createServer} from 'vite';
@@ -78,9 +87,28 @@ try {
     const a = withDecals[i] + withDecals[i + 1] + withDecals[i + 2], b = without[i] + without[i + 1] + without[i + 2];
     if (a !== b) { changed++; if (a < b) darker++; else brighter++; }
   }
-  report = { pawn, state, changed, darker, brighter, pageErrors: errors };
+  let mover = null;
+  if (option('mover', 'on') !== 'off') {
+    const probe = args => page.evaluate(args => window.deusExViewer.moverDecalProbe(args), args);
+    const placed = await probe({ place: true });
+    await frames(20);
+    const spawned = await probe({ spawn: true });
+    await frames(8);
+    const before = await probe({});
+    await page.evaluate(name => window.deusExViewer.moverProbe({ set: [{ name, offset: [0, 0, 16] }] }), placed.mover);
+    await frames(8);
+    const moved = await probe({});
+    const turn = [moved.moverRotation[0], (moved.moverRotation[1] + 2048) | 0, moved.moverRotation[2]];
+    await page.evaluate(([name, rotation]) => window.deusExViewer.moverProbe({ set: [{ name, rotation }] }), [placed.mover, turn]);
+    await frames(8);
+    const turned = await probe({});
+    mover = { placed, spawned, before, moved, turned, runtimeError: await page.evaluate(() => window.deusExViewer.status().runtimeError?.message ?? null) };
+  }
+  report = { pawn, state, changed, darker, brighter, mover, pageErrors: errors };
 } finally { await browser.close(); await server?.close(); }
-console.log(JSON.stringify(report, null, 1));
+const brief = m => m && { ...m, fragments: m.fragments.map(g => ({ texture: g.texture, points: g.points.length })) };
+console.log(JSON.stringify({ ...report, mover: report.mover && Object.fromEntries(Object.entries(report.mover)
+  .map(([k, v]) => [k, typeof v === 'object' ? brief(v) : v])) }, null, 1));
 assert.deepEqual(report.pageErrors, []);
 assert.equal(report.state.runtimeError, null);
 assert.ok(report.state.surfList.length > 0, 'the drawn pawn\'s Shadow attaches through AttachDecal');
@@ -91,5 +119,37 @@ assert.ok(shadowGroup?.triangles > 0, 'the Shadow texture\'s fragments reach the
 assert.ok(report.state.decals.drawnTriangles > 0, 'the page draws them');
 assert.ok(report.darker > 200 && report.darker > 3 * report.brighter,
   `the modulated shadow darkens the floor (${report.darker} darker, ${report.brighter} brighter pixels)`);
+let moverNote = '';
+if (report.mover) {
+  const { spawned, before, moved, turned } = report.mover;
+  assert.equal(report.mover.runtimeError, null);
+  assert.ok(spawned.decal, 'the BulletHole spawns');
+  assert.ok(spawned.decal.surfList.includes(spawned.surface), `AttachDecal meets the mover fragment's surface ${spawned.surface} (SurfList ${spawned.decal.surfList})`);
+  assert.equal(spawned.decal.base, spawned.mover, 'the Mover branch bases the decal on its Owner (SetBase(Owner, 1))');
+  assert.ok(spawned.held.includes(spawned.surface), 'the tracker surface holds the FDecal');
+  // The BulletHole's fragments: the group of its texture, every point 0.75
+  // units off the tracked surface's plane (ClipDecal's lift).
+  const sub = (a, b) => a.map((v, i) => v - b[i]), dot = (a, b) => a.reduce((s, v, i) => s + v * b[i], 0);
+  const group = state => {
+    const n = state.plane.normal, len = Math.hypot(...n), unit = n.map(v => v / len);
+    const groups = state.fragments.filter(g => g.points.length && g.points.every(p => Math.abs(dot(sub(p, state.plane.base), unit) - 0.75) < 0.05));
+    assert.equal(groups.length, 1, `one decal group on the mover's plane at ${state.time.toFixed(2)} s`);
+    const points = groups[0].points, centre = [0, 1, 2].map(c => points.reduce((s, p) => s + p[c], 0) / points.length);
+    return { points: points.length, centre };
+  };
+  const a = group(before), b = group(moved), c = group(turned);
+  assert.ok(before.time - before.decal.lastRendered < 0.1, 'the decal block stamps the BulletHole\'s LastRenderedTime');
+  const shift = sub(b.centre, a.centre);
+  assert.ok(Math.abs(shift[0]) < 0.05 && Math.abs(shift[1]) < 0.05 && Math.abs(shift[2] - 16) < 0.05,
+    `the fragments follow the mover up 16 units (moved by ${shift.map(v => v.toFixed(3))})`);
+  // A turn about the mover's pivot carries the drawn fragments with its
+  // plane: the plane's normal turns and every point stays 0.75 off it.
+  const turnedBy = Math.acos(Math.min(1, dot(moved.plane.normal, turned.plane.normal) /
+    (Math.hypot(...moved.plane.normal) * Math.hypot(...turned.plane.normal))));
+  assert.ok(Math.abs(turnedBy - 2048 * Math.PI / 32768) < 1e-3,
+    `the tracked surface turns with the mover (${turnedBy.toFixed(4)} rad; fragments' centre moved ${Math.hypot(...sub(c.centre, b.centre)).toFixed(3)})`);
+  moverNote = `; BulletHole on ${spawned.mover} surface ${spawned.surface}: ${a.points} points, ` +
+    `followed 16 units up and a 2048 turn`;
+}
 console.log(`validate-decals-play: PASS (${report.pawn.name}'s Shadow on surfaces ${report.state.surfList.join(', ')}, ` +
-  `${shadowGroup.triangles} triangles, ${report.darker} pixels darker)`);
+  `${shadowGroup.triangles} triangles, ${report.darker} pixels darker${moverNote})`);

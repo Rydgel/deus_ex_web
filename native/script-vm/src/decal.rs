@@ -18,8 +18,8 @@
 //!   node: iVertPool, iSurf, iPlane (the coplanar link), NumVertices;
 //!   vert: pVertex; point and vector: three f32 bit patterns;
 //!   surf: PolyFlags, pBase, vNormal, Nodes start, Nodes count, Actor is a
-//!     Mover (1) — Surf.Nodes as UModel::PostLoad builds it (0x103ace90:
-//!     ascending node index).
+//!     Mover (1), that Mover's Rotation (3) — Surf.Nodes as UModel::PostLoad
+//!     builds it (0x103ace90: ascending node index).
 //!
 //! Store block (one per loaded level, `decal_store_init`): a header, each
 //! surface's FDecal list as a doubly linked list of records (head, tail),
@@ -43,7 +43,8 @@ extern "C" {
 /// [11] DrawScale bits, [12] Texture.USize, [13] MultiDecalLevel (after the
 /// clamp at 0x103e7351), [14] Texture id, [15] SurfList count, [64..128]
 /// SurfList. Outputs: [32] result, [33] exit, [34] appended count,
-/// [35..52] appended surfaces, [52] rand() calls, [53] fault code.
+/// [35..52] appended surfaces, [52] rand() calls, [53] fault code, [54] 1
+/// when the host must run this->SetBase(Owner, 1) (the Mover branch).
 static mut IO: [u32; 128] = [0; 128];
 
 #[no_mangle]
@@ -62,7 +63,6 @@ const FAULT_TRACE: u32 = 2;
 const FAULT_CLIP_ASSERT: u32 = 3;
 const FAULT_NODES: u32 = 4;
 const FAULT_SURFLIST: u32 = 5;
-const FAULT_MOVER: u32 = 6;
 const FAULT_STORE: u32 = 7;
 
 pub const EXIT_ATTACHED: u32 = 0;
@@ -130,6 +130,7 @@ struct Surf {
     nodes: u32,
     node_count: u32,
     mover: bool,
+    rotation: [u32; 3],
 }
 
 impl Model {
@@ -162,7 +163,7 @@ impl Model {
         if i >= self.surf_count {
             return Err(FAULT_MODEL);
         }
-        let at = self.surfs + 24 * i;
+        let at = self.surfs + 36 * i;
         Ok(Surf {
             flags: word(at),
             base: word(at + 4),
@@ -170,6 +171,7 @@ impl Model {
             nodes: word(at + 12),
             node_count: word(at + 16),
             mover: word(at + 20) != 0,
+            rotation: [word(at + 24), word(at + 28), word(at + 32)],
         })
     }
     unsafe fn point(&self, i: u32) -> Result<V, u32> {
@@ -659,6 +661,118 @@ pub extern "C" fn decal_store_grow(from: u32, to: u32, capacity: u32) {
     }
 }
 
+/// Copy `from` into `to`, laid out for `surf_count` surfaces and
+/// `capacity` records (neither below the old): the added surfaces' lists
+/// start empty and the added records join the free list. A store made
+/// before the moving brush tracker added its surfaces grows into them.
+#[no_mangle]
+pub extern "C" fn decal_store_resize(from: u32, to: u32, surf_count: u32, capacity: u32) {
+    unsafe {
+        let old = Store { at: from };
+        let (old_surfs, old_capacity) = (old.surf_count(), old.capacity());
+        for k in 0..HEADER as u32 {
+            set_word(to + 4 * k, word(from + 4 * k));
+        }
+        set_word(to, capacity);
+        set_word(to + 8, surf_count);
+        let st = Store { at: to };
+        for s in 0..surf_count {
+            let (head, tail) = if s < old_surfs { (word(old.surf_at(s)), word(old.surf_at(s) + 4)) } else { (u32::MAX, u32::MAX) };
+            set_word(st.surf_at(s), head);
+            set_word(st.surf_at(s) + 4, tail);
+        }
+        for r in 0..old_capacity {
+            for k in 0..REC as u32 {
+                set_word(st.rec(r as i32) + 4 * k, word(old.rec(r as i32) + 4 * k));
+            }
+        }
+        for r in old_capacity..capacity {
+            let rec = st.rec(r as i32);
+            set_word(rec, u32::MAX);
+            set_word(rec + 4, if r + 1 < capacity { r + 1 } else { old.free_head() as u32 });
+            set_word(rec + 8, u32::MAX);
+        }
+        if capacity > old_capacity {
+            st.set_free_head(old_capacity as i32);
+        }
+    }
+}
+
+// ---- the model over the moving brush tracker (Play) ----------------------------
+
+/// Rewrite decal model `model` from the moving brush tracker's arrays, the
+/// level model as its last Update left it (docs/decals.md "Movers"): every
+/// node, vert, point and vector, each tracker surface's PolyFlags, pBase
+/// and vNormal, and the trace model's nodes (trace-kernel.mjs
+/// traceModelLayout's layout). The model must come from the tracked model
+/// (decal-kernel.mjs uploadDecalModel over brush-tracker.mjs trackedModel:
+/// the same node, vert, vector and surface counts) with room for
+/// `point_capacity` points. Surf.Nodes stays as loaded (the tracker's
+/// fragments are in no surface's list) and the Mover rotations are the
+/// host's. Returns 0, or 1 when a count no longer fits.
+#[no_mangle]
+pub extern "C" fn decal_model_sync(model: u32, point_capacity: u32) -> u32 {
+    use crate::tracker::{header, H_DSURFS, H_LIVE, H_NODES, H_NODES_NUM, H_POINTS, H_POINTS_NUM, H_SURFS_NUM,
+        H_SURFS_TOP, H_VECTORS, H_VECTORS_NUM, H_VERTS, H_VERTS_NUM};
+    const TRACE_HEADER: u32 = 32;
+    const TRACE_NODE: u32 = 64;
+    const INVALID: i32 = -2;
+    unsafe {
+        let m = Model::load(model);
+        let nodes = header(H_NODES_NUM);
+        let points = header(H_POINTS_NUM);
+        if header(H_LIVE) == 0 || m.node_count != nodes || m.vert_count != header(H_VERTS_NUM)
+            || m.vector_count != header(H_VECTORS_NUM) || m.surf_count != header(H_SURFS_NUM)
+            || points > point_capacity || word(m.trace) != nodes {
+            return 1;
+        }
+        let (tn, tv, tp, tvec) = (header(H_NODES), header(H_VERTS), header(H_POINTS), header(H_VECTORS));
+        let hull_words = word(m.trace + 12);
+        for i in 0..nodes {
+            // FBspNode: Plane 0..3, iVertPool 6, iSurf 7, iBack 8, iFront 9,
+            // iPlane 10, iCollisionBound 11; NumVertices byte 54, NodeFlags 55.
+            let src = tn + 64 * i;
+            let packed = word(src + 52);
+            let (count, flags) = ((packed >> 16) & 0xff, packed >> 24);
+            let dst = m.nodes + 16 * i;
+            set_word(dst, word(src + 24));
+            set_word(dst + 4, word(src + 28));
+            set_word(dst + 8, word(src + 40));
+            set_word(dst + 12, count);
+            let t = m.trace + TRACE_HEADER + TRACE_NODE * i;
+            for k in 0..4 {
+                core::ptr::write_unaligned((t + 8 * k) as *mut f64, f32::from_bits(word(src + 4 * k)) as f64);
+            }
+            let link = |v: i32| if v == -1 { -1 } else if v >= 0 && (v as u32) < nodes { v } else { INVALID };
+            let bound = word(src + 44) as i32;
+            set_word(t + 32, link(word(src + 36) as i32) as u32);
+            set_word(t + 36, link(word(src + 32) as i32) as u32);
+            set_word(t + 40, flags);
+            set_word(t + 44, (if bound == -1 { -1 } else if bound >= 0 && (bound as u32) < hull_words { bound } else { INVALID }) as u32);
+            set_word(t + 48, (count > 0) as u32);
+        }
+        for i in 0..m.vert_count {
+            set_word(m.verts + 4 * i, word(tv + 8 * i));
+        }
+        for k in 0..3 * points {
+            set_word(m.points + 4 * k, word(tp + 4 * k));
+        }
+        set_word(model + 4 * 10, points);
+        for k in 0..3 * m.vector_count {
+            set_word(m.vectors + 4 * k, word(tvec + 4 * k));
+        }
+        let top = header(H_SURFS_TOP);
+        for s in top..m.surf_count {
+            let ds = header(H_DSURFS) + 64 * (s - top);
+            let at = m.surfs + 36 * s;
+            set_word(at, word(ds + 4));
+            set_word(at + 4, word(ds + 8));
+            set_word(at + 8, word(ds + 12));
+        }
+    }
+    0
+}
+
 // ---- execAttachDecal (0x103e7250) ---------------------------------------------
 
 #[no_mangle]
@@ -791,10 +905,15 @@ unsafe fn attach(m: &Model, st: &Store) -> Result<(), u32> {
     let e = st.insert_decal(i_surf, actor, texture)?;
     surf_list_add(i_surf)?;
     if surf.mover {
-        // MoverRotation and AActor::SetBase(Owner, 1): no shipped level
-        // surface belongs to a Mover (docs/decals.md), so this stays a
-        // labelled boundary.
-        return Err(FAULT_MOVER);
+        // 0x103e79d6..0x103e79fe: FDecal.MoverRotation = Surf.Actor->Rotation
+        // (+0x120), then this->SetBase(Owner, 1), which runs script events:
+        // the host runs it when the native returns (IO[54]). A Mover's
+        // surface is a moving brush tracker surface (docs/decals.md).
+        let rec = st.rec(e);
+        for k in 0..3 {
+            set_word(rec + 4 * (16 + k as u32), surf.rotation[k]);
+        }
+        set_io(54, 1);
     }
 
     // 0x103e7a03: the quad radius; VSize is not read.
@@ -1002,7 +1121,24 @@ fn fv(b: V) -> [f32; 3] {
 /// points `poly`): the fragment's world points and, per point, the U and V
 /// dot products before the division by DrawScale. Returns the count.
 fn clip_decal(coords: &[f32; 12], uncoords: &[f32; 12], base: [f32; 3], normal: [f32; 3], verts: &[[f32; 3]; 4],
-    poly: &[[f32; 3]], out: &mut [[f32; 5]; 24]) -> Result<usize, u32> {
+    poly: &[[f32; 3]], mover: Option<[i32; 3]>, out: &mut [[f32; 5]; 24]) -> Result<usize, u32> {
+    // On a Mover's surface (0x10b1bfa3..0x10b1c0df): each vertex through
+    // GMath.UnitCoords *= FRotator(Actor.Rotation - MoverRotation) (Core
+    // 0x1011ac80), as the inlined TransformPointBy, at the pass's 24 bits.
+    let mut rotated = *verts;
+    if let Some(delta) = mover {
+        use crate::tracker::{ld3, mul_rotator, tvb, Fp, P24, UNIT};
+        let mut c = UNIT;
+        mul_rotator::<P24>(&mut c, delta);
+        for v in rotated.iter_mut() {
+            let b = [v[0].to_bits(), v[1].to_bits(), v[2].to_bits()];
+            let o = ld3::<P24>(c[0]);
+            let d = [P24::ld(b[0]).sub(o[0]), P24::ld(b[1]).sub(o[1]), P24::ld(b[2]).sub(o[2])];
+            let r = tvb::<P24>(d, &c);
+            *v = [f32::from_bits(r[0]), f32::from_bits(r[1]), f32::from_bits(r[2])];
+        }
+    }
+    let verts = &rotated;
     let mut n = normal;
     let ss = (n[0] * n[0] + n[1] * n[1]) + n[2] * n[2];
     if !((ss as f64) < 1e-8) {
@@ -1175,7 +1311,15 @@ pub extern "C" fn decal_clip_frame(model: u32, store: u32, frame: u32, stream: u
                     if listed {
                         let vb = st.vertices(r);
                         let verts = [fv(vb[0]), fv(vb[1]), fv(vb[2]), fv(vb[3])];
-                        match clip_decal(&coords, &uncoords, base, normal, &verts, &poly[..count], &mut frag) {
+                        // A Mover's surface: FRotator(Surf.Actor->Rotation -
+                        // MoverRotation), the int subtraction.
+                        let mover = if s.mover {
+                            let mr = at + 4 * 16;
+                            Some([0, 1, 2].map(|k| (s.rotation[k] as i32).wrapping_sub(word(mr + 4 * k as u32) as i32)))
+                        } else {
+                            None
+                        };
+                        match clip_decal(&coords, &uncoords, base, normal, &verts, &poly[..count], mover, &mut frag) {
                             Ok(0) => {}
                             Ok(n) => {
                                 let need = 3 + 5 * n as u32;
@@ -1236,7 +1380,13 @@ pub extern "C" fn decal_clip_test(inp: u32, out: u32) -> u32 {
             poly[k] = [r(43 + 3 * k as u32), r(44 + 3 * k as u32), r(45 + 3 * k as u32)];
         }
         let mut frag = [[0f32; 5]; 24];
-        match clip_decal(&coords, &uncoords, base, normal, &verts, &poly[..count], &mut frag) {
+        // Words 115..118: a Mover surface flag and Actor.Rotation - MoverRotation.
+        let mover = if word(inp + 4 * 115) != 0 {
+            Some([word(inp + 4 * 116) as i32, word(inp + 4 * 117) as i32, word(inp + 4 * 118) as i32])
+        } else {
+            None
+        };
+        match clip_decal(&coords, &uncoords, base, normal, &verts, &poly[..count], mover, &mut frag) {
             Ok(n) => {
                 for k in 0..n {
                     for c in 0..5 {

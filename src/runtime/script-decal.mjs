@@ -16,22 +16,65 @@ export class DecalBoundaryError extends Error {
  * (decal-kernel.mjs, native/script-vm/src/decal.rs, docs/decals.md),
  * created on the first AttachDecal. LoadMap loads the model fresh, so a
  * Player-start reload starts empty (script-doors drops it); a dropped level
- * frees its kernel blocks. Every level-BSP surface Actor of the shipped maps
- * is a Brush (docs/decals.md), so no surface takes the Mover branch. */
+ * frees its kernel blocks.
+ *
+ * With the moving brush tracker the level model holds the movers'
+ * fragments where they were last rendered, and their surfaces' Actor is
+ * the Mover. The host then sets `level.decalSource` (sim-host.mjs):
+ * `model()` the tracked model (brush-tracker.mjs trackedModel),
+ * `pointCapacity`, `generation()` (bumped by every Update that rebuilt a
+ * mover) and `movers()`, each tracked mover's actor and surfaces. The
+ * model is uploaded from it once (a store made before the tracker existed,
+ * as the original's GNewBrushTracker runs after the actor start-up, grows
+ * into the tracker's surfaces) and follows the tracker's arrays after. */
 const releaseDecals = new FinalizationRegistry(dispose => dispose());
 export function levelDecals(level) {
-  if (level.decals) return level.decals;
+  const source = level.decalSource ?? null;
+  if (level.decals && level.decals.source === source) return level.decals;
   const kernel = scriptVmKernel?.decals;
   if (!kernel) throw new DecalBoundaryError('AttachDecal.kernel', 'AttachDecal runs in the Rust core (npm run build:wasm)');
   if (!level.model?.nodes?.length || !level.model?.surfaces?.length)
     throw new DecalBoundaryError('AttachDecal.model','AttachDecal requires the original compiled BSP model');
-  const model = uploadDecalModel(kernel, level.model);
+  let model;
+  if (source) {
+    const tracked = source.model();
+    model = uploadDecalModel(kernel, tracked, { pointCapacity: source.pointCapacity,
+      isMover: s => (tracked.surfaces[s]?.dynamic ? true : null) });
+  } else model = uploadDecalModel(kernel, level.model);
+  if (level.decals) {
+    const decals = level.decals, old = decals.model;
+    decals.store.setModel(model);
+    old.dispose();
+    decals.model = model; decals.source = source; decals.generation = source?.generation() ?? 0;
+    return decals;
+  }
   const store = createDecalStore(kernel, model);
   let live = true;
-  const dispose = () => { if (live) { live = false; store.dispose(); model.dispose(); } };
-  level.decals = { model, store, dispose };
-  releaseDecals.register(level, dispose, level.decals);
+  const decals = { model, store, source, generation: source?.generation() ?? 0, dispose: null };
+  decals.dispose = () => { if (live) { live = false; decals.store.dispose(); decals.model.dispose(); } };
+  level.decals = decals;
+  releaseDecals.register(level, decals.dispose, level.decals);
   return level.decals;
+}
+
+/** Bring a level's decal model to the tracker's present state: its arrays
+ * after the last Update (decal.rs `decal_model_sync`, when the generation
+ * moved) and every Mover surface's Actor Rotation, which AttachDecal's
+ * Mover branch (MoverRotation) and ClipDecal (Rotation - MoverRotation)
+ * read at their call. */
+export function followDecalTracker(decals) {
+  const source = decals?.source;
+  if (!source) return;
+  const generation = source.generation();
+  if (generation !== decals.generation) {
+    if (!decals.model.sync())
+      throw new DecalBoundaryError('AttachDecal.tracker', 'the tracked level model no longer fits the decal model');
+    decals.generation = generation;
+  }
+  for (const { surfaces, rotation } of source.movers()) {
+    const r = rotation();
+    for (const s of surfaces) decals.model.setRotation(s, r);
+  }
 }
 /** Drop a level's decals (a reload: the original's UModel is loaded anew). */
 export function resetLevelDecals(level) {
@@ -66,17 +109,28 @@ function textureUSize(reference) {
  * 0x103e734b-0x103e898e), in the Rust core: the trace, the surface, the
  * FDecal quad, its Nodes and the MultiDecalLevel grid. SurfList gains the
  * attached surfaces; the result follows the original. `rand()` is the shared
- * stream's msvcrt rand() (appFrand's call). */
-export function attachDecalSurfaces(actor,distance,direction,{level,read,write,rand}){
+ * stream's msvcrt rand() (appFrand's call).
+ *
+ * On a Mover's surface (the moving brush tracker's) the original calls
+ * this->SetBase(Owner, 1) inside the native, after the FDecal entry and
+ * before the quad (0x103e79d6..0x103e79fe); the port runs `setBase(actor, Owner)` when
+ * the kernel returns. Its events (Detach/Attach on the bases, BaseChange)
+ * then run after the FDecal lists are finished, which no script reads. */
+export function attachDecalSurfaces(actor,distance,direction,{level,read,write,rand,setBase}){
   if(!level)throw new DecalBoundaryError('AttachDecal.level','AttachDecal requires the live level');
   if(typeof rand!=='function')throw new DecalBoundaryError('AttachDecal.rng','AttachDecal requires the original RNG stream');
-  const {store}=levelDecals(level),texture=read(actor,'Texture'),surfList=read(actor,'SurfList');
+  const decals=levelDecals(level),{store}=decals,texture=read(actor,'Texture'),surfList=read(actor,'SurfList');
+  followDecalTracker(decals);
   const out=store.attach({actor:handleOf(actor),location:read(actor,'Location').map(Math.fround),rotation:read(actor,'Rotation'),
     traceDistance:Math.fround(distance),decalDir:direction.map(Math.fround),drawScale:Math.fround(read(actor,'DrawScale')),
     uSize:textureUSize(texture),level:read(actor,'MultiDecalLevel')|0,texture:textureId(texture),surfList},{
     rand,textureOf:id=>{const other=identityOfHandle(id);return other?textureId(read(other,'Texture')):0;},
   });
   if(out.appended.length)write(actor,'SurfList',[...surfList,...out.appended]);
+  if(out.setBase){
+    if(typeof setBase!=='function')throw new DecalBoundaryError('AttachDecal.setBase','The Mover branch requires AActor::SetBase');
+    setBase(actor,read(actor,'Owner'));
+  }
   return out.result!==0;
 }
 

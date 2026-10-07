@@ -198,6 +198,138 @@ two different sum orders), and the zone from UModel::PointRegion (`dist =
 Core appTan's result comes from `sceneFrameTangent`, measured for FOV 75 and
 90 among others.
 
+## Child frames
+
+OccludeBsp makes a child frame for each mirror and sky polygon it keeps,
+and URender::OccludeFrame (`0x10b19fc0`) then runs each child: its own
+SetupDynamics and OccludeBsp, then its children. The Rust core runs the
+whole recursion in one `occ_run` (`occlude.rs` `create_child_frame`,
+`occlude_children`), on the same arenas as the original's DrawWorld.
+
+- **Precision.** Everything here runs inside DrawWorld, at 24 bits. The
+  mirror and sky coordinates are binary32 arithmetic in the instructions'
+  order. The child's ComputeRenderSize is `render_size` at P24, the
+  master's at the 64-bit model. Three of its operands are doubles rounded
+  once: the FX15/FY15 constant, the FOV argument and the appTan quotient
+  (tracker.rs `P24`, with `div24` for a double divisor).
+- **CreateChildFrame** (`0x10b15a40`):
+  - A request merges into an existing child of the same parent when iSurf,
+    Parent and ZoneNumber match and each NearClip component compares equal
+    (unordered counts as equal). The merge widens the span and, with
+    bounds, only widens the Prj clip numbers.
+  - Otherwise a new child is copied from the parent and prepended. Only X,
+    Y, XB and YB survive the copy. It gets the given Coords, their
+    transposed Uncoords, Recursion + 1, Mirror and NearClip, then
+    ComputeRenderSize. The raster's bounds narrow PrjXM..PrjYP, and its span
+    is the request's, merged into a fresh one.
+- **Mirror request** (`0x10b188ce..0x10b18b55`):
+  - Coords reflected: Z and Y through `A − N·(2(A|N))` (Core's FVector |,
+    \* and −), X through MirrorByVector, the origin through MirrorByPlane.
+  - NearClip is the node's plane in the parent's view, negated:
+    `(Coords axes · N, W − Origin·Coords | that)`. Mirror is negated.
+- **Sky request** (`0x10b184b1..0x10b187d1`):
+  - The parent's Coords with the origin set to `O − O`, multiplied
+    (FCoords \*=) by the SkyZone's roll, pitch and yaw matrices from
+    GMath's table, then the SkyZone's Location added.
+  - Mirror and NearClip are the parent's. The zone is the SkyZone's
+    Region.ZoneNumber, which the request also carries.
+- **Recursion** (`0x10b1a267..0x10b1a27c`): each child of a frame, newest
+  first, depth first. Before each OccludeBsp, Setup runs again on the frame's
+  candidates. OccludeFrame passes no excluded actor for a child, and
+  SetupDynamics' ViewTarget rule applies only at Recursion 0. A candidate
+  flagged `SETUP.FLAGS` = 1 (the player in first person) is therefore
+  constructed only in child frames.
+- **Output.** `occ_run` writes the root frame's output first (the decal
+  block reads only that), then one record per child: its fields, its span
+  as OccludeBsp receives it, and its OccludeBsp output.
+  `bsp-occlusion.mjs` `run(..., { children: { fov } })` decodes these as
+  `frames`. The child tangent is `childFrameTangent`'s x87-tan.mjs model
+  for the 24-bit argument, refused when FPTAN's last bit could change
+  Proj.Z.
+
+**Verification.** `scripts/validate-child-frames.mjs` drives the unchanged
+CreateChildFrame (with Engine's ComputeRenderSize) and OccludeFrame's
+recursion under Unicorn (`native-occlusion-oracle.py` with `children`,
+SkyZone fixtures, per-frame sprite constructors and Setup). Cameras aim at
+mirrored and fake-backdrop polygons and at movers, using
+validate-mirrors-play's views and the club tunnel. Sprite actors stand
+around the view, one at the eye that only child frames construct.
+
+Every child frame matches bit for bit: fields, Uncoords, NearClip, Mirror,
+zone, recursion, span, draw lists with every saved point, Frame->Sprite
+with span buffers and its own requests, plus NodeFlags, zone times and
+counters over the recursion.
+
+| Map | Cases | Child frames | Mirror / sky | Deepest recursion |
+| --- | ---: | ---: | --- | ---: |
+| 00_Training | 24 | 55 | 52 / 3 | 2 |
+| 01_NYC_UNATCOIsland | 20 | 17 | 1 / 16 | 1 |
+| 10_Paris_Club | 20 | 29 | 29 / 0 | 2 |
+| 10_Paris_Club, tracked movers | 18 | 2 | 2 / 0 | 1 |
+| 02_NYC_Bar | 19 | 18 | 18 / 0 | 1 |
+| 02_NYC_Hotel | 19 | 11 | 11 / 0 | 1 |
+| 02_NYC_Smug, tracked movers | 19 | 17 | 6 / 11 | 2 |
+| 11_Paris_Everett, tracked movers | 19 | 23 | 9 / 14 | 3 |
+
+The checks include mover mirrors, sky frames inside mirror frames and
+merged requests. validate-bsp-occlusion's master-only sequences are
+unchanged.
+
+**Play.** With child frames on (the default; `?childFrames=off`, Node
+`CHILD_FRAMES=off`, keeps the frustum-planned passes):
+
+- **Frames.** `sim-session.mjs` `visibility` runs the recursion. Each child
+  frame carries its visible nodes, its tracked movers' polygons, its
+  Frame->Sprite and the group a mirror frame looks through: a static group
+  by its node, a mover's by its tracked polygon.
+- **Pass plan.** `mirror-passes.mjs` `planFramePasses` plans the mirror
+  passes from these frames on both sides. A pass is a mirror frame whose
+  group the page supports. Its scissor is the frame span's bounds, and its
+  children are its own mirror frames, up to Recursion 3. A sky frame made
+  inside a mirror frame is drawn into that mirror's target first, with the
+  SkyZone view turned like the mirror camera.
+- **Drawing.** Each mirror and sky pass draws the world through its own
+  frame's nodes and mover polygons (`world-visibility.mjs`) and only the
+  sprite records its Frame->Sprite holds (`sprite-scene.mjs` `framePass`).
+  The root sky frame does the same.
+- **Actors and stamps.** Actor meshes in each pass are decided by the
+  pass's Frame->Sprite (`actor-mesh-sim.mjs` `framePasses`), and `stamps()`
+  writes LastRenderTime for every actor in any frame's Frame->Sprite, as
+  DrawActorSprite does. The player, flagged root-excluded, appears in mirror
+  frames.
+- **simVerify.** It compares the actors three.js draws. A Frame->Sprite
+  actor whose groups all lie outside a pass's view is stamped, not drawn.
+
+**Cost.** See "Child frames: cost" below.
+
+**Pixels against `?childFrames=off`** (worker mode, 1280×720, 30 frames):
+
+- The Island start and the Paris Club spawn are identical.
+- Facing Training's entrance floor mirror, 5,096 pixels differ. The floor
+  reflects the sky through the ceiling opening (a sky frame inside the
+  mirror frame), and there are single pixels along the mirror's far edge.
+- Facing 02_NYC_Smug's mover mirror, 9,757 pixels differ: the window in
+  the reflection shows the sky.
+
+**Other checks.** `validate-sim-split` is deterministic on Training and
+Island (240 frames walking, same pixels). `validate-mirrors-play` passes,
+with the player in the Hotel mirror, and so does its `?simVerify=1` run
+(one of two runs lost its browser before finishing). `validate-decals-play`
+and `validate-gpu-mesh` pass too.
+
+**Open.**
+
+- Fog maps in mirror and sky passes are the main frame's: SetupForSurf per
+  child frame is not run, so a fog surface seen only in a child pass has no
+  fog map.
+- Actor meshes are not drawn in a sky frame made inside a mirror frame;
+  that frame's sprites and world are drawn.
+- A sky frame inside a mirror frame uses the root frame's SkyZone view.
+- Iterator items are the root frame's in every child frame. The original
+  runs the iterator again for each frame.
+- The child tangent comes from the x87-tan.mjs model, which is checked
+  against hardware FPTAN, not from a measurement of these arguments.
+
 ## Reference and verification
 
 `scripts/native-occlusion-oracle.py` runs the unchanged CreateMasterFrame
@@ -355,19 +487,23 @@ made. Then:
 * **World.** Each world triangle carries its BSP node
   (`buildSurfaceGeometry`, world batches). The main pass draws each world
   mesh through an index of its visible triangles in their own order
-  (`world-visibility.mjs`); the mirror and sky passes draw whole meshes,
-  since child frames' own occlusion is not ported.
+  (`world-visibility.mjs`). Each mirror and sky pass does the same with its
+  own child frame's nodes ("Child frames"); with `?childFrames=off` they
+  draw whole meshes.
 * **Movers.** The moving brush tracker ([brush tracker](brush-tracker.md#play))
   filters every mover's polygons into the model: Update for each mover the
   level-actor pass admits runs before OccludeBsp, the main pass draws a
   mover's polygons the draw lists hold (so closed doors occlude), and
   nothing stamps a tracked mover. `?moverTracker=off` keeps them out of the
   BSP, drawn whole and frustum-stamped.
-* **Mirrors.** The main frame's mirror children are the static mirror groups
-  OccludeBsp requested (`mirror-passes.mjs` `requestedGroup`), on the page
-  and in the drawn set alike, mover mirrors by their tracked polygon;
+* **Mirrors.** The mirror passes are OccludeFrame's mirror child frames, at
+  every depth (`planFramePasses`, "Child frames"). With
+  `?childFrames=off`, the main frame's children are the groups OccludeBsp
+  requested (`requestedGroup`, mover mirrors by their tracked polygon), and
   deeper levels keep the frustum test.
-* **Sky.** The sky frame is drawn only when OccludeBsp made one.
+* **Sky.** The sky frame is drawn only when OccludeBsp made one. It draws
+  its own child frame's world, sprites and actors, and so does a sky frame
+  inside a mirror frame.
 * **Fog.** Only drawn surfaces get a fog map, as SetupForSurf does.
 * **Actors.** The run waits for SetupDynamics' candidates (`occludeMain`):
   after the sprite scan (`sprite-scan.mjs`: DT_Sprite actors and
@@ -386,7 +522,8 @@ made. Then:
   `main` for the page's main pass (`sprite-scene.mjs` `mainPass`), and
   `stamps()` writes LastRenderTime for every `Frame->Sprite` actor, as
   DrawActorSprite does, the items' proxies included. The mirror and sky
-  passes keep the frustum-tested drawn set. A drawn binding's
+  passes draw and stamp their own frames' Frame->Sprite ("Child frames";
+  the frustum-tested set with `?childFrames=off`). A drawn binding's
   mesh groups outside the frustum are still left out of the draw (no pixels
   either way). `?actorOcclusion=frustum` (Node: `ACTOR_OCCLUSION=frustum`)
   restores the frustum-tested drawn set for the main frame and runs
@@ -457,27 +594,20 @@ In recommended order. Each step keeps the rule above: recover from the
 DLL, port to Rust, match the original under `native-occlusion-oracle.py`,
 then wire into Play.
 
-### 1. Child frames (next)
+### 1. Child frames (done)
 
-CreateChildFrame (`0x10b15a40`, notes in `.work/occlude/frame-and-clip.md`:
-reuse of an equal child, merged spans, ComputeRenderSize again at 24 bits)
-and OccludeFrame's recursion into the children, newest first, so mirror
-and sky views get their own visible polygons and sprites. The mirror
-child's coords and near-clip plane are already verified
-([mirror surfaces](mirror-surfaces.md)); the sky child's are in
-`.work/occlude/occludebsp.md` (step 14). Play then draws mirror and sky
-passes from their own results instead of whole meshes and the frustum, and
-each child frame's SetupDynamics (no excluded actor: a mirror shows the
-player) gives its own `Frame->Sprite` to draw and stamp, replacing the
-frustum-tested drawn set those passes still use.
+Ported and in Play on 2026-10-07 ("Child frames" above). What remains:
+each child frame's own fog maps, actor meshes in a sky frame inside a mirror
+frame, each frame's own iterator items, and a measured FPTAN for the
+24-bit argument.
 
 ### 2. The moving brush tracker (done)
 
 Ported and in Play on 2026-10-06: [brush tracker](brush-tracker.md). The
 tracker is bit-equal to Engine's over 239 oracle steps, and OccludeBsp over
 the models it builds matches the original with Engine's SurfIsDynamic on
-four maps. Its own open items are decals and fog on movers, collision
-(Stage 5) and SaveGame (Stage 6).
+four maps. Decals and fog on movers followed on 2026-10-07; its own open
+items are collision (Stage 5) and SaveGame (Stage 6).
 
 ### 3. Smaller items
 

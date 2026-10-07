@@ -12,7 +12,7 @@
 import * as THREE from 'three';
 import { toView } from '../unreal/geometry.mjs';
 import { mirrorMatrix } from './mirrors.mjs';
-import { mirrorsMayRender, planMirrorPasses, passOrder } from './mirror-passes.mjs';
+import { mirrorsMayRender, planMirrorPasses, planFramePasses, passOrder } from './mirror-passes.mjs';
 import { moverGroupMatrix } from './mover-matrix.mjs';
 import { rotatorEuler } from './play-camera.mjs';
 
@@ -80,17 +80,28 @@ export function createDrawnSet(scene) {
      * `mirrors`), the sky frame (when `sky`) and the main frame (when
      * `drawWorld`), each with its camera and the mirror group it looks
      * through; `requested` OccludeBsp's mirror requests (mirror-passes.mjs
-     * requestedGroup). */
-    passes({ camera, sky, drawWorld, size, mirrors = true, requested = null }) {
-      const passes = [], mirrored = mirrors && groups.length > 0 && mirrorsMayRender(camera, groups, undefined, requested);
-      if (mirrored)
-        for (const node of passOrder(planMirrorPasses(camera, groups, size, undefined, requested)))
-          passes.push({ kind: 'mirror', camera: node.camera, through: node.group, node });
+     * requestedGroup). With `frames` (OccludeFrame's child frames,
+     * sim-session.mjs visibility) the mirror passes are its mirror frames
+     * (planFramePasses, `rect` the render viewport) and the sky pass its
+     * root sky frame, each pass with its `frame`. */
+    passes({ camera, sky, drawWorld, size, mirrors = true, requested = null, frames = null, rect = null }) {
+      const passes = [];
+      let mirrored = false;
+      if (frames) {
+        const plan = mirrors && groups.length ? planFramePasses(camera, groups, size, frames, rect) : [];
+        mirrored = plan.length > 0;
+        for (const node of passOrder(plan)) passes.push({ kind: 'mirror', camera: node.camera, through: node.group, node, frame: node.frame });
+      } else {
+        mirrored = mirrors && groups.length > 0 && mirrorsMayRender(camera, groups, undefined, requested);
+        if (mirrored)
+          for (const node of passOrder(planMirrorPasses(camera, groups, size, undefined, requested)))
+            passes.push({ kind: 'mirror', camera: node.camera, through: node.group, node });
+      }
       if (sky) {
         skyCamera.copy(camera); skyCamera.position.fromArray(toView(sky.location));
         skyCamera.quaternion.premultiply(new THREE.Quaternion().setFromEuler(rotatorEuler(sky.rotation)));
         skyCamera.updateMatrixWorld();
-        passes.push({ kind: 'sky', camera: skyCamera });
+        passes.push({ kind: 'sky', camera: skyCamera, frame: frames?.find(f => f.parent === 0 && f.kind === 'sky') ?? null });
       }
       if (drawWorld) { camera.updateMatrixWorld(); passes.push({ kind: 'main', camera }); }
       return { passes, mirrored };

@@ -29,6 +29,17 @@ movers into (docs/brush-tracker.md): ULevel+0xfc gets a tracker object whose
 vslot 3 is Engine's unchanged FMovingBrushTracker::SurfIsDynamic (0x1037ac10,
 `iSurf >= iOriginalSurfs` at +0x20), which OccludeBsp calls before a node's
 bound test (0x10b17ae5); its other slots trap.
+
+A case with `children` runs the unchanged CreateChildFrame (0x10b15a40,
+with Engine's ComputeRenderSize under the case's tangent table) instead of
+the recorder, then OccludeFrame's recursion (0x10b1a267..0x10b1a27c): each
+child of a frame, newest first (Child, then Sibling), gets its sprites
+constructed for it (SetupDynamics; a sprite with `rootExcluded` only in a
+child frame, as OccludeFrame passes no excluded actor and SetupDynamics
+skips the ViewTarget only at Recursion 0) and OccludeBsp, then its own
+children. Each child is reported with its FSceneNode fields and span as
+OccludeBsp receives it. A zone actor or the LevelInfo can carry a SkyZone
+fixture (+0x384: Location +0x114, Rotation +0x120, Region.ZoneNumber +0xd0).
 """
 import importlib.util
 import json
@@ -63,6 +74,7 @@ MESH_BOUNDS, MESH_GET_ANIM_SEQ = 0x103a6850, 0x10301e29
 CEIL_BRIDGE = bytes.fromhex('dd44240483ec04d93c24668b04246625fff3660d00086689442402d96c2402d9fcd92c2483c404c3')
 CREATE_MASTER_FRAME, OCCLUDE_BSP = 0x10b15690, 0x10b173d0
 SURF_IS_DYNAMIC = 0x1037ac10  # Engine FMovingBrushTracker vslot 3
+CREATE_CHILD_FRAME = 0x10b15a40
 CORE_APPTAN = 0x10123260
 GMATH_CTOR = 0x10102978
 
@@ -98,6 +110,7 @@ class Occlusion(native.NativeCollision):
         self.device_stub = self.code(b'\xc2\x04\x00')
         self.trap_stub = self.code(b'\xf4')
         cpu.hook_add(UC_HOOK_CODE, self.on_child, begin=self.child_stub, end=self.child_stub)
+        cpu.hook_add(UC_HOOK_CODE, self.on_child, begin=CREATE_CHILD_FRAME, end=CREATE_CHILD_FRAME)
         cpu.hook_add(UC_HOOK_CODE, self.on_trap_stub, begin=self.trap_stub, end=self.trap_stub)
         cpu.hook_add(UC_HOOK_CODE, self.on_setup, begin=SPRITE_SETUP, end=SPRITE_SETUP)
         cpu.hook_add(UC_HOOK_CODE, self.on_setup_result, begin=CTOR_SETUP_RESULT, end=CTOR_SETUP_RESULT)
@@ -269,11 +282,23 @@ class Occlusion(native.NativeCollision):
         self.level_info = self.alloc(0x1000)
         self.write(self.level_info + 4, 'I', next(object_index))
         self.write(self.level_info + 0x24, 'I', LEVELINFO_CLASS)
+
+        def sky_fixture(owner, sky):
+            if not sky:
+                return
+            address = self.alloc(0x200)
+            self.write(address + 4, 'I', next(object_index))
+            self.write(address + 0x114, '3I', *sky['locationBits'])
+            self.write(address + 0x120, '3i', *sky['rotation'])
+            self.write(address + 0xd0, 'B', sky['zone'])
+            self.write(owner + 0x384, 'I', address)
+        sky_fixture(self.level_info, model.get('levelSky'))
         zone_actors = {}
         for zone in model['zoneActors']:
             address = self.alloc(0x600)
             self.write(address + 4, 'I', next(object_index))
             self.write(address + 0x24, 'I', ZONEINFO_CLASS)
+            sky_fixture(address, zone.get('sky'))
             zone_actors[zone['index']] = address
         m = self.model = self.alloc(0x104 + 24 * 64)
         node_data = self.alloc(64 * len(nodes))
@@ -418,35 +443,11 @@ class Occlusion(native.NativeCollision):
                     'uncoordsBits': list(self.read(frame + 0x64, '12I')), 'setups': setups}
         before = self.node_flags()
         times_before = [self.read(self.model + 0x108 + 24 * i, 'I')[0] for i in range(64)]
-        # OccludeFrame's dynamics bookkeeping (0x10b1a0f6..0x10b1a14a), then
-        # the case's sprites in order (SetupDynamics), all at node 0.
-        post = self.alloc(4 * self.num_nodes)
-        self.write(self.render + 0xec, 'II', 0, post)
-        sprites, setups = [], []
-        for sprite in case.get('sprites', []):
-            address = self.alloc(0x100)
-            if 'actor' in sprite:
-                self.setup_values, actor = None, self.actor_fixture(sprite['actor'])
-            else:
-                self.setup_values = (sprite['x1'], sprite['y1'], sprite['x2'], sprite['y2'], sprite['zBits'])
-                actor = self.alloc(16)
-            self.setup_result = None
-            self.call_native(SPRITE_CTOR, address, struct.pack('<3I', frame, 0, actor), 0x007f)
-            if 'actor' in sprite:
-                setups.append(self.setup_record(address, self.setup_result))
-            sprites.append(address)
-        self.call_native(OCCLUDE_BSP, self.render, struct.pack('<I', frame), 0x007f)
-        drawn = []
-        link = self.read(frame + 0xa4, 'I')[0]
-        while link:
-            span = self.read(link + 0xc, 'I')[0]
-            drawn.append({'sprite': sprites.index(link), 'span': self.span(span)})
-            link = self.read(link + 0x10, 'I')[0]
-        count, post = self.read(self.render + 0xec, 'II')
-        for i in range(count):
-            self.write(self.read(post + 4 * i, 'I')[0], 'II', 0, 0)
-        after = self.node_flags()
-        times = [self.read(self.model + 0x108 + 24 * i, 'I')[0] for i in range(64)]
+        children = bool(case.get('children'))
+        self.write(self.vtable + 0x68, 'I', CREATE_CHILD_FRAME if children else self.child_stub)
+        drawn, setups = self.occlude_frame(frame, case.get('sprites', []), True)
+        # The root frame's results before its children run (they share the
+        # transformed points, which Rasterize clamps in place).
         result = {
             'zoneNumber': self.read(frame + 0x18, 'i')[0],
             'frameBits': list(self.read(frame + 0x34, '12I')) + list(self.read(frame + 0xb8, '17I')) +
@@ -456,11 +457,78 @@ class Occlusion(native.NativeCollision):
             'sprites': drawn,
             'setups': setups,
             'uncoordsBits': list(self.read(frame + 0x64, '12I')),
+        }
+        if children:
+            frames = []
+            self.occlude_children(frame, 0, case.get('sprites', []), frames)
+            result['frames'] = frames
+        after = self.node_flags()
+        times = [self.read(self.model + 0x108 + 24 * i, 'I')[0] for i in range(64)]
+        result.update({
             'zoneTimes': {i: t for i, (t, b) in enumerate(zip(times, times_before)) if t != b},
             'nodeFlags': {i: a for i, (a, b) in enumerate(zip(after, before)) if a != b},
             'counters': list(self.read(self.render + 0x68, '2I')),
-        }
+        })
         return result
+
+    def occlude_frame(self, frame, specs, root):
+        """OccludeFrame's dynamics bookkeeping (0x10b1a0f6..0x10b1a14a), the
+        frame's sprites in order (SetupDynamics), all at node 0, OccludeBsp,
+        then the post-dynamics reset. Returns Frame->Sprite (each sprite's
+        index in `specs` and span) and the actor sprites' Setup records."""
+        post = self.alloc(4 * self.num_nodes)
+        self.write(self.render + 0xec, 'II', 0, post)
+        sprites, setups = {}, []
+        for index, sprite in enumerate(specs):
+            if root and sprite.get('rootExcluded'):
+                continue
+            address = self.alloc(0x100)
+            if 'actor' in sprite:
+                self.setup_values, actor = None, self.actor_fixture(sprite['actor'])
+            else:
+                if not root:
+                    continue
+                self.setup_values = (sprite['x1'], sprite['y1'], sprite['x2'], sprite['y2'], sprite['zBits'])
+                actor = self.alloc(16)
+            self.setup_result = None
+            self.call_native(SPRITE_CTOR, address, struct.pack('<3I', frame, 0, actor), 0x007f)
+            if 'actor' in sprite:
+                setups.append(self.setup_record(address, self.setup_result))
+            sprites[address] = index
+        self.call_native(OCCLUDE_BSP, self.render, struct.pack('<I', frame), 0x007f)
+        drawn = []
+        link = self.read(frame + 0xa4, 'I')[0]
+        while link:
+            span = self.read(link + 0xc, 'I')[0]
+            drawn.append({'sprite': sprites[link], 'span': self.span(span)})
+            link = self.read(link + 0x10, 'I')[0]
+        count, post = self.read(self.render + 0xec, 'II')
+        for i in range(count):
+            self.write(self.read(post + 4 * i, 'I')[0], 'II', 0, 0)
+        return drawn, setups
+
+    def occlude_children(self, parent, parent_index, specs, frames):
+        """OccludeFrame on each child of `parent`, newest first, depth first."""
+        child = self.read(parent + 0x10, 'I')[0]
+        while child:
+            index = len(frames) + 1
+            record = {
+                'index': index, 'parent': parent_index, 'iSurf': self.read(child + 0x14, 'i')[0],
+                'zoneNumber': self.read(child + 0x18, 'i')[0], 'recursion': self.read(child + 0x1c, 'i')[0],
+                'mirrorBits': self.read(child + 0x20, 'I')[0], 'nearClipBits': list(self.read(child + 0x24, '4I')),
+                'frameBits': list(self.read(child + 0x34, '12I')) + list(self.read(child + 0xb8, '17I')) +
+                             list(self.read(child + 0xfc, '28I')),
+                'uncoordsBits': list(self.read(child + 0x64, '12I')),
+                'span': self.span(self.read(child + 0x94, 'I')[0]),
+            }
+            frames.append(record)
+            self.children = []
+            drawn, setups = self.occlude_frame(child, specs, False)
+            record.update({
+                'draw': [self.draw_list(self.read(child + 0x98 + 4 * i, 'I')[0]) for i in range(3)],
+                'children': self.children, 'sprites': drawn, 'setups': setups})
+            self.occlude_children(child, index, specs, frames)
+            child = self.read(child + 0xc, 'I')[0]
 
 
 if __name__ == '__main__':

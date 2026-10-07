@@ -9,8 +9,12 @@
  * (Frame->Draw[0..2], newest first: mirrors, occluding and non-occluding
  * surfaces), each entry with the nodes whose clipped polygons were saved for
  * it (newest first), and the child-frame requests (mirror and sky) with the
- * span they were given. */
+ * span they were given. With `children`, OccludeFrame's recursion runs too:
+ * CreateChildFrame made each child during its parent's OccludeBsp, and each
+ * child (newest first, depth first) gets its own SetupDynamics and
+ * OccludeBsp (`frames`). */
 import { sceneFrameTangent } from './script-window-scene-frame.mjs';
+import { x87TanCandidates } from './x87-tan.mjs';
 import { createTrackerHost, trackerCapacities, TRACKER } from './brush-tracker.mjs';
 
 /** Engine.Texture's bools packed into the dword UTexture::PolyFlags (+0x80
@@ -34,6 +38,61 @@ export function texturePolyFlags(values) {
 
 const f32 = new Float32Array(1), u32 = new Uint32Array(f32.buffer);
 const bitsOf = value => (f32[0] = value, u32[0]);
+const fromBits = bits => (u32[0] = bits >>> 0, f32[0]);
+
+// Precision control 24 for double operands (tracker.rs P24): a result
+// rounded once to a 24-bit significand.
+function twoSum(a, b) {
+  const s = a + b, bb = s - a;
+  return [s, (a - (s - bb)) + (b - bb)];
+}
+function round24(s, e) {
+  const r = Math.fround(s);
+  if (e === 0 || !Number.isFinite(s) || r === s) return r;
+  const b = bitsOf(r);
+  const other = r > s ? (r > 0 ? fromBits(b - 1) : r < 0 ? fromBits(b + 1) : fromBits(0x80000001))
+    : (r > 0 ? fromBits(b + 1) : r < 0 ? fromBits(b - 1) : fromBits(1));
+  if (s !== (r + other) * 0.5) return r;
+  return (e > 0) === (other > r) ? other : r;
+}
+/** A float32 `a` times a double `c`, rounded once to 24 bits. */
+function mul24(a, c) {
+  const hi = Math.fround(c), lo = c - hi;
+  const [s, e] = twoSum(a * hi, a * lo);
+  return round24(s, e);
+}
+function split(x) {
+  const c = 134217729 * x, hi = c - (c - x);
+  return [hi, x - hi];
+}
+/** A float32 `a` over a double `b`, rounded once to 24 bits. */
+function div24(a, b) {
+  const q = a / b, r = Math.fround(q);
+  if (!Number.isFinite(q) || r === q) return r;
+  const bits = bitsOf(r);
+  const other = (r > q) === (r > 0) ? fromBits(bits - 1) : fromBits(bits + 1);
+  const mid = (r + other) * 0.5;
+  if (q !== mid) return r;
+  const p = mid * b, [mh, ml] = split(mid), [bh, bl] = split(b);
+  const e = ((mh * bh - p) + mh * bl + ml * bh) + ml * bl, residual = (a - p) - e;
+  if (residual === 0) return (bits & 1) === 0 ? r : other;
+  return (b > 0 ? residual > 0 : residual < 0) === (other > r) ? other : r;
+}
+
+/** A child frame's ComputeRenderSize argument for Actor.FOVAngle `fov`
+ * (FOV * 0.008726646259971648 rounded to 24 bits inside DrawWorld, stored
+ * as a double) and Core appTan's result for it: x87-tan.mjs's FPTAN model,
+ * whose candidates must give one Proj.Z (`hx / tan` at 24 bits) for a
+ * frame `width` pixels wide. */
+export function childFrameTangent(fov, width) {
+  const argument = mul24(Math.fround(fov), 0.008726646259971648);
+  const tangents = x87TanCandidates(argument);
+  if (!tangents?.length) throw new Error(`Child frames require the original appTan for FOV ${fov}`);
+  const hx = Math.fround(Math.fround(width) * 0.5);
+  if (new Set(tangents.map(t => div24(hx, t))).size !== 1)
+    throw new Error(`Child frame FOV ${fov}: FPTAN's last bit decides Proj.Z, which is unmeasured`);
+  return { argument, tangent: tangents[0] };
+}
 
 // occ_run option bits (occlude.rs FRAME word 46).
 export const OCCLUSION_SHOW_PLAYER_CTRL = 1, OCCLUSION_SHINY_SURFACES = 2, OCCLUSION_TOGGLE = 4,
@@ -49,13 +108,15 @@ export const OCCLUSION_SHOW_PLAYER_CTRL = 1, OCCLUSION_SHINY_SURFACES = 2, OCCLU
  * and AnimFrame. Floats are written through the f32 view. */
 export const SETUP = Object.freeze({ KEY: 0, DRAWTYPE: 1, MESH: 2, TEXTURE: 3, USIZE: 4, VSIZE: 5, LOCATION: 6,
   ROTATION: 9, DRAWSCALE: 12, PREPIVOT: 13, PARTICLES: 16, SEQ: 17, SEQ_START: 18, SEQ_FRAMES: 19, ANIMFRAME: 20,
-  WORDS: 21 });
+  FLAGS: 21, WORDS: 22 });
+/** SETUP.FLAGS bit: not constructed in a root frame (setup.rs C_FLAGS). */
+export const SETUP_ROOT_EXCLUDED = 1;
 export const SETUP_MESH_NONE = 0, SETUP_MESH_UNKNOWN = 1;
 export const SETUP_TEXTURE_NONE = 0, SETUP_TEXTURE_SIZED = 1, SETUP_TEXTURE_UNKNOWN = 2;
 /** Setup's result words: status (SETUP_STATUS), X1, Y1, X2, Y2, Z bits and
  * the sprite path's ScreenX, ScreenY and Persp bits. */
 export const SETUP_OUT_WORDS = 9;
-export const SETUP_STATUS = Object.freeze({ REJECTED: 0, ACCEPTED: 1, UNKNOWN: 3, UNSUPPORTED: 4 });
+export const SETUP_STATUS = Object.freeze({ REJECTED: 0, ACCEPTED: 1, UNKNOWN: 3, UNSUPPORTED: 4, NOT_CONSTRUCTED: 5 });
 
 /** UMesh::GetAnimSeq (Engine 0x1031c000): the first sequence whose FName is
  * `name`. FNames compare by index, and names intern case-insensitively
@@ -90,6 +151,7 @@ export function packSetupCandidate({ u32, f32, i32 }, at, c) {
   i32[at + SETUP.SEQ_START] = c.sequence?.startFrame ?? 0;
   i32[at + SETUP.SEQ_FRAMES] = c.sequence?.numFrames ?? 0;
   f32[at + SETUP.ANIMFRAME] = c.animFrame ?? 0;
+  u32[at + SETUP.FLAGS] = c.rootExcluded ? SETUP_ROOT_EXCLUDED : 0;
 }
 
 /** A mesh payload's GetRenderBoundingBox fields for meshRecord. */
@@ -125,10 +187,10 @@ function masterFrame(kernel, { location, rotation, width, height, fov, orthoZoom
 
 /** Upload `model` (src/unreal/model.mjs readModel) with each surface's
  * texture PolyFlags (`surfaceTextureFlags[i]`, 0 without a texture) and
- * each zone's actor key (`zoneActors[i]`, 0 for none: the LevelInfo) and
- * sky (`zoneSkies[i]`, 0 for none). `kernel` is the script-VM kernel's
- * `occlusion` facade. */
-export function createBspOcclusion(kernel, model, { surfaceTextureFlags, zoneActors = [], zoneSkies = [],
+ * each zone's actor key (`zoneActors[i]`, 0 for none: the LevelInfo); the
+ * zones' skies come per frame (setZoneSkies). `kernel` is the script-VM
+ * kernel's `occlusion` facade. */
+export function createBspOcclusion(kernel, model, { surfaceTextureFlags, zoneActors = [],
   workBytes = 32 << 20, tracker = null } = {}) {
   const { memory, alloc, free } = kernel;
   const nodeCount = model.nodes.length, pointCount = model.points.length;
@@ -140,7 +202,7 @@ export function createBspOcclusion(kernel, model, { surfaceTextureFlags, zoneAct
     points: pointCount, surfs: model.surfaces.length };
   const nodes = block(64 * caps.nodes), verts = block(8 * caps.verts),
     points = block(12 * caps.points + 16), surfs = block(8 * caps.surfs),
-    bounds = block(28 * model.renderBounds.length + 16), zones = block(16 * 64),
+    bounds = block(28 * model.renderBounds.length + 16), zones = block(16 * 64), skyRecords = block(4 * 7 * 64),
     cache = block(8 * Math.max(1, caps.points)), work = block(workBytes),
     dynamics = block(12 * caps.nodes);
   let sprites = block(24 * 256), spriteCapacity = 256;
@@ -169,7 +231,7 @@ export function createBspOcclusion(kernel, model, { surfaceTextureFlags, zoneAct
     u.fill(0, zones >>> 2, (zones >>> 2) + 256);
     for (let i = 0; i < model.zones.length; i++) {
       u[(zones >>> 2) + 4 * i] = (zoneActors[i] ?? 0) >>> 0;
-      u[(zones >>> 2) + 4 * i + 2] = (zoneSkies[i] ?? 0) >>> 0;
+      u[(zones >>> 2) + 4 * i + 2] = 0;
     }
     u.fill(0, cache >>> 2, (cache >>> 2) + 2 * Math.max(1, caps.points));
   }
@@ -265,7 +327,7 @@ export function createBspOcclusion(kernel, model, { surfaceTextureFlags, zoneAct
      * `{key, x1, y1, x2, y2, zBits}` with Y1 >= 0, Y2 <= the frame's height
      * and Y1 < Y2 (Setup's checks); or, with `setupCount`, Setup on that
      * many packed candidates (setupCandidates) gives them. */
-    run(frameWords, frameSprites = [], { setupCount = -1, skipPoints = false } = {}) {
+    run(frameWords, frameSprites = [], { setupCount = -1, skipPoints = false, children = null } = {}) {
       const viaSetup = setupCount >= 0;
       ensureSprites(viaSetup ? setupCount : frameSprites.length);
       if (!viaSetup) {
@@ -277,22 +339,43 @@ export function createBspOcclusion(kernel, model, { surfaceTextureFlags, zoneAct
       setHeader();
       words().set(frameWords, kernel.framePtr() >>> 2);
       if (viaSetup) setup(setupCount);
+      // CreateChildFrame's ComputeRenderSize inputs and the recursion switch.
+      if (kernel.childInPtr) {
+        const at = kernel.childInPtr() >>> 2;
+        if (children) {
+          const { tangent } = childFrameTangent(children.fov, frameWords[12]);
+          const io = new DataView(new ArrayBuffer(8));
+          io.setFloat64(0, tangent, true);
+          words().set([bitsOf(children.fov), bitsOf(children.orthoZoom ?? 0), io.getUint32(0, true), io.getUint32(4, true),
+            viaSetup ? candidates : 0, viaSetup ? setupCount : 0, 1, 0], at);
+        } else words()[at + 6] = 0;
+      } else if (children) throw new Error('The script VM core predates child frames; run npm run build:wasm');
       const status = kernel.run(work, workBytes);
       stamp = words()[(kernel.modelPtr() >>> 2) + 14];
       const st = words().slice(kernel.statusPtr() >>> 2, (kernel.statusPtr() >>> 2) + 8);
       if (status !== 0) throw new Error(`OccludeBsp failed with status ${status}`);
-      // `stream` is the output's address and length in the kernel memory, for
-      // the decal block (decal-draw.mjs), valid until the next run;
-      // `skipPoints` leaves the saved points to it.
-      return { ...decode(words().slice(st[5] >>> 2, (st[5] >>> 2) + st[1]), st, skipPoints),
-        stream: { at: st[5], words: st[1] } };
+      // `stream` is the root frame's output (address and length in the kernel
+      // memory) for the decal block (decal-draw.mjs), valid until the next
+      // run; `skipPoints` leaves the saved points to it. `frames` are the
+      // child frames in OccludeFrame's order.
+      const all = words().slice(st[5] >>> 2, (st[5] >>> 2) + st[1]);
+      return { ...decode(all.subarray(0, st[6]), st, skipPoints), frames: decodeFrames(all, st[6], skipPoints),
+        stream: { at: st[5], words: st[6] } };
     },
-    /** Each zone's SkyZone presence (`skies[i]` truthy: the zone's actor,
-     * or the LevelInfo for a zone without one, has a SkyZone; OccludeBsp
-     * reads it at 0x10b183a8 for a fake-backdrop polygon). */
+    /** Each zone's SkyZone (the zone's actor's, or the LevelInfo's for a
+     * zone without one; OccludeBsp reads it at 0x10b183a8 for a
+     * fake-backdrop polygon): null for none, else its `location` (floats),
+     * `rotation` (pitch, yaw, roll) and `zone` (Region.ZoneNumber), which
+     * the sky child frame takes. */
     setZoneSkies(skies) {
       const u = words();
-      for (let i = 0; i < model.zones.length; i++) u[(zones >>> 2) + 4 * i + 2] = skies[i] ? 1 : 0;
+      for (let i = 0; i < model.zones.length; i++) {
+        const sky = skies[i];
+        if (!sky) { u[(zones >>> 2) + 4 * i + 2] = 0; continue; }
+        const at = (skyRecords >>> 2) + 7 * i;
+        u.set([...(sky.location ?? [0, 0, 0]).map(bitsOf), ...(sky.rotation ?? [0, 0, 0]).map(v => v >>> 0), (sky.zone ?? 0) >>> 0], at);
+        u[(zones >>> 2) + 4 * i + 2] = skyRecords + 28 * i;
+      }
     },
     /** The live NodeFlags byte of node `i` (NF_PolyOccluded 8, NF_BoxOccluded 0x10). */
     nodeFlags: i => bytes()[nodes + 64 * i + 55],
@@ -334,6 +417,38 @@ export function createBspOcclusion(kernel, model, { surfaceTextureFlags, zoneAct
     // level it filtered into: travel and LoadMap, docs/brush-tracker.md).
     dispose() { if (trackerHost?.live()) trackerHost.destroy(); for (const at of blocks.splice(0)) free(at); },
   };
+}
+
+/** The child frames' records after the root frame's output (occlude.rs
+ * emit_frame): each frame's index, its parent's (0 the root), the kind and
+ * node of the request that made it, Recursion, ZoneNumber, Mirror and
+ * NearClip bits, the ComputeRenderSize fields (Coords, FX..PrjYP,
+ * ViewSides, ViewPlanes), Uncoords, its span and its OccludeBsp output. */
+function decodeFrames(words, at, skipPoints) {
+  const frames = [];
+  let i = at;
+  while (i < words.length) {
+    if (words[i] !== 0xfffffffd) throw new Error(`Malformed child frame record at ${i}`);
+    const [index, parent, kind, iNode, recursion, zone, mirror] = words.slice(i + 1, i + 8);
+    const nearClip = [...words.slice(i + 8, i + 12)], fields = [...words.slice(i + 12, i + 69)];
+    const uncoords = [...words.slice(i + 69, i + 81)];
+    i += 81;
+    const [startY, endY, valid] = words.slice(i, i + 3);
+    i += 3;
+    const lines = [];
+    for (let y = startY | 0; y < (endY | 0); y++) {
+      const count = words[i++], line = [];
+      for (let k = 0; k < count; k++, i += 2) line.push([words[i] | 0, words[i + 1] | 0]);
+      lines.push(line);
+    }
+    const length = words[i++];
+    const body = decode(words.subarray(i, i + length), [], skipPoints);
+    i += length;
+    frames.push({ index, parent, kind: kind ? 'sky' : 'mirror', iNode: iNode | 0, recursion, zone, mirror, nearClip,
+      fields, uncoords, span: { startY: startY | 0, endY: endY | 0, validLines: valid | 0, lines },
+      draw: body.draw, children: body.children, sprites: body.sprites });
+  }
+  return frames;
 }
 
 function decode(words, status, skipPoints = false) {
