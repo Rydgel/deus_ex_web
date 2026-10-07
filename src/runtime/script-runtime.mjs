@@ -2271,6 +2271,12 @@ export class ScriptRuntime {
         const parsed=importText('bool',rest);
         if(parsed){args[index]=parsed.value;at=text.length-parsed.rest.length;}
         else imported=false;
+      }else if(field.metadata.type==='string'&&(field.metadata.arrayDim??1)<=1){
+        // UStrProperty::ImportText 0x10167980: port flags 1 lack
+        // PPF_Delimited (2), so the FString takes the whole remaining text
+        // (to a NUL) and the buffer comes back unchanged; never NULL.
+        const end=rest.indexOf('\0');
+        args[index]=end<0?rest:rest.slice(0,end);
       }else if(field.metadata.type==='object'&&rest===''){
         // UObjectProperty::ImportText 0x10166e20: ReadToken yields an empty
         // token, which is not "None", and StaticFindObject finds nothing, so

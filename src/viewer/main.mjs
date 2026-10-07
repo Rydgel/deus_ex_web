@@ -103,6 +103,15 @@ let held=new URLSearchParams(location.search).get('hold')==='1';
 // stamps, which writes LastRenderTime) against what three.js drew: the
 // onAfterRender of mover meshes, sprites and actor meshes (docs/sim-worker.md).
 const simVerify=new URLSearchParams(location.search).get('simVerify')==='1';
+// ?cheat=summon Lockpick*10: original console commands, ';'-separated with an
+// optional *N repeat, run at each Player start through the recovered exec
+// chain after the bCheatsEnabled write that stands in for the original's
+// `set DeusEx.JCDentonMale bCheatsEnabled True` (view-probe.mjs). A
+// recording aid; DeusExPlayer.Summon spawns in front of the player.
+const startCheats=(new URLSearchParams(location.search).get('cheat')??'').split(';').flatMap(part=>{
+  const [,command,count]=/^(.*?)(?:\*(\d+))?$/.exec(part.trim());
+  return command.trim()?Array(Math.min(Number(count??1),100)).fill(command.trim()):[];
+});
 const drew={movers:new Set(),sprites:new Set(),actors:new Set(),weapon:new Set()};
 // The simulation runs in a module worker by default (sim-worker.mjs,
 // docs/sim-worker.md "Modes"). ?sim=inline runs it on the page and hands its
@@ -416,8 +425,9 @@ function resetCamera() {
   hideNpcFocus();
   if (mode === 'play' && game) {
     // Player start; the worker resets after the frames posted before it.
-    if (simClient) reply = simClient.call('reset').then(result => { if (result && world) { world.syncMovers(result.movers); applyPlayerView(result.view); } });
-    else { sim.reset(); world.syncMovers(sim.movers()); }
+    if (simClient) reply = simClient.call('reset').then(result => { if (result && world) { world.syncMovers(result.movers); applyPlayerView(result.view); } })
+      .then(applyStartCheats);
+    else { sim.reset(); world.syncMovers(sim.movers()); applyStartCheats(); }
     runtimeError=null;paused=false;keys.clear();$('toast').textContent='';stopInfoLinkPresentation();showStats();
   }
   const start = map.summary.playerStarts.find(p => p.location);
@@ -428,6 +438,13 @@ function resetCamera() {
   camera.rotation.set(pitch, yaw, 0); cameraMoved = false;
   if (mode === 'play' && game && !simClient) applyPlayerView(sim.view());
   return reply;
+}
+/** ?cheat= after a Player start; failures are shown, not thrown. */
+function applyStartCheats() {
+  if (!startCheats.length || !game) return null;
+  const args = { exec: startCheats };
+  return Promise.resolve().then(() => simClient ? simClient.call('viewProbe', args) : viewProbe(game, args))
+    .catch(error => toast(`?cheat: ${error.message}`));
 }
 /** With ?sim=worker, returns the promise of PlayerCalcView's reply. */
 function setMode(next) {
@@ -597,8 +614,11 @@ async function loadMap(name) {
     world.displayGamma.value = 1 / (2.5 * Number($('brightness').value));
     // The worker's PlayerCalcView replies point the camera before the map
     // counts as ready (on the page they are synchronous).
+    // resetCamera runs ?cheat= when it resets the player (Play mode).
+    const playerReset = mode === 'play' && !!game;
     const resetReply = resetCamera(); showStats();
     await viewReply; await resetReply;
+    if (!playerReset) await applyStartCheats();
     $('wireframe').checked = false; $('actor-markers').checked = false;
     $('lighting').checked = true;
     $('map').value = name; $('gate').hidden = true; $('reset').disabled = false;
