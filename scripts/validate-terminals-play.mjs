@@ -21,8 +21,10 @@
  *    message's text; Escape logs out, and Escape on the login screen closes
  *    the terminal.
  *  - ComputerSecurity1 (NetworkTerminalSecurity): the login succeeds and
- *    the security screen stops at its ViewportWindow, whose family the
- *    window host does not admit yet (an explicit, labelled boundary).
+ *    the security screen's camera ViewportWindows are admitted
+ *    (docs/script-window-viewport.md); the screen then stops at its pan
+ *    slider's ScaleManagerWindow native 1667 (SetMarginSpacing), which is
+ *    not translated yet (an explicit, labelled boundary).
  * 01_NYC_UNATCOHQ:
  *  - ComputerPublic0 (NetworkTerminalPublic): six bulletins, the first shown,
  *    Down shows the second, Escape closes, and the computer turns off.
@@ -149,7 +151,7 @@ const checks = [];
     assert.equal(topWindow(), null, 'Escape on the login screen closes the terminal');
     checks.push(`ComputerPersonal0: KLloyd, ${rows.length} e-mail(s) ("${rows[0]}"), logout, close`);
   }
-  // The login works; the security screen's ViewportWindow is the boundary.
+  // The login works; the pan slider's ScaleManager native is the boundary.
   if (only === 'ComputerSecurity1') {
     const {terminal} = open('ComputerSecurity1');
     assert.equal(cls(terminal), 'deusex.networkterminalsecurity');
@@ -159,9 +161,9 @@ const checks = [];
     let boundary = null;
     try { enter(); } catch (error) { boundary = String(error.message).split('\n')[0]; }
     assert.equal(rd(terminal, 'userName'), 'NSF001', 'the security login succeeds');
-    assert.match(boundary ?? '', /Window family is not admitted: extension\.viewportwindow/,
-      'the security screen stops at its ViewportWindow (explicitly unsupported)');
-    checks.push('ComputerSecurity1: NSF001 logs in; the camera ViewportWindow is unsupported');
+    assert.match(boundary ?? '', /Unsupported original door native 1667 in menuuisliderbuttonwindow\.initwindow/,
+      'the security screen stops at the pan slider native 1667 (explicitly unsupported)');
+    checks.push('ComputerSecurity1: NSF001 logs in; the pan slider ScaleManager native 1667 is unsupported');
   }
 }
 if (only === 'ComputerPublic0') {

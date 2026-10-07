@@ -19,7 +19,8 @@ const RECEIVER_SIZE=0x800;
 // Window-host natives whose recovered bodies are self-contained receiver
 // reads/writes (optionally with AskParentForReconfigure).
 const NATIVES=[1424,1474,1487,1495,1500,1510,1511,1512,1513,1514,1515,1516,1517,1518,1521,1522,1555,1559,1560,1561,1562,1563,
-  1564,1572,1573,1595,1596,1597,1620,1621,1622,1624,1625,1629,1630,1631,1632,1633,1634,1635,1637,1641,1651,1652,1689,1701,1702,1703,1840,1841,1842,1843,1844];
+  1564,1572,1573,1595,1596,1597,1620,1621,1622,1624,1625,1629,1630,1631,1632,1633,1634,1635,1637,1641,1651,1652,1689,1701,1702,1703,1840,1841,1842,1843,1844,
+  1945,1946,1947,1948,1950,1951,1955,1956];
 // FString receiver fields a native reads, with the texts each case cycles
 // through. Their 12 raw bytes hold oracle-local pointers and are not compared.
 const STRINGS={
@@ -33,6 +34,8 @@ const EDGES={
   FloatProperty:[0,-0,1.5,-3.25,3.4028234663852886e38,1e-45],
   ObjectProperty:[0,0x0bad0c0d],
   'struct:color':[[0,0,0,0],[0x12,0x34,0x56,0x78],[0xff,0x80,0x01,0xfe]],
+  'struct:vector':[[0,0,0],[1.5,-3.25,1e-45],[3.4028234663852886e38,-0,0.1]],
+  'struct:rotator':[[0,0,0],[1,-1,0x7fffffff],[-0x80000000,65536,-16384]],
 };
 const scriptValue=(shape,value)=>shape.kind==='struct:color'
   ?Object.fromEntries(['r','g','b','a'].map((key,i)=>[`core.object.color.${key}`,value[i]]))

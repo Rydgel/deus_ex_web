@@ -28,7 +28,12 @@ export const plainError = error => ({ name: error?.name ?? 'Error', message: Str
 export const plainTexture = ref => ({ key: ref.key, package: ref.asset.name, index: ref.index });
 /** The window host's GC draw commands (script-window-host.mjs callVirtual)
  * as plain data. */
-export const plainHudCommands = commands => commands.map(command => ({ texture: plainTexture(command.texture),
+export const plainHudCommands = commands => commands.map(command => command.kind === 'viewport'
+  // A ViewportWindow's world pass (script-window-viewport.mjs): plain already.
+  ? { kind: 'viewport', x: command.x, y: command.y, width: command.width, height: command.height,
+    location: [...command.location], rotation: [...command.rotation], fov: command.fov, clearZ: command.clearZ,
+    hidden: [...command.hidden], behindView: command.behindView }
+  : ({ texture: plainTexture(command.texture),
   x: command.x, y: command.y, width: command.width, height: command.height, u: command.u, v: command.v,
   ul: command.ul, vl: command.vl, color: command.color, style: command.style }));
 

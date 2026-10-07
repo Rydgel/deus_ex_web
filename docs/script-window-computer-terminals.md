@@ -66,12 +66,14 @@ Map exports, counted by class: `ATM`, `ComputerPublic`, `ComputerPersonal`,
 | ATM0 (`ATMWindow`) | Island | A wrong PIN is refused. 230023/4558 opens the withdraw screen with balance 200. Withdrawing 50 adds 50 to the player's `Credits` (500 → 550), leaves 150 and shows "50 CREDITS WITHDRAWN". Escape logs out to the login screen; a second Escape closes the ATM. |
 | ComputerPersonal0 (`NetworkTerminalPersonal`) | Island | KLloyd/squishy opens the e-mail screen (`01_EmailMenu_klloyd`, 2 messages, the first shown). GUEST logs in to "No Email Today!", because DeusExText has no `01_EmailMenu_GUEST`. Escape logs out; Escape on the login screen closes the terminal. |
 | ComputerPublic0 (`NetworkTerminalPublic`) | UNATCO HQ | Six bulletins with the first shown. Down shows the second. Escape closes the terminal and the computer turns off (`state Off`, `bOn = False`). |
-| ComputerSecurity1 (`NetworkTerminalSecurity`) | Island | NSF001/smashthestate logs in. `ComputerScreenSecurity` then stops at its `ViewportWindow` (the camera view), whose family the window host does not admit yet: **explicitly unsupported**. |
+| ComputerSecurity1 (`NetworkTerminalSecurity`) | Island | NSF001/smashthestate logs in. `ComputerScreenSecurity` builds its choices, camera buttons and three camera windows, whose `ViewportWindow`s the host now admits ([script-window-viewport.md](script-window-viewport.md)). It then stops in the pan slider's `MenuUISliderButtonWindow.InitWindow` at ScaleManagerWindow native 1667 (SetMarginSpacing), which is not translated yet: **explicitly unsupported**. |
 
 Not driven yet:
 * the ATM disabled screen, hacking and the special-options screens;
 * every security computer's camera, door and turret choices (they sit
-  behind the ViewportWindow);
+  behind the pan slider's ScaleManager/Scale natives);
+* the camera image itself: Draw queues a `viewport` command, but the page's
+  second camera pass is not implemented;
 * the other maps' terminals.
 
 `XComputerWindow::VirtualKeyPressed` (`0x1000f530`) is reached by none of

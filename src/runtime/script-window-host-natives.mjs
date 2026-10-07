@@ -147,6 +147,27 @@ export function dispatchWindowHostNative(W, call) {
       W.setU32(win,0x5d8,W.u32(win,0x5d8)|2);
       for(let i=0;i<4;i++)W.setF32(win,0x5dc+4*i,arg(i,0));break;
     case 1515: W.setU32(win,0x5d8,W.u32(win,0x5d8)&~2);W.setU32(win,0x5dc,0);W.setU32(win,0x5e0,0);break; // ResetRenderViewport 0x10039e90
+    // ViewportWindow leaves (Extension.dll, docs/script-window-viewport.md).
+    case 1945: bits(0x14c,1,arg(0,true));break;                    // EnableViewport 0x1004a640 (exec 0x1004b630)
+    case 1946: {                                                    // SetFOVAngle 0x1004a660 (exec 0x1004b6a0, default 90)
+      let a=Math.fround(arg(0,90));if(a>179)a=179;                  // above 179.0f: 179.0f
+      W.setF32(win,0x150,a<0.1||Number.isNaN(a)?Math.fround(0.1):a);break; // below double 0.1 or NaN: 0.1f
+    }
+    case 1947: bits(0x14c,4,arg(0,true));break;                    // ShowViewportActor 0x1004a6b0
+    case 1948: bits(0x14c,8,arg(0,true));break;                    // ShowWeapons 0x1004a6d0
+    case 1950: {                                                    // SetRelativeLocation 0x1004a6f0
+      const v=arg(0,null),c=Array.isArray(v)?v:['x','y','z'].map(k=>v?.[`core.object.vector.${k}`]??0);
+      c.forEach((x,i)=>W.setF32(win,0x170+4*i,x));break;
+    }
+    case 1951: {                                                    // SetRelativeRotation 0x1004a710
+      const r=arg(0,null),c=Array.isArray(r)?r:['pitch','yaw','roll'].map(k=>r?.[`core.object.rotator.${k}`]??0);
+      c.forEach((x,i)=>W.setI32(win,0x188+4*i,x|0));break;
+    }
+    case 1955: { // SetDefaultTexture 0x1004a730: an omitted color is R=G=B=0xff
+      // with the FFrame* slot's high byte as alpha (exec 0x1004b95d), 0 here.
+      const color=arg(1,null);W.setPtr(win,0x154,arg(0,null));W.setU32(win,0x158,color?packed(color):0x00ffffff);break;
+    }
+    case 1956: bits(0x14c,2,arg(0,true));break;                    // ClearZBuffer 0x1004a750
     case 1516: { // SetRawBackground 0x10039eb0; the omitted color's alpha byte
       // is the stale high byte of the caller's FFrame pointer slot (exec
       // 0x1003cc0d stores only R/G/B), 0 for a game stack below 16 MB.
