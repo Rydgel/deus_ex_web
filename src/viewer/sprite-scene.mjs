@@ -69,7 +69,7 @@ export function createSpriteScene(assets, textures, { displayGamma, stamp }) {
     material.needsUpdate = true;
   }
 
-  function draw({ handle, texture: reference, style, location, drawScale, scaleGlow, main }) {
+  function draw({ handle, texture: reference, style, location, drawScale, scaleGlow, main, frames }) {
     const mode = STYLE_BLEND[style] ?? 'normal';
     const entry = texture(reference, mode === 'masked');
     if (!entry.texture) { skipped.add(handle); return; }
@@ -84,6 +84,8 @@ export function createSpriteScene(assets, textures, { displayGamma, stamp }) {
     // Whether the main frame's Frame->Sprite holds it (OccludeBsp,
     // sim-session.mjs occludeMain); without occlusion every record is.
     object.userData.main = main !== false;
+    // The child frames whose Frame->Sprite holds it (OccludeFrame).
+    object.userData.frames = frames ?? null;
     object.userData.feedback = () => stamp(handle);
   }
 
@@ -99,7 +101,12 @@ export function createSpriteScene(assets, textures, { displayGamma, stamp }) {
   function mainPass(on) {
     for (let i = 0; i < used; i++) pool[i].visible = !on || pool[i].userData.main;
   }
+  /** A child frame's pass draws only its Frame->Sprite records (`index`
+   * the frame's); null: every record again. */
+  function framePass(index) {
+    for (let i = 0; i < used; i++) pool[i].visible = index === null || Boolean(pool[i].userData.frames?.includes(index));
+  }
 
-  return { root, update, mainPass, notes, skipped, count: () => used,
+  return { root, update, mainPass, framePass, notes, skipped, count: () => used,
     dispose() { for (const object of pool) object.material.dispose(); for (const entry of textureCache.values()) if (!entry.shared) entry.texture?.dispose(); } };
 }

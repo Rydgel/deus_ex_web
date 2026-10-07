@@ -398,7 +398,7 @@ of general script compatibility.
 **In progress.** Restored so far, each with its evidence below: original
 mesh lighting (CPU kernels and an exact GPU path), static and animated light
 maps, moving lights on light maps, BSP occlusion (OccludeBsp, the master
-frame, dynamics and the moving brush tracker in the Rust core), mirrors on every static and mover plane
+frame, dynamics, the moving brush tracker and child frames in the Rust core), mirrors on every static and mover plane
 with nesting, Fire.dll fire and water textures, animated and auto-panned
 surfaces, particles and sprites, light coronas, laser beams, volumetric fog
 on BSP surfaces, ambient sound, script sounds, sound effects and zone reverb
@@ -407,8 +407,8 @@ conversation camera with lip sync. The render pass's translations run at its
 24-bit precision ([render-pass precision](render-pass-precision.md)).
 Fourteen maps match the original's own frames at matched cameras
 ([visual acceptance](visual-acceptance.md)).
-Open: fog and decals on movers, the occlusion's child frames, mirror/sky
-combinations, time-varying moving lights and spotlights, UnrealScript inside
+Open: fog and decals on movers (ClipDecal's mover rotation is done), child
+frames' own fog maps, time-varying moving lights and spotlights, UnrealScript inside
 the render events at 24 bits (the script VM computes at 64), the darkest-pixel
 rounding visual acceptance found, and acceptance of live (unfrozen) scenes.
 SpriteAnimOnce frames and animated mesh skins
@@ -625,6 +625,18 @@ the visible world polygons, requested mirrors, sky and fog surfaces from it
 instead of frustum culling (the Paris club tunnel went from 15 to 59 fps).
 Each actor's Setup rectangle, child frames and the moving brush tracker
 remain ([BSP occlusion](bsp-occlusion.md#what-is-left)).
+
+**Occlusion child frames (2026-10-07).** OccludeBsp's mirror and sky
+requests make child frames, through Render.dll's CreateChildFrame (merging,
+24-bit ComputeRenderSize, mirror and sky coordinates). OccludeFrame then
+runs each child's SetupDynamics and OccludeBsp, newest first, depth first.
+This runs in the Rust core and is bit-equal to the original over 172 child
+frames on seven maps: mover mirrors, sky inside mirrors and recursion up to
+3. Play draws every mirror and sky pass from its own frame: its visible
+polygons, its mover fragments, and its Frame->Sprite, which it draws and
+stamps (the player shows in mirrors). Mirrors now reflect the sky through
+openings (Training's floor, 02_NYC_Smug's window). `?childFrames=off`
+keeps the frustum passes ([BSP occlusion](bsp-occlusion.md#child-frames)).
 
 **Moving brush tracker (2026-10-06).** Engine's FMovingBrushTracker runs in
 the Rust core, bit-equal to the original over 239 oracle steps on five maps

@@ -99,6 +99,76 @@ export function mirrorsMayRender(source, groups, visible = mesh => mesh.visible,
   return false;
 }
 
+/** OccludeFrame's child frames switch: ?childFrames=off (Node:
+ * CHILD_FRAMES=off) keeps the main frame's requests and the frustum-tested
+ * mirror and sky passes (docs/bsp-occlusion.md "Child frames"). */
+export const childFramesMode = () => (typeof process !== 'undefined' && process.env?.CHILD_FRAMES)
+  || globalThis.DEUS_EX_CHILD_FRAMES || 'on';
+
+/** The mirror group a child frame looks through (sim-session.mjs
+ * `visibility` frames): a moving group by its tracked polygon's key, a
+ * static one by the node of the request that made the frame. */
+export function frameGroup(groups, frame) {
+  if (frame.group) return groups.find(group => group.key === frame.group) ?? null;
+  for (const group of groups) if (groupNodes(group)?.has(frame.iNode)) return group;
+  return null;
+}
+
+/** A child frame's span bounds in drawing-buffer pixels, bottom-up
+ * (`rect` the frame's render viewport, top-down; `height` the buffer's),
+ * widened by a pixel and clamped. */
+function spanBox(frame, rect, size) {
+  const b = frame.bounds;
+  if (!b) return null;
+  const x = Math.max(0, rect.x + b[0] - 1), right = Math.min(size.x, rect.x + b[2] + 1);
+  const top = Math.max(0, rect.y + b[1] - 1), bottom = Math.min(size.y, rect.y + b[3] + 1);
+  return right > x && bottom > top ? { x, y: size.y - bottom, width: right - x, height: bottom - top } : null;
+}
+
+/** OccludeFrame's mirror child frames as passes (the frames of
+ * sim-session.mjs `visibility`, child frames on): each mirror frame
+ * through its group, with the reflected camera, its span's bounds (in
+ * `rect`, the frame's render viewport) as its region, the sky frame
+ * OccludeBsp made inside it (`sky`) and its own mirror children; frames
+ * whose surface has no supported group are left out with their children.
+ * The nodes are those of planMirrorPasses, with `frame` added. */
+export function planFramePasses(source, groups, size, frames, rect = null) {
+  rect ??= { x: 0, y: 0, width: size.x, height: size.y };
+  const byParent = new Map();
+  for (const frame of frames) {
+    if (!byParent.has(frame.parent)) byParent.set(frame.parent, []);
+    byParent.get(frame.parent).push(frame);
+  }
+  const flip = b => ({ x: size.x - b.x - b.width, y: b.y, width: b.width, height: b.height });
+  function children(view, parent) {
+    const out = [];
+    for (const frame of byParent.get(parent) ?? []) {
+      if (frame.kind !== 'mirror') continue;
+      const group = frameGroup(groups, frame), box = group && spanBox(frame, rect, size);
+      if (!box) continue;
+      const depth = view.depth + 1, camera = new THREE.PerspectiveCamera();
+      const world = new THREE.Matrix4().multiplyMatrices(group.matrix, view.world);
+      camera.copy(source, false); camera.matrixAutoUpdate = camera.matrixWorldAutoUpdate = false;
+      if (depth % 2 && camera.view?.enabled) { camera.view.offsetX = -camera.view.offsetX; camera.updateProjectionMatrix(); }
+      camera.layers.disable(DECAL_LAYER);
+      camera.matrixWorld.copy(world);
+      if (depth % 2) camera.matrixWorld.multiply(submissionHandedness);
+      camera.matrixWorldInverse.copy(camera.matrixWorld).invert();
+      camera.position.setFromMatrixPosition(camera.matrixWorld);
+      // The span is in screen pixels; a depth's target is mirrored against
+      // its parent's (the parent's is screen space flipped depth - 1 times).
+      const bounds = (depth - 1) % 2 ? flip(box) : box, scissor = flip(bounds);
+      const node = { group, camera, world, depth, scissor, index: out.length, bounds, frame,
+        sky: (byParent.get(frame.index) ?? []).find(f => f.kind === 'sky') ?? null };
+      node.children = children({ camera, world, depth, scissor, through: group }, frame.index);
+      out.push(node);
+    }
+    return out;
+  }
+  source.updateMatrixWorld();
+  return children({ camera: source, world: source.matrixWorld, depth: 0 }, 0);
+}
+
 /** The children of the source view, recursively (the main frame's only
  * those in `requested`, requestedGroup): for each, its group, its
  * camera (the source's projection, the reflected world matrix with odd

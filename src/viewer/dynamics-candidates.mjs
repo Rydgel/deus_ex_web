@@ -16,7 +16,7 @@
  * texture for is not a candidate (it is neither drawn nor stamped, as
  * before); RenderIterator classes other than ParticleIterator and
  * LaserIterator and the bHighDetail rule are the sprite scan's. */
-import { SETUP, SETUP_TEXTURE_SIZED, SETUP_TEXTURE_UNKNOWN, meshRecordFields } from '../runtime/bsp-occlusion.mjs';
+import { SETUP, SETUP_ROOT_EXCLUDED, SETUP_TEXTURE_SIZED, SETUP_TEXTURE_UNKNOWN, meshRecordFields } from '../runtime/bsp-occlusion.mjs';
 
 /** ACTOR_OCCLUSION=frustum (Node) or ?actorOcclusion=frustum keeps the
  * frustum-tested drawn set (drawn-set.mjs) for the main frame's actors. */
@@ -27,16 +27,21 @@ export const actorOcclusionMode = () => (typeof process !== 'undefined' && proce
  * (sprite-scan records), `iterators` (the actors iterating in their items'
  * place), and from the actor mesh layer `bindings`, `items` ({item,
  * binding}), `reads` (this frame's mesh_reads) and `levelIndex` (actor →
- * Level.Actors index). Returns the entries in candidate order: {binding,
- * item, sprite}. */
+ * Level.Actors index). With `childFrames` (OccludeFrame's child frames),
+ * a binding only child frames admit (the player in a mirror: the root
+ * frame's excluded actor and ViewTarget) is a candidate too, flagged
+ * SETUP_ROOT_EXCLUDED. Returns the entries in candidate order: {binding,
+ * item, sprite, rootExcluded}. */
 export function packDynamics(occlusion, { sprites = [], iterators = null, bindings = [], items = [], reads = null,
-  levelIndex = null }) {
+  levelIndex = null, childFrames = false }) {
   const entries = [];
   for (const binding of bindings) {
     if (iterators?.has(binding.actor)) continue;
     const index = levelIndex?.get(binding.actor);
-    if (index === undefined || !binding.admitted(reads)) continue;
-    entries.push({ order: index * 65536, binding, item: null, sprite: null });
+    if (index === undefined) continue;
+    if (binding.admitted(reads)) entries.push({ order: index * 65536, binding, item: null, sprite: null, rootExcluded: false });
+    else if (childFrames && binding.childAdmitted?.(reads))
+      entries.push({ order: index * 65536, binding, item: null, sprite: null, rootExcluded: true });
   }
   for (const { item, binding } of items) entries.push({ order: item.order, binding, item, sprite: null });
   for (const sprite of sprites) entries.push({ order: sprite.order, binding: null, item: null, sprite });
@@ -46,7 +51,11 @@ export function packDynamics(occlusion, { sprites = [], iterators = null, bindin
   const views = occlusion.setupCandidates(entries.length), { u32, f32, i32 } = views;
   for (let i = 0; i < entries.length; i++) {
     const e = entries[i], at = views.at + SETUP.WORDS * i;
-    if (e.binding) { e.binding.packSetup(views, at, i, records[i], reads, e.item); continue; }
+    if (e.binding) {
+      e.binding.packSetup(views, at, i, records[i], reads, e.item);
+      u32[at + SETUP.FLAGS] = e.rootExcluded ? SETUP_ROOT_EXCLUDED : 0;
+      continue;
+    }
     // A DT_Sprite or DT_SpriteAnimOnce record: Setup's sprite path reads
     // the texture's size, Location and DrawScale.
     const sprite = e.sprite;

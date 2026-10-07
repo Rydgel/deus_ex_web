@@ -13,6 +13,7 @@
  *     [--fixed-dt seconds] (explicit fixed-step comparison workload, not live FPS)
  *     [--query gpuMesh=1] (viewer URL switches, e.g. the GPU mesh path)
  *     [--preview weapon] (a viewer preview after the start click, e.g. Training's crowbar)
+ *     [--place '{"location":[x,y,z],"rotation":[p,y,r]}'] (the player placed before the settle)
  *     [--angle metal|gl|vulkan] (ANGLE backend: metal on macOS, gl elsewhere;
  *       Linux headless Chromium ignores metal and falls back to SwiftShader)
  *     [--headed] [--executable /usr/bin/chromium] (a visible window, another Chromium)
@@ -96,6 +97,9 @@ try {
   await page.locator('#scene').click({position:{x:600,y:350}});
   if(option('preview',null))await page.evaluate(name=>{const menu=document.getElementById('preview');menu.value=name;
     menu.dispatchEvent(new Event('change'));},option('preview',null));
+  // --place '{"location":[x,y,z],"rotation":[p,y,r]}': the player moved
+  // there (decal-probe.mjs placeProbe) before the settle.
+  if(option('place',null))await page.evaluate(args=>window.deusExViewer.placeProbe(JSON.parse(args)),option('place',null));
   await page.waitForTimeout(settle);
   if(walk)await page.keyboard.down('KeyW');
   await page.evaluate(()=>window.deusExViewer.framePhases(true));
