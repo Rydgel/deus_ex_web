@@ -389,6 +389,7 @@ export function animatedLightConstants(frame, { values, ref }, { levelBrightness
  * the simulation advanced the noise at URender::PreRender from the game's
  * shared appFrand stream, sim-session.mjs) takes its tables; without one the
  * frame's own noise advances from `frand`. */
+const TWO_52 = 4503599627370496;
 export function createLightFrame(frand) {
   const noise = createLightNoise(frand), strobe = { time: 0, flag: 0 };
   const factors = { 1: new Float64Array(256), 2: new Float64Array(256), 3: new Float64Array(256) };
@@ -400,7 +401,16 @@ export function createLightFrame(frand) {
     const version = effect === 3 ? noise.version : frame.frameIndex;
     if (built[effect] !== version) {
       const table = tables[effect], factor = factors[effect];
-      for (let i = 0; i < 256; i++) for (let byte = 0; byte < 256; byte++) table[i << 8 | byte] = fistp(f(factor[i] * byte) - 0.5) & 255;
+      // fistp(f(factor·byte) − 0.5) & 255: below 2^52 the nearest-even sum
+      // with ±2^52 lands on the integer grid, which is fistp's ties-to-even
+      // (light.rs light_modulation); other magnitudes take fistp itself.
+      for (let i = 0; i < 256; i++) {
+        const k = factor[i];
+        for (let byte = 0; byte < 256; byte++) {
+          const v = f(k * byte) - 0.5;
+          table[i << 8 | byte] = (v >= 0 && v < TWO_52 ? (v + TWO_52) - TWO_52 : v < 0 && v > -TWO_52 ? (v - TWO_52) + TWO_52 : fistp(v)) & 255;
+        }
+      }
       built[effect] = version;
     }
     return tables[effect];

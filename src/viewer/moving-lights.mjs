@@ -402,12 +402,11 @@ export function createMovingLights(lighting, model, { mode = movingLightsMode() 
         }
       }
       // The frame's colour: a LightType function or a new noise frame
-      // changes the addends, not the spatial bytes. A steady light's change
-      // dirties its maps; a time-varying light's maps are checked below.
-      if (state.item) {
+      // changes the addends, not the spatial bytes; the time-varying
+      // lights' maps are checked below.
+      // (A steady light's colour does not depend on the frame.)
+      if (state.item?.timeVarying) {
         const colour = colourOf(state.item, frame);
-        if (colour.token !== state.item.colour.token && !state.item.timeVarying)
-          for (const record of state.reach.keys()) dirty.add(record);
         state.item.colour = colour;
       }
     }
