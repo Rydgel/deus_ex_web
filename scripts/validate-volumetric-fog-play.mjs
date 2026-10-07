@@ -124,7 +124,12 @@ let moverNote = '', mirrorNote = '';
 if (report.mover) {
   assert.equal(report.mover.runtimeError, null);
   assert.ok(report.mover.stats.movers > 0, 'drawn mover polygons in the fog zone get fog maps');
-  assert.ok(moverCase, 'a mover polygon is fogged');
+  assert.ok(moverCase, 'a mover draw item is fogged');
+  // Its fragments map onto its own fog map (light-map texel units, the map
+  // spanning 0..width and 0..height).
+  const [u0, v0, u1, v1] = moverCase.uvRange;
+  assert.ok(u0 >= -0.01 && v0 >= -0.01 && u1 <= moverCase.width + 0.01 && v1 <= moverCase.height + 0.01 && u1 - u0 > 1 && v1 - v0 > 1,
+    `the item's fragments lie on its map (${moverCase.uvRange.map(v => v.toFixed(2))} of ${moverCase.width}x${moverCase.height})`);
   moverNote = equalToOriginal(moverCase, 'mover')
     ? `; ${moverCase.mover} polygon ${moverCase.polygon}: ${moverCase.width}x${moverCase.height} fog map equal to Render.dll's loop`
     : `; ${moverCase.mover} polygon ${moverCase.polygon} fogged (no native probe environment for the oracle)`;

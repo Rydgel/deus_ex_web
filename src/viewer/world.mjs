@@ -249,17 +249,18 @@ export async function createWorld(map, asset, assets, onProgress = () => {}, {ba
         batch.nodes.push(...g.nodes);
         counts.triangles += g.positions.length / 9; counts.surfaces++;
         // A level surface in a fog zone; every lit mover polygon of a map
-        // with fog zones, whose zone is its drawn fragments' (fog-pass.mjs,
-        // the brush tracker).
-        if (lightmap && lit && (actorName ? anyFogZone : (await zoneActor(zone)).fog)) {
+        // with fog zones, whose draw items are gated by their own zones
+        // (fog-pass.mjs, the brush tracker).
+        if (lightmap && lit && actorName && anyFogZone) {
+          fog.addMoverPolygon(lightmap, actorName, surfaceIndex);
+        } else if (lightmap && lit && !actorName && (await zoneActor(zone)).fog) {
           const fogUV = [], fogBounds = [];
           for (let i = 0; i < g.positions.length; i += 3) {
             fogUV.push(...lightAtlas.coordinates(tile, fromView(g.positions.slice(i, i + 3))));
             fogBounds.push(...(tile.bounds ?? [0, 0, 1, 1]));
           }
           lightmap.fogGrid ??= () => ({ grid: lighting.gridFor(lightmap) });
-          fog.addSurface(lightmap, tile, g.positions, fogUV, fogBounds, surfaceIndex,
-            actorName ? { name: actorName, parent } : null);
+          fog.addSurface(lightmap, tile, g.positions, fogUV, fogBounds, surfaceIndex);
         }
       } catch (error) {
         errors.push({ actor: actorName, surface: surfaceIndex, message: error.message });
@@ -323,9 +324,9 @@ export async function createWorld(map, asset, assets, onProgress = () => {}, {ba
       counts.movers++;
     } catch (error) { errors.push({ actor: actor.name, message: error.message }); }
   }
-  if (fog.stats.surfaces && fog.stats.lights) {
+  if ((fog.stats.surfaces || fog.stats.moverPolygons) && fog.stats.lights) {
     root.add(fog.root);
-    notes.add(`${fog.stats.surfaces} fog-zone and mover surfaces draw volumetric fog from ${fog.stats.lights} volumetric lights each frame. Every light is linked to every fog surface (the original's culls drop only lights that add nothing); volumetric brightness is steady; meshes get no fog (D3D's shipped configuration).`);
+    notes.add(`${fog.stats.surfaces} fog-zone surfaces and ${fog.stats.moverPolygons} mover polygons draw volumetric fog from ${fog.stats.lights} volumetric lights each frame. Every light is linked to every fog surface (the original's culls drop only lights that add nothing); volumetric brightness is steady; meshes get no fog (D3D's shipped configuration).`);
   }
   const submissionBatches = batchOpaque ? batchWorldMeshes(root, lightAtlas, lightingEnabled, displayGamma) : null;
   // The main frame's BSP visibility (world-visibility.mjs), after batching.
