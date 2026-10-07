@@ -337,6 +337,9 @@ export function createSimSession(game, { assets = null, events = [], exportName 
       return { index: frame.index, parent: frame.parent, kind: frame.kind, iNode: frame.iNode, recursion: frame.recursion,
         group: owner ? `${trackerMovers.names[owner.tag - 0x40000000]}:${owner.ordinal}` : null,
         bounds: spanBounds(frame.span), nodes: drawnHere.nodes, movers: drawnHere.movers,
+        moverZones: drawnHere.moverZones, moverFacets: drawnHere.moverFacets,
+        // The frame's Coords (origin, X, Y, Z), as its fog maps read them.
+        coords: Array.from(new Float32Array(Uint32Array.from(frame.fields.slice(0, 12)).buffer)),
         sprites: frame.sprites.map(sprite => sprite.key) };
     });
     // DrawLodMesh's inputs from the master frame: Frame->Coords and FX

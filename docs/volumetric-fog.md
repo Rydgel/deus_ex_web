@@ -233,6 +233,25 @@ generic over three register models (`Reg`):
   - The pass builds the lattice as for level surfaces (`lightmapBasis`,
     p00, p10 and p01) from those vectors and the Brush's light-map index,
     then runs the same loop.
+- **Child frames** (2026-10-07, with `?childFrames` on). SetupForSurf
+  takes the frame DrawFrame is drawing as its first argument and stores it
+  at `0x10b38a7c` (`0x10b06d3d`). The fog loop and ComputeFromActor read
+  that frame's Coords, so a mirror or sky frame gets fog maps of its own,
+  from its reflected or sky camera.
+  - DrawFrame draws a frame's children first (`Frame->Child`, then each
+    `Sibling`, `0x10b1a336..0x10b1a348`) and then its own lists. The pass
+    therefore computes every child frame's maps in that order, the root
+    frame's last, carrying the early-out flag through.
+  - The surfaces are the ones each frame's OccludeBsp drew (its nodes and
+    mover polygons, with their items' zones and facets). The Coords are the
+    frame record's own (`visibility.frames[].coords`, from occlude.rs).
+  - The child maps wait until their pass. `framePass(frame, renderer)`
+    copies each one into the atlas tile it shares with the root frame
+    (`copyTextureToTexture`, one padded tile at a time) and shows only that
+    frame's fog meshes. At the end of the pass the root frame's tiles and
+    meshes are restored.
+  - `?childFog=off` keeps the earlier behaviour: child passes reuse the root
+    frame's maps.
 - **Check.** `validate-volumetric-fog-play.mjs` stands in 02_NYC_Bar's
   Light90 volume, in the default mode with the simulation in the worker
   (`placeProbe` moves the player there; `--query sim=inline` runs it on the
@@ -248,6 +267,25 @@ generic over three register models (`Reg`):
     a 4×8 fog map. Its inputs (lattice, frame coords, light, early-out
     flag) go through the unchanged Render.dll loop
     (`native-volumetric-fog-oracle.py`), and the texels are equal.
+  - **Mirror phase.** On 10_Paris_Club the player faces the bar's two
+    mirrors (surfaces 231 and 232) from `[-122,-1008,60]`, inside Light15's
+    volume in fog zone 7. The two mirror frames get 53 child maps.
+    - The most fogged map comes from mirror frame 1's Coords (determinant
+      +1, where the root frame's ViewCoords give −1): surface 10, 80×50.
+    - Its inputs go through the same oracle, and the texels and flag are
+      equal.
+    - The Bar's own mirror is not used, because the Bartender's greeting
+      takes the view within about a second of standing there.
+- **Cost of the child maps** (interleaved A/B against `?childFog=off`, the
+  club mirror view, worker mode, 1920×1080, 600 frames, 3 rounds,
+  load 9–12 from other agents):
+  - The page's fog phase is 2.0–2.3 ms against 0.4–0.9 ms. It computes the
+    53 child maps and the root frame's.
+  - The mirror passes are 3.8–4.3 ms against 2.3–4.5 ms.
+  - Mirror draw calls are 77 against 29: each fogged child surface draws its
+    fog mesh, as the original draws a fog pass over each such surface.
+  - The child maps run on the page. Moving them next to OccludeBsp in the
+    worker is a possible saving that has not been tried.
 
 Unverified or host choices, noted:
 - **Upload scale.** The seven-bit upload scale (×2) follows the light maps.
@@ -259,9 +297,7 @@ Unverified or host choices, noted:
   flag then sees a different sequence.
 - **Brightness and colour.** Volumetric lights use their steady brightness
   and colour; GlobalLighting's LightType animation is not applied to them.
-- **Not fogged.** Meshes draw unfogged as D3D does ("Mesh fog"). Mirror
-  child views reuse the main frame's fog maps instead of their own
-  frames'.
+- **Not fogged.** Meshes draw unfogged as D3D does ("Mesh fog").
 - **Mover polygons.** A mover polygon draws whole with one fog map. It is
   fogged when any of its draw items lies in a bFogZone zone. The original
   computes a map per draw item (fragment) and gates each by its own zone.
@@ -279,8 +315,9 @@ Unverified or host choices, noted:
 - **Ties.** Equal light depths keep the host sort's order. MSVCRT's `qsort`
   decides the original order, and the comparator never returns 0.
 - **Draw order.** The early-out flag persists across surfaces in the
-  original draw order. Play's surface order differs, which can change
-  boundary texels.
+  original draw order. Play follows DrawFrame's order across frames
+  (children first), but within a frame its surface order differs, which can
+  change boundary texels.
 
 ## Mesh fog
 
