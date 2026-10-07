@@ -1,9 +1,9 @@
 import { filterMovingLight, surfaceLightClass, movingLightConstants, movingLightRect, nonIncidenceSpatial,
-  normalLightIncidence, normalLightSpatial, colorTableEntry, fgetHsv } from '../runtime/dynamic-lighting.mjs';
+  normalLightIncidence, normalLightSpatial, colorTableEntry, fgetHsv, fistp } from '../runtime/dynamic-lighting.mjs';
 import { lightTypeBrightness, spotLightSpatial } from '../runtime/static-lighting.mjs';
 import { fcoordsAxes } from '../runtime/script-pawn-locomotion.mjs';
 
-const MAX = 127 / 255, ORIGIN = [0, 0, 0];
+const MAX = 127 / 255, ORIGIN = [0, 0, 0], TWO_52 = 4503599627370496, f = Math.fround;
 // The effect table at 0x10b2a0f0 (docs/static-lighting.md): the normal body
 // 0x10b03360 for None, the three wavers, Warp and Unused; the spot body
 // 0x10b04f80 for StaticSpot and Spotlight; NonIncidence 0x10b054e0; Shell
@@ -103,6 +103,32 @@ export function createMovingLights(lighting, model, { mode = movingLightsMode() 
     return entry.spatial = bytes;
   }
 
+  // The merge's modulated byte for (noise entry, spatial byte), computed
+  // when first asked in its noise input's frame: createLightFrame's
+  // `modulation` table entry, `fistp(f(factor·byte) − 0.5) & 255`, without
+  // building all 65,536 entries a frame.
+  const modulators = new Map();
+  function modulator(effect, frame) {
+    let m = modulators.get(effect);
+    if (!m) modulators.set(effect, m = { value: new Uint8Array(65536), valid: new Uint8Array(65536), token: -1, frame: null, fn: null });
+    // Effects 1 and 2 read table A (new every frame), 3 reads W.
+    const token = effect === 3 ? frame.noise.version : frame.frameIndex;
+    if (m.frame === frame && m.token === token) return m.fn;
+    m.valid.fill(0);
+    m.frame = frame; m.token = token;
+    const factor = frame.factors[effect], { value, valid } = m;
+    m.fn = (row, byte) => {
+      const at = row << 8 | byte;
+      if (!valid[at]) {
+        const v = f(factor[row] * byte) - 0.5;
+        value[at] = (v >= 0 && v < TWO_52 ? (v + TWO_52) - TWO_52 : v < 0 && v > -TWO_52 ? (v - TWO_52) + TWO_52 : fistp(v)) & 255;
+        valid[at] = 1;
+      }
+      return value[at];
+    };
+    return m.fn;
+  }
+
   /** A colour's per-byte amounts: `colorTableEntry(step, byte) / 255` per
    * channel (the colour table at 0x10b064ff, as the page adds it). */
   const amountsOf = colour => colour.amounts ??= colour.steps.map(step =>
@@ -119,7 +145,7 @@ export function createMovingLights(lighting, model, { mode = movingLightsMode() 
     let index = 0, k = 0, n = 0;
     for (let v = rect.minV; v < rect.maxV; v++) for (let u = rect.minU; u < rect.maxU; u++, index++, k++) {
       let byte = bytes[k];
-      if (modulate && byte) byte = modulate[(index & 0xff) << 8 | byte];
+      if (modulate && byte) byte = modulate(index & 0xff, byte);
       if (!byte) continue;
       at[n] = (v * width + u) * 3;
       amounts[n * 3] = red[byte]; amounts[n * 3 + 1] = green[byte]; amounts[n * 3 + 2] = blue[byte];
@@ -138,7 +164,7 @@ export function createMovingLights(lighting, model, { mode = movingLightsMode() 
       let i = (v * width + rect.minU) * 3;
       for (let u = rect.minU; u < rect.maxU; u++, index++, k++, i += 3) {
         let byte = bytes[k];
-        if (modulate && byte) byte = modulate[(index & 0xff) << 8 | byte];
+        if (modulate && byte) byte = modulate(index & 0xff, byte);
         if (!byte) continue;
         pixels[i] = Math.min(MAX, pixels[i] + red[byte]);
         pixels[i + 1] = Math.min(MAX, pixels[i + 1] + green[byte]);
@@ -197,7 +223,7 @@ export function createMovingLights(lighting, model, { mode = movingLightsMode() 
     let modulate = null, noise = '';
     if (MODULATED.has(effect)) {
       if (frame) {
-        modulate = frame.modulation(effect);
+        modulate = modulator(effect, frame);
         noise = effect === 3 ? `W${frame.noise.version}` : `A${frame.frameIndex}`;
       } else notes.add('Moving torch, fire and watery lights are unmodulated: no light animation frame was supplied.');
     }
