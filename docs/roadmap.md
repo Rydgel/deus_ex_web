@@ -739,6 +739,20 @@ worker mode.
 `tools/dump-actor-win.c` reads live actor fields from the running original.
 See [visual acceptance](visual-acceptance.md).
 
+**Persona list screens (2026-10-07).** Extension.dll's ListWindow family is
+now admitted in Play's window host:
+- construction, the lifecycle, all 69 natives (1720–1812), preferred
+  size, Draw at the render pass's precision, mouse, keys and tick;
+- the scrollbar draw for overflowing lists (XScaleWindow::Draw).
+
+280 of 280 oracle cases are identical, and 19 deliberate mutations are
+caught. The Conversations, Images and Logs screens open, draw and close in
+Play, and `scripts/census-ui-screens.mjs` passes 11 of 11 player screens on
+Training and Island. The Load/Save Game screens stop at the save-game
+directory (native 3013, Stage 6). List hot keys are translated, but typed
+characters don't reach windows in Play yet. See
+[ListWindow family](script-window-list-family.md).
+
 ## 5. Implement the full gameplay systems
 
 Expand movement and world simulation to swimming, ladders, water/damage zones,
