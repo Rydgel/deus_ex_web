@@ -139,6 +139,68 @@ export function movingLightLeaves(model, location, radius) {
   return leaves;
 }
 
+/** SetupDynamics' ViewPlanes test of a moving-light candidate (0x10b2311c-
+ * 0x10b2319f): R is the larger of WorldLightRadius and 25*(VolumeRadius+1)
+ * (the float of `fild` times the double 25, 0x10b2a8b8), and the light is
+ * skipped when its sphere lies wholly outside one of the frame's four
+ * ViewPlanes (FSceneNode +0x12c, [nx, ny, nz, w] each): `-R > d` with
+ * `d = ((z*nz + y*ny) + x*nx) - w` on the 24-bit stack (an unordered
+ * compare keeps the light). `values` need LightRadius and VolumeRadius. */
+export function movingLightInView(location, values, planes) {
+  const volume = f(((values.VolumeRadius & 255) + 1) * 25), light = f(worldLightRadius(values));
+  const radius = light < volume ? volume : light;
+  const [lx, ly, lz] = location.map(f);
+  for (const [px, py, pz, pw] of planes)
+    if (-radius > filterDistance(px, py, pz, pw, lx, ly, lz)) return false;
+  return true;
+}
+
+/** URender::LeafLights after OccludeBsp's Filter walk (0x10b24a10; leaf lists
+ * at 0x10b24ab9-0x10b24bbd and 0x10b24e31-0x10b24f6b): `lights` are the
+ * candidates ({location, radius: WorldLightRadius}) in SetupDynamics order,
+ * which prepends each to node 0's list (HitLeaf clear). A node's first visit
+ * filters its list from the head; for each item the front side, then the back
+ * side, the sphere reaches (`-R < Dist`, `Dist < R`): unless the item has
+ * already hit a leaf, a leaf there (FBspNode.iLeaf[side]) takes the item at
+ * the head of its list and the copy for that side's child carries HitLeaf;
+ * a child node gets the copy prepended to its list. The order flips at every
+ * hop, so a leaf's list is in candidate order below an even number of nodes
+ * and reversed below an odd number. Every node is taken as visited (the
+ * ancestors of the viewer's leaf are, which is where the corona pass reads).
+ * Returns Map(leaf -> light indices, head first). */
+export function movingLightLeafLists(model, lights) {
+  const lists = new Map();
+  if (!model.nodes.length || !lights.length) return lists;
+  const locations = lights.map(light => light.location.map(f));
+  const pending = new Map([[0, lights.map((_, i) => ({ i, hit: false })).reverse()]]), stack = [0];
+  const take = (leaf, i) => { const list = lists.get(leaf); if (list) list.unshift(i); else lists.set(leaf, [i]); };
+  for (let visited = 0; stack.length; visited++) {
+    if (visited > model.nodes.length) throw new Error('Cyclic BSP moving-light filter');
+    const index = stack.pop(), items = pending.get(index);
+    pending.delete(index);
+    if (!items) continue;
+    const node = model.nodes[index], [px, py, pz, pw] = node.plane;
+    const front = [], back = [];
+    for (const { i, hit } of items) {
+      const [lx, ly, lz] = locations[i], radius = lights[i].radius;
+      const distance = filterDistance(px, py, pz, pw, lx, ly, lz);
+      if (-radius < distance) {
+        let hits = hit;
+        if (!hit && node.leaves[1] >= 0) { take(node.leaves[1], i); hits = true; }
+        if (node.front >= 0) front.unshift({ i, hit: hits });
+      }
+      if (distance < radius) {
+        let hits = hit;
+        if (!hit && node.leaves[0] >= 0) { take(node.leaves[0], i); hits = true; }
+        if (node.back >= 0) back.unshift({ i, hit: hits });
+      }
+    }
+    if (front.length) { pending.set(node.front, front); stack.push(node.front); }
+    if (back.length) { pending.set(node.back, back); stack.push(node.back); }
+  }
+  return lists;
+}
+
 const K85 = x87load(f(1 / 85)), K84 = x87load(f(1 / 84)), ZERO = x87load(0), ONE = x87load(1);
 
 /** Engine.dll FGetHSV 0x103ec8d0, as the render pass runs it (GlobalLighting

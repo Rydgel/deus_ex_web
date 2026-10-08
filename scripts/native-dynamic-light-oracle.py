@@ -778,6 +778,105 @@ class Oracle:
         return {'surfaces': sorted(lit), 'dynLightSurfs': order, 'visited': visited, 'leaves': leaves}
 
 
+    # SetupDynamics' light block (0x10b230e8-0x10b232f4: the candidate gate, the
+    # ViewPlanes sphere test, the FDynamicLight made at Dynamics[0]) for each
+    # light in Level.Actors order, then OccludeBsp's first-visit Filter of every
+    # node's Dynamics list in pre-order (items from the head, each Filter
+    # prepending to its children's lists and to URender::LeafLights), over a
+    # BSP. Returns the accepted lights and every leaf's list, head first, as
+    # light indices (docs/coronas.md "Leaf lights").
+    def leaf_lists(self, model, planes, lights):
+        mark = self.alloc_top
+        try:
+            return self.leaf_lists_case(model, planes, lights)
+        finally:
+            self.alloc_top = mark
+
+    def leaf_lists_case(self, model, planes, lights):
+        nodes, surfaces = model['nodes'], model['surfaces']
+        node_array = self.alloc(len(nodes) * 64)
+        blob = bytearray(len(nodes) * 64)
+        for index, (px, py, pz, pw, surface, back, front, coplanar, *leaves) in enumerate(nodes):
+            struct.pack_into('<ffff', blob, index * 64, px, py, pz, pw)
+            struct.pack_into('<iiii', blob, index * 64 + 0x1c, surface, back, front, coplanar)
+            struct.pack_into('<ii', blob, index * 64 + 0x38, *(leaves or (-1, -1)))
+        self.cpu.mem_write(node_array, bytes(blob))
+        surf_array = self.alloc(max(1, len(surfaces)) * 64)
+        blob = bytearray(max(1, len(surfaces)) * 64)
+        for index in range(len(surfaces)):
+            struct.pack_into('<i', blob, index * 64 + 0x18, -1)   # no light map: only the leaf lists are of interest
+        self.cpu.mem_write(surf_array, bytes(blob))
+        model_object = self.alloc(0x100)
+        self.write(model_object + 0x58, 'I', node_array)
+        self.write(model_object + 0x98, 'I', surf_array)
+        self.write(model_object + 0xa8, 'I', self.alloc(0x40))
+        self.write(model_object + 0xac, 'i', 0)
+        level, view_actor, viewport, frame = self.alloc(0x100), self.alloc(0x100), self.alloc(0x100), self.alloc(0x200)
+        self.write(level + 0x98, 'I', model_object)
+        self.write(view_actor + 0xac, 'I', level)
+        self.write(viewport + 0x30, 'I', view_actor)
+        for k, plane in enumerate(planes):
+            self.write(frame + 0x12c + 16 * k, 'ffff', *plane)
+        dynamics = self.alloc(len(nodes) * 8 + 8)
+        self.write(DYNAMICS_CACHE, 'I', dynamics)
+        surf_lights = self.alloc(max(1, len(surfaces)) * 4)
+        self.write(SURF_LIGHTS, 'I', surf_lights)
+        leaf_count = max([max(node[8:10]) for node in nodes if len(node) > 8] + [0]) + 1
+        leaf_lights = self.alloc(leaf_count * 4 + 0x100)
+        self.write(LEAF_LIGHTS, 'I', leaf_lights)
+        self.write(NUM_DYN_LIGHT_LEAVES, 'i', 0)
+        grender = self.alloc(0x200)
+        self.write(grender + 0xf0, 'I', self.alloc(len(nodes) * 4 + 64))
+        self.write(GRENDER, 'I', grender)
+        self.write(NUM_DYN_LIGHT_SURFS, 'i', 0)
+        arena = self.alloc(len(nodes) * 0x80 + 0x20000)
+        self.write(GDYNMEM, 'II', arena, arena + len(nodes) * 0x80 + 0x20000)
+        links = self.alloc(len(nodes) * 64 + 0x10000)
+        self.write(self.gmem, 'II', links, links + len(nodes) * 64 + 0x10000)
+        actors, index_of, accepted = [], {}, []
+        for i, light in enumerate(lights):
+            actor = self.actor(light)
+            self.write(actor + 0x28, 'I', light.get('flags', 0))
+            self.write(actor + 0x1ea, 'B', light.get('volumeRadius', 0))
+            self.write(actor + 0x1e9, 'B', light.get('volumeBrightness', 0))
+            self.write(actor + 0xc8, 'I', self.alloc(0x400))   # Region.Zone
+            actors.append(actor)
+            index_of[actor] = i
+            ebp = self.frame()
+            self.write(ebp + 8, 'I', frame)
+            self.cpu.reg_write(UC_X86_REG_ESI, actor)
+            self.cpu.reg_write(UC_X86_REG_EBX, frame)
+            before = self.read(dynamics, 'I')[0]
+            self.run(0x10b230e8, 0x10b232f4)
+            if self.read(dynamics, 'I')[0] != before:
+                accepted.append(i)
+        def visit(node):
+            head = self.read(dynamics + node * 8, 'I')[0]
+            items = []
+            while head:
+                items.append(head)
+                head = self.read(head + 4, 'I')[0]
+            for item in items:
+                try:
+                    self.call(FILTER, [viewport, frame, node, 0], this=item)
+                except Exception:
+                    from unicorn.x86_const import UC_X86_REG_EIP, UC_X86_REG_EAX, UC_X86_REG_ESI
+                    raise RuntimeError(f'Filter fault at {self.cpu.reg_read(UC_X86_REG_EIP):#x}, node {node} eax {self.cpu.reg_read(UC_X86_REG_EAX):#x} esi {self.cpu.reg_read(UC_X86_REG_ESI):#x} nodes {len(nodes)} dyn {dynamics:#x}')
+            record = nodes[node]
+            for child in (record[6], record[5]):
+                if child >= 0:
+                    visit(child)
+        visit(0)
+        result = []
+        for leaf in range(leaf_count):
+            link, order = self.read(leaf_lights + 4 * leaf, 'I')[0], []
+            while link:
+                order.append(index_of[self.read(link + 0xc, 'I')[0]])
+                link = self.read(link + 0x10, 'I')[0]
+            result.append(order)
+        return {'accepted': accepted, 'leaves': result}
+
+
 def main():
     # argv[2]: the control word of the per-frame bodies: the render pass's
     # precision control 24, 0x007f, by default (docs/render-pass-precision.md;
@@ -824,6 +923,7 @@ def main():
         out['atanMissing'] = sorted(oracle.atan_missing)
     model = cases.get('model')
     out['filters'] = [oracle.filter(model, light) for light in cases.get('filters', [])] if model else []
+    out['leafLists'] = [oracle.leaf_lists(case['model'], case['planes'], case['lights']) for case in cases.get('leafLists', [])]
     json.dump(out, sys.stdout)
 
 

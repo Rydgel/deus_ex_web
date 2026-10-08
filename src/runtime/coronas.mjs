@@ -131,3 +131,15 @@ export function coronaFrameFromCamera(view, rect) {
       frame: { projZ: f.projectionZ, fx2: f.center[0], fy2: f.center[1], width: rect.width } };
   } finally { setX87Precision(previous); }
 }
+
+/** The static lights the corona pass visits for the viewer's leaf
+ * (0x10b1b6b1-0x10b1b70e): `Model.Leaves[leaf].iPermeating` indexes
+ * `Model.Lights`, whose run of references ends at a null entry. The viewer's
+ * LeafLights follow (0x10b1b711-0x10b1b743, dynamic-lighting.mjs
+ * movingLightLeafLists), each through the same helper. */
+export function leafPermeatingLights(model, leaf) {
+  const start = model.leaves[leaf]?.permeating ?? -1, out = [];
+  if (start < 0) return out;
+  for (let i = start; i < model.lights.length && model.lights[i]; i++) out.push(model.lights[i]);
+  return out;
+}
