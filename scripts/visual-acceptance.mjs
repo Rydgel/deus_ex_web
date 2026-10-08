@@ -14,6 +14,8 @@
 //       launch; DX_WINE/DX_GAME/WINEPREFIX for plain Wine), takes the original's frames
 //   node scripts/visual-acceptance.mjs compare [--maps a,b]
 //       per-view metrics and side-by-side/difference images
+//   All three take --view name:x,y,z:pitch,yaw,roll (repeatable) to use explicit
+//   cameras instead of the planned views; the plan itself keeps its views.
 //
 // Frames are raw: the original's Shot bitmaps are its framebuffer before the
 // gamma ramp, and Play is captured at Brightness 0.4, whose display ramp
@@ -35,7 +37,27 @@ const maps = (option('maps', null)?.split(',') ?? DEFAULT_MAPS);
 const [WIDTH, HEIGHT] = option('size', '1280x720').split('x').map(Number);
 const planPath = path.join(out, 'plan.json');
 const freeze = !process.argv.includes('--live');
+// --region Zone:leaf:zoneNumber (e.g. ZoneInfo4:380:7): after each view's Location, both sides
+// set the player's Region to it (`set DeusEx.JCDentonMale Region (...)` in the
+// original). `set Location` leaves the Region of the last move, which is the
+// start's under ghost, and Region.iLeaf picks the static lights an actor's
+// mesh gets (docs/mesh-lighting.md); a walking player would move through
+// MoveActor and SetActorZone, but the original asserts ("moved without proper
+// hashing") when a collision-enabled player is placed with `set Location`.
+const regionOption = option('region', null);
+const region = regionOption ? (([zone, leaf, number]) => ({zone, iLeaf: Number(leaf), zoneNumber: Number(number)}))(regionOption.split(':')) : null;
 const onlyViews = option('views', null)?.split(',') ?? null;
+// --view name:x,y,z:pitch,yaw,roll (repeatable): explicit camera(s) used in
+// place of the planned views, for one subject (a mirror, a face) at a known
+// spot. Location and rotation are integers (raw rotator units), as the plan's.
+const optionAll = name => process.argv.flatMap((a, i) => a === `--${name}` ? [process.argv[i + 1]] : []);
+const explicitViews = optionAll('view').map(text => {
+  const m = /^([\w.-]+):(-?\d+),(-?\d+),(-?\d+):(-?\d+),(-?\d+),(-?\d+)$/.exec(text);
+  if (!m) throw new Error(`--view ${text}: expected name:x,y,z:pitch,yaw,roll (integers)`);
+  const n = m.slice(2).map(Number);
+  return {name: m[1], location: n.slice(0, 3), rotation: n.slice(3)};
+});
+const viewsOf = entry => explicitViews.length ? explicitViews : entry.views;
 const loadPlan = () => existsSync(planPath) ? JSON.parse(readFileSync(planPath, 'utf8')) : {};
 // The original's level time when its clock was held (`original` writes it,
 // `play` runs Play's frozen level to the same TimeSeconds before holding it).
@@ -118,8 +140,8 @@ async function play() {
       if (buffer[0] !== WIDTH || buffer[1] !== HEIGHT || box.x !== 0 || box.y !== 0 || box.width !== WIDTH || box.height !== HEIGHT)
         throw new Error(`the scene canvas is ${box.width}x${box.height} at ${box.x},${box.y} (buffer ${buffer.join('x')}), not ${WIDTH}x${HEIGHT}`);
       const shots = [];
-      for (const view of entry.views) {
-        await page.evaluate(v => window.deusExViewer.viewProbe({location: v.location, rotation: v.rotation}), view);
+      for (const view of viewsOf(entry)) {
+        await page.evaluate(([v, region]) => window.deusExViewer.viewProbe({location: v.location, rotation: v.rotation, region}), [view, region]);
         await frames(45);
         const state = await page.evaluate(() => {
           const s = window.deusExViewer.status();
@@ -128,7 +150,7 @@ async function play() {
         const probe = await page.evaluate(() => window.deusExViewer.viewProbe({}));
         await page.screenshot({path: path.join(dir, `${view.name}-play.png`),
           clip: {x: 0, y: 0, width: WIDTH, height: HEIGHT}});
-        shots.push({view: view.name, camera: state, player: {location: probe.location, state: probe.state, physics: probe.physics}});
+        shots.push({view: view.name, camera: state, player: {location: probe.location, region: probe.region, state: probe.state, physics: probe.physics}});
       }
       writeFileSync(path.join(dir, 'play.json'), JSON.stringify({map, freeze, size: [box.width, box.height], ghost, timeTarget: target, timeHeld: held, shots, errors}, null, 1));
       console.log(map, `${shots.length} views`, ghost.state, held !== null ? `time ${held.toFixed(3)} (original ${target.toFixed(3)})` : '', errors.length ? `errors: ${errors.slice(0, 2).join(' | ')}` : '');
@@ -212,7 +234,7 @@ async function original() {
       writeFileSync(timesPath, JSON.stringify(times, null, 1));
       console.log(map, 'held at TimeSeconds', times[map], 'dilation', live[0][3]);
     }
-    for (const view of entry.views) {
+    for (const view of viewsOf(entry)) {
       if (onlyViews && !onlyViews.includes(view.name)) continue;
       const [x, y, z] = view.location, [pitch, yaw, roll] = view.rotation;
       let taken = [];
@@ -226,7 +248,9 @@ async function original() {
         }
         const before = game.shots();
         post([`cmd set DeusEx.JCDentonMale Location (X=${x},Y=${y},Z=${z})`, 'cmd set DeusEx.JCDentonMale Velocity (X=0,Y=0,Z=0)',
-          `cmd set DeusEx.JCDentonMale ViewRotation (Pitch=${pitch},Yaw=${yaw},Roll=${roll})`, 'sleep 1500', 'shot', 'sleep 900']);
+          `cmd set DeusEx.JCDentonMale ViewRotation (Pitch=${pitch},Yaw=${yaw},Roll=${roll})`,
+          ...(region ? [`cmd set DeusEx.JCDentonMale Region (Zone=ZoneInfo'${map}.${region.zone}',iLeaf=${region.iLeaf},ZoneNumber=${region.zoneNumber})`] : []),
+          'sleep 1500', 'shot', 'sleep 900']);
         const fresh = game.shots().filter(shot => !before.includes(shot));
         taken = fresh.map(shot => {
           const png = path.join(dir, `${view.name}-original.png`), size = game.bmpToPng(path.join(game.SYSTEM, shot), png);
@@ -340,20 +364,28 @@ function compareOne(a, b, prefix) {
   };
 }
 
+// compare --crop WxH+X+Y: the metrics over that region only (the crops are
+// kept as <view>-crop-original.png / -play.png); --play-name <suffix>: compare
+// <view>-<suffix>.png of Play (an experiment's frame) instead of <view>-play.png.
 function compare() {
-  const report = {}, plan = loadPlan();
+  const report = {}, plan = loadPlan(), crop = option('crop', null), playName = option('play-name', 'play');
   for (const map of maps) {
     const dir = path.join(out, map);
-    for (const view of plan[map]?.views ?? []) {
-      const a = path.join(dir, `${view.name}-original.png`), b = path.join(dir, `${view.name}-play.png`);
+    for (const view of viewsOf(plan[map] ?? {views: []})) {
+      let a = path.join(dir, `${view.name}-original.png`), b = path.join(dir, `${view.name}-${playName}.png`);
       if (!existsSync(a) || !existsSync(b)) continue;
-      const result = compareOne(a, b, path.join(dir, view.name));
+      let prefix = path.join(dir, playName === 'play' ? view.name : `${view.name}-${playName}`);
+      if (crop) {
+        const cropped = (file, name) => { const to = `${prefix}-crop-${name}.png`; execFileSync('magick', [file, '-crop', crop, '+repage', to]); return to; };
+        a = cropped(a, 'original'); b = cropped(b, playName); prefix = `${prefix}-crop`;
+      }
+      const result = compareOne(a, b, prefix);
       (report[map] ??= {})[view.name] = result;
       const {outlierBlocks, ...brief} = result;
       console.log(map, view.name, JSON.stringify(brief), `${outlierBlocks?.length ?? 0} outlier blocks`);
     }
   }
-  writeFileSync(path.join(out, 'report.json'), JSON.stringify(report, null, 1));
+  if (!crop && playName === 'play') writeFileSync(path.join(out, 'report.json'), JSON.stringify(report, null, 1));
 }
 
 if (verb === 'play') await play();

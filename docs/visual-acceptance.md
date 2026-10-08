@@ -128,6 +128,29 @@ node scripts/visual-acceptance.mjs compare
 `--current <map>` names the map the running game has loaded, so it is
 left first. The `play` step writes `.work/acceptance/plan.json`; `original` reads it.
 
+**One subject.** `--view name:x,y,z:pitch,yaw,roll` (repeatable, integers in
+raw rotator units, taken by all three verbs) uses explicit cameras in place
+of the planned views, for a mirror or a face at a known spot; the plan keeps
+its own views. Frames are `<map>/<name>-original.png` and `-play.png`.
+`compare --crop WxH+X+Y` measures one region (the crops are kept as
+`<name>-crop-*.png`), and `--play-name <suffix>` compares
+`<name>-<suffix>.png` of Play, for an experiment's frame.
+
+**Placing the player's Region.** `set Location` moves the player without
+SetActorZone, so its Region (zone, leaf) stays the start's under `ghost`
+(measured on both sides: the original's JC read leaf 111, zone 3 after the
+teleport), and Region.iLeaf picks the static lights the player's own
+mesh gets (SetupForActor, [mesh lighting](mesh-lighting.md)). A reflection of
+the player captured after only `set Location` is therefore lit from the
+start's leaf (10_Paris_Club: leaf 111, zone 3; the mesh gets no light and is
+black in the original). `--region ZoneInfo4:380:7` sets the Region at each
+view on both sides (`set DeusEx.JCDentonMale Region (Zone=ZoneInfo'<map>.ZoneInfo4',
+iLeaf=380,ZoneNumber=7)` in the original; `viewProbe({region})` in Play), the
+leaf and zone `PointRegion` gives at the camera. Walking instead of `ghost`
+does not work in the original: a collision-enabled player placed with
+`set Location` asserts in the next MoveActor ("moved without proper hashing")
+and the game exits.
+
 ## Results
 
 ### Twenty-six maps, frozen at held level time (2026-10-07)
@@ -250,6 +273,60 @@ LT_Pulse phase alone.
      to 1 or more for 733,665. Original 0 maps to Play 1 or more for
      18,738 pixels and to 0 for 334,999.
    - Rounding at the bottom of the range, in both directions; not traced.
+
+### The player's reflection in a mirror (2026-10-08, open: a Play difference)
+
+10_Paris_Club's bar mirror (surface 232, the plane x = 128, y from −736 to
+−1600, z from −16 to 240), JC at (88, −1008, 27) with Region zone 7, leaf 380
+(`--region ZoneInfo4:380:7`), pitch 58276, yaw 0, so that his reflected face
+is 100 units from the camera. The report was dark marks around JC's mouth in
+Play, gone with the AugLight on. The original shows his face evenly lit; Play
+shows the skin at the texture's full brightness over most of the face and the
+real, dim light only on patches around the eyes, nose and mouth.
+
+Over the face region (120×100 px at 580,325; the whole frame has a 1.34×
+raw brightness ratio, see Open):
+
+| | Play / original | Mean abs. diff. | Edge recall / precision |
+| --- | ---: | ---: | --- |
+| Play today (mean 27.1, 23.6, 16.6 against the original's 4.1, 13.7, 5.1) | 2.72 | 21.65 | 0.28 / 0.38 |
+| Play with the child frame's own lighting (below) | 1.31 | 5.26 | 0.41 / 0.48 |
+
+The edge scores are low for both because the crop is dark. With the
+child frame's lighting the face region's ratio equals the frame's.
+
+**Cause.** The original lights an actor in every frame that draws it:
+DrawLodMesh runs SetupForActor and Light with that frame's Coords and its
+back-face test is `dot·Frame.Mirror < 0`
+([mesh lighting](mesh-lighting.md), "Call order"). JC is not drawn in the main
+frame (the camera sits in his head), so in the original only the mirror's
+child frame lights him. Play lights each actor once per main frame and the
+mirror passes reuse the colours (`actor-mesh-sim.mjs`: "Mirror frames reuse
+the main frame's lighting; a child-only actor is lit the same way"), with no
+Frame.Mirror. For JC that pass runs with the camera inside his head. Of the 339
+vertices of his mesh (T-pose, this view), the main camera's back-face test
+marks 233 (255 faces kept); the mirror's child camera marks 295 (378 faces),
+and 90 of those were not marked by the main pass. A vertex not marked keeps
+diffuse 1.0 (`lightMesh`: `!light[v]`), a marked one gets the computed Light:
+neighbouring vertices at full texture brightness and at 0.05 to 0.2. The lit
+patches are the dark marks; with the AugLight the light saturates and they
+vanish. The player's own Region (above) is a separate capture hazard, not
+this cause: with the start's leaf Play still showed a bright face where the
+original showed a black silhouette.
+
+**Experiment** (not committed; `mirror-lighting-experiment.patch` in the session
+scratchpad): for JC alone, SetupForActor and lightMesh run once more with
+the Origin and axes reflected across the mirror plane and Frame.Mirror = −1.
+The existing functions then give the face above, within the display gap, with
+its two lights (Light91 and Light77, steady, brightness 44, radius 34,
+leaf 380's permeating static lights; ambient 0, ScaleGlow 1, no moving
+lights), so light selection, vertex normals (accumulated in the child's
+camera space without a mirror factor), Light's view-dependent specular term,
+the material path and the mesh's LOD are not the cause. The fix is per-child-frame
+lighting for actors the child frames draw: SetupForActor and DrawLodMesh
+under the child's Coords and Frame.Mirror, in the GPU path as well. It
+applies to every actor seen in a mirror from the side its main-frame
+camera does not see.
 
 ## Open
 
