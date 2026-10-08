@@ -1,0 +1,43 @@
+/** Validation only (scripts/validate-terminals-camera-browser.mjs,
+ * docs/script-window-viewport.md "Camera pass"): on whichever side runs the
+ * simulation (sim-worker.mjs `call`, or the page with ?sim=inline).
+ * `front`: places the player 56 units in front of the named actor (along its
+ * Rotation yaw, as validate-terminals-play.mjs approaches a wall terminal)
+ * and points the view at it, so the page's own frob input reaches it.
+ * Returns the player's FrobTarget, Location and ViewRotation and the last
+ * HUD frame's ViewportWindow world frames (sim-session.mjs viewportState). */
+export function terminalProbe(game, session, { front = null } = {}) {
+  const runtime = game.doors.scriptRuntime.runtime, player = game.player.collisionActor;
+  const read = (actor, name) => runtime.readNamed(actor, name);
+  let placed = null;
+  if (front) {
+    const target = runtime.levelFor(player).actors.find(actor => actor?.name === front);
+    if (!target) throw new Error(`terminalProbe: no actor ${front}`);
+    const at = read(target, 'Location'), yaw = read(target, 'Rotation')[1] * Math.PI / 32768;
+    const location = [at[0] + Math.cos(yaw) * 56, at[1] + Math.sin(yaw) * 56, at[2]];
+    if (Math.hypot(...read(player, 'Location').map((v, i) => v - location[i]).slice(0, 2)) > 8)
+      runtime.farMoveActor(player, location, 0, 1);
+    const eye = game.view().location, d = at.map((v, i) => v - eye[i]);
+    const units = r => (Math.round(r * 32768 / Math.PI) + 65536) % 65536;
+    const rotation = [units(Math.atan2(d[2], Math.hypot(d[0], d[1]))), units(Math.atan2(d[1], d[0])), 0];
+    runtime.writeNamed(player, 'ViewRotation', rotation);
+    placed = { location: [...read(player, 'Location')], rotation };
+  }
+  const camera = level => level.actors.find(actor => actor?.name === 'SecurityCamera5');
+  const cam = camera(runtime.levelFor(player));
+  // Actors inside the camera's view cone (angle test only) with their
+  // LastRenderTime, to see which the camera frame did not stamp.
+  const cone = [];
+  if (cam) {
+    const at = read(cam, 'Location'), r = read(cam, 'Rotation'), u = Math.PI / 32768;
+    const f = [Math.cos(r[0] * u) * Math.cos(r[1] * u), Math.cos(r[0] * u) * Math.sin(r[1] * u), Math.sin(r[0] * u)];
+    for (const actor of runtime.levelFor(player).actors) {
+      if (!actor || actor === cam || !read(actor, 'Mesh')) continue;
+      const p = read(actor, 'Location'), d = p.map((v, i) => v - at[i]), len = Math.hypot(...d);
+      if (len > 1 && (d[0] * f[0] + d[1] * f[1] + d[2] * f[2]) / len > 0.7)
+        cone.push({ name: actor.name, hidden: Boolean(read(actor, 'bHidden')), distance: Math.round(len), lastRenderTime: read(actor, 'LastRenderTime') });
+    }
+  }
+  return { placed, cone, camera: cam ? { location: [...read(cam, 'Location')], rotation: [...read(cam, 'Rotation')] } : null, frobTarget: read(player, 'FrobTarget')?.name ?? null, location: [...read(player, 'Location')],
+    viewRotation: [...read(player, 'ViewRotation')], viewports: session.viewportState() };
+}

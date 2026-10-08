@@ -1138,7 +1138,12 @@ export async function createWindowHost({runtime, assets, player, gameConfig = nu
   // translation), ClearZ marks the pass, DrawWorld queues a 'viewport' draw
   // command in window order (the page draws the world from that camera into
   // the frame's rectangle), FinishMasterFrame frees the image.
+  // The view's world frame (OccludeBsp, the actors it draws, render
+  // feedback) is planned by `viewportPlanner` (sim-session.mjs) inside
+  // DrawWorld, while Draw holds the origin's bHidden and the player's
+  // bBehindView, as URender::DrawWorld (Render.dll 0x10b1cb90) reads them.
   // ------------------------------------------------------------------
+  let viewportPlanner = null;
   const playRenderer = {name: 'PlayRenderer'};
   const viewportFrames = new Map();
   const isDeletedActor = actor => Boolean(runtime.readNamed(actor, 'bDeleteMe'));
@@ -1196,10 +1201,12 @@ export async function createWindowHost({runtime, assets, player, gameConfig = nu
       // bShowActor, the player bBehindView unless it shows its weapons.
       drawWorld(_renderer, frame, {origin}) {
         const camera = viewportFrames.get(frame), viewer = runtime.readNamed(runtime.readNamed(player, 'Player'), 'Actor') ?? player;
-        drawCommands.push({kind: 'viewport', x: W.i32(frame, 0xb0), y: W.i32(frame, 0xb4), width: W.i32(frame, 0xa8), height: W.i32(frame, 0xac),
+        const command = {kind: 'viewport', x: W.i32(frame, 0xb0), y: W.i32(frame, 0xb4), width: W.i32(frame, 0xa8), height: W.i32(frame, 0xac),
           location: camera.location, rotation: camera.rotation, fov: camera.fov, clearZ: camera.clearZ,
           hidden: origin && runtime.readNamed(origin, 'bHidden') ? [origin.name] : [],
-          behindView: Boolean(runtime.readNamed(viewer, 'bBehindView'))});
+          behindView: Boolean(runtime.readNamed(viewer, 'bBehindView')), pass: null};
+        if (viewportPlanner) command.pass = viewportPlanner(command);
+        drawCommands.push(command);
       },
       finishMasterFrame() {
         for (const frame of viewportFrames.keys()) heap.free(frame);
@@ -1657,6 +1664,8 @@ export async function createWindowHost({runtime, assets, player, gameConfig = nu
     delegateLegacySubtree:object=>externalSubtrees.add(object),
     raw:{allocate:heap.allocate,read:heap.read,write:heap.write,addressOf:heap.addressOf},
     families: win => families.get(win) ?? null,
+    /** The world frame of each ViewportWindow DrawWorld (sim-session.mjs). */
+    setViewportPlanner(planner){viewportPlanner=planner;},
     isDestroyed: win => destroyed.has(win),
     processScript, constructRootWindow, configureChild, askParentForReconfigure, setVisibility,
     canvas,node,

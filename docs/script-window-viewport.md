@@ -3,9 +3,9 @@
 The Extension window that draws the world from an actor or a location into its
 rectangle. Security computers use three of them (ComputerSecurityCameraWindow,
 one per camera view); the spy drone and the scope/targeting views use the same
-class. This note covers the window's own bodies and natives. The page-side
-camera pass that draws the world into the rectangle is a separate step and is
-**not implemented yet** (see "Play wiring" below).
+class. This note covers the window's own bodies and natives, and the camera
+pass that draws the world into the rectangle ("Camera pass" below, with its
+unsupported parts).
 
 Authority: installed Extension.dll (SHA-256 `93c35502…8b916d9c`, preferred
 base 0x10000000), Engine.dll for APlayerPawn's view list, the DX SDK 1112f
@@ -132,26 +132,127 @@ The window host admits `extension.viewportwindow` (construct, Init, CleanUp,
 Draw, PostDraw, ConvertVectorToCoordinates, natives 1940–1943 and 1945–1956,
 and member cleanup on destroy).
 
-The render services are Play's, and the following is the part that is
-**unsupported**:
+The render services are Play's:
 
 - CreateMasterFrame allocates a heap scene node. ComputeRenderSize writes it
   with the recovered scene-frame translation (`writeWindowSceneFrame`), using
   the viewer's FovAngle while Draw holds the window's fov there.
 - DrawWorld queues a `viewport` draw command in window order. The command
-  holds the rectangle, location, rotation, fov, clearZ, the hidden origin and
-  bBehindView.
-- `sim-session` passes the command to the page. `hud.mjs` currently skips it.
-  The second camera pass that renders the world into that rectangle (camera
-  occlusion, per-pass actor visibility, hiding the origin, fov) is **not
-  implemented**. Camera windows therefore show no world image yet.
-- URender::DrawWorld's own work for an additional view has not been traced
-  either (beyond the AdditionalViews list it uses for visibility).
+  holds the rectangle, location, rotation, fov, clearZ, the hidden origin,
+  bBehindView and the frame's plan (below).
+
+`AdditionalViews` is replicated. PlayerPawn.uc describes it as other actors
+"the pawn can see from the point of view of". Its readers in Engine.dll
+(network relevancy) are not traced. Play does not use it for rendering.
+
+## Camera pass
+
+### Original evidence
+
+- **RenderFrame** (`0x1004b260`) calls `Render->DrawWorld(frame)` (vslot
+  0x70) when the frame's X and Y are positive. It does nothing else.
+- **DrawWorld** (Render.dll `0x10b1cb90`, see
+  [bsp-occlusion.md](bsp-occlusion.md) "Call order") works the same on the
+  window's master frame as on the player's. In order, it:
+  1. increments the frame counter;
+  2. runs OccludeFrame: SetupDynamics, OccludeBsp, dynamic lights and the
+     child frames;
+  3. runs DrawFrame;
+  4. clears Z and calls the viewing actor's RenderOverlays, but only when it
+     has a Target ([script-weapon-rendering.md](script-weapon-rendering.md)).
+- **Why Draw sets bBehindView.** With bBehindView set, Target is None, so a
+  camera view draws no weapon overlay. The flag also stops the level-actor
+  pass from excluding the player, so JC is drawn in the view.
+- **The origin is not drawn**, because Draw sets its bHidden.
+- **Placement.** The view draws inside PostRender's window paint, after
+  ClearZ, over whatever the HUD drew before it. The window draws after it
+  then cover it.
+
+### Play
+
+**Planning.** The window host calls `viewportPlanner` (sim-session.mjs
+`planViewportPass`) inside its DrawWorld service, while Draw holds the flags.
+In the worker this:
+
+- increments DrawWorld's frame counter;
+- runs OccludeBsp from a master frame at the camera's location, rotation and
+  fov, at the window's size. Its drawn polygons and tracked movers are kept,
+  and the sky frame when OccludeBsp makes one.
+- runs SetupDynamics' candidates for that frame (the actor layer's
+  bindings and iterator items, and the sprite records, read live under Draw's
+  flags: the camera hidden, the owner-see rules following bBehindView) through
+  the same Setup path as the main frame, and OccludeBsp returns the frame's
+  Frame->Sprite keys. The decal block is off. On the GPU path the actor layer
+  also asks which groups the camera's frustum keeps.
+- writes LastRenderTime (DrawActorSprite's render feedback) for exactly
+  the Frame->Sprite actors and sprites, whether three.js then culls them or
+  not; an actor in the camera's cone but occluded or out of range is not
+  stamped.
+
+**Posing.** The actor layer poses the actors the previous HUD frame's camera
+Frame->Sprite held (and mirror children's ids) as child-only. Posing every
+admitted actor in the map instead made each frame minutes long on Island
+(the "8 minutes to the first poll" of the earlier WIP: all actors posed and
+lit); that is the cause of the slowness, measured by the stall's return when
+the Set was widened to every actor.
+
+**Drawing.** The page's HUD renderer splits its frame at each `viewport`
+command. `main.mjs` `viewportWorldPass`:
+
+- clears Z;
+- draws the sky frame;
+- selects OccludeBsp's polygons and applies the actor decisions;
+- renders the scene from the camera into the window's rectangle (viewport
+  and scissor);
+
+then the HUD draws continue.
+
+**Light maps.** The light maps of the camera frame's OccludeBsp polygons
+are animated and relit with the main frame's. When the main frame lists no
+polygons, the light maps in the main frustum or a camera's frustum are.
+
+**Check.** `scripts/validate-terminals-camera-browser.mjs` runs in the
+default worker mode. On Island it:
+
+- frobs ComputerSecurity1 with the page's right click;
+- types the login on the keyboard;
+- reads the plan through the worker-side terminal probe
+  (`terminal-probe.mjs`): one frame from SecurityCamera5, OccludeBsp nodes,
+  and the camera absent from its actors;
+- reads the page's pass: the same rectangle, with draw calls;
+- checks the plan's location and rotation equal SecurityCamera5's, and
+  its FOV is the window's;
+- checks the stamped set is the frame's Frame->Sprite actors: of 82 mesh
+  actors inside SecurityCamera5's view cone on Island, 72 (behind walls or
+  beyond the room) are not in it and keep their LastRenderTime;
+- checks that the rectangle's image varies, and the plan's own cost.
+
+Measured on the Linux host (headless SwiftShader, worker mode): the camera
+frame plans in about 2 ms and frames stay at about 16 ms; the first poll after
+the login arrives within seconds. The earlier WIP reached it after about 8
+minutes: it passed `children: true` to the actor layer while a camera view was
+on, which poses (and lights) every admitted actor in the map each frame. That
+is reproduced by restoring that value (the check then runs past 100 s), and
+removed by posing only the camera's Frame->Sprite ids.
+
+The image has not been compared with an original frame.
+
+### Unsupported or approximate (explicit)
+
+- The decal block: decals are not drawn in camera views.
+- Mirror child frames inside a camera view (Play's mirror child frames, from
+  master, are not run for the camera frame).
+- Coronas.
+- Per-frame mesh lighting: the camera view reuses the main frame's colours.
+- Fog maps: the main frame's.
+- The first HUD frame of a camera view (and a frame whose Frame->Sprite adds
+  an actor the previous one lacked) lacks the actors outside the main
+  frame, because posing follows the previous HUD frame.
 
 Reproduce:
 
 - `NATIVE_PROBE_PYTHON=.cache/native-probe-env/bin/python node scripts/validate-window-viewport-diff.mjs`
 - `NATIVE_PROBE_PYTHON=.cache/native-probe-env/bin/python node scripts/validate-window-native-diff.mjs`
 - `node scripts/validate-terminals-play.mjs --map 01_NYC_UNATCOIsland --terminal ComputerSecurity1`
-  (the security screen constructs its three camera windows and then stops at
-  the pan slider's ScaleManager native).
+  (the security screen end to end, headless)
+- `node scripts/validate-terminals-camera-browser.mjs [--shot camera.png]` (the camera pass)

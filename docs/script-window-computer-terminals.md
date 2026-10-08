@@ -75,6 +75,17 @@ active, unalarmed path. At this terminal, SecurityCamera5 sees the player
 pan therefore restarts from the same stale rotation, as the script is
 written: a second pan does not add to the first.
 
+**Bark conversations.** About 9 s after JC arrives at this computer, an
+NPC bark (BarkManager's ConPlayBark) used to read a ConEventRandomLabel
+that was never attached, and Play paused. Bark conversations are skipped
+as frob ConPlay candidates (`GetActiveConversation`), and
+`prepareFaceConversations` (`script-conversation-face-live.mjs`) had
+skipped them entirely. It now attaches their graphs and returns them as
+`barks`. The live ConPlay preparation (`script-conplay-live.mjs`) loads
+their speech sounds, e.g. from `DeusExConAudioAIBarks.u`. A headless run
+now ticks 900 frames there without an error. What the bark shows and
+plays is not checked.
+
 Not driven yet:
 * the ATM disabled screen, hacking and the special-options screens;
 * the camera image itself: Draw queues a `viewport` command, but the page's

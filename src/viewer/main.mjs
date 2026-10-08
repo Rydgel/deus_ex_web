@@ -414,6 +414,57 @@ function renderViewportFor(rect) {
 // Render.dll 0x10b18410: the SkyZone's Location and Rotation, the sky view
 // being the SkyZone rotation applied after the view's); Inspect uses the
 // map's statically chosen sky.
+// A ViewportWindow's world frame (XViewportWindow::Draw: ClearZ, then
+// RenderFrame -> URender::DrawWorld on its master frame; docs/
+// script-window-viewport.md "Camera pass"), drawn between the HUD's GC
+// draws before and after it. The simulation side planned the frame
+// (sim-session.mjs planViewportPass): OccludeBsp's polygons and movers,
+// the sky frame and the actor layer's decisions. Its decals, sprites'
+// Frame->Sprite, mirrors, coronas, fog maps and mesh lighting are the main
+// frame's or are not drawn (explicitly unsupported).
+const viewportCamera = createPlayCamera();
+/** Points viewportCamera along a 'viewport' command's frame. */
+function aimViewportCamera(command) {
+  const view = { location: command.location, rotation: command.rotation, fov: command.fov };
+  applyPlayFrame(viewportCamera, view, { render: true, width: command.width, height: command.height });
+  setPixelCentre(viewportCamera, command.width, command.height);
+  viewportCamera.updateMatrixWorld();
+  return viewportCamera;
+}
+/** A 'viewport' command's camera frustum (light map culling). */
+function viewportFrustum(command) {
+  const view = aimViewportCamera(command);
+  return new THREE.Frustum().setFromProjectionMatrix(new THREE.Matrix4().multiplyMatrices(view.projectionMatrix, view.matrixWorldInverse));
+}
+// The camera passes the last frame drew (terminalProbe): rectangle and draw calls.
+let viewportPassesDrawn = [];
+function viewportWorldPass(command) {
+  const plan = command.pass;
+  if (!plan || !world || !(command.width > 0 && command.height > 0)) return;
+  const callsBefore = renderer.info.render.calls;
+  aimViewportCamera(command); viewportCamera.layers.disable(DECAL_LAYER);
+  const box = renderViewportFor(command), markersVisible = world.markers.visible;
+  renderer.setViewport(...box); renderer.setScissor(...box); renderer.setScissorTest(true);
+  world.markers.visible = false;
+  try {
+    if (command.clearZ) renderer.clearDepth();
+    if (plan.sky) {
+      skyCamera.copy(viewportCamera); skyCamera.layers.disable(DECAL_LAYER); skyCamera.position.fromArray(toView(plan.sky.location));
+      skyCamera.quaternion.premultiply(new THREE.Quaternion().setFromEuler(rotatorEuler(plan.sky.rotation)));
+      const npcVisible = npcPreview?.root.visible; if (npcPreview) npcPreview.root.visible = false;
+      renderer.render(scene, skyCamera);
+      if (npcPreview) npcPreview.root.visible = npcVisible; renderer.clearDepth();
+    }
+    if (plan.visibility) world.visibility.select(plan.visibility.nodes, plan.visibility.movers ?? null);
+    if (npcPreview && plan.decisions) npcPreview.draw.pass(plan.decisions, fromView(viewportCamera.position.toArray()));
+    renderer.render(scene, viewportCamera);
+    viewportPassesDrawn.push({ rect: [command.x, command.y, command.width, command.height], calls: renderer.info.render.calls - callsBefore });
+  } finally {
+    world.visibility.all(); world.markers.visible = markersVisible;
+    const pr = renderer.getPixelRatio(), full = [0, 0, renderer.domElement.width / pr, renderer.domElement.height / pr];
+    renderer.setViewport(...full); renderer.setScissor(...full); renderer.setScissorTest(false);
+  }
+}
 function skyFrame(frame) {
   if (mode === 'play' && game) return frame?.sky ?? null;
   return world.sky ? { location: world.sky, rotation: world.skyRotation ?? [0, 0, 0] } : null;
@@ -1133,6 +1184,14 @@ async windowProbe() {
 },
 /** Validation only: mover-probe.mjs (the moving brush tracker's movers) on
  * the simulation side. */
+/** Validation only: terminal-probe.mjs (place the player at a terminal, the
+ * last HUD frame's ViewportWindow frames) on the simulation side, and the
+ * page's camera passes of its last frame. */
+async terminalProbe(args) {
+  const value = simClient ? await simClient.call('terminalProbe', args)
+    : game && sim ? (await import('./terminal-probe.mjs')).terminalProbe(game, sim, args) : null;
+  return value && { ...value, page: viewportPassesDrawn.map(pass => ({ ...pass })) };
+},
 async moverProbe(args) {
   if (simClient) return simClient.call('moverProbe', args);
   return game && sim ? (await import('./mover-probe.mjs')).moverProbe(game, sim, args) : null;
@@ -1418,8 +1477,17 @@ function drawFrame(snap, time) {
     frameSurfaces = new Set(drawnSurfaces);
     for (const f of frames) for (const node of f.nodes) frameSurfaces.add(world.nodeSurface[node]);
   }
-  const drawnLightMaps = frameSurfaces ?? (viewFrustum && visible && !visible.sky ? drawnSurfaces : null);
-  const lightFrustum = frameSurfaces ? null : viewFrustum;
+  // A ViewportWindow's world frame draws later in the HUD
+  // (viewportWorldPass): its OccludeBsp polygons' light maps are drawn too.
+  // Without its polygons (no BSP occlusion) every light map is.
+  const viewportPasses = snap?.hud?.commands?.filter(command => command.kind === 'viewport' && command.pass) ?? [];
+  const viewportSurfaces = viewportPasses.every(command => command.pass.visibility)
+    ? viewportPasses.flatMap(command => Array.from(command.pass.visibility.nodes, node => world.nodeSurface[node])) : null;
+  let drawnLightMaps = frameSurfaces ?? (viewFrustum && visible && !visible.sky ? drawnSurfaces : null);
+  if (drawnLightMaps && viewportPasses.length) drawnLightMaps = viewportSurfaces ? new Set([...drawnLightMaps, ...viewportSurfaces]) : null;
+  // Without listed polygons, the light maps in the main frustum or a camera's.
+  const lightFrustum = frameSurfaces && drawnLightMaps ? null
+    : viewFrustum && viewportPasses.length ? [viewFrustum, ...viewportPasses.map(viewportFrustum)] : viewFrustum;
   // The frame's moving lights (docs/dynamic-lighting.md), on the drawn light
   // maps, before the texture animation that shares their light frame.
   if (playing && frame?.lights) {
@@ -1555,7 +1623,9 @@ function drawFrame(snap, time) {
   }
   phase('weapon');
   if (snap?.hud && hudRenderer) {
-    hudRenderer.render(renderer, renderer.domElement.width, renderer.domElement.height, snap.hud.commands);
+    viewportPassesDrawn = [];
+    hudRenderer.render(renderer, renderer.domElement.width, renderer.domElement.height, snap.hud.commands,
+      { viewport: command => { try { viewportWorldPass(command); } catch (error) { pauseForRuntimeError(error); } } });
     updateInfoLinkAccessibility(snap.hud.infoLink);
   }
   framePhases.hudCalls += drawCalls() - calls;

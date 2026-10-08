@@ -19,6 +19,13 @@ import { createFogPass } from './fog-pass.mjs';
 import { createWorldVisibility } from './world-visibility.mjs';
 import { loadScriptVmKernel } from '../runtime/script-vm-kernel.mjs';
 
+/** Whether a light map record's points meet a frustum, or any of a list of
+ * frustums (the main frame's and a ViewportWindow frame's). */
+function inFrustum(frustum, record) {
+  record.viewSphere ??= new THREE.Sphere().setFromPoints(record.points.map(point => new THREE.Vector3(...toView(point))));
+  return Array.isArray(frustum) ? frustum.some(each => each.intersectsSphere(record.viewSphere)) : frustum.intersectsSphere(record.viewSphere);
+}
+
 export async function createWorld(map, asset, assets, onProgress = () => {}, {batchOpaque = true, movingLightsMode} = {}) {
   const root = new THREE.Group(), textures = new TextureStore(assets), textureGPU = new Map(), materials = new Map();
   // Identity, never moved: no auto-update cascade (main.mjs, the scene).
@@ -435,11 +442,12 @@ export async function createWorld(map, asset, assets, onProgress = () => {}, {ba
      * OccludeBsp's frame draws) or a `frustum`, the light maps not drawn
      * wait. Changed tiles upload on the next flushLighting. */
     syncMovingLights(lights, movers = [], { frustum = null, drawn = null } = {}) {
+      // `frustum` may be a list (the main frame's and a ViewportWindow
+      // frame's): a light map in any of them is drawn.
       const offsets = new Map(movers.map(mover => [mover.name, mover.offset]));
       // The drawn light maps, as for the light animation below.
       const visible = drawn ? record => record.owner || drawn.has(record.surfaceIndex)
-        : frustum ? record => record.owner || frustum.intersectsSphere(record.viewSphere ??=
-          new THREE.Sphere().setFromPoints(record.points.map(point => new THREE.Vector3(...toView(point))))) : null;
+        : frustum ? record => record.owner || inFrustum(frustum, record) : null;
       // With OccludeBsp's drawn surfaces the drawn light maps are listed
       // (brush light maps are always drawn).
       const drawnRecords = drawn ? [...lighting.ownedRecords()] : null;
@@ -465,8 +473,7 @@ export async function createWorld(map, asset, assets, onProgress = () => {}, {ba
       // inputs, not on what is drawn); brush light maps always update.
       if (lighting.animatedRecords().length) {
         const inView = drawn ? record => record.owner || drawn.has(record.surfaceIndex)
-          : frustum ? record => record.owner || frustum.intersectsSphere(record.viewSphere ??=
-            new THREE.Sphere().setFromPoints(record.points.map(point => new THREE.Vector3(...toView(point))))) : () => true;
+          : frustum ? record => record.owner || inFrustum(frustum, record) : () => true;
         let merged = 0;
         const visible = record => inView(record) && ++merged > 0;
         const start = performance.now();

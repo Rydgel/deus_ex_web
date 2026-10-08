@@ -490,6 +490,19 @@ export async function createMeshBinding(runtime,actor,{id,originalObjectIndex,ke
         const spheres=spheresChanged?sphereWords():null;spheresChanged=false;
         return {root:true,groups:bits,spheres};
       },
+      /** Another root frame's decision (a ViewportWindow's DrawWorld,
+       * docs/script-window-viewport.md "Camera pass"): drawn when that
+       * frame's Frame->Sprite holds the binding (`inFrame`, from its own
+       * SetupDynamics candidates) and this frame's update posed it (drawn by
+       * the main frame or child-only); on the GPU path also the groups
+       * `frustum` keeps. */
+      viewportPass(frustum,inFrame){
+        if(disposed||(!drawnMain&&!childOnly)||!inFrame)return {root:false};
+        if(mode!=='gpu')return {root:true};
+        const bits=[];decideGroups(frustum,(group,visible)=>bits.push(visible?1:0));
+        const spheres=spheresChanged?sphereWords():null;spheresChanged=false;
+        return {root:true,groups:bits,spheres};
+      },
       /** Not drawn this frame without an update (an iterator item slot
        * the frame does not use): the page hides its root. */
       hide(){drawnMain=false;childOnly=false;return {id,visible:false,childOnly:false};},
@@ -961,6 +974,18 @@ export async function createActorMeshSim(runtime,assets,asset,{kernel,player:pla
       for(const binding of all()){const decision=binding.framePass(frustum,ids?ids.has(binding.id):true);if(decision)decisions.set(binding.id,decision);}
       return decisions;
     },
+    /** Another root frame's decisions (a ViewportWindow's DrawWorld), one
+     * per binding id (`frustum`: that frame's camera; `ids`: its
+     * Frame->Sprite bindings). */
+    viewportPasses(frustum,ids){
+      const decisions=new Map();
+      for(const binding of all())decisions.set(binding.id,binding.viewportPass(frustum,ids.has(binding.id)));
+      return decisions;
+    },
+    /** SetupDynamics' actor candidates for a frame of its own (a
+     * ViewportWindow's DrawWorld), read live: the bindings, the iterator
+     * items' bindings and the level order (packDynamics' arguments). */
+    setupArgs(items=[]){return {bindings:actors,items:itemCandidates(items),reads:null,levelIndex};},
     /** Every binding, item bindings included. */
     all,
     /** URender::Exec's MLOD (+40, positive only), MLMODE (+48, non-negative)
