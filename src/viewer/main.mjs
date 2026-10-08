@@ -1280,6 +1280,15 @@ meshLod() {
   const draw = npcPreview?.draw;
   return draw ? [...draw.bindings.values()].map(binding => binding.lodStats()) : null;
 },
+/** Validation only: the actor mesh layer's passes record what each binding
+ * has drawn in them (actor-mesh-draw.mjs setPassProbe); with no argument the
+ * records so far are returned and cleared. */
+meshPassProbe(on) {
+  const draw = npcPreview?.draw;
+  if (!draw) return null;
+  if (on !== undefined) { draw.setPassProbe(on); return null; }
+  return draw.takePassProbe();
+},
 /** The page's fog pass (fog-pass.mjs): its last frame's counters and the
  * fog meshes it drew. */
 fog() {

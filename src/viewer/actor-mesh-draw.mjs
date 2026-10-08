@@ -58,6 +58,13 @@ export function createMeshDraw(assets,creation,{gpu=null,texturePool,batches=nul
   // to give the actor its main lighting back after a child frame's pass
   // lit it with that frame's Coords and Mirror (applyPass).
   let mainLighting=null,variantLit=false;
+  // The LOD state of the main frame (the GPU record's parameters, null at
+  // full detail) and which child frame's state is on the slot or geometry
+  // (docs/script-lodmesh-lod.md "Child frames"): the key of its GPU
+  // parameters, or the CPU state shown.
+  let mainLodParams=null,appliedLodKey=null,shown=latest,variantCpu=false;
+  const lodKey=params=>`${params.count}:${params.start}:${params.active}:${params.morph}:${params.inverse}`;
+  const fullLodParams=()=>({count:gpuHandle.mesh.lod.modelVerts,start:0,active:false,morph:false,inverse:0});
   function core(){
     if(disposed)return;
     const {payload,faces,faceWords}=source;
@@ -67,16 +74,16 @@ export function createMeshDraw(assets,creation,{gpu=null,texturePool,batches=nul
       bases={vbase:gpuHandle.vbase,cbase:gpuHandle.cbase};
       if(creation.plan)gpu.setPose(gpuHandle,creation.plan);
       for(const plan of pendingPlans.splice(0))gpu.setPose(gpuHandle,plan);
-      if(pendingLod){gpu.setLod(gpuHandle,pendingLod);pendingLod=null;}
+      if(pendingLod){gpu.setLod(gpuHandle,pendingLod);mainLodParams=pendingLod;pendingLod=null;}
     }
   }
   const sourceEntry=meshSource(assets,meshes,creation.mesh);
   if(sourceEntry.ready){source=sourceEntry.ready;core();}
-  const updateNormals=()=>{
-    if(!latest.posed)return;
-    points=latest.posed;normals??=new Float32Array(points.length);
+  const updateNormals=(state=latest)=>{
+    if(!state.posed)return;
+    points=state.posed;normals??=new Float32Array(points.length);
     // The LOD's admitted faces with their resolved corners.
-    const resolved=latest.lod?.resolved;
+    const resolved=state.lod?.resolved;
     meshVertexNormalsInto(points,resolved?Uint32Array.from(resolved.filter((v,i)=>resolved[i-i%3]>=0)):faceIndices,normals);
   };
   const dispose=()=>{
@@ -115,21 +122,22 @@ export function createMeshDraw(assets,creation,{gpu=null,texturePool,batches=nul
   // The drawn corners: GetFrame's (or the LOD's morphed) positions at each
   // corner's vertex, the LOD's resolved one (actor-mesh-sim.mjs
   // lodCornerIndices); a group the LOD empties is not drawn.
-  const cpuPositions=()=>{
-    const resolved=latest.lod?.resolved??null;
+  const cpuPositions=(state=latest)=>{
+    const resolved=state.lod?.resolved??null;
+    shown=state;
     for(const group of groups){
       const positions=group.geometry.getAttribute('position');
       const indices=resolved?lodCornerIndices(group.faces,group.indices,resolved,group):group.indices;
       if(!resolved)group.lodEmpty=false;
-      copyPositions(latest.posed,positions.array,indices);positions.needsUpdate=true;
+      copyPositions(state.posed,positions.array,indices);positions.needsUpdate=true;
       setMeshBounds(group.geometry,positions.array);
       if(mode==='cpu'){group.mesh.visible=!group.lodEmpty;if(group.twin)group.twin.visible=!group.lodEmpty&&group.split;}
     }
-    if(creation.environment)updateNormals();
+    if(creation.environment)updateNormals(state);
   };
   // The corners' U and V bytes: the LOD's packed wedge dwords, or the faces'.
-  const lodUVs=()=>{
-    const scratch=latest.lod?.scratch??null,{faces}=source;
+  const lodUVs=(state=latest)=>{
+    const scratch=state.lod?.scratch??null,{faces}=source;
     for(const group of groups){
       if(group.environment)continue;
       const uv=group.geometry.getAttribute('uv');
@@ -191,7 +199,7 @@ export function createMeshDraw(assets,creation,{gpu=null,texturePool,batches=nul
     if(disposed||!ready||!root.visible||!creation.environment||!cameraPosition||mode!=='cpu'||!points)return false;
     const relative=[0,0,0],normal=[0,0,0];
     for(const group of groups)if(group.flags&POLY.Environment){
-      const uv=group.geometry.getAttribute('uv'),indices=latest.lod?.resolved&&group.lodIndices?group.lodIndices:group.indices;
+      const uv=group.geometry.getAttribute('uv'),indices=shown.lod?.resolved&&group.lodIndices?group.lodIndices:group.indices;
       for(let i=0;i<indices.length;i++){
         const at=indices[i]*3;
         relative[0]=Math.fround(points[at]-cameraPosition[0]);relative[1]=Math.fround(points[at+1]-cameraPosition[1]);
@@ -340,10 +348,10 @@ export function createMeshDraw(assets,creation,{gpu=null,texturePool,batches=nul
         return {id,path:mode,ready,visible:root.visible,lod:dropped?{faces,vertices:vertices.size,
           emptyGroups:null}:null,gpuFaces:faces,gpuVertices:vertices.size,faces:source.faces.length};
       }
-      const resolved=latest.lod?.resolved??null;
+      const resolved=shown.lod?.resolved??null;
       let faces=0;const vertices=new Set();
       if(resolved)for(let i=0;i<resolved.length;i+=3){if(resolved[i]<0)continue;faces++;vertices.add(resolved[i]).add(resolved[i+1]).add(resolved[i+2]);}
-      return {id,path:mode,ready,visible:root.visible,lod:resolved?{count:latest.lod.count,faces,vertices:vertices.size,
+      return {id,path:mode,ready,visible:root.visible,lod:resolved?{count:shown.lod.count,faces,vertices:vertices.size,
         emptyGroups:groups.filter(group=>group.lodEmpty).length}:null,
         faces:source?.faces.length??null};
     },
@@ -365,7 +373,15 @@ export function createMeshDraw(assets,creation,{gpu=null,texturePool,batches=nul
       const lodChanged=record.lod!==undefined;
       if(lodChanged)latest.lod=record.lod.resolved?record.lod:null;
       if(plan&&mode==='gpu'&&!record.toCpu){if(gpuHandle)gpu.setPose(gpuHandle,plan);else if(!source)pendingPlans.push(plan);}
-      if(record.lodParams&&mode==='gpu'&&!record.toCpu){if(gpuHandle)gpu.setLod(gpuHandle,record.lodParams);else if(!source)pendingLod=record.lodParams;}
+      if(record.lodParams&&mode==='gpu'&&!record.toCpu){
+        mainLodParams=record.lodParams;
+        if(gpuHandle)gpu.setLod(gpuHandle,record.lodParams);else if(!source)pendingLod=record.lodParams;
+      }else if(appliedLodKey!==null&&mode==='gpu'&&gpuHandle){
+        // A child frame's LOD state is still on the slot (its restoring pass
+        // did not run): the main frame's again, redone by this frame's run.
+        gpu.setLod(gpuHandle,mainLodParams??fullLodParams());
+      }
+      appliedLodKey=null;
       if(record.toCpu)toCpu();
       if(lighting&&gpuHandle&&!gpu.setLighting(gpuHandle,lighting))
         throw new Error(`${actorName}: the GPU mesh lights differ from the simulation side's layout`);
@@ -376,6 +392,8 @@ export function createMeshDraw(assets,creation,{gpu=null,texturePool,batches=nul
       if(record.material)applyMaterial(record.material);
       if(lodChanged)lodUVs();
       if(record.posed&&mode==='cpu')cpuPositions();
+      else if(variantCpu&&mode==='cpu'&&latest.posed){cpuPositions();lodUVs();}
+      variantCpu=false;
       if(record.spheres)setSpheres(record.spheres);
       if(mode==='gpu'&&latest.groups)groups.forEach((group,i)=>showGroup(group,Boolean(latest.groups[i])));
       const environmentUpload=updateView(cameraPosition);
@@ -397,13 +415,25 @@ export function createMeshDraw(assets,creation,{gpu=null,texturePool,batches=nul
       if(decision.spheres)setSpheres(decision.spheres);
       if(decision.groups)groups.forEach((group,i)=>showGroup(group,Boolean(decision.groups[i])));
       let queued=false;
-      if(decision.frame!==undefined){
+      // The LOD state of this pass: the child frame's own when it differs
+      // from the base's (`lodParams` on the GPU path, `cpuState` on the CPU
+      // path), else the main frame's.
+      let lodChanged=false;
+      if(mode==='gpu'&&gpuHandle){
+        const want=decision.lodParams??null,key=want?lodKey(want):null;
+        if(key!==appliedLodKey){gpu.setLod(gpuHandle,want??mainLodParams??fullLodParams());appliedLodKey=key;lodChanged=queued=true;}
+      }else if(mode==='cpu'&&latest.posed){
+        if(decision.cpuState){cpuPositions(decision.cpuState);lodUVs(decision.cpuState);variantCpu=true;}
+        else if(variantCpu){cpuPositions();lodUVs();variantCpu=false;}
+      }
+      if(decision.frame!==undefined&&(decision.lighting||decision.colors)){
         if(decision.lighting&&mode==='gpu'&&gpuHandle){
           if(!gpu.setLighting(gpuHandle,decision.lighting))
             throw new Error(`${actorName}: the GPU mesh lights differ from the simulation side's layout`);
           queued=variantLit=true;
         }else if(decision.colors){applyColors(decision.colors);variantLit=true;}
-      }else if(variantLit){
+      }else if(variantLit||lodChanged){
+        // The main frame's lighting again, also under a LOD state that changed.
         if(mode==='gpu'&&mainLighting&&gpuHandle){
           if(!gpu.setLighting(gpuHandle,mainLighting))throw new Error(`${actorName}: the GPU mesh lights differ from the simulation side's layout`);
           queued=true;
@@ -432,8 +462,14 @@ export function createActorMeshDraw(assets,{gpu=null,lit=false,displayGamma,feed
   const batches=gpu&&lit?createActorBatches(root,{makeMaterial:(template,members)=>
     batchMaterial(template,members,gpu,displayGamma)}):null;
   const bindings=new Map(),meshes=new Map(),errors=[];
-  let mainCamera=null;
+  let mainCamera=null,passProbe=null,passCount=0;
   return {root,bindings,errors,batches,textures,
+    /** Validation only: with `on`, every pass records what each binding it
+     * draws has on the slot or geometry once the pass's lighting run is done
+     * (lodStats), tagged with the pass's number and the decision's frame;
+     * `takePassProbe` returns and clears the records. */
+    setPassProbe(on){passProbe=on?[]:null;},
+    takePassProbe(){const records=passProbe;if(passProbe)passProbe=[];return records;},
     /** A binding's creation record: its GPU slot now, its meshes when built. */
     create(creation){
       const draw=createMeshDraw(assets,creation,{gpu,texturePool:textures,batches,displayGamma,
@@ -470,6 +506,13 @@ export function createActorMeshDraw(assets,{gpu=null,lit=false,displayGamma,feed
       }
       if(gpu){
         if(queued&&(lightView??mainCamera))gpu.lightRun(lightView??mainCamera);else gpu.cancelLightRun();
+      }
+      if(passProbe){
+        passCount++;
+        for(const [id,draw] of bindings){
+          const decision=decisions.get(id);
+          if(decision?.root&&draw.ready)passProbe.push({pass:passCount,frame:decision.frame??null,child:Boolean(lightView),...draw.lodStats()});
+        }
       }
       batches?.flush();
     },

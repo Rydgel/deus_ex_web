@@ -170,8 +170,8 @@ keeps the dated record.
   written back (Stage 6); UI Background = Snapshot and Toggle Full-Screen are
   explicit boundaries.
 
-**Still open in Stage 4:** the LOD morph's world-space rounding and per-mirror
-drawing ([LOD](docs/script-lodmesh-lod.md#play)); inside mirror and sky child
+**Still open in Stage 4:** the LOD morph's world-space rounding and the ViewportWindow
+frames' own LOD choice ([LOD](docs/script-lodmesh-lod.md#play)); inside mirror and sky child
 frames, per-frame mesh lighting, actor meshes in a sky seen through a mirror
 and the frames' own iterator items ([BSP occlusion](docs/bsp-occlusion.md));
 the security cameras' views without mirrors, decals, coronas, their own

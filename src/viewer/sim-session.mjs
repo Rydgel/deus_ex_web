@@ -417,6 +417,14 @@ export function createSimSession(game, { assets = null, events = [], exportName 
   // Each child frame's lighting frame (mesh-lighting-view.mjs childFrame) with
   // its Frame->Sprite's binding ids, in DrawFrame's order, for the actor
   // layer's per-frame SetupForActor and Light.
+  // Each child frame's DrawLodMesh inputs (its Coords and FX) with its
+  // Frame->Sprite's binding ids, in DrawFrame's order (docs/script-lodmesh-lod.md
+  // "Child frames"): the actor layer selects the LOD and calls GetFrame for an
+  // actor in each frame that draws it.
+  function lodFramesOf(frames, fov) {
+    if (!frames) return null;
+    return drawFrameOrder(frames).map(frame => ({ index: frame.index, ids: frame.main ?? new Set(), lod: { ...frame.lod, fov } }));
+  }
   function lightFramesOf(frames) {
     if (!frames || !meshLighting?.frame) return null;
     return drawFrameOrder(frames).map(frame => ({ index: frame.index, kind: frame.kind, ids: frame.main ?? new Set(),
@@ -789,7 +797,7 @@ export function createSimSession(game, { assets = null, events = [], exportName 
           const result = occludeMain({ ...args, childFrames });
           return { main: result.main, children: viewportChildren(result.frames ? result.children
             : drawn ? drawn.mayRender(view, new Set(result.mirrors)) : false), lod: lodOf(result),
-            lightFrames: lightFramesOf(result.frames) };
+            lightFrames: lightFramesOf(result.frames), lodFrames: fov !== undefined ? lodFramesOf(result.frames, fov) : null };
         } : null;
         frame = actorScene.update({ lit: Boolean(meshLighting?.frame), frustum, camera: view, cull: !children, children,
           items: inspect ? [] : live.meshItems, occlude, lod: inspect ? null : lodOf(current?.visibility), ...(pack ? { pack } : {}) });
@@ -843,10 +851,7 @@ export function createSimSession(game, { assets = null, events = [], exportName 
           if (pass.frame) {
             const frame = pass.frame, ids = frame.main ?? new Set(), frustum = drawn.frustum(pass.camera);
             for (const sprite of sprites) if (sprite.frames?.includes(frame.index)) stamped.sprites.add(sprite.handle);
-            // DrawLodMesh in this frame selects from its own Coords and FX.
-            const fov = current?.view?.fov;
-            const lod = !inspect && frame.lod && fov !== undefined ? { ...frame.lod, fov, index: frame.index } : null;
-            const decisions = actorPasses && actorScene ? actorScene.framePasses(frustum, ids, frame.index, lod) : null;
+            const decisions = actorPasses && actorScene ? actorScene.framePasses(frustum, ids, frame.index) : null;
             for (const id of ids) {
               const binding = byId.get(id);
               if (!binding) continue;

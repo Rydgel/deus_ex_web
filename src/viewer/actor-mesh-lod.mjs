@@ -45,8 +45,9 @@ export function createMeshLod(payload,faces,faceWords,{kernel=null}={}) {
   if(!topology)return null;
   const {special,modelVerts:N}=topology,V=payload.frameVertexCount,F=topology.faceCount;
   const lod=kernel?.lod??null;
+  // The topology's upload writes the kernel's WORK area: do it before `after` stages positions there.
+  lod?.handleOf(topology);
   const alphas=new Uint32Array(N),alphaFloat=new Float32Array(1),alphaWord=new Uint32Array(alphaFloat.buffer);
-  let morphed=null;
   // Lighting topologies per returned count (the reduced faces depend on it
   // alone), a few at a time; the kernel keeps an uploaded copy of each.
   const lighting=new Map();
@@ -90,7 +91,8 @@ export function createMeshLod(payload,faces,faceWords,{kernel=null}={}) {
     },
     /** After GetFrame returned `count` ordinary vertices into `output`
      * (12-byte stride, special vertices first): the drawn positions (the
-     * output itself, or a morphed copy), the final flags, the per-face
+     * output itself, or a morphed copy of its own, which a later call, another
+     * frame's, leaves alone), the final flags, the per-face
      * resolved vertices (special prefix included; -1 for a face above the
      * count) and packed wedge dwords while the LOD flag holds, and the
      * lighting topology of those faces. */
@@ -103,7 +105,7 @@ export function createMeshLod(payload,faces,faceWords,{kernel=null}={}) {
           const words=lod.words(V*3+N);
           words.floats.set(source,0);
           state=lod.morphWords(topology,selection,count,{...work,positions:special*3,alphas:V*3});
-          if(state.morph){morphed??=new Float32Array(V*3);morphed.set(lod.words(V*3+N).floats.subarray(0,V*3));positions=morphed;}
+          if(state.morph)positions=Float32Array.from(lod.words(V*3+N).floats.subarray(0,V*3));
         }else state={active:selection.active&&count<N,morph:false,start:0,count};
         if(state.active){
           // Alphas stay at WORK[V*3..] from the morph above; without a morph
@@ -113,7 +115,7 @@ export function createMeshLod(payload,faces,faceWords,{kernel=null}={}) {
           for(let i=0;i<F*3;i++){const v=out.faces[i];resolved[i]=v===0xffffffff?-1:v+special;}
         }
       }else{
-        if(selection.morph){morphed??=new Float32Array(V*3);morphed.set(source);positions=morphed;}
+        if(selection.morph)positions=Float32Array.from(source);
         const base=special*3;
         state=morphLodMesh(topology,selection,count,{
           vertex:i=>[positions[base+i*3],positions[base+i*3+1],positions[base+i*3+2]],

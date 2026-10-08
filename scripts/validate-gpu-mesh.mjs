@@ -75,6 +75,7 @@ async function capture(page,{frames,device,tolerance,admission,lodViews}) {
       environmentVertices:0,maxNormalUlp:0,maxUV:0,groups:0,certified:0,ambiguous:0,visibilityMismatches:0,
       finalComponents:0,finalExact:0,maxFinalUlp:0,worstFinal:null,cornerWedges:0,wedgeMismatches:0,worstWedge:null,
       child:{actors:0,corners:0,maxByte:0,drawnDisagreements:0,restoredOff:0,corner:null},
+      variant:{actors:0,morph:0,corners:0,maxByte:0,drawnDisagreements:0,restoredOff:0,corner:null,components:0,maxUlp:0,worst:null,wedges:0,wedgeMismatches:0,dropped:0},
       coverage:{translucent:0,modulated:0,masked:0,environment:0,unlit:0,mixedUnlit:0,blend:0,tween:0,movingLights:0,lod:0,lodMorph:0,lodReduced:0},
       fallbacks:{},errors:[]};
     const frustum=new THREE.Frustum(),matrix=new THREE.Matrix4();
@@ -243,47 +244,106 @@ async function capture(page,{frames,device,tolerance,admission,lodViews}) {
           const child={origin:reflectPoint(mainCamera.origin),axes:mainCamera.axes.map(reflectVector),mirror:-1};
           const plain={flags:actorFlags,ambient:[...setup.ambient],scaleGlow:setup.scaleGlow,unlit:[...unlit],
             lights:setup.lights.map(light=>({location:[...light.location],rradius:light.rradius,color:[...light.color]}))};
+          // Compares one lighting run's corner bytes and drawn faces with the
+          // kernel `light` on the given points and reduced faces, in `camera`
+          // with Frame.Mirror `mirror`.
+          const checkLit=(stats,{points,facesList,words,camera,mirror,colors,faceTexels})=>{
+            const reference=npc.kernel.light({points,faces:words,origin:camera.origin,axes:camera.axes,mirror,
+              ambient:setup.ambient,scaleGlow:setup.scaleGlow,unlit,lights:setup.lights,flags:actorFlags});
+            const component=(p,axis)=>{const dx=f32(p[0]-camera.origin[0]),dy=f32(p[1]-camera.origin[1]),dz=f32(p[2]-camera.origin[2]);
+              return f32(f32(f32(dx*axis[0])+f32(dy*axis[1]))+f32(dz*axis[2]));};
+            const cameraPoints=Array.from({length:V},(_,i)=>{const p=[points[i*3],points[i*3+1],points[i*3+2]];
+              return camera.axes.map(axis=>component(p,axis));});
+            const sums=cameraPoints.map(()=>[0,0,0]),keep=new Uint8Array(F),excluded=new Set();
+            for(let face=0;face<F;face++){
+              const [a,b,c]=facesList[face].vertices,p0=cameraPoints[a];
+              const unit=accumulateFaceNormal(p0,cameraPoints[b],cameraPoints[c],sums[a],sums[b],sums[c]);
+              keep[face]=faceKept(unit,p0,mirror,facesList[face].flags)?1:0;
+              const dot=unit[0]*p0[0]+unit[1]*p0[1]+unit[2]*p0[2];
+              if((faceTexels[face*4+3]>0.5?1:0)!==keep[face]){
+                stats.drawnDisagreements++;
+                if((stats.notes??=[]).length<6)stats.notes.push({actor:actor.summary.actor,face,vertices:facesList[face].vertices,flags:facesList[face].flags,
+                  gpu:faceTexels[face*4+3],keep:keep[face],dotRel:Math.abs(dot)/Math.hypot(...p0),unit,p0,label:stats.label});
+                report.maxEdgeOn=Math.max(report.maxEdgeOn,Math.abs(dot)/Math.hypot(...p0));
+                for(const vertex of facesList[face].vertices)excluded.add(vertex);
+              }
+            }
+            stats.actors++;
+            for(let face=0;face<F;face++){
+              if(!keep[face])continue;
+              for(let k=0;k<3;k++){
+                if(excluded.has(facesList[face].vertices[k]))continue;
+                stats.corners++;
+                for(let channel=0;channel<3;channel++){
+                  const expected=Math.round(reference[face*9+k*3+channel]*255),got=colors[(face*3+k)*4+channel];
+                  const error=Math.abs(got-expected);
+                  if(error>stats.maxByte){stats.maxByte=error;
+                    stats.corner={actor:actor.summary.actor,face,corner:k,channel,expected,got};}
+                }
+              }
+            }
+          };
           gpu.beginLightRun();
           if(!gpu.setLighting(handle,plain))throw new Error('child frame lighting did not fit');
           gpu.lightRun(child);
-          const childColors=gpu.read('corners',handle.cbase,F*3),childFaces=gpu.read('faces',handle.fbase,F);
-          const childReference=npc.kernel.light({points:drawnPoints,faces:litWords,origin:child.origin,axes:child.axes,mirror:-1,
-            ambient:setup.ambient,scaleGlow:setup.scaleGlow,unlit,lights:setup.lights,flags:actorFlags});
-          const component=(p,axis)=>{const dx=f32(p[0]-child.origin[0]),dy=f32(p[1]-child.origin[1]),dz=f32(p[2]-child.origin[2]);
-            return f32(f32(f32(dx*axis[0])+f32(dy*axis[1]))+f32(dz*axis[2]));};
-          const childPoints=Array.from({length:V},(_,i)=>{const p=[drawnPoints[i*3],drawnPoints[i*3+1],drawnPoints[i*3+2]];
-            return child.axes.map(axis=>component(p,axis));});
-          const sums=childPoints.map(()=>[0,0,0]),childDrawn=new Uint8Array(F),excluded=new Set();
-          for(let face=0;face<F;face++){
-            const [a,b,c]=litFaces[face].vertices,p0=childPoints[a];
-            const unit=accumulateFaceNormal(p0,childPoints[b],childPoints[c],sums[a],sums[b],sums[c]);
-            childDrawn[face]=faceKept(unit,p0,-1,litFaces[face].flags)?1:0;
-            const dot=unit[0]*p0[0]+unit[1]*p0[1]+unit[2]*p0[2];
-            if((childFaces[face*4+3]>0.5?1:0)!==childDrawn[face]){
-              report.child.drawnDisagreements++;
-              report.maxEdgeOn=Math.max(report.maxEdgeOn,Math.abs(dot)/Math.hypot(...p0));
-              for(const vertex of litFaces[face].vertices)excluded.add(vertex);
-            }
-          }
-          report.child.actors++;
-          for(let face=0;face<F;face++){
-            if(!childDrawn[face])continue;
-            for(let k=0;k<3;k++){
-              if(excluded.has(litFaces[face].vertices[k]))continue;
-              report.child.corners++;
-              for(let channel=0;channel<3;channel++){
-                const expected=Math.round(childReference[face*9+k*3+channel]*255),got=childColors[(face*3+k)*4+channel];
-                const error=Math.abs(got-expected);
-                if(error>report.child.maxByte){report.child.maxByte=error;
-                  report.child.corner={actor:actor.summary.actor,face,corner:k,channel,expected,got};}
-              }
-            }
-          }
+          checkLit(report.child,{points:drawnPoints,facesList:litFaces,words:litWords,camera:child,mirror:-1,
+            colors:gpu.read('corners',handle.cbase,F*3),faceTexels:gpu.read('faces',handle.fbase,F)});
           // The page puts the main lighting back after the pass.
-          gpu.beginLightRun();gpu.setLighting(handle,plain);gpu.lightRun(mainCamera);
+          const restoreMain=()=>{gpu.beginLightRun();gpu.setLighting(handle,plain);gpu.lightRun(mainCamera);};
+          restoreMain();
           const restored=gpu.read('corners',handle.cbase,F*3);
           for(let i=0;i<F*3*4;i+=4)for(let channel=0;channel<3;channel++)
             if(restored[i+channel]!==deviceColors[i+channel]&&drawn[Math.floor(i/12)])report.child.restoredOff++;
+          // The same actor with a child frame's own DrawLodMesh state
+          // (docs/script-lodmesh-lod.md "Child frames"): a reduced count with
+          // and without a morph, run through the page's lighting run (setLod
+          // redoes the morph, the corners and the lighting for the slot), then
+          // the main state again. The CPU LOD of the same selection over the
+          // exact output is the reference for the final pose, the corner
+          // dwords and the corner colours.
+          const topology=state.lodTopology();
+          const mainParams=state.mainLodParams();
+          if(topology&&mainParams&&published-topology.special>=8){
+            // The ordinary vertices GetFrame published (its count includes the special ones).
+            const N=topology.modelVerts,ordinary=published-topology.special;
+            for(const spec of [{count:Math.min(ordinary,Math.floor(N*0.6)),morph:true},{count:Math.min(ordinary,Math.floor(N*0.35)),morph:false},
+              {count:Math.min(ordinary,Math.floor(N*0.9)),morph:true}]){
+              if(spec.morph&&!(topology.lodMorph>0))continue;
+              if(spec.count<2||spec.count>=N)continue;
+              const selection={active:true,morph:spec.morph,detail:f32(spec.count),requested:spec.count};
+              const variant=state.lodVariant(selection,spec.count);
+              if(!variant.params.active)continue;
+              gpu.beginLightRun();
+              gpu.setLod(handle,variant.params);
+              if(!gpu.setLighting(handle,plain))throw new Error('child frame lighting did not fit');
+              gpu.lightRun(child);
+              const vFinal=gpu.read('final',handle.vbase,V),vWedges=gpu.read('cornerWedges',handle.cbase,F*3);
+              report.variant.actors++;if(spec.morph)report.variant.morph++;
+              // The final pose of every published vertex, and the corner dwords.
+              for(let i=0;i<published;i++)for(let k=0;k<3;k++){
+                const c=variant.drawn.positions[i*3+k],g=vFinal[i*4+k];
+                report.variant.components++;
+                if(!(Object.is(c,g)||c===g)){const error=Math.abs(g-c)/ulp(c);report.variant.maxUlp=Math.max(report.variant.maxUlp,error);
+                  if(error>tolerance.tweenUlp&&!report.variant.worst)report.variant.worst={actor:actor.summary.actor,i,k,c,g,count:spec.count,morph:spec.morph,state:variant.drawn.state,cpu:Array.from(variant.drawn.positions.slice(0,9)),main:Array.from(cpu.slice(0,9)),gpuFinal:Array.from(vFinal.slice(0,8)),published};}
+              }
+              const dropped=variant.drawn.resolved.filter((v,i)=>i%3===0&&v<0).length;report.variant.dropped+=dropped;
+              for(let face=0;face<F;face++)for(let k=0;k<3;k++){
+                const expected=(variant.drawn.resolved[face*3]<0?0xffffffff:variant.drawn.scratch[faces[face].wedges[k]])>>>0;
+                report.variant.wedges++;
+                if((vWedges[face*3+k]>>>0)!==expected)report.variant.wedgeMismatches++;
+              }
+              report.variant.label={count:spec.count,morph:spec.morph,start:variant.params.start};
+              checkLit(report.variant,{points:variant.drawn.positions,facesList:variant.drawn.lighting.faces,words:variant.drawn.lighting.faceWords,
+                camera:child,mirror:-1,colors:gpu.read('corners',handle.cbase,F*3),faceTexels:gpu.read('faces',handle.fbase,F)});
+              // The main frame's pass: its LOD state and lighting again.
+              gpu.beginLightRun();gpu.setLod(handle,mainParams);gpu.setLighting(handle,plain);gpu.lightRun(mainCamera);
+              const backFinal=gpu.read('final',handle.vbase,V),backWedges=gpu.read('cornerWedges',handle.cbase,F*3),backColors=gpu.read('corners',handle.cbase,F*3);
+              for(let i=0;i<published;i++)for(let k=0;k<3;k++)if(!Object.is(backFinal[i*4+k],gpuFinal[i*4+k]))report.variant.restoredOff++;
+              for(let i=0;i<F*3;i++)if((backWedges[i]>>>0)!==(gpuWedges[i]>>>0))report.variant.restoredOff++;
+              for(let i=0;i<F*3*4;i+=4)for(let channel=0;channel<3;channel++)
+                if(backColors[i+channel]!==deviceColors[i+channel]&&drawn[Math.floor(i/12)])report.variant.restoredOff++;
+            }
+          }
         }
       }
     }
@@ -383,6 +443,11 @@ try {
       ['edge-on drawn disagreements',report.maxEdgeOn<TOLERANCE.edgeOn],
       ['child frame colour bytes (reflected Coords, Mirror -1)',report.child.maxByte<=TOLERANCE.byte],
       ['child frame lighting restored',report.child.restoredOff===0],
+      ['child LOD state: final pose ulp',report.variant.maxUlp<=TOLERANCE.tweenUlp],
+      ['child LOD state: corner dwords',report.variant.wedgeMismatches===0],
+      ['child LOD state: colour bytes',report.variant.maxByte<=TOLERANCE.byte],
+      ['child LOD state: restored',report.variant.restoredOff===0],
+      ['child LOD state: compared actors',device==='cpu'||report.variant.actors>0&&report.variant.corners>0],
       ['child frame compared actors',device==='cpu'||report.child.actors>0&&report.child.corners>0],
       ['environment UV',report.maxUV<=TOLERANCE.uv],
       ['visibility',report.visibilityMismatches===0],

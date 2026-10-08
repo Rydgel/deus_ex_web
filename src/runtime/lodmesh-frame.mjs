@@ -294,3 +294,56 @@ export function materializeLodMeshFrame(plan) {
   }
   return context.output;
 }
+
+/** The scalar state of every cache entry (header fields and the pending
+ * operation logs, not the cached poses, which planning never touches) and a
+ * function that puts it back, dropping the entries created since. For a
+ * sequence of planned calls that turns out not to merge. */
+export function snapshotLodMeshCache(cache) {
+  const saved=new Map();
+  for(const [key,entry] of cache.entries)
+    saved.set(key,{entry,frame:entry.frame,sequence:entry.sequence,valid:entry.valid,completion:entry.completion,log:entry.log?.slice()});
+  return () => {
+    for(const key of [...cache.entries.keys()])if(!saved.has(key))cache.entries.delete(key);
+    for(const {entry,frame,sequence,valid,completion,log} of saved.values()){
+      entry.frame=frame;entry.sequence=sequence;entry.valid=valid;entry.completion=completion;
+      if(log)entry.log=log;else delete entry.log;
+    }
+  };
+}
+
+/** One GetFrame call per frame that draws an actor (DrawFrame's order, the
+ * main frame last), each planned in order by planLodMeshFrame, as the one
+ * plan the GPU pose pass can run (docs/script-lodmesh-lod.md "Child
+ * frames"). A call after the first in a tick leaves the cached poses as they
+ * are except for the vertices it publishes: a keyframe operation recomputes
+ * the same poses (so the one with the largest count covers them), and a
+ * tween operation after the first has alpha 0 (the first wrote the cached
+ * frame) and nothing to fill (the first expanded the valid count), so it
+ * only publishes the cache. Per channel the merged operation is the one that
+ * changes the pose (or, if none, the one publishing most), with the largest
+ * count; each cache entry's log then holds it in place of this tick's
+ * operations. Returns null when a channel mixes a keyframe operation and a
+ * tween operation (a cache entry created in this tick while tweening), which
+ * one operation cannot express: restore the cache and plan one call. */
+export function mergeLodMeshPlans(plans) {
+  if(plans.length===1)return plans[0];
+  const last=plans.at(-1),channels=[];
+  for(const channel of last.channels) {
+    const ops=plans.map(plan=>plan.channels.find(op=>op.channel===channel.channel));
+    if(ops.some(op=>!op))return null;
+    const real=ops.filter(op=>!(op.tween&&!(op.alpha>0)&&!op.fill));
+    const pool=real.length?real:ops;
+    if(pool.some(op=>op.tween!==pool[0].tween)||(pool[0].tween&&real.length>1))return null;
+    const chosen=pool.reduce((a,b)=>b.count>a.count?b:a);
+    const count=Math.max(...ops.map(op=>op.count));
+    if(chosen.fill&&count!==chosen.count)return null;
+    channels.push({merged:{...chosen,count},ops});
+  }
+  for(const {merged,ops} of channels) {
+    const entry=merged.entry,mine=new Set(ops);
+    entry.log=(entry.log??[]).filter(op=>!mine.has(op));
+    entry.log.push(merged);
+  }
+  return {...last,channels:channels.map(entry=>entry.merged)};
+}

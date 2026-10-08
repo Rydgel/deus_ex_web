@@ -9,13 +9,17 @@
 // give the same detail bits, requested count, flags and morph start, and
 // the same admitted faces and distinct vertices as the page draws.
 //
-// Child frames: each mirror or sky frame that draws a binding reports that
-// frame's own selection (its Coords and FX); it goes through the oracle too,
-// and the run counts the frames whose selection draws what the main frame's
-// does. --mirrors views the map's mirror polygons from in front instead of
-// the far actors.
+// Child frames (docs/script-lodmesh-lod.md "Child frames"): each mirror or sky
+// frame that draws a binding reports that frame's own selection (its Coords and
+// FX) and the state its GetFrame call and the LOD give (count, flags, start,
+// admitted faces and vertices); both go through the oracle with the count the
+// call returned. The page's pass for that frame (actor-mesh-draw.mjs
+// setPassProbe: what the slot's corner dwords or the geometry's resolved
+// corners hold once the pass's lighting run is done) must draw that state,
+// also when it differs from the main frame's. --mirrors views the map's mirror
+// polygons from in front instead of the far actors, at several MLODs.
 //
-//   node scripts/validate-lodmesh-lod-play.mjs [--map M] [--query gpuMesh=0] [--mirrors] [--url http://...]
+//   node scripts/validate-lodmesh-lod-play.mjs [--map M] [--query gpuMesh=0] [--mirrors] [--mlod 0.25,3] [--url http://...]
 import assert from 'node:assert/strict';
 import {execFileSync} from 'node:child_process';
 import {existsSync} from 'node:fs';
@@ -36,6 +40,12 @@ const python = process.env.NATIVE_PROBE_PYTHON ?? '.cache/native-probe-env/bin/p
 if (!existsSync(python)) { console.log('SKIP validate-lodmesh-lod-play: no native probe environment'); process.exit(0); }
 const map = option('map', '01_NYC_UNATCOIsland'), query = option('query', '');
 const mirrorViews = process.argv.includes('--mirrors');
+// --mlod a,b,c: URender's MLOD (shape LOD distance) for each sampling of a view
+// (shipped: 0.25; sim-side setLodSettings through lodProbe). With --mirrors the
+// default samples each mirror view at 0.25, 1, 3 and 10, so that frames whose
+// LOD choice differs from the main frame's (a reflection twice as far, a larger
+// MLOD) are among the child passes compared.
+const mlods = option('mlod', mirrorViews ? '0.25,1,3,10' : '').split(',').filter(Boolean).map(Number);
 /** Cameras in front of the map's mirror polygons (PF_Mirrored, surface or
  * texture flags), at 160 and 420 units along the normal, eye height above. */
 async function mirrorCameras() {
@@ -81,6 +91,7 @@ try {
   await page.waitForFunction(map => { const s = window.deusExViewer?.status(); return s?.ready && s.map === map; }, map, {timeout: 240000});
   const frames = n => page.evaluate(async n => { for (let k = 0; k < n; k++) await new Promise(r => requestAnimationFrame(r)); }, n);
   await frames(60);
+  await page.evaluate(() => window.deusExViewer.meshPassProbe(true));
   // Views: the start, four directions, and the farthest actor meshes (the
   // ones the LOD reduces most), looked at from the start.
   // --from x,y,z: start from another place (an open area of the map).
@@ -105,7 +116,8 @@ try {
       (units(Math.atan2(d[1], d[0])) + 65536) % 65536, 0]};
   }) : [{name: 'start'}, ...[0, 16384, 32768, 49152].map(yaw => ({name: `yaw ${yaw}`, rotation: [65000, yaw, 0]})),
     ...far.map(entry => ({name: `look at ${entry.actor} (${Math.round(entry.distance)})`, lookAt: entry.actor}))];
-  for (const view of views) {
+  for (const view of views) for (const mlod of mlods.length ? mlods : [null]) {
+    await page.evaluate(settings => window.deusExViewer.lodProbe({settings}), mlod === null ? false : {shapeLOD: mlod});
     if (view.location) { await page.evaluate(args => window.deusExViewer.placeProbe(args), {location: view.location, rotation: view.rotation}); await frames(10); }
     if (view.rotation || view.lookAt) await page.evaluate(args => window.deusExViewer.placeProbe(args), {rotation: view.rotation ?? null, lookAt: view.lookAt ?? null});
     await frames(30);
@@ -114,18 +126,25 @@ try {
     // drawn by the page from the state the probe reports.
     const sample = await page.evaluate(async () => {
       await window.deusExViewer.settled();
+      window.deusExViewer.meshPassProbe();
       const sim = await window.deusExViewer.lodProbe({});
       for (let k = 0; k < 2; k++) await new Promise(requestAnimationFrame);
       const drawn = window.deusExViewer.meshLod();
       for (let k = 0; k < 2; k++) await new Promise(requestAnimationFrame);
+      const passes = window.deusExViewer.meshPassProbe();
       await window.deusExViewer.settled();
-      return {sim, drawn, again: await window.deusExViewer.lodProbe({})};
+      return {sim, drawn, passes, again: await window.deusExViewer.lodProbe({})};
     });
-    const again = new Map((sample.again ?? []).map(row => [row.id, JSON.stringify(row)]));
-    samples.push({yaw: view.name, sim: sample.sim, drawn: sample.drawn,
-      stable: new Set((sample.sim ?? []).filter(row => again.get(row.id) === JSON.stringify(row)).map(row => row.id))});
+    // A row is stable when the LOD state it reports (selections, counts, flags,
+    // admitted faces, each child frame's) is the same in both probes; the
+    // camera may drift by an ulp between them.
+    const signature = row => JSON.stringify([row.returned, row.state, row.admitted, row.vertices, row.selection,
+      (row.frames ?? []).map(f => [f.index, f.returned, f.state, f.admitted, f.vertices, f.selection])]);
+    const again = new Map((sample.again ?? []).map(row => [row.id, signature(row)]));
+    samples.push({yaw: mlod === null ? view.name : `${view.name} @MLOD ${mlod}`, sim: sample.sim, drawn: sample.drawn, passes: sample.passes ?? [],
+      stable: new Set((sample.sim ?? []).filter(row => again.get(row.id) === signature(row)).map(row => row.id))});
     const drawnRows = (sample.sim ?? []).filter(row => row.drawn || row.frames?.length);
-    console.error(`${view.name}: ${drawnRows.length} drawn, ${drawnRows.filter(row => row.state?.active).length} reduced, ` +
+    console.error(`${mlod === null ? view.name : `${view.name} @MLOD ${mlod}`}${view.location ? ` at ${view.location.map(Math.round)} rot ${view.rotation}` : ''}: ${drawnRows.length} drawn, ${drawnRows.filter(row => row.state?.active).length} reduced, ` +
       `${drawnRows.reduce((n, row) => n + (row.frames?.length ?? 0), 0)} child-frame draws` +
       ` [${drawnRows.map(row => `${row.actor}:${row.returned}${row.frames?.length ? `+${row.frames.length}f` : ''}`).join(' ')}]`);
   }
@@ -151,12 +170,13 @@ for (const sample of samples) {
       entry.cases.push({name, ...inputs, fxBits: row.frame.fxBits, coordsBits: row.frame.coordsBits, returnedCount: row.returned});
       checks.push({key, name, row, tanBits: row.frame.tanBits, page: sample.stable.has(row.id) ? drawn.get(row.id) ?? null : null});
     }
-    // Each child frame's own selection (the returned count is not rerun).
+    // Each child frame's own selection, with the count its GetFrame call returned.
     for (const [k, frame] of (row.frames ?? []).entries()) {
       const frameName = `${name}:frame${frame.index ?? k}`;
       entry.cases.push({name: frameName, ...inputs, fxBits: frame.fxBits, coordsBits: frame.coordsBits,
-        returnedCount: Math.max(1, frame.selection.requested)});
-      frameChecks.push({key, name: frameName, row, frame, tanBits: row.frame.tanBits});
+        returnedCount: Math.max(1, frame.returned ?? frame.selection.requested)});
+      frameChecks.push({key, name: frameName, row, frame, tanBits: row.frame.tanBits, sample,
+        page: sample.stable.has(row.id) ? (sample.passes ?? []).filter(p => p.id === row.id && p.frame === frame.index) : []});
     }
   }
 }
@@ -173,7 +193,7 @@ for (const [key, entry] of byMesh) {
 const reference = JSON.parse(execFileSync(python, ['scripts/native-lodmesh-lod-oracle.py', root],
   {input: JSON.stringify(specs), encoding: 'utf8', maxBuffer: 256 << 20}));
 const tally = {rows: checks.length, active: 0, morph: 0, reduced: 0, minCount: Infinity, meshes: byMesh.size, pageCompared: 0,
-  frames: frameChecks.length, framesSame: 0, framesDiffer: []};
+  frames: frameChecks.length, framesSame: 0, framesDiffer: [], passes: 0, passesDiffer: 0};
 for (const check of frameChecks) {
   const {at} = meshes.get(check.key), original = reference.meshes[at].cases.find(c => c.name === check.name);
   const {frame} = check, label = `${check.name} (${specs[at].name})`;
@@ -181,7 +201,31 @@ for (const check of frameChecks) {
   assert.equal(frame.selection.requested, original.selection.requested, `${label}: child frame requested count`);
   assert.equal(frame.selection.active, Boolean(original.selection.active), `${label}: child frame LOD flag`);
   assert.equal(frame.selection.morph, Boolean(original.selection.morph), `${label}: child frame morph flag`);
+  // The frame's own final flags, start, admitted faces and vertices.
+  const finalActive = Boolean(original.state.active), finalMorph = Boolean(original.state.morph);
+  assert.equal(Boolean(frame.state?.active), finalActive, `${label}: child frame LOD flag after the morph`);
+  assert.equal(Boolean(frame.state?.morph), finalMorph, `${label}: child frame morph flag after the morph`);
+  if (finalMorph) assert.equal(frame.state.start, original.state.start, `${label}: child frame morph start`);
+  const admitted = original.faces.filter(face => face.admitted), vertices = new Set(admitted.flatMap(face => face.vertices));
+  assert.equal(frame.admitted, admitted.length, `${label}: child frame admitted faces`);
+  if (finalActive && frame.vertices !== null) assert.equal(frame.vertices, vertices.size, `${label}: child frame distinct vertices`);
   if (frame.same) tally.framesSame++; else tally.framesDiffer.push(`${check.name}: main ${frame.main}, frame ${frame.here}`);
+  // The page's pass for that frame draws it: the slot's corner dwords (GPU) or
+  // the geometry's resolved corners (CPU) hold this frame's state.
+  const all = new Set(original.faces.flatMap(face => face.vertices ?? []));
+  for (const pass of check.page) {
+    if (!pass.ready) continue;
+    if (pass.path === 'gpu') {
+      assert.equal(pass.gpuFaces, admitted.length, `${label}: faces the GPU resolves in the child pass`);
+      assert.equal(pass.gpuVertices, finalActive ? vertices.size : all.size, `${label}: vertices the GPU resolves in the child pass`);
+    } else if (finalActive) {
+      assert.ok(pass.lod, `${label}: the child pass draws the reduced faces`);
+      assert.equal(pass.lod.faces, admitted.length, `${label}: faces the child pass draws`);
+      assert.equal(pass.lod.vertices, vertices.size, `${label}: vertices the child pass draws`);
+    } else assert.equal(pass.lod, null, `${label}: the child pass draws every face`);
+    tally.passes++;
+    if (!frame.same) tally.passesDiffer++;
+  }
 }
 for (const check of checks) {
   const {at, topology} = meshes.get(check.key), original = reference.meshes[at].cases.find(c => c.name === check.name);
@@ -219,5 +263,6 @@ console.log(`validate-lodmesh-lod-play: PASS (${map}${query ? `, ${query}` : ''}
   `${tally.meshes} meshes; ${tally.active} with reduced topology, ${tally.morph} morphing, ${tally.reduced} below ModelVerts ` +
   `(down to ${tally.minCount === Infinity ? '-' : tally.minCount}); the selection, flags, start, admitted faces and vertices equal ` +
   `the original's, and the page draws them (${tally.pageCompared} compared, ${tally.gpu ?? 0} on the GPU path); ` +
-  `${tally.frames} child-frame selections equal the original's, ${tally.framesSame} draw what the main frame's does` +
-  `${tally.framesDiffer.length ? `, ${tally.framesDiffer.length} differ (${tally.framesDiffer.slice(0, 4).join('; ')})` : ''})`);
+  `${tally.frames} child-frame states equal the original's, ${tally.framesSame} the main frame's own and ` +
+  `${tally.framesDiffer.length} different (${tally.framesDiffer.slice(0, 3).join('; ')}); the page's child passes drew them: ` +
+  `${tally.passes} compared, ${tally.passesDiffer} of a frame whose state differs from the main frame's)`);
