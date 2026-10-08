@@ -297,9 +297,10 @@ unchanged.
 - **Pass plan.** `mirror-passes.mjs` `planFramePasses` plans the mirror
   passes from these frames on both sides. A pass is a mirror frame whose
   group the page supports. Its scissor is the frame span's bounds, and its
-  children are its own mirror frames, up to Recursion 3. A sky frame made
-  inside a mirror frame is drawn into that mirror's target first, with the
-  SkyZone view turned like the mirror camera.
+  children are its own mirror frames, up to Recursion 3. The sky frames
+  made inside a mirror frame (`node.skies`) are drawn into that mirror's
+  target first, each with the camera of its own Coords
+  ([below](#a-sky-frame-inside-a-mirror-frame)).
 - **Drawing.** Each mirror and sky pass draws the world through its own
   frame's nodes and mover polygons (`world-visibility.mjs`) and only the
   sprite records its Frame->Sprite holds (`sprite-scene.mjs` `framePass`).
@@ -312,6 +313,78 @@ unchanged.
   frame's Coords, Mirror and LeafLights, in DrawFrame's order ([mesh
   lighting](mesh-lighting.md#one-call-per-frame-child-frames-lighting-2026-10-08);
   frames carry `mirror` and `planes` beside `coords`).
+### A sky frame inside a mirror frame
+
+(2026-10-08.) The page drew a sky frame made inside a mirror frame with the
+root frame's SkyZone view and no actors, and nothing stamped its
+Frame->Sprite. It now draws like any other frame:
+
+- **Camera.** The sky request turns each of the parent's axes by the
+  SkyZone's roll, pitch and yaw and moves the origin to the SkyZone's
+  Location (`occlude.rs` `sky_coords`, "Sky request" above). The frame's own
+  Coords carry both: its origin is the Location, and the world turn `M` is
+  `sky axes = M * parent axes` over the two frames' orthonormal axes.
+  `mirror-passes.mjs` `skyFrameCamera` conjugates `M` into the viewer's
+  axes and applies it to the parent camera's world rotation, so a mirrored
+  or negated parent keeps its handedness. The sky frame of a zone other than
+  the camera's now has its own SkyZone, not the root frame's.
+  `validate-sky-frame-camera.mjs` takes every sky frame the Rust
+  OccludeBsp makes (root and inside mirrors, 00_Training, both
+  01/03_NYC_UNATCOIsland, 02_NYC_Smug, 11_Paris_Everett, on the maps'
+  rotations and on random ones) and checks the camera against the rotator
+  form the root sky frame drew with, on random and reflected parents: the
+  origin is the SkyZone's Location bit for bit and the matrices agree to
+  5.8e-4. That difference is the original's: GMath's trig table steps the
+  roll, pitch and yaw to multiples of four units (3.8e-4 rad), which the
+  exact Euler form lacks.
+- **Actors and stamps.** `drawn-set.mjs` `passes` makes each such sky frame a
+  `sky` pass (`within` its mirror node) before the mirror's own, as the page
+  draws them. `stamps()` then stamps its Frame->Sprite like any frame's and
+  decides its actors with `framePasses` (lit with that frame's Coords by
+  the per-frame lighting), and hands the decisions to the page as
+  `passSky`, aligned with the mirror passes; a frame that draws no actor
+  carries none. The page applies them before drawing the sky into the
+  mirror's target (the actors' GPU lighting run resets the GL state, so it
+  cannot run inside the target) and puts the mirror frame's own decisions
+  back after it (`main.mjs` `drawSkyFrame`).
+- **Several sky frames.** A parent could hold more than one sky frame (a
+  second fake-backdrop surface); a mirror frame's are all drawn, each with
+  depth cleared after it. The root frame's sky pass is still the first one
+  only. None occurred: the 400 cases of `validate-sky-frame-camera.mjs` made
+  no parent with two sky frames.
+
+**Census.** The shipped maps hold no actor that these frames draw:
+- *Static.* In all 42 maps with a SkyZoneInfo (38 single-player, 4 DXMP), the actors standing in the
+  sky zone are Brushes, Lights, Spotlights and, in 00_Intro and
+  06_HongKong_VersaLife, level content that shares the zone (00_Intro:
+  GasGrenade, DeusExMover, AmbientSound, PathNode; VersaLife: PathNodes,
+  six NPCs, two movers, a Trigger, three PatrolPoints, a PigeonGenerator).
+- *Dynamic.* In Play (worker mode), cameras aimed at every mirrored surface
+  of the 26 maps that have a sky zone and a mirror (rings of eyes at several
+  distances and offsets: 48 views per floor mirror, 12 per wall mirror)
+  made a sky frame inside a mirror frame in 00_Training (19 of 192 views of
+  a separate sweep around the entrance), 06_HongKong_VersaLife (7),
+  02/04/08_NYC_Smug (1 each), 03_NYC_UNATCOIsland (8), 10_Paris_Chateau (7)
+  and 10_Paris_Metro (2). The Frame->Sprite of every one of them held no
+  actor. In VersaLife that holds
+  although its sky zone has NPCs: they are not visible from the sky camera.
+  (A DT_Sprite record or an iterator's item in such a frame is not counted
+  there; no particle generator or laser stands in a sky zone.)
+
+**Verification** (`validate-sky-in-mirror-play.mjs`, worker mode). Without
+shipped content, the fixture moves a plant (`moverProbe`) into the sky
+frame's own view on 00_Training, at a point along the ray through its span
+(`frame.bounds`, the frame's FX2/FY2/Proj.Z and its Coords axes), at a depth
+from 300 down to 40 until the sky frame's Frame->Sprite holds it. Then:
+the sky frame alone holds it; `LastRenderTime` is stamped (the base code does
+not); the page's renderer draws it in the pass whose camera is at the
+SkyZone's Location and in no other pass; and the frame differs from the
+same frame with the plant moved out of the world by 1,468 pixels, all inside
+the sky frame's span on the screen (the span is mirrored on the screen) and
+none outside, against 3 by the moving scene. The plant is dark (the sky zone
+is nearly unlit; the threshold is 3 levels). It passes with `?sim=inline` and
+`?simVerify=1` too, and fails on the previous code at the stamp.
+
 - **simVerify.** It compares the actors three.js draws. A Frame->Sprite
   actor whose groups all lie outside a pass's view is stamped, not drawn.
 
@@ -337,9 +410,6 @@ and `validate-gpu-mesh` pass too.
 - Fog maps in mirror and sky passes are the main frame's: SetupForSurf per
   child frame is not run, so a fog surface seen only in a child pass has no
   fog map.
-- Actor meshes are not drawn in a sky frame made inside a mirror frame;
-  that frame's sprites and world are drawn.
-- A sky frame inside a mirror frame uses the root frame's SkyZone view.
 - Iterator items are the root frame's in every child frame. The original
   runs the iterator again for each frame.
 - The child tangent comes from the x87-tan.mjs model, which is checked
@@ -678,8 +748,7 @@ then wire into Play.
 
 Ported and in Play on 2026-10-07 ("Child frames" above). Each child frame's
 own fog maps followed the same day ([volumetric fog](volumetric-fog.md),
-"Play"). What remains: actor meshes in a sky frame inside a mirror frame,
-each frame's own iterator items, and a measured FPTAN for the 24-bit
+"Play"). What remains: each frame's own iterator items, and a measured FPTAN for the 24-bit
 argument.
 
 ### 2. The moving brush tracker (done)

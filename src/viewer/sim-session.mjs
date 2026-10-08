@@ -452,8 +452,6 @@ export function createSimSession(game, { assets = null, events = [], exportName 
     result.children = children;
     pending.frame.visibility = result;
     // DrawWorld draws the sky frame only when OccludeBsp made one.
-    // The SkyZone view stays for the sky frames inside mirror frames.
-    result.skyView = pending.frame.sky ?? null;
     if (!result.sky) pending.frame.sky = null;
     return result;
   }
@@ -704,7 +702,7 @@ export function createSimSession(game, { assets = null, events = [], exportName 
         const stamps = this.stamps({ size: { x: width, y: height }, drawWorld, sky, mirrors: input.mirrors, sprites, camera: inspect, requested,
           actorPasses: Boolean(actorScene) && !stopped(), frames, rect: begun?.renderRect ?? null });
         collect(stamps.errors);
-        snapshot.stamps = { passDecisions: stamps.passDecisions, passFrames: stamps.passFrames, mainDecisions: stamps.mainDecisions,
+        snapshot.stamps = { passDecisions: stamps.passDecisions, passFrames: stamps.passFrames, passSky: stamps.passSky, mainDecisions: stamps.mainDecisions,
           skyDecisions: stamps.skyDecisions, skyFrame: stamps.skyFrame };
       }
       time('mirrors');
@@ -799,8 +797,8 @@ export function createSimSession(game, { assets = null, events = [], exportName 
      * drew, the main frame's again. `size` is the drawing buffer's. */
     stamps({ size, drawWorld, sky = null, mirrors = true, sprites = [], camera: inspect = null, actorPasses = true, requested = null,
       frames = null, rect = null }) {
-      const errors = [], passDecisions = [], passFrames = [];
-      let mainDecisions = null, skyDecisions = null, skyFrame = null;
+      const errors = [], passDecisions = [], passFrames = [], passSky = [];
+      let mainDecisions = null, skyDecisions = null, skyFrame = null, insideSky = [];
       // A child frame's lighting camera for the page's lightRun: Coords and Mirror.
       const lightCamera = frame => ({ origin: frame.coords.slice(0, 3),
         axes: [frame.coords.slice(3, 6), frame.coords.slice(6, 9), frame.coords.slice(9, 12)], mirror: frame.mirror });
@@ -850,9 +848,13 @@ export function createSimSession(game, { assets = null, events = [], exportName 
               if (binding.drawnIn(frustum, decisions?.get(id) ?? { root: true })) stamped.drawn.add(binding.actor);
             }
             if (decisions) {
-              if (pass.kind === 'mirror') { passDecisions.push(decisions); passFrames.push(lightCamera(frame)); }
+              // A sky frame inside a mirror frame: its decisions ride with
+              // that mirror's pass (the page draws it into the mirror's
+              // target first); a frame that draws no actor needs none.
+              if (pass.within) { if (ids.size) insideSky.push({ frame: frame.index, decisions, light: lightCamera(frame) }); }
+              else if (pass.kind === 'mirror') { passDecisions.push(decisions); passFrames.push(lightCamera(frame)); passSky.push(insideSky); insideSky = []; }
               else { skyDecisions = decisions; skyFrame = lightCamera(frame); }
-              if (pass === lastMirror || pass.kind === 'sky') mainDecisions = actorScene.framePasses(null, null);
+              if (pass === lastMirror || (pass.kind === 'sky' && !pass.within)) mainDecisions = actorScene.framePasses(null, null);
             }
             continue;
           }
@@ -860,7 +862,7 @@ export function createSimSession(game, { assets = null, events = [], exportName 
           if (pass.kind === 'sky' || !actorScene) continue;
           const frustum = drawn.frustum(pass.camera);
           const decisions = pass.kind === 'mirror' && actorPasses ? actorScene.passVisibility(frustum) : null;
-          if (decisions) { passDecisions.push(decisions); passFrames.push(null); }
+          if (decisions) { passDecisions.push(decisions); passFrames.push(null); passSky.push([]); }
           for (const binding of bindings)
             if (!stamped.bindings.has(binding.id) && binding.drawnIn(frustum, decisions?.get(binding.id) ?? null)) {
               stamped.actors.add(binding.actor); stamped.bindings.set(binding.id, binding.actor); stamped.source.set(binding.actor, pass.kind);
@@ -883,7 +885,7 @@ export function createSimSession(game, { assets = null, events = [], exportName 
         // draw whatever their own bHidden).
         for (const actor of stamped.occluded) if (!stamped.actors.has(actor)) runtime.writeNamed(actor, 'LastRenderTime', time);
       } catch (error) { failed = true; errors.push(plainError(error)); }
-      return { errors, passDecisions, passFrames, mainDecisions, skyDecisions, skyFrame };
+      return { errors, passDecisions, passFrames, passSky, mainDecisions, skyDecisions, skyFrame };
     },
     /** DrawFrame's corona pass, which closes the world frame
      * (corona-scan.mjs): the icons over the render rect's size, or else the
@@ -1010,7 +1012,6 @@ export function createSimSession(game, { assets = null, events = [], exportName 
             try { frame.visibility = visibility(frame.view, w, h); }
             catch (error) { fail(error); }
             // DrawWorld draws the sky frame only when OccludeBsp made one.
-            if (frame.visibility) frame.visibility.skyView = frame.sky ?? null;
             if (frame.visibility && !frame.visibility.sky) frame.sky = null;
           }
         }

@@ -176,8 +176,6 @@ const scene = new THREE.Scene();
 // update or flag their own (validate-scene-matrices.mjs).
 scene.matrixAutoUpdate = false;
 const camera = createPlayCamera(), skyCamera = new THREE.PerspectiveCamera(75, 1, 1, 65536);
-// A sky frame inside a mirror frame (drawFrame drawSkyFrame).
-const skyFrameCamera = new THREE.PerspectiveCamera(), skyRotation = new THREE.Matrix4(), skyFrameBasis = new THREE.Matrix4();
 // The main frame draws decals; child frames (mirrors, sky) do not (decal-scene.mjs).
 camera.layers.enable(DECAL_LAYER);
 const raycaster = new THREE.Raycaster();
@@ -1600,23 +1598,24 @@ function drawFrame(snap, time) {
     world.visibility.select(record.nodes, record.movers ?? null);
     spriteScene?.framePass(record.index);
   } : null;
-  // A sky frame OccludeBsp made (in the root frame or inside a mirror
-  // frame): the SkyZone's view turned like the frame's camera
-  // (0x10b184b1), its own world and sprites, no actor meshes.
-  const skyView = visible?.skyView ?? null;
-  const drawSkyFrame = (record, base) => {
-    if (!skyView) return;
-    skyFrameCamera.copy(base, false); skyFrameCamera.matrixAutoUpdate = skyFrameCamera.matrixWorldAutoUpdate = false;
-    skyFrameCamera.layers.disable(DECAL_LAYER);
-    skyFrameCamera.matrixWorld.multiplyMatrices(skyRotation.makeRotationFromEuler(rotatorEuler(skyView.rotation)),
-      skyFrameBasis.extractRotation(base.matrixWorld)).setPosition(...toView(skyView.location));
-    skyFrameCamera.matrixWorldInverse.copy(skyFrameCamera.matrixWorld).invert();
-    skyFrameCamera.position.setFromMatrixPosition(skyFrameCamera.matrixWorld);
+  // A sky frame OccludeBsp made inside a mirror frame: the camera of its own
+  // Coords (mirror-passes.mjs skyFrameCamera, 0x10b184b1), its own world
+  // and sprites, and its own Frame->Sprite actors (the simulation side's
+  // `passSky`, applied now and the mirror frame's put back after).
+  const drawSkyFrame = (record, frameCamera, node) => {
     const markersVisible = world.markers.visible; world.markers.visible = false;
-    const npcVisible = npcPreview?.root.visible; if (npcPreview) npcPreview.root.visible = false;
+    const npcVisible = npcPreview?.root.visible, target = renderer.getRenderTarget();
+    const actors = npcPreview ? stampFrame?.passSky?.[node.passAt]?.find(entry => entry.frame === record.index) ?? null : null;
+    // The actors' lighting run resets the GL state, the render target with it.
+    if (actors) { npcPreview.draw.pass(actors.decisions, fromView(frameCamera.position.toArray()), actors.light); renderer.setRenderTarget(target); }
+    else if (npcPreview) npcPreview.root.visible = false;
     framePass(record);
-    try { renderer.render(scene, skyFrameCamera); }
-    finally { framePass(null); world.markers.visible = markersVisible; if (npcPreview) npcPreview.root.visible = npcVisible; }
+    try { renderer.render(scene, frameCamera); }
+    finally {
+      framePass(null); world.markers.visible = markersVisible;
+      if (npcPreview) npcPreview.root.visible = npcVisible;
+      if (actors) { node.reapply(); renderer.setRenderTarget(target); }
+    }
   };
   world.mirrors.render(renderer, scene, camera, { markers: world.markers, sky: world.sky, requested,
     frames, rect: frames ? (renderRect ?? null) : null, framePass, skyIn: frames ? drawSkyFrame : null,
@@ -1624,7 +1623,11 @@ function drawFrame(snap, time) {
       const at = passIndex, decisions = node ? stampFrame?.passDecisions[passIndex++] : stampFrame?.mainDecisions;
       if (node && !decisions) throw new Error('The page drew a mirror pass the simulation side did not plan');
       // A child frame's pass lights the actors it draws with that frame's Coords and Mirror.
-      npcPreview.draw.pass(decisions ?? new Map(), position, node ? stampFrame?.passFrames?.[at] ?? null : null);
+      const light = node ? stampFrame?.passFrames?.[at] ?? null : null;
+      npcPreview.draw.pass(decisions ?? new Map(), position, light);
+      // A sky frame inside this mirror frame finds its decisions at `passAt`
+      // and puts these back with `reapply`.
+      if (node) { node.passAt = at; node.reapply = () => npcPreview.draw.pass(decisions, position, light); }
     } : null });
   phase('mirrors');
   let calls = drawCalls(); framePhases.mirrorCalls += calls;

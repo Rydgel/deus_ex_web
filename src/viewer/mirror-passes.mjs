@@ -7,6 +7,7 @@
  * would use. */
 import * as THREE from 'three';
 import { DECAL_LAYER } from './render-layers.mjs';
+import { toView } from '../unreal/geometry.mjs';
 
 /** OccludeBsp takes the mirror path only while Frame->Recursion (+0x1c) is
  * below 3 (0x10b18881); CreateChildFrame gives a child its parent's
@@ -125,11 +126,40 @@ function spanBox(frame, rect, size) {
   return right > x && bottom > top ? { x, y: size.y - bottom, width: right - x, height: bottom - top } : null;
 }
 
+const skyRotation = new THREE.Matrix4(), skyBasis = new THREE.Matrix4();
+
+/** A sky child frame's camera (Render.dll 0x10b184b1..0x10b187d1), from its
+ * parent's camera and the two frames' own Coords (12 binary32: origin, then
+ * the X, Y and Z axes in world space): the request turns each of the
+ * parent's axes by the SkyZone's roll, pitch and yaw (FCoords *=, over the
+ * Coords with the origin zeroed) and moves the origin to the SkyZone's
+ * Location. The world turn M is read back from the two frames' axes
+ * (`sky axes = M * parent axes`, both orthonormal), conjugated into the
+ * viewer's axes and applied to the parent camera's world rotation, so the
+ * parent's own handedness (mirrored, odd depths negated) carries over; the
+ * origin is the frame's own. `parent` is the camera the parent frame draws
+ * with. */
+export function skyFrameCamera(parent, parentCoords, skyCoords) {
+  const p = k => parentCoords.slice(3 + 3 * k, 6 + 3 * k), s = k => skyCoords.slice(3 + 3 * k, 6 + 3 * k);
+  const M = [0, 1, 2].map(i => [0, 1, 2].map(j => s(0)[i] * p(0)[j] + s(1)[i] * p(1)[j] + s(2)[i] * p(2)[j]));
+  // The viewer's reflection (toView: x' = y, y' = z, z' = -x) around M.
+  const T = [[0, 1, 0], [0, 0, 1], [-1, 0, 0]];
+  const TM = T.map(row => [0, 1, 2].map(j => row[0] * M[0][j] + row[1] * M[1][j] + row[2] * M[2][j]));
+  const Q = TM.map(row => [0, 1, 2].map(j => row[0] * T[j][0] + row[1] * T[j][1] + row[2] * T[j][2]));
+  skyRotation.set(Q[0][0], Q[0][1], Q[0][2], 0, Q[1][0], Q[1][1], Q[1][2], 0, Q[2][0], Q[2][1], Q[2][2], 0, 0, 0, 0, 1);
+  const camera = new THREE.PerspectiveCamera();
+  camera.copy(parent, false); camera.matrixAutoUpdate = camera.matrixWorldAutoUpdate = false;
+  camera.matrixWorld.multiplyMatrices(skyRotation, skyBasis.extractRotation(parent.matrixWorld)).setPosition(...toView(skyCoords.slice(0, 3)));
+  camera.matrixWorldInverse.copy(camera.matrixWorld).invert();
+  camera.position.setFromMatrixPosition(camera.matrixWorld);
+  return camera;
+}
+
 /** OccludeFrame's mirror child frames as passes (the frames of
  * sim-session.mjs `visibility`, child frames on): each mirror frame
  * through its group, with the reflected camera, its span's bounds (in
- * `rect`, the frame's render viewport) as its region, the sky frame
- * OccludeBsp made inside it (`sky`) and its own mirror children; frames
+ * `rect`, the frame's render viewport) as its region, the sky frames
+ * OccludeBsp made inside it (`skies`, each with its camera) and its own mirror children; frames
  * whose surface has no supported group are left out with their children.
  * The nodes are those of planMirrorPasses, with `frame` added. */
 export function planFramePasses(source, groups, size, frames, rect = null) {
@@ -158,8 +188,11 @@ export function planFramePasses(source, groups, size, frames, rect = null) {
       // The span is in screen pixels; a depth's target is mirrored against
       // its parent's (the parent's is screen space flipped depth - 1 times).
       const bounds = (depth - 1) % 2 ? flip(box) : box, scissor = flip(bounds);
-      const node = { group, camera, world, depth, scissor, index: out.length, bounds, frame,
-        sky: (byParent.get(frame.index) ?? []).find(f => f.kind === 'sky') ?? null };
+      // The sky child frames made inside this mirror frame, each with its own
+      // camera from its own Coords.
+      const skies = (byParent.get(frame.index) ?? []).filter(f => f.kind === 'sky')
+        .map(sky => ({ frame: sky, camera: skyFrameCamera(camera, frame.coords, sky.coords) }));
+      const node = { group, camera, world, depth, scissor, index: out.length, bounds, frame, skies };
       node.children = children({ camera, world, depth, scissor, through: group }, frame.index);
       out.push(node);
     }

@@ -116,8 +116,9 @@ export function createMirrors(notes, displayGamma) {
   /** `frames` (OccludeFrame's child frames, sim-session.mjs visibility;
    * `rect` their render viewport in drawing-buffer pixels) plan the passes
    * instead of the frustum; `framePass(frame)` selects one frame's world and
-   * sprites (null: all again) and `skyIn(skyFrame, camera)` draws the sky
-   * frame OccludeBsp made inside a mirror frame, before the mirror's view. */
+   * sprites (null: all again) and `skyIn(skyFrame, camera, node)` draws a sky
+   * frame OccludeBsp made inside a mirror frame (its own camera, from its
+   * own Coords), before the mirror's view. */
   function render(renderer, scene, source, { markers, updateActors, sky, requested = null, frames = null, rect = null,
     framePass = null, skyIn = null } = {}) {
     stats.renderedPlanes = 0;stats.depth=0;stats.scissorPixels=0;
@@ -160,11 +161,11 @@ export function createMirrors(notes, displayGamma) {
         updateActors?.(fromView(child.position.toArray()), child, node);
         renderer.setRenderTarget(target); renderer.setClearColor(0, 1);
         renderer.clear();
-        // The sky frame inside this mirror frame, unclipped, then depth again.
-        if (node.sky && skyIn) {
+        // The sky frames inside this mirror frame, unclipped, each with depth
+        // cleared after it.
+        if (skyIn && node.skies.length) {
           renderClip.normal.set(0, 0, 0); renderClip.constant = 1; renderer.clippingPlanes = clippingPlanes;
-          skyIn(node.sky, child);
-          renderer.clearDepth();
+          for (const sky of node.skies) { skyIn(sky.frame, sky.camera, node); renderer.clearDepth(); }
         }
         framePass?.(node.frame ?? null);
         // Clip geometry behind the original mirror plane, not the reflected

@@ -83,14 +83,21 @@ export function createDrawnSet(scene) {
      * requestedGroup). With `frames` (OccludeFrame's child frames,
      * sim-session.mjs visibility) the mirror passes are its mirror frames
      * (planFramePasses, `rect` the render viewport) and the sky pass its
-     * root sky frame, each pass with its `frame`. */
+     * root sky frame, each pass with its `frame`; a sky frame inside a
+     * mirror frame is a 'sky' pass of its own (`within`: the mirror's node),
+     * ahead of that mirror's pass. */
     passes({ camera, sky, drawWorld, size, mirrors = true, requested = null, frames = null, rect = null }) {
       const passes = [];
       let mirrored = false;
       if (frames) {
         const plan = mirrors && groups.length ? planFramePasses(camera, groups, size, frames, rect) : [];
         mirrored = plan.length > 0;
-        for (const node of passOrder(plan)) passes.push({ kind: 'mirror', camera: node.camera, through: node.group, node, frame: node.frame });
+        // A mirror frame's sky frames draw into its target before its own
+        // view (mirrors.mjs draw), after the mirror frames inside it.
+        for (const node of passOrder(plan)) {
+          for (const inside of node.skies) passes.push({ kind: 'sky', camera: inside.camera, frame: inside.frame, within: node });
+          passes.push({ kind: 'mirror', camera: node.camera, through: node.group, node, frame: node.frame });
+        }
       } else {
         mirrored = mirrors && groups.length > 0 && mirrorsMayRender(camera, groups, undefined, requested);
         if (mirrored)
