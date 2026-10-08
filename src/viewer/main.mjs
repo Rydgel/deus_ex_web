@@ -186,6 +186,11 @@ let subtitlePreference = false;
 // The loaded map's simulation side (sim-host.mjs): `game` and its frame
 // session `sim`.
 let game, sim = null, simHost = null, mode = 'play', paused = false, runtimeError = null;
+// The 3D view's projection from the simulation's pass frame (Proj.Z, FX15,
+// FY15: play-camera.mjs setFrameProjection) instead of the FOV and the
+// constant half-pixel centre; deusExViewer.frameProjection(false) is the
+// latter, for the pixel census (scripts/census-frame-projection.mjs).
+let frameProjection = true;
 let hudRenderer=null;
 let npcPreview=null;
 let spriteScene=null,coronaPass=null,decalScene=null;
@@ -403,6 +408,7 @@ function resize() {
   canvasAspect = camera.aspect; resizeCount++;
   camera.fov = verticalFov(75, camera.aspect);
   camera.updateProjectionMatrix();
+  camera.userData.projection = null;   // the next Play frame brings its pass frame's
   setPixelCentre(camera, renderer.domElement.width, renderer.domElement.height);
 }
 new ResizeObserver(resize).observe($('viewport'));
@@ -426,7 +432,8 @@ const viewportCamera = createPlayCamera();
 /** Points viewportCamera along a 'viewport' command's frame. */
 function aimViewportCamera(command) {
   const view = { location: command.location, rotation: command.rotation, fov: command.fov };
-  applyPlayFrame(viewportCamera, view, { render: true, width: command.width, height: command.height });
+  applyPlayFrame(viewportCamera, view, { render: true, width: command.width, height: command.height },
+    frameProjection ? command.pass?.projection ?? null : null);
   setPixelCentre(viewportCamera, command.width, command.height);
   viewportCamera.updateMatrixWorld();
   return viewportCamera;
@@ -1241,6 +1248,9 @@ fog() {
   const fog = world?.fog;
   return fog ? { stats: { ...fog.stats }, visibleMeshes: fog.root.children.filter(object => object.visible).length } : null;
 },
+/** Validation only: the 3D view's projection from the pass frame (on, the
+ * default) or from the FOV and the constant pixel centre (off). */
+frameProjection(on) { frameProjection = Boolean(on); },
 /** Show or hide the fog pass (validation: a frame with and without it). */
 showFog(on) { if (world?.fog) world.fog.root.visible = Boolean(on); },
 /** The page's corona pass (corona-pass.mjs): the last frame's counters,
@@ -1431,7 +1441,10 @@ function drawFrame(snap, time) {
     // The simulation side points its own camera the same way
     // (play-camera.mjs applyPlayFrame).
     renderRect = frame.renderRect;
-    if (frame.view) { playerView = frame.view; ({ pitch, yaw } = applyPlayFrame(camera, frame.view, renderRect)); }
+    if (frame.view) {
+      playerView = frame.view;
+      ({ pitch, yaw } = applyPlayFrame(camera, frame.view, renderRect, frameProjection ? frame.projection ?? null : null));
+    }
     // The 3D view's pixel size: the render rect when it draws, else the canvas.
     const viewSize = renderRect?.render && renderRect.width > 0 && renderRect.height > 0
       ? [renderRect.width, renderRect.height] : [renderer.domElement.width, renderer.domElement.height];

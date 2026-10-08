@@ -35,10 +35,11 @@ export function decalProbe(game, { place = false, pawn = null } = {}) {
  * `call`, or the page with ?sim=inline). */
 export function placeProbe(game, { location = null, rotation = null, lookAt = null, set = null }) {
   const runtime = game.doors.scriptRuntime.runtime, player = game.player.collisionActor;
-  // `set` {actor, fields}: write script properties of a level actor (validate-
-  // coronas-play: make a static corona light a moving-light candidate).
+  // `set` {actor, fields}: write script properties of a level actor (or of
+  // '$player'; validate-coronas-play: make a static corona light a moving-light
+  // candidate; census-frame-projection: the FOV).
   if (set) {
-    const target = runtime.levelFor(player).actors.find(a => a?.name === set.actor);
+    const target = set.actor === '$player' ? player : runtime.levelFor(player).actors.find(a => a?.name === set.actor);
     if (!target) throw new Error(`placeProbe: no actor ${set.actor}`);
     for (const [name, value] of Object.entries(set.fields)) runtime.writeNamed(target, name, value);
   }
