@@ -177,7 +177,14 @@ In the worker this:
 - increments DrawWorld's frame counter;
 - runs OccludeBsp from a master frame at the camera's location, rotation and
   fov, at the window's size. Its drawn polygons and tracked movers are kept,
-  and the sky frame when OccludeBsp makes one.
+  and the sky frame when OccludeBsp makes one. The moving brush tracker is
+  not updated again: the main frame's update stands, as the original updates
+  it on the game thread when a mover moves, not in a DrawWorld.
+- runs inside the HUD paint, so at the render pass's x87 precision control
+  24 (render-precision.mjs): CreateMasterFrame for this frame (occlude.rs,
+  the x87.rs model) rounds at 24 bits, where the main frame's, built before
+  URender::PreRender, rounds at 64. That follows where XViewportWindow::Draw
+  runs; no 0x007f master-frame oracle case covers it yet (unverified).
 - runs SetupDynamics' candidates for that frame (the actor layer's
   bindings and iterator items, and the sprite records, read live under Draw's
   flags: the camera hidden, the owner-see rules following bBehindView) through

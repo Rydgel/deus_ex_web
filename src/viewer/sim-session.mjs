@@ -307,10 +307,14 @@ export function createSimSession(game, { assets = null, events = [], exportName 
     });
     return minX < maxX && startY < endY ? [minX, startY, maxX, endY] : null;
   }
-  function visibility(view, width, height, setupCount = -1, { decals: decalBlock = true } = {}) {
+  // `movers` false (a ViewportWindow's frame) keeps the tracker as the main
+  // frame left it: the original updates the moving brush tracker on the game
+  // thread (64 bits) when a mover moves, never inside a render-pass DrawWorld,
+  // where the x87 model now runs at 24 bits (render-precision.mjs).
+  function visibility(view, width, height, setupCount = -1, { decals: decalBlock = true, movers: moverUpdate = true } = {}) {
     const level = runtime.levelFor(game.player.collisionActor), info = level.actors[0];
     const moversStarted = performance.now();
-    updateMovers();
+    if (moverUpdate) updateMovers();
     const moversMs = performance.now() - moversStarted;
     occlusion.setZoneSkies(level.zoneModel.zoneActors.map(zone => skyRecord(runtime.readNamed(zone ?? info, 'SkyZone'))));
     const words = occlusion.master({ location: view.location, rotation: view.rotation, width, height, fov: view.fov }).frame;
@@ -430,7 +434,7 @@ export function createSimSession(game, { assets = null, events = [], exportName 
     const ids = new Set(), sprites = new Set();
     if (occlusion && occlusion.setupSupported && actorScene) {
       const entries = packDynamics(occlusion, { sprites: live.sprites, iterators: live.iterators, ...actorScene.setupArgs(live.meshItems) });
-      const seen = visibility(view, command.width, command.height, entries.length, { decals: false });
+      const seen = visibility(view, command.width, command.height, entries.length, { decals: false, movers: false });
       pass.visibility = { nodes: seen.nodes, movers: seen.movers };
       if (seen.sky) pass.sky = sky(view.location);
       for (const key of seen.sprites) {
@@ -438,7 +442,7 @@ export function createSimSession(game, { assets = null, events = [], exportName 
         if (entry.sprite) sprites.add(entry.sprite.handle); else ids.add(entry.binding.id);
       }
     } else if (occlusion) {
-      const seen = visibility(view, command.width, command.height, -1, { decals: false });
+      const seen = visibility(view, command.width, command.height, -1, { decals: false, movers: false });
       pass.visibility = { nodes: seen.nodes, movers: seen.movers };
       if (seen.sky) pass.sky = sky(view.location);
     } else pass.sky = sky(view.location);
