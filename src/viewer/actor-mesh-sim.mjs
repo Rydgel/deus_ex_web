@@ -1126,7 +1126,7 @@ export async function createActorMeshSim(runtime,assets,asset,{kernel,player:pla
         const reads=meshReads();
         reconcile(reads);
         if(view.occlude){
-          const occluded=view.occlude({bindings:actors,items:itemCandidates(view.items??[]),reads,levelIndex});
+          const occluded=view.occlude({bindings:actors,items:itemCandidates(view.items??[]),reads,levelIndex,itemCandidates});
           view={...view,main:occluded.main,children:occluded.children,cull:!occluded.children,lod:occluded.lod??view.lod,
             lightFrames:occluded.lightFrames??null,lodFrames:occluded.lodFrames??null};
         }

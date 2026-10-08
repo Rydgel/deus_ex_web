@@ -56,16 +56,105 @@ export function packDynamics(occlusion, { sprites = [], iterators = null, bindin
       u32[at + SETUP.FLAGS] = e.rootExcluded ? SETUP_ROOT_EXCLUDED : 0;
       continue;
     }
-    // A DT_Sprite or DT_SpriteAnimOnce record: Setup's sprite path reads
-    // the texture's size, Location and DrawScale.
-    const sprite = e.sprite;
-    u32.fill(0, at, at + SETUP.WORDS);
-    u32[at + SETUP.KEY] = i; u32[at + SETUP.DRAWTYPE] = 1;
-    if (sprite.size) {
-      u32[at + SETUP.TEXTURE] = SETUP_TEXTURE_SIZED; i32[at + SETUP.USIZE] = sprite.size[0]; i32[at + SETUP.VSIZE] = sprite.size[1];
-    } else u32[at + SETUP.TEXTURE] = SETUP_TEXTURE_UNKNOWN;
-    for (let k = 0; k < 3; k++) f32[at + SETUP.LOCATION + k] = sprite.location[k];
-    f32[at + SETUP.DRAWSCALE] = sprite.drawScale;
+    packSprite(views, at, i, e.sprite);
   }
   return entries;
+}
+
+/** A DT_Sprite or DT_SpriteAnimOnce record as Setup's candidate: its sprite
+ * path reads the texture's size, Location and DrawScale. */
+function packSprite({ u32, f32, i32 }, at, key, sprite) {
+  u32.fill(0, at, at + SETUP.WORDS);
+  u32[at + SETUP.KEY] = key; u32[at + SETUP.DRAWTYPE] = 1;
+  if (sprite.size) {
+    u32[at + SETUP.TEXTURE] = SETUP_TEXTURE_SIZED; i32[at + SETUP.USIZE] = sprite.size[0]; i32[at + SETUP.VSIZE] = sprite.size[1];
+  } else u32[at + SETUP.TEXTURE] = SETUP_TEXTURE_UNKNOWN;
+  for (let k = 0; k < 3; k++) f32[at + SETUP.LOCATION + k] = sprite.location[k];
+  f32[at + SETUP.DRAWSCALE] = sprite.drawScale;
+}
+
+/** The root frame's packed candidates (what packDynamics last put in
+ * `occlusion`'s candidate block), copied for patchDynamics. */
+export function candidateWords(occlusion, count) {
+  const views = occlusion.setupCandidates(count);
+  return views.u32.slice(views.at, views.at + SETUP.WORDS * count);
+}
+
+/** A child frame's candidates when its own SetupDynamics (the iterators run
+ * again) changed only the iterator-made ones: the root's `entries` and
+ * their packed `words` (candidateWords), with each iterator-made candidate
+ * (a mesh item's binding, a sprite record) packed again from this frame's
+ * `items` ({item, binding}, actor-mesh-sim.mjs `itemCandidates`) and
+ * `sprites` (the frame's list, childFrameSprites). The same candidates
+ * packDynamics would give, in the same order, when this frame's iterator-made
+ * entries stand in the root's places (the same orders, bindings and kinds:
+ * the sort puts them where the root's stood); null when they do not, and the
+ * caller packs the frame from scratch. Returns the entries. */
+export function patchDynamics(occlusion, rootEntries, rootWords, { items, sprites, reads = null }) {
+  const own = [];
+  for (const { item, binding } of items) own.push({ order: item.order, binding, item, sprite: null });
+  for (const sprite of sprites) if (sprite.viaIterator) own.push({ order: sprite.order, binding: null, item: null, sprite });
+  own.sort((a, b) => a.order - b.order);
+  const places = [];
+  for (let i = 0; i < rootEntries.length; i++) if (rootEntries[i].item || rootEntries[i].sprite?.viaIterator) places.push(i);
+  if (places.length !== own.length) return null;
+  for (let k = 0; k < places.length; k++) {
+    const root = rootEntries[places[k]], mine = own[k];
+    if (root.order !== mine.order || root.binding !== mine.binding || Boolean(root.item) !== Boolean(mine.item)) return null;
+  }
+  const entries = rootEntries.slice();
+  const views = occlusion.setupCandidates(entries.length);
+  views.u32.set(rootWords, views.at);
+  for (let k = 0; k < places.length; k++) {
+    const i = places[k], e = own[k], at = views.at + SETUP.WORDS * i;
+    if (e.binding) {
+      // The slot's mesh record is the root candidate's.
+      e.binding.packSetup(views, at, i, rootWords[SETUP.WORDS * i + SETUP.MESH], reads, e.item);
+      views.u32[at + SETUP.FLAGS] = 0;
+    } else packSprite(views, at, i, e.sprite);
+    entries[i] = e;
+  }
+  return entries;
+}
+
+/** Whether two sprite records draw the same (sprite-scan.mjs records): the
+ * same actor, texture, style, place and scale. */
+export const sameSprite = (a, b) => a.handle === b.handle && a.style === b.style && a.texture.key === b.texture.key
+  && a.texture.package === b.texture.package && a.texture.index === b.texture.index && a.drawScale === b.drawScale
+  && a.scaleGlow === b.scaleGlow && a.location.every((v, k) => Object.is(v, b.location[k]));
+
+/** A child frame's sprite records after its own SetupDynamics ran the
+ * iterators again (docs/bsp-occlusion.md "Child frames"): `rootSprites` are
+ * the root frame's records (those from iterators carry `viaIterator`) and
+ * `scanned` the records the frame's own run made, in order. The frame's
+ * list is the root's other records and, for each scanned one, the root's
+ * record of the same `order` it equals (a particle's, which draws the same
+ * in every frame) or else a record of its own: `make(record)` completes it
+ * (texture size) and it joins `known` so that later frames' equal records
+ * share it. Returns the list and the records made. */
+export function childFrameSprites(rootSprites, scanned, known, make) {
+  const sprites = rootSprites.filter(sprite => !sprite.viaIterator), added = [];
+  for (const record of scanned) {
+    let found = known.get(record.order)?.find(other => sameSprite(other, record));
+    if (!found) {
+      make(record); added.push(record);
+      if (!known.has(record.order)) known.set(record.order, []);
+      known.get(record.order).push(record);
+      found = record;
+    }
+    sprites.push(found);
+  }
+  return { sprites, added };
+}
+
+/** The root frame's iterator-made sprite records by `order`, for
+ * childFrameSprites's `known`. */
+export function iteratorSpritesByOrder(rootSprites) {
+  const known = new Map();
+  for (const sprite of rootSprites) {
+    if (!sprite.viaIterator) continue;
+    if (!known.has(sprite.order)) known.set(sprite.order, []);
+    known.get(sprite.order).push(sprite);
+  }
+  return known;
 }

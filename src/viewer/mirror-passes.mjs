@@ -106,6 +106,15 @@ export function mirrorsMayRender(source, groups, visible = mesh => mesh.visible,
 export const childFramesMode = () => (typeof process !== 'undefined' && process.env?.CHILD_FRAMES)
   || globalThis.DEUS_EX_CHILD_FRAMES || 'on';
 
+/** Each child frame's own SetupDynamics (docs/bsp-occlusion.md "Child
+ * frames"): the render iterators' items are built again for every frame.
+ * ?iteratorFrames=off (Node: ITERATOR_FRAMES=off) keeps the root frame's
+ * items in every child frame (measurement and fallback); `full` packs every
+ * frame's candidates from scratch and `verify` also checks the patched ones
+ * against that (measurement and validation). */
+export const iteratorFramesMode = () => (typeof process !== 'undefined' && process.env?.ITERATOR_FRAMES)
+  || globalThis.DEUS_EX_ITERATOR_FRAMES || 'on';
+
 /** The mirror group a child frame looks through (sim-session.mjs
  * `visibility` frames): a moving group by its tracked polygon's key, a
  * static one by the node of the request that made the frame. */

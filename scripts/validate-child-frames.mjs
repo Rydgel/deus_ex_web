@@ -157,21 +157,43 @@ async function validate(mapName, { seed, count, tracker = null, views = [] }) {
   }
   // Sprite actors (DT_Sprite, sized textures) around each view; the first
   // stands at the eye and is constructed only in child frames.
-  for (const c of cases) {
+  const randomActor = (c, forward) => {
+    const depth = 30 + random() * 900, spread = depth * 0.8;
+    return { location: [0, 1, 2].map(j => Math.fround(c.location[j] + forward[j] * depth + (random() - 0.5) * spread)),
+      texture: Math.floor(random() * TEXTURES.length), drawScale: Math.fround(0.25 + random() * 3), rootExcluded: random() < 0.1 };
+  };
+  const forwardOf = c => {
     const yaw = c.rotation[1] * Math.PI / 32768, pitch = c.rotation[0] * Math.PI / 32768;
-    const forward = [Math.cos(pitch) * Math.cos(yaw), Math.cos(pitch) * Math.sin(yaw), Math.sin(pitch)];
+    return [Math.cos(pitch) * Math.cos(yaw), Math.cos(pitch) * Math.sin(yaw), Math.sin(pitch)];
+  };
+  for (const c of cases) {
+    const forward = forwardOf(c);
     c.actors = [{ location: c.location.map((v, k) => Math.fround(v - (k === 2 ? 20 : 0))), texture: 3, drawScale: 1, rootExcluded: true }];
     const n = 4 + Math.floor(random() * 12);
-    for (let k = 0; k < n; k++) {
-      const depth = 30 + random() * 900, spread = depth * 0.8;
-      c.actors.push({ location: [0, 1, 2].map(j => Math.fround(c.location[j] + forward[j] * depth + (random() - 0.5) * spread)),
-        texture: Math.floor(random() * TEXTURES.length), drawScale: Math.fround(0.25 + random() * 3), rootExcluded: random() < 0.1 });
+    for (let k = 0; k < n; k++) c.actors.push(randomActor(c, forward));
+  }
+  const spriteSpec = a => ({ rootExcluded: a.rootExcluded, actor: { sequence: 0, animFrameBits: 0,
+    locationBits: a.location.map(bits), rotation: [0, 0, 0], drawType: 1, texture: a.texture, mesh: null,
+    drawScaleBits: bits(a.drawScale), prePivotBits: [0, 0, 0], particles: false } });
+  // Each child frame's own SetupDynamics (iterators run again, so its items
+  // differ): on half the cases, every visit index up to 12 gets its own
+  // candidates, the root's moved, dropped, resized and added to.
+  for (const c of cases) {
+    c.frameActors = {};
+    if (random() < 0.5) continue;
+    const forward = forwardOf(c);
+    for (let index = 1; index <= 12; index++) {
+      if (random() < 0.25) continue;
+      const list = c.actors.filter(() => random() > 0.2).map(a => ({ ...a,
+        location: a.location.map(v => Math.fround(v + (random() - 0.5) * 80)), drawScale: Math.fround(Math.max(0.1, a.drawScale * (0.5 + random()))) }));
+      for (let k = Math.floor(random() * 4); k > 0; k--) list.push(randomActor(c, forward));
+      if (random() < 0.15) list.length = 0;
+      c.frameActors[index] = list;
     }
   }
   cases.forEach((c, i) => Object.assign(c, { locationBits: c.location.map(bits), frameCounter: i, timeBits: bits(1 + i / 30),
-    children: true, sprites: c.actors.map(a => ({ rootExcluded: a.rootExcluded, actor: { sequence: 0, animFrameBits: 0,
-      locationBits: a.location.map(bits), rotation: [0, 0, 0], drawType: 1, texture: a.texture, mesh: null,
-      drawScaleBits: bits(a.drawScale), prePivotBits: [0, 0, 0], particles: false } })) }));
+    children: true, sprites: c.actors.map(spriteSpec),
+    frameSprites: Object.fromEntries(Object.entries(c.frameActors).map(([index, list]) => [index, list.map(spriteSpec)])) }));
   // The render pass's ComputeRenderSize on the root frame (XRootWindow::
   // PreRender) on two cases in three: a clipped rectangle, the children
   // inheriting its X and Y; one in three keeps the viewport.
@@ -196,7 +218,7 @@ async function validate(mapName, { seed, count, tracker = null, views = [] }) {
   const oracle = JSON.parse(execFileSync(python, ['scripts/native-occlusion-oracle.py'],
     { input: JSON.stringify(request), encoding: 'utf8', maxBuffer: 1 << 30 })).results;
   const flags = request.model.nodes.map(n => n.flags), times = new Array(model.zones.length).fill(0);
-  const stats = { frames: 0, sky: 0, mirror: 0, deepest: 0, merged: 0, sprites: 0, childSprites: 0, polys: 0 };
+  const stats = { frames: 0, sky: 0, mirror: 0, deepest: 0, merged: 0, sprites: 0, childSprites: 0, polys: 0, ownFrames: 0 };
   const drawLists = (got, want, where) => {
     for (let list = 0; list < 3; list++) {
       const w = want[list].map(d => ({ iNode: d.iNode, iSurf: d.iSurf, iZone: d.iZone, polyFlags: d.polyFlags >>> 0,
@@ -218,11 +240,20 @@ async function validate(mapName, { seed, count, tracker = null, views = [] }) {
       const words = [...master.frame];
       words[44] = c.frameCounter; words[45] = c.timeBits;
       words[46] = OCCLUSION_SHOW_PLAYER_CTRL | OCCLUSION_SHINY_SURFACES | OCCLUSION_POINTS; words[47] = 0;
-      const views = occlusion.setupCandidates(c.actors.length);
-      c.actors.forEach((a, key) => packSetupCandidate(views, views.at + SETUP.WORDS * key, { key, drawType: 1, mesh: SETUP_MESH_NONE,
-        texture: { uSize: TEXTURES[a.texture][0], vSize: TEXTURES[a.texture][1] }, location: a.location, rotation: [0, 0, 0],
-        drawScale: a.drawScale, prePivot: [0, 0, 0], particles: false, sequence: null, animFrame: 0, rootExcluded: a.rootExcluded }));
-      const r = occlusion.run(words, [], { setupCount: c.actors.length, children: { fov: c.fov, orthoZoom: 0 } });
+      const pack = list => {
+        const views = occlusion.setupCandidates(list.length);
+        list.forEach((a, key) => packSetupCandidate(views, views.at + SETUP.WORDS * key, { key, drawType: 1, mesh: SETUP_MESH_NONE,
+          texture: { uSize: TEXTURES[a.texture][0], vSize: TEXTURES[a.texture][1] }, location: a.location, rotation: [0, 0, 0],
+          drawScale: a.drawScale, prePivot: [0, 0, 0], particles: false, sequence: null, animFrame: 0, rootExcluded: a.rootExcluded }));
+      };
+      pack(c.actors);
+      // Each child frame takes its own candidates, from the host, when the case has them.
+      const r = occlusion.run(words, [], { setupCount: c.actors.length, children: { fov: c.fov, orthoZoom: 0,
+        frameDynamics: ({ index }) => {
+          const list = c.frameActors[index] ?? c.actors;
+          pack(list); occlusion.useFrameCandidates(list.length);
+          stats.ownFrames += c.frameActors[index] ? 1 : 0;
+        } } });
       same(r.sprites, o.sprites.map(entry => ({ key: entry.sprite, span: entry.span })), `${where}: Frame->Sprite`);
       drawLists(r.draw, o.draw, where);
       requests(r.children, o.children, where);
@@ -257,7 +288,7 @@ async function validate(mapName, { seed, count, tracker = null, views = [] }) {
   }
   console.log(`${mapName}${tracker ? ` (${movers.length} tracked movers)` : ''}: ${cases.length} cases, ${stats.frames} child frames match ` +
     `(${stats.mirror} mirror, ${stats.sky} sky, recursion up to ${stats.deepest}, ${stats.merged} merged requests, ` +
-    `${stats.polys} child draw lists, ${stats.childSprites} child-frame sprites, ${stats.sprites} root sprites)`);
+    `${stats.polys} child draw lists, ${stats.childSprites} child-frame sprites, ${stats.sprites} root sprites, ${stats.ownFrames} frames with their own candidates)`);
 }
 
 const only = new Set(process.argv.slice(2));

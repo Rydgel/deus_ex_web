@@ -12,7 +12,9 @@
  * span they were given. With `children`, OccludeFrame's recursion runs too:
  * CreateChildFrame made each child during its parent's OccludeBsp, and each
  * child (newest first, depth first) gets its own SetupDynamics and
- * OccludeBsp (`frames`). */
+ * OccludeBsp (`frames`); `children.frameDynamics` is called before each
+ * child's Setup, for the host's own SetupDynamics of that frame (its own
+ * candidates, `useFrameCandidates`). */
 import { sceneFrameTangent } from './script-window-scene-frame.mjs';
 import { x87TanCandidates } from './x87-tan.mjs';
 import { createTrackerHost, trackerCapacities, TRACKER } from './brush-tracker.mjs';
@@ -267,7 +269,7 @@ export function createBspOcclusion(kernel, model, { surfaceTextureFlags, zoneAct
   };
   // Setup's mesh records by mesh key, and its candidate and result blocks.
   const meshRecords = new Map();
-  let candidates = 0, results = 0, candidateCapacity = 0, views = null;
+  let candidates = 0, results = 0, candidateCapacity = 0, views = null, frameCandidatesSet = false;
   const ensureCandidates = count => {
     if (count <= candidateCapacity) return;
     if (candidates) { release(candidates); release(results); }
@@ -325,6 +327,17 @@ export function createBspOcclusion(kernel, model, { surfaceTextureFlags, zoneAct
       ensureCandidates(count);
       return { ...setupViews(), at: candidates >>> 2 };
     },
+    /** In a `frameDynamics` call (run's `children`): the `count` candidates
+     * packed with setupCandidates since are this child frame's own
+     * (FDynamicSprite::Setup runs on them, and the accepted ones are its
+     * sprites). The sprite list grows to fit, in the model the run reads. */
+    useFrameCandidates(count) {
+      ensureSprites(count);
+      const u = words(), at = kernel.childInPtr() >>> 2;
+      u[(kernel.modelPtr() >>> 2) + 17] = sprites;
+      u[at + 4] = candidates; u[at + 5] = count;
+      frameCandidatesSet = true;
+    },
     /** Setup alone on `count` packed candidates with `frameWords`; returns
      * the results (SETUP_OUT_WORDS words each). Validation access. */
     setupOnly(frameWords, count) {
@@ -361,10 +374,22 @@ export function createBspOcclusion(kernel, model, { surfaceTextureFlags, zoneAct
           const io = new DataView(new ArrayBuffer(8));
           io.setFloat64(0, tangent, true);
           words().set([bitsOf(children.fov), bitsOf(children.orthoZoom ?? 0), io.getUint32(0, true), io.getUint32(4, true),
-            viaSetup ? candidates : 0, viaSetup ? setupCount : 0, 1, 0], at);
+            viaSetup ? candidates : 0, viaSetup ? setupCount : 0, 1 | (children.frameDynamics ? 2 : 0), 0], at);
         } else words()[at + 6] = 0;
       } else if (children) throw new Error('The script VM core predates child frames; run npm run build:wasm');
-      const status = kernel.run(work, workBytes);
+      // OccludeFrame's SetupDynamics for each child frame, between the
+      // previous frame's OccludeBsp and the child's own Setup: the host runs
+      // the frame's iterators again and gives it its own candidates.
+      if (children?.frameDynamics) {
+        if (!kernel.setFrameHook) throw new Error('The script VM core predates per-frame dynamics; run npm run build:wasm');
+        kernel.setFrameHook((index, kind, parent) => {
+          frameCandidatesSet = false;
+          children.frameDynamics({ index, kind: kind ? 'sky' : 'mirror', parent });
+          if (!frameCandidatesSet) throw new Error(`frameDynamics gave child frame ${index} no candidates (useFrameCandidates)`);
+        });
+      }
+      let status;
+      try { status = kernel.run(work, workBytes); } finally { if (children?.frameDynamics) kernel.setFrameHook(null); }
       stamp = words()[(kernel.modelPtr() >>> 2) + 14];
       const st = words().slice(kernel.statusPtr() >>> 2, (kernel.statusPtr() >>> 2) + 8);
       if (status !== 0) throw new Error(`OccludeBsp failed with status ${status}`);

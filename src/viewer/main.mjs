@@ -70,6 +70,8 @@ if(movingLightsParam)globalThis.DEUS_EX_MOVING_LIGHTS=movingLightsParam;
 // whole and frustum-stamped, as before the moving brush tracker.
 // ?childFrames=off keeps OccludeFrame's child frames out of Play: mirror
 // and sky passes drawn whole and planned and stamped by the frustum.
+// ?iteratorFrames=off keeps the root frame's render-iterator items in every
+// child frame (each frame's SetupDynamics builds its own otherwise).
 // ?actorOcclusion=frustum draws and stamps the main frame's actors from the
 // frustum-tested drawn set instead of OccludeBsp's Frame->Sprite
 // (dynamics-candidates.mjs, docs/bsp-occlusion.md "Play").
@@ -77,7 +79,7 @@ for(const [param,global] of [['renderScan','DEUS_EX_RENDER_SCAN'],['meshLight','
   ['cycleScan','DEUS_EX_CYCLE_SCAN'],['levelScan','DEUS_EX_LEVEL_SCAN'],['farMove','DEUS_EX_FAR_MOVE'],
   ['particles','DEUS_EX_PARTICLES'],['gcNative','DEUS_EX_GC_NATIVE'],['pawnPhysics','DEUS_EX_PAWN_PHYSICS'],
   ['actorPhysics','DEUS_EX_ACTOR_PHYSICS'],['actorOcclusion','DEUS_EX_ACTOR_OCCLUSION'],
-  ['moverTracker','DEUS_EX_MOVER_TRACKER'],['childFrames','DEUS_EX_CHILD_FRAMES']]) {
+  ['moverTracker','DEUS_EX_MOVER_TRACKER'],['childFrames','DEUS_EX_CHILD_FRAMES'],['iteratorFrames','DEUS_EX_ITERATOR_FRAMES']]) {
   const value=new URLSearchParams(location.search).get(param);
   if(value)globalThis[global]=value;
 }
@@ -1234,6 +1236,11 @@ async terminalProbe(args) {
   const value = simClient ? await simClient.call('terminalProbe', args)
     : game && sim ? (await import('./terminal-probe.mjs')).terminalProbe(game, sim, args) : null;
   return value && { ...value, page: viewportPassesDrawn.map(pass => ({ ...pass })) };
+},
+/** Validation only: the render iterators' per-frame runs (sim-session.mjs iteratorState). */
+iteratorProbe(args) {
+  if (simClient) return simClient.call('iteratorProbe', args);
+  return sim ? sim.iteratorState(args) : null;
 },
 async moverProbe(args) {
   if (simClient) return simClient.call('moverProbe', args);

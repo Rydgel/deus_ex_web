@@ -122,6 +122,14 @@ animated textures are imported only by maps, for their surfaces). Play
 therefore keeps DT_SpriteAnimOnce sprites on their Texture and notes it;
 the contract above is recorded for completeness, not implemented.
 
+## Per frame
+
+SetupDynamics runs the protocol above for every frame OccludeFrame visits
+(`Init(Viewport->Actor)` is the same actor in each), so a child frame runs
+it again. A particle's items come out the same in every frame: the child
+frame's sprite records are the root's
+([child frames](bsp-occlusion.md#each-child-frames-own-setupdynamics)).
+
 ## Play
 
 - **Native 3017** runs `execUpdateParticles` in the VM on the shared
