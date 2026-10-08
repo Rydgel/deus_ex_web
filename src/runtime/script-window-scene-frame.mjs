@@ -7,7 +7,7 @@
 import {rotatorSin} from './coords.mjs';
 import {x87TanCandidates} from './x87-tan.mjs';
 import {x87load as X, x87int32 as I, x87add as A, x87neg as N,
-  x87mul as M, x87div as D, x87store as S, x87storeDouble as Q} from './script-vm.mjs';
+  x87mul as M, x87div as D, x87store as S, x87storeDouble as Q, x87PrecisionControl, setX87Precision} from './script-vm.mjs';
 
 const io = new DataView(new ArrayBuffer(8));
 const doubleFromBits = bits => {
@@ -86,15 +86,26 @@ export function buildWindowSceneFrame({location, rotation, width, height, fov, r
   if (!Number.isInteger(renderMode) || [13, 14, 15].includes(renderMode))
     throw new Error('Orthographic scene-frame production is unsupported');
   fov = Math.fround(fov);
+  // ComputeRenderSize runs at the caller's precision control: 64 from
+  // CreateMasterFrame, 24 when XRootWindow::PreRender calls it again on the
+  // edited frame (0x1003a8cd, inside the render pass). At 24 bits the FMUL
+  // by the double pi/360 rounds before the qword store, so appTan's argument
+  // is not the one the measured tangents were taken for.
+  const pass = x87PrecisionControl() === 24;
   const argument = double(M(X(fov), DEG_HALF));
-  const tangents = appTan ? [appTan(argument)] : TANGENTS.has(fov) ? [TANGENTS.get(fov)] : x87TanCandidates(argument);
+  const tangents = appTan ? [appTan(argument)] : !pass && TANGENTS.has(fov) ? [TANGENTS.get(fov)] : x87TanCandidates(argument);
   if (!tangents || !tangents.every(t => Number.isFinite(t) && t > 0))
     throw new Error(`Scene frame requires the original appTan for FOV ${fov}`);
   const fx = S(I(width)), fy = S(I(height));
   const projections = new Set(tangents.map(t => S(D(M(X(fx), HALF), X64(t)))));
   if (projections.size !== 1)
     throw new Error(`Scene frame FOV ${fov}: FPTAN's last bit decides projectionZ, which is unmeasured`);
-  return {coords: viewCoords(rotation, location), width: fx, height: fy,
+  // The coordinates are CreateMasterFrame's ComputeRenderCoords (the game
+  // thread, 64 bits); PreRender's edit does not recompute them.
+  const previous = setX87Precision(64);
+  let coords;
+  try { coords = viewCoords(rotation, location); } finally { setX87Precision(previous); }
+  return {coords, width: fx, height: fy,
     center: [S(M(I(width), HALF)), S(M(X(fy), HALF))],
     projectionZ: [...projections][0]};
 }

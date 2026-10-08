@@ -1,11 +1,20 @@
 import{brushCollisionBounds}from'./brush-bounds.mjs';
 import{x87add,x87mul}from'./x87-nan.mjs';
+import{x87Precision}from'./x87-precision.mjs';
+import{r24}from'./x87-r24.mjs';
 const f=Math.fround;
 // Core execVSize10138d10: (z*z+y*y)+x*x, double argument to appSqrt. The
 // products and sums are x87 FMUL/FADDP, so a NaN component follows the x87
 // NaN rules (x87-nan.mjs); the CRT sqrt thunk 0x101032ba (Sqrt's) returns a
 // NaN operand quieted.
 export const finishVectorSize=v=>{
+ // Inside the render pass (render-precision.mjs) every FMUL, FADDP and the
+ // FSQRT round to 24 bits (lib.rs vector_size): r24 after each double step
+ // of 24-bit operands; the double argument store is exact then.
+ if(x87Precision===24){
+  const s=r24(x87add(r24(x87add(r24(x87mul(v[2],v[2])),r24(x87mul(v[1],v[1])))),r24(x87mul(v[0],v[0]))));
+  return f(s!==s?s:r24(Math.sqrt(s)));
+ }
  const s=x87add(x87add(x87mul(v[2],v[2]),x87mul(v[1],v[1])),x87mul(v[0],v[0]));
  return f(s!==s?s:Math.sqrt(s));
 };

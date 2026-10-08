@@ -79,6 +79,10 @@ CASES = [
 
 if __name__ == '__main__':
     probe = FloatApproxProbe(Path(sys.argv[1]))
+    # The x87 control word of each call: 0x037f (the game thread) unless
+    # ORACLE_CW sets the render pass's 0x007f (docs/render-pass-precision.md
+    # "UnrealScript in the render pass").
+    probe.control_word = int(__import__('os').environ.get('ORACLE_CW', '0x037f'), 0)
     results = [probe.compare(name, a, b) for name, a, b in CASES]
     print(json.dumps({
         'hashes': native.HASHES,

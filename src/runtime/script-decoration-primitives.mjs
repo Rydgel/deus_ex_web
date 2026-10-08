@@ -1,13 +1,32 @@
-import {getAxes} from './camera.mjs';
+import {coordsDotX87,getAxes} from './camera.mjs';
 import {rotatorSin} from './coords.mjs';
+import {x87Precision} from './x87-precision.mjs';
+import {r24,r24prod} from './x87-r24.mjs';
 const f=Math.fround;
 const bits=new DataView(new ArrayBuffer(4));
 const value=arg=>arg?.reference?arg.get():arg;
 export const decorationPrimitiveIndices=new Set([152,153,159,161,162,178,246,275]);
 export const decorationOutPrimitiveIndices=new Set([159,161,162]);
 
+/** Core FVector::Rotation (0x10144390) at 24 bits (inside the render pass,
+ * render-precision.mjs): yaw `ftol(atan2(y, x)·K)`, pitch
+ * `ftol(atan2(z, √(y² + x²))·K)` with K the embedded double
+ * 10430.219195527361 (0x10178050), the sum and appSqrt's FSQRT at 24 bits
+ * and each product rounded once from the exact value. FPATAN (unaffected by
+ * precision control) is the host's Math.atan2, as below. */
+export function vectorToRotator24(vector) {
+  const [x,y,z]=vector.map(f),K=10430.219195527361;
+  if(![x,y,z].every(Number.isFinite))throw new Error('Original nonfinite vector rotation is not implemented');
+  // Products of floats are exact in doubles; r24 rounds each step once.
+  const root=f(r24(Math.sqrt(r24(r24(y*y)+r24(x*x)))));
+  return [Math.trunc(r24prod(Math.atan2(z,root),K))|0,Math.trunc(r24prod(Math.atan2(y,x),K))|0,0];
+}
+
+/** The vector-to-rotator cast (Core 0x10136f90: Step, FVector::Rotation, a
+ * copy of the rotator). */
 export function vectorToRotator(vector) {
   if(!Array.isArray(vector)||vector.length!==3)throw new Error('VectorToRotator requires three components');
+  if(x87Precision===24)return vectorToRotator24(vector);
   const [x,y,z]=vector.map(f),scale=10430.219195527361;
   if(![x,y,z].every(Number.isFinite))throw new Error('Original nonfinite vector rotation is not implemented');
   const yaw=Math.trunc(Math.atan2(y,x)*scale)|0;
@@ -48,7 +67,10 @@ export function executeDecorationPrimitive(index,args) {
   if(index===275){
     if(!Array.isArray(a)||a.length!==3)throw new Error('Vector shift requires three components');
     const vector=a.map(f);
-    return getAxes(b).map(axis=>f(vector[0]*axis[0]+vector[1]*axis[1]+vector[2]*axis[2]));
+    // A.TransformVectorBy(GMath.UnitCoords / B) (Core 0x10137d90): the
+    // GetAxes coordinates, then one FCoords dot per axis on the x87 model
+    // (NaN components follow the x87; 24 bits inside the render pass).
+    return getAxes(b).map(axis=>coordsDotX87(vector,axis));
   }
   if(index===152)return (a|0)<=(b|0);
   if(index===153)return (a|0)>=(b|0);

@@ -385,7 +385,7 @@ class StringTranscendentalProbe(_NATIVE.NativeCollision):
                 for register, value in [
                     (UC_X86_REG_ESP, stack),
                     (UC_X86_REG_ECX, 0),
-                    (UC_X86_REG_FPCW, 0x037F),
+                    (UC_X86_REG_FPCW, self.control_word),
                     (UC_X86_REG_FPSW, 0),
                     (UC_X86_REG_FPTAG, 0xFFFF),
                 ]:
@@ -442,7 +442,7 @@ class StringTranscendentalProbe(_NATIVE.NativeCollision):
         stack = self.stack
         for register, value in [
             (UC_X86_REG_ESP, stack),
-            (UC_X86_REG_FPCW, 0x037F),
+            (UC_X86_REG_FPCW, self.control_word),
             (UC_X86_REG_FPSW, 0),
             (UC_X86_REG_FPTAG, 0xFFFF),
         ]:
@@ -787,6 +787,10 @@ def _sweep_init(root: str) -> None:
     """Per-worker probe; each Unicorn instance lives in exactly one process."""
     global _SWEEP_PROBE
     _SWEEP_PROBE = StringTranscendentalProbe(Path(root))
+    # The x87 control word of each call: 0x037f (the game thread) unless
+    # ORACLE_CW sets the render pass's 0x007f (docs/render-pass-precision.md
+    # "UnrealScript in the render pass").
+    _SWEEP_PROBE.control_word = int(__import__('os').environ.get('ORACLE_CW', '0x037f'), 0)
 
 
 def _sweep_work(item: tuple[str, list[int]]) -> bytes:
@@ -799,6 +803,10 @@ def main() -> None:
     if len(sys.argv) != 2:
         raise SystemExit("Usage: native-string-transcendental-oracle.py GAME_ROOT")
     probe = StringTranscendentalProbe(Path(sys.argv[1]))
+    # The x87 control word of each call: 0x037f (the game thread) unless
+    # ORACLE_CW sets the render pass's 0x007f (docs/render-pass-precision.md
+    # "UnrealScript in the render pass").
+    probe.control_word = int(__import__('os').environ.get('ORACLE_CW', '0x037f'), 0)
     cases = [probe.run(native, name, operands) for name, native, operands in CASES]
     # JavaScript cannot hold a signaling NaN: reading one through a typed
     # array quiets it before the VM sees the operand.  For every case whose

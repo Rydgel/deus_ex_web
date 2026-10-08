@@ -11,6 +11,7 @@ import {createGame} from '../src/viewer/game.mjs';
 import {createWeaponViewModel} from '../src/viewer/weapon-view-model.mjs';
 import {gameDirectory} from './game-directory.mjs';
 import {createPlayerInputFixture} from './player-input-fixture.mjs';
+import {inRenderPass} from '../src/runtime/render-precision.mjs';
 
 const files=[],root=gameDirectory();
 for(const dir of ['Maps','System','Textures','Sounds','Music'])for(const name of await readdir(`${root}/${dir}`))
@@ -40,7 +41,9 @@ assert.equal(get(player,'ShowFlags'),0x480c,'SpawnPlayActor ShowFlags');
 const native=runtime.native,boundaries=[...runtime.boundaryNatives];
 const pose=()=>[get(crowbar,'AnimSequence'),get(crowbar,'AnimFrame'),get(crowbar,'AnimRate')];
 const before=pose();
-const offset=runtime.callFunction(runtime.lookup(crowbar,'CalcDrawOffset'),crowbar);
+// RenderOverlays runs inside the render pass (x87 precision control 24,
+// render-precision.mjs); the expected offset is evaluated the same way.
+const offset=inRenderPass(runtime,()=>runtime.callFunction(runtime.lookup(crowbar,'CalcDrawOffset'),crowbar));
 const expected=get(player,'Location').map((n,i)=>Math.fround(n+offset[i]));
 view.render(renderer,camera);
 assert.equal(view.summary.draws,1);assert.equal(view.summary.loading,false);
@@ -87,7 +90,7 @@ assert.equal(get(player,'inHand'),ring);assert.equal(get(player,'Weapon'),null);
 assert.equal(get(ring,'Mesh'),get(ring,'PlayerViewMesh'),'carried ring uses its PlayerViewMesh');
 await view.ready();
 const ringPose=[get(ring,'AnimSequence'),get(ring,'AnimFrame')];
-const ringOffset=runtime.callFunction(runtime.lookup(ring,'CalcDrawOffset'),ring);
+const ringOffset=inRenderPass(runtime,()=>runtime.callFunction(runtime.lookup(ring,'CalcDrawOffset'),ring));
 const ringAt=get(player,'Location').map((n,i)=>Math.fround(n+ringOffset[i]));
 view.render(renderer,camera);
 assert.equal(view.summary.draws,1,'the key ring is drawn');assert.equal(view.summary.actor,ring.name);

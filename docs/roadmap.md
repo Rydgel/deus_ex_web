@@ -407,8 +407,8 @@ conversation camera with lip sync. The render pass's translations run at its
 24-bit precision ([render-pass precision](render-pass-precision.md)).
 Twenty-six maps match the original's own frames at matched cameras and level time (122 of 130 views)
 ([visual acceptance](visual-acceptance.md)).
-Open: time-varying moving lights and spotlights, UnrealScript inside
-the render events at 24 bits (the script VM computes at 64), the darkest-pixel
+Open: time-varying moving lights and spotlights, the 3D frame's
+projection at 24 bits (occlusion builds it at 64), the darkest-pixel
 rounding visual acceptance found, and acceptance of live (unfrozen) scenes.
 SpriteAnimOnce frames and animated mesh skins
 are recovered or checked but unreachable: no shipped class, map actor or

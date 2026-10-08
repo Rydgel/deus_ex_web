@@ -9,6 +9,11 @@ import { AssetStore } from '../src/unreal/assets.mjs';
 import { readFunctionMetadata } from '../src/unreal/script-metadata.mjs';
 import { compileFunction, primitiveNativeIndices } from '../src/runtime/script-vm.mjs';
 import { gameDirectory } from './game-directory.mjs';
+import { setX87Precision as setRenderPassPrecision } from '../src/runtime/script-vm.mjs';
+// ORACLE_CW=0x007f runs the oracle at the render pass's control word and the
+// VM at x87 precision control 24 (docs/render-pass-precision.md "UnrealScript
+// in the render pass").
+if (Number(process.env.ORACLE_CW) === 0x7f) setRenderPassPrecision(24);
 
 const root = gameDirectory();
 const python = process.env.NATIVE_PROBE_PYTHON ?? '.cache/native-probe-env/bin/python';
@@ -65,6 +70,14 @@ const NATIVES = {
     [[0x1013953d, '3bd0'], [0x1013954a, '3bc1'], [0x10139556, '3bc8'],
       [0x1013955e, '33c0'], [0x10139560, '8902'],
       [0x1013956c, 'b801000000'], [0x10139571, '8901']]],
+  runrotate: [275, 0x10101942, 0x10137d90, 'object.lessless_vectorrotator',
+    [0x29, 0x7b, 0x03, 0x29, 0x77, 0x03],
+    [['A', 'struct', false, false], ['B', 'struct', false, false],
+      ['ReturnValue', 'struct', true, true]],
+    /native\(275\)\s+static final operator\(22\)\s+vector\s+<<\s*\(\s*vector\s+A,\s*rotator\s+B\s*\)/,
+    // Identity FCoords rep-movsd from 0x101b3230 and the quantized-sine
+    // index (a+0x4000)>>2 of GMath.UnitCoords / B, as in 276.
+    [[0x10137de1, '8d9000400000'], [0x10137de7, 'c1fa02'], [0x10137dea, 'be30321b10'], [0x10137dfb, 'f3a5']]],
   rrotate: [276, 0x10101cc6, 0x101380e0, 'object.greatergreater_vectorrotator',
     [0x29, 0x74, 0x03, 0x29, 0x70, 0x03],
     [['A', 'struct', false, false], ['B', 'struct', false, false],
@@ -266,7 +279,7 @@ const field = i => String.fromCharCode(65 + i);
 // Operand kind per native/position — the oracle only knows bit patterns.
 const KIND = {
   req: ['rotator', 'rotator'], rne: ['rotator', 'rotator'],
-  mod: ['float', 'float'], rrotate: ['vector', 'rotator'],
+  mod: ['float', 'float'], rrotate: ['vector', 'rotator'], runrotate: ['vector', 'rotator'],
   rmulf: ['rotator', 'float'], fmulr: ['float', 'rotator'],
   rsub: ['rotator', 'rotator'], raddeq: ['rotator', 'rotator'], rsubeq: ['rotator', 'rotator'],
 };
@@ -315,7 +328,7 @@ for (const original of oracle.cases) {
     assert.equal(result ? 1 : 0, resultBits[0], `${original.name}: VM result`);
   else if (resultBits.length === 1)
     assert.equal(nanNorm(bitsOf(result)), nanNorm(resultBits[0]), `${original.name}: VM result`);
-  else if (original.native === 'rrotate')
+  else if (original.native === 'rrotate' || original.native === 'runrotate')
     assert.deepEqual(result.map(v => nanNorm(bitsOf(v))), resultBits.map(nanNorm),
       `${original.name}: VM result`);
   else
@@ -358,4 +371,4 @@ assert.deepEqual(fixture(317, [variable(1), variable(2)]).run(receiver), [9, 18,
   'fixture subtract of B from A');
 assert.deepEqual(evaluation, ['A', 'B'], 'VM evaluates rotator operands left to right');
 
-console.log(`Original Core ==/!=/%/>>/*(rotator,float)/-/+=/-= natives passed ${oracle.cases.length} bit-exact, extended-product truncation, CRT-fmod domain/NaN, GPropAddr out-mutation, quantized-sine composition, operand-order, and FFrame cursor cases.`);
+console.log(`Original Core ==/!=/%/<</>>/*(rotator,float)/-/+=/-= natives passed ${oracle.cases.length} bit-exact, extended-product truncation, CRT-fmod domain/NaN, GPropAddr out-mutation, quantized-sine composition, operand-order, and FFrame cursor cases.`);

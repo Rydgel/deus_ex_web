@@ -1726,7 +1726,8 @@ export async function createWindowHost({runtime, assets, player, gameConfig = nu
       // (ConvertVectorToCoordinates adds renderX/Y back). With rendering off
       // the size is 0 x 0 and the previous frame stays (nothing projects).
       const rect=view?rootRenderViewport(W,root,{x:0,y:0,width,height}):null;
-      if(rect?.width>0&&rect.height>0){writeWindowSceneFrame(W,node,{...view,width:rect.width,height:rect.height,renderMode:5});W.setPtr(root,0x740,sceneFrame);}
+      if(rect?.width>0&&rect.height>0){host.lastSceneFrame={input:{...view,width:rect.width,height:rect.height,renderMode:5},
+        value:writeWindowSceneFrame(W,node,{...view,width:rect.width,height:rect.height,renderMode:5})};W.setPtr(root,0x740,sceneFrame);}
       W.setF32(canvas,0x3c,width);W.setF32(canvas,0x40,height);
       T.resizeRoot(W,root,canvas);T.reconfigureTree(W,root,0);T.initializeWindows(W,root);
       drawCommands.length=0;

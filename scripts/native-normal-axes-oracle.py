@@ -436,6 +436,10 @@ def main() -> None:
     if len(sys.argv) != 2:
         raise SystemExit("Usage: native-normal-axes-oracle.py GAME_ROOT")
     probe = NormalAxesProbe(Path(sys.argv[1]))
+    # The x87 control word of each call: 0x037f (the game thread) unless
+    # ORACLE_CW sets the render pass's 0x007f (docs/render-pass-precision.md
+    # "UnrealScript in the render pass").
+    probe.control_word = int(__import__('os').environ.get('ORACLE_CW', '0x037f'), 0)
     cases = [probe.run(native, name, operands) for name, native, operands in CASES]
     # JavaScript cannot hold a signaling NaN: reading one through a typed
     # array quiets it before the VM sees the operand.  For every case whose

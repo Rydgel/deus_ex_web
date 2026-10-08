@@ -8,6 +8,7 @@ import { rotatorSin } from './coords.mjs';
 import { referenceElementType } from './script-values.mjs';
 import { scriptVmKernel } from './script-vm-kernel.mjs';
 import { X87_INDEFINITE, x87mul32, x87div32, x87add32, x87sub32 } from './x87-nan.mjs';
+import { x87Precision, x87PrecisionControl, setX87Precision } from './x87-precision.mjs';
 
 const f = Math.fround;
 const primitiveNatives=new Set([214,112,114,115,119,120,121,122,123,124,125,126,127,128,129,131,135,138,139,140,141,142,143,144,145,146,147,148,149,150,151,154,155,156,157,158,160,163,164,165,168,169,171,172,173,174,175,176,177,179,180,181,182,184,185,187,188,189,190,193,194,196,203,210,211,212,213,215,216,217,218,219,221,222,223,224,226,229,234,235,236,237,242,243,244,245,248,249,250,251,254,255,276,287,288,296,297,300,316,317,318,319]);
@@ -76,6 +77,10 @@ export const initScriptRunaway = () => { scriptRunaway = 0; };
 export const scriptRunawayCount = () => scriptRunaway;
 // The Rust interpreter's copy of the counter comes back through this.
 export const setScriptRunaway = value => { scriptRunaway = value; };
+// The arithmetic below rounds to the x87 precision control (x87-precision.mjs:
+// 64 bits on the game thread, 24 inside the render pass). x87-pc24.mjs's
+// explicit p24 forms are the same rounding for code ported at 24 bits.
+export { x87PrecisionControl, setX87Precision };
 // FLD m32 of a float32 word. x87load takes the float32 as a JavaScript
 // number; the *Word forms let a body keep a NaN's sign and payload without
 // storing the number in an Array, where V8 may canonicalize it (see
@@ -140,7 +145,7 @@ export const x87mul = (a, b) => {
     return !other.inf && other.sig === 0n ? { nan: X87_INDEFINITE } : { neg: a.neg ^ b.neg, inf: true };
   }
   if (a.sig === 0n || b.sig === 0n) return { neg: a.neg ^ b.neg, sig: 0n, exp: 0 };
-  const [sig, sh] = x87round(a.sig * b.sig, 64);
+  const [sig, sh] = x87round(a.sig * b.sig, x87Precision);
   return { neg: a.neg ^ b.neg, sig, exp: a.exp + b.exp + sh };
 };
 // FSUB operand negation: sign flips on finite and infinite values while a
@@ -160,12 +165,13 @@ export const x87add = (a, b) => {
     + (b.neg ? -(b.sig << BigInt(b.exp - exp)) : b.sig << BigInt(b.exp - exp));
   if (sum === 0n) return { neg: a.neg & b.neg, sig: 0n, exp: 0 };
   const neg = sum < 0n ? 1 : 0;
-  const [sig, sh] = x87round(neg ? -sum : sum, 64);
+  const [sig, sh] = x87round(neg ? -sum : sum, x87Precision);
   return { neg, sig, exp: exp + sh };
 };
 // 1.0 / b held on the x87 stack (native 222 divides the embedded double
 // 1.0 at 0x101765a8 by the float32 divisor and never stores it to float32).
 export const x87recip = b => {
+  if (x87Precision !== 64) return x87div({ neg: 0, sig: 1n, exp: 0 }, b);
   const n = x87width(b.sig), num = 1n << BigInt(63 + n);
   let q = num / b.sig;
   const twice = (num - q * b.sig) * 2n;
@@ -197,13 +203,13 @@ export const x87div = (a, b) => {
   const k = 96 + x87width(b.sig) - x87width(a.sig);
   const num = a.sig << BigInt(k);
   const q = num / b.sig, rem = num - q * b.sig;
-  const shift = x87width(q) - 64;
+  const width = x87Precision, shift = x87width(q) - width;
   let sig = q >> BigInt(shift);
   const low = q - (sig << BigInt(shift));
   const lost2 = (low * b.sig + rem) * 2n, unit = b.sig << BigInt(shift);
   if (lost2 > unit || (lost2 === unit && (sig & 1n))) sig += 1n;
   let exp = a.exp - b.exp - k + shift;
-  if (x87width(sig) > 64) { sig >>= 1n; exp += 1; }
+  if (x87width(sig) > width) { sig >>= 1n; exp += 1; }
   return { neg, sig, exp };
 };
 // The FST/FSTP float32 store: round the 64-bit significand to 24 bits with
@@ -266,6 +272,11 @@ export const x87sqrt = v => {
   const w = x87width(sig), sh = BigInt(w & 1 ? 127 - w : 128 - w);
   const n2 = sig << sh;
   let q = x87isqrt(n2);
+  if (x87Precision !== 64) {
+    // The floor root (64 bits) with a sticky bit, rounded once.
+    const [root, shifted] = x87round((q << 1n) | (q * q === n2 ? 0n : 1n), x87Precision);
+    return { neg: 0, sig: root, exp: exp / 2 - Number(sh) / 2 - 1 + shifted };
+  }
   // Round the real root to nearest (a root is never exactly halfway):
   // q + 1 wins iff n2 - q*q > q.
   if (n2 - q * q > q) q += 1n;

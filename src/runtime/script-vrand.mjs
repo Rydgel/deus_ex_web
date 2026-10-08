@@ -9,6 +9,8 @@
  * model the finite, normal values reached by the original MSVCRT stream so
  * the float32 result keeps the native boundary-bit behavior.
  */
+import { x87PrecisionControl, x87load, x87double, x87add, x87mul, x87neg, x87div, x87sqrt, x87store, x87storeDouble,
+  x87cmp } from './script-vm.mjs';
 
 const f = Math.fround;
 const TWO_POW_23 = 1n << 23n;
@@ -219,11 +221,37 @@ function sample(rng) {
   return { raw, stored: f(raw) };
 }
 
+/** The same body at x87 precision control 24 (inside the render pass,
+ * render-precision.mjs), on the x87 model: appFrand's FMUL rounds the
+ * retained product, `*2 - 1` rounds before the store (so the retained z is
+ * the stored z), the rejection sum (x*x + y*y) + z*z and the magnitude
+ * (z*z + y*y) + x*x round per operation, the double argument store is
+ * exact, and FSQRT, FDIVR 1.0 and each component product round to 24 bits. */
+const X_ONE = x87double(1);
+function execVRand24(rng) {
+  const sample24 = () => {
+    const retained = x87mul(x87double(rng.frand()), X_ONE);
+    return x87store(x87add(x87add(retained, retained), x87neg(X_ONE)));
+  };
+  let x, y, z;
+  for (;;) {
+    x = sample24(); y = sample24(); z = sample24();
+    const [X, Y, Z] = [x, y, z].map(x87load);
+    if (x87cmp(x87add(x87add(x87mul(X, X), x87mul(Y, Y)), x87mul(Z, Z)), X_ONE) !== 'gt') break;
+  }
+  const [X, Y, Z] = [x, y, z].map(x87load);
+  const squared = x87storeDouble(x87add(x87add(x87mul(Z, Z), x87mul(Y, Y)), x87mul(X, X)));
+  if (squared.sig === 0n) return [NaN, NaN, NaN];
+  const inverse = x87div(X_ONE, x87sqrt(squared));
+  return [X, Y, Z].map(component => x87store(x87mul(inverse, component)));
+}
+
 /** Execute the recovered Core native 252 contract against a shared RNG. */
 export function execVRand(rng) {
   if (typeof rng?.frand !== 'function') {
     throw new Error('VRand requires the shared original RNG stream');
   }
+  if (x87PrecisionControl() === 24) return execVRand24(rng);
   let x, y, z;
   for (;;) {
     x = sample(rng);

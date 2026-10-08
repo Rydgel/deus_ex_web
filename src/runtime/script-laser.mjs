@@ -5,8 +5,9 @@
 // FVector::Rotation run at x87 precision control 24
 // (docs/render-pass-precision.md): the x87 model here rounds every result to
 // 24 bits (x87-pc24.mjs), the double constants included.
-import { rotatorToVector } from './script-decoration-primitives.mjs';
+import { rotatorToVector, vectorToRotator24 } from './script-decoration-primitives.mjs';
 import { setScriptRotation } from './script-set-rotation.mjs';
+import { inRenderPass } from './render-precision.mjs';
 import { x87load, x87double, x87int32, x87neg, x87store, x87storeDouble, x87cmp } from './script-vm.mjs';
 import { p24add as x87add, p24mul as x87mul, p24div as x87div, p24sqrt as x87sqrt, r24prod } from './x87-pc24.mjs';
 
@@ -25,19 +26,6 @@ function unsafeNormal([x, y, z]) {
 }
 
 const lessOrUnordered = c => c === 'lt' || c === 'un';
-
-/** Core FVector::Rotation (0x10144390) at 24 bits: yaw `ftol(atan2(y, x)·K)`,
- * pitch `ftol(atan2(z, √(y² + x²))·K)` with K the embedded double
- * 10430.219195527361 (0x10178050), the sum and appSqrt's FSQRT at 24 bits and
- * each product rounded once from the exact value. FPATAN (unaffected by
- * precision control) is the host's Math.atan2, as in
- * script-decoration-primitives.mjs vectorToRotator. */
-function vectorToRotator24(vector) {
-  const [x, y, z] = vector.map(Math.fround), K = 10430.219195527361;
-  if (![x, y, z].every(Number.isFinite)) throw new Error('Original nonfinite vector rotation is not implemented');
-  const root = st(x87sqrt(x87add(x87mul(ld(y), ld(y)), x87mul(ld(x), ld(x)))));
-  return [Math.trunc(r24prod(Math.atan2(z, root), K)) | 0, Math.trunc(r24prod(Math.atan2(y, x), K)) | 0, 0];
-}
 
 /** ULaserIterator::CurrentItem on a plain iterator state (mutated in place):
  * {beams: 8 × {active, location, rotation, length, numSegments}, index,
@@ -147,7 +135,8 @@ function writeLaserState(runtime, iterator, state) {
  * (DrawActorSprite reads FDynamicSprite +0xbc..+0xd8, not the actor), so
  * every segment draws where CurrentItem put it. Returns those snapshots. */
 export function laserIteratorItems(runtime, iterator, owner, camera, { processEvent, frand }) {
-  processEvent(iterator, 'Init', [camera]);
+  // SetupDynamics runs Init(Camera) inside the render pass (render-precision.mjs).
+  inRenderPass(runtime, () => processEvent(iterator, 'Init', [camera]));
   runtime.writeNamed(iterator, 'Observer', camera);
   const max = runtime.readNamed(iterator, 'MaxItems') | 0, proxy = runtime.readNamed(iterator, 'proxy');
   const read = (actor, name) => runtime.readNamed(actor, name);

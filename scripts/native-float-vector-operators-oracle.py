@@ -77,6 +77,10 @@ NATIVES = {
     "subtractVectorVector":       {"index": 216, "thunk": 0x10101992, "body": 0x10137CA0, "result": "3f"},
     "addEqualVectorVector":       {"index": 223, "thunk": 0x10101447, "body": 0x10138B10, "result": "3f", "variable": "3f"},
     "vectorSize":                 {"index": 225, "thunk": 0x10102D88, "body": 0x10138D10, "result": "f"},
+    # The vector-to-rotator cast (token 0x50's evaluator in GNatives): Step
+    # the vector operand, FVector::Rotation (0x10144390), copy the rotator.
+    # It consumes no EndFunctionParms.
+    "vectorToRotator":            {"index": 0x50, "thunk": 0x1010329C, "body": 0x10136F90, "result": "3i"},
 }
 
 # Float32 operand values are written as bit patterns; vectors are three
@@ -511,6 +515,24 @@ CASES = [
     ("vsize-nan-xyz", "vectorSize", [("vector", [0xFFE12345, 0x7FE00000, 0x7FC00001])]),
     ("vsize-nan-tie", "vectorSize", [("vector", [0x7FC00001, 0xFFC00001, 0])]),
     ("vsize-nan-tie-zx", "vectorSize", [("vector", [0xFFC00001, 0, 0x7FC00001])]),
+    ("vsize-arbitrary-0", "vectorSize", [("vector", [0x40466666, 0x40966666, 0x40BCCCCD])]),
+    ("vsize-arbitrary-1", "vectorSize", [("vector", [0x449A5225, 0x3A83126F, 0xC29B6666])]),
+    ("vsize-arbitrary-2", "vectorSize", [("vector", [0x3DCCCCCD, 0x3E4CCCCD, 0x3E99999A])]),
+    ("vsize-arbitrary-3", "vectorSize", [("vector", [0x447A0000, 0x3A83126F, 0x40F8A3D7])]),
+    ("vsize-arbitrary-4", "vectorSize", [("vector", [0x4B7FFFFF, 0x3F800000, 0x3F800000])]),
+    ("vsize-arbitrary-5", "vectorSize", [("vector", [0xC14570A4, 0x42631EB8, 0xC2B43D71])]),
+    ("v2r-0", "vectorToRotator", [("vector", [0x3F800000, 0x00000000, 0x00000000])]),
+    ("v2r-1", "vectorToRotator", [("vector", [0x00000000, 0x3F800000, 0x00000000])]),
+    ("v2r-2", "vectorToRotator", [("vector", [0x00000000, 0x00000000, 0x3F800000])]),
+    ("v2r-3", "vectorToRotator", [("vector", [0x3F800000, 0x3F800000, 0x3F800000])]),
+    ("v2r-4", "vectorToRotator", [("vector", [0x40466666, 0x40966666, 0x40BCCCCD])]),
+    ("v2r-5", "vectorToRotator", [("vector", [0xC2C90000, 0x41A20000, 0x40F66666])]),
+    ("v2r-6", "vectorToRotator", [("vector", [0x3A83126F, 0x3B03126F, 0xBA03126F])]),
+    ("v2r-7", "vectorToRotator", [("vector", [0x4640E666, 0xC5CC799A, 0x44426CCD])]),
+    ("v2r-8", "vectorToRotator", [("vector", [0x3DCCCCCD, 0x3E4CCCCD, 0x3E99999A])]),
+    ("v2r-9", "vectorToRotator", [("vector", [0xBF800000, 0xBF800000, 0x3F000000])]),
+    ("v2r-10", "vectorToRotator", [("vector", [0x449A5225, 0x3A83126F, 0xC29B6666])]),
+    ("v2r-11", "vectorToRotator", [("vector", [0xBF333333, 0x3E99999A, 0xC14E6666])]),
 ]
 
 
@@ -518,6 +540,10 @@ def main() -> None:
     if len(sys.argv) != 2:
         raise SystemExit("Usage: native-float-vector-operators-oracle.py GAME_ROOT")
     probe = FloatVectorOperatorsProbe(Path(sys.argv[1]))
+    # The x87 control word of each call: 0x037f (the game thread) unless
+    # ORACLE_CW sets the render pass's 0x007f (docs/render-pass-precision.md
+    # "UnrealScript in the render pass").
+    probe.control_word = int(__import__('os').environ.get('ORACLE_CW', '0x037f'), 0)
     cases = [probe.run(native, name, operands) for name, native, operands in CASES]
     # JavaScript cannot hold a signaling NaN: reading one through a typed
     # array quiets it before the VM sees the operand.  For every case whose

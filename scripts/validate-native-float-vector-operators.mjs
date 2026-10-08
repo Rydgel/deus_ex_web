@@ -8,7 +8,13 @@ import path from 'node:path';
 import { AssetStore } from '../src/unreal/assets.mjs';
 import { readFunctionMetadata } from '../src/unreal/script-metadata.mjs';
 import { compileFunction, primitiveNativeIndices } from '../src/runtime/script-vm.mjs';
+import { vectorToRotator } from '../src/runtime/script-decoration-primitives.mjs';
 import { gameDirectory } from './game-directory.mjs';
+import { setX87Precision as setRenderPassPrecision } from '../src/runtime/script-vm.mjs';
+// ORACLE_CW=0x007f runs the oracle at the render pass's control word and the
+// VM at x87 precision control 24 (docs/render-pass-precision.md "UnrealScript
+// in the render pass").
+if (Number(process.env.ORACLE_CW) === 0x7f) setRenderPassPrecision(24);
 
 const root = gameDirectory();
 const python = process.env.NATIVE_PROBE_PYTHON ?? '.cache/native-probe-env/bin/python';
@@ -136,9 +142,18 @@ const NATIVES = {
 };
 const OUT_PARAM = new Set([182, 184, 185, 221, 222, 223, 224]);
 
-assert.deepEqual(oracle.addresses.natives, Object.fromEntries(Object.entries(NATIVES).map(
-  ([name, [index, thunk, body]]) => [name, { index, thunk: `0x${thunk.toString(16)}`, body: `0x${body.toString(16)}` }],
-)));
+// The vector-to-rotator cast (token 0x50's evaluator) is checked apart:
+// it has no Core.u function export.
+const CAST = { index: 0x50, thunk: 0x1010329c, body: 0x10136f90 };
+assert.deepEqual(oracle.addresses.natives, {
+  ...Object.fromEntries(Object.entries(NATIVES).map(
+    ([name, [index, thunk, body]]) => [name, { index, thunk: `0x${thunk.toString(16)}`, body: `0x${body.toString(16)}` }])),
+  vectorToRotator: { index: CAST.index, thunk: `0x${CAST.thunk.toString(16)}`, body: `0x${CAST.body.toString(16)}` },
+});
+assert.equal(coreDll[CAST.thunk - IMAGE_BASE], 0xe9, 'cast 0x50: thunk jump opcode');
+assert.equal(CAST.thunk + 5 + coreDll.readInt32LE(CAST.thunk - IMAGE_BASE + 1), CAST.body, 'cast 0x50: thunk target');
+// The body's one call: FVector::Rotation through its thunk 0x10102888.
+assert.equal(coreDll.subarray(0x10136fd3 - IMAGE_BASE, 0x10136fd8 - IMAGE_BASE).toString('hex'), 'e8b0b8fcff', 'cast 0x50: FVector::Rotation call');
 
 // Each thunk is at an image RVA that jumps to the body; the pinned bytes are
 // the x87 semantic instructions and the GPropAddr clear in the out bodies.
@@ -206,7 +221,16 @@ const fixture = (index, args) => compileFunction({
 
 // kind names in the oracle operand rows; each oracle operand is a bit word
 // (int/float) or a three-word vector.
+let casts = 0;
 for (const original of oracle.cases) {
+  if (original.native === 'vectorToRotator') {
+    // Step consumes the operand and nothing else; the rotator is copied out.
+    assert.equal(original.codeAdvance, 1, `${original.name}: FFrame cursor advance`);
+    assert.deepEqual(original.events, original.operands, `${original.name}: operand evaluation`);
+    assert.deepEqual(vectorToRotator(original.operands[0].map(f32)), original.resultBits.map(v => v | 0), `${original.name}: VM result`);
+    casts++;
+    continue;
+  }
   const index = NATIVES[original.native][0];
   assert.equal(original.index, index, `${original.name}: index`);
   assert.equal(original.codeAdvance, original.operands.length + 1,
@@ -270,4 +294,5 @@ for (const [name, value] of [['A', [1, 0, 0]], ['B', [0, 1, 0]]]) {
 assert.deepEqual(fixture(219, [variable(1), variable(2)]).run(receiver), 0, 'getter fixture dot');
 assert.deepEqual(evaluation, ['A', 'B'], 'VM evaluates Dot operands left to right');
 
-console.log(`Original Core float/vector operators passed ${oracle.cases.length} arithmetic, comparison, extended-precision, NaN-payload, out-parameter, operand-order, and FFrame cursor cases.`);
+assert.ok(casts >= 10, 'the vector-to-rotator cast cases ran');
+console.log(`Original Core float/vector operators and the vector-to-rotator cast passed ${oracle.cases.length} arithmetic, comparison, extended-precision, NaN-payload, out-parameter, operand-order, and FFrame cursor cases.`);

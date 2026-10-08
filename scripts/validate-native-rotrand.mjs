@@ -10,6 +10,11 @@ import {readFunctionMetadata} from '../src/unreal/script-metadata.mjs';
 import {createNativeRng} from '../src/runtime/rng.mjs';
 import {execRotRand,ROTRAND_NATIVE} from '../src/runtime/script-rot-rand.mjs';
 import {gameDirectory} from './game-directory.mjs';
+import { setX87Precision as setRenderPassPrecision } from '../src/runtime/script-vm.mjs';
+// ORACLE_CW=0x007f runs the oracle at the render pass's control word and the
+// VM at x87 precision control 24 (docs/render-pass-precision.md "UnrealScript
+// in the render pass").
+if (Number(process.env.ORACLE_CW) === 0x7f) setRenderPassPrecision(24);
 
 const root=gameDirectory(),dir='reports/movement/native-rotrand',reuse=process.argv.includes('--reuse');
 await mkdir(dir,{recursive:true});

@@ -160,8 +160,9 @@ keeps the dated record.
   ([conversation camera](docs/conversation-camera.md)) and speech-driven lip
   sync ([lip sync](docs/lip-sync.md)).
 
-**Still open in Stage 4:** UnrealScript inside the render events at the
-pass's 24-bit precision; the LOD morph's world-space rounding and per-mirror
+**Still open in Stage 4:** the 3D frame's projection at 24 bits (occlusion
+builds it at 64; [render-pass precision](docs/render-pass-precision.md));
+the LOD morph's world-space rounding and per-mirror
 selection ([LOD](docs/script-lodmesh-lod.md#play)); the security computers'
 camera views (the ViewportWindow family runs, its world pass is not drawn,
 [computer terminals](docs/script-window-computer-terminals.md)); per-frame fog

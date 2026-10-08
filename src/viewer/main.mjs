@@ -10,7 +10,7 @@ import { createSimClient } from './sim-client.mjs';
 import { createPlayCamera, pointCamera, applyPlayFrame, verticalFov, rotatorEuler, setPixelCentre } from './play-camera.mjs';
 import { createSpriteScene } from './sprite-scene.mjs';
 import { createDecalScene } from './decal-scene.mjs';
-import { decalProbe, placeProbe, laserProbe, meshLightProbe } from './decal-probe.mjs';
+import { decalProbe, placeProbe, laserProbe, meshLightProbe, renderPassProbe } from './decal-probe.mjs';
 import { viewProbe } from './view-probe.mjs';
 import { DECAL_LAYER } from './render-layers.mjs';
 import { createCoronaPass } from './corona-pass.mjs';
@@ -1195,6 +1195,12 @@ async terminalProbe(args) {
 async moverProbe(args) {
   if (simClient) return simClient.call('moverProbe', args);
   return game && sim ? (await import('./mover-probe.mjs')).moverProbe(game, sim, args) : null;
+},
+/** Validation only: decal-probe.mjs renderPassProbe (the weapon placed by
+ * RenderOverlays and the HUD scene frame) on the simulation side. */
+renderPassProbe(args) {
+  if (simClient) return simClient.call('renderPassProbe', args);
+  return game ? renderPassProbe(game, args) : null;
 },
 async moverDecalProbe(args) {
   if (simClient) return simClient.call('moverDecalProbe', args);

@@ -1,4 +1,5 @@
 import {refValue} from '../runtime/script-vm.mjs';
+import {inRenderPass} from '../runtime/render-precision.mjs';
 import {TextureStore} from '../unreal/textures.mjs';
 import {createMeshBinding} from './actor-mesh-sim.mjs';
 
@@ -67,7 +68,9 @@ export async function createWeaponOverlaySim(runtime,assets,playerSource,{kernel
       calls.push({actor:args[0],wireframe:Boolean(args[1]),clearZ:Boolean(args[2])});
     };
     try {
-      runtime.processEvent(target,'RenderOverlays',[canvas]);
+      // DrawWorld's RenderOverlays event runs inside the render pass, at
+      // x87 precision control 24 (render-precision.mjs).
+      inRenderPass(runtime,()=>runtime.processEvent(target,'RenderOverlays',[canvas]));
     } finally {
       runtime.native=previous;if(!wasBoundary)runtime.boundaryNatives.delete(467);
     }

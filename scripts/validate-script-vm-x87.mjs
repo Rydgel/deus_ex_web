@@ -18,7 +18,8 @@
  * any NaN matching any NaN.
  */
 import assert from 'node:assert/strict';
-import {x87Operators, x87OperatorWords} from '../src/runtime/script-vm.mjs';
+import {x87Operators, x87OperatorWords, setX87Precision} from '../src/runtime/script-vm.mjs';
+import {finishVectorSize} from '../src/runtime/mover-finish.mjs';
 import {loadScriptVmKernel} from '../src/runtime/script-vm-kernel.mjs';
 
 const kernel = await loadScriptVmKernel();
@@ -82,12 +83,23 @@ const OPERATORS = {
 };
 const CASES = Number(process.env.X87_CASES ?? 20000);
 let total = 0;
-for (const [name, operands] of Object.entries(OPERATORS)) {
+// Both precision controls: the game thread's 64 bits and the render pass's
+// 24 (render-precision.mjs), set in the kernel instance and the BigInt model
+// alike. VSize's model form (lib.rs vector_size, the interpreter's at 24)
+// runs at 24 only; its game-thread form is the double one.
+const references = {...x87OperatorWords};
+const numberReferences = {...x87Operators};
+for (const precision of [64, 24]) {
+setX87Precision(precision); kernel.setPrecision(precision);
+const operators = precision === 24 ? {...OPERATORS, vectorSize: () => [vector()]} : OPERATORS;
+references.vectorSize = v => bits(finishVectorSize(v));
+numberReferences.vectorSize = finishVectorSize;
+for (const [name, operands] of Object.entries(operators)) {
   assert.equal(typeof kernel[name], 'function', `kernel exports ${name}`);
   for (let i = 0; i < CASES; i++) {
     const args = operands();
     let expected;
-    try { expected = x87OperatorWords[name](...args); }
+    try { expected = references[name](...args); }
     catch (error) {
       // The reference refuses nothing here; an error is a harness fault.
       throw new Error(`${name}(${args.map(show).join(', ')}) reference threw: ${error.message}`);
@@ -98,13 +110,15 @@ for (const [name, operands] of Object.entries(OPERATORS)) {
     // kernel's result slot.
     const words = INTEGER.has(name) ? actual : Array.isArray(expected) ? kernel.resultWords() : bits(actual);
     assert.ok(sameWords(words, expected),
-      `${name}(${args.map(show).join(', ')}): kernel ${showWords(words)}, BigInt ${showWords(expected)}`);
+      `PC ${precision} ${name}(${args.map(show).join(', ')}): kernel ${showWords(words)}, BigInt ${showWords(expected)}`);
     if (!INTEGER.has(name)) {
-      assert.ok(numberMatches(actual, expected), `${name}(${args.map(show).join(', ')}): kernel number form ${show(actual)}`);
-      const numbers = x87Operators[name](...args);
-      assert.ok(numberMatches(numbers, expected), `${name}(${args.map(show).join(', ')}): BigInt number form ${show(numbers)}`);
-    } else assert.ok(sameWords(x87Operators[name](...args), expected), `${name}: BigInt int form`);
+      assert.ok(numberMatches(actual, expected), `PC ${precision} ${name}(${args.map(show).join(', ')}): kernel number form ${show(actual)}`);
+      const numbers = numberReferences[name](...args);
+      assert.ok(numberMatches(numbers, expected), `PC ${precision} ${name}(${args.map(show).join(', ')}): BigInt number form ${show(numbers)}`);
+    } else assert.ok(sameWords(numberReferences[name](...args), expected), `${name}: BigInt int form`);
     total++;
   }
 }
-console.log(`validate-script-vm-x87: ${Object.keys(OPERATORS).length} operators, ${total} operand sets bit-identical to the BigInt x87 bodies`);
+}
+setX87Precision(64); kernel.setPrecision(64);
+console.log(`validate-script-vm-x87: ${Object.keys(OPERATORS).length} operators (and VSize at 24 bits), ${total} operand sets at precision control 64 and 24 bit-identical to the BigInt x87 bodies`);

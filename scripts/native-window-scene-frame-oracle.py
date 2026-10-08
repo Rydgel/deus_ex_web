@@ -2,6 +2,9 @@
 Core appTan is supplied only from a real-x87 captured qword result: Unicorn's
 FPTAN is not authoritative. Other transforms/size operations execute unchanged.
 Render-device vtable +0xac is the sole other intercepted runtime leaf.
+A sample with `pass` then runs ComputeRenderSize (thunk 0x10302d6f) again on
+the same frame at control word 0x007f, at the size `pass` gives, as
+XRootWindow::PreRender does inside the render pass (Extension 0x1003a8cd).
 Inputs and capture results remain outside Git.
 """
 import importlib.util,json,struct,sys
@@ -35,6 +38,15 @@ class Probe(native.NativeCollision):
   location=self.alloc(12);rotation=self.alloc(12);self.write(location,'3f',*s['location']);self.write(rotation,'3i',*s['rotation'])
   self.call(0x103019d3,frame,struct.pack('<2I',location,rotation))
   if self.callbacks!=[frame]:raise RuntimeError('Unexpected ComputeRenderSize renderer callback')
-  return {'coordsBits':list(self.read(frame+0x34,'12I')),'sizeBits':[self.read(frame+at,'I')[0] for at in [0xb8,0xbc,0xc8,0xcc,0xdc]],'tangentCalls':self.tangent_calls,'rendererCallbacks':len(self.callbacks)}
+  out={'coordsBits':list(self.read(frame+0x34,'12I')),'sizeBits':[self.read(frame+at,'I')[0] for at in [0xb8,0xbc,0xc8,0xcc,0xdc]],'tangentCalls':self.tangent_calls,'rendererCallbacks':len(self.callbacks)}
+  if s.get('pass'):
+   self.tangent_calls=[];self.callbacks=[]
+   self.write(frame+0xa8,'2i',*s['pass'])
+   saved=self.control_word;self.control_word=0x007f
+   try:self.call(0x10302d6f,frame,b'')
+   finally:self.control_word=saved
+   out.update({'passCoordsBits':list(self.read(frame+0x34,'12I')),'passSizeBits':[self.read(frame+at,'I')[0] for at in [0xb8,0xbc,0xc8,0xcc,0xdc]],
+    'passTangentCalls':self.tangent_calls,'passRendererCallbacks':len(self.callbacks)})
+  return out
 if __name__=='__main__':
  req=json.load(sys.stdin);p=Probe(req['gameRoot'],req['tangents']);print(json.dumps({'hashes':native.HASHES,'viewCoords':p.view_coords,'results':[p.run(s) for s in req['samples']]}))

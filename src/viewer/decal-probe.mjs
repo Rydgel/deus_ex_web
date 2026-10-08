@@ -1,3 +1,6 @@
+import { inRenderPass, renderPassControl } from '../runtime/render-precision.mjs';
+import { buildWindowSceneFrame } from '../runtime/script-window-scene-frame.mjs';
+import { setX87Precision } from '../runtime/script-vm.mjs';
 /** Validation only (scripts/validate-decals-play.mjs): stand the player a few
  * metres from a ScriptedPawn looking at its feet (`place`), or read that
  * pawn's Shadow and the level's FDecal state, on whichever side runs the
@@ -77,4 +80,53 @@ export function meshLightProbe(meshLighting, game, { watch = null, take = false 
   const records = meshLighting.watch.records;
   meshLighting.watch.records = [];
   return { records, location: actor ? runtime.readNamed(actor, 'Location') : null };
+}
+
+/** Validation only (validate-render-pass-script-play.mjs), on the simulation
+ * side. `{locate: name}` returns a level actor's Location; `{take: name}` picks up the named inventory actor through the public
+ * Use path (the view must already select it: placeProbe lookAt) and
+ * activates its belt slot; `{}` reads the weapon the last frame's
+ * RenderOverlays placed (Location, Rotation, its owner's Location) with the
+ * original CalcDrawOffset evaluated again by the script VM inside the
+ * render pass (24 bits) and on the game thread (64), and the HUD scene
+ * frame the last paint wrote with ComputeRenderSize's projection at both
+ * precisions. */
+export async function renderPassProbe(game, { take = null, locate = null, time = 0 } = {}) {
+  const runtime = game.doors.scriptRuntime.runtime, player = game.player.collisionActor, read = (a, n) => runtime.readNamed(a, n);
+  if (locate) return read(runtime.levelFor(player).actors.find(a => a?.name === locate), 'Location');
+  if (take) {
+    const item = runtime.levelFor(player).actors.find(a => a?.name === take);
+    const used = game.use();
+    const belt = game.hud.read(game.hud.hud, 'belt');
+    const position = game.hud.read(belt, 'objects').findIndex(slot => game.hud.read(slot, 'item') === item);
+    const equipped = position >= 0 ? await game.activateBelt(position) : { ok: false };
+    return { used: used?.message ?? null, position, equipped: equipped.ok };
+  }
+  const weapon = read(player, 'Weapon');
+  if (time) {
+    // Measurement only: Weapon.CalcDrawOffset (the script math of
+    // RenderOverlays' placement) with the render pass's precision on and
+    // off, alternating, in microseconds per call (batches of 100).
+    const call = () => runtime.callFunction(runtime.lookup(weapon, 'CalcDrawOffset'), weapon);
+    const on = [], off = [], now = () => performance.now();
+    for (let i = 0; i < time * 2; i++) {
+      renderPassControl.enabled = !(i & 1);
+      const t = now(); for (let k = 0; k < 100; k++) inRenderPass(runtime, call); (i & 1 ? off : on).push((now() - t) * 10);
+    }
+    renderPassControl.enabled = true;
+    const med = a => a.sort((x, y) => x - y)[a.length >> 1];
+    return { precision24Us: med(on), precision64Us: med(off) };
+  }
+  const offset = () => runtime.callFunction(runtime.lookup(weapon, 'CalcDrawOffset'), weapon).map(Math.fround);
+  const frame = game.hud?.host?.lastSceneFrame ?? null;
+  const projection = bits => { const previous = setX87Precision(bits); try { return buildWindowSceneFrame(frame.input).projectionZ; }
+    finally { setX87Precision(previous); } };
+  return {
+    weapon: weapon?.name ?? null,
+    location: weapon ? read(weapon, 'Location') : null, rotation: weapon ? read(weapon, 'Rotation') : null,
+    owner: read(player, 'Location'), viewRotation: read(player, 'ViewRotation'),
+    offset24: weapon ? inRenderPass(runtime, offset) : null, offset64: weapon ? offset() : null,
+    sceneFrame: frame ? { width: frame.input.width, height: frame.input.height, fov: frame.input.fov, projectionZ: frame.value.projectionZ,
+      projection24: projection(24), projection64: projection(64) } : null,
+  };
 }

@@ -119,6 +119,10 @@ def main() -> None:
     if len(sys.argv) != 2:
         sys.exit("Usage: native-core-damage-primitives-oracle.py GAME_ROOT")
     probe = CoreDamagePrimitiveProbe(Path(sys.argv[1]))
+    # The x87 control word of each call: 0x037f (the game thread) unless
+    # ORACLE_CW sets the render pass's 0x007f (docs/render-pass-precision.md
+    # "UnrealScript in the render pass").
+    probe.control_word = int(__import__('os').environ.get('ORACLE_CW', '0x037f'), 0)
     cases = [
         probe.run("multiplyIntInt", [("int", 300), ("int", -7)], "i"),
         probe.run("multiplyIntInt", [("int", 0x40000000), ("int", 4)], "i"),
