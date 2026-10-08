@@ -24,7 +24,7 @@ import { loadScriptVmKernel } from '../src/runtime/script-vm-kernel.mjs';
 import { createBspOcclusion } from '../src/runtime/bsp-occlusion.mjs';
 import { surfaceTextureFlags, renderPassTangent, renderRectangle } from './occlusion-request.mjs';
 import { coordsTransform } from '../src/runtime/volumetric-fog.mjs';
-import { coronaSeen, coronaFade, coronaIcon, coronaFrame, coronaFrameFromCamera, CORONA_SLOTS } from '../src/runtime/coronas.mjs';
+import { coronaSeen, coronaFade, coronaIcon, coronaFrame, coronaFrameFromCamera, leafPermeatingLights, CORONA_SLOTS } from '../src/runtime/coronas.mjs';
 // ORACLE_CW=0x007f: the render-pass precision audit (precision-audit.mjs).
 const assert = auditAssert();
 
@@ -46,6 +46,23 @@ const assets = new AssetStore(files), asset = await assets.get('00_Training'), m
 const occlusion = createBspOcclusion((await loadScriptVmKernel()).occlusion, model, {
   surfaceTextureFlags: await surfaceTextureFlags(assets, asset, model), zoneActors: model.zones.map(z => (z.actor > 0 ? z.actor : 0)) });
 const SIZES = [[1440, 960], [1920, 1080], [1024, 768], [801, 601]];
+
+// The leaf loops (0x10b1b6b1-0x10b1b745): which lights the pass offers the
+// helper for the viewer's leaf, and in which order: the leaf's permeating
+// static lights (Model.Leaves[iLeaf].iPermeating into the null-terminated
+// Model.Lights), then URender::LeafLights[iLeaf], head first.
+const LEAF_CASES = 60;
+const visitCases = Array.from({ length: LEAF_CASES }, () => {
+  const lights = 1 + int(14), leaves = Array.from({ length: 2 + int(6) }, () => [int(3), random() < 0.25 ? -1 : int(16), -1]);
+  const flat = []; // runs of light indices, 0 (null) ends a run, as Model.Lights lists them
+  const starts = [];
+  while (flat.length < 18) { starts.push(flat.length); for (let k = int(5); k > 0; k--) flat.push(int(lights) + 1); flat.push(0); }
+  leaves.forEach(leaf => { if (leaf[1] >= 0) leaf[1] = pickStart(starts); });
+  const leafLists = {};
+  leaves.forEach((_, leaf) => { if (random() < 0.6) leafLists[leaf] = Array.from({ length: 1 + int(4) }, () => int(lights)); });
+  return { lights, leaves, flat, leafLists, iLeaf: int(leaves.length) };
+});
+function pickStart(starts) { return starts[int(starts.length)]; }
 
 const FABRICATED = 200, MASTER = 80;
 const cases = [];
@@ -98,7 +115,9 @@ for (let c = 0; c < FABRICATED + MASTER; c++) {
     lights: lights.map(l => ({ ...l, location: l.location.map(bits), drawScale: bits(l.drawScale) })), lightsJs: lights, entries, seen });
 }
 const reference = JSON.parse(execFileSync(python, ['scripts/native-coronas-oracle.py', gameDirectory()],
-  { input: JSON.stringify(cases.map(({ coordsJs, frameJs, lightsJs, ...c }) => c)), encoding: 'utf8', maxBuffer: 1 << 28 }));
+  { input: JSON.stringify([...cases.map(({ coordsJs, frameJs, lightsJs, ...c }) => c), ...visitCases.map(c => ({ leafVisit: {
+    lights: c.lights, leaves: c.leaves, modelLights: c.flat.map(v => v - 1), iLeaf: c.iLeaf,
+    leafLists: c.leafLists } }))]), encoding: 'utf8', maxBuffer: 1 << 28 }));
 
 let icons = 0, seenCount = 0, created = 0, behind = 0;
 cases.forEach((c, i) => {
@@ -146,7 +165,16 @@ cases.forEach((c, i) => {
   assert.deepEqual(drawn, expected.icons.map(({ canvas, ...icon }) => icon), `${where}: DrawIcon calls`);
   icons += drawn.length;
 });
+// The leaf loops: the same lights in the same order.
+let visits = 0, dynamicVisits = 0;
+visitCases.forEach((c, i) => {
+  const model = { leaves: c.leaves.map(([, permeating]) => ({ permeating })), lights: c.flat };
+  const expected = [...leafPermeatingLights(model, c.iLeaf).map(ref => ref - 1), ...(c.leafLists[c.iLeaf] ?? [])];
+  assert.deepEqual(reference[cases.length + i].visited, expected, `leaf visit case ${i}: lights offered to the helper`);
+  visits += expected.length; dynamicVisits += (c.leafLists[c.iLeaf] ?? []).length;
+});
+assert.ok(visits > 50 && dynamicVisits > 20, 'leaf cases visit static and dynamic lights');
 assert.ok(icons > 100 && created > 50 && behind > 20, 'cases reach drawn icons, new entries and lights behind the eye');
 occlusion.dispose();
-console.log(`Coronas: ${cases.length} frames (${fromCamera} from the master frame OccludeBsp reads; fade loop included), ${seenCount} helper calls (${created} new entries), ${icons} DrawIcon calls and ${behind} lights behind the eye match the original Render.dll.`);
+console.log(`Coronas: ${LEAF_CASES} leaf visits (${visits} helper calls, ${dynamicVisits} from LeafLights), ${cases.length} frames (${fromCamera} from the master frame OccludeBsp reads; fade loop included), ${seenCount} helper calls (${created} new entries), ${icons} DrawIcon calls and ${behind} lights behind the eye match the original Render.dll.`);
 if (assert.enabled) assert.report('validate-coronas');

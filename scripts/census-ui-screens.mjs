@@ -24,6 +24,7 @@ import {decodeMap} from '../src/unreal/map.mjs';
 import {createGame} from '../src/viewer/game.mjs';
 import {gameDirectory} from './game-directory.mjs';
 import {createPlayerInputFixture} from './player-input-fixture.mjs';
+import {createMenuDriver} from '../src/viewer/menu-driver.mjs';
 
 const option = (name, fallback) => { const i = process.argv.indexOf(`--${name}`); return i < 0 ? fallback : process.argv[i + 1]; };
 const map = option('map', '00_Training');
@@ -74,34 +75,42 @@ for (const screen of screens) {
     catch (error) { failedStack ??= [...stack]; throw error; }
     finally { stack.pop(); }
   };
-  const topWindow = () => {
-    const rootWindow = runtime.namedReference(player, 'rootWindow').get();
-    let window = rootWindow ? W.ptr(rootWindow, 0x140) : 0;
-    while (window && W.u8(window, 0x28) < 2) window = W.ptr(window, 0x144);
-    return window || null;
-  };
-  const top = () => { const window = topWindow(); return window ? runtime.instance(window).cls.record.key : null; };
-  // The button of the topmost menu window whose buttonDefaults invoke a menu class
-  // (MenuUIMenuWindow buttonDefaults[i].invoke), activated like a click.
-  const activateInvoking = screenClass => {
-    const menu = topWindow(), defaults = runtime.readNamed(menu, 'buttonDefaults'), buttons = runtime.readNamed(menu, 'winButtons');
-    const index = defaults.findIndex(entry => Object.entries(entry).find(([key]) => key.endsWith('.invoke'))?.[1]?.key === `deusex.${screenClass.toLowerCase()}`);
-    if (index < 0) throw new Error(`${top()} has no button invoking ${screenClass}`);
-    game.hud.scoped(() => W.native.activateButton(buttons[index], 1));
-    input.tick(10);
-  };
-  // 'MenuSettings>MenuScreenOptions' opens the main menu, then each class in turn from the previous window.
+  // The shared menu driver (src/viewer/menu-driver.mjs): the same button and slider actions the
+  // browser check uses.
+  const driver = createMenuDriver(game), {topWindow, top} = driver;
+  // 'MenuSettings>MenuScreenOptions' opens the main menu, then each class in turn from the previous
+  // window; 'MenuSettings>MenuScreenDisplay#MenuChoice_Brightness' then presses an action choice
+  // (a MenuUIChoiceAction: its ButtonActivated invokes the screen it names).
   const openFromMainMenu = path => {
-    game.hud.scoped(() => runtime.scriptConsoleExec(player, 'ShowMainMenu'));
+    driver.showMainMenu();
     input.tick(5);
-    for (const screenClass of path.split('>')) activateInvoking(screenClass);
+    for (const step of path.split('>')) {
+      const [screenClass, choice] = step.split('#');
+      driver.invoke(screenClass); input.tick(10);
+      if (choice) { driver.press(choice); input.tick(10); }
+    }
     return true;
+  };
+  // Trailing '!cycle', '!reset', '!ok' on a path exercise the screen once it is open: cycle every
+  // value choice (a ButtonActivated on its action button), press ResetToDefaults, press OK
+  // (SaveSettings, then PopWindow). The action choices (MenuUIChoiceAction) are skipped.
+  const exercise = word => {
+    // A restart-required choice opens a message box; dismiss it with Escape first.
+    for (let guard = 0; top()?.includes('messagebox') && guard < 5; guard++) {
+      game.windowKey('Escape', true); game.windowKey('Escape', false); input.tick(5);
+    }
+    if (word === 'ok') { driver.pressAction(1); input.tick(10); return null; }
+    if (word === 'reset') { driver.pressAction(3); input.tick(10); return null; }
+    if (word !== 'cycle') throw new Error(`unknown census step !${word}`);
+    return driver.cycleAll();
   };
   const result = {screen};
   try {
     input.tick(30);
-    result.opened = /^Menu/.test(screen) ? openFromMainMenu(screen) : game.hud.scoped(() => runtime.scriptConsoleExec(player, screen));
+    const [path, ...exercises] = screen.split('!');
+    result.opened = /^Menu/.test(screen) ? openFromMainMenu(path) : game.hud.scoped(() => runtime.scriptConsoleExec(player, screen));
     input.tick(10);
+    for (const word of exercises) { const done = exercise(word); input.tick(5); if (Array.isArray(done)) result.cycled = done; else result.pressed = word; }
     result.window = top();
     if (process.env.CENSUS_ACTIONS) {
       // What the topmost menu offers: the classes its buttonDefaults invoke.

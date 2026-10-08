@@ -30,10 +30,18 @@ export function decalProbe(game, { place = false, pawn = null } = {}) {
 /** Validation only (validate-volumetric-fog-play.mjs, validate-coronas-play
  * and other checks of a view): move the player to `location` (optional) and
  * set its ViewRotation to `rotation`, or aim the view from the eye at the
- * level actor named `lookAt`, on the simulation side (sim-worker.mjs
+ * level actor named `lookAt`, or write properties of an actor (`set`), on the
+ * simulation side (sim-worker.mjs
  * `call`, or the page with ?sim=inline). */
-export function placeProbe(game, { location = null, rotation = null, lookAt = null }) {
+export function placeProbe(game, { location = null, rotation = null, lookAt = null, set = null }) {
   const runtime = game.doors.scriptRuntime.runtime, player = game.player.collisionActor;
+  // `set` {actor, fields}: write script properties of a level actor (validate-
+  // coronas-play: make a static corona light a moving-light candidate).
+  if (set) {
+    const target = runtime.levelFor(player).actors.find(a => a?.name === set.actor);
+    if (!target) throw new Error(`placeProbe: no actor ${set.actor}`);
+    for (const [name, value] of Object.entries(set.fields)) runtime.writeNamed(target, name, value);
+  }
   if (location) runtime.farMoveActor(player, location, 0, 1);
   if (lookAt) {
     const target = runtime.levelFor(player).actors.find(a => a?.name === lookAt), at = runtime.readNamed(target, 'Location');

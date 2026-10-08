@@ -154,7 +154,10 @@ the sort key and `SpecialTag` (`+0x110`) the fade. At most 120, in this order:
 1. cached entries, fade from the cache;
 2. the leaf's permeating static lights (`Model.Leaves[iLeaf].iPermeating`
    into `Model.Lights`, null-terminated), fade 0;
-3. `LeafLights` (the moving lights filtered into this leaf), fade 255.
+3. `LeafLights` (the moving lights filtered into this leaf), fade 255: the
+   candidates SetupDynamics took (its gate and the frame's ViewPlanes sphere
+   test) in the order Filter's hop parity leaves them
+   ([coronas](coronas.md#leaf-lights)).
 
 A candidate is kept when its `bSpecialLit` equals the actor's and
 `dist² < R²`, with `R = WorldLightRadius()`. For `LightEffect = LE_Cylinder`

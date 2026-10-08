@@ -10,6 +10,15 @@ import * as THREE from 'three';
  * Host choice, noted: the ramp's 16-bit entries reach an 8-bit canvas here
  * as round(255 * pow(x/255, g)); how a display reduced them is not
  * modelled. */
+/** The ramp exponent D3DDrv's UD3DRenderDevice::Flush 0x10002e32 builds from Client->Brightness
+ * (UClient +0x6c, a float32): `fld Brightness; fmul 2.5f (0x10018434); fstp dword`, then
+ * `1.0f / that` as the exponent of appPow. Brightness 0 divides by zero (the ramp becomes black
+ * below full scale); the shader gets the largest float then. */
+export function brightnessGamma(brightness) {
+  const divisor = Math.fround(Math.fround(brightness) * 2.5);
+  return divisor > 0 ? Math.min(1 / divisor, 3.4028234663852886e38) : 3.4028234663852886e38;
+}
+
 export function createDisplayRamp() {
   let texture = null;
   const uniforms = { frame: { value: null }, gamma: { value: 1 } };

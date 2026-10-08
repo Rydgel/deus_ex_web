@@ -26,7 +26,7 @@ import {pointerButtonKey,windowPointerSample} from './window-pointer.mjs';
 import { typedCharacters } from './typed-characters.mjs';
 import {mp3SampleRate,pcm16} from '../runtime/galaxy-lipsync-channels.mjs';
 import { setDisplayRampPerFragment } from './light-atlas.mjs';
-import { createDisplayRamp } from './display-ramp.mjs';
+import { createDisplayRamp, brightnessGamma } from './display-ramp.mjs';
 import { stateDigest } from '../runtime/state-digest.mjs';
 import { createMusicOutput } from './galaxy-music-output.mjs';
 import { connectMusicLibraryPort, driveMusicLibrary } from '../runtime/galaxy-music-library.mjs';
@@ -381,9 +381,27 @@ const SCREEN_ASPECTS = { window: null, '4:3': 4 / 3, '16:10': 16 / 10 };
 // simulation side's camera follows them (play-camera.mjs).
 let canvasAspect = 1, resizeCount = 0;
 let screenAspect = 'window';
+// A SetRes request from the original menus (UWindowsViewport::Exec SetRes -> RenDev->SetRes): the
+// drawing buffer is exactly width x height, scaled to fit the page (docs/script-native-config.md).
+let fixedResolution = null;
 function resize() {
   const box = $('viewport').getBoundingClientRect(), canvas = $('scene');
   let width = box.width, height = box.height;
+  if (mode === 'play' && fixedResolution) {
+    const { width: bufferWidth, height: bufferHeight } = fixedResolution;
+    const fit = Math.min(box.width / bufferWidth, box.height / bufferHeight);
+    width = Math.floor(bufferWidth * fit); height = Math.floor(bufferHeight * fit);
+    canvas.style.width = `${width}px`; canvas.style.height = `${height}px`;
+    canvas.style.marginLeft = `${Math.floor((box.width - width) / 2)}px`; canvas.style.marginTop = `${Math.floor((box.height - height) / 2)}px`;
+    renderer.setPixelRatio(1);
+    renderer.setSize(bufferWidth, bufferHeight, false); camera.aspect = bufferWidth / Math.max(1, bufferHeight);
+    canvasAspect = camera.aspect; resizeCount++;
+    camera.fov = verticalFov(75, camera.aspect);
+    camera.updateProjectionMatrix();
+    setPixelCentre(camera, renderer.domElement.width, renderer.domElement.height);
+    return;
+  }
+  renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
   const aspect = mode === 'play' ? SCREEN_ASPECTS[screenAspect] : null;
   if (aspect) { if (width / Math.max(1, height) > aspect) width = height * aspect; else height = width / aspect; }
   if (mode === 'play') {
@@ -671,7 +689,8 @@ async function loadMap(name) {
     setPreviewsAvailable({light: training, 'dark-door': training, npc: Boolean(npcPreview?.npcActors?.length),
       instructor: training, weapon: training, datacube: training, keypad: training});
     $('infolink-shell').hidden = true;
-    world.displayGamma.value = 1 / (2.5 * Number($('brightness').value));
+    world.displayGamma.value = brightnessGamma(Number($('brightness').value));
+    displayFlushes = null; displayResolutionVersion = 0;
     // The worker's PlayerCalcView replies point the camera before the map
     // counts as ready (on the page they are synchronous).
     // resetCamera runs ?cheat= when it resets the player (Play mode).
@@ -757,11 +776,24 @@ $('wireframe').onchange = event => { if (world) for (const material of world.mat
 $('actor-markers').onchange = event => { if (world) world.markers.visible = event.target.checked; };
 $('lighting').onchange = event => { if (world) world.lightingEnabled.value = event.target.checked ? 1 : 0; };
 $('subtitles').onchange = event => { subtitlePreference = event.target.checked; simInput.subtitles(subtitlePreference); };
-$('brightness').oninput = event => {
-  const value = Number(event.target.value);
-  if (world) world.displayGamma.value = 1 / (2.5 * value);
+function setBrightness(value) {
+  $('brightness').value = String(value);
+  if (world) world.displayGamma.value = brightnessGamma(value);
   $('brightness-value').value = value.toFixed(2);
-};
+}
+$('brightness').oninput = event => setBrightness(Number(event.target.value));
+// The render device's view of the client config (sim-session.mjs snapshot.display): a Flush re-reads
+// Brightness (D3DDrv UD3DRenderDevice::Flush) and a SetRes request fixes the drawing buffer.
+let displayFlushes = null, displayResolutionVersion = 0;
+function applyDisplaySettings(display) {
+  if (displayFlushes !== null && display.flushes !== displayFlushes && Number.isFinite(display.brightness)) setBrightness(display.brightness);
+  displayFlushes = display.flushes;
+  if (display.resolutionVersion !== displayResolutionVersion) {
+    displayResolutionVersion = display.resolutionVersion;
+    fixedResolution = display.resolution ? { width: display.resolution.width, height: display.resolution.height } : null;
+    resize();
+  }
+}
 function setCamera(input) {
   if (!world) throw new Error('No map loaded');
   if (!input || Object.keys(input).some(k => !['position', 'rotation'].includes(k)) ||
@@ -1176,6 +1208,12 @@ viewProbe(args) {
   if (simClient) return simClient.call('viewProbe', args);
   return game ? viewProbe(game, args) : null;
 },
+/** Validation only: settings-probe.mjs, one step of the original options menus on the
+ * simulation side and the settings state it left (docs/script-native-config.md). */
+async settingsProbe(step) {
+  if (simClient) return simClient.call('settingsProbe', [step]);
+  return game ? (await import('./settings-probe.mjs')).settingsProbe(game, step) : null;
+},
 /** Validation only: window-probe.mjs (the root window, focus text,
  * Console line and notes) on the simulation side. */
 async windowProbe() {
@@ -1245,8 +1283,10 @@ fog() {
 showFog(on) { if (world?.fog) world.fog.root.visible = Boolean(on); },
 /** The page's corona pass (corona-pass.mjs): the last frame's counters,
  * and the simulation's last corona frame: its icons with the inputs of
- * their placement and the master frame's words they were placed in. */
-coronas() { return coronaPass ? { ...coronaPass.stats, icons: lastCoronaScan?.icons ?? null, frameWords: lastCoronaScan?.frameWords ?? null } : null; },
+ * their placement, the lights the helper was called for (in order) and the
+ * master frame's words they were placed in. */
+coronas() { return coronaPass ? { ...coronaPass.stats, icons: lastCoronaScan?.icons ?? null, visited: lastCoronaScan?.visited ?? null,
+  frameWords: lastCoronaScan?.frameWords ?? null } : null; },
 /** Draw or skip the corona pass (validation: a frame with and without it). */
 showCoronas(on) {
   if (!coronaPass) return;
@@ -1410,6 +1450,7 @@ function drawFrame(snap, time) {
     // The worker's audio since the last snapshot, as its callbacks ran
     // during the tick, then the frame's errors.
     for (const { kind, event } of snap.audio ?? []) { if (kind === 'voice') void galaxyVoice(event); else void playConversationSpeech(event); }
+    if (snap.display) applyDisplaySettings(snap.display);
     if (snap.answers) simAnswers = snap.answers;
     for (const message of snap.toasts ?? []) toast(message);
     if (snap.status) { simStatus = snap.status; if (npcPreview && snap.status.summary) npcPreview.summary = snap.status.summary; }

@@ -307,6 +307,27 @@ export function createSimSession(game, { assets = null, events = [], exportName 
     });
     return minX < maxX && startY < endY ? [minX, startY, maxX, endY] : null;
   }
+  // The main frame's coordinates and ViewPlanes, which SetupDynamics reads
+  // (the mesh lighting's leaf lists, mesh-lighting-view.mjs): the master frame
+  // built before the frame's lighting setup, once per frame. Its words and
+  // planes depend on the view and the render rectangle alone, so visibility()
+  // builds the same ones later, after the moving brush tracker's update has
+  // moved the zone lookup's model. Null without OccludeBsp or a drawn rectangle.
+  const frameMasters = new WeakMap();
+  function frameMaster() {
+    const frame = current;
+    if (!occlusion || !frame?.view || !size) return null;
+    const rect = frame.renderRect ?? { width: size[0], height: size[1], render: true };
+    if (!(rect.render && rect.width > 0 && rect.height > 0)) return null;
+    let master = frameMasters.get(frame);
+    if (!master) {
+      const built = occlusion.master({ location: frame.view.location, rotation: frame.view.rotation, width: size[0], height: size[1],
+        fov: frame.view.fov, render: { width: rect.width, height: rect.height } });
+      master = { words: Array.from(built.frame), planes: Array.from(built.fields.slice(41, 57)) };
+      frameMasters.set(frame, master);
+    }
+    return master;
+  }
   // `movers` false (a ViewportWindow's frame) keeps the tracker as the main
   // frame left it: the original updates the moving brush tracker on the game
   // thread (64 bits) when a mover moves, never inside a render-pass DrawWorld,
@@ -322,8 +343,9 @@ export function createSimSession(game, { assets = null, events = [], exportName 
     // PreRender for the main frame, ViewportWindow's Draw for a camera's;
     // docs/render-pass-precision.md "The 3D frame's projection").
     const [viewportWidth, viewportHeight] = size ?? [width, height];
-    const words = occlusion.master({ location: view.location, rotation: view.rotation, width: viewportWidth,
-      height: viewportHeight, fov: view.fov, render: { width, height } }).frame;
+    const built = occlusion.master({ location: view.location, rotation: view.rotation, width: viewportWidth,
+      height: viewportHeight, fov: view.fov, render: { width, height } });
+    const words = built.frame;
     f32[0] = runtime.readNamed(info, 'TimeSeconds');
     // The decal block clips against the saved polygons' points (option
     // 0x100); Setup's sprites need only their keys (0x200).
@@ -365,7 +387,8 @@ export function createSimSession(game, { assets = null, events = [], exportName 
     const lod = { coords: Array.from(frameFloats.subarray(0, 12)), fx: frameFloats[18] };
     // The master frame as OccludeBsp got it, with the inputs that made it
     // (validate-master-frame-play.mjs; docs/render-pass-precision.md).
-    const master = { words: Array.from(words), location: Array.from(view.location), rotation: Array.from(view.rotation), fov: view.fov,
+    // `planes`: the frame's four ViewPlanes (+0x12c), as words.
+    const master = { words: Array.from(words), planes: Array.from(built.fields.slice(41, 57)), location: Array.from(view.location), rotation: Array.from(view.rotation), fov: view.fov,
       viewport: [viewportWidth, viewportHeight], render: [width, height] };
     return { nodes, zone: words[42], mirrors, frames: childFrames ? frames : null, size: [width, height], lod, master,
       sky: result.children.some(child => child.kind === 'sky'), decals: fragments, movers, moverItems,
@@ -609,7 +632,7 @@ export function createSimSession(game, { assets = null, events = [], exportName 
       // (mesh-frame-pack.mjs), a fresh buffer each frame.
       const pack = createMeshFramePack();
       const snapshot = { errors, timings, begin: null, drawWorld: true, sprites: null, actors: null, stamps: null,
-        coronas: null, weapon: null, hud: null, audioMs: 0, events: null, pack: null };
+        coronas: null, weapon: null, hud: null, audioMs: 0, events: null, pack: null, display: null };
       let begun = null;
       if (input.play) {
         begun = this.begin({ dt: input.dt, run: input.run, halted: input.halted, width, height, lipSync,
@@ -685,6 +708,11 @@ export function createSimSession(game, { assets = null, events = [], exportName 
       if (begun?.light) begun.light.strobe = { time: lights.strobe.time, flag: lights.strobe.flag };
       snapshot.events = events.splice(0);
       snapshot.pack = pack.words();
+      // What the render device took from the client config (docs/script-native-config.md): the
+      // Brightness of its last Flush and the last SetRes request.
+      const display = game.hud?.host?.display;
+      snapshot.display = display ? { brightness: display.brightness, flushes: display.flushes,
+        resolution: display.resolution, resolutionVersion: display.resolutionVersion } : null;
       return snapshot;
     },
     /** The queued events outside a frame (map load: the first creation
@@ -700,7 +728,10 @@ export function createSimSession(game, { assets = null, events = [], exportName 
       const toUnits = radians => Math.round(radians * 32768 / Math.PI);
       const view = inspect ?? current?.view ?? { location: fromView(camera.position.toArray()),
         rotation: [toUnits(camera.rotation.x), toUnits(-camera.rotation.y), 0] };
-      try { meshLighting.beginFrame({ location: view.location, rotation: view.rotation, seconds, lights: inspect ? null : live.lights }); }
+      try {
+        meshLighting.beginFrame({ location: view.location, rotation: view.rotation, seconds, lights: inspect ? null : live.lights,
+          master: inspect ? null : frameMaster() });
+      }
       catch (error) { failed = true; errors.push(plainError(error)); }
       return errors;
     },
@@ -830,7 +861,7 @@ export function createSimSession(game, { assets = null, events = [], exportName 
     coronas({ now }) {
       const errors = [], rect = current?.renderRect ?? { width: size[0], height: size[1] };
       let frame = null;
-      try { frame = coronaScan.update(current.view, rect, current.visibility?.master ?? null, now); }
+      try { frame = coronaScan.update(current.view, rect, current.visibility?.master ?? null, live.lights, now); }
       catch (error) { failed = true; errors.push(plainError(error)); }
       return { errors, frame, width: rect.width, height: rect.height };
     },
