@@ -28,6 +28,30 @@ dispatched from `script-window-host-natives.mjs`.
 | 1644 GetValue | 0x100410d0 → 0x1003e1b0 | Returns TickToValue(position), stored as a float. |
 | 1645 GetValues | 0x10041110 → 0x1003e230 | `from` is TickToValue(position). In range mode `to` is TickToValue(position + span); otherwise it is the +0x1d4 value (the range's *low* end). The exec passes the out properties through GPropAddr. |
 
+### Value strings (2026-10-08)
+
+The options menus' sliders (`MenuUIChoiceSlider`) show their value through these.
+Window layout: the format FString at +0x1dc (the constructor default is
+`%1.2f`), the label `TArray<FString>` at +0x268 (Data, Num +0x26c, Max +0x270;
+12-byte elements), the position at +0x1c8.
+
+| Native | Exec → body | Behaviour |
+| --- | --- | --- |
+| 1646 SetValueFormat | 0x100411d0 → 0x1003e310 | `FString::operator=(format)` on +0x1dc (an empty argument becomes the shared empty string), then **always** `ChangeScalePosition(1)`. |
+| 1647 GetValueString | 0x10041310 → 0x1003e460 | The label of the current position when `0 <= position < Num` and it is not empty (`appStricmp` against `L""`); otherwise `appSprintf(buffer, format, (double)GetValue())`. The result is copied from a static buffer (0x100aa924) into the returned FString. |
+| 1648 SetEnumeration | 0x100413b0 → 0x1003e580 | A tick outside `[0, 0x200)` returns at once (no notification). Otherwise the array grows to `tick + 1` elements (FArray growth `Num + 3*Num/8 + 32`, new elements zeroed), element `tick` takes the text, and `ChangeScalePosition(1)` runs **only when `tick` is the current position**. |
+| 1649 ClearAllEnumerations | 0x10041510 → 0x1003e780 | Every element string is emptied and released, the array is emptied (`Realloc(12)` frees it), then `ChangeScalePosition(1)`. |
+| 1653 PlayScaleSound | 0x100416e0 → 0x1003e9c0 | Defaults: sound None, volume -1.0, pitch 1.0; calls the XWindow sound routine 0x10050050 at the scale's centre (`size * 0.5 + position`, each stored as float32). The body was already translated (`playScaleSound`) for the scroll input; this adds the exec wrapper. |
+
+**GetValueString and extended precision.** `GetValue` (0x1003e1b0) returns
+`TickToValue` in `st0`. The body's `fst dword` spills only a copy, and the
+`fstp qword` that pushes the printf argument stores the **unrounded extended
+value as a double**, not the float32. At an exact `.5` that changes the digit:
+rounding through float32 (what `GetValue` as a script float would give)
+disagreed with the original in 73 of the validated GetValueString cases (for
+example `-2` against `-3` at `%1.0f`). The JavaScript model stores the x87 value
+as FSTP m64 and formats that.
+
 **Omitted colours.** When the colour argument of SetScaleBorder or
 SetThumbBorder is omitted, R, G and B are 0xff. The exec writes them over its
 `FFrame*` argument slot, so the alpha byte is the high byte of that pointer.
@@ -95,16 +119,39 @@ security screen through these natives. The slider's broadcast reaches
 `ComputerScreenSecurity.ScalePositionChanged` and sets `panMod` to 1, which
 the pan and zoom checks then use.
 
+### Value-string checks (2026-10-08)
+
+`scripts/validate-window-scale-values.mjs` runs the natives' exec bodies
+unchanged, with Core's FArray/FString/appStr* code, through
+`scripts/native-window-scale-values-oracle.py`. Besides the receiver image it
+compares the format string and label-array contents with their Num/Max, the
+result string, the recorded `AskParentForReconfigure` /
+`ChangeScalePosition(1)` / `PlaySound(sound, volume, pitch, x, y)` events
+(floats as raw bits) and the consumed code bytes. **5,546 cases are
+identical**: SetValueFormat 64, SetEnumeration 336 (ticks across the 0x200
+limit, growth past Max, the current position, empty and set texts),
+ClearAllEnumerations 6, PlayScaleSound 212 (skipped optionals, edge
+volume/pitch, geometry) and GetValueString 4,928 (labels, 8 formats, 8 ranges,
+11 positions, both modes). Four deliberate mutations are caught (notifying on
+every tick, the 0x200 limit, a missing clear notification, and the float32
+spill above).
+
+The Core services are the real Core.dll code except GMalloc (a bump allocator
+behind a fake FMalloc vtable), the MSVCRT string primitives (libc
+definitions), and `_vsnwprintf`, which the oracle answers from rows the
+validator measured with the game's own MSVCRT.dll under Wine for exactly the
+(format, double) pairs involved ([value formatting](script-value-format.md));
+a pair that was not measured stops the run, so a mismatch between the model's
+double and the original x87 run shows up as a failure. GetValueString cases
+are skipped when Wine or mingw is missing.
+
 ## Still unsupported
 
-These are explicit errors if reached:
+Explicit errors if reached:
 
-- GetValueString (1647), SetValueFormat (1646), SetEnumeration (1648) and
-  ClearAllEnumerations (1649). They need the static value buffer, Core
-  `appSprintf` → MSVCRT float formatting, and the FString / TArray
-  enumeration storage.
-- PlayScaleSound (1653).
-- ChangeValueField's formatting.
+- `ScaleManagerWindow.ChangeValueField`'s text formatting (a manager with both
+  a value field and a scale; no shipped screen sets one: `SetValueField`
+  1661 is unused by the menus).
 
-The options menus (`MenuChoice_*`, `MenuUIChoiceSlider`) use the enumeration
-natives and formats such as `%1.0f`.
+The options menus call these natives with `%1.0f` / `%1.1f` and the volume
+sliders' labels (`OFF`, `1`–`9`, `MAX`).

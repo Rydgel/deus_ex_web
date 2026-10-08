@@ -5,7 +5,8 @@
  * docs/script-window-scale-settings.md. Value formatting (GetValueString),
  * SetValueFormat and the enumeration strings stay explicit boundaries. */
 import {x87load as X, x87int32 as I, x87add as A, x87neg as N, x87mul as M, x87div as D,
-  x87ftol as T, x87store as S, x87cmp} from './script-vm.mjs';
+  x87ftol as T, x87store as S, x87storeDouble, x87cmp} from './script-vm.mjs';
+import {msvcrtSprintf} from './script-text-format.mjs';
 import {changeThumbPosition} from './script-window-scroll-children.mjs';
 import {tickToValue} from './script-window-scroll-movement.mjs';
 
@@ -83,6 +84,72 @@ export function scaleGetValues(W, win) {
   const from = S(tickToValue(W, win, W.i32(win, 0x1c8)));
   const to = (W.u8(win, 0x164) & 16) ? S(tickToValue(W, win, (W.i32(win, 0x1cc) + W.i32(win, 0x1c8)) | 0)) : W.f32(win, 0x1d4);
   return {from, to};
+}
+
+// ---- Value strings ---------------------------------------------------------
+// Window layout: the format FString (+0x1dc, constructor default "%1.2f"), the
+// label array TArray<FString> (Data +0x268, Num +0x26c, Max +0x270; elements
+// are 12 bytes), the position (+0x1c8) and the ChangeScalePosition(notify)
+// body 0x1003f5a0 that each of these natives ends with.
+
+const enumerationText = (W, win, index) => W.heap.read(W.u32(win, 0x268), index * 12, 'string');
+
+/** SetValueFormat exec 0x100411d0 -> 0x1003e310: FString::operator=(format) on
+ * +0x1dc (an empty argument is the shared empty string), then always
+ * ChangeScalePosition(1). */
+export function scaleValueFormat(W, win, format) {
+  W.heap.write(win, 0x1dc, 'string', format);
+  W.native.changeScalePosition(win, 1);
+}
+
+/** SetEnumeration exec 0x100413b0 -> 0x1003e580(tick, text): a tick outside
+ * [0, 0x200) returns at once. Otherwise the array grows to tick + 1 elements
+ * (FArray growth, new elements zeroed), element `tick` takes the text, and
+ * ChangeScalePosition(1) runs only when `tick` is the current position. */
+export function scaleEnumeration(W, win, tick, text) {
+  if (tick < 0 || tick >= 0x200) return;
+  const count = W.i32(win, 0x26c);
+  if (tick >= count) {
+    const added = tick - count + 1;
+    W.farray.add(win, 0x268, added, 12);
+    const data = W.u32(win, 0x268);
+    for (let at = data + count * 12; at < data + (count + added) * 12; at += 4) W.heap.mem.write(at, 'u32', 0);
+  }
+  W.heap.write(W.u32(win, 0x268), tick * 12, 'string', text);
+  if (tick === W.i32(win, 0x1c8)) W.native.changeScalePosition(win, 1);
+}
+
+/** ClearAllEnumerations exec 0x10041510 -> 0x1003e780: every element string is
+ * emptied and released, the array is emptied (Realloc(12) frees the block),
+ * then ChangeScalePosition(1). */
+export function scaleClearEnumerations(W, win) {
+  const count = W.i32(win, 0x26c);
+  for (let i = 0; i < count; i++) W.heap.write(W.u32(win, 0x268), i * 12, 'string', '');
+  W.farray.empty(win, 0x268, 12);
+  W.native.changeScalePosition(win, 1);
+}
+
+/** A model x87 value stored as the 64-bit double FSTP m64 would. */
+function x87doubleNumber(value) {
+  const stored = x87storeDouble(value);
+  if (stored.nan !== undefined) return NaN;
+  if (stored.inf) return stored.neg ? -Infinity : Infinity;
+  const magnitude = Number(stored.sig) * 2 ** stored.exp;
+  return stored.neg ? -magnitude : magnitude;
+}
+
+/** GetValueString exec 0x10041310 -> 0x1003e460: the label of the current
+ * position when it exists and is not empty (appStricmp against L""); otherwise
+ * appSprintf(buffer, format, (double)GetValue()). GetValue (0x1003e1b0) leaves
+ * TickToValue in st0, so FST m32 only spills a copy and the double pushed for
+ * the printf is the extended value rounded to 53 bits, not the float32. */
+export function scaleValueString(W, win) {
+  const position = W.i32(win, 0x1c8);
+  if (position >= 0 && position < W.i32(win, 0x26c)) {
+    const label = enumerationText(W, win, position);
+    if (label !== '') return label;
+  }
+  return msvcrtSprintf(W.heap.read(win, 0x1dc, 'string'), x87doubleNumber(tickToValue(W, win, position)));
 }
 
 // ---- ScaleManagerWindow ---------------------------------------------------

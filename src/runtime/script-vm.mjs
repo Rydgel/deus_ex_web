@@ -9,6 +9,7 @@ import { referenceElementType } from './script-values.mjs';
 import { scriptVmKernel } from './script-vm-kernel.mjs';
 import { X87_INDEFINITE, x87mul32, x87div32, x87add32, x87sub32 } from './x87-nan.mjs';
 import { x87Precision, x87PrecisionControl, setX87Precision } from './x87-precision.mjs';
+import { CORE_CASTS } from './script-core-casts.mjs';
 
 const f = Math.fround;
 const primitiveNatives=new Set([214,112,114,115,119,120,121,122,123,124,125,126,127,128,129,131,135,138,139,140,141,142,143,144,145,146,147,148,149,150,151,154,155,156,157,158,160,163,164,165,168,169,171,172,173,174,175,176,177,179,180,181,182,184,185,187,188,189,190,193,194,196,203,210,211,212,213,215,216,217,218,219,221,222,223,224,226,229,234,235,236,237,242,243,244,245,248,249,250,251,254,255,276,287,288,296,297,300,316,317,318,319]);
@@ -1176,7 +1177,11 @@ export function compileFunction(fn) {
           return undefined;
         };
       }
-      default: return () => { throw new Error(`VM expression opcode 0x${n.op.toString(16)} is not supported`); };
+      default: {
+        const cast = CORE_CASTS.get(n.op);
+        if (cast) { const value = sub(n.value); return fr => cast(value.rv(fr, fr.instance)); }
+        return () => { throw new Error(`VM expression opcode 0x${n.op.toString(16)} is not supported`); };
+      }
     }
   }
   // One statement of the loop below, after the cursor has advanced past it.
@@ -1413,7 +1418,11 @@ export function compileFunction(fn) {
             services.gotoLabel(instance,rvalue(n.value,instance));
             return undefined;
           }
-          default: throw new Error(`VM expression opcode 0x${n.op.toString(16)} is not supported`);
+          default: {
+            const cast=CORE_CASTS.get(n.op);
+            if(cast)return cast(rvalue(n.value,instance));
+            throw new Error(`VM expression opcode 0x${n.op.toString(16)} is not supported`);
+          }
         }
       };
       frame.resume = () => {
