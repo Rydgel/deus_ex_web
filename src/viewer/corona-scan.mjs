@@ -1,6 +1,6 @@
 import { coordsTransform } from '../runtime/volumetric-fog.mjs';
 import { createCoronaCache, coronaDecay, coronaSeen, coronaIcon, coronaFrame, coronaFrameFromCamera, leafPermeatingLights } from '../runtime/coronas.mjs';
-import { movingLightInView, movingLightLeafLists, worldLightRadius } from '../runtime/dynamic-lighting.mjs';
+import { movingLightInView, movingLightLeafLists, viewPlanesOf, worldLightRadius } from '../runtime/dynamic-lighting.mjs';
 import { actorsEpoch } from '../runtime/base-epoch.mjs';
 
 /** The simulation side of Play's light coronas (docs/coronas.md "Play",
@@ -21,9 +21,9 @@ import { actorsEpoch } from '../runtime/base-epoch.mjs';
  * left on that leaf (docs/coronas.md "Leaf lights").
  *
  * Host choices, noted: the fade clock is the host's (`now`, seconds; the
- * original's appSeconds is the CPU clock too); the leaf lists use the map's
- * static model (the moving brush tracker's fragments are not in it) and, with
- * no master frame, take every candidate (no ViewPlanes to test). */
+ * original's appSeconds is the CPU clock too); with no master frame the leaf
+ * lists take every candidate (no ViewPlanes to test). The map's static model
+ * gives the lists the tracked BSP would (validate-leaf-lights.mjs). */
 export function createCoronaScan(runtime, { model, exportName, player }) {
   const cache = createCoronaCache(), byName = new Map();
   const read = (actor, name) => runtime.readNamed(actor, name);
@@ -48,15 +48,13 @@ export function createCoronaScan(runtime, { model, exportName, player }) {
   }
   const plainRef = reference => ({ key: reference.key, package: reference.asset?.name, index: reference.index });
 
-  const words = new Uint32Array(16), floats = new Float32Array(words.buffer);
   /** The viewer's leaf's LeafLights, head first: `lights` are this frame's
    * moving-light candidates (game.movingLights(), in Level.Actors order;
    * SetupDynamics' gate already applied); each must also pass the ViewPlanes
    * sphere test of the master frame (all of them without one). */
   function dynamicLights(leaf, lights, master) {
     if (!lights?.length) return [];
-    let planes = null;
-    if (master?.planes) { words.set(master.planes); planes = [0, 1, 2, 3].map(k => [...floats.subarray(4 * k, 4 * k + 4)]); }
+    const planes = master?.planes ? viewPlanesOf(master.planes) : null;
     const candidates = planes ? lights.filter(light => movingLightInView(light.location, light.values, planes)) : lights;
     const list = movingLightLeafLists(model, candidates.map(light => ({ location: light.location,
       radius: worldLightRadius(light.values) }))).get(leaf);

@@ -139,6 +139,15 @@ export function movingLightLeaves(model, location, radius) {
   return leaves;
 }
 
+const PLANE_WORDS = new Uint32Array(16), PLANE_FLOATS = new Float32Array(PLANE_WORDS.buffer);
+/** The frame's four ViewPlanes (FSceneNode +0x12c) from their 16 words (the
+ * master frame's `planes`, bsp-occlusion.mjs master().fields[41..57]) as
+ * [nx, ny, nz, w] each. */
+export function viewPlanesOf(words) {
+  PLANE_WORDS.set(words);
+  return [0, 1, 2, 3].map(k => [...PLANE_FLOATS.subarray(4 * k, 4 * k + 4)]);
+}
+
 /** SetupDynamics' ViewPlanes test of a moving-light candidate (0x10b2311c-
  * 0x10b2319f): R is the larger of WorldLightRadius and 25*(VolumeRadius+1)
  * (the float of `fild` times the double 25, 0x10b2a8b8), and the light is

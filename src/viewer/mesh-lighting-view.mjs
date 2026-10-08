@@ -1,7 +1,8 @@
 import { getAxes } from '../runtime/camera.mjs';
 import { traceRay, traceRayFast } from '../runtime/ray.mjs';
 import { actorsEpoch } from '../runtime/base-epoch.mjs';
-import { movingLightLeaves, worldLightRadius } from '../runtime/dynamic-lighting.mjs';
+import { movingLightInView, movingLightLeafLists, viewPlanesOf, worldLightRadius } from '../runtime/dynamic-lighting.mjs';
+import { coronaFrame } from '../runtime/coronas.mjs';
 import { PF, accumulateFaceNormal, actorPolyFlags, createMeshLightManager, d3dDiffuse, finishSetup, lightVertex,
   lightsActor, setupAmbient, setupForActor, unlitColor, vertexNormalPlane } from '../runtime/mesh-lighting.mjs';
 import { handleOf, identityOfHandle } from '../runtime/script-object-handles.mjs';
@@ -11,7 +12,7 @@ import { renderScanMode } from '../runtime/script-vm-render.mjs';
 
 const f = Math.fround;
 const LIGHT_FIELDS = ['LightType', 'LightEffect', 'LightBrightness', 'LightHue', 'LightSaturation', 'LightRadius',
-  'LightPeriod', 'LightPhase', 'bStatic', 'bNoDelete', 'bDynamicLight', 'bMovable', 'bSpecialLit', 'bDeleteMe'];
+  'LightPeriod', 'LightPhase', 'bStatic', 'bNoDelete', 'bDynamicLight', 'bMovable', 'bSpecialLit', 'bDeleteMe', 'VolumeRadius'];
 
 /** Play's per-frame mesh lighting (docs/mesh-lighting.md): one light manager
  * for the viewport, live light fields read from the shared script runtime,
@@ -143,15 +144,25 @@ export function createMeshLightingView(runtime, levelSource, { exportName, expor
     /** URender's per-frame setup for the main viewport: Frame->Coords, the
      * viewport clock and SetupDynamics' moving-light leaf lists. `lights`,
      * Play's game.movingLights() of this frame, stands for the candidate
-     * scan: the same gate over the same level, in Level.Actors order. */
-    beginFrame({ location, rotation, seconds, lights = null }) {
+     * scan: the same gate over the same level, in Level.Actors order.
+     * `master` {words, planes} is the frame OccludeBsp reads (sim-session
+     * visibility().master): its Coords and, for SetupDynamics' ViewPlanes
+     * sphere test, its four planes; without it Coords come from the view
+     * and no candidate is rejected by the planes. */
+    beginFrame({ location, rotation, seconds, lights = null, master = null }) {
       const level = levelSource();
       if (!level?.model) { frame = null; return; }
-      const [forward, right, up] = getAxes(rotation.map(value => value | 0));
       // Frame->Coords: camera X = right, Y = down, Z = forward, origin at the
       // view location (GMath.ViewCoords / ViewRotation / ViewLocation).
-      const axes = [right.map(f), up.map(value => f(-value)), forward.map(f)];
-      const origin = location.map(f);
+      let axes, origin;
+      if (master) {
+        const { coords } = coronaFrame(master.words);
+        axes = [coords.x, coords.y, coords.z]; origin = coords.origin;
+      } else {
+        const [forward, right, up] = getAxes(rotation.map(value => value | 0));
+        axes = [right.map(f), up.map(value => f(-value)), forward.map(f)];
+        origin = location.map(f);
+      }
       frameCount++;
       const viewport = { currentTime: seconds, lastUpdateTime: lastTime ?? seconds, frameCount };
       lastTime = seconds;
@@ -169,25 +180,27 @@ export function createMeshLightingView(runtime, levelSource, { exportName, expor
         light: handle => lightRecord(identityOfHandle(handle)),
         trace: (from, to) => clear(from, to),
       });
-      // SetupDynamics (0x10b22d90) prepends candidates in level-actor order;
-      // Filter prepends each onto the leaves it reaches.
-      const filter = record => {
-        for (const leaf of movingLightLeaves(frame.model, record.location, worldLightRadius(record.values))) {
-          const list = frame.leafLights.get(leaf) ?? [];
-          list.unshift(record);
-          frame.leafLights.set(leaf, list);
-        }
-      };
-      if (lights) { for (const light of lights) filter(lightRecord(light.actor, light)); return; }
-      for (const actor of level.actors) {
+      // SetupDynamics (0x10b22d90) takes the candidates in level-actor order
+      // (the gate 0x10b230e8..0x10b2311c, then the frame's ViewPlanes test),
+      // and OccludeBsp's Filter leaves each on the leaves it reaches
+      // (dynamic-lighting.mjs movingLightLeafLists; the order and the
+      // candidate test are verified against the original in
+      // validate-leaf-lights.mjs, docs/coronas.md "Leaf lights").
+      const records = [];
+      if (lights) for (const light of lights) records.push(lightRecord(light.actor, light));
+      else for (const actor of level.actors) {
         if (!actor || !read(actor, 'LightType') || read(actor, 'bDeleteMe')) continue;
-        // SetupDynamics 0x10b230e8..0x10b2311c rejects these before
-        // constructing a dynamic light. Static-light records are created
-        // lazily by lightOf/current if SetupForActor actually needs them.
+        // Static-light records are created lazily by lightOf/current if
+        // SetupForActor actually needs them.
         if ((read(actor, 'bStatic') || read(actor, 'bNoDelete')) && !read(actor, 'bDynamicLight')) continue;
         if (!read(actor, 'LightBrightness') || !read(actor, 'LightRadius')) continue;
-        filter(lightRecord(actor));
+        records.push(lightRecord(actor));
       }
+      const planes = master?.planes ? viewPlanesOf(master.planes) : null;
+      const candidates = planes ? records.filter(record => movingLightInView(record.location, record.values, planes)) : records;
+      const lists = movingLightLeafLists(frame.model, candidates.map(record => ({ location: record.location,
+        radius: worldLightRadius(record.values) })));
+      for (const [leaf, order] of lists) frame.leafLights.set(leaf, order.map(k => candidates[k]));
     },
     /** ComputeFromActor's camera-space location (TransformPointBy of the
      * frame coords, 0x10b06035-0x10b06095) at the render pass's 24 bits:
