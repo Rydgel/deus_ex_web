@@ -407,14 +407,13 @@ conversation camera with lip sync. The render pass's translations run at its
 24-bit precision ([render-pass precision](render-pass-precision.md)).
 Twenty-six maps match the original's own frames at matched cameras and level time (122 of 130 views)
 ([visual acceptance](visual-acceptance.md)).
-Open: the scene's three.js projection (it does not read the 3D frame
-OccludeBsp and the corona pass use, built at 24 bits on the render
-rectangle), the LOD morph's world-space rounding and per-mirror drawing,
-actor meshes in a sky seen through a mirror, the child frames' own iterator
-items, the security cameras' views without mirrors, decals, coronas and their
-own lighting and fog, the Sound and Display options screens and the
-settings' effects, the darkest-pixel rounding visual acceptance found, and
-acceptance of live (unfrozen) scenes.
+Open: the LOD morph's world-space rounding and per-mirror drawing,
+per-frame mesh lighting in mirror and sky frames, actor meshes in a sky seen
+through a mirror, the child frames' own iterator items, the security cameras'
+views without mirrors, decals, coronas and their own lighting and fog, the
+host's depth range and float32 GPU transform under the frame projection, the
+darkest-pixel rounding visual acceptance found, and acceptance of live
+(unfrozen) scenes.
 SpriteAnimOnce frames and animated mesh skins
 are recovered or checked but unreachable: no shipped class, map actor or
 script uses DT_SpriteAnimOnce or gives an actor an animated texture

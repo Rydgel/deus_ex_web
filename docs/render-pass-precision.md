@@ -450,11 +450,9 @@ rectangle for the main frame, and the window's size for a camera frame
   moves by an ulp and every saved polygon point's projection with it.
 
 **Unverified or still open.**
-- The scene's three.js projection comes from the FOV and the render
-  rectangle, not from the frame's Proj.Z and ViewSides; it does not read the
-  frame OccludeBsp used. (The corona scan does since 2026-10-08: it reads
-  this frame's Coords, X, FX2, FY2 and Proj.Z as DrawFrame's corona pass
-  does, [coronas](coronas.md#the-frame).)
+- The scene's three.js projection reads this frame since 2026-10-08 (next
+  section), as does the corona scan ([coronas](coronas.md#the-frame)); the
+  GPU's matrix arithmetic is not the original's x87 vertex transform.
 - The camera frame's hardware evidence is the oracle's, with the model
   tangent (a ViewportWindow's Draw itself was not run); XB/YB are not read
   by OccludeBsp (oracle cases with random offsets match without them).
@@ -462,3 +460,68 @@ rectangle for the main frame, and the window's size for a camera frame
   player's root window does not exist (the original then never reaches
   XRootWindow::PreRender and keeps the 64-bit sizes) is not distinguished;
   none was observed in single-player after Login.
+
+## The scene's projection (2026-10-08)
+
+The page's three.js camera used the horizontal FOV over the render
+rectangle's aspect and a constant half-pixel view offset
+(`play-camera.mjs`, [visual acceptance](visual-acceptance.md)). It now takes
+the pass frame's own numbers.
+
+**Original.** Every projection Render.dll makes for what D3D draws is
+`RZ = Proj.Z / Z; ScreenX = X * RZ + FX15; ScreenY = Y * RZ + FY15` from the
+frame's `+0xdc`, `+0xc0` and `+0xc4`: `0x10b0c432-0x10b0c44e` (in
+`0x10b0bab0`), the BSP clipper `ClipBspSurf` (`0x10b14f04`, `0x10b15070`,
+`0x10b151a5`), `DrawMesh` (`0x10b0d804`, `0x10b0e2c3`), `DrawLodMesh`
+(`0x10b0f8f8`, `0x10b10a66`) and `ClipDecal` (`0x10b1c768`). D3DDrv submits
+the pre-projected vertex at `XB + ScreenX - 0.5`, `YB + ScreenY - 0.5`
+(`DrawGouraudPolygon 0x10005822-0x10005855`: `fild [Frame + 0xb0]`, `fadd
+[point + 0x10]`, `fsub [0x1001864c]`, and the same for +0xb4/+0x14; the 0.5 of
+D3D's integer pixel centres). In the rectangle's GL window coordinates (from
+the left and top) a point therefore lands at `FX15 + X * Proj.Z / Z` and
+`FY15 + Y * Proj.Z / Z`: one focal length, Proj.Z, for both axes, and the
+centre FX15, FY15, which are `(X + 1.0001) * 0.5` and `(Y + 1.0001) * 0.5`
+rounded to float32 at 24 bits.
+
+**Port.** `setFrameProjection` (play-camera.mjs) makes that a symmetric
+three.js projection over the rectangle: vertical FOV `2 atan(Y / (2 Proj.Z))`,
+aspect `X / Y` and a view offset of `(FX15 - X/2, FY15 - Y/2)` pixels
+(0.500061 in both axes at 1440 x 960, 0.500046 vertically at 462 rows, where
+the constant was 0.50005).
+The simulation's frame carries it (`frame.projection` from the master frame's
+words, `projectionOf`); the page's camera, the simulation's own copy (culling,
+mirror and sky passes, which copy it) and a ViewportWindow's camera (from its
+own pass frame, `pass.projection`) all take it; without OccludeBsp, in Inspect
+and after a resize the FOV and the constant remain. `test/play-camera.test.mjs`
+checks that points land at `FX15 + X * Proj.Z / Z` and
+`FY15 + Y * Proj.Z / Z` (to 1e-6 relative) at five sizes and FOVs, and that the
+FOV's projection is within 0.01 pixel of it at FOV 75.
+
+**What changes** (`scripts/census-frame-projection.mjs`, worker mode, 1024 by
+about 465 pixels, the page's three draws of one frozen frame: frame
+projection, FOV projection, frame projection again; the last two against the
+first, the noise floor, was 0 in every view except one DPR 2 view; views
+whose frozen frame keeps changing because of animated textures are left out):
+
+| Map and setting | Settled views | Pixels that differ (of 476,625 a view) | Views with any | Largest channel difference |
+| --- | --- | --- | --- | --- |
+| Island, FOV 75 | 7 | 45 (0.0014%) | 3 | 4 |
+| Paris club, FOV 75 | 7 | 64 (0.0019%) | 7 | 10 |
+| Training, FOV 75 | 5 | 697 (0.029%; one view 578) | 4 | 8 |
+| Island, FOV 90 | 3 | 46 (0.0032%) | 3 | 8 |
+| Paris club, FOV 90 | 5 | 72 (0.0030%) | 5 | 25 |
+| Island, FOV 75, 2 device pixels per CSS pixel (1,906,500 pixels) | 3 | 161 (0.0028%) | 3 | 2 |
+
+The change is a few dozen edge pixels a view: the focal length differs by one
+float32 rounding (at FOV 90 appTan of the 24-bit argument moves Proj.Z by an
+ulp) and the centre by up to 1.2e-5 pixel. The world is drawn with the same
+vertices and the same GPU arithmetic, so nothing moves visibly; what changes
+is that the projection is the frame's.
+
+**Not covered.** The GPU does the perspective divide and the viewport transform
+in float32, where the original projects each vertex on the x87 at 24 bits and
+D3D interpolates its screen-space vertices; the near plane (1) and far plane
+(65,536) are the host's, not the original's depth (D3DDrv's vertex z is `RZ *
+RProj.Z`, times the device's scale and plus its bias:
+`DrawGouraudPolygon 0x10005827-0x10005869`); the page's HUD and weapon view
+model take the camera as it is.

@@ -8,7 +8,7 @@ import { constructRenderIterator, renderIteratorNativeClass } from '../runtime/s
 import * as THREE from 'three';
 import { TextureStore } from '../unreal/textures.mjs';
 import { fromView } from '../unreal/geometry.mjs';
-import { createPlayCamera, applyPlayFrame, pointCamera, verticalFov, setPixelCentre } from './play-camera.mjs';
+import { createPlayCamera, applyPlayFrame, pointCamera, projectionOf, setFrameProjection, verticalFov, setPixelCentre } from './play-camera.mjs';
 import { createDrawnSet } from './drawn-set.mjs';
 import { createMeshFramePack } from './mesh-frame-pack.mjs';
 import { createDecalDraw } from '../runtime/decal-draw.mjs';
@@ -314,8 +314,7 @@ export function createSimSession(game, { assets = null, events = [], exportName 
   // builds the same ones later, after the moving brush tracker's update has
   // moved the zone lookup's model. Null without OccludeBsp or a drawn rectangle.
   const frameMasters = new WeakMap();
-  function frameMaster() {
-    const frame = current;
+  function frameMaster(frame = current) {
     if (!occlusion || !frame?.view || !size) return null;
     const rect = frame.renderRect ?? { width: size[0], height: size[1], render: true };
     if (!(rect.render && rect.width > 0 && rect.height > 0)) return null;
@@ -469,6 +468,8 @@ export function createSimSession(game, { assets = null, events = [], exportName 
       const entries = packDynamics(occlusion, { sprites: live.sprites, iterators: live.iterators, ...actorScene.setupArgs(live.meshItems) });
       const seen = visibility(view, command.width, command.height, entries.length, { decals: false, movers: false });
       pass.visibility = { nodes: seen.nodes, movers: seen.movers };
+      pass.projection = projectionOf(seen.master.words);
+      if (pass.projection) setFrameProjection(viewportCamera, pass.projection);
       if (seen.sky) pass.sky = sky(view.location);
       for (const key of seen.sprites) {
         const entry = entries[key];
@@ -477,6 +478,8 @@ export function createSimSession(game, { assets = null, events = [], exportName 
     } else if (occlusion) {
       const seen = visibility(view, command.width, command.height, -1, { decals: false, movers: false });
       pass.visibility = { nodes: seen.nodes, movers: seen.movers };
+      pass.projection = projectionOf(seen.master.words);
+      if (pass.projection) setFrameProjection(viewportCamera, pass.projection);
       if (seen.sky) pass.sky = sky(view.location);
     } else pass.sky = sky(view.location);
     const frustum = new THREE.Frustum().setFromProjectionMatrix(
@@ -990,7 +993,12 @@ export function createSimSession(game, { assets = null, events = [], exportName 
         frame.pan = { timeSeconds: pan.timeSeconds, speeds: Object.fromEntries(panZones.map(name => [name, pan.zoneSpeeds(name)])) };
       } catch (error) { fail(error); }
       if (frame.view) {
-        applyPlayFrame(camera, frame.view, frame.renderRect);
+        // The pass frame's projection (Proj.Z, FX15, FY15 over the render
+        // rectangle: play-camera.mjs setFrameProjection), the page's own
+        // when it receives it; the FOV's without OccludeBsp.
+        try { const master = frameMaster(frame); frame.projection = master ? projectionOf(master.words) : null; }
+        catch (error) { frame.projection = null; fail(error); }
+        applyPlayFrame(camera, frame.view, frame.renderRect, frame.projection);
         // The page's camera takes the original's pixel centres for the same
         // view size (main.mjs), so mirror planning sees the same bounds.
         const viewSize = rect?.render && rect.width > 0 && rect.height > 0 ? [rect.width, rect.height] : size;
