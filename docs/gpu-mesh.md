@@ -337,6 +337,28 @@ list offsets with CollapsePointThus (`meshLodVertices`) and the lists
 (`lodLists`, their own arena). Per slot: the final pose and the corner
 dwords. A mesh without LOD arrays cannot take the GPU path (none ships).
 
+**Child frames (2026-10-08).** DrawLodMesh runs per frame
+([LOD](script-lodmesh-lod.md#play)): an actor a mirror frame draws is
+selected, posed and lit in that frame, so a child pass can need another count,
+morph start and corners than the main pass. The lighting run
+(`beginLightRun`/`lightRun`) now carries it: `setLod` inside a run stamps the
+slot's LOD row (U11.x and, for the environment normals, the pose stamp U2.z)
+with the run's stamp, and `lightRun` first runs the same morph and corner
+passes for the stamped slots, reading the pose the frame's pose pass published
+(`pose[current][0]`), then the face, vertex and corner passes of that frame's
+camera and Mirror. The pass draws the slot's final pose and corner dwords as
+they are; the main frame's pass (`applyPass` without `lodParams`) or the next
+frame's record restores the main parameters by the same run. The pose pass
+itself still runs once per frame: the one plan holds, per channel, the
+operation that changes the cached pose with the largest count any of the
+frame's GetFrame calls asked for (`mergeLodMeshPlans`), so every child frame's
+vertices exist in it.
+validate-gpu-mesh runs reduced counts (morphing and not) through that run for
+every compared actor and the main parameters back: Island 5,448 variants
+(1,816 morphing, 228,394 faces dropped), 896,274 final-pose components,
+1,694,241 corner dwords and 542,991 corner bytes equal the CPU path's, the
+drawn test 0 disagreements, the restore exact (Training: 30 variants).
+
 **Visibility.** Each group's certificate boxes cover the closure of its
 corners under the LOD (every vertex of its wedge chains and their collapse
 targets, `actor-mesh-lod.mjs closure`), so they stay conservative for any

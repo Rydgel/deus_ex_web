@@ -200,6 +200,62 @@ count, start, flags, the 24-bit inverse), and the GPU passes do the rest
 (the morph, the corners, the normals, lighting and draw over the resolved
 corners; [GPU mesh](gpu-mesh.md#distance-lod)).
 
+**Child frames (2026-10-08).** The original runs the whole of DrawLodMesh
+for every sprite of every frame. DrawFrame (`0x10b1a2d0`) recurses into each
+child (`0x10b1a336-0x10b1a348`) and then walks its own Frame->Sprite list,
+calling DrawActorSprite (`0x10b25080`), which passes that Frame and
+`Coords = Frame+0x34` to DrawMesh (`0x10b0d1a0`) at `0x10b25624`
+([mesh lighting](mesh-lighting.md#one-call-per-frame-child-frames-lighting-2026-10-08)
+has the addresses). DrawLodMesh reads Frame->Coords and FX (`+0xb8`) for its
+selection, calls GetFrame with the count it chose (`0x10b0ee0f`), morphs,
+lights and draws. An actor drawn in k frames therefore has k selections and k
+GetFrame calls per tick, in DrawFrame's order (children before their parent,
+the main frame last), each drawn in its own pass.
+
+What a second GetFrame call does in the same tick (`lodmesh-frame.mjs`,
+`decide`): a keyframe call recomputes the same poses for its count (the call
+with the larger count covers the other); a tween call after the first finds
+the cached frame already written (alpha 0) and the valid count already
+expanded (nothing to fill), so it only publishes the cache, and its count is
+clamped to the valid count the earlier call set: in the tween case the main
+frame's returned count can be lower than its request when a child frame drew
+first with fewer vertices. Every vertex a call publishes holds the value the
+other calls publish for it, so one output buffer serves all of them.
+
+Play (`actor-mesh-sim.mjs update`, `sim-session.mjs lodFramesOf`):
+
+* each child frame carries its Coords, FX and Frame->Sprite ids; a binding
+  selects once per frame that draws it (`meshLod.select` with that frame),
+  main frame last; consecutive frames asking for the same count make one
+  GetFrame call. The record's base state is the last frame's (the main
+  frame's, or the last child's for an actor only child frames draw).
+* **CPU path:** the calls run in order through `getLodMeshFrame` into the
+  binding's one output buffer; each frame's state is `meshLod.after` of its
+  selection and its call's returned count over that buffer.
+* **GPU path:** the calls are planned in order (`planLodMeshFrame`, which
+  leaves the cache scalars as the calls would) and merged
+  (`mergeLodMeshPlans`) into the plan the pose pass runs: per channel the
+  operation that changes the pose, or else the one publishing most, with the
+  largest count, replacing the tick's operations in the cache entry's log
+  (test/lodmesh-calls.test.mjs: the merged cache, output and scalars equal
+  the calls in order over 17 ticks of keyframes, tweens, blend slots and
+  count changes, JS and Wasm). Calls that cannot merge (a cache entry made
+  in this tick while tweening with a fill after a keyframe operation) are
+  replaced by the base call alone for that tick (`planDegraded`).
+* a frame whose state differs from the base's (`frameVariants`: returned
+  count, flags, start, and the detail while morphing) is drawn with its own.
+  The decision for its pass carries the GPU `lodParams` or the CPU
+  `cpuState` (positions with the morph, resolved corners and wedge dwords),
+  its emptied groups, and (the lighting being per frame already) its colours;
+  the CPU lighting runs over that frame's reduced faces.
+* page (`gpu-mesh.mjs`): `setLod` inside a lighting run (`beginLightRun`)
+  stamps the slot, and `lightRun` first runs the morph and corner passes
+  for the stamped slots from the pose the last run published, then the
+  lighting passes (with the environment normals), so the child's pass draws
+  its own pose, corners and colours; the main frame's pass (or the next
+  record) puts the main state back the same way. The CPU path swaps the
+  geometry's positions, U/V bytes and colours (`cpuPositions(state)`).
+
 **What stays different from the original:**
 
 * *Space of the morph.* Play's GetFrame runs with identity coords (world
@@ -213,10 +269,20 @@ corners; [GPU mesh](gpu-mesh.md#distance-lod)).
   whenever the view moves (on the CPU shadow too) and a draw path that takes
   camera-space positions, per mirror frame as well; this is the existing
   host-stage item, left open.
-* Mirror frames reuse the main frame's selection and pose (the original
-  runs DrawLodMesh per frame with that frame's coords). Their lighting is
-  the frame's own since 2026-10-08 ([mesh
-  lighting](mesh-lighting.md#one-call-per-frame-child-frames-lighting-2026-10-08)).
+* A child frame whose state differs draws the base state's bounding sphere
+  for transparent sorting on the GPU path; its groups' visibility uses its own.
+* The vertices of a blend channel past its own count are published by the
+  call that covers them last; the original gives each call a fresh buffer.
+  They agree whenever a blend channel's count is its main count (keyframes)
+  or its valid count is unchanged between the calls (tweens), which the test
+  checks; a blend slot with a lower valid count than the main channel
+  between differing child and main counts is not covered.
+* ViewportWindow frames (security camera views, `viewportPass`) select no LOD
+  of their own yet: they draw the base state.
+* Actor Volumetrics (fog on meshes, `[sprite+0xb4]`, passed by DrawActorSprite
+  with the frame's sprite) are not computed in any frame, the main one
+  included, so there is no per-frame difference to reproduce
+  ([mesh lighting](mesh-lighting.md#not-reproduced--open)).
 * The first-person weapon is not selected: its overlay frame has no LOD
   inputs in Play; at its depth the original's ratio keeps it at full detail
   (not measured).
@@ -226,20 +292,32 @@ corners; [GPU mesh](gpu-mesh.md#distance-lod)).
 * The particle and wire/orthographic branches are not ported.
 
 **Checks.** `node scripts/validate-lodmesh-lod-play.mjs [--map M] [--query
-gpuMesh=0]` (worker mode): from the start, four directions and twelve far
-actors, lod-probe.mjs reports each drawn binding's inputs and results; the
-same inputs through the original ranges must give the same detail bits,
-count, flags, start, admitted faces and vertices, and the page must draw
-them (the CPU geometry's corners, or the GPU corner pass's dwords). The GPU
-passes are compared with the CPU path by `validate-gpu-mesh` (below and
-[GPU mesh](gpu-mesh.md#distance-lod)).
+gpuMesh=0] [--mirrors] [--mlod 0.25,3]` (worker mode): from the start, four
+directions and twelve far actors, lod-probe.mjs reports each drawn binding's
+inputs and results; the same inputs through the original ranges must give the
+same detail bits, count, flags, start, admitted faces and vertices, and the
+page must draw them (the CPU geometry's corners, or the GPU corner pass's
+dwords). Each child frame's selection and final state (with the count its
+GetFrame call returned) go through the oracle too, and the page's pass for
+that frame (`meshPassProbe`: what the slot or the geometry holds once the
+pass's lighting run is done) must hold that state, also when it differs from
+the main frame's. `--mirrors` views the map's mirror polygons from in front
+instead of the far actors, each at URender's MLOD 0.25, 1, 3 and 10 (the
+shipped 0.25 alone rarely changes a reflection's detail; `lodProbe` sets the
+renderer settings on the simulation side). The GPU passes are compared with
+the CPU path by `validate-gpu-mesh` (below and
+[GPU mesh](gpu-mesh.md#distance-lod)), also in a child frame's own LOD state;
+the merge of several GetFrame calls by `test/lodmesh-calls.test.mjs`.
 
 | Run (worker mode, Linux host) | Result |
 | --- | --- |
-| Island, GPU path | PASS: 108 drawn rows over 17 views, 13 meshes; 59 with the LOD flag and morphing, 8 below ModelVerts (down to 11); 102 GPU corner-pass comparisons |
-| Island, `gpuMesh=0` | PASS: the same 108 rows; 105 comparisons of the page's CPU geometry |
+| Island, GPU path | PASS: 105 drawn rows over 17 views, 13 meshes; 56 with the LOD flag and morphing, 5 below ModelVerts (down to 11); 99 GPU corner-pass comparisons |
+| Island, `gpuMesh=0` | PASS: the same 105 rows; 99 comparisons of the page's CPU geometry |
 | BatteryPark, GPU path | PASS: 99 drawn rows over 17 views, 8 meshes, all at full detail. The view writes did not change the drawn set (the boat, Anna, JC and near props in every view), which suggests the start's arrival camera holds the view; not investigated |
-| `validate-gpu-mesh` (Training, Island, `?sim=inline`) | PASS: on Island 293,583 final-pose components and 555,756 corner dwords equal the CPU path, colours 0 bytes off, visibility 0 mismatches; 201 LOD captures, all morphing, 96 with dropped faces (half of 16 far views at MLOD 2) |
+| Training, `--mirrors` (16 views x 4 MLODs; the player in the mirrors) | PASS: 70 child-frame states equal the original's, 20 different from the main frame's (the player: 336/330/142 counts, with and without a morph); the GPU page passes drew them (140 compared, 12 of a differing frame), the CPU geometry too (180 compared, 36 of a differing frame) |
+| Paris Club, `--mirrors` (10 views x 4 MLODs; the player, Female1, Faucet7, TrashCan1) | PASS: 84 drawn rows, 47 morphing, 44 below ModelVerts; 39 child-frame states equal the original's, 12 different from the main frame's; the GPU passes drew them (143 compared, 38 of a differing frame), the CPU geometry too (144 compared, 44) |
+| `validate-gpu-mesh` (Training, Island, `?sim=inline`) | PASS: on Island 298,758 final-pose components and 564,747 corner dwords equal the CPU path, colours 0 bytes off, visibility 0 mismatches; 201 LOD captures, all morphing, 96 with dropped faces; and in a child frame's own LOD state (5,448 variants of the compared actors, 1,816 morphing, then the main state back): 896,274 pose components, 1,694,241 corner dwords and 542,991 corner bytes equal, 0 drawn disagreements, the restore exact |
+| `test/lodmesh-calls.test.mjs` | 17 ticks of 1 to 3 GetFrame calls (keyframes, tweens, blend slots, count changes), JavaScript and Wasm: the merged plan's cache scalars, cache poses and published output equal the calls in order; a call that cannot merge restores the cache |
 
 **Cost** (interleaved A/B on the Linux host, AMD Radeon 780M, Island's
 start idle at 1440×960, worker mode, GPU path, `?meshLod=off` against the
@@ -251,6 +329,24 @@ default, medians; `.cache/ab-lod.mjs` over `profile-play-browser.mjs`):
 | worker actors phase (4 pairs) | 3.92 ms | 3.97 ms |
 | GPU per frame (3 pairs, `--gpu`) | 2.02 ms | 2.05 ms |
 | frame interval | 16.7 ms | 16.7 ms (vsync) |
+
+**Cost of the child frames** (interleaved A/B, 5 pairs of 400 frames, medians,
+Linux host, worker mode, GPU path, 1440×960, Paris Club;
+`.cache/ab-mirror.mjs` over `profile-play-browser.mjs`):
+
+| | before | after |
+| --- | ---: | ---: |
+| bar mirror (58, −1008, 27), master 0df0107 → this change; one child frame, nothing differs: page mirrors phase | 2.93 ms | 3.06 ms |
+| the same: worker actors phase | 1.81 ms | 1.88 ms |
+| the same: page frame work | 7.65 ms | 7.52 ms |
+| restroom mirror (−1424, −1064, −100, yaw 32768) at MLOD 10 (`--lod-settings`), the previous commit's main-state draw → per-frame states; TrashCan1 and others differ per frame: page mirrors phase | 2.65 ms | 2.63 ms |
+| the same: worker actors phase | 1.66 ms | 1.73 ms |
+| the same: page frame work | 5.67 ms | 5.63 ms |
+| frame interval, all runs | 16.7 ms (vsync) | 16.7 ms (vsync) |
+
+The runs spread over 2.4–3.2 ms (mirrors) and 1.5–1.9 ms (worker actors), so
+the differences are inside the noise; the engaged case adds the morph and
+corner passes to a child pass's lighting run for the slots that differ.
 
 The first GPU version walked the per-vertex LOD lists whenever the LOD flag
 held and cost 2.00 → 2.86 ms per frame; the vertex and corner passes now

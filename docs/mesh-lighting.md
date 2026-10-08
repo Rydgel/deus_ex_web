@@ -602,10 +602,14 @@ and the mirror calls (60) are unchanged.
 
 * Fog and volumetric lights (`PF_RenderFog`); Training's leaves have none.
 * A child frame's LeafLights follow OccludeBsp's visited nodes only through
-  the same approximation as the main frame's (every node visited), and its
-  `LOD` selection, pose and Volumetrics are still the main frame's (the
-  original runs DrawLodMesh's detail choice per frame; see
-  [LOD](script-lodmesh-lod.md#play)).
+  the same approximation as the main frame's (every node visited). Its LOD
+  choice and GetFrame count are its own since 2026-10-08
+  ([LOD](script-lodmesh-lod.md#play)); its Volumetrics are not computed: the
+  original passes each sprite's Volumetrics (`[sprite+0xb4]`) from DrawActorSprite
+  to SetupForActor, which returns `0x40000000` and links the volumetric lights
+  for `GLightManager->Fog`, for the sprites of every frame, so a child frame's
+  would differ from the main frame's; Play computes no actor Volumetrics in
+  any frame (above), so there is nothing per frame to reproduce yet.
 * The texture-palette light types (8, 9), steady with a note; no map light
   uses them. Flicker's key is the export index or Level.Actors slot, not the
   actor's address.

@@ -154,7 +154,7 @@ export function createGpuMesh(renderer,capacities={}) {
   const {slots,vertexArena,faceArena,cornerArena,keyArena}=layout.arenas;
   // `lightStamp`: the lighting frame number setLighting writes: the next run's
   // (frame + 1) or, inside beginLightRun..lightRun, that run's own.
-  let frame=0,current=0,camera=null,lightStamp=null,lightRuns=0;
+  let frame=0,current=0,camera=null,lightStamp=null,lightRuns=0,lodRun=false;
 
   /** A new mesh record's static data: keyframes, faces and the vertex
    * adjacency lists (gpu-mesh-layout.mjs). */
@@ -288,7 +288,12 @@ export function createGpuMesh(renderer,capacities={}) {
   function setLod(handle,{count,start,active,morph,inverse}) {
     const u=handle.slot*PARAMS_U*4;
     slotParamsU[u+41]=count>>>0;slotParamsU[u+42]=start>>>0;slotParamsU[u+43]=(active?1:0)|(morph?2:0);
-    slotParamsU[u+44]=frame+1;slotParamsU[u+45]=floatWord(inverse);
+    slotParamsU[u+44]=lightStamp??frame+1;slotParamsU[u+45]=floatWord(inverse);
+    // Inside a child frame's lighting run (beginLightRun) the slot's LOD
+    // changes for that frame's pass: the morph, the corners and the
+    // environment normals (stamped by the pose stamp) are redone with the
+    // run, and the main frame's state again by the run that restores it.
+    if(lightStamp!==null){slotParamsU[u+8+2]=lightStamp;lodRun=true;}
     touch(handle.slot);
   }
   /** The lighting frame's coordinates and Mirror (mesh-lighting-view
@@ -349,6 +354,18 @@ export function createGpuMesh(renderer,capacities={}) {
       ['uMeshVertices',meshVertices],['uAdjacency',adjacency],['uFaces',faceNormals],['uLight',vertexLight],...lodTextures]);
     draw(prog,cornerFramebuffer,cornerArena.high?cRows:0);
   }
+  /** The morph pass (the final pose of the slots posed or re-stamped for
+   * `poseFrame`) and the corner pass (the slots whose LOD stamp is it). */
+  function lodPasses(poseFrame,lighting,source=pose[current][0]) {
+    const vRows=rowsFor(vertexArena.high),cRows=rowsFor(cornerArena.high);
+    let prog=programs.morph;gl.useProgram(prog.handle);setUniforms(prog,poseFrame,lighting);
+    bindTextures(prog,[['uParamsU',paramsU],['uVertexMap',vertexMap],['uLodVertices',meshLodVertices],['uPose',source]]);
+    draw(prog,morphFramebuffer,vertexArena.high?vRows:0);
+    prog=programs.resolve;gl.useProgram(prog.handle);setUniforms(prog,poseFrame,lighting);
+    bindTextures(prog,[['uParamsU',paramsU],['uCornerMap',cornerMap],['uLodFaces',meshLodFaces],['uWedges',meshWedges],
+      ['uFinal',finalPose]]);
+    draw(prog,resolveFramebuffer,cornerArena.high?cRows:0);
+  }
   const GL_STATE=()=>{
     gl.bindVertexArray(vao);
     gl.disable(gl.BLEND);gl.disable(gl.DEPTH_TEST);gl.disable(gl.CULL_FACE);gl.disable(gl.SCISSOR_TEST);
@@ -367,9 +384,9 @@ export function createGpuMesh(renderer,capacities={}) {
    * that follow belong to it, and lightRun runs them (DrawFrame lights each
    * frame's sprites with that frame's Coords and Mirror, so the page redoes
    * the lighting of the actors a pass draws before drawing it). */
-  function beginLightRun(){lightStamp=0x80000000+(++lightRuns&0x3fffffff);return lightStamp;}
+  function beginLightRun(){lightStamp=0x80000000+(++lightRuns&0x3fffffff);lodRun=false;return lightStamp;}
   /** Nothing was queued for the run beginLightRun started. */
-  function cancelLightRun(){lightStamp=null;}
+  function cancelLightRun(){lightStamp=null;lodRun=false;}
   /** The lighting passes of the setLighting calls since beginLightRun, in
    * `view` ({origin, axes, mirror}); the corner colours of those slots then
    * hold that frame's lighting until the next run lights them again. */
@@ -378,7 +395,11 @@ export function createGpuMesh(renderer,capacities={}) {
     if(stamp===null)throw new Error('GPU mesh: lightRun without beginLightRun');
     uploadDirty();
     GL_STATE();
-    lightingPasses(NO_FRAME,{stamp,camera:view});
+    // The slots whose LOD state this pass changed (setLod): their morph and
+    // corners, from the pose the last run published.
+    if(lodRun)lodPasses(stamp,{stamp,camera:view});
+    lightingPasses(lodRun?stamp:NO_FRAME,{stamp,camera:view});
+    lodRun=false;
     gl.bindVertexArray(null);
     renderer.resetState();
     layout.endLights();
@@ -404,13 +425,7 @@ export function createGpuMesh(renderer,capacities={}) {
     });
     current^=1;
     // The LOD's morph into the final pose, then the resolved corners.
-    prog=programs.morph;gl.useProgram(prog.handle);setUniforms(prog);
-    bindTextures(prog,[['uParamsU',paramsU],['uVertexMap',vertexMap],['uLodVertices',meshLodVertices],['uPose',next[0]]]);
-    draw(prog,morphFramebuffer,vertexArena.high?vRows:0);
-    prog=programs.resolve;gl.useProgram(prog.handle);setUniforms(prog);
-    bindTextures(prog,[['uParamsU',paramsU],['uCornerMap',cornerMap],['uLodFaces',meshLodFaces],['uWedges',meshWedges],
-      ['uFinal',finalPose]]);
-    draw(prog,resolveFramebuffer,cornerArena.high?cRows:0);
+    lodPasses(frame,{stamp:frame,camera},next[0]);
     lightingPasses(frame,{stamp:frame,camera});
     gl.bindVertexArray(null);
     renderer.resetState();

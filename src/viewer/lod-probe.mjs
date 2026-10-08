@@ -7,8 +7,12 @@
  * vertices. Floats are returned with their bit patterns. */
 const bits=value=>{const v=new DataView(new ArrayBuffer(4));v.setFloat32(0,value,true);return v.getUint32(0,true);};
 
-export function lodProbe(actorSim,{all=false,list=false}={}){
+export function lodProbe(actorSim,{all=false,list=false,settings=null}={}){
   if(!actorSim)return null;
+  // `settings`: URender's MLOD/MLMODE/MLFIX for the next frames (an object
+  // as setLodSettings takes it), or false for the shipped ones.
+  if(settings===false)actorSim.resetLodSettings();
+  else if(settings)actorSim.setLodSettings(settings);
   // `list`: every binding's actor, mesh and Location (to aim views).
   if(list)return actorSim.all().map(binding=>{let location=null;try{location=binding.location;}catch{}
     return {id:binding.id,actor:binding.actor?.name??null,mesh:binding.mesh?.key??null,path:binding.path,location};});
@@ -22,7 +26,13 @@ export function lodProbe(actorSim,{all=false,list=false}={}){
         settings:{...frame.settings}},
       inputs:{locationBits:inputs.location.map(bits),drawScaleBits:bits(inputs.drawScale),lodBiasBits:bits(inputs.lodBias)},
       selection:{detailBits:bits(selection.detail),requested:selection.requested,active:selection.active,morph:selection.morph},
-      returned:state.returned,state:state.state,admitted:state.admitted,vertices:state.vertices});
+      returned:state.returned,state:state.state,admitted:state.admitted,vertices:state.vertices,
+      // Child frames that drew it: their own selection, and whether it draws
+      // what the main frame's does.
+      frames:(state.frames??[]).map(entry=>({index:entry.index,same:entry.same,main:entry.main,here:entry.here,returned:entry.returned,state:entry.state,admitted:entry.admitted,vertices:entry.vertices,
+        coordsBits:entry.frame.coords.map(bits),fxBits:bits(entry.frame.fx),
+        selection:{detailBits:bits(entry.selection.detail),requested:entry.selection.requested,active:entry.selection.active,
+          morph:entry.selection.morph}}))});
   }
   return rows;
 }

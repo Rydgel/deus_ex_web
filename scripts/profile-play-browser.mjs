@@ -14,6 +14,7 @@
  *     [--query gpuMesh=1] (viewer URL switches, e.g. the GPU mesh path)
  *     [--preview weapon] (a viewer preview after the start click, e.g. Training's crowbar)
  *     [--place '{"location":[x,y,z],"rotation":[p,y,r]}'] (the player placed before the settle)
+ *     [--lod-settings '{"shapeLOD":10}'] (URender's MLOD/MLMODE/MLFIX on the simulation side)
  *     [--angle metal|gl|vulkan] (ANGLE backend: metal on macOS, gl elsewhere;
  *       Linux headless Chromium ignores metal and falls back to SwiftShader)
  *     [--headed] [--executable /usr/bin/chromium] (a visible window, another Chromium)
@@ -100,6 +101,9 @@ try {
   // --place '{"location":[x,y,z],"rotation":[p,y,r]}': the player moved
   // there (decal-probe.mjs placeProbe) before the settle.
   if(option('place',null))await page.evaluate(args=>window.deusExViewer.placeProbe(JSON.parse(args)),option('place',null));
+  // --lod-settings '{"shapeLOD":10}': URender's MLOD, MLMODE or MLFIX, set on the simulation side
+  // (lod-probe.mjs; validation), e.g. to make mirror frames draw other LOD states than the main frame.
+  if(option('lod-settings',null))await page.evaluate(args=>window.deusExViewer.lodProbe({settings:JSON.parse(args)}),option('lod-settings',null));
   await page.waitForTimeout(settle);
   if(walk)await page.keyboard.down('KeyW');
   await page.evaluate(()=>window.deusExViewer.framePhases(true));

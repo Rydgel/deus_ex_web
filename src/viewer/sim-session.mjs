@@ -372,6 +372,9 @@ export function createSimSession(game, { assets = null, events = [], exportName 
     const frames = result.frames.map(frame => {
       const drawnHere = drawnOf(frame.draw);
       const owner = frame.kind === 'mirror' && drawnHere.movers ? occlusion.tracker.surfOwner(occlusion.nodeSurf(frame.iNode)) : null;
+      // Its DrawLodMesh inputs: the frame's Coords and FX (ComputeRenderSize
+      // fields +0x34 and +0xb8; docs/script-lodmesh-lod.md "Play").
+      const fieldFloats = new Float32Array(Uint32Array.from(frame.fields.slice(0, 13)).buffer);
       return { index: frame.index, parent: frame.parent, kind: frame.kind, iNode: frame.iNode, recursion: frame.recursion,
         group: owner ? `${trackerMovers.names[owner.tag - 0x40000000]}:${owner.ordinal}` : null,
         bounds: spanBounds(frame.span), nodes: drawnHere.nodes, movers: drawnHere.movers,
@@ -381,7 +384,8 @@ export function createSimSession(game, { assets = null, events = [], exportName 
         // SetupDynamics' moving-light test, mesh lighting's LeafLights).
         coords: Array.from(new Float32Array(Uint32Array.from(frame.fields.slice(0, 12)).buffer)),
         mirror: new Float32Array(Uint32Array.of(frame.mirror).buffer)[0], planes: Array.from(frame.fields.slice(41, 57)),
-        sprites: frame.sprites.map(sprite => sprite.key) };
+        sprites: frame.sprites.map(sprite => sprite.key),
+        lod: { coords: Array.from(fieldFloats.subarray(0, 12)), fx: fieldFloats[12] } };
     });
     // DrawLodMesh's inputs from the master frame: Frame->Coords and FX
     // (docs/script-lodmesh-lod.md "Play").
@@ -413,6 +417,14 @@ export function createSimSession(game, { assets = null, events = [], exportName 
   // Each child frame's lighting frame (mesh-lighting-view.mjs childFrame) with
   // its Frame->Sprite's binding ids, in DrawFrame's order, for the actor
   // layer's per-frame SetupForActor and Light.
+  // Each child frame's DrawLodMesh inputs (its Coords and FX) with its
+  // Frame->Sprite's binding ids, in DrawFrame's order (docs/script-lodmesh-lod.md
+  // "Child frames"): the actor layer selects the LOD and calls GetFrame for an
+  // actor in each frame that draws it.
+  function lodFramesOf(frames, fov) {
+    if (!frames) return null;
+    return drawFrameOrder(frames).map(frame => ({ index: frame.index, ids: frame.main ?? new Set(), lod: { ...frame.lod, fov } }));
+  }
   function lightFramesOf(frames) {
     if (!frames || !meshLighting?.frame) return null;
     return drawFrameOrder(frames).map(frame => ({ index: frame.index, kind: frame.kind, ids: frame.main ?? new Set(),
@@ -783,7 +795,7 @@ export function createSimSession(game, { assets = null, events = [], exportName 
           const result = occludeMain({ ...args, childFrames });
           return { main: result.main, children: viewportChildren(result.frames ? result.children
             : drawn ? drawn.mayRender(view, new Set(result.mirrors)) : false), lod: lodOf(result),
-            lightFrames: lightFramesOf(result.frames) };
+            lightFrames: lightFramesOf(result.frames), lodFrames: fov !== undefined ? lodFramesOf(result.frames, fov) : null };
         } : null;
         frame = actorScene.update({ lit: Boolean(meshLighting?.frame), frustum, camera: view, cull: !children, children,
           items: inspect ? [] : live.meshItems, occlude, lod: inspect ? null : lodOf(current?.visibility), ...(pack ? { pack } : {}) });

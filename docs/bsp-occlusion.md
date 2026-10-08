@@ -775,8 +775,9 @@ items are collision (Stage 5) and SaveGame (Stage 6).
   read from the dynamics yet. (A frame's own moving-light LeafLights for
   mesh lighting are: main and child frames each filter SetupDynamics'
   candidates by their ViewPlanes, mesh-lighting-view.mjs `childFrame`; a
-  child frame's DrawLodMesh detail choice, pose and Volumetrics are the
-  main frame's, as before.)
+  child frame's DrawLodMesh detail choice and GetFrame count are its own since
+  2026-10-08, [LOD](script-lodmesh-lod.md#play); its Volumetrics are not computed in any
+  frame.)
 
 Explicitly unsupported: WarpZoneInfo portals (none in the single-player
 maps), span-based render devices, AMD3DClipBspSurf, frames taller than the

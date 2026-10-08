@@ -407,7 +407,7 @@ conversation camera with lip sync. The render pass's translations run at its
 24-bit precision ([render-pass precision](render-pass-precision.md)).
 Twenty-six maps match the original's own frames at matched cameras and level time (122 of 130 views)
 ([visual acceptance](visual-acceptance.md)).
-Open: the LOD morph's world-space rounding and per-mirror drawing,
+Open: the LOD morph's world-space rounding and the ViewportWindow frames' own LOD choice,
 per-frame mesh lighting in mirror and sky frames, actor meshes in a sky seen
 through a mirror, the child frames' own iterator items, the security cameras'
 views without mirrors, decals, coronas and their own lighting and fog, the
@@ -849,9 +849,14 @@ faces.
   path in `validate-gpu-mesh` (201 LOD captures, 96 with dropped faces). GPU
   time per frame 2.02 → 2.05 ms on Island (A/B). `?meshLod=off` draws full
   detail.
+- *Child frames (2026-10-08).* Each mirror and sky frame draws its own
+  DrawLodMesh state: the selection from its Coords and FX, the GetFrame count
+  of its call (the calls run in DrawFrame's order and merge into one pose
+  pass), the morph, corners, lighting and visibility, on both paths; the page
+  redoes the slot's morph and corner passes in the frame's lighting run.
 - *Left.* The morph rounds in Play's world space (the original's GetFrame
-  output is camera space), mirror frames reuse the main frame's selection (their lighting is their own),
-  and the particle and wire branches are not ported. See
+  output is camera space), ViewportWindow frames and the weapon select no LOD
+  of their own, and the particle and wire branches are not ported. See
   [LOD](script-lodmesh-lod.md).
 
 **Typed characters (2026-10-07).** The `WM_CHAR` route is recovered and

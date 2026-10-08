@@ -11,7 +11,7 @@
  * so both sides take the same path for every actor. */
 import * as THREE from 'three';
 import {TextureStore} from '../unreal/textures.mjs';
-import {createLodMeshFrameCache,getLodMeshFrame,planLodMeshFrame,materializeLodMeshFrame} from '../runtime/lodmesh-frame.mjs';
+import {createLodMeshFrameCache,getLodMeshFrame,planLodMeshFrame,materializeLodMeshFrame,mergeLodMeshPlans,snapshotLodMeshCache} from '../runtime/lodmesh-frame.mjs';
 import {loadLodMeshKernel} from '../runtime/lodmesh-wasm.mjs';
 import {actorsEpoch} from '../runtime/base-epoch.mjs';
 import {RENDER_MESH,RENDER_SHIFT,renderScanMode} from '../runtime/script-vm-render.mjs';
@@ -31,6 +31,9 @@ const MB={STATUS:0,MESH:1,STYLE:2,SCALEGLOW:3,LOCATION:4,PREPIVOT:7,DRAWSCALE:10
 const MB_WORDS=55,MS_OK=1,MS_DRAWN=2,MS_DRAWN_CHILD=4,MS_CHANGED=8,MS_SETUP=16;
 
 /** A plain texture reference for the page's asset store. */
+const wordView=new DataView(new ArrayBuffer(4));
+/** A float32's bits. */
+const floatBits=value=>{wordView.setFloat32(0,value,true);return wordView.getUint32(0,true);};
 const plainRef=reference=>({key:reference.key,package:reference.asset?.name,index:reference.index});
 
 /** BufferGeometry.computeBoundingBox + computeBoundingSphere (three.js
@@ -133,7 +136,9 @@ export async function createMeshBinding(runtime,actor,{id,originalObjectIndex,ke
   const fullCount=payload.frameVertexCount-(payload.scalarBits.get(0x184)|0);
   // The last LOD inputs and results: the requested and returned counts, the
   // detail bits, and the drawn state (drawn positions, resolved corners).
-  let lastRequested=fullCount,lastReturned=fullCount,lastDetail='off',lodDrawn=null,lastLod=null;
+  let lastCallsKey=String(fullCount),lastReturned=fullCount,lastDetail='off',lodDrawn=null,lastLod=null;
+  // GetFrame's returned count of each call this frame (in call order).
+  let callReturned=[fullCount];
   // The GPU path's last LOD state: the selection, its post-frame scalars
   // while the LOD flag holds, and the parameters the page last received.
   let lastSelection=null,gpuLodScalars=null,lastLodKey='full';
@@ -143,6 +148,31 @@ export async function createMeshBinding(runtime,actor,{id,originalObjectIndex,ke
     lodDrawn=selection?meshLod.after(selection,lastReturned,frame.output):null;
     if(lodDrawn&&!lodDrawn.state.active&&!lodDrawn.state.morph)lodDrawn=null;
   }
+  /** DrawLodMesh in each child frame that draws the binding
+   * (docs/script-lodmesh-lod.md "Child frames"): the selection from that
+   * frame's own Coords and FX, GetFrame's returned count for its call, and
+   * the state those give (the GPU scalars; the CPU morph, corners and
+   * lighting topology, on demand). `frameVariants` holds the frames whose
+   * state differs from the base's (the last frame to draw it, the main
+   * frame's unless only child frames do): each is drawn with its own. */
+  let frameVariants=new Map();
+  const stateKey=(selection,returned)=>{
+    if(!selection)return 'full';
+    const s=lodMorphScalars(meshLod.topology,selection,returned);
+    return s.active?`${s.count}:${s.start}:${s.morph}:${s.morph?floatBits(Math.fround(s.inverse)):0}`:'full';
+  };
+  const fullParams=()=>({count:meshLod.topology.modelVerts,start:0,active:false,morph:false,inverse:0});
+  /** The GPU record's LOD parameters of a selection after a GetFrame that
+   * returned `returned` (lodMorphScalars). */
+  const paramsOf=(selection,returned)=>{
+    const s=selection?lodMorphScalars(meshLod.topology,selection,returned):null;
+    return s?.active?{count:s.count,start:s.start,active:true,morph:s.morph,inverse:Math.fround(s.inverse)}:fullParams();
+  };
+  const emptyGroups=params=>{
+    const level=meshLod.topology.faceLevel,empty=new Map();
+    for(const group of groups.values())empty.set(group,params.active&&group.faces.every(face=>level[face]>params.count));
+    return empty;
+  };
   /** What the page needs to draw the LOD state: the resolved corners and
    * wedge dwords (null at full resolution). */
   const lodRecord=()=>({resolved:lodDrawn?.resolved?Int32Array.from(lodDrawn.resolved):null,
@@ -220,8 +250,9 @@ export async function createMeshBinding(runtime,actor,{id,originalObjectIndex,ke
   // actor once in every frame whose Frame->Sprite holds it, with that
   // frame's Coords and Mirror (docs/mesh-lighting.md "One call per frame").
   const frameLights=new Map(),frameSetups=new Map(),frameCtxs=new Map();
-  function relight(prepared,ctx=null){
-    const points=drawnPoints(),topology=lodDrawn?.lighting??{faces,faceWords};
+  function relight(prepared,ctx=null,drawn=lodDrawn){
+    const points=drawn?.positions??new Float32Array(frame.output.buffer,frame.output.byteOffset,frame.output.byteLength/4),
+      topology=drawn?.lighting??{faces,faceWords};
     const result=lighting.lightMesh(actor,points,topology.faces,topology.faceWords,prepared,ctx);
     if(!result)return null;
     return {colors:result.colors.slice(),summary:{lights:result.setup.lights.length,flags:result.flags}};
@@ -285,9 +316,12 @@ export async function createMeshBinding(runtime,actor,{id,originalObjectIndex,ke
     // The plan whose CPU pose frame.output holds (materialized once; a LOD
     // change alone invalidates only the spheres).
     let materializedPlan=null;
+    function materialize(){
+      if(materializedPlan!==lastPlan){materializeLodMeshFrame(lastPlan);materializedPlan=lastPlan;}
+    }
     function exactSpheres(){
       if(exactValid)return;
-      if(materializedPlan!==lastPlan){materializeLodMeshFrame(lastPlan);materializedPlan=lastPlan;}
+      materialize();
       // The LOD's drawn corners, as the CPU path draws them.
       const drawn=gpuLodScalars?meshLod.after(lastSelection,lastReturned,frame.output):null;
       const points=drawn?new Uint8Array(drawn.positions.buffer,drawn.positions.byteOffset,drawn.positions.byteLength):frame.output;
@@ -300,6 +334,48 @@ export async function createMeshBinding(runtime,actor,{id,originalObjectIndex,ke
         group.sphere.copy(group.exact.boundingSphere);
       }
       exactValid=true;spheresChanged=true;
+    }
+    /** A child frame variant's CPU state (docs/script-lodmesh-lod.md "Child
+     * frames"): the LOD of its selection and returned count over GetFrame's
+     * output (which holds every vertex any call of the tick returned), the
+     * drawn positions, the page's LOD record and each group's bounds. */
+    function variantCpu(variant){
+      if(variant.cpu)return variant.cpu;
+      if(mode==='gpu')materialize();
+      let drawn=variant.selection?meshLod.after(variant.selection,variant.returned,frame.output):null;
+      if(drawn&&!drawn.state.active&&!drawn.state.morph)drawn=null;
+      const points=drawn?Float32Array.from(drawn.positions):new Float32Array(frame.output.buffer,frame.output.byteOffset,frame.output.byteLength/4).slice();
+      const cpu={drawn:drawn&&{...drawn,positions:points},points,
+        record:{resolved:drawn?.resolved?Int32Array.from(drawn.resolved):null,scratch:drawn?.scratch?Uint32Array.from(drawn.scratch):null,
+          count:variant.returned,state:drawn?{...drawn.state}:null},
+        empty:new Map(),spheres:new Map()};
+      const bytes=new Uint8Array(points.buffer,points.byteOffset,points.byteLength);
+      for(const group of groups.values()){
+        const positions=new Float32Array(group.indices.length*3),scratch={};
+        const indices=drawn?.resolved?lodCornerIndices(group.faces,group.indices,drawn.resolved,scratch):group.indices;
+        cpu.empty.set(group,Boolean(drawn?.resolved&&scratch.lodEmpty));
+        copyPositions(bytes,positions,indices);
+        const bounds={};setMeshBounds(bounds,positions);cpu.spheres.set(group,bounds.boundingSphere);
+      }
+      return variant.cpu=cpu;
+    }
+    /** The frame's CPU drawn state for lighting: the variant's, or the base's. */
+    const drawnOfFrame=index=>{const variant=frameVariants.get(index);return variant?variantCpu(variant).drawn:lodDrawn;};
+    const variantParams=variant=>variant.params??=paramsOf(variant.selection,variant.returned);
+    const variantEmpty=variant=>variant.lodEmpty??=emptyGroups(variantParams(variant));
+    /** A child frame's final LOD state (validation access): its variant's,
+     * or the base's when it draws the same. */
+    function frameStateOf(index){
+      const variant=frameVariants.get(index);
+      if(!variant)return {state:lastLod.state,admitted:lastLod.admitted,vertices:lastLod.vertices};
+      if(mode==='gpu'){
+        const params=variantParams(variant);
+        return {state:params.active?{active:true,morph:params.morph,start:params.start,count:params.count}:null,
+          admitted:params.active?countLevel(meshLod.topology.faceLevel,params.count):faces.length,vertices:null};
+      }
+      const drawn=variantCpu(variant).drawn;
+      return {state:drawn?{...drawn.state}:null,admitted:drawn?.resolved?countAdmitted(drawn.resolved):faces.length,
+        vertices:drawn?.resolved?countVertices(drawn.resolved):null};
     }
     function boxSphere(group){
       const box=group.viewBox,sphere=group.sphere;
@@ -315,14 +391,19 @@ export async function createMeshBinding(runtime,actor,{id,originalObjectIndex,ke
         unionBox[k]=Math.min(unionBox[k],group.viewBox[k]);unionBox[3+k]=Math.max(unionBox[3+k],group.viewBox[3+k]);
       }
     }
-    function decideGroups(frustum,assign){
-      const whole=certifyFrustum(frustum,unionBox);
+    /** Each group's visibility in a pass; `variant`: a child frame whose
+     * LOD state differs from the base's, with its own emptied groups and
+     * (when the boxes cannot tell) its own exact spheres. */
+    function decideGroups(frustum,assign,variant=null){
+      const whole=certifyFrustum(frustum,unionBox),empty=variant?variantEmpty(variant):null;
       // A group the LOD empties draws nothing.
-      for(const group of groups.values())assign(group,!group.lodEmpty&&(whole>=0?whole===1:groupVisible(group,frustum)));
+      for(const group of groups.values())
+        assign(group,!(empty?empty.get(group):group.lodEmpty)&&(whole>=0?whole===1:groupVisible(group,frustum,variant)));
     }
-    function groupVisible(group,frustum){
+    function groupVisible(group,frustum,variant=null){
       const certain=certifyFrustum(frustum,group.viewBox);
       if(certain>=0)return certain===1;
+      if(variant)return frustum.intersectsSphere(variantCpu(variant).spheres.get(group));
       exactSpheres();
       return frustum.intersectsSphere(group.exact.boundingSphere);
     }
@@ -338,7 +419,14 @@ export async function createMeshBinding(runtime,actor,{id,originalObjectIndex,ke
       cpuBounds();
       layout.release(gpuHandle);gpuHandle=null;
     }
-    function planGpu(vertexCount=fullCount){
+    /** GetFrame planned for the GPU: one call per distinct count in
+     * `requests` (the frames that draw the binding, DrawFrame's order), merged
+     * into the one plan the pose pass runs (mergeLodMeshPlans); the
+     * returned counts of the calls are `callReturned`. Calls that do not merge
+     * (a cache entry created this tick while tweening) are replaced by the
+     * base call alone and the child frames draw its state (`planDegraded`). */
+    let planDegraded=false;
+    function planGpu(requests=[fullCount]){
       // A slot's plans take effect when its GPU pass runs. Until the first
       // one has run, the actor has not been drawn and the GPU holds none of
       // its cache poses; a new plan would overwrite that first one, and a
@@ -346,8 +434,19 @@ export async function createMeshBinding(runtime,actor,{id,originalObjectIndex,ke
       // GetFrame happens when the actor is first drawn, so the cache
       // restarts: this plan is the first.
       if(layout.frame<firstPassFrame)for(const key of [...cache.entries.keys()])cache.flush(key);
-      lastPlan=planLodMeshFrame(payload,actor,coords,services,{output:frame.output,vertexCount});
-      lastReturned=lastPlan.vertexCount;
+      const call=vertexCount=>planLodMeshFrame(payload,actor,coords,services,{output:frame.output,vertexCount});
+      planDegraded=false;
+      let merged=null,plans=null;
+      if(requests.length>1){
+        const restore=snapshotLodMeshCache(cache);
+        plans=requests.map(call);
+        merged=mergeLodMeshPlans(plans);
+        if(!merged){restore();plans=null;planDegraded=true;}
+      }
+      if(!merged){merged=call(requests.at(-1));plans=requests.map(()=>merged);}
+      lastPlan=merged;
+      callReturned=plans.map(plan=>plan.vertexCount);
+      lastReturned=callReturned.at(-1);
       exactValid=false;plannedFrame=layout.frame+1;
       try{layout.checkPose(gpuHandle,lastPlan);}
       catch(error){toCpu(error.message);return false;}
@@ -492,11 +591,20 @@ export async function createMeshBinding(runtime,actor,{id,originalObjectIndex,ke
         if(!root)return {root:false};
         // The frame's own lighting rides with the decision (frameIndex): the
         // page applies it before the pass and restores the main frame's after.
-        const decision={root:true},light=frustum!==null&&frameIndex!==undefined?frameLights.get(frameIndex):null;
-        if(light)Object.assign(decision,{frame:frameIndex},light);
+        // So does its own DrawLodMesh state when it differs from the base's:
+        // the GPU path's LOD parameters or the CPU path's positions and
+        // corners (docs/script-lodmesh-lod.md "Child frames").
+        const child=frustum!==null&&frameIndex!==undefined;
+        const decision={root:true},light=child?frameLights.get(frameIndex):null,variant=child?frameVariants.get(frameIndex):null;
+        if(light||variant)decision.frame=frameIndex;
+        if(light)Object.assign(decision,light);
+        if(variant){
+          if(mode==='gpu')decision.lodParams=variantParams(variant);
+          else{const cpu=variantCpu(variant);decision.cpuState={posed:cpu.points,lod:cpu.record.resolved?cpu.record:null};}
+        }
         if(mode!=='gpu')return decision;
         if(frustum===null){decision.groups=groupBits();return decision;}
-        const bits=[];decideGroups(frustum,(group,visible)=>bits.push(visible?1:0));
+        const bits=[];decideGroups(frustum,(group,visible)=>bits.push(visible?1:0),variant);
         const spheres=spheresChanged?sphereWords():null;spheresChanged=false;
         decision.groups=bits;decision.spheres=spheres;
         return decision;
@@ -530,7 +638,9 @@ export async function createMeshBinding(runtime,actor,{id,originalObjectIndex,ke
           const bits=decision?.groups??groupBits();
           return bits.some(Boolean);
         }
-        for(const group of groups.values())if(!group.lodEmpty&&frustum.intersectsSphere(group.bounds.boundingSphere))return true;
+        const variant=decision?.frame!==undefined?frameVariants.get(decision.frame):null,cpu=variant?variantCpu(variant):null;
+        for(const group of groups.values())
+          if(!(cpu?cpu.empty.get(group):group.lodEmpty)&&frustum.intersectsSphere(cpu?cpu.spheres.get(group):group.bounds.boundingSphere))return true;
         return false;
       },
       /** Validation access (scripts/validate-gpu-mesh.mjs): this frame's
@@ -542,11 +652,22 @@ export async function createMeshBinding(runtime,actor,{id,originalObjectIndex,ke
         // positions, resolved corners, wedge dwords and lighting faces, or
         // null at full detail; `wedges` the mesh's Wedges dwords.
         lodDrawn:()=>gpuLodScalars?meshLod.after(lastSelection,lastReturned,frame.output):null,
-        lodParams:gpuLodScalars?{...gpuLodScalars}:null,wedges:meshLod?.topology.wedges??null}),
+        lodParams:gpuLodScalars?{...gpuLodScalars}:null,wedges:meshLod?.topology.wedges??null,
+        // A child frame's LOD state (selection and returned count) on the
+        // exact output (call exactOutput first): the GPU parameters and the
+        // CPU drawn state, with its positions copied; the main frame's GPU
+        // parameters; the mesh's LOD topology.
+        lodVariant:(selection,returned)=>{
+          let drawn=selection?meshLod.after(selection,returned,frame.output):null;
+          if(drawn)drawn={...drawn,positions:Float32Array.from(drawn.positions)};
+          return {params:paramsOf(selection,returned),drawn};
+        },
+        mainLodParams:()=>meshLod?paramsOf(gpuLodScalars?lastSelection:null,lastReturned):null,
+        lodTopology:()=>meshLod?.topology??null}),
       get location(){return [...read(actor,'Location')];},get rotation(){return [...read(actor,'Rotation')];},
       /** Validation access (lod-probe.mjs): the last update's LOD inputs,
        * selection, returned count, final state and drawn faces. */
-      lodState:()=>lastLod?{...lastLod,mesh:meshReference.key,meshPackage:meshReference.asset?.name??null,meshIndex:meshReference.index??null,
+      lodState:()=>lastLod?{...lastLod,frames:(lastLod.frames??[]).map(entry=>({...entry,...frameStateOf(entry.index)})),mesh:meshReference.key,meshPackage:meshReference.asset?.name??null,meshIndex:meshReference.index??null,
         actor:actorName,path:mode,drawn:drawnMain}:null,
       /** One main-frame update: the frame record for the page, or null when
        * the binding is disposed. With `view.pack` (mesh-frame-pack.mjs) the
@@ -554,7 +675,7 @@ export async function createMeshBinding(runtime,actor,{id,originalObjectIndex,ke
       update(view={}){
         if(disposed)return null;
         const record={id,visible:false,childOnly:false};drawnMain=false;
-        if(lastLod)lastLod.updated=false;
+        if(lastLod){lastLod.updated=false;lastLod.frames=[];}
         // This frame's mesh_reads words (MB), or -1.
         const {u32,f32}=view.reads&&block?view.reads.views():{},at=u32&&u32[block>>2]&MS_OK?block>>2:-1;
         const verify=at>=0&&view.reads.verify;
@@ -614,25 +735,44 @@ export async function createMeshBinding(runtime,actor,{id,originalObjectIndex,ke
             throw new Error(`RENDER_SCAN=verify: ${actorName} pose changed is ${poseChanged} from mesh_reads, ${changed} by pose()`);
           poseChanged=changed;
         }
-        // DrawLodMesh's selection for the main frame (actor-mesh-lod.mjs):
-        // its count joins the pose in deciding a new GetFrame, its detail
-        // the morph (the CPU path runs it here, the GPU path in its passes).
-        let selection=null,lodInputs=null;
+        // DrawLodMesh in every frame that draws the binding (actor-mesh-lod.mjs),
+        // in DrawFrame's order: the child frames first, the main frame last,
+        // each with its own Coords and FX and one GetFrame call. The last one
+        // is the base state of the record (the main frame's unless only child
+        // frames draw the binding); the others that differ are drawn with
+        // their own (frameVariants; docs/script-lodmesh-lod.md "Child frames").
+        const lodFrames=[];let lodInputs=null;
         if(meshLod&&view.lodFrame){
           const location=at>=0?[f32[at+MB.LOCATION],f32[at+MB.LOCATION+1],f32[at+MB.LOCATION+2]]:own.Location();
           lodInputs={location,drawScale:at>=0?f32[at+MB.DRAWSCALE]:own.DrawScale(),lodBias:own.LODBias()};
-          selection=meshLod.select(view.lodFrame,lodInputs.location,lodInputs.drawScale,lodInputs.lodBias);
-          lastLod={frame:view.lodFrame,inputs:lodInputs,selection};
-          if(!selection.active)selection=null;
+          const choose=(inputs,index)=>{
+            const chosen=meshLod.select(inputs,lodInputs.location,lodInputs.drawScale,lodInputs.lodBias);
+            return {index,frame:inputs,chosen,selection:chosen.active?chosen:null,requested:chosen.active?chosen.requested:fullCount};
+          };
+          for(const entry of view.lodFrames??[])if(entry.ids.has(id))lodFrames.push(choose(entry.frame,entry.index));
+          const main=choose(view.lodFrame,null);
+          lastLod={frame:view.lodFrame,inputs:lodInputs,selection:main.chosen};
+          if(!childOnly||!lodFrames.length)lodFrames.push(main);
         }
-        const requested=selection?.requested??fullCount;
+        const base=lodFrames.at(-1)??null,selection=base?.selection??null;
+        // The GetFrame calls: consecutive frames asking for the same count
+        // make the same call twice (a keyframe pose recomputed, a tween with
+        // alpha 0), which the second need not run.
+        const requests=[],callOf=[];
+        for(const entry of lodFrames){
+          if(!requests.length||requests.at(-1)!==entry.requested)requests.push(entry.requested);
+          callOf.push(requests.length-1);
+        }
+        if(!requests.length)requests.push(fullCount);
+        const callsKey=requests.join(',');
         // The detail matters only to a morph; the flags and the count to all.
-        const detailKey=selection?`${selection.morph?bitsOf(selection.detail):0}`:'off';
-        const lodChanged=requested!==lastRequested||detailKey!==lastDetail;
+        const detailKey=lodFrames.length?lodFrames.map(entry=>entry.selection?`${entry.selection.morph?bitsOf(entry.selection.detail):0}`:'off').join(','):'off';
+        const callsChanged=callsKey!==lastCallsKey,lodChanged=callsChanged||detailKey!==lastDetail;
         lastDetail=detailKey;
         let posed=false;
-        if((poseChanged||requested!==lastRequested)&&mode==='gpu'){
-          if(planGpu(requested))record.plan=view.pack?view.pack.plan(lastPlan):plainPlan(lastPlan);posed=true;
+        if((poseChanged||callsChanged)&&mode==='gpu'){
+          if(planGpu(requests))record.plan=view.pack?view.pack.plan(lastPlan):plainPlan(lastPlan);
+          posed=true;
         }
         // The GPU path's LOD parameters after GetFrame (the morph and corner
         // passes run them); the groups the reduced faces empty.
@@ -640,19 +780,20 @@ export async function createMeshBinding(runtime,actor,{id,originalObjectIndex,ke
           lastSelection=selection;
           const scalars=selection?lodMorphScalars(meshLod.topology,selection,lastReturned):null;
           gpuLodScalars=scalars?.active?scalars:null;
-          const params=gpuLodScalars?{count:scalars.count,start:scalars.start,active:true,morph:scalars.morph,inverse:Math.fround(scalars.inverse)}
-            :{count:meshLod.topology.modelVerts,start:0,active:false,morph:false,inverse:0};
+          const params=paramsOf(selection,lastReturned);
           const key=`${params.count}:${params.start}:${params.morph}:${params.active}:${bitsOf(params.inverse)}`;
           if(key!==lastLodKey){
             record.lodParams=params;lastLodKey=key;exactValid=false;
-            const level=meshLod.topology.faceLevel;
-            for(const group of groups.values())group.lodEmpty=params.active&&group.faces.every(face=>level[face]>params.count);
+            const empty=emptyGroups(params);
+            for(const group of groups.values())group.lodEmpty=empty.get(group);
           }
         }
         if((poseChanged||lodChanged)&&mode==='cpu'){
           // A plan evaluated for this frame before a fallback already posed it.
-          if(!posed&&(poseChanged||requested!==lastRequested))
-            lastReturned=getLodMeshFrame(payload,actor,coords,services,{output:frame.output,vertexCount:requested}).vertexCount;
+          if(!posed&&(poseChanged||callsChanged)){
+            callReturned=requests.map(count=>getLodMeshFrame(payload,actor,coords,services,{output:frame.output,vertexCount:count}).vertexCount);
+            lastReturned=callReturned.at(-1);
+          }
           lodAfter(selection);
           cpuBounds();record.posed=posedCopy();
           if(meshLod)record.lod=lodRecord();
@@ -663,7 +804,20 @@ export async function createMeshBinding(runtime,actor,{id,originalObjectIndex,ke
         else if(lastLod)Object.assign(lastLod,{returned:lastReturned,
           state:gpuLodScalars?{active:true,morph:gpuLodScalars.morph,start:gpuLodScalars.start,count:gpuLodScalars.count}:null,
           admitted:gpuLodScalars?countLevel(meshLod.topology.faceLevel,gpuLodScalars.count):faces.length,vertices:null,updated:true});
-        lastRequested=requested;
+        // The child frames whose state differs from the base's.
+        frameVariants=new Map();
+        if(meshLod&&lodFrames.length>1&&!planDegraded){
+          const baseKey=stateKey(selection,callReturned[callOf.at(-1)]);
+          lodFrames.forEach((entry,k)=>{
+            if(entry===base)return;
+            const returned=callReturned[callOf[k]],key=stateKey(entry.selection,returned);
+            if(lastLod)(lastLod.frames??=[]).push({index:entry.index,frame:entry.frame,selection:entry.chosen,same:key===baseKey,
+              main:baseKey,here:key,returned});
+            if(key!==baseKey)frameVariants.set(entry.index,{index:entry.index,selection:entry.selection,returned,key,
+              params:mode==='gpu'?paramsOf(entry.selection,returned):null,lodEmpty:null,exact:null,cpu:null});
+          });
+        }
+        lastCallsKey=callsKey;
         let mainVisible;
         if(mode==='gpu'){
           mainVisible=false;
@@ -696,14 +850,14 @@ export async function createMeshBinding(runtime,actor,{id,originalObjectIndex,ke
                 record.posed=posedCopy();
                 // The frames lit before the fallback now take the CPU path's colours.
                 for(const [index,setup] of frameSetups)if(index!==lf?.index&&frameLights.get(index)?.lighting){
-                  const earlier=relight(setup,frameCtxs.get(index));
+                  const earlier=relight(setup,frameCtxs.get(index),drawnOfFrame(index));
                   if(earlier)frameLights.set(index,{colors:earlier.colors});
                 }
-                const lit=relight(prepared,ctx);
+                const lit=relight(prepared,ctx,lf?drawnOfFrame(lf.index):lodDrawn);
                 if(lit){if(lf)frameLights.set(lf.index,{colors:lit.colors});else{record.colors=lit.colors;summary.lighting=lit.summary;}}
               }
             } else {
-              const lit=relight(undefined,ctx);
+              const lit=relight(undefined,ctx,lf?drawnOfFrame(lf.index):lodDrawn);
               if(lit){if(lf)frameLights.set(lf.index,{colors:lit.colors});else{record.colors=lit.colors;summary.lighting=lit.summary;}}
             }
           };
@@ -974,11 +1128,13 @@ export async function createActorMeshSim(runtime,assets,asset,{kernel,player:pla
         if(view.occlude){
           const occluded=view.occlude({bindings:actors,items:itemCandidates(view.items??[]),reads,levelIndex});
           view={...view,main:occluded.main,children:occluded.children,cull:!occluded.children,lod:occluded.lod??view.lod,
-            lightFrames:occluded.lightFrames??null};
+            lightFrames:occluded.lightFrames??null,lodFrames:occluded.lodFrames??null};
         }
         // The main frame's LOD inputs (Frame->Coords, FX, FovAngle), when the
-        // frame has them; mirror frames reuse the main frame's selection.
-        if(lod&&view.lod)view={...view,lodFrame:lodFrame(view.lod,lodSettings)};
+        // frame has them, and each child frame's own (DrawLodMesh selects in
+        // every frame that draws an actor).
+        if(lod&&view.lod)view={...view,lodFrame:lodFrame(view.lod,lodSettings),
+          lodFrames:view.lodFrames?.map(entry=>({index:entry.index,ids:entry.ids,frame:lodFrame(entry.lod,lodSettings)}))??null};
         for(const binding of actors)records.push(binding.update(reads?{...view,reads}:view));
         drawItems(view.items??[],view,records);
       }finally{frameViewer=null;}
