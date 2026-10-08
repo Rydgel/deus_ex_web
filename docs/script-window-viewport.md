@@ -268,3 +268,41 @@ Reproduce:
 - `node scripts/validate-terminals-play.mjs --map 01_NYC_UNATCOIsland --terminal ComputerSecurity1`
   (the security screen end to end, headless)
 - `node scripts/validate-terminals-camera-browser.mjs [--shot camera.png]` (the camera pass)
+
+## Handoff: the camera frame as a full root frame (WIP, 2026-10-08, paused)
+
+No code changed yet. Verified: nothing new (the baseline
+`validate-terminals-camera-browser` run was stopped before it reported).
+Original evidence read: `URender::DrawWorld` (`0x10b1cb90`) pushes the same
+frame for OccludeFrame (`0x10b1ce3b`) and DrawFrame (`0x10b1ce44`), so the
+mirror and sky child frames, SetupDynamics per frame, decals, fog and coronas
+are the generic per-frame passes for a ViewportWindow's master frame too.
+Reads of the real viewport still apply: the corona pass takes the viewport
+actor's (the player's) leaf lights, line-checks them to the camera frame's
+origin, shares the one 32-entry corona cache and clock with the main frame's
+pass, and runs only for `Recursion` 0 (the camera frame is). RenderOverlays
+needs a Target (none with bBehindView).
+
+Next step (plan, not done):
+1. Sim side (`src/viewer/sim-session.mjs` `planViewportPass`): call
+   `visibility(...)` with `children`/`frameDynamics` so the camera frame gets
+   mirror and sky child frames (return `frames`), then reuse `stamps()`'s
+   pass logic (`drawn.passes({camera: viewportCamera, frames, rect})`,
+   `actorScene.framePasses`) generalized to take a camera and frame list;
+   light and LOD each drawn binding per camera frame (`lightFramesOf`,
+   `lodFramesOf`, `meshLighting.childFrame`) and add a root-frame lighting
+   context from the camera's master words; fix first-HUD-frame posing
+   (`viewportIds` follows the previous HUD frame).
+2. Page side (`src/viewer/main.mjs` `viewportWorldPass`): run
+   `world.mirrors.render(renderer, scene, viewportCamera, {frames, rect,
+   framePass, skyIn, updateActors})` before the camera's render, per-frame fog
+   (`world.fog.update` with the camera's Coords) and the decal and corona
+   passes, mirroring `drawFrame`'s main block; consider factoring that block
+   into one function used for both.
+3. Verify in worker mode: extend `validate-terminals-camera-browser`
+   (lit actors equal SetupForActor on the camera frame's inputs; find a
+   camera that sees a mirror, decal or corona, or build a fixture), then
+   `validate-terminals-play`, `validate-window-viewport-diff`,
+   `validate-mirrors-play`, `validate-gpu-mesh`, `npm test`, and an
+   interleaved A/B of the cost with the camera window open.
+Setup done in this worktree: branch at master `e70fd64`, wasm rebuilt.
