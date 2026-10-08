@@ -109,6 +109,36 @@ OccludeBsp visits only the nodes its walk reaches; the translation takes
 every node as visited, which holds for the ancestors of the viewer's leaf
 (its zone is active and its bounds contain the eye), where this pass reads.
 
+**The moving brush tracker's fragment nodes do not change the lists.** A
+fragment is a new node hung off a leaf side of its parent (the parent's
+iFront or iBack changes, its iLeaf does not) with iLeaf copied from that
+side; Filter hits the leaf at the parent, which sets HitLeaf on the copy for
+the fragment, so no deeper node adds the light again, and the parent's hop
+parity is the static model's. `validate-leaf-lights.mjs` also runs the
+original's Filter over the tracked BSP of Training (25 movers, two raised),
+the Paris club (13, two turned) and the Island (19; 19,560, 5,672 and
+26,936 nodes against 9,524, 2,580 and 13,212): it matches the translation
+and its leaf lists equal the static model's in every case.
+
+**Mesh lighting.** `mesh-lighting-view.beginFrame` builds the same lists
+(its `frame.leafLights`, read by SetupForActor), from the master frame built
+before the frame's lighting setup (sim-session `frameMaster`; the planes and
+Coords depend on the view and the render rectangle alone). Before, it put each
+candidate on every leaf it reaches in reverse candidate order with no
+ViewPlanes test. On seeded views of the Island (8 views, 370 lit LOD-mesh
+actors, `census-mesh-leaf-lights.mjs`) 81 of 128 candidates that reached a
+leaf lie outside a ViewPlane (they were lights behind or beside the view),
+1,202 of 1,568 leaf lists differ (99 only in order), 21 actors have a
+different list for their own leaf and 4 choose different lights; the Paris
+club has no moving-light candidates without AugLight (754 actors, none
+change). With AugLight on, in 12 views facing the club's mirror movers JC's
+chosen lights are unchanged (both Beams are inside the frame's planes; the
+leaf list's order differs in 8 of them, which does not reach the selection,
+whose sort keys differ). Open: a mirror child frame has its own
+SetupDynamics, planes and LeafLights in the original (OccludeFrame per
+frame), while Play lights each actor once, with the main frame's lists, for
+all frames.
+
 ## The frame
 
 The pass is inside `URender::DrawFrame` (`0x10b1a2d0`), whose argument
@@ -221,8 +251,7 @@ reads the frame itself, in the pixels of the drawing buffer.
 
 Host choices, noted:
 - the clock is the host's;
-- the leaf lists use the map's static model (the moving brush tracker's
-  fragment nodes are not in it) and, with no master frame, take every
-  candidate (no ViewPlanes to test);
+- with no master frame the leaf lists take every candidate (no ViewPlanes
+  to test);
 - the display ramp applies to the finished frame, after the tile blends
   ([lighting](lighting.md), "Display ramp").

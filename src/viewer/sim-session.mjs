@@ -307,6 +307,27 @@ export function createSimSession(game, { assets = null, events = [], exportName 
     });
     return minX < maxX && startY < endY ? [minX, startY, maxX, endY] : null;
   }
+  // The main frame's coordinates and ViewPlanes, which SetupDynamics reads
+  // (the mesh lighting's leaf lists, mesh-lighting-view.mjs): the master frame
+  // built before the frame's lighting setup, once per frame. Its words and
+  // planes depend on the view and the render rectangle alone, so visibility()
+  // builds the same ones later, after the moving brush tracker's update has
+  // moved the zone lookup's model. Null without OccludeBsp or a drawn rectangle.
+  const frameMasters = new WeakMap();
+  function frameMaster() {
+    const frame = current;
+    if (!occlusion || !frame?.view || !size) return null;
+    const rect = frame.renderRect ?? { width: size[0], height: size[1], render: true };
+    if (!(rect.render && rect.width > 0 && rect.height > 0)) return null;
+    let master = frameMasters.get(frame);
+    if (!master) {
+      const built = occlusion.master({ location: frame.view.location, rotation: frame.view.rotation, width: size[0], height: size[1],
+        fov: frame.view.fov, render: { width: rect.width, height: rect.height } });
+      master = { words: Array.from(built.frame), planes: Array.from(built.fields.slice(41, 57)) };
+      frameMasters.set(frame, master);
+    }
+    return master;
+  }
   // `movers` false (a ViewportWindow's frame) keeps the tracker as the main
   // frame left it: the original updates the moving brush tracker on the game
   // thread (64 bits) when a mover moves, never inside a render-pass DrawWorld,
@@ -702,7 +723,10 @@ export function createSimSession(game, { assets = null, events = [], exportName 
       const toUnits = radians => Math.round(radians * 32768 / Math.PI);
       const view = inspect ?? current?.view ?? { location: fromView(camera.position.toArray()),
         rotation: [toUnits(camera.rotation.x), toUnits(-camera.rotation.y), 0] };
-      try { meshLighting.beginFrame({ location: view.location, rotation: view.rotation, seconds, lights: inspect ? null : live.lights }); }
+      try {
+        meshLighting.beginFrame({ location: view.location, rotation: view.rotation, seconds, lights: inspect ? null : live.lights,
+          master: inspect ? null : frameMaster() });
+      }
       catch (error) { failed = true; errors.push(plainError(error)); }
       return errors;
     },
