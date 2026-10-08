@@ -116,3 +116,15 @@ Native 1689 (exec 0x1000cb70, both optional booleans default TRUE, body
 745 identical across 53 natives. The ListWindow natives 1720–1812 use the
 structured family harness in [the ListWindow family](script-window-list-family.md),
 which runs the same exec bodies over a full heap image.
+
+### Value-string natives (2026-10-08)
+
+Natives that call Core (FString/FArray, appStrlen/appStricmp, appSprintf) are
+not leaf runs. The ScaleWindow value strings 1646–1649 and PlayScaleSound 1653
+use a sibling oracle, `scripts/native-window-scale-values-oracle.py`, built on
+this one: Core runs as loaded, GMalloc is a modelled allocator, MSVCRT
+primitives are libc definitions, `_vsnwprintf` is answered from rows measured
+with the game's MSVCRT.dll under Wine, and `ChangeScalePosition` /
+`AskParentForReconfigure` / the sound call are recorded with their arguments.
+5,546 cases are identical; see
+[scale settings](script-window-scale-settings.md#value-strings-2026-10-08).

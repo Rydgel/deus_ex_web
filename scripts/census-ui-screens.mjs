@@ -6,9 +6,9 @@
  * window class, or the first error with the script stack that reached it.
  * A census of reach, not a fidelity check.
  *
- * A `MenuScreen...` entry (MenuScreenLoadGame, MenuScreenSaveGame) opens the
- * main menu and activates the MenuMain button whose buttonDefaults invoke
- * that class, through XButtonWindow::ActivateButton like a click. They are
+ * A `Menu...` entry (MenuScreenLoadGame, `MenuSettings>MenuScreenOptions`) opens the
+ * main menu and activates, in each window along the `>` path, the button whose
+ * buttonDefaults invoke that class, through XButtonWindow::ActivateButton like a click. They are
  * not in the default list: both stop at the save-game directory (Stage 6).
  *
  * Each screen runs in its own child Node process (`--single`), so memory does
@@ -81,22 +81,35 @@ for (const screen of screens) {
     return window || null;
   };
   const top = () => { const window = topWindow(); return window ? runtime.instance(window).cls.record.key : null; };
-  // MenuMain's button for a menu screen class (MenuUIMenuWindow buttonDefaults[i].invoke).
-  const openFromMainMenu = screenClass => {
-    game.hud.scoped(() => runtime.scriptConsoleExec(player, 'ShowMainMenu'));
-    input.tick(5);
+  // The button of the topmost menu window whose buttonDefaults invoke a menu class
+  // (MenuUIMenuWindow buttonDefaults[i].invoke), activated like a click.
+  const activateInvoking = screenClass => {
     const menu = topWindow(), defaults = runtime.readNamed(menu, 'buttonDefaults'), buttons = runtime.readNamed(menu, 'winButtons');
     const index = defaults.findIndex(entry => Object.entries(entry).find(([key]) => key.endsWith('.invoke'))?.[1]?.key === `deusex.${screenClass.toLowerCase()}`);
-    if (index < 0) throw new Error(`MenuMain has no button invoking ${screenClass}`);
+    if (index < 0) throw new Error(`${top()} has no button invoking ${screenClass}`);
     game.hud.scoped(() => W.native.activateButton(buttons[index], 1));
+    input.tick(10);
+  };
+  // 'MenuSettings>MenuScreenOptions' opens the main menu, then each class in turn from the previous window.
+  const openFromMainMenu = path => {
+    game.hud.scoped(() => runtime.scriptConsoleExec(player, 'ShowMainMenu'));
+    input.tick(5);
+    for (const screenClass of path.split('>')) activateInvoking(screenClass);
     return true;
   };
   const result = {screen};
   try {
     input.tick(30);
-    result.opened = screen.startsWith('MenuScreen') ? openFromMainMenu(screen) : game.hud.scoped(() => runtime.scriptConsoleExec(player, screen));
+    result.opened = /^Menu/.test(screen) ? openFromMainMenu(screen) : game.hud.scoped(() => runtime.scriptConsoleExec(player, screen));
     input.tick(10);
     result.window = top();
+    if (process.env.CENSUS_ACTIONS) {
+      // What the topmost menu offers: the classes its buttonDefaults invoke.
+      const defaults = top()?.includes('menuscreen') ? [] : runtime.readNamed(topWindow(), 'buttonDefaults') ?? [];
+      result.invokes = defaults.map(entry => Object.entries(entry).filter(([key]) => /\.(invoke|text)$/.test(key)).map(([, v]) => v?.key ?? v).join(' '));
+      const choices = (() => { try { return runtime.readNamed(topWindow(), 'Choices'); } catch { return null; } })();
+      if (choices) result.choices = choices.map(c => c?.key ?? c);
+    }
     game.windowKey('Escape', true); game.windowKey('Escape', false);
     input.tick(10);
     result.after = top();
