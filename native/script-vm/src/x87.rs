@@ -10,6 +10,29 @@
 
 pub const INDEFINITE: u32 = 0xffc0_0000;
 
+/// The x87 precision control the arithmetic rounds to: 64 bits on the game
+/// thread, 24 inside URender::PreRender..PostRender, where the host runs
+/// the render events' UnrealScript (docs/render-pass-precision.md
+/// "UnrealScript in the render pass"). FADD, FSUB, FMUL, FDIV and FSQRT
+/// round their exact result once to this width; loads, stores, compares and
+/// FTOL are unaffected. Each instance of the module (the interpreter's, the
+/// JavaScript VM's operator kernel) has its own, set by `set_x87_precision`.
+static mut PRECISION: u32 = 64;
+
+pub fn precision() -> u32 {
+    unsafe { PRECISION }
+}
+
+/// Set the precision control (24 or 64) and return the previous one.
+#[no_mangle]
+pub extern "C" fn set_x87_precision(bits: u32) -> u32 {
+    unsafe {
+        let previous = PRECISION;
+        PRECISION = if bits == 24 { 24 } else { 64 };
+        previous
+    }
+}
+
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct Ext {
     pub sig: u64,
@@ -73,6 +96,20 @@ impl Ext {
             exp -= shift as i32;
         }
         Self { sig: sig as u64, exp, sign, special: 0 }
+    }
+
+    /// An arithmetic result: the exact (or sticky-jammed) `sig·2^exp`
+    /// rounded once to the precision control's width, nearest-even, then
+    /// held normalized to 64 bits.
+    fn rounded(sig: u128, exp: i32, sign: u32) -> Self {
+        if precision() == 24 && sig != 0 {
+            let width = 128 - sig.leading_zeros();
+            if width > 24 {
+                let shift = width - 24;
+                return Self::normalized(round_right(sig, shift), exp + shift as i32, sign);
+            }
+        }
+        Self::normalized(sig, exp, sign)
     }
 
     pub fn nan(self) -> bool {
@@ -140,7 +177,7 @@ impl Ext {
         let left = (a.sig as u128) << 3;
         let right = shift_jam((b.sig as u128) << 3, (a.exp - b.exp) as u32);
         let sum = if a.sign == b.sign { left + right } else { left - right };
-        Self::normalized(sum, a.exp - 3, if sum == 0 { self.sign & other.sign } else { a.sign })
+        Self::rounded(sum, a.exp - 3, if sum == 0 { self.sign & other.sign } else { a.sign })
     }
 
     pub fn mul(self, other: Self) -> Self {
@@ -152,7 +189,7 @@ impl Ext {
             let finite = if self.inf() { other } else { self };
             return Self::load(if !finite.inf() && finite.sig == 0 { INDEFINITE } else { sign | 0x7f80_0000 });
         }
-        Self::normalized(self.sig as u128 * other.sig as u128, self.exp + other.exp, sign)
+        Self::rounded(self.sig as u128 * other.sig as u128, self.exp + other.exp, sign)
     }
 
     /// FDIV: 0/0 and inf/inf are the indefinite, x/0 a signed infinity and
@@ -182,7 +219,7 @@ impl Ext {
         let rem = (num % den) << 2;
         let extra = rem / den;
         let sticky = u128::from(rem % den != 0);
-        Self::normalized((q << 3) | (extra << 1) | sticky, self.exp - other.exp - 67, sign)
+        Self::rounded((q << 3) | (extra << 1) | sticky, self.exp - other.exp - 67, sign)
     }
 
     /// FCOM's (C0, C3) as script-pawn-locomotion.mjs `x87compare` models
@@ -236,6 +273,11 @@ impl Ext {
         let shift = if width & 1 != 0 { 127 - width } else { 128 - width };
         let n2 = sig << shift;
         let mut q = isqrt(n2);
+        if precision() == 24 {
+            // The floor root (64 bits) with a sticky bit, rounded once.
+            let sticky = u128::from(q * q != n2);
+            return Self::rounded((q << 1) | sticky, exp / 2 - shift / 2 - 1, 0);
+        }
         // The root is never exactly halfway: q + 1 wins iff n2 - q^2 > q.
         if n2 - q * q > q {
             q += 1;

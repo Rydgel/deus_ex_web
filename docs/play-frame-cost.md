@@ -898,7 +898,9 @@ The response therefore keeps the recovered `SetupForActor` state machine in
 JavaScript and moves only the measured numeric loop—camera transforms, ordered
 normals/culling, vertex `Light`, unlit overwrite and D3D diffuse conversion—to
 the existing Rust/Wasm module. Mirror child passes now reuse the main actor
-lighting/pose, keep one clipping-program shape, compensate reflected handedness
+pose (the lighting is per frame since 2026-10-08, see [mesh
+lighting](mesh-lighting.md#one-call-per-frame-child-frames-lighting-2026-10-08)),
+keep one clipping-program shape, compensate reflected handedness
 in the camera/target sample and scissor to each mirror's screen bounds. See
 [the kernel boundary](lodmesh-wasm.md) and [mirror surfaces](mirror-surfaces.md)
 for the behavior and verification contracts.

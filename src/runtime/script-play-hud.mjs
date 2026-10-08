@@ -1,6 +1,7 @@
 /** Original DeusExHUD tree driven by recovered Extension native layout/GC.
  * InfoLink is part of the same native window tree. */
 import {TextureStore} from '../unreal/textures.mjs';
+import {inRenderPass} from './render-precision.mjs';
 const parts=['head','torso','armLeft','armRight','legLeft','legRight'];
 const deref=value=>value?.reference?value.get():value;
 export const hudColor=value=>['r','g','b'].map(key=>value[`core.object.color.${key}`]);
@@ -60,7 +61,10 @@ export async function createPlayHud({runtime,assets,player,shell,host}){
       player=next;root=host.root;hud=host.hud;
       hit=read(hud,'hit');compass=read(hud,'compass');cross=read(hud,'cross');
     },
-    commands(width,height,view){return scoped(()=>host.draw(root,width,height,view));},
+    // PreRenderWindows (the PreRender event) and PostRenderWindows' paint
+    // (PostRenderFlash) run inside the render pass, at x87 precision control
+    // 24 (render-precision.mjs); Galaxy's Update (game.mjs) stays outside.
+    commands(width,height,view){return inRenderPass(runtime,()=>scoped(()=>host.draw(root,width,height,view)));},
     renderViewport(width,height){return scoped(()=>host.renderViewport(root,width,height));},
     tick(delta){scoped(()=>host.tick(root,delta));},
     key(key,action){return scoped(()=>host.key(root,key,action));},

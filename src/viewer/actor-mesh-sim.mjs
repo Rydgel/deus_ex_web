@@ -234,9 +234,15 @@ export async function createMeshBinding(runtime,actor,{id,originalObjectIndex,ke
   const drawnPoints=()=>lodDrawn?.positions??new Float32Array(frame.output.buffer,frame.output.byteOffset,frame.output.byteLength/4);
   const posedCopy=()=>drawnPoints().slice();
   let lastSetup=null,lastLitFrame=-1;
-  function relight(prepared){
+  // This frame's lighting in each child frame that draws the actor (frame
+  // index -> {lighting} on the GPU path or {colors} on the CPU path; frames
+  // that lit it before the toCpu fallback keep theirs): DrawFrame lights an
+  // actor once in every frame whose Frame->Sprite holds it, with that
+  // frame's Coords and Mirror (docs/mesh-lighting.md "One call per frame").
+  const frameLights=new Map(),frameSetups=new Map(),frameCtxs=new Map();
+  function relight(prepared,ctx=null){
     const points=drawnPoints(),topology=lodDrawn?.lighting??{faces,faceWords};
-    const result=lighting.lightMesh(actor,points,topology.faces,topology.faceWords,prepared);
+    const result=lighting.lightMesh(actor,points,topology.faces,topology.faceWords,prepared,ctx);
     if(!result)return null;
     return {colors:result.colors.slice(),summary:{lights:result.setup.lights.length,flags:result.flags}};
   }
@@ -500,13 +506,31 @@ export async function createMeshBinding(runtime,actor,{id,originalObjectIndex,ke
        * `inFrame` null: the main frame again): drawn when its Frame->Sprite
        * holds the binding, and then, on the GPU path, the groups the pass
        * frustum keeps. Null when the frame did not pose it. */
-      framePass(frustum,inFrame,lodFrame=null){
+      framePass(frustum,inFrame,frameIndex,lodFrame=null){
         if(disposed||(!drawnMain&&!childOnly))return null;
         const root=frustum===null?drawnMain:inFrame;
         if(!root)return {root:false};
         if(lodFrame&&frustum!==null)frameLod(lodFrame);
+        // The frame's own lighting rides with the decision (frameIndex): the
+        // page applies it before the pass and restores the main frame's after.
+        const decision={root:true},light=frustum!==null&&frameIndex!==undefined?frameLights.get(frameIndex):null;
+        if(light)Object.assign(decision,{frame:frameIndex},light);
+        if(mode!=='gpu')return decision;
+        if(frustum===null){decision.groups=groupBits();return decision;}
+        const bits=[];decideGroups(frustum,(group,visible)=>bits.push(visible?1:0));
+        const spheres=spheresChanged?sphereWords():null;spheresChanged=false;
+        decision.groups=bits;decision.spheres=spheres;
+        return decision;
+      },
+      /** Another root frame's decision (a ViewportWindow's DrawWorld,
+       * docs/script-window-viewport.md "Camera pass"): drawn when that
+       * frame's Frame->Sprite holds the binding (`inFrame`, from its own
+       * SetupDynamics candidates) and this frame's update posed it (drawn by
+       * the main frame or child-only); on the GPU path also the groups
+       * `frustum` keeps. */
+      viewportPass(frustum,inFrame){
+        if(disposed||(!drawnMain&&!childOnly)||!inFrame)return {root:false};
         if(mode!=='gpu')return {root:true};
-        if(frustum===null)return {root:true,groups:groupBits()};
         const bits=[];decideGroups(frustum,(group,visible)=>bits.push(visible?1:0));
         const spheres=spheresChanged?sphereWords():null;spheresChanged=false;
         return {root:true,groups:bits,spheres};
@@ -533,7 +557,7 @@ export async function createMeshBinding(runtime,actor,{id,originalObjectIndex,ke
       /** Validation access (scripts/validate-gpu-mesh.mjs): this frame's
        * plan, lighting setup and GPU slot; `exactOutput()` replays the CPU
        * shadow to the exact CPU pose. Never used by Play. */
-      gpuState:()=>({handle:gpuHandle,plan:lastPlan,plannedFrame,updated:mainCamera!==null,setup:lastSetup,litFrame:lastLitFrame,faces,faceWords,groups,hasEnvironment,
+      gpuState:()=>({handle:gpuHandle,plan:lastPlan,plannedFrame,updated:mainCamera!==null,setup:lastSetup,litFrame:lastLitFrame,frameSetups:new Map(frameSetups),frameLights:new Map(frameLights),faces,faceWords,groups,hasEnvironment,
         exactOutput:()=>{exactSpheres();return frame.output;},get exactValid(){return exactValid;},
         // The CPU LOD of the exact output (call exactOutput first): drawn
         // positions, resolved corners, wedge dwords and lighting faces, or
@@ -672,28 +696,45 @@ export async function createMeshBinding(runtime,actor,{id,originalObjectIndex,ke
           if(!lastAppliedGroups||bits.some((bit,i)=>bit!==lastAppliedGroups[i]))record.groups=bits;
           lastAppliedGroups=bits;
         }
-        // Mirror frames reuse the main frame's lighting; a child-only actor
-        // is lit the same way.
-        if(lighting&&view.lit&&lighting.frame&&(childOnly||!view.frustum||(mode==='gpu'?mainVisible:[...groups.values()].some(group=>
-          !group.lodEmpty&&view.frustum.intersectsSphere(group.bounds.boundingSphere))))){
-          if(mode==='gpu'){
-            const prepared=lighting.setupMesh(actor,at>=0?setupFields(view.reads.views()):null);
-            if(prepared){
-              lastSetup=prepared;lastLitFrame=layout.frame+1;
-              summary.lighting={lights:prepared.setup.lights.length,flags:prepared.flags};
-              if(layout.reserveLights(prepared.setup.lights.length))
-                record.lighting=view.pack?view.pack.lighting(prepared):plainLighting(prepared);
-              else {
+        // One SetupForActor and Light pass per frame that draws the actor,
+        // in DrawFrame's order: the child frames' sprites first (children
+        // before their parent), the main frame's last. A child frame lights
+        // with its own Coords, Mirror and LeafLights (view.lightFrames).
+        frameLights.clear();frameSetups.clear();frameCtxs.clear();
+        if(lighting&&view.lit&&lighting.frame){
+          const lightIn=lf=>{
+            const ctx=lf?lf.ctx:null,pool=lf?lf.index:0;
+            if(mode==='gpu'){
+              const prepared=lighting.setupMesh(actor,at>=0?setupFields(view.reads.views()):null,ctx);
+              if(!prepared)return;
+              if(lf){frameSetups.set(lf.index,prepared);frameCtxs.set(lf.index,ctx);}else{lastSetup=prepared;lastLitFrame=layout.frame+1;}
+              if(!lf)summary.lighting={lights:prepared.setup.lights.length,flags:prepared.flags};
+              if(layout.reserveLights(prepared.setup.lights.length,pool)){
+                if(lf)frameLights.set(lf.index,{lighting:plainLighting(prepared)});
+                else record.lighting=view.pack?view.pack.lighting(prepared):plainLighting(prepared);
+              } else {
                 toCpu(`more than ${prepared.setup.lights.length-1} selected lights`);
                 record.posed=posedCopy();
-                const lit=relight(prepared);
-                if(lit){record.colors=lit.colors;summary.lighting=lit.summary;}
+                // The frames lit before the fallback now take the CPU path's colours.
+                for(const [index,setup] of frameSetups)if(index!==lf?.index&&frameLights.get(index)?.lighting){
+                  const earlier=relight(setup,frameCtxs.get(index));
+                  if(earlier)frameLights.set(index,{colors:earlier.colors});
+                }
+                const lit=relight(prepared,ctx);
+                if(lit){if(lf)frameLights.set(lf.index,{colors:lit.colors});else{record.colors=lit.colors;summary.lighting=lit.summary;}}
               }
+            } else {
+              const lit=relight(undefined,ctx);
+              if(lit){if(lf)frameLights.set(lf.index,{colors:lit.colors});else{record.colors=lit.colors;summary.lighting=lit.summary;}}
             }
-          } else {
-            const lit=relight();
-            if(lit){record.colors=lit.colors;summary.lighting=lit.summary;}
-          }
+          };
+          for(const lf of view.lightFrames??[])if(lf.ids.has(id))lightIn(lf);
+          // The main frame's pass: the actor in its Frame->Sprite (inside the
+          // frustum: the host's culling); an actor only child frames draw
+          // keeps the main lighting only without a child frame's.
+          if(childOnly?frameLights.size===0&&!frameSetups.size
+            :(!view.frustum||(mode==='gpu'?mainVisible:[...groups.values()].some(group=>
+              !group.lodEmpty&&view.frustum.intersectsSphere(group.bounds.boundingSphere)))))lightIn(null);
         }
         if(toCpuReason){record.toCpu=toCpuReason;toCpuReason=null;record.posed??=posedCopy();}
         if(spheresChanged&&mode==='gpu'){record.spheres=sphereWords();spheresChanged=false;}
@@ -953,7 +994,8 @@ export async function createActorMeshSim(runtime,assets,asset,{kernel,player:pla
         reconcile(reads);
         if(view.occlude){
           const occluded=view.occlude({bindings:actors,items:itemCandidates(view.items??[]),reads,levelIndex});
-          view={...view,main:occluded.main,children:occluded.children,cull:!occluded.children,lod:occluded.lod??view.lod};
+          view={...view,main:occluded.main,children:occluded.children,cull:!occluded.children,lod:occluded.lod??view.lod,
+            lightFrames:occluded.lightFrames??null};
         }
         // The main frame's LOD inputs (Frame->Coords, FX, FovAngle), when the
         // frame has them; mirror frames reuse the main frame's selection.
@@ -977,14 +1019,26 @@ export async function createActorMeshSim(runtime,assets,asset,{kernel,player:pla
     /** A child frame's pass decisions (OccludeFrame, sim-session.mjs
      * stamps): every posed binding's, drawn when `ids` (its Frame->Sprite)
      * holds it; `frustum` null and `ids` null: the main frame's again. */
-    framePasses(frustum,ids,lod=null){
+    framePasses(frustum,ids,frameIndex,lod=null){
       const decisions=new Map(),frameLod=lod&&frustum!==null?{...lodFrame(lod,lodSettings),index:lod.index??null}:null;
       for(const binding of all()){
         const inFrame=ids?ids.has(binding.id):true;
-        const decision=binding.framePass(frustum,inFrame,inFrame?frameLod:null);if(decision)decisions.set(binding.id,decision);
+        const decision=binding.framePass(frustum,inFrame,frameIndex,inFrame?frameLod:null);if(decision)decisions.set(binding.id,decision);
       }
       return decisions;
     },
+    /** Another root frame's decisions (a ViewportWindow's DrawWorld), one
+     * per binding id (`frustum`: that frame's camera; `ids`: its
+     * Frame->Sprite bindings). */
+    viewportPasses(frustum,ids){
+      const decisions=new Map();
+      for(const binding of all())decisions.set(binding.id,binding.viewportPass(frustum,ids.has(binding.id)));
+      return decisions;
+    },
+    /** SetupDynamics' actor candidates for a frame of its own (a
+     * ViewportWindow's DrawWorld), read live: the bindings, the iterator
+     * items' bindings and the level order (packDynamics' arguments). */
+    setupArgs(items=[]){return {bindings:actors,items:itemCandidates(items),reads:null,levelIndex};},
     /** Every binding, item bindings included. */
     all,
     /** URender::Exec's MLOD (+40, positive only), MLMODE (+48, non-negative)

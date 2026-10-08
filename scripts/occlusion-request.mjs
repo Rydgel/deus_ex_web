@@ -4,7 +4,10 @@
  * PolyFlags, and Core appTan's measured results for the frame producer. */
 import { readTexture } from '../src/unreal/textures.mjs';
 import { buildWindowSceneFrame } from '../src/runtime/script-window-scene-frame.mjs';
-import { texturePolyFlags } from '../src/runtime/bsp-occlusion.mjs';
+import { childFrameTangent, texturePolyFlags } from '../src/runtime/bsp-occlusion.mjs';
+import { x87TanCandidates } from '../src/runtime/x87-tan.mjs';
+import { hex64, measureTangents } from './x87-hardware-tangents.mjs';
+import assert from 'node:assert/strict';
 import { TRACKER } from '../src/runtime/brush-tracker.mjs';
 
 const f32 = new Float32Array(1), u32 = new Uint32Array(f32.buffer);
@@ -73,4 +76,40 @@ export function trackedModelRequest(occlusion, base, memory) {
     surfs: range(count(TRACKER.SURFS_NUM)).map(i => ({ texture: i, flags: u[(surfs >>> 2) + 2 * i] })),
     textures: range(count(TRACKER.SURFS_NUM)).map(i => ({ polyFlags: u[(surfs >>> 2) + 2 * i + 1] })),
     brushTracker: { originalSurfs: count(TRACKER.SURFS_TOP) } };
+}
+
+// The render pass's ComputeRenderSize (docs/render-pass-precision.md "The 3D
+// frame's projection"): XRootWindow::PreRender leaves the frame's X and Y a
+// render rectangle and calls ComputeRenderSize again at precision control
+// 24, so appTan's argument is the 24-bit FOV product.
+let hardware;
+const checked = new Set();
+
+/** Core appTan's qword result (16 hex digits, keyed by its double argument
+ * as the oracle looks it up) for the render pass's ComputeRenderSize at
+ * Actor.FOVAngle `fov` on a frame `width` pixels wide: the real-x87
+ * measurement when the runner exists (FOV 75 and 90; it must be one of the
+ * FPTAN model's candidates), else the model's. */
+export function renderPassTangent(fov, width, label = 'render pass appTan') {
+  const { argument, tangent } = childFrameTangent(fov, width), key = hex64(argument);
+  if (hardware === undefined)
+    hardware = measureTangents([75, 90].map(f => hex64(childFrameTangent(f, 1024).argument)), label);
+  const measured = hardware?.get(key) ?? null;
+  if (measured && !checked.has(key)) {
+    const candidates = x87TanCandidates(argument).map(hex64);
+    assert.ok(candidates.includes(measured), `FPTAN model candidates ${candidates} miss the hardware tangent ${measured}`);
+    checked.add(key);
+  }
+  return { [key]: measured ?? hex64(tangent) };
+}
+/** How many distinct render-pass arguments were checked against hardware. */
+export const renderPassTangentsMeasured = () => checked.size;
+
+/** A render rectangle inside a width x height viewport (what XRootWindow::
+ * PreRender leaves in the frame's XB, YB, X, Y): `clip` below 1 shrinks
+ * it. */
+export function renderRectangle(width, height, random, clip = 1) {
+  const w = clip < 1 ? Math.max(48, Math.floor(width * (0.45 + random() * 0.55))) : width;
+  const h = clip < 1 ? Math.max(48, Math.floor(height * (0.45 + random() * 0.55))) : height;
+  return { width: w, height: h, x: clip < 1 ? Math.floor(random() * (width - w + 1)) : 0, y: clip < 1 ? Math.floor(random() * (height - h + 1)) : 0 };
 }

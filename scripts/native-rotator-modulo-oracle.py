@@ -18,6 +18,7 @@ The bodies under test:
     142 ==(rotator,rotator)->bool        thunk 0x10102b30 -> body 0x10139400
     173 %(float,float)->float            thunk 0x101031d9 -> body 0x10135020
     203 !=(rotator,rotator)->bool        thunk 0x10102086 -> body 0x101394f0
+    275 <<(vector,rotator)->vector       thunk 0x10101942 -> body 0x10137d90
     276 >>(vector,rotator)->vector       thunk 0x10101cc6 -> body 0x101380e0
     287 *(rotator,float)->rotator        thunk 0x10101f64 -> body 0x101395e0
     288 *(float,rotator)->rotator        thunk 0x10101c12 -> body 0x101396d0
@@ -73,6 +74,7 @@ NATIVES = {
     "mod":     {"index": 173, "thunk": 0x101031D9, "body": 0x10135020, "result": "f"},
     "rne":     {"index": 203, "thunk": 0x10102086, "body": 0x101394F0, "result": "I"},
     "rrotate": {"index": 276, "thunk": 0x10101CC6, "body": 0x101380E0, "result": "3f"},
+    "runrotate": {"index": 275, "thunk": 0x10101942, "body": 0x10137D90, "result": "3f"},
     "rmulf":   {"index": 287, "thunk": 0x10101F64, "body": 0x101395E0, "result": "3i"},
     "fmulr":   {"index": 288, "thunk": 0x10101C12, "body": 0x101396D0, "result": "3i"},
     "rsub":    {"index": 317, "thunk": 0x1010164A, "body": 0x10139BB0, "result": "3i"},
@@ -439,6 +441,53 @@ CASES = [
     ("rot-vec-snan", "rrotate", [("vector", [SNAN, 0x3F800000, 0x00000000]),
                                  ("rotator", [8192, 16384, 0])]),
 
+    # ---- 275 << : A.TransformVectorBy(GMath.UnitCoords / B), the same
+    #      operands as 276 ----
+    ("urot-identity", "runrotate", [("vector", [0x3F800000, 0x40000000, 0x40400000]),
+                                 ("rotator", [0, 0, 0])]),
+    ("urot-yaw-90", "runrotate", [("vector", [0x3F800000, 0x00000000, 0x00000000]),
+                               ("rotator", [0, 16384, 0])]),
+    ("urot-pitch-90", "runrotate", [("vector", [0x3F800000, 0x00000000, 0x00000000]),
+                                 ("rotator", [16384, 0, 0])]),
+    ("urot-roll-90", "runrotate", [("vector", [0x3F800000, 0x00000000, 0x00000000]),
+                                ("rotator", [0, 0, 16384])]),
+    ("urot-y-90", "runrotate", [("vector", [0x00000000, 0x3F800000, 0x00000000]),
+                             ("rotator", [0, 16384, 0])]),
+    ("urot-z-90", "runrotate", [("vector", [0x00000000, 0x00000000, 0x3F800000]),
+                             ("rotator", [0, 0, 16384])]),
+    ("urot-mixed", "runrotate", [("vector", [0x3F800000, 0x40000000, 0x40400000]),
+                              ("rotator", [8192, 16384, 8192])]),
+    ("urot-mixed-2", "runrotate", [("vector", [0x40400000, 0xBF800000, 0x40000000]),
+                                ("rotator", [-8192, -16384, -8192])]),
+    ("urot-arbitrary", "runrotate", [("vector", [0x3FC00000, 0x40200000, 0xC1200000]),
+                                  ("rotator", [12345, -23456, 30000])]),
+    ("urot-arbitrary-2", "runrotate", [("vector", [0x42C80000, 0x3E800000, 0xBF000000]),
+                                    ("rotator", [-30000, 20000, -10000])]),
+    ("urot-wrap", "runrotate", [("vector", [0x3F800000, 0x40000000, 0x40400000]),
+                             ("rotator", [73728, 147456, -73728])]),
+    ("urot-max", "runrotate", [("vector", [0x3F800000, 0x40000000, 0x40400000]),
+                            ("rotator", [INT_MAX, INT_MIN, 0x40000000])]),
+    ("urot-quantized", "runrotate", [("vector", [0x3F800000, 0x40000000, 0x40400000]),
+                                  ("rotator", [1, 2, 3])]),
+    ("urot-quantized-neg", "runrotate", [("vector", [0x3F800000, 0x40000000, 0x40400000]),
+                                      ("rotator", [-1, -2, -3])]),
+    ("urot-vec-nan", "runrotate", [("vector", [NAN, 0x3F800000, 0x00000000]),
+                                ("rotator", [0, 16384, 0])]),
+    ("urot-vec-nan-payload", "runrotate", [("vector", [0x00000000, NAN_P1, 0x00000000]),
+                                        ("rotator", [8192, 16384, 8192])]),
+    ("urot-vec-nan-tie", "runrotate", [("vector", [NAN_P1, NNAN_P1, 0x00000000]),
+                                    ("rotator", [8192, 0, 0])]),
+    ("urot-vec-inf", "runrotate", [("vector", [INF, 0x3F800000, 0x00000000]),
+                                ("rotator", [0, 0, 16384])]),
+    ("urot-vec-neginf", "runrotate", [("vector", [0x00000000, NINF, 0x3F800000]),
+                                   ("rotator", [0, 16384, 0])]),
+    ("urot-vec-negzero", "runrotate", [("vector", [NEG_ZERO, NEG_ZERO, NEG_ZERO]),
+                                    ("rotator", [0, 16384, 0])]),
+    ("urot-vec-denormal", "runrotate", [("vector", [DENORM_1, DENORM_MID, 0x00000000]),
+                                     ("rotator", [0, 16384, 0])]),
+    ("urot-vec-snan", "runrotate", [("vector", [SNAN, 0x3F800000, 0x00000000]),
+                                 ("rotator", [8192, 16384, 0])]),
+
     # ---- 287 rotator*float / 288 float*rotator: FILD int32, FMUL f32 in
     #      80-bit, then the shipped MSVCRT _ftol (truncate FISTP m64) and the
     #      low DWORD is stored per component ----
@@ -522,6 +571,10 @@ def main() -> None:
     if len(sys.argv) != 2:
         raise SystemExit("Usage: native-rotator-modulo-oracle.py GAME_ROOT")
     probe = RotatorModuloProbe(Path(sys.argv[1]))
+    # The x87 control word of each call: 0x037f (the game thread) unless
+    # ORACLE_CW sets the render pass's 0x007f (docs/render-pass-precision.md
+    # "UnrealScript in the render pass").
+    probe.control_word = int(__import__('os').environ.get('ORACLE_CW', '0x037f'), 0)
     cases = [probe.run(native, name, operands) for name, native, operands in CASES]
     # JavaScript cannot hold a signaling NaN: reading one through a typed
     # array quiets it before the VM sees the operand.  For every case whose

@@ -407,9 +407,13 @@ conversation camera with lip sync. The render pass's translations run at its
 24-bit precision ([render-pass precision](render-pass-precision.md)).
 Twenty-six maps match the original's own frames at matched cameras and level time (122 of 130 views)
 ([visual acceptance](visual-acceptance.md)).
-Open: child frames' own fog maps, per-fragment fog maps on movers, time-varying moving lights and spotlights, UnrealScript inside
-the render events at 24 bits (the script VM computes at 64), the darkest-pixel
-rounding visual acceptance found, and acceptance of live (unfrozen) scenes.
+Open: the LOD morph's world-space rounding and per-mirror drawing,
+per-frame mesh lighting in mirror and sky frames, actor meshes in a sky seen
+through a mirror, the child frames' own iterator items, the security cameras'
+views without mirrors, decals, coronas and their own lighting and fog, the
+host's depth range and float32 GPU transform under the frame projection, the
+darkest-pixel rounding visual acceptance found, and acceptance of live
+(unfrozen) scenes.
 SpriteAnimOnce frames and animated mesh skins
 are recovered or checked but unreachable: no shipped class, map actor or
 script uses DT_SpriteAnimOnce or gives an actor an animated texture
@@ -636,12 +640,11 @@ movers' polygons are level surfaces whose Actor is the Mover.
 - **Decals in Play.** The decal model follows the tracker. A BulletHole
   spawned on a Training door stays on the door's plane when the door is
   raised and turned.
-- **Fog.** Drawn mover polygons in a fog zone get fog maps over their
-  tracker surface's lattice. On 02_NYC_Bar, a door's fog map equals
+- **Fog.** Each mover draw item in a fog zone gets its own fog map over
+  its tracker surface's lattice, drawn over that item's fragments. On 02_NYC_Bar, a door's fog map equals
   Render.dll's loop.
 
-Open: a mover polygon draws one fog map, where the original draws one per
-fragment. Script traces in Play still use the static model (Stage 5).
+Open: script traces in Play still use the static model (Stage 5).
 ([decals](decals.md#movers), [volumetric fog](volumetric-fog.md#play)).
 
 **Occlusion child frames (2026-10-07).** OccludeBsp's mirror and sky
@@ -810,6 +813,23 @@ Training and Island. The Load/Save Game screens stop at the save-game
 directory (native 3013, Stage 6). See
 [ListWindow family](script-window-list-family.md).
 
+**Options menus (2026-10-08).** Esc > Settings opens the original Controls, Customize
+Keys, Game options, Display, Brightness, Sound and Adjust Colors screens in Play; each
+opens, draws, takes input and closes (`scripts/census-ui-screens.mjs` with menu paths and
+`!cycle!reset!ok`). They needed the ScaleWindow value-string natives (1646-1649, 1653;
+5,591 exec-body oracle cases identical), nine Core casts, the MSVCRT `%f` / `atof` behaviour
+measured against the game's own MSVCRT.dll under Wine (290k printf and 11.5k atof rows), the
+mouse grab natives, and `get` / `set ini:` on the native viewport manager, audio device and
+render device classes (the D3D device, a documented host choice), whose 66 config properties are read from their StaticConstructors.
+Brightness reaches the display ramp through the render device's Flush, the volume sliders the
+Galaxy mixer through PostEditChange / SetVolumes, Decals the decal pass, and Mouse
+Sensitivity / Invert Mouse the original `PlayerInput`; a worker-mode browser check drives the
+menus' buttons and slider thumbs. INI persistence (Stage 6), UI Background = Snapshot (native
+1524), Toggle Full-Screen and the live effect of the remaining client and device properties
+are explicit boundaries. See [settings menus](settings-menus.md),
+[native config](script-native-config.md), [Core casts](script-core-casts.md) and
+[value format](script-value-format.md).
+
 **Mesh distance LOD (2026-10-07).** DrawLodMesh's LOD now runs in Play on
 both mesh paths: the requested vertex count from distance, FOV, frame width,
 DrawScale and LODBias, GetFrame at that count, the vertex morph toward the
@@ -830,10 +850,8 @@ faces.
   time per frame 2.02 → 2.05 ms on Island (A/B). `?meshLod=off` draws full
   detail.
 - *Left.* The morph rounds in Play's world space (the original's GetFrame
-  output is camera space), a child frame whose own selection would draw
-  differently is drawn with the main frame's (counted; none in the checked
-  Training and Paris Club mirror views), and the particle and wire branches
-  are not ported. See
+  output is camera space), mirror frames reuse the main frame's selection (their lighting is their own),
+  and the particle and wire branches are not ported. See
   [LOD](script-lodmesh-lod.md).
 
 **Typed characters (2026-10-07).** The `WM_CHAR` route is recovered and

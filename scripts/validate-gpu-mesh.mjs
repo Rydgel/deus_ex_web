@@ -63,7 +63,7 @@ const hook=`\nwindow.__deusValidation={get npc(){return npcPreview;},get gpu(){r
 
 async function capture(page,{frames,device,tolerance,admission,lodViews}) {
   return page.evaluate(async({frames,device,tolerance,admission,lodViews})=>{
-    const {accumulateFaceNormal}=await import('/src/runtime/mesh-lighting.mjs');
+    const {accumulateFaceNormal,faceKept}=await import('/src/runtime/mesh-lighting.mjs');
     const {meshVertexNormalsInto,writeMeshEnvironmentUV}=await import('/src/runtime/mesh-environment.mjs');
     const {certificateStats}=await import('/src/viewer/gpu-mesh-bounds.mjs');
     const certifiedBefore=certificateStats.certified,ambiguousBefore=certificateStats.ambiguous;
@@ -74,6 +74,7 @@ async function capture(page,{frames,device,tolerance,admission,lodViews}) {
       corners:0,maxByte:0,byteHistogram:[0,0,0],worstColor:null,drawnDisagreements:0,maxEdgeOn:0,excludedCorners:0,
       environmentVertices:0,maxNormalUlp:0,maxUV:0,groups:0,certified:0,ambiguous:0,visibilityMismatches:0,
       finalComponents:0,finalExact:0,maxFinalUlp:0,worstFinal:null,cornerWedges:0,wedgeMismatches:0,worstWedge:null,
+      child:{actors:0,corners:0,maxByte:0,drawnDisagreements:0,restoredOff:0,corner:null},
       coverage:{translucent:0,modulated:0,masked:0,environment:0,unlit:0,mixedUnlit:0,blend:0,tween:0,movingLights:0,lod:0,lodMorph:0,lodReduced:0},
       fallbacks:{},errors:[]};
     const frustum=new THREE.Frustum(),matrix=new THREE.Matrix4();
@@ -228,6 +229,62 @@ async function capture(page,{frames,device,tolerance,admission,lodViews}) {
             }
           }
         }
+        // The same actor lit in a mirror's child frame: Coords reflected across
+        // a plane (all three axes, so the determinant is negative) and
+        // Frame.Mirror -1, lit again with the same SetupForActor result
+        // through the page's lighting run (docs/mesh-lighting.md "One call per
+        // frame"). The kernel `light` with that camera and Mirror is the
+        // reference; the main lighting is then restored and must match.
+        if(device!=='cpu'){
+          const mainCamera={origin:frame.origin,axes:frame.axes};
+          const plane=[0.6,0.8,0,0.6*frame.origin[0]+0.8*frame.origin[1]+120];
+          const reflectPoint=p=>{const d=2*(plane[0]*p[0]+plane[1]*p[1]+plane[2]*p[2]-plane[3]);return p.map((c,i)=>f32(c-d*plane[i]));};
+          const reflectVector=p=>{const d=2*(plane[0]*p[0]+plane[1]*p[1]+plane[2]*p[2]);return p.map((c,i)=>f32(c-d*plane[i]));};
+          const child={origin:reflectPoint(mainCamera.origin),axes:mainCamera.axes.map(reflectVector),mirror:-1};
+          const plain={flags:actorFlags,ambient:[...setup.ambient],scaleGlow:setup.scaleGlow,unlit:[...unlit],
+            lights:setup.lights.map(light=>({location:[...light.location],rradius:light.rradius,color:[...light.color]}))};
+          gpu.beginLightRun();
+          if(!gpu.setLighting(handle,plain))throw new Error('child frame lighting did not fit');
+          gpu.lightRun(child);
+          const childColors=gpu.read('corners',handle.cbase,F*3),childFaces=gpu.read('faces',handle.fbase,F);
+          const childReference=npc.kernel.light({points:drawnPoints,faces:litWords,origin:child.origin,axes:child.axes,mirror:-1,
+            ambient:setup.ambient,scaleGlow:setup.scaleGlow,unlit,lights:setup.lights,flags:actorFlags});
+          const component=(p,axis)=>{const dx=f32(p[0]-child.origin[0]),dy=f32(p[1]-child.origin[1]),dz=f32(p[2]-child.origin[2]);
+            return f32(f32(f32(dx*axis[0])+f32(dy*axis[1]))+f32(dz*axis[2]));};
+          const childPoints=Array.from({length:V},(_,i)=>{const p=[drawnPoints[i*3],drawnPoints[i*3+1],drawnPoints[i*3+2]];
+            return child.axes.map(axis=>component(p,axis));});
+          const sums=childPoints.map(()=>[0,0,0]),childDrawn=new Uint8Array(F),excluded=new Set();
+          for(let face=0;face<F;face++){
+            const [a,b,c]=litFaces[face].vertices,p0=childPoints[a];
+            const unit=accumulateFaceNormal(p0,childPoints[b],childPoints[c],sums[a],sums[b],sums[c]);
+            childDrawn[face]=faceKept(unit,p0,-1,litFaces[face].flags)?1:0;
+            const dot=unit[0]*p0[0]+unit[1]*p0[1]+unit[2]*p0[2];
+            if((childFaces[face*4+3]>0.5?1:0)!==childDrawn[face]){
+              report.child.drawnDisagreements++;
+              report.maxEdgeOn=Math.max(report.maxEdgeOn,Math.abs(dot)/Math.hypot(...p0));
+              for(const vertex of litFaces[face].vertices)excluded.add(vertex);
+            }
+          }
+          report.child.actors++;
+          for(let face=0;face<F;face++){
+            if(!childDrawn[face])continue;
+            for(let k=0;k<3;k++){
+              if(excluded.has(litFaces[face].vertices[k]))continue;
+              report.child.corners++;
+              for(let channel=0;channel<3;channel++){
+                const expected=Math.round(childReference[face*9+k*3+channel]*255),got=childColors[(face*3+k)*4+channel];
+                const error=Math.abs(got-expected);
+                if(error>report.child.maxByte){report.child.maxByte=error;
+                  report.child.corner={actor:actor.summary.actor,face,corner:k,channel,expected,got};}
+              }
+            }
+          }
+          // The page puts the main lighting back after the pass.
+          gpu.beginLightRun();gpu.setLighting(handle,plain);gpu.lightRun(mainCamera);
+          const restored=gpu.read('corners',handle.cbase,F*3);
+          for(let i=0;i<F*3*4;i+=4)for(let channel=0;channel<3;channel++)
+            if(restored[i+channel]!==deviceColors[i+channel]&&drawn[Math.floor(i/12)])report.child.restoredOff++;
+        }
       }
     }
     if(lodViews){
@@ -324,6 +381,9 @@ try {
       ['position ulp (tween)',report.maxUlpTween<=TOLERANCE.tweenUlp],
       ['colour bytes',report.maxByte<=TOLERANCE.byte],
       ['edge-on drawn disagreements',report.maxEdgeOn<TOLERANCE.edgeOn],
+      ['child frame colour bytes (reflected Coords, Mirror -1)',report.child.maxByte<=TOLERANCE.byte],
+      ['child frame lighting restored',report.child.restoredOff===0],
+      ['child frame compared actors',device==='cpu'||report.child.actors>0&&report.child.corners>0],
       ['environment UV',report.maxUV<=TOLERANCE.uv],
       ['visibility',report.visibilityMismatches===0],
       ['final pose ulp (morph pass)',report.maxFinalUlp<=TOLERANCE.tweenUlp],

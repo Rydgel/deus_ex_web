@@ -1,5 +1,22 @@
 import { rotatorSin } from './coords.mjs';
+import { x87Precision } from './x87-precision.mjs';
+import { x87add as nanAdd, x87mul as nanMul } from './x87-nan.mjs';
+import { r24 } from './x87-r24.mjs';
 const f = Math.fround;
+/** The FCoords transform's dot (0x1011a710): (a.x*b.x + a.y*b.y) + a.z*b.z
+ * on the x87 stack, one float store. In doubles (products of floats exact,
+ * double rounding innocuous) it is the 64-bit result, and with each step
+ * rounded to 24 bits (r24) the precision control 24 one (inside the render
+ * pass, render-precision.mjs); NaN operands follow the x87's rules
+ * (x87-nan.mjs). */
+export const coordsDotX87 = (a, b) => {
+  const [a0, a1, a2] = a.map(f), [b0, b1, b2] = b.map(f);
+  if (x87Precision === 24) return f(r24(nanAdd(r24(nanAdd(r24(nanMul(a0, b0)), r24(nanMul(a1, b1)))), r24(nanMul(a2, b2)))));
+  return f(nanAdd(nanAdd(nanMul(a0, b0), nanMul(a1, b1)), nanMul(a2, b2)));
+};
+/** The same dot for finite operands (GetAxes' sines): the game thread
+ * keeps the plain double form. */
+export const coordsDot = (a, b) => x87Precision === 24 ? coordsDotX87(a, b) : f(a[0] * b[0] + a[1] * b[1] + a[2] * b[2]);
 
 /** Core execGetAxes 0x10139e90; inverse roll/pitch/yaw composition. */
 export function getAxes(rotation) {
@@ -11,7 +28,7 @@ export function getAxes(rotation) {
   let axes=[[1,0,0],[0,1,0],[0,0,1]];
   for(const rows of [ [[1,0,0],[0,cr,sr],[0,-sr,cr]], [[cp,0,-sp],[0,1,0],[sp,0,cp]],
     [[cy,-sy,0],[sy,cy,0],[0,0,1]] ]) {
-    axes=axes.map(a=>rows.map(b=>f(a[0]*b[0]+a[1]*b[1]+a[2]*b[2])));
+    axes=axes.map(a=>rows.map(b=>coordsDot(a,b)));
   }
   return axes;
 }

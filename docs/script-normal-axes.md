@@ -217,7 +217,20 @@ and the rounding placement is asymmetric:
   boundary — `SafeNormal` returns `(0,0,0)` so the result is exactly `V`),
   `mirror-unnormalized`, `mirror-neg-normal`, `mirror-neg-zero`,
   `mirror-denormal`, `mirror-near-overflow`, `mirror-inf-v`/`mirror-inf-n`,
-  `mirror-nan-v`/`mirror-nan-n`, `mirror-snan-v`.
+  `mirror-nan-v`/`mirror-nan-n`, `mirror-snan-v`;
+- an infinite `Normal` component of either sign (`mirror-inf-n-indefinite`,
+  `mirror-ninf-n-x`, `mirror-inf-n-y`, `mirror-ninf-n-z`,
+  `mirror-inf-n-mixed-signs`, `mirror-inf-n-zero-v`): `SafeNormal` stores
+  the real indefinite `0xFFC00000` for `inf*0` and signed zeros for the
+  rest. The indefinite reaches every component through the float32 dot
+  store, so all three results store `0xFFC00000`, whatever `V` is. A NaN
+  component of either sign, or the indefinite, makes the normal `(0,0,0)`
+  even beside an infinite component, so the result is `V` (`mirror-neg-nan-n`,
+  `mirror-nan-inf-n`, `mirror-indefinite-n`). `mirror-inf-n-indefinite` is
+  the operand set that failed `X87_CASES=5000 validate-script-vm-x87`. Core
+  stores `0xFFC00000` in all three components, as the Rust kernel does. The
+  JavaScript body computed the same word, but V8 stored it into its result
+  Array as `0x7fc00000` (see Validation).
 
 ## Validation
 
@@ -234,7 +247,7 @@ constructor at `0x10102978` first so the `0x101b32a4` sine table the
 targets (including the `SafeNormal` and CRT-`sqrt` helpers), the instruction
 pins above, the embedded doubles `1.0`/`1e-08`/`3.0`, the Core.u
 declarations, native indices, serialized script bytes and parameter `out`
-flags — then compares all 111 original cases against the VM bit-exact:
+flags — then compares all 120 original cases against the VM bit-exact:
 threshold boundary on both sides of `1e-08` plus the 80-bit-compare window,
 squared-length association, reciprocal-multiply, every rounding-placement
 proof named above, NaN payloads/ties, signed zeros, denormals, infinities,
@@ -245,7 +258,13 @@ The VM side reuses the existing BigInt 80-bit x87 model in
 `src/runtime/script-vm.mjs`; the only additions are `x87storeDouble` (the
 `fst qword` double store), `x87sqrt` (the CRT thunk's `fsqrt`),
 `x87below1em8` (the `fcomp` boundary on the retained register),
-`x87safeNormal` (the shared thiscall) and the `x87three` constant.  A
+`x87safeNormalWords`/`x87safeNormal` (the shared thiscall) and the
+`x87three` constant.  The operator bodies are `x87OperatorWords`. They
+return float32 words, and 300 reads `SafeNormal`'s normal as words, because
+V8 may store a NaN number into an Array canonically. `x87Operators` turns
+the words into the VM's numbers. `validate-script-vm-x87` compares the words
+with the Rust kernel's ([rust-core.md](rust-core.md), "V8 NaN
+instability"). A
 call-shape guard binds these five indices only for operand counts and
 shapes matching the declared signatures; a malformed call keeps the
 `services.native` fallback that unbound indices use.

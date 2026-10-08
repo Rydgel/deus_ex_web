@@ -1,6 +1,7 @@
 /** DeusEx.dll's ParticleIterator natives (docs/particles.md). */
 import { x87load, x87double, x87mul, x87add, x87neg, x87div, x87store, x87cmp } from './script-vm.mjs';
 import { particlesMode } from './script-vm-particles.mjs';
+import { inRenderPass } from './render-precision.mjs';
 
 const f = Math.fround;
 export const PARTICLE_COUNT = 64;
@@ -135,7 +136,8 @@ export function ensureRenderInterface(runtime, actor, construct) {
  * FarMoveActors it to the particle (a failed move deletes the particle),
  * and the proxy is drawn there. Returns the proxy's sprite states in order. */
 export function particleIteratorItems(runtime, iterator, camera, { processEvent, farMoveActor }) {
-  processEvent(iterator, 'Init', [camera]);
+  // SetupDynamics runs Init(Camera) inside the render pass (render-precision.mjs).
+  inRenderPass(runtime, () => processEvent(iterator, 'Init', [camera]));
   runtime.writeNamed(iterator, 'Observer', camera);
   const items = [], max = runtime.readNamed(iterator, 'MaxItems') | 0, proxy = runtime.readNamed(iterator, 'proxy');
   let state = null;

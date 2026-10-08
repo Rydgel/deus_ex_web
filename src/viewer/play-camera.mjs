@@ -43,17 +43,51 @@ export function setViewAspect(camera, aspect, fov) {
   camera.updateProjectionMatrix();
 }
 
-/** One Play frame's camera: the view, then the render rect's aspect when it
- * draws. With a drawn rect the result depends on the view and the rect
- * alone. */
-export function applyPlayFrame(camera, view, renderRect) {
+/** One Play frame's camera: the view, then the projection: the pass frame's
+ * (`projection`, see projectionOf) or, without one, the render rect's aspect
+ * and the view's FOV when it draws. With a drawn rect the result depends on
+ * the view and the rect (and the frame's projection) alone. */
+export function applyPlayFrame(camera, view, renderRect, projection = null) {
   const angles = view ? pointCamera(camera, view) : null;
-  if (view && renderRect?.render && renderRect.width > 0 && renderRect.height > 0)
+  camera.userData.projection = null;
+  if (view && projection) setFrameProjection(camera, projection);
+  else if (view && renderRect?.render && renderRect.width > 0 && renderRect.height > 0)
     setViewAspect(camera, renderRect.width / renderRect.height, view.fov);
   return angles;
 }
 
-/** The original's pixel centres. Render.dll projects to ScreenX = X·RZ +
+const wordFloat = (() => { const u = new Uint32Array(1), f = new Float32Array(u.buffer); return word => (u[0] = word, f[0]); })();
+/** The projection fields of the pass frame OccludeBsp and the draws read
+ * (occlusion frame words: 12 X, 13 Y, 14 FX15, 15 FY15, 20 Proj.Z), as the
+ * numbers setFrameProjection takes; null when the words are not a drawn
+ * frame. */
+export function projectionOf(words) {
+  const width = words[12] | 0, height = words[13] | 0;
+  if (!(width > 0 && height > 0)) return null;
+  return { width, height, fx15: wordFloat(words[14]), fy15: wordFloat(words[15]), projZ: wordFloat(words[20]) };
+}
+
+/** The original's projection from the pass frame instead of a FOV:
+ * Render.dll projects to `ScreenX = X * RZ + FX15` and
+ * `ScreenY = Y * RZ + FY15` with `RZ = Proj.Z / Z`, and D3DDrv submits each
+ * vertex at `XB + ScreenX - 0.5` (the 0.5 of D3D's integer pixel centres),
+ * so in the rectangle's GL window coordinates a point sits at
+ * `FX15 + X * Proj.Z / Z`: the focal length Proj.Z (one value for both axes)
+ * and the centre (FX15, FY15), half a pixel and 1.0001/2 beyond the middle
+ * of the rectangle. As a symmetric three.js projection over a width x height
+ * view that is a vertical FOV of 2 atan(height / (2 Proj.Z)) and a view
+ * offset of (FX15 - width/2, FY15 - height/2) pixels. `projection`:
+ * {width, height, fx15, fy15, projZ} (projectionOf). */
+export function setFrameProjection(camera, { width, height, fx15, fy15, projZ }) {
+  camera.userData.projection = { width, height, fx15, fy15, projZ };
+  camera.aspect = width / height;
+  camera.fov = THREE.MathUtils.radToDeg(2 * Math.atan(height / (2 * projZ)));
+  camera.userData.fov = undefined;
+  camera.setViewOffset(width, height, -(fx15 - width / 2), -(fy15 - height / 2), width, height);
+}
+
+/** The original's pixel centres, as a constant where no pass frame is at
+ * hand (a session without OccludeBsp, Inspect). Render.dll projects to ScreenX = X·RZ +
  * FX15, with FX15 = (SizeX + 1.0001)·0.5 (ComputeRenderSize, occlude.rs);
  * D3DDrv submits each vertex at ScreenX − 0.5 (DrawGouraudPolygon
  * 0x1000583c/0x1000584f, DrawComplexSurface 0x10003c0e, the 0.5 at
@@ -64,6 +98,8 @@ export function applyPlayFrame(camera, view, renderRect) {
  * `height` are the 3D view's size in device pixels. */
 export const PIXEL_CENTRE = 0.50005;
 export function setPixelCentre(camera, width, height) {
+  // A frame projection carries the centre itself (setFrameProjection).
+  if (camera.userData.projection) return;
   const view = camera.view;
   if (view?.enabled && view.fullWidth === width && view.fullHeight === height && view.offsetX === -PIXEL_CENTRE) return;
   camera.setViewOffset(width, height, -PIXEL_CENTRE, -PIXEL_CENTRE, width, height);

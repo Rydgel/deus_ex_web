@@ -159,13 +159,25 @@ keeps the dated record.
 - **Conversations:** the third-person conversation camera and letterbox
   ([conversation camera](docs/conversation-camera.md)) and speech-driven lip
   sync ([lip sync](docs/lip-sync.md)).
+- **Options menus:** Esc > Settings opens the original Controls, Customize
+  Keys, Game options, Display, Brightness, Sound and Adjust Colors screens.
+  They run the original scripts over the translated ScaleWindow value-string
+  natives, Core casts and `get`/`set ini:` on the engine's native config
+  classes ([settings menus](docs/settings-menus.md),
+  [native config](docs/script-native-config.md)). Brightness drives the display
+  ramp, the volume sliders the Galaxy mixer, Decals the decal pass, Mouse
+  Sensitivity and Invert Mouse the original `PlayerInput`. INI files are not
+  written back (Stage 6); UI Background = Snapshot and Toggle Full-Screen are
+  explicit boundaries.
 
-**Still open in Stage 4:** UnrealScript inside the render events at the
-pass's 24-bit precision; the LOD morph's world-space rounding and drawing a
-mirror frame's own differing selection ([LOD](docs/script-lodmesh-lod.md#play)); the security computers'
-camera views (the ViewportWindow family runs, its world pass is not drawn,
-[computer terminals](docs/script-window-computer-terminals.md)); per-frame fog
-maps in mirror and sky frames; the darkest-pixel rounding and
+**Still open in Stage 4:** the LOD morph's world-space rounding and per-mirror
+drawing ([LOD](docs/script-lodmesh-lod.md#play)); inside mirror and sky child
+frames, per-frame mesh lighting, actor meshes in a sky seen through a mirror
+and the frames' own iterator items ([BSP occlusion](docs/bsp-occlusion.md));
+the security cameras' views without mirrors, decals, coronas, their own
+lighting and fog ([viewport window](docs/script-window-viewport.md)); the
+host's depth range and float32 GPU transform under the frame projection
+([render-pass precision](docs/render-pass-precision.md)); the darkest-pixel rounding and
 live scenes left by [visual acceptance](docs/visual-acceptance.md) (26 maps
 compared with the original's own frames at matched cameras and level time).
 

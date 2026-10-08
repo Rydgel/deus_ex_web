@@ -400,6 +400,35 @@ CASES = [
      [("vector", [NAN, 0x3F800000, NNAN_P1]), ("vector", [0x3F800000, 0x00000000, 0x3F800000])]),
     ("mirror-nan-sub-tie", "mirror",
      [("vector", [NAN_P1, NNAN_P1, 0x3F800000]), ("vector", [0x3F800000, 0xBF800000, 0x00000000])]),
+    # An infinite normal component: the squared length is +inf, the
+    # reciprocal +0, so SafeNormal stores the real indefinite 0xffc00000 for
+    # inf*0 and signed zeros for the finite components.  The indefinite then
+    # reaches every result component through the f32 dot store, so all three
+    # store the negative indefinite (the operands that failed
+    # X87_CASES=5000 validate-script-vm-x87).
+    ("mirror-inf-n-indefinite", "mirror",
+     [("vector", [0x4FDE00D3, F32_MAX, 0xBF800000]), ("vector", [INF, 0x0C000000, 0xB7400B29])]),
+    ("mirror-ninf-n-x", "mirror",
+     [("vector", [0x4FDE00D3, F32_MAX, 0xBF800000]), ("vector", [NINF, 0x0C000000, 0xB7400B29])]),
+    ("mirror-inf-n-y", "mirror",
+     [("vector", [0x3F800000, 0xC0000000, 0x40400000]), ("vector", [0x3F800000, INF, 0x80000000])]),
+    ("mirror-ninf-n-z", "mirror",
+     [("vector", [0x3F800000, 0xC0000000, 0x40400000]), ("vector", [0x00000000, 0xBF800000, NINF])]),
+    ("mirror-inf-n-mixed-signs", "mirror",
+     [("vector", [0x3F800000, 0xC0000000, 0x40400000]), ("vector", [INF, NINF, 0x3F800000])]),
+    # A zero vector against an infinite normal: no finite product hides the
+    # indefinite, and V - NaN keeps the NaN's sign.
+    ("mirror-inf-n-zero-v", "mirror",
+     [("vector", [0x00000000, NEG_ZERO, 0x00000000]), ("vector", [NINF, 0x00000000, 0x00000000])]),
+    # A NaN normal component makes SafeNormal's FCOMP unordered: the normal
+    # is exactly (0,0,0) whatever the NaN's sign or payload, and an infinite
+    # component beside it does not change that.
+    ("mirror-neg-nan-n", "mirror",
+     [("vector", [0x4FDE00D3, F32_MAX, 0xBF800000]), ("vector", [NNAN_P1, 0x3F800000, 0x00000000])]),
+    ("mirror-nan-inf-n", "mirror",
+     [("vector", [0x4FDE00D3, F32_MAX, 0xBF800000]), ("vector", [INF, NAN_P2, 0x0C000000])]),
+    ("mirror-indefinite-n", "mirror",
+     [("vector", [0x3F800000, 0xC0000000, 0x40400000]), ("vector", [0x00000000, 0x00000000, INDEFINITE])]),
 ]
 
 
@@ -407,6 +436,10 @@ def main() -> None:
     if len(sys.argv) != 2:
         raise SystemExit("Usage: native-normal-axes-oracle.py GAME_ROOT")
     probe = NormalAxesProbe(Path(sys.argv[1]))
+    # The x87 control word of each call: 0x037f (the game thread) unless
+    # ORACLE_CW sets the render pass's 0x007f (docs/render-pass-precision.md
+    # "UnrealScript in the render pass").
+    probe.control_word = int(__import__('os').environ.get('ORACLE_CW', '0x037f'), 0)
     cases = [probe.run(native, name, operands) for name, native, operands in CASES]
     # JavaScript cannot hold a signaling NaN: reading one through a typed
     # array quiets it before the VM sees the operand.  For every case whose

@@ -71,6 +71,7 @@ import * as Log from './script-window-text-log.mjs';
 import * as L from './script-window-family-layout.mjs';
 import {createInputConsole} from './script-input-console.mjs';
 import {createConsoleCommands} from './script-console-command.mjs';
+import {createNativeConfig} from './script-native-config.mjs';
 import {rootTickNative,moveTabGroupNative} from './script-window-root-tick.mjs';
 import {dispatchWindowSoundNative,windowPlaySound} from './script-window-sound.mjs';
 import {createWindowActorRefDispatcher, addActorReference, removeActorReference, isActorReferenceValid} from './script-window-actor-refs.mjs';
@@ -101,6 +102,7 @@ import {enableTextAsAcceleratorNative} from './script-window-text.mjs';
 import {textWindowGetText} from './script-text-get-text.mjs';
 import {textWindowGetTextLength} from './script-text-get-text-length.mjs';
 import {releaseHandle} from './script-object-handles.mjs';
+import {createWindowFArray} from './script-window-farray.mjs';
 
 const f = Math.fround;
 const lower = value => String(value).toLowerCase();
@@ -184,7 +186,15 @@ export async function createWindowHost({runtime, assets, player, gameConfig = nu
       throw new TypeError('Viewport size must be two non-negative integers');
     viewportSize={sizeX,sizeY};
   };
+  // The native config classes behind `get/set ini:Engine.Engine.<Device> <Property>`
+  // (docs/script-native-config.md). The live audio objects belong to the current level.
+  const nativeConfig=createNativeConfig({gconfig:await runtime.classLoader.prepareConfig(),audio:()=>runtime.audio??null});
+  /** What the render device last took from the client config on a Flush (docs/script-native-config.md). */
+  const display={brightness:nativeConfig.instance('WinDrv.WindowsClient','Brightness'),flushes:0,resolution:null,resolutionVersion:0};
   const consoleCommands=createConsoleCommands({runtime,input:inputConsole,services:{
+    nativeConfig:()=>nativeConfig,
+    // UWindowsViewport::Exec SetRes -> RenDev->SetRes: the browser render device takes the request.
+    setResolution(request){display.resolution={...request};display.resolutionVersion++;},
     viewportSize(){
       if(!viewportSize)boundary('UViewport SizeX/SizeY are unknown before the first frame');
       return viewportSize;
@@ -205,7 +215,11 @@ export async function createWindowHost({runtime, assets, player, gameConfig = nu
     isPlayerPawnExt:actor=>isA(actor,'extension.playerpawnext'),
     rootKey:(root,key)=>TK.rootKey(W,root,key),
     hostBinding:(key,action)=>input.hostBinding(key,action),
-    flushRenderDevice:allow=>input.flushRenderDevice?.(allow),
+    flushRenderDevice:allow=>{
+      input.flushRenderDevice?.(allow);
+      // UD3DRenderDevice::Flush 0x10002e32 re-reads Client->Brightness (+0x6c) for the gamma ramp.
+      display.brightness=nativeConfig.instance('WinDrv.WindowsClient','Brightness');display.flushes++;
+    },
     // ResetInput clears UInput's held table before WinDrv polls the platform.
     // The browser's event-fed device snapshot is kept separately and replayed
     // through InputEvent in native key order.
@@ -396,41 +410,7 @@ export async function createWindowHost({runtime, assets, player, gameConfig = nu
     deferWindowSound:request=>soundRequests.push(request),
     computerPauser:pawn=>runtime.readNamed(runtime.readNamed(pawn,'Level'),'Pauser'),
   };
-  // FArray over heap storage ({Data, Num, Max} at the given offset).
-  W.farray = {
-    construct: (o, off) => { W.setU32(o, off, 0); W.setU32(o, off + 4, 0); W.setU32(o, off + 8, 0); },
-    num: (o, off) => W.i32(o, off + 4),
-    data: (o, off) => W.u32(o, off),
-    // FArray::Realloc: GMalloc->Realloc moves the data and frees the old block
-    // (a zero capacity frees it outright).
-    realloc(o, off, elementSize) {
-      const max = W.i32(o, off + 8), num = W.i32(o, off + 4), old = W.u32(o, off);
-      if (max <= 0) { W.setU32(o, off, 0); if (old) heap.freeRaw(old); return; }
-      const address = heap.allocRaw(max * elementSize);
-      if (old) { heap.copyBytes(address,old,Math.min(num,max)*elementSize); heap.freeRaw(old); }
-      W.setU32(o, off, address);
-    },
-    empty(o, off, elementSize, slack = 0) { W.setI32(o, off + 4, 0); W.setI32(o, off + 8, slack); W.farray.realloc(o, off, elementSize); },
-    add(o, off, count, elementSize) {
-      const index = W.i32(o, off + 4), num = index + count;
-      W.setI32(o, off + 4, num);
-      if (num > W.i32(o, off + 8)) { W.setI32(o, off + 8, num + Math.trunc((3 * num) / 8) + 32); W.farray.realloc(o, off, elementSize); }
-      return index;
-    },
-    remove(o, off, index, count, elementSize) {
-      const data = W.u32(o, off), num = W.i32(o, off + 4);
-      heap.copyBytes(data+index*elementSize,data+(index+count)*elementSize,(num-index-count)*elementSize);
-      W.setI32(o, off + 4, num - count);
-    },
-    ptr: (o, off, i) => heap.mem.read(W.u32(o, off) + 4 * i, 'ptr'),
-    setPtr: (o, off, i, v) => heap.mem.write(W.u32(o, off) + 4 * i, 'ptr', v),
-    qsort(o, off, compare) {
-      const n = W.i32(o, off + 4), items = [];
-      for (let i = 0; i < n; i++) items.push(W.farray.ptr(o, off, i));
-      items.sort(compare);
-      items.forEach((item, i) => W.farray.setPtr(o, off, i, item));
-    },
-  };
+  W.farray = createWindowFArray(W, heap);
   const rawServices = {
     read: (object, offset, kind) => heap.read(object, offset, kind === 'string' ? 'string' : kind),
     write: (object, offset, kind, value) => heap.write(object, offset, kind, value),
@@ -1138,7 +1118,12 @@ export async function createWindowHost({runtime, assets, player, gameConfig = nu
   // translation), ClearZ marks the pass, DrawWorld queues a 'viewport' draw
   // command in window order (the page draws the world from that camera into
   // the frame's rectangle), FinishMasterFrame frees the image.
+  // The view's world frame (OccludeBsp, the actors it draws, render
+  // feedback) is planned by `viewportPlanner` (sim-session.mjs) inside
+  // DrawWorld, while Draw holds the origin's bHidden and the player's
+  // bBehindView, as URender::DrawWorld (Render.dll 0x10b1cb90) reads them.
   // ------------------------------------------------------------------
+  let viewportPlanner = null;
   const playRenderer = {name: 'PlayRenderer'};
   const viewportFrames = new Map();
   const isDeletedActor = actor => Boolean(runtime.readNamed(actor, 'bDeleteMe'));
@@ -1196,10 +1181,12 @@ export async function createWindowHost({runtime, assets, player, gameConfig = nu
       // bShowActor, the player bBehindView unless it shows its weapons.
       drawWorld(_renderer, frame, {origin}) {
         const camera = viewportFrames.get(frame), viewer = runtime.readNamed(runtime.readNamed(player, 'Player'), 'Actor') ?? player;
-        drawCommands.push({kind: 'viewport', x: W.i32(frame, 0xb0), y: W.i32(frame, 0xb4), width: W.i32(frame, 0xa8), height: W.i32(frame, 0xac),
+        const command = {kind: 'viewport', x: W.i32(frame, 0xb0), y: W.i32(frame, 0xb4), width: W.i32(frame, 0xa8), height: W.i32(frame, 0xac),
           location: camera.location, rotation: camera.rotation, fov: camera.fov, clearZ: camera.clearZ,
           hidden: origin && runtime.readNamed(origin, 'bHidden') ? [origin.name] : [],
-          behindView: Boolean(runtime.readNamed(viewer, 'bBehindView'))});
+          behindView: Boolean(runtime.readNamed(viewer, 'bBehindView')), pass: null};
+        if (viewportPlanner) command.pass = viewportPlanner(command);
+        drawCommands.push(command);
       },
       finishMasterFrame() {
         for (const frame of viewportFrames.keys()) heap.free(frame);
@@ -1657,13 +1644,15 @@ export async function createWindowHost({runtime, assets, player, gameConfig = nu
     delegateLegacySubtree:object=>externalSubtrees.add(object),
     raw:{allocate:heap.allocate,read:heap.read,write:heap.write,addressOf:heap.addressOf},
     families: win => families.get(win) ?? null,
+    /** The world frame of each ViewportWindow DrawWorld (sim-session.mjs). */
+    setViewportPlanner(planner){viewportPlanner=planner;},
     isDestroyed: win => destroyed.has(win),
     processScript, constructRootWindow, configureChild, askParentForReconfigure, setVisibility,
     canvas,node,
     tick(root,seconds){lastTickTime=hostNow()/1000;T.rootTick(W,root,f(seconds));},
     // XInputExt::Process 0x1002d0b0 offers each key to XRootWindow::Process first.
     key(root,key,action,delta=0){return Input.rootProcess(W,root,key,action,delta);},
-    consoleCommands,
+    consoleCommands,nativeConfig,display,
     /** UEngine::InputEvent for one browser key edge. The optional
      * hostBinding override remains only for isolated legacy fixtures. */
     inputEvent(key,action,{delta=0,hostBinding=()=>false,flushRenderDevice=null}={}){
@@ -1717,7 +1706,8 @@ export async function createWindowHost({runtime, assets, player, gameConfig = nu
       // (ConvertVectorToCoordinates adds renderX/Y back). With rendering off
       // the size is 0 x 0 and the previous frame stays (nothing projects).
       const rect=view?rootRenderViewport(W,root,{x:0,y:0,width,height}):null;
-      if(rect?.width>0&&rect.height>0){writeWindowSceneFrame(W,node,{...view,width:rect.width,height:rect.height,renderMode:5});W.setPtr(root,0x740,sceneFrame);}
+      if(rect?.width>0&&rect.height>0){host.lastSceneFrame={input:{...view,width:rect.width,height:rect.height,renderMode:5},
+        value:writeWindowSceneFrame(W,node,{...view,width:rect.width,height:rect.height,renderMode:5})};W.setPtr(root,0x740,sceneFrame);}
       W.setF32(canvas,0x3c,width);W.setF32(canvas,0x40,height);
       T.resizeRoot(W,root,canvas);T.reconfigureTree(W,root,0);T.initializeWindows(W,root);
       drawCommands.length=0;

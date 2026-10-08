@@ -52,7 +52,9 @@ in Play reads exactly these values from the spawned `Beam0`/`Beam1`.
    (`UModel::GetLightMapIndex`, Engine `0x1031e610`) and whose
    `PF_SpecialLit` matches the actor's `bSpecialLit` (`+0x1ec` bit 0). A
    surface is listed once per light; `NumDynLightSurfs` stops at 2048. Leaf
-   lists (`LeafLights`) feed mesh and volumetric lighting.
+   lists (`LeafLights`) feed mesh and volumetric lighting and the corona
+   pass; their order and the candidates' ViewPlanes test are in
+   [coronas](coronas.md#leaf-lights).
 3. **FLightManager::SetupForSurf** (`0x10b06c90`) adds the static list
    (`LightActors`, with shadow bits) and then `Draw->SurfLights` through
    **AddLight** (`0x10b08b30`). AddLight classifies each light: `LE_OmniBumpMap`

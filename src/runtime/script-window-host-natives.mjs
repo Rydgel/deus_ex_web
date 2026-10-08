@@ -5,8 +5,11 @@ import {setButtonTexturesNative} from './script-window-set-button-textures.mjs';
 import {setButtonColorsNative} from './script-window-set-button-colors.mjs';
 import * as S from './script-window-scroll-children.mjs';
 import * as SS from './script-window-scale-settings.mjs';
+import {scriptStringText} from './script-string-operations.mjs';
+import {playScaleSound} from './script-window-scroll-input.mjs';
+import {grabMouse,ungrabMouse} from './script-window-input.mjs';
 import {enableScrollAreaScrolling,setScrollAreaDistance,setScrollAreaMargins,autoHideScrollAreaBars} from './script-window-scroll-area.mjs';
-import {refValue} from './script-vm.mjs';
+import {refValue,floatToInt} from './script-vm.mjs';
 import * as T from './script-window-tree-natives.mjs';
 import {addLog,clearLog} from './script-window-text-log.mjs';
 import {gcSetBaselineData} from './script-gc-set-baseline-data.mjs';
@@ -239,6 +242,19 @@ export function dispatchWindowHostNative(W, call) {
     case 1643: SS.scaleValue(W,win,arg(0,0));break;                                                 // exec 0x10041060
     case 1644: value=SS.scaleGetValue(W,win);break;                                                 // exec 0x100410d0
     case 1645: {const values=SS.scaleGetValues(W,win);out(0,values.from);out(1,values.to);break;}   // exec 0x10041110
+    // Value strings (exec bodies recovered in docs/script-window-scale-settings.md).
+    case 1646: SS.scaleValueFormat(W,win,scriptStringText(arg(0,'')));break;                       // exec 0x100411d0 -> 0x1003e310
+    case 1647: value=SS.scaleValueString(W,win);break;                                              // exec 0x10041310 -> 0x1003e460
+    case 1648: SS.scaleEnumeration(W,win,arg(0,0)|0,scriptStringText(arg(1,'')));break;            // exec 0x100413b0 -> 0x1003e580
+    case 1649: SS.scaleClearEnumerations(W,win);break;                                              // exec 0x10041510 -> 0x1003e780
+    // PlayScaleSound exec 0x100416e0 (sound None, volume -1.0, pitch 1.0) -> 0x1003e9c0.
+    case 1653: playScaleSound(W,win,arg(0,null),Math.fround(arg(1,-1)),Math.fround(arg(2,1)));break;
+    // Window.GrabMouse / UngrabMouse (execs 0x10052a70 / 0x10052aa0: skip EX_EndFunctionParms, then
+    // XWindow::GrabMouse 0x1004cac0 / UngrabMouse 0x1004cb60, translated in script-window-input.mjs).
+    case 1450: grabMouse(W,win,{getRootWindow:T.getRootWindow});break;
+    case 1451: ungrabMouse(W,win,{getRootWindow:T.getRootWindow});break;
+    // RootWindow.SetSnapshotSize exec 0x1003cfb0: two floats, each stored with _ftol (truncation) at +0x738 / +0x73c.
+    case 1523: W.setI32(win,0x738,floatToInt(Math.fround(arg(0,0))));W.setI32(win,0x73c,floatToInt(Math.fround(arg(1,0))));break;
     case 1660: S.managerSetButtons(W,win,arg(0,null),arg(1,null));break;                            // exec 0x100427e0 -> 0x10041b30
     case 1661: SS.managerValueField(W,win,arg(0,null));break;                                       // exec 0x10042870 -> 0x10041c70
     case 1662: S.managerSetScale(W,win,arg(0,null));break;                                          // exec 0x100428e0 -> 0x10041bd0

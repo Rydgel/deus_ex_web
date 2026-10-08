@@ -34,8 +34,8 @@ import { loadScriptVmKernel } from '../src/runtime/script-vm-kernel.mjs';
 import { createBspOcclusion, childFrameTangent, packSetupCandidate, texturePolyFlags, SETUP, SETUP_MESH_NONE,
   OCCLUSION_POINTS, OCCLUSION_SHOW_PLAYER_CTRL, OCCLUSION_SHINY_SURFACES } from '../src/runtime/bsp-occlusion.mjs';
 import { collectTrackerMovers, trackerMoverSpec, trackerTextureFlags } from '../src/runtime/brush-tracker.mjs';
-import { bits, occlusionModelRequest, occlusionTangents, surfaceTextureFlags as textureFlagsOf,
-  trackedModelRequest } from './occlusion-request.mjs';
+import { bits, occlusionModelRequest, occlusionTangents, renderPassTangent, renderRectangle,
+  surfaceTextureFlags as textureFlagsOf, trackedModelRequest } from './occlusion-request.mjs';
 
 const python = process.env.NATIVE_PROBE_PYTHON ?? '.cache/native-probe-env/bin/python';
 if (!existsSync(python)) {
@@ -172,10 +172,18 @@ async function validate(mapName, { seed, count, tracker = null, views = [] }) {
     children: true, sprites: c.actors.map(a => ({ rootExcluded: a.rootExcluded, actor: { sequence: 0, animFrameBits: 0,
       locationBits: a.location.map(bits), rotation: [0, 0, 0], drawType: 1, texture: a.texture, mesh: null,
       drawScaleBits: bits(a.drawScale), prePivotBits: [0, 0, 0], particles: false } })) }));
+  // The render pass's ComputeRenderSize on the root frame (XRootWindow::
+  // PreRender) on two cases in three: a clipped rectangle, the children
+  // inheriting its X and Y; one in three keeps the viewport.
+  cases.forEach((c, i) => {
+    if (i % 3 === 0) return;
+    c.render = renderRectangle(c.width, c.height, random, i % 3 === 1 ? 1 : 0.5);
+  });
   const tangents = occlusionTangents();
   for (const c of cases) {
-    const { argument, tangent } = childFrameTangent(c.fov, c.width);
+    const { argument, tangent } = childFrameTangent(c.fov, c.render?.width ?? c.width);
     tangents[hex64(argument)] = hex64(tangent);
+    if (c.render) Object.assign(tangents, renderPassTangent(c.fov, c.render.width, 'validate-child-frames'));
   }
   const base = occlusionModelRequest(model, textureFlags);
   if (sky) {
@@ -203,8 +211,9 @@ async function validate(mapName, { seed, count, tracker = null, views = [] }) {
   try {
     for (const [i, c] of cases.entries()) {
       const o = oracle[i];
-      const where = `${mapName} case ${i} ${JSON.stringify(c.location.map(v => +v.toFixed(1)))} ${c.rotation} ${c.width}x${c.height} FOV ${c.fov}`;
-      const master = occlusion.master({ location: c.location, rotation: c.rotation, width: c.width, height: c.height, fov: c.fov });
+      const where = `${mapName} case ${i} ${JSON.stringify(c.location.map(v => +v.toFixed(1)))} ${c.rotation} ${c.width}x${c.height}${c.render ? ` render ${c.render.width}x${c.render.height}` : ''} FOV ${c.fov}`;
+      const master = occlusion.master({ location: c.location, rotation: c.rotation, width: c.width, height: c.height, fov: c.fov,
+        render: c.render ? { width: c.render.width, height: c.render.height } : null });
       same([...master.fields].map(v => v >>> 0), [...o.frameBits, o.zoneNumber, ...o.uncoordsBits].map(v => v >>> 0), `${where}: master frame`);
       const words = [...master.frame];
       words[44] = c.frameCounter; words[45] = c.timeBits;

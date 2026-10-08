@@ -2194,10 +2194,17 @@ impl Run {
                 self.skip(2);
                 let a = self.vector(SELF);
                 let [x, y, z] = widen3(a);
-                let (xx, yy, zz) = (x * x, y * y, z * z);
-                let s = x87_nan(zz, yy, zz + yy);
-                let s = x87_nan(s, xx, s + xx);
-                let v = fround(if s.is_nan() { s } else { crate::trace::sqrt(s) });
+                let v = if crate::x87::precision() == 24 {
+                    // Inside the render pass every FMUL, FADDP and the FSQRT
+                    // round to 24 bits (the x87 model at precision control
+                    // 24); the double argument store is exact then.
+                    widen(crate::vector_size(a))
+                } else {
+                    let (xx, yy, zz) = (x * x, y * y, z * z);
+                    let s = x87_nan(zz, yy, zz + yy);
+                    let s = x87_nan(s, xx, s + xx);
+                    fround(if s.is_nan() { s } else { crate::trace::sqrt(s) })
+                };
                 self.verify_op(node, r, [x, y, z], [0.0; 3], [v, 0.0, 0.0]);
                 v
             }

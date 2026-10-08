@@ -73,7 +73,7 @@ const meshActors = map.actors.filter(actor => {
   return v && v.DrawType === 2 && !v.bHidden && Array.isArray(v.Location);
 }).filter((_, i) => i % 5 === 0);
 
-const cases = { tables: true, setups: [], faceNormals: [], vertexNormals: [], diffuse: [] };
+const cases = { tables: true, setups: [], faceNormals: [], faceDots: [], vertexNormals: [], diffuse: [] };
 const scenes = [];
 for (const [actorNumber, source] of meshActors.entries()) {
   const v = values.get(source.index), location = v.Location.map(f);
@@ -163,6 +163,18 @@ for (let i = 0; i < 400; i++) {
     normal: [0, 1, 2].map(() => u32(f((random() - .5) * 3))) })) });
   cases.vertexNormals.push({ point: point().map(u32), normal: [0, 1, 2].map(() => u32(f((random() - .5) * 6))) });
 }
+// The back-face test's dot times Frame.Mirror (0x10b0ffa3-0x10b0ffc9): a root
+// frame's +1 and an odd-depth mirror frame's -1, on random normals and points
+// and on the cases where the dot is exactly zero (either sign of Mirror, so
+// a zero never keeps a face) or tiny against the point's size.
+for (let i = 0; i < 600; i++) {
+  const mirror = i % 2 ? -1 : 1, point = [0, 1, 2].map(() => f((random() - .5) * 600));
+  let face = [0, 1, 2].map(() => f((random() - .5) * 2));
+  if (i % 7 === 0) face = [f(face[0]), 0, 0], point[0] = 0;               // dot = 0 exactly
+  if (i % 7 === 1) face = [0, 0, 0];                                       // a degenerate (NaN-free) zero normal
+  if (i % 11 === 0) face = face.map(v => f(v * 1e-30));                    // tiny products
+  cases.faceDots.push({ face: face.map(u32), point: point.map(u32), mirror: u32(mirror) });
+}
 for (let i = 0; i <= 2048; i++) cases.diffuse.push([i / 2048, f(random()), f(i / 2048 - 1 / 510)].map(c => u32(f(c))));
 
 // FDynamicLight::Filter's leaf lists for the moving lights (the dynamic-light
@@ -225,6 +237,20 @@ for (const [i, c] of cases.faceNormals.entries()) {
   assert.deepEqual(normals.map(normal => normal.map(u32)), reference.faceNormals[i].normals, `accumulated normals ${i}`);
   faceBits += 12;
 }
+const { faceDot } = await import('../src/runtime/mesh-lighting.mjs');
+let keptFaces = 0, mirroredFaces = 0;
+for (const [i, c] of cases.faceDots.entries()) {
+  const mirror = float(c.mirror), kept = faceDot(c.face.map(float), c.point.map(float), mirror) < 0 ? 1 : 0;
+  assert.equal(kept, reference.faceDots[i].kept, `face dot ${i} (Mirror ${mirror})`);
+  keptFaces += kept; if (mirror < 0) mirroredFaces++;
+}
+// Mirror -1 flips which faces face the camera: the same normals and points, the other half.
+for (let i = 0; i + 1 < cases.faceDots.length; i += 2) {
+  const a = cases.faceDots[i], b = cases.faceDots[i + 1];
+  const root = faceDot(a.face.map(float), a.point.map(float), 1), mirrored = faceDot(a.face.map(float), a.point.map(float), -1);
+  assert.equal(root < 0, mirrored > 0, `Mirror -1 reverses the test of case ${i}`);
+}
+report.faceDots = { cases: cases.faceDots.length, kept: keptFaces, mirrorMinusOne: mirroredFaces };
 for (const [i, c] of cases.vertexNormals.entries())
   assert.deepEqual(vertexNormalPlane(c.point.map(float), c.normal.map(float)).map(u32), reference.vertexNormals[i],
     `vertex normal plane ${i}`);

@@ -10,7 +10,7 @@ import { createSimClient } from './sim-client.mjs';
 import { createPlayCamera, pointCamera, applyPlayFrame, verticalFov, rotatorEuler, setPixelCentre } from './play-camera.mjs';
 import { createSpriteScene } from './sprite-scene.mjs';
 import { createDecalScene } from './decal-scene.mjs';
-import { decalProbe, placeProbe, laserProbe, meshLightProbe } from './decal-probe.mjs';
+import { decalProbe, placeProbe, laserProbe, meshLightProbe, renderPassProbe } from './decal-probe.mjs';
 import { viewProbe } from './view-probe.mjs';
 import { DECAL_LAYER } from './render-layers.mjs';
 import { createCoronaPass } from './corona-pass.mjs';
@@ -26,7 +26,7 @@ import {pointerButtonKey,windowPointerSample} from './window-pointer.mjs';
 import { typedCharacters } from './typed-characters.mjs';
 import {mp3SampleRate,pcm16} from '../runtime/galaxy-lipsync-channels.mjs';
 import { setDisplayRampPerFragment } from './light-atlas.mjs';
-import { createDisplayRamp } from './display-ramp.mjs';
+import { createDisplayRamp, brightnessGamma } from './display-ramp.mjs';
 import { stateDigest } from '../runtime/state-digest.mjs';
 import { createMusicOutput } from './galaxy-music-output.mjs';
 import { connectMusicLibraryPort, driveMusicLibrary } from '../runtime/galaxy-music-library.mjs';
@@ -81,6 +81,9 @@ for(const [param,global] of [['renderScan','DEUS_EX_RENDER_SCAN'],['meshLight','
   const value=new URLSearchParams(location.search).get(param);
   if(value)globalThis[global]=value;
 }
+// ?childFog=off: the child frames' passes reuse the root frame's fog maps
+// (as before each frame had its own, fog-pass.mjs framePass).
+const childFog = new URLSearchParams(location.search).get('childFog') !== 'off';
 // The original's display gamma ramp maps the finished 8-bit framebuffer, HUD
 // included (D3DDrv SetGammaRamp, display-ramp.mjs): shaders draw raw colours
 // and one pass ramps the frame. ?gamma=material keeps the earlier ramp in
@@ -183,6 +186,11 @@ let subtitlePreference = false;
 // The loaded map's simulation side (sim-host.mjs): `game` and its frame
 // session `sim`.
 let game, sim = null, simHost = null, mode = 'play', paused = false, runtimeError = null;
+// The 3D view's projection from the simulation's pass frame (Proj.Z, FX15,
+// FY15: play-camera.mjs setFrameProjection) instead of the FOV and the
+// constant half-pixel centre; deusExViewer.frameProjection(false) is the
+// latter, for the pixel census (scripts/census-frame-projection.mjs).
+let frameProjection = true;
 let hudRenderer=null;
 let npcPreview=null;
 let spriteScene=null,coronaPass=null,decalScene=null;
@@ -378,9 +386,27 @@ const SCREEN_ASPECTS = { window: null, '4:3': 4 / 3, '16:10': 16 / 10 };
 // simulation side's camera follows them (play-camera.mjs).
 let canvasAspect = 1, resizeCount = 0;
 let screenAspect = 'window';
+// A SetRes request from the original menus (UWindowsViewport::Exec SetRes -> RenDev->SetRes): the
+// drawing buffer is exactly width x height, scaled to fit the page (docs/script-native-config.md).
+let fixedResolution = null;
 function resize() {
   const box = $('viewport').getBoundingClientRect(), canvas = $('scene');
   let width = box.width, height = box.height;
+  if (mode === 'play' && fixedResolution) {
+    const { width: bufferWidth, height: bufferHeight } = fixedResolution;
+    const fit = Math.min(box.width / bufferWidth, box.height / bufferHeight);
+    width = Math.floor(bufferWidth * fit); height = Math.floor(bufferHeight * fit);
+    canvas.style.width = `${width}px`; canvas.style.height = `${height}px`;
+    canvas.style.marginLeft = `${Math.floor((box.width - width) / 2)}px`; canvas.style.marginTop = `${Math.floor((box.height - height) / 2)}px`;
+    renderer.setPixelRatio(1);
+    renderer.setSize(bufferWidth, bufferHeight, false); camera.aspect = bufferWidth / Math.max(1, bufferHeight);
+    canvasAspect = camera.aspect; resizeCount++;
+    camera.fov = verticalFov(75, camera.aspect);
+    camera.updateProjectionMatrix();
+    setPixelCentre(camera, renderer.domElement.width, renderer.domElement.height);
+    return;
+  }
+  renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
   const aspect = mode === 'play' ? SCREEN_ASPECTS[screenAspect] : null;
   if (aspect) { if (width / Math.max(1, height) > aspect) width = height * aspect; else height = width / aspect; }
   if (mode === 'play') {
@@ -400,6 +426,7 @@ function resize() {
   canvasAspect = camera.aspect; resizeCount++;
   camera.fov = verticalFov(75, camera.aspect);
   camera.updateProjectionMatrix();
+  camera.userData.projection = null;   // the next Play frame brings its pass frame's
   setPixelCentre(camera, renderer.domElement.width, renderer.domElement.height);
 }
 new ResizeObserver(resize).observe($('viewport'));
@@ -411,6 +438,58 @@ function renderViewportFor(rect) {
 // Render.dll 0x10b18410: the SkyZone's Location and Rotation, the sky view
 // being the SkyZone rotation applied after the view's); Inspect uses the
 // map's statically chosen sky.
+// A ViewportWindow's world frame (XViewportWindow::Draw: ClearZ, then
+// RenderFrame -> URender::DrawWorld on its master frame; docs/
+// script-window-viewport.md "Camera pass"), drawn between the HUD's GC
+// draws before and after it. The simulation side planned the frame
+// (sim-session.mjs planViewportPass): OccludeBsp's polygons and movers,
+// the sky frame and the actor layer's decisions. Its decals, sprites'
+// Frame->Sprite, mirrors, coronas, fog maps and mesh lighting are the main
+// frame's or are not drawn (explicitly unsupported).
+const viewportCamera = createPlayCamera();
+/** Points viewportCamera along a 'viewport' command's frame. */
+function aimViewportCamera(command) {
+  const view = { location: command.location, rotation: command.rotation, fov: command.fov };
+  applyPlayFrame(viewportCamera, view, { render: true, width: command.width, height: command.height },
+    frameProjection ? command.pass?.projection ?? null : null);
+  setPixelCentre(viewportCamera, command.width, command.height);
+  viewportCamera.updateMatrixWorld();
+  return viewportCamera;
+}
+/** A 'viewport' command's camera frustum (light map culling). */
+function viewportFrustum(command) {
+  const view = aimViewportCamera(command);
+  return new THREE.Frustum().setFromProjectionMatrix(new THREE.Matrix4().multiplyMatrices(view.projectionMatrix, view.matrixWorldInverse));
+}
+// The camera passes the last frame drew (terminalProbe): rectangle and draw calls.
+let viewportPassesDrawn = [];
+function viewportWorldPass(command) {
+  const plan = command.pass;
+  if (!plan || !world || !(command.width > 0 && command.height > 0)) return;
+  const callsBefore = renderer.info.render.calls;
+  aimViewportCamera(command); viewportCamera.layers.disable(DECAL_LAYER);
+  const box = renderViewportFor(command), markersVisible = world.markers.visible;
+  renderer.setViewport(...box); renderer.setScissor(...box); renderer.setScissorTest(true);
+  world.markers.visible = false;
+  try {
+    if (command.clearZ) renderer.clearDepth();
+    if (plan.sky) {
+      skyCamera.copy(viewportCamera); skyCamera.layers.disable(DECAL_LAYER); skyCamera.position.fromArray(toView(plan.sky.location));
+      skyCamera.quaternion.premultiply(new THREE.Quaternion().setFromEuler(rotatorEuler(plan.sky.rotation)));
+      const npcVisible = npcPreview?.root.visible; if (npcPreview) npcPreview.root.visible = false;
+      renderer.render(scene, skyCamera);
+      if (npcPreview) npcPreview.root.visible = npcVisible; renderer.clearDepth();
+    }
+    if (plan.visibility) world.visibility.select(plan.visibility.nodes, plan.visibility.movers ?? null);
+    if (npcPreview && plan.decisions) npcPreview.draw.pass(plan.decisions, fromView(viewportCamera.position.toArray()));
+    renderer.render(scene, viewportCamera);
+    viewportPassesDrawn.push({ rect: [command.x, command.y, command.width, command.height], calls: renderer.info.render.calls - callsBefore });
+  } finally {
+    world.visibility.all(); world.markers.visible = markersVisible;
+    const pr = renderer.getPixelRatio(), full = [0, 0, renderer.domElement.width / pr, renderer.domElement.height / pr];
+    renderer.setViewport(...full); renderer.setScissor(...full); renderer.setScissorTest(false);
+  }
+}
 function skyFrame(frame) {
   if (mode === 'play' && game) return frame?.sky ?? null;
   return world.sky ? { location: world.sky, rotation: world.skyRotation ?? [0, 0, 0] } : null;
@@ -617,7 +696,8 @@ async function loadMap(name) {
     setPreviewsAvailable({light: training, 'dark-door': training, npc: Boolean(npcPreview?.npcActors?.length),
       instructor: training, weapon: training, datacube: training, keypad: training});
     $('infolink-shell').hidden = true;
-    world.displayGamma.value = 1 / (2.5 * Number($('brightness').value));
+    world.displayGamma.value = brightnessGamma(Number($('brightness').value));
+    displayFlushes = null; displayResolutionVersion = 0;
     // The worker's PlayerCalcView replies point the camera before the map
     // counts as ready (on the page they are synchronous).
     // resetCamera runs ?cheat= when it resets the player (Play mode).
@@ -703,11 +783,24 @@ $('wireframe').onchange = event => { if (world) for (const material of world.mat
 $('actor-markers').onchange = event => { if (world) world.markers.visible = event.target.checked; };
 $('lighting').onchange = event => { if (world) world.lightingEnabled.value = event.target.checked ? 1 : 0; };
 $('subtitles').onchange = event => { subtitlePreference = event.target.checked; simInput.subtitles(subtitlePreference); };
-$('brightness').oninput = event => {
-  const value = Number(event.target.value);
-  if (world) world.displayGamma.value = 1 / (2.5 * value);
+function setBrightness(value) {
+  $('brightness').value = String(value);
+  if (world) world.displayGamma.value = brightnessGamma(value);
   $('brightness-value').value = value.toFixed(2);
-};
+}
+$('brightness').oninput = event => setBrightness(Number(event.target.value));
+// The render device's view of the client config (sim-session.mjs snapshot.display): a Flush re-reads
+// Brightness (D3DDrv UD3DRenderDevice::Flush) and a SetRes request fixes the drawing buffer.
+let displayFlushes = null, displayResolutionVersion = 0;
+function applyDisplaySettings(display) {
+  if (displayFlushes !== null && display.flushes !== displayFlushes && Number.isFinite(display.brightness)) setBrightness(display.brightness);
+  displayFlushes = display.flushes;
+  if (display.resolutionVersion !== displayResolutionVersion) {
+    displayResolutionVersion = display.resolutionVersion;
+    fixedResolution = display.resolution ? { width: display.resolution.width, height: display.resolution.height } : null;
+    resize();
+  }
+}
 function setCamera(input) {
   if (!world) throw new Error('No map loaded');
   if (!input || Object.keys(input).some(k => !['position', 'rotation'].includes(k)) ||
@@ -1122,6 +1215,12 @@ viewProbe(args) {
   if (simClient) return simClient.call('viewProbe', args);
   return game ? viewProbe(game, args) : null;
 },
+/** Validation only: settings-probe.mjs, one step of the original options menus on the
+ * simulation side and the settings state it left (docs/script-native-config.md). */
+async settingsProbe(step) {
+  if (simClient) return simClient.call('settingsProbe', [step]);
+  return game ? (await import('./settings-probe.mjs')).settingsProbe(game, step) : null;
+},
 /** Validation only: window-probe.mjs (the root window, focus text,
  * Console line and notes) on the simulation side. */
 async windowProbe() {
@@ -1130,9 +1229,23 @@ async windowProbe() {
 },
 /** Validation only: mover-probe.mjs (the moving brush tracker's movers) on
  * the simulation side. */
+/** Validation only: terminal-probe.mjs (place the player at a terminal, the
+ * last HUD frame's ViewportWindow frames) on the simulation side, and the
+ * page's camera passes of its last frame. */
+async terminalProbe(args) {
+  const value = simClient ? await simClient.call('terminalProbe', args)
+    : game && sim ? (await import('./terminal-probe.mjs')).terminalProbe(game, sim, args) : null;
+  return value && { ...value, page: viewportPassesDrawn.map(pass => ({ ...pass })) };
+},
 async moverProbe(args) {
   if (simClient) return simClient.call('moverProbe', args);
   return game && sim ? (await import('./mover-probe.mjs')).moverProbe(game, sim, args) : null;
+},
+/** Validation only: decal-probe.mjs renderPassProbe (the weapon placed by
+ * RenderOverlays and the HUD scene frame) on the simulation side. */
+renderPassProbe(args) {
+  if (simClient) return simClient.call('renderPassProbe', args);
+  return game ? renderPassProbe(game, args) : null;
 },
 async moverDecalProbe(args) {
   if (simClient) return simClient.call('moverDecalProbe', args);
@@ -1173,10 +1286,17 @@ fog() {
   const fog = world?.fog;
   return fog ? { stats: { ...fog.stats }, visibleMeshes: fog.root.children.filter(object => object.visible).length } : null;
 },
+/** Validation only: the 3D view's projection from the pass frame (on, the
+ * default) or from the FOV and the constant pixel centre (off). */
+frameProjection(on) { frameProjection = Boolean(on); },
 /** Show or hide the fog pass (validation: a frame with and without it). */
 showFog(on) { if (world?.fog) world.fog.root.visible = Boolean(on); },
-/** The page's corona pass (corona-pass.mjs): the last frame's counters. */
-coronas() { return coronaPass ? { ...coronaPass.stats } : null; },
+/** The page's corona pass (corona-pass.mjs): the last frame's counters,
+ * and the simulation's last corona frame: its icons with the inputs of
+ * their placement, the lights the helper was called for (in order) and the
+ * master frame's words they were placed in. */
+coronas() { return coronaPass ? { ...coronaPass.stats, icons: lastCoronaScan?.icons ?? null, visited: lastCoronaScan?.visited ?? null,
+  frameWords: lastCoronaScan?.frameWords ?? null } : null; },
 /** Draw or skip the corona pass (validation: a frame with and without it). */
 showCoronas(on) {
   if (!coronaPass) return;
@@ -1190,10 +1310,12 @@ decals() {
     drawnTriangles: decalScene?.count() ?? null, notes: [...(decalScene?.notes ?? [])] };
 },
 /** The last drawn frame's OccludeBsp result (sim-session.mjs visibility):
- * node count, mirror requests, sky, and the world triangles it kept. */
+ * node count, mirror requests, sky, the world triangles it kept and the
+ * master frame's words with the view, viewport and render rectangle that
+ * made them. */
 visibility() {
   return lastVisibility ? { nodes: lastVisibility.nodes.length, zone: lastVisibility.zone, mirrors: [...lastVisibility.mirrors],
-    sky: lastVisibility.sky, triangles: world?.visibility?.stats.drawnTriangles ?? null,
+    sky: lastVisibility.sky, triangles: world?.visibility?.stats.drawnTriangles ?? null, master: lastVisibility.master ?? null,
     groups: world?.mirrors.groups().map(group => ({ key: group.key, moving: Boolean(group.moving) })) ?? [] } : null;
 },
 stateDigest() {
@@ -1321,7 +1443,7 @@ function animate(time) {
 }
 /** Draws one simulation snapshot (null: no simulation, Inspect over the
  * world alone). */
-let lastVisibility = null;
+let lastVisibility = null, lastCoronaScan = null;
 function drawFrame(snap, time) {
   // Drawn frames: the fps counter's and framePhases' `draws` (with
   // ?sim=worker a display frame without a new snapshot draws nothing).
@@ -1338,6 +1460,7 @@ function drawFrame(snap, time) {
     // The worker's audio since the last snapshot, as its callbacks ran
     // during the tick, then the frame's errors.
     for (const { kind, event } of snap.audio ?? []) { if (kind === 'voice') void galaxyVoice(event); else void playConversationSpeech(event); }
+    if (snap.display) applyDisplaySettings(snap.display);
     if (snap.answers) simAnswers = snap.answers;
     for (const message of snap.toasts ?? []) toast(message);
     if (snap.status) { simStatus = snap.status; if (npcPreview && snap.status.summary) npcPreview.summary = snap.status.summary; }
@@ -1357,7 +1480,10 @@ function drawFrame(snap, time) {
     // The simulation side points its own camera the same way
     // (play-camera.mjs applyPlayFrame).
     renderRect = frame.renderRect;
-    if (frame.view) { playerView = frame.view; ({ pitch, yaw } = applyPlayFrame(camera, frame.view, renderRect)); }
+    if (frame.view) {
+      playerView = frame.view;
+      ({ pitch, yaw } = applyPlayFrame(camera, frame.view, renderRect, frameProjection ? frame.projection ?? null : null));
+    }
     // The 3D view's pixel size: the render rect when it draws, else the canvas.
     const viewSize = renderRect?.render && renderRect.width > 0 && renderRect.height > 0
       ? [renderRect.width, renderRect.height] : [renderer.domElement.width, renderer.domElement.height];
@@ -1415,8 +1541,17 @@ function drawFrame(snap, time) {
     frameSurfaces = new Set(drawnSurfaces);
     for (const f of frames) for (const node of f.nodes) frameSurfaces.add(world.nodeSurface[node]);
   }
-  const drawnLightMaps = frameSurfaces ?? (viewFrustum && visible && !visible.sky ? drawnSurfaces : null);
-  const lightFrustum = frameSurfaces ? null : viewFrustum;
+  // A ViewportWindow's world frame draws later in the HUD
+  // (viewportWorldPass): its OccludeBsp polygons' light maps are drawn too.
+  // Without its polygons (no BSP occlusion) every light map is.
+  const viewportPasses = snap?.hud?.commands?.filter(command => command.kind === 'viewport' && command.pass) ?? [];
+  const viewportSurfaces = viewportPasses.every(command => command.pass.visibility)
+    ? viewportPasses.flatMap(command => Array.from(command.pass.visibility.nodes, node => world.nodeSurface[node])) : null;
+  let drawnLightMaps = frameSurfaces ?? (viewFrustum && visible && !visible.sky ? drawnSurfaces : null);
+  if (drawnLightMaps && viewportPasses.length) drawnLightMaps = viewportSurfaces ? new Set([...drawnLightMaps, ...viewportSurfaces]) : null;
+  // Without listed polygons, the light maps in the main frustum or a camera's.
+  const lightFrustum = frameSurfaces && drawnLightMaps ? null
+    : viewFrustum && viewportPasses.length ? [viewFrustum, ...viewportPasses.map(viewportFrustum)] : viewFrustum;
   // The frame's moving lights (docs/dynamic-lighting.md), on the drawn light
   // maps, before the texture animation that shares their light frame.
   if (playing && frame?.lights) {
@@ -1431,15 +1566,15 @@ function drawFrame(snap, time) {
   world.flushLighting(renderer);
   phase('lightUpload');
   // Volumetric fog maps from this frame's eye and view rotation
-  // (docs/volumetric-fog.md). Mirror views reuse the main frame's maps.
-  if (world.fog?.stats.surfaces && !runtimeError) {
+  // (docs/volumetric-fog.md), and each child frame's from its own Coords.
+  if ((world.fog?.stats.surfaces || world.fog?.stats.moverPolygons) && !runtimeError) {
     const toUnits = radians => Math.round(radians * 32768 / Math.PI);
     const fogView = playerView ?? snap?.inspect?.view ?? { location: fromView(camera.position.toArray()), rotation: [toUnits(pitch), toUnits(-yaw), 0] };
     try {
       world.fog.update(fogView, new THREE.Frustum().setFromProjectionMatrix(
         new THREE.Matrix4().multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse)),
-        drawnSurfaces, { movers: visible?.movers ?? null, moverZones: visible?.moverZones ?? null,
-          moverFacets: visible?.moverFacets ?? null, fogZone: world.fogZone });
+        drawnSurfaces, { moverItems: visible?.moverItems ?? null, fogZone: world.fogZone, frames: childFog ? frames : null,
+          nodeSurface: world.nodeSurface });
     } catch (error) { pauseForRuntimeError(error); }
   }
   phase('fog');
@@ -1460,6 +1595,7 @@ function drawFrame(snap, time) {
   // One child frame's world (its visible nodes and mover polygons) and
   // sprite records; null: all again.
   const framePass = frames ? record => {
+    world.fog?.framePass(record, renderer);
     if (!record) { world.visibility.all(); spriteScene?.framePass(null); return; }
     world.visibility.select(record.nodes, record.movers ?? null);
     spriteScene?.framePass(record.index);
@@ -1485,9 +1621,10 @@ function drawFrame(snap, time) {
   world.mirrors.render(renderer, scene, camera, { markers: world.markers, sky: world.sky, requested,
     frames, rect: frames ? (renderRect ?? null) : null, framePass, skyIn: frames ? drawSkyFrame : null,
     updateActors: npcPreview && !runtimeError ? (position, passCamera, node) => {
-      const decisions = node ? stampFrame?.passDecisions[passIndex++] : stampFrame?.mainDecisions;
+      const at = passIndex, decisions = node ? stampFrame?.passDecisions[passIndex++] : stampFrame?.mainDecisions;
       if (node && !decisions) throw new Error('The page drew a mirror pass the simulation side did not plan');
-      npcPreview.draw.pass(decisions ?? new Map(), position);
+      // A child frame's pass lights the actors it draws with that frame's Coords and Mirror.
+      npcPreview.draw.pass(decisions ?? new Map(), position, node ? stampFrame?.passFrames?.[at] ?? null : null);
     } : null });
   phase('mirrors');
   let calls = drawCalls(); framePhases.mirrorCalls += calls;
@@ -1509,7 +1646,7 @@ function drawFrame(snap, time) {
     // (stamped on the simulation side); without child frames, no actors.
     const skyActors = rootSky && npcPreview && stampFrame?.skyDecisions;
     const npcVisible=npcPreview?.root.visible;if(npcPreview&&!skyActors)npcPreview.root.visible=false;
-    if (skyActors) npcPreview.draw.pass(stampFrame.skyDecisions, fromView(skyCamera.position.toArray()));
+    if (skyActors) npcPreview.draw.pass(stampFrame.skyDecisions, fromView(skyCamera.position.toArray()), stampFrame.skyFrame ?? null);
     if (rootSky) framePass(rootSky);
     try { renderer.render(scene, skyCamera); } finally { if (rootSky) framePass(null); }
     world.markers.visible = markersVisible;
@@ -1533,6 +1670,7 @@ function drawFrame(snap, time) {
   phase('render');
   // Coronas close DrawFrame, before PostRender's weapon and HUD.
   if (coronaFrame && coronaPass) {
+    lastCoronaScan = coronaFrame.frame;
     try { coronaPass.update(coronaFrame.frame, coronaFrame.width, coronaFrame.height); coronaPass.render(renderer); }
     catch (error) { pauseForRuntimeError(error); }
   }
@@ -1551,7 +1689,9 @@ function drawFrame(snap, time) {
   }
   phase('weapon');
   if (snap?.hud && hudRenderer) {
-    hudRenderer.render(renderer, renderer.domElement.width, renderer.domElement.height, snap.hud.commands);
+    viewportPassesDrawn = [];
+    hudRenderer.render(renderer, renderer.domElement.width, renderer.domElement.height, snap.hud.commands,
+      { viewport: command => { try { viewportWorldPass(command); } catch (error) { pauseForRuntimeError(error); } } });
     updateInfoLinkAccessibility(snap.hud.infoLink);
   }
   framePhases.hudCalls += drawCalls() - calls;

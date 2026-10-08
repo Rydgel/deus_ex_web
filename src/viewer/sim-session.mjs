@@ -8,7 +8,7 @@ import { constructRenderIterator, renderIteratorNativeClass } from '../runtime/s
 import * as THREE from 'three';
 import { TextureStore } from '../unreal/textures.mjs';
 import { fromView } from '../unreal/geometry.mjs';
-import { createPlayCamera, applyPlayFrame, pointCamera, verticalFov, setPixelCentre } from './play-camera.mjs';
+import { createPlayCamera, applyPlayFrame, pointCamera, projectionOf, setFrameProjection, verticalFov, setPixelCentre } from './play-camera.mjs';
 import { createDrawnSet } from './drawn-set.mjs';
 import { createMeshFramePack } from './mesh-frame-pack.mjs';
 import { createDecalDraw } from '../runtime/decal-draw.mjs';
@@ -34,7 +34,7 @@ export const plainHudCommands = commands => commands.map(command => command.kind
   // A ViewportWindow's world pass (script-window-viewport.mjs): plain already.
   ? { kind: 'viewport', x: command.x, y: command.y, width: command.width, height: command.height,
     location: [...command.location], rotation: [...command.rotation], fov: command.fov, clearZ: command.clearZ,
-    hidden: [...command.hidden], behindView: command.behindView }
+    hidden: [...command.hidden], behindView: command.behindView, pass: command.pass ?? null }
   : ({ texture: plainTexture(command.texture),
   x: command.x, y: command.y, width: command.width, height: command.height, u: command.u, v: command.v,
   ul: command.ul, vl: command.vl, color: command.color, style: command.style }));
@@ -65,6 +65,10 @@ export function createSimSession(game, { assets = null, events = [], exportName 
   // SetupDynamics' candidates (`pendingOcclusion`, run by occludeMain) and
   // its Frame->Sprite decides the main frame's actors.
   let occlusion = null, drawWorlds = 0, pendingOcclusion = null;
+  // ViewportWindow world frames (planViewportPass): how many the last HUD
+  // frame drew, and their camera.
+  let viewportFrames = 0, lastViewportFrames = 0;
+  const viewportCamera = createPlayCamera();
   // The moving brush tracker's movers ({names, actors, indices: their
   // Level.Actors slots} in its order; null with ?moverTracker=off) and the
   // rebuild Player start's LoadMap needs.
@@ -269,26 +273,29 @@ export function createSimSession(game, { assets = null, events = [], exportName 
   }
   // A frame's drawn nodes (Uint32Array) and the tracked movers' polygon
   // ordinals its draw lists hold, by mover name (null without the tracker),
-  // with each draw item's iZone alongside (`moverZones`: SetupForSurf's
-  // fog-zone test reads the item's zone) and each drawn polygon's surface
-  // pBase and vectors as the tracker holds them (`moverFacets`, by ordinal:
-  // SetupForSurf's light-map lattice of a dynamic surface).
+  // and its mover draw items (`moverItems`, in draw-list order): each one's
+  // mover, polygon, iZone (SetupForSurf's fog-zone test reads the item's
+  // zone), its surface's pBase and vectors as the tracker holds them (the
+  // light-map lattice of a dynamic surface) and its fragments' points
+  // (the polygons the item draws, world floats).
   function drawnOf(draw) {
     const nodes = [];
     for (const list of draw) for (const entry of list) for (const poly of entry.polys) nodes.push(poly.iNode);
-    let movers = null, moverZones = null, moverFacets = null;
+    let movers = null, moverItems = null;
     if (trackerMovers && occlusion.tracker?.live()) {
-      movers = {}; moverZones = {}; moverFacets = {};
+      movers = {}; moverItems = [];
+      const facets = new Map();
       for (const list of draw) for (const entry of list) {
         const owner = occlusion.tracker.surfOwner(entry.iSurf);
         if (!owner) continue;
         const name = trackerMovers.names[owner.tag - 0x40000000];
         (movers[name] ??= []).push(owner.ordinal);
-        (moverZones[name] ??= []).push(entry.iZone);
-        (moverFacets[name] ??= {})[owner.ordinal] ??= occlusion.tracker.surfaceFacet(entry.iSurf);
+        if (!facets.has(entry.iSurf)) facets.set(entry.iSurf, occlusion.tracker.surfaceFacet(entry.iSurf));
+        moverItems.push({ mover: name, polygon: owner.ordinal, zone: entry.iZone, facet: facets.get(entry.iSurf),
+          fragments: entry.polys.map(poly => occlusion.nodePolygon(poly.iNode)) });
       }
     }
-    return { nodes: Uint32Array.from(nodes), movers, moverZones, moverFacets };
+    return { nodes: Uint32Array.from(nodes), movers, moverItems };
   }
   // A span's pixel bounds [minX, startY, maxX, endY) (top-down), or null.
   function spanBounds(span) {
@@ -300,23 +307,54 @@ export function createSimSession(game, { assets = null, events = [], exportName 
     });
     return minX < maxX && startY < endY ? [minX, startY, maxX, endY] : null;
   }
-  function visibility(view, width, height, setupCount = -1) {
+  // The main frame's coordinates and ViewPlanes, which SetupDynamics reads
+  // (the mesh lighting's leaf lists, mesh-lighting-view.mjs): the master frame
+  // built before the frame's lighting setup, once per frame. Its words and
+  // planes depend on the view and the render rectangle alone, so visibility()
+  // builds the same ones later, after the moving brush tracker's update has
+  // moved the zone lookup's model. Null without OccludeBsp or a drawn rectangle.
+  const frameMasters = new WeakMap();
+  function frameMaster(frame = current) {
+    if (!occlusion || !frame?.view || !size) return null;
+    const rect = frame.renderRect ?? { width: size[0], height: size[1], render: true };
+    if (!(rect.render && rect.width > 0 && rect.height > 0)) return null;
+    let master = frameMasters.get(frame);
+    if (!master) {
+      const built = occlusion.master({ location: frame.view.location, rotation: frame.view.rotation, width: size[0], height: size[1],
+        fov: frame.view.fov, render: { width: rect.width, height: rect.height } });
+      master = { words: Array.from(built.frame), planes: Array.from(built.fields.slice(41, 57)) };
+      frameMasters.set(frame, master);
+    }
+    return master;
+  }
+  // `movers` false (a ViewportWindow's frame) keeps the tracker as the main
+  // frame left it: the original updates the moving brush tracker on the game
+  // thread (64 bits) when a mover moves, never inside a render-pass DrawWorld,
+  // where the x87 model now runs at 24 bits (render-precision.mjs).
+  function visibility(view, width, height, setupCount = -1, { decals: decalBlock = true, movers: moverUpdate = true } = {}) {
     const level = runtime.levelFor(game.player.collisionActor), info = level.actors[0];
     const moversStarted = performance.now();
-    updateMovers();
+    if (moverUpdate) updateMovers();
     const moversMs = performance.now() - moversStarted;
     occlusion.setZoneSkies(level.zoneModel.zoneActors.map(zone => skyRecord(runtime.readNamed(zone ?? info, 'SkyZone'))));
-    const words = occlusion.master({ location: view.location, rotation: view.rotation, width, height, fov: view.fov }).frame;
+    // CreateMasterFrame at the viewport's size, then the render pass's
+    // ComputeRenderSize at 24 bits on the render rectangle (XRootWindow::
+    // PreRender for the main frame, ViewportWindow's Draw for a camera's;
+    // docs/render-pass-precision.md "The 3D frame's projection").
+    const [viewportWidth, viewportHeight] = size ?? [width, height];
+    const built = occlusion.master({ location: view.location, rotation: view.rotation, width: viewportWidth,
+      height: viewportHeight, fov: view.fov, render: { width, height } });
+    const words = built.frame;
     f32[0] = runtime.readNamed(info, 'TimeSeconds');
     // The decal block clips against the saved polygons' points (option
     // 0x100); Setup's sprites need only their keys (0x200).
-    const decals = decalDraw?.wanted(level) ?? false;
+    const decals = decalBlock && (decalDraw?.wanted(level) ?? false);
     words[44] = ++drawWorlds; words[45] = u32[0];
     words[46] = 3 | (decals ? OCCLUSION_POINTS : 0) | (setupCount >= 0 ? OCCLUSION_SPRITE_KEYS : 0); words[47] = 0;
     const started = performance.now();
     const result = occlusion.run(words, [], { setupCount, skipPoints: true,
       children: childFrames ? { fov: view.fov, orthoZoom: 0 } : null });
-    const { nodes, movers, moverZones, moverFacets } = drawnOf(result.draw);
+    const { nodes, movers, moverItems } = drawnOf(result.draw);
     // The mirror requests: a level node, or a tracked mover's polygon
     // (mirror-passes.mjs requestedGroup).
     const mirrors = [];
@@ -340,6 +378,12 @@ export function createSimSession(game, { assets = null, events = [], exportName 
       return { index: frame.index, parent: frame.parent, kind: frame.kind, iNode: frame.iNode, recursion: frame.recursion,
         group: owner ? `${trackerMovers.names[owner.tag - 0x40000000]}:${owner.ordinal}` : null,
         bounds: spanBounds(frame.span), nodes: drawnHere.nodes, movers: drawnHere.movers,
+        moverItems: drawnHere.moverItems,
+        // The frame's Coords (origin, X, Y, Z), as its fog maps read them,
+        // its Mirror (+0x20, a float) and its four ViewPlanes' words (+0x12c;
+        // SetupDynamics' moving-light test, mesh lighting's LeafLights).
+        coords: Array.from(new Float32Array(Uint32Array.from(frame.fields.slice(0, 12)).buffer)),
+        mirror: new Float32Array(Uint32Array.of(frame.mirror).buffer)[0], planes: Array.from(frame.fields.slice(41, 57)),
         sprites: frame.sprites.map(sprite => sprite.key),
         lod: { coords: Array.from(fieldFloats.subarray(0, 12)), fx: fieldFloats[12] } };
     });
@@ -347,12 +391,36 @@ export function createSimSession(game, { assets = null, events = [], exportName 
     // (docs/script-lodmesh-lod.md "Play").
     const frameFloats = new Float32Array(words.buffer, words.byteOffset, 19);
     const lod = { coords: Array.from(frameFloats.subarray(0, 12)), fx: frameFloats[18] };
-    return { nodes, zone: words[42], mirrors, frames: childFrames ? frames : null, size: [width, height], lod,
-      sky: result.children.some(child => child.kind === 'sky'), decals: fragments, movers, moverZones, moverFacets,
+    // The master frame as OccludeBsp got it, with the inputs that made it
+    // (validate-master-frame-play.mjs; docs/render-pass-precision.md).
+    // `planes`: the frame's four ViewPlanes (+0x12c), as words.
+    const master = { words: Array.from(words), planes: Array.from(built.fields.slice(41, 57)), location: Array.from(view.location), rotation: Array.from(view.rotation), fov: view.fov,
+      viewport: [viewportWidth, viewportHeight], render: [width, height] };
+    return { nodes, zone: words[42], mirrors, frames: childFrames ? frames : null, size: [width, height], lod, master,
+      sky: result.children.some(child => child.kind === 'sky'), decals: fragments, movers, moverItems,
       sprites: result.sprites.map(sprite => sprite.key),
       // Host timings (ms): the movers' Update, OccludeBsp with its decode
       // (and the movers' draw lists), then the decal block.
       ms: { movers: moversMs, occlusion: occluded - started, decals: performance.now() - occluded } };
+  }
+  // DrawFrame's order over OccludeFrame's child frames (0x10b1a336-0x10b1a348
+  // recurses into each child, in list order, before the frame's own sprites;
+  // the list is newest first and OccludeFrame numbers the frames in that
+  // visiting order): children before their parent, siblings in index order.
+  function drawFrameOrder(frames) {
+    const byParent = new Map(), order = [];
+    for (const frame of frames) { if (!byParent.has(frame.parent)) byParent.set(frame.parent, []); byParent.get(frame.parent).push(frame); }
+    const visit = parent => { for (const frame of (byParent.get(parent) ?? []).sort((a, b) => a.index - b.index)) { visit(frame.index); order.push(frame); } };
+    visit(0);
+    return order;
+  }
+  // Each child frame's lighting frame (mesh-lighting-view.mjs childFrame) with
+  // its Frame->Sprite's binding ids, in DrawFrame's order, for the actor
+  // layer's per-frame SetupForActor and Light.
+  function lightFramesOf(frames) {
+    if (!frames || !meshLighting?.frame) return null;
+    return drawFrameOrder(frames).map(frame => ({ index: frame.index, kind: frame.kind, ids: frame.main ?? new Set(),
+      ctx: meshLighting.childFrame({ coords: frame.coords, mirror: frame.mirror, planes: frame.planes }) })).filter(entry => entry.ctx);
   }
   // The main frame's dynamics and OccludeBsp (docs/bsp-occlusion.md "Play"):
   // this frame's sprite records and, from the actor mesh layer, its bindings
@@ -393,6 +461,72 @@ export function createSimSession(game, { assets = null, events = [], exportName 
     if (!result.sky) pending.frame.sky = null;
     return result;
   }
+  // A ViewportWindow's DrawWorld (Render.dll 0x10b1cb90 on the master frame
+  // XViewportWindow::Draw made, docs/script-window-viewport.md "Camera
+  // pass"), planned inside the window host's DrawWorld while Draw holds the
+  // origin's bHidden and the player's bBehindView: DrawWorld's frame counter
+  // and OccludeBsp from the frame's camera at the window's size, the sky
+  // frame when OccludeBsp makes one, the actor layer's decisions with the
+  // root frame's admission read live, and render feedback for the actors
+  // and sprites the pass draws. SetupDynamics' Frame->Sprite, the decal
+  // block, mirrors, coronas and per-frame lighting are not run for it.
+  let lastViewportPlans = [];
+  // Camera frames pose exactly the actors the previous HUD frame's camera
+  // Frame->Sprite held (with mirror children's ids): a Set, as OccludeFrame's.
+  let viewportIds = new Set(), nextViewportIds = new Set();
+  const viewportChildren = mirror => viewportIds.size === 0 || mirror === true ? mirror
+    : new Set([...(mirror instanceof Set ? mirror : []), ...viewportIds]);
+  function planViewportPass(command) {
+    if (!(command.width > 0 && command.height > 0)) return null;
+    viewportFrames++;
+    const planStarted = performance.now();
+    const view = { location: command.location, rotation: command.rotation, fov: command.fov };
+    applyPlayFrame(viewportCamera, view, { render: true, width: command.width, height: command.height });
+    setPixelCentre(viewportCamera, command.width, command.height);
+    viewportCamera.updateMatrixWorld();
+    const pass = { visibility: null, sky: null, decisions: null };
+    // The camera frame's own SetupDynamics candidates (the actor layer's
+    // bindings read live under Draw's flags, the sprite records), then
+    // OccludeBsp from its camera with Frame->Sprite's keys: exactly those
+    // actors and sprites are drawn and stamped, as for the main frame.
+    const ids = new Set(), sprites = new Set();
+    if (occlusion && occlusion.setupSupported && actorScene) {
+      const entries = packDynamics(occlusion, { sprites: live.sprites, iterators: live.iterators, ...actorScene.setupArgs(live.meshItems) });
+      const seen = visibility(view, command.width, command.height, entries.length, { decals: false, movers: false });
+      pass.visibility = { nodes: seen.nodes, movers: seen.movers };
+      pass.projection = projectionOf(seen.master.words);
+      if (pass.projection) setFrameProjection(viewportCamera, pass.projection);
+      if (seen.sky) pass.sky = sky(view.location);
+      for (const key of seen.sprites) {
+        const entry = entries[key];
+        if (entry.sprite) sprites.add(entry.sprite.handle); else ids.add(entry.binding.id);
+      }
+    } else if (occlusion) {
+      const seen = visibility(view, command.width, command.height, -1, { decals: false, movers: false });
+      pass.visibility = { nodes: seen.nodes, movers: seen.movers };
+      pass.projection = projectionOf(seen.master.words);
+      if (pass.projection) setFrameProjection(viewportCamera, pass.projection);
+      if (seen.sky) pass.sky = sky(view.location);
+    } else pass.sky = sky(view.location);
+    const frustum = new THREE.Frustum().setFromProjectionMatrix(
+      new THREE.Matrix4().multiplyMatrices(viewportCamera.projectionMatrix, viewportCamera.matrixWorldInverse));
+    const info = runtime.levelFor(game.player.collisionActor).actors[0];
+    const time = Math.fround(runtime.readNamed(info, 'TimeSeconds'));
+    if (actorScene) {
+      pass.decisions = actorScene.viewportPasses(frustum, ids);
+      // DrawActorSprite stamps every Frame->Sprite actor, drawn or occluded
+      // by the three.js cull (the main frame's `occluded` set).
+      for (const binding of actorScene.all()) if (ids.has(binding.id)) runtime.writeNamed(binding.actor, 'LastRenderTime', time);
+    }
+    for (const handle of sprites) runtime.writeNamed(identityOfHandle(handle), 'LastRenderTime', time);
+    for (const id of ids) nextViewportIds.add(id);
+    const stampedNames = actorScene ? actorScene.all().filter(b => ids.has(b.id)).map(b => b.actor.name) : [];
+    lastViewportPlans.push({ rect: [command.x, command.y, command.width, command.height],
+      location: [...command.location], rotation: [...command.rotation], fov: command.fov, ms: +(performance.now() - planStarted).toFixed(2), nodes: pass.visibility?.nodes.length ?? null,
+      sky: Boolean(pass.sky), actors: pass.decisions ? [...pass.decisions].filter(([, d]) => d.root)
+        .map(([id]) => actorScene.all().find(b => b.id === id)?.actor?.name ?? id) : null, sprites: sprites.size, stamped: stampedNames, time });
+    return pass;
+  }
   // Accessibility mirrors native TextWindow contents: the window, its title
   // and queue (raw heap strings) and the displayBuffer's characters that
   // have actually appeared.
@@ -427,7 +561,10 @@ export function createSimSession(game, { assets = null, events = [], exportName 
       const errors = [];
       let commands = [], infoLink = null;
       try {
-        commands = plainHudCommands(game.hud.commands(width, height, view));
+        game.hud.host?.setViewportPlanner?.(planViewportPass);
+        viewportFrames = 0; lastViewportPlans = []; nextViewportIds = new Set();
+        try { commands = plainHudCommands(game.hud.commands(width, height, view)); }
+        finally { lastViewportFrames = viewportFrames; viewportIds = nextViewportIds; }
         infoLink = infoLinkText();
       } catch (error) { failed = true; errors.push(plainError(error)); }
       return { errors, commands, infoLink };
@@ -466,6 +603,11 @@ export function createSimSession(game, { assets = null, events = [], exportName 
       moverActors = new Map(level.actors.filter(Boolean).map(actor => [actor.name, actor]));
     },
     setMeshLighting(lighting) { meshLighting = lighting; },
+    /** Validation (scripts/validate-terminals-camera-browser.mjs): the last
+     * HUD frame's ViewportWindow world frames (planViewportPass): each one's
+     * rectangle, OccludeBsp's drawn node count, whether it drew a sky frame,
+     * the actors it draws and its sprite count. */
+    viewportState() { return lastViewportPlans.map(plan => ({ ...plan, rect: [...plan.rect], actors: plan.actors && [...plan.actors] })); },
     setOcclusion(value, movers = null) { occlusion = value; trackerMovers = movers; },
     setOcclusionRebuild(rebuild) { rebuildOcclusion = rebuild; },
     /** Validation (mover-probe.mjs): each tracked mover's fragment count
@@ -519,7 +661,7 @@ export function createSimSession(game, { assets = null, events = [], exportName 
       // (mesh-frame-pack.mjs), a fresh buffer each frame.
       const pack = createMeshFramePack();
       const snapshot = { errors, timings, begin: null, drawWorld: true, sprites: null, actors: null, stamps: null,
-        coronas: null, weapon: null, hud: null, audioMs: 0, events: null, pack: null };
+        coronas: null, weapon: null, hud: null, audioMs: 0, events: null, pack: null, display: null };
       let begun = null;
       if (input.play) {
         begun = this.begin({ dt: input.dt, run: input.run, halted: input.halted, width, height, lipSync,
@@ -566,11 +708,12 @@ export function createSimSession(game, { assets = null, events = [], exportName 
         const stamps = this.stamps({ size: { x: width, y: height }, drawWorld, sky, mirrors: input.mirrors, sprites, camera: inspect, requested,
           actorPasses: Boolean(actorScene) && !stopped(), frames, rect: begun?.renderRect ?? null });
         collect(stamps.errors);
-        snapshot.stamps = { passDecisions: stamps.passDecisions, mainDecisions: stamps.mainDecisions, skyDecisions: stamps.skyDecisions };
+        snapshot.stamps = { passDecisions: stamps.passDecisions, passFrames: stamps.passFrames, mainDecisions: stamps.mainDecisions,
+          skyDecisions: stamps.skyDecisions, skyFrame: stamps.skyFrame };
       }
       time('mirrors');
       if (drawWorld && input.play && coronaScan && view && !stopped()) {
-        const coronas = this.coronas({ pixelRatio: input.pixelRatio, now: input.now });
+        const coronas = this.coronas({ now: input.now });
         collect(coronas.errors);
         if (coronas.frame) snapshot.coronas = { frame: coronas.frame, width: coronas.width, height: coronas.height };
       }
@@ -595,6 +738,11 @@ export function createSimSession(game, { assets = null, events = [], exportName 
       if (begun?.light) begun.light.strobe = { time: lights.strobe.time, flag: lights.strobe.flag };
       snapshot.events = events.splice(0);
       snapshot.pack = pack.words();
+      // What the render device took from the client config (docs/script-native-config.md): the
+      // Brightness of its last Flush and the last SetRes request.
+      const display = game.hud?.host?.display;
+      snapshot.display = display ? { brightness: display.brightness, flushes: display.flushes,
+        resolution: display.resolution, resolutionVersion: display.resolutionVersion } : null;
       return snapshot;
     },
     /** The queued events outside a frame (map load: the first creation
@@ -610,7 +758,10 @@ export function createSimSession(game, { assets = null, events = [], exportName 
       const toUnits = radians => Math.round(radians * 32768 / Math.PI);
       const view = inspect ?? current?.view ?? { location: fromView(camera.position.toArray()),
         rotation: [toUnits(camera.rotation.x), toUnits(-camera.rotation.y), 0] };
-      try { meshLighting.beginFrame({ location: view.location, rotation: view.rotation, seconds, lights: inspect ? null : live.lights }); }
+      try {
+        meshLighting.beginFrame({ location: view.location, rotation: view.rotation, seconds, lights: inspect ? null : live.lights,
+          master: inspect ? null : frameMaster() });
+      }
       catch (error) { failed = true; errors.push(plainError(error)); }
       return errors;
     },
@@ -625,7 +776,10 @@ export function createSimSession(game, { assets = null, events = [], exportName 
         const frustum = new THREE.Frustum().setFromProjectionMatrix(
           new THREE.Matrix4().multiplyMatrices(view.projectionMatrix, view.matrixWorldInverse));
         const requested = !inspect && current?.visibility ? new Set(current.visibility.mirrors) : null;
-        const children = drawn ? drawn.mayRender(view, requested) : false;
+        // A ViewportWindow's frame last HUD frame: its actors are posed
+        // too (child-only outside the main frame), as for mirror children.
+        const viewports = !inspect && lastViewportFrames > 0;
+        const children = (drawn ? drawn.mayRender(view, requested) : false) || viewports;
         // The main frame's dynamics run after the layer's reads; mirror child
         // frames then follow OccludeBsp's requests.
         // The LOD's FovAngle is the viewport actor's (game.view()).
@@ -633,8 +787,9 @@ export function createSimSession(game, { assets = null, events = [], exportName 
         const lodOf = result => result?.lod && fov !== undefined ? { ...result.lod, fov } : null;
         const occlude = !inspect && pendingOcclusion ? args => {
           const result = occludeMain({ ...args, childFrames });
-          return { main: result.main, children: result.frames ? result.children
-            : drawn ? drawn.mayRender(view, new Set(result.mirrors)) : false, lod: lodOf(result) };
+          return { main: result.main, children: viewportChildren(result.frames ? result.children
+            : drawn ? drawn.mayRender(view, new Set(result.mirrors)) : false), lod: lodOf(result),
+            lightFrames: lightFramesOf(result.frames) };
         } : null;
         frame = actorScene.update({ lit: Boolean(meshLighting?.frame), frustum, camera: view, cull: !children, children,
           items: inspect ? [] : live.meshItems, occlude, lod: inspect ? null : lodOf(current?.visibility), ...(pack ? { pack } : {}) });
@@ -648,8 +803,11 @@ export function createSimSession(game, { assets = null, events = [], exportName 
      * drew, the main frame's again. `size` is the drawing buffer's. */
     stamps({ size, drawWorld, sky = null, mirrors = true, sprites = [], camera: inspect = null, actorPasses = true, requested = null,
       frames = null, rect = null }) {
-      const errors = [], passDecisions = [];
-      let mainDecisions = null, skyDecisions = null;
+      const errors = [], passDecisions = [], passFrames = [];
+      let mainDecisions = null, skyDecisions = null, skyFrame = null;
+      // A child frame's lighting camera for the page's lightRun: Coords and Mirror.
+      const lightCamera = frame => ({ origin: frame.coords.slice(0, 3),
+        axes: [frame.coords.slice(3, 6), frame.coords.slice(6, 9), frame.coords.slice(9, 12)], mirror: frame.mirror });
       stamped = { movers: new Set(), sprites: new Set(), actors: new Set(), occluded: new Set(), bindings: new Map(),
         weapon: new Set(), source: new Map(), drawn: new Set() };
       try {
@@ -688,7 +846,7 @@ export function createSimSession(game, { assets = null, events = [], exportName 
             // DrawLodMesh in this frame selects from its own Coords and FX.
             const fov = current?.view?.fov;
             const lod = !inspect && frame.lod && fov !== undefined ? { ...frame.lod, fov, index: frame.index } : null;
-            const decisions = actorPasses && actorScene ? actorScene.framePasses(frustum, ids, lod) : null;
+            const decisions = actorPasses && actorScene ? actorScene.framePasses(frustum, ids, frame.index, lod) : null;
             for (const id of ids) {
               const binding = byId.get(id);
               if (!binding) continue;
@@ -699,7 +857,8 @@ export function createSimSession(game, { assets = null, events = [], exportName 
               if (binding.drawnIn(frustum, decisions?.get(id) ?? { root: true })) stamped.drawn.add(binding.actor);
             }
             if (decisions) {
-              if (pass.kind === 'mirror') passDecisions.push(decisions); else skyDecisions = decisions;
+              if (pass.kind === 'mirror') { passDecisions.push(decisions); passFrames.push(lightCamera(frame)); }
+              else { skyDecisions = decisions; skyFrame = lightCamera(frame); }
               if (pass === lastMirror || pass.kind === 'sky') mainDecisions = actorScene.framePasses(null, null);
             }
             continue;
@@ -708,7 +867,7 @@ export function createSimSession(game, { assets = null, events = [], exportName 
           if (pass.kind === 'sky' || !actorScene) continue;
           const frustum = drawn.frustum(pass.camera);
           const decisions = pass.kind === 'mirror' && actorPasses ? actorScene.passVisibility(frustum) : null;
-          if (decisions) passDecisions.push(decisions);
+          if (decisions) { passDecisions.push(decisions); passFrames.push(null); }
           for (const binding of bindings)
             if (!stamped.bindings.has(binding.id) && binding.drawnIn(frustum, decisions?.get(binding.id) ?? null)) {
               stamped.actors.add(binding.actor); stamped.bindings.set(binding.id, binding.actor); stamped.source.set(binding.actor, pass.kind);
@@ -731,19 +890,18 @@ export function createSimSession(game, { assets = null, events = [], exportName 
         // draw whatever their own bHidden).
         for (const actor of stamped.occluded) if (!stamped.actors.has(actor)) runtime.writeNamed(actor, 'LastRenderTime', time);
       } catch (error) { failed = true; errors.push(plainError(error)); }
-      return { errors, passDecisions, mainDecisions, skyDecisions };
+      return { errors, passDecisions, passFrames, mainDecisions, skyDecisions, skyFrame };
     },
     /** DrawFrame's corona pass, which closes the world frame
-     * (corona-scan.mjs): the icons over the drawn size, the render rect's or
-     * else the canvas's in CSS pixels (`pixelRatio`). `now` is the fade
-     * clock in seconds. */
-    coronas({ pixelRatio, now }) {
+     * (corona-scan.mjs): the icons over the render rect's size, or else the
+     * canvas's, in drawing-buffer pixels, from the master frame OccludeBsp
+     * read. `now` is the fade clock in seconds. */
+    coronas({ now }) {
       const errors = [], rect = current?.renderRect ?? { width: size[0], height: size[1] };
-      const width = rect.width / pixelRatio, height = rect.height / pixelRatio;
       let frame = null;
-      try { frame = coronaScan.update(current.view, width, height, now); }
+      try { frame = coronaScan.update(current.view, rect, current.visibility?.master ?? null, live.lights, now); }
       catch (error) { failed = true; errors.push(plainError(error)); }
-      return { errors, frame, width, height };
+      return { errors, frame, width: rect.width, height: rect.height };
     },
     /** PostRender's view model (weapon-overlay-sim.mjs) with the main
      * camera, and render feedback for the actors it draws. */
@@ -870,7 +1028,12 @@ export function createSimSession(game, { assets = null, events = [], exportName 
         frame.pan = { timeSeconds: pan.timeSeconds, speeds: Object.fromEntries(panZones.map(name => [name, pan.zoneSpeeds(name)])) };
       } catch (error) { fail(error); }
       if (frame.view) {
-        applyPlayFrame(camera, frame.view, frame.renderRect);
+        // The pass frame's projection (Proj.Z, FX15, FY15 over the render
+        // rectangle: play-camera.mjs setFrameProjection), the page's own
+        // when it receives it; the FOV's without OccludeBsp.
+        try { const master = frameMaster(frame); frame.projection = master ? projectionOf(master.words) : null; }
+        catch (error) { frame.projection = null; fail(error); }
+        applyPlayFrame(camera, frame.view, frame.renderRect, frame.projection);
         // The page's camera takes the original's pixel centres for the same
         // view size (main.mjs), so mirror planning sees the same bounds.
         const viewSize = rect?.render && rect.width > 0 && rect.height > 0 ? [rect.width, rect.height] : size;

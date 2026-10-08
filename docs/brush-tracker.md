@@ -259,9 +259,10 @@ it already did for static groups.
 **Decals and fog (2026-10-07).** AttachDecal traces the level model as the
 tracker holds it, so decals attach to movers through the Mover branch. Each
 Update bumps a generation word (header 51), and the decal model then
-follows the tracker's arrays ([decals](decals.md), "Movers"). Drawn mover
-polygons in a bFogZone zone get fog maps over their tracker surface's
-lattice (`surfaceFacet`; [volumetric fog](volumetric-fog.md), "Play").
+follows the tracker's arrays ([decals](decals.md), "Movers"). Each mover
+draw item in a bFogZone zone gets its own fog map over its tracker
+surface's lattice (`surfaceFacet`), drawn over that item's fragments
+(`nodePolygon`; [volumetric fog](volumetric-fog.md), "Play").
 
 **Switch.** `?moverTracker=off` (Node: `MOVER_TRACKER=off`) keeps the
 earlier behaviour: movers stay out of the BSP, draw whole and are stamped

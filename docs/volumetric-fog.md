@@ -225,29 +225,75 @@ generic over three register models (`Reg`):
   light-map index comes from `Surf.Actor->Brush` (`0x10b06e2c..0x10b06e4a`);
   the lattice uses the surface's own pBase and vectors, which each Update
   rewrites in world space.
-  - On maps with a fog zone, world.mjs collects every lit mover polygon,
-    parented to its mover's group.
-  - The simulation sends each drawn polygon's draw-item zones (`moverZones`)
-    and its tracker surface's pBase, vTextureU, vTextureV and vNormal
-    (`moverFacets`, `brush-tracker.mjs surfaceFacet`).
-  - The pass builds the lattice as for level surfaces (`lightmapBasis`,
-    p00, p10 and p01) from those vectors and the Brush's light-map index,
-    then runs the same loop.
+  - On maps with a fog zone, world.mjs records every lit mover polygon's
+    light-map record (`addMoverPolygon`).
+  - For each frame the simulation sends the mover draw items in draw-list
+    order (`moverItems`). Each item carries its polygon, its iZone, its
+    tracker surface's pBase, vTextureU, vTextureV and vNormal
+    (`brush-tracker.mjs surfaceFacet`) and its fragments' points
+    (`bsp-occlusion.mjs nodePolygon`, where the last Update left them).
+  - Each item in a bFogZone zone gets its own map. The pass builds the
+    lattice as for level surfaces (`lightmapBasis`, p00, p10 and p01) from
+    those vectors and the Brush's light-map index, then runs the same loop.
+  - Each map is drawn over that item's fragments only, from a padded
+    texture of its own. The light UVs are `lightmapBasis.uv` of the fragment
+    points, with texel centres at +0.5, the light atlas's convention. A
+    polygon split across zones therefore fogs only its pieces in fog zones,
+    each with its own map, as the original does.
+- **Child frames** (2026-10-07, with `?childFrames` on). SetupForSurf
+  takes the frame DrawFrame is drawing as its first argument and stores it
+  at `0x10b38a7c` (`0x10b06d3d`). The fog loop and ComputeFromActor read
+  that frame's Coords, so a mirror or sky frame gets fog maps of its own,
+  from its reflected or sky camera.
+  - DrawFrame draws a frame's children first (`Frame->Child`, then each
+    `Sibling`, `0x10b1a336..0x10b1a348`) and then its own lists. The pass
+    therefore computes every child frame's maps in that order, the root
+    frame's last, carrying the early-out flag through.
+  - The surfaces are the ones each frame's OccludeBsp drew (its nodes and
+    mover polygons, with their items' zones and facets). The Coords are the
+    frame record's own (`visibility.frames[].coords`, from occlude.rs).
+  - The child maps wait until their pass. `framePass(frame, renderer)`
+    copies each one into the atlas tile it shares with the root frame
+    (`copyTextureToTexture`, one padded tile at a time) and shows only that
+    frame's fog meshes. At the end of the pass the root frame's tiles and
+    meshes are restored.
+  - `?childFog=off` keeps the earlier behaviour: child passes reuse the root
+    frame's maps.
 - **Check.** `validate-volumetric-fog-play.mjs` stands in 02_NYC_Bar's
   Light90 volume, in the default mode with the simulation in the worker
   (`placeProbe` moves the player there; `--query sim=inline` runs it on the
   page).
-  - 949 surfaces are collected: 919 fog-zone level surfaces and 30 lit
-    mover polygons.
+  - 919 fog-zone level surfaces and 30 lit mover polygons are collected.
   - The 7 that OccludeBsp draws in that view get fog maps (8,704 texels)
     through the Rust loop, and the frame changes with the pass (2026-10-06;
     before occlusion, 264 surfaces in the frustum did).
   - The haze takes the light's blue and thickens with distance.
   - **Mover phase.** The player then faces DeusExMover9, a door in the
-    bar's fog zone about 1,900 units from Light90. Its drawn polygon 4 gets
-    a 4×8 fog map. Its inputs (lattice, frame coords, light, early-out
-    flag) go through the unchanged Render.dll loop
-    (`native-volumetric-fog-oracle.py`), and the texels are equal.
+    bar's fog zone about 1,900 units from Light90. The draw item of its
+    polygon 4 (one fragment) gets a 4×8 fog map. Its inputs (lattice, frame
+    coords, light, early-out flag) go through the unchanged Render.dll loop
+    (`native-volumetric-fog-oracle.py`), and the texels are equal. The
+    fragment's light-map coordinates run from texel centre to texel
+    centre: 0.50 to 3.50 by 0.50 to 7.50.
+  - **Mirror phase.** On 10_Paris_Club the player faces the bar's two
+    mirrors (surfaces 231 and 232) from `[-122,-1008,60]`, inside Light15's
+    volume in fog zone 7. The two mirror frames get 53 child maps.
+    - The most fogged map comes from mirror frame 1's Coords (determinant
+      +1, where the root frame's ViewCoords give −1): surface 10, 80×50.
+    - Its inputs go through the same oracle, and the texels and flag are
+      equal.
+    - The Bar's own mirror is not used, because the Bartender's greeting
+      takes the view within about a second of standing there.
+- **Cost of the child maps** (interleaved A/B against `?childFog=off`, the
+  club mirror view, worker mode, 1920×1080, 600 frames, 3 rounds,
+  load 9–12 from other agents):
+  - The page's fog phase is 2.0–2.3 ms against 0.4–0.9 ms. It computes the
+    53 child maps and the root frame's.
+  - The mirror passes are 3.8–4.3 ms against 2.3–4.5 ms.
+  - Mirror draw calls are 77 against 29: each fogged child surface draws its
+    fog mesh, as the original draws a fog pass over each such surface.
+  - The child maps run on the page. Moving them next to OccludeBsp in the
+    worker is a possible saving that has not been tried.
 
 Unverified or host choices, noted:
 - **Upload scale.** The seven-bit upload scale (×2) follows the light maps.
@@ -259,15 +305,11 @@ Unverified or host choices, noted:
   flag then sees a different sequence.
 - **Brightness and colour.** Volumetric lights use their steady brightness
   and colour; GlobalLighting's LightType animation is not applied to them.
-- **Not fogged.** Meshes draw unfogged as D3D does ("Mesh fog"). Mirror
-  child views reuse the main frame's fog maps instead of their own
-  frames'.
-- **Mover polygons.** A mover polygon draws whole with one fog map. It is
-  fogged when any of its draw items lies in a bFogZone zone. The original
-  computes a map per draw item (fragment) and gates each by its own zone.
-  The lattice's derivation (`lightmapBasis`, in doubles rounded to floats)
-  is the one used for level surfaces, and it is not separately checked
-  against SetupForSurf's own lattice code.
+- **Not fogged.** Meshes draw unfogged as D3D does ("Mesh fog").
+- **Mover lattice.** The lattice's derivation (`lightmapBasis`, in doubles
+  rounded to floats) is the one used for level surfaces, and it is not
+  separately checked against SetupForSurf's own lattice code. No checked
+  view yet shows one polygon split into several fogged items.
 - **Gamma.** The display ramp maps the finished frame after the pass
   blends ([lighting](lighting.md), "Display ramp"), as the original's
   SetGammaRamp does. Until 2026-10-03 it applied per fragment, before
@@ -279,8 +321,9 @@ Unverified or host choices, noted:
 - **Ties.** Equal light depths keep the host sort's order. MSVCRT's `qsort`
   decides the original order, and the comparator never returns 0.
 - **Draw order.** The early-out flag persists across surfaces in the
-  original draw order. Play's surface order differs, which can change
-  boundary texels.
+  original draw order. Play follows DrawFrame's order across frames
+  (children first), but within a frame its surface order differs, which can
+  change boundary texels.
 
 ## Mesh fog
 

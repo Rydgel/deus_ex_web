@@ -6,7 +6,11 @@ lights (Render, Core and Engine hash-pinned, native-dynamic-light-oracle.py):
   with XLevel's SingleLineCheck (vtable +0xc0) answering from the case and
   Engine's own ULevel::GetActorIndex;
 - the draw loop 0x10b1b745-0x10b1bafc over a prepared 32-entry cache, the
-  canvas DrawIcon (Viewport+0x5c, vtable +0x60) recording its arguments.
+  canvas DrawIcon (Viewport+0x5c, vtable +0x60) recording its arguments;
+- the leaf loops 0x10b1b6b1-0x10b1b745 (a case with `leafVisit`): the viewer
+  actor's Region.iLeaf, FLeaf.iPermeating into Model.Lights (null-terminated),
+  then URender::LeafLights[iLeaf]'s linked list, with the helper recording the
+  light it is called for.
 Core's FPlane constructors run natively; UObject::IsValid (the entries'
 assertion) answers 1.
 
@@ -18,7 +22,7 @@ from pathlib import Path
 import struct
 import sys
 
-from unicorn.x86_const import UC_X86_REG_ESP, UC_X86_REG_ECX, UC_X86_REG_ESI
+from unicorn.x86_const import UC_X86_REG_ESP, UC_X86_REG_ECX, UC_X86_REG_ESI, UC_X86_REG_EIP
 
 spec = importlib.util.spec_from_file_location('lighting', Path(__file__).with_name('native-dynamic-light-oracle.py'))
 lighting = importlib.util.module_from_spec(spec)
@@ -63,8 +67,19 @@ class CoronaOracle(lighting.Oracle):
                            'yl': args[4], 'span': args[5], 'z': args[6], 'color': list(args[7:11]), 'fog': list(args[11:15]),
                            'flags': args[15]})
 
+    recording = False
+
     def hook(self, cpu, address, size, data):
-        if address == self.trace_stub:
+        if address == HELPER:
+            if self.recording:
+                self.on_helper(cpu)
+        elif address == LOOP:
+            # The leaf loops end where the draw loop begins; Unicorn's cached
+            # block at this address (translated when an earlier case started
+            # the draw loop here) carries no `until` check, so stop here.
+            if self.recording:
+                cpu.emu_stop()
+        elif address == self.trace_stub:
             self.on_trace(cpu)
         elif address == self.icon_stub:
             self.on_icon(cpu)
@@ -104,7 +119,60 @@ class CoronaOracle(lighting.Oracle):
         self.write(frame + 0xdc, 'I', case['projZ'])
         return frame, viewport, player, lights
 
+    def visit_case(self, case):
+        """The leaf loops over `leafVisit`: leaves [[iZone, iPermeating, iVolumetric]],
+        modelLights (runs of light indices, -1 ends a run, the array flat),
+        leafLists ({leaf: [light indices, head first]}), iLeaf, lights (count)."""
+        spec = case['leafVisit']
+        lights = [self.alloc(0x400) for _ in range(spec['lights'])]
+        model, level, player, viewport = self.alloc(0x100), self.alloc(0x100), self.alloc(0x400), self.alloc(0x200)
+        self.write(level + 0x98, 'I', model)
+        self.write(player + 0xac, 'I', level)
+        self.write(player + 0xcc, 'i', spec['iLeaf'])
+        self.write(viewport + 0x30, 'I', player)
+        leaves = self.alloc(20 * len(spec['leaves']) + 20)
+        for i, (zone, permeating, volumetric) in enumerate(spec['leaves']):
+            self.write(leaves + 20 * i, 'iii', zone, permeating, volumetric)
+        self.write(model + 0xd8, 'I', leaves)
+        flat = self.alloc(4 * len(spec['modelLights']) + 4)
+        for i, light in enumerate(spec['modelLights']):
+            self.write(flat + 4 * i, 'I', 0 if light < 0 else lights[light])
+        self.write(model + 0xe4, 'I', flat)
+        heads = self.alloc(4 * (len(spec['leaves']) + 1))
+        for leaf, order in spec['leafLists'].items():
+            head = 0
+            for light in reversed(order):
+                node = self.alloc(0x18)
+                self.write(node + 0xc, 'II', lights[light], head)
+                head = node
+            self.write(heads + 4 * int(leaf), 'I', head)
+        self.write(0x10b5a6fc, 'I', heads)
+        cache, frame, nxt = self.alloc(32 * 12), self.alloc(0x200), self.alloc(16)
+        ebp = self.frame()
+        self.cpu.reg_write(UC_X86_REG_ESP, ebp - 0x1000)
+        self.write(ebp + 8, 'I', frame)
+        self.write(ebp - 0x1c, 'I', viewport)
+        self.write(ebp - 0x24, 'I', 0)
+        self.write(ebp - 0x48, 'I', 0)
+        self.cpu.reg_write(UC_X86_REG_ESI, cache)
+        self.cpu.reg_write(lighting.UC_X86_REG_EDI, 0)
+        self.calls = []
+        self.recording = True
+        try:
+            self.run(0x10b1b6b1, LOOP)
+        finally:
+            self.recording = False
+        return [lights.index(address) for address in self.calls]
+
+    def on_helper(self, cpu):
+        esp = cpu.reg_read(UC_X86_REG_ESP)
+        self.calls.append(self.read(esp + 0x10, 'I')[0])
+        cpu.reg_write(UC_X86_REG_EIP, self.read(esp, 'I')[0])
+        cpu.reg_write(UC_X86_REG_ESP, esp + 4)
+
     def run_case(self, case):
+        if 'leafVisit' in case:
+            return {'visited': self.visit_case(case)}
         frame, viewport, player, lights = self.world(case)
         cache = self.alloc(32 * 12)
         entries = case.get('entries', [])
@@ -149,8 +217,14 @@ class CoronaOracle(lighting.Oracle):
 if __name__ == '__main__':
     oracle = CoronaOracle(Path(sys.argv[1]))
     oracle.cpu.hook_add(lighting.UC_HOOK_CODE, oracle.hook, begin=STUBS, end=STUBS + 0x100)
+    oracle.cpu.hook_add(lighting.UC_HOOK_CODE, oracle.hook, begin=HELPER, end=HELPER)
+    oracle.cpu.hook_add(lighting.UC_HOOK_CODE, oracle.hook, begin=LOOP, end=LOOP)
     out = []
     for case in json.load(sys.stdin):
-        out.append(oracle.run_case(case))
+        try:
+            out.append(oracle.run_case(case))
+        except Exception:
+            print(json.dumps(case.get('leafVisit', case))[:2000], hex(oracle.cpu.reg_read(UC_X86_REG_EIP)), hex(oracle.cpu.reg_read(UC_X86_REG_ESP)), file=sys.stderr)
+            raise
         oracle.alloc_top = oracle.case_top
     json.dump(out, sys.stdout)

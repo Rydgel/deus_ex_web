@@ -86,15 +86,30 @@ export async function createHudRenderer({assets,preload=[]}){
     const tint=attrs.tint.array,r=color[0]/255,g=color[1]/255,b=color[2]/255;
     for(let i=p;i<p+18;i+=3){tint[i]=r;tint[i+1]=g;tint[i+2]=b;}
   }
-  function render(renderer,width,height,commands){
+  /** One HUD frame in window order. A ViewportWindow's 'viewport' command
+   * (XViewportWindow::Draw's DrawWorld, docs/script-window-viewport.md)
+   * splits it: the GC draws before it are submitted, `viewport(command)`
+   * draws that world frame into its rectangle, and the later draws go over
+   * it. */
+  function render(renderer,width,height,commands,{viewport=null}={}){
     if(pendingError)throw pendingError;
-    count=0;current=null;camera.right=width;camera.bottom=height;camera.updateProjectionMatrix();
-    for(const command of commands){
-      if(command.kind==='viewport')continue;
-      const image=images.get(command.texture.key);
+    camera.right=width;camera.bottom=height;camera.updateProjectionMatrix();
+    let start=0;
+    for(let end=0;end<=commands.length;end++){
+      if(end<commands.length&&commands[end].kind!=='viewport')continue;
+      submit(renderer,commands,start,end);
+      if(end<commands.length)viewport?.(commands[end]);
+      start=end+1;
+    }
+  }
+  function submit(renderer,commands,start,end){
+    count=0;current=null;
+    for(let at=start;at<end;at++){
+      const command=commands[at],image=images.get(command.texture.key);
       if(!image){void imageFor(command.texture).catch(error=>{pendingError=error;});continue;}
       draw({...command,image});
     }
+    if(!count&&start>0)return;
     for(let i=0;i<count;i++){
       const batch=batches[i],vertices=batch.tiles*6,geometry=batch.mesh.geometry;
       geometry.setDrawRange(0,vertices);

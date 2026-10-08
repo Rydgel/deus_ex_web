@@ -31,7 +31,11 @@ Core `appEnableFastMath(1)` at `0x10b14629`; its body (`0x1016e050`) is
 
 * The master frame (ComputeRenderCoords/ComputeRenderSize) is built at the
   game thread's precision, as [the scene frame](script-window-scene-frame.md)
-  assumes.
+  assumes. Its sizes are then recomputed at 24 bits on the render rectangle
+  by XRootWindow::PreRender before DrawWorld ([the 3D frame's
+  projection](render-pass-precision.md#the-3d-frames-projection-2026-10-08)):
+  OccludeBsp sees CreateMasterFrame's coordinates, zone and screen span (the
+  viewport's size) with the 24-bit FX..PrjYP, ViewSides and ViewPlanes.
 * Everything inside DrawWorld, including OccludeBsp, ClipBspSurf,
   BoundVisible, SetupDynamics and child frames' ComputeRenderSize, runs with
   precision control 24: each x87 add, subtract, multiply, divide and square
@@ -198,6 +202,14 @@ two different sum orders), and the zone from UModel::PointRegion (`dist =
 Core appTan's result comes from `sceneFrameTangent`, measured for FOV 75 and
 90 among others.
 
+With a render rectangle (`master({..., render})`, Play's main and camera
+frames) the sizes are computed once, by `render_size` at P24 on the
+rectangle with the tangent of the 24-bit argument, as XRootWindow::PreRender's
+second ComputeRenderSize leaves them; the frame's X and Y are the
+rectangle's and the screen span (`AllocIndexForScreen`) keeps the viewport's
+size (frame words 61 and 62), which OccludeBsp's results depend on in clipped
+views. Without one (no render pass), the 64-bit sizes of CreateMasterFrame.
+
 ## Child frames
 
 OccludeBsp makes a child frame for each mirror and sky polygon it keeps,
@@ -296,7 +308,10 @@ unchanged.
   pass's Frame->Sprite (`actor-mesh-sim.mjs` `framePasses`), and `stamps()`
   writes LastRenderTime for every actor in any frame's Frame->Sprite, as
   DrawActorSprite does. The player, flagged root-excluded, appears in mirror
-  frames.
+  frames. Each such actor is also lit once per frame that draws it, with that
+  frame's Coords, Mirror and LeafLights, in DrawFrame's order ([mesh
+  lighting](mesh-lighting.md#one-call-per-frame-child-frames-lighting-2026-10-08);
+  frames carry `mirror` and `planes` beside `coords`).
 - **simVerify.** It compares the actors three.js draws. A Frame->Sprite
   actor whose groups all lie outside a pass's view is stamped, not drawn.
 
@@ -353,6 +368,10 @@ bits), the NodeFlags, the zones' LastRenderTime, NodesDraw/PolysDraw and the
 child-frame requests with their spans match bit for bit. The port builds
 each frame from the camera itself, and its 57 FSceneNode words, Uncoords
 and zone number match the original CreateMasterFrame's bit for bit as well.
+Three frames in four then go through the render pass's ComputeRenderSize
+(rectangle edit and Engine's ComputeRenderSize at control word 0x007f in the
+oracle, `render` cases; one in four with the master built at 0x007f), the
+same comparison bit for bit.
 Each frame also carries up to 23 random sprites (1,598 in all, 418 drawn):
 `Frame->Sprite`'s order and every sprite's merged span buffer match. During development
 the same comparison also passed 360 more frames on Paris Club, Training,
@@ -657,10 +676,11 @@ then wire into Play.
 
 ### 1. Child frames (done)
 
-Ported and in Play on 2026-10-07 ("Child frames" above). What remains:
-each child frame's own fog maps, actor meshes in a sky frame inside a mirror
-frame, each frame's own iterator items, and a measured FPTAN for the
-24-bit argument.
+Ported and in Play on 2026-10-07 ("Child frames" above). Each child frame's
+own fog maps followed the same day ([volumetric fog](volumetric-fog.md),
+"Play"). What remains: actor meshes in a sky frame inside a mirror frame,
+each frame's own iterator items, and a measured FPTAN for the 24-bit
+argument.
 
 ### 2. The moving brush tracker (done)
 
@@ -683,7 +703,11 @@ items are collision (Stage 5) and SaveGame (Stage 6).
   scan's limits); an actor the page has no mesh binding or decoded sprite
   texture for is not a candidate, so it is neither drawn nor stamped (as
   before); the sprites' LeafLights and Volumetrics (fog on actors) are not
-  read from the dynamics yet.
+  read from the dynamics yet. (A frame's own moving-light LeafLights for
+  mesh lighting are: main and child frames each filter SetupDynamics'
+  candidates by their ViewPlanes, mesh-lighting-view.mjs `childFrame`; a
+  child frame's DrawLodMesh detail choice, pose and Volumetrics are the
+  main frame's, as before.)
 
 Explicitly unsupported: WarpZoneInfo portals (none in the single-player
 maps), span-based render devices, AMD3DClipBspSurf, frames taller than the

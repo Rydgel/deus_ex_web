@@ -14,7 +14,7 @@ import { scriptGetStateName } from '../runtime/script-state-queries.mjs';
  * non-brush actor nothing else follows). `exec` runs further console
  * commands the same way, after the same bCheatsEnabled write (main.mjs
  * ?cheat=, e.g. DeusExPlayer.Summon). Returns the player's state. */
-export function viewProbe(game, { playersOnly = false, timeDilation = null, ghost = false, location = null, rotation = null, exec = [] } = {}) {
+export function viewProbe(game, { playersOnly = false, timeDilation = null, ghost = false, location = null, rotation = null, region = null, exec = [] } = {}) {
   const runtime = game.doors.scriptRuntime.runtime, player = game.player.collisionActor;
   // `set LevelInfo bPlayersOnly True`, which the original capture types
   // before `open` so the new level's LevelInfo starts with it: written here
@@ -39,8 +39,20 @@ export function viewProbe(game, { playersOnly = false, timeDilation = null, ghos
     runtime.writeNamed(player, 'Velocity', [0, 0, 0]);
   }
   if (rotation) runtime.writeNamed(player, 'ViewRotation', rotation.map(v => v | 0));
+  // `set DeusEx.JCDentonMale Region (Zone=..., iLeaf=..., ZoneNumber=...)`.
+  if (region) {
+    const zone = runtime.levelFor(player).actors.find(actor => actor?.name === region.zone);
+    if (!zone) throw new Error(`viewProbe: no zone actor ${region.zone}`);
+    runtime.writeNamed(player, 'Region', { ...runtime.readNamed(player, 'Region'), 'engine.actor.pointregion.zone': zone,
+      'engine.actor.pointregion.ileaf': region.iLeaf, 'engine.actor.pointregion.zonenumber': region.zoneNumber });
+  }
   const instance = runtime.instance(player), node = instance?.state ? (instance.state.stateNode ?? instance.cls) : null;
-  return { location: [...read('Location')], viewRotation: [...read('ViewRotation')], eyeHeight: read('EyeHeight'),
+  // Region.iLeaf and ZoneNumber: they decide the static lights the player's
+  // mesh sees (docs/mesh-lighting.md), and `set Location` leaves the ones
+  // the last move set.
+  const current = read('Region');
+  return { location: [...read('Location')],
+    region: { iLeaf: current['engine.actor.pointregion.ileaf'], zoneNumber: current['engine.actor.pointregion.zonenumber'] }, viewRotation: [...read('ViewRotation')], eyeHeight: read('EyeHeight'),
     baseEyeHeight: read('BaseEyeHeight'), physics: read('Physics'), bCollideWorld: read('bCollideWorld'),
     state: scriptGetStateName(node), playersOnly: runtime.readNamed(info, 'bPlayersOnly'),
     timeSeconds: runtime.readNamed(info, 'TimeSeconds'), timeDilation: runtime.readNamed(info, 'TimeDilation'), output };

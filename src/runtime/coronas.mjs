@@ -3,7 +3,8 @@
 // The pass runs inside the render pass, under precision control 24
 // (docs/render-pass-precision.md): every arithmetic result is rounded once
 // to a 24-bit significand (x87-pc24.mjs, exact for the double operands).
-import { x87load, x87double, x87int32, x87store, x87cmp } from './script-vm.mjs';
+import { x87load, x87double, x87int32, x87store, x87cmp, setX87Precision } from './script-vm.mjs';
+import { buildWindowSceneFrame } from './script-window-scene-frame.mjs';
 import { p24mul as x87mul, p24add as x87add, p24div as x87div, p24sub as sub } from './x87-pc24.mjs';
 
 const ld = x87load, st = x87store;
@@ -97,4 +98,48 @@ export function coronaIcon(entry, camera, frame, { hue, saturation, drawScale })
   const size = st(x87mul(x87mul(x87int32(frame.width | 0), ld(drawScale)), SIZE));
   const half = x87mul(ld(size), HALF);
   return { x: st(sub(ld(x), half)), y: st(sub(ld(y), half)), size, color, polyFlags: 0x104 };
+}
+
+const FRAME_WORDS = new Uint32Array(21), FRAME_FLOATS = new Float32Array(FRAME_WORDS.buffer);
+
+/** The FSceneNode fields the corona pass reads from DrawFrame's frame
+ * argument (Render.dll 0x10b1b7b4-0x10b1ba21: Coords +0x34 for the inline
+ * TransformPointBy, Proj.Z +0xdc, FX2 +0xc8, FY2 +0xcc and X +0xa8), out of
+ * the occlusion frame words (bsp-occlusion.mjs occlusionFrameWords: 0..11
+ * Coords, 12 X, 16 FX2, 17 FY2, 20 Proj.Z; the master frame OccludeBsp
+ * read, which DrawWorld hands to DrawFrame): `coords` {origin, x, y, z} for
+ * coordsTransform and `frame` for coronaIcon. */
+export function coronaFrame(words) {
+  for (let k = 0; k < FRAME_WORDS.length; k++) FRAME_WORDS[k] = words[k];
+  const vec = at => [FRAME_FLOATS[at], FRAME_FLOATS[at + 1], FRAME_FLOATS[at + 2]];
+  return { coords: { origin: vec(0), x: vec(3), y: vec(6), z: vec(9) },
+    frame: { projZ: FRAME_FLOATS[20], fx2: FRAME_FLOATS[16], fy2: FRAME_FLOATS[17], width: words[12] | 0 } };
+}
+
+/** The same fields without an OccludeBsp frame: Engine's ComputeRenderCoords
+ * (game thread, 64 bits) and the render pass's ComputeRenderSize (24 bits)
+ * on the render rectangle `rect` {width, height}, for the camera `view`
+ * {location, rotation, fov} (script-window-scene-frame.mjs, validated
+ * against the unchanged Engine code for these fields). */
+export function coronaFrameFromCamera(view, rect) {
+  const previous = setX87Precision(24);
+  try {
+    const f = buildWindowSceneFrame({ location: view.location, rotation: view.rotation.map(v => v | 0), width: rect.width,
+      height: rect.height, fov: view.fov });
+    const at = k => f.coords.slice(k, k + 3);
+    return { coords: { origin: at(0), x: at(3), y: at(6), z: at(9) },
+      frame: { projZ: f.projectionZ, fx2: f.center[0], fy2: f.center[1], width: rect.width } };
+  } finally { setX87Precision(previous); }
+}
+
+/** The static lights the corona pass visits for the viewer's leaf
+ * (0x10b1b6b1-0x10b1b70e): `Model.Leaves[leaf].iPermeating` indexes
+ * `Model.Lights`, whose run of references ends at a null entry. The viewer's
+ * LeafLights follow (0x10b1b711-0x10b1b743, dynamic-lighting.mjs
+ * movingLightLeafLists), each through the same helper. */
+export function leafPermeatingLights(model, leaf) {
+  const start = model.leaves[leaf]?.permeating ?? -1, out = [];
+  if (start < 0) return out;
+  for (let i = start; i < model.lights.length && model.lights[i]; i++) out.push(model.lights[i]);
+  return out;
 }

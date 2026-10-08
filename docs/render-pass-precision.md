@@ -26,7 +26,7 @@ DLL's preferred base.
 | `0x1038f66c` | **`Render->PreRender`** (vslot `0x5c`, `0x10b14560`) | sets PC 24 |
 | `0x1038f685` | `Console->PreRender(Frame)` (native, vslot `0x58`) | 24 |
 | `0x1038f68e` | `Canvas->Update(Frame)` | 24 |
-| `0x1038f6b5` | `PreRender` event; PlayerPawnExt.PreRender calls native 1050 PreRenderWindows → XRootWindow::PreRender `0x1003a760` (from `0x10038336`) | 24 |
+| `0x1038f6b5` | `PreRender` event; PlayerPawnExt.PreRender calls native 1050 PreRenderWindows → XRootWindow::PreRender `0x1003a760` (from `0x10038336`): the frame edit, then **`FSceneNode::ComputeRenderSize` again** (`0x1003a8cd`) | 24 |
 | `0x1038f6e5` | `Render->DrawWorld` (vslot `0x70`, `0x10b1cb90`): OccludeFrame `0x10b1ce3b` (SetupDynamics, OccludeBsp, child frames), DrawFrame `0x10b1ce44`, RenDev ClearZ (`0x10b1ce91`) and the `RenderOverlays` event `0x10b1cebd` | 24 |
 | `0x1038f70c` | `PostRenderFlash` event (FName `0x105835b8`, built from the string at `0x1047cf6c` at `0x10380726`); PlayerPawnExt.PostRenderFlash calls native 1051 PostRenderWindows → XRootWindow::PostRender `0x1003a960` (from `0x100383b6`) → PaintWindows → DrawWindow scripts → GC natives | 24 |
 | `0x1038f714` | RenDev vslot `0xa4` | 24 |
@@ -171,7 +171,8 @@ render-pass word (tables at `0x037f`), on the validator's own cases.
 | BoundsUpdate `0x10051160`, SortWindowLists `0x10045140` | ambiguous (ConfigureChild: tick or PaintWindows) | bounds-update oracle (0x037f; ORACLE_CW) | validate-window-bounds-update | `script-window-bounds-update.mjs` | 0 of 138 |
 | ConvertVectorToCoordinates (native 1489, root `0x10039f10`) | pass (DrawWindow) | none in scripts/ | none | `script-window-projection.mjs` (x87 model) | not measured |
 | Coronas' SingleLineCheck, ParticleIterator FarMoveActor | pass | collision oracles at 0x037f | — | trace.rs, render.rs | not measured |
-| UnrealScript run from the render events (RenderOverlays → Weapon/CalcDrawOffset, PreRender/PostRenderFlash → DrawWindow, iterator `Init(Camera)`, Console PostRender, DeusExPlayer.RenderOverlays) | pass | none | none | script VM (Rust interp + JS): Core float operators on the 64-bit model | not measured; needs a design decision |
+| UnrealScript run from the render events (RenderOverlays → Weapon/CalcDrawOffset, PreRender/PostRenderFlash → DrawWindow, iterator `Init(Camera)`) | pass | the Core operator oracles, `ORACLE_CW` (all eight) | the operator validators at both words, validate-script-vm-x87, validate-render-pass-script-play (worker) | script VM (Rust interp + JS) on the x87 model at the precision control, `inRenderPass` **PC 24** | 13 natives differ at 0x007f (census-render-pass-operators); **now 0** ("UnrealScript in the render pass") |
+| ComputeRenderSize again from XRootWindow::PreRender (`0x1003a8cd`) | pass (PreRender event) | window-scene-frame oracle, the second call at **0x007f** | validate-window-scene-frame (Wine real-x87 tangents) | `script-window-scene-frame.mjs` (coords at 64, size at the caller's precision) | was: 8 of 15 projections; **now 0** (HUD frame); the occlusion master frame: "The 3D frame's projection" below |
 
 ## Status and plan
 
@@ -202,12 +203,8 @@ Costs (interleaved medians, Linux host; family docs give the setups):
 | HUD paint, headless Island, gc.rs in Play's path (238 commands a frame, three alternating processes) | 5.65 ms per frame | 5.72 ms (within the 0.9 ms run-to-run spread) |
 
 Open items:
-- **UnrealScript inside the render events** (RenderOverlays →
-  Weapon/CalcDrawOffset, PreRender/PostRenderFlash → DrawWindow, iterator
-  `Init(Camera)`, Console PostRender, DeusExPlayer.RenderOverlays): the
-  script VM's float operators run on the 64-bit model. Moving them needs a
-  design decision (a per-call precision flag in the Rust interpreter and the
-  JS VM); the VM is unchanged.
+- **UnrealScript inside the render events**: done ("UnrealScript in the
+  render pass" below); its open parts are listed there.
 - **Environment mapping** (`mesh-environment.mjs`, GLSL `ENVIRONMENT_UV`):
   f64 within a 0.00005-texel tolerance, not bit-exact at either word.
 - **Mirror segment** (`mirrors.mjs`): doubles within a 4-ulp tolerance.
@@ -229,3 +226,302 @@ Open items:
 - `validate-gpu-mesh` runs its page with `?sim=inline` (the GPU kernels
   read the page's mesh state); the Play checks of the moved families run in
   worker mode.
+
+## UnrealScript in the render pass (2026-10-07)
+
+Everything UGameEngine::Draw runs between PreRender and PostRender runs at
+precision control 24, the UnrealScript it calls included, and that script
+writes persisted state (Weapon.RenderOverlays' SetLocation and SetRotation,
+window layout fields, iterator state). Play now runs those calls at 24 bits.
+
+**Entry points** (the table above):
+- The **PreRender** event: PlayerPawnExt.PreRender → Super (PlayerPawn's:
+  `myHUD.PreRender`, an empty HUD event, or the HUD's spawn) →
+  PreRenderWindows (1050) → XRootWindow::PreRender: the frame edit, then
+  **ComputeRenderSize again** on the edited frame (`0x1003a8cd`), then the
+  window configuration.
+- DrawWorld's **RenderOverlays** event (`0x10b1cebd`): DeusExPlayer's →
+  PlayerPawnExt's → PlayerPawn's (`Weapon.RenderOverlays`: DeusExWeapon's
+  CalcDrawOffset, `(0.9/Default.FOVAngle · PlayerViewOffset) >>
+  ViewRotation` plus EyeHeight and WalkBob, SetLocation, SetRotation,
+  Canvas.DrawActor; `myHUD.RenderOverlays`), then a non-Weapon inHand's
+  Inventory.RenderOverlays.
+- SetupDynamics' render iterators: **Init(Camera)** (LaserIterator,
+  ParticleIterator), before CurrentItem.
+- The **PostRenderFlash** event: PostRenderWindows (1051) →
+  XRootWindow::PostRender → PaintWindows → DrawWindow scripts and the GC
+  natives.
+- The **PostRender** event (PlayerPawn's `myHUD.PostRender`, empty in
+  HUD.uc and not overridden in DeusEx) and the console's PostRender: Play
+  does not run them (no console drawing); no DeusEx float math there.
+
+**Host sites.** The simulation's frame (sim-session.mjs) runs them in its
+`sprites` step (script-laser.mjs / script-particles.mjs `Init`), its
+`weapon` step (weapon-overlay-sim.mjs, `RenderOverlays`) and its `hud` step
+(script-play-hud.mjs `commands` → the window host's draw: resize,
+reconfigure, initialize and paint). Script bodies run in the Rust
+interpreter (interp.rs, its operator nodes calling lib.rs's x87 bodies) or,
+with `SCRIPT_VM=js`, in the JavaScript VM (its operators through the Rust
+operator kernel or the BigInt `x87Operators`).
+
+**Which natives depend on the precision.** `census-render-pass-operators.mjs`
+runs every Core operator oracle at 0x037f and at 0x007f. A native that is
+one x87 operation between float loads and a float store gives the same bits
+at both words (64 ≥ 2·24 + 2): no case differs for 171–175, 182–185, 193,
+194, 210, 212, 213, 215–218, 221, 223, 224, 296, 297, the rotator integer
+operators, RotRand, Sin/Cos/Tan/Atan and the vector-to-rotator cast. The
+compound ones differ:
+
+| Native | Cases differing at 0x007f |
+| --- | --- |
+| Dot (219) | 1 of 19 |
+| `*=`/`/=` vector by float (221/222) | 0 / 1 of 15 |
+| vector / float (214) | 2 of 8 |
+| VSize (225) | 2 of 14 |
+| Normal (226) | 3 of 26 |
+| Smerp (248) | 1 of 24 |
+| GetAxes (229) | 2 of 15 |
+| MirrorVectorByNormal (300) | 3 of 19 |
+| `>>` (276) | 5 of 22 |
+| `<<` (275, new oracle cases) | 7 of 22 |
+| rotator × float (287/288) | 3 of 21, 2 of 9 |
+| int `/=` float (160) | 2 of 20 |
+| VRand (252) | 60 of 64 |
+
+**Translation.** The x87 models take a precision control:
+`x87-precision.mjs` (a leaf module, read by script-vm.mjs's
+x87mul/add/div/sqrt/recip) and `x87.rs` `PRECISION` (`set_x87_precision`,
+per wasm instance: Ext add/mul/div/sqrt round the exact or sticky-jammed
+result once to 24 bits). `render-precision.mjs` `inRenderPass` sets 24 in
+the JavaScript model, the operator kernel instance and the interpreter
+instance around the three host sites and restores 64. The model-based
+bodies follow by construction; the ones that had their own 64-bit form now
+branch: VSize (lib.rs `vector_size` for the interpreter, mover-finish.mjs
+with r24), GetAxes and `<<` (camera.mjs `coordsDot`/`coordsDotX87`; `<<` now
+also follows the x87's NaN rules at 64 bits, which its first oracle cases
+showed it did not), VRand (script-vrand.mjs `execVRand24`) and the cast
+(script-decoration-primitives.mjs `vectorToRotator24`, shared with the
+lasers). The HUD scene frame keeps CreateMasterFrame's coordinates (64
+bits) and computes ComputeRenderSize at the caller's precision: at 24 bits
+appTan's argument `FOV·π/360` rounds before its qword store, so the measured
+64-bit tangents do not apply and x87-tan.mjs's FPTAN model takes the 24-bit
+argument. The game thread (ticks, physics, PlayerCalcView, Galaxy's Update)
+stays at 64.
+
+**Evidence.**
+- The eight Core operator validators (float/vector operators with the cast,
+  normal/axes, rotator/modulo with `<<`, string/transcendental, VRand,
+  RotRand, float-approx, damage primitives) pass at 0x037f and, with
+  `ORACLE_CW=0x007f`, against the original at 0x007f with the VM at 24 bits.
+- `validate-script-vm-x87`: the Rust kernel equals the BigInt model at 64
+  and 24 bits on 620,000 operand sets (VSize at 24 included).
+- `validate-window-scene-frame`: each case also runs Engine's
+  ComputeRenderSize again at 0x007f on the same frame, as XRootWindow's
+  PreRender does, with real-x87 tangents of the 24-bit arguments (Wine on
+  Linux, `X87_PROBE_WINE`): 19 cases bit-exact; 8 of the 15 same-size
+  projections differ from the 64-bit ones.
+- `validate-render-pass-script-play` (worker mode, new `renderPassProbe`):
+  Training with the crowbar picked up and selected through Use and its belt
+  slot, the view turned over 60 frames: every frame's crowbar Location is
+  Owner.Location plus CalcDrawOffset at 24 bits. The 64-bit CalcDrawOffset
+  differs in 41 of the 60 frames and would have placed the crowbar
+  differently in 6.
+  The HUD scene frame carries the 24-bit projection.
+
+**Status (2026-10-08): verified.** The sweep (master merged at eb93aa2)
+passes except `field-player-sequence-adapter`, which fails the same way on
+master (its `reports/movement/player-sequence/*/scene.json` capture reports
+are absent from this checkout). Passed: the eight operator validators at both
+control words, validate-script-vm-x87 (merged with master's word-level
+references), validate-window-scene-frame (Wine), validate-native-laser,
+validate-render-pass-script-play (worker), all 88 window validators, weapon,
+training, trigger, volumetric, world, render, scene-matrices, sim-split,
+light-atlas-upload, fire-texture-play, galaxy-effects, galaxy-music-sequencer
+(fresh oracle cache) and npm test (603). The x87 hardware validators skip on
+this host without their probe.
+
+**Cost (Linux, worker mode; interleaved, toggling `renderPassControl`).**
+HUD paint on 01_NYC_UNATCOIsland, headless, alternating frames, median of 300
+each, three rounds: 24-bit 1.997 / 2.008 / 2.016 ms against 64-bit
+1.945 / 1.982 / 1.981 ms, +0.03 to +0.05 ms (about 2%) per paint, which is
+the extra rounding in the Rust kernel's and the BigInt model's Ext forms.
+RenderOverlays' script math (Weapon.CalcDrawOffset with the crowbar, in the
+Training worker, 200 batches of 100 calls alternating): about 4 microseconds
+per call at both precisions, below the timer's resolution. Neither shows in
+frame time.
+
+Open:
+- Window natives on the x87 model that the paint reaches (layout, scroll,
+  edit, list, ConvertVectorToCoordinates) now run at 24 bits there; only
+  the scene frame has original evidence at 0x007f.
+- The GC natives (f64 with float stores) and the traces (trace.rs) keep
+  their forms; FPATAN is the host's atan2.
+
+## The 3D frame's projection (2026-10-08)
+
+**Original call order** (disassembly of Engine `UGameEngine::Draw`, Render
+`CreateMasterFrame` `0x10b15690`, Extension `XRootWindow::PreRender`
+`0x1003a760`; the import at Extension `0x10059324` is
+`Engine.dll ?ComputeRenderSize@FSceneNode@@QAEXXZ`):
+
+1. `CreateMasterFrame` (game thread, 64 bits) allocates the frame, sets X
+   and Y from the viewport's `SizeX`/`SizeY` (`+0x78/+0x7c`, `0x10b15780`),
+   gives the screen span `AllocIndexForScreen(SizeX, SizeY)` (`0x10b15827`),
+   runs `ComputeRenderCoords` (Coords, Uncoords, then a first
+   ComputeRenderSize) and takes the zone from `PointRegion`.
+2. `URender::PreRender` sets precision control 24. `Canvas->Update(Frame)`
+   points the canvas at that same frame (`Canvas+0x7c`).
+3. The `PreRender` event reaches `XRootWindow::PreRender`: the render
+   rectangle edit of [the conversation camera](conversation-camera.md) on
+   the frame's X/Y/XB/YB, then, unconditionally (a root without
+   `bClipRender` too), `FSceneNode::ComputeRenderSize` on the frame at
+   `0x1003a8cd`, at 24 bits.
+4. `DrawWorld` (OccludeFrame: SetupDynamics, OccludeBsp, child frames; then
+   DrawFrame) reads that frame.
+
+ComputeRenderSize reads X, Y, Actor.FOVAngle (`+0x410`), OrthoZoom, the
+frame's Origin and Uncoords, and writes FX, FY, FX2, FY2, FX15, FY15, Zoom,
+Proj, RProj, PrjXM..PrjYP, ViewSides and ViewPlanes, every one of them; it
+leaves Coords, Uncoords, ZoneNumber and the span alone. So the frame
+OccludeBsp sees has CreateMasterFrame's coordinates, zone and a screen span
+of the **viewport's** size, with the sizes, projection, ViewSides and
+ViewPlanes of the **render rectangle** computed at 24 bits, and the first
+call's size fields are dead. At 24 bits appTan's argument `FOV * pi/360`
+rounds before its qword store (so the measured 64-bit tangents do not apply,
+x87-tan.mjs takes the 24-bit argument, as for child frames) and FX15, the
+Proj.Z quotient, the corner rays and the planes round once per operation.
+A ViewportWindow's Draw (`0x1004a770`, in the HUD paint) does the same:
+CreateMasterFrame at 24 bits on the canvas viewport, the window's XB/YB/X/Y,
+then ComputeRenderSize at 24 bits.
+
+**Port.** `occ_master_frame` (occlude.rs) takes the render rectangle and
+appTan's result for the pass's argument and builds the sizes with
+`render_size::<P24>` (the child frames' routine) on the rectangle; the frame
+words 61 and 62 carry the viewport's size for `AllocIndexForScreen`.
+`bsp-occlusion.mjs master({..., render: {width, height}})` supplies the
+tangent through `childFrameTangent`; Play passes the canvas size as the
+viewport and the root's render viewport (`game.renderViewport`) as the
+rectangle for the main frame, and the window's size for a camera frame
+(whose coordinates round at the ambient 24 bits).
+
+**Evidence.**
+- `native-occlusion-oracle.py` cases with `render` edit the frame's X, Y,
+  XB and YB after the unchanged CreateMasterFrame and run Engine's
+  ComputeRenderSize at control word `0x007f`; `masterControlWord` `0x007f`
+  builds the master frame inside the pass too. validate-bsp-occlusion (3
+  cases in 4 through the pass, 2 in 4 on a clipped rectangle at an offset,
+  1 in 4 with the master at 24 bits; Paris Club, Training, Island,
+  Vandenberg and the tracker sequences), validate-child-frames (2 cases in 3
+  with a rectangle, the children inheriting it) and validate-sprite-setup
+  (Setup on the pass frame): every master frame word, Uncoords, zone, draw
+  list with its saved points, child request, span, sprite, NodeFlag and
+  zone time bit-exact. Core appTan's results for the 24-bit arguments of
+  FOV 75 and 90 are measured on real x87 (`scripts/x87-hardware-tangents.mjs`,
+  Wine) and are among the FPTAN model's candidates.
+- `validate-master-frame-play` (worker mode, `deusExViewer.visibility().master`
+  from sim-session.mjs): three Island frames' master words equal the Rust
+  core's pass frame built from the view, viewport and render rectangle the
+  frame reports, X/Y are the rectangle, words 61/62 the viewport, and none
+  equals the one-call 64-bit frame.
+- Mutations: the pass sizes at the 64-bit model fail the first pass case;
+  an `AllocIndexForScreen` at the frame's X/Y instead of the viewport's
+  fails node flags on the second clipped case (the original's span is
+  larger than the clipped frame, and OccludeBsp's results see it).
+- `census-master-frame-pass.mjs` (200 seeded views per map, FOV 75 and 90,
+  1440x960; a fresh occlusion state per view so both variants start equal)
+  against the master frame Play built before (one ComputeRenderSize at 64
+  bits on the rectangle):
+
+  | View | Frame words changed | Surfaces, child requests or node state changed | Saved points' projection changed |
+  | --- | --- | --- | --- |
+  | Island, viewport, FOV 75 | 200 of 200 | 0 | 0 |
+  | Island, viewport, FOV 90 | 200 of 200 | 9 | 200 |
+  | Island, letterbox 1440x720, FOV 75 | 200 of 200 | 145 | 0 |
+  | Island, letterbox, FOV 90 | 200 of 200 | 146 | 200 |
+  | Paris Club, viewport, FOV 75 | 200 of 200 | 0 | 0 |
+  | Paris Club, viewport, FOV 90 | 200 of 200 | 0 | 200 |
+  | Paris Club, letterbox, FOV 75 | 200 of 200 | 83 | 0 |
+  | Paris Club, letterbox, FOV 90 | 200 of 200 | 81 | 200 |
+
+  The frame changes everywhere (17 to 30 of its 45 size words); the visible
+  set changes rarely in normal play and often with letterbox bars, where the
+  viewport-sized screen span and the rectangle's own frustum both differ from
+  what Play built. At FOV 90 (appTan of a 24-bit pi/4 is above 1) Proj.Z
+  moves by an ulp and every saved polygon point's projection with it.
+
+**Unverified or still open.**
+- The scene's three.js projection reads this frame since 2026-10-08 (next
+  section), as does the corona scan ([coronas](coronas.md#the-frame)); the
+  GPU's matrix arithmetic is not the original's x87 vertex transform.
+- The camera frame's hardware evidence is the oracle's, with the model
+  tangent (a ViewportWindow's Draw itself was not run); XB/YB are not read
+  by OccludeBsp (oracle cases with random offsets match without them).
+- Play applies the pass to every main frame. A frame drawn while the
+  player's root window does not exist (the original then never reaches
+  XRootWindow::PreRender and keeps the 64-bit sizes) is not distinguished;
+  none was observed in single-player after Login.
+
+## The scene's projection (2026-10-08)
+
+The page's three.js camera used the horizontal FOV over the render
+rectangle's aspect and a constant half-pixel view offset
+(`play-camera.mjs`, [visual acceptance](visual-acceptance.md)). It now takes
+the pass frame's own numbers.
+
+**Original.** Every projection Render.dll makes for what D3D draws is
+`RZ = Proj.Z / Z; ScreenX = X * RZ + FX15; ScreenY = Y * RZ + FY15` from the
+frame's `+0xdc`, `+0xc0` and `+0xc4`: `0x10b0c432-0x10b0c44e` (in
+`0x10b0bab0`), the BSP clipper `ClipBspSurf` (`0x10b14f04`, `0x10b15070`,
+`0x10b151a5`), `DrawMesh` (`0x10b0d804`, `0x10b0e2c3`), `DrawLodMesh`
+(`0x10b0f8f8`, `0x10b10a66`) and `ClipDecal` (`0x10b1c768`). D3DDrv submits
+the pre-projected vertex at `XB + ScreenX - 0.5`, `YB + ScreenY - 0.5`
+(`DrawGouraudPolygon 0x10005822-0x10005855`: `fild [Frame + 0xb0]`, `fadd
+[point + 0x10]`, `fsub [0x1001864c]`, and the same for +0xb4/+0x14; the 0.5 of
+D3D's integer pixel centres). In the rectangle's GL window coordinates (from
+the left and top) a point therefore lands at `FX15 + X * Proj.Z / Z` and
+`FY15 + Y * Proj.Z / Z`: one focal length, Proj.Z, for both axes, and the
+centre FX15, FY15, which are `(X + 1.0001) * 0.5` and `(Y + 1.0001) * 0.5`
+rounded to float32 at 24 bits.
+
+**Port.** `setFrameProjection` (play-camera.mjs) makes that a symmetric
+three.js projection over the rectangle: vertical FOV `2 atan(Y / (2 Proj.Z))`,
+aspect `X / Y` and a view offset of `(FX15 - X/2, FY15 - Y/2)` pixels
+(0.500061 in both axes at 1440 x 960, 0.500046 vertically at 462 rows, where
+the constant was 0.50005).
+The simulation's frame carries it (`frame.projection` from the master frame's
+words, `projectionOf`); the page's camera, the simulation's own copy (culling,
+mirror and sky passes, which copy it) and a ViewportWindow's camera (from its
+own pass frame, `pass.projection`) all take it; without OccludeBsp, in Inspect
+and after a resize the FOV and the constant remain. `test/play-camera.test.mjs`
+checks that points land at `FX15 + X * Proj.Z / Z` and
+`FY15 + Y * Proj.Z / Z` (to 1e-6 relative) at five sizes and FOVs, and that the
+FOV's projection is within 0.01 pixel of it at FOV 75.
+
+**What changes** (`scripts/census-frame-projection.mjs`, worker mode, 1024 by
+about 465 pixels, the page's three draws of one frozen frame: frame
+projection, FOV projection, frame projection again; the last two against the
+first, the noise floor, was 0 in every view except one DPR 2 view; views
+whose frozen frame keeps changing because of animated textures are left out):
+
+| Map and setting | Settled views | Pixels that differ (of 476,625 a view) | Views with any | Largest channel difference |
+| --- | --- | --- | --- | --- |
+| Island, FOV 75 | 7 | 45 (0.0014%) | 3 | 4 |
+| Paris club, FOV 75 | 7 | 64 (0.0019%) | 7 | 10 |
+| Training, FOV 75 | 5 | 697 (0.029%; one view 578) | 4 | 8 |
+| Island, FOV 90 | 3 | 46 (0.0032%) | 3 | 8 |
+| Paris club, FOV 90 | 5 | 72 (0.0030%) | 5 | 25 |
+| Island, FOV 75, 2 device pixels per CSS pixel (1,906,500 pixels) | 3 | 161 (0.0028%) | 3 | 2 |
+
+The change is a few dozen edge pixels a view: the focal length differs by one
+float32 rounding (at FOV 90 appTan of the 24-bit argument moves Proj.Z by an
+ulp) and the centre by up to 1.2e-5 pixel. The world is drawn with the same
+vertices and the same GPU arithmetic, so nothing moves visibly; what changes
+is that the projection is the frame's.
+
+**Not covered.** The GPU does the perspective divide and the viewport transform
+in float32, where the original projects each vertex on the x87 at 24 bits and
+D3D interpolates its screen-space vertices; the near plane (1) and far plane
+(65,536) are the host's, not the original's depth (D3DDrv's vertex z is `RZ *
+RProj.Z`, times the device's scale and plus its bias:
+`DrawGouraudPolygon 0x10005827-0x10005869`); the page's HUD and weapon view
+model take the camera as it is.

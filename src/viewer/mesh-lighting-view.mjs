@@ -1,8 +1,9 @@
 import { getAxes } from '../runtime/camera.mjs';
 import { traceRay, traceRayFast } from '../runtime/ray.mjs';
 import { actorsEpoch } from '../runtime/base-epoch.mjs';
-import { movingLightLeaves, worldLightRadius } from '../runtime/dynamic-lighting.mjs';
-import { PF, accumulateFaceNormal, actorPolyFlags, createMeshLightManager, d3dDiffuse, finishSetup, lightVertex,
+import { movingLightInView, movingLightLeafLists, viewPlanesOf, worldLightRadius } from '../runtime/dynamic-lighting.mjs';
+import { coronaFrame } from '../runtime/coronas.mjs';
+import { PF, accumulateFaceNormal, actorPolyFlags, createMeshLightManager, d3dDiffuse, faceKept, finishSetup, lightVertex,
   lightsActor, setupAmbient, setupForActor, unlitColor, vertexNormalPlane } from '../runtime/mesh-lighting.mjs';
 import { handleOf, identityOfHandle } from '../runtime/script-object-handles.mjs';
 import { meshLightMode } from '../runtime/script-vm-meshlight.mjs';
@@ -11,7 +12,7 @@ import { renderScanMode } from '../runtime/script-vm-render.mjs';
 
 const f = Math.fround;
 const LIGHT_FIELDS = ['LightType', 'LightEffect', 'LightBrightness', 'LightHue', 'LightSaturation', 'LightRadius',
-  'LightPeriod', 'LightPhase', 'bStatic', 'bNoDelete', 'bDynamicLight', 'bMovable', 'bSpecialLit', 'bDeleteMe'];
+  'LightPeriod', 'LightPhase', 'bStatic', 'bNoDelete', 'bDynamicLight', 'bMovable', 'bSpecialLit', 'bDeleteMe', 'VolumeRadius'];
 
 /** Play's per-frame mesh lighting (docs/mesh-lighting.md): one light manager
  * for the viewport, live light fields read from the shared script runtime,
@@ -130,6 +131,23 @@ export function createMeshLightingView(runtime, levelSource, { exportName, expor
     const a = describe(js), b = describe(rust);
     if (a !== b) throw new Error(`MESH_LIGHT=verify: ${actor.name} JavaScript ${a}, Rust ${b}`);
   };
+  // SetupDynamics' ViewPlanes test over the gate's survivors and OccludeBsp's
+  // Filter walk (dynamic-lighting.mjs): the frame's LeafLights, leaf -> records.
+  const leafListsFor = (records, planeWords) => {
+    const planes = planeWords ? viewPlanesOf(planeWords) : null;
+    const candidates = planes ? records.filter(record => movingLightInView(record.location, record.values, planes)) : records;
+    const leafLights = new Map();
+    const lists = movingLightLeafLists(frame.model, candidates.map(record => ({ location: record.location,
+      radius: worldLightRadius(record.values) })));
+    for (const [leaf, order] of lists) leafLights.set(leaf, order.map(k => candidates[k]));
+    return leafLights;
+  };
+  // Run `fn` with `ctx` (a child frame, childFrame) as the lighting frame.
+  const withFrame = (ctx, fn) => {
+    const saved = frame;
+    frame = ctx;
+    try { return fn(); } finally { frame = saved; }
+  };
   const view = {
     manager,kernel,
     /** Validation only: {name, records} of the actor whose setups are kept. */
@@ -143,21 +161,31 @@ export function createMeshLightingView(runtime, levelSource, { exportName, expor
     /** URender's per-frame setup for the main viewport: Frame->Coords, the
      * viewport clock and SetupDynamics' moving-light leaf lists. `lights`,
      * Play's game.movingLights() of this frame, stands for the candidate
-     * scan: the same gate over the same level, in Level.Actors order. */
-    beginFrame({ location, rotation, seconds, lights = null }) {
+     * scan: the same gate over the same level, in Level.Actors order.
+     * `master` {words, planes} is the frame OccludeBsp reads (sim-session
+     * visibility().master): its Coords and, for SetupDynamics' ViewPlanes
+     * sphere test, its four planes; without it Coords come from the view
+     * and no candidate is rejected by the planes. */
+    beginFrame({ location, rotation, seconds, lights = null, master = null }) {
       const level = levelSource();
       if (!level?.model) { frame = null; return; }
-      const [forward, right, up] = getAxes(rotation.map(value => value | 0));
       // Frame->Coords: camera X = right, Y = down, Z = forward, origin at the
       // view location (GMath.ViewCoords / ViewRotation / ViewLocation).
-      const axes = [right.map(f), up.map(value => f(-value)), forward.map(f)];
-      const origin = location.map(f);
+      let axes, origin;
+      if (master) {
+        const { coords } = coronaFrame(master.words);
+        axes = [coords.x, coords.y, coords.z]; origin = coords.origin;
+      } else {
+        const [forward, right, up] = getAxes(rotation.map(value => value | 0));
+        axes = [right.map(f), up.map(value => f(-value)), forward.map(f)];
+        origin = location.map(f);
+      }
       frameCount++;
       const viewport = { currentTime: seconds, lastUpdateTime: lastTime ?? seconds, frameCount };
       lastTime = seconds;
       // Level->Actors(0) is the LevelInfo (SetupForActor asserts it).
       const { byName, live } = levelMembership(level), levelInfo = level.actors[0];
-      frame = { level, model: level.model, axes, origin, viewport, lights: new Map(), leafLights: new Map(),
+      frame = { level, model: level.model, axes, origin, mirror: 1, viewport, lights: new Map(), leafLights: new Map(),
         levelInfo, byName, timeSeconds: read(levelInfo, 'TimeSeconds') ?? 0,
         levelBrightness: f(read(levelInfo, 'Brightness') ?? 1), ambients: new Map(), live,
         meshLight: runtime.scriptVm?.meshLight ?? null, runs: new Map() };
@@ -169,25 +197,44 @@ export function createMeshLightingView(runtime, levelSource, { exportName, expor
         light: handle => lightRecord(identityOfHandle(handle)),
         trace: (from, to) => clear(from, to),
       });
-      // SetupDynamics (0x10b22d90) prepends candidates in level-actor order;
-      // Filter prepends each onto the leaves it reaches.
-      const filter = record => {
-        for (const leaf of movingLightLeaves(frame.model, record.location, worldLightRadius(record.values))) {
-          const list = frame.leafLights.get(leaf) ?? [];
-          list.unshift(record);
-          frame.leafLights.set(leaf, list);
-        }
-      };
-      if (lights) { for (const light of lights) filter(lightRecord(light.actor, light)); return; }
-      for (const actor of level.actors) {
+      // SetupDynamics (0x10b22d90) takes the candidates in level-actor order
+      // (the gate 0x10b230e8..0x10b2311c, then the frame's ViewPlanes test),
+      // and OccludeBsp's Filter leaves each on the leaves it reaches
+      // (dynamic-lighting.mjs movingLightLeafLists; the order and the
+      // candidate test are verified against the original in
+      // validate-leaf-lights.mjs, docs/coronas.md "Leaf lights").
+      const records = [];
+      if (lights) for (const light of lights) records.push(lightRecord(light.actor, light));
+      else for (const actor of level.actors) {
         if (!actor || !read(actor, 'LightType') || read(actor, 'bDeleteMe')) continue;
-        // SetupDynamics 0x10b230e8..0x10b2311c rejects these before
-        // constructing a dynamic light. Static-light records are created
-        // lazily by lightOf/current if SetupForActor actually needs them.
+        // Static-light records are created lazily by lightOf/current if
+        // SetupForActor actually needs them.
         if ((read(actor, 'bStatic') || read(actor, 'bNoDelete')) && !read(actor, 'bDynamicLight')) continue;
         if (!read(actor, 'LightBrightness') || !read(actor, 'LightRadius')) continue;
-        filter(lightRecord(actor));
+        records.push(lightRecord(actor));
       }
+      // SetupDynamics' gate's survivors, before any frame's ViewPlanes: each
+      // child frame filters them again (childFrame).
+      frame.candidates = records;
+      frame.leafLights = leafListsFor(records, master?.planes ?? null);
+    },
+    /** The lighting frame of a child frame (mirror or sky) OccludeFrame made:
+     * its own Frame->Coords and Frame->Mirror, and its own SetupDynamics'
+     * ViewPlanes and Filter walk, so its sprites' LeafLights are the lists
+     * that frame left (Render.dll OccludeFrame 0x10b19fc0: SetupDynamics at
+     * 0x10b1a18e, OccludeBsp 0x10b1a19a, then each sprite's LeafLights =
+     * LeafLights[its leaf] at 0x10b1a1ff-0x10b1a202 before the lists are
+     * cleared for the next frame at 0x10b1a213-0x10b1a265). `coords` are the
+     * frame's 12 words as floats (Origin, X, Y, Z), `mirror` its Mirror
+     * (+0x20) and `planes` its four ViewPlanes' 16 words (+0x12c).
+     * Everything else (the light records, the clock, the zones'
+     * ambients) is the main frame's. Returns a frame setupMesh and
+     * lightMesh take. */
+    childFrame({ coords, mirror, planes = null }) {
+      if (!frame) return null;
+      const axes = [coords.slice(3, 6), coords.slice(6, 9), coords.slice(9, 12)];
+      return Object.assign(Object.create(frame), { origin: coords.slice(0, 3), axes, mirror,
+        leafLights: leafListsFor(frame.candidates, planes) });
     },
     /** ComputeFromActor's camera-space location (TransformPointBy of the
      * frame coords, 0x10b06035-0x10b06095) at the render pass's 24 bits:
@@ -200,7 +247,8 @@ export function createMeshLightingView(runtime, levelSource, { exportName, expor
     /** SetupForActor for one DrawLodMesh pass of `actor`: the selected
      * lights, ambient and ScaleGlow, the actor poly flags and the unlit
      * colour. Mutates the light manager's caches exactly once per call. */
-    setupMesh(actor, fields = null) {
+    setupMesh(actor, fields = null, ctx = null) {
+      if (ctx) return withFrame(ctx, () => view.setupMesh(actor, fields));
       if (!frame) return null;
       // `fields`: the same reads from the mesh scene's Rust pass
       // (npc-mesh-preview.mjs MB), compared under RENDER_SCAN=verify.
@@ -270,13 +318,15 @@ export function createMeshLightingView(runtime, levelSource, { exportName, expor
      * Returns per-face corner diffuse colours in [0,1], three corners per face
      * in face-vertex order, as D3D's FISTP bytes. `prepared` is a setupMesh
      * result already taken for this draw (SetupForActor runs once). */
-    lightMesh(actor, points, faces, faceWords = null, prepared = view.setupMesh(actor)) {
+    lightMesh(actor, points, faces, faceWords = null, prepared = null, ctx = null) {
+      if (ctx) return withFrame(ctx, () => view.lightMesh(actor, points, faces, faceWords, prepared));
+      prepared ??= view.setupMesh(actor);
       if (!prepared) return null;
       const { setup, flags } = prepared;
       if(view.kernel&&ArrayBuffer.isView(points)){
         if(!(faceWords instanceof Uint32Array)||faceWords.length!==faces.length*4)
           throw new TypeError('Wasm mesh lighting requires packed face topology');
-        const colors=view.kernel.light({points,faces:faceWords,origin:frame.origin,axes:frame.axes,
+        const colors=view.kernel.light({points,faces:faceWords,origin:frame.origin,axes:frame.axes,mirror:frame.mirror,
           ambient:setup.ambient,scaleGlow:setup.scaleGlow,unlit:prepared.unlit,lights:setup.lights,flags});
         return {colors,setup,flags,vertices:null};
       }
@@ -290,10 +340,9 @@ export function createMeshLightingView(runtime, levelSource, { exportName, expor
         const [a, b, c] = face.vertices;
         const unit = accumulateFaceNormal(camera[a], camera[b], camera[c], normals[a], normals[b], normals[c]);
         const p = camera[a];
-        // PF_Invisible (0x1) faces still add to the normals but are not drawn.
-        if (!(face.flags & 1) && (face.flags & PF.TwoSided || unit[0] * p[0] + unit[1] * p[1] + unit[2] * p[2] < 0)) {
-          drawn[i] = 1; lit[a] = lit[b] = lit[c] = 1;
-        }
+        // PF_Invisible (0x1) faces still add to the normals but are not drawn;
+        // the dot is times the frame's Mirror (0x10b0ffbb).
+        if (faceKept(unit, p, frame.mirror, face.flags)) { drawn[i] = 1; lit[a] = lit[b] = lit[c] = 1; }
       });
       const planes = camera.map((point, i) => lit[i] ? vertexNormalPlane(point, normals[i]) : null);
       const light = camera.map((point, i) => lit[i] ? lightVertex(setup, point, planes[i], flags) : null);

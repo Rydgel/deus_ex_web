@@ -166,6 +166,23 @@ pub extern "C" fn op_subtract_equal_vector_vector(a0: u32, a1: u32, a2: u32, b0:
     out3([a[0].add(b[0].neg()).store(), a[1].add(b[1].neg()).store(), a[2].add(b[2].neg()).store()]);
 }
 
+/// VSize (225, Core 0x10138d10) on the x87 model: (z*z + y*y) + x*x, the
+/// sum passed to appSqrt as a double (FSTP m64), FSQRT, one float store; a
+/// NaN sum returns quieted. The interpreter takes it at precision control
+/// 24 (render-precision.mjs); its game-thread form is the double one.
+pub(crate) fn vector_size(v: [u32; 3]) -> u32 {
+    let [x, y, z] = load3(v[0], v[1], v[2]);
+    let s = z.mul(z).add(y.mul(y)).add(x.mul(x));
+    if s.nan() {
+        return s.quiet().store();
+    }
+    s.store_double().sqrt().store()
+}
+#[no_mangle]
+pub extern "C" fn op_vector_size(x: u32, y: u32, z: u32) -> u32 {
+    vector_size([x, y, z])
+}
+
 /// FVector::SafeNormal (Normal, 226).
 pub(crate) fn safe_normal(v: [u32; 3]) -> [u32; 3] {
     let [x, y, z] = load3(v[0], v[1], v[2]);

@@ -8,6 +8,8 @@ import { rotatorSin } from './coords.mjs';
 import { referenceElementType } from './script-values.mjs';
 import { scriptVmKernel } from './script-vm-kernel.mjs';
 import { X87_INDEFINITE, x87mul32, x87div32, x87add32, x87sub32 } from './x87-nan.mjs';
+import { x87Precision, x87PrecisionControl, setX87Precision } from './x87-precision.mjs';
+import { CORE_CASTS } from './script-core-casts.mjs';
 
 const f = Math.fround;
 const primitiveNatives=new Set([214,112,114,115,119,120,121,122,123,124,125,126,127,128,129,131,135,138,139,140,141,142,143,144,145,146,147,148,149,150,151,154,155,156,157,158,160,163,164,165,168,169,171,172,173,174,175,176,177,179,180,181,182,184,185,187,188,189,190,193,194,196,203,210,211,212,213,215,216,217,218,219,221,222,223,224,226,229,234,235,236,237,242,243,244,245,248,249,250,251,254,255,276,287,288,296,297,300,316,317,318,319]);
@@ -76,11 +78,20 @@ export const initScriptRunaway = () => { scriptRunaway = 0; };
 export const scriptRunawayCount = () => scriptRunaway;
 // The Rust interpreter's copy of the counter comes back through this.
 export const setScriptRunaway = value => { scriptRunaway = value; };
-export const x87load = v => {
-  const b = f32bits(v), neg = b >>> 31, e = (b >>> 23) & 0xff, m = b & 0x7fffff;
+// The arithmetic below rounds to the x87 precision control (x87-precision.mjs:
+// 64 bits on the game thread, 24 inside the render pass). x87-pc24.mjs's
+// explicit p24 forms are the same rounding for code ported at 24 bits.
+export { x87PrecisionControl, setX87Precision };
+// FLD m32 of a float32 word. x87load takes the float32 as a JavaScript
+// number; the *Word forms let a body keep a NaN's sign and payload without
+// storing the number in an Array, where V8 may canonicalize it (see
+// x87OperatorWords).
+export const x87loadWord = w => {
+  const b = w >>> 0, neg = b >>> 31, e = (b >>> 23) & 0xff, m = b & 0x7fffff;
   if (e === 0xff) return m ? { nan: b } : { neg, inf: true };
   return { neg, sig: BigInt(e ? m | 0x800000 : m), exp: e ? e - 150 : -149 };
 };
+export const x87load = v => x87loadWord(f32bits(v));
 // FLD m64 / a returned double: the binary64 value as an exact 80-bit value.
 const f64io = new DataView(new ArrayBuffer(8));
 export const x87double = v => {
@@ -135,7 +146,7 @@ export const x87mul = (a, b) => {
     return !other.inf && other.sig === 0n ? { nan: X87_INDEFINITE } : { neg: a.neg ^ b.neg, inf: true };
   }
   if (a.sig === 0n || b.sig === 0n) return { neg: a.neg ^ b.neg, sig: 0n, exp: 0 };
-  const [sig, sh] = x87round(a.sig * b.sig, 64);
+  const [sig, sh] = x87round(a.sig * b.sig, x87Precision);
   return { neg: a.neg ^ b.neg, sig, exp: a.exp + b.exp + sh };
 };
 // FSUB operand negation: sign flips on finite and infinite values while a
@@ -155,12 +166,13 @@ export const x87add = (a, b) => {
     + (b.neg ? -(b.sig << BigInt(b.exp - exp)) : b.sig << BigInt(b.exp - exp));
   if (sum === 0n) return { neg: a.neg & b.neg, sig: 0n, exp: 0 };
   const neg = sum < 0n ? 1 : 0;
-  const [sig, sh] = x87round(neg ? -sum : sum, 64);
+  const [sig, sh] = x87round(neg ? -sum : sum, x87Precision);
   return { neg, sig, exp: exp + sh };
 };
 // 1.0 / b held on the x87 stack (native 222 divides the embedded double
 // 1.0 at 0x101765a8 by the float32 divisor and never stores it to float32).
 export const x87recip = b => {
+  if (x87Precision !== 64) return x87div({ neg: 0, sig: 1n, exp: 0 }, b);
   const n = x87width(b.sig), num = 1n << BigInt(63 + n);
   let q = num / b.sig;
   const twice = (num - q * b.sig) * 2n;
@@ -192,23 +204,24 @@ export const x87div = (a, b) => {
   const k = 96 + x87width(b.sig) - x87width(a.sig);
   const num = a.sig << BigInt(k);
   const q = num / b.sig, rem = num - q * b.sig;
-  const shift = x87width(q) - 64;
+  const width = x87Precision, shift = x87width(q) - width;
   let sig = q >> BigInt(shift);
   const low = q - (sig << BigInt(shift));
   const lost2 = (low * b.sig + rem) * 2n, unit = b.sig << BigInt(shift);
   if (lost2 > unit || (lost2 === unit && (sig & 1n))) sig += 1n;
   let exp = a.exp - b.exp - k + shift;
-  if (x87width(sig) > 64) { sig >>= 1n; exp += 1; }
+  if (x87width(sig) > width) { sig >>= 1n; exp += 1; }
   return { neg, sig, exp };
 };
 // The FST/FSTP float32 store: round the 64-bit significand to 24 bits with
-// nearest-even, honoring denormal and overflow boundaries.
-export const x87store = v => {
-  if (v.nan !== undefined) return f32num(v.nan);
-  if (v.inf) return f32num((v.neg << 31) | 0x7f800000);
+// nearest-even, honoring denormal and overflow boundaries. x87storeWord
+// returns the stored word, x87store the float32 as a JavaScript number.
+export const x87storeWord = v => {
+  if (v.nan !== undefined) return v.nan >>> 0;
+  if (v.inf) return ((v.neg << 31) | 0x7f800000) >>> 0;
   let e = v.exp + x87width(v.sig) - 1;
-  if (e > 127) return f32num((v.neg << 31) | 0x7f800000);
-  if (v.sig === 0n) return f32num(v.neg << 31);
+  if (e > 127) return ((v.neg << 31) | 0x7f800000) >>> 0;
+  if (v.sig === 0n) return (v.neg << 31) >>> 0;
   if (e >= -126) {
     const shift = v.exp + 23 - e;
     let sig;
@@ -218,10 +231,10 @@ export const x87store = v => {
       let q = v.sig >> sh;
       const rem = v.sig - (q << sh), half = 1n << (sh - 1n);
       if (rem > half || (rem === half && (q & 1n))) q += 1n;
-      if (x87width(q) > 24) { q >>= 1n; if (++e > 127) return f32num((v.neg << 31) | 0x7f800000); }
+      if (x87width(q) > 24) { q >>= 1n; if (++e > 127) return ((v.neg << 31) | 0x7f800000) >>> 0; }
       sig = q;
     }
-    return f32num((v.neg << 31) | ((e + 127) << 23) | Number(sig - (1n << 23n)));
+    return ((v.neg << 31) | ((e + 127) << 23) | Number(sig - (1n << 23n))) >>> 0;
   }
   const shift = v.exp + 149;
   let q;
@@ -232,8 +245,9 @@ export const x87store = v => {
     const rem = v.sig - (q << sh), half = 1n << (sh - 1n);
     if (rem > half || (rem === half && (q & 1n))) q += 1n;
   }
-  return f32num(q >= (1n << 23n) ? (v.neg << 31) | 0x800000 : (v.neg << 31) | Number(q));
+  return (q >= (1n << 23n) ? (v.neg << 31) | 0x800000 : (v.neg << 31) | Number(q)) >>> 0;
 };
+export const x87store = v => f32num(x87storeWord(v));
 // The FST/FSTL double store: round the 64-bit significand to 53 bits with
 // nearest-even, keeping the value in the model (SafeNormal's fstl at
 // 0x10144c04 is the only float64 store in the bound natives).
@@ -259,6 +273,11 @@ export const x87sqrt = v => {
   const w = x87width(sig), sh = BigInt(w & 1 ? 127 - w : 128 - w);
   const n2 = sig << sh;
   let q = x87isqrt(n2);
+  if (x87Precision !== 64) {
+    // The floor root (64 bits) with a sticky bit, rounded once.
+    const [root, shifted] = x87round((q << 1n) | (q * q === n2 ? 0n : 1n), x87Precision);
+    return { neg: 0, sig: root, exp: exp / 2 - Number(sh) / 2 - 1 + shifted };
+  }
   // Round the real root to nearest (a root is never exactly halfway):
   // q + 1 wins iff n2 - q*q > q.
   if (n2 - q * q > q) q += 1n;
@@ -308,14 +327,18 @@ export const floatToInt = v => {
 // FSTL, and the 80-bit register value is FCOMP'd against the embedded
 // 1e-08: below or unordered returns (0,0,0).  Otherwise the FDIVR
 // reciprocal of the CRT sqrt of that double stays on the stack and each
-// component multiplies into a float32 store.
-export const x87safeNormal = v => {
+// component multiplies into a float32 store. x87safeNormalWords returns the
+// three stored words, x87safeNormal the float32s as JavaScript numbers.
+export const x87safeNormalWords = v => {
   const x = x87load(v[0]), y = x87load(v[1]), z = x87load(v[2]);
   const s = x87add(x87add(x87mul(x, x), x87mul(y, y)), x87mul(z, z));
   if (s.nan !== undefined || x87below1em8(s)) return [0, 0, 0];
   const r = s.inf ? { neg: 0, sig: 0n, exp: 0 } : x87recip(x87sqrt(x87storeDouble(s)));
-  return v.map(c => x87store(x87mul(x87load(c), r)));
+  return [x87storeWord(x87mul(x, r)), x87storeWord(x87mul(y, r)), x87storeWord(x87mul(z, r))];
 };
+// A vector of three float32 words as JavaScript numbers.
+const x87vector = w => [f32num(w[0]), f32num(w[1]), f32num(w[2])];
+export const x87safeNormal = v => x87vector(x87safeNormalWords(v));
 // The embedded double 3.0 at 0x10177f90 (Smerp's cubic coefficient).
 const x87three = { neg: 0, sig: 3n, exp: 0 };
 // Vector/rotator operand shape: three number components (NaN and infinity
@@ -363,9 +386,18 @@ function x87Transcendental(name, operand) {
 
 /** The BigInt bodies of the float, vector and rotator operators that the
  * Rust kernel (script-vm-kernel.mjs) also implements: the reference the
- * kernel is validated against, and the path while it is not loaded. Each
- * body's evidence is at its case in native(). */
-export const x87Operators = Object.freeze({
+ * kernel is validated against. Each body's evidence is at its case in
+ * native(). A float32 result is its stored word (a vector, three words) and
+ * an int result the int32, so the reference keeps every NaN's sign and
+ * payload: V8 may store a NaN number into an Array canonically. When the
+ * MirrorVectorByNormal body still returned an Array literal of numbers, its
+ * 10th call in validate-script-vm-x87 stored the negative indefinite of
+ * mirror-inf-n-indefinite (native-normal-axes-oracle.py) into element 0 as
+ * 0x7fc00000; the body had computed 0xffc00000, as Core.dll stores
+ * (docs/rust-core.md, "V8 NaN instability"). Values that pass between steps
+ * of a body stay words too, like SafeNormal's normal in
+ * MirrorVectorByNormal. */
+export const x87OperatorWords = Object.freeze({
   divideEqualIntFloat: (a, b) => {
     const divisor=x87load(b);
     return divisor.nan!==undefined||(!divisor.inf&&divisor.sig===0n)?0
@@ -373,42 +405,44 @@ export const x87Operators = Object.freeze({
   },
   percent: (a, b) => {
     const x=x87load(a),y=x87load(b);
-    if(x.nan!==undefined)return x87store(y.nan===undefined?x87quiet(x):x87nan(x,y));
-    if(y.nan!==undefined)return x87store(x87quiet(y));
-    if(y.sig===0n||x.inf||y.inf)return x87store({nan:X87_INDEFINITE});
+    if(x.nan!==undefined)return x87storeWord(y.nan===undefined?x87quiet(x):x87nan(x,y));
+    if(y.nan!==undefined)return x87storeWord(x87quiet(y));
+    if(y.sig===0n||x.inf||y.inf)return x87storeWord({nan:X87_INDEFINITE});
     const r=a%b;
-    return f(r===0?0:r);
+    return f32bits(r===0?0:r);
   },
   sqrt: a => {
     const d=x87load(a);
-    return d.nan!==undefined?x87store(x87quiet(d))
-      :d.neg&&(d.inf||d.sig!==0n)?x87store({nan:X87_INDEFINITE})
-      :x87store(x87sqrt(d));
+    return d.nan!==undefined?x87storeWord(x87quiet(d))
+      :d.neg&&(d.inf||d.sig!==0n)?x87storeWord({nan:X87_INDEFINITE})
+      :x87storeWord(x87sqrt(d));
   },
-  square: a => { const d=x87load(a); return x87store(x87mul(d,d)); },
+  square: a => { const d=x87load(a); return x87storeWord(x87mul(d,d)); },
   dot: (a, b) => {
     const px=x87mul(x87load(a[0]),x87load(b[0]));
     const py=x87mul(x87load(a[1]),x87load(b[1]));
     const pz=x87mul(x87load(a[2]),x87load(b[2]));
-    return x87store(x87add(px,x87add(py,pz)));
+    return x87storeWord(x87add(px,x87add(py,pz)));
   },
-  multiplyEqualVectorFloat: (a, b) => { const s=x87load(b); return a.map(v=>x87store(x87mul(x87load(v),s))); },
+  multiplyEqualVectorFloat: (a, b) => { const s=x87load(b); return a.map(v=>x87storeWord(x87mul(x87load(v),s))); },
   divideEqualVectorFloat: (a, b) => {
     const d=x87load(b);
     const r=d.nan!==undefined?x87quiet(d):d.inf?{neg:d.neg,sig:0n,exp:0}
       :d.sig===0n?{neg:d.neg,inf:true}:x87recip(d);
-    return a.map(v=>x87store(x87mul(x87load(v),r)));
+    return a.map(v=>x87storeWord(x87mul(x87load(v),r)));
   },
-  subtractEqualVectorVector: (a, b) => a.map((v,i)=>x87store(x87add(x87load(v),x87neg(x87load(b[i]))))),
-  normal: a => x87safeNormal(a),
+  subtractEqualVectorVector: (a, b) => a.map((v,i)=>x87storeWord(x87add(x87load(v),x87neg(x87load(b[i]))))),
+  normal: a => x87safeNormalWords(a),
   smerp: (alpha, a, b) => {
     const al=x87load(alpha),aa=x87load(a),bb=x87load(b);
     const p=x87mul(al,al),cube=x87mul(al,p);
     const s=x87add(x87mul(p,x87three),x87neg(x87add(cube,cube)));
-    return x87store(x87add(x87mul(s,x87add(bb,x87neg(aa))),aa));
+    return x87storeWord(x87add(x87mul(s,x87add(bb,x87neg(aa))),aa));
   },
   rotate: (a, b) => {
-    const dot=(t,r)=>x87store(x87add(
+    // The matrix entries are float32 numbers: sums of products of the
+    // finite sine table, never NaN.
+    const dot=(t,r,store=x87store)=>store(x87add(
       x87add(x87mul(t[0],x87load(r[0])),x87mul(t[1],x87load(r[1]))),
       x87mul(t[2],x87load(r[2]))));
     const [pitch,yaw,roll]=b.map(v=>v|0);
@@ -424,22 +458,44 @@ export const x87Operators = Object.freeze({
           :v.map((x,j)=>x87add(x87load(x),x87neg(x87load(r[0][j]))));
         return [dot(t,r[1]),dot(t,r[2]),dot(t,r[3])];
       });
-    return [dot(a.map(x87load),m[1]),dot(a.map(x87load),m[2]),dot(a.map(x87load),m[3])];
+    const v=a.map(x87load);
+    return [dot(v,m[1],x87storeWord),dot(v,m[2],x87storeWord),dot(v,m[3],x87storeWord)];
   },
   multiplyRotatorFloat: (r, scale) => { const s=x87load(scale); return r.map(v=>x87ftol(x87mul(x87int32(v),s))); },
-  multiplyVectorVector: (a, b) => a.map((v,i)=>x87store(x87mul(x87load(v),x87load(b[i])))),
-  multiplyEqualVectorVector: (a, b) => a.map((v,i)=>x87store(x87mul(x87load(b[i]),x87load(v)))),
+  multiplyVectorVector: (a, b) => a.map((v,i)=>x87storeWord(x87mul(x87load(v),x87load(b[i])))),
+  multiplyEqualVectorVector: (a, b) => a.map((v,i)=>x87storeWord(x87mul(x87load(b[i]),x87load(v)))),
   mirrorVectorByNormal: (a, b) => {
-    const n=x87safeNormal(b);
-    const nx=x87load(n[0]),ny=x87load(n[1]),nz=x87load(n[2]);
+    // FSTP m32 then FLD m32 of the stored word.
+    const f32=v=>x87loadWord(x87storeWord(v));
+    const n=x87safeNormalWords(b);
+    const nx=x87loadWord(n[0]),ny=x87loadWord(n[1]),nz=x87loadWord(n[2]);
     const vx=x87load(a[0]),vy=x87load(a[1]),vz=x87load(a[2]);
     const twoX=x87add(nx,nx);
-    const twoY=x87load(x87store(x87add(ny,ny))),twoZ=x87load(x87store(x87add(nz,nz)));
-    const dot=x87load(x87store(x87add(x87add(x87mul(vy,ny),x87mul(vz,nz)),x87mul(vx,nx))));
+    const twoY=f32(x87add(ny,ny)),twoZ=f32(x87add(nz,nz));
+    const dot=f32(x87add(x87add(x87mul(vy,ny),x87mul(vz,nz)),x87mul(vx,nx)));
     const prodX=x87mul(twoX,dot);
-    const prodY=x87load(x87store(x87mul(twoY,dot))),prodZ=x87load(x87store(x87mul(twoZ,dot)));
-    return [x87store(x87add(vx,x87neg(prodX))),x87store(x87add(vy,x87neg(prodY))),x87store(x87add(vz,x87neg(prodZ)))];
+    const prodY=f32(x87mul(twoY,dot)),prodZ=f32(x87mul(twoZ,dot));
+    return [x87storeWord(x87add(vx,x87neg(prodX))),x87storeWord(x87add(vy,x87neg(prodY))),x87storeWord(x87add(vz,x87neg(prodZ)))];
   },
+});
+/** x87OperatorWords with float32 results as JavaScript numbers: the
+ * operator path while the kernel is not loaded. */
+export const x87Operators = Object.freeze({
+  divideEqualIntFloat: x87OperatorWords.divideEqualIntFloat,
+  percent: (a, b) => f32num(x87OperatorWords.percent(a, b)),
+  sqrt: a => f32num(x87OperatorWords.sqrt(a)),
+  square: a => f32num(x87OperatorWords.square(a)),
+  dot: (a, b) => f32num(x87OperatorWords.dot(a, b)),
+  multiplyEqualVectorFloat: (a, b) => x87vector(x87OperatorWords.multiplyEqualVectorFloat(a, b)),
+  divideEqualVectorFloat: (a, b) => x87vector(x87OperatorWords.divideEqualVectorFloat(a, b)),
+  subtractEqualVectorVector: (a, b) => x87vector(x87OperatorWords.subtractEqualVectorVector(a, b)),
+  normal: a => x87safeNormal(a),
+  smerp: (alpha, a, b) => f32num(x87OperatorWords.smerp(alpha, a, b)),
+  rotate: (a, b) => x87vector(x87OperatorWords.rotate(a, b)),
+  multiplyRotatorFloat: x87OperatorWords.multiplyRotatorFloat,
+  multiplyVectorVector: (a, b) => x87vector(x87OperatorWords.multiplyVectorVector(a, b)),
+  multiplyEqualVectorVector: (a, b) => x87vector(x87OperatorWords.multiplyEqualVectorVector(a, b)),
+  mirrorVectorByNormal: (a, b) => x87vector(x87OperatorWords.mirrorVectorByNormal(a, b)),
 });
 const x87Kernel = () => scriptVmKernel ?? x87Operators;
 
@@ -1121,7 +1177,11 @@ export function compileFunction(fn) {
           return undefined;
         };
       }
-      default: return () => { throw new Error(`VM expression opcode 0x${n.op.toString(16)} is not supported`); };
+      default: {
+        const cast = CORE_CASTS.get(n.op);
+        if (cast) { const value = sub(n.value); return fr => cast(value.rv(fr, fr.instance)); }
+        return () => { throw new Error(`VM expression opcode 0x${n.op.toString(16)} is not supported`); };
+      }
     }
   }
   // One statement of the loop below, after the cursor has advanced past it.
@@ -1358,7 +1418,11 @@ export function compileFunction(fn) {
             services.gotoLabel(instance,rvalue(n.value,instance));
             return undefined;
           }
-          default: throw new Error(`VM expression opcode 0x${n.op.toString(16)} is not supported`);
+          default: {
+            const cast=CORE_CASTS.get(n.op);
+            if(cast)return cast(rvalue(n.value,instance));
+            throw new Error(`VM expression opcode 0x${n.op.toString(16)} is not supported`);
+          }
         }
       };
       frame.resume = () => {

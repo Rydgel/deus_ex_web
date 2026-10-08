@@ -1304,7 +1304,8 @@ float32 bit patterns so NaN payloads and signed zeros are exact.
   in `script-vm.mjs` as `x87Operators`: the reference, and the path in hosts
   that never load the kernel (unit tests that compile a body directly).
 * **Verification.** `validate-script-vm-x87` compares the kernel with the
-  BigInt bodies on edge and seeded random operands. Its first run found a
+  BigInt bodies on edge and seeded random operands, as float32 words (see
+  "V8 NaN instability" under R2b-2). Its first run found a
   kernel FDIV that dropped the round bit when the integer quotient had
   exactly 64 bits: `DivideEqual_IntFloat(617446728, 8.758457e-8)` truncated
   7049720607872202.9997… where the 64-bit rounding gives …203. After the
@@ -1565,6 +1566,20 @@ in `interp.rs`'s header.
   * With two NaN operands, `x op y` returns the first under Ignition and
     TurboFan and the second under Maglev.
   * Optimized code may store a NaN into a double-elements Array canonically.
+    Unoptimized code does too: the store that moves an Array literal from
+    Smi to double elements writes 0x7fc00000 (2026-10-07). A bare
+    `(x, y, z) => [x, y, z]` given three 0xffc00000 NaNs loses element 0's
+    sign on call 10 by default, call 5 with
+    `--invocation-count-for-feedback-allocation=3` and call 1 with
+    `--no-lazy-feedback-allocation` (also with `--jitless`), and keeps it on
+    every other call. That made `X87_CASES=5000 validate-script-vm-x87` fail
+    on MirrorVectorByNormal's 10th call, whose x is a NaN only at that case
+    count. The BigInt bodies are
+    therefore `x87OperatorWords`, which return float32 words, and pass words
+    between steps (SafeNormal's normal in 300). `x87Operators` turns the words
+    into numbers. The validator compares those words with the kernel's
+    (`resultWords()` for vectors). It checks both number forms only up to
+    NaN-matches-NaN.
   * Optimized code may fold a float32 widening with a later narrowing,
     keeping a signaling NaN.
 

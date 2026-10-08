@@ -19,6 +19,13 @@ import { createFogPass } from './fog-pass.mjs';
 import { createWorldVisibility } from './world-visibility.mjs';
 import { loadScriptVmKernel } from '../runtime/script-vm-kernel.mjs';
 
+/** Whether a light map record's points meet a frustum, or any of a list of
+ * frustums (the main frame's and a ViewportWindow frame's). */
+function inFrustum(frustum, record) {
+  record.viewSphere ??= new THREE.Sphere().setFromPoints(record.points.map(point => new THREE.Vector3(...toView(point))));
+  return Array.isArray(frustum) ? frustum.some(each => each.intersectsSphere(record.viewSphere)) : frustum.intersectsSphere(record.viewSphere);
+}
+
 export async function createWorld(map, asset, assets, onProgress = () => {}, {batchOpaque = true, movingLightsMode} = {}) {
   const root = new THREE.Group(), textures = new TextureStore(assets), textureGPU = new Map(), materials = new Map();
   // Identity, never moved: no auto-update cascade (main.mjs, the scene).
@@ -249,17 +256,18 @@ export async function createWorld(map, asset, assets, onProgress = () => {}, {ba
         batch.nodes.push(...g.nodes);
         counts.triangles += g.positions.length / 9; counts.surfaces++;
         // A level surface in a fog zone; every lit mover polygon of a map
-        // with fog zones, whose zone is its drawn fragments' (fog-pass.mjs,
-        // the brush tracker).
-        if (lightmap && lit && (actorName ? anyFogZone : (await zoneActor(zone)).fog)) {
+        // with fog zones, whose draw items are gated by their own zones
+        // (fog-pass.mjs, the brush tracker).
+        if (lightmap && lit && actorName && anyFogZone) {
+          fog.addMoverPolygon(lightmap, actorName, surfaceIndex);
+        } else if (lightmap && lit && !actorName && (await zoneActor(zone)).fog) {
           const fogUV = [], fogBounds = [];
           for (let i = 0; i < g.positions.length; i += 3) {
             fogUV.push(...lightAtlas.coordinates(tile, fromView(g.positions.slice(i, i + 3))));
             fogBounds.push(...(tile.bounds ?? [0, 0, 1, 1]));
           }
           lightmap.fogGrid ??= () => ({ grid: lighting.gridFor(lightmap) });
-          fog.addSurface(lightmap, tile, g.positions, fogUV, fogBounds, surfaceIndex,
-            actorName ? { name: actorName, parent } : null);
+          fog.addSurface(lightmap, tile, g.positions, fogUV, fogBounds, surfaceIndex);
         }
       } catch (error) {
         errors.push({ actor: actorName, surface: surfaceIndex, message: error.message });
@@ -323,9 +331,9 @@ export async function createWorld(map, asset, assets, onProgress = () => {}, {ba
       counts.movers++;
     } catch (error) { errors.push({ actor: actor.name, message: error.message }); }
   }
-  if (fog.stats.surfaces && fog.stats.lights) {
+  if ((fog.stats.surfaces || fog.stats.moverPolygons) && fog.stats.lights) {
     root.add(fog.root);
-    notes.add(`${fog.stats.surfaces} fog-zone and mover surfaces draw volumetric fog from ${fog.stats.lights} volumetric lights each frame. Every light is linked to every fog surface (the original's culls drop only lights that add nothing); volumetric brightness is steady; meshes get no fog (D3D's shipped configuration).`);
+    notes.add(`${fog.stats.surfaces} fog-zone surfaces and ${fog.stats.moverPolygons} mover polygons draw volumetric fog from ${fog.stats.lights} volumetric lights each frame. Every light is linked to every fog surface (the original's culls drop only lights that add nothing); volumetric brightness is steady; meshes get no fog (D3D's shipped configuration).`);
   }
   const submissionBatches = batchOpaque ? batchWorldMeshes(root, lightAtlas, lightingEnabled, displayGamma) : null;
   // The main frame's BSP visibility (world-visibility.mjs), after batching.
@@ -434,11 +442,12 @@ export async function createWorld(map, asset, assets, onProgress = () => {}, {ba
      * OccludeBsp's frame draws) or a `frustum`, the light maps not drawn
      * wait. Changed tiles upload on the next flushLighting. */
     syncMovingLights(lights, movers = [], { frustum = null, drawn = null } = {}) {
+      // `frustum` may be a list (the main frame's and a ViewportWindow
+      // frame's): a light map in any of them is drawn.
       const offsets = new Map(movers.map(mover => [mover.name, mover.offset]));
       // The drawn light maps, as for the light animation below.
       const visible = drawn ? record => record.owner || drawn.has(record.surfaceIndex)
-        : frustum ? record => record.owner || frustum.intersectsSphere(record.viewSphere ??=
-          new THREE.Sphere().setFromPoints(record.points.map(point => new THREE.Vector3(...toView(point))))) : null;
+        : frustum ? record => record.owner || inFrustum(frustum, record) : null;
       // With OccludeBsp's drawn surfaces the drawn light maps are listed
       // (brush light maps are always drawn).
       const drawnRecords = drawn ? [...lighting.ownedRecords()] : null;
@@ -464,8 +473,7 @@ export async function createWorld(map, asset, assets, onProgress = () => {}, {ba
       // inputs, not on what is drawn); brush light maps always update.
       if (lighting.animatedRecords().length) {
         const inView = drawn ? record => record.owner || drawn.has(record.surfaceIndex)
-          : frustum ? record => record.owner || frustum.intersectsSphere(record.viewSphere ??=
-            new THREE.Sphere().setFromPoints(record.points.map(point => new THREE.Vector3(...toView(point))))) : () => true;
+          : frustum ? record => record.owner || inFrustum(frustum, record) : () => true;
         let merged = 0;
         const visible = record => inView(record) && ++merged > 0;
         const start = performance.now();

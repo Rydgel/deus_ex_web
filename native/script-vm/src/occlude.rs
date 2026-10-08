@@ -47,7 +47,9 @@ static mut MODEL: [u32; 20] = [0; 20];
 /// ShowFlags & 0x800, 2 RenDev ShinySurfaces, 4 URender Toggle; 0x100 asks
 /// the output to carry each saved polygon's points, 0x200 leaves the
 /// sprites' span buffers out of it), 47
-/// Viewport ExtraPolyFlags, 48..60 Uncoords, 60 RProj.Z.
+/// Viewport ExtraPolyFlags, 48..60 Uncoords, 60 RProj.Z, 61 and 62 the
+/// viewport's width and height when the frame's X and Y are a render
+/// rectangle (the screen span's size; 0: X and Y).
 static mut FRAME: [u32; 64] = [0; 64];
 /// Run results: 0 status, 1 output words, 2 NodesDraw (+0x68), 3 PolysDraw
 /// (+0x6c), 4 child requests (all over the frames), 5 the output's address,
@@ -890,7 +892,10 @@ pub extern "C" fn occ_run(work: u32, bytes: u32) -> i32 {
         }
         wr(master + 4 * FR_ISURF, u32::MAX);
         let mut screen = EMPTY;
-        screen.alloc_index_for_screen(frame(12) as i32, frame(13) as i32, GSCENE);
+        // AllocIndexForScreen(SizeX, SizeY): the viewport's size, which is the
+        // frame's X and Y unless the render pass edited them (words 61, 62).
+        let (screen_x, screen_y) = if frame(61) != 0 && frame(62) != 0 { (frame(61), frame(62)) } else { (frame(12), frame(13)) };
+        screen.alloc_index_for_screen(screen_x as i32, screen_y as i32, GSCENE);
         set_frame_span(master, &screen);
         let mut result = occlude(master);
         status[6] = (arena_top(OUT) - arenas[OUT][0]) / 4;
@@ -1424,13 +1429,27 @@ fn emit_child(kind: u32, i_node: i32, i_surf: i32, zone: u8, span: &SpanBuffer) 
 // is its transpose. ComputeRenderSize (Engine 0x10372980) gives the sizes,
 // projection, clip numbers, ViewSides and ViewPlanes; UModel::PointRegion
 // (Engine 0x103f5db0) the zone at the origin.
+//
+// The render pass's ComputeRenderSize (flag 1 of word 16): XRootWindow::
+// PreRender (Extension 0x1003a760) edits the frame's X/Y/XB/YB and calls
+// ComputeRenderSize again (0x1003a8cd) at x87 precision control 24, and a
+// ViewportWindow's Draw (0x1004a770) does the same inside the HUD paint.
+// That call writes every size field again from the frame's X and Y and the
+// Uncoords and Origin CreateMasterFrame stored (the coordinates stay at the
+// first call's precision), so the pass frame has the sizes of
+// render_size::<P24> on the render rectangle, while the screen span stays
+// the one CreateMasterFrame allocated for the viewport (words 61 and 62 of
+// the frame hold the viewport size).
 
 use crate::tracker::{Fp, P24};
 use crate::x87::Ext;
 
-/// Input: location bits (3), rotation (3 int32), width, height, FOV bits,
-/// Core appTan's qword result (low, high), Actor.OrthoZoom bits.
-static mut MASTER_IN: [u32; 12] = [0; 12];
+/// Input: location bits (3), rotation (3 int32), width, height (the
+/// viewport), FOV bits, Core appTan's qword result (low, high) for the
+/// first ComputeRenderSize, Actor.OrthoZoom bits, then the render pass's
+/// ComputeRenderSize: the render rectangle's width and height, appTan's
+/// qword result for its (24-bit) argument, and the flags (1: the pass runs).
+static mut MASTER_IN: [u32; 17] = [0; 17];
 /// Output: the FSceneNode words Coords (+0x34, 12), FX..PrjYP (+0xb8, 17),
 /// ViewSides and ViewPlanes (+0xfc, 28), ZoneNumber, then Uncoords (+0x64, 12).
 static mut MASTER_OUT: [u32; 70] = [0; 70];
@@ -1525,7 +1544,16 @@ pub extern "C" fn occ_master_frame() {
     let (width, height) = (input[6] as i32, input[7] as i32);
     let coords = view_coords(rotation, location);
     let tan = f64::from_bits(input[9] as u64 | (input[10] as u64) << 32);
-    let size = render_size::<Ext>(&coords, width, height, tan, input[11]);
+    // The first ComputeRenderSize's fields are all written again by the
+    // render pass's, so with the pass only that one is computed.
+    let pass = input[16] & 1 != 0;
+    let (frame_width, frame_height) = if pass { (input[12] as i32, input[13] as i32) } else { (width, height) };
+    let size = if pass {
+        let tan_pass = f64::from_bits(input[14] as u64 | (input[15] as u64) << 32);
+        render_size::<P24>(&coords, frame_width, frame_height, tan_pass, input[11])
+    } else {
+        render_size::<Ext>(&coords, width, height, tan, input[11])
+    };
     let [fx, fy, fx15, fy15, fx2, fy2, zoom, proj_x, proj_y, proj_z, rx, ry, rz, prj_xm, prj_ym, prj_xp, prj_yp] = size.f;
     let rproj = [rx, ry, rz];
     let (sides, planes) = (size.sides, size.planes);
@@ -1548,8 +1576,8 @@ pub extern "C" fn occ_master_frame() {
         // The frame words occ_run reads.
         let f = &mut *addr_of_mut!(FRAME);
         f[..12].copy_from_slice(&coords);
-        f[12] = width as u32;
-        f[13] = height as u32;
+        f[12] = frame_width as u32;
+        f[13] = frame_height as u32;
         f[14..20].copy_from_slice(&[fx15, fy15, fx2, fy2, fx, fy]);
         f[20] = proj_z;
         f[21..25].copy_from_slice(&[prj_xm, prj_ym, prj_xp, prj_yp]);
@@ -1562,6 +1590,10 @@ pub extern "C" fn occ_master_frame() {
         f[43] = 0;
         f[48..60].copy_from_slice(&uncoords);
         f[60] = rproj[2];
+        // CreateMasterFrame's screen span is the viewport's size (0: the frame's).
+        f[61] = if pass { width as u32 } else { 0 };
+        f[62] = if pass { height as u32 } else { 0 };
+        f[63] = 0;
     }
 }
 

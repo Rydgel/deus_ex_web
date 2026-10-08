@@ -54,6 +54,10 @@ export function createMeshDraw(assets,creation,{gpu=null,texturePool,batches=nul
   const latest={visible:Boolean(creation.visible),childOnly:false,material:null,posed:creation.posed,colors:null,groups:null,
     spheres:creation.spheres,lod:null};
   const pendingPlans=[];let pendingLod=null;
+  // The main frame's lighting this frame (its packed words or plain record), kept
+  // to give the actor its main lighting back after a child frame's pass
+  // lit it with that frame's Coords and Mirror (applyPass).
+  let mainLighting=null,variantLit=false;
   function core(){
     if(disposed)return;
     const {payload,faces,faceWords}=source;
@@ -365,6 +369,7 @@ export function createMeshDraw(assets,creation,{gpu=null,texturePool,batches=nul
       if(record.toCpu)toCpu();
       if(lighting&&gpuHandle&&!gpu.setLighting(gpuHandle,lighting))
         throw new Error(`${actorName}: the GPU mesh lights differ from the simulation side's layout`);
+      mainLighting=lighting??null;variantLit=false;
       if(!ready)return false;
       root.visible=record.visible;
       if(!record.visible){hideBatched();return false;}
@@ -379,13 +384,33 @@ export function createMeshDraw(assets,creation,{gpu=null,texturePool,batches=nul
       if(record.childOnly){root.visible=false;hideBatched();}
       return Boolean(record.changed)||environmentUpload;
     },
-    /** A mirror pass's decision (actor-mesh-sim.mjs passVisibility). */
+    /** A pass's decision (actor-mesh-sim.mjs passVisibility, framePass).
+     * A child frame's decision (`frame`) carries the lighting that frame's
+     * DrawFrame gave the actor (Coords, Mirror, LeafLights): the GPU path
+     * queues it for the pass's lighting run (returns true), the CPU path
+     * takes its corner colours now. The main frame's decision after it
+     * restores the actor's own lighting. */
     applyPass(decision){
-      if(!ready||!decision)return;
+      if(!ready||!decision)return false;
       root.visible=decision.root;
-      if(!decision.root){hideBatched();return;}
+      if(!decision.root){hideBatched();return false;}
       if(decision.spheres)setSpheres(decision.spheres);
       if(decision.groups)groups.forEach((group,i)=>showGroup(group,Boolean(decision.groups[i])));
+      let queued=false;
+      if(decision.frame!==undefined){
+        if(decision.lighting&&mode==='gpu'&&gpuHandle){
+          if(!gpu.setLighting(gpuHandle,decision.lighting))
+            throw new Error(`${actorName}: the GPU mesh lights differ from the simulation side's layout`);
+          queued=variantLit=true;
+        }else if(decision.colors){applyColors(decision.colors);variantLit=true;}
+      }else if(variantLit){
+        if(mode==='gpu'&&mainLighting&&gpuHandle){
+          if(!gpu.setLighting(gpuHandle,mainLighting))throw new Error(`${actorName}: the GPU mesh lights differ from the simulation side's layout`);
+          queued=true;
+        }else if(latest.colors)applyColors(latest.colors);
+        variantLit=false;
+      }
+      return queued;
     }};
 }
 
@@ -407,6 +432,7 @@ export function createActorMeshDraw(assets,{gpu=null,lit=false,displayGamma,feed
   const batches=gpu&&lit?createActorBatches(root,{makeMaterial:(template,members)=>
     batchMaterial(template,members,gpu,displayGamma)}):null;
   const bindings=new Map(),meshes=new Map(),errors=[];
+  let mainCamera=null;
   return {root,bindings,errors,batches,textures,
     /** A binding's creation record: its GPU slot now, its meshes when built. */
     create(creation){
@@ -421,19 +447,29 @@ export function createActorMeshDraw(assets,{gpu=null,lit=false,displayGamma,feed
      * then the GPU passes with the lighting frame's coordinates. */
     apply({records,camera},cameraPosition,words=null){
       if(gpu&&cameraPosition)gpu.setViewCamera(cameraPosition);
+      // A pass that stopped on an error leaves no lighting run open.
+      gpu?.cancelLightRun();
       let changed=false;
       for(const record of records)changed=bindings.get(record.id)?.apply(record,cameraPosition,words)||changed;
-      if(gpu){if(camera)gpu.setCamera(camera.origin,camera.axes);gpu.run();}
+      if(gpu){if(camera){mainCamera={origin:camera.origin,axes:camera.axes,mirror:1};gpu.setCamera(camera.origin,camera.axes,1);}gpu.run();}
       batches?.flush();
       return changed;
     },
-    /** A mirror pass: each binding's decision, then the camera-relative
+    /** A pass (the mirror and sky frames, then the main frame again): each
+     * binding's decision, the lighting run of the actors it relights (a
+     * child frame's, in `lightView` {origin, axes, mirror}; or the main
+     * frame's once the passes are done), then the camera-relative
      * environment UVs of CPU-path bindings. */
-    pass(decisions,cameraPosition){
+    pass(decisions,cameraPosition,lightView=null){
       if(gpu&&cameraPosition)gpu.setViewCamera(cameraPosition);
+      if(gpu)gpu.beginLightRun();
+      let queued=false;
       for(const [id,draw] of bindings){
-        draw.applyPass(decisions.get(id));
+        queued=draw.applyPass(decisions.get(id))||queued;
         if(draw.viewDependent)draw.updateView(cameraPosition);
+      }
+      if(gpu){
+        if(queued&&(lightView??mainCamera))gpu.lightRun(lightView??mainCamera);else gpu.cancelLightRun();
       }
       batches?.flush();
     },

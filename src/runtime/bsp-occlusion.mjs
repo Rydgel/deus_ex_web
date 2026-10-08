@@ -163,21 +163,30 @@ export const meshRecordFields = payload => ({ box: payload.boundingBox, boxes: p
  * `fx2`, `fy2`, `fx`, `fy`, `projZ`, `prj` ([PrjXM, PrjYM, PrjXP, PrjYP]),
  * `viewSides` (12), `nearClip` (4), `mirror`, plus the zone number,
  * recursion depth, the renderer's frame counter (0x10b5a700), the level's
- * TimeSeconds, option bits and the viewport's ExtraPolyFlags. */
+ * TimeSeconds, option bits and the viewport's ExtraPolyFlags, and, when
+ * `width`/`height` are a render rectangle, `spanWidth` and `spanHeight` (the
+ * viewport's size, which the screen span keeps). */
 export function occlusionFrameWords(f) {
   const words = [...f.coords, f.width, f.height, f.fx15, f.fy15, f.fx2, f.fy2, f.fx, f.fy, f.projZ, ...f.prj,
     ...f.viewSides, ...(f.nearClip ?? [0, 0, 0, 0]), f.mirror ?? 0x3f800000, f.zoneNumber, f.recursion ?? 0,
     f.frameCounter >>> 0, f.timeBits >>> 0, f.options ?? (OCCLUSION_SHOW_PLAYER_CTRL | OCCLUSION_SHINY_SURFACES),
-    f.extraPolyFlags ?? 0, ...(f.uncoords ?? new Array(12).fill(0)), f.rprojZ ?? 0, 0, 0, 0];
+    f.extraPolyFlags ?? 0, ...(f.uncoords ?? new Array(12).fill(0)), f.rprojZ ?? 0, f.spanWidth ?? 0, f.spanHeight ?? 0, 0];
   if (words.length !== 64) throw new Error(`Occlusion frame has ${words.length} words`);
   return words.map(v => v >>> 0);
 }
 
-function masterFrame(kernel, { location, rotation, width, height, fov, orthoZoom = 0 }) {
+function masterFrame(kernel, { location, rotation, width, height, fov, orthoZoom = 0, render = null }) {
   const io = new DataView(new ArrayBuffer(8));
   io.setFloat64(0, sceneFrameTangent(fov), true);
   const input = [...location.map(bitsOf), ...rotation.map(v => v >>> 0), width >>> 0, height >>> 0, bitsOf(fov),
-    io.getUint32(0, true), io.getUint32(4, true), bitsOf(orthoZoom)];
+    io.getUint32(0, true), io.getUint32(4, true), bitsOf(orthoZoom), 0, 0, 0, 0, 0];
+  // The render pass's ComputeRenderSize on the frame (XRootWindow::PreRender,
+  // a ViewportWindow's Draw): the render rectangle's size at 24 bits, with
+  // the tangent of the 24-bit argument (childFrameTangent).
+  if (render) {
+    io.setFloat64(0, childFrameTangent(fov, render.width).tangent, true);
+    input.splice(12, 5, render.width >>> 0, render.height >>> 0, io.getUint32(0, true), io.getUint32(4, true), 1);
+  }
   new Uint32Array(kernel.memory.buffer).set(input, kernel.masterInPtr() >>> 2);
   kernel.masterFrame();
   const words = new Uint32Array(kernel.memory.buffer);
@@ -279,9 +288,14 @@ export function createBspOcclusion(kernel, model, { surfaceTextureFlags, zoneAct
   };
   return {
     /** The master FSceneNode (CreateMasterFrame) for a camera: `location`
-     * (three floats), `rotation` ([pitch, yaw, roll] int32), integer
-     * `width` and `height`, Actor.FOVAngle `fov` and Actor.OrthoZoom, with
-     * the zone from this model. Returns `frame`, the words for `run` (its
+     * (three floats), `rotation` ([pitch, yaw, roll] int32), the viewport's
+     * integer `width` and `height`, Actor.FOVAngle `fov` and
+     * Actor.OrthoZoom, with the zone from this model. With `render`
+     * ({width, height}, the root window's render rectangle) the frame has
+     * been through the render pass's ComputeRenderSize at precision control
+     * 24 (XRootWindow::PreRender, a ViewportWindow's Draw): the sizes,
+     * projection, ViewSides and ViewPlanes of that rectangle, the screen
+     * span still the viewport's. Returns `frame`, the words for `run` (its
      * frame counter, TimeSeconds and option words still to set), and
      * `fields`: Coords, FX..PrjYP, ViewSides, ViewPlanes and ZoneNumber. */
     master(camera) {
@@ -381,6 +395,17 @@ export function createBspOcclusion(kernel, model, { surfaceTextureFlags, zoneAct
     nodeFlags: i => bytes()[nodes + 64 * i + 55],
     /** Node `i`'s iSurf (a child request names its node, not its surface). */
     nodeSurf: i => words()[(nodes >>> 2) + 16 * i + 7] | 0,
+    /** Node `i`'s polygon as the model holds it now (a tracker fragment where
+     * the last Update left it): its points, flat [x, y, z, ...] floats. */
+    nodePolygon(i) {
+      const u = words(), f = new Float32Array(u.buffer), count = bytes()[nodes + 64 * i + 54];
+      const pool = u[(nodes >>> 2) + 16 * i + 6] | 0, out = new Array(3 * count);
+      for (let k = 0; k < count; k++) {
+        const at = (points >>> 2) + 3 * u[(verts >>> 2) + 2 * (pool + k)];
+        out[3 * k] = f[at]; out[3 * k + 1] = f[at + 1]; out[3 * k + 2] = f[at + 2];
+      }
+      return out;
+    },
     /** The moving brush tracker (brush-tracker.mjs) over this model, or
      * null without movers; `blocks` are the model's own. */
     tracker: trackerHost,

@@ -9,6 +9,11 @@ import { AssetStore } from '../src/unreal/assets.mjs';
 import { readFunctionMetadata } from '../src/unreal/script-metadata.mjs';
 import { compileFunction, primitiveNativeIndices } from '../src/runtime/script-vm.mjs';
 import { gameDirectory } from './game-directory.mjs';
+import { setX87Precision as setRenderPassPrecision } from '../src/runtime/script-vm.mjs';
+// ORACLE_CW=0x007f runs the oracle at the render pass's control word and the
+// VM at x87 precision control 24 (docs/render-pass-precision.md "UnrealScript
+// in the render pass").
+if (Number(process.env.ORACLE_CW) === 0x7f) setRenderPassPrecision(24);
 
 const root = gameDirectory();
 const python = process.env.NATIVE_PROBE_PYTHON ?? '.cache/native-probe-env/bin/python';

@@ -79,6 +79,10 @@ def main() -> None:
     root = Path(sys.argv[1])
     raw = Path(sys.argv[2]).read_bytes()
     probe = RotRandProbe(root)
+    # The x87 control word of each call: 0x037f (the game thread) unless
+    # ORACLE_CW sets the render pass's 0x007f (docs/render-pass-precision.md
+    # "UnrealScript in the render pass").
+    probe.control_word = int(__import__('os').environ.get('ORACLE_CW', '0x037f'), 0)
     print(json.dumps({
         "hashes": {"Core.dll": CORE_SHA256, "MSVCRT.dll": MSVCRT_SHA256},
         "addresses": {"nativeIndex": 320, "cell": hex(ROTRAND_CELL), "thunk": hex(ROTRAND_THUNK),

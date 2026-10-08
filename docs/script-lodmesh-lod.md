@@ -227,6 +227,10 @@ corners; [GPU mesh](gpu-mesh.md#distance-lod)).
   the child frame's own count comes from that call; Play takes the frame's
   request (clamped to the main frame's returned count when that was
   clamped). In the checked mirror views no child frame differed (below).
+* Mirror frames reuse the main frame's selection and pose (the original
+  runs DrawLodMesh per frame with that frame's coords). Their lighting is
+  the frame's own since 2026-10-08 ([mesh
+  lighting](mesh-lighting.md#one-call-per-frame-child-frames-lighting-2026-10-08)).
 * The first-person weapon is not selected: its overlay frame has no LOD
   inputs in Play; at its depth the original's ratio keeps it at full detail
   (not measured).

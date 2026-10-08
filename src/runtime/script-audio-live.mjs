@@ -302,6 +302,6 @@ export async function createLiveAudio({runtime, level, player, onVoice = null, l
     }
     if (music.state.current !== null) music.unregisterMusic(music.state.current);
   }
-  return {galaxy, music, volumes, library, musicLog, update, reset, dispose, notes, voices, galaxyVoices,
+  return {galaxy, music, volumes, library, galaxyConfig, musicLog, update, reset, dispose, notes, voices, galaxyVoices,
     setDigitalVolume: value => { digital = value & 127; }};
 }
