@@ -851,7 +851,7 @@ faces.
   time per frame 2.02 → 2.05 ms on Island (A/B). `?meshLod=off` draws full
   detail.
 - *Left.* The morph rounds in Play's world space (the original's GetFrame
-  output is camera space), mirror frames reuse the main frame's selection,
+  output is camera space), mirror frames reuse the main frame's selection (their lighting is their own),
   and the particle and wire branches are not ported. See
   [LOD](script-lodmesh-lod.md).
 

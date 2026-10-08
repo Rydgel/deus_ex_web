@@ -62,8 +62,14 @@ export function accumulateFaceNormal(p0, p1, p2, n0, n1, n2) {
 }
 
 /** DrawLodMesh 0x10b0ffa3-0x10b0ffbb: the back-face test's dot,
- * `(n.x·p.x + n.z·p.z) + n.y·p.y` at 24 bits (times Frame.Mirror, ±1). */
-export const faceDot = (face, p0) => f(f(f(face[0] * p0[0]) + f(face[2] * p0[2])) + f(face[1] * p0[1]));
+ * `(n.x·p.x + n.z·p.z) + n.y·p.y` at 24 bits, times Frame.Mirror (+0x20, a
+ * float: ±1, +1 in the root frame and -1 in an odd-depth mirror frame). */
+export const faceDot = (face, p0, mirror = 1) =>
+  f(f(f(f(face[0] * p0[0]) + f(face[2] * p0[2])) + f(face[1] * p0[1])) * mirror);
+/** Whether DrawLodMesh keeps a face (0x10b0ff90-0x10b0ffc9): the face is not
+ * PF_Invisible (+0x0c bit 0, tested above) and either PF_TwoSided or
+ * `faceDot < 0` (an unordered compare keeps nothing: NaN is not less). */
+export const faceKept = (face, p0, mirror, flags) => !(flags & 1) && ((flags & PF.TwoSided) !== 0 || faceDot(face, p0, mirror) < 0);
 
 /** DrawLodMesh 0x10b10863-0x10b1090f: normalize a summed vertex normal and
  * return the plane [x, y, z, W] with W = (P.x·n.x + P.y·n.y) + P.z·n.z, each

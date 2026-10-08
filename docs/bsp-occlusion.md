@@ -308,7 +308,10 @@ unchanged.
   pass's Frame->Sprite (`actor-mesh-sim.mjs` `framePasses`), and `stamps()`
   writes LastRenderTime for every actor in any frame's Frame->Sprite, as
   DrawActorSprite does. The player, flagged root-excluded, appears in mirror
-  frames.
+  frames. Each such actor is also lit once per frame that draws it, with that
+  frame's Coords, Mirror and LeafLights, in DrawFrame's order ([mesh
+  lighting](mesh-lighting.md#one-call-per-frame-child-frames-lighting-2026-10-08);
+  frames carry `mirror` and `planes` beside `coords`).
 - **simVerify.** It compares the actors three.js draws. A Frame->Sprite
   actor whose groups all lie outside a pass's view is stamped, not drawn.
 
@@ -700,7 +703,11 @@ items are collision (Stage 5) and SaveGame (Stage 6).
   scan's limits); an actor the page has no mesh binding or decoded sprite
   texture for is not a candidate, so it is neither drawn nor stamped (as
   before); the sprites' LeafLights and Volumetrics (fog on actors) are not
-  read from the dynamics yet.
+  read from the dynamics yet. (A frame's own moving-light LeafLights for
+  mesh lighting are: main and child frames each filter SetupDynamics'
+  candidates by their ViewPlanes, mesh-lighting-view.mjs `childFrame`; a
+  child frame's DrawLodMesh detail choice, pose and Volumetrics are the
+  main frame's, as before.)
 
 Explicitly unsupported: WarpZoneInfo portals (none in the single-player
 maps), span-based render devices, AMD3DClipBspSurf, frames taller than the

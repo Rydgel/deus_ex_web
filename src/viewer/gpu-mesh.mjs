@@ -152,7 +152,9 @@ export function createGpuMesh(renderer,capacities={}) {
   const lightData=new Float32Array(lightCapacity*8);
   let dirtyLow=Infinity,dirtyHigh=-1;
   const {slots,vertexArena,faceArena,cornerArena,keyArena}=layout.arenas;
-  let frame=0,current=0,camera=null;
+  // `lightStamp`: the lighting frame number setLighting writes: the next run's
+  // (frame + 1) or, inside beginLightRun..lightRun, that run's own.
+  let frame=0,current=0,camera=null,lightStamp=null,lightRuns=0;
 
   /** A new mesh record's static data: keyframes, faces and the vertex
    * adjacency lists (gpu-mesh-layout.mjs). */
@@ -253,7 +255,7 @@ export function createGpuMesh(renderer,capacities={}) {
     if(!reserved)return false;
     let lightCount=reserved.start;
     const {slot}=handle,u=slot*PARAMS_U*4,fl=slot*PARAMS_F*4;
-    slotParamsU[u+8+1]=lightCount;slotParamsU[u+8+3]=frame+1;
+    slotParamsU[u+8+1]=lightCount;slotParamsU[u+8+3]=lightStamp??frame+1;
     slotParamsU[u+12+1]=count;
     if(packed){
       const {u32,f32,at}=packed;
@@ -289,8 +291,9 @@ export function createGpuMesh(renderer,capacities={}) {
     slotParamsU[u+44]=frame+1;slotParamsU[u+45]=floatWord(inverse);
     touch(handle.slot);
   }
-  /** The main frame's lighting coordinates (mesh-lighting-view beginFrame). */
-  function setCamera(origin,axes){camera={origin,axes};}
+  /** The lighting frame's coordinates and Mirror (mesh-lighting-view
+   * beginFrame: Frame->Coords and Frame->Mirror, 1 in the root frame). */
+  function setCamera(origin,axes,mirror=1){camera={origin,axes,mirror};}
   /** The render camera for environment UVs, as a float-float pair. */
   function setViewCamera(position){
     const hi=position.map(f32);shared.deusCameraHi.value.set(...hi);
@@ -310,32 +313,86 @@ export function createGpuMesh(renderer,capacities={}) {
     gl.viewport(0,0,WIDTH,rows);
     gl.drawArrays(gl.TRIANGLES,0,3);
   };
-  const setUniforms=prog=>{
-    const u=prog.locations;
+  // `poseFrame`: the pose stamp (uFrame); `lighting`: the lighting stamp
+  // (uLightFrame) and the frame's camera, which a lighting run replaces.
+  const NO_FRAME=0xffffffff;
+  const setUniforms=(prog,poseFrame=frame,lighting={stamp:frame,camera})=>{
+    const u=prog.locations,view=lighting.camera;
     if(u.get('uZero'))gl.uniform1ui(u.get('uZero'),0);
-    if(u.get('uFrame'))gl.uniform1ui(u.get('uFrame'),frame);
-    if(camera&&u.get('uCameraOrigin')){
-      gl.uniform3fv(u.get('uCameraOrigin'),camera.origin);gl.uniform3fv(u.get('uCameraX'),camera.axes[0]);
-      gl.uniform3fv(u.get('uCameraY'),camera.axes[1]);gl.uniform3fv(u.get('uCameraZ'),camera.axes[2]);
+    if(u.get('uFrame'))gl.uniform1ui(u.get('uFrame'),poseFrame);
+    if(u.get('uLightFrame'))gl.uniform1ui(u.get('uLightFrame'),lighting.stamp>>>0);
+    if(view&&u.get('uCameraOrigin')){
+      gl.uniform3fv(u.get('uCameraOrigin'),view.origin);gl.uniform3fv(u.get('uCameraX'),view.axes[0]);
+      gl.uniform3fv(u.get('uCameraY'),view.axes[1]);gl.uniform3fv(u.get('uCameraZ'),view.axes[2]);
+      gl.uniform1f(u.get('uMirror'),view.mirror??1);
     }
   };
-
-  /** Run this frame's passes; afterwards three.js state is reset. */
-  function run() {
-    frame++;
+  /** The lighting passes (faces, vertices, corners) for the slots whose
+   * lighting stamp is `lighting.stamp`, in the frame `lighting.camera`. */
+  function lightingPasses(poseFrame,lighting) {
+    const vRows=rowsFor(vertexArena.high),fRows=rowsFor(faceArena.high),cRows=rowsFor(cornerArena.high);
+    const lodTextures=[['uCornerWedges',cornerWedges],['uLodVertices',meshLodVertices],['uLodLists',lodLists]];
+    // Faces.
+    let prog=programs.face;gl.useProgram(prog.handle);setUniforms(prog,poseFrame,lighting);
+    bindTextures(prog,[['uParamsU',paramsU],['uParamsF',paramsF],['uTables',tables],['uFaceMap',faceMap],
+      ['uMeshFaces',meshFaces],['uPose',finalPose],...lodTextures]);
+    draw(prog,faceFramebuffer,faceArena.high?fRows:0);
+    // Vertices.
+    prog=programs.vertex;gl.useProgram(prog.handle);setUniforms(prog,poseFrame,lighting);
+    bindTextures(prog,[['uParamsU',paramsU],['uParamsF',paramsF],['uTables',tables],['uVertexMap',vertexMap],
+      ['uMeshVertices',meshVertices],['uAdjacency',adjacency],['uPose',finalPose],['uFaces',faceNormals],
+      ['uEnvironmentFaces',environmentFaces],['uLights',lightTexture],...lodTextures]);
+    draw(prog,vertexFramebuffer,vertexArena.high?vRows:0);
+    // Corners.
+    prog=programs.corner;gl.useProgram(prog.handle);setUniforms(prog,poseFrame,lighting);
+    bindTextures(prog,[['uParamsU',paramsU],['uParamsF',paramsF],['uCornerMap',cornerMap],['uMeshFaces',meshFaces],
+      ['uMeshVertices',meshVertices],['uAdjacency',adjacency],['uFaces',faceNormals],['uLight',vertexLight],...lodTextures]);
+    draw(prog,cornerFramebuffer,cornerArena.high?cRows:0);
+  }
+  const GL_STATE=()=>{
+    gl.bindVertexArray(vao);
+    gl.disable(gl.BLEND);gl.disable(gl.DEPTH_TEST);gl.disable(gl.CULL_FACE);gl.disable(gl.SCISSOR_TEST);
+    gl.disable(gl.STENCIL_TEST);gl.colorMask(true,true,true,true);
+  };
+  const uploadDirty=()=>{
     if(dirtyHigh>=dirtyLow){
       const rows=dirtyHigh-dirtyLow+1;
       upload(paramsU,0,dirtyLow,PARAMS_U,rows,slotParamsU.subarray(dirtyLow*PARAMS_U*4,(dirtyHigh+1)*PARAMS_U*4));
       upload(paramsF,0,dirtyLow,PARAMS_F,rows,slotParamsF.subarray(dirtyLow*PARAMS_F*4,(dirtyHigh+1)*PARAMS_F*4));
     }
+    dirtyLow=Infinity;dirtyHigh=-1;
     if(layout.lightCount)uploadRange(lightTexture,0,4,lightData.subarray(0,layout.lightCount*8));
+  };
+  /** Start a lighting run for a child frame's pass: the setLighting calls
+   * that follow belong to it, and lightRun runs them (DrawFrame lights each
+   * frame's sprites with that frame's Coords and Mirror, so the page redoes
+   * the lighting of the actors a pass draws before drawing it). */
+  function beginLightRun(){lightStamp=0x80000000+(++lightRuns&0x3fffffff);return lightStamp;}
+  /** Nothing was queued for the run beginLightRun started. */
+  function cancelLightRun(){lightStamp=null;}
+  /** The lighting passes of the setLighting calls since beginLightRun, in
+   * `view` ({origin, axes, mirror}); the corner colours of those slots then
+   * hold that frame's lighting until the next run lights them again. */
+  function lightRun(view) {
+    const stamp=lightStamp;lightStamp=null;
+    if(stamp===null)throw new Error('GPU mesh: lightRun without beginLightRun');
+    uploadDirty();
+    GL_STATE();
+    lightingPasses(NO_FRAME,{stamp,camera:view});
+    gl.bindVertexArray(null);
+    renderer.resetState();
+    layout.endLights();
+  }
+
+  /** Run this frame's passes; afterwards three.js state is reset. */
+  function run() {
+    frame++;
+    uploadDirty();
     // The frame numbers written by setPose/setLighting were frame+1 before
     // the increment above; they now equal `frame`.
-    gl.bindVertexArray(vao);
-    gl.disable(gl.BLEND);gl.disable(gl.DEPTH_TEST);gl.disable(gl.CULL_FACE);gl.disable(gl.SCISSOR_TEST);
-    gl.disable(gl.STENCIL_TEST);gl.colorMask(true,true,true,true);
+    GL_STATE();
     const previous=pose[current],next=pose[current^1];
-    const vRows=rowsFor(vertexArena.high),fRows=rowsFor(faceArena.high),cRows=rowsFor(cornerArena.high);
+    const vRows=rowsFor(vertexArena.high),cRows=rowsFor(cornerArena.high);
     // Pose, one draw per part: each evaluates every channel from the
     // previous targets and writes its own targets of the next side.
     let prog;
@@ -354,26 +411,10 @@ export function createGpuMesh(renderer,capacities={}) {
     bindTextures(prog,[['uParamsU',paramsU],['uCornerMap',cornerMap],['uLodFaces',meshLodFaces],['uWedges',meshWedges],
       ['uFinal',finalPose]]);
     draw(prog,resolveFramebuffer,cornerArena.high?cRows:0);
-    const lodTextures=[['uCornerWedges',cornerWedges],['uLodVertices',meshLodVertices],['uLodLists',lodLists]];
-    // Faces.
-    prog=programs.face;gl.useProgram(prog.handle);setUniforms(prog);
-    bindTextures(prog,[['uParamsU',paramsU],['uParamsF',paramsF],['uTables',tables],['uFaceMap',faceMap],
-      ['uMeshFaces',meshFaces],['uPose',finalPose],...lodTextures]);
-    draw(prog,faceFramebuffer,faceArena.high?fRows:0);
-    // Vertices.
-    prog=programs.vertex;gl.useProgram(prog.handle);setUniforms(prog);
-    bindTextures(prog,[['uParamsU',paramsU],['uParamsF',paramsF],['uTables',tables],['uVertexMap',vertexMap],
-      ['uMeshVertices',meshVertices],['uAdjacency',adjacency],['uPose',finalPose],['uFaces',faceNormals],
-      ['uEnvironmentFaces',environmentFaces],['uLights',lightTexture],...lodTextures]);
-    draw(prog,vertexFramebuffer,vertexArena.high?vRows:0);
-    // Corners.
-    prog=programs.corner;gl.useProgram(prog.handle);setUniforms(prog);
-    bindTextures(prog,[['uParamsU',paramsU],['uParamsF',paramsF],['uCornerMap',cornerMap],['uMeshFaces',meshFaces],
-      ['uMeshVertices',meshVertices],['uAdjacency',adjacency],['uFaces',faceNormals],['uLight',vertexLight],...lodTextures]);
-    draw(prog,cornerFramebuffer,cornerArena.high?cRows:0);
+    lightingPasses(frame,{stamp:frame,camera});
     gl.bindVertexArray(null);
     renderer.resetState();
-    dirtyLow=Infinity;dirtyHigh=-1;layout.endFrame();
+    layout.endFrame();
   }
 
   /** Validation only: the draw shader's environmentUV for every vertex of
@@ -418,7 +459,7 @@ void main(){uint t=texelIndex();vec3 p=texelFetch(uPose,at(t),0).xyz,n=texelFetc
     return out;
   }
 
-  return {allocate,release,setPose,setLod,setLighting,setCamera,setViewCamera,run,read,environmentUVs,shared,
+  return {allocate,release,setPose,setLod,setLighting,setCamera,setViewCamera,run,beginLightRun,lightRun,cancelLightRun,read,environmentUVs,shared,
     capacities:layout.capacities,
     get frame(){return frame;},
     stats:()=>({slots:slots.high,vertices:vertexArena.high,faces:faceArena.high,corners:cornerArena.high,

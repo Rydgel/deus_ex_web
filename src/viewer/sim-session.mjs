@@ -377,8 +377,11 @@ export function createSimSession(game, { assets = null, events = [], exportName 
         group: owner ? `${trackerMovers.names[owner.tag - 0x40000000]}:${owner.ordinal}` : null,
         bounds: spanBounds(frame.span), nodes: drawnHere.nodes, movers: drawnHere.movers,
         moverItems: drawnHere.moverItems,
-        // The frame's Coords (origin, X, Y, Z), as its fog maps read them.
+        // The frame's Coords (origin, X, Y, Z), as its fog maps read them,
+        // its Mirror (+0x20, a float) and its four ViewPlanes' words (+0x12c;
+        // SetupDynamics' moving-light test, mesh lighting's LeafLights).
         coords: Array.from(new Float32Array(Uint32Array.from(frame.fields.slice(0, 12)).buffer)),
+        mirror: new Float32Array(Uint32Array.of(frame.mirror).buffer)[0], planes: Array.from(frame.fields.slice(41, 57)),
         sprites: frame.sprites.map(sprite => sprite.key) };
     });
     // DrawLodMesh's inputs from the master frame: Frame->Coords and FX
@@ -396,6 +399,25 @@ export function createSimSession(game, { assets = null, events = [], exportName 
       // Host timings (ms): the movers' Update, OccludeBsp with its decode
       // (and the movers' draw lists), then the decal block.
       ms: { movers: moversMs, occlusion: occluded - started, decals: performance.now() - occluded } };
+  }
+  // DrawFrame's order over OccludeFrame's child frames (0x10b1a336-0x10b1a348
+  // recurses into each child, in list order, before the frame's own sprites;
+  // the list is newest first and OccludeFrame numbers the frames in that
+  // visiting order): children before their parent, siblings in index order.
+  function drawFrameOrder(frames) {
+    const byParent = new Map(), order = [];
+    for (const frame of frames) { if (!byParent.has(frame.parent)) byParent.set(frame.parent, []); byParent.get(frame.parent).push(frame); }
+    const visit = parent => { for (const frame of (byParent.get(parent) ?? []).sort((a, b) => a.index - b.index)) { visit(frame.index); order.push(frame); } };
+    visit(0);
+    return order;
+  }
+  // Each child frame's lighting frame (mesh-lighting-view.mjs childFrame) with
+  // its Frame->Sprite's binding ids, in DrawFrame's order, for the actor
+  // layer's per-frame SetupForActor and Light.
+  function lightFramesOf(frames) {
+    if (!frames || !meshLighting?.frame) return null;
+    return drawFrameOrder(frames).map(frame => ({ index: frame.index, kind: frame.kind, ids: frame.main ?? new Set(),
+      ctx: meshLighting.childFrame({ coords: frame.coords, mirror: frame.mirror, planes: frame.planes }) })).filter(entry => entry.ctx);
   }
   // The main frame's dynamics and OccludeBsp (docs/bsp-occlusion.md "Play"):
   // this frame's sprite records and, from the actor mesh layer, its bindings
@@ -679,7 +701,8 @@ export function createSimSession(game, { assets = null, events = [], exportName 
         const stamps = this.stamps({ size: { x: width, y: height }, drawWorld, sky, mirrors: input.mirrors, sprites, camera: inspect, requested,
           actorPasses: Boolean(actorScene) && !stopped(), frames, rect: begun?.renderRect ?? null });
         collect(stamps.errors);
-        snapshot.stamps = { passDecisions: stamps.passDecisions, mainDecisions: stamps.mainDecisions, skyDecisions: stamps.skyDecisions };
+        snapshot.stamps = { passDecisions: stamps.passDecisions, passFrames: stamps.passFrames, mainDecisions: stamps.mainDecisions,
+          skyDecisions: stamps.skyDecisions, skyFrame: stamps.skyFrame };
       }
       time('mirrors');
       if (drawWorld && input.play && coronaScan && view && !stopped()) {
@@ -758,7 +781,8 @@ export function createSimSession(game, { assets = null, events = [], exportName 
         const occlude = !inspect && pendingOcclusion ? args => {
           const result = occludeMain({ ...args, childFrames });
           return { main: result.main, children: viewportChildren(result.frames ? result.children
-            : drawn ? drawn.mayRender(view, new Set(result.mirrors)) : false), lod: lodOf(result) };
+            : drawn ? drawn.mayRender(view, new Set(result.mirrors)) : false), lod: lodOf(result),
+            lightFrames: lightFramesOf(result.frames) };
         } : null;
         frame = actorScene.update({ lit: Boolean(meshLighting?.frame), frustum, camera: view, cull: !children, children,
           items: inspect ? [] : live.meshItems, occlude, lod: inspect ? null : lodOf(current?.visibility), ...(pack ? { pack } : {}) });
@@ -772,8 +796,11 @@ export function createSimSession(game, { assets = null, events = [], exportName 
      * drew, the main frame's again. `size` is the drawing buffer's. */
     stamps({ size, drawWorld, sky = null, mirrors = true, sprites = [], camera: inspect = null, actorPasses = true, requested = null,
       frames = null, rect = null }) {
-      const errors = [], passDecisions = [];
-      let mainDecisions = null, skyDecisions = null;
+      const errors = [], passDecisions = [], passFrames = [];
+      let mainDecisions = null, skyDecisions = null, skyFrame = null;
+      // A child frame's lighting camera for the page's lightRun: Coords and Mirror.
+      const lightCamera = frame => ({ origin: frame.coords.slice(0, 3),
+        axes: [frame.coords.slice(3, 6), frame.coords.slice(6, 9), frame.coords.slice(9, 12)], mirror: frame.mirror });
       stamped = { movers: new Set(), sprites: new Set(), actors: new Set(), occluded: new Set(), bindings: new Map(),
         weapon: new Set(), source: new Map(), drawn: new Set() };
       try {
@@ -809,7 +836,7 @@ export function createSimSession(game, { assets = null, events = [], exportName 
           if (pass.frame) {
             const frame = pass.frame, ids = frame.main ?? new Set(), frustum = drawn.frustum(pass.camera);
             for (const sprite of sprites) if (sprite.frames?.includes(frame.index)) stamped.sprites.add(sprite.handle);
-            const decisions = actorPasses && actorScene ? actorScene.framePasses(frustum, ids) : null;
+            const decisions = actorPasses && actorScene ? actorScene.framePasses(frustum, ids, frame.index) : null;
             for (const id of ids) {
               const binding = byId.get(id);
               if (!binding) continue;
@@ -820,7 +847,8 @@ export function createSimSession(game, { assets = null, events = [], exportName 
               if (binding.drawnIn(frustum, decisions?.get(id) ?? { root: true })) stamped.drawn.add(binding.actor);
             }
             if (decisions) {
-              if (pass.kind === 'mirror') passDecisions.push(decisions); else skyDecisions = decisions;
+              if (pass.kind === 'mirror') { passDecisions.push(decisions); passFrames.push(lightCamera(frame)); }
+              else { skyDecisions = decisions; skyFrame = lightCamera(frame); }
               if (pass === lastMirror || pass.kind === 'sky') mainDecisions = actorScene.framePasses(null, null);
             }
             continue;
@@ -829,7 +857,7 @@ export function createSimSession(game, { assets = null, events = [], exportName 
           if (pass.kind === 'sky' || !actorScene) continue;
           const frustum = drawn.frustum(pass.camera);
           const decisions = pass.kind === 'mirror' && actorPasses ? actorScene.passVisibility(frustum) : null;
-          if (decisions) passDecisions.push(decisions);
+          if (decisions) { passDecisions.push(decisions); passFrames.push(null); }
           for (const binding of bindings)
             if (!stamped.bindings.has(binding.id) && binding.drawnIn(frustum, decisions?.get(binding.id) ?? null)) {
               stamped.actors.add(binding.actor); stamped.bindings.set(binding.id, binding.actor); stamped.source.set(binding.actor, pass.kind);
@@ -852,7 +880,7 @@ export function createSimSession(game, { assets = null, events = [], exportName 
         // draw whatever their own bHidden).
         for (const actor of stamped.occluded) if (!stamped.actors.has(actor)) runtime.writeNamed(actor, 'LastRenderTime', time);
       } catch (error) { failed = true; errors.push(plainError(error)); }
-      return { errors, passDecisions, mainDecisions, skyDecisions };
+      return { errors, passDecisions, passFrames, mainDecisions, skyDecisions, skyFrame };
     },
     /** DrawFrame's corona pass, which closes the world frame
      * (corona-scan.mjs): the icons over the render rect's size, or else the

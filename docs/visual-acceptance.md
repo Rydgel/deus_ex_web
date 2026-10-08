@@ -274,59 +274,67 @@ LT_Pulse phase alone.
      18,738 pixels and to 0 for 334,999.
    - Rounding at the bottom of the range, in both directions; not traced.
 
-### The player's reflection in a mirror (2026-10-08, open: a Play difference)
+### The player's reflection in a mirror (2026-10-08, fixed: per-frame lighting)
 
 10_Paris_Club's bar mirror (surface 232, the plane x = 128, y from −736 to
-−1600, z from −16 to 240), JC at (88, −1008, 27) with Region zone 7, leaf 380
-(`--region ZoneInfo4:380:7`), pitch 58276, yaw 0, so that his reflected face
-is 100 units from the camera. The report was dark marks around JC's mouth in
-Play, gone with the AugLight on. The original shows his face evenly lit; Play
-shows the skin at the texture's full brightness over most of the face and the
-real, dim light only on patches around the eyes, nose and mouth.
+−1600, z from −16 to 240), JC at (58, −1008, 27) with Region zone 7, leaf 380
+(`--region ZoneInfo4:380:7`), pitch 61736, yaw 0: his reflected face is 140
+units from the camera. The report was dark marks around JC's mouth in Play,
+gone with the AugLight on. The original (Wine, D3D, frozen level, held clock,
+Brightness 0.4 for Play) shows his face evenly lit by the club's two lights;
+Play showed the skin at the texture's full brightness over most of the face
+and the real, dim light only on patches around the eyes, nose and mouth.
 
-Over the face region (120×100 px at 580,325; the whole frame has a 1.34×
-raw brightness ratio, see Open):
+Over the face (110×110 px at 585,350, view f70; the whole frame has a 1.33×
+raw ratio, see Open):
 
-| | Play / original | Mean abs. diff. | Edge recall / precision |
-| --- | ---: | ---: | --- |
-| Play today (mean 27.1, 23.6, 16.6 against the original's 4.1, 13.7, 5.1) | 2.72 | 21.65 | 0.28 / 0.38 |
-| Play with the child frame's own lighting (below) | 1.31 | 5.26 | 0.41 / 0.48 |
+| Play | Play / original | Mean abs. diff. | Edge recall / precision | Outlier blocks |
+| --- | ---: | ---: | --- | ---: |
+| before (master b0d79d5; mean 17.5, 22.4, 13.0 against the original's 4.4, 16.3, 6.4) | 1.86 | 11.73 | 0.64 / 0.91 | 65 |
+| after (this change) | 1.34 | 3.38 | 0.99 / 0.99 | 0 |
 
-The edge scores are low for both because the crop is dark. With the
-child frame's lighting the face region's ratio equals the frame's.
+The whole 1280×720 frame: ratio 1.326 → 1.329, mean abs. diff. 3.83 → 3.68,
+edge recall 0.88 → 0.93, outlier blocks 1 → 0. The closer view (f40,
+reflected face 100 units away) measures the face at 2.59 → 1.32 over 120×100
+px, but there JC's animation frame differs between the two captures (the
+original's head sits lower: the player's mesh animates in a frozen level, and
+its phase follows elapsed real time), which the edge scores show (0.32 →
+0.41); f70 is aligned. The NPC and the chairs seen in the same mirror
+(view `far`, 500 units) were at 1.19/1.03/0.69 (NPC) and 1.0/1.05/0.67 (chairs)
+of the original's R/G/B when lit from the main frame; they now sit at
+1.39/1.34/1.55 and 1.39/1.36/1.53, the frame's own 1.40/1.34/1.57)..
 
 **Cause.** The original lights an actor in every frame that draws it:
 DrawLodMesh runs SetupForActor and Light with that frame's Coords and its
-back-face test is `dot·Frame.Mirror < 0`
-([mesh lighting](mesh-lighting.md), "Call order"). JC is not drawn in the main
-frame (the camera sits in his head), so in the original only the mirror's
-child frame lights him. Play lights each actor once per main frame and the
-mirror passes reuse the colours (`actor-mesh-sim.mjs`: "Mirror frames reuse
-the main frame's lighting; a child-only actor is lit the same way"), with no
-Frame.Mirror. For JC that pass runs with the camera inside his head. Of the 339
-vertices of his mesh (T-pose, this view), the main camera's back-face test
-marks 233 (255 faces kept); the mirror's child camera marks 295 (378 faces),
-and 90 of those were not marked by the main pass. A vertex not marked keeps
-diffuse 1.0 (`lightMesh`: `!light[v]`), a marked one gets the computed Light:
-neighbouring vertices at full texture brightness and at 0.05 to 0.2. The lit
-patches are the dark marks; with the AugLight the light saturates and they
-vanish. The player's own Region (above) is a separate capture hazard, not
-this cause: with the start's leaf Play still showed a bright face where the
-original showed a black silhouette.
+back-face test is `dot·Frame.Mirror < 0` ([mesh lighting](mesh-lighting.md#one-call-per-frame-child-frames-lighting-2026-10-08)
+has the addresses). JC is not drawn in the main frame (the camera sits in his
+head), so in the original only the mirror's child frame lights him. Play lit
+each actor once per main frame and the mirror passes reused the colours, with
+no Frame.Mirror. For JC that pass ran with the camera inside his head. Of the
+339 vertices of his mesh (T-pose, view f40), the main camera's back-face
+test marked 233 (255 faces kept); the mirror's child camera marks 295 (378
+faces), and 90 of those were not marked by the main pass. A vertex not marked
+keeps diffuse 1.0 (`lightMesh`: `!light[v]`), a marked one gets the
+computed Light: neighbouring vertices at full texture brightness and at 0.05 to
+0.2. The lit patches were the dark marks; with the AugLight the light
+saturates and they vanish. Light selection (the club's Light91 and Light77,
+steady, brightness 44, radius 34; ambient 0, ScaleGlow 1), vertex normals,
+Light's specular term and the material path were not the cause (a one-actor
+experiment that only re-ran them in the reflected frame gave this face).
 
-**Experiment** (not committed; `mirror-lighting-experiment.patch` in the session
-scratchpad): for JC alone, SetupForActor and lightMesh run once more with
-the Origin and axes reflected across the mirror plane and Frame.Mirror = −1.
-The existing functions then give the face above, within the display gap, with
-its two lights (Light91 and Light77, steady, brightness 44, radius 34,
-leaf 380's permeating static lights; ambient 0, ScaleGlow 1, no moving
-lights), so light selection, vertex normals (accumulated in the child's
-camera space without a mirror factor), Light's view-dependent specular term,
-the material path and the mesh's LOD are not the cause. The fix is per-child-frame
-lighting for actors the child frames draw: SetupForActor and DrawLodMesh
-under the child's Coords and Frame.Mirror, in the GPU path as well. It
-applies to every actor seen in a mirror from the side its main-frame
-camera does not see.
+**Fix.** Each child frame lights the actors in its Frame->Sprite with its own
+Coords, Mirror and LeafLights; an actor in several frames is lit in each, in
+DrawFrame's order. See [mesh lighting](mesh-lighting.md#one-call-per-frame-child-frames-lighting-2026-10-08).
+Cost in this view (Paris Club, worker mode, 1440×960, 5 interleaved rounds of
+400 frames, medians): mirror phase 2.14 → 2.32 ms (the page's lighting run
+before the pass and the main frame's after it), simulation-side actors
+1.38 → 1.46 ms, the frame 5.34 → 5.50 ms of page work, 16.63 ms vsync
+interval unchanged, draw calls 111 both.
+
+**Placing the player.** The capture hazard that hid this: `set Location`
+leaves the player's Region at the last move's leaf, so a reflection captured
+that way is lit from the start's leaf (the original's mesh was black). Use
+`--region` (above).
 
 ## Open
 

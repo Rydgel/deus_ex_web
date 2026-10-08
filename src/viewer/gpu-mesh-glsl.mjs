@@ -222,7 +222,7 @@ void main(){
 // The lighting frame's camera transform (kernel camera_component):
 // TransformPointBy at the render pass's 24 bits, (d.x*A.x + d.y*A.y) + d.z*A.z.
 export const CAMERA=`
-uniform vec3 uCameraOrigin,uCameraX,uCameraY,uCameraZ;
+uniform vec3 uCameraOrigin,uCameraX,uCameraY,uCameraZ;uniform float uMirror;uniform uint uLightFrame;
 float cameraComponent(vec3 p,vec3 axis){
   float dx=B(p.x-uCameraOrigin.x),dy=B(p.y-uCameraOrigin.y),dz=B(p.z-uCameraOrigin.z);
   return B(B(B(dx*axis.x)+B(dy*axis.y))+B(dz*axis.z));}
@@ -239,7 +239,7 @@ void main(){
   uint t=texelIndex();uvec2 map=texelFetch(uFaceMap,at(t),0).xy;
   if(map.x==0u)discard;
   uint slot=map.x-1u;uvec4 u2=pu(slot,2),u3=pu(slot,3);
-  bool lit=u2.w==uFrame,environment=u3.x!=0u&&u2.z==uFrame;
+  bool lit=u2.w==uLightFrame,environment=u3.x!=0u&&u2.z==uFrame;
   if(!lit&&!environment)discard;
   uvec4 u0=pu(slot,0),u1=pu(slot,1);
   uvec4 face=texelFetch(uMeshFaces,at(u0.z+map.y),0);
@@ -253,12 +253,13 @@ void main(){
   vec3 w0=texelFetch(uPose,at(u1.y+face.x),0).xyz,w1=texelFetch(uPose,at(u1.y+face.y),0).xyz,w2=texelFetch(uPose,at(u1.y+face.z),0).xyz;
   if(lit){
     vec3 p0=toCamera(w0),p1=toCamera(w1),p2=toCamera(w2);
-    // DrawLodMesh 0x10b0fe60..0x10b0ffbb at 24 bits (accumulateFaceNormal, faceDot).
+    // DrawLodMesh 0x10b0fe60..0x10b0ffbb at 24 bits (accumulateFaceNormal, faceDot),
+    // the dot times Frame.Mirror (+0x20: exactly 1 or -1).
     float ax=B(p2.x-p0.x),ay=B(p2.y-p0.y),az=B(p2.z-p0.z),bx=B(p0.x-p1.x),bz=B(p0.z-p1.z),by=B(p0.y-p1.y);
     float nz=B(B(bx*ay)-B(by*ax)),ny=B(B(bz*ax)-B(bx*az)),nx=B(B(by*az)-B(bz*ay));
     float scale=tableRsqrt(B(B(B(B(nx*nx)+B(ny*ny))+B(nz*nz))+EPSILON));
     vec3 n=vec3(B(nx*scale),B(ny*scale),B(nz*scale));
-    float dot=B(B(B(n.x*p0.x)+B(n.z*p0.z))+B(n.y*p0.y));
+    float dot=B(B(B(B(n.x*p0.x)+B(n.z*p0.z))+B(n.y*p0.y))*uMirror);
     uint flags=face.w|u2.x;
     bool drawn=(face.w&1u)==0u&&((face.w&0x100u)!=0u||dot<0.0);
     oFace=vec4(n,drawn?((flags&0x400000u)!=0u?2.0:1.0):0.0);
@@ -283,7 +284,7 @@ void main(){
   uint t=texelIndex();uvec2 map=texelFetch(uVertexMap,at(t),0).xy;
   if(map.x==0u)discard;
   uint slot=map.x-1u;uvec4 u2=pu(slot,2),u3=pu(slot,3);
-  bool lit=u2.w==uFrame,environment=u3.x!=0u&&u2.z==uFrame;
+  bool lit=u2.w==uLightFrame,environment=u3.x!=0u&&u2.z==uFrame;
   if(!lit&&!environment)discard;
   uvec4 u1=pu(slot,1);
   vec3 N=vec3(0.0),E=vec3(0.0);
@@ -354,7 +355,7 @@ void main(){
  * before this face that contains the vertex replaces its light with the unlit
  * colour (the in-order overwrite); diffuse bytes are FISTP(L*255). */
 export const CORNER_FRAGMENT=`${COMMON}${PARAMS}${CORNERS}
-uniform usampler2D uCornerMap,uMeshFaces,uMeshVertices,uAdjacency;uniform sampler2D uFaces,uLight;uniform uint uFrame;
+uniform usampler2D uCornerMap,uMeshFaces,uMeshVertices,uAdjacency;uniform sampler2D uFaces,uLight;uniform uint uLightFrame;
 out uvec4 oColor;
 uint adjacent(uint k){uvec4 v=texelFetch(uAdjacency,at(k>>2),0);uint c=k&3u;return c==0u?v.x:c==1u?v.y:c==2u?v.z:v.w;}
 uint byteOf(float value){return uint(roundEven(B(value*255.0)))&255u;}
@@ -362,7 +363,7 @@ void main(){
   uint t=texelIndex();uvec2 map=texelFetch(uCornerMap,at(t),0).xy;
   if(map.x==0u)discard;
   uint slot=map.x-1u;uvec4 u2=pu(slot,2);
-  if(u2.w!=uFrame)discard;
+  if(u2.w!=uLightFrame)discard;
   uvec4 u0=pu(slot,0),u1=pu(slot,1);
   uint f=map.y/3u,k=map.y-f*3u;
   uvec4 face=texelFetch(uMeshFaces,at(u0.z+f),0);
