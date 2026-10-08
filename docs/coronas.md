@@ -134,10 +134,10 @@ club has no moving-light candidates without AugLight (754 actors, none
 change). With AugLight on, in 12 views facing the club's mirror movers JC's
 chosen lights are unchanged (both Beams are inside the frame's planes; the
 leaf list's order differs in 8 of them, which does not reach the selection,
-whose sort keys differ). Open: a mirror child frame has its own
-SetupDynamics, planes and LeafLights in the original (OccludeFrame per
-frame), while Play lights each actor once, with the main frame's lists, for
-all frames.
+whose sort keys differ). A mirror child frame has its own SetupDynamics,
+planes and LeafLights in the original (OccludeFrame per frame); since
+2026-10-08 Play lights each actor in every frame that draws it with that
+frame's own lists ([mesh lighting](mesh-lighting.md#one-call-per-frame-child-frames-lighting-2026-10-08)).
 
 ## The frame
 

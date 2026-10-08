@@ -52,6 +52,11 @@ LOCK_STACK, LOCK_STACK_BASE = 0x10b38a80, 0x10b34654
 FIRST_LIGHT, LAST_LIGHT = 0x10b401c0, 0x10b49df4
 AMBIENT, SCALE_GLOW = 0x10b3d2e0, 0x10b33648
 FACE_NORMAL = (0x10b0fe60, 0x10b0ff88)
+# The back-face test's dot, times Frame.Mirror (+0x20 of the frame at [ebp+8]),
+# compared with zero; it stops at the je that skips the face (ZF follows
+# `test ah, 1` on the FPU status the compare left in ax: bit 8 of ax set when
+# the product is less than zero, which keeps the face).
+FACE_DOT = (0x10b0ffa3, 0x10b0ffc9)
 VERTEX_NORMAL = (0x10b10863, 0x10b10912)
 D3D_DIFFUSE = (0x10005942, 0x100059ac)
 
@@ -287,6 +292,18 @@ class MeshOracle(dyn.Oracle):
             self.write(0x10b4fa44, '256I', *frame_case['noiseA'])
         if 'strobe' in frame_case:
             self.write(0x10b49ea4, 'II', *frame_case['strobe'])
+        # A child frame (OccludeFrame's reflected Coords, its Mirror and its own
+        # LeafLights) draws the same actor with the frame the case names.
+        coords = frame_case.get('coords', scene['coords'])
+        self.write(fixture['frame'] + 0x34, '12I', *coords['origin'], *coords['x'], *coords['y'], *coords['z'])
+        self.write(fixture['frame'] + 0x20, 'I', frame_case.get('mirror', 0x3f800000))
+        if 'leafLights' in frame_case:
+            leaf_lights = 0
+            for ref in reversed(frame_case['leafLights']):
+                link = self.alloc(0x20)
+                self.write(link + 0xc, 'II', fixture['lights'][ref], leaf_lights)
+                leaf_lights = link
+            fixture = {**fixture, 'leafLights': leaf_lights}
         self.visibility = {int(key): value for key, value in frame_case.get('lineChecks', {}).items()}
         self.traced = []
         flags = self.call(SETUP_FOR_ACTOR, [fixture['frame'], fixture['actor'], fixture['leafLights'], 0],
@@ -350,6 +367,20 @@ class MeshOracle(dyn.Oracle):
         return {'face': list(self.read(ebp - 0x6c, '3I')),
                 'normals': [list(self.read(record + 0x20, '3I')) for record in records]}
 
+    def face_dot(self, case):
+        """DrawLodMesh's `dot(face normal, v0) * Frame.Mirror < 0` (0x10b0ffa3-0x10b0ffc9):
+        the face normal's words at ebp-0x6c/-0x68/-0x64, the first vertex's point
+        at esi, the frame (Mirror at +0x20) at [ebp+8]."""
+        frame, record = self.alloc(0x40), self.alloc(0x58)
+        self.write(frame + 0x20, 'I', case['mirror'])
+        self.write(record, '3I', *case['point'])
+        ebp = self.frame()
+        self.write(ebp - 0x6c, '3I', *case['face'])
+        self.write(ebp + 8, 'I', frame)
+        self.cpu.reg_write(UC_X86_REG_ESI, record)
+        self.run(*FACE_DOT)
+        return {'kept': (self.cpu.reg_read(UC_X86_REG_EAX) >> 8) & 1}
+
     def vertex_normal(self, case):
         record = self.alloc(0x58)
         self.write(record, '3I', *case['point'])
@@ -399,6 +430,7 @@ def main():
         out['sqrtTable'] = oracle.sqrt
         out['power'] = oracle.power
     out['faceNormals'] = [oracle.face_normal(case) for case in cases.get('faceNormals', [])]
+    out['faceDots'] = [oracle.face_dot(case) for case in cases.get('faceDots', [])]
     out['vertexNormals'] = [oracle.vertex_normal(case) for case in cases.get('vertexNormals', [])]
     if cases.get('diffuse'):
         out['diffuse'] = oracle.d3d_diffuse(cases['diffuse'])

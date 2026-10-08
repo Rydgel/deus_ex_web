@@ -74,7 +74,10 @@ export function createGpuMeshLayout(capacities={}) {
   const cornerArena=new Arena(cornerCapacity),keyArena=new Arena(keyframeCapacity);
   const meshVertexArena=new Arena(vertexCapacity),meshFaceArena=new Arena(faceCapacity),adjacencyArena=new Arena(faceCapacity*3);
   const meshes=new Map();
-  let lightCount=0,frame=0;
+  // The light texels of the main frame's run (pool 0) and of each child
+  // frame's own run (a pool per frame index): a pass's lighting run starts at
+  // texel 0 and its lights are free again once it ran.
+  let lightCount=0,frame=0;const framePools=new Map();
 
   /** Static mesh data shared by every actor with that mesh: its texel bases
    * and the vertex → face adjacency lists (each vertex's faces in ascending
@@ -154,15 +157,23 @@ export function createGpuMeshLayout(capacities={}) {
     },
     /** This frame's light texels for one SetupForActor result, or false when
      * they do not fit (the CPU path lights the actor). */
-    reserveLights(count) {
+    reserveLights(count,pool=0) {
       if(count>GPU_MESH_MAX_LIGHTS)return false;
+      if(pool){
+        const used=framePools.get(pool)??0;
+        if(used+count>lightCapacity)return false;
+        framePools.set(pool,used+count);return {start:used};
+      }
       if(lightCount+count>lightCapacity)return false;
       const start=lightCount;lightCount+=count;
       return {start};
     },
+    /** A child frame's lighting run ran (the page's lightRun): its light
+     * texels are free again. */
+    endLights(pool=0){if(pool)framePools.delete(pool);else lightCount=0;},
     /** The frame's passes ran: the frame number advances, the light texels
      * are free again. */
-    endFrame(){frame++;lightCount=0;},
+    endFrame(){frame++;lightCount=0;framePools.clear();},
     get frame(){return frame;},
     get lightCount(){return lightCount;},
     arenas:{slots,vertexArena,faceArena,cornerArena,keyArena,wedgeArena,lodListArena},

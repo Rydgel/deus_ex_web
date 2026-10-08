@@ -458,6 +458,7 @@ fn light_mesh_job(
     flags: u32,
     origin: [f32; 3],
     axes: [[f32; 3]; 3],
+    mirror: f32,
     ambient: [f32; 3],
     scale_glow: f32,
     unlit: [f32; 3],
@@ -520,8 +521,10 @@ fn light_mesh_job(
             }
         }
         let face_flags = faces[at + 3];
-        // The back-face dot (0x10b0ffa3-0x10b0ffbb): (x + z) + y at 24 bits.
-        let dot = (face[0] * p0[0] + face[2] * p0[2]) + face[1] * p0[1];
+        // The back-face dot (0x10b0ffa3-0x10b0ffbb): (x + z) + y at 24 bits,
+        // times Frame.Mirror (+0x20: 1.0 in the root frame, -1.0 in an
+        // odd-depth mirror frame).
+        let dot = ((face[0] * p0[0] + face[2] * p0[2]) + face[1] * p0[1]) * mirror;
         if face_flags & 1 == 0 && (face_flags & 0x100 != 0 || dot < 0.0) {
             work[drawn_at + i] = 1;
             for vertex in vertices {
@@ -628,6 +631,9 @@ pub extern "C" fn light_mesh(
                 let axes = std::array::from_fn(|axis| {
                     std::array::from_fn(|component| f32::from_bits(work[4 + axis * 3 + component]))
                 });
+                // Word 3: the frame's Mirror (the lighting frame is the
+                // child frame's when the actor is drawn in a mirror).
+                let mirror = f32::from_bits(work[3]);
                 let ambient = [13, 14, 15].map(|i| f32::from_bits(work[i]));
                 let scale_glow = f32::from_bits(work[16]);
                 let unlit = [17, 18, 19].map(|i| f32::from_bits(work[i]));
@@ -640,6 +646,7 @@ pub extern "C" fn light_mesh(
                     flags,
                     origin,
                     axes,
+                    mirror,
                     ambient,
                     scale_glow,
                     unlit,
@@ -1086,6 +1093,7 @@ mod light_bench {
         for (k, v) in [100.0f32, 50.0, 30.0].iter().enumerate() {
             work[k] = v.to_bits();
         }
+        work[3] = 1.0f32.to_bits();
         for a in 0..3 {
             for c in 0..3 {
                 work[4 + a * 3 + c] = axes[a][c].to_bits();

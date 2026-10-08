@@ -213,8 +213,10 @@ corners; [GPU mesh](gpu-mesh.md#distance-lod)).
   whenever the view moves (on the CPU shadow too) and a draw path that takes
   camera-space positions, per mirror frame as well; this is the existing
   host-stage item, left open.
-* Mirror frames reuse the main frame's selection, pose and lighting (the
-  original runs DrawLodMesh per frame with that frame's coords).
+* Mirror frames reuse the main frame's selection and pose (the original
+  runs DrawLodMesh per frame with that frame's coords). Their lighting is
+  the frame's own since 2026-10-08 ([mesh
+  lighting](mesh-lighting.md#one-call-per-frame-child-frames-lighting-2026-10-08)).
 * The first-person weapon is not selected: its overlay frame has no LOD
   inputs in Play; at its depth the original's ratio keeps it at full detail
   (not measured).

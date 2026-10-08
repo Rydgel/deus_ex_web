@@ -1621,9 +1621,10 @@ function drawFrame(snap, time) {
   world.mirrors.render(renderer, scene, camera, { markers: world.markers, sky: world.sky, requested,
     frames, rect: frames ? (renderRect ?? null) : null, framePass, skyIn: frames ? drawSkyFrame : null,
     updateActors: npcPreview && !runtimeError ? (position, passCamera, node) => {
-      const decisions = node ? stampFrame?.passDecisions[passIndex++] : stampFrame?.mainDecisions;
+      const at = passIndex, decisions = node ? stampFrame?.passDecisions[passIndex++] : stampFrame?.mainDecisions;
       if (node && !decisions) throw new Error('The page drew a mirror pass the simulation side did not plan');
-      npcPreview.draw.pass(decisions ?? new Map(), position);
+      // A child frame's pass lights the actors it draws with that frame's Coords and Mirror.
+      npcPreview.draw.pass(decisions ?? new Map(), position, node ? stampFrame?.passFrames?.[at] ?? null : null);
     } : null });
   phase('mirrors');
   let calls = drawCalls(); framePhases.mirrorCalls += calls;
@@ -1645,7 +1646,7 @@ function drawFrame(snap, time) {
     // (stamped on the simulation side); without child frames, no actors.
     const skyActors = rootSky && npcPreview && stampFrame?.skyDecisions;
     const npcVisible=npcPreview?.root.visible;if(npcPreview&&!skyActors)npcPreview.root.visible=false;
-    if (skyActors) npcPreview.draw.pass(stampFrame.skyDecisions, fromView(skyCamera.position.toArray()));
+    if (skyActors) npcPreview.draw.pass(stampFrame.skyDecisions, fromView(skyCamera.position.toArray()), stampFrame.skyFrame ?? null);
     if (rootSky) framePass(rootSky);
     try { renderer.render(scene, skyCamera); } finally { if (rootSky) framePass(null); }
     world.markers.visible = markersVisible;

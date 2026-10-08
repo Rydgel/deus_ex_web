@@ -489,9 +489,123 @@ actor phase 4.05 → 3.89 ms (worker 16.00 → 15.90), Wan Chai Underworld
 (Pulse, Flicker and Strobe lights) 3.32 → 3.05 ms (worker 15.83 → 15.56).
 The type functions stay in JavaScript: no measurement names them.
 
+## One call per frame: child frames' lighting (2026-10-08)
+
+Evidence first, from the hash-pinned Render.dll (disassembled with Capstone,
+addresses as in the rest of this note):
+
+- **DrawFrame draws each frame's own sprites with that frame.** `DrawFrame`
+  (`0x10b1a2d0`) first recurses into each child (`0x10b1a336-0x10b1a348`,
+  `esi = [esi+0x10]`, next `[esi+0xc]`, each `call 0x10b0102d` back into
+  DrawFrame), then walks its own `Frame->Sprite` list (`[frame+0xa4]`, next
+  `[sprite+0x10]`, `0x10b1b3f6-0x10b1b44b`) and calls `DrawActorSprite`
+  (`0x10b25080`, through the thunk `0x10b011c2` at `0x10b1b446`) with
+  `(Frame, Sprite)` for every one. The only other caller (`0x10b26345`) draws
+  one actor with a stack sprite, not a frame's list.
+- **DrawActorSprite passes that Frame down.** It calls `DrawMesh`
+  (`0x10b0d1a0`, thunk `0x10b01221`) at `0x10b25624` with `Frame`
+  (`[ebp+8]`), `Coords = Frame+0x34` (`0x10b25615`), the sprite's LeafLights
+  (`[sprite+0xb8]`, `0x10b25604`) and Volumetrics (`[sprite+0xb4]`).
+- **DrawLodMesh calls SetupForActor per call, with the frame.** At
+  `0x10b107da` (`call [edx+8]` through the light manager's vtable) the first
+  argument is the Frame (`edi`, loaded from `[ebp+8]` at `0x10b1062b`; its
+  `[edi]` is the Viewport at `0x10b10751`), then LightSink, LeafLights
+  (`[ebp+0x20]`) and Volumetrics. SetupForActor keeps the frame in a global
+  (`0x10b38a7c`, stored at `0x10b08ca2`) and calls `ComputeFromActor(0, Frame)`
+  for each selected light (`0x10b097e0`): it reads **Frame->Coords**
+  (`Frame+0x34`: Origin, then the three axes, `0x10b0600b-0x10b06095`) for
+  the camera-space light position, the Viewport's clock for the fade, and
+  nothing else of the frame. DrawLodMesh multiplies the back-face dot by
+  **Frame->Mirror** (`+0x20`, `0x10b0ffbb`) before comparing it with zero.
+  So the actor's lighting is a function of the frame it is drawn in: its
+  Coords (camera-space light positions, vertex positions, normals, specular)
+  and its Mirror (which faces are kept).
+- **Each frame runs its own SetupDynamics and leaves its own LeafLights.**
+  OccludeFrame (`0x10b19fc0`) calls SetupDynamics (`0x10b22d90`, thunk
+  `0x10b0118b`) at `0x10b1a18e` and OccludeBsp at `0x10b1a19a` for the frame,
+  then gives each of its sprites `LeafLights[the actor's Region.iLeaf]`
+  (`[sprite+0xb8]`, `0x10b1a1ea-0x10b1a208`), clears the lists
+  (`0x10b1a213-0x10b1a265`) and recurses into the children
+  (`0x10b1a26a-0x10b1a27c`, newest first). The ViewPlanes SetupDynamics tests
+  the moving lights against are the frame's own.
+- **A frame's Mirror is Frame->Mirror = -parent's** (the Rust core's
+  `emit_frame` words, Play's `visibility().frames[].mirror`); a mirror child's
+  Coords have Origin and all three axes reflected, a negative determinant.
+
+So an actor drawn in the main frame and in a mirror (or only in a mirror,
+as the player is in a bar mirror: the camera sits in his head) has one
+SetupForActor and Light pass **per frame**, in DrawFrame's order (the
+children before their parent, siblings in OccludeFrame's visiting order, the
+main frame last). The per-actor light cache is shared by those calls, so the
+order matters for an actor in several frames.
+
+**Play** (before this change: each actor once, with the main frame's Coords
+and leaf lists, and the mirror passes reused those colours; a mirror's
+reflection of the player lit his vertices by the *main* camera's back-face
+test, from inside his head). Now:
+
+- `sim-session.mjs`: OccludeFrame's child frames carry their Coords, Mirror
+  and ViewPlanes words; `lightFramesOf` builds, in DrawFrame's order, each
+  frame's lighting frame (`mesh-lighting-view.mjs childFrame`: Origin and axes
+  from Coords, `mirror`, and the frame's own LeafLights from the gate's
+  survivors filtered by its ViewPlanes) with its Frame->Sprite's binding ids.
+- `actor-mesh-sim.mjs`: a binding lights itself once for each child frame
+  that draws it (`setupMesh(actor, fields, frame)`, `lightMesh(..., frame)`),
+  then for the main frame; the GPU path's light texels are reserved per
+  frame (`reserveLights(count, frameIndex)`). A decision for a child pass
+  (`framePasses`) carries the frame's lighting (GPU: the light records; CPU: the
+  corner colours).
+- `lightMesh` keeps a face when `faceDot(face, p0, Mirror) < 0` (JavaScript,
+  Rust `light_mesh_job` with the Mirror in header word 3, GLSL `uMirror`).
+- Page: before a child pass (`updateActors`), the actors it draws that have
+  lighting for it take it (`applyPass`); the GPU path runs the face, vertex and
+  corner passes for those slots only, in that frame's Coords and Mirror
+  (`gpu-mesh.mjs beginLightRun`/`lightRun`, the same shaders keyed by a
+  lighting stamp), and the main frame's pass gives them their own lighting
+  back the same way. CPU-path bindings swap their corner colours.
+
+**Verification.**
+
+- `validate-mesh-lighting`: the back-face test's compare against the
+  original's own `fmul [eax+0x20]; fcomp` (`0x10b0ffa3-0x10b0ffc9`) on 600
+  random and degenerate faces, half with Mirror -1 (0 differences); a version
+  that ignores Mirror fails.
+- `validate-mesh-lighting-play`: besides its 12 Training actors in two main
+  frames, the same actors lit in two child frames (a plane's reflected Coords
+  with Mirror -1; one whose ViewPlanes reject every moving light, so its
+  LeafLights are empty while the first has 16 leaf lists) against the original's
+  SetupForActor and Light with those Coords and leaf lists (48 passes, 0
+  differences, JavaScript and Wasm equal), and every face's kept/dropped test
+  of the child frame against the original's compare (2,645 faces, 1,336 kept,
+  the lit vertices equal). Mutations (Mirror ignored; the main frame's
+  LeafLights in the child) fail it.
+- `validate-gpu-mesh`: each compared actor is lit again through the page's
+  lighting run in a reflected frame (all three axes reflected, Mirror -1) and
+  restored; the corner bytes match the Wasm kernel (Training: 5 actors, 480
+  corners; Island: 898 actor captures, 279,420 corners; max byte error 0, 0
+  drawn disagreements and the restore exact in both).
+- The matched capture ([visual acceptance](visual-acceptance.md#the-players-reflection-in-a-mirror-2026-10-08-fixed-per-frame-lighting)):
+  JC's reflected face in the Paris Club's bar mirror, Play over the original
+  1.86 → 1.34 (the frame's own gap is 1.33), mean abs. diff. 11.7 → 3.4, edge
+  recall 0.64 → 0.99; the NPC and chairs in the same mirror from 1.19/1.03/0.69
+  and 1.0/1.05/0.67 to the frame's R/G/B gap.
+- `validate-mirrors-play` and `npm test` pass.
+
+**Cost** (Paris Club mirror view, worker mode, five interleaved A/B rounds of
+400 frames, medians, the Linux host's iGPU): the page's mirror phase 2.14 →
+2.32 ms (a lighting run before the child pass and one restoring the main
+frame's after it), the simulation side's actors 1.38 → 1.46 ms, the page's
+frame work 5.34 → 5.50 ms; the 16.6 ms vsync interval, the draw calls (111)
+and the mirror calls (60) are unchanged.
+
 ## Not reproduced / open
 
 * Fog and volumetric lights (`PF_RenderFog`); Training's leaves have none.
+* A child frame's LeafLights follow OccludeBsp's visited nodes only through
+  the same approximation as the main frame's (every node visited), and its
+  `LOD` selection, pose and Volumetrics are still the main frame's (the
+  original runs DrawLodMesh's detail choice per frame; see
+  [LOD](script-lodmesh-lod.md#play)).
 * The texture-palette light types (8, 9), steady with a note; no map light
   uses them. Flicker's key is the export index or Level.Actors slot, not the
   actor's address.

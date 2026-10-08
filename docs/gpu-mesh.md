@@ -241,7 +241,8 @@ operation per x87 operation, each through B(); [mesh lighting](mesh-lighting.md)
   and difference rounded, `scale = tableRsqrt(((n.x² + n.y²) + n.z²) + ε)`,
   `face = n·scale`; `ε = 0x3a83126f`;
 * drawn: not `PF_Invisible` and (`PF_TwoSided` or
-  `(face.x·p0.x + face.z·p0.z) + face.y·p0.y < 0`);
+  `((face.x·p0.x + face.z·p0.z) + face.y·p0.y)·Mirror < 0`), with the
+  frame's Mirror (`uMirror`, ±1: -1 in an odd-depth mirror frame);
 * vertex normal: f32 sums of the face normals in ascending face order,
   `scale = tableRsqrt(((N.x² + N.y²) + N.z²) + ε)`, plane `n = N·scale` and
   `W = (P.x·n.x + P.y·n.y) + P.z·n.z`;
@@ -260,6 +261,23 @@ operation per x87 operation, each through B(); [mesh lighting](mesh-lighting.md)
 by the float's bits exactly as the kernel does. Because they index by bits,
 their inputs are the values that must agree bit for bit, which binary32
 operations through B() give.
+
+**One lighting run per frame (2026-10-08).** Render.dll lights an actor in
+every frame that draws it, with that frame's Coords and Mirror ([mesh
+lighting](mesh-lighting.md#one-call-per-frame-child-frames-lighting-2026-10-08)).
+The three passes run once with the main frame's camera inside `run()`; a
+mirror or sky child pass that draws an actor with lighting of its own runs
+them again for those slots only: `beginLightRun()` starts a lighting stamp
+(`0x80000000 + n`, written by `setLighting` in place of the next frame's
+number), `lightRun({origin, axes, mirror})` uploads the dirty slot rows and
+the lights (texel 0 on), runs the face, vertex and corner passes with that
+stamp (`uLightFrame`; `uFrame`, the pose stamp, is set to a value no slot
+has, so no environment normals are redone) and ends the lights. The draw
+materials read the same corner texels, so the pass draws the actors with the
+frame's colours; the main frame's pass queues each such actor's own lighting
+and runs it again. The pose, morph and corner-wedge passes are not rerun.
+`validate-gpu-mesh` lights every compared actor in a reflected frame
+(Mirror -1) through this path against the Wasm kernel and restores it.
 
 **Corner rules** (the kernel's final loop), per corner `(face i, vertex v)`
 with `flags = faceFlags | actorFlags`: `PF_Modulated` gives colour 1; a
