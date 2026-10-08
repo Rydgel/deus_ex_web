@@ -16,6 +16,8 @@
  * unescaped. Every other property type is an explicit boundary.
  */
 
+import { msvcrtSprintf } from './script-text-format.mjs';
+
 export class UnsupportedConfigTextError extends Error {
   constructor(message) { super(message); this.name = 'UnsupportedConfigTextError'; }
 }
@@ -134,37 +136,13 @@ export function importText(kind, text, { enumNames = null } = {}) {
   }
 }
 
-/** MSVC "%f" of a double: 17 significant digits ($I10_OUTPUT), then the digit
- * string rounded half up to six decimals (_fptostr). */
+/** UFloatProperty::ExportTextItem 0x10166890: appSprintf("%f", (double)value);
+ * the formatter is the one measured against the game's MSVCRT.dll
+ * (script-text-format.mjs, docs/script-value-format.md), which prints -0.0
+ * unsigned. A non-finite float is an explicit boundary. */
 function formatFloat(value) {
   if (!Number.isFinite(value)) unsupported('Config ExportText of a non-finite float is not recovered');
-  const negative = value < 0 || Object.is(value, -0);
-  const magnitude = Math.abs(value);
-  if (magnitude === 0) return `${negative ? '-' : ''}0.000000`;
-  const [mantissa, exponentText] = magnitude.toExponential(16).split('e');
-  const digits = mantissa.replace('.', '').split('').map(Number);
-  const exponent = Number(exponentText);
-  // Keep digits through the sixth decimal: exponent + 1 integer digits + 6.
-  const keep = exponent + 1 + 6;
-  let kept;
-  // _fptostr rounds only for a non-negative digit count; a count of zero
-  // rounds on the first significant digit.
-  if (keep < 0) kept = [];
-  else if (keep === 0) kept = digits[0] >= 5 ? [1] : [];
-  else {
-    kept = digits.slice(0, keep);
-    while (kept.length < keep) kept.push(0);
-    if (keep < digits.length && digits[keep] >= 5) {
-      let i = kept.length - 1;
-      for (; i >= 0; i--) { if (kept[i] === 9) kept[i] = 0; else { kept[i]++; break; } }
-      if (i < 0) kept.unshift(1);
-    }
-  }
-  const intDigits = kept.length - 6;
-  const whole = intDigits > 0 ? kept.slice(0, intDigits).join('') : '0';
-  const fraction = intDigits >= 0 ? kept.slice(intDigits).join('')
-    : `${'0'.repeat(-intDigits)}${kept.join('')}`.slice(0, 6);
-  return `${negative ? '-' : ''}${whole}.${fraction.padEnd(6, '0')}`;
+  return msvcrtSprintf('%f', value);
 }
 
 export function exportText(kind, value, { enumNames = null } = {}) {
