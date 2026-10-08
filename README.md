@@ -161,14 +161,15 @@ keeps the dated record.
   sync ([lip sync](docs/lip-sync.md)).
 
 **Still open in Stage 4:** the scene's three.js projection, which does not
-read the 3D frame OccludeBsp and the corona pass use (built at 24 bits on the
-render rectangle, [render-pass
+read the 3D frame OccludeBsp and the corona pass use ([render-pass
 precision](docs/render-pass-precision.md#the-3d-frames-projection-2026-10-08));
-the LOD morph's world-space rounding and per-mirror
-selection ([LOD](docs/script-lodmesh-lod.md#play)); the security computers'
-camera views (the ViewportWindow family runs, its world pass is not drawn,
-[computer terminals](docs/script-window-computer-terminals.md)); per-frame fog
-maps in mirror and sky frames; the darkest-pixel rounding and
+the LOD morph's world-space rounding and per-mirror drawing
+([LOD](docs/script-lodmesh-lod.md#play)); inside mirror and sky child frames,
+actor meshes in a sky seen through a mirror and the frames' own iterator
+items ([BSP occlusion](docs/bsp-occlusion.md)); the security cameras' views
+without mirrors, decals, coronas, their own lighting and fog
+([viewport window](docs/script-window-viewport.md)); the Sound and Display
+options screens and the settings' effects; the darkest-pixel rounding and
 live scenes left by [visual acceptance](docs/visual-acceptance.md) (26 maps
 compared with the original's own frames at matched cameras and level time).
 
