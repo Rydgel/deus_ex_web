@@ -94,6 +94,23 @@ async function play() {
     for (const map of maps) {
       const page = await browser.newPage({viewport: {width: WIDTH, height: HEIGHT}, deviceScaleFactor: 1});
       const errors = []; page.on('pageerror', error => errors.push(error.message));
+      // Frozen frames step at a fixed 1/60 s (the profile script's --fixed-dt
+      // patch of the page's frame time), so the hold lands on the same level
+      // time in every run. The player's own animation is not held by the
+      // level's TimeDilation but follows the page's frames: two captures differ
+      // by its phase whatever the mesh path (docs/visual-acceptance.md "CPU and
+      // GPU mesh paths"; validate-mesh-path-frames.mjs compares the paths
+      // frame for frame). --real-time keeps the page's clock.
+      if (freeze && !process.argv.includes('--real-time')) await page.route(/\/src\/viewer\/main\.mjs(?:\?|$)/, async route => {
+        const response = await route.fetch();
+        let body = await response.text();
+        for (const original of ['const dt = Math.max(0, (time - (simLastPost ?? time - 1000 / 60)) / 1000);',
+          'const dt = Math.max(0, (time - lastTime) / 1000);']) {
+          if (!body.includes(original)) throw new Error(`the fixed-step patch no longer matches main.mjs: ${original}`);
+          body = body.replace(original, 'const dt = 1 / 60;');
+        }
+        await route.fulfill({response, body});
+      });
       // Frozen (the default): the page holds its frame loop (?hold=1) until
       // LevelInfo.bPlayersOnly is set, as the original's console sets it
       // before `open`; --live lets the level run.
@@ -129,6 +146,12 @@ async function play() {
           let state = await probe({timeDilation: 20});
           while (state.timeSeconds < target - 1.5) { await frame(); state = await probe({}); }
           state = await probe({timeDilation: 1});
+          while (state.timeSeconds < target - 0.1) { await frame(); state = await probe({}); }
+          // The last tenth of a second at a twentieth of the speed: a frame
+          // then advances the level by under a millisecond, so the hold lands
+          // within that of the original's TimeSeconds whatever the frame time
+          // (full-speed frames overshot by up to a frame, 17 ms).
+          state = await probe({timeDilation: 0.05});
           while (state.timeSeconds < target) { await frame(); state = await probe({}); }
           state = await probe({timeDilation: dilation});
           return state.timeSeconds;
@@ -150,7 +173,7 @@ async function play() {
         const probe = await page.evaluate(() => window.deusExViewer.viewProbe({}));
         await page.screenshot({path: path.join(dir, `${view.name}-play.png`),
           clip: {x: 0, y: 0, width: WIDTH, height: HEIGHT}});
-        shots.push({view: view.name, camera: state, player: {location: probe.location, region: probe.region, state: probe.state, physics: probe.physics}});
+        shots.push({view: view.name, camera: state, player: {location: probe.location, region: probe.region, state: probe.state, physics: probe.physics, anim: probe.anim}});
       }
       writeFileSync(path.join(dir, 'play.json'), JSON.stringify({map, freeze, size: [box.width, box.height], ghost, timeTarget: target, timeHeld: held, shots, errors}, null, 1));
       console.log(map, `${shots.length} views`, ghost.state, held !== null ? `time ${held.toFixed(3)} (original ${target.toFixed(3)})` : '', errors.length ? `errors: ${errors.slice(0, 2).join(' | ')}` : '');

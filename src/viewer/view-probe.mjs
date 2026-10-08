@@ -55,5 +55,7 @@ export function viewProbe(game, { playersOnly = false, timeDilation = null, ghos
     region: { iLeaf: current['engine.actor.pointregion.ileaf'], zoneNumber: current['engine.actor.pointregion.zonenumber'] }, viewRotation: [...read('ViewRotation')], eyeHeight: read('EyeHeight'),
     baseEyeHeight: read('BaseEyeHeight'), physics: read('Physics'), bCollideWorld: read('bCollideWorld'),
     state: scriptGetStateName(node), playersOnly: runtime.readNamed(info, 'bPlayersOnly'),
-    timeSeconds: runtime.readNamed(info, 'TimeSeconds'), timeDilation: runtime.readNamed(info, 'TimeDilation'), output };
+    timeSeconds: runtime.readNamed(info, 'TimeSeconds'), timeDilation: runtime.readNamed(info, 'TimeDilation'), output,
+    // The player's own animation (its mesh's pose follows it): a capture's reflection can differ by it.
+    anim: { sequence: read('AnimSequence'), frame: read('AnimFrame'), rate: read('AnimRate'), blendFrames: [...read('BlendAnimFrame')] } };
 }

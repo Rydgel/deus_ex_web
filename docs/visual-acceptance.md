@@ -339,6 +339,58 @@ leaves the player's Region at the last move's leaf, so a reflection captured
 that way is lit from the start's leaf (the original's mesh was black). Use
 `--region` (above).
 
+### CPU and GPU mesh paths: JC's reflection (2026-10-08, a capture artifact, fixed in the tool)
+
+The matched captures of the bar mirror showed JC's reflected face higher (and
+larger in a 440×440 crop) with `?gpuMesh=0` than on the default GPU path. The
+two paths do not differ: the player's animation stood at another phase in
+each capture.
+
+- **The poses are bit-equal.** `validate-gpu-mesh` compares the GPU pose and
+  final pose with the CPU shadow's exact output (the CPU path's positions) to
+  0 ulp (Island: 298,758 components of 908 actor captures; Training too). At the
+  captured state in the Club (`viewProbe` placement at (78, −1008, 27), 45
+  frames, `?sim=inline`) JC's 339 vertices on the GPU equal the CPU shadow's:
+  0 mismatches.
+- **One simulation state gives one frame.** Without the level-time hold, the
+  views f40 (88, −1008, 27), f70 and far (500 units) taken on master 0df0107
+  and on this branch, GPU against CPU: mean abs. diff. 0.00–0.02, edge recall
+  and precision 1.0.
+- **Held captures differ run to run, on each path.** The ghost loops `Tread`
+  (AnimRate 1.25). Three runs per path at the same view (g40, (78, −1008, 27),
+  pitch 61736) read AnimFrame 0.8004, 0.8358, 0.8212 (GPU) and 0.8149,
+  0.8250, 0.8003 (CPU) at the screenshot; the frames differ by that phase:
+  mean abs. error (ImageMagick, 16-bit) 34–52 between the three GPU runs,
+  28–47 between the three CPU runs and 14–58 between the paths. The hold
+  itself overshot the original's TimeSeconds (46.8165) by 0 to 17 ms, a
+  frame, in each of them.
+- **Cause: the animation follows the page's frames, not the level clock.**
+  JC's loop is not held by the level's TimeDilation (0.001): at a fixed
+  1/60 s step it advances 0.3375 of the loop per 45 frames, so the phase at a
+  screenshot counts the frames the page ran since the hold (a worker-mode run
+  also lags the page by a variable number of frames; the screenshot's
+  duration adds frames before the next view). Runs of one path under another
+  load read 0.3129, 0.3563 and 0.3375 for the same first view. No code of
+  either mesh path is involved.
+- **Fixes (the tool).** The last 0.1 s of the hold steps at TimeDilation 0.05
+  (under a millisecond of overshoot), frozen captures step at a fixed 1/60 s
+  (`--real-time` keeps the page's clock; the hold is then 46.81667 s in every
+  run), and `play.json` records the player's animation (`anim`). A
+  worker-mode capture still shows the animation of the frames that happened
+  to pass: it is no pixel comparison between paths.
+- **A pixel comparison between the paths: `validate-mesh-path-frames.mjs`.**
+  The inline simulation under a paused Playwright clock, 90 frames of 16 ms,
+  the capture's ghost, Location, ViewRotation and Region: the default GPU
+  path twice (the scenario reproduces its own pixels) and `?gpuMesh=0`, the
+  drawing buffers compared byte for byte. In 10_Paris_Club the bar mirror
+  with the player's reflection (the view of this section), and the restroom
+  mirror at URender's MLOD 3 and 10, where a child frame draws another LOD
+  state than the main frame's (`lodProbe` counts it, 1 draw each): the
+  1280x720 frames are identical on the two paths (0 of 3,686,400 bytes
+  differ), the player's animation at the same frame (0.7078). Making the CPU
+  path ignore a child frame's own LOD state (a mutation of `applyPass`)
+  differs in 1,359 bytes, up to 80, and fails it.
+
 ## Open
 
 - The uniform 1.13–1.41× raw brightness gap under Wine; a CrossOver
