@@ -364,14 +364,18 @@ each capture.
   28–47 between the three CPU runs and 14–58 between the paths. The hold
   itself overshot the original's TimeSeconds (46.8165) by 0 to 17 ms, a
   frame, in each of them.
-- **Cause: the animation follows the page's frames, not the level clock.**
-  JC's loop is not held by the level's TimeDilation (0.001): at a fixed
-  1/60 s step it advances 0.3375 of the loop per 45 frames, so the phase at a
-  screenshot counts the frames the page ran since the hold (a worker-mode run
-  also lags the page by a variable number of frames; the screenshot's
-  duration adds frames before the next view). Runs of one path under another
-  load read 0.3129, 0.3563 and 0.3375 for the same first view. No code of
-  either mesh path is involved.
+- **Cause: a held level still ticks animations once per frame.** The actor
+  delta of `ULevel::Tick` is TimeDilation x frame time clamped to at least
+  0.005 s, so at the hold's TimeDilation 0.001 every tick advances the ghost's
+  loop by 0.005 s x AnimRate (1.25) = 0.00625 of the loop, in the original and
+  in Play alike (`validate-anim-dilation-play`, [level
+  tick](script-level-tick.md#animation-under-timedilation-in-play-2026-10-08)).
+  The phase at a screenshot therefore counts the ticks since the hold (a fixed
+  1/60 s step gave 0.3375 = 54 ticks between two views 45 frames apart, the
+  rest being frames during the probe and the screenshot; a worker-mode run
+  also lags the page by a variable number of frames). Runs of one path under
+  another load read 0.3129, 0.3563 and 0.3375 for the same first view. No code
+  of either mesh path is involved, and none of the animation's.
 - **Fixes (the tool).** The last 0.1 s of the hold steps at TimeDilation 0.05
   (under a millisecond of overshoot), frozen captures step at a fixed 1/60 s
   (`--real-time` keeps the page's clock; the hold is then 46.81667 s in every
