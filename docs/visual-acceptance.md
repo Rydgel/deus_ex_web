@@ -395,6 +395,72 @@ each capture.
   path ignore a child frame's own LOD state (a mutation of `applyPass`)
   differs in 1,359 bytes, up to 80, and fails it.
 
+## Live scenes (WIP handoff, 2026-10-08: design only, nothing run yet)
+
+Status: the `live-acceptance` branch holds this note and nothing else. No
+capture, no Wine run, no code change; the original game was never started.
+The worktree `.work/live` is set up (symlinks for node_modules, game data,
+Reference, `.cache/*` except `wasm`, `ad/build/dump-actor-win.exe`,
+`ad/tools/dxinput.exe`; `npm run build:wasm` done).
+
+Method decided from the sources read so far (to be confirmed by the pilots):
+
+- **Same start.** The frozen start of the sections above (bPlayersOnly from the
+  first tick, `ghost`, `ShowHud False`, same console inputs), then release with
+  `set LevelInfo bPlayersOnly False` on both sides. Frozen NPCs never ran
+  StartUp, so InitializePawn and the first orders run after the release on both.
+- **Actor-time clock instead of wall time.** `AActor::Tick` decrements LifeSpan
+  by the actor delta. Set LifeSpan (e.g. 60) on one non-ticking-while-frozen
+  actor before the release (check that Play's Actor.Tick does the same, and the
+  point at which it runs relative to the players-only return): its decrement
+  counts exactly the actor time elapsed since the release (tau), whatever each
+  side's frame times. Samples on both sides are keyed by tau, not by
+  TimeSeconds (which also runs while frozen). Fallback: TimeSeconds minus its
+  value at the release.
+- **Two modes.** A, stepped: TimeDilation tiny (0.0001) so every tick's actor
+  delta clamps to exactly 0.005 (docs/script-level-tick.md; ULevel::Tick
+  103a54c8..103a54df), the same step on both sides, so ticks can be compared one
+  for one (TimeSeconds then barely moves, so lights that follow it are not
+  exercised). B, free-running at TimeDilation 1: Play at its fixed 1/60 s step
+  (visual-acceptance.mjs's `dt = 1/60` patch), the original at its own frame
+  time; compare state as a function of tau within tolerances (one tick of
+  motion, rate x dt of animation), and TimeSeconds for the light phases.
+- **Original-side reads.** Extend `tools/dump-actor-win.c` with a watch mode:
+  resolve the named actors once through the global object array, then loop,
+  reading each actor's struct in one ReadProcessMemory (Location, Rotation,
+  Velocity, Physics, AnimSequence/Frame/Rate, LifeSpan, state name) plus
+  LevelInfo.TimeSeconds, output JSONL with QueryPerformanceCounter stamps.
+  Consistent snapshots: ULevel.InTick (+0x108) 0 before and after the reads and
+  an unchanged clock actor (seqlock), else retry. Actor field offsets from
+  `sdk-layouts.mjs` / `slotOf(field.loadRecord, 0x48)`.
+- **Play-side reads.** A per-tick recorder on the simulation side (a
+  `viewProbe`-style call registering actors/fields, appended at the end of each
+  processLevelTick), so worker-mode frame merging cannot skip a tick; the page
+  drives fixed 1/60 steps. A probe to set the next dt would let Play land on a
+  given tau exactly for frame captures.
+- **Frames at synced times.** Freeze the original at a requested tau (console
+  latency overshoots by some ticks; the frozen clock actor then gives the exact
+  tau reached), run Play to that tau (mode A: the same tick count), freeze,
+  and compare frames with the existing metrics, reporting actors whose
+  measured state differs beyond tolerance so their blocks can be excluded.
+- **Randomness (open).** The original seeds MSVCRT rand with time(NULL) at
+  startup and every consumer shares the stream (docs/rng.md), Play seeds its
+  own from the current time. Random branches (FRand in NPC scripts, e.g.
+  docs/script-npc-startup-animation.md) can diverge for that reason alone.
+  To measure: whether the original's rand state moves while frozen (render
+  consumers), and the FRand call sites on the pilot NPCs' paths; the CRT
+  per-thread state could be read from the process to seed Play's stream.
+- **Known hazards.** Walking in the original after `set Location` crashes
+  ("moved without proper hashing"); under ghost use `--region`. Close the game
+  by the PID `original-game.mjs launch` prints.
+
+Next steps: (1) watch mode in dump-actor-win.c and a sanity sample of Island
+NPCs (names, orders, positions) on the original; (2) Play-side per-tick
+recorder; (3) `scripts/live-acceptance.mjs` (`play`, `original`, `compare`)
+with the LifeSpan clock; (4) pilots on 01_NYC_UNATCOIsland (patrols) and
+10_Paris_Club (dancers); (5) rewrite this section as "Live scenes" with the
+measured divergences and their evidence.
+
 ## Open
 
 - The uniform 1.13–1.41× raw brightness gap under Wine; a CrossOver
