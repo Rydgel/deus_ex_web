@@ -64,9 +64,14 @@ async function load() {
 // the call in flight.
 let decalHost = null;
 export const setDecalHost = host => { decalHost = host; };
+// OccludeFrame's SetupDynamics for each child frame (occlude.rs
+// occ_frame_dynamics, bsp-occlusion.mjs): the host's hook for the run in flight.
+let frameHook = null;
+export const setFrameHook = hook => { frameHook = hook; };
 const decalImports = {
   decal_rand: () => decalHost.rand(),
   decal_texture: actor => decalHost.texture(actor),
+  occ_frame_dynamics: (index, kind, parent) => { frameHook?.(index, kind, parent); },
 };
 
 /** Core FGlobalMath's sine table into an instance's SINE static. */
@@ -322,6 +327,8 @@ export function createScriptVmKernel(instance, memory) {
       masterFrame: () => x.occ_master_frame(),
       // CreateChildFrame's inputs and OccludeFrame's recursion switch (occlude.rs CHILD_IN).
       childInPtr: typeof x.occ_child_in_ptr !== 'function' ? null : () => x.occ_child_in_ptr() >>> 0,
+      // The host's SetupDynamics for each child frame (occ_frame_dynamics).
+      setFrameHook,
       // FDynamicSprite::Setup (setup.rs) over packed candidates; null in a
       // core that predates it.
       setup: typeof x.occ_setup !== 'function' ? null

@@ -313,6 +313,39 @@ unchanged.
   frame's Coords, Mirror and LeafLights, in DrawFrame's order ([mesh
   lighting](mesh-lighting.md#one-call-per-frame-child-frames-lighting-2026-10-08);
   frames carry `mirror` and `planes` beside `coords`).
+- **simVerify.** It compares the actors three.js draws. A Frame->Sprite
+  actor whose groups all lie outside a pass's view is stamped, not drawn.
+
+**Cost.** See "Child frames: cost" below.
+
+**Pixels against `?childFrames=off`** (worker mode, 1280×720, 30 frames):
+
+- The Island start and the Paris Club spawn are identical.
+- Facing Training's entrance floor mirror, 5,096 pixels differ. The floor
+  reflects the sky through the ceiling opening (a sky frame inside the
+  mirror frame), and there are single pixels along the mirror's far edge.
+- Facing 02_NYC_Smug's mover mirror, 9,757 pixels differ: the window in
+  the reflection shows the sky.
+
+**Other checks.** `validate-sim-split` is deterministic on Training and
+Island (240 frames walking, same pixels). `validate-mirrors-play` passes,
+with the player in the Hotel mirror, and so does its `?simVerify=1` run
+(one of two runs lost its browser before finishing). `validate-decals-play`
+and `validate-gpu-mesh` pass too.
+
+**Open.**
+
+- Fog maps in mirror and sky passes are the main frame's: SetupForSurf per
+  child frame is not run, so a fog surface seen only in a child pass has no
+  fog map.
+- A render iterator's items are built again in every child frame
+  ([below](#each-child-frames-own-setupdynamics)); a laser's mesh item that
+  differs between frames is drawn at the root frame's pose in every pass,
+  and the HUD's camera frames (ViewportWindow DrawWorld) do not run the
+  iterators again.
+- The child tangent comes from the x87-tan.mjs model, which is checked
+  against hardware FPTAN, not from a measurement of these arguments.
+
 ### A sky frame inside a mirror frame
 
 (2026-10-08.) The page drew a sky frame made inside a mirror frame with the
@@ -385,35 +418,122 @@ none outside, against 3 by the moving scene. The plant is dark (the sky zone
 is nearly unlit; the threshold is 3 levels). It passes with `?sim=inline` and
 `?simVerify=1` too, and fails on the previous code at the stamp.
 
-- **simVerify.** It compares the actors three.js draws. A Frame->Sprite
-  actor whose groups all lie outside a pass's view is stamped, not drawn.
+### Each child frame's own SetupDynamics
 
-**Cost.** See "Child frames: cost" below.
+(2026-10-08.) Play ran the render iterators once a frame, after the tick,
+and every child frame took the root frame's items. The original builds them
+again for each frame.
 
-**Pixels against `?childFrames=off`** (worker mode, 1280×720, 30 frames):
+**Original.** `URender::OccludeFrame` (`0x10b19fc0`) calls SetupDynamics
+(thunk `0x10b0118b`, body `0x10b22d90`) for the frame at `0x10b1a18e`, then
+OccludeBsp at `0x10b1a19a`, then OccludeFrame again for each child (thunk
+`0x10b01014`, `0x10b1a274`). SetupDynamics, for an actor with a
+RenderIteratorClass (`+0x310`) and a RenderInterface (`+0x314`, built when
+missing, `0x10b22f42..0x10b22fd2`), runs the protocol every time
+(`0x10b22fee..0x10b2307c`): `Init(Viewport->Actor)` (vslot `0x54`;
+Viewport `+0x30`, the argument read from the frame's Viewport, not from the
+frame), `First()` (`0x58`), then `IsDone()` (`0x60`), `CurrentItem()`
+(`0x64`), the FDynamicSprite constructor (thunk `0x10b0117c`, at
+`0x10b2306d`) and `Next()` (`0x5c`).
 
-- The Island start and the Paris Club spawn are identical.
-- Facing Training's entrance floor mirror, 5,096 pixels differ. The floor
-  reflects the sky through the ceiling opening (a sky frame inside the
-  mirror frame), and there are single pixels along the mirror's far edge.
-- Facing 02_NYC_Smug's mover mirror, 9,757 pixels differ: the window in
-  the reflection shows the sky.
+So the camera does not differ between frames: the argument is the viewport's
+actor in every frame, and neither `LaserIterator.Init` nor
+`ParticleIterator.Init` (DeusEx.u) reads it. What a frame's run does change:
 
-**Other checks.** `validate-sim-split` is deterministic on Training and
-Island (240 frames walking, same pixels). `validate-mirrors-play` passes,
-with the player in the Hotel mirror, and so does its `?simVerify=1` run
-(one of two runs lost its browser before finishing). `validate-decals-play`
-and `validate-gpu-mesh` pass too.
+- Init resets the iterator (laser: MaxItems, nextItem, prevLoc, prevRand,
+  savedLoc, savedRot, proxy, bRandomBeam; particle: proxy, MaxItems);
+- CurrentItem draws the shared appFrand stream: the laser's savedLoc rule
+  (one draw per item until an item is saved) and its random beam
+  (docs/lasers.md), and it moves the proxy with FarMoveActor, whose position
+  the frame's FDynamicSprite snapshots.
 
-**Open.**
+A laser's last item, the one saved at a random place along the beam, is
+therefore elsewhere in each frame; a particle's items are the same in every
+frame (docs/particles.md), and the proxy is left where the frame's last
+CurrentItem put it.
 
-- Fog maps in mirror and sky passes are the main frame's: SetupForSurf per
-  child frame is not run, so a fog surface seen only in a child pass has no
-  fog map.
-- Iterator items are the root frame's in every child frame. The original
-  runs the iterator again for each frame.
-- The child tangent comes from the x87-tan.mjs model, which is checked
-  against hardware FPTAN, not from a measurement of these arguments.
+**Port.**
+- `occlude.rs`: with CHILD_IN option bit 2, the host import
+  `occ_frame_dynamics(index, kind, parent)` runs before each child's Setup,
+  in the recursion's order (newest first, depth first: OccludeFrame's), and
+  may replace that child's candidates and its sprite list
+  (`bsp-occlusion.mjs` `run`'s `children.frameDynamics`,
+  `useFrameCandidates`). The Setup, the dynamics and OccludeBsp are
+  unchanged.
+- `sprite-scan.mjs` `rescan`: the iterating actors the root scan found, in
+  Level.Actors order, their protocol run again (Init inside the render pass
+  at 24 bits, CurrentItem on the shared stream).
+- `sim-session.mjs` `childDynamics`, for a frame with iterators in the
+  level: its candidates are the root's with the iterators' new items (a mesh
+  item takes its slot's binding, packed from its own snapshot); the frame's
+  Frame->Sprite is read against them. When the new items stand in the
+  places of the root's (same orders, bindings and kinds), the frame's
+  candidates are the root's packed words with those entries packed again
+  (`dynamics-candidates.mjs` `patchDynamics`), else the frame is packed from
+  scratch as the root is; `?iteratorFrames=verify` packs it both ways and
+  compares every word, `=full` always packs from scratch. A sprite item
+  equal to the root's (same order, texture, place and scale) is the root's
+  record; a different one is a record of its own (`childOnly`), drawn only in
+  the frames that hold it (`dynamics-candidates.mjs` `childFrameSprites`).
+- `?iteratorFrames=off` (Node `ITERATOR_FRAMES=off`) keeps the root's items
+  in every child frame.
+
+**Verification.**
+- `validate-child-frames.mjs` gives half the cases' child frames their own
+  candidate lists, in the Rust run (`frameDynamics`) and, as `frameSprites`
+  by visit index, in the oracle (the unchanged sprite constructor and
+  OccludeBsp, whose SetupDynamics stand-in builds each frame's sprites from
+  its own list): the lists move, drop, resize and add actors, and some are
+  emptied. Every child frame matches bit for bit, over all the maps of the
+  table above, 66 of the frames with a list of their own; using the root's
+  list in those frames instead fails, so the check can tell them apart.
+- `test/child-frame-sprites.test.mjs`: the records a frame shares with the
+  root's and the ones it makes.
+- `validate-iterator-frames-play.mjs` (worker mode, `iteratorProbe`): on
+  09_NYC_Dockyard (42 iterating actors, BeamTrigger beams) in a mirror frame
+  and in a sky frame, and on 01_NYC_UNATCOIsland by the doorway lasers in a
+  mirror frame, every child frame visited ran the iterators again, once, and
+  drew from the stream about as much as the root's scan; no frame's item
+  list changes length; a laser's last item differs from the root's in some
+  frame (about five per frame on Dockyard and four on Island); on
+  02_NYC_Street's sky frame beside smoke every particle record of a child
+  frame is the root's; `?iteratorFrames=off` runs none again.
+
+**Cost** (2026-10-08, the Linux host with other agents running, load average
+about 3.4; worker mode, `profile-play-browser.mjs --no-profile --angle gl`,
+1280×720, 400 frames, three rounds with the mode order rotating, medians):
+
+- *Host timings in the worker* (warm, 200 to 300 frames, per frame; the
+  root scan is existing work):
+
+  | View | Iterator items | Root scan | Rerun | Candidates, patched | Candidates, from scratch |
+  | --- | ---: | ---: | ---: | ---: | ---: |
+  | Island, doorway lasers in the mirror | 55 | 0.8 to 1.0 ms | 0.6 to 0.7 ms | 0.05 to 0.16 ms | 0.76 ms |
+  | Dockyard, beams in the mirror | 78 | 1.35 ms | 1.10 ms | 0.14 ms | |
+  | Dockyard, sky frame | 78 | 1.2 ms | 1.0 ms | 0.19 ms | |
+  | Island's start (sky frame, lasers frozen) | 0 | 0.36 ms | 0.17 ms | 0.01 ms | |
+
+  A child frame's rerun is as costly as the root's scan of the iterators
+  (its Init scripts, CurrentItem and the proxy's moves are the work the
+  original does again); the patch brings its candidates from the cost of the
+  root's pack down to a copy.
+- *Against the previous commit* (a worktree at `0df0107`, alternating):
+
+  | View | Worker frame | Worker actors phase |
+  | --- | --- | --- |
+  | Training, entrance floor mirror with a sky frame in it (no iterators) | 6.46 against 6.38 ms | 1.49 against 1.47 ms |
+  | Island, doorway lasers in the mirror | 15.64 against 13.90 ms | 3.92 against 2.42 ms |
+  | Island's start | 15.17 against 15.60 ms | 4.16 against 3.83 ms |
+
+  The first and the last are within the runs' spread (a few tenths of a
+  millisecond); the second is the reruns, 1.5 ms in the A/B and 0.65 to 0.9
+  in the host timings above (the A/B's other agents add noise to both). The
+  same view with `?iteratorFrames=off`, `full` and the default: the actors
+  phase 2.70, 3.77 and 4.00 ms (worker frame 14.95, 15.43 and 15.63 ms),
+  where the patch's 0.6 ms saving is below the spread.
+- A level without iterators, or a view without child frames, runs no
+  rerun: the hook is called per child frame.
+
 
 ## Reference and verification
 
@@ -748,8 +868,10 @@ then wire into Play.
 
 Ported and in Play on 2026-10-07 ("Child frames" above). Each child frame's
 own fog maps followed the same day ([volumetric fog](volumetric-fog.md),
-"Play"). What remains: each frame's own iterator items, and a measured FPTAN for the 24-bit
-argument.
+"Play"); the sky frames inside mirror frames (camera, actors) and each
+frame's own iterator items on 2026-10-08. What remains: a measured FPTAN for
+the 24-bit argument, the per-pass pose of an iterator's mesh item, and the
+iterators' rerun in the HUD's camera frames.
 
 ### 2. The moving brush tracker (done)
 

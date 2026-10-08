@@ -12,13 +12,13 @@ import { createPlayCamera, applyPlayFrame, pointCamera, projectionOf, setFramePr
 import { createDrawnSet } from './drawn-set.mjs';
 import { createMeshFramePack } from './mesh-frame-pack.mjs';
 import { createDecalDraw } from '../runtime/decal-draw.mjs';
-import { OCCLUSION_POINTS, OCCLUSION_SPRITE_KEYS } from '../runtime/bsp-occlusion.mjs';
-import { packDynamics, actorOcclusionMode } from './dynamics-candidates.mjs';
+import { OCCLUSION_POINTS, OCCLUSION_SPRITE_KEYS, SETUP } from '../runtime/bsp-occlusion.mjs';
+import { packDynamics, patchDynamics, candidateWords, actorOcclusionMode, childFrameSprites, iteratorSpritesByOrder } from './dynamics-candidates.mjs';
 import { createLightNoise, lightNoiseSnapshot } from '../runtime/static-lighting.mjs';
 import { lightGlobals } from '../runtime/light-globals.mjs';
 import { filterMovingLight, surfaceLightClass, worldLightRadius } from '../runtime/dynamic-lighting.mjs';
 import { dynamicActorRoute } from '../runtime/render-visibility.mjs';
-import { TRACKED_MOVER_MIRRORS, childFramesMode } from './mirror-passes.mjs';
+import { TRACKED_MOVER_MIRRORS, childFramesMode, iteratorFramesMode } from './mirror-passes.mjs';
 
 /** A thrown error as plain data: structured clone drops an Error's own
  * properties (`travel`, `partial`). */
@@ -76,7 +76,7 @@ export function createSimSession(game, { assets = null, events = [], exportName 
   const actorOcclusion = actorOcclusionMode() !== 'frustum';
   // OccludeFrame's child frames (mirror and sky) with their own OccludeBsp;
   // ?childFrames=off keeps the frustum-tested passes.
-  const childFrames = childFramesMode() !== 'off';
+  const childFrames = childFramesMode() !== 'off', iteratorMode = iteratorFramesMode(), iteratorFrames = iteratorMode !== 'off';
   // DrawFrame's decal block after the main frame's OccludeBsp
   // (decal-draw.mjs, docs/decals.md), with the kernel's frame words.
   let decalDraw = null, occlusionFramePtr = null;
@@ -85,7 +85,7 @@ export function createSimSession(game, { assets = null, events = [], exportName 
   // The live records of this frame's moving-light scan, for the simulation
   // side's own consumers (the mesh lighting frame); the snapshot carries
   // handles instead of actors.
-  const live = { lights: null, meshItems: [], sprites: [], iterators: null };
+  const live = { lights: null, meshItems: [], sprites: [], iterators: null, iteratorIndex: null };
   // URender::PreRender's light noise (0x10b13080, called at 0x10b146ae on
   // every drawn frame with Level.TimeSeconds, docs/dynamic-lighting.md
   // "Time-varying moving lights"): its appFrand draws come from the game's
@@ -179,8 +179,13 @@ export function createSimSession(game, { assets = null, events = [], exportName 
       ...base, validate: () => true, initNativeProperties: () => {},
       nativeConstructor: object => constructRenderIterator(object, row, iteratorNatives) });
   };
+  // Validation (iteratorProbe, scripts/validate-iterator-frames-play.mjs): the
+  // render iterators' runs per frame, their draws from the shared stream and
+  // each frame's mesh items.
+  const iteratorStats = { scans: 0, rescans: 0, visited: 0, drawsScan: 0, drawsRescan: 0, draws: 0, lastFrames: [], msRescan: 0, msPack: 0, msScan: 0, msVisibility: 0,
+    patched: 0, packed: 0 };
   const spriteScan = createSpriteScan(runtime, { player: () => game.player.collisionActor, constructIterator,
-    frand: () => runtime.rng.frand() });
+    frand: () => { iteratorStats.draws++; return runtime.rng.frand(); } });
   // A sprite's texture size (Texture.USize/VSize, else its first mip), as
   // the page's sprite scene sizes it; a sprite draws once its texture has
   // decoded, here as on the page (sprite-scene.mjs).
@@ -331,7 +336,7 @@ export function createSimSession(game, { assets = null, events = [], exportName 
   // frame left it: the original updates the moving brush tracker on the game
   // thread (64 bits) when a mover moves, never inside a render-pass DrawWorld,
   // where the x87 model now runs at 24 bits (render-precision.mjs).
-  function visibility(view, width, height, setupCount = -1, { decals: decalBlock = true, movers: moverUpdate = true } = {}) {
+  function visibility(view, width, height, setupCount = -1, { decals: decalBlock = true, movers: moverUpdate = true, frameDynamics = null } = {}) {
     const level = runtime.levelFor(game.player.collisionActor), info = level.actors[0];
     const moversStarted = performance.now();
     if (moverUpdate) updateMovers();
@@ -353,7 +358,7 @@ export function createSimSession(game, { assets = null, events = [], exportName 
     words[46] = 3 | (decals ? OCCLUSION_POINTS : 0) | (setupCount >= 0 ? OCCLUSION_SPRITE_KEYS : 0); words[47] = 0;
     const started = performance.now();
     const result = occlusion.run(words, [], { setupCount, skipPoints: true,
-      children: childFrames ? { fov: view.fov, orthoZoom: 0 } : null });
+      children: childFrames ? { fov: view.fov, orthoZoom: 0, frameDynamics } : null });
     const { nodes, movers, moverItems } = drawnOf(result.draw);
     // The mirror requests: a level node, or a tracked mover's polygon
     // (mirror-passes.mjs requestedGroup).
@@ -418,6 +423,45 @@ export function createSimSession(game, { assets = null, events = [], exportName 
     return drawFrameOrder(frames).map(frame => ({ index: frame.index, kind: frame.kind, ids: frame.main ?? new Set(),
       ctx: meshLighting.childFrame({ coords: frame.coords, mirror: frame.mirror, planes: frame.planes }) })).filter(entry => entry.ctx);
   }
+  // SetupDynamics for a child frame (docs/bsp-occlusion.md "Child frames"),
+  // called by the Rust recursion before the frame's Setup: the iterating
+  // actors' protocol runs again (sprite-scan.mjs `rescan`: Init, CurrentItem,
+  // the shared random stream) and the frame's candidates are the root's
+  // with the iterators' new items. A sprite item equal to the root frame's
+  // (same order, texture, place and scale: a particle's) is the root's
+  // record, drawn by the frames whose Frame->Sprite holds it; a different
+  // one (a random beam's) is a record of its own, drawn in those frames
+  // alone. A mesh item takes its slot's binding, whose pose is the root
+  // frame's (open: docs/bsp-occlusion.md).
+  function childDynamics(frame, args, own, known, root) {
+    const drawsBefore = iteratorStats.draws, started = performance.now(), scanned = spriteScan.rescan(live.iteratorIndex);
+    iteratorStats.rescans++; iteratorStats.drawsRescan += iteratorStats.draws - drawsBefore; iteratorStats.msRescan += performance.now() - started;
+    iteratorStats.lastFrames.push({ frame: frame.index, kind: frame.kind, items: scanned.meshItems });
+    const { sprites, added } = childFrameSprites(live.sprites, scanned.sprites, known, record => {
+      record.size = spriteTextures ? spriteSize(record.texture, record.style === 2) : undefined;
+      record.main = false; record.frames = null; record.childOnly = true;
+    });
+    for (const record of added) live.sprites.push(record);
+    const packed = performance.now(), items = args.itemCandidates?.(scanned.meshItems) ?? [];
+    const full = () => packDynamics(occlusion, { ...args, sprites, iterators: live.iterators, items, childFrames });
+    // Only the iterator-made candidates changed: the root's packed words with
+    // those packed again (patchDynamics); ITERATOR_FRAMES=verify packs the
+    // frame from scratch too and compares, =full always packs from scratch.
+    let entries = iteratorMode === 'full' ? null : patchDynamics(occlusion, root.entries, root.words, { items, sprites, reads: args.reads });
+    if (entries) {
+      iteratorStats.patched++;
+      if (iteratorMode === 'verify') {
+        const views = occlusion.setupCandidates(entries.length), patched = views.u32.slice(views.at, views.at + SETUP.WORDS * entries.length);
+        const fresh = full(), after = occlusion.setupCandidates(fresh.length);
+        const same = fresh.length === entries.length && patched.every((v, k) => v === after.u32[after.at + k])
+          && fresh.every((e, i) => e.order === entries[i].order && e.binding === entries[i].binding && e.item === entries[i].item);
+        if (!same) throw new Error('ITERATOR_FRAMES=verify: the patched candidates differ from the frame packed from scratch');
+      }
+    } else { entries = full(); iteratorStats.packed++; }
+    occlusion.useFrameCandidates(entries.length);
+    iteratorStats.msPack += performance.now() - packed;
+    own.set(frame.index, entries);
+  }
   // The main frame's dynamics and OccludeBsp (docs/bsp-occlusion.md "Play"):
   // this frame's sprite records and, from the actor mesh layer, its bindings
   // (`args`), as Setup candidates in SetupDynamics' order. Frame->Sprite
@@ -428,7 +472,17 @@ export function createSimSession(game, { assets = null, events = [], exportName 
     pendingOcclusion = null;
     if (!pending) return null;
     const entries = packDynamics(occlusion, { sprites: live.sprites, iterators: live.iterators, ...args });
-    const result = visibility(pending.view, pending.width, pending.height, entries.length), main = new Set();
+    // Each child frame's own SetupDynamics (OccludeFrame, 0x10b1a188): with
+    // iterators in the level, their items are built again for every frame
+    // (`childDynamics`); `own` holds each frame's candidates by visit index.
+    const iterating = childFrames && iteratorFrames && live.iterators?.size && live.iteratorIndex;
+    const own = new Map(), known = iterating ? iteratorSpritesByOrder(live.sprites) : null;
+    const root = iterating ? { entries, words: candidateWords(occlusion, entries.length) } : null;
+    const frameDynamics = iterating ? frame => childDynamics(frame, args, own, known, root) : null;
+    const occludeStarted = performance.now();
+    const result = visibility(pending.view, pending.width, pending.height, entries.length, { frameDynamics }), main = new Set();
+    iteratorStats.msVisibility += performance.now() - occludeStarted;
+    iteratorStats.visited += result.frames?.length ?? 0;
     for (const sprite of live.sprites) { sprite.main = false; sprite.frames = null; }
     for (const key of result.sprites) {
       const entry = entries[key];
@@ -442,8 +496,9 @@ export function createSimSession(game, { assets = null, events = [], exportName 
     const children = new Set();
     for (const frame of result.frames ?? []) {
       frame.main = new Set();
+      const frameEntries = own.get(frame.index) ?? entries;
       for (const key of frame.sprites) {
-        const entry = entries[key];
+        const entry = frameEntries[key];
         if (entry.sprite) (entry.sprite.frames ??= []).push(frame.index);
         else { frame.main.add(entry.binding.id); children.add(entry.binding.id); }
       }
@@ -571,8 +626,10 @@ export function createSimSession(game, { assets = null, events = [], exportName 
       let sprites = [];
       live.meshItems = [];
       try {
-        const scanned = spriteScan.scan(); sprites = scanned.sprites; live.meshItems = scanned.meshItems;
-        live.iterators = scanned.iterators;
+        const drawsBefore = iteratorStats.draws, started = performance.now(), scanned = spriteScan.scan(); sprites = scanned.sprites; live.meshItems = scanned.meshItems;
+        iteratorStats.scans++; iteratorStats.drawsScan += iteratorStats.draws - drawsBefore; iteratorStats.msScan += performance.now() - started;
+        iteratorStats.lastFrames = [{ frame: 0, kind: 'root', items: scanned.meshItems }];
+        live.iterators = scanned.iterators; live.iteratorIndex = scanned.iteratorIndex;
       } catch (error) { failed = true; errors.push(plainError(error)); }
       if (spriteTextures) for (const sprite of sprites) sprite.size = spriteSize(sprite.texture, sprite.style === 2);
       live.sprites = sprites;
@@ -604,6 +661,20 @@ export function createSimSession(game, { assets = null, events = [], exportName 
     viewportState() { return lastViewportPlans.map(plan => ({ ...plan, rect: [...plan.rect], actors: plan.actors && [...plan.actors] })); },
     setOcclusion(value, movers = null) { occlusion = value; trackerMovers = movers; },
     setOcclusionRebuild(rebuild) { rebuildOcclusion = rebuild; },
+    /** Validation (iteratorProbe in main.mjs): the render iterators' per-frame
+     * runs since the last reset. */
+    iteratorState({ reset = false } = {}) {
+      const iterating = live.sprites.filter(sprite => sprite.viaIterator);
+      const state = { ...iteratorStats, lastFrames: iteratorStats.lastFrames.map(f => ({ ...f, items: f.items.map(item => [...item.location]) })),
+        iterators: live.iterators?.size ?? 0,
+        // The sprite records of the iterators' items in the last frame: all,
+        // those in the root's Frame->Sprite, in a child frame's, and the ones
+        // only a child frame's own run made.
+        sprites: { iterating: iterating.length, main: iterating.filter(sprite => sprite.main).length,
+          inChildren: iterating.filter(sprite => sprite.frames?.length).length, childOnly: iterating.filter(sprite => sprite.childOnly).length } };
+      if (reset) Object.assign(iteratorStats, { scans: 0, rescans: 0, visited: 0, drawsScan: 0, drawsRescan: 0, draws: 0, msRescan: 0, msPack: 0, msScan: 0, msVisibility: 0, patched: 0, packed: 0 });
+      return state;
+    },
     /** Validation (mover-probe.mjs): each tracked mover's fragment count
      * and the polygons the last main frame drew, and that frame's drawn
      * node count, mover mirror requests, host timings and admitted
@@ -670,7 +741,7 @@ export function createSimSession(game, { assets = null, events = [], exportName 
       if (meshLighting && !stopped()) collect(this.lightFrame(input.seconds, input.inspect?.view ?? null));
       time('lighting');
       let sprites = [];
-      live.sprites = []; live.iterators = null;
+      live.sprites = []; live.iterators = null; live.iteratorIndex = null;
       if (input.play && !stopped()) {
         const scanned = this.sprites();
         collect(scanned.errors);
@@ -837,7 +908,8 @@ export function createSimSession(game, { assets = null, events = [], exportName 
           if (pass.frame) {
             const frame = pass.frame, ids = frame.main ?? new Set(), frustum = drawn.frustum(pass.camera);
             for (const sprite of sprites) if (sprite.frames?.includes(frame.index)) stamped.sprites.add(sprite.handle);
-            const decisions = actorPasses && actorScene ? actorScene.framePasses(frustum, ids, frame.index) : null;
+            // A sky frame inside a mirror frame that draws no actor needs no decisions (the page hides the actors for it).
+            const decisions = actorPasses && actorScene && !(pass.within && !ids.size) ? actorScene.framePasses(frustum, ids, frame.index) : null;
             for (const id of ids) {
               const binding = byId.get(id);
               if (!binding) continue;
@@ -851,7 +923,7 @@ export function createSimSession(game, { assets = null, events = [], exportName 
               // A sky frame inside a mirror frame: its decisions ride with
               // that mirror's pass (the page draws it into the mirror's
               // target first); a frame that draws no actor needs none.
-              if (pass.within) { if (ids.size) insideSky.push({ frame: frame.index, decisions, light: lightCamera(frame) }); }
+              if (pass.within) insideSky.push({ frame: frame.index, decisions, light: lightCamera(frame) });
               else if (pass.kind === 'mirror') { passDecisions.push(decisions); passFrames.push(lightCamera(frame)); passSky.push(insideSky); insideSky = []; }
               else { skyDecisions = decisions; skyFrame = lightCamera(frame); }
               if (pass === lastMirror || (pass.kind === 'sky' && !pass.within)) mainDecisions = actorScene.framePasses(null, null);

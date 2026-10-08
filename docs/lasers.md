@@ -100,6 +100,14 @@ case's doubles, and XLevel's two moves are recording stubs.
 - **Limitation.** Unicorn evaluates FPATAN in double precision, so the
   oracle's Rotation agrees with the host's only away from integer boundaries.
 
+## Per frame
+
+OccludeFrame runs SetupDynamics again for every child frame, so a frame in
+a mirror or sky pass runs this chain again: `Init` resets nextItem, prevLoc,
+prevRand, savedLoc and savedRot, and CurrentItem draws the stream again, so
+the last item (the one saved at a random place along the beam) is elsewhere
+in each frame ([child frames](bsp-occlusion.md#each-child-frames-own-setupdynamics)).
+
 ## Play
 
 - **Construction.** The LaserIterator is built with its recovered class

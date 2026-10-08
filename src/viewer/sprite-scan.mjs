@@ -16,6 +16,15 @@
  * "Play") can merge them with the actor mesh layer's bindings; scan() also
  * returns the iterating actors, which draw only through their items.
  *
+ * OccludeFrame runs SetupDynamics again for every child frame (0x10b1a188
+ * calls it before each child's OccludeBsp), and each run builds every
+ * iterator's items again: Init(Viewport->Actor) (the same actor in every
+ * frame, which neither script's Init reads), First, then CurrentItem until
+ * IsDone (0x10b22fee..0x10b2307c). `rescan` is that run over the iterating
+ * actors the root frame's scan found: the iterators' state is reset by Init
+ * and the shared random stream is drawn from again, so a laser's items can
+ * differ from one frame to the next.
+ *
  * Not translated yet, noted: DT_SpriteAnimOnce's frame choice, iterator
  * classes other than ParticleIterator and LaserIterator, the bHighDetail
  * rule and fog. */
@@ -26,26 +35,24 @@ import { RENDER_ITERATOR, RENDER_SHIFT, RENDER_SPRITE } from '../runtime/script-
 
 export function createSpriteScan(runtime, { player, constructIterator, frand }) {
   const notes = new Set();
-  /** One frame: the level actor array in order, after the tick. Returns the
-   * sprite records and the iterator items that draw as meshes. */
-  function scan({ firstPerson = true } = {}) {
-    const sprites = [], meshItems = [], iterators = new Set();
-    const viewer = player(), level = runtime.levelFor(viewer);
-    const read = (actor, name) => runtime.readNamed(actor, name);
-    let order = 0;
+  const read = (actor, name) => runtime.readNamed(actor, name);
+  const newOut = () => ({ sprites: [], meshItems: [], iterators: new Set(), iteratorIndex: new Map() });
+  /** SetupDynamics' visit of one actor for a frame (`out`, newOut's): the
+   * sprite records, the iterator items that draw as meshes, the iterating
+   * actors and where each stands in Level.Actors. A record made from an
+   * iterator's item carries `viaIterator`. */
+  function makeVisit(out, firstPerson) {
+    const { sprites, meshItems, iterators, iteratorIndex } = out;
+    const viewer = player();
+    let order = 0, viaIterator = false;
     const record = (actor, { location, drawScale, scaleGlow }) => {
       const reference = read(actor, 'Texture');
       if (!reference) return;
       sprites.push({ handle: handleOf(actor), order,
         texture: { key: reference.key ?? null, package: reference.asset?.name, index: reference.index },
-        style: read(actor, 'Style') & 255, location: [...location], drawScale, scaleGlow });
+        style: read(actor, 'Style') & 255, location: [...location], drawScale, scaleGlow, ...(viaIterator ? { viaIterator: true } : {}) });
     };
-    // The render scan (script-vm-render.mjs) leaves the actors visit()
-    // would draw or iterate, plus those it hands back, and stops after an
-    // iterator: an iterator may run script, so the scan resumes after it with
-    // the viewer's ViewTarget read again. Without it, every actor in order.
-    const actors = level.actors, render = runtime.scriptVm?.render ?? null;
-    const visit = (actor, index) => {
+    return (actor, index) => {
       if (!actor || actor === viewer) return;
       order = index * 65536;
       let hidden;
@@ -61,28 +68,34 @@ export function createSpriteScan(runtime, { player, constructIterator, frand }) 
       if (read(actor, 'RenderIteratorClass')) {
         const iterator = ensureRenderInterface(runtime, actor, constructIterator);
         if (!iterator) return;
-        iterators.add(actor);
+        iterators.add(actor); iteratorIndex.set(actor, index);
         const kind = runtime.instance(iterator).cls.record.key;
         if (kind === 'deusex.laseriterator') {
-          for (const item of laserIteratorItems(runtime, iterator, actor, viewer, {
-            processEvent: (receiver, name, args) => runtime.processNativeEvent(receiver, name, args), frand })) {
-            const drawType = read(item.actor, 'DrawType') & 255;
-            if (drawType === 2) meshItems.push({ ...item, order });
-            else if (drawType === 1 || drawType === 7) record(item.actor, item);
-            order++;
-          }
+          viaIterator = true;
+          try {
+            for (const item of laserIteratorItems(runtime, iterator, actor, viewer, {
+              processEvent: (receiver, name, args) => runtime.processNativeEvent(receiver, name, args), frand })) {
+              const drawType = read(item.actor, 'DrawType') & 255;
+              if (drawType === 2) meshItems.push({ ...item, order });
+              else if (drawType === 1 || drawType === 7) record(item.actor, item);
+              order++;
+            }
+          } finally { viaIterator = false; }
           return;
         }
         if (kind !== 'deusex.particleiterator') {
           notes.add(`RenderIterator ${kind} is not translated.`);
           return;
         }
-        for (const item of particleIteratorItems(runtime, iterator, viewer, {
-          processEvent: (receiver, name, args) => runtime.processNativeEvent(receiver, name, args),
-          farMoveActor: (target, destination) => runtime.farMoveActor(target, destination, 0, 0) })) {
-          if ([1, 7].includes(read(item.actor, 'DrawType') & 255)) record(item.actor, item);
-          order++;
-        }
+        viaIterator = true;
+        try {
+          for (const item of particleIteratorItems(runtime, iterator, viewer, {
+            processEvent: (receiver, name, args) => runtime.processNativeEvent(receiver, name, args),
+            farMoveActor: (target, destination) => runtime.farMoveActor(target, destination, 0, 0) })) {
+            if ([1, 7].includes(read(item.actor, 'DrawType') & 255)) record(item.actor, item);
+            order++;
+          }
+        } finally { viaIterator = false; }
         return;
       }
       const drawType = read(actor, 'DrawType') & 255;
@@ -91,6 +104,18 @@ export function createSpriteScan(runtime, { player, constructIterator, frand }) 
       record(actor, { location: read(actor, 'Location').map(Math.fround), drawScale: Math.fround(read(actor, 'DrawScale')),
         scaleGlow: Math.fround(read(actor, 'ScaleGlow')) });
     };
+  }
+  /** One frame: the level actor array in order, after the tick. Returns the
+   * sprite records and the iterator items that draw as meshes, with the
+   * iterating actors (and their Level.Actors indices). */
+  function scan({ firstPerson = true } = {}) {
+    const out = newOut(), viewer = player(), level = runtime.levelFor(viewer);
+    const visit = makeVisit(out, firstPerson);
+    // The render scan (script-vm-render.mjs) leaves the actors visit()
+    // would draw or iterate, plus those it hands back, and stops after an
+    // iterator: an iterator may run script, so the scan resumes after it with
+    // the viewer's ViewTarget read again. Without it, every actor in order.
+    const actors = level.actors, render = runtime.scriptVm?.render ?? null;
     for (let start = 0; ;) {
       const entries = render?.scan(actors, { start, kinds: RENDER_SPRITE | RENDER_ITERATOR, viewer,
         viewTarget: firstPerson ? read(viewer, 'ViewTarget') : null, firstPerson }) ?? null;
@@ -100,7 +125,16 @@ export function createSpriteScan(runtime, { player, constructIterator, frand }) 
       if (!entries.length || !(last & RENDER_ITERATOR)) break;
       start = (last >>> RENDER_SHIFT) + 1;
     }
-    return { sprites, meshItems, iterators };
+    return out;
   }
-  return { scan, notes };
+  /** A child frame's SetupDynamics: the iterating actors of `scan` (its
+   * `iteratorIndex`) in Level.Actors order, their protocol run again.
+   * Returns the frame's items (sprite records and mesh items, as `scan`
+   * does for the iterating actors alone). */
+  function rescan(iteratorIndex, { firstPerson = true } = {}) {
+    const out = newOut(), visit = makeVisit(out, firstPerson);
+    for (const [actor, index] of iteratorIndex) visit(actor, index);
+    return out;
+  }
+  return { scan, rescan, notes };
 }

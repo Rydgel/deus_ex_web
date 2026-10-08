@@ -1710,8 +1710,20 @@ fn uncoords<F: Fp>(coords: &[u32; 12]) -> [u32; 12] {
 /// for the child's argument (d64 of FOVAngle * 0.008726646259971648 rounded
 /// to 24 bits), 4 the Setup candidates' address (0: none), 5 their count, 6
 /// option bits (1: occlude the children; without it the requests are only
-/// reported).
+/// reported; 2: before each child's Setup the host's `occ_frame_dynamics`
+/// runs, and may replace words 4 and 5 and the sprite list's address (MODEL
+/// 17) for that child, as each frame's own SetupDynamics builds its own
+/// FDynamicSprites).
 static mut CHILD_IN: [u32; 8] = [0; 8];
+
+#[link(wasm_import_module = "env")]
+extern "C" {
+    /// OccludeFrame's SetupDynamics for a child frame (0x10b1a188), whose
+    /// iterators run again (Init, First, CurrentItem), called with the
+    /// frame's visit index, its request kind (0 mirror, 1 sky) and its
+    /// parent's visit index (0: the root frame).
+    fn occ_frame_dynamics(index: u32, kind: u32, parent: u32);
+}
 
 #[no_mangle]
 pub extern "C" fn occ_child_in_ptr() -> *mut u32 {
@@ -2008,6 +2020,9 @@ fn occlude_children(parent: u32, index: &mut u32) -> u32 {
         }
         set_fw(c, FR_INDEX, *index);
         *index += 1;
+        if unsafe { (*addr_of!(CHILD_IN))[6] } & 2 != 0 {
+            unsafe { occ_frame_dynamics(fw(c, FR_INDEX), fw(c, FR_KIND), fw(fw(c, FR_PARENT), FR_INDEX)) };
+        }
         let input = unsafe { *addr_of!(CHILD_IN) };
         if input[4] != 0 {
             let scratch = push(GDYN, 4 * crate::setup::OW * input[5].max(1), 8);

@@ -41,7 +41,9 @@ child of a frame, newest first (Child, then Sibling), gets its sprites
 constructed for it (SetupDynamics; a sprite with `rootExcluded` only in a
 child frame, as OccludeFrame passes no excluded actor and SetupDynamics
 skips the ViewTarget only at Recursion 0) and OccludeBsp, then its own
-children. Each child is reported with its FSceneNode fields and span as
+children (a case's `frameSprites`, by visit index, gives a child its own
+sprites: each frame's SetupDynamics runs its iterators again). Each child is
+reported with its FSceneNode fields and span as
 OccludeBsp receives it. A zone actor or the LevelInfo can carry a SkyZone
 fixture (+0x384: Location +0x114, Rotation +0x120, Region.ZoneNumber +0xd0).
 """
@@ -478,7 +480,7 @@ class Occlusion(native.NativeCollision):
         }
         if children:
             frames = []
-            self.occlude_children(frame, 0, case.get('sprites', []), frames)
+            self.occlude_children(frame, 0, case.get('sprites', []), frames, case.get('frameSprites', {}))
             result['frames'] = frames
         after = self.node_flags()
         times = [self.read(self.model + 0x108 + 24 * i, 'I')[0] for i in range(64)]
@@ -525,8 +527,11 @@ class Occlusion(native.NativeCollision):
             self.write(self.read(post + 4 * i, 'I')[0], 'II', 0, 0)
         return drawn, setups
 
-    def occlude_children(self, parent, parent_index, specs, frames):
-        """OccludeFrame on each child of `parent`, newest first, depth first."""
+    def occlude_children(self, parent, parent_index, specs, frames, frame_specs={}):
+        """OccludeFrame on each child of `parent`, newest first, depth first.
+        A child's SetupDynamics builds its sprites from `frame_specs[visit
+        index]` when the case gives that frame its own (iterators run again
+        in each frame), else from the root frame's `specs`."""
         child = self.read(parent + 0x10, 'I')[0]
         while child:
             index = len(frames) + 1
@@ -541,11 +546,11 @@ class Occlusion(native.NativeCollision):
             }
             frames.append(record)
             self.children = []
-            drawn, setups = self.occlude_frame(child, specs, False)
+            drawn, setups = self.occlude_frame(child, frame_specs.get(str(index), specs), False)
             record.update({
                 'draw': [self.draw_list(self.read(child + 0x98 + 4 * i, 'I')[0]) for i in range(3)],
                 'children': self.children, 'sprites': drawn, 'setups': setups})
-            self.occlude_children(child, index, specs, frames)
+            self.occlude_children(child, index, specs, frames, frame_specs)
             child = self.read(child + 0xc, 'I')[0]
 
 
