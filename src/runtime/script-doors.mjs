@@ -2225,6 +2225,9 @@ export async function createScriptDoors({
   // UViewport::Input (+0x60) exists before SpawnPlayActor; TravelPostAccept's
   // ResetKeyboard reaches it through the new player's Player.
   level.engine.client.viewports[0].input=windowHost.input;
+  // Client.Decals is the live UWindowsClient property (the Display screen's Decals choice sets it).
+  Object.defineProperty(level.engine.client,'decals',{configurable:true,enumerable:true,
+    get:()=>windowHost.nativeConfig.instance('WinDrv.WindowsClient','Decals')});
   playerLogs=await preparePlayerLogStore({runtime,assets,player:playerActor});
   loginPlayer();
   playerLogs.enableMessages();

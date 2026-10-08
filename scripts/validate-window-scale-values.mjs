@@ -126,6 +126,12 @@ for (const [x, y, w, h] of geometry) {
   addCase(1653, {values: [], floats});
 }
 
+// 1523 RootWindow.SetSnapshotSize (the UI background's snapshot size): two floats through _ftol into +0x738 / +0x73c.
+// (Beyond int64 FISTP stores the integer indefinite, low dword 0, as the real-x87 probe measured
+// (validate-x87-ftol-hardware.mjs); Unicorn's FPU saturates instead, so no such value is compared here.)
+for (const width of [0, -0, 1.5, -1.5, 639.9, 1432, 1e-45, -3.25e9, 4e18])
+  for (const height of [0, 480.5, -7.9, 2147483520, 1e10]) addCase(1523, {values: [width, height]});
+
 // 1647 GetValueString: labels, formats, ranges and positions. The printf rows come from the model first
 // (the doubles it predicts), are measured under Wine, and the oracle fails a case if its own x87 run asks for another double.
 const ranges = [[0, 1], [0, 10], [-2.5, 8.25], [0.5, 3], [3, 3], [100, 0], [0, 255], [0.0625, 0.1875]];

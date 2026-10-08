@@ -21,6 +21,7 @@
  */
 import {gameEngineKey} from './script-window-typed-keys.mjs';
 import {readToken} from './config-text.mjs';
+import {msvcrtWtoi} from './script-text-parser.mjs';
 import {scriptStringComplementEqual, scriptStringText} from './script-string-operations.mjs';
 import {x87load, x87double, x87mul, x87div, x87store, x87add, x87cmp} from './script-vm.mjs';
 
@@ -33,6 +34,8 @@ export class UnsupportedConsoleCommandError extends Error {
   }
 }
 
+/** GlideDrv.dll 0x10710174, the list UGlideRenderDevice::Exec GetRes logs. */
+export const GLIDE_RESOLUTIONS = '640x480 800x600 1024x768 1280x1024 1600x1200';
 export const IST_PRESS = 1, IST_HOLD = 2, IST_RELEASE = 3, IST_AXIS = 4;
 
 // Each body's ParseCommand keywords, in the order its fall-through path tests
@@ -379,6 +382,7 @@ export function createConsoleCommands({runtime, input, services}) {
     if (uviewportExec(cmd, ar)) return true;
     for (const keyword of EXEC_KEYWORDS['UWindowsViewport::Exec']) {
       if (parseCommand(cmd, keyword) === null) continue;
+      if (keyword === 'SetRes') return setRes(parseCommand(cmd, 'SetRes'));
       if (keyword !== 'GetCurrentRes')
         throw new UnsupportedConsoleCommandError(`UWindowsViewport::Exec ${keyword} is not implemented: ${cmd}`,
           {body: 'UWindowsViewport::Exec', keyword});
@@ -387,6 +391,40 @@ export function createConsoleCommands({runtime, input, services}) {
       return true;
     }
     return false;
+  }
+
+  /** UGlideRenderDevice::Exec (GlideDrv.dll 0x10707d90-0x10707e4d): URenderDevice::Exec first, then
+   * TMUDETAIL (toggles +0x20294; unsupported here), GetRes, GetColorDepths. GetRes logs the fixed
+   * list at 0x10710174 and GetColorDepths the string "16" at 0x10710148, each returning 1. The
+   * installed config's GameRenderDevice is this class (DeusEx.ini). */
+  function glideExec(cmd, ar) {
+    if (parseCommand(cmd, 'TMUDETAIL') !== null)
+      throw new UnsupportedConsoleCommandError(`UGlideRenderDevice::Exec TMUDETAIL is not implemented: ${cmd}`, {body: 'UGlideRenderDevice::Exec', keyword: 'TMUDETAIL'});
+    if (parseCommand(cmd, 'GetRes') !== null) { ar.log(GLIDE_RESOLUTIONS); return true; }
+    if (parseCommand(cmd, 'GetColorDepths') !== null) { ar.log('16'); return true; }
+    return false;
+  }
+
+  /** UWindowsViewport::Exec SetRes (WinDrv.dll 0x1110715f-0x11107291): X = appAtoi(Str); Y = appAtoi
+   * after the first 'x' (or 'X'); the colour depth after the next one, ColorBytes = depth / 8 (signed
+   * division) or the viewport's own when 0. With X and Y both nonzero it calls
+   * RenDev->SetRes(X, Y, ColorBytes, IsFullscreen()) (vtable +0x60) and returns 1 either way. The
+   * render device is the browser: SetRes is handed to `services.setResolution` as a request for that
+   * drawing-buffer size; there is no Glide mode to switch. */
+  function setRes(rest) {
+    // appStrchr(S, 'x'), else 'X', else the empty string: the text after that character.
+    const afterX = text => {
+      const at = text.includes('x') ? text.indexOf('x') : text.indexOf('X');
+      return at >= 0 ? text.slice(at + 1) : '';
+    };
+    const text = String(rest), yText = afterX(text), depthText = afterX(yText);
+    const width = msvcrtWtoi(text), height = msvcrtWtoi(yText), depth = msvcrtWtoi(depthText);
+    if (width && height) {
+      if (typeof services.setResolution !== 'function')
+        throw new UnsupportedConsoleCommandError('UWindowsViewport::Exec SetRes has no render device to resize', {body: 'UWindowsViewport::Exec', keyword: 'SetRes'});
+      services.setResolution({width, height, colorBytes: depth ? Math.trunc(depth / 8) : null});
+    }
+    return true;
   }
 
   /** UViewport::Exec 0x10373a60: Input (+0x60), RenDev (+0x64), its keywords,
@@ -398,7 +436,7 @@ export function createConsoleCommands({runtime, input, services}) {
     // The installed GameRenderDevice: GlideRenderDevice::Exec runs
     // URenderDevice::Exec first.
     claims('URenderDevice::Exec', cmd);
-    claims('UGlideRenderDevice::Exec', cmd);
+    if (glideExec(cmd, ar)) return true;
     // 0x10373ae5-0x10373b0c: GETPING logs the literal "0" (0x1047c2b4).
     if (parseCommand(cmd, 'GETPING') !== null) { ar.log('0'); return true; }
     claims('UViewport::Exec', cmd);
@@ -452,17 +490,32 @@ export function createConsoleCommands({runtime, input, services}) {
     return false;
   }
 
-  /** UObject::StaticExec 0x10153110 in keyword order MEM, DUMPNATIVES, GET,
-   * SET, OBJ, GTIME. Only SET (0x101532da) is implemented, for the one class
-   * whose properties Play models natively: ParseToken(256, escapes) for the
-   * class, StaticFindObject(UClass, ANY_PACKAGE), ParseToken for the
-   * property, FindField, spaces skipped, then GlobalSetProperty(value, class,
-   * property, offset, 1). A missing class or property logs its
-   * NAME_ExecWarning line and still returns 1. */
+  /** UObject::StaticExec 0x10153110 in keyword order MEM, DUMPNATIVES, GET (0x101531ad), SET
+   * (0x101532da), OBJ, GTIME. GET and SET reach a native config class (script-native-config.mjs:
+   * the viewport manager, audio device and render device) or, for SET, the InputExt class
+   * (script-input-console.mjs). ParseToken(256, escapes) for the class, StaticFindObject(UClass,
+   * ANY_PACKAGE) (which resolves "ini:Section.Key" through GConfig), ParseToken for the property,
+   * FindField; a missing class or property logs its NAME_ExecWarning line and still returns 1. GET
+   * then logs ExportText of the class default (port flags 1); SET skips spaces and runs
+   * GlobalSetProperty(value, class, property, offset, 1). */
   function staticExec(cmd, ar) {
-    for (const keyword of ['MEM', 'DUMPNATIVES', 'GET'])
+    for (const keyword of ['MEM', 'DUMPNATIVES'])
       if (parseCommand(cmd, keyword) !== null)
         throw new UnsupportedConsoleCommandError(`UObject::StaticExec ${keyword} is not implemented: ${cmd}`, {body: 'UObject::StaticExec', keyword});
+    const config = services.nativeConfig?.();
+    const getRest = parseCommand(cmd, 'GET');
+    if (getRest !== null) {
+      const className = parseToken(getRest, 256, true);
+      if (!className.ok) { ar.log(`Unrecognized class ${className.token}`); return true; }
+      const cls = nativeClass(config, className.token, 'GET', cmd);
+      if (!cls) { ar.log(`Unrecognized class ${className.token}`); return true; }
+      const propertyName = parseToken(className.rest, 256, true);
+      if (!propertyName.ok) { ar.log(`Unrecognized property ${propertyName.token}`); return true; }
+      const field = config.findField(cls, propertyName.token);
+      if (!field) { ar.log(`Unrecognized property ${propertyName.token}`); return true; }
+      ar.log(config.getText(cls, field));
+      return true;
+    }
     const rest = parseCommand(cmd, 'SET');
     if (rest === null) {
       for (const keyword of ['OBJ', 'GTIME'])
@@ -471,8 +524,20 @@ export function createConsoleCommands({runtime, input, services}) {
       return false;
     }
     const className = parseToken(rest, 256, true);
-    if (className.ok && !scriptStringComplementEqual(className.token, 'InputExt'))
+    const native = className.ok ? nativeClass(config, className.token, 'SET', cmd, true) : null;
+    if (native) {
+      const propertyName = parseToken(className.rest, 256, true);
+      const field = propertyName.ok ? config.findField(native, propertyName.token) : null;
+      if (!field) { ar.log(`Unrecognized property ${propertyName.token}`); return true; }
+      let value = propertyName.rest;
+      while (value[0] === ' ') value = value.slice(1);
+      config.globalSetProperty(native, field, value);
+      return true;
+    }
+    if (className.ok && !scriptStringComplementEqual(className.token, 'InputExt')) {
+      if (isIniName(className.token)) { ar.log(`Unrecognized class ${className.token}`); return true; }
       throw new UnsupportedConsoleCommandError(`UObject::StaticExec SET of class ${className.token} is not implemented: ${cmd}`, {body: 'UObject::StaticExec', keyword: 'SET'});
+    }
     if (!className.ok || typeof input.findField !== 'function') { ar.log(`Unrecognized class ${className.token}`); return true; }
     const propertyName = parseToken(className.rest, 256, true);
     const field = propertyName.ok ? input.findField(propertyName.token) : null;
@@ -481,6 +546,21 @@ export function createConsoleCommands({runtime, input, services}) {
     while (value[0] === ' ') value = value.slice(1);
     input.globalSetProperty(field, value);
     return true;
+  }
+
+  const isIniName = token => /^(ini|usr):/i.test(token);
+  /** StaticFindObject(UClass, ANY_PACKAGE, token) over the modelled native classes. A name that
+   * resolves (or an ini: key that is missing) but names no modelled class is not claimed
+   * unrecognized: the original would find any loaded script class. */
+  function nativeClass(config, token, keyword, cmd, inputFallback = false) {
+    if (!config) return null;
+    const found = config.findClass(token);
+    if (found) return found;
+    if (isIniName(token) && config.resolveName(token) === null) return null;   // ResolveName fails: not found
+    if (inputFallback && scriptStringComplementEqual(token, 'InputExt')) return null;
+    if (isIniName(token) || keyword === 'GET')
+      throw new UnsupportedConsoleCommandError(`UObject::StaticExec ${keyword} of class ${token} is not implemented: ${cmd}`, {body: 'UObject::StaticExec', keyword});
+    return null;
   }
 
   /** UEngine::Flush 0x10380cf0: GCache.Flush(0,0,0), then Client->Flush

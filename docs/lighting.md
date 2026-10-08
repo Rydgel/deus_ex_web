@@ -107,7 +107,7 @@ surface (`0x2e3e`; UT432's Direct3D7.cpp has the same loop:
 `SetGammaRamp`). The ramp maps the finished 8-bit framebuffer at scanout,
 so every pass, blended ones and the HUD included, is composed before it.
 
-Play does the same since 2026-10-03 (`src/viewer/display-ramp.mjs`). Shaders
+Play does the same since 2026-10-03 (`src/viewer/display-ramp.mjs`; the original Display > Adjust Brightness screen drives it since 2026-10-08, see [native config](script-native-config.md#display)). Shaders
 draw raw colours into the canvas, and after the HUD one pass copies the
 drawing buffer to a texture and draws it back through `pow(x, g)`, one
 fragment per pixel. The UI clear colour is drawn raw as `c^(1/g)`, so it

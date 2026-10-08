@@ -809,6 +809,23 @@ Training and Island. The Load/Save Game screens stop at the save-game
 directory (native 3013, Stage 6). See
 [ListWindow family](script-window-list-family.md).
 
+**Options menus (2026-10-08).** Esc > Settings opens the original Controls, Customize
+Keys, Game options, Display, Brightness, Sound and Adjust Colors screens in Play; each
+opens, draws, takes input and closes (`scripts/census-ui-screens.mjs` with menu paths and
+`!cycle!reset!ok`). They needed the ScaleWindow value-string natives (1646-1649, 1653;
+5,591 exec-body oracle cases identical), nine Core casts, the MSVCRT `%f` / `atof` behaviour
+measured against the game's own MSVCRT.dll under Wine (290k printf and 11.5k atof rows), the
+mouse grab natives, and `get` / `set ini:` on the native viewport manager, audio device and
+render device classes, whose 52 config properties are read from their StaticConstructors.
+Brightness reaches the display ramp through the render device's Flush, the volume sliders the
+Galaxy mixer through PostEditChange / SetVolumes, Decals the decal pass, and Mouse
+Sensitivity / Invert Mouse the original `PlayerInput`; a worker-mode browser check drives the
+menus' buttons and slider thumbs. INI persistence (Stage 6), UI Background = Snapshot (native
+1524), Toggle Full-Screen and the live effect of the remaining client and device properties
+are explicit boundaries. See [settings menus](settings-menus.md),
+[native config](script-native-config.md), [Core casts](script-core-casts.md) and
+[value format](script-value-format.md).
+
 **Mesh distance LOD (2026-10-07).** DrawLodMesh's LOD now runs in Play on
 both mesh paths: the requested vertex count from distance, FOV, frame width,
 DrawScale and LODBias, GetFrame at that count, the vertex morph toward the

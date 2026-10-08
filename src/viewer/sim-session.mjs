@@ -599,7 +599,7 @@ export function createSimSession(game, { assets = null, events = [], exportName 
       // (mesh-frame-pack.mjs), a fresh buffer each frame.
       const pack = createMeshFramePack();
       const snapshot = { errors, timings, begin: null, drawWorld: true, sprites: null, actors: null, stamps: null,
-        coronas: null, weapon: null, hud: null, audioMs: 0, events: null, pack: null };
+        coronas: null, weapon: null, hud: null, audioMs: 0, events: null, pack: null, display: null };
       let begun = null;
       if (input.play) {
         begun = this.begin({ dt: input.dt, run: input.run, halted: input.halted, width, height, lipSync,
@@ -675,6 +675,11 @@ export function createSimSession(game, { assets = null, events = [], exportName 
       if (begun?.light) begun.light.strobe = { time: lights.strobe.time, flag: lights.strobe.flag };
       snapshot.events = events.splice(0);
       snapshot.pack = pack.words();
+      // What the render device took from the client config (docs/script-native-config.md): the
+      // Brightness of its last Flush and the last SetRes request.
+      const display = game.hud?.host?.display;
+      snapshot.display = display ? { brightness: display.brightness, flushes: display.flushes,
+        resolution: display.resolution, resolutionVersion: display.resolutionVersion } : null;
       return snapshot;
     },
     /** The queued events outside a frame (map load: the first creation

@@ -71,6 +71,7 @@ import * as Log from './script-window-text-log.mjs';
 import * as L from './script-window-family-layout.mjs';
 import {createInputConsole} from './script-input-console.mjs';
 import {createConsoleCommands} from './script-console-command.mjs';
+import {createNativeConfig} from './script-native-config.mjs';
 import {rootTickNative,moveTabGroupNative} from './script-window-root-tick.mjs';
 import {dispatchWindowSoundNative,windowPlaySound} from './script-window-sound.mjs';
 import {createWindowActorRefDispatcher, addActorReference, removeActorReference, isActorReferenceValid} from './script-window-actor-refs.mjs';
@@ -185,7 +186,15 @@ export async function createWindowHost({runtime, assets, player, gameConfig = nu
       throw new TypeError('Viewport size must be two non-negative integers');
     viewportSize={sizeX,sizeY};
   };
+  // The native config classes behind `get/set ini:Engine.Engine.<Device> <Property>`
+  // (docs/script-native-config.md). The live audio objects belong to the current level.
+  const nativeConfig=createNativeConfig({gconfig:await runtime.classLoader.prepareConfig(),audio:()=>runtime.audio??null});
+  /** What the render device last took from the client config on a Flush (docs/script-native-config.md). */
+  const display={brightness:nativeConfig.instance('WinDrv.WindowsClient','Brightness'),flushes:0,resolution:null,resolutionVersion:0};
   const consoleCommands=createConsoleCommands({runtime,input:inputConsole,services:{
+    nativeConfig:()=>nativeConfig,
+    // UWindowsViewport::Exec SetRes -> RenDev->SetRes: the browser render device takes the request.
+    setResolution(request){display.resolution={...request};display.resolutionVersion++;},
     viewportSize(){
       if(!viewportSize)boundary('UViewport SizeX/SizeY are unknown before the first frame');
       return viewportSize;
@@ -206,7 +215,11 @@ export async function createWindowHost({runtime, assets, player, gameConfig = nu
     isPlayerPawnExt:actor=>isA(actor,'extension.playerpawnext'),
     rootKey:(root,key)=>TK.rootKey(W,root,key),
     hostBinding:(key,action)=>input.hostBinding(key,action),
-    flushRenderDevice:allow=>input.flushRenderDevice?.(allow),
+    flushRenderDevice:allow=>{
+      input.flushRenderDevice?.(allow);
+      // UD3DRenderDevice::Flush 0x10002e32 re-reads Client->Brightness (+0x6c) for the gamma ramp.
+      display.brightness=nativeConfig.instance('WinDrv.WindowsClient','Brightness');display.flushes++;
+    },
     // ResetInput clears UInput's held table before WinDrv polls the platform.
     // The browser's event-fed device snapshot is kept separately and replayed
     // through InputEvent in native key order.
@@ -1639,7 +1652,7 @@ export async function createWindowHost({runtime, assets, player, gameConfig = nu
     tick(root,seconds){lastTickTime=hostNow()/1000;T.rootTick(W,root,f(seconds));},
     // XInputExt::Process 0x1002d0b0 offers each key to XRootWindow::Process first.
     key(root,key,action,delta=0){return Input.rootProcess(W,root,key,action,delta);},
-    consoleCommands,
+    consoleCommands,nativeConfig,display,
     /** UEngine::InputEvent for one browser key edge. The optional
      * hostBinding override remains only for isolated legacy fixtures. */
     inputEvent(key,action,{delta=0,hostBinding=()=>false,flushRenderDevice=null}={}){

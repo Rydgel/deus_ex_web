@@ -159,6 +159,16 @@ keeps the dated record.
 - **Conversations:** the third-person conversation camera and letterbox
   ([conversation camera](docs/conversation-camera.md)) and speech-driven lip
   sync ([lip sync](docs/lip-sync.md)).
+- **Options menus:** Esc > Settings opens the original Controls, Customize
+  Keys, Game options, Display, Brightness, Sound and Adjust Colors screens.
+  They run the original scripts over the translated ScaleWindow value-string
+  natives, Core casts and `get`/`set ini:` on the engine's native config
+  classes ([settings menus](docs/settings-menus.md),
+  [native config](docs/script-native-config.md)). Brightness drives the display
+  ramp, the volume sliders the Galaxy mixer, Decals the decal pass, Mouse
+  Sensitivity and Invert Mouse the original `PlayerInput`. INI files are not
+  written back (Stage 6); UI Background = Snapshot and Toggle Full-Screen are
+  explicit boundaries.
 
 **Still open in Stage 4:** the 3D frame's projection at 24 bits (occlusion
 builds it at 64; [render-pass precision](docs/render-pass-precision.md));
