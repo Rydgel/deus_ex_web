@@ -14,6 +14,19 @@
  * builds from the camera (CreateMasterFrame: ComputeRenderCoords,
  * ComputeRenderSize, PointRegion).
  *
+ * Three cases in four also run the render pass's ComputeRenderSize
+ * (docs/render-pass-precision.md "The 3D frame's projection"): the frame's
+ * X and Y become a render rectangle (the viewport, or a clipped one at an
+ * offset, as XRootWindow::PreRender leaves them) and ComputeRenderSize runs
+ * again at control word 0x007f, so FX..PrjYP, ViewSides and ViewPlanes are
+ * the 24-bit ones of that rectangle while the coordinates, the zone and the
+ * screen span stay CreateMasterFrame's (the viewport's); every other pass
+ * case builds the frame inside the render pass, as a ViewportWindow's does
+ * (CreateMasterFrame at 0x007f). Core appTan's results for the 24-bit
+ * arguments are measured on real x87 hardware (X87_PROBE_WINE) when the
+ * runner exists; the FPTAN model stands in otherwise and is checked
+ * against them.
+ *
  * With the moving brush tracker (docs/brush-tracker.md), a map's movers are
  * filtered into the model first (construction at PC64, then moved movers'
  * Update at PC24, as Play runs them) and the oracle gets the resulting
@@ -32,8 +45,8 @@ import { AssetStore } from '../src/unreal/assets.mjs';
 import { loadScriptVmKernel } from '../src/runtime/script-vm-kernel.mjs';
 import { createBspOcclusion, OCCLUSION_POINTS, OCCLUSION_SHOW_PLAYER_CTRL,
   OCCLUSION_SHINY_SURFACES } from '../src/runtime/bsp-occlusion.mjs';
-import { bits, occlusionModelRequest, occlusionTangents, surfaceTextureFlags as textureFlagsOf,
-  trackedModelRequest } from './occlusion-request.mjs';
+import { bits, occlusionModelRequest, occlusionTangents, renderPassTangent, renderPassTangentsMeasured, renderRectangle,
+  surfaceTextureFlags as textureFlagsOf, trackedModelRequest } from './occlusion-request.mjs';
 import { collectTrackerMovers, trackerMoverSpec, trackerTextureFlags } from '../src/runtime/brush-tracker.mjs';
 import { texturePolyFlags } from '../src/runtime/bsp-occlusion.mjs';
 import { readTexture } from '../src/unreal/textures.mjs';
@@ -49,7 +62,7 @@ for (const directory of ['Maps', 'System', 'Textures'])
     files.push({ path: `${directory}/${name}`, read: () => readFile(path.join(root, directory, name)) });
 const assets = new AssetStore(files);
 const TANGENTS = occlusionTangents();
-const kernel = (await loadScriptVmKernel()).occlusion;
+const vm = await loadScriptVmKernel(), kernel = vm.occlusion;
 
 const units = r => Math.round(r * 32768 / Math.PI);
 
@@ -101,21 +114,33 @@ async function validate(mapName, count, seed, extra = [], { tracker = null } = {
       random() < 0.2 ? Math.floor((random() - 0.5) * 8000) : 0], width, height, fov: random() < 0.5 ? 90 : 75 });
   }
   cases.forEach((c, i) => Object.assign(c, { locationBits: c.location.map(bits), frameCounter: i, timeBits: bits(1 + i / 30) }));
+  // The render pass's ComputeRenderSize on three cases in four: the viewport
+  // as the render rectangle (kind 1), a clipped rectangle at an offset
+  // (kind 2), and one of those with the master frame built inside the pass
+  // (kind 3, a ViewportWindow's).
+  cases.forEach((c, i) => {
+    if (i % 4 === 0) return;
+    c.render = renderRectangle(c.width, c.height, random, i % 4 === 1 ? 1 : 0.5);
+    if (i % 4 === 3) c.masterControlWord = 0x007f;
+  });
   // Sprites as Setup leaves them: a screen rectangle with Y1 < Y2 inside the
   // frame, and a depth in front of the eye.
   for (const c of cases) {
     c.sprites = [];
+    const frameWidth = c.render?.width ?? c.width, frameHeight = c.render?.height ?? c.height;
     const count = Math.floor(random() * 24);
     for (let k = 0; k < count; k++) {
-      const a = Math.floor(random() * c.width), b = Math.floor(random() * c.width);
-      const y = Math.floor(random() * (c.height - 1)), h = 1 + Math.floor(random() * Math.min(300, c.height - y - 1));
+      const a = Math.floor(random() * frameWidth), b = Math.floor(random() * frameWidth);
+      const y = Math.floor(random() * (frameHeight - 1)), h = 1 + Math.floor(random() * Math.min(300, frameHeight - y - 1));
       c.sprites.push({ x1: Math.min(a, b), x2: Math.max(a, b) + 1, y1: y, y2: y + h, zBits: bits(8 + random() * 4000) });
     }
   }
   occlusion ??= createBspOcclusion(kernel, model, { surfaceTextureFlags,
     zoneActors: model.zones.map(z => (z.actor > 0 ? z.actor : 0)) });
   const base = occlusionModelRequest(model, surfaceTextureFlags);
-  const request = { gameRoot: root, tangents: TANGENTS, cases, model: tracker ? trackedModelRequest(occlusion, base, kernel.memory) : base };
+  const tangents = { ...TANGENTS };
+  for (const c of cases) if (c.render) Object.assign(tangents, renderPassTangent(c.fov, c.render.width, 'validate-bsp-occlusion'));
+  const request = { gameRoot: root, tangents, cases, model: tracker ? trackedModelRequest(occlusion, base, kernel.memory) : base };
   const oracle = JSON.parse(execFileSync(python, ['scripts/native-occlusion-oracle.py'],
     { input: JSON.stringify(request), encoding: 'utf8', maxBuffer: 1 << 30 })).results;
   const flags = request.model.nodes.map(n => n.flags), times = new Array(model.zones.length).fill(0);
@@ -123,10 +148,18 @@ async function validate(mapName, count, seed, extra = [], { tracker = null } = {
   try {
     for (const [i, c] of cases.entries()) {
       const o = oracle[i];
-      const where = `${mapName} case ${i} ${JSON.stringify(c.location.map(v => +v.toFixed(1)))} ${c.rotation} ${c.width}x${c.height}`;
-      // The master frame from the camera: every field CreateMasterFrame made.
-      const master = occlusion.master({ location: c.location.map(Math.fround), rotation: c.rotation, width: c.width,
-        height: c.height, fov: c.fov });
+      const where = `${mapName} case ${i} ${JSON.stringify(c.location.map(v => +v.toFixed(1)))} ${c.rotation} ${c.width}x${c.height}` +
+        (c.render ? ` render ${c.render.width}x${c.render.height}+${c.render.x}+${c.render.y}${c.masterControlWord ? ' in the pass' : ''}` : '');
+      // The master frame from the camera: every field CreateMasterFrame made,
+      // then the render pass's ComputeRenderSize.
+      if (c.masterControlWord) vm.setPrecision(24);
+      let master;
+      try {
+        master = occlusion.master({ location: c.location.map(Math.fround), rotation: c.rotation, width: c.width,
+          height: c.height, fov: c.fov, render: c.render ? { width: c.render.width, height: c.render.height } : null });
+      } finally { vm.setPrecision(64); }
+      stats.pass = (stats.pass ?? 0) + Boolean(c.render);
+      stats.clipped = (stats.clipped ?? 0) + Boolean(c.render && (c.render.width !== c.width || c.render.height !== c.height));
       assert.deepEqual([...master.fields].map(v => v >>> 0), [...o.frameBits, o.zoneNumber, ...o.uncoordsBits].map(v => v >>> 0), `${where}: master frame`);
       const words = [...master.frame];
       words[44] = c.frameCounter; words[45] = c.timeBits;
@@ -160,7 +193,7 @@ async function validate(mapName, count, seed, extra = [], { tracker = null } = {
     occlusion.dispose();
   }
   const with_ = tracker ? ` with ${movers.length} tracked movers${tracker.moves ? ` (${tracker.moves.length} moved)` : ''}, ${fragmentNodes} fragment nodes,` : '';
-  console.log(`${mapName}:${with_} ${cases.length} frames match (${stats.surfaces} draw lists${tracker ? `, ${stats.fragments ?? 0} mover polygons drawn` : ''}, ${stats.children} child requests, ${stats.zone0} zone-0 views, ${stats.drawn}/${stats.sprites} sprites drawn)`);
+  console.log(`${mapName}:${with_} ${cases.length} frames match (${stats.surfaces} draw lists${tracker ? `, ${stats.fragments ?? 0} mover polygons drawn` : ''}, ${stats.children} child requests, ${stats.zone0} zone-0 views, ${stats.drawn}/${stats.sprites} sprites drawn, ${stats.pass} through the render pass's ComputeRenderSize, ${stats.clipped} on a clipped rectangle)`);
 }
 
 // The Paris club entrance tunnel at spawn (the slow view that motivated the
@@ -178,4 +211,4 @@ await validate('00_Training', 16, 31, [], { tracker: {} });
 await validate('00_Training', 8, 37, [], { tracker: { moves: raised } });
 await validate('10_Paris_Club', 12, 41, [], { tracker: { moves: ['DeusExMover8', 'DeusExMover11'].map(name => ({ name, addRotation: [0, 6000, 0] })) } });
 await validate('01_NYC_UNATCOIsland', 12, 43, [], { tracker: {} });
-console.log('validate-bsp-occlusion: ok');
+console.log(`validate-bsp-occlusion: ok (${renderPassTangentsMeasured()} render-pass appTan arguments measured on real x87)`);

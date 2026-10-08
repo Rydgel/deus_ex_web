@@ -317,7 +317,13 @@ export function createSimSession(game, { assets = null, events = [], exportName 
     if (moverUpdate) updateMovers();
     const moversMs = performance.now() - moversStarted;
     occlusion.setZoneSkies(level.zoneModel.zoneActors.map(zone => skyRecord(runtime.readNamed(zone ?? info, 'SkyZone'))));
-    const words = occlusion.master({ location: view.location, rotation: view.rotation, width, height, fov: view.fov }).frame;
+    // CreateMasterFrame at the viewport's size, then the render pass's
+    // ComputeRenderSize at 24 bits on the render rectangle (XRootWindow::
+    // PreRender for the main frame, ViewportWindow's Draw for a camera's;
+    // docs/render-pass-precision.md "The 3D frame's projection").
+    const [viewportWidth, viewportHeight] = size ?? [width, height];
+    const words = occlusion.master({ location: view.location, rotation: view.rotation, width: viewportWidth,
+      height: viewportHeight, fov: view.fov, render: { width, height } }).frame;
     f32[0] = runtime.readNamed(info, 'TimeSeconds');
     // The decal block clips against the saved polygons' points (option
     // 0x100); Setup's sprites need only their keys (0x200).
@@ -357,7 +363,11 @@ export function createSimSession(game, { assets = null, events = [], exportName 
     // (docs/script-lodmesh-lod.md "Play").
     const frameFloats = new Float32Array(words.buffer, words.byteOffset, 19);
     const lod = { coords: Array.from(frameFloats.subarray(0, 12)), fx: frameFloats[18] };
-    return { nodes, zone: words[42], mirrors, frames: childFrames ? frames : null, size: [width, height], lod,
+    // The master frame as OccludeBsp got it, with the inputs that made it
+    // (validate-master-frame-play.mjs; docs/render-pass-precision.md).
+    const master = { words: Array.from(words), location: Array.from(view.location), rotation: Array.from(view.rotation), fov: view.fov,
+      viewport: [viewportWidth, viewportHeight], render: [width, height] };
+    return { nodes, zone: words[42], mirrors, frames: childFrames ? frames : null, size: [width, height], lod, master,
       sky: result.children.some(child => child.kind === 'sky'), decals: fragments, movers, moverItems,
       sprites: result.sprites.map(sprite => sprite.key),
       // Host timings (ms): the movers' Update, OccludeBsp with its decode

@@ -184,7 +184,12 @@ In the worker this:
   24 (render-precision.mjs): CreateMasterFrame for this frame (occlude.rs,
   the x87.rs model) rounds at 24 bits, where the main frame's, built before
   URender::PreRender, rounds at 64. That follows where XViewportWindow::Draw
-  runs; no 0x007f master-frame oracle case covers it yet (unverified).
+  runs. The frame is CreateMasterFrame on the main viewport's size (the
+  screen span) and Draw's ComputeRenderSize at 24 bits on the window's rectangle
+  ([the 3D frame's projection](render-pass-precision.md#the-3d-frames-projection-2026-10-08));
+  validate-bsp-occlusion's `masterControlWord` 0x007f cases run both against
+  the unchanged original (the tangent is the FPTAN model's, measured on
+  hardware for FOV 75 and 90). Draw itself was not run.
 - runs SetupDynamics' candidates for that frame (the actor layer's
   bindings and iterator items, and the sprite records, read live under Draw's
   flags: the camera hidden, the owner-see rules following bBehindView) through

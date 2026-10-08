@@ -1258,10 +1258,12 @@ decals() {
     drawnTriangles: decalScene?.count() ?? null, notes: [...(decalScene?.notes ?? [])] };
 },
 /** The last drawn frame's OccludeBsp result (sim-session.mjs visibility):
- * node count, mirror requests, sky, and the world triangles it kept. */
+ * node count, mirror requests, sky, the world triangles it kept and the
+ * master frame's words with the view, viewport and render rectangle that
+ * made them. */
 visibility() {
   return lastVisibility ? { nodes: lastVisibility.nodes.length, zone: lastVisibility.zone, mirrors: [...lastVisibility.mirrors],
-    sky: lastVisibility.sky, triangles: world?.visibility?.stats.drawnTriangles ?? null,
+    sky: lastVisibility.sky, triangles: world?.visibility?.stats.drawnTriangles ?? null, master: lastVisibility.master ?? null,
     groups: world?.mirrors.groups().map(group => ({ key: group.key, moving: Boolean(group.moving) })) ?? [] } : null;
 },
 stateDigest() {

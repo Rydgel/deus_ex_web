@@ -33,7 +33,7 @@ import { createActorMeshSim } from '../src/viewer/actor-mesh-sim.mjs';
 import { packDynamics } from '../src/viewer/dynamics-candidates.mjs';
 import { createBspOcclusion, packSetupCandidate, setupSequence, meshRecordFields, SETUP, SETUP_OUT_WORDS,
   SETUP_STATUS, SETUP_MESH_NONE, OCCLUSION_SHOW_PLAYER_CTRL, OCCLUSION_SHINY_SURFACES } from '../src/runtime/bsp-occlusion.mjs';
-import { bits, occlusionModelRequest, occlusionTangents, surfaceTextureFlags } from './occlusion-request.mjs';
+import { bits, occlusionModelRequest, occlusionTangents, renderPassTangent, renderRectangle, surfaceTextureFlags } from './occlusion-request.mjs';
 
 const python = process.env.NATIVE_PROBE_PYTHON ?? '.cache/native-probe-env/bin/python';
 if (!existsSync(python)) {
@@ -264,7 +264,8 @@ async function validate(mapName, seed) {
     const pair = spec => actorPair(spec, meshIndex(spec.mesh), textureIndex(spec.texture), names);
     const realPairs = play.actors.map(pair);
     const synthetic = [...meshes.keys()].filter(k => k.startsWith('synthetic:'));
-    const camera = c => occlusion.master({ location: c.location, rotation: c.rotation, width: c.width, height: c.height, fov: c.fov });
+    const camera = c => occlusion.master({ location: c.location, rotation: c.rotation, width: c.width, height: c.height, fov: c.fov,
+      render: c.render ? { width: c.render.width, height: c.render.height } : null });
     const cases = [], plans = [];
     // Real actors from the player's view and from cameras looking at them.
     const looked = play.actors.filter(a => a.drawType === 2 || a.drawType === 1 || a.drawType === 7);
@@ -301,6 +302,15 @@ async function validate(mapName, seed) {
       }
       plans.push({ camera: c, pairs, label: 'synthetic' });
     }
+    // Setup runs inside DrawWorld on the frame the render pass's
+    // ComputeRenderSize (XRootWindow::PreRender) left: two cameras in three
+    // get a render rectangle, a third of those the viewport.
+    const tangents = { ...TANGENTS };
+    for (const [i, plan] of plans.entries()) {
+      if (i % 3 === 0) continue;
+      plan.camera.render = renderRectangle(plan.camera.width, plan.camera.height, random, i % 3 === 1 ? 1 : 0.5);
+      Object.assign(tangents, renderPassTangent(plan.camera.fov, plan.camera.render.width, 'validate-sprite-setup'));
+    }
     for (const [i, plan] of plans.entries())
       cases.push({ ...plan.camera, locationBits: plan.camera.location.map(bits), frameCounter: i, timeBits: bits(1 + i / 30),
         setupOnly: true, actors: plan.pairs.map(p => p.fixture) });
@@ -309,7 +319,7 @@ async function validate(mapName, seed) {
     for (const [i, c] of chain.entries())
       cases.push({ ...c, locationBits: c.location.map(bits), frameCounter: 100 + i, timeBits: bits(5 + i / 30),
         sprites: realPairs.map(p => ({ actor: p.fixture })) });
-    const request = { gameRoot: root, tangents: TANGENTS, cases, meshes: meshKeys.map(k => meshes.get(k).fixture), spriteTextures,
+    const request = { gameRoot: root, tangents, cases, meshes: meshKeys.map(k => meshes.get(k).fixture), spriteTextures,
       model: occlusionModelRequest(model, textureFlags) };
     const oracle = JSON.parse(execFileSync(python, ['scripts/native-occlusion-oracle.py'],
       { input: JSON.stringify(request), encoding: 'utf8', maxBuffer: 1 << 30 })).results;

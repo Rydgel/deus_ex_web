@@ -26,7 +26,7 @@ DLL's preferred base.
 | `0x1038f66c` | **`Render->PreRender`** (vslot `0x5c`, `0x10b14560`) | sets PC 24 |
 | `0x1038f685` | `Console->PreRender(Frame)` (native, vslot `0x58`) | 24 |
 | `0x1038f68e` | `Canvas->Update(Frame)` | 24 |
-| `0x1038f6b5` | `PreRender` event; PlayerPawnExt.PreRender calls native 1050 PreRenderWindows → XRootWindow::PreRender `0x1003a760` (from `0x10038336`) | 24 |
+| `0x1038f6b5` | `PreRender` event; PlayerPawnExt.PreRender calls native 1050 PreRenderWindows → XRootWindow::PreRender `0x1003a760` (from `0x10038336`): the frame edit, then **`FSceneNode::ComputeRenderSize` again** (`0x1003a8cd`) | 24 |
 | `0x1038f6e5` | `Render->DrawWorld` (vslot `0x70`, `0x10b1cb90`): OccludeFrame `0x10b1ce3b` (SetupDynamics, OccludeBsp, child frames), DrawFrame `0x10b1ce44`, RenDev ClearZ (`0x10b1ce91`) and the `RenderOverlays` event `0x10b1cebd` | 24 |
 | `0x1038f70c` | `PostRenderFlash` event (FName `0x105835b8`, built from the string at `0x1047cf6c` at `0x10380726`); PlayerPawnExt.PostRenderFlash calls native 1051 PostRenderWindows → XRootWindow::PostRender `0x1003a960` (from `0x100383b6`) → PaintWindows → DrawWindow scripts → GC natives | 24 |
 | `0x1038f714` | RenDev vslot `0xa4` | 24 |
@@ -172,7 +172,7 @@ render-pass word (tables at `0x037f`), on the validator's own cases.
 | ConvertVectorToCoordinates (native 1489, root `0x10039f10`) | pass (DrawWindow) | none in scripts/ | none | `script-window-projection.mjs` (x87 model) | not measured |
 | Coronas' SingleLineCheck, ParticleIterator FarMoveActor | pass | collision oracles at 0x037f | — | trace.rs, render.rs | not measured |
 | UnrealScript run from the render events (RenderOverlays → Weapon/CalcDrawOffset, PreRender/PostRenderFlash → DrawWindow, iterator `Init(Camera)`) | pass | the Core operator oracles, `ORACLE_CW` (all eight) | the operator validators at both words, validate-script-vm-x87, validate-render-pass-script-play (worker) | script VM (Rust interp + JS) on the x87 model at the precision control, `inRenderPass` **PC 24** | 13 natives differ at 0x007f (census-render-pass-operators); **now 0** ("UnrealScript in the render pass") |
-| ComputeRenderSize again from XRootWindow::PreRender (`0x1003a8cd`) | pass (PreRender event) | window-scene-frame oracle, the second call at **0x007f** | validate-window-scene-frame (Wine real-x87 tangents) | `script-window-scene-frame.mjs` (coords at 64, size at the caller's precision) | was: 8 of 15 projections; **now 0** (HUD frame); the occlusion master frame: see open items |
+| ComputeRenderSize again from XRootWindow::PreRender (`0x1003a8cd`) | pass (PreRender event) | window-scene-frame oracle, the second call at **0x007f** | validate-window-scene-frame (Wine real-x87 tangents) | `script-window-scene-frame.mjs` (coords at 64, size at the caller's precision) | was: 8 of 15 projections; **now 0** (HUD frame); the occlusion master frame: "The 3D frame's projection" below |
 
 ## Status and plan
 
@@ -351,17 +351,113 @@ per call at both precisions, below the timer's resolution. Neither shows in
 frame time.
 
 Open:
-- **The 3D frame's projection.** XRootWindow::PreRender's ComputeRenderSize
-  at 24 bits edits the master frame before DrawWorld, so OccludeBsp and
-  the scene use the 24-bit FX..Proj.Z, ViewSides and ViewPlanes, while
-  bsp-occlusion.mjs builds the frame once at 64 bits (occ_master_frame,
-  the measured 64-bit tangent). The fix: run occ_master_frame's size part a
-  second time at 24 bits on the render rect with the 24-bit argument's
-  tangent, and extend native-occlusion-oracle.py with the same second call
-  at 0x007f (hardware tangents for the 24-bit arguments, as the scene-frame
-  validator measures them).
 - Window natives on the x87 model that the paint reaches (layout, scroll,
   edit, list, ConvertVectorToCoordinates) now run at 24 bits there; only
   the scene frame has original evidence at 0x007f.
 - The GC natives (f64 with float stores) and the traces (trace.rs) keep
   their forms; FPATAN is the host's atan2.
+
+## The 3D frame's projection (2026-10-08)
+
+**Original call order** (disassembly of Engine `UGameEngine::Draw`, Render
+`CreateMasterFrame` `0x10b15690`, Extension `XRootWindow::PreRender`
+`0x1003a760`; the import at Extension `0x10059324` is
+`Engine.dll ?ComputeRenderSize@FSceneNode@@QAEXXZ`):
+
+1. `CreateMasterFrame` (game thread, 64 bits) allocates the frame, sets X
+   and Y from the viewport's `SizeX`/`SizeY` (`+0x78/+0x7c`, `0x10b15780`),
+   gives the screen span `AllocIndexForScreen(SizeX, SizeY)` (`0x10b15827`),
+   runs `ComputeRenderCoords` (Coords, Uncoords, then a first
+   ComputeRenderSize) and takes the zone from `PointRegion`.
+2. `URender::PreRender` sets precision control 24. `Canvas->Update(Frame)`
+   points the canvas at that same frame (`Canvas+0x7c`).
+3. The `PreRender` event reaches `XRootWindow::PreRender`: the render
+   rectangle edit of [the conversation camera](conversation-camera.md) on
+   the frame's X/Y/XB/YB, then, unconditionally (a root without
+   `bClipRender` too), `FSceneNode::ComputeRenderSize` on the frame at
+   `0x1003a8cd`, at 24 bits.
+4. `DrawWorld` (OccludeFrame: SetupDynamics, OccludeBsp, child frames; then
+   DrawFrame) reads that frame.
+
+ComputeRenderSize reads X, Y, Actor.FOVAngle (`+0x410`), OrthoZoom, the
+frame's Origin and Uncoords, and writes FX, FY, FX2, FY2, FX15, FY15, Zoom,
+Proj, RProj, PrjXM..PrjYP, ViewSides and ViewPlanes, every one of them; it
+leaves Coords, Uncoords, ZoneNumber and the span alone. So the frame
+OccludeBsp sees has CreateMasterFrame's coordinates, zone and a screen span
+of the **viewport's** size, with the sizes, projection, ViewSides and
+ViewPlanes of the **render rectangle** computed at 24 bits, and the first
+call's size fields are dead. At 24 bits appTan's argument `FOV * pi/360`
+rounds before its qword store (so the measured 64-bit tangents do not apply,
+x87-tan.mjs takes the 24-bit argument, as for child frames) and FX15, the
+Proj.Z quotient, the corner rays and the planes round once per operation.
+A ViewportWindow's Draw (`0x1004a770`, in the HUD paint) does the same:
+CreateMasterFrame at 24 bits on the canvas viewport, the window's XB/YB/X/Y,
+then ComputeRenderSize at 24 bits.
+
+**Port.** `occ_master_frame` (occlude.rs) takes the render rectangle and
+appTan's result for the pass's argument and builds the sizes with
+`render_size::<P24>` (the child frames' routine) on the rectangle; the frame
+words 61 and 62 carry the viewport's size for `AllocIndexForScreen`.
+`bsp-occlusion.mjs master({..., render: {width, height}})` supplies the
+tangent through `childFrameTangent`; Play passes the canvas size as the
+viewport and the root's render viewport (`game.renderViewport`) as the
+rectangle for the main frame, and the window's size for a camera frame
+(whose coordinates round at the ambient 24 bits).
+
+**Evidence.**
+- `native-occlusion-oracle.py` cases with `render` edit the frame's X, Y,
+  XB and YB after the unchanged CreateMasterFrame and run Engine's
+  ComputeRenderSize at control word `0x007f`; `masterControlWord` `0x007f`
+  builds the master frame inside the pass too. validate-bsp-occlusion (3
+  cases in 4 through the pass, 2 in 4 on a clipped rectangle at an offset,
+  1 in 4 with the master at 24 bits; Paris Club, Training, Island,
+  Vandenberg and the tracker sequences), validate-child-frames (2 cases in 3
+  with a rectangle, the children inheriting it) and validate-sprite-setup
+  (Setup on the pass frame): every master frame word, Uncoords, zone, draw
+  list with its saved points, child request, span, sprite, NodeFlag and
+  zone time bit-exact. Core appTan's results for the 24-bit arguments of
+  FOV 75 and 90 are measured on real x87 (`scripts/x87-hardware-tangents.mjs`,
+  Wine) and are among the FPTAN model's candidates.
+- `validate-master-frame-play` (worker mode, `deusExViewer.visibility().master`
+  from sim-session.mjs): three Island frames' master words equal the Rust
+  core's pass frame built from the view, viewport and render rectangle the
+  frame reports, X/Y are the rectangle, words 61/62 the viewport, and none
+  equals the one-call 64-bit frame.
+- Mutations: the pass sizes at the 64-bit model fail the first pass case;
+  an `AllocIndexForScreen` at the frame's X/Y instead of the viewport's
+  fails node flags on the second clipped case (the original's span is
+  larger than the clipped frame, and OccludeBsp's results see it).
+- `census-master-frame-pass.mjs` (200 seeded views per map, FOV 75 and 90,
+  1440x960; a fresh occlusion state per view so both variants start equal)
+  against the master frame Play built before (one ComputeRenderSize at 64
+  bits on the rectangle):
+
+  | View | Frame words changed | Surfaces, child requests or node state changed | Saved points' projection changed |
+  | --- | --- | --- | --- |
+  | Island, viewport, FOV 75 | 200 of 200 | 0 | 0 |
+  | Island, viewport, FOV 90 | 200 of 200 | 9 | 200 |
+  | Island, letterbox 1440x720, FOV 75 | 200 of 200 | 145 | 0 |
+  | Island, letterbox, FOV 90 | 200 of 200 | 146 | 200 |
+  | Paris Club, viewport, FOV 75 | 200 of 200 | 0 | 0 |
+  | Paris Club, viewport, FOV 90 | 200 of 200 | 0 | 200 |
+  | Paris Club, letterbox, FOV 75 | 200 of 200 | 83 | 0 |
+  | Paris Club, letterbox, FOV 90 | 200 of 200 | 81 | 200 |
+
+  The frame changes everywhere (17 to 30 of its 45 size words); the visible
+  set changes rarely in normal play and often with letterbox bars, where the
+  viewport-sized screen span and the rectangle's own frustum both differ from
+  what Play built. At FOV 90 (appTan of a 24-bit pi/4 is above 1) Proj.Z
+  moves by an ulp and every saved polygon point's projection with it.
+
+**Unverified or still open.**
+- Other consumers of the 3D frame's size fields: the corona scan builds its
+  own frame (`corona-scan.mjs`: `Math.tan`, the full viewport's centre), and
+  the scene's three.js projection comes from the FOV, not from Proj.Z.
+  Neither reads the frame OccludeBsp used.
+- The camera frame's hardware evidence is the oracle's, with the model
+  tangent (a ViewportWindow's Draw itself was not run); XB/YB are not read
+  by OccludeBsp (oracle cases with random offsets match without them).
+- Play applies the pass to every main frame. A frame drawn while the
+  player's root window does not exist (the original then never reaches
+  XRootWindow::PreRender and keeps the 64-bit sizes) is not distinguished;
+  none was observed in single-player after Login.

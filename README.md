@@ -160,8 +160,10 @@ keeps the dated record.
   ([conversation camera](docs/conversation-camera.md)) and speech-driven lip
   sync ([lip sync](docs/lip-sync.md)).
 
-**Still open in Stage 4:** the 3D frame's projection at 24 bits (occlusion
-builds it at 64; [render-pass precision](docs/render-pass-precision.md));
+**Still open in Stage 4:** the corona scan's own frame and the scene's
+projection, which do not read the 3D frame OccludeBsp uses (now built at 24
+bits on the render rectangle, [render-pass
+precision](docs/render-pass-precision.md#the-3d-frames-projection-2026-10-08));
 the LOD morph's world-space rounding and per-mirror
 selection ([LOD](docs/script-lodmesh-lod.md#play)); the security computers'
 camera views (the ViewportWindow family runs, its world pass is not drawn,

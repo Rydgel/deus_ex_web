@@ -11,9 +11,13 @@ Fixtures supply only the fields the instructions read; every other byte is
 zero, unmapped access traps, and reads below 0x10000 (a null object) trap.
 Unresolved imports trap. Core appTan takes the request's tangent table (real
 FPTAN is not authoritative under Unicorn). The frame is built with control
-word 0x037f, as the existing scene-frame oracle does; OccludeBsp runs under
-0x007f, the precision control URender::PreRender sets (appEnableFastMath(1)
-at 0x10b14629: _controlfp(_PC_24, _MCW_PC)).
+word 0x037f, as the existing scene-frame oracle does (`masterControlWord`
+0x007f for a frame built inside the render pass, a ViewportWindow's); a case
+with `render` {width, height, x, y} then edits the frame's X, Y, XB, YB and
+calls ComputeRenderSize again at 0x007f, as XRootWindow::PreRender does
+(Extension 0x1003a8cd). OccludeBsp runs under 0x007f, the precision control
+URender::PreRender sets (appEnableFastMath(1) at 0x10b14629:
+_controlfp(_PC_24, _MCW_PC)).
 
 A case's sprite is either a screen rectangle and depth (the hook below plays
 FDynamicSprite::Setup) or an actor fixture, for which the unchanged Setup
@@ -75,6 +79,8 @@ CEIL_BRIDGE = bytes.fromhex('dd44240483ec04d93c24668b04246625fff3660d00086689442
 CREATE_MASTER_FRAME, OCCLUDE_BSP = 0x10b15690, 0x10b173d0
 SURF_IS_DYNAMIC = 0x1037ac10  # Engine FMovingBrushTracker vslot 3
 CREATE_CHILD_FRAME = 0x10b15a40
+# Engine FSceneNode::ComputeRenderSize's thunk (body 0x10372980), as the scene-frame oracle calls it.
+COMPUTE_RENDER_SIZE = 0x10302d6f
 CORE_APPTAN = 0x10123260
 GMATH_CTOR = 0x10102978
 
@@ -428,7 +434,19 @@ class Occlusion(native.NativeCollision):
         location = struct.pack('<3I', *case['locationBits'])
         rotation = struct.pack('<3i', *case['rotation'])
         frame = self.call_native(CREATE_MASTER_FRAME, self.render,
-                                 struct.pack('<I', self.viewport) + location + rotation + struct.pack('<I', 0), 0x037f)
+                                 struct.pack('<I', self.viewport) + location + rotation + struct.pack('<I', 0),
+                                 case.get('masterControlWord', 0x037f))
+        render = case.get('render')
+        if render:
+            # The render pass's ComputeRenderSize (docs/render-pass-precision.md):
+            # XRootWindow::PreRender (Extension 0x1003a7dd..0x1003a8cb) leaves the
+            # frame's XB, YB, X, Y the root's render rectangle, then calls
+            # FSceneNode::ComputeRenderSize again (0x1003a8cd) at control word
+            # 0x007f; a ViewportWindow's Draw does the same inside the HUD paint.
+            # The screen span stays the viewport's (CreateMasterFrame's).
+            self.write(frame + 0xa8, '2i', render['width'], render['height'])
+            self.write(frame + 0xb0, '2i', render.get('x', 0), render.get('y', 0))
+            self.call_native(COMPUTE_RENDER_SIZE, frame, b'', 0x007f)
         if case.get('setupOnly'):
             # Setup alone on each actor (thiscall, the frame its argument).
             setups = []
