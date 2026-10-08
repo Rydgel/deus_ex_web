@@ -660,7 +660,7 @@ export function createSimSession(game, { assets = null, events = [], exportName 
       }
       time('mirrors');
       if (drawWorld && input.play && coronaScan && view && !stopped()) {
-        const coronas = this.coronas({ pixelRatio: input.pixelRatio, now: input.now });
+        const coronas = this.coronas({ now: input.now });
         collect(coronas.errors);
         if (coronas.frame) snapshot.coronas = { frame: coronas.frame, width: coronas.width, height: coronas.height };
       }
@@ -824,16 +824,15 @@ export function createSimSession(game, { assets = null, events = [], exportName 
       return { errors, passDecisions, mainDecisions, skyDecisions };
     },
     /** DrawFrame's corona pass, which closes the world frame
-     * (corona-scan.mjs): the icons over the drawn size, the render rect's or
-     * else the canvas's in CSS pixels (`pixelRatio`). `now` is the fade
-     * clock in seconds. */
-    coronas({ pixelRatio, now }) {
+     * (corona-scan.mjs): the icons over the render rect's size, or else the
+     * canvas's, in drawing-buffer pixels, from the master frame OccludeBsp
+     * read. `now` is the fade clock in seconds. */
+    coronas({ now }) {
       const errors = [], rect = current?.renderRect ?? { width: size[0], height: size[1] };
-      const width = rect.width / pixelRatio, height = rect.height / pixelRatio;
       let frame = null;
-      try { frame = coronaScan.update(current.view, width, height, now); }
+      try { frame = coronaScan.update(current.view, rect, current.visibility?.master ?? null, now); }
       catch (error) { failed = true; errors.push(plainError(error)); }
-      return { errors, frame, width, height };
+      return { errors, frame, width: rect.width, height: rect.height };
     },
     /** PostRender's view model (weapon-overlay-sim.mjs) with the main
      * camera, and render feedback for the actors it draws. */

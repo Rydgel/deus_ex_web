@@ -1,6 +1,5 @@
-import { getAxes } from '../runtime/camera.mjs';
 import { coordsTransform } from '../runtime/volumetric-fog.mjs';
-import { createCoronaCache, coronaDecay, coronaSeen, coronaIcon } from '../runtime/coronas.mjs';
+import { createCoronaCache, coronaDecay, coronaSeen, coronaIcon, coronaFrame, coronaFrameFromCamera } from '../runtime/coronas.mjs';
 import { actorsEpoch } from '../runtime/base-epoch.mjs';
 
 /** The simulation side of Play's light coronas (docs/coronas.md "Play",
@@ -10,10 +9,14 @@ import { actorsEpoch } from '../runtime/base-epoch.mjs';
  * SingleLineCheck; the live entries become screen icons the page draws
  * (corona-pass.mjs).
  *
+ * The pass reads the frame DrawWorld hands to DrawFrame, the master frame
+ * OccludeBsp read (docs/coronas.md "The frame"): `update` takes its words
+ * (sim-session visibility().master), the render pass's Coords, X, FX2, FY2
+ * and Proj.Z in the drawing buffer's pixels.
+ *
  * Host choices, noted: the fade clock is the host's (`now`, seconds; the
- * original's appSeconds is the CPU clock too); the frame precomputes (FX2,
- * FY2, Proj.Z, Frame.X) come from Play's canvas size and the view FOV;
- * dynamic lights in the leaf (LeafLights) are not visited. */
+ * original's appSeconds is the CPU clock too); dynamic lights in the leaf
+ * (LeafLights) are not visited. */
 export function createCoronaScan(runtime, { model, exportName, player }) {
   const cache = createCoronaCache(), byName = new Map();
   const read = (actor, name) => runtime.readNamed(actor, name);
@@ -45,16 +48,21 @@ export function createCoronaScan(runtime, { model, exportName, player }) {
   }
   const plainRef = reference => ({ key: reference.key, package: reference.asset?.name, index: reference.index });
 
-  /** One main frame: `view` {location, rotation, fov}, the drawn size and
-   * the fade clock. Returns the icons in cache order, each
-   * {x, y, size, color, skin}, and the frame's counts. */
-  function update(view, width, height, now) {
+  /** One main frame: `view` {location, rotation, fov}, the render
+   * rectangle {width, height} in drawing-buffer pixels, the master frame
+   * (visibility().master, or null) and the fade clock. Returns the icons in
+   * cache order, each {x, y, size, color, skin}, and the frame's counts. */
+  function update(view, rect, master, now) {
     const icons = [], stats = { leafLights: 0, visible: 0 };
     const viewer = player(), level = viewer ? runtime.levelFor(viewer) : null;
     const region = viewer ? runtime.regionValue(viewer) : null;
     if (!level?.hash || !region || region.leaf === -1 || !region.zone) return { icons, stats };
     const delta = coronaDecay(cache, now);
-    const eye = view.location.map(Math.fround), slot = { next: 0 };
+    // The frame DrawFrame reads: the master frame's words when OccludeBsp built
+    // one, else Engine's own frame producers on the render rectangle. The line
+    // checks end at its Coords.Origin (the helper's `frame + 0x34`).
+    const { coords, frame } = master ? coronaFrame(master.words) : coronaFrameFromCamera(view, rect);
+    const eye = coords.origin, slot = { next: 0 };
     for (const ref of leafLights(region.leaf)) {
       const light = actorFor(ref, level);
       if (!light) continue;
@@ -70,10 +78,6 @@ export function createCoronaScan(runtime, { model, exportName, player }) {
         qualifies: Boolean(read(light, 'bCorona')) && Boolean(read(light, 'Skin')) && !read(light, 'bDeleteMe'),
         actorIndex: () => level.actors.indexOf(light) });
     }
-    const [x, y, z] = getAxes(view.rotation.map(v => v | 0));
-    const coords = { origin: eye, x: y, y: z.map(v => -v), z: x };
-    const fx2 = Math.fround(width / 2), fy2 = Math.fround(height / 2);
-    const frame = { fx2, fy2, projZ: Math.fround(fx2 / Math.tan(view.fov * Math.PI / 360)), width };
     for (const entry of cache.entries) {
       if (entry.actor == null || level.actors[entry.index] !== entry.actor) continue;
       const light = entry.actor;
@@ -81,9 +85,12 @@ export function createCoronaScan(runtime, { model, exportName, player }) {
         { hue: read(light, 'LightHue'), saturation: read(light, 'LightSaturation'), drawScale: Math.fround(read(light, 'DrawScale')) });
       const skin = icon ? read(light, 'Skin') : null;
       if (!skin) continue;
-      icons.push({ x: icon.x, y: icon.y, size: icon.size, color: [...icon.color], skin: plainRef(skin) });
+      icons.push({ x: icon.x, y: icon.y, size: icon.size, color: [...icon.color], skin: plainRef(skin),
+        // The inputs of the icon's placement, for validation (validate-coronas-play.mjs).
+        light: { location: read(light, 'Location').map(Math.fround), hue: read(light, 'LightHue'),
+          saturation: read(light, 'LightSaturation'), drawScale: Math.fround(read(light, 'DrawScale')) } });
     }
-    return { icons, stats };
+    return { icons, stats, frameWords: master ? [...master.words] : null };
   }
   return { update };
 }

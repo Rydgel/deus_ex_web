@@ -8,12 +8,19 @@
 // is read through deusExViewer.coronas() (`--query sim=inline` runs it on
 // the page).
 //
-//   node scripts/validate-coronas-play.mjs [--map M --light L] [--url http://...] [--query sim=inline] [--shots DIR]
+// The icons' placement (x, y, size) is recomputed in Node from the master
+// frame's words the pass read (coronaFrame, DrawFrame's frame argument:
+// docs/coronas.md "The frame") and each light's inputs, with the validated
+// coronaIcon, and must equal the worker's bit for bit.
+//
+//   node scripts/validate-coronas-play.mjs [--map M --light L] [--url http://...] [--query sim=inline] [--dpr 2] [--shots DIR]
 import assert from 'node:assert/strict';
 import {chromium} from '@playwright/test';
 import {createServer} from 'vite';
 import {fileURLToPath} from 'node:url';
 import {gameDirectory} from './game-directory.mjs';
+import {coronaFrame, coronaIcon} from '../src/runtime/coronas.mjs';
+import {coordsTransform} from '../src/runtime/volumetric-fog.mjs';
 
 const option = (name, fallback) => { const i = process.argv.indexOf(`--${name}`); return i < 0 ? fallback : process.argv[i + 1]; };
 try { gameDirectory(); } catch { console.log('SKIP validate-coronas-play: no installed game data'); process.exit(0); }
@@ -34,7 +41,7 @@ if (!url) {
 const browser = await chromium.launch({args: [`--use-angle=${process.platform === 'darwin' ? 'metal' : 'gl'}`]});
 let report;
 try {
-  const page = await browser.newPage({viewport: {width: 1024, height: 640}});
+  const page = await browser.newPage({viewport: {width: 1024, height: 640}, deviceScaleFactor: Number(option('dpr', 1))});
   const errors = []; page.on('pageerror', error => errors.push(error.message));
   await page.goto(`${url.replace(/\/$/, '')}/${query ? `?${query}` : ''}`);
   await page.waitForFunction(() => window.deusExViewer?.status().ready, {}, {timeout: 240000});
@@ -55,10 +62,20 @@ try {
   report.differing = Buffer.compare(on, off) !== 0;
   report.pageErrors = errors;
 } finally { await browser.close(); await server?.close(); }
-console.log(JSON.stringify(report, null, 1));
+console.log(JSON.stringify({...report, stats: {...report.stats, frameWords: report.stats.frameWords && '[master frame words]',
+  icons: report.stats.icons?.map(({x, y, size}) => ({x, y, size}))}}, null, 1));
 assert.deepEqual(report.pageErrors, []);
 assert.equal(report.runtimeError, null);
 assert.ok(report.stats.leafLights > 0, 'the player leaf permeating list names lights');
 assert.ok(report.stats.visible >= 1 && report.stats.drawn >= 1, `${lightName} passes the line checks and its corona draws`);
 assert.ok(report.differing, 'the corona changes the frame');
-console.log(`validate-coronas-play: PASS (${map}${query ? `, ${query}` : ''}: ${report.stats.leafLights} leaf lights, ${report.stats.visible} visible, ${report.stats.drawn} drawn)`);
+// The placement from the frame the pass read.
+assert.ok(report.stats.frameWords, 'the pass read OccludeBsp\'s master frame');
+const {coords, frame} = coronaFrame(report.stats.frameWords), f32 = new Float32Array(1), u32 = new Uint32Array(f32.buffer);
+const bits = value => (f32[0] = value, u32[0]);
+assert.ok(report.stats.icons.length >= report.stats.drawn && report.stats.drawn >= 1, 'every drawn corona has an icon');
+for (const icon of report.stats.icons) {
+  const expected = coronaIcon({brightness: 1}, coordsTransform(icon.light.location, coords), frame, icon.light);
+  assert.deepEqual([icon.x, icon.y, icon.size].map(bits), [expected.x, expected.y, expected.size].map(bits), 'icon placement from the master frame');
+}
+console.log(`validate-coronas-play: PASS (${map}${query ? `, ${query}` : ''}: ${report.stats.leafLights} leaf lights, ${report.stats.visible} visible, ${report.stats.drawn} drawn, ${report.stats.icons.length} placements equal the master frame's, X ${frame.width})`);

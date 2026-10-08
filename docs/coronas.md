@@ -55,6 +55,32 @@ the TRACE_ flags).
      size, Span 0, Z 1.0, brightness·colour, fog 0, PolyFlags 0x104)`, where
      0x104 is Translucent|TwoSided.
 
+## The frame
+
+The pass is inside `URender::DrawFrame` (`0x10b1a2d0`), whose argument
+(`[ebp + 8]`, `esi`) is the frame `DrawWorld` hands it: `DrawWorld`
+(`0x10b1cb90`) pushes the same `ebx` for `OccludeFrame` (`0x10b1ce3b`) and for
+`DrawFrame` (`0x10b1ce44`), so the corona pass reads the frame OccludeBsp read:
+CreateMasterFrame's frame after XRootWindow::PreRender's `ComputeRenderSize`
+at 24 bits on the render rectangle ([the 3D frame's
+projection](render-pass-precision.md#the-3d-frames-projection-2026-10-08)).
+The fields, by instruction (`ecx` is that frame from `0x10b1b7b4`, not
+reloaded before the last read):
+
+| Field | Offset | Reader |
+| --- | --- | --- |
+| Coords (the inline TransformPointBy) | `+0x34` | `0x10b1b7c0` (`lea eax, [ecx + 0x34]`, then the 12 FSUB/FMUL operands) |
+| Proj.Z | `+0xdc` | `0x10b1b9cf` (`fld`, then `fdiv` by the transformed z) |
+| FX2 | `+0xc8` | `0x10b1b9fa` (`fadd`) |
+| FY2 | `+0xcc` | `0x10b1ba06` (`fadd`) |
+| X | `+0xa8` | `0x10b1ba0f` (`fild`, the size's `X * DrawScale * 0.2`) |
+| Coords.Origin, the line checks' end | `+0x34` | helper `0x10b1bc43` (`lea edi, [esi + 0x34]`, pushed before each `SingleLineCheck` call at `0x10b1bc5b` and `0x10b1bcac`) |
+
+Coords is CreateMasterFrame's (game thread, 64 bits); X, FX2, FY2 and Proj.Z
+are the pass's: the render rectangle's width in the drawing buffer's pixels,
+`X * 0.5`, `Y * 0.5` and `FX2 / tan` at 24 bits with appTan of the 24-bit
+argument.
+
 ## Translation and verification
 
 `src/runtime/coronas.mjs` contains `createCoronaCache`, `coronaDecay`
@@ -77,6 +103,15 @@ control word `0x007f`):
   and helper calls over every answer and gate.
 - **Result.** All fades, cache updates (87 new entries) and 352 DrawIcon
   calls (every argument) match.
+- **The master frame (2026-10-08).** 80 more frames take their Coords, X, FX2,
+  FY2 and Proj.Z words from the frame OccludeBsp reads (the Rust core's
+  CreateMasterFrame and render-pass ComputeRenderSize on a viewport and a
+  render rectangle, half of them clipped, FOV 75 and 90, `coronaFrame` mapping
+  the words as Play's scan does) and give them to the original pass as its
+  DrawFrame argument: the DrawIcon calls (455 in all, with the first 200
+  frames') match bit for bit. A swapped FX2/FY2 fails them. The fields built
+  without an OccludeBsp frame (`coronaFrameFromCamera`, Engine's producers on
+  the rectangle) equal those words in every frame.
 - **Stub.** The oracle answers 1 for `UObject::IsValid`, the entries'
   assertion.
 
@@ -92,23 +127,39 @@ matching DrawFrame ahead of PostRender. It hands the page a list of icons;
   with the host clock.
 - **Visibility.** It visits the lights permeating the player's leaf. Model
   references resolve to live actors by export name, and the two line checks
-  are Play's translated SingleLineCheck (`level.hash.lineCheck`), from the
-  view location.
-- **Draw.** Each live entry's `coronaIcon` is computed with the view's
-  exact frame coords: getAxes' Y, −Z and X, as for fog. The tile is drawn in
-  an orthographic overlay with the canvas's translucent blend (ONE,
-  INVSRCCOLOR); the display ramp maps the finished frame.
+  are Play's translated SingleLineCheck (`level.hash.lineCheck`), ending at
+  the frame's origin.
+- **Draw.** Each live entry's `coronaIcon` is computed with the frame the
+  pass reads (above): the master frame's words, `visibility().master` of
+  the same main frame, so the line checks end at its Coords.Origin and the
+  icons are in the drawing buffer's pixels (X is the render rectangle's
+  width in device pixels; before 2026-10-08 the scan used CSS pixels and
+  `fx2 / Math.tan(fov * pi / 360)`). A session without OccludeBsp builds
+  the fields with `coronaFrameFromCamera`. The tile is drawn in an
+  orthographic overlay over the render rectangle with the canvas's
+  translucent blend (ONE, INVSRCCOLOR); the display ramp maps the finished
+  frame.
 - **Check.** `validate-coronas-play.mjs` looks up at a corona light from a
   start, in the default mode with the simulation in the worker
   (`placeProbe({lookAt})`; `--query sim=inline` runs it on the page). On 02_NYC_BatteryPark, Light410 is among 5 leaf lights, 3 are
   visible and 1 is drawn. On 03_NYC_Airfield, Light348 is among 13 leaf
   lights, 7 are visible and 4 are drawn. In both, the frame changes with the
-  pass and the street lamp shows its glow.
+  pass and the street lamp shows its glow. In worker mode it also reads the
+  scan's icons with the inputs of their placement and the master frame's
+  words (`deusExViewer.coronas()`), recomputes each icon's x, y and size
+  with `coronaFrame` and `coronaIcon`, and requires the bits to match (1
+  placement on BatteryPark, 4 on Airfield; `--dpr 2` too: X 2048).
+
+What the frame change moves (`census-master-frame-pass.mjs`, 100 seeded views
+per map, 1440x960, eight probe lights in front of each camera, the old frame
+at the same size): at FOV 75, Play's default, Coords and Proj.Z are bit-equal
+to the old ones and no icon moves; at FOV 90 appTan of the 24-bit argument
+changes Proj.Z in every view and 280 of 800 probe icons on the Island (262 of
+800 on Paris Club) move or resize by an ulp or more. Beyond that the scan now
+reads the frame itself, in the pixels of the drawing buffer.
 
 Host choices, noted:
 - the clock is the host's;
-- the frame precomputes (FX2, FY2, `Proj.Z = FX2/tan(FOV/2)`, Frame.X) come
-  from Play's canvas and the view FOV, not the original's resolution;
 - the leaf's dynamic lights (LeafLights) are not visited;
 - the display ramp applies to the finished frame, after the tile blends
   ([lighting](lighting.md), "Display ramp").

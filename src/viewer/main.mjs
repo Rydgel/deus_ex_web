@@ -1243,8 +1243,10 @@ fog() {
 },
 /** Show or hide the fog pass (validation: a frame with and without it). */
 showFog(on) { if (world?.fog) world.fog.root.visible = Boolean(on); },
-/** The page's corona pass (corona-pass.mjs): the last frame's counters. */
-coronas() { return coronaPass ? { ...coronaPass.stats } : null; },
+/** The page's corona pass (corona-pass.mjs): the last frame's counters,
+ * and the simulation's last corona frame: its icons with the inputs of
+ * their placement and the master frame's words they were placed in. */
+coronas() { return coronaPass ? { ...coronaPass.stats, icons: lastCoronaScan?.icons ?? null, frameWords: lastCoronaScan?.frameWords ?? null } : null; },
 /** Draw or skip the corona pass (validation: a frame with and without it). */
 showCoronas(on) {
   if (!coronaPass) return;
@@ -1391,7 +1393,7 @@ function animate(time) {
 }
 /** Draws one simulation snapshot (null: no simulation, Inspect over the
  * world alone). */
-let lastVisibility = null;
+let lastVisibility = null, lastCoronaScan = null;
 function drawFrame(snap, time) {
   // Drawn frames: the fps counter's and framePhases' `draws` (with
   // ?sim=worker a display frame without a new snapshot draws nothing).
@@ -1613,6 +1615,7 @@ function drawFrame(snap, time) {
   phase('render');
   // Coronas close DrawFrame, before PostRender's weapon and HUD.
   if (coronaFrame && coronaPass) {
+    lastCoronaScan = coronaFrame.frame;
     try { coronaPass.update(coronaFrame.frame, coronaFrame.width, coronaFrame.height); coronaPass.render(renderer); }
     catch (error) { pauseForRuntimeError(error); }
   }

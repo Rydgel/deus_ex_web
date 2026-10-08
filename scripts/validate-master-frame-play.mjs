@@ -82,4 +82,4 @@ for (const m of snapshots) {
 }
 assert.ok(distinct === snapshots.length, 'and not the one-call 64-bit frame');
 occlusion.dispose();
-console.log(`validate-master-frame-play: PASS (${snapshots.length} Play frames on ${map}, worker mode: master frame = CreateMasterFrame on ${snapshots[0].viewport.join('x')} + ComputeRenderSize at 24 bits on ${snapshots[0].render.join('x')}, ${distinct} differ from the 64-bit frame)`);
+console.log(`validate-master-frame-play: PASS (${snapshots.length} Play frames on ${map}, worker mode, FOV ${snapshots[0].fov}: master frame = CreateMasterFrame on ${snapshots[0].viewport.join('x')} + ComputeRenderSize at 24 bits on ${snapshots[0].render.join('x')}, ${distinct} differ from the 64-bit frame)`);

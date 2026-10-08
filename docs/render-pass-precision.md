@@ -450,10 +450,11 @@ rectangle for the main frame, and the window's size for a camera frame
   moves by an ulp and every saved polygon point's projection with it.
 
 **Unverified or still open.**
-- Other consumers of the 3D frame's size fields: the corona scan builds its
-  own frame (`corona-scan.mjs`: `Math.tan`, the full viewport's centre), and
-  the scene's three.js projection comes from the FOV, not from Proj.Z.
-  Neither reads the frame OccludeBsp used.
+- The scene's three.js projection comes from the FOV and the render
+  rectangle, not from the frame's Proj.Z and ViewSides; it does not read the
+  frame OccludeBsp used. (The corona scan does since 2026-10-08: it reads
+  this frame's Coords, X, FX2, FY2 and Proj.Z as DrawFrame's corona pass
+  does, [coronas](coronas.md#the-frame).)
 - The camera frame's hardware evidence is the oracle's, with the model
   tangent (a ViewportWindow's Draw itself was not run); XB/YB are not read
   by OccludeBsp (oracle cases with random offsets match without them).
