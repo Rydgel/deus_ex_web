@@ -175,3 +175,36 @@ reached a JavaScript stack overflow in LoadMap GC's recursive reference walk
 the old test's coverage and remains unresolved. The isolated fixture does not
 claim support for that path. Training's original full-world reset assertions
 remain unchanged.
+
+## Animation under TimeDilation in Play (2026-10-08)
+
+Question: does an actor's animation advance by the dilated delta, or by the
+page's frame time? The original: `ULevel::Tick` multiplies the input delta by
+`LevelInfo.TimeDilation` (`103a5468..103a5487`) and clamps the **actor** delta
+to [0.005, 0.4] (`103a54c8..103a54df`, floats `3ba3d70a`/`3ecccccd`) for every
+tick (not only `bPlayersOnly`), while `TimeSeconds` adds the unclamped product.
+`AActor::Tick`'s animation phase starts with `remaining = DeltaSeconds` and adds
+`remaining * AnimRate` to `AnimFrame` per pass
+([animation tick](script-animation-tick.md), `103a1bf0..103a1fd2`). So in the
+original an actor's animation advances by clamp(frame time x TimeDilation,
+0.005, 0.4) per tick: a level "held" at TimeDilation 0.001 still advances every
+animation 0.005 s per tick (the capture tool's hold, which also holds the
+original's clock), and the animation's phase counts ticks, not clock seconds.
+Play's `processLevelTick` is that code (`levelTickTime`: the 31 original-DLL
+cases of `validate-level-tick`, including both clamp ends, pass) and ticks once
+per posted frame in worker mode (sim-session `begin`), with the worker summing
+the dt of merged posts.
+
+`scripts/validate-anim-dilation-play.mjs` (worker mode, paused Playwright
+clock, each 16 ms frame settled so the worker never merges): the ghost
+player's looping animation and TimeSeconds read before and after N frames at
+TimeDilation 1, 0.5, 0.01, 0.001, 0.0001 and 50, against the original's rule
+in float32 frame by frame. PASS: the actor delta is 0.016, 0.008, 0.005,
+0.005, 0.005 and 0.4; TimeSeconds advances by the unclamped product (+0.192,
++0.096, +0.00192, +0.000192, +0.000019 over 12 frames; +0.8 in one frame at
+50); AnimFrame advances by delta x AnimRate to within 2e-6 in every row
+(+0.096, +0.048, +0.03, +0.075, +0.075 and +0.5). Play is right; the
+animation phase in a held capture differs run to run only because the held
+level still ticks the animation once per frame the page ran
+([visual acceptance](visual-acceptance.md#cpu-and-gpu-mesh-paths-jcs-reflection-2026-10-08-a-capture-artifact-fixed-in-the-tool)).
+
