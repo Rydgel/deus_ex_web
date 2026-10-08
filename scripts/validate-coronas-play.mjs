@@ -60,10 +60,19 @@ try {
   const off = await page.screenshot();
   if (shots) await page.screenshot({path: `${shots}/corona-${map}-off.png`});
   report.differing = Buffer.compare(on, off) !== 0;
+  // The light as a moving-light candidate (bDynamicLight: SetupDynamics takes
+  // it whatever bStatic and bNoDelete say, given a LightBrightness, which this
+  // corona-only light lacks): the pass offers it to the helper a second time,
+  // through the viewer's LeafLights.
+  await page.evaluate(() => window.deusExViewer.showCoronas(true));
+  await page.evaluate(actor => window.deusExViewer.placeProbe({ set: { actor, fields: { bDynamicLight: true, LightBrightness: 100 } } }), lightName);
+  await frames(60);
+  report.dynamic = await page.evaluate(() => window.deusExViewer.coronas());
   report.pageErrors = errors;
 } finally { await browser.close(); await server?.close(); }
 console.log(JSON.stringify({...report, stats: {...report.stats, frameWords: report.stats.frameWords && '[master frame words]',
-  icons: report.stats.icons?.map(({x, y, size}) => ({x, y, size}))}}, null, 1));
+  icons: report.stats.icons?.map(({x, y, size}) => ({x, y, size}))},
+  dynamic: {...report.dynamic, frameWords: '[master frame words]', icons: report.dynamic.icons?.length}}, null, 1));
 assert.deepEqual(report.pageErrors, []);
 assert.equal(report.runtimeError, null);
 assert.ok(report.stats.leafLights > 0, 'the player leaf permeating list names lights');
@@ -78,4 +87,18 @@ for (const icon of report.stats.icons) {
   const expected = coronaIcon({brightness: 1}, coordsTransform(icon.light.location, coords), frame, icon.light);
   assert.deepEqual([icon.x, icon.y, icon.size].map(bits), [expected.x, expected.y, expected.size].map(bits), 'icon placement from the master frame');
 }
-console.log(`validate-coronas-play: PASS (${map}${query ? `, ${query}` : ''}: ${report.stats.leafLights} leaf lights, ${report.stats.visible} visible, ${report.stats.drawn} drawn, ${report.stats.icons.length} placements equal the master frame's, X ${frame.width})`);
+// As a dynamic light: one more helper call and one more visible light (the
+// same actor, through LeafLights), the same icon placed from the new frame.
+// (The conversation camera's ConLights are moving-light candidates too and come and go.)
+const offered = (stats, name) => stats.visited.filter(visited => visited === name).length;
+assert.equal(offered(report.stats, lightName), 1, 'the static light is offered to the helper once');
+assert.equal(offered(report.dynamic, lightName), 2, 'as a moving light it is offered again, through the viewer\'s LeafLights');
+assert.equal(report.dynamic.drawn, report.stats.drawn, 'one entry, one icon');
+{
+  const {coords: dynamicCoords, frame: dynamicFrame} = coronaFrame(report.dynamic.frameWords);
+  for (const icon of report.dynamic.icons) {
+    const expected = coronaIcon({brightness: 1}, coordsTransform(icon.light.location, dynamicCoords), dynamicFrame, icon.light);
+    assert.deepEqual([icon.x, icon.y, icon.size].map(bits), [expected.x, expected.y, expected.size].map(bits), 'dynamic: icon placement from the master frame');
+  }
+}
+console.log(`validate-coronas-play: PASS (${map}${query ? `, ${query}` : ''}: ${report.stats.leafLights} leaf lights, ${report.stats.visible} visible, ${report.stats.drawn} drawn, ${report.stats.icons.length} placements equal the master frame's, X ${frame.width}; as a moving light offered ${offered(report.dynamic, lightName)} times)`);

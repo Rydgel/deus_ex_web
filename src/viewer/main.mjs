@@ -1245,8 +1245,10 @@ fog() {
 showFog(on) { if (world?.fog) world.fog.root.visible = Boolean(on); },
 /** The page's corona pass (corona-pass.mjs): the last frame's counters,
  * and the simulation's last corona frame: its icons with the inputs of
- * their placement and the master frame's words they were placed in. */
-coronas() { return coronaPass ? { ...coronaPass.stats, icons: lastCoronaScan?.icons ?? null, frameWords: lastCoronaScan?.frameWords ?? null } : null; },
+ * their placement, the lights the helper was called for (in order) and the
+ * master frame's words they were placed in. */
+coronas() { return coronaPass ? { ...coronaPass.stats, icons: lastCoronaScan?.icons ?? null, visited: lastCoronaScan?.visited ?? null,
+  frameWords: lastCoronaScan?.frameWords ?? null } : null; },
 /** Draw or skip the corona pass (validation: a frame with and without it). */
 showCoronas(on) {
   if (!coronaPass) return;

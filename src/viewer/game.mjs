@@ -305,7 +305,9 @@ export async function createGame(map, asset, assets, { randomSeed = Math.floor(D
           LightBrightness: read('LightBrightness'), LightRadius: read('LightRadius') };
         if (!isMovingLightCandidate(values)) continue;
         Object.assign(values, { LightEffect: read('LightEffect'), LightHue: read('LightHue'), LightSaturation: read('LightSaturation'),
-          bSpecialLit: read('bSpecialLit') });
+          bSpecialLit: read('bSpecialLit'),
+          // SetupDynamics' ViewPlanes test takes the larger of WorldLightRadius and 25 * (VolumeRadius + 1).
+          VolumeRadius: read('VolumeRadius') });
         // GlobalLighting's type functions read LightPeriod and LightPhase
         // (Pulse, Blink, SubtlePulse).
         if ([2, 3, 7].includes(LightType & 255)) Object.assign(values, { LightPeriod: read('LightPeriod'), LightPhase: read('LightPhase') });

@@ -322,8 +322,9 @@ export function createSimSession(game, { assets = null, events = [], exportName 
     // PreRender for the main frame, ViewportWindow's Draw for a camera's;
     // docs/render-pass-precision.md "The 3D frame's projection").
     const [viewportWidth, viewportHeight] = size ?? [width, height];
-    const words = occlusion.master({ location: view.location, rotation: view.rotation, width: viewportWidth,
-      height: viewportHeight, fov: view.fov, render: { width, height } }).frame;
+    const built = occlusion.master({ location: view.location, rotation: view.rotation, width: viewportWidth,
+      height: viewportHeight, fov: view.fov, render: { width, height } });
+    const words = built.frame;
     f32[0] = runtime.readNamed(info, 'TimeSeconds');
     // The decal block clips against the saved polygons' points (option
     // 0x100); Setup's sprites need only their keys (0x200).
@@ -365,7 +366,8 @@ export function createSimSession(game, { assets = null, events = [], exportName 
     const lod = { coords: Array.from(frameFloats.subarray(0, 12)), fx: frameFloats[18] };
     // The master frame as OccludeBsp got it, with the inputs that made it
     // (validate-master-frame-play.mjs; docs/render-pass-precision.md).
-    const master = { words: Array.from(words), location: Array.from(view.location), rotation: Array.from(view.rotation), fov: view.fov,
+    // `planes`: the frame's four ViewPlanes (+0x12c), as words.
+    const master = { words: Array.from(words), planes: Array.from(built.fields.slice(41, 57)), location: Array.from(view.location), rotation: Array.from(view.rotation), fov: view.fov,
       viewport: [viewportWidth, viewportHeight], render: [width, height] };
     return { nodes, zone: words[42], mirrors, frames: childFrames ? frames : null, size: [width, height], lod, master,
       sky: result.children.some(child => child.kind === 'sky'), decals: fragments, movers, moverItems,
@@ -830,7 +832,7 @@ export function createSimSession(game, { assets = null, events = [], exportName 
     coronas({ now }) {
       const errors = [], rect = current?.renderRect ?? { width: size[0], height: size[1] };
       let frame = null;
-      try { frame = coronaScan.update(current.view, rect, current.visibility?.master ?? null, now); }
+      try { frame = coronaScan.update(current.view, rect, current.visibility?.master ?? null, live.lights, now); }
       catch (error) { failed = true; errors.push(plainError(error)); }
       return { errors, frame, width: rect.width, height: rect.height };
     },
