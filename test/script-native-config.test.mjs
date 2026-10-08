@@ -9,7 +9,7 @@ import { brightnessGamma } from '../src/viewer/display-ramp.mjs';
 const ini = `[Engine.Engine]\r\nViewportManager=WinDrv.WindowsClient\r\nAudioDevice=Galaxy.GalaxyAudioSubsystem\r\nGameRenderDevice=GlideDrv.GlideRenderDevice\r\n
 [WinDrv.WindowsClient]\r\nBrightness=0.600000\r\nDecals=True\r\nTextureDetail=High\r\nUseJoystick=False\r\n
 [Galaxy.GalaxyAudioSubsystem]\r\nSoundVolume=204\r\nMusicVolume=153\r\nSpeechVolume=255\r\nOutputRate=44100Hz\r\nEffectsChannels=16\r\nLatency=40\r\nAmbientFactor=0.700000\r\nDopplerSpeed=6500.000000\r\nUseSurround=False\r\nReverseStereo=False\r\n
-[GlideDrv.GlideRenderDevice]\r\nDetailTextures=True\r\n`;
+[GlideDrv.GlideRenderDevice]\r\nDetailTextures=True\r\n[D3DDrv.D3DRenderDevice]\r\nDetailTextures=True\r\nUseGammaCorrection=True\r\n`;
 const registry = (audio = () => null) => {
   const gconfig = new ConfigCache({ files: new Map([['deusex.ini', ini]]) });
   return { gconfig, config: createNativeConfig({ gconfig, audio }) };
@@ -23,9 +23,13 @@ test('ini: names resolve through GConfig; a missing key or an unloaded class is 
   assert.equal(get(config, 'WindowsClient', 'brightness'), '0.600000');
   assert.equal(get(config, 'ini:Engine.Engine.AudioDevice', 'OutputRate'), '44100Hz');
   assert.equal(config.findClass('ini:Engine.Engine.NoSuchKey'), null);
-  assert.equal(config.findClass('D3DDrv.D3DRenderDevice'), null);
+  assert.equal(config.findClass('GlideDrv.GlideRenderDevice'), null);
   assert.equal(config.findField(config.findClass('WindowsClient'), 'Nope'), null);
-  assert.throws(() => config.findField(config.findClass('GlideDrv.GlideRenderDevice'), 'Resolution'), UnsupportedNativeConfigError);
+  // The render device is the D3D one whatever the ini names; a driver whose own properties are untabled is a boundary.
+  assert.equal(config.findClass('ini:Engine.Engine.GameRenderDevice').path, 'D3DDrv.D3DRenderDevice');
+  assert.equal(get(config, 'ini:Engine.Engine.GameRenderDevice', 'UseGammaCorrection'), 'True');
+  const glide = createNativeConfig({ gconfig: new ConfigCache({ files: new Map([['deusex.ini', ini]]) }), renderDevice: null });
+  assert.throws(() => glide.findField(glide.findClass('ini:Engine.Engine.GameRenderDevice'), 'Resolution'), UnsupportedNativeConfigError);
 });
 
 test('SET clamps the live instance, keeps the raw class default, and SaveConfig writes the section', () => {

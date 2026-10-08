@@ -39,8 +39,8 @@ takes input and closes:
   [value format](script-value-format.md).
 * `UObject::StaticExec` GET and SET for the viewport manager, audio device and render device
   classes, with their property tables, PostEditChange and SaveConfig:
-  [native config](script-native-config.md). `UGlideRenderDevice::Exec` GetRes / GetColorDepths and
-  `UWindowsViewport::Exec` SetRes.
+  [native config](script-native-config.md). `UD3DRenderDevice::Exec` GetRes (the render device is D3DDrv's, a host
+  choice) and `UWindowsViewport::Exec` SetRes.
 
 ## What each setting does in Play
 
@@ -55,10 +55,10 @@ takes input and closes:
 | Screen Resolution | `SetRes WxH` | a request to the page, which fixes its drawing buffer to that size (see below) |
 | Sample Rate, Sound Quality, Hardware 3D, Texture Color Depth, Render Device | config + restart prompt | stored; the menu itself says they apply after a restart |
 
-`GetCurrentRes` reports the page's real drawing buffer. The list `GetRes` returns is the Glide
-device's fixed list (`640x480 ... 1600x1200`), the installed `GameRenderDevice`, so the Resolution
-choice shows the entry matching the current size, or the first one when the browser's buffer is
-none of them (the original's current mode is always in the list).
+`GetCurrentRes` reports the page's real drawing buffer. The list `GetRes` returns is the D3D device's
+mode list, which the original takes from the DirectDraw enumeration; here it is a host input
+(`DEFAULT_DISPLAY_MODES`), so the Resolution choice shows the entry matching the current size, or the
+first one when the browser's buffer is none of them.
 
 ## Boundaries
 
@@ -76,7 +76,7 @@ none of them (the original's current mode is always in the list).
 
 ## Checks
 
-`scripts/validate-native-config.mjs` (52 checks, headless, the menus driven through
+`scripts/validate-native-config.mjs` (56 checks, headless, the menus driven through
 `src/viewer/menu-driver.mjs`), `scripts/validate-native-config-classes.mjs` (the property tables
 against the DLL constructors) and `scripts/validate-settings-play.mjs` (Playwright, worker mode, a
 worker-side `settingsProbe` call per step): Display > Brightness, Sound and Controls on

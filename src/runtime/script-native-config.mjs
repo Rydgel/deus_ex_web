@@ -5,7 +5,8 @@
  * `ConsoleCommand("get ini:Engine.Engine.AudioDevice SoundVolume")` and
  * `"set ini:Engine.Engine.ViewportManager Brightness 0.5"`. The named classes
  * are native: UClient / UWindowsClient (Engine.dll, WinDrv.dll),
- * UGalaxyAudioSubsystem (Galaxy.dll) and URenderDevice with its driver classes.
+ * UGalaxyAudioSubsystem (Galaxy.dll) and URenderDevice with its driver class (D3DDrv.dll, see
+ * PLAY_RENDER_DEVICE).
  * Their properties are declared by each class's StaticConstructor in the
  * `new(GetClass(), TEXT("Name"), RF_Public) UXProperty(CPP_PROPERTY(Member),
  * TEXT("Category"), CPF_Config)` pattern; the tables below were read from those
@@ -66,10 +67,23 @@ export const NATIVE_CONFIG_CLASSES = Object.freeze([
     prop('VolumetricLighting', B, 0x58, 'Client'), prop('ShinySurfaces', B, 0x5c, 'Client'), prop('Coronas', B, 0x60, 'Client'),
     prop('HighDetailActors', B, 0x64, 'Client'), prop('Description', S, 0x38, 'Client'), prop('DescFlags', I, 0x44, 'Client'),
     prop('DetailTextures', B, 0x78, 'Client')]},
-  ...['GlideDrv.GlideRenderDevice', 'D3DDrv.D3DRenderDevice', 'OpenGLDrv.OpenGLRenderDevice', 'SoftDrv.SoftwareRenderDevice',
+  {path: 'D3DDrv.D3DRenderDevice', superPath: 'Engine.RenderDevice', ctor: {dll: 'D3DDrv', start: 0x10001880}, properties: [
+    prop('UseMipmapping', B, 0x9ac, 'Options'), prop('UseTrilinear', B, 0x9b0, 'Options'), prop('UseMultitexture', B, 0x9b4, 'Options'),
+    prop('UsePalettes', B, 0x9b8, 'Options'), prop('UseGammaCorrection', B, 0x9bc, 'Options'), prop('Use3dfx', B, 0x9c0, 'Options'),
+    prop('UseTripleBuffering', B, 0x9c8, 'Options'), prop('UseVSync', B, 0x9cc, 'Options'), prop('UsePrecache', B, 0x9d8, 'Options'),
+    prop('UseVideoMemoryVB', B, 0x9dc, 'Options'), prop('UseAGPTextures', B, 0x9e0, 'Options'), prop('UseVertexFog', B, 0x9e4, 'Options'),
+    prop('dwVendorId', I, 0x9f4, 'Options'), prop('dwDeviceId', I, 0x9f8, 'Options')]},
+  ...['GlideDrv.GlideRenderDevice', 'OpenGLDrv.OpenGLRenderDevice', 'SoftDrv.SoftwareRenderDevice',
     'MetalDrv.MetalRenderDevice', 'SglDrv.SglRenderDevice'].map(path =>
     ({path, superPath: 'Engine.RenderDevice', ctor: null, properties: [], incomplete: true})),
 ]);
+
+/** The render device Play stands in for: **D3DDrv.D3DRenderDevice**, a documented host choice. The
+ * installed DeusEx.ini names GlideDrv.GlideRenderDevice, but everything Play draws follows D3DDrv
+ * (the -0.5 pixel centre, the Flush gamma ramp, visual acceptance captured from the D3D renderer,
+ * docs/visual-acceptance.md, docs/lighting.md), and the original runs one device. The menus must not
+ * mix two: `ini:Engine.Engine.GameRenderDevice` resolves to this class, whatever the ini file says. */
+export const PLAY_RENDER_DEVICE = 'D3DDrv.D3DRenderDevice';
 
 const lower = text => String(text).toLowerCase();
 const clampInt = (value, low, high) => value < low ? low : value >= high ? high : value;
@@ -85,7 +99,7 @@ const clampFloat = (value, low, high) => !(value >= low) ? low : value < high ? 
  *   loaded         class paths the engine has loaded (default: the configured
  *                  ViewportManager, AudioDevice and GameRenderDevice, with their bases)
  */
-export function createNativeConfig({gconfig, audio = () => null, onChange = () => {}, concrete = null}) {
+export function createNativeConfig({gconfig, audio = () => null, onChange = () => {}, concrete = null, renderDevice = PLAY_RENDER_DEVICE}) {
   const classes = new Map(NATIVE_CONFIG_CLASSES.map(cls => [lower(cls.path), cls]));
   const superOf = cls => cls.superPath ? classes.get(lower(cls.superPath)) : null;
   const chain = cls => { const out = []; for (let c = cls; c; c = superOf(c)) out.push(c); return out; };
@@ -95,7 +109,7 @@ export function createNativeConfig({gconfig, audio = () => null, onChange = () =
 
   // The classes the engine instantiated from [Engine.Engine] (UGameEngine::Init's StaticLoadClass of
   // ViewportManager, AudioDevice and GameRenderDevice) and their bases are the loaded UClasses.
-  const engineKey = key => gconfig.getString('Engine.Engine', key, 'System', 0x400);
+  const engineKey = key => lower(key) === 'gamerenderdevice' && renderDevice ? renderDevice : gconfig.getString('Engine.Engine', key, 'System', 0x400);
   const instanceClasses = (concrete ?? ['ViewportManager', 'AudioDevice', 'GameRenderDevice'].map(engineKey).filter(Boolean))
     .map(path => classes.get(lower(path))).filter(Boolean);
   const loadedPaths = new Set(instanceClasses.flatMap(cls => chain(cls).map(c => lower(c.path))));
@@ -172,8 +186,9 @@ export function createNativeConfig({gconfig, audio = () => null, onChange = () =
   function resolveName(name) {
     const prefix = /^(ini|usr):/i.exec(name);
     if (!prefix || name.length >= 0x400 || !name.includes('.')) return name;
-    const body = name.slice(4), dot = body.lastIndexOf('.');
-    return gconfig.getString(body.slice(0, dot), body.slice(dot + 1), /^ini/i.test(prefix[0]) ? 'System' : 'User', 0x400);
+    const body = name.slice(4), dot = body.lastIndexOf('.'), section = body.slice(0, dot), key = body.slice(dot + 1);
+    if (/^ini/i.test(prefix[0]) && lower(section) === 'engine.engine' && lower(key) === 'gamerenderdevice' && renderDevice) return renderDevice;
+    return gconfig.getString(section, key, /^ini/i.test(prefix[0]) ? 'System' : 'User', 0x400);
   }
   /** StaticFindObject(UClass, ANY_PACKAGE, name): a loaded native class by full path or bare name. */
   function findClass(token) {
@@ -236,7 +251,7 @@ export function createNativeConfig({gconfig, audio = () => null, onChange = () =
   }
 
   return {
-    classes, findClass, findField, getText, globalSetProperty, resolveName, loadedPaths,
+    classes, findClass, findField, getText, globalSetProperty, resolveName, loadedPaths, renderDevice,
     /** A live instance property of an instantiated class (hosts read Brightness here). */
     instance(path, name) {
       const cls = classes.get(lower(path));

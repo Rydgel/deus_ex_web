@@ -34,8 +34,12 @@ export class UnsupportedConsoleCommandError extends Error {
   }
 }
 
-/** GlideDrv.dll 0x10710174, the list UGlideRenderDevice::Exec GetRes logs. */
-export const GLIDE_RESOLUTIONS = '640x480 800x600 1024x768 1280x1024 1600x1200';
+/** The DirectDraw display-mode enumeration UD3DRenderDevice keeps (`EnumDisplayModes`), as a **host
+ * input**: the browser has no display modes to enumerate, so the page's offer stands in. Entries are
+ * {width, height, bits}; GetRes lists the 16-bit ones. Callers may supply their own through
+ * `services.displayModes()`. */
+export const DEFAULT_DISPLAY_MODES = Object.freeze([[640, 480], [800, 600], [1024, 768], [1280, 1024], [1600, 1200]]
+  .flatMap(([width, height]) => [16, 32].map(bits => Object.freeze({width, height, bits}))));
 export const IST_PRESS = 1, IST_HOLD = 2, IST_RELEASE = 3, IST_AXIS = 4;
 
 // Each body's ParseCommand keywords, in the order its fall-through path tests
@@ -44,7 +48,8 @@ export const IST_PRESS = 1, IST_HOLD = 2, IST_RELEASE = 3, IST_AXIS = 4;
 export const EXEC_KEYWORDS = Object.freeze({
   'UInput::Exec': ['BUTTON', 'PULSE', 'TOGGLE', 'AXIS', 'KEYNAME', 'KEYBINDING'],
   'URenderDevice::Exec': ['GetDetailTextures', 'ToggleDetailTextures'],
-  'UGlideRenderDevice::Exec': ['TMUDETAIL', 'GetRes', 'GetColorDepths'],
+  // GetRes is tested only when the device holds its DirectDraw object (+0x964).
+  'UD3DRenderDevice::Exec': ['GetRes', 'LodBias', 'ShowPools'],
   'UViewport::Exec': ['GETPING', 'INJECT', 'NETSPEED', 'LANSPEED', 'SHOWALL', 'REPORT', 'SHOT',
     'SHOWACTORS', 'HIDEACTORS', 'RMODE', 'EXEC'],
   'UWindowsViewport::Exec': ['EndFullscreen', 'ToggleFullscreen', 'GetCurrentRes', 'GetCurrentColorDepth',
@@ -393,15 +398,24 @@ export function createConsoleCommands({runtime, input, services}) {
     return false;
   }
 
-  /** UGlideRenderDevice::Exec (GlideDrv.dll 0x10707d90-0x10707e4d): URenderDevice::Exec first, then
-   * TMUDETAIL (toggles +0x20294; unsupported here), GetRes, GetColorDepths. GetRes logs the fixed
-   * list at 0x10710174 and GetColorDepths the string "16" at 0x10710148, each returning 1. The
-   * installed config's GameRenderDevice is this class (DeusEx.ini). */
-  function glideExec(cmd, ar) {
-    if (parseCommand(cmd, 'TMUDETAIL') !== null)
-      throw new UnsupportedConsoleCommandError(`UGlideRenderDevice::Exec TMUDETAIL is not implemented: ${cmd}`, {body: 'UGlideRenderDevice::Exec', keyword: 'TMUDETAIL'});
-    if (parseCommand(cmd, 'GetRes') !== null) { ar.log(GLIDE_RESOLUTIONS); return true; }
-    if (parseCommand(cmd, 'GetColorDepths') !== null) { ar.log('16'); return true; }
+  /** UD3DRenderDevice::Exec (D3DDrv.dll 0x100061b0): URenderDevice::Exec first, then GetRes (only with a
+   * DirectDraw object, +0x964): walk the device's display modes (element 0x7c bytes), keep the 16-bit
+   * ones (+0x54 == 0x10), skip a (width, height) already listed, and log up to 16 as "%ix%i" then
+   * " %ix%i", each only when the device's two size limits (members filled at Init, not recovered) are not
+   * below it. Then LodBias and ShowPools, which stay refused. GetColorDepths is not the device's: it
+   * falls through to UWindowsViewport::Exec, also refused. The mode list is the host's
+   * (DEFAULT_DISPLAY_MODES); with no size limits recovered the list is unfiltered. */
+  function d3dExec(cmd, ar) {
+    if (parseCommand(cmd, 'GetRes') !== null) {
+      const listed = [];
+      for (const mode of services.displayModes?.() ?? DEFAULT_DISPLAY_MODES)
+        if (mode.bits === 16 && !listed.some(entry => entry.width === mode.width && entry.height === mode.height)) listed.push(mode);
+      listed.slice(0, 16).forEach((mode, index) => ar.log(`${index ? ' ' : ''}${mode.width}x${mode.height}`));
+      return true;
+    }
+    for (const keyword of ['LodBias', 'ShowPools'])
+      if (parseCommand(cmd, keyword) !== null)
+        throw new UnsupportedConsoleCommandError(`UD3DRenderDevice::Exec ${keyword} is not implemented: ${cmd}`, {body: 'UD3DRenderDevice::Exec', keyword});
     return false;
   }
 
@@ -409,8 +423,8 @@ export function createConsoleCommands({runtime, input, services}) {
    * after the first 'x' (or 'X'); the colour depth after the next one, ColorBytes = depth / 8 (signed
    * division) or the viewport's own when 0. With X and Y both nonzero it calls
    * RenDev->SetRes(X, Y, ColorBytes, IsFullscreen()) (vtable +0x60) and returns 1 either way. The
-   * render device is the browser: SetRes is handed to `services.setResolution` as a request for that
-   * drawing-buffer size; there is no Glide mode to switch. */
+   * render device is the browser (D3D's stand-in): SetRes is handed to `services.setResolution` as a request for that
+   * drawing-buffer size; there is no display mode to switch. */
   function setRes(rest) {
     // appStrchr(S, 'x'), else 'X', else the empty string: the text after that character.
     const afterX = text => {
@@ -433,10 +447,9 @@ export function createConsoleCommands({runtime, input, services}) {
     const viewport = services.viewport(), actor = read(viewport, 'Actor');
     if (!actor) throw new Error('UViewport::Exec requires its Actor (UnPlayer check at line 0x1db)');
     if (inputExec(cmd, ar)) return true;
-    // The installed GameRenderDevice: GlideRenderDevice::Exec runs
-    // URenderDevice::Exec first.
+    // Play's render device (PLAY_RENDER_DEVICE): D3DRenderDevice::Exec runs URenderDevice::Exec first.
     claims('URenderDevice::Exec', cmd);
-    if (glideExec(cmd, ar)) return true;
+    if (d3dExec(cmd, ar)) return true;
     // 0x10373ae5-0x10373b0c: GETPING logs the literal "0" (0x1047c2b4).
     if (parseCommand(cmd, 'GETPING') !== null) { ar.log('0'); return true; }
     claims('UViewport::Exec', cmd);

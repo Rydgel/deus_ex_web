@@ -1,6 +1,6 @@
 /** The native config class tables (src/runtime/script-native-config.mjs) against the
  * StaticConstructors they were read from: tools/native-class-properties.py scans each constructor in
- * the hash-pinned DLLs (Engine, WinDrv, Galaxy) for the
+ * the hash-pinned DLLs (Engine, WinDrv, Galaxy, D3DDrv) for the
  * `new(GetClass(), TEXT("Name"), RF_Public) UXProperty(CPP_PROPERTY(Member), TEXT("Category"), Flags)`
  * sequence, and every property's name, type, member offset, flags (CPF_Config 0x4000), category and
  * registration order must equal the table. The Galaxy `OutputRates` and Client `Details` enum names

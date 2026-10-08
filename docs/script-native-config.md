@@ -11,7 +11,18 @@ Brightness slider follows each `set` with `FLUSH`. The three classes behind thos
 | --- | --- | --- |
 | `ViewportManager` | `WinDrv.WindowsClient` (base `Engine.Client`, UClient) | WinDrv.dll, Engine.dll |
 | `AudioDevice` | `Galaxy.GalaxyAudioSubsystem` (base `Engine.AudioSubsystem`) | Galaxy.dll |
-| `GameRenderDevice` | `GlideDrv.GlideRenderDevice` (base `Engine.RenderDevice`) | GlideDrv.dll, Engine.dll |
+| `GameRenderDevice` | `D3DDrv.D3DRenderDevice` (base `Engine.RenderDevice`), a host choice, see below | D3DDrv.dll, Engine.dll |
+
+**One render device (2026-10-08).** The installed DeusEx.ini names `GlideDrv.GlideRenderDevice`, but
+the original runs one device and everything Play draws follows D3DDrv: the `ScreenX - 0.5` pixel
+centre, the gamma ramp loaded by `UD3DRenderDevice::Flush`, and visual acceptance captured from the
+D3D renderer ([visual acceptance](visual-acceptance.md), [lighting](lighting.md#display-ramp)). So
+Play's `GameRenderDevice` is **`D3DDrv.D3DRenderDevice`**, a documented host choice (like the browser
+standing in for the hardware): `PLAY_RENDER_DEVICE` makes `ini:Engine.Engine.GameRenderDevice`
+resolve to it whatever the file says (the installed value is still readable through GConfig). Its
+14 own properties (`UseMipmapping` ... `dwDeviceId`, ctor `0x10001880`) are tabled and compared with
+the DLL like the others; `UD3DRenderDevice::PostEditChange` is `UObject::PostEditChange` (the vtable
+slot is the import thunk), so a `set` on it only stores and saves. No evidence points the other way.
 
 `src/runtime/script-native-config.mjs` is the registry behind them;
 `script-console-command.mjs` routes `UObject::StaticExec` GET and SET to it, and the
@@ -49,16 +60,16 @@ so a `-0.0` exports as `0.000000`.
 `new(GetClass(), TEXT("Name"), RF_Public) UXProperty(CPP_PROPERTY(Member), TEXT("Category"), 0x4000)`
 and prints name, type, member offset, flags, category and bool bit mask. The tables in
 `NATIVE_CONFIG_CLASSES` are that output; `scripts/validate-native-config-classes.mjs`
-re-derives them and requires equality: **52 properties** of Engine.Client (17, ctor
+re-derives them and requires equality: **66 properties** of Engine.Client (17, ctor
 `0x10375010`), WinDrv.WindowsClient (10, `0x111015f0`), Galaxy.GalaxyAudioSubsystem (18,
-`0x10604bb0`) and Engine.RenderDevice (7, `0x103713c0`), in registration order
+`0x10604bb0`), Engine.RenderDevice (7, `0x103713c0`) and D3DDrv.D3DRenderDevice (14, `0x10001880`), in registration order
 (`UStruct::AddCppProperty` `0x10125fd0` prepends, so iteration is reversed). The member
 offsets agree with the SDK's `UClient` layout (`UnCamera.h`). The two enums come from the
 FNames the constructors create: `Details` {High, Medium, Low, Ultra Low} for TextureDetail /
 SkinDetail and `OutputRates` {8000Hz … 48000Hz} for Galaxy's OutputRate (the byte clamped
 to <= 6 by `PostEditChange`).
 
-The other render devices (Glide, D3D, OpenGL, Soft, Metal, Sgl) are registered with the
+The other render devices (Glide, OpenGL, Soft, Metal, Sgl) are registered with the
 `Engine.RenderDevice` properties only: a name that is not found on them is an explicit
 `UnsupportedNativeConfigError`, never "Unrecognized property". A class the engine did not
 instantiate (anything but the three configured above and their bases) is not found, as in
@@ -99,13 +110,19 @@ loads the ramp `appPow(i / 255, 1 / (2.5 * Brightness))`. The window host record
 (`display-ramp.mjs brightnessGamma`: `1 / float32(float32(b) * 2.5)`, the largest float for 0).
 The control's range is now 0..1, the menu's.
 
-`GetRes` and `GetColorDepths` are answered by `UGlideRenderDevice::Exec` (GlideDrv.dll
-`0x10707dec`, `0x10707e22`): the fixed strings `640x480 800x600 1024x768 1280x1024 1600x1200`
-and `16`; `TMUDETAIL` stays refused. `SetRes WxH[xD]` is `UWindowsViewport::Exec` (WinDrv.dll
-`0x1110715f`): the parse is translated and the `RenDev->SetRes(X, Y, ColorBytes, IsFullscreen())`
-call becomes a **request** to the page, which fixes its drawing buffer to that size and scales it
-to fit (`main.mjs` `fixedResolution`). No Glide mode exists to switch; this is the browser
-standing in for the render device, labelled as such.
+`GetRes` is answered by `UD3DRenderDevice::Exec` (D3DDrv.dll `0x100061b0`; the keyword is tested
+only when the device holds its DirectDraw object, `+0x964`): it walks the device's display modes,
+keeps the 16-bit ones (`bits == 0x10`), skips a width x height already listed and logs up to 16 as
+`%ix%i` then ` %ix%i`. The two size limits it also compares are members filled at Init whose writer
+is not recovered, so the list is unfiltered. **The mode list is a host input**: the original's comes
+from the DirectDraw `EnumDisplayModes` of the monitor; the browser has none, so
+`DEFAULT_DISPLAY_MODES` (640x480 ... 1600x1200, 16- and 32-bit) stands in, and a host may supply its
+own through `services.displayModes()`. `GetColorDepths` is not the D3D device's: it falls to
+`UWindowsViewport::Exec` and stays refused, as do the device's `LodBias` and `ShowPools`.
+`SetRes WxH[xD]` is `UWindowsViewport::Exec` (WinDrv.dll `0x1110715f`): the parse is translated and the
+`RenDev->SetRes(X, Y, ColorBytes, IsFullscreen())` call becomes a **request** to the page, which fixes
+its drawing buffer to that size and scales it to fit (`main.mjs` `fixedResolution`). No display mode
+exists to switch; this is the browser standing in for the render device, labelled as such.
 
 ## Not covered
 
@@ -127,9 +144,9 @@ standing in for the render device, labelled as such.
 
 ## Checks
 
-* `scripts/validate-native-config-classes.mjs` (`NATIVE_PROBE_PYTHON`): the 52-property tables
+* `scripts/validate-native-config-classes.mjs` (`NATIVE_PROBE_PYTHON`): the 66-property tables
   and both enums against the DLL constructors.
-* `scripts/validate-native-config.mjs` (headless): 52 checks. Part 1 drives the registry over the
+* `scripts/validate-native-config.mjs` (headless): 56 checks. Part 1 drives the registry over the
   installed DeusEx.ini (class resolution, FindField, ExportText, every clamp, SaveConfig into
   GConfig, the reload). Part 2 runs the original menus in Training: Sound sliders reach the
   mirror library's `glxSetSampleVolume` / `glxSetMusicVolume` with the x87 arithmetic of

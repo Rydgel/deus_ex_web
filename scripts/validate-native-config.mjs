@@ -17,7 +17,7 @@ import {AssetStore} from '../src/unreal/assets.mjs';
 import {decodeMap} from '../src/unreal/map.mjs';
 import {createGame} from '../src/viewer/game.mjs';
 import {loadConfigCache} from '../src/runtime/config-cache.mjs';
-import {createNativeConfig, UnsupportedNativeConfigError} from '../src/runtime/script-native-config.mjs';
+import {createNativeConfig, PLAY_RENDER_DEVICE, UnsupportedNativeConfigError} from '../src/runtime/script-native-config.mjs';
 import {createMenuDriver} from '../src/viewer/menu-driver.mjs';
 import {gameDirectory} from './game-directory.mjs';
 import {createPlayerInputFixture} from './player-input-fixture.mjs';
@@ -48,13 +48,17 @@ const is = (actual, expected, label) => { assert.deepEqual(actual, expected, lab
   is(get('ini:Engine.Engine.AudioDevice', 'OutputRate'), '44100Hz', 'Galaxy OutputRates enum');
   is(get('ini:Engine.Engine.AudioDevice', 'AmbientFactor'), '0.700000', 'float');
   is(get('ini:Engine.Engine.AudioDevice', 'Latency'), '40', 'int');
-  is(get('ini:Engine.Engine.GameRenderDevice', 'DetailTextures'), 'True', 'URenderDevice property of the Glide device');
+  // One render device: the installed ini names Glide, Play's rendering is D3DDrv's (PLAY_RENDER_DEVICE).
+  is([gconfig.getString('Engine.Engine', 'GameRenderDevice', 'System'), config.findClass('ini:Engine.Engine.GameRenderDevice').path],
+    ['GlideDrv.GlideRenderDevice', PLAY_RENDER_DEVICE], 'GameRenderDevice resolves to the D3D device the renderer follows');
+  is(get('ini:Engine.Engine.GameRenderDevice', 'DetailTextures'), 'True', 'URenderDevice property of the D3D device');
+  is(get('ini:Engine.Engine.GameRenderDevice', 'UseGammaCorrection'), 'True', 'a D3DRenderDevice property');
   is(get('ini:Engine.Engine.GameRenderDevice', 'HighDetailActors'), 'True', 'another');
   // Lookups that fail the way the original's do.
   is(config.findClass('ini:Engine.Engine.NoSuchKey'), null, 'ResolveName fails for a missing ini key');
-  is(config.findClass('D3DDrv.D3DRenderDevice'), null, 'a render device the engine did not load');
+  is(config.findClass('GlideDrv.GlideRenderDevice'), null, 'a render device the engine did not load');
   is(config.findField(config.findClass('WindowsClient'), 'NoSuchProperty'), null, 'FindField returns none');
-  assert.throws(() => config.findField(config.findClass('GlideDrv.GlideRenderDevice'), 'Resolution'), UnsupportedNativeConfigError); checks++;
+  is(config.findField(config.findClass('ini:Engine.Engine.GameRenderDevice'), 'NoSuchDeviceProperty'), null, 'the D3D device is fully tabled: FindField returns none');
   // GlobalSetProperty: instance clamp, raw defaults, SaveConfig into GConfig.
   set('ini:Engine.Engine.ViewportManager', 'Brightness', '7');
   is(config.instance('WinDrv.WindowsClient', 'Brightness'), 1, 'UClient::PostEditChange clamps the live Brightness to 1');
@@ -130,6 +134,10 @@ const is = (actual, expected, label) => { assert.deepEqual(actual, expected, lab
   is(client.decals, true, 'the installed Decals=True');
   host.consoleCommands.consoleCommand(player, 'set ini:Engine.Engine.ViewportManager Decals False');
   is([client.decals, host.consoleCommands.consoleCommand(player, 'get ini:Engine.Engine.ViewportManager Decals')], [false, 'False'], 'Decals off reaches Client.Decals');
+  // Display modes: UD3DRenderDevice::Exec GetRes lists the host's 16-bit modes once each; GetColorDepths is not the
+  // D3D device's and stays refused (UWindowsViewport::Exec).
+  is(host.consoleCommands.consoleCommand(player, 'GetRes'), '640x480 800x600 1024x768 1280x1024 1600x1200', 'GetRes');
+  assert.throws(() => host.consoleCommands.consoleCommand(player, 'GetColorDepths'), error => error.name === 'UnsupportedConsoleCommandError'); checks++;
   // Resolution: SetRes becomes a request for the page.
   host.consoleCommands.consoleCommand(player, 'SetRes 1024x768');
   is(host.display.resolution, {width: 1024, height: 768, colorBytes: null}, 'SetRes request'); is(host.display.resolutionVersion, 1, 'versioned');
