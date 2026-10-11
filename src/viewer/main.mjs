@@ -476,11 +476,17 @@ function viewportFrustum(command) {
 }
 // The camera passes the last frame drew (terminalProbe): rectangle and draw calls.
 let viewportPassesDrawn = [];
+// The snapshot's packed mesh records (mesh-frame-pack.mjs), which the HUD frame's late actor records also use.
+let frameWords = null;
 function viewportWorldPass(command) {
   const plan = command.pass;
   if (!plan || !world || !(command.width > 0 && command.height > 0)) return;
   const callsBefore = renderer.info.render.calls;
   aimViewportCamera(command); viewportCamera.layers.disable(DECAL_LAYER);
+  // The frame's actors, updated on the simulation side after the main frame's
+  // (sim-session.mjs planViewportPass): their poses, LOD and lighting for this
+  // camera, in this frame, before the pass draws them.
+  if (npcPreview && plan.late) npcPreview.draw.apply(plan.late, fromView(viewportCamera.position.toArray()), frameWords);
   const box = renderViewportFor(command), markersVisible = world.markers.visible;
   renderer.setViewport(...box); renderer.setScissor(...box); renderer.setScissorTest(true);
   world.markers.visible = false;
@@ -1576,7 +1582,7 @@ function drawFrame(snap, time) {
     phaseMark = performance.now();
     applySimEvents(snap.events, { world, actors: npcPreview, weapon: weaponDraw });
   }
-  const frame = snap?.begin ?? null, words = packViews(snap?.pack);
+  const frame = snap?.begin ?? null, words = frameWords = packViews(snap?.pack);
   if (playing && frame) {
     world.syncMovers(frame.movers);
     // The simulation side points its own camera the same way

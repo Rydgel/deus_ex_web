@@ -305,7 +305,7 @@ export function createMeshLightingView(runtime, levelSource, { exportName, expor
       const flags = polyFlags | setup.flags;
       // Validation only (decal-probe.mjs meshLightProbe): one watched
       // actor's light infos with the inputs their type functions read.
-      if (strobeBefore) view.watch.records.push({ timeSeconds: frame.timeSeconds, strobeBefore,
+      if (strobeBefore) view.watch.records.push({ timeSeconds: frame.timeSeconds, strobeBefore, origin: [...frame.origin], mirror: frame.mirror,
         strobe: [globals.strobe.time, globals.strobe.flag], noiseA: globals.noise ? Array.from(globals.noise.A) : null,
         levelBrightness: frame.levelBrightness, lights: setup.lights.map(info => ({ name: info.light.actor?.name,
           flickerKey: info.light.flickerKey ?? 0, brightness: info.brightness, fade: info.tagFade, color: [...info.color],

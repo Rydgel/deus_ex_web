@@ -67,7 +67,7 @@ export function createSimSession(game, { assets = null, events = [], exportName 
   let occlusion = null, drawWorlds = 0, pendingOcclusion = null;
   // ViewportWindow world frames (planViewportPass): how many the last HUD
   // frame drew, and their camera.
-  let viewportFrames = 0, lastViewportFrames = 0;
+  let viewportFrames = 0;
   const viewportCamera = createPlayCamera();
   // The moving brush tracker's movers ({names, actors, indices: their
   // Level.Actors slots} in its order; null with ?moverTracker=off) and the
@@ -525,18 +525,18 @@ export function createSimSession(game, { assets = null, events = [], exportName 
   // A ViewportWindow's DrawWorld (Render.dll 0x10b1cb90 on the master frame
   // XViewportWindow::Draw made, docs/script-window-viewport.md "Camera
   // pass"), planned inside the window host's DrawWorld while Draw holds the
-  // origin's bHidden and the player's bBehindView: DrawWorld's frame counter
-  // and OccludeBsp from the frame's camera at the window's size, the sky
-  // frame when OccludeBsp makes one, the actor layer's decisions with the
-  // root frame's admission read live, and render feedback for the actors
-  // and sprites the pass draws. SetupDynamics' Frame->Sprite, the decal
-  // block, mirrors, coronas and per-frame lighting are not run for it.
+  // origin's bHidden and the player's bBehindView, after the main frame's
+  // DrawWorld: DrawWorld's frame counter and OccludeBsp from the frame's
+  // camera at the window's size, the sky frame when OccludeBsp makes one,
+  // SetupDynamics' candidates read live, and render feedback for the
+  // actors and sprites the pass draws. The actors it draws are updated now
+  // as the main frame's update does (actorScene.updateFrame): posed, with
+  // DrawLodMesh's LOD and SetupForActor's lighting from this frame's own
+  // Coords, in this same frame.
   let lastViewportPlans = [];
-  // Camera frames pose exactly the actors the previous HUD frame's camera
-  // Frame->Sprite held (with mirror children's ids): a Set, as OccludeFrame's.
-  let viewportIds = new Set(), nextViewportIds = new Set();
-  const viewportChildren = mirror => viewportIds.size === 0 || mirror === true ? mirror
-    : new Set([...(mirror instanceof Set ? mirror : []), ...viewportIds]);
+  // The HUD frame's packed mesh records (mesh-frame-pack.mjs): the camera
+  // frames' late actor updates add to the frame's own (frame()).
+  let framePack = null;
   function planViewportPass(command) {
     if (!(command.width > 0 && command.height > 0)) return null;
     viewportFrames++;
@@ -545,25 +545,22 @@ export function createSimSession(game, { assets = null, events = [], exportName 
     applyPlayFrame(viewportCamera, view, { render: true, width: command.width, height: command.height });
     setPixelCentre(viewportCamera, command.width, command.height);
     viewportCamera.updateMatrixWorld();
-    const pass = { visibility: null, sky: null, decisions: null };
+    const pass = { visibility: null, sky: null, decisions: null, late: null };
     // The camera frame's own SetupDynamics candidates (the actor layer's
     // bindings read live under Draw's flags, the sprite records), then
     // OccludeBsp from its camera with Frame->Sprite's keys: exactly those
     // actors and sprites are drawn and stamped, as for the main frame.
     const ids = new Set(), sprites = new Set();
+    let seen = null;
     if (occlusion && occlusion.setupSupported && actorScene) {
       const entries = packDynamics(occlusion, { sprites: live.sprites, iterators: live.iterators, ...actorScene.setupArgs(live.meshItems) });
-      const seen = visibility(view, command.width, command.height, entries.length, { decals: false, movers: false });
-      pass.visibility = { nodes: seen.nodes, movers: seen.movers };
-      pass.projection = projectionOf(seen.master.words);
-      if (pass.projection) setFrameProjection(viewportCamera, pass.projection);
-      if (seen.sky) pass.sky = sky(view.location);
+      seen = visibility(view, command.width, command.height, entries.length, { decals: false, movers: false });
       for (const key of seen.sprites) {
         const entry = entries[key];
         if (entry.sprite) sprites.add(entry.sprite.handle); else ids.add(entry.binding.id);
       }
-    } else if (occlusion) {
-      const seen = visibility(view, command.width, command.height, -1, { decals: false, movers: false });
+    } else if (occlusion) seen = visibility(view, command.width, command.height, -1, { decals: false, movers: false });
+    if (seen) {
       pass.visibility = { nodes: seen.nodes, movers: seen.movers };
       pass.projection = projectionOf(seen.master.words);
       if (pass.projection) setFrameProjection(viewportCamera, pass.projection);
@@ -574,18 +571,25 @@ export function createSimSession(game, { assets = null, events = [], exportName 
     const info = runtime.levelFor(game.player.collisionActor).actors[0];
     const time = Math.fround(runtime.readNamed(info, 'TimeSeconds'));
     if (actorScene) {
-      pass.decisions = actorScene.viewportPasses(frustum, ids);
+      // The Frame->Sprite actors are updated as a second DrawWorld would
+      // draw them: DrawLodMesh's LOD choice and GetFrame call, SetupForActor
+      // and Light with this frame's Coords (the viewport actor's FovAngle is
+      // the window's while Draw holds it). The others are hidden in this pass.
+      const lit = Boolean(meshLighting?.frame);
+      pass.late = actorScene.updateFrame({ lit, frustum, camera: viewportCamera, cull: false, main: ids,
+        ...(seen ? { lod: { ...seen.lod, fov: command.fov },
+          lightRoot: lit ? meshLighting.childFrame({ coords: seen.lod.coords, mirror: 1, planes: seen.master.planes }) : null } : {}),
+        ...(framePack ? { pack: framePack } : {}) }, ids);
+      pass.decisions = new Map(actorScene.all().filter(binding => !ids.has(binding.id)).map(binding => [binding.id, { root: false }]));
       // DrawActorSprite stamps every Frame->Sprite actor, drawn or occluded
       // by the three.js cull (the main frame's `occluded` set).
       for (const binding of actorScene.all()) if (ids.has(binding.id)) runtime.writeNamed(binding.actor, 'LastRenderTime', time);
     }
     for (const handle of sprites) runtime.writeNamed(identityOfHandle(handle), 'LastRenderTime', time);
-    for (const id of ids) nextViewportIds.add(id);
     const stampedNames = actorScene ? actorScene.all().filter(b => ids.has(b.id)).map(b => b.actor.name) : [];
     lastViewportPlans.push({ rect: [command.x, command.y, command.width, command.height],
       location: [...command.location], rotation: [...command.rotation], fov: command.fov, ms: +(performance.now() - planStarted).toFixed(2), nodes: pass.visibility?.nodes.length ?? null,
-      sky: Boolean(pass.sky), actors: pass.decisions ? [...pass.decisions].filter(([, d]) => d.root)
-        .map(([id]) => actorScene.all().find(b => b.id === id)?.actor?.name ?? id) : null, sprites: sprites.size, stamped: stampedNames, time });
+      sky: Boolean(pass.sky), actors: stampedNames, sprites: sprites.size, stamped: stampedNames, time, late: pass.late?.records.length ?? 0 });
     return pass;
   }
   // Accessibility mirrors native TextWindow contents: the window, its title
@@ -623,9 +627,8 @@ export function createSimSession(game, { assets = null, events = [], exportName 
       let commands = [], infoLink = null;
       try {
         game.hud.host?.setViewportPlanner?.(planViewportPass);
-        viewportFrames = 0; lastViewportPlans = []; nextViewportIds = new Set();
-        try { commands = plainHudCommands(game.hud.commands(width, height, view)); }
-        finally { lastViewportFrames = viewportFrames; viewportIds = nextViewportIds; }
+        viewportFrames = 0; lastViewportPlans = [];
+        commands = plainHudCommands(game.hud.commands(width, height, view));
         infoLink = infoLinkText();
       } catch (error) { failed = true; errors.push(plainError(error)); }
       return { errors, commands, infoLink };
@@ -736,7 +739,7 @@ export function createSimSession(game, { assets = null, events = [], exportName 
       }
       // The frame's packed GetFrame plans and SetupForActor results
       // (mesh-frame-pack.mjs), a fresh buffer each frame.
-      const pack = createMeshFramePack();
+      const pack = framePack = createMeshFramePack();
       const snapshot = { errors, timings, begin: null, drawWorld: true, sprites: null, actors: null, stamps: null,
         coronas: null, weapon: null, hud: null, audioMs: 0, events: null, pack: null, display: null };
       let begun = null;
@@ -814,7 +817,7 @@ export function createSimSession(game, { assets = null, events = [], exportName 
       // simulation-side caller (light-globals.mjs).
       if (begun?.light) begun.light.strobe = { time: lights.strobe.time, flag: lights.strobe.flag };
       snapshot.events = events.splice(0);
-      snapshot.pack = pack.words();
+      snapshot.pack = pack.words(); framePack = null;
       // What the render device took from the client config (docs/script-native-config.md): the
       // Brightness of its last Flush and the last SetRes request.
       const display = game.hud?.host?.display;
@@ -853,10 +856,7 @@ export function createSimSession(game, { assets = null, events = [], exportName 
         const frustum = new THREE.Frustum().setFromProjectionMatrix(
           new THREE.Matrix4().multiplyMatrices(view.projectionMatrix, view.matrixWorldInverse));
         const requested = !inspect && current?.visibility ? new Set(current.visibility.mirrors) : null;
-        // A ViewportWindow's frame last HUD frame: its actors are posed
-        // too (child-only outside the main frame), as for mirror children.
-        const viewports = !inspect && lastViewportFrames > 0;
-        const children = (drawn ? drawn.mayRender(view, requested) : false) || viewports;
+        const children = drawn ? drawn.mayRender(view, requested) : false;
         // The main frame's dynamics run after the layer's reads; mirror child
         // frames then follow OccludeBsp's requests.
         // The LOD's FovAngle is the viewport actor's (game.view()).
@@ -864,8 +864,8 @@ export function createSimSession(game, { assets = null, events = [], exportName 
         const lodOf = result => result?.lod && fov !== undefined ? { ...result.lod, fov } : null;
         const occlude = !inspect && pendingOcclusion ? args => {
           const result = occludeMain({ ...args, childFrames });
-          return { main: result.main, children: viewportChildren(result.frames ? result.children
-            : drawn ? drawn.mayRender(view, new Set(result.mirrors)) : false), lod: lodOf(result),
+          return { main: result.main, children: result.frames ? result.children
+            : drawn ? drawn.mayRender(view, new Set(result.mirrors)) : false, lod: lodOf(result),
             lightFrames: lightFramesOf(result.frames), lodFrames: fov !== undefined ? lodFramesOf(result.frames, fov) : null };
         } : null;
         frame = actorScene.update({ lit: Boolean(meshLighting?.frame), frustum, camera: view, cull: !children, children,

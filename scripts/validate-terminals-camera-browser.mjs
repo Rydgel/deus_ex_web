@@ -19,7 +19,9 @@ import path from 'node:path';
 import {chromium} from '@playwright/test';
 import {createServer} from 'vite';
 import {fileURLToPath} from 'node:url';
+import {existsSync} from 'node:fs';
 import {gameDirectory} from './game-directory.mjs';
+import {meshOracleSpec} from './lodmesh-lod-cases.mjs';
 
 const option = (name, fallback) => { const i = process.argv.indexOf(`--${name}`); return i < 0 ? fallback : process.argv[i + 1]; };
 try { gameDirectory(); } catch { console.log('SKIP validate-terminals-camera-browser: no installed game data'); process.exit(0); }
@@ -66,6 +68,8 @@ try {
   if (process.env.TERMINAL_DEBUG) console.log('after click', JSON.stringify(await probe({})), JSON.stringify(await page.evaluate(() => window.deusExViewer.windowProbe())),
     JSON.stringify((({mode, paused, runtimeError, gameplay}) => ({mode, paused, runtimeError, gameplay}))(await page.evaluate(() => window.deusExViewer.status()))));
   assert.equal(await top(), 'deusex.networkterminalsecurity', 'the right click frobs ComputerSecurity1');
+  // SetupForActor's inputs for the props the camera room's frame lights (meshLightProbe watch).
+  await page.evaluate(() => window.deusExViewer.meshLightProbe({watch: 'Chair9'}));
   await page.keyboard.type('NSF001'); await page.keyboard.press('Tab');
   await page.keyboard.type('smashthestate'); await page.keyboard.press('Enter');
   let state = null;
@@ -81,10 +85,15 @@ try {
   const crop = [Math.round(width / ratio), Math.round(height / ratio), Math.round(canvas[0] + x / ratio), Math.round(canvas[1] + y / ratio)];
   const stats = width ? execFileSync('magick', [shot, '-crop', `${crop[0]}x${crop[1]}+${crop[2]}+${crop[3]}`, '+repage', '-colorspace', 'gray',
     '-format', '%[fx:mean] %[fx:standard_deviation]', 'info:'], {encoding: 'utf8'}).trim().split(' ').map(Number) : null;
+  // The LOD and lighting the actor layer decided for the last frames: each
+  // binding's last DrawLodMesh inputs (lodProbe) and the watched actor's
+  // SetupForActor records.
+  const lodRows = await page.evaluate(() => window.deusExViewer.lodProbe({}));
+  const lighting = await page.evaluate(() => window.deusExViewer.meshLightProbe({take: true}));
   const status = await page.evaluate(() => window.deusExViewer.status());
-  report = {sim, cone: state.cone, frameMs: +interval.toFixed(1), camera: state.camera, plans: state.viewports, passes: state.page, crop, stats, runtimeError: status.runtimeError?.message ?? null, pageErrors: errors};
+  report = {sim, lodRows, lighting, cone: state.cone, frameMs: +interval.toFixed(1), camera: state.camera, plans: state.viewports, passes: state.page, crop, stats, runtimeError: status.runtimeError?.message ?? null, pageErrors: errors};
 } finally { await browser.close(); await server?.close(); if (!option('shot', null)) rmSync(scratch, {recursive: true, force: true}); }
-console.log(JSON.stringify(report, null, 1));
+console.log(JSON.stringify({...report, lodRows: undefined, lighting: undefined, cone: report.cone.length}, null, 1));
 assert.deepEqual(report.pageErrors, []);
 assert.equal(report.runtimeError, null);
 assert.equal(report.plans.length, 1, 'one ViewportWindow world frame per HUD frame (views 2 and 3 have no camera)');
@@ -106,4 +115,50 @@ assert.equal(report.passes.length, 1, 'the page draws that frame');
 assert.deepEqual(report.passes[0].rect, plan.rect, 'into the window rectangle the plan was made for');
 assert.ok(report.passes[0].calls > 0, 'with draw calls');
 assert.ok(report.stats[1] > 0.02, `the rectangle holds an image (luma standard deviation ${report.stats[1]})`);
+// The camera frame lit and LOD-selected the actors it draws with its own
+// Coords, in the same frame: a record of the watched actor's SetupForActor
+// carries the camera's origin (the master frame's Coords.Origin), and each
+// drawn binding's last DrawLodMesh frame is the camera's (Coords origin and
+// the window's FOV).
+const f32 = new Float32Array(1), u32 = new Uint32Array(f32.buffer), bits = v => { f32[0] = v; return u32[0]; };
+const cameraBits = plan.location.map(bits);
+assert.ok(report.lighting.records.some(record => record.origin.map(bits).every((b, i) => b === cameraBits[i])),
+  "SetupForActor lit the watched actor with the camera frame's Coords");
+const cameraRows = report.lodRows.filter(row => row.frame.coordsBits.slice(0, 3).every((b, i) => b === cameraBits[i]));
+for (const name of plan.actors) {
+  const row = cameraRows.find(r => r.actor === name);
+  if (row) assert.equal(row.frame.fovBits, bits(plan.fov), `${name}: DrawLodMesh reads the window's FOV`);
+}
+assert.ok(cameraRows.length > 0, 'the camera frame selected a LOD for the actors it draws');
+const python = process.env.NATIVE_PROBE_PYTHON ?? '.cache/native-probe-env/bin/python';
+let lodChecked = 0;
+if (existsSync(python)) {
+  const {lodMeshTanArgument, bitsFloat} = await import('../src/runtime/lodmesh-lod.mjs');
+  const doubleHex = value => { const v = new DataView(new ArrayBuffer(8)); v.setFloat64(0, value, true); return v.getBigUint64(0, true).toString(16).padStart(16, '0'); };
+  const byMesh = new Map();
+  for (const row of cameraRows) {
+    const key = `${row.meshPackage}:${row.meshIndex}`;
+    if (!byMesh.has(key)) byMesh.set(key, {pack: row.meshPackage, index: row.meshIndex, cases: [], rows: []});
+    const entry = byMesh.get(key), name = `${row.id}:${row.actor}`;
+    entry.cases.push({name, settings: row.frame.settings, lodBiasBits: row.inputs.lodBiasBits, drawScaleBits: row.inputs.drawScaleBits,
+      locationBits: row.inputs.locationBits, fovBits: row.frame.fovBits, fxBits: row.frame.fxBits, coordsBits: row.frame.coordsBits,
+      returnedCount: row.returned, tanBits: {[doubleHex(lodMeshTanArgument(bitsFloat(row.frame.fovBits)))]: row.frame.tanBits}});
+    entry.rows.push(row);
+  }
+  const root = gameDirectory(), specs = [], list = [...byMesh.values()];
+  for (const entry of list) specs.push((await meshOracleSpec(root, entry.pack, entry.index, entry.cases)).spec);
+  const reference = JSON.parse(execFileSync(python, ['scripts/native-lodmesh-lod-oracle.py', root],
+    {input: JSON.stringify(specs), encoding: 'utf8', maxBuffer: 256 << 20}));
+  list.forEach((entry, at) => {
+    for (const row of entry.rows) {
+      const original = reference.meshes[at].cases.find(c => c.name === `${row.id}:${row.actor}`);
+      assert.equal(row.selection.detailBits, original.selection.detailBits, `${row.actor}: the camera frame's LOD detail equals the original's`);
+      assert.equal(row.selection.requested, original.selection.requested, `${row.actor}: requested count`);
+      assert.equal(row.selection.active, Boolean(original.selection.active), `${row.actor}: LOD flag`);
+      lodChecked++;
+    }
+  });
+}
+console.log(`camera frame LOD: ${cameraRows.length} bindings selected with the camera's Coords (${lodChecked} against the original's selection); `
+  + `lighting records at the camera's origin: ${report.lighting.records.filter(r => r.origin.map(bits).every((b, i) => b === cameraBits[i])).length}`);
 console.log(`validate-terminals-camera-browser: PASS (${report.sim}; ${plan.nodes} nodes, ${plan.actors.length} actors, ${report.passes[0].calls} calls)`);

@@ -835,8 +835,11 @@ export async function createMeshBinding(runtime,actor,{id,originalObjectIndex,ke
         // with its own Coords, Mirror and LeafLights (view.lightFrames).
         frameLights.clear();frameSetups.clear();frameCtxs.clear();
         if(lighting&&view.lit&&lighting.frame){
+          // `view.lightRoot`: the lighting frame of a root frame that is not the
+          // main viewport's (a ViewportWindow's DrawWorld, updateFrame), for the
+          // pass that is not a child frame's.
           const lightIn=lf=>{
-            const ctx=lf?lf.ctx:null,pool=lf?lf.index:0;
+            const ctx=lf?lf.ctx:view.lightRoot??null,pool=lf?lf.index:0;
             if(mode==='gpu'){
               const prepared=lighting.setupMesh(actor,at>=0?setupFields(view.reads.views()):null,ctx);
               if(!prepared)return;
@@ -1144,6 +1147,33 @@ export async function createActorMeshSim(runtime,assets,asset,{kernel,player:pla
       layout?.endFrame();
       return {records:records.filter(Boolean),camera};
     },
+    /** Another root frame's update (a ViewportWindow's DrawWorld, in the HUD
+     * paint after the main frame's: docs/script-window-viewport.md "Camera
+     * pass"): the bindings in `ids` (its Frame->Sprite, its child frames'
+     * included), each updated as the main frame's update does with this
+     * frame's inputs in `view` (`main`, `children`, `frustum`, `lod`,
+     * `lodFrames`, `lightFrames`, `lightRoot`: this frame's own Coords for
+     * the lighting, `pack`). The calls come after the main frame's, as the
+     * original's second DrawWorld does: DrawLodMesh selects and calls
+     * GetFrame in this frame again, SetupForActor lights with its Coords,
+     * and the page applies the records and runs the passes once more
+     * (apply). Iterator mesh items keep the main frame's pose. Returns the
+     * records and the lighting frame's camera for the page's GPU passes, or
+     * null when no binding is updated. */
+    updateFrame(view={},ids){
+      const records=[];
+      frameViewer=null;frameViewer=viewer();
+      try{
+        if(lod&&view.lod)view={...view,lodFrame:lodFrame(view.lod,lodSettings),
+          lodFrames:view.lodFrames?.map(entry=>({index:entry.index,ids:entry.ids,frame:lodFrame(entry.lod,lodSettings)}))??null};
+        for(const binding of actors)if(ids.has(binding.id))records.push(binding.update(view));
+      }finally{frameViewer=null;}
+      if(!records.length)return null;
+      const root=view.lightRoot??lighting?.frame;
+      const camera=root?{origin:[...root.origin],axes:root.axes.map(axis=>[...axis])}:null;
+      layout?.endFrame();
+      return {records:records.filter(Boolean),camera};
+    },
     /** A mirror child pass's decisions, per binding id (`frustum`: the
      * pass camera's). */
     passVisibility(frustum){
@@ -1170,7 +1200,7 @@ export async function createActorMeshSim(runtime,assets,asset,{kernel,player:pla
     /** SetupDynamics' actor candidates for a frame of its own (a
      * ViewportWindow's DrawWorld), read live: the bindings, the iterator
      * items' bindings and the level order (packDynamics' arguments). */
-    setupArgs(items=[]){return {bindings:actors,items:itemCandidates(items),reads:null,levelIndex};},
+    setupArgs(items=[]){return {bindings:actors,items:itemCandidates(items),reads:null,levelIndex,itemCandidates};},
     /** Every binding, item bindings included. */
     all,
     /** URender::Exec's MLOD (+40, positive only), MLMODE (+48, non-negative)
