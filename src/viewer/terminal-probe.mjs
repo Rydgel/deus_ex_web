@@ -6,7 +6,7 @@
  * and points the view at it, so the page's own frob input reaches it.
  * Returns the player's FrobTarget, Location and ViewRotation and the last
  * HUD frame's ViewportWindow world frames (sim-session.mjs viewportState). */
-export function terminalProbe(game, session, { front = null, placeCamera = null, placePlayer = null, cameraName = 'SecurityCamera5' } = {}) {
+export function terminalProbe(game, session, { front = null, placeCamera = null, placePlayer = null, cameraName = 'SecurityCamera5', iterators = false, placeEmitters = null } = {}) {
   const runtime = game.doors.scriptRuntime.runtime, player = game.player.collisionActor;
   const read = (actor, name) => runtime.readNamed(actor, name);
   let placed = null;
@@ -26,6 +26,22 @@ export function terminalProbe(game, session, { front = null, placeCamera = null,
   // `placePlayer` [x, y, z]: the player stands elsewhere (the corona pass
   // lists the lights of the player's leaf, whatever the camera frame sees).
   if (placePlayer) runtime.farMoveActor(player, placePlayer, 0, 1);
+  // `placeEmitters` {location, rotation, count}: the first `count` LaserTriggers (the doorway beams: each
+  // trigger's LaserEmitter follows it) and their beam proxies stand at the location pointing along the
+  // rotation, one 32 units above the other (a fixture: the beams then lie where a mirror reflects them;
+  // the proxy moves too, since an emitter stays frozen while its proxy is far from the player).
+  if (placeEmitters) {
+    const triggers = runtime.levelFor(player).actors.filter(actor => actor && /^LaserTrigger\d+$/.test(actor.name)).slice(0, placeEmitters.count ?? 1);
+    triggers.forEach((trigger, i) => {
+      const location = placeEmitters.location.map((v, k) => k === 2 ? v + 32 * i : v);
+      runtime.farMoveActor(trigger, location, 0, 1);
+      runtime.writeNamed(trigger, 'Rotation', placeEmitters.rotation);
+      const emitter = runtime.levelFor(player).actors.find(actor => actor && /^LaserEmitter\d+$/.test(actor.name) && read(actor, 'Owner') === trigger)
+        ?? runtime.levelFor(player).actors.filter(actor => actor && /^LaserEmitter\d+$/.test(actor.name))[i];
+      const proxy = emitter && read(emitter, 'proxy');
+      if (proxy) runtime.farMoveActor(proxy, location, 0, 1);
+    });
+  }
   const camera = level => level.actors.find(actor => actor?.name === cameraName);
   const cam = camera(runtime.levelFor(player));
   // `placeCamera` {location, rotation}: SecurityCamera5 stands elsewhere and
@@ -51,5 +67,7 @@ export function terminalProbe(game, session, { front = null, placeCamera = null,
     }
   }
   return { placed, cone, camera: cam ? { location: [...read(cam, 'Location')], rotation: [...read(cam, 'Rotation')] } : null, frobTarget: read(player, 'FrobTarget')?.name ?? null, location: [...read(player, 'Location')],
-    viewRotation: [...read(player, 'ViewRotation')], viewports: session.viewportState() };
+    viewRotation: [...read(player, 'ViewRotation')], viewports: session.viewportState(),
+    // The iterator state of the same frame (iteratorState), for the camera frame's items.
+    iterators: iterators ? session.iteratorState() : null };
 }

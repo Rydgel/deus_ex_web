@@ -407,8 +407,7 @@ conversation camera with lip sync. The render pass's translations run at its
 24-bit precision ([render-pass precision](render-pass-precision.md)).
 Twenty-six maps match the original's own frames at matched cameras and level time (122 of 130 views)
 ([visual acceptance](visual-acceptance.md)).
-Open: the LOD morph's world-space rounding, an iterator mesh item's per-pass
-pose in child and camera frames, a matched capture of the security cameras'
+Open: the LOD morph's world-space rounding, a matched capture of the security cameras'
 views (root frames with their own mirror and sky frames, decals, coronas, fog,
 LOD and lighting since 2026-10-11, [viewport window](script-window-viewport.md)), the
 host's depth range and float32 GPU transform under the frame projection, the

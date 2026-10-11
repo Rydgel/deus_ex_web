@@ -107,6 +107,8 @@ a mirror or sky pass runs this chain again: `Init` resets nextItem, prevLoc,
 prevRand, savedLoc and savedRot, and CurrentItem draws the stream again, so
 the last item (the one saved at a random place along the beam) is elsewhere
 in each frame ([child frames](bsp-occlusion.md#each-child-frames-own-setupdynamics)).
+Each frame draws its own items: an item that differs from the root frame's at its
+slot is a binding of its own, posed and lit in the frames that hold it (2026-10-11).
 
 ## Play
 

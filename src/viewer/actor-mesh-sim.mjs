@@ -1025,6 +1025,51 @@ export async function createActorMeshSim(runtime,assets,asset,{kernel,player:pla
   // of the actor, updated the same way; items draw whatever the actor's
   // bHidden (SetupDynamics admits the iterating actor, not its items).
   const itemPools=new Map(),SNAPSHOT=[['ScaleGlow','scaleGlow'],['DrawScale','drawScale'],['Location','location'],['Rotation','rotation']];
+  // Each frame's SetupDynamics builds its own items (docs/bsp-occlusion.md
+  // "Each child frame's own SetupDynamics"), and DrawFrame draws each frame's
+  // sprites with DrawActorSprite, which writes that sprite's own snapshot into
+  // the actor (0x10b2556a-0x10b25655) before DrawMesh poses, lights and draws
+  // it in that frame. An item some frame holds that the root frame's items at
+  // the same slot do not equal (a laser's saved last item, an electric arc's
+  // random beam) is therefore a binding of its own: an "extra", drawn only in
+  // the frames that hold it, as a sprite record of its own is. Items equal to a
+  // root frame's item share that item's binding, drawn in every frame that
+  // holds it with that frame's lighting and LOD.
+  const itemExtras=new Map();
+  const bits32=new Float32Array(1),words32=new Uint32Array(bits32.buffer);
+  const wordOf=value=>{bits32[0]=value;return words32[0];};
+  const itemKey=(item,slot)=>`${slot}:${item.location.map(wordOf).join()}:${item.rotation.join()}:${wordOf(item.drawScale)}:${wordOf(item.scaleGlow)}`;
+  /** The items one planning of a root frame has bound: `known` (actor ->
+   * item key -> binding), `itemOf` (binding -> its item) and the extras in use
+   * (`used`, with a per-actor `cursor` into the actor's extras). */
+  let scope=null;
+  const newScope=baseItems=>{
+    const made={known:new Map(),itemOf:new Map(),cursor:new Map(),used:new Set()},counts=new Map();
+    for(const item of baseItems){
+      const slot=counts.get(item.actor)??0;counts.set(item.actor,slot+1);
+      const binding=itemPools.get(item.actor)?.[slot]?.binding;
+      if(!binding)continue;
+      if(!made.known.has(item.actor))made.known.set(item.actor,new Map());
+      made.known.get(item.actor).set(itemKey(item,slot),binding);made.itemOf.set(binding,item);
+    }
+    return made;
+  };
+  const createItemBinding=(item,entry,alive)=>{
+    bind(item.actor,{originalObjectIndex:synthetic++,visible:()=>true})
+      .then(binding=>{if(disposed||!alive()){binding.dispose();return;}
+        entry.binding=binding;onCreate(binding.creation);})
+      .catch(error=>{entry.failed=error.message;errors.push({actor:`${item.actor.name??'?'} item`,message:error.message});});
+  };
+  /** One item's update with its snapshot written into the actor, and restored. */
+  const lastItems=new Map();
+  const withItem=(item,run,binding)=>{
+    if(binding)lastItems.set(binding.id,item);
+    const saved=SNAPSHOT.map(([name])=>runtime.readNamed(item.actor,name));
+    try{
+      for(const [name,key] of SNAPSHOT)runtime.writeNamed(item.actor,name,item[key]);
+      return run();
+    }finally{SNAPSHOT.forEach(([name],i)=>runtime.writeNamed(item.actor,name,saved[i]));}
+  };
   const drawItems=(items,view,records)=>{
     const counts=new Map();
     for(const item of items){
@@ -1033,19 +1078,12 @@ export async function createActorMeshSim(runtime,assets,asset,{kernel,player:pla
       if(!pool)itemPools.set(item.actor,pool=[]);
       if(!pool[slot]){
         const entry=pool[slot]={binding:null};
-        bind(item.actor,{originalObjectIndex:synthetic++,visible:()=>true})
-          .then(binding=>{if(disposed||itemPools.get(item.actor)!==pool){binding.dispose();return;}
-            entry.binding=binding;onCreate(binding.creation);})
-          .catch(error=>{entry.failed=error.message;errors.push({actor:`${item.actor.name??'?'} item`,message:error.message});});
+        createItemBinding(item,entry,()=>itemPools.get(item.actor)===pool);
         continue;
       }
       const binding=pool[slot].binding;
       if(!binding)continue;
-      const saved=SNAPSHOT.map(([name])=>runtime.readNamed(item.actor,name));
-      try{
-        for(const [name,key] of SNAPSHOT)runtime.writeNamed(item.actor,name,item[key]);
-        records.push(binding.update(view));
-      }finally{SNAPSHOT.forEach(([name],i)=>runtime.writeNamed(item.actor,name,saved[i]));}
+      records.push(withItem(item,()=>binding.update(view),binding));
     }
     for(const [actor,pool] of itemPools){
       const used=counts.get(actor)??0;
@@ -1055,15 +1093,48 @@ export async function createActorMeshSim(runtime,assets,asset,{kernel,player:pla
       }
       for(let i=used;i<pool.length;i++)if(pool[i].binding)records.push(pool[i].binding.hide());
     }
+    for(const [actor,list] of itemExtras)
+      if(!itemPools.has(actor)&&(!live?.has(actor)||read(actor,'bDeleteMe'))){
+        for(const entry of list)if(entry.binding){entry.binding.dispose();onRelease(entry.binding.id);}
+        itemExtras.delete(actor);
+      }
   };
-  const itemBindings=()=>[...itemPools.values()].flatMap(pool=>pool.map(entry=>entry.binding).filter(Boolean));
+  /** The extras the frames of this planning hold, updated with their own
+   * items; the others are hidden. */
+  const drawExtras=(view,records)=>{
+    for(const binding of scope?.used??[])records.push(withItem(scope.itemOf.get(binding),()=>binding.update(view),binding));
+    for(const list of itemExtras.values())
+      for(const entry of list)if(entry.binding&&!scope?.used.has(entry.binding))records.push(entry.binding.hide());
+  };
+  const itemBindings=()=>[...itemPools.values(),...itemExtras.values()].flatMap(pool=>pool.map(entry=>entry.binding).filter(Boolean));
   /** This frame's iterator items with the binding drawItems will update for
-   * each (the same slots), where one exists. */
-  const itemCandidates=items=>{
+   * each (the same slots), where one exists. A child frame's (or another
+   * root frame's, `frame` its name) item equal to one already bound in this
+   * planning (the base items', or an earlier frame's) shares that binding;
+   * any other takes an extra of the actor's, made when it does not exist yet
+   * (the item is not drawn until the binding exists, as for a new slot). */
+  const itemCandidates=(items,frame)=>{
     const counts=new Map(),out=[];
     for(const item of items){
       const slot=counts.get(item.actor)??0;counts.set(item.actor,slot+1);
-      const binding=itemPools.get(item.actor)?.[slot]?.binding;
+      if(frame===undefined||!scope){
+        const binding=itemPools.get(item.actor)?.[slot]?.binding;
+        if(binding)out.push({item,binding});
+        continue;
+      }
+      if(!scope.known.has(item.actor))scope.known.set(item.actor,new Map());
+      const keys=scope.known.get(item.actor),key=itemKey(item,slot);
+      let binding=keys.get(key);
+      // An item whose root slot has no binding yet (a new slot, still being made) has nothing to differ from.
+      if(!binding&&!itemPools.get(item.actor)?.[slot]?.binding)continue;
+      if(!binding){
+        let list=itemExtras.get(item.actor);
+        if(!list)itemExtras.set(item.actor,list=[]);
+        const at=scope.cursor.get(item.actor)??0;scope.cursor.set(item.actor,at+1);
+        if(!list[at])createItemBinding(item,list[at]={binding:null},()=>itemExtras.get(item.actor)===list);
+        binding=list[at].binding;
+        if(binding){keys.set(key,binding);scope.itemOf.set(binding,item);scope.used.add(binding);}
+      }
       if(binding)out.push({item,binding});
     }
     return out;
@@ -1117,6 +1188,7 @@ export async function createActorMeshSim(runtime,assets,asset,{kernel,player:pla
       try{
         const reads=meshReads();
         reconcile(reads);
+        scope=newScope(view.items??[]);
         if(view.occlude){
           const occluded=view.occlude({bindings:actors,items:itemCandidates(view.items??[]),reads,levelIndex,itemCandidates});
           view={...view,main:occluded.main,children:occluded.children,cull:!occluded.children,lod:occluded.lod??view.lod,
@@ -1129,6 +1201,7 @@ export async function createActorMeshSim(runtime,assets,asset,{kernel,player:pla
           lodFrames:view.lodFrames?.map(entry=>({index:entry.index,ids:entry.ids,frame:lodFrame(entry.lod,lodSettings)}))??null};
         for(const binding of actors)records.push(binding.update(reads?{...view,reads}:view));
         drawItems(view.items??[],view,records);
+        drawExtras(view,records);
       }finally{frameViewer=null;}
       const frame=lighting?.frame;
       const camera=frame?{origin:[...frame.origin],axes:frame.axes.map(axis=>[...axis])}:null;
@@ -1156,6 +1229,12 @@ export async function createActorMeshSim(runtime,assets,asset,{kernel,player:pla
         if(lod&&view.lod)view={...view,lodFrame:lodFrame(view.lod,lodSettings),
           lodFrames:view.lodFrames?.map(entry=>({index:entry.index,ids:entry.ids,frame:lodFrame(entry.lod,lodSettings)}))??null};
         for(const binding of actors)if(ids.has(binding.id))records.push(binding.update(view));
+        // The iterator items the frames draw (shared with the main frame's or this planning's extras),
+        // each with its own item (beginFrameItems).
+        for(const binding of itemBindings()){
+          const item=ids.has(binding.id)?scope?.itemOf.get(binding):null;
+          if(item)records.push(withItem(item,()=>binding.update(view),binding));
+        }
       }finally{frameViewer=null;}
       if(!records.length)return null;
       const root=view.lightRoot??lighting?.frame;
@@ -1182,6 +1261,10 @@ export async function createActorMeshSim(runtime,assets,asset,{kernel,player:pla
      * ViewportWindow's DrawWorld), read live: the bindings, the iterator
      * items' bindings and the level order (packDynamics' arguments). */
     setupArgs(items=[]){return {bindings:actors,items:itemCandidates(items),reads:null,levelIndex,itemCandidates};},
+    /** The planning of a root frame other than the main one (a ViewportWindow's, in the HUD paint) starts
+     * from `baseItems`, the main frame's root items: its items equal to those share their
+     * bindings, and the others take extras (itemCandidates' `frame` argument). */
+    beginFrameItems(baseItems){scope=newScope(baseItems??[]);},
     /** Every binding, item bindings included. */
     all,
     /** URender::Exec's MLOD (+40, positive only), MLMODE (+48, non-negative)
@@ -1194,8 +1277,20 @@ export async function createActorMeshSim(runtime,assets,asset,{kernel,player:pla
     },
     resetLodSettings(){lodSettings=RENDER_LOD_SETTINGS;},
     /** Iterator item bindings in use (validation access). */
-    itemSlots:()=>[...itemPools].map(([actor,pool])=>({actor:actor.name,ids:pool.map(entry=>entry.binding?.id??null)})),
+    /** Validation: each iterator item binding (a root slot's or an extra) with the item it was last
+     * updated with (Location, Rotation, DrawScale, ScaleGlow) and whether the last planning
+     * drew it as an extra. */
+    itemStates:()=>[...itemPools].flatMap(([actor,pool])=>pool.map(entry=>({entry,actor,extra:false})))
+      .concat([...itemExtras].flatMap(([actor,list])=>list.map(entry=>({entry,actor,extra:true}))))
+      .filter(({entry})=>entry.binding).map(({entry,actor,extra})=>({id:entry.binding.id,actor:actor.name,extra,item:lastItems.get(entry.binding.id)
+        ?{location:[...lastItems.get(entry.binding.id).location],rotation:[...lastItems.get(entry.binding.id).rotation],
+          drawScale:lastItems.get(entry.binding.id).drawScale,scaleGlow:lastItems.get(entry.binding.id).scaleGlow}:null,
+        inScope:Boolean(scope?.used.has(entry.binding))})),
+    /** The extras the last planning of a root frame took (a ViewportWindow's: planViewportPass). */
+    itemScopeUsed:()=>scope?.used.size??0,
+    itemSlots:()=>[...itemPools].map(([actor,pool])=>({actor:actor.name,ids:pool.map(entry=>entry.binding?.id??null),
+      extras:(itemExtras.get(actor)??[]).map(entry=>entry.binding?.id??null)})),
     async ready(){await Promise.all(pending.values());},
-    dispose(){disposed=true;for(const binding of all())binding.dispose();itemPools.clear();},
+    dispose(){disposed=true;for(const binding of all())binding.dispose();itemPools.clear();itemExtras.clear();},
   };
 }

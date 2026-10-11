@@ -346,9 +346,10 @@ once per window.
 
 ### Unsupported or approximate (explicit)
 
-- Iterator mesh items (a laser's beam, a DT_Mesh item) keep the main frame's
-  pose and lighting in the camera frame: their bindings are not updated
-  again, so an item the main frame did not draw is not drawn by the camera.
+- Iterator mesh items (a laser's beam) are posed, lit and LOD-chosen with the
+  camera frame's own items, like every frame's ([bsp-occlusion](bsp-occlusion.md#each-child-frames-own-setupdynamics)):
+  `validate-terminals-camera-browser.mjs --expect items,extras` with the doorway
+  lasers moved above the floor mirror.
 - The sprite records of the camera frame are the main scan's, except the
   iterators' (rebuilt for the frame): a plain DT_Sprite actor whose
   visibility follows the first-person viewer rules (bOnlyOwnerSee) is not read

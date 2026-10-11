@@ -100,7 +100,10 @@ export function patchDynamics(occlusion, rootEntries, rootWords, { items, sprite
   if (places.length !== own.length) return null;
   for (let k = 0; k < places.length; k++) {
     const root = rootEntries[places[k]], mine = own[k];
-    if (root.order !== mine.order || root.binding !== mine.binding || Boolean(root.item) !== Boolean(mine.item)) return null;
+    // A frame's item that differs from the root's has a binding of its own (actor-mesh-sim.mjs
+    // itemCandidates), with the same mesh record: its candidate is packed from its own item.
+    if (root.order !== mine.order || (root.binding !== mine.binding && root.binding?.mesh?.key !== mine.binding?.mesh?.key)
+      || Boolean(root.item) !== Boolean(mine.item)) return null;
   }
   const entries = rootEntries.slice();
   const views = occlusion.setupCandidates(entries.length);
