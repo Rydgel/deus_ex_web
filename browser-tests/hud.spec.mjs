@@ -14,6 +14,7 @@ test('original health HUD, compass and InfoLink remain live across turning and r
   await page.mouse.move(box.x+760,box.y+350,{steps:8});await page.mouse.up();
   await expect.poll(async()=>(await status()).gameplay.hud.compass.yaw).not.toBe(initial.gameplay.hud.compass.yaw);
   const turned=await status();expect(turned.gameplay.hud.compass.drawPos).not.toBe(initial.gameplay.hud.compass.drawPos);
+  await page.locator('#tools-options').click();
   await page.getByRole('button',{name:'Player start',exact:true}).click();
   await page.locator('#scene').click({position:{x:600,y:350}});
   await page.keyboard.down('KeyW');
@@ -22,6 +23,7 @@ test('original health HUD, compass and InfoLink remain live across turning and r
   await expect(page.locator('#infolink-title')).toHaveText('Jaime Reyes',{timeout:15000});
   await expect.poll(()=>page.locator('#infolink-text').textContent()).toContain('I figured');
   await mkdir('reports/hud',{recursive:true});await page.screenshot({path:'reports/hud/original-infolink.png'});
+  await page.locator('#tools-options').click();
   await page.getByRole('button',{name:'Player start',exact:true}).click();
   await expect(page.locator('#infolink-shell')).toBeHidden();
   await expect.poll(async()=>(await status()).gameplay.hud.health.head.displayedHealth).toBe(100);

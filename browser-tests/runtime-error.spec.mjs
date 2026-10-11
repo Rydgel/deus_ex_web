@@ -30,6 +30,7 @@ test('player bump pushes the training plant without pausing, and Player start re
   // Firefox keeps rendering after the contact.
   await page.waitForFunction(frame=>window.deusExViewer.status().frame>frame,pushed.frame);
   // Player start resets the scene to the original spawn.
+  await page.locator('#tools-options').click();
   await page.getByRole('button',{name:'Player start',exact:true}).click();
   await page.waitForFunction(()=>window.deusExViewer.status().gameplay.player.grounded);
   const reset=await page.evaluate(()=>window.deusExViewer.status());

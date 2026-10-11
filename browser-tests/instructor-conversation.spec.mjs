@@ -43,6 +43,7 @@ test('ordinary use renders and plays the instructor, terminates, and survives Pl
   const t=r.levelFor(p).actors.find(a=>a?.name==='UNATCOTroop3'),loc=r.namedReference(t,'Location').get();
   g.collision.queries.changeActor(p,()=>{g.player.position=[loc[0]-80,loc[1],loc[2]];g.player.velocity=[0,0,0];});f.aim();
  });
+ await page.locator('#tools-options').click();
  await page.getByLabel('Preview',{exact:true}).selectOption('instructor');
  await page.waitForFunction(()=>{
   const g=window.__instructorFixture.game(),r=g.doors.scriptRuntime.runtime;
@@ -64,6 +65,7 @@ test('ordinary use renders and plays the instructor, terminates, and survives Pl
  await expect.poll(async()=>(await status()).active,{timeout:10000}).toBe(false);
  expect(await status()).toMatchObject({error:null,guards:4,failures:[]});
  // Toggle the discoverable preference off: the panel hides while speech plays.
+ await page.locator('#tools-options').click();
  await page.locator('#diagnostics').click();
  await page.locator('#subtitles').uncheck();
  await page.locator('#close-panel').click();
@@ -77,6 +79,7 @@ test('ordinary use renders and plays the instructor, terminates, and survives Pl
  await page.screenshot({path:'reports/instructor/subtitles-off.png'});
  await expect.poll(async()=>(await status()).active,{timeout:10000}).toBe(false);
  // Re-enable subtitles so the remaining flow keeps the original preference.
+ await page.locator('#tools-options').click();
  await page.locator('#diagnostics').click();
  await page.locator('#subtitles').check();
  await page.locator('#close-panel').click();
@@ -98,6 +101,7 @@ test('ordinary use renders and plays the instructor, terminates, and survives Pl
  await expect.poll(async()=>(await status()).active,{timeout:15000}).toBe(false);
  await page.waitForTimeout(1100);await page.keyboard.press('KeyF');
  await expect.poll(async()=>(await status()).active).toBe(true);
+ await page.locator('#tools-options').click();
  await page.getByRole('button',{name:'Player start',exact:true}).click();
  expect(await status()).toMatchObject({active:false,audio:[],error:null,failures:[]});
  await page.waitForTimeout(2500);await aim();await page.locator('#scene').click({position:{x:600,y:350}});

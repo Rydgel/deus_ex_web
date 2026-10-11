@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import './style.css';
+import { closeToolbarMenus } from './toolbar.mjs';
 import { AssetStore } from '../unreal/assets.mjs';
 import { readGlobalConfigBool, parseIniValue } from '../unreal/user-config.mjs';
 import { decodeMap } from '../unreal/map.mjs';
@@ -778,6 +779,7 @@ $('diagnostics').onclick = () => togglePanel($('panel').hidden);
 // forced-play conversation's letterbox, which holds the intro's subtitles)
 // gets the window's own aspect. A per-browser convenience only.
 function setUiHidden(hidden) {
+  if (hidden) closeToolbarMenus();
   $('app').classList.toggle('ui-hidden', hidden); $('show-ui').hidden = !hidden;
   try { localStorage.setItem('deusex.uiHidden', hidden ? '1' : '0'); } catch { /* storage unavailable */ }
 }
@@ -787,7 +789,9 @@ function setCrt(enabled, announce = false) {
   crtEnabled = Boolean(enabled);
   if (!crtEnabled) { crtCompare = false; displayRamp?.reset(); crtMaterialRamp?.reset(); }
   $('crt').setAttribute('aria-pressed', String(crtEnabled));
-  $('crt').textContent = `CRT: ${crtEnabled ? 'on' : 'off'}`;
+  $('crt').textContent = crtEnabled ? 'On' : 'Off';
+  $('display-options').classList.toggle('has-effect', crtEnabled);
+  $('display-options').title = crtEnabled ? `Display settings · ${CRT_PRESETS[crtShader].name} enabled` : 'Display settings';
   $('crt-compare').setAttribute('aria-pressed', String(crtCompare));
   $('crt-comparison').hidden = !crtCompare;
   $('crt-comparison-name').textContent = CRT_PRESETS[crtShader].name;
@@ -796,7 +800,7 @@ function setCrt(enabled, announce = false) {
 }
 $('crt').onclick = () => {
   setCrt(!crtEnabled, true);
-  if (world && !loading) $('scene').focus({ preventScroll: true });
+  if (world && !loading && !$('display-menu').matches(':popover-open')) $('scene').focus({ preventScroll: true });
 };
 let crtSelection = 0;
 async function setCrtShader(value, activate = true) {
@@ -830,9 +834,10 @@ try {
 } catch { /* storage unavailable */ }
 $('crt-shader').onchange = event => {
   setCrtShader(event.target.value);
-  if (world && !loading) $('scene').focus({ preventScroll: true });
+  if (world && !loading && !$('display-menu').matches(':popover-open')) $('scene').focus({ preventScroll: true });
 };
 $('crt-compare').onclick = () => {
+  closeToolbarMenus();
   crtCompare = !crtCompare; setCrt(true);
   if (world && !loading) $('scene').focus({ preventScroll: true });
 };

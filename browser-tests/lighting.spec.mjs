@@ -30,6 +30,7 @@ test('static lighting, display brightness and fixed original cameras render with
   })));
   for (const c of cameras) {
     const dir = `reports/lighting/${c.name}`; await mkdir(dir, { recursive: true });
+    await page.locator('#tools-options').click();
     await page.getByRole('button', { name: 'Diagnostics', exact: true }).click();
     await page.getByText('Reference camera', { exact: true }).click();
     await page.getByLabel('Position (X, Y, Z)').fill(c.position.join(','));
@@ -38,11 +39,13 @@ test('static lighting, display brightness and fixed original cameras render with
     await page.getByText('Reference camera', { exact: true }).click();
     await page.getByLabel('Close diagnostics').click();
     await canvas.screenshot({ path: `${dir}/browser-gamma.png` });
+    await page.locator('#tools-options').click();
     await page.getByRole('button', { name: 'Diagnostics', exact: true }).click();
     await page.getByRole('slider', { name: 'Brightness', exact: true }).fill('0.4');
     await page.getByLabel('Close diagnostics').click();
     const lit = await canvas.screenshot({ path: `${dir}/browser-raw.png` });
     const unchanged = c.name === 'start' ? await unlitProbe() : null;
+    await page.locator('#tools-options').click();
     await page.getByRole('button', { name: 'Diagnostics', exact: true }).click();
     await page.getByLabel('Original lighting', { exact: true }).uncheck();
     await page.getByLabel('Close diagnostics').click();
@@ -54,6 +57,7 @@ test('static lighting, display brightness and fixed original cameras render with
     expect(lit.equals(unlit)).toBe(false);
     expect(await page.evaluate(() => window.deusExViewer.status().lightingEnabled)).toBe(false);
     await writeFile(`${dir}/browser-status.json`, JSON.stringify(await page.evaluate(() => window.deusExViewer.status()), null, 2));
+    await page.locator('#tools-options').click();
     await page.getByRole('button', { name: 'Diagnostics', exact: true }).click();
     await page.getByLabel('Original lighting', { exact: true }).check();
     await page.getByRole('slider', { name: 'Brightness', exact: true }).fill('0.6');

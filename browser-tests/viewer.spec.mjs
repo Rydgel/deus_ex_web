@@ -12,12 +12,14 @@ test('original training map renders with textures and interactive inspection con
   const failures = errors(page);
   await page.goto('http://127.0.0.1:5173'); await ready(page);
   await page.getByRole('combobox', { name: 'Movement mode' }).selectOption('inspect');
+  await page.locator('#tools-options').click();
   await page.getByRole('button', { name: 'Player start', exact: true }).click();
   const initial = await state(page);
   expect(initial).toMatchObject({ map: '00_Training', textures: 70, movers: 25, triangles: 24427, renderErrors: [], cameraMoved: false });
   expect(initial.calls).toBeGreaterThan(0);
   await mkdir('reports/browser', { recursive: true });
   await page.screenshot({ path: 'reports/browser/training-start.png' });
+  await page.locator('#tools-options').click();
   await page.getByRole('button', { name: 'Diagnostics', exact: true }).click();
   await page.getByLabel('Inspect surface under crosshair').check();
   await expect(page.locator('#surface-info')).toContainText('UNATCO');
@@ -35,6 +37,7 @@ test('original training map renders with textures and interactive inspection con
   await page.mouse.move(450, 400); await page.mouse.down(); await page.mouse.move(580, 430, { steps: 8 }); await page.mouse.up();
   expect((await state(page)).rotation).not.toEqual(initial.rotation);
   await page.screenshot({ path: 'reports/browser/training-camera.png' });
+  await page.locator('#tools-options').click();
   await page.getByRole('button', { name: 'Player start', exact: true }).click();
   expect((await state(page)).position).toEqual(initial.position);
   await page.getByRole('combobox', { name: 'Map', exact: true }).selectOption('00_TrainingCombat'); await ready(page);
@@ -50,7 +53,7 @@ test('production opens local File objects, reports missing packages, and sends n
   await page.goto('http://127.0.0.1:5174');
   await expect(page.getByRole('heading', { name: 'Open your Deus Ex installation' })).toBeVisible();
   await page.setViewportSize({ width: 820, height: 900 });
-  await expect(page.getByRole('button', { name: 'Choose game folder', exact: true }).first()).toBeVisible();
+  await expect(page.locator('#gate-choose')).toBeVisible();
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
   await page.screenshot({ path: 'reports/browser/local-folder-picker.png' });
   await page.setViewportSize({ width: 1440, height: 960 });

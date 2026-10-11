@@ -5,13 +5,19 @@ compatibility roadmap. It is not a reconstruction or measurement of a
 particular physical monitor. CRT starts disabled. The browser remembers
 both the enable switch and the selected shader.
 
-The toolbar offers CRT-Aperture, CRT-EasyMode, CRT-Lottes, SatPixie and
+The toolbar's **Display** menu offers CRT-Aperture, CRT-EasyMode, CRT-Lottes, SatPixie and
 CRT-Royale. **Alt+C** (Option+C on Mac) toggles CRT; **Alt+Shift+C** cycles
 shaders and enables the selection. Both work in Play and Inspect, including
 with the page bars hidden. The shortcut consumes repeats and its eventual
 key release, even if Alt is released first: C must not reach the original
 TurnRight binding. Editable fields retain their normal keyboard behavior.
-Choosing a shader returns focus to the game canvas. Royale loads on demand;
+The menu groups screen shape, the CRT switch, shader and comparison. It
+stays open while adjusting the shader; Compare closes it and focuses the
+game. Escape closes the host menu and restores its button's focus without
+reaching the game's Escape binding. A small gold dot on Display indicates
+that CRT is enabled. Folder selection, Player start, previews and diagnostics
+are in **Tools**, keeping the desktop toolbar on one row.
+Royale loads on demand;
 newer selections and on/off changes take precedence over an earlier load.
 
 **Compare** shows original on the left and the selected CRT on the right.

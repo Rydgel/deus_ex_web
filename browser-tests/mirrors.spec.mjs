@@ -24,6 +24,7 @@ test('Training floor matches the native reflection and clips geometry behind the
   const canvas = page.locator('#scene'), box = await canvas.boundingBox();
   await page.setViewportSize({ width: 926, height: 719 + 603 - box.height });
   await expect.poll(() => canvas.evaluate(c => [c.width, c.height])).toEqual([926, 603]);
+  await page.locator('#tools-options').click();
   await page.getByRole('button', { name: 'Diagnostics', exact: true }).click();
   await page.getByText('Reference camera', { exact: true }).click();
   await page.getByLabel('Position (X, Y, Z)').fill('-1149.2435302734375,825.8439331054688,-40.19999694824219');

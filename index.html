@@ -13,6 +13,28 @@
       <label class="map-control">Map <select id="map" disabled aria-label="Map"><option>Training</option></select></label>
       <div class="actions">
         <select id="mode" aria-label="Movement mode"><option value="play">Play</option><option value="inspect">Inspect</option></select>
+        <button id="display-options" popovertarget="display-menu" aria-expanded="false" aria-controls="display-menu">Display <span aria-hidden="true">▾</span></button>
+        <button id="tools-options" popovertarget="tools-menu" aria-expanded="false" aria-controls="tools-menu">Tools <span aria-hidden="true">▾</span></button>
+        <button id="hide-ui" title="Hide the page bars so the game view fills the window">Hide UI</button>
+      </div>
+      <section id="display-menu" class="toolbar-popover" popover aria-labelledby="display-menu-title">
+        <h2 id="display-menu-title">Display</h2>
+        <label class="setting-row" for="screen-aspect">Screen shape
+          <select id="screen-aspect" aria-label="Screen shape" title="Screen shape of the game view: the original ran at 4:3 resolutions, where cinematic letterboxes (and the intro's subtitles) have room">
+            <option value="window">Window</option>
+            <option value="4:3">4:3</option>
+            <option value="16:10">16:10</option>
+          </select>
+        </label>
+        <div class="setting-row crt-setting"><span id="crt-label">CRT display</span><button id="crt" aria-labelledby="crt-label" aria-pressed="false" aria-keyshortcuts="Alt+C" title="Toggle CRT display (Alt+C / Option+C)">Off</button></div>
+        <label class="shader-setting" for="crt-shader">Shader
+          <select id="crt-shader" aria-label="CRT shader" aria-keyshortcuts="Alt+Shift+C" title="Choose a CRT shader (Alt+Shift+C / Option+Shift+C to cycle)"></select>
+        </label>
+        <button id="crt-compare" aria-pressed="false" title="Compare the original on the left with the selected CRT on the right">Compare with original</button>
+        <p class="shortcut-hint"><kbd>Alt+C</kbd> toggle · <kbd>Alt+Shift+C</kbd> cycle<br>Use Option on Mac</p>
+      </section>
+      <section id="tools-menu" class="toolbar-popover tools-popover" popover aria-labelledby="tools-menu-title">
+        <h2 id="tools-menu-title">Game tools</h2>
         <button id="choose">Choose game folder</button>
         <button id="reset" disabled>Player start</button>
         <select id="preview" hidden aria-label="Preview" title="Jump to a Training test setup">
@@ -26,16 +48,7 @@
           <option value="keypad" title="Reset Play in front of the Training keypad that opens paddoor">Keypad</option>
         </select>
         <button id="diagnostics" aria-expanded="false" aria-controls="panel">Diagnostics</button>
-        <select id="screen-aspect" aria-label="Screen shape" title="Screen shape of the game view: the original ran at 4:3 resolutions, where cinematic letterboxes (and the intro's subtitles) have room">
-          <option value="window">Screen: window</option>
-          <option value="4:3">Screen: 4:3</option>
-          <option value="16:10">Screen: 16:10</option>
-        </select>
-        <button id="crt" aria-pressed="false" aria-keyshortcuts="Alt+C" title="Toggle CRT display (Alt+C / Option+C)">CRT: off</button>
-        <select id="crt-shader" aria-label="CRT shader" aria-keyshortcuts="Alt+Shift+C" title="Choose a CRT shader (Alt+Shift+C / Option+Shift+C to cycle)"></select>
-        <button id="crt-compare" aria-pressed="false" title="Compare the original on the left with the selected CRT on the right">Compare</button>
-        <button id="hide-ui" title="Hide the page bars so the game view fills the window">Hide UI</button>
-      </div>
+      </section>
       <input id="folder" type="file" webkitdirectory multiple hidden />
     </header>
     <section id="viewport" aria-label="3D map inspection">

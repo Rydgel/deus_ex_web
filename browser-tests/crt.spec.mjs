@@ -66,9 +66,13 @@ test('CRT button and Alt+C work in Play, preserve input, and remember the prefer
   await page.goto('http://127.0.0.1:5173'); await ready();
   await expect(toggle).toHaveAttribute('aria-pressed', 'false');
   await expect(toggle).toHaveAttribute('aria-keyshortcuts', 'Alt+C');
+  await page.locator('#display-options').click();
   await toggle.click();
   await expect(toggle).toHaveAttribute('aria-pressed', 'true');
-  await expect(page.locator('#scene')).toBeFocused();
+  await page.keyboard.press('Escape');
+  await expect(page.locator('#display-menu')).toBeHidden();
+  await expect(page.locator('#display-options')).toBeFocused();
+  await page.locator('#scene').focus();
   await page.waitForFunction(() => window.deusExViewer.status().gameplay?.player.grounded);
   const rotation = await page.evaluate(() => window.deusExViewer.status().rotation);
   await page.keyboard.down('Alt'); await page.keyboard.down('KeyC');
@@ -80,6 +84,7 @@ test('CRT button and Alt+C work in Play, preserve input, and remember the prefer
   await page.waitForTimeout(100);
   expect(await page.evaluate(() => window.deusExViewer.status().rotation)).toEqual(rotation);
 
+  await page.locator('#tools-options').click();
   await page.locator('#diagnostics').click();
   await page.locator('summary').click();
   await page.locator('#camera-position').focus();
@@ -98,6 +103,7 @@ test('CRT button and Alt+C work in Play, preserve input, and remember the prefer
   await page.reload(); await ready();
   await expect(toggle).toHaveAttribute('aria-pressed', 'true');
   const shaders = page.locator('#crt-shader');
+  await page.locator('#display-options').click();
   for (const shader of ['easymode', 'lottes', 'satpixie', 'royale']) {
     await shaders.selectOption(shader);
     await page.waitForFunction(shader => window.deusExViewer.status().crtShader === shader, shader);
@@ -107,7 +113,9 @@ test('CRT button and Alt+C work in Play, preserve input, and remember the prefer
   await expect(page.locator('#crt-comparison-name')).toHaveText('CRT-Royale');
   await page.keyboard.press('Alt+Shift+KeyC');
   await expect(shaders).toHaveValue('aperture');
+  await page.locator('#display-options').click();
   await shaders.selectOption('satpixie');
+  await page.keyboard.press('Escape');
   await page.screenshot({ path: 'reports/browser/crt-compare.png' });
   await page.reload(); await ready();
   await expect(shaders).toHaveValue('satpixie');
