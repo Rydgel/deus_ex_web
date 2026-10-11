@@ -15,8 +15,10 @@ const assets=new AssetStore(files),asset=await assets.get('00_Training');
 const game=await createGame(decodeMap(asset.bytes),asset,assets,{randomSeed:1});
 const runtime=game.doors.scriptRuntime.runtime,level=runtime.levelFor(game.player.collisionActor);
 // A controlled original-client fixture: the installed DeusEx.ini has Decals=True.
-// The live host still requires its own original Client.Decals binding.
-level.engine.client.decals=true;
+// The live host reads Client.Decals from the WindowsClient config (script-doors.mjs);
+// the fixture pins it on over that getter.
+const pinDecals=on=>Object.defineProperty(level.engine.client,'decals',{configurable:true,enumerable:true,value:on});
+pinDecals(true);
 const get=(actor,name)=>runtime.namedReference(actor,name).get();
 const set=(actor,name,value)=>runtime.namedReference(actor,name).set(value);
 const jaime=await runtime.objects.resolve(asset,asset.exportsByPath.get('jaimereyes0'));
@@ -120,7 +122,7 @@ assert.equal(get(jaime,'bInitialized'),false,'PreBeginPlay does not initialize; 
 
 // Exercise the real negative BeginPlay route on the constructed actor. Only
 // this isolated fixture disables decals; Play never bypasses BSP attachment.
-level.engine.client.decals=false;
+pinDecals(false);
 runtime.processEvent(shadow,'BeginPlay');
 assert.equal(get(shadow,'bDeleteMe'),true);
 assert.equal(level.actors[originalActorCount],null);
