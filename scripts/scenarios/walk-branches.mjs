@@ -28,6 +28,9 @@ export default function ({game, runtime}) {
         const speed = Math.max(100, read(actor, 'GroundSpeed') || 0) * 3;
         runtime.writeNamed(actor, 'Velocity', [dx * speed, dy * speed, 0]);
         runtime.writeNamed(actor, 'Acceleration', [dx * speed, dy * speed, 0]);
+        // calcVelocity caps a script pawn at GroundSpeed x DesiredSpeed (0x103cdf05), 0.2-0.3 for a walking NPC: the
+        // pawns run at their ground speed, so they still reach the steps and walls the scenario is for.
+        runtime.writeNamed(actor, 'DesiredSpeed', 1);
         runtime.writeNamed(actor, 'bCanJump', phase % 3 !== 1);
         if (index % 20 === 0 && k % 2 === 0) runtime.writeNamed(actor, 'bHitSlopedWall', true);
       } catch (error) {

@@ -50,7 +50,10 @@ const W_ZONE_VELOCITY: usize = 20;
 const W_ZONE_FRICTION: usize = 21;
 // physFlying's (fly.rs).
 const W_ZONE_FLUID_FRICTION: usize = 22;
-const W_COUNT: usize = 23;
+// Pawn.DesiredSpeed: a non-PlayerPawn's calcVelocity scales MaxSpeed by it (appended: the pawn fields' own
+// range ends at W_MOTION; walk-loop-kernel.mjs PAWN_ROWS names this row too).
+const W_DESIRED_SPEED: usize = 23;
+const W_COUNT: usize = 24;
 
 static mut WFIELDS: [[u32; 2]; W_COUNT] = [[0; 2]; W_COUNT];
 // WL_IO: a line check's answer [time, nx, ny, nz, actor handle], and the
@@ -305,7 +308,10 @@ pub extern "C" fn walk_loop(depth: u32, base: u32, seconds: f32, mut iterations:
     let accel_rate = float(base, W_ACCEL_RATE);
     let friction = pawn.friction();
     let walking = bit(base, W_IS_WALKING);
-    let (v, a) = match ground_velocity(velocity, acceleration, direction, dt, max_speed, accel_rate, friction, walking) {
+    // The Rust pawn physics runs script pawns only (the host declines a PlayerPawn): calcVelocity's class tests
+    // (0x103cd7e2, 0x103cdf05) take the non-PlayerPawn side.
+    let desired_speed = float(base, W_DESIRED_SPEED);
+    let (v, a) = match ground_velocity(velocity, acceleration, direction, dt, max_speed, accel_rate, friction, walking, false, desired_speed) {
         Some(r) => r,
         None => { unsafe { js_walk_error(depth, E_GROUND_VELOCITY) }; return DONE; }
     };

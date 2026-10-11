@@ -114,6 +114,40 @@ Native MoveActor/query/event internals are supplied callbacks, not proven by thi
 harness. MayFall probing/state-machine suppression is likewise the adapter's
 responsibility; for ordinary PlayerPawn the inherited event is empty.
 
+## Script pawns: calcVelocity's class tests (2026-10-11)
+
+`walking.mjs` was recovered and validated for the player ("ordinary dry Player path"), and script pawns (ScriptedPawn)
+walked through the same body. Original `APawn::calcVelocity` (Engine.dll `0x103cd7a0`, physWalking's call at
+`0x103ca674`) tests the pawn's class chain against APlayerPawn (`0x1058c160`) twice:
+
+- `0x103cd7e2..0x103cd815`: `bIsWalking` (`+0x318` bit `0x10`) counts only for a PlayerPawn. For any other pawn walking is
+  false, so the acceleration limit is `AccelRate`, not `0.3 AccelRate`, and the speed clamp is the plain one.
+- `0x103cdf05..0x103cdf30`: any other pawn's MaxSpeed is multiplied by `DesiredSpeed` (`+0x36c`).
+
+`flying.mjs` `calcVelocity` (physFlying, physSwimming) has both; the walking path (`velocity.mjs` `groundVelocity` and the Rust
+`walk.rs` `ground_velocity`) took bIsWalking and GroundSpeed as they stood. Script pawns that walk have bIsWalking set (1 on
+every walking NPC of the original's live trace), so they accelerated at 0.3 x AccelRate and capped at 0.3 x GroundSpeed instead of
+AccelRate and GroundSpeed x DesiredSpeed: 0.3 GroundSpeed is within 1.4% of GroundSpeed x 0.296 for the human NPCs (60.0 against
+59.2 units/s, so the error hid), but a pawn with DesiredSpeed 1 (SecurityBot0, GroundSpeed 95) walked at 28.5 instead of 95. Found by the live-scene acceptance
+([visual acceptance](visual-acceptance.md#live-scenes)): Island, 01_NYC_UNATCOIsland, at the first walking tick of every NPC.
+
+`groundVelocity` now takes `playerPawn` (IsA(PlayerPawn), default true: the player and the oracles' pawn) and `desiredSpeed`;
+the JavaScript walking body passes `pawn.isPlayerPawn !== false` and `pawn.desiredSpeed`, and the Rust walk loop (which runs
+script pawns only; the host declines a PlayerPawn) the non-PlayerPawn side with `W_DESIRED_SPEED`, an appended row of the walk
+field table. `validate-native-velocity` now holds script-pawn cases (class chain without APlayerPawn, DesiredSpeed 0.2 to 1.7, with
+and without bIsWalking) and PlayerPawn controls with the same DesiredSpeed, 2,420 cases bit-exact for the JavaScript body and
+for `WALK_KERNEL=rust` (without the gate 623 of them differ by up to 434 units/s). `validate-native-walking` adds
+script-pawn and control cases to the physWalking oracle (123 cases).
+
+**Open: physWalking's other non-PlayerPawn tests.** The same oracle shows physWalking itself reads the class twice more, which the
+walking body does not translate for a script pawn (6 cases listed as `open`, 5 differ):
+
+- `0x103ca876..0x103ca8fa`: the remaining time is cut into steps of at most 0.05 s for a PlayerPawn; for any other pawn
+  only when `(|V| * remaining)^2 > 400` (`0x10431bd0`), i.e. when it travels more than 20 units in the remaining time.
+  At 60 fps (0.0167 s) the cut never applies, so only frames over 50 ms differ.
+- `0x103ca697..0x103ca6e8`: a non-PlayerPawn compares `|Region.Zone.ZoneVelocity|^2` with 90000 (`0x10431bd4`) before the
+  ZoneVelocity term enters the desired move; not read here.
+
 ## Surface-prelude boundary
 
 The original caller ALWAYS first invokes103cc450. It scans prospective wall

@@ -25,8 +25,15 @@ class NativeVelocity(collision.NativeCollision):
         self.write(actors, 'I', info)
         self.write(info + 0x24, 'I', 0x1057bf00)  # ALevelInfo class.
         self.write(info + 0x518, 'B', 0)  # NM_Standalone.
+        # A script pawn: a class whose SuperField chain (+0x28) reaches Pawn (0x1058c660) and never APlayerPawn
+        # (0x1058c160). calcVelocity reads the class only through two IsA walks (0x103cd7e2, 0x103cdf05).
+        self.script_class = self.alloc(0x40)
+        self.write(self.script_class + 0x28, 'I', 0x1058c660)
 
     def velocity(self, case):
+        # PlayerPawn (the default) or a script pawn; DesiredSpeed (+0x36c) scales a script pawn's MaxSpeed only.
+        self.write(self.pawn + 0x24, 'I', 0x1058c160 if case.get('playerPawn', True) else self.script_class)
+        self.write(self.pawn + 0x36c, 'f', case.get('desiredSpeed', 1))
         # Pawn's fifth boolean is bIsWalking (original Pawn source + native mask).
         self.write(self.pawn + 0x318, 'I', 0x10 if case['walking'] else 0)
         self.write(self.pawn + 0x144, '3f', *case['velocity'])

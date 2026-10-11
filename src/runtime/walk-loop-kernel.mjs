@@ -71,10 +71,14 @@ export const WALK_FIELDS = [
   ['ZoneGroundFriction', 'engine.zoneinfo.zonegroundfriction', 'float'],
   // physFlying's (fly.rs, pawn-physics-kernel.mjs).
   ['ZoneFluidFriction', 'engine.zoneinfo.zonefluidfriction', 'float'],
+  // calcVelocity scales a non-PlayerPawn's MaxSpeed by it (walk_loop.rs W_DESIRED_SPEED).
+  ['DesiredSpeed', 'engine.pawn.desiredspeed', 'float'],
 ];
 // walk_loop.rs W_ZONE_FLUID_FRICTION.
 const ZONE_FLUID_FRICTION = 22;
 const PAWN_FIELDS = 19;
+// The rows read from the pawn's own image: its first PAWN_FIELDS and DesiredSpeed (the last row).
+const PAWN_ROWS = [...Array(PAWN_FIELDS).keys(), 23];
 
 /** WALK_LOOP_DIFFERENTIAL's counts for a walking call pawn_phys.rs makes
  * itself (pawn-physics-kernel.mjs), as `walk` keeps them: the Rust-side
@@ -141,7 +145,8 @@ export class WalkLoopHost {
     let info = this.classes.get(cls);
     if (!info || info.names !== names.size) {
       let ok = this.valid;
-      for (let i = 0; ok && i < PAWN_FIELDS; i++) {
+      for (const i of PAWN_ROWS) {
+        if (!ok) break;
         const [name, key] = WALK_FIELDS[i];
         let field;
         try { field = this.runtime.lookupMember(cls, 'fields', name); } catch { ok = false; break; }
@@ -154,7 +159,7 @@ export class WalkLoopHost {
     if (!info.ok) return false;
     let entry = this.instances.get(instance);
     if (!entry || entry.info !== info || entry.bindings !== instance.bindings.size) {
-      const ok = WALK_FIELDS.slice(0, PAWN_FIELDS).every(([, key]) => !instance.bindings.has(key));
+      const ok = PAWN_ROWS.every(i => !instance.bindings.has(WALK_FIELDS[i][1]));
       this.instances.set(instance, entry = {info, bindings: instance.bindings.size, ok});
     }
     return entry.ok;
@@ -173,6 +178,8 @@ export class WalkLoopHost {
     mover.table(); this.table();
     if (!mover.eligiblePawn(instance) || !this.eligible(instance)) { declined('fields', actor?.name); return false; }
     if (!pawn.pawn || pawn.movingBrush || pawn.model) { declined('kind', actor?.name); return false; }
+    // The kernel is the non-PlayerPawn side of calcVelocity (walk_loop.rs): a PlayerPawn runs the JavaScript body.
+    if (pawn.isPlayerPawn !== false) { declined('player', actor?.name); return false; }
     const level = ops.level;
     const model = this.vm.zone.model(level);
     const view = this.vm.arena.view;

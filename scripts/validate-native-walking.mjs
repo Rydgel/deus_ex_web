@@ -21,12 +21,24 @@ export function walkingCases(){
  for(const dt of [.016,.1,.01])mods.push({moves:[wall,clear,wall,...many(clear)],wallPhysics:2,fallingPhysics:4,airSpeed:420.5,dt});
  mods.push({moves:[wall,clear,wall,...many(clear)],wallPhysics:2,fallingPhysics:0,airSpeed:420.5,dt:.1});
  for(const fallingPhysics of [0,4])mods.push({lines:many(clear),fallingPhysics,airSpeed:420.5});
+ // A script pawn (no APlayerPawn in its class chain): calcVelocity ignores bIsWalking and scales MaxSpeed by DesiredSpeed
+ // (0x103cd7e2, 0x103cdf05); the PlayerPawn control with the same DesiredSpeed ignores it (a pawn is a PlayerPawn by default).
+ for(const desiredSpeed of [.2,.296,1])for(const walking of [false,true])for(const dt of [.016,.03]){
+  mods.push({scripted:true,desiredSpeed,walking,dt,velocity:[250,0,0],acceleration:[1000,500,0]},{scripted:false,desiredSpeed,walking,dt,velocity:[250,0,0],acceleration:[1000,500,0]},
+   {scripted:true,desiredSpeed,walking,dt,velocity:[0,0,0],acceleration:[300,-800,0],lines:many(clear)},{scripted:true,desiredSpeed,walking,dt,velocity:[120,40,0],acceleration:[0,0,0]});
+ }
+ // Open: physWalking's other class tests, not translated for a script pawn (docs/visual-acceptance.md "Live scenes"). 0x103ca876..0x103ca8fa:
+ // a remaining time over 0.05 s is cut into steps for a PlayerPawn, but for any other pawn only when (|V|*remaining)^2 > 400 (0x10431bd0);
+ // 0x103ca697..0x103ca6e8: ZoneVelocity (|zv|^2 against 90000, 0x10431bd4) is read for a non-PlayerPawn. These cases run and are
+ // reported, not asserted.
+ for(const dt of [.1,.2])for(const velocity of [[250,0,0],[20,0,0]])mods.push({open:true,scripted:true,desiredSpeed:1,walking:false,dt,velocity,acceleration:[1000,500,0]});
+ for(const zoneVelocity of [[30,-15,5],[400,0,0]])mods.push({open:true,scripted:true,desiredSpeed:1,walking:false,zoneVelocity,velocity:[250,0,0],acceleration:[1000,500,0]});
  return mods.map(m=>({...base,...m}));
 }
 
 export function run(c){
  const events=[];let mi=0,li=0;const actor={};
- const pawn={...structuredClone(c),position:c.position.map(f),velocity:c.velocity.map(f),acceleration:c.acceleration.map(f),radius:20,height:43,physics:1,base:c.base===false?null:actor,canJump:true,isPlayer:true,isWalking:!!c.walking,hitSlopedWall:!!c.hitSlopedWall,mass:150,
+ const pawn={...structuredClone(c),position:c.position.map(f),velocity:c.velocity.map(f),acceleration:c.acceleration.map(f),radius:20,height:43,physics:1,base:c.base===false?null:actor,canJump:true,isPlayer:true,isPlayerPawn:!c.scripted,desiredSpeed:c.desiredSpeed??1,isWalking:!!c.walking,hitSlopedWall:!!c.hitSlopedWall,mass:150,
  walkingPrelude(dt,it){events.push({prelude:dt,iterations:it});return false;},
  move(delta){events.push({move:delta,velocity:[...this.velocity]});const r=c.moves[mi++];if(r.justTeleported)this.justTeleported=true;if(r.physics!==undefined)this.physics=r.physics;this.position=this.position.map((v,i)=>f(v+f(delta[i]*f(r.time))));return {...r,time:f(r.time),normal:r.normal.map(f),actor:r.time<1?actor:null};},
  lineCheck(start,end,extent,flags){events.push({line:{start:[...start],end,extent,flags}});const r=c.lines[li++];return {...r,time:f(r.time),normal:r.normal.map(f),actor:r.time<1?actor:null};},
@@ -40,8 +52,8 @@ if(!process.argv[2])fs.writeFileSync('.cache/walking/cases.json',JSON.stringify(
 const cases=JSON.parse(fs.readFileSync(process.argv[2]??'.cache/walking/cases.json'));
 if(!process.argv[3]){const r=spawnSync(process.env.NATIVE_PROBE_PYTHON??'.cache/native-probe-env/bin/python',['scripts/native-walking-oracle.py',process.env.DEUS_EX_ROOT??'Deus Ex GOTY Edition',process.argv[2]??'.cache/walking/cases.json'],{encoding:'utf8'});if(r.status)throw Error(r.stderr);fs.writeFileSync('.cache/walking/native.json',r.stdout);}
 const native=JSON.parse(fs.readFileSync(process.argv[3]??'.cache/walking/native.json')).results;
-const actual=cases.map(run),failures=[];
-for(let i=0;i<cases.length;i++)if(JSON.stringify(actual[i])!==JSON.stringify(native[i]))failures.push({i,actual:actual[i],expected:native[i]});
-fs.writeFileSync('.cache/walking/comparison.json',JSON.stringify({cases:cases.length,failures},null,2));console.log(JSON.stringify({cases:cases.length,failures:failures.length,first:failures.slice(0,2)},null,2));process.exitCode=failures.length?1:0;
+const actual=cases.map(run),failures=[],open=[];
+for(let i=0;i<cases.length;i++)if(JSON.stringify(actual[i])!==JSON.stringify(native[i]))(cases[i].open?open:failures).push({i,actual:actual[i],expected:native[i]});
+fs.writeFileSync('.cache/walking/comparison.json',JSON.stringify({cases:cases.length,failures,open},null,2));console.log(JSON.stringify({cases:cases.length,failures:failures.length,openCases:cases.filter(c=>c.open).length,openMismatches:open.length,first:failures.slice(0,2)},null,2));process.exitCode=failures.length?1:0;
 
 }
