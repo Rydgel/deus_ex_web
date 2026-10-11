@@ -10,6 +10,9 @@ export default function ({game, runtime}) {
   const headings = [[1, 0], [0, 1], [-1, 0], [0, -1], [0.70710678, 0.70710678], [-0.70710678, 0.70710678]];
   const START = 30, PHASE = 45;
   let pawns = null;
+  // The zone's current, per phase: above 300 it enters a script pawn's desired move, below it does not (physWalking 0x103ca697),
+  // which a long frame (--dt) makes visible (25 x |ZoneVelocity| x dt).
+  const currents = new Map();
   const read = (actor, name) => runtime.readNamed(actor, name);
   return index => {
     if (index < START) return;
@@ -31,6 +34,11 @@ export default function ({game, runtime}) {
         // calcVelocity caps a script pawn at GroundSpeed x DesiredSpeed (0x103cdf05), 0.2-0.3 for a walking NPC: the
         // pawns run at their ground speed, so they still reach the steps and walls the scenario is for.
         runtime.writeNamed(actor, 'DesiredSpeed', 1);
+        const zone = read(actor, 'Region')?.['engine.actor.pointregion.zone'];
+        if (zone) {
+          if (!currents.has(zone)) currents.set(zone, read(zone, 'ZoneVelocity'));
+          runtime.writeNamed(zone, 'ZoneVelocity', phase % 4 === 1 ? [400, -150, 0] : phase % 4 === 2 ? [150, 60, 0] : currents.get(zone));
+        }
         runtime.writeNamed(actor, 'bCanJump', phase % 3 !== 1);
         if (index % 20 === 0 && k % 2 === 0) runtime.writeNamed(actor, 'bHitSlopedWall', true);
       } catch (error) {

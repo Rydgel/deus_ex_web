@@ -19,7 +19,12 @@ use crate::move_actor::store;
 use crate::move_pawn::{move_pawn, mp_io, MP_DONE};
 use crate::trace::{abs, f, js_max, js_min, sqrt};
 use crate::walk::{ground_velocity, js_hypot, safe_normal, step_up, Hit, PawnOps, StepUp, V3};
+use crate::fly::{above, dot as x87dot, l, loads};
+use crate::x87::Ext;
 use crate::zone::point_region;
+
+#[inline(always)]
+fn bits32(v: f64) -> u32 { (v as f32).to_bits() }
 
 const HANDBACK: u32 = 0;
 const DONE: u32 = 1;
@@ -317,8 +322,18 @@ pub extern "C" fn walk_loop(depth: u32, base: u32, seconds: f32, mut iterations:
     };
     pawn.set_velocity(v);
     pawn.set_acceleration(a);
-    let mut desired = add(pawn.velocity(), scale(scale(pawn.zone_velocity(), 25.0), dt));
+    // physWalking's two class reads beyond calcVelocity's (walking.mjs): this is the non-PlayerPawn side. The ZoneVelocity term
+    // enters the desired move only when |ZoneVelocity|^2 > 90000 (0x103ca697..0x103ca6f1), and a remaining time over 0.05 s is
+    // cut into steps only when (|desired|*remaining)^2 > 400 (0x103ca873..0x103ca8fa); both are x87 tests (fly.rs helpers).
+    let zone_velocity = pawn.zone_velocity();
+    let zone_bits = [bits32(zone_velocity[0]), bits32(zone_velocity[1]), bits32(zone_velocity[2])];
+    let mut desired = if above(x87dot(loads(zone_bits), loads(zone_bits)), l(90000.0f32.to_bits())) {
+        add(pawn.velocity(), scale(scale(zone_velocity, 25.0), dt))
+    } else {
+        pawn.velocity()
+    };
     desired[2] = 0.0;
+    let desired_bits = [bits32(desired[0]), bits32(desired[1]), bits32(desired[2])];
     let gravity = [0.0, 0.0, if pawn.gravity()[2] > 0.0 { 1.0 } else { -1.0 }];
     let floor_delta = scale(gravity, f(f(float(base, W_MAX_STEP_HEIGHT)) + 2.0));
     let extent = [f(float(base, W_RADIUS)), f(float(base, W_RADIUS)), f(float(base, W_HEIGHT))];
@@ -329,7 +344,11 @@ pub extern "C" fn walk_loop(depth: u32, base: u32, seconds: f32, mut iterations:
     let mut may_fall_called = false;
     while remaining > 0.0 && iterations < 8 {
         iterations += 1;
-        let step = if remaining > 0.05 { f(js_min(remaining * 0.5, f(0.05))) } else { remaining };
+        let cut = remaining > 0.05 && {
+            let r: Ext = l(bits32(remaining));
+            above(x87dot(loads(desired_bits), loads(desired_bits)).mul(r).mul(r), l(400.0f32.to_bits()))
+        };
+        let step = if cut { f(js_min(remaining * 0.5, f(0.05))) } else { remaining };
         remaining = f(remaining - step);
         let mut delta = scale(desired, step);
         let original_delta = delta;

@@ -27,12 +27,17 @@ export function walkingCases(){
   mods.push({scripted:true,desiredSpeed,walking,dt,velocity:[250,0,0],acceleration:[1000,500,0]},{scripted:false,desiredSpeed,walking,dt,velocity:[250,0,0],acceleration:[1000,500,0]},
    {scripted:true,desiredSpeed,walking,dt,velocity:[0,0,0],acceleration:[300,-800,0],lines:many(clear)},{scripted:true,desiredSpeed,walking,dt,velocity:[120,40,0],acceleration:[0,0,0]});
  }
- // Open: physWalking's other class tests, not translated for a script pawn (docs/visual-acceptance.md "Live scenes"). 0x103ca876..0x103ca8fa:
- // a remaining time over 0.05 s is cut into steps for a PlayerPawn, but for any other pawn only when (|V|*remaining)^2 > 400 (0x10431bd0);
- // 0x103ca697..0x103ca6e8: ZoneVelocity (|zv|^2 against 90000, 0x10431bd4) is read for a non-PlayerPawn. These cases run and are
- // reported, not asserted.
- for(const dt of [.1,.2])for(const velocity of [[250,0,0],[20,0,0]])mods.push({open:true,scripted:true,desiredSpeed:1,walking:false,dt,velocity,acceleration:[1000,500,0]});
- for(const zoneVelocity of [[30,-15,5],[400,0,0]])mods.push({open:true,scripted:true,desiredSpeed:1,walking:false,zoneVelocity,velocity:[250,0,0],acceleration:[1000,500,0]});
+ // physWalking's two other class reads (docs/walking.md "Script pawns"): a remaining time over 0.05 s is cut into steps for a
+ // PlayerPawn, for any other pawn only when (|V|*remaining)^2 > 400 (0x103ca873..0x103ca8fa); ZoneVelocity enters the desired move
+ // for a PlayerPawn, for any other pawn only when |ZoneVelocity|^2 > 90000 (0x103ca697..0x103ca6f1).
+ for(const scripted of [true,false])for(const dt of [.1,.2,.4])for(const velocity of [[250,0,0],[20,0,0],[190,0,0],[210,0,0]])mods.push({scripted,desiredSpeed:1,walking:false,dt,velocity,acceleration:[1000,500,0]});
+ for(const scripted of [true,false])for(const zoneVelocity of [[30,-15,5],[299,0,0],[301,0,0],[400,0,0],[0,-290,80],[0,-290,90],[200,200,150]])mods.push({scripted,desiredSpeed:.296,walking:false,zoneVelocity,velocity:[250,0,0],acceleration:[1000,500,0]});
+ // and a sweep over all of them, scripted and control, 5 ms to 0.4 s
+ let rs=424242;const rnd=()=>(rs=(Math.imul(rs,1664525)+1013904223)>>>0)/2**32;
+ for(let i=0;i<240;i++){
+  const speed=rnd()*500,angle=rnd()*6.283185,zone=i%3===0?[(rnd()-.5)*700,(rnd()-.5)*700,(rnd()-.5)*200]:[0,0,0];
+  mods.push({scripted:i%2===0,desiredSpeed:[.2,.296,1][i%3],walking:i%4<2,dt:f(.005+rnd()*.395),velocity:[speed*Math.cos(angle),speed*Math.sin(angle),0],acceleration:[(rnd()-.5)*2000,(rnd()-.5)*2000,0],zoneVelocity:zone.map(f)});
+ }
  return mods.map(m=>({...base,...m}));
 }
 

@@ -474,3 +474,9 @@ measured divergences and their evidence.
   differs through timing).
 - Captures come from one Wine/D3D host. D3D behaviour that depends on the
   driver is not separated from the original's own.
+
+## Live scenes: handoff (2026-10-11, paused at the usage limit)
+
+- Built: `tools/dx-live-win.c` (debugger Tick tracer), `src/viewer/live-probe.mjs`, `scripts/live-acceptance.mjs`, `scripts/live-original.sh` (runs under the Wine lock); Island pilot done (25/59 NPCs match 600 ticks, 41/59 after ee041b8); the Paris Club pilot and the "Live scenes" write-up are not.
+- Open: Cause 2 (PathNode vs PatrolPoint MoveTarget for 18 Island NPCs, e.g. SecurityBot0 tick 6, Terrorist34 tick 14); ghost flight by key input did not move the player (W/Up, Phys 4), so the Club needs another way to reach the dancers without `set Location`; WaterRing draws at tick 24.
+- WIP uncommitted-verified: physWalking class reads (step cut 0x103ca876, ZoneVelocity 0x103ca697): JS oracle 395 cases bit-exact (90 fail without it); Rust walk_loop.rs port builds but validate-walk-loop-kernel/-branches (incl. the new --dt 0.12 runs) were not rerun.

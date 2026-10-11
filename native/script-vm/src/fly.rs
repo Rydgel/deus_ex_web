@@ -24,7 +24,7 @@ const ONE_BITS: u32 = 0x3f80_0000;
 
 /// x87 load of a float32 value's bits.
 #[inline(always)]
-fn l(bits: u32) -> Ext {
+pub(crate) fn l(bits: u32) -> Ext {
     Ext::load(bits)
 }
 #[inline(always)]
@@ -39,10 +39,10 @@ fn num(bits: u32) -> f64 {
 fn sub(a: Ext, b: Ext) -> Ext {
     a.add(b.neg())
 }
-fn dot(a: [Ext; 3], b: [Ext; 3]) -> Ext {
+pub(crate) fn dot(a: [Ext; 3], b: [Ext; 3]) -> Ext {
     a[0].mul(b[0]).add(a[1].mul(b[1])).add(a[2].mul(b[2]))
 }
-fn loads(v: [u32; 3]) -> [Ext; 3] {
+pub(crate) fn loads(v: [u32; 3]) -> [Ext; 3] {
     [l(v[0]), l(v[1]), l(v[2])]
 }
 /// FCOM's C0: below or unordered.
@@ -52,7 +52,7 @@ fn below(a: Ext, b: Ext) -> bool {
 }
 /// Neither below nor equal nor unordered.
 #[inline(always)]
-fn above(a: Ext, b: Ext) -> bool {
+pub(crate) fn above(a: Ext, b: Ext) -> bool {
     let (c0, c3) = a.compare(b);
     !c0 && !c3
 }
