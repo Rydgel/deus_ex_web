@@ -23,7 +23,7 @@
  *   go to the worklet and its reports come back on the port, never through
  *   the page.
  * - `call` {id, method, args}: `view`, `reset` (Player start: reset, then the
- *   movers and PlayerCalcView), `stateDigest`, `decalProbe`, `placeProbe`, `laserProbe`, `meshLightProbe`, `lodProbe` and `renderPassProbe` (validation), `musicStatus` (the library
+ *   movers and PlayerCalcView), `stateDigest`, `decalProbe`, `liveProbe` (the live-scene replay), `placeProbe`, `laserProbe`, `meshLightProbe`, `lodProbe` and `renderPassProbe` (validation), `musicStatus` (the library
  *   service's counters), `musicDrive` (galaxy-music-library.mjs
  *   driveMusicLibrary, validation only).
  *
@@ -172,6 +172,7 @@ async function handle(data) {
           game.doors.scriptRuntime.runtime.levelFor(game.player.collisionActor));
         else if (data.method === 'decalProbe') value = decalProbe(game, data.args ?? {});
         else if (data.method === 'viewProbe') value = (await import('./view-probe.mjs')).viewProbe(game, data.args ?? {});
+        else if (data.method === 'liveProbe') value = (await import('./live-probe.mjs')).liveProbe(game, data.args ?? {});
         else if (data.method === 'placeProbe') value = placeProbe(game, data.args ?? {});
         else if (data.method === 'laserProbe') value = laserProbe(game, host.actorSim);
         else if (data.method === 'lodProbe') value = (await import('./lod-probe.mjs')).lodProbe(host.actorSim, data.args ?? {});
