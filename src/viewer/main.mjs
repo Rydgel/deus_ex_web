@@ -27,6 +27,7 @@ import { typedCharacters } from './typed-characters.mjs';
 import {mp3SampleRate,pcm16} from '../runtime/galaxy-lipsync-channels.mjs';
 import { setDisplayRampPerFragment } from './light-atlas.mjs';
 import { createDisplayRamp, brightnessGamma } from './display-ramp.mjs';
+import { CRT_PRESETS, prepareCrtPreset } from './crt-shader.mjs';
 import { stateDigest } from '../runtime/state-digest.mjs';
 import { createMusicOutput } from './galaxy-music-output.mjs';
 import { connectMusicLibraryPort, driveMusicLibrary } from '../runtime/galaxy-music-library.mjs';
@@ -93,6 +94,10 @@ const childFog = new URLSearchParams(location.search).get('childFog') !== 'off';
 const rampPerFragment = new URLSearchParams(location.search).get('gamma') === 'material';
 setDisplayRampPerFragment(rampPerFragment);
 const displayRamp = rampPerFragment ? null : createDisplayRamp();
+// A browser display preference, outside the recovered game settings.
+let crtEnabled = false, crtMaterialRamp = null, crtShortcutHeld = false;
+let crtShader = 'aperture', crtCompare = false;
+let crtToggleVersion = 0;
 const canvasClear = new THREE.Color('#06101b');
 // ?gpuTimer=1: one EXT_disjoint_timer_query_webgl2 TIME_ELAPSED query around
 // the frame's GL work, read back frames later (docs/play-frame-cost.md).
@@ -389,6 +394,11 @@ let screenAspect = 'window';
 // A SetRes request from the original menus (UWindowsViewport::Exec SetRes -> RenDev->SetRes): the
 // drawing buffer is exactly width x height, scaled to fit the page (docs/script-native-config.md).
 let fixedResolution = null;
+function layoutCrtComparison() {
+  const canvas = $('scene'), overlay = $('crt-comparison');
+  overlay.style.width = canvas.style.width || '100%'; overlay.style.height = canvas.style.height || '100%';
+  overlay.style.left = canvas.style.marginLeft || '0'; overlay.style.top = canvas.style.marginTop || '0';
+}
 function resize() {
   const box = $('viewport').getBoundingClientRect(), canvas = $('scene');
   let width = box.width, height = box.height;
@@ -404,6 +414,7 @@ function resize() {
     camera.fov = verticalFov(75, camera.aspect);
     camera.updateProjectionMatrix();
     setPixelCentre(camera, renderer.domElement.width, renderer.domElement.height);
+    layoutCrtComparison();
     return;
   }
   renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
@@ -428,6 +439,7 @@ function resize() {
   camera.updateProjectionMatrix();
   camera.userData.projection = null;   // the next Play frame brings its pass frame's
   setPixelCentre(camera, renderer.domElement.width, renderer.domElement.height);
+  layoutCrtComparison();
 }
 new ResizeObserver(resize).observe($('viewport'));
 function renderViewportFor(rect) {
@@ -770,6 +782,60 @@ function setUiHidden(hidden) {
   try { localStorage.setItem('deusex.uiHidden', hidden ? '1' : '0'); } catch { /* storage unavailable */ }
 }
 $('hide-ui').onclick = () => setUiHidden(true);
+function setCrt(enabled, announce = false) {
+  crtToggleVersion++;
+  crtEnabled = Boolean(enabled);
+  if (!crtEnabled) { crtCompare = false; displayRamp?.reset(); crtMaterialRamp?.reset(); }
+  $('crt').setAttribute('aria-pressed', String(crtEnabled));
+  $('crt').textContent = `CRT: ${crtEnabled ? 'on' : 'off'}`;
+  $('crt-compare').setAttribute('aria-pressed', String(crtCompare));
+  $('crt-comparison').hidden = !crtCompare;
+  $('crt-comparison-name').textContent = CRT_PRESETS[crtShader].name;
+  try { localStorage.setItem('deusex.crt', crtEnabled ? '1' : '0'); } catch { /* storage unavailable */ }
+  if (announce) toast(crtEnabled ? `CRT enabled · ${CRT_PRESETS[crtShader].name} · Alt+C / Option+C` : 'CRT disabled · Alt+C / Option+C');
+}
+$('crt').onclick = () => {
+  setCrt(!crtEnabled, true);
+  if (world && !loading) $('scene').focus({ preventScroll: true });
+};
+let crtSelection = 0;
+async function setCrtShader(value, activate = true) {
+  const id = Object.hasOwn(CRT_PRESETS, value) ? value : 'aperture';
+  const request = ++crtSelection;
+  const toggleVersion = crtToggleVersion;
+  $('crt-shader').value = id;
+  try {
+    if (id === 'royale') {
+      if (activate) toast('Loading CRT-Royale…');
+    }
+    await prepareCrtPreset(id);
+  } catch (error) {
+    if (request !== crtSelection) return;
+    $('crt-shader').value = crtShader;
+    toast(`Could not load ${CRT_PRESETS[id].name}: ${error.message}`);
+    return;
+  }
+  if (request !== crtSelection) return;
+  crtShader = id;
+  $('crt-shader').value = crtShader;
+  try { localStorage.setItem('deusex.crtShader', crtShader); } catch { /* storage unavailable */ }
+  setCrt((activate && toggleVersion === crtToggleVersion) || crtEnabled, activate);
+}
+for (const [id, preset] of Object.entries(CRT_PRESETS)) $('crt-shader').add(new Option(preset.label, id));
+try {
+  const enabled = localStorage.getItem('deusex.crt') === '1';
+  const preset = localStorage.getItem('deusex.crtShader') ?? 'aperture';
+  setCrt(enabled);
+  setCrtShader(preset, false);
+} catch { /* storage unavailable */ }
+$('crt-shader').onchange = event => {
+  setCrtShader(event.target.value);
+  if (world && !loading) $('scene').focus({ preventScroll: true });
+};
+$('crt-compare').onclick = () => {
+  crtCompare = !crtCompare; setCrt(true);
+  if (world && !loading) $('scene').focus({ preventScroll: true });
+};
 function setScreenAspect(value) {
   screenAspect = Object.hasOwn(SCREEN_ASPECTS, value) ? value : 'window'; $('screen-aspect').value = screenAspect; resize();
   try { localStorage.setItem('deusex.screenAspect', screenAspect); } catch { /* storage unavailable */ }
@@ -1137,6 +1203,21 @@ function typeCharacters(event) {
   }
 }
 document.addEventListener('keydown', event => {
+  // Intercept before the original key/character paths (C is TurnRight).
+  // A held shortcut consumes repeats and its release even if Alt lifts first.
+  const editing = event.target.closest?.('input, textarea, select, [contenteditable]:not([contenteditable="false"])');
+  if (event.code === 'KeyC' && (crtShortcutHeld || (!event.repeat && event.altKey && !event.ctrlKey && !event.metaKey
+      && !event.isComposing && !editing))) {
+    event.preventDefault();
+    if (!event.repeat && !crtShortcutHeld) {
+      if (event.shiftKey) {
+        const shaders = Object.keys(CRT_PRESETS);
+        setCrtShader(shaders[(shaders.indexOf($('crt-shader').value) + 1) % shaders.length]);
+      } else setCrt(!crtEnabled, true);
+    }
+    crtShortcutHeld = true;
+    return;
+  }
   const input = inputKey(event, true);
   if (input && !runtimeError) typeCharacters(event);
   if (input) {
@@ -1157,11 +1238,12 @@ document.addEventListener('keydown', event => {
 });
 document.addEventListener('pointerlockchange', () => { drag = false; keys.clear(); simInput.reset(); });
 document.addEventListener('keyup', event => {
+  if (event.code === 'KeyC' && crtShortcutHeld) { crtShortcutHeld = false; event.preventDefault(); return; }
   const input = inputKey(event, false);
   if (input?.consumed || (input?.handled && !input.host)) event.preventDefault();
   keys.delete(event.code);
 });
-window.addEventListener('blur', () => { keys.clear(); drag = false; paused = true; simInput.reset({releasePhysical:true}); });
+window.addEventListener('blur', () => { keys.clear(); crtShortcutHeld = false; drag = false; paused = true; simInput.reset({releasePhysical:true}); });
 document.addEventListener('visibilitychange', () => { keys.clear(); if (document.hidden) { paused = true; simInput.reset({releasePhysical:true}); } });
 function status() {
   return { ready: Boolean(world) && !loading, map: currentMap ?? null, revision,
@@ -1176,6 +1258,7 @@ function status() {
     lighting: world?.lighting ?? null, lightingEnabled: Boolean(world?.lightingEnabled.value), horizontalFOV: 75,
     mirrors: world ? { ...world.mirrors.stats } : null,
     brightness: Number($('brightness').value), displayGamma: world?.displayGamma.value ?? null,
+    crt: crtEnabled, crtShader, crtCompare,
     rotation: [pitch, yaw], wireframe: $('wireframe').checked, actorMarkers: $('actor-markers').checked, cameraMoved,
     calls: renderer.info.render.calls, frame: renderer.info.render.frame,
   };
@@ -1715,7 +1798,8 @@ function drawFrame(snap, time) {
   }
   framePhases.hudCalls += drawCalls() - calls;
   phase('hud');
-  if (displayRamp) displayRamp.apply(renderer, world.displayGamma.value);
+  if (displayRamp) displayRamp.apply(renderer, world.displayGamma.value, crtEnabled, crtShader, crtCompare);
+  else if (crtEnabled) (crtMaterialRamp ??= createDisplayRamp()).apply(renderer, 1, true, crtShader, crtCompare);
   gpuEnd();
   phase('ramp');
   $('crosshair').hidden=mode==='play'&&Boolean(hudRenderer);

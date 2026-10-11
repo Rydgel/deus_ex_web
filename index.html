@@ -31,12 +31,16 @@
           <option value="4:3">Screen: 4:3</option>
           <option value="16:10">Screen: 16:10</option>
         </select>
+        <button id="crt" aria-pressed="false" aria-keyshortcuts="Alt+C" title="Toggle CRT display (Alt+C / Option+C)">CRT: off</button>
+        <select id="crt-shader" aria-label="CRT shader" aria-keyshortcuts="Alt+Shift+C" title="Choose a CRT shader (Alt+Shift+C / Option+Shift+C to cycle)"></select>
+        <button id="crt-compare" aria-pressed="false" title="Compare the original on the left with the selected CRT on the right">Compare</button>
         <button id="hide-ui" title="Hide the page bars so the game view fills the window">Hide UI</button>
       </div>
       <input id="folder" type="file" webkitdirectory multiple hidden />
     </header>
     <section id="viewport" aria-label="3D map inspection">
       <canvas id="scene" tabindex="0" aria-label="Map camera. Click to look around; W A S D to fly, Q E down and up, Escape to release mouse."></canvas>
+      <div id="crt-comparison" hidden aria-live="polite"><span>Original</span><span id="crt-comparison-name">CRT-Aperture</span></div>
       <div id="crosshair" aria-hidden="true">+</div>
       <output id="play-hint" aria-live="polite"></output>
       <button id="show-ui" hidden title="Show the page bars">Show UI</button>

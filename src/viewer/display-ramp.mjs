@@ -1,4 +1,6 @@
 import * as THREE from 'three';
+import { createCrtDisplay } from './crt-shader.mjs';
+export { CRT_PRESETS, prepareCrtPreset } from './crt-shader.mjs';
 
 /** The original display gamma ramp over the finished frame (D3DDrv
  * 0x2e3e, docs/lighting.md): D3D draws every pass, the HUD included, into
@@ -21,6 +23,8 @@ export function brightnessGamma(brightness) {
 
 export function createDisplayRamp() {
   let texture = null;
+  let crtDisplay = null;
+  const savedScissor = new THREE.Vector4();
   const uniforms = { frame: { value: null }, gamma: { value: 1 } };
   const material = new THREE.ShaderMaterial({
     glslVersion: THREE.GLSL3, uniforms, depthTest: false, depthWrite: false,
@@ -40,6 +44,7 @@ export function createDisplayRamp() {
   const scene = new THREE.Scene(), camera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
   scene.add(mesh); scene.matrixAutoUpdate = false;
   return {
+    reset() { crtDisplay?.reset(); },
     /** The clear colour whose ramped value is `color` (a THREE.Color). */
     rawClear(color, gamma) {
       const inverse = 1 / gamma;
@@ -47,7 +52,7 @@ export function createDisplayRamp() {
     },
     /** Ramp the default framebuffer in place; the renderer's viewport must
      * cover the whole drawing buffer. */
-    apply(renderer, gamma) {
+    apply(renderer, gamma, crt = false, preset = 'aperture', compare = false) {
       const width = renderer.domElement.width, height = renderer.domElement.height;
       if (!texture || texture.image.width !== width || texture.image.height !== height) {
         texture?.dispose();
@@ -62,8 +67,20 @@ export function createDisplayRamp() {
       renderer.setRenderTarget(null);
       renderer.copyFramebufferToTexture(texture);
       uniforms.gamma.value = gamma;
-      renderer.render(scene, camera);
+      if (crt) {
+        (crtDisplay ??= createCrtDisplay(geometry)).apply(renderer, texture, gamma, preset);
+        if (compare) {
+          // Same original frame, gamma and full-image coordinates on both
+          // sides. Scissor only the final original pass; never recopy CRT.
+          renderer.getScissor(savedScissor);
+          const scissorTest = renderer.getScissorTest(), pr = renderer.getPixelRatio();
+          renderer.setScissor(0, 0, Math.floor(width / 2) / pr, height / pr);
+          renderer.setScissorTest(true);
+          try { renderer.render(scene, camera); }
+          finally { renderer.setScissor(savedScissor); renderer.setScissorTest(scissorTest); }
+        }
+      } else { crtDisplay?.reset(); renderer.render(scene, camera); }
     },
-    dispose() { texture?.dispose(); geometry.dispose(); material.dispose(); },
+    dispose() { texture?.dispose(); geometry.dispose(); material.dispose(); crtDisplay?.dispose(); },
   };
 }

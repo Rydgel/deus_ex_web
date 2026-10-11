@@ -1,0 +1,42 @@
+{
+  "satpixie": {
+    "revision": "8c08dd137b77a0e00e27f1a57b8a4d4bd6ac8889",
+    "files": {
+      "accumulate.slang": "20f52f5949989167a1aba194358d6b85058ee51da9f532d51c769368c0696d9d",
+      "blur_horiz.slang": "1a70156a3677edc32b84a5edf6724ddb71d7c2043143f781f657751cc5689cc6",
+      "blur_vert.slang": "f4517cab2f1de7b2923aaa03a75635c0456f5a07f853192ffbcf04dc7d3bd760",
+      "satpixie-crt.slang": "03174cd1dfcc61c4145d648faec0ec6a8d7ef4397bc6ad4dddf41de0d32e372e"
+    }
+  },
+  "royale": {
+    "revision": "435612fe4f1023117b3aae48c88603fb413404a3",
+    "files": {
+      "crt-royale-first-pass-linearize-crt-gamma-bob-fields.glsl": "ece014b2b994346a44fedb6c03c57662ae1d16e5abd7ce79105dbd7c364bf7ff",
+      "crt-royale-scanlines-vertical-interlacing.glsl": "621d81c694d92fced7510560cfdbb5aa97bdcbb4cc5c8120453039a783fbe064",
+      "crt-royale-bloom-approx.glsl": "803a53490628142a8e95a3f06dc0c7febce3457bda70b8f0b855f4d19102260b",
+      "blur9fast-vertical.glsl": "eb37d685b238573444dd0b25b362c51a1a06fc8a54c1e758908b6e8b9d37233c",
+      "blur9fast-horizontal.glsl": "4bce1de8798c52637fbbd74702c14bbde3ac6dcd16e269d511ab96d3c9494fc7",
+      "crt-royale-mask-resize-vertical.glsl": "5dd65d249edd6460ae0dfbdbac12bb49d2cd40d3962f28f29f217fc107ccc5a8",
+      "crt-royale-mask-resize-horizontal.glsl": "317d70e5e17b3f8db40c735744c86aadc67a308b4e42eaa4ce95553891c35bc6",
+      "crt-royale-scanlines-horizontal-apply-mask.glsl": "1f301b83052ab84d68c716050ff3823ecba9bc3152e0f1633cb4fe8a528f93da",
+      "crt-royale-brightpass.glsl": "6d09cb5d760ee092000da62d81960c615f69b98bc3160e9718fd6719c604a45b",
+      "crt-royale-bloom-vertical.glsl": "00d5521c4c6037a6a0715cfdeb7728df4f296e26670ccc2065fd404cd1a996ca",
+      "crt-royale-bloom-horizontal-reconstitute.glsl": "6a57bacdee4510b861ff55b5f7fd6c95aa4276c5747ab7b98d44ef89948e21ad",
+      "crt-royale-geometry-aa-last-pass.glsl": "ae473412b567c28d1ffc5d81e958f5f508c3b4b26482c43bdbebcfabc098f7f8",
+      "TileableLinearApertureGrille15Wide8And5d5SpacingResizeTo64.png": "3ba708dba5989741c58d9b7a1d1e38499bb6dabeb6787da523c9ca6e06159215",
+      "TileableLinearApertureGrille15Wide8And5d5Spacing.png": "4b46103e20567b99e9525ce521438573f49609452d142438088fa6309902aef2",
+      "TileableLinearSlotMaskTall15Wide9And4d5Horizontal9d14VerticalSpacingResizeTo64.png": "b3ab2c1d9205e167c44fc86aeb5a031a4fe7199de728d52f94e11635a467ab6d",
+      "TileableLinearSlotMaskTall15Wide9And4d5Horizontal9d14VerticalSpacing.png": "4d4385d8476faaaebc6c4f6540b73c28bf3b643a6efb93866e58050f3d0f6567",
+      "TileableLinearShadowMaskEDPResizeTo64.png": "d68808ef5c819555c6001ea2d0627c18e64a7d0a7a6ebb3af4a09261a4c23713",
+      "TileableLinearShadowMaskEDP.png": "637e567fe5180ba53af5a185ceef24b4a44b86d74d802fb33df6a2d02d3bcf49"
+    }
+  },
+  "libretro": {
+    "revision": "435612fe4f1023117b3aae48c88603fb413404a3",
+    "files": {
+      "crt-aperture.glsl": "d7c20c972ae0cd9790280d8a070f1bd96bb4b9d90b4718a94c6296a58cc1f81e",
+      "crt-easymode.glsl": "ed27bab460c53d98fcf727333210de0d746c957c86463028d8c0e4c15e29f3ab",
+      "crt-lottes.glsl": "699a947fc2744eb7e2dc4adb2c08a8b74e31685baa77cbc1face9593106b57ef"
+    }
+  }
+}
