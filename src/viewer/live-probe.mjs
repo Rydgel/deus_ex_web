@@ -1,0 +1,164 @@
+import { scriptGetStateName } from '../runtime/script-state-queries.mjs';
+
+/** Validation only (scripts/live-acceptance.mjs, docs/visual-acceptance.md
+ * "Live scenes"): the simulation side of the live-scene comparison. It
+ * replays the ticks of a trace of the original (tools/dx-live-win.c `trace`)
+ * on Play's live level and records the same fields tick for tick.
+ *
+ * A trace row holds what the original's ULevel::Tick (Engine.dll 0x103a51a0)
+ * was called with and the stream it ran on: the input `delta` and the CRT
+ * rand state at entry (`rngIn`). Replay is the only intervention: tick i runs
+ * with that delta and Play's stream set to that state, as `srand` sets the
+ * CRT's word (rng.mjs seed). The original's render draws (256 per frame,
+ * URender::PreRender's light noise, and whatever else a map's frame consumes)
+ * happen between its ticks; replaying the state makes the script draws of each
+ * tick comparable without modelling them.
+ *
+ * `begin({release})`: the unfreeze, at the entry of tick 1 (the original
+ * clears LevelInfo.bPlayersOnly there): the level clock takes the trace's
+ * entry clock, so TimeSeconds-driven content starts at the same time.
+ * `before()` is called by sim-session begin() ahead of game.tick(); it returns
+ * the delta to tick with, or false to skip the tick (the replay is over and
+ * the level is held, as the tool's Tick skip holds the original). */
+const hex = word => `0x${(word >>> 0).toString(16).padStart(8, '0')}`;
+const plain = value => {
+  if (value === null || value === undefined) return null;
+  if (typeof value === 'number') return value;
+  if (typeof value === 'boolean') return value ? 1 : 0;
+  if (typeof value === 'string') return value;
+  if (Array.isArray(value) || ArrayBuffer.isView(value)) return [...value].map(plain);
+  if (typeof value === 'object' && typeof value.name === 'string') return value.name;
+  return String(value);
+};
+
+export function liveProbe(game, args = {}) {
+  const runtime = game.doors.scriptRuntime.runtime, player = game.player.collisionActor;
+  const level = runtime.levelFor(player), info = level.actors[0];
+  const byName = name => name === '@player' ? player : level.actors.find(actor => actor?.name === name) ?? null;
+  const out = {};
+  // slotOf offsets of named properties, to write the original's watch config.
+  if (args.offsets) {
+    const { slotOf } = runtime.classLoader.graph;
+    out.offsets = {};
+    for (const [actorName, names] of Object.entries(args.offsets)) {
+      const actor = byName(actorName);
+      if (!actor) { out.offsets[actorName] = null; continue; }
+      out.offsets[actorName] = Object.fromEntries(names.map(name => {
+        const member = runtime.lookupMember(runtime.instance(actor).cls, 'fields', name);
+        return [name, member ? slotOf(member.loadRecord, 0x48) : null];
+      }));
+    }
+  }
+  // The Region (zone, leaf, zone number) PointRegion gives at a point: what the original's
+  // `set ... Region (...)` is given after `set Location` (visual-acceptance.md "Placing the player's Region").
+  if (args.pointRegion) {
+    const region = level.pointRegion(args.pointRegion);
+    out.pointRegion = { zone: region.zone?.name ?? null, iLeaf: region.leaf, zoneNumber: region.zoneNumber };
+  }
+  if (args.actors) {
+    // A class list: names, class and state of the level's actors of that class (or its subclasses).
+    out.actors = [];
+    for (const actor of level.actors) {
+      if (!actor) continue;
+      let match = false;
+      for (let cls = runtime.instance(actor).cls; cls && !match; cls = cls.base) match = cls.record?.key === args.actors.toLowerCase();
+      if (!match) continue;
+      const instance = runtime.instance(actor), node = instance?.state ? (instance.state.stateNode ?? instance.cls) : null;
+      out.actors.push({ name: actor.name, cls: instance.cls.record?.key ?? null, location: [...runtime.readNamed(actor, 'Location')], state: scriptGetStateName(node) });
+    }
+  }
+  // write: {actorName: {Property: value}}, plain host writes (the player's animation state at the trace's start).
+  if (args.write) for (const [name, fields] of Object.entries(args.write)) {
+    const actor = byName(name);
+    if (!actor) throw new Error(`liveProbe: no actor ${name}`);
+    for (const [prop, value] of Object.entries(fields)) runtime.writeNamed(actor, prop, typeof value === 'number' ? Math.fround(value) : value);
+  }
+  // population: the names of the actors the original's level holds. A load decides some map actors by chance
+  // (OddsOfAppearing, scripts' own FRand in PostBeginPlay, drawn from a stream the two sides do not share): an actor
+  // only Play holds is destroyed here (Actor.Destroy, as the script's own would); one only the original holds cannot be
+  // created and is reported (the load must be repeated). Actors the game spawns at load (player, inventory, shadows,
+  // managers) are numbered by spawn order and are not compared by name.
+  if (args.population) {
+    const spawned = /^(Skill|Aug|NanoKey|ColorTheme|Shadow|ParticleProxy|Laser|Flare|Cigarettes|Candybar|Weapon|Mission|GameReplicationInfo|PlayerReplicationInfo|JCDenton|Mutator|DeusExGameInfo|PickupDistributor|AutoTurretGun|BarkManager|ParticleGenerator|DataVault|Credits|Ammo|BioelectricCell|Medkit|Binoculars|Lockpick|Multitool|LAM|Liquor|Soda|Sodacan|Fruit|Vice)/;
+    const have = new Set(args.population.map(entry => entry.name)), extra = [];
+    for (const actor of level.actors) if (actor && actor !== player && actor.name && !have.has(actor.name) && !spawned.test(actor.name)) extra.push(actor);
+    out.population = { removed: extra.map(actor => actor.name) };
+    for (const actor of extra) runtime.destroyActor(actor, false);
+    const names = new Set(level.actors.filter(Boolean).map(actor => actor.name));
+    out.population.missing = args.population.filter(entry => !names.has(entry.name) && !spawned.test(entry.name)).map(entry => entry.name);
+  }
+  if (args.replay) {
+    const { watch = [], ticks, hold = true, warm = 3 } = args.replay;
+    const actors = watch.map(({ names, props }) => ({ props, items: names.map(name => [name, byName(name)]) }));
+    for (const group of actors) for (const [name, actor] of group.items) if (!actor) throw new Error(`liveProbe: no actor ${name}`);
+    const state = game.liveReplay = {
+      ticks, hold, warm, index: 0, rows: [], cursor: 0, current: null,
+      snapshot() {
+        const result = {};
+        for (const group of actors) for (const [name, actor] of group.items) {
+          const row = {};
+          for (const prop of group.props) {
+            if (prop === '$state') {
+              const instance = runtime.instance(actor), node = instance?.state ? (instance.state.stateNode ?? instance.cls) : null;
+              row.State = scriptGetStateName(node);
+            } else if (prop.startsWith('$region')) {
+              const region = runtime.readNamed(actor, 'Region');
+              row[prop] = prop === '$regionZone' ? plain(region['engine.actor.pointregion.zone'])
+                : region[`engine.actor.pointregion.${prop === '$regionLeaf' ? 'ileaf' : 'zonenumber'}`];
+            } else row[prop] = plain(runtime.readNamed(actor, prop));
+          }
+          result[name] = row;
+        }
+        return result;
+      },
+      before(dt) {
+        // Warm-up: the level's clock stands at the trace's start while the page draws a few frames,
+        // so the actors drawn stamp LastRenderTime with that time (the original's frames before the
+        // release did); the first tick then finds the stamps current, as the original's did.
+        if (this.warm > 0) { this.warm--; return false; }
+        if (this.index >= this.ticks.length) return this.hold ? false : dt;
+        const tick = this.ticks[this.index];
+        game.random.seed(parseInt(tick.rngIn, 16) >>> 0);
+        this.current = { n: this.index + 1, delta: tick.delta, rngIn: hex(game.random.state), clockIn: level.timeSeconds, tsIn: runtime.readNamed(info, 'TimeSeconds') };
+        return Math.fround(tick.delta);
+      },
+      after() {
+        if (!this.current) return;
+        const row = this.current; this.current = null;
+        row.rngOut = hex(game.random.state); row.clockOut = level.timeSeconds; row.tsOut = runtime.readNamed(info, 'TimeSeconds');
+        row.actors = this.snapshot();
+        if (this.draws) { row.draws = {}; for (const name of this.draws) row.draws[name] = (row.draws[name] ?? 0) + 1; this.draws.length = 0; }
+        this.rows.push(row); this.index++;
+      },
+    };
+    // drawTrace: which actor's tick consumed each draw of the stream (rows' `draws`: name -> count;
+    // '-' outside any actor's tick), to find where Play and the original draw a different number.
+    if (args.replay.drawTrace) {
+      let current = null;
+      const draws = state.draws = [];
+      for (const name of ['frand', 'rand']) {
+        const original = game.random[name];
+        game.random[name] = (...rest) => { draws.push(current?.name ?? '-'); return original(...rest); };
+      }
+      if (game.player.nativeRandom) game.player.nativeRandom = game.random.frand;   // the player's landing recovery captured the original
+      const tickActor = runtime.processActorTick.bind(runtime);
+      runtime.processActorTick = (actor, ...rest) => { const previous = current; current = actor; try { return tickActor(actor, ...rest); } finally { current = previous; } };
+    }
+    if (args.replay.release) {
+      const first = ticks[0];
+      runtime.writeNamed(info, 'bPlayersOnly', false);
+      level.timeSeconds = first.clockIn;
+      runtime.writeNamed(info, 'TimeSeconds', Math.fround(first.tsIn));
+    }
+    // (while the warm-up holds the level, nothing else moves the clock: the tick is skipped)
+    out.initial = state.snapshot();
+  }
+  const replay = game.liveReplay;
+  if (args.take && replay) {
+    out.rows = replay.rows.slice(replay.cursor); replay.cursor = replay.rows.length;
+    out.index = replay.index;
+  }
+  if (args.status && replay) out.status = { index: replay.index, of: replay.ticks.length };
+  if (args.stop) game.liveReplay = null;
+  return out;
+}

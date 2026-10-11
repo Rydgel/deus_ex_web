@@ -28,7 +28,7 @@ export function walking(pawn,seconds,iterations=0){
  // through the setter instead of changing only a temporary returned array.
  pawn.acceleration=[pawn.acceleration[0],pawn.acceleration[1],0];
  pawn.velocity=[pawn.velocity[0],pawn.velocity[1],0];
- Object.assign(pawn,groundVelocity({velocity:pawn.velocity,acceleration:pawn.acceleration,direction:safeNormal(pawn.acceleration),dt,maxSpeed:pawn.groundSpeed,accelRate:pawn.accelRate,friction:pawn.friction,walking:pawn.isWalking}));
+ Object.assign(pawn,groundVelocity({velocity:pawn.velocity,acceleration:pawn.acceleration,direction:safeNormal(pawn.acceleration),dt,maxSpeed:pawn.groundSpeed,accelRate:pawn.accelRate,friction:pawn.friction,walking:pawn.isWalking,playerPawn:pawn.isPlayerPawn!==false,desiredSpeed:pawn.desiredSpeed??1}));
  const desired=add(pawn.velocity,scale(scale(pawn.zoneVelocity,25),dt));desired[2]=0;
  const gravity=[0,0,pawn.gravity[2]>0?1:-1],floorDelta=scale(gravity,f(f(pawn.maxStepHeight)+2)),extent=[f(pawn.radius),f(pawn.radius),f(pawn.height)];
  const old=[...pawn.position];pawn.oldLocation=[...old];pawn.justTeleported=false;

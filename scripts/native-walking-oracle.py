@@ -5,7 +5,8 @@ sp=importlib.util.spec_from_file_location('fall',Path(__file__).with_name('nativ
 c=b.collision
 class NativeWalking(b.NativeFalling):
  def __init__(self,root):
-  super().__init__(root);self.far_thunk=0x700fe030;self.cpu.mem_write(self.far_thunk,bytes.fromhex('c2 18 00'));self.write(self.vtable+0x8c,'I',self.far_thunk)
+  super().__init__(root);self.script_class=self.alloc(0x40);self.write(self.script_class+0x28,'I',0x1058c660)  # a script pawn: Pawn ancestry, never APlayerPawn (calcVelocity's class tests)
+  self.far_thunk=0x700fe030;self.cpu.mem_write(self.far_thunk,bytes.fromhex('c2 18 00'));self.write(self.vtable+0x8c,'I',self.far_thunk)
  def on_instruction(self,cpu,address,size,data):
   if self.events is not None:
    st=cpu.reg_read(c.UC_X86_REG_ESP)
@@ -56,6 +57,7 @@ class NativeWalking(b.NativeFalling):
  def walking(self,case):
   self.case=case;self.mi=self.li=0
   self.write(self.pawn+0x30,'B',1);self.write(self.pawn+0x1ec,'I',0)
+  self.write(self.pawn+0x24,'I',self.script_class if case.get('scripted') else 0x1058c160);self.write(self.pawn+0x36c,'f',case.get('desiredSpeed',1))
   self.write(self.pawn+0x318,'I',0x1002|(0x20 if case.get('hitSlopedWall') else 0)|(0x10 if case.get('walking') else 0))
   self.write(self.pawn+0xc4,'I',self.zone if case.get('base',True) else 0)
   for off,key in [(0x114,'position'),(0x144,'velocity'),(0x150,'acceleration')]:self.write(self.pawn+off,'3f',*case[key])

@@ -11,16 +11,27 @@ import { gameDirectory } from './game-directory.mjs';
 // WALK_KERNEL=rust compares the Rust kernel (walk.rs, R3-b B3) instead.
 const groundVelocity = process.env.WALK_KERNEL === 'rust' ? (await loadWalkKernel()).groundVelocity : groundVelocityJs;
 const cases = [], f = Math.fround;
-const addCase = (velocity, acceleration, dt, walking, friction = 8, maxSpeed = 320, accelRate = 1000) => {
+// `extra`: playerPawn (IsA(PlayerPawn): the default, the player) and desiredSpeed (Pawn.DesiredSpeed) for the class tests of calcVelocity.
+const addCase = (velocity, acceleration, dt, walking, friction = 8, maxSpeed = 320, accelRate = 1000, extra = {}) => {
   acceleration = acceleration.map(f);
   const size = Math.hypot(...acceleration);
   cases.push({ velocity: velocity.map(f), acceleration, direction: acceleration.map(v => size ? f(v / size) : 0),
-    dt: f(dt), walking, friction: f(friction), maxSpeed: f(maxSpeed), accelRate: f(accelRate) });
+    dt: f(dt), walking, friction: f(friction), maxSpeed: f(maxSpeed), accelRate: f(accelRate), ...extra });
 };
 for (const dt of [.005, 1 / 120, 1 / 60, .03, 1 / 30, .1, .4]) for (const walking of [false, true]) {
   for (const velocity of [[0, 0, 0], [1, 0, 0], [10, 0, 0], [100, 0, 0], [320, 0, 0], [300, -80, 0]]) {
     for (const acceleration of [[0, 0, 0], [1000, 0, 0], [0, 1000, 0], [-1000, 1000, 0], [20, -20, 0]]) {
       addCase(velocity, acceleration, dt, walking);
+    }
+  }
+}
+// A script pawn (class chain without APlayerPawn): bIsWalking does not count (0x103cd7e2..0x103cd815) and MaxSpeed is
+// multiplied by DesiredSpeed (0x103cdf05..0x103cdf30); the PlayerPawn control with the same DesiredSpeed ignores it.
+for (const dt of [.005, 1 / 60, .1]) for (const walking of [false, true]) for (const desiredSpeed of [.2, .296, .5, 1, 1.7]) {
+  for (const velocity of [[0, 0, 0], [10, 0, 0], [100, 0, 0], [320, 0, 0], [300, -80, 0]]) {
+    for (const acceleration of [[0, 0, 0], [1000, 0, 0], [-1000, 1000, 0], [20, -20, 0]]) {
+      addCase(velocity, acceleration, dt, walking, 8, 320, 1000, { playerPawn: false, desiredSpeed });
+      addCase(velocity, acceleration, dt, walking, 8, 320, 1000, { playerPawn: true, desiredSpeed });
     }
   }
 }
@@ -30,6 +41,12 @@ for (let i = 0; i < 400; i++) {
   const velocity = [random() * 1000 - 500, random() * 1000 - 500, 0];
   const acceleration = i % 4 ? [random() * 3000 - 1500, random() * 3000 - 1500, 0] : [0, 0, 0];
   addCase(velocity, acceleration, .005 + random() * .395, i % 2 === 0, [0, 4, 8, 64][i % 4], [100, 208, 320][i % 3]);
+}
+for (let i = 0; i < 400; i++) {
+  const velocity = [random() * 1000 - 500, random() * 1000 - 500, 0];
+  const acceleration = i % 4 ? [random() * 3000 - 1500, random() * 3000 - 1500, 0] : [0, 0, 0];
+  addCase(velocity, acceleration, .005 + random() * .395, i % 2 === 0, [0, 4, 8, 64][i % 4], [100, 208, 320][i % 3], 1000,
+    { playerPawn: i % 5 === 0, desiredSpeed: f(.1 + random() * 1.5) });
 }
 const directory = path.resolve('reports/movement/native-velocity');
 await mkdir(directory, { recursive: true });

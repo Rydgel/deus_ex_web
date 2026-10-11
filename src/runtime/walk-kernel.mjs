@@ -76,10 +76,11 @@ async function load() {
       x.walk_two_wall_adjust();
       return out3(0);
     },
-    groundVelocity({velocity, acceleration, direction, dt, maxSpeed, accelRate, friction, walking = false}) {
+    groundVelocity({velocity, acceleration, direction, dt, maxSpeed, accelRate, friction, walking = false, playerPawn = true, desiredSpeed = 1}) {
       views();
       in3(0, velocity); in3(3, acceleration); in3(6, direction);
       io[9] = dt; io[10] = maxSpeed; io[11] = accelRate; io[12] = friction; io[13] = walking ? 1 : 0;
+      io[14] = playerPawn ? 1 : 0; io[15] = desiredSpeed;
       if (!x.walk_ground_velocity()) throw new Error('Ground velocity requires an original actor timestep in (0, 0.4]');
       return {velocity: out3(0), acceleration: out3(3)};
     },

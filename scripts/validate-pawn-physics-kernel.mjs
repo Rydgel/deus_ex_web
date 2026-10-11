@@ -40,7 +40,9 @@ const totals = Object.fromEntries(COUNTS.map(key => [key, 0]));
 const RUNS = [
   ...['fly-branches', 'walk-branches'].flatMap(name => ['00_Training', '01_NYC_UNATCOIsland'].map(map =>
     ({map, name, ticks: '300', every: '25'}))),
-  {map: '01_NYC_UNATCOIsland', name: 'swim-branches', ticks: '600', every: '50'},
+  // 1200 ticks: script pawns walk at GroundSpeed x DesiredSpeed now (calcVelocity's class test, 2026-10-11), and the
+  // first swimming step-up on Island came after tick 600.
+  {map: '01_NYC_UNATCOIsland', name: 'swim-branches', ticks: '1200', every: '100'},
 ];
 function run({map, name, ticks, every}, tag, env) {
   const out = join(dir, `${map}-${name}-${tag}.json`);

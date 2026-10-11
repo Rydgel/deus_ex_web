@@ -1403,6 +1403,12 @@ viewProbe(args) {
   if (simClient) return simClient.call('viewProbe', args);
   return game ? viewProbe(game, args) : null;
 },
+/** Validation only: live-probe.mjs, the replay of an original trace on the live level
+ * (scripts/live-acceptance.mjs, docs/visual-acceptance.md "Live scenes"). */
+async liveProbe(args) {
+  if (simClient) return simClient.call('liveProbe', args);
+  return game ? (await import('./live-probe.mjs')).liveProbe(game, args) : null;
+},
 /** Validation only: settings-probe.mjs, one step of the original options menus on the
  * simulation side and the settings state it left (docs/script-native-config.md). */
 async settingsProbe(step) {

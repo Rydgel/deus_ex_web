@@ -143,6 +143,8 @@ pub(crate) fn ground_velocity(
     accel_rate: f64,
     friction: f64,
     walking: bool,
+    player_pawn: bool,
+    desired_speed: f64,
 ) -> Option<(V3, V3)> {
     let mut v = fv(velocity);
     let mut a = fv(acceleration);
@@ -152,6 +154,9 @@ pub(crate) fn ground_velocity(
     let max_speed = f(max_speed);
     let accel_rate = f(accel_rate);
     let friction = js_max(0.0, f(friction));
+    // velocity.mjs groundVelocity: calcVelocity's two class tests (0x103cd7e2, 0x103cdf05).
+    let walking = walking && player_pawn;
+    let max_speed = if player_pawn { max_speed } else { f(max_speed * f(desired_speed)) };
     if !(dt > 0.0) || dt > f(0.4) {
         return None;
     }
@@ -337,11 +342,12 @@ pub extern "C" fn walk_two_wall_adjust() {
 }
 /// groundVelocity: velocity IO[0..3], acceleration [3..6], direction [6..9],
 /// dt [9], maxSpeed [10], accelRate [11], friction [12], walking [13] (0 or
-/// 1); velocity out in [0..3], acceleration in [3..6]. Returns 0 where the
+/// 1), playerPawn [14] (0 or 1), desiredSpeed [15]; velocity out in [0..3],
+/// acceleration in [3..6]. Returns 0 where the
 /// JavaScript throws.
 #[no_mangle]
 pub extern "C" fn walk_ground_velocity() -> u32 {
-    match ground_velocity(io3(0), io3(3), io3(6), io(9), io(10), io(11), io(12), io(13) != 0.0) {
+    match ground_velocity(io3(0), io3(3), io3(6), io(9), io(10), io(11), io(12), io(13) != 0.0, io(14) != 0.0, io(15)) {
         Some((velocity, acceleration)) => {
             set_io3(0, velocity);
             set_io3(3, acceleration);
