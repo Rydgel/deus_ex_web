@@ -1423,3 +1423,20 @@ Focused checkpoint: `validate-pawn-nav.mjs` 225/225 scenes, 47/47 mutants;
 (`ASPECT=1.3333 STRICT=1 STOP=1`, 9000 ticks) no longer stops at 1004 and
 runs to the labeled Stage 6 `ClientTravel("dxonly")` stop at tick 8040 with
 no unsupported natives.
+
+## Handoff: Island NPC next-MoveTarget divergence (WIP, 2026-10-11, paused)
+
+Not started beyond setup; no first diverging NPC or tick yet. Worktree at master
+`61d270c`, wasm rebuilt. The live agent's Island original trace (22 MB, 600 ticks,
+`.work/live/.work/live-acceptance/01_NYC_UNATCOIsland/`: `original-trace.jsonl`,
+`.actors.jsonl`, `population.json`, `play-population.json`, `trace.cfg`, `watch.json`)
+was copied to this worktree's `.work/live-acceptance/01_NYC_UNATCOIsland/`, so the
+original need not run again for step 1. The `play` replay was started
+(`node scripts/live-acceptance.mjs play --map 01_NYC_UNATCOIsland`, then `compare`) and
+stopped unfinished by the pause: rerun both. Next: from `report.json` take the first NPC
+whose `MoveTgt` differs (tick, PathNode vs PatrolPoint), trace its state script to the
+native (candidates: FindPathToward 517, FindRandomDest 525 and FindPathTo 518, which the
+notes above list as not oracle-verified), read that native's inputs and outputs at the
+tick in the original with `scripts/live-original.sh` (flock) and dx-live-win's
+watch/breakpoints, and fix it bit-exact against a Unicorn or Wine oracle. Extracted
+DeusEx scripts (ScriptedPawn.uc) are not in `.cache/reference`; only Pawn.uc is.
