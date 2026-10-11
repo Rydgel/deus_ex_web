@@ -361,7 +361,17 @@ once per window.
   follows the fog (docs/volumetric-fog.md), once per frame per window.
 - The clock of the camera frame's corona pass advances by the host's elapsed
   time; the original's appSeconds is the CPU clock too.
-- Matched captures against the original (Wine) of a camera view: see below.
+- No matched capture against the original's own frame of a camera view
+  (2026-10-11, not attempted on this host). The window is only reachable
+  through the security terminal, which needs a ticking level (the computer's
+  activation animation and timers, the login), while visual acceptance
+  ([method](visual-acceptance.md#method)) places the camera with `set Location`
+  in a frozen level; `set Location` or `set Region` in a level that then ticks
+  corrupts the collision hash. Leaving the level live instead gives NPC
+  positions and animation that cannot be matched to Play's. The camera frame's
+  parts are checked against the original's code and oracles instead (LOD,
+  corona placement, decal block and master frame as above); the mirror
+  reflection's placement in the window is checked visually only.
 
 Reproduce:
 
