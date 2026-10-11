@@ -6,7 +6,7 @@
  * and points the view at it, so the page's own frob input reaches it.
  * Returns the player's FrobTarget, Location and ViewRotation and the last
  * HUD frame's ViewportWindow world frames (sim-session.mjs viewportState). */
-export function terminalProbe(game, session, { front = null } = {}) {
+export function terminalProbe(game, session, { front = null, placeCamera = null, placePlayer = null, cameraName = 'SecurityCamera5' } = {}) {
   const runtime = game.doors.scriptRuntime.runtime, player = game.player.collisionActor;
   const read = (actor, name) => runtime.readNamed(actor, name);
   let placed = null;
@@ -23,8 +23,20 @@ export function terminalProbe(game, session, { front = null } = {}) {
     runtime.writeNamed(player, 'ViewRotation', rotation);
     placed = { location: [...read(player, 'Location')], rotation };
   }
-  const camera = level => level.actors.find(actor => actor?.name === 'SecurityCamera5');
+  // `placePlayer` [x, y, z]: the player stands elsewhere (the corona pass
+  // lists the lights of the player's leaf, whatever the camera frame sees).
+  if (placePlayer) runtime.farMoveActor(player, placePlayer, 0, 1);
+  const camera = level => level.actors.find(actor => actor?.name === cameraName);
   const cam = camera(runtime.levelFor(player));
+  // `placeCamera` {location, rotation}: SecurityCamera5 stands elsewhere and
+  // keeps its aim (no swing), to put the view where a map's mirrors, sky,
+  // decals or coronas are (a fixture: the original camera does not move).
+  if (placeCamera && cam) {
+    runtime.writeNamed(cam, 'bSwing', false);
+    runtime.writeNamed(cam, 'Location', placeCamera.location);
+    runtime.writeNamed(cam, 'Rotation', placeCamera.rotation);
+    runtime.writeNamed(cam, 'DesiredRotation', placeCamera.rotation);
+  }
   // Actors inside the camera's view cone (angle test only) with their
   // LastRenderTime, to see which the camera frame did not stamp.
   const cone = [];

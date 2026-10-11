@@ -170,12 +170,13 @@ keeps the dated record.
   written back (Stage 6); UI Background = Snapshot and Toggle Full-Screen are
   explicit boundaries.
 
-**Still open in Stage 4:** the LOD morph's world-space rounding and the ViewportWindow
-frames' own LOD choice ([LOD](docs/script-lodmesh-lod.md#play)); inside mirror and sky child
-frames, per-frame mesh lighting, actor meshes in a sky seen through a mirror
-and the frames' own iterator items ([BSP occlusion](docs/bsp-occlusion.md));
-the security cameras' views without mirrors, decals, coronas, their own
-lighting and fog ([viewport window](docs/script-window-viewport.md)); the
+**Still open in Stage 4:** the LOD morph's world-space rounding ([LOD](docs/script-lodmesh-lod.md#play));
+actor meshes in a sky seen through a mirror and the child frames' own iterator
+mesh items ([BSP occlusion](docs/bsp-occlusion.md)); the security cameras' views
+(a root frame with its own mirror and sky frames, decals, coronas, fog, LOD and
+lighting since 2026-10-11) without a matched capture of the original's
+and with their iterator mesh items at the main frame's pose
+([viewport window](docs/script-window-viewport.md)); the
 host's depth range and float32 GPU transform under the frame projection
 ([render-pass precision](docs/render-pass-precision.md)); the darkest-pixel rounding and
 live scenes left by [visual acceptance](docs/visual-acceptance.md) (26 maps

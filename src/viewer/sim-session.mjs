@@ -430,6 +430,9 @@ export function createSimSession(game, { assets = null, events = [], exportName 
     if (!frames) return null;
     return drawFrameOrder(frames).map(frame => ({ index: frame.index, ids: frame.main ?? new Set(), lod: { ...frame.lod, fov } }));
   }
+  // A frame's lighting camera for the page's lightRun: Coords and Mirror.
+  const lightCameraOf = frame => ({ origin: frame.coords.slice(0, 3),
+    axes: [frame.coords.slice(3, 6), frame.coords.slice(6, 9), frame.coords.slice(9, 12)], mirror: frame.mirror });
   function lightFramesOf(frames) {
     if (!frames || !meshLighting?.frame) return null;
     return drawFrameOrder(frames).map(frame => ({ index: frame.index, kind: frame.kind, ids: frame.main ?? new Set(),
@@ -445,8 +448,11 @@ export function createSimSession(game, { assets = null, events = [], exportName 
   // one (a random beam's) is a record of its own, drawn in those frames
   // alone. A mesh item takes its slot's binding, whose pose is the root
   // frame's (open: docs/bsp-occlusion.md).
+  // Whether the iterators' rescans follow the first-person viewer rules (a
+  // ViewportWindow's frame plans with Draw's bBehindView on: false).
+  let rescanFirstPerson = true;
   function childDynamics(frame, args, own, known, root) {
-    const drawsBefore = iteratorStats.draws, started = performance.now(), scanned = spriteScan.rescan(live.iteratorIndex);
+    const drawsBefore = iteratorStats.draws, started = performance.now(), scanned = spriteScan.rescan(live.iteratorIndex, { firstPerson: rescanFirstPerson });
     iteratorStats.rescans++; iteratorStats.drawsRescan += iteratorStats.draws - drawsBefore; iteratorStats.msRescan += performance.now() - started;
     iteratorStats.lastFrames.push({ frame: frame.index, kind: frame.kind, items: scanned.meshItems });
     const { sprites, added } = childFrameSprites(live.sprites, scanned.sprites, known, record => {
@@ -526,17 +532,34 @@ export function createSimSession(game, { assets = null, events = [], exportName 
   // XViewportWindow::Draw made, docs/script-window-viewport.md "Camera
   // pass"), planned inside the window host's DrawWorld while Draw holds the
   // origin's bHidden and the player's bBehindView, after the main frame's
-  // DrawWorld: DrawWorld's frame counter and OccludeBsp from the frame's
-  // camera at the window's size, the sky frame when OccludeBsp makes one,
-  // SetupDynamics' candidates read live, and render feedback for the
-  // actors and sprites the pass draws. The actors it draws are updated now
-  // as the main frame's update does (actorScene.updateFrame): posed, with
-  // DrawLodMesh's LOD and SetupForActor's lighting from this frame's own
+  // DrawWorld, as a root frame of its own: OccludeFrame's SetupDynamics (the
+  // iterators' items rebuilt), OccludeBsp from the frame's camera at the
+  // window's size with its mirror and sky child frames (each with its own
+  // SetupDynamics) and the decal block, the corona pass, render feedback for
+  // the actors and sprites every frame draws, and the actors updated now as
+  // the main frame's update does (actorScene.updateFrame): posed, with
+  // DrawLodMesh's LOD and SetupForActor's lighting from each frame's own
   // Coords, in this same frame.
-  let lastViewportPlans = [];
+  let lastViewportPlans = [], coronaClock = null, mirrorsOn = true;
   // The HUD frame's packed mesh records (mesh-frame-pack.mjs): the camera
   // frames' late actor updates add to the frame's own (frame()).
   let framePack = null;
+  // A frame's Frame->Sprite as sets: the binding ids and the sprite records
+  // (OccludeBsp's keys over the frame's own candidate entries).
+  function frameMembers(seen, entries, own) {
+    const of = (keys, list) => {
+      const ids = new Set(), records = new Set();
+      for (const key of keys) { const entry = list[key]; if (entry.sprite) records.add(entry.sprite); else ids.add(entry.binding.id); }
+      return { ids, records };
+    };
+    const root = of(seen.sprites, entries), frames = new Map(), children = new Set();
+    for (const frame of seen.frames ?? []) {
+      const here = of(frame.sprites, own.get(frame.index) ?? entries);
+      frames.set(frame.index, here);
+      for (const id of here.ids) children.add(id);
+    }
+    return { root, frames, children };
+  }
   function planViewportPass(command) {
     if (!(command.width > 0 && command.height > 0)) return null;
     viewportFrames++;
@@ -545,26 +568,51 @@ export function createSimSession(game, { assets = null, events = [], exportName 
     applyPlayFrame(viewportCamera, view, { render: true, width: command.width, height: command.height });
     setPixelCentre(viewportCamera, command.width, command.height);
     viewportCamera.updateMatrixWorld();
-    const pass = { visibility: null, sky: null, decisions: null, late: null };
+    const pass = { visibility: null, sky: null, decisions: null, late: null, frames: null, stamps: null, sprites: null, decals: null,
+      coronas: null, projection: null };
     // The camera frame's own SetupDynamics candidates (the actor layer's
-    // bindings read live under Draw's flags, the sprite records), then
-    // OccludeBsp from its camera with Frame->Sprite's keys: exactly those
-    // actors and sprites are drawn and stamped, as for the main frame.
-    const ids = new Set(), sprites = new Set();
-    let seen = null;
+    // bindings read live under Draw's flags, the sprite records and the
+    // iterators' items made again), then OccludeBsp from its camera with
+    // Frame->Sprite's keys for it and each child frame: exactly those actors
+    // and sprites are drawn and stamped, as for the main frame.
+    let seen = null, members = null;
     if (occlusion && occlusion.setupSupported && actorScene) {
-      const entries = packDynamics(occlusion, { sprites: live.sprites, iterators: live.iterators, ...actorScene.setupArgs(live.meshItems) });
-      seen = visibility(view, command.width, command.height, entries.length, { decals: false, movers: false });
-      for (const key of seen.sprites) {
-        const entry = entries[key];
-        if (entry.sprite) sprites.add(entry.sprite.handle); else ids.add(entry.binding.id);
-      }
-    } else if (occlusion) seen = visibility(view, command.width, command.height, -1, { decals: false, movers: false });
+      const args = { ...actorScene.setupArgs(live.meshItems), childFrames };
+      const rescanning = iteratorFrames && live.iterators?.size && live.iteratorIndex;
+      const known = rescanning ? iteratorSpritesByOrder(live.sprites) : null;
+      let sprites = live.sprites, frameArgs = args;
+      rescanFirstPerson = !command.behindView;
+      try {
+        if (rescanning) {
+          // SetupDynamics for this root frame (0x10b22d90 from OccludeFrame): every
+          // iterator's protocol again, from the shared random stream.
+          const drawsBefore = iteratorStats.draws, started = performance.now(), scanned = spriteScan.rescan(live.iteratorIndex, { firstPerson: rescanFirstPerson });
+          iteratorStats.rescans++; iteratorStats.drawsRescan += iteratorStats.draws - drawsBefore; iteratorStats.msRescan += performance.now() - started;
+          const made = childFrameSprites(live.sprites, scanned.sprites, known, record => {
+            record.size = spriteTextures ? spriteSize(record.texture, record.style === 2) : undefined;
+            record.main = false; record.frames = null; record.childOnly = true;
+          });
+          for (const record of made.added) live.sprites.push(record);
+          sprites = made.sprites; frameArgs = { ...args, items: args.itemCandidates(scanned.meshItems) };
+        }
+        const entries = packDynamics(occlusion, { sprites, iterators: live.iterators, ...frameArgs });
+        const own = new Map(), root = rescanning ? { entries, words: candidateWords(occlusion, entries.length) } : null;
+        const frameDynamics = childFrames && rescanning ? frame => childDynamics(frame, frameArgs, own, known, root) : null;
+        seen = visibility(view, command.width, command.height, entries.length, { decals: true, movers: false, frameDynamics });
+        members = frameMembers(seen, entries, own);
+      } finally { rescanFirstPerson = true; }
+    } else if (occlusion) seen = visibility(view, command.width, command.height, -1, { decals: true, movers: false });
+    const ids = members?.root.ids ?? new Set(), childIds = members?.children ?? new Set(), updateIds = new Set([...ids, ...childIds]);
     if (seen) {
-      pass.visibility = { nodes: seen.nodes, movers: seen.movers };
+      pass.visibility = { nodes: seen.nodes, movers: seen.movers, moverItems: seen.moverItems };
+      pass.decals = seen.decals?.length ? seen.decals : null;
       pass.projection = projectionOf(seen.master.words);
       if (pass.projection) setFrameProjection(viewportCamera, pass.projection);
       if (seen.sky) pass.sky = sky(view.location);
+      for (const frame of seen.frames ?? []) frame.main = members?.frames.get(frame.index)?.ids ?? new Set();
+      if (seen.frames?.length) pass.frames = seen.frames.map(frame => ({ index: frame.index, parent: frame.parent, kind: frame.kind,
+        iNode: frame.iNode, group: frame.group, bounds: frame.bounds, nodes: frame.nodes, movers: frame.movers, moverItems: frame.moverItems,
+        coords: frame.coords, mirror: frame.mirror }));
     } else pass.sky = sky(view.location);
     const frustum = new THREE.Frustum().setFromProjectionMatrix(
       new THREE.Matrix4().multiplyMatrices(viewportCamera.projectionMatrix, viewportCamera.matrixWorldInverse));
@@ -573,23 +621,70 @@ export function createSimSession(game, { assets = null, events = [], exportName 
     if (actorScene) {
       // The Frame->Sprite actors are updated as a second DrawWorld would
       // draw them: DrawLodMesh's LOD choice and GetFrame call, SetupForActor
-      // and Light with this frame's Coords (the viewport actor's FovAngle is
+      // and Light with each frame's Coords (the viewport actor's FovAngle is
       // the window's while Draw holds it). The others are hidden in this pass.
       const lit = Boolean(meshLighting?.frame);
-      pass.late = actorScene.updateFrame({ lit, frustum, camera: viewportCamera, cull: false, main: ids,
+      pass.late = actorScene.updateFrame({ lit, frustum, camera: viewportCamera, cull: false, main: ids, children: childIds,
         ...(seen ? { lod: { ...seen.lod, fov: command.fov },
+          lodFrames: childFrames ? lodFramesOf(seen.frames, command.fov) : null, lightFrames: childFrames ? lightFramesOf(seen.frames) : null,
           lightRoot: lit ? meshLighting.childFrame({ coords: seen.lod.coords, mirror: 1, planes: seen.master.planes }) : null } : {}),
-        ...(framePack ? { pack: framePack } : {}) }, ids);
+        ...(framePack ? { pack: framePack } : {}) }, updateIds);
       pass.decisions = new Map(actorScene.all().filter(binding => !ids.has(binding.id)).map(binding => [binding.id, { root: false }]));
-      // DrawActorSprite stamps every Frame->Sprite actor, drawn or occluded
-      // by the three.js cull (the main frame's `occluded` set).
-      for (const binding of actorScene.all()) if (ids.has(binding.id)) runtime.writeNamed(binding.actor, 'LastRenderTime', time);
+      // The child frames' passes, as the main frame's stamps() decides them:
+      // each frame draws the actors its Frame->Sprite holds, lit and LOD-chosen
+      // for it, in DrawFrame's order, and the camera's own frame again after.
+      if (drawn && seen?.frames?.length && size) {
+        const { passes } = drawn.passes({ camera: viewportCamera, sky: pass.sky, drawWorld: false, size: { x: size[0], y: size[1] },
+          mirrors: mirrorsOn, frames: seen.frames, rect: { x: command.x, y: command.y, width: command.width, height: command.height } });
+        const passDecisions = [], passFrames = [], passSky = [], stamps = { passDecisions, passFrames, passSky, mainDecisions: null,
+          skyDecisions: null, skyFrame: null };
+        let insideSky = [];
+        for (const one of passes) {
+          const frame = one.frame;
+          if (!frame) continue;
+          const frameIds = frame.main ?? new Set();
+          // A sky frame inside a mirror frame that draws no actor needs no decisions.
+          if (one.within && !frameIds.size) continue;
+          const decisions = actorScene.framePasses(drawn.frustum(one.camera), frameIds, frame.index);
+          if (one.within) insideSky.push({ frame: frame.index, decisions, light: lightCameraOf(frame) });
+          else if (one.kind === 'mirror') { passDecisions.push(decisions); passFrames.push(lightCameraOf(frame)); passSky.push(insideSky); insideSky = []; }
+          else { stamps.skyDecisions = decisions; stamps.skyFrame = lightCameraOf(frame); }
+        }
+        // The camera frame's own decisions again after its child passes.
+        if (passDecisions.length || stamps.skyDecisions) stamps.mainDecisions = actorScene.framePasses(null, ids);
+        pass.stamps = stamps;
+      }
+      // DrawActorSprite stamps every Frame->Sprite actor of every frame, drawn
+      // or occluded by the three.js cull (the main frame's `occluded` set).
+      for (const binding of actorScene.all()) if (updateIds.has(binding.id)) runtime.writeNamed(binding.actor, 'LastRenderTime', time);
     }
-    for (const handle of sprites) runtime.writeNamed(identityOfHandle(handle), 'LastRenderTime', time);
-    const stampedNames = actorScene ? actorScene.all().filter(b => ids.has(b.id)).map(b => b.actor.name) : [];
+    // The sprite records each frame draws, as indices into the frame's sprite
+    // list (the page's sprite scene numbers its records the same way).
+    const records = new Set(members?.root.records);
+    for (const here of members?.frames.values() ?? []) for (const record of here.records) records.add(record);
+    if (members) {
+      const index = new Map(live.sprites.map((record, at) => [record, at])), at = set => [...set].map(record => index.get(record)).filter(i => i !== undefined);
+      pass.sprites = { root: at(members.root.records), frames: Object.fromEntries([...members.frames].map(([frame, here]) => [frame, at(here.records)])) };
+    }
+    for (const record of records) runtime.writeNamed(identityOfHandle(record.handle), 'LastRenderTime', time);
+    // DrawFrame's corona pass closes the frame (corona-scan.mjs): the player's
+    // leaf's lights, seen from this frame's origin, in this frame's pixels, on
+    // the same cache and clock the main frame's pass uses.
+    if (seen && coronaScan && coronaClock) {
+      const frame = coronaScan.update(view, { width: command.width, height: command.height }, seen.master, live.lights,
+        coronaClock.now + (performance.now() - coronaClock.at) / 1000);
+      pass.coronas = { frame, width: command.width, height: command.height };
+    }
+    const names = ids => actorScene ? actorScene.all().filter(b => ids.has(b.id)).map(b => b.actor.name) : [];
     lastViewportPlans.push({ rect: [command.x, command.y, command.width, command.height],
       location: [...command.location], rotation: [...command.rotation], fov: command.fov, ms: +(performance.now() - planStarted).toFixed(2), nodes: pass.visibility?.nodes.length ?? null,
-      sky: Boolean(pass.sky), actors: stampedNames, sprites: sprites.size, stamped: stampedNames, time, late: pass.late?.records.length ?? 0 });
+      sky: Boolean(pass.sky), actors: names(ids), sprites: records.size, stamped: names(updateIds), time, late: pass.late?.records.length ?? 0,
+      frames: (seen?.frames ?? []).map(frame => ({ index: frame.index, parent: frame.parent, kind: frame.kind, nodes: frame.nodes.length,
+        actors: names(frame.main ?? new Set()) })),
+      decals: pass.decals ? pass.decals.reduce((n, group) => n + group.positions.length / 9, 0) : 0,
+      coronas: pass.coronas ? { icons: pass.coronas.frame.icons.length, ...pass.coronas.frame.stats,
+        // The frame DrawFrame's pass read and the icons it placed (validation).
+        frameWords: pass.coronas.frame.frameWords, placed: pass.coronas.frame.icons.map(({ x, y, size, light }) => ({ x, y, size, light })) } : null });
     return pass;
   }
   // Accessibility mirrors native TextWindow contents: the window, its title
@@ -729,6 +824,7 @@ export function createSimSession(game, { assets = null, events = [], exportName 
       let mark = performance.now();
       const time = name => { const now = performance.now(); timings[name] = (timings[name] ?? 0) + now - mark; mark = now; };
       const stopped = () => input.halted || failed, [width, height] = input.size;
+      mirrorsOn = input.mirrors; coronaClock = null;
       let inspect = null;
       if (input.inspect) {
         const c = input.inspect.camera;
@@ -882,9 +978,7 @@ export function createSimSession(game, { assets = null, events = [], exportName 
       frames = null, rect = null }) {
       const errors = [], passDecisions = [], passFrames = [], passSky = [];
       let mainDecisions = null, skyDecisions = null, skyFrame = null, insideSky = [];
-      // A child frame's lighting camera for the page's lightRun: Coords and Mirror.
-      const lightCamera = frame => ({ origin: frame.coords.slice(0, 3),
-        axes: [frame.coords.slice(3, 6), frame.coords.slice(6, 9), frame.coords.slice(9, 12)], mirror: frame.mirror });
+      const lightCamera = lightCameraOf;
       stamped = { movers: new Set(), sprites: new Set(), actors: new Set(), occluded: new Set(), bindings: new Map(),
         weapon: new Set(), source: new Map(), drawn: new Set() };
       try {
@@ -976,6 +1070,9 @@ export function createSimSession(game, { assets = null, events = [], exportName 
      * canvas's, in drawing-buffer pixels, from the master frame OccludeBsp
      * read. `now` is the fade clock in seconds. */
     coronas({ now }) {
+      // The camera frames' corona passes (planViewportPass) come later in the
+      // same frame: their clock runs on from this one by the host's elapsed time.
+      coronaClock = { now, at: performance.now() };
       const errors = [], rect = current?.renderRect ?? { width: size[0], height: size[1] };
       let frame = null;
       try { frame = coronaScan.update(current.view, rect, current.visibility?.master ?? null, live.lights, now); }

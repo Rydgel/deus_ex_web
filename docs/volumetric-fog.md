@@ -206,6 +206,14 @@ generic over three register models (`Reg`):
   light UVs and bounds. It also collects every actor with `VolumeRadius > 0`,
   with its colour from `movingLightConstants` and its steady
   LightBrightness/255.
+- **Camera frames.** A ViewportWindow's frame is a root frame of its own:
+  `viewportWorldPass` (main.mjs) calls `update` again with the window's eye and
+  rotation, its OccludeBsp surfaces and its child frames
+  (docs/script-window-viewport.md "Camera pass"), before it draws the
+  mirror frames and the frame itself. `validate-terminals-camera-browser.mjs
+  --map 02_NYC_BatteryPark --computer ComputerSecurity2 --user NSF --password righteous
+  --camera-actor SecurityCamera1 --camera=-619,-3679,290,0,29856 --expect fog`
+  computes the maps of 59 surfaces for the camera.
 - **Frame coords.** Each frame, main.mjs passes the view's eye and rotation.
   The frame coords are ViewCoords under the view rotation: `getAxes`' Y, −Z
   and X. getAxes computes `UnitCoords / Rotation`, and ViewCoords permutes

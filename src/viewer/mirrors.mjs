@@ -118,9 +118,13 @@ export function createMirrors(notes, displayGamma) {
    * instead of the frustum; `framePass(frame)` selects one frame's world and
    * sprites (null: all again) and `skyIn(skyFrame, camera, node)` draws a sky
    * frame OccludeBsp made inside a mirror frame (its own camera, from its
-   * own Coords), before the mirror's view. */
+   * own Coords), before the mirror's view. `viewport` {x, y, width, height}
+   * (top-down, drawing-buffer pixels) is the region the frame draws into when
+   * it is not the whole buffer (a ViewportWindow's frame): each child's image
+   * sits in its target at that region, flipped across the buffer's centre for
+   * an odd depth, where the parent's shader samples it. */
   function render(renderer, scene, source, { markers, updateActors, sky, requested = null, frames = null, rect = null,
-    framePass = null, skyIn = null } = {}) {
+    framePass = null, skyIn = null, viewport = null } = {}) {
     stats.renderedPlanes = 0;stats.depth=0;stats.scissorPixels=0;
     if (!planes.size) return;
     for (const group of planes.values()) group.active.value = 0;
@@ -153,6 +157,8 @@ export function createMirrors(notes, displayGamma) {
         const target = targetFor(depth, index);
         target.setSize(size.x, size.y);
         target.scissor.set(scissor.x, scissor.y, scissor.width, scissor.height); target.scissorTest = true;
+        if (viewport) target.viewport.set(depth % 2 ? size.x - viewport.x - viewport.width : viewport.x,
+          size.y - viewport.y - viewport.height, viewport.width, viewport.height);
         for (const g of planes.values()) g.active.value = 0;
         for (const n of nested) { n.group.texture.value = n.target.texture; n.group.size.value.copy(size); n.group.active.value = 1; }
         // The mirror's own plane is the child's clip plane; its faces are not
