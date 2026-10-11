@@ -102,6 +102,23 @@ const near = (a, b) => a.every((v, i) => Math.abs(v - b[i]) < 0.01);
 assert.ok(near(movement[0], [-41, 269, 312]) && near(movement[1], [41, 45, 72]),
   `ComputeMovementArea center ${movement[0]} area ${movement[1]}`);
 
+// Mover.FinishNotify on a WaitingPawn outside ScriptedPawn's OpeningDoor
+// override runs the native Pawn.StopWaiting (Engine 0x103ba590): a pawn in
+// Sleep (latent 0x180) gets LatentFloat -1.
+let sleeper = null;
+for (let i = 0; i < 600 && !sleeper; i++) {
+  for (let pawn = level.pawnList; pawn && !sleeper; pawn = pawn.nextPawn)
+    if (pawn !== player && runtime.instance(pawn).state?.latent === 384 && read(pawn, 'LatentFloat') > 0) sleeper = pawn;
+  if (!sleeper) step();
+}
+assert.ok(sleeper, 'a pawn in Sleep');
+assert.notEqual(stateOf(sleeper), 'OpeningDoor');
+runtime.writeNamed(door, 'WaitingPawn', sleeper);
+runtime.processEvent(door, 'FinishNotify', []);
+assert.equal(read(door, 'WaitingPawn'), null, 'FinishNotify cleared WaitingPawn');
+assert.equal(read(sleeper, 'LatentFloat'), -1, `native StopWaiting ended ${sleeper.name}'s Sleep`);
+step();
+
 // Part 2: Mission03.Timer's original call, and Simons at the door.
 const events = [];
 const processEvent = runtime.processEvent.bind(runtime);

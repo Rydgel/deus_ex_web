@@ -2988,6 +2988,18 @@ export class ScriptRuntime {
     return this.callFunction(record,call.receiver,call.argumentCount,call.evaluateArgument,call);
   }
   invokeNative(call) {
+    if(call.record?.key==='engine.pawn.stopwaiting'){
+      // APawn::execStopWaiting, Engine 0x103ba590: P_FINISH, then
+      // LatentFloat (+0xe0) = -1.0f when StateFrame->LatentAction is Sleep's
+      // poll 0x180, so the Sleep ends at its next poll. StateFrame (+0xc) is
+      // read without a null test. Mover.FinishNotify reaches it for a based
+      // pawn or a WaitingPawn outside ScriptedPawn's OpeningDoor override.
+      if(call.argumentCount!==0)throw new Error('StopWaiting takes no arguments');
+      const state=this.instance(call.receiver).state;
+      if(!state)throw new Error('StopWaiting requires the pawn StateFrame');
+      if(state.latent===384)this.writeNamed(call.receiver,'LatentFloat',-1);
+      return undefined;
+    }
     if(call.record?.key==='engine.decal.attachdecal')return execAttachDecal(call,{
       read:(actor,name)=>this.readNamed(actor,name),
       write:(actor,name,value)=>this.writeNamed(actor,name,value),
