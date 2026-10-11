@@ -337,10 +337,10 @@ and `validate-gpu-mesh` pass too.
 
 - A render iterator's items are built again in every child frame
   ([below](#each-child-frames-own-setupdynamics)); a laser's mesh item that
-  differs between frames is drawn at the root frame's pose in every pass,
-  and the HUD's camera frames (ViewportWindow DrawWorld) do not run the
-  iterators again. (Each child frame's own fog maps were added on
-  2026-10-07, [volumetric fog](volumetric-fog.md).)
+  differs between frames is drawn at the root frame's pose in every pass
+  (also in the HUD's camera frames, whose DrawWorld does run the iterators
+  again, for its sprites and Frame->Sprite). (Each child frame's own fog
+  maps were added on 2026-10-07, [volumetric fog](volumetric-fog.md).)
 - The child tangent comes from the x87-tan.mjs model, which is checked
   against hardware FPTAN, not from a measurement of these arguments.
 
@@ -868,8 +868,9 @@ Ported and in Play on 2026-10-07 ("Child frames" above). Each child frame's
 own fog maps followed the same day ([volumetric fog](volumetric-fog.md),
 "Play"); the sky frames inside mirror frames (camera, actors) and each
 frame's own iterator items on 2026-10-08. What remains: a measured FPTAN for
-the 24-bit argument, the per-pass pose of an iterator's mesh item, and the
-iterators' rerun in the HUD's camera frames.
+the 24-bit argument, the per-pass pose of an iterator's mesh item. The HUD's
+camera frames (ViewportWindow DrawWorld) run the iterators again, mirror and sky
+child frames included, since 2026-10-11.
 
 ### 2. The moving brush tracker (done)
 

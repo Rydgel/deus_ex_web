@@ -408,8 +408,9 @@ conversation camera with lip sync. The render pass's translations run at its
 Twenty-six maps match the original's own frames at matched cameras and level time (122 of 130 views)
 ([visual acceptance](visual-acceptance.md)).
 Open: the LOD morph's world-space rounding, an iterator mesh item's per-pass
-pose in child frames, the security cameras' views without mirrors, decals,
-coronas and their own lighting, LOD, iterators and fog, the
+pose in child and camera frames, a matched capture of the security cameras'
+views (root frames with their own mirror and sky frames, decals, coronas, fog,
+LOD and lighting since 2026-10-11, [viewport window](script-window-viewport.md)), the
 host's depth range and float32 GPU transform under the frame projection, the
 darkest-pixel rounding visual acceptance found, and acceptance of live
 (unfrozen) scenes.
@@ -854,8 +855,7 @@ faces.
   pass), the morph, corners, lighting and visibility, on both paths; the page
   redoes the slot's morph and corner passes in the frame's lighting run.
 - *Left.* The morph rounds in Play's world space (the original's GetFrame
-  output is camera space), ViewportWindow frames and the weapon select no LOD
-  of their own, and the particle and wire branches are not ported. See
+  output is camera space), the weapon selects no LOD of its own, and the particle and wire branches are not ported. See
   [LOD](script-lodmesh-lod.md).
 
 **Typed characters (2026-10-07).** The `WM_CHAR` route is recovered and

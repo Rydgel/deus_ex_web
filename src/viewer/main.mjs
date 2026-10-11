@@ -476,29 +476,126 @@ function viewportFrustum(command) {
 }
 // The camera passes the last frame drew (terminalProbe): rectangle and draw calls.
 let viewportPassesDrawn = [];
+// The snapshot's packed mesh records (mesh-frame-pack.mjs), which the HUD frame's late actor records also use.
+let frameWords = null;
+// Validation: whether the camera frames draw the decal block (deusExViewer.viewportDecals).
+let viewportDecalsOn = true;
+/** The pieces of one root frame's child-frame passes, for the main frame and
+ * for a ViewportWindow's frame alike (the original runs the same OccludeFrame
+ * and DrawFrame for both): `framePass(record)` puts one child frame's world,
+ * sprites and fog in place (null: the root frame's again; `spritesOf(record)`
+ * picks the sprite records that frame draws), `drawSkyFrame` draws a sky frame
+ * OccludeBsp made inside a mirror frame (mirror-passes.mjs skyFrameCamera,
+ * 0x10b184b1: the camera of its own Coords, its own world and sprites, and
+ * its own Frame->Sprite actors, the simulation side's `passSky`, applied now
+ * and the mirror frame's put back after) and `updateActors` applies the actor
+ * layer's decisions for each mirror pass. `stampFrame` is the simulation's
+ * decisions for the frame (sim-session.mjs stamps, planViewportPass). */
+function framePassHelpers(frames, stampFrame, spritesOf) {
+  let passIndex = 0;
+  const framePass = frames ? record => {
+    world.fog?.framePass(record, renderer);
+    if (!record) { world.visibility.all(); spriteScene?.framePass(null); return; }
+    world.visibility.select(record.nodes, record.movers ?? null);
+    spritesOf(record);
+  } : null;
+  const drawSkyFrame = (record, frameCamera, node) => {
+    const markersVisible = world.markers.visible; world.markers.visible = false;
+    const npcVisible = npcPreview?.root.visible, target = renderer.getRenderTarget();
+    const actors = npcPreview ? stampFrame?.passSky?.[node.passAt]?.find(entry => entry.frame === record.index) ?? null : null;
+    // The actors' lighting run resets the GL state, the render target with it.
+    if (actors) { npcPreview.draw.pass(actors.decisions, fromView(frameCamera.position.toArray()), actors.light); renderer.setRenderTarget(target); }
+    else if (npcPreview) npcPreview.root.visible = false;
+    framePass(record);
+    try { renderer.render(scene, frameCamera); }
+    finally {
+      framePass(null); world.markers.visible = markersVisible;
+      if (npcPreview) npcPreview.root.visible = npcVisible;
+      if (actors) { node.reapply(); renderer.setRenderTarget(target); }
+    }
+  };
+  const updateActors = npcPreview && !runtimeError ? (position, passCamera, node) => {
+    const at = passIndex, decisions = node ? stampFrame?.passDecisions[passIndex++] : stampFrame?.mainDecisions;
+    if (node && !decisions) throw new Error('The page drew a mirror pass the simulation side did not plan');
+    // A child frame's pass lights the actors it draws with that frame's Coords and Mirror.
+    const light = node ? stampFrame?.passFrames?.[at] ?? null : null;
+    npcPreview.draw.pass(decisions ?? new Map(), position, light);
+    // A sky frame inside this mirror frame finds its decisions at `passAt`
+    // and puts these back with `reapply`.
+    if (node) { node.passAt = at; node.reapply = () => npcPreview.draw.pass(decisions, position, light); }
+  } : null;
+  return { framePass, drawSkyFrame, updateActors };
+}
+/** A root frame's sky frame: the camera at the SkyZone (`sky`), drawn under
+ * the frame (`parent` is the frame's camera) with its own world, sprites and
+ * actors when OccludeBsp made it a child frame (`rootSky`, stamped on the
+ * simulation side); without child frames, no actors. */
+function drawRootSky(parent, sky, rootSky, stampFrame, framePass) {
+  skyCamera.copy(parent); skyCamera.layers.disable(DECAL_LAYER); skyCamera.position.fromArray(toView(sky.location));
+  skyCamera.quaternion.premultiply(new THREE.Quaternion().setFromEuler(rotatorEuler(sky.rotation)));
+  const markersVisible = world.markers.visible; world.markers.visible = false;
+  const skyActors = rootSky && npcPreview && stampFrame?.skyDecisions;
+  const npcVisible = npcPreview?.root.visible; if (npcPreview && !skyActors) npcPreview.root.visible = false;
+  if (skyActors) npcPreview.draw.pass(stampFrame.skyDecisions, fromView(skyCamera.position.toArray()), stampFrame.skyFrame ?? null);
+  if (rootSky) framePass(rootSky);
+  try { renderer.render(scene, skyCamera); } finally { if (rootSky) framePass(null); }
+  world.markers.visible = markersVisible;
+  if (npcPreview) npcPreview.root.visible = npcVisible;
+  renderer.clearDepth();
+  if (skyActors) npcPreview.draw.pass(stampFrame.mainDecisions ?? new Map(), fromView(parent.position.toArray()));
+}
 function viewportWorldPass(command) {
   const plan = command.pass;
   if (!plan || !world || !(command.width > 0 && command.height > 0)) return;
   const callsBefore = renderer.info.render.calls;
-  aimViewportCamera(command); viewportCamera.layers.disable(DECAL_LAYER);
+  aimViewportCamera(command);
+  // The frame's decal block (the camera frame's own OccludeBsp polygons).
+  viewportCamera.layers[plan.decals && viewportDecalsOn ? 'enable' : 'disable'](DECAL_LAYER);
+  // The frame's actors, updated on the simulation side after the main frame's
+  // (sim-session.mjs planViewportPass): their poses, LOD and lighting for each
+  // of this camera's frames, in this frame, before the pass draws them; the
+  // others are hidden in the camera's own frame.
+  if (npcPreview && plan.late) npcPreview.draw.apply(plan.late, fromView(viewportCamera.position.toArray()), frameWords);
+  if (npcPreview && plan.decisions) npcPreview.draw.pass(plan.decisions, fromView(viewportCamera.position.toArray()));
+  const frames = plan.frames ?? null, stampFrame = plan.stamps ?? null, rect = { x: command.x, y: command.y, width: command.width, height: command.height };
+  // The volumetric fog maps of this frame's surfaces: its own Coords for the
+  // camera frame and for each child frame (fog-pass.mjs update).
+  let fogMaps = null;
+  if ((world.fog?.stats.surfaces || world.fog?.stats.moverPolygons) && !runtimeError && plan.visibility) {
+    try {
+      world.fog.update({ location: command.location, rotation: command.rotation }, viewportFrustum(command),
+        new Set(Array.from(plan.visibility.nodes, node => world.nodeSurface[node])),
+        { moverItems: plan.visibility.moverItems ?? null, fogZone: world.fogZone, frames: childFog ? frames : null, nodeSurface: world.nodeSurface });
+      const { drawn, texels, movers, frameMaps } = world.fog.stats; fogMaps = { drawn, texels, movers, frameMaps };
+    } catch (error) { pauseForRuntimeError(error); }
+  }
+  // Each sprite record the frame draws: the camera frame's, and each child frame's.
+  const { framePass, drawSkyFrame, updateActors } = framePassHelpers(frames, stampFrame,
+    record => spriteScene?.numberedPass(plan.sprites?.frames?.[record.index] ?? []));
+  // The mirror frames: each child frame into its target, over the camera's own
+  // rectangle, which the camera frame's shader then samples. Without child
+  // frames the mirror surfaces draw unreflected.
+  world.mirrors.render(renderer, scene, viewportCamera, { markers: world.markers, sky: plan.sky, frames: frames ?? [], rect,
+    framePass, skyIn: frames ? drawSkyFrame : null, updateActors, viewport: rect });
   const box = renderViewportFor(command), markersVisible = world.markers.visible;
   renderer.setViewport(...box); renderer.setScissor(...box); renderer.setScissorTest(true);
   world.markers.visible = false;
   try {
     if (command.clearZ) renderer.clearDepth();
-    if (plan.sky) {
-      skyCamera.copy(viewportCamera); skyCamera.layers.disable(DECAL_LAYER); skyCamera.position.fromArray(toView(plan.sky.location));
-      skyCamera.quaternion.premultiply(new THREE.Quaternion().setFromEuler(rotatorEuler(plan.sky.rotation)));
-      const npcVisible = npcPreview?.root.visible; if (npcPreview) npcPreview.root.visible = false;
-      renderer.render(scene, skyCamera);
-      if (npcPreview) npcPreview.root.visible = npcVisible; renderer.clearDepth();
-    }
+    if (plan.sky) drawRootSky(viewportCamera, plan.sky, frames?.find(f => f.parent === 0 && f.kind === 'sky') ?? null, stampFrame, framePass);
     if (plan.visibility) world.visibility.select(plan.visibility.nodes, plan.visibility.movers ?? null);
-    if (npcPreview && plan.decisions) npcPreview.draw.pass(plan.decisions, fromView(viewportCamera.position.toArray()));
+    decalScene?.update(plan.decals ?? null);
+    spriteScene?.numberedPass(plan.sprites ? plan.sprites.root : null);
     renderer.render(scene, viewportCamera);
-    viewportPassesDrawn.push({ rect: [command.x, command.y, command.width, command.height], calls: renderer.info.render.calls - callsBefore });
+    // DrawFrame's corona pass closes the frame, in this frame's pixels.
+    if (plan.coronas && coronaPass) {
+      try { coronaPass.update(plan.coronas.frame, plan.coronas.width, plan.coronas.height); coronaPass.render(renderer); }
+      catch (error) { pauseForRuntimeError(error); }
+    }
+    viewportPassesDrawn.push({ rect: [command.x, command.y, command.width, command.height], calls: renderer.info.render.calls - callsBefore,
+      frames: frames?.length ?? 0, decals: plan.decals?.length ?? 0, icons: plan.coronas?.frame.icons.length ?? 0, fog: fogMaps });
   } finally {
-    world.visibility.all(); world.markers.visible = markersVisible;
+    world.visibility.all(); world.markers.visible = markersVisible; spriteScene?.numberedPass(null);
     const pr = renderer.getPixelRatio(), full = [0, 0, renderer.domElement.width / pr, renderer.domElement.height / pr];
     renderer.setViewport(...full); renderer.setScissor(...full); renderer.setScissorTest(false);
   }
@@ -621,7 +718,10 @@ async function loadMap(name) {
     // The simulation side (sim-host.mjs): the game, the frame session, the
     // mesh layers' simulation halves and lip sync.
     const hostOptions = { randomSeed, subtitles: subtitlePreference,
-      stampScene: nextWorld.stampScene(), panZones: nextWorld.panZoneNames(), childFrames: nextWorld.mirrors.stats.planes > 0,
+      stampScene: nextWorld.stampScene(), panZones: nextWorld.panZoneNames(),
+      // Actors only a child frame draws are admitted where one may exist: a map with mirrors, or with security
+      // cameras (a ViewportWindow's frame draws the player, whom Draw's bBehindView stops excluding).
+      childFrames: nextWorld.mirrors.stats.planes > 0 || nextMap.actors.some(actor => actor.className === 'SecurityCamera' || actor.className === 'ComputerSecurity'),
       gpu: nextGpuMesh?.capacities ?? null, weaponGpu: nextWeaponGpu?.capacities ?? null,
       meshBackend: new URLSearchParams(location.search).get('meshBackend'), meshLod: new URLSearchParams(location.search).get('meshLod') };
     // On the page the old map's audio unregisters its music before the next
@@ -1391,6 +1491,8 @@ fog() {
 /** Validation only: the 3D view's projection from the pass frame (on, the
  * default) or from the FOV and the constant pixel centre (off). */
 frameProjection(on) { frameProjection = Boolean(on); },
+/** Validation only: draw (or leave out) the decal block in a ViewportWindow's frames. */
+viewportDecals(on) { viewportDecalsOn = Boolean(on); },
 /** Show or hide the fog pass (validation: a frame with and without it). */
 showFog(on) { if (world?.fog) world.fog.root.visible = Boolean(on); },
 /** The page's corona pass (corona-pass.mjs): the last frame's counters,
@@ -1576,7 +1678,7 @@ function drawFrame(snap, time) {
     phaseMark = performance.now();
     applySimEvents(snap.events, { world, actors: npcPreview, weapon: weaponDraw });
   }
-  const frame = snap?.begin ?? null, words = packViews(snap?.pack);
+  const frame = snap?.begin ?? null, words = frameWords = packViews(snap?.pack);
   if (playing && frame) {
     world.syncMovers(frame.movers);
     // The simulation side points its own camera the same way
@@ -1649,7 +1751,8 @@ function drawFrame(snap, time) {
   // Without its polygons (no BSP occlusion) every light map is.
   const viewportPasses = snap?.hud?.commands?.filter(command => command.kind === 'viewport' && command.pass) ?? [];
   const viewportSurfaces = viewportPasses.every(command => command.pass.visibility)
-    ? viewportPasses.flatMap(command => Array.from(command.pass.visibility.nodes, node => world.nodeSurface[node])) : null;
+    ? viewportPasses.flatMap(command => [command.pass.visibility.nodes, ...(command.pass.frames ?? []).map(frame => frame.nodes)]
+      .flatMap(nodes => Array.from(nodes, node => world.nodeSurface[node]))) : null;
   let drawnLightMaps = frameSurfaces ?? (viewFrustum && visible && !visible.sky ? drawnSurfaces : null);
   if (drawnLightMaps && viewportPasses.length) drawnLightMaps = viewportSurfaces ? new Set([...drawnLightMaps, ...viewportSurfaces]) : null;
   // Without listed polygons, the light maps in the main frustum or a camera's.
@@ -1694,46 +1797,9 @@ function drawFrame(snap, time) {
   }
   phase('weapon');
   if (simVerify) for (const set of Object.values(drew)) set.clear();
-  let passIndex = 0;
-  // One child frame's world (its visible nodes and mover polygons) and
-  // sprite records; null: all again.
-  const framePass = frames ? record => {
-    world.fog?.framePass(record, renderer);
-    if (!record) { world.visibility.all(); spriteScene?.framePass(null); return; }
-    world.visibility.select(record.nodes, record.movers ?? null);
-    spriteScene?.framePass(record.index);
-  } : null;
-  // A sky frame OccludeBsp made inside a mirror frame: the camera of its own
-  // Coords (mirror-passes.mjs skyFrameCamera, 0x10b184b1), its own world
-  // and sprites, and its own Frame->Sprite actors (the simulation side's
-  // `passSky`, applied now and the mirror frame's put back after).
-  const drawSkyFrame = (record, frameCamera, node) => {
-    const markersVisible = world.markers.visible; world.markers.visible = false;
-    const npcVisible = npcPreview?.root.visible, target = renderer.getRenderTarget();
-    const actors = npcPreview ? stampFrame?.passSky?.[node.passAt]?.find(entry => entry.frame === record.index) ?? null : null;
-    // The actors' lighting run resets the GL state, the render target with it.
-    if (actors) { npcPreview.draw.pass(actors.decisions, fromView(frameCamera.position.toArray()), actors.light); renderer.setRenderTarget(target); }
-    else if (npcPreview) npcPreview.root.visible = false;
-    framePass(record);
-    try { renderer.render(scene, frameCamera); }
-    finally {
-      framePass(null); world.markers.visible = markersVisible;
-      if (npcPreview) npcPreview.root.visible = npcVisible;
-      if (actors) { node.reapply(); renderer.setRenderTarget(target); }
-    }
-  };
+  const { framePass, drawSkyFrame, updateActors } = framePassHelpers(frames, stampFrame, record => spriteScene?.framePass(record.index));
   world.mirrors.render(renderer, scene, camera, { markers: world.markers, sky: world.sky, requested,
-    frames, rect: frames ? (renderRect ?? null) : null, framePass, skyIn: frames ? drawSkyFrame : null,
-    updateActors: npcPreview && !runtimeError ? (position, passCamera, node) => {
-      const at = passIndex, decisions = node ? stampFrame?.passDecisions[passIndex++] : stampFrame?.mainDecisions;
-      if (node && !decisions) throw new Error('The page drew a mirror pass the simulation side did not plan');
-      // A child frame's pass lights the actors it draws with that frame's Coords and Mirror.
-      const light = node ? stampFrame?.passFrames?.[at] ?? null : null;
-      npcPreview.draw.pass(decisions ?? new Map(), position, light);
-      // A sky frame inside this mirror frame finds its decisions at `passAt`
-      // and puts these back with `reapply`.
-      if (node) { node.passAt = at; node.reapply = () => npcPreview.draw.pass(decisions, position, light); }
-    } : null });
+    frames, rect: frames ? (renderRect ?? null) : null, framePass, skyIn: frames ? drawSkyFrame : null, updateActors });
   phase('mirrors');
   let calls = drawCalls(); framePhases.mirrorCalls += calls;
   // The ramp pass maps the raw clear colour back to the UI colour.
@@ -1747,19 +1813,7 @@ function drawFrame(snap, time) {
   const sky = drawWorld ? skyFrame(frame) : null;
   const rootSky = frames?.find(f => f.parent === 0 && f.kind === 'sky') ?? null;
   if (sky) {
-    skyCamera.copy(camera); skyCamera.layers.disable(DECAL_LAYER); skyCamera.position.fromArray(toView(sky.location));
-    skyCamera.quaternion.premultiply(new THREE.Quaternion().setFromEuler(rotatorEuler(sky.rotation)));
-    const markersVisible = world.markers.visible; world.markers.visible = false;
-    // The root sky frame draws its own world, sprites and actors
-    // (stamped on the simulation side); without child frames, no actors.
-    const skyActors = rootSky && npcPreview && stampFrame?.skyDecisions;
-    const npcVisible=npcPreview?.root.visible;if(npcPreview&&!skyActors)npcPreview.root.visible=false;
-    if (skyActors) npcPreview.draw.pass(stampFrame.skyDecisions, fromView(skyCamera.position.toArray()), stampFrame.skyFrame ?? null);
-    if (rootSky) framePass(rootSky);
-    try { renderer.render(scene, skyCamera); } finally { if (rootSky) framePass(null); }
-    world.markers.visible = markersVisible;
-    if(npcPreview)npcPreview.root.visible=npcVisible;renderer.clearDepth();
-    if (skyActors) npcPreview.draw.pass(stampFrame.mainDecisions ?? new Map(), fromView(camera.position.toArray()));
+    drawRootSky(camera, sky, rootSky, stampFrame, framePass);
     framePhases.skyCalls += drawCalls() - calls; calls = drawCalls();
   }
   // The decal block's fragments for this frame (sim-session.mjs visibility).

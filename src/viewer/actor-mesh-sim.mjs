@@ -587,7 +587,9 @@ export async function createMeshBinding(runtime,actor,{id,originalObjectIndex,ke
        * frustum keeps. Null when the frame did not pose it. */
       framePass(frustum,inFrame,frameIndex){
         if(disposed||(!drawnMain&&!childOnly))return null;
-        const root=frustum===null?drawnMain:inFrame;
+        // The frame's own again (`frustum` null): drawn when this frame drew it and, for a
+        // root frame other than the main one, when its Frame->Sprite holds it (`inFrame`).
+        const root=frustum===null?drawnMain&&inFrame:inFrame;
         if(!root)return {root:false};
         // The frame's own lighting rides with the decision (frameIndex): the
         // page applies it before the pass and restores the main frame's after.
@@ -608,19 +610,6 @@ export async function createMeshBinding(runtime,actor,{id,originalObjectIndex,ke
         const spheres=spheresChanged?sphereWords():null;spheresChanged=false;
         decision.groups=bits;decision.spheres=spheres;
         return decision;
-      },
-      /** Another root frame's decision (a ViewportWindow's DrawWorld,
-       * docs/script-window-viewport.md "Camera pass"): drawn when that
-       * frame's Frame->Sprite holds the binding (`inFrame`, from its own
-       * SetupDynamics candidates) and this frame's update posed it (drawn by
-       * the main frame or child-only); on the GPU path also the groups
-       * `frustum` keeps. */
-      viewportPass(frustum,inFrame){
-        if(disposed||(!drawnMain&&!childOnly)||!inFrame)return {root:false};
-        if(mode!=='gpu')return {root:true};
-        const bits=[];decideGroups(frustum,(group,visible)=>bits.push(visible?1:0));
-        const spheres=spheresChanged?sphereWords():null;spheresChanged=false;
-        return {root:true,groups:bits,spheres};
       },
       /** Not drawn this frame without an update (an iterator item slot
        * the frame does not use): the page hides its root. */
@@ -835,8 +824,11 @@ export async function createMeshBinding(runtime,actor,{id,originalObjectIndex,ke
         // with its own Coords, Mirror and LeafLights (view.lightFrames).
         frameLights.clear();frameSetups.clear();frameCtxs.clear();
         if(lighting&&view.lit&&lighting.frame){
+          // `view.lightRoot`: the lighting frame of a root frame that is not the
+          // main viewport's (a ViewportWindow's DrawWorld, updateFrame), for the
+          // pass that is not a child frame's.
           const lightIn=lf=>{
-            const ctx=lf?lf.ctx:null,pool=lf?lf.index:0;
+            const ctx=lf?lf.ctx:view.lightRoot??null,pool=lf?lf.index:0;
             if(mode==='gpu'){
               const prepared=lighting.setupMesh(actor,at>=0?setupFields(view.reads.views()):null,ctx);
               if(!prepared)return;
@@ -1144,6 +1136,33 @@ export async function createActorMeshSim(runtime,assets,asset,{kernel,player:pla
       layout?.endFrame();
       return {records:records.filter(Boolean),camera};
     },
+    /** Another root frame's update (a ViewportWindow's DrawWorld, in the HUD
+     * paint after the main frame's: docs/script-window-viewport.md "Camera
+     * pass"): the bindings in `ids` (its Frame->Sprite, its child frames'
+     * included), each updated as the main frame's update does with this
+     * frame's inputs in `view` (`main`, `children`, `frustum`, `lod`,
+     * `lodFrames`, `lightFrames`, `lightRoot`: this frame's own Coords for
+     * the lighting, `pack`). The calls come after the main frame's, as the
+     * original's second DrawWorld does: DrawLodMesh selects and calls
+     * GetFrame in this frame again, SetupForActor lights with its Coords,
+     * and the page applies the records and runs the passes once more
+     * (apply). Iterator mesh items keep the main frame's pose. Returns the
+     * records and the lighting frame's camera for the page's GPU passes, or
+     * null when no binding is updated. */
+    updateFrame(view={},ids){
+      const records=[];
+      frameViewer=null;frameViewer=viewer();
+      try{
+        if(lod&&view.lod)view={...view,lodFrame:lodFrame(view.lod,lodSettings),
+          lodFrames:view.lodFrames?.map(entry=>({index:entry.index,ids:entry.ids,frame:lodFrame(entry.lod,lodSettings)}))??null};
+        for(const binding of actors)if(ids.has(binding.id))records.push(binding.update(view));
+      }finally{frameViewer=null;}
+      if(!records.length)return null;
+      const root=view.lightRoot??lighting?.frame;
+      const camera=root?{origin:[...root.origin],axes:root.axes.map(axis=>[...axis])}:null;
+      layout?.endFrame();
+      return {records:records.filter(Boolean),camera};
+    },
     /** A mirror child pass's decisions, per binding id (`frustum`: the
      * pass camera's). */
     passVisibility(frustum){
@@ -1159,18 +1178,10 @@ export async function createActorMeshSim(runtime,assets,asset,{kernel,player:pla
       for(const binding of all()){const decision=binding.framePass(frustum,ids?ids.has(binding.id):true,frameIndex);if(decision)decisions.set(binding.id,decision);}
       return decisions;
     },
-    /** Another root frame's decisions (a ViewportWindow's DrawWorld), one
-     * per binding id (`frustum`: that frame's camera; `ids`: its
-     * Frame->Sprite bindings). */
-    viewportPasses(frustum,ids){
-      const decisions=new Map();
-      for(const binding of all())decisions.set(binding.id,binding.viewportPass(frustum,ids.has(binding.id)));
-      return decisions;
-    },
     /** SetupDynamics' actor candidates for a frame of its own (a
      * ViewportWindow's DrawWorld), read live: the bindings, the iterator
      * items' bindings and the level order (packDynamics' arguments). */
-    setupArgs(items=[]){return {bindings:actors,items:itemCandidates(items),reads:null,levelIndex};},
+    setupArgs(items=[]){return {bindings:actors,items:itemCandidates(items),reads:null,levelIndex,itemCandidates};},
     /** Every binding, item bindings included. */
     all,
     /** URender::Exec's MLOD (+40, positive only), MLMODE (+48, non-negative)

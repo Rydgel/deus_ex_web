@@ -277,8 +277,12 @@ Play (`actor-mesh-sim.mjs update`, `sim-session.mjs lodFramesOf`):
   or its valid count is unchanged between the calls (tweens), which the test
   checks; a blend slot with a lower valid count than the main channel
   between differing child and main counts is not covered.
-* ViewportWindow frames (security camera views, `viewportPass`) select no LOD
-  of their own yet: they draw the base state.
+* ViewportWindow frames (security camera views) select their own LOD, since
+  2026-10-11: the actors a camera frame draws are updated again in the HUD
+  paint, after the main frame's, with the camera frame's Coords and FX, the
+  window's fov (the viewport actor's FovAngle while Draw holds it) and each
+  child frame's own, the GetFrame calls following the main frame's
+  (`actorScene.updateFrame`; [camera pass](script-window-viewport.md#camera-pass)).
 * Actor Volumetrics (fog on meshes, `[sprite+0xb4]`, passed by DrawActorSprite
   with the frame's sprite) are not computed in any frame, the main one
   included, so there is no per-frame difference to reproduce

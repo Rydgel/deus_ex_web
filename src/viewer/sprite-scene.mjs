@@ -69,7 +69,7 @@ export function createSpriteScene(assets, textures, { displayGamma, stamp }) {
     material.needsUpdate = true;
   }
 
-  function draw({ handle, texture: reference, style, location, drawScale, scaleGlow, main, frames }) {
+  function draw({ handle, texture: reference, style, location, drawScale, scaleGlow, main, frames }, number) {
     const mode = STYLE_BLEND[style] ?? 'normal';
     const entry = texture(reference, mode === 'masked');
     if (!entry.texture) { skipped.add(handle); return; }
@@ -86,13 +86,16 @@ export function createSpriteScene(assets, textures, { displayGamma, stamp }) {
     object.userData.main = main !== false;
     // The child frames whose Frame->Sprite holds it (OccludeFrame).
     object.userData.frames = frames ?? null;
+    // The record's place in the simulation's list: a ViewportWindow's frames
+    // name the records they draw by it (sim-session.mjs planViewportPass).
+    object.userData.number = number;
     object.userData.feedback = () => stamp(handle);
   }
 
   /** One frame: the simulation's sprite records, in its scan order. */
   function update(sprites) {
     used = 0; skipped.clear();
-    for (const record of sprites) draw(record);
+    sprites.forEach((record, number) => draw(record, number));
     for (let i = used; i < pool.length; i++) { pool[i].visible = false; pool[i].userData.feedback = null; }
   }
 
@@ -107,6 +110,14 @@ export function createSpriteScene(assets, textures, { displayGamma, stamp }) {
     for (let i = 0; i < used; i++) pool[i].visible = index === null || Boolean(pool[i].userData.frames?.includes(index));
   }
 
-  return { root, update, mainPass, framePass, notes, skipped, count: () => used,
+  /** A ViewportWindow frame's pass (root or child) draws only the records
+   * its own Frame->Sprite holds (`numbers`, their places in the list
+   * `update` was given); null: every record again. */
+  function numberedPass(numbers) {
+    const wanted = numbers ? new Set(numbers) : null;
+    for (let i = 0; i < used; i++) pool[i].visible = !wanted || wanted.has(pool[i].userData.number);
+  }
+
+  return { root, update, mainPass, framePass, numberedPass, notes, skipped, count: () => used,
     dispose() { for (const object of pool) object.material.dispose(); for (const entry of textureCache.values()) if (!entry.shared) entry.texture?.dispose(); } };
 }

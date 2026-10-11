@@ -208,6 +208,12 @@ is reachable (see "Movers").
   filtering with nearest mip selection and a −0.5 LOD bias, drawn before the
   translucent world surfaces. Decals sit on their own three.js layer
   (`render-layers.mjs`), which the mirror and sky cameras leave out.
+- **Camera frames.** A ViewportWindow's DrawWorld runs the decal block on its
+  own frame (docs/script-window-viewport.md "Camera pass"): its OccludeBsp
+  saves the points, the fragments travel in the plan and the page draws them
+  in the window's rectangle. `validate-terminals-camera-browser.mjs --camera=2018,-1588,40,-16000,0`
+  looks down at JC in ComputerSecurity1's room: the same paused frame without
+  the decal block differs in 104 window pixels, all darker with it.
 - **Check.** `validate-decals-play.mjs` (worker mode by default, or
   `--query sim=inline`) stands the player a few metres from JaimeReyes0 in
   Training looking at its feet: the drawn pawn's Shadow attaches, the

@@ -225,6 +225,16 @@ matching DrawFrame ahead of PostRender. It hands the page a list of icons;
   orthographic overlay over the render rectangle with the canvas's
   translucent blend (ONE, INVSRCCOLOR); the display ramp maps the finished
   frame.
+- **Camera frames.** A ViewportWindow's DrawWorld runs the pass on its own
+  master frame (docs/script-window-viewport.md "Camera pass"): the same scan
+  and cache, with the lights of the *player's* leaf, line checks ending at the
+  camera frame's origin, the camera frame's words for the placement and the
+  window's width as X. The pass takes the plan's clock, which runs on from the
+  main pass's by the host's elapsed time. The camera validator
+  (`validate-terminals-camera-browser.mjs --player=-2561,-2682,320
+  --camera=-2561,-2200,340,0,49152`, Island's street lamp seen from 480 units)
+  recomputes each placement from the frame words with `coronaFrame` and
+  `coronaIcon` and requires the bits to match.
 - **Check.** `validate-coronas-play.mjs` looks up at a corona light from a
   start, in the default mode with the simulation in the worker
   (`placeProbe({lookAt})`; `--query sim=inline` runs it on the page). On 02_NYC_BatteryPark, Light410 is among 5 leaf lights, 3 are
