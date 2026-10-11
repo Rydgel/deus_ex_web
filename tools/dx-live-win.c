@@ -9,7 +9,7 @@
  *       `interval_ms` apart: <qpc_us> tid=<tid> slot=<n> ptd=0x<addr> state=0x<word>
  *
  *   wine dx-live-win.exe list <Class>
- *       the live level's actors whose class derives from <Class>: class, name, global slot, Location, state
+ *       the live level's actors whose class derives from <Class>: class, name, global slot, Location, state, OddsOfAppearing
  *
  *   wine dx-live-win.exe trace <config>
  *       attaches as a debugger and breaks at ULevel::Tick's entry (Engine.dll
@@ -576,7 +576,8 @@ static int do_list(const char *wanted) {
     if (!cls || !is_a(cls, wanted)) continue;
     float loc[3]; read_mem(obj + 0x114, loc, 12);
     unsigned sf = read_u32(obj + 0xc); unsigned node = sf ? read_u32(sf + 0x18) : 0;
-    printf("%s %s slot=%u loc=(%.1f,%.1f,%.1f) state=%s\n", object_name(cls), object_name(obj), slot, loc[0], loc[1], loc[2], node ? object_name(node) : "None");
+    float odds = 1; read_mem(obj + 0x160, &odds, 4);   /* Actor.OddsOfAppearing: below 1, a load may have removed the actor */
+    printf("%s %s slot=%u loc=(%.1f,%.1f,%.1f) state=%s odds=%g\n", object_name(cls), object_name(obj), slot, loc[0], loc[1], loc[2], node ? object_name(node) : "None", odds);
   }
   return 0;
 }

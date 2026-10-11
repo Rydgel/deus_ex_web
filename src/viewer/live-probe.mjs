@@ -67,18 +67,25 @@ export function liveProbe(game, args = {}) {
       out.actors.push({ name: actor.name, cls: instance.cls.record?.key ?? null, location: [...runtime.readNamed(actor, 'Location')], state: scriptGetStateName(node) });
     }
   }
-  // population: the names of the actors the original's level holds. Map actors the original removed at load
-  // (OddsOfAppearing, drawn from the stream then: the two sides' loads draw differently) are destroyed here, as
-  // Level.Game.IsRelevant's Destroy does; names only Play lacks cannot be created and are reported.
+  // write: {actorName: {Property: value}}, plain host writes (the player's animation state at the trace's start).
+  if (args.write) for (const [name, fields] of Object.entries(args.write)) {
+    const actor = byName(name);
+    if (!actor) throw new Error(`liveProbe: no actor ${name}`);
+    for (const [prop, value] of Object.entries(fields)) runtime.writeNamed(actor, prop, typeof value === 'number' ? Math.fround(value) : value);
+  }
+  // population: the names of the actors the original's level holds. A load decides some map actors by chance
+  // (OddsOfAppearing, scripts' own FRand in PostBeginPlay, drawn from a stream the two sides do not share): an actor
+  // only Play holds is destroyed here (Actor.Destroy, as the script's own would); one only the original holds cannot be
+  // created and is reported (the load must be repeated). Actors the game spawns at load (player, inventory, shadows,
+  // managers) are numbered by spawn order and are not compared by name.
   if (args.population) {
-    const have = new Set(args.population), extra = [];
-    // Only actors that can have been removed that way (OddsOfAppearing < 1); spawned actors (shadows, inventory)
-    // are numbered by spawn order and are not compared by name.
-    for (const actor of level.actors) if (actor && actor !== player && actor.name && !have.has(actor.name) && runtime.readNamed(actor, 'OddsOfAppearing') < 1) extra.push(actor);
+    const spawned = /^(Skill|Aug|NanoKey|ColorTheme|Shadow|ParticleProxy|Laser|Flare|Cigarettes|Candybar|Weapon|Mission|GameReplicationInfo|PlayerReplicationInfo|JCDenton|Mutator|DeusExGameInfo|PickupDistributor|AutoTurretGun|BarkManager|ParticleGenerator|DataVault|Credits|Ammo|BioelectricCell|Medkit|Binoculars|Lockpick|Multitool|LAM|Liquor|Soda|Sodacan|Fruit|Vice)/;
+    const have = new Set(args.population.map(entry => entry.name)), extra = [];
+    for (const actor of level.actors) if (actor && actor !== player && actor.name && !have.has(actor.name) && !spawned.test(actor.name)) extra.push(actor);
     out.population = { removed: extra.map(actor => actor.name) };
     for (const actor of extra) runtime.destroyActor(actor, false);
     const names = new Set(level.actors.filter(Boolean).map(actor => actor.name));
-    out.population.missing = args.population.filter(name => !names.has(name));
+    out.population.missing = args.population.filter(entry => !names.has(entry.name) && !spawned.test(entry.name)).map(entry => entry.name);
   }
   if (args.replay) {
     const { watch = [], ticks, hold = true, warm = 3 } = args.replay;

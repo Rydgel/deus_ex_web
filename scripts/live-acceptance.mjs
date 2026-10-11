@@ -113,9 +113,20 @@ async function original() {
   writeFileSync(configPath, config.join('\n') + '\n');
   writeFileSync(watchPath, JSON.stringify({map, pawns: names}, null, 1));
   // The actors the original's level holds (a load removes some at random: OddsOfAppearing).
-  const everything = wine('list', 'Actor').split('\n').map(line => /^\S+ (\S+) slot=/.exec(line)?.[1]).filter(Boolean);
+  const everything = wine('list', 'Actor').split('\n').map(line => /^\S+ (\S+) slot=\d+ .* odds=(\S+)/.exec(line)).filter(Boolean).map(m => ({name: m[1], odds: Number(m[2])}));
   writeFileSync(path.join(dir, 'population.json'), JSON.stringify(everything));
-  console.log(`${everything.length} actors in the original's level`);
+  console.log(`${everything.length} actors in the original's level, ${everything.filter(e => e.odds < 1).length} with OddsOfAppearing < 1`);
+  // The original's load decided some map actors by chance (FlyGenerator, OddsOfAppearing): Play's replay destroys the
+  // ones only Play holds, but cannot create the ones only the original holds. Reload until it holds none (the
+  // driver's exit code 3 asks for a retry); `--no-population-check` runs on regardless.
+  const reference = path.join(dir, 'play-population.json');
+  if (existsSync(reference) && !flag('no-population-check')) {
+    const played = new Set(JSON.parse(readFileSync(reference, 'utf8')).names);
+    const spawned = /^(Skill|Aug|NanoKey|ColorTheme|Shadow|ParticleProxy|Laser|Flare|Cigarettes|Candybar|Weapon|Mission|GameReplicationInfo|PlayerReplicationInfo|JCDenton|Mutator|DeusExGameInfo|PickupDistributor|AutoTurretGun|BarkManager|ParticleGenerator|DataVault|Credits|Ammo|BioelectricCell|Medkit|Binoculars|Lockpick|Multitool|LAM|Liquor|Soda|Sodacan|Fruit|Vice)/;
+    const only = everything.filter(e => !played.has(e.name) && !spawned.test(e.name)).map(e => e.name);
+    if (only.length) { console.log(`POPULATION: the original holds ${only.length} actors Play's seed ${option('seed', 1)} load lacks: ${only.slice(0, 20).join(' ')}`); process.exitCode = 3; return; }
+    console.log('population: the original holds nothing Play lacks');
+  }
   rmSync(`${tracePath}.resume`, {force: true});
   const child = spawn(game.WINE, [tool, 'trace', configPath], {env: process.env, stdio: ['ignore', 'pipe', 'pipe']});
   console.log('tracer pid', child.pid, `${names.length} pawns watched`);
@@ -153,7 +164,7 @@ async function withPlay(body) {
   try {
     const page = await browser.newPage({viewport: {width: 1280, height: 720}, deviceScaleFactor: 1});
     const errors = []; page.on('pageerror', error => errors.push(error.message));
-    await page.goto(`${url}/?hold=1`);
+    await page.goto(`${url}/?hold=1&seed=${option('seed', 1)}`);
     await page.waitForFunction(() => window.deusExViewer?.status().ready, {}, {timeout: 240000});
     if (await page.evaluate(() => window.deusExViewer.status().map) !== map) {
       await page.locator('#map').selectOption(map);
@@ -190,11 +201,21 @@ async function snap() {
   });
 }
 
+// population: which OddsOfAppearing < 1 actors Play's seeded load keeps (compared with the original's before a trace).
+async function population() {
+  await withPlay(async ({page}) => {
+    const {actors} = await page.evaluate(() => window.deusExViewer.liveProbe({actors: 'engine.actor'}));
+    writeFileSync(path.join(dir, 'play-population.json'), JSON.stringify({seed: Number(option('seed', 1)), names: actors.map(a => a.name)}));
+    console.log(map, `seed ${option('seed', 1)}:`, actors.length, 'actors');
+  });
+}
+
 async function play() {
   const trace = readFileSync(tracePath, 'utf8').trim().split('\n').map(line => JSON.parse(line)).filter(row => row.unfrozen >= 1);
   const {pawns} = JSON.parse(readFileSync(watchPath, 'utf8'));
-  // Play is placed where the original's player stood when the trace began.
-  const pose = readFileSync(tracePath, 'utf8').trim().split('\n').map(line => JSON.parse(line))[0].actors['@player'];
+  // Play is placed where the original's player stood when the replay begins: the last frozen tick's exit.
+  const frozen = readFileSync(tracePath, 'utf8').trim().split('\n').map(line => JSON.parse(line)).filter(row => row.unfrozen === 0);
+  const pose = frozen[frozen.length - 1].actors['@player'];
   await withPlay(async ({page, frames, errors, ghost}) => {
     // The original's pose, exactly (the frozen-phase history of the ghost differs: its landing, its Tread loop).
     await page.evaluate(a => window.deusExViewer.viewProbe({location: a.Loc, rotation: a.VRot,
@@ -207,7 +228,9 @@ async function play() {
     }
     await frames(5);
     const props = [...new Set(FIELDS.map(f => f[1]))], playerProps = [...new Set(PLAYER_FIELDS.map(f => f[1]))];
-    const request = {replay: {ticks: trace, release: true, hold: true, drawTrace: flag('draw-trace'), watch: [
+    // the player's animation too, in the call that arms the replay: no frozen tick runs between (a looping ghost
+    // animation reaching its end can call script that draws)
+    const request = {write: {'@player': {AnimSequence: pose.Anim, AnimFrame: pose.Frame, AnimRate: pose.Rate, TweenRate: pose.Tween}}, replay: {ticks: trace, release: true, hold: true, drawTrace: flag('draw-trace'), watch: [
       {names: ['@player'], props: playerProps}, {names: pawns, props}]}};
     const started = await page.evaluate(r => window.deusExViewer.liveProbe(r), request);
     const rows = [];
@@ -283,6 +306,7 @@ function compare() {
 
 if (verb === 'original') await original();
 else if (verb === 'snap') await snap();
+else if (verb === 'population') await population();
 else if (verb === 'play') await play();
 else if (verb === 'compare') compare();
 else console.log('usage: live-acceptance.mjs original|play|compare|snap --map <map>');
