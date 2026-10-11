@@ -999,7 +999,7 @@ export function createSimSession(game, { assets = null, events = [], exportName 
             if (!runtime.readNamed(actor, 'bHidden') && !runtime.readNamed(actor, 'bDeleteMe'))
               runtime.writeNamed(actor, 'LastRenderTime', time);
           if (stamped) stamped.weapon = new Set(frame.drawn.map(handleOf));
-          frame = { target: frame.target, draws: frame.draws, camera: frame.camera, summary: { ...weaponSim.summary } };
+          frame = { draws: frame.draws, camera: frame.camera, summary: { ...weaponSim.summary } };
         }
       } catch (error) { failed = true; errors.push(plainError(error)); }
       return { errors, frame };
@@ -1100,7 +1100,6 @@ export function createSimSession(game, { assets = null, events = [], exportName 
           }
         }
       }
-      try { const target = game.target(); frame.target = target ? { label: target.label } : null; } catch (error) { fail(error); }
       try {
         const pan = game.surfacePan();
         frame.pan = { timeSeconds: pan.timeSeconds, speeds: Object.fromEntries(panZones.map(name => [name, pan.zoneSpeeds(name)])) };

@@ -1592,9 +1592,10 @@ function drawFrame(snap, time) {
     setPixelCentre(camera, ...viewSize);
     if (frame.light) world.beginLightFrame(frame.light);
     if (x || z || keys.has('Space') || keys.has('ControlLeft') || keys.has('ControlRight')) cameraMoved = true;
-    const target = frame.target;
+    // Host status only: the frob target's name and highlight are the
+    // original HUD's FrobDisplayWindow.
     $('play-hint').textContent = runtimeError?.travel ? `Map ended · travel to ${runtimeError.travel.url} is Stage 6 · Player start replays`
-    : runtimeError ? 'Play paused · Player start resets the scene' : paused ? 'Click the view to resume' : target ? `Right-click · ${target.label}` : '';
+    : runtimeError ? 'Play paused · Player start resets the scene' : paused ? 'Click the view to resume' : '';
   }
   phase('tick');
   // The GPU timer starts before the actor layer, whose mesh passes
