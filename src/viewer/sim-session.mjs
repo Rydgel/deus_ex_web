@@ -446,21 +446,31 @@ export function createSimSession(game, { assets = null, events = [], exportName 
   // (same order, texture, place and scale: a particle's) is the root's
   // record, drawn by the frames whose Frame->Sprite holds it; a different
   // one (a random beam's) is a record of its own, drawn in those frames
-  // alone. A mesh item takes its slot's binding, whose pose is the root
-  // frame's (open: docs/bsp-occlusion.md).
+  // alone. A mesh item takes its slot's binding when it equals the root's
+  // item there, else a binding of its own (actor-mesh-sim.mjs itemCandidates).
+  // A frame's iterator item claims (validation, iteratorState and viewportState): each candidate's
+  // binding with its item, the actor and the item's slot among that actor's items in the frame.
+  const claimsOf = (candidates, frameItems) => {
+    const counts = new Map(), slotOf = new Map();
+    for (const item of frameItems) { const slot = counts.get(item.actor) ?? 0; counts.set(item.actor, slot + 1); slotOf.set(item, slot); }
+    return candidates.map(({ binding, item }) => ({ id: binding.id, actor: item.actor.name, slot: slotOf.get(item), location: [...item.location],
+      rotation: [...item.rotation], drawScale: item.drawScale, scaleGlow: item.scaleGlow }));
+  };
   // Whether the iterators' rescans follow the first-person viewer rules (a
   // ViewportWindow's frame plans with Draw's bBehindView on: false).
-  let rescanFirstPerson = true;
+  let rescanFirstPerson = true, planningCamera = false;
   function childDynamics(frame, args, own, known, root) {
     const drawsBefore = iteratorStats.draws, started = performance.now(), scanned = spriteScan.rescan(live.iteratorIndex, { firstPerson: rescanFirstPerson });
     iteratorStats.rescans++; iteratorStats.drawsRescan += iteratorStats.draws - drawsBefore; iteratorStats.msRescan += performance.now() - started;
-    iteratorStats.lastFrames.push({ frame: frame.index, kind: frame.kind, items: scanned.meshItems });
+    const row = { frame: frame.index, kind: frame.kind, items: scanned.meshItems, ...(planningCamera ? { camera: true } : {}) };
+    iteratorStats.lastFrames.push(row);
     const { sprites, added } = childFrameSprites(live.sprites, scanned.sprites, known, record => {
       record.size = spriteTextures ? spriteSize(record.texture, record.style === 2) : undefined;
       record.main = false; record.frames = null; record.childOnly = true;
     });
     for (const record of added) live.sprites.push(record);
-    const packed = performance.now(), items = args.itemCandidates?.(scanned.meshItems) ?? [];
+    const packed = performance.now(), items = args.itemCandidates?.(scanned.meshItems, frame.index) ?? [];
+    row.candidates = items;
     const full = () => packDynamics(occlusion, { ...args, sprites, iterators: live.iterators, items, childFrames });
     // Only the iterator-made candidates changed: the root's packed words with
     // those packed again (patchDynamics); ITERATOR_FRAMES=verify packs the
@@ -490,6 +500,7 @@ export function createSimSession(game, { assets = null, events = [], exportName 
     pendingOcclusion = null;
     if (!pending) return null;
     const entries = packDynamics(occlusion, { sprites: live.sprites, iterators: live.iterators, ...args });
+    if (iteratorStats.lastFrames[0]) iteratorStats.lastFrames[0].candidates = args.items ?? [];
     // Each child frame's own SetupDynamics (OccludeFrame, 0x10b1a188): with
     // iterators in the level, their items are built again for every frame
     // (`childDynamics`); `own` holds each frame's candidates by visit index.
@@ -523,6 +534,11 @@ export function createSimSession(game, { assets = null, events = [], exportName 
       delete frame.sprites;
     }
     result.children = children;
+    // Which claimed iterator items each child frame's Frame->Sprite holds (validation: iteratorState).
+    for (const frame of result.frames ?? []) {
+      const row = iteratorStats.lastFrames.find(entry => entry.frame === frame.index);
+      if (row) row.drawnIds = frame.main;
+    }
     pending.frame.visibility = result;
     // DrawWorld draws the sky frame only when OccludeBsp made one.
     if (!result.sky) pending.frame.sky = null;
@@ -575,13 +591,14 @@ export function createSimSession(game, { assets = null, events = [], exportName 
     // iterators' items made again), then OccludeBsp from its camera with
     // Frame->Sprite's keys for it and each child frame: exactly those actors
     // and sprites are drawn and stamped, as for the main frame.
-    let seen = null, members = null;
+    let seen = null, members = null, cameraItems = [], cameraScanned = [];
     if (occlusion && occlusion.setupSupported && actorScene) {
+      actorScene.beginFrameItems(live.meshItems);
       const args = { ...actorScene.setupArgs(live.meshItems), childFrames };
       const rescanning = iteratorFrames && live.iterators?.size && live.iteratorIndex;
       const known = rescanning ? iteratorSpritesByOrder(live.sprites) : null;
       let sprites = live.sprites, frameArgs = args;
-      rescanFirstPerson = !command.behindView;
+      rescanFirstPerson = !command.behindView; planningCamera = true;
       try {
         if (rescanning) {
           // SetupDynamics for this root frame (0x10b22d90 from OccludeFrame): every
@@ -593,14 +610,15 @@ export function createSimSession(game, { assets = null, events = [], exportName 
             record.main = false; record.frames = null; record.childOnly = true;
           });
           for (const record of made.added) live.sprites.push(record);
-          sprites = made.sprites; frameArgs = { ...args, items: args.itemCandidates(scanned.meshItems) };
+          sprites = made.sprites; cameraScanned = scanned.meshItems; frameArgs = { ...args, items: args.itemCandidates(scanned.meshItems, 'camera') };
         }
+        if (rescanning) cameraItems = frameArgs.items;
         const entries = packDynamics(occlusion, { sprites, iterators: live.iterators, ...frameArgs });
         const own = new Map(), root = rescanning ? { entries, words: candidateWords(occlusion, entries.length) } : null;
         const frameDynamics = childFrames && rescanning ? frame => childDynamics(frame, frameArgs, own, known, root) : null;
         seen = visibility(view, command.width, command.height, entries.length, { decals: true, movers: false, frameDynamics });
         members = frameMembers(seen, entries, own);
-      } finally { rescanFirstPerson = true; }
+      } finally { rescanFirstPerson = true; planningCamera = false; }
     } else if (occlusion) seen = visibility(view, command.width, command.height, -1, { decals: true, movers: false });
     const ids = members?.root.ids ?? new Set(), childIds = members?.children ?? new Set(), updateIds = new Set([...ids, ...childIds]);
     if (seen) {
@@ -680,7 +698,12 @@ export function createSimSession(game, { assets = null, events = [], exportName 
       location: [...command.location], rotation: [...command.rotation], fov: command.fov, ms: +(performance.now() - planStarted).toFixed(2), nodes: pass.visibility?.nodes.length ?? null,
       sky: Boolean(pass.sky), actors: names(ids), sprites: records.size, stamped: names(updateIds), time, late: pass.late?.records.length ?? 0,
       frames: (seen?.frames ?? []).map(frame => ({ index: frame.index, parent: frame.parent, kind: frame.kind, nodes: frame.nodes.length,
-        actors: names(frame.main ?? new Set()) })),
+        actors: names(frame.main ?? new Set()),
+        // The frame's own iterator items with their bindings and whether its Frame->Sprite holds them (validation, viewportState).
+        rawItems: iteratorStats.lastFrames.findLast(row => row.camera && row.frame === frame.index) ?? null, drawnIds: frame.main ?? new Set() })),
+      itemExtras: actorScene ? actorScene.itemScopeUsed() : 0,
+      // The camera frame's own iterator items with the bindings they draw through (validation, viewportState).
+      rawItems: { candidates: cameraItems, frameItems: cameraScanned, drawnIds: updateIds },
       decals: pass.decals ? pass.decals.reduce((n, group) => n + group.positions.length / 9, 0) : 0,
       coronas: pass.coronas ? { icons: pass.coronas.frame.icons.length, ...pass.coronas.frame.stats,
         // The frame DrawFrame's pass read and the icons it placed (validation).
@@ -768,15 +791,23 @@ export function createSimSession(game, { assets = null, events = [], exportName 
      * HUD frame's ViewportWindow world frames (planViewportPass): each one's
      * rectangle, OccludeBsp's drawn node count, whether it drew a sky frame,
      * the actors it draws and its sprite count. */
-    viewportState() { return lastViewportPlans.map(plan => ({ ...plan, rect: [...plan.rect], actors: plan.actors && [...plan.actors] })); },
+    viewportState() {
+      const claims = (raw, ids) => raw?.candidates ? claimsOf(raw.candidates, raw.frameItems ?? raw.items).map(claim => ({ ...claim, drawn: ids.has(claim.id) })) : [];
+      return lastViewportPlans.map(({ rawItems, ...plan }) => ({ ...plan, rect: [...plan.rect], actors: plan.actors && [...plan.actors],
+        items: claims(rawItems, rawItems.drawnIds),
+        frames: plan.frames.map(({ rawItems: rows, drawnIds, ...frame }) => ({ ...frame, items: claims(rows, drawnIds) })) }));
+    },
     setOcclusion(value, movers = null) { occlusion = value; trackerMovers = movers; },
     setOcclusionRebuild(rebuild) { rebuildOcclusion = rebuild; },
     /** Validation (iteratorProbe in main.mjs): the render iterators' per-frame
      * runs since the last reset. */
     iteratorState({ reset = false } = {}) {
       const iterating = live.sprites.filter(sprite => sprite.viaIterator);
-      const state = { ...iteratorStats, lastFrames: iteratorStats.lastFrames.map(f => ({ ...f, items: f.items.map(item => [...item.location]) })),
-        iterators: live.iterators?.size ?? 0,
+      const state = { ...iteratorStats, lastFrames: iteratorStats.lastFrames.map(f => ({ frame: f.frame, kind: f.kind, camera: f.camera, items: f.items.map(item => [...item.location]),
+        full: f.items.map(item => ({ location: [...item.location], rotation: [...item.rotation], drawScale: item.drawScale, scaleGlow: item.scaleGlow })),
+        // The bindings the frame's items are drawn through, with the item each carries and whether the frame's Frame->Sprite holds it.
+        bindings: f.candidates ? claimsOf(f.candidates, f.items).map(claim => ({ ...claim, drawn: f.drawnIds?.has(claim.id) ?? false })) : undefined })),
+        iterators: live.iterators?.size ?? 0, itemStates: actorScene?.itemStates?.() ?? null,
         // The sprite records of the iterators' items in the last frame: all,
         // those in the root's Frame->Sprite, in a child frame's, and the ones
         // only a child frame's own run made.

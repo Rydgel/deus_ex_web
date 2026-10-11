@@ -171,8 +171,7 @@ keeps the dated record.
   explicit boundaries.
 
 **Still open in Stage 4:** the LOD morph's world-space rounding
-([LOD](docs/script-lodmesh-lod.md#play)); an iterator mesh item's per-pass pose in
-child frames and camera frames ([BSP occlusion](docs/bsp-occlusion.md)); a matched
+([LOD](docs/script-lodmesh-lod.md#play)); a matched
 capture of the security cameras' views (root frames with their own mirror and sky
 frames, decals, coronas, fog, LOD and lighting since 2026-10-11,
 [viewport window](docs/script-window-viewport.md)); the

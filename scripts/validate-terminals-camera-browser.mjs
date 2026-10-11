@@ -11,8 +11,8 @@
 // the plan and the page's pass, and that the rectangle holds a varied image.
 //
 //   node scripts/validate-terminals-camera-browser.mjs [--url http://...] [--query sim=inline] [--shot camera.png]
-//        [--map M --computer C --user U --password P --camera-actor A]
-//        [--camera x,y,z,pitch,yaw] [--player x,y,z] [--expect mirror,sky,decals,coronas,fog]
+//        [--map M --computer C --user U --password P --camera-actor A --click x,y]
+//        [--camera x,y,z,pitch,yaw] [--player x,y,z] [--emitters x,y,z,pitch,yaw,count] [--expect mirror,sky,decals,coronas,fog,items,extras]
 //
 // --camera stands the camera actor (SecurityCamera5; --camera-actor) elsewhere in the map (a fixture: the original
 // camera does not move), to put the view where a map's mirrors, sky, decals or
@@ -89,9 +89,18 @@ try {
   await page.keyboard.type(option('password', 'smashthestate')); await page.keyboard.press('Enter');
   let state = null;
   log('logged in');
+  // Some computers open on another screen (Dockyard's Special Options): --click x,y presses a button of the page after the login.
+  if (option('click', null)) { const [cx, cy] = option('click', '').split(',').map(Number); await settled(); await page.mouse.click(cx, cy); await settled(); }
   for (let i = 0; i < 30; i++) { await settled(); state = await probe({}); log('poll', i, state.viewports.length, state.page.length); if (state.viewports.length && state.page.length) break; }
+  if (!state?.viewports.length) { await page.screenshot({path: option('shot', path.join(scratch, 'camera.png'))}); throw new Error(`no camera window after the login (top window ${await top()}; screenshot ${option('shot', path.join(scratch, 'camera.png'))})`); }
   if (option('player', null)) {
     await probe({placePlayer: option('player', '').split(',').map(Number)});
+    await settled();
+  }
+  if (option('emitters', null)) {
+    // --emitters x,y,z,pitch,yaw,count: the first LaserEmitters stand there, pointing that way.
+    const [x, y, z, pitch, yaw, count] = option('emitters', '').split(',').map(Number);
+    await probe({placeEmitters: {location: [x, y, z], rotation: [pitch, yaw, 0], count}});
     await settled();
   }
   if (option('camera', null)) {
@@ -137,7 +146,7 @@ try {
     await Promise.race([window.deusExViewer.settled(), new Promise(resolve => setTimeout(resolve, 2000))]);
     window.deusExViewer.meshPassProbe(true);
     const sim = await window.deusExViewer.lodProbe({});
-    for (let k = 0; k < 2; k++) await new Promise(requestAnimationFrame);
+    for (let k = 0; k < 8; k++) await new Promise(requestAnimationFrame);
     const passes = window.deusExViewer.meshPassProbe();
     await Promise.race([window.deusExViewer.settled(), new Promise(resolve => setTimeout(resolve, 2000))]);
     return {sim, passes, again: await window.deusExViewer.lodProbe({})};
@@ -148,10 +157,13 @@ try {
   const again = new Map((sample.again ?? []).map(row => [row.id, lodSignature(row)]));
   const stableIds = (lodRows ?? []).filter(row => again.get(row.id) === lodSignature(row)).map(row => row.id);
   const lighting = await page.evaluate(() => window.deusExViewer.meshLightProbe({take: true}));
+  // The camera frame's plan and the iterator state of the same frame, in one worker call.
+  const itemFrame = await probe({iterators: true});
+  const iterators = itemFrame.iterators, itemPlan = itemFrame.viewports.find(candidate => candidate.location.every((v, i) => v === itemFrame.camera.location[i]));
   const status = await page.evaluate(() => window.deusExViewer.status());
-  report = {sim, watched, lodRows, passRows, stableIds, decalShare, lighting, cone: state.cone, frameMs: +interval.toFixed(1), camera: state.camera, plans: state.viewports, passes: state.page, crop, stats, runtimeError: status.runtimeError?.message ?? null, pageErrors: errors};
+  report = {sim, watched, iterators, itemPlan, lodRows, passRows, stableIds, decalShare, lighting, cone: state.cone, frameMs: +interval.toFixed(1), camera: state.camera, plans: state.viewports, passes: state.page, crop, stats, runtimeError: status.runtimeError?.message ?? null, pageErrors: errors};
 } finally { await browser.close(); await server?.close(); if (!option('shot', null)) rmSync(scratch, {recursive: true, force: true}); }
-console.log(JSON.stringify({...report, lodRows: undefined, passRows: undefined, stableIds: undefined, lighting: undefined, cone: report.cone.length,
+console.log(JSON.stringify({...report, iterators: undefined, lodRows: undefined, passRows: undefined, stableIds: undefined, lighting: undefined, cone: report.cone.length,
   plans: report.plans.map(plan => ({...plan, coronas: plan.coronas && {...plan.coronas, frameWords: undefined, placed: plan.coronas.placed.length}}))}, null, 1));
 assert.deepEqual(report.pageErrors, []);
 assert.equal(report.runtimeError, null);
@@ -275,6 +287,40 @@ for (const feature of expectedFeatures) {
   if (feature === 'sky') assert.ok(plan.sky, 'the camera frame has a sky frame');
   if (feature === 'decals') assert.ok(plan.decals > 0, 'the camera frame draws decals');
   if (feature === 'coronas') assert.ok(plan.coronas?.icons > 0, 'the camera frame draws coronas');
+  if (feature === 'items') {
+    const itemsPlan = report.itemPlan;
+    // The camera frame's own iterator items: each is drawn through a binding updated with that item,
+    // the main frame's when equal to one of its items and an extra of its own otherwise.
+    assert.ok(itemsPlan.items.length > 0 && itemsPlan.itemExtras > 0, `the camera frame has iterator items of its own (${itemsPlan.items.length} items, ${itemsPlan.itemExtras} extras)`);
+    assert.ok(itemsPlan.items.some(claim => claim.drawn), 'some of them are in the camera frame\'s Frame->Sprite');
+    const states = new Map(report.iterators.itemStates.map(entry => [entry.id, entry])), [mainRoot] = report.iterators.lastFrames;
+    const same = (a, b) => a && b && a.location.every((v, k) => Object.is(v, b.location[k])) && a.rotation.every((v, k) => v === b.rotation[k])
+      && Object.is(a.drawScale, b.drawScale) && Object.is(a.scaleGlow, b.scaleGlow);
+    let extras = 0, shared = 0;
+    // The bindings of the items a frame draws are updated with their items (the others have nothing to draw).
+    for (const claim of itemsPlan.items.filter(item => item.drawn)) {
+      const entry = states.get(claim.id), equalsMain = mainRoot.bindings.some(root => root.actor === claim.actor && root.slot === claim.slot && same(root, claim));
+      assert.ok(entry && same(entry.item, claim), `item binding ${claim.id} was updated with the camera frame's item`);
+      assert.equal(entry.extra, !equalsMain, `item ${claim.id} shares the main frame's binding exactly when it equals the main frame's item: ${JSON.stringify({claim, entry, mainSameSlot: mainRoot.bindings.filter(root => root.actor === claim.actor && root.slot === claim.slot)})}`);
+      if (entry.extra) extras++; else shared++;
+    }
+    assert.ok(!expectedFeatures.includes('extras') || extras > 0, 'some camera frame items differ from the main frame\'s and are drawn through bindings of their own');
+    // The camera frame's child frames: the same, and the page draws the extras in their passes.
+    let childClaims = 0, childExtras = 0;
+    for (const frame of itemsPlan.frames) for (const claim of frame.items.filter(item => item.drawn)) {
+      const entry = states.get(claim.id);
+      assert.ok(entry && same(entry.item, claim), `child frame ${frame.index}: item binding ${claim.id} was updated with the frame's item`);
+      const equalsRoot = itemsPlan.items.some(root => root.actor === claim.actor && root.slot === claim.slot && same(root, claim))
+        || mainRoot.bindings.some(root => root.actor === claim.actor && root.slot === claim.slot && same(root, claim));
+      assert.equal(entry.extra, !equalsRoot, `child frame ${frame.index}: item ${claim.id} has a binding of its own exactly when it differs from the root frames' items`);
+      childClaims++; if (entry.extra) childExtras++;
+    }
+    const extraIds = new Set([...states.values()].filter(entry => entry.extra).map(entry => entry.id));
+    const childDraws = report.passRows.filter(row => extraIds.has(row.id) && row.child).length;
+    assert.ok(childExtras === 0 || childDraws > 0 || !expectedFeatures.includes('extras'), `the page draws the extras in the camera's mirror pass (${childExtras} held, ${childDraws} drawn)`);
+    console.log(`camera child frames' iterator items: ${childClaims} drawn, ${childExtras} through bindings of their own; the page drew extras in the child pass ${childDraws} times`);
+    console.log(`camera frame iterator items: ${itemsPlan.items.length}, ${itemsPlan.items.filter(item => item.drawn).length} drawn (${extras} through bindings of their own, ${shared} shared with the main frame's)`);
+  }
   if (feature === 'fog') assert.ok(drawnPass.fog?.drawn > 0, "the camera frame computes fog maps for its surfaces");
 }
 console.log(`camera frame children: ${plan.frames.map(frame => `${frame.kind}#${frame.index}(parent ${frame.parent}, ${frame.nodes} nodes, ${frame.actors.length} actors)`).join(' ') || 'none'}; ` +

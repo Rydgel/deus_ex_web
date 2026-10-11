@@ -337,9 +337,10 @@ and `validate-gpu-mesh` pass too.
 
 - A render iterator's items are built again in every child frame
   ([below](#each-child-frames-own-setupdynamics)); a laser's mesh item that
-  differs between frames is drawn at the root frame's pose in every pass
-  (also in the HUD's camera frames, whose DrawWorld does run the iterators
-  again, for its sprites and Frame->Sprite). (Each child frame's own fog
+  differs between frames is posed, lit and drawn with that frame's own item
+  in every frame that holds it, since 2026-10-11 ([a mesh item per
+  frame](#each-child-frames-own-setupdynamics); the HUD's camera frames run
+  the iterators again and do the same). (Each child frame's own fog
   maps were added on 2026-10-07, [volumetric fog](volumetric-fog.md).)
 - The child tangent comes from the x87-tan.mjs model, which is checked
   against hardware FPTAN, not from a measurement of these arguments.
@@ -496,6 +497,80 @@ CurrentItem put it.
   frame (about five per frame on Dockyard and four on Island); on
   02_NYC_Street's sky frame beside smoke every particle record of a child
   frame is the root's; `?iteratorFrames=off` runs none again.
+
+**A mesh item is posed, lit and LOD-chosen in each frame that holds it**
+(2026-10-11). *Original.* An iterator's item is an FDynamicSprite per frame:
+SetupDynamics' loop (`0x10b22fee..0x10b2307c`) builds it with the constructor
+(thunk `0x10b0117c`, called at `0x10b2306d`), whose SetupSprite
+(`0x10b23910`) copies the item actor's ScaleGlow (`+0x18c` to sprite `+0xbc`),
+DrawScale (`+0x17c` to `+0xc0`), Location (`+0x114` to `+0xc4`) and Rotation
+(`+0x120` to `+0xd0`) at that moment. The sprites are allocated per frame from
+the frame's scene memory (`0xdc` bytes each), so each frame's SetupDynamics
+makes its own. DrawFrame draws a frame's Frame->Sprite with DrawActorSprite
+(`0x10b25080`) passing that frame; its mesh branch (`0x10b2556a..0x10b25655`)
+saves the actor's four fields, writes the sprite's snapshot into the actor,
+calls DrawMesh (thunk `0x10b01221`, with the frame and its Coords `frame+0x34`)
+and restores the fields. Pose (GetFrame), SetupForActor and Light, and
+DrawLodMesh's selection therefore run once per item per frame that holds it,
+from that frame's snapshot and Coords: an item that differs between frames is
+posed and lit differently in each. Several items of one actor draw as several
+sprites, even at one place (a laser's last item is moved to a saved earlier
+item's place, so two segments overlap there; both draw).
+
+*Which shipped items differ.* LaserIterator is the only iterator class whose
+proxy is a mesh (ParticleProxy is a sprite, so particles are not affected:
+their items are the same in every frame). The census over the 83 single-player
+maps: 141 LaserTriggers and 49 BeamTriggers (each `LaserEmitter`, no
+bRandomBeam: the segment positions are fixed along the beam, and only the last
+item, the saved one, differs per frame) and 178 `ElectricityEmitter`s (a
+`LaserEmitter` subclass with bRandomBeam, whose items are all random per frame;
+Island has three, frozen unless the player is near). In Play, on Island's five doorway
+beams (11 items each) the last item differs from the root's in 17 to 23 of 24
+frames, by 16 to 95 units along the beam; on Dockyard's six BeamTriggers (13 items) in
+18 to 21 of 24. In `validate-iterator-frames-play`'s two mirror views no frame's
+Frame->Sprite holds any of these items (0 of 1,100 claims on Island, 0 of 1,560 on
+Dockyard, in 20 samples each; the Dockyard mirror is a bathroom's), so those views show no
+difference on screen; the camera fixture below does.
+
+*Port.* `actor-mesh-sim.mjs` `itemCandidates(items, frame)`: an item of a
+frame that equals, by its Location, Rotation, DrawScale and ScaleGlow bits at the
+same slot of the same actor, an item already bound in this planning (the root
+frame's, or an earlier frame's) shares that binding, which draws in every frame
+that holds it with that frame's lighting and LOD (`lodFrames`, `lightFrames`); any
+other takes an *extra* binding of the actor's (a grow-only list, a cursor per
+actor per planning), updated with that item and drawn only in the frames that
+hold it (childOnly, as a sprite record of a frame's own is). An item whose root
+slot has no binding yet is skipped until it has one. `patchDynamics` accepts a
+binding of the same mesh record in an item's place. The main frame's extras
+are updated after its root items (`drawExtras`; unused ones are hidden), and a
+ViewportWindow's root frame plans its own items against the main frame's
+(`beginFrameItems`, `updateFrame` updates the item bindings its frames draw with
+their items). The page needs nothing new: an extra is a binding with its own GPU
+slot or geometry, and its pass decision is the ordinary one.
+
+*Verification.* `validate-iterator-frames-play.mjs` (worker mode, GPU path and
+`--query gpuMesh=0`; the `verify` run compares every candidate word with a
+from-scratch pack): for every item a child frame claims, its binding was
+updated with that frame's item (all four fields, bit for bit); it is the root's
+exactly when the item equals the root's at its slot and a binding of its own
+otherwise (about 110 extras and 1,700 shared claims in 24 samples a map). The
+mirror frames of those views hold none of the items, so the page's draw is
+checked on the camera fixture: `validate-terminals-camera-browser.mjs
+--player=-4700,2000,-190 --emitters=-4560,2110,-200,0,16384,5
+--camera=-4650,2150,-150,-5461,0 --expect mirror,items,extras` (Island's five
+laser triggers and their proxies moved above the floor mirror, the camera
+looking down at them): the camera frame's 55 items (32 in its Frame->Sprite)
+are drawn through the main frame's bindings when equal to its items and extras
+otherwise, each updated with the camera frame's item, and the mirror child frame
+holds 33 of them, whose extras the page draws in the mirror's pass (23 draws
+in 8 frames on the GPU path, 10 on the CPU path). Cost (the Linux host, worker
+mode, `scripts/measure-iterator-cost.mjs`: Dockyard's mirror view with its 78 items, 300
+frames, interleaved runs of the tree before and after, three pairs twice): the worker's
+actors phase 4.46 and 4.78 ms a frame in the first set of medians (the extras'
+updates and their lighting), 5.49 and 5.47 ms in the second, which ran under other
+agents' load (the worker frame there 22.0 and 20.4 ms, individual runs from 17 to 38
+ms); the page's actors phase 0.53 and 0.54, 0.58 and 0.61 ms. About a third of
+a millisecond at most a frame in the worker, inside the spread of the second set.
 
 **Cost** (2026-10-08, the Linux host with other agents running, load average
 about 3.4; worker mode, `profile-play-browser.mjs --no-profile --angle gl`,
@@ -868,7 +943,8 @@ Ported and in Play on 2026-10-07 ("Child frames" above). Each child frame's
 own fog maps followed the same day ([volumetric fog](volumetric-fog.md),
 "Play"); the sky frames inside mirror frames (camera, actors) and each
 frame's own iterator items on 2026-10-08. What remains: a measured FPTAN for
-the 24-bit argument, the per-pass pose of an iterator's mesh item. The HUD's
+the 24-bit argument. An iterator's mesh item has been posed, lit and drawn
+with each frame's own item since 2026-10-11. The HUD's
 camera frames (ViewportWindow DrawWorld) run the iterators again, mirror and sky
 child frames included, since 2026-10-11.
 

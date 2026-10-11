@@ -17,12 +17,17 @@
 //   of an emitter (savedLoc) differs in some frame, and no list changes length;
 // - a particle's items are the same in every frame (the child frame draws the
 //   root's sprite records), checked on 02_NYC_Street's sky frame beside smoke;
+// - each frame draws its items with its own fields (docs/bsp-occlusion.md "Each child
+//   frame's own SetupDynamics", DrawActorSprite 0x10b2556a): an item equal to a root
+//   frame's item shares that item's binding, and one that differs has a binding of its
+//   own (an extra), updated with the frame's item (its Location, Rotation, DrawScale and
+//   ScaleGlow bit for bit) and drawn only in the child pass of the frames that hold it;
 // - the frame's candidates are the root's with the iterator-made ones packed
 //   again, and ?iteratorFrames=verify (which packs each frame from scratch too and
 //   compares every word) runs through;
 // - ?iteratorFrames=off (the root's items in every frame) runs none again.
 //
-//   node scripts/validate-iterator-frames-play.mjs [--url http://...]
+//   node scripts/validate-iterator-frames-play.mjs [--url http://...] [--query gpuMesh=0]
 import assert from 'node:assert/strict';
 import {chromium} from '@playwright/test';
 import {createServer} from 'vite';
@@ -65,7 +70,7 @@ try {
         const response = await route.fetch();
         await route.fulfill({response, body: (await response.text()) + '\nwindow.__deusIter={get visible(){return lastVisibility;}};\n'});
       });
-      await page.goto(`${url.replace(/\/$/, '')}/?iteratorFrames=${mode}`);
+      await page.goto(`${url.replace(/\/$/, '')}/?iteratorFrames=${mode}${option('query', '') ? `&${option('query', '')}` : ''}`);
       await page.waitForFunction(() => window.deusExViewer?.status().ready, {}, {timeout: 240000});
       await page.locator('#map').selectOption(c.map);
       await page.waitForFunction(map => { const s = window.deusExViewer?.status(); return s?.ready && s.map === map; }, c.map, {timeout: 240000});
@@ -73,7 +78,8 @@ try {
       if (c.view) await page.evaluate(view => window.deusExViewer.placeProbe(view), c.view);
       const frames = n => page.evaluate(async n => { for (let k = 0; k < n; k++) await new Promise(r => requestAnimationFrame(r)); }, n);
       await frames(30);
-      const total = {scans: 0, rescans: 0, visited: 0, drawsScan: 0, drawsRescan: 0, iterators: 0, frames: 0, kinds: new Set(), differing: 0,
+      await page.evaluate(() => window.deusExViewer.meshPassProbe(true));
+      const total = {extraDrawnClaims: 0, extraClaims: 0, sharedClaims: 0, claimMismatch: [], extraChildDraws: 0, extraMainDraws: 0, scans: 0, rescans: 0, visited: 0, drawsScan: 0, drawsRescan: 0, iterators: 0, frames: 0, kinds: new Set(), differing: 0,
         lengthChanged: 0, itemFrames: 0, particles: c.particles ?? false, spriteRecords: 0, childOnly: 0, patched: 0, packed: 0};
       for (let sample = 0; sample < 24; sample++) {
         await page.evaluate(() => window.deusExViewer.iteratorProbe({reset: true}));
@@ -83,7 +89,21 @@ try {
         total.iterators = Math.max(total.iterators, state.iterators);
         total.spriteRecords += state.sprites.iterating; total.childOnly += state.sprites.childOnly;
         total.patched += state.patched; total.packed += state.packed;
+        const passes = (await page.evaluate(() => window.deusExViewer.meshPassProbe())) ?? [];
         const [root, ...children] = state.lastFrames;
+        // Each frame's items are drawn with the frame's own fields: a shared binding is the root's, an extra
+        // was updated with this item and is no root item's.
+        const states = new Map((state.itemStates ?? []).map(entry => [entry.id, entry]));
+        const sameItem = (a, b) => a && b && a.location.every((v, k) => Object.is(v, b.location[k])) && a.rotation.every((v, k) => v === b.rotation[k])
+          && Object.is(a.drawScale, b.drawScale) && Object.is(a.scaleGlow, b.scaleGlow);
+        for (const child of children) for (const claim of child.bindings ?? []) {
+          const entry = states.get(claim.id), equalsRoot = root.bindings.some(rootClaim => rootClaim.actor === claim.actor && rootClaim.slot === claim.slot && sameItem(rootClaim, claim));
+          if (!entry || !sameItem(entry.item, claim) || entry.extra === equalsRoot) { total.claimMismatch.push({id: claim.id, extra: entry?.extra, equalsRoot, last: entry?.item?.location, frame: claim.location}); continue; }
+          if (entry.extra) { total.extraClaims++; if (claim.drawn) total.extraDrawnClaims++; } else total.sharedClaims++;
+        }
+        const extraIds = new Set([...states.values()].filter(entry => entry.extra).map(entry => entry.id));
+        total.extraChildDraws += passes.filter(pass => extraIds.has(pass.id) && pass.child).length;
+        total.extraMainDraws += passes.filter(pass => extraIds.has(pass.id) && !pass.child).length;
         for (const child of children) {
           total.kinds.add(child.kind); total.itemFrames++;
           if (child.items.length !== root.items.length) total.lengthChanged++;
@@ -118,7 +138,11 @@ for (const r of reports) {
   assert.ok(r.drawsRescan > 0 && Math.abs(r.drawsRescan - r.drawsScan * r.visited / r.scans) < 0.35 * r.drawsScan * r.visited / r.scans,
     `${r.map}: the stream is drawn from for each frame as for the root (${r.drawsRescan} draws in ${r.rescans} reruns, ${r.drawsScan} in ${r.scans} scans)`);
   assert.equal(r.lengthChanged, 0, `${r.map}: no frame's item list changes length`);
+  assert.deepEqual(r.claimMismatch.slice(0, 3), [], `${r.map} ${r.mode}: every claimed item's binding carries the frame's own item (an extra exactly when it differs from the root's)`);
+  assert.ok(r.extraClaims > 0 && r.sharedClaims > 0, `${r.map} ${r.mode}: frames share the root's bindings for equal items (${r.sharedClaims}) and have extras for the others (${r.extraClaims})`);
+  assert.ok(r.extraDrawnClaims === 0 || r.extraChildDraws > 0, `${r.map} ${r.mode}: the page draws the extras that a child frame's Frame->Sprite holds in its pass (${r.extraDrawnClaims} held, ${r.extraChildDraws} drawn)`);
+  assert.equal(r.extraMainDraws, 0, `${r.map} ${r.mode}: and never in the root frame's pass`);
   assert.ok(r.differing > 0, `${r.map}: some child frame's items differ from the root's (the savedLoc item): ${r.differing} of ${r.itemFrames} frames' items`);
 }
 console.log('validate-iterator-frames-play: PASS (' + reports.filter(r => r.mode === 'on').map(r =>
-  `${r.map}: ${r.rescans} reruns for ${r.visited} child frames${r.particles ? `, ${r.spriteRecords} particle records, ${r.childOnly} of their own` : `, ${r.differing} items differ`}`).join('; ') + ')');
+  `${r.map}: ${r.rescans} reruns for ${r.visited} child frames${r.particles ? `, ${r.spriteRecords} particle records, ${r.childOnly} of their own` : `, ${r.differing} items differ, ${r.extraClaims} drawn through bindings of their own (${r.extraDrawnClaims} in a frame's Frame->Sprite, ${r.extraChildDraws} page draws), ${r.sharedClaims} shared`}`).join('; ') + ')');
