@@ -13,6 +13,13 @@ event,args)` is used only for native actor branches such as `StopWaiting`.
 `callbacks.getBoundingBox(actor,exact,position,rotation)` is optional; when it
 is omitted, the established `moverFinishBounds` implementation is used.
 
+This subset now names only the legacy fixture's `mover` role (`doors.mjs`
+`supported`, the pre-VM door state). In Play every map mover is attached as a
+scene actor, runs the full `physMovingBrush` ([doors](doors.md)) and is frobbed
+through the original `DeusExMover.Frob` from `PlayerPawn` input or an NPC's
+`FrobDoor`; `Doors.describe` reads the live `bLocked`/`KeyNum`/`PrevKeyNum`
+for the hint line instead of reporting "not supported".
+
 The supported records are the existing two-key Training subset:
 `InitialState=TriggerToggle`, `NumKeys=2`, a zero first key and translating
 second key, zero key rotations, and no slave/once-only/delay branch. A nonempty
@@ -49,7 +56,14 @@ mover model. Native pawn event boundaries such as `StopWaiting` use
 
 The adapter binds native 264 (PlaySound), 301/302 (FinishInterpolation),
 3970 (the selected
-already active `PHYS_MovingBrush` mode), and 724 (GetBoundingBox). The common
+already active `PHYS_MovingBrush` mode), and 724 (GetBoundingBox). Engine
+`execGetBoundingBox` (`0x1036dea0`) writes the out vectors and returns the
+primitive FBox's IsValid byte (`0x1036e0cc`–`0x1036e0da`); the adapter returns
+the bounds' `valid`. Its one tested caller is `DeusExMover.ComputeMovementArea`,
+which adds a swing pose's box only when it is true; until 2026-10-11 Play
+returned nothing, so ScriptedPawn `OpeningDoor.FindBackupPoint` saw the closed
+leaf alone and backed NPCs up 40 units into the swing
+(`scripts/validate-npc-door-encroach.mjs`). The common
 runtime supplies GotoState, Sleep and SetTimer, while this adapter retains its zero-delay
 scope. Play now supplies the complete [map actor array](script-map-actors.md),
 including non-colliding actors and null slots, for native AllActors. Each map

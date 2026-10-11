@@ -630,8 +630,8 @@ export async function createScriptDoors({
   function boundingBox(receiver, exact, position, rotation) {
     if (typeof callbacks.getBoundingBox === 'function') {
       const result = callbacks.getBoundingBox(receiver, exact, position, rotation);
-      if (!result?.min || !result?.max) throw new Error('GetBoundingBox callback returned invalid bounds');
-      return { min: vector(result.min), max: vector(result.max) };
+      if (!result?.min || !result?.max || typeof result.valid !== 'boolean') throw new Error('GetBoundingBox callback returned invalid bounds');
+      return { min: vector(result.min), max: vector(result.max), valid: result.valid };
     }
     if (!receiver?.model) throw new Error('Original GetBoundingBox requires a mover model callback');
     return moverFinishBounds(receiver.model, receiver.collisionValues ?? receiver.values ?? {}, position, rotation);
@@ -789,7 +789,10 @@ export async function createScriptDoors({
       const bounds = boundingBox(call.receiver, exact, position, rotation);
       if (!minimum?.reference || !maximum?.reference) throw new Error('GetBoundingBox requires out references');
       minimum.set(vector(bounds.min)); maximum.set(vector(bounds.max));
-      return undefined;
+      // Engine execGetBoundingBox 0x1036dea0 returns the primitive FBox's
+      // IsValid byte (0x1036e0cc-0x1036e0da). DeusExMover.ComputeMovementArea
+      // only adds a swing pose's box when this is true.
+      return bounds.valid;
     }
     if (call.index === 262 && !call.receiver?.controlledPlayer && Number.isInteger(call.receiver?.flags)) {
       // execSetCollision 0x103e1900 -> AActor::SetCollision 0x10369200 on the

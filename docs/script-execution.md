@@ -338,6 +338,16 @@ returns; symbolic names for the two object bits are unresolved.
 
 `execGotoState` evaluates NewState and Label, compares NewState with the
 current name, and uses vtable `+0x30` for GotoState and `+0x34` for GotoLabel.
+Before either `Stack.Step` (`0x1013dd05`–`0x1013dd5a`) the NewState slot is
+pre-seeded with the current name (`StateFrame+0x18` StateNode's `+0x20` name
+when that node is not the object's Class `+0x24`, else `None`, also `None`
+without a StateFrame) and the Label slot with `None`. EX_Nothing writes
+nothing, so an omitted NewState keeps the current state: Mover's
+`MakeGroupReturn` `GotoState( , 'Close' )` only jumps to `Close`, and
+`MakeGroupStop`'s `GotoState( , '' )` relabels to a missing `Begin`, which
+clears the code. Play read an omitted NewState as `None` until 2026-10-11, so
+a door's first EncroachingOn left it without a state
+(`scripts/validate-npc-door-encroach.mjs`).
 If the names differ it calls GotoState and calls GotoLabel only when the return
 is exactly `1`; a return of `0` or `2` suppresses the label. If the names are
 already equal, it skips GotoState and calls GotoLabel directly, so a same-state

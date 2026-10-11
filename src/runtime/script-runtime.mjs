@@ -3831,8 +3831,16 @@ export class ScriptRuntime {
     if(call.index>=2105&&call.index<=2107)return execPawnAlliance(call,this.allianceServices());
     if(call.index===113){
       if(call.argumentCount>2)throw new Error('GotoState accepts at most two name arguments');
-      const name=call.argumentCount?refValue(call.evaluateArgument(0)):'None';
-      const label=call.argumentCount>1?refValue(call.evaluateArgument(1)):'Begin';
+      // Core.dll execGotoState 0x1013dd00: before either Stack.Step the state
+      // slot holds the current state's name (StateFrame->StateNode->Name when
+      // that node is not the class, else None) and the label slot None, which
+      // GotoLabel reads as Begin. EX_Nothing keeps them, so Mover's
+      // MakeGroupReturn `GotoState( , 'Close' )` stays in its state.
+      const current=this.instance(call.receiver).state?.stateNode?.record.name??'None';
+      const stateArgument=call.argumentCount?refValue(call.evaluateArgument(0)):undefined;
+      const labelArgument=call.argumentCount>1?refValue(call.evaluateArgument(1)):undefined;
+      const name=stateArgument===undefined?current:stateArgument;
+      const label=labelArgument===undefined?'None':labelArgument;
       this.gotoState(call.receiver,name,label);return;
     }
     if(call.index===281||call.index===284){

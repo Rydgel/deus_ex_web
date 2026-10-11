@@ -71,7 +71,17 @@ export class Doors {
     return { ...this.describe(mover), distance: hit.time * this.maxDistance };
   }
   describe(mover) {
-    return { mover, label: !mover.supported ? 'Door behavior not supported yet' : mover.values.bLocked && closed(mover) ? "It's locked" : mover.target === 1 ? 'Close door' : 'Open door' };
+    // Host hint only. With the script runtime linked, every map mover's frob
+    // runs the original DeusExMover.Frob, so the hint reads the live script
+    // state: bLocked, and Mover.TriggerToggle.Trigger's own choice (Open when
+    // KeyNum==0 || KeyNum<PrevKeyNum, else Close).
+    const runtime = this.scriptRuntime?.runtime;
+    if (!runtime) return { mover, label: !mover.supported ? 'Door behavior not supported yet' : mover.values.bLocked && closed(mover) ? "It's locked" : mover.target === 1 ? 'Close door' : 'Open door' };
+    const key = runtime.readNamed(mover, 'KeyNum'), previous = runtime.readNamed(mover, 'PrevKeyNum');
+    const opens = key === 0 || key < previous;
+    // bLocked is DeusExMover's; a plain Engine.Mover has no lock.
+    const locked = mover.lineage?.includes('deusex.deusexmover') && runtime.readNamed(mover, 'bLocked');
+    return { mover, label: locked && key === 0 ? "It's locked" : opens ? 'Open door' : 'Close door' };
   }
   use(target, playerPosition, frobWith = null) {
     if (!target) return { ok: false, message: 'No door in reach' };
