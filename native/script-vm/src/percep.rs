@@ -467,7 +467,7 @@ fn truthy(v: f64) -> bool {
 }
 
 /// A call the Rust body gives to JavaScript before any effect.
-struct HandBack;
+pub(crate) struct HandBack;
 
 impl Run {
     // ---- Arguments ---------------------------------------------------------
@@ -744,7 +744,7 @@ impl Run {
         }
     }
 
-    fn ai_can_see_body(&mut self, receiver: u32, other: u32, visibility: f64, checks: [bool; 4]) -> Result<f64, HandBack> {
+    pub(crate) fn ai_can_see_body(&mut self, receiver: u32, other: u32, visibility: f64, checks: [bool; 4]) -> Result<f64, HandBack> {
         let [check_visibility, check_dir, check_cylinder, check_los] = checks;
         // services.level(viewer) is a pure lookup; the traces make it again.
         if !(visibility > 0.0) {
@@ -990,4 +990,21 @@ impl Run {
 #[inline(always)]
 fn truthy_strict(v: f64) -> bool {
     v != 0.0
+}
+
+/// The run id the host maps to a frameless run (script-vm-perception.mjs `synthetic`): reads and writes that cannot be made in the image
+/// go through the JavaScript services as for any run, with no SELF.
+pub(crate) const SYNTHETIC_FRAME: u32 = 0xffff_fff0;
+
+/// APawn::AICanSee(other, visibility, checks) for a caller that is not an interpreted run (the AI event manager, aievent.rs): the same
+/// body, float32 bits in and out. None where the body hands the call back (its reads or a nonfinite value are the host's), always
+/// before any write, so the caller may make the call in JavaScript.
+pub(crate) fn ai_can_see_direct(pawn: u32, other: u32, visibility: u32, checks: [u32; 4]) -> Option<u32> {
+    let code = core::ptr::null::<u32>();
+    let mut run = Run { code, pc: code, frame: SYNTHETIC_FRAME, locals: 0, self_handle: pawn, self_info: 0, self_bind: 0, self_fresh: false, callee: false };
+    let flags = [checks[0] != 0, checks[1] != 0, checks[2] != 0, checks[3] != 0];
+    match run.ai_can_see_body(pawn, other, f32::from_bits(visibility) as f64, flags) {
+        Ok(value) => Some((value as f32).to_bits()),
+        Err(HandBack) => None,
+    }
 }

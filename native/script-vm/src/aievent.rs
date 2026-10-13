@@ -27,9 +27,6 @@ extern "C" {
     fn js_ai_float(actor: u32, field: u32) -> u32;
     /// The locations of two actors (float32 bits) into `out[0..6]`.
     fn js_ai_locs(a: u32, b: u32, out: u32);
-    /// What AICanSee's first gates read, into `out[0..11]`: the viewer's Location and BaseEyeHeight, MinAngularSize, the other's Location,
-    /// CollisionRadius and CollisionHeight, and its bDetectable (0/1).
-    fn js_ai_view(pawn: u32, other: u32, out: u32);
     fn js_ai_owner(actor: u32) -> u32;
     /// The actor's XLevel->TimeSeconds (a double).
     fn js_ai_time(actor: u32) -> f64;
@@ -126,9 +123,8 @@ static mut POOL: *mut Pool = core::ptr::null_mut();
 static mut CANDIDATES: [u32; MAX_CANDIDATES] = [0; MAX_CANDIDATES];
 static mut PARAMS: [u32; 5] = [0; 5];
 static mut LOCS: [u32; 6] = [0; 6];
-/// 1: AICanSee runs even where the pre-gate says it returns 0, and a nonzero result is reported (js_ai_warn 3).
-static mut CHECK: u32 = 0;
-static mut VIEW: [u32; 11] = [0; 11];
+/// 1: AICanSee runs in Rust (percep.rs ai_can_see_direct) when the host has the perception field table; 0: the host's leaf.
+static mut DIRECT: u32 = 0;
 // A small cache of the host's name hashes.
 static mut HASHES: [(u32, u32); 256] = [(u32::MAX, 0); 256];
 
@@ -534,13 +530,26 @@ fn squared_distance(a: u32, b: u32) -> Ext {
     dx.mul(dx).add(dy.mul(dy)).add(dz.mul(dz))
 }
 
-/// AIComputeScore (0x10383f50): float32 bits.
-fn compute_score(receiver: u32, sender: u32, callback: u32) -> u32 {
+/// AIComputeScore (0x10383f50): float32 bits. The score callback runs in Rust (dispatch.rs call_score) once processEvent's gate has
+/// passed for the receiver (`gate`: 1 pass, 0 no call, -1 JavaScript, read when the first callback is needed); otherwise the host's.
+fn compute_score(receiver: u32, sender: u32, callback: u32, gate: &mut Option<i32>) -> u32 {
     let value = squared_distance(receiver, sender).add(Ext::load(F32_ONE));
     if callback == 0 {
         return value.store();
     }
-    unsafe { js_ai_score(receiver, sender, callback, value.store()) }
+    let base = value.store();
+    if unsafe { *addr_of_mut!(DIRECT) } != 0 {
+        let verdict = *gate.get_or_insert_with(|| crate::dispatch::event_gate(receiver));
+        if verdict == 0 {
+            return F32_ZERO;
+        }
+        if verdict > 0 {
+            if let Some(bits) = crate::dispatch::call_score(receiver, callback, sender, base) {
+                return bits;
+            }
+        }
+    }
+    unsafe { js_ai_score(receiver, sender, callback, base) }
 }
 
 /// APawn::AICanHear (0x103c7680): float32 bits.
@@ -600,32 +609,6 @@ fn settings(event: u32, start: u32, end: u32) -> [u32; 4] {
     }
 }
 
-/// Whether APawn::AICanSee(other, visibility, ...) is certain to return 0, from the first gates of its worker (0x103c6ab0): a visibility
-/// not above 0, an undetectable other, or an angular size ((r^2 + h^2) / max(|other - eye|^2, 1)) not above MinAngularSize. The angular
-/// size is estimated in double with a margin far above its float32 rounding, so a call that is not certain is made.
-fn surely_unseen(pawn: u32, other: u32, visibility: u32) -> bool {
-    if !positive(visibility) {
-        return true;
-    }
-    let v = unsafe {
-        js_ai_view(pawn, other, addr_of_mut!(VIEW) as u32);
-        *addr_of_mut!(VIEW)
-    };
-    let f = |bits: u32| f32::from_bits(bits) as f64;
-    if v[10] == 0 {
-        return true;
-    }
-    let eye_z = f(v[2]) + f(v[3]);
-    let (dx, dy, dz) = (f(v[5]) - f(v[0]), f(v[6]) - f(v[1]), f(v[7]) - eye_z);
-    let mut distance = dx * dx + dy * dy + dz * dz;
-    if !(distance >= 1.0) {
-        distance = 1.0;
-    }
-    let ratio = (f(v[8]) * f(v[8]) + f(v[9]) * f(v[9])) / distance;
-    let minimum = f(v[4]);
-    ratio < minimum * (1.0 - 1e-5) && minimum > 0.0
-}
-
 /// ComputeSenseDetection (0x103837b0): (visibility, volume, smell) as float32 bits.
 fn compute_sense(r: u32, s: u32) -> (u32, u32, u32) {
     let receiver = rcv(r).actor;
@@ -651,13 +634,14 @@ fn compute_sense(r: u32, s: u32) -> (u32, u32, u32) {
     if !(less || equal) {
         let checks = rcv(r).checks;
         if pawn != 0 {
-            visibility = if surely_unseen(pawn, sender, visibility) {
-                if unsafe { *addr_of_mut!(CHECK) } != 0 && unsafe { js_ai_can_see(pawn, sender, visibility, checks[0], checks[1], checks[2], checks[3]) } != F32_ZERO {
-                    unsafe { js_ai_warn(3, 0) };
-                }
-                F32_ZERO
+            let direct = if unsafe { *addr_of_mut!(DIRECT) } != 0 {
+                crate::percep::ai_can_see_direct(pawn, sender, visibility, checks)
             } else {
-                unsafe { js_ai_can_see(pawn, sender, visibility, checks[0], checks[1], checks[2], checks[3]) }
+                None
+            };
+            visibility = match direct {
+                Some(value) => value,
+                None => unsafe { js_ai_can_see(pawn, sender, visibility, checks[0], checks[1], checks[2], checks[3]) },
             };
         } else {
             let time = unsafe { js_ai_line_check(receiver, sender_event_actor) };
@@ -807,6 +791,7 @@ fn process_receiver(r: u32) {
     let mut first = if t != 0 { first_valid_sender(ty(t).senders) } else { 0 };
     let mut distance = F32_ZERO;
     let mut count = 0;
+    let mut gate: Option<i32> = None;
     while first != 0 {
         let sender = snd(first).actor;
         if sender != actor {
@@ -833,7 +818,7 @@ fn process_receiver(r: u32) {
             }
             let (less, equal) = Ext::load(distance).compare(Ext::load(NEAR_SQUARED));
             if less || equal {
-                let score = compute_score(actor, sender, rcv(r).score_callback);
+                let score = compute_score(actor, sender, rcv(r).score_callback, &mut gate);
                 snd(first).hold = score;
                 if positive(score) {
                     unsafe { (*addr_of_mut!(CANDIDATES))[count] = first };
@@ -1052,8 +1037,8 @@ pub extern "C" fn ai_tick() {
     cleanup();
 }
 #[no_mangle]
-pub extern "C" fn ai_check_ptr() -> *mut u32 {
-    addr_of_mut!(CHECK)
+pub extern "C" fn ai_direct_ptr() -> *mut u32 {
+    addr_of_mut!(DIRECT)
 }
 #[no_mangle]
 pub extern "C" fn ai_params_ptr() -> *const u32 {

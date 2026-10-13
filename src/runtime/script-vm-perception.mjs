@@ -300,7 +300,9 @@ export class PerceptionHost {
     return value;
   }
   imports(enter, leave, count) {
-    const host = this, vm = this.vm, frame = id => vm.run(id);
+    // SYNTHETIC_FRAME (percep.rs): a body called from Rust code that is no interpreted run (the AI event manager): no SELF, no node.
+    const SYNTHETIC = 0xfffffff0, synthetic = {self: null, selfHandle: 0, compiled: {displayName: 'AI event manager'}};
+    const host = this, vm = this.vm, frame = id => (id >>> 0 === SYNTHETIC ? synthetic : vm.run(id));
     const guarded = fn => (...args) => {
       enter();
       try { return fn(...args); } finally { leave(); }
