@@ -178,7 +178,7 @@ typedef struct {
 typedef struct { char name[96]; uintptr_t address; int group; } Watched;
 
 static char out_path[512] = "trace.jsonl", player_name[96] = "JCDentonMale";
-static int release_at = 1, run_ticks = 100, pre_watch = -1;
+static int release_at = 1, run_ticks = 100, pre_watch = -1, max_seconds = 0;
 static int soft_at[64], soft_count, soft_idx, soft_state;   /* pause-at: unfrozen tick counts at which the level is held for console input */
 static float forced_delta = 0;
 static int monitor_seconds = 0, kill_on_crash = 1, actor_trace_first = 0, actor_trace_last = -1;
@@ -223,6 +223,7 @@ static int read_config(const char *path) {
     else if (!strcmp(tok, "release")) release_at = atoi(strtok(NULL, " \t\r\n"));
     else if (!strcmp(tok, "pause-at")) { for (char *v; (v = strtok(NULL, " \t\r\n")) && soft_count < 64;) soft_at[soft_count++] = atoi(v); }
     else if (!strcmp(tok, "ticks")) run_ticks = atoi(strtok(NULL, " \t\r\n"));
+    else if (!strcmp(tok, "max-seconds")) max_seconds = atoi(strtok(NULL, " \t\r\n"));   /* stop after that many seconds of unfrozen time, whatever the tick count */
     else if (!strcmp(tok, "delta")) forced_delta = (float)atof(strtok(NULL, " \t\r\n"));
     else if (!strcmp(tok, "actor-trace")) { actor_trace_first = atoi(strtok(NULL, " \t\r\n")); actor_trace_last = atoi(strtok(NULL, " \t\r\n")); }
     else if (!strcmp(tok, "monitor")) monitor_seconds = atoi(strtok(NULL, " \t\r\n"));
@@ -652,7 +653,7 @@ static int do_trace(const char *config) {
   if (actor_trace_last >= actor_trace_first && actor_trace_last > 0) { snprintf(actors_path, sizeof(actors_path), "%s.actors.jsonl", out_path); aout = fopen(actors_path, "w"); bp_arm(&bp[2], ACTOR_TICK); }
 
   DEBUG_EVENT ev;
-  int tick = 0, unfrozen = 0, released = 0, paused = 0, done = 0;
+  int tick = 0, unfrozen = 0, released = 0, paused = 0, done = 0; long long release_us = 0;
   int pending_rearm = -1; DWORD pending_tid = 0;
   unsigned rng_in = 0; int in_our_tick = 0; uintptr_t rng_ptd = 0;
   double clock_in = 0; float ts_in = 0, delta_in = 0; int tick_type = 0, players_only_in = 0; unsigned strobe_flag_in = 0; float strobe_time_in = 0;
@@ -701,9 +702,9 @@ static int do_trace(const char *config) {
             fprintf(stderr, "rand state block 0x%lx (state 0x%x of %d candidates)\n", (unsigned long)rng_ptd, best, n);
           }
           if (release_at > 0 && tick == release_at && !released) {
-            unsigned char b; read_mem(level_info + 0x4f0, &b, 1); b &= ~4; write_mem(level_info + 0x4f0, &b, 1); released = 1;
+            unsigned char b; read_mem(level_info + 0x4f0, &b, 1); b &= ~4; write_mem(level_info + 0x4f0, &b, 1); released = 1; release_us = qpc_us();
           }
-          if (released && unfrozen >= run_ticks && !paused) paused = 1;
+          if (released && !paused && (unfrozen >= run_ticks || (max_seconds && qpc_us() - release_us > (long long)max_seconds * 1000000))) paused = 1;
           /* pause-at: after that many unfrozen ticks the level's Tick is skipped (as for the final pause) until <out>.go appears, so a
              console command typed meanwhile runs between two ticks; the next entry after the go file runs the tick */
           int soft_skip = 0;
