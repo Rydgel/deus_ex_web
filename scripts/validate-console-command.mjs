@@ -36,7 +36,11 @@ const kw = body => EXEC_KEYWORDS[body].map(keyword => `KW:${keyword}`);
 const STEPS = {
   'UInput::Exec': [...kw('UInput::Exec'), 'CALL:?ParseToken'],
   'URenderDevice::Exec': kw('URenderDevice::Exec'),
-  'UGlideRenderDevice::Exec': ['CALL:?Exec@URenderDevice', ...kw('UGlideRenderDevice::Exec')],
+  // The device Play follows (PLAY_RENDER_DEVICE, D3DDrv.D3DRenderDevice): its keywords are EXEC_KEYWORDS.
+  'UD3DRenderDevice::Exec': ['CALL:?Exec@URenderDevice', ...kw('UD3DRenderDevice::Exec')],
+  // The installed ini's GlideRenderDevice. Play does not dispatch it since f02d132 (no EXEC_KEYWORDS entry),
+  // so its trace stays pinned here as the original's own order instead of being dropped.
+  'UGlideRenderDevice::Exec': ['CALL:?Exec@URenderDevice', 'KW:TMUDETAIL', 'KW:GetRes', 'KW:GetColorDepths'],
   // FExec this: +0x34 Input (UViewport+0x60), +0x38 RenDev (+0x64), +0x8
   // Console (+0x34) with the viewport Actor (+0x30) as executor.
   'UViewport::Exec': ['CALL:this/0x34/0x28/0x0', 'CALL:this/0x38/0x28/0x0', ...kw('UViewport::Exec'),

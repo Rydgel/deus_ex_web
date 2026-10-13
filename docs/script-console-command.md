@@ -24,6 +24,7 @@ Installed GOTY binaries, SHA-256:
 | Render.dll | `607f1077…bd75d1` |
 | Galaxy.dll | `606e71d1…7d06353` |
 | GlideDrv.dll | `50b9f142…4cfe4c` |
+| D3DDrv.dll | `9e0f8a42…d8ac9f` |
 
 The full hashes are in `scripts/native-exec-chain-oracle.py`. The installed
 `DeusEx.ini` selects `Input=Extension.InputExt`,
@@ -75,7 +76,8 @@ output device whose text it returns.
 | `UWindowsViewport::Exec` (WinDrv `0x11106d90`) | `UViewport::Exec`, then 9 viewport keywords |
 | `UViewport::Exec` (Engine `0x10373a60`) | `Input->Exec` (`+0x60`), `RenDev->Exec` (`+0x64`), 11 keywords, `Console->ScriptConsoleExec(Cmd, Ar, Actor)`, `UPlayer::Exec` |
 | `UInput::Exec` (Engine `0x10393e10`) | BUTTON, PULSE, TOGGLE, AXIS, KEYNAME, KEYBINDING, then the alias lookup |
-| `UGlideRenderDevice::Exec` | `URenderDevice::Exec` (2 keywords), then 3 keywords |
+| `UD3DRenderDevice::Exec` (D3DDrv `0x100061b0`; the device Play follows) | `URenderDevice::Exec` (2 keywords), then GetRes, LodBias, ShowPools |
+| `UGlideRenderDevice::Exec` (GlideDrv `0x107010cd`; the installed ini's device, not dispatched by Play) | `URenderDevice::Exec`, then TMUDETAIL, GetRes, GetColorDepths; pinned in the validator only |
 | `UPlayer::Exec` (Engine `0x103d7ed0`) | `XLevel->Exec`; `ScriptConsoleExec` with the Actor as executor on `Level.Game`, `myHUD`, the Actor, each item of the `Inventory` chain; `XLevel.Engine->Exec` |
 | `ULevel::Exec` (Engine `0x1039dfe0`) | NetDriver (`+0x3c`), DemoRecDriver (`+0x88`), DEMOREC, DEMOPLAY |
 | `DDeusExGameEngine::Exec` (DeusEx `0x1000ed70`) | SAVEGAME, DELETEGAME, `UGameEngine::Exec` |

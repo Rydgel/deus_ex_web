@@ -38,6 +38,7 @@ HASHES = {
     'Render.dll': '607f1077c5cd3e25f8a4cde1ffacf4cf9260aebc92a72be40721cd6955bd75d1',
     'Galaxy.dll': '606e71d13bbd3c4db2460aabcf60d87b1c79bb49d77725cf9e087513c7d06353',
     'GlideDrv.dll': '50b9f142700ca928ea688e7cce34d3064d39ccbe0b5056c826b413bd842cfe4c',
+    'D3DDrv.dll': '9e0f8a4293de6edb4f88b1ba9972fe98b4e80a1115f9667e57f8ef3d51d8ac9f',
     'DeusEx.exe': '3e6fdb89b880a60ee984b885a48f262070019572f1531ed70d96108781bae00e',
 }
 
@@ -48,6 +49,7 @@ BODIES = {
     'UInput::Exec': ('Engine.dll', 0x1030178f, CMD),
     'URenderDevice::Exec': ('Engine.dll', 0x10303819, CMD),
     'UGlideRenderDevice::Exec': ('GlideDrv.dll', 0x107010cd, CMD),
+    'UD3DRenderDevice::Exec': ('D3DDrv.dll', 0x100061b0, CMD),
     'UViewport::Exec': ('Engine.dll', 0x1030204a, CMD),
     'UWindowsViewport::Exec': ('WinDrv.dll', 0x1110119a, CMD),
     'UPlayer::Exec': ('Engine.dll', 0x10302cb6, CMD),
