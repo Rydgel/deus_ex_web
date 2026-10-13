@@ -1396,8 +1396,20 @@ export async function createScriptDoors({
     },
     // The string adapter does not retain allocated-empty FString storage.
     // Only an actual EventManager needs this distinction; remain explicit.
-    pauserArrayCount: () => {throw new Error('Level.Tick EventManager requires native Pauser FString allocation storage');},
-    tickEventManager: () => {throw new Error('Level.Tick EventManager.Tick is not linked');},
+    // The Rust AI event manager (script-vm-aievent.mjs) stands for LevelInfo.EventManager. Pauser's FString array count: 0 for the
+    // empty string, the length plus its terminator otherwise (an allocated empty string, which the original counts as 1, is not told
+    // apart: the string adapter does not keep it).
+    pauserArrayCount: info => {
+      if (!runtime.scriptVm?.aiEvents?.active) throw new Error('Level.Tick EventManager requires native Pauser FString allocation storage');
+      const pauser = runtime.readNamed(info, 'Pauser');
+      return pauser && pauser.length ? pauser.length + 1 : 0;
+    },
+    eventManager: info => (runtime.scriptVm?.aiEvents?.active && runtime.scriptVm.aiEvents.levelInfo === info ? true : null),
+    tickEventManager: () => {
+      const aiEvents = runtime.scriptVm?.aiEvents;
+      if (!aiEvents?.active) throw new Error('Level.Tick EventManager.Tick is not linked');
+      aiEvents.tick();
+    },
     aroundActorTick: (actor, run) => {
       const from = level.actors.length;
       try { return liveConPlay.withLifecycle(run); }

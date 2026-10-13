@@ -934,6 +934,13 @@ pub extern "C" fn ai_destroy() {
         m().level = 0;
     }
 }
+/// After a script error unwound through AIProcess: nothing is processing any more.
+#[no_mangle]
+pub extern "C" fn ai_recover() {
+    if unsafe { !POOL.is_null() } {
+        m().ref_processing = 0;
+    }
+}
 #[no_mangle]
 pub extern "C" fn ai_active() -> u32 {
     if unsafe { POOL.is_null() } { 0 } else { m().level }

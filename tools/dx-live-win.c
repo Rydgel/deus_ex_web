@@ -188,7 +188,7 @@ static Watched watched[1024]; static int watched_count;
 /* ---------------- call tracing (config `call`) ---------------- */
 #define MAXCALLS 32
 #define MAXRET 64
-typedef struct { uintptr_t address; unsigned char original; char label[24]; int nwords, deref_count, deref_arg[3], deref_n[3], deref_off[3], gate, always, name0, namee, namearg, namearg_off, ecx_n, ecx_off, span_on, span_arg, span_off; char only[48]; } CallBp;
+typedef struct { uintptr_t address; unsigned char original; char label[24]; int nwords, deref_count, deref_arg[3], deref_n[3], deref_off[3], gate, always, name0, namee, namearg, namearg_off, ecx_n, ecx_off, span_on, span_arg, span_off, fret; char only[48]; } CallBp;
 typedef struct { uintptr_t address; unsigned char original; int refs; } RetBp;
 typedef struct { int active; uintptr_t ret; unsigned esp, ecx; int call; unsigned args[16]; unsigned deref_ptr[3]; unsigned long seq; } Pending;
 static CallBp calls[MAXCALLS]; static int call_count;
@@ -243,6 +243,7 @@ static int read_config(const char *path) {
         else if (!strcmp(o, "namearg")) { c->namearg = atoi(strtok(NULL, " \t\r\n")) + 1; c->namearg_off = (int)strtol(strtok(NULL, " \t\r\n"), NULL, 0); }
         else if (!strcmp(o, "only")) { char *v = strtok(NULL, " \t\r\n"); if (v) strncpy(c->only, v, sizeof(c->only) - 1); }
         else if (!strcmp(o, "span")) { c->span_on = 1; c->span_arg = atoi(strtok(NULL, " \t\r\n")); c->span_off = (int)strtol(strtok(NULL, " \t\r\n"), NULL, 0); }
+        else if (!strcmp(o, "fret")) c->fret = 1;
         else if (!strcmp(o, "ecxwords")) { c->ecx_n = atoi(strtok(NULL, " \t\r\n")); c->ecx_off = (int)strtol(strtok(NULL, " \t\r\n"), NULL, 0); if (c->ecx_n > 64) c->ecx_n = 64; }
         else if (!strcmp(o, "deref") && c->deref_count < 3) { c->deref_arg[c->deref_count] = atoi(strtok(NULL, " \t\r\n")); c->deref_n[c->deref_count] = atoi(strtok(NULL, " \t\r\n")); c->deref_off[c->deref_count] = (int)strtol(strtok(NULL, " \t\r\n"), NULL, 0); if (c->deref_n[c->deref_count] > 128) c->deref_n[c->deref_count] = 128; c->deref_count++; }
       }
@@ -501,6 +502,15 @@ static int handle_call_event(HANDLE th, DWORD tid, uintptr_t where, int unfrozen
         fprintf(cout, ",\"floats\":"); print_floats(cout, deref, c->deref_n[d]); fprintf(cout, "}");
       }
       fprintf(cout, "]");
+    }
+    if (c->fret) {   /* the x87 ST(0) at the return: ten bytes of the FNSAVE image, little endian, and the value as a long double */
+      CONTEXT fc; memset(&fc, 0, sizeof(fc)); fc.ContextFlags = CONTEXT_FLOATING_POINT;
+      if (GetThreadContext(th, &fc)) {
+        unsigned top = (fc.FloatSave.StatusWord >> 11) & 7; unsigned char *st0 = fc.FloatSave.RegisterArea; long double v = 0; memcpy(&v, st0, 10);
+        fprintf(cout, ",\"st0\":\"");
+        for (int b = 9; b >= 0; b--) fprintf(cout, "%02x", st0[b]);
+        fprintf(cout, "\",\"st0f\":%.21Lg,\"fpTop\":%u,\"fpTag\":%u", v, top, (unsigned)fc.FloatSave.TagWord);
+      }
     }
     if (c->ecx_n) { unsigned w[64]; memset(w, 0, sizeof(w)); read_mem(p->ecx + c->ecx_off, w, 4 * c->ecx_n); fprintf(cout, ",\"ecxWords\":"); print_words(cout, w, c->ecx_n); fprintf(cout, ",\"ecxFloats\":"); print_floats(cout, w, c->ecx_n); }
     fprintf(cout, "}\n"); fflush(cout);

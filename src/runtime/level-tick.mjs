@@ -126,9 +126,10 @@ export function tickStandaloneLevel(level,seconds,tickType,services) {
     }
   }
 
-  const manager=read(levelInfo(),'EventManager');
+  // The host's manager (the Rust AI event manager) stands for the LevelInfo.EventManager object it does not materialize.
+  const manager=read(levelInfo(),'EventManager')||services.eventManager?.(levelInfo())||null;
   if(manager&&services.pauserArrayCount(info)===0&&tickType===2)
-    services.tickEventManager(read(levelInfo(),'EventManager'),delta);
+    services.tickEventManager(manager,delta);
   if(level.netDriver!==null||level.demoRecDriver!==null)
     throw new Error('Level.Tick callback installed an unsupported network/demo driver');
   level.tickTag=Number(level.tickTag===0);

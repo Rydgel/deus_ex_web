@@ -178,7 +178,7 @@ export function cleanupLevelDestroyed(level,services,force=false) {
     if(!read(actor,'bDeleteMe'))warning?.({type:'ReleasedActorNotDeleted',actor});
     const levelInfo=level.actors[0];
     if(!levelInfo)throw new Error('CleanupDestroyed requires the original LevelInfo');
-    const manager=read(levelInfo,'EventManager');
+    const manager=read(levelInfo,'EventManager')??services.eventManager?.(levelInfo)??null;
     if(manager!==null){
       if(typeof services.destroyActorEvents!=='function')throw new Error('CleanupDestroyed requires EventManager.DestroyActor');
       services.destroyActorEvents(manager,actor);

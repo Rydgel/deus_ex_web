@@ -1882,6 +1882,34 @@ export class ScriptRuntime {
    * soundField level graph; the trace primitives are the BSP FastLineCheck
    * and the SingleLineCheck (MultiLineCheck) wrapper — no navigation graph is
    * consulted by any of these bodies. */
+  /** Natives 710/711 and 713-716 on the Rust AI event manager (script-vm-aievent.mjs): the exec wrappers' argument defaults
+   * (0x1036d440: visibility, direction and LOS checks on, cylinder off; 0x1036d750 and 0x1036d8e0: value 1.0, radius 800.0). An
+   * EX_Nothing argument is `undefined` and keeps its default. */
+  aiEventNative(aiEvents,call) {
+    const arg=(i,fallback)=>{
+      if(call.argumentCount<=i)return fallback;
+      const value=refValue(call.evaluateArgument(i));
+      return value===undefined?fallback:value;
+    };
+    const receiver=call.receiver,event=arg(0,'');
+    switch(call.index) {
+      case 710: {
+        const callback=arg(1,''),score=arg(2,'');
+        const checks=[arg(3,true),arg(4,true),arg(5,false),arg(6,true)].map(Boolean);
+        aiEvents.setCallback(receiver,event,callback,score,checks);
+        return;
+      }
+      case 711: aiEvents.clearCallback(receiver,event);return;
+      case 713: case 714: {
+        const type=Number(arg(1,0)),value=Math.fround(Number(arg(2,1))),radius=Math.fround(Number(arg(3,800)));
+        if(call.index===713)aiEvents.send(receiver,event,type,value,radius);
+        else aiEvents.start(receiver,event,type,value,radius);
+        return;
+      }
+      case 715: aiEvents.end(receiver,event,Number(arg(1,0)));return;
+      default: aiEvents.clear(receiver,event);return;
+    }
+  }
   perceptionServices(call) {
     const services=this.soundServices(call);
     services.write=(actor,name,value)=>this.writeNamed(actor,name,value);
@@ -2818,7 +2846,12 @@ export class ScriptRuntime {
         if(typeof lifecycle.release==='function')lifecycle.release(actor,flags);
         else this.releaseObject(actor,flags);
       },
-      destroyActorEvents:lifecycle.destroyActorEvents,
+      destroyActorEvents:(manager,actor)=>{
+        const aiEvents=this.scriptVm?.aiEvents;
+        if(aiEvents?.active)aiEvents.destroyActor(actor);
+        else lifecycle.destroyActorEvents?.(manager,actor);
+      },
+      eventManager:levelInfo=>this.scriptVm?.aiEvents?.active&&this.scriptVm.aiEvents.levelInfo===levelInfo?true:null,
       recordArrayRemoval:lifecycle.recordArrayRemoval,
       warning:this.warning,
       settled:this.scriptVm?.render?(actors,start)=>this.scriptVm.render.compactSettled(actors,start):null,
@@ -3784,6 +3817,15 @@ export class ScriptRuntime {
       // the pawn's Destination over a copy of its Velocity.
       return execEAdjustJump(call.receiver,this.pawnNavServices(call.receiver));
     }
+    const aiEvents=this.scriptVm?.aiEvents;
+    if(call.index===650&&aiEvents){
+      // execInitEventManager 0x103023b0 -> 0x10384a90: the manager (aievent.rs, docs/ai-event-manager.md) for this level.
+      aiEvents.init(this.levelFor(call.receiver)?.actors?.[0]??call.receiver);
+      call.receiver.aiEventManager??=new Map();   // the legacy gate of the JavaScript VM below
+      return;
+    }
+    if(aiEvents?.owns(call.receiver)&&(call.index===710||call.index===711||(call.index>=713&&call.index<=716)))
+      return this.aiEventNative(aiEvents,call);
     if(call.index===650){
       // execInitEventManager 0x103023b0 -> 0x10384a90: the lazy +0x550
       // UEventManager creator LevelInfo.PreBeginPlay invokes. The Map is the

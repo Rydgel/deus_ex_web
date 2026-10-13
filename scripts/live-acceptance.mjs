@@ -100,6 +100,8 @@ if (flag('perception')) FIELDS.push(...PERCEPTION_FIELDS);
 // The player's pose, read back from the original (the placement of Play's replay): view rotation and Region.
 const PLAYER_FIELDS = FIELDS.slice(0, 10).concat([FIELDS[10]],
   [['VRot', 'ViewRotation', 0x3dc, 'i3'], ['RegZone', '$regionZone', 0xc8, 'obj'], ['RegLeaf', '$regionLeaf', 0xcc, 'i32'], ['RegNum', '$regionNum', 0xd0, 'u8']]);
+// --perception: the player's AIVisibility cache (Actor +0x2e8: VisUpdateTime, CurrentVisibility, LastVisibility), which every AICanSee on the player reads.
+if (flag('perception')) PLAYER_FIELDS.push(['VisT', 'VisUpdateTime', 0x2e8, 'f'], ['CurVis', 'CurrentVisibility', 0x2ec, 'f'], ['LastVis', 'LastVisibility', 0x2f0, 'f']);
 
 // Load-time random state of the PawnGenerators (PigeonGenerator, SeagullGenerator, ...): PostBeginPlay draws TryTimer
 // (0.25 + FRand()*0.75) and, with bRandomCount, PoolCount from the load's stream, which the two sides do not share
@@ -546,9 +548,16 @@ async function play() {
 const f32 = Math.fround;
 let rotationCompare = false;
 const indexOf = new Map(FIELDS.filter(f => f[5] !== undefined).map(f => [f[0], f[5]]));
+// Objects the two programs create while running are numbered by their own creation order (JCDentonMale2 and JCDentonMale1, the NPCs' weapons
+// WeaponAssaultShotgun0 and 1): the same object under another number. Map actors keep their names.
+const runtimeNumbered = /^((?:JCDenton\w*?|Weapon\w+?|Ammo\w+?))\d+$/;
 function same(a, b) {
   if (a === null || a === undefined) a = 'None';
   if (b === null || b === undefined) b = 'None';
+  if (typeof a === 'string' && typeof b === 'string' && a !== b) {
+    const x = runtimeNumbered.exec(a), y = runtimeNumbered.exec(b);
+    if (x && y && x[1] === y[1]) return true;
+  }
   if (rotationCompare && Array.isArray(a) && Array.isArray(b)) { const wrap = v => ((v % 65536) + 65536) % 65536; a = a.map(wrap); b = b.map(wrap); }
   if (Array.isArray(a) || Array.isArray(b)) return Array.isArray(a) && Array.isArray(b) && a.length === b.length && a.every((v, i) => same(v, b[i]));
   if (typeof a === 'number' && typeof b === 'number') return Object.is(f32(a), f32(b)) || (a === b);
