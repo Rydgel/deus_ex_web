@@ -569,8 +569,11 @@ Club's ghost-player difference (Divergences 6). Not traced.
    (SecurityBot0 tick 6: original PatrolPoint19, Play PathNode403). FindPathToward's scoutE (`0x103db0e0`) stores the first candidate
    that passes the eye line check and pointWorker and returns (`0x103db2fd..0x103db314`); the translation kept the last one. With the
    fix, no NPC's first MoveTarget differs ([pawn navigation](script-pawn-nav.md), oracle scene `fpt-scoute-first-passing`).
-4. **Guests in state Sitting walking between seat positions (open, Club above).** Same state in, different steering direction out at the
-   first poll after the new MoveTo; the speed equal.
+4. **Guests in state Sitting walking between seat positions (fixed, 0e84704 and b75babd).** Same state in, different steering direction out at the
+   first poll after the new MoveTo; the speed equal. Two missing pieces: the move polls fire AlterDestination (not SpawnNotification,
+   [pawn locomotion](script-pawn-locomotion.md)), and DeusEx.dll's native AScriptedPawn::Tick (`0x100195a0`), which Play did not run,
+   undoes Bump's `MoveTimer += 4` when the avoidance clears ([scripted pawn tick](script-scripted-pawn-tick.md)). With both, a fresh
+   600-tick Club run is equal for all 19 NPCs, and Island's Terrorist18 and UNATCOTroop6 are equal over a fresh 262-tick run.
 5. **Draws at tick 24 on Island (explained: a load-time input).** Original 10, Play 18: SeagullGenerator1 and 3 draw 4 each when
    their TryTimer runs out. `PawnGenerator.PostBeginPlay` draws TryTimer and PoolCount from the load's own stream, which the two sides
    do not share, so the generators spawn on other ticks. `live-acceptance.mjs` now reads those fields from the original and writes them
@@ -640,7 +643,7 @@ its PID; Play runs headless Chromium in worker mode.
   (item 2 above).
 - The frozen captures stand at the map's frame-0 pose; live behaviour is
   compared per tick in [Live scenes](#live-scenes-2026-10-13), where the
-  Sitting guests' steering (4 there) and MoveTimer (TriadRedArrow0, Underworld), Island's Terrorist18, the Underworld's
+  Underworld's TriadRedArrow0 MoveTimer (likely the native tick of item 4; not rerun), the Underworld's
   view-edge `LastRenderTime` differences (Businessman1 tick 22, Female5 tick 465), the Club's dancers in view (stasis) and a frame
   with pawns in view are still open.
 - **Breakable glass and walls are not drawn by the page world.** `world.mjs` builds a mover group for every actor whose class name ends in
