@@ -18,6 +18,16 @@ export function windowProbe(game) {
   const console_ = runtime.readNamed(runtime.readNamed(player, 'Player'), 'Console');
   const notes = [];
   for (let note = runtime.readNamed(player, 'FirstNote'); note; note = runtime.readNamed(note, 'next')) notes.push(runtime.readNamed(note, 'text'));
+  // Window.PlaySound requests (script-window-sound.mjs) and Galaxy's channels
+  // that hold such a sound (no actor, a counter id), by sound name.
+  const soundName = sound => String(sound?.key ?? sound?.name ?? sound);
+  const audio = runtime.audio;
+  const sounds = host.soundRequests.map(request => ({sound: soundName(request.sound), volume: request.volume, pan: request.pan,
+    played: request.played ?? null}));
+  const galaxy = audio ? {counter: audio.galaxy.state.counter, voices: audio.voices.size, galaxyVoices: audio.galaxyVoices,
+    channels: audio.galaxy.state.channels.filter(c => c.sound && c.actor === null).map(c => ({sound: soundName(c.sound), id: c.id,
+      voice: c.voice, radius: c.radius, volume: c.volume}))} : null;
   return {top: cls(top), focus: cls(focus), family, text, keyboardGrab: root ? W.i32(root, 0x5d0) : null,
-    console: {state: runtime.instance(console_).state?.stateNode?.record.name ?? null, typed: runtime.readNamed(console_, 'TypedStr')}, notes};
+    console: {state: runtime.instance(console_).state?.stateNode?.record.name ?? null, typed: runtime.readNamed(console_, 'TypedStr')}, notes,
+    sounds, galaxy};
 }

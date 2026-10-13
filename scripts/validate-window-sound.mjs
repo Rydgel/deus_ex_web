@@ -17,6 +17,7 @@ const samples = [
   {name: 'argument-resize', resizeOnVolume: [199.5, 70.25]},
   {name: 'null-sound', nullSound: true}, {name: 'no-root', noRoot: true},
   {name: 'no-pawn', noPawn: true},
+  {name: 'no-xlevel', nullLink: 'level'}, {name: 'no-engine', nullLink: 'engine'}, {name: 'no-audio', nullLink: 'audio'},
 ];
 const input = {gameRoot: gameDirectory(), samples};
 const originalText = execFileSync(process.env.NATIVE_PROBE_PYTHON || path.resolve('.cache/native-probe-env/bin/python'),
@@ -37,8 +38,13 @@ for (const [index, s] of samples.entries()) {
   const audio = [], evaluated = [], requests = [];
   const W = {u8: (o, k) => o[k] ?? 0, ptr: (o, k) => o[k] ?? null, f32: (o, k) => Math.fround(o[k] ?? 0),
     soundPawnFields: value => {assert.equal(value, pawn); return {location: s.location ?? [10, 20, 30], viewRotation: s.rotation ?? [2000, 1000, 4000]};},
-    deferWindowSound: r => {requests.push(r); audio.push([0, 0, r.sound === sound,
-      ...r.location.map(bits), bits(r.volume), bits(r.radius), bits(r.pitch)]);}};
+    deferWindowSound: r => requests.push(r),
+    // pawn+0xac -> +0x40 -> +0x4c: any null link is null; the body's virtual call records the audio arguments.
+    audioOf: value => s.nullLink ? null : {playSound: (actor, id, sound2, location, volume, radius, pitch) => {
+      assert.equal(actor, null); assert.equal(value, pawn);
+      audio.push([0, id, sound2 === sound, ...location.map(bits), bits(volume), bits(radius), bits(pitch)]);
+      return true;
+    }}};
   const result = dispatchWindowSoundNative(W, {index: 1473, receiver: window, argumentCount: 5,
     evaluateArgument(i) {
       evaluated.push(i);

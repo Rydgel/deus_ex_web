@@ -13,8 +13,11 @@ const below = (a, b) => {
 const half = value => S(M(X(value), X(.5)));
 
 /** Full native calculation through audio's PlaySound virtual call arguments.
- * W.deferWindowSound records the request while the audio device is unbound.
- * W.soundPawnFields returns original Location/ViewRotation as arrays.
+ * W.deferWindowSound records the request. W.audioOf(pawn) is the body's
+ * pawn+0xac -> +0x40 -> +0x4c chain (XLevel, Engine, Audio), null when any
+ * link is null; the body then calls Audio's PlaySound (vtable +0x74,
+ * Extension 0x10050277) and ignores the result. W.soundPawnFields returns
+ * original Location/ViewRotation as arrays.
  */
 export function windowPlaySound(W, win, sound, volume = -1, pitch = 1, posX, posY) {
   // The C++ centered overload (0x1004ffb0) evaluates height before width.
@@ -48,6 +51,8 @@ export function windowPlaySound(W, win, sound, volume = -1, pitch = 1, posX, pos
   const request = {window: win, sound, root, pawn, requestedVolume, posX, posY, pan,
     actor: null, id: 0, location, volume, radius: 100, pitch};
   W.deferWindowSound(request);
+  const audio = W.audioOf(pawn);
+  if (audio) request.played = audio.playSound(request.actor, request.id, sound, location, volume, request.radius, pitch);
   return request;
 }
 

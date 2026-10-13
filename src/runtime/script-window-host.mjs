@@ -407,7 +407,11 @@ export async function createWindowHost({runtime, assets, player, gameConfig = nu
     // of the timer lists (XWindow::CleanUp) resolve it.
     allocTimerNode:()=>{const node={windowTimerNode:true};heap.allocate(node,Timers.WINDOW_TIMER.size);timerNodes.add(node);return node;},
     soundPawnFields:pawn=>({location:runtime.readNamed(pawn,'Location'),viewRotation:runtime.readNamed(pawn,'ViewRotation')}),
+    // Extension 0x10050277: the body's call on pawn->XLevel->Engine->Audio
+    // (script-window-sound.mjs): Galaxy's PlaySound with (None, 0, Sound,
+    // Location, Volume, 100, Pitch). The request stays recorded.
     deferWindowSound:request=>soundRequests.push(request),
+    audioOf:pawn=>runtime.audioOf(pawn),
     computerPauser:pawn=>runtime.readNamed(runtime.readNamed(pawn,'Level'),'Pauser'),
   };
   W.farray = createWindowFArray(W, heap);

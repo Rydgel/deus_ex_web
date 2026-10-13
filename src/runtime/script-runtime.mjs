@@ -2223,6 +2223,19 @@ export class ScriptRuntime {
     services.read=(object,name)=>name==='Audio'?(object?.audio??null):read(object,name);
     return services;
   }
+  /** Pawn->XLevel->Engine->Audio with each pointer tested, the chain the
+   * native Window.PlaySound body follows before its virtual call (Extension
+   * 0x1005022a..0x10050249: pawn+0xac, level+0x40, engine+0x4c; a null at any
+   * step skips the call). Unlike execStopSound's unchecked reads this returns
+   * null for a missing link. docs/script-window-sound.md. */
+  audioOf(actor) {
+    const services=this.audioServices();
+    const level=services.read(actor,'XLevel');
+    if(level===null||level===undefined)return null;
+    const engine=services.read(level,'Engine');
+    if(engine===null||engine===undefined)return null;
+    return services.read(engine,'Audio')??null;
+  }
   /** The measured global UObject index of `receiver` (a map table, pawn table
    * or capture-provider value), or null. Unlike soundField('ObjectIndex') this
    * never falls back to the host registry slot of a runtime spawn, which is

@@ -44,7 +44,10 @@ class Probe(native.NativeCollision):
   self.write(window+0x80,'2f',*s.get('size',[100,50]));self.write(window+0x114,'f',s.get('volume',.5))
   self.write(pawn+0x114,'3f',*s.get('location',[10,20,30]));self.write(pawn+0x3dc,'3i',*s.get('rotation',[2000,1000,4000]))
   level=self.alloc(0x100);engine=self.alloc(0x100);audio=self.alloc(0x100);vt=self.alloc(0x100)
-  self.write(pawn+0xac,'I',level);self.write(level+0x40,'I',engine);self.write(engine+0x4c,'I',audio);self.write(audio,'I',vt);self.write(vt+0x74,'I',self.audio)
+  # nullLink: the body tests each of pawn+0xac, level+0x40 and engine+0x4c and skips the call on a null
+  cut=s.get('nullLink')
+  self.write(pawn+0xac,'I',0 if cut=='level' else level);self.write(level+0x40,'I',0 if cut=='engine' else engine)
+  self.write(engine+0x4c,'I',0 if cut=='audio' else audio);self.write(audio,'I',vt);self.write(vt+0x74,'I',self.audio)
   frame=self.alloc(0x20);code=self.alloc(16);self.cpu.mem_write(code,bytes([0xf0,0xf1,0xf2,0xf3,0xf4,0x16]));self.write(frame+8,'2I',window,code)
   self.call(0x10053820,window,struct.pack('<2I',frame,0))
   return {'events':self.events,'bodyArgs':self.body_args,'audio':self.audio_calls,'codeOffset':self.read(frame+0xc,'I')[0]-code}

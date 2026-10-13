@@ -261,8 +261,8 @@ a buffer source at
 `volume/32767 · digital/127`. That volume and pan law is the host's mapping
 of Galaxy's units, not a measured mixer.
 
-What reaches Galaxy: ambient sounds (Update's scan), and script PlaySound
-through its original chain. `XLevel->Engine->Audio` is linked before the map's
+What reaches Galaxy: ambient sounds (Update's scan), script PlaySound
+through its original chain, and interface sounds (Window.PlaySound, item 4). `XLevel->Engine->Audio` is linked before the map's
 startup and Login (script-doors.mjs `level.engine.audio`):
 
 1. `execPlaySound` (`0x103e1f60`, script-sound.mjs) for an emitter whose
@@ -285,7 +285,13 @@ startup and Login (script-doors.mjs `level.engine.audio`):
    or 1600 when it compares equal to 0.0 or unordered. Only a PlayerPawn whose
    Player is a UViewport, with Audio set, plays; an Actor with bDeleteMe goes as
    None. Then Galaxy's PlaySound (vtable +0x74).
-4. `execStopSound` (`0x103e27d0`, native 265) reads Id and calls Audio's
+4. `Window.PlaySound` (Extension native 1473, [script-window-sound](script-window-sound.md)):
+   menu, HUD and inventory interface sounds. The body calls Audio's PlaySound
+   itself (`None, 0, Sound, pawn.Location + XAxis, Volume * 100/99, 100,
+   Pitch`), with no ClientHearSound and no actor, so a channel takes a counter
+   id and Update pans it from that position. Wired 2026-10-14
+   (validate-window-sound-play, validate-window-sound-browser).
+5. `execStopSound` (`0x103e27d0`, native 265) reads Id and calls Audio's
    StopSoundId (+0x78) when Audio is set. Conversation speech stops are
    consumed by the speech transport first.
 
