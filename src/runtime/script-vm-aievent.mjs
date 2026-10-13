@@ -28,6 +28,8 @@ import {nameId, nameSpelling} from './script-name-ids.mjs';
 import {zeroValue} from './script-values.mjs';
 import {actorInStasis} from './actor-tick.mjs';
 import {execAICanSee} from './script-pawn-perception.mjs';
+import {functionSignature} from './script-vm-lower.mjs';
+import {frameLayout} from './script-frame-locals.mjs';
 
 const view = new DataView(new ArrayBuffer(8));
 const bitsOf = value => { view.setFloat32(0, value, true); return view.getUint32(0, true); };
@@ -51,11 +53,7 @@ export class AiEventHost {
     this.kinds = new WeakMap();
     this.paramKeys = null;
   }
-  attach(exports) {
-    this.x = exports;
-    // AI_EVENTS_CHECK=1: AICanSee also runs where the pre-gate says it returns 0 (aievent.rs surely_unseen) and must return 0.
-    if (typeof process !== 'undefined' && process.env?.AI_EVENTS_CHECK === '1') this.vm.arena.view.setUint32(exports.ai_check_ptr(), 1, true);
-  }
+  attach(exports) { this.x = exports; }
   nid(name) {
     const text = typeof name === 'string' ? name : String(name ?? '');
     const id = nameId(text);
@@ -64,12 +62,20 @@ export class AiEventHost {
     return id;
   }
   spelling(id) { return id === 0 ? 'None' : this.spellings.get(id) ?? nameSpelling(id); }
-  /** LevelInfo.InitEventManager (0x10384a90): a manager for `levelInfo` unless it already has one. */
+  /** LevelInfo.InitEventManager (0x10384a90) in the level's PreBeginPlay: a new, empty manager. The original makes it for a LevelInfo
+   * whose EventManager is null, and LoadMap gives every level a new LevelInfo; Play's Player start re-runs the startup on the same
+   * LevelInfo object, so the previous generation's manager (its senders and receivers name released actors) is dropped here. */
   init(levelInfo) {
-    if (this.active && this.levelInfo === levelInfo) return;
     if (!this.pool) {
       this.pool = this.vm.arena.alloc(this.x.ai_pool_size());
       this.x.ai_attach(this.pool);
+    }
+    if (!this.scores) {
+      // dispatch.rs SCORES = [table, slot count]: the score callbacks' cache, 256 slots of 48 bytes
+      this.scores = this.vm.arena.alloc(256 * 48);
+      const view = this.vm.arena.view, at = this.x.vm_scores_ptr();
+      view.setUint32(at, this.scores, true);
+      view.setUint32(at + 4, 256, true);
     }
     this.x.ai_reset();
     this.levelInfo = levelInfo;
@@ -94,7 +100,14 @@ export class AiEventHost {
   clear(sender, event) { this.x.ai_clear(handleOf(sender), this.nid(event)); }
   destroyActor(actor) { this.x.ai_destroy_actor(handleOf(actor)); }
   /** UEventManager::Tick. */
-  tick() { return this.guarded(() => this.x.ai_tick()); }
+  tick() {
+    // AICanSee runs in Rust once the perception natives' field table is built (script-vm-perception.mjs ready(705)); until then, here.
+    const view = this.vm.arena.view;
+    view.setUint32(this.x.ai_direct_ptr(), this.vm.perception.ready(705) ? 1 : 0, true);
+    // the score callbacks run in Rust (dispatch.rs call_score) while processEvent and its parts are the runtime's own
+    view.setUint32(this.x.vm_scores_ptr() + 8, this.vm.events.allowed({runtimeEvents: true}) & 1, true);
+    return this.guarded(() => this.x.ai_tick());
+  }
 
   kind(actor) {
     const cls = this.runtime.instance(actor).cls;
@@ -134,16 +147,6 @@ export class AiEventHost {
         const memory = host.vm.arena.view, p = read(actorOf(a), 'Location'), q = read(actorOf(b), 'Location');
         for (let i = 0; i < 3; i++) { memory.setFloat32(out + 4 * i, p[i], true); memory.setFloat32(out + 12 + 4 * i, q[i], true); }
       },
-      js_ai_view: (pawn, other, out) => {
-        const memory = host.vm.arena.view, viewer = actorOf(pawn), target = actorOf(other);
-        const v = read(viewer, 'Location'), o = read(target, 'Location');
-        for (let i = 0; i < 3; i++) { memory.setFloat32(out + 4 * i, v[i], true); memory.setFloat32(out + 20 + 4 * i, o[i], true); }
-        memory.setFloat32(out + 12, read(viewer, 'BaseEyeHeight'), true);
-        memory.setFloat32(out + 16, read(viewer, 'MinAngularSize'), true);
-        memory.setFloat32(out + 32, read(target, 'CollisionRadius'), true);
-        memory.setFloat32(out + 36, read(target, 'CollisionHeight'), true);
-        memory.setUint32(out + 40, read(target, 'bDetectable') ? 1 : 0, true);
-      },
       js_ai_owner: handle => handleOf(read(actorOf(handle), 'Owner')),
       js_ai_time: handle => runtime.levelFor(actorOf(handle)).timeSeconds,
       js_ai_in_stasis: handle => {
@@ -167,8 +170,39 @@ export class AiEventHost {
       },
       js_ai_callback: (handle, callback, event, state) => host.callback(actorOf(handle), callback, event, state),
       js_ai_score: (receiver, sender, callback, score) => host.score(actorOf(receiver), actorOf(sender), callback, score),
-      js_ai_warn: code => { if (code === 3) throw new Error('AICanSee pre-gate: a call certain to return 0 returned a value'); },
+      js_score_resolve: (handle, name, slot) => host.resolveScore(handle, name, slot),
+      js_ai_warn: () => {},
     };
+  }
+  /** js_score_resolve (dispatch.rs call_score): the SCORES slot at `slot` for `handle`'s function `name`: kind (1 JavaScript, 2 no call,
+   * 3 a Rust run), the lowering's code and frame size, the three parameters' offsets + 1 and the run template. The decision is
+   * processEvent's: a function with a body, not native or singular, `float Name(Object, Object, float)`, lowered. */
+  resolveScore(handle, nameId, slot) {
+    const K_JS = 1, K_NOCALL = 2, K_RUN = 3, view = this.vm.arena.view;
+    const decision = this.decideScore(identityOfHandle(handle), this.spelling(nameId)) ?? {kind: K_JS};
+    view.setUint32(slot + 16, decision.kind, true);
+    view.setUint32(slot + 20, decision.code ?? 0, true);
+    view.setUint32(slot + 24, decision.size ?? 0, true);
+    for (let i = 0; i < 3; i++) view.setUint32(slot + 28 + 4 * i, decision.offsets?.[i] ?? 0, true);
+    view.setUint32(slot + 40, decision.template ?? 0, true);
+    void K_NOCALL; void K_RUN;
+  }
+  decideScore(receiver, name) {
+    const vm = this.vm, runtime = this.runtime, loader = runtime.classLoader, events = vm.events;
+    if (receiver === null || !loader) return null;
+    const instance = runtime.instance(receiver);
+    if (!instance?.deleteMe || !events.deleteMeCell(instance.deleteMe)) return null;
+    let record = null;
+    try { record = runtime.lookup(receiver, name); } catch { return null; }
+    const fn = record?.function;
+    if (!fn) return null;
+    if ((fn.script.nativeIndex & 0xffff) !== 0) return {kind: 2};
+    if (fn.script.functionFlags & 0x420 || !fn.result || fn.parameters.length !== 3) return null;
+    const signature = functionSignature(fn, loader);
+    if (!signature || signature.rkind !== 3 || signature.params.map(p => p.kind).join() !== 'object,object,float') return null;
+    const layout = frameLayout(fn, loader), lowered = layout && vm.loweringFor(fn.compiled, layout, runtime.services, receiver);
+    if (!lowered) return null;
+    return {kind: 3, code: lowered.code, size: layout.size, offsets: signature.params.map(p => p.offset + 1), template: events.template(fn, lowered, layout)};
   }
   /** AIEvent (0x10384980): the receiver's callback function with (event, state, XAIParams), when it has one. */
   callback(actor, callback, event, state) {

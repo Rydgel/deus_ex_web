@@ -88,6 +88,14 @@ pub extern "C" fn vm_serial_ptr() -> *mut u32 {
     addr_of_mut!(SERIAL)
 }
 
+/// SCORES = [table, slot count (a power of two), enabled] of the AI event manager's score-callback cache (call_score). The host sets
+/// `enabled` per manager tick, when processEvent, executeScript, eventLevelGate and lookup are the runtime's own (EventHost.allowed).
+static mut SCORES: [u32; 3] = [0; 3];
+#[no_mangle]
+pub extern "C" fn vm_scores_ptr() -> *mut u32 {
+    addr_of_mut!(SCORES) as *mut u32
+}
+
 #[link(wasm_import_module = "env")]
 extern "C" {
     /// The runtime's eventGate (1 pass, 0 processEvent returns false, -1
@@ -96,6 +104,92 @@ extern "C" {
     /// Fill the slot at `slot` (kind, code, size, parameter, template) for
     /// `handle`'s event `which`; under verify, compare a filled slot first.
     fn js_event_resolve(handle: u32, which: u32, slot: u32);
+    /// Fill the SCORES slot at `slot` (kind, code, size, three parameter offsets + 1, template) for `handle`'s function `name`.
+    fn js_score_resolve(handle: u32, name: u32, slot: u32);
+}
+
+/// processEvent's gate (see the header) for a caller outside the actor tick: 1 pass, 0 no call, -1 JavaScript.
+pub(crate) fn event_gate(handle: u32) -> i32 {
+    if unsafe { (*addr_of!(SCORES))[2] } == 0 {
+        return -1;
+    }
+    unsafe { js_event_gate(handle) }
+}
+
+/// A script function `float Name(Object receiver, Object other, float value)` run on `receiver` from Rust (the AI event manager's score
+/// callbacks, aievent.rs), as processEvent would run it after `event_gate` passed: pendingKill from the image, the function from a cache
+/// keyed by (class row, state row, name, epoch) that `js_score_resolve` fills, a zeroed frame with the three parameters, the body as a
+/// callee run, RESULT. None when the host must do it (the JavaScript path); Some(float32 bits). A native function or a deleted
+/// receiver is processEvent returning false: 0.
+pub(crate) fn call_score(receiver: u32, name: u32, other: u32, value: u32) -> Option<u32> {
+    let e = events();
+    let t = unsafe { *addr_of!(SCORES) };
+    if t[2] == 0 || t[0] == 0 {
+        return None;
+    }
+    match image_deleted(receiver) {
+        Some(true) => return Some(0),
+        Some(false) => {}
+        None => return None,
+    }
+    let entry = state_entry(receiver);
+    if entry == 0 {
+        return None;
+    }
+    let state = load32(entry);
+    let mut row = class_entry(receiver);
+    if row <= RELEASED {
+        row = unsafe { js_class_row(receiver) };
+        if row <= RELEASED {
+            return None;
+        }
+    }
+    let (slot, hit) = find(t[0], t[1], SLOT, mix(row ^ mix(state ^ mix(name))), &[row, state, name, e[2]]);
+    if e[4] != 0 || !hit {
+        unsafe { js_score_resolve(receiver, name, slot) };
+        store32(slot, row);
+        store32(slot.wrapping_add(4), state);
+        store32(slot.wrapping_add(8), name);
+        store32(slot.wrapping_add(12), events()[2]);
+    }
+    match load32(slot.wrapping_add(16)) {
+        K_NOCALL => return Some(0),
+        K_RUN => {}
+        _ => return None,
+    }
+    let saved = frames_save();
+    let id = saved[3];
+    if id >= MAX_RUNS {
+        return None;
+    }
+    let (code, size, o0, o1, o2, template) = (
+        load32(slot.wrapping_add(20)),
+        load32(slot.wrapping_add(24)),
+        load32(slot.wrapping_add(28)),
+        load32(slot.wrapping_add(32)),
+        load32(slot.wrapping_add(36)),
+        load32(slot.wrapping_add(40)),
+    );
+    let locals = if size != 0 { vm_frame_push(size) } else { 0 };
+    store32(locals.wrapping_add(o0 - 1), receiver);
+    store32(locals.wrapping_add(o1 - 1), other);
+    store32(locals.wrapping_add(o2 - 1), value);
+    unsafe {
+        let serial = SERIAL.wrapping_add(1);
+        SERIAL = serial;
+        (*addr_of_mut!(RUNS))[id as usize] = [template, receiver, locals, serial];
+        (*addr_of_mut!(FRAMES))[3] = id + 1;
+    }
+    let outer_budget = unsafe { BUDGET };
+    unsafe { BUDGET = HANG_BUDGET };
+    let code = code as usize as *const u32;
+    let mut run = Run { code, pc: code, frame: id, locals, self_handle: receiver, self_info: 0, self_bind: 0, self_fresh: false, callee: true };
+    run.statements(0);
+    unsafe { BUDGET = outer_budget };
+    frames_restore(saved);
+    // callFunction's copyValue(fn.result, value): undefined is the zero, a float is stored float32.
+    let result = crate::interp::last_result();
+    Some(if result.to_bits() == crate::interp::UNDEF_F64_BITS { 0 } else { (result as f32).to_bits() })
 }
 
 /// The enable word's bits (script-vm-events.mjs): events dispatch in Rust;

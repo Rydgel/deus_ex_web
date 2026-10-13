@@ -260,6 +260,30 @@ Inside the JS runtime these surfaces are the `services.atan` and
 production falls back to host `Math.atan`/`atan2` (a documented last-ULP
 residual, not part of the bit-exact corpus).
 
+## AICanSee's x87 placement, found live (2026-10-13)
+
+The perception pilot ([visual acceptance](visual-acceptance.md)) found a 2-ulp float32 difference in an NPC's `CycleCumulative` at tick 4,
+which the hand-written scenes could not show: they use round coordinates, where a rounding in the wrong place changes nothing. The
+worker (0x103c6ab0) keeps these values at their own precision, which the port had rounded:
+
+* the deltas other - eye are extended; only their float32 stores feed the rotation and the line of sight; the squared distance sums the
+  extended squares and is stored as a **double** (`fstp qword [ebp-0x44]`), then clamped to at least 1.0;
+* `cr^2` stays extended and `ch^2` is stored as a double (`fstp qword [ebp-0x7c]`); the ratio `(cr^2 + ch^2) / distSq` is **not**
+  stored: the MinAngularSize compare, the 0.00030467929 cylinder gate and `acc = f32(visibility * ratio * 64)` use it extended;
+* `appAtan` leaves its `fpatan` result unrounded in ST0 and the extent is `f32(atan * 114.59...)`: the extended value is multiplied;
+* the angular trapezoid (0x103c7360) wraps the angle in extended precision (no float32 store per step), keeps the plateau extended for
+  the edge and as a float32 store for the compare and the ramp, and returns the ramp value unstored: `acc` multiplies it extended.
+
+`scripts/validate-pawn-perception.mjs` now carries 300 seeded random AICanSee scenes at live geometry (FOVs 30 to 160, off-axis and
+near targets, ramps and the pitch floor); 756 scenes (700 random once) and the 14 mutations are bit-exact against the Unicorn run of
+the original worker. Two oracle faults were found on the way: the probe's `appAtan` interception wrote ST0 without pushing the x87
+stack (so every extent read 0 and no off-plateau case was ever compared), and it returned a double; it now pushes the hardware's
+unrounded result (`tools/atan-double-probe.c` prints the `fstpt` image). The port takes that value from a `services.atanExt` seam and
+falls back to the host's double `Math.atan` in production (a flip of the float32 `extent` needs an atan within 1e-16 of a rounding
+boundary: about 1 in 10^9 calls). The Rust body (percep.rs) is the same arithmetic; `validate-perception-kernel.mjs` compares the
+two on 120000 random worlds. On the Underworld pilot (400 ticks, a visible player allied to mj12) every actor is now equal tick for
+tick; before, three NPCs differed at tick 4.
+
 ## Command-capture isolation
 
 The probe scripts four independent result streams so one subsystem's stub can

@@ -540,18 +540,23 @@ export function execPickAnyTarget(call, services) {
   return pickTarget(call, services, true);
 }
 
-/** The angular trapezoid (0x103c7360): wrap delta to +/-180, plateau 1.0 for
- * |delta| <= (halfwidth-extent)/2, linear to 0 at (halfwidth+extent)/2. */
+/** The angular trapezoid (0x103c7360), returned as the x87 value it leaves in ST0 (not stored): the delta is wrapped to +/-180 in
+ * extended precision (fadd/fsub 360, no store between), made absolute, and the plateau (halfwidth - extent) * 0.5 is kept both in
+ * extended (the edge, plateau + extent) and as the float32 stored copy the plateau compare and the ramp use. Inside the plateau
+ * 1.0, beyond the edge 0.0, between 1 - (|delta| - plateau) / extent. */
 function trapezoid(delta, halfwidth, extent) {
-  let d = f32(delta);
-  while (d <= -180) d = f32(d + 360);
-  while (d > 180) d = f32(d - 360);
-  d = Math.abs(d);
-  const plateau = st(x87mul(sub(ld(halfwidth), ld(extent)), D05));
-  const edge = st(x87add(ld(plateau), ld(extent)));
-  if (d <= plateau) return 1;
-  if (d > edge) return 0;
-  return st(sub(D1, x87div(sub(ld(d), ld(plateau)), ld(extent))));
+  let d = ld(delta);
+  const low = ld(-180), high = ld(180), period = ld(360);
+  if (d.nan !== undefined) throw new Error('AICanSee trapezoid with an unordered angle never ends in the original');
+  while (leU(d, low)) d = x87add(d, period);
+  while (gtU(d, high)) d = sub(d, period);
+  if (ltU(d, ZERO)) d = x87neg(d);
+  const plateau = x87mul(sub(ld(halfwidth), ld(extent)), D05);
+  const stored = ld(st(plateau));
+  const edge = x87add(plateau, ld(extent));
+  if (!leU(d, edge)) return ZERO;
+  if (leU(d, stored)) return ld(1);
+  return sub(D1, x87div(sub(d, stored), ld(extent)));
 }
 
 /** appAtan is a cdecl `double appAtan(double)` (Core export, FPATAN on real
@@ -559,6 +564,9 @@ function trapezoid(delta, halfwidth, extent) {
  * validator inject the CrossOver-measured oracle; production falls back to the
  * host Math.atan (a documented last-ULP residual, docs/script-pawn-perception.md). */
 function appAtan(services, x87double) {
+  // Core appAtan is `fld qword; fld1; fpatan; ret`: its result stays in ST0 at 80 bits. A host that has the hardware's unrounded
+  // value gives it as services.atanExt; the default is the host's double atan.
+  if (typeof services.atanExt === 'function') return services.atanExt(x87toDouble(x87double));
   const atan = typeof services.atan === 'function' ? services.atan : Math.atan;
   return ld64(atan(x87toDouble(x87double)));
 }
@@ -583,29 +591,35 @@ export function execAICanSee(call, services) {
   const vLoc = rd(services, viewer, 'Location');
   const oLoc = rd(services, other, 'Location');
   const baseEye = rd(services, viewer, 'BaseEyeHeight');
+  // eye = this.Location with z + BaseEyeHeight stored float32 (0x103c6b1f..28). The deltas other - eye stay extended (fsub dword
+  // from each coordinate); their float32 stores (fst/fstp [ebp-0x28..0x20]) are the vector the rotation and the LOS traces use,
+  // while the squared distance sums the extended squares and is stored as a DOUBLE (fstp qword [ebp-0x44]).
   const eye = [vLoc[0], vLoc[1], f32(vLoc[2] + baseEye)];
-  // distSq = max(|other.loc - eye|^2, 1); eye = this.loc + BaseEyeHeight.
-  const delta = subVec(oLoc, eye);
-  let distSq = st(magsq3(delta));
-  if (!(distSq >= 1)) distSq = 1;
+  const deltaX = [sub(ld(oLoc[0]), ld(eye[0])), sub(ld(oLoc[1]), ld(eye[1])), sub(ld(oLoc[2]), ld(eye[2]))];
+  const delta = deltaX.map(st);
+  let distSq = x87storeDouble(x87add(x87add(x87mul(deltaX[0], deltaX[0]), x87mul(deltaX[1], deltaX[1])), x87mul(deltaX[2], deltaX[2])));
+  if (ltU(distSq, D1)) distSq = D1;                          // fcomp qword [1.0]: below (or unordered) -> exactly 1.0
 
+  // (cr^2 + ch^2) / distSq: cr^2 stays extended, ch^2 is stored as a double (fstp qword [ebp-0x7c]); the ratio is not stored.
   const cr = rd(services, other, 'CollisionRadius'), ch = rd(services, other, 'CollisionHeight');
   const cr2 = x87mul(ld(cr), ld(cr));
-  const ch2 = x87mul(ld(ch), ld(ch));
-  const ratio = st(x87div(x87add(cr2, ch2), ld(distSq)));   // angular size
-  if (!(ratio > Number(rd(services, viewer, 'MinAngularSize')))) return 0;
-  // bCheckCylinder is forced off unless the target fills the view.
-  const cyl = bCheckCylinder && (ratio >= 0.0003046792916483);
+  const ch2 = x87storeDouble(x87mul(ld(ch), ld(ch)));
+  const ratio = x87div(x87add(ch2, cr2), distSq);
+  if (!gtU(ratio, ld(rd(services, viewer, 'MinAngularSize')))) return 0;
+  // bCheckCylinder is forced off unless the target fills the view (ratio vs the double 0.0003046792916483).
+  const cyl = bCheckCylinder && !ltU(ratio, ld64(0.0003046792916483));
 
-  // acc = visibility * angularSize * 64
-  let acc = st(x87mul(x87mul(ld(visibility), ld(ratio)), ld(64)));
+  // acc = f32(visibility * ratio * 64)
+  let acc = st(x87mul(x87mul(ld(visibility), ratio), ld64(64)));
 
   if (bCheckDir && acc > 0) {
     const aspect = Number(rd(services, viewer, 'AspectRatio'));
     const halfFovV = aspect > 0
       ? st(x87div(ld(rd(services, viewer, 'AIHorizontalFOV')), ld(aspect))) : 0;
-    const hExt = st(x87mul(appAtan(services, appSqrt(x87div(cr2, ld(distSq)))), ld64(114.59155902616465)));
-    const vExt = st(x87mul(appAtan(services, appSqrt(x87div(ch2, ld(distSq)))), ld64(114.59155902616465)));
+    // appAtan(appSqrt(extent^2 / distSq)) * 114.59...: appSqrt stores its operand and its result as doubles; appAtan's extended
+    // result is multiplied unrounded and the product is stored float32.
+    const hExt = st(x87mul(appAtan(services, appSqrt(x87div(cr2, distSq))), ld64(114.59155902616465)));
+    const vExt = st(x87mul(appAtan(services, appSqrt(x87div(ch2, distSq))), ld64(114.59155902616465)));
     // viewRot = (player?ViewRotation:Rotation) + AIAddViewRotation
     const isPlayer = services.isA(viewer, 'PlayerPawn');
     const base = isPlayer ? rd(services, viewer, 'ViewRotation') : rd(services, viewer, 'Rotation');
@@ -621,11 +635,11 @@ export function execAICanSee(call, services) {
     const yawDeg = st(x87mul(ld(rot[1] * 360), ld(1.52587890625e-05)));
     const pitchDeg = st(x87mul(ld(rot[0] * 360), ld(1.52587890625e-05)));
     const yawTrap = trapezoid(yawDeg, Number(rd(services, viewer, 'AIHorizontalFOV')), hExt);
+    acc = st(x87mul(yawTrap, ld(acc)));
     let pitchTrap = trapezoid(pitchDeg, halfFovV, vExt);
-    // Near-target pitch floor (0x103c6e38): distSq<22500 keeps at least 0.75.
-    if (distSq < 22500 && pitchTrap < 0.75) pitchTrap = 0.75;
-    acc = st(x87mul(ld(acc), ld(yawTrap)));
-    acc = st(x87mul(ld(acc), ld(pitchTrap)));
+    // Near-target pitch floor (0x103c6e38): distSq < 22500 keeps at least 0.75 (the double compare, the float32 constant stored).
+    if (ltU(distSq, ld64(22500)) && ltU(pitchTrap, ld64(0.75))) pitchTrap = ld(0.75);
+    acc = st(x87mul(pitchTrap, ld(acc)));
   }
 
   if (bCheckVisibility && acc > 0) {

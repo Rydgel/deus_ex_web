@@ -527,6 +527,11 @@ pub extern "C" fn vm_check_values_ptr() -> *mut f64 {
     addr_of_mut!(CHECK_VALUES) as *mut f64
 }
 
+/// RESULT: the value the last Return left (a body ended by a void Return holds UNDEF_F64_BITS).
+#[inline(always)]
+pub(crate) fn last_result() -> f64 {
+    unsafe { RESULT }
+}
 #[inline(always)]
 pub(crate) fn frames_save() -> [u32; 4] {
     unsafe { *addr_of!(FRAMES) }
@@ -572,7 +577,7 @@ pub(crate) fn store8(addr: u32, value: u8) {
 }
 /// Math.fround.
 #[inline(always)]
-fn fround(v: f64) -> f64 {
+pub(crate) fn fround(v: f64) -> f64 {
     v as f32 as f64
 }
 #[inline(always)]
@@ -591,7 +596,7 @@ pub(crate) fn float_bits(v: f64) -> u32 {
 /// A POINTER cell's word for an object value: copyPointer's `value ?? null`
 /// (UNDEFINED is None), then the handle, 0 for None.
 #[inline(always)]
-fn pointer_word(handle: u32) -> u32 {
+pub(crate) fn pointer_word(handle: u32) -> u32 {
     if handle == UNDEFINED {
         0
     } else {
