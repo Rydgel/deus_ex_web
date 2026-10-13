@@ -238,6 +238,9 @@ export function reachMask(pawn, services) {
  * collisionHeight(int), +0x14 reachFlags, +0x18 pruned.
  */
 export function directReach(pawn, source, target, services) {
+  return traced(services, 'directreach', { source: source?.name, target: target?.name }, () => directReachBody(pawn, source, target, services));
+}
+function directReachBody(pawn, source, target, services) {
   const table = services.reachSpecTable(pawn);              // pawn->level +0x8c
   const cri = x87ftol(ld(rd(services, pawn, 'CollisionRadius')));  // __ftol
   const chi = x87ftol(ld(rd(services, pawn, 'CollisionHeight')));
@@ -940,6 +943,9 @@ export function physicsReach(pawn, point, radius, target, services) {
  * services.farMoveActor(actor,dest,test,noCheck).
  */
 export function pointWorker(pawn, point, arg14, services) {
+  return traced(services, 'pointworker', { pawn: pawn.name, point: [...point], arg14 }, () => pointWorkerBody(pawn, point, arg14, services));
+}
+function pointWorkerBody(pawn, point, arg14, services) {
   const loc = services.location(pawn);
   // GIsEditor==0 gate + 2D distance limit (0x103c0d65): dx^2+dy^2 <= 1e6, z
   // ignored.  fld m32/fsub m32 keep the deltas in 80-bit for the compare.
@@ -1371,6 +1377,14 @@ export function execAiDirectionReachable(receiver, focus, yaw, pitch, minDist, m
 
 const wr = (services, obj, name, v) => services.write(obj, name, v);
 
+/** Validation (nav-trace.mjs): an inner worker's entry and return, when a probe traces this pawn. */
+const traced = (services, fn, input, run) => {
+  const done = services.navTrace?.(fn, input);
+  const result = run();
+  done?.(result);
+  return result;
+};
+
 /** The native's 32-slot { item, key, count } candidate list. */
 const navList = () => ({ items: new Array(32).fill(null), keys: new Int32Array(32), count: 0 });
 
@@ -1495,6 +1509,9 @@ function navScoutA(thisList, pawn, targetLoc, otherList, bClearPaths, state, ser
  * bEndPoint (+0x448|2) with bestPathWeight (+0x428) = keys[0].
  */
 function navScoutB(list, pawn, outFlag, services) {
+  return traced(services, 'scoutb', { head: list.items[0]?.name, count: list.count }, () => navScoutBBody(list, pawn, outFlag, services));
+}
+function navScoutBBody(list, pawn, outFlag, services) {
   const model = services.model(services.level(pawn));
   const ploc = services.location(pawn);
   const eye = [ploc[0], ploc[1], st(x87add(ld(ploc[2]), ld(rd(services, pawn, 'BaseEyeHeight'))))];
@@ -1528,6 +1545,9 @@ function navScoutB(list, pawn, outFlag, services) {
  * the pawn's original location first.
  */
 function navScoutC(list, pawn, targetLoc, services) {
+  return traced(services, 'scoutc', { head: list.items[0]?.name, count: list.count }, () => navScoutCBody(list, pawn, targetLoc, services));
+}
+function navScoutCBody(list, pawn, targetLoc, services) {
   const origLoc = services.location(pawn).map(f32);         // [ebp-0x28..]
   const nav = list.items[0];
   const model = services.model(services.level(pawn));
@@ -1595,9 +1615,12 @@ function navScoutD(list, pawn, services) {
  * w = cand.visitedWeight + ftol(sqrt(keys[i])) satisfy w < routeW and
  * |cand.z - pawn.z| < 120 pass unconditionally when the direction dot
  * (cand.loc-pawn.loc)·(found.loc-pawn.loc) < 0; otherwise they need
- * w < max(ftol(routeW*0.85), routeW-150).  Of the passing set, the LAST
- * candidate that FastLineChecks to the pawn eye and passes pointWorker
- * becomes *foundPtr.
+ * w < max(ftol(routeW*0.85), routeW-150).  The passing set is sorted by w;
+ * the FIRST candidate that FastLineChecks to the pawn eye and passes
+ * pointWorker becomes *foundPtr and the function returns
+ * (0x103db2f5-0x103db304: the success path stores it and falls into the
+ * epilogue; a failure goes to 0x103db317, the next candidate). The earlier
+ * translation kept the last one (fpt-scoute-first-passing).
  */
 function navScoutE(list, pawn, foundPtr, services) {
   const model = services.model(services.level(pawn));
@@ -1631,6 +1654,7 @@ function navScoutE(list, pawn, foundPtr, services) {
     if (!services.fastLineCheck(model, cloc, eye)) continue;
     if (!pointWorker(pawn, cloc, 1, services)) continue;
     foundPtr.node = cand;                                   // *[ebp+0x10]
+    return;                                                 // 0x103db302 -> epilogue 0x103db304
   }
 }
 

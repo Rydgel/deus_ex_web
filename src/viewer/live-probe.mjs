@@ -1,4 +1,5 @@
 import { scriptGetStateName } from '../runtime/script-state-queries.mjs';
+import { createNavTrace } from '../runtime/nav-trace.mjs';
 
 /** Validation only (scripts/live-acceptance.mjs, docs/visual-acceptance.md
  * "Live scenes"): the simulation side of the live-scene comparison. It
@@ -87,6 +88,12 @@ export function liveProbe(game, args = {}) {
     const names = new Set(level.actors.filter(Boolean).map(actor => actor.name));
     out.population.missing = args.population.filter(entry => !names.has(entry.name) && !spawned.test(entry.name)).map(entry => entry.name);
   }
+  // navTrace: {pawns, first, last}: the boundary calls of those pawns' reach and path natives in those ticks
+  // (nav-trace.mjs), returned by `take` as `nav`; compared with tools/dx-live-win.c `call` on the original.
+  if (args.navTrace) {
+    runtime.navTrace ??= createNavTrace();
+    Object.assign(runtime.navTrace, { pawns: new Set(args.navTrace.pawns), first: args.navTrace.first, last: args.navTrace.last });
+  }
   if (args.replay) {
     const { watch = [], ticks, hold = true, warm = 3 } = args.replay;
     const actors = watch.map(({ names, props }) => ({ props, items: names.map(name => [name, byName(name)]) }));
@@ -118,6 +125,7 @@ export function liveProbe(game, args = {}) {
         if (this.warm > 0) { this.warm--; return false; }
         if (this.index >= this.ticks.length) return this.hold ? false : dt;
         const tick = this.ticks[this.index];
+        if (runtime.navTrace) runtime.navTrace.tick = this.index + 1;
         game.random.seed(parseInt(tick.rngIn, 16) >>> 0);
         this.current = { n: this.index + 1, delta: tick.delta, rngIn: hex(game.random.state), clockIn: level.timeSeconds, tsIn: runtime.readNamed(info, 'TimeSeconds') };
         return Math.fround(tick.delta);
@@ -157,6 +165,7 @@ export function liveProbe(game, args = {}) {
   if (args.take && replay) {
     out.rows = replay.rows.slice(replay.cursor); replay.cursor = replay.rows.length;
     out.index = replay.index;
+    if (runtime.navTrace) out.nav = runtime.navTrace.events.splice(0);
   }
   if (args.status && replay) out.status = { index: replay.index, of: replay.ticks.length };
   if (args.stop) game.liveReplay = null;
