@@ -89,8 +89,8 @@ function hyprlandWindow() {
     const at = `address:${window.address}`;
     for (const dispatch of [`hl.dsp.window.float({ action = "set", window = "${at}" })`,
       `hl.dsp.window.resize({ x = 1280, y = 720, relative = false, window = "${at}" })`, `hl.dsp.window.center({ window = "${at}" })`])
-      execFileSync('hyprctl', ['dispatch', dispatch]);
-    execFileSync('sleep', ['2']);
+      { execFileSync('hyprctl', ['dispatch', dispatch]); execFileSync('sleep', ['1.5']); } // each takes effect before the next (a resize sent right after the float was ignored)
+    execFileSync('sleep', ['1']);
   }
   throw new Error(`the deusex.exe window does not stay floating at 1280x720: ${JSON.stringify(JSON.parse(execFileSync('hyprctl', ['clients', '-j'], {encoding: 'utf8'})).filter(c => /deus/i.test(c.class)).map(c => ({floating: c.floating, size: c.size, at: c.at, mapped: c.mapped})))}`);
 }
