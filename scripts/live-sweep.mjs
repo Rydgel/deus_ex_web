@@ -168,11 +168,12 @@ function report() {
   const data = load();
   const maps = Object.values(data.maps), ok = maps.filter(m => m.status === 'ok');
   const out = [];
-  out.push('| map | pawns and others watched | equal | ticks | diverging (first tick, class: field) |', '| --- | ---: | ---: | ---: | --- |');
+  out.push('| map | watched | equal | ticks | absent in Play | diverging (first tick, class: field) |', '| --- | ---: | ---: | ---: | --- | --- |');
   for (const m of maps.sort((a, b) => a.map.localeCompare(b.map))) {
-    if (m.status !== 'ok') { out.push(`| ${m.map} | | | | **${m.status}**: ${String(m.reason ?? '').replace(/\|/g, '/')} |`); continue; }
-    const list = m.diverging.slice(0, 4).map(d => `${d.actor} ${d.firstTick} ${d.class}: ${d.field}`).join('; ');
-    out.push(`| ${m.map} | ${m.watched} | ${m.equal} | ${m.ticks} | ${m.diverging.length ? `${m.diverging.length}: ${list}${m.diverging.length > 4 ? '; ...' : ''}` : 'none'} |`);
+    if (m.status !== 'ok') { out.push(`| ${m.map} | | | | | **${m.status}**: ${String(m.reason ?? '').replace(/\|/g, '/')} |`); continue; }
+    const list = m.diverging.slice(0, 3).map(d => `${d.actor} ${d.firstTick} ${d.class}: ${d.field}`).join('; ');
+    const absent = (m.notInPlay ?? []).length ? m.notInPlay.slice(0, 3).join(' ') + (m.notInPlay.length > 3 ? ` +${m.notInPlay.length - 3}` : '') : '';
+    out.push(`| ${m.map} | ${m.watched} | ${m.equal} | ${m.ticks} | ${absent} | ${m.diverging.length ? `${m.diverging.length}: ${list}${m.diverging.length > 3 ? '; ...' : ''}` : 'none'} |`);
   }
   const all = ok.flatMap(m => m.diverging.map(d => ({...d, map: m.map})));
   const total = ok.reduce((n, m) => n + m.watched, 0), equal = ok.reduce((n, m) => n + m.equal, 0);
@@ -193,6 +194,16 @@ function report() {
   show('By state and field', all, d => `${d.state || '?'}: ${d.field}`, ex);
   console.log(out.join('\n'));
   const ranked = {byField: groups(all, d => d.field), byClass: groups(all, d => d.class), byState: groups(all, d => d.state || '?'), byClassField: groups(all, d => `${d.class}: ${d.field}`), byStateField: groups(all, d => `${d.state || '?'}: ${d.field}`)};
+  // --json <file>: the per-map results and the automatic groups (a compact copy of the sweep, for the docs)
+  const jsonOut = option('json', null);
+  if (jsonOut) {
+    const trim = d => ({actor: d.actor, class: d.class, firstTick: d.firstTick, field: d.field, original: d.original, play: d.play, state: d.state ?? null, order: d.order ?? null});
+    writeFileSync(path.resolve(root, jsonOut), JSON.stringify({ticks: data.ticks, maxSeconds: data.maxSeconds,
+      maps: Object.fromEntries(Object.values(data.maps).sort((a, b) => a.map.localeCompare(b.map)).map(m => [m.map, m.status === 'ok'
+        ? {status: m.status, watched: m.watched, equal: m.equal, ticks: m.ticks, notInPlay: m.notInPlay ?? [], originalSeconds: m.originalSeconds, rngFirstDifference: m.rngFirstDifference, diverging: m.diverging.map(trim)}
+        : {status: m.status, reason: m.reason}])),
+      groups: Object.fromEntries(Object.entries(ranked).map(([k, v]) => [k, v.map(g => ({key: g.key, actors: g.actors, maps: g.maps}))]))}, null, 1) + '\n');
+  }
   const slim = list => list.map(g => ({key: g.key, actors: g.actors, maps: g.maps, examples: g.items.slice().sort((a, b) => a.firstTick - b.firstTick).slice(0, 3).map(i => ({map: i.map, actor: i.actor, tick: i.firstTick, field: i.field, original: i.original, play: i.play}))}));
   writeFileSync(outPath.replace(/\.json$/, '-ranked.json'), JSON.stringify(Object.fromEntries(Object.entries(ranked).map(([k, v]) => [k, slim(v)])), null, 1));
 }

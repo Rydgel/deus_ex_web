@@ -743,6 +743,107 @@ that needs the player to move or act; lights and particles (the frame at tick 60
 in view (Island's start view has none close). The comparison is replay-synchronised: it cannot say that two free-running games would
 look alike, only that, given the same inputs, Play's tick computes the original's result. Everything above runs on one Wine/D3D host.
 
+### Sweep: 28 maps, 1200 ticks each (2026-10-13)
+
+How far the three pilots generalise. `scripts/live-sweep.mjs run` takes a list of maps; per map it runs Play's population probe, the original
+through `live-original.sh` (the Wine lock, one game at a time, a per-map trace `--tag`), Play's replay on that trace and `compare`, and keeps
+per actor the first differing tick, field, class and the original's state at that tick; `report` prints the table and the groups, `--json` the
+compact copy (`.work/live-acceptance/sweep-2026-10-13.json`, with the traces in `.work/live-acceptance/<map>/`: machine output derived from captures, kept out of Git). Every run is the
+map's start pose with no placement, 1200 ticks at 1/60 s (no map needed the `--max-seconds 300` cut: the original's whole run was 163 to 506 s,
+the load and any reloads included), the harness at master 441f432: delta, rand state per tick, the original's viewport size, strobe, generator,
+pawn SightCounter and timer inputs, population match. Maps: UNATCO HQ visits (01 and 03), Battery Park, Hell's Kitchen streets, the Hotel,
+Warehouse, Mole People, Airfield, NSFHQ, the MJ12 labs (05 NYC, 06 Hong Kong), VersaLife, the Canal, Market and Street of Wan Chai, Lebedev's
+ship and the dockyard, the Chateau, the Metro, the Catacombs, the Cathedral, Vandenberg (Cmd, Gas), Ocean Lab (Lab, Silo), Area 51 (Bunker,
+Entrance). **None was skipped in the end.** 11 failed the original's population match at the first attempt (4 reloads of the map, then the
+driver's exit code 3), for two reasons the driver cannot fix by reloading: the original *spawns* FlyGenerators and ProjectileGenerators at
+load by chance (each reload continues the numbering, FlyGenerator0-5, then 6-7, ...), and Play's seed-1 load holds another subset; and it holds
+actors Play does not have at all after its load (`Light1` in eight maps, `mib1` in three, `InterpolateTrigger0/3`, `WaterRing0`, `SoyFood7`,
+`MedKit9`, `TechGoggles0`). Those maps were run with `--allow-missing all`: the absent actors leave the watch list and the record (column
+"absent in Play"). A generator only the original holds draws from the stream at its tick (1 to 2 draws on tick 1 each), so the stream's draw
+count differs from tick 1 in 13 of the 19 maps with absent actors; in 4 of those 13 it is followed by many divergences (group 1), in the other
+9 (or a few) not.
+
+| map | watched | equal | ticks | absent in Play | diverging (first tick, class: field) |
+| --- | ---: | ---: | ---: | --- | --- |
+| 01_NYC_UNATCOHQ | 22 | 22 | 1200 |  | none |
+| 02_NYC_BatteryPark | 64 | 32 | 1200 | FlyGenerator0 | 32: UNATCOTroop2 13 UNATCOTroop: State; UNATCOTroop3 14 UNATCOTroop: Rot; Terrorist5 14 Terrorist: Loc; ... |
+| 02_NYC_Hotel | 13 | 13 | 1200 |  | none |
+| 02_NYC_Street | 45 | 43 | 1200 | FlyGenerator5 FlyGenerator4 FlyGenerator3 +3 | 2: Hooker0 8 Hooker1: Acc; BumMale1 54 BumMale3: Acc |
+| 02_NYC_Warehouse | 32 | 30 | 1200 | FlyGenerator0 FlyGenerator1 FlyGenerator2 +1 | 2: Doberman0 33 Doberman: Dest; Doberman1 47 Doberman: Dest |
+| 03_NYC_Airfield | 30 | 30 | 1200 | Light1 | none |
+| 03_NYC_MolePeople | 31 | 30 | 1200 | FlyGenerator0 | 1: Terrorist23 393 Terrorist: Loc |
+| 03_NYC_UNATCOHQ | 24 | 24 | 1200 | Light1 | none |
+| 04_NYC_NSFHQ | 20 | 20 | 1200 | FlyGenerator2 FlyGenerator1 FlyGenerator0 +4 | none |
+| 04_NYC_Street | 22 | 22 | 1200 | FlyGenerator4 FlyGenerator3 FlyGenerator2 +2 | none |
+| 05_NYC_UNATCOMJ12lab | 58 | 25 | 1200 | Light1 mib1 | 33: Mechanic2 14 Mechanic: Loc; MJ12Troop11 14 MJ12Troop: Loc; Greasel2 14 Greasel: Loc; ... |
+| 06_HongKong_MJ12lab | 54 | 41 | 1200 | mib1 | 13: Greasel2 14 Greasel: Loc; MIB3 15 MIB: Loc; Greasel0 17 Greasel: Loc; ... |
+| 06_HongKong_VersaLife | 25 | 25 | 1200 |  | none |
+| 06_HongKong_WanChai_Canal | 26 | 26 | 1200 |  | none |
+| 06_HongKong_WanChai_Market | 46 | 45 | 1200 |  | 1: Female8 61 Female4: Loc |
+| 06_HongKong_WanChai_Street | 24 | 24 | 1200 |  | none |
+| 09_NYC_Dockyard | 34 | 33 | 1200 | ProjectileGenerator3 ProjectileGenerator2 ProjectileGenerator1 +2 | 1: SecurityBot0 28 SecurityBot2: Dest |
+| 09_NYC_Ship | 21 | 21 | 1200 |  | none |
+| 10_Paris_Catacombs | 51 | 51 | 1200 | FlyGenerator0 InterpolateTrigger0 | none |
+| 10_Paris_Chateau | 22 | 22 | 1200 |  | none |
+| 10_Paris_Metro | 61 | 60 | 1200 | FlyGenerator0 | 1: JaimeReyes1 61 JaimeReyes: Loc |
+| 11_Paris_Cathedral | 56 | 56 | 1200 | FlyGenerator0 SoyFood7 WaterRing0 | none |
+| 12_Vandenberg_Cmd | 48 | 48 | 1200 | TechGoggles0 MedKit9 Light1 +1 | none |
+| 12_Vandenberg_Gas | 16 | 16 | 1200 | Light1 | none |
+| 14_OceanLab_Lab | 42 | 42 | 1200 |  | none |
+| 14_Oceanlab_Silo | 32 | 21 | 1200 | FlyGenerator1 FlyGenerator0 Light1 +1 | 11: ScientistMale0 15 ScientistMale: State; MJ12Commando2 16 MJ12Commando: Loc; HowardStrong0 23 HowardStrong: State; ... |
+| 15_Area51_Bunker | 44 | 42 | 1200 | InterpolateTrigger0 Light1 | 2: MJ12Troop0 811 MJ12Troop: Enemy; @player 901 Player: VRot |
+| 15_Area51_Entrance | 26 | 26 | 1200 | Light1 | none |
+
+**28 maps compared, 890 of 989 watched actors equal (90%), 99 diverging in 11 maps; 17 maps are equal for all their actors over 1200 ticks.**
+(Watched: the NPCs, the player, the generators and the timed actors of the load-time inputs.)
+
+**Ranked groups, by actors and the likely cause** (the first two are the ones to schedule; counts are actors, not ticks):
+
+1. **StartUp phases that leave the state a few ticks earlier or later, every class, first tick 13 to 70: 89 actors in 4 maps** (BatteryPark 32,
+   05_NYC_UNATCOMJ12lab 33, 06_HongKong_MJ12lab 13, 14_Oceanlab_Silo 11), 90% of all divergences. First fields State (StartUp against
+   Standing/Wandering and back), Loc (the first steps), Rot; classes Terrorist 23, MJ12Troop 9, Greasel 8, MIB 6, UNATCOTroop 5, MedicalBot 5,
+   ScientistMale 5, RepairBot 4, ... (the same family in every NPC class: a pawn's StartUp `Sleep`/first MoveTo draw). The stream's draw count
+   differs on tick 1 in all four (the original draws more: BatteryPark 201 against 199 and, in a second load, 229 against 219; the MJ12 labs 166
+   against 162 and 173 against 169; the Silo 133 against 125) and at many ticks from 13 on. **Load-dependent**: BatteryPark's old run (before the
+   harness took pawns' SightCounter and timers) was equal for its 43 pawns; seven later loads with the same harness were equal over 30 to
+   389 ticks with equal draws tick for tick (Rat0 and Rat4 swap one draw at tick 1 in two of them: harmless); two loads diverge from tick 13 and 14,
+   the sweep's and an exact-population rerun (so not the absent generator). Replays of the clean-population trace without the pawn or the timer
+   inputs are worse (23 of 64 against 31). So a per-load input the original's load draws and the harness does not copy yet. **A caution on the
+   evidence**: the seven good loads all ran with `--actor-trace` on ticks 1 to 3 (the per-actor draw attribution), the two bad ones did not; the
+   breakpoints may change which loads show it, so the cause is not yet attributed per actor. The extra tick-1 draws in the bad loads (2 and 10)
+   say which actor to look at. Not Play's tick logic as far as measured.
+2. **Wandering: the first destination differs, 5 actors in 3 maps.** Doberman0 and Doberman1 (Warehouse): `Destination` and `Focus` Z 28.4 in the
+   original, 28.3 in Play (the pawn's own Z), first Wandering tick 33 and 47; Hooker0 and BumMale1 (02_NYC_Street): Z lower in Play by 0.43 (-1140.60
+   against -1141.03) and 0.10 (-1136.10 against -1136.20), ticks 8 and 54, which makes the acceleration differ by one float ulp and, 270 ticks
+   later (some 300 ticks), `Rot` or `MoveTimer`; SecurityBot0 (Dockyard): another waypoint altogether at tick 28 (2523, 4365 against 2572, 4376). The Z cases
+   are a deterministic offset (not stream noise): the wander destination's ground height. The maps that hold them also have absent generators
+   (tick-1 draws differ), the Z values do not depend on that. Next: the Wandering destination body (`ScriptedPawn.PickDestination`/`GoToLocation`'s
+   Z) against the original's call trace of the first pick.
+3. **MissionScript.Timer's first call, 1.0 s: tick 61, 2 actors in 2 maps, both in maps with no other difference.** JaimeReyes1 (Paris Metro):
+   Play moves it from Z +20000 (out of the world) to 333 and seats it, state Idle to Sitting, `bInWorld` 0 to 1; reproduced with an exact
+   population (the clean rerun) and identical in the first sweep. Female8 (Wan Chai Market): the original ends its StartUp at tick 63 and patrols from where it stands (972, -1256, 43); Play, at tick 61,
+   moves it to (450, -973, 25) and sets it Standing instead of Patrolling. MissionScript.Timer is `if flags is null: InitStateMachine;
+   if Player != null and flags.GetBool('PlayerTraveling'): FirstFrame()` and Mission10.FirstFrame calls `Jaime.EnterWorld()` only when the flag
+   `JaimeRecruited` is set: Play runs a FirstFrame, or reads flags, that the original's directly opened map does not. The start state of the
+   flag base (PlayerTraveling, the mission flags; [mission timer](script-mission-timer.md), [training mission entry](script-training-mission-entry.md))
+   is the input to measure from the original and compare with Play's; not traced further.
+4. **Walking down a step: Terrorist23, Mole People, tick 393.** The original stays PHYS_Walking (Z 47.80), Play is PHYS_Falling at Z 51.61 (3.8
+   higher) with MoveTimer 12.51 against 8.51 and falls afterwards. A floor-following (step-down) difference in physWalking for a pawn walking a
+   slope or stairs; 1 actor in 1 map in 28.
+5. **A pawn attacking the ghost player (Area 51 Bunker), 2 entries.** `MJ12Troop0.Enemy` is JCDentonMale2 in the original and JCDentonMale1 in Play from
+   tick 811: the player pawn's name (numbered by the load count, the original having opened the map twice), a harness naming artifact, not a
+   behaviour; and the ghost's `ViewRotation.Roll` is -170 in Play, 0 in the original, at tick 901: a damage view shake applied to Play's ghost.
+
+Everything else, 17 maps with 520 NPCs, the player and the generators, is equal tick for tick: UNATCO HQ (01, 03), the Hotel, Airfield, NSFHQ,
+the 04 street, VersaLife, the Canal, Wan Chai Street, the ship, the Chateau, Catacombs, Cathedral, Vandenberg Cmd and Gas, Ocean Lab, Area 51
+Entrance. What the automatic grouping (`report`) adds: by first field Loc 56 actors / 7 maps, State 24 / 4, Rot 12 / 3, Dest 3 / 2; by class
+Terrorist 23 / 3 maps, MJ12Troop 9 / 2, Greasel 8 / 2, MIB 6 / 2; by state at the first difference StartUp 44 / 5 maps, Wandering 25 / 7,
+Standing 14 / 3, Patrolling 10 / 4.
+
+Controls run during the sweep: BatteryPark and Metro with an exact population (no actor absent): 31 of 64 and 60 of 61 equal (the same
+divergences: the group 1 load and JaimeReyes1); Mole People never matched in four loads (a FlyGenerator) and was not repeated; short runs of
+BatteryPark with per-actor draw attribution: seven loads equal. One load per map: group 1 shows a map can be equal in one load and not in the next.
+
 ### Running it
 
 ```bash
@@ -759,6 +860,8 @@ node scripts/live-acceptance.mjs eval --map <map> --expr 'window.deusExViewer.st
 DX_HYPRLAND=1 scripts/live-original.sh <map> --ticks 600 --delta 0.0166666675 --shot name --tag name     # a frame, its trace and the held Strobe state apart
 node scripts/live-acceptance.mjs play --map <map> --seed 1 --tag name --shot name                       # Play's frame takes that Strobe state (--own-strobe: its own)
 node scripts/live-acceptance.mjs compare --map <map> --tag name                                         # clock, stream, Strobe flips, every field
+node scripts/live-sweep.mjs run --maps a,b,c --ticks 1200 --max-seconds 300 [--allow-missing all]   # a sweep over maps (one original at a time)
+node scripts/live-sweep.mjs report [--json .work/live-acceptance/sweep-2026-10-13.json]        # the table and the ranked groups
 ```
 
 `live-original.sh` takes the Wine lock (`.work/wine-deusex.lock`), refuses to start with another DeusEx.exe running and quits the game by
