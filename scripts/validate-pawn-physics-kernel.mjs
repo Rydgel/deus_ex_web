@@ -38,6 +38,8 @@ const REQUIRED = ['rotations', 'rotationMoves', 'flights', 'flightBlocked', 'fli
   'swimAir', 'swimKeepZ', 'swimToFalling', 'swimFallTails'];
 const totals = Object.fromEntries(COUNTS.map(key => [key, 0]));
 const RUNS = [
+  // APawn::physicsRotation's raw-compare step (pawnRotationStep), reached with raw and equal rotations
+  ...['00_Training', '01_NYC_UNATCOIsland'].map(map => ({map, name: 'rotation-branches', ticks: '300', every: '25'})),
   ...['fly-branches', 'walk-branches'].flatMap(name => ['00_Training', '01_NYC_UNATCOIsland'].map(map =>
     ({map, name, ticks: '300', every: '25'}))),
   // 1200 ticks: script pawns walk at GroundSpeed x DesiredSpeed now (calcVelocity's class test, 2026-10-11), and the

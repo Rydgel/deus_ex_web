@@ -27,6 +27,7 @@
  * Evidence: Engine.dll bodies above; docs/player-physics.md,
  * docs/script-pawn-locomotion.md field map. */
 import { falling } from './falling.mjs';
+import { fixedTurn } from './actor-rotation.mjs';
 import { walking } from './walking.mjs';
 import { physFlying } from './flying.mjs';
 import { physSwimming, startSwimming } from './swimming.mjs';
@@ -51,18 +52,6 @@ import { interpolationVelocity } from './actor-physics.mjs';
 const f = Math.fround;
 const unsupported = name => { throw new Error(`Original pawn physics boundary not linked: ${name}`); };
 const sameRotation = (a, b) => a && b && a[0] === b[0] && a[1] === b[1] && a[2] === b[2];
-
-/** fixRotation mode (motionFlags 0x40 set, 0x20 clear — installed by
- * physicsRotation): rotate current toward target along the shorter arc by at
- * most |delta|, 16-bit masked. */
-function fixToward(current, target, delta) {
-  current &= 0xffff; target &= 0xffff;
-  if (delta === 0) return current;
-  const step = Math.abs(delta);
-  const forward = (target - current) & 0xffff;
-  if (forward < 0x8000) return (current + Math.min(step, forward)) & 0xffff;
-  return (current - Math.min(step, (current - target) & 0xffff)) & 0xffff;
-}
 
 /** PointRegion struct field binding with the plain {zone,leaf,zoneNumber}
  * shape setActorZone reads and writes (same storage as
@@ -481,20 +470,39 @@ function farLevel(pawn, actor, services, dispatch) {
   return level;
 }
 
-/** APawn::physicsRotation (0x103c9f30): face DesiredRotation at RotationRate,
- * then MoveActor when the rotation actually changed. */
+/** APawn::physicsRotation (0x103c9f30), its decisions: face DesiredRotation at RotationRate, and the NewRotation of the
+ * MoveActor it ends with (null: none). The raw integer Rotation and DesiredRotation are compared as stored, not masked:
+ * - a PlayerPawn takes neither step (0x103c9f75..0x103c9f96 jumps to 0x103ca058) but still zeroes a nonzero Roll;
+ * - any other pawn sets bRotateToDesired and clears bFixedRotationDir (0x103c9faa), steps Yaw only while
+ *   DesiredRotation.Yaw differs from Rotation.Yaw (0x103c9fc2) and Pitch only while DesiredRotation.Pitch differs from
+ *   Rotation.Pitch (0x103c9fd5), so a pawn whose Rotation already equals its DesiredRotation keeps its raw Rotation
+ *   (a map rotation such as (-4, -32404) stays until a script changes it) and keeps a nonzero equal Pitch while it
+ *   walks or falls; the Pitch step goes toward 0 for Walking (1) and for Falling (2) Pawn-ancestry actors, else toward
+ *   DesiredRotation.Pitch, by trunc(dt * 32768), and is clamped to +-RotationRate.Pitch (0x103ca031..0x103ca056).
+ * Evidence: scripts/native-pawn-rotation-oracle.py (the unchanged body), validate-native-pawn-rotation.mjs. */
+export function pawnRotationStep({ rotation, desiredRotation, rotationRate, physics, motionFlags }, dt, { playerPawn, pawn }) {
+  const [pitch0, yaw0, roll0] = rotation;
+  if (playerPawn) return { motionFlags, rotation: roll0 !== 0 ? [pitch0, yaw0, 0] : null };
+  const flags = ((motionFlags & ~0x20) | 0x40) >>> 0;
+  let yaw = yaw0, pitch = pitch0;
+  const turn = { bFixedRotationDir: false, bRotateToDesired: true };   // the mode physicsRotation installed (0x40 set, 0x20 clear)
+  if (desiredRotation[1] !== yaw0) yaw = fixedTurn(yaw0, desiredRotation[1], Math.trunc(rotationRate[1] * dt), turn);
+  if (desiredRotation[0] !== pitch0) {
+    const target = physics === 1 || (physics === 2 && pawn) ? 0 : desiredRotation[0];
+    pitch = fixedTurn(pitch0, target, Math.trunc(dt * f(32768)), turn);
+    const limit = rotationRate[0];
+    if (pitch < 0x8000) { if (pitch > limit) pitch = limit; }
+    else { const lo = 0x10000 - limit; if (pitch < lo) pitch = lo; }
+  }
+  return { motionFlags: flags, rotation: pitch !== pitch0 || yaw !== yaw0 || roll0 !== 0 ? [pitch, yaw, 0] : null };
+}
+
 function physicsRotation(pawn, dt, services, dispatch) {
-  if (services.isA(pawn.self, 'engine.playerpawn')) return;
-  pawn.motionFlags = ((pawn.motionFlags & ~0x20) | 0x40) >>> 0;
-  const yaw = fixToward(pawn.rotation[1], pawn.desiredRotation[1], Math.trunc(pawn.rotationRate[1] * dt));
-  const pitchTarget = pawn.physics === 1 || (pawn.physics === 2 && services.isA(pawn.self, 'engine.pawn'))
-    ? 0 : pawn.desiredRotation[0];
-  let pitch = fixToward(pawn.rotation[0], pitchTarget, Math.trunc(dt * f(32768)));
-  const limit = pawn.rotationRate[0];
-  if (pitch < 0x8000) { if (pitch > limit) pitch = limit; }
-  else { const lo = 0x10000 - limit; if (pitch < lo) pitch = lo; }
-  if (pitch !== pawn.rotation[0] || yaw !== pawn.rotation[1] || pawn.rotation[2] !== 0)
-    moveActor(pawn, [0, 0, 0], [pitch, yaw, 0], services, dispatch);
+  const step = pawnRotationStep({ rotation: pawn.rotation, desiredRotation: pawn.desiredRotation, rotationRate: pawn.rotationRate,
+    physics: pawn.physics, motionFlags: pawn.motionFlags }, dt,
+  { playerPawn: services.isA(pawn.self, 'engine.playerpawn'), pawn: services.isA(pawn.self, 'engine.pawn') });
+  pawn.motionFlags = step.motionFlags;
+  if (step.rotation) moveActor(pawn, [0, 0, 0], step.rotation, services, dispatch);
 }
 
 /** performPhysics's event dispatch: the view stands for its actor. */

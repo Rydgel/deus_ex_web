@@ -156,6 +156,34 @@ disabled. `validate-walk-loop-branches` runs both maps at `--dt 0.12` with the w
 units, around the gate) on the JavaScript and Rust paths, digests equal at every checkpoint; mutating the Rust cut to "always"
 changes the digest (`27005fe196048f0b` against `b18f4d13205dbe18`, Training, 300 ticks).
 
+## APawn::physicsRotation keeps a raw rotation that already equals its desired one (2026-10-13)
+
+`APawn::performPhysics` (`0x103c9a70`) runs `physicsRotation` (`0x103c9f30`) when Rotation differs from DesiredRotation or
+`RotationRate.Roll` is positive (gate `0x103c9bd0..0x103c9bfd`, unchanged). The body compares the raw int32 rotators:
+
+- a PlayerPawn takes neither step (`0x103c9f75..0x103c9f96`) but still zeroes a nonzero Roll with a MoveActor;
+- any other pawn sets bRotateToDesired and clears bFixedRotationDir (`0x103c9faa`), steps Yaw through `fixedTurn`
+  (`0x10303b34`, the mode with `0x40` set) **only while DesiredRotation.Yaw differs from Rotation.Yaw** (`0x103c9fc2`), and
+  Pitch **only while DesiredRotation.Pitch differs from Rotation.Pitch** (`0x103c9fd5`): toward 0 for a Walking or a
+  Falling Pawn, else toward the desired pitch, by `trunc(dt * 32768)`, clamped to +-RotationRate.Pitch; it then calls
+  MoveActor when the new Pitch, Yaw or a nonzero Roll differs from the stored ones.
+
+Play stepped both axes every time, with a masked `fixToward`: a pawn whose map rotation was not canonical lost it on its
+first tick (06_HongKong_WanChai_Underworld's Hooker0, Rotation = DesiredRotation = (-4, -32404, 0): the original keeps it
+until a script changes it, six ticks; Play stored (0, 33132, 0) on tick 1), and a walking or falling pawn whose Rotation
+equals its DesiredRotation with a nonzero Pitch was pulled to 0. The shorter-arc rule also differed at the exact half turn
+(the original goes the positive way; 48 of 1,271 cases). `pawnRotationStep` (script-pawn-physics.mjs) now follows the body
+with `fixedTurn` (actor-rotation.mjs, validated against `0x103c9dc0`), and `pawn_phys.rs` `tail` the same.
+
+Evidence: the original's call trace at ticks 1 to 8 shows performPhysics and physicsRotation entered for Hooker0 with the
+rotation unchanged; `scripts/native-pawn-rotation-oracle.py` executes the unchanged body (class chains, both `_ftol`
+conversions, `fixedTurn`, the clamp, a stubbed MoveActor recording its NewRotation); `validate-native-pawn-rotation` compares
+**1,271 cases bit-exact** (raw and equal rotations, one equal axis, every Physics mode, Pawn / ScriptedPawn-like / PlayerPawn
+/ non-Pawn chains, wrap and half-turn boundaries, clamp, a 700-case sweep; 286 fail with the equality tests removed).
+`scripts/scenarios/rotation-branches.mjs` drives raw, equal, half-turn and Roll rotations through
+`validate-pawn-physics-kernel`: JS and Rust digests equal at every checkpoint on Training and Island (a Rust build with the
+tests removed differs: `7dbeae2a71482d86` against `240a4dc3d502f71c`).
+
 ## Surface-prelude boundary
 
 The original caller ALWAYS first invokes103cc450. It scans prospective wall

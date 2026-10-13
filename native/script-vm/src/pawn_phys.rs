@@ -124,20 +124,32 @@ fn same_image(handle: u32, base: u32) -> bool {
     info & HOST == 0 && info & !15 == base
 }
 
-/// script-pawn-physics.mjs `fixToward`: the shorter arc from `current` to
-/// `target`, at most |delta|, 16-bit masked. `delta` is a Math.trunc result.
-fn fix_toward(current: i64, target: i64, delta: f64) -> i64 {
-    let current = current & 0xffff;
-    let target = target & 0xffff;
-    if delta == 0.0 {
-        return current;
+/// actor-rotation.mjs `fixedTurn` with bRotateToDesired set and bFixedRotationDir clear, the mode APawn::physicsRotation
+/// installs (AActor::fixedTurn 0x103c9dc0): the shorter arc from `current` to `desired` at most |delta|, 16-bit masked;
+/// a half turn goes the other way round; delta 0 returns the masked current. `delta` is a Math.trunc result.
+fn fixed_turn(current: i64, desired: i64, delta: f64) -> i64 {
+    let delta = delta as i64 as i32;
+    let from = current & 0xffff;
+    if delta == 0 {
+        return from;
     }
-    let step = if delta < 0.0 { -delta } else { delta } as i64;
-    let forward = (target - current) & 0xffff;
-    if forward < 0x8000 {
-        return (current + step.min(forward)) & 0xffff;
+    let to = desired & 0xffff;
+    // x86 `neg`: INT_MIN stays INT_MIN
+    let rate = (if delta < 0 { delta.wrapping_neg() } else { delta }) as i64;
+    if from > to {
+        let distance = from - to;
+        if distance < 0x8000 {
+            return (from - if distance <= rate { distance } else { rate }) & 0xffff;
+        }
+        let around = to - from + 0x10000;
+        return (from + if around <= rate { around } else { rate }) & 0xffff;
     }
-    (current - step.min((current - target) & 0xffff)) & 0xffff
+    let distance = to - from;
+    if distance < 0x8000 {
+        return (from + if distance > rate { rate } else { distance }) & 0xffff;
+    }
+    let around = from - to + 0x10000;
+    (from - if around > rate { rate } else { around }) & 0xffff
 }
 
 /// APawn::performPhysics for the walking (1), swimming (3) or flying (4) pawn `handle`
@@ -195,19 +207,27 @@ fn tail(handle: u32, base: u32, depth: u32, dt: f64) {
         count(0);
         let word = p_at(base, P_ROTATE_TO_DESIRED);
         store(word, (load32(word) & !pf(P_FIXED_ROTATION_DIR)[1]) | pf(P_ROTATE_TO_DESIRED)[1]);
-        let yaw = fix_toward(rotation[1] as i64, desired[1] as i64, trunc(rate[1] as f64 * dt));
-        // `physics===1||(physics===2&&isA(pawn))`: this is a Pawn.
-        let target = if physics == 1 || physics == 2 { 0 } else { desired[0] as i64 };
-        let mut pitch = fix_toward(rotation[0] as i64, target, trunc(dt * 32768.0));
-        let limit = rate[0] as i64;
-        if pitch < 0x8000 {
-            if pitch > limit {
-                pitch = limit;
-            }
-        } else {
-            let lo = 0x10000 - limit;
-            if pitch < lo {
-                pitch = lo;
+        // The raw Rotation and DesiredRotation are compared as stored (script-pawn-physics.mjs pawnRotationStep, the oracle-
+        // validated reference): a step runs only on an axis whose Desired differs (0x103c9fc2, 0x103c9fd5).
+        let mut yaw = rotation[1] as i64;
+        if desired[1] != rotation[1] {
+            yaw = fixed_turn(rotation[1] as i64, desired[1] as i64, trunc(rate[1] as f64 * dt));
+        }
+        let mut pitch = rotation[0] as i64;
+        if desired[0] != rotation[0] {
+            // `physics===1||(physics===2&&isA(pawn))`: this is a Pawn.
+            let target = if physics == 1 || physics == 2 { 0 } else { desired[0] as i64 };
+            pitch = fixed_turn(rotation[0] as i64, target, trunc(dt * 32768.0));
+            let limit = rate[0] as i64;
+            if pitch < 0x8000 {
+                if pitch > limit {
+                    pitch = limit;
+                }
+            } else {
+                let lo = 0x10000 - limit;
+                if pitch < lo {
+                    pitch = lo;
+                }
             }
         }
         if pitch != rotation[0] as i64 || yaw != rotation[1] as i64 || rotation[2] != 0 {
