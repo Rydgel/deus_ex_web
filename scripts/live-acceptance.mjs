@@ -64,7 +64,14 @@ const FIELDS = [
   ['AnimFin', 'bAnimFinished', 0x28, 'bit', 0x8], ['AnimLoop', 'bAnimLoop', 0x28, 'bit', 0x10], ['AnimNote', 'bAnimNotify', 0x28, 'bit', 0x20],
   ['BSeq0', 'BlendAnimSequence', 0x68, 'name', 0, 0], ['BFrame0', 'BlendAnimFrame', 0x78, 'f', 0, 0], ['BRate0', 'BlendAnimRate', 0x88, 'f', 0, 0], ['BTween0', 'BlendTweenRate', 0x98, 'f', 0, 0],
   ['DesSp', 'DesiredSpeed', 0x36c, 'f'], ['MaxDes', 'MaxDesiredSpeed', 0x370, 'f'], ['Reduced', 'bReducedSpeed', 0x318, 'bit', 0x800],
+  // Pawn.PostBeginPlay draws SightCounter (0.2 * FRand()) from the load's stream, which the two sides do not share (docs/rng.md): written into Play
+  // from the original's frozen phase (PAWN_LOAD_FIELDS); it decides which tick each listener's visibility check, and so the player's ShowSelf draws, run.
+  ['Sight', 'SightCounter', 0x320, 'f'],
+  // The Timer event's phase (Actor +0x48/+0x4c): who draws on which tick follows it.
+  ['TRate', 'TimerRate', 0x48, 'f'], ['TCount', 'TimerCounter', 0x4c, 'f'],
 ];
+// The load-time draws of the pawns (see GENERATOR_FIELDS): label of FIELDS -> written into Play's pawn before the first tick.
+const PAWN_LOAD_FIELDS = ['Sight', 'TRate', 'TCount'];
 // The player's pose, read back from the original (the placement of Play's replay): view rotation and Region.
 const PLAYER_FIELDS = FIELDS.slice(0, 10).concat([FIELDS[10]],
   [['VRot', 'ViewRotation', 0x3dc, 'i3'], ['RegZone', '$regionZone', 0xc8, 'obj'], ['RegLeaf', '$regionLeaf', 0xcc, 'i32'], ['RegNum', '$regionNum', 0xd0, 'u8']]);
@@ -199,9 +206,14 @@ async function original() {
     ...(generators.length ? [`watch ${generators.join(',')} ${GENERATOR_FIELDS.map(spec).join(' ')}`] : []),
     `watch @player ${PLAYER_FIELDS.map(spec).join(' ')}`,
     `watch ${names.join(',')} ${FIELDS.map(spec).join(' ')}`];
+  // Actors whose Timer runs from the load (SetTimer in PostBeginPlay, e.g. Tree: 4 + 2 * FRand()): Play's load draws another rate, so the
+  // original's TimerRate/TimerCounter are read here and written into Play (docs/rng.md). The list comes from Play's population step.
+  const reference0 = path.join(dir, 'play-population.json');
+  const timers = (existsSync(reference0) && !flag('no-timers') ? JSON.parse(readFileSync(reference0, 'utf8')).timers ?? [] : []).filter(name => !names.includes(name) && !generators.includes(name));
+  if (timers.length) config.push(`watch ${timers.join(',')} TRate:0x48:f TCount:0x4c:f`);
   const configPath = path.join(dir, 'trace.cfg');
   writeFileSync(configPath, config.join('\n') + '\n');
-  writeFileSync(watchPath, JSON.stringify({map, pawns: names.filter(name => !extras.includes(name)), extras, generators}, null, 1));
+  writeFileSync(watchPath, JSON.stringify({map, pawns: names.filter(name => !extras.includes(name)), extras, generators, timers}, null, 1));
   // The actors the original's level holds (a load removes some at random: OddsOfAppearing).
   const everything = wine('list', 'Actor').split('\n').map(line => /^\S+ (\S+) slot=\d+ .* odds=(\S+)/.exec(line)).filter(Boolean).map(m => ({name: m[1], odds: Number(m[2])}));
   writeFileSync(path.join(dir, 'population.json'), JSON.stringify(everything));
@@ -319,7 +331,7 @@ async function snap() {
 async function population() {
   await withPlay(async ({page}) => {
     const {actors} = await page.evaluate(() => window.deusExViewer.liveProbe({actors: 'engine.actor'}));
-    writeFileSync(path.join(dir, 'play-population.json'), JSON.stringify({seed: Number(option('seed', 1)), names: actors.map(a => a.name)}));
+    writeFileSync(path.join(dir, 'play-population.json'), JSON.stringify({seed: Number(option('seed', 1)), names: actors.map(a => a.name), timers: actors.filter(a => a.timer).map(a => a.name)}));
     console.log(map, `seed ${option('seed', 1)}:`, actors.length, 'actors');
   });
 }
@@ -408,7 +420,7 @@ async function play() {
   // (tools/dx-live-win.c `call`, original --extra-config).
   const limit = Number(option('ticks', 0)) || undefined;
   const trace = readFileSync(tracePath, 'utf8').trim().split('\n').map(line => JSON.parse(line)).filter(row => row.unfrozen >= 1).slice(0, limit);
-  const {pawns, extras = [], generators = []} = JSON.parse(readFileSync(watchPath, 'utf8'));
+  const {pawns, extras = [], generators = [], timers = []} = JSON.parse(readFileSync(watchPath, 'utf8'));
   // Play is placed where the original's player stood when the replay begins: the last frozen tick's exit.
   const frozen = readFileSync(tracePath, 'utf8').trim().split('\n').map(line => JSON.parse(line)).filter(row => row.unfrozen === 0);
   const pose = frozen[frozen.length - 1].actors['@player'];
@@ -432,14 +444,18 @@ async function play() {
     // The generators' load-time draws (GENERATOR_FIELDS), as the original's frozen phase left them.
     const generatorWrites = Object.fromEntries(generators.filter(name => frozen[frozen.length - 1].actors[name])
       .map(name => [name, Object.fromEntries(GENERATOR_FIELDS.map(([label, prop]) => [prop, frozen[frozen.length - 1].actors[name][label]]))]));
-    const request = {write: {'@player': {AnimSequence: pose.Anim, AnimFrame: pose.Frame, AnimRate: pose.Rate, TweenRate: pose.Tween}, ...generatorWrites},
+    const lastFrozen = frozen[frozen.length - 1].actors;
+    const pawnWrites = Object.fromEntries(pawns.filter(name => lastFrozen[name] && PAWN_LOAD_FIELDS.every(label => lastFrozen[name][label] !== undefined))
+      .map(name => [name, Object.fromEntries(PAWN_LOAD_FIELDS.map(label => [FIELDS.find(f => f[0] === label)[1], lastFrozen[name][label]]))]));
+    const timerWrites = Object.fromEntries(timers.filter(name => lastFrozen[name]?.TRate !== undefined).map(name => [name, {TimerRate: lastFrozen[name].TRate, TimerCounter: lastFrozen[name].TCount}]));
+    const request = {write: {...timerWrites, ...pawnWrites, '@player': {AnimSequence: pose.Anim, AnimFrame: pose.Frame, AnimRate: pose.Rate, TweenRate: pose.Tween}, ...generatorWrites},
       ...(navPawns ? {navTrace: {pawns: navPawns.split(','), first: navFirst, last: navLast}} : {}),
       ...(trace[0]?.viewport?.[0] && !flag('own-viewport') ? {renderSize: trace[0].viewport} : {}),   // the original's frame size (--own-viewport: Play's page)
       ...(setupNames ? {setupProbe: {names: setupNames.split(','), first: setupFirst, last: setupLast}} : {}),
       ...(scriptPawns ? {scriptTrace: {pawns: scriptPawns.split(','), first: scriptFirst, last: scriptLast}} : {}), replay: {ticks: trace, release: true, hold: true, drawTrace: flag('draw-trace'), watch: [
       {names: ['@player'], props: playerProps}, {names: pawns, props},
       // --extra-watch actors are not pawns: the fields every Actor has
-      ...(extras.length ? [{names: extras, props: ['Location', 'Rotation', 'Velocity', 'Physics', 'AnimSequence', 'AnimFrame', 'AnimRate', 'TweenRate', 'LifeSpan', 'LastRenderTime', 'DistanceFromPlayer']}] : [])]}};
+      ...(extras.length ? [{names: extras, props: ['Location', 'Rotation', 'Velocity', 'Physics', 'AnimSequence', 'AnimFrame', 'AnimRate', 'TweenRate', 'LifeSpan', 'LastRenderTime', 'DistanceFromPlayer', 'TimerRate', 'TimerCounter']}] : [])]}};
     const started = await page.evaluate(r => window.deusExViewer.liveProbe(r), request);
     const rows = [], nav = [], script = [], setup = [];
     let stalls = 0;

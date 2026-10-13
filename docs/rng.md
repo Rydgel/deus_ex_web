@@ -101,3 +101,14 @@ with its own seed). A generator first spawns when its TryTimer has run down, so 
 `live-acceptance.mjs original` watches `TryTimer` and `PoolCount` of every PawnGenerator, and `play` writes the last
 frozen row's values into Play before its first tick. With them the stream's draw count is equal for all 100 ticks
 compared, and no watched pawn differs.
+
+### More load-time state in a live comparison (2026-10-13)
+
+Besides the PawnGenerators' TryTimer and PoolCount, two more load-time draws decide which tick things run on and so which tick draws:
+`Pawn.PostBeginPlay`'s `SightCounter = 0.2 * FRand()` (it decides on which tick each listener's visibility check, and so the player's
+`ShowSelf` far-path `appFrand`, runs) and every `SetTimer(... FRand() ...)` in a PostBeginPlay (Tree: `4 + 2 * FRand()`, so a tree's
+Timer, one to three draws, fires on a different tick). `live-acceptance.mjs` reads `SightCounter` and `TimerRate`/`TimerCounter` of the
+pawns and of the actors Play's population step found with a running timer from the original's frozen phase and writes them into
+Play before the first tick. With them, 600-tick runs of Island and the Club have equal stream draws on every tick (before: one tick
+in each differed, the ghost's `ShowSelf` draw or a tree's), and the Underworld's 120.
+

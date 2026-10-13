@@ -625,11 +625,15 @@ one load, the numbers of the Businessman1 case fixed in eb22793; not checked whe
    their TryTimer runs out. `PawnGenerator.PostBeginPlay` draws TryTimer and PoolCount from the load's own stream, which the two sides
    do not share, so the generators spawn on other ticks. `live-acceptance.mjs` now reads those fields from the original and writes them
    into Play before the first tick; with them the draw counts are equal over the 260 ticks compared ([random stream](rng.md)).
-   Left after that: Terrorist18 (from about tick 140) and UNATCOTroop6 (sits at tick 230 in the original, walks on in Play), and one
-   draw-count difference at tick 276 in a 600-tick run.
-6. **The ghost player's own draw timing (open, small).** Club: the player draws at ticks 1, 2, 26 and 49 in the original and at 1, 11 and 49
-   in Play (the player's position, animation and rotation equal all 600 ticks). Unverified cause: the ghost's `Tread` loop (AnimRate 1.25) and
-   its notify.
+   Left after that: Terrorist18 and UNATCOTroop6 (item 4) and one draw-count difference at tick 276 in a 600-tick run (item 6).
+6. **The ghost player's own draw timing (explained: a load-time input, 2026-10-13).** Club: the player drew at ticks 1, 2, 26 and 49 in the
+   original and at 1, 11 and 49 in Play (Underworld: tick 2 or 3; Island: 264 and 276 in 600-tick runs). The draws are not the ghost's:
+   they are `appFrand` at `0x103bf111` in the LOS worker's far path (the NPC decay gate), run for the player's `ShowSelf` against each
+   listener whose `SightCounter` has run out, and a different tick in each original run. `Pawn.PostBeginPlay` draws `SightCounter`
+   (`0.2 * FRand()`) from the load's stream, which the two sides do not share. `live-acceptance.mjs` now watches `SightCounter` and
+   writes the original's value into Play's pawns (and the load-time timer phase of every actor whose Timer runs from the load: Island's
+   trees, `SetTimer(4 + 2 * FRand())`, were the 264/276 draws: their Timer fired on other ticks); with them the stream draws per tick
+   are equal for 600 ticks on Island, the Club and (120 ticks) the Underworld, and every actor too ([random stream](rng.md)).
 7. **A divergence the tool made visible but did not cause:** the original's `physWalking` for a non-PlayerPawn reads the `ZoneVelocity` only
    above 300 and cuts steps only when travelling over 20 units; both are in 586aa15 and were not reachable at 60 fps.
 8. **Child frames the page cannot draw did not stamp their sprites (fixed, eb22793).** `DrawFrame` draws every child frame and
