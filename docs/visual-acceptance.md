@@ -778,8 +778,8 @@ its PID; Play runs headless Chromium in worker mode.
   original's `Touch` machinery agree on the rules (`BeginTouch`/`AddTouch`/`EndTouch` are oracle-exact, 825 cases, [check encroachment](check-encroachment.md)),
   the pawn overlaps five trigger cylinders at once and the pawn has four `Touching` slots, so evictions churn the slots in Play (it prints
   `UnTouch` of four triggers and a `Touch` of the fifth in one update, then the reverse); the original's call log (`BeginTouch` breakpoints, perc8) shows it
-  calling `BeginTouch` every tick for the triggers that are not in the slots (FlagTrigger15 and FlagTrigger3 at 915 to 922, Trigger0, FlagTrigger16
-  and SkillAwardTrigger12 at 872 to 884 while Play holds them) and does not show a restart. Not known: the slot contents and the overlap list order in the
+  calling `BeginTouch` every tick for FlagTrigger15 and FlagTrigger3 at 915 to 922 and for Trigger0, FlagTrigger16 and SkillAwardTrigger12 at
+  872 to 884 (triggers Play already holds in its slots; the log does not say whether those calls insert) and no restart of the door. Not known: the slot contents and the overlap list order in the
   original, which differ from Play's from about tick 860. Next step: log the original's `AddTouch` (its inner call is not through the thunk the
   breakpoint uses; `EndTouch`'s thunk was never hit) and the `Touching` array of the pawn per tick.
 - A same-state `GotoState` was read in the disassembly (`UObject::GotoState` `0x1012e8f0`, `0x1012ea1f`) to recompute the StateFrame's ProbeMask and
