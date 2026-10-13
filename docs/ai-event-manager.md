@@ -97,6 +97,36 @@ modelled; it is off in play.
   ones): per operation, the boundary logs and the manager's tables (types in bucket order, senders and receivers in list order, the
   16 slots of every sender, the ring, `deleteCount`) of the Rust port equal the original's.
 
-## Host integration and open items
+## Host integration
 
-Recorded in the sections below as they land.
+* **Start-up.** `LevelInfo.PreBeginPlay` calls native 650 (`InitEventManager`). Play makes a **new** manager at every call
+  (`AiEventHost.init` resets the pool): a Player start re-runs the startup on the same `LevelInfo` (the original's `LoadMap` makes a
+  new level, `LevelInfo` and manager), and the old generation's events named released actors. The manager is a pool in the object
+  arena, outside the JavaScript heap; `EventManager` on the `LevelInfo` is a token for the scripts' `!= None` tests and for
+  `ULevel::Tick`.
+* **Natives.** 710/711 and 713-716 reach `ScriptRuntime.aiEventNative` with the exec wrappers' defaults (checks `[1,1,0,1]`, value
+  1.0, radius 800.0; an `EX_Nothing` argument keeps the default). The Rust VM's handbacks take the same route.
+* **Tick.** `ULevel::Tick` calls the manager's `Tick` after the actors (`script-doors.mjs` `tickEventManager` -> `AiEventHost.tick`), and
+  `CleanupDestroyed` calls `DestroyActor` (`destroyActorEvents`), as the original's `ULevel::DestroyActor` does.
+* **What Rust reads from the image.** Actor flags (`bDeleteMe`, Pawn, Inventory, `bDetectable`) and locations come from the object
+  image (`percep.rs`) when the perception table is ready; otherwise the host reads them. `APawn::AICanSee` runs in Rust
+  (`ai_can_see_direct`, the same body as the script native 705) with a JavaScript fallback; the score callbacks
+  (`LoudNoiseScore`, `WeaponDrawnScore`, `DistressScore`) run in Rust through the dispatch tables, enabled per manager tick (the
+  EVENTS enable word is set only inside the actor tick, so the manager keeps its own).
+* **Callbacks.** `AIEvent` finds the receiver's function by name and runs it through the script dispatcher (`ProcessEvent` with the
+  event name, state and an `XAIParams`); this is the one JavaScript crossing per delivered event.
+
+## Verification of the translation in play
+
+* `validate-event-manager` (oracle, above), `validate-pawn-perception` (AICanSee, 756 scenes and 14 mutations bit-exact, see
+  [pawn perception](script-pawn-perception.md#aicansees-x87-placement-found-live-2026-10-13)), `validate-perception-kernel`.
+* The live acceptance ([visual acceptance](visual-acceptance.md#perception-pilot-2026-10-13)): per-tick state of every watched NPC
+  against the original, with a visible player allied to mj12 (hostile to the civilians).
+
+## Open items
+
+* The rdtsc time budget `AIProcess` checks while `GTimestamp` is set (a profiling flag) is not modelled; it is off in play.
+* `AICanSmell` is the original's constant 0.0; smell events are carried and never detected, as in the original.
+* No scripted sender is exercised against the original beyond the sounds and presences the Underworld produces
+  (`FootStep`-class loud noises, fleeing, distress); a player-fired weapon (`WeaponFire`, `Gunshot`) needs a weapon in the player's
+  hand in a live capture and is not compared.

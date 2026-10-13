@@ -1458,3 +1458,35 @@ detected. 226 of 226 scenes bit-exact, 48 of 48 mutants detected.
 0, and those with any watched field different from 18 to 2 (Terrorist18 from tick 164, with a Walk/SitBegin
 difference at 227; UNATCOTroop6 from tick 244, sitting in the original and walking in Play). The stream still
 draws a different number of times at tick 24 (original 10, Play 18); not traced.
+
+## Live divergence: scoutE and the second hop run pointWorker whatever the line check says; the scans' FastLineCheck order (2026-10-13)
+
+The perception pilot on 06_HongKong_WanChai_Underworld (visible player allied to mj12, so the civilians flee;
+[visual acceptance](visual-acceptance.md#perception-pilot-2026-10-13)) found fleeing NPCs choosing another path than the
+original's, first at tick 560 to 576 (Female5, Female6: a `MoveTimer` 4.0 lower in Play, the family of Bump's `MoveTimer += 4`, and a
+rotation 833 units off; in an earlier run Female3 at tick 567, `FindPathToward(HidePoint3)` returning `PathNode149` in the original and `PathNode150` in Play).
+
+**Method.** As above: `call` breakpoints at the path worker, FastLineCheck, FarMoveActor, MoveActor and pointWorker for every pawn over 1,200 ticks
+(211 worker calls of 21 pawns; `--extra-config`), and `live-acceptance.mjs play --nav-trace` on the same pawns. The leaf
+calls of the two sides were compared per worker call.
+
+**Two translation faults, from the first differing leaf call.**
+
+1. **`navScoutE` (`0x103db0e0`) short-circuited.** The original stores the line check's byte (`and eax, 0xff; mov [ebp-0x18], eax`
+   at `0x103db2c5`), calls pointWorker(candidate, 1) (`0x103db2ed`), and only then tests both (`0x103db2f5..0x103db2fb`). The
+   translation skipped pointWorker after a failed line check. pointWorker is not a pure test: its walk is a series of MoveActor
+   calls, and a pawn it meets is Bumped (the 4.0 `MoveTimer` above). The original's call log at tick 18 (TriadRedArrow1): three
+   candidates, each `FastLineCheck` then pointWorker, the first two with a failed line check (0) and a failed walk; Play made the
+   second walk only.
+2. **The second hop (`0x103dbb1c..0x103dbb56`) was the same.** FastLineCheck, then pointWorker(hop2, 1) unconditionally, both tested,
+   then `FarMoveActor(origLoc, 1, 1)` on every path and `return 1`; the translation restored the pawn only after a success.
+3. **FastLineCheck's argument order at the two target-side scans.** The original passes (target, item) (`0x103db78f`, `0x103dc42a`:
+   the item's location is pushed first, so it is the second argument); the translation passed (item, target). FastLineCheck is
+   not symmetric in floating point. The live logs show the other four call sites (`0x103da6b2`, `0x103db2c5`, `0x103da943`,
+   `0x103c0e84`: 1,081 calls) in the right order, and this one swapped in 23 of 23.
+
+**Oracle.** The nav oracle recorded the line checks' endpoints from the start but the validator compared only their count. It
+now compares each call's (end, start) with the original's, and has scenes `fpt-scoute-flc-fails` and `fpt-pass2-hop2-flc0`
+(a failed line check before a successful walk) and three mutants (`scoute-flc-short-circuit`, `hop2-flc-short-circuit`,
+`scan-flc-order`): the old code fails the first scene (20 MoveActor calls against the original's 30, 7 FarMoveActor against 10), the
+reversed scan order fails `fpt-pass2`. 228 of 228 scenes bit-exact, 51 of 51 mutants detected.
