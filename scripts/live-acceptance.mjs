@@ -113,6 +113,9 @@ async function original() {
   if (watchOption === 'auto') {
     names = wine('list', 'ScriptedPawn').split('\n').map(line => /^\S+ (\S+) slot=/.exec(line)?.[1]).filter(Boolean);
   } else names = watchOption.split(',');
+  // --extra-watch A,B: more actors (a seat, a door) watched with the same fields, e.g. one a pawn walks to.
+  const extras = option('extra-watch', null)?.split(',') ?? [];
+  names.push(...extras);
   const config = [`out ${tracePath}`, 'player JCDentonMale', `release ${option('release', 3)}`, `ticks ${option('ticks', 600)}`,
     ...(option('delta', null) ? [`delta ${option('delta')}`] : []), ...(option('monitor', null) ? [`monitor ${option('monitor')}`] : []), ...(option('actor-trace', null) ? [`actor-trace ${option('actor-trace').replace(':', ' ')}`] : []),
     // --extra-config <file>: more trace.cfg lines (tools/dx-live-win.c `call` breakpoints, call-ticks, call-pawn).
@@ -122,7 +125,7 @@ async function original() {
     `watch ${names.join(',')} ${FIELDS.map(spec).join(' ')}`];
   const configPath = path.join(dir, 'trace.cfg');
   writeFileSync(configPath, config.join('\n') + '\n');
-  writeFileSync(watchPath, JSON.stringify({map, pawns: names, generators}, null, 1));
+  writeFileSync(watchPath, JSON.stringify({map, pawns: names.filter(name => !extras.includes(name)), extras, generators}, null, 1));
   // The actors the original's level holds (a load removes some at random: OddsOfAppearing).
   const everything = wine('list', 'Actor').split('\n').map(line => /^\S+ (\S+) slot=\d+ .* odds=(\S+)/.exec(line)).filter(Boolean).map(m => ({name: m[1], odds: Number(m[2])}));
   writeFileSync(path.join(dir, 'population.json'), JSON.stringify(everything));
@@ -227,7 +230,7 @@ async function play() {
   // (tools/dx-live-win.c `call`, original --extra-config).
   const limit = Number(option('ticks', 0)) || undefined;
   const trace = readFileSync(tracePath, 'utf8').trim().split('\n').map(line => JSON.parse(line)).filter(row => row.unfrozen >= 1).slice(0, limit);
-  const {pawns, generators = []} = JSON.parse(readFileSync(watchPath, 'utf8'));
+  const {pawns, extras = [], generators = []} = JSON.parse(readFileSync(watchPath, 'utf8'));
   // Play is placed where the original's player stood when the replay begins: the last frozen tick's exit.
   const frozen = readFileSync(tracePath, 'utf8').trim().split('\n').map(line => JSON.parse(line)).filter(row => row.unfrozen === 0);
   const pose = frozen[frozen.length - 1].actors['@player'];
@@ -251,7 +254,9 @@ async function play() {
       .map(name => [name, Object.fromEntries(GENERATOR_FIELDS.map(([label, prop]) => [prop, frozen[frozen.length - 1].actors[name][label]]))]));
     const request = {write: {'@player': {AnimSequence: pose.Anim, AnimFrame: pose.Frame, AnimRate: pose.Rate, TweenRate: pose.Tween}, ...generatorWrites},
       ...(navPawns ? {navTrace: {pawns: navPawns.split(','), first: navFirst, last: navLast}} : {}), replay: {ticks: trace, release: true, hold: true, drawTrace: flag('draw-trace'), watch: [
-      {names: ['@player'], props: playerProps}, {names: pawns, props}]}};
+      {names: ['@player'], props: playerProps}, {names: pawns, props},
+      // --extra-watch actors are not pawns: the fields every Actor has
+      ...(extras.length ? [{names: extras, props: ['Location', 'Rotation', 'Velocity', 'Physics', 'AnimSequence', 'AnimFrame', 'AnimRate', 'TweenRate', 'LifeSpan', 'LastRenderTime', 'DistanceFromPlayer']}] : [])]}};
     const started = await page.evaluate(r => window.deusExViewer.liveProbe(r), request);
     const rows = [], nav = [];
     let stalls = 0;
@@ -306,7 +311,7 @@ function compare() {
       const o = rows[i].actors[name], p = played.rows[i]?.actors[name];
       if (!o || !p) continue;
       for (const [label, prop] of [...FIELDS, ...PLAYER_FIELDS.slice(11)].map(f => [f[0], f[1] === '$state' ? 'State' : f[1]])) {
-        if (!(label in o)) continue;
+        if (!(label in o) || !(prop in p)) continue;
         let ov = o[label], pv = p[prop];
         if (label === 'State') { ov = String(ov).split('|')[0]; pv = String(pv).split('|')[0]; }
         rotationCompare = label === 'Rot';

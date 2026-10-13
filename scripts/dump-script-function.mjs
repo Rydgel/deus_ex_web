@@ -84,7 +84,8 @@ const show = n => {
 
 let count = 0;
 pkg.exports.forEach((entry, i) => {
-  if (entry.className !== 'Function' || !wanted.some(re => re.test(entry.path))) return;
+  // A state's code (its labels' statements) is stored as a function's is: Class.State, or Class.State.Begin for its labels
+  if ((entry.className !== 'Function' && entry.className !== 'State') || !wanted.some(re => re.test(entry.path))) return;
   const object = readObject(pkg, bytes, i + 1), r = object.reader;
   for (let k = 0; k < 4; k++) r.compact();
   const name = nameAt(pkg, r.compact());
