@@ -56,6 +56,10 @@ const FIELDS = [
   ['NextAnim', 'NextAnim', 0x688, 'name'],
   // The stasis gate (AActor::InStasis 0x1036bfe0) and its inputs: bStasis, bForceStasis (Actor +0x2a bits 5 and 6), what a rendered view changes.
   ['Stasis', 'bStasis', 0x28, 'bit', 0x200000], ['FStasis', 'bForceStasis', 0x28, 'bit', 0x400000], ['TickVis', 'bTickVisibleOnly', 0x910, 'bit', 0x400],
+  // Animation beyond sequence/frame/rate: the finished/looping/notify flags (Actor +0x2a... bits 3, 4, 5 of the dword at 0x28) and blend channel 0
+  // (BlendAnimSequence[0] +0x68, BlendAnimFrame[0] +0x78, BlendAnimRate[0] +0x88, BlendTweenRate[0] +0x98): an AnimEnd or a notify changes them.
+  ['AnimFin', 'bAnimFinished', 0x28, 'bit', 0x8], ['AnimLoop', 'bAnimLoop', 0x28, 'bit', 0x10], ['AnimNote', 'bAnimNotify', 0x28, 'bit', 0x20],
+  ['BSeq0', 'BlendAnimSequence', 0x68, 'name', 0, 0], ['BFrame0', 'BlendAnimFrame', 0x78, 'f', 0, 0], ['BRate0', 'BlendAnimRate', 0x88, 'f', 0, 0], ['BTween0', 'BlendTweenRate', 0x98, 'f', 0, 0],
   ['DesSp', 'DesiredSpeed', 0x36c, 'f'], ['MaxDes', 'MaxDesiredSpeed', 0x370, 'f'], ['Reduced', 'bReducedSpeed', 0x318, 'bit', 0x800],
 ];
 // The player's pose, read back from the original (the placement of Play's replay): view rotation and Region.
@@ -140,6 +144,41 @@ async function original() {
       const [yaw, ms] = fly.split(':').map(Number);
       post([`cmd set DeusEx.JCDentonMale ViewRotation (Pitch=0,Yaw=${yaw},Roll=0)`, 'sleep 300', 'down W', `sleep ${ms}`, 'up W', 'sleep 1500']);
     }
+  }
+  // --sweep yawBase --sweep-pawns A,B [--sweep-step 15]: instead of tracing, turn the view (ViewRotation only) through the full circle
+  // in steps and read these pawns' LastRenderTime against the level time (rendered while the difference is under half a second),
+  // to .work/live-acceptance/<map>/sweep-original.json (Play's: the `sweep` verb). The level stays frozen.
+  // --stamps-yaws a,b --stamp-pawns A,B [--stamp-seconds 3]: at those view yaws (ViewRotation only) the tracer's `stamps` command logs
+  // which frame stamps each pawn's LastRenderTime (Render.dll 0x10b25161: the frame's recursion, surface and mirror) to
+  // .work/live-acceptance/<map>/stamps-<yaw>.txt. The level stays frozen.
+  if (option('stamps-yaws', null) !== null) {
+    for (const yaw of option('stamps-yaws').split(',').map(Number)) {
+      post([`cmd set DeusEx.JCDentonMale ViewRotation (Pitch=0,Yaw=${yaw},Roll=0)`, 'sleep 1500']);
+      const out = execFileSync(game.WINE, [path.join(root, 'ad/build/dx-live-win.exe'), 'stamps', option('stamp-seconds', 3), option('stamp-pawns', '')], {encoding: 'utf8', env: process.env, maxBuffer: 1 << 26});
+      writeFileSync(path.join(dir, `stamps-${yaw}.txt`), out);
+      const by = {};
+      for (const line of out.split('\n').filter(Boolean)) { const m = /^\d+ (\S+) .*recursion=(\d+) iSurf=(-?\d+)/.exec(line); if (m) { const k = `${m[1]} r${m[2]}${m[2] !== '0' ? ` surf${m[3]}` : ''}`; by[k] = (by[k] ?? 0) + 1; } }
+      console.log(yaw, JSON.stringify(by));
+    }
+    return;
+  }
+  if (option('sweep', null) !== null) {
+    const base = Number(option('sweep')), stepDeg = Number(option('sweep-step', 15)), pawns = option('sweep-pawns', '').split(',').filter(Boolean);
+    const results = [];
+    for (let deg = 0; deg < 360; deg += stepDeg) {
+      const yaw = ((base + Math.round(deg / 360 * 65536)) % 65536 + 65536) % 65536;
+      post([`cmd set DeusEx.JCDentonMale ViewRotation (Pitch=0,Yaw=${yaw},Roll=0)`, 'sleep 1500']);
+      const row = {deg, yaw, pawns: {}};
+      for (const name of pawns) {
+        const dump = execFileSync(game.WINE, [path.join(root, 'ad/build/dump-actor-win.exe'), name, 'LRT:0x34:f', 'Time:0xa8:pf:0x478'], {encoding: 'utf8', env: process.env});
+        const live = dump.split('\n').map(line => /^(\S+) (\S+) LRT=(\S+) Time=(\S+)/.exec(line)).filter(m => m && m[1] !== 'Class' && m[2] === name && Number(m[4]) > 1)[0];
+        if (live) row.pawns[name] = {stale: +(Number(live[4]) - Number(live[3])).toFixed(3), lrt: Number(live[3])};
+      }
+      results.push(row);
+      console.log(deg, yaw, Object.entries(row.pawns).map(([n, v]) => `${n}:${v.stale < 0.5 ? 'R' : '.'}`).join(' '));
+    }
+    writeFileSync(path.join(dir, 'sweep-original.json'), JSON.stringify({map, base, results}, null, 1));
+    return;
   }
   const generators = flag('no-generators') ? [] : wine('list', 'PawnGenerator').split('\n').map(line => /^\S+ (\S+) slot=/.exec(line)?.[1]).filter(Boolean);
   const watchOption = option('watch', 'auto');
@@ -273,6 +312,79 @@ async function population() {
   });
 }
 
+// screen --maps a,b,..: Play's own run of each map from its start pose (the player standing, no input) with the view turned
+// through four yaws, and per view the pawns Play rendered within the last half second that are not in stasis and animate (a
+// census of LastRenderTime, bStasis, AnimRate). It picks the maps worth a run of the original (the original's own
+// LastRenderTime/bStasis from a short trace decide). Output: .work/live-acceptance/screen.json.
+async function screen() {
+  const maps = option('maps', '').split(',').filter(Boolean);
+  const {chromium} = await import('@playwright/test');
+  const {createServer} = await import('vite');
+  const {default: base} = await import('../vite.config.mjs');
+  const deny = base.server.fs.deny.filter(pattern => !(pattern.includes('.work') && root.includes('/.work/')) && !(pattern.includes('.claude/worktrees') && root.includes('/.claude/worktrees/')));
+  const server = await createServer({...base, configFile: false, root, logLevel: 'error', server: {...base.server, port: 0, strictPort: false, fs: {...base.server.fs, deny}, watch: null}});
+  await server.listen();
+  const url = server.resolvedUrls.local[0].replace(/\/$/, '');
+  const browser = await chromium.launch({args: [`--use-angle=${process.platform === 'darwin' ? 'metal' : 'gl'}`]});
+  const file = path.join(root, '.work/live-acceptance/screen.json');
+  const result = existsSync(file) ? JSON.parse(readFileSync(file, 'utf8')) : {};
+  try {
+    for (const name of maps) {
+      const page = await browser.newPage({viewport: {width: 1280, height: 720}, deviceScaleFactor: 1});
+      const errors = []; page.on('pageerror', error => errors.push(error.message));
+      try {
+        await page.goto(`${url}/?seed=1`);
+        await page.waitForFunction(() => window.deusExViewer?.status().ready, {}, {timeout: 240000});
+        if (await page.evaluate(() => window.deusExViewer.status().map) !== name) {
+          await page.locator('#map').selectOption(name);
+          await page.waitForFunction(m => { const s = window.deusExViewer?.status(); return s?.ready && s.map === m; }, name, {timeout: 300000});
+        }
+        const frames = n => page.evaluate(async n => { for (let k = 0; k < n; k++) await new Promise(r => requestAnimationFrame(r)); }, n);
+        await frames(120);
+        const start = await page.evaluate(() => window.deusExViewer.viewProbe({}));
+        const views = [];
+        for (let k = 0; k < 4; k++) {
+          const yaw = ((start.viewRotation[1] + 16384 * k) % 65536 + 65536) % 65536;
+          if (k) await page.evaluate(r => window.deusExViewer.viewProbe({rotation: r}), [0, yaw, 0]);
+          await frames(k ? 150 : 60);
+          const {census} = await page.evaluate(() => window.deusExViewer.liveProbe({census: true}));
+          const seen = census.pawns.filter(p => !p.hidden && census.time - p.lrt < 0.5 && p.lrt > 0);
+          const active = seen.filter(p => !p.stasis);
+          views.push({yaw, rendered: seen.length, notStasis: active.length, animating: active.filter(p => p.rate > 0).length,
+            names: active.map(p => `${p.name}:${p.anim}:${p.state}`).slice(0, 12), pawns: census.pawns.length,
+            // rendered pawns (InStasis is false while LastRenderTime is recent, whatever bStasis says)
+            seen: seen.map(p => `${p.name}:${p.anim}:${p.state}:rate ${Number(p.rate).toFixed(2)}:${Math.round(p.dist)}`)});
+        }
+        result[name] = {start: start.location, startYaw: start.viewRotation[1], views, errors: errors.slice(0, 2)};
+        const best = views.reduce((a, b) => b.rendered > a.rendered ? b : a);
+        console.log(name.padEnd(30), `pawns ${views[0].pawns}`, `best yaw ${best.yaw}: rendered ${best.rendered}: ${best.seen.join(' ')}`);
+      } catch (error) { result[name] = {error: String(error.message).slice(0, 200)}; console.log(name.padEnd(30), 'ERROR', result[name].error); }
+      await page.close();
+      writeFileSync(file, JSON.stringify(result, null, 1));
+    }
+  } finally { await browser.close(); await server.close(); }
+}
+
+// sweep --yaw-base N --pawns A,B [--step 15]: Play's side of `original --sweep`: the same views, the same pawns' staleness of LastRenderTime.
+async function sweep() {
+  const base = Number(option('yaw-base')), stepDeg = Number(option('step', 15)), pawns = option('pawns', '').split(',').filter(Boolean);
+  await withPlay(async ({page, frames}) => {
+    const results = [];
+    for (let deg = 0; deg < 360; deg += stepDeg) {
+      const yaw = ((base + Math.round(deg / 360 * 65536)) % 65536 + 65536) % 65536;
+      await page.evaluate(r => window.deusExViewer.viewProbe({rotation: r}), [0, yaw, 0]);
+      const t0 = (await page.evaluate(() => window.deusExViewer.liveProbe({census: true}))).census.time;
+      let census;
+      do { await frames(15); census = (await page.evaluate(() => window.deusExViewer.liveProbe({census: true}))).census; } while (census.time - t0 < 1.5);
+      const row = {deg, yaw, pawns: {}};
+      for (const name of pawns) { const p = census.pawns.find(q => q.name === name); if (p) row.pawns[name] = {stale: +(census.time - p.lrt).toFixed(3), lrt: p.lrt}; }
+      results.push(row);
+      console.log(deg, yaw, Object.entries(row.pawns).map(([n, v]) => `${n}:${v.stale < 0.5 ? 'R' : '.'}`).join(' '));
+    }
+    writeFileSync(path.join(dir, 'sweep-play.json'), JSON.stringify({map, base, results}, null, 1));
+  });
+}
+
 async function play() {
   // --ticks N replays only the first N unfrozen ticks; --nav-trace A,B [--nav-ticks first:last] also records those pawns'
   // reach and path natives' boundary calls (src/runtime/nav-trace.mjs) to nav-play.json, to compare with the original's
@@ -336,6 +448,7 @@ async function play() {
 // --- comparison -----------------------------------------------------------
 const f32 = Math.fround;
 let rotationCompare = false;
+const indexOf = new Map(FIELDS.filter(f => f[5] !== undefined).map(f => [f[0], f[5]]));
 function same(a, b) {
   if (a === null || a === undefined) a = 'None';
   if (b === null || b === undefined) b = 'None';
@@ -374,6 +487,8 @@ function compare() {
       for (const [label, prop] of [...FIELDS, ...PLAYER_FIELDS.slice(11)].map(f => [f[0], f[1] === '$state' ? 'State' : f[1]])) {
         if (!(label in o) || !(prop in p)) continue;
         let ov = o[label], pv = p[prop];
+        const index = indexOf.get(label);
+        if (index !== undefined && Array.isArray(pv)) pv = pv[index];
         if (label === 'State') { ov = String(ov).split('|')[0]; pv = String(pv).split('|')[0]; }
         rotationCompare = label === 'Rot';
         if (same(ov, pv)) continue;
@@ -395,6 +510,8 @@ function compare() {
 if (verb === 'original') await original();
 else if (verb === 'snap') await snap();
 else if (verb === 'population') await population();
+else if (verb === 'screen') await screen();
+else if (verb === 'sweep') await sweep();
 else if (verb === 'play') await play();
 else if (verb === 'compare') compare();
 else console.log('usage: live-acceptance.mjs original|play|compare|snap --map <map>');

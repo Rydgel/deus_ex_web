@@ -15,7 +15,9 @@ export DX_GAME=${DX_GAME:-$WINEPREFIX/drive_c/Deus Ex GOTY Edition}
 cd "$ROOT" || exit 1
 exec 9>"$LOCK"
 flock 9
-if pgrep -x DeusEx.exe >/dev/null; then echo "a DeusEx.exe is already running; not starting" >&2; exit 9; fi
+# another agent's game may still be closing (it is not always started under the lock): wait for it, up to 30 minutes
+for _ in $(seq 1 360); do pgrep -x DeusEx.exe >/dev/null || break; sleep 5; done
+if pgrep -x DeusEx.exe >/dev/null; then echo "a DeusEx.exe is still running; not starting" >&2; exit 9; fi
 node ad/scripts/original-game.mjs launch "$MAP.dx" || exit 1
 PID=
 quit_game() {

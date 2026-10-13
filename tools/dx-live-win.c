@@ -11,6 +11,10 @@
  *   wine dx-live-win.exe list <Class>
  *       the live level's actors whose class derives from <Class>: class, name, global slot, Location, state, OddsOfAppearing
  *
+ *   wine dx-live-win.exe stamps <seconds> <name,name,...>
+ *       which frame stamps an actor's LastRenderTime (Render.dll 0x10b25161): per stamp of a listed actor its name and the
+ *       frame's Recursion, iSurf, Mirror and parent (the main frame has recursion 0, a mirror's child 1 or more)
+ *
  *   wine dx-live-win.exe trace <config>
  *       attaches as a debugger and breaks at ULevel::Tick's entry (Engine.dll
  *       0x103a51a0) and return (0x103a5baf, `ret 8`) for the watched level,
@@ -745,9 +749,80 @@ static int do_list(const char *wanted) {
   return 0;
 }
 
+
+/* stamps <seconds> <name,name,...>: breaks at the instruction that stores Actor.LastRenderTime in Render.dll
+ * (0x10b25161, `mov [eax+0x34], ecx`; EAX = the actor, the caller's FSceneNode* at [ebp+8]) for <seconds>, and
+ * prints one line per stamp of a listed actor: its name, the frame's Recursion (+0x1c), iSurf (+0x14), Mirror
+ * (+0x20) and parent. Which frame (the main frame, recursion 0, or a mirror's child) stamps an actor. */
+#define STAMP_SITE 0x10b25161u
+static int do_stamps(int seconds, const char *names) {
+  QueryPerformanceFrequency(&qpf);
+  pid = find_pid("DeusEx.exe");
+  if (!pid) { fprintf(stderr, "DeusEx.exe not running\n"); return 1; }
+  process = OpenProcess(PROCESS_ALL_ACCESS, FALSE, pid);
+  core_base = module_base("Core.dll");
+  uintptr_t render = module_base("Render.dll");
+  if (!process || !core_base || render != 0x10b00000u) { fprintf(stderr, "cannot read DeusEx.exe or Render.dll is at 0x%lx\n", (unsigned long)render); return 1; }
+  names_table = read_u32(core_base + OFF_NAMES_DATA);
+  char list[2048]; strncpy(list, names, sizeof(list) - 1); list[sizeof(list) - 1] = 0;
+  if (!DebugActiveProcess(pid)) { fprintf(stderr, "DebugActiveProcess failed (%lu)\n", GetLastError()); return 1; }
+  DebugSetProcessKillOnExit(FALSE);
+  Breakpoint b; bp_arm(&b, STAMP_SITE);
+  DWORD pending_tid = 0; int pending = 0;
+  ULONGLONG until = GetTickCount64() + (ULONGLONG)seconds * 1000;
+  long hits = 0;
+  DEBUG_EVENT ev;
+  while (GetTickCount64() < until) {
+    if (!WaitForDebugEvent(&ev, 100)) continue;
+    DWORD status = DBG_CONTINUE;
+    if (ev.dwDebugEventCode == EXCEPTION_DEBUG_EVENT) {
+      DWORD code = ev.u.Exception.ExceptionRecord.ExceptionCode;
+      uintptr_t where = (uintptr_t)ev.u.Exception.ExceptionRecord.ExceptionAddress;
+      HANDLE th = thread_of(ev.dwThreadId);
+      if (code == EXCEPTION_BREAKPOINT && where == STAMP_SITE && th) {
+        CONTEXT ctx; ctx.ContextFlags = CONTEXT_CONTROL | CONTEXT_INTEGER; GetThreadContext(th, &ctx);
+        hits++;
+        const char *name = object_name((uintptr_t)ctx.Eax);
+        int wanted = 0; char copy[2048]; strcpy(copy, list);
+        for (char *n = strtok(copy, ","); n; n = strtok(NULL, ",")) if (!strcmp(n, name)) wanted = 1;
+        if (wanted) {
+          unsigned frame = read_u32(ctx.Ebp + 8), rec = frame ? read_u32(frame + 0x1c) : 0, surf = frame ? read_u32(frame + 0x14) : 0, parent = frame ? read_u32(frame + 8) : 0;
+          float mirror = 0; if (frame) read_mem(frame + 0x20, &mirror, 4);
+          printf("%lld %s frame=0x%x recursion=%u iSurf=%d mirror=%g parent=0x%x\n", qpc_us(), name, frame, rec, (int)surf, mirror, parent);
+        }
+        ctx.Eip = (DWORD)where; ctx.EFlags |= 0x100; SetThreadContext(th, &ctx);
+        write_mem(b.address, &b.original, 1); FlushInstructionCache(process, (LPCVOID)b.address, 1);
+        pending = 1; pending_tid = ev.dwThreadId;
+      } else if (code == EXCEPTION_SINGLE_STEP && pending && ev.dwThreadId == pending_tid) {
+        unsigned char cc = 0xCC; write_mem(b.address, &cc, 1); FlushInstructionCache(process, (LPCVOID)b.address, 1); pending = 0;
+      } else if (code == EXCEPTION_BREAKPOINT || code == EXCEPTION_SINGLE_STEP) {
+      } else status = DBG_EXCEPTION_NOT_HANDLED;
+    } else if (ev.dwDebugEventCode == CREATE_PROCESS_DEBUG_EVENT && ev.u.CreateProcessInfo.hFile) CloseHandle(ev.u.CreateProcessInfo.hFile);
+    else if (ev.dwDebugEventCode == LOAD_DLL_DEBUG_EVENT && ev.u.LoadDll.hFile) CloseHandle(ev.u.LoadDll.hFile);
+    ContinueDebugEvent(ev.dwProcessId, ev.dwThreadId, status);
+  }
+  bp_disarm(&b);
+  /* drain anything already queued, rewinding an int3 that fired before the byte was restored */
+  int quiet = 0;
+  while (quiet < 3) {
+    if (!WaitForDebugEvent(&ev, 40)) { quiet++; continue; }
+    quiet = 0; DWORD status = DBG_CONTINUE;
+    if (ev.dwDebugEventCode == EXCEPTION_DEBUG_EVENT) {
+      DWORD code = ev.u.Exception.ExceptionRecord.ExceptionCode; uintptr_t where = (uintptr_t)ev.u.Exception.ExceptionRecord.ExceptionAddress; HANDLE th = thread_of(ev.dwThreadId);
+      if (code == EXCEPTION_BREAKPOINT && where == STAMP_SITE && th) { CONTEXT ctx; ctx.ContextFlags = CONTEXT_CONTROL; GetThreadContext(th, &ctx); ctx.Eip = (DWORD)where; SetThreadContext(th, &ctx); }
+      else if (code != EXCEPTION_BREAKPOINT && code != EXCEPTION_SINGLE_STEP) status = DBG_EXCEPTION_NOT_HANDLED;
+    }
+    ContinueDebugEvent(ev.dwProcessId, ev.dwThreadId, status);
+  }
+  DebugActiveProcessStop(pid);
+  fprintf(stderr, "%ld stamps seen in %d s\n", hits, seconds);
+  return 0;
+}
+
 int main(int argc, char **argv) {
   if (argc < 2) { fprintf(stderr, "usage: dx-live-win.exe rng [count] [interval_ms] | trace <config>\n"); return 2; }
   if (!strcmp(argv[1], "trace")) return argc > 2 ? do_trace(argv[2]) : 2;
+  if (!strcmp(argv[1], "stamps")) return argc > 3 ? do_stamps(atoi(argv[2]), argv[3]) : 2;
   if (!strcmp(argv[1], "list")) { QueryPerformanceFrequency(&qpf); return argc > 2 ? do_list(argv[2]) : 2; }
   QueryPerformanceFrequency(&qpf);
   pid = find_pid("DeusEx.exe");
