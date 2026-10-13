@@ -3,6 +3,7 @@
 // (delta, rand state, viewport size, strobe, generator state, population match), then compared per actor and field.
 //
 //   node scripts/live-sweep.mjs run --maps a,b,c [--ticks 1200] [--max-seconds 300] [--seed 1] [--tag sweep] [--out .work/live-acceptance/sweep.json] [--force]
+//        [--allow-missing generators]   # go on when the only actors Play's load lacks are generators (chosen by chance at each load); they are not watched
 //   node scripts/live-sweep.mjs report [--out ...]      # the table, the ranked groups and the skipped maps, as markdown on stdout
 //
 // Pipeline: Play's population probe of map k+1 and Play's replay of map k run in Chromium while the original runs map k+1 (one Wine
@@ -56,7 +57,7 @@ async function population(map) {
 async function original(map) {
   mkdirSync(mapDir(map), {recursive: true});
   const logFile = path.join(mapDir(map), 'sweep-original.log');
-  const result = await run('bash', ['scripts/live-original.sh', map, '--ticks', String(ticks), '--delta', '0.0166666675', '--monitor', '20', '--max-seconds', String(maxSeconds), '--tag', tag],
+  const result = await run('bash', ['scripts/live-original.sh', map, '--ticks', String(ticks), '--delta', '0.0166666675', '--monitor', '20', '--max-seconds', String(maxSeconds), '--tag', tag, ...(option('allow-missing', null) ? ['--allow-missing', option('allow-missing')] : [])],
     {logFile, timeoutMs: 90 * 60e3});
   return result;
 }
@@ -108,7 +109,7 @@ async function summarise(map) {
   const states = existsSync(tracePath) ? await stateAt(tracePath, wanted) : new Map();
   for (const d of diverging) Object.assign(d, states.get(`${d.firstTick}:${d.actor}`) ?? {});
   diverging.sort((a, b) => a.firstTick - b.firstTick);
-  return {watched: entries.length, equal: entries.filter(([, e]) => e.firstDifference === null).length, ticks: report.ticks, diverging,
+  return {notInPlay: watch.notInPlay ?? [], watched: entries.length, equal: entries.filter(([, e]) => e.firstDifference === null).length, ticks: report.ticks, diverging,
     rngFirstDifference: report.rng?.firstTickWithDifferentDrawCount ? report.rng.firstTickWithDifferentDrawCount.tick : null,
     clockEqual: !report.clock?.firstDifference, strobe: report.strobe ?? null};
 }

@@ -242,6 +242,11 @@ async function original() {
   // of its replay (commands<tag>.json). A command is the console line as typed (an exec function of the player, `set ...`).
   const cmds = option('cmds', '').split('|').filter(Boolean).map(entry => { const i = entry.indexOf(':'); return {after: Number(entry.slice(0, i)), text: entry.slice(i + 1)}; });
   writeFileSync(path.join(dir, `commands${suffix}.json`), JSON.stringify(cmds));
+  // Actors whose Timer runs from the load (SetTimer in PostBeginPlay, e.g. Tree: 4 + 2 * FRand()): Play's load draws another rate, so the
+  // original's TimerRate/TimerCounter are read here and written into Play (docs/rng.md). The list comes from Play's population step.
+  const reference0 = path.join(dir, 'play-population.json');
+  const timers = (existsSync(reference0) && !flag('no-timers') ? JSON.parse(readFileSync(reference0, 'utf8')).timers ?? [] : []).filter(name => !names.includes(name) && !generators.includes(name));
+  const buildConfig = (names, generators, timers) => {
   const config = [`out ${tracePath}`, 'player JCDentonMale', `release ${option('release', 3)}`, `ticks ${option('ticks', 600)}`,
     ...(cmds.length ? [`pause-at ${[...new Set(cmds.map(c => c.after))].sort((a, b) => a - b).join(' ')}`] : []),
     ...(option('delta', null) ? [`delta ${option('delta')}`] : []), ...(option('max-seconds', null) ? [`max-seconds ${option('max-seconds')}`] : []), ...(option('monitor', null) ? [`monitor ${option('monitor')}`] : []), ...(option('actor-trace', null) ? [`actor-trace ${option('actor-trace').replace(':', ' ')}`] : []),
@@ -250,11 +255,10 @@ async function original() {
     ...(generators.length ? [`watch ${generators.join(',')} ${GENERATOR_FIELDS.map(spec).join(' ')}`] : []),
     `watch @player ${PLAYER_FIELDS.map(spec).join(' ')}`,
     `watch ${names.join(',')} ${FIELDS.map(spec).join(' ')}`];
-  // Actors whose Timer runs from the load (SetTimer in PostBeginPlay, e.g. Tree: 4 + 2 * FRand()): Play's load draws another rate, so the
-  // original's TimerRate/TimerCounter are read here and written into Play (docs/rng.md). The list comes from Play's population step.
-  const reference0 = path.join(dir, 'play-population.json');
-  const timers = (existsSync(reference0) && !flag('no-timers') ? JSON.parse(readFileSync(reference0, 'utf8')).timers ?? [] : []).filter(name => !names.includes(name) && !generators.includes(name));
   if (timers.length) config.push(`watch ${timers.join(',')} TRate:0x48:f TCount:0x4c:f`);
+  return config;
+  };
+  let config = buildConfig(names, generators, timers.slice());
   const configPath = path.join(dir, 'trace.cfg');
   writeFileSync(configPath, config.join('\n') + '\n');
   writeFileSync(watchPath, JSON.stringify({map, pawns: names.filter(name => !extras.includes(name)), extras, generators, timers, classes: classOf}, null, 1));
@@ -270,8 +274,20 @@ async function original() {
     const played = new Set(JSON.parse(readFileSync(reference, 'utf8')).names);
     const spawned = /^(Skill|Aug|NanoKey|ColorTheme|Shadow|ParticleProxy|Laser|Flare|Cigarettes|Candybar|Weapon|Mission|GameReplicationInfo|PlayerReplicationInfo|JCDenton|Mutator|DeusExGameInfo|PickupDistributor|AutoTurretGun|BarkManager|ParticleGenerator|DataVault|Credits|Ammo|BioelectricCell|Medkit|Binoculars|Lockpick|Multitool|LAM|Liquor|Soda|Sodacan|Fruit|Vice)/;
     const only = everything.filter(e => !played.has(e.name) && !spawned.test(e.name)).map(e => e.name);
-    if (only.length) { console.log(`POPULATION: the original holds ${only.length} actors Play's seed ${option('seed', 1)} load lacks: ${only.slice(0, 20).join(' ')}`); process.exitCode = 3; return; }
-    console.log('population: the original holds nothing Play lacks');
+    // --allow-missing generators|all: go on when the actors only the original holds are all generators (a sweep: FlyGenerators and
+    // the like are chosen by chance at each load and Play's seeded load cannot be made to hold the original's set); they leave the watch
+    // list and the map's record (`notInPlay`). Any other actor missing in Play still asks for a reload (exit code 3).
+    const tolerated = {generators: /Generator\d+$/, all: /./}[option('allow-missing', '')];
+    if (only.length && tolerated && only.every(name => tolerated.test(name))) {
+      const gone = new Set(only);
+      console.log(`POPULATION tolerated: ${only.length} actors only the original holds are not watched: ${only.slice(0, 20).join(' ')}`);
+      names = names.filter(name => !gone.has(name));
+      const keptGenerators = generators.filter(name => !gone.has(name)), keptTimers = timers.filter(name => !gone.has(name));
+      config = buildConfig(names, keptGenerators, keptTimers);
+      writeFileSync(configPath, config.join('\n') + '\n');
+      writeFileSync(watchPath, JSON.stringify({map, pawns: names.filter(name => !extras.includes(name)), extras, generators: keptGenerators, timers: keptTimers, classes: classOf, notInPlay: only}, null, 1));
+    } else if (only.length) { console.log(`POPULATION: the original holds ${only.length} actors Play's seed ${option('seed', 1)} load lacks: ${only.slice(0, 20).join(' ')}`); process.exitCode = 3; return; }
+    else console.log('population: the original holds nothing Play lacks');
   }
   rmSync(`${tracePath}.resume`, {force: true});
   rmSync(`${tracePath}.go`, {force: true});
