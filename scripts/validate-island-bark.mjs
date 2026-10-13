@@ -73,7 +73,9 @@ let bark = null;
 for (let tick = 0; tick < 620; tick++) {
   input.tick(1);
   if (bark) continue;
-  const slot = rd(barkManager, 'currentBarks').find(info => field(info, 'barkpawn'));
+  // Terrorist18's bark: with the AI event manager (docs/ai-event-manager.md) the other terrorists hear the placed player too, and one of
+  // them may bark first (Terrorist30's BM_PreAttackSearching), so the slot is chosen by its pawn.
+  const slot = rd(barkManager, 'currentBarks').find(info => field(info, 'barkpawn')?.name === 'Terrorist18');
   if (!slot) continue;
   const winBarks = rd(barkDisplay, 'winBarks'), item = W.ptr(winBarks, 0x13c);
   bark = {tick, pawn: field(slot, 'barkpawn').name, conName: field(slot, 'conname'), mode: field(slot, 'barkmode'),
@@ -90,7 +92,7 @@ for (let event = randomLabel; event; event = rd(event, 'nextEvent')) {
 }
 const spoken = speeches.find(speech => speech.text === bark.text);
 assert.ok(spoken, `the bark display shows a speech of the conversation: ${JSON.stringify(bark.text)}`);
-assert.equal(bark.count, 1, 'one bark item');
+assert.ok(bark.count >= 1, 'a bark item is shown');
 assert.notEqual(spoken.soundId, -1);
 assert.notEqual(bark.soundId, 0, "GetSpeechAudio found the speech's sound and PlaySound returned its channel");
 const textPause = Math.max(bark.text.length * rd(barkManager, 'perCharDelay'), rd(barkManager, 'minimumTextPause'));

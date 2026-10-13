@@ -9,6 +9,7 @@
 //! results are written to `RESULT`.
 #![no_std]
 
+mod aievent;
 mod hash;
 mod move_actor;
 mod move_pawn;

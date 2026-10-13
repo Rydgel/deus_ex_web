@@ -27,6 +27,7 @@ import {FrameLocals, frameLayout} from './script-frame-locals.mjs';
 import {copyValue} from './script-values.mjs';
 import {lowerFunction, fieldKeyId, functionSignature, classRecordId, nameId, foldedNameId, nameSpelling} from './script-vm-lower.mjs';
 import {PerceptionHost} from './script-vm-perception.mjs';
+import {AiEventHost} from './script-vm-aievent.mjs';
 import {LocomotionHost} from './script-vm-locomotion.mjs';
 import {ParticleHost} from './script-vm-particles.mjs';
 import {GcHost} from './script-vm-gc.mjs';
@@ -270,6 +271,8 @@ export class RustScriptVm {
     this.receiverCapacity = 0;
     // R3-c: the perception natives' tables and imports.
     this.perception = new PerceptionHost(this);
+    // The AI event manager (aievent.rs, docs/ai-event-manager.md).
+    this.aiEvents = new AiEventHost(this);
     // October 1: the locomotion polls' table (loco.rs).
     this.loco = new LocomotionHost(this);
     // October 3: the viewer's render scan (render.rs).
@@ -320,6 +323,7 @@ export class RustScriptVm {
     this.result3At = x.vm_result3_ptr();
     this.checkValuesAt = x.vm_check_values_ptr();
     this.perception.attach(x);
+    this.aiEvents.attach(x);
     this.loco.attach(x);
     this.render.attach(x);
     this.particles.attach(x);
@@ -623,6 +627,7 @@ export class RustScriptVm {
     };
     return {
       ...vm.perception.imports(enter, leave, STATS ? count : null),
+      ...vm.aiEvents.imports(),
       ...vm.loco.imports(),
       ...vm.render.imports(),
       ...vm.particles.imports(),

@@ -61,6 +61,16 @@ const K_RUN: u32 = 3;
 pub extern "C" fn vm_events_ptr() -> *mut u32 {
     addr_of_mut!(EVENTS) as *mut u32
 }
+/// bDeleteMe of an actor read from its image (the table above), or None when the image cannot be read.
+pub(crate) fn image_deleted(handle: u32) -> Option<bool> {
+    let d = unsafe { *addr_of!(DELETE_ME) };
+    if d[2] == 0 {
+        return None;
+    }
+    let (info, bind) = receiver(handle);
+    let deleted = field_addr(info, bind, d[1], d[0])?;
+    Some(load32(deleted) & d[2] != 0)
+}
 #[no_mangle]
 pub extern "C" fn vm_delete_me_ptr() -> *mut u32 {
     addr_of_mut!(DELETE_ME) as *mut u32
