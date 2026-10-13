@@ -110,6 +110,10 @@ const PLAYER_FIELDS = FIELDS.slice(0, 10).concat([FIELDS[10]],
 // --perception: the player's AIVisibility cache (Actor +0x2e8: VisUpdateTime, CurrentVisibility, LastVisibility), which every AICanSee on the player reads.
 if (flag('perception')) PLAYER_FIELDS.push(['CRad', 'CollisionRadius', 0x1d4, 'f'], ['CHeight', 'CollisionHeight', 0x1d8, 'f'], ['BaseEye', 'BaseEyeHeight', 0x3f4, 'f'], ['VisT', 'VisUpdateTime', 0x2e8, 'f'], ['CurVis', 'CurrentVisibility', 0x2ec, 'f'], ['LastVis', 'LastVisibility', 0x2f0, 'f']);
 
+// --player-gear: what the player holds and aims at (Pawn.Weapon/PendingWeapon, Inventory, DeusExPlayer.inHand/FrobTarget, bFire, Health): the console scenes that summon,
+// pick up and fire a weapon (--cmds) are followed through these.
+if (flag('player-gear')) PLAYER_FIELDS.push(['Weapon', 'Weapon', 976, 'obj'], ['PendWeapon', 'PendingWeapon', 980, 'obj'], ['Inv', 'Inventory', 192, 'obj'], ['InHand', 'inHand', 2600, 'obj'],
+  ['FrobTgt', 'FrobTarget', 2536, 'obj'], ['bFire', 'bFire', 1206, 'u8'], ['PHealth', 'Health', 1064, 'i32']);
 // Load-time random state of the PawnGenerators (PigeonGenerator, SeagullGenerator, ...): PostBeginPlay draws TryTimer
 // (0.25 + FRand()*0.75) and, with bRandomCount, PoolCount from the load's stream, which the two sides do not share
 // (the original seeds the CRT with time(NULL), docs/rng.md). A generator first spawns when its TryTimer runs out,

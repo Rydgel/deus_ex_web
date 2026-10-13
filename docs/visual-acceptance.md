@@ -643,9 +643,29 @@ breakpoints (`--extra-config`) for the original's own calls. The player stands s
 | 06_HongKong_WanChai_Underworld, ghost (fresh original) | 600 | 50 of 50 | equal |
 | Underworld, visible player allied to mj12 | 400 | 50 of 50 | equal |
 | Underworld, visible player allied to mj12 (path fixes) | 1,200 | 50 of 50 | equal |
+| Underworld, visible player allied to mj12, three more fresh captures (1,500, 1,500 and 1,000 ticks) with the probe gate below | 1,500 / 1,500 / 1,000 | 50 of 50 / 52 of 52 / 52 of 52 | equal |
+| Underworld, 940 ticks with the `Touching` slots of the pawns, triggers and doors watched | 940 | 61 of 61 | equal; 581 `AddTouch`/`EndTouch` calls identical in order, result and slots |
 
 Before the path fixes the same 1,200-tick run diverged at tick 560 (Female5), and the first 1,500-tick run at tick 567 (Female3) for civilians fleeing through
-the dance floor. Two longer fresh captures (1,500 ticks, perc4 and perc6) are equal for 46 to 47 of 50 actors; the rest is described under *Open* below.
+the dance floor. Three longer fresh captures then ended with two club doors (DeusExMover4 and 21, Tag `club_doors`) swinging on a curve of their own
+from tick 890 to 920 and a pawn meeting them closed (tick 935 to 965), found and fixed as follows.
+
+**The club doors.** A pawn (Businessman3) walks through five overlapping trigger cylinders (Trigger0, FlagTrigger3/15/16, SkillAwardTrigger12) and has four
+`Touching` slots, so its slots churn: a Touch/UnTouch of Trigger0 every tick. Each Touch makes the Trigger actor call `A.Trigger(...)` on the door,
+which is in `TriggerOpenTimed`'s `Open` sequence with `Disable('Trigger')` in force. In Play that call ran `TriggerOpenTimed.Trigger`, whose
+`GotoState('TriggerOpenTimed', 'Open')` restarted `InterpolateTo` from the current angle on every tick (a slow start each time): the door finished
+45 ticks late. Three suspects were checked against the original: (1) a same-state `GotoState` recomputing the ProbeMask: no, the script native calls
+`GotoLabel` only for the state it is in, an oracle of Core's GotoState/execGotoState/GotoLabel says so and Play already did the same
+([door state](door-state.md#gotostate-from-script-the-same-state-runs-gotolabel-only-2026-10-13)); (2) the `Touching` machinery or the overlap
+order: no, breakpoints in the real `AddTouch`, `EndTouch` and `BeginTouch` bodies logged 581 calls over ticks 840 to 940 and Play's were identical in
+order, result and slot contents, with the slots of the pawn, the triggers and the doors watched per tick; (3) the call itself: yes. The original's
+log of the door's script calls (breakpoints at `UObject::ProcessInternal`, gated on DeusExMover4) shows `Trigger` entering and returning at once, with
+no `GotoState` anywhere: `ProcessInternal` (Core `0x1013f690`) tests the probe bit of the function's name before it runs *any* script function, a
+call from script included, so `Disable('Trigger')` silences `A.Trigger()`. Play applied that test to engine events (`ProcessEvent`) only
+([script events](script-events.md#a-script-call-runs-the-same-probe-gate-uobjectprocessinternal-2026-10-13)). Fixed in `ScriptRuntime.callFunction`
+and the Rust CALL (`interp.rs`; the callee's probe index travels with the call cache and CALL_BLOCK), with a Unicorn oracle of ProcessInternal
+(12 cases) that fails without the gate, a validator of the Rust CALL that fails with the gate disabled, and no change to the Island's digest or
+tick time (4 interleaved rounds, 17.91 ms against 17.97 ms).
 
 **Not covered.** The player never fires, throws or makes a noise (`MakeNoise`): the manager's weapon, gunshot and loud-noise paths are exercised only by what the NPCs
 send each other (distress, footsteps, the fleeing pawn's `Distress`). A weapon in the player's hand in a live capture is the next scene. `AICanSmell` is the original's
@@ -766,27 +786,8 @@ its PID; Play runs headless Chromium in worker mode.
 
 ## Open
 
-- **Two doors open late in Play when a pawn walks through a cluster of triggers (Underworld, ticks 877 to 965).** After the path fixes, two fresh
-  1,500-tick captures (perc4, perc6) and a 1,000-tick one (perc8) all end with the same first difference: DeusExMover4 and DeusExMover21 (the club
-  doors, Tag `club_doors`, state `TriggerOpenTimed`) swing on the original's curve to the end (rotation 16384 to 31744 over about 120 ticks, 877 to 999
-  in perc6) and on Play's only until a pawn (Businessman3) reaches the cluster of Trigger0, FlagTrigger3/15/16 and SkillAwardTrigger12 around
-  (-1024, -940); from tick 920 in perc6 (890 in perc8) Play's mover is re-triggered every tick (`Touch`/`UnTouch` of Trigger0 against the pawn
-  alternating, each `Trigger` doing `GotoState('TriggerOpenTimed', 'Open')`, which restarts `InterpolateTo` from the current angle with an
-  ease-in), the door finishes about 45 ticks later (1044), and the pawn, walking at 180 units/s, meets it still closed at tick 935 to 965
-  (`Bump(DeusExMover4)`, 1.2 units into a 3-unit step). The original does not restart the door. Everything else is equal (perc6: Hooker4 and
-  LowerClassFemale1 differ at 1,202 because they react to Businessman3 at the distance the stuck pawn no longer has). What is known: Play's and the
-  original's `Touch` machinery agree on the rules (`BeginTouch`/`AddTouch`/`EndTouch` are oracle-exact, 825 cases, [check encroachment](check-encroachment.md)),
-  the pawn overlaps five trigger cylinders at once and the pawn has four `Touching` slots, so evictions churn the slots in Play (it prints
-  `UnTouch` of four triggers and a `Touch` of the fifth in one update, then the reverse); the original's call log (`BeginTouch` breakpoints, perc8) shows it
-  calling `BeginTouch` every tick for FlagTrigger15 and FlagTrigger3 at 915 to 922 and for Trigger0, FlagTrigger16 and SkillAwardTrigger12 at
-  872 to 884 (triggers Play already holds in its slots; the log does not say whether those calls insert) and no restart of the door. Not known: the slot contents and the overlap list order in the
-  original, which differ from Play's from about tick 860. Next step: log the original's `AddTouch` (its inner call is not through the thunk the
-  breakpoint uses; `EndTouch`'s thunk was never hit) and the `Touching` array of the pawn per tick.
-- A same-state `GotoState` was read in the disassembly (`UObject::GotoState` `0x1012e8f0`, `0x1012ea1f`) to recompute the StateFrame's ProbeMask and
-  reset its Code on every call, the state it is already in included; Play's `gotoState` keeps the mask in that case. Making Play do it
-  broke the match of the Underworld's TriadRedArrow pawns from tick 72 (Walk against BreatheLight, a stream draw at 121), so it is not applied; the
-  reading and the live data disagree and a Unicorn run of `GotoState` would settle it.
-
+- The player's weapon noise (a pistol fired near hostile NPCs: `WeaponFire`, `LoudNoise` through the event manager, then the NPCs' reactions) is
+  not compared with the original yet; hearing from a visible player is (above).
 - The uniform 1.13–1.41× raw brightness gap under Wine; a CrossOver
   capture on the Mac matched more closely. The user does not want it
   chased: it is a known gamma issue of the game on Windows.
@@ -798,8 +799,8 @@ its PID; Play runs headless Chromium in worker mode.
 - **Held frames carry the host's Strobe phase.** The Strobe flag is a host input ([Strobe](#strobe-a-host-input-and-a-triggerlight-the-page-lit-wrongly)):
   a frame compared at a held tick takes the original's measured flag, not its own. A light-map region lit by a Strobe light that is on
   differs between two frames of the same program unless the flag is matched. The Underworld's only Strobe light is TriggerLight1, off.
-- The stream's draw count per tick differs on some tick between Play and the original in every pilot (the Underworld on tick 1 to 3,
-  depending on the load) while every watched field agrees; not traced.
+- The stream's draw count per tick was a difference in every early pilot (the Underworld on tick 1 to 3, depending on the load); with the load-time
+  inputs copied from the original (divergences 5 and 6) it is equal in every run listed above, 600 to 1,500 ticks.
 - Captures come from one Wine/D3D host. D3D behaviour that depends on the
   driver is not separated from the original's own.
 
