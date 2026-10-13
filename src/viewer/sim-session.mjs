@@ -1078,8 +1078,36 @@ export function createSimSession(game, { assets = null, events = [], exportName 
             }
           if (pass === lastMirror && actorPasses) mainDecisions = actorScene.passVisibility(null);
         }
+        // A child frame OccludeBsp made that no pass draws (the page has no mirror group for its surface: a mover's
+        // translucent glass, 06_HongKong_WanChai_Underworld) still stamps its Frame->Sprite: DrawFrame draws every
+        // child frame, and DrawActorSprite (0x10b25150) stamps what it draws. The original's frame 1 of that map
+        // (recursion 1, Mirror -1) stamped a pawn the main frame culls; without this Play never stamped it
+        // (docs/visual-acceptance.md "Live scenes", pilot 3).
+        if (!inspect && frames) {
+          const planned = new Set(passes.filter(pass => pass.frame).map(pass => pass.frame.index));
+          for (const frame of frames) {
+            if (planned.has(frame.index)) continue;
+            for (const sprite of sprites) if (sprite.frames?.includes(frame.index)) stamped.sprites.add(sprite.handle);
+            for (const id of frame.main ?? []) {
+              const binding = byId.get(id);
+              if (!binding || stamped.bindings.has(id)) continue;
+              stamped.occluded.add(binding.actor); stamped.bindings.set(id, binding.actor);
+              stamped.source.set(binding.actor, `${frame.kind} frame ${frame.index} (not drawn)`);
+            }
+          }
+        }
         if (mirrored && actorPasses && !mainDecisions && actorScene) mainDecisions = actorScene.passVisibility(null);
         for (const name of stamped.movers) if (!moverActors.has(name)) stamped.movers.delete(name);
+        // Model.Zones[i].LastRenderTime: OccludeBsp stamps the zone of each frame and every zone a portal shows it
+        // (0x10b1768d and the portal write in the same function; occlude.rs), in every frame it runs, child frames
+        // included. AActor::InStasis reads it (a pawn in a zone seen within 5 s and within 1200 units of the player is
+        // never in stasis, actor-tick.mjs). Play kept the table at zero, so a pawn with bStasis set whose LastRenderTime
+        // was old went into stasis in a rendered zone and its animation and timers froze one tick after the script set
+        // bStasis; the original kept ticking it (06_HongKong_WanChai_Underworld, Female1: Dist 1122, LRT -10).
+        if (occlusion?.zoneTime) {
+          const times = runtime.levelFor(game.player.collisionActor).zoneLastRenderTimes;
+          if (times) for (let i = 0; i < times.length; i++) { u32[0] = occlusion.zoneTime(i); times[i] = f32[0]; }
+        }
         const info = runtime.levelFor(game.player.collisionActor).actors[0];
         const time = Math.fround(runtime.readNamed(info, 'TimeSeconds'));
         const shown = actor => !runtime.readNamed(actor, 'bHidden') && !runtime.readNamed(actor, 'bDeleteMe');
