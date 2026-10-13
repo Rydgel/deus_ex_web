@@ -287,6 +287,9 @@ export function liveProbe(game, args = {}) {
     if (runtime.scriptTrace) out.script = runtime.scriptTrace.events.splice(0);
   }
   if (args.status && replay) out.status = { index: replay.index, of: replay.ticks.length };
+  // deferred: the boundaries Play recorded instead of running (player.unimplementedPhysicsEffects: sounds of emitters without a measured
+  // object index, trigger scripts that reached an unsupported native, ...); the record-only audit's dynamic side.
+  if (args.deferred) out.deferred = [...game.player.unimplementedPhysicsEffects];
   if (args.stop) game.liveReplay = null;
   return out;
 }

@@ -604,6 +604,53 @@ corona and actor passes left it. See [Strobe](#strobe-a-host-input-and-a-trigger
 The random stream: the first tick whose draw count differs is tick 1, 2 or 3 depending on the load (original 248, Play 247 on tick 1 of
 one load, the numbers of the Businessman1 case fixed in eb22793; not checked whether it is the same cause). Not traced.
 
+### Perception pilot (2026-10-13)
+
+**Question.** Do NPCs perceive and react to a normal, visible player as the original's do? Until now every pilot ran the cheat-flying ghost
+(invisible to the AI), and the user reported NPCs that did not hear the player. This pilot compares NPC perception and reaction tick by tick
+with the original, with a visible player and known inputs.
+
+**Setup.** `live-acceptance.mjs` gained: `--no-ghost` (the player is a normal `DeusExPlayer`, detectable, not cheat-flying), `--perception`
+(each NPC's perception and reaction fields: SightCounter, Stimulus, the Cycle* target picker, FearLevel/FearTimer, AgitationTimer, the
+`bLookingFor*` reaction flags, the AlliancesEx table, EnemyReadiness, ReactionLevel...), `--player-alliance mj12` (the player's `Alliance`;
+the Underworld's civilians hold a hostile entry for it, so they see an enemy and flee: `AlliancesEx` is filled after the first unfrozen
+tick, so the replay writes the alliance to Play at the same moment), `--cmds "tick:console command|..."` (commands typed into the original
+between two ticks and run by Play through the same console chain at the same point), `--tag` (separate captures), `--script-trace`,
+`--nav-trace` and `--can-see` (Play's script calls, path-native leaf calls and an `Enemy.AICanSee` probe), and the tracer's `call`
+breakpoints (`--extra-config`) for the original's own calls. The player stands still at the map's start pose.
+
+**Findings, in the order they were found.**
+
+1. **The AI event manager did not exist.** Natives 713-716 (`AISendEvent`, `AIStartEvent`, `AIEndEvent`, `AIClearEvent`) were recorded no-ops
+   (`script-doors.mjs`), 710/711 only filled a map: no pawn ever heard a noise, saw a drawn weapon, heard a distress call or an alarm. `UEventManager`
+   (Engine.dll) is now translated in Rust and validated against the unchanged DLL ([AI event manager](ai-event-manager.md)).
+2. **`APawn::AICanSee` placed its x87 roundings wrongly** (a 2-ulp `CycleCumulative` difference at tick 4 that hand-written scenes with round
+   numbers could not show): [AICanSee's x87 placement](script-pawn-perception.md#aicansees-x87-placement-found-live-2026-10-13).
+3. **A Player start (reset) re-ran the startup on the same `LevelInfo`**, and the manager of the old generation named released actors: a new manager
+   at every `InitEventManager`.
+4. **Four faults in `FindPathToward` / `pointReachable`** (a fleeing NPC picks its route with the path worker): `scoutE` and the second hop
+   did not run `pointWorker` after a failed line check (its test walk Bumps pawns: the 4.0 `MoveTimer`), the target-side scans passed `FastLineCheck`
+   its endpoints in the other order, and the walks aimed at the requested point instead of the Location the test `FarMoveActor` left
+   ([pawn navigation](script-pawn-nav.md#live-divergence-scoute-the-second-hop-and-the-walks-destination-2026-10-13)). Found by comparing the
+   original's leaf calls with Play's, 211 path-worker calls of 21 pawns.
+
+**Results** (every watched field of every watched actor, float32 per tick; the replay carries the original's delta, stream state and clock):
+
+| Map and scene | ticks | actors equal | stream draws |
+| --- | ---: | ---: | --- |
+| 01_NYC_UNATCOIsland, ghost | 600 | all | equal |
+| 10_Paris_Club, ghost (fresh original, no flags) | 600 | 22 of 22 | equal |
+| 06_HongKong_WanChai_Underworld, ghost (fresh original) | 600 | 50 of 50 | equal |
+| Underworld, visible player allied to mj12 | 400 | 50 of 50 | equal |
+| Underworld, visible player allied to mj12 (path fixes) | 1,200 | 50 of 50 | equal |
+
+Before the path fixes the same 1,200-tick run diverged at tick 560 (Female5), and the first 1,500-tick run at tick 567 (Female3) for civilians fleeing through
+the dance floor. The 1,500-tick scene's remaining divergence is described under *Open* below.
+
+**Not covered.** The player never fires, throws or makes a noise (`MakeNoise`): the manager's weapon, gunshot and loud-noise paths are exercised only by what the NPCs
+send each other (distress, footsteps, the fleeing pawn's `Distress`). A weapon in the player's hand in a live capture is the next scene. `AICanSmell` is the original's
+constant 0.0.
+
 ### Divergences found
 
 1. **Walking script pawns: calcVelocity's class tests (fixed, ee041b8).** Original `calcVelocity` (`0x103cd7a0`) counts `bIsWalking` only for a
