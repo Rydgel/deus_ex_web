@@ -177,6 +177,8 @@ export class PerceptionHost {
     });
     view.setUint32(this.namesAt, foldedNameId('playerpawn'), true);
     view.setUint32(this.namesAt + 4, foldedNameId('levelinfo'), true);
+    view.setUint32(this.namesAt + 8, foldedNameId('pawn'), true);
+    view.setUint32(this.namesAt + 12, foldedNameId('inventory'), true);
     return added;
   }
   /** The field word and flags of a class (percep.rs): field i is set when

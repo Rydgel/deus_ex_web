@@ -471,10 +471,11 @@ async function play() {
   // reach and path natives' boundary calls (src/runtime/nav-trace.mjs) to nav-play.json, to compare with the original's
   // (tools/dx-live-win.c `call`, original --extra-config).
   const limit = Number(option('ticks', 0)) || undefined;
-  const trace = readFileSync(tracePath, 'utf8').trim().split('\n').map(line => JSON.parse(line)).filter(row => row.unfrozen >= 1).slice(0, limit);
+  const traceRows = readFileSync(tracePath, 'utf8').trim().split('\n').map(line => JSON.parse(line));   // parsed once: a long trace is large
+  const trace = traceRows.filter(row => row.unfrozen >= 1).slice(0, limit);
   const {pawns, extras = [], generators = [], timers = []} = JSON.parse(readFileSync(watchPath, 'utf8'));
   // Play is placed where the original's player stood when the replay begins: the last frozen tick's exit.
-  const frozen = readFileSync(tracePath, 'utf8').trim().split('\n').map(line => JSON.parse(line)).filter(row => row.unfrozen === 0);
+  const frozen = traceRows.filter(row => row.unfrozen === 0);
   const pose = frozen[frozen.length - 1].actors['@player'];
   await withPlay(async ({page, frames, errors, ghost}) => {
     // The original's pose, exactly (the frozen-phase history of the ghost differs: its landing, its Tread loop).
@@ -504,7 +505,9 @@ async function play() {
       ...(navPawns ? {navTrace: {pawns: navPawns.split(','), first: navFirst, last: navLast}} : {}),
       ...(trace[0]?.viewport?.[0] && !flag('own-viewport') ? {renderSize: trace[0].viewport} : {}),   // the original's frame size (--own-viewport: Play's page)
       ...(setupNames ? {setupProbe: {names: setupNames.split(','), first: setupFirst, last: setupLast}} : {}),
-      ...(scriptPawns ? {scriptTrace: {pawns: scriptPawns.split(','), first: scriptFirst, last: scriptLast}} : {}), replay: {ticks: trace, release: true, hold: true, drawTrace: flag('draw-trace'),
+      ...(scriptPawns ? {scriptTrace: {pawns: scriptPawns.split(','), first: scriptFirst, last: scriptLast}} : {}), replay: {ticks: trace.map(({n, unfrozen, delta, rngIn, clockIn, tsIn, strobeIn}) => ({n, unfrozen, delta, rngIn, clockIn, tsIn, strobeIn})),   // not the watched fields: a long trace would not fit the page
+      release: true, hold: true, drawTrace: flag('draw-trace'),
+      ...(option('can-see', null) ? {canSeeProbe: {pawn: option('can-see'), first: Number(option('can-see-ticks', '1:1').split(':')[0]), last: Number(option('can-see-ticks', '1:1').split(':')[1])}} : {}),
       commands: existsSync(path.join(dir, `commands${suffix}.json`)) ? JSON.parse(readFileSync(path.join(dir, `commands${suffix}.json`), 'utf8')) : [], watch: [
       {names: ['@player'], props: playerProps}, {names: pawns, props},
       // --extra-watch actors are not pawns: the fields every Actor has
