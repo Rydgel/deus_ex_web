@@ -173,7 +173,7 @@ static int find_ptds_of(DWORD only_tid, Ptd *out, int max) {
 typedef struct { char field[48]; unsigned offset; char type[8]; unsigned mask; } FieldSpec;
 typedef struct {
   char names[2048];
-  FieldSpec fields[48]; int field_count;
+  FieldSpec fields[96]; int field_count;
 } WatchGroup;
 typedef struct { char name[96]; uintptr_t address; int group; } Watched;
 
@@ -182,7 +182,7 @@ static int release_at = 1, run_ticks = 100, pre_watch = -1;
 static float forced_delta = 0;
 static int monitor_seconds = 0, kill_on_crash = 1, actor_trace_first = 0, actor_trace_last = -1;
 static WatchGroup groups[16]; static int group_count;
-static Watched watched[256]; static int watched_count;
+static Watched watched[1024]; static int watched_count;
 
 /* ---------------- call tracing (config `call`) ---------------- */
 #define MAXCALLS 32
@@ -250,7 +250,7 @@ static int read_config(const char *path) {
       WatchGroup *g = &groups[group_count++];
       char *n = strtok(NULL, " \t\r\n"); if (!n) continue;
       strncpy(g->names, n, sizeof(g->names) - 1);
-      for (char *f; (f = strtok(NULL, " \t\r\n")) && g->field_count < 48;) if (parse_field(f, &g->fields[g->field_count])) g->field_count++;
+      for (char *f; (f = strtok(NULL, " \t\r\n")) && g->field_count < 96;) if (parse_field(f, &g->fields[g->field_count])) g->field_count++;
     }
   }
   fclose(file);
@@ -314,7 +314,7 @@ static int resolve_actors(void) {
   for (int g = 0; g < group_count; g++) {
     char list[2048]; strncpy(list, groups[g].names, sizeof(list) - 1); list[sizeof(list) - 1] = 0;
     for (char *n = strtok(list, ","); n; n = strtok(NULL, ","))
-      if (!strcmp(n, "@player") && watched_count < 256) { strcpy(watched[watched_count].name, "@player"); watched[watched_count].address = player_ptr; watched[watched_count].group = g; watched_count++; }
+      if (!strcmp(n, "@player") && watched_count < 1024) { strcpy(watched[watched_count].name, "@player"); watched[watched_count].address = player_ptr; watched[watched_count].group = g; watched_count++; }
   }
   /* Pass 2: watched names on that level. */
   for (unsigned slot = 0; slot < count; slot++) {
@@ -324,7 +324,7 @@ static int resolve_actors(void) {
     for (int g = 0; g < group_count; g++) {
       char list[2048]; strncpy(list, groups[g].names, sizeof(list) - 1); list[sizeof(list) - 1] = 0;
       for (char *n = strtok(list, ","); n; n = strtok(NULL, ","))
-        if (!strcmp(n, name) && read_u32(obj + 0xac) == level_ptr && watched_count < 256) {
+        if (!strcmp(n, name) && read_u32(obj + 0xac) == level_ptr && watched_count < 1024) {
           strncpy(watched[watched_count].name, name, sizeof(watched[0].name) - 1);
           watched[watched_count].address = obj; watched[watched_count].group = g; watched_count++;
         }

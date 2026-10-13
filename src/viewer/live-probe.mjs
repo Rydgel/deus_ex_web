@@ -65,7 +65,8 @@ export function liveProbe(game, args = {}) {
       for (let cls = runtime.instance(actor).cls; cls && !match; cls = cls.base) match = cls.record?.key === args.actors.toLowerCase();
       if (!match) continue;
       const instance = runtime.instance(actor), node = instance?.state ? (instance.state.stateNode ?? instance.cls) : null;
-      out.actors.push({ name: actor.name, cls: instance.cls.record?.key ?? null, location: [...runtime.readNamed(actor, 'Location')], state: scriptGetStateName(node) });
+      out.actors.push({ name: actor.name, cls: instance.cls.record?.key ?? null, location: [...runtime.readNamed(actor, 'Location')], state: scriptGetStateName(node),
+        timer: runtime.readNamed(actor, 'TimerRate') > 0 });
     }
   }
   // write: {actorName: {Property: value}}, plain host writes (the player's animation state at the trace's start).
