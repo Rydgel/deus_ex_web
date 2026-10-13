@@ -471,7 +471,7 @@ static int handle_call_event(HANDLE th, DWORD tid, uintptr_t where, int unfrozen
       if (armed) {
         unsigned args[16]; memset(args, 0, sizeof(args)); read_mem(ctx.Esp + 4, args, 4 * c->nwords);
         unsigned long seq = ++call_seq;
-        fprintf(cout, "{\"u\":%d,\"seq\":%lu,\"ev\":\"enter\",\"fn\":\"%s\",\"ecx\":\"0x%x\"", unfrozen, seq, c->label, (unsigned)ctx.Ecx);
+        fprintf(cout, "{\"u\":%d,\"seq\":%lu,\"ev\":\"enter\",\"fn\":\"%s\",\"ecx\":\"0x%x\",\"ret\":\"0x%x\"", unfrozen, seq, c->label, (unsigned)ctx.Ecx, read_u32(ctx.Esp));
         if (c->namee) fprintf(cout, ",\"ecxName\":\"%s\"", object_name(ctx.Ecx));
         if (c->name0 && c->nwords > 0) fprintf(cout, ",\"arg0Name\":\"%s\"", object_name(args[0]));
         fprintf(cout, ",\"args\":"); print_words(cout, args, c->nwords); fprintf(cout, ",\"floats\":"); print_floats(cout, args, c->nwords);

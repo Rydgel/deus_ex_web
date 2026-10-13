@@ -76,3 +76,28 @@ It accepts no expressions and consumes exactly one shared-stream random value.
 The common ScriptRuntime binding therefore requires an explicit shared `rng`
 service and returns `Math.fround(rng.frand())`. Play passes its existing scene
 stream to the script runtime, preserving the same state used by physics.
+
+## Load-time random state in a live comparison (2026-10-13)
+
+The live-scene pilot on 01_NYC_UNATCOIsland (docs/visual-acceptance.md "Live scenes") replays the original's ticks in
+Play with the original's stream state at each tick's entry, and found the stream drawn a different number of times at
+unfrozen tick 24 (original 8, Play 16 in one run; 10 and 18 in the pilot's).
+
+**It is not an accounting difference and not a code-path difference.** Per-actor draw counts for the original
+(`tools/dx-live-win.c` `actor-trace`: the stream state at every AActor::Tick entry, whose differences are the draws between
+two entries) and for Play (`live-acceptance.mjs play --draw-trace`: the actor whose tick drew) agree for every
+ScriptedPawn, every WaterRing and the player, tick by tick. The 8 extra draws are `SeagullGenerator1` and
+`SeagullGenerator3`, four each (`PawnGenerator.GeneratePawn`), which the original makes at tick 31 and again at 47, 63;
+Play at 24, 40, 56 (the same 16-tick cadence, `TryTimer = 0.25` after each). The original's call breakpoints on appRand
+`0x101232d0` and appFrand `0x101232e0` name every draw's caller (script FRand `0x101362ac`, script Rand `0x1013499e`,
+the Engine AI draws `0x1036d0de`/`0x1036d152`); none is a draw Play lacks in kind.
+
+**Cause.** `PawnGenerator.PostBeginPlay` sets `TryTimer = 0.25 + FRand() * 0.75` (and with `bRandomCount` a random
+`PoolCount`) from the load's stream, which the two sides do not share (the original seeds the CRT with time(NULL), Play
+with its own seed). A generator first spawns when its TryTimer has run down, so Play's own draws start the same script
+7 ticks earlier than the original's.
+
+**Treatment.** Like the player's pose and OddsOfAppearing, the original's values are a measured input:
+`live-acceptance.mjs original` watches `TryTimer` and `PoolCount` of every PawnGenerator, and `play` writes the last
+frozen row's values into Play before its first tick. With them the stream's draw count is equal for all 100 ticks
+compared, and no watched pawn differs.
