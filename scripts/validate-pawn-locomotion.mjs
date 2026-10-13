@@ -112,7 +112,7 @@ const FIELD_NAME = {
   CollisionHeight: 'collisionHeight', Velocity: 'velocity',
 };
 
-function makeServices(objectsByName, events, view) {
+function makeServices(objectsByName, events, view, alterDestination = null) {
   // ScriptRuntime.pawnView is not the actor: a body hands the services the
   // receiver as p.self. The twin's view and actor differ too (runJs), and a
   // service given the view fails the scene.
@@ -133,7 +133,11 @@ function makeServices(objectsByName, events, view) {
     // The oracle's FindFunctionChecked stub always resolves; the JS seam
     // dispatches only on a hit, so the twin returns truthy to match.
     findFunction: actorOnly(() => ({})),
-    processEvent: actorOnly((actor, name, args) => events.push({ this: actor, name, args })),
+    // A scene's `alterDestination` plays ScriptedPawn.AlterDestination's effect (the probe does the same at its ProcessEvent stub).
+    processEvent: actorOnly((actor, name, args) => {
+      events.push({ this: actor, name, args });
+      if (alterDestination && name === 'AlterDestination') actor.destination = alterDestination.map(f32);
+    }),
     zone: actorOnly(zoneOf),
   };
 }
@@ -159,7 +163,7 @@ function runJs(scene, mod = module) {
   pawn.moveTarget = objects[scene.pawn?.moveTarget] ?? null;
   pawn.faceTarget = objects[scene.pawn?.faceTarget] ?? null;
   const events = [];
-  const services = makeServices(objects, events, pawn);
+  const services = makeServices(objects, events, pawn, scene.alterDestination ?? null);
   const state = { latent: scene.latent ?? 0 };
   const frame = { code: 0 };
   const operandOf = kind => ({ vector: 12, float: 4, object: 4, nothing: 0 })[kind];
@@ -382,6 +386,8 @@ const scenes = [
   { name: 'pmt-arrive-vert-collh', body: PMT, pawn: { physics: 3, destination: [5, 0, 60], collisionHeight: 80 }, latent: 501 },
   { name: 'pmt-moving', body: PMT, pawn: { physics: 1, destination: [100, 0, 0], moveTimer: 5 }, latent: 501 },
   { name: 'pmt-tactics', body: PMT, pawn: { physics: 1, destination: [100, 0, 0], flags318: 0x80000000 }, latent: 501 },
+  // the event rewrites Destination; the helpers steer on the rewrite, and the snapshot comes back
+  { name: 'pmt-tactics-alter', body: PMT, pawn: { physics: 1, destination: [100, 0, 0], flags318: 0x80000000 }, alterDestination: [0, 300, 0], latent: 501 },
   { name: 'pmt-tactics-falling', body: PMT, pawn: { physics: 2, destination: [100, 0, 500], flags318: 0x80000000, velocity: [0, 0, -50] }, pawnZone: LOW_GRAV, latent: 501 },
   { name: 'pmt-timer-negative', body: PMT, pawn: { physics: 1, destination: [100, 0, 0], moveTimer: -0.5 }, latent: 501 },
   { name: 'pmt-timer-zero', body: PMT, pawn: { physics: 1, destination: [100, 0, 0], moveTimer: 0 }, latent: 501 },
@@ -435,6 +441,7 @@ const scenes = [
   { name: 'pmtw-water-swim', body: PMW, pawn: { physics: 1, moveTarget: 'target', moveTimer: 5, desiredSpeed: 0.7, flags318: 0x4000 }, target: { cls: 'pawn', location: [100, 0, 0], collisionRadius: 30 }, targetZone: { gravityZ: -950, defaultGravityZ: -950, flags: 1 }, latent: 503 },
   { name: 'pmtw-water-nonpawn', body: PMW, pawn: { physics: 1, moveTarget: 'target', moveTimer: 5, desiredSpeed: 0.7, flags318: 0 }, target: { cls: 'inventory', location: [100, 0, 0], collisionRadius: 30 }, targetZone: { gravityZ: -950, defaultGravityZ: -950, flags: 1 }, latent: 503 },
   { name: 'pmtw-tactics', body: PMW, pawn: { physics: 1, moveTarget: 'target', moveTimer: 5, desiredSpeed: 1, flags318: 0x80000000 }, target: { cls: 'pawn', location: [100, 0, 0], collisionRadius: 30 }, latent: 503 },
+  { name: 'pmtw-tactics-alter', body: PMW, pawn: { physics: 1, moveTarget: 'target', moveTimer: 5, desiredSpeed: 1, flags318: 0x80000000 }, target: { cls: 'pawn', location: [100, 0, 0], collisionRadius: 30 }, alterDestination: [0, 300, 0], latent: 503 },
   { name: 'pmtw-nonpawn-brake', body: PMW, pawn: { physics: 1, moveTarget: 'target', moveTimer: 5, desiredSpeed: 1, velocity: [50, 0, 0], avgPhysicsTime: 10 }, target: { cls: 'inventory', location: [30, 0, 0], collisionRadius: 30 }, latent: 503 },
   // Flying pawn target: the adjusted dest (z += CollisionHeight*0.7) differs
   // from the live location, so the post-helper re-snapshot is observable.
@@ -512,7 +519,7 @@ for (const scene of scenes) {
     console.log(`FAIL ${scene.name}: probe error — ${r?.error ?? 'no result'}`);
     failures++; continue;
   }
-  if (r.findFunction?.some(n => !['LongFall', 'Touch', 'SpawnNotification'].includes(n))) {
+  if (r.findFunction?.some(n => !['LongFall', 'Touch', 'AlterDestination'].includes(n))) {
     console.log(`FAIL ${scene.name}: unexpected FindFunctionChecked ${JSON.stringify(r.findFunction)}`);
     failures++; continue;
   }
@@ -525,6 +532,31 @@ for (const scene of scenes) {
 const passed = scenes.length - failures;
 console.log(`${failures ? 'FAIL' : 'PASS'} validate-pawn-locomotion: ${passed}/${scenes.length} scenes bit-exact`);
 if (failures) process.exit(1);
+
+// The tactics event's name: the FName global the polls read (0x105835c8) is built by Engine.dll's startup code from the
+// string "AlterDestination" (the neighbours 0x105835c4 / 0x105835c0 are SpawnNotification / UpdateTactics).  Read here
+// from the image so the label above is the DLL's, not an assumption: push imm32 of the string (0x103806c4), the FName
+// constructor call (0x103806d2), the store into the global (0x103806e0).
+{
+  const { gameDirectory } = await import('./game-directory.mjs');
+  const dll = readFileSync(path.join(gameDirectory(), 'System', 'Engine.dll'));
+  const pe = dll.readUInt32LE(0x3c), sections = dll.readUInt16LE(pe + 6), optional = dll.readUInt16LE(pe + 20);
+  const base = dll.readUInt32LE(pe + 24 + 28), table = pe + 24 + optional;
+  const at = va => {
+    for (let i = 0; i < sections; i++) {
+      const o = table + 40 * i, rva = va - base, start = dll.readUInt32LE(o + 12), size = Math.max(dll.readUInt32LE(o + 8), dll.readUInt32LE(o + 16));
+      if (rva >= start && rva < start + size) return dll.readUInt32LE(o + 20) + rva - start;
+    }
+    throw new Error(`no section for ${va.toString(16)}`);
+  };
+  const hex = (va, n) => dll.subarray(at(va), at(va) + n).toString('hex');
+  const wide = va => { let end = at(va); while (dll.readUInt16LE(end)) end += 2; return dll.subarray(at(va), end).toString('utf16le'); };
+  const stringPtr = hex(0x103806c4, 5), expect = '680cd04710';
+  const ok = stringPtr === expect && hex(0x103806d2, 2) === 'ffd6' && hex(0x103806e0, 5) === 'a3c8355810' && wide(0x1047d00c) === 'AlterDestination'
+    && wide(0x1047cfe0) === 'SpawnNotification' && wide(0x1047cfbc) === 'UpdateTactics';
+  console.log(`${ok ? 'PASS' : 'FAIL'} tactics event name global 0x105835c8 = ${wide(0x1047d00c)}`);
+  if (!ok) process.exit(1);
+}
 
 // --------------------------------------------------------------------------
 // Mutation coverage: each edit rewrites one behavior the disassembly dictates;
@@ -575,6 +607,17 @@ const MUTATIONS = [
   { name: 'tactics-physics-gate', pattern: 'if (!(p.bAdvancedTactics && p.physics === 1)) return;',
     replacement: 'if (!(p.bAdvancedTactics && p.physics === 2)) return;',
     expect: ['pmt-tactics', 'pmt-tactics-falling', 'pmtw-tactics'] },
+  { name: 'tactics-event-name', pattern: "s.processEvent(p.self, 'AlterDestination', [])",
+    replacement: "s.processEvent(p.self, 'SpawnNotification', [])",
+    expect: ['pmt-tactics', 'pmt-tactics-alter', 'pmtw-tactics', 'pmtw-tactics-alter', 'pst-tactics', 'psf-tactics'] },
+  { name: 'moveto-helpers-snapshot', pattern: "turnSetup980(p, live, s);\n  if (steerArrive200(p, live, s)) state.latent = 0;\n  p.destination = dest;",
+    replacement: "turnSetup980(p, dest, s);\n  if (steerArrive200(p, dest, s)) state.latent = 0;\n  p.destination = dest;",
+    expect: ['pmt-tactics-alter'] },
+  { name: 'moveto-no-restore', pattern: "if (steerArrive200(p, live, s)) state.latent = 0;\n  p.destination = dest;",
+    replacement: "if (steerArrive200(p, live, s)) state.latent = 0;", expect: ['pmt-tactics-alter'] },
+  { name: 'movetoward-helpers-stale', pattern: "turnSetup980(p, live, s);\n  if (steerArrive200(p, live, s)) state.latent = 0;\n  p.destination = fieldVector(s.readField(target",
+    replacement: "turnSetup980(p, dest, s);\n  if (steerArrive200(p, dest, s)) state.latent = 0;\n  p.destination = fieldVector(s.readField(target",
+    expect: ['pmtw-tactics-alter'] },
   { name: 'swim-gate', pattern: 'if (!p.bCanSwim && zone && zone.waterZone) p.moveTimer = -1;',
     replacement: 'if (!p.bCanSwim && zone && !zone.waterZone) p.moveTimer = -1;',
     expect: ['pmtw-water-abort'] },

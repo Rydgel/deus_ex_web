@@ -104,7 +104,7 @@ export const PAWN_LOCOMOTION_CONTRACT = Object.freeze({
     moveTowardPawnTimer: 1.2,          // 0x3f99999a
     waterAbortTimer: -1,               // 0xbf800000
   }),
-  eventNames: Object.freeze({ touch: 'Touch', longFall: 'LongFall', spawnNotification: 'SpawnNotification' }),
+  eventNames: Object.freeze({ touch: 'Touch', longFall: 'LongFall', alterDestination: 'AlterDestination' }),
   turnCone: Object.freeze({ facing: 0x7d0, behind: 0xf82f }),
 });
 
@@ -599,16 +599,23 @@ export function pollTurnToward({ pawn, state, services } = {}) {
   if (turnSetup980(p, p.focus, s)) state.latent = 0;
 }
 
-/** The bAdvancedTactics+PHYS_Walking SpawnNotification event shared by the
+/** The bAdvancedTactics+PHYS_Walking AlterDestination event shared by the
  * move polls (FindFunctionChecked then ProcessEvent on the pawn itself).
- * No shipped pawn class declares SpawnNotification — the function lives on
- * SpawnNotify — so the original lookup returns NULL (logged via GWarn->Logf,
- * nonfatal) and AActor::ProcessEvent's XLevel+0x4f0 bit-0x2 gate then drops
- * the NULL before Core ProcessEvent can dereference it. Observable contract:
- * the dispatch fires only when the class actually resolves the function. */
+ * The name is the FName global 0x105835c8, which Engine.dll builds from the
+ * string "AlterDestination" at 0x1047d00c (0x103806d2..0x103806e0; the
+ * neighbours are 0x105835c4 SpawnNotification and 0x105835c0 UpdateTactics,
+ * which an earlier reading took for this one) and which the original,
+ * traced on Island, ProcessEvents inside UNATCOTroop6's MoveTo poll
+ * (docs/script-pawn-locomotion.md "Live divergence").  ScriptedPawn declares
+ * it: the function rewrites Destination to walk around ActorAvoiding and,
+ * once TurnDirection clears, undoes Bump's `MoveTimer += 4`.  A class that
+ * does not declare it gets the original's NULL-resolution no-op (logged
+ * through GWarn->Logf, nonfatal; AActor::ProcessEvent's XLevel+0x4f0 bit-0x2
+ * gate drops the NULL before Core ProcessEvent can dereference it): the
+ * dispatch fires only when the class actually resolves the function. */
 function tacticsEvent(p, s) {
   if (!(p.bAdvancedTactics && p.physics === 1)) return;
-  if (s.findFunction?.(p.self, 'SpawnNotification')) s.processEvent(p.self, 'SpawnNotification', []);
+  if (s.findFunction?.(p.self, 'AlterDestination')) s.processEvent(p.self, 'AlterDestination', []);
 }
 
 /** Engine 0x103bd060 — MoveTo poll.  Destination is snapshotted across the
@@ -617,8 +624,11 @@ export function pollMoveTo({ pawn, state, services } = {}) {
   const p = requirePawn(pawn), s = requireServices(services);
   const dest = fieldVector(p.destination, 'Pawn Destination');
   tacticsEvent(p, s);
-  turnSetup980(p, dest, s);
-  if (steerArrive200(p, dest, s)) state.latent = 0;
+  // Both helpers receive the Destination field itself (edi = pawn+0x354 at
+  // 0x103bd0b1..0x103bd0bc): they see what the event rewrote.
+  const live = fieldVector(p.destination, 'Pawn Destination');
+  turnSetup980(p, live, s);
+  if (steerArrive200(p, live, s)) state.latent = 0;
   p.destination = dest;
 }
 
@@ -673,8 +683,11 @@ export function pollMoveToward({ pawn, state, services } = {}) {
   p.focus = dest.slice();
   const savedSpeed = p.desiredSpeed;
   tacticsEvent(p, s);
-  turnSetup980(p, dest, s);
-  if (steerArrive200(p, dest, s)) state.latent = 0;
+  // The helpers take the Destination field itself (edi = pawn+0x354 at
+  // 0x103bd4a4..0x103bd4af): the event's rewrite is what they steer on.
+  const live = fieldVector(p.destination, 'Pawn Destination');
+  turnSetup980(p, live, s);
+  if (steerArrive200(p, live, s)) state.latent = 0;
   p.destination = fieldVector(s.readField(target, 'Location'), 'MoveTarget Location');
   if (s.isA(target, 'Pawn')) {
     p.desiredSpeed = savedSpeed;

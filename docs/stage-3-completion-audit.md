@@ -498,8 +498,9 @@ resolved three latent contracts — test-mode `MoveActor` with `bIgnorePawns`,
 `FarMoveActor` hash re-registration through the pawn view, and
 required..max arity on the four iterator factories (`GetFloorMaterial`'s
 8-arg `TraceTexture` call). Ambient `PlaySound` sites are recorded nonfatal
-boundaries; the `SpawnNotification` `FindFunctionChecked` miss is now the
-original's logged-NULL no-op. See [pawn navigation](script-pawn-nav.md) and
+boundaries; the tactics-event `FindFunctionChecked` miss is now the
+original's logged-NULL no-op (the event is `AlterDestination`, not `SpawnNotification`, as first read; see
+[locomotion](script-pawn-locomotion.md#live-divergence-the-tactics-event-is-alterdestination-2026-10-13)). See [pawn navigation](script-pawn-nav.md) and
 [alliance evidence](script-pawn-alliance.md).
 
 2026-09-20 armed-NPC inventory follow-up: the `InitializeInventory`

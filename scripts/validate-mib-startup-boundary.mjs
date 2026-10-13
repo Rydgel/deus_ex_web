@@ -2,9 +2,8 @@
  * AIPickRandomDestination(709): the Training MIB lands, ticks through its
  * Wandering.PickDestination episodes, and — once a search succeeds — walks.
  * ScriptedPawn ambient PlaySound(264) sites are recorded nonfatal boundaries;
- * SpawnNotification never dispatches (no pawn class declares it — the
- * original's FindFunctionChecked miss is logged and the AActor::ProcessEvent
- * level-flag gate drops the NULL). */
+ * the polls' AlterDestination event dispatches where the class declares it
+ * (ScriptedPawn does; docs/script-pawn-locomotion.md "Live divergence"). */
 import assert from 'node:assert/strict';
 import {readdir,readFile} from 'node:fs/promises';
 import {AssetStore} from '../src/unreal/assets.mjs';

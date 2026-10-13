@@ -62,7 +62,7 @@ PAWN_CLASS = 0x1058c660          # Engine APawn PrivateStaticClass object.
 INVENTORY_CLASS = 0x10576f70     # Engine AInventory PrivateStaticClass object.
 NAME_LONG_FALL = 0x10583664      # .bss FName caches read by the bodies.
 NAME_TOUCH = 0x10583704
-NAME_SPAWN_NOTIFICATION = 0x105835c8
+NAME_ALTER_DESTINATION = 0x105835c8   # built from the string "AlterDestination" (0x1047d00c) at 0x103806d2..0x103806e0
 
 # Harness mailbox (dedicated page below the 0x20000000 arena).
 MAIL_FFC_COUNT = 0x1ff00000
@@ -262,7 +262,7 @@ class PawnLatentProbe:
         # Fake-name sentinels the event path reports through the mailbox.
         self.write(NAME_LONG_FALL, 'I', 0x1f000001)
         self.write(NAME_TOUCH, 'I', 0x1f000002)
-        self.write(NAME_SPAWN_NOTIFICATION, 'I', 0x1f000003)
+        self.write(NAME_ALTER_DESTINATION, 'I', 0x1f000003)
         self.process_event = self.deploy(PROCESS_EVENT_STUB)
         self.prop_size = self.deploy(PROPSIZE_STUB)
         # Patch the FindFunctionChecked thunk in-place so calls through the
@@ -270,6 +270,8 @@ class PawnLatentProbe:
         cpu.mem_write(FIND_FUNCTION, FIND_FUNCTION_STUB)
         self.rotation_table = {}
         self.events = []
+        self.alter = None
+        self.alter_pawn = 0
         cpu.hook_add(UC_HOOK_CODE, self.on_instruction)
         cpu.hook_add(UC_HOOK_MEM_INVALID, self.on_bad_memory)
 
@@ -309,6 +311,12 @@ class PawnLatentProbe:
             return
         if address == FAIL_ASSERT:
             raise ProbeError(f'appFailAssert fired; trace {self.trace[-12:]}')
+        if address == self.process_event and self.alter is not None:
+            # The script event rewrites Destination (ScriptedPawn.AlterDestination does): the caller's helpers read it after.
+            fn = self.read(cpu.reg_read(UC_X86_REG_ESP) + 4, 'I')[0]
+            if (fn & 0x1fffffff) == 0x1f000003:
+                for i, v in enumerate(self.alter):
+                    self.write(self.alter_pawn + 0x354 + 4 * i, 'f', v)
         self.trace.append(hex(address))
         if len(self.trace) > 24:
             self.trace.pop(0)
@@ -398,6 +406,8 @@ class PawnLatentProbe:
         self.write(MAIL_EVT_COUNT, 'I', 0)
         self.write(MAIL_FFC_COUNT, 'I', 0)
         pawn = self.actor(scene['pawn'], self.vtable())
+        self.alter = scene.get('alterDestination')
+        self.alter_pawn = pawn
         target = self.actor(scene['target'], self.vtable()) if scene.get('target') else 0
         if 'zone' in scene or 'pawnZone' in scene:
             zone = self.zone(scene.get('pawnZone', scene.get('zone', {})))
@@ -451,7 +461,7 @@ class PawnLatentProbe:
         self.cpu.emu_start(body, self.done + 1, count=4000000)
         if self.cpu.reg_read(UC_X86_REG_EIP) != self.done:
             raise ProbeError('Native instruction budget exceeded')
-        names = {0x1f000001: 'LongFall', 0x1f000002: 'Touch', 0x1f000003: 'SpawnNotification'}
+        names = {0x1f000001: 'LongFall', 0x1f000002: 'Touch', 0x1f000003: 'AlterDestination'}
         ffc = [self.read(MAIL_FFC_NAMES + i * 4, 'I')[0]
                for i in range(self.read(MAIL_FFC_COUNT, 'I')[0])]
         events = []

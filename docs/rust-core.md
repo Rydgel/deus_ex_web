@@ -574,7 +574,7 @@ poll when LatentAction is 0). A poll Rust does not take crosses to
   image; a float that is not finite or not below 2^60 in magnitude (the
   JavaScript model throws where an intermediate becomes infinite); a facing
   direction that is not; PHYS_Falling and PHYS_Spider; the
-  bAdvancedTactics walking branch (its SpawnNotification lookup); an
+  bAdvancedTactics walking branch (its AlterDestination event); an
   Inventory MoveTarget close enough to fire Touch; MoveToward with a Pawn
   target (its zone read); WaitForLanding's LongFall.
 * **Gate.** Bit 4 of the tick word, with the state bit, when
