@@ -146,7 +146,8 @@ export function liveProbe(game, args = {}) {
     const named = name => trace.pawns.has(name) || [...trace.pawns].some(entry => entry.endsWith('*') && name?.startsWith(entry.slice(0, -1)));
     const on = receiver => receiver && named(receiver.name) && trace.tick >= trace.first && trace.tick <= trace.last;
     const pawnState = receiver => { try { return { mt: runtime.readNamed(receiver, 'MoveTimer'), dest: plain(runtime.readNamed(receiver, 'Destination')),
-      td: runtime.readNamed(receiver, 'TurnDirection'), acc: runtime.readNamed(receiver, 'bAcceptBump'), phys: runtime.readNamed(receiver, 'Physics') }; } catch { return {}; } };
+      td: runtime.readNamed(receiver, 'TurnDirection'), acc: runtime.readNamed(receiver, 'bAcceptBump'), phys: runtime.readNamed(receiver, 'Physics'),
+      touching: (() => { try { return [...runtime.readNamed(receiver, 'Touching')].map(t => t?.name ?? null); } catch { return undefined; } })() }; } catch { return {}; } };
     const wrapCall = (name, fn, describe) => {
       const original = runtime[name].bind(runtime);
       runtime[name] = (...rest) => {

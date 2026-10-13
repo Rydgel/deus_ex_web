@@ -645,7 +645,7 @@ breakpoints (`--extra-config`) for the original's own calls. The player stands s
 | Underworld, visible player allied to mj12 (path fixes) | 1,200 | 50 of 50 | equal |
 
 Before the path fixes the same 1,200-tick run diverged at tick 560 (Female5), and the first 1,500-tick run at tick 567 (Female3) for civilians fleeing through
-the dance floor. The 1,500-tick scene's remaining divergence is described under *Open* below.
+the dance floor. Two longer fresh captures (1,500 ticks, perc4 and perc6) are equal for 46 to 47 of 50 actors; the rest is described under *Open* below.
 
 **Not covered.** The player never fires, throws or makes a noise (`MakeNoise`): the manager's weapon, gunshot and loud-noise paths are exercised only by what the NPCs
 send each other (distress, footsteps, the fleeing pawn's `Distress`). A weapon in the player's hand in a live capture is the next scene. `AICanSmell` is the original's
@@ -765,6 +765,27 @@ node scripts/live-acceptance.mjs compare --map <map> --tag name                 
 its PID; Play runs headless Chromium in worker mode.
 
 ## Open
+
+- **Two doors open late in Play when a pawn walks through a cluster of triggers (Underworld, ticks 877 to 965).** After the path fixes, two fresh
+  1,500-tick captures (perc4, perc6) and a 1,000-tick one (perc8) all end with the same first difference: DeusExMover4 and DeusExMover21 (the club
+  doors, Tag `club_doors`, state `TriggerOpenTimed`) swing on the original's curve to the end (rotation 16384 to 31744 over about 120 ticks, 877 to 999
+  in perc6) and on Play's only until a pawn (Businessman3) reaches the cluster of Trigger0, FlagTrigger3/15/16 and SkillAwardTrigger12 around
+  (-1024, -940); from tick 920 in perc6 (890 in perc8) Play's mover is re-triggered every tick (`Touch`/`UnTouch` of Trigger0 against the pawn
+  alternating, each `Trigger` doing `GotoState('TriggerOpenTimed', 'Open')`, which restarts `InterpolateTo` from the current angle with an
+  ease-in), the door finishes about 45 ticks later (1044), and the pawn, walking at 180 units/s, meets it still closed at tick 935 to 965
+  (`Bump(DeusExMover4)`, 1.2 units into a 3-unit step). The original does not restart the door. Everything else is equal (perc6: Hooker4 and
+  LowerClassFemale1 differ at 1,202 because they react to Businessman3 at the distance the stuck pawn no longer has). What is known: Play's and the
+  original's `Touch` machinery agree on the rules (`BeginTouch`/`AddTouch`/`EndTouch` are oracle-exact, 825 cases, [check encroachment](check-encroachment.md)),
+  the pawn overlaps five trigger cylinders at once and the pawn has four `Touching` slots, so evictions churn the slots in Play (it prints
+  `UnTouch` of four triggers and a `Touch` of the fifth in one update, then the reverse); the original's call log (`BeginTouch` breakpoints, perc8) shows it
+  calling `BeginTouch` every tick for the triggers that are not in the slots (FlagTrigger15 and FlagTrigger3 at 915 to 922, Trigger0, FlagTrigger16
+  and SkillAwardTrigger12 at 872 to 884 while Play holds them) and does not show a restart. Not known: the slot contents and the overlap list order in the
+  original, which differ from Play's from about tick 860. Next step: log the original's `AddTouch` (its inner call is not through the thunk the
+  breakpoint uses; `EndTouch`'s thunk was never hit) and the `Touching` array of the pawn per tick.
+- A same-state `GotoState` was read in the disassembly (`UObject::GotoState` `0x1012e8f0`, `0x1012ea1f`) to recompute the StateFrame's ProbeMask and
+  reset its Code on every call, the state it is already in included; Play's `gotoState` keeps the mask in that case. Making Play do it
+  broke the match of the Underworld's TriadRedArrow pawns from tick 72 (Walk against BreatheLight, a stream draw at 121), so it is not applied; the
+  reading and the live data disagree and a Unicorn run of `GotoState` would settle it.
 
 - The uniform 1.13–1.41× raw brightness gap under Wine; a CrossOver
   capture on the Mac matched more closely. The user does not want it
