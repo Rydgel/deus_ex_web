@@ -385,6 +385,11 @@ async function sweep() {
   });
 }
 
+// eval --expr 'js': the expression in the page after the map's frozen start (a quick look at Play's state: window.deusExViewer.status().notes, ...).
+async function evaluate() {
+  await withPlay(async ({page, frames}) => { await frames(30); console.log(JSON.stringify(await page.evaluate(option('expr')), null, 1)); });
+}
+
 async function play() {
   // --ticks N replays only the first N unfrozen ticks; --nav-trace A,B [--nav-ticks first:last] also records those pawns'
   // reach and path natives' boundary calls (src/runtime/nav-trace.mjs) to nav-play.json, to compare with the original's
@@ -515,6 +520,7 @@ else if (verb === 'snap') await snap();
 else if (verb === 'population') await population();
 else if (verb === 'screen') await screen();
 else if (verb === 'sweep') await sweep();
+else if (verb === 'eval') await evaluate();
 else if (verb === 'play') await play();
 else if (verb === 'compare') compare();
 else console.log('usage: live-acceptance.mjs original|play|compare|snap --map <map>');
