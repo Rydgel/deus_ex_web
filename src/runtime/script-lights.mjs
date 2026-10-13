@@ -201,11 +201,12 @@ export async function createScriptLights({ runtime, assets, lights = [], sharedS
     const previous = previousBrightness.get(identity);
     previousBrightness.set(identity, brightness);
     if (!force && Object.is(previous, brightness)) return null;
-    // The recovered renderer contract covers the selected TriggerLight route's
-    // steady surface-list lights. Animated/pulsed light types remain outside
-    // this callback until their native renderer path is established.
-    const type = runtime.readNamed(identity, 'LightType');
-    if (Number(type) !== 1) return null; // LT_Steady
+    // Steady and animated (Pulse, Flicker, Strobe, ...) surface-list lights alike: SetupForSurf's class test reads the live actor
+    // (surfaceLightClass: no LightType or no LightBrightness is no light), so a TriggerLight that BeginPlay or Tick leaves at
+    // brightness 0 adds nothing, whatever its type. Original evidence (docs/visual-acceptance.md "Strobe"):
+    // 06_HongKong_WanChai_Underworld's TriggerLight1 (Strobe, map brightness 200, bInitiallyOn false) reads 200 while the level is
+    // frozen and 0 from its first unfrozen Tick (tools/dx-live-win.c trace of the live fields), the floor it lights is dark in
+    // the original's frames, and Render.dll's Strobe flag stops flipping at that tick.
     return { ref: identity.index, values: { LightBrightness: brightness } };
   }
 

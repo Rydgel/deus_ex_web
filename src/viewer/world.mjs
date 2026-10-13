@@ -384,7 +384,7 @@ export async function createWorld(map, asset, assets, onProgress = () => {}, {ba
     return { ...update, uploaded: update.lightmaps.length };
   }
   const moverMatrix = new THREE.Matrix4();
-  const world = { root, markers, counts, textures: textureNames.size, materials, mirrors, fog, submissionBatches, notes: [...notes], errors, sky, skyRotation,
+  const world = { /** Validation access: the light maps (unreal/lighting.mjs); `lighting` below is their statistics. */ lightMaps: lighting, root, markers, counts, textures: textureNames.size, materials, mirrors, fog, submissionBatches, notes: [...notes], errors, sky, skyRotation,
     visibility,
     /** Whether a zone's actor (or the LevelInfo) is bFogZone. */
     fogZone: zone => Boolean(fogZones[zone]),

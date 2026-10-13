@@ -111,8 +111,11 @@ it exposes the original Trigger event directly so those boundaries cannot be
 replaced by a hand-written toggle. The Play host now forwards changed
 `LightBrightness` bytes from linked TriggerLight instances to
 `world.updateLighting()` after the script tick. Skin and `MultiSkins` changes
-still have no renderer update path, and animated light types remain unsupported
-by that callback.
+still have no renderer update path. The callback forwards animated types (Pulse,
+Flicker, Strobe, ...) too since 2026-10-13: SetupForSurf's class test reads the live
+actor, so a TriggerLight at brightness 0 is no light of any type (the Underworld's
+TriggerLight1 measured in the original, [Strobe](visual-acceptance.md#strobe-a-host-input-and-a-triggerlight-the-page-lit-wrongly);
+`validate-triggerlight-animated`).
 
 `unreal/lighting.mjs` and `viewer/world.mjs` refill dependent lightmaps in place
 and upload their existing atlas tiles after the selected brightness callback.

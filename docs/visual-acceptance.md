@@ -424,7 +424,8 @@ and eleven more NPCs rendered from the start pose). Frames are a second stage, a
 3. **Measured host inputs for Play** (`src/viewer/live-probe.mjs`, `window.deusExViewer.liveProbe`, simulation side in worker mode;
    `scripts/live-acceptance.mjs play`): per replayed tick Play ticks with the original's delta and its stream set to the original's
    `rand` state at that tick's entry (`srand` semantics, `rng.seed`), the clock starts at the trace's, the player stands where and as the
-   original's did at the release (pose, Region, animation), and the actors the original's load kept are the ones Play keeps (below). The
+   original's did at the release (pose, Region, animation), the actors the original's load kept are the ones Play keeps (below), and a
+   held frame takes the original's Strobe state (Strobe, below). The
    replay is not a free-running comparison: it removes what the two programs cannot share, and each input is measured, not guessed.
 4. **Compare** (`scripts/live-acceptance.mjs compare`): for every watched actor and field the first tick where Play's float32 value
    differs, per-tick stream draw counts (original: state before and after each Tick; Play: its draws), and with `--actor-trace a:b` on the
@@ -451,6 +452,41 @@ Measured from the CRT state (the `rand` word of the msvcrt thread data, `+0x14`)
 - With the population matched the first unfrozen tick's totals are equal (317 and 317 on Island, 54 and 54 on the Club) and so are the
   per-actor counts (`AActor::Tick` attribution) for every NPC and generator; before the match the only difference was one generator
   (`FlyGenerator1`) that the original's load had kept and Play's had not.
+
+### Strobe, a host input, and a TriggerLight the page lit wrongly
+
+Render.dll keeps one Strobe state (`0x10b49ea8` the flag, `0x10b49ea4` the TimeSeconds it last saw). The Strobe light-type function
+flips the flag whenever it is called with a new TimeSeconds, and it is called once per drawn frame in which a Strobe light is set up
+([mesh lighting](mesh-lighting.md) "LightType functions, Strobe and the noise"). So the flag a frame shows is a function of how many frames
+the host drew at distinct times, **a host input like the rand state**: it differs run to run in either program. The tracer
+(`tools/dx-live-win.c` trace) now writes it into every row (`strobeIn` and `strobeOut`: flag, time) and, while the level is held, at every
+skipped Tick to `<trace>.strobe`; the driver keeps the held value in `hold<tag>.json` and Play's `--shot` sets it (`liveProbe({strobe})`)
+unless `--own-strobe`. `compare` reports the flips of both sides.
+
+What the Underworld showed. Original: the flag flipped at ticks 2 and 3 (frozen, TimeSeconds advancing) and **never in the 600 unfrozen
+ticks**; the TimeSeconds it last saw stayed at the release (87.54). The reason is a light, not the renderer: the map's only Strobe light is
+`TriggerLight1` (engine.triggerlight, state TriggerToggle, LightType 5, map brightness 200, bInitiallyOn false). The tracer's trace of its
+live fields (offsets from `liveProbe({offsets})`):
+
+| tick | LightBrightness | LightType | InitialBrightness | Alpha | Direction |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| 1 (frozen) | 200 | 5 | 200 | 0 | -1 |
+| 3 (the first unfrozen Tick) | 0 | 5 | 200 | 0 | -1 |
+| 22 | 0 | 5 | 200 | 0 | -1 |
+
+TriggerLight.Tick sets `LightBrightness = Alpha * InitialBrightness`, so from the first Tick the light is at 0: SetupForSurf's class test
+reads the live actor (`surfaceLightClass`: no LightBrightness is no light), no Strobe light is set up any more, the flag stops
+flipping, and the floor it lit is dark in every frame after. Play's sim side agreed (its strobe flips stop at the same moment, which
+is how the stuck flag was found) but the page's light maps kept the light at the map's 200, because the Play host forwards a
+TriggerLight's `LightBrightness` to the light maps only for Steady lights (`script-lights.mjs lightingChange`: "animated light types remain
+unsupported by that callback"). The floor therefore lit yellow-green whenever the flag, set in the frames before the release, happened to be 0:
+the run-dependent patch of Pilot 3's frame. **Fixed** (`lightingChange` forwards animated types too; the light map is refilled from the live
+brightness, as for steady lights): `validate-triggerlight-animated` (headless; Underworld TriggerLight1 off and in no animated light map after
+its first Tick, OceanLab_UC's TriggerLight0 off, Airfield's TriggerLight0, which starts on, stays in 530 entries; fails without the change),
+validate-script-lights, validate-script-light-cache (with its original brightness/colour-cache oracle), validate-moving-lights-incremental,
+validate-moving-light-effects, validate-light-animation and validate-auglight-lighting pass. Census of the shipped maps: 145 TriggerLights,
+28 of them with a type other than Steady in 9 maps (Warehouse 2, Airfield 3, Helibase 1, Storage 8, Underworld 1, Graveyard 2, OceanLab_UC 8,
+OceanLab_Silo 2, Area51_Entrance 1), most off until triggered; all showed at the map's brightness before.
 
 ### Placement constraint
 
@@ -479,6 +515,7 @@ the 22 that stay put and 2 of the 36 that walk. Every other walking NPC diverged
 | + physWalking's two class reads (586aa15) | 41 / 59 | 18 | long frames and zone currents only (not reached at 1/60) |
 | master 507daec (d104c8e first MoveTarget, 0e84704 AlterDestination, the others above) | 57 / 59 | 34 | Divergence 3 |
 | + physicsRotation (ca0686d) | 58 / 59 | 35 | Divergence 10; Terrorist18 (tick 235) is the one left |
+| master bcff6b0 (AlterDestination, AScriptedPawn::Tick) | 59 / 59 | 36 | Terrorist18, the one left before |
 
 The 18 walkers that match walk up to 544 units (UNATCOTroop1), 528 (SecurityBot1), 313 (Terrorist36) identically, with equal destinations,
 timers, rotations and animation, in ten seconds.
@@ -498,7 +535,7 @@ sub-pixel offset (0, 0), 0 outlier blocks. That the SecurityBot0 of this frame w
 ### Pilot 2: 10_Paris_Club (2026-10-13)
 
 20 actors (19 NPCs and the player), 600 ticks, map start pose (2062.9, 273.2, -48.3), yaw 35411 (set through `ViewRotation`), population matched.
-**17 of 20 equal for 600 ticks** at ee041b8 (19 of 20 after the later fixes: only MichaelHamner0, a Sitting guest, differs, from tick 521): the player and 16 NPCs, among them the dancers (Hooker0, Nurse0, Female3, Businessman5), the bartender, the
+**17 of 20 equal for 600 ticks** at ee041b8 (19 of 20 after physicsRotation, 20 of 20 at bcff6b0: MichaelHamner0, a Sitting guest, differed from tick 521): the player and 16 NPCs, among them the dancers (Hooker0, Nurse0, Female3, Businessman5), the bartender, the
 wanderers and the patrolling Businessman0. `LastRenderTime` equal for every NPC and tick (`DistanceFromPlayer` too, until the three below diverge). What it shows about
 being viewed:
 
@@ -538,32 +575,34 @@ AnimRate, TweenRate, bAnimFinished, bAnimLoop, bAnimNotify and blend channel 0 (
 | + child frames the page cannot draw stamp their sprites (eb22793) | 34 / 50 | Businessman1 and others seen through a mirror child frame |
 | + zone render times reach InStasis (eb22793) | 41 / 50 | Female1 and others in a rendered zone |
 | + physicsRotation compares raw rotators (ca0686d) | 47 / 50 | six actors, Hooker0 among them |
+| master bcff6b0 (AlterDestination, AScriptedPawn::Tick) | 50 / 50 | Businessman1 and Female5 `LastRenderTime`, TriadRedArrow0 `MoveTimer` |
 
-What the 47 show: the six dancers' animation (sequence, frame, rate, tween, finished/loop/notify flags, blend channel) is **equal for all
-600 ticks on both sides**, as are Female7, SarahMead0, LowerClassMale1 (Walk, wandering), Secretary0, Businessman3 (seated) and the three
-MJ12Commandos that wander; every position, rotation, timer and state field of those NPCs too. It is an animation comparison with the
-original's stasis gate, because the NPCs are rendered, and the gate's inputs are compared (`LastRenderTime`, `bStasis`, `Dist`).
+All 50 equal at bcff6b0, in two replays of two different loads of the original. The six dancers' animation (sequence, frame, rate,
+tween, finished/loop/notify flags, blend channel) is **equal for all 600 ticks on both sides**, as are Female7, SarahMead0,
+LowerClassMale1 (Walk, wandering), Secretary0, Businessman3 (seated), the three MJ12Commandos that wander, Businessman1 (patrolling, at
+the view's edge) and every other watched NPC: position, rotation, timers, state, and the stasis gate's inputs (`LastRenderTime`,
+`bStasis`, `Dist`). It is an animation comparison under the original's stasis gate, since the NPCs are rendered. Before bcff6b0
+three differed: Businessman1 and Female5 in `LastRenderTime` (one tick, at the view's edge; traced to the frame size, Divergence 12) and
+TriadRedArrow0 in `MoveTimer` (a seated guest, 4.0 lower in the original from the tick after SitBegin starts; the family of Divergence 4).
 
-The three that differ:
+**Frame at tick 600** (both levels held at the last replayed tick, the view from the start pose: three BreakableGlass panes and the
+dance floor in view; the Hyprland placement works since the dispatches are spaced; the tracer's trace and `--shot` are kept apart with
+`--tag`). Compared against the original's frame (`visual-acceptance.mjs compare --view name:0,0,0:0,0,0`):
 
-- **Businessman1, LastRenderTime from tick 22** (original 77.1033, Play 77.1200 = one tick later) and **Female5 from tick 465** (84.4866
-  against 84.5033): a pawn at the edge of the view that Play's frame stamped and the original's did not. **Resolved: the frame size**
-  (Divergences 11): Play's frames were 1280x611 and the original's 632x1030 (its window); with the original's size both are equal.
-- **TriadRedArrow0, MoveTimer from tick 181** (original -4.045, Play -0.045, then both count down together): a seated guest, the tick after
-  the SitBegin animation starts (Physics 4). In the Sitting family, with Club's guests; not traced.
+| Play | ratio | mean abs. diff. | edge recall / precision | outlier blocks (block ratio min to max) |
+| --- | ---: | ---: | --- | --- |
+| no glass panes on the page (507daec's world; another load) | 1.171 | 3.64 | .989 / .994 | 1 (0.62 to 1.37) |
+| panes, TriggerLight1 lit (Divergence 11 only) | 1.215 | 4.37 | .987 / .991 | 4 (1.01 to 4.68) |
+| panes and TriggerLight1 off (Divergence 13) | 1.180 | 3.69 | .988 / .993 | 0 (1.01 to 1.37) |
 
-**Frame at tick 600** (`live600`, both levels held at the last replayed tick, the view from the start pose, a row of BreakableGlass panes and
-the dance floor in view; the Hyprland placement works since the dispatches are spaced). With the page's glass panes (Divergence 11):
-ratio 1.214 (the known uniform gap plus the pane region below), mean abs. diff. 4.33, edge recall 0.987, precision 0.991, sub-pixel
-offset (0, 0), 4 outlier blocks (block ratio median 1.30, max 4.69). Without them (Play at 507daec's page world): ratio 1.171, mean
-abs. diff. 3.64, recall 0.989, precision 0.994, 1 outlier block. **The panes make the metrics worse and the picture closer**: without
-them the three panes ahead are a black hole onto the dance floor behind; with them the frame shows the pane as the original does, but
-the reflection in it (the opaque mirror shows the reflected child alone) holds a brightly lit, yellowish floor with the light cones
-where the original's reflection is the dark red floor of the rest of the frame (difference image: the red channel, a 400 x 100 pixel
-patch on the floor in the panes' region). Everything outside the panes is within the known uniform gap. Cause not traced (next below).
+Without the panes the three ahead are a black hole onto the dance floor. With them but not Divergence 13 a yellow-green patch lit the dance
+floor in the panes' region (a 370 x 90 pixel area of the floor, ratio up to 4.7, the original's floor there is dark red), in some runs and
+not in others. It was first read as the panes' reflection lit differently (a mirror pass defect, an opaque mirror shows the reflected child
+alone) and is not: the patch is the floor's own light map, present in frames without panes, and each toggle of the page's mirror, mover, fog,
+corona and actor passes left it. See [Strobe](#strobe-a-host-input-and-a-triggerlight-the-page-lit-wrongly).
 
-The random stream: the first tick whose draw count differs is tick 3 (original 1, Play 2), then a few more on the same tick lines as the
-Club's ghost-player difference (Divergences 6). Not traced.
+The random stream: the first tick whose draw count differs is tick 1, 2 or 3 depending on the load (original 248, Play 247 on tick 1 of
+one load, the numbers of the Businessman1 case fixed in eb22793; not checked whether it is the same cause). Not traced.
 
 ### Divergences found
 
@@ -621,10 +660,9 @@ Club's ghost-player difference (Divergences 6). Not traced.
     all along. A broken pane (BlowItUp leaves the mover 20,000 units up: collider offset (0, 0, 20000), validate-island-blowitup) takes the same
     route as any mover: out of the mirror pass and the frame. `validate-page-movers-play` (worker mode; fails without the change);
     validate-mirrors-play, validate-mirrors, validate-bsp-occlusion, validate-brush-tracker, validate-child-frames,
-    validate-sky-in-mirror-play and validate-live-visibility-play pass. The frame at tick 600 (Pilot 3): the pane is there, its reflection
-    is lit differently (open, below).
-
-11. **The frame size of a live comparison (fixed, 2026-10-13).** The original renders into its window (here 632x1030, UViewport
+    validate-sky-in-mirror-play and validate-live-visibility-play pass. The frame at tick 600 (Pilot 3) shows the pane, and its reflection
+    agrees with the original's once Divergence 13 is fixed.
+12. **The frame size of a live comparison (fixed, 2026-10-13).** The original renders into its window (here 632x1030, UViewport
    SizeX/SizeY, which the tracer now records in every trace row as `viewport`), Play's page into a 1280x720 viewport whose canvas
    gave a 1280x611 render rectangle. Every sprite rectangle and span edge is in pixels, so at the edge of the view they differ by one:
    Businessman1's reflection in the Underworld's mirror child frame (the mirror frame's free spans at its rows 525-538 are [441,455); the
@@ -635,14 +673,20 @@ Club's ghost-player difference (Divergences 6). Not traced.
    512, 442, 538 ... 425, 512, 440, 538) and the mirror frame's membership matches. `live-acceptance.mjs play` now gives the replay's
    frames the trace's `viewport` (`--own-viewport` keeps the page's); with it the Underworld's 50 actors are equal for 600 ticks. The
    OccludeBsp/Setup translation was not at fault (bit-exact on the same frame, docs/bsp-occlusion.md).
+13. **TriggerLights of an animated type kept the map's brightness in the light maps (fixed).** The Play host forwarded a TriggerLight's live
+    `LightBrightness` to the light maps only for LightType Steady; a Strobe, Pulse or Flicker TriggerLight that is off until triggered
+    stayed lit at the map's brightness, where SetupForSurf's class test reads the live actor and a light at 0 is no light. Found in the
+    Underworld frame (a lit patch on the dance floor, first taken for a pane reflection), traced through the Strobe flag, and
+    measured in the original: [Strobe](#strobe-a-host-input-and-a-triggerlight-the-page-lit-wrongly). 28 TriggerLights in 9 maps.
 
 ### What this shows and does not
 
-It shows, per tick and with the original's own inputs, that Play's live NPC code agrees with the original for 58 of 59 Island actors, 19
-of 20 Club actors and 47 of 50 Underworld actors over ten seconds, including animation (the Underworld's six dancers and its walkers, the Island's
+It shows, per tick and with the original's own inputs, that Play's live NPC code agrees with the original for 59 of 59 Island actors, 20
+of 20 Club actors and 50 of 50 Underworld actors over ten seconds (master bcff6b0, each replay of the original's trace of the load it was
+taken from), including animation (the Underworld's six dancers and its walkers, the Island's
 walkers), timers, state changes and the stream's use. It found defects the frozen acceptance and the unit oracles missed because they ran
 the player or looked at one frame: calcVelocity (1), physWalking (2), the first path choice (3), the render feedback that sets
-`LastRenderTime` and the zone times (8, 9) and the pawn rotation step (10). It does not show:
+`LastRenderTime` and the zone times (8, 9), the pawn rotation step (10), the page's missing glass (11) and animated TriggerLights (12). It does not show:
 the dancers' animation where no one sees them (the Club: stasis, above); patrols past the first path choice, any NPC beyond 600 ticks, combat, conversations, anything
 that needs the player to move or act; lights and particles (the frame at tick 600 has none in view that move); frames with a pawn
 in view (Island's start view has none close). The comparison is replay-synchronised: it cannot say that two free-running games would
@@ -661,6 +705,9 @@ DX_HYPRLAND=1 scripts/live-original.sh <map> --sweep 49096 --sweep-pawns A,B --s
 node scripts/live-acceptance.mjs sweep --map <map> --yaw-base 49096 --pawns A,B --step 15       # Play's side of the same views
 DX_HYPRLAND=1 scripts/live-original.sh <map> --stamps-yaws 49096 --stamp-pawns A,B                # which frame stamps a pawn
 node scripts/live-acceptance.mjs eval --map <map> --expr 'window.deusExViewer.status()'         # a look at Play after the frozen start
+DX_HYPRLAND=1 scripts/live-original.sh <map> --ticks 600 --delta 0.0166666675 --shot name --tag name     # a frame, its trace and the held Strobe state apart
+node scripts/live-acceptance.mjs play --map <map> --seed 1 --tag name --shot name                       # Play's frame takes that Strobe state (--own-strobe: its own)
+node scripts/live-acceptance.mjs compare --map <map> --tag name                                         # clock, stream, Strobe flips, every field
 ```
 
 `live-original.sh` takes the Wine lock (`.work/wine-deusex.lock`), refuses to start with another DeusEx.exe running and quits the game by
@@ -675,15 +722,12 @@ its PID; Play runs headless Chromium in worker mode.
   (item 2 above).
 - The frozen captures stand at the map's frame-0 pose; live behaviour is
   compared per tick in [Live scenes](#live-scenes-2026-10-13), where the
-  Underworld's TriadRedArrow0 MoveTimer (likely the native tick of item 4; not rerun), the Underworld's
-  view-edge `LastRenderTime` differences (Businessman1 tick 22, Female5 tick 465), the Club's dancers in view (stasis) and a frame
-  with pawns in view are still open.
-- **The reflection in the Underworld's glass panes is lit differently** (live600, Pilot 3): an opaque mirrored mover (flags `0x8400028`/`0x8400008`)
-  draws the reflected child frame alone; Play's child frame shows the dance floor with its light cones bright and yellowish, the original's
-  the same floor dark red like the rest of the frame (diff patch in the pane region, ratio up to 4.7). The main frame's own floor stripes agree
-  (replay-synchronised light animation), so the difference is in the reflected frame: the moving lights, the reflected-frame lighting or
-  the mirror's depth and blend. Not traced; the frozen acceptance of static wall mirrors and the Smug translucent mover do not cover an
-  opaque mover mirror under moving lights.
+  Club's dancers in view (stasis) and a frame with pawns close in view are still open.
+- **Held frames carry the host's Strobe phase.** The Strobe flag is a host input ([Strobe](#strobe-a-host-input-and-a-triggerlight-the-page-lit-wrongly)):
+  a frame compared at a held tick takes the original's measured flag, not its own. A light-map region lit by a Strobe light that is on
+  differs between two frames of the same program unless the flag is matched. The Underworld's only Strobe light is TriggerLight1, off.
+- The stream's draw count per tick differs on some tick between Play and the original in every pilot (the Underworld on tick 1 to 3,
+  depending on the load) while every watched field agrees; not traced.
 - Captures come from one Wine/D3D host. D3D behaviour that depends on the
   driver is not separated from the original's own.
 
