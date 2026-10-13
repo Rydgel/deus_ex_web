@@ -31,6 +31,9 @@ for(const path of ['actor.beginevent','actor.endevent','mover.triggertoggle.trig
 }
 const stateNode=await runtime.prepareState(engine,engine.exportsByPath.get('mover.triggertoggle'));
 state.setStateNode(stateNode);
+// The StateFrame mask GotoState('TriggerToggle') computes (script-state.mjs transition): ProcessInternal's probe gate (Core 0x1013f6c6)
+// silences the probe-named Trigger without the state's bit.
+state.probeMask=cls.metadata.probeMask.map((word,i)=>((word|stateNode.script.probeMask[i])&stateNode.script.ignoreMask[i])>>>0);
 function getRef(receiver,name){return runtime.fieldReference(receiver,runtime.lookupMember(runtime.instance(receiver).cls,'fields',name));}
 async function set(receiver,name,value){const field=runtime.lookupMember(runtime.instance(receiver).cls,'fields',name);await runtime.field(field);runtime.fieldReference(receiver,field).set(value);}
 for(const [name,value] of Object.entries({Location:[10,20,30],Rotation:[0,0,0],BasePos:[10,20,30],BaseRot:[0,0,0],MoveTime:1,KeyPos:[[0,0,0],[0,56,0],...Array.from({length:6},()=>[0,0,0])],Physics:9}))await set(mover,name,value);
