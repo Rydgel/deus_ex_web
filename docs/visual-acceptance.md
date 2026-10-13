@@ -474,3 +474,4 @@ measured divergences and their evidence.
   differs through timing).
 - Captures come from one Wine/D3D host. D3D behaviour that depends on the
   driver is not separated from the original's own.
+

@@ -139,14 +139,22 @@ and without bIsWalking) and PlayerPawn controls with the same DesiredSpeed, 2,42
 for `WALK_KERNEL=rust` (without the gate 623 of them differ by up to 434 units/s). `validate-native-walking` adds
 script-pawn and control cases to the physWalking oracle (123 cases).
 
-**Open: physWalking's other non-PlayerPawn tests.** The same oracle shows physWalking itself reads the class twice more, which the
-walking body does not translate for a script pawn (6 cases listed as `open`, 5 differ):
+**physWalking's own two class reads (same day, translated).** The oracle showed physWalking reads the class twice more, which
+the body did not translate for a script pawn:
 
-- `0x103ca876..0x103ca8fa`: the remaining time is cut into steps of at most 0.05 s for a PlayerPawn; for any other pawn
-  only when `(|V| * remaining)^2 > 400` (`0x10431bd0`), i.e. when it travels more than 20 units in the remaining time.
-  At 60 fps (0.0167 s) the cut never applies, so only frames over 50 ms differ.
-- `0x103ca697..0x103ca6e8`: a non-PlayerPawn compares `|Region.Zone.ZoneVelocity|^2` with 90000 (`0x10431bd4`) before the
-  ZoneVelocity term enters the desired move; not read here.
+- `0x103ca873..0x103ca8fa`: a remaining time over 0.05 s is cut into steps of at most 0.05 s for a PlayerPawn; for any other
+  pawn only when `(|desired|^2 * remaining) * remaining > 400` (x87, `0x10431bd0`), i.e. when it travels over 20 units in the
+  remaining time. At 60 fps (0.0167 s) the cut never applies, so only frames over 50 ms differ (Play clamps the actor delta
+  at 0.4 s, so a long frame does happen).
+- `0x103ca697..0x103ca6f1`: a non-PlayerPawn adds `ZoneVelocity * 25 * dt` to the desired move only when
+  `|ZoneVelocity|^2 > 90000` (`0x10431bd4`, x87 SizeSquared), as physFlying already did.
+
+`walking.mjs` and the Rust walk loop (`walk_loop.rs`, with the x87 helpers of `fly.rs` made `pub(crate)`) take the
+non-PlayerPawn side. `validate-native-walking` asserts them: 395 physWalking oracle cases (script pawn and PlayerPawn controls,
+frames of 5 ms to 0.4 s, zone currents at 290, 299, 301, 400; a 240-case sweep), bit-exact; 90 of them fail with the tests
+disabled. `validate-walk-loop-branches` runs both maps at `--dt 0.12` with the walk-branches scenario's zone current (305 and 290
+units, around the gate) on the JavaScript and Rust paths, digests equal at every checkpoint; mutating the Rust cut to "always"
+changes the digest (`27005fe196048f0b` against `b18f4d13205dbe18`, Training, 300 ticks).
 
 ## Surface-prelude boundary
 

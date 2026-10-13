@@ -36,9 +36,9 @@ const ARGS = ['--bypass', '--continue', '--render-feedback', '--warm', '30', '--
 const REQUIRED = ['moves', 'stepUps', 'hitWalls', 'slopeProbes', 'nudges'];
 const REQUIRED_ANY = ['retreats', 'farMoves', 'mayFalls', 'fallingEvents', 'physicsSets'];
 const reached = new Set();
-function run(map, tag, env, scenario = 'scripts/scenarios/walk-branches.mjs') {
+function run(map, tag, env, scenario = 'scripts/scenarios/walk-branches.mjs', extra = []) {
   const out = join(dir, `${map}-${tag}.json`);
-  const child = spawnSync(process.execPath, ['scripts/bench-sim.mjs', '--map', map, ...ARGS, '--scenario', scenario, '--json', out],
+  const child = spawnSync(process.execPath, ['scripts/bench-sim.mjs', '--map', map, ...ARGS, '--scenario', scenario, ...extra, '--json', out],
     {env: {...process.env, ...env}, encoding: 'utf8', stdio: ['ignore', 'ignore', 'pipe'], maxBuffer: 64 << 20});
   assert.equal(child.status, 0, `${map} ${tag}: bench-sim exited ${child.status}\n${child.stderr?.slice(-2000)}`);
   const report = JSON.parse(readFileSync(out, 'utf8'));
@@ -82,6 +82,20 @@ try {
     assert(d.flyings > 0, `${map} physics events: the Falling-event physFlying tail was not reached`);
     console.log(`${map} physics events: ${d.calls} Rust walking calls, digest ${rust.report.digest} on both paths, ` +
       `${d.flyings} Falling-event physFlying tails, ${d.fallings} physFalling tails, ${d.hitWalls} HitWalls`);
+  }
+  // Long frames (--dt 0.12): physWalking cuts a remaining time over 0.05 s into steps for a PlayerPawn but, for a script pawn,
+  // only when (|desired|*remaining)^2 > 400, and reads ZoneVelocity only above 300 (0x103ca873, 0x103ca697; walking.mjs). The
+  // walk-branches scenario pushes pawns at 3 x GroundSpeed and gives their zone a current in alternate phases, so both sides of
+  // both tests run; the digests must agree at every checkpoint.
+  for (const map of ['00_Training', '01_NYC_UNATCOIsland']) {
+    const rust = run(map, 'long-rust', {WALK_LOOP_DIFFERENTIAL: '1'}, undefined, ['--dt', '0.12']);
+    const js = run(map, 'long-js', {WALK_LOOP_KERNEL: 'js'}, undefined, ['--dt', '0.12']);
+    assert.deepEqual(rust.report.errors ?? {}, js.report.errors ?? {}, `${map} long frames: the boundaries reached differ`);
+    assert.equal(rust.report.digest, js.report.digest, `${map} long frames: final digest`);
+    assert.deepEqual(rust.report.digests, js.report.digests, `${map} long frames: checkpoint digests`);
+    const d = rust.differential;
+    assert(d && d.calls > 0 && d.handedBack === 0, `${map} long frames: Rust walking calls`);
+    console.log(`${map} long frames (0.12 s): ${d.calls} Rust walking calls, ${d.moves} MoveActor bodies, digest ${rust.report.digest} on both paths`);
   }
 } finally {
   rmSync(dir, {recursive: true, force: true});

@@ -1,7 +1,10 @@
 import {groundVelocity} from './velocity.mjs';
 import {safeNormal,stepUp} from './steps.mjs';
+import {x87add,x87cmp,x87load as L,x87mul} from './script-vm.mjs';
 const f=Math.fround,add=(a,b)=>a.map((v,i)=>f(v+b[i])),sub=(a,b)=>a.map((v,i)=>f(v-b[i])),scale=(a,s)=>a.map(v=>f(v*s)),dot=(a,b)=>a.reduce((s,v,i)=>s+v*b[i],0);
 const sloped=h=>h.time<1&&h.normal[2]>.01&&h.normal[2]<.7;
+// x87 SizeSquared: (x*x+y*y)+z*z on float32 loads, kept extended (physWalking's tests at 0x103ca6b8 and 0x103ca8a9).
+const x87size2=v=>x87add(x87add(x87mul(L(f(v[0])),L(f(v[0]))),x87mul(L(f(v[1])),L(f(v[1])))),x87mul(L(f(v[2])),L(f(v[2]))));
 /** physWalking's three PHYS_Swimming checks (0x103cb3fd, 0x103cb6d9,
  * 0x103cb97d) call startSwimming(Velocity, timeTick, remainingTime, Iterations)
  * and return. docs/swimming.md. */
@@ -29,13 +32,21 @@ export function walking(pawn,seconds,iterations=0){
  pawn.acceleration=[pawn.acceleration[0],pawn.acceleration[1],0];
  pawn.velocity=[pawn.velocity[0],pawn.velocity[1],0];
  Object.assign(pawn,groundVelocity({velocity:pawn.velocity,acceleration:pawn.acceleration,direction:safeNormal(pawn.acceleration),dt,maxSpeed:pawn.groundSpeed,accelRate:pawn.accelRate,friction:pawn.friction,walking:pawn.isWalking,playerPawn:pawn.isPlayerPawn!==false,desiredSpeed:pawn.desiredSpeed??1}));
- const desired=add(pawn.velocity,scale(scale(pawn.zoneVelocity,25),dt));desired[2]=0;
+ // physWalking's class reads (the other two than calcVelocity's): the ZoneVelocity term enters the desired move for a PlayerPawn,
+ // for any other pawn only when |ZoneVelocity|^2 > 90000 (0x103ca697..0x103ca6f1), and a remaining time over 0.05 s is cut into steps
+ // for a PlayerPawn, for any other pawn only when (|desired|*remaining)^2 > 400 (0x103ca873..0x103ca8fa). The player and views that
+ // do not say (isPlayerPawn undefined) are the PlayerPawn the body was recovered for; swimming.mjs and flying.mjs have their own.
+ const playerPawn=pawn.isPlayerPawn!==false;
+ const zoneApplies=playerPawn||x87cmp(x87size2(pawn.zoneVelocity),L(90000))==='gt';
+ const desired=zoneApplies?add(pawn.velocity,scale(scale(pawn.zoneVelocity,25),dt)):[...pawn.velocity];desired[2]=0;
  const gravity=[0,0,pawn.gravity[2]>0?1:-1],floorDelta=scale(gravity,f(f(pawn.maxStepHeight)+2)),extent=[f(pawn.radius),f(pawn.radius),f(pawn.height)];
  const old=[...pawn.position];pawn.oldLocation=[...old];pawn.justTeleported=false;
  let remaining=dt,mayFallCalled=false;
  const query=(s,e,ext,flags)=>pawn.lineCheck(s,e,ext,flags,0);
  while(remaining>0&&iterations<8){
-  iterations++;const step=remaining>.05?f(Math.min(remaining*.5,f(.05))):remaining;remaining=f(remaining-step);
+  iterations++;
+  const cut=remaining>.05&&(playerPawn||x87cmp(x87mul(x87mul(x87size2(desired),L(remaining)),L(remaining)),L(400))==='gt');
+  const step=cut?f(Math.min(remaining*.5,f(.05))):remaining;remaining=f(remaining-step);
   let delta=scale(desired,step);const originalDelta=[...delta],origin=[...pawn.position];
   const stopped=delta.every(v=>Math.abs(v)<.0001);
   if(stopped){remaining=0;pawn.hitSlopedWall=false;}

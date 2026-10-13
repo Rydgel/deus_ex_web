@@ -51,6 +51,8 @@ const FIELDS = [
   ['Crouching', 'bCrouching', 0x910, 'bit', 0x100], ['InWorld', 'bInWorld', 0x910, 'bit', 0x800], ['WalkAround', 'bWalkAround', 0x974, 'bit', 0x4],
   ['MoveTgt', 'MoveTarget', 0x34c, 'obj'], ['Enemy', 'Enemy', 0x3cc, 'obj'], ['Focus', 'Focus', 0x360, 'f3'], ['DesRot', 'DesiredRotation', 0x208, 'i3'],
   ['NextAnim', 'NextAnim', 0x688, 'name'],
+  // The stasis gate (AActor::InStasis 0x1036bfe0) and its inputs: bStasis, bForceStasis (Actor +0x2a bits 5 and 6), what a rendered view changes.
+  ['Stasis', 'bStasis', 0x28, 'bit', 0x200000], ['FStasis', 'bForceStasis', 0x28, 'bit', 0x400000], ['TickVis', 'bTickVisibleOnly', 0x910, 'bit', 0x400],
   ['DesSp', 'DesiredSpeed', 0x36c, 'f'], ['MaxDes', 'MaxDesiredSpeed', 0x370, 'f'], ['Reduced', 'bReducedSpeed', 0x318, 'bit', 0x800],
 ];
 // The player's pose, read back from the original (the placement of Play's replay): view rotation and Region.
