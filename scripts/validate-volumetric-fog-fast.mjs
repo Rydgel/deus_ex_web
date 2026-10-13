@@ -5,8 +5,11 @@
 // Play's fog pass sends to the Rust loop on 02_NYC_Bar,
 // 06_HongKong_WanChai_Market, 09_NYC_Ship and 02_NYC_BatteryPark from many
 // eye positions and rotations (volumetric-fog-capture.mjs, cached under
-// .cache/volumetric-fog-inputs/). Each frame replays its surfaces in Play's
-// order with the early-out flag carried from surface to surface:
+// .cache/volumetric-fog-inputs/, one file per map and per KEY: the inputs'
+// hash of the files that decide what Play's fog pass sends and answers, so a
+// change to them recaptures instead of replaying a stale flag chain; see
+// KEYED). Each frame replays its surfaces in Play's order with the early-out
+// flag carried from surface to surface:
 // - `fog.check` runs every texel on Exact and the fast registers on the
 //   same incoming flag; any texel where they answer with a different index
 //   or flag fails. Equal (index, flag) per texel makes the flag sequence
@@ -22,7 +25,8 @@
 // registers against Exact only, interleaved, medians of N passes.
 import assert from 'node:assert/strict';
 import {execFileSync} from 'node:child_process';
-import {existsSync, readFileSync, mkdirSync} from 'node:fs';
+import {createHash} from 'node:crypto';
+import {existsSync, readFileSync, mkdirSync, readdirSync, statSync, unlinkSync} from 'node:fs';
 import {loadScriptVmKernel} from '../src/runtime/script-vm-kernel.mjs';
 import {squareRootTable} from '../src/runtime/dynamic-lighting.mjs';
 import {gameDirectory} from './game-directory.mjs';
@@ -31,14 +35,38 @@ const flag = name => process.argv.includes(`--${name}`);
 const listed = process.argv.indexOf('--maps');
 const MAPS = listed < 0 ? ['02_NYC_Bar', '06_HongKong_WanChai_Market', '09_NYC_Ship', '02_NYC_BatteryPark'] : process.argv[listed + 1].split(',');
 const option = (name, fallback) => { const i = process.argv.indexOf(`--${name}`); return i < 0 ? fallback : Number(process.argv[i + 1]); };
-const DIRECTORY = '.cache/volumetric-fog-inputs';
+const DIRECTORY = process.env.FOG_INPUTS_DIR ?? '.cache/volumetric-fog-inputs';
+
+// What a capture records is Play's fog pass at the time: the lights, tables
+// and grid it builds, and the early-out flag chain the Rust loop answers with
+// (`missIn`, carried surface to surface). The render pass moved to 24-bit
+// precision in 90d8092, which changed that chain on 02_NYC_BatteryPark: a
+// capture taken before it fails "Play's incoming flag equals the Exact
+// replay's" though Play and the replay agree. The key therefore hashes the
+// files that decide those values: the capture driver and its shim, the fog
+// pass, the fog model and its precision helpers, the lighting it reads, and
+// the Rust loop with its two arithmetic modules. world.mjs (which hands the
+// pass its surfaces) is left out: it changes for many other reasons, and the
+// surfaces come from the map data.
+const KEYED = ['scripts/volumetric-fog-capture.mjs', 'scripts/volumetric-fog-capture-shim.mjs',
+  'src/viewer/fog-pass.mjs', 'src/runtime/volumetric-fog.mjs', 'src/runtime/dynamic-lighting.mjs',
+  'src/runtime/x87-pc24.mjs', 'src/unreal/lighting.mjs', 'src/unreal/geometry.mjs',
+  'native/script-vm/src/fog.rs', 'native/script-vm/src/x87.rs', 'native/script-vm/src/p24.rs'];
+const KEY = createHash('sha256').update(KEYED.map(name =>
+  `${name}\0${createHash('sha256').update(readFileSync(new URL(`../${name}`, import.meta.url))).digest('hex')}\0`).join(''))
+  .digest('hex').slice(0, 12);
 
 function capture(map) {
-  const file = `${DIRECTORY}/${map}.json`;
+  const file = `${DIRECTORY}/${map}.${KEY}.json`;
   if (flag('capture') || !existsSync(file)) {
     try { gameDirectory(); } catch { console.log('SKIP validate-volumetric-fog-fast: no installed game data'); process.exit(0); }
     mkdirSync(DIRECTORY, {recursive: true});
+    console.log(`validate-volumetric-fog-fast: capturing ${map} (inputs key ${KEY})`);
     execFileSync(process.execPath, ['scripts/volumetric-fog-capture.mjs', map, file], {stdio: ['ignore', 'inherit', 'inherit']});
+    // Keep the two newest captures of this map (another checkout may run an older key).
+    const keyed = readdirSync(DIRECTORY).filter(name => name.startsWith(`${map}.`) && /\.[0-9a-f]{12}\.json$/.test(name))
+      .map(name => ({name, time: statSync(`${DIRECTORY}/${name}`).mtimeMs})).sort((a, b) => b.time - a.time);
+    for (const {name} of keyed.slice(2)) unlinkSync(`${DIRECTORY}/${name}`);
   }
   const data = JSON.parse(readFileSync(file, 'utf8'));
   const words = text => { const b = Buffer.from(text, 'base64'); return new Uint32Array(b.buffer, b.byteOffset, b.byteLength / 4); };

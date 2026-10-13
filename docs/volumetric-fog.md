@@ -171,7 +171,12 @@ generic over three register models (`Reg`):
     `volumetric-fog-capture.mjs` builds a world headless, swaps
     `fog-pass.mjs`'s kernel for a recording wrapper through a resolve hook,
     and drives `world.fog.update` over 240 deterministic views per map
-    (cached in `.cache/volumetric-fog-inputs/`; `--capture` refreshes them).
+    (cached in `.cache/volumetric-fog-inputs/<map>.<key>.json`, the key being a
+    hash of the fog pass, fog model, precision helpers, lighting and Rust loop
+    sources, so editing them recaptures; `--capture` refreshes them anyway). The
+    captured `missIn` flag chain is Play's own: the Oct 3 captures went stale
+    when the render pass moved to 24 bits (90d8092) and failed
+    02_NYC_BatteryPark frame 75 surface 345 against the Exact replay.
     The maps are 02_NYC_Bar, 06_HongKong_WanChai_Market, 09_NYC_Ship and
     02_NYC_BatteryPark. Views sit inside and around the volumes and facing
     fog surfaces, plus the PlayerStarts and validate-volumetric-fog-play's
