@@ -25,6 +25,11 @@ extern "C" {
     fn js_ai_flags(actor: u32) -> u32;
     /// float32 bits: 0..2 Location, 3 CollisionRadius, 4 CollisionHeight, 5 LastRenderTime, 6 DistanceFromPlayer, 7 HearingThreshold.
     fn js_ai_float(actor: u32, field: u32) -> u32;
+    /// The locations of two actors (float32 bits) into `out[0..6]`.
+    fn js_ai_locs(a: u32, b: u32, out: u32);
+    /// What AICanSee's first gates read, into `out[0..11]`: the viewer's Location and BaseEyeHeight, MinAngularSize, the other's Location,
+    /// CollisionRadius and CollisionHeight, and its bDetectable (0/1).
+    fn js_ai_view(pawn: u32, other: u32, out: u32);
     fn js_ai_owner(actor: u32) -> u32;
     /// The actor's XLevel->TimeSeconds (a double).
     fn js_ai_time(actor: u32) -> f64;
@@ -120,6 +125,10 @@ static mut POOL: *mut Pool = core::ptr::null_mut();
 // AIProcess's candidate array (the original's static 0x10585090) and AIEvent's parameter block for the host.
 static mut CANDIDATES: [u32; MAX_CANDIDATES] = [0; MAX_CANDIDATES];
 static mut PARAMS: [u32; 5] = [0; 5];
+static mut LOCS: [u32; 6] = [0; 6];
+/// 1: AICanSee runs even where the pre-gate says it returns 0, and a nonzero result is reported (js_ai_warn 3).
+static mut CHECK: u32 = 0;
+static mut VIEW: [u32; 11] = [0; 11];
 // A small cache of the host's name hashes.
 static mut HASHES: [(u32, u32); 256] = [(u32::MAX, 0); 256];
 
@@ -230,7 +239,11 @@ fn flags(actor: u32) -> u32 {
     unsafe { js_ai_flags(actor) }
 }
 fn is_deleted(actor: u32) -> bool {
-    flags(actor) & 1 != 0
+    // bDeleteMe from the actor's image when it can be read there (AIProcess asks for every receiver every tick), else the host's
+    match crate::dispatch::image_deleted(actor) {
+        Some(deleted) => deleted,
+        None => flags(actor) & 1 != 0,
+    }
 }
 fn float(actor: u32, field: u32) -> u32 {
     unsafe { js_ai_float(actor, field) }
@@ -505,11 +518,19 @@ fn destroy_actor(actor: u32) {
 fn sub(a: u32, b: u32) -> Ext {
     Ext::load(a).add(Ext::load(b).neg())
 }
+/// The locations of `a` and `b` (float32 bits), fetched together.
+fn locations(a: u32, b: u32) -> [u32; 6] {
+    unsafe {
+        js_ai_locs(a, b, addr_of_mut!(LOCS) as u32);
+        *addr_of_mut!(LOCS)
+    }
+}
 /// (dx*dx + dy*dy) + dz*dz of the differences `a - b`, in the order the original loads z, y, x and sums x, y, z.
 fn squared_distance(a: u32, b: u32) -> Ext {
-    let dz = sub(float(a, 2), float(b, 2));
-    let dy = sub(float(a, 1), float(b, 1));
-    let dx = sub(float(a, 0), float(b, 0));
+    let l = locations(a, b);
+    let dz = sub(l[2], l[5]);
+    let dy = sub(l[1], l[4]);
+    let dx = sub(l[0], l[3]);
     dx.mul(dx).add(dy.mul(dy)).add(dz.mul(dz))
 }
 
@@ -534,9 +555,10 @@ fn can_hear(pawn: u32, other: u32, volume: u32, radius: u32) -> u32 {
     }
     let (less, equal) = Ext::load(radius).compare(zero);
     let radius = if less || equal { F32_800 } else { radius };
-    let dz = sub(float(other, 2), float(pawn, 2)).store();
-    let dy = sub(float(other, 1), float(pawn, 1));
-    let dx = sub(float(other, 0), float(pawn, 0)).store();
+    let l = locations(other, pawn);
+    let dz = sub(l[2], l[5]).store();
+    let dy = sub(l[1], l[4]);
+    let dx = sub(l[0], l[3]).store();
     let dz2 = Ext::load(dz).add(Ext::load(dz)).store();
     let (dxe, dz2e) = (Ext::load(dx), Ext::load(dz2));
     let sum = dxe.mul(dxe).add(dy.mul(dy)).add(dz2e.mul(dz2e));
@@ -578,6 +600,32 @@ fn settings(event: u32, start: u32, end: u32) -> [u32; 4] {
     }
 }
 
+/// Whether APawn::AICanSee(other, visibility, ...) is certain to return 0, from the first gates of its worker (0x103c6ab0): a visibility
+/// not above 0, an undetectable other, or an angular size ((r^2 + h^2) / max(|other - eye|^2, 1)) not above MinAngularSize. The angular
+/// size is estimated in double with a margin far above its float32 rounding, so a call that is not certain is made.
+fn surely_unseen(pawn: u32, other: u32, visibility: u32) -> bool {
+    if !positive(visibility) {
+        return true;
+    }
+    let v = unsafe {
+        js_ai_view(pawn, other, addr_of_mut!(VIEW) as u32);
+        *addr_of_mut!(VIEW)
+    };
+    let f = |bits: u32| f32::from_bits(bits) as f64;
+    if v[10] == 0 {
+        return true;
+    }
+    let eye_z = f(v[2]) + f(v[3]);
+    let (dx, dy, dz) = (f(v[5]) - f(v[0]), f(v[6]) - f(v[1]), f(v[7]) - eye_z);
+    let mut distance = dx * dx + dy * dy + dz * dz;
+    if !(distance >= 1.0) {
+        distance = 1.0;
+    }
+    let ratio = (f(v[8]) * f(v[8]) + f(v[9]) * f(v[9])) / distance;
+    let minimum = f(v[4]);
+    ratio < minimum * (1.0 - 1e-5) && minimum > 0.0
+}
+
 /// ComputeSenseDetection (0x103837b0): (visibility, volume, smell) as float32 bits.
 fn compute_sense(r: u32, s: u32) -> (u32, u32, u32) {
     let receiver = rcv(r).actor;
@@ -603,7 +651,14 @@ fn compute_sense(r: u32, s: u32) -> (u32, u32, u32) {
     if !(less || equal) {
         let checks = rcv(r).checks;
         if pawn != 0 {
-            visibility = unsafe { js_ai_can_see(pawn, sender, visibility, checks[0], checks[1], checks[2], checks[3]) };
+            visibility = if surely_unseen(pawn, sender, visibility) {
+                if unsafe { *addr_of_mut!(CHECK) } != 0 && unsafe { js_ai_can_see(pawn, sender, visibility, checks[0], checks[1], checks[2], checks[3]) } != F32_ZERO {
+                    unsafe { js_ai_warn(3, 0) };
+                }
+                F32_ZERO
+            } else {
+                unsafe { js_ai_can_see(pawn, sender, visibility, checks[0], checks[1], checks[2], checks[3]) }
+            };
         } else {
             let time = unsafe { js_ai_line_check(receiver, sender_event_actor) };
             // FCheckResult.Time against 1.0 (FCOMP, C3): kept when equal or unordered, otherwise 0.0
@@ -746,27 +801,34 @@ fn process_receiver(r: u32) {
     let mut best_hold = F32_ZERO;
     let mut best_actor = 0;
     rcv(r).params = [0; 5];
-    let mut near = false;
-    let mut first = 0;
-    if t != 0 {
-        if unsafe { js_ai_in_stasis(actor) } == 0 {
-            let age = Ext::load_f64(unsafe { js_ai_time(actor) }).add(Ext::load(float(actor, 5)).neg());
-            let (less, equal) = age.compare(Ext::load_f64(NEAR_TIME));
-            if less || equal {
-                near = true;
-            } else {
-                let (less, equal) = Ext::load(float(actor, 6)).compare(Ext::load_f64(NEAR_DISTANCE));
-                near = less || equal;
-            }
-        }
-        first = first_valid_sender(ty(t).senders);
-    }
+    // The receiver's "near" test (not in stasis, and rendered within 5 s or within 1200 of the player) only matters once a sender other than
+    // the receiver is considered: it is a pure function of the actor, so it is evaluated there rather than for every receiver.
+    let mut near: Option<bool> = None;
+    let mut first = if t != 0 { first_valid_sender(ty(t).senders) } else { 0 };
     let mut distance = F32_ZERO;
     let mut count = 0;
     while first != 0 {
         let sender = snd(first).actor;
         if sender != actor {
-            if !near {
+            let is_near = match near {
+                Some(value) => value,
+                None => {
+                    let mut value = false;
+                    if unsafe { js_ai_in_stasis(actor) } == 0 {
+                        let age = Ext::load_f64(unsafe { js_ai_time(actor) }).add(Ext::load(float(actor, 5)).neg());
+                        let (less, equal) = age.compare(Ext::load_f64(NEAR_TIME));
+                        if less || equal {
+                            value = true;
+                        } else {
+                            let (less, equal) = Ext::load(float(actor, 6)).compare(Ext::load_f64(NEAR_DISTANCE));
+                            value = less || equal;
+                        }
+                    }
+                    near = Some(value);
+                    value
+                }
+            };
+            if !is_near {
                 distance = squared_distance(actor, sender).store();
             }
             let (less, equal) = Ext::load(distance).compare(Ext::load(NEAR_SQUARED));
@@ -988,6 +1050,10 @@ pub extern "C" fn ai_cleanup() {
 pub extern "C" fn ai_tick() {
     process();
     cleanup();
+}
+#[no_mangle]
+pub extern "C" fn ai_check_ptr() -> *mut u32 {
+    addr_of_mut!(CHECK)
 }
 #[no_mangle]
 pub extern "C" fn ai_params_ptr() -> *const u32 {

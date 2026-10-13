@@ -78,6 +78,17 @@ class World {
         const a = actor(handle);
         return f32bits([a.location[0], a.location[1], a.location[2], a.radius, a.height, a.lastRender, a.distance, a.hearing][field]);
       },
+      js_ai_locs: (a, b, out) => {
+        const view = new DataView(w.memory.buffer), p = actor(a).location, q = actor(b).location;
+        for (let i = 0; i < 3; i++) { view.setFloat32(out + 4 * i, p[i], true); view.setFloat32(out + 12 + 4 * i, q[i], true); }
+      },
+      // The oracle's AICanSee is a leaf that returns what the policy says whatever the geometry, so the pre-gate (which skips the call
+      // when the real function is certain to return 0) must not fire here: a detectable target and no minimum angular size.
+      js_ai_view: (pawn, other, out) => {
+        const view = new DataView(w.memory.buffer);
+        for (let i = 0; i < 11; i++) view.setUint32(out + 4 * i, 0, true);
+        view.setUint32(out + 40, 1, true);
+      },
       js_ai_owner: handle => (actor(handle).owner ? w.actors.get(actor(handle).owner).handle : 0),
       js_ai_time: () => w.time,
       js_ai_in_stasis: handle => (actor(handle).stasis ? 1 : 0),

@@ -51,7 +51,11 @@ export class AiEventHost {
     this.kinds = new WeakMap();
     this.paramKeys = null;
   }
-  attach(exports) { this.x = exports; }
+  attach(exports) {
+    this.x = exports;
+    // AI_EVENTS_CHECK=1: AICanSee also runs where the pre-gate says it returns 0 (aievent.rs surely_unseen) and must return 0.
+    if (typeof process !== 'undefined' && process.env?.AI_EVENTS_CHECK === '1') this.vm.arena.view.setUint32(exports.ai_check_ptr(), 1, true);
+  }
   nid(name) {
     const text = typeof name === 'string' ? name : String(name ?? '');
     const id = nameId(text);
@@ -126,6 +130,20 @@ export class AiEventHost {
         if (field < 3) return bitsOf(read(actor, 'Location')[field]);
         return bitsOf(read(actor, FLOAT_FIELDS[field]));
       },
+      js_ai_locs: (a, b, out) => {
+        const memory = host.vm.arena.view, p = read(actorOf(a), 'Location'), q = read(actorOf(b), 'Location');
+        for (let i = 0; i < 3; i++) { memory.setFloat32(out + 4 * i, p[i], true); memory.setFloat32(out + 12 + 4 * i, q[i], true); }
+      },
+      js_ai_view: (pawn, other, out) => {
+        const memory = host.vm.arena.view, viewer = actorOf(pawn), target = actorOf(other);
+        const v = read(viewer, 'Location'), o = read(target, 'Location');
+        for (let i = 0; i < 3; i++) { memory.setFloat32(out + 4 * i, v[i], true); memory.setFloat32(out + 20 + 4 * i, o[i], true); }
+        memory.setFloat32(out + 12, read(viewer, 'BaseEyeHeight'), true);
+        memory.setFloat32(out + 16, read(viewer, 'MinAngularSize'), true);
+        memory.setFloat32(out + 32, read(target, 'CollisionRadius'), true);
+        memory.setFloat32(out + 36, read(target, 'CollisionHeight'), true);
+        memory.setUint32(out + 40, read(target, 'bDetectable') ? 1 : 0, true);
+      },
       js_ai_owner: handle => handleOf(read(actorOf(handle), 'Owner')),
       js_ai_time: handle => runtime.levelFor(actorOf(handle)).timeSeconds,
       js_ai_in_stasis: handle => {
@@ -136,7 +154,8 @@ export class AiEventHost {
         const receiver = actorOf(pawn), target = actorOf(other);
         const args = [target, valueOf(visibility), !!c0, !!c1, !!c2, !!c3];
         const call = {receiver, argumentCount: 6, evaluateArgument: i => args[i]};
-        return bitsOf(execAICanSee(call, runtime.perceptionServices(call)));
+        // the services do not depend on the call (soundServices reads only call.script, which AICanSee does not use)
+        return bitsOf(execAICanSee(call, host.services ??= runtime.perceptionServices({})));
       },
       js_ai_line_check: (receiver, sender) => {
         // ULevel::SingleLineCheck(Hit, Source = receiver, End = sender.Location, Start = receiver.Location, TRACE_Movers|TRACE_Level):
@@ -148,7 +167,7 @@ export class AiEventHost {
       },
       js_ai_callback: (handle, callback, event, state) => host.callback(actorOf(handle), callback, event, state),
       js_ai_score: (receiver, sender, callback, score) => host.score(actorOf(receiver), actorOf(sender), callback, score),
-      js_ai_warn: () => {},
+      js_ai_warn: code => { if (code === 3) throw new Error('AICanSee pre-gate: a call certain to return 0 returned a value'); },
     };
   }
   /** AIEvent (0x10384980): the receiver's callback function with (event, state, XAIParams), when it has one. */

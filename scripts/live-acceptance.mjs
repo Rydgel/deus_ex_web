@@ -93,6 +93,9 @@ const PERCEPTION_FIELDS = [
   ['LkCarcass', 'bLookingForCarcass', 1804, 'bit', 512], ['LkInjury', 'bLookingForInjury', 1804, 'bit', 1024], ['LkIndirect', 'bLookingForIndirectInjury', 1804, 'bit', 2048],
   ['Distressed', 'bDistressed', 2320, 'bit', 16], ['Attacking', 'bAttacking', 2320, 'bit', 8], ['Stunned', 'bStunned', 2320, 'bit', 32],
   ['NoNegAl', 'bNoNegativeAlliances', 1616, 'bit', 16], ['AlChanged', 'bAlliancesChanged', 1616, 'bit', 8], ['FacingTgt', 'bFacingTarget', 1804, 'bit', 4096],
+  // AICanSee's inputs on the viewer (Pawn: BaseEyeHeight, AIHorizontalFOV, AspectRatio, MinAngularSize, VisibilityThreshold, AIAddViewRotation) and its collision size.
+  ['BaseEye', 'BaseEyeHeight', 0x3f4, 'f'], ['HFov', 'AIHorizontalFOV', 0x5ac, 'f'], ['Aspect', 'AspectRatio', 0x5b0, 'f'], ['MinAng', 'MinAngularSize', 0x5b8, 'f'],
+  ['VisThr', 'VisibilityThreshold', 0x5bc, 'f'], ['AddView', 'AIAddViewRotation', 0x5c8, 'i3'], ['CRad', 'CollisionRadius', 0x1d4, 'f'], ['CHeight', 'CollisionHeight', 0x1d8, 'f'],
   ['Alliance', 'Alliance', 1476, 'name'], ['OrderTag', 'OrderTag', 1656, 'name'], ['OrderAct', 'OrderActor', 1668, 'obj'],
   ...[0, 1, 2, 3, 4, 5, 6, 7].flatMap(i => [[`AlName${i}`, `$AlName${i}`, 2028 + 16 * i, 'name'], [`AlLvl${i}`, `$AlLvl${i}`, 2032 + 16 * i, 'f'], [`AlAgit${i}`, `$AlAgit${i}`, 2036 + 16 * i, 'f']]),
 ];
@@ -101,7 +104,7 @@ if (flag('perception')) FIELDS.push(...PERCEPTION_FIELDS);
 const PLAYER_FIELDS = FIELDS.slice(0, 10).concat([FIELDS[10]],
   [['VRot', 'ViewRotation', 0x3dc, 'i3'], ['RegZone', '$regionZone', 0xc8, 'obj'], ['RegLeaf', '$regionLeaf', 0xcc, 'i32'], ['RegNum', '$regionNum', 0xd0, 'u8']]);
 // --perception: the player's AIVisibility cache (Actor +0x2e8: VisUpdateTime, CurrentVisibility, LastVisibility), which every AICanSee on the player reads.
-if (flag('perception')) PLAYER_FIELDS.push(['VisT', 'VisUpdateTime', 0x2e8, 'f'], ['CurVis', 'CurrentVisibility', 0x2ec, 'f'], ['LastVis', 'LastVisibility', 0x2f0, 'f']);
+if (flag('perception')) PLAYER_FIELDS.push(['CRad', 'CollisionRadius', 0x1d4, 'f'], ['CHeight', 'CollisionHeight', 0x1d8, 'f'], ['BaseEye', 'BaseEyeHeight', 0x3f4, 'f'], ['VisT', 'VisUpdateTime', 0x2e8, 'f'], ['CurVis', 'CurrentVisibility', 0x2ec, 'f'], ['LastVis', 'LastVisibility', 0x2f0, 'f']);
 
 // Load-time random state of the PawnGenerators (PigeonGenerator, SeagullGenerator, ...): PostBeginPlay draws TryTimer
 // (0.25 + FRand()*0.75) and, with bRandomCount, PoolCount from the load's stream, which the two sides do not share
@@ -338,7 +341,7 @@ async function withPlay(body) {
   try {
     const page = await browser.newPage({viewport: {width: 1280, height: 720}, deviceScaleFactor: 1});
     const errors = []; page.on('pageerror', error => errors.push(error.message));
-    await page.goto(`${url}/?hold=1&seed=${option('seed', 1)}`);
+    await page.goto(`${url}/?hold=1&seed=${option('seed', 1)}${option('script-vm', null) ? `&scriptVm=${option('script-vm')}` : ''}`);
     await page.waitForFunction(() => window.deusExViewer?.status().ready, {}, {timeout: 240000});
     if (await page.evaluate(() => window.deusExViewer.status().map) !== map) {
       await page.locator('#map').selectOption(map);
@@ -512,11 +515,12 @@ async function play() {
     while (rows.length < trace.length) {
       await frames(20);
       const taken = await page.evaluate(() => window.deusExViewer.liveProbe({take: true}));
-      nav.push(...(taken.nav ?? [])); script.push(...(taken.script ?? [])); setup.push(...(taken.setup ?? [])); commandLog.push(...(taken.commands ?? []));
+      if (taken.debug?.length) { (globalThis.__debugRows ??= []).push(...taken.debug); } nav.push(...(taken.nav ?? [])); script.push(...(taken.script ?? [])); setup.push(...(taken.setup ?? [])); commandLog.push(...(taken.commands ?? []));
       if (taken.rows.length) { rows.push(...taken.rows); stalls = 0; } else if (++stalls > 40) throw new Error(`the replay stopped at tick ${rows.length}`);
     }
     writeFileSync(playPath, JSON.stringify({map, ghost, initial: started.initial, rows, errors, commands: commandLog}));
     for (const c of commandLog) console.log(`command after ${c.after} ticks: ${c.text} -> ${c.error ? `ERROR ${c.error}` : JSON.stringify(c.output)}`);
+    if (globalThis.__debugRows) writeFileSync(path.join(dir, 'debug-play.json'), JSON.stringify(globalThis.__debugRows));
     if (setupNames) writeFileSync(path.join(dir, 'setup-play.json'), JSON.stringify(setup));
     if (scriptPawns) writeFileSync(path.join(dir, 'script-play.json'), JSON.stringify({pawns: scriptPawns.split(','), events: script}));
     if (navPawns) writeFileSync(path.join(dir, 'nav-play.json'), JSON.stringify({pawns: navPawns.split(','), events: nav}));
