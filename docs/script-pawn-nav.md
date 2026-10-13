@@ -1424,19 +1424,38 @@ Focused checkpoint: `validate-pawn-nav.mjs` 225/225 scenes, 47/47 mutants;
 runs to the labeled Stage 6 `ClientTravel("dxonly")` stop at tick 8040 with
 no unsupported natives.
 
-## Handoff: Island NPC next-MoveTarget divergence (WIP, 2026-10-11, paused)
+## Live divergence: scoutE returns at the first passing candidate (2026-10-13)
 
-Not started beyond setup; no first diverging NPC or tick yet. Worktree at master
-`61d270c`, wasm rebuilt. The live agent's Island original trace (22 MB, 600 ticks,
-`.work/live/.work/live-acceptance/01_NYC_UNATCOIsland/`: `original-trace.jsonl`,
-`.actors.jsonl`, `population.json`, `play-population.json`, `trace.cfg`, `watch.json`)
-was copied to this worktree's `.work/live-acceptance/01_NYC_UNATCOIsland/`, so the
-original need not run again for step 1. The `play` replay was started
-(`node scripts/live-acceptance.mjs play --map 01_NYC_UNATCOIsland`, then `compare`) and
-stopped unfinished by the pause: rerun both. Next: from `report.json` take the first NPC
-whose `MoveTgt` differs (tick, PathNode vs PatrolPoint), trace its state script to the
-native (candidates: FindPathToward 517, FindRandomDest 525 and FindPathTo 518, which the
-notes above list as not oracle-verified), read that native's inputs and outputs at the
-tick in the original with `scripts/live-original.sh` (flock) and dx-live-win's
-watch/breakpoints, and fix it bit-exact against a Unicorn or Wine oracle. Extracted
-DeusEx scripts (ScriptedPawn.uc) are not in `.cache/reference`; only Pawn.uc is.
+The live-scene pilot on 01_NYC_UNATCOIsland (docs/visual-acceptance.md "Live scenes": the original's ticks
+replayed in Play) found 16 NPCs that chose another `MoveTarget` at their first walk, in both directions, with
+equal random-draw counts (SecurityBot0 at unfrozen tick 6: the original `PatrolPoint19`, Play `PathNode403`).
+
+**Method.** `tools/dx-live-win.c` `call` breakpoints (`scripts/live-original.sh ... --extra-config FILE`: calls
+inside `FindPathToward`'s worker for one pawn, with the arguments at entry and the return value and out-parameters at
+the return) record the original's boundary calls; `src/runtime/nav-trace.mjs` (`live-acceptance.mjs play
+--nav-trace SecurityBot0 --ticks 8`) records Play's at the same functions: UModel::FastLineCheck `0x103f3280`,
+ULevel::FarMoveActor `0x10398ba0`, MoveActor `0x103990e0`, and the workers' own entries (pathTowardWorker
+`0x103db3f0`, scoutB `0x103da610`, pointWorker `0x103c0d30`, directReach `0x103dad20`). At tick 6 both sides
+make the same 40 calls (the same FastLineChecks, test moves and every MoveActor delta, bit for bit) up to
+scoutE's second candidate: the original returns from the worker after the pointWorker of the first
+candidate (PatrolPoint19, the target itself); Play went on to a second candidate (PathNode403, farther along the
+route) and kept that one.
+
+**Original** (`0x103db0e0`, disassembled). After scoutE sorts the passing candidates by route weight (the
+first loop `0x103db12f..0x103db241`), the second loop (`0x103db274`) tests each with the pawn-eye
+FastLineCheck (call `0x10301a37`) and pointWorker (call `0x10302bcb`); on a failure of either it goes to
+`0x103db317` (the next candidate), and on success it stores the candidate through `*found`
+(`0x103db302`) and falls into the epilogue (`0x103db304`, `ret 8`): the first passing candidate is the result.
+The translation's comment and loop ("the LAST candidate ... passes") kept testing and kept the last one.
+
+**Fix.** `navScoutE` returns at the first success (`script-pawn-nav.mjs`). The oracle comparison
+(`scripts/validate-pawn-nav.mjs`, the unchanged Engine.dll under Unicorn) had no scene with two passing
+candidates; `fpt-scoute-first-passing` (three pawn-side nodes with routes to the target, all FastLineChecks and walks
+clear) fails before the fix (result navC against the original's navB, 30 MoveActor calls against 18, 10
+FarMoveActor against 7) and passes after it; the mutant `scoute-last-passing` removes the return and is
+detected. 226 of 226 scenes bit-exact, 48 of 48 mutants detected.
+
+**Pilot.** Island's 600 ticks replayed on master with the fix: the NPCs with a first `MoveTgt` mismatch go from 16 to
+0, and those with any watched field different from 18 to 2 (Terrorist18 from tick 164, with a Walk/SitBegin
+difference at 227; UNATCOTroop6 from tick 244, sitting in the original and walking in Play). The stream still
+draws a different number of times at tick 24 (original 10, Play 18); not traced.

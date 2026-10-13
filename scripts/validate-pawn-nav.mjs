@@ -1123,6 +1123,27 @@ const scenes = [
     fastLine: [1, 0],
     singleLine: [{ ret: 1, hit: { actor: 0, time: 1 } }],
   }),
+  // scoutE with two passing candidates (the Island's SecurityBot0 walking to PatrolPoint19, 2026-10-13): the
+  // pawn is 100 from navA (the endpoint scoutB marks), navB and navC lie between, each with a route to the
+  // target and a clear reach. Candidates are tried in ascending route weight and the FIRST that passes the eye
+  // LOS and pointWorker becomes the result (the loop exits at 0x103db302-0x103db304); the translation took the
+  // last (navC) where the original returns navB.
+  fx('fpt-scoute-first-passing', {
+    navList: 'navA',
+    navPoints: {
+      navA: { location: [100, 0, 0], nextNav: 'navB' },
+      navB: { location: [120, 20, 0], nextNav: 'navC' },
+      navC: { location: [130, -30, 0], nextNav: 'tgt' },
+      tgt: { location: [400, 0, 0], upstreamPaths: [0, 1, 2] },
+    },
+    reachSpecs: [{ start: 'navA', end: 'tgt', distance: 150, radius: 30, height: 50, flags: 0 },
+                 { start: 'navB', end: 'tgt', distance: 60, radius: 30, height: 50, flags: 0 },
+                 { start: 'navC', end: 'tgt', distance: 70, radius: 30, height: 50, flags: 0 }],
+    fastLine: [1, 1, 1, 1, 1, 1, 1, 1],
+    singleLine: [{ ret: 1, hit: { actor: 0, time: 1 } }],
+    farMove: [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
+    moveActor: flatWalk(60),
+  }),
   // Exec tail on the fpt-bfs1 graph: bShootSpecial clears, SpecialPause
   // zeroes, and a result equal to SpecialGoal clears SpecialGoal.
   fx('fpt-exec-tail', {
@@ -2687,6 +2708,12 @@ MUTATIONS.push(
 );
 
 MUTATIONS.push(
+  // -- scoutE (0x103db0e0) -------------------------------------------------
+  // The last passing candidate wins (the loop not exiting at the first success).
+  { name: 'scoute-last-passing',
+    pattern: "    return;                                                 // 0x103db302 -> epilogue 0x103db304\n",
+    replacement: "",
+    expect: ['fpt-scoute-first-passing'] },
   // -- GetPathnodeList (0x103c6490) / ReachablePathnodes (1004) mutants -----
   // A full list replacing its farthest farther entry (the "obvious" rule).
   { name: 'gpl-replace-farthest',

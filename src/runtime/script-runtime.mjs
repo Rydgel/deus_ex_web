@@ -3761,8 +3761,11 @@ export class ScriptRuntime {
       // an omitted tail does (bClearPaths = 1 at Engine.dll 0x103bca11).
       const bSingle=singleArgument===undefined?0:singleArgument|0;
       const bClear=clearArgument===undefined?1:clearArgument|0;
-      return execFindPathToward(call.receiver,target,bSingle,bClear,
+      const traced=this.navTrace?.begin(call.receiver,'findPathToward',target,this.readNamed(call.receiver,'Location'));
+      const found=execFindPathToward(call.receiver,target,bSingle,bClear,
         this.pawnNavServices(call.receiver));
+      traced?.end(found);
+      return found;
     }
     if(call.index===518){
       // execFindPathTo 0x103bc800: (point, bSinglePath=0, bClearPaths=1);
@@ -4275,7 +4278,8 @@ export class ScriptRuntime {
       // target runs target->jumpLanding) moves that actor: its own services.
       forActor:actor=>actor===receiver?services:this.pawnNavServices(actor),
     };
-    return services;
+    // Validation (nav-trace.mjs): the boundary calls of a traced pawn's natives are logged.
+    return this.navTrace?this.navTrace.wrap(services,receiver):services;
   }
   createIterator(call) {
     if(call.index===309||call.index===1000||call.index===1003){

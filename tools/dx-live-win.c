@@ -35,6 +35,15 @@
  *         monitor <seconds>       after the resume, stay attached (breakpoints removed) that long, reporting fatal exceptions
  *         kill-on-crash <0|1>     terminate the game at its first fatal first-chance exception, after reporting it (default 1:
  *                                 no crash dialog is left on the desktop)
+ *         call <addr> <label> <nwords> [gate] [always] [name0] [namee] [deref <argidx> <ndwords> <byteoffset>]... (up to three)
+ *                                 a breakpoint at a function's entry (call-ticks only): its label, ECX, the first
+ *                                 `nwords` stack dwords and, at its return (a one-shot breakpoint at the return
+ *                                 address), EAX, those dwords again and `ndwords` at the pointer passed as argument
+ *                                 `argidx`, to <out>.calls.jsonl. A `gate` function arms the others while it runs for
+ *                                 the pawn `call-pawn` names (ECX); the rest log only inside a gate unless `always`.
+ *                                 `name0` / `namee` also name the actor in argument 0 / ECX.
+ *         call-ticks <first> <last>   the unfrozen ticks whose calls are traced
+ *         call-pawn <name>        the actor whose gate calls arm the tracing (any when omitted)
  *         watch <A,B,..> <Field:off:type[:mask]>...   fields of those actors
  *       Types: f f3 i3 u8 u16 u32 bit(mask) name obj state.
  *       Offsets are the linked UProperty offsets (see dump-actor-win.c).
@@ -166,6 +175,21 @@ static int monitor_seconds = 0, kill_on_crash = 1, actor_trace_first = 0, actor_
 static WatchGroup groups[16]; static int group_count;
 static Watched watched[256]; static int watched_count;
 
+/* ---------------- call tracing (config `call`) ---------------- */
+#define MAXCALLS 32
+#define MAXRET 64
+typedef struct { uintptr_t address; unsigned char original; char label[24]; int nwords, deref_count, deref_arg[3], deref_n[3], deref_off[3], gate, always, name0, namee; } CallBp;
+typedef struct { uintptr_t address; unsigned char original; int refs; } RetBp;
+typedef struct { int active; uintptr_t ret; unsigned esp, ecx; int call; unsigned args[16]; unsigned deref_ptr[3]; unsigned long seq; } Pending;
+static CallBp calls[MAXCALLS]; static int call_count;
+static RetBp rets[MAXRET]; static int ret_count;
+static Pending pend[MAXRET]; static int pend_count;
+static int call_first = 0, call_last = -1, calls_armed = 0, gate_depth = 0;
+static char call_pawn[96] = "";
+static unsigned long call_seq = 0;
+static FILE *cout;
+static int pending_kind = -1, pending_index = -1;   /* a single step to re-arm a call (0) or return (1) breakpoint */
+
 static int parse_field(const char *text, FieldSpec *f) {
   char off[32] = "", type[8] = "", mask[32] = "";
   int n = sscanf(text, "%47[^:]:%31[^:]:%7[^:]:%31s", f->field, off, type, mask);
@@ -192,6 +216,20 @@ static int read_config(const char *path) {
     else if (!strcmp(tok, "monitor")) monitor_seconds = atoi(strtok(NULL, " \t\r\n"));
     else if (!strcmp(tok, "kill-on-crash")) kill_on_crash = atoi(strtok(NULL, " \t\r\n"));
     else if (!strcmp(tok, "pre-watch")) pre_watch = atoi(strtok(NULL, " \t\r\n"));
+    else if (!strcmp(tok, "call-ticks")) { call_first = atoi(strtok(NULL, " \t\r\n")); call_last = atoi(strtok(NULL, " \t\r\n")); }
+    else if (!strcmp(tok, "call-pawn")) { char *v = strtok(NULL, " \t\r\n"); if (v) strncpy(call_pawn, v, sizeof(call_pawn) - 1); }
+    else if (!strcmp(tok, "call") && call_count < MAXCALLS) {
+      CallBp *c = &calls[call_count]; memset(c, 0, sizeof(*c));
+      char *a = strtok(NULL, " \t\r\n"), *l = strtok(NULL, " \t\r\n"), *n = strtok(NULL, " \t\r\n");
+      if (!a || !l || !n) continue;
+      c->address = strtoul(a, NULL, 0); strncpy(c->label, l, sizeof(c->label) - 1); c->nwords = atoi(n); if (c->nwords > 16) c->nwords = 16;
+      for (char *o; (o = strtok(NULL, " \t\r\n"));) {
+        if (!strcmp(o, "gate")) c->gate = 1; else if (!strcmp(o, "always")) c->always = 1;
+        else if (!strcmp(o, "name0")) c->name0 = 1; else if (!strcmp(o, "namee")) c->namee = 1;
+        else if (!strcmp(o, "deref") && c->deref_count < 3) { c->deref_arg[c->deref_count] = atoi(strtok(NULL, " \t\r\n")); c->deref_n[c->deref_count] = atoi(strtok(NULL, " \t\r\n")); c->deref_off[c->deref_count] = (int)strtol(strtok(NULL, " \t\r\n"), NULL, 0); if (c->deref_n[c->deref_count] > 16) c->deref_n[c->deref_count] = 16; c->deref_count++; }
+      }
+      call_count++;
+    }
     else if (!strcmp(tok, "watch") && group_count < 16) {
       WatchGroup *g = &groups[group_count++];
       char *n = strtok(NULL, " \t\r\n"); if (!n) continue;
@@ -364,6 +402,122 @@ static double read_double(uintptr_t a) { double v = 0; read_mem(a, &v, 8); retur
 static float read_float(uintptr_t a) { float v = 0; read_mem(a, &v, 4); return v; }
 
 
+static void cb_write(uintptr_t address, unsigned char byte) { write_mem(address, &byte, 1); FlushInstructionCache(process, (LPCVOID)address, 1); }
+/* Arm or remove every call breakpoint (the traced ticks' span) and the pending return breakpoints. */
+static void calls_set(int on) {
+  if (on == calls_armed) return;
+  for (int i = 0; i < call_count; i++) {
+    if (on) { read_mem(calls[i].address, &calls[i].original, 1); cb_write(calls[i].address, 0xCC); }
+    else cb_write(calls[i].address, calls[i].original);
+  }
+  if (!on) { for (int i = 0; i < ret_count; i++) if (rets[i].refs > 0) cb_write(rets[i].address, rets[i].original); ret_count = 0; pend_count = 0; gate_depth = 0; }
+  calls_armed = on;
+}
+static int is_call_address(uintptr_t where) {
+  if (!calls_armed) return 0;
+  for (int i = 0; i < call_count; i++) if (calls[i].address == where) return 1;
+  for (int i = 0; i < ret_count; i++) if (rets[i].refs > 0 && rets[i].address == where) return 1;
+  return 0;
+}
+static void print_words(FILE *o, const unsigned *w, int n) {
+  fprintf(o, "[");
+  for (int i = 0; i < n; i++) { float f; memcpy(&f, &w[i], 4); fprintf(o, "%s\"0x%x\"", i ? "," : "", w[i]); (void)f; }
+  fprintf(o, "]");
+}
+static void print_floats(FILE *o, const unsigned *w, int n) {
+  fprintf(o, "[");
+  for (int i = 0; i < n; i++) { float f; memcpy(&f, &w[i], 4); fprintf(o, i ? ",%.9g" : "%.9g", (f == f && f > -1e30f && f < 1e30f) ? f : 0.0f); }
+  fprintf(o, "]");
+}
+/* A traced call's entry or return. Returns 1 when the breakpoint was one of ours (the thread's state is set). */
+static int handle_call_event(HANDLE th, DWORD tid, uintptr_t where, int unfrozen) {
+  if (!is_call_address(where)) return 0;
+  CONTEXT ctx; ctx.ContextFlags = CONTEXT_CONTROL | CONTEXT_INTEGER; GetThreadContext(th, &ctx);
+  int step_kind = -1, step_index = -1;
+  /* a return: the latest pending record at this address whose entry frame lies below the stack pointer now */
+  int found = -1;
+  for (int i = pend_count - 1; i >= 0; i--) if (pend[i].active && pend[i].ret == where && ctx.Esp > pend[i].esp) { found = i; break; }
+  if (found >= 0) {
+    Pending *p = &pend[found]; CallBp *c = &calls[p->call];
+    unsigned now[16]; memset(now, 0, sizeof(now));
+    read_mem(p->esp + 4, now, 4 * c->nwords);
+    fprintf(cout, "{\"u\":%d,\"seq\":%lu,\"ev\":\"ret\",\"fn\":\"%s\",\"of\":%lu,\"eax\":\"0x%x\",\"args\":", unfrozen, ++call_seq, c->label, p->seq, (unsigned)ctx.Eax);
+    print_words(cout, now, c->nwords);
+    if (c->deref_count) {
+      fprintf(cout, ",\"deref\":[");
+      for (int d = 0; d < c->deref_count; d++) {
+        unsigned deref[16]; memset(deref, 0, sizeof(deref));
+        if (p->deref_ptr[d]) read_mem(p->deref_ptr[d] + c->deref_off[d], deref, 4 * c->deref_n[d]);
+        fprintf(cout, "%s{\"arg\":%d,\"words\":", d ? "," : "", c->deref_arg[d]); print_words(cout, deref, c->deref_n[d]);
+        fprintf(cout, ",\"floats\":"); print_floats(cout, deref, c->deref_n[d]); fprintf(cout, "}");
+      }
+      fprintf(cout, "]");
+    }
+    fprintf(cout, "}\n"); fflush(cout);
+    if (c->gate && gate_depth > 0) gate_depth--;
+    p->active = 0; while (pend_count > 0 && !pend[pend_count - 1].active) pend_count--;
+    for (int i = 0; i < ret_count; i++) if (rets[i].address == where && rets[i].refs > 0) {
+      if (--rets[i].refs == 0) cb_write(where, rets[i].original); else { step_kind = 1; step_index = i; cb_write(where, rets[i].original); }
+      break;
+    }
+  } else {
+    for (int i = 0; i < call_count; i++) if (calls[i].address == where) {
+      CallBp *c = &calls[i];
+      int armed = gate_depth > 0 || c->always;
+      if (c->gate) {
+        char text[96] = ""; strncpy(text, object_name(ctx.Ecx), sizeof(text) - 1);
+        if (call_pawn[0] && strcmp(text, call_pawn)) armed = 0; else armed = 1;
+      }
+      if (armed) {
+        unsigned args[16]; memset(args, 0, sizeof(args)); read_mem(ctx.Esp + 4, args, 4 * c->nwords);
+        unsigned long seq = ++call_seq;
+        fprintf(cout, "{\"u\":%d,\"seq\":%lu,\"ev\":\"enter\",\"fn\":\"%s\",\"ecx\":\"0x%x\"", unfrozen, seq, c->label, (unsigned)ctx.Ecx);
+        if (c->namee) fprintf(cout, ",\"ecxName\":\"%s\"", object_name(ctx.Ecx));
+        if (c->name0 && c->nwords > 0) fprintf(cout, ",\"arg0Name\":\"%s\"", object_name(args[0]));
+        fprintf(cout, ",\"args\":"); print_words(cout, args, c->nwords); fprintf(cout, ",\"floats\":"); print_floats(cout, args, c->nwords);
+        if (c->deref_count) {
+          fprintf(cout, ",\"deref\":[");
+          for (int d = 0; d < c->deref_count; d++) {
+            unsigned deref[16]; memset(deref, 0, sizeof(deref));
+            if (c->deref_arg[d] >= 0 && c->deref_arg[d] < c->nwords && args[c->deref_arg[d]]) read_mem(args[c->deref_arg[d]] + c->deref_off[d], deref, 4 * c->deref_n[d]);
+            fprintf(cout, "%s{\"arg\":%d,\"words\":", d ? "," : "", c->deref_arg[d]); print_words(cout, deref, c->deref_n[d]);
+            fprintf(cout, ",\"floats\":"); print_floats(cout, deref, c->deref_n[d]); fprintf(cout, "}");
+          }
+          fprintf(cout, "]");
+        }
+        fprintf(cout, "}\n"); fflush(cout);
+        if (c->gate) gate_depth++;
+        unsigned ret = read_u32(ctx.Esp);
+        if (pend_count < MAXRET) {
+          Pending *p = &pend[pend_count++]; memset(p, 0, sizeof(*p));
+          p->active = 1; p->ret = ret; p->esp = ctx.Esp; p->ecx = ctx.Ecx; p->call = i; p->seq = seq;
+          for (int d = 0; d < c->deref_count; d++) p->deref_ptr[d] = (c->deref_arg[d] >= 0 && c->deref_arg[d] < c->nwords) ? args[c->deref_arg[d]] : 0;
+          int slot = -1;
+          for (int k = 0; k < ret_count; k++) if (rets[k].address == ret) { slot = k; break; }
+          if (slot < 0 && ret_count < MAXRET) { slot = ret_count++; rets[slot].address = ret; rets[slot].refs = 0; }
+          if (slot >= 0) { if (rets[slot].refs == 0) { read_mem(ret, &rets[slot].original, 1); cb_write(ret, 0xCC); } rets[slot].refs++; }
+        }
+      }
+      step_kind = 0; step_index = i; cb_write(where, c->original);
+      break;
+    }
+  }
+  ctx.Eip = (DWORD)where;
+  if (step_kind >= 0) { ctx.EFlags |= 0x100; pending_kind = step_kind; pending_index = step_index; }
+  SetThreadContext(th, &ctx);
+  (void)tid;
+  return 1;
+}
+static int finish_call_step(void) {
+  if (pending_kind < 0) return 0;
+  if (calls_armed) {
+    if (pending_kind == 0) cb_write(calls[pending_index].address, 0xCC);
+    else if (rets[pending_index].refs > 0) cb_write(rets[pending_index].address, 0xCC);
+  }
+  pending_kind = -1;
+  return 1;
+}
+
 /* Remove the breakpoints, then take every debug event still queued: an int3 the
  * thread raised before the byte was restored is rewound to the instruction (the
  * default would deliver it to the game as an unhandled breakpoint), and the
@@ -371,6 +525,7 @@ static float read_float(uintptr_t a) { float v = 0; read_mem(a, &v, 4); return v
 static void drain_and_disarm(int *disarmed) {
   if (*disarmed) return;
   bp_disarm(&bp[0]); bp_disarm(&bp[1]); if (bp[2].address) bp_disarm(&bp[2]); *disarmed = 1;
+  calls_set(0);
   DEBUG_EVENT ev; int quiet = 0;
   while (quiet < 3) {
     if (!WaitForDebugEvent(&ev, 40)) { quiet++; continue; }
@@ -412,6 +567,7 @@ static int do_trace(const char *config) {
   if (!DebugActiveProcess(pid)) { fprintf(stderr, "DebugActiveProcess failed (%lu)\n", GetLastError()); return 1; }
   DebugSetProcessKillOnExit(FALSE);
   bp_arm(&bp[0], TICK_ENTRY); bp_arm(&bp[1], TICK_RET);
+  if (call_count && call_last >= call_first && call_last > 0) { char cp[640]; snprintf(cp, sizeof(cp), "%s.calls.jsonl", out_path); cout = fopen(cp, "w"); }
   FILE *aout = NULL; char actors_path[640];
   if (actor_trace_last >= actor_trace_first && actor_trace_last > 0) { snprintf(actors_path, sizeof(actors_path), "%s.actors.jsonl", out_path); aout = fopen(actors_path, "w"); bp_arm(&bp[2], ACTOR_TICK); }
 
@@ -436,7 +592,11 @@ static int do_trace(const char *config) {
       DWORD code = ev.u.Exception.ExceptionRecord.ExceptionCode;
       uintptr_t where = (uintptr_t)ev.u.Exception.ExceptionRecord.ExceptionAddress;
       HANDLE th = thread_of(ev.dwThreadId);
-      if (code == EXCEPTION_BREAKPOINT && (where == bp[0].address || where == bp[1].address || (aout && where == bp[2].address)) && th) {
+      if (code == EXCEPTION_BREAKPOINT && th && cout && handle_call_event(th, ev.dwThreadId, where, unfrozen)) {
+        /* a traced call's entry or return */
+      } else if (code == EXCEPTION_SINGLE_STEP && pending_kind >= 0 && finish_call_step()) {
+        /* the instruction under a call breakpoint ran: re-armed */
+      } else if (code == EXCEPTION_BREAKPOINT && (where == bp[0].address || where == bp[1].address || (aout && where == bp[2].address)) && th) {
         int is_entry = where == bp[0].address, is_actor = aout && where == bp[2].address;
         CONTEXT ctx; ctx.ContextFlags = CONTEXT_CONTROL | CONTEXT_INTEGER;
         GetThreadContext(th, &ctx);
@@ -468,11 +628,13 @@ static int do_trace(const char *config) {
             rng_in = rng_ptd ? read_u32(rng_ptd + 0x14) : 0; t_in = qpc_us();
             in_our_tick = 1;
             if (released) unfrozen++;
+            if (cout && released && unfrozen >= call_first && unfrozen <= call_last) calls_set(1);
             if (aout && released && unfrozen >= actor_trace_first && unfrozen <= actor_trace_last) fprintf(aout, "{\"u\":%d,\"actor\":\"@entry\",\"rng\":\"0x%08x\"}\n", unfrozen, rng_in);
           }
         }
         if (!is_entry && !is_actor && mine) {
           in_our_tick = 0;
+          if (cout && calls_armed) calls_set(0);
           if (aout && unfrozen >= actor_trace_first && unfrozen <= actor_trace_last) { fprintf(aout, "{\"u\":%d,\"actor\":\"@exit\",\"rng\":\"0x%08x\"}\n", unfrozen, rng_ptd ? read_u32(rng_ptd + 0x14) : 0); fflush(aout); }
           int record = pre_watch < 0 || released || tick > release_at - pre_watch;
           if (record) {
@@ -545,6 +707,7 @@ static int do_trace(const char *config) {
     DebugActiveProcessStop(pid);
   }
   if (aout) fclose(aout);
+  if (cout) fclose(cout);
   fclose(out);
   fprintf(stderr, "stopped after %d ticks\n", tick);
   return 0;
