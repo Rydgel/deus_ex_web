@@ -139,3 +139,25 @@ after that tick's mover phase and starts on the following one. Multiple presses
 before the same mover phase remain multiple synchronous Trigger calls (including
 the evidenced repeated-Open case). These are source/instruction scheduling
 contracts; exact cross-platform wall-clock input latency is not claimed.
+
+## GotoState from script: the same state runs GotoLabel only (2026-10-13)
+
+Question (the club-door divergence work, [visual acceptance](visual-acceptance.md)): does `GotoState('TriggerOpenTimed', 'Open')`,
+issued while the mover is already in `TriggerOpenTimed`, recompute the StateFrame's ProbeMask, as `UObject::GotoState` (Core `0x1012e8f0`)
+does at `0x1012ea1f` for any state it is given, the one it is already in included?
+
+Answer, from the original's own code (`scripts/native-goto-state-oracle.py`: Core's GotoState, execGotoState and GotoLabel execute
+unchanged under Unicorn over a fabricated frame and two states with label tables; FindState is the one explicit boundary):
+
+* **The script native (113, `execGotoState` `0x1013dd00`)** reads NewState (default: the current state's name) and Label (default None, which
+  GotoLabel reads as `Begin`, name index `0x64`). When the state named is the one the object is in, `0x1013dd86` skips `GotoState` and calls
+  `GotoLabel` only: the ProbeMask is kept (a `Disable('Trigger')` stays in force), LatentAction is cleared, Code is the label's offset
+  (None when the label is missing) and the Node is the node holding the label. A different state calls `GotoState` (ProbeMask =
+  `(class | state) & state ignore`, Code cleared, flag `0x1000` set, EndState/BeginState events when probed) and then `GotoLabel`.
+* **`UObject::GotoState` called directly** (native C++ callers; no script reaches it for the current state) recomputes the ProbeMask and clears
+  Code for the same state too: `ScriptState.transition` is that body.
+
+Play already did both (`ScriptRuntime.gotoState` short-circuits the same state to `gotoLabel`; `invokeNative` 113 supplies the defaults).
+An attempt to reset the mask in the same-state script path, made from a reading of `0x1012ea1f` alone, broke the Underworld's TriadRedArrow
+pawns at tick 72 and is exactly what `scripts/validate-native-goto-state.mjs` now rejects (2 direct-body cases and 5 exec cases against the
+original; the earlier change fails `execNoParameters`).
