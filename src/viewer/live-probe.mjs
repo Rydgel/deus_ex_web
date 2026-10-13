@@ -74,6 +74,21 @@ export function liveProbe(game, args = {}) {
     if (!actor) throw new Error(`liveProbe: no actor ${name}`);
     for (const [prop, value] of Object.entries(fields)) runtime.writeNamed(actor, prop, typeof value === 'number' ? Math.fround(value) : value);
   }
+  // census: every pawn but the player, with what a rendered view changes (LastRenderTime, bStasis) and its animation: the
+  // screening of which maps' start views have animating NPCs in view (scripts/live-acceptance.mjs screen).
+  if (args.census) {
+    const read = (actor, name) => { try { return runtime.readNamed(actor, name); } catch { return null; } };
+    out.census = { time: read(info, 'TimeSeconds'), pawns: [] };
+    for (const actor of level.actors) {
+      if (!actor || actor === player || !read(actor, 'bIsPawn') || read(actor, 'bDeleteMe')) continue;
+      const instance = runtime.instance(actor), node = instance?.state ? (instance.state.stateNode ?? instance.cls) : null;
+      out.census.pawns.push({ name: actor.name, cls: instance?.cls?.record?.key ?? null, state: scriptGetStateName(node), lrt: read(actor, 'LastRenderTime'),
+        stasis: Boolean(read(actor, 'bStasis')), force: Boolean(read(actor, 'bForceStasis')), physics: read(actor, 'Physics'), anim: read(actor, 'AnimSequence'),
+        rate: read(actor, 'AnimRate'), frame: read(actor, 'AnimFrame'), dist: read(actor, 'DistanceFromPlayer'), hidden: Boolean(read(actor, 'bHidden')),
+        // Model.Zones[Region.ZoneNumber].LastRenderTime as AActor::InStasis reads it
+        zoneLrt: level.zoneLastRenderTimes?.[read(actor, 'Region')?.['engine.actor.pointregion.zonenumber']] ?? null });
+    }
+  }
   // population: the names of the actors the original's level holds. A load decides some map actors by chance
   // (OddsOfAppearing, scripts' own FRand in PostBeginPlay, drawn from a stream the two sides do not share): an actor
   // only Play holds is destroyed here (Actor.Destroy, as the script's own would); one only the original holds cannot be
