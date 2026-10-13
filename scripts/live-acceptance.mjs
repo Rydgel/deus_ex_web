@@ -37,6 +37,8 @@ mkdirSync(dir, {recursive: true});
 // overwrite the trace a frame was taken from.
 const tag = option('tag', null), suffix = tag ? `-${tag}` : '';
 const tracePath = path.join(dir, `original-trace${suffix}.jsonl`);
+// A watched field read from memory that is no float (an --extra-watch door read with a pawn's field list) can print as -nan(ind) or inf: not JSON.
+const parseTraceLine = line => JSON.parse(line.replace(/-?nan\([a-z0-9]+\)|-?nan\b|-?inf\b/gi, 'null'));
 const watchPath = path.join(dir, `watch${suffix}.json`);
 const playPath = path.join(dir, `play-rows${suffix}.json`);
 
@@ -471,7 +473,7 @@ async function play() {
   // reach and path natives' boundary calls (src/runtime/nav-trace.mjs) to nav-play.json, to compare with the original's
   // (tools/dx-live-win.c `call`, original --extra-config).
   const limit = Number(option('ticks', 0)) || undefined;
-  const traceRows = readFileSync(tracePath, 'utf8').trim().split('\n').map(line => JSON.parse(line));   // parsed once: a long trace is large
+  const traceRows = readFileSync(tracePath, 'utf8').trim().split('\n').map(parseTraceLine);   // parsed once: a long trace is large
   const trace = traceRows.filter(row => row.unfrozen >= 1).slice(0, limit);
   const {pawns, extras = [], generators = [], timers = []} = JSON.parse(readFileSync(watchPath, 'utf8'));
   // Play is placed where the original's player stood when the replay begins: the last frozen tick's exit.
@@ -576,7 +578,7 @@ function same(a, b) {
 }
 const fmt = v => Array.isArray(v) ? `(${v.map(fmt).join(', ')})` : typeof v === 'number' ? String(+v.toPrecision(9)) : String(v);
 function compare() {
-  const original = readFileSync(tracePath, 'utf8').trim().split('\n').map(line => JSON.parse(line));
+  const original = readFileSync(tracePath, 'utf8').trim().split('\n').map(parseTraceLine);
   const rows = original.filter(row => row.unfrozen >= 1);
   const played = JSON.parse(readFileSync(playPath, 'utf8'));
   const labelOf = new Map(FIELDS.map(f => [f[1] === '$state' ? 'State' : f[1], f[0]]));
