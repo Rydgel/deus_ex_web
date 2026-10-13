@@ -232,6 +232,11 @@ fn compare_names(a: u32, b: u32) -> i32 {
 }
 
 fn flags(actor: u32) -> u32 {
+    if unsafe { *addr_of_mut!(DIRECT) } != 0 {
+        if let Some(word) = crate::percep::actor_flags(actor) {
+            return word;
+        }
+    }
     unsafe { js_ai_flags(actor) }
 }
 fn is_deleted(actor: u32) -> bool {
@@ -516,6 +521,11 @@ fn sub(a: u32, b: u32) -> Ext {
 }
 /// The locations of `a` and `b` (float32 bits), fetched together.
 fn locations(a: u32, b: u32) -> [u32; 6] {
+    if unsafe { *addr_of_mut!(DIRECT) } != 0 {
+        if let (Some(p), Some(q)) = (crate::percep::actor_location(a), crate::percep::actor_location(b)) {
+            return [p[0], p[1], p[2], q[0], q[1], q[2]];
+        }
+    }
     unsafe {
         js_ai_locs(a, b, addr_of_mut!(LOCS) as u32);
         *addr_of_mut!(LOCS)

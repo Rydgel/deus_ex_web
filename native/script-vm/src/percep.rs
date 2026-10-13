@@ -123,8 +123,8 @@ static mut P_FIELDS: [[u32; 3]; FIELD_COUNT] = [[0; 3]; FIELD_COUNT];
 /// P_ALLIANCE: the AlliancesEx element's stride and its AllianceName,
 /// AllianceLevel and AgitationLevel offsets.
 static mut P_ALLIANCE: [u32; 4] = [0; 4];
-/// P_NAMES: the name ids of `playerpawn` and `levelinfo` (row name lists).
-static mut P_NAMES: [u32; 2] = [0; 2];
+/// P_NAMES: the name ids of `playerpawn`, `levelinfo`, `pawn` and `inventory` (row name lists).
+static mut P_NAMES: [u32; 4] = [0; 4];
 /// P_ARGS: argc, the EX_Nothing mask, then the six argument values (object
 /// handles, bools 0/1, the float as its JavaScript number).
 static mut P_ARGS: [f64; 8] = [0.0; 8];
@@ -1007,4 +1007,31 @@ pub(crate) fn ai_can_see_direct(pawn: u32, other: u32, visibility: u32, checks: 
         Ok(value) => Some((value as f32).to_bits()),
         Err(HandBack) => None,
     }
+}
+
+fn synthetic_run(handle: u32) -> Run {
+    let code = core::ptr::null::<u32>();
+    Run { code, pc: code, frame: SYNTHETIC_FRAME, locals: 0, self_handle: handle, self_info: 0, self_bind: 0, self_fresh: false, callee: false }
+}
+
+/// An actor's Location (float32 bits) from its image, or None where the host reads it (HOST or bound).
+pub(crate) fn actor_location(handle: u32) -> Option<[u32; 3]> {
+    let mut run = synthetic_run(handle);
+    let o = run.describe(handle);
+    let addr = o.addr(F_LOCATION)?;
+    Some([load32(addr), load32(addr.wrapping_add(4)), load32(addr.wrapping_add(8))])
+}
+
+/// The AI event manager's flag word for an actor from its image and class row (aievent.rs `flags`): bit 0 bDeleteMe, 1 a Pawn, 2 an
+/// Inventory, 3 bDetectable. None where the host must read them.
+pub(crate) fn actor_flags(handle: u32) -> Option<u32> {
+    let mut run = synthetic_run(handle);
+    let o = run.describe(handle);
+    if o.row == 0 {
+        return None;
+    }
+    let deleted = load32(o.addr(F_BDELETEME)?) & pfield(F_BDELETEME)[1] != 0;
+    let detectable = load32(o.addr(F_BDETECTABLE)?) & pfield(F_BDETECTABLE)[1] != 0;
+    let [_, _, pawn, inventory] = unsafe { *addr_of!(P_NAMES) };
+    Some(u32::from(deleted) | u32::from(row_has_name(o.row, pawn)) << 1 | u32::from(row_has_name(o.row, inventory)) << 2 | u32::from(detectable) << 3)
 }
