@@ -5,8 +5,9 @@
 // full circle in 15 degree steps, 8 pawns, 192 readings of LastRenderTime against the level time) stamps Businessman1
 // at the start view although the main frame culls him: Render.dll's DrawFrame draws OccludeBsp's mirror child frame
 // (recursion 1, Mirror -1), and DrawActorSprite (0x10b25150) stamps its Frame->Sprite. Play's Rust OccludeBsp makes
-// that child frame (its `main` set lists the pawn) but the page has no mirror group to draw it with (a mover's
-// translucent glass), so no pass stamped it. And Model.Zones[i].LastRenderTime, which OccludeBsp writes in every frame
+// that child frame (its `main` set lists the pawn) but the page had no mirror group to draw it with (the panes are
+// BreakableGlass movers, which world.mjs did not build until validate-page-movers-play), so no pass stamped it; the
+// stamping of a child frame the page cannot draw stays as a fallback. And Model.Zones[i].LastRenderTime, which OccludeBsp writes in every frame
 // and AActor::InStasis reads, was never copied to the actors' level (a pawn in a rendered zone within 1200 units of the
 // player was frozen by stasis where the original kept ticking it). Checks, in worker mode:
 // - at the start view Businessman1 (56 degrees left of the view axis, 526 units) is stamped within half a second,

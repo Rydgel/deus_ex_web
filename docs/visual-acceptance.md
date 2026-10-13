@@ -554,6 +554,16 @@ The three that differ:
 - **TriadRedArrow0, MoveTimer from tick 181** (original -4.045, Play -0.045, then both count down together): a seated guest, the tick after
   the SitBegin animation starts (Physics 4). In the Sitting family, with Club's guests; not traced.
 
+**Frame at tick 600** (`live600`, both levels held at the last replayed tick, the view from the start pose, a row of BreakableGlass panes and
+the dance floor in view; the Hyprland placement works since the dispatches are spaced). With the page's glass panes (Divergence 11):
+ratio 1.214 (the known uniform gap plus the pane region below), mean abs. diff. 4.33, edge recall 0.987, precision 0.991, sub-pixel
+offset (0, 0), 4 outlier blocks (block ratio median 1.30, max 4.69). Without them (Play at 507daec's page world): ratio 1.171, mean
+abs. diff. 3.64, recall 0.989, precision 0.994, 1 outlier block. **The panes make the metrics worse and the picture closer**: without
+them the three panes ahead are a black hole onto the dance floor behind; with them the frame shows the pane as the original does, but
+the reflection in it (the opaque mirror shows the reflected child alone) holds a brightly lit, yellowish floor with the light cones
+where the original's reflection is the dark red floor of the rest of the frame (difference image: the red channel, a 400 x 100 pixel
+patch on the floor in the panes' region). Everything outside the panes is within the known uniform gap. Cause not traced (next below).
+
 The random stream: the first tick whose draw count differs is tick 3 (original 1, Play 2), then a few more on the same tick lines as the
 Club's ghost-player difference (Divergences 6). Not traced.
 
@@ -587,8 +597,8 @@ Club's ghost-player difference (Divergences 6). Not traced.
    above 300 and cuts steps only when travelling over 20 units; both are in 586aa15 and were not reachable at 60 fps.
 8. **Child frames the page cannot draw did not stamp their sprites (fixed, eb22793).** `DrawFrame` draws every child frame and
    `DrawActorSprite` (Render.dll `0x10b25150`) stamps `LastRenderTime` (`0x10b25161`) with the level clock for what it draws. Play stamped only
-   the frames the page has a pass for; the Rust `OccludeBsp` made the Underworld's mirror child frame (a mover's translucent glass: its
-   `Frame->Sprite` listed Businessman1 and Female3) but the page has no mirror group for it, so those sprites were not stamped.
+   the frames the page has a pass for; the Rust `OccludeBsp` made the Underworld's mirror child frame (a BreakableGlass pane's mirrored polygon: its
+   `Frame->Sprite` listed Businessman1 and Female3) but the page had no mirror group for it (BreakableGlass was not built, Divergence 11), so those sprites were not stamped.
    Evidence: the tracer's `stamps` command shows Businessman1 stamped only by a recursion-1, Mirror -1 frame at the start view; a
    sweep of `ViewRotation` (24 views, 8 pawns, 192 readings of `LastRenderTime` against the level clock) differed from Play in 2 cells and now in 0.
    `validate-live-visibility-play`.
@@ -603,6 +613,18 @@ Club's ghost-player difference (Divergences 6). Not traced.
    walking or falling pawn with Rotation equal to a nonzero-Pitch DesiredRotation was pulled to 0. Found from the first differing field (Hooker0
    Rot, tick 1), the original's call trace (`call 0x103c9f30` breakpoints: the body runs, the rotation does not change) and a
    disassembly; oracle [walking](walking.md#apawnphysicsrotation-keeps-a-raw-rotation-that-already-equals-its-desired-one-2026-10-13), 1,271 bit-exact cases.
+11. **The page did not build BreakableGlass and BreakableWall (fixed).** `world.mjs` built a mover group for each actor whose class name
+    matched `/Mover$/`; the two classes extend DeusExMover, the simulation tracks them as movers and the page never held their meshes
+    or their mirror groups: the Underworld's start view showed the three panes ahead (Mirrored|Unlit|Semisolid) as a black hole, and the
+    simulation held 29 movers against the page's 14 (15 glass). The groups are now picked by the class chain (`engine.mover` in
+    the lineage `ClassDefaults.lineage` gives, as IsA follows it): 29 and 29 on the Underworld, 90 and 90 on 05_NYC_UNATCOMJ12lab, 41 and 41 on
+    00_TrainingCombat, no render errors. Census of the shipped maps: 247 such brush actors in 34 maps (BreakableGlass and BreakableWall), 10
+    with a mirrored polygon (the Underworld 9, 06_HongKong_Storage 1), against 13 DeusExMover brushes with one in 12 maps that were built
+    all along. A broken pane (BlowItUp leaves the mover 20,000 units up: collider offset (0, 0, 20000), validate-island-blowitup) takes the same
+    route as any mover: out of the mirror pass and the frame. `validate-page-movers-play` (worker mode; fails without the change);
+    validate-mirrors-play, validate-mirrors, validate-bsp-occlusion, validate-brush-tracker, validate-child-frames,
+    validate-sky-in-mirror-play and validate-live-visibility-play pass. The frame at tick 600 (Pilot 3): the pane is there, its reflection
+    is lit differently (open, below).
 
 ### What this shows and does not
 
@@ -646,15 +668,12 @@ its PID; Play runs headless Chromium in worker mode.
   Underworld's TriadRedArrow0 MoveTimer (likely the native tick of item 4; not rerun), the Underworld's
   view-edge `LastRenderTime` differences (Businessman1 tick 22, Female5 tick 465), the Club's dancers in view (stasis) and a frame
   with pawns in view are still open.
-- **Breakable glass and walls are not drawn by the page world.** `world.mjs` builds a mover group for every actor whose class name ends in
-  `Mover` and has a Brush (line 317). `BreakableGlass` and `BreakableWall` descend from `DeusExMover` (the runtime attaches them as movers,
-  `script-doors.mjs`) but their class names do not match, so the sim holds them (Underworld: 29 movers, 15 of them BreakableGlass) and the page has
-  14 groups, none of them glass. Census of the shipped maps (`decodeMap`, Brush > 0 and a class name not ending in `Mover`): **247 brush
-  actors in 34 maps** (BreakableGlass and BreakableWall), 10 of which have a polygon with the Mirrored flag (`0x8400008` in the Underworld: 9;
-  06_HongKong_Storage: 1). For comparison, DeusExMover brushes with mirrored polygons, which the page does build: 13 movers in 12 maps. The
-  visual effect (panes missing, no mirror group, so no reflection of the room in the Underworld's glass) is **not measured**: no
-  frame comparison has had a pane in view. Relevant to the stamps fix (8): a mirror child frame for such a pane is made by the sim's
-  `OccludeBsp` and not drawn.
+- **The reflection in the Underworld's glass panes is lit differently** (live600, Pilot 3): an opaque mirrored mover (flags `0x8400028`/`0x8400008`)
+  draws the reflected child frame alone; Play's child frame shows the dance floor with its light cones bright and yellowish, the original's
+  the same floor dark red like the rest of the frame (diff patch in the pane region, ratio up to 4.7). The main frame's own floor stripes agree
+  (replay-synchronised light animation), so the difference is in the reflected frame: the moving lights, the reflected-frame lighting or
+  the mirror's depth and blend. Not traced; the frozen acceptance of static wall mirrors and the Smug translucent mover do not cover an
+  opaque mover mirror under moving lights.
 - Captures come from one Wine/D3D host. D3D behaviour that depends on the
   driver is not separated from the original's own.
 

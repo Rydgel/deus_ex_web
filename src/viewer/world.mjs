@@ -314,7 +314,17 @@ export async function createWorld(map, asset, assets, onProgress = () => {}, {ba
     if (!(actor.values.VolumeRadius > 0)) continue;
     fog.addLight(await classDefaults.forActor(asset, actor));
   }
-  for (const actor of map.actors.filter(a => /Mover$/.test(a.className) && a.values.Brush > 0)) {
+  // A mover is an actor whose class descends from Engine.Mover (the class chain, as IsA follows it), not one whose name ends
+  // in "Mover": BreakableGlass and BreakableWall extend DeusExMover and the simulation tracks them as movers.
+  const moverActors = [];
+  for (const actor of map.actors) {
+    if (!(actor.values.Brush > 0)) continue;
+    try {
+      const lineage = await classDefaults.lineage(asset, asset.pkg.exports[actor.index - 1].classIndex);
+      if (lineage.includes('engine.mover')) moverActors.push(actor);
+    } catch (error) { errors.push({ actor: actor.name, message: error.message }); }
+  }
+  for (const actor of moverActors) {
     try {
       const rawModel = readModel(asset.pkg, asset.bytes, actor.values.Brush);
       // The brush tracker's surfaces: one per polygon (polys.mjs).
