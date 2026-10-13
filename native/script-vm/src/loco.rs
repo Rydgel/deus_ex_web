@@ -16,7 +16,7 @@
 //! write, decided from reads alone:
 //! * Physics PHYS_Falling (steerArrive's air control reads the zone) and
 //!   PHYS_Spider (turnSetup returns early; MoveToward offsets along Floor);
-//! * the bAdvancedTactics walking SpawnNotification lookup;
+//! * the bAdvancedTactics walking AlterDestination event;
 //! * an Inventory MoveTarget close enough for steerArrive's Touch event;
 //! * MoveToward with a Pawn target (it reads the target's zone);
 //! * WaitForLanding's LongFall event;

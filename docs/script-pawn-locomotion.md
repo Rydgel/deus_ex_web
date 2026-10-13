@@ -129,21 +129,23 @@ consumes no operand). `MoveTo`/`MoveToward` clamp `DesiredSpeed` to
   acceleration, `Focus` re-snapshots the **live** target location each tick,
   facing helper, `latent=0` on completion.
 - **MoveTo (501)**: `Destination` is snapshotted before and restored after the
-  event+helpers (immune to event side effects). `bAdvancedTactics` + walking
-  runs `pawn.FindFunctionChecked(SpawnNotification)` → `ProcessEvent` — on
-  shipped pawn classes the lookup misses (only `SpawnNotify` declares the
-  function), the miss path is a nonfatal `Logf` returning NULL, and
-  `AActor::ProcessEvent`'s `XLevel+0x4f0` bit-0x2 gate drops the NULL before
-  Core `ProcessEvent` dereferences it: an effective no-op. The runtime
-  therefore dispatches the event only when the receiver's class chain
-  actually resolves it — observable contract unchanged. Facing helper then
-  steer/arrive; `latent=0` when the helper reports done.
+  event+helpers. `bAdvancedTactics` + walking runs
+  `pawn.FindFunctionChecked(AlterDestination)` → `ProcessEvent` (the name global
+  `0x105835c8`; see [Live divergence](#live-divergence-the-tactics-event-is-alterdestination-2026-10-13)):
+  a class that declares it (ScriptedPawn does) runs the script, which may
+  rewrite `Destination` and `MoveTimer`; one that does not gets the original's
+  NULL-resolution no-op (a nonfatal `Logf`, and `AActor::ProcessEvent`'s
+  `XLevel+0x4f0` bit-0x2 gate drops the NULL before Core `ProcessEvent`
+  dereferences it), so the runtime dispatches only when the class chain
+  resolves the name. Facing helper then steer/arrive, both on the **live**
+  `Destination` field (edi = pawn+0x354: they see the event's rewrite, then the
+  snapshot is written back); `latent=0` when the helper reports done.
 - **MoveToward (503)**: `MoveTarget==0` → `latent=0`. Destination is rebuilt
   each tick from the live target location — flying pawn targets offset
   `z += CollisionHeight*0.7`, Spider physics offsets by
   `CollisionRadius*Floor` — then `Focus=Destination`, `DesiredSpeed` is saved,
-  the same tactics `SpawnNotification` lookup fires (NULL-resolution no-op as
-  above), helpers run, `latent=0` on done, `Destination`
+  the same tactics `AlterDestination` event fires, the helpers run on the live
+  `Destination` (`0x103bd4a4..0x103bd4af`), `latent=0` on done, `Destination`
   re-snapshots the live location, and pawn targets unconditionally restore
   `DesiredSpeed` plus force `MoveTimer=-1` when the target's
   `Region.Zone+0x388&1` water flag is set and the pawn lacks `bCanSwim`
@@ -170,7 +172,7 @@ was the first boundary of a player who stands near the dock.
   that MoveTarget is untouched, FaceTarget takes the target, Focus copies its
   Location, and the latent is 507.
 * **StrafeTo poll** (`0x103bd7d0`): Destination saved; the bAdvancedTactics
-  walking SpawnNotification event; facing on Focus; steer/arrive on
+  walking AlterDestination event; facing on Focus; steer/arrive on
   Destination (arrival clears the latent); Destination restored.
 * **StrafeFacing poll** (`0x103bdad0`): FaceTarget None clears the latent;
   Focus re-copies the target's Location; Destination saved; facing **before**
@@ -384,3 +386,28 @@ Review correction: the earlier z≈18.8 versus z≈23.3 comparison called only
 and clock reset. A direct 20-tick comparison reproduced the discrepancy for
 that partial reset and matched fresh load exactly through `game.reset()`.
 It therefore does not establish a floor-selection defect in the public reset.
+
+## Live divergence: the tactics event is AlterDestination (2026-10-13)
+
+Found by the live-scene acceptance on Island ([visual acceptance](visual-acceptance.md)): UNATCOTroop6 sat at tick 227 in the
+original and kept walking in Play, and three Club guests steered differently at their first poll after a MoveTo.
+
+* **The cause.** The polls (`0x103bd060` MoveTo, `0x103bd370` MoveToward, `0x103bd7d0` StrafeTo, `0x103bdad0` StrafeFacing) read the
+  FName global `0x105835c8` for the bAdvancedTactics walking event. An earlier reading took it for `SpawnNotification`, which is
+  `0x105835c4`. Engine.dll builds the globals at startup, in one run (`0x103806d2..0x103806e0` stores `0x105835c8` from the string at
+  `0x1047d00c`): `0x105835bc` LogGameSpecial2, `0x105835c0` UpdateTactics, `0x105835c4` SpawnNotification, **`0x105835c8`
+  AlterDestination**. `validate-pawn-locomotion` reads those bytes and the string from the DLL.
+* **Original trace** (dx-live-win `call` on `pollMoveTo`, `steerArrive`, `ProcessEvent`, `MoveActor`, UNATCOTroop6): the bump tick has
+  `OfficeChair0.Bump`, `UNATCOTroop6.Bump` twice and `HitWall`; the next tick `MoveTo(GetDestinationPosition(SeatActor, 16))`
+  (`setMoveTimer` 30.57 units, MoveTimer 1.655); and in the one after, inside `pollMoveTo`, `ProcessEvent(AlterDestination)` and then
+  `steerArrive` returns 1 with the Destination unchanged and 29.5 units off. The state code goes on to `bSitting`, `SetPhysics(4)`,
+  the 13-unit drop, and MoveTimer reads -2.362: it is 1.655 - 4 - one tick. ScriptedPawn.AlterDestination ends with
+  `if (oldTurnDir != 0 && TurnDirection == 0) MoveTimer -= 4`, which undoes Bump's `MoveTimer += 4` (the 6.29 one tick after the
+  bump) and, with the 1.655 timer, makes MoveTimer negative, which `steerArrive` reports as done.
+* **Play's gap.** `tacticsEvent` looked up SpawnNotification, which no pawn class declares, so it did nothing; the MoveTo ran on to the
+  chair. Its helpers also took the pre-event Destination; the original passes them the field itself.
+* **Fixed:** the event is AlterDestination in all four polls, and MoveTo's and MoveToward's helpers read the live Destination after the
+  event (MoveTo still writes the snapshot back). Oracle: `validate-pawn-locomotion` 144 scenes (two new, where the event rewrites
+  Destination: `pmt-tactics-alter`, `pmtw-tactics-alter`) and 32 mutants (event name, stale helpers, no restore). Live: UNATCOTroop6 sits
+  at the original's tick and is equal for the 264 ticks compared.
+* The Rust poll declines any bAdvancedTactics walking pawn (`loco.rs` `pawn`), so these polls run in JavaScript, as before.

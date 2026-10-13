@@ -94,6 +94,32 @@ export function liveProbe(game, args = {}) {
     runtime.navTrace ??= createNavTrace();
     Object.assign(runtime.navTrace, { pawns: new Set(args.navTrace.pawns), first: args.navTrace.first, last: args.navTrace.last });
   }
+  // scriptTrace: {pawns, first, last}: those pawns' script calls (events, functions, natives, GotoState) in those ticks, with
+  // the pawn's MoveTimer/Destination/state before and after each; returned by `take` as `script`. A validation aid: it
+  // names the first call whose effect differs from the original's (tools/dx-live-win.c `call` on the same natives).
+  if (args.scriptTrace && !runtime.scriptTrace) {
+    const trace = runtime.scriptTrace = { pawns: new Set(), tick: 0, first: 0, last: -1, events: [], depth: 0 };
+    const on = receiver => receiver && trace.pawns.has(receiver.name) && trace.tick >= trace.first && trace.tick <= trace.last;
+    const pawnState = receiver => { try { return { mt: runtime.readNamed(receiver, 'MoveTimer'), dest: plain(runtime.readNamed(receiver, 'Destination')),
+      td: runtime.readNamed(receiver, 'TurnDirection'), acc: runtime.readNamed(receiver, 'bAcceptBump'), phys: runtime.readNamed(receiver, 'Physics') }; } catch { return {}; } };
+    const wrapCall = (name, fn, describe) => {
+      const original = runtime[name].bind(runtime);
+      runtime[name] = (...rest) => {
+        const receiver = describe.receiver(...rest);
+        if (!on(receiver)) return original(...rest);
+        const depth = trace.depth++, before = pawnState(receiver);
+        trace.events.push({ u: trace.tick, d: depth, ev: 'enter', fn: describe.label(...rest), ...before });
+        try { return original(...rest); }
+        finally { trace.depth--; trace.events.push({ u: trace.tick, d: depth, ev: 'leave', fn: describe.label(...rest), ...pawnState(receiver) }); }
+      };
+    };
+    const nameOf = value => (value && typeof value === 'object' ? (value.name ?? '?') : value);
+    wrapCall('processEvent', null, { receiver: receiver => receiver, label: (receiver, name, a = []) => `event ${name}(${a.map(nameOf).join(',')})` });
+    wrapCall('callFunction', null, { receiver: (record, receiver) => receiver, label: record => `fn ${record.key}` });
+    wrapCall('invokeNative', null, { receiver: call => call.receiver, label: call => `native ${call.index} ${call.record?.key ?? ''}` });
+    wrapCall('gotoState', null, { receiver: receiver => receiver, label: (receiver, name, label) => `gotoState ${name} ${label ?? ''}` });
+  }
+  if (args.scriptTrace) Object.assign(runtime.scriptTrace, { pawns: new Set(args.scriptTrace.pawns), first: args.scriptTrace.first, last: args.scriptTrace.last });
   if (args.replay) {
     const { watch = [], ticks, hold = true, warm = 3 } = args.replay;
     const actors = watch.map(({ names, props }) => ({ props, items: names.map(name => [name, byName(name)]) }));
@@ -126,6 +152,7 @@ export function liveProbe(game, args = {}) {
         if (this.index >= this.ticks.length) return this.hold ? false : dt;
         const tick = this.ticks[this.index];
         if (runtime.navTrace) runtime.navTrace.tick = this.index + 1;
+        if (runtime.scriptTrace) runtime.scriptTrace.tick = this.index + 1;
         game.random.seed(parseInt(tick.rngIn, 16) >>> 0);
         this.current = { n: this.index + 1, delta: tick.delta, rngIn: hex(game.random.state), clockIn: level.timeSeconds, tsIn: runtime.readNamed(info, 'TimeSeconds') };
         return Math.fround(tick.delta);
@@ -166,6 +193,7 @@ export function liveProbe(game, args = {}) {
     out.rows = replay.rows.slice(replay.cursor); replay.cursor = replay.rows.length;
     out.index = replay.index;
     if (runtime.navTrace) out.nav = runtime.navTrace.events.splice(0);
+    if (runtime.scriptTrace) out.script = runtime.scriptTrace.events.splice(0);
   }
   if (args.status && replay) out.status = { index: replay.index, of: replay.ticks.length };
   if (args.stop) game.liveReplay = null;

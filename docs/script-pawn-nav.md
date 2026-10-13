@@ -938,12 +938,11 @@ Boundaries reached while wandering and their resolution:
   keeps ticking; AI propagation stays on the separately recorded 713–716
   natives.  `human.playtakehitsound` and other measured stop points still
   throw through `soundBoundary`.
-- `pollMoveTo`/`pollMoveToward` fire `SpawnNotification` through
-  `FindFunctionChecked`: no shipped pawn class declares it (the function
-  lives on `SpawnNotify`), so the original miss logs a nonfatal `Logf` and
-  returns NULL, which `AActor::ProcessEvent`'s `XLevel+0x4f0` bit-0x2 gate
-  drops before Core `ProcessEvent` can dereference it.  The runtime now
-  dispatches only on a real resolution — observable contract unchanged.
+- `pollMoveTo`/`pollMoveToward` fire `AlterDestination` (not `SpawnNotification`, as first read; see
+  [locomotion](script-pawn-locomotion.md#live-divergence-the-tactics-event-is-alterdestination-2026-10-13))
+  through `FindFunctionChecked` when bAdvancedTactics is set and the pawn walks. ScriptedPawn declares it; a class that
+  does not gets the original's logged-NULL no-op (`AActor::ProcessEvent`'s `XLevel+0x4f0` bit-0x2 gate drops the NULL).
+  The runtime dispatches only on a real resolution.
 
 Remaining explicit boundaries: the ReachSpec BFS path workers stay unported; bark speech and
 audible playback are Stage 4.

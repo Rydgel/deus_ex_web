@@ -297,25 +297,28 @@ async function play() {
     const props = [...new Set(FIELDS.map(f => f[1]))], playerProps = [...new Set(PLAYER_FIELDS.map(f => f[1]))];
     // the player's animation too, in the call that arms the replay: no frozen tick runs between (a looping ghost
     // animation reaching its end can call script that draws)
+    const scriptPawns = option('script-trace', null), [scriptFirst, scriptLast] = option('script-ticks', `1:${trace.length}`).split(':').map(Number);
     const navPawns = option('nav-trace', null), [navFirst, navLast] = option('nav-ticks', `1:${trace.length}`).split(':').map(Number);
     // The generators' load-time draws (GENERATOR_FIELDS), as the original's frozen phase left them.
     const generatorWrites = Object.fromEntries(generators.filter(name => frozen[frozen.length - 1].actors[name])
       .map(name => [name, Object.fromEntries(GENERATOR_FIELDS.map(([label, prop]) => [prop, frozen[frozen.length - 1].actors[name][label]]))]));
     const request = {write: {'@player': {AnimSequence: pose.Anim, AnimFrame: pose.Frame, AnimRate: pose.Rate, TweenRate: pose.Tween}, ...generatorWrites},
-      ...(navPawns ? {navTrace: {pawns: navPawns.split(','), first: navFirst, last: navLast}} : {}), replay: {ticks: trace, release: true, hold: true, drawTrace: flag('draw-trace'), watch: [
+      ...(navPawns ? {navTrace: {pawns: navPawns.split(','), first: navFirst, last: navLast}} : {}),
+      ...(scriptPawns ? {scriptTrace: {pawns: scriptPawns.split(','), first: scriptFirst, last: scriptLast}} : {}), replay: {ticks: trace, release: true, hold: true, drawTrace: flag('draw-trace'), watch: [
       {names: ['@player'], props: playerProps}, {names: pawns, props},
       // --extra-watch actors are not pawns: the fields every Actor has
       ...(extras.length ? [{names: extras, props: ['Location', 'Rotation', 'Velocity', 'Physics', 'AnimSequence', 'AnimFrame', 'AnimRate', 'TweenRate', 'LifeSpan', 'LastRenderTime', 'DistanceFromPlayer']}] : [])]}};
     const started = await page.evaluate(r => window.deusExViewer.liveProbe(r), request);
-    const rows = [], nav = [];
+    const rows = [], nav = [], script = [];
     let stalls = 0;
     while (rows.length < trace.length) {
       await frames(20);
       const taken = await page.evaluate(() => window.deusExViewer.liveProbe({take: true}));
-      nav.push(...(taken.nav ?? []));
+      nav.push(...(taken.nav ?? [])); script.push(...(taken.script ?? []));
       if (taken.rows.length) { rows.push(...taken.rows); stalls = 0; } else if (++stalls > 40) throw new Error(`the replay stopped at tick ${rows.length}`);
     }
     writeFileSync(playPath, JSON.stringify({map, ghost, initial: started.initial, rows, errors}));
+    if (scriptPawns) writeFileSync(path.join(dir, 'script-play.json'), JSON.stringify({pawns: scriptPawns.split(','), events: script}));
     if (navPawns) writeFileSync(path.join(dir, 'nav-play.json'), JSON.stringify({pawns: navPawns.split(','), events: nav}));
     if (option('shot', null)) {
       // The replay holds the level at its last tick; Play draws on: the frame at the brightness whose display ramp is the identity.

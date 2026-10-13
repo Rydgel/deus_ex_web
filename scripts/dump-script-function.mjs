@@ -70,6 +70,8 @@ const show = n => {
     case 0x07: return `ifnot ${show(n.value)} goto @${n.target}`;
     case 0x05: return `switch(${show(n.value)})`;
     case 0x0a: return n.target === 0xffff ? 'default:' : `case ${show(n.value)}: else @${n.target}`;
+    case 0x0d: return `gotolabel ${show(n.value)}`;
+    case 0x0c: return `labels ${(n.labels ?? []).map(l => `${l.name}=@${l.target}`).join(' ')}`;
     case 0x0e: return `eat ${show(n.value)}`;
     case 0x09: return `assert ${show(n.value)}`;
     case 0x18: return `skip @${n.target} ${show(n.value)}`;
