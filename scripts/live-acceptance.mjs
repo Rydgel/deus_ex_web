@@ -37,7 +37,7 @@ mkdirSync(dir, {recursive: true});
 // overwrite the trace a frame was taken from.
 const tag = option('tag', null), suffix = tag ? `-${tag}` : '';
 const tracePath = path.join(dir, `original-trace${suffix}.jsonl`);
-const watchPath = path.join(dir, 'watch.json');
+const watchPath = path.join(dir, `watch${suffix}.json`);
 const playPath = path.join(dir, `play-rows${suffix}.json`);
 
 
@@ -72,6 +72,31 @@ const FIELDS = [
 ];
 // The load-time draws of the pawns (see GENERATOR_FIELDS): label of FIELDS -> written into Play's pawn before the first tick.
 const PAWN_LOAD_FIELDS = ['Sight', 'TRate', 'TCount'];
+// --perception: what carries a ScriptedPawn's perception and reaction (ScriptedPawn.CheckEnemyPresence/CheckCycle/UpdateReactionLevel, the
+// HandleXxx reactions, SeekPawn/SeekLevel, the agitation and alarm timers), at the linked offsets Play's slotOf gives (liveProbe offsets with
+// offsetMasks: bool properties give their UBoolProperty::BitMask) and the first eight AlliancesEx entries (name, AllianceLevel, AgitationLevel;
+// entries start at +0x7ec, stride 16).
+const PERCEPTION_FIELDS = [
+  ['EnemyRdy', 'EnemyReadiness', 1856, 'f'], ['ReactLvl', 'ReactionLevel', 1860, 'f'], ['SightPct', 'SightPercentage', 1868, 'f'],
+  ['CycTimer', 'CycleTimer', 1872, 'f'], ['CycPeriod', 'CyclePeriod', 1876, 'f'], ['CycCum', 'CycleCumulative', 1880, 'f'],
+  ['CycCand', 'CycleCandidate', 1884, 'obj'], ['CycDist', 'CycleDistance', 1888, 'f'], ['CycIdx', 'CycleIndex', 2312, 'i32'],
+  ['ChkPeriod', 'CheckPeriod', 2296, 'f'], ['EnemyLast', 'EnemyLastSeen', 2300, 'f'], ['PotAlly', 'PotentialEnemyAlliance', 1604, 'name'],
+  ['PotTimer', 'PotentialEnemyTimer', 1608, 'f'], ['AlarmT', 'AlarmTimer', 1896, 'f'], ['AgitT', 'AgitationTimer', 1828, 'f'],
+  ['AgitChk', 'AgitationCheckTimer', 1832, 'f'], ['PlAgitT', 'PlayerAgitationTimer', 1836, 'f'], ['SeekLvl', 'SeekLevel', 1580, 'i32'],
+  ['SeekType', 'SeekType', 1584, 'u8'], ['SeekPawn', 'SeekPawn', 1588, 'obj'], ['SeekLoc', 'bSeekLocation', 1616, 'bit', 2],
+  ['FearLvl', 'FearLevel', 1852, 'f'], ['FearT', 'FearTimer', 1848, 'f'], ['CarcassT', 'CarcassTimer', 1592, 'f'], ['BeamChk', 'BeamCheckTimer', 1612, 'f'],
+  ['WeaponT', 'WeaponTimer', 1900, 'f'], ['FireT', 'FireTimer', 1904, 'f'], ['SpecialT', 'SpecialTimer', 1908, 'f'], ['Stimulus', 'Stimulus', 928, 'f'],
+  ['HeldWpn', 'Weapon', 976, 'obj'],
+  ['LkEnemy', 'bLookingForEnemy', 1804, 'bit', 1], ['LkLoud', 'bLookingForLoudNoise', 1804, 'bit', 2], ['LkAlarm', 'bLookingForAlarm', 1804, 'bit', 4],
+  ['LkDistress', 'bLookingForDistress', 1804, 'bit', 8], ['LkProj', 'bLookingForProjectiles', 1804, 'bit', 16], ['LkFutz', 'bLookingForFutz', 1804, 'bit', 32],
+  ['LkHack', 'bLookingForHacking', 1804, 'bit', 64], ['LkShot', 'bLookingForShot', 1804, 'bit', 128], ['LkWeapon', 'bLookingForWeapon', 1804, 'bit', 256],
+  ['LkCarcass', 'bLookingForCarcass', 1804, 'bit', 512], ['LkInjury', 'bLookingForInjury', 1804, 'bit', 1024], ['LkIndirect', 'bLookingForIndirectInjury', 1804, 'bit', 2048],
+  ['Distressed', 'bDistressed', 2320, 'bit', 16], ['Attacking', 'bAttacking', 2320, 'bit', 8], ['Stunned', 'bStunned', 2320, 'bit', 32],
+  ['NoNegAl', 'bNoNegativeAlliances', 1616, 'bit', 16], ['AlChanged', 'bAlliancesChanged', 1616, 'bit', 8], ['FacingTgt', 'bFacingTarget', 1804, 'bit', 4096],
+  ['Alliance', 'Alliance', 1476, 'name'], ['OrderTag', 'OrderTag', 1656, 'name'], ['OrderAct', 'OrderActor', 1668, 'obj'],
+  ...[0, 1, 2, 3, 4, 5, 6, 7].flatMap(i => [[`AlName${i}`, `$AlName${i}`, 2028 + 16 * i, 'name'], [`AlLvl${i}`, `$AlLvl${i}`, 2032 + 16 * i, 'f'], [`AlAgit${i}`, `$AlAgit${i}`, 2036 + 16 * i, 'f']]),
+];
+if (flag('perception')) FIELDS.push(...PERCEPTION_FIELDS);
 // The player's pose, read back from the original (the placement of Play's replay): view rotation and Region.
 const PLAYER_FIELDS = FIELDS.slice(0, 10).concat([FIELDS[10]],
   [['VRot', 'ViewRotation', 0x3dc, 'i3'], ['RegZone', '$regionZone', 0xc8, 'obj'], ['RegLeaf', '$regionLeaf', 0xcc, 'i32'], ['RegNum', '$regionNum', 0xd0, 'u8']]);
@@ -134,7 +159,10 @@ async function original() {
     writeFileSync(lastPath, map);
     post(['cmd set LevelInfo bPlayersOnly True', 'sleep 300', 'cmd set LevelInfo TimeDilation 1', 'sleep 300',
       `cmd open ${map}`, `sleep ${loadWait}`], loadWait + 60000);
-    post(['cmd set DeusEx.JCDentonMale bCheatsEnabled True', 'sleep 200', 'cmd ghost', 'sleep 200', 'cmd ShowHud False', 'sleep 500']);
+    // --no-ghost: the player stays a normal visible player at the map's start (the perception pilot); --player-alliance NAME: `set` of the player's
+    // Alliance (non-location, so safe in a level that then ticks): NPCs that hate NAME see the player as one of them.
+    post(['cmd set DeusEx.JCDentonMale bCheatsEnabled True', 'sleep 200', ...(flag('no-ghost') ? [] : ['cmd ghost', 'sleep 200']), 'cmd ShowHud False', 'sleep 500',
+      ...(option('player-alliance', null) ? [`cmd set DeusEx.JCDentonMale Alliance ${option('player-alliance')}`, 'sleep 500'] : [])]);
     // The window is placed (floating, 1280x720, inside the screen) before the tracer attaches, with a throwaway shot (the
     // first frame after a resize is stale): a resize while the tracer holds the level did not take (2026-10-13).
     if (option('shot', null) && process.env.DX_HYPRLAND === '1') {
@@ -199,7 +227,13 @@ async function original() {
   // --extra-watch A,B: more actors (a seat, a door) watched with the same fields, e.g. one a pawn walks to.
   const extras = option('extra-watch', null)?.split(',') ?? [];
   names.push(...extras);
+  // --cmds "30:Fire|90:AltFire": console commands typed into the original at those unfrozen tick counts, between two ticks: the tracer holds the
+  // level (config `pause-at`, ticks skipped as for the final pause) while the command is typed, and Play runs the same command at the same point
+  // of its replay (commands<tag>.json). A command is the console line as typed (an exec function of the player, `set ...`).
+  const cmds = option('cmds', '').split('|').filter(Boolean).map(entry => { const i = entry.indexOf(':'); return {after: Number(entry.slice(0, i)), text: entry.slice(i + 1)}; });
+  writeFileSync(path.join(dir, `commands${suffix}.json`), JSON.stringify(cmds));
   const config = [`out ${tracePath}`, 'player JCDentonMale', `release ${option('release', 3)}`, `ticks ${option('ticks', 600)}`,
+    ...(cmds.length ? [`pause-at ${[...new Set(cmds.map(c => c.after))].sort((a, b) => a - b).join(' ')}`] : []),
     ...(option('delta', null) ? [`delta ${option('delta')}`] : []), ...(option('monitor', null) ? [`monitor ${option('monitor')}`] : []), ...(option('actor-trace', null) ? [`actor-trace ${option('actor-trace').replace(':', ' ')}`] : []),
     // --extra-config <file>: more trace.cfg lines (tools/dx-live-win.c `call` breakpoints, call-ticks, call-pawn).
     ...(option('extra-config', null) ? readFileSync(option('extra-config'), 'utf8').split('\n').filter(line => line.trim()) : []),
@@ -230,6 +264,7 @@ async function original() {
     console.log('population: the original holds nothing Play lacks');
   }
   rmSync(`${tracePath}.resume`, {force: true});
+  rmSync(`${tracePath}.go`, {force: true});
   rmSync(`${tracePath}.strobe`, {force: true});
   const child = spawn(game.WINE, [tool, 'trace', configPath], {env: process.env, stdio: ['ignore', 'pipe', 'pipe']});
   console.log('tracer pid', child.pid, `${names.length} pawns watched`);
@@ -237,7 +272,18 @@ async function original() {
   child.stderr.on('data', chunk => { log += chunk; });
   const finished = new Promise(resolve => child.on('exit', resolve));
   const started = Date.now();
-  while (!/paused after/.test(log) && child.exitCode === null && Date.now() - started < 600000) await new Promise(r => setTimeout(r, 500));
+  const handled = new Set();
+  while (!/paused after/.test(log) && child.exitCode === null && Date.now() - started < 600000) {
+    for (const match of log.matchAll(/^held after (\d+) unfrozen ticks/gm)) {
+      const n = Number(match[1]);
+      if (handled.has(n)) continue;
+      handled.add(n);
+      post(['sleep 300', ...cmds.filter(c => c.after === n).flatMap(c => [`cmd ${c.text}`, 'sleep 500'])]);
+      writeFileSync(`${tracePath}.go`, '');
+      console.log(`typed after ${n} ticks: ${cmds.filter(c => c.after === n).map(c => c.text).join(' ; ')}`);
+    }
+    await new Promise(r => setTimeout(r, 300));
+  }
   console.log(log.trim());
   if (option('shot', null) && /paused after/.test(log)) {
     // The level is held at the last replayed tick (the tracer returns from ULevel::Tick); the game still draws.
@@ -301,7 +347,8 @@ async function withPlay(body) {
     await page.evaluate(() => window.deusExViewer.viewProbe({playersOnly: true, timeDilation: 1}));
     await page.evaluate(() => window.deusExViewer.release());
     await frames(10);
-    const ghost = await page.evaluate(() => window.deusExViewer.viewProbe({ghost: true}));
+    // --no-ghost: a normal, visible player standing at the map's start (the perception pilot): only the HUD is hidden, as the capture does.
+    const ghost = await page.evaluate(noGhost => window.deusExViewer.viewProbe(noGhost ? {exec: ['ShowHud False']} : {ghost: true}), flag('no-ghost'));
     await frames(5);
     await body({page, frames, errors, ghost});
     await page.close();
@@ -448,24 +495,26 @@ async function play() {
     const pawnWrites = Object.fromEntries(pawns.filter(name => lastFrozen[name] && PAWN_LOAD_FIELDS.every(label => lastFrozen[name][label] !== undefined))
       .map(name => [name, Object.fromEntries(PAWN_LOAD_FIELDS.map(label => [FIELDS.find(f => f[0] === label)[1], lastFrozen[name][label]]))]));
     const timerWrites = Object.fromEntries(timers.filter(name => lastFrozen[name]?.TRate !== undefined).map(name => [name, {TimerRate: lastFrozen[name].TRate, TimerCounter: lastFrozen[name].TCount}]));
-    const request = {write: {...timerWrites, ...pawnWrites, '@player': {AnimSequence: pose.Anim, AnimFrame: pose.Frame, AnimRate: pose.Rate, TweenRate: pose.Tween}, ...generatorWrites},
+    const request = {write: {...timerWrites, ...pawnWrites, '@player': {AnimSequence: pose.Anim, AnimFrame: pose.Frame, AnimRate: pose.Rate, TweenRate: pose.Tween, ...(option('player-alliance', null) ? {Alliance: option('player-alliance')} : {})}, ...generatorWrites},
       ...(navPawns ? {navTrace: {pawns: navPawns.split(','), first: navFirst, last: navLast}} : {}),
       ...(trace[0]?.viewport?.[0] && !flag('own-viewport') ? {renderSize: trace[0].viewport} : {}),   // the original's frame size (--own-viewport: Play's page)
       ...(setupNames ? {setupProbe: {names: setupNames.split(','), first: setupFirst, last: setupLast}} : {}),
-      ...(scriptPawns ? {scriptTrace: {pawns: scriptPawns.split(','), first: scriptFirst, last: scriptLast}} : {}), replay: {ticks: trace, release: true, hold: true, drawTrace: flag('draw-trace'), watch: [
+      ...(scriptPawns ? {scriptTrace: {pawns: scriptPawns.split(','), first: scriptFirst, last: scriptLast}} : {}), replay: {ticks: trace, release: true, hold: true, drawTrace: flag('draw-trace'),
+      commands: existsSync(path.join(dir, `commands${suffix}.json`)) ? JSON.parse(readFileSync(path.join(dir, `commands${suffix}.json`), 'utf8')) : [], watch: [
       {names: ['@player'], props: playerProps}, {names: pawns, props},
       // --extra-watch actors are not pawns: the fields every Actor has
       ...(extras.length ? [{names: extras, props: ['Location', 'Rotation', 'Velocity', 'Physics', 'AnimSequence', 'AnimFrame', 'AnimRate', 'TweenRate', 'LifeSpan', 'LastRenderTime', 'DistanceFromPlayer', 'TimerRate', 'TimerCounter']}] : [])]}};
     const started = await page.evaluate(r => window.deusExViewer.liveProbe(r), request);
-    const rows = [], nav = [], script = [], setup = [];
+    const rows = [], nav = [], script = [], setup = [], commandLog = [];
     let stalls = 0;
     while (rows.length < trace.length) {
       await frames(20);
       const taken = await page.evaluate(() => window.deusExViewer.liveProbe({take: true}));
-      nav.push(...(taken.nav ?? [])); script.push(...(taken.script ?? [])); setup.push(...(taken.setup ?? []));
+      nav.push(...(taken.nav ?? [])); script.push(...(taken.script ?? [])); setup.push(...(taken.setup ?? [])); commandLog.push(...(taken.commands ?? []));
       if (taken.rows.length) { rows.push(...taken.rows); stalls = 0; } else if (++stalls > 40) throw new Error(`the replay stopped at tick ${rows.length}`);
     }
-    writeFileSync(playPath, JSON.stringify({map, ghost, initial: started.initial, rows, errors}));
+    writeFileSync(playPath, JSON.stringify({map, ghost, initial: started.initial, rows, errors, commands: commandLog}));
+    for (const c of commandLog) console.log(`command after ${c.after} ticks: ${c.text} -> ${c.error ? `ERROR ${c.error}` : JSON.stringify(c.output)}`);
     if (setupNames) writeFileSync(path.join(dir, 'setup-play.json'), JSON.stringify(setup));
     if (scriptPawns) writeFileSync(path.join(dir, 'script-play.json'), JSON.stringify({pawns: scriptPawns.split(','), events: script}));
     if (navPawns) writeFileSync(path.join(dir, 'nav-play.json'), JSON.stringify({pawns: navPawns.split(','), events: nav}));

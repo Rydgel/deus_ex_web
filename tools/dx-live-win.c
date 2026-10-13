@@ -173,12 +173,13 @@ static int find_ptds_of(DWORD only_tid, Ptd *out, int max) {
 typedef struct { char field[48]; unsigned offset; char type[8]; unsigned mask; } FieldSpec;
 typedef struct {
   char names[2048];
-  FieldSpec fields[96]; int field_count;
+  FieldSpec fields[192]; int field_count;
 } WatchGroup;
 typedef struct { char name[96]; uintptr_t address; int group; } Watched;
 
 static char out_path[512] = "trace.jsonl", player_name[96] = "JCDentonMale";
 static int release_at = 1, run_ticks = 100, pre_watch = -1;
+static int soft_at[64], soft_count, soft_idx, soft_state;   /* pause-at: unfrozen tick counts at which the level is held for console input */
 static float forced_delta = 0;
 static int monitor_seconds = 0, kill_on_crash = 1, actor_trace_first = 0, actor_trace_last = -1;
 static WatchGroup groups[16]; static int group_count;
@@ -212,7 +213,7 @@ static int parse_field(const char *text, FieldSpec *f) {
 static int read_config(const char *path) {
   FILE *file = fopen(path, "r");
   if (!file) { fprintf(stderr, "cannot open %s\n", path); return 0; }
-  char line[4096];
+  char line[16384];
   while (fgets(line, sizeof line, file)) {
     char *hash = strchr(line, '#'); if (hash) *hash = 0;
     char *tok = strtok(line, " \t\r\n");
@@ -220,6 +221,7 @@ static int read_config(const char *path) {
     if (!strcmp(tok, "out")) { char *v = strtok(NULL, "\r\n"); if (v) { while (*v == ' ') v++; strncpy(out_path, v, sizeof(out_path) - 1); } }
     else if (!strcmp(tok, "player")) strncpy(player_name, strtok(NULL, " \t\r\n"), sizeof(player_name) - 1);
     else if (!strcmp(tok, "release")) release_at = atoi(strtok(NULL, " \t\r\n"));
+    else if (!strcmp(tok, "pause-at")) { for (char *v; (v = strtok(NULL, " \t\r\n")) && soft_count < 64;) soft_at[soft_count++] = atoi(v); }
     else if (!strcmp(tok, "ticks")) run_ticks = atoi(strtok(NULL, " \t\r\n"));
     else if (!strcmp(tok, "delta")) forced_delta = (float)atof(strtok(NULL, " \t\r\n"));
     else if (!strcmp(tok, "actor-trace")) { actor_trace_first = atoi(strtok(NULL, " \t\r\n")); actor_trace_last = atoi(strtok(NULL, " \t\r\n")); }
@@ -250,7 +252,7 @@ static int read_config(const char *path) {
       WatchGroup *g = &groups[group_count++];
       char *n = strtok(NULL, " \t\r\n"); if (!n) continue;
       strncpy(g->names, n, sizeof(g->names) - 1);
-      for (char *f; (f = strtok(NULL, " \t\r\n")) && g->field_count < 96;) if (parse_field(f, &g->fields[g->field_count])) g->field_count++;
+      for (char *f; (f = strtok(NULL, " \t\r\n")) && g->field_count < 192;) if (parse_field(f, &g->fields[g->field_count])) g->field_count++;
     }
   }
   fclose(file);
@@ -692,7 +694,21 @@ static int do_trace(const char *config) {
             unsigned char b; read_mem(level_info + 0x4f0, &b, 1); b &= ~4; write_mem(level_info + 0x4f0, &b, 1); released = 1;
           }
           if (released && unfrozen >= run_ticks && !paused) paused = 1;
-          if (paused) { skip_function = 1; { char sp[660]; snprintf(sp, sizeof(sp), "%s.strobe", out_path); FILE *sf = fopen(sp, "w"); if (sf) { fprintf(sf, "%u %.9g\n", strobe_flag(), strobe_time()); fclose(sf); } } if (paused == 1) { paused = 2; fprintf(stderr, "paused after %d unfrozen ticks (tick %d); remove %s to resume\n", unfrozen, tick, resume_path); } }
+          /* pause-at: after that many unfrozen ticks the level's Tick is skipped (as for the final pause) until <out>.go appears, so a
+             console command typed meanwhile runs between two ticks; the next entry after the go file runs the tick */
+          int soft_skip = 0;
+          if (released && !paused && soft_idx < soft_count && unfrozen >= soft_at[soft_idx]) {
+            char gp[660]; snprintf(gp, sizeof(gp), "%s.go", out_path);
+            FILE *gf = fopen(gp, "r");
+            if (soft_state == 1 && gf) { fclose(gf); gf = NULL; remove(gp); soft_state = 0; soft_idx++; }
+            else {
+              if (gf) fclose(gf);
+              if (soft_state == 0) { soft_state = 1; fprintf(stderr, "held after %d unfrozen ticks (tick %d); create %s to go on\n", unfrozen, tick, gp); }
+              soft_skip = 1;
+            }
+          }
+          if (soft_skip) skip_function = 1;
+          else if (paused) { skip_function = 1; { char sp[660]; snprintf(sp, sizeof(sp), "%s.strobe", out_path); FILE *sf = fopen(sp, "w"); if (sf) { fprintf(sf, "%u %.9g\n", strobe_flag(), strobe_time()); fclose(sf); } } if (paused == 1) { paused = 2; fprintf(stderr, "paused after %d unfrozen ticks (tick %d); remove %s to resume\n", unfrozen, tick, resume_path); } }
           else {
             unsigned char b; read_mem(level_info + 0x4f0, &b, 1); players_only_in = (b & 4) ? 1 : 0;
             clock_in = read_double(level_ptr + 0xdc); ts_in = read_float(level_info + 0x478);

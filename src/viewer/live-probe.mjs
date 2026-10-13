@@ -47,7 +47,8 @@ export function liveProbe(game, args = {}) {
       if (!actor) { out.offsets[actorName] = null; continue; }
       out.offsets[actorName] = Object.fromEntries(names.map(name => {
         const member = runtime.lookupMember(runtime.instance(actor).cls, 'fields', name);
-        return [name, member ? slotOf(member.loadRecord, 0x48) : null];
+        // bool properties also give their UBoolProperty::BitMask (+0x5c)
+        return [name, member ? (args.offsetMasks ? [slotOf(member.loadRecord, 0x48), (v => typeof v === 'number' ? v : null)(slotOf(member.loadRecord, 0x5c))] : slotOf(member.loadRecord, 0x48)) : null];
       }));
     }
   }
@@ -66,8 +67,14 @@ export function liveProbe(game, args = {}) {
       for (let cls = runtime.instance(actor).cls; cls && !match; cls = cls.base) match = cls.record?.key === args.actors.toLowerCase();
       if (!match) continue;
       const instance = runtime.instance(actor), node = instance?.state ? (instance.state.stateNode ?? instance.cls) : null;
-      out.actors.push({ name: actor.name, cls: instance.cls.record?.key ?? null, location: [...runtime.readNamed(actor, 'Location')], state: scriptGetStateName(node),
-        timer: runtime.readNamed(actor, 'TimerRate') > 0 });
+      const row = { name: actor.name, cls: instance.cls.record?.key ?? null, location: [...runtime.readNamed(actor, 'Location')], state: scriptGetStateName(node),
+        timer: runtime.readNamed(actor, 'TimerRate') > 0 };
+      // actorProps: more properties by name (a census of NPCs' alliance and orders)
+      for (const prop of args.actorProps ?? []) { try { row[prop] = plain(runtime.readNamed(actor, prop)); } catch { row[prop] = undefined; } }
+      // alliances: AlliancesEx as [name, AllianceLevel, AgitationLevel] for the entries that have a name
+      if (args.alliances) row.alliances = [...runtime.readNamed(actor, 'AlliancesEx')].map(entry => Object.entries(entry).map(([k, v]) => [k.split('.').pop(), plain(v)]))
+        .map(fields => Object.fromEntries(fields)).filter(entry => entry.alliancename && entry.alliancename !== 'None').map(entry => [entry.alliancename, entry.alliancelevel, entry.agitationlevel]);
+      out.actors.push(row);
     }
   }
   // lights: the level's actors with a LightType other than None (a light's live state: scripts change it, Light.uc and subclasses).
@@ -158,11 +165,14 @@ export function liveProbe(game, args = {}) {
   }
   if (args.scriptTrace) Object.assign(runtime.scriptTrace, { pawns: new Set(args.scriptTrace.pawns), first: args.scriptTrace.first, last: args.scriptTrace.last });
   if (args.replay) {
-    const { watch = [], ticks, hold = true, warm = 3 } = args.replay;
+    const { watch = [], ticks, hold = true, warm = 3, commands = [] } = args.replay;
     const actors = watch.map(({ names, props }) => ({ props, items: names.map(name => [name, byName(name)]) }));
     for (const group of actors) for (const [name, actor] of group.items) if (!actor) throw new Error(`liveProbe: no actor ${name}`);
     const state = game.liveReplay = {
       ticks, hold, warm, index: 0, rows: [], cursor: 0, current: null,
+      // console commands typed into the original between two ticks ({after, text}: after that many ticks), run here the same way through the
+      // recovered console command chain (APlayerPawn::execConsoleCommand) before the next tick; their results are returned by `take` as `commands`
+      commands: commands.map(command => ({ ...command })), commandLog: [],
       snapshot() {
         const result = {};
         for (const group of actors) for (const [name, actor] of group.items) {
@@ -171,6 +181,12 @@ export function liveProbe(game, args = {}) {
             if (prop === '$state') {
               const instance = runtime.instance(actor), node = instance?.state ? (instance.state.stateNode ?? instance.cls) : null;
               row.State = scriptGetStateName(node);
+            } else if (prop.startsWith('$Al')) {
+              // an AlliancesEx entry's name / AllianceLevel / AgitationLevel ($AlName0, $AlLvl0, $AlAgit0, ...)
+              const [, part, index] = /^\$Al(Name|Lvl|Agit)(\d)$/.exec(prop);
+              const entry = runtime.readNamed(actor, 'AlliancesEx')[Number(index)];
+              const key = part === 'Name' ? 'alliancename' : part === 'Lvl' ? 'alliancelevel' : 'agitationlevel';
+              row[prop] = plain(Object.entries(entry).find(([k]) => k.split('.').pop() === key)?.[1]);
             } else if (prop.startsWith('$region')) {
               const region = runtime.readNamed(actor, 'Region');
               row[prop] = prop === '$regionZone' ? plain(region['engine.actor.pointregion.zone'])
@@ -188,6 +204,15 @@ export function liveProbe(game, args = {}) {
         if (this.warm > 0) { this.warm--; return false; }
         if (this.index >= this.ticks.length) return this.hold ? false : dt;
         const tick = this.ticks[this.index];
+        while (this.commands.length && this.commands[0].after <= this.index) {
+          const command = this.commands.shift(), entry = { ...command };
+          try {
+            const consoleCommands = game.doors.scriptRuntime.windowHost?.consoleCommands;
+            if (!consoleCommands) throw new Error('no console command chain');
+            entry.output = consoleCommands.consoleCommand(player, command.text);
+          } catch (error) { entry.error = String(error?.message ?? error); }
+          this.commandLog.push(entry);
+        }
         if (runtime.navTrace) runtime.navTrace.tick = this.index + 1;
         if (runtime.scriptTrace) runtime.scriptTrace.tick = this.index + 1;
         game.random.seed(parseInt(tick.rngIn, 16) >>> 0);
@@ -236,6 +261,7 @@ export function liveProbe(game, args = {}) {
   const replay = game.liveReplay;
   if (args.take && replay) {
     if (replay.setupProbe) out.setup = replay.setupProbe.rows.splice(0);
+    if (replay.commandLog.length) out.commands = replay.commandLog.splice(0);
     out.rows = replay.rows.slice(replay.cursor); replay.cursor = replay.rows.length;
     out.index = replay.index;
     if (runtime.navTrace) out.nav = runtime.navTrace.events.splice(0);
