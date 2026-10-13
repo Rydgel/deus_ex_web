@@ -76,3 +76,7 @@ export const probeNames = new Map([
   ['probe62', 0x16a],
   ['all', 0x16b],
 ]);
+
+/** The probe index (0x12c..0x16b) of a script function record, or 0xffffffff when its name is no probe name: UObject::ProcessInternal
+ * (Core 0x1013f6c6-0x1013f6fe) runs a probe-named function only if its object's ProbeMask holds that bit, whoever calls it. */
+export const probeIndex = record => probeNames.get(record.key.slice(record.key.lastIndexOf('.') + 1).toLowerCase()) ?? 0xffffffff;

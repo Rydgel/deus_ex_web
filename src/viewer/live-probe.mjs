@@ -2,6 +2,7 @@ import { lightGlobals } from '../runtime/light-globals.mjs';
 import { scriptGetStateName } from '../runtime/script-state-queries.mjs';
 import { createNavTrace } from '../runtime/nav-trace.mjs';
 import { execAICanSee } from '../runtime/script-pawn-perception.mjs';
+import { setTouchTrace } from '../runtime/actor-touch.mjs';
 
 /** Validation only (scripts/live-acceptance.mjs, docs/visual-acceptance.md
  * "Live scenes"): the simulation side of the live-scene comparison. It
@@ -165,6 +166,15 @@ export function liveProbe(game, args = {}) {
     wrapCall('invokeNative', null, { receiver: call => call.receiver, label: call => `native ${call.index} ${call.record?.key ?? ''}` });
     wrapCall('gotoState', null, { receiver: receiver => receiver, label: (receiver, name, label) => `gotoState ${name} ${label ?? ''}` });
   }
+  // touchTrace: {first, last}: every EndTouch / AddTouch / BeginTouch the replayed ticks make (actor-touch.mjs), with the Touching slots after each;
+  // returned by `take` as `touch`, compared with the original's breakpoints at the same bodies (docs/visual-acceptance.md).
+  if (args.touchTrace) {
+    const events = runtime.touchEvents ??= [];
+    setTouchTrace(event => {
+      const n = game.liveReplay?.current?.n;
+      if (n >= args.touchTrace.first && n <= args.touchTrace.last) events.push({ u: n, ...event });
+    });
+  }
   if (args.scriptTrace) Object.assign(runtime.scriptTrace, { pawns: new Set(args.scriptTrace.pawns), first: args.scriptTrace.first, last: args.scriptTrace.last });
   // canSeeProbe: {pawn, first, last}: after those replayed ticks, what `Enemy.AICanSee(destPoint, 1, false, false, false, true)` (the
   // test ScriptedPawn's Fleeing state makes when a move ends) gives for that pawn, with the collision hash's hits along the line
@@ -286,6 +296,7 @@ export function liveProbe(game, args = {}) {
     out.index = replay.index;
     if (runtime.navTrace) out.nav = runtime.navTrace.events.splice(0);
     if (runtime.scriptTrace) out.script = runtime.scriptTrace.events.splice(0);
+    if (runtime.touchEvents) out.touch = runtime.touchEvents.splice(0);
   }
   if (args.status && replay) out.status = { index: replay.index, of: replay.ticks.length };
   // deferred: the boundaries Play recorded instead of running (player.unimplementedPhysicsEffects: sounds of emitters without a measured

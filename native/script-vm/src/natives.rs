@@ -85,6 +85,18 @@ pub(crate) fn state_entry(handle: u32) -> u32 {
     table.wrapping_add(ENTRY.wrapping_mul(handle))
 }
 
+/// Whether `handle`'s object probes the name with probe index `ename` (0x12c..0x16b): the state table's probe words decide as
+/// ScriptState.isProbing does; an instance without a ScriptState (a row with no names) or one the host does not describe probes every
+/// name. ProcessInternal's gate on a script call (Core 0x1013f6c6-0x1013f6fe).
+pub(crate) fn probing_name(handle: u32, ename: u32) -> bool {
+    let entry = state_entry(handle);
+    if entry == 0 {
+        return true;
+    }
+    let bit = ename.wrapping_sub(0x12c);
+    load32(load32(entry).wrapping_add(4)) == 0 || bit >= 64 || load32(entry.wrapping_add(4 + 4 * (bit >> 5))) & (1u32 << (bit & 31)) != 0
+}
+
 /// `handle`'s frame word (script-vm-states.mjs), or 0 (state code to run,
 /// which makes the caller cross) when the host does not describe it.
 pub(crate) fn state_frame(handle: u32) -> u32 {

@@ -234,6 +234,41 @@ shows why `FUNC_Defined` must not be treated as a `ProcessEvent` gate: its
 resolved script function carries that flag and still uses the same indirect
 implementation path.
 
+## A script call runs the same probe gate: `UObject::ProcessInternal` (2026-10-13)
+
+`ProcessEvent` is not the only place the ProbeMask is read. `UObject::ProcessInternal` (Core `0x1013f690`), which executes the bytecode of
+every script function, however it was reached, tests it again before it runs anything (`0x1013f6c6`-`0x1013f6fe`):
+
+```text
+ProcessInternal(this, Stack, Result):
+    if this.vtable[+0x18](Function, ...) != 0:           // ProcessRemoteFunction
+        return
+    name = Function.u32(+0x20)
+    if 0x12c <= name < 0x16c and this.StateFrame(+0x0c) != null:
+        if (MakeProbeMask(name - 0x12c) & StateFrame.ProbeMask(+0x1c,+0x20)) == 0:
+            return                                       // the body does not run
+    ...singular flag, the statement loop (0x1013f76c), the Return expression...
+```
+
+`CallFunction` (`0x1013f4e0`), which `execVirtualFunction` (`0x101301e0`: `FindFunctionChecked` then `CallFunction` through vtable `+0x44`) uses for a script-to-script call, has
+already evaluated the arguments into the new frame, and copies out parameters back and destroys the frame afterwards as usual; nothing in
+`CallFunction` or in the function lookup (`0x10150b50`, the StateNode's function table then the class's) consults the mask. So
+`Disable('Trigger')` silences `A.Trigger()` called from script as it silences the engine's Trigger event: the TriggerOpenTimed movers
+(the Underworld's club doors) disable Trigger on entering `Open`, the Trigger actor's `A.Trigger(...)` loop then reaches them with a function
+that returns at once, and the door is not restarted by a pawn standing in several trigger cylinders. Play ran such a call
+(`ScriptRuntime.callFunction`, and the Rust CALL in `interp.rs`) whatever the mask said, and restarted `InterpolateTo` from the current angle on every
+`Touch`/`UnTouch` of the churning `Touching` slots: the door finished 45 ticks late and the pawn met it closed (docs/visual-acceptance.md).
+
+Evidence. The original's call log of the door (`call` breakpoints at `ProcessInternal`, gated on DeusExMover4, tick 889 to 893 of a 940-tick
+capture): five `Trigger` and six `UnTrigger` entries, each returning at once with no `execGotoState`, `GotoState` or `GotoLabel` hit; Play's trace of
+the same scene ran `TriggerOpenTimed.Trigger` and its `GotoState` each time. `scripts/native-process-internal-oracle.py` runs the unchanged
+`ProcessInternal` over a fabricated frame (12 cases: each end of the probe range, both ProbeMask words, outside the range, no StateFrame):
+the body runs exactly when the name is outside the range, the object has no StateFrame, or the name's bit is set.
+`scripts/validate-native-process-internal.mjs` checks `ScriptRuntime.callFunction` on the same cases and fails without the gate;
+`validate-script-vm-interp` checks the Rust CALL (cached and `js_call_begin` paths, bit set, bit clear, high word, no probe name) and fails
+with the gate disabled. In the Rust CALL the callee's probe index travels with the call cache entry (word 9) and CALL_BLOCK (word 3); the test
+reads the state table's probe words (`natives.rs probing_name`) after the arguments, as ProcessInternal does.
+
 ## Boundaries left unresolved
 
 The disassembly establishes the gate order and byte-level frame ABI, but it

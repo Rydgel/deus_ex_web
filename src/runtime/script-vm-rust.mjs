@@ -20,6 +20,7 @@
  * callee statement left to JavaScript runs through `step`. The callee's
  * JavaScript frame object exists only once one of its nodes needs it.
  */
+import { probeIndex } from '../unreal/probe-names.mjs';
 import {instantiateScriptVm} from './script-vm-kernel.mjs';
 import {handleOf, identityOfHandle, onHandleRelease, handleLimit, existingHandle} from './script-object-handles.mjs';
 import {scriptRunawayCount, setScriptRunaway, SCRIPT_RUNAWAY_LIMIT} from './script-vm.mjs';
@@ -1015,6 +1016,7 @@ export class RustScriptVm {
     view.setUint32(this.callAt, base, true);
     view.setUint32(this.callAt + 4, lowered.code, true);
     view.setUint32(this.callAt + 8, handleOf(receiver), true);
+    view.setUint32(this.callAt + 12, probeIndex(record), true);
     const id = this.depth;
     this.own(id, new Run(this, fn.compiled, lowered, receiver, services, null, layout, base, fn.result ?? null));
     this.depth = id + 1;

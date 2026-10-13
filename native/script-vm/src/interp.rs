@@ -446,7 +446,7 @@ extern "C" {
 // JavaScript FrameStack (script-frame-locals.mjs), then the host's count of
 // active runs (the next run id), restored with the stack after a call;
 // CALL_BLOCK [callee locals,
-// callee code, callee SELF], written by js_call_begin; CLASSES [table
+// callee code, callee SELF, callee probe index], written by js_call_begin; CLASSES [table
 // address, capacity] of the handle class table; RECEIVERS [table address,
 // capacity, epoch, verify] of the receiver table; CHECK nonzero under
 // SCRIPT_VM_CHECK.
@@ -456,7 +456,9 @@ static mut RESULT: f64 = 0.0;
 static mut FLOAT_UNDEF: u32 = 0;
 pub(crate) static mut BOUND_KEYS: [u32; 2] = [0; 2];
 pub(crate) static mut FRAMES: [u32; 4] = [0; 4];
-static mut CALL_BLOCK: [u32; 3] = [0; 3];
+static mut CALL_BLOCK: [u32; 4] = [0; 4];
+/// A callee with no probe name: CALL_BLOCK's fourth word and the call cache's probe word when ProcessInternal's gate does not apply.
+pub(crate) const PROBE_NONE: u32 = 0xffff_ffff;
 static mut CLASSES: [u32; 2] = [0; 2];
 static mut RECEIVERS: [u32; 4] = [0; 4];
 /// js_receiver's binding set for the handle it answered (for a handle the
@@ -1430,16 +1432,16 @@ impl Run {
         let saved = frames_save();
         // The callee's run id, frame block, code and SELF: from the call
         // cache (dispatch.rs), or js_call_begin and CALL_BLOCK.
-        let (callee, locals, code, callee_self) =
+        let (callee, locals, code, callee_self, probe) =
             match crate::dispatch::begin_call(self.frame, self.code as usize as u32, node, receiver, sig) {
-                Some(c) => (c.id as i32, c.locals, c.code, receiver),
+                Some(c) => (c.id as i32, c.locals, c.code, receiver, c.probe),
                 None => {
                     let callee = unsafe { js_call_begin(self.frame, node, receiver, sig) };
                     self.self_fresh = false;
                     // The callee block is read before any argument runs a
                     // nested call.
                     let block = addr_of!(CALL_BLOCK) as *const u32;
-                    unsafe { (callee, *block, *block.add(1), *block.add(2)) }
+                    unsafe { (callee, *block, *block.add(1), *block.add(2), *block.add(3)) }
                 }
             };
         if callee < 0 {
@@ -1488,6 +1490,13 @@ impl Run {
                 }
                 _ => self.fail(ERR_KIND, pkind),
             }
+        }
+        // UObject::ProcessInternal (Core 0x1013f6c6-0x1013f6fe): a probe-named function does not run when its object's StateFrame
+        // ProbeMask lacks the name's bit, whoever called it; the arguments are evaluated above, the frame is put back below.
+        if probe != PROBE_NONE && !crate::natives::probing_name(callee_self, probe) {
+            frames_restore(saved);
+            self.self_fresh = false;
+            return 0.0;
         }
         // executeScript: the callee's own resumeCompiled budget.
         let caller_budget = unsafe { BUDGET };

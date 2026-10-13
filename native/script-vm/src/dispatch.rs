@@ -395,6 +395,8 @@ pub(crate) struct Callee {
     pub(crate) id: u32,
     pub(crate) locals: u32,
     pub(crate) code: u32,
+    /// The callee's probe index (0x12c..0x16b) or PROBE_NONE: ProcessInternal's ProbeMask gate.
+    pub(crate) probe: u32,
 }
 
 /// beginCall from the cache, or None when the caller must ask js_call_begin
@@ -443,7 +445,7 @@ pub(crate) fn begin_call(frame: u32, caller: u32, node: u32, handle: u32, sig: u
         (*addr_of_mut!(RUNS))[runs as usize] = [template, handle, locals, serial];
         (*addr_of_mut!(FRAMES))[3] = runs + 1;
     }
-    Some(Callee { id: runs, locals, code })
+    Some(Callee { id: runs, locals, code, probe: load32(slot.wrapping_add(36)) })
 }
 
 /// dispatch_event for validators (validate-script-vm-interp).

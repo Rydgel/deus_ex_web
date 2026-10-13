@@ -151,6 +151,7 @@ const imports = {
     wr32(CALL_BLOCK_AT, base);
     wr32(CALL_BLOCK_AT + 4, target.code);
     wr32(CALL_BLOCK_AT + 8, receiver);
+    wr32(CALL_BLOCK_AT + 12, site.probe ?? 0xffffffff);
     return id;
   },
   js_step(frame, index) {
@@ -248,8 +249,8 @@ const imports = {
   },
   js_call_resolve(frame, n, handle, sig, slot) {
     calls.push({imp: 'callResolve', frame, node: n, receiver: handle, sig, frames: framesKey()});
-    const [kind, code, size, template] = nativeHost.callResolve(frame, n, handle, sig);
-    for (const [i, v] of [kind, code, size, template].entries()) wr32(slot + 20 + 4 * i, v);
+    const [kind, code, size, template, probe = 0xffffffff] = nativeHost.callResolve(frame, n, handle, sig);
+    for (const [i, v] of [kind, code, size, template, probe].entries()) wr32(slot + 20 + 4 * i, v);
   },
   js_event_resolve(handle, which, slot) {
     calls.push({imp: 'resolve', receiver: handle, which});
@@ -1553,6 +1554,23 @@ const floatStore = v => bits(f(Number(v ?? 0)));       // the float codec: Math.
       same(value(resultKind, wrap(call(n, rkind, args), after)), expected, `${target} call rkind ${rkind} followed by an operand`);
       same(afterCalls, 1, `${target} call rkind ${rkind}: the operand after it evaluates once`);
     }
+  }
+  // js_call_begin's CALL_BLOCK probe word gates a callee as the cache's does (ProcessInternal, Core 0x1013f6c6-0x1013f6fe).
+  {
+    const ENTRY = 16, table = arena.alloc(ENTRY * 64), row = arena.alloc(12);
+    wr32(row, 9); wr32(row + 4, 1); wr32(row + 8, 1);
+    for (const [why, lo, hi, runs] of [['bit set', 1 << 6, 0, true], ['bit clear', ~(1 << 6) >>> 0, 0xffffffff, false]]) {
+      reset();
+      arena.bytes.fill(0, table, table + ENTRY * 64);
+      wr32(STATES_AT, table); wr32(STATES_AT + 4, 64); wr32(STATES_AT + 8, 0);
+      wr32(table + ENTRY * SELF_H, row); wr32(table + ENTRY * SELF_H + 4, lo); wr32(table + ENTRY * SELF_H + 8, hi);
+      const n = site(defineFn([S.ret(R.INT, E.int(7))]));
+      callSites.get(n).probe = 0x132;
+      same(value(R.INT, call(n, R.INT)), runs ? 7 : 0, `js_call_begin probe-named callee (${why}) value`);
+      same(rd32(FRAMES_AT + 12), 0, `js_call_begin probe-named callee (${why}) run count restored`);
+      same(framesKey(), INITIAL_FRAMES, `js_call_begin probe-named callee (${why}) frame stack restored`);
+    }
+    reset();
   }
   reset();
   wr32(LOCALS + 0x4c, 0xdeadbeef);
@@ -3511,6 +3529,29 @@ const castOf = (target, value) => w(K.DYNAMIC_CAST, target === null ? 0 : classR
   same(resolveCall.sig, SIG, 'js_call_resolve signature');
   same(resolveCall.frame, FRAME, 'js_call_resolve frame');
   same(resolveCall.frames, before, 'js_call_resolve runs before the push');
+  // ProcessInternal's probe gate (Core 0x1013f6c6-0x1013f6fe): a callee with a probe index runs only when its object's ProbeMask holds the
+  // bit; the arguments are evaluated and the frame stack and run count restored either way, the value is 0 when it does not run.
+  for (const [why, probeLo, probeHi, runs] of [['bit set', 1 << 6, 0, true], ['bit clear', ~(1 << 6) >>> 0, 0xffffffff, false],
+    ['nothing probed', 0, 0, false], ['high word bit set', 0, 1 << 3, true]]) {
+    for (const probe of [0x132, 0x12c + 35]) {
+      if (why === 'high word bit set' && probe === 0x132) continue;
+      if (why !== 'high word bit set' && probe !== 0x132) continue;
+      setup();
+      nativeHost.callResolve = () => [...runDecision(), probe];
+      wr32(STATE_TABLE + ENTRY * SELF_H + 4, probeLo); wr32(STATE_TABLE + ENTRY * SELF_H + 8, probeHi);
+      seen = null;
+      const m = node();
+      same(value(R.INT, callNode(m, 41)), runs ? 42 : 0, `cached probe-named callee (${why}) value`);
+      same(seen !== null, runs, `cached probe-named callee (${why}) body ran`);
+      same(framesKey(), before, `cached probe-named callee (${why}) frame stack restored`);
+      same(rd32(FRAMES_AT + 12), 0, `cached probe-named callee (${why}) run count restored`);
+    }
+  }
+  // A callee without a probe name is not gated, whatever the receiver's mask.
+  setup();
+  nativeHost.callResolve = runDecision;
+  wr32(STATE_TABLE + ENTRY * SELF_H + 4, 0); wr32(STATE_TABLE + ENTRY * SELF_H + 8, 0);
+  same(value(R.INT, callNode(node(), 41)), 42, 'a callee with no probe index runs under an empty ProbeMask');
   // Another receiver class, another state row, a cleared slot, the epoch,
   // verify: resolved again.
   for (const [why, change, expected] of [

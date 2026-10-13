@@ -26,7 +26,7 @@ import {scriptRunawayCount} from './script-vm.mjs';
 import {frameLayout} from './script-frame-locals.mjs';
 import {functionSignature, fieldKeyId} from './script-vm-lower.mjs';
 import {fieldImageCell, scalarCell, onFieldImageCellWithdrawn} from './script-object-image.mjs';
-import {probeNames} from '../unreal/probe-names.mjs';
+import {probeNames, probeIndex} from '../unreal/probe-names.mjs';
 import {handleOf} from './script-object-handles.mjs';
 import {STATE_ENTRY} from './script-vm-states.mjs';
 import {ScriptState, originalProcess, originalIsProbing} from './script-state.mjs';
@@ -169,6 +169,7 @@ export class EventHost {
     view.setUint32(slot + 24, decision.size, true);
     view.setUint32(slot + 28, decision.param, true);
     view.setUint32(slot + 32, decision.template, true);
+    view.setUint32(slot + 36, decision.probe ?? 0xffffffff, true);
   }
   /** Whether the slot holds the current key for this dispatch (verify). */
   sameKey(handle, which, slot) {
@@ -231,8 +232,8 @@ export class EventHost {
       view.getUint32(slot + 4, true) === node && view.getUint32(slot + 8, true) === this.vm.classRow(handle) &&
       view.getUint32(slot + 12, true) === (handle < this.vm.states.capacity ? view.getUint32(this.vm.states.table + STATE_ENTRY * handle, true) : 0) &&
       view.getUint32(slot + 16, true) === view.getUint32(this.at + 8, true)) {
-      const words = [20, 24, 28, 32].map(at => view.getUint32(slot + at, true));
-      const fresh = [decision.kind, decision.code, decision.size, decision.template];
+      const words = [20, 24, 28, 32, 36].map(at => view.getUint32(slot + at, true));
+      const fresh = [decision.kind, decision.code, decision.size, decision.template, decision.probe ?? 0xffffffff];
       if (words.some((w, i) => w !== fresh[i]))
         throw new Error(`Call cache slot for node ${node} on handle ${handle} is stale: [${words}], now [${fresh}]`);
     }
@@ -254,6 +255,6 @@ export class EventHost {
     if (functionSignature(fn, runtime.classLoader)?.id !== sig) return js;
     const layout = frameLayout(fn, runtime.classLoader), lowered = vm.loweringFor(fn.compiled, layout, services, receiver);
     if (!lowered) return js;
-    return {kind: K_RUN, code: lowered.code, size: layout.size, template: this.template(fn, lowered, layout, services)};
+    return {kind: K_RUN, code: lowered.code, size: layout.size, template: this.template(fn, lowered, layout, services), probe: probeIndex(record)};
   }
 }

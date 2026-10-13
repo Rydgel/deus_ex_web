@@ -102,6 +102,8 @@ const PERCEPTION_FIELDS = [
   ...[0, 1, 2, 3, 4, 5, 6, 7].flatMap(i => [[`AlName${i}`, `$AlName${i}`, 2028 + 16 * i, 'name'], [`AlLvl${i}`, `$AlLvl${i}`, 2032 + 16 * i, 'f'], [`AlAgit${i}`, `$AlAgit${i}`, 2036 + 16 * i, 'f']]),
 ];
 if (flag('perception')) FIELDS.push(...PERCEPTION_FIELDS);
+// --touching: Actor.Touching[0..3] (+0xe8..+0xf4) of every watched actor, the extras' included (the four slots BeginTouch/AddTouch fill and evict).
+if (flag('touching')) FIELDS.push(...[0, 1, 2, 3].map(i => [`Touch${i}`, 'Touching', 0xe8 + 4 * i, 'obj', 0, i]));
 // The player's pose, read back from the original (the placement of Play's replay): view rotation and Region.
 const PLAYER_FIELDS = FIELDS.slice(0, 10).concat([FIELDS[10]],
   [['VRot', 'ViewRotation', 0x3dc, 'i3'], ['RegZone', '$regionZone', 0xc8, 'obj'], ['RegLeaf', '$regionLeaf', 0xcc, 'i32'], ['RegNum', '$regionNum', 0xd0, 'u8']]);
@@ -495,6 +497,7 @@ async function play() {
     // animation reaching its end can call script that draws)
     const setupNames = option('setup-probe', null), [setupFirst, setupLast] = option('setup-ticks', `1:${trace.length}`).split(':').map(Number);   // Setup's result for those actors (setup-play.json)
     const scriptPawns = option('script-trace', null), [scriptFirst, scriptLast] = option('script-ticks', `1:${trace.length}`).split(':').map(Number);
+    const touchWindow = option('touch-trace', null)?.split(':').map(Number);   // --touch-trace first:last: EndTouch/AddTouch/BeginTouch of those ticks (touch-play.json)
     const navPawns = option('nav-trace', null), [navFirst, navLast] = option('nav-ticks', `1:${trace.length}`).split(':').map(Number);
     // The generators' load-time draws (GENERATOR_FIELDS), as the original's frozen phase left them.
     const generatorWrites = Object.fromEntries(generators.filter(name => frozen[frozen.length - 1].actors[name])
@@ -504,6 +507,7 @@ async function play() {
       .map(name => [name, Object.fromEntries(PAWN_LOAD_FIELDS.map(label => [FIELDS.find(f => f[0] === label)[1], lastFrozen[name][label]]))]));
     const timerWrites = Object.fromEntries(timers.filter(name => lastFrozen[name]?.TRate !== undefined).map(name => [name, {TimerRate: lastFrozen[name].TRate, TimerCounter: lastFrozen[name].TCount}]));
     const request = {write: {...timerWrites, ...pawnWrites, '@player': {AnimSequence: pose.Anim, AnimFrame: pose.Frame, AnimRate: pose.Rate, TweenRate: pose.Tween, ...(option('player-alliance', null) ? {Alliance: option('player-alliance')} : {})}, ...generatorWrites},
+      ...(touchWindow ? {touchTrace: {first: touchWindow[0], last: touchWindow[1]}} : {}),
       ...(navPawns ? {navTrace: {pawns: navPawns.split(','), first: navFirst, last: navLast}} : {}),
       ...(trace[0]?.viewport?.[0] && !flag('own-viewport') ? {renderSize: trace[0].viewport} : {}),   // the original's frame size (--own-viewport: Play's page)
       ...(setupNames ? {setupProbe: {names: setupNames.split(','), first: setupFirst, last: setupLast}} : {}),
@@ -513,14 +517,14 @@ async function play() {
       commands: existsSync(path.join(dir, `commands${suffix}.json`)) ? JSON.parse(readFileSync(path.join(dir, `commands${suffix}.json`), 'utf8')) : [], watch: [
       {names: ['@player'], props: playerProps}, {names: pawns, props},
       // --extra-watch actors are not pawns: the fields every Actor has
-      ...(extras.length ? [{names: extras, props: ['Location', 'Rotation', 'Velocity', 'Physics', 'AnimSequence', 'AnimFrame', 'AnimRate', 'TweenRate', 'LifeSpan', 'LastRenderTime', 'DistanceFromPlayer', 'TimerRate', 'TimerCounter']}] : [])]}};
+      ...(extras.length ? [{names: extras, props: ['Location', 'Rotation', 'Velocity', 'Physics', 'AnimSequence', 'AnimFrame', 'AnimRate', 'TweenRate', 'LifeSpan', 'LastRenderTime', 'DistanceFromPlayer', 'TimerRate', 'TimerCounter', ...(flag('touching') ? ['Touching'] : [])]}] : [])]}};
     const started = await page.evaluate(r => window.deusExViewer.liveProbe(r), request);
-    const rows = [], nav = [], script = [], setup = [], commandLog = [];
+    const touch = [], rows = [], nav = [], script = [], setup = [], commandLog = [];
     let stalls = 0;
     while (rows.length < trace.length) {
       await frames(20);
       const taken = await page.evaluate(() => window.deusExViewer.liveProbe({take: true}));
-      if (taken.debug?.length) { (globalThis.__debugRows ??= []).push(...taken.debug); } nav.push(...(taken.nav ?? [])); script.push(...(taken.script ?? [])); setup.push(...(taken.setup ?? [])); commandLog.push(...(taken.commands ?? []));
+      if (taken.debug?.length) { (globalThis.__debugRows ??= []).push(...taken.debug); } nav.push(...(taken.nav ?? [])); touch.push(...(taken.touch ?? [])); script.push(...(taken.script ?? [])); setup.push(...(taken.setup ?? [])); commandLog.push(...(taken.commands ?? []));
       if (taken.rows.length) { rows.push(...taken.rows); stalls = 0; } else if (++stalls > 40) throw new Error(`the replay stopped at tick ${rows.length}`);
     }
     // the boundaries Play recorded instead of running during the replay (docs/visual-acceptance.md, record-only audit)
@@ -530,6 +534,7 @@ async function play() {
     writeFileSync(playPath, JSON.stringify({map, ghost, initial: started.initial, rows, errors, commands: commandLog}));
     for (const c of commandLog) console.log(`command after ${c.after} ticks: ${c.text} -> ${c.error ? `ERROR ${c.error}` : JSON.stringify(c.output)}`);
     if (globalThis.__debugRows) writeFileSync(path.join(dir, 'debug-play.json'), JSON.stringify(globalThis.__debugRows));
+    if (touchWindow) writeFileSync(path.join(dir, 'touch-play.json'), JSON.stringify(touch));
     if (setupNames) writeFileSync(path.join(dir, 'setup-play.json'), JSON.stringify(setup));
     if (scriptPawns) writeFileSync(path.join(dir, 'script-play.json'), JSON.stringify({pawns: scriptPawns.split(','), events: script}));
     if (navPawns) writeFileSync(path.join(dir, 'nav-play.json'), JSON.stringify({pawns: navPawns.split(','), events: nav}));

@@ -27,7 +27,7 @@ import { createAllActorsIterator, createTraceActorsIterator, createTraceVisibleA
 import { scriptTrace, scriptFastTrace } from './script-trace.mjs';
 import { setActorTimer, updateActorTimer } from './script-timers.mjs';
 import { sleepActor, pollActorSleep } from './script-sleep.mjs';
-import { probeNames } from '../unreal/probe-names.mjs';
+import { probeNames, probeIndex } from '../unreal/probe-names.mjs';
 import { conditionalDestroyScriptObject, destroyScriptObject } from './script-object-lifecycle.mjs';
 import { setScriptOwner } from './script-owner.mjs';
 import { destroyScriptActor } from './script-destroy.mjs';
@@ -4502,7 +4502,13 @@ export class ScriptRuntime {
       if(value!==undefined)locals.set(field.key,copyValue(field,refValue(value)));
       if(field.metadata.out&&value?.reference)out.push({field,reference:value});
     }
-    const value=this.executeScript(fn,receiver,locals);
+    // UObject::ProcessInternal (Core 0x1013f690, 0x1013f6c6-0x1013f6fe): a script function whose name is one of the 64 probe names does not
+    // run when its object's StateFrame ProbeMask lacks that bit, whoever called it; CallFunction already evaluated the arguments and
+    // still copies the out parameters back and destroys the frame afterwards (Disable('Trigger') silences `A.Trigger()` as well as the
+    // engine's Trigger event: the club doors, docs/visual-acceptance.md).
+    const ename=probeIndex(record);
+    const masked=ename!==0xffffffff&&this.instance(receiver).state?.isProbing(ename)===false;
+    const value=masked?undefined:this.executeScript(fn,receiver,locals);
     // ProcessInternal writes the caller's result before returning to the out
     // copyback/destruction loops. Preserve that value outside the local frame.
     const result=fn.result?copyValue(fn.result,value):value;

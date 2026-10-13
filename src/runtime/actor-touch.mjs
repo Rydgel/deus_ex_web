@@ -6,6 +6,12 @@ const f=Math.fround;
  * pointers, so a view never belongs in them (docs/script-map-actor-move.md). */
 export const ACTOR_IDENTITY=Symbol('actor identity');
 export const identityOf=actor=>actor?.[ACTOR_IDENTITY]??actor;
+/** Validation only (live-acceptance --touch-trace): receives one record per EndTouch / AddTouch / BeginTouch call, in call order, with the
+ * actors' names and Touching slots after the call; the original's breakpoints at the same bodies (Engine 0x10369970, 0x10369630,
+ * 0x10369570) log the same. Off (null) in play. */
+let touchTrace=null;
+export const setTouchTrace=fn=>{touchTrace=fn;};
+const slotNames=actor=>actor.touching.map(item=>item?.name??null);
 function slots(actor){if(!Array.isArray(actor.touching)||actor.touching.length!==4)throw Error('Original Touching requires four explicit slots');return actor.touching;}
 function identities(actor,other){if(actor?.[ACTOR_IDENTITY]||other?.[ACTOR_IDENTITY])throw Error('Touching slots hold actor identities: pass the host, not its field view');}
 /** Original cylinder IsOverlapping10369430; brush/world exclusions are native. */
@@ -22,12 +28,18 @@ export function endTouch(actor,other,noNotifySelf,dispatch){
  if(index>=0){actor.touching[index]=null;if(!noNotifySelf)dispatch(actor,'UnTouch',[other]);}
  index=slots(other).indexOf(actor);
  if(index>=0){other.touching[index]=null;dispatch(other,'UnTouch',[actor]);}
+ if(touchTrace)touchTrace({fn:'endtouch',a:actor.name,b:other.name,noNotifySelf:Boolean(noNotifySelf),slotsA:slotNames(actor),slotsB:slotNames(other)});
 }
 /** Original BeginTouch pair order, last-empty selection, and capacity eviction. */
 export function beginTouch(actor,other,dispatch){
  if(!actor||!other||actor===other)throw Error('Original BeginTouch requires distinct actors');
  identities(actor,other);
  const add=(a,b)=>{
+  const result=addTouch(a,b);
+  if(touchTrace)touchTrace({fn:'addtouch',a:a.name,b:b.name,ret:result,slots:slotNames(a)});
+  return result;
+ };
+ const addTouch=(a,b)=>{
   let empty=-1;
   for(let i=0;i<4;i++){const item=slots(a)[i];if(item===b)return true;if(item===null)empty=i;}
   if(empty<0){
@@ -49,4 +61,5 @@ export function beginTouch(actor,other,dispatch){
   a.touching[empty]=b;dispatch(a,'Touch',[b]);return a.touching[empty]===b;
  };
  if(add(actor,other))add(other,actor);
+ if(touchTrace)touchTrace({fn:'begintouch',a:actor.name,b:other.name});
 }
