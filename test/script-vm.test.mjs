@@ -102,3 +102,11 @@ test('native discard metadata follows statement Context values, not consumed ope
     assert.deepEqual(seen,flags);
   }
 });
+test('Let through a None context warns and still evaluates the right side (execLet 0x1012fe40), it does not throw', () => {
+  // Amount.Value = 5; return 7 -- with Amount (a local object) None. The original points the store at a zeroed dummy
+  // ("Attempt to assigned variable through None", Core 0x1012fe74) and evaluates the right side into it.
+  const vm = compile([0x0f, 0x19, 0x00, 2, 5, 0, 0, 0x01, 1, 0x1d, 5, 0, 0, 0, 0x04, 0x1d, 7, 0, 0, 0], 26);
+  const instance = { Value: 3 };
+  assert.equal(vm.run(instance, { Amount: null }), 7);
+  assert.equal(instance.Value, 3);
+});

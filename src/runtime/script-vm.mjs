@@ -986,7 +986,20 @@ export function compileFunction(fn) {
    * reference's check/select/evaluate/store order without building it. */
   function compileAssign(target, valueOf) {
     const left = sub(target);
-    const generic = fr => assign(left.ev(fr, fr.instance), valueOf(fr));
+    // UObject::execLet (Core 0x1012fe40): the left side is evaluated for its address; when a context object is None there is none, and
+    // the original warns ("Attempt to assigned variable through None", ScriptWarning, 0x1012fe74), points the store at a zeroed 12-byte
+    // dummy and still evaluates the right side into it. Any other left side without a variable stays an error.
+    const throughContext = target !== null && typeof target === 'object' &&
+      (target.op === 0x12 || target.op === 0x19 || (target.op === 0x2d && target.value && (target.value.op === 0x12 || target.value.op === 0x19)));
+    const generic = throughContext
+      ? fr => {
+        const reference = left.ev(fr, fr.instance);
+        const value = valueOf(fr);
+        if (reference?.reference) return assign(reference, value);
+        fr.services.warning?.({ type: 'Attempt to assign variable through None', script: fn.entry.path, offset: target.offset });
+        return undefined;
+      }
+      : fr => assign(left.ev(fr, fr.instance), valueOf(fr));
     if (!directTarget(target)) return generic;
     const resolved = operandCache();
     if (target.op === 0x00) return fr => {
@@ -1129,6 +1142,8 @@ export function compileFunction(fn) {
         const value = sub(n.value);
         return (fr, r) => {
           const field = value.ev(fr, r);
+          // a context whose object is None yields no variable (execContext zeroes the result); the caller decides (execLet warns)
+          if (!field?.reference && (n.value.op === 0x12 || n.value.op === 0x19)) return field;
           if (!field?.reference) throw new Error('BoolVariable requires a property');
           return { reference: true, get: () => Boolean(refValue(field)), set: v => assign(field, Boolean(v)) };
         };
