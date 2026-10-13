@@ -59,6 +59,13 @@ const FIELDS = [
 const PLAYER_FIELDS = FIELDS.slice(0, 10).concat([FIELDS[10]],
   [['VRot', 'ViewRotation', 0x3dc, 'i3'], ['RegZone', '$regionZone', 0xc8, 'obj'], ['RegLeaf', '$regionLeaf', 0xcc, 'i32'], ['RegNum', '$regionNum', 0xd0, 'u8']]);
 
+// Load-time random state of the PawnGenerators (PigeonGenerator, SeagullGenerator, ...): PostBeginPlay draws TryTimer
+// (0.25 + FRand()*0.75) and, with bRandomCount, PoolCount from the load's stream, which the two sides do not share
+// (the original seeds the CRT with time(NULL), docs/rng.md). A generator first spawns when its TryTimer runs out,
+// so Play's own draws moved those ticks (and the draws they make) by several ticks. Like the player's pose, the
+// original's values are a measured input: read at the release (the last frozen row), written into Play before its first tick.
+const GENERATOR_FIELDS = [['TryTimer', 'TryTimer', 0x540, 'f'], ['PoolCount', 'PoolCount', 0x3b4, 'i32']];
+
 const spec = ([label, , off, type, mask]) => `${label}:0x${off.toString(16)}:${type}${mask ? `:0x${mask.toString(16)}` : ''}`;
 
 // --- the original ---------------------------------------------------------
@@ -102,20 +109,25 @@ async function original() {
       post([`cmd set DeusEx.JCDentonMale ViewRotation (Pitch=0,Yaw=${yaw},Roll=0)`, 'sleep 300', 'down W', `sleep ${ms}`, 'up W', 'sleep 1500']);
     }
   }
+  const generators = flag('no-generators') ? [] : wine('list', 'PawnGenerator').split('\n').map(line => /^\S+ (\S+) slot=/.exec(line)?.[1]).filter(Boolean);
   const watchOption = option('watch', 'auto');
   let names;
   if (watchOption === 'auto') {
     names = wine('list', 'ScriptedPawn').split('\n').map(line => /^\S+ (\S+) slot=/.exec(line)?.[1]).filter(Boolean);
   } else names = watchOption.split(',');
+  // --extra-watch A,B: more actors (a seat, a door) watched with the same fields, e.g. one a pawn walks to.
+  const extras = option('extra-watch', null)?.split(',') ?? [];
+  names.push(...extras);
   const config = [`out ${tracePath}`, 'player JCDentonMale', `release ${option('release', 3)}`, `ticks ${option('ticks', 600)}`,
     ...(option('delta', null) ? [`delta ${option('delta')}`] : []), ...(option('monitor', null) ? [`monitor ${option('monitor')}`] : []), ...(option('actor-trace', null) ? [`actor-trace ${option('actor-trace').replace(':', ' ')}`] : []),
     // --extra-config <file>: more trace.cfg lines (tools/dx-live-win.c `call` breakpoints, call-ticks, call-pawn).
     ...(option('extra-config', null) ? readFileSync(option('extra-config'), 'utf8').split('\n').filter(line => line.trim()) : []),
+    ...(generators.length ? [`watch ${generators.join(',')} ${GENERATOR_FIELDS.map(spec).join(' ')}`] : []),
     `watch @player ${PLAYER_FIELDS.map(spec).join(' ')}`,
     `watch ${names.join(',')} ${FIELDS.map(spec).join(' ')}`];
   const configPath = path.join(dir, 'trace.cfg');
   writeFileSync(configPath, config.join('\n') + '\n');
-  writeFileSync(watchPath, JSON.stringify({map, pawns: names}, null, 1));
+  writeFileSync(watchPath, JSON.stringify({map, pawns: names.filter(name => !extras.includes(name)), extras, generators}, null, 1));
   // The actors the original's level holds (a load removes some at random: OddsOfAppearing).
   const everything = wine('list', 'Actor').split('\n').map(line => /^\S+ (\S+) slot=\d+ .* odds=(\S+)/.exec(line)).filter(Boolean).map(m => ({name: m[1], odds: Number(m[2])}));
   writeFileSync(path.join(dir, 'population.json'), JSON.stringify(everything));
@@ -220,7 +232,7 @@ async function play() {
   // (tools/dx-live-win.c `call`, original --extra-config).
   const limit = Number(option('ticks', 0)) || undefined;
   const trace = readFileSync(tracePath, 'utf8').trim().split('\n').map(line => JSON.parse(line)).filter(row => row.unfrozen >= 1).slice(0, limit);
-  const {pawns} = JSON.parse(readFileSync(watchPath, 'utf8'));
+  const {pawns, extras = [], generators = []} = JSON.parse(readFileSync(watchPath, 'utf8'));
   // Play is placed where the original's player stood when the replay begins: the last frozen tick's exit.
   const frozen = readFileSync(tracePath, 'utf8').trim().split('\n').map(line => JSON.parse(line)).filter(row => row.unfrozen === 0);
   const pose = frozen[frozen.length - 1].actors['@player'];
@@ -239,9 +251,14 @@ async function play() {
     // the player's animation too, in the call that arms the replay: no frozen tick runs between (a looping ghost
     // animation reaching its end can call script that draws)
     const navPawns = option('nav-trace', null), [navFirst, navLast] = option('nav-ticks', `1:${trace.length}`).split(':').map(Number);
-    const request = {write: {'@player': {AnimSequence: pose.Anim, AnimFrame: pose.Frame, AnimRate: pose.Rate, TweenRate: pose.Tween}},
+    // The generators' load-time draws (GENERATOR_FIELDS), as the original's frozen phase left them.
+    const generatorWrites = Object.fromEntries(generators.filter(name => frozen[frozen.length - 1].actors[name])
+      .map(name => [name, Object.fromEntries(GENERATOR_FIELDS.map(([label, prop]) => [prop, frozen[frozen.length - 1].actors[name][label]]))]));
+    const request = {write: {'@player': {AnimSequence: pose.Anim, AnimFrame: pose.Frame, AnimRate: pose.Rate, TweenRate: pose.Tween}, ...generatorWrites},
       ...(navPawns ? {navTrace: {pawns: navPawns.split(','), first: navFirst, last: navLast}} : {}), replay: {ticks: trace, release: true, hold: true, drawTrace: flag('draw-trace'), watch: [
-      {names: ['@player'], props: playerProps}, {names: pawns, props}]}};
+      {names: ['@player'], props: playerProps}, {names: pawns, props},
+      // --extra-watch actors are not pawns: the fields every Actor has
+      ...(extras.length ? [{names: extras, props: ['Location', 'Rotation', 'Velocity', 'Physics', 'AnimSequence', 'AnimFrame', 'AnimRate', 'TweenRate', 'LifeSpan', 'LastRenderTime', 'DistanceFromPlayer']}] : [])]}};
     const started = await page.evaluate(r => window.deusExViewer.liveProbe(r), request);
     const rows = [], nav = [];
     let stalls = 0;
@@ -296,7 +313,7 @@ function compare() {
       const o = rows[i].actors[name], p = played.rows[i]?.actors[name];
       if (!o || !p) continue;
       for (const [label, prop] of [...FIELDS, ...PLAYER_FIELDS.slice(11)].map(f => [f[0], f[1] === '$state' ? 'State' : f[1]])) {
-        if (!(label in o)) continue;
+        if (!(label in o) || !(prop in p)) continue;
         let ov = o[label], pv = p[prop];
         if (label === 'State') { ov = String(ov).split('|')[0]; pv = String(pv).split('|')[0]; }
         rotationCompare = label === 'Rot';
