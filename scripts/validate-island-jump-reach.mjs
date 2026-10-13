@@ -18,7 +18,8 @@
  * validate-pawn-direction-reach) was the next boundary, at tick 1375: after
  * actorReachable(player) succeeds, PaulDenton0's GetNextVector asks it for a
  * step toward the player. It now runs, Paul follows the player, and his
- * radius conversation MeetPaul starts at tick 1872. It is third-person, so
+ * radius conversation MeetPaul starts at tick 1872 (1422 since NPCs walk at
+ * GroundSpeed x DesiredSpeed, 2026-10-11). It is third-person, so
  * ConPlay.StartConversation calls Conversation.CreateConCamera (ConSys native
  * 2051), formerly the boundary and now implemented; validate-island-conversation
  * follows MeetPaul to its first choice. Play paints the HUD every frame (the
@@ -34,29 +35,29 @@ if (process.argv[2] !== 'child') {
   if (child.status !== 0) throw new Error(`child failed (${child.status}): ${child.stderr.split('\n').filter(l => !/Deprecation|trace-deprecation/.test(l)).slice(-12).join('\n')}`);
   const run = JSON.parse(child.stdout.trim().split('\n').at(-1));
   const paul = run.paul;
-  // 1. The former boundary: PaulDenton0's GetNextWaypoint actorReachable at
-  // tick 1221 now completes, and its walkReachable ran FindBestJump.
-  const former = paul.calls.find(c => c.tick === 1221 && c.index === 520);
-  assert.ok(former, 'PaulDenton0 calls actorReachable at tick 1221');
-  assert.deepEqual({ fn: former.function, state: former.state }, { fn: 'GetNextWaypoint', state: 'RunningTo' });
-  assert.ok(former.jumps > 0, 'the tick-1221 reach check entered FindBestJump');
-  assert.equal(typeof former.result, 'boolean', 'the tick-1221 reach check returned a verdict');
-  assert.ok(!run.firstError || run.firstError.tick > 1221, 'no boundary at the former jump tick');
+  // 1. The former boundary: a GetNextWaypoint actorReachable of PaulDenton0's
+  // whose walkReachable ran FindBestJump (tick 1221 before 2026-10-11). Since
+  // script pawns walk at GroundSpeed x DesiredSpeed (calcVelocity's class test,
+  // docs/walking.md), Paul reaches the player sooner on this workload and no
+  // longer needs that jump; the jump bodies stay bit-exact in
+  // validate-pawn-jump-reach. When a jumping reach check does occur, it must
+  // complete as before.
+  const former = paul.calls.find(c => c.index === 520 && c.jumps > 0) ?? null;
+  if (former) {
+    assert.deepEqual({ fn: former.function, state: former.state }, { fn: 'GetNextWaypoint', state: 'RunningTo' });
+    assert.equal(typeof former.result, 'boolean', 'the jumping reach check returned a verdict');
+    const trace = former.trace, jump = trace.findIndex(t => t.op === 'FindBestJump');
+    assert.ok(jump > 0 && trace.slice(0, jump).some(t => t.op === 'MoveActor'), 'checkMove steps preceded the jump');
+  }
   const jumpCalls = paul.calls.filter(c => c.jumps > 0);
   assert.ok(jumpCalls.every(c => typeof c.result === 'boolean'), 'every reach check that jumped completed');
-  // The jump lands in water (jumpLanding stops on the water zone) and
-  // swimReachable cannot climb out toward the player: GetNextWaypoint falls
-  // back to FindPathToward in the same tick and gets a PatrolPoint.
-  const trace = former.trace, jump = trace.findIndex(t => t.op === 'FindBestJump');
-  assert.ok(jump > 0 && trace.slice(0, jump).some(t => t.op === 'MoveActor'), 'checkMove steps preceded the jump');
-  const path = paul.calls.find(c => c.tick === 1221 && c.index === 517);
-  assert.match(path?.result ?? '', /^PatrolPoint\d+$/, 'FindPathToward answers the failed reach check');
-  // 2. The former 708 boundary: from tick 1375 PaulDenton0's GetNextVector
+  // 2. The former 708 boundary (tick 1375 before 2026-10-11, 1335 since): PaulDenton0's GetNextVector
   // runs AIDirectionReachable after actorReachable(player) succeeds, every
   // call returns a verdict, and Paul closes on the player.
   const directionCalls = paul.calls.filter(c => c.index === 708);
-  assert.equal(directionCalls[0]?.tick, 1375, 'the first AIDirectionReachable is the former boundary tick');
-  assert.deepEqual(paul.calls.filter(c => c.tick === 1375).map(c => [c.index, c.result ?? null]),
+  const firstDirection = directionCalls[0]?.tick;
+  assert.ok(firstDirection > 0, 'PaulDenton0 runs AIDirectionReachable');
+  assert.deepEqual(paul.calls.filter(c => c.tick === firstDirection).map(c => [c.index, c.result ?? null]),
     [[520, true], [708, true]], 'actorReachable(player) succeeds, then GetNextVector finds a step');
   assert.ok(directionCalls.every(c => c.function === 'GetNextVector' && c.state === 'RunningTo' &&
     typeof c.result === 'boolean' && c.moves > 0), 'every GetNextVector search completed with test moves');
@@ -66,21 +67,22 @@ if (process.argv[2] !== 'child') {
     'every search wrote bestDest through its reference');
   assert.ok(directionCalls.every(c => !c.result || Math.hypot(...c.out.map((v, i) => v - c.from[i])) <= 64),
     'each found step is within maxDist of Location');
-  assert.ok(!run.firstError || run.firstError.tick > 1375, 'no boundary at the former 708 tick');
+  assert.ok(!run.firstError || run.firstError.tick > firstDirection, 'no boundary at the first AIDirectionReachable');
   const distance = t => Math.hypot(t.location[0] - run.player[0], t.location[1] - run.player[1]);
-  const [atFirst, atLast] = [paul.track.find(t => t.tick >= 1380), paul.track.at(-1)];
+  const [atFirst, atLast] = [paul.track.find(t => t.tick >= firstDirection + 5), paul.track.at(-1)];
   assert.ok(distance(atLast) < distance(atFirst), 'Paul followed the player');
   // 3. PaulDenton0's radius conversation MeetPaul is third-person, so
   // ConPlay.StartConversation asks Conversation.CreateConCamera (ConSys native
   // 2051, execCreateConCamera 0x100106f0) for its camera, with no boundary.
   assert.equal(run.firstError, null, 'no boundary through the conversation start');
   const camera = run.conversation.find(c => c.index === 2051);
-  assert.deepEqual({ tick: camera?.tick, conName: camera?.conName, owner: camera?.owner, firstPerson: camera?.bFirstPerson },
-    { tick: 1872, conName: 'MeetPaul', owner: 'PaulDenton', firstPerson: false });
+  assert.ok(camera?.tick > firstDirection, 'MeetPaul starts after Paul closes on the player');
+  assert.deepEqual({ conName: camera?.conName, owner: camera?.owner, firstPerson: camera?.bFirstPerson },
+    { conName: 'MeetPaul', owner: 'PaulDenton', firstPerson: false });
   assert.deepEqual(run.conversation.filter(c => c.tick === camera.tick).map(c => c.index), [2052, 2051],
     'ConPlayBase binds the conversation events before the camera');
   const summary = {
-    formerBoundary: former, jumpingCalls: jumpCalls.length,
+    formerBoundary: former, firstDirection, conversationTick: camera.tick, jumpingCalls: jumpCalls.length,
     paulCalls: paul.calls.map(({ trace, ...c }) => c),
     fbjEntries: jumpCalls.reduce((n, c) => n + c.jumps, 0),
     fbjLog: paul.log,

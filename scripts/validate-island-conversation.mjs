@@ -44,7 +44,9 @@ if (process.argv[2] !== 'child') {
   assert.equal(run.firstError, null, `no runtime error before the choice: ${JSON.stringify(run.firstError)}`);
   assert.equal(run.conversation.name, 'MeetPaul');
   assert.equal(run.conversation.bFirstPerson, false);
-  assert.ok(run.conversation.tick > 1800 && run.conversation.tick < 2000, `MeetPaul starts with Paul at the player (tick ${run.conversation.tick})`);
+  // Tick 1872 until 2026-10-11, 1422 since script pawns walk at GroundSpeed x DesiredSpeed (calcVelocity's class
+  // test, docs/walking.md): Paul reaches the player sooner. The window only rules out a start before he can arrive.
+  assert.ok(run.conversation.tick > 1200 && run.conversation.tick < 2000, `MeetPaul starts with Paul at the player (tick ${run.conversation.tick})`);
   // 1.
   const camera = run.camera;
   assert.equal(camera.cls, 'consys.concamera');
