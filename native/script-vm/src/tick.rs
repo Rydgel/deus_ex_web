@@ -31,13 +31,13 @@ use crate::trace::sqrt;
 use core::ptr::{addr_of, addr_of_mut};
 
 // Field indices (actor-tick-kernel.mjs TICK_FIELDS).
-const F_ROLE: usize = 0;
-const F_REMOTEROLE: usize = 1;
-const F_LASTRENDERTIME: usize = 2;
-const F_BSTASIS: usize = 3;
-const F_BFORCESTASIS: usize = 4;
-const F_PHYSICS: usize = 5;
-const F_DISTANCE: usize = 6;
+pub(crate) const F_ROLE: usize = 0;
+pub(crate) const F_REMOTEROLE: usize = 1;
+pub(crate) const F_LASTRENDERTIME: usize = 2;
+pub(crate) const F_BSTASIS: usize = 3;
+pub(crate) const F_BFORCESTASIS: usize = 4;
+pub(crate) const F_PHYSICS: usize = 5;
+pub(crate) const F_DISTANCE: usize = 6;
 const F_BTRANSIENT: usize = 7;
 const F_OWNER: usize = 8;
 const F_BTICKED: usize = 9;
@@ -50,20 +50,20 @@ const F_BISPLAYER: usize = 15;
 const F_BVIEWTARGET: usize = 16;
 const F_VIEWROTATION: usize = 17;
 const F_ROTATION: usize = 18;
-const F_WEAPON: usize = 19;
+pub(crate) const F_WEAPON: usize = 19;
 const F_LOCATION: usize = 20;
 const F_SIGHTCOUNTER: usize = 21;
 const F_BHIDDEN: usize = 22;
 const F_PAINTIME: usize = 23;
 const F_SPEECHTIME: usize = 24;
-const F_BADVANCEDTACTICS: usize = 25;
+pub(crate) const F_BADVANCEDTACTICS: usize = 25;
 const F_ANIMSEQUENCE: usize = 26;
 const F_ANIMFRAME: usize = 27;
 const F_ANIMRATE: usize = 28;
 const F_TWEENRATE: usize = 29;
 const F_ANIMLAST: usize = 30;
 const F_ANIMMINRATE: usize = 31;
-const F_VELOCITY: usize = 32;
+pub(crate) const F_VELOCITY: usize = 32;
 const F_BANIMFINISHED: usize = 33;
 const F_BANIMLOOP: usize = 34;
 const F_BANIMNOTIFY: usize = 35;
@@ -86,6 +86,8 @@ const ANIM_FIELDS: u64 = ((1u64 << (F_BLENDMINRATE + 1)) - 1) & !((1u64 << F_ANI
 const C_PAWN: u32 = 1;
 const C_PLAYERPAWN: u32 = 2;
 const C_WEAPON: u32 = 4;
+/// The class derives from DeusEx.ScriptedPawn and every field of the SP table (sptick.rs) is in the pawn's image.
+const C_SCRIPTEDPAWN: u32 = 8;
 
 // Results besides the body's 0 and 1.
 const HANDBACK: i32 = -1;
@@ -119,9 +121,9 @@ const ERR_PROBE: u32 = 2;
 /// T_FIELDS: per field [offset, bool mask or fixed-array element stride],
 /// written by the host from the cell registry.
 static mut T_FIELDS: [[u32; 2]; FIELD_COUNT] = [[0; 2]; FIELD_COUNT];
-/// T_STATE: after a callback, [receiver info (base | HOST), mask low, mask
+/// T_STATE: [5] and [6] are the scripted-pawn field mask (sptick.rs), low and high word; after a callback, [receiver info (base | HOST), mask low, mask
 /// high, DemoRecDriver set]; [4]: js_tick_zone_time's value was not a number.
-static mut T_STATE: [u32; 5] = [0; 5];
+static mut T_STATE: [u32; 7] = [0; 7];
 /// T_F64: js_anim_notify's notify time, js_anim_velocity's vector.
 static mut T_F64: [f64; 3] = [0.0; 3];
 /// The name word of the empty name '' (nameCellWord), which `named` rejects
@@ -147,6 +149,11 @@ pub extern "C" fn tick_empty_name_ptr() -> *mut u32 {
 #[no_mangle]
 pub extern "C" fn tick_probe_names_ptr() -> *mut u32 {
     addr_of_mut!(P_ENAMES) as *mut u32
+}
+
+/// js_tick_zone_time's value was not a number (T_STATE[4]).
+pub(crate) fn zone_time_bad() -> bool {
+    unsafe { (*addr_of!(T_STATE))[4] != 0 }
 }
 
 /// `services.isProbing(actor, name)` for the ticking actor: with the probe
@@ -206,7 +213,7 @@ extern "C" {
 }
 
 #[inline(always)]
-fn field(f: usize) -> [u32; 2] {
+pub(crate) fn field(f: usize) -> [u32; 2] {
     unsafe { (*addr_of!(T_FIELDS))[f] }
 }
 #[inline(always)]
@@ -272,25 +279,27 @@ fn trunc(x: f64) -> f64 {
 }
 /// animation-tick.mjs `named` on a name word (nameCellWord: None is 0).
 #[inline(always)]
-fn named_word(word: u32) -> bool {
+pub(crate) fn named_word(word: u32) -> bool {
     word != 0 && word != unsafe { T_EMPTY_NAME }
 }
 
 /// The ticking actor. `at` gives a field's image address when `readNamed`
 /// reads it there.
-struct Actor {
-    ctx: u32,
-    handle: u32,
-    base: u32,
-    host: bool,
-    mask: u64,
-    flags: u32,
-    demo: bool,
+pub(crate) struct Actor {
+    pub(crate) ctx: u32,
+    pub(crate) handle: u32,
+    pub(crate) base: u32,
+    pub(crate) host: bool,
+    pub(crate) mask: u64,
+    pub(crate) flags: u32,
+    pub(crate) demo: bool,
+    /// The SP table's fields (sptick.rs) that `readNamed` reads in the image, bit i for field i.
+    pub(crate) sp_mask: u64,
 }
 
 impl Actor {
     #[inline(always)]
-    fn at(&self, f: usize) -> Option<u32> {
+    pub(crate) fn at(&self, f: usize) -> Option<u32> {
         if self.host || self.mask & (1u64 << f) == 0 {
             None
         } else {
@@ -302,12 +311,13 @@ impl Actor {
         self.at(f).map(|a| a.wrapping_add(i.wrapping_mul(field(f)[1])))
     }
     /// After a callback: the actor's fresh receiver info and mask.
-    fn refresh(&mut self) {
+    pub(crate) fn refresh(&mut self) {
         let s = unsafe { *addr_of!(T_STATE) };
         self.host = s[0] & HOST != 0;
         self.base = s[0] & !15;
         self.mask = (s[2] as u64) << 32 | s[1] as u64;
         self.demo = s[3] != 0;
+        self.sp_mask = (s[6] as u64) << 32 | s[5] as u64;
     }
 
     // Image-only reads for the prelude (None hands the tick back).
@@ -326,7 +336,7 @@ impl Actor {
 
     // Reads with the JavaScript fallback: byte and float fields as numbers.
     #[inline(always)]
-    fn num(&mut self, f: usize) -> f64 {
+    pub(crate) fn num(&mut self, f: usize) -> f64 {
         match self.at(f) {
             Some(a) => {
                 if f == F_ROLE || f == F_REMOTEROLE || f == F_PHYSICS {
@@ -339,7 +349,7 @@ impl Actor {
         }
     }
     #[inline(always)]
-    fn boolean(&mut self, f: usize) -> bool {
+    pub(crate) fn boolean(&mut self, f: usize) -> bool {
         match self.at(f) {
             Some(a) => load32(a) & field(f)[1] != 0,
             None => (unsafe { js_tick_get(self.ctx, f as u32, -1) }) != 0.0,
@@ -356,7 +366,7 @@ impl Actor {
         }
     }
     #[inline(always)]
-    fn set_bool(&mut self, f: usize, v: bool) {
+    pub(crate) fn set_bool(&mut self, f: usize, v: bool) {
         match self.at(f) {
             Some(a) => {
                 let mask = field(f)[1];
@@ -571,12 +581,30 @@ fn tick_body(
     time_seconds: f64,
     tick_tag: u32,
 ) -> i32 {
-    let mut a = Actor { ctx, handle, base, host: false, mask: (mask_hi as u64) << 32 | mask_lo as u64, flags, demo: false };
+    let sp = unsafe { *addr_of!(T_STATE) };
+    let mut a = Actor { ctx, handle, base, host: false, mask: (mask_hi as u64) << 32 | mask_lo as u64, flags, demo: false, sp_mask: (sp[6] as u64) << 32 | sp[5] as u64 };
     if flags & C_PLAYERPAWN != 0 {
         return HANDBACK;
     }
     let delta = fround(seconds);
+    if flags & C_SCRIPTEDPAWN != 0 {
+        // AScriptedPawn::Tick runs before AActor::Tick. Its effects come first, so the reads `start` needs must be in the image
+        // now (no JavaScript call: a hand-back after them would run the phase twice).
+        if [F_ROLE, F_LASTRENDERTIME, F_BSTASIS, F_PHYSICS, F_BFORCESTASIS, F_DISTANCE, F_BTRANSIENT, F_OWNER].iter().any(|&f| a.at(f).is_none())
+            || a.img_byte(F_ROLE) != Some(4.0)
+        {
+            return HANDBACK;
+        }
+        if !crate::sptick::pre(&mut a, seconds, tick_type, time_seconds) {
+            return 1;
+        }
+    }
     match start(&a, time_seconds, tick_tag) {
+        None if flags & C_SCRIPTEDPAWN != 0 => {
+            // The SP phase ran: the reads left the image or the zone time was not a number during it; JavaScript throws too.
+            unsafe { js_tick_error(ctx, 3) };
+            return 1;
+        }
         None => return HANDBACK,
         Some(Start::Stasis(destroy)) => {
             if destroy {

@@ -45,6 +45,8 @@ const {decodeMap} = await import('../src/unreal/map.mjs');
 const {createGame} = await import('../src/viewer/game.mjs');
 const {gameDirectory} = await import('./game-directory.mjs');
 const {tickStandaloneActor} = await import('../src/runtime/actor-tick.mjs');
+const {scriptedPawnTick} = await import('../src/runtime/scripted-pawn-tick.mjs');
+const {SP_FIELDS} = await import('../src/runtime/actor-tick-kernel.mjs');
 const {TICK_FIELDS, actorTickStats} = await import('../src/runtime/actor-tick-kernel.mjs');
 const {handleOf, releaseHandle, handleLimit} = await import('../src/runtime/script-object-handles.mjs');
 
@@ -206,6 +208,12 @@ const same = (a, b) => {
 };
 const show = v => typeof v === 'number' ? `${v}/${numberBits(v)}` : Array.isArray(v) ? `[${v.map(show)}]` : v?.name ?? String(v);
 
+/** The JavaScript tick: AScriptedPawn::Tick's phase for a ScriptedPawn, then AActor::Tick. */
+function jsTick(actor, seconds, tickType, services) {
+  if (runtime.isScriptedPawn(actor) && !scriptedPawnTick(actor, seconds, tickType, runtime.scriptedPawnTickServices(services))) return 1;
+  return tickStandaloneActor(actor, seconds, tickType, services);
+}
+
 function run(spec, kernelPath) {
   const {actor} = spec, instance = instanceOf(actor), trace = [], counts = new Map();
   const deferredSentinel = {sentinel: true};
@@ -248,9 +256,9 @@ function run(spec, kernelPath) {
       result = kernel.run(actor, spec.seconds, {tickType: spec.tickType, services});
       if (result === undefined) {
         handedBack = true;
-        result = tickStandaloneActor(actor, spec.seconds, spec.tickType, services);
+        result = jsTick(actor, spec.seconds, spec.tickType, services);
       }
-    } else result = tickStandaloneActor(actor, spec.seconds, spec.tickType, services);
+    } else result = jsTick(actor, spec.seconds, spec.tickType, services);
   } catch (e) {
     error = String(e?.message ?? e);
   } finally {
@@ -270,7 +278,8 @@ const FLOAT_FIELDS = ['LastRenderTime', 'DistanceFromPlayer', 'TimerRate', 'Time
 const BOOL_FIELDS = ['bStasis', 'bForceStasis', 'bTransient', 'bTimerLoop', 'bIsPlayer', 'bViewTarget', 'bHidden',
   'bAdvancedTactics', 'bAnimFinished', 'bAnimLoop', 'bAnimNotify', 'bIsPawn'];
 const CALLBACKS = ['state', 'event Tick', 'event Timer', 'event Expired', 'physics', 'anim AnimEnd', 'farMove', 'showSelf',
-  'checkEnemy', 'event UpdateEyeHeight', 'event PainTimer', 'event SpeechTimer', 'event UpdateTactics'];
+  'checkEnemy', 'event UpdateEyeHeight', 'event PainTimer', 'event SpeechTimer', 'event UpdateTactics', 'event EnableCloak',
+  'event ExtinguishFire', 'event SpurtBlood', 'destroy'];
 let otherActor = actors.find(a => a !== player);
 
 function makeCase(actor, family) {
@@ -386,6 +395,55 @@ function makeCase(actor, family) {
       if (chance(0.2)) effect('farMove', 0, {write: ['Role', 3]});
       break;
     }
+    case 'scripted': {
+      if (!has(actor, 'AlarmTimer')) break;
+      const timers = ['AlarmTimer', 'WeaponTimer', 'FireTimer', 'SpecialTimer', 'ReloadTimer', 'AvoidWallTimer', 'AvoidBumpTimer', 'ObstacleTimer',
+        'CloakEMPTimer', 'TakeHitTimer', 'CarcassCheckTimer', 'PotentialEnemyTimer', 'BeamCheckTimer', 'FutzTimer', 'PlayerAgitationTimer',
+        'AgitationCheckTimer', 'AgitationTimer', 'FearTimer', 'DistressTimer', 'burnTimer', 'BurnPeriod', 'FearSustainTime'];
+      const edge = () => chance(0.5) ? pick([-0.5, 0, 0.001, 0.0166, 0.5, 1.5, 7.25]) : floatEdge(pick([0, seconds, 1]));
+      for (const name of timers) if (chance(0.5)) set(name, edge());
+      for (const name of ['AgitationDecayRate', 'FearDecayRate', 'FearLevel']) if (chance(0.6)) set(name, pick([0, 0.2, 0.7, 1, floatEdge(0)]));
+      set('Role', 4);
+      set('RemoteRole', pick([0, 0, 0, 3, 1]));
+      set('bSimulatedPawn', chance(0.5));
+      set('bDisappear', chance(0.35));
+      set('LastRenderTime', pick([timeSeconds - 1, timeSeconds - 4.99, timeSeconds - 5, timeSeconds - 6, floatEdge(timeSeconds - 5)]));
+      set('bTickVisibleOnly', chance(0.4));
+      set('DistanceFromPlayer', pick([100, 1200, ulp(1200, 1), 3000]));
+      set('bAdvancedTactics', chance(0.5));
+      set('Acceleration', pick([[0, 0, 0], [50, 0, 0], [0, -3, 0], [0, 0, 1]]));
+      set('TurnDirection', pick([0, 1, 2]));
+      set('NextDirection', pick([0, 1, 2]));
+      set('MoveTimer', pick([-1, 0, 1.655, 6.29, floatEdge(4)]));
+      set('bHasCloak', chance(0.4));
+      set('Health', pick([100, 50, 10, 0]));
+      set('CloakThreshold', pick([50, 10, 0, 100]));
+      set('bOnFire', chance(0.3));
+      set('bCanBleed', chance(0.6));
+      set('BleedRate', pick([0, 0.2, 0.9, 1, 5, -1]));
+      set('ClotPeriod', pick([0.5, 3, 8]));
+      set('DropCounter', pick([0, 0.4, 2]));
+      set('Velocity', pick([[0, 0, 0], [60, 0, 0], [300, 400, 0], [1, 0, -2000]]));
+      set('PrePivotTime', pick([0, -1, 0.005, Math.fround(seconds), 0.1, 2.5]));
+      set('PrePivot', [random() * 20 - 10, random() * 20 - 10, random() * 20 - 10]);
+      set('DesiredPrePivot', [random() * 20 - 10, random() * 20 - 10, random() * 20 - 10]);
+      set('bAlliancesChanged', chance(0.6));
+      if (has(actor, 'AlliancesEx') && chance(0.7)) set('AlliancesEx', Array.from({length: 16}, (_, i) => ({
+        'deusex.scriptedpawn.allianceinfoex.alliancename': i % 3 ? 'Player' : 'None',
+        'deusex.scriptedpawn.allianceinfoex.alliancelevel': 0.5,
+        'deusex.scriptedpawn.allianceinfoex.agitationlevel': i % 4 ? Math.fround(random() * 2) : 0,
+        'deusex.scriptedpawn.allianceinfoex.bpermanent': i % 5 === 1,
+      })));
+      spec.weapon = pick(['keep', 'none', 'other']);
+      spec.probes.Tick = chance(0.5);
+      // callbacks that change what the phase reads next, or take the actor away
+      if (chance(0.3)) effect('event EnableCloak', 0, {write: [pick(['TurnDirection', 'bAdvancedTactics', 'MoveTimer']), pick([0, true, 2.5])]});
+      if (chance(0.3)) effect('event ExtinguishFire', 0, {write: ['BleedRate', pick([0, 0.5])]});
+      if (chance(0.4)) effect('event SpurtBlood', pick([0, 1]), {write: ['DropCounter', pick([0, 0.01])]});
+      if (chance(0.15)) effect('event SpurtBlood', 0, {bind: pick(['DropCounter', 'BleedRate', 'ClotPeriod'])});
+      if (chance(0.1)) effect('destroy', 0, {release: true});
+      break;
+    }
     case 'owner': {
       spec.owner = pick(['none', 'ticked', 'unticked', 'unattached', 'released', 'dangling']);
       spec.allocation = pick([{}, {}, null, 5]);
@@ -406,7 +464,7 @@ function makeCase(actor, family) {
     spec.probes.Tick = chance(0.7);
   }
   // Bound or poisoned fields, before the tick or from a callback.
-  const names = TICK_FIELDS.map(([name]) => name);
+  const names = [...TICK_FIELDS.map(([name]) => name), ...(family === 'scripted' ? SP_FIELDS.map(([name]) => name) : [])];
   if (chance(0.15)) for (let i = 0; i < 1 + Math.floor(random() * 3); i++) spec.bindBefore.push(pick(names));
   if (chance(0.05)) spec.poisonBefore.push(pick(names));
   if (chance(0.25)) {
@@ -504,7 +562,7 @@ function prepare(spec) {
 // ---- The comparison -------------------------------------------------------
 const traceKinds = new Map();
 let cases = 0, handbacks = 0, expectedRust = 0, errors = 0, deferrals = 0, callbacks = 0;
-const families = ['stasis', 'timer', 'lifespan', 'animation', 'pawn', 'owner', 'random'];
+const families = ['stasis', 'timer', 'lifespan', 'animation', 'pawn', 'scripted', 'owner', 'scripted', 'random'];
 const handbackBefore = actorTickStats().handback.get('prelude') ?? 0;
 for (const actor of actors) {
   const fixed = fixedCases(actor);
@@ -521,6 +579,8 @@ for (const actor of actors) {
     const imageComplete = !spec.bindBefore.length && !spec.poisonBefore.length && !isA(actor, 'engine.playerpawn') &&
       (typeof spec.zone === 'number') && typeof spec.seconds === 'number';
     const rust = run(spec, true);
+    if (rust.error?.startsWith('ACTOR_TICK_DIFFERENTIAL'))
+      console.log(`case ${actor.name}:${n} ${spec.family}`, JSON.stringify({seconds: spec.seconds, tickType: spec.tickType, tickTag: spec.tickTag, time: spec.timeSeconds, fields: spec.fields, effects: [...spec.effects], bindBefore: spec.bindBefore, weapon: spec.weapon}, (k, v) => typeof v === 'number' && !Number.isFinite(v) ? String(v) : v));
     for (const s of saved.slice().reverse()) restore(s);
     const saved2 = prepare(spec);
     const js = run(spec, false);
@@ -556,6 +616,7 @@ console.log(`${cases} cases on ${actors.length} actors of ${byClass.size} classe
   `${deferrals} deferred`);
 console.log(`kernel paths: ${stats.get} JavaScript reads, ${stats.set} writes, ${stats.statements} statements, ` +
   `${stats.animation} animation phases in JavaScript; replay: ${stats.verified} ticks, ${stats.mismatches} mismatches`);
+console.log(`hand-backs by reason: ${[...stats.handback].map(([k, v]) => `${k} ${v}`).join(', ')}`);
 console.log(`kernel imports: ${[...stats.imports].map(([k, v]) => `${k} ${v}`).join(', ')}`);
 console.log(`callbacks by kind: ${[...traceKinds].sort((a, b) => b[1] - a[1]).map(([k, v]) => `${k} ${v}`).join(', ')}`);
 assert.ok(stats.get > 0 && stats.set > 0 && stats.statements > 0 && stats.animation > 0, 'a fallback path was not exercised');

@@ -36,6 +36,7 @@ mod tracker;
 mod particles;
 mod pawn_phys;
 mod swim;
+mod sptick;
 mod tick;
 mod trace;
 mod walk;

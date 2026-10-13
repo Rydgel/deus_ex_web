@@ -31,7 +31,8 @@
 import {fieldImageCell, fieldImageCellVersion, cellKind, sameCell} from './script-object-image.mjs';
 import {handleOf, identityOfHandle} from './script-object-handles.mjs';
 import {nameCellWord} from './script-name-ids.mjs';
-import {tickStandaloneActor} from './actor-tick.mjs';
+import {tickStandaloneActor, actorInStasis} from './actor-tick.mjs';
+import {scriptedPawnTick} from './scripted-pawn-tick.mjs';
 import {tickActorAnimation, selectAnimNotify, named} from './animation-tick.mjs';
 import {animationTickView} from './script-anim.mjs';
 import {propertyReference, propertyCodec} from './script-values.mjs';
@@ -92,6 +93,66 @@ export const TICK_FIELDS = Object.freeze([
   // Sleep's remaining time (script-sleep.mjs), polled in Rust.
   ['LatentFloat', 'engine.actor.latentfloat', 'float'],
 ]);
+/** The fields AScriptedPawn::Tick reads and writes besides TICK_FIELDS's (sptick.rs S_*), in index order: [the spelling, key, cell
+ * kind]. A pawn runs the phase in Rust only when its class resolves every one of them to the cell the table describes. */
+export const SP_FIELDS = Object.freeze([
+  ['bSimulatedPawn', 'engine.actor.bsimulatedpawn', 'bool'],
+  ['Acceleration', 'engine.actor.acceleration', 'vector'],
+  ['MoveTimer', 'engine.pawn.movetimer', 'float'],
+  ['Health', 'engine.pawn.health', 'int'],
+  ['bOnFire', 'engine.pawn.bonfire', 'bool'],
+  ['burnTimer', 'engine.pawn.burntimer', 'float'],
+  ['PrePivot', 'engine.actor.prepivot', 'vector'],
+  ['DesiredPrePivot', 'deusex.scriptedpawn.desiredprepivot', 'vector'],
+  ['PrePivotTime', 'deusex.scriptedpawn.prepivottime', 'float'],
+  ['CarcassCheckTimer', 'deusex.scriptedpawn.carcasschecktimer', 'float'],
+  ['PotentialEnemyTimer', 'deusex.scriptedpawn.potentialenemytimer', 'float'],
+  ['BeamCheckTimer', 'deusex.scriptedpawn.beamchecktimer', 'float'],
+  ['bAlliancesChanged', 'deusex.scriptedpawn.ballianceschanged', 'bool'],
+  ['ReloadTimer', 'deusex.scriptedpawn.reloadtimer', 'float'],
+  ['bCanBleed', 'deusex.scriptedpawn.bcanbleed', 'bool'],
+  ['BleedRate', 'deusex.scriptedpawn.bleedrate', 'float'],
+  ['DropCounter', 'deusex.scriptedpawn.dropcounter', 'float'],
+  ['ClotPeriod', 'deusex.scriptedpawn.clotperiod', 'float'],
+  ['AgitationDecayRate', 'deusex.scriptedpawn.agitationdecayrate', 'float'],
+  ['AgitationTimer', 'deusex.scriptedpawn.agitationtimer', 'float'],
+  ['AgitationCheckTimer', 'deusex.scriptedpawn.agitationchecktimer', 'float'],
+  ['PlayerAgitationTimer', 'deusex.scriptedpawn.playeragitationtimer', 'float'],
+  ['FearSustainTime', 'deusex.scriptedpawn.fearsustaintime', 'float'],
+  ['FearDecayRate', 'deusex.scriptedpawn.feardecayrate', 'float'],
+  ['FearTimer', 'deusex.scriptedpawn.feartimer', 'float'],
+  ['FearLevel', 'deusex.scriptedpawn.fearlevel', 'float'],
+  ['AlarmTimer', 'deusex.scriptedpawn.alarmtimer', 'float'],
+  ['WeaponTimer', 'deusex.scriptedpawn.weapontimer', 'float'],
+  ['FireTimer', 'deusex.scriptedpawn.firetimer', 'float'],
+  ['SpecialTimer', 'deusex.scriptedpawn.specialtimer', 'float'],
+  ['bDisappear', 'deusex.scriptedpawn.bdisappear', 'bool'],
+  ['bTickVisibleOnly', 'deusex.scriptedpawn.btickvisibleonly', 'bool'],
+  ['bClearedObstacle', 'deusex.scriptedpawn.bclearedobstacle', 'bool'],
+  ['TurnDirection', 'deusex.scriptedpawn.turndirection', 'byte'],
+  ['NextDirection', 'deusex.scriptedpawn.nextdirection', 'byte'],
+  ['ActorAvoiding', 'deusex.scriptedpawn.actoravoiding', 'pointer'],
+  ['AvoidWallTimer', 'deusex.scriptedpawn.avoidwalltimer', 'float'],
+  ['AvoidBumpTimer', 'deusex.scriptedpawn.avoidbumptimer', 'float'],
+  ['ObstacleTimer', 'deusex.scriptedpawn.obstacletimer', 'float'],
+  ['TakeHitTimer', 'deusex.scriptedpawn.takehittimer', 'float'],
+  ['BurnPeriod', 'deusex.scriptedpawn.burnperiod', 'float'],
+  ['FutzTimer', 'deusex.scriptedpawn.futztimer', 'float'],
+  ['DistressTimer', 'deusex.scriptedpawn.distresstimer', 'float'],
+  ['bHasCloak', 'deusex.scriptedpawn.bhascloak', 'bool'],
+  ['CloakThreshold', 'deusex.scriptedpawn.cloakthreshold', 'int'],
+  ['CloakEMPTimer', 'deusex.scriptedpawn.cloakemptimer', 'float'],
+  ['AlliancesEx', 'deusex.scriptedpawn.alliancesex', 'fixed'],
+  // a name: its id lives in its bytes, so Rust writes it (to None) through the host only
+  ['PotentialEnemyAlliance', 'deusex.scriptedpawn.potentialenemyalliance', 'name'],
+]);
+const SPB = 100;
+const SP_ALLIANCE_MEMBERS = ['deusex.scriptedpawn.allianceinfoex.alliancename', 'deusex.scriptedpawn.allianceinfoex.agitationlevel',
+  'deusex.scriptedpawn.allianceinfoex.bpermanent'];
+const SP_INDEX = Object.fromEntries(SP_FIELDS.map(([name], i) => [name, i]));
+// every SP field in the image (the name PotentialEnemyAlliance is written through the host and is not in the mask)
+const SP_FULL_LO = 0xffffffff, SP_FULL_HI = (2 ** (SP_FIELDS.length - 32 - 1) - 1) >>> 0;
+const SP_ALLIANCES = SP_INDEX.AlliancesEx, SP_POTENTIAL = SP_INDEX.PotentialEnemyAlliance;
 const F = Object.fromEntries(TICK_FIELDS.map(([name], i) => [name, i]));
 // js_tick_get/js_tick_set: the animation view's animFlags accessor.
 const A_FLAGS = 64;
@@ -106,14 +167,18 @@ const NAME_FIELDS = new Set([F.AnimSequence, F.BlendAnimSequence]);
 const BOOL_FIELDS = new Set(TICK_FIELDS.flatMap(([, , kind], i) => kind === 'bool' ? [i] : []));
 // The fields ACTOR_TICK_DIFFERENTIAL compares, besides TICK_FIELDS: the
 // replication planes replicateCompletion writes.
-const STRUCT_FIELDS = new Set(['SimAnim', 'SimBlendAnim']);
-const SNAPSHOT_FIELDS = [...TICK_FIELDS.map(([name]) => name), ...STRUCT_FIELDS];
+const STRUCT_FIELDS = new Set(['SimAnim', 'SimBlendAnim', 'AlliancesEx']);
+const SNAPSHOT_FIELDS = [...TICK_FIELDS.map(([name]) => name), ...SP_FIELDS.map(([name]) => name), ...STRUCT_FIELDS];
 // Class flags (tick.rs C_*).
-const C_PAWN = 1, C_PLAYERPAWN = 2, C_WEAPON = 4;
+const C_PAWN = 1, C_PLAYERPAWN = 2, C_WEAPON = 4, C_SCRIPTEDPAWN = 8;
 const HANDBACK = -1, DEFER = -2, HOST = 2;
 // tick.rs E_*: the event and whether it takes the delta.
 const EVENTS = [['Tick', true], ['Timer', false], ['Expired', false], ['UpdateEyeHeight', true],
-  ['PainTimer', false], ['SpeechTimer', false], ['UpdateTactics', true]];
+  ['PainTimer', false], ['SpeechTimer', false], ['UpdateTactics', true],
+  // AScriptedPawn::Tick's (sptick.rs E_*): the bool parameter, then no arguments; each looked up first, as FindFunctionChecked
+  // does, and an event the class does not declare is dropped
+  ['EnableCloak', false, [false]], ['EnableCloak', false, [true]], ['ExtinguishFire', false, []], ['SpurtBlood', false, []]];
+const SP_EVENT = 7;
 const PROBES = ['Tick', 'EnemyNotVisible'];
 const S_VIEWROTATION = 0;
 
@@ -153,6 +218,7 @@ function sameValue(name, a, b) {
 // A copy of a snapshot value, so the replay never shares an array or plane
 // with the snapshot it came from.
 function copyOf(name, value) {
+  if (name === 'AlliancesEx' && Array.isArray(value)) return value.map(item => ({...item}));
   if (!Array.isArray(value)) return STRUCT_FIELDS.has(name) && value && typeof value === 'object' ? {...value} : value;
   return name === 'SimBlendAnim' ? value.map(item => item && typeof item === 'object' ? {...item} : item) : value.slice();
 }
@@ -168,7 +234,7 @@ class TickContext {
   constructor() {
     this.receiver = null; this.instance = null; this.services = null; this.level = null;
     this.view = null; this.notify = null; this.log = null;
-    this.timeSeconds = 0; this.tickTag = 0; this.seconds = 0; this.tickType = 0;
+    this.timeSeconds = 0; this.tickTag = 0; this.seconds = 0; this.tickType = 0; this.flags = 0;
     // pawn-physics-kernel.mjs: the walk contexts' depth while they are pushed.
     this.pawnDepth = undefined;
     this.fallDepth = undefined;
@@ -187,6 +253,7 @@ export class ActorTickHost {
     this.x = null;
     // Per field: the registry cell the table describes, or null.
     this.expected = null;
+    this.spExpected = null;
     this.registryVersion = -1;
     // Advances whenever the table gains an entry.
     this.version = 0;
@@ -204,6 +271,8 @@ export class ActorTickHost {
     this.fieldsAt = x.tick_fields_ptr();
     this.stateAt = x.tick_state_ptr();
     this.f64At = x.tick_f64_ptr();
+    this.spAt = x.tick_sp_ptr();
+    this.spAllianceAt = x.tick_sp_alliance_ptr();
     this.vm.arena.view.setUint32(x.tick_empty_name_ptr(), nameCellWord(''), true);
     // The probe index of each js_tick_probing name, for tick.rs `probing`.
     const probes = x.tick_probe_names_ptr();
@@ -217,9 +286,9 @@ export class ActorTickHost {
     if (this.registryVersion === version) return;
     this.registryVersion = version;
     const expected = this.expected ??= TICK_FIELDS.map(() => null);
-    if (!expected.includes(null)) return;
+    let added = this.spTable();
+    if (!expected.includes(null)) { if (added) this.version++; return; }
     const view = this.vm.arena.view;
-    let added = false;
     TICK_FIELDS.forEach(([, key, kind, element], i) => {
       if (expected[i]) return;
       let cell = fieldImageCell(key);
@@ -233,6 +302,35 @@ export class ActorTickHost {
       view.setUint32(this.fieldsAt + 8 * i + 4, kind === 'fixed' ? cell.stride : cell.mask >>> 0, true);
     });
     if (added) this.version++;
+  }
+  /** The SP table (AScriptedPawn::Tick's fields), filled like TICK_FIELDS's; whether an entry was added. */
+  spTable() {
+    const expected = this.spExpected ??= SP_FIELDS.map(() => null);
+    if (!expected.includes(null)) return false;
+    const view = this.vm.arena.view;
+    let added = false;
+    SP_FIELDS.forEach(([, key, kind], i) => {
+      if (expected[i] || i === SP_POTENTIAL) return;
+      let cell = fieldImageCell(key);
+      if (cellKind(cell) !== kind) cell = null;
+      if (cell && i === SP_ALLIANCES) {
+        const members = cell.dim === 16 && cellKind(cell.element) === 'struct'
+          ? SP_ALLIANCE_MEMBERS.map(member => cell.element.members.find(item => item.key === member)) : [];
+        if (members.length !== 3 || cellKind(members[0]) !== 'name' || cellKind(members[1]) !== 'float' || cellKind(members[2]) !== 'bool') cell = null;
+        else {
+          view.setUint32(this.spAllianceAt, members[0].offset, true);
+          view.setUint32(this.spAllianceAt + 4, members[1].offset, true);
+          view.setUint32(this.spAllianceAt + 8, members[2].offset, true);
+          view.setUint32(this.spAllianceAt + 12, members[2].mask >>> 0, true);
+        }
+      }
+      if (!cell) return;
+      expected[i] = cell;
+      added = true;
+      view.setUint32(this.spAt + 8 * i, cell.offset, true);
+      view.setUint32(this.spAt + 8 * i + 4, kind === 'fixed' ? cell.stride : cell.mask >>> 0, true);
+    });
+    return added;
   }
   /** A class's field bits and flags. Field i is set when the spelling
    * resolves to the table's key and the handle `readNamed` uses for it (the
@@ -252,13 +350,28 @@ export class ActorTickHost {
       if (!sameCell(cell, expected[i])) return;
       if (i < 32) lo |= 1 << i; else hi |= 1 << (i - 32);
     });
+    let scripted = false;
     for (let c = cls; c; c = c.base) {
       const key = c.record?.key;
       if (key === 'engine.pawn') flags |= C_PAWN;
       else if (key === 'engine.playerpawn') flags |= C_PLAYERPAWN;
       else if (key === 'engine.weapon') flags |= C_WEAPON;
+      else if (key === 'deusex.scriptedpawn') scripted = true;
     }
-    info = {version: this.version, names: names.size, lo: lo >>> 0, hi: hi >>> 0, flags};
+    // A ScriptedPawn runs AScriptedPawn::Tick in Rust when its class gives the SP table's every field the table's cell.
+    let splo = 0, sphi = 0, spFull = scripted && Boolean(cells);
+    if (scripted && cells) SP_FIELDS.forEach(([name, key], i) => {
+      if (i === SP_POTENTIAL) return;
+      let field;
+      try { field = runtime.lookupMember(cls, 'fields', name); } catch { spFull = false; return; }
+      if (field?.key !== key) { spFull = false; return; }
+      const cached = names.get(name);
+      const cell = cached === undefined ? cells.get(key) : cached?.field === field ? cached.cell : null;
+      if (!this.spExpected?.[i] || !sameCell(cell, this.spExpected[i])) { spFull = false; return; }
+      if (i < 32) splo |= 1 << i; else sphi |= 1 << (i - 32);
+    });
+    info = {version: this.version, names: names.size, lo: lo >>> 0, hi: hi >>> 0, flags: flags | (spFull ? C_SCRIPTEDPAWN : 0), scripted,
+      splo: splo >>> 0, sphi: sphi >>> 0};
     this.classes.set(cls, info);
     return info;
   }
@@ -271,13 +384,20 @@ export class ActorTickHost {
     if (d !== undefined && d.version === this.version && d.bindings === instance.bindings.size &&
       d.names === names.size) return d;
     const info = this.classInfo(instance.cls, instance.cells, names);
-    let lo = info.lo, hi = info.hi;
-    if (instance.bindings.size) TICK_FIELDS.forEach(([, key], i) => {
-      if (!instance.bindings.has(key)) return;
-      if (i < 32) lo &= ~(1 << i); else hi &= ~(1 << (i - 32));
-    });
+    let lo = info.lo, hi = info.hi, flags = info.flags, splo = info.splo, sphi = info.sphi;
+    if (instance.bindings.size) {
+      TICK_FIELDS.forEach(([, key], i) => {
+        if (!instance.bindings.has(key)) return;
+        if (i < 32) lo &= ~(1 << i); else hi &= ~(1 << (i - 32));
+      });
+      // A bound SP field is read and written through the binding (js_tick_get / js_tick_set), not in the image.
+      SP_FIELDS.forEach(([, key], i) => {
+        if (!instance.bindings.has(key)) return;
+        if (i < 32) splo &= ~(1 << i); else sphi &= ~(1 << (i - 32));
+      });
+    }
     return instance.tickDesc = {version: this.version, bindings: instance.bindings.size, names: names.size,
-      lo: lo >>> 0, hi: hi >>> 0, flags: info.flags, handle: handleOf(receiver)};
+      lo: lo >>> 0, hi: hi >>> 0, flags, scripted: info.scripted, splo: splo >>> 0, sphi: sphi >>> 0, handle: handleOf(receiver)};
   }
   /** Whether every field access of the instance takes the JavaScript path:
    * no image here, a poisoned value, a released allocation. */
@@ -304,10 +424,14 @@ export class ActorTickHost {
     this.table();
     const d = this.describe(instance, receiver);
     if (d.flags & C_PLAYERPAWN) return this.handback('PlayerPawn');
+    // A ScriptedPawn whose fields are not all in its image runs AScriptedPawn::Tick in JavaScript (processActorTick).
+    if (d.scripted && (!(d.flags & C_SCRIPTEDPAWN) || d.splo !== SP_FULL_LO || d.sphi !== SP_FULL_HI)) return this.handback('scripted pawn fields');
+    this.vm.arena.view.setUint32(this.stateAt + 20, d.splo, true);
+    this.vm.arena.view.setUint32(this.stateAt + 24, d.sphi, true);
     const ctx = this.depth, c = this.contexts[ctx] ??= new TickContext();
     c.receiver = receiver; c.instance = instance; c.services = services; c.level = level;
     c.view = null; c.notify = null; c.log = DIFFERENTIAL ? [] : null;
-    c.timeSeconds = level.timeSeconds; c.tickTag = level.tickTag; c.seconds = seconds; c.tickType = tickType;
+    c.timeSeconds = level.timeSeconds; c.tickTag = level.tickTag; c.seconds = seconds; c.tickType = tickType; c.flags = d.flags;
     this.depth = ctx + 1;
     const before = DIFFERENTIAL ? this.snapshot(c) : null;
     // The shadow stack pointer to restore if an import throws through the
@@ -364,6 +488,8 @@ export class ActorTickHost {
       view.setUint32(at, instance.base, true);
       view.setUint32(at + 4, d.lo, true);
       view.setUint32(at + 8, d.hi, true);
+      view.setUint32(at + 20, d.splo, true);
+      view.setUint32(at + 24, d.sphi, true);
     }
     view.setUint32(at + 12, c.level.demoRecDriver !== null ? 1 : 0, true);
   }
@@ -384,7 +510,10 @@ export class ActorTickHost {
     if (field === A_FLAGS) value = this.view(c).animFlags;
     else if (ANIM_MAIN.has(field)) value = this.view(c)[ANIM_MAIN.get(field)];
     else if (ANIM_BLEND.has(field)) value = this.view(c).blends[element][ANIM_BLEND.get(field)];
+    else if (field >= SPB) value = c.services.read(c.receiver, SP_FIELDS[field - SPB][0]);
     else value = c.services.read(c.receiver, TICK_FIELDS[field][0]);
+    // an element of a vector (the SP table's, or Velocity read for the bleeding block)
+    if (element >= 0 && Array.isArray(value) && !ANIM_BLEND.has(field)) value = value[element];
     if (NAME_FIELDS.has(field)) return named(value) ? 1 : 0;
     if (typeof value === 'number') return value;
     if (typeof value === 'boolean') return value ? 1 : 0;
@@ -398,7 +527,13 @@ export class ActorTickHost {
     if (field === A_FLAGS) this.view(c).animFlags = value;
     else if (ANIM_MAIN.has(field)) this.view(c)[ANIM_MAIN.get(field)] = value;
     else if (ANIM_BLEND.has(field)) this.view(c).blends[element][ANIM_BLEND.get(field)] = value;
-    else c.services.write(c.receiver, TICK_FIELDS[field][0], BOOL_FIELDS.has(field) ? value !== 0 : value);
+    else if (field >= SPB) {
+      const index = field - SPB, [name, , kind] = SP_FIELDS[index], s = c.services;
+      if (index === SP_POTENTIAL) s.write(c.receiver, name, 'None');
+      else if (kind === 'pointer') s.write(c.receiver, name, null);
+      else if (element >= 0) { const whole = s.read(c.receiver, name).slice(); whole[element] = value; s.write(c.receiver, name, whole); }
+      else s.write(c.receiver, name, kind === 'bool' ? value !== 0 : value);
+    } else c.services.write(c.receiver, TICK_FIELDS[field][0], BOOL_FIELDS.has(field) ? value !== 0 : value);
   }
   f64(index, value) {
     this.vm.arena.view.setFloat64(this.f64At + 8 * index, value, true);
@@ -433,7 +568,13 @@ export class ActorTickHost {
         host.callback(c, 'destroy', [0], () => c.services.destroyActor(c.receiver, 0));
       },
       js_tick_event(i, which, delta) {
-        const c = context(i), [name, withDelta] = EVENTS[which], args = withDelta ? [delta] : [];
+        const c = context(i), [name, withDelta, fixed] = EVENTS[which], args = fixed ? fixed.slice() : withDelta ? [delta] : [];
+        if (which >= SP_EVENT) {
+          // FindFunctionChecked on the pawn, then ProcessEvent: a name the class does not declare gets the original's no-op
+          const record = host.runtime.lookup(c.receiver, name)?.function ?? null;
+          c.log?.push({kind: 'lookup', name, record});
+          if (!record) { host.refresh(c); return; }
+        }
         host.callback(c, name, args.slice(), () => c.services.processEvent(c.receiver, name, args));
       },
       // An event ran in Rust (dispatch.rs): the runaway count it left, then
@@ -500,6 +641,8 @@ export class ActorTickHost {
         host.refresh(c);
       },
       js_tick_error(i, code) {
+        if (code === 3) throw new Error('Original zone render timestamp is not provided');
+        if (code === 4) throw new Error(`Actor tick kernel: ${context(i).receiver?.name} left its image during AScriptedPawn::Tick`);
         if (code === 2) throw new Error(`Actor tick kernel: the state table's IsProbing differs from JavaScript for ${context(i).receiver?.name}`);
         throw new Error('Actor.Tick callback installed an unsupported DemoRecDriver');
       },
@@ -690,6 +833,20 @@ class Replay {
       allocateDeferredActor: () => { replay.deferred = true; return {}; },
       advanceAnimation: (a, delta) => { self(a); replay.animation(delta); },
     };
+    if (c.flags & C_SCRIPTEDPAWN) {
+      const pawn = {
+        read: services.read, write: services.write, level, processEvent: services.processEvent, destroyActor: services.destroyActor,
+        // the lookup Rust logged for the event
+        findFunction: (a, name) => {
+          self(a);
+          const entry = replay.next('lookup');
+          if (entry.name !== name) replay.fail(`FindFunctionChecked ${name} in JavaScript, ${entry.name} in Rust`);
+          return entry.record;
+        },
+        inStasis: a => actorInStasis(a, services),
+      };
+      if (!scriptedPawnTick(actor, c.seconds, c.tickType, pawn)) return 1;
+    }
     return tickStandaloneActor(actor, c.seconds, c.tickType, services);
   }
   /** processActorAnimation on the virtual fields (or the whole phase as a

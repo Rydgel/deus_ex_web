@@ -3982,16 +3982,17 @@ export class ScriptRuntime {
       entry=this.actorTickServices(options);
       if(shared)(this.levelTickActorServices??=new WeakMap()).set(options,entry);
     }
-    // DeusEx.dll's AScriptedPawn::Tick (0x100195a0) is the Tick virtual of every ScriptedPawn: its native timers and bookkeeping
-    // run first, then AActor::Tick (below), unless it destroyed the pawn.
-    if(this.isScriptedPawn(receiver)&&!scriptedPawnTick(receiver,seconds,entry.tickType,this.scriptedPawnTickServices(entry.services)))return 1;
     // R3-d: the Rust interpreter runs the body on the actor's image
-    // (actor-tick-kernel.mjs); undefined hands the tick to JavaScript.
+    // (actor-tick-kernel.mjs), AScriptedPawn::Tick included for a ScriptedPawn;
+    // undefined hands the tick to JavaScript.
     const kernel=this.scriptVm?.actorTick;
     if(kernel?.enabled){
       const result=kernel.run(receiver,seconds,entry);
       if(result!==undefined)return result;
     }
+    // DeusEx.dll's AScriptedPawn::Tick (0x100195a0) is the Tick virtual of every ScriptedPawn: its native timers and bookkeeping
+    // run first, then AActor::Tick (below), unless it destroyed the pawn.
+    if(this.isScriptedPawn(receiver)&&!scriptedPawnTick(receiver,seconds,entry.tickType,this.scriptedPawnTickServices(entry.services)))return 1;
     return tickStandaloneActor(receiver,seconds,entry.tickType,entry.services);
   }
   /** Whether the actor's class is DeusEx.ScriptedPawn or derives from it (cached by class). */
