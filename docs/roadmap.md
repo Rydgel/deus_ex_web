@@ -411,8 +411,9 @@ Open: the LOD morph's world-space rounding, a matched capture of the security ca
 views (root frames with their own mirror and sky frames, decals, coronas, fog,
 LOD and lighting since 2026-10-11, [viewport window](script-window-viewport.md)), the
 host's depth range and float32 GPU transform under the frame projection, the
-darkest-pixel rounding visual acceptance found, and acceptance of live
-(unfrozen) scenes.
+darkest-pixel rounding visual acceptance found, and in live scenes (compared
+tick by tick with the original since 2026-10-13, [visual acceptance](visual-acceptance.md#live-scenes-2026-10-13))
+two Island NPCs, the Club's sitting guests and the dancers' animation.
 SpriteAnimOnce frames and animated mesh skins
 are recovered or checked but unreachable: no shipped class, map actor or
 script uses DT_SpriteAnimOnce or gives an actor an animated texture

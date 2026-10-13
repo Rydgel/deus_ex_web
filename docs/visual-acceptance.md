@@ -570,8 +570,8 @@ its PID; Play runs headless Chromium in worker mode.
   (item 2 above).
 - The frozen captures stand at the map's frame-0 pose; live behaviour is
   compared per tick in [Live scenes](#live-scenes-2026-10-13), where the
-  dancers' animation, the first path choices (3 and 4 there) and frames
-  with pawns in view are still open.
+  dancers' animation, the Sitting guests' steering (4 there), Island's
+  Terrorist18 and UNATCOTroop6 and frames with pawns in view are still open.
 - Captures come from one Wine/D3D host. D3D behaviour that depends on the
   driver is not separated from the original's own.
 
