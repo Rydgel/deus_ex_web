@@ -75,6 +75,7 @@ import { execAiPickRandomDestination, execAiDirectionReachable, execFindPathTowa
 import { actorLightLevelExtended, execAIGetLightLevel, execAIVisibility } from './script-ai-visibility.mjs';
 import { execMakeNoise } from './script-noise.mjs';
 import { execPawnAlliance } from './script-pawn-alliance.mjs';
+import { execPawnCarcass } from './script-pawn-carcass.mjs';
 import {
   execLineOfSightTo, execCanSee, execPlayerCanSeeMe,
   execPickTarget, execPickAnyTarget, execAICanSee, showPawnSelf, checkPawnEnemyVisible,
@@ -3887,6 +3888,8 @@ export class ScriptRuntime {
       return this.bindConversationEvents(call.receiver);
     }
     if(call.index>=2105&&call.index<=2107)return execPawnAlliance(call,this.allianceServices());
+    if(call.index===2108||call.index===2109)
+      return execPawnCarcass(call,{read:(actor,name)=>this.readNamed(actor,name),write:(actor,name,value)=>this.writeNamed(actor,name,value)});
     if(call.index===113){
       if(call.argumentCount>2)throw new Error('GotoState accepts at most two name arguments');
       // Core.dll execGotoState 0x1013dd00: before either Stack.Step the state
