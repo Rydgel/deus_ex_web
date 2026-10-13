@@ -782,6 +782,8 @@ edge (the `rng` field of its record, `inTick` 0), and Play seeds its stream with
 at each call. Play logs the same through `AiEventHost.trace` (`--event-trace`), and `scripts/live-events-compare.mjs` compares the
 two per tick: the same sequence, sender or receiver, event, type, value and radius (float32), the callback, state, best sender, score,
 visibility, volume and smell, and the **stream state at every call**, so a draw one side makes between two calls shows at once.
+The measured state covers key edges only: a console line (`Tantalus`, `ParseRightClick`) runs on the stream state Play has when it types it, so a draw
+made by the command itself (the event's `rng` at tick 140 of the `Tantalus` capture) differs while the events and states they lead to are equal.
 After a typed command Play lets three frames pass before the next tick, as the original's frames do (a view change stamps the
 `LastRenderTime` of what it now shows).
 
@@ -791,6 +793,7 @@ After a typed command Play lets three frames pass before the next tick, as the o
 | --- | ---: | ---: | --- | --- |
 | Pistol: pickup, draw, 3 shots (the first and third hit the same NPC and killed him, the second a glass pane) | 600 | 1,069 of 1,069 | 46 of 46 NPCs equal, but the dead one's settling (below) | equal |
 | Pistol, then assault shotgun: 6 shots | 860 | 1,586 of 1,586 | 46 of 46 equal (one `LastRenderTime` one tick apart on one NPC for 2 ticks) | equal |
+| `Tantalus` aimed at a standing NPC (`Female7`: killed with its 4,000-unit momentum, the others flee) | 400 | 648 of 648 (the stream state at the command's own calls differs: below) | 46 of 46 equal, the dying body's z included | equal |
 
 In those ticks: `WeaponFire` and `LoudNoise` from the player (value 1.0, radius 800), `Projectile` from the `Tracer`, `Futz` when the bullet
 hits an owned decoration, the glass's and fragments' `LoudNoise`, then in the next tick `HandleShot` for the 9 to 12 NPCs that hear it
@@ -810,7 +813,8 @@ function `AICanHear` and the score callbacks are exercised with the shots at 300
 * **A killed pawn settling into the floor, one tick late.** In the first capture the NPC the shots killed (`LowerClassMale1`, state
   Dying, Physics walking after his fall) stands 3.72 units below the floor at tick 336 in both programs, velocity and horizontal position equal;
   the original lifts him by 2.10 at tick 337 and 1.62 at 338 (to the floor at -336.2), Play at 338 and 339. One tick, three ticks of z. Not traced
-  to a body: a capture with `MoveActor` breakpoints on that pawn is needed (the victim differs per capture).
+  to a body: a capture with `MoveActor` breakpoints on that pawn is needed (the victim differs per capture: a second shot capture hit nobody, a `Tantalus`
+  kill of a standing NPC settles equal, so the case is a pawn killed while running, near a floor step at (-1176, -1419)).
 * **Footsteps and every held-key behaviour** (walking noise, `PlayFootStep`'s `LoudNoise`, automatic fire) are not compared: the harness cannot hold a
   key. Play does send the player's footstep `LoudNoise` when it runs (15 sends in 280 ticks, volume 0.35, radius 76 to 519 with the speed), from the
   original `PlayFootStep` bytecode; its inputs (`Velocity`, `FloorMaterial`) are unverified against a walking original.
