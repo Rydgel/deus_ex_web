@@ -234,8 +234,9 @@ async function original() {
   const generators = flag('no-generators') ? [] : wine('list', 'PawnGenerator').split('\n').map(line => /^\S+ (\S+) slot=/.exec(line)?.[1]).filter(Boolean);
   const watchOption = option('watch', 'auto');
   let names;
+  const classOf = {};   // each watched pawn's class (the sweep groups divergences by it)
   if (watchOption === 'auto') {
-    names = wine('list', 'ScriptedPawn').split('\n').map(line => /^\S+ (\S+) slot=/.exec(line)?.[1]).filter(Boolean);
+    names = wine('list', 'ScriptedPawn').split('\n').map(line => { const m = /^(\S+) (\S+) slot=/.exec(line); if (m) classOf[m[2]] = m[1]; return m?.[2]; }).filter(Boolean);
   } else names = watchOption.split(',');
   // --extra-watch A,B: more actors (a seat, a door) watched with the same fields, e.g. one a pawn walks to.
   const extras = option('extra-watch', null)?.split(',') ?? [];
@@ -245,22 +246,26 @@ async function original() {
   // of its replay (commands<tag>.json). A command is the console line as typed (an exec function of the player, `set ...`).
   const cmds = option('cmds', '').split('|').filter(Boolean).map(entry => { const i = entry.indexOf(':'); return {after: Number(entry.slice(0, i)), text: entry.slice(i + 1)}; });
   writeFileSync(path.join(dir, `commands${suffix}.json`), JSON.stringify(cmds));
+  // Actors whose Timer runs from the load (SetTimer in PostBeginPlay, e.g. Tree: 4 + 2 * FRand()): Play's load draws another rate, so the
+  // original's TimerRate/TimerCounter are read here and written into Play (docs/rng.md). The list comes from Play's population step.
+  const reference0 = path.join(dir, 'play-population.json');
+  const timers = (existsSync(reference0) && !flag('no-timers') ? JSON.parse(readFileSync(reference0, 'utf8')).timers ?? [] : []).filter(name => !names.includes(name) && !generators.includes(name));
+  const buildConfig = (names, generators, timers) => {
   const config = [`out ${tracePath}`, 'player JCDentonMale', `release ${option('release', 3)}`, `ticks ${option('ticks', 600)}`,
     ...(cmds.length ? [`pause-at ${[...new Set(cmds.map(c => c.after))].sort((a, b) => a - b).join(' ')}`] : []),
-    ...(option('delta', null) ? [`delta ${option('delta')}`] : []), ...(option('monitor', null) ? [`monitor ${option('monitor')}`] : []), ...(option('actor-trace', null) ? [`actor-trace ${option('actor-trace').replace(':', ' ')}`] : []),
+    ...(option('delta', null) ? [`delta ${option('delta')}`] : []), ...(option('max-seconds', null) ? [`max-seconds ${option('max-seconds')}`] : []), ...(option('monitor', null) ? [`monitor ${option('monitor')}`] : []), ...(option('actor-trace', null) ? [`actor-trace ${option('actor-trace').replace(':', ' ')}`] : []),
     // --extra-config <file>: more trace.cfg lines (tools/dx-live-win.c `call` breakpoints, call-ticks, call-pawn).
     ...(option('extra-config', null) ? readFileSync(option('extra-config'), 'utf8').split('\n').filter(line => line.trim()) : []),
     ...(generators.length ? [`watch ${generators.join(',')} ${GENERATOR_FIELDS.map(spec).join(' ')}`] : []),
     `watch @player ${PLAYER_FIELDS.map(spec).join(' ')}`,
     `watch ${names.join(',')} ${FIELDS.map(spec).join(' ')}`];
-  // Actors whose Timer runs from the load (SetTimer in PostBeginPlay, e.g. Tree: 4 + 2 * FRand()): Play's load draws another rate, so the
-  // original's TimerRate/TimerCounter are read here and written into Play (docs/rng.md). The list comes from Play's population step.
-  const reference0 = path.join(dir, 'play-population.json');
-  const timers = (existsSync(reference0) && !flag('no-timers') ? JSON.parse(readFileSync(reference0, 'utf8')).timers ?? [] : []).filter(name => !names.includes(name) && !generators.includes(name));
   if (timers.length) config.push(`watch ${timers.join(',')} TRate:0x48:f TCount:0x4c:f`);
+  return config;
+  };
+  let config = buildConfig(names, generators, timers.slice());
   const configPath = path.join(dir, 'trace.cfg');
   writeFileSync(configPath, config.join('\n') + '\n');
-  writeFileSync(watchPath, JSON.stringify({map, pawns: names.filter(name => !extras.includes(name)), extras, generators, timers}, null, 1));
+  writeFileSync(watchPath, JSON.stringify({map, pawns: names.filter(name => !extras.includes(name)), extras, generators, timers, classes: classOf}, null, 1));
   // The actors the original's level holds (a load removes some at random: OddsOfAppearing).
   const everything = wine('list', 'Actor').split('\n').map(line => /^\S+ (\S+) slot=\d+ .* odds=(\S+)/.exec(line)).filter(Boolean).map(m => ({name: m[1], odds: Number(m[2])}));
   writeFileSync(path.join(dir, 'population.json'), JSON.stringify(everything));
@@ -273,8 +278,20 @@ async function original() {
     const played = new Set(JSON.parse(readFileSync(reference, 'utf8')).names);
     const spawned = /^(Skill|Aug|NanoKey|ColorTheme|Shadow|ParticleProxy|Laser|Flare|Cigarettes|Candybar|Weapon|Mission|GameReplicationInfo|PlayerReplicationInfo|JCDenton|Mutator|DeusExGameInfo|PickupDistributor|AutoTurretGun|BarkManager|ParticleGenerator|DataVault|Credits|Ammo|BioelectricCell|Medkit|Binoculars|Lockpick|Multitool|LAM|Liquor|Soda|Sodacan|Fruit|Vice)/;
     const only = everything.filter(e => !played.has(e.name) && !spawned.test(e.name)).map(e => e.name);
-    if (only.length) { console.log(`POPULATION: the original holds ${only.length} actors Play's seed ${option('seed', 1)} load lacks: ${only.slice(0, 20).join(' ')}`); process.exitCode = 3; return; }
-    console.log('population: the original holds nothing Play lacks');
+    // --allow-missing generators|all: go on when the actors only the original holds are all generators (a sweep: FlyGenerators and
+    // the like are chosen by chance at each load and Play's seeded load cannot be made to hold the original's set); they leave the watch
+    // list and the map's record (`notInPlay`). Any other actor missing in Play still asks for a reload (exit code 3).
+    const tolerated = {generators: /Generator\d+$/, all: /./}[option('allow-missing', '')];
+    if (only.length && tolerated && only.every(name => tolerated.test(name))) {
+      const gone = new Set(only);
+      console.log(`POPULATION tolerated: ${only.length} actors only the original holds are not watched: ${only.slice(0, 20).join(' ')}`);
+      names = names.filter(name => !gone.has(name));
+      const keptGenerators = generators.filter(name => !gone.has(name)), keptTimers = timers.filter(name => !gone.has(name));
+      config = buildConfig(names, keptGenerators, keptTimers);
+      writeFileSync(configPath, config.join('\n') + '\n');
+      writeFileSync(watchPath, JSON.stringify({map, pawns: names.filter(name => !extras.includes(name)), extras, generators: keptGenerators, timers: keptTimers, classes: classOf, notInPlay: only}, null, 1));
+    } else if (only.length) { console.log(`POPULATION: the original holds ${only.length} actors Play's seed ${option('seed', 1)} load lacks: ${only.slice(0, 20).join(' ')}`); process.exitCode = 3; return; }
+    else console.log('population: the original holds nothing Play lacks');
   }
   rmSync(`${tracePath}.resume`, {force: true});
   rmSync(`${tracePath}.go`, {force: true});
@@ -507,9 +524,10 @@ async function play() {
     const generatorWrites = Object.fromEntries(generators.filter(name => frozen[frozen.length - 1].actors[name])
       .map(name => [name, Object.fromEntries(GENERATOR_FIELDS.map(([label, prop]) => [prop, frozen[frozen.length - 1].actors[name][label]]))]));
     const lastFrozen = frozen[frozen.length - 1].actors;
-    const pawnWrites = Object.fromEntries(pawns.filter(name => lastFrozen[name] && PAWN_LOAD_FIELDS.every(label => lastFrozen[name][label] !== undefined))
+    // --no-pawn-load / --no-timer-load: diagnostics, a replay without the pawns' (SightCounter, TimerRate, TimerCounter) or the timed actors' load-time inputs.
+    const pawnWrites = flag('no-pawn-load') ? {} : Object.fromEntries(pawns.filter(name => lastFrozen[name] && PAWN_LOAD_FIELDS.every(label => lastFrozen[name][label] !== undefined))
       .map(name => [name, Object.fromEntries(PAWN_LOAD_FIELDS.map(label => [FIELDS.find(f => f[0] === label)[1], lastFrozen[name][label]]))]));
-    const timerWrites = Object.fromEntries(timers.filter(name => lastFrozen[name]?.TRate !== undefined).map(name => [name, {TimerRate: lastFrozen[name].TRate, TimerCounter: lastFrozen[name].TCount}]));
+    const timerWrites = flag('no-timer-load') ? {} : Object.fromEntries(timers.filter(name => lastFrozen[name]?.TRate !== undefined).map(name => [name, {TimerRate: lastFrozen[name].TRate, TimerCounter: lastFrozen[name].TCount}]));
     const request = {write: {...timerWrites, ...pawnWrites, '@player': {AnimSequence: pose.Anim, AnimFrame: pose.Frame, AnimRate: pose.Rate, TweenRate: pose.Tween, ...(option('player-alliance', null) ? {Alliance: option('player-alliance')} : {})}, ...generatorWrites},
       ...(touchWindow ? {touchTrace: {first: touchWindow[0], last: touchWindow[1]}} : {}),
       ...(navPawns ? {navTrace: {pawns: navPawns.split(','), first: navFirst, last: navLast}} : {}),
