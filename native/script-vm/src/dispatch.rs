@@ -88,8 +88,9 @@ pub extern "C" fn vm_serial_ptr() -> *mut u32 {
     addr_of_mut!(SERIAL)
 }
 
-/// SCORES = [table, slot count (a power of two)] of the AI event manager's score-callback cache (call_score).
-static mut SCORES: [u32; 2] = [0; 2];
+/// SCORES = [table, slot count (a power of two), enabled] of the AI event manager's score-callback cache (call_score). The host sets
+/// `enabled` per manager tick, when processEvent, executeScript, eventLevelGate and lookup are the runtime's own (EventHost.allowed).
+static mut SCORES: [u32; 3] = [0; 3];
 #[no_mangle]
 pub extern "C" fn vm_scores_ptr() -> *mut u32 {
     addr_of_mut!(SCORES) as *mut u32
@@ -109,7 +110,7 @@ extern "C" {
 
 /// processEvent's gate (see the header) for a caller outside the actor tick: 1 pass, 0 no call, -1 JavaScript.
 pub(crate) fn event_gate(handle: u32) -> i32 {
-    if events()[3] & TICK_EVENTS_BIT == 0 {
+    if unsafe { (*addr_of!(SCORES))[2] } == 0 {
         return -1;
     }
     unsafe { js_event_gate(handle) }
@@ -123,7 +124,7 @@ pub(crate) fn event_gate(handle: u32) -> i32 {
 pub(crate) fn call_score(receiver: u32, name: u32, other: u32, value: u32) -> Option<u32> {
     let e = events();
     let t = unsafe { *addr_of!(SCORES) };
-    if e[3] & TICK_EVENTS_BIT == 0 || t[0] == 0 {
+    if t[2] == 0 || t[0] == 0 {
         return None;
     }
     match image_deleted(receiver) {

@@ -102,7 +102,10 @@ export class AiEventHost {
   /** UEventManager::Tick. */
   tick() {
     // AICanSee runs in Rust once the perception natives' field table is built (script-vm-perception.mjs ready(705)); until then, here.
-    this.vm.arena.view.setUint32(this.x.ai_direct_ptr(), this.vm.perception.ready(705) ? 1 : 0, true);
+    const view = this.vm.arena.view;
+    view.setUint32(this.x.ai_direct_ptr(), this.vm.perception.ready(705) ? 1 : 0, true);
+    // the score callbacks run in Rust (dispatch.rs call_score) while processEvent and its parts are the runtime's own
+    view.setUint32(this.x.vm_scores_ptr() + 8, this.vm.events.allowed({runtimeEvents: true}) & 1, true);
     return this.guarded(() => this.x.ai_tick());
   }
 
