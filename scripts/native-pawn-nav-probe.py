@@ -654,6 +654,8 @@ class NavProbe:
                 self.stub_ret[addr + len(builder) - 3] = op
         # Per-scene controlled-world options (reset in run()).
         self.water_plane = None
+        self.far_adjust = {}
+        self.far_results = []
         self.move_nearly_zero = False
         self.coverage_ranges = []
         self.covered = set()
@@ -774,6 +776,16 @@ class NavProbe:
         for lo, hi in self.coverage_ranges:
             if lo <= address < hi:
                 self.covered.add(address)
+        if address in self.stub_ret and self.stub_ret[address] == 'farMoveActor' and self.far_adjust:
+            # Scene 'farMoveAdjust' {call index: [dx, dy, dz]}: a test FarMoveActor that succeeds leaves the actor where the
+            # engine's placement put it (the destination moved by the adjustment), as the real one does near geometry.
+            index = self.read(MAIL_FM + 4, 'I')[0] - 1
+            if index in self.far_adjust and self.far_results[index]:
+                esp = cpu.reg_read(UC_X86_REG_ESP)
+                actor = self.read(esp + 4, 'I')[0]
+                for axis, delta in enumerate(self.far_adjust[index]):
+                    here = self.read(actor + 0x114 + 4 * axis, 'f')[0]
+                    self.write(actor + 0x114 + 4 * axis, 'f', here + delta)
         if address in self.stub_ret and self.water_plane:
             # SetActorZone stand-in: after the committed move, Region.Zone
             # (+0xc8) follows the scene's water plane (FootRegion/HeadRegion
@@ -1058,6 +1070,8 @@ class NavProbe:
         mv_mem = self.alloc(48 * len(mv))
         self.write(MAIL_MV + 8, 'I', mv_mem)
         fm = pad(scene.get('farMove', []), 1)
+        self.far_results = fm
+        self.far_adjust = {int(k): v for k, v in scene.get('farMoveAdjust', {}).items()}
         fm_mem = self.alloc(4 * len(fm))
         for i, v in enumerate(fm):
             self.write(fm_mem + i * 4, 'I', v)

@@ -972,10 +972,15 @@ function pointWorkerBody(pawn, point, arg14, services) {
   }
   // Test FarMoveActor to the point (0x103c0e8c), restore on success (0x103c0ecf).
   const origLoc = loc.map(f32);
-  if (services.farMoveActor(pawn, point, 1, 0))
+  // 0x103c0ecb-0x103c0f06: a successful test move replaces the destination with the pawn's Location where the engine's placement
+  // left it (edi = pawn+0x114, read into [ebp+8], [ebp+0xc], ebx before the restore); a failed one keeps the point.
+  let dest = point;
+  if (services.farMoveActor(pawn, point, 1, 0)) {
+    dest = [...services.location(pawn)];
     services.farMoveActor(pawn, origLoc, 1, 1);
+  }
   // Physics dispatch (0x103c0f22): radius 15.0, target 0.
-  return physicsReach(pawn, point, 15.0, 0, services);
+  return physicsReach(pawn, dest, 15.0, 0, services);
 }
 
 /**
@@ -1048,18 +1053,26 @@ export function actorWorker(pawn, target, argC, services) {
       // fcom dword[ebp+0xc]: widened vs the f32-stored R; keep the larger.
       if (geU(widened, Rf)) R = widened;                    // R = max(R, widened)
     }
-    if (services.farMoveActor(pawn, tloc.map(f32), 1, 0))   // fit test
+    // 0x103c09ae-0x103c0a0b: the destination handed to physicsReach is the pawn's Location after a successful test move
+    // (edi = pawn+0x114 read before the restore), else the target's.
+    let dest = tloc.map(f32);
+    if (services.farMoveActor(pawn, tloc.map(f32), 1, 0)) {   // fit test
+      dest = [...services.location(pawn)];
       services.farMoveActor(pawn, origLoc, 1, 1);
-    return physicsReach(pawn, tloc.map(f32), st(R), target, services);
+    }
+    return physicsReach(pawn, dest, st(R), target, services);
   }
   let R = 15.0;                                             // 0x103c0a26
   if (services.isA(target, 'Inventory') || services.isA(target, 'Trigger'))
     R = st(sub(x87add(ld(rd(services, target, 'CollisionRadius')), ld(pCR)), ld(2.0)));
-  if (services.farMoveActor(pawn, tloc.map(f32), 1, 0))
+  let dest = tloc.map(f32);                                 // 0x103c0ae3-0x103c0b20: as above, the post-test-move Location
+  if (services.farMoveActor(pawn, tloc.map(f32), 1, 0)) {
+    dest = [...services.location(pawn)];
     services.farMoveActor(pawn, origLoc, 1, 1);
+  }
   const f1dc = rd(services, target, 'Flags1dc') >>> 0;      // target+0x1dc
   const arg4 = (f1dc & 4) || services.isA(target, 'WarpZoneMarker') ? target : 0;
-  return physicsReach(pawn, tloc.map(f32), R, arg4, services);
+  return physicsReach(pawn, dest, R, arg4, services);
 }
 
 /**
@@ -1651,8 +1664,11 @@ function navScoutE(list, pawn, foundPtr, services) {
   for (let i = 0; i < passing.count; i++) {                 // last passing wins
     const cand = passing.items[i];
     const cloc = services.location(cand);
-    if (!services.fastLineCheck(model, cloc, eye)) continue;
-    if (!pointWorker(pawn, cloc, 1, services)) continue;
+    // 0x103db2c0-0x103db2f7: the line check's byte is stored ([ebp-0x18]) and pointWorker(cand, 1) is called whatever it
+    // says (its test moves are effects: Touch/Bump of what the walk meets); only then are both tested.
+    const clear = services.fastLineCheck(model, cloc, eye);
+    const reachable = pointWorker(pawn, cloc, 1, services);
+    if (!clear || !reachable) continue;
     foundPtr.node = cand;                                   // *[ebp+0x10]
     return;                                                 // 0x103db302 -> epilogue 0x103db304
   }
@@ -1839,7 +1855,7 @@ export function pathTowardWorker(pawn, target, bSinglePath, found, bClearPaths, 
   if (!state.seeded) {
     for (let i = 0; i < listT.count; i++) {
       const item = listT.items[i], iloc = services.location(item);
-      if (!services.fastLineCheck(model, iloc, targetLoc)) continue;
+      if (!services.fastLineCheck(model, targetLoc, iloc)) continue;   // 0x103db78f: (target, item), as the live trace shows
       if (!services.farMoveActor(pawn, iloc.map(f32), 1, 0)) continue;
       if (!actorWorker(pawn, target, 1, services)) continue;
       state.seeded = 1;                                     // [ebp-0x14] = 1
@@ -1902,12 +1918,13 @@ export function pathTowardWorker(pawn, target, bSinglePath, found, bClearPaths, 
     if ((state.anchor && listP.items[0] === tail) || near) {
       const eye = [pl[0], pl[1], st(x87add(ld(pl[2]), ld(rd(services, pawn, 'BaseEyeHeight'))))];
       const hloc = services.location(hop2);
-      if (services.fastLineCheck(model, hloc, eye) &&
-          pointWorker(pawn, hloc, 1, services)) {
-        found.node = hop2;
-        services.farMoveActor(pawn, origLoc, 1, 1);         // 0x103dbb56
-        return 1;
-      }
+      // 0x103dbb1c-0x103dbb4c: ebx = the line check's byte, pointWorker(hop2, 1) runs whatever it says, then both are tested;
+      // 0x103dbb56 restores the pawn (FarMoveActor(origLoc, 1, 1)) on every path and returns 1.
+      const clear = services.fastLineCheck(model, hloc, eye);
+      const reachable = pointWorker(pawn, hloc, 1, services);
+      if (clear && reachable) found.node = hop2;
+      services.farMoveActor(pawn, origLoc, 1, 1);           // 0x103dbb56
+      return 1;
     }
     return 1;                                               // 0x103dbba3
   }
@@ -1964,7 +1981,7 @@ export function pathToWorker(pawn, point, bSinglePath, found, bClearPaths, servi
   if (!state.seeded) {
     for (let i = 0; i < listT.count; i++) {
       const item = listT.items[i], iloc = services.location(item);
-      if (!services.fastLineCheck(model, iloc, point)) continue;
+      if (!services.fastLineCheck(model, point, iloc)) continue;       // 0x103dc42a: (point, item)
       if (!services.farMoveActor(pawn, iloc.map(f32), 1, 0)) continue;
       if (!pointWorker(pawn, point, 1, services)) continue;
       state.seeded = 1;                                     // [ebp-0x18] = 1

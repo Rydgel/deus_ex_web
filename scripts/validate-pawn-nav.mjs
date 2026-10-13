@@ -46,7 +46,7 @@ const vecBits = v => v.map(bitsHex);
  * fstp m32 loc.  Mirror that in 80-bit so partial-hit z landings round
  * identically. */
 const commitMove = (loc, delta, time) => {
-  const t = x87load(time);
+  const t = x87load(f32(time));   // the stub's `fld [time]` is a float32 (0.9 is stored 0.89999998)
   for (let i = 0; i < 3; i++)
     loc[i] = x87store(x87add(x87load(loc[i]), x87mul(t, x87load(delta[i]))));
 };
@@ -134,7 +134,7 @@ function dp(name, mv, { point = [100, 0, 0], radius = 15, target = 0,
  * boundary results alongside the MoveActor sequence. */
 function pw(name, mv, { point = [100, 0, 0], arg14 = 0, physics = 1,
                         zones = null, gIsEditor = 0, pawn = {},
-                        pointRegion = ['dry'], fastLine = [1], farMove = [1, 1] } = {}) {
+                        pointRegion = ['dry'], fastLine = [1], farMove = [1, 1], farMoveAdjust = null } = {}) {
   const z = { dry: { gravityZ: -950 }, ...(zones || {}) };
   const pr = pointRegion.map(r => (typeof r === 'string' ? { zone: r } : r));
   const s = {
@@ -147,6 +147,7 @@ function pw(name, mv, { point = [100, 0, 0], arg14 = 0, physics = 1,
           pawn: { ...BASE_PAWN, physics, ...pawn }, actors: {},
           pointRegion: pr, fastLine },
   };
+  if (farMoveAdjust) s.farMoveAdjust = farMoveAdjust;
   return s;
 }
 
@@ -184,7 +185,7 @@ function dr(name, { source = 'src', target = 'tgt', navPoints = null,
  * singleLine/farMove/moveActor are the scripted boundary sequences. */
 function aw(name, mv, { target = 'tgt', argC = 0, actors = null, navPoints = null,
                         zones = null, gIsEditor = 0, pawn = {},
-                        singleLine = null, farMove = [1, 1] } = {}) {
+                        singleLine = null, farMove = [1, 1], farMoveAdjust = null } = {}) {
   const z = { dry: { gravityZ: -950 }, ...(zones || {}) };
   const s = {
     name, body: 'actorWorker', this: 'self', gIsEditor,
@@ -198,6 +199,7 @@ function aw(name, mv, { target = 'tgt', argC = 0, actors = null, navPoints = nul
   };
   if (actors) s.actors = actors;
   if (navPoints) s.navPoints = navPoints;
+  if (farMoveAdjust) s.farMoveAdjust = farMoveAdjust;
   return s;
 }
 
@@ -236,7 +238,7 @@ function fp(name, { target = 'tgt', bSingle = 0, bClear = 1, navList = null,
                     navPoints = null, actors = null, zones = null, gIsEditor = 0,
                     pawn = {}, singleLine = null, farMove = [1], fastLine = [1],
                     moveActor = [], reachSpecs = [], specialCost = null,
-                    probing = null, specialHandling = null,
+                    probing = null, specialHandling = null, farMoveAdjust = null,
                     pointRegion = ['dry'] } = {}) {
   const z = { dry: { gravityZ: -950 }, ...(zones || {}) };
   const pr = pointRegion.map(r => (typeof r === 'string' ? { zone: r } : r));
@@ -257,6 +259,7 @@ function fp(name, { target = 'tgt', bSingle = 0, bClear = 1, navList = null,
   if (navList) s.navList = navList;
   if (specialCost) s.specialCost = specialCost;
   if (probing) s.probing = probing;
+  if (farMoveAdjust) s.farMoveAdjust = farMoveAdjust;   // {call index: [dx, dy, dz]}: the placement a successful FarMoveActor leaves the actor at
   return s;
 }
 
@@ -620,6 +623,8 @@ const scenes = [
   pw('pw-arg14-skip', flatWalk(20), { arg14: 1, fastLine: [0],
                                      pawn: { collisionRadius: 20 } }),
   // farMove test fails -> no restore, dispatch still runs into walkReach.
+  // the walk aims at the Location a successful test move left (0x103c0ecb-0x103c0f06), not at the point
+  pw('pw-farmove-adjusted', flatWalk(20), { pawn: { collisionRadius: 20 }, farMoveAdjust: { 0: [12, -9, 0] } }),
   pw('pw-farmove-fail', flatWalk(20), { farMove: [0, 0],
                                       pawn: { collisionRadius: 20 } }),
   // Blocked walk: forward probe always blocked -> walkReach returns 0.
@@ -723,6 +728,13 @@ const scenes = [
     pawn: { meleeRange: 40, physics: 1 },
     singleLine: [{ ret: 1, hit: { actor: 0, time: 1 } }],
   }),
+  // The same, the test move leaving the pawn off the target (0x103c09b2-0x103c0a0b): the walk aims at that Location.
+  aw('aw-pawn-reach-adjusted', flatWalk(40), {
+    actors: { tgt: { cls: 'pawn', location: [120, 0, 0], collisionRadius: 22, collisionHeight: 40 } },
+    pawn: { meleeRange: 40, physics: 1 },
+    singleLine: [{ ret: 1, hit: { actor: 0, time: 1 } }],
+    farMoveAdjust: { 0: [12, -9, 0] },
+  }),
   // Pawn target beyond 800 -> widen R to dist-800 before walking.
   aw('aw-pawn-far', flatWalk(50), {
     actors: { tgt: { cls: 'pawn', location: [900, 0, 0], collisionRadius: 22, collisionHeight: 40 } },
@@ -739,6 +751,13 @@ const scenes = [
     actors: { tgt: { cls: 'actor', location: [100, 0, 0] } },
     pawn: { physics: 1 },
     singleLine: [{ ret: 1, hit: { actor: 0, time: 1 } }],
+  }),
+  // A non-pawn target, the test move leaving the pawn off it (0x103c0ae3-0x103c0b20).
+  aw('aw-actor-adjusted', flatWalk(40), {
+    actors: { tgt: { cls: 'actor', location: [100, 0, 0] } },
+    pawn: { physics: 1 },
+    singleLine: [{ ret: 1, hit: { actor: 0, time: 1 } }],
+    farMoveAdjust: { 0: [12, -9, 0] },
   }),
   // Inventory target -> R = tCR + pCR - 2.
   aw('aw-inventory', flatWalk(40), {
@@ -1142,6 +1161,63 @@ const scenes = [
     fastLine: [1, 1, 1, 1, 1, 1, 1, 1],
     singleLine: [{ ret: 1, hit: { actor: 0, time: 1 } }],
     farMove: [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
+    moveActor: flatWalk(60),
+  }),
+  // scoutE runs pointWorker whatever the line check says (0x103db2c0-0x103db2f7: the byte is stored, pointWorker(cand, 1) is
+  // called, then both are tested): the first candidate's line check fails, the walk is still made (the Underworld's
+  // TriadRedArrow1 at tick 18, 2026-10-13: the original ran pointWorker after a failed line check; the translation skipped it).
+  fx('fpt-scoute-flc-fails', {
+    navList: 'navA',
+    navPoints: {
+      navA: { location: [100, 0, 0], nextNav: 'navB' },
+      navB: { location: [120, 20, 0], nextNav: 'navC' },
+      navC: { location: [130, -30, 0], nextNav: 'tgt' },
+      tgt: { location: [400, 0, 0], upstreamPaths: [0, 1, 2] },
+    },
+    reachSpecs: [{ start: 'navA', end: 'tgt', distance: 150, radius: 30, height: 50, flags: 0 },
+                 { start: 'navB', end: 'tgt', distance: 60, radius: 30, height: 50, flags: 0 },
+                 { start: 'navC', end: 'tgt', distance: 70, radius: 30, height: 50, flags: 0 }],
+    fastLine: [1, 0, 1, 1, 1, 1, 1, 1],
+    singleLine: [{ ret: 1, hit: { actor: 0, time: 1 } }],
+    farMove: [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
+    moveActor: flatWalk(60),
+  }),
+  // A successful test FarMoveActor leaves the pawn where the engine's placement put it, and the walk aims there, not at the
+  // point (pointWorker 0x103c0ecb-0x103c0f06: the Location is read into the destination before the restore). The Underworld's Female5
+  // at tick 560, 2026-10-13: the original's walk to PathNode149 started at the adjusted x (-682.5), Play's at the raw one.
+  fx('fpt-test-move-adjusted', {
+    navList: 'navA',
+    navPoints: {
+      navA: { location: [100, 0, 0], nextNav: 'navB' },
+      navB: { location: [120, 20, 0], nextNav: 'navC' },
+      navC: { location: [130, -30, 0], nextNav: 'tgt' },
+      tgt: { location: [400, 0, 0], upstreamPaths: [0, 1, 2] },
+    },
+    reachSpecs: [{ start: 'navA', end: 'tgt', distance: 150, radius: 30, height: 50, flags: 0 },
+                 { start: 'navB', end: 'tgt', distance: 60, radius: 30, height: 50, flags: 0 },
+                 { start: 'navC', end: 'tgt', distance: 70, radius: 30, height: 50, flags: 0 }],
+    fastLine: [1, 1, 1, 1, 1, 1, 1, 1],
+    singleLine: [{ ret: 1, hit: { actor: 0, time: 1 } }],
+    farMove: [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
+    farMoveAdjust: { 0: [12, -9, 0] },
+    moveActor: flatWalk(60),
+  }),
+  // The second hop (0x103dbb1c-0x103dbb56) is the same: pointWorker(hop2, 1) runs after a failed line check, and the pawn is
+  // restored (FarMoveActor(origLoc, 1, 1)) on every path.
+  fx('fpt-pass2-hop2-flc0', {
+    navList: 'navA',
+    navPoints: {
+      navA: { location: [10, 0, 0], paths: [0], upstreamPaths: [2], nextNav: 'navX' },
+      navX: { location: [50, 0, 0], upstreamPaths: [0, 1], nextNav: 'navB' },
+      navB: { location: [290, 0, 0], paths: [1] },
+    },
+    actors: { tgt: { cls: 'actor', location: [290, 0, 200] } },
+    reachSpecs: [{ start: 'navA', end: 'navX', distance: 40, radius: 30, height: 50, flags: 0 },
+                 { start: 'navB', end: 'navX', distance: 240, radius: 30, height: 50, flags: 0 },
+                 { start: 'navX', end: 'navA', distance: 40, radius: 30, height: 50, flags: 0 }],
+    fastLine: [1, 0, 0, 0, 0, 1, 0],
+    singleLine: [{ ret: 1, hit: { actor: 0, time: 1 } }],
+    farMove: [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
     moveActor: flatWalk(60),
   }),
   // Exec tail on the fpt-bfs1 graph: bShootSpecial clears, SpecialPause
@@ -1820,7 +1896,7 @@ function runJs(scene, mod = module) {
       moves++;
       const h = scripted[Math.min(idx, scripted.length - 1)].hit; idx++;
       commitMove(a.location, delta, h.time);
-      return { time: h.time, normal: h.normal, actor: h.actor === 'tgt' ? TGT : h.actor, item: h.item };
+      return { time: f32(h.time), normal: h.normal, actor: h.actor === 'tgt' ? TGT : h.actor, item: h.item };
     },
     farMoveActor: (a, dest, test, noCheck) => { farMoves++; a.location = dest.map(f32); return 1; },
   };
@@ -1861,6 +1937,7 @@ function runJsWalk(scene, mod = module) {
   const scripted = scene.moveActor;
   const farSeq = j.farMove || null, prSeq = j.pointRegion || null, flSeq = j.fastLine || null;
   let idx = 0, moves = 0, farMoves = 0, fi = 0, pri = 0, fli = 0;
+  const moveArgs = [], farArgs = [];
   const services = {
     location: a => a.location, velocity: a => a.velocity,
     read: (a, n) => a[n],
@@ -1878,14 +1955,21 @@ function runJsWalk(scene, mod = module) {
     fastLineCheck: (model, end, start) => (flSeq || [1])[Math.min(fli++, (flSeq || [1]).length - 1)],
     moveActor: (a, delta, rot, flags) => {
       moves++;
+      moveArgs.push([...delta].map(f32));
       const h = scripted[Math.min(idx, scripted.length - 1)].hit; idx++;
       commitMove(a.location, delta, h.time);
-      return { time: h.time, normal: h.normal, actor: h.actor === j.target ? tgt : h.actor, item: h.item };
+      return { time: f32(h.time), normal: h.normal, actor: h.actor === j.target ? tgt : h.actor, item: h.item };
     },
     farMoveActor: (a, dest, test, noCheck) => {
-      farMoves++;
+      farArgs.push([[...dest].map(f32), test ? 1 : 0, noCheck ? 1 : 0]);
+      const call = farMoves++;
       const r = farSeq ? farSeq[Math.min(fi++, farSeq.length - 1)] : 1;
-      if (r) a.location = dest.map(f32);
+      if (r) {
+        a.location = dest.map(f32);
+        // scene.farMoveAdjust: the engine's placement leaves the actor off the destination (the oracle's stub does the same)
+        const adjust = scene.farMoveAdjust?.[call];
+        if (adjust) a.location = a.location.map((v, i) => f32(v + adjust[i]));
+      }
       return r;
     },
     waterReach: () => { throw new Error('waterReach is outside this corpus'); },
@@ -1896,7 +1980,7 @@ function runJsWalk(scene, mod = module) {
     ? mod.pointWorker(pawn, j.point.map(f32), j.arg14, services)
     : mod.walkReach(pawn, j.point.map(f32), j.radius, j.arg18, tgt, services);
   return { ret, moves, farMoves, locationBits: vecBits(pawn.location),
-           velocityBits: vecBits(pawn.velocity) };
+           velocityBits: vecBits(pawn.velocity), moveArgs, farArgs };
 }
 
 /* Nav-graph twin: reachMask/directReach/actorWorker.  Builds named actors and
@@ -1991,6 +2075,8 @@ function runJsGraph(scene, mod = module, throughRuntime = false) {
   const slSeq = j.singleLine || null, farSeq = j.farMove || null;
   const flSeq = j.fastLine || null, prSeq = j.pointRegion || null;
   let idx = 0, moves = 0, farMoves = 0, sli = 0, fi = 0, fli = 0;
+  const flArgs = [];   // each FastLineCheck call's (end, start): the original's argument order is part of the contract
+  const moveArgs = [], farArgs = [];   // MoveActor deltas and FarMoveActor (dest, test, noCheck) per call: what a walk aims at is part of the contract
   let sci = 0, shi = 0, pri = 0, pqi = 0;
   const scCalls = [], shCalls = [];
   const services = {
@@ -2033,14 +2119,20 @@ function runJsGraph(scene, mod = module, throughRuntime = false) {
     },
     moveActor: (a, delta, rot, flags) => {
       moves++;
+      moveArgs.push([...delta].map(f32));
       const h = scripted[Math.min(idx, scripted.length - 1)].hit; idx++;
       commitMove(a.location, delta, h.time);
-      return { time: h.time, normal: h.normal, actor: ref(h.actor ?? 0), item: h.item };
+      return { time: f32(h.time), normal: h.normal, actor: ref(h.actor ?? 0), item: h.item };
     },
     farMoveActor: (a, dest, test, noCheck) => {
-      farMoves++;
+      farArgs.push([[...dest].map(f32), test ? 1 : 0, noCheck ? 1 : 0]);
+      const call = farMoves++;
       const r = farSeq ? farSeq[Math.min(fi++, farSeq.length - 1)] : 1;
-      if (r) a.location = dest.map(f32);
+      if (r) {
+        a.location = dest.map(f32);
+        const adjust = scene.farMoveAdjust?.[call];
+        if (adjust) a.location = a.location.map((v, i) => f32(v + adjust[i]));
+      }
       return r;
     },
     waterReach: () => { throw new Error('waterReach is outside this corpus'); },
@@ -2053,6 +2145,7 @@ function runJsGraph(scene, mod = module, throughRuntime = false) {
     },
     fastLineCheck: (model, end, start) => {
       const arr = flSeq || [1];
+      flArgs.push([[...end].map(f32), [...start].map(f32)]);
       return arr[Math.min(fli++, arr.length - 1)] | 0;
     },
     navListHead: () => ref(j.navList),                        // LevelInfo+0x548
@@ -2154,7 +2247,7 @@ function runJsGraph(scene, mod = module, throughRuntime = false) {
     // findPathToward's result slot is an actor pointer: null -> '0' like the
     // probe's zeroed resultOut; live actors resolve to their scene name
     // (the `ret` key below).
-    moves, farMoves, slc: sli, fli,
+    moves, farMoves, slc: sli, fli, flArgs, moveArgs, farArgs,
     locationBits: vecBits(pawn.location),
     // The 517 bodies also emit the found slot, per-node search state, and the
     // pawn's special-nav fields; other bodies leave them undefined so the
@@ -2267,7 +2360,7 @@ function runJsPick(scene, mod = module) {
       moves++;
       const h = scripted[Math.min(idx, scripted.length - 1)].hit; idx++;
       commitMove(a.location, delta, h.time);
-      return { time: h.time, normal: h.normal, actor: 0, item: h.item };
+      return { time: f32(h.time), normal: h.normal, actor: 0, item: h.item };
     },
     farMoveActor: (a, dest, test, noCheck) => {
       farMoves++; a.location = dest.map(f32); return 1;
@@ -2348,6 +2441,9 @@ function normalizeProbe(r, isExec, body) {
     farMoves: r.counts.farMoveActor,
     slc: r.counts.singleLineCheck,
     fli: r.counts.fastLineCheck,
+    flArgs: (r.commands || []).filter(c => c.op === 'fastLineCheck').map(c => [c.end.map(f32), c.start.map(f32)]),
+    moveArgs: (r.commands || []).filter(c => c.op === 'moveActor').map(c => c.delta.map(f32)),
+    farArgs: (r.commands || []).filter(c => c.op === 'farMoveActor').map(c => [c.dest.map(f32), c.test ? 1 : 0, c.noCheck ? 1 : 0]),
     frand: r.counts.frand,
     outBits: r.vecbuf.slice(0, 3),
     locationBits: r.pawn.locationBits,
@@ -2357,6 +2453,7 @@ function normalizeProbe(r, isExec, body) {
 
 function compare(name, o, j) {
   const d = [];
+  if (process.env.DEBUG_SCENE && name.startsWith(process.env.DEBUG_SCENE)) console.error(name, 'oracle moves', JSON.stringify(o.moveArgs?.slice(0, 6)), 'far', JSON.stringify(o.farArgs?.slice(0, 8)), 'js moves', JSON.stringify(j.moveArgs?.slice(0, 6)));
   if (o.ret !== j.ret) d.push(`${name}: ret ${o.ret} != ${j.ret}`);
   if (o.moves !== j.moves) d.push(`${name}: moveActor calls ${o.moves} != ${j.moves}`);
   if (o.farMoves !== j.farMoves) d.push(`${name}: farMoveActor calls ${o.farMoves} != ${j.farMoves}`);
@@ -2372,6 +2469,16 @@ function compare(name, o, j) {
     d.push(`${name}: found ${o.found} != ${j.found}`);
   if (j.fli !== undefined && o.fli !== j.fli)
     d.push(`${name}: fastLineCheck calls ${o.fli} != ${j.fli}`);
+  if (j.moveArgs && JSON.stringify(o.moveArgs) !== JSON.stringify(j.moveArgs)) {
+    const at = j.moveArgs.findIndex((v, i) => JSON.stringify(v) !== JSON.stringify(o.moveArgs[i]));
+    d.push(`${name}: MoveActor delta #${at} ${JSON.stringify(o.moveArgs[at])} != ${JSON.stringify(j.moveArgs[at])}`);
+  }
+  if (j.farArgs && JSON.stringify(o.farArgs) !== JSON.stringify(j.farArgs)) {
+    const at = j.farArgs.findIndex((v, i) => JSON.stringify(v) !== JSON.stringify(o.farArgs[i]));
+    d.push(`${name}: FarMoveActor (dest, test, noCheck) #${at} ${JSON.stringify(o.farArgs[at])} != ${JSON.stringify(j.farArgs[at])}`);
+  }
+  if (j.flArgs && j.flArgs.length && JSON.stringify(o.flArgs) !== JSON.stringify(j.flArgs))
+    d.push(`${name}: fastLineCheck (end, start) ${JSON.stringify(o.flArgs)} != ${JSON.stringify(j.flArgs)}`);
   if (j.scCalls !== undefined && o.scCalls !== j.scCalls)
     d.push(`${name}: specialCost calls ${o.scCalls} != ${j.scCalls}`);
   if (j.specialGoal !== undefined && o.specialGoal !== j.specialGoal)
@@ -2709,6 +2816,34 @@ MUTATIONS.push(
 
 MUTATIONS.push(
   // -- scoutE (0x103db0e0) -------------------------------------------------
+  // The destination of the walk is the point, not the Location the test move left (pointWorker / actorWorker, both branches).
+  { name: 'pw-dest-raw',
+    pattern: "return physicsReach(pawn, dest, 15.0, 0, services);",
+    replacement: "return physicsReach(pawn, point, 15.0, 0, services);",
+    expect: ['pw-farmove-adjusted', 'fpt-test-move-adjusted'] },
+  { name: 'aw-pawn-dest-raw',
+    pattern: "return physicsReach(pawn, dest, st(R), target, services);",
+    replacement: "return physicsReach(pawn, tloc.map(f32), st(R), target, services);",
+    expect: ['aw-pawn-reach-adjusted'] },
+  { name: 'aw-actor-dest-raw',
+    pattern: "return physicsReach(pawn, dest, R, arg4, services);",
+    replacement: "return physicsReach(pawn, tloc.map(f32), R, arg4, services);",
+    expect: ['aw-actor-adjusted'] },
+  // scoutE short-circuits on the line check (pointWorker not run after a failed line check).
+  { name: 'scoute-flc-short-circuit',
+    pattern: "    const clear = services.fastLineCheck(model, cloc, eye);\n    const reachable = pointWorker(pawn, cloc, 1, services);\n    if (!clear || !reachable) continue;",
+    replacement: "    if (!services.fastLineCheck(model, cloc, eye)) continue;\n    if (!pointWorker(pawn, cloc, 1, services)) continue;",
+    expect: ['fpt-scoute-flc-fails'] },
+  // The second hop short-circuits and restores the pawn only on success.
+  { name: 'hop2-flc-short-circuit',
+    pattern: "      const clear = services.fastLineCheck(model, hloc, eye);\n      const reachable = pointWorker(pawn, hloc, 1, services);\n      if (clear && reachable) found.node = hop2;\n      services.farMoveActor(pawn, origLoc, 1, 1);           // 0x103dbb56\n      return 1;",
+    replacement: "      if (services.fastLineCheck(model, hloc, eye) &&\n          pointWorker(pawn, hloc, 1, services)) {\n        found.node = hop2;\n        services.farMoveActor(pawn, origLoc, 1, 1);         // 0x103dbb56\n        return 1;\n      }\n      return 1;",
+    expect: ['fpt-pass2-hop2-flc0'] },
+  // The listA/listT scans pass the item first and the target second (the original: target, item).
+  { name: 'scan-flc-order',
+    pattern: "      if (!services.fastLineCheck(model, targetLoc, iloc)) continue;   // 0x103db78f: (target, item), as the live trace shows",
+    replacement: "      if (!services.fastLineCheck(model, iloc, targetLoc)) continue;",
+    expect: ['fpt-pass2'] },
   // The last passing candidate wins (the loop not exiting at the first success).
   { name: 'scoute-last-passing',
     pattern: "    return;                                                 // 0x103db302 -> epilogue 0x103db304\n",
