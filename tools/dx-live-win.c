@@ -416,6 +416,11 @@ static void report_crash(const DEBUG_EVENT *ev, const char *crash_path, int tick
 
 static double read_double(uintptr_t a) { double v = 0; read_mem(a, &v, 8); return v; }
 static float read_float(uintptr_t a) { float v = 0; read_mem(a, &v, 4); return v; }
+/* Render.dll's Strobe state (0x10b49ea8 the flag, 0x10b49ea4 the TimeSeconds it last saw; docs/visual-acceptance.md "Strobe"):
+   set by SetupForSurf's Strobe type function once per drawn frame at a new time, so it is a host input like the rand state. */
+static int strobe_ok = 0;
+static unsigned strobe_flag(void) { return strobe_ok ? read_u32(0x10b49ea8) : 0; }
+static float strobe_time(void) { return strobe_ok ? read_float(0x10b49ea4) : 0; }
 
 
 /* watch-write: DR0 on the call-pawn's field (4 bytes, write), armed for the traced ticks. A hit is an EXCEPTION_SINGLE_STEP
@@ -615,6 +620,7 @@ static int do_trace(const char *config) {
   core_base = module_base("Core.dll"); engine_base = module_base("Engine.dll");
   if (!process || !core_base || !engine_base) { fprintf(stderr, "cannot read DeusEx.exe\n"); return 1; }
   if (engine_base != 0x10300000u) { fprintf(stderr, "Engine.dll is at 0x%lx, not its preferred base\n", (unsigned long)engine_base); return 1; }
+  strobe_ok = module_base("Render.dll") == 0x10b00000u;
   names_table = read_u32(core_base + OFF_NAMES_DATA);
   if (!resolve_actors()) return 1;
   fprintf(stderr, "level 0x%lx info 0x%lx player 0x%lx, %d watched\n", (unsigned long)level_ptr, (unsigned long)level_info, (unsigned long)player_ptr, watched_count);
@@ -637,7 +643,7 @@ static int do_trace(const char *config) {
   int tick = 0, unfrozen = 0, released = 0, paused = 0, done = 0;
   int pending_rearm = -1; DWORD pending_tid = 0;
   unsigned rng_in = 0; int in_our_tick = 0; uintptr_t rng_ptd = 0;
-  double clock_in = 0; float ts_in = 0, delta_in = 0; int tick_type = 0, players_only_in = 0;
+  double clock_in = 0; float ts_in = 0, delta_in = 0; int tick_type = 0, players_only_in = 0; unsigned strobe_flag_in = 0; float strobe_time_in = 0;
   long long t_in = 0;
   unsigned char block[0x1000];
   int detaching = 0, resume_requested = 0;
@@ -686,10 +692,11 @@ static int do_trace(const char *config) {
             unsigned char b; read_mem(level_info + 0x4f0, &b, 1); b &= ~4; write_mem(level_info + 0x4f0, &b, 1); released = 1;
           }
           if (released && unfrozen >= run_ticks && !paused) paused = 1;
-          if (paused) { skip_function = 1; if (paused == 1) { paused = 2; fprintf(stderr, "paused after %d unfrozen ticks (tick %d); remove %s to resume\n", unfrozen, tick, resume_path); } }
+          if (paused) { skip_function = 1; { char sp[660]; snprintf(sp, sizeof(sp), "%s.strobe", out_path); FILE *sf = fopen(sp, "w"); if (sf) { fprintf(sf, "%u %.9g\n", strobe_flag(), strobe_time()); fclose(sf); } } if (paused == 1) { paused = 2; fprintf(stderr, "paused after %d unfrozen ticks (tick %d); remove %s to resume\n", unfrozen, tick, resume_path); } }
           else {
             unsigned char b; read_mem(level_info + 0x4f0, &b, 1); players_only_in = (b & 4) ? 1 : 0;
             clock_in = read_double(level_ptr + 0xdc); ts_in = read_float(level_info + 0x478);
+            strobe_flag_in = strobe_flag(); strobe_time_in = strobe_time();
             rng_in = rng_ptd ? read_u32(rng_ptd + 0x14) : 0; t_in = qpc_us();
             in_our_tick = 1;
             if (released) unfrozen++;
@@ -707,9 +714,10 @@ static int do_trace(const char *config) {
           int record = pre_watch < 0 || released || tick > release_at - pre_watch;
           if (record) {
             fprintf(out, "{\"n\":%d,\"unfrozen\":%d,\"viewport\":[%u,%u],\"tickType\":%d,\"delta\":%.9g,\"playersOnly\":%d,\"clockIn\":%.17g,\"tsIn\":%.9g,\"rngIn\":\"0x%08x\","
-              "\"clockOut\":%.17g,\"tsOut\":%.9g,\"rngOut\":\"0x%08x\",\"inTick\":%u,\"usIn\":%lld,\"usOut\":%lld,\"actors\":{",
+              "\"clockOut\":%.17g,\"tsOut\":%.9g,\"rngOut\":\"0x%08x\",\"inTick\":%u,\"usIn\":%lld,\"usOut\":%lld,\"strobeIn\":[%u,%.9g],\"strobeOut\":[%u,%.9g],\"actors\":{",
               tick, released ? unfrozen : 0, vp_x, vp_y, tick_type, delta_in, players_only_in, clock_in, ts_in, rng_in,
-              read_double(level_ptr + 0xdc), read_float(level_info + 0x478), rng_ptd ? read_u32(rng_ptd + 0x14) : 0, read_u32(level_ptr + 0x108), t_in, qpc_us());
+              read_double(level_ptr + 0xdc), read_float(level_info + 0x478), rng_ptd ? read_u32(rng_ptd + 0x14) : 0, read_u32(level_ptr + 0x108), t_in, qpc_us(),
+              strobe_flag_in, strobe_time_in, strobe_flag(), strobe_time());
             for (int i = 0; i < watched_count; i++) {
               size_t got = 0;
               read_block(watched[i].address, block, sizeof(block), &got);

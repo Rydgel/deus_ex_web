@@ -33,9 +33,12 @@ const verb = process.argv[2];
 const map = option('map', '10_Paris_Club');
 const dir = path.join(root, '.work/live-acceptance', map);
 mkdirSync(dir, {recursive: true});
-const tracePath = path.join(dir, 'original-trace.jsonl');
+// --tag name keeps a run's files apart (original-trace-<name>.jsonl, play-rows-<name>.json): a short capture of another tick must not
+// overwrite the trace a frame was taken from.
+const tag = option('tag', null), suffix = tag ? `-${tag}` : '';
+const tracePath = path.join(dir, `original-trace${suffix}.jsonl`);
 const watchPath = path.join(dir, 'watch.json');
-const playPath = path.join(dir, 'play-rows.json');
+const playPath = path.join(dir, `play-rows${suffix}.json`);
 
 
 // The fields watched on every actor: label (the trace's key), Unreal property
@@ -215,6 +218,7 @@ async function original() {
     console.log('population: the original holds nothing Play lacks');
   }
   rmSync(`${tracePath}.resume`, {force: true});
+  rmSync(`${tracePath}.strobe`, {force: true});
   const child = spawn(game.WINE, [tool, 'trace', configPath], {env: process.env, stdio: ['ignore', 'pipe', 'pipe']});
   console.log('tracer pid', child.pid, `${names.length} pawns watched`);
   let log = '';
@@ -237,6 +241,14 @@ async function original() {
       }
     }
     console.log(taken ? `frame: ${taken}` : 'NO FRAME of the original');
+    // Render.dll's Strobe flag and the TimeSeconds it last saw, as the held frames left them (the tracer writes them at every held Tick):
+    // a host input of the frame, like the rand state (docs/visual-acceptance.md "Strobe").
+    const strobePath = `${tracePath}.strobe`;
+    if (existsSync(strobePath)) {
+      const [flag, time] = readFileSync(strobePath, 'utf8').trim().split(/\s+/).map(Number);
+      writeFileSync(path.join(dir, `hold${suffix}.json`), JSON.stringify({strobe: {flag, time}}));
+      console.log(`strobe at the hold: flag ${flag}, time ${time}`);
+    }
   }
   if (!flag('hold')) {
     writeFileSync(`${tracePath}.resume`, '');
@@ -449,6 +461,14 @@ async function play() {
       await page.evaluate(() => window.dispatchEvent(new Event('resize')));
       await page.evaluate(() => { const el = document.getElementById('brightness'); el.value = '0.4'; el.dispatchEvent(new Event('input')); });
       await frames(30);
+      // The original's Strobe state at its held frame (hold<tag>.json, the original run's), unless --own-strobe: the flag flips with every
+      // drawn frame at a new time, so which phase a held frame shows depends on the host's frame timing, in either program.
+      const holdFile = path.join(dir, `hold${suffix}.json`);
+      if (!flag('own-strobe') && existsSync(holdFile)) {
+        const {strobe} = JSON.parse(readFileSync(holdFile, 'utf8'));
+        console.log('strobe set to the original\'s:', JSON.stringify(await page.evaluate(s => window.deusExViewer.liveProbe({strobe: s}), strobe)));
+        await frames(30);
+      }
       const file = path.join(acceptanceDir(), `${option('shot')}-play.png`);
       await page.screenshot({path: file, clip: {x: 0, y: 0, width: 1280, height: 720}});
       console.log(`frame: ${file}`);
@@ -490,6 +510,15 @@ function compare() {
   });
   report.rng = {firstTickWithDifferentDrawCount: firstRng, ticksWithDraws: tickDraws.length, tickDraws: tickDraws.slice(0, 40)};
   report.clock = {firstDifference: firstClock};
+  // Render.dll's Strobe state (one flip per drawn frame at a new time: a host input of the frames, not of the ticks): the ticks at
+  // which the flag differs and how often each side flipped it.
+  if (rows[0]?.strobeOut && played.rows[0]?.strobeOut) {
+    const flips = list => list.reduce((n, r, i) => n + (i && r.strobeOut[0] !== list[i - 1].strobeOut[0] ? 1 : 0), 0);
+    const differing = rows.filter((r, i) => played.rows[i] && r.strobeOut[0] !== played.rows[i].strobeOut[0]).length;
+    report.strobe = {originalFlips: flips(rows), playFlips: flips(played.rows), ticksWithDifferentFlag: differing,
+      originalLastChange: rows.findLast((r, i) => i && r.strobeOut[0] !== rows[i - 1].strobeOut[0])?.n ?? null,
+      playLastChange: played.rows.findLast((r, i) => i && r.strobeOut[0] !== played.rows[i - 1].strobeOut[0])?.n ?? null};
+  }
   const names = Object.keys(rows[0]?.actors ?? {});
   for (const name of names) {
     const entry = report.actors[name] = {firstDifference: null, fields: {}};
@@ -512,6 +541,7 @@ function compare() {
   }
   writeFileSync(path.join(dir, 'report.json'), JSON.stringify(report, null, 1));
   console.log(`${map}: ${rows.length} ticks; clock ${firstClock ? `differs from tick ${firstClock.tick}` : 'equal'}; stream draws per tick ${firstRng ? `differ at tick ${firstRng.tick} (original ${firstRng.original}, Play ${firstRng.play})` : 'equal'}`);
+  if (report.strobe) console.log(`Strobe flag: original flipped ${report.strobe.originalFlips} times (last at tick ${report.strobe.originalLastChange}), Play ${report.strobe.playFlips} (last at tick ${report.strobe.playLastChange}); differs at ${report.strobe.ticksWithDifferentFlag} of ${rows.length} ticks`);
   for (const [name, entry] of Object.entries(report.actors)) {
     const fields = Object.entries(entry.fields).sort((a, b) => a[1].tick - b[1].tick).slice(0, 4)
       .map(([label, f]) => `${label}@${f.tick}: ${fmt(f.original)} vs ${fmt(f.play)}`).join(' | ');

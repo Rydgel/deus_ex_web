@@ -1,3 +1,4 @@
+import { lightGlobals } from '../runtime/light-globals.mjs';
 import { scriptGetStateName } from '../runtime/script-state-queries.mjs';
 import { createNavTrace } from '../runtime/nav-trace.mjs';
 
@@ -68,6 +69,22 @@ export function liveProbe(game, args = {}) {
       out.actors.push({ name: actor.name, cls: instance.cls.record?.key ?? null, location: [...runtime.readNamed(actor, 'Location')], state: scriptGetStateName(node) });
     }
   }
+  // lights: the level's actors with a LightType other than None (a light's live state: scripts change it, Light.uc and subclasses).
+  if (args.lights) {
+    const names = ['LightType', 'LightEffect', 'LightBrightness', 'LightHue', 'LightSaturation', 'LightRadius', 'bStatic', 'bNoDelete', 'bDynamicLight', 'bIsOn'];
+    out.lights = [];
+    for (const actor of level.actors) {
+      if (!actor) continue;
+      const instance = runtime.instance(actor);
+      if (!instance) continue;
+      const type = runtime.readNamed(actor, 'LightType') & 255;
+      if (args.lights.type != null && type !== args.lights.type) continue;
+      const row = { name: actor.name, cls: instance.cls.record?.key ?? null, state: scriptGetStateName(instance.state ? (instance.state.stateNode ?? instance.cls) : null) };
+      for (const n of names) { try { row[n] = plain(runtime.readNamed(actor, n)); } catch { /* not a property of this class */ } }
+      row.mapLightType = actor.values?.LightType ?? null;
+      out.lights.push(row);
+    }
+  }
   // write: {actorName: {Property: value}}, plain host writes (the player's animation state at the trace's start).
   if (args.write) for (const [name, fields] of Object.entries(args.write)) {
     const actor = byName(name);
@@ -94,6 +111,8 @@ export function liveProbe(game, args = {}) {
   // only Play holds is destroyed here (Actor.Destroy, as the script's own would); one only the original holds cannot be
   // created and is reported (the load must be repeated). Actors the game spawns at load (player, inventory, shadows,
   // managers) are numbered by spawn order and are not compared by name.
+  // strobe: {flag, time}: Render.dll's Strobe state as the original's held frame left it (a host input, light-globals.mjs).
+  if (args.strobe) { const strobe = lightGlobals(runtime).strobe; strobe.flag = args.strobe.flag & 1; strobe.time = Math.fround(args.strobe.time); out.strobe = { ...strobe }; }
   if (args.population) {
     const spawned = /^(Skill|Aug|NanoKey|ColorTheme|Shadow|ParticleProxy|Laser|Flare|Cigarettes|Candybar|Weapon|Mission|GameReplicationInfo|PlayerReplicationInfo|JCDenton|Mutator|DeusExGameInfo|PickupDistributor|AutoTurretGun|BarkManager|ParticleGenerator|DataVault|Credits|Ammo|BioelectricCell|Medkit|Binoculars|Lockpick|Multitool|LAM|Liquor|Soda|Sodacan|Fruit|Vice)/;
     const have = new Set(args.population.map(entry => entry.name)), extra = [];
@@ -171,13 +190,16 @@ export function liveProbe(game, args = {}) {
         if (runtime.navTrace) runtime.navTrace.tick = this.index + 1;
         if (runtime.scriptTrace) runtime.scriptTrace.tick = this.index + 1;
         game.random.seed(parseInt(tick.rngIn, 16) >>> 0);
-        this.current = { n: this.index + 1, delta: tick.delta, rngIn: hex(game.random.state), clockIn: level.timeSeconds, tsIn: runtime.readNamed(info, 'TimeSeconds') };
+        const strobe = lightGlobals(runtime).strobe;
+        this.current = { n: this.index + 1, delta: tick.delta, rngIn: hex(game.random.state), clockIn: level.timeSeconds, tsIn: runtime.readNamed(info, 'TimeSeconds'),
+          strobeIn: [strobe.flag, strobe.time] };
         return Math.fround(tick.delta);
       },
       after() {
         if (!this.current) return;
         const row = this.current; this.current = null;
         row.rngOut = hex(game.random.state); row.clockOut = level.timeSeconds; row.tsOut = runtime.readNamed(info, 'TimeSeconds');
+        row.strobeOut = [lightGlobals(runtime).strobe.flag, lightGlobals(runtime).strobe.time];
         row.actors = this.snapshot();
         if (this.draws) { row.draws = {}; for (const name of this.draws) row.draws[name] = (row.draws[name] ?? 0) + 1; this.draws.length = 0; }
         this.rows.push(row); this.index++;
