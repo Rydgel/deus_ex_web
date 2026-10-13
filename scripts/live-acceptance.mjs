@@ -15,6 +15,10 @@
 //   --shot name (original and play): a frame of each side at the last replayed tick, the level held there (the original's
 //   Tick is skipped by the tracer; Play's replay holds), into .work/acceptance/<map>/<name>-original.png / -play.png for
 //   `node scripts/visual-acceptance.mjs compare --maps <map> --view <name>:0,0,0:0,0,0`.
+//   --cmds "N:console line|N:@down Enter|N:@up Enter" (original): console lines and key edges typed after N unfrozen ticks with the level held (Play runs
+//   them at the same point of its replay; `@down`/`@up` take a KeyboardEvent.code and go through the User.ini binding: a typed `Fire` is not the binding).
+//   --event-trace first:last (play) records the AI event manager's calls; with the original's `call` breakpoints (--extra-config) compare them with
+//   `node scripts/live-events-compare.mjs --map M --tag T` (docs/visual-acceptance.md "Weapon noise"). --draw-stacks (play) lists each command's draws.
 //   node scripts/live-acceptance.mjs play --map 10_Paris_Club
 //   node scripts/live-acceptance.mjs compare --map 10_Paris_Club
 //

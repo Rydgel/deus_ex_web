@@ -750,6 +750,75 @@ constant 0.0.
     Underworld frame (a lit patch on the dance floor, first taken for a pane reflection), traced through the Strobe flag, and
     measured in the original: [Strobe](#strobe-a-host-input-and-a-triggerlight-the-page-lit-wrongly). 28 TriggerLights in 9 maps.
 
+### Weapon noise (2026-10-14)
+
+**Question.** The perception pilot compared a visible player that never fired or made a noise. Do NPCs hear the player's gunshots as the
+original's do: the event manager's traffic, the callbacks they get and what they do with them?
+
+**Scene.** 06_HongKong_WanChai_Underworld, a normal player (`--no-ghost`, no alliance) with 46 NPCs within 100 to 1,500 units. Typed
+into the original after N unfrozen ticks with the level held (`--cmds`), run by Play at the same point of its replay: `summon DeusEx.WeaponPistol`
+(tick 20); `set JCDentonMale ViewRotation (Pitch=-10130,...)` (50, the pistol rests 0.25 high at 57 units, so a horizontal line misses it
+and a 55.7 degree look down hits its disc); `ParseRightClick` (90, the pickup: the item is the FrobTarget, `Ammo10mm` is created and
+given); `ActivateBelt 1` (130, the weapon is drawn: `AIStartEvent('WeaponDrawn')`, auto reload); the view levelled (170); then three shots
+as the `Enter` binding's key edges (`@down Enter`, `@up Enter` at 210, 270 and 330: `ParseLeftClick|Fire`). A second weapon follows in the
+long capture: `summon DeusEx.WeaponAssaultShotgun`, the same pickup with a 49.7 degree look, `ActivateBelt 2`, three shots (600, 660, 720).
+
+What the harness could not do, and why:
+
+* **A typed `Fire` does nothing, in either game.** The alias `Fire` is `Button bFire | Fire`; typed, `UInput::Exec` runs the alias with the
+  state's Action None, so `ExecInputCommands` hands every line to `UInput::Exec` (not `UViewport::Exec`) and the exec function never
+  runs ([aliases](script-console-command.md#aliases)). Weapon.Fire runs from the key binding's press (`@down Enter`).
+* **A held key is impossible through posted messages.** WinDrv's `UpdateInput(0)` releases every key whose `GetKeyState` is up and
+  `PostMessage` does not change that state, so `down W`, `down PGDN` left the player standing (tested focused and unfocused). The scene has no
+  walking, no turning by key and no automatic fire; the player's footsteps are unverified (below).
+* **`set JCDentonMale ViewRotation` was an unsupported command in Play** ("SET of class JCDentonMale is not implemented": the earlier
+  gun runs' aim never happened in Play). `UObject::GlobalSetProperty` now runs for script classes ([SET](script-console-command.md#set-of-a-script-class)).
+
+**What the replay measures for the commands.** The original draws frames while a command is typed (256 stream draws each), so the CRT state a command
+runs on is not derivable from the ticks. The tracer's `call` breakpoint at `UEngine::InputEvent` (`0x103814e0`) records the state at each key
+edge (the `rng` field of its record, `inTick` 0), and Play seeds its stream with it before the matching `@down`/`@up`. The event manager's calls
+(`AISendEvent` `0x10382c60`, `AIStartEvent` `0x10382fe0`, `AIEndEvent` `0x103831e0`, `AIClearEvent` `0x103832c0` and the callback delivery
+`AIEvent` `0x10384980` with its XAIParams) are logged by breakpoints (`events.cfg`), with the FName arguments decoded (`fname`) and the CRT state
+at each call. Play logs the same through `AiEventHost.trace` (`--event-trace`), and `scripts/live-events-compare.mjs` compares the
+two per tick: the same sequence, sender or receiver, event, type, value and radius (float32), the callback, state, best sender, score,
+visibility, volume and smell, and the **stream state at every call**, so a draw one side makes between two calls shows at once.
+After a typed command Play lets three frames pass before the next tick, as the original's frames do (a view change stamps the
+`LastRenderTime` of what it now shows).
+
+**Results** (every watched field of every watched actor per tick, the manager's calls and the stream state at each of them):
+
+| Capture | ticks | manager calls compared | NPC fields | stream draws per tick |
+| --- | ---: | ---: | --- | --- |
+| Pistol: pickup, draw, 3 shots (one hit glass, one a wall, one an NPC, killing him) | 600 | 1,069 of 1,069 | 46 of 46 NPCs equal (one carcass settling, below) | equal |
+| Pistol, then assault shotgun: 6 shots | 860 | 1,586 of 1,586 | 46 of 46 equal (one `LastRenderTime` one tick apart on one NPC for 2 ticks) | equal |
+
+In those ticks: `WeaponFire` and `LoudNoise` from the player (value 1.0, radius 800), `Projectile` from the `Tracer`, `Futz` when the bullet
+hits an owned decoration, the glass's and fragments' `LoudNoise`, then in the next tick `HandleShot` for the 9 to 12 NPCs that hear it
+(the hearing score and volume of each, bit for bit), their `Distress` starts and the `HandleDistress` callbacks of the NPCs those reach, and
+the NPCs' states (a dancer starts fleeing, the reactions flags, the stimulus pickers) all equal for every tick. 46 NPCs, the hearing
+function `AICanHear` and the score callbacks are exercised with the shots at 300 to 900 units.
+
+**Findings**
+
+1. **A shot NPC's carcass paused Play** ("Unsupported original door native 2108 in scriptedpawn.getcarcassdata"). `HaveSeenCarcass` (2108) and
+   `AddCarcass` (2109) were missing; translated and checked under Unicorn against the DLL ([carcass memory](script-pawn-carcass.md)).
+2. **`set <script class> <property> <value>` was unsupported in Play** (above); implemented from `GlobalSetProperty`.
+3. Two tool findings, not game defects: a typed `Fire` is not the binding, and held keys cannot be posted.
+
+**Open**
+
+* **A killed pawn settling into the floor, one tick late.** In the first capture the NPC the third shot killed (`LowerClassMale1`, state
+  Dying, Physics walking after his fall) stands 3.72 units below the floor at tick 336 in both programs, velocity and horizontal position equal;
+  the original lifts him by 2.10 at tick 337 and 1.62 at 338 (to the floor at -336.2), Play at 338 and 339. One tick, three ticks of z. Not traced
+  to a body: a capture with `MoveActor` breakpoints on that pawn is needed (the victim differs per capture).
+* **Footsteps and every held-key behaviour** (walking noise, `PlayFootStep`'s `LoudNoise`, automatic fire) are not compared: the harness cannot hold a
+  key. Play does send the player's footstep `LoudNoise` when it runs (15 sends in 280 ticks, volume 0.35, radius 76 to 519 with the speed), from the
+  original `PlayFootStep` bytecode; its inputs (`Velocity`, `FloorMaterial`) are unverified against a walking original.
+* The player's `TakeDamage` `Distress` and NPC-versus-player combat: no scene. A summoned `MJ12Troop` stood beside the player for 400 ticks without attacking
+  (not compared with the original).
+* Other weapons: the silenced pistol (no events by `bHasSilencer`), the rifle's scope, the GEP gun's `ProjectileFire`, thrown grenades.
+* The player's own `AnimFrame` differs by a constant 0.0125 for the first 50 ticks of every run (the `BreatheLight` loop; not an AI input).
+
 ### What this shows and does not
 
 It shows, per tick and with the original's own inputs, that Play's live NPC code agrees with the original for 59 of 59 Island actors, 20
@@ -889,8 +958,8 @@ its PID; Play runs headless Chromium in worker mode.
 
 ## Open
 
-- The player's weapon noise (a pistol fired near hostile NPCs: `WeaponFire`, `LoudNoise` through the event manager, then the NPCs' reactions) is
-  not compared with the original yet; hearing from a visible player is (above).
+- The player's weapon noise is compared ([Weapon noise](#weapon-noise-2026-10-14): a pistol and an assault shotgun, 1,069 and 1,586 manager calls
+  equal); footsteps (held keys), the player's `TakeDamage` `Distress`, combat and the other weapons are not.
 - The uniform 1.13–1.41× raw brightness gap under Wine; a CrossOver
   capture on the Mac matched more closely. The user does not want it
   chased: it is a known gamma issue of the game on Windows.

@@ -127,6 +127,7 @@ modelled; it is off in play.
 
 * The rdtsc time budget `AIProcess` checks while `GTimestamp` is set (a profiling flag) is not modelled; it is off in play.
 * `AICanSmell` is the original's constant 0.0; smell events are carried and never detected, as in the original.
-* No scripted sender is exercised against the original beyond the sounds and presences the Underworld produces
-  (`FootStep`-class loud noises, fleeing, distress); a player-fired weapon (`WeaponFire`, `Gunshot`) needs a weapon in the player's
-  hand in a live capture and is not compared.
+* A player-fired weapon is compared with the original ([Weapon noise](visual-acceptance.md#weapon-noise-2026-10-14)): `WeaponFire`,
+  `LoudNoise`, `Projectile`, `Futz`, the hit objects' noises, `HandleShot` / `HandleDistress` deliveries and the callbacks' parameters equal,
+  with the CRT state at every call, for a pistol and an assault shotgun. Not compared: the player's footsteps (the harness cannot hold a key), the
+  player's own `TakeDamage` `Distress`, weapons with a silencer or projectiles.

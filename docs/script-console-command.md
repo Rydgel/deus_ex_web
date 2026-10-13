@@ -126,6 +126,23 @@ The alias step runs only when not already inside an alias (static
 The first of the 40 entries with that name runs its `Command` through
 `ExecInputCommands` with the current Action.
 
+### SET of a script class
+
+`UObject::StaticExec` SET (Core `0x101532da`) finds the class with `StaticFindObject(UClass, ANY_PACKAGE)`, so a script class works too
+(`set JCDentonMale ViewRotation (Pitch=-10130,Yaw=49096,Roll=0)`, the live-scene captures' way to aim the player; the original also
+accepts `set DeusEx.JCDentonMale ...`). It then runs `UObject::GlobalSetProperty(value, class, property, offset, 1)` (`0x101523a0`):
+for every object in GObjObjects that IsA the class, `ImportText` of the value into the property and `PostEditChange` (vtable `+0x40`),
+then the same text into the class defaults and `SaveConfig(CPF_Config)`. For an Actor, `PostEditChange` is `AActor::PostEditChange`
+(`0x10369140`): `UObject::PostEditChange` and a flag written only when the editor global is set, a no-op in the game.
+
+Play (`scriptClassSet` in `script-console-command.mjs`) imports the value into every live actor of the player's level that IsA the class,
+for int (`UIntProperty::ImportText`, appAtoi only when the text starts with `-` or a digit), float, bool, name, and the Rotator and Vector
+structs over int/float members (`importNumericStruct`, the member loop of `UStructProperty::ImportText`). Not modelled, and said so: the
+import into the class defaults and the `SaveConfig` (a later instance made from the defaults, such as the Player start's second Login,
+does not carry the value), objects that are not live actors of that level, and every other property kind (they throw
+`UnsupportedConsoleCommandError`). `validate-console-command` covers a rotator, a partial rotator, a bool through a superclass name, an
+unknown property and an unlinked kind.
+
 ### FLUSH
 
 `UEngine::Exec`'s FLUSH calls `Flush(1)` (vtable `+0x6c`, `UEngine::Flush`

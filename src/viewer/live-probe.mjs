@@ -244,7 +244,9 @@ export function liveProbe(game, args = {}) {
         if (this.warm > 0) { this.warm--; return false; }
         if (this.index >= this.ticks.length) return this.hold ? false : dt;
         const tick = this.ticks[this.index];
+        let typed = false;
         while (this.commands.length && this.commands[0].after <= this.index) {
+          typed = true;
           const command = this.commands.shift(), entry = { ...command };
           // the stream state the original's command ran on (a measured input, see live-acceptance.mjs commandsWithStream)
           if (command.rng) game.random.seed(parseInt(command.rng, 16) >>> 0);
@@ -271,6 +273,9 @@ export function liveProbe(game, args = {}) {
           finally { restore?.(); }
           this.commandLog.push(entry);
         }
+        // The original draws frames while a command is typed and the level is held (a view change stamps the LastRenderTime of what it now
+        // shows): a few frames pass here before the next tick, as in the warm-up.
+        if (typed) { this.warm = 3; return false; }
         if (runtime.navTrace) runtime.navTrace.tick = this.index + 1;
         if (runtime.scriptTrace) runtime.scriptTrace.tick = this.index + 1;
         game.random.seed(parseInt(tick.rngIn, 16) >>> 0);

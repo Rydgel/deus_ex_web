@@ -48,7 +48,9 @@
  *                                 `name0` / `namee` also name the actor in argument 0 / ECX.
  *         watch-write <offset>    a hardware write watch (DR0) on that offset of the call-pawn, armed for the traced ticks; each
  *                                 write is a "write" record with the new value, the EIP after the writing instruction and 12 stack dwords
- *                                 `fname <i>` (up to two) logs the text of args[i], an FName, as "fnames"
+ *                                 `fname <i>` (up to two) logs the text of args[i], an FName, as "fnames"; every record carries `inTick` (inside a
+ *                                 ULevel::Tick of the level: 0 for a console command or key edge typed while the level is held) and `rng` (the CRT
+ *                                 rand state at the breakpoint)
  *         call-ticks <first> <last>   the unfrozen ticks whose calls are traced
  *         call-pawn <name>        the actor whose gate calls arm the tracing (any when omitted)
  *         call-frames             keep the calls armed between ticks (the renders after each traced tick), until the entry of the tick after
