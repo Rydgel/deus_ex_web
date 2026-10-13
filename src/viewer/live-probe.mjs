@@ -1,6 +1,7 @@
 import { lightGlobals } from '../runtime/light-globals.mjs';
 import { scriptGetStateName } from '../runtime/script-state-queries.mjs';
 import { createNavTrace } from '../runtime/nav-trace.mjs';
+import { execAICanSee } from '../runtime/script-pawn-perception.mjs';
 
 /** Validation only (scripts/live-acceptance.mjs, docs/visual-acceptance.md
  * "Live scenes"): the simulation side of the live-scene comparison. It
@@ -164,6 +165,23 @@ export function liveProbe(game, args = {}) {
     wrapCall('gotoState', null, { receiver: receiver => receiver, label: (receiver, name, label) => `gotoState ${name} ${label ?? ''}` });
   }
   if (args.scriptTrace) Object.assign(runtime.scriptTrace, { pawns: new Set(args.scriptTrace.pawns), first: args.scriptTrace.first, last: args.scriptTrace.last });
+  // canSeeProbe: {pawn, first, last}: after those replayed ticks, what `Enemy.AICanSee(destPoint, 1, false, false, false, true)` (the
+  // test ScriptedPawn's Fleeing state makes when a move ends) gives for that pawn, with the collision hash's hits along the line
+  // (rows' `canSee`). A validation aid for a pawn whose next path choice differs from the original's.
+  const canSeeProbe = pawn => {
+    const actor = byName(pawn), enemy = runtime.readNamed(actor, 'Enemy'), point = runtime.readNamed(actor, 'destPoint');
+    if (!enemy || !point) return { enemy: enemy?.name ?? null, destPoint: point?.name ?? null };
+    const services = runtime.perceptionServices({ receiver: enemy }), level = runtime.levelFor(enemy);
+    const eye = [...runtime.readNamed(enemy, 'Location')], end = [...runtime.readNamed(point, 'Location')];
+    eye[2] = Math.fround(eye[2] + runtime.readNamed(enemy, 'BaseEyeHeight'));
+    const worldActor = level.actors?.[0] ?? null;
+    const hits = level.hash.multiLineCheck({ end, start: eye, extent: [0, 0, 0], checkActors: 1, worldActor, extra: 4 })
+      .map(hit => ({ actor: hit.actor?.name ?? null, cls: hit.actor ? runtime.instance(hit.actor)?.cls?.record?.key : null, time: hit.time,
+        blocks: hit.actor ? plain(runtime.readNamed(hit.actor, 'bBlockSight')) : null, hidden: hit.actor ? plain(runtime.readNamed(hit.actor, 'bHidden')) : null }));
+    const args6 = [point, 1, false, false, false, true];
+    const call = { receiver: enemy, argumentCount: 6, evaluateArgument: i => args6[i] };
+    return { enemy: enemy.name, destPoint: point.name, from: eye, to: end, value: execAICanSee(call, services), bDetectable: plain(runtime.readNamed(enemy, 'bDetectable')), hits };
+  };
   if (args.replay) {
     const { watch = [], ticks, hold = true, warm = 3, commands = [] } = args.replay;
     const actors = watch.map(({ names, props }) => ({ props, items: names.map(name => [name, byName(name)]) }));
@@ -172,7 +190,7 @@ export function liveProbe(game, args = {}) {
       ticks, hold, warm, index: 0, rows: [], cursor: 0, current: null,
       // console commands typed into the original between two ticks ({after, text}: after that many ticks), run here the same way through the
       // recovered console command chain (APlayerPawn::execConsoleCommand) before the next tick; their results are returned by `take` as `commands`
-      commands: commands.map(command => ({ ...command })), commandLog: [],
+      commands: commands.map(command => ({ ...command })), commandLog: [], canSee: args.replay.canSeeProbe ?? null,
       snapshot() {
         const result = {};
         for (const group of actors) for (const [name, actor] of group.items) {
@@ -227,6 +245,7 @@ export function liveProbe(game, args = {}) {
         row.rngOut = hex(game.random.state); row.clockOut = level.timeSeconds; row.tsOut = runtime.readNamed(info, 'TimeSeconds');
         row.strobeOut = [lightGlobals(runtime).strobe.flag, lightGlobals(runtime).strobe.time];
         row.actors = this.snapshot();
+        if (this.canSee && row.n >= this.canSee.first && row.n <= this.canSee.last) row.canSee = canSeeProbe(this.canSee.pawn);
         if (this.draws) { row.draws = {}; for (const name of this.draws) row.draws[name] = (row.draws[name] ?? 0) + 1; this.draws.length = 0; }
         this.rows.push(row); this.index++;
       },
