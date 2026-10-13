@@ -61,7 +61,12 @@ const FIELDS = [
   ['AnimFin', 'bAnimFinished', 0x28, 'bit', 0x8], ['AnimLoop', 'bAnimLoop', 0x28, 'bit', 0x10], ['AnimNote', 'bAnimNotify', 0x28, 'bit', 0x20],
   ['BSeq0', 'BlendAnimSequence', 0x68, 'name', 0, 0], ['BFrame0', 'BlendAnimFrame', 0x78, 'f', 0, 0], ['BRate0', 'BlendAnimRate', 0x88, 'f', 0, 0], ['BTween0', 'BlendTweenRate', 0x98, 'f', 0, 0],
   ['DesSp', 'DesiredSpeed', 0x36c, 'f'], ['MaxDes', 'MaxDesiredSpeed', 0x370, 'f'], ['Reduced', 'bReducedSpeed', 0x318, 'bit', 0x800],
+  // Pawn.PostBeginPlay draws SightCounter (0.2 * FRand()) from the load's stream, which the two sides do not share (docs/rng.md): written into Play
+  // from the original's frozen phase (PAWN_LOAD_FIELDS); it decides which tick each listener's visibility check, and so the player's ShowSelf draws, run.
+  ['Sight', 'SightCounter', 0x320, 'f'],
 ];
+// The load-time draws of the pawns (see GENERATOR_FIELDS): label of FIELDS -> written into Play's pawn before the first tick.
+const PAWN_LOAD_FIELDS = ['Sight'];
 // The player's pose, read back from the original (the placement of Play's replay): view rotation and Region.
 const PLAYER_FIELDS = FIELDS.slice(0, 10).concat([FIELDS[10]],
   [['VRot', 'ViewRotation', 0x3dc, 'i3'], ['RegZone', '$regionZone', 0xc8, 'obj'], ['RegLeaf', '$regionLeaf', 0xcc, 'i32'], ['RegNum', '$regionNum', 0xd0, 'u8']]);
@@ -420,7 +425,10 @@ async function play() {
     // The generators' load-time draws (GENERATOR_FIELDS), as the original's frozen phase left them.
     const generatorWrites = Object.fromEntries(generators.filter(name => frozen[frozen.length - 1].actors[name])
       .map(name => [name, Object.fromEntries(GENERATOR_FIELDS.map(([label, prop]) => [prop, frozen[frozen.length - 1].actors[name][label]]))]));
-    const request = {write: {'@player': {AnimSequence: pose.Anim, AnimFrame: pose.Frame, AnimRate: pose.Rate, TweenRate: pose.Tween}, ...generatorWrites},
+    const lastFrozen = frozen[frozen.length - 1].actors;
+    const pawnWrites = Object.fromEntries(pawns.filter(name => lastFrozen[name] && PAWN_LOAD_FIELDS.every(label => lastFrozen[name][label] !== undefined))
+      .map(name => [name, Object.fromEntries(PAWN_LOAD_FIELDS.map(label => [FIELDS.find(f => f[0] === label)[1], lastFrozen[name][label]]))]));
+    const request = {write: {...pawnWrites, '@player': {AnimSequence: pose.Anim, AnimFrame: pose.Frame, AnimRate: pose.Rate, TweenRate: pose.Tween}, ...generatorWrites},
       ...(navPawns ? {navTrace: {pawns: navPawns.split(','), first: navFirst, last: navLast}} : {}),
       ...(trace[0]?.viewport?.[0] && !flag('own-viewport') ? {renderSize: trace[0].viewport} : {}),   // the original's frame size (--own-viewport: Play's page)
       ...(setupNames ? {setupProbe: {names: setupNames.split(','), first: setupFirst, last: setupLast}} : {}),
