@@ -327,6 +327,7 @@ export function createScriptVmKernel(instance, memory) {
       masterFrame: () => x.occ_master_frame(),
       // CreateChildFrame's inputs and OccludeFrame's recursion switch (occlude.rs CHILD_IN).
       childInPtr: typeof x.occ_child_in_ptr !== 'function' ? null : () => x.occ_child_in_ptr() >>> 0,
+      childDebugPtr: typeof x.occ_child_debug_ptr !== 'function' ? null : () => x.occ_child_debug_ptr() >>> 0,
       // The host's SetupDynamics for each child frame (occ_frame_dynamics).
       setFrameHook,
       // FDynamicSprite::Setup (setup.rs) over packed candidates; null in a

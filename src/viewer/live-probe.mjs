@@ -205,8 +205,14 @@ export function liveProbe(game, args = {}) {
     // (while the warm-up holds the level, nothing else moves the clock: the tick is skipped)
     out.initial = state.snapshot();
   }
+  // setupProbe: {names, first, last}: FDynamicSprite::Setup's result and the main frame's Frame->Sprite membership for those
+  // actors in the frames after those ticks (sim-session.mjs occludeMain), returned by `take` as `setup`.
+  // renderSize: [width, height]: the original's viewport (the trace rows' `viewport`); the frames Play's simulation side builds use it.
+  if (args.renderSize && game.liveReplay) game.liveReplay.renderSize = args.renderSize;
+  if (args.setupProbe && game.liveReplay) game.liveReplay.setupProbe = { names: new Set(args.setupProbe.names), first: args.setupProbe.first, last: args.setupProbe.last, rows: [] };
   const replay = game.liveReplay;
   if (args.take && replay) {
+    if (replay.setupProbe) out.setup = replay.setupProbe.rows.splice(0);
     out.rows = replay.rows.slice(replay.cursor); replay.cursor = replay.rows.length;
     out.index = replay.index;
     if (runtime.navTrace) out.nav = runtime.navTrace.events.splice(0);

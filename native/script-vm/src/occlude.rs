@@ -1715,6 +1715,14 @@ fn uncoords<F: Fp>(coords: &[u32; 12]) -> [u32; 12] {
 /// 17) for that child, as each frame's own SetupDynamics builds its own
 /// FDynamicSprites).
 static mut CHILD_IN: [u32; 8] = [0; 8];
+/// Validation (live-probe.mjs setupProbe): [0] rows written, [1] watched candidate count, [2..10) their indices, then rows of
+/// [frame visit index, candidate index, Setup's 9 result words] for each child frame's Setup on a watched candidate (at most 32).
+static mut CHILD_DEBUG: [u32; 10 + 32 * 11] = [0; 10 + 32 * 11];
+
+#[no_mangle]
+pub extern "C" fn occ_child_debug_ptr() -> *mut u32 {
+    addr_of_mut!(CHILD_DEBUG) as *mut u32
+}
 
 #[link(wasm_import_module = "env")]
 extern "C" {
@@ -2027,6 +2035,21 @@ fn occlude_children(parent: u32, index: &mut u32) -> u32 {
         if input[4] != 0 {
             let scratch = push(GDYN, 4 * crate::setup::OW * input[5].max(1), 8);
             crate::setup::occ_setup(input[4], input[5], scratch);
+            unsafe {
+                let debug = &mut *addr_of_mut!(CHILD_DEBUG);
+                for k in 0..(debug[1].min(8) as usize) {
+                    let candidate = debug[2 + k];
+                    if candidate < input[5] && debug[0] < 32 {
+                        let row = 10 + 11 * debug[0] as usize;
+                        debug[row] = fw(c, FR_INDEX);
+                        debug[row + 1] = candidate;
+                        for w in 0..crate::setup::OW {
+                            debug[row + 2 + w as usize] = rd(scratch + 4 * (candidate * crate::setup::OW + w));
+                        }
+                        debug[0] += 1;
+                    }
+                }
+            }
         } else {
             set_model(18, 0);
         }

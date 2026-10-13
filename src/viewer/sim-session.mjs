@@ -12,7 +12,7 @@ import { createPlayCamera, applyPlayFrame, pointCamera, projectionOf, setFramePr
 import { createDrawnSet } from './drawn-set.mjs';
 import { createMeshFramePack } from './mesh-frame-pack.mjs';
 import { createDecalDraw } from '../runtime/decal-draw.mjs';
-import { OCCLUSION_POINTS, OCCLUSION_SPRITE_KEYS, SETUP } from '../runtime/bsp-occlusion.mjs';
+import { OCCLUSION_POINTS, OCCLUSION_SPRITE_KEYS, SETUP, SETUP_OUT_WORDS } from '../runtime/bsp-occlusion.mjs';
 import { packDynamics, patchDynamics, candidateWords, actorOcclusionMode, childFrameSprites, iteratorSpritesByOrder } from './dynamics-candidates.mjs';
 import { createLightNoise, lightNoiseSnapshot } from '../runtime/static-lighting.mjs';
 import { lightGlobals } from '../runtime/light-globals.mjs';
@@ -508,6 +508,10 @@ export function createSimSession(game, { assets = null, events = [], exportName 
     const own = new Map(), known = iterating ? iteratorSpritesByOrder(live.sprites) : null;
     const root = iterating ? { entries, words: candidateWords(occlusion, entries.length) } : null;
     const frameDynamics = iterating ? frame => childDynamics(frame, args, own, known, root) : null;
+    const probing = game.liveReplay?.setupProbe;
+    if (probing && game.liveReplay.index >= probing.first && game.liveReplay.index <= probing.last)
+      occlusion.childSetupDebug.watch(entries.flatMap((entry, i) => entry.binding?.actor && probing.names.has(entry.binding.actor.name) ? [i] : []));
+    else occlusion.childSetupDebug.watch([]);
     const occludeStarted = performance.now();
     const result = visibility(pending.view, pending.width, pending.height, entries.length, { frameDynamics }), main = new Set();
     iteratorStats.msVisibility += performance.now() - occludeStarted;
@@ -538,6 +542,24 @@ export function createSimSession(game, { assets = null, events = [], exportName 
     for (const frame of result.frames ?? []) {
       const row = iteratorStats.lastFrames.find(entry => entry.frame === frame.index);
       if (row) row.drawnIds = frame.main;
+    }
+    // Validation (live-probe.mjs setupProbe): FDynamicSprite::Setup's root-frame result for the named actors in this frame, and
+    // which frames' Frame->Sprite hold them.
+    const setupProbe = game.liveReplay?.setupProbe;
+    if (setupProbe && game.liveReplay.index >= setupProbe.first && game.liveReplay.index <= setupProbe.last) {
+      const out = occlusion.setupResults(entries.length), f32 = new Float32Array(1), u32 = new Uint32Array(f32.buffer);
+      const level = runtime.levelFor(game.player.collisionActor);
+      entries.forEach((entry, i) => {
+        const actor = entry.binding?.actor;
+        if (!actor || !setupProbe.names.has(actor.name)) return;
+        const at = SETUP_OUT_WORDS * i, bits = word => { u32[0] = word; return f32[0]; };
+        setupProbe.rows.push({ tick: game.liveReplay.index, time: runtime.readNamed(level.actors[0], 'TimeSeconds'), name: actor.name,
+          status: out[at], rect: [out[at + 1], out[at + 2], out[at + 3], out[at + 4]].map(v => v | 0), z: bits(out[at + 5]),
+          children: occlusion.childSetupDebug.rows().filter(r => r.candidate === i).map(r => ({ frame: r.frame, status: r.words[0], rect: r.words.slice(1, 5).map(v => v | 0), z: bits(r.words[5]) })),
+          main: main.has(entry.binding.id), frames: (result.frames ?? []).map(frame => ({ index: frame.index, kind: frame.kind, iSurf: frame.iSurf, in: frame.main.has(entry.binding.id) })),
+          size: [pending.width, pending.height], location: [...runtime.readNamed(actor, 'Location')], rotation: [...runtime.readNamed(actor, 'Rotation')],
+          anim: [runtime.readNamed(actor, 'AnimSequence'), runtime.readNamed(actor, 'AnimFrame')] });
+      });
     }
     pending.frame.visibility = result;
     // DrawWorld draws the sky frame only when OccludeBsp made one.
@@ -1213,6 +1235,9 @@ export function createSimSession(game, { assets = null, events = [], exportName 
       if (aspect !== null && resizes !== resizesSeen) {
         camera.aspect = aspect; camera.fov = verticalFov(75, aspect); camera.updateProjectionMatrix(); resizesSeen = resizes;
       }
+      // Validation (live-probe.mjs renderSize): the original's frame size (UViewport SizeX, SizeY) when a live replay holds it.
+      const forced = game.liveReplay?.renderSize ?? null;
+      if (forced) { width = forced[0]; height = forced[1]; }
       size = [width, height];
       const errors = [], stopped = () => halted || failed;
       const fail = error => { failed = true; errors.push(plainError(error)); };
@@ -1239,7 +1264,7 @@ export function createSimSession(game, { assets = null, events = [], exportName 
         } catch (error) { fail(error); }
       }
       if (frame.view && !stopped()) {
-        try { frame.renderRect = { ...game.renderViewport(width, height) }; } catch (error) { fail(error); }
+        try { frame.renderRect = forced ? { render: true, x: 0, y: 0, width, height } : { ...game.renderViewport(width, height) }; } catch (error) { fail(error); }
       }
       if (!stopped()) {
         try { live.lights = game.movingLights(); frame.lights = live.lights.map(plainLight); } catch (error) { fail(error); }

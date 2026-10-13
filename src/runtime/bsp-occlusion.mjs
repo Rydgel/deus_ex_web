@@ -401,6 +401,21 @@ export function createBspOcclusion(kernel, model, { surfaceTextureFlags, zoneAct
       return { ...decode(all.subarray(0, st[6]), st, skipPoints), frames: decodeFrames(all, st[6], skipPoints),
         stream: { at: st[5], words: st[6] } };
     },
+    /** Validation: the child frames' Setup results for the watched candidate indices (up to 8), read after a run; `watch([])` stops it. */
+    childSetupDebug: {
+      watch(indices) {
+        if (!kernel.childDebugPtr) return;
+        const u = words(), at = kernel.childDebugPtr() >>> 2;
+        u[at] = 0; u[at + 1] = indices.length;
+        indices.slice(0, 8).forEach((index, i) => { u[at + 2 + i] = index; });
+      },
+      rows() {
+        if (!kernel.childDebugPtr) return [];
+        const u = words(), at = kernel.childDebugPtr() >>> 2, out = [];
+        for (let r = 0; r < u[at]; r++) out.push({ frame: u[at + 10 + 11 * r], candidate: u[at + 11 + 11 * r], words: [...u.slice(at + 12 + 11 * r, at + 21 + 11 * r)] });
+        return out;
+      },
+    },
     /** Each zone's SkyZone (the zone's actor's, or the LevelInfo's for a
      * zone without one; OccludeBsp reads it at 0x10b183a8 for a
      * fake-backdrop polygon): null for none, else its `location` (floats),

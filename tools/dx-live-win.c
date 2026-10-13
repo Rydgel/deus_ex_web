@@ -50,6 +50,9 @@
  *                                 write is a "write" record with the new value, the EIP after the writing instruction and 12 stack dwords
  *         call-ticks <first> <last>   the unfrozen ticks whose calls are traced
  *         call-pawn <name>        the actor whose gate calls arm the tracing (any when omitted)
+ *         call-frames             keep the calls armed between ticks (the renders after each traced tick), until the entry of the tick after
+ *                                 call-ticks' last; `namearg <i> <off>` on a call logs the object name at *(args[i]+off) (off -1: args[i]
+ *                                 itself) as argName; `ecxwords <n> <off>` logs n dwords at ECX+off at the return
  *         watch <A,B,..> <Field:off:type[:mask]>...   fields of those actors
  *       Types: f f3 i3 u8 u16 u32 bit(mask) name obj state.
  *       Offsets are the linked UProperty offsets (see dump-actor-win.c).
@@ -184,13 +187,13 @@ static Watched watched[256]; static int watched_count;
 /* ---------------- call tracing (config `call`) ---------------- */
 #define MAXCALLS 32
 #define MAXRET 64
-typedef struct { uintptr_t address; unsigned char original; char label[24]; int nwords, deref_count, deref_arg[3], deref_n[3], deref_off[3], gate, always, name0, namee; } CallBp;
+typedef struct { uintptr_t address; unsigned char original; char label[24]; int nwords, deref_count, deref_arg[3], deref_n[3], deref_off[3], gate, always, name0, namee, namearg, namearg_off, ecx_n, ecx_off, span_on, span_arg, span_off; char only[48]; } CallBp;
 typedef struct { uintptr_t address; unsigned char original; int refs; } RetBp;
 typedef struct { int active; uintptr_t ret; unsigned esp, ecx; int call; unsigned args[16]; unsigned deref_ptr[3]; unsigned long seq; } Pending;
 static CallBp calls[MAXCALLS]; static int call_count;
 static RetBp rets[MAXRET]; static int ret_count;
 static Pending pend[MAXRET]; static int pend_count;
-static int call_first = 0, call_last = -1, calls_armed = 0, gate_depth = 0;
+static int call_first = 0, call_last = -1, calls_armed = 0, gate_depth = 0, call_frames = 0;
 static char call_pawn[96] = "";
 static unsigned long call_seq = 0;
 static FILE *cout;
@@ -223,6 +226,7 @@ static int read_config(const char *path) {
     else if (!strcmp(tok, "monitor")) monitor_seconds = atoi(strtok(NULL, " \t\r\n"));
     else if (!strcmp(tok, "kill-on-crash")) kill_on_crash = atoi(strtok(NULL, " \t\r\n"));
     else if (!strcmp(tok, "pre-watch")) pre_watch = atoi(strtok(NULL, " \t\r\n"));
+    else if (!strcmp(tok, "call-frames")) call_frames = 1;
     else if (!strcmp(tok, "call-ticks")) { call_first = atoi(strtok(NULL, " \t\r\n")); call_last = atoi(strtok(NULL, " \t\r\n")); }
     else if (!strcmp(tok, "watch-write")) watch_off = (unsigned)strtoul(strtok(NULL, " \t\r\n"), NULL, 0);
     else if (!strcmp(tok, "call-pawn")) { char *v = strtok(NULL, " \t\r\n"); if (v) strncpy(call_pawn, v, sizeof(call_pawn) - 1); }
@@ -234,7 +238,11 @@ static int read_config(const char *path) {
       for (char *o; (o = strtok(NULL, " \t\r\n"));) {
         if (!strcmp(o, "gate")) c->gate = 1; else if (!strcmp(o, "always")) c->always = 1;
         else if (!strcmp(o, "name0")) c->name0 = 1; else if (!strcmp(o, "namee")) c->namee = 1;
-        else if (!strcmp(o, "deref") && c->deref_count < 3) { c->deref_arg[c->deref_count] = atoi(strtok(NULL, " \t\r\n")); c->deref_n[c->deref_count] = atoi(strtok(NULL, " \t\r\n")); c->deref_off[c->deref_count] = (int)strtol(strtok(NULL, " \t\r\n"), NULL, 0); if (c->deref_n[c->deref_count] > 16) c->deref_n[c->deref_count] = 16; c->deref_count++; }
+        else if (!strcmp(o, "namearg")) { c->namearg = atoi(strtok(NULL, " \t\r\n")) + 1; c->namearg_off = (int)strtol(strtok(NULL, " \t\r\n"), NULL, 0); }
+        else if (!strcmp(o, "only")) { char *v = strtok(NULL, " \t\r\n"); if (v) strncpy(c->only, v, sizeof(c->only) - 1); }
+        else if (!strcmp(o, "span")) { c->span_on = 1; c->span_arg = atoi(strtok(NULL, " \t\r\n")); c->span_off = (int)strtol(strtok(NULL, " \t\r\n"), NULL, 0); }
+        else if (!strcmp(o, "ecxwords")) { c->ecx_n = atoi(strtok(NULL, " \t\r\n")); c->ecx_off = (int)strtol(strtok(NULL, " \t\r\n"), NULL, 0); if (c->ecx_n > 64) c->ecx_n = 64; }
+        else if (!strcmp(o, "deref") && c->deref_count < 3) { c->deref_arg[c->deref_count] = atoi(strtok(NULL, " \t\r\n")); c->deref_n[c->deref_count] = atoi(strtok(NULL, " \t\r\n")); c->deref_off[c->deref_count] = (int)strtol(strtok(NULL, " \t\r\n"), NULL, 0); if (c->deref_n[c->deref_count] > 128) c->deref_n[c->deref_count] = 128; c->deref_count++; }
       }
       call_count++;
     }
@@ -447,6 +455,22 @@ static void print_floats(FILE *o, const unsigned *w, int n) {
   for (int i = 0; i < n; i++) { float f; memcpy(&f, &w[i], 4); fprintf(o, i ? ",%.9g" : "%.9g", (f == f && f > -1e30f && f < 1e30f) ? f : 0.0f); }
   fprintf(o, "]");
 }
+/* An FSpanBuffer (StartY, EndY, ValidLines, Index**) as [[y,[start,end,...]],...] for the lines that have spans. */
+static void print_span(FILE *o, uintptr_t sb) {
+  if (!sb) { fprintf(o, "null"); return; }
+  int y0 = (int)read_u32(sb), y1 = (int)read_u32(sb + 4); uintptr_t index = read_u32(sb + 12);
+  if (y1 - y0 > 4096 || y1 < y0) { fprintf(o, "\"bad\""); return; }
+  fprintf(o, "{\"y0\":%d,\"y1\":%d,\"lines\":[", y0, y1);
+  int first = 1;
+  for (int y = y0; y < y1; y++) {
+    uintptr_t link = read_u32(index + 4 * (y - y0));
+    if (!link) continue;
+    fprintf(o, "%s[%d,[", first ? "" : ",", y); first = 0;
+    for (int k = 0; link && k < 64; k++) { int a = (int)read_u32(link), b = (int)read_u32(link + 4); fprintf(o, "%s%d,%d", k ? "," : "", a, b); link = read_u32(link + 8); }
+    fprintf(o, "]]");
+  }
+  fprintf(o, "]}");
+}
 /* A traced call's entry or return. Returns 1 when the breakpoint was one of ours (the thread's state is set). */
 static int handle_call_event(HANDLE th, DWORD tid, uintptr_t where, int unfrozen) {
   if (!is_call_address(where)) return 0;
@@ -464,13 +488,14 @@ static int handle_call_event(HANDLE th, DWORD tid, uintptr_t where, int unfrozen
     if (c->deref_count) {
       fprintf(cout, ",\"deref\":[");
       for (int d = 0; d < c->deref_count; d++) {
-        unsigned deref[16]; memset(deref, 0, sizeof(deref));
+        unsigned deref[128]; memset(deref, 0, sizeof(deref));
         if (p->deref_ptr[d]) read_mem(p->deref_ptr[d] + c->deref_off[d], deref, 4 * c->deref_n[d]);
         fprintf(cout, "%s{\"arg\":%d,\"words\":", d ? "," : "", c->deref_arg[d]); print_words(cout, deref, c->deref_n[d]);
         fprintf(cout, ",\"floats\":"); print_floats(cout, deref, c->deref_n[d]); fprintf(cout, "}");
       }
       fprintf(cout, "]");
     }
+    if (c->ecx_n) { unsigned w[64]; memset(w, 0, sizeof(w)); read_mem(p->ecx + c->ecx_off, w, 4 * c->ecx_n); fprintf(cout, ",\"ecxWords\":"); print_words(cout, w, c->ecx_n); fprintf(cout, ",\"ecxFloats\":"); print_floats(cout, w, c->ecx_n); }
     fprintf(cout, "}\n"); fflush(cout);
     if (c->gate && gate_depth > 0) gate_depth--;
     p->active = 0; while (pend_count > 0 && !pend[pend_count - 1].active) pend_count--;
@@ -486,6 +511,11 @@ static int handle_call_event(HANDLE th, DWORD tid, uintptr_t where, int unfrozen
         char text[96] = ""; strncpy(text, object_name(ctx.Ecx), sizeof(text) - 1);
         if (call_pawn[0] && strcmp(text, call_pawn)) armed = 0; else armed = 1;
       }
+      if (armed && c->only[0]) {
+        unsigned a0[16]; memset(a0, 0, sizeof(a0)); read_mem(ctx.Esp + 4, a0, 4 * (c->nwords > 16 ? 16 : c->nwords));
+        uintptr_t o = (c->namearg && c->namearg - 1 < c->nwords) ? (c->namearg_off < 0 ? a0[c->namearg - 1] : (a0[c->namearg - 1] ? read_u32(a0[c->namearg - 1] + c->namearg_off) : 0)) : 0;
+        if (!o || strcmp(object_name(o), c->only)) armed = 0;
+      }
       if (armed && c->gate && watch_off && !watch_pawn) { watch_pawn = (uintptr_t)ctx.Ecx; watch_set(1); }
       if (armed) {
         unsigned args[16]; memset(args, 0, sizeof(args)); read_mem(ctx.Esp + 4, args, 4 * c->nwords);
@@ -493,11 +523,13 @@ static int handle_call_event(HANDLE th, DWORD tid, uintptr_t where, int unfrozen
         fprintf(cout, "{\"u\":%d,\"seq\":%lu,\"ev\":\"enter\",\"fn\":\"%s\",\"ecx\":\"0x%x\",\"ret\":\"0x%x\"", unfrozen, seq, c->label, (unsigned)ctx.Ecx, read_u32(ctx.Esp));
         if (c->namee) fprintf(cout, ",\"ecxName\":\"%s\"", object_name(ctx.Ecx));
         if (c->name0 && c->nwords > 0) fprintf(cout, ",\"arg0Name\":\"%s\"", object_name(args[0]));
+        if (c->namearg && c->namearg - 1 < c->nwords) { uintptr_t o = c->namearg_off < 0 ? args[c->namearg - 1] : (args[c->namearg - 1] ? read_u32(args[c->namearg - 1] + c->namearg_off) : 0); fprintf(cout, ",\"argName\":\"%s\"", object_name(o)); }
+        if (c->span_on && c->span_arg < c->nwords && args[c->span_arg]) { fprintf(cout, ",\"span\":"); print_span(cout, read_u32(args[c->span_arg] + c->span_off)); }
         fprintf(cout, ",\"args\":"); print_words(cout, args, c->nwords); fprintf(cout, ",\"floats\":"); print_floats(cout, args, c->nwords);
         if (c->deref_count) {
           fprintf(cout, ",\"deref\":[");
           for (int d = 0; d < c->deref_count; d++) {
-            unsigned deref[16]; memset(deref, 0, sizeof(deref));
+            unsigned deref[128]; memset(deref, 0, sizeof(deref));
             if (c->deref_arg[d] >= 0 && c->deref_arg[d] < c->nwords && args[c->deref_arg[d]]) read_mem(args[c->deref_arg[d]] + c->deref_off[d], deref, 4 * c->deref_n[d]);
             fprintf(cout, "%s{\"arg\":%d,\"words\":", d ? "," : "", c->deref_arg[d]); print_words(cout, deref, c->deref_n[d]);
             fprintf(cout, ",\"floats\":"); print_floats(cout, deref, c->deref_n[d]); fprintf(cout, "}");
@@ -662,18 +694,21 @@ static int do_trace(const char *config) {
             in_our_tick = 1;
             if (released) unfrozen++;
             if (cout && released && unfrozen >= call_first && unfrozen <= call_last) calls_set(1);
+            else if (cout && call_frames && calls_armed) calls_set(0);   /* call-frames: the render after tick call_last stays armed until the next tick's entry */
             if (aout && released && unfrozen >= actor_trace_first && unfrozen <= actor_trace_last) fprintf(aout, "{\"u\":%d,\"actor\":\"@entry\",\"rng\":\"0x%08x\"}\n", unfrozen, rng_in);
           }
         }
         if (!is_entry && !is_actor && mine) {
           in_our_tick = 0;
-          if (cout && calls_armed) calls_set(0);
+          if (cout && calls_armed && !call_frames) calls_set(0);
           if (aout && unfrozen >= actor_trace_first && unfrozen <= actor_trace_last) { fprintf(aout, "{\"u\":%d,\"actor\":\"@exit\",\"rng\":\"0x%08x\"}\n", unfrozen, rng_ptd ? read_u32(rng_ptd + 0x14) : 0); fflush(aout); }
+          unsigned vp_x = 0, vp_y = 0;   /* the player's UViewport: SizeX +0x78, SizeY +0x7c (Player at +0x5d4) */
+          { uintptr_t vp = player_ptr ? read_u32(player_ptr + 0x5d4) : 0; if (vp) { vp_x = read_u32(vp + 0x78); vp_y = read_u32(vp + 0x7c); } }
           int record = pre_watch < 0 || released || tick > release_at - pre_watch;
           if (record) {
-            fprintf(out, "{\"n\":%d,\"unfrozen\":%d,\"tickType\":%d,\"delta\":%.9g,\"playersOnly\":%d,\"clockIn\":%.17g,\"tsIn\":%.9g,\"rngIn\":\"0x%08x\","
+            fprintf(out, "{\"n\":%d,\"unfrozen\":%d,\"viewport\":[%u,%u],\"tickType\":%d,\"delta\":%.9g,\"playersOnly\":%d,\"clockIn\":%.17g,\"tsIn\":%.9g,\"rngIn\":\"0x%08x\","
               "\"clockOut\":%.17g,\"tsOut\":%.9g,\"rngOut\":\"0x%08x\",\"inTick\":%u,\"usIn\":%lld,\"usOut\":%lld,\"actors\":{",
-              tick, released ? unfrozen : 0, tick_type, delta_in, players_only_in, clock_in, ts_in, rng_in,
+              tick, released ? unfrozen : 0, vp_x, vp_y, tick_type, delta_in, players_only_in, clock_in, ts_in, rng_in,
               read_double(level_ptr + 0xdc), read_float(level_info + 0x478), rng_ptd ? read_u32(rng_ptd + 0x14) : 0, read_u32(level_ptr + 0x108), t_in, qpc_us());
             for (int i = 0; i < watched_count; i++) {
               size_t got = 0;
