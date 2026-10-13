@@ -547,10 +547,8 @@ original's stasis gate, because the NPCs are rendered, and the gate's inputs are
 The three that differ:
 
 - **Businessman1, LastRenderTime from tick 22** (original 77.1033, Play 77.1200 = one tick later) and **Female5 from tick 465** (84.4866
-  against 84.5033): a pawn at the edge of the view that Play's frame stamped and the original's did not. Walking patrol in the first case,
-  a dancer in the second (her bounds change with the animation). The pawn's position and animation are equal. Unexplained; a candidate
-  is the sprite bounds test in `DrawActorSprite`. Not traced; the effect is one tick of `LastRenderTime`, which `bStasis` and
-  `ScriptedPawn.Tick` read only at a threshold.
+  against 84.5033): a pawn at the edge of the view that Play's frame stamped and the original's did not. **Resolved: the frame size**
+  (Divergences 11): Play's frames were 1280x611 and the original's 632x1030 (its window); with the original's size both are equal.
 - **TriadRedArrow0, MoveTimer from tick 181** (original -4.045, Play -0.045, then both count down together): a seated guest, the tick after
   the SitBegin animation starts (Physics 4). In the Sitting family, with Club's guests; not traced.
 
@@ -625,6 +623,18 @@ Club's ghost-player difference (Divergences 6). Not traced.
     validate-mirrors-play, validate-mirrors, validate-bsp-occlusion, validate-brush-tracker, validate-child-frames,
     validate-sky-in-mirror-play and validate-live-visibility-play pass. The frame at tick 600 (Pilot 3): the pane is there, its reflection
     is lit differently (open, below).
+
+11. **The frame size of a live comparison (fixed, 2026-10-13).** The original renders into its window (here 632x1030, UViewport
+   SizeX/SizeY, which the tracer now records in every trace row as `viewport`), Play's page into a 1280x720 viewport whose canvas
+   gave a 1280x611 render rectangle. Every sprite rectangle and span edge is in pixels, so at the edge of the view they differ by one:
+   Businessman1's reflection in the Underworld's mirror child frame (the mirror frame's free spans at its rows 525-538 are [441,455); the
+   sprite's raster [X1,X2) is [424,442) at ticks 19-20, where DrawActorSprite stamps it, and [425,441) from tick 21, where it does not).
+   Traced with `call` on `FDynamicSprite::Setup`'s caller (the constructor `0x10b233c0`: the frame, the sprite's rectangle and Z) and on
+   `DrawActorSprite` (`0x10b25150`), `call-frames` (the renders between ticks), the child frame's span buffer dump: Z and the actor's
+   fields were already equal; at the original's frame size Play's child-frame Setup rectangles equal the original's at every tick (424,
+   512, 442, 538 ... 425, 512, 440, 538) and the mirror frame's membership matches. `live-acceptance.mjs play` now gives the replay's
+   frames the trace's `viewport` (`--own-viewport` keeps the page's); with it the Underworld's 50 actors are equal for 600 ticks. The
+   OccludeBsp/Setup translation was not at fault (bit-exact on the same frame, docs/bsp-occlusion.md).
 
 ### What this shows and does not
 
