@@ -113,7 +113,7 @@ if (flag('perception')) PLAYER_FIELDS.push(['CRad', 'CollisionRadius', 0x1d4, 'f
 // --player-gear: what the player holds and aims at (Pawn.Weapon/PendingWeapon, Inventory, DeusExPlayer.inHand/FrobTarget, bFire, Health): the console scenes that summon,
 // pick up and fire a weapon (--cmds) are followed through these.
 if (flag('player-gear')) PLAYER_FIELDS.push(['Weapon', 'Weapon', 976, 'obj'], ['PendWeapon', 'PendingWeapon', 980, 'obj'], ['Inv', 'Inventory', 192, 'obj'], ['InHand', 'inHand', 2600, 'obj'],
-  ['FrobTgt', 'FrobTarget', 2536, 'obj'], ['bFire', 'bFire', 1206, 'u8'], ['PHealth', 'Health', 1064, 'i32']);
+  ['FrobTgt', 'FrobTarget', 2536, 'obj'], ['bFire', 'bFire', 1206, 'u8'], ['PHealth', 'Health', 1064, 'i32'], ['FrobTime', 'FrobTime', 2540, 'f']);
 // Load-time random state of the PawnGenerators (PigeonGenerator, SeagullGenerator, ...): PostBeginPlay draws TryTimer
 // (0.25 + FRand()*0.75) and, with bRandomCount, PoolCount from the load's stream, which the two sides do not share
 // (the original seeds the CRT with time(NULL), docs/rng.md). A generator first spawns when its TryTimer runs out,
@@ -244,6 +244,17 @@ async function original() {
   // --cmds "30:Fire|90:AltFire": console commands typed into the original at those unfrozen tick counts, between two ticks: the tracer holds the
   // level (config `pause-at`, ticks skipped as for the final pause) while the command is typed, and Play runs the same command at the same point
   // of its replay (commands<tag>.json). A command is the console line as typed (an exec function of the player, `set ...`).
+  // A command `@down NAME` / `@up NAME` is a key edge instead of a console line (NAME is a KeyboardEvent.code, `PageDown`, `Enter`): the original gets
+  // it as a WM_KEYDOWN/WM_KEYUP (dxinput), Play through game.inputKey, so the User.ini binding runs (`Enter=ParseLeftClick|Fire`, `PageDown=LookDown`);
+  // a typed `Fire` is not the binding: the alias runs through UInput::Exec only (docs/script-console-command.md "Aliases").
+  const DXINPUT_KEYS = {PageDown: 'PGDN', PageUp: 'PGUP', Enter: 'ENTER', Escape: 'ESC', Space: 'SPACE', End: 'END', Home: 'HOME', Tab: 'TAB',
+    ArrowUp: 'UP', ArrowDown: 'DOWN', ArrowLeft: 'LEFT', ArrowRight: 'RIGHT', ShiftLeft: 'SHIFT', ControlLeft: 'CTRL'};
+  const keyEdge = text => {
+    const m = /^@(down|up) (\S+)$/.exec(text);
+    if (!m) return null;
+    const key = DXINPUT_KEYS[m[2]] ?? m[2].replace(/^(Key|Digit)/, '');
+    return [`${m[1]} ${key}`, 'sleep 200'];
+  };
   const cmds = option('cmds', '').split('|').filter(Boolean).map(entry => { const i = entry.indexOf(':'); return {after: Number(entry.slice(0, i)), text: entry.slice(i + 1)}; });
   writeFileSync(path.join(dir, `commands${suffix}.json`), JSON.stringify(cmds));
   // Actors whose Timer runs from the load (SetTimer in PostBeginPlay, e.g. Tree: 4 + 2 * FRand()): Play's load draws another rate, so the
@@ -308,7 +319,7 @@ async function original() {
       const n = Number(match[1]);
       if (handled.has(n)) continue;
       handled.add(n);
-      post(['sleep 300', ...cmds.filter(c => c.after === n).flatMap(c => [`cmd ${c.text}`, 'sleep 500'])]);
+      post(['sleep 300', ...cmds.filter(c => c.after === n).flatMap(c => keyEdge(c.text) ?? [`cmd ${c.text}`, 'sleep 500'])]);
       writeFileSync(`${tracePath}.go`, '');
       console.log(`typed after ${n} ticks: ${cmds.filter(c => c.after === n).map(c => c.text).join(' ; ')}`);
     }
@@ -518,9 +529,34 @@ async function play() {
     // animation reaching its end can call script that draws)
     const setupNames = option('setup-probe', null), [setupFirst, setupLast] = option('setup-ticks', `1:${trace.length}`).split(':').map(Number);   // Setup's result for those actors (setup-play.json)
     const scriptPawns = option('script-trace', null), [scriptFirst, scriptLast] = option('script-ticks', `1:${trace.length}`).split(':').map(Number);
+    const eventWindow = option('event-trace', null)?.split(':').map(Number);   // --event-trace first:last: every AI event manager call and delivered callback of those ticks (events-play<tag>.json)
     const touchWindow = option('touch-trace', null)?.split(':').map(Number);   // --touch-trace first:last: EndTouch/AddTouch/BeginTouch of those ticks (touch-play.json)
     const navPawns = option('nav-trace', null), [navFirst, navLast] = option('nav-ticks', `1:${trace.length}`).split(':').map(Number);
     // The generators' load-time draws (GENERATOR_FIELDS), as the original's frozen phase left them.
+    // The commands typed between two ticks run on a stream state the replay cannot derive (the level is held while the game draws frames, 256 draws
+    // each: docs/visual-acceptance.md "What the original does with the random stream"). The tracer's `call` breakpoint at UEngine::InputEvent
+    // (0x103814e0, label `inputevent`, config events.cfg) carries the CRT state at each key edge, the start of a key-edge command: its `rng` is a
+    // measured input handed to Play with that command (the n-th `@down`/`@up` of a hold takes the n-th press/release record of that hold).
+    const commandsWithStream = () => {
+      const list = existsSync(path.join(dir, `commands${suffix}.json`)) ? JSON.parse(readFileSync(path.join(dir, `commands${suffix}.json`), 'utf8')) : [];
+      const callsFile = `${tracePath}.calls.jsonl`;
+      if (!existsSync(callsFile) || !list.some(c => c.text.startsWith('@'))) return list;
+      const edges = new Map();
+      for (const line of readFileSync(callsFile, 'utf8').split('\n')) {
+        if (!line.includes('"fn":"inputevent"') || !line.includes('"ev":"enter"')) continue;
+        const r = parseTraceLine(line), action = parseInt(r.args[2], 16);
+        if (r.inTick !== 0 || (action !== 1 && action !== 3)) continue;
+        if (!edges.has(r.u)) edges.set(r.u, []);
+        edges.get(r.u).push({action, rng: r.rng});
+      }
+      return list.map(command => {
+        const m = /^@(down|up) /.exec(command.text);
+        if (!m) return command;
+        const wanted = m[1] === 'down' ? 1 : 3, records = edges.get(command.after) ?? [], at = records.findIndex(e => e.action === wanted);
+        if (at < 0) return command;
+        return {...command, rng: records.splice(at, 1)[0].rng};
+      });
+    };
     const generatorWrites = Object.fromEntries(generators.filter(name => frozen[frozen.length - 1].actors[name])
       .map(name => [name, Object.fromEntries(GENERATOR_FIELDS.map(([label, prop]) => [prop, frozen[frozen.length - 1].actors[name][label]]))]));
     const lastFrozen = frozen[frozen.length - 1].actors;
@@ -528,35 +564,40 @@ async function play() {
     const pawnWrites = flag('no-pawn-load') ? {} : Object.fromEntries(pawns.filter(name => lastFrozen[name] && PAWN_LOAD_FIELDS.every(label => lastFrozen[name][label] !== undefined))
       .map(name => [name, Object.fromEntries(PAWN_LOAD_FIELDS.map(label => [FIELDS.find(f => f[0] === label)[1], lastFrozen[name][label]]))]));
     const timerWrites = flag('no-timer-load') ? {} : Object.fromEntries(timers.filter(name => lastFrozen[name]?.TRate !== undefined).map(name => [name, {TimerRate: lastFrozen[name].TRate, TimerCounter: lastFrozen[name].TCount}]));
-    const request = {write: {...timerWrites, ...pawnWrites, '@player': {AnimSequence: pose.Anim, AnimFrame: pose.Frame, AnimRate: pose.Rate, TweenRate: pose.Tween, ...(option('player-alliance', null) ? {Alliance: option('player-alliance')} : {})}, ...generatorWrites},
+    const request = {write: {...timerWrites, ...pawnWrites, '@player': {AnimSequence: pose.Anim, AnimFrame: pose.Frame, AnimRate: pose.Rate, TweenRate: pose.Tween, ...(option('player-alliance', null) ? {Alliance: option('player-alliance')} : {}),
+      // FrobTime accumulates the player's tick deltas (HighlightCenterObject runs when it reaches 0.1 s); the frozen phase's deltas are the host's, so the original's value is a measured input
+      ...(flag('player-gear') && pose.FrobTime !== undefined ? {FrobTime: pose.FrobTime} : {})}, ...generatorWrites},
       ...(touchWindow ? {touchTrace: {first: touchWindow[0], last: touchWindow[1]}} : {}),
+      ...(eventWindow ? {eventTrace: {first: eventWindow[0], last: eventWindow[1]}} : {}),
       ...(navPawns ? {navTrace: {pawns: navPawns.split(','), first: navFirst, last: navLast}} : {}),
       ...(trace[0]?.viewport?.[0] && !flag('own-viewport') ? {renderSize: trace[0].viewport} : {}),   // the original's frame size (--own-viewport: Play's page)
       ...(setupNames ? {setupProbe: {names: setupNames.split(','), first: setupFirst, last: setupLast}} : {}),
       ...(scriptPawns ? {scriptTrace: {pawns: scriptPawns.split(','), first: scriptFirst, last: scriptLast}} : {}), replay: {ticks: trace.map(({n, unfrozen, delta, rngIn, clockIn, tsIn, strobeIn}) => ({n, unfrozen, delta, rngIn, clockIn, tsIn, strobeIn})),   // not the watched fields: a long trace would not fit the page
-      release: true, hold: true, drawTrace: flag('draw-trace'),
+      release: true, hold: true, drawTrace: flag('draw-trace'), drawStacks: flag('draw-stacks'),
       ...(option('can-see', null) ? {canSeeProbe: {pawn: option('can-see'), first: Number(option('can-see-ticks', '1:1').split(':')[0]), last: Number(option('can-see-ticks', '1:1').split(':')[1])}} : {}),
-      commands: existsSync(path.join(dir, `commands${suffix}.json`)) ? JSON.parse(readFileSync(path.join(dir, `commands${suffix}.json`), 'utf8')) : [], watch: [
+      commands: commandsWithStream(), watch: [
       {names: ['@player'], props: playerProps}, {names: pawns, props},
       // --extra-watch actors are not pawns: the fields every Actor has
       ...(extras.length ? [{names: extras, props: ['Location', 'Rotation', 'Velocity', 'Physics', 'AnimSequence', 'AnimFrame', 'AnimRate', 'TweenRate', 'LifeSpan', 'LastRenderTime', 'DistanceFromPlayer', 'TimerRate', 'TimerCounter', ...(flag('touching') ? ['Touching'] : [])]}] : [])]}};
     const started = await page.evaluate(r => window.deusExViewer.liveProbe(r), request);
-    const touch = [], rows = [], nav = [], script = [], setup = [], commandLog = [];
+    const touch = [], rows = [], nav = [], script = [], setup = [], commandLog = [], events = [];
     let stalls = 0;
     while (rows.length < trace.length) {
       await frames(20);
       const taken = await page.evaluate(() => window.deusExViewer.liveProbe({take: true}));
-      if (taken.debug?.length) { (globalThis.__debugRows ??= []).push(...taken.debug); } nav.push(...(taken.nav ?? [])); touch.push(...(taken.touch ?? [])); script.push(...(taken.script ?? [])); setup.push(...(taken.setup ?? [])); commandLog.push(...(taken.commands ?? []));
-      if (taken.rows.length) { rows.push(...taken.rows); stalls = 0; } else if (++stalls > 40) throw new Error(`the replay stopped at tick ${rows.length}`);
+      if (taken.debug?.length) { (globalThis.__debugRows ??= []).push(...taken.debug); } nav.push(...(taken.nav ?? [])); touch.push(...(taken.touch ?? [])); events.push(...(taken.events ?? [])); script.push(...(taken.script ?? [])); setup.push(...(taken.setup ?? [])); commandLog.push(...(taken.commands ?? []));
+      if (taken.rows.length) { rows.push(...taken.rows); stalls = 0; } else if (++stalls > 40) throw new Error(`the replay stopped at tick ${rows.length}${errors.length ? `: ${errors.slice(0, 3).join(' | ')}` : ''}${(await page.evaluate(() => document.querySelector('#toast')?.textContent ?? '').catch(() => '')).slice(0, 600)}`);
     }
     // the boundaries Play recorded instead of running during the replay (docs/visual-acceptance.md, record-only audit)
     const deferred = (await page.evaluate(() => window.deusExViewer.liveProbe({deferred: true}))).deferred ?? [];
     writeFileSync(path.join(dir, `deferred${suffix}.json`), JSON.stringify(deferred));
     console.log(`${deferred.length} recorded boundaries: ${deferred.slice(0, 12).join('; ')}`);
     writeFileSync(playPath, JSON.stringify({map, ghost, initial: started.initial, rows, errors, commands: commandLog}));
+    for (const c of commandLog) if (c.draws) console.log(`  ${c.draws.length} draws in ${c.text}:\n    ${c.draws.join('\n    ')}`);
     for (const c of commandLog) console.log(`command after ${c.after} ticks: ${c.text} -> ${c.error ? `ERROR ${c.error}` : JSON.stringify(c.output)}`);
     if (globalThis.__debugRows) writeFileSync(path.join(dir, 'debug-play.json'), JSON.stringify(globalThis.__debugRows));
     if (touchWindow) writeFileSync(path.join(dir, 'touch-play.json'), JSON.stringify(touch));
+    if (eventWindow) writeFileSync(path.join(dir, `events-play${suffix}.json`), JSON.stringify(events));
     if (setupNames) writeFileSync(path.join(dir, 'setup-play.json'), JSON.stringify(setup));
     if (scriptPawns) writeFileSync(path.join(dir, 'script-play.json'), JSON.stringify({pawns: scriptPawns.split(','), events: script}));
     if (navPawns) writeFileSync(path.join(dir, 'nav-play.json'), JSON.stringify({pawns: navPawns.split(','), events: nav}));
@@ -590,7 +631,7 @@ let rotationCompare = false;
 const indexOf = new Map(FIELDS.filter(f => f[5] !== undefined).map(f => [f[0], f[5]]));
 // Objects the two programs create while running are numbered by their own creation order (JCDentonMale2 and JCDentonMale1, the NPCs' weapons
 // WeaponAssaultShotgun0 and 1): the same object under another number. Map actors keep their names.
-const runtimeNumbered = /^((?:JCDenton\w*?|Weapon\w+?|Ammo\w+?))\d+$/;
+const runtimeNumbered = /^((?:JCDenton\w*?|Weapon\w+?|Ammo\w+?|NanoKeyRing))\d+$/;
 function same(a, b) {
   if (a === null || a === undefined) a = 'None';
   if (b === null || b === undefined) b = 'None';

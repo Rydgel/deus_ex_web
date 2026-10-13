@@ -48,6 +48,7 @@
  *                                 `name0` / `namee` also name the actor in argument 0 / ECX.
  *         watch-write <offset>    a hardware write watch (DR0) on that offset of the call-pawn, armed for the traced ticks; each
  *                                 write is a "write" record with the new value, the EIP after the writing instruction and 12 stack dwords
+ *                                 `fname <i>` (up to two) logs the text of args[i], an FName, as "fnames"
  *         call-ticks <first> <last>   the unfrozen ticks whose calls are traced
  *         call-pawn <name>        the actor whose gate calls arm the tracing (any when omitted)
  *         call-frames             keep the calls armed between ticks (the renders after each traced tick), until the entry of the tick after
@@ -186,9 +187,10 @@ static WatchGroup groups[16]; static int group_count;
 static Watched watched[1024]; static int watched_count;
 
 /* ---------------- call tracing (config `call`) ---------------- */
+static int in_our_tick = 0; static uintptr_t rng_ptd = 0;   /* inside a ULevel::Tick of the traced level; the msvcrt thread-data block of the rand state (+0x14) */
 #define MAXCALLS 32
 #define MAXRET 64
-typedef struct { uintptr_t address; unsigned char original; char label[24]; int nwords, deref_count, deref_arg[3], deref_n[3], deref_off[3], gate, always, name0, namee, namearg, namearg_off, ecx_n, ecx_off, span_on, span_arg, span_off, fret; char only[48]; } CallBp;
+typedef struct { uintptr_t address; unsigned char original; char label[24]; int nwords, deref_count, deref_arg[3], deref_n[3], deref_off[3], gate, always, name0, namee, namearg, namearg_off, ecx_n, ecx_off, span_on, span_arg, span_off, fret, fname_count, fname_arg[2]; char only[48]; } CallBp;
 typedef struct { uintptr_t address; unsigned char original; int refs; } RetBp;
 typedef struct { int active; uintptr_t ret; unsigned esp, ecx; int call; unsigned args[16]; unsigned deref_ptr[3]; unsigned long seq; } Pending;
 static CallBp calls[MAXCALLS]; static int call_count;
@@ -245,6 +247,7 @@ static int read_config(const char *path) {
         else if (!strcmp(o, "only")) { char *v = strtok(NULL, " \t\r\n"); if (v) strncpy(c->only, v, sizeof(c->only) - 1); }
         else if (!strcmp(o, "span")) { c->span_on = 1; c->span_arg = atoi(strtok(NULL, " \t\r\n")); c->span_off = (int)strtol(strtok(NULL, " \t\r\n"), NULL, 0); }
         else if (!strcmp(o, "fret")) c->fret = 1;
+        else if (!strcmp(o, "fname") && c->fname_count < 2) c->fname_arg[c->fname_count++] = atoi(strtok(NULL, " \t\r\n"));
         else if (!strcmp(o, "ecxwords")) { c->ecx_n = atoi(strtok(NULL, " \t\r\n")); c->ecx_off = (int)strtol(strtok(NULL, " \t\r\n"), NULL, 0); if (c->ecx_n > 64) c->ecx_n = 64; }
         else if (!strcmp(o, "deref") && c->deref_count < 3) { c->deref_arg[c->deref_count] = atoi(strtok(NULL, " \t\r\n")); c->deref_n[c->deref_count] = atoi(strtok(NULL, " \t\r\n")); c->deref_off[c->deref_count] = (int)strtol(strtok(NULL, " \t\r\n"), NULL, 0); if (c->deref_n[c->deref_count] > 128) c->deref_n[c->deref_count] = 128; c->deref_count++; }
       }
@@ -538,10 +541,15 @@ static int handle_call_event(HANDLE th, DWORD tid, uintptr_t where, int unfrozen
       if (armed) {
         unsigned args[16]; memset(args, 0, sizeof(args)); read_mem(ctx.Esp + 4, args, 4 * c->nwords);
         unsigned long seq = ++call_seq;
-        fprintf(cout, "{\"u\":%d,\"seq\":%lu,\"ev\":\"enter\",\"fn\":\"%s\",\"ecx\":\"0x%x\",\"ret\":\"0x%x\"", unfrozen, seq, c->label, (unsigned)ctx.Ecx, read_u32(ctx.Esp));
+        fprintf(cout, "{\"u\":%d,\"seq\":%lu,\"ev\":\"enter\",\"fn\":\"%s\",\"ecx\":\"0x%x\",\"ret\":\"0x%x\",\"inTick\":%d,\"rng\":\"0x%08x\"", unfrozen, seq, c->label, (unsigned)ctx.Ecx, read_u32(ctx.Esp), in_our_tick, rng_ptd ? read_u32(rng_ptd + 0x14) : 0);
         if (c->namee) fprintf(cout, ",\"ecxName\":\"%s\"", object_name(ctx.Ecx));
         if (c->name0 && c->nwords > 0) fprintf(cout, ",\"arg0Name\":\"%s\"", object_name(args[0]));
         if (c->namearg && c->namearg - 1 < c->nwords) { uintptr_t o = c->namearg_off < 0 ? args[c->namearg - 1] : (args[c->namearg - 1] ? read_u32(args[c->namearg - 1] + c->namearg_off) : 0); fprintf(cout, ",\"argName\":\"%s\"", object_name(o)); }
+        if (c->fname_count) {   /* arguments that are FNames (an index into the name table): their text */
+          fprintf(cout, ",\"fnames\":[");
+          for (int k = 0; k < c->fname_count; k++) fprintf(cout, "%s\"%s\"", k ? "," : "", c->fname_arg[k] < c->nwords ? name_text(args[c->fname_arg[k]]) : "?");
+          fprintf(cout, "]");
+        }
         if (c->span_on && c->span_arg < c->nwords && args[c->span_arg]) { fprintf(cout, ",\"span\":"); print_span(cout, read_u32(args[c->span_arg] + c->span_off)); }
         fprintf(cout, ",\"args\":"); print_words(cout, args, c->nwords); fprintf(cout, ",\"floats\":"); print_floats(cout, args, c->nwords);
         if (c->deref_count) {
@@ -655,7 +663,7 @@ static int do_trace(const char *config) {
   DEBUG_EVENT ev;
   int tick = 0, unfrozen = 0, released = 0, paused = 0, done = 0; long long release_us = 0;
   int pending_rearm = -1; DWORD pending_tid = 0;
-  unsigned rng_in = 0; int in_our_tick = 0; uintptr_t rng_ptd = 0;
+  unsigned rng_in = 0;
   double clock_in = 0; float ts_in = 0, delta_in = 0; int tick_type = 0, players_only_in = 0; unsigned strobe_flag_in = 0; float strobe_time_in = 0;
   long long t_in = 0;
   unsigned char block[0x1000];

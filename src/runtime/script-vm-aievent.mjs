@@ -52,6 +52,9 @@ export class AiEventHost {
     this.spellings = new Map();
     this.kinds = new WeakMap();
     this.paramKeys = null;
+    /** Validation only (live-acceptance --event-trace): receives one record per send, start, end, clear and per delivered callback, in call
+     * order; compared with the original's breakpoints at UEventManager::AISendEvent/AIStartEvent/AIEndEvent/AIClearEvent/AIEvent. */
+    this.trace = null;
   }
   attach(exports) { this.x = exports; }
   nid(name) {
@@ -94,10 +97,10 @@ export class AiEventHost {
     this.x.ai_set_callback(handleOf(receiver), this.nid(event), this.nid(callback), this.nid(score), +checks[0], +checks[1], +checks[2], +checks[3]);
   }
   clearCallback(receiver, event) { this.x.ai_clear_callback(handleOf(receiver), this.nid(event)); }
-  send(sender, event, type, value, radius) { this.x.ai_send(handleOf(sender), this.nid(event), type & 255, bitsOf(value), bitsOf(radius)); }
-  start(sender, event, type, value, radius) { this.x.ai_start(handleOf(sender), this.nid(event), type & 255, bitsOf(value), bitsOf(radius)); }
-  end(sender, event, type) { this.x.ai_end(handleOf(sender), this.nid(event), type & 255); }
-  clear(sender, event) { this.x.ai_clear(handleOf(sender), this.nid(event)); }
+  send(sender, event, type, value, radius) { this.trace?.({fn: 'send', sender: sender?.name ?? 'None', event: this.spelling(this.nid(event)), type: type & 255, value, radius}); this.x.ai_send(handleOf(sender), this.nid(event), type & 255, bitsOf(value), bitsOf(radius)); }
+  start(sender, event, type, value, radius) { this.trace?.({fn: 'start', sender: sender?.name ?? 'None', event: this.spelling(this.nid(event)), type: type & 255, value, radius}); this.x.ai_start(handleOf(sender), this.nid(event), type & 255, bitsOf(value), bitsOf(radius)); }
+  end(sender, event, type) { this.trace?.({fn: 'end', sender: sender?.name ?? 'None', event: this.spelling(this.nid(event)), type: type & 255}); this.x.ai_end(handleOf(sender), this.nid(event), type & 255); }
+  clear(sender, event) { this.trace?.({fn: 'clear', sender: sender?.name ?? 'None', event: this.spelling(this.nid(event))}); this.x.ai_clear(handleOf(sender), this.nid(event)); }
   destroyActor(actor) { this.x.ai_destroy_actor(handleOf(actor)); }
   /** UEventManager::Tick. */
   tick() {
@@ -207,6 +210,10 @@ export class AiEventHost {
   /** AIEvent (0x10384980): the receiver's callback function with (event, state, XAIParams), when it has one. */
   callback(actor, callback, event, state) {
     const runtime = this.runtime, name = callback ? this.spelling(callback) : 'AIEvent';
+    if (this.trace) {
+      const w = new Uint32Array(this.vm.arena.memory.buffer, this.x.ai_params_ptr(), 5), best = identityOfHandle(w[0]);
+      this.trace({fn: 'event', receiver: actor?.name ?? 'None', event: this.spelling(event), callback: name, state, best: best?.name ?? 'None', score: valueOf(w[1]), visibility: valueOf(w[2]), volume: valueOf(w[3]), smell: valueOf(w[4])});
+    }
     let record = null;
     try { record = runtime.lookup(actor, name); } catch { record = null; }
     const fn = record?.function;

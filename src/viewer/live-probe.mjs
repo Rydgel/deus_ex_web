@@ -175,6 +175,17 @@ export function liveProbe(game, args = {}) {
       if (n >= args.touchTrace.first && n <= args.touchTrace.last) events.push({ u: n, ...event });
     });
   }
+  // eventTrace: every AI event manager call (send, start, end, clear) and delivered callback of the replayed ticks and of the console commands
+  // between them (u: the unfrozen tick count at the call), returned by `take` as `events`; compared with the original's AISendEvent/AIEvent
+  // breakpoints (tools/dx-live-win.c `call ... fname`).
+  if (args.eventTrace) {
+    const events = runtime.aiEventLog ??= [], manager = runtime.scriptVm?.aiEvents;
+    if (!manager) throw new Error('liveProbe: no AI event manager');
+    manager.trace = event => {
+      const replay = game.liveReplay, n = replay?.current?.n ?? replay?.index ?? 0;
+      if (n >= args.eventTrace.first && n <= args.eventTrace.last) events.push({ u: n, rng: hex(game.random.state), ...event });
+    };
+  }
   if (args.scriptTrace) Object.assign(runtime.scriptTrace, { pawns: new Set(args.scriptTrace.pawns), first: args.scriptTrace.first, last: args.scriptTrace.last });
   // canSeeProbe: {pawn, first, last}: after those replayed ticks, what `Enemy.AICanSee(destPoint, 1, false, false, false, true)` (the
   // test ScriptedPawn's Fleeing state makes when a move ends) gives for that pawn, with the collision hash's hits along the line
@@ -235,11 +246,29 @@ export function liveProbe(game, args = {}) {
         const tick = this.ticks[this.index];
         while (this.commands.length && this.commands[0].after <= this.index) {
           const command = this.commands.shift(), entry = { ...command };
+          // the stream state the original's command ran on (a measured input, see live-acceptance.mjs commandsWithStream)
+          if (command.rng) game.random.seed(parseInt(command.rng, 16) >>> 0);
+          // drawStacks: where each draw of the stream the command makes comes from (the script call stack's last frames)
+          let restore = null;
+          if (args.replay.drawStacks) {
+            const draws = entry.draws = [], originals = {};
+            for (const name of ['frand', 'rand']) {
+              originals[name] = game.random[name];
+              game.random[name] = (...rest) => { draws.push(`${name} ${new Error().stack.split('\n').slice(2, 9).map(l => l.trim().replace(/^at /, '').replace(/\(.*[\\/]/, '(')).join(' < ')}`); return originals[name](...rest); };
+            }
+            restore = () => { for (const name of Object.keys(originals)) game.random[name] = originals[name]; };
+          }
           try {
-            const consoleCommands = game.doors.scriptRuntime.windowHost?.consoleCommands;
-            if (!consoleCommands) throw new Error('no console command chain');
-            entry.output = consoleCommands.consoleCommand(player, command.text);
+            // `@down CODE` / `@up CODE`: a key edge (KeyboardEvent.code) through the binding path, as the original's WM_KEYDOWN/WM_KEYUP
+            const edge = /^@(down|up) (\S+)$/.exec(command.text);
+            if (edge) entry.output = plain(game.inputKey(edge[2], edge[1] === 'down'));
+            else {
+              const consoleCommands = game.doors.scriptRuntime.windowHost?.consoleCommands;
+              if (!consoleCommands) throw new Error('no console command chain');
+              entry.output = consoleCommands.consoleCommand(player, command.text);
+            }
           } catch (error) { entry.error = String(error?.message ?? error); }
+          finally { restore?.(); }
           this.commandLog.push(entry);
         }
         if (runtime.navTrace) runtime.navTrace.tick = this.index + 1;
@@ -297,6 +326,7 @@ export function liveProbe(game, args = {}) {
     if (runtime.navTrace) out.nav = runtime.navTrace.events.splice(0);
     if (runtime.scriptTrace) out.script = runtime.scriptTrace.events.splice(0);
     if (runtime.touchEvents) out.touch = runtime.touchEvents.splice(0);
+    if (runtime.aiEventLog) out.events = runtime.aiEventLog.splice(0);
   }
   if (args.status && replay) out.status = { index: replay.index, of: replay.ticks.length };
   // deferred: the boundaries Play recorded instead of running (player.unimplementedPhysicsEffects: sounds of emitters without a measured
