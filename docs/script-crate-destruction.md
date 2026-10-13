@@ -56,8 +56,11 @@ expiry, walking beside the uncollected Lockpick through public player input,
 then collecting/equipping it, fragment fade and LifeSpan expiry, and reset
 restoring the crate and removing spawned actors. It also walks across Jaime's
 departure trigger before the crates and keeps earlier transmissions queued:
-the original Mission00 lockpick message must play through while the original
-tick destroys departed Jaime. PawnList/inventory cleanup, mesh removal and NPC
+the original Mission00 lockpick message must play through while
+`AScriptedPawn::Tick` destroys departed Jaime (a `bDisappear` pawn, set by
+`Leaving.BeginState`, is destroyed on the first tick that finds Level.TimeSeconds
+minus LastRenderTime over 5.0; the fixture stamps him once through the renderer's
+feedback, and the validator pins the tick pair 4.9833 and 5.0000005). PawnList/inventory cleanup, mesh removal and NPC
 reset are checked as described in [world destruction](script-world-destroy.md).
 The movement case preserves the spawned collision view's
 read-only, class-derived `isPawn=false`: the original engine observes class

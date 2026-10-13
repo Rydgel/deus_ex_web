@@ -10,6 +10,7 @@ import {gameDirectory} from './game-directory.mjs';
 import {createGame} from '../src/viewer/game.mjs';
 import {createActorMeshScene} from '../src/viewer/npc-mesh-preview.mjs';
 import {createPlayerInputFixture} from './player-input-fixture.mjs';
+import {actorRenderFeedback} from '../src/viewer/actor-render-feedback.mjs';
 
 const root=gameDirectory(),files=[];
 for(const dir of ['Maps','System','Textures','Sounds','Music'])for(const name of await readdir(`${root}/${dir}`))
@@ -27,13 +28,27 @@ const place=(item,options)=>input.aim(item,options);
 
 // Walk through the authored departure trigger before visiting the crates.
 // Skipping this approach used to hide Jaime's transient/stasis destruction.
+// Controlled visibility fixture (as validate-secretary-patrol): the headless
+// tick draws nothing and never manufactures visibility, so Jaime's
+// LastRenderTime stays at the LoadMap value -10. AScriptedPawn::Tick (DeusEx.dll
+// 0x100195a0, docs/script-scripted-pawn-tick.md) destroys a bDisappear pawn
+// (Leaving.BeginState sets it) once Level.TimeSeconds - LastRenderTime is over
+// 5.0, so an unrendered Jaime would be gone on the tick after the trigger. Here
+// the renderer's own feedback stamps him once, as seen when he is sent away;
+// he then leaves the world 5 seconds later, while the transmissions play.
 const jaime=live('JaimeReyes0'),leavingTrigger=live('OrdersTrigger4');
 const departure=get(leavingTrigger,'Location');
 assert.equal(get(leavingTrigger,'Orders'),'Leaving');
 assert.equal(get(leavingTrigger,'Event'),'JaimeReyes');
+assert.equal(get(jaime,'bDisappear'),false,'Jaime stays until sent away');
+actorRenderFeedback(runtime,jaime)();
+const seenAt=get(jaime,'LastRenderTime');
+assert.equal(seenAt,Math.fround(get(level.actors[0],'TimeSeconds')),'the feedback stamps Level.TimeSeconds');
 input.place([departure[0]-60,departure[1],-128+43+0.2]);
 input.driveLegacy({forward:1});input.tick(40);input.driveLegacy({forward:0});
 assert.equal(get(jaime,'bTransient'),true,'original Leaving.BeginState marks Jaime transient');
+assert.equal(get(jaime,'bDisappear'),true,'original Leaving.BeginState marks Jaime to disappear');
+assert.equal(get(jaime,'LastRenderTime'),seenAt,'nothing drew Jaime since');
 assert.equal(stateKey(jaime),'deusex.scriptedpawn.patrolling');
 const jaimeInventory=[];
 for(let item=get(jaime,'Inventory');item;item=get(item,'Inventory')){
@@ -47,7 +62,7 @@ const pawnList=()=>{
  }
  return result;
 };
-assert.ok(pawnList().includes(jaime));
+assert.ok(pawnList().includes(jaime),'a pawn seen within 5 seconds is not yet destroyed');
 // Original trigger Touch bodies start/queue earlier transmissions. Mission00's
 // Timer must queue DL_Lockpick behind them when it observes the broken crate.
 for(const tag of ['dl_start','dl_door']){
@@ -69,8 +84,14 @@ const cl=get(crate,'Location');
 const px=[cl[0],cl[1]+64,-128+43+0.2];
 input.place(px,{yaw:-Math.PI/2,pitch:Math.atan2(cl[2]-(px[2]+game.player.baseEyeHeight),px[1]-cl[1])});
 const traces=new Set(),fragments=new Set();
+// Jaime's departure clock: Level.TimeSeconds - LastRenderTime (a float32, as
+// AScriptedPawn::Tick computes it) after each tick that leaves him in the
+// world, and after the first tick that finds him gone.
+const unseenFor=()=>Math.fround(get(level.actors[0],'TimeSeconds')-seenAt);
+let lastSeenWithin=unseenFor(),goneAfter=null;
 const tick=n=>{for(let i=0;i<n;i++){
  game.tick(1/60);
+ if(goneAfter===null){if(level.actors.includes(jaime))lastSeenWithin=unseenFor();else goneAfter=unseenFor();}
  for(const actor of level.actors){
   if(!actor)continue;
   const cls=runtime.instance(actor).cls;
@@ -153,10 +174,13 @@ for(let frame=0;frame<Math.ceil((maxLife+0.1)*60);frame++){
 }
 assert.ok(faded,'fragment fade executed');
 assert.ok([...fragments].every(actor=>runtime.instance(actor).pendingKill),'LifeSpan destroys every fragment');
-// Keep ticking through the queued messages and the original stasis destroy.
-// No direct Destroy, artificial LifeSpan or forced stasis is used for Jaime.
+// Keep ticking through the queued messages and the departed pawn's destroy.
+// No direct Destroy, artificial LifeSpan or forced stasis is used for Jaime;
+// the unseen-for-5-seconds gate of AScriptedPawn::Tick decides the tick.
 for(let frame=0;frame<3600&&(level.actors.includes(jaime)||get(player,'dataLinkPlay'));frame++)tick(1);
-assert.equal(runtime.instance(jaime).pendingKill,true,'original Actor.Tick destroys departed Jaime');
+assert.equal(runtime.instance(jaime).pendingKill,true,'AScriptedPawn::Tick destroys departed Jaime');
+assert.ok(goneAfter!==null&&lastSeenWithin<=5&&goneAfter>5,
+ `Jaime is destroyed on the first tick that finds him unseen for over 5 seconds (${lastSeenWithin}, then ${goneAfter})`);
 assert.ok(!level.actors.includes(jaime),'departed Jaime leaves the live actor array');
 assert.ok(!pawnList().includes(jaime),'original Pawn.Destroyed unlinks Jaime');
 assert.ok(jaimeInventory.every(item=>runtime.instance(item).pendingKill&&!level.actors.includes(item)),

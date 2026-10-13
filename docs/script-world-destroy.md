@@ -193,8 +193,11 @@ reproduces the same destruction frame.
 
 `validate-crowbar-crate.mjs` additionally crosses `OrdersTrigger4`, queues the
 start/door transmissions, breaks a crate and collects/equips its lockpick
-while `Mission00.Timer` queues `DL_Lockpick`. It checks original stasis
-destruction of Jaime, PawnList and inventory cleanup, continued speech and
+while `Mission00.Timer` queues `DL_Lockpick`. It checks the destruction of
+Jaime by `AScriptedPawn::Tick` once he has been unseen for 5 seconds (before
+2026-10-13 the pawn tick was missing and `Actor.Tick`'s stasis gate destroyed
+him; an unrendered headless Jaime now goes on the tick after the trigger, so
+the fixture stamps his LastRenderTime), PawnList and inventory cleanup, continued speech and
 queue completion, mesh removal, and reset restoring Jaime and the crate.
 This is a translation/integration check against the original contracts above,
 not an original-executable whole-scene recording.
