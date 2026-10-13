@@ -789,7 +789,7 @@ After a typed command Play lets three frames pass before the next tick, as the o
 
 | Capture | ticks | manager calls compared | NPC fields | stream draws per tick |
 | --- | ---: | ---: | --- | --- |
-| Pistol: pickup, draw, 3 shots (one hit glass, one a wall, one an NPC, killing him) | 600 | 1,069 of 1,069 | 46 of 46 NPCs equal (one carcass settling, below) | equal |
+| Pistol: pickup, draw, 3 shots (the first and third hit the same NPC and killed him, the second a glass pane) | 600 | 1,069 of 1,069 | 46 of 46 NPCs equal, but the dead one's settling (below) | equal |
 | Pistol, then assault shotgun: 6 shots | 860 | 1,586 of 1,586 | 46 of 46 equal (one `LastRenderTime` one tick apart on one NPC for 2 ticks) | equal |
 
 In those ticks: `WeaponFire` and `LoudNoise` from the player (value 1.0, radius 800), `Projectile` from the `Tracer`, `Futz` when the bullet
@@ -807,7 +807,7 @@ function `AICanHear` and the score callbacks are exercised with the shots at 300
 
 **Open**
 
-* **A killed pawn settling into the floor, one tick late.** In the first capture the NPC the third shot killed (`LowerClassMale1`, state
+* **A killed pawn settling into the floor, one tick late.** In the first capture the NPC the shots killed (`LowerClassMale1`, state
   Dying, Physics walking after his fall) stands 3.72 units below the floor at tick 336 in both programs, velocity and horizontal position equal;
   the original lifts him by 2.10 at tick 337 and 1.62 at 338 (to the floor at -336.2), Play at 338 and 339. One tick, three ticks of z. Not traced
   to a body: a capture with `MoveActor` breakpoints on that pawn is needed (the victim differs per capture).
