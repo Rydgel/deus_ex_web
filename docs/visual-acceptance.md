@@ -407,8 +407,7 @@ own process, with every input that is not the game's logic measured from the ori
 1. **The original is observed as a debugger** (`tools/dx-live-win.c`, build with
    `i686-w64-mingw32-gcc -O2 -o ad/build/dx-live-win.exe tools/dx-live-win.c -lpsapi`). `trace` attaches to the running DeusEx.exe under
    Wine and breaks at `ULevel::Tick`'s entry (Engine.dll `0x103a51a0`, ECX = the player's level) and its `ret 8` (`0x103a5baf`), optionally
-   also at `AActor::Tick` (`0x103a1aa0`). With the game thread stopped there, each observation is consistent (reading the process from
-   outside tore: a Tick runs between two reads), and the original's input delta (the stack argument), the double level clock (`ULevel +0xdc`),
+   also at `AActor::Tick` (`0x103a1aa0`). With the game thread stopped there, each observation is consistent (a read from outside the process can straddle a Tick; not measured, avoided), and the original's input delta (the stack argument), the double level clock (`ULevel +0xdc`),
    `LevelInfo.TimeSeconds` and the CRT `rand` state are read exactly. Per tick it writes one JSON line with those and the watched actors'
    fields (Location, Rotation, Velocity, Acceleration, Physics, AnimSequence/Frame/Rate, TweenRate, state, Destination, MoveTarget,
    MoveTimer, Orders, speeds, bIsWalking and the sitting/pausing flags, LastRenderTime, DistanceFromPlayer, bStasis, bForceStasis). The
@@ -449,8 +448,8 @@ Measured from the CRT state (the `rand` word of the msvcrt thread data, `+0x14`)
   first unfrozen tick (the 59 pawns' and the generators' startup), 54 in the Club's, then mostly under 25. Setting Play's state from the original's at each tick's entry therefore keeps a difference in
   how many draws one actor makes from spreading, and the counts are compared as a result of their own.
 - With the population matched the first unfrozen tick's totals are equal (317 and 317 on Island, 54 and 54 on the Club) and so are the
-  per-actor counts (`AActor::Tick` attribution) for every NPC and generator; before the match the only difference was the one extra
-  generator the original's load had kept.
+  per-actor counts (`AActor::Tick` attribution) for every NPC and generator; before the match the only difference was one generator
+  (`FlyGenerator1`) that the original's load had kept and Play's had not.
 
 ### Placement constraint
 
