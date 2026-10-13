@@ -99,7 +99,9 @@ export function liveProbe(game, args = {}) {
   // names the first call whose effect differs from the original's (tools/dx-live-win.c `call` on the same natives).
   if (args.scriptTrace && !runtime.scriptTrace) {
     const trace = runtime.scriptTrace = { pawns: new Set(), tick: 0, first: 0, last: -1, events: [], depth: 0 };
-    const on = receiver => receiver && trace.pawns.has(receiver.name) && trace.tick >= trace.first && trace.tick <= trace.last;
+    // a name ending in '*' matches every actor with that prefix (spawned actors are not known by name in advance)
+    const named = name => trace.pawns.has(name) || [...trace.pawns].some(entry => entry.endsWith('*') && name?.startsWith(entry.slice(0, -1)));
+    const on = receiver => receiver && named(receiver.name) && trace.tick >= trace.first && trace.tick <= trace.last;
     const pawnState = receiver => { try { return { mt: runtime.readNamed(receiver, 'MoveTimer'), dest: plain(runtime.readNamed(receiver, 'Destination')),
       td: runtime.readNamed(receiver, 'TurnDirection'), acc: runtime.readNamed(receiver, 'bAcceptBump'), phys: runtime.readNamed(receiver, 'Physics') }; } catch { return {}; } };
     const wrapCall = (name, fn, describe) => {
@@ -108,7 +110,7 @@ export function liveProbe(game, args = {}) {
         const receiver = describe.receiver(...rest);
         if (!on(receiver)) return original(...rest);
         const depth = trace.depth++, before = pawnState(receiver);
-        trace.events.push({ u: trace.tick, d: depth, ev: 'enter', fn: describe.label(...rest), ...before });
+        trace.events.push({ u: trace.tick, d: depth, ev: 'enter', pawn: receiver.name, fn: describe.label(...rest), ...before });
         try { return original(...rest); }
         finally { trace.depth--; trace.events.push({ u: trace.tick, d: depth, ev: 'leave', fn: describe.label(...rest), ...pawnState(receiver) }); }
       };

@@ -42,6 +42,8 @@
  *                                 `argidx`, to <out>.calls.jsonl. A `gate` function arms the others while it runs for
  *                                 the pawn `call-pawn` names (ECX); the rest log only inside a gate unless `always`.
  *                                 `name0` / `namee` also name the actor in argument 0 / ECX.
+ *         watch-write <offset>    a hardware write watch (DR0) on that offset of the call-pawn, armed for the traced ticks; each
+ *                                 write is a "write" record with the new value, the EIP after the writing instruction and 12 stack dwords
  *         call-ticks <first> <last>   the unfrozen ticks whose calls are traced
  *         call-pawn <name>        the actor whose gate calls arm the tracing (any when omitted)
  *         watch <A,B,..> <Field:off:type[:mask]>...   fields of those actors
@@ -189,6 +191,7 @@ static char call_pawn[96] = "";
 static unsigned long call_seq = 0;
 static FILE *cout;
 static int pending_kind = -1, pending_index = -1;   /* a single step to re-arm a call (0) or return (1) breakpoint */
+static unsigned watch_off = 0; static uintptr_t watch_pawn = 0; static HANDLE game_thread = NULL;   /* watch-write: a hardware write watch on call-pawn + offset */
 
 static int parse_field(const char *text, FieldSpec *f) {
   char off[32] = "", type[8] = "", mask[32] = "";
@@ -217,6 +220,7 @@ static int read_config(const char *path) {
     else if (!strcmp(tok, "kill-on-crash")) kill_on_crash = atoi(strtok(NULL, " \t\r\n"));
     else if (!strcmp(tok, "pre-watch")) pre_watch = atoi(strtok(NULL, " \t\r\n"));
     else if (!strcmp(tok, "call-ticks")) { call_first = atoi(strtok(NULL, " \t\r\n")); call_last = atoi(strtok(NULL, " \t\r\n")); }
+    else if (!strcmp(tok, "watch-write")) watch_off = (unsigned)strtoul(strtok(NULL, " \t\r\n"), NULL, 0);
     else if (!strcmp(tok, "call-pawn")) { char *v = strtok(NULL, " \t\r\n"); if (v) strncpy(call_pawn, v, sizeof(call_pawn) - 1); }
     else if (!strcmp(tok, "call") && call_count < MAXCALLS) {
       CallBp *c = &calls[call_count]; memset(c, 0, sizeof(*c));
@@ -402,10 +406,20 @@ static double read_double(uintptr_t a) { double v = 0; read_mem(a, &v, 8); retur
 static float read_float(uintptr_t a) { float v = 0; read_mem(a, &v, 4); return v; }
 
 
+/* watch-write: DR0 on the call-pawn's field (4 bytes, write), armed for the traced ticks. A hit is an EXCEPTION_SINGLE_STEP
+ * with DR6 bit 0, reported by watch_hit after the writing instruction ran. */
+static void watch_set(int on) {
+  if (!watch_off || !watch_pawn || !game_thread) return;
+  CONTEXT dc; memset(&dc, 0, sizeof(dc)); dc.ContextFlags = CONTEXT_DEBUG_REGISTERS;
+  if (!GetThreadContext(game_thread, &dc)) return;
+  dc.Dr0 = on ? (DWORD)(watch_pawn + watch_off) : 0; dc.Dr6 = 0; dc.Dr7 = on ? (0x1u | (1u << 16) | (3u << 18)) : 0;
+  SetThreadContext(game_thread, &dc);
+}
 static void cb_write(uintptr_t address, unsigned char byte) { write_mem(address, &byte, 1); FlushInstructionCache(process, (LPCVOID)address, 1); }
 /* Arm or remove every call breakpoint (the traced ticks' span) and the pending return breakpoints. */
 static void calls_set(int on) {
   if (on == calls_armed) return;
+  watch_set(on);
   for (int i = 0; i < call_count; i++) {
     if (on) { read_mem(calls[i].address, &calls[i].original, 1); cb_write(calls[i].address, 0xCC); }
     else cb_write(calls[i].address, calls[i].original);
@@ -468,6 +482,7 @@ static int handle_call_event(HANDLE th, DWORD tid, uintptr_t where, int unfrozen
         char text[96] = ""; strncpy(text, object_name(ctx.Ecx), sizeof(text) - 1);
         if (call_pawn[0] && strcmp(text, call_pawn)) armed = 0; else armed = 1;
       }
+      if (armed && c->gate && watch_off && !watch_pawn) { watch_pawn = (uintptr_t)ctx.Ecx; watch_set(1); }
       if (armed) {
         unsigned args[16]; memset(args, 0, sizeof(args)); read_mem(ctx.Esp + 4, args, 4 * c->nwords);
         unsigned long seq = ++call_seq;
@@ -506,6 +521,17 @@ static int handle_call_event(HANDLE th, DWORD tid, uintptr_t where, int unfrozen
   if (step_kind >= 0) { ctx.EFlags |= 0x100; pending_kind = step_kind; pending_index = step_index; }
   SetThreadContext(th, &ctx);
   (void)tid;
+  return 1;
+}
+static int watch_hit(HANDLE th, uintptr_t where, int unfrozen) {
+  if (!watch_off || !watch_pawn || !th || !cout) return 0;
+  CONTEXT dc; memset(&dc, 0, sizeof(dc)); dc.ContextFlags = CONTEXT_DEBUG_REGISTERS | CONTEXT_CONTROL;
+  if (!GetThreadContext(th, &dc) || !(dc.Dr6 & 1)) return 0;
+  unsigned now = read_u32(watch_pawn + watch_off), stack[12]; memset(stack, 0, sizeof(stack)); read_mem(dc.Esp, stack, sizeof(stack));
+  float f; memcpy(&f, &now, 4);
+  fprintf(cout, "{\"u\":%d,\"seq\":%lu,\"ev\":\"write\",\"eip\":\"0x%lx\",\"new\":\"0x%x\",\"float\":%.9g,\"stack\":", unfrozen, ++call_seq, (unsigned long)where, now, (f == f && f > -1e30f && f < 1e30f) ? f : 0.0f);
+  print_words(cout, stack, 12); fprintf(cout, "}\n"); fflush(cout);
+  dc.Dr6 = 0; dc.ContextFlags = CONTEXT_DEBUG_REGISTERS; SetThreadContext(th, &dc);
   return 1;
 }
 static int finish_call_step(void) {
@@ -592,7 +618,9 @@ static int do_trace(const char *config) {
       DWORD code = ev.u.Exception.ExceptionRecord.ExceptionCode;
       uintptr_t where = (uintptr_t)ev.u.Exception.ExceptionRecord.ExceptionAddress;
       HANDLE th = thread_of(ev.dwThreadId);
-      if (code == EXCEPTION_BREAKPOINT && th && cout && handle_call_event(th, ev.dwThreadId, where, unfrozen)) {
+      if (code == EXCEPTION_SINGLE_STEP && watch_off && watch_hit(th, where, unfrozen)) {
+        /* a hardware write watch on the call-pawn's field */
+      } else if (code == EXCEPTION_BREAKPOINT && th && cout && handle_call_event(th, ev.dwThreadId, where, unfrozen)) {
         /* a traced call's entry or return */
       } else if (code == EXCEPTION_SINGLE_STEP && pending_kind >= 0 && finish_call_step()) {
         /* the instruction under a call breakpoint ran: re-armed */
@@ -601,6 +629,7 @@ static int do_trace(const char *config) {
         CONTEXT ctx; ctx.ContextFlags = CONTEXT_CONTROL | CONTEXT_INTEGER;
         GetThreadContext(th, &ctx);
         int mine = is_entry ? ((uintptr_t)ctx.Ecx == level_ptr) : in_our_tick;
+        if (is_entry && mine) game_thread = th;
         if (is_actor && in_our_tick && released && unfrozen >= actor_trace_first && unfrozen <= actor_trace_last) {
           fprintf(aout, "{\"u\":%d,\"actor\":\"%s\",\"rng\":\"0x%08x\"}\n", unfrozen, object_name((uintptr_t)ctx.Ecx), rng_ptd ? read_u32(rng_ptd + 0x14) : 0);
         }
