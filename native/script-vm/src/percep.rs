@@ -367,25 +367,44 @@ fn vector_to_rotator(v: [f64; 3]) -> Option<[i32; 3]> {
     Some([pitch as i32, yaw as i32, 0])
 }
 
-/// The angular trapezoid (0x103c7360, script-pawn-perception.mjs).
-fn trapezoid(delta: f64, halfwidth: f64, extent: f64) -> f64 {
-    let mut d = f(delta);
-    while d <= -180.0 {
-        d = f(d + 360.0);
+/// The angular trapezoid (0x103c7360, script-pawn-perception.mjs), as the x87 value it leaves in ST0: the delta wrapped to +-180 in
+/// extended precision, made absolute; the plateau (halfwidth - extent) * 0.5 kept extended (the edge) and as its float32 store (the
+/// compare and the ramp). None for an unordered angle, which never ends in the original (the JavaScript body throws).
+fn trapezoid(delta: f64, halfwidth: f64, extent: f64) -> Option<Ext> {
+    let mut d = ld(delta);
+    if d.nan() {
+        return None;
     }
-    while d > 180.0 {
-        d = f(d - 360.0);
+    let (low, high, period) = (ld(-180.0), ld(180.0), ld(360.0));
+    loop {
+        let (less, equal) = fcom(d, low);
+        if !(less || equal) {
+            break;
+        }
+        d = d.add(period);
     }
-    let d = f64::from_bits(d.to_bits() & !(1u64 << 63));
-    let plateau = st(sub(ld(halfwidth), ld(extent)).mul(crate::load_double(0.5)));
-    let edge = st(ld(plateau).add(ld(extent)));
-    if d <= plateau {
-        return 1.0;
+    loop {
+        let (less, equal) = fcom(d, high);
+        if less || equal {
+            break;
+        }
+        d = sub(d, period);
     }
-    if d > edge {
-        return 0.0;
+    if below(d, zero()) {
+        d = d.neg();
     }
-    st(sub(crate::load_double(1.0), sub(ld(d), ld(plateau)).div(ld(extent))))
+    let plateau = sub(ld(halfwidth), ld(extent)).mul(half());
+    let stored = Ext::load(plateau.store());
+    let edge = plateau.add(ld(extent));
+    let (less, equal) = fcom(d, edge);
+    if !(less || equal) {
+        return Some(zero());
+    }
+    let (less, equal) = fcom(d, stored);
+    if less || equal {
+        return Some(one());
+    }
+    Some(sub(one(), sub(d, stored).div(ld(extent))))
 }
 
 /// appSqrt: the double argument, FSQRT, the double result. The JavaScript
@@ -740,21 +759,28 @@ impl Run {
         let o_loc = self.read3(&o, F_LOCATION, SITE_PERCEP);
         let base_eye = self.read(&viewer, F_BASEEYE, SITE_PERCEP);
         let eye = [v_loc[0], v_loc[1], f(v_loc[2] + base_eye)];
-        let delta = [f(o_loc[0] - eye[0]), f(o_loc[1] - eye[1]), f(o_loc[2] - eye[2])];
-        let mut dist_sq = st(magsq3(delta));
-        if !(dist_sq >= 1.0) {
-            dist_sq = 1.0;
+        // The deltas other - eye stay extended (fsub dword); their float32 stores are the vector the rotation and the line of sight
+        // use, while the squared distance sums the extended squares and is stored as a double (fstp qword [ebp-0x44]).
+        let dx = sub(ld(o_loc[0]), ld(eye[0]));
+        let dy = sub(ld(o_loc[1]), ld(eye[1]));
+        let dz = sub(ld(o_loc[2]), ld(eye[2]));
+        let delta = [st(dx), st(dy), st(dz)];
+        let mut dist_sq = dx.mul(dx).add(dy.mul(dy)).add(dz.mul(dz)).store_double();
+        if below(dist_sq, crate::load_double(1.0)) {
+            dist_sq = crate::load_double(1.0);
         }
         let cr = self.read(&o, F_CRADIUS, SITE_PERCEP);
         let ch = self.read(&o, F_CHEIGHT, SITE_PERCEP);
+        // (cr^2 + ch^2) / distSq: cr^2 stays extended, ch^2 is stored as a double (fstp qword [ebp-0x7c]); the ratio is not stored.
         let cr2 = ld(cr).mul(ld(cr));
-        let ch2 = ld(ch).mul(ld(ch));
-        let ratio = st(cr2.add(ch2).div(ld(dist_sq)));
-        if !(ratio > self.read(&viewer, F_MINANG, SITE_PERCEP)) {
+        let ch2 = ld(ch).mul(ld(ch)).store_double();
+        let ratio = ch2.add(cr2).div(dist_sq);
+        let (below_min, equal_min) = fcom(ratio, ld(self.read(&viewer, F_MINANG, SITE_PERCEP)));
+        if below_min || equal_min {
             return Ok(0.0);
         }
-        let cyl = check_cylinder && ratio >= 0.0003046792916483;
-        let mut acc = st(ld(visibility).mul(ld(ratio)).mul(ld(64.0)));
+        let cyl = check_cylinder && !below(ratio, crate::load_double(0.0003046792916483));
+        let mut acc = st(ld(visibility).mul(ratio).mul(crate::load_double(64.0)));
 
         if check_dir && acc > 0.0 {
             let aspect = self.read(&viewer, F_ASPECT, SITE_PERCEP);
@@ -764,8 +790,8 @@ impl Run {
                 0.0
             };
             let degrees = crate::load_double(114.59155902616465);
-            let h_ext = st(app_atan(app_sqrt(cr2.div(ld(dist_sq)))).ok_or(HandBack)?.mul(degrees));
-            let v_ext = st(app_atan(app_sqrt(ch2.div(ld(dist_sq)))).ok_or(HandBack)?.mul(degrees));
+            let h_ext = st(app_atan(app_sqrt(cr2.div(dist_sq))).ok_or(HandBack)?.mul(degrees));
+            let v_ext = st(app_atan(app_sqrt(ch2.div(dist_sq))).ok_or(HandBack)?.mul(degrees));
             let is_player = self.obj_is_a(&viewer, 0);
             let base = self.read3(&viewer, if is_player { F_VIEWROT } else { F_ROTATION }, SITE_PERCEP);
             let add = self.read3(&viewer, F_ADDVIEWROT, SITE_PERCEP);
@@ -777,14 +803,14 @@ impl Run {
             let unit = ld(1.52587890625e-05);
             let yaw_deg = st(ld(rot[1] as f64 * 360.0).mul(unit));
             let pitch_deg = st(ld(rot[0] as f64 * 360.0).mul(unit));
-            let yaw_trap = trapezoid(yaw_deg, self.read(&viewer, F_HFOV, SITE_PERCEP), h_ext);
-            let mut pitch_trap = trapezoid(pitch_deg, half_fov_v, v_ext);
-            // Near-target pitch floor (0x103c6e38).
-            if dist_sq < 22500.0 && pitch_trap < 0.75 {
-                pitch_trap = 0.75;
+            let yaw_trap = trapezoid(yaw_deg, self.read(&viewer, F_HFOV, SITE_PERCEP), h_ext).ok_or(HandBack)?;
+            acc = st(yaw_trap.mul(ld(acc)));
+            let mut pitch_trap = trapezoid(pitch_deg, half_fov_v, v_ext).ok_or(HandBack)?;
+            // Near-target pitch floor (0x103c6e38): the double compares, the float32 constant stored.
+            if below(dist_sq, crate::load_double(22500.0)) && below(pitch_trap, crate::load_double(0.75)) {
+                pitch_trap = ld(0.75);
             }
-            acc = st(ld(acc).mul(ld(yaw_trap)));
-            acc = st(ld(acc).mul(ld(pitch_trap)));
+            acc = st(pitch_trap.mul(ld(acc)));
         }
 
         if check_visibility && acc > 0.0 {

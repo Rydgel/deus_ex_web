@@ -239,6 +239,7 @@ function buildScene(scene) {
       return queues.singleLine[queues.si++ % queues.singleLine.length] ?? 0;
     },
     atan: x => (Object.keys(atanTable).length ? atanLookup(atanTable, x) : Math.atan(x)),
+    atanExt: Object.keys(atanTable).length ? x => atanExtLookup(atanTable, x) : undefined,
     vectorToRotator: Object.keys(rotationTable).length ? v => rotationLookup(rotationTable, v) : undefined,
   };
   return { objects, pawn, levelInfo, level, services, queues, captured };
@@ -262,8 +263,16 @@ function atanLookup(table, x) {
   const row = table[key];
   if (row === undefined) throw new Error(`missing atan oracle for ${key}`);
   const buf = new DataView(new ArrayBuffer(8));
-  buf.setBigUint64(0, BigInt('0x' + row));   // row is the u64 double bits (hex)
+  buf.setBigUint64(0, BigInt('0x' + row.d));   // the u64 double bits (hex)
   return buf.getFloat64(0);
+}
+/** appAtan's unrounded result as an x87 value: 16 bits of sign and exponent, then the 64-bit significand. */
+function atanExtLookup(table, x) {
+  const key = f64bits(x).toString(16).padStart(16, '0');
+  const row = table[key];
+  if (row === undefined) throw new Error(`missing atan oracle for ${key}`);
+  const word = BigInt('0x' + row.e);
+  return { neg: Number(word >> 79n), sig: word & ((1n << 64n) - 1n), exp: Number((word >> 64n) & 0x7fffn) - 16383 - 63 };
 }
 
 /** Runs the module over a scene, returning the same shape the probe emits. */
@@ -320,7 +329,7 @@ function runJs(scene, mod = module) {
 // --------------------------------------------------------------------------
 const runProbe = payload =>
   JSON.parse(execFileSync(python, [probeScript], {
-    input: JSON.stringify(payload), maxBuffer: 1 << 28, encoding: 'utf8', cwd: root,
+    input: JSON.stringify(payload), maxBuffer: 1 << 30, encoding: 'utf8', cwd: root,
   }));
 
 /** Measure each missed FVector::Rotation input on real silicon. */
@@ -348,8 +357,9 @@ function measureAtans(keys, table) {
   });
   for (const line of out.split('\n')) {
     const p = line.trim().split(',');
-    if (p.length !== 2) continue;
-    table[p[0].toLowerCase().padStart(16, '0')] = p[1].toLowerCase().padStart(16, '0');
+    if (p.length !== 3) continue;
+    // the double fstpl gives, and the unrounded 80-bit fpatan result appAtan returns in ST0
+    table[p[0].toLowerCase().padStart(16, '0')] = { d: p[1].toLowerCase().padStart(16, '0'), e: p[2].toLowerCase().padStart(20, '0') };
   }
 }
 
@@ -676,6 +686,27 @@ for(const [name,time,target] of [
     visTime:10,visNew:0.41233187913894653,visOld:0.123,...target}},
   args:[obj('t'),flt(1),int(1),int(0),int(0),int(0)],lighting:[0.213]});
 
+// Seeded random AICanSee scenes at the live game's kind of geometry (non-integer coordinates, a target inside the view cone, the
+// Underworld's FOV and aspect): the hand-written scenes above use round numbers, where an x87 rounding placed wrongly (a float32
+// store of the squared distance, of the angular size, of the collision radius sum) changes nothing. Found live: an NPC's
+// CycleCumulative differed by 2 ulps from the original at tick 4 (docs/ai-event-manager.md, perception pilot).
+{
+  let seed = 0x1f2e3d4c;
+  const rnd = () => { seed ^= seed << 13; seed >>>= 0; seed ^= seed >>> 17; seed ^= seed << 5; seed >>>= 0; return seed / 4294967296; };
+  for (let k = 0; k < 300; k++) {
+    const viewer = [f32((rnd() - 0.5) * 4000 + rnd() * 0.01), f32((rnd() - 0.5) * 4000 + rnd() * 0.01), f32((rnd() - 0.5) * 400 + rnd() * 0.01)];
+    const yaw = Math.floor(rnd() * 65536) - 32768, heading = (yaw / 65536) * 2 * Math.PI + (rnd() - 0.5) * (k < 100 ? 1.6 : 2.4);
+    const distance = k % 9 === 8 ? 60 + rnd() * 80 : 150 + rnd() * 1300;
+    const target = [f32(viewer[0] + Math.cos(heading) * distance), f32(viewer[1] + Math.sin(heading) * distance), f32(viewer[2] + (rnd() - 0.5) * 120)];
+    const heights = [39, 43, 38.5, 44], eyes = [38, 40, 44];
+    scenes.push({ name: `aic-fuzz-${k}`, body: 'AICanSee',
+      pawn: { ...NPC, location: viewer, rotation: [0, yaw, 0], baseEyeHeight: eyes[k % 3], aiHorizontalFov: k < 100 ? 160 : [30, 60, 90, 120][k % 4], aspectRatio: k < 100 ? 2.3 : 1.333333,
+        minAngularSize: f32(0.0000761582), visibilityThreshold: f32(0.01) },
+      actors: { t: { ...TGT_PAWN, location: target, collisionRadius: k % 5 ? 20 : 17, collisionHeight: heights[k % 4] } },
+      args: [obj('t'), flt(k % 7 ? 1 : f32(0.3 + rnd())), int(1), int(1), int(0), int(1)], singleLine: [1, 1, 1, 1], lighting: [f32(0.05 + rnd() * 0.9)] });
+  }
+}
+
 // --------------------------------------------------------------------------
 // Oracle convergence: run the corpus, measure every unmeasured FVector::Rotation
 // and appAtan input on real silicon, fold them into the tables, re-run until
@@ -684,7 +715,7 @@ for(const [name,time,target] of [
 // --------------------------------------------------------------------------
 const rotationTable = {}, atanTable = {};
 for (let round = 0; round < 5; round++) {
-  const payload = scenes.map(s => ({ ...s, rotationTable, atanTable }));
+  const payload = scenes.map(s => ({ ...s, rotationTable, atanTable, dumpFrame: process.env.DUMP_SCENE === s.name }));
   const results = runProbe(payload);
   const rotMiss = new Set(), atanMiss = new Set();
   results.forEach((r, i) => {
@@ -766,6 +797,19 @@ function compareAll(mod) {
   return { failures, failed };
 }
 
+if (process.env.DUMP_SCENE) {
+  // The original worker's frame after its direction block (0x103c6e6c): the locals AICanSee keeps, to find where a port departs.
+  const r = scenes.find(x => x.name === process.env.DUMP_SCENE)?.result;
+  if (r?.frameDump) {
+    const bytes = Buffer.from(r.frameDump, 'hex'), base = 0x100;
+    const f32 = o => bytes.readFloatLE(base + o), i32 = o => bytes.readInt32LE(base + o), f64 = o => bytes.readDoubleLE(base + o);
+    console.log('TRAP', JSON.stringify(r.trapCalls));
+    console.log('MISSED', JSON.stringify(r.missedOracles), 'st0', r.st0, 'atanTable', JSON.stringify(Object.entries(atanTable).slice(0,3)));
+    console.log('ORACLE', JSON.stringify({ acc: f32(0xc), distSq: f64(-0x44), chsq: f64(-0x7c), hExt: f32(-0x74), vExt: f32(-0x2c), halfFovV: f32(-0x54),
+      pitch: i32(-0x50), yaw: i32(-0x4c), roll: i32(-0x48), delta: [f32(-0x28), f32(-0x24), f32(-0x20)], eye: [f32(-0x3c), f32(-0x38), f32(-0x34)],
+      viewRot: [i32(-0x6c), i32(-0x68), i32(-0x64)], local14: f32(0x14), local8: f32(8) }));
+  }
+}
 const { failures, failed } = compareAll(module);
 const passed = scenes.length - failures;
 console.log(`${failures ? 'FAIL' : 'PASS'} validate-pawn-perception: ${passed}/${scenes.length} scenes bit-exact`);
@@ -817,13 +861,13 @@ const MUTATIONS = [
     replacement: "if (false) continue;\n      if (services.isA(cand, 'Pawn')) continue;",
     expect: ['pat-noproj'] },
   // --- AICanSee (705) ---
-  { name: 'aic-angmul', pattern: 'let acc = st(x87mul(x87mul(ld(visibility), ld(ratio)), ld(64)));',
-    replacement: 'let acc = st(x87mul(x87mul(ld(visibility), ld(ratio)), ld(32)));',
+  { name: 'aic-angmul', pattern: 'let acc = st(x87mul(x87mul(ld(visibility), ratio), ld64(64)));',
+    replacement: 'let acc = st(x87mul(x87mul(ld(visibility), ratio), ld64(32)));',
     expect: ['aic-clear'] },
-  { name: 'aic-pitch-floor', pattern: 'if (distSq < 22500 && pitchTrap < 0.75) pitchTrap = 0.75;',
-    replacement: 'if (distSq < 22500 && pitchTrap < 0.75) pitchTrap = 0.25;',
+  { name: 'aic-pitch-floor', pattern: 'if (ltU(distSq, ld64(22500)) && ltU(pitchTrap, ld64(0.75))) pitchTrap = ld(0.75);',
+    replacement: 'if (ltU(distSq, ld64(22500)) && ltU(pitchTrap, ld64(0.75))) pitchTrap = ld(0.25);',
     expect: ['aic-pitch-floor'] },
-  { name: 'aic-cyl-gate', pattern: 'const cyl = bCheckCylinder && (ratio >= 0.0003046792916483);',
+  { name: 'aic-cyl-gate', pattern: 'const cyl = bCheckCylinder && !ltU(ratio, ld64(0.0003046792916483));',
     replacement: 'const cyl = bCheckCylinder;',
     expect: ['aic-cyl-far'] },
 ];

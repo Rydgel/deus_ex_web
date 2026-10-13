@@ -440,6 +440,13 @@ class PawnPerceptionProbe:
         if address == self.frand_body:
             self.intercept_frand(cpu)
             return
+        if address == 0x103c7360 and getattr(self, 'dump_frame', False):
+            esp = cpu.reg_read(UC_X86_REG_ESP)
+            self.trap_calls.append(list(self.read(esp + 4, '3f')))
+        if address == 0x103c6e6c and getattr(self, 'dump_frame', False):
+            ebp = cpu.reg_read(UC_X86_REG_EBP)
+            self.frame_dump = bytes(cpu.mem_read(ebp - 0x100, 0x130)).hex()
+            self.frame_ebp = ebp
         if address == self.fail_body:
             raise ProbeError(f'appFailAssert fired; trace {self.trace[-12:]}')
         if address == self.unwind_body:
@@ -467,16 +474,27 @@ class PawnPerceptionProbe:
         cpu.reg_write(UC_X86_REG_ESP, esp + 8)
 
     def intercept_atan(self, cpu):
+        """appAtan(double) (Core 0x10123270: fld qword; fld1; fpatan; ret): the unrounded 80-bit result is pushed on the x87 stack."""
         esp = cpu.reg_read(UC_X86_REG_ESP)
         bits = self.read(esp + 4, 'Q')[0]
         row = self.atan_table.get('%016x' % bits)
         if row is None:
             arg = struct.unpack('<d', struct.pack('<Q', bits))[0]
-            row = struct.unpack('<Q', struct.pack('<d', math.atan(arg)))[0]
-            self.missed_oracles.append(('atan', '%016x' % bits, '%016x' % row))
-        if isinstance(row, str):          # hex-encoded u64 bits from the table
-            row = int(row, 16)
-        cpu.reg_write(UC_X86_REG_ST0, double_to_x87(row))
+            result = struct.unpack('<Q', struct.pack('<d', math.atan(arg)))[0]
+            self.missed_oracles.append(('atan', '%016x' % bits, '%016x' % result))
+            x80 = double_to_x87(result)
+        elif isinstance(row, dict):       # measured: {'d': double bits hex, 'e': 80-bit hex}
+            e = int(row['e'], 16)
+            x80 = e                       # 16 bits of sign/exponent, then the 64-bit significand
+        else:                             # a double only
+            x80 = double_to_x87(int(row, 16) if isinstance(row, str) else row)
+        fpsw = cpu.reg_read(UC_X86_REG_FPSW)
+        top = (fpsw >> 11) & 7
+        new_top = (top - 1) & 7
+        cpu.reg_write(UC_X86_REG_FPSW, (fpsw & ~0x3800) | (new_top << 11))
+        cpu.reg_write(UC_X86_REG_FP0 + new_top, (x80 & ((1 << 64) - 1), (x80 >> 64) & 0xffff))
+        fptag = cpu.reg_read(UC_X86_REG_FPTAG)
+        cpu.reg_write(UC_X86_REG_FPTAG, fptag & ~(3 << (2 * new_top)))
         cpu.reg_write(UC_X86_REG_EIP, self.read(esp, 'I')[0])
         cpu.reg_write(UC_X86_REG_ESP, esp + 4)
 
@@ -724,6 +742,7 @@ class PawnPerceptionProbe:
         self.write(frame + 0xc, 'I', code)
         result_out = self.alloc(16)
 
+        self.dump_frame = bool(scene.get('dumpFrame')); self.frame_dump = None; self.frame_ebp = 0; self.trap_calls = []
         body = BODIES[scene['body']]
         direct_args = scene.get('directArgs')        # worker-call args on stack
         for reg, value in [(UC_X86_REG_ESP, self.stack),
@@ -779,6 +798,7 @@ class PawnPerceptionProbe:
             'resultOut': '%08x' % self.read(result_out, 'I')[0],
             'resultOutValue': self.read(result_out, 'f')[0],
             'st0': st0_bits,
+            'frameDump': self.frame_dump, 'frameEbp': self.frame_ebp, 'trapCalls': self.trap_calls,
             'traces': traces,
             'slTraces': sl_traces,
             'lights': lights,
