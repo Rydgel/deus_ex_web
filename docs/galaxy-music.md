@@ -278,10 +278,14 @@ NATIVE_PROBE_PYTHON=.cache/native-probe-env/bin/python node scripts/validate-gal
 The oracle cache is `.cache/galaxy-music/sequencer-corpus` (keyed by the
 oracle and loader scripts, the DLL, each program and module); a cold run
 takes about 20 minutes with four oracle processes of about 1.2 GB each; a
-cached run about 5 minutes (replay with the real SSE kernel, coverage,
-mutants). Run it once on its own before a sweep: `run-validators.mjs` picks
-it up by name and allows ten minutes for a validator without a recorded
-time.
+cached run about 5 minutes (310 s on the Linux host; replay with the real SSE
+kernel, coverage, mutants). The cache lives in the checkout's `.cache`, so a
+worktree without `.cache/galaxy-music` runs cold: link it, or expect 20 to 24
+minutes (the recorded oracle seconds sum to 4561, 1141 on four processes).
+The validator header declares `runner-timeout: 2400`, which
+`run-validators.mjs` honours (the limit is the largest of that, ten minutes
+and four times the recorded time), so a cold run in a sweep is not killed at
+the default ten minutes.
 
 ## Phase 3 status (mixer, 2026-10-06)
 

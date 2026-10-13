@@ -35,7 +35,20 @@
  * logging to sequencer-corpus/logs. A cold run takes about 20 minutes with four
  * processes (about 1.2 GB each); a cached one about 5. Needs NATIVE_PROBE_PYTHON (default
  * .cache/native-probe-env/bin/python) and src/runtime/galaxy-kernel.wasm
- * (npm run build:wasm). */
+ * (npm run build:wasm).
+ *
+ * The cache is per checkout (.cache is untracked): a worktree whose .cache lacks
+ * galaxy-music/ runs cold, and one without a recorded time in
+ * .cache/validator-timings.json gets the sweep runner's ten-minute default limit.
+ * The oracle seconds recorded per case in the cache sum to 4561 s (238 cases, the
+ * longest 144 s), 1141 s on four processes by the longest-first split above (a
+ * sweep on this host measured 874 s), and the cached part takes 310 s here (390 s
+ * recorded): 20 to 24 minutes cold. Neither has changed since 2026-10-06 (the
+ * oracle, loader and case list are unchanged), so a sweep failure at ten minutes
+ * is a cold cache or a missing recorded time, not a slowdown. The line below is
+ * the limit the runner (scripts/run-validators.mjs) allows a cold run.
+ *
+ * runner-timeout: 2400 */
 import assert from 'node:assert/strict';
 import {spawn} from 'node:child_process';
 import {createHash} from 'node:crypto';

@@ -37,6 +37,10 @@
  * snapshot of its process group (state, cpu time, children such as an oracle)
  * so the hang leaves evidence; unbounded, one stuck process held a sweep's
  * last slot for forty minutes.  --timeout overrides the limit (0 disables it).
+ * A validator whose honest cold run is longer than ten minutes (an oracle
+ * corpus it rebuilds when its cache is cold) declares so in its first 8 KiB,
+ * on a line `runner-timeout: <seconds>` after ` * ` or `// `; the limit is then
+ * the largest of that, ten minutes and four times its recorded time.
  */
 import { spawn, execFile } from 'node:child_process';
 import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'node:fs';
@@ -109,8 +113,21 @@ const started = Date.now();
 const pad = n => String(n).padStart(3);
 const predicted = name => solo.has(name) ? budget : Math.min(peaks[name] ?? unknownPeak, cap);
 const reservation = job => Math.max(job.current, predicted(job.name));
+// `runner-timeout: <seconds>` in a validator's header (see the file comment).
+const declared = new Map();
+const declaredTimeout = name => {
+  if (!declared.has(name)) {
+    let seconds = 0;
+    try {
+      const head = readFileSync(path.join(root, 'scripts', name), 'utf8').slice(0, 8192);
+      seconds = Number(/^[ \t]*(?:\*|\/\/)[ \t]*runner-timeout:[ \t]*(\d+)\b/m.exec(head)?.[1] ?? 0);
+    } catch { /* an unreadable file fails when it starts */ }
+    declared.set(name, seconds * 1000);
+  }
+  return declared.get(name);
+};
 const timeLimit = name => timeoutFlag !== null ? Number(timeoutFlag) * 1000
-  : Math.max(600_000, 4 * (timings[name] ?? 0));
+  : Math.max(600_000, declaredTimeout(name), 4 * (timings[name] ?? 0));
 
 // Memory in MiB of every process in each running validator's group.
 const units = { B: 1 / 1048576, K: 1 / 1024, M: 1, G: 1024 };
