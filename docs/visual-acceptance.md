@@ -400,7 +400,8 @@ each capture.
 The sections above compare frozen levels. A live level (NPCs walking, animation, particles, generators) cannot be pixel-aligned
 run to run, and the two programs do not share a random stream, so this method compares **state per tick** against the original's
 own process, with every input that is not the game's logic measured from the original and given to Play. Pilots: 01_NYC_UNATCOIsland
-(patrolling troops, terrorists, bots) and 10_Paris_Club (dancers, wanderers, seated guests). Frames are a second stage, at a held tick.
+(patrolling troops, terrorists, bots), 10_Paris_Club (dancers, wanderers, seated guests) and 06_HongKong_WanChai_Underworld (six dancers
+and eleven more NPCs rendered from the start pose). Frames are a second stage, at a held tick.
 
 ### Method
 
@@ -476,11 +477,15 @@ the 22 that stay put and 2 of the 36 that walk. Every other walking NPC diverged
 | e70fd64 (baseline) | 25 / 59 | 2 | |
 | + calcVelocity's class tests (ee041b8) | 41 / 59 | 18 | walking script pawns |
 | + physWalking's two class reads (586aa15) | 41 / 59 | 18 | long frames and zone currents only (not reached at 1/60) |
+| master 507daec (d104c8e first MoveTarget, 0e84704 AlterDestination, the others above) | 57 / 59 | 34 | Divergence 3 |
+| + physicsRotation (ca0686d) | 58 / 59 | 35 | Divergence 10; Terrorist18 (tick 235) is the one left |
 
 The 18 walkers that match walk up to 544 units (UNATCOTroop1), 528 (SecurityBot1), 313 (Terrorist36) identically, with equal destinations,
 timers, rotations and animation, in ten seconds.
 
-The 18 walkers that still differ, by first differing tick: SecurityBot0 6, Terrorist34 14, Terrorist15 20, Terrorist21 20, Terrorist31 20,
+The list below is the state at ee041b8 and 586aa15; the table's last row is the later state.
+
+The 18 walkers that still differed then, by first differing tick: SecurityBot0 6, Terrorist34 14, Terrorist15 20, Terrorist21 20, Terrorist31 20,
 Terrorist1 20, Terrorist24 21, SecurityBot3 24, Terrorist14 25, Terrorist7 28, Terrorist10 53, UNATCOTroop0 61, Terrorist13 64,
 Terrorist20 67, Terrorist35 69, Terrorist29 70, Terrorist18 164, UNATCOTroop6 244. At the first tick the field is Location,
 Velocity, Acceleration, Destination, MoveTarget, Focus, DesiredRotation, MoveTimer for 16 to 18 of them: the pawn walks toward another
@@ -493,7 +498,7 @@ sub-pixel offset (0, 0), 0 outlier blocks. That the SecurityBot0 of this frame w
 ### Pilot 2: 10_Paris_Club (2026-10-13)
 
 20 actors (19 NPCs and the player), 600 ticks, map start pose (2062.9, 273.2, -48.3), yaw 35411 (set through `ViewRotation`), population matched.
-**17 of 20 equal for 600 ticks**: the player and 16 NPCs, among them the dancers (Hooker0, Nurse0, Female3, Businessman5), the bartender, the
+**17 of 20 equal for 600 ticks** at ee041b8 (19 of 20 after the later fixes: only MichaelHamner0, a Sitting guest, differs, from tick 521): the player and 16 NPCs, among them the dancers (Hooker0, Nurse0, Female3, Businessman5), the bartender, the
 wanderers and the patrolling Businessman0. `LastRenderTime` equal for every NPC and tick (`DistanceFromPlayer` too, until the three below diverge). What it shows about
 being viewed:
 
@@ -512,6 +517,45 @@ The three that differ are all guests in state Sitting, walking (MoveTarget a Cha
 MoveTarget, speeds, flags equal on both sides at 95 and the acceleration there points at the Destination (36 degrees); at 96 the original's
 DesiredRotation is 12351 (67.9 degrees) and Acceleration (188.5, 463.1), Play's 6565 (36.1 degrees) and (404.2, 294.4), the speed 22.2 the
 same, the direction not: the original steers toward something other than the Destination and Focus it holds. Not traced further.
+
+### Pilot 3: 06_HongKong_WanChai_Underworld (2026-10-13)
+
+**Why this map.** The Club's dancers sit behind walls, and Island's start view has no NPC close by: both gate animation on the stasis check
+(`AActor::InStasis` returns true for an NPC that has not been rendered for 5 s). A pilot of animation needs a start view that renders
+NPCs. `live-acceptance.mjs screen` finds one: Play's own run of each map from its start pose, the view turned through four yaws
+(`ViewRotation` only), and per view the pawns Play rendered within half a second (`LastRenderTime`), their stasis and animation. 47
+maps screened (06_HongKong_Storage's page crashed in the screening, not investigated). The Underworld renders 9 pawns at its start view,
+six of them in a Dance sequence (next: 02_NYC_FreeClinic, 6, none animating; the Club's dancers are out of view);
+the original's own trace then showed 17 NPCs rendered at some tick of the 600 and the six dancers (Female3 to Female6, Secretary0, Hooker0) rendered at every one, all animating (601 distinct AnimFrames).
+
+**Setup.** 50 actors watched (the player, 47 pawns, the two fish generators), 600 ticks at 1/60 s, population matched, seed 1, the player at
+the map's start pose (-1171.0, -1124.0, -336.2), yaw 49096, no placement. The animation fields compared are AnimSequence, AnimFrame,
+AnimRate, TweenRate, bAnimFinished, bAnimLoop, bAnimNotify and blend channel 0 (sequence, frame, rate, tween), tick by tick.
+
+| Play | actors equal for 600 ticks | what changed |
+| --- | ---: | --- |
+| master 507daec (baseline) | 26 / 50 | |
+| + child frames the page cannot draw stamp their sprites (eb22793) | 34 / 50 | Businessman1 and others seen through a mirror child frame |
+| + zone render times reach InStasis (eb22793) | 41 / 50 | Female1 and others in a rendered zone |
+| + physicsRotation compares raw rotators (ca0686d) | 47 / 50 | six actors, Hooker0 among them |
+
+What the 47 show: the six dancers' animation (sequence, frame, rate, tween, finished/loop/notify flags, blend channel) is **equal for all
+600 ticks on both sides**, as are Female7, SarahMead0, LowerClassMale1 (Walk, wandering), Secretary0, Businessman3 (seated) and the three
+MJ12Commandos that wander; every position, rotation, timer and state field of those NPCs too. It is an animation comparison with the
+original's stasis gate, because the NPCs are rendered, and the gate's inputs are compared (`LastRenderTime`, `bStasis`, `Dist`).
+
+The three that differ:
+
+- **Businessman1, LastRenderTime from tick 22** (original 77.1033, Play 77.1200 = one tick later) and **Female5 from tick 465** (84.4866
+  against 84.5033): a pawn at the edge of the view that Play's frame stamped and the original's did not. Walking patrol in the first case,
+  a dancer in the second (her bounds change with the animation). The pawn's position and animation are equal. Unexplained; a candidate
+  is the sprite bounds test in `DrawActorSprite`. Not traced; the effect is one tick of `LastRenderTime`, which `bStasis` and
+  `ScriptedPawn.Tick` read only at a threshold.
+- **TriadRedArrow0, MoveTimer from tick 181** (original -4.045, Play -0.045, then both count down together): a seated guest, the tick after
+  the SitBegin animation starts (Physics 4). In the Sitting family, with Club's guests; not traced.
+
+The random stream: the first tick whose draw count differs is tick 3 (original 1, Play 2), then a few more on the same tick lines as the
+Club's ghost-player difference (Divergences 6). Not traced.
 
 ### Divergences found
 
@@ -538,13 +582,33 @@ same, the direction not: the original steers toward something other than the Des
    its notify.
 7. **A divergence the tool made visible but did not cause:** the original's `physWalking` for a non-PlayerPawn reads the `ZoneVelocity` only
    above 300 and cuts steps only when travelling over 20 units; both are in 586aa15 and were not reachable at 60 fps.
+8. **Child frames the page cannot draw did not stamp their sprites (fixed, eb22793).** `DrawFrame` draws every child frame and
+   `DrawActorSprite` (Render.dll `0x10b25150`) stamps `LastRenderTime` (`0x10b25161`) with the level clock for what it draws. Play stamped only
+   the frames the page has a pass for; the Rust `OccludeBsp` made the Underworld's mirror child frame (a mover's translucent glass: its
+   `Frame->Sprite` listed Businessman1 and Female3) but the page has no mirror group for it, so those sprites were not stamped.
+   Evidence: the tracer's `stamps` command shows Businessman1 stamped only by a recursion-1, Mirror -1 frame at the start view; a
+   sweep of `ViewRotation` (24 views, 8 pawns, 192 readings of `LastRenderTime` against the level clock) differed from Play in 2 cells and now in 0.
+   `validate-live-visibility-play`.
+9. **Zone render times did not reach `AActor::InStasis` (fixed, eb22793).** `Model.Zones[i].LastRenderTime`, which `OccludeBsp` writes for
+   every frame's zone and portal view (`0x10b1768d`) and `InStasis` reads (a pawn in a zone seen within 5 s and within 1,200 units of the
+   player is not in stasis), stayed zero in Play's level: Female1 (Dist 1,122, `LRT` -10) froze one tick after the script set `bStasis`; the original
+   kept ticking her. Same validator.
+10. **`APawn::physicsRotation` compared and stepped the wrong things (fixed, ca0686d).** The original (Engine `0x103c9f30`) compares the
+   raw int rotators and steps Yaw only while DesiredRotation.Yaw differs from Rotation.Yaw (`0x103c9fc2`), Pitch likewise (`0x103c9fd5`);
+   a PlayerPawn takes neither step. Play stepped both axes with a masked comparison on every call, so a pawn with a non-canonical map
+   rotation lost it on its first tick (Hooker0: (-4, -32404, 0) kept six ticks by the original, (0, 33132, 0) in Play at tick 1) and a
+   walking or falling pawn with Rotation equal to a nonzero-Pitch DesiredRotation was pulled to 0. Found from the first differing field (Hooker0
+   Rot, tick 1), the original's call trace (`call 0x103c9f30` breakpoints: the body runs, the rotation does not change) and a
+   disassembly; oracle [walking](walking.md#apawnphysicsrotation-keeps-a-raw-rotation-that-already-equals-its-desired-one-2026-10-13), 1,271 bit-exact cases.
 
 ### What this shows and does not
 
-It shows, per tick and with the original's own inputs, that Play's live NPC code agrees with the original for 41 of 59 Island actors and 17
-of 20 Club actors over ten seconds, including animation (Island), timers, state changes and the stream's use, and it found one wide-reaching
-defect (1) and one latent one (2) that the frozen acceptance and the unit oracles missed because they ran the player. It does not show:
-the dancers' animation (stasis, above); patrols past the first path choice (3), any NPC beyond 600 ticks, combat, conversations, anything
+It shows, per tick and with the original's own inputs, that Play's live NPC code agrees with the original for 58 of 59 Island actors, 19
+of 20 Club actors and 47 of 50 Underworld actors over ten seconds, including animation (the Underworld's six dancers and its walkers, the Island's
+walkers), timers, state changes and the stream's use. It found defects the frozen acceptance and the unit oracles missed because they ran
+the player or looked at one frame: calcVelocity (1), physWalking (2), the first path choice (3), the render feedback that sets
+`LastRenderTime` and the zone times (8, 9) and the pawn rotation step (10). It does not show:
+the dancers' animation where no one sees them (the Club: stasis, above); patrols past the first path choice, any NPC beyond 600 ticks, combat, conversations, anything
 that needs the player to move or act; lights and particles (the frame at tick 600 has none in view that move); frames with a pawn
 in view (Island's start view has none close). The comparison is replay-synchronised: it cannot say that two free-running games would
 look alike, only that, given the same inputs, Play's tick computes the original's result. Everything above runs on one Wine/D3D host.
@@ -556,6 +620,12 @@ node scripts/live-acceptance.mjs population --map 10_Paris_Club --seed 1      # 
 DX_HYPRLAND=1 scripts/live-original.sh 10_Paris_Club --ticks 600 --delta 0.0166666675 --monitor 20 [--actor-trace 1:60] [--shot name]
 node scripts/live-acceptance.mjs play --map 10_Paris_Club --seed 1 [--draw-trace] [--shot name]
 node scripts/live-acceptance.mjs compare --map 10_Paris_Club
+
+node scripts/live-acceptance.mjs screen --maps 06_HongKong_WanChai_Underworld,...   # which maps render NPCs at the start pose (Play's side)
+DX_HYPRLAND=1 scripts/live-original.sh <map> --sweep 49096 --sweep-pawns A,B --sweep-step 15   # LastRenderTime per view yaw
+node scripts/live-acceptance.mjs sweep --map <map> --yaw-base 49096 --pawns A,B --step 15       # Play's side of the same views
+DX_HYPRLAND=1 scripts/live-original.sh <map> --stamps-yaws 49096 --stamp-pawns A,B                # which frame stamps a pawn
+node scripts/live-acceptance.mjs eval --map <map> --expr 'window.deusExViewer.status()'         # a look at Play after the frozen start
 ```
 
 `live-original.sh` takes the Wine lock (`.work/wine-deusex.lock`), refuses to start with another DeusEx.exe running and quits the game by
@@ -570,8 +640,18 @@ its PID; Play runs headless Chromium in worker mode.
   (item 2 above).
 - The frozen captures stand at the map's frame-0 pose; live behaviour is
   compared per tick in [Live scenes](#live-scenes-2026-10-13), where the
-  dancers' animation, the Sitting guests' steering (4 there), Island's
-  Terrorist18 and UNATCOTroop6 and frames with pawns in view are still open.
+  Sitting guests' steering (4 there) and MoveTimer (TriadRedArrow0, Underworld), Island's Terrorist18, the Underworld's
+  view-edge `LastRenderTime` differences (Businessman1 tick 22, Female5 tick 465), the Club's dancers in view (stasis) and a frame
+  with pawns in view are still open.
+- **Breakable glass and walls are not drawn by the page world.** `world.mjs` builds a mover group for every actor whose class name ends in
+  `Mover` and has a Brush (line 317). `BreakableGlass` and `BreakableWall` descend from `DeusExMover` (the runtime attaches them as movers,
+  `script-doors.mjs`) but their class names do not match, so the sim holds them (Underworld: 29 movers, 15 of them BreakableGlass) and the page has
+  14 groups, none of them glass. Census of the shipped maps (`decodeMap`, Brush > 0 and a class name not ending in `Mover`): **247 brush
+  actors in 34 maps** (BreakableGlass and BreakableWall), 10 of which have a polygon with the Mirrored flag (`0x8400008` in the Underworld: 9;
+  06_HongKong_Storage: 1). For comparison, DeusExMover brushes with mirrored polygons, which the page does build: 13 movers in 12 maps. The
+  visual effect (panes missing, no mirror group, so no reflection of the room in the Underworld's glass) is **not measured**: no
+  frame comparison has had a pane in view. Relevant to the stamps fix (8): a mirror child frame for such a pane is made by the sim's
+  `OccludeBsp` and not drawn.
 - Captures come from one Wine/D3D host. D3D behaviour that depends on the
   driver is not separated from the original's own.
 
