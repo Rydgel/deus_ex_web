@@ -176,9 +176,10 @@ capture of the security cameras' views (root frames with their own mirror and sk
 frames, decals, coronas, fog, LOD and lighting since 2026-10-11,
 [viewport window](docs/script-window-viewport.md)); the
 host's depth range and float32 GPU transform under the frame projection
-([render-pass precision](docs/render-pass-precision.md)); the darkest-pixel rounding and
-live scenes left by [visual acceptance](docs/visual-acceptance.md) (26 maps
-compared with the original's own frames at matched cameras and level time).
+([render-pass precision](docs/render-pass-precision.md)); the darkest-pixel rounding left by
+[visual acceptance](docs/visual-acceptance.md) (26 maps compared with the original's own frames
+at matched cameras and level time); and in live scenes, compared tick by tick with the original
+since 2026-10-13, two Island NPCs, the Club's sitting guests and the dancers' animation.
 
 ## Open the viewer
 

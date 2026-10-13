@@ -11,7 +11,10 @@
 // same fields. The first differing tick of each field is the divergence.
 //
 //   node scripts/live-acceptance.mjs original --map 10_Paris_Club [--ticks 600] [--release 3] [--delta 0.0166666675]
-//        [--watch auto|A,B,..] [--no-open] [--load-wait 25000] [--hold]
+//        [--watch auto|A,B,..] [--no-open] [--load-wait 25000] [--hold] [--shot name]
+//   --shot name (original and play): a frame of each side at the last replayed tick, the level held there (the original's
+//   Tick is skipped by the tracer; Play's replay holds), into .work/acceptance/<map>/<name>-original.png / -play.png for
+//   `node scripts/visual-acceptance.mjs compare --maps <map> --view <name>:0,0,0:0,0,0`.
 //   node scripts/live-acceptance.mjs play --map 10_Paris_Club
 //   node scripts/live-acceptance.mjs compare --map 10_Paris_Club
 //
@@ -68,6 +71,27 @@ const GENERATOR_FIELDS = [['TryTimer', 'TryTimer', 0x540, 'f'], ['PoolCount', 'P
 
 const spec = ([label, , off, type, mask]) => `${label}:0x${off.toString(16)}:${type}${mask ? `:0x${mask.toString(16)}` : ''}`;
 
+
+// The original's window under Hyprland: floating, 1280x720 and inside the screen (docs/visual-acceptance.md "Frames").
+function hyprlandWindow() {
+  // the game's window is the largest client of the class (a hidden log window shares it)
+  const find = () => JSON.parse(execFileSync('hyprctl', ['clients', '-j'], {encoding: 'utf8'})).filter(c => c.class.toLowerCase() === 'deusex.exe')
+    .sort((a, b) => b.size[0] * b.size[1] - a.size[0] * a.size[1])[0];
+  const placed = w => w && w.floating && w.size[0] === 1280 && w.size[1] === 720 && w.at[0] >= 0 && w.at[1] >= 0;
+  for (let attempt = 0; attempt < 5; attempt++) {
+    const window = find();
+    if (!window) throw new Error('no deusex.exe window');
+    if (placed(window)) return attempt > 0;
+    const at = `address:${window.address}`;
+    for (const dispatch of [`hl.dsp.window.float({ action = "set", window = "${at}" })`,
+      `hl.dsp.window.resize({ x = 1280, y = 720, relative = false, window = "${at}" })`, `hl.dsp.window.center({ window = "${at}" })`])
+      execFileSync('hyprctl', ['dispatch', dispatch]);
+    execFileSync('sleep', ['2']);
+  }
+  throw new Error(`the deusex.exe window does not stay floating at 1280x720: ${JSON.stringify(JSON.parse(execFileSync('hyprctl', ['clients', '-j'], {encoding: 'utf8'})).filter(c => /deus/i.test(c.class)).map(c => ({floating: c.floating, size: c.size, at: c.at, mapped: c.mapped})))}`);
+}
+const acceptanceDir = () => { const d = path.join(root, '.work/acceptance', map); mkdirSync(d, {recursive: true}); return d; };
+
 // --- the original ---------------------------------------------------------
 async function original() {
   const game = await import('../ad/scripts/original-game.mjs');
@@ -97,6 +121,14 @@ async function original() {
     post(['cmd set LevelInfo bPlayersOnly True', 'sleep 300', 'cmd set LevelInfo TimeDilation 1', 'sleep 300',
       `cmd open ${map}`, `sleep ${loadWait}`], loadWait + 60000);
     post(['cmd set DeusEx.JCDentonMale bCheatsEnabled True', 'sleep 200', 'cmd ghost', 'sleep 200', 'cmd ShowHud False', 'sleep 500']);
+    // The window is placed (floating, 1280x720, inside the screen) before the tracer attaches, with a throwaway shot (the
+    // first frame after a resize is stale): a resize while the tracer holds the level did not take (2026-10-13).
+    if (option('shot', null) && process.env.DX_HYPRLAND === '1') {
+      hyprlandWindow();
+      const stale = game.shots();
+      post(['sleep 3000', 'shot', 'sleep 900']);
+      for (const shot of game.shots().filter(shot => !stale.includes(shot))) renameSync(path.join(game.SYSTEM, shot), path.join(scratch, shot));
+    }
     // Placement. The original is never moved with `set Location` or `set Region` in a level that
     // then ticks: the collision hash is not updated, and the live level crashed (a General
     // protection fault in TickLevel, 2026-10-11). The player stays at the map's start pose, or
@@ -152,6 +184,21 @@ async function original() {
   const started = Date.now();
   while (!/paused after/.test(log) && child.exitCode === null && Date.now() - started < 600000) await new Promise(r => setTimeout(r, 500));
   console.log(log.trim());
+  if (option('shot', null) && /paused after/.test(log)) {
+    // The level is held at the last replayed tick (the tracer returns from ULevel::Tick); the game still draws.
+    let taken = null;
+    for (let attempt = 0; attempt < 3 && !taken; attempt++) {
+      const before = game.shots();
+      post(['sleep 1500', 'shot', 'sleep 900']);
+      const fresh = game.shots().filter(shot => !before.includes(shot));
+      if (fresh.length) {
+        const png = path.join(acceptanceDir(), `${option('shot')}-original.png`), size = game.bmpToPng(path.join(game.SYSTEM, fresh[0]), png);
+        renameSync(path.join(game.SYSTEM, fresh[0]), path.join(acceptanceDir(), `${option('shot')}-original.bmp`));
+        if (size.width === 1280 && size.height === 720) taken = png;
+      }
+    }
+    console.log(taken ? `frame: ${taken}` : 'NO FRAME of the original');
+  }
   if (!flag('hold')) {
     writeFileSync(`${tracePath}.resume`, '');
     await finished;
@@ -273,6 +320,18 @@ async function play() {
     writeFileSync(playPath, JSON.stringify({map, ghost, initial: started.initial, rows, errors}));
     if (scriptPawns) writeFileSync(path.join(dir, 'script-play.json'), JSON.stringify({pawns: scriptPawns.split(','), events: script}));
     if (navPawns) writeFileSync(path.join(dir, 'nav-play.json'), JSON.stringify({pawns: navPawns.split(','), events: nav}));
+    if (option('shot', null)) {
+      // The replay holds the level at its last tick; Play draws on: the frame at the brightness whose display ramp is the identity.
+      await page.addStyleTag({content: `.toolbar, footer, #toast, #play-hint, #npc-preview-label, #panel, #crosshair, #gate { display: none !important; }
+#app { height: 100vh !important; } #viewport { position: fixed !important; inset: 0 !important; width: 1280px; height: 720px; }
+#scene { position: fixed !important; left: 0 !important; top: 0 !important; margin: 0 !important; border: 0 !important; transform: none !important; width: 1280px !important; height: 720px !important; }`});
+      await page.evaluate(() => window.dispatchEvent(new Event('resize')));
+      await page.evaluate(() => { const el = document.getElementById('brightness'); el.value = '0.4'; el.dispatchEvent(new Event('input')); });
+      await frames(30);
+      const file = path.join(acceptanceDir(), `${option('shot')}-play.png`);
+      await page.screenshot({path: file, clip: {x: 0, y: 0, width: 1280, height: 720}});
+      console.log(`frame: ${file}`);
+    }
     console.log(map, `${rows.length} ticks replayed`, errors.length ? `errors: ${errors.slice(0, 2).join(' | ')}` : '');
   });
 }
