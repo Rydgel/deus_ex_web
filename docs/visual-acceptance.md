@@ -395,71 +395,172 @@ each capture.
   path ignore a child frame's own LOD state (a mutation of `applyPass`)
   differs in 1,359 bytes, up to 80, and fails it.
 
-## Live scenes (WIP handoff, 2026-10-08: design only, nothing run yet)
+## Live scenes (2026-10-13)
 
-Status: the `live-acceptance` branch holds this note and nothing else. No
-capture, no Wine run, no code change; the original game was never started.
-The worktree `.work/live` is set up (symlinks for node_modules, game data,
-Reference, `.cache/*` except `wasm`, `ad/build/dump-actor-win.exe`,
-`ad/tools/dxinput.exe`; `npm run build:wasm` done).
+The sections above compare frozen levels. A live level (NPCs walking, animation, particles, generators) cannot be pixel-aligned
+run to run, and the two programs do not share a random stream, so this method compares **state per tick** against the original's
+own process, with every input that is not the game's logic measured from the original and given to Play. Pilots: 01_NYC_UNATCOIsland
+(patrolling troops, terrorists, bots) and 10_Paris_Club (dancers, wanderers, seated guests). Frames are a second stage, at a held tick.
 
-Method decided from the sources read so far (to be confirmed by the pilots):
+### Method
 
-- **Same start.** The frozen start of the sections above (bPlayersOnly from the
-  first tick, `ghost`, `ShowHud False`, same console inputs), then release with
-  `set LevelInfo bPlayersOnly False` on both sides. Frozen NPCs never ran
-  StartUp, so InitializePawn and the first orders run after the release on both.
-- **Actor-time clock instead of wall time.** `AActor::Tick` decrements LifeSpan
-  by the actor delta. Set LifeSpan (e.g. 60) on one non-ticking-while-frozen
-  actor before the release (check that Play's Actor.Tick does the same, and the
-  point at which it runs relative to the players-only return): its decrement
-  counts exactly the actor time elapsed since the release (tau), whatever each
-  side's frame times. Samples on both sides are keyed by tau, not by
-  TimeSeconds (which also runs while frozen). Fallback: TimeSeconds minus its
-  value at the release.
-- **Two modes.** A, stepped: TimeDilation tiny (0.0001) so every tick's actor
-  delta clamps to exactly 0.005 (docs/script-level-tick.md; ULevel::Tick
-  103a54c8..103a54df), the same step on both sides, so ticks can be compared one
-  for one (TimeSeconds then barely moves, so lights that follow it are not
-  exercised). B, free-running at TimeDilation 1: Play at its fixed 1/60 s step
-  (visual-acceptance.mjs's `dt = 1/60` patch), the original at its own frame
-  time; compare state as a function of tau within tolerances (one tick of
-  motion, rate x dt of animation), and TimeSeconds for the light phases.
-- **Original-side reads.** Extend `tools/dump-actor-win.c` with a watch mode:
-  resolve the named actors once through the global object array, then loop,
-  reading each actor's struct in one ReadProcessMemory (Location, Rotation,
-  Velocity, Physics, AnimSequence/Frame/Rate, LifeSpan, state name) plus
-  LevelInfo.TimeSeconds, output JSONL with QueryPerformanceCounter stamps.
-  Consistent snapshots: ULevel.InTick (+0x108) 0 before and after the reads and
-  an unchanged clock actor (seqlock), else retry. Actor field offsets from
-  `sdk-layouts.mjs` / `slotOf(field.loadRecord, 0x48)`.
-- **Play-side reads.** A per-tick recorder on the simulation side (a
-  `viewProbe`-style call registering actors/fields, appended at the end of each
-  processLevelTick), so worker-mode frame merging cannot skip a tick; the page
-  drives fixed 1/60 steps. A probe to set the next dt would let Play land on a
-  given tau exactly for frame captures.
-- **Frames at synced times.** Freeze the original at a requested tau (console
-  latency overshoots by some ticks; the frozen clock actor then gives the exact
-  tau reached), run Play to that tau (mode A: the same tick count), freeze,
-  and compare frames with the existing metrics, reporting actors whose
-  measured state differs beyond tolerance so their blocks can be excluded.
-- **Randomness (open).** The original seeds MSVCRT rand with time(NULL) at
-  startup and every consumer shares the stream (docs/rng.md), Play seeds its
-  own from the current time. Random branches (FRand in NPC scripts, e.g.
-  docs/script-npc-startup-animation.md) can diverge for that reason alone.
-  To measure: whether the original's rand state moves while frozen (render
-  consumers), and the FRand call sites on the pilot NPCs' paths; the CRT
-  per-thread state could be read from the process to seed Play's stream.
-- **Known hazards.** Walking in the original after `set Location` crashes
-  ("moved without proper hashing"); under ghost use `--region`. Close the game
-  by the PID `original-game.mjs launch` prints.
+1. **The original is observed as a debugger** (`tools/dx-live-win.c`, build with
+   `i686-w64-mingw32-gcc -O2 -o ad/build/dx-live-win.exe tools/dx-live-win.c -lpsapi`). `trace` attaches to the running DeusEx.exe under
+   Wine and breaks at `ULevel::Tick`'s entry (Engine.dll `0x103a51a0`, ECX = the player's level) and its `ret 8` (`0x103a5baf`), optionally
+   also at `AActor::Tick` (`0x103a1aa0`). With the game thread stopped there, each observation is consistent (reading the process from
+   outside tore: a Tick runs between two reads), and the original's input delta (the stack argument), the double level clock (`ULevel +0xdc`),
+   `LevelInfo.TimeSeconds` and the CRT `rand` state are read exactly. Per tick it writes one JSON line with those and the watched actors'
+   fields (Location, Rotation, Velocity, Acceleration, Physics, AnimSequence/Frame/Rate, TweenRate, state, Destination, MoveTarget,
+   MoveTimer, Orders, speeds, bIsWalking and the sitting/pausing flags, LastRenderTime, DistanceFromPlayer, bStasis, bForceStasis). The
+   tracer also does the **release** (clears `LevelInfo.bPlayersOnly` at the third tick entry, the frozen start of the sections above),
+   can force the input delta (`delta 0.0166666675`; the original's own free-running delta on this host is mostly 4.8 to 6.6 ms, near the actor-delta
+   floor of 0.005 s, with an occasional 25 ms, against Play's 1/60 s frame), **holds** the level after N unfrozen ticks (it returns from `ULevel::Tick` without running it, the game keeps
+   drawing), reports a fatal first-chance exception (address, module+RVA, registers, stack; `kill-on-crash`) and detaches with the
+   breakpoints removed and the queue drained. `list <Class>` lists a level's actors with `OddsOfAppearing`, `rng` samples the CRT state.
+2. **Same start.** `scripts/live-original.sh <map> ...` (under the Wine lock, quitting the game by its PID) opens the map frozen
+   (`set LevelInfo bPlayersOnly True` before `open`, as the frozen captures), types `bCheatsEnabled`, `ghost`, `ShowHud False`, then
+   `scripts/live-acceptance.mjs original` attaches the tracer, which releases at tick 3 and records 600 ticks (10 s). NPCs that never ran
+   StartUp while frozen run it after the release on both sides.
+3. **Measured host inputs for Play** (`src/viewer/live-probe.mjs`, `window.deusExViewer.liveProbe`, simulation side in worker mode;
+   `scripts/live-acceptance.mjs play`): per replayed tick Play ticks with the original's delta and its stream set to the original's
+   `rand` state at that tick's entry (`srand` semantics, `rng.seed`), the clock starts at the trace's, the player stands where and as the
+   original's did at the release (pose, Region, animation), and the actors the original's load kept are the ones Play keeps (below). The
+   replay is not a free-running comparison: it removes what the two programs cannot share, and each input is measured, not guessed.
+4. **Compare** (`scripts/live-acceptance.mjs compare`): for every watched actor and field the first tick where Play's float32 value
+   differs, per-tick stream draw counts (original: state before and after each Tick; Play: its draws), and with `--actor-trace a:b` on the
+   original and `--draw-trace` on Play the draws of each actor (the stream state at each `AActor::Tick` entry). `.work/live-acceptance/<map>/`
+   keeps traces and reports (outside Git).
+5. **Frames at a held tick** (`--shot name` on both `original` and `play`): the original's level is held at the last replayed tick, Play's
+   replay holds the same way, both draw on; the frames go to `.work/acceptance/<map>/<name>-original.png` / `-play.png` and
+   `node scripts/visual-acceptance.mjs compare --maps <map> --view <name>:0,0,0:0,0,0` gives the usual metrics. The window is placed
+   (`DX_HYPRLAND=1`) before the tracer attaches.
 
-Next steps: (1) watch mode in dump-actor-win.c and a sanity sample of Island
-NPCs (names, orders, positions) on the original; (2) Play-side per-tick
-recorder; (3) `scripts/live-acceptance.mjs` (`play`, `original`, `compare`)
-with the LifeSpan clock; (4) pilots on 01_NYC_UNATCOIsland (patrols) and
-10_Paris_Club (dancers); (5) rewrite this section as "Live scenes" with the
-measured divergences and their evidence.
+### What the original does with the random stream
+
+Measured from the CRT state (the `rand` word of the msvcrt thread data, `+0x14`), Island and Club, on this host:
+
+- It is seeded from `time(NULL)` at startup ([RNG](rng.md)), so a load's random decisions differ between runs and between the two programs.
+  Of Island's 2,427 actors, `FlyGenerator1` existed in some loads and not in others; the driver reloads the original until it holds no
+  actor Play's seeded load lacks (`play-population.json`; exit code 3 asks `live-original.sh` to retry) and Play destroys the ones only it
+  holds.
+- The stream advances while the level is frozen and between ticks: exactly 256 draws between two consecutive Ticks in 600 of 600 inter-tick
+  gaps of a Club trace and 23 of 23 of an Island one (URender::PreRender's light noise, [dynamic lighting](dynamic-lighting.md)), about
+  100,000 to 200,000 draws per second for Island and Club frozen or live. A tick's own draws are the scripts' and natives': 317 in Island's
+  first unfrozen tick (the 59 pawns' and the generators' startup), 54 in the Club's, then mostly under 25. Setting Play's state from the original's at each tick's entry therefore keeps a difference in
+  how many draws one actor makes from spreading, and the counts are compared as a result of their own.
+- With the population matched the first unfrozen tick's totals are equal (317 and 317 on Island, 54 and 54 on the Club) and so are the
+  per-actor counts (`AActor::Tick` attribution) for every NPC and generator; before the match the only difference was the one extra
+  generator the original's load had kept.
+
+### Placement constraint
+
+The original is never moved with `set Location` or `set Region` in a level that then ticks. The known hash corruption ("moved without
+proper hashing", [placement](#placing-the-players-region)) is the reason, and one run crashed that way: `set Location` and `Region` on the
+ghost at (-250, -320, -70) in 10_Paris_Club, the tracer released and detached, and the game ended with a General protection fault in
+`TickLevel` (`DeusEx.log`: TickLevel, UGameEngine::Tick, XGameEngineExt::Tick, UpdateWorld, MainLoop; address not captured: the capture
+was built afterwards). It was not deliberately reproduced; every later run (more than ten), without the placement and with the crash capture armed, did not crash.
+Live runs start from the map's own start pose (only `ViewRotation` may be set). Reaching other places by the original's own movement did not
+work here: posted `W` and `Up` key events (`down`/`up`, held 2.5 s) did not move a ghost (Location unchanged, Physics 4; unexplained, a
+guess is that the game drops held keys while its window is unfocused), and after `set DeusEx.JCDentonMale Velocity (X=-300,Y=-135,Z=0)` the
+first read, seconds later, showed Velocity 0 and Location unchanged. So the
+Club's dancers, 2,300 units away behind walls, are not in view in any live run yet.
+
+### Pilot 1: 01_NYC_UNATCOIsland (2026-10-11 to 13)
+
+59 actors watched (58 pawns and the player), 600 ticks at 1/60 s, population matched, seed 1 for Play, the player at the map start
+(x -4760.6, y 10430.8, yaw -7040). Of the 58 NPCs, 22 do not move (they stand or sit; 45 have `bStasis` set by tick 600, 13 never) and 36 move
+more than 20 units in the ten seconds. With Play at master e70fd64 **25 of the 59 actors matched the original for all 600 ticks**: the player,
+the 22 that stay put and 2 of the 36 that walk. Every other walking NPC diverged at its first walking tick.
+
+| Play | actors equal for 600 ticks | of the 36 that walk | what changed |
+| --- | ---: | ---: | --- |
+| e70fd64 (baseline) | 25 / 59 | 2 | |
+| + calcVelocity's class tests (ee041b8) | 41 / 59 | 18 | walking script pawns |
+| + physWalking's two class reads (586aa15) | 41 / 59 | 18 | long frames and zone currents only (not reached at 1/60) |
+
+The 18 walkers that match walk up to 544 units (UNATCOTroop1), 528 (SecurityBot1), 313 (Terrorist36) identically, with equal destinations,
+timers, rotations and animation, in ten seconds.
+
+The 18 walkers that still differ, by first differing tick: SecurityBot0 6, Terrorist34 14, Terrorist15 20, Terrorist21 20, Terrorist31 20,
+Terrorist1 20, Terrorist24 21, SecurityBot3 24, Terrorist14 25, Terrorist7 28, Terrorist10 53, UNATCOTroop0 61, Terrorist13 64,
+Terrorist20 67, Terrorist35 69, Terrorist29 70, Terrorist18 164, UNATCOTroop6 244. At the first tick the field is Location,
+Velocity, Acceleration, Destination, MoveTarget, Focus, DesiredRotation, MoveTimer for 16 to 18 of them: the pawn walks toward another
+destination. The later fields (Frame, Rate, Phys, Sitting from tick 159 and 227) belong to the two or seven that go on to sit or turn.
+
+Frame at tick 600 (`live600`, the level held, view from the start pose; no pawn is large in it: UNATCOTroop1, PaulDenton0 and SecurityBot0 are
+rendered at 2,300 to 3,200 units): ratio 1.287 (the known uniform gap, Open below), mean abs. diff. 2.2, edge recall 0.975, precision 0.987,
+sub-pixel offset (0, 0), 0 outlier blocks. That the SecurityBot0 of this frame walked another path (below) is not visible in it.
+
+### Pilot 2: 10_Paris_Club (2026-10-13)
+
+20 actors (19 NPCs and the player), 600 ticks, map start pose (2062.9, 273.2, -48.3), yaw 35411 (set through `ViewRotation`), population matched.
+**17 of 20 equal for 600 ticks**: the player and 16 NPCs, among them the dancers (Hooker0, Nurse0, Female3, Businessman5), the bartender, the
+wanderers and the patrolling Businessman0. `LastRenderTime` equal for every NPC and tick (`DistanceFromPlayer` too, until the three below diverge). What it shows about
+being viewed:
+
+- No NPC is rendered from the start pose (`LastRenderTime` stays -10 for all 19 over the 600 ticks, nearest at 1,804 units, none in view),
+  and by tick 300 18 of the 19 have `bStasis` set (cleared at load; `bForceStasis` is set for all 19), so `AActor::InStasis` (time since
+  `LastRenderTime` over 5 s, distance over 1,200 or the zone unseen) returns true and their animation is not advanced: the dancers' `Dance`
+  stays at AnimFrame -0.0833 (Female3 -0.1) on both sides to tick 600, `Tween` 0.28. The two agree, but this is the stasis gate, not the dance: **the
+  dancing animation is not compared.** It needs a view (or placement) the original can reach without `set Location`; a rotation of the view
+  cannot see through the walls. Island is no different at the start pose: 45 of its 58 NPCs are in stasis at tick 600 (3 are rendered, 13 never enter it);
+  the pilot's evidence is in the 36 that move.
+- A view-dependent field matters here, so it is reported as view-dependent rather than forced: `LastRenderTime`, `bStasis`, and what
+  `ScriptedPawn.Tick` gates on `LastRendered()`/`DistanceFromPlayer` (`bCheckPlayer`, `bCheckOther`, low-priority work, ScriptedPawn.uc).
+
+The three that differ are all guests in state Sitting, walking (MoveTarget a Chair at tick 94, none after): NicoletteDuClare0 at tick 96, MargaretWilliams0 at 152, MichaelHamner0 at 277
+(Location, Velocity, Acceleration, DesiredRotation). Detail, Nicolette at 95 and 96: Location, Velocity, Rotation, Destination, Focus,
+MoveTarget, speeds, flags equal on both sides at 95 and the acceleration there points at the Destination (36 degrees); at 96 the original's
+DesiredRotation is 12351 (67.9 degrees) and Acceleration (188.5, 463.1), Play's 6565 (36.1 degrees) and (404.2, 294.4), the speed 22.2 the
+same, the direction not: the original steers toward something other than the Destination and Focus it holds. Not traced further.
+
+### Divergences found
+
+1. **Walking script pawns: calcVelocity's class tests (fixed, ee041b8).** Original `calcVelocity` (`0x103cd7a0`) counts `bIsWalking` only for a
+   PlayerPawn (`0x103cd7e2..0x103cd815`) and multiplies any other pawn's MaxSpeed by DesiredSpeed (`0x103cdf05..0x103cdf30`);
+   Play's walking path did neither: NPCs accelerated at 0.3 x AccelRate and capped at 0.3 x GroundSpeed (SecurityBot0: 28.5 units/s, original 95).
+   Proof: [walking](walking.md#script-pawns-calcvelocitys-class-tests-2026-10-11), the oracle (2,420 bit-exact cases, 623 differ without it).
+2. **physWalking's own class reads (fixed, 586aa15).** The step cut above 0.05 s and the ZoneVelocity gate for non-PlayerPawns
+   (`0x103ca873`, `0x103ca697`), the same page.
+3. **First MoveTarget of a walking NPC (open).** 16 to 18 Island NPCs pick another next target at their first walk, both ways: SecurityBot0
+   tick 6, original PatrolPoint19 (-2057, 9673), Play PathNode403 (-2084, 9843); Terrorist34 tick 14 original PathNode541, Play PathNode739;
+   Terrorist15 PatrolPoint45 against PathNode348; Terrorist21 PathNode483 against PatrolPoint63; Terrorist1 PathNode225 against PatrolPoint97;
+   and so on (Location and Velocity differ from the same tick, MoveTimer too). The stream draws at those ticks are equal, and the NPCs'
+   states, orders and positions before are equal, so the choice differs in the path natives (FindPathToward and the patrol-point/path-node
+   pick, [pawn navigation](script-pawn-nav.md)), not in the random stream. Not traced.
+4. **Guests in state Sitting walking between seat positions (open, Club above).** Same state in, different steering direction out at the
+   first poll after the new MoveTo; the speed equal.
+5. **Draws at tick 24 on Island (open, probably a load-time input).** Original 10, Play 18 (6 and 14 in a later run: always 8 more in
+   Play): Play's SeagullGenerator1 and 3 draw 4 each at tick 24; the original's per-actor trace of that run stopped at tick 3, so the
+   original's absence is inferred from the totals. If so, the generators' timers were set at load from the load's own draws, which the two
+   sides do not share (unverified). Draw counts are equal on every earlier tick.
+6. **The ghost player's own draw timing (open, small).** Club: the player draws at ticks 1, 2, 26 and 49 in the original and at 1, 11 and 49
+   in Play (the player's position, animation and rotation equal all 600 ticks). Unverified cause: the ghost's `Tread` loop (AnimRate 1.25) and
+   its notify.
+7. **A divergence the tool made visible but did not cause:** the original's `physWalking` for a non-PlayerPawn reads the `ZoneVelocity` only
+   above 300 and cuts steps only when travelling over 20 units; both are in 586aa15 and were not reachable at 60 fps.
+
+### What this shows and does not
+
+It shows, per tick and with the original's own inputs, that Play's live NPC code agrees with the original for 41 of 59 Island actors and 17
+of 20 Club actors over ten seconds, including animation (Island), timers, state changes and the stream's use, and it found one wide-reaching
+defect (1) and one latent one (2) that the frozen acceptance and the unit oracles missed because they ran the player. It does not show:
+the dancers' animation (stasis, above); patrols past the first path choice (3), any NPC beyond 600 ticks, combat, conversations, anything
+that needs the player to move or act; lights and particles (the frame at tick 600 has none in view that move); frames with a pawn
+in view (Island's start view has none close). The comparison is replay-synchronised: it cannot say that two free-running games would
+look alike, only that, given the same inputs, Play's tick computes the original's result. Everything above runs on one Wine/D3D host.
+
+### Running it
+
+```bash
+node scripts/live-acceptance.mjs population --map 10_Paris_Club --seed 1      # Play's load: the actors it keeps
+DX_HYPRLAND=1 scripts/live-original.sh 10_Paris_Club --ticks 600 --delta 0.0166666675 --monitor 20 [--actor-trace 1:60] [--shot name]
+node scripts/live-acceptance.mjs play --map 10_Paris_Club --seed 1 [--draw-trace] [--shot name]
+node scripts/live-acceptance.mjs compare --map 10_Paris_Club
+```
+
+`live-original.sh` takes the Wine lock (`.work/wine-deusex.lock`), refuses to start with another DeusEx.exe running and quits the game by
+its PID; Play runs headless Chromium in worker mode.
 
 ## Open
 
@@ -468,10 +569,10 @@ measured divergences and their evidence.
   chased: it is a known gamma issue of the game on Windows.
 - Rounding of the darkest values, at the level of single raw steps
   (item 2 above).
-- Captures are frozen. NPCs stand at their map locations in the frame-0
-  reference pose, and their startup (InitializePawn) and patrols are not
-  compared. A live comparison needs matched level time (`--live` alone
-  differs through timing).
+- The frozen captures stand at the map's frame-0 pose; live behaviour is
+  compared per tick in [Live scenes](#live-scenes-2026-10-13), where the
+  dancers' animation, the first path choices (3 and 4 there) and frames
+  with pawns in view are still open.
 - Captures come from one Wine/D3D host. D3D behaviour that depends on the
   driver is not separated from the original's own.
 
