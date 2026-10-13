@@ -53,6 +53,7 @@ import { tickActorAnimation } from './animation-tick.mjs';
 import { createLodMeshFrameCache, getLodMeshFrame } from './lodmesh-frame.mjs';
 import { getActorSkin, getMeshTexture, execGetMeshTexture, readLodMeshSurfaces } from './lodmesh-materials.mjs';
 import { tickStandaloneActor, actorInStasis } from './actor-tick.mjs';
+import { scriptedPawnTick } from './scripted-pawn-tick.mjs';
 import { bumpBaseEpoch,bumpActorsEpoch } from './base-epoch.mjs';
 import { bumpReceiverEpoch } from './receiver-epoch.mjs';
 const ACTOR_BASE_KEY='engine.actor.base';
@@ -3981,6 +3982,9 @@ export class ScriptRuntime {
       entry=this.actorTickServices(options);
       if(shared)(this.levelTickActorServices??=new WeakMap()).set(options,entry);
     }
+    // DeusEx.dll's AScriptedPawn::Tick (0x100195a0) is the Tick virtual of every ScriptedPawn: its native timers and bookkeeping
+    // run first, then AActor::Tick (below), unless it destroyed the pawn.
+    if(this.isScriptedPawn(receiver)&&!scriptedPawnTick(receiver,seconds,entry.tickType,this.scriptedPawnTickServices(entry.services)))return 1;
     // R3-d: the Rust interpreter runs the body on the actor's image
     // (actor-tick-kernel.mjs); undefined hands the tick to JavaScript.
     const kernel=this.scriptVm?.actorTick;
@@ -3989,6 +3993,28 @@ export class ScriptRuntime {
       if(result!==undefined)return result;
     }
     return tickStandaloneActor(receiver,seconds,entry.tickType,entry.services);
+  }
+  /** Whether the actor's class is DeusEx.ScriptedPawn or derives from it (cached by class). */
+  isScriptedPawn(receiver) {
+    const cls=(receiver?.[this.instanceKey]??this.instances.get(receiver))?.cls;
+    if(!cls)return false;
+    const cache=this.scriptedPawnClasses??=new WeakMap();
+    let known=cache.get(cls);
+    if(known===undefined){
+      known=false;
+      for(let c=cls;c;c=c.base)if(c.record?.key==='deusex.scriptedpawn'){known=true;break;}
+      cache.set(cls,known);
+    }
+    return known;
+  }
+  /** The services scripted-pawn-tick.mjs takes: the tick's own, with the original's FindFunctionChecked and InStasis. */
+  scriptedPawnTickServices(services) {
+    return (services.scriptedPawn??=Object.freeze({
+      read:services.read,write:services.write,level:services.level,processEvent:services.processEvent,
+      destroyActor:services.destroyActor,
+      findFunction:(actor,name)=>this.lookup(actor,name)?.function??null,
+      inStasis:actor=>actorInStasis(actor,services),
+    }));
   }
   actorTickServices({tickType=2,...nativeServices}) {
     return {tickType,services:{
