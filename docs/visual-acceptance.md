@@ -521,18 +521,18 @@ same, the direction not: the original steers toward something other than the Des
    Proof: [walking](walking.md#script-pawns-calcvelocitys-class-tests-2026-10-11), the oracle (2,420 bit-exact cases, 623 differ without it).
 2. **physWalking's own class reads (fixed, 586aa15).** The step cut above 0.05 s and the ZoneVelocity gate for non-PlayerPawns
    (`0x103ca873`, `0x103ca697`), the same page.
-3. **First MoveTarget of a walking NPC (open).** 16 to 18 Island NPCs pick another next target at their first walk, both ways: SecurityBot0
-   tick 6, original PatrolPoint19 (-2057, 9673), Play PathNode403 (-2084, 9843); Terrorist34 tick 14 original PathNode541, Play PathNode739;
-   Terrorist15 PatrolPoint45 against PathNode348; Terrorist21 PathNode483 against PatrolPoint63; Terrorist1 PathNode225 against PatrolPoint97;
-   and so on (Location and Velocity differ from the same tick, MoveTimer too). The stream draws at those ticks are equal, and the NPCs'
-   states, orders and positions before are equal, so the choice differs in the path natives (FindPathToward and the patrol-point/path-node
-   pick, [pawn navigation](script-pawn-nav.md)), not in the random stream. Not traced.
+3. **First MoveTarget of a walking NPC (fixed, d104c8e).** 16 to 18 Island NPCs picked another next target at their first walk, both ways
+   (SecurityBot0 tick 6: original PatrolPoint19, Play PathNode403). FindPathToward's scoutE (`0x103db0e0`) stores the first candidate
+   that passes the eye line check and pointWorker and returns (`0x103db2fd..0x103db314`); the translation kept the last one. With the
+   fix, no NPC's first MoveTarget differs ([pawn navigation](script-pawn-nav.md), oracle scene `fpt-scoute-first-passing`).
 4. **Guests in state Sitting walking between seat positions (open, Club above).** Same state in, different steering direction out at the
    first poll after the new MoveTo; the speed equal.
-5. **Draws at tick 24 on Island (open, probably a load-time input).** Original 10, Play 18 (6 and 14 in a later run: always 8 more in
-   Play): Play's SeagullGenerator1 and 3 draw 4 each at tick 24; the original's per-actor trace of that run stopped at tick 3, so the
-   original's absence is inferred from the totals. If so, the generators' timers were set at load from the load's own draws, which the two
-   sides do not share (unverified). Draw counts are equal on every earlier tick.
+5. **Draws at tick 24 on Island (explained: a load-time input).** Original 10, Play 18: SeagullGenerator1 and 3 draw 4 each when
+   their TryTimer runs out. `PawnGenerator.PostBeginPlay` draws TryTimer and PoolCount from the load's own stream, which the two sides
+   do not share, so the generators spawn on other ticks. `live-acceptance.mjs` now reads those fields from the original and writes them
+   into Play before the first tick; with them the draw counts are equal over the 260 ticks compared ([random stream](rng.md)).
+   Left after that: Terrorist18 (from about tick 140) and UNATCOTroop6 (sits at tick 230 in the original, walks on in Play), and one
+   draw-count difference at tick 276 in a 600-tick run.
 6. **The ghost player's own draw timing (open, small).** Club: the player draws at ticks 1, 2, 26 and 49 in the original and at 1, 11 and 49
    in Play (the player's position, animation and rotation equal all 600 ticks). Unverified cause: the ghost's `Tread` loop (AnimRate 1.25) and
    its notify.
