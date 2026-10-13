@@ -20,7 +20,7 @@
  * throws UnsupportedConsoleCommandError before any of that handler's work.
  */
 import {gameEngineKey} from './script-window-typed-keys.mjs';
-import {readToken} from './config-text.mjs';
+import {readToken, importText} from './config-text.mjs';
 import {msvcrtWtoi} from './script-text-parser.mjs';
 import {scriptStringComplementEqual, scriptStringText} from './script-string-operations.mjs';
 import {x87load, x87double, x87mul, x87div, x87store, x87add, x87cmp} from './script-vm.mjs';
@@ -207,6 +207,50 @@ function nameText(text, warn) {
   if (!read) return null;
   const name = cString(read.token);
   return {value: name === '' || equalName(name, 'None') ? 'None' : name, rest: read.rest};
+}
+
+/**
+ * UStructProperty::ImportText (Core 0x101698b0) over a Rotator (int Pitch/Yaw/Roll) or Vector (float X/Y/Z): `(Pitch=-10130,Yaw=49096)`
+ * into `value` (an array of the three components; members the text omits keep theirs). The members import as UIntProperty::ImportText
+ * 0x10165f00 (appAtoi only when the text starts with '-' or a digit, then skip every '-'/digit) and UFloatProperty::ImportText 0x10166940
+ * (appAtof, then skip to ',' ')' CR LF). A malformed struct warns and stops; the members already imported keep their values.
+ */
+export function importNumericStruct(text, names, integer, value, warn = () => {}) {
+  let at = 0;
+  const fail = message => { warn(message); return null; };
+  if (text[at++] !== '(') return fail("ImportText: Struct missing '('");
+  for (;;) {
+    if (text[at] === ')') return text.slice(at + 1);
+    let name = '';
+    while (name.length < 0x3f && at < text.length && text[at] !== '=' && text[at] !== '[') name += text[at++];
+    if (text[at] === '[') return fail('ImportText: Illegal array element');
+    if (text[at++] !== '=') return fail('ImportText: Illegal or missing key name');
+    const index = names.findIndex(member => equalName(member, name));
+    if (index >= 0) {
+      const rest = text.slice(at);
+      if (integer) {
+        if (/^[-0-9]/.test(rest)) value[index] = importText('int', rest).value | 0;
+        while (text[at] === '-' || /[0-9]/.test(text[at] ?? '')) at++;
+      } else {
+        const parsed = importText('float', rest);
+        value[index] = Math.fround(parsed.value);
+        at = text.length - parsed.rest.length;
+      }
+    } else {
+      let depth = 0;
+      while (at < text.length && text[at] !== '\n' && text[at] !== '\r') {
+        const c = text[at];
+        if (depth <= 0 && (c === ')' || c === ',')) break;
+        if (c === '(') depth++;
+        else if (c === ')' && --depth < 0) return fail('ImportText: Bad parenthesised struct');
+        at++;
+      }
+      if (depth > 0) return fail('ImportText: Incomplete parenthesised struct');
+    }
+    if (text[at] === ',') { at++; continue; }
+    if (text[at] === ')') continue;
+    return fail('ImportText: Bad termination');
+  }
 }
 
 /** UInput::StaticInitInput 0x103930c0: `Alias` struct {Alias name +0, Command
@@ -549,6 +593,7 @@ export function createConsoleCommands({runtime, input, services}) {
     }
     if (className.ok && !scriptStringComplementEqual(className.token, 'InputExt')) {
       if (isIniName(className.token)) { ar.log(`Unrecognized class ${className.token}`); return true; }
+      if (scriptClassSet(className.token, className.rest, cmd, ar)) return true;
       throw new UnsupportedConsoleCommandError(`UObject::StaticExec SET of class ${className.token} is not implemented: ${cmd}`, {body: 'UObject::StaticExec', keyword: 'SET'});
     }
     if (!className.ok || typeof input.findField !== 'function') { ar.log(`Unrecognized class ${className.token}`); return true; }
@@ -558,6 +603,49 @@ export function createConsoleCommands({runtime, input, services}) {
     let value = propertyName.rest;
     while (value[0] === ' ') value = value.slice(1);
     input.globalSetProperty(field, value);
+    return true;
+  }
+
+  /** UObject::GlobalSetProperty 0x101523a0 (Immediate) for a script class (`set JCDentonMale ViewRotation (Pitch=-10130,Yaw=49096,Roll=0)`):
+   * ParseToken for the property, FindField, spaces skipped, then for every object that IsA the class ImportText of the value into the property
+   * followed by PostEditChange (vtable +0x40: AActor::PostEditChange 0x10369140 is UObject::PostEditChange and an Editor-only flag, a game
+   * no-op). The live actors of the player's level are the objects modelled. The original goes on to import the text into the class defaults and
+   * SaveConfig(CPF_Config) the class: not modelled, so only properties of live instances change (a later instance spawned from the class
+   * defaults, such as the Player start's second Login, would not carry the value). Property kinds: int (UIntProperty::ImportText 0x10165f00),
+   * float, bool, name, and the Rotator/Vector structs over int/float members (UStructProperty::ImportText 0x101698b0); other kinds are
+   * not linked and throw. Returns false when no live actor IsA the class (the class lookup is left to the caller's unsupported report). */
+  function scriptClassSet(token, rest, cmd, ar) {
+    const viewportActor = services.viewport ? read(services.viewport(), 'Actor') : null;
+    if (!viewportActor) return false;
+    const wanted = token.toLowerCase();
+    const isA = cls => { for (let c = cls; c; c = c.base) { const key = c.record?.key?.toLowerCase(); if (key === wanted || (!wanted.includes('.') && key?.endsWith(`.${wanted}`))) return true; } return false; };
+    const targets = runtime.levelFor(viewportActor).actors.filter(actor => actor && isA(runtime.instance(actor).cls));
+    if (!targets.length) return false;
+    const propertyName = parseToken(rest, 256, true);
+    let field = null;
+    if (propertyName.ok) { try { field = runtime.namedField(targets[0], propertyName.token); } catch { field = null; } }
+    if (!field) { ar.log(`Unrecognized property ${propertyName.token}`); return true; }
+    let value = propertyName.rest;
+    while (value[0] === ' ') value = value.slice(1);
+    const meta = field.metadata, kind = meta.type;
+    if ((meta.arrayDim ?? 1) > 1) throw new UnsupportedConsoleCommandError(`UObject::GlobalSetProperty of a fixed array (${propertyName.token}) is not linked: ${cmd}`);
+    for (const actor of targets) {
+      let imported;
+      const current = runtime.readField(actor, field);
+      if (kind === 'int') {
+        // UIntProperty::ImportText 0x10165f00: appAtoi only when the text starts with '-' or a digit; otherwise NULL and the value stays
+        imported = /^[-0-9]/.test(value) ? (importText('int', value).value | 0) : current;
+      } else if (kind === 'float' || kind === 'bool' || kind === 'name') {
+        const parsed = importText(kind, value);
+        imported = parsed ? (kind === 'float' ? Math.fround(parsed.value) : parsed.value) : current;
+      } else if (kind === 'struct' && (meta.structKey === 'core.object.rotator' || meta.structKey === 'core.object.vector')) {
+        const rotator = meta.structKey === 'core.object.rotator', names = rotator ? ['Pitch', 'Yaw', 'Roll'] : ['X', 'Y', 'Z'];
+        const next = [...current];
+        importNumericStruct(value, names, rotator, next, message => ar.log(message));
+        imported = next;
+      } else throw new UnsupportedConsoleCommandError(`UObject::GlobalSetProperty of ${kind} property ${propertyName.token} is not linked: ${cmd}`);
+      runtime.writeField(actor, field, imported);
+    }
     return true;
   }
 

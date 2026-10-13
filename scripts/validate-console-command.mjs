@@ -215,8 +215,24 @@ assert.match(userIni, /\r\nT=Talk\r\n/);
 assert.match(userIni, /\r\nAliases\[0\]=\(Command="Button bFire \| Fire",Alias=Fire\)\r\n/, 'the Alias struct export round-trips');
 assert.equal(commands.consoleCommand(player, 'SET InputExt NoSuchKey 1'), 'Unrecognized property NoSuchKey');
 assert.equal(commands.consoleCommand(player, 'SET InputExt'), 'Unrecognized property ');
-assert.throws(() => commands.consoleCommand(player, 'SET DeusExPlayer bGodMode True'),
-  error => error instanceof UnsupportedConsoleCommandError && error.keyword === 'SET');
+// UObject::GlobalSetProperty for a script class (0x101523a0): every live object that IsA the class takes the ImportText of the value
+// (the live-scene acceptance aims the player with `set JCDentonMale ViewRotation (...)`). AActor::PostEditChange (0x10369140) is a game no-op.
+// The class defaults and SaveConfig are not modelled; property kinds other than int/float/bool/name/Rotator/Vector are not linked and throw.
+{
+  const before = [...runtime.readNamed(player, 'ViewRotation')];
+  assert.equal(commands.consoleCommand(player, 'SET JCDentonMale ViewRotation (Pitch=-10130,Yaw=49096,Roll=0)'), '');
+  assert.deepEqual([...runtime.readNamed(player, 'ViewRotation')], [-10130, 49096, 0], 'SET writes the Rotator members it names');
+  assert.equal(commands.consoleCommand(player, 'SET DeusEx.JCDentonMale ViewRotation (Yaw=-16440)'), '');
+  assert.deepEqual([...runtime.readNamed(player, 'ViewRotation')], [-10130, -16440, 0], 'members the text omits keep their values');
+  runtime.writeNamed(player, 'ViewRotation', before);
+  const cheats = runtime.readNamed(player, 'bCheatsEnabled');
+  assert.equal(commands.consoleCommand(player, `SET DeusExPlayer bCheatsEnabled ${cheats ? 'False' : 'True'}`), '');
+  assert.equal(runtime.readNamed(player, 'bCheatsEnabled'), !cheats, 'SET of a bool reaches every object that IsA the class (a superclass name)');
+  runtime.writeNamed(player, 'bCheatsEnabled', cheats);
+  assert.equal(commands.consoleCommand(player, 'SET JCDentonMale NoSuchProperty 1'), 'Unrecognized property NoSuchProperty');
+  assert.throws(() => commands.consoleCommand(player, 'SET DeusExPlayer Weapon None'),
+    error => error instanceof UnsupportedConsoleCommandError && /not linked/.test(error.message), 'an object property is not linked');
+}
 // F1=ShowInventoryWindow opens the persona screen; Escape closes it.
 key('F1', true); key('F1', false); tick(5);
 assert.equal(classKey(topModal()), 'deusex.personascreeninventory');
