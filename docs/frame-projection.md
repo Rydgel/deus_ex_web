@@ -186,6 +186,22 @@ original's draw loop reads the same buffer. A corner without a valid buffer
 (the CPU path, an unlit slot) projects its world pose through `fpView`.
 The environment mapping and the culling spheres still read the world pose.
 
+**The CPU mesh path** (`?gpuMesh=0`, or a binding that left the GPU path) draws
+the same points. Its lighting already computes the buffer in every frame that
+lights an actor (`cameraDrawn`: the cache poses published through that frame's
+GetFrame matrix and the frame's LOD morph, [GPU mesh](gpu-mesh.md#camera-space-2026-10-14)),
+so `relight` hands that buffer to the page next to the corner colours (the
+record's and each child frame decision's `cameraPoints`). The page writes the
+shown state's corners into a `deusCameraPoint` attribute whenever it applies a
+frame's colours (`applyCamera`), and the vertex stage projects it with
+`fpClip` exactly as the GPU path projects `cameraFinal`. The same invariant
+holds: a frame that did not light the actor, or a state other than the one the
+points were written for, draws the world pose through `fpView`. Before this the
+CPU path projected the world pose in every frame, which rounds differently from
+the buffer the original projects (a mirror child frame's meshes, 44 pixels of
+the Bar mirror view in `validate-mesh-path-frames`); that validator again finds
+the two paths' pixels identical.
+
 **Overlays.** An overlay drawn over the same plane with LESSEQUAL (the fog
 map; D3DDrv draws it with `ZBIAS 15`) must project with its surface's chain: with
 the camera's matrices its depth differed by a depth unit and z-fought against a
@@ -256,6 +272,24 @@ frame (4%) in the mirror-heavy scene, whose child passes each draw the world
 again; the frame stays on vsync in both. Per vertex the chain is about
 twenty barriered operations and one correctly rounded division (`divRN`).
 
+**The CPU mesh path** (`?gpuMesh=0`; interleaved A/B against the commit before
+the camera-space points, 5 pairs, worker mode, 1440 x 960, 300 frames a run, medians,
+`ab-run`-style `framePhases` plus `meshLod()`, headless Chromium ANGLE GL on the same
+host; the frame stays on vsync, 16.7 ms, in both):
+
+| | Island's start | | Bar mirror view (Paris club, ghost at (78, -1008, 27)) | |
+| --- | ---: | ---: | ---: | ---: |
+| | before | camera-space points | before | camera-space points |
+| page frame work | 3.32 ms | 3.42 ms | 4.64 ms | 4.75 ms |
+| page actors phase | 0.40 ms | 0.47 ms | 0.23 ms | 0.22 ms |
+| page mirrors phase | 0.02 ms | 0.02 ms | 2.00 ms | 2.09 ms |
+| GPU per frame | 1.38 ms | 1.36 ms | 1.23 ms | 1.23 ms |
+| worker frame work | 15.9 ms | 15.9 ms | 7.24 ms | 7.51 ms |
+| worker actors phase | 4.50 ms | 4.55 ms | 2.10 ms | 2.07 ms |
+
+About 0.1 ms of page work a frame on the reference path (one corner copy per
+lit actor and frame, and the points in the worker's record).
+
 ## Unverified and open
 
 * **Movers.** A mover's vertices are float32 products of its group matrix with
@@ -275,9 +309,8 @@ twenty barriered operations and one correctly rounded division (`divRN`).
   30,000 pixels per window and not their mean absolute difference
   ([visual acceptance](visual-acceptance.md#security-cameras-2026-10-14)), so it
   is not needed there.
-* **Environment mapping** and the **culling spheres** read the world pose;
-  the CPU mesh path projects the world pose through `fpView` (the CPU twin of
-  the camera-space buffer, `cameraDrawn`, is not shipped to the page).
+* **Environment mapping** and the **culling spheres** read the world pose
+  (both mesh paths).
 * **Depth buffer.** The depth buffer's format and rounding (Direct3D's z
   buffer or the host's 24-bit one), the hardware's interpolation, the ZBIAS
   steps and the multi-pass ZFUNC EQUAL of the light-map, fog and detail passes
