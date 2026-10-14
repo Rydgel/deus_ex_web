@@ -76,6 +76,19 @@ actors. Of what survived two scavenges (and so reached the old generation):
   `validate-decals-play` 3512-3513 pixels darker before and after (its
   spread is 3502-3513 across runs); the Training frame hash is unchanged.
 
+**Slow-machine emulation again, with both fixes** (same four cores, x4 page
+throttle and 2.2 GB `memory.high`; worker frame median [p99, max] ms: 10.7
+[17.4, 406] before, 7.0 [10.7, 146] after; draw gaps over 200 ms: 6 before,
+1 after, and that one is the load-time texture upload). A GC cluster of about
+a second is still there once in the run, now eight frames of 100-170 ms
+(t = 134-135 s, steps tick and hud) instead of three of 317-417 ms (t = 138-139
+s, steps lighting and coronas): a major GC costs what its 520 MB of live heap
+costs, and a smaller garbage rate only makes it rarer (heap-drop spacing 60 s
+before, 100 s after) and its peak lower. What is left of the promoted garbage
+(about 5 MB/s) is diffuse: Rust-VM script frames and object-image reads
+(`createFrame`, `readComposite`), `reconcile` in the actor mesh layer,
+`lightRecord`.
+
 **Not established.** The Mac's multi-second drops did not appear in any of
 this. What would produce them there and not here, in decreasing order of what
 the code suggests: a major GC of the worker's 1-1.7 GB heap under macOS memory
