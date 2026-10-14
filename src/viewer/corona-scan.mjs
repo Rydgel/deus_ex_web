@@ -1,6 +1,6 @@
 import { coordsTransform } from '../runtime/volumetric-fog.mjs';
 import { createCoronaCache, coronaDecay, coronaSeen, coronaIcon, coronaFrame, coronaFrameFromCamera, leafPermeatingLights } from '../runtime/coronas.mjs';
-import { movingLightInView, movingLightLeafLists, viewPlanesOf, worldLightRadius } from '../runtime/dynamic-lighting.mjs';
+import { movingLightInView, movingLightLeafList, viewPlanesOf, worldLightRadius } from '../runtime/dynamic-lighting.mjs';
 import { actorsEpoch } from '../runtime/base-epoch.mjs';
 
 /** The simulation side of Play's light coronas (docs/coronas.md "Play",
@@ -56,8 +56,8 @@ export function createCoronaScan(runtime, { model, exportName, player }) {
     if (!lights?.length) return [];
     const planes = master?.planes ? viewPlanesOf(master.planes) : null;
     const candidates = planes ? lights.filter(light => movingLightInView(light.location, light.values, planes)) : lights;
-    const list = movingLightLeafLists(model, candidates.map(light => ({ location: light.location,
-      radius: worldLightRadius(light.values) }))).get(leaf);
+    const list = movingLightLeafList(model, candidates.map(light => ({ location: light.location,
+      radius: worldLightRadius(light.values) })), leaf);
     return list ? list.map(k => candidates[k].actor) : [];
   }
 

@@ -1,7 +1,7 @@
 import { getAxes } from '../runtime/camera.mjs';
 import { traceRay, traceRayFast } from '../runtime/ray.mjs';
 import { actorsEpoch } from '../runtime/base-epoch.mjs';
-import { movingLightInView, movingLightLeafLists, viewPlanesOf, worldLightRadius } from '../runtime/dynamic-lighting.mjs';
+import { movingLightInView, lazyLeafLists, viewPlanesOf, worldLightRadius } from '../runtime/dynamic-lighting.mjs';
 import { coronaFrame } from '../runtime/coronas.mjs';
 import { PF, accumulateFaceNormal, actorPolyFlags, createMeshLightManager, d3dDiffuse, faceKept, finishSetup, lightVertex,
   lightsActor, setupAmbient, setupForActor, unlitColor, vertexNormalPlane } from '../runtime/mesh-lighting.mjs';
@@ -136,11 +136,21 @@ export function createMeshLightingView(runtime, levelSource, { exportName, expor
   const leafListsFor = (records, planeWords) => {
     const planes = planeWords ? viewPlanesOf(planeWords) : null;
     const candidates = planes ? records.filter(record => movingLightInView(record.location, record.values, planes)) : records;
-    const leafLights = new Map();
-    const lists = movingLightLeafLists(frame.model, candidates.map(record => ({ location: record.location,
+    // Each leaf's list is built when a drawn actor asks for it (lazyLeafLists).
+    const lists = lazyLeafLists(frame.model, candidates.map(record => ({ location: record.location,
       radius: worldLightRadius(record.values) })));
-    for (const [leaf, order] of lists) leafLights.set(leaf, order.map(k => candidates[k]));
-    return leafLights;
+    const records_ = new Map();
+    const get = leaf => {
+      let list = records_.get(leaf);
+      if (list === undefined && !records_.has(leaf)) {
+        const order = lists.get(leaf);
+        records_.set(leaf, list = order && order.map(k => candidates[k]));
+      }
+      return list;
+    };
+    const all = () => new Map([...lists].map(([leaf]) => [leaf, get(leaf)]));
+    return { get, has: leaf => get(leaf) !== undefined, keys: () => lists.keys(), entries: () => all().entries(), get size() { return lists.size; },
+      [Symbol.iterator]: () => all()[Symbol.iterator]() };
   };
   // Run `fn` with `ctx` (a child frame, childFrame) as the lighting frame.
   const withFrame = (ctx, fn) => {

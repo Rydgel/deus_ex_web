@@ -29,7 +29,7 @@ import { decodeMap } from '../src/unreal/map.mjs';
 import { AssetStore } from '../src/unreal/assets.mjs';
 import { loadScriptVmKernel } from '../src/runtime/script-vm-kernel.mjs';
 import { createBspOcclusion } from '../src/runtime/bsp-occlusion.mjs';
-import { isMovingLightCandidate, movingLightInView, movingLightLeafLists, worldLightRadius } from '../src/runtime/dynamic-lighting.mjs';
+import { isMovingLightCandidate, movingLightInView, movingLightLeafLists, movingLightLeafList, worldLightRadius } from '../src/runtime/dynamic-lighting.mjs';
 import { occlusionModelRequest, surfaceTextureFlags, renderPassTangent, renderRectangle, trackedModelRequest } from './occlusion-request.mjs';
 import { collectTrackerMovers, trackerMoverSpec, trackerTextureFlags } from '../src/runtime/brush-tracker.mjs';
 import { texturePolyFlags } from '../src/runtime/bsp-occlusion.mjs';
@@ -128,6 +128,11 @@ async function validate(mapName, count, seed, { tracker = null } = {}) {
     const lists = movingLightLeafLists(tracked ?? model, candidates);
     // The fragments leave the leaf lists as the static model has them.
     if (tracked) assert.deepEqual([...lists], [...movingLightLeafLists(model, candidates)], `${where}: tracked and static leaf lists`);
+    // Play asks for single leaves (movingLightLeafList walks only the path from the root): the same list as the full walk's,
+    // for every leaf of the model walked, the tracked fragments' shared leaves included.
+    const walked = tracked ?? model, leafIds = new Set();
+    for (const node of walked.nodes) for (const leaf of node.leaves) if (leaf >= 0) leafIds.add(leaf);
+    for (const leaf of leafIds) assert.deepEqual(movingLightLeafList(walked, candidates, leaf), lists.get(leaf), `${where}: leaf ${leaf} by the single-leaf walk`);
     const got = {}, want = {};
     for (const [leaf, list] of lists) got[leaf] = list.map(k => accepted[k]);
     reference[c].leaves.forEach((list, leaf) => { if (list.length) want[leaf] = list; });

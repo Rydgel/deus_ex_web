@@ -210,6 +210,103 @@ export function movingLightLeafLists(model, lights) {
   return lists;
 }
 
+// The BSP's parent links and leaf owners, per model: which node and side a
+// leaf hangs off. `regular` is false when a node has two parents or a child
+// is the root (the single-leaf walk then asks the full one).
+const bspTopologies = new WeakMap();
+function bspTopology(model) {
+  const nodes = model.nodes;
+  let topology = bspTopologies.get(model);
+  if (topology && topology.nodes === nodes && topology.count === nodes.length) return topology;
+  const parent = new Int32Array(nodes.length).fill(-1), side = new Uint8Array(nodes.length), owner = new Map();
+  let regular = nodes.length > 0;
+  for (let i = 0; i < nodes.length; i++) {
+    const node = nodes[i];
+    for (let s = 0; s < 2; s++) {
+      const child = s ? node.front : node.back;
+      if (child >= 0) {
+        if (child === 0 || child >= nodes.length || parent[child] !== -1) regular = false;
+        else { parent[child] = i; side[child] = s; }
+      }
+      const leaf = node.leaves[s];
+      if (leaf >= 0) owner.set(leaf, owner.has(leaf) ? -1 : i * 2 + s);
+    }
+  }
+  topology = { nodes, count: nodes.length, parent, side, owner, regular };
+  bspTopologies.set(model, topology);
+  return topology;
+}
+
+/** One leaf's list of movingLightLeafLists(model, lights), light indices head
+ * first, or undefined when no light reaches it: the same decisions in the
+ * same order, but only along the path from the root to the node the leaf
+ * hangs off, since the Filter walk's lists on a node depend on its ancestors
+ * alone. Play reads a few leaves a frame (the viewer's for the coronas, the
+ * drawn actors' for mesh lighting); the full walk builds every leaf's list
+ * and allocated most of the worker's garbage (docs/hitch-log.md). A leaf with
+ * two owners, or a BSP that is not a tree, goes through the full walk.
+ * `locations` are the lights' float32 locations (computed when omitted). */
+export function movingLightLeafList(model, lights, leaf, locations = lights.map(light => light.location.map(f))) {
+  if (!lights.length || !model.nodes.length) return undefined;
+  if (globalThis.DEUS_EX_LEAF_LISTS === 'full') return movingLightLeafLists(model, lights).get(leaf);
+  const topology = bspTopology(model), owner = topology.owner.get(leaf);
+  if (owner === undefined) return undefined;
+  if (!topology.regular || owner < 0) return movingLightLeafLists(model, lights).get(leaf);
+  const path = [];
+  for (let n = owner >> 1; n !== -1; n = topology.parent[n]) path.push(n);
+  if (path[path.length - 1] !== 0) return undefined;
+  path.reverse();
+  // Node 0's list holds the candidates prepended one by one: last first.
+  let count = lights.length, ids = new Int32Array(count), hits = new Uint8Array(count);
+  for (let j = 0; j < count; j++) ids[j] = count - 1 - j;
+  for (let k = 0; k < path.length; k++) {
+    const node = model.nodes[path[k]], [px, py, pz, pw] = node.plane;
+    if (k === path.length - 1) {
+      // The leaf's node: an item that has not hit a leaf yet and reaches the
+      // leaf's side is prepended to the leaf's list.
+      const s = owner & 1, taken = [];
+      for (let j = 0; j < count; j++) {
+        if (hits[j]) continue;
+        const i = ids[j], [lx, ly, lz] = locations[i], radius = lights[i].radius, distance = filterDistance(px, py, pz, pw, lx, ly, lz);
+        if (s ? -radius < distance : distance < radius) taken.push(i);
+      }
+      return taken.length ? taken.reverse() : undefined;
+    }
+    // An ancestor: the items reaching the side the path takes go to that
+    // child, prepended (the order flips), carrying HitLeaf once this side has
+    // a leaf of its own.
+    const s = topology.side[path[k + 1]], leafHere = node.leaves[s] >= 0;
+    const nextIds = new Int32Array(count), nextHits = new Uint8Array(count);
+    let n = 0;
+    for (let j = 0; j < count; j++) {
+      const i = ids[j], [lx, ly, lz] = locations[i], radius = lights[i].radius, distance = filterDistance(px, py, pz, pw, lx, ly, lz);
+      if (!(s ? -radius < distance : distance < radius)) continue;
+      nextIds[n] = i; nextHits[n] = hits[j] || leafHere ? 1 : 0; n++;
+    }
+    if (!n) return undefined;
+    ids = nextIds.subarray(0, n).reverse(); hits = nextHits.subarray(0, n).reverse(); count = n;
+  }
+  return undefined;
+}
+
+/** `get(leaf)` of movingLightLeafLists(model, lights), computed per leaf on
+ * demand (movingLightLeafList) and kept for the frame; iteration, `size` and
+ * `keys()` build the full walk once. */
+export function lazyLeafLists(model, lights) {
+  const locations = lights.map(light => light.location.map(f)), cache = new Map();
+  let full = null;
+  const all = () => (full ??= movingLightLeafLists(model, lights));
+  const get = leaf => {
+    if (cache.has(leaf)) return cache.get(leaf);
+    // ?leafLists=full keeps the full walk, once per frame (A/B and verification).
+    const list = globalThis.DEUS_EX_LEAF_LISTS === 'full' ? all().get(leaf) : movingLightLeafList(model, lights, leaf, locations);
+    cache.set(leaf, list);
+    return list;
+  };
+  return { get, has: leaf => get(leaf) !== undefined, keys: () => all().keys(), entries: () => all().entries(),
+    get size() { return all().size; }, [Symbol.iterator]: () => all()[Symbol.iterator]() };
+}
+
 const K85 = x87load(f(1 / 85)), K84 = x87load(f(1 / 84)), ZERO = x87load(0), ONE = x87load(1);
 
 /** Engine.dll FGetHSV 0x103ec8d0, as the render pass runs it (GlobalLighting
