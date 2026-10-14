@@ -58,6 +58,17 @@ export function createDecalScene(assets, textures, { displayGamma }) {
     return entry;
   }
 
+  /** Room for `vertices` in the entry's geometry, doubling; the old buffers
+   * are deleted with the geometry's dispose (the geometry stays usable). */
+  function reserve(entry, geometry, vertices) {
+    let capacity = Math.max(64, entry.capacity ?? 0);
+    while (capacity < vertices) capacity *= 2;
+    geometry.dispose();
+    geometry.setAttribute('position', new THREE.BufferAttribute(new Float32Array(capacity * 3), 3).setUsage(THREE.DynamicDrawUsage));
+    geometry.setAttribute('uv', new THREE.BufferAttribute(new Float32Array(capacity * 2), 2).setUsage(THREE.DynamicDrawUsage));
+    entry.capacity = capacity;
+  }
+
   /** One frame: the texture groups of decal-draw.mjs, or null. */
   function update(groups) {
     drawn = 0;
@@ -65,9 +76,18 @@ export function createDecalScene(assets, textures, { displayGamma }) {
     for (const group of groups ?? []) {
       const entry = texture(group.texture);
       if (!entry.mesh) continue;
-      const geometry = entry.mesh.geometry;
-      geometry.setAttribute('position', new THREE.BufferAttribute(group.positions, 3));
-      geometry.setAttribute('uv', new THREE.BufferAttribute(group.uvs, 2));
+      const geometry = entry.mesh.geometry, vertices = group.positions.length / 3;
+      // The group's fragments are copied into attributes that keep their GL
+      // buffers (a replaced attribute's buffer is never deleted by three.js,
+      // so a new attribute each frame leaked two buffers per group per frame
+      // until the page heap's next collection).
+      if (!(entry.capacity >= vertices)) reserve(entry, geometry, vertices);
+      const position = geometry.getAttribute('position'), uv = geometry.getAttribute('uv');
+      position.array.set(group.positions); uv.array.set(group.uvs);
+      for (const attribute of [position, uv]) {
+        attribute.clearUpdateRanges(); attribute.addUpdateRange(0, attribute.itemSize * vertices); attribute.needsUpdate = true;
+      }
+      geometry.setDrawRange(0, vertices);
       entry.mesh.visible = true;
       drawn += group.positions.length / 9;
     }
