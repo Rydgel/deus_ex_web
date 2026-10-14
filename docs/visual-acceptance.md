@@ -1304,6 +1304,11 @@ node scripts/camera-acceptance.mjs compare --map 14_OceanLab_Lab --name cs1 --su
 - **Population mismatches of pickups.** The population step exempts the spawned pickup families (Liquor, Medkit, ...) from the name match; an item placed by the load's chance in the
   original and not in Play blocks a pawn now that pawns collide with items as the original's do. No case seen (the bottles and the HazMatSuit were in both programs).
 
+- **Camera views not yet captured against the original** ([Security cameras](#security-cameras-2026-10-14)): a camera whose view holds a mirror, a sky
+  frame, fog or coronas (the thirteen windows look into rooms; Island ComputerSecurity0's exterior cameras were tried, and after the ghost's `walk`
+  JC left the map at the SATCOM compound, probably through a transition volume), the other computers of the census, a window zoomed or panned
+  (`Equals`, the arrows), and the three windows' door/turret choices. The camera window's moving actors and movers (Island's terrorists, Ship's
+  locker door) are not matched.
 - The player's weapon noise is compared ([Weapon noise](#weapon-noise-2026-10-14): a pistol and an assault shotgun, 1,069 and 1,586 manager calls
   equal); footsteps (held keys), the player's `TakeDamage` `Distress`, combat and the other weapons are not.
 - The uniform 1.13–1.41× raw brightness gap under Wine; a CrossOver
