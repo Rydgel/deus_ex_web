@@ -1471,7 +1471,7 @@ laserProbe() {
  * state) on the simulation side. */
 async lodProbe(args) {
   if (simClient) return simClient.call('lodProbe', args);
-  return (await import('./lod-probe.mjs')).lodProbe(simHost?.actorSim, args);
+  return (await import('./lod-probe.mjs')).lodProbe(simHost?.actorSim, args, simHost?.weaponSim);
 },
 /** Validation only: what the page's actor mesh layer draws under the LOD,
  * per binding id (actor-mesh-draw.mjs lodStats). */

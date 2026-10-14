@@ -175,7 +175,7 @@ async function handle(data) {
         else if (data.method === 'liveProbe') value = (await import('./live-probe.mjs')).liveProbe(game, data.args ?? {});
         else if (data.method === 'placeProbe') value = placeProbe(game, data.args ?? {});
         else if (data.method === 'laserProbe') value = laserProbe(game, host.actorSim);
-        else if (data.method === 'lodProbe') value = (await import('./lod-probe.mjs')).lodProbe(host.actorSim, data.args ?? {});
+        else if (data.method === 'lodProbe') value = (await import('./lod-probe.mjs')).lodProbe(host.actorSim, data.args ?? {}, host.weaponSim);
         else if (data.method === 'windowProbe') value = (await import('./window-probe.mjs')).windowProbe(game);
         else if (data.method === 'settingsProbe') value = (await import('./settings-probe.mjs')).settingsProbe(game, ...data.args);
         else if (data.method === 'meshLightProbe') value = meshLightProbe(host.meshLighting, game, data.args ?? {});

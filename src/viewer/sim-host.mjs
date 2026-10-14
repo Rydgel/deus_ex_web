@@ -71,9 +71,10 @@ export async function createSimHost(map, asset, assets, { randomSeed, subtitles,
   const hudTextures = game.hud ? session.hudTextures() : null;
   // The player's view model, with the layout of the page's own GPU mesh
   // instance for it.
-  session.setWeapon(await createWeaponOverlaySim(runtime, assets, player, { kernel: actorSim?.kernel ?? null, lighting: meshLighting,
+  const weaponSim = await createWeaponOverlaySim(runtime, assets, player, { kernel: actorSim?.kernel ?? null, lighting: meshLighting, lod: meshLod !== 'off',
     layout: weaponGpu ? createGpuMeshLayout(weaponGpu) : null,
-    onCreate: creation => events.push({ kind: 'weapon-create', creation }), onRelease: id => events.push({ kind: 'weapon-release', id }) }));
+    onCreate: creation => events.push({ kind: 'weapon-create', creation }), onRelease: id => events.push({ kind: 'weapon-release', id }) });
+  session.setWeapon(weaponSim);
   session.setCoronas(createCoronaScan(runtime, { model: map.model, exportName, player }));
   const lipSync = createLipSyncChannels({ kernel: (await loadScriptVmKernel()).lipsync, ...game.lipSyncServices() });
   // The original BSP occlusion (bsp-occlusion.mjs) over the map's model, with
@@ -137,6 +138,6 @@ export async function createSimHost(map, asset, assets, { randomSeed, subtitles,
   session.setPanZones(panZones);
   let audioDisposed = false;
   const disposeAudio = () => { if (audioDisposed) return; audioDisposed = true; runtime.audio?.dispose?.(); };
-  return { game, session, actorSim, meshLighting, lipSync, notes, events, hudTextures, disposeAudio,
+  return { game, session, actorSim, weaponSim, meshLighting, lipSync, notes, events, hudTextures, disposeAudio,
     dispose() { disposeAudio(); session.dispose(); actorSim?.dispose(); } };
 }
