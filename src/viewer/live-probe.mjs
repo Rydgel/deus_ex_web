@@ -38,7 +38,15 @@ const plain = value => {
 export function liveProbe(game, args = {}) {
   const runtime = game.doors.scriptRuntime.runtime, player = game.player.collisionActor;
   const level = runtime.levelFor(player), info = level.actors[0];
-  const byName = name => name === '@player' ? player : level.actors.find(actor => actor?.name === name) ?? null;
+  // FName comparison is case-insensitive in Unreal; the text a name shows is the spelling its table registered first, which differs between the two
+  // programs for some map actors (the original's `mib1` and `Light1` are Play's `MIB1` and `light1`). A name given in the original's spelling finds Play's actor.
+  const byName = name => {
+    if (name === '@player') return player;
+    const exact = level.actors.find(actor => actor?.name === name);
+    if (exact) return exact;
+    const lower = String(name).toLowerCase();
+    return level.actors.find(actor => actor?.name && actor.name.toLowerCase() === lower) ?? null;
+  };
   const out = {};
   // slotOf offsets of named properties, to write the original's watch config.
   if (args.offsets) {
@@ -125,12 +133,14 @@ export function liveProbe(game, args = {}) {
   if (args.strobe) { const strobe = lightGlobals(runtime).strobe; strobe.flag = args.strobe.flag & 1; strobe.time = Math.fround(args.strobe.time); out.strobe = { ...strobe }; }
   if (args.population) {
     const spawned = /^(Skill|Aug|NanoKey|ColorTheme|Shadow|ParticleProxy|Laser|Flare|Cigarettes|Candybar|Weapon|Mission|GameReplicationInfo|PlayerReplicationInfo|JCDenton|Mutator|DeusExGameInfo|PickupDistributor|AutoTurretGun|BarkManager|ParticleGenerator|DataVault|Credits|Ammo|BioelectricCell|Medkit|Binoculars|Lockpick|Multitool|LAM|Liquor|Soda|Sodacan|Fruit|Vice)/;
-    const have = new Set(args.population.map(entry => entry.name)), extra = [];
-    for (const actor of level.actors) if (actor && actor !== player && actor.name && !have.has(actor.name) && !spawned.test(actor.name)) extra.push(actor);
+    // names compare as FNames do, ignoring case (see byName): destroying Play's `MIB1` because the original spells it `mib1` removed a live
+    // pawn that the original ticks (its four tick-1 draws and the stream shift after them: the sweep's StartUp group in the MJ12 labs)
+    const have = new Set(args.population.map(entry => entry.name.toLowerCase())), extra = [];
+    for (const actor of level.actors) if (actor && actor !== player && actor.name && !have.has(actor.name.toLowerCase()) && !spawned.test(actor.name)) extra.push(actor);
     out.population = { removed: extra.map(actor => actor.name) };
     for (const actor of extra) runtime.destroyActor(actor, false);
-    const names = new Set(level.actors.filter(Boolean).map(actor => actor.name));
-    out.population.missing = args.population.filter(entry => !names.has(entry.name) && !spawned.test(entry.name)).map(entry => entry.name);
+    const names = new Set(level.actors.filter(Boolean).map(actor => actor.name.toLowerCase()));
+    out.population.missing = args.population.filter(entry => !names.has(entry.name.toLowerCase()) && !spawned.test(entry.name)).map(entry => entry.name);
   }
   // navTrace: {pawns, first, last}: the boundary calls of those pawns' reach and path natives in those ticks
   // (nav-trace.mjs), returned by `take` as `nav`; compared with tools/dx-live-win.c `call` on the original.

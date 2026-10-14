@@ -77,6 +77,8 @@ const FIELDS = [
   ['Sight', 'SightCounter', 0x320, 'f'],
   // The Timer event's phase (Actor +0x48/+0x4c): who draws on which tick follows it.
   ['TRate', 'TimerRate', 0x48, 'f'], ['TCount', 'TimerCounter', 0x4c, 'f'],
+  // The latent Sleep's remaining seconds (Actor +0xe0): the draw a StartUp pawn's Sleep(FRand()+0.2) made, so the stream position of each pawn's draw.
+  ['LatF', 'LatentFloat', 0xe0, 'f'],
 ];
 // The load-time draws of the pawns (see GENERATOR_FIELDS): label of FIELDS -> written into Play's pawn before the first tick.
 const PAWN_LOAD_FIELDS = ['Sight', 'TRate', 'TCount'];
@@ -266,7 +268,11 @@ async function original() {
   // Actors whose Timer runs from the load (SetTimer in PostBeginPlay, e.g. Tree: 4 + 2 * FRand()): Play's load draws another rate, so the
   // original's TimerRate/TimerCounter are read here and written into Play (docs/rng.md). The list comes from Play's population step.
   const reference0 = path.join(dir, 'play-population.json');
-  const timers = (existsSync(reference0) && !flag('no-timers') ? JSON.parse(readFileSync(reference0, 'utf8')).timers ?? [] : []).filter(name => !names.includes(name) && !generators.includes(name));
+  // The two programs spell some actors' names with other case (the original's `mib1`, `Light1`; Play's `MIB1`, `light1`: the name table keeps the first
+  // spelling registered, and FNames compare without case). Names are matched lowercase, and a name Play reports is watched in the original's spelling.
+  const originalSpelling = new Map(wine('list', 'Actor').split('\n').map(line => /^\S+ (\S+) slot=/.exec(line)?.[1]).filter(Boolean).map(name => [name.toLowerCase(), name]));
+  const timers = (existsSync(reference0) && !flag('no-timers') ? JSON.parse(readFileSync(reference0, 'utf8')).timers ?? [] : []).map(name => originalSpelling.get(name.toLowerCase()) ?? name)
+    .filter(name => !names.includes(name) && !generators.includes(name));
   const buildConfig = (names, generators, timers) => {
   const config = [`out ${tracePath}`, 'player JCDentonMale', `release ${option('release', 3)}`, `ticks ${option('ticks', 600)}`,
     ...(cmds.length ? [`pause-at ${[...new Set(cmds.map(c => c.after))].sort((a, b) => a - b).join(' ')}`] : []),
@@ -292,9 +298,9 @@ async function original() {
   // driver's exit code 3 asks for a retry); `--no-population-check` runs on regardless.
   const reference = path.join(dir, 'play-population.json');
   if (existsSync(reference) && !flag('no-population-check')) {
-    const played = new Set(JSON.parse(readFileSync(reference, 'utf8')).names);
+    const played = new Set(JSON.parse(readFileSync(reference, 'utf8')).names.map(name => name.toLowerCase()));
     const spawned = /^(Skill|Aug|NanoKey|ColorTheme|Shadow|ParticleProxy|Laser|Flare|Cigarettes|Candybar|Weapon|Mission|GameReplicationInfo|PlayerReplicationInfo|JCDenton|Mutator|DeusExGameInfo|PickupDistributor|AutoTurretGun|BarkManager|ParticleGenerator|DataVault|Credits|Ammo|BioelectricCell|Medkit|Binoculars|Lockpick|Multitool|LAM|Liquor|Soda|Sodacan|Fruit|Vice)/;
-    const only = everything.filter(e => !played.has(e.name) && !spawned.test(e.name)).map(e => e.name);
+    const only = everything.filter(e => !played.has(e.name.toLowerCase()) && !spawned.test(e.name)).map(e => e.name);
     // --allow-missing generators|all: go on when the actors only the original holds are all generators (a sweep: FlyGenerators and
     // the like are chosen by chance at each load and Play's seeded load cannot be made to hold the original's set); they leave the watch
     // list and the map's record (`notInPlay`). Any other actor missing in Play still asks for a reload (exit code 3).
