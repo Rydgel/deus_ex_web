@@ -395,6 +395,50 @@ each capture.
   path ignore a child frame's own LOD state (a mutation of `applyPass`)
   differs in 1,359 bytes, up to 80, and fails it.
 
+### Light effects against the original (2026-10-14)
+
+The 26-map table aimed at the map's own start poses, which seldom look at an effect-lit surface. These views are aimed at one
+effect's surfaces ([light effects](light-effects.md)): the camera sits 150 to 450 units from the light and looks at it (chosen by
+Play's reach, the main frame drawing the most surfaces whose light list holds the light), or straight down from beside it. Both clocks
+are held at the same TimeSeconds (the original's, to 1 ms), the level is frozen, the frames are raw 1280x720 at Brightness 0.4, and the original's debugger
+probe (`--cw-probe`, [render-pass precision](render-pass-precision.md#measured-in-the-running-original-2026-10-14)) reads which
+spatial body ran at each camera and its control word.
+
+| Map, light | View | Play / original | Mean abs. diff. | Edge recall / precision | Outlier blocks | Original body, hits (`0x007f` all) |
+| --- | --- | ---: | ---: | ---: | ---: | --- |
+| WanChai Garage, Searchlight Light6, Light10 (periods 1 and 2) | garage1 | 1.205 | 2.65 | .986 / .995 | 0 | Searchlight 143 |
+| | garage2 | 1.208 | 3.88 | .974 / .953 | 2 | Searchlight 159 |
+| | garage3 (from beside the light, down) | 1.353 | 2.35 | .975 / .989 | 0 | Searchlight 477 |
+| Ship fan, Rotor Light10 | fan1 | 1.287 | 3.58 | .966 / .978 | 0 | normal 97 |
+| | fan2 | 1.463 | 6.17 | .861 / .684 | 10 | Rotor 159 |
+| | fan3 (down) | 1.285 | 3.56 | .985 / .993 | 0 | normal 141 |
+| Paris Club, Disco Light3 | club1 | 1.337 | 3.26 | .963 / .977 | 0 | Disco 96 |
+| | club2 | 1.366 | 2.83 | .966 / .979 | 0 | Disco 138 |
+| | club3 (down) | 1.319 | 3.21 | .985 / .980 | 0 | Disco 274 |
+| | club4 | 1.347 | 2.76 | .982 / .979 | 0 | Disco 233 |
+| Ship's hold, SlowWave Light16, Light17 (Pulse, period 100) | below1 | 1.333 | 3.22 | .981 / .988 | 0 | SlowWave 209 |
+| | below2 (down) | 1.362 | 3.84 | .991 / .988 | 0 | SlowWave 276 |
+| NYC Street, Spotlight Light26 (a lamp's pool) | street1 | 1.330 | 1.63 | .984 / .988 | 0 | none (class 0: built once, see below) |
+| NYC Street, Cylinder Light137 | street2 | 1.341 | 2.81 | .962 / .971 | 0 | none |
+
+The ratio is the uniform brightness gap (1.2 to 1.46 here, higher on the darkest scenes), which stays outside this
+work. Every view's geometry, light pools, sweeping sectors and gradients line up; the Searchlight, Rotor, Disco and SlowWave bodies, which
+change every frame, match at the held phase.
+
+- *Ship fan fan2: an open divergence in the coronas, not in the effect.* The 10 outlier blocks are three coronas that Play draws at full
+  size and the original does not, for the ceiling lamps Light34 and Light35 (the original shows only the small bulb) and Light36 at the
+  frame's edge; Light33's corona is drawn by both. It is not the Strobe phase: the held pair fan2_s0 and fan2_s1 gives the same 10
+  blocks (and the original's kept Strobe time stays 0 there: no Strobe call at this camera). Each of these lights sits within 3 units
+  of a DeusEx.Lightbulb (bCollideActors and bBlockActors, cylinder radius 1.6, half height 2.9) with its Location 0.37 above the
+  cylinder's bottom, and the corona helper's second line check (TRACE_Pawns|TRACE_Others, [coronas](coronas.md)) would cull them (inferred, not measured). Play's
+  `level.hash.lineCheck` hits the bulb through its centre and returns clear for a segment that ends 0.4 inside its bottom face, and for all six
+  lights here. Not yet traced to the original's cylinder line check; follow-up task filed.
+- *Garage garage2.* The 2 outlier blocks are on the ceiling's bright white strip lights; the red and blue ceiling panels differ by the
+  darkest-pixel rounding (raw 1.9 against 2.9 on the red panel, a crop at ratio 1.38).
+- *Class 0 spot and cylinder bodies.* A static light's body runs once, into the cached static map, when the surface is first drawn,
+  so an attach after the map has loaded sees no call. `scripts/original-fpu.sh` (launch under the debugger) reaches them: see the
+  precision page.
+
 ## Live scenes (2026-10-13)
 
 The sections above compare frozen levels. A live level (NPCs walking, animation, particles, generators) cannot be pixel-aligned

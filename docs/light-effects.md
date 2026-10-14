@@ -124,6 +124,11 @@ unsupported (the code names it in a note instead of drawing something else):
 
 ## Matched captures
 
-[Visual acceptance](visual-acceptance.md#light-effects-against-the-original-2026-10-14) compares
-frames of the original and of Play at held level time and matched cameras for the
-effects the 26-map table did not aim at.
+[Visual acceptance](visual-acceptance.md#light-effects-against-the-original-2026-10-14) compares raw frames of the
+original and of Play at held level time and cameras aimed at one effect's surfaces: Searchlight (garage), Rotor (ship fan), Disco
+(Paris club), a lamp's Spotlight pool and a Cylinder light (NYC street), SlowWave (ship's hold). The bodies that change every frame
+(Searchlight, Rotor, Disco, SlowWave) match at the held phase. The wavers (TorchWaver, FireWaver, WateryShimmer) draw their
+modulation from the light noise's appFrand stream, a host input the two sides do not share, so their frames cannot be compared
+pixel for pixel; they are checked by the oracle with the noise tables supplied (`validate-light-animation`,
+`validate-moving-light-effects`). FastWave's only light (Endgame 2) and the Searchlights of Helibase, Area 51 Page and Endgames 1 to 3
+are TriggerLights with `bInitiallyOn` false: off until a trigger fires, so a frozen frame of the level shows nothing from them.

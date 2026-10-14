@@ -434,9 +434,13 @@ the running original: `0x007f` in every lighting computation of the render pass,
 ([render-pass precision](render-pass-precision.md#measured-in-the-running-original-2026-10-14)).
 A strobe-lit surface drawn only in a mirror's child frame flips the Strobe flag, as
 the original does ([visual acceptance](visual-acceptance.md#strobe-in-child-frames-2026-10-14)).
+Matched captures aimed at the effects (14 views, [visual acceptance](visual-acceptance.md#light-effects-against-the-original-2026-10-14))
+match the Searchlight, Rotor, Disco, SlowWave, spot and Cylinder surfaces at held time; they found one
+open corona divergence (the Ship fan's ceiling lamps, a line check against the bulb decorations).
 Still open in lighting: Windows' own ddraw `DDSCL_FPUSETUP` (measured under Wine
-only), the movers' own polygons in the Strobe scan, and the effect captures
-below that the original comparison has not covered.
+only), the movers' own polygons in the Strobe scan, the wavers' frames (their
+noise is a host input, checked by the oracle only) and the game thread's
+first two ticks at `0x027f` for ports outside lighting.
 SpriteAnimOnce frames and animated mesh skins
 are recovered or checked but unreachable: no shipped class, map actor or
 script uses DT_SpriteAnimOnce or gives an actor an animated texture
