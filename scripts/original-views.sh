@@ -30,6 +30,10 @@ trap quit_game EXIT
 # up: the viewport player exists
 for _ in $(seq 1 60); do
   if "$DX_WINE" ad/build/dump-actor-win.exe JCDentonMale 'Player:0x5d4:u32' 2>/dev/null | grep -q '^JCDentonMale JCDentonMale.* Player=0x[1-9a-f]'; then break; fi
+  # a game that was ended from outside (a crash, a kill) starts in Recovery Mode: answer that wizard once (live-original.sh does the same)
+  if node ad/scripts/original-game.mjs find 2>/dev/null | grep -q 'Recovery Mode'; then
+    printf 'button Run Deus Ex\nsleep 500\n' > /tmp/original-views-recover.txt; node ad/scripts/original-game.mjs run /tmp/original-views-recover.txt >/dev/null 2>&1
+  fi
   sleep 5
 done
 PID=$(pgrep -x DeusEx.exe | head -1)

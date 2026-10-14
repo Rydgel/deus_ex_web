@@ -1454,6 +1454,11 @@ async terminalProbe(args) {
     : game && sim ? (await import('./terminal-probe.mjs')).terminalProbe(game, sim, args) : null;
   return value && { ...value, page: viewportPassesDrawn.map(pass => ({ ...pass })) };
 },
+/** Validation only: the light-map Strobe lists and each frame's reach (sim-session.mjs strobeReach). */
+strobeProbe(args) {
+  if (simClient) return simClient.call('strobeProbe', args);
+  return sim ? sim.strobeReach(args) : null;
+},
 /** Validation only: the render iterators' per-frame runs (sim-session.mjs iteratorState). */
 iteratorProbe(args) {
   if (simClient) return simClient.call('iteratorProbe', args);

@@ -109,9 +109,32 @@ const mapLights = {}, reach = new Map();
 // Every lit light by LightType, whatever its class: mesh lighting
 // (SetupForActor's GlobalLighting) takes static and moving lights alike.
 const lightTypes = new Map();
+// The distinct lights the level's surfaces list (UModel.Lights, the static light lists SetupForSurf adds through AddLight), by AddLight class:
+// a class 2 light there would be merged twice, once shadowed-free from this list and once from SetupDynamics' list (docs/dynamic-lighting.md).
+const listedLights = { maps: 0, lights: 0, byClass: {}, class2: [] };
+// Every light (or script-lit class) by (LightEffect, AddLight class): which spatial functions the shipped content reaches, and on which kind of
+// light (docs/light-effects.md). A script-lit class has no light until a script sets LightType; it counts under its class defaults' effect.
+const effectClasses = new Map();
+const noteEffect = (effect, cls, type, map, className, count = 1) => {
+  const key = `${effect}|${cls}`, e = effectClasses.get(key) ?? { effect, cls, lights: 0, maps: new Set(), types: new Set(), classes: new Map() };
+  e.lights += count; e.maps.add(map); e.types.add(type); e.classes.set(className, (e.classes.get(className) ?? 0) + count);
+  effectClasses.set(key, e);
+};
 const note = (key, source) => { const entry = reach.get(key) ?? { pair: key, sources: new Map() }; entry.sources.set(source, (entry.sources.get(source) ?? 0) + 1); reach.set(key, entry); };
 for (const map of maps) {
   const asset = await assets.get(map), decoded = decodeMap(asset.bytes), rows = {};
+  {
+    const byIndex = new Map(decoded.actors.map(a => [a.index, a])), refs = new Set(decoded.model.lights.filter(Boolean));
+    listedLights.maps++;
+    for (const ref of refs) {
+      const actor = byIndex.get(ref);
+      let values = null;
+      if (actor) try { values = await defaults.forActor(asset, actor); } catch { /* an unreadable actor is counted below */ }
+      const cls = values ? surfaceLightClass(values) : 'unread';
+      listedLights.lights++; listedLights.byClass[cls] = (listedLights.byClass[cls] ?? 0) + 1;
+      if (cls === 2) listedLights.class2.push(`${map}:${actor.name}`);
+    }
+  }
   for (const actor of decoded.actors) {
     let values, lineage;
     try { values = await defaults.forActor(asset, actor); lineage = await defaults.lineage(asset, asset.pkg.exports[actor.index - 1].classIndex); }
@@ -125,6 +148,8 @@ for (const map of maps) {
       lightTypes.set(type, entry);
     }
     const cls = lit ? surfaceLightClass(values) : null;
+    if (lit && values.LightBrightness) noteEffect(EFFECTS[values.LightEffect ?? 0] ?? values.LightEffect, cls, TYPES[values.LightType] ?? values.LightType, map, className);
+    else if (!lit && scripted) noteEffect(EFFECTS[values.LightEffect ?? 0] ?? values.LightEffect, 'script', 'script', map, className);
     // bIsOn (AlarmLight, Lamp, ...) decides whether BeginPlay keeps the light.
     const on = values.bIsOn === undefined ? '' : ` bIsOn=${Boolean(values.bIsOn)}`;
     const key = `${className} ${pair(values)} class=${cls ?? (scripted ? 'script-lit' : '-')}${candidate ? ' candidate' : ''}${on}`;
@@ -144,6 +169,9 @@ const result = {
   classTwoPairs: [...reach.values()].map(e => ({ pair: e.pair, sources: Object.fromEntries(e.sources) })),
   lightTypes: Object.fromEntries([...lightTypes].map(([type, e]) => [type, { lights: e.lights, maps: [...e.maps],
     classes: Object.fromEntries(e.classes) }])),
+  effectClasses: [...effectClasses.values()].map(e => ({ effect: e.effect, addLight: e.cls, lights: e.lights, maps: e.maps.size,
+    types: [...e.types], classes: Object.fromEntries(e.classes) })).sort((a, b) => String(a.effect).localeCompare(String(b.effect)) || String(a.addLight).localeCompare(String(b.addLight))),
+  listedLights,
   mapLights,
 };
 if (argv.includes('--text')) {
@@ -157,6 +185,11 @@ if (argv.includes('--text')) {
   console.log('\nEvery lit map light by LightType (any class):');
   for (const [type, e] of Object.entries(result.lightTypes))
     console.log(`  ${type.padEnd(20)} ${String(e.lights).padStart(5)} lights in ${e.maps.length} maps: ${Object.entries(e.classes).map(([c, n]) => `${c}×${n}`).join(', ').slice(0, 300)}`);
+  console.log('\nEvery lit map light by (LightEffect, AddLight class); script = a script-lit class (no light until a script sets LightType):');
+  for (const e of result.effectClasses)
+    console.log(`  ${String(e.effect).padEnd(14)} class ${String(e.addLight).padEnd(6)} ${String(e.lights).padStart(6)} lights in ${String(e.maps).padStart(2)} maps  types ${e.types.join('/')}  ${Object.entries(e.classes).map(([c, n]) => `${c}×${n}`).join(', ').slice(0, 200)}`);
+  console.log(`  effects with no map light: ${EFFECTS.filter(effect => !result.effectClasses.some(e => e.effect === effect)).join(', ')}`);
+  console.log(`\nLights the level surfaces list (UModel.Lights) by AddLight class, over ${listedLights.maps} maps: ${listedLights.lights} distinct, ${Object.entries(listedLights.byClass).map(([c, n]) => `class ${c}: ${n}`).join(', ')}${listedLights.class2.length ? `; class 2: ${listedLights.class2.join(', ')}` : ''}`);
   console.log('\nClass 2 reach (map actors) and script-lit/spawned sources:');
   for (const e of result.classTwoPairs) console.log(`  ${e.pair}: ${Object.entries(e.sources).map(([k, n]) => `${k}${n > 1 ? `×${n}` : ''}`).join(', ')}`);
 } else console.log(JSON.stringify(result, null, 1));

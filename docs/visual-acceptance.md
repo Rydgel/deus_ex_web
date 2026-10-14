@@ -395,6 +395,52 @@ each capture.
   path ignore a child frame's own LOD state (a mutation of `applyPass`)
   differs in 1,359 bytes, up to 80, and fails it.
 
+### Light effects against the original (2026-10-14)
+
+The 26-map table aimed at the map's own start poses, which seldom look at an effect-lit surface. These views are aimed at one
+effect's surfaces ([light effects](light-effects.md)): the camera sits 150 to 450 units from the light and looks at it (chosen by
+Play's reach, the main frame drawing the most surfaces whose light list holds the light), or straight down from beside it. Both clocks
+are held at the same TimeSeconds (the original's, to 1 ms), the level is frozen, the frames are raw 1280x720 at Brightness 0.4, and the original's debugger
+probe (`--cw-probe`, [render-pass precision](render-pass-precision.md#measured-in-the-running-original-2026-10-14)) reads which
+spatial body ran at each camera and its control word.
+
+| Map, light | View | Play / original | Mean abs. diff. | Edge recall / precision | Outlier blocks | Original body, hits (`0x007f` all) |
+| --- | --- | ---: | ---: | ---: | ---: | --- |
+| WanChai Garage, Searchlight Light6, Light10 (periods 1 and 2) | garage1 | 1.205 | 2.65 | .986 / .995 | 0 | Searchlight 143 |
+| | garage2 | 1.208 | 3.88 | .974 / .953 | 2 | Searchlight 159 |
+| | garage3 (from beside the light, down) | 1.353 | 2.35 | .975 / .989 | 0 | Searchlight 477 |
+| Ship fan, Rotor Light10 | fan1 | 1.287 | 3.58 | .966 / .978 | 0 | normal 97 |
+| | fan2 | 1.463 | 6.17 | .861 / .684 | 10 | Rotor 159 |
+| | fan3 (down) | 1.285 | 3.56 | .985 / .993 | 0 | normal 141 |
+| Paris Club, Disco Light3 | club1 | 1.337 | 3.26 | .963 / .977 | 0 | Disco 96 |
+| | club2 | 1.366 | 2.83 | .966 / .979 | 0 | Disco 138 |
+| | club3 (down) | 1.319 | 3.21 | .985 / .980 | 0 | Disco 274 |
+| | club4 | 1.347 | 2.76 | .982 / .979 | 0 | Disco 233 |
+| Ship's hold, SlowWave Light16, Light17 (Pulse, period 100) | below1 | 1.333 | 3.22 | .981 / .988 | 0 | SlowWave 209 |
+| | below2 (down) | 1.362 | 3.84 | .991 / .988 | 0 | SlowWave 276 |
+| NYC Street, Spotlight Light26 (a lamp's pool) | street1 | 1.330 | 1.63 | .984 / .988 | 0 | spot 5, normal 5 (built once, see below) |
+| NYC Street, Cylinder Light137 | street2 | 1.341 | 2.81 | .962 / .971 | 0 | Cylinder 6, spot 3, normal 6 |
+
+The ratio is the uniform brightness gap (1.2 to 1.46 here, higher on the darkest scenes), which stays outside this
+work. Every view's geometry, light pools, sweeping sectors and gradients line up; the Searchlight, Rotor, Disco and SlowWave bodies, which
+change every frame, match at the held phase.
+
+- *Ship fan fan2: an open divergence in the coronas, not in the effect.* The 10 outlier blocks are three coronas that Play draws at full
+  size and the original does not, for the ceiling lamps Light34 and Light35 (the original shows only the small bulb) and Light36 at the
+  frame's edge; Light33's corona is drawn by both. It is not the Strobe phase: the held pair fan2_s0 and fan2_s1 gives the same 10
+  blocks (and the original's kept Strobe time stays 0 there: no Strobe call at this camera). Each of these lights sits within 3 units
+  of a DeusEx.Lightbulb (bCollideActors and bBlockActors, cylinder radius 1.6, half height 2.9) with its Location 0.37 above the
+  cylinder's bottom, and the corona helper's second line check (TRACE_Pawns|TRACE_Others, [coronas](coronas.md)) would cull them (inferred, not measured). Play's
+  `level.hash.lineCheck` hits the bulb through its centre and returns clear for a segment that ends 0.4 inside its bottom face, and for all six
+  lights here. Not yet traced to the original's cylinder line check; follow-up task filed.
+- *Garage garage2.* The 2 outlier blocks are on the ceiling's bright white strip lights; the red and blue ceiling panels differ by the
+  darkest-pixel rounding (raw 1.9 against 2.9 on the red panel, a crop at ratio 1.38).
+- *Class 0 spot, Cylinder and NonIncidence bodies.* A static light's body runs once, into the cached static map, when a surface is first
+  drawn, so a probe that attaches after the camera moved sees no call; `--cw-probe-early` attaches before it moves. Then the street's
+  spot (8 calls) and Cylinder (6) bodies and Training's corridor views (trainA, trainB: `-100,840,30` and `1200,840,30` looking down +x, the six NonIncidence
+  lights) spot, NonIncidence and normal bodies run at `0x007f`. Their frames match too: the table's street rows, and Training's trainA (Play / original 1.423,
+  mean abs. diff. 1.70, edge .954 / .957, 0 outlier blocks) and trainB (1.272, 3.77, .978 / .992, 0).
+
 ## Live scenes (2026-10-13)
 
 The sections above compare frozen levels. A live level (NPCs walking, animation, particles, generators) cannot be pixel-aligned
@@ -492,6 +538,56 @@ The matched-camera views (`visual-acceptance.mjs`) hold the state the same way: 
 light lit) or 1 (dark), the original through `dx-live-win.exe strobe hold` (the Strobe function's flip, `0x10b05b4b`, patched to a jump while it is held) and Play with
 `TimeDilation 0` and `liveProbe({strobe: {flag, time}})`. A free-running capture's phase is a coin flip on each side; Divergence 19 is the case it misread as a mirror
 defect.
+
+### Strobe in child frames (2026-10-14)
+
+Render.dll's DrawFrame (`0x10b1a2d0`) calls itself on `Frame->Child` and the siblings first (the loop at `0x10b1a339`,
+through `0x10b0102d`) and then sets up its own surfaces: SetupForSurf (`[0x10b3059c]` slot +0xc, `0x10b1aa99`) for each
+surface of the frame. The Strobe function runs inside, for every surface whose light list holds a live Strobe light, so the flag
+flips when a mirror's child frame draws a strobe-lit surface the main frame does not. `lightMapStrobe` (sim-session.mjs) scanned
+the main frame's drawn nodes; it now scans every frame's (and a moving Strobe light must pass SetupDynamics' ViewPlanes test of
+that frame).
+
+**The scene.** An aimed view of the Underworld club, camera (-1081, -2010, -336) at yaw 54769 (230 units from TriggerLight1,
+looking at the floor mirrors). Play's reach (`strobeProbe`): the main frame draws no surface whose light list holds TriggerLight1,
+the mirror's child frame draws 24 (101 nodes). The club's dancers are lit by the same light and call the Strobe function
+from SetupForActor, which would flip the flag first, so the views hide them on both sides
+(`--cmd 'set ScriptedPawn bHidden True'`; `visual-acceptance.mjs` takes `--cmd` for the original's console and Play's viewProbe).
+A search found 60 of 148 sampled cameras around it (x -1300 to -1050, y -2150 to -1900, yaw 53500 to 57500) with a child frame
+and no strobe-lit surface in the main frame.
+
+**The original** (`scripts/original-views.sh ... --strobe-poll --cw-probe`; `tools/dx-fpu-win.c` attached for 6 seconds at each camera):
+
+| Camera | SetupForSurf calls by Frame->Recursion | Kept TimeSeconds over 120 polls |
+| --- | --- | --- |
+| aimed (c0, flag held 0) | recursion 1: 3,932, recursion 0: 51, over 51 frames (DrawFrame: 51 and 51) | 117 distinct values, 116 steps: the Strobe function runs every frame; the flag changed at 76 of them (a poll can span two frames) |
+| aimed (c0, flag held 1) | recursion 1: 4,208, recursion 0: 54, over 54 frames | |
+| a direct view (d) | recursion 1: 2,351, recursion 0: 936, over 79 frames | 117 distinct values |
+| a wall view (p2) | recursion 0 only: 534, over 534 frames | 1 value: no call |
+
+So the original sets up the child frame's 77 surfaces a frame through SetupForSurf (Recursion 1) while the main frame
+sets up one, and calls the Strobe function every frame there with no mesh lit by it.
+
+**Play.** `scripts/validate-strobe-child-frames-play.mjs` (worker mode, pawns hidden): at the aimed camera the scan finds
+0 strobe-lit nodes in the main frame and 101 in the child frame, and the flag flips at all 23 new TimeSeconds; at a direct view
+(d) it flips at all 23 (6 main-frame nodes); at the wall view (p2) at none. With the first version's scan (`strobeProbe({mainOnly:
+true})`) the aimed camera flips at none of 23, so the scene discriminates the change. Cost (interleaved medians of
+2,000 calls, 3 rounds): 4.0 µs a frame at the aimed camera (0.35 µs before), 2.5 µs at a direct view (2.6), 0.35 µs where no
+frame draws a strobe-lit surface; the scan runs only in maps with a Strobe light (Underworld, Ship fan, Endgame 4).
+
+**Matched frames** (flag held 0 and 1, both clocks at TimeSeconds 54.179, pawns hidden): the reflected dance floor, lit and
+dark, equals the original's.
+
+| View | Play / original | Mean abs. diff. | Edge recall / precision | Outlier blocks |
+| --- | ---: | ---: | ---: | ---: |
+| c0_s0 (lit) | 1.212 | 4.65 | .986 / .988 | 0 |
+| c0_s1 (dark) | 1.197 | 2.92 | .992 / .989 | 0 |
+
+(The ratio is the uniform brightness gap. The unsuffixed views d and p2 are free-running in the flag, so they are polled and not
+compared.)
+
+**Not covered.** The movers' own polygons are still not searched for Strobe lights. The Strobe lists come from the lights that are
+Strobe at load. A Strobe light seen only in a sky child frame has no case in the shipped maps (the sky zones hold no lights).
 
 ### Placement constraint
 
@@ -880,11 +976,10 @@ constant 0.0.
     direct view uses, and the cadence equals the original's at all seven cameras. The change is in the harness: paired states, the Hyprland window selection (the largest client of
     the class, as `live-acceptance.mjs` does; the first client was a hidden log window), `--unfreeze`, `--strobe-poll`. **Check.** `scripts/validate-strobe-mirror-play.mjs` (worker mode; the cadence
     at seven cameras, the held lit/dark ratios within 10% of the original's, the unfrozen light; fails without the `viewProbe` change).
-    **Not reached.** `DrawFrame` (`0x10b1a2d0`) calls SetupForSurf through the light manager (`[0x10b3059c]`, slot +0xc, at `0x10b1aa99`) for each frame's surfaces, children first, so a
-    strobe-lit surface drawn only in a child frame would flip the flag; Play's `lightMapStrobe` reads the main frame's drawn nodes only. In this map a main frame that shows a mirror
-    always draws a surface the strobe lights: a sweep of 200 random views of the dance floor and its surroundings (Play, the flag's flips per new TimeSeconds over 23 frames) had 62 with a child
-    frame, 60 of them flipping at every step; the other two stand in the restroom, 900 units from the light, where the child frame shows the restroom too and neither frame draws a strobe-lit
-    surface. So the difference has no case in this map to be measured on, and `lightMapStrobe` is left as it is (unverified, not unsupported: no shipped view known to reach it).
+    **Not reached, then closed.** `DrawFrame` (`0x10b1a2d0`) calls SetupForSurf through the light manager (`[0x10b3059c]`, slot +0xc, at `0x10b1aa99`) for each frame's surfaces, children first, so a
+    strobe-lit surface drawn only in a child frame flips the flag; Play's `lightMapStrobe` read the main frame's drawn nodes only. A sweep of 200 random views of the club did not separate the two (62 had a child frame,
+    60 flipped at every step; each also drew a dancer lit by the same light, whose SetupForActor flips the flag first, or a strobe-lit surface in the main frame). With the dancers hidden and the camera aimed
+    at the floor mirrors, 230 units from the light, the scene exists: [Strobe in child frames](#strobe-in-child-frames-2026-10-14).
 
 ### Weapon noise (2026-10-14)
 
@@ -1150,6 +1245,16 @@ scripts/original-views.sh 06_HongKong_WanChai_Underworld --view d_s0:-1120,-1900
 node scripts/visual-acceptance.mjs play --maps 06_HongKong_WanChai_Underworld --view d_s0:-1120,-1900,-336:0,55000,0 --view d_s1:-1120,-1900,-336:0,55000,0 [--unfreeze]
 node scripts/visual-acceptance.mjs compare --maps 06_HongKong_WanChai_Underworld --view d_s0:-1120,-1900,-336:0,55000,0 [--crop 490x520+340+170]
 wine ad/build/dx-live-win.exe strobe poll 120 5 | strobe hold 0 | strobe release      # the running original's Strobe flag (free-running, held at a value, released)
+```
+
+```bash
+# the club's floor in the mirror with no pawn mesh lit by the strobe, on both sides; the polls and a debugger probe of the original at each camera
+scripts/original-views.sh 06_HongKong_WanChai_Underworld --view c0_s0:-1081,-2010,-336:0,54769,0 --view c0_s1:-1081,-2010,-336:0,54769,0 --cmd 'set ScriptedPawn bHidden True' --strobe-poll --cw-probe
+node scripts/visual-acceptance.mjs play --maps 06_HongKong_WanChai_Underworld --view c0_s0:-1081,-2010,-336:0,54769,0 --view c0_s1:-1081,-2010,-336:0,54769,0 --cmd 'set ScriptedPawn bHidden True'
+node scripts/validate-strobe-child-frames-play.mjs                                 # Play's side: the reach, the cadence, the failing baseline
+scripts/original-fpu.sh 01_NYC_UNATCOIsland 170                                    # the original's control word at start-up and the pass's entry points (start-up scene), and its light-manager tables (.work/fpu)
+scripts/original-views.sh 04_NYC_Street --view street1:-264,-256,-452:-343,32616,0 --cw-probe --cw-probe-early   # the loaded map's pass functions and static light bodies at a camera
+node scripts/validate-original-light-tables.mjs                                    # those tables against Play's builders
 ```
 
 `live-original.sh` takes the Wine lock (`.work/wine-deusex.lock`), refuses to start with another DeusEx.exe running and quits the game by
