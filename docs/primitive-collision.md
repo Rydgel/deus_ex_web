@@ -52,8 +52,8 @@ cases in all): 09_NYC_ShipFan's Lightbulb12 with Light34 inside it and the
 camera 735 units away, plus neighbouring long segments (start-inside dots
 around -0.1, bottom-cap entry with the end inside or on the cap, grazing
 rays, a viewer cylinder holding the eye). See [coronas](coronas.md),
-"Lights inside a colliding actor". **They have not been run against the
-DLL yet.** The zero-mismatch result above is for the first 5,353 cases.
+"Lights inside a colliding actor". All 5,399 cases equal the DLL
+(`validate-native-primitive`, 0 failures, 2026-10-14).
 
 This establishes these two primitive methods against original DLL execution,
 not full actor movement/events or all possible floating-point inputs. Inputs

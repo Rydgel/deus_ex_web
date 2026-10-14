@@ -265,3 +265,19 @@ Host choices, noted:
   to test);
 - the display ramp applies to the finished frame, after the tile blends
   ([lighting](lighting.md), "Display ramp").
+
+## Lights inside a colliding actor (open, 2026-10-14)
+
+09_NYC_ShipFan's fan2 view: the original hides the coronas of Light34 and
+Light35, each inside a DeusEx.Lightbulb collision cylinder (radius 1.6,
+height 2.9); Play draws them. The helper's direction is not the cause: it
+calls `ULevel::SingleLineCheck(Hit, Source 0, End, Start, TraceFlags, Extent,
+NodeFlags)` with End = the light's Location (`ebx = light+0x114`, pushed at
+`0x10b1bc50`) and Start = the frame's Coords.Origin (`edi = frame+0x34`, pushed
+at `0x10b1bc4f`), so it traces from the eye to the light, as Play does;
+`validate-coronas` compares those arguments with the original helper under
+Unicorn. A reversal of the direction (6ce1620) failed that comparison and was
+reverted. The primitive's start-inside and cap cases for this geometry equal the
+DLL (`validate-native-primitive`, `shipFanBulbCases`), so the remaining
+suspect is how Play registers or queries the bulbs (Lightbulb12's collision
+in the hash at that view); not traced.
