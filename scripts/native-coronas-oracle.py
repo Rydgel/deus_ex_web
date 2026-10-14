@@ -4,7 +4,9 @@ Runs unchanged Render.dll code over fabricated frames, viewports, levels and
 lights (Render, Core and Engine hash-pinned, native-dynamic-light-oracle.py):
 - the visibility helper 0x10b1bc00 (cdecl Frame, Cache, &Next, Light, Delta)
   with XLevel's SingleLineCheck (vtable +0xc0) answering from the case and
-  Engine's own ULevel::GetActorIndex;
+  recording its arguments (which pointers are End and Start, their vectors,
+  Source, Extent, TraceFlags, NodeFlags), and Engine's own
+  ULevel::GetActorIndex;
 - the draw loop 0x10b1b745-0x10b1bafc over a prepared 32-entry cache, the
   canvas DrawIcon (Viewport+0x5c, vtable +0x60) recording its arguments;
 - the leaf loops 0x10b1b6b1-0x10b1b745 (a case with `leafVisit`): the viewer
@@ -39,7 +41,7 @@ class CoronaOracle(lighting.Oracle):
         # audit) selects another word.
         super().__init__(root, lighting.native.render_control_word(0x007f))
         self.cpu.mem_map(STUBS, 0x1000)
-        # SingleLineCheck(Hit, Source, End, Start, Flags, Extent, NodeFlags): 7 dwords + FVector = 0x24 bytes.
+        # SingleLineCheck(Hit, Source, End, Start, Flags, Extent, NodeFlags): 6 dwords + FVector = 0x24 bytes.
         self.cpu.mem_write(self.trace_stub, bytes.fromhex('c22400'))
         # DrawIcon(Texture, X, Y, XL, YL, Span, Z, Color, Fog, PolyFlags) = 0x40 bytes.
         self.cpu.mem_write(self.icon_stub, bytes.fromhex('c24000'))
@@ -55,8 +57,15 @@ class CoronaOracle(lighting.Oracle):
     def on_trace(self, cpu):
         esp = cpu.reg_read(UC_X86_REG_ESP)
         hit, source, end, start, flags = self.read(esp + 4, '5I')
+        extent, node_flags = list(self.read(esp + 0x18, '3I')), self.read(esp + 0x24, 'I')[0] & 0xff
         outside, actor = self.answers.pop(0)
-        self.traces.append([flags, list(self.read(end, '3I')), list(self.read(start, '3I'))])
+        # Which object each pointer argument is (the frame's Coords.Origin
+        # at +0x34, the light's Location at +0x114), then the vectors' bits.
+        role = {self.trace_frame + 0x34: 'frameOrigin', self.trace_light + 0x114: 'lightLocation'}
+        self.traces.append({'flags': flags, 'end': role.get(end, 'other'), 'start': role.get(start, 'other'),
+                            'endBits': list(self.read(end, '3I')), 'startBits': list(self.read(start, '3I')),
+                            'extent': extent, 'nodeFlags': node_flags,
+                            'source': {0: None, self.trace_viewer: 'viewer', self.trace_light: 'light'}.get(source, 'other')})
         self.write(hit + 4, 'I', actor)
         cpu.reg_write(lighting.UC_X86_REG_EAX, outside)
 
@@ -191,7 +200,9 @@ class CoronaOracle(lighting.Oracle):
         self.run(0x10b1b682, 0x10b1b6b1)
         faded = [list(self.read(cache + 12 * i, 'IiI')) for i in range(32)]
         self.traces = []
+        self.trace_frame, self.trace_viewer = frame, player
         for seen in case.get('seen', []):
+            self.trace_light = lights[seen['light']]
             self.answers = [(a[0], player if a[1] == 'viewer' else (lights[0] if a[1] == 'other' else 0)) for a in seen['answers']]
             stack = self.frame() - 0x1000
             self.write(stack, '6I', lighting.RETURN, frame, cache, nxt, lights[seen['light']], case['delta'])
