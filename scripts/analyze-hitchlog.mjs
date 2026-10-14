@@ -75,6 +75,10 @@ for (const e of loaf) console.log(`  long animation frame t=${f(e.t / 1000)}s ${
 
 // ---- frames around the longest gaps (rows kept in the dump)
 const R = d.rows, draws = R.filter(r => r[ci.drawn]);
+// A worker frame in which several steps are each several times their usual cost at once, with no work to explain it,
+// is a pause of the worker's thread (a garbage collection, or the thread being descheduled), not slow code.
+const stepMedian = Object.fromEntries(d.meta.workerKeys.map(k => [k, q(R.map(r => r[ci[`w.${k}`]]).filter(x => x >= 0), 0.5)]));
+const pauseLike = row => row && d.meta.workerKeys.filter(k => row[ci[`w.${k}`]] > Math.max(4 * stepMedian[k], 4)).length >= 3;
 const gaps = [];
 for (let i = 1; i < draws.length; i++) if (draws[i][ci.t] - draws[i - 1][ci.t] < 5000) gaps.push({ t: draws[i][ci.t], gap: draws[i][ci.t] - draws[i - 1][ci.t] });
 gaps.sort((a, b) => b.gap - a.gap);
@@ -86,7 +90,7 @@ for (const g of spikes.slice(0, listN)) {
   const max = k => f(Math.max(0, ...inside.map(r => r[ci[k]])), 0);
   const big = worker ? d.meta.workerKeys.map(k => [k, worker[ci[`w.${k}`]]]).sort((a, b) => b[1] - a[1]).slice(0, 2).map(([k, v]) => `${k}=${f(v, 0)}`).join(' ') : '';
   const events = d.events.filter(e => e.t >= g.t - g.gap && e.t <= g.t && e.kind !== 'program').map(e => `${e.kind}${e.ms ? ':' + f(e.ms, 0) : ''}${e.fn ? ':' + e.fn : ''}`).slice(0, 4);
-  console.log(`  t=${f(g.t / 1000, 2)}s gap ${f(g.gap, 0)} | worker ${worker ? f(worker[ci['w.dur']], 0) : '-'} [${big}] posts ${worker ? worker[ci['w.posts']] : '-'} lat ${worker ? f(worker[ci['w.lat']], 0) : '-'} | page animate ${max('animate')} gl compile ${max('gl.compile')} upload ${max('gl.upload')} sync ${max('gl.sync')} draw ${max('gl.draw')} | ${events.join(',')}`);
+  console.log(`  t=${f(g.t / 1000, 2)}s gap ${f(g.gap, 0)} | worker ${worker ? f(worker[ci['w.dur']], 0) : '-'}${pauseLike(worker) ? ' PAUSE-LIKE' : ''} [${big}] posts ${worker ? worker[ci['w.posts']] : '-'} lat ${worker ? f(worker[ci['w.lat']], 0) : '-'} | page animate ${max('animate')} gl compile ${max('gl.compile')} upload ${max('gl.upload')} sync ${max('gl.sync')} draw ${max('gl.draw')} | ${events.join(',')}`);
 }
 if (run?.gc) {
   const by = new Map();
