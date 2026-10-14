@@ -77,6 +77,7 @@ void main(){vec2 p=vec2(float((gl_VertexID&1)<<2)-1.0,float((gl_VertexID&2)<<1)-
 // U11 lodFrame, the morph's inverse (float bits), 0, 0
 // F0 matrix row 0 (m0)  F1..F3 rows 1..3  F4 mesh origin  F5+k channel alpha
 // F10 ambient rgb, ScaleGlow*1.4 (24-bit)   F11 unlit rgb
+// F12..F15 the lighting frame's GetFrame matrix (rows 0..3): the camera-space publication
 export const PARAMS=`
 uniform usampler2D uParamsU;uniform sampler2D uParamsF;
 uvec4 pu(uint slot,int k){return texelFetch(uParamsU,ivec2(k,int(slot)),0);}
@@ -219,21 +220,90 @@ void main(){
   oWedge=packed;
 }`;
 
-// The lighting frame's camera transform (kernel camera_component):
-// TransformPointBy at the render pass's 24 bits, (d.x*A.x + d.y*A.y) + d.z*A.z.
+/** Camera pose pass: GetFrame's publication (the POSE_FRAGMENT's main and
+ * additive blend arithmetic) of the cache poses through the lighting frame's
+ * own matrix (F12..F15: GetFrame called with that frame's Frame->Coords), for
+ * the slots lit in this run. DrawLodMesh calls GetFrame once for each frame
+ * that draws an actor, and what it publishes is in that frame's camera space:
+ * the morph, the normals and the lighting all start from these values
+ * (docs/script-lodmesh-lod.md "Camera space"). The cache poses are the
+ * channels' states the pose pass left (a keyframe operation stores its pose
+ * there too). */
+export const CAMERA_POSE_FRAGMENT=`${COMMON}${PARAMS}
+uniform usampler2D uVertexMap;uniform isampler2D uKeyframes;
+uniform sampler2D uState0,uState1,uState2,uState3,uState4;
+uniform uint uLightFrame;
+out vec4 oCamera;
+vec3 key(uint keyBase,uint V,uint frame,uint i){return vec3(texelFetch(uKeyframes,at(keyBase+frame*V+i),0).xyz);}
+float dot24(vec3 v,vec3 r){return B(B(B(v.x*r.x)+B(v.y*r.y))+B(v.z*r.z));}
+void main(){
+  uint t=texelIndex();ivec2 p=at(t);
+  uvec2 map=texelFetch(uVertexMap,p,0).xy;
+  if(map.x==0u)discard;
+  uint slot=map.x-1u,i=map.y;
+  if(pu(slot,2).w!=uLightFrame)discard;
+  uvec4 u0=pu(slot,0);uint keyBase=u0.x,V=u0.y;
+  vec3 m0=pf(slot,12).xyz,r1=pf(slot,13).xyz,r2=pf(slot,14).xyz,r3=pf(slot,15).xyz,origin=pf(slot,4).xyz;
+  uvec4 u9=pu(slot,9);uint counts[5];counts[0]=u9.x;counts[1]=u9.y;counts[2]=u9.z;counts[3]=u9.w;counts[4]=pu(slot,10).x;
+  vec4 s[5];s[0]=texelFetch(uState0,p,0);s[1]=texelFetch(uState1,p,0);s[2]=texelFetch(uState2,p,0);
+  s[3]=texelFetch(uState3,p,0);s[4]=texelFetch(uState4,p,0);
+  vec3 outp=vec3(0.0);
+  for(int k=0;k<5;k++){
+    uvec4 ch=pu(slot,4+k);
+    if(ch.x==0u)continue;
+    if(i>=(counts[k]&0xffffu))continue;
+    vec3 pose=s[k].xyz;
+    if(ch.w==0u){
+      vec3 c=vec3(B(pose.x-origin.x),B(pose.y-origin.y),B(pose.z-origin.z));
+      vec3 v=vec3(B(c.x-m0.x),B(c.y-m0.y),B(c.z-m0.z));
+      outp=vec3(dot24(v,r1),dot24(v,r2),dot24(v,r3));
+    }else{
+      vec3 base=key(keyBase,V,0u,i);
+      vec3 c=vec3(B(pose.x-base.x),B(pose.y-base.y),B(pose.z-base.z));
+      outp=vec3(B(dot24(c,r1)+outp.x),B(dot24(c,r2)+outp.y),B(dot24(c,r3)+outp.z));
+    }
+  }
+  oCamera=vec4(outp,1.0);
+}`;
+
+/** Camera morph pass: MORPH_FRAGMENT's arithmetic on the camera-space pose,
+ * for the slots lit in this run, into the camera-space final pose the face,
+ * vertex and corner passes read. w is the vertex's stored alpha, which the
+ * world pass computes the same (it depends on the counts alone). */
+export const CAMERA_MORPH_FRAGMENT=`${COMMON}${PARAMS}
+uniform usampler2D uVertexMap,uLodVertices;uniform sampler2D uPose;uniform uint uLightFrame;
+out vec4 oFinal;
+void main(){
+  uint t=texelIndex();uvec2 map=texelFetch(uVertexMap,at(t),0).xy;
+  if(map.x==0u)discard;
+  uint slot=map.x-1u;uvec4 u2=pu(slot,2),u10=pu(slot,10),u11=pu(slot,11);
+  if(u2.w!=uLightFrame)discard;
+  vec4 p=texelFetch(uPose,at(t),0);
+  oFinal=vec4(p.xyz,0.0);
+  uint special=pu(slot,3).w,i=map.y;
+  if((u10.w&2u)==0u||i<special)return;
+  int o=int(i-special),start=int(u10.z);
+  if(o<=start||o>=int(u10.y))return;
+  float alpha=B(float(o-start)*uintBitsToFloat(u11.y));
+  if(!(1.0>alpha))alpha=1.0;
+  uvec4 u1=pu(slot,1);uint target=texelFetch(uLodVertices,at(u1.x+i),0).z;
+  if(target==0u)return;
+  vec3 T=texelFetch(uPose,at(u1.y+special+target),0).xyz;
+  oFinal=vec4(B(B(B(T.x-p.x)*alpha)+p.x),B(B(B(T.y-p.y)*alpha)+p.y),B(B(B(T.z-p.z)*alpha)+p.z),alpha);
+}`;
+
+// The lighting frame's Mirror (Frame+0x20) and lighting stamp. The vertices
+// the lighting passes read are already in that frame's camera space.
 export const CAMERA=`
-uniform vec3 uCameraOrigin,uCameraX,uCameraY,uCameraZ;uniform float uMirror;uniform uint uLightFrame;
-float cameraComponent(vec3 p,vec3 axis){
-  float dx=B(p.x-uCameraOrigin.x),dy=B(p.y-uCameraOrigin.y),dz=B(p.z-uCameraOrigin.z);
-  return B(B(B(dx*axis.x)+B(dy*axis.y))+B(dz*axis.z));}
-vec3 toCamera(vec3 p){return vec3(cameraComponent(p,uCameraX),cameraComponent(p,uCameraY),cameraComponent(p,uCameraZ));}
+uniform float uMirror;uniform uint uLightFrame;
 `;
 
 /** Face pass: DrawLodMesh 0x10b0fe60..0x10b0ffc9 (kernel light_mesh_job's
- * face loop) in camera space; w = 0 not drawn, 1 drawn, 2 drawn and
- * PF_Unlit. Attachment 1: meshFaceNormal on the world pose. */
+ * face loop) on the camera-space final pose (uCameraPose); w = 0 not drawn,
+ * 1 drawn, 2 drawn and PF_Unlit. Attachment 1: meshFaceNormal on the world
+ * pose. */
 export const FACE_FRAGMENT=`${COMMON}${TABLES}${PARAMS}${CAMERA}${CORNERS}
-uniform usampler2D uFaceMap,uMeshFaces;uniform sampler2D uPose;uniform uint uFrame;
+uniform usampler2D uFaceMap,uMeshFaces;uniform sampler2D uPose,uCameraPose;uniform uint uFrame;
 layout(location=0) out vec4 oFace;layout(location=1) out vec4 oEnvironment;
 void main(){
   uint t=texelIndex();uvec2 map=texelFetch(uFaceMap,at(t),0).xy;
@@ -252,7 +322,8 @@ void main(){
   face.xyz=uvec3(special+(c0&0xffffu),special+(c1&0xffffu),special+(c2&0xffffu));
   vec3 w0=texelFetch(uPose,at(u1.y+face.x),0).xyz,w1=texelFetch(uPose,at(u1.y+face.y),0).xyz,w2=texelFetch(uPose,at(u1.y+face.z),0).xyz;
   if(lit){
-    vec3 p0=toCamera(w0),p1=toCamera(w1),p2=toCamera(w2);
+    vec3 p0=texelFetch(uCameraPose,at(u1.y+face.x),0).xyz,p1=texelFetch(uCameraPose,at(u1.y+face.y),0).xyz,
+      p2=texelFetch(uCameraPose,at(u1.y+face.z),0).xyz;
     // DrawLodMesh 0x10b0fe60..0x10b0ffbb at 24 bits (accumulateFaceNormal, faceDot),
     // the dot times Frame.Mirror (+0x20: exactly 1 or -1).
     float ax=B(p2.x-p0.x),ay=B(p2.y-p0.y),az=B(p2.z-p0.z),bx=B(p0.x-p1.x),bz=B(p0.z-p1.z),by=B(p0.y-p1.y);
@@ -276,7 +347,7 @@ void main(){
 /** Vertex pass: the kernel's vertex normal, normal plane and light_vertex;
  * attachment 1 the environment vertex normal (meshVertexNormalsInto). */
 export const VERTEX_FRAGMENT=`${COMMON}${TABLES}${PARAMS}${CAMERA}${CORNERS}
-uniform usampler2D uVertexMap,uMeshVertices,uAdjacency;uniform sampler2D uPose,uFaces,uEnvironmentFaces,uLights;
+uniform usampler2D uVertexMap,uMeshVertices,uAdjacency;uniform sampler2D uPose,uCameraPose,uFaces,uEnvironmentFaces,uLights;
 uniform uint uFrame;
 layout(location=0) out vec4 oLight;layout(location=1) out vec4 oEnvironment;
 uint adjacent(uint k){uvec4 v=texelFetch(uAdjacency,at(k>>2),0);uint c=k&3u;return c==0u?v.x:c==1u?v.y:c==2u?v.z:v.w;}
@@ -309,7 +380,7 @@ void main(){
     oEnvironment=vec4(B(E.x*r),B(E.y*r),B(E.z*r),1.0);
   }
   if(!lit)return;
-  vec3 P=toCamera(texelFetch(uPose,at(u1.y+map.y),0).xyz);
+  vec3 P=texelFetch(uCameraPose,at(u1.y+map.y),0).xyz;
   // DrawLodMesh 0x10b10863..0x10b1090f and FLightManager::Light at the
   // render pass's 24 bits (the kernel's light_vertex): one binary32
   // operation each, the two quotients correctly rounded (divRN).

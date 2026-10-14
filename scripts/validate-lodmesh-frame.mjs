@@ -34,6 +34,28 @@ for(const [pack,index] of [['DeusExDeco',606],['DeusExCharacters',669]]) {
   add('transformed',pose(move,0.4137,{Location:[137.35,-95.75,40.13],PrePivot:[2.35,-7.875,3.375],
     Rotation:[4917,23471,-6193],DrawScale:1.237}),{coords:[-91.125,65.7,81.32,0.75,0.25,-0.5,-0.125,0.875,0.3,0.5,-0.75,0.25],
     meshFloats:{0x100:-0.01273,0x104:0.00735,0x108:0.00983,0x10c:37.1,0x110:-12.89}});
+  // GetFrame called the way DrawLodMesh calls it: with the Frame->Coords of the
+  // frame that draws the actor (camera space: X right, Y down, Z forward),
+  // for a camera in the map (large coordinates), a pitched one and a mirror
+  // frame's reflected Coords (determinant -1, Frame.Mirror -1). The actor
+  // stands a few thousand units from the camera as the LOD cases do.
+  const look=(origin,yaw,pitch)=>{
+    const f=Math.fround,cy=Math.cos(yaw),sy=Math.sin(yaw),cp=Math.cos(pitch),sp=Math.sin(pitch);
+    return [...origin,-sy,cy,0,sp*cy,sp*sy,-cp,cp*cy,cp*sy,sp].map(f);
+  };
+  const reflect=(coords,[nx,ny,nz,w])=>{
+    const f=Math.fround,n=[nx,ny,nz],point=p=>{const d=2*(nx*p[0]+ny*p[1]+nz*p[2]-w);return p.map((c,i)=>f(c-d*n[i]));};
+    const vector=v=>{const d=2*(nx*v[0]+ny*v[1]+nz*v[2]);return v.map((c,i)=>f(c-d*n[i]));};
+    return [...point(coords.slice(0,3)),...vector(coords.slice(3,6)),...vector(coords.slice(6,9)),...vector(coords.slice(9,12))];
+  };
+  const standing={Location:[2310.5,-140.25,-27.75],PrePivot:[0,0,0],Rotation:[0,23000,0],DrawScale:1};
+  const cameraA=look([-1210.5,880.25,64.75],0.35,-0.02),cameraB=look([2310.125,-1914.5,310.5],-2.4,0.4);
+  add('camera-keyframe',pose(move,0.4137,standing),{coords:cameraA});
+  add('camera-keyframe-reduced',pose(move,0.4137,standing),{coords:cameraB,count:11});
+  add('camera-keyframe-reflected',pose(move,0.4137,standing),{coords:reflect(cameraA,[0.6,0.8,0,120])});
+  add('camera-tween',pose(other,-0.25,standing),{coords:cameraB});
+  add('camera-tween-progress',pose(other,-0.1,standing),{coords:cameraA});
+  add('camera-tween-reflected',pose(other,-0.05,standing),{coords:reflect(cameraB,[0,0.8,0.6,-40])});
   add('owner-animation-particles',{actor:{bAnimByOwner:true,Owner:'owner',DrawScale:2.3},
     owner:{AnimSequence:other,AnimFrame:0.31,bParticles:true}});
   add('null-owner-falls-back',{actor:{Owner:null}});
@@ -43,6 +65,9 @@ for(const [pack,index] of [['DeusExDeco',606],['DeusExCharacters',669]]) {
     add('blend-tween-progress',pose('BreatheLight',0.35,{BlendAnimFrame:[-0.21,-0.13,-0.12,-0.1]}));
     add('blend-tween-near-end',pose('BreatheLight',0.39,{BlendAnimFrame:[-0.0001,-0.0001,-0.0001,-0.0001]}));
     add('blend-completion',pose('BreatheLight',0.413,{BlendAnimFrame:[0,0,0,0]}));
+    add('camera-four-additive-blends',pose('BreatheLight',0.234,{...standing,BlendAnimSequence:['MouthA','Blink','HeadLeft','HeadUp'],BlendAnimFrame:[0,0.371,0,0]}),{coords:cameraB});
+    add('camera-blend-tweens',pose('BreatheLight',0.26,{BlendAnimSequence:['MouthE','Blink','HeadLeft','HeadUp'],BlendAnimFrame:[-0.5,-0.25,-0.3,-0.4]}),{coords:cameraA});
+    add('camera-blend-tween-progress',pose('BreatheLight',0.3,{BlendAnimFrame:[-0.21,-0.13,-0.12,-0.1]}),{coords:reflect(cameraA,[0.6,0.8,0,120])});
     add('owner-blend-cache-key',{actor:{Owner:'owner'},owner:{BlendAnimSequence:['MouthA','None','None','None'],BlendAnimFrame:[0,0,0,0]}});
     add('blend-missing-sequence',{owner:{BlendAnimSequence:['UnknownSequence','None','None','None'],BlendAnimFrame:[0.13,0,0,0]}});
     add('blend-cache-invalidation',{}, {invalidate:true,stride:28});
@@ -106,4 +131,4 @@ for(const [rowIndex,row] of rows.entries()) {
     assert.equal(mesh.arrays.get(0x60).savedPosition,original.lazyPosition,label);
   }
 }
-if(assert.enabled)assert.report('validate-lodmesh-frame');else console.log(`PASS ${rows.reduce((n,r)=>n+r.spec.steps.length,0)} complete original GetFrame calls: LightSwitch and GM_Trench output/padding, all cache bytes, frame wrap/tween, owner/transforms, reduced counts and four additive blends.`);
+if(assert.enabled)assert.report('validate-lodmesh-frame');else console.log(`PASS ${rows.reduce((n,r)=>n+r.spec.steps.length,0)} complete original GetFrame calls: LightSwitch and GM_Trench output/padding, all cache bytes, frame wrap/tween, owner/transforms, camera-space Frame->Coords (large offsets, pitch, mirror-reflected), reduced counts and four additive blends.`);

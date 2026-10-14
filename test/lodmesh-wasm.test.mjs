@@ -131,4 +131,8 @@ test('Wasm bulk mesh lighting preserves the JavaScript face and diffuse-byte pat
     unlit,lights:setup.lights,flags};
   const actual=kernel.light(input);
   assert.deepEqual(new Uint32Array(actual.buffer,actual.byteOffset,actual.length),new Uint32Array(expected.buffer));
+  // GetFrame called with the frame's own Coords already returns camera-space
+  // vertices: lit as they are (`cameraSpace`), the colours are the same.
+  const inCamera=kernel.light({...input,points:Float32Array.from(camera.flat()),cameraSpace:true});
+  assert.deepEqual(new Uint32Array(inCamera.buffer,inCamera.byteOffset,inCamera.length),new Uint32Array(expected.buffer));
 });

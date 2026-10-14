@@ -462,6 +462,7 @@ fn light_mesh_job(
     ambient: [f32; 3],
     scale_glow: f32,
     unlit: [f32; 3],
+    camera_space: bool,
     points_at: usize,
     lights_at: usize,
     scratch_at: usize,
@@ -480,7 +481,13 @@ fn light_mesh_job(
     for i in 0..vertex_count {
         let point = std::array::from_fn(|axis| f32::from_bits(work[points_at + i * 3 + axis]));
         for axis in 0..3 {
-            work[camera_at + i * 3 + axis] = camera_component(point, origin, axes[axis]).to_bits();
+            // GetFrame's output for the frame's Coords is already camera
+            // space (`camera_space`): the vertex stays as it is.
+            work[camera_at + i * 3 + axis] = if camera_space {
+                point[axis].to_bits()
+            } else {
+                camera_component(point, origin, axes[axis]).to_bits()
+            };
             work[normals_at + i * 3 + axis] = 0;
             work[vertex_light_at + i * 3 + axis] = 0;
         }
@@ -613,6 +620,7 @@ pub extern "C" fn light_mesh(
     vertex_count: usize,
     light_count: usize,
     flags: u32,
+    camera_space: u32,
 ) {
     LIGHT_MESHES.with_borrow(|meshes| {
         let faces = meshes
@@ -650,6 +658,7 @@ pub extern "C" fn light_mesh(
                     ambient,
                     scale_glow,
                     unlit,
+                    camera_space != 0,
                     points_at,
                     lights_at,
                     scratch_at,
@@ -1118,7 +1127,7 @@ mod light_bench {
         let rounds = 400;
         let start = std::time::Instant::now();
         for _ in 0..rounds {
-            light_mesh(0, vertex_count, light_count, 0);
+            light_mesh(0, vertex_count, light_count, 0, 0);
         }
         let ns =
             start.elapsed().as_nanos() as f64 / (rounds * vertex_count * light_count.max(1)) as f64;

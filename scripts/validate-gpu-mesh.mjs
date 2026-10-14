@@ -9,6 +9,11 @@
  *     used this frame, on the exact CPU pose;
  *   - environment: meshVertexNormalsInto and writeMeshEnvironmentUV;
  *   - visibility: three.js's own sphere test on the exact CPU spheres;
+ *   - camera space (docs/script-lodmesh-lod.md "Camera space"): the pose a
+ *     lit slot's frame matrix publishes and its morph, which the lighting
+ *     reads, against the CPU twin (publishLodMeshOps + actor-mesh-lod.mjs on
+ *     the exact cache poses), main frame, a reflected child frame and the
+ *     child LOD states;
  *   - the distance LOD (docs/gpu-mesh.md "Distance LOD"): for an actor the
  *     LOD reduces, the final (morphed) pose and the resolved corner dwords
  *     against actor-mesh-lod.mjs on the exact output, and the colours and
@@ -74,12 +79,25 @@ async function capture(page,{frames,device,tolerance,admission,lodViews}) {
       corners:0,maxByte:0,byteHistogram:[0,0,0],worstColor:null,drawnDisagreements:0,maxEdgeOn:0,excludedCorners:0,
       environmentVertices:0,maxNormalUlp:0,maxUV:0,groups:0,certified:0,ambiguous:0,visibilityMismatches:0,
       finalComponents:0,finalExact:0,maxFinalUlp:0,worstFinal:null,cornerWedges:0,wedgeMismatches:0,worstWedge:null,
+      camera:{components:0,exact:0,maxUlp:0,worst:null},
       child:{actors:0,corners:0,maxByte:0,drawnDisagreements:0,restoredOff:0,corner:null},
       variant:{actors:0,morph:0,corners:0,maxByte:0,drawnDisagreements:0,restoredOff:0,corner:null,components:0,maxUlp:0,worst:null,wedges:0,wedgeMismatches:0,dropped:0},
       coverage:{translucent:0,modulated:0,masked:0,environment:0,unlit:0,mixedUnlit:0,blend:0,tween:0,movingLights:0,lod:0,lodMorph:0,lodReduced:0},
       fallbacks:{},errors:[]};
     const frustum=new THREE.Frustum(),matrix=new THREE.Matrix4();
     let focus=null;
+    // The GPU camera-space final pose (`gpuRead`, null on the CPU harness)
+    // against the CPU twin's, in the published vertices; the alphas too.
+    function compareCamera(stats,gpuRead,cpuPoints,published,actorName){
+      for(let i=0;i<published;i++)for(let k=0;k<3;k++){
+        const c=cpuPoints[i*3+k],g=gpuRead?gpuRead[i*4+k]:c;
+        stats.components++;
+        if(Object.is(c,g)||c===g){stats.exact++;continue;}
+        const error=Math.abs(g-c)/ulp(c);
+        stats.maxUlp=Math.max(stats.maxUlp,error);
+        if(!stats.worst||error>stats.worst.ulp)stats.worst={actor:actorName,vertex:i,axis:k,cpu:c,gpu:g,ulp:error};
+      }
+    }
     function compare(){
       const {npc,gpu,lighting,camera}=v;
       if(!npc||!gpu)throw new Error('GPU mesh path is not active');
@@ -188,16 +206,20 @@ async function capture(page,{frames,device,tolerance,admission,lodViews}) {
         const {setup,flags:actorFlags,unlit}=state.setup;
         if(setup.lights.some(light=>!light.light.values?.bStatic))report.coverage.movingLights++;
         const frame=lighting.frame;
-        const reference=npc.kernel.light({points:drawnPoints,faces:litWords,origin:frame.origin,axes:frame.axes,
-          ambient:setup.ambient,scaleGlow:setup.scaleGlow,unlit,lights:setup.lights,flags:actorFlags});
+        // The camera-space buffer of this frame (GetFrame called with its
+        // Coords, then the morph): the CPU twin of the camera passes.
+        const cameraState=state.cameraDrawn(null),cameraSpace=cameraState.positions;
+        compareCamera(report.camera,device==='cpu'?null:gpu.read('cameraFinal',handle.vbase,V),cameraSpace,published,actor.summary.actor);
+        const reference=npc.kernel.light({points:cameraSpace,faces:litWords,origin:frame.origin,axes:frame.axes,
+          ambient:setup.ambient,scaleGlow:setup.scaleGlow,unlit,lights:setup.lights,flags:actorFlags,cameraSpace:true});
         let deviceColors;
         if(device==='cpu'){
           const kernel=lighting.kernel;lighting.kernel=null;
-          try{deviceColors=lighting.lightMesh(actor.actor,Float32Array.from(drawnPoints),litFaces,litWords,state.setup).colors;}
+          try{deviceColors=lighting.lightMesh(actor.actor,Float32Array.from(cameraSpace),litFaces,litWords,state.setup,null,true).colors;}
           finally{lighting.kernel=kernel;}
         } else deviceColors=gpu.read('corners',handle.cbase,F*3);
         // The CPU's drawn test (kernel face loop, JavaScript form).
-        const cameraPoints=Array.from({length:V},(_,i)=>lighting.toCamera([drawnPoints[i*3],drawnPoints[i*3+1],drawnPoints[i*3+2]]));
+        const cameraPoints=Array.from({length:V},(_,i)=>[cameraSpace[i*3],cameraSpace[i*3+1],cameraSpace[i*3+2]]);
         const accumulated=cameraPoints.map(()=>[0,0,0]),drawn=new Uint8Array(F);
         const gpuFaces=device==='cpu'?null:gpu.read('faces',handle.fbase,F);
         const excludedVertices=new Set();
@@ -244,16 +266,17 @@ async function capture(page,{frames,device,tolerance,admission,lodViews}) {
           const child={origin:reflectPoint(mainCamera.origin),axes:mainCamera.axes.map(reflectVector),mirror:-1};
           const plain={flags:actorFlags,ambient:[...setup.ambient],scaleGlow:setup.scaleGlow,unlit:[...unlit],
             lights:setup.lights.map(light=>({location:[...light.location],rradius:light.rradius,color:[...light.color]}))};
+          // Each frame's lighting carries its GetFrame matrix (the camera passes).
+          const plainChild={...plain,camera:state.cameraMatrix(child).flat()},plainMain={...plain,camera:state.cameraMatrix(null).flat()};
           // Compares one lighting run's corner bytes and drawn faces with the
           // kernel `light` on the given points and reduced faces, in `camera`
           // with Frame.Mirror `mirror`.
           const checkLit=(stats,{points,facesList,words,camera,mirror,colors,faceTexels})=>{
+            // `points`: the frame's camera-space buffer (GetFrame with its Coords, then the morph).
             const reference=npc.kernel.light({points,faces:words,origin:camera.origin,axes:camera.axes,mirror,
-              ambient:setup.ambient,scaleGlow:setup.scaleGlow,unlit,lights:setup.lights,flags:actorFlags});
-            const component=(p,axis)=>{const dx=f32(p[0]-camera.origin[0]),dy=f32(p[1]-camera.origin[1]),dz=f32(p[2]-camera.origin[2]);
-              return f32(f32(f32(dx*axis[0])+f32(dy*axis[1]))+f32(dz*axis[2]));};
-            const cameraPoints=Array.from({length:V},(_,i)=>{const p=[points[i*3],points[i*3+1],points[i*3+2]];
-              return camera.axes.map(axis=>component(p,axis));});
+              ambient:setup.ambient,scaleGlow:setup.scaleGlow,unlit,lights:setup.lights,flags:actorFlags,cameraSpace:true});
+            compareCamera(stats.camera??={components:0,exact:0,maxUlp:0,worst:null},gpu.read('cameraFinal',handle.vbase,V),points,published,actor.summary.actor);
+            const cameraPoints=Array.from({length:V},(_,i)=>[points[i*3],points[i*3+1],points[i*3+2]]);
             const sums=cameraPoints.map(()=>[0,0,0]),keep=new Uint8Array(F),excluded=new Set();
             for(let face=0;face<F;face++){
               const [a,b,c]=facesList[face].vertices,p0=cameraPoints[a];
@@ -284,12 +307,12 @@ async function capture(page,{frames,device,tolerance,admission,lodViews}) {
             }
           };
           gpu.beginLightRun();
-          if(!gpu.setLighting(handle,plain))throw new Error('child frame lighting did not fit');
+          if(!gpu.setLighting(handle,plainChild))throw new Error('child frame lighting did not fit');
           gpu.lightRun(child);
-          checkLit(report.child,{points:drawnPoints,facesList:litFaces,words:litWords,camera:child,mirror:-1,
+          checkLit(report.child,{points:state.cameraDrawn(child).positions,facesList:litFaces,words:litWords,camera:child,mirror:-1,
             colors:gpu.read('corners',handle.cbase,F*3),faceTexels:gpu.read('faces',handle.fbase,F)});
           // The page puts the main lighting back after the pass.
-          const restoreMain=()=>{gpu.beginLightRun();gpu.setLighting(handle,plain);gpu.lightRun(mainCamera);};
+          const restoreMain=()=>{gpu.beginLightRun();gpu.setLighting(handle,plainMain);gpu.lightRun(mainCamera);};
           restoreMain();
           const restored=gpu.read('corners',handle.cbase,F*3);
           for(let i=0;i<F*3*4;i+=4)for(let channel=0;channel<3;channel++)
@@ -315,7 +338,7 @@ async function capture(page,{frames,device,tolerance,admission,lodViews}) {
               if(!variant.params.active)continue;
               gpu.beginLightRun();
               gpu.setLod(handle,variant.params);
-              if(!gpu.setLighting(handle,plain))throw new Error('child frame lighting did not fit');
+              if(!gpu.setLighting(handle,plainChild))throw new Error('child frame lighting did not fit');
               gpu.lightRun(child);
               const vFinal=gpu.read('final',handle.vbase,V),vWedges=gpu.read('cornerWedges',handle.cbase,F*3);
               report.variant.actors++;if(spec.morph)report.variant.morph++;
@@ -333,10 +356,11 @@ async function capture(page,{frames,device,tolerance,admission,lodViews}) {
                 if((vWedges[face*3+k]>>>0)!==expected)report.variant.wedgeMismatches++;
               }
               report.variant.label={count:spec.count,morph:spec.morph,start:variant.params.start};
-              checkLit(report.variant,{points:variant.drawn.positions,facesList:variant.drawn.lighting.faces,words:variant.drawn.lighting.faceWords,
+              const variantCamera=state.cameraDrawn(child,selection,spec.count);
+              checkLit(report.variant,{points:variantCamera.positions,facesList:variant.drawn.lighting.faces,words:variant.drawn.lighting.faceWords,
                 camera:child,mirror:-1,colors:gpu.read('corners',handle.cbase,F*3),faceTexels:gpu.read('faces',handle.fbase,F)});
               // The main frame's pass: its LOD state and lighting again.
-              gpu.beginLightRun();gpu.setLod(handle,mainParams);gpu.setLighting(handle,plain);gpu.lightRun(mainCamera);
+              gpu.beginLightRun();gpu.setLod(handle,mainParams);gpu.setLighting(handle,plainMain);gpu.lightRun(mainCamera);
               const backFinal=gpu.read('final',handle.vbase,V),backWedges=gpu.read('cornerWedges',handle.cbase,F*3),backColors=gpu.read('corners',handle.cbase,F*3);
               for(let i=0;i<published;i++)for(let k=0;k<3;k++)if(!Object.is(backFinal[i*4+k],gpuFinal[i*4+k]))report.variant.restoredOff++;
               for(let i=0;i<F*3;i++)if((backWedges[i]>>>0)!==(gpuWedges[i]>>>0))report.variant.restoredOff++;
@@ -439,6 +463,10 @@ try {
     const checks=[
       ['position ulp (keyframe/blend)',report.maxUlp<=TOLERANCE.ulp],
       ['position ulp (tween)',report.maxUlpTween<=TOLERANCE.tweenUlp],
+      ['camera-space final pose ulp (main frame)',report.camera.maxUlp<=TOLERANCE.tweenUlp],
+      ['camera-space final pose ulp (child frame)',(report.child.camera?.maxUlp??0)<=TOLERANCE.tweenUlp],
+      ['camera-space final pose ulp (child LOD state)',(report.variant.camera?.maxUlp??0)<=TOLERANCE.tweenUlp],
+      ['camera-space compared',device==='cpu'||(report.camera.components>0&&(report.child.camera?.components??0)>0)],
       ['colour bytes',report.maxByte<=TOLERANCE.byte],
       ['edge-on drawn disagreements',report.maxEdgeOn<TOLERANCE.edgeOn],
       ['child frame colour bytes (reflected Coords, Mirror -1)',report.child.maxByte<=TOLERANCE.byte],

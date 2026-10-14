@@ -91,7 +91,7 @@ export function createLodMeshKernel(instance) {
     const after=current().scratch;
     cacheBytes.set(after.subarray(cacheAt,outAt));
     output.set(after.subarray(outAt,outAt+count*stride));
-  },light({points,faces,origin,axes,mirror=1,ambient,scaleGlow,unlit,lights,flags}) {
+  },light({points,faces,origin,axes,mirror=1,ambient,scaleGlow,unlit,lights,flags,cameraSpace=false}) {
     const vertexCount=points.length/3,faceCount=faces.length/4,lightCount=lights.length;
     if(!Number.isInteger(vertexCount)||!Number.isInteger(faceCount))throw new TypeError('Invalid mesh-lighting buffers');
     const mesh=lightingMesh(faces);
@@ -108,7 +108,7 @@ export function createLodMeshKernel(instance) {
       const info=lights[i],offset=lightsAt+i*7;
       floats.set(info.location,offset);floats[offset+3]=info.rradius;floats.set(info.color,offset+4);
     }
-    lightMesh(mesh.handle,vertexCount,lightCount,flags>>>0);
+    lightMesh(mesh.handle,vertexCount,lightCount,flags>>>0,cameraSpace?1:0);
     const after=current().floats;
     const key=`${colorsAt}:${faceCount}`;
     let output=outputs.get(key);

@@ -10,9 +10,10 @@
  * channel being -1), tween, first, second, blend, alpha (float), count,
  * fill start (the count without a tween fill).
  * Lighting at `at`: flags, ambient (3 floats), ScaleGlow (float), unlit (3
- * floats), the light count n, then n lights of 7 floats: location, rradius,
- * colour. */
-export const PLAN_HEAD = 16, PLAN_OP = 8, LIGHTING_HEAD = 9, LIGHTING_LIGHT = 7;
+ * floats), the light count n, the frame's GetFrame matrix (4 rows of 3
+ * floats: the cache poses published in that frame's camera space), then n
+ * lights of 7 floats: location, rradius, colour. */
+export const PLAN_HEAD = 16, PLAN_OP = 8, LIGHTING_HEAD = 21, LIGHTING_LIGHT = 7;
 
 export function createMeshFramePack(capacity = 8192) {
   let buffer = new ArrayBuffer(capacity * 4), u32 = new Uint32Array(buffer), f32 = new Float32Array(buffer), used = 0;
@@ -38,12 +39,14 @@ export function createMeshFramePack(capacity = 8192) {
       });
       return at;
     },
-    /** A mesh-lighting-view setupMesh result; returns its offset. */
-    lighting(prepared) {
+    /** A mesh-lighting-view setupMesh result with the frame's GetFrame matrix
+     * (`camera`, 4 rows of 3); returns its offset. */
+    lighting(prepared, camera) {
       const { setup } = prepared, lights = setup.lights, at = reserve(LIGHTING_HEAD + LIGHTING_LIGHT * lights.length);
       u32[at] = prepared.flags >>> 0;
       for (let i = 0; i < 3; i++) { f32[at + 1 + i] = setup.ambient[i]; f32[at + 5 + i] = prepared.unlit[i]; }
       f32[at + 4] = setup.scaleGlow; u32[at + 8] = lights.length;
+      for (let row = 0; row < 4; row++) for (let i = 0; i < 3; i++) f32[at + 9 + row * 3 + i] = camera[row][i];
       lights.forEach((light, k) => {
         const base = at + LIGHTING_HEAD + LIGHTING_LIGHT * k;
         for (let i = 0; i < 3; i++) { f32[base + i] = light.location[i]; f32[base + 4 + i] = light.color[i]; }

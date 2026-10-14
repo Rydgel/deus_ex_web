@@ -21,13 +21,13 @@ const f=Math.fround;
 const doubleHex=value=>{const v=new DataView(new ArrayBuffer(8));v.setFloat64(0,value,true);return v.getBigUint64(0,true).toString(16).padStart(16,'0');};
 /** A camera FCoords looking along `forward` (unit floats) from `origin`, with
  * X = right and Y = down as Frame->Coords has them. */
-function cameraCoords(origin,yaw,pitch=0) {
+export function cameraCoords(origin,yaw,pitch=0) {
   const cy=Math.cos(yaw),sy=Math.sin(yaw),cp=Math.cos(pitch),sp=Math.sin(pitch);
   const forward=[cp*cy,cp*sy,sp],right=[-sy,cy,0],down=[sp*cy,sp*sy,-cp];
   return [...origin,...right,...down,...forward].map(f);
 }
 /** Deterministic bytes standing for DrawLodMesh's uninitialized GMem block. */
-function pattern(size,seed) {
+export function pattern(size,seed) {
   const bytes=new Uint8Array(size);let x=seed>>>0;
   for(let i=0;i<size;i++){x=(Math.imul(x,1664525)+1013904223)>>>0;bytes[i]=x>>>24;}
   return bytes;
@@ -50,7 +50,7 @@ function frameBuffer(mesh,seed) {
  * translation picks inputs; the oracle decides outputs) to land in each
  * regime: full detail without morph, morph at full count, reduced count with
  * morph, the LODMinVerts floor and the behind-camera clamp. */
-function meshCases(topology) {
+export function meshCases(topology) {
   const cases=[],N=topology.modelVerts;
   const base={settings:{...RENDER_LOD_SETTINGS},lodBias:1,drawScale:1,fov:75,fx:1440,coords:[0,0,0,0,1,0,0,0,1,1,0,0],
     location:[0,0,0]};
@@ -121,6 +121,12 @@ export async function meshOracleSpec(root,pack,exportIndex,cases,{seed=0x5eed100
     vertices:Buffer.from(frameBuffer(mesh,seed)).toString('base64'),cases}};
 }
 
+/** A case as the oracle takes it: float32 bit patterns. */
+export const oracleCase=c=>({name:c.name,settings:c.settings,lodBiasBits:floatBits(c.lodBias),drawScaleBits:floatBits(c.drawScale),
+  locationBits:c.location.map(floatBits),fovBits:floatBits(c.fov),fxBits:floatBits(c.fx),coordsBits:c.coords.map(floatBits),
+  tanBits:c.tanBits,...(c.returnedCount?{returnedCount:c.returnedCount}:{}),...(c.noCollapse?{noCollapse:true}:{}),
+  ...(c.meshBits?{meshBits:c.meshBits}:{})});
+
 /** The validator's samples: per mesh the oracle's input (`spec`) and the
  * translation's inputs (`topology`, `vertices`, `cases`). */
 export async function buildLodMeshSamples(root) {
@@ -141,11 +147,7 @@ export async function buildLodMeshSamples(root) {
     for(let offset=0x180;offset<=0x19c;offset+=4)scalars[offset]=mesh.scalarBits.get(offset)>>>0;
     const cases=meshCases(topology);
     const spec={name:`${pack}.${name}`,arrays,scalars,frameVerts:mesh.frameVertexCount,
-      vertices:Buffer.from(vertices).toString('base64'),
-      cases:cases.map(c=>({name:c.name,settings:c.settings,lodBiasBits:floatBits(c.lodBias),drawScaleBits:floatBits(c.drawScale),
-        locationBits:c.location.map(floatBits),fovBits:floatBits(c.fov),fxBits:floatBits(c.fx),coordsBits:c.coords.map(floatBits),
-        tanBits:c.tanBits,...(c.returnedCount?{returnedCount:c.returnedCount}:{}),...(c.noCollapse?{noCollapse:true}:{}),
-        ...(c.meshBits?{meshBits:c.meshBits}:{})}))};
+      vertices:Buffer.from(vertices).toString('base64'),cases:cases.map(oracleCase)};
     samples.push({name:spec.name,mesh,topology,vertices,cases,spec});
   }
   return samples;

@@ -119,7 +119,8 @@ class Probe(mesh.Probe):
             if 'special' in step:
                 self.write(self.object + 0x184, 'i', step['special'])
             stride = step.get('stride', 20)
-            self.cpu.mem_write(self.output, b'\x55' * (count * stride))
+            # The output block's prior contents (DrawLodMesh's uninitialized GMem): 0x55 unless the step gives bytes.
+            self.cpu.mem_write(self.output, base64.b64decode(step['pattern']) if 'pattern' in step else b'\x55' * (count * stride))
             self.write(self.count_cell, 'i', step.get('count', count))
             args = struct.pack('<II12fII', self.output, stride, *step.get('coords', IDENTITY),
                                self.actors['actor'], self.count_cell)

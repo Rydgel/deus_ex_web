@@ -158,7 +158,7 @@ for(const mesh of restored.root.children){
 const lightFaces=runtime.getActorMeshSurfaces(crate);
 let lightColors=new Float32Array(lightFaces.length*9).fill(1),lightCalls=0;
 const lightView=await createActorMeshPreview(runtime,assets,crate,{originalObjectIndex:0x40000001,kernel:scene.kernel,
-  lighting:{frame:{},lightMesh(){lightCalls++;return {colors:lightColors,setup:{lights:[]},flags:0};}}});
+  lighting:{frame:{origin:[0,0,0],axes:[[1,0,0],[0,1,0],[0,0,1]]},lightMesh(){lightCalls++;return {colors:lightColors,setup:{lights:[]},flags:0};}}});
 const lightAttributes=lightView.root.children.map(mesh=>mesh.geometry.getAttribute('deusLight'));
 const versions=()=>lightAttributes.map(attribute=>attribute.version);
 const firstVersions=versions();

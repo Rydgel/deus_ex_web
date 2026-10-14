@@ -100,6 +100,57 @@ export function lodMeshFrameMatrix(mesh,coords,scaleFactor,value) {
   return matrix.map((v,row)=>v.map((x,i)=>row?f(f(x)*scale[i]):f(f(x)/scale[i])));
 }
 
+/** The vertex loops of GetFrame for one coordinate matrix and output buffer:
+ * `execute(op, publish)` runs one decided operation (tween fill, interpolation
+ * into the cache pose and, when `publish`, publication into the output);
+ * `frameVertex(frame, i)` reads the mesh's int16 vertex words. The same loops
+ * serve a call's own output and the camera-space publications of one
+ * pose (publishLodMeshOps). */
+function createPublisher(mesh,source,kernel,matrix,output,stride) {
+  const out=new DataView(output.buffer,output.byteOffset,output.byteLength);
+  const frameVertex=(frame,i)=>{
+    const at=(frame*mesh.frameVertexCount+i)*8;
+    if(at<0||at+6>source.byteLength)throw new LodMeshError('GetFrame accesses an unloaded/out-of-range vertex');
+    return [0,1,2].map(axis=>source.getInt16(at+axis*2,true));
+  };
+  // The vertex less the mesh Origin (or a blend's absolute frame zero),
+  // stored; less the matrix origin for the main pose; the three axis dots;
+  // a blend adds onto the output. Each operation at 24 bits.
+  function publishVertex(i,pose,blend) {
+    const origin=blend?frameVertex(0,i):mesh.origin;
+    const vector=pose.map((v,j)=>{
+      const component=f(f(v)-f(origin[j]));
+      return blend?component:f(component-matrix[0][j]);
+    });
+    for(let j=0;j<3;j++){
+      const row=matrix[j+1],result=f(f(f(vector[0]*row[0])+f(vector[1]*row[1]))+f(vector[2]*row[2]));
+      const at=i*stride+j*4;
+      out.setFloat32(at,blend?f(result+out.getFloat32(at,true)):result,true);
+    }
+  }
+  /** The vertex loop of one decided operation. Without `publish` the output
+   * is untouched (a scratch buffer receives the kernel's publication). */
+  function execute(op,publish=true) {
+    const {entry,count,alpha,blend}=op;
+    if(op.fill)for(let i=op.fill[0];i<op.fill[1];i++)entry.vertices.set(frameVertex(op.second,i),i*3);
+    if(kernel) {
+      const target=publish?output:scratchOutput(count*stride);
+      kernel.run({source,frameVertexCount:mesh.frameVertexCount,output:target,stride,matrix,origin:mesh.origin,
+        count,entry,...(op.tween?{second:op.second,alpha,tween:true}:{first:op.first,second:op.second,alpha}),blend});
+      return;
+    }
+    if(op.tween)for(let i=0;i<count;i++) {
+      if(alpha>0)entry.vertices.set(interpolate(vectorAt(entry.vertices,i),frameVertex(op.second,i),alpha),i*3);
+      if(publish)publishVertex(i,vectorAt(entry.vertices,i),blend);
+    }
+    else for(let i=0;i<count;i++) {
+      const pose=alpha>0?interpolate(frameVertex(op.first,i),frameVertex(op.second,i),alpha):frameVertex(op.first,i);
+      entry.vertices.set(pose,i*3);if(publish)publishVertex(i,pose,blend);
+    }
+  }
+  return {frameVertex,execute};
+}
+
 /** GetFrame's per-call setup shared by the full evaluation and the plan:
  * Load, the four-slot cache leases, the coordinate matrix and the vertex
  * operations. `decide` applies one channel's cache-scalar updates in the
@@ -114,7 +165,7 @@ function frameContext(mesh,actor,coords,services,{vertexCount,stride,output}) {
   if(!cache)throw new LodMeshError('GetFrame requires the persistent native cache service');
   if(!Number.isInteger(vertexCount)||vertexCount<0||stride<12||stride%4||output.byteLength<mesh.frameVertexCount*stride)
     throw new LodMeshError('Invalid GetFrame output/count/stride');
-  const out=new DataView(output.buffer,output.byteOffset,output.byteLength),special=mesh.scalarBits.get(0x184)|0;
+  const special=mesh.scalarBits.get(0x184)|0;
   const owner=read(services,actor,'bAnimByOwner')?read(services,actor,'Owner'):null;
   const animationActor=owner??actor;
   const mainKey=BigInt((((index(services,actor)<<8)>>>0)+0x1d)>>>0);
@@ -122,11 +173,7 @@ function frameContext(mesh,actor,coords,services,{vertexCount,stride,output}) {
   const scaleFactor=read(services,animationActor,'bParticles')?1:read(services,actor,'DrawScale');
   const matrix=lodMeshFrameMatrix(mesh,coords,scaleFactor,name=>read(services,actor,name));
   const kernel=services.kernel;
-  const frameVertex=(frame,i)=>{
-    const at=(frame*mesh.frameVertexCount+i)*8;
-    if(at<0||at+6>source.byteLength)throw new LodMeshError('GetFrame accesses an unloaded/out-of-range vertex');
-    return [0,1,2].map(axis=>source.getInt16(at+axis*2,true));
-  };
+  const publisher=createPublisher(mesh,source,kernel,matrix,output,stride),frameVertex=publisher.frameVertex;
   const context={mesh,source,cache,kernel,matrix,special,animationActor,main,output,stride,
     get vertexCount(){return vertexCount;}};
   context.decide=function decide(channel,lease) {
@@ -168,26 +215,7 @@ function frameContext(mesh,actor,coords,services,{vertexCount,stride,output}) {
     }
     return {channel,blend:channel>=0,tween:false,entry,count,fill:null,first,second,alpha:fraction};
   };
-  /** The vertex loop of one decided operation. Without `publish` the output
-   * is untouched (a scratch buffer receives the kernel's publication). */
-  context.execute=function execute(op,publish=true) {
-    const {entry,count,alpha,blend}=op;
-    if(op.fill)for(let i=op.fill[0];i<op.fill[1];i++)entry.vertices.set(frameVertex(op.second,i),i*3);
-    if(kernel) {
-      const target=publish?output:scratchOutput(count*stride);
-      kernel.run({source,frameVertexCount:mesh.frameVertexCount,output:target,stride,matrix,origin:mesh.origin,
-        count,entry,...(op.tween?{second:op.second,alpha,tween:true}:{first:op.first,second:op.second,alpha}),blend});
-      return;
-    }
-    if(op.tween)for(let i=0;i<count;i++) {
-      if(alpha>0)entry.vertices.set(interpolate(vectorAt(entry.vertices,i),frameVertex(op.second,i),alpha),i*3);
-      if(publish)publishVertex(i,vectorAt(entry.vertices,i),blend);
-    }
-    else for(let i=0;i<count;i++) {
-      const pose=alpha>0?interpolate(frameVertex(op.first,i),frameVertex(op.second,i),alpha):frameVertex(op.first,i);
-      entry.vertices.set(pose,i*3);if(publish)publishVertex(i,pose,blend);
-    }
-  };
+  context.execute=publisher.execute;
   /** Apply a cache entry's planned operations that were not executed on the
    * CPU (planLodMeshFrame), in order, to its cache pose only. */
   context.replay=function replay(entry,keep=0) {
@@ -205,21 +233,6 @@ function frameContext(mesh,actor,coords,services,{vertexCount,stride,output}) {
     for(const frame of frames)frameVertex(frame,op.count-1);
     if(op.fill)frameVertex(op.second,op.fill[1]-1);
   };
-  // The vertex less the mesh Origin (or a blend's absolute frame zero),
-  // stored; less the matrix origin for the main pose; the three axis dots;
-  // a blend adds onto the output. Each operation at 24 bits.
-  function publishVertex(i,pose,blend) {
-    const origin=blend?frameVertex(0,i):mesh.origin;
-    const vector=pose.map((v,j)=>{
-      const component=f(f(v)-f(origin[j]));
-      return blend?component:f(component-matrix[0][j]);
-    });
-    for(let j=0;j<3;j++){
-      const row=matrix[j+1],result=f(f(f(vector[0]*row[0])+f(vector[1]*row[1]))+f(vector[2]*row[2]));
-      const at=i*stride+j*4;
-      out.setFloat32(at,blend?f(result+out.getFloat32(at,true)):result,true);
-    }
-  }
   context.blendLease=slot=>{
     if(!named(read(services,animationActor,'BlendAnimSequence')[slot]))return null;
     const key=(BigInt(index(services,animationActor))<<32n)+BigInt((slot+1)*0x10000+0x1d);
@@ -238,6 +251,7 @@ const frameDefaults=(mesh,{vertexCount=mesh.frameVertexCount-(mesh.scalarBits.ge
  * Actor state is read-only; cache/header state and vertexCount are outputs. */
 export function getLodMeshFrame(mesh,actor,coords,services,options={}) {
   const context=frameContext(mesh,actor,coords,services,frameDefaults(mesh,options));
+  const ops=[];
   const evaluate=lease=>{
     const op=context.decide(lease.channel,lease);
     // A cache pose planned for the GPU is brought up to date first.
@@ -245,13 +259,41 @@ export function getLodMeshFrame(mesh,actor,coords,services,options={}) {
     context.execute(op);
     if(op.tween)op.entry.frame=op.endFrame;
     context.cache.unlock(op.entry);
+    ops.push(op);
   };
   evaluate({...context.main,channel:-1});
   for(let slot=0;slot<4;slot++) {
     const lease=context.blendLease(slot);
     if(lease)evaluate({...lease,channel:slot});
   }
-  return {output:context.output,vertexCount:context.vertexCount};
+  return {output:context.output,vertexCount:context.vertexCount,ops};
+}
+
+/** The coordinate matrix GetFrame would build for `actor` with the caller's
+ * `coords` (12 floats: Origin, X, Y, Z), without touching the cache: the
+ * animation actor's bParticles and the render actor's DrawScale, Location,
+ * PrePivot and Rotation through `services.read`. */
+export function lodMeshCameraMatrix(mesh,actor,coords,services) {
+  const owner=read(services,actor,'bAnimByOwner')?read(services,actor,'Owner'):null;
+  const scaleFactor=read(services,owner??actor,'bParticles')?1:read(services,actor,'DrawScale');
+  return lodMeshFrameMatrix(mesh,coords,scaleFactor,name=>read(services,actor,name));
+}
+
+/** GetFrame's publication of poses already in the cache: the operations of an
+ * earlier call (`getLodMeshFrame`'s `ops`, a plan's `channels` once its cache
+ * poses are current) published again through `matrix` into `output`, main
+ * channel first and the additive blends after it, as the call itself did.
+ * DrawLodMesh calls GetFrame once for each frame that draws an actor, with
+ * that frame's Frame->Coords, so each frame's buffer is the same cache poses
+ * through its own matrix (docs/script-lodmesh-lod.md "Camera space").
+ * The cache is read, never changed: each operation runs as a tween with alpha
+ * 0 and no fill, which republishes the cached pose. */
+export function publishLodMeshOps(mesh,ops,matrix,{output,stride=12,kernel=null}) {
+  const vertices=mesh.arrays.get(0x60).load();
+  const source=new DataView(vertices.data.buffer,vertices.data.byteOffset,vertices.data.byteLength);
+  const publisher=createPublisher(mesh,source,kernel,matrix,output,stride);
+  for(const op of ops)publisher.execute({...op,tween:true,alpha:0,fill:null},true);
+  return output;
 }
 
 /** GetFrame without its vertex loops, for the GPU path (docs/gpu-mesh.md):

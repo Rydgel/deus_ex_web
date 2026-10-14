@@ -6,10 +6,13 @@
  * src/runtime/lodmesh-lod.mjs; the lodmesh kernel's `lod` runs the morph
  * and the corners when it is loaded.
  *
- * Play keeps GetFrame's output in world space (the lighting's camera
- * transform is a host stage, docs/render-pass-precision.md), so the morph
- * runs on world-space positions: the selection, counts, faces, wedges and
- * alphas are the original's; the morphed coordinates round in another space. */
+ * `after` morphs whatever buffer it is given. Play gives it two kinds:
+ * GetFrame's world-space output (identity Coords), which the draw, the
+ * environment mapping and the culling bounds use, and, for the lighting,
+ * the camera-space buffer GetFrame fills when DrawLodMesh calls it with the
+ * frame's own Frame->Coords (actor-mesh-sim.mjs cameraDrawn), which is the
+ * original's buffer and rounds the morph where the original does
+ * (docs/script-lodmesh-lod.md "Camera space"). */
 import {lodMeshCorners,lodMeshTanFactor,lodMeshTopology,morphLodMesh,selectLodMesh,RENDER_LOD_SETTINGS} from '../runtime/lodmesh-lod.mjs';
 
 const topologies=new WeakMap();
