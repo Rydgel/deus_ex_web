@@ -72,7 +72,7 @@ const depth24 = z => Math.round(Math.min(Math.max(z, 0), 1) * 16777215);
 
 /** Checks one frame's draw lists against the reference. */
 function checkFrame(model, fields, rect, lists, where, camera = null, coords = null) {
-  const frame = frameOfFields(fields, rect), depth = depthConstants(32), depths = [];
+  const frame = frameOfFields(fields, rect), depth = depthConstants(32), depths = [], depthsNow = [];
   stats.frames++;
   for (const list of lists) for (const entry of list) {
     stats.lists++;
@@ -107,6 +107,7 @@ function checkFrame(model, fields, rect, lists, where, camera = null, coords = n
             s3.maxPixel = Math.max(s3.maxPixel, dx, dy); s3.errors.push(Math.max(dx, dy)); s3.maxDepth = Math.max(s3.maxDepth, dz);
             depths.push([wordFloat(d[2]), t3.sz]);
             if (coords) {
+              depthsNow.push([wordFloat(d[2]), threeVertex(coords, rect, model.points[pv]).sz]);
               const tc = threeVertex(coords, rect, model.points[pv]), sc = stats.coordsCamera;
               sc.points++; sc.sxDiffer += word(floatWord(tc.sx)) !== word(d[0]); sc.szDiffer += word(floatWord(tc.sz)) !== word(d[2]);
               sc.maxDepth = Math.max(sc.maxDepth, Math.abs(tc.sz - wordFloat(d[2])));
@@ -124,11 +125,13 @@ function checkFrame(model, fields, rect, lists, where, camera = null, coords = n
   }
   // Depth-test outcomes of vertex pairs: neighbours in the original's depth order
   // (24-bit quantized) against the page's depths.
-  depths.sort((a, b) => a[0] - b[0]);
-  for (let i = 1; i < depths.length; i++) {
-    const a = depths[i - 1], b = depths[i];
-    const original = Math.sign(depth24(b[0]) - depth24(a[0])), host = Math.sign(depth24(b[1]) - depth24(a[1]));
-    stats.three.pairs++; stats.three.pairsDiffer += original !== host;
+  for (const [list, into] of [[depths, stats.three], [depthsNow, stats.coordsCamera]]) {
+    list.sort((a, b) => a[0] - b[0]);
+    for (let i = 1; i < list.length; i++) {
+      const a = list[i - 1], b = list[i];
+      const original = Math.sign(depth24(b[0]) - depth24(a[0])), host = Math.sign(depth24(b[1]) - depth24(a[1]));
+      into.pairs = (into.pairs ?? 0) + 1; into.pairsDiffer = (into.pairsDiffer ?? 0) + (original !== host);
+    }
   }
 }
 
@@ -137,8 +140,9 @@ async function bsp(mapName, options) {
   for (const [i, c] of cases.entries()) {
     const o = results[i], rect = rectOf(c);
     const where = `${mapName} case ${i} ${c.width}x${c.height}${c.render ? ` render ${c.render.width}x${c.render.height}+${c.render.x}+${c.render.y}` : ''} FOV ${c.fov}`;
-    assert.deepEqual(o.depth, { zBias: floatWord(depthConstants(32).zBias), m34: 0x3f800000, zScale: floatWord(depthConstants(32).zScale) },
-      `${where}: depth constants`);
+    for (const [bits, measured] of [[32, o.depth], [16, o.depth16]])
+      assert.deepEqual(measured, { zBias: floatWord(depthConstants(bits).zBias), m34: 0x3f800000, zScale: floatWord(depthConstants(bits).zScale) },
+        `${where}: SetRes' projection matrix at ${bits} bits`);
     checkFrame(model, o.frameBits, rect, o.draw, where, threeCamera(c, o.frameBits, rect), threeCamera(c, o.frameBits, rect, { now: true }));
     for (const child of o.frames ?? []) {
       checkFrame(model, child.frameBits, rect, child.draw, `${where} child ${child.index}`);
@@ -180,4 +184,9 @@ const coordErrors = stats.coordsCamera.errors.sort((a, b) => a - b), coordQuanti
 console.log(JSON.stringify({ ...stats, depthCases: undefined, three: { ...stats.three, errors: undefined,
   pixelError: { p50: quantile(0.5), p90: quantile(0.9), p99: quantile(0.99), over0_01: errors.filter(e => e > 0.01).length } },
   coordsCamera: { ...stats.coordsCamera, errors: undefined, pixelError: { p50: coordQuantile(0.5), p90: coordQuantile(0.9), p99: coordQuantile(0.99), max: coordErrors.at(-1) } } }));
+// The comparison must fail for the host paths: the earlier camera (exact angles, far 65536) and the
+// Coords-posed one both leave most vertices a bit or more away from the device's.
+assert.ok(stats.three.sxDiffer > 0.5 * stats.three.points && stats.three.szDiffer === stats.three.points,
+  'the previous camera path must fail the vertex comparison');
+assert.ok(stats.coordsCamera.sxDiffer > 0.3 * stats.coordsCamera.points, 'the Coords-posed camera must fail the vertex comparison too');
 console.log('validate-frame-projection: ok');

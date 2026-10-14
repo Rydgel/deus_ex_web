@@ -320,8 +320,14 @@ before the face pass of every lighting run, for the slots lit in it
   parameters of this run (a child frame's own state after its `setLod`).
 
 The face and vertex passes read `cameraFinal` (`uCameraPose`) for the normals,
-the drawn test and `Light`; the environment normals, the draw and the culling
-bounds keep the world final pose. The CPU twin is `publishLodMeshOps` on the
+the drawn test and `Light`; the environment normals and the culling bounds keep
+the world final pose. The draw's vertex shader reads `cameraFinal` too
+(2026-10-14, [frame projection](frame-projection.md)): `deusVertexMap`,
+`deusParamsU` and `deusCameraFinal` are shared with the draw materials, and a
+corner's camera-space point is used when its slot's lighting stamp (row 2 of
+the slot parameters) is this frame's (`deusLitFrame`) or above the runs before
+it (`deusLitRuns`, set by `run()`): the invariant the corner colours rely on,
+which the page keeps by relighting a slot whenever a pass changes its frame. The CPU twin is `publishLodMeshOps` on the
 exact cache poses followed by `meshLod.after`
 (actor-mesh-sim.mjs `cameraDrawn`); `validate-gpu-mesh` compares
 `cameraFinal` with it in the main frame, in a reflected child frame and in the

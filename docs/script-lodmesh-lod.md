@@ -338,12 +338,13 @@ the culling bounds use, and, for each frame that lights the actor, through
 that frame's own matrix (`lodMeshCameraMatrix`: `lodMeshFrameMatrix` with the
 frame's Coords, 12 floats the lighting frame already holds), which is what the
 original's GetFrame call for that frame fills. The morph runs on both; the
-lighting reads only the camera-space one (see "Camera space" above for the
-original). The draw keeps the world-space pose because three.js projects it
-with its own float32 view and projection: the original's camera-space points
-are the input of its D3D device's projection, which Play does not reproduce
-bit for bit, and the environment mapping's world-space inputs are an existing
-tolerance item ([GPU mesh](gpu-mesh.md#tolerances)).
+lighting reads the camera-space one (see "Camera space" above for the
+original). Since 2026-10-14 the GPU draw projects it too: a corner's point is
+`cameraFinal`'s, through the original's projection
+([frame projection](frame-projection.md)), as DrawLodMesh's draw loop does. The
+environment mapping's world-space inputs are an existing tolerance item
+([GPU mesh](gpu-mesh.md#tolerances)), and the CPU path and unlit slots project
+the world pose.
 
 **CPU path** (`?gpuMesh=0`, and any binding off the GPU path): GetFrame's
 world-space output stays unmorphed (a later frame's GetFrame or LOD reads it
@@ -427,13 +428,12 @@ Play (`actor-mesh-sim.mjs update`, `sim-session.mjs lodFramesOf`):
 
 **What stays different from the original:**
 
-* *Space of the drawn positions.* The morph and the lighting run in the
-  original's camera space since 2026-10-14 ("Two spaces" above). The
-  positions the page draws (and the environment mapping and culling bounds
-  read) are the world-space publication and morph, which round in another
-  space than the original's buffer: three.js projects them with its own
-  matrices anyway, so a draw from the camera-space buffer would change
-  sub-ulp placement only. The lighting-side effect of the old host stage was
+* *Space of the drawn positions.* The morph, the lighting and, on the GPU
+  path, the drawn positions are in the original's camera space since
+  2026-10-14 ("Two spaces" above, [frame projection](frame-projection.md)).
+  The environment mapping, the culling bounds and the CPU path's positions
+  read the world-space publication and morph, which round in another
+  space than the original's buffer. The lighting-side effect of the old host stage was
   large: of 10,188 camera-space components (six LOD meshes, three cameras)
   the world pose transformed to camera space (`toCamera`, 24 bits) differed
   from the original's buffer in 6,244, by up to 4,096 ulps of the small

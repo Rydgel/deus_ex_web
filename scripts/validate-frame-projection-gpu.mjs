@@ -63,6 +63,10 @@ for (const [mapName, options] of [['01_NYC_UNATCOIsland', { seed: 5, count: 8 }]
   for (const [i, c] of cases.entries()) {
     const o = results[i], u = unit(o.frameBits, rectOf(c), 1, depth, `${mapName} mesh case ${i}`);
     for (const p of o.points) if (p.flags === 0) { u.points.push({ world: p.point.map(f), view: p.point.map(word), mode: 1 }); u.expected.push(p.d3d); }
+    // Points around the near plane (view depth 1, where the depth is 0): the exact form at and above it,
+    // the linear form below it; only the clip-space mapping is checked for these.
+    u.near = [1.0, 1.5, 3, 40, 0.99, 0.5, 0.1, 0.001, -3].map(z => ({ view: [z * 0.3, z * -0.2, z].map(Math.fround), mode: 1 }));
+    for (const n of u.near) u.points.push({ world: n.view, view: n.view.map(floatWord), mode: 1 });
     units.push(u);
   }
 }
@@ -83,7 +87,7 @@ void main(){
 if (noBarrier) fragmentSource = fragmentSource.replace('float B(float x){return uintBitsToFloat(floatBitsToUint(x)^uFpZero);}', 'float B(float x){return x;}');
 
 const browser = await chromium.launch({ args: [`--use-angle=${angle}`] });
-let checked = 0, mismatched = 0, clipChecked = 0, maxClipPixel = 0, maxClipDepth = 0;
+let nearChecked = 0, checked = 0, mismatched = 0, clipChecked = 0, maxClipPixel = 0, maxClipDepth = 0;
 try {
   const page = await browser.newPage();
   await page.setContent('<canvas id="c" width="64" height="64"></canvas>');
@@ -154,6 +158,19 @@ try {
   console.log(`GPU: ${runtime.renderer} (--angle ${angle})`);
   for (const [i, u] of units.entries()) {
     const r = runtime.results[i];
+    // The near-plane points: the clip form against the analytic projection of the view point.
+    for (const [j, n] of (u.near ?? []).entries()) {
+      const k = u.expected.length + j, [cx, cy, cz, cw] = r.clip.slice(4 * k, 4 * k + 4), rect = u.rect, [x, y, z] = n.view;
+      const frame = { fx15: u.proj[2], fy15: u.proj[3], projZ: u.proj[0], zBias: u.depth[0] };
+      assert.ok(Math.abs(cw - z) < 1e-6 * Math.max(1, Math.abs(z)), `${u.label}: clip w of z ${z}`);
+      // ndc x, y from ScreenX = X * Proj.Z / Z + FX15 (relative to the frame's rectangle, the view being it).
+      const nx = (2 * (x * frame.projZ / z + frame.fx15) / rect[0] - 1), ny = (1 - 2 * (y * frame.projZ / z + frame.fy15) / rect[1]);
+      const nz = 2 * frame.zBias * (1 - u.proj[1] * frame.projZ / z) - 1;
+      const tolerance = (a, b, scale) => Math.abs(a - b) < 2e-5 * scale;
+      assert.ok(tolerance(cx, nx * z, Math.max(1, Math.abs(nx * z))) && tolerance(cy, ny * z, Math.max(1, Math.abs(ny * z))) && tolerance(cz, nz * z, Math.max(1, Math.abs(nz * z))),
+        `${u.label}: clip form at view depth ${z}: ${[cx, cy, cz]} vs ${[nx * z, ny * z, nz * z]}`);
+      nearChecked++;
+    }
     for (const [k, expected] of u.expected.entries()) {
       const got = r.vertex.slice(4 * k, 4 * k + 4).map(word);
       if (noBarrier) { checked++; mismatched += got.join() !== expected.map(word).join(); continue; }
@@ -176,6 +193,6 @@ try {
   await browser.close();
 }
 if (noBarrier) { console.log(`without the barrier: ${mismatched} of ${checked} vertices differ`); process.exit(0); }
-console.log(`${units.length} units, ${checked} GPU vertices equal the original's bit for bit; clip form: ${clipChecked} points, `
+console.log(`${units.length} units, ${checked} GPU vertices equal the original's bit for bit; clip form: ${clipChecked} points (+${nearChecked} around the near plane), `
   + `largest window error ${maxClipPixel.toExponential(2)} px, depth ${maxClipDepth.toExponential(2)}`);
 console.log('validate-frame-projection-gpu: ok');

@@ -210,6 +210,7 @@ class FrameProjection(occ.Occlusion):
         result = super().run_case(case)
         if self.d3d:
             result['depth'] = self.depth_constants(self.color_bits)
+            result['depth16'] = self.depth_constants(16)
         return result
 
     # -- meshes ---------------------------------------------------------------------
