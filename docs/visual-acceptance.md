@@ -493,6 +493,56 @@ light lit) or 1 (dark), the original through `dx-live-win.exe strobe hold` (the 
 `TimeDilation 0` and `liveProbe({strobe: {flag, time}})`. A free-running capture's phase is a coin flip on each side; Divergence 19 is the case it misread as a mirror
 defect.
 
+### Strobe in child frames (2026-10-14)
+
+Render.dll's DrawFrame (`0x10b1a2d0`) calls itself on `Frame->Child` and the siblings first (the loop at `0x10b1a339`,
+through `0x10b0102d`) and then sets up its own surfaces: SetupForSurf (`[0x10b3059c]` slot +0xc, `0x10b1aa99`) for each
+surface of the frame. The Strobe function runs inside, for every surface whose light list holds a live Strobe light, so the flag
+flips when a mirror's child frame draws a strobe-lit surface the main frame does not. `lightMapStrobe` (sim-session.mjs) scanned
+the main frame's drawn nodes; it now scans every frame's (and a moving Strobe light must pass SetupDynamics' ViewPlanes test of
+that frame).
+
+**The scene.** An aimed view of the Underworld club, camera (-1081, -2010, -336) at yaw 54769 (230 units from TriggerLight1,
+looking at the floor mirrors). Play's reach (`strobeProbe`): the main frame draws no surface whose light list holds TriggerLight1,
+the mirror's child frame draws 24 (101 nodes). The club's dancers are lit by the same light and call the Strobe function
+from SetupForActor, which would flip the flag first, so the views hide them on both sides
+(`--cmd 'set ScriptedPawn bHidden True'`; `visual-acceptance.mjs` takes `--cmd` for the original's console and Play's viewProbe).
+A search found 60 of 148 sampled cameras around it (x -1300 to -1050, y -2150 to -1900, yaw 53500 to 57500) with a child frame
+and no strobe-lit surface in the main frame.
+
+**The original** (`scripts/original-views.sh ... --strobe-poll --cw-probe`; `tools/dx-fpu-win.c` attached for 6 seconds at each camera):
+
+| Camera | SetupForSurf calls by Frame->Recursion | Kept TimeSeconds over 120 polls |
+| --- | --- | --- |
+| aimed (c0, flag held 0) | recursion 1: 3,932, recursion 0: 51, over 51 frames (DrawFrame: 51 and 51) | 117 distinct values, 116 steps: the Strobe function runs every frame; the flag changed at 76 of them (a poll can span two frames) |
+| aimed (c0, flag held 1) | recursion 1: 4,208, recursion 0: 54, over 54 frames | |
+| a direct view (d) | recursion 1: 2,351, recursion 0: 936, over 79 frames | 117 distinct values |
+| a wall view (p2) | recursion 0 only: 534, over 534 frames | 1 value: no call |
+
+So the original sets up the child frame's 77 surfaces a frame through SetupForSurf (Recursion 1) while the main frame
+sets up one, and calls the Strobe function every frame there with no mesh lit by it.
+
+**Play.** `scripts/validate-strobe-child-frames-play.mjs` (worker mode, pawns hidden): at the aimed camera the scan finds
+0 strobe-lit nodes in the main frame and 101 in the child frame, and the flag flips at all 23 new TimeSeconds; at a direct view
+(d) it flips at all 23 (6 main-frame nodes); at the wall view (p2) at none. With the first version's scan (`strobeProbe({mainOnly:
+true})`) the aimed camera flips at none of 23, so the scene discriminates the change. Cost (interleaved medians of
+2,000 calls, 3 rounds): 4.0 µs a frame at the aimed camera (0.35 µs before), 2.5 µs at a direct view (2.6), 0.35 µs where no
+frame draws a strobe-lit surface; the scan runs only in maps with a Strobe light (Underworld, Ship fan, Endgame 4).
+
+**Matched frames** (flag held 0 and 1, both clocks at TimeSeconds 54.179, pawns hidden): the reflected dance floor, lit and
+dark, equals the original's.
+
+| View | Play / original | Mean abs. diff. | Edge recall / precision | Outlier blocks |
+| --- | ---: | ---: | ---: | ---: |
+| c0_s0 (lit) | 1.212 | 4.65 | .986 / .988 | 0 |
+| c0_s1 (dark) | 1.197 | 2.92 | .992 / .989 | 0 |
+
+(The ratio is the uniform brightness gap. The unsuffixed views d and p2 are free-running in the flag, so they are polled and not
+compared.)
+
+**Not covered.** The movers' own polygons are still not searched for Strobe lights. The Strobe lists come from the lights that are
+Strobe at load. A Strobe light seen only in a sky child frame has no case in the shipped maps (the sky zones hold no lights).
+
 ### Placement constraint
 
 The original is never moved with `set Location` or `set Region` in a level that then ticks. The known hash corruption ("moved without
@@ -880,11 +930,10 @@ constant 0.0.
     direct view uses, and the cadence equals the original's at all seven cameras. The change is in the harness: paired states, the Hyprland window selection (the largest client of
     the class, as `live-acceptance.mjs` does; the first client was a hidden log window), `--unfreeze`, `--strobe-poll`. **Check.** `scripts/validate-strobe-mirror-play.mjs` (worker mode; the cadence
     at seven cameras, the held lit/dark ratios within 10% of the original's, the unfrozen light; fails without the `viewProbe` change).
-    **Not reached.** `DrawFrame` (`0x10b1a2d0`) calls SetupForSurf through the light manager (`[0x10b3059c]`, slot +0xc, at `0x10b1aa99`) for each frame's surfaces, children first, so a
-    strobe-lit surface drawn only in a child frame would flip the flag; Play's `lightMapStrobe` reads the main frame's drawn nodes only. In this map a main frame that shows a mirror
-    always draws a surface the strobe lights: a sweep of 200 random views of the dance floor and its surroundings (Play, the flag's flips per new TimeSeconds over 23 frames) had 62 with a child
-    frame, 60 of them flipping at every step; the other two stand in the restroom, 900 units from the light, where the child frame shows the restroom too and neither frame draws a strobe-lit
-    surface. So the difference has no case in this map to be measured on, and `lightMapStrobe` is left as it is (unverified, not unsupported: no shipped view known to reach it).
+    **Not reached, then closed.** `DrawFrame` (`0x10b1a2d0`) calls SetupForSurf through the light manager (`[0x10b3059c]`, slot +0xc, at `0x10b1aa99`) for each frame's surfaces, children first, so a
+    strobe-lit surface drawn only in a child frame flips the flag; Play's `lightMapStrobe` read the main frame's drawn nodes only. A sweep of 200 random views of the club did not separate the two (62 had a child frame,
+    60 flipped at every step; each also drew a dancer lit by the same light, whose SetupForActor flips the flag first, or a strobe-lit surface in the main frame). With the dancers hidden and the camera aimed
+    at the floor mirrors, 230 units from the light, the scene exists: [Strobe in child frames](#strobe-in-child-frames-2026-10-14).
 
 ### Weapon noise (2026-10-14)
 
@@ -1150,6 +1199,15 @@ scripts/original-views.sh 06_HongKong_WanChai_Underworld --view d_s0:-1120,-1900
 node scripts/visual-acceptance.mjs play --maps 06_HongKong_WanChai_Underworld --view d_s0:-1120,-1900,-336:0,55000,0 --view d_s1:-1120,-1900,-336:0,55000,0 [--unfreeze]
 node scripts/visual-acceptance.mjs compare --maps 06_HongKong_WanChai_Underworld --view d_s0:-1120,-1900,-336:0,55000,0 [--crop 490x520+340+170]
 wine ad/build/dx-live-win.exe strobe poll 120 5 | strobe hold 0 | strobe release      # the running original's Strobe flag (free-running, held at a value, released)
+```
+
+```bash
+# the club's floor in the mirror with no pawn mesh lit by the strobe, on both sides; the polls and a debugger probe of the original at each camera
+scripts/original-views.sh 06_HongKong_WanChai_Underworld --view c0_s0:-1081,-2010,-336:0,54769,0 --view c0_s1:-1081,-2010,-336:0,54769,0 --cmd 'set ScriptedPawn bHidden True' --strobe-poll --cw-probe
+node scripts/visual-acceptance.mjs play --maps 06_HongKong_WanChai_Underworld --view c0_s0:-1081,-2010,-336:0,54769,0 --view c0_s1:-1081,-2010,-336:0,54769,0 --cmd 'set ScriptedPawn bHidden True'
+node scripts/validate-strobe-child-frames-play.mjs                                 # Play's side: the reach, the cadence, the failing baseline
+scripts/original-fpu.sh 01_NYC_UNATCOIsland 170                                    # the original's control word at the lighting entry points, and its light-manager tables (.work/fpu)
+node scripts/validate-original-light-tables.mjs                                    # those tables against Play's builders
 ```
 
 `live-original.sh` takes the Wine lock (`.work/wine-deusex.lock`), refuses to start with another DeusEx.exe running and quits the game by

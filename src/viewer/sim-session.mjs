@@ -158,11 +158,11 @@ export function createSimSession(game, { assets = null, events = [], exportName 
     let any = false;
     for (const { nodes, planes } of frames) {
       let found = 0, reached = 0;
-      const drawn = new Set();
+      const drawn = moving ? new Set() : null;
       for (const node of nodes) {
         if (node >= model.nodes.length) continue;
         const surface = model.nodes[node].surface;
-        drawn.add(surface);
+        drawn?.add(surface);
         const actors = strobeSurfaces.get(surface);
         if (actors && actors.some(live)) found++;
       }

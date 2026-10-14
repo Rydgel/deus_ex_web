@@ -236,7 +236,8 @@ Light = min(1, sum · ScaleGlow · 1.4 + Ambient)        // per channel
 
 The specular term is `6·cos²` of the angle between the view ray and the
 mirrored light direction. The per-vertex path does not apply spot cones or
-light effects.
+light effects (the only reads of LightEffect around it are the Cylinder 0.75 in
+SetupForActor's candidate loops, [light effects](light-effects.md#who-reads-lighteffect)).
 
 ## D3D output (`UD3DRenderDevice::DrawGouraudPolygon`, `0x100056b0`)
 
@@ -450,13 +451,16 @@ class 1 Strobe light, or a moving class 2 Strobe light that the
 SetupDynamics filter puts on a drawn surface. The frame's flag goes to the
 page with the light noise (`frame.light.strobe`, world.mjs
 `beginLightFrame`), whose class 1 merge then reads it without flipping.
+Every frame's drawn surfaces are scanned, the main frame's and each mirror and sky
+child frame's (since 2026-10-14: the original's DrawFrame `0x10b1a2d0` draws a
+frame's child frames first, then sets up the frame's own surfaces through
+SetupForSurf at `0x10b1aa99`; [visual acceptance](visual-acceptance.md#strobe-in-child-frames-2026-10-14)).
 Approximations: the movers' own polygons (the tracker's fragment nodes)
-are not searched for Strobe lights, a child frame's drawn surfaces are not scanned (the
-original's DrawFrame sets up every frame's surfaces, `0x10b1aa99`; no Underworld view
-reaches the difference, [Divergence 19](visual-acceptance.md#divergences-found)), and
-the Strobe lists are taken once
+are not searched for Strobe lights, and the Strobe lists are taken once
 from the lights that are Strobe at load (no script sets LightType to
-Strobe, per the census).
+Strobe, per the census). Cost of the scan (interleaved medians, 3 rounds, 2,000 calls each): 4.0 µs a frame at a
+view whose child frame draws the strobe-lit surfaces (0.35 µs with the main frame's alone), 2.5 µs
+at a direct view (2.6 µs), 0.35 µs where no frame draws one; it runs in maps with a Strobe light only.
 
 **Evidence.**
 - `validate-mesh-light-types` (native-mesh-light-oracle.py with per-frame

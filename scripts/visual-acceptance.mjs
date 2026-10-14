@@ -19,7 +19,11 @@
 //   A view named <name>_s0 or <name>_s1 is taken with Render.dll's Strobe flag held at 0 or 1 (docs/visual-acceptance.md
 //   "Strobe, a host input"): the original through `dx-live-win.exe strobe hold` (the flag flips every frame at a new
 //   TimeSeconds, so an unheld capture is a coin flip), Play with TimeDilation 0 and the flag written (liveProbe strobe).
-//   `original --strobe-poll` also records the free-running flag per camera (<name>-strobe.txt).
+//   `original --strobe-poll` also records the free-running flag per camera (<name>-strobe.txt), for any view.
+//   `--cmd '<console command>'` (repeatable, all three verbs' sides) runs a console command once after ghost and ShowHud False, on the original's
+//   console and through Play's viewProbe exec (e.g. `set ScriptedPawn bHidden True`: no pawn mesh lit by the map's Strobe light).
+//   `original --cw-probe` attaches tools/dx-fpu-win.c for 6 seconds at each camera: DrawFrame, SetupForSurf (by the frame's Recursion), GlobalLighting,
+//   the spatial light bodies and Galaxy's GlobalLighting call, with the x87 control word at each (<name>-cw.txt).
 //   `--unfreeze` (both sides) clears LevelInfo.bPlayersOnly after the clock is held, so actors with a Tick (a TriggerLight that sets
 //   its own brightness) run it at the held dilation; the other views of the run are then of that level, not the frozen one.
 //

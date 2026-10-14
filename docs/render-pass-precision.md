@@ -54,8 +54,10 @@ frame, whatever the word was before the first frame.
   tables are identical at `0x037f` and `0x027f` (real Windows' default); at
   `0x007f` the square-root table differs in 248 of 2048 entries and the
   normal table in 3,249 of 4,096. The oracles therefore build them at an
-  init word (`0x037f`) separate from the per-frame word. Open: whether D3D's
-  `DDSCL_FPUSETUP` (`0x1000b18e`) ran before URender::Init.
+  init word (`0x037f`) separate from the per-frame word. Measured 2026-10-14:
+  the original runs it at `0x027f`, before D3D's `DDSCL_FPUSETUP` call
+  (`0x1000b18e`), and its tables equal Play's builders bit for bit
+  ([measured](#measured-in-the-running-original-2026-10-14)).
 * Galaxy Update's ambient-sound volume, which calls URender::GlobalLighting
   from Audio->Update (`script-audio-live.mjs`): before PreRender, so it runs
   the shared `lightTypeBrightness` with `precision: 'pc64'` (validated against
@@ -66,9 +68,61 @@ frame, whatever the word was before the first frame.
   UpdateParticles, animation tick, TweenBlendAnim), AttachDecal/DetachDecal,
   mesh loading and Fire.dll's module tables (first construction).
 * After the first frame the game thread starts each tick at PC 64 (the
-  PostRender reset above). Nothing between PostRender and the next tick
-  has been traced for further control-word changes, so the game thread's
-  word stays the open item recorded in [dynamic lighting](dynamic-lighting.md).
+  PostRender reset above): measured at `0x037f` in 4,610 of 4,612 ticks and
+  2,305 of 2,307 frames; the first two ticks and the first Draw run at
+  `0x027f` ([measured](#measured-in-the-running-original-2026-10-14)).
+
+## Measured in the running original (2026-10-14)
+
+`tools/dx-fpu-win.c` debugs the original DeusEx.exe under Wine (Wine 11.17, the 32-bit
+retail DLLs at their preferred bases; D3DDrv.dll is rebased by Wine and the tool follows it): an int3 at each listed address, the
+thread context's `FloatSave.ControlWord` at every hit, the return address and, between
+PreRender's `appEnableFastMath(1)` and PostRender's `appEnableFastMath(0)`, a pass flag.
+`scripts/original-fpu.sh` launches the game as the tool's debuggee under the shared Wine lock
+(so code that runs once at start-up is reached), runs it unfrozen on a map and dumps the
+light manager's tables at the end. Island: 2,307 frames and 4,612 ULevel::Tick calls in 170
+seconds; the Wan Chai garage: 1,873 frames. The attach mode
+(`visual-acceptance.mjs original --cw-probe`) records the same at a view's camera.
+
+| Where | Address | Control word (hits) |
+| --- | --- | --- |
+| `URender::Init`, `FLightManager::Init` | `0x10b13460`, `0x10b02080` | `0x027f` (1, 1): the thread's start-up word, PC 53 |
+| D3DDrv's `SetCooperativeLevel(DDSCL_FPUSETUP)` call | `0x1000b18e` | `0x027f` before and after the first call (0.7 s after URender::Init), `0x037f` on the second; Wine's ddraw leaves the word alone |
+| `UGameEngine::Draw` entry | `0x1038f110` | `0x027f` (2), `0x037f` (2,305) |
+| `ULevel::Tick` entry | `0x103a51a0` | `0x027f` (2), `0x037f` (4,610) |
+| Galaxy Update (garage), its GlobalLighting call (lit ambient sounds, Underworld) | `0x10609510`, `0x1060992e` | `0x027f` (the first frame), `0x037f` (1,871); the GlobalLighting call itself `0x037f` (1,251 in four Underworld views) |
+| `URender::PreRender` entry | `0x10b14560` | `0x027f` (1), `0x037f` (2,305) |
+| after `appEnableFastMath(1)` | `0x10b1462f` | `0x007f` (2,306) |
+| `URender::PostRender` entry, after `appEnableFastMath(0)` | `0x10b14700`, `0x10b14732` | `0x007f` (2,305), `0x037f` (2,305) |
+| in the pass: light noise, SetupDynamics, Filter, DrawFrame | `0x10b13080`, `0x10b22d90`, `0x10b24a10`, `0x10b1a2d0` | `0x007f`, every hit (2,306; 2,306; 3,910; 2,306) |
+| in the pass: SetupForSurf, ComputeFromActor, GlobalLighting, FGetHSV | `0x10b06c90`, `0x10b05fa0`, `0x10b05e90`, `0x103ec8d0` | `0x007f`, every hit (11,547; 13,869; 57,273; 13,173) |
+| in the pass: SetupForActor, Light, LeafVolumetricLighting, the merge | `0x10b08c70`, `0x10b027f0`, `0x10b170e0`, `0x10b03040` | `0x007f`, every hit (13,777; 25,247; 2,664; 6) |
+| in the pass: normal body, Disco body | `0x10b03360`, `0x10b046f0` | `0x007f`, every hit (6; 1,618 at four Underworld views) |
+
+What follows:
+
+1. **Every lighting computation of the pass runs at `0x007f`** (PC 24, round to nearest, all
+   exceptions masked), in every one of the 148,384 recorded hits of the Island run (and of the garage's): the ports' 24-bit model is the
+   original's word. No function between them changes the word (Render.dll has no `fldcw`).
+2. **The light-manager tables** are built at `0x027f` (PC 53), on the game thread, before D3D's
+   cooperative-level call can touch the word. They equal Play's builders (the 64-bit x87
+   model) bit for bit: the square-root table (2,048 entries), the normal-falloff table
+   (4,096), the shadow-blur table (128 rows of 4 packed words) and the x^-0.5 mantissas (1,024) and
+   exponents (512), dumped from the running original (`validate-original-light-tables`, a
+   skipped check without the local dump). The oracles' init word `0x037f` was harmless (the
+   tables are identical at `0x027f` and `0x037f`); `0x027f` is now the measured word.
+3. **The game thread** runs at `0x037f` (PC 64) from the first PostRender on:
+   `appEnableFastMath(0)` is `_controlfp(0, _MCW_PC)`, whose 0 is `_PC_64`. Before it (the first
+   Draw, the first two ticks) it runs at the start-up `0x027f`. The only lighting computation
+   there is Galaxy's GlobalLighting call, which Play runs as `precision: 'pc64'`: at `0x027f`
+   the original gives the same brightness in 2,560 of 2,560 frames
+   (`GAME_THREAD_CW=0x027f validate-light-animation`), and at `0x037f` too. No port needs
+   a change; game-thread ports outside lighting (physics, the first two ticks) were not
+   re-derived at `0x027f`.
+4. **D3D's FPU setup** reaches no lighting computation: the pass sets its own word at
+   PreRender and PostRender resets it, and URender::Init runs before the cooperative-level
+   call. This is Wine's ddraw; Windows' own is not measured, and could only change the
+   game-thread word before the first PostRender.
 
 ## What precision control 24 changes
 
@@ -232,8 +286,9 @@ Open items:
   SingleLineCheck**: in the pass, not measured or not re-derived at 24 bits.
 - **BoundsUpdate / SortWindowLists**: ambiguous placement (tick or
   PaintWindows); 0 of 138 differ.
-- **The game thread's control word** after PostRender's reset (above) and
-  D3D's `DDSCL_FPUSETUP` before URender::Init.
+- **The game thread's control word** and the init word: closed 2026-10-14
+  ([measured](#measured-in-the-running-original-2026-10-14)). Open there:
+  Windows' own ddraw, whose `DDSCL_FPUSETUP` handling Wine's does not reproduce.
 - `validate-gpu-mesh` runs its page with `?sim=inline` (the GPU kernels
   read the page's mesh state); the Play checks of the moved families run in
   worker mode.
