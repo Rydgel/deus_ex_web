@@ -69,6 +69,11 @@ HEAP, HEAP_SIZE = 0x30000000, 0x10000000
 # SplitInHalf, FPoly::Transform, UModel::PrecomputeSphereFilter).
 COVERAGE = [(0x1037a290, 0x1037d140), (0x10386ad0, 0x10386e77), (0x10386f70, 0x1038707e),
             (0x10387360, 0x10387757), (0x103f63a0, 0x103f651c)]
+# FPoly::Transform(Coords, PreSubtract, PostAdd, Orientation), thiscall: the
+# entry and its `ret 0x10`. The FPoly (this) is read back at the return:
+# Base +0x0, Vertex[] +0x30, NumVertices +0x100, iLink +0x104 (the 0x110-byte FPoly
+# the fixtures write: PolyFlags 0xf0, Actor, Texture, ItemName, NumVertices, iLink).
+TRANSFORM_ENTRY, TRANSFORM_RET = 0x10387360, 0x10387754
 
 # Field offsets (SDK 1112f layouts, confirmed by the instructions).
 A_CLASS, A_FLAGS, A_LOCATION, A_ROTATION, A_BRUSH, A_PREPIVOT = 0x24, 0x28, 0x114, 0x120, 0x178, 0x180
@@ -97,6 +102,20 @@ class Tracker(native.NativeCollision):
             if any(lo <= address < hi for lo, hi in COVERAGE):
                 self.coverage.add(address)
         cpu.hook_add(UC_HOOK_BLOCK, on_block)
+        # What FPoly::Transform left in each polygon it ran on (Update's
+        # FMemStack copies are gone when the step returns): reported next to a
+        # step's report, outside the digest of the report itself.
+        self.transforms, self.transform_this = [], 0
+        def on_transform_entry(uc, address, size, data):
+            self.transform_this = uc.reg_read(UC_X86_REG_ECX)
+        def on_transform_ret(uc, address, size, data):
+            poly = self.transform_this
+            count = self.read(poly + 0x100, "I")[0]
+            self.transforms.append({'iLink': self.read(poly + 0x104, "i")[0],
+                                    'baseBits': list(self.read(poly, '3I')),
+                                    'vertexBits': [list(self.read(poly + 0x30 + 12 * k, '3I')) for k in range(count)]})
+        cpu.hook_add(UC_HOOK_CODE, on_transform_entry, begin=TRANSFORM_ENTRY, end=TRANSFORM_ENTRY)
+        cpu.hook_add(UC_HOOK_CODE, on_transform_ret, begin=TRANSFORM_RET, end=TRANSFORM_RET)
         cpu.mem_map(HEAP, HEAP_SIZE)
         self.heap = HEAP
         self.sizes = {}
@@ -442,6 +461,7 @@ class Tracker(native.NativeCollision):
         out['newBlocks'] = sorted(self.coverage - self.reported)
         self.reported = set(self.coverage)
         self.snap = now
+        transforms, self.transforms = self.transforms, []
         if step.get('brief'):
             # Counts and a digest of the full report instead of the report.
             text = json.dumps(out, separators=(',', ':'), sort_keys=True)
@@ -451,7 +471,9 @@ class Tracker(native.NativeCollision):
                     'counts': counts, 'newBlocks': out['newBlocks'],
                     'chains': {k: len(v['moverLink']) for k, v in out.get('movers', {}).items()},
                     'cursors': [out['tracker']['iNodeCursor'], out['tracker']['iVertCursor'],
-                                out['tracker']['pointFreeHead']] if self.tracker else None}
+                                out['tracker']['pointFreeHead']] if self.tracker else None,
+                    'transforms': transforms}
+        out['transforms'] = transforms
         return out
 
     # -- steps ----------------------------------------------------------------

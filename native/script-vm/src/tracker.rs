@@ -491,6 +491,14 @@ const M_MOVERLINK: u32 = 27;
 const M_POLYS: u32 = 28;
 const M_POLY_COUNT: u32 = 29;
 const M_SPECIALLIT: u32 = 30;
+/// Host-side copy of FPoly::Transform's output (not an original field; the
+/// original leaves it in the FMemStack until Update returns): the byte
+/// address of the mover's transformed-vertex block (3 words a vertex, the
+/// polygons in order, each in the order Transform left it), a revision that
+/// every rebuild bumps, and whether Transform reversed the vertices.
+const M_XVERTS: u32 = 31;
+const M_REVISION: u32 = 32;
+const M_REVERSED: u32 = 33;
 const ASSIMILATED: u32 = 0x100;
 
 fn mover(i: u32) -> u32 {
@@ -1010,6 +1018,7 @@ fn rebuild<F: Fp>(i: u32) {
     let location = [mw(m, M_LOCATION), mw(m, M_LOCATION + 1), mw(m, M_LOCATION + 2)];
     let count = mw(m, M_POLY_COUNT);
     let copies = scratch_mark();
+    let mut export = mw(m, M_XVERTS);
     for k in 0..count {
         let c = new_poly();
         let src = mw(m, M_POLYS) + 4 * FP * k;
@@ -1017,7 +1026,15 @@ fn rebuild<F: Fp>(i: u32) {
             wr(c + 4 * w, rd(src + 4 * w));
         }
         transform::<F>(c, &point_xform, &vector_xform, prepivot, location, orient);
+        if export != 0 {
+            for w in 0..3 * numv(c) {
+                wr(export + 4 * w, rd(c + 4 * (P_VERT + w)));
+            }
+            export += 12 * numv(c);
+        }
     }
+    set_mw(m, M_REVERSED, lt(F::ld(orient), F::ldc(0.0)) as u32);
+    set_mw(m, M_REVISION, mw(m, M_REVISION).wrapping_add(1));
     // FSphere over every transformed vertex (Core 0x10144960, FBox 0x10144ab0).
     let sphere = sphere::<F>(copies, count);
     precompute_sphere_filter::<F>(sphere);
