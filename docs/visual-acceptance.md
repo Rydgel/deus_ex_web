@@ -1182,7 +1182,7 @@ the converse (precision), per window; `ratio` is Play's mean over the original's
 With the sampling state and no multisampling 91 to 93% of the OceanLab windows' pixels are identical to the original's (Battery Park: 75 to
 83%) and 98 to 99.9% of the pixels of both maps differ by at most 2 of 255; with the display-space filtering as well 98.9 to 99.8% of
 OceanLab's are identical and 89.5 to 99.3% of Battery Park's (the rest of window 2 is two walking actors). Of each OceanLab window's 30,000
-pixels 3, 287 and 116 differ by more than 10 without it (9, 171 and 15 with it); Battery Park's largest differences are 12, 7 and 23 (48, 42 and 17). The windows' mean values agree to 0.2 to 1.3%. The Island window with
+pixels 3, 287 and 116 differ by more than 10 without it (3, 171 and 15 with it); Battery Park's largest differences are 12, 7 and 23 (48, 42 and 17). The windows' mean values agree to 0.2 to 1.3%. The Island window with
 three NSF terrorists in it (Terrorist2, 18 and 30: they walk and animate differently in the two programs, [live scenes](#live-scenes-2026-10-13)) is 0.64 to 0.74 MAD and
 edge recall .77 to .81 unmasked; JC himself (mesh, lighting from the camera's frame, his shadow decal) agrees in the 24 x 32 pixels
 around him (MAD 0.14, recall .949, precision 1.0). The level times agree to 5 ms.
@@ -1207,6 +1207,32 @@ The 20 stored main views (4 maps x 5) were retaken in the original at Brightness
 | master (`?sampling=legacy`) | 0.9974 | 0.80 to 1.05 | 0.347 |
 | mip state (`?sampling=srgb`) | 1.0119 | 0.80 to 1.08 | 0.285 |
 | mip state and display-space filtering (the default) | 1.0026 | 1.000 to 1.032, 17 of 20 at 1.000 | 0.065 |
+
+Per view (mean of the three channels over 0..255, Play's mean over the original's in brackets, and the mean absolute difference from the
+original's frame):
+
+| map, view | original mean | master: mean (ratio) MAD | mip state: mean (ratio) MAD | mip state and display-space filtering: mean (ratio) MAD |
+| --- | ---: | ---: | ---: | ---: |
+| 14_OceanLab_Lab down | 9.138 | 8.565 (0.937) 0.667 | 9.558 (1.046) 0.450 | 9.431 (1.032) 0.311 |
+| 14_OceanLab_Lab y0 | 8.882 | 7.135 (0.803) 1.791 | 7.137 (0.804) 1.770 | 8.663 (0.975) 0.253 |
+| 14_OceanLab_Lab y1 | 13.526 | 12.994 (0.961) 0.922 | 13.735 (1.015) 0.240 | 13.842 (1.023) 0.323 |
+| 14_OceanLab_Lab y2 | 4.747 | 4.766 (1.004) 0.026 | 4.767 (1.004) 0.021 | 4.747 (1.000) 0.001 |
+| 14_OceanLab_Lab y3 | 14.042 | 14.682 (1.046) 0.640 | 15.091 (1.075) 1.049 | 14.042 (1.000) 0.000 |
+| 01_NYC_UNATCOIsland down | 12.316 | 12.669 (1.029) 0.484 | 12.680 (1.030) 0.371 | 12.316 (1.000) 0.008 |
+| 01_NYC_UNATCOIsland y0 | 9.109 | 9.412 (1.033) 0.466 | 9.423 (1.034) 0.358 | 9.109 (1.000) 0.077 |
+| 01_NYC_UNATCOIsland y1 | 5.089 | 5.153 (1.013) 0.140 | 5.159 (1.014) 0.118 | 5.089 (1.000) 0.054 |
+| 01_NYC_UNATCOIsland y2 | 5.457 | 5.636 (1.033) 0.233 | 5.633 (1.032) 0.202 | 5.461 (1.001) 0.033 |
+| 01_NYC_UNATCOIsland y3 | 5.564 | 5.651 (1.016) 0.202 | 5.661 (1.017) 0.137 | 5.564 (1.000) 0.043 |
+| 10_Paris_Club down | 5.540 | 5.550 (1.002) 0.013 | 5.550 (1.002) 0.012 | 5.540 (1.000) 0.000 |
+| 10_Paris_Club y0 | 5.917 | 5.960 (1.007) 0.063 | 5.962 (1.008) 0.047 | 5.917 (1.000) 0.000 |
+| 10_Paris_Club y1 | 3.003 | 3.014 (1.004) 0.012 | 3.014 (1.004) 0.012 | 3.003 (1.000) 0.000 |
+| 10_Paris_Club y2 | 3.857 | 3.865 (1.002) 0.012 | 3.866 (1.002) 0.009 | 3.857 (1.000) 0.000 |
+| 10_Paris_Club y3 | 3.416 | 3.429 (1.004) 0.013 | 3.429 (1.004) 0.013 | 3.416 (1.000) 0.000 |
+| 02_NYC_BatteryPark down | 16.774 | 16.951 (1.011) 0.472 | 16.959 (1.011) 0.291 | 16.773 (1.000) 0.121 |
+| 02_NYC_BatteryPark y0 | 7.884 | 7.981 (1.012) 0.307 | 7.983 (1.012) 0.139 | 7.881 (1.000) 0.046 |
+| 02_NYC_BatteryPark y1 | 10.212 | 10.506 (1.029) 0.312 | 10.505 (1.029) 0.302 | 10.214 (1.000) 0.014 |
+| 02_NYC_BatteryPark y2 | 4.126 | 4.246 (1.029) 0.124 | 4.246 (1.029) 0.124 | 4.126 (1.000) 0.007 |
+| 02_NYC_BatteryPark y3 | 1.964 | 2.000 (1.018) 0.038 | 2.000 (1.018) 0.037 | 1.964 (1.000) 0.005 |
 
 Master's overall brightness is right on average because its per-view errors cancel (OceanLab's y0 is 20% dark, y3 5% bright; the
 per-view brightness error averages 3.0% and falls to 0.4% with the colour-space change; Paris Club's five views are pixel-identical
