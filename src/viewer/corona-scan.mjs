@@ -1,5 +1,5 @@
 import { coordsTransform } from '../runtime/volumetric-fog.mjs';
-import { createCoronaCache, coronaDecay, coronaLineVisible, coronaSeen, coronaIcon, coronaFrame, coronaFrameFromCamera, leafPermeatingLights } from '../runtime/coronas.mjs';
+import { createCoronaCache, coronaDecay, coronaSeen, coronaIcon, coronaFrame, coronaFrameFromCamera, leafPermeatingLights } from '../runtime/coronas.mjs';
 import { movingLightInView, movingLightLeafLists, viewPlanesOf, worldLightRadius } from '../runtime/dynamic-lighting.mjs';
 import { actorsEpoch } from '../runtime/base-epoch.mjs';
 
@@ -77,15 +77,16 @@ export function createCoronaScan(runtime, { model, exportName, player }) {
     // checks end at its Coords.Origin (the helper's `frame + 0x34`).
     const { coords, frame } = master ? coronaFrame(master.words) : coronaFrameFromCamera(view, rect);
     const eye = coords.origin, slot = { next: 0 };
-    const lineCheck = (...args) => level.hash.lineCheck(...args);
     // Helper 0x10b1bc00 for one light: the two line checks, then the entry.
     const visit = light => {
       stats.leafLights++;
       visited.push(light.name);
-      // From the light's Location to the eye (Start, End), as the helper
-      // passes them.
       const location = read(light, 'Location').map(Math.fround);
-      const visible = coronaLineVisible(lineCheck, location, eye, viewer);
+      let visible = level.hash.lineCheck(eye, location, [0, 0, 0], 6, 0, null).outside;
+      if (visible) {
+        const hit = level.hash.lineCheck(eye, location, [0, 0, 0], 0x11, 0, null);
+        visible = hit.outside || hit.actor === viewer;
+      }
       if (visible) stats.visible++;
       coronaSeen(cache, slot, light, { visible, delta,
         qualifies: Boolean(read(light, 'bCorona')) && Boolean(read(light, 'Skin')) && !read(light, 'bDeleteMe'),
