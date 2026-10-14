@@ -30,6 +30,8 @@
  * Everything that crosses is plain data (sim-session.mjs plainError for
  * errors). */
 // `loadId`: the map load (its request id) that frames belong to.
+// ?hitchlog=1 (hitch-log.mjs): the worker's frame record and wasm sizes.
+let hitchWasm = null, hitchFrames = 0;
 let host = null, loadId = null, assets = null, decodeMap = null, createSimHost = null, setHostClock = null, plainError = null, stateDigest = null,
   decalProbe = null, placeProbe = null, laserProbe = null, meshLightProbe = null, renderPassProbe = null;
 // Galaxy's music library service and its module (set by `music`).
@@ -100,6 +102,7 @@ async function handle(data) {
   switch (data.type) {
     case 'init': {
       for (const [name, value] of Object.entries(data.flags)) globalThis[name] = value;
+      if (globalThis.DEUS_EX_HITCHLOG) { hitchWasm = await import('./hitch-wasm.mjs'); hitchWasm.watchWasm(); }
       const [{ AssetStore }, map, simHost, clock, session, digest, library, probe] = await Promise.all([import('../unreal/assets.mjs'),
         import('../unreal/map.mjs'), import('./sim-host.mjs'), import('../runtime/host-clock.mjs'), import('./sim-session.mjs'),
         import('../runtime/state-digest.mjs'), import('../runtime/galaxy-music-library.mjs'), import('./decal-probe.mjs')]);
@@ -139,6 +142,7 @@ async function handle(data) {
     case 'frame': {
       if (!host?.game) { send({ type: 'frame', load: loadId, posts: data.posts, snapshot: null }); return; }
       setHostClock(data.clock);
+      const hitchStart = hitchWasm ? performance.now() : 0;
       for (const [id, position] of data.speech ?? []) speechPositions.set(id, position);
       const errors = [];
       for (const entry of data.commands) command(host.game, entry, errors);
@@ -152,6 +156,9 @@ async function handle(data) {
       // page's clock at the post (seconds), which animates its textures.
       snapshot.inspect = data.input.inspect ? { camera: data.input.inspect.camera, view: data.input.inspect.view } : null;
       snapshot.now = data.input.now;
+      if (hitchWasm) snapshot.hitch = { n: hitchFrames++, start: performance.timeOrigin + hitchStart, end: performance.timeOrigin + performance.now(),
+        posts: data.posts, dt: data.input.dt, sent: data.clock.now, firstSent: data.firstSent ?? data.clock.now, status: Boolean(data.status),
+        wasm: hitchWasm.wasmBytes(), mems: hitchWasm.wasmCount() };
       if (data.status) snapshot.status = { gameplay: host.game.status(), summary: host.actorSim ? structuredClone(host.actorSim.summary) : null,
         music: musicLibrary?.status() ?? null };
       send({ type: 'frame', load: loadId, posts: data.posts, snapshot }, snapshot.pack ? [snapshot.pack.buffer] : []);
@@ -199,7 +206,7 @@ async function handle(data) {
 // once the messages already queued have arrived.
 let pending = null, runScheduled = false;
 function mergeFrame(data) {
-  pending = !pending ? { ...data, commands: [...data.commands], posts: 1 } : { ...data,
+  pending = !pending ? { ...data, commands: [...data.commands], posts: 1, firstSent: data.clock.now } : { ...data, firstSent: pending.firstSent,
     input: { ...data.input, dt: pending.input.dt + data.input.dt }, commands: [...pending.commands, ...data.commands],
     status: pending.status || data.status, posts: pending.posts + 1 };
 }

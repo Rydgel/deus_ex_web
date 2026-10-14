@@ -1,3 +1,4 @@
+import { hitchEnabled, createHitchLog } from './hitch-log.mjs';
 import * as THREE from 'three';
 import './style.css';
 import { closeToolbarMenus } from './toolbar.mjs';
@@ -86,6 +87,8 @@ for(const [param,global] of [['renderScan','DEUS_EX_RENDER_SCAN'],['meshLight','
   const value=new URLSearchParams(location.search).get(param);
   if(value)globalThis[global]=value;
 }
+// ?hitchlog=1 (hitch-log.mjs, docs/hitch-log.md) also reaches the simulation worker, for its frame record.
+if (hitchEnabled) globalThis.DEUS_EX_HITCHLOG = '1';
 // ?childFog=off: the child frames' passes reuse the root frame's fog maps
 // (as before each frame had its own, fog-pass.mjs framePass).
 const childFog = new URLSearchParams(location.search).get('childFog') !== 'off';
@@ -104,7 +107,7 @@ const canvasClear = new THREE.Color('#06101b');
 // ?gpuTimer=1: one EXT_disjoint_timer_query_webgl2 TIME_ELAPSED query around
 // the frame's GL work, read back frames later (docs/play-frame-cost.md).
 // Measurement only; scripts/profile-play-browser.mjs --gpu sets it.
-const gpuTimerParam=new URLSearchParams(location.search).get('gpuTimer')==='1';
+const gpuTimerParam=new URLSearchParams(location.search).get('gpuTimer')==='1'||hitchEnabled;
 // ?seed=N: the shared random stream's srand seed instead of time(NULL), for
 // comparing two runs of one scenario (scripts/validate-sim-split.mjs).
 const seedParam=new URLSearchParams(location.search).get('seed');
@@ -1545,6 +1548,11 @@ stateDigest() {
 const framePhases = { frames: 0, tick: 0, lighting: 0, sprites: 0, actors: 0, lightAnimation: 0, textures: 0, lightUpload: 0,
   fog: 0, mirrors: 0, render: 0, coronas: 0, weapon: 0, hud: 0, ramp: 0, audio: 0, clone: 0, worker: 0, total: 0, draws: 0,
   mirrorCalls: 0, skyCalls: 0, mainCalls: 0, hudCalls: 0, gpu: 0, gpuFrames: 0, gpuDisjoint: 0, gpuSupported: 0 };
+// ?hitchlog=1 (hitch-log.mjs, docs/hitch-log.md): the opt-in frame-hitch recorder.
+const hitch = hitchEnabled ? createHitchLog() : null;
+hitch?.attach({ renderer, framePhases, threeRevision: THREE.REVISION, client: () => simClient,
+  status: () => ({ map: currentMap ?? null, paused, error: Boolean(runtimeError), position: world ? fromView(camera.position.toArray()).map(Math.round) : null }),
+  music: () => { try { return musicOutput?.status()?.worklet ?? null; } catch { return null; } } });
 const drawCalls = () => renderer.info.render.calls;
 let phaseMark = 0;
 const phase = name => { const now = performance.now(); framePhases[name] += now - phaseMark; phaseMark = now; };
@@ -1654,6 +1662,7 @@ function animate(time) {
     if (draw) drawFrame(snap, time);
   }
   framePhases.frames++; framePhases.total += performance.now() - frameStart;
+  hitch?.frameEnd(time);
   if (time - fpsTime > 1000) { $('performance').textContent = world ? `${Math.round(frameCount * 1000 / (time - fpsTime))} fps` : ''; frameCount = 0; fpsTime = time; }
 }
 /** Draws one simulation snapshot (null: no simulation, Inspect over the
@@ -1672,6 +1681,7 @@ function drawFrame(snap, time) {
   const live = snap?.inspect && simClient ? { position: camera.position.clone(), quaternion: camera.quaternion.clone() } : null;
   if (live) { camera.position.fromArray(snap.inspect.camera.position); camera.quaternion.fromArray(snap.inspect.camera.quaternion); camera.updateMatrixWorld(); }
   if (snap) {
+    hitch?.snapshot(snap);
     // The worker's audio since the last snapshot, as its callbacks ran
     // during the tick, then the frame's errors.
     for (const { kind, event } of snap.audio ?? []) { if (kind === 'voice') void galaxyVoice(event); else void playConversationSpeech(event); }
