@@ -16,6 +16,8 @@
 //     [--frames 240] [--every 60] [--walk] [--query a=1&b=2] [--query-a ...] [--query-b ...]
 //     [--preview weapon] [--mode inspect] (Inspect's free camera; --walk flies it)
 //     [--shots DIR] (writes each run's last frame as DIR/<hash>.png)
+//     [--via MAP] (one more run loads MAP first and travels to --map; its digests and pixels
+//     must equal page A's, so the previous map's host must leave nothing behind in the next)
 //
 // Without --a, a Vite server for this tree serves A; without --b, B is A.
 import assert from 'node:assert/strict';
@@ -50,7 +52,8 @@ const target = (base, extra) => {
 };
 const INSTALL = new Date('2001-06-23T12:00:00Z').getTime(), START = INSTALL + 3600 * 1000;
 
-async function run(browser, url) {
+const via = option('via', null);
+async function run(browser, url, first = null) {
   const page = await browser.newPage({viewport: {width: 1280, height: 720}});
   const errors = []; page.on('pageerror', error => errors.push(error.message));
   await page.route(/\/src\/viewer\/main\.mjs(?:\?|$)/, async route => {
@@ -69,6 +72,13 @@ async function run(browser, url) {
     // The page bars are hidden, so the menus are set through the DOM.
     const choose = (id, value) => page.evaluate(([id, value]) => { const menu = document.getElementById(id); menu.value = value;
       menu.dispatchEvent(new Event('change')); }, [id, value]);
+    if (first) {
+      await choose('map', first);
+      await page.waitForFunction(map => { const s = window.deusExViewer?.status(); return s?.ready && s.map === map && s.mode === 'play'; },
+        first, {timeout: 240000});
+      // Frames of the first map run on the real clock before the travel.
+      await new Promise(resolve => setTimeout(resolve, 2000));
+    }
     await choose('map', map);
     await page.waitForFunction(map => { const s = window.deusExViewer?.status(); return s?.ready && s.map === map && s.mode === 'play'; },
       map, {timeout: 240000});
@@ -125,17 +135,21 @@ let report;
 try {
   const first = await run(browser, target(a, option('query-a', ''))), again = await run(browser, target(a, option('query-a', '')));
   const other = await run(browser, target(b, option('query-b', '')));
-  report = {map, frames, walk, a: first, again, b: other};
+  const chained = via ? await run(browser, target(a, option('query-a', '')), via) : null;
+  report = {map, frames, walk, a: first, again, b: other, chained};
 } finally { await browser.close(); await server?.close(); }
 console.log(JSON.stringify(report, null, 1));
-for (const side of [report.a, report.again, report.b]) {
+for (const side of [report.a, report.again, report.b, ...(report.chained ? [report.chained] : [])]) {
   assert.deepEqual(side.errors, [], `${side.url}: page errors`);
   assert.ok(side.digests.every(d => d.error === null), `${side.url}: runtime error ${side.digests.at(-1)?.error}`);
 }
 const sequence = side => side.digests.map(d => `${d.frame}:${d.digest}`).join(' ');
 assert.equal(sequence(report.again), sequence(report.a), 'the same page twice gives the same digests (deterministic scenario)');
 assert.equal(sequence(report.b), sequence(report.a), 'page B gives page A\'s digests');
+if (report.chained) assert.equal(sequence(report.chained), sequence(report.a), `travelling from ${via} gives the digests of loading ${map} directly`);
 const pixels = report.again.shot === report.a.shot;
-if (pixels) assert.equal(report.b.shot, report.a.shot, 'page B draws page A\'s last frame');
-else console.log('validate-sim-split: the same page drew different last frames; pixels not compared');
+if (pixels) {
+  assert.equal(report.b.shot, report.a.shot, 'page B draws page A\'s last frame');
+  if (report.chained) assert.equal(report.chained.shot, report.a.shot, `travelling from ${via} draws the frame of loading ${map} directly`);
+} else console.log('validate-sim-split: the same page drew different last frames; pixels not compared');
 console.log(`validate-sim-split: PASS (${map}, ${frames} frames${walk ? ' walking' : ''}, ${report.a.digests.length} digests${pixels ? ', same pixels' : ''})`);

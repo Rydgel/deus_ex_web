@@ -28,6 +28,13 @@ export class DecalBoundaryError extends Error {
  * as the original's GNewBrushTracker runs after the actor start-up, grows
  * into the tracker's surfaces) and follows the tracker's arrays after. */
 const releaseDecals = new FinalizationRegistry(dispose => dispose());
+// The registry's held value: it must not reach the level, the tracker source
+// or the runtime, or the level it waits for (and with it the runtime) is never
+// collected. It holds only the kernel store and the current model.
+function decalDisposer(parts) {
+  let live = true;
+  return () => { if (live) { live = false; parts.store.dispose(); parts.model.dispose(); } };
+}
 export function levelDecals(level) {
   const source = level.decalSource ?? null;
   if (level.decals && level.decals.source === source) return level.decals;
@@ -45,13 +52,12 @@ export function levelDecals(level) {
     const decals = level.decals, old = decals.model;
     decals.store.setModel(model);
     old.dispose();
-    decals.model = model; decals.source = source; decals.generation = source?.generation() ?? 0;
+    decals.model = decals.parts.model = model; decals.source = source; decals.generation = source?.generation() ?? 0;
     return decals;
   }
   const store = createDecalStore(kernel, model);
-  let live = true;
-  const decals = { model, store, source, generation: source?.generation() ?? 0, dispose: null };
-  decals.dispose = () => { if (live) { live = false; decals.store.dispose(); decals.model.dispose(); } };
+  const parts = { store, model };
+  const decals = { model, store, source, generation: source?.generation() ?? 0, parts, dispose: decalDisposer(parts) };
   level.decals = decals;
   releaseDecals.register(level, decals.dispose, level.decals);
   return level.decals;

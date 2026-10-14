@@ -21,6 +21,7 @@
  * Everything the page must apply between frames goes to the session's
  * event queue (sim-session.mjs events). */
 import { createGame } from './game.mjs';
+import { handleLimit, releaseHandleRange } from '../runtime/script-object-handles.mjs';
 import { createSimSession } from './sim-session.mjs';
 import { createActorMeshSim } from './actor-mesh-sim.mjs';
 import { createGpuMeshLayout } from './gpu-mesh-layout.mjs';
@@ -33,10 +34,14 @@ import { createBspOcclusion, texturePolyFlags } from '../runtime/bsp-occlusion.m
 import { collectTrackerMovers, moverTrackerMode, trackerDecalSource, trackerMoverSpec, trackerTextureFlags } from '../runtime/brush-tracker.mjs';
 import { readTexture } from '../unreal/textures.mjs';
 
+// The handle limit when each host started (script-object-handles.mjs): a
+// host's identities are the handles from its start to the next host's.
+const hostStarts = [];
+
 export async function createSimHost(map, asset, assets, { randomSeed, subtitles, stampScene, panZones, childFrames,
   gpu = null, weaponGpu = null, meshBackend = null, meshLod = null, musicLibrary = null, onConversationSpeech = null, onAudioVoice = null,
   onProgress = () => {} }) {
-  const events = [], notes = [];
+  const events = [], notes = [], hostIndex = hostStarts.push(handleLimit()) - 1;
   let game;
   try {
     game = await createGame(map, asset, assets, { presentation: true, randomSeed, subtitles, musicLibrary,
@@ -142,5 +147,16 @@ export async function createSimHost(map, asset, assets, { randomSeed, subtitles,
   let audioDisposed = false;
   const disposeAudio = () => { if (audioDisposed) return; audioDisposed = true; runtime.audio?.dispose?.(); };
   return { game, session, actorSim, weaponSim, meshLighting, lipSync, notes, events, hudTextures, disposeAudio,
-    dispose() { disposeAudio(); session.dispose(); actorSim?.dispose(); } };
+    // The next map's host replaces this one: nothing runs this runtime again,
+    // so its identities leave the process-wide handle table, which would
+    // otherwise keep the whole runtime alive (script-object-handles.mjs).
+    dispose() {
+      disposeAudio(); session.dispose(); actorSim?.dispose();
+      releaseHandleRange(hostStarts[hostIndex], hostStarts[hostIndex + 1] ?? handleLimit());
+      // The image arena's views of the native heap are closures over this
+      // runtime; the arena itself stays reachable from the process-wide
+      // FinalizationRegistry that returns image ranges (script-runtime.mjs
+      // imageFinalizer), whose held values would keep the runtime alive.
+      runtime.arena.listeners.length = 0;
+    } };
 }

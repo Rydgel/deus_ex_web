@@ -99,6 +99,70 @@ thermal or power limits. The recorder tells these apart from one file: a slow
 second is classified as worker frame, page frame (phase), WebGL calls, or
 neither thread.
 
+### October 14, later: the previous map's runtime stayed alive
+
+The user's Mac log (Firefox 157, Everett, `?hitchlog=1`, two map events) shows
+worker frames of 1.1-2.4 s every 6.5 s. Firefox 155 on the Linux host
+(Playwright's build, headless, `.work/hitch/run-ff.mjs`: load Island, travel to
+Everett, 300 s of roaming) reproduces the pattern: worker frames over 200 ms
+every 6.0 s (or a multiple), median 708 ms, in whatever step happens to be
+running.
+
+**What the Gecko profiler says** (`MOZ_PROFILER_STARTUP=1`, worker thread
+markers, `.work/hitch/ff-gc.mjs`): every worker GC is one non-incremental
+slice. The periodic ones have reason `DOM_WORKER`, options `Shrink`, about
+every 5.5 s, followed 0.5-1 s later by a `Normal` one. Gecko arms a worker GC
+timer when the worker's event queue drains (WorkerPrivate::DoRunLoop,
+IDLE_GC_TIMER_DELAY_SEC = 5) and a worker that goes idle between frames
+therefore gets a full compacting GC every ~5 s, whatever its allocation rate.
+Its cost is the heap's: of 255 / 592 / 659 ms, mark 27-30%, sweep 8-10%,
+compact 54-60% (`compact_update`, the pointer fix-up over every cell). The
+allocation-triggered GCs (`EAGER_ALLOC_TRIGGER`) are rarer and happen mostly
+while the heap grows. Experiment: a worker whose event queue is never empty (a
+MessageChannel ping chain, 100% of a core) has no periodic stall at all (the
+only worker frames over 150 ms are the load and one 247 ms at 110 s). That is
+what `?workerBusy=1` switches on, as a diagnostic; see below.
+
+**The leak.** After a map change the previous map's whole runtime stayed
+alive: the process-wide handle table (`script-object-handles.mjs`) is the only
+strong reference to the identities its object images name, so the old
+runtime, object images and Rust VM memory were reachable for the rest of the
+session, and every major GC marked and compacted two maps. `sim-host.mjs`
+dispose now releases the host's range of the table (`releaseHandleRange`; a
+handle is never reused and nothing touches an identity of a host that was
+replaced: the worker disposes before it builds the next host, and the Rust
+interpreters mark the released handles as None, as for LoadMap's releases),
+the decal FinalizationRegistry's held value no longer reaches the level, and
+the image arena's listeners are dropped. In V8 that was not enough: heap
+snapshots of the Chromium worker (marker class on each runtime,
+`.work/hitch/snap-paths-all.mjs`) showed two more retainers, both V8 map
+transition trees that keep accessor closures: `createLevelQueries`' default
+`levelInfo` literal (the actor field installers define per-runtime
+accessors on it) and the object literals with getters in
+`script-load-graph.mjs` (`loadState`, the CreateExport, lifecycle and
+static-load services). They are dictionary-mode objects now
+(`standalone`, `accessorMembers`).
+
+Numbers (forced GC, JS heap in MB):
+
+| | Node 26, Everett then Island | Chromium 152 worker, Island, Everett, Island |
+|---|---:|---:|
+| before | 1013 (Island alone 610) | 601, 818, 1124 |
+| handle release only (99efddc) | 634 | 604, 821 |
+| plus the two V8 map retainers | not reproduced (V8 14.6) | 387, 305, 386 |
+
+(The first Chromium map also lost the default map the page loads at start,
+which the old build kept: Island alone is 601 before and 387 after.) Firefox
+155, same scenario, worker frames over 200 ms in 300 s of Everett after
+Island: 30 with a median of 708 ms before, 35 with a median of 278 ms after the
+handle release (the map-retention part is V8 only). The cadence stays at ~5.5
+s, so the user's file should now show the same pattern with stalls about 2.5
+times shorter (more where the old heap was swapped or compressed).
+
+`validate-sim-split.mjs --via MAP` loads MAP first and travels to `--map`: its
+state digests and last frame equal a direct load of `--map`
+(Island via Training, Everett via Island, Training via Island).
+
 ## October 4: Firefox and Training's mirrored floor
 
 The user saw 27 fps in Firefox (not Chrome) at Training's Player start on

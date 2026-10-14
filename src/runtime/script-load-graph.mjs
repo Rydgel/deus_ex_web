@@ -39,6 +39,19 @@ import {loadConfig as loadObjectConfig, defaultsObject} from './script-config.mj
 import {CORE_CLASSES, ENGINE_CLASSES, DEUSEX_CLASSES, findNativeClassConstructor,
   isNativeClassRegisteredDynamic} from './script-native-class-registry.mjs';
 
+// Service objects with accessor members are dictionary-mode objects whose
+// accessors are defined on the object itself. As object literals, each graph's
+// accessors went into the transition tree of the literal's map, which belongs
+// to the literal's allocation site and lives as long as this module; V8 kept
+// the descriptor arrays of that tree, accessor closures included, and with
+// them the first graphs' scopes (their runtimes, object images and Rust VM
+// memory) after their map was left.
+const accessorMembers = (data, accessors) => {
+  const object = Object.assign(Object.create(null), data);
+  for (const [name, get, set] of accessors) Object.defineProperty(object, name, {get, set, enumerable: true, configurable: true});
+  return object;
+};
+
 export function createScriptLoadGraph({packageAssets = new Map(), captureEvents = false,
   nativeFunctions = {}, lifecycle = {}, resourceServices = null,
   meshLoadServices = resourceServices} = {}) {
@@ -478,11 +491,8 @@ export function createScriptLoadGraph({packageAssets = new Map(), captureEvents 
   }
 
   const importState = {importCount: 0};
-  const loadState = {
-    nest: 0, registrationQueueHead: null, loadedMax: 0,
-    get loaderCleanupState() { return importState.importCount; },
-    set loaderCleanupState(value) { importState.importCount = value; },
-  };
+  const loadState = accessorMembers({nest: 0, registrationQueueHead: null, loadedMax: 0},
+    [['loaderCleanupState', () => importState.importCount, value => { importState.importCount = value; }]]);
   const importFields = {name: 0x20, class: 0x24, superField: 0x28, flags: 0x1c,
     classFlags: 0x484, packageFlags: 0x30};
   const importServices = {
@@ -522,7 +532,7 @@ export function createScriptLoadGraph({packageAssets = new Map(), captureEvents 
   // CreateExport services
   // ---------------------------------------------------------------------------
 
-  const createExportServices = {
+  const createExportServices = accessorMembers({
     readExport: (linker, index) => linker.exports[index],
     writeExportObject: (linker, index, object) => { linker.exports[index].object = object; },
     contextFlags: linker => linker.contextFlags,
@@ -611,7 +621,6 @@ export function createScriptLoadGraph({packageAssets = new Map(), captureEvents 
       writeSlot(object, 0x10, linker);
       writeSlot(object, 0x14, index);
     },
-    get loadedObjects() { return loadedObjects; },
     getFullName: object => fullName(object),
     log: detail => { events.push({op: 'Logf', ...detail}); },
     read(object, field) {
@@ -659,7 +668,7 @@ export function createScriptLoadGraph({packageAssets = new Map(), captureEvents 
     classStaticClass: classStatic,
     structStaticClass: structStatic,
     errorDevice: {address: 0x101a7c38},
-  };
+  }, [['loadedObjects', () => loadedObjects]]);
 
   // ---------------------------------------------------------------------------
   // Preload + serialize services
@@ -1239,16 +1248,14 @@ export function createScriptLoadGraph({packageAssets = new Map(), captureEvents 
     errorReceiver: lifecycle.errorReceiver,
     errorLogf: lifecycle.errorLogf,
   };
-  const lifecycleServices = {
+  const lifecycleServices = accessorMembers({
     ...postServices,
     loadState,
-    get loadedObjects() { return loadedObjects; },
-    get loaders() { return [...linkers.values()]; },
     logReceiver: lifecycle.logReceiver,
     logEndLoad: lifecycle.logEndLoad,
     reallocLoaded: lifecycle.reallocLoaded,
     preload: ({object}) => preload(object),
-  };
+  }, [['loadedObjects', () => loadedObjects], ['loaders', () => [...linkers.values()]]]);
   /**
    * Play's class loader creates and preloads exports lazily and never runs
    * EndLoad, so its GObjLoaded and GImportCount hold entries the original
@@ -1338,10 +1345,8 @@ export function createScriptLoadGraph({packageAssets = new Map(), captureEvents 
     };
     const createExport = ({linker, index}) => importServices.createExport(linker, index);
     createExport.body = CREATE_EXPORT_CONTRACT.body;
-    return {
+    return accessorMembers({
       loadState,
-      get loadedObjects() { return loadedObjects; },
-      get loaders() { return [...linkers.values()]; },
       read(object, field) {
         if (object?.kind === 'ULinkerLoad') {
           if (field === 'outer') return object.root;
@@ -1391,7 +1396,7 @@ export function createScriptLoadGraph({packageAssets = new Map(), captureEvents 
       logReceiver: lifecycle.logReceiver,
       logEndLoad: lifecycle.logEndLoad,
       reallocLoaded: lifecycle.reallocLoaded,
-    };
+    }, [['loadedObjects', () => loadedObjects], ['loaders', () => [...linkers.values()]]]);
   }
 
   return {

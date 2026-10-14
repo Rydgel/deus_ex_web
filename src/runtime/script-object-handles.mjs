@@ -57,6 +57,27 @@ export function releaseHandle(identity) {
   for (const listener of releaseListeners) listener(handle);
 }
 
+/** End every live handle from `first` up to (not including) `end`, as
+ * `releaseHandle` does for one. Handles are allocated in order and never
+ * reused, so a map host's generation is the range between the limit when it
+ * started and the limit when the next host started. A host calls it for its
+ * range once the next map's host replaces it (sim-host.mjs dispose): this
+ * table is the only strong reference to the identities, so without it the
+ * previous map's runtime, object images and Rust VM memory stay alive for the
+ * rest of the session. Returns the number released. */
+export function releaseHandleRange(first, end) {
+  let released = 0;
+  for (let handle = Math.max(1, first); handle < Math.min(end, identities.length); handle++) {
+    const identity = identities[handle];
+    if (identity === null) continue;
+    handles.delete(identity);
+    identities[handle] = null;
+    for (const listener of releaseListeners) listener(handle);
+    released++;
+  }
+  return released;
+}
+
 /** One past the highest handle allocated so far. */
 export const handleLimit = () => identities.length;
 

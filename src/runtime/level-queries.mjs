@@ -31,6 +31,14 @@ function brushToWorldCached(values) {
   toWorldCache.set(values, { inputs, coords });
   return coords;
 }
+// The world stand-in the queries default to gets accessor members later (the
+// actor field installers define them per runtime). An object literal's map
+// belongs to the literal's allocation site, which lives as long as this
+// module, and V8 keeps the descriptor arrays of its transition tree, accessor
+// closures included, so the first runtimes' closures (and with them whole
+// runtimes) stayed reachable after their map was left. A dictionary-mode
+// object keeps its members, accessors included, in the object itself.
+const standalone = members => Object.assign(Object.create(null), members);
 const lineageKeys = new Map();
 const lineageKey = kind => {
   let key = lineageKeys.get(kind);
@@ -49,7 +57,7 @@ const lineageKey = kind => {
  * with `kernel: false`, and the answer to every query the kernel hands back.
  */
 export function createLevelQueries(model, actors, { pointCheck, extentCheck,
-  levelInfo = { id: '$world', name: '$world', lineage: ['engine.levelinfo', 'engine.zoneinfo', 'engine.actor'] },
+  levelInfo = standalone({ id: '$world', name: '$world', lineage: ['engine.levelinfo', 'engine.zoneinfo', 'engine.actor'] }),
   kernel = true } = {}) {
   const store = kernel ? kernelHashStore() : null;
   const hash = !store ? createCollisionHash() : HASH_DIFFERENTIAL
