@@ -8,6 +8,7 @@ import { toView, fromView } from '../unreal/geometry.mjs';
 import { createWorld } from './world.mjs';
 import { createSimHost } from './sim-host.mjs';
 import { createSimClient } from './sim-client.mjs';
+import { frameProjection as vertexProjection } from './frame-projection.mjs';
 import { createPlayCamera, pointCamera, applyPlayFrame, verticalFov, rotatorEuler, setPixelCentre, PLAY_NEAR, PLAY_FAR } from './play-camera.mjs';
 import { createSpriteScene } from './sprite-scene.mjs';
 import { createDecalScene } from './decal-scene.mjs';
@@ -197,6 +198,24 @@ let game, sim = null, simHost = null, mode = 'play', paused = false, runtimeErro
 // constant half-pixel centre; deusExViewer.frameProjection(false) is the
 // latter, for the pixel census (scripts/census-frame-projection.mjs).
 let frameProjection = true;
+// The vertex stage of the same frame: world and mesh materials project their
+// vertices with Render.dll's and D3DDrv's chain (frame-projection.mjs,
+// docs/frame-projection.md) in every pass that has a frame. ?vertexProjection=off
+// keeps the camera's matrices; deusExViewer.vertexProjection(on) switches it.
+vertexProjection.enabled = new URLSearchParams(location.search).get('vertexProjection') !== 'off';
+// The main frame's rectangle in drawing-buffer pixels (XB, YB, X, Y), set with its pass.
+let mainRect = null;
+/** The next draw projects with `projection`'s frame (a mirror or sky child's,
+ * or the main frame's), or with the camera when there is none. A render
+ * target's pass maps the frame onto the target's viewport, the main pass onto
+ * the render rectangle. */
+function useFrameProjection(projection, mirror = 1) {
+  if (!projection || !mainRect) { vertexProjection.off(); return; }
+  const target = renderer.getRenderTarget(), rect = { x: mainRect.x, y: mainRect.y, width: projection.width, height: projection.height };
+  const view = target ? { x: target.viewport.x, y: target.height - target.viewport.y - target.viewport.height,
+    width: target.viewport.width, height: target.viewport.height } : mainRect;
+  vertexProjection.use(projection, rect, view, mirror);
+}
 let hudRenderer=null;
 let npcPreview=null;
 let spriteScene=null,coronaPass=null,decalScene=null;
@@ -494,6 +513,7 @@ let viewportDecalsOn = true;
 function framePassHelpers(frames, stampFrame, spritesOf) {
   let passIndex = 0;
   const framePass = frames ? record => {
+    useFrameProjection(record?.projection, record?.mirror);
     world.fog?.framePass(record, renderer);
     if (!record) { world.visibility.all(); spriteScene?.framePass(null); return; }
     world.visibility.select(record.nodes, record.movers ?? null);
@@ -537,7 +557,7 @@ function drawRootSky(parent, sky, rootSky, stampFrame, framePass) {
   const skyActors = rootSky && npcPreview && stampFrame?.skyDecisions;
   const npcVisible = npcPreview?.root.visible; if (npcPreview && !skyActors) npcPreview.root.visible = false;
   if (skyActors) npcPreview.draw.pass(stampFrame.skyDecisions, fromView(skyCamera.position.toArray()), stampFrame.skyFrame ?? null);
-  if (rootSky) framePass(rootSky);
+  if (rootSky) framePass(rootSky); else vertexProjection.off();
   try { renderer.render(scene, skyCamera); } finally { if (rootSky) framePass(null); }
   world.markers.visible = markersVisible;
   if (npcPreview) npcPreview.root.visible = npcVisible;
@@ -547,6 +567,8 @@ function drawRootSky(parent, sky, rootSky, stampFrame, framePass) {
 function viewportWorldPass(command) {
   const plan = command.pass;
   if (!plan || !world || !(command.width > 0 && command.height > 0)) return;
+  // A camera window's frames keep the camera's projection (docs/frame-projection.md).
+  vertexProjection.off();
   const callsBefore = renderer.info.render.calls;
   aimViewportCamera(command);
   // The frame's decal block (the camera frame's own OccludeBsp polygons).
@@ -1497,6 +1519,9 @@ fog() {
 /** Validation only: the 3D view's projection from the pass frame (on, the
  * default) or from the FOV and the constant pixel centre (off). */
 frameProjection(on) { frameProjection = Boolean(on); },
+/** Validation only: the vertex stage of the frame's projection (on, the
+ * default) or the camera's matrices (off). */
+vertexProjection(on) { if (on === undefined) return vertexProjection.state(); vertexProjection.enabled = Boolean(on); return null; },
 /** Validation only: draw (or leave out) the decal block in a ViewportWindow's frames. */
 viewportDecals(on) { viewportDecalsOn = Boolean(on); },
 /** Show or hide the fog pass (validation: a frame with and without it). */
@@ -1690,6 +1715,8 @@ function drawFrame(snap, time) {
     // The simulation side points its own camera the same way
     // (play-camera.mjs applyPlayFrame).
     renderRect = frame.renderRect;
+    mainRect = renderRect?.render && renderRect.width > 0 && renderRect.height > 0 ? { x: renderRect.x, y: renderRect.y, width: renderRect.width, height: renderRect.height }
+      : { x: 0, y: 0, width: renderer.domElement.width, height: renderer.domElement.height };
     if (frame.view) {
       playerView = frame.view;
       ({ pitch, yaw } = applyPlayFrame(camera, frame.view, renderRect, frameProjection ? frame.projection ?? null : null));
@@ -1828,7 +1855,8 @@ function drawFrame(snap, time) {
     // The main frame draws only the polygons OccludeBsp kept (world-visibility.mjs).
     if (visible) world.visibility.select(visible.nodes, visible.movers ?? null);
     spriteScene?.mainPass(true);
-    try { renderer.render(scene, camera); } finally { world.visibility.all(); spriteScene?.mainPass(false); }
+    useFrameProjection(playing && !runtimeError ? frame?.projection : null);
+    try { renderer.render(scene, camera); } finally { world.visibility.all(); spriteScene?.mainPass(false); vertexProjection.off(); }
   }
   if (simVerify && !simClient && stampFrame) {
     const problem = sim.verifyStamps(drew, { built: id => Boolean(npcPreview?.draw.bindings.get(id)?.ready),

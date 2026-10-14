@@ -136,7 +136,7 @@ try {
       gl.uniform1f(u('uFpOn'), 1);
       gl.uniform3fv(u('uFpOrigin'), unit.origin);
       gl.uniform3fv(u('uFpAxisX'), unit.axes[0]); gl.uniform3fv(u('uFpAxisY'), unit.axes[1]); gl.uniform3fv(u('uFpAxisZ'), unit.axes[2]);
-      gl.uniform4fv(u('uFpProj'), unit.proj); gl.uniform4fv(u('uFpRect'), unit.rect); gl.uniform3fv(u('uFpDepth'), unit.depth);
+      gl.uniform4fv(u('uFpProj'), unit.proj); gl.uniform4fv(u('uFpRect'), unit.rect); gl.uniform4fv(u('uFpView'), [unit.rect[0], unit.rect[1], unit.rect[2], unit.rect[3]]); gl.uniform3fv(u('uFpDepth'), unit.depth);
       gl.drawArrays(gl.TRIANGLES, 0, 3);
       const status = gl.checkFramebufferStatus(gl.FRAMEBUFFER), error = gl.getError();
       if (status !== gl.FRAMEBUFFER_COMPLETE || error) throw new Error(`framebuffer ${status} error ${error}`);

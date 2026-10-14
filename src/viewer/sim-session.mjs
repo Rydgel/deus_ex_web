@@ -8,7 +8,7 @@ import { constructRenderIterator, renderIteratorNativeClass } from '../runtime/s
 import * as THREE from 'three';
 import { TextureStore } from '../unreal/textures.mjs';
 import { fromView } from '../unreal/geometry.mjs';
-import { createPlayCamera, applyPlayFrame, pointCamera, projectionOf, setFrameProjection, verticalFov, setPixelCentre } from './play-camera.mjs';
+import { createPlayCamera, applyPlayFrame, pointCamera, projectionOf, projectionOfFields, setFrameProjection, verticalFov, setPixelCentre } from './play-camera.mjs';
 import { createDrawnSet } from './drawn-set.mjs';
 import { createMeshFramePack } from './mesh-frame-pack.mjs';
 import { createDecalDraw } from '../runtime/decal-draw.mjs';
@@ -389,6 +389,9 @@ export function createSimSession(game, { assets = null, events = [], exportName 
         // SetupDynamics' moving-light test, mesh lighting's LeafLights).
         coords: Array.from(new Float32Array(Uint32Array.from(frame.fields.slice(0, 12)).buffer)),
         mirror: new Float32Array(Uint32Array.of(frame.mirror).buffer)[0], planes: Array.from(frame.fields.slice(41, 57)),
+        // Its projection (Proj.Z, RProj.Z, FX15, FY15, Coords) for the page's vertex stage
+        // (docs/frame-projection.md); the rectangle is the root's.
+        projection: projectionOfFields(frame.fields, width, height),
         sprites: frame.sprites.map(sprite => sprite.key),
         lod: { coords: Array.from(fieldFloats.subarray(0, 12)), fx: fieldFloats[12] } };
     });

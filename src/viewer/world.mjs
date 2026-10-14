@@ -6,6 +6,7 @@ import { brushMatrix } from './transforms.mjs';
 import { moverGroupMatrix } from './mover-matrix.mjs';
 import { createLighting, pointZone } from '../unreal/lighting.mjs';
 import { LightAtlas, applyLightAtlas } from './light-atlas.mjs';
+import { frameProjection, FRAME_PROJECTION_KEY } from './frame-projection.mjs';
 import { readPolys, moverModelFromPolys } from '../unreal/polys.mjs';
 import { createMovingLights } from './moving-lights.mjs';
 import { createMirrors } from './mirrors.mjs';
@@ -279,7 +280,11 @@ export async function createWorld(map, asset, assets, onProgress = () => {}, {ba
       const geometry = new THREE.BufferGeometry();
       geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
       geometry.computeBoundingSphere();
-      const mesh = new THREE.Mesh(geometry, new THREE.MeshBasicMaterial({ colorWrite: false, side: Number(side) }));
+      const backdropMaterial = new THREE.MeshBasicMaterial({ colorWrite: false, side: Number(side) });
+      // Depth only, at the depth the world's polygons have (docs/frame-projection.md).
+      backdropMaterial.customProgramCacheKey = () => `deus-ex-backdrop:${FRAME_PROJECTION_KEY}`;
+      backdropMaterial.onBeforeCompile = shader => frameProjection.patch(shader);
+      const mesh = new THREE.Mesh(geometry, backdropMaterial);
       mesh.matrixAutoUpdate = false;
       mesh.userData = { actor: actorName, backdrop: true, model: model.entry.name };
       mesh.renderOrder = -1; // before anything it hides

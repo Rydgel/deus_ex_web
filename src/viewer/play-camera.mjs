@@ -75,6 +75,14 @@ export function projectionOf(words) {
     rprojZ: wordFloat(words[60]), coords: Array.from({ length: 12 }, (_, i) => wordFloat(words[i])) };
 }
 
+/** The same from the ComputeRenderSize layout the Rust core keeps for every
+ * frame (`fields`: Coords 0..11, FX15 14, FY15 15, Proj.Z 21, RProj.Z 24) and
+ * the frame's rectangle size. */
+export function projectionOfFields(fields, width, height) {
+  return { width, height, fx15: wordFloat(fields[14]), fy15: wordFloat(fields[15]), projZ: wordFloat(fields[21]),
+    rprojZ: wordFloat(fields[24]), coords: Array.from({ length: 12 }, (_, i) => wordFloat(fields[i])) };
+}
+
 const basis = new THREE.Matrix4();
 /** Poses the camera from a frame's Coords (12 binary32: origin, then the X, Y
  * and Z axes in world space): the original's camera orientation comes from

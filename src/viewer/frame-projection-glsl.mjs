@@ -15,7 +15,10 @@
  *   uFpOn      1 when the pass has a frame, else the host camera projects
  *   uFpOrigin, uFpAxisX/Y/Z   Frame->Coords
  *   uFpProj    (Proj.Z, RProj.Z, FX15, FY15)
- *   uFpRect    (X, Y, XB, YB)
+ *   uFpRect    (X, Y, XB, YB), the frame's rectangle in drawing-buffer pixels
+ *   uFpView    (width, height, x, y) of the viewport the pass renders into
+ *              (top-down pixels; the frame's rectangle for the main pass, a
+ *              mirror target's whole size)
  *   uFpDepth   (_33, _43, horizontal flip)
  */
 import { FLOAT_FLOAT } from './gpu-mesh-glsl.mjs';
@@ -23,7 +26,7 @@ import { FLOAT_FLOAT } from './gpu-mesh-glsl.mjs';
 export const FRAME_PROJECTION_UNIFORMS = `
 uniform float uFpOn;
 uniform vec3 uFpOrigin,uFpAxisX,uFpAxisY,uFpAxisZ;
-uniform vec4 uFpProj,uFpRect;
+uniform vec4 uFpProj,uFpRect,uFpView;
 uniform vec3 uFpDepth;
 `;
 
@@ -47,12 +50,12 @@ vec4 fpClip(vec3 v){
   float flip=uFpDepth.z;
   if(v.z>=1.0){
     vec4 d=fpVertex(v);
-    float nx=(d.x+0.5-uFpRect.z)*(2.0/uFpRect.x)-1.0;
-    float ny=1.0-(d.y+0.5-uFpRect.w)*(2.0/uFpRect.y);
+    float nx=(d.x+0.5-uFpView.z)*(2.0/uFpView.x)-1.0;
+    float ny=1.0-(d.y+0.5-uFpView.w)*(2.0/uFpView.y);
     float nz=2.0*d.z-1.0;
     return vec4(flip*nx*v.z,ny*v.z,nz*v.z,v.z);}
-  float a=2.0*uFpProj.x/uFpRect.x,b=2.0*uFpProj.z/uFpRect.x-1.0;
-  float c=2.0*uFpProj.x/uFpRect.y,e=1.0-2.0*uFpProj.w/uFpRect.y;
+  float a=2.0*uFpProj.x/uFpView.x,b=2.0*(uFpProj.z+uFpRect.z-uFpView.z)/uFpView.x-1.0;
+  float c=2.0*uFpProj.x/uFpView.y,e=1.0-2.0*(uFpProj.w+uFpRect.w-uFpView.w)/uFpView.y;
   float zb=uFpDepth.x;
   return vec4(flip*(a*v.x+b*v.z),e*v.z-c*v.y,(2.0*zb-1.0)*v.z-2.0*zb*uFpProj.y*uFpProj.x,v.z);}
 `;
