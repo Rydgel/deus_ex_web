@@ -419,7 +419,7 @@ coronas, fog, LOD and lighting since 2026-10-11, [viewport window](script-window
 are matched against captures of the original's own screens (2026-10-14, [visual
 acceptance](visual-acceptance.md#security-cameras-2026-10-14)): five computers, thirteen
 windows, 91 to 93% of an OceanLab window's pixels identical. The comparison found the
-original's texture sampling state (mip level picked, LOD bias -0.5,
+original's texture sampling state (mip level picked, LOD bias -0.5, texels filtered in display space,
 [texture sampling](texture-sampling.md), now in Play) and that Play's canvas is
 multisampled where the original's device is not (`?antialias=0`, the default is
 unchanged); the three maps' cameras look into rooms, so a camera view with a mirror, sky

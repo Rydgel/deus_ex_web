@@ -1156,27 +1156,33 @@ the converse (precision), per window; `ratio` is Play's mean over the original's
 | 14_OceanLab_Lab ComputerSecurity1 (SecurityCamera0, 4, 3: URV Bay, Crew Module, Greasel Lab; 135.612 / 135.617) | master | 0.26 / 1.58 / 0.62 | .966 / 1 / .997 | .962 / 1 / .999 |
 | | no multisampling | 0.11 / 0.86 / 0.46 | .968 / 1 / .998 | .968 / 1 / .999 |
 | | sampling state | 0.19 / 1.13 / 0.32 | .987 / 1 / .999 | .999 / 1 / .995 |
-| | both | **0.04 / 0.31 / 0.15** | .987 / 1 / 1 | .995 / 1 / 1 |
+| | sampling state and no multisampling | 0.04 / 0.31 / 0.15 | .987 / 1 / 1 | .995 / 1 / 1 |
+| | + display-space filtering | **0.00 / 0.15 / 0.02** | .989 / 1 / .999 | .994 / 1 / .998 |
 | 02_NYC_BatteryPark ComputerSecurity2 (SecurityCamera1, 2, 0: Storage Warehouse, Tunnel Bridge, Boathouse Approach; 229.006 / 229.011) | master | 0.62 / 0.21 / 0.85 | .981 / .990 / .955 | .981 / .992 / .988 |
 | | no multisampling | 0.52 / 0.16 / 0.65 | .978 / .986 / .954 | .981 / .991 / .984 |
 | | sampling state | 0.26 / 0.14 / 0.41 | .998 / .997 / .999 | .991 / .988 / .999 |
-| | both | **0.15 / 0.08 / 0.19** | .999 / .999 / 1 | .995 / .992 / 1 |
+| | sampling state and no multisampling | 0.15 / 0.08 / 0.19 | .999 / .999 / 1 | .995 / .992 / 1 |
+| | + display-space filtering | **0.00 / 0.09 / 0.01** | 1 / .997 / 1 | 1 / .997 / 1 |
 | 01_NYC_UNATCOIsland ComputerSecurity1 (SecurityCamera5, JC in view; 252.714 / 252.717), the terrorists' region masked (x 2 to 69, y 50 to 93 of the window) | master | 0.35 | .946 | .959 |
 | | no multisampling | 0.45 | .939 | .936 |
 | | sampling state | 0.12 | .992 | .985 |
-| | both | **0.07** | .992 | .994 |
+| | sampling state and no multisampling | 0.07 | .992 | .994 |
+| | + display-space filtering | **0.01** | .998 | 1 |
 | 06_HongKong_WanChai_Market ComputerSecurity0 (SecurityCamera2, 0, 1: Market lane 1, 2, 3; 175.209 / 175.223) | master | 1.54 / 1.86 / 0.63 | .989 / .990 / .984 | .997 / 1 / .991 |
 | | no multisampling | 1.07 / 1.54 / 0.37 | .993 / .990 / .984 | .988 / .999 / .987 |
 | | sampling state | 0.95 / 1.09 / 0.42 | .995 / .996 / .991 | .998 / 1 / .997 |
-| | both | **0.37 / 0.66 / 0.14** | .997 / .997 / .999 | .997 / .999 / .997 |
+| | sampling state and no multisampling | 0.37 / 0.66 / 0.14 | .997 / .997 / .999 | .997 / .999 / .997 |
+| | + display-space filtering | **0.04 / 0.20 / 0.01** | 1 / .997 / 1 | 1 / 1 / .999 |
 | 09_NYC_Ship ComputerSecurity3 (SecurityCamera1, 19, 18: Entry Area, Locker Room, Break Room; 231.290 / 231.304) | master | 0.70 / 4.71 / 0.37 | .956 / .692 / .955 | .993 / .517 / .914 |
 | | no multisampling | 0.53 / 5.11 / 0.23 | .951 / .615 / .966 | .995 / .514 / .976 |
 | | sampling state | 0.36 / 4.51 / 0.15 | .999 / .732 / .999 | .995 / .537 / .971 |
-| | both | **0.17** / 4.39 / **0.03** | .997 / .711 / .999 | .996 / .525 / 1 |
+| | sampling state and no multisampling | 0.17 / 4.39 / 0.03 | .997 / .711 / .999 | .996 / .525 / 1 |
+| | + display-space filtering | **0.05** / 4.35 / 0.11 | .999 / .710 / .984 | 1 / .527 / .950 |
 
-With both changes 91 to 93% of the OceanLab windows' pixels are identical to the original's (Battery Park: 75 to 83%) and 98 to
-99.9% of the pixels of both maps differ by at most 2 of 255. Of each OceanLab window's 30,000 pixels 3, 287 and 116 differ by more
-than 10; Battery Park's largest differences are 12, 7 and 23. The windows' mean values agree to 0.2 to 1.3%. The Island window with
+With the sampling state and no multisampling 91 to 93% of the OceanLab windows' pixels are identical to the original's (Battery Park: 75 to
+83%) and 98 to 99.9% of the pixels of both maps differ by at most 2 of 255; with the display-space filtering as well 98.9 to 99.8% of
+OceanLab's are identical and 89.5 to 99.3% of Battery Park's (the rest of window 2 is two walking actors). Of each OceanLab window's 30,000
+pixels 3, 287 and 116 differ by more than 10 without it (9, 171 and 15 with it); Battery Park's largest differences are 12, 7 and 23 (48, 42 and 17). The windows' mean values agree to 0.2 to 1.3%. The Island window with
 three NSF terrorists in it (Terrorist2, 18 and 30: they walk and animate differently in the two programs, [live scenes](#live-scenes-2026-10-13)) is 0.64 to 0.74 MAD and
 edge recall .77 to .81 unmasked; JC himself (mesh, lighting from the camera's frame, his shadow decal) agrees in the 24 x 32 pixels
 around him (MAD 0.14, recall .949, precision 1.0). The level times agree to 5 ms.
@@ -1199,8 +1205,8 @@ The 20 stored main views (4 maps x 5) were retaken in the original at Brightness
 | Play | mean luminance, Play / original | per view | mean absolute difference |
 | --- | ---: | --- | ---: |
 | master (`?sampling=legacy`) | 0.9974 | 0.80 to 1.05 | 0.347 |
-| mip state (`?sampling=srgb`, this branch) | 1.0119 | 0.80 to 1.08 | 0.285 |
-| mip state and display-space filtering (branch `security-cameras-colour`) | 1.0026 | 1.000 to 1.032, 17 of 20 at 1.000 | 0.065 |
+| mip state (`?sampling=srgb`) | 1.0119 | 0.80 to 1.08 | 0.285 |
+| mip state and display-space filtering (the default) | 1.0026 | 1.000 to 1.032, 17 of 20 at 1.000 | 0.065 |
 
 Master's overall brightness is right on average because its per-view errors cancel (OceanLab's y0 is 20% dark, y3 5% bright; the
 per-view brightness error averages 3.0% and falls to 0.4% with the colour-space change; Paris Club's five views are pixel-identical
@@ -1222,12 +1228,13 @@ Play's linear-light filtering then lifts further; that is what the display-space
    patterns in Play (61, 166, 112 / 114, 218, 112 / 63, 114, 61); with multisampling off they are 218, 218, 215 / 219, 218, 215
    / 222, 220, 215. `?antialias=0` turns it off (the comparison uses it; the default is unchanged). The main frames' metrics
    move little (above) because their edges are a smaller share of the pixels.
-3. **Filtering space (not in this branch).** Play uploads base textures as sRGB, so the GPU filters them in linear light and the shaders
+3. **Filtering space.** Play uploads base textures as sRGB, so the GPU filters them in linear light and the shaders
    re-encode; Direct3D 7 blends the 8-bit display-space values (a mix of black and white is 127, where Play gave 188). With the mip state
    it removes most of the residual below (Hong Kong 0.37 / 0.66 / 0.14 to 0.04 / 0.20 / 0.01; OceanLab to 0.00 / 0.15 / 0.02, 99% of its
    pixels identical; Battery Park 0.00 / 0.09 / 0.01; Island 0.01 with the moving actors masked; Ship window 3 gets worse, 0.03 to 0.11) and
-   brings the main views' mean luminance to the original's (table above). Its commit `cc4dbd4` is on branch `security-cameras-colour`,
-   not applied here because it moves Play's mean luminance (by 2.9% on the 20 views, toward the original's).
+   brings the main views' mean luminance to the original's (table above). It is Play's default now (`?sampling=srgb` keeps the sRGB
+   upload and re-encode for A/B, `?sampling=legacy` is the earlier sampling entirely); it moved Play's mean luminance by 2.9% on the 20 views,
+   toward the original's, and the user approved it.
 4. **Not causes.** The window frames' projection (Coords-posed camera, the device's depth range) already matches: drawing them
    through the exact vertex chain of [frame projection](frame-projection.md) (`fpClip` with the window's frame) changed 0 to 2 pixels
    of 30,000 per window and the same MAD, with multisampling on and off. A sub-pixel shift of Play's frame: the best shift over
@@ -1237,7 +1244,7 @@ Play's linear-light filtering then lifts further; that is what the display-space
 
 - Blended texels' colour (Hong Kong's signs, OceanLab window 2's light strips, window 3's ceiling panel): a strip's leading edge pixel is
   62 / 133 in the original and 32 / 168 in Play, mid-tone pixels up to 5% brighter. The vertex positions and the mip level are not the
-  cause (the chain and the bias scan); the filtering space is (cause 3, on branch `security-cameras-colour`: the same pixels equal there
+  cause (the chain and the bias scan); the filtering space is (cause 3: with it the same pixels are equal
   except one per strip edge, a polygon-edge tie).
 - Moving actors: the Island view's terrorists (positions, animation) differ as in every live scene; static props, JC, the
   turret and the decals agree.

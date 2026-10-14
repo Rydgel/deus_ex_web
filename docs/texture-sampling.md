@@ -100,7 +100,7 @@ same level time and poses): Hong Kong 0.37 / 0.66 / 0.14 with the mip state alon
 with the colour space as well; OceanLab 0.04 / 0.31 / 0.15 to 0.00 / 0.15 / 0.02 (99% of its pixels
 identical); Battery Park 0.15 / 0.08 / 0.19 to 0.00 / 0.09 / 0.01; the windows' mean values
 go from 1.01 to 1.000 of the original's. The overall brightness of the main views does not move:
-[mean luminance A/B](#overall-brightness-ab).
+[main views at Brightness 2/3](visual-acceptance.md#main-views-at-brightness-23).
 
 The validator checks the filtering space as well: a 2 x 1 texture of 0 and 255, magnified, shows 124
 next to the boundary through the plain material and the world's shader (183 if re-encoded).

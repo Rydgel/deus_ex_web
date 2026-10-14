@@ -375,7 +375,8 @@ once per window.
   difference is 0.04 to 0.31 (0.08 to 0.19 in Battery Park, 0.14 to 0.66 in Hong
   Kong's market, 0.03 to 0.17 in Ship's rooms but a door, 0.07 around the moving
   actors of Island's). The window frame needs no more than the Coords-posed camera
-  it has: the exact vertex chain changes 0 to 2 pixels of 30,000.
+  it has: the exact vertex chain changes 0 to 2 pixels of 30,000. With the
+  display-space texture filtering ([texture sampling](texture-sampling.md#filtering-space-display-space)) 98.9 to 99.8% of the OceanLab windows' pixels are identical.
   Still checked against the original's code and oracles only, not against a captured
   frame: a camera whose view has a mirror, a sky frame, fog or coronas (the seven
   windows look into rooms), the decal block beyond JC's shadow.
