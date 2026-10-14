@@ -362,16 +362,18 @@ once per window.
   follows the fog (docs/volumetric-fog.md), once per frame per window.
 - The clock of the camera frame's corona pass advances by the host's elapsed
   time; the original's appSeconds is the CPU clock too.
-- **Matched captures (2026-10-14).** The security screens of three computers
-  (seven 200 x 150 windows: 14_OceanLab_Lab ComputerSecurity1, 02_NYC_BatteryPark
-  ComputerSecurity2, 01_NYC_UNATCOIsland ComputerSecurity1) are compared with the
+- **Matched captures (2026-10-14).** The security screens of five computers
+  (thirteen 200 x 150 windows: 14_OceanLab_Lab ComputerSecurity1, 02_NYC_BatteryPark
+  ComputerSecurity2, 06_HongKong_WanChai_Market ComputerSecurity0, 09_NYC_Ship
+  ComputerSecurity3, 01_NYC_UNATCOIsland ComputerSecurity1) are compared with the
   original's own frames at the same level time, camera poses and player pose
   ([visual acceptance](visual-acceptance.md#security-cameras-2026-10-14)): reached through
   the real path (a ghost flight, the frob, the typed login, the tracer holding the
   level) without moving the player by `set Location`. With the texture sampling
   state ([texture sampling](texture-sampling.md)) and the canvas's multisampling
   off, 91 to 93% of the OceanLab windows' pixels are identical and the mean absolute
-  difference is 0.04 to 0.31 (0.08 to 0.19 in Battery Park, 0.07 around the moving
+  difference is 0.04 to 0.31 (0.08 to 0.19 in Battery Park, 0.14 to 0.66 in Hong
+  Kong's market, 0.03 to 0.17 in Ship's rooms but a door, 0.07 around the moving
   actors of Island's). The window frame needs no more than the Coords-posed camera
   it has: the exact vertex chain changes 0 to 2 pixels of 30,000.
   Still checked against the original's code and oracles only, not against a captured

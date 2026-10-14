@@ -417,7 +417,7 @@ posed from the frame's Coords.
 The security cameras' views (root frames with their own mirror and sky frames, decals,
 coronas, fog, LOD and lighting since 2026-10-11, [viewport window](script-window-viewport.md))
 are matched against captures of the original's own screens (2026-10-14, [visual
-acceptance](visual-acceptance.md#security-cameras-2026-10-14)): three computers, seven
+acceptance](visual-acceptance.md#security-cameras-2026-10-14)): five computers, thirteen
 windows, 91 to 93% of an OceanLab window's pixels identical. The comparison found the
 original's texture sampling state (mip level picked, LOD bias -0.5,
 [texture sampling](texture-sampling.md), now in Play) and that Play's canvas is

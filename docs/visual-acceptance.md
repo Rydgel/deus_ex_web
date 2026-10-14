@@ -1103,7 +1103,7 @@ its PID; Play runs headless Chromium in worker mode.
 
 The security computers' camera views ([ViewportWindow](script-window-viewport.md)) matched against the original's
 own frames: the same map, camera actors, camera rotations, level time and player pose, in the same 1280 x 720 screen.
-Three computers on three maps, seven camera windows of 200 x 150 pixels.
+Five computers on five maps, thirteen camera windows of 200 x 150 pixels.
 
 ### Method
 
@@ -1138,7 +1138,7 @@ measures each window.
 6. **Brightness.** The ini's default, 0.6, is not the framebuffer: Shot bakes a ramp of its own into the bitmap. Against the
    compositor's capture of the window (`grim`, with the window made opaque), a Shot at Brightness b is the framebuffer to the
    power 1/k with k = 0.77, 0.88, 1.02, 1.18 at b = 0.5, 0.6, 0.7, 0.8 (about 1.5 b), and at b = 2/3 it is the framebuffer
-   (0.08% of the pixels differ, the moving ones). So a Shot at 0.6 is the framebuffer to the 1.11, darker than Play's raw
+   (0.08% of the pixels differ, the moving ones; in a bright outdoor view every Shot value from 0 to 255 maps to itself). So a Shot at 0.6 is the framebuffer to the 1.11, darker than Play's raw
    colours by the "uniform gap" listed under Open, and a Shot at 0.8 brighter. The capture sets
    `set WinDrv.WindowsClient Brightness 0.666667` in the original (Play's ramp is untouched, and the page is captured at its
    identity ramp as before): the windows' mean values then agree to 1% (the ratio column below), where the earlier frames at
@@ -1165,6 +1165,14 @@ the converse (precision), per window; `ratio` is Play's mean over the original's
 | | no multisampling | 0.45 | .939 | .936 |
 | | sampling state | 0.12 | .992 | .985 |
 | | both | **0.07** | .992 | .994 |
+| 06_HongKong_WanChai_Market ComputerSecurity0 (SecurityCamera2, 0, 1: Market lane 1, 2, 3; 175.209 / 175.223) | master | 1.54 / 1.86 / 0.63 | .989 / .990 / .984 | .997 / 1 / .991 |
+| | no multisampling | 1.07 / 1.54 / 0.37 | .993 / .990 / .984 | .988 / .999 / .987 |
+| | sampling state | 0.95 / 1.09 / 0.42 | .995 / .996 / .991 | .998 / 1 / .997 |
+| | both | **0.37 / 0.66 / 0.14** | .997 / .997 / .999 | .997 / .999 / .997 |
+| 09_NYC_Ship ComputerSecurity3 (SecurityCamera1, 19, 18: Entry Area, Locker Room, Break Room; 231.290 / 231.304) | master | 0.70 / 4.71 / 0.37 | .956 / .692 / .955 | .993 / .517 / .914 |
+| | no multisampling | 0.53 / 5.11 / 0.23 | .951 / .615 / .966 | .995 / .514 / .976 |
+| | sampling state | 0.36 / 4.51 / 0.15 | .999 / .732 / .999 | .995 / .537 / .971 |
+| | both | **0.17** / 4.39 / **0.03** | .997 / .711 / .999 | .996 / .525 / 1 |
 
 With both changes 91 to 93% of the OceanLab windows' pixels are identical to the original's (Battery Park: 75 to 83%) and 98 to
 99.9% of the pixels of both maps differ by at most 2 of 255. Of each OceanLab window's 30,000 pixels 3, 287 and 116 differ by more
@@ -1177,6 +1185,27 @@ The same variants on the stored main-frame views (`visual-acceptance.mjs play`, 
 ini's default brightness, so MAD carries the Shot ramp above): master MAD 2.098, edge recall .9726, precision .9197; sampling
 state 1.913, .9803, .9206; sampling state and no multisampling 1.922, .9837, .9186 (OceanLab_Lab 3.07 to 2.33, Island's recall
 .978 to .992, Battery Park's .974 to .987; the Club's precision .75 is as before).
+
+Ship's window 2 (the locker room) differs by a door: a `DeusExMover` stands half open in the original and not in Play (a mover's state
+in a live level, like the actors' positions; it is the 4.4 in the table, and the other two windows are the renderer). Hong Kong's
+three windows hold the market's signs and neon, Ship's window 1 the entry's potted plants (actor meshes with masked skins).
+
+### Main views at Brightness 2/3
+
+The 20 stored main views (4 maps x 5) were retaken in the original at Brightness 2/3 (`scripts/original-views-b.sh ...
+--brightness 0.666667`, Shot == framebuffer) and compared with Play at the same held times, canvas multisampling off
+(`play --query antialias=0`, with the sampling variants below), per view and over the 20:
+
+| Play | mean luminance, Play / original | per view | mean absolute difference |
+| --- | ---: | --- | ---: |
+| master (`?sampling=legacy`) | 0.9974 | 0.80 to 1.05 | 0.347 |
+| mip state (`?sampling=srgb`, this branch) | 1.0119 | 0.80 to 1.08 | 0.285 |
+| mip state and display-space filtering (branch `security-cameras-colour`) | 1.0026 | 1.000 to 1.032, 17 of 20 at 1.000 | 0.065 |
+
+Master's overall brightness is right on average because its per-view errors cancel (OceanLab's y0 is 20% dark, y3 5% bright; the
+per-view brightness error averages 3.0% and falls to 0.4% with the colour-space change; Paris Club's five views are pixel-identical
+with it). The mip state alone brightens by about 1%: the finer level the device picks carries more of the textures' contrast, which
+Play's linear-light filtering then lifts further; that is what the display-space change (below) removes.
 
 ### Causes
 
@@ -1193,17 +1222,23 @@ state 1.913, .9803, .9206; sampling state and no multisampling 1.922, .9837, .91
    patterns in Play (61, 166, 112 / 114, 218, 112 / 63, 114, 61); with multisampling off they are 218, 218, 215 / 219, 218, 215
    / 222, 220, 215. `?antialias=0` turns it off (the comparison uses it; the default is unchanged). The main frames' metrics
    move little (above) because their edges are a smaller share of the pixels.
-3. **Not causes.** The window frames' projection (Coords-posed camera, the device's depth range) already matches: drawing them
+3. **Filtering space (not in this branch).** Play uploads base textures as sRGB, so the GPU filters them in linear light and the shaders
+   re-encode; Direct3D 7 blends the 8-bit display-space values (a mix of black and white is 127, where Play gave 188). With the mip state
+   it removes most of the residual below (Hong Kong 0.37 / 0.66 / 0.14 to 0.04 / 0.20 / 0.01; OceanLab to 0.00 / 0.15 / 0.02, 99% of its
+   pixels identical; Battery Park 0.00 / 0.09 / 0.01; Island 0.01 with the moving actors masked; Ship window 3 gets worse, 0.03 to 0.11) and
+   brings the main views' mean luminance to the original's (table above). Its commit `cc4dbd4` is on branch `security-cameras-colour`,
+   not applied here because it moves Play's mean luminance (by 2.9% on the 20 views, toward the original's).
+4. **Not causes.** The window frames' projection (Coords-posed camera, the device's depth range) already matches: drawing them
    through the exact vertex chain of [frame projection](frame-projection.md) (`fpClip` with the window's frame) changed 0 to 2 pixels
    of 30,000 per window and the same MAD, with multisampling on and off. A sub-pixel shift of Play's frame: the best shift over
    ±1.5 pixels is (0, 0) in every window but one (0.125 pixel, 2.6% of its error).
 
 ### What stays
 
-- Isolated edge pixels on the brightest thin features (OceanLab window 2's light strips and window 3's ceiling panel):
-  one pixel per row at the strip's leading edge, 30 to 45 of 255 (a 0.1 to 0.15 texel difference of where the strip's own
-  texture edge is sampled). The vertex positions and the mip level are not the cause (the chain and the bias scan); a light map
-  clamp at the polygon's edge is a guess, untested.
+- Blended texels' colour (Hong Kong's signs, OceanLab window 2's light strips, window 3's ceiling panel): a strip's leading edge pixel is
+  62 / 133 in the original and 32 / 168 in Play, mid-tone pixels up to 5% brighter. The vertex positions and the mip level are not the
+  cause (the chain and the bias scan); the filtering space is (cause 3, on branch `security-cameras-colour`: the same pixels equal there
+  except one per strip edge, a polygon-edge tie).
 - Moving actors: the Island view's terrorists (positions, animation) differ as in every live scene; static props, JC, the
   turret and the decals agree.
 - Cameras with mirrors, a sky frame, fog or coronas in their view were not among the seven windows (the three maps' cameras
