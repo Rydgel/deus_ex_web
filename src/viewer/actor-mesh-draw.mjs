@@ -51,8 +51,11 @@ export function createMeshDraw(assets,creation,{gpu=null,texturePool,batches=nul
   let mode=creation.path,gpuHandle=null,bases=null,source=null,ready=false,disposed=false,points=null,normals=null,faceIndices=null;
   let lastStyle,lastGlow,materialStateApplied=false;
   const gpuUniform={value:mode==='gpu'?1:0};
+  // CPU path: 1 while the geometry's `deusCameraPoint` attribute holds the camera-space points of the state
+  // shown (applyCamera).
+  const cameraOn={value:0};let cameraFor=null;
   // The latest record's state, applied when the meshes exist.
-  const latest={visible:Boolean(creation.visible),childOnly:false,material:null,posed:creation.posed,colors:null,groups:null,
+  const latest={visible:Boolean(creation.visible),childOnly:false,material:null,posed:creation.posed,colors:null,cameraPoints:null,groups:null,
     spheres:creation.spheres,lod:null};
   const pendingPlans=[];let pendingLod=null;
   // The main frame's lighting this frame (its packed words or plain record), kept
@@ -130,10 +133,12 @@ export function createMeshDraw(assets,creation,{gpu=null,texturePool,batches=nul
       const positions=group.geometry.getAttribute('position');
       const indices=resolved?lodCornerIndices(group.faces,group.indices,resolved,group):group.indices;
       if(!resolved)group.lodEmpty=false;
+      group.cornerIndices=indices;
       copyPositions(state.posed,positions.array,indices);positions.needsUpdate=true;
       setMeshBounds(group.geometry,positions.array);
       if(mode==='cpu'){group.mesh.visible=!group.lodEmpty;if(group.twin)group.twin.visible=!group.lodEmpty&&group.split;}
     }
+    cameraOn.value=cameraFor===shown?1:0;
     if(creation.environment)updateNormals(state);
   };
   // The corners' U and V bytes: the LOD's packed wedge dwords, or the faces'.
@@ -158,6 +163,33 @@ export function createMeshDraw(assets,creation,{gpu=null,texturePool,batches=nul
     const words=new Uint32Array(colors.buffer,colors.byteOffset,colors.length);
     for(const group of groups)if(copyMeshLightColors(group.lightWords,words,group.faces))
       group.geometry.getAttribute('deusLight').needsUpdate=true;
+  };
+  /** CPU path: the camera-space points the original projects (docs/frame-projection.md "Meshes"). `cameraPoints`
+   * is GetFrame's buffer for the frame whose colours were just applied, after that frame's LOD morph
+   * (actor-mesh-sim.mjs relight): its corners go to the groups' `deusCameraPoint` attribute, in the order of
+   * the state shown. Null (the frame did not light the actor): the world pose projects instead. */
+  const applyCamera=cameraPoints=>{
+    if(mode!=='cpu')return;
+    cameraFor=null;
+    if(cameraPoints){
+      for(const group of groups){
+        const indices=group.cornerIndices;
+        if(!indices)continue;
+        let attribute=group.geometry.getAttribute('deusCameraPoint');
+        if(!attribute){
+          attribute=new THREE.BufferAttribute(new Float32Array(indices.length*3),3).setUsage(THREE.DynamicDrawUsage);
+          group.geometry.setAttribute('deusCameraPoint',attribute);
+        }
+        const target=attribute.array;
+        for(let corner=0;corner<indices.length;corner++){
+          const from=indices[corner]*3,at=corner*3;
+          target[at]=cameraPoints[from];target[at+1]=cameraPoints[from+1];target[at+2]=cameraPoints[from+2];
+        }
+        attribute.needsUpdate=true;
+      }
+      cameraFor=shown;
+    }
+    cameraOn.value=cameraFor===shown?1:0;
   };
   const applyMaterial=({glow,style})=>{
     if(materialStateApplied&&Object.is(glow,lastGlow)&&Object.is(style,lastStyle))return;
@@ -235,27 +267,28 @@ export function createMeshDraw(assets,creation,{gpu=null,texturePool,batches=nul
       const environmentGroup=Boolean(record.flags&POLY.Environment),gpuSlot=creation.path==='gpu';
       const makeMaterial=side=>{
         const material=new THREE.MeshBasicMaterial({map:texture,side,alphaTest:flags&POLY.Masked?.5:0});
-        material.customProgramCacheKey=gpuSlot?()=>`deus-ex-mesh-gpu-v2:${environmentGroup?1:0}:${FRAME_PROJECTION_KEY}`
-          :()=>`deus-ex-mesh-display-color-v3:${FRAME_PROJECTION_KEY}`;
+        material.customProgramCacheKey=gpuSlot?()=>`deus-ex-mesh-gpu-v3:${environmentGroup?1:0}:${FRAME_PROJECTION_KEY}`
+          :()=>`deus-ex-mesh-display-color-v4:${FRAME_PROJECTION_KEY}`;
         material.onBeforeCompile=shader=>{
           shader.uniforms.deusDisplayGamma=displayGamma;shader.uniforms.deusModulated=modulatedUniform;
+          shader.uniforms.deusCameraOn=cameraOn;
           if(gpuSlot){
             Object.assign(shader.uniforms,gpu.shared,{deusGpu:gpuUniform});
             shader.vertexShader=shader.vertexShader.replace('#include <common>',
-              `#include <common>\nattribute vec3 deusLight;\nvarying vec3 vDeusLight;\n${DRAW_VERTEX_DECLARATIONS}`)
-              .replace('#include <begin_vertex>',gpuBeginVertex(environmentGroup));
+              `#include <common>\nattribute vec3 deusLight;\nvarying vec3 vDeusLight;\n${CPU_CAMERA_DECLARATIONS}${DRAW_VERTEX_DECLARATIONS}`)
+              .replace('#include <begin_vertex>',gpuBeginVertex(environmentGroup,true));
           } else shader.vertexShader=shader.vertexShader.replace('#include <common>',
-            '#include <common>\nattribute vec3 deusLight;\nvarying vec3 vDeusLight;')
-            .replace('#include <begin_vertex>','#include <begin_vertex>\nvDeusLight = deusLight;');
+            `#include <common>\nattribute vec3 deusLight;\nvarying vec3 vDeusLight;\n${CPU_CAMERA_DECLARATIONS}`)
+            .replace('#include <begin_vertex>',`#include <begin_vertex>\nvDeusLight = deusLight;\n${CPU_CAMERA_BEGIN}`);
           shader.fragmentShader=shader.fragmentShader.replace('#include <common>',
             '#include <common>\nuniform float deusDisplayGamma;\nuniform float deusModulated;\nvarying vec3 vDeusLight;')
             .replace('#include <colorspace_fragment>',
               'gl_FragColor = sRGBTransferOETF(gl_FragColor);\ngl_FragColor.rgb *= vDeusLight;\n'+
               `if (deusModulated > 0.5) { ${displayRampGlsl('deusDisplayGamma',true)} }\n`+
               `else { ${displayRampGlsl('deusDisplayGamma',false)} }`);
-          // The original's vertex projection (docs/frame-projection.md); the GPU path projects the
-          // lighting frame's camera-space buffer.
-          frameProjection.patch(shader,{floatFloat:!gpuSlot,camera:gpuSlot});
+          // The original's vertex projection (docs/frame-projection.md): both paths project the lighting
+          // frame's camera-space buffer (a GPU slot's texture, or the CPU path's attribute once it left the slot).
+          frameProjection.patch(shader,{floatFloat:!gpuSlot,camera:true});
         };
         materials.push(material);
         if(flags&(POLY.Translucent|POLY.Modulated)) {
@@ -331,6 +364,7 @@ export function createMeshDraw(assets,creation,{gpu=null,texturePool,batches=nul
     if(mode==='cpu'&&latest.posed)cpuPositions();
     if(mode==='gpu'&&latest.groups)groups.forEach((group,i)=>showGroup(group,Boolean(latest.groups[i])));
     if(latest.colors)applyColors(latest.colors);
+    applyCamera(latest.cameraPoints);
     if(latest.childOnly){root.visible=false;hideBatched();}
   }
   const built=(sourceEntry.ready?Promise.resolve():sourceEntry.pending.then(asset=>{source=sourceEntry.ready;core();}))
@@ -374,6 +408,7 @@ export function createMeshDraw(assets,creation,{gpu=null,texturePool,batches=nul
       if(record.groups)latest.groups=record.groups;
       if(record.spheres)latest.spheres=record.spheres;
       if(record.colors)latest.colors=record.colors;
+      latest.cameraPoints=record.cameraPoints??null;
       const lodChanged=record.lod!==undefined;
       if(lodChanged)latest.lod=record.lod.resolved?record.lod:null;
       if(plan&&mode==='gpu'&&!record.toCpu){if(gpuHandle)gpu.setPose(gpuHandle,plan);else if(!source)pendingPlans.push(plan);}
@@ -402,6 +437,7 @@ export function createMeshDraw(assets,creation,{gpu=null,texturePool,batches=nul
       if(mode==='gpu'&&latest.groups)groups.forEach((group,i)=>showGroup(group,Boolean(latest.groups[i])));
       const environmentUpload=updateView(cameraPosition);
       if(record.colors)applyColors(record.colors);
+      applyCamera(latest.cameraPoints);
       // Hidden from the main pass until a child pass shows it.
       if(record.childOnly){root.visible=false;hideBatched();}
       return Boolean(record.changed)||environmentUpload;
@@ -435,13 +471,13 @@ export function createMeshDraw(assets,creation,{gpu=null,texturePool,batches=nul
           if(!gpu.setLighting(gpuHandle,decision.lighting))
             throw new Error(`${actorName}: the GPU mesh lights differ from the simulation side's layout`);
           queued=variantLit=true;
-        }else if(decision.colors){applyColors(decision.colors);variantLit=true;}
+        }else if(decision.colors){applyColors(decision.colors);applyCamera(decision.cameraPoints??null);variantLit=true;}
       }else if(variantLit||lodChanged){
         // The main frame's lighting again, also under a LOD state that changed.
         if(mode==='gpu'&&mainLighting&&gpuHandle){
           if(!gpu.setLighting(gpuHandle,mainLighting))throw new Error(`${actorName}: the GPU mesh lights differ from the simulation side's layout`);
           queued=true;
-        }else if(latest.colors)applyColors(latest.colors);
+        }else if(latest.colors){applyColors(latest.colors);applyCamera(latest.cameraPoints);}
         variantLit=false;
       }
       return queued;
@@ -527,13 +563,18 @@ export function createActorMeshDraw(assets,{gpu=null,lit=false,displayGamma,feed
   };
 }
 
+/** The CPU path's camera-space point of a corner (applyCamera), the same two names the GPU path's begin_vertex
+ * (gpuBeginVertex) leaves for the projection patch. */
+const CPU_CAMERA_DECLARATIONS='attribute vec3 deusCameraPoint;\nuniform float deusCameraOn;\n';
+const CPU_CAMERA_BEGIN='vec3 deusCamera = deusCameraPoint;\nbool deusHasCamera = deusCameraOn > 0.5;';
+
 /** The GPU draw path's begin_vertex (docs/gpu-mesh.md): the corner's
  * resolved wedge (the LOD's collapsed vertex and U/V bytes, or the corner's
  * own), its final-pose texel with the viewer reflection, its corner colour
  * and, for environment groups, the environment UV from the pass camera. A
  * face the LOD drops collapses to a point. `deusGpu` 0 keeps the CPU path's
  * attributes for an actor that fell back. */
-function gpuBeginVertex(environment){
+function gpuBeginVertex(environment,fallback=false){
   return `vec3 transformed;
 // The corner's point in the lighting frame's camera space (GetFrame's buffer), when its slot was lit in
 // this pass's frame: what the original projects (frame-projection.mjs).
@@ -565,7 +606,9 @@ ${environment?`  vec3 deusN = texelFetch(deusEnvironmentNormals, ivec2(deusV & 1
 `}} else {
   transformed = vec3( position );
   vDeusLight = deusLight;
-}`;
+${fallback?`  deusCamera = deusCameraPoint;
+  deusHasCamera = deusCameraOn > 0.5;
+`:''}}`;
 }
 
 /** A batch's material (actor-batches.mjs): the members' shared material state

@@ -276,14 +276,16 @@ export async function createMeshBinding(runtime,actor,{id,originalObjectIndex,ke
     return drawn??{positions:new Float32Array(output.buffer),lighting:{faces,faceWords}};
   }
   /** CPU lighting of one frame: the corner colours over that frame's
-   * camera-space buffer and reduced faces. */
+   * camera-space buffer and reduced faces. `points` is that buffer after the
+   * frame's LOD morph, the points DrawLodMesh projects in that frame (the page
+   * draws them: docs/frame-projection.md "Meshes"); it belongs to this call. */
   function relight(prepared,ctx=null,frameIndex=null){
     const variant=frameIndex===null?null:frameVariants.get(frameIndex);
     const drawn=cameraDrawn(ctx,variant?variant.selection:baseSelection,variant?variant.returned:lastReturned,opsOfFrame(frameIndex)),
       topology=drawn.lighting;
     const result=lighting.lightMesh(actor,drawn.positions,topology.faces,topology.faceWords,prepared,ctx,true);
     if(!result)return null;
-    return {colors:result.colors.slice(),summary:{lights:result.setup.lights.length,flags:result.flags}};
+    return {colors:result.colors.slice(),points:drawn.positions,summary:{lights:result.setup.lights.length,flags:result.flags}};
   }
   try {
     const partition=meshFaceGroups(faces,face=>face.flags&POLY.Environment?environmentTexture():runtime.getActorMeshTexture(actor,face.texture));
@@ -888,14 +890,14 @@ export async function createMeshBinding(runtime,actor,{id,originalObjectIndex,ke
                 // The frames lit before the fallback now take the CPU path's colours.
                 for(const [index,setup] of frameSetups)if(index!==lf?.index&&frameLights.get(index)?.lighting){
                   const earlier=relight(setup,frameCtxs.get(index),index);
-                  if(earlier)frameLights.set(index,{colors:earlier.colors});
+                  if(earlier)frameLights.set(index,{colors:earlier.colors,cameraPoints:earlier.points});
                 }
                 const lit=relight(prepared,ctx,lf?lf.index:null);
-                if(lit){if(lf)frameLights.set(lf.index,{colors:lit.colors});else{record.colors=lit.colors;summary.lighting=lit.summary;}}
+                if(lit){if(lf)frameLights.set(lf.index,{colors:lit.colors,cameraPoints:lit.points});else{record.colors=lit.colors;record.cameraPoints=lit.points;summary.lighting=lit.summary;}}
               }
             } else {
               const lit=relight(undefined,ctx,lf?lf.index:null);
-              if(lit){if(lf)frameLights.set(lf.index,{colors:lit.colors});else{record.colors=lit.colors;summary.lighting=lit.summary;}}
+              if(lit){if(lf)frameLights.set(lf.index,{colors:lit.colors,cameraPoints:lit.points});else{record.colors=lit.colors;record.cameraPoints=lit.points;summary.lighting=lit.summary;}}
             }
           };
           for(const lf of view.lightFrames??[])if(lf.ids.has(id))lightIn(lf);

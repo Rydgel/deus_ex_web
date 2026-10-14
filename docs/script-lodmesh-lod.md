@@ -428,12 +428,15 @@ Play (`actor-mesh-sim.mjs update`, `sim-session.mjs lodFramesOf`):
 
 **What stays different from the original:**
 
-* *Space of the drawn positions.* The morph, the lighting and, on the GPU
-  path, the drawn positions are in the original's camera space since
+* *Space of the drawn positions.* The morph, the lighting and the drawn
+  positions (both mesh paths) are in the original's camera space since
   2026-10-14 ("Two spaces" above, [frame projection](frame-projection.md)).
-  The environment mapping, the culling bounds and the CPU path's positions
-  read the world-space publication and morph, which round in another
-  space than the original's buffer. The lighting-side effect of the old host stage was
+  The environment mapping and the culling bounds read the world-space
+  publication and morph, which round in another space than the original's
+  buffer; the CPU path's drawn points are the camera-space buffer of the
+  lighting frame as well (its lighting's `cameraDrawn`, shipped as
+  `cameraPoints`; [frame projection](frame-projection.md)).
+  The lighting-side effect of the old host stage was
   large: of 10,188 camera-space components (six LOD meshes, three cameras)
   the world pose transformed to camera space (`toCamera`, 24 bits) differed
   from the original's buffer in 6,244, by up to 4,096 ulps of the small

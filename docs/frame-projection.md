@@ -186,6 +186,22 @@ original's draw loop reads the same buffer. A corner without a valid buffer
 (the CPU path, an unlit slot) projects its world pose through `fpView`.
 The environment mapping and the culling spheres still read the world pose.
 
+**The CPU mesh path** (`?gpuMesh=0`, or a binding that left the GPU path) draws
+the same points. Its lighting already computes the buffer in every frame that
+lights an actor (`cameraDrawn`: the cache poses published through that frame's
+GetFrame matrix and the frame's LOD morph, [GPU mesh](gpu-mesh.md#camera-space-2026-10-14)),
+so `relight` hands that buffer to the page next to the corner colours (the
+record's and each child frame decision's `cameraPoints`). The page writes the
+shown state's corners into a `deusCameraPoint` attribute whenever it applies a
+frame's colours (`applyCamera`), and the vertex stage projects it with
+`fpClip` exactly as the GPU path projects `cameraFinal`. The same invariant
+holds: a frame that did not light the actor, or a state other than the one the
+points were written for, draws the world pose through `fpView`. Before this the
+CPU path projected the world pose in every frame, which rounds differently from
+the buffer the original projects (a mirror child frame's meshes, 44 pixels of
+the Bar mirror view in `validate-mesh-path-frames`); that validator again finds
+the two paths' pixels identical.
+
 **Overlays.** An overlay drawn over the same plane with LESSEQUAL (the fog
 map; D3DDrv draws it with `ZBIAS 15`) must project with its surface's chain: with
 the camera's matrices its depth differed by a depth unit and z-fought against a
@@ -270,9 +286,8 @@ twenty barriered operations and one correctly rounded division (`divRN`).
   depth 380:** the camera's projection (decals' camera-space points and DrawTile's
   `1/Z` vertex are original facts, not wired). ViewportWindow camera frames keep
   the camera's projection (their camera is posed from Coords as well).
-* **Environment mapping** and the **culling spheres** read the world pose;
-  the CPU mesh path projects the world pose through `fpView` (the CPU twin of
-  the camera-space buffer, `cameraDrawn`, is not shipped to the page).
+* **Environment mapping** and the **culling spheres** read the world pose
+  (both mesh paths).
 * **Depth buffer.** The depth buffer's format and rounding (Direct3D's z
   buffer or the host's 24-bit one), the hardware's interpolation, the ZBIAS
   steps and the multi-pass ZFUNC EQUAL of the light-map, fog and detail passes
