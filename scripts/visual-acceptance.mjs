@@ -244,7 +244,10 @@ async function original() {
       // window's rectangle, and a rectangle past the edge fails
       // (DDERR_INVALIDPARAMS) and writes a black frame.
       if (process.env.DX_HYPRLAND === '1') hyprlandWindow();
-      post(['cmd set DeusEx.JCDentonMale bCheatsEnabled True', 'sleep 200', 'cmd ghost', 'sleep 200', 'cmd ShowHud False', 'sleep 300',
+      // --brightness b: the original's Brightness setting. Shot bakes a ramp of it into the bitmap (the framebuffer to the 1/(1.5 b));
+      // 0.666667 makes the Shot the framebuffer (docs/visual-acceptance.md "Security cameras", item 6). Not set by default.
+      post([...(option('brightness', null) ? [`cmd set WinDrv.WindowsClient Brightness ${option('brightness')}`, 'sleep 600'] : []),
+        'cmd set DeusEx.JCDentonMale bCheatsEnabled True', 'sleep 200', 'cmd ghost', 'sleep 200', 'cmd ShowHud False', 'sleep 300',
         `cmd set LevelInfo TimeDilation ${HELD_DILATION}`, 'sleep 500']);
       // The held level time, through the live player's Level (old levels'
       // LevelInfo objects can linger until garbage collection).
