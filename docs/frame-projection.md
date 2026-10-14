@@ -269,7 +269,12 @@ twenty barriered operations and one correctly rounded division (`divRN`).
 * **Decals, sprites, particles, coronas, lasers, the fog overlay's clip at view
   depth 380:** the camera's projection (decals' camera-space points and DrawTile's
   `1/Z` vertex are original facts, not wired). ViewportWindow camera frames keep
-  the camera's projection (their camera is posed from Coords as well).
+  the camera's projection (their camera is posed from Coords as well): measured
+  against the original's own security-camera frames, drawing a window through the
+  vertex chain (`fpClip` with the window's master frame) changes 0 to 2 of
+  30,000 pixels per window and not their mean absolute difference
+  ([visual acceptance](visual-acceptance.md#security-cameras-2026-10-14)), so it
+  is not needed there.
 * **Environment mapping** and the **culling spheres** read the world pose;
   the CPU mesh path projects the world pose through `fpView` (the CPU twin of
   the camera-space buffer, `cameraDrawn`, is not shipped to the page).

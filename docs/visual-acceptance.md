@@ -1099,6 +1099,129 @@ node scripts/live-acceptance.mjs play ... [--keep-traveling] [--page-params 'paw
 `live-original.sh` takes the Wine lock (`.work/wine-deusex.lock`), refuses to start with another DeusEx.exe running and quits the game by
 its PID; Play runs headless Chromium in worker mode.
 
+## Security cameras (2026-10-14)
+
+The security computers' camera views ([ViewportWindow](script-window-viewport.md)) matched against the original's
+own frames: the same map, camera actors, camera rotations, level time and player pose, in the same 1280 x 720 screen.
+Three computers on three maps, seven camera windows of 200 x 150 pixels.
+
+### Method
+
+`scripts/camera-original.sh <map> --computer C --user U --password P --cameras A,B,C --name n` (under the Wine lock) drives
+the original through the terminal's real path and `scripts/camera-acceptance.mjs play ...` does the same in Play; `compare`
+measures each window.
+
+1. **The route.** The map is opened from the console; `ghost` lets JC fly through the walls in a straight line to the point
+   56 units in front of the computer (aim with `ViewRotation`, hold W, measure, repeat); `walk` puts him on the floor with his
+   collision; `ViewRotation` aims at the computer; the right click frobs it (`Computers.Frob`, state On: Activate,
+   `FinishAnim`, `TryInvoke`, `InvokeComputerScreen`); the login is typed (`type`, Tab, Enter). No `set Location`: the level
+   ticks ([Placement constraint](#placement-constraint)). `set DeusEx.JCDentonMale ReducedDamageType All` stops the
+   turrets and guards of an enemy's rooms (Island's holding cell) from killing him; Play's run sets the same.
+2. **Held keys.** `dxinput`'s posted `WM_KEYDOWN` does not hold a key in this game (the note under
+   [Placement constraint](#placement-constraint): W and Up did not move a ghost), though the window had the Wine focus; WinDrv
+   imports `GetKeyState`, which a posted message does not update, and a key sent through the input queue does. `shold <key> <ms>` sends it through the Wine input queue (`keybd_event`), and the ghost
+   flies at about 800 units/s. The window must be floating, 1280 x 720 and the one Wine gives the input (`focus`).
+3. **The screenshot under a modal screen.** `XModalWindow::VisibilityChanged` grabs every keyboard key and mouse button
+   (`XRootWindow::Process` returns 1 for them), so no binding (`*`, a mouse button) reaches `Shot`. The root window's own
+   `DeusExRootWindow.VirtualKeyPressed` calls `ConsoleCommand("SHOT")` for Print Screen (key 44) and Ctrl+F9, and that key does
+   get through (`key PRINT`).
+4. **Holding the level.** The tracer (`tools/dx-live-win.c`, `release 1`, `max-seconds 8`) returns from `ULevel::Tick` eight
+   seconds after the frob, with the terminal's screen open and the camera views drawing: the camera actors, the clock and the
+   lights stand, the UI goes on. Its last row and `dump-actor-win` give the state: `LevelInfo.TimeSeconds`, each camera actor's
+   Location and Rotation, JC's Location, Rotation, ViewRotation and animation fields (sequence, frame, blend arrays).
+5. **Play.** The same route (`terminalProbe` puts JC in front of the computer; the page's right click frobs it; the login is
+   typed), `viewProbe`'s dilation steps run the level to the original's TimeSeconds (a few milliseconds of difference: Play's
+   frames run ahead of its reads, so each speed stops short of the target), and the level is held (bPlayersOnly, TimeDilation
+   0.001). The cameras and JC then stand where the original's were (`terminalProbe` `placeCamera` and `playerPose`; his
+   animation frame is written with a rate of 0, because his own ticks follow the page's frames, not the level's dilation).
+   Play's canvas multisampling is off (`?antialias=0`, below).
+6. **Brightness.** The ini's default, 0.6, is not the framebuffer: Shot bakes a ramp of its own into the bitmap. Against the
+   compositor's capture of the window (`grim`, with the window made opaque), a Shot at Brightness b is the framebuffer to the
+   power 1/k with k = 0.77, 0.88, 1.02, 1.18 at b = 0.5, 0.6, 0.7, 0.8 (about 1.5 b), and at b = 2/3 it is the framebuffer
+   (0.08% of the pixels differ, the moving ones). So a Shot at 0.6 is the framebuffer to the 1.11, darker than Play's raw
+   colours by the "uniform gap" listed under Open, and a Shot at 0.8 brighter. The capture sets
+   `set WinDrv.WindowsClient Brightness 0.666667` in the original (Play's ramp is untouched, and the page is captured at its
+   identity ramp as before): the windows' mean values then agree to 1% (the ratio column below), where the earlier frames at
+   0.6 were 1.13 to 1.41 apart.
+
+### Result
+
+Mean absolute difference over 0..255 (MAD), and the share of the original's Sobel edges Play has within 2 pixels (recall) and
+the converse (precision), per window; `ratio` is Play's mean over the original's. Captures and montages in
+`.work/acceptance/<map>/<name>-*` (outside Git): `-original.png`, `-<variant>.png` (Play), `-w<k>-<variant>-montage.png`
+(original, Play, difference x6, enlarged 3x), `-state.json` (the original's measured state), `-<variant>.json`.
+
+| Map, computer (cameras; level time original / Play) | step | MAD, windows 1 / 2 / 3 | edge recall | edge precision |
+| --- | --- | ---: | ---: | ---: |
+| 14_OceanLab_Lab ComputerSecurity1 (SecurityCamera0, 4, 3: URV Bay, Crew Module, Greasel Lab; 135.612 / 135.617) | master | 0.26 / 1.58 / 0.62 | .966 / 1 / .997 | .962 / 1 / .999 |
+| | no multisampling | 0.11 / 0.86 / 0.46 | .968 / 1 / .998 | .968 / 1 / .999 |
+| | sampling state | 0.19 / 1.13 / 0.32 | .987 / 1 / .999 | .999 / 1 / .995 |
+| | both | **0.04 / 0.31 / 0.15** | .987 / 1 / 1 | .995 / 1 / 1 |
+| 02_NYC_BatteryPark ComputerSecurity2 (SecurityCamera1, 2, 0: Storage Warehouse, Tunnel Bridge, Boathouse Approach; 229.006 / 229.011) | master | 0.62 / 0.21 / 0.85 | .981 / .990 / .955 | .981 / .992 / .988 |
+| | no multisampling | 0.52 / 0.16 / 0.65 | .978 / .986 / .954 | .981 / .991 / .984 |
+| | sampling state | 0.26 / 0.14 / 0.41 | .998 / .997 / .999 | .991 / .988 / .999 |
+| | both | **0.15 / 0.08 / 0.19** | .999 / .999 / 1 | .995 / .992 / 1 |
+| 01_NYC_UNATCOIsland ComputerSecurity1 (SecurityCamera5, JC in view; 252.714 / 252.717), the terrorists' region masked (x 2 to 69, y 50 to 93 of the window) | master | 0.35 | .946 | .959 |
+| | no multisampling | 0.45 | .939 | .936 |
+| | sampling state | 0.12 | .992 | .985 |
+| | both | **0.07** | .992 | .994 |
+
+With both changes 91 to 93% of the OceanLab windows' pixels are identical to the original's (Battery Park: 75 to 83%) and 98 to
+99.9% of the pixels of both maps differ by at most 2 of 255. Of each OceanLab window's 30,000 pixels 3, 287 and 116 differ by more
+than 10; Battery Park's largest differences are 12, 7 and 23. The windows' mean values agree to 0.2 to 1.3%. The Island window with
+three NSF terrorists in it (Terrorist2, 18 and 30: they walk and animate differently in the two programs, [live scenes](#live-scenes-2026-10-13)) is 0.64 to 0.74 MAD and
+edge recall .77 to .81 unmasked; JC himself (mesh, lighting from the camera's frame, his shadow decal) agrees in the 24 x 32 pixels
+around him (MAD 0.14, recall .949, precision 1.0). The level times agree to 5 ms.
+
+The same variants on the stored main-frame views (`visual-acceptance.mjs play`, 4 maps x 5 views, the original's frames at the
+ini's default brightness, so MAD carries the Shot ramp above): master MAD 2.098, edge recall .9726, precision .9197; sampling
+state 1.913, .9803, .9206; sampling state and no multisampling 1.922, .9837, .9186 (OceanLab_Lab 3.07 to 2.33, Island's recall
+.978 to .992, Battery Park's .974 to .987; the Club's precision .75 is as before).
+
+### Causes
+
+1. **Texture sampling.** The window's pixels are minified several times more than the main view's, so the mip choice shows.
+   Play sampled world, actor and decal textures trilinear with no bias; D3DDrv's stage setup (`0x10009e20`) is LINEAR magnification
+   and minification, MIPFILTER POINT (`UseTrilinear=False`) and a LOD bias of -0.5, and POINT filters for PF_NoSmooth. A bias scan
+   of the three OceanLab windows (-1, -0.5, -0.25, 0 on the batched world shader) has its minimum at -0.5 (MAD 0.04 / 0.31 / 0.16
+   against 0.21 / 0.88 / 0.37, 0.07 / 0.60 / 0.31 and 0.10 / 0.92 / 0.44). Fixed in `src/viewer/original-sampling.mjs`;
+   evidence, addresses and validator in [texture sampling](texture-sampling.md).
+2. **Multisampling.** `main.mjs` makes the canvas multisampled (`antialias: true`); the original's Direct3D 7 device has none. In
+   a camera window every polygon edge and every sub-4-pixel mesh took partial coverage: the OceanLab window's four small bright
+   dots (the camera frame has no sprites, decals or coronas there; its actors are a crate and four fish at that distance) are
+   3 x 3 pixels of one value in the original (220, 219, 214 / 225, 216, 215 / 220, 220, 213) and came out as 25%-step coverage
+   patterns in Play (61, 166, 112 / 114, 218, 112 / 63, 114, 61); with multisampling off they are 218, 218, 215 / 219, 218, 215
+   / 222, 220, 215. `?antialias=0` turns it off (the comparison uses it; the default is unchanged). The main frames' metrics
+   move little (above) because their edges are a smaller share of the pixels.
+3. **Not causes.** The window frames' projection (Coords-posed camera, the device's depth range) already matches: drawing them
+   through the exact vertex chain of [frame projection](frame-projection.md) (`fpClip` with the window's frame) changed 0 to 2 pixels
+   of 30,000 per window and the same MAD, with multisampling on and off. A sub-pixel shift of Play's frame: the best shift over
+   ±1.5 pixels is (0, 0) in every window but one (0.125 pixel, 2.6% of its error).
+
+### What stays
+
+- Isolated edge pixels on the brightest thin features (OceanLab window 2's light strips and window 3's ceiling panel):
+  one pixel per row at the strip's leading edge, 30 to 45 of 255 (a 0.1 to 0.15 texel difference of where the strip's own
+  texture edge is sampled). The vertex positions and the mip level are not the cause (the chain and the bias scan); a light map
+  clamp at the polygon's edge is a guess, untested.
+- Moving actors: the Island view's terrorists (positions, animation) differ as in every live scene; static props, JC, the
+  turret and the decals agree.
+- Cameras with mirrors, a sky frame, fog or coronas in their view were not among the seven windows (the three maps' cameras
+  look into rooms): those parts of the camera frame stay checked against the original's code and oracles only
+  ([viewport window](script-window-viewport.md)), not against captured frames.
+- A modal screen leaves no key for bindings and the held level needs the tracer; maps whose computer cannot be reached by the
+  flight (a stalled game) fail with a message, not silently.
+
+### Running it
+
+```bash
+DX_HYPRLAND=1 scripts/camera-original.sh 14_OceanLab_Lab --computer ComputerSecurity1 --user Oceanguard --password Kraken \
+  --cameras SecurityCamera0,SecurityCamera4,SecurityCamera3 --name cs1                 # the original: frame and state
+node scripts/camera-acceptance.mjs play --map 14_OceanLab_Lab --computer ComputerSecurity1 --user Oceanguard --password Kraken \
+  --camera-actor SecurityCamera0 --name cs1 --suffix aaoff                              # Play at that state (--antialias on, --query sampling=trilinear for A/B)
+node scripts/camera-acceptance.mjs compare --map 14_OceanLab_Lab --name cs1 --suffix aaoff    # the windows' metrics and montages
+```
+
 ## Open
 
 - **Not attributed, seen in the 2026-10-14 pilot re-runs with Divergences 17 and 18 in** (every watched actor equal in all three): the Island run's stream draws differ at tick 264
@@ -1117,7 +1240,10 @@ its PID; Play runs headless Chromium in worker mode.
   equal); footsteps (held keys), the player's `TakeDamage` `Distress`, combat and the other weapons are not.
 - The uniform 1.13–1.41× raw brightness gap under Wine; a CrossOver
   capture on the Mac matched more closely. The user does not want it
-  chased: it is a known gamma issue of the game on Windows.
+  chased: it is a known gamma issue of the game on Windows. Measured since
+  ([Security cameras](#security-cameras-2026-10-14), item 6): Shot bakes a ramp
+  of the Brightness setting into its bitmap; at Brightness 2/3 it is the framebuffer
+  and Play's identity-ramp frames agree to 1% in the camera windows. Play's ramp was not touched.
 - Rounding of the darkest values, at the level of single raw steps
   (item 2 above).
 - The frozen captures stand at the map's frame-0 pose; live behaviour is
