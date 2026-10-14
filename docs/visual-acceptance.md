@@ -749,6 +749,45 @@ constant 0.0.
     stayed lit at the map's brightness, where SetupForSurf's class test reads the live actor and a light at 0 is no light. Found in the
     Underworld frame (a lit patch on the dance floor, first taken for a pane reflection), traced through the Strobe flag, and
     measured in the original: [Strobe](#strobe-a-host-input-and-a-triggerlight-the-page-lit-wrongly). 28 TriggerLights in 9 maps.
+14. **The population step destroyed a live pawn whose name the original spells in other case (fixed, 2026-10-14; the sweep's StartUp group).**
+    The sweep's group 1 ([Sweep](#sweep-28-maps-1200-ticks-each-2026-10-13)): the pawns of four maps leave StartUp on other ticks than the
+    original's, first at ticks 13 to 70, and the original draws more on tick 1. **Method.** A StartUp pawn's first tick draws `FRand()` once for
+    `Sleep(FRand() + 0.2)`; the trace now watches `LatentFloat` (Actor +0xe0, the Sleep's remaining seconds), so the draw is known, and the
+    stream the tick starts from (`rngIn`, the same on both sides) is the CRT's congruential sequence, so the value names the draw's index in the
+    tick, per pawn and per side (`scripts/live-draw-shift.mjs`). **Evidence.** 05_NYC_UNATCOMJ12lab, two loads (original 165 draws on tick 1, Play 161, 33
+    of 53 pawns diverging in 100 ticks): the first 20 pawns of the actor order (SecurityBot0 ... Doberman3) drew the same index on both sides,
+    and every pawn from Terrorist1 on drew **4 indices later in the original**: four draws that Play does not make sit between Doberman3's
+    and Terrorist1's ticks, and every Sleep after them read another value, so the pawns woke on other ticks. The population step had logged
+    what it did: `population: 2 actors only Play had destroyed (light1 MIB1); 2 only the original has (Light1 mib1)`. They are the same actors
+    under other spelling: the name table keeps the first spelling registered and FNames compare without case, so the original's `mib1` and
+    `Light1` are Play's `MIB1` and `light1` (also in 06_HongKong_MJ12lab and 14_Oceanlab_Silo). The step compared the spellings exactly, destroyed Play's `MIB1`,
+    a live pawn that the original ticks (StartUp: Sleep and three more draws = the four), and reported `mib1` absent, which also took it out of the
+    watch list. Per actor and call site, on a fresh load with `--actor-trace 1:1` and the CRT call breakpoints: `mib1` is entry 84 of 659 AActor::Tick
+    entries, between Doberman3 (63) and Terrorist1 (85), and draws 4 times from script `FRand` (`0x101362ac`); Play, with the fix, 4 as well (165 draws on tick 1
+    on both sides). It was not load-dependent in these maps (two of two loads), nor a missing per-load input, nor a tracing effect: the sweep's
+    "good in one load, bad in the next" was the random FlyGenerators below. **Fix.** The population step in Play and in the driver compares names without case;
+    `byName` finds an actor by either spelling (the replay's rows are keyed by the original's); the timed actors Play reports are watched in the original's
+    spelling; the driver also counts the spawned class-name families (an extra ParticleGenerator or Medkit the original's load made) and treats a
+    difference like a missing actor. **Check.** `validate-live-population-case` (worker mode; fails without the change: `removed` holds `light1` and `MIB1`);
+    the first bad load's trace replayed with the fix: tick 1 draws 165 and 165, every one of the 53 StartUp pawns on the same index, 0 of 53 actors
+    differing in 100 ticks (33 before); the three maps over 1,200 ticks: see the table in the Sweep section.
+15. **A FlyGenerator only the original holds draws on tick 1 and moves no pawn (explained; the sweep's BatteryPark load is not).** `DeusExDecoration.PreBeginPlay`
+    spawns a FlyGenerator for 10% of the decorations that make flies, from the load's stream, so the original's load holds some that Play's seeded load does not.
+    Attributed per actor and call site (`--actor-trace 1:1` and call breakpoints on the CRT's `rand` `0x101232d0` and `appFrand` `0x101232e0`, whose
+    return address names the caller; `scripts/live-draw-attr.mjs`) on a BatteryPark load whose only difference to Play was `FlyGenerator0`: the original drew 198
+    on tick 1 against Play's 196, and the two extra draws are `FlyGenerator0`'s own tick, script `FRand` (`0x101362ac`) twice, at entry 414 of 659 AActor::Tick
+    entries. A spawned actor takes its place after the map's own actors (the 41 pawns are entries 50 to 259), so the generator's draws come after every
+    map-placed pawn's: 0 of 41 pawns differ in 150 ticks (Silo: FlyGenerator0 and 1 absent, 133 draws against 129, 0 of 33 differ). The tick-1 draw count differs by
+    two per generator and nothing else; the earlier reading that an absent generator "shifts the pawns after it" is not supported (it can shift only actors spawned
+    after it). Play cannot hold the generator, so the driver reloads the original until its population is exact (`live-original.sh` tries 8 loads, 14 in the final
+    runs below); `--allow-missing` keeps its meaning (the actor leaves the watch list).
+16. **checkMove's Hit buffer and MoveActor's early return (fixed, 2026-10-14; the sweep's group 2, MedicalBot0).** The pick's test moves of a pawn with
+    MaxStepHeight 0 (the robots) went one stride too far: checkMove's FCheckResult is the caller's `Hit(1.f)`, shared by its five MoveActor calls, and ULevel::MoveActor
+    returns without writing it for a nearly-zero Delta, which the step-up and step-down deltas are when MaxStepHeight is 0; the port made a fresh hit per move
+    and so missed the wall branch (FarMoveActor back to the stride's start). Found from the first differing test move of the original's call trace against Play's
+    (`call` breakpoints at the pick worker `0x103c7fc0`, MoveActor `0x103990e0` and FarMoveActor `0x10398ba0`; `play --nav-trace`, which now logs
+    AIPickRandomDestination): [pawn navigation](script-pawn-nav.md#live-divergence-checkmoves-hit-buffer-and-moveactors-early-return-2026-10-14), oracle scenes (four fail
+    before the fix), 237 of 237 bit-exact. The three 1,200-tick 05_NYC_UNATCOMJ12lab traces replay equal for all 59 actors with it.
 
 ### Weapon noise (2026-10-14)
 
@@ -892,7 +931,8 @@ count differs from tick 1 in 13 of the 19 maps with absent actors; in 4 of those
 
 **Ranked groups, by actors and the likely cause** (the first two are the ones to schedule; counts are actors, not ticks):
 
-1. **StartUp phases that leave the state a few ticks earlier or later, every class, first tick 13 to 70: 89 actors in 4 maps** (BatteryPark 32,
+1. **StartUp phases that leave the state a few ticks earlier or later, every class, first tick 13 to 70: 89 actors in 4 maps** (**cause found 2026-10-14 for
+   three of the four maps: a harness fault, [Divergence 14](#divergences-found); BatteryPark's two loads are not reproduced, see "Group 1 after the fix" below**; BatteryPark 32,
    05_NYC_UNATCOMJ12lab 33, 06_HongKong_MJ12lab 13, 14_Oceanlab_Silo 11), 90% of all divergences. First fields State (StartUp against
    Standing/Wandering and back), Loc (the first steps), Rot; classes Terrorist 23, MJ12Troop 9, Greasel 8, MIB 6, UNATCOTroop 5, MedicalBot 5,
    ScientistMale 5, RepairBot 4, ... (the same family in every NPC class: a pawn's StartUp `Sleep`/first MoveTo draw). The stream's draw count
@@ -937,6 +977,38 @@ Controls run during the sweep: BatteryPark and Metro with an exact population (n
 divergences: the group 1 load and JaimeReyes1); Mole People never matched in four loads (a FlyGenerator) and was not repeated; short runs of
 BatteryPark with per-actor draw attribution: seven loads equal. One load per map: group 1 shows a map can be equal in one load and not in the next.
 
+#### Group 1 after the fix (2026-10-14)
+
+The cause of group 1 in 05_NYC_UNATCOMJ12lab, 06_HongKong_MJ12lab and 14_Oceanlab_Silo is [Divergence 14](#divergences-found): the harness's population
+step destroyed Play's `MIB1` because the original spells the same actor `mib1` (and `light1`/`Light1`), a pawn the original ticks, whose four draws
+sit in the middle of the actor order. It was a fault of every load of those maps, not a per-load input; "good in one load and bad in the next" was
+the loads' random FlyGenerators, which come after the pawns ([Divergence 15](#divergences-found)). **Tracing was not the cause** (the confound
+above): 14 BatteryPark loads of this session, 10 without `--actor-trace` and 4 with the per-actor trace and the CRT call breakpoints on tick 1, all
+stream-equal on every tick and none with a StartUp or State difference; the two-draw excess of a load with an absent generator is the same with the breakpoints armed.
+The sweep's BatteryPark loads (32 pawns diverging from tick 13 and 14, 201 against 199 and 229 against 219 draws on tick 1) are **not reproduced and not
+explained**: the 14 loads include none with that behaviour, an absent FlyGenerator draws after every map-placed pawn ([Divergence 15](#divergences-found)), and no
+case-spelling difference exists in this map. Tick 1's draws are Trashbag1's `Containers.Destroyed` (21 to 71 draws, rejection of random spawns: trash paper,
+contents) and the pawns'; the next place to look if a bad BatteryPark load shows again is `live-draw-attr.mjs` on that load.
+
+Re-run on the tree with the group 1 fix, exact population (the original reloaded until it holds nothing Play lacks), 1,200 ticks at 1/60 s,
+`--max-seconds 300`, three loads per map; the clock and every tick's stream draws equal in all twelve runs. The first column set is that run; "after
+checkMove" is the same three traces replayed again after [Divergence 16](#divergences-found) (Play only, the original's traces unchanged):
+
+| map | watched | load 1 | load 2 | load 3 |
+| --- | ---: | --- | --- | --- |
+| 02_NYC_BatteryPark | 64 | 64 equal | 64 equal | 63 equal; Terrorist5 Dest.Z at tick 13 |
+| 05_NYC_UNATCOMJ12lab | 59 | 58 equal; MedicalBot0 Dest at tick 31 | 58 equal; MedicalBot0 Dest at tick 14 | 58 equal; MedicalBot0 Dest at tick 52 |
+| 06_HongKong_MJ12lab | 55 | 55 equal | 55 equal | 55 equal |
+| 14_Oceanlab_Silo | 33 | 33 equal | 33 equal | 33 equal |
+| after checkMove (replays) | | 05_NYC 59 equal, BatteryPark 64 equal, HK 55 equal, Silo 33 equal | 05_NYC 59 equal, BatteryPark 64 equal | 05_NYC 59 equal; BatteryPark Terrorist5 as before |
+
+No StartUp, State or Rot difference remains in these maps (the sweep had 89 actors). The differences left after the group 1 fix were in **group 2** (the
+wander destination): MedicalBot0's first `Wandering` pick was exactly one 25-unit stride farther in Play than in the original in every load (from the
+pawn's start, original/Play: 225/250 units in a 100-tick load, 250/275, 325/350 and 275/300 in the three above; the same direction, the same draws, Z
+unchanged), and Terrorist5's pick (BatteryPark load 3: the same XY, Z 380.23 in the original and 363.90 in Play) differs in height only. The stream stays
+equal for both (the pick makes the same draws), so the difference was in the band search's test moves in the world (`MoveActor` with `bTest`), not in
+the draws. MedicalBot0's is fixed (Divergence 16); Terrorist5's is not (BatteryPark load 3, and Terrorist7 in a 150-tick load at tick 49 with Z 363.9 against 363.8).
+
 ### Running it
 
 ```bash
@@ -955,6 +1027,8 @@ node scripts/live-acceptance.mjs play --map <map> --seed 1 --tag name --shot nam
 node scripts/live-acceptance.mjs compare --map <map> --tag name                                         # clock, stream, Strobe flips, every field
 node scripts/live-sweep.mjs run --maps a,b,c --ticks 1200 --max-seconds 300 [--allow-missing all]   # a sweep over maps (one original at a time)
 node scripts/live-sweep.mjs report [--json .work/live-acceptance/sweep-2026-10-13.json]        # the table and the ranked groups
+node scripts/live-draw-shift.mjs --map <map> --tag <tag>        # the first pawn whose StartUp Sleep draw has another stream index in Play (needs LatF in the trace)
+node scripts/live-draw-attr.mjs --map <map> --tag <tag> [--actor mib1]   # tick 1's draws per actor and call site (original --actor-trace 1:1 and the CRT call breakpoints)
 ```
 
 `live-original.sh` takes the Wine lock (`.work/wine-deusex.lock`), refuses to start with another DeusEx.exe running and quits the game by

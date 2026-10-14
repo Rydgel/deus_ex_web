@@ -1500,3 +1500,45 @@ first scene (20 MoveActor calls against the original's 30, 7 FarMoveActor agains
 destination fails `fpt-test-move-adjusted` (first MoveActor delta (22, 0, 0) against the original's (21.93, -1.76, 0)). The stronger comparison
 also exposed two harness inexactnesses, not port faults: the scripted hit times and the mock's move time were JavaScript doubles where
 the engine's are float32 (`wr-ledge-clamp`: `1 - 0.9` is not `1 - 0.9f`). 232 of 232 scenes bit-exact, 54 of 54 mutants detected.
+
+## Live divergence: checkMove's Hit buffer and MoveActor's early return (2026-10-14)
+
+The live sweep's next group ([visual acceptance](visual-acceptance.md#group-1-after-the-fix-2026-10-14), group 2, the wander destination): in
+05_NYC_UNATCOMJ12lab, MedicalBot0's first `Wandering` pick landed exactly one 25-unit stride farther in Play than in the original, in four of
+four loads (distance from the start, original/Play: 225/250, 250/275, 325/350, 275/300; the same direction, the same random draws).
+
+**Method.** `call` breakpoints for the pawn (`call-pawn MedicalBot0`, ticks 1 to 70) at the pick worker `0x103c7fc0` (`gate`: the nested calls are
+armed while it runs), ULevel::MoveActor `0x103990e0` (12 words: actor, delta, rotation, hit*, test, ignorePawns, ignoreBases, noFail; the actor's
+Location read at entry and return) and FarMoveActor `0x10398ba0`; `play --nav-trace MedicalBot0` records the same boundary calls on Play's side
+(`nav-trace.mjs`; the AIPickRandomDestination native now logs its arguments, its test moves and the destination it wrote). The load's pick was at tick
+61: arguments (100, 421.77, yaw 0, 0, 0, 0, 1 try, multiplier 0.6123), from the pawn's start (1913.54, -758.57, -237.87).
+
+**First differing call.** Both sides made the same first 20 test moves: eight 25-unit strides to 200 (a full forward step, then the down-probe
+`(0, 0, -2)` for each), a ninth stride that stops at 206.60 (partial, `Time` 0.264, a vertical face), then checkMove's step sequence at that
+wall: the step-up `(0, 0, 0)`, the retry `(-5.8, -17.46, 0)` (partial again, to 207.26) and the step-down `(0, 0, 0)`. The original then called
+`FarMoveActor(the stride's start at 200.00)`, which is checkMove's wall branch (`0x103c356f`, return 0, the search ends there); Play went on to the
+down-probe, six more moves at the wall, and a stride later.
+
+**Cause.** checkMove's FCheckResult is not its own: it is the caller's out buffer (`[ebp+0x14]`, `ret 0x1c`), `Hit(1.f)` constructed once per search
+(aiPickSearch at `0x103c7910`, `[ebp-0xcc]`; walkReach `[ebp-0xb0]`), and the same pointer goes to all five MoveActor calls. ULevel::MoveActor returns
+before it writes `Hit` when every |Delta| component is below 1e-4 and the rotation is unchanged (`0x1039915a..0x103991c6`, [swimming](swimming.md)).
+The step-up `(0, 0, MaxStepHeight)` and step-down `(0, 0, -MaxStepHeight)` deltas are zero for a pawn whose MaxStepHeight is 0 (the robots), so the
+wall test after them (`Hit.Time < 1 && Hit.Normal.Z < 0.7`, branch `0x103c356f`) reads the retry's result, a partial hit on a vertical face. The port
+returned a fresh hit object for every move ("each moveActor returns a fresh hit object, so the local hit tracks the same data"), which is true
+only while no delta is zero; the swim workers (swimMove, swimReachable) already modelled the early return.
+
+**Fix and oracle.** `checkMove` takes the caller's buffer (`freshHit()`), every move writes it unless its delta is nearly zero (`moveInto`), and
+aiPickSearch and walkReach pass theirs. The oracle's probe has the early return as the scene key `moveNearlyZero` (the call is recorded, no scripted
+result is consumed, `Hit` is untouched); the twins now do the same, and there are five checkMove scenes: `zero-step-wall`, `zero-step-slope` and
+`zero-step-floorlike` (MaxStepHeight 0 with a partial hit at the wall, on a 0.69 face and on a 0.7 face), `zero-step-clear` (a stride that
+lands) and `zero-retry-target` (a retry delta below 1e-4, so the Hit still holds the step-up's result, which hit the target: 5). Before the fix
+the first three fail (return -1 against the original's 0, 1 against 0) and `zero-retry-target` fails on the move count; the mutants
+`checkmove-fresh-hit` and `checkmove-stepup-unrecorded` flip them. 237 of 237 scenes bit-exact, 56 of 56 mutants detected;
+validate-pawn-direction-reach (285 cases), validate-pawn-swimming-reach, validate-pawn-jump-reach and validate-pawn-flying-reach unchanged.
+
+**Result.** The same trace replayed: all 34 test-move calls of the pick equal (before: 20 equal, then different), MedicalBot0 equal, and the three 1,200-tick
+05_NYC_UNATCOMJ12lab traces of the session replayed with the fix are equal for all 59 watched actors.
+
+`flyMove` (`0x103c3900`) keeps a `Hit` of its own across its moves (a local at `[ebp-0x68]`, time 1 and item -1 set inline), so the same early return
+applies to its retry; its port still makes a fresh hit per move, which cannot be told apart: its only reads of `Hit` are the target compares, and a first
+move that hit the target has already returned 5, so the stale content the original would read after a zero retry never names the target.
