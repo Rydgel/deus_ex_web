@@ -1169,7 +1169,9 @@ export function createSimSession(game, { assets = null, events = [], exportName 
         camera.updateMatrixWorld();
         weaponFrustum.setFromProjectionMatrix(weaponMatrix.multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse),
           camera.coordinateSystem, camera.reversedDepth);
-        frame = weaponSim.frame({ frustum: weaponFrustum, pack });
+        // The master frame's DrawLodMesh inputs (Canvas.DrawActor draws in it).
+        const lodInputs = current?.visibility?.lod && current.view?.fov !== undefined ? { ...current.visibility.lod, fov: current.view.fov } : null;
+        frame = weaponSim.frame({ frustum: weaponFrustum, pack, lodInputs, settings: actorScene?.lodSettings?.() });
         if (frame) {
           const info = runtime.levelFor(game.player.collisionActor).actors[0];
           const time = Math.fround(runtime.readNamed(info, 'TimeSeconds'));

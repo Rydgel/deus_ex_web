@@ -11,7 +11,8 @@
  * so both sides take the same path for every actor. */
 import * as THREE from 'three';
 import {TextureStore} from '../unreal/textures.mjs';
-import {createLodMeshFrameCache,getLodMeshFrame,planLodMeshFrame,materializeLodMeshFrame,mergeLodMeshPlans,snapshotLodMeshCache} from '../runtime/lodmesh-frame.mjs';
+import {createLodMeshFrameCache,getLodMeshFrame,planLodMeshFrame,materializeLodMeshFrame,mergeLodMeshPlans,snapshotLodMeshCache,
+  lodMeshCameraMatrix,publishLodMeshOps} from '../runtime/lodmesh-frame.mjs';
 import {loadLodMeshKernel} from '../runtime/lodmesh-wasm.mjs';
 import {actorsEpoch} from '../runtime/base-epoch.mjs';
 import {RENDER_MESH,RENDER_SHIFT,renderScanMode} from '../runtime/script-vm-render.mjs';
@@ -103,9 +104,11 @@ const countVertices=resolved=>{const seen=new Set();for(const v of resolved)if(v
 const plainPlan=plan=>({matrix:plan.matrix.map(row=>[...row]),origin:[...plan.origin],
   channels:plan.channels.map(op=>({channel:op.channel,tween:Boolean(op.tween),first:op.first,second:op.second,
     blend:Boolean(op.blend),alpha:op.alpha,count:op.count,fill:op.fill?[...op.fill]:null}))});
-/** SetupForActor's result as gpu-mesh.mjs setLighting reads it. */
-const plainLighting=prepared=>({flags:prepared.flags,ambient:[...prepared.setup.ambient],scaleGlow:prepared.setup.scaleGlow,
-  unlit:[...prepared.unlit],lights:prepared.setup.lights.map(light=>({location:[...light.location],rradius:light.rradius,
+/** SetupForActor's result as gpu-mesh.mjs setLighting reads it, with the
+ * frame's GetFrame matrix (`camera`, 4 rows of 3: lodMeshCameraMatrix) that
+ * publishes the cache poses in that frame's camera space. */
+const plainLighting=(prepared,camera)=>({flags:prepared.flags,ambient:[...prepared.setup.ambient],scaleGlow:prepared.setup.scaleGlow,
+  unlit:[...prepared.unlit],camera:camera.flat(),lights:prepared.setup.lights.map(light=>({location:[...light.location],rradius:light.rradius,
     color:[...light.color]}))});
 
 /** One actor's mesh binding on the simulation side. `layout` is this side's
@@ -137,14 +140,17 @@ export async function createMeshBinding(runtime,actor,{id,originalObjectIndex,ke
   // The last LOD inputs and results: the requested and returned counts, the
   // detail bits, and the drawn state (drawn positions, resolved corners).
   let lastCallsKey=String(fullCount),lastReturned=fullCount,lastDetail='off',lodDrawn=null,lastLod=null;
-  // GetFrame's returned count of each call this frame (in call order).
-  let callReturned=[fullCount];
+  // GetFrame's returned count of each call this frame (in call order), the
+  // operations each call ran (the CPU path's, or the merged plan's channels)
+  // and the call each frame (its index, null for the main frame) made.
+  let callReturned=[fullCount],callOps=[[]],frameCalls=new Map(),baseSelection=null;
   // The GPU path's last LOD state: the selection, its post-frame scalars
   // while the LOD flag holds, and the parameters the page last received.
   let lastSelection=null,gpuLodScalars=null,lastLodKey='full';
   /** The LOD's post-frame state for GetFrame's last output (null: full
    * resolution and unmorphed). */
   function lodAfter(selection){
+    baseSelection=selection;
     lodDrawn=selection?meshLod.after(selection,lastReturned,frame.output):null;
     if(lodDrawn&&!lodDrawn.state.active&&!lodDrawn.state.morph)lodDrawn=null;
   }
@@ -185,8 +191,10 @@ export async function createMeshBinding(runtime,actor,{id,originalObjectIndex,ke
   // instead is materialized, which gives getLodMeshFrame's output.
   let mode='cpu',gpuHandle=null,gpuFallback=null,lastPlan=null,exactValid=false,plannedFrame=-1,firstPassFrame=-1;
   const frame=layout?planFirst():getLodMeshFrame(payload,actor,coords,services);
+  if(!layout)callOps=[frame.ops];
   function planFirst(){
     lastPlan=planLodMeshFrame(payload,actor,coords,services);
+    callOps=[lastPlan.channels];
     return {output:lastPlan.context.output,vertexCount:lastPlan.vertexCount};
   }
   // Host culling bound, never drawn geometry: the farthest vertex of every
@@ -250,10 +258,30 @@ export async function createMeshBinding(runtime,actor,{id,originalObjectIndex,ke
   // actor once in every frame whose Frame->Sprite holds it, with that
   // frame's Coords and Mirror (docs/mesh-lighting.md "One call per frame").
   const frameLights=new Map(),frameSetups=new Map(),frameCtxs=new Map();
-  function relight(prepared,ctx=null,drawn=lodDrawn){
-    const points=drawn?.positions??new Float32Array(frame.output.buffer,frame.output.byteOffset,frame.output.byteLength/4),
-      topology=drawn?.lighting??{faces,faceWords};
-    const result=lighting.lightMesh(actor,points,topology.faces,topology.faceWords,prepared,ctx);
+  /** The GetFrame operations of the call frame `index` made (null: the main
+   * frame's, the last). */
+  const opsOfFrame=index=>callOps[Math.min(frameCalls.get(index)??callOps.length-1,callOps.length-1)];
+  /** DrawLodMesh's buffer for one frame, which GetFrame fills in that
+   * frame's camera space (called with its Coords): the cache poses published
+   * through the frame's matrix, then the LOD's morph of the frame's state
+   * (docs/script-lodmesh-lod.md "Camera space"). `ctx` is the frame's
+   * lighting frame (null: the main viewport's). Returns the drawn state as
+   * meshLod.after does (positions, resolved corners, lighting topology). */
+  function cameraDrawn(ctx,selection,returned,ops){
+    const at=ctx??lighting.frame,output=new Uint8Array(payload.frameVertexCount*12);
+    const coords=[...at.origin,...at.axes[0],...at.axes[1],...at.axes[2]];
+    publishLodMeshOps(payload,ops,lodMeshCameraMatrix(payload,actor,coords,services),{output,stride:12,kernel});
+    let drawn=selection?meshLod.after(selection,returned,output):null;
+    if(drawn&&!drawn.state.active&&!drawn.state.morph)drawn=null;
+    return drawn??{positions:new Float32Array(output.buffer),lighting:{faces,faceWords}};
+  }
+  /** CPU lighting of one frame: the corner colours over that frame's
+   * camera-space buffer and reduced faces. */
+  function relight(prepared,ctx=null,frameIndex=null){
+    const variant=frameIndex===null?null:frameVariants.get(frameIndex);
+    const drawn=cameraDrawn(ctx,variant?variant.selection:baseSelection,variant?variant.returned:lastReturned,opsOfFrame(frameIndex)),
+      topology=drawn.lighting;
+    const result=lighting.lightMesh(actor,drawn.positions,topology.faces,topology.faceWords,prepared,ctx,true);
     if(!result)return null;
     return {colors:result.colors.slice(),summary:{lights:result.setup.lights.length,flags:result.flags}};
   }
@@ -359,8 +387,6 @@ export async function createMeshBinding(runtime,actor,{id,originalObjectIndex,ke
       }
       return variant.cpu=cpu;
     }
-    /** The frame's CPU drawn state for lighting: the variant's, or the base's. */
-    const drawnOfFrame=index=>{const variant=frameVariants.get(index);return variant?variantCpu(variant).drawn:lodDrawn;};
     const variantParams=variant=>variant.params??=paramsOf(variant.selection,variant.returned);
     const variantEmpty=variant=>variant.lodEmpty??=emptyGroups(variantParams(variant));
     /** A child frame's final LOD state (validation access): its variant's,
@@ -414,6 +440,7 @@ export async function createMeshBinding(runtime,actor,{id,originalObjectIndex,ke
       if(mode!=='gpu')return;
       mode='cpu';gpuFallback=reason;summary.path=mode;summary.gpuFallback=reason;toCpuReason=reason;
       if(lastPlan&&materializedPlan!==lastPlan)materializeLodMeshFrame(lastPlan);
+      if(lastPlan)callOps=[lastPlan.channels];
       lastPlan=null;
       if(meshLod)lodAfter(gpuLodScalars?lastSelection:null);
       cpuBounds();
@@ -445,6 +472,7 @@ export async function createMeshBinding(runtime,actor,{id,originalObjectIndex,ke
       }
       if(!merged){merged=call(requests.at(-1));plans=requests.map(()=>merged);}
       lastPlan=merged;
+      callOps=[merged.channels];
       callReturned=plans.map(plan=>plan.vertexCount);
       lastReturned=callReturned.at(-1);
       exactValid=false;plannedFrame=layout.frame+1;
@@ -652,7 +680,19 @@ export async function createMeshBinding(runtime,actor,{id,originalObjectIndex,ke
           return {params:paramsOf(selection,returned),drawn};
         },
         mainLodParams:()=>meshLod?paramsOf(gpuLodScalars?lastSelection:null,lastReturned):null,
-        lodTopology:()=>meshLod?.topology??null}),
+        lodTopology:()=>meshLod?.topology??null,
+        // The CPU twin of the GPU camera passes for a lighting frame `ctx`
+        // ({origin, axes}; null: the main viewport's): the cache poses of
+        // the current plan published through that frame's GetFrame matrix and
+        // morphed by `selection`/`returned` (default: the main frame's); and
+        // that matrix (4 rows of 3).
+        cameraDrawn:(ctx=null,selection=gpuLodScalars?lastSelection:null,returned=lastReturned)=>{
+          materialize();return cameraDrawn(ctx,selection,returned,lastPlan.channels);
+        },
+        cameraMatrix:(ctx=null)=>{
+          const at=ctx??lighting.frame;
+          return lodMeshCameraMatrix(payload,actor,[...at.origin,...at.axes[0],...at.axes[1],...at.axes[2]],services);
+        }}),
       get location(){return [...read(actor,'Location')];},get rotation(){return [...read(actor,'Rotation')];},
       /** Validation access (lod-probe.mjs): the last update's LOD inputs,
        * selection, returned count, final state and drawn faces. */
@@ -753,6 +793,7 @@ export async function createMeshBinding(runtime,actor,{id,originalObjectIndex,ke
           callOf.push(requests.length-1);
         }
         if(!requests.length)requests.push(fullCount);
+        frameCalls=new Map(lodFrames.map((entry,k)=>[entry.index,callOf[k]]));
         const callsKey=requests.join(',');
         // The detail matters only to a morph; the flags and the count to all.
         const detailKey=lodFrames.length?lodFrames.map(entry=>entry.selection?`${entry.selection.morph?bitsOf(entry.selection.detail):0}`:'off').join(','):'off';
@@ -780,7 +821,8 @@ export async function createMeshBinding(runtime,actor,{id,originalObjectIndex,ke
         if((poseChanged||lodChanged)&&mode==='cpu'){
           // A plan evaluated for this frame before a fallback already posed it.
           if(!posed&&(poseChanged||callsChanged)){
-            callReturned=requests.map(count=>getLodMeshFrame(payload,actor,coords,services,{output:frame.output,vertexCount:count}).vertexCount);
+            const calls=requests.map(count=>getLodMeshFrame(payload,actor,coords,services,{output:frame.output,vertexCount:count}));
+            callReturned=calls.map(call=>call.vertexCount);callOps=calls.map(call=>call.ops);
             lastReturned=callReturned.at(-1);
           }
           lodAfter(selection);
@@ -835,21 +877,24 @@ export async function createMeshBinding(runtime,actor,{id,originalObjectIndex,ke
               if(lf){frameSetups.set(lf.index,prepared);frameCtxs.set(lf.index,ctx);}else{lastSetup=prepared;lastLitFrame=layout.frame+1;}
               if(!lf)summary.lighting={lights:prepared.setup.lights.length,flags:prepared.flags};
               if(layout.reserveLights(prepared.setup.lights.length,pool)){
-                if(lf)frameLights.set(lf.index,{lighting:plainLighting(prepared)});
-                else record.lighting=view.pack?view.pack.lighting(prepared):plainLighting(prepared);
+                // The frame's GetFrame matrix: the page publishes the cached
+                // poses in this frame's camera space for the lighting passes.
+                const here=ctx??lighting.frame,camera=lodMeshCameraMatrix(payload,actor,[...here.origin,...here.axes[0],...here.axes[1],...here.axes[2]],services);
+                if(lf)frameLights.set(lf.index,{lighting:plainLighting(prepared,camera)});
+                else record.lighting=view.pack?view.pack.lighting(prepared,camera):plainLighting(prepared,camera);
               } else {
                 toCpu(`more than ${prepared.setup.lights.length-1} selected lights`);
                 record.posed=posedCopy();
                 // The frames lit before the fallback now take the CPU path's colours.
                 for(const [index,setup] of frameSetups)if(index!==lf?.index&&frameLights.get(index)?.lighting){
-                  const earlier=relight(setup,frameCtxs.get(index),drawnOfFrame(index));
+                  const earlier=relight(setup,frameCtxs.get(index),index);
                   if(earlier)frameLights.set(index,{colors:earlier.colors});
                 }
-                const lit=relight(prepared,ctx,lf?drawnOfFrame(lf.index):lodDrawn);
+                const lit=relight(prepared,ctx,lf?lf.index:null);
                 if(lit){if(lf)frameLights.set(lf.index,{colors:lit.colors});else{record.colors=lit.colors;summary.lighting=lit.summary;}}
               }
             } else {
-              const lit=relight(undefined,ctx,lf?drawnOfFrame(lf.index):lodDrawn);
+              const lit=relight(undefined,ctx,lf?lf.index:null);
               if(lit){if(lf)frameLights.set(lf.index,{colors:lit.colors});else{record.colors=lit.colors;summary.lighting=lit.summary;}}
             }
           };
@@ -1276,6 +1321,8 @@ export async function createActorMeshSim(runtime,assets,asset,{kernel,player:pla
       return {...lodSettings};
     },
     resetLodSettings(){lodSettings=RENDER_LOD_SETTINGS;},
+    /** URender's current LOD settings (the weapon's selection uses them too). */
+    lodSettings:()=>lodSettings,
     /** Iterator item bindings in use (validation access). */
     /** Validation: each iterator item binding (a root slot's or an extra) with the item it was last
      * updated with (Location, Rotation, DrawScale, ScaleGlow) and whether the last planning

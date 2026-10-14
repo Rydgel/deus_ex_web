@@ -234,9 +234,12 @@ the render pass's precision control 24 since 2026-10-06 (one binary32
 operation per x87 operation, each through B(); [mesh lighting](mesh-lighting.md)
 "Precision"):
 
-* camera point: TransformPointBy's `((p − o).x·A.x + (p − o).y·A.y) +
-  (p − o).z·A.z`, as `camera_component` (a host stage: the original's
-  GetFrame composes the view into its matrix);
+* camera point: the camera-space final pose (`CAMERA_POSE_FRAGMENT`,
+  `CAMERA_MORPH_FRAGMENT`, below): GetFrame's publication of the cache poses
+  through the lighting frame's own matrix, as the original's GetFrame call
+  for that frame fills it, then the morph. Before 2026-10-14 this was
+  TransformPointBy of the world pose (`camera_component`, a host stage that
+  rounded twice); the passes now read the camera-space points as they are;
 * face normal: `a = p2 − p0`, `b = p0 − p1`, `n = b × a` with each product
   and difference rounded, `scale = tableRsqrt(((n.x² + n.y²) + n.z²) + ε)`,
   `face = n·scale`; `ε = 0x3a83126f`;
@@ -293,6 +296,37 @@ stored cross terms, `q = st(|c|² + st(0.001))`, the same rsqrt tables). The
 draw shader computes `writeMeshEnvironmentUV` per corner from the render
 camera (three.js `cameraPosition`, which is the mirror camera in mirror
 passes, as `updateView` passes today).
+
+## Camera space (2026-10-14)
+
+DrawLodMesh calls GetFrame with the Frame->Coords of the frame drawing the
+actor, so its buffer, the morph and the lighting are in that frame's camera
+space ([LOD](script-lodmesh-lod.md), "Camera space").
+The slot parameters grew four rows, F12..F15: the lighting frame's GetFrame
+matrix (`lodMeshCameraMatrix`, written by `setLighting` with that frame's
+lighting, so a child frame's lighting run carries its own). Two passes run
+before the face pass of every lighting run, for the slots lit in it
+(`uLightFrame`):
+
+* **Camera pose pass** (`CAMERA_POSE_FRAGMENT`, one point per vertex, into
+  `cameraPose`): the publication arithmetic of the pose pass (main channel
+  `v = (pose − origin) − m0`, three `dot24` rows; blend slots
+  `dot24(pose − frame0)` added onto the output, in channel order) over the
+  cache poses the latest pose pass left in its five state textures, with
+  F12..F15 and each channel's count. A keyframe operation stores its pose in
+  the state texture too, so every published channel is read the same way.
+* **Camera morph pass** (`CAMERA_MORPH_FRAGMENT`, into `cameraFinal`): the
+  morph arithmetic of `MORPH_FRAGMENT` on `cameraPose` with the slot's LOD
+  parameters of this run (a child frame's own state after its `setLod`).
+
+The face and vertex passes read `cameraFinal` (`uCameraPose`) for the normals,
+the drawn test and `Light`; the environment normals, the draw and the culling
+bounds keep the world final pose. The CPU twin is `publishLodMeshOps` on the
+exact cache poses followed by `meshLod.after`
+(actor-mesh-sim.mjs `cameraDrawn`); `validate-gpu-mesh` compares
+`cameraFinal` with it in the main frame, in a reflected child frame and in the
+child LOD states, and the colours that follow. The passes cost two more
+full-screen draws over the vertex arena per lighting run.
 
 ## Distance LOD
 
@@ -514,10 +548,17 @@ the conversation sets bBehindView and the player's mesh is admitted, every
 frame for 90 frames is compared, and at least one of them must tween the
 player (the first-pass case above).
 
+Since 2026-10-14 the same run compares the camera-space pose (`cameraFinal`,
+"Camera space" above) with its CPU twin in the main frame, in a reflected
+child frame and in the child LOD states, derives the lighting reference from
+the CPU twin's buffer (kernel `cameraSpace`), and checks that the lighting
+frame's Coords equal the Frame->Coords the LOD selects with.
+
 The simulation digest must be unchanged, since the path is render-only:
 `node scripts/bench-sim.mjs --map 01_NYC_UNATCOIsland --bypass --continue
---render-feedback --warm 60 --ticks 300 --digest-every 50` gives
-`b767a7e417fe5968`.
+--render-feedback --warm 60 --ticks 300 --digest-every 50` gave
+`b767a7e417fe5968` when this was written; on 2026-10-14 it gives
+`1f5d08a3783e1c4b` both at `fc0e745` and with the camera-space and weapon LOD changes.
 
 ## Results
 

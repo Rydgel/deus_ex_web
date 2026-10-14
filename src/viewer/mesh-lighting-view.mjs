@@ -313,13 +313,16 @@ export function createMeshLightingView(runtime, levelSource, { exportName, expor
             'LightRadius', 'LightEffect'].map(name => [name, info.light.values[name]])) })) });
       return { setup, flags, unlit: unlitColor(v.AmbientGlow, f(v.ScaleGlow)) };
     },
-    /** One DrawLodMesh lighting pass. `points` are GetFrame's world-space
-     * vertices, `faces` the mesh faces in draw order ({vertices, flags}).
+    /** One DrawLodMesh lighting pass. `points` are GetFrame's vertices:
+     * world-space (the default, transformed here by the frame's Coords) or,
+     * with `cameraSpace`, the output of GetFrame called with the frame's own
+     * Coords (and morphed in that space), which the original lights as they
+     * are. `faces` are the mesh faces in draw order ({vertices, flags}).
      * Returns per-face corner diffuse colours in [0,1], three corners per face
      * in face-vertex order, as D3D's FISTP bytes. `prepared` is a setupMesh
      * result already taken for this draw (SetupForActor runs once). */
-    lightMesh(actor, points, faces, faceWords = null, prepared = null, ctx = null) {
-      if (ctx) return withFrame(ctx, () => view.lightMesh(actor, points, faces, faceWords, prepared));
+    lightMesh(actor, points, faces, faceWords = null, prepared = null, ctx = null, cameraSpace = false) {
+      if (ctx) return withFrame(ctx, () => view.lightMesh(actor, points, faces, faceWords, prepared, null, cameraSpace));
       prepared ??= view.setupMesh(actor);
       if (!prepared) return null;
       const { setup, flags } = prepared;
@@ -327,13 +330,13 @@ export function createMeshLightingView(runtime, levelSource, { exportName, expor
         if(!(faceWords instanceof Uint32Array)||faceWords.length!==faces.length*4)
           throw new TypeError('Wasm mesh lighting requires packed face topology');
         const colors=view.kernel.light({points,faces:faceWords,origin:frame.origin,axes:frame.axes,mirror:frame.mirror,
-          ambient:setup.ambient,scaleGlow:setup.scaleGlow,unlit:prepared.unlit,lights:setup.lights,flags});
+          ambient:setup.ambient,scaleGlow:setup.scaleGlow,unlit:prepared.unlit,lights:setup.lights,flags,cameraSpace});
         return {colors,setup,flags,vertices:null};
       }
       if(ArrayBuffer.isView(points))points=Array.from({length:points.length/3},(_,i)=>Array.from(points.subarray(i*3,i*3+3)));
       // DrawLodMesh: camera-space vertices, summed face normals over every
       // face, then per-vertex light for vertices of faces that are drawn.
-      const camera = points.map(point => view.toCamera(point));
+      const camera = cameraSpace ? points.map(point => [...point]) : points.map(point => view.toCamera(point));
       const normals = camera.map(() => [0, 0, 0]);
       const drawn = new Uint8Array(faces.length), lit = new Uint8Array(camera.length);
       faces.forEach((face, i) => {

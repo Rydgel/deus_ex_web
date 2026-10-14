@@ -9,7 +9,13 @@
  * untouched pattern), each face's admission, material, flags and vertices,
  * and every scratch wedge dword.
  *
- *   node scripts/validate-lodmesh-lod.mjs [--reference-only | --captured] [--js-only]
+ *   node scripts/validate-lodmesh-lod.mjs [--reference-only | --captured] [--js-only] [--camera-chain]
+ *
+ * --camera-chain: the morph's input buffers are the original GetFrame's
+ * (lodmesh-camera-chain.mjs): each mesh's poses (keyframes, tweens, blends)
+ * called with camera Frame->Coords (large offsets, pitch, a mirror frame's
+ * reflected Coords), so the chain GetFrame -> morph -> faces is the original's
+ * in camera space, and the translation's GetFrame must give those buffers.
  *
  * --reference-only records the oracle's output under .cache/research;
  * --captured reuses it when its inputs match these cases. */
@@ -18,16 +24,20 @@ import {mkdir,readFile,writeFile} from 'node:fs/promises';
 import {auditAssert,auditControlWord} from './precision-audit.mjs';
 import {gameDirectory} from './game-directory.mjs';
 import {buildLodMeshSamples} from './lodmesh-lod-cases.mjs';
+import {buildCameraChainSamples} from './lodmesh-camera-chain.mjs';
 import {bitsFloat,floatBits,lodMeshCorners,lodMeshTanArgument,morphLodMesh,selectLodMesh} from '../src/runtime/lodmesh-lod.mjs';
 
 const assert=auditAssert(),controlWord=auditControlWord();
-const root=gameDirectory(),capture='.cache/research/lodmesh-lod-original.json';
-const samples=await buildLodMeshSamples(root),specs=samples.map(s=>s.spec);
+const root=gameDirectory(),chain=process.argv.includes('--camera-chain');
+const capture=chain?'.cache/research/lodmesh-lod-camera-chain-original.json':'.cache/research/lodmesh-lod-original.json';
+const python=process.env.DEUS_EX_NATIVE_PYTHON??process.env.NATIVE_PROBE_PYTHON??'.cache/native-probe-env/bin/python';
+const chainKernel=chain&&!process.argv.includes('--js-only')?await (await import('../src/runtime/lodmesh-wasm.mjs')).loadLodMeshKernel().catch(()=>null):null;
+const samples=chain?await buildCameraChainSamples(root,{assert,kernel:chainKernel,python}):await buildLodMeshSamples(root),specs=samples.map(s=>s.spec);
 let reference;
 if(process.argv.includes('--captured')){
   const saved=JSON.parse(await readFile(capture,'utf8'));
   assert.deepEqual(saved.specs,specs,'the captured oracle inputs must match these cases');reference=saved.reference;
-}else reference=JSON.parse(execFileSync(process.env.DEUS_EX_NATIVE_PYTHON??process.env.NATIVE_PROBE_PYTHON??'.cache/native-probe-env/bin/python',
+}else reference=JSON.parse(execFileSync(python,
   ['scripts/native-lodmesh-lod-oracle.py',root,...(controlWord?[controlWord]:[])],{input:JSON.stringify(specs),encoding:'utf8',maxBuffer:256<<20}));
 if(process.argv.includes('--reference-only')){
   await mkdir('.cache/research',{recursive:true});await writeFile(capture,JSON.stringify({specs,reference}));

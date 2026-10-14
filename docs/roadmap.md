@@ -854,8 +854,43 @@ faces.
   of its call (the calls run in DrawFrame's order and merge into one pose
   pass), the morph, corners, lighting and visibility, on both paths; the page
   redoes the slot's morph and corner passes in the frame's lighting run.
-- *Left.* The morph rounds in Play's world space (the original's GetFrame
-  output is camera space), the weapon selects no LOD of its own, and the particle and wire branches are not ported. See
+- *Camera space (2026-10-14).* DrawLodMesh calls GetFrame with the Frame->Coords
+  of the frame that draws the actor, so the buffer it fills, the morph and the
+  lighting are in that frame's camera space (Render.dll `0x10b0ed53..0x10b0ee0f`;
+  every float store of `ULodMesh::GetFrame` is listed with its address in
+  [LOD](script-lodmesh-lod.md)). Play posed the actor once in world space and
+  transformed it for the lighting; of 10,188 camera-space components (six LOD
+  meshes, three cameras) that stage differed from the original's buffer in
+  6,244, by up to 4,096 ulps. Each lit frame now carries its GetFrame matrix
+  and the cache poses are published and morphed through it, on the CPU
+  (`publishLodMeshOps`, the kernel's `cameraSpace`) and on the GPU (camera
+  pose and camera morph passes); the world-space pose stays for the draw, the
+  environment mapping and the culling bounds. Evidence: the original GetFrame
+  with camera Frame->Coords on 61 calls (15 new), and
+  `validate-lodmesh-lod --camera-chain`: the original GetFrame on 30 poses
+  of the six meshes (keyframes, tweens, blends, three cameras including a
+  mirror frame's reflection) with the original morph and face ranges on its
+  buffers, 210 cases, every byte equal for JS and the kernel; the GPU passes
+  against the CPU twin on Island (1.6 million camera-space components
+  bit-equal, 0 colour bytes off over 1.2 million corners).
+- *First-person weapon (2026-10-14).* `Canvas.DrawActor` draws in the master
+  frame, so the weapon selects like any actor (the master frame's Coords and
+  FX, the viewport's FovAngle, its own Location, DrawScale, LODBias); Play now
+  passes the overlay those inputs. The crowbar's detail is 14,240 for 138
+  vertices, so the original draws it at full detail; the selection is equal
+  to the original ranges' at six URender settings (`validate-weapon-lod`) and
+  in worker mode (`validate-lodmesh-lod-play --weapon`).
+- *Particle and wire branches (2026-10-14).* Not reachable in the shipped game:
+  no class default, map actor or script sets bParticles; RendMap 1/13..15
+  needs `RMODE` typed at the console (Play's console refuses it) or a
+  `Canvas.DrawActor` with `bWireframe`, which the two script callers never
+  pass (`scripts/census-lodmesh-branches.mjs`). They stay unported and
+  explicitly unsupported.
+- *Left.* The drawn positions round in world space (three.js projects them
+  with its own matrices; the original's camera-space points feed its device
+  projection), and the environment mapping's world-space normals and UVs keep
+  their existing tolerance; weapons other than the crowbar and the GPU
+  view-model instance's camera passes against the original are not run. See
   [LOD](script-lodmesh-lod.md).
 
 **Typed characters (2026-10-07).** The `WM_CHAR` route is recovered and

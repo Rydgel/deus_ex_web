@@ -5,7 +5,10 @@ and Core.dll `8bf3039e…7e4` (see [surface/skin selection](script-lodmesh-mater
 This is the distance LOD of `URender::DrawLodMesh` (`0x10b0ea80`, reached only
 through `URender::DrawMesh` `0x10b0d1a0`). Re-derived from the disassembly on
 2026-10-07; the earlier draft of this page assumed 64-bit precision and
-mis-stated the morph gate and appTan's store.
+mis-stated the morph gate and appTan's store. Added 2026-10-14: GetFrame's
+buffer is in the drawing frame's camera space ("Camera space" below), the
+first-person weapon selects like any actor, and the particle and wire
+branches are unreachable in the shipped game.
 
 ## Precision
 
@@ -76,6 +79,50 @@ Before GetFrame, a viewport actor whose RendMap (`+600`) is 1 or 13..15
 (wire and orthographic views) makes GetFrame use GMath.UnitCoords instead of
 the caller's coords (`0x10b0ed53..0x10b0edf3`).
 
+## Camera space: the Coords GetFrame is called with `0x10b0ed53..0x10b0ee0f`
+
+Added 2026-10-14. DrawLodMesh calls GetFrame with the FCoords of the frame
+that is drawing the actor, so the buffer it fills, and everything after it,
+is in that frame's camera space:
+
+* `0x10b0ed53..0x10b0ed83`: the viewport actor (`[Frame]+0x30`)'s RendMap
+  (`+0x600`) equal to 13, 14, 15 or 1 sets the wire flag `[ebp-0x38]`;
+* `0x10b0ed8a..0x10b0edbc`: the output block, 88 bytes (`push 8`, alignment)
+  for each of N + SpecialVerts vertices from the frame's GMem;
+* `0x10b0edd8..0x10b0edf3`: `esi` = GMath.UnitCoords (`[0x10b5d4d4]+0x18`)
+  when the wire flag is set, else the caller's Coords (`[ebp+0x1c]`,
+  `Frame+0x34` from DrawActorSprite);
+* `0x10b0edf3..0x10b0ee0f`: `rep movs` of those 12 dwords onto the stack (the
+  FCoords by value), the stride `0x58`, the block and the in/out count, then
+  the call through the Engine import `0x10b5d6b4` (ULodMesh::GetFrame).
+
+The morph (`0x10b0ee34..`), the outcode and projection loop (`0x10b0ef6e..`),
+the face normals and back-face tests (`0x10b0fe60..`), the vertex lighting
+(`0x10b10834`) and the draw loop (`0x10b10ae9`) all read the points GetFrame
+wrote at `+0x00`. Nothing in the loop turns them back into world space.
+
+GetFrame composes the Coords into its matrix, so a vertex rounds once on its
+way from the mesh's int16 frame to camera space. Every float store of
+`ULodMesh::GetFrame` (`0x10355360..0x103568e5`), with the order of the work
+between them (render pass, precision control 24):
+
+| Addresses | Stores | What |
+| --- | --- | --- |
+| `0x10355520..0x10355584` | `fst [ebp-0x44]` `0x1035553d`; `fstp [ebp-0x2c], [ebp-0x28], [ebp-0x24]` `0x10355572`, `0x10355578`, `0x10355584` | scale = DrawScale (the double 1.0 at `0x104298a0` when the animation actor's bParticles, `+0x194` bit 2, is set), stored; mesh Scale x, y, z (computed z, y, x) times it, each stored |
+| `0x10355587..0x10355606` | `fstp [ebp-0x198], [ebp-0x194], [ebp-0x190]` `0x103555c3`, `0x103555d3`, `0x10355600` | the caller's Origin less (Location + PrePivot): the sums (`0x1035558d..0x103555a5`) stay on the x87 stack, the three differences are stored |
+| `0x10355610..0x1035566b` | Core calls `0x10599b48` (twice: `*=` the actor's Rotation, then the mesh RotOrigin `+0x118`) and `0x10599b4c` (`*=` FScale) | the Core FCoords operators; their stores are Core's (`0x1011ac80` rotation, `0x1011c0a0` scale, the pinned sine table) |
+| keyframe, whole frame `0x10355b50..0x10355c4f` | `0x10355b7f`, `0x10355b94`, `0x10355ba0` the int16 words as floats (the cached pose); `0x10355bb9`, `0x10355bc5`, `0x10355be0` the pose less the mesh Origin (`+0x10c..0x114`); `0x10355c4a`, `0x10355c4c`, `0x10355c4f` the output | TransformPointBy is inline (`0x10355bef..0x10355c13`): the Origin subtraction of the matrix and the three dot products stay on the stack, only the three results are stored |
+| keyframe, interpolated `0x10355c76..0x10355df6` | the words `0x10355cb4`, `0x10355cc5`, `0x10355ce4`, `0x10355cf3`; differences Y, Z `0x10355d04`, `0x10355d0d` (X stays on the stack); products Y, Z `0x10355d19`, `0x10355d25` (X stays); sums `0x10355d2a`, `0x10355d3d`, `0x10355d4c` into the cache pose; less Origin `0x10355d5d`, `0x10355d69`, `0x10355d87`; output `0x10355df1`, `0x10355df3`, `0x10355df6` | `(b - a)·alpha + a`, alpha the fraction stored at `0x10355b1e` (`0x10355afb`: the phase `frame·NumFrames`; `0x10355b09`: FISTP of phase less the float .5 at `0x1047a158`) |
+| tween scalars `0x103556b7..0x10355763` | `fstp [ebp+0x40]` `0x103556fe` (alpha = 1 − AnimFrame/cachedFrame, the double 1.0 `fsubr`); `fstp [edi+4]` `0x10355730` (the reset frame); `fst [edi+0x10]` `0x10355753` (the completion `(1 − completion)·alpha + completion`, compared with .97f after the store) | the cache entry's scalars, in this order |
+| tween fill `0x10355788..0x103557d4` | `0x103557a3`, `0x103557b8`, `0x103557c8` | the words of the target frame as floats, into the cache pose for newly requested vertices |
+| tween, alpha 0 `0x10355807..0x103558bb` | less Origin `0x1035582b`, `0x10355837`, `0x1035584c`; output `0x103558b6`, `0x103558b8`, `0x103558bb` | the cache pose published |
+| tween, alpha > 0 `0x103558e5..0x10355a1c` | words `0x10355923`, `0x10355932`; differences Y, Z `0x1035594d`, `0x10355956`; products Y, Z `0x10355962`, `0x1035596e`; sums into the cache `0x10355973`, `0x1035597e`, `0x10355987`; less Origin `0x10355992`, `0x1035599e`, `0x103559b0`; output `0x10355a17`, `0x10355a19`, `0x10355a1c` | the same interpolation from the cache pose |
+| blend slots `0x10356020..0x10356879` | the same arithmetic per slot (fill, tween, keyframe, interpolated) with the slot's frame-0 vertex in place of the Origin; each vertex's TransformVectorBy result `0x10356239..0x1035623e`, `0x103563ec..0x103563f1`, `0x10356641..0x10356646`, `0x10356858..0x1035685d`, then the sum with the output `0x10356249..0x1035625a`, `0x103563ff..0x10356416`, `0x10356654..0x1035666b`, `0x10356868..0x10356879` | the additive blend, slots in ascending order |
+
+`lodMeshFrameMatrix`, `createPublisher`'s `publishVertex` and `interpolate` in
+`src/runtime/lodmesh-frame.mjs` are these rounds in this order; the oracle
+cases below execute the function itself.
+
 ## GetFrame and the post-frame morph `0x10b0ee34..0x10b0ef6e`
 
 GetFrame ([GetFrame](script-lodmesh-frame.md)) receives the requested count
@@ -130,13 +177,112 @@ vertex and U/V bytes from the cached dwords (overwriting `+50`/`+54`).
 
 Not ported here: the particle branch (Actor `+194` bit 2, `0x10b0f7ad..`),
 which uses the same count; the wire/orthographic branch (`0x10b0f45c..`),
-which collapses wedges below the count without testing the LOD flag.
+which collapses wedges below the count without testing the LOD flag. Neither
+is reachable in the shipped game ("Branches not ported" below).
+
+## Branches not ported: no shipped data reaches them
+
+Measured 2026-10-14 with `node scripts/census-lodmesh-branches.mjs` (the
+installed game; nothing is written). Each branch has one gate in
+DrawLodMesh, and one way to be set in a shipped game.
+
+**Particle branch** (`test [actor+0x194], 4` at `0x10b0f7a0`, then
+`0x10b0f7ad..`: the actor's Texture is drawn as a sprite at each vertex,
+using the same count). The bit is Actor.bParticles. In the shipped data:
+
+* 0 of 1,502 classes in the 38 script packages set bParticles in their
+  defaults (own or inherited);
+* 0 of 131,514 map actors in the 88 maps carry a bParticles tag;
+* 0 of 8,469 decoded script functions and states store it (no Let to an
+  InstanceVariable or through a Context), and no string constant names it
+  (a `set` console string);
+* the native stores to `+0x194` in Engine.dll and DeusEx.dll are the
+  bit-by-bit copies of the Actor assignment (`and ecx, 2 / 4 / 8 / 0x10 / 0x20`
+  clusters at Engine.dll `0x10324212`, `0x10325529`, `0x10327512`,
+  `0x103295ee`), which take the source actor's bits (the class defaults and
+  map tags above), and `GC.DrawActor` (Extension.dll `0x1002aa60`), which
+  sets and restores bit 0 (bUnlit) only. The other `+0x194` sites in
+  Extension.dll (word stores and float loads at unrelated offsets) were not
+  traced, so a native store of the bit there is unexcluded by this census.
+
+Island's earlier census agrees ("No actor has bParticles",
+[GPU mesh](gpu-mesh.md#why)). Play draws such an actor as an ordinary mesh;
+the branch stays unported and explicitly unsupported.
+
+**Wire / orthographic branch** (the wire flag `[ebp-0x38]`, set when the
+viewport actor's RendMap, `+0x600`, is 1, 13, 14 or 15, `0x10b0ed5b..0x10b0ed83`;
+GetFrame then gets GMath.UnitCoords). RendMap is set by:
+
+* `SpawnPlayActor` / Login to 5 (`0x103971a7`), and by no script (0 stores
+  in 8,469 functions);
+* `UCanvas::execDrawActor` (`0x10377f6f`: `bWireframe` sets RendMap 1 for
+  the call). Its only script callers are `Engine.Inventory.RenderOverlays`
+  and `Engine.Weapon.RenderOverlays`, both with the literal `false`; the other
+  native caller of the renderer's DrawActor, `GC.DrawActor` (Extension.dll
+  `0x1002aa60`), writes neither RendMap nor bParticles;
+* the console command `RMODE n`, 0 < n < 20 (UViewport::Exec `0x1037420f`).
+  The shipped scripts issue only `RMODE 6` and `RMODE 5`
+  (`DeusExPlayer.Matrix`), neither a wire value; Play's console
+  (script-console-command.mjs) raises `UnsupportedConsoleCommandError` for
+  RMODE as a claimed UViewport::Exec keyword;
+* class defaults: no class sets RendMap; the 122 RendMap tags in the maps
+  (values 1, 2, 5, 6, 13, 14, 15) all sit on the editor's `Camera` actors,
+  which no game viewport attaches to.
+
+So the branch is reachable only by a player typing `RMODE 1` or
+`RMODE 13..15` at the console. Play has no such command; the branch stays
+unported and explicitly unsupported (a viewer with RendMap 5, as
+[bsp-occlusion.md](bsp-occlusion.md) records for the orthographic maps).
+
+## The first-person weapon
+
+Added 2026-10-14. `Weapon.RenderOverlays` (and `Inventory.RenderOverlays`)
+call `Canvas.DrawActor(self, false)`; `UCanvas::execDrawActor` (Engine.dll
+`0x10377ed0`) clears the actor's bHidden bit (`+0x28` bit 1) for the call,
+and calls the renderer's DrawActor (vtable `+0x74`, at `0x10377fae`) with the
+canvas's Frame (`Canvas+0x7c`, the Frame `UGameEngine::Draw` gave
+`Canvas->Update` at `0x1038f68e`: the master frame). Render.dll `0x10b262c0`
+builds an FDynamicSprite on that Frame and calls DrawActorSprite, which hands
+`Frame->Coords` to DrawMesh like any sprite's. DrawLodMesh therefore selects
+the weapon's detail exactly as it does for a world actor: from the master
+frame's Coords and FX (`+0xb8`), the viewport actor's FovAngle, the settings
+of URender, and the weapon's own Location (set by `SetLocation` in
+RenderOverlays just before), DrawScale and LODBias. There is no term of its
+own for the weapon's render pass. (RenderOverlays itself returns for a
+DesiredFOV other than DefaultFOV, so the FOV is the default one.)
+
+Play: `weapon-overlay-sim.mjs` gives the weapon's binding the master frame's
+inputs (`sim-session.mjs weapon()`: the visibility pass's Coords and FX, the
+player's FovAngle, URender's settings), so it selects, morphs and lights in
+camera space like the world's actors; `?meshLod=off` turns it off with the
+rest. The crowbar in Training, shipped settings: detail 14,240 for 138
+vertices, requested 138; the selection sets the morph flag (the ratio is
+below 1.43) and the morph start, `(1 − 0.3)·14,240`, is not below the count, so
+GetFrame's return clears it and the weapon is drawn at full detail with no
+morphed vertex: the original keeps the first-person weapon unreduced at its
+distance, as the earlier note assumed. `validate-weapon-lod` runs the overlay
+simulation on the crowbar with six URender settings (shipped and MLOD 1 to
+4,096) on the JavaScript and Wasm paths: six of the twelve selections reduce
+the weapon below ModelVerts, and the detail bits, counts, flags, start,
+admitted faces and vertices equal the original ranges' in all twelve. In
+worker mode `validate-lodmesh-lod-play --map 00_Training --weapon` (the
+crowbar taken and equipped through the probe) has the 17 views' weapon rows
+through the same oracle.
+
+Not measured: other weapons (every `DeusExItems` LodMesh, 158 of 158, has LOD
+data; at a hand's distance each is expected at full detail as the crowbar
+is, but only the crowbar is run), and the GPU view-model instance's
+camera-space passes against the original (they are the world actors' passes
+on the weapon's own GPU mesh instance).
 
 ## Translation and reference cases
 
 * `src/runtime/lodmesh-lod.mjs` (the reference): `selectLodMesh`,
   `morphLodMesh`, `lodMeshCorners`, `lodMeshTopology`, `lodMeshTanArgument`,
   `lodMeshTanFactor`, `RENDER_LOD_SETTINGS`.
+* `src/runtime/lodmesh-frame.mjs`: `lodMeshCameraMatrix` (a frame's GetFrame
+  matrix from its Coords) and `publishLodMeshOps` (the cache poses of earlier
+  operations published through it).
 * `native/lodmesh-kernel/src/lod.rs` (the port): `lod_select`, `lod_morph`,
   `lod_corners`, `upload_lod_mesh`; `kernel.lod` in `src/runtime/lodmesh-wasm.mjs`.
 * The tangent: `x87TanFloatCandidates` in `src/runtime/x87-tan.mjs` computes
@@ -157,6 +303,9 @@ which collapses wedges below the count without testing the LOD flag.
 | coverage of those cases | 183 with reduced topology, 152 morphing (4,174 morphed vertices), 162 below ModelVerts; 48,578 of 77,140 faces admitted; 4,531 wedges with interpolated UVs; distances from full detail to the LODMinVerts floor and behind the camera; FOV 60/75/90/120/74.99874; FX 640–1920; LODBias, DrawScale, LODZDisplace; no collapse table, LODStrength 0 and −0, LODMorph 0, LODMinVerts above N; modes 0 (fixed 0.37 and 0), 2, 3, MLOD 0.5; rotated coords; GetFrame returning 7 fewer and fewer than the morph start |
 | `node scripts/validate-x87-tan-hardware.mjs` (AMD Ryzen 9 8945HS, Wine, `0x007f`) | 208,181 FOVs: every argument equals `lodMeshTanArgument`, every stored float equals the single candidate (no ambiguous pair); `Math.fround(Math.tan(x))` happened to agree in all of them too |
 | `ORACLE_CW=0x037f` audit | 665 of 226,265 checks differ (above): the precision matters |
+| `node scripts/validate-lodmesh-lod.mjs --camera-chain` (2026-10-14; the six meshes, 6 poses for each character and 4 for each prop: keyframes, tweens, additive blends; three cameras: a map position, a pitched one, a mirror frame's reflected Coords) | the original GetFrame (`native-lodmesh-frame-oracle.py`, `0x007f`) is run on every pose with the camera's Frame->Coords over a pattern; the translation's GetFrame (JavaScript and Wasm) produces its 88-byte buffer byte for byte; the original morph and face ranges then run on that buffer for 7 cases per pose (the morph regimes, the floor, rotated Coords, a short GetFrame return): 210 cases, 180 reduced, 172 morphing (4,956 vertices), every buffer byte, face, material, flag and wedge dword equal for JS and the kernel |
+| `node scripts/validate-lodmesh-frame.mjs [--wasm]` | 61 complete GetFrame calls, 15 of them in camera space (large origins, pitch, reflected Coords; keyframes, reduced counts, tweens, four additive blends): every output byte, cache byte and scalar equal |
+| `test/lodmesh-camera.test.mjs` | the cache poses published again through a frame's matrix (`publishLodMeshOps`) equal GetFrame called with that frame's Coords on 4 cameras and 7 ticks (keyframes, tweens, blends, count changes), JavaScript and Wasm |
 
 The captured oracle output (`--reference-only`, `.cache/research/`) stays
 outside Git; `--captured` reuses it when its inputs match.
@@ -183,22 +332,42 @@ settings (`setLodSettings` changes them as MLOD/MLMODE/MLFIX would; only
 validation calls it). The requested count joins the pose in deciding a new
 GetFrame; GetFrame returns the count the rest uses.
 
+**Two spaces (2026-10-14).** The cache poses are published twice: through the
+identity matrix into world space, which the draw, the environment mapping and
+the culling bounds use, and, for each frame that lights the actor, through
+that frame's own matrix (`lodMeshCameraMatrix`: `lodMeshFrameMatrix` with the
+frame's Coords, 12 floats the lighting frame already holds), which is what the
+original's GetFrame call for that frame fills. The morph runs on both; the
+lighting reads only the camera-space one (see "Camera space" above for the
+original). The draw keeps the world-space pose because three.js projects it
+with its own float32 view and projection: the original's camera-space points
+are the input of its D3D device's projection, which Play does not reproduce
+bit for bit, and the environment mapping's world-space inputs are an existing
+tolerance item ([GPU mesh](gpu-mesh.md#tolerances)).
+
 **CPU path** (`?gpuMesh=0`, and any binding off the GPU path): GetFrame's
-output stays unmorphed (a later frame's GetFrame or LOD reads it again); the
-morph runs on a copy, the kernel's `lod` facade resolves the corners and the
-lighting runs over the reduced faces (a dropped face becomes a zero-area
-`PF_Invisible` face, which adds nothing to the normals and is never drawn).
-The frame record's `lod` carries the resolved corners and wedge dwords; the
-page draws each corner at its resolved vertex with its U/V bytes
+world-space output stays unmorphed (a later frame's GetFrame or LOD reads it
+again); the morph runs on a copy, the kernel's `lod` facade resolves the
+corners. For the lighting, `publishLodMeshOps` publishes the operations of the
+frame's GetFrame call (`getLodMeshFrame`'s `ops`; the merged plan's channels
+after a fallback) from the cache poses through that frame's matrix into a
+fresh buffer, `meshLod.after` morphs it with the frame's own selection and
+returned count, and the kernel lights it with `cameraSpace` set (the points
+are used as they are) over the reduced faces (a dropped face becomes a
+zero-area `PF_Invisible` face, which adds nothing to the normals and is never
+drawn). The frame record's `lod` carries the resolved corners and wedge
+dwords; the page draws each corner at its resolved vertex with its U/V bytes
 (actor-mesh-draw.mjs). A dropped face collapses onto its group's first
 admitted corner (zero area, bounds unchanged); a group with no admitted face
 is hidden on both sides.
 
 **GPU path** (the default): the plan carries each channel's count and fill
 start, the record's `lodParams` the post-frame scalars (`lodMorphScalars`:
-count, start, flags, the 24-bit inverse), and the GPU passes do the rest
-(the morph, the corners, the normals, lighting and draw over the resolved
-corners; [GPU mesh](gpu-mesh.md#distance-lod)).
+count, start, flags, the 24-bit inverse), each frame's lighting its GetFrame
+matrix (slot parameters F12..F15), and the GPU passes do the rest (the world
+pose and morph for the draw, then for the lit frames the camera pose and
+camera morph passes, the corners, the normals and the lighting over the
+resolved corners; [GPU mesh](gpu-mesh.md#distance-lod)).
 
 **Child frames (2026-10-08).** The original runs the whole of DrawLodMesh
 for every sprite of every frame. DrawFrame (`0x10b1a2d0`) recurses into each
@@ -258,17 +427,17 @@ Play (`actor-mesh-sim.mjs update`, `sim-session.mjs lodFramesOf`):
 
 **What stays different from the original:**
 
-* *Space of the morph.* Play's GetFrame runs with identity coords (world
-  space) and the lighting transforms to camera space as a separate stage at
-  24 bits (render-pass-precision.md "lighting camera transform"); the
-  original's GetFrame composes Frame->Coords into its matrix, so its morph
-  and lighting see camera-space floats. Counts, flags, start, alphas,
-  admitted faces, resolved corners and U/V bytes are the original's; the
-  morphed coordinates round in world space. Doing it in camera space would
-  need GetFrame's publication with the camera matrix for every drawn actor
-  whenever the view moves (on the CPU shadow too) and a draw path that takes
-  camera-space positions, per mirror frame as well; this is the existing
-  host-stage item, left open.
+* *Space of the drawn positions.* The morph and the lighting run in the
+  original's camera space since 2026-10-14 ("Two spaces" above). The
+  positions the page draws (and the environment mapping and culling bounds
+  read) are the world-space publication and morph, which round in another
+  space than the original's buffer: three.js projects them with its own
+  matrices anyway, so a draw from the camera-space buffer would change
+  sub-ulp placement only. The lighting-side effect of the old host stage was
+  large: of 10,188 camera-space components (six LOD meshes, three cameras)
+  the world pose transformed to camera space (`toCamera`, 24 bits) differed
+  from the original's buffer in 6,244, by up to 4,096 ulps of the small
+  camera-space value.
 * A child frame whose state differs draws the base state's bounding sphere
   for transparent sorting on the GPU path; its groups' visibility uses its own.
 * The vertices of a blend channel past its own count are published by the
@@ -287,13 +456,14 @@ Play (`actor-mesh-sim.mjs update`, `sim-session.mjs lodFramesOf`):
   with the frame's sprite) are not computed in any frame, the main one
   included, so there is no per-frame difference to reproduce
   ([mesh lighting](mesh-lighting.md#not-reproduced--open)).
-* The first-person weapon is not selected: its overlay frame has no LOD
-  inputs in Play; at its depth the original's ratio keeps it at full detail
-  (not measured).
+* The first-person weapon selects since 2026-10-14 ("The first-person weapon"
+  below); its camera-space lighting uses the main frame's Coords like the
+  world's.
 * GetFrame runs when the pose or the requested count changes, not every
   frame (an existing Play rule); the morph and corners follow the detail
   every frame it changes.
-* The particle and wire/orthographic branches are not ported.
+* The particle and wire/orthographic branches are not ported; no shipped data
+  or script reaches them ("Branches not ported" below).
 
 **Checks.** `node scripts/validate-lodmesh-lod-play.mjs [--map M] [--query
 gpuMesh=0] [--mirrors] [--mlod 0.25,3]` (worker mode): from the start, four
@@ -322,6 +492,8 @@ the merge of several GetFrame calls by `test/lodmesh-calls.test.mjs`.
 | Paris Club, `--mirrors` (10 views x 4 MLODs; the player, Female1, Faucet7, TrashCan1) | PASS: 84 drawn rows, 47 morphing, 44 below ModelVerts; 39 child-frame states equal the original's, 12 different from the main frame's; the GPU passes drew them (143 compared, 38 of a differing frame), the CPU geometry too (144 compared, 44) |
 | `validate-gpu-mesh` (Training, Island, `?sim=inline`) | PASS: on Island 298,758 final-pose components and 564,747 corner dwords equal the CPU path, colours 0 bytes off, visibility 0 mismatches; 201 LOD captures, all morphing, 96 with dropped faces; and in a child frame's own LOD state (5,448 variants of the compared actors, 1,816 morphing, then the main state back): 896,274 pose components, 1,694,241 corner dwords and 542,991 corner bytes equal, 0 drawn disagreements, the restore exact |
 | `validate-mesh-path-frames` (inline simulation, paused clock, 90 frames; the bar mirror with the player's reflection and the restroom mirror at MLOD 3 and 10) | PASS: the CPU path's 1280x720 frame equals the GPU path's byte for byte in each (0 of 3,686,400 bytes), a child frame drawing another LOD state than the main frame's in the two MLOD views ([visual acceptance](visual-acceptance.md#cpu-and-gpu-mesh-paths-jcs-reflection-2026-10-08-a-capture-artifact-fixed-in-the-tool)); a CPU path that ignores the child frame's own state fails it (1,359 bytes) |
+| `validate-gpu-mesh`, camera space (2026-10-14; Training, Island, `?sim=inline`) | the GPU camera final pose (the publication through the frame's matrix and the morph) equals its CPU twin (`publishLodMeshOps` + the LOD morph on the exact cache poses) in every published vertex: Island main frame 319,464 components, a reflected child frame (Mirror -1) 319,464, the child LOD states 958,392 (5,634 variants, 1,878 morphing), 0 ulp; the lighting reads these: colour bytes 0 off over 1.2 million corners, 0 drawn disagreements, restores exact; the lighting frame's Coords equal the LOD frame's on 939 compared actors |
+| `node scripts/validate-weapon-lod.mjs` | the crowbar through the overlay simulation, JavaScript and Wasm, at the shipped settings and MLOD 1, 8, 64, 512, 4096: 12 selections, 6 below ModelVerts, equal to the original ranges |
 | `test/lodmesh-calls.test.mjs` | 17 ticks of 1 to 3 GetFrame calls (keyframes, tweens, blend slots, count changes), JavaScript and Wasm: the merged plan's cache scalars, cache poses and published output equal the calls in order; a call that cannot merge restores the cache |
 
 **Cost** (interleaved A/B on the Linux host, AMD Radeon 780M, Island's
@@ -352,6 +524,35 @@ Linux host, worker mode, GPU path, 1440×960, Paris Club;
 The runs spread over 2.4–3.2 ms (mirrors) and 1.5–1.9 ms (worker actors), so
 the differences are inside the noise; the engaged case adds the morph and
 corner passes to a child pass's lighting run for the slots that differ.
+
+**Cost of camera space (2026-10-14)** (interleaved A/B on the Linux host, AMD
+Radeon 780M, worker mode, GPU path, 1440×960, 400 frames a run, medians;
+the previous commit `fc0e745` served from an export of the tree against
+this change, `profile-play-browser.mjs --gpu --no-profile`):
+
+| Island's start, idle, 5 pairs | before | after |
+| --- | ---: | ---: |
+| page actors phase | 0.44 ms | 0.43 ms |
+| worker actors phase | 4.17 ms | 4.29 ms |
+| GPU per frame | 1.70 ms | 1.64 ms |
+| page frame work | 3.39 ms | 3.41 ms |
+| worker frame work | 15.92 ms | 15.99 ms |
+| frame interval | 16.7 ms (vsync) | 16.7 ms (vsync) |
+
+| Paris Club bar mirror (78, −1008, 27), 4 pairs | before | after |
+| --- | ---: | ---: |
+| page actors phase | 0.315 ms | 0.310 ms |
+| worker actors phase | 2.04 ms | 1.92 ms |
+| page mirrors phase | 3.09 ms | 2.85 ms |
+| GPU per frame | 1.51 ms | 1.52 ms |
+
+The only difference outside the run-to-run spread is Island's worker actors
+phase, +0.12 ms: each lit actor's GetFrame matrix (`lodMeshFrameMatrix`, 1.3
+to 1.7 µs a call in JavaScript, about 70 lit actors in view). A Rust port of
+that function (`frame_matrix`, bit-equal to the JavaScript on 20,000 random
+inputs) measured 1.6 µs a call, no faster, since the call's marshalling costs
+as much as the arithmetic, and was not kept. The two extra GPU passes are
+not visible in the GPU time.
 
 The first GPU version walked the per-vertex LOD lists whenever the LOD flag
 held and cost 2.00 → 2.86 ms per frame; the vertex and corner passes now

@@ -7,7 +7,7 @@
  * vertices. Floats are returned with their bit patterns. */
 const bits=value=>{const v=new DataView(new ArrayBuffer(4));v.setFloat32(0,value,true);return v.getUint32(0,true);};
 
-export function lodProbe(actorSim,{all=false,list=false,settings=null}={}){
+export function lodProbe(actorSim,{all=false,list=false,settings=null}={},weaponSim=null){
   if(!actorSim)return null;
   // `settings`: URender's MLOD/MLMODE/MLFIX for the next frames (an object
   // as setLodSettings takes it), or false for the shipped ones.
@@ -17,11 +17,13 @@ export function lodProbe(actorSim,{all=false,list=false,settings=null}={}){
   if(list)return actorSim.all().map(binding=>{let location=null;try{location=binding.location;}catch{}
     return {id:binding.id,actor:binding.actor?.name??null,mesh:binding.mesh?.key??null,path:binding.path,location};});
   const rows=[];
-  for(const binding of actorSim.all()){
+  // The first-person weapon's bindings join the rows (`weapon`): Canvas.DrawActor selects its LOD in the master frame.
+  const weapon=new Set(weaponSim?.all?.()??[]);
+  for(const binding of [...actorSim.all(),...weapon]){
     const state=binding.lodState?.();
     if(!state||(!all&&!state.updated))continue;
     const {frame,inputs,selection}=state;
-    rows.push({id:binding.id,actor:state.actor,mesh:state.mesh,meshPackage:state.meshPackage,meshIndex:state.meshIndex,path:state.path,drawn:state.drawn,
+    rows.push({id:weapon.has(binding)?`weapon${binding.id}`:binding.id,weapon:weapon.has(binding),actor:state.actor,mesh:state.mesh,meshPackage:state.meshPackage,meshIndex:state.meshIndex,path:state.path,drawn:state.drawn,
       frame:{coordsBits:frame.coords.map(bits),fxBits:bits(frame.fx),fovBits:bits(frame.fov),tanBits:bits(frame.tanFactor),
         settings:{...frame.settings}},
       inputs:{locationBits:inputs.location.map(bits),drawScaleBits:bits(inputs.drawScale),lodBiasBits:bits(inputs.lodBias)},

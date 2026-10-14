@@ -19,7 +19,13 @@
 // also when it differs from the main frame's. --mirrors views the map's mirror
 // polygons from in front instead of the far actors, at several MLODs.
 //
-//   node scripts/validate-lodmesh-lod-play.mjs [--map M] [--query gpuMesh=0] [--mirrors] [--mlod 0.25,3] [--url http://...]
+// --weapon (Training): the player first takes the crowbar and equips it (renderPassProbe), so the
+// first-person weapon's binding joins the rows: Canvas.DrawActor draws it in the master frame
+// (docs/script-lodmesh-lod.md "The first-person weapon"), and its selection, with the master
+// frame's Coords and FX and the weapon's own Location, DrawScale and LODBias, goes through the
+// original ranges like any other row.
+//
+//   node scripts/validate-lodmesh-lod-play.mjs [--map M] [--query gpuMesh=0] [--mirrors] [--weapon] [--mlod 0.25,3] [--url http://...]
 import assert from 'node:assert/strict';
 import {execFileSync} from 'node:child_process';
 import {existsSync} from 'node:fs';
@@ -39,7 +45,7 @@ try { root = gameDirectory(); } catch { console.log('SKIP validate-lodmesh-lod-p
 const python = process.env.NATIVE_PROBE_PYTHON ?? '.cache/native-probe-env/bin/python';
 if (!existsSync(python)) { console.log('SKIP validate-lodmesh-lod-play: no native probe environment'); process.exit(0); }
 const map = option('map', '01_NYC_UNATCOIsland'), query = option('query', '');
-const mirrorViews = process.argv.includes('--mirrors');
+const mirrorViews = process.argv.includes('--mirrors'), weaponView = process.argv.includes('--weapon');
 // --mlod a,b,c: URender's MLOD (shape LOD distance) for each sampling of a view
 // (shipped: 0.25; sim-side setLodSettings through lodProbe). With --mirrors the
 // default samples each mirror view at 0.25, 1, 3 and 10, so that frames whose
@@ -97,6 +103,17 @@ try {
   // --from x,y,z: start from another place (an open area of the map).
   const from = option('from', null);
   if (from) { await page.evaluate(location => window.deusExViewer.placeProbe({location}), from.split(',').map(Number)); await frames(30); }
+  if (weaponView) {
+    assert.equal(map, '00_Training', '--weapon takes the Training crowbar');
+    const at = await page.evaluate(() => window.deusExViewer.renderPassProbe({locate: 'WeaponCrowbar1'}));
+    await page.evaluate(location => window.deusExViewer.placeProbe({location, lookAt: 'WeaponCrowbar1'}), [at[0] - 48, at[1], at[2] + 20]);
+    await frames(20);
+    await page.evaluate(() => window.deusExViewer.placeProbe({lookAt: 'WeaponCrowbar1'}));
+    await frames(10);
+    const taken = await page.evaluate(() => window.deusExViewer.renderPassProbe({take: 'WeaponCrowbar1'}));
+    assert.ok(taken.equipped, `the crowbar is equipped (${JSON.stringify(taken)})`);
+    await frames(60);
+  }
   const listed = await page.evaluate(() => window.deusExViewer.lodProbe({list: true}));
   const eye = await page.evaluate(() => window.deusExViewer.placeProbe({}));
   // The farthest are often behind walls: take the farthest few and others
@@ -192,6 +209,8 @@ for (const [key, entry] of byMesh) {
 }
 const reference = JSON.parse(execFileSync(python, ['scripts/native-lodmesh-lod-oracle.py', root],
   {input: JSON.stringify(specs), encoding: 'utf8', maxBuffer: 256 << 20}));
+const weaponRows = checks.filter(check => check.row.weapon);
+if (weaponView) assert.ok(weaponRows.length > 0, 'the first-person weapon is among the drawn rows');
 const tally = {rows: checks.length, active: 0, morph: 0, reduced: 0, minCount: Infinity, meshes: byMesh.size, pageCompared: 0,
   frames: frameChecks.length, framesSame: 0, framesDiffer: [], passes: 0, passesDiffer: 0};
 for (const check of frameChecks) {
@@ -259,7 +278,7 @@ for (const check of checks) {
   tally.active += finalActive ? 1 : 0; tally.morph += finalMorph ? 1 : 0;
   if (row.returned < topology.modelVerts) { tally.reduced++; tally.minCount = Math.min(tally.minCount, row.returned); }
 }
-console.log(`validate-lodmesh-lod-play: PASS (${map}${query ? `, ${query}` : ''}: ${tally.rows} drawn LOD rows over ${samples.length} views, ` +
+console.log(`validate-lodmesh-lod-play: PASS (${map}${query ? `, ${query}` : ''}${weaponView ? `, first-person weapon: ${weaponRows.length} rows (${[...new Set(weaponRows.map(check => `${check.row.actor}: GetFrame returned ${check.row.returned}, LOD flag ${Boolean(check.row.state?.active)}`))].join('; ')})` : ''}: ${tally.rows} drawn LOD rows over ${samples.length} views, ` +
   `${tally.meshes} meshes; ${tally.active} with reduced topology, ${tally.morph} morphing, ${tally.reduced} below ModelVerts ` +
   `(down to ${tally.minCount === Infinity ? '-' : tally.minCount}); the selection, flags, start, admitted faces and vertices equal ` +
   `the original's, and the page draws them (${tally.pageCompared} compared, ${tally.gpu ?? 0} on the GPU path); ` +

@@ -2,6 +2,7 @@ import {refValue} from '../runtime/script-vm.mjs';
 import {inRenderPass} from '../runtime/render-precision.mjs';
 import {TextureStore} from '../unreal/textures.mjs';
 import {createMeshBinding} from './actor-mesh-sim.mjs';
+import {lodFrame} from './actor-mesh-lod.mjs';
 
 /** The simulation side of the player's view model (docs/sim-worker.md step
  * 6; evidence: docs/script-weapon-rendering.md). Render.dll's ClearZ +
@@ -17,8 +18,14 @@ import {createMeshBinding} from './actor-mesh-sim.mjs';
  * `playerSource` is the player actor or a getter for it: Player start logs a
  * new player in. `layout` is this side's copy of the page's weapon GPU mesh
  * layout (gpu-mesh-layout.mjs; null: the CPU path). `onCreate(creation)` and
- * `onRelease(id)` hand the page each binding's creation and retirement. */
-export async function createWeaponOverlaySim(runtime,assets,playerSource,{kernel=null,lighting=null,layout=null,
+ * `onRelease(id)` hand the page each binding's creation and retirement.
+ * `lod` (false: `?meshLod=off`) gives the bindings DrawLodMesh's distance
+ * LOD: Canvas.DrawActor draws in the world's master frame (UCanvas+0x7c, the
+ * Frame UGameEngine::Draw gave Canvas->Update), so the weapon's selection
+ * takes that frame's Coords and FX, the viewport actor's FovAngle and the
+ * weapon's own Location, DrawScale and LODBias (docs/script-lodmesh-lod.md
+ * "The first-person weapon"). */
+export async function createWeaponOverlaySim(runtime,assets,playerSource,{kernel=null,lighting=null,layout=null,lod=true,
   onCreate=()=>{},onRelease=()=>{}}={}) {
   const currentPlayer=typeof playerSource==='function'?playerSource:()=>playerSource;
   const engine=await assets.get('Engine');
@@ -37,7 +44,7 @@ export async function createWeaponOverlaySim(runtime,assets,playerSource,{kernel
     if(entry?.mesh===mesh)return entry;
     if(entry)retire(actor,entry);
     if(pending.has(actor))return null;
-    const task=createMeshBinding(runtime,actor,{id:nextId++,originalObjectIndex:index++,kernel,drawActor:true,lighting,layout,textures})
+    const task=createMeshBinding(runtime,actor,{id:nextId++,originalObjectIndex:index++,kernel,drawActor:true,lighting,layout,textures,lod})
       .then(binding=>{
         if(disposed||runtime.isReleased(actor)||read(actor,'Mesh')!==mesh||read(actor,'bDeleteMe')){binding.dispose();return;}
         entries.set(actor,{mesh,binding});onCreate(binding.creation);
@@ -77,6 +84,8 @@ export async function createWeaponOverlaySim(runtime,assets,playerSource,{kernel
     return calls;
   };
   return {summary,
+    /** The bindings in use (validation access: lod-probe.mjs). */
+    all:()=>[...entries.values()].map(entry=>entry.binding),
     // The asynchronous phase only prepares bindings. It does not dispatch
     // the script event or advance an actor; frame() is the sole draw event
     // source.
@@ -90,8 +99,10 @@ export async function createWeaponOverlaySim(runtime,assets,playerSource,{kernel
      * DrawActor submission with its binding's frame record and main-frustum
      * decision, the lighting frame's coordinates for the GPU passes, and the
      * actors the frame draws (render feedback). A submission whose binding is
-     * still being prepared is skipped. */
-    frame({frustum,pack=null}){
+     * still being prepared is skipped. `lodInputs` {coords, fx, fov} is the
+     * master frame's DrawLodMesh inputs (sim-session.mjs), with URender's
+     * `settings`; without them the weapon draws at full detail. */
+    frame({frustum,pack=null,lodInputs=null,settings}){
       if(disposed)return null;
       if(error)throw error;
       // A reload's collection releases the old generation's weapons.
@@ -99,6 +110,7 @@ export async function createWeaponOverlaySim(runtime,assets,playerSource,{kernel
         retire(actor,entry);
       summary.draws=0;summary.actor=null;summary.mesh=null;
       const target=overlayTarget(),draws=[],drawn=[];
+      const frameLod=lod&&lodInputs?lodFrame(lodInputs,settings):null;
       if(target){
         for(const command of commands(target)){
           summary.actor??=command.actor.name;summary.mesh??=read(command.actor,'Mesh')?.key??null;
@@ -106,7 +118,7 @@ export async function createWeaponOverlaySim(runtime,assets,playerSource,{kernel
           const {binding}=entry;
           // Canvas.DrawActor -> URender::DrawActor lights the weapon as its
           // own light sink in the main frame (docs/mesh-lighting.md).
-          const record=binding.update(pack?{lit:true,pack}:{lit:true});
+          const record=binding.update({lit:true,...(pack?{pack}:{}),...(frameLod?{lodFrame:frameLod}:{})});
           // three.js's frustum test on the drawn groups (the CPU path's
           // posed bounds; the GPU path's group decisions).
           const decision=binding.passVisibility(frustum);

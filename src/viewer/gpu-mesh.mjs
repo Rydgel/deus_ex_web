@@ -10,10 +10,10 @@ import {r24prod} from '../runtime/x87-pc24.mjs';
 import {createGpuMeshLayout} from './gpu-mesh-layout.mjs';
 import {PLAN_HEAD,PLAN_OP,LIGHTING_HEAD,LIGHTING_LIGHT} from './mesh-frame-pack.mjs';
 import {WIDTH,COMMON,FLOAT_FLOAT,FULLSCREEN_VERTEX,poseFragment,FACE_FRAGMENT,VERTEX_FRAGMENT,CORNER_FRAGMENT,ENVIRONMENT_UV,
-  MORPH_FRAGMENT,RESOLVE_FRAGMENT} from './gpu-mesh-glsl.mjs';
+  MORPH_FRAGMENT,RESOLVE_FRAGMENT,CAMERA_POSE_FRAGMENT,CAMERA_MORPH_FRAGMENT} from './gpu-mesh-glsl.mjs';
 
 export {GPU_MESH_MAX_LIGHTS} from './gpu-mesh-layout.mjs';
-const PARAMS_U=12,PARAMS_F=12,STATES=5;
+const PARAMS_U=12,PARAMS_F=16,STATES=5;
 const floatWord=(()=>{const v=new DataView(new ArrayBuffer(4));return x=>(v.setFloat32(0,x,true),v.getUint32(0,true));})();
 // The pose pass's targets, split into two draws of three (docs/gpu-mesh.md
 // "Pose pass targets"): drawn as one pass of all six RGBA32F targets, Chrome
@@ -57,7 +57,8 @@ export function createGpuMesh(renderer,capacities={}) {
   };
   const poseParts=POSE_PARTS.map(part=>program(poseFragment(part)));
   const programs={face:program(FACE_FRAGMENT),vertex:program(VERTEX_FRAGMENT),
-    corner:program(CORNER_FRAGMENT),morph:program(MORPH_FRAGMENT),resolve:program(RESOLVE_FRAGMENT)};
+    corner:program(CORNER_FRAGMENT),morph:program(MORPH_FRAGMENT),resolve:program(RESOLVE_FRAGMENT),
+    cameraPose:program(CAMERA_POSE_FRAGMENT),cameraMorph:program(CAMERA_MORPH_FRAGMENT)};
   const vao=gl.createVertexArray();
 
   // ---- textures
@@ -90,6 +91,11 @@ export function createGpuMesh(renderer,capacities={}) {
   const meshLodFaces=texels(RGBA32UI,faceCapacity),meshWedges=texels(RG32UI,wedgeCapacity);
   const meshLodVertices=texels(RGBA32UI,vertexCapacity),lodLists=texels(RGBA32UI,lodListCapacity/4);
   const finalPose=texels(RGBA32F,vertexCapacity),cornerWedges=texels(R32UI,cornerCapacity);
+  // The lighting frame's camera space (docs/script-lodmesh-lod.md "Camera
+  // space"): GetFrame's publication through that frame's matrix and its LOD
+  // morph, which the face and vertex passes read. The draw reads the world
+  // pose above.
+  const cameraPose=texels(RGBA32F,vertexCapacity),cameraFinal=texels(RGBA32F,vertexCapacity);
 
   // three sets the unpack state per texture and leaves it (a flipY texture
   // leaves UNPACK_FLIP_Y on, which reverses the rows of a typed-array upload).
@@ -121,6 +127,7 @@ export function createGpuMesh(renderer,capacities={}) {
   const vertexFramebuffer=framebuffer([vertexLight,environmentNormals]);
   const cornerFramebuffer=framebuffer([corners]);
   const morphFramebuffer=framebuffer([finalPose]),resolveFramebuffer=framebuffer([cornerWedges]);
+  const cameraPoseFramebuffer=framebuffer([cameraPose]),cameraFinalFramebuffer=framebuffer([cameraFinal]);
   {
     // Zero the ping-pong targets so copied-through free texels are defined.
     for(const fb of poseFramebuffers.flat()){
@@ -257,6 +264,9 @@ export function createGpuMesh(renderer,capacities={}) {
     const {slot}=handle,u=slot*PARAMS_U*4,fl=slot*PARAMS_F*4;
     slotParamsU[u+8+1]=lightCount;slotParamsU[u+8+3]=lightStamp??frame+1;
     slotParamsU[u+12+1]=count;
+    // The frame's GetFrame matrix (F12..F15, rows of 4 with 3 used).
+    for(let row=0;row<4;row++)for(let i=0;i<3;i++)
+      slotParamsF[fl+48+row*4+i]=packed?packed.f32[packed.at+9+row*3+i]:lighting.camera[row*3+i];
     if(packed){
       const {u32,f32,at}=packed;
       slotParamsU[u+8]=u32[at];
@@ -326,11 +336,7 @@ export function createGpuMesh(renderer,capacities={}) {
     if(u.get('uZero'))gl.uniform1ui(u.get('uZero'),0);
     if(u.get('uFrame'))gl.uniform1ui(u.get('uFrame'),poseFrame);
     if(u.get('uLightFrame'))gl.uniform1ui(u.get('uLightFrame'),lighting.stamp>>>0);
-    if(view&&u.get('uCameraOrigin')){
-      gl.uniform3fv(u.get('uCameraOrigin'),view.origin);gl.uniform3fv(u.get('uCameraX'),view.axes[0]);
-      gl.uniform3fv(u.get('uCameraY'),view.axes[1]);gl.uniform3fv(u.get('uCameraZ'),view.axes[2]);
-      gl.uniform1f(u.get('uMirror'),view.mirror??1);
-    }
+    if(view&&u.get('uMirror'))gl.uniform1f(u.get('uMirror'),view.mirror??1);
   };
   /** The lighting passes (faces, vertices, corners) for the slots whose
    * lighting stamp is `lighting.stamp`, in the frame `lighting.camera`. */
@@ -340,12 +346,12 @@ export function createGpuMesh(renderer,capacities={}) {
     // Faces.
     let prog=programs.face;gl.useProgram(prog.handle);setUniforms(prog,poseFrame,lighting);
     bindTextures(prog,[['uParamsU',paramsU],['uParamsF',paramsF],['uTables',tables],['uFaceMap',faceMap],
-      ['uMeshFaces',meshFaces],['uPose',finalPose],...lodTextures]);
+      ['uMeshFaces',meshFaces],['uPose',finalPose],['uCameraPose',cameraFinal],...lodTextures]);
     draw(prog,faceFramebuffer,faceArena.high?fRows:0);
     // Vertices.
     prog=programs.vertex;gl.useProgram(prog.handle);setUniforms(prog,poseFrame,lighting);
     bindTextures(prog,[['uParamsU',paramsU],['uParamsF',paramsF],['uTables',tables],['uVertexMap',vertexMap],
-      ['uMeshVertices',meshVertices],['uAdjacency',adjacency],['uPose',finalPose],['uFaces',faceNormals],
+      ['uMeshVertices',meshVertices],['uAdjacency',adjacency],['uPose',finalPose],['uCameraPose',cameraFinal],['uFaces',faceNormals],
       ['uEnvironmentFaces',environmentFaces],['uLights',lightTexture],...lodTextures]);
     draw(prog,vertexFramebuffer,vertexArena.high?vRows:0);
     // Corners.
@@ -365,6 +371,21 @@ export function createGpuMesh(renderer,capacities={}) {
     bindTextures(prog,[['uParamsU',paramsU],['uCornerMap',cornerMap],['uLodFaces',meshLodFaces],['uWedges',meshWedges],
       ['uFinal',finalPose]]);
     draw(prog,resolveFramebuffer,cornerArena.high?cRows:0);
+  }
+  /** The lighting frame's camera space: GetFrame's publication of the cache
+   * poses (the states of the latest pose pass) through the matrix each lit
+   * slot's lighting carries, then the LOD morph of that frame's state, for
+   * the slots whose lighting stamp is `lighting.stamp`. */
+  function cameraPasses(poseFrame,lighting) {
+    if(!vertexArena.high)return;
+    const vRows=rowsFor(vertexArena.high);
+    let prog=programs.cameraPose;gl.useProgram(prog.handle);setUniforms(prog,poseFrame,lighting);
+    bindTextures(prog,[['uParamsU',paramsU],['uParamsF',paramsF],['uVertexMap',vertexMap],['uKeyframes',keyframes],
+      ...pose[current].slice(1).map((target,k)=>[`uState${k}`,target])]);
+    draw(prog,cameraPoseFramebuffer,vRows);
+    prog=programs.cameraMorph;gl.useProgram(prog.handle);setUniforms(prog,poseFrame,lighting);
+    bindTextures(prog,[['uParamsU',paramsU],['uVertexMap',vertexMap],['uLodVertices',meshLodVertices],['uPose',cameraPose]]);
+    draw(prog,cameraFinalFramebuffer,vRows);
   }
   const GL_STATE=()=>{
     gl.bindVertexArray(vao);
@@ -398,6 +419,7 @@ export function createGpuMesh(renderer,capacities={}) {
     // The slots whose LOD state this pass changed (setLod): their morph and
     // corners, from the pose the last run published.
     if(lodRun)lodPasses(stamp,{stamp,camera:view});
+    cameraPasses(NO_FRAME,{stamp,camera:view});
     lightingPasses(lodRun?stamp:NO_FRAME,{stamp,camera:view});
     lodRun=false;
     gl.bindVertexArray(null);
@@ -426,6 +448,7 @@ export function createGpuMesh(renderer,capacities={}) {
     current^=1;
     // The LOD's morph into the final pose, then the resolved corners.
     lodPasses(frame,{stamp:frame,camera},next[0]);
+    cameraPasses(frame,{stamp:frame,camera});
     lightingPasses(frame,{stamp:frame,camera});
     gl.bindVertexArray(null);
     renderer.resetState();
@@ -453,6 +476,7 @@ void main(){uint t=texelIndex();vec3 p=texelFetch(uPose,at(t),0).xyz,n=texelFetc
   /** Validation readback of texel ranges (never used by Play). */
   function read(name,start,count) {
     const targets={pose:[pose[current][0],gl.FLOAT,4,Float32Array],final:[finalPose,gl.FLOAT,4,Float32Array],
+      cameraPose:[cameraPose,gl.FLOAT,4,Float32Array],cameraFinal:[cameraFinal,gl.FLOAT,4,Float32Array],
       cornerWedges:[cornerWedges,gl.UNSIGNED_INT,1,Uint32Array],faces:[faceNormals,gl.FLOAT,4,Float32Array],
       light:[vertexLight,gl.FLOAT,4,Float32Array],corners:[corners,gl.UNSIGNED_INT,4,Uint32Array],
       environment:[environmentNormals,gl.FLOAT,4,Float32Array],uv:[uvTarget,gl.FLOAT,4,Float32Array],environmentFaces:[environmentFaces,gl.FLOAT,4,Float32Array],
@@ -482,9 +506,9 @@ void main(){uint t=texelIndex();vec3 p=texelFetch(uPose,at(t),0).xyz,n=texelFetc
     dispose(){
       for(const target of [tables,keyframes,meshFaces,meshVertices,adjacency,vertexMap,faceMap,cornerMap,paramsU,paramsF,
         lightTexture,...pose.flat(),faceNormals,environmentFaces,vertexLight,environmentNormals,corners,meshLodFaces,meshWedges,
-        meshLodVertices,lodLists,finalPose,cornerWedges])gl.deleteTexture(target.handle);
+        meshLodVertices,lodLists,finalPose,cornerWedges,cameraPose,cameraFinal])gl.deleteTexture(target.handle);
       for(const fb of [...poseFramebuffers.flat(),faceFramebuffer,vertexFramebuffer,cornerFramebuffer,morphFramebuffer,
-        resolveFramebuffer])gl.deleteFramebuffer(fb.handle);
+        resolveFramebuffer,cameraPoseFramebuffer,cameraFinalFramebuffer])gl.deleteFramebuffer(fb.handle);
       for(const prog of [...poseParts,...Object.values(programs)])gl.deleteProgram(prog.handle);
       gl.deleteVertexArray(vao);cornerColors.dispose();renderer.resetState();
     }};
