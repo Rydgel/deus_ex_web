@@ -64,6 +64,8 @@ that returns without writing it (static or immovable actor, `0x10399145`;
 sub-threshold Delta with an unchanged rotation, `0x10399228`) leaves the first
 call's Time, Normal and Actor in place, so a zero slide still reaches HitWall
 and TwoWallAdjust with the first hit. The callback reports this as
-`hitUntouched` (set by `playerMove`'s early returns); `moveSmooth` then keeps
-the first hit. `moveSmoothActor` runs this body over a non-Pawn actor's own
-MoveActor ([mover-push](mover-push.md)).
+`hitUntouched` (set by `playerMove`'s early returns, and by the Rust pawn
+MoveActor as `MP_IO[13]`); `moveSmooth` then keeps the first hit.
+`moveSmoothActor` runs this body over a non-Pawn actor's own MoveActor and
+`moveSmoothPawn` over a pawn physics view's `moveActorHit`
+([mover-push](mover-push.md), `pawn-floor` scene).

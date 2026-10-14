@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { pawnPhysicsView } from '../src/runtime/script-pawn-physics.mjs';
+import { moveSmoothPawn } from '../src/runtime/move-smooth.mjs';
 import { beginTouch, endTouch } from '../src/runtime/actor-touch.mjs';
 
 // The script pawn physics view is a JS wrapper of a map pawn's script fields.
@@ -86,4 +87,22 @@ test('FindBase ignores a floor actor based on the pawn', () => {
   view.setPhysics(1);
   assert.equal(troop.fields.Physics, 1);
   assert.deepEqual(events, []);
+});
+
+test('moveSmooth keeps the first hit when the pawn MoveActor returns before writing it', () => {
+  // One FCheckResult serves both MoveActor calls of moveSmooth: a zero slide
+  // (pushed straight into the floor) is a sub-threshold Delta whose MoveActor
+  // returns at 0x10399228, so HitWall still sees the first call's floor hit.
+  const { events, hash, troop, view } = scene();
+  troop.fields.bCollideWorld = true;
+  hash.lineHits = [{ actor: view.worldActor, time: 0, location: [0, 0, -1], normal: [0, 0, 1] }];
+  assert.equal(view.moveActorHit([0, 0, 0]).hitUntouched, true);
+  assert.equal(view.moveActorHit([0, 0, -4]).hitUntouched, false);
+  events.length = 0;
+  moveSmoothPawn(view, [0, 0, -4]);
+  assert.deepEqual(events.map(e => e.slice(0, 2)), [['UNATCOTroop6', 'BumpWall'], ['UNATCOTroop6', 'HitWall']]);
+  assert.deepEqual(events[1].slice(2), [[0, 0, 1], '$world']);
+  // A static or immovable source returns at 0x10399145, also before the write.
+  troop.fields.bMovable = false;
+  assert.equal(view.moveActorHit([0, 0, -4]).hitUntouched, true);
 });

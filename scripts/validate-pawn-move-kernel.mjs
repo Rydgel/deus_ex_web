@@ -9,7 +9,10 @@
  * with the same digest at every checkpoint and no errors, the differential
  * must have completed moves and handed none back, and every declined call
  * must be the controlled player's (its Base and Touching stay bound until
- * stage 1e-6). The native movement oracles (validate-native-move,
+ * stage 1e-6). Two scenario pairs on Island follow: collision-bits (the
+ * block test) and pawn-push-floor (the two returns that leave MoveActor's
+ * Hit unwritten, with the differential's hitUntouched check). The native
+ * movement oracles (validate-native-move,
  * -player-move, -walking, -walking-callbacks, -steps, -set-rotation-riders,
  * -far-move-scene) exercise the same path through the pawn view. */
 import assert from 'node:assert/strict';
@@ -62,6 +65,25 @@ try {
     assert(d && d.calls > 0 && d.blocked > 0, `${map} collision bits: the scenario reached no blocked Rust move`);
     assert.equal(d.handedBack, 0, `${map} collision bits: hand-backs`);
     console.log(`${map} (collision bits): ${d.calls} Rust moves (${d.blocked} blocked), digest ${rust.report.digest} on both paths`);
+  }
+  // The two returns that leave MoveActor's Hit unwritten (0x10399145 bStatic or !bMovable, 0x10399228 a sub-threshold Delta),
+  // which the maps' own moves never reach in the Rust host: the pawn-push-floor scenario pushes each walking pawn straight down
+  // into its floor through moveSmoothPawn (its zero slide's second MoveActor returns early and HitWall reads the first hit) and
+  // moves it once with bMovable cleared. The differential holds the Rust body's hitUntouched word to the reference's conditions
+  // on every completed call; that check, not the digest, is the evidence here: Island's walking pawns leave the digested state
+  // as it was after HitWall (the digests are the same with moveActorHit's hitUntouched forced off). The digests must still agree.
+  // The reference itself is checked against the original's moveSmooth in validate-native-mover-push (the pawn-floor scene).
+  {
+    const map = '01_NYC_UNATCOIsland', scenario = ['--scenario', 'scripts/scenarios/pawn-push-floor.mjs'];
+    const rust = run(map, 'push-rust', {MOVE_PAWN_DIFFERENTIAL: '1'}, scenario);
+    const js = run(map, 'push-js', {MOVE_PAWN_KERNEL: 'js'}, scenario);
+    assert.deepEqual(rust.report.errors ?? {}, js.report.errors ?? {}, `${map} floor push: the boundaries reached differ`);
+    assert.equal(rust.report.digest, js.report.digest, `${map} floor push: final digest`);
+    assert.deepEqual(rust.report.digests, js.report.digests, `${map} floor push: checkpoint digests`);
+    const d = rust.differential;
+    assert(d && d.untouched > 0 && d.calls > d.untouched, `${map} floor push: the scenario reached no early return in Rust`);
+    assert.equal(d.handedBack, 0, `${map} floor push: hand-backs`);
+    console.log(`${map} (floor push): ${d.calls} Rust moves (${d.untouched} with the Hit unwritten), digest ${rust.report.digest} on both paths`);
   }
 } finally {
   rmSync(dir, {recursive: true, force: true});
