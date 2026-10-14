@@ -1752,6 +1752,8 @@ function drawFrame(snap, time) {
     phaseMark = performance.now();
     applySimEvents(snap.events, { world, actors: npcPreview, weapon: weaponDraw });
   }
+  // The previous frame's pack words are done with: their buffer goes back to the worker for a later frame.
+  if (frameWords && simClient) simClient.recycle(frameWords.u32.buffer);
   const frame = snap?.begin ?? null, words = frameWords = packViews(snap?.pack);
   if (playing && frame) {
     world.syncMovers(frame.movers);

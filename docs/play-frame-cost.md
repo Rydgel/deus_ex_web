@@ -163,6 +163,80 @@ times shorter (more where the old heap was swapped or compressed).
 state digests and last frame equal a direct load of `--map`
 (Island via Training, Everett via Island, Training via Island).
 
+**The idle GC switch.** `?workerBusy=1` (diagnostic, off by default) keeps
+the worker's event queue non-empty with a ping chain on a private
+MessageChannel while messages arrive (it stops a second after the last one),
+so Gecko never arms the idle GC timer; the price is one busy core. Firefox
+155, Everett after Island, 300 s, worker frames over 200 ms:
+
+| | stalls | median | draw gaps over 100 / 200 / 500 ms |
+|---|---:|---:|---:|
+| master 06d38c8 | 30 | 708 ms | 57 / 55 / 53 (load included) |
+| handle release only | 35 | 278 ms | 59 / 59 / 3 |
+| this branch | 35 | 335 ms | 61 / 59 / 4 |
+| this branch, `?workerBusy=1` | 4 (all in the load) | 402 ms | 8 / 7 / 1 |
+
+(The draw gaps include the 25 s load; a 200 s run with the switch has no worker
+frame over 200 ms after its load either.) What should therefore be recorded on
+the Mac: the default, and `?workerBusy=1`. If the second is clean, the cause
+there is the same idle GC and the fix is a smaller heap or a worker that never
+idles without burning a core (a blocking wait needs cross-origin isolation).
+
+**Per-frame allocation.** Typed arrays and ArrayBuffers (worker mode,
+60 s roams, `.work/hitch/alloc-patch.js`): the mesh frame pack was a new
+32 KB ArrayBuffer every frame, transferred to the page; the page now returns
+each pack buffer with its next post (`sim-client.mjs recycle`, the session's
+`recyclePack`) and the worker reuses it. `bsp-occlusion.mjs` copied the
+whole OccludeBsp output stream each frame (now a view, since `decode` copies
+what it keeps) and built a typed array per record header (direct reads now);
+Play's main visibility call no longer builds the sprites' per-row span arrays
+it never reads (`skipSpritePixels`); `x87TanCandidates` (BigInt, the FOV
+half-angle tangent asked for four times a frame) is memoized; the ambient
+sound range test of Galaxy Update (every ambient actor, every frame, a dozen
+BigInt records each) is decided in doubles unless the squared distance is
+within 1e-9 of the squared radius, where the extended-precision path
+decides (`ambientInRange`, differential test over 100,000 cases in
+`test/galaxy-ambient-range.test.mjs`). The state digests and the last frame
+are unchanged (`validate-sim-split`, worker against inline, Everett).
+
+Interleaved before (master 06d38c8, dev server) and after (this tree), worker
+mode, 60 s roams, Chromium 152, bytes per second as the sampling heap profiler
+(all allocations, 16 KB interval) and the typed-array wrapper count them:
+
+| | before | after |
+|---|---:|---:|
+| Everett, typed arrays / ArrayBuffers | 2.87 MB/s (61 KB/frame) | 0.48, 0.53 MB/s (10 KB/frame) |
+| Island, typed arrays / ArrayBuffers | 5.57 MB/s (150 KB/frame) | 1.55, 1.64 MB/s (38 KB/frame) |
+| Everett, sampled JS heap | 82.0, 80.5, 79.9 MB/s | 66.1, 71.3, 68.5 MB/s |
+| Island, sampled JS heap | 175.4, 174.3 MB/s | 160.8, 160.4, 182.9 MB/s |
+
+The Everett JS figure falls about 16%; Island's does not clearly (the runs
+differ by 8% among themselves and by frame rate): its largest allocator is
+`decode` in `bsp-occlusion.mjs` (25 MB/s), now dominated by the draw lists'
+per-surface and per-polygon records, which the Play path folds into a node
+list at once (`drawnOf`); skipping the sprites' span arrays changed nothing
+measurable there. None of this moves Firefox's periodic stall: a scavenge
+costs nothing for garbage, and the idle GC above runs on its timer.
+
+**Live heap after one map load** (Everett, V8 heap snapshot of the Node host,
+7.5 M nodes, 779 MB of which 300 MB are ArrayBuffer data: the object arena,
+Rust VM and mesh memories): the script object model is 6.0 M nodes. By
+retaining subtree: ScriptObjects 2.2 M (the decoded bytecode trees and their
+operand maps `linkedOperands` 1.4 M, the identity map 0.7 M), the class loader
+1.1 M (the load graph's records, each with `nativeSlots` and `instanceValues`
+Maps of small `{value, width}` objects, and the `nativeRecords` WeakMap
+0.5 M), the `functions` Map 0.86 M, `instances` 0.44 M, `contextResults` 0.2
+M, the level and its closure scopes 0.5 M; the asset store's package tables
+0.43 M (195 MB); the host (occlusion tracker, collision BSP, actor mesh layer)
+0.73 M. Plain objects are 2.4 M of the nodes (823 K of them with no named
+property, held in arrays and Map tables). A pause scales with this count (mark
+27-30%, compact 54-60% of a shrinking GC), so a smaller object count is the
+lever that stays when the timer fires. Not needed at run time but unmeasured:
+the decoded trees and operand maps of functions the Rust VM runs from its
+own words, and `loadedObjects` (Play's loader never runs EndLoad, so the
+original's flushed queue keeps every loaded object). Needed: the identity map,
+instances and records the VM and the object images name.
+
 ## October 4: Firefox and Training's mirrored floor
 
 The user saw 27 fps in Firefox (not Chrome) at Training's Player start on

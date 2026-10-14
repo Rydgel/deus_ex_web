@@ -50,6 +50,30 @@ function distanceSquared(a, b) {
   return x87add(x87add(x87mul(dx, dx), x87mul(dy, dy)), x87mul(dz, dz));
 }
 
+/** Whether an ambient sound's radius ((SoundRadius & 0xff) + 1) * 25 reaches
+ * the listener: radius*radius >= dist^2, kept extended (the original's
+ * compare in Update, 0x10609510). */
+export function ambientInRangeExact(location, listener, soundRadius) {
+  const radius = x87mul(x87int32((soundRadius & 0xff) + 1), TWENTY_FIVE);
+  return !lt(x87cmp(x87mul(radius, radius), distanceSquared(location, listener)));
+}
+/** The same answer, decided in doubles when the squared distance is not
+ * within 1e-9 (relative) of the squared radius: the radius and its square are
+ * exact integers, the float differences and their squares carry at most about
+ * 5e-16 relative error in doubles and 5e-19 in extended precision, and the
+ * terms are non-negative, so no rounding on either side can cross that gap. A
+ * NaN or infinite distance, and the gap itself, take the exact path. Update
+ * asks for every ambient actor of the level every frame; the exact path builds
+ * a dozen BigInt records each time. */
+export function ambientInRange(location, listener, soundRadius) {
+  const reach = ((soundRadius & 0xff) + 1) * 25, reach2 = reach * reach;
+  const dx = location[0] - listener[0], dy = location[1] - listener[1], dz = location[2] - listener[2];
+  const d2 = dx * dx + dy * dy + dz * dz, gap = d2 - reach2, margin = (reach2 + d2) * 1e-9;
+  if (gap > margin) return false;
+  if (-gap > margin) return true;
+  return ambientInRangeExact(location, listener, soundRadius);
+}
+
 export function createGalaxyAudio(config, services) {
   const channelCount = config.effectsChannels;
   // `reverb`: the glxReverb Update last handed the library (+0x88e, zeroed by
@@ -102,8 +126,7 @@ export function createGalaxyAudio(config, services) {
 
   const ambientRadius = actor => x87mul(x87int32((read(actor, 'SoundRadius') & 0xff) + 1), TWENTY_FIVE);
   const inAmbientRange = (actor, listener) => {
-    const radius = ambientRadius(actor);
-    return !lt(x87cmp(x87mul(radius, radius), distanceSquared(read(actor, 'Location'), listener)));
+    return ambientInRange(read(actor, 'Location'), listener, read(actor, 'SoundRadius'));
   };
   const ambientVolume = actor => x87mul(x87mul(x87int32(read(actor, 'SoundVolume') & 0xff), X(config.ambientFactor)), INV_255);
 

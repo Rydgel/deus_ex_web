@@ -354,7 +354,7 @@ export function createBspOcclusion(kernel, model, { surfaceTextureFlags, zoneAct
      * `{key, x1, y1, x2, y2, zBits}` with Y1 >= 0, Y2 <= the frame's height
      * and Y1 < Y2 (Setup's checks); or, with `setupCount`, Setup on that
      * many packed candidates (setupCandidates) gives them. */
-    run(frameWords, frameSprites = [], { setupCount = -1, skipPoints = false, children = null } = {}) {
+    run(frameWords, frameSprites = [], { setupCount = -1, skipPoints = false, skipSpritePixels = false, children = null } = {}) {
       const viaSetup = setupCount >= 0;
       ensureSprites(viaSetup ? setupCount : frameSprites.length);
       if (!viaSetup) {
@@ -397,8 +397,9 @@ export function createBspOcclusion(kernel, model, { surfaceTextureFlags, zoneAct
       // memory) for the decal block (decal-draw.mjs), valid until the next
       // run; `skipPoints` leaves the saved points to it. `frames` are the
       // child frames in OccludeFrame's order.
-      const all = words().slice(st[5] >>> 2, (st[5] >>> 2) + st[1]);
-      return { ...decode(all.subarray(0, st[6]), st, skipPoints), frames: decodeFrames(all, st[6], skipPoints),
+      // A view: decode copies what it keeps, and runs before the kernel is called again.
+      const all = words().subarray(st[5] >>> 2, (st[5] >>> 2) + st[1]);
+      return { ...decode(all.subarray(0, st[6]), st, skipPoints, skipSpritePixels), frames: decodeFrames(all, st[6], skipPoints),
         stream: { at: st[5], words: st[6] } };
     },
     /** Validation: the child frames' Setup results for the watched candidate indices (up to 8), read after a run; `watch([])` stops it. */
@@ -499,11 +500,11 @@ function decodeFrames(words, at, skipPoints) {
   let i = at;
   while (i < words.length) {
     if (words[i] !== 0xfffffffd) throw new Error(`Malformed child frame record at ${i}`);
-    const [index, parent, kind, iNode, recursion, zone, mirror] = words.slice(i + 1, i + 8);
+    const index = words[i + 1], parent = words[i + 2], kind = words[i + 3], iNode = words[i + 4], recursion = words[i + 5], zone = words[i + 6], mirror = words[i + 7];
     const nearClip = [...words.slice(i + 8, i + 12)], fields = [...words.slice(i + 12, i + 69)];
     const uncoords = [...words.slice(i + 69, i + 81)];
     i += 81;
-    const [startY, endY, valid] = words.slice(i, i + 3);
+    const startY = words[i], endY = words[i + 1], valid = words[i + 2];
     i += 3;
     const lines = [];
     for (let y = startY | 0; y < (endY | 0); y++) {
@@ -523,13 +524,19 @@ function decodeFrames(words, at, skipPoints) {
   return frames;
 }
 
-function decode(words, status, skipPoints = false) {
+function decode(words, status, skipPoints = false, skipSpritePixels = false) {
   const draw = [[], [], []], children = [], sprites = [];
   let i = 0;
   while (i < words.length) {
     if (words[i] === 0xfffffffe) {
-      const [key, startY, endY, valid] = words.slice(i + 1, i + 5);
+      const key = words[i + 1], startY = words[i + 2], endY = words[i + 3], valid = words[i + 4];
       i += 5;
+      if (skipSpritePixels) {
+        // The caller reads only the sprite's key: step over its rows.
+        for (let y = startY | 0; y < (endY | 0); y++) i += 2 * words[i] + 1;
+        sprites.push({ key, span: { startY: startY | 0, endY: endY | 0, validLines: valid | 0, lines: [] } });
+        continue;
+      }
       const lines = [];
       for (let y = startY | 0; y < (endY | 0); y++) {
         const count = words[i++], line = [];
@@ -540,7 +547,7 @@ function decode(words, status, skipPoints = false) {
       continue;
     }
     if (words[i] === 0xffffffff) {
-      const [kind, iNode, iSurf, zone, startY, endY, valid] = words.slice(i + 1, i + 8);
+      const kind = words[i + 1], iNode = words[i + 2], iSurf = words[i + 3], zone = words[i + 4], startY = words[i + 5], endY = words[i + 6], valid = words[i + 7];
       i += 8;
       const lines = [];
       for (let y = startY | 0; y < (endY | 0); y++) {
@@ -552,7 +559,7 @@ function decode(words, status, skipPoints = false) {
         span: { startY: startY | 0, endY: endY | 0, validLines: valid | 0, lines } });
       continue;
     }
-    const [list, iNode, iSurf, iZone, polyFlags, zoneKey, polyCount] = words.slice(i, i + 7);
+    const list = words[i], iNode = words[i + 1], iSurf = words[i + 2], iZone = words[i + 3], polyFlags = words[i + 4], zoneKey = words[i + 5], polyCount = words[i + 6];
     i += 7;
     const polys = [];
     for (let p = 0; p < polyCount; p++) {

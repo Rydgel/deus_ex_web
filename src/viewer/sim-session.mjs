@@ -10,7 +10,7 @@ import { TextureStore } from '../unreal/textures.mjs';
 import { fromView } from '../unreal/geometry.mjs';
 import { createPlayCamera, applyPlayFrame, pointCamera, projectionOf, projectionOfFields, setFrameProjection, verticalFov, setPixelCentre } from './play-camera.mjs';
 import { createDrawnSet } from './drawn-set.mjs';
-import { createMeshFramePack } from './mesh-frame-pack.mjs';
+import { createMeshFramePack, PACK_WORDS } from './mesh-frame-pack.mjs';
 import { createDecalDraw } from '../runtime/decal-draw.mjs';
 import { OCCLUSION_POINTS, OCCLUSION_SPRITE_KEYS, SETUP, SETUP_OUT_WORDS } from '../runtime/bsp-occlusion.mjs';
 import { packDynamics, patchDynamics, candidateWords, actorOcclusionMode, childFrameSprites, iteratorSpritesByOrder } from './dynamics-candidates.mjs';
@@ -408,7 +408,7 @@ export function createSimSession(game, { assets = null, events = [], exportName 
     words[44] = ++drawWorlds; words[45] = u32[0];
     words[46] = 3 | (decals ? OCCLUSION_POINTS : 0) | (setupCount >= 0 ? OCCLUSION_SPRITE_KEYS : 0); words[47] = 0;
     const started = performance.now();
-    const result = occlusion.run(words, [], { setupCount, skipPoints: true,
+    const result = occlusion.run(words, [], { setupCount, skipPoints: true, skipSpritePixels: true,
       children: childFrames ? { fov: view.fov, orthoZoom: 0, frameDynamics } : null });
     const { nodes, movers, moverItems } = drawnOf(result.draw);
     // The mirror requests: a level node, or a tracked mover's polygon
@@ -644,6 +644,9 @@ export function createSimSession(game, { assets = null, events = [], exportName 
   // The HUD frame's packed mesh records (mesh-frame-pack.mjs): the camera
   // frames' late actor updates add to the frame's own (frame()).
   let framePack = null;
+  // Pack buffers the page sent back (recyclePack): each frame's pack is
+  // transferred to the page, which sends it back with a later post.
+  const packSpares = [];
   // A frame's Frame->Sprite as sets: the binding ids and the sprite records
   // (OccludeBsp's keys over the frame's own candidate entries).
   function frameMembers(seen, entries, own) {
@@ -1007,7 +1010,7 @@ export function createSimSession(game, { assets = null, events = [], exportName 
       }
       // The frame's packed GetFrame plans and SetupForActor results
       // (mesh-frame-pack.mjs), a fresh buffer each frame.
-      const pack = framePack = createMeshFramePack();
+      const pack = framePack = createMeshFramePack(PACK_WORDS, packSpares.pop() ?? null);
       const snapshot = { errors, timings, begin: null, drawWorld: true, sprites: null, actors: null, stamps: null,
         coronas: null, weapon: null, hud: null, audioMs: 0, events: null, pack: null, display: null };
       let begun = null;
@@ -1343,6 +1346,10 @@ export function createSimSession(game, { assets = null, events = [], exportName 
     reset() { game.reset(); failed = false; rebuildOcclusion?.(); },
     /** The session's own simulation-side objects (the view model's
      * bindings); the actor mesh layer belongs to its scene wrapper. */
+    /** A pack buffer back from the page, for a later frame. */
+    recyclePack(buffer) {
+      if (buffer instanceof ArrayBuffer && buffer.byteLength >= PACK_WORDS * 4 && packSpares.length < 4) packSpares.push(buffer);
+    },
     dispose() { weaponSim?.dispose(); decalDraw?.dispose(); },
     /** The frame's first steps: the tick (and lip sync), PlayerCalcView, the
      * render viewport, SetupDynamics' moving-light scan, the sky frame, the

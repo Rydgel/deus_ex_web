@@ -13,7 +13,7 @@ export function createSimClient({ onProgress = () => {}, onFrame = null, onFailu
   // load (a frame in flight when the page loaded another map) is dropped.
   // `outstanding`: posts no snapshot has answered yet.
   let nextId = 1, ready = null, outstanding = 0, activeLoad = null;
-  const waiting = [];
+  const waiting = [], spares = [];
   const settle = () => { for (const resolve of settledWaiters.splice(0)) resolve(); };
   const request = (message, transfer = []) => new Promise((resolve, reject) => {
     const id = nextId++;
@@ -70,8 +70,13 @@ export function createSimClient({ onProgress = () => {}, onFrame = null, onFailu
      * positions, `status` asks for the game status. */
     post(input, { speech = [], status = false } = {}) {
       outstanding++;
-      worker.postMessage({ type: 'frame', input, commands: commands.splice(0), clock: clock(), speech, status });
+      const returned = spares.splice(0);
+      worker.postMessage({ type: 'frame', input, commands: commands.splice(0), clock: clock(), speech, status, returned }, returned);
     },
+    /** A snapshot's pack buffer the page is done with: it goes back to the
+     * worker with the next post, which reuses it for a later frame instead of
+     * allocating one (the buffer is detached here from then on). */
+    recycle(buffer) { if (buffer instanceof ArrayBuffer && buffer.byteLength && spares.length < 4) spares.push(buffer); },
     /** The oldest snapshot not yet taken, or null. */
     take() { return waiting.shift() ?? null; },
     /** Arrived snapshots not yet taken. */

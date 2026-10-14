@@ -142,6 +142,7 @@ async function handle(data) {
     case 'frame': {
       if (!host?.game) { send({ type: 'frame', load: loadId, posts: data.posts, snapshot: null }); return; }
       setHostClock(data.clock);
+      for (const buffer of data.returned ?? []) host.session.recyclePack(buffer);
       const hitchStart = hitchWasm ? performance.now() : 0;
       for (const [id, position] of data.speech ?? []) speechPositions.set(id, position);
       const errors = [];
@@ -209,6 +210,7 @@ let pending = null, runScheduled = false;
 function mergeFrame(data) {
   pending = !pending ? { ...data, commands: [...data.commands], posts: 1, firstSent: data.clock.now } : { ...data, firstSent: pending.firstSent,
     input: { ...data.input, dt: pending.input.dt + data.input.dt }, commands: [...pending.commands, ...data.commands],
+    returned: [...(pending.returned ?? []), ...(data.returned ?? [])],
     status: pending.status || data.status, posts: pending.posts + 1 };
 }
 let chain = Promise.resolve();

@@ -42,7 +42,7 @@ function tanFixed(x) {
  * Measured on AMD x87 silicon (208,181 arguments): FPTAN missed the correctly
  * rounded double 39 times, each within 0.581 extended units of the halfway
  * point, at every tangent size; the band is 8 extended units. */
-export function x87TanCandidates(x) {
+function computeTanCandidates(x) {
   if (!(x > 0 && x < Math.PI / 2) || !decompose(x)) return null;
   const t = tanFixed(x);
   if (t === null || t <= 0n) return null;
@@ -67,7 +67,7 @@ export function x87TanCandidates(x) {
  * candidate, or both neighbours (lower first) when the true tangent lies
  * within the same 8-extended-unit band of a float rounding midpoint.
  * scripts/validate-x87-tan-hardware.mjs measures it on real FPTAN. */
-export function x87TanFloatCandidates(x) {
+function computeTanFloatCandidates(x) {
   if (!(x > 0 && x < Math.PI / 2) || !decompose(x)) return null;
   const t = tanFixed(x);
   if (t === null || t <= 0n) return null;
@@ -81,3 +81,23 @@ export function x87TanFloatCandidates(x) {
   if (distance <= band) return [float(truncated), float(truncated + 1n)];
   return [float(remainder > half ? truncated + 1n : truncated)];
 }
+
+// Both are pure functions of one double (the frame's FOV half-angle) that Play
+// asks for every frame and every child frame with the same argument: the
+// results are kept, frozen, for the latest arguments (a few FOVs; a zoom
+// sweeps many, hence the bound).
+const memoized = compute => {
+  const cache = new Map();
+  return x => {
+    let result = cache.get(x);
+    if (result === undefined) {
+      result = compute(x);
+      if (result) Object.freeze(result);
+      if (cache.size >= 64) cache.delete(cache.keys().next().value);
+      cache.set(x, result);
+    }
+    return result;
+  };
+};
+export const x87TanCandidates = memoized(computeTanCandidates);
+export const x87TanFloatCandidates = memoized(computeTanFloatCandidates);

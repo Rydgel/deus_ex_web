@@ -15,8 +15,12 @@
  * lights of 7 floats: location, rradius, colour. */
 export const PLAN_HEAD = 16, PLAN_OP = 8, LIGHTING_HEAD = 21, LIGHTING_LIGHT = 7;
 
-export function createMeshFramePack(capacity = 8192) {
-  let buffer = new ArrayBuffer(capacity * 4), u32 = new Uint32Array(buffer), f32 = new Float32Array(buffer), used = 0;
+export const PACK_WORDS = 8192;
+/** `reuse`: a buffer of an earlier frame the page sent back (sim-client.mjs
+ * recycle): every word a record uses is written when it is reserved, so the
+ * old contents never show. */
+export function createMeshFramePack(capacity = PACK_WORDS, reuse = null) {
+  let buffer = reuse ?? new ArrayBuffer(capacity * 4), u32 = new Uint32Array(buffer), f32 = new Float32Array(buffer), used = 0;
   const reserve = count => {
     if (used + count > u32.length) {
       const next = new ArrayBuffer(Math.max(u32.length * 2, used + count) * 4);
