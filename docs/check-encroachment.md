@@ -152,3 +152,7 @@ Location, OldLocation, bJustTeleported, every actor's Location and Touching.
 `scripts/validate-island-blowitup.mjs` destroys Island's DeusExMover13 and
 BreakableGlass0 through their original TakeDamage and checks BlowItUp to its
 end.
+
+A blocking non-Brush hit is pushed whatever its class: the native has no Pawn
+test before `moveSmooth` (0x1039a577). Pawns, decorations, carcasses, pickups
+and spawned actors are covered in [mover-push](mover-push.md).

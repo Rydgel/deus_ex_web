@@ -58,3 +58,12 @@ second-hit event branches are established by the controlled native matrix, not
 by those map samples. Dynamic actor contacts and callbacks that alter physics,
 base or zone remain integration work even though the helper's numerical branches
 are verified.
+
+Shared FCheckResult: both MoveActor calls receive the same Hit. A MoveActor
+that returns without writing it (static or immovable actor, `0x10399145`;
+sub-threshold Delta with an unchanged rotation, `0x10399228`) leaves the first
+call's Time, Normal and Actor in place, so a zero slide still reaches HitWall
+and TwoWallAdjust with the first hit. The callback reports this as
+`hitUntouched` (set by `playerMove`'s early returns); `moveSmooth` then keeps
+the first hit. `moveSmoothActor` runs this body over a non-Pawn actor's own
+MoveActor ([mover-push](mover-push.md)).

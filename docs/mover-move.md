@@ -81,3 +81,7 @@ moveSmooth's second-hit HitWall event103c9230 is direct script dispatch, not the
 separate native processHitWall gate. It returns the first MoveActor bool even
 when later sliding moves occur. These are required before calling full mover
 integration complete; substituting moveQuery once for moveSmooth is insufficient.
+
+Update: the pushed actor's `moveSmooth` is no longer limited to Pawns; any
+blocking non-Brush hit is pushed through its own MoveActor
+([mover-push](mover-push.md)).

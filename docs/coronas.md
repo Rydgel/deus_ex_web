@@ -26,10 +26,7 @@ the TRACE_ flags).
    viewport actor's leaf, `FLeaf.iPermeating` into `Model.Lights`, and for
    the leaf's dynamic lights (`LeafLights[iLeaf]`):
    - **Level and movers.** `SingleLineCheck(Location → frame origin,
-     TRACE_Level|TRACE_Movers)` must be clear. The light's Location is
-     Start and the frame's Coords.Origin End (below, "The frame"): the
-     trace runs from the light to the eye, which decides lights inside a
-     colliding actor (below, "Lights inside a colliding actor").
+     TRACE_Level|TRACE_Movers)` must be clear.
    - **Other actors.** `SingleLineCheck(…, TRACE_Pawns|TRACE_Others)` must
      be clear or hit the viewport actor.
    - **Light.** It needs `bCorona` (+0x1ec bit 2) and a Skin (+0x170), and
@@ -217,10 +214,7 @@ matching DrawFrame ahead of PostRender. It hands the page a list of icons;
   (`game.movingLights()`, with `VolumeRadius`), filtered by the master
   frame's ViewPlanes and through the map's BSP. Model references resolve to
   live actors by export name, and the two line checks are Play's translated
-  SingleLineCheck (`level.hash.lineCheck`, through `coronaLineVisible`),
-  starting at the light's Location and ending at the frame's origin (before
-  2026-10-14 they started at the origin; see "Lights inside a colliding
-  actor").
+  SingleLineCheck (`level.hash.lineCheck`), ending at the frame's origin.
 - **Draw.** Each live entry's `coronaIcon` is computed with the frame the
   pass reads (above): the master frame's words, `visibility().master` of
   the same main frame, so the line checks end at its Coords.Origin and the
@@ -272,92 +266,18 @@ Host choices, noted:
 - the display ramp applies to the finished frame, after the tile blends
   ([lighting](lighting.md), "Display ramp").
 
-## Lights inside a colliding actor (2026-10-14)
+## Lights inside a colliding actor (open, 2026-10-14)
 
-**Finding.** In 09_NYC_ShipFan's `fan2` view (camera (236,-238,-55), pitch
--1850, yaw 25298), the original draws Light33's corona and only the bulbs
-of Light34 and Light35; Play drew all three coronas. Each of Light33..37
-(bCorona) sits within 3 units of a DeusEx.Lightbulb (bCollideActors,
-bBlockActors, CollisionRadius 1.6, CollisionHeight 2.9). Light34 at
-(-272.30,273.81,85.14) is inside Lightbulb12's cylinder at
-(-271.79,274.31,87.67): 0.71 from its axis and 0.37 above its bottom cap.
-
-**The original's rule.** Two recorded pieces of evidence decide it:
-
-- The helper's SingleLineCheck runs from the light's Location (Start) to
-  the frame's Coords.Origin (End): the table in "The frame" above
-  (`lea edi, [esi + 0x34]` at `0x10b1bc43`). It agrees with the helper
-  accepting a hit on the viewport actor: the eye lies inside the viewer's
-  own cylinder, so a trace ending there hits the viewer whenever nothing
-  else is hit first. A trace starting there would skip the viewer (a start
-  inside on its axis, not heading inward).
-- UPrimitive::LineCheck (`103d8af0`, [primitive
-  collision](primitive-collision.md)) with a start inside the cylinder
-  (radially `x² + y² - r² < 1`, strictly between the caps) returns a hit at
-  time 0 when the horizontal movement dotted with the start's horizontal
-  offset from the axis is below -0.1, and clear otherwise; the cylinder is
-  then ignored for the rest of the segment. The native captures kept in
-  `test/primitive-collision.test.mjs` show both branches (start (5,0,0) in a
-  radius-10 cylinder: towards (-100,0,0) hit at 0, towards (100,0,0) clear).
-  A segment that starts outside and ends inside hits at its entry.
-
-So a corona light inside a colliding non-pawn actor is hidden by it exactly
-when the eye lies horizontally inward of the light, across the actor's
-axis. For Light34 the dot is -3.32: hidden. A light that is radially
-inside by that test (up to `sqrt(r² + 1)` from the axis, 1.89 for a bulb)
-but whose eye direction points outward is not hidden by its own bulb. The
-"0.37 above the bottom cap" plays no part: from the light, the bottom cap
-only bounds the segment's exit.
-
-**Play's defect.** `corona-scan.mjs` called `level.hash.lineCheck(eye,
-location, ...)`. That function takes Start first, so Play traced from the
-eye to the light. The comment beside the call even said the checks end at
-Coords.Origin. Traced that way, every light inside a bulb ends inside the
-cylinder and hits it at the entry (Light34: time 0.997), whichever side the
-eye is on. The cylinder test itself (`primitiveLineHit` and hash.rs) was
-not wrong: it is the native-checked translation. `coronaLineVisible`
-(coronas.mjs) now makes the two calls with the original's arguments, and the
-scan uses it.
-
-**Verified in this change.**
-- `test/corona-line-checks.test.mjs`: coronaLineVisible's call order,
-  arguments and acceptance. Through createLevelQueries (JavaScript and the
-  Rust kernel), with Lightbulb12, Light34 and a viewer cylinder holding the
-  eye: Light34 is hidden by the bulb at time 0, the same light mirrored
-  through the bulb's axis is visible (its trace ends on the viewer), and
-  from the eye the bulb would hide both.
-
-**Not yet verified (requires the local DLLs and game data, absent from the
-session that made this change):**
-- `validate-coronas.mjs` now compares, per helper call, which pointers the
-  original passes as End and Start (`frame + 0x34`, `light + 0x114`), their
-  bits, TraceFlags, Extent, NodeFlags and Source with coronaLineVisible's
-  (`native-coronas-oracle.py` records them). It has not been run. Source
-  null, zero extent and NodeFlags 0 are Play's arguments until it runs.
-- `validate-native-primitive.mjs` gained 46 directed cases
-  (`shipFanBulbCases`): Light34 and Lightbulb12 in both directions; starts
-  inside with horizontal dots from -5 to 5 around the -0.1 threshold; far
-  starts entering through the bottom cap with the end 0.4 to 0.001 inside,
-  on, or just below it; rays grazing the side at 1.59 to 1.61 from the axis
-  on 750-unit segments, in both directions; and a viewer cylinder holding
-  the eye. They have not been run against the DLL. Play's answers include
-  two boundary results to confirm: an end exactly on the bottom cap leaves
-  the caps unclipped (the short probe hits at 0.466, below the cylinder),
-  and the 1.599 grazing ray is clear one way and hits the other (float32
-  cancellation in the discriminant).
-- The live Play session. The report from that session says Play's scan and
-  a probe in it (`level.hash.lineCheck(start, end, [0,0,0], 0x11, 0, null)`
-  from (bx+3,by,bz-15) to (bx,by,bz-2.5)) returned clear for that bulb. With
-  the reported Location, radius and height, the same query path here
-  (createLevelQueries, JavaScript and Rust) hits it at time 0.967, and eye to
-  Light34 hits at 0.997. So the session's registration of Lightbulb12 (its
-  `collisionValues ?? values` Location, CollisionRadius, CollisionHeight and
-  hash cells) must differ from the map values reported. Read it in the live
-  session before relying on the fix there.
-- The fan2 comparison against the original (`visual-acceptance.mjs play
-  --maps 09_NYC_ShipFan --view fan2:...`) has not been re-run, and Light33
-  and Light35's own geometry has not been checked against the rule. The rule
-  predicts Light35's eye direction points inward from its bulb's axis.
-  Light33 is either not inside its bulb by the `C < 1` test (and its
-  segment to the eye misses the cylinder), or its eye direction points
-  outward.
+09_NYC_ShipFan's fan2 view: the original hides the coronas of Light34 and
+Light35, each inside a DeusEx.Lightbulb collision cylinder (radius 1.6,
+height 2.9); Play draws them. The helper's direction is not the cause: it
+calls `ULevel::SingleLineCheck(Hit, Source 0, End, Start, TraceFlags, Extent,
+NodeFlags)` with End = the light's Location (`ebx = light+0x114`, pushed at
+`0x10b1bc50`) and Start = the frame's Coords.Origin (`edi = frame+0x34`, pushed
+at `0x10b1bc4f`), so it traces from the eye to the light, as Play does;
+`validate-coronas` compares those arguments with the original helper under
+Unicorn. A reversal of the direction (6ce1620) failed that comparison and was
+reverted. The primitive's start-inside and cap cases for this geometry equal the
+DLL (`validate-native-primitive`, `shipFanBulbCases`), so the remaining
+suspect is how Play registers or queries the bulbs (Lightbulb12's collision
+in the hash at that view); not traced.

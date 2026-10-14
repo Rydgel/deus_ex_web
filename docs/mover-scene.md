@@ -46,5 +46,5 @@ base harness. Legacy `original.json` and the shared oracle are unchanged.
 
 This is the composed collision/movement prefix through mover commit, not full
 DoorState/interpolation completion, FinishNotify, PawnList scheduling, arbitrary
-script effects, based passengers, or blocking non-Pawn push acceptance. Those
-remain separately evidenced integration dependencies.
+script effects or based passengers. Those remain separately evidenced
+integration dependencies. Blocking non-Pawn push is in [mover-push](mover-push.md).

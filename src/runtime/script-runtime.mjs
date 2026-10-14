@@ -70,7 +70,7 @@ import {
   pollTurnToward, pollWaitForLanding,
 } from './script-pawn-locomotion.mjs';
 import { runScriptPawnPhysics, pawnPhysicsView } from './script-pawn-physics.mjs';
-import { moveSmooth } from './move-smooth.mjs';
+import { moveSmooth, moveSmoothActor } from './move-smooth.mjs';
 import { execAiPickRandomDestination, execAiDirectionReachable, execFindPathToward, execFindPathTo, execEAdjustJump, actorReachable, pointWorker, aiDirection, createReachablePathnodesIterator } from './script-pawn-nav.mjs';
 import { actorLightLevelExtended, execAIGetLightLevel, execAIVisibility } from './script-ai-visibility.mjs';
 import { execMakeNoise } from './script-noise.mjs';
@@ -2696,6 +2696,21 @@ export class ScriptRuntime {
     if(!this.isMapPawn(actor))throw new Error('Map pawn moveSmooth requires a serialized map pawn');
     const view=actor._pawnPhysics??pawnPhysicsView(actor,this.pawnPhysicsServices(actor));
     return moveSmooth(view,delta,{moveActor:(_target,movement)=>view.moveActorHit(movement),dispatch:view.dispatchEvent});
+  }
+  /** AActor::moveSmooth (0x103c9020, move-smooth.mjs) for a non-Pawn actor a
+   * moving brush pushes in CheckEncroachment (0x1039a577 and 0x1039a75d call it
+   * on every blocking non-Brush hit, with no Pawn test): a decoration, carcass,
+   * pickup or fragment, serialized or spawned. Its MoveActor is the recovered
+   * body those classes already run, on the same hash, touch, zone and
+   * CheckEncroachment services (docs/mover-push.md). */
+  moveSmoothActor(actor,delta) {
+    if(this.isMapPawn(actor))throw new Error('Pawn moveSmooth uses moveSmoothPawn');
+    let level;
+    if(this.collisionViewActors.has(actor)){
+      level=this.levelFor(actor);
+      if(!level?.hash)throw new Error('Spawned moveSmooth requires the level collision hash');
+    }else level=this.mapMoveLevel(actor,'moveSmooth');
+    return moveSmoothActor(actor,delta,this.spawnedMoveServices(actor,level));
   }
   /** A serialized map export in the Pawn class chain, other than the
    * controlled player (the player scene owns its moves). */

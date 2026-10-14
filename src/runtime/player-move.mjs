@@ -14,14 +14,15 @@ export function basedOn(actor,base){const seen=new Set();base=identityOf(base);f
 export function playerMove(source,delta,{worldActor,multiLineCheck,removeActor,addActor,dispatch,isBlockedBy,isOverlapping,beginTouch,endTouch,setActorZone,moveRiders,noFail,checkEncroachment,ignoreBases=false},newRotation=null){
  const requested=delta.map(f),rotation=newRotation?[...newRotation]:[...source.rotation];let hits=[];
  const query=moveQuery({source,worldActor,start:source.position,delta:requested,extent:[source.radius,source.radius,source.height],multiLineCheck:q=>(hits=multiLineCheck(q)),ignoreBases});
- if(source.static || source.movable===false)return query;
+ // Both early returns leave the caller's Hit unwritten (0x10399145, 0x10399228): moveSmooth's second call keeps the first hit.
+ if(source.static || source.movable===false)return {...query,hitUntouched:true};
  const tiny=requested.every(v=>Math.abs(v)<.0001);
  const sameRotation=rotation.every((v,i)=>v===source.rotation[i]);
  // 0x103991c8..0x10399240: tiny Delta only takes the short path when the
  // rotation is unchanged, or there are no riders/nonstatic brush. SetRotation
  // on a player carrying inventory has Delta=0 but must run the rider/commit
  // tail. Two original DLL cases are in docs/script-set-rotation.md.
- if(tiny&&(sameRotation||!source.standingCount)){source.rotation=rotation;return query;}
+ if(tiny&&(sameRotation||!source.standingCount)){source.rotation=rotation;return {...query,hitUntouched:true};}
  if(tiny&&requested.some(v=>v!==0))
   throw Error('MoveActor changed rotation with riders and nonzero sub-threshold Delta is not linked');
  const eligibleScanned=!!(source.flags&14)&&hits.some(h=>!basedOn(h.actor,source));
