@@ -20,6 +20,8 @@ export function destructScriptObject(object,services) {
   registry.unhash(object,object.linkerIndex,warning);
   registry.objects[index]=null;
   registry.freeIndices.push(index);
+  // The original's GObjAvailable append, for an object the seeded model allocated.
+  registry.original?.giveBack(object);
   // Native code frees the frame without clearing +0x0c or changing +0x04.
   if(object.stateFrame!==null)freeStateFrame(object.stateFrame);
 }

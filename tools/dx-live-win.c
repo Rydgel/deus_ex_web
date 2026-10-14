@@ -45,7 +45,8 @@
  *                                 address), EAX, those dwords again and `ndwords` at the pointer passed as argument
  *                                 `argidx`, to <out>.calls.jsonl. A `gate` function arms the others while it runs for
  *                                 the pawn `call-pawn` names (ECX); the rest log only inside a gate unless `always`.
- *                                 `name0` / `namee` also name the actor in argument 0 / ECX.
+ *                                 `name0` / `namee` also name the actor in argument 0 / ECX; `retname` names ECX, its class (+0x24) and
+ *                                 index (+0x04) at the RETURN (an AddObject or UnhashObject record: the object the registry slot is for).
  *         watch-write <offset>    a hardware write watch (DR0) on that offset of the call-pawn, armed for the traced ticks; each
  *                                 write is a "write" record with the new value, the EIP after the writing instruction and 12 stack dwords
  *                                 `fname <i>` (up to two) logs the text of args[i], an FName, as "fnames"; every record carries `inTick` (inside a
@@ -192,7 +193,7 @@ static Watched watched[1024]; static int watched_count;
 static int in_our_tick = 0; static uintptr_t rng_ptd = 0;   /* inside a ULevel::Tick of the traced level; the msvcrt thread-data block of the rand state (+0x14) */
 #define MAXCALLS 32
 #define MAXRET 64
-typedef struct { uintptr_t address; unsigned char original; char label[24]; int nwords, deref_count, deref_arg[3], deref_n[3], deref_off[3], gate, always, name0, namee, namearg, namearg_off, ecx_n, ecx_off, span_on, span_arg, span_off, fret, fname_count, fname_arg[2]; char only[48]; } CallBp;
+typedef struct { uintptr_t address; unsigned char original; char label[24]; int nwords, deref_count, deref_arg[3], deref_n[3], deref_off[3], gate, always, name0, namee, retname, namearg, namearg_off, ecx_n, ecx_off, span_on, span_arg, span_off, fret, fname_count, fname_arg[2]; char only[48]; } CallBp;
 typedef struct { uintptr_t address; unsigned char original; int refs; } RetBp;
 typedef struct { int active; uintptr_t ret; unsigned esp, ecx; int call; unsigned args[16]; unsigned deref_ptr[3]; unsigned long seq; } Pending;
 static CallBp calls[MAXCALLS]; static int call_count;
@@ -244,7 +245,7 @@ static int read_config(const char *path) {
       c->address = strtoul(a, NULL, 0); strncpy(c->label, l, sizeof(c->label) - 1); c->nwords = atoi(n); if (c->nwords > 16) c->nwords = 16;
       for (char *o; (o = strtok(NULL, " \t\r\n"));) {
         if (!strcmp(o, "gate")) c->gate = 1; else if (!strcmp(o, "always")) c->always = 1;
-        else if (!strcmp(o, "name0")) c->name0 = 1; else if (!strcmp(o, "namee")) c->namee = 1;
+        else if (!strcmp(o, "name0")) c->name0 = 1; else if (!strcmp(o, "namee")) c->namee = 1; else if (!strcmp(o, "retname")) c->retname = 1;
         else if (!strcmp(o, "namearg")) { c->namearg = atoi(strtok(NULL, " \t\r\n")) + 1; c->namearg_off = (int)strtol(strtok(NULL, " \t\r\n"), NULL, 0); }
         else if (!strcmp(o, "only")) { char *v = strtok(NULL, " \t\r\n"); if (v) strncpy(c->only, v, sizeof(c->only) - 1); }
         else if (!strcmp(o, "span")) { c->span_on = 1; c->span_arg = atoi(strtok(NULL, " \t\r\n")); c->span_off = (int)strtol(strtok(NULL, " \t\r\n"), NULL, 0); }
@@ -518,6 +519,7 @@ static int handle_call_event(HANDLE th, DWORD tid, uintptr_t where, int unfrozen
         fprintf(cout, "\",\"st0f\":%.21Lg,\"fpTop\":%u,\"fpTag\":%u", v, top, (unsigned)fc.FloatSave.TagWord);
       }
     }
+    if (c->retname) { char text[96]; strncpy(text, object_name(p->ecx), sizeof(text) - 1); text[sizeof(text) - 1] = 0; fprintf(cout, ",\"ecxName\":\"%s\"", text); fprintf(cout, ",\"ecxClass\":\"%s\"", object_name(read_u32(p->ecx + 0x24))); fprintf(cout, ",\"ecxIndex\":%u", read_u32(p->ecx + 0x04)); }
     if (c->ecx_n) { unsigned w[64]; memset(w, 0, sizeof(w)); read_mem(p->ecx + c->ecx_off, w, 4 * c->ecx_n); fprintf(cout, ",\"ecxWords\":"); print_words(cout, w, c->ecx_n); fprintf(cout, ",\"ecxFloats\":"); print_floats(cout, w, c->ecx_n); }
     fprintf(cout, "}\n"); fflush(cout);
     if (c->gate && gate_depth > 0) gate_depth--;

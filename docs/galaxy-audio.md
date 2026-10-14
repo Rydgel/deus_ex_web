@@ -228,10 +228,10 @@ from `DeusEx.ini [Galaxy.GalaxyAudioSubsystem]` with Init's clamps
 world services read the live actors. The listener is the player and its
 ViewTarget. `index` is the actor's measured global index
 (`ScriptRuntime.measuredObjectIndex`: the map, pawn and player tables of
-object-index-captures.md). A runtime spawn's host registry slot is not the
-original index (the seeded spawn registry is not wired into Play,
-boot-replay.md), so an ambient actor without a measured index is left out of
-the scan and noted rather than given an invented id (Island's LaserEmitters). `fastLineCheck` is the translated UModel::FastLineCheck.
+object-index-captures.md) or the slot the model gives a runtime spawn
+(`ScriptRuntime.soundObjectIndex`, "Runtime spawns" there), never the host
+registry's own slot, so an ambient actor with neither is left out of the scan
+and noted rather than given an invented id. `fastLineCheck` is the translated UModel::FastLineCheck.
 `globalLighting` follows Render.dll's `URender::GlobalLighting`
 (`0x10b05e90`): the light type's function (mesh-lighting.mjs; Steady when not
 realtime; Pulse, Flicker, SubtlePulse and the palette types are noted, as for
@@ -295,11 +295,16 @@ startup and Login (script-doors.mjs `level.engine.audio`):
    StopSoundId (+0x78) when Audio is set. Conversation speech stops are
    consumed by the speech transport first.
 
-A runtime spawn (a fragment, a projectile, a LaserEmitter) has no measured
-index, so its PlaySound stays the recorded boundary that returns the
-placeholder channel 0; StopSound(0) can only match an idle channel, because a
-real id carries a nonzero object index and slot-0 sounds take Galaxy's
-counter ids. Speech keeps its own transport.
+A runtime spawn (a fragment, a projectile, a LaserEmitter, a weapon that was `summon`ed or dropped) has no entry in the
+capture. Its id is formed from the slot the original's `AddObject` rule gives it, continued from the map's measured registry
+state and every creation and release since (`original-object-index.mjs`; [object-index-captures](object-index-captures.md)
+"Runtime spawns"): `ScriptRuntime.soundObjectIndex` answers `measured` for the capture and `modeled` for such a slot, and the
+sound takes the real chain above. Only an emitter with neither (an object that existed before the model was seeded and is not
+in the capture) stays the recorded boundary that returns the placeholder channel 0; StopSound(0) can only match an idle
+channel, because a real id carries a nonzero object index and slot-0 sounds take Galaxy's counter ids. Speech keeps its own
+transport. Galaxy compares ids for equality and reads their slot bits only, so a unique, stable modeled id gives the
+original's audible behaviour; its magnitude is the original's only where the model replays every creation (the weapon scene
+of that note: the first 310, or without Mission06's flags 417, registry takes equal).
 
 `scripts/validate-native-client-hear-sound.mjs` runs the original
 execClientHearSound, execStopSound and ProcessRemoteFunction on fabricated

@@ -47,6 +47,7 @@ try {
   const explore = process.argv.includes('--explore');
   assert.equal(first.galaxy.galaxyVoices, true, 'effects play through Galaxy\'s own voices (the worklet library)');
   assert.deepEqual(first.sounds, [], 'no window sound before any input');
+  assert.ok(first.slotModel?.count >= 42167 && /00_Training/.test(first.slotModel.source), `the worker seeded the registry slot model from Training's capture: ${JSON.stringify(first.slotModel)}`);
   const libraryBefore = (await music()).library;
   await page.keyboard.press('F2'); await settled();
   const goals = await probe();
@@ -74,6 +75,9 @@ try {
   const status = await page.evaluate(() => window.deusExViewer.status());
   assert.equal(status.runtimeError, null, `no runtime error: ${status.runtimeError?.message}`);
   assert.deepEqual(errors, [], 'no page errors');
+  // The windows the Goals screen made took slots of the model, and gave them back as the screen closed or stayed.
+  assert.ok(saved.slotModel.allocated > first.slotModel.allocated, `windows and graphics contexts take model slots: ${first.slotModel.allocated} -> ${saved.slotModel.allocated}`);
+  assert.equal(saved.slotModel.rejected, 0, 'every slot the model was given back was one it had handed out');
   report = {sim, sounds: names(saved.sounds), channels, voiceOps: [libraryBefore.voiceOps, libraryAfter.voiceOps], samples: [libraryBefore.samples, libraryAfter.samples]};
 } finally {
   await browser.close();

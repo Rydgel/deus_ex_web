@@ -155,14 +155,22 @@ export async function createLiveAudio({runtime, level, player, onVoice = null, l
   // SpeechVolume on 0..127 (galaxy-volumes.mjs).
   let nextVoice = 1, last = null;
   let digital = Math.trunc(Math.max(galaxyConfig.soundVolume, galaxyConfig.speechVolume) / 255 * 127);
-  // Measured global indices only: a runtime spawn's host registry slot is not
-  // the original index (ScriptRuntime.measuredObjectIndex).
-  const index = actor => runtime.measuredObjectIndex(actor);
-  // An actor whose global index is unmeasured cannot form its ambient
-  // channel id; it is left out and noted rather than given an invented id.
+  // Measured (the live capture) or modeled (the slot AddObject's rule gives a
+  // runtime spawn, continued from a measured registry state) global indices;
+  // a runtime spawn's host registry slot is neither
+  // (ScriptRuntime.soundObjectIndex, docs/object-index-captures.md).
+  const index = actor => runtime.soundObjectIndex(actor)?.index ?? null;
+  // Sounds played with a modeled index, by class: reported, not hidden.
+  const modeledIds = new Map();
+  const noteModeledId = actor => {
+    const name = runtime.instance(actor).cls?.record?.name ?? '?';
+    modeledIds.set(name, (modeledIds.get(name) ?? 0) + 1);
+  };
+  // An actor with no measured or modeled global index cannot form its
+  // ambient channel id; it is left out and noted rather than given an invented id.
   const measured = actor => {
     if (!actor || index(actor) !== null) return actor;
-    try { if (read(actor, 'AmbientSound')) notes.add(`${actor.name}: ambient sound without a measured global index`); } catch {}
+    try { if (read(actor, 'AmbientSound')) notes.add(`${actor.name}: ambient sound without a measured or modeled global index`); } catch {}
     return null;
   };
   const galaxy = createGalaxyAudio(galaxyConfig, {
@@ -302,6 +310,6 @@ export async function createLiveAudio({runtime, level, player, onVoice = null, l
     }
     if (music.state.current !== null) music.unregisterMusic(music.state.current);
   }
-  return {galaxy, music, volumes, library, galaxyConfig, musicLog, update, reset, dispose, notes, voices, galaxyVoices,
+  return {galaxy, music, volumes, library, galaxyConfig, musicLog, update, reset, dispose, notes, voices, galaxyVoices, modeledIds, noteModeledId,
     setDigitalVolume: value => { digital = value & 127; }};
 }

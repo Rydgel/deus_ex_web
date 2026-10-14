@@ -7,6 +7,10 @@ export class ScriptObjectRegistry {
     if(!Array.isArray(objects)||!Array.isArray(freeIndices)||buckets.length!==4096)
       throw new Error('Invalid original object registry storage');
     this.objects=objects;this.freeIndices=freeIndices;this.buckets=buckets;
+    // The original's own slot space (original-object-index.mjs), when seeded:
+    // this registry's indices are the host's, an object created after the
+    // seed also gets `originalIndex` from AddObject's rule.
+    this.original=null;
   }
   add(object) {
     if(object.index!==-1||!Number.isInteger(object.nameIndex)||object.nameIndex<0)
@@ -20,6 +24,7 @@ export class ScriptObjectRegistry {
       throw new Error('Invalid original free object index');
     if(this.freeIndices.length)this.freeIndices.pop();
     this.objects[index]=object;object.index=index;
+    if(this.original)this.original.take(object,object.objectClass?.name??object.identity?.name??null,object.name??null);
     const hash=(outerIndex^object.nameIndex)&0xfff;
     object.hashNext=this.buckets[hash];this.buckets[hash]=object;
     return index;

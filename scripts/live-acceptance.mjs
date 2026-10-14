@@ -17,6 +17,8 @@
 //   `node scripts/visual-acceptance.mjs compare --maps <map> --view <name>:0,0,0:0,0,0`.
 //   --cmds "N:console line|N:@down Enter|N:@up Enter" (original): console lines and key edges typed after N unfrozen ticks with the level held (Play runs
 //   them at the same point of its replay; `@down`/`@up` take a KeyboardEvent.code and go through the User.ini binding: a typed `Fire` is not the binding).
+//   --object-trace first:last (play): the slot model from registry-start<tag>.txt and the registry's / Galaxy's events of those ticks (scripts/live-sound-compare.mjs).
+//   --registry (original): the GObjObjects registry and its free list at the frozen start and at the end (registry-start/-end<tag>.txt).
 //   --event-trace first:last (play) records the AI event manager's calls; with the original's `call` breakpoints (--extra-config) compare them with
 //   `node scripts/live-events-compare.mjs --map M --tag T` (docs/visual-acceptance.md "Weapon noise"). --draw-stacks (play) lists each command's draws.
 //   node scripts/live-acceptance.mjs play --map 10_Paris_Club
@@ -311,6 +313,15 @@ async function original() {
   rmSync(`${tracePath}.resume`, {force: true});
   rmSync(`${tracePath}.go`, {force: true});
   rmSync(`${tracePath}.strobe`, {force: true});
+  // --registry: the original's GObjObjects (rows, addresses and the free list GObjAvailable) at the frozen start, before the tracer
+  // attaches, and again at the end while the level is held (registry-start/-end<tag>.txt; docs/object-index-captures.md "Runtime spawns").
+  const registryDump = label => {
+    if (!flag('registry')) return;
+    const text = execFileSync(game.WINE, [path.join(root, 'ad/build/dump-gobjects-win.exe'), '--available'], {encoding: 'utf8', env: process.env, maxBuffer: 1 << 28});
+    writeFileSync(path.join(dir, `registry-${label}${suffix}.txt`), text);
+    console.log(`registry ${label}: ${text.split('\n').length - 2} rows, ${text.split('\n').find(line => line.startsWith('available=')) ?? 'no free list'}`.slice(0, 200));
+  };
+  registryDump('start');
   const child = spawn(game.WINE, [tool, 'trace', configPath], {env: process.env, stdio: ['ignore', 'pipe', 'pipe']});
   console.log('tracer pid', child.pid, `${names.length} pawns watched`);
   let log = '';
@@ -330,6 +341,7 @@ async function original() {
     await new Promise(r => setTimeout(r, 300));
   }
   console.log(log.trim());
+  if (/paused after/.test(log)) registryDump('end');
   if (option('shot', null) && /paused after/.test(log)) {
     // The level is held at the last replayed tick (the tracer returns from ULevel::Tick); the game still draws.
     let taken = null;
@@ -534,6 +546,46 @@ async function play() {
     const setupNames = option('setup-probe', null), [setupFirst, setupLast] = option('setup-ticks', `1:${trace.length}`).split(':').map(Number);   // Setup's result for those actors (setup-play.json)
     const scriptPawns = option('script-trace', null), [scriptFirst, scriptLast] = option('script-ticks', `1:${trace.length}`).split(':').map(Number);
     const eventWindow = option('event-trace', null)?.split(':').map(Number);   // --event-trace first:last: every AI event manager call and delivered callback of those ticks (events-play<tag>.json)
+    // --object-trace first:last: the slot model started from the original's registry at the frozen start (registry-start<tag>.txt, `original --registry`)
+    // and every object it takes or gives back and every Galaxy PlaySound call of those ticks (objects-play<tag>.json, sounds-play<tag>.json).
+    const objectWindow = option('object-trace', null)?.split(':').map(Number);
+    const registrySeed = () => {
+      const file = path.join(dir, `registry-start${suffix}.txt`);
+      if (!existsSync(file)) return null;
+      const text = readFileSync(file, 'utf8').replace(/\r/g, '');
+      const count = Number(/objects=(\d+)/.exec(text.split('\n', 1)[0])?.[1]), free = /^available=\d+:(.*)$/m.exec(text)?.[1].trim();
+      // The pre-placed actors' indices in THIS run (a process's registry depends on everything it loaded: another session's table is
+      // off by thousands): the unique Class.Name rows of the dump whose name Play's population holds, and the live player (the
+      // JCDentonMale created last).
+      const names = new Set((existsSync(path.join(dir, 'play-population.json')) ? JSON.parse(readFileSync(path.join(dir, 'play-population.json'), 'utf8')).names : []));
+      const rowsByKey = new Map();
+      let player = null;
+      const packages = [];   // the Package objects the original holds at the start
+      for (const line of text.split(/\r?\n/)) {
+        const m = /^slot\s+\d+\s+index\s+(\d+)\s+ptr 0x\w+\s+(\S+?)\.(\S+)$/.exec(line);
+        if (!m) continue;
+        const key = `${m[2]}.${m[3]}`;
+        if (names.has(m[3])) rowsByKey.set(key, rowsByKey.has(key) ? null : Number(m[1]));
+        if (m[2] === 'JCDentonMale' && (!player || Number(m[1]) > player.index)) player = {key, index: Number(m[1])};
+        if (m[2] === 'Package') packages.push(m[3]);
+      }
+      // Objects that existed at the frozen start and that the original frees during the replay (the sender event the player's landing left
+      // in the manager, ...): Play does not hold them, and their slots come back in the order the original freed them, so the free list
+      // would differ. They are replayed as a measured input (UnhashObject at the tick, `preFrees`), as the CRT state and the clocks are.
+      const callsFile = `${tracePath}.calls.jsonl`, preFrees = [];
+      if (existsSync(callsFile)) {
+        const born = new Set();
+        for (const line of readFileSync(callsFile, 'utf8').split('\n')) {
+          if (!line.includes('"ev":"ret"') || !(line.includes('"fn":"addobj"') || line.includes('"fn":"unhash"'))) continue;
+          const r = parseTraceLine(line);
+          if (r.fn === 'addobj') born.add(r.ecxIndex);
+          else if (born.has(r.ecxIndex)) born.delete(r.ecxIndex);
+          else preFrees.push({u: r.u, index: r.ecxIndex, cls: r.ecxClass, name: r.ecxName});
+        }
+      }
+      return {count, freeIndices: free ? free.split(/\s+/).map(Number) : [], preFrees, packages,
+        measured: Object.fromEntries([...rowsByKey].filter(([, index]) => index !== null)), player};
+    };
     const touchWindow = option('touch-trace', null)?.split(':').map(Number);   // --touch-trace first:last: EndTouch/AddTouch/BeginTouch of those ticks (touch-play.json)
     const navPawns = option('nav-trace', null), [navFirst, navLast] = option('nav-ticks', `1:${trace.length}`).split(':').map(Number);
     // The generators' load-time draws (GENERATOR_FIELDS), as the original's frozen phase left them.
@@ -573,6 +625,7 @@ async function play() {
       ...(flag('player-gear') && pose.FrobTime !== undefined ? {FrobTime: pose.FrobTime} : {})}, ...generatorWrites},
       ...(touchWindow ? {touchTrace: {first: touchWindow[0], last: touchWindow[1]}} : {}),
       ...(eventWindow ? {eventTrace: {first: eventWindow[0], last: eventWindow[1]}} : {}),
+      ...(objectWindow ? {objectTrace: {first: objectWindow[0], last: objectWindow[1], seed: registrySeed()}} : {}),
       ...(navPawns ? {navTrace: {pawns: navPawns.split(','), first: navFirst, last: navLast}} : {}),
       ...(trace[0]?.viewport?.[0] && !flag('own-viewport') ? {renderSize: trace[0].viewport} : {}),   // the original's frame size (--own-viewport: Play's page)
       ...(setupNames ? {setupProbe: {names: setupNames.split(','), first: setupFirst, last: setupLast}} : {}),
@@ -584,12 +637,13 @@ async function play() {
       // --extra-watch actors are not pawns: the fields every Actor has
       ...(extras.length ? [{names: extras, props: ['Location', 'Rotation', 'Velocity', 'Physics', 'AnimSequence', 'AnimFrame', 'AnimRate', 'TweenRate', 'LifeSpan', 'LastRenderTime', 'DistanceFromPlayer', 'TimerRate', 'TimerCounter', ...(flag('touching') ? ['Touching'] : [])]}] : [])]}};
     const started = await page.evaluate(r => window.deusExViewer.liveProbe(r), request);
-    const touch = [], rows = [], nav = [], script = [], setup = [], commandLog = [], events = [];
+    if (started.objectTrace) console.log(`object trace: the run's own indices for ${started.objectTrace.measured} pre-placed actors and the player (${started.objectTrace.player})`);
+    const touch = [], rows = [], nav = [], script = [], setup = [], commandLog = [], events = [], objects = [], sounds = [];
     let stalls = 0;
     while (rows.length < trace.length) {
       await frames(20);
       const taken = await page.evaluate(() => window.deusExViewer.liveProbe({take: true}));
-      if (taken.debug?.length) { (globalThis.__debugRows ??= []).push(...taken.debug); } nav.push(...(taken.nav ?? [])); touch.push(...(taken.touch ?? [])); events.push(...(taken.events ?? [])); script.push(...(taken.script ?? [])); setup.push(...(taken.setup ?? [])); commandLog.push(...(taken.commands ?? []));
+      if (taken.debug?.length) { (globalThis.__debugRows ??= []).push(...taken.debug); } nav.push(...(taken.nav ?? [])); touch.push(...(taken.touch ?? [])); events.push(...(taken.events ?? [])); objects.push(...(taken.objects ?? [])); sounds.push(...(taken.sounds ?? [])); script.push(...(taken.script ?? [])); setup.push(...(taken.setup ?? [])); commandLog.push(...(taken.commands ?? []));
       if (taken.rows.length) { rows.push(...taken.rows); stalls = 0; } else if (++stalls > 40) throw new Error(`the replay stopped at tick ${rows.length}${errors.length ? `: ${errors.slice(0, 3).join(' | ')}` : ''}${(await page.evaluate(() => document.querySelector('#toast')?.textContent ?? '').catch(() => '')).slice(0, 600)}`);
     }
     // the boundaries Play recorded instead of running during the replay (docs/visual-acceptance.md, record-only audit)
@@ -602,6 +656,8 @@ async function play() {
     if (globalThis.__debugRows) writeFileSync(path.join(dir, 'debug-play.json'), JSON.stringify(globalThis.__debugRows));
     if (touchWindow) writeFileSync(path.join(dir, 'touch-play.json'), JSON.stringify(touch));
     if (eventWindow) writeFileSync(path.join(dir, `events-play${suffix}.json`), JSON.stringify(events));
+    if (objectWindow) { writeFileSync(path.join(dir, `objects-play${suffix}.json`), JSON.stringify(objects)); writeFileSync(path.join(dir, `sounds-play${suffix}.json`), JSON.stringify(sounds));
+      console.log(`object trace: ${objects.length} registry events, ${sounds.length} Galaxy PlaySound calls`); }
     if (setupNames) writeFileSync(path.join(dir, 'setup-play.json'), JSON.stringify(setup));
     if (scriptPawns) writeFileSync(path.join(dir, 'script-play.json'), JSON.stringify({pawns: scriptPawns.split(','), events: script}));
     if (navPawns) writeFileSync(path.join(dir, 'nav-play.json'), JSON.stringify({pawns: navPawns.split(','), events: nav}));

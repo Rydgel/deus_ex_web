@@ -39,6 +39,10 @@ extern "C" {
     /// AIComputeScore's score callback (receiver.ProcessEvent): returns the float32 bits of its result.
     fn js_ai_score(receiver: u32, sender: u32, callback: u32, score: u32) -> u32;
     fn js_ai_warn(code: u32, count: u32);
+    /// An event object of a table (0 types, 1 senders, 2 receivers) takes (op 1) or gives back (op 0) its UObject slot: the original's
+    /// `new` runs AddObject, and the deleting destructor ~UObject appends the slot to GObjAvailable, at these points. The host owns
+    /// the slot space (original-object-index.mjs); the manager's behavior does not depend on the answer.
+    fn js_ai_slot(table: u32, index: u32, op: u32);
 }
 
 const MAX_TYPES: usize = 128;
@@ -155,21 +159,24 @@ const NEAR_SQUARED: u32 = 0x481c_4000;
 /// A new object of a table (0 types, 1 senders, 2 receivers), not yet zeroed; 0 when full.
 fn alloc(table: usize) -> u32 {
     let p = pool();
-    if p.free_n[table] > 0 {
+    let index = if p.free_n[table] > 0 {
         p.free_n[table] -= 1;
         let at = p.free_n[table];
-        return match table {
+        match table {
             0 => p.free_t[at],
             1 => p.free_s[at],
             _ => p.free_r[at],
-        };
-    }
-    let cap = [MAX_TYPES, MAX_SENDERS, MAX_RECEIVERS][table];
-    if p.next[table] > cap {
-        return 0;
-    }
-    let index = p.next[table] as u32;
-    p.next[table] += 1;
+        }
+    } else {
+        let cap = [MAX_TYPES, MAX_SENDERS, MAX_RECEIVERS][table];
+        if p.next[table] > cap {
+            return 0;
+        }
+        let index = p.next[table] as u32;
+        p.next[table] += 1;
+        index
+    };
+    unsafe { js_ai_slot(table as u32, index, 1) };
     index
 }
 fn release(table: usize, index: u32) {
@@ -181,6 +188,7 @@ fn release(table: usize, index: u32) {
         _ => p.free_r[at] = index,
     }
     p.free_n[table] += 1;
+    unsafe { js_ai_slot(table as u32, index, 0) };
 }
 
 /// A pointer into the original's lists (`XAIEvent **`): the slot a new event is linked at.

@@ -142,8 +142,18 @@ export function createLevelCollection({ runtime, level, viewports = [], transien
       const record = recordOf(identity);
       if (!record) throw new Error('CleanupDestroyed release requires the actor native record');
       const live = registry.objects.filter(object => object && !object.released);
-      if (record.index === null) release.conditionalDestroy(record);
-      else finalDelete(record, flags);
+      if (record.index === null) {
+        release.conditionalDestroy(record);
+        // ~UObject appends the actor's own slot to GObjAvailable: a pre-placed
+        // actor's is its measured index, when it has one; the model otherwise
+        // counts a slot it cannot name.
+        const model = registry.original;
+        if (model) {
+          const measured = runtime.measuredObjectIndex(identity);
+          if (measured === null) model.unattributed++;
+          else model.release(measured);   // a measured slot the model never handed out (a pre-placed actor) is the original's own
+        }
+      } else finalDelete(record, flags);
       for (const object of live) if (object.released) onReleased?.(object.identity);
       runtime.reclaimReleased?.();
     },

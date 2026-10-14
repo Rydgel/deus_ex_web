@@ -95,6 +95,7 @@ import { importText } from './config-text.mjs';
 import { setActorZone } from './zone.mjs';
 import { prepareContextResults, zeroContextResult } from './script-context-results.mjs';
 import { cleanupScriptReferences, cleanupLevelDestroyed, cleanupSites, cleanupFields, cleanupImageSites } from './script-cleanup.mjs';
+import { OriginalObjectIndexModel } from './original-object-index.mjs';
 import { destructScriptObject, freeScriptObject, releaseScriptCameraPoint } from './script-object-release.mjs';
 import { TEXT_PARSER_NATIVE } from './script-text-parser.mjs';
 import { constructTextParserObject, dispatchTextParserNative, releaseTextParserObject } from './script-text-parser-natives.mjs';
@@ -2223,6 +2224,38 @@ export class ScriptRuntime {
     services.read=(object,name)=>name==='Audio'?(object?.audio??null):read(object,name);
     return services;
   }
+  /** Start the original's slot model (original-object-index.mjs) on the live
+   * registry from a measured state: the objects created from now on take the
+   * slot AddObject would give them (`originalIndex`), and the ones released
+   * give it back. Called when the boot is over (the seed's count includes
+   * everything the boot made) or by a harness with the original's own dump. */
+  seedOriginalObjectIndex(seed) {
+    const registry=this.actorLifecycle?.construction?.registry;
+    if(!registry)throw new Error('The original object index model requires the live object registry');
+    registry.original=new OriginalObjectIndexModel(seed);
+    return registry.original;
+  }
+  /** The global index a sound's channel id is formed from, and where it came
+   * from: `{index, source: 'measured'}` (the live capture: pre-placed actors,
+   * the player), `{index, source: 'modeled'}` (the slot AddObject gives a
+   * runtime spawn, continued from a measured registry state;
+   * docs/object-index-captures.md "Runtime spawns"), or null when the original
+   * index is not known: the sound then stays the recorded boundary. */
+  soundObjectIndex(receiver) {
+    const measured=this.measuredObjectIndex(receiver);
+    if(measured!==null)return {index:measured,source:'measured'};
+    let instance;
+    try{instance=this.instance(receiver);}catch{return null;}
+    const modeled=instance.nativeObject?.originalIndex;
+    return Number.isInteger(modeled)?{index:modeled,source:'modeled'}:null;
+  }
+  /** soundServices for execPlaySound: ObjectIndex is the measured or modeled
+   * original index, never the host registry slot. */
+  playSoundServices(call) {
+    const services=this.soundServices(call),read=services.read;
+    services.read=(actor,name)=>name==='ObjectIndex'?(this.soundObjectIndex(actor)?.index??null):read(actor,name);
+    return services;
+  }
   /** Pawn->XLevel->Engine->Audio with each pointer tested, the chain the
    * native Window.PlaySound body follows before its virtual call (Extension
    * 0x1005022a..0x10050249: pawn+0xac, level+0x40, engine+0x4c; a null at any
@@ -2490,7 +2523,9 @@ export class ScriptRuntime {
         // XFlagBase overrides Destroy (Extension 0x100239f0).
         flag.destroy=receiver=>destroyFlagBaseNative(receiver,{destroyObjectBase:target=>this.destroyObjectBase(target)});
         Object.defineProperties(flag.identity,Object.getOwnPropertyDescriptors(
-          createFlagBase({defaultExpiration:contract.defaultExpiration})));
+          createFlagBase({defaultExpiration:contract.defaultExpiration,slots:{
+            take:(holder,cls,name)=>this.actorLifecycle?.construction?.registry?.original?.take(holder,cls,name),
+            giveBack:holder=>this.actorLifecycle?.construction?.registry?.original?.giveBack(holder)}})));
       },
     });
     ref.set(identity);

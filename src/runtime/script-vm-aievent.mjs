@@ -55,6 +55,8 @@ export class AiEventHost {
     /** Validation only (live-acceptance --event-trace): receives one record per send, start, end, clear and per delivered callback, in call
      * order; compared with the original's breakpoints at UEventManager::AISendEvent/AIStartEvent/AIEndEvent/AIClearEvent/AIEvent. */
     this.trace = null;
+    // pool index -> UObject slot, per table (types, senders, receivers)
+    this.slots = [new Map(), new Map(), new Map()];
   }
   attach(exports) { this.x = exports; }
   nid(name) {
@@ -81,6 +83,7 @@ export class AiEventHost {
       view.setUint32(at + 4, 256, true);
     }
     this.x.ai_reset();
+    for (const slots of this.slots) slots.clear();
     this.levelInfo = levelInfo;
     this.active = true;
   }
@@ -175,7 +178,17 @@ export class AiEventHost {
       js_ai_score: (receiver, sender, callback, score) => host.score(actorOf(receiver), actorOf(sender), callback, score),
       js_score_resolve: (handle, name, slot) => host.resolveScore(handle, name, slot),
       js_ai_warn: () => {},
+      js_ai_slot: (table, index, op) => host.slot(table, index, op),
     };
+  }
+  /** js_ai_slot: an event object's UObject slot (original-object-index.mjs). The pool's index names the object; the model gives the
+   * slot AddObject would, and takes it back at the deleting destructor. A manager made before the model was seeded has none. */
+  slot(table, index, op) {
+    const model = this.runtime.actorLifecycle?.construction?.registry?.original;
+    if (!model) return;
+    const slots = this.slots[table];
+    if (op === 1) { const holder = {}; model.take(holder, ['AIEventType', 'AISenderEvent', 'AIReceiverEvent'][table], null); slots.set(index, holder); }
+    else if (slots.has(index)) { model.giveBack(slots.get(index)); slots.delete(index); }
   }
   /** js_score_resolve (dispatch.rs call_score): the SCORES slot at `slot` for `handle`'s function `name`: kind (1 JavaScript, 2 no call,
    * 3 a Rust run), the lowering's code and frame size, the three parameters' offsets + 1 and the run template. The decision is

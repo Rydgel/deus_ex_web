@@ -687,11 +687,17 @@ export async function createScriptDoors({
     if (call.index === 264) {
       // execPlaySound (103e1f60) -> CheckHearSound -> the player's native
       // ClientHearSound -> Galaxy PlaySound, for an emitter whose global
-      // UObject index is measured (map/pawn tables, the player's capture).
-      // A runtime spawn's index is not (the seeded spawn registry is not wired
-      // into Play), so its sound stays the recorded boundary below.
-      if (runtime.measuredObjectIndex(call.receiver) !== null) {
-        const result = execActorPlaySound(call, runtime.soundServices(call));
+      // UObject index is measured (map/pawn tables, the player's capture) or
+      // modeled (the slot AddObject's rule gives a runtime spawn, continued
+      // from the map's measured registry: original-object-index.mjs,
+      // docs/object-index-captures.md "Runtime spawns"). An emitter with
+      // neither (created before the model was seeded, absent from the capture)
+      // keeps the recorded boundary below; the host registry's own slot is
+      // never used for an id.
+      const soundIndex = runtime.soundObjectIndex(call.receiver);
+      if (soundIndex !== null) {
+        const result = execActorPlaySound(call, runtime.playSoundServices(call));
+        if (soundIndex.source === 'modeled') runtime.audio.noteModeledId(call.receiver);
         return result.resultWritten ? result.result : undefined;
       }
       if (decoration) { decorationEffect(call, path.endsWith('.bump') ? 'PushSound' : 'LandedSound'); return 0; }

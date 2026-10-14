@@ -118,6 +118,7 @@ class World {
           score: hex(score), result: hex(f32bits(value))});
         return f32bits(value);
       },
+      js_ai_slot: () => {},   // the UObject slot of each event object belongs to the host (original-object-index.mjs); the oracle logs allocator calls itself
       js_ai_warn: (code, count) => { w.log.push({kind: 'warning'}); if (code === 1) w.log.push({kind: 'warning'}); },
     };
   }

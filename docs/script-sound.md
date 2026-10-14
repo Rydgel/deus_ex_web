@@ -191,11 +191,12 @@ translation; this does not claim arbitrary extended-precision bit identity.
 
 Play now runs `execActorPlaySound` for every emitter whose global index is
 measured (`ScriptRuntime.measuredObjectIndex`: the map, pawn and player
-tables), and its listeners' `ClientHearSound` reaches Galaxy through the
+tables) or modeled (`ScriptRuntime.soundObjectIndex`, 2026-10-14: the slot
+`AddObject` gives a runtime spawn, [object-index-captures](object-index-captures.md)
+"Runtime spawns"; the host registry's own slot is neither), and its listeners' `ClientHearSound` reaches Galaxy through the
 recovered `APawn::execClientHearSound` and ProcessEvent's
 `ProcessRemoteFunction` gate ([galaxy audio](galaxy-audio.md#play)). Native
-265 runs `execStopSound`. The recorded seam below remains only for a runtime
-spawn, whose host registry slot is not the original index. The runtime's own
+265 runs `execStopSound`. The recorded seam below remains only for an emitter with neither index. The runtime's own
 264 body now returns the channel id (or leaves the result untouched for a null
 Sound) instead of its descriptor.
 

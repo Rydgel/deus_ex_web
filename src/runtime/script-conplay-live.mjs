@@ -178,7 +178,7 @@ export async function createLiveConPlayRuntime({runtime,assets,level,player,shel
     },stringText:data=>data,
     staticLoadObject:request=>{
       const graph=runtime.dynamicLoadGraph;
-      return staticLoadObject(request,{...graph.services(),
+      const object=staticLoadObject(request,{...graph.services(),
         read:(object,key)=>object===soundClass
           ?key==='outer'?soundClassOuter:key==='nameIndex'?graph.nameIndex('Sound'):graph.read(object,key)
           :graph.read(object,key),
@@ -192,9 +192,15 @@ export async function createLiveConPlayRuntime({runtime,assets,level,player,shel
         createPackage:({outer,name})=>{
           const linker=graph.linkerByPackage.get(name.toLowerCase());
           if(outer!==null||!linker)throw new Error(`Speech package Outer is not prepared: ${name}`);
+          // The first speech load of a package the original had not loaded creates its UPackage and LinkerLoad
+          // (original-object-index.mjs loadPackage; the package is prepared here, so only the slots are modeled).
+          runtime.actorLifecycle?.construction?.registry?.original?.loadPackage(name);
           return linker.outer;
         },
       }).object;
+      // CreateExport of the Sound itself: one slot the first time it is loaded.
+      if(object)runtime.actorLifecycle?.construction?.registry?.original?.loadExport(object,'Sound',request.name);
+      return object;
     },
     arrayRealloc:a=>{if(a.max!==0)throw new Error('Unexpected speech FString resize');a.data=null;},
     arrayRemove:(_a,start,count)=>{if(start!==0||count!==0)throw new Error('Unexpected speech FString remove');},

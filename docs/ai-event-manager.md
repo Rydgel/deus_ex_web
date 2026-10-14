@@ -116,6 +116,13 @@ modelled; it is off in play.
 * **Callbacks.** `AIEvent` finds the receiver's function by name and runs it through the script dispatcher (`ProcessEvent` with the
   event name, state and an `XAIParams`); this is the one JavaScript crossing per delivered event.
 
+* **UObject slots (2026-10-14).** Each event type, sender and receiver is a UObject: `FindEvent`'s, `SetCallback`'s and
+  `SendEvent`/`StartEvent`'s `new` run `AddObject`, and `CleanupSlot`'s deleting destructor `~UObject`, so the objects
+  take and give back GObjObjects slots that sounds created later reuse (LIFO). `aievent.rs` `alloc`/`release` call the host's
+  `js_ai_slot(table, index, op)` at those points and `AiEventHost.slot` hands them to the slot model
+  (`original-object-index.mjs`). The Weapon scene's 361 creations and 211 releases of event objects interleave with the
+  spawns' in the original's order ([object-index-captures](object-index-captures.md) "Runtime spawns").
+
 ## Verification of the translation in play
 
 * `validate-event-manager` (oracle, above), `validate-pawn-perception` (AICanSee, 756 scenes and 14 mutations bit-exact, see

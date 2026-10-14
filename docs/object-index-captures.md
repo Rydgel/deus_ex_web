@@ -109,3 +109,73 @@ are not resident in the running game's level, and 20 Lights whose names are
 ambiguous in their capture. `measured-object-indices.mjs` gives every
 measured actor its `globalIndex` before the map's startup runs; the pawn
 tables take precedence.
+
+## Runtime spawns (2026-10-14)
+
+The tables above give the index of every actor the map placed. An actor created while the game runs (a fragment, a shell
+casing, a weapon `summon`ed or dropped by a crate, a bullet hole, an AI event object) has none: the slot it holds is
+whatever `UObject::AddObject` (Core `0x10157830`) gave it, the last entry of `GObjAvailable` (LIFO) or else a new slot at
+`GObjObjects.Num`, and `~UObject` (`0x10150040`) gives the slot back
+([object release](script-object-release.md)). A sound's channel id needs that slot, so until now their `PlaySound` stayed a
+recorded boundary (channel 0, silent: the `decorationEffect` and `soundBoundary` paths of `script-doors.mjs`).
+
+**The model.** `src/runtime/original-object-index.mjs` is that rule and nothing else, started from a measured state:
+
+* The seed is the registry as the live dump shows it: `Num` and the free slots. `map-registry-seeds.mjs` holds it for every
+  single-player map (`scripts/build-map-registry-seeds.mjs`, from the same captures as the tables above: Training's
+  `Num` 42167 and its one hole 42156; 44 maps have no hole, 42 have more than one). The dump lists holes as a set, not in
+  the order they were freed in, so a seed is `exact` only with at most one hole; with more, the order the first spawns reuse
+  them in is an assumption (`seed.exact` says so).
+* `createGame` seeds it when the boot is over (the capture's `Num` includes everything the boot made); a harness replaces
+  it with the original's own dump at its start (`liveProbe objectTrace.seed`).
+* Every object created afterwards takes `originalIndex` from it, and gives it back when it is released: registry objects
+  (`ScriptObjectRegistry.add`, `destructScriptObject`: spawns, `new`s), windows and graphics contexts
+  (`script-window-host.mjs`), the AI event manager's types, senders and receivers (`js_ai_slot`, `aievent.rs` `alloc`/`release`),
+  FlagBase's `FlagBool`s, a pre-placed actor's own measured slot when `CleanupDestroyed` releases it, and, with a measured
+  set of resident packages, the UPackage + LinkerLoad + export of a first speech-audio load.
+* `ScriptRuntime.soundObjectIndex(actor)` answers `{index, source: 'measured'}` for the capture's indices and
+  `{index, source: 'modeled'}` for a model slot; the host registry's own slot is neither and is never used for a sound.
+  `execPlaySound` (via `playSoundServices`) and Galaxy's ambient scan use it, and `runtime.audio.modeledIds` counts the
+  classes that played with a modeled id.
+* The model never stops the game: a give-back it cannot match (an index outside `Num`, a slot already free) is counted in
+  `rejected`.
+
+**What the id is for.** Galaxy compares ids for equality only (`PlaySound` replaces a channel of the same id, `StopSoundId`
+matches one, `Update` reads the slot bits `Id & 0xe`): the audible behaviour of an emitter needs an id that is unique among
+live objects and the same for each of its sounds, and the model gives that. The magnitude is the original's only while
+every creation and release since the seed is replayed in order; it is labelled modeled for that reason.
+
+**Evidence: the weapon scene against the original (06_HongKong_WanChai_Underworld, 400 ticks).** The original, under
+`live-original.sh --registry`, with the tracer's `call` breakpoints at `AddObject`, `UnhashObject`, `ClientHearSound` and
+Galaxy's `PlaySound` (`tools/dx-live-win.c` `retname`; `tools/dump-gobjects-win.c --available` for the free list), typed
+`summon DeusEx.WeaponPistol`, the pickup, the draw and three shots. The scene creates 563 objects and frees 235 (AI event
+objects: 361 created and 211 freed; 17 graphics contexts; 10 glass fragments; NPC inventories; the pistol; a shell casing;
+effects; a bark's windows and its audio package). Play replays the scene with the original's start registry as the seed and the run's own
+indices for the pre-placed actors (`live-acceptance.mjs play --object-trace`), and `scripts/live-sound-compare.mjs` lines the
+two up:
+
+| What | Result |
+| --- | --- |
+| Registry takes in order (class and slot) | the first 310 agree, to tick 60; Play then creates the two startup flags of Mission06 (`M06_..._StartupText`, `M6MissionStart`) that the original does not create in these 400 ticks (an open difference of the mission script, not of the model). Without the flag objects 417 agree, to tick 212: the 217 objects of tick 1 (NPC inventories, AI event types and receivers), the AI event traffic, the pistol (it takes slot 50689, a sender event's freed slot), the glass shot's 10 fragments, shell casing, bullet holes and tracer, a conversation's windows and graphics contexts, and the bark's Package/LinkerLoad/Sound |
+| Frees in order | the 21 of the first 22 agree; the 22nd is the sender event the player's landing left in the manager before the scene (Play replays it as a measured input, `preFrees`) |
+| Galaxy `PlaySound`, pre-placed emitters | 85 of 85 calls matched in tick, emitter, sound, volume, radius and pitch have the original's channel id |
+| Galaxy `PlaySound`, emitters spawned in the scene | the ones created before the first difference have the original's id: the pistol (`DropSmallWeapon`, slot 50689: the freed slot of a sender event) in the run above, and in the run without the flag objects also GlassFragment9 (817040) and ShellCasing0 (815680, three hits); the ones after it are off by the slots the difference shifted (GlassFragment9 at 817072, 2 slots up, with the flags) |
+| Galaxy `PlaySound`, all | 93 of 112 calls matched, the rest differ in what the NPCs and the shots did (below), not in the channel logic |
+
+The scene's second and third shots hit other things in Play than in the original (blood actors in Play, a wall in the
+original), so from tick 270 the spawns themselves differ.
+
+**What is not modeled, so the id of an emitter created after it is the model's alone:**
+
+* temporary graphics contexts of window layout (five in the bark's display, created and freed in one tick) and any other
+  object a window native creates and deletes inside one call;
+* a runtime load of anything but speech audio (a texture, a font, a mesh; a `DynamicLoadObject` of a package), and every
+  load before the seed;
+* the intermediate objects of a conversation or a save/travel (`ConPlay`'s history and flag objects other than FlagBase's);
+* frees of pre-placed objects that have no measured slot (counted in `unattributed`), the order `DeleteAllFlags` frees
+  flags in (insertion order here, the native walks its hash buckets), and the free-list order of a seed with several holes;
+* after a Player start (LoadMap) the model is not re-seeded: the map change frees and creates objects it does not see.
+
+**Repeating the scene** (one original at a time, `scripts/live-original.sh`, the Wine lock): `live-original.sh <map> --registry
+--tag T --extra-config <cfg with call-ticks, call-frames and the four call lines> --cmds ...`, then `live-acceptance.mjs play
+--tag T --object-trace 1:N`, then `live-sound-compare.mjs --tag T`. The captures stay in `.work/` (outside Git).

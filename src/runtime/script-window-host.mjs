@@ -545,6 +545,13 @@ export async function createWindowHost({runtime, assets, player, gameConfig = nu
   // Object creation: StaticConstructObject + family constructor.
   // ------------------------------------------------------------------
   let nameCounter = 0;
+  // A window and a graphics context are UObjects: each takes a GObjObjects slot
+  // when it is created and gives it back when it is deleted. Host windows are
+  // outside the host registry, so the original's slot model (seeded when the
+  // boot is over, original-object-index.mjs) is told directly.
+  const slotModel = () => runtime.actorLifecycle?.construction?.registry?.original ?? null;
+  function takeOriginalSlot(object, cls) { slotModel()?.take(object, cls, object.name); }
+  function giveBackOriginalSlot(object) { slotModel()?.giveBack(object); }
   const families = new WeakMap(), checkboxes = new WeakSet();
   const isCheckbox = win => checkboxes.has(win);
   const externalSubtrees = new WeakSet();
@@ -564,6 +571,7 @@ export async function createWindowHost({runtime, assets, player, gameConfig = nu
     if (!family || !FAMILIES[family]) boundary(`Window family is not admitted: ${cls.record.key} (${family ?? 'no native window ancestry'})`);
     const object = {name: `${cls.record.name}${nameCounter++}`, outer};
     heap.allocate(object, NATIVE_WINDOW_CLASS_SIZES[family] + 0x80);
+    takeOriginalSlot(object, cls.record.name);
     runtime.attach(object, cls);
     families.set(object, FAMILIES[family].dispatch ?? family);
     if (family === 'extension.checkboxwindow') checkboxes.add(object);
@@ -609,6 +617,7 @@ export async function createWindowHost({runtime, assets, player, gameConfig = nu
   function allocateGc(outer) {
     const gc = {name: `GC${nameCounter++}`, outer};
     heap.allocate(gc, 0xb8 + 0x10);
+    takeOriginalSlot(gc, 'GC');
     runtime.attach(gc, gcClass);
     return gc;
   }
@@ -1426,6 +1435,7 @@ export async function createWindowHost({runtime, assets, player, gameConfig = nu
       count++;
     }
     if (count > 16) boundaryLog.push({log: 'GLog', text: `***WARNING: GC contains an abnormally large GC stack! (${count})`});
+    giveBackOriginalSlot(gc);
     heap.free(gc);
     // R1a: the GC's handle ends with it (docs/rust-core.md). Its image range
     // is left to the runtime's finalizer: a host window has no released
@@ -1463,6 +1473,7 @@ export async function createWindowHost({runtime, assets, player, gameConfig = nu
       conditionalDestroyWindow(object);
       destroyed.add(object);
       families.delete(object);
+      giveBackOriginalSlot(object);
       heap.free(object);
       releaseHandle(object);
     },

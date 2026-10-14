@@ -6,6 +6,7 @@ import { toView, fromView } from '../unreal/geometry.mjs';
 import { CollisionWorld, BspCollider } from '../runtime/collision.mjs';
 import { Player } from '../runtime/player.mjs';
 import { Doors } from '../runtime/doors.mjs';
+import { mapRegistrySeed } from '../runtime/map-registry-seeds.mjs';
 import { createScriptDoors } from '../runtime/script-doors.mjs';
 import { readFunction } from '../unreal/script.mjs';
 import { compileFunction } from '../runtime/script-vm.mjs';
@@ -255,6 +256,15 @@ export async function createGame(map, asset, assets, { randomSeed = Math.floor(D
       audioMs += performance.now() - start;
       return out;
     };
+  }
+  // The boot is over: the registry's slot model starts from the map's
+  // measured state, so a runtime spawn takes the slot AddObject would give it
+  // (docs/object-index-captures.md "Runtime spawns"). A harness with the
+  // original's own dump at its start replaces this seed (live-probe.mjs).
+  {
+    const seed = mapRegistrySeed(asset?.name);
+    if (seed) doors.scriptRuntime.runtime.seedOriginalObjectIndex({count: seed.count, freeIndices: seed.freeIndices, exact: seed.exact,
+      source: `${asset.name} open capture (${seed.holes} holes)`});
   }
   let zoneNames = null;
   const game = {

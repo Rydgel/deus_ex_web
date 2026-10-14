@@ -6,6 +6,14 @@
  *
  *   wine dump-gobjects-win.exe            (all objects)
  *   wine dump-gobjects-win.exe LightSwitch
+ *   wine dump-gobjects-win.exe --available      (also the free list, below)
+ *   wine dump-gobjects-win.exe --module Galaxy.dll   (that module's load address and nothing else)
+ *
+ * --available prints, after the rows, the free list the way the registry holds
+ * it (GObjAvailable, Core +0x19e618 data, +0x19e61c count; AddObject pops the
+ * last entry first, ~UObject appends), and the objects' addresses ("ptr 0x..."
+ * before the name) so a tracer's call records can be matched to rows:
+ *   available=<n>: <index> <index> ...      (array order; the last is reused first)
  *
  * Core.dll structure offsets (module-relative), recovered from the GOTY DLLs:
  *   GObjObjects data +0x19e628, count +0x19e62c
@@ -26,6 +34,8 @@
 
 #define OFF_GOG_DATA   0x19E628u
 #define OFF_GOG_COUNT  0x19E62Cu
+#define OFF_AVAIL_DATA 0x19E618u
+#define OFF_AVAIL_COUNT 0x19E61Cu
 #define OFF_NAMES_DATA 0x1961F0u
 #define OFF_NAMES_COUNT 0x1961F4u
 #define OFF_OBJECT_INDEX 0x04u
@@ -85,11 +95,18 @@ static void read_wstr(HANDLE process, uintptr_t address, wchar_t *out, int max) 
 }
 
 int main(int argc, char **argv) {
-    const char *find = argc > 1 ? argv[1] : NULL;
+    int available = 0;
+    const char *find = NULL, *module = NULL;
+    for (int a = 1; a < argc; a++) {
+        if (!strcmp(argv[a], "--available")) available = 1;
+        else if (!strcmp(argv[a], "--module") && a + 1 < argc) module = argv[++a];
+        else find = argv[a];
+    }
     DWORD pid = find_pid("DeusEx.exe");
     if (!pid) { fprintf(stderr, "DeusEx.exe not running\n"); return 1; }
     HANDLE process = OpenProcess(PROCESS_QUERY_INFORMATION | PROCESS_VM_READ, FALSE, pid);
     if (!process) { fprintf(stderr, "OpenProcess failed (%lu)\n", GetLastError()); return 1; }
+    if (module) { printf("%s base=0x%lx\n", module, (unsigned long)module_base(pid, module, process)); return 0; }
     uintptr_t core = module_base(pid, "Core.dll", process);
     if (!core) { fprintf(stderr, "Core.dll not loaded\n"); return 1; }
 
@@ -124,7 +141,15 @@ int main(int argc, char **argv) {
             WideCharToMultiByte(CP_ACP, 0, object_name, -1, ascii, sizeof(ascii), NULL, NULL);
             if (!strstr(ascii, find)) continue;
         }
-        printf("slot %6u index %6u %ls.%ls\n", slot, index, class_name, object_name);
+        if (available) printf("slot %6u index %6u ptr 0x%08lx %ls.%ls\n", slot, index, (unsigned long)obj, class_name, object_name);
+        else printf("slot %6u index %6u %ls.%ls\n", slot, index, class_name, object_name);
+    }
+    if (available) {
+        uintptr_t list = read_u32(process, core + OFF_AVAIL_DATA);
+        unsigned n = read_u32(process, core + OFF_AVAIL_COUNT);
+        printf("available=%u:", n);
+        for (unsigned i = 0; i < n; i++) printf(" %u", read_u32(process, list + i * 4));
+        printf("\n");
     }
     CloseHandle(process);
     return 0;

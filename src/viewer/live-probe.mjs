@@ -186,6 +186,49 @@ export function liveProbe(game, args = {}) {
       if (n >= args.eventTrace.first && n <= args.eventTrace.last) events.push({ u: n, rng: hex(game.random.state), ...event });
     };
   }
+  // objectTrace: {seed: {count, freeIndices}, first, last}: the original's slot model (original-object-index.mjs) started from the
+  // registry the original had at the frozen start (a measured host input: tools/dump-gobjects-win.c --available), then every
+  // object the registry takes or gives back and every Galaxy PlaySound call, with the unfrozen tick (u), returned by `take` as `objects`
+  // and `sounds`; compared with the original's AddObject / UnhashObject / UAudioSubsystem::PlaySound breakpoints
+  // (scripts/live-sound-compare.mjs, docs/object-index-captures.md "Runtime spawns").
+  if (args.objectTrace) {
+    const registry = runtime.actorLifecycle.construction.registry;
+    if (args.objectTrace.seed) {
+      const { count, freeIndices, measured = {}, player: live = null, preFrees = [], packages = null } = args.objectTrace.seed;
+      runtime.seedOriginalObjectIndex({ count, freeIndices, exact: true, packages, source: 'the original registry at the frozen start' });
+      // The run's own measured indices for the pre-placed actors and the player (a host input, like the tables of the other sessions)
+      let given = 0;
+      for (const actor of level.actors) {
+        if (!actor || actor === player) continue;
+        const key = `${runtime.instance(actor).cls.record.name}.${actor.name}`;
+        if (Number.isInteger(measured[key])) { runtime.instance(actor).globalIndex = measured[key]; given++; }
+      }
+      if (live) runtime.instance(player).globalIndex = live.index;
+      out.objectTrace = { measured: given, player: live?.key ?? null, preFrees: preFrees.length };
+      // Frees of objects that existed at the frozen start (see live-acceptance.mjs registrySeed): run before the tick they happened in.
+      args.objectTrace.pending = preFrees.map(entry => ({ ...entry }));
+    }
+    const objects = runtime.objectLog ??= [], sounds = runtime.soundLog ??= [];
+    const tick = () => { const replay = game.liveReplay; return replay?.current?.n ?? replay?.index ?? 0; };
+    const inRange = n => n >= args.objectTrace.first && n <= args.objectTrace.last;
+    const model = registry.original;
+    if (model) {
+      model.clock = tick;
+      // the model's own log, filtered to the window of ticks the comparison covers
+      model.log = { push: entry => { if (inRange(entry.u)) objects.push(entry); } };
+    }
+    const audio = level.engine.audio;
+    if (audio && !audio.traced) {
+      audio.traced = true;
+      const playSound = audio.playSound;
+      const nameOf = value => value?.key ?? value?.name ?? null;
+      audio.playSound = (actor, id, sound, location, volume, radius, pitch) => {
+        const result = playSound(actor, id, sound, location, volume, radius, pitch);
+        if (inRange(tick())) sounds.push({ u: tick(), actor: actor?.name ?? null, id, sound: nameOf(sound), volume, radius, pitch, result });
+        return result;
+      };
+    }
+  }
   if (args.scriptTrace) Object.assign(runtime.scriptTrace, { pawns: new Set(args.scriptTrace.pawns), first: args.scriptTrace.first, last: args.scriptTrace.last });
   // canSeeProbe: {pawn, first, last}: after those replayed ticks, what `Enemy.AICanSee(destPoint, 1, false, false, false, true)` (the
   // test ScriptedPawn's Fleeing state makes when a move ends) gives for that pawn, with the collision hash's hits along the line
@@ -209,7 +252,7 @@ export function liveProbe(game, args = {}) {
     const actors = watch.map(({ names, props }) => ({ props, items: names.map(name => [name, byName(name)]) }));
     for (const group of actors) for (const [name, actor] of group.items) if (!actor) throw new Error(`liveProbe: no actor ${name}`);
     const state = game.liveReplay = {
-      ticks, hold, warm, index: 0, rows: [], cursor: 0, current: null,
+      ticks, hold, warm, index: 0, rows: [], cursor: 0, current: null, preFrees: args.objectTrace?.pending ?? null,
       // console commands typed into the original between two ticks ({after, text}: after that many ticks), run here the same way through the
       // recovered console command chain (APlayerPawn::execConsoleCommand) before the next tick; their results are returned by `take` as `commands`
       commands: commands.map(command => ({ ...command })), commandLog: [], canSee: args.replay.canSeeProbe ?? null,
@@ -278,6 +321,10 @@ export function liveProbe(game, args = {}) {
         if (typed) { this.warm = 3; return false; }
         if (runtime.navTrace) runtime.navTrace.tick = this.index + 1;
         if (runtime.scriptTrace) runtime.scriptTrace.tick = this.index + 1;
+        if (this.preFrees?.length) while (this.preFrees.length && this.preFrees[0].u <= this.index + 1) {
+          const entry = this.preFrees.shift();
+          if (!runtime.actorLifecycle.construction.registry.original?.release(entry.index)) this.preFreesRejected = (this.preFreesRejected ?? 0) + 1;
+        }
         game.random.seed(parseInt(tick.rngIn, 16) >>> 0);
         const strobe = lightGlobals(runtime).strobe;
         this.current = { n: this.index + 1, delta: tick.delta, rngIn: hex(game.random.state), clockIn: level.timeSeconds, tsIn: runtime.readNamed(info, 'TimeSeconds'),
@@ -332,6 +379,8 @@ export function liveProbe(game, args = {}) {
     if (runtime.scriptTrace) out.script = runtime.scriptTrace.events.splice(0);
     if (runtime.touchEvents) out.touch = runtime.touchEvents.splice(0);
     if (runtime.aiEventLog) out.events = runtime.aiEventLog.splice(0);
+    if (runtime.objectLog) out.objects = runtime.objectLog.splice(0);
+    if (runtime.soundLog) out.sounds = runtime.soundLog.splice(0);
   }
   if (args.status && replay) out.status = { index: replay.index, of: replay.ticks.length };
   // deferred: the boundaries Play recorded instead of running (player.unimplementedPhysicsEffects: sounds of emitters without a measured

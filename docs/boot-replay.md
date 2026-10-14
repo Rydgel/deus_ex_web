@@ -164,10 +164,14 @@ against the live capture and fed through the PlaySound channel-id formula).
   retail strings); it does not apply to reading `GObjObjects` out of process
   memory, which is now the authority.
 - Implemented: pre-placed lookup from the capture, and the runtime-spawn model
-  (seeded `AddObject` append + LIFO free list) above. Open only as later
-  integration: wiring the seeded registry into the live `createGame` spawn path
-  (spawns are currently gated to CameraPoint) and a distilled, shippable
-  load-time index table for the browser (the `.cache` capture is local evidence).
+  (seeded `AddObject` append + LIFO free list) above. Wired into Play on
+  2026-10-14 as a slot model beside the host registry
+  ([object-index-captures](object-index-captures.md) "Runtime spawns"): seeded
+  from the map's measured `Num` and holes when the boot is over, fed by every
+  creation and release Play models (spawns, windows, AI events, flags, speech
+  loads), and checked against the original's registry traffic in the
+  Underworld weapon scene. The distilled tables (`map-object-indices.mjs`,
+  `map-registry-seeds.mjs`) are the shippable form of the captures.
 
 ### Play's registry against the capture (2026-10-02)
 

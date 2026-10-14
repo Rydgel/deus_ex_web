@@ -101,8 +101,14 @@ export const TRIGGER_NATIVE_INDICES = Object.freeze({
  * false for a missing bool. Expiration is compared with mission criteria,
  * not a clock (docs/script-training-mission-entry.md).
  */
-export function createFlagBase({ initialFlags, defaultExpiration = 0 } = {}) {
+export function createFlagBase({ initialFlags, defaultExpiration = 0, slots = null } = {}) {
   const entries = new Map();
+  // Each flag is an XFlagBool, a UObject: AddFlag's `new` takes a GObjObjects slot and the delete gives it back
+  // (`slots`: the host's slot model, original-object-index.mjs; the delete order here is insertion order, the native
+  // walks its hash buckets, so the order slots are given back in is the model's, not measured).
+  const holders = new Map();
+  const takeSlot = key => { if (slots && !holders.has(key)) { const holder = {}; slots.take(holder, 'FlagBool', key); holders.set(key, holder); } };
+  const giveBackSlot = key => { const holder = holders.get(key); if (holder) { slots.giveBack(holder); holders.delete(key); } };
   const calls = [];
   // XFlagBase::SetDefaultExpiration (native 1125, exec 0x10025dc0) writes the
   // raw int to +0x128; SetBool substitutes it for an expiration of -1. The
@@ -166,6 +172,7 @@ export function createFlagBase({ initialFlags, defaultExpiration = 0 } = {}) {
         requestedExpiration,
       };
       entries.set(key, entry);
+      takeSlot(key);
       calls.push({ method: 'SetBool', name: entry.name, value: entry.value,
         bAdd: entry.bAdd, expiration: entry.expiration, requestedExpiration,
         previous: previous?.value, added: !previous });
@@ -185,6 +192,7 @@ export function createFlagBase({ initialFlags, defaultExpiration = 0 } = {}) {
     deleteFlag(name,type) {
       if(!Number.isInteger(type)||type<0||type>255)throw new TypeError('FlagBase.DeleteFlag requires a byte flag type');
       const found=type===0&&entries.delete(lower(name));
+      if(found)giveBackSlot(lower(name));
       calls.push({method:'DeleteFlag',name:name??'None',type,found});
       return found;
     },
@@ -194,7 +202,7 @@ export function createFlagBase({ initialFlags, defaultExpiration = 0 } = {}) {
       if(!Number.isInteger(criteria))throw new TypeError('Flag expiration criteria requires a signed int');
       criteria|=0;
       for(const [key,entry] of entries)
-        if((entry.expiration|0)!==0&&(entry.expiration|0)<=criteria)entries.delete(key);
+        if((entry.expiration|0)!==0&&(entry.expiration|0)<=criteria){entries.delete(key);giveBackSlot(key);}
       calls.push({method:'DeleteExpiredFlags',criteria});
     },
     /** Extension.FlagBase.GetBool(Name). */
@@ -266,6 +274,7 @@ export function createFlagBase({ initialFlags, defaultExpiration = 0 } = {}) {
     /** XFlagBase::DeleteAllFlags 0x10024900: each bucket's head deleted until
      * the bucket is empty. */
     deleteAllFlags() {
+      for (const key of [...entries.keys()]) giveBackSlot(key);
       entries.clear();
       calls.push({ method: 'DeleteAllFlags' });
     },
