@@ -239,13 +239,16 @@ export function pawnPhysicsView(actor, services) {
     headZoneChange: (a, z) => dispatch(a, 'HeadZoneChange', [z]) };
   // The common case runs in Rust (zone-kernel.mjs) on the actor's image.
   pawn.setActorZone = (test, force) => services.zoneUpdate?.(actor, test, force) || setActorZone(pawn, zoneWorld, test, force);
-  // The native MoveActor entry for script Move/SetBasedPawnSize: an equal
-  // NewRotation takes the same path as none (0x1039915a).
+  // The native MoveActor entry for script Move/SetBasedPawnSize and for
+  // moveSmooth: an equal NewRotation takes the same path as none (0x1039915a).
+  // `hitUntouched`: the call returned before writing its FCheckResult
+  // (0x10399145, 0x10399228; playerMove or the Rust body report it), so
+  // moveSmooth's second call keeps the first hit.
   pawn.moveActorHit = (delta, rotation = null, ignoreBases = false) => {
     const result = moveActor(pawn, delta, rotation && !sameRotation(rotation, pawn.rotation) ? rotation : null,
       services, dispatch, decorate, ignoreBases);
     const hit = { result: Boolean(result.success), time: f(result.time), normal: (result.hit?.normal ?? [0, 0, 0]).map(f),
-      actor: result.hit?.actor ?? null };
+      actor: result.hit?.actor ?? null, hitUntouched: Boolean(result.hitUntouched) };
     services.moveTrace?.('moveActor', actor, delta, pawn.position, hit);   // validation only (nav-trace.mjs)
     return hit;
   };

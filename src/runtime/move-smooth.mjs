@@ -46,3 +46,11 @@ export function moveSmoothActor(actor,delta,services){
   return {result:r.success,time:r.time,normal:r.hit?.normal??[0,0,0],actor:r.hit?.actor??null,hitUntouched:Boolean(r.hitUntouched)};
  }});
 }
+
+/** AActor::moveSmooth for a map Pawn over its pawn physics view's MoveActor
+ * (script-pawn-physics.mjs `moveActorHit`, the Rust pawn body or playerMove):
+ * ScriptRuntime.moveSmoothPawn, the Pawn a moving brush pushes. The view's
+ * own event dispatch maps it back to the pawn. */
+export function moveSmoothPawn(view,delta){
+ return moveSmooth(view,delta,{moveActor:(_target,movement)=>view.moveActorHit(movement),dispatch:view.dispatchEvent});
+}

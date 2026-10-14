@@ -60,8 +60,13 @@ pushed straight down into the floor therefore has a zero slide, a second
 and `TwoWallAdjust` run with the first call's normal and actor. The oracle
 caught this (6 of the first 79 cases); `moveSmooth` now keeps the first hit
 when the callback reports `hitUntouched` (set by `playerMove` on both early
-returns). The Pawn entry (`script-pawn-physics.mjs` `moveActorHit`, over the
-Rust pawn move kernel) does not report it yet: see Unverified.
+returns). The Pawn entry reports it too: `script-pawn-physics.mjs`
+`moveActorHit` passes it on from `playerMove` or from the Rust pawn body
+(`move_pawn.rs` writes it as `MP_IO[13]` on the same two returns), and the
+controlled player's own push (`player-scene.mjs` `pushedMoveSmooth`) passes
+it on from its `playerMove`. A Pawn pushed straight down into the floor
+therefore gets `BumpWall` from its first call, then `HitWall` with the floor
+normal and `LevelInfo` (the `pawn-floor` scene below).
 
 ## Implementation
 
@@ -71,12 +76,25 @@ Rust pawn move kernel) does not report it yet: see Unverified.
 - `ScriptRuntime.moveSmoothActor(actor, delta)`: a serialized map actor goes
   through `mapMoveLevel` (collision view, `linkLiveCollision`), a spawned
   collision-view actor through `levelFor`; Pawns keep `moveSmoothPawn`.
+- `move-smooth.mjs` `moveSmoothPawn(view, delta)`: `moveSmooth` over a pawn
+  physics view's `moveActorHit` and event dispatch. `ScriptRuntime.moveSmoothPawn`
+  calls it, and so does the `pawn-floor` replay.
 - `player-scene.mjs` `pushedMoveSmooth` routes every non-Pawn, non-Brush hit
   to the `moveSmoothActor` hook (`script-doors.mjs`); `mover-move.mjs` no
   longer throws for it. A pushed *Brush* (a static one is pushed in the
   original) stays an explicit unsupported branch.
-- No Rust twin: the rider pass in Rust (`vm.moveActor.rider`) is a different
-  call, and nothing here is on a hot path.
+- No Rust twin of `moveSmooth`: the rider pass in Rust (`vm.moveActor.rider`)
+  is a different call, and nothing here is on a hot path. The Pawn's
+  MoveActor itself runs in Rust when the pawn is admitted; its `hitUntouched`
+  word is checked against the reference's two early-return conditions on
+  every completed call under `MOVE_PAWN_DIFFERENTIAL=1`. The maps' own moves
+  never take either return in the Rust host, so `validate-pawn-move-kernel.mjs`
+  runs `scripts/scenarios/pawn-push-floor.mjs` on Island: every walking pawn
+  pushed straight down through `moveSmoothPawn`, and moved once with
+  `bMovable` cleared (649 of 1399 Rust moves with the Hit unwritten, the same
+  digests as the JavaScript path). The digests alone would not show it: they
+  are the same with `hitUntouched` forced off, since Island's walking pawns'
+  `HitWall` leaves the digested state as it was.
 
 ## Evidence
 
@@ -85,7 +103,7 @@ Rust pawn move kernel) does not report it yet: see Unverified.
 `DeusExMover16` harness) with plain `Actor` cylinders as the pushed class and
 replays each case through the JavaScript composition Play uses, comparing
 every query and its hits, `moveSmooth` entry, hash remove/add, event, zone
-boundary, position, rotation and touch slot in order. 108 cases, 144 pushes,
+boundary, position, rotation and touch slot in order. 130 cases, 181 pushes,
 0 mismatches:
 
 - 79 `training` cases: translations in three axes and magnitudes, accepted
@@ -104,7 +122,19 @@ boundary, position, rotation and touch slot in order. 108 cases, 144 pushes,
 - 6 `play-door` cases: pushes recorded from the Play run below, on
   Training's leaf and an `Ammo10mm2` squeezed against the frame. The original
   ends the pickup exactly where Play does, in all six
-  (`scripts/mover-push-play-door.mjs`).
+  (`scripts/mover-push-play-door.mjs`);
+- 22 `pawn-floor` cases: a Pawn (kind `Pawn`, `Engine.Pawn`'s class
+  `0x1058c660` in `native-level-oracle.py`; radius 17, height 42, flags 15) on
+  Training's floor at (-360, 800), with `DeusExMover16`'s leaf placed 0.5
+  above it and moved down 1, 4 and 16 units, the pawn's center from -84.5
+  (touching the Z -128 floor) to -56 (clear of the push), two rejected by
+  `EncroachingOn`, and two pushes with a slide along the floor. The replay
+  runs `moveSmoothPawn` over a real `pawnPhysicsView` (JavaScript
+  `playerMove` body). In 14 cases the original's trace is `BumpWall`, then
+  `HitWall` from the kept floor hit, then the reverse push into the leaf
+  (`Bump` pair, `HitWall` again). With `moveActorHit`'s `hitUntouched` forced
+  false the replay misses those `HitWall`s in the same 14 cases; the two
+  slide cases have no `HitWall` in the original either.
 
 `scripts/validate-mover-push-play.mjs` (live Play, fails before the change
 with the reported pause):
@@ -132,9 +162,14 @@ non-Pawn push order and the shared-Hit rule.
   Play's `TakeDamage(10000, 'Crushed')` and the invincible refusal are the
   script VM's (`DeusExDecoration.TakeDamage`), not compared with the original
   process.
-- The Pawn entry's `moveSmooth` (`moveSmoothPawn`) does not yet keep the first
-  hit when its second `MoveActor` returns early (see above), so a pawn pushed
-  into a wall with a zero slide misses `HitWall`.
+- The Rust pawn MoveActor's `hitUntouched` is not compared with the original
+  directly: the `pawn-floor` replay runs the JavaScript body (no script VM
+  image there), and the Rust word is held to that body's conditions by the
+  differential above.
+- The controlled player pushed by a mover passes `hitUntouched` on through
+  the same `playerMove`, but has no oracle case of its own: the oracle's
+  pushed Pawn has no `Player`, so `GetPlayerPawn`'s player branches of the
+  candidate test are not exercised there.
 - A pushed *spawned* actor runs the same `playerMove` body (exercised by the
   fragment in Part B) but has no oracle scene of its own; a rotating mover
   with a changing Location (a door that swings and slides) is covered only by

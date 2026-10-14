@@ -9,11 +9,13 @@
  * pushed actor's own MoveActor through playerMove) and checkActorEncroachment
  * for the pushed actor's nested CheckEncroachment. Every query, hash
  * operation, event, zone boundary, position, rotation and touch slot is
- * compared in order.
+ * compared in order. The pawn-floor scene pushes a Pawn (Engine.Pawn's
+ * class) instead, through Play's Pawn entry: moveSmoothPawn over a pawn
+ * physics view's moveActorHit.
  *
  * runner-timeout: 1800
  *
- *   NATIVE_PROBE_PYTHON=.cache/native-probe-env/bin/python node scripts/validate-native-mover-push.mjs [--reuse|--capture-only] [--scene training|paris-grill|play-door]
+ *   NATIVE_PROBE_PYTHON=.cache/native-probe-env/bin/python node scripts/validate-native-mover-push.mjs [--reuse|--capture-only] [--scene training|paris-grill|play-door|pawn-floor]
  */
 import assert from 'node:assert/strict';
 import {readFile,readdir,mkdir,writeFile} from 'node:fs/promises';
@@ -30,7 +32,8 @@ import {brushCollisionBounds} from '../src/runtime/brush-bounds.mjs';
 import {createLevelQueries} from '../src/runtime/level-queries.mjs';
 import {traceExtent} from '../src/runtime/extent-trace.mjs';
 import {moveTranslatingMover} from '../src/runtime/mover-move.mjs';
-import {moveSmoothActor} from '../src/runtime/move-smooth.mjs';
+import {moveSmoothActor,moveSmoothPawn} from '../src/runtime/move-smooth.mjs';
+import {pawnPhysicsView} from '../src/runtime/script-pawn-physics.mjs';
 import {moveActorRiders} from '../src/runtime/move-riders.mjs';
 import {playerMove} from '../src/runtime/player-move.mjs';
 import {actorBlockedBy,checkActorEncroachment,checkMoverEncroachment} from '../src/runtime/check-encroachment.mjs';
@@ -121,13 +124,37 @@ async function playDoorScene(assets,defaults){
  return {dir:`${base}/play-door`,scene,cases};
 }
 
+/** A Pawn (kind 'Pawn': Engine.Pawn's class in native-level-oracle.py) on
+ * Training's floor, with DeusExMover16's leaf moved over it and then down
+ * into it. Pushed straight into the floor, the pawn's moveSmooth has a zero
+ * slide: its second MoveActor returns before writing the shared Hit
+ * (0x10399228), and HitWall and TwoWallAdjust run with the first call's floor
+ * hit (docs/mover-push.md). Gaps under the pawn from touching to clear of the
+ * push, and two pushes with a slide along the floor. */
+async function pawnFloorScene(assets,defaults){
+ const {scene}=await trainingScene(assets,defaults,{minimal:true});
+ // (-360,800): open floor on the Z -128 plane, no wall within 200 units. A
+ // 17x42 cylinder's extent trace meets it with its center near Z -84 to
+ // -85.4 (by trace length), so the pawn starts from touching to well clear.
+ const x=-360,y=800,height=42;
+ scene.actors.push({...cylinder('$pawn',15,17,height,[x,y,-84]),kind:'Pawn'});
+ // The leaf (8 thick, 64 wide, 128 high about its Location) 0.5 above the pawn.
+ const at=z=>({$pawn:[x,y,z],DeusExMover16:[x-4,y,z+height+.5+64]});
+ const cases=[],mover='DeusExMover16';
+ for(const z of [-84.5,-84,-83,-80,-74,-56])for(const d of [1,4,16])cases.push({actor:mover,delta:[0,0,-d],positions:at(z)});
+ cases.push({actor:mover,delta:[0,0,-4],reject:1,positions:at(-84)},{actor:mover,delta:[0,0,-16],reject:1,positions:at(-80)});
+ cases.push({actor:mover,delta:[8,0,-16],positions:at(-84)},{actor:mover,delta:[0,6,-16],positions:at(-80)});
+ return {dir:`${base}/pawn-floor`,scene,cases};
+}
+
 const captured=[];
 {
  const files=[];for(const d of ['Maps','System'])for(const name of await readdir(path.join(root,d)))files.push({path:`${d}/${name}`,read:()=>readFile(path.join(root,d,name))});
  const assets=new AssetStore(files),defaults=new ClassDefaults(assets);
- const scenes=[[trainingScene,'training',base],[parisGrillScene,'paris-grill',`${base}/paris-grill`],[playDoorScene,'play-door',`${base}/play-door`]];
+ const scenes=[[trainingScene,'training',base],[parisGrillScene,'paris-grill',`${base}/paris-grill`],[playDoorScene,'play-door',`${base}/play-door`],
+  [pawnFloorScene,'pawn-floor',`${base}/pawn-floor`]];
  for(const [build,name,saved] of scenes){
-  // --reuse replays the saved captures; --scene training|paris-grill|play-door captures only that scene.
+  // --reuse replays the saved captures; --scene training|paris-grill|play-door|pawn-floor captures only that scene.
   const only=process.argv.includes('--scene')?process.argv[process.argv.indexOf('--scene')+1]:null;
   if(reuse||only&&only!==name){captured.push(saved);continue;}
   const {dir,scene,cases}=await build(assets,defaults);
@@ -149,8 +176,9 @@ for(let index=0;index<cases.length;index++){
  const bits=new DataView(new ArrayBuffer(4));
  for(const model of [scene.model,...actors.map(a=>a.model).filter(Boolean)])for(const node of model.nodes)if(node.planeBits)node.plane=node.planeBits.map(w=>{bits.setUint32(0,w,true);return bits.getFloat32(0,true);});
  for(const a of actors){
-  Object.assign(a,{flags:a.collisionBits,actorFlags:0x80000,static:false,movable:true,movingBrush:Boolean(a.model),isPawn:false,controlledPlayer:false,pawnFlags:0,
-   standingCount:0,touching:[null,null,null,null],physics:0,mapActor:!a.model,lineage:['engine.actor',...(a.model?['engine.mover','engine.brush']:[])]});
+  const pawn=a.kind==='Pawn';
+  Object.assign(a,{flags:a.collisionBits,actorFlags:0x80000,static:false,movable:true,movingBrush:Boolean(a.model),isPawn:pawn,controlledPlayer:false,pawnFlags:0,
+   standingCount:0,touching:[null,null,null,null],physics:0,mapActor:!a.model,lineage:[...(pawn?['engine.pawn']:[]),'engine.actor',...(a.model?['engine.mover','engine.brush']:[])]});
   Object.assign(a,{collideActors:Boolean(a.flags&1),collideWorld:Boolean(a.flags&2),blockActors:Boolean(a.flags&4),blockPlayers:Boolean(a.flags&8)});
   for(const [key,value]of [['position','Location'],['radius','CollisionRadius'],['height','CollisionHeight'],['rotation','Rotation']])
    Object.defineProperty(a,key,{get(){return this.values[value]??(key==='rotation'?[0,0,0]:0);},set(v){this.values[value]=v;}});
@@ -180,8 +208,24 @@ for(let index=0;index<cases.length;index++){
  const pushSmooth=(a,delta)=>{
   pushes++;
   const entry={smooth:a.id,vector:[...delta],moverPosition:[...mover.position]};trace.push(entry);
-  const result=moveSmoothActor(a,delta,services);entry.positionAfter=[...a.position];return result;
+  const result=a.kind==='Pawn'?moveSmoothPawn(pawnViews.get(a),delta):moveSmoothActor(a,delta,services);entry.positionAfter=[...a.position];return result;
  };
+ // A Pawn moves through a pawn physics view (script-pawn-physics.mjs) over its
+ // values, the fields a map pawn's view binds; the hash, events and zone are
+ // the same traced services. Built before the case runs: its collision link
+ // re-registers the pawn, which is not part of the original trace.
+ const pawnViews=new Map();
+ for(const a of actors.filter(x=>x.kind==='Pawn')){
+  Object.assign(a.values,{Rotation:a.values.Rotation??[0,0,0],StandingCount:0,Base:null,Physics:1,bStatic:false,bMovable:true,
+   bCollideActors:Boolean(a.flags&1),bCollideWorld:Boolean(a.flags&2),bBlockActors:Boolean(a.flags&4),bBlockPlayers:Boolean(a.flags&8),bProjTarget:false});
+  const level={hash:{multiLineCheck:queries.multiLineCheck,removeActor,addActor,lineCheck:queries.lineCheck},actors,netMode:0,model:scene.model,
+   pointRegion:()=>({zone:null,leaf:0,zoneNumber:0})};
+  const field=(actor,name)=>({get:()=>actor.values[name],set:value=>{actor.values[name]=value;}});
+  pawnViews.set(a,pawnPhysicsView(a,{level,worldActor:queries.levelInfo,field,read:(actor,name)=>actor.values[name],
+   write:(actor,name,value)=>{actor.values[name]=value;},isA:(actor,key)=>actor.lineage.includes(key),zoneFields:()=>({}),isProbing:()=>false,
+   dispatch,zoneUpdate:actor=>{trace.push({zoneBoundary:actor.id});return true;}}));
+ }
+ trace.length=0;
  if('destination' in c){
   (c.touching??[]).forEach((id,i)=>{const other=actors.find(a=>a.id===id);mover.touching[i]=other;other.touching[0]=mover;});
   const level={editor:false,netMode:0,actors,hash:{removeActor,addActor},findSpot:()=>{throw Error('FindSpot is not reached for a mover');},

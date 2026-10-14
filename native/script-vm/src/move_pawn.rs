@@ -61,8 +61,10 @@ const C_SOURCE_PROJECTILE: u32 = 32;
 // MP_IO, written at the end of a completed call: [0] the query's time,
 // [1] the selected hit's index (or -1), [2] success (0/1), [3..6] the
 // query's delta, [6..9] the source's Location after the move, [9..12] the
-// selected hit's normal and [12] its actor's handle (0 without a hit).
-static mut MP_IO: [f64; 13] = [0.0; 13];
+// selected hit's normal, [12] its actor's handle (0 without a hit) and
+// [13] 1 when the call returned without writing the caller's Hit (the
+// reference's `hitUntouched`: 0x10399145 and 0x10399228, see `finish`).
+static mut MP_IO: [f64; 14] = [0.0; 14];
 
 #[no_mangle]
 pub extern "C" fn move_pawn_io_ptr() -> *mut f64 {
@@ -70,7 +72,7 @@ pub extern "C" fn move_pawn_io_ptr() -> *mut f64 {
 }
 /// The last completed call's IO block (the walking loop reads it directly).
 #[inline(always)]
-pub(crate) fn mp_io() -> &'static [f64; 13] {
+pub(crate) fn mp_io() -> &'static [f64; 14] {
     unsafe { &*core::ptr::addr_of!(MP_IO) }
 }
 
@@ -119,8 +121,14 @@ fn standing_count(base: u32) -> u32 {
     load8(address(base, F_STANDING_COUNT)) as u32
 }
 
-fn finish(time: f64, hit: i32, success: bool, delta: [f64; 3], position: [f64; 3], records: &[f64]) -> u32 {
+/// `untouched`: the two returns before MoveActor writes its FCheckResult
+/// argument (a static or immovable source, 0x10399145; a sub-threshold Delta
+/// with an unchanged rotation or no riders, 0x10399228). moveSmooth passes
+/// one Hit to both of its MoveActor calls, so after either its second call
+/// still reads the first hit (move-smooth.mjs).
+fn finish(time: f64, hit: i32, success: bool, delta: [f64; 3], position: [f64; 3], records: &[f64], untouched: bool) -> u32 {
     let io = unsafe { &mut *core::ptr::addr_of_mut!(MP_IO) };
+    io[13] = untouched as u32 as f64;
     io[0] = time;
     io[1] = hit as f64;
     io[2] = success as u32 as f64;
@@ -165,11 +173,11 @@ pub(crate) fn move_source(depth: u32, base: u32, dx: f32, dy: f32, dz: f32, has_
     for v in start.iter().chain(requested.iter()).chain(extent.iter()) {
         if !v.is_finite() { return HANDBACK; }
     }
-    // `if(source.static||source.movable===false)return {success:false,...}`:
+    // `if(source.static||source.movable===false)return {...query,hitUntouched:true}`:
     // playerMove returns that query without a store.
     let mut records = [0.0f64; MAX_HITS * HIT_WORDS];
     if flag(base, F_STATIC) || !flag(base, F_MOVABLE) {
-        return finish(1.0, -1, false, [0.0; 3], start, &records);
+        return finish(1.0, -1, false, [0.0; 3], start, &records, true);
     }
     let tiny = requested.iter().all(|v| abs(*v) < 0.0001);
     let source_flags = collision_flags(base);
@@ -244,7 +252,7 @@ pub(crate) fn move_source(depth: u32, base: u32, dx: f32, dy: f32, dz: f32, has_
     let same_rotation = rotation == source_rotation;
     if tiny && (same_rotation || standing_count(base) == 0) {
         store_rotator(rotation_at, rotation);
-        return finish(query_time, hit, query_time > 0.0, query_delta, query_position, &records);
+        return finish(query_time, hit, query_time > 0.0, query_delta, query_position, &records, true);
     }
     if tiny && requested.iter().any(|v| *v != 0.0) { return HANDBACK; }
     let eligible_scanned = queried && source_flags & 14 != 0 && unsafe { js_move_eligible(depth) } != 0;
@@ -257,7 +265,7 @@ pub(crate) fn move_source(depth: u32, base: u32, dx: f32, dy: f32, dz: f32, has_
         let p = vector(location);
         let target = [f(p[0] + query_delta[0]), f(p[1] + query_delta[1]), f(p[2] + query_delta[2])];
         if unsafe { js_move_encroach(depth, target[0], target[1], target[2], rotation[0], rotation[1], rotation[2]) } != 0 {
-            return finish(query_time, hit, false, query_delta, vector(location), &records);
+            return finish(query_time, hit, false, query_delta, vector(location), &records, false);
         }
     }
     if collision_flags(base) & 1 != 0 { unsafe { js_move_hash(depth, 0) }; }
@@ -285,5 +293,5 @@ pub(crate) fn move_source(depth: u32, base: u32, dx: f32, dy: f32, dz: f32, has_
         }
     }
     unsafe { js_move_zone(depth) };
-    finish(query_time, hit, query_time > 0.0, query_delta, vector(location), &records)
+    finish(query_time, hit, query_time > 0.0, query_delta, vector(location), &records, false)
 }
