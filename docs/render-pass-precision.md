@@ -142,7 +142,7 @@ render-pass word (tables at `0x037f`), on the validator's own cases.
 
 | Routine | Placement | Oracle (CW today) | Validator | Ports | Port precision | At 0x007f |
 | --- | --- | --- | --- | --- | --- | --- |
-| ULodMesh::GetFrame `0x10355360–0x103568e5` (Render's only call through its import is DrawLodMesh `0x10b0ee0f`; no other DLL imports it; virtual-call sites of UMesh::GetFrame `0x103a7780` not traced) | pass | lodmesh-frame oracle, **0x007f** | validate-lodmesh-frame (and `--wasm`), validate-gpu-mesh | `lodmesh-frame.mjs`; lodmesh-kernel `pose_single`/`pose_ext24`; GLSL `POSE_FRAGMENT` | **PC 24** (binary32; Ext24 fallback) | was: 20 of 46 calls (7,562 of 29,823 output words, max 1,257 ulps); **now 0**; GPU 227,862 of 227,862 components equal the CPU |
+| ULodMesh::GetFrame `0x10355360–0x103568e5` (Render's only call through its import is DrawLodMesh `0x10b0ee0f`; no other DLL imports it; virtual-call sites of UMesh::GetFrame `0x103a7780` not traced) | pass | lodmesh-frame oracle, **0x007f** | validate-lodmesh-frame (and `--wasm`), validate-gpu-mesh | `lodmesh-frame.mjs`; lodmesh-kernel `pose_single`/`pose_ext24`; GLSL `POSE_FRAGMENT` | **PC 24** (binary32; Ext24 fallback) | was: 20 of 46 calls (7,562 of 29,823 output words, max 1,257 ulps); **now 0**; GPU 227,862 of 227,862 components equal the CPU; 2026-10-14: 61 calls including 15 with camera Frame->Coords, and the camera-space GPU passes equal the CPU twin |
 | DrawLodMesh normals `0x10b0fe60–0x10b0ff85`, `0x10b10863–0x10b10912`, back-face dot `0x10b0ffa3` | pass | mesh-light oracle, **0x007f** | validate-mesh-lighting, validate-gpu-mesh | `accumulateFaceNormal`, `faceDot`, `vertexNormalPlane`; kernel `light_mesh_job`; GLSL `FACE_FRAGMENT` | **PC 24** | was: face 278 of 400, vertex plane 208 of 400; **now 0** |
 | SetupForActor `0x10b08c70` (ambient, candidates, AddLight, sort, ComputeFromActor) | pass | mesh-light oracle, **0x007f** | validate-mesh-lighting(-play) | `mesh-lighting.mjs` `setupForActor`; meshlight.rs `ml_select` | **PC 24** | was: camera-space light and colour words 1–8 ulps off; **now 0** (52 calls, 220 infos) |
 | FLightManager::Light `0x10b027f0` | pass | mesh-light oracle, **0x007f** | validate-mesh-lighting, validate-gpu-mesh | `lightVertexX87` (BigInt PC 24 reference), `lightVertex`; kernel `light_vertex`; GLSL `VERTEX_FRAGMENT` (`divRN`) | **PC 24** | was: 1,545 of 3,744 channels; **now 0**; GPU 701,505 colour channels equal the CPU |
@@ -208,9 +208,14 @@ Open items:
 - **Environment mapping** (`mesh-environment.mjs`, GLSL `ENVIRONMENT_UV`):
   f64 within a 0.00005-texel tolerance, not bit-exact at either word.
 - **Mirror segment** (`mirrors.mjs`): doubles within a 4-ulp tolerance.
-- **The lighting camera transform** (`camera_component`, `toCamera`): a
-  host stage at 24 bits; the original composes the view into GetFrame's
-  matrix.
+- **The lighting camera transform**: closed 2026-10-14. The original calls
+  GetFrame with the drawing frame's Coords, so its buffer, the morph and the
+  lighting are in that frame's camera space; Play now publishes the cache poses
+  through each lit frame's own matrix and lights those (the `camera_component`
+  / `toCamera` stage remains only for callers that pass world-space points; the
+  validators of the mesh-lighting composition use it). The draw, the environment
+  mapping and the culling bounds keep the world-space pose
+  ([LOD](script-lodmesh-lod.md)).
 - **FPATAN**: hosts use `Math.atan2` (Unicorn's FPATAN is double); exact
   only away from integer boundaries (lasers' `vectorToRotator24`).
 - **Texture ticks** (Update, Tick, ConstantTimeTick) keep the 64-bit model:

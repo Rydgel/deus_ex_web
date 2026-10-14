@@ -319,7 +319,9 @@ not moved.
 
 The September 28 Island profile attributed about 19 ms/frame specifically to
 the presence of this mesh-lighting pass. The repeated numeric portion now runs
-in `native/lodmesh-kernel`: camera transforms, face normals and culling, marked
+in `native/lodmesh-kernel`: camera transforms (since 2026-10-14 only for world-space
+points; the actor layer lights the camera-space buffer GetFrame fills for the frame,
+`cameraSpace`), face normals and culling, marked
 vertex lighting, ordered `PF_Unlit` replacement, and diffuse-byte conversion.
 The Rust code consumes the validated table bits and retains the store order and
 f32/f64 intermediates of the JavaScript translation. Face topology is immutable

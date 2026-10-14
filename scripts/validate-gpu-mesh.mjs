@@ -80,6 +80,8 @@ async function capture(page,{frames,device,tolerance,admission,lodViews}) {
       environmentVertices:0,maxNormalUlp:0,maxUV:0,groups:0,certified:0,ambiguous:0,visibilityMismatches:0,
       finalComponents:0,finalExact:0,maxFinalUlp:0,worstFinal:null,cornerWedges:0,wedgeMismatches:0,worstWedge:null,
       camera:{components:0,exact:0,maxUlp:0,worst:null},
+      // The frame the lighting's camera matrix is made from (lighting.frame) against the Frame->Coords the LOD selects with.
+      coordsGlue:{checked:0,mismatches:0},
       child:{actors:0,corners:0,maxByte:0,drawnDisagreements:0,restoredOff:0,corner:null},
       variant:{actors:0,morph:0,corners:0,maxByte:0,drawnDisagreements:0,restoredOff:0,corner:null,components:0,maxUlp:0,worst:null,wedges:0,wedgeMismatches:0,dropped:0},
       coverage:{translucent:0,modulated:0,masked:0,environment:0,unlit:0,mixedUnlit:0,blend:0,tween:0,movingLights:0,lod:0,lodMorph:0,lodReduced:0},
@@ -209,6 +211,14 @@ async function capture(page,{frames,device,tolerance,admission,lodViews}) {
         // The camera-space buffer of this frame (GetFrame called with its
         // Coords, then the morph): the CPU twin of the camera passes.
         const cameraState=state.cameraDrawn(null),cameraSpace=cameraState.positions;
+        {
+          const lodCoords=actor.lodState()?.frame?.coords;
+          if(lodCoords){
+            const want=[...frame.origin,...frame.axes[0],...frame.axes[1],...frame.axes[2]];
+            report.coordsGlue.checked++;
+            if(want.some((value,i)=>!Object.is(value,lodCoords[i])))report.coordsGlue.mismatches++;
+          }
+        }
         compareCamera(report.camera,device==='cpu'?null:gpu.read('cameraFinal',handle.vbase,V),cameraSpace,published,actor.summary.actor);
         const reference=npc.kernel.light({points:cameraSpace,faces:litWords,origin:frame.origin,axes:frame.axes,
           ambient:setup.ambient,scaleGlow:setup.scaleGlow,unlit,lights:setup.lights,flags:actorFlags,cameraSpace:true});
@@ -467,6 +477,7 @@ try {
       ['camera-space final pose ulp (child frame)',(report.child.camera?.maxUlp??0)<=TOLERANCE.tweenUlp],
       ['camera-space final pose ulp (child LOD state)',(report.variant.camera?.maxUlp??0)<=TOLERANCE.tweenUlp],
       ['camera-space compared',device==='cpu'||(report.camera.components>0&&(report.child.camera?.components??0)>0)],
+      ['lighting frame Coords equal the LOD frame Coords',report.coordsGlue.mismatches===0&&report.coordsGlue.checked>0],
       ['colour bytes',report.maxByte<=TOLERANCE.byte],
       ['edge-on drawn disagreements',report.maxEdgeOn<TOLERANCE.edgeOn],
       ['child frame colour bytes (reflected Coords, Mirror -1)',report.child.maxByte<=TOLERANCE.byte],

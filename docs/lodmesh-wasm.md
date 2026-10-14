@@ -59,7 +59,9 @@ to 2.42 ms. This is the evidence for extending the kernel; the sky comparison
 changed only ten draw calls and did not improve the frame.
 
 The added bulk operation translates the already recovered DrawLodMesh contract
-in [mesh lighting](mesh-lighting.md). It performs the camera transform, ordered
+in [mesh lighting](mesh-lighting.md). It performs the camera transform (skipped with
+`cameraSpace`, for the camera-space buffer GetFrame fills when called with the
+frame's Coords; 2026-10-14), ordered
 face-normal accumulation, original face culling, marked-vertex `Light`, ordered
 `PF_Unlit` overwrites and D3D nearest-even diffuse quantization. JavaScript
 retains `SetupForActor`: live object reads, leaf candidates, line traces, fade

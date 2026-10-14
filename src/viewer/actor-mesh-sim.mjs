@@ -879,7 +879,7 @@ export async function createMeshBinding(runtime,actor,{id,originalObjectIndex,ke
               if(layout.reserveLights(prepared.setup.lights.length,pool)){
                 // The frame's GetFrame matrix: the page publishes the cached
                 // poses in this frame's camera space for the lighting passes.
-                const at=ctx??lighting.frame,camera=lodMeshCameraMatrix(payload,actor,[...at.origin,...at.axes[0],...at.axes[1],...at.axes[2]],services);
+                const here=ctx??lighting.frame,camera=lodMeshCameraMatrix(payload,actor,[...here.origin,...here.axes[0],...here.axes[1],...here.axes[2]],services);
                 if(lf)frameLights.set(lf.index,{lighting:plainLighting(prepared,camera)});
                 else record.lighting=view.pack?view.pack.lighting(prepared,camera):plainLighting(prepared,camera);
               } else {

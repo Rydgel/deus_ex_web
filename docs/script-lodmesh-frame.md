@@ -71,6 +71,25 @@ store f32, TransformVectorBy (no coordinate origin), add to existing output and
 store f32. Slots execute in ascending order; each can reduce the in/out count
 before the next slot. No additional blend weight field is read by this body.
 
+## Called with a frame's Coords (2026-10-14)
+
+DrawLodMesh passes the Frame->Coords of the frame that draws the actor, so
+every call's output is in that frame's camera space; the addresses of the
+call and every float store of the body are in
+[LOD](script-lodmesh-lod.md) ("Camera space"). `validate-lodmesh-frame.mjs`
+has 15 calls with such Coords (large origins, a pitched camera, a mirror
+frame's reflected Coords with negative determinant) on LightSwitch and
+GM_Trench: keyframes, a reduced count, tweens and four additive blends, all
+bytes equal to the original's. `validate-lodmesh-lod.mjs --camera-chain` runs
+the original GetFrame on 30 poses of the six LOD meshes and the original LOD
+morph on its buffers.
+
+Play keeps one cache per actor and publishes it once for each frame that
+draws the actor: `publishLodMeshOps` runs an earlier call's operations
+(`getLodMeshFrame`'s `ops`, a plan's `channels` once its cache is current)
+as tweens with alpha 0, which republish the cached pose through another
+matrix (`lodMeshCameraMatrix`) without touching it.
+
 ## Original comparisons and runtime integration
 
 `scripts/native-lodmesh-frame-oracle.py` executes the complete unchanged original

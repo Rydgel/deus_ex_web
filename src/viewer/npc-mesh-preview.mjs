@@ -30,6 +30,8 @@ export function bindingView(binding,drawOf,draw=null){
     /** Validation access (scripts/validate-gpu-mesh.mjs): the simulation
      * side's plan, lighting and CPU shadow with the page's GPU slot. */
     gpuState(){return {...binding.gpuState(),handle:drawOf(binding.id)?.gpuHandle??null};},
+    /** Validation access: the last update's DrawLodMesh inputs and results (actor-mesh-sim.mjs lodState). */
+    lodState(){return binding.lodState?.()??null;},
     /** This binding alone for one frame (no GPU passes), as the earlier
      * per-actor update: true when a buffer was re-uploaded. */
     update(cameraPosition,view={}){
