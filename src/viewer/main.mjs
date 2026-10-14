@@ -170,7 +170,7 @@ function applySimEvents(events,{world:target,actors,weapon}){
 }
 
 const $ = id => document.getElementById(id);
-const renderer = new THREE.WebGLRenderer({ canvas: $('scene'), antialias: true });
+const renderer = new THREE.WebGLRenderer({ canvas: $('scene'), antialias: new URLSearchParams(location.search).get('antialias') !== '0' });
 renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
 // World and actor shaders apply the original display-encoded modulation
 // themselves and draw raw colours; the display ramp maps the finished frame

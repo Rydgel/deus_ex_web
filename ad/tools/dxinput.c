@@ -17,6 +17,18 @@
  *   shot                  numpad * (User.ini GreyStar=Shot)
  *   button <title>        BM_CLICK a visible dialog button of DeusEx.exe
  *   move <x> <y> / click <x> <y>   mouse in viewport client coordinates
+ *   rclick <x> <y>        right button click (same coordinates)
+ *   mclick <x> <y>        middle button click (a mouse key reaches the bindings even under a UI
+ *                         screen, which grabs every keyboard key; docs/visual-acceptance.md)
+ *   focus                 give the game's top-level window and viewport the Wine foreground and
+ *                         keyboard focus (WinDrv reads GetFocus/GetKeyState, so a key held by a
+ *                         posted message only counts while the window has focus), and report
+ *                         the game thread's active/focus windows
+ *   focusinfo             report them without changing anything
+ *   sdown <key> / sup <key> / shold <key> <ms>
+ *                         the same keys through the Wine input queue (keybd_event), which updates
+ *                         the thread's key state as a real key does; a posted WM_KEYDOWN does
+ *                         not, and the game's held-key axes (MoveForward and the others) need it
  */
 #include <windows.h>
 #include <tlhelp32.h>
@@ -90,7 +102,7 @@ static int locate(int verbose) {
 
 static int vkFor(const char *name) {
   static const struct { const char *name; int vk; } table[] = {
-    {"ENTER", VK_RETURN}, {"ESC", VK_ESCAPE}, {"SPACE", VK_SPACE}, {"BACK", VK_BACK}, {"TAB", VK_TAB},
+    {"TILDE", VK_OEM_3}, {"PRINT", VK_SNAPSHOT}, {"ENTER", VK_RETURN}, {"ESC", VK_ESCAPE}, {"SPACE", VK_SPACE}, {"BACK", VK_BACK}, {"TAB", VK_TAB},
     {"MULTIPLY", VK_MULTIPLY}, {"UP", VK_UP}, {"DOWN", VK_DOWN}, {"LEFT", VK_LEFT}, {"RIGHT", VK_RIGHT},
     {"SHIFT", VK_SHIFT}, {"CTRL", VK_CONTROL}, {"F1", VK_F1}, {"F2", VK_F2}, {"F3", VK_F3}, {"F4", VK_F4},
     {"F5", VK_F5}, {"F6", VK_F6}, {"F7", VK_F7}, {"F8", VK_F8}, {"F9", VK_F9}, {"F10", VK_F10},
@@ -113,6 +125,14 @@ static void keyEdge(int vk, int down) {
   LPARAM lp = 1 | ((LPARAM)scan << 16) | (extended(vk) ? (1 << 24) : 0);
   if (!down) lp |= (1u << 30) | (1u << 31);
   PostMessageA(target, down ? WM_KEYDOWN : WM_KEYUP, vk, lp);
+}
+
+/* A key through the input queue: delivered to the focus window (the game's viewport, see focusinfo)
+ * and recorded in the thread's key state. */
+static void sendEdge(int vk, int down) {
+  UINT scan = MapVirtualKeyA(vk, 0);
+  DWORD flags = (down ? 0 : KEYEVENTF_KEYUP) | (extended(vk) ? KEYEVENTF_EXTENDEDKEY : 0);
+  keybd_event((BYTE)vk, (BYTE)scan, flags, 0);
 }
 
 static void typeText(const char *text) {
@@ -171,6 +191,53 @@ static void mouse(int x, int y, int click) {
   Sleep(60);
 }
 
+static DWORD gameThread(void) {
+  DWORD pid = 0;
+  return GetWindowThreadProcessId(target, &pid);
+}
+
+static void focusInfo(const char *what) {
+  GUITHREADINFO info = {sizeof info};
+  if (GetGUIThreadInfo(gameThread(), &info))
+    printf("%s: active=%p focus=%p capture=%p foreground=%p target=%p\n", what, (void *)info.hwndActive, (void *)info.hwndFocus,
+           (void *)info.hwndCapture, (void *)GetForegroundWindow(), (void *)target);
+  else printf("%s: GetGUIThreadInfo failed (%lu)\n", what, GetLastError());
+}
+
+/* Wine-side focus only: no compositor involved. */
+static void takeFocus(void) {
+  HWND top = GetAncestor(target, GA_ROOT);
+  DWORD game = gameThread(), mine = GetCurrentThreadId();
+  focusInfo("before");
+  AttachThreadInput(mine, game, TRUE);
+  SetForegroundWindow(top);
+  SetActiveWindow(top);
+  SetFocus(target);
+  AttachThreadInput(mine, game, FALSE);
+  Sleep(100);
+  focusInfo("after");
+}
+
+static void rmouse(int x, int y) {
+  LPARAM pos = MAKELPARAM(x, y);
+  PostMessageA(target, WM_MOUSEMOVE, 0, pos);
+  Sleep(60);
+  PostMessageA(target, WM_RBUTTONDOWN, MK_RBUTTON, pos);
+  Sleep(80);
+  PostMessageA(target, WM_RBUTTONUP, 0, pos);
+  Sleep(60);
+}
+
+static void mmouse(int x, int y) {
+  LPARAM pos = MAKELPARAM(x, y);
+  PostMessageA(target, WM_MOUSEMOVE, 0, pos);
+  Sleep(60);
+  PostMessageA(target, WM_MBUTTONDOWN, MK_MBUTTON, pos);
+  Sleep(80);
+  PostMessageA(target, WM_MBUTTONUP, 0, pos);
+  Sleep(60);
+}
+
 static void trim(char *s) {
   size_t n = strlen(s);
   while (n && (s[n - 1] == '\n' || s[n - 1] == '\r' || s[n - 1] == ' ')) s[--n] = 0;
@@ -202,6 +269,27 @@ static int runScript(const char *path) {
     else if (!_stricmp(verb, "cmd")) consoleLine(arg);
     else if (!_stricmp(verb, "shot")) { press(VK_MULTIPLY, 60); Sleep(400); }
     else if (!_stricmp(verb, "button")) clickButton(arg);
+    else if (!_stricmp(verb, "sdown") || !_stricmp(verb, "sup") || !_stricmp(verb, "shold")) {
+      char name[32] = "";
+      int hold = 100;
+      sscanf(arg, "%31s %d", name, &hold);
+      int vk = vkFor(name);
+      if (!vk) { fprintf(stderr, "unknown key %s\n", name); continue; }
+      if (!_stricmp(verb, "shold")) { sendEdge(vk, 1); Sleep(hold); sendEdge(vk, 0); Sleep(40); }
+      else sendEdge(vk, !_stricmp(verb, "sdown"));
+    }
+    else if (!_stricmp(verb, "focus")) takeFocus();
+    else if (!_stricmp(verb, "focusinfo")) focusInfo("info");
+    else if (!_stricmp(verb, "mclick")) {
+      int x = 0, y = 0;
+      sscanf(arg, "%d %d", &x, &y);
+      mmouse(x, y);
+    }
+    else if (!_stricmp(verb, "rclick")) {
+      int x = 0, y = 0;
+      sscanf(arg, "%d %d", &x, &y);
+      rmouse(x, y);
+    }
     else if (!_stricmp(verb, "move") || !_stricmp(verb, "click")) {
       int x = 0, y = 0;
       sscanf(arg, "%d %d", &x, &y);

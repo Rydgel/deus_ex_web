@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { displayRampGlsl } from './light-atlas.mjs';
 import { DECAL_LAYER } from './render-layers.mjs';
+import { configureSampler } from './original-sampling.mjs';
 
 
 /** Decals in Play, the page's side (docs/decals.md "Drawing"): the
@@ -27,11 +28,10 @@ export function createDecalScene(assets, textures, { displayGamma }) {
       const first = data.mips[0], gpu = new THREE.DataTexture(first.data, first.width, first.height, THREE.RGBAFormat);
       gpu.colorSpace = THREE.SRGBColorSpace; gpu.flipY = false;
       gpu.wrapS = gpu.wrapT = THREE.RepeatWrapping;
-      gpu.magFilter = THREE.LinearFilter;
       const last = data.mips.at(-1), complete = last.width === 1 && last.height === 1;
       if (complete && data.mips.length > 1) gpu.mipmaps = data.mips;
       gpu.generateMipmaps = !complete;
-      gpu.minFilter = THREE.LinearMipmapNearestFilter;
+      configureSampler(gpu, false);
       gpu.needsUpdate = true;
       const material = new THREE.MeshBasicMaterial({ map: gpu, transparent: true, depthWrite: false,
         depthFunc: THREE.LessEqualDepth, side: THREE.DoubleSide, fog: false });
@@ -40,7 +40,6 @@ export function createDecalScene(assets, textures, { displayGamma }) {
       material.onBeforeCompile = shader => {
         shader.uniforms.deusDisplayGamma = displayGamma;
         shader.fragmentShader = shader.fragmentShader.replace('#include <common>', '#include <common>\nuniform float deusDisplayGamma;')
-          .replace('texture2D( map, vMapUv )', 'texture2D( map, vMapUv, -0.5 )')
           .replace('#include <colorspace_fragment>', `gl_FragColor = sRGBTransferOETF(gl_FragColor);
             ${displayRampGlsl('deusDisplayGamma', true)}`);
       };
