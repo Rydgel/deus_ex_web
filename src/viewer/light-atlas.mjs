@@ -172,13 +172,15 @@ export class LightAtlas {
   }
 }
 
-export function applyLightAtlas(material, page, enabled, gamma = { value: 1 }, mirror = null, modulated = false, array = null) {
+/** `tracked`: a mover's material, whose vertices carry the brush tracker's
+ * points (`deusTracked`, Unreal's axes; docs/frame-projection.md "Movers"). */
+export function applyLightAtlas(material, page, enabled, gamma = { value: 1 }, mirror = null, modulated = false, array = null, tracked = false) {
   const stride = array ? array.value.image.depth + 1 : 0;
   // An unbatched surface samples its page's array layer when the atlas has
   // been sealed by the time its program is built (the same texels, linear
   // filtered within one layer), otherwise the page texture.
   const layer = () => !array && page?.layers?.value ? page.layers : null;
-  material.customProgramCacheKey = () => `deus-ex-lightmap-v5:${FRAME_PROJECTION_KEY}:${mirror ? (mirror.opaque ? 'opaque' : 'composite') : ''}:${Boolean(modulated)}:${stride}:${layer() ? 'layer' : ''}`;
+  material.customProgramCacheKey = () => `deus-ex-lightmap-v5:${FRAME_PROJECTION_KEY}:${mirror ? (mirror.opaque ? 'opaque' : 'composite') : ''}:${Boolean(modulated)}:${stride}:${layer() ? 'layer' : ''}${tracked ? ':tracked' : ''}`;
   material.onBeforeCompile = shader => {
     const pageLayers = layer();
     shader.uniforms.deusLightAtlas = array ?? pageLayers ?? { value: page.texture };
@@ -224,7 +226,7 @@ export function applyLightAtlas(material, page, enabled, gamma = { value: 1 }, m
       }` : ''}
       ${displayRampGlsl('deusDisplayGamma', modulated)}`);
     // The original's vertex projection (docs/frame-projection.md).
-    frameProjection.patch(shader);
+    frameProjection.patch(shader, { tracked });
   };
 }
 

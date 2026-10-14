@@ -1484,6 +1484,12 @@ iteratorProbe(args) {
   if (simClient) return simClient.call('iteratorProbe', args);
   return sim ? sim.iteratorState(args) : null;
 },
+/** Validation only (validate-mover-vertices-play.mjs): the mover meshes' `deusTracked` vertices against the tracker's
+ * points (`moverProbe({ points: true })` movers: name, revision, points) and, as a bound on the vertex order, against the
+ * group matrix's product with the rest positions. */
+moverVertexProbe(movers) { return world.moverVertices(movers); },
+/** Validation: false poses the movers' vertices from their group matrices (the behaviour before the tracker's points). */
+moverVertices(on) { world.useTrackerVertices(on); },
 async moverProbe(args) {
   if (simClient) return simClient.call('moverProbe', args);
   return game && sim ? (await import('./mover-probe.mjs')).moverProbe(game, sim, args) : null;
@@ -1801,6 +1807,8 @@ function drawFrame(snap, time) {
   // it draws, its mirror child requests and whether it made a sky frame.
   const visible = playing && !runtimeError ? frame?.visibility ?? null : null;
   lastVisibility = visible;
+  // The brush tracker's vertices of the movers it rebuilt (sim-session.mjs attachMoverPoints), before any pass draws them.
+  if (playing && frame?.visibility?.moverPoints) world.setMoverPoints(frame.visibility.moverPoints);
   const requested = visible ? new Set(visible.mirrors) : null;
   // OccludeFrame's child frames (sim-session.mjs visibility), with
   // ?childFrames on: each mirror and sky pass draws its own results.

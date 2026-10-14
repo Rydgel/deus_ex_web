@@ -87,7 +87,7 @@ async function makeCases(mapName, { seed, count, aimed, views = [] }) {
   return { model, cases, tangents, request: occlusionModelRequest(model, textureFlags) };
 }
 
-const run = request => JSON.parse(execFileSync(python, ['scripts/native-frame-projection-oracle.py'],
+export const run = request => JSON.parse(execFileSync(python, ['scripts/native-frame-projection-oracle.py'],
   { input: JSON.stringify({ gameRoot: root, ...request }), encoding: 'utf8', maxBuffer: 1 << 30 }));
 
 /** A frame's rectangle: the render pass' (X, Y, XB, YB) or the viewport. */

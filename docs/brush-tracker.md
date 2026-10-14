@@ -245,6 +245,13 @@ polygons (`moverModelFromPolys`).
   rest.
 - The mirror and sky passes still draw movers whole, because child frames'
   occlusion is not ported.
+- A mover mesh's vertices are the tracker's: `moverPoints` (brush-tracker.mjs) is
+  a host copy of what `FPoly::Transform` left in each rebuilt polygon (the
+  original keeps those in Update's FMemStack), sent to the page with each
+  rebuild and projected by the frame's vertex chain
+  ([frame projection](frame-projection.md), "Movers"). The oracle hooks
+  Transform's return, and `validate-brush-tracker` checks the copy against 15,333
+  polygon outputs.
 
 **Stamping.** Tracked movers are no longer stamped from the frustum-tested
 drawn set, and `verifyStamps` leaves the movers kind out.

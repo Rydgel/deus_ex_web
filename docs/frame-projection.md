@@ -208,6 +208,63 @@ the camera's matrices its depth differed by a depth unit and z-fought against a
 surface on the chain (diagonal hatching in the Bar's mirror wall). The fog
 mesh uses `patch` too, with its surface's vertices, so the depths are equal.
 
+**Movers (2026-10-14).** The original draws a mover's polygons as nodes of the
+level model, `Model->Points` as the moving brush tracker wrote them
+([brush tracker](brush-tracker.md)): `FPoly::Transform` (Engine `0x10387360`,
+`ret 0x10` at `0x10387754`; called by Update at precision 24 from
+URender::SetupDynamics) turns each brush polygon's Base and Vertex[] by
+`((V - PrePivot) through PointXform) + Location`, each operation stored as
+binary32 (and reverses the vertices when the orientation is negative), and
+AddNode (`0x1037bb00`, AllocPoint `0x1037cff0`) copies a fragment's vertices
+unchanged into new `Model->Points` entries. ClipBspSurf then transforms those
+points exactly as it does a level vertex (`0x10b14de2` on). Play used to pose a
+mover mesh with the float32 product of its group matrix (`brushMatrix`, double
+precision, then the GPU's `modelMatrix * position`) and the rest positions.
+Now:
+
+* `tracker.rs` keeps a host copy of each rebuilt mover's transformed polygon
+  vertices (`M_XVERTS`: 3 words a vertex, polygons in order, in Transform's
+  order, plus a revision and whether Transform reversed them; the original
+  leaves them in the FMemStack until Update returns).
+  `scripts/native-brush-tracker-oracle.py` hooks Transform's return and reports
+  every polygon it ran on; `validate-brush-tracker` compares the copy with it
+  bit for bit: **15,333 polygon outputs** over the 20 cases (Training, the club,
+  Island, the Intro and the Ship, whose scaled -1 mover reverses its vertices,
+  both control words), and a flipped bit is found.
+* `sim-session.mjs` sends the vertices of the movers whose revision changed
+  (`visibility().moverPoints`, all of them in the first frame and after
+  Player start's rebuild) and `world.setMoverPoints` writes them, rest order,
+  into each mover mesh's `deusTracked` attribute (Unreal's axes). Every mesh
+  vertex knows its place among the brush polygons' vertices (`mesh.userData.tracked`,
+  from `moverModelFromPolys` through `buildSurfaceGeometry`'s `sources`). A mover
+  material (`applyLightAtlas(..., tracked)`) projects `fpClip(fpView(deusTracked))`.
+  Without a tracker (`?moverTracker=off`, Inspect) or until the first points
+  arrive the attribute holds the group matrix's product, as before; the matrix
+  still poses everything else (culling, lights, mirror planes).
+  `deusExViewer.moverVertices(false)` goes back to the matrix for a comparison.
+* A polygon the BSP split draws whole with its own vertices: the fragments'
+  vertices on the cuts are the tracker's (`SplitWithPlaneFast`) and interior to
+  the polygon; see "Clipped polygons" below.
+
+`scripts/validate-frame-projection-movers.mjs` runs the unchanged Render.dll and
+D3DDrv.dll (the frame-projection oracle) over a level whose BSP holds the Rust
+tracker's fragments (Training closed and its first double door raised, the club
+with its mirror movers turned, Island), 54 cameras aimed at movers, main and
+child frames:
+
+| | |
+| --- | --- |
+| Mover fragments drawn | 299, of 124 polygons; 1,203 points |
+| Model vertices through the chain | 1,063 equal D3DDrv's vertex bit for bit; 140 are the clipper's; none on the rasterizer's Y clamp |
+| Drawn fragments of polygons the BSP left whole | 162; the 144 not cut by the frustum have exactly Transform's vertices (576 vertices; the polygon's own order in 141, reversed in 3: a polygon seen from its back) |
+| Every fragmented polygon, the chains of all movers | 617 unsplit (the one fragment is Transform's vertices in order), 119 split or partly dropped (468 fragment vertices are Transform's, 800 are the tracker's cuts, none a hair from one of Transform's) |
+| The page's earlier vertices (matrix times rest position) through the same chain, 757 polygon vertices | X differs from the device's in 30, depth in none; error p50 0, p99 1.2e-4, max 1.3e-3 pixel |
+| Mutation | one flipped bit in each exported polygon is found |
+
+So the earlier path was already within a thousandth of a pixel (doors are
+translations, whose matrix products mostly round the same way); the change is
+that the vertex is the original's, bit for bit, for turned movers too.
+
 ## Play
 
 `scripts/validate-frame-projection-play.mjs` (worker mode, headless Chromium,
@@ -227,6 +284,19 @@ a view) the stage changes 3,180 and 1,643 pixels (0.03%, 0.015%; largest channel
 164 on a single edge pixel); a frozen frame at that ratio has a noise of its own
 (100 to 300 pixels in some views, the same with the stage off), so the
 validator asserts the zero only at 1 pixel per CSS pixel.
+
+`scripts/validate-mover-vertices-play.mjs` (worker mode, 1024 x 640, one device
+pixel per CSS pixel) reads the tracker's vertices from the simulation side's
+memory (`moverProbe({points: true})`) and the page's mesh attributes
+(`moverVertexProbe`): every mover mesh vertex holds the tracker's point as float
+bits (Training 1,800 of 1,800 vertices over 25 movers, Island 2,292 over 19, the
+club 2,244 over 13, the Ship 17,538 over 85), each within 2.4e-4 units of the
+group matrix's pose (which bounds the vertex order, reversals included); after
+the probe moves one mover up and turns another the tracker rebuilds both (their
+revisions grow) and the page's vertices follow, bit for bit; and in 11 frozen
+views of movers (3 + 3 + 2 + 3, a view with an animated texture such as the Training
+monitor's static is not a measurement and is skipped) drawing the meshes with
+the group matrix's pose instead changes 0 pixels.
 
 [Visual acceptance](visual-acceptance.md) (`scripts/visual-acceptance.mjs play`
 then `compare` against the stored original frames, 1280 x 720, Training, Island,
@@ -292,10 +362,6 @@ lit actor and frame, and the points in the worker's record).
 
 ## Unverified and open
 
-* **Movers.** A mover's vertices are float32 products of its group matrix with
-  the rest positions, then the chain: the original's are `Model->Points` the
-  brush tracker writes (FPoly::Transform at precision 24). The tracker's points
-  could be uploaded per move.
 * **Clipped polygons.** The original draws the Sutherland-Hodgman clipped
   polygon (20% of the saved points in these frames); the GPU clips the unclipped
   polygon homogeneously. The pixels inside the frustum agree; the vertices on its

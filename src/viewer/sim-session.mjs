@@ -299,6 +299,26 @@ export function createSimSession(game, { assets = null, events = [], exportName 
     }
   }
   const f32b = new Float32Array(3), u32b = new Uint32Array(f32b.buffer);
+  // The tracker's transformed polygon vertices of the movers it rebuilt since
+  // the last frame the page received (revision by revision; everything again
+  // after a rebuild of the tracker): `visibility.moverPoints`, mover name ->
+  // flat Float32Array (brush-tracker.mjs moverPoints). The page poses the
+  // movers' meshes with them (docs/frame-projection.md "Movers"); null without
+  // a tracker.
+  let sentRevisions = null;
+  function attachMoverPoints(result) {
+    const tracker = occlusion?.tracker;
+    if (!trackerMovers || !tracker?.live()) { result.moverPoints = null; return; }
+    sentRevisions ??= new Array(trackerMovers.names.length).fill(-1);
+    const out = {};
+    trackerMovers.names.forEach((name, i) => {
+      const revision = tracker.revision(i);
+      if (revision === sentRevisions[i]) return;
+      sentRevisions[i] = revision;
+      out[name] = tracker.moverPoints(i).points;
+    });
+    result.moverPoints = out;
+  }
   // A zone's SkyZone for the sky child frame (occlude.rs sky_coords): its
   // Location, Rotation and Region.ZoneNumber.
   function skyRecord(sky) {
@@ -603,6 +623,7 @@ export function createSimSession(game, { assets = null, events = [], exportName 
       });
     }
     pending.frame.visibility = result;
+    attachMoverPoints(result);
     // DrawWorld draws the sky frame only when OccludeBsp made one.
     if (!result.sky) pending.frame.sky = null;
     return result;
@@ -860,7 +881,7 @@ export function createSimSession(game, { assets = null, events = [], exportName 
         items: claims(rawItems, rawItems.drawnIds),
         frames: plan.frames.map(({ rawItems: rows, drawnIds, ...frame }) => ({ ...frame, items: claims(rows, drawnIds) })) }));
     },
-    setOcclusion(value, movers = null) { occlusion = value; trackerMovers = movers; },
+    setOcclusion(value, movers = null) { occlusion = value; trackerMovers = movers; sentRevisions = null; },
     setOcclusionRebuild(rebuild) { rebuildOcclusion = rebuild; },
     /** Validation (strobeProbe in main.mjs, scripts/validate-strobe-child-frames-play.mjs): the Strobe lists of the
      * light-map Strobe calls. `mainOnly` scans the main frame's surfaces alone (the first version's behavior,
@@ -938,7 +959,7 @@ export function createSimSession(game, { assets = null, events = [], exportName 
      * and the polygons the last main frame drew, and that frame's drawn
      * node count, mover mirror requests, host timings and admitted
      * (updated) movers. */
-    moverState() {
+    moverState({ points = false } = {}) {
       const tracker = occlusion?.tracker, last = current?.visibility ?? null;
       const frame = { nodes: last?.nodes?.length ?? null, moverMirrors: last?.mirrors?.filter(m => typeof m === 'string') ?? null,
         ms: last?.ms ?? null,
@@ -949,7 +970,9 @@ export function createSimSession(game, { assets = null, events = [], exportName 
       const drawn = last?.movers ?? null;
       return { tracker: tracker.live(), ...frame, admitted: trackerMovers.admitted ?? null, movers: trackerMovers.names.map((name, i) => ({ name,
         fragments: tracker.chain(i).length, drawn: drawn ? [...new Set(drawn[name] ?? [])].length : null,
-        polygons: drawn ? [...new Set(drawn[name] ?? [])].sort((a, b) => a - b) : null })) };
+        polygons: drawn ? [...new Set(drawn[name] ?? [])].sort((a, b) => a - b) : null,
+        // `points`: the tracker's transformed vertices now (moverPoints) and their revision.
+        ...(points ? { revision: tracker.revision(i), points: tracker.moverPoints(i).points } : {}) })) };
     },
     /** Validation (mover-probe.mjs): the last main frame's decal fragments
      * (decal-draw.mjs groups: texture, view-space triangle positions). */
@@ -1378,7 +1401,7 @@ export function createSimSession(game, { assets = null, events = [], exportName 
           // The dynamics wait for the sprite scan and the actor layer.
           if (actorOcclusion && occlusion.setupSupported) pendingOcclusion = { view: frame.view, width: w, height: h, frame };
           else {
-            try { frame.visibility = visibility(frame.view, w, h); }
+            try { frame.visibility = visibility(frame.view, w, h); attachMoverPoints(frame.visibility); }
             catch (error) { fail(error); }
             // DrawWorld draws the sky frame only when OccludeBsp made one.
             if (frame.visibility && !frame.visibility.sky) frame.sky = null;
