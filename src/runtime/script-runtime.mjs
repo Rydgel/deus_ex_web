@@ -3791,8 +3791,14 @@ export class ScriptRuntime {
       if(call.argumentCount!==9)throw new Error('AIPickRandomDestination requires nine arguments');
       const args=[];
       for(let i=0;i<8;i++)args.push(refValue(call.evaluateArgument(i)));
-      return execAiPickRandomDestination(call.receiver,args,call.evaluateArgument(8),
-        this.pawnNavServices(call.receiver));
+      // Validation (nav-trace.mjs): a traced pawn's pick logs its arguments, its test moves (the wrapped services) and the destination it wrote.
+      const dest=call.evaluateArgument(8);
+      const traced=this.navTrace?.begin(call.receiver,'aiPick',args,this.readNamed(call.receiver,'Location'));
+      let written=null;
+      const out=traced&&dest&&typeof dest.set==='function'?{set:value=>{written=[...value];dest.set(value);}}:dest;
+      const found=execAiPickRandomDestination(call.receiver,args,out,this.pawnNavServices(call.receiver));
+      traced?.end(found,{dest:Array.isArray(dest)?[...dest]:written});
+      return found;
     }
     if(call.index===708){
       // execAIDirectionReachable 0x103c8560 (docs/script-pawn-nav.md): six

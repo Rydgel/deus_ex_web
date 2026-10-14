@@ -51,6 +51,12 @@ const commitMove = (loc, delta, time) => {
     loc[i] = x87store(x87add(x87load(loc[i]), x87mul(t, x87load(delta[i]))));
 };
 
+/* ULevel::MoveActor's early return (scene key `moveNearlyZero`, the probe's nearly_zero_move): every |Delta| component below 1e-4 with the
+ * pawn's own rotation does not move, consumes no scripted result and leaves the caller's Hit as it was; the twin's service says so by
+ * returning without touching its script, and the port under test is the one that has to keep the buffer. */
+const skipsMove = (scene, delta) => scene.moveNearlyZero && delta.every(c => !(Math.abs(c) >= 1e-4));
+const STALE_HIT = { time: 1, normal: [0, 0, 0], actor: 0, item: -1 };
+
 // -- Scripted boundary hits --------------------------------------------------
 const H = (time, nz, actor = 0, nx = 0, ny = 0) =>
   ({ ret: 1, hit: { time, normal: [nx, ny, nz], actor, item: -1 } });
@@ -548,6 +554,19 @@ const scenes = [
   cm('offaxis', [H(1, 1), H(0.5, 1)], { delta: [30, 40, 0], scale: 50 }),
   // Inverted-gravity zone flips the probe sign.
   cm('lowgrav', [H(1, 1), H(0.5, 1)], { gravityZ: 50 }),
+  // MaxStepHeight 0 (the robots: MedicalBot0 on 05_NYC_UNATCOMJ12lab): the step-up and step-down deltas are zero, MoveActor returns early and the
+  // shared Hit keeps the forward step's result. A wall in front: the first move is partial (0.264, a vertical face) and the retry is partial
+  // again; the step sequence's wall test reads that, restores the pawn and returns 0 (the live trace: FarMoveActor back to the stride's start).
+  { ...cm('zero-step-wall', [H(0.264, 0), H(0.0264, 0)], { pawn: { maxStepHeight: 0 }, delta: [25, 0, 0], scale: 4.1, flag: 0 }), moveNearlyZero: true },
+  // The same wall with flag 1 and a sloped face (normal.z 0.69, under the 0.7 floor limit): still a wall.
+  { ...cm('zero-step-slope', [H(0.5, 0.69), H(0.4, 0.69)], { pawn: { maxStepHeight: 0 }, delta: [25, 0, 0], scale: 4.1, flag: 1 }), moveNearlyZero: true },
+  // A floor-like partial face (0.7): not a wall, the sequence falls through to the down-probe.
+  { ...cm('zero-step-floorlike', [H(0.5, 0.7), H(0.4, 0.7), H(0.5, 1)], { pawn: { maxStepHeight: 0 }, delta: [25, 0, 0], scale: 4.1, flag: 0 }), moveNearlyZero: true },
+  // A clear stride: full forward, the down-probe lands.
+  { ...cm('zero-step-clear', [H(1, 1), H(0.5, 1)], { pawn: { maxStepHeight: 0 }, delta: [25, 0, 0], scale: 4.1, flag: 0 }), moveNearlyZero: true },
+  // The retry delta is nearly zero (the first move stopped at 0.99999994): #3 leaves the Hit, which holds the step-up move's result, and
+  // that one hit the target: 5.
+  { ...cm('zero-retry-target', [H(0.99999994, 0), H(0.5, 0, 'tgt')], { target: 'tgt', actors: { tgt: TGT }, delta: [25, 0, 0], scale: 4.1, flag: 0 }), moveNearlyZero: true },
 
   // -- walkReach (0x103c1b70) -----------------------------------------------
   // Flat walk to a point 100 units away: ~5 innerRadius steps, then arrival.
@@ -1894,6 +1913,7 @@ function runJs(scene, mod = module) {
     zoneGravity: a => a.zoneGravity,
     moveActor: (a, delta, rot, flags) => {
       moves++;
+      if (skipsMove(scene, delta)) return STALE_HIT;
       const h = scripted[Math.min(idx, scripted.length - 1)].hit; idx++;
       commitMove(a.location, delta, h.time);
       return { time: f32(h.time), normal: h.normal, actor: h.actor === 'tgt' ? TGT : h.actor, item: h.item };
@@ -1956,6 +1976,7 @@ function runJsWalk(scene, mod = module) {
     moveActor: (a, delta, rot, flags) => {
       moves++;
       moveArgs.push([...delta].map(f32));
+      if (skipsMove(scene, delta)) return STALE_HIT;
       const h = scripted[Math.min(idx, scripted.length - 1)].hit; idx++;
       commitMove(a.location, delta, h.time);
       return { time: f32(h.time), normal: h.normal, actor: h.actor === j.target ? tgt : h.actor, item: h.item };
@@ -2358,6 +2379,7 @@ function runJsPick(scene, mod = module) {
     frand: () => frSeq[Math.min(fri++, frSeq.length - 1)],
     moveActor: (a, delta, rot, flags) => {
       moves++;
+      if (skipsMove(scene, delta)) return STALE_HIT;
       const h = scripted[Math.min(idx, scripted.length - 1)].hit; idx++;
       commitMove(a.location, delta, h.time);
       return { time: f32(h.time), normal: h.normal, actor: 0, item: h.item };
@@ -2574,9 +2596,20 @@ console.log(`Compared ${runtimeCases} FindPathToward/FindPathTo/ReachablePathnod
 const MUTATIONS = [
   // Phase-A target hit: unique via the `let hit` declaration.
   { name: 'actor-hit-code',
-    pattern: "  let hit = moveActor(services, pawn, delta, rot);\n  if (target && hit.actor === target) return 5;",
-    replacement: "  let hit = moveActor(services, pawn, delta, rot);\n  if (target && hit.actor === target) return 4;",
+    pattern: "  let hit = moveInto(services, pawn, delta, rot, buf);\n  if (target && hit.actor === target) return 5;",
+    replacement: "  let hit = moveInto(services, pawn, delta, rot, buf);\n  if (target && hit.actor === target) return 4;",
     expect: ['target-phaseA'] },
+  // The step-down's result replaces the shared Hit even when its delta is zero (MoveActor's early return leaves it): a MaxStepHeight 0 pawn
+  // reads a fresh Hit(1) at the wall test, falls through to the down-probe and returns -1 where the original restores and returns 0.
+  { name: 'checkmove-fresh-hit',
+    pattern: "    hit = moveInto(services, pawn, [0, 0, stepSigned], rot, buf); // #4 step down (zero for MaxStepHeight 0: Hit keeps #3's)\n",
+    replacement: "    hit = moveActor(services, pawn, [0, 0, stepSigned], rot); // #4 step down\n",
+    expect: ['zero-step-wall', 'zero-step-slope', 'zero-step-floorlike'] },
+  // The step-up's result is dropped instead of written to the shared Hit (it is the buffer's content when the retry delta is nearly zero).
+  { name: 'checkmove-stepup-unrecorded',
+    pattern: "    moveInto(services, pawn, upVec, rot, buf);           // #2 step up onto ledge (writes the shared Hit unless its delta is zero)\n",
+    replacement: "    moveActor(services, pawn, upVec, rot);\n",
+    expect: ['zero-retry-target'] },
   // Steep-landing threshold (the down-probe 0x103c3697 site): a 0.0 bound turns
   // every steep landing into a floor landing.  Unique via the trailing comment.
   { name: 'steep-threshold',

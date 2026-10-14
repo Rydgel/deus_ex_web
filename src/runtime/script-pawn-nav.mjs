@@ -197,6 +197,19 @@ const moveActor = (services, pawn, delta, rot) =>
 /** Original ULevel::FarMoveActor (vtable +0x8c): restore `pawn` to `dest`. */
 const farMove = (services, pawn, dest) => services.farMoveActor(pawn, dest, 1, 1);
 
+/** A caller's `FCheckResult Hit(1.f)` buffer (0x103c7910 in aiPickSearch, [ebp-0xb0] in walkReach): the same pointer goes to every
+ * checkMove, and to every MoveActor inside it. ULevel::MoveActor writes it (`Hit = FCheckResult(1)` and the sweep's result), except on the
+ * early return for a nearly-zero Delta with an unchanged Rotation, which leaves it as it was (docs/swimming.md). A pawn with MaxStepHeight 0
+ * (the robots) makes checkMove's step-up and step-down deltas zero, so the step sequence's wall test reads the forward step's result, not
+ * a fresh Hit(1) (docs/script-pawn-nav.md "checkMove's Hit buffer"). */
+export const freshHit = () => ({ time: 1.0, normal: [0, 0, 0], actor: 0, item: -1 });
+/** MoveActor(pawn, delta, own Rotation, test, ignorePawns) into the shared `buf`: the returned hit is the buffer. */
+const moveInto = (services, pawn, delta, rot, buf) => {
+  const h = moveActor(services, pawn, delta, rot);
+  if (!nearlyZero(delta)) { buf.time = h.time; buf.normal = h.normal; buf.actor = h.actor; buf.item = h.item; }
+  return buf;
+};
+
 /** Ordered C3 (equal) flag from FCOM — `test ah,0x40`. */
 const eqU = (a, b) => x87compare(a, b).c3 === 1;
 
@@ -286,7 +299,7 @@ function directReachBody(pawn, source, target, services) {
  *   0  — blocked (wall) or under-moved; flag decides whether to revert.
  *  -1  — ledge/void or steep landing; flag decides the restore point.
  */
-export function checkMove(pawn, delta, target, scale, flag, services) {
+export function checkMove(pawn, delta, target, scale, flag, services, buf = freshHit()) {
   delta = [delta[0], delta[1], 0];                       // 0x103c32c0 clears incoming Z
   const origLoc = services.location(pawn).map(f32);      // [ebp-0x2c/-0x28/-0x24]
   const rot = rd(services, pawn, 'Rotation');            // esi+0x120
@@ -298,17 +311,17 @@ export function checkMove(pawn, delta, target, scale, flag, services) {
   const upVec = [-0, -0, f32(-stepSigned)];              // native 0.0f * -1.0f
 
   // Phase A: MoveActor(pawn, delta, rot, hit, test=1, igp=1, igb=0, nofail=0).
-  let hit = moveActor(services, pawn, delta, rot);
+  let hit = moveInto(services, pawn, delta, rot, buf);
   if (target && hit.actor === target) return 5;          // 0x103c33a4
 
   if (ltU(ld(hit.time), D1)) {                           // 0x103c33bc: Time<1 -> partial
     // Remaining fraction: delta *= (1 - hit.time), z forced to 0.
     const remain = f32(1.0 - hit.time);                  // 0x103c33d3
     const fwd = [f32(delta[0] * remain), f32(delta[1] * remain), 0];
-    moveActor(services, pawn, upVec, rot);               // #2 step up onto ledge
-    hit = moveActor(services, pawn, fwd, rot);           // #3 continue forward
+    moveInto(services, pawn, upVec, rot, buf);           // #2 step up onto ledge (writes the shared Hit unless its delta is zero)
+    hit = moveInto(services, pawn, fwd, rot, buf);       // #3 continue forward
     if (target && hit.actor === target) return 5;        // 0x103c349f
-    hit = moveActor(services, pawn, [0, 0, stepSigned], rot); // #4 step down
+    hit = moveInto(services, pawn, [0, 0, stepSigned], rot, buf); // #4 step down (zero for MaxStepHeight 0: Hit keeps #3's)
     if (target && hit.actor === target) return 5;        // 0x103c3514
     // Wall after the step sequence (partial hit on a non-floor): restore, 0.
     if (ltU(ld(hit.time), D1) && ltU(ld(hit.normal[2]), D07)) {
@@ -322,7 +335,7 @@ export function checkMove(pawn, delta, target, scale, flag, services) {
   // (0,0,(maxStep+2)*sign) — for normal gravity a (0,0,-(maxStep+2)) drop.
   const postLoc = services.location(pawn).map(f32);      // [ebp-0x44/-0x40/-0x3c]
   const downVec = [0, 0, f32(x87store(x87mul(x87add(ld(maxStep), D2), ld(sign))))];
-  hit = moveActor(services, pawn, downVec, rot);         // #5
+  hit = moveInto(services, pawn, downVec, rot, buf);     // #5
   if (ltU(ld(hit.time), D1)) {                           // 0x103c360e: hit going down
     if (ltU(ld(hit.normal[2]), D07)) {                   // 0x103c3697: steep landing
       farMove(services, pawn, origLoc);                  // 0x103c36ca
@@ -790,16 +803,7 @@ export function walkReach(pawn, point, radius, arg18, target, services) {
   // Shared FCheckResult buffer [ebp-0xb0]: the native hands the same out ptr
   // to every checkMove MoveActor, so [ebp-0x94]=Normal.z is the last landing
   // slope.  The wrapper records each hit exactly as the shared buffer would.
-  const hitbuf = { time: 1.0, normal: [0, 0, 0], actor: 0, item: -1 };
-  const nav = {
-    ...services,
-    moveActor: (a, d, r, f) => {
-      const h = services.moveActor(a, d, r, f);
-      hitbuf.time = h.time; hitbuf.normal = h.normal;
-      hitbuf.actor = h.actor; hitbuf.item = h.item;
-      return h;
-    },
-  };
+  const hitbuf = freshHit();
 
   let counter = 100;                                       // [ebp-0x34]
   let edi = 1;
@@ -855,7 +859,7 @@ export function walkReach(pawn, point, radius, arg18, target, services) {
                st(x87mul(ld(flat[2]), ld(innerRadius)))];
       scale = 4.1;
     }
-    edi = checkMove(pawn, delta, target, scale, 0, nav);
+    edi = checkMove(pawn, delta, target, scale, 0, services, hitbuf);
 
     if (edi === 5) { reached = 1; edi = 0; }               // 0x103c1e13
     else if (edi !== 1) {                                  // 0 or -1: blocked
@@ -1241,12 +1245,13 @@ export function aiPickSearch(pawn, origin, yaw, pitch, minR, maxR, arg24, out, s
   // rotator literal has pitch=0 (0x103c7b12 stores edi=0 over the arg).
   const dirVec = fcoordsAxes([mode === 1 ? 0 : pitch, yaw, 0])[1];
   const rdt = rd(services, pawn, 'ReducedDamageType');    // pawn+0x444
+  const hitBuffer = freshHit();                           // FCheckResult Hit(1.f) [ebp-0xcc], 0x103c7910: checkMove's out buffer
   while (cont === 1) {                                    // 0x103c7a89
     const stepVec = [st(x87mul(ld(dirVec[0]), ld(step))),
                      st(x87mul(ld(dirVec[1]), ld(step))),
                      st(x87mul(ld(dirVec[2]), ld(step)))];
     let code;
-    if (mode === 1) code = checkMove(pawn, stepVec, 0, 4.1, 0, services);
+    if (mode === 1) code = checkMove(pawn, stepVec, 0, 4.1, 0, services, hitBuffer);
     else if (mode === 2) code = flyMove(pawn, stepVec, 0, 4.1, 0, services);
     else code = swimMove(pawn, stepVec, 0, 4.1, 0, services); // mode 3, 0x103c7c13
     cont = code;                                          // [ebp-0x18]
