@@ -8,7 +8,7 @@ import { toView, fromView } from '../unreal/geometry.mjs';
 import { createWorld } from './world.mjs';
 import { createSimHost } from './sim-host.mjs';
 import { createSimClient } from './sim-client.mjs';
-import { createPlayCamera, pointCamera, applyPlayFrame, verticalFov, rotatorEuler, setPixelCentre } from './play-camera.mjs';
+import { createPlayCamera, pointCamera, applyPlayFrame, verticalFov, rotatorEuler, setPixelCentre, PLAY_NEAR, PLAY_FAR } from './play-camera.mjs';
 import { createSpriteScene } from './sprite-scene.mjs';
 import { createDecalScene } from './decal-scene.mjs';
 import { decalProbe, placeProbe, laserProbe, meshLightProbe, renderPassProbe } from './decal-probe.mjs';
@@ -183,7 +183,7 @@ const scene = new THREE.Scene();
 // to be recomputed (twice per frame, sky and main pass). Objects that move
 // update or flag their own (validate-scene-matrices.mjs).
 scene.matrixAutoUpdate = false;
-const camera = createPlayCamera(), skyCamera = new THREE.PerspectiveCamera(75, 1, 1, 65536);
+const camera = createPlayCamera(), skyCamera = new THREE.PerspectiveCamera(75, 1, PLAY_NEAR, PLAY_FAR);
 // The main frame draws decals; child frames (mirrors, sky) do not (decal-scene.mjs).
 camera.layers.enable(DECAL_LAYER);
 const raycaster = new THREE.Raycaster();

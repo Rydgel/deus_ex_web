@@ -38,6 +38,7 @@ const only = new Set(process.argv.slice(2).filter(a => !a.startsWith('--')));
 
 const stats = { frames: 0, children: 0, lists: 0, polys: 0, points: 0, modelPoints: 0, exact: 0, clamped: 0, clipped: 0,
   meshPoints: 0, meshInside: 0, meshExact: 0, depthCases: new Set(),
+  coordsCamera: { errors: [], points: 0, sxDiffer: 0, maxDepth: 0, szDiffer: 0 },
   three: { errors: [], points: 0, sxDiffer: 0, syDiffer: 0, szDiffer: 0, maxPixel: 0, maxDepth: 0, pairs: 0, pairsDiffer: 0 } };
 const word = v => v >>> 0;
 
@@ -46,11 +47,15 @@ const word = v => v >>> 0;
  * evaluated in binary32 as the vertex shader does (`projectionMatrix *
  * (modelViewMatrix * position)`, no fused operations), mapped back to the
  * Direct3D convention: X = XB + window X - 0.5, depth = window depth. */
-function threeCamera(c, fields, rect) {
+function threeCamera(c, fields, rect, { now = false } = {}) {
   const camera = createPlayCamera();
   camera.aspect = rect.width / rect.height;
+  // Before: the rotator's exact angles and far 65536. Now: the frame's Coords
+  // (play-camera.mjs setCameraCoords) and the original's far 32767.
+  if (!now) { camera.far = 65536; camera.updateProjectionMatrix(); }
   pointCamera(camera, { location: c.location, rotation: c.rotation, fov: c.fov });
-  setFrameProjection(camera, { width: rect.width, height: rect.height, fx15: wordFloat(fields[14]), fy15: wordFloat(fields[15]), projZ: wordFloat(fields[21]) });
+  setFrameProjection(camera, { width: rect.width, height: rect.height, fx15: wordFloat(fields[14]), fy15: wordFloat(fields[15]),
+    projZ: wordFloat(fields[21]), ...(now ? { coords: Array.from({ length: 12 }, (_, i) => wordFloat(fields[i])) } : {}) });
   camera.updateMatrixWorld();
   return camera;
 }
@@ -66,7 +71,7 @@ function threeVertex(camera, rect, point) {
 const depth24 = z => Math.round(Math.min(Math.max(z, 0), 1) * 16777215);
 
 /** Checks one frame's draw lists against the reference. */
-function checkFrame(model, fields, rect, lists, where, camera = null) {
+function checkFrame(model, fields, rect, lists, where, camera = null, coords = null) {
   const frame = frameOfFields(fields, rect), depth = depthConstants(32), depths = [];
   stats.frames++;
   for (const list of lists) for (const entry of list) {
@@ -101,6 +106,12 @@ function checkFrame(model, fields, rect, lists, where, camera = null) {
             s3.szDiffer += word(floatWord(t3.sz)) !== word(d[2]);
             s3.maxPixel = Math.max(s3.maxPixel, dx, dy); s3.errors.push(Math.max(dx, dy)); s3.maxDepth = Math.max(s3.maxDepth, dz);
             depths.push([wordFloat(d[2]), t3.sz]);
+            if (coords) {
+              const tc = threeVertex(coords, rect, model.points[pv]), sc = stats.coordsCamera;
+              sc.points++; sc.sxDiffer += word(floatWord(tc.sx)) !== word(d[0]); sc.szDiffer += word(floatWord(tc.sz)) !== word(d[2]);
+              sc.maxDepth = Math.max(sc.maxDepth, Math.abs(tc.sz - wordFloat(d[2])));
+              sc.errors.push(Math.max(Math.abs(tc.sx - wordFloat(d[0])), Math.abs(tc.sy - wordFloat(d[1]))));
+            }
           }
         } else {
           // Rewritten by the rasterizer's Y clamp (0x10b19dd1..0x10b19e10): the
@@ -128,7 +139,7 @@ async function bsp(mapName, options) {
     const where = `${mapName} case ${i} ${c.width}x${c.height}${c.render ? ` render ${c.render.width}x${c.render.height}+${c.render.x}+${c.render.y}` : ''} FOV ${c.fov}`;
     assert.deepEqual(o.depth, { zBias: floatWord(depthConstants(32).zBias), m34: 0x3f800000, zScale: floatWord(depthConstants(32).zScale) },
       `${where}: depth constants`);
-    checkFrame(model, o.frameBits, rect, o.draw, where, threeCamera(c, o.frameBits, rect));
+    checkFrame(model, o.frameBits, rect, o.draw, where, threeCamera(c, o.frameBits, rect), threeCamera(c, o.frameBits, rect, { now: true }));
     for (const child of o.frames ?? []) {
       checkFrame(model, child.frameBits, rect, child.draw, `${where} child ${child.index}`);
       stats.children++;
@@ -165,6 +176,8 @@ for (const [map, options] of jobs) if (!only.size || only.has(map)) await bsp(ma
 for (const [map, options] of [['01_NYC_UNATCOIsland', { seed: 5, count: 8 }], ['10_Paris_Club', { seed: 9, count: 8 }]])
   if (!only.size || only.has(map)) await meshes(map, options);
 const errors = stats.three.errors.sort((a, b) => a - b), quantile = q => errors[Math.min(errors.length - 1, Math.floor(q * errors.length))];
+const coordErrors = stats.coordsCamera.errors.sort((a, b) => a - b), coordQuantile = q => coordErrors[Math.min(coordErrors.length - 1, Math.floor(q * coordErrors.length))];
 console.log(JSON.stringify({ ...stats, depthCases: undefined, three: { ...stats.three, errors: undefined,
-  pixelError: { p50: quantile(0.5), p90: quantile(0.9), p99: quantile(0.99), over0_01: errors.filter(e => e > 0.01).length } } }));
+  pixelError: { p50: quantile(0.5), p90: quantile(0.9), p99: quantile(0.99), over0_01: errors.filter(e => e > 0.01).length } },
+  coordsCamera: { ...stats.coordsCamera, errors: undefined, pixelError: { p50: coordQuantile(0.5), p90: coordQuantile(0.9), p99: coordQuantile(0.99), max: coordErrors.at(-1) } } }));
 console.log('validate-frame-projection: ok');

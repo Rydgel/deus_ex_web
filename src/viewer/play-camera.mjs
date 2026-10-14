@@ -4,9 +4,16 @@
 import * as THREE from 'three';
 import { toView } from '../unreal/geometry.mjs';
 
-/** A camera as Play's: 75° default, near 1, far 65536, rotation order YXZ. */
+/** The original's depth range (D3DDrv SetRes 0x1000c40f..0x1000c45b,
+ * docs/frame-projection.md): the vertex depth is `_33 * (1 - 1/Z)` with `_33
+ * = far / (far - 1)`, so view depth 1 maps to 0 and the far plane to 1; far
+ * is 32767 (8192 on a 16-bit viewport). That is a perspective projection with
+ * near 1 and far 32767 over the device's [0, 1] depth range. */
+export const PLAY_NEAR = 1, PLAY_FAR = 32767;
+
+/** A camera as Play's: 75° default, near 1, far 32767, rotation order YXZ. */
 export function createPlayCamera() {
-  const camera = new THREE.PerspectiveCamera(75, 1, 1, 65536);
+  const camera = new THREE.PerspectiveCamera(75, 1, PLAY_NEAR, PLAY_FAR);
   camera.rotation.order = 'YXZ';
   return camera;
 }
@@ -64,7 +71,22 @@ const wordFloat = (() => { const u = new Uint32Array(1), f = new Float32Array(u.
 export function projectionOf(words) {
   const width = words[12] | 0, height = words[13] | 0;
   if (!(width > 0 && height > 0)) return null;
-  return { width, height, fx15: wordFloat(words[14]), fy15: wordFloat(words[15]), projZ: wordFloat(words[20]) };
+  return { width, height, fx15: wordFloat(words[14]), fy15: wordFloat(words[15]), projZ: wordFloat(words[20]),
+    rprojZ: wordFloat(words[60]), coords: Array.from({ length: 12 }, (_, i) => wordFloat(words[i])) };
+}
+
+const basis = new THREE.Matrix4();
+/** Poses the camera from a frame's Coords (12 binary32: origin, then the X, Y
+ * and Z axes in world space): the original's camera orientation comes from
+ * ComputeRenderCoords' sine tables, not from the rotator's angles, and
+ * differs from an exact rotation by up to 0.3 pixel at 1440 wide
+ * (docs/frame-projection.md). Unreal's X axis is the screen's right, Y down
+ * and Z forward; three's camera looks down -z with y up, in the world
+ * [y, z, -x]. */
+export function setCameraCoords(camera, coords) {
+  const axis = (k, sign) => { const [x, y, z] = coords.slice(3 + 3 * k, 6 + 3 * k); return new THREE.Vector3(sign * y, sign * z, -sign * x); };
+  camera.position.fromArray(toView(coords.slice(0, 3)));
+  camera.quaternion.setFromRotationMatrix(basis.makeBasis(axis(0, 1), axis(1, -1), axis(2, -1)));
 }
 
 /** The original's projection from the pass frame instead of a FOV:
@@ -78,8 +100,11 @@ export function projectionOf(words) {
  * view that is a vertical FOV of 2 atan(height / (2 Proj.Z)) and a view
  * offset of (FX15 - width/2, FY15 - height/2) pixels. `projection`:
  * {width, height, fx15, fy15, projZ} (projectionOf). */
-export function setFrameProjection(camera, { width, height, fx15, fy15, projZ }) {
-  camera.userData.projection = { width, height, fx15, fy15, projZ };
+export function setFrameProjection(camera, projection) {
+  const { width, height, fx15, fy15, projZ, coords } = projection;
+  camera.userData.projection = projection;
+  // The frame's orientation and origin, when it carries them.
+  if (coords) setCameraCoords(camera, coords);
   camera.aspect = width / height;
   camera.fov = THREE.MathUtils.radToDeg(2 * Math.atan(height / (2 * projZ)));
   camera.userData.fov = undefined;

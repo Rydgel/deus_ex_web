@@ -14,7 +14,7 @@ import { toView } from '../unreal/geometry.mjs';
 import { mirrorMatrix } from './mirrors.mjs';
 import { mirrorsMayRender, planMirrorPasses, planFramePasses, passOrder } from './mirror-passes.mjs';
 import { moverGroupMatrix } from './mover-matrix.mjs';
-import { rotatorEuler } from './play-camera.mjs';
+import { rotatorEuler, PLAY_NEAR, PLAY_FAR } from './play-camera.mjs';
 
 const SPRITE_RADIUS = 0.7071067811865476, identity = new THREE.Quaternion();
 
@@ -56,7 +56,7 @@ export function createDrawnSet(scene) {
   placeMirrors();
   const frustum = new THREE.Frustum(), projection = new THREE.Matrix4(), sphere = new THREE.Sphere();
   const spriteMatrix = new THREE.Matrix4(), position = new THREE.Vector3(), scale = new THREE.Vector3();
-  const skyCamera = new THREE.PerspectiveCamera(75, 1, 1, 65536);
+  const skyCamera = new THREE.PerspectiveCamera(75, 1, PLAY_NEAR, PLAY_FAR);
   const frustumOf = camera => frustum.setFromProjectionMatrix(
     projection.multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse), camera.coordinateSystem, camera.reversedDepth);
   return {
