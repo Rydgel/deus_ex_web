@@ -53,6 +53,9 @@ const freeze = !process.argv.includes('--live');
 const regionOption = option('region', null);
 const region = regionOption ? (([zone, leaf, number]) => ({zone, iLeaf: Number(leaf), zoneNumber: Number(number)}))(regionOption.split(':')) : null;
 const onlyViews = option('views', null)?.split(',') ?? null;
+// --cmd '<console command>' (repeatable): a command both sides run once, after ghost and ShowHud False (the original's console, Play's viewProbe
+// exec), e.g. `--cmd 'set ScriptedPawn bHidden True'` for a view with no actor mesh lit by the map's Strobe light.
+const consoleCommands = process.argv.flatMap((arg, i) => arg === '--cmd' ? [process.argv[i + 1]] : []);
 // <name>_s0 / <name>_s1: the Strobe flag the frame is taken with (null: free-running).
 const strobeOf = name => { const m = /_s([01])$/.exec(name); return m ? Number(m[1]) : null; };
 // --view name:x,y,z:pitch,yaw,roll (repeatable): explicit camera(s) used in
@@ -143,7 +146,7 @@ async function play() {
       const start = await page.evaluate(() => window.deusExViewer.viewProbe({}));
       const entry = plan[map] ?? (plan[map] = {start: start.location, startRotation: start.viewRotation,
         views: viewsFrom(start.location, start.viewRotation[1])});
-      const ghost = await page.evaluate(() => window.deusExViewer.viewProbe({ghost: true}));
+      const ghost = await page.evaluate(commands => window.deusExViewer.viewProbe({ghost: true, exec: commands}), consoleCommands);
       // Level time: run the frozen level to the original's held TimeSeconds
       // (fast, then at normal speed for the last second), then hold it.
       const target = loadTimes()[map] ?? null;
@@ -265,6 +268,7 @@ async function original() {
       // (DDERR_INVALIDPARAMS) and writes a black frame.
       if (process.env.DX_HYPRLAND === '1') hyprlandWindow();
       post(['cmd set DeusEx.JCDentonMale bCheatsEnabled True', 'sleep 200', 'cmd ghost', 'sleep 200', 'cmd ShowHud False', 'sleep 300',
+        ...consoleCommands.flatMap(command => [`cmd ${command}`, 'sleep 300']),
         `cmd set LevelInfo TimeDilation ${HELD_DILATION}`, 'sleep 500']);
       // The held level time, through the live player's Level (old levels'
       // LevelInfo objects can linger until garbage collection).
@@ -296,6 +300,24 @@ async function original() {
           `cmd set DeusEx.JCDentonMale ViewRotation (Pitch=${pitch},Yaw=${yaw},Roll=${roll})`,
           ...(region ? [`cmd set DeusEx.JCDentonMale Region (Zone=ZoneInfo'${map}.${region.zone}',iLeaf=${region.iLeaf},ZoneNumber=${region.zoneNumber})`] : []),
           'sleep 1500', ...(strobe === null ? ['shot', 'sleep 900'] : [])]);
+        // --strobe-poll on a view with no _s0/_s1 suffix: the free-running flag at this camera, 120 samples 5 ms apart (<name>-strobe.txt).
+        if (strobe === null && process.argv.includes('--strobe-poll')) {
+          const tool = args => execFileSync(game.WINE, [path.join(root, 'ad/build/dx-live-win.exe'), 'strobe', ...args], {encoding: 'utf8', env: process.env});
+          tool(['release']);
+          post(['sleep 400']);
+          writeFileSync(path.join(dir, `${view.name}-strobe.txt`), tool(['poll', '120', '5']));
+        }
+        // --cw-probe: attach tools/dx-fpu-win.c for a few seconds at this camera: DrawFrame and SetupForSurf by the frame's Recursion (<name>-cw.txt).
+        if (process.argv.includes('--cw-probe')) {
+          const specs = ['frame=Engine.dll:0x1038f110', 'drawframe=Render.dll:0x10b1a2d0:n=10:rec', 'setupforsurf=Render.dll:0x10b06c90:n=2000:rec',
+            'pass-open=Render.dll:0x10b1462f:ret', 'pass-close=Render.dll:0x10b14732:ret', 'galaxy-lighting-call=Galaxy.dll:0x1060992e:ret:n=10', 'globallighting=Render.dll:0x10b05e90:n=40',
+            // the spatial functions (normal, spot, NonIncidence, Cylinder, Searchlight, SlowWave, FastWave, CloudCast, Shock, Disco, Interference, Rotor, Shell)
+            ...[['normal', 0x10b03360], ['spot', 0x10b04f80], ['nonincidence', 0x10b054e0], ['cylinder', 0x10b04a80], ['searchlight', 0x10b03770],
+              ['slowwave', 0x10b03de0], ['fastwave', 0x10b040b0], ['cloudcast', 0x10b04380], ['shock', 0x10b043a0], ['disco', 0x10b046f0],
+              ['interference', 0x10b04c80], ['rotor', 0x10b03ae0], ['shell', 0x10b05740]].map(([name, at]) => `body-${name}=Render.dll:0x${at.toString(16)}:n=3`)];
+          writeFileSync(path.join(dir, `${view.name}-cw.txt`), execFileSync(game.WINE, [path.join(root, 'ad/build/dx-fpu-win.exe'), 'cw', 'attach', '6', ...specs],
+            {encoding: 'utf8', env: process.env, stdio: ['ignore', 'pipe', 'ignore']}));
+        }
         if (strobe !== null) {
           const tool = args => execFileSync(game.WINE, [path.join(root, 'ad/build/dx-live-win.exe'), 'strobe', ...args], {encoding: 'utf8', env: process.env});
           // the free-running flag at this camera (a hold left by an earlier view is released first, and the flag needs a frame to move)

@@ -126,9 +126,12 @@ for (let k = 0; k < 32; k++) {
 // `precision: 'pc64'` against the original at 0x037f, on the same cases
 // with an input brightness (Galaxy passes its volume).
 report.gameThreadFrames = 0; report.gameThreadMismatch = 0;
+// GAME_THREAD_CW=0x027f counts the mismatches against the word the game thread has until URender::PostRender's first reset (measured in
+// the running original, docs/render-pass-precision.md "Measured in the running original"): the first Draw's Galaxy Update runs there.
+const gameThreadWord = process.env.GAME_THREAD_CW ?? '0x037f';
 if (!controlWord) {
   const gameThreadCases = typeCases.map(c => ({ ...c, frames: c.frames.map(frame => ({ ...frame, brightness: u32(f((random() % 1000) / 999)) })) }));
-  const gameThread = JSON.parse(execFileSync(python, ['scripts/native-dynamic-light-oracle.py', root, '0x037f'],
+  const gameThread = JSON.parse(execFileSync(python, ['scripts/native-dynamic-light-oracle.py', root, gameThreadWord],
     { input: JSON.stringify({ sines: [...rotationSineTable()].map(u32), lightTypes: gameThreadCases }), encoding: 'utf8', maxBuffer: 1 << 28 }));
   gameThreadCases.forEach((c, i) => {
     const strobe = { time: 0, flag: 0 }, key = gameThread.lightTypes[i].flickerKey;
@@ -143,8 +146,8 @@ if (!controlWord) {
     });
   });
 }
-console.log(JSON.stringify(report));
-assert.equal(report.gameThreadMismatch, 0, 'the game thread\'s LightType brightness matches at 0x037f');
+console.log(JSON.stringify({ ...report, gameThreadWord }));
+if (gameThreadWord === '0x037f') assert.equal(report.gameThreadMismatch, 0, 'the game thread\'s LightType brightness matches at 0x037f');
 assert.equal(report.factorMismatch, 0, 'the 24-bit merge factors give the x87 modulation bytes');
 assert.equal(report.noiseMismatch, 0, 'light noise tables match');
 assert.equal(report.typeMismatch, 0, 'LightType brightness matches');
