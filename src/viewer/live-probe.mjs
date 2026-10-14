@@ -131,6 +131,43 @@ export function liveProbe(game, args = {}) {
   // managers) are numbered by spawn order and are not compared by name.
   // strobe: {flag, time}: Render.dll's Strobe state as the original's held frame left it (a host input, light-globals.mjs).
   if (args.strobe) { const strobe = lightGlobals(runtime).strobe; strobe.flag = args.strobe.flag & 1; strobe.time = Math.fround(args.strobe.time); out.strobe = { ...strobe }; }
+  // moveTest: {pawn, at, delta}: the pick worker's test move for that pawn from that place (FarMoveActor there with test and noCheck, ULevel::MoveActor
+  // with bTest=1 and bIgnorePawns=1 as checkMove makes it, FarMoveActor back), and the hit it made: what an original capture's MoveActor record
+  // (location after, Hit.Time, Hit.Normal, Hit.Actor) is compared with.
+  if (args.moveTest) {
+    const pawn = byName(args.moveTest.pawn);
+    if (!pawn) throw new Error(`liveProbe: no actor ${args.moveTest.pawn}`);
+    const services = runtime.pawnNavServices(pawn), home = [...services.location(pawn)];
+    const tests = Array.isArray(args.moveTest.tests) ? args.moveTest.tests : [args.moveTest];
+    out.moveTest = [];
+    for (const test of tests) {
+      services.farMoveActor(pawn, test.at.map(Math.fround), 1, 1);
+      const rotation = runtime.readNamed(pawn, 'Rotation');
+      const hit = services.moveActor(pawn, test.delta.map(Math.fround), rotation, { test: 1, ignorePawns: 1, ignoreBalls: 0, noFail: 0 });
+      out.moveTest.push({ at: test.at, delta: test.delta, after: plain(services.location(pawn)), time: hit?.time ?? null, actor: hit?.actor?.name ?? null, normal: plain(hit?.normal) });
+    }
+    services.farMoveActor(pawn, home, 1, 1);
+  }
+  // lineHits: {start, end, extent}: the collision hash's ordered hits of that swept cylinder (MultiLineCheck with actors): which actors a move would meet,
+  // with the collision flags the host holds for each.
+  if (args.lineHits) {
+    const hits = level.hash.multiLineCheck({ end: args.lineHits.end.map(Math.fround), start: args.lineHits.start.map(Math.fround), extent: args.lineHits.extent.map(Math.fround),
+      checkActors: 1, worldActor: level.hash.levelInfo, extra: 0 });
+    out.lineHits = hits.map(hit => ({ actor: hit.actor?.name ?? null, flags: hit.actor?.flags ?? null, actorFlags: hit.actor?.actorFlags ?? null, time: hit.time, location: plain(hit.location), normal: plain(hit.normal),
+      lineage: (hit.actor?.lineage ?? []).slice(0, 4) }));
+  }
+  // flags: the player's FlagBase as Play holds it, after `delete` (names): the original's DeleteFlag(Name, FLAG_Bool) native on each. The start state
+  // of a directly opened map: the original's `open` leaves the player's FlagBase empty (tools/dump-flags-win.c: 0 flags at the frozen start, defaultExpiration
+  // 0, and 0 flags after the mission script's first Timer, which sets defaultExpiration to mission + 1 and finds no PlayerTraveling), where Play's login
+  // supplies the fresh-mission marker PlayerTraveling (script-mission-live.mjs beginFreshMission) and the first Timer runs FirstFrame.
+  if (args.flags) {
+    const base = runtime.readNamed(player, 'FlagBase');
+    for (const name of args.flags.delete ?? []) {
+      const call = [name, 0];
+      runtime.callFunction(runtime.lookup(base, 'DeleteFlag'), base, call.length, index => call[index]);
+    }
+    out.flags = { defaultExpiration: base.defaultExpiration, entries: [...base.entries.values()].map(entry => ({ name: entry.name, value: entry.value ? 1 : 0, expiration: entry.expiration })) };
+  }
   if (args.population) {
     const spawned = /^(Skill|Aug|NanoKey|ColorTheme|Shadow|ParticleProxy|Laser|Flare|Cigarettes|Candybar|Weapon|Mission|GameReplicationInfo|PlayerReplicationInfo|JCDenton|Mutator|DeusExGameInfo|PickupDistributor|AutoTurretGun|BarkManager|ParticleGenerator|DataVault|Credits|Ammo|BioelectricCell|Medkit|Binoculars|Lockpick|Multitool|LAM|Liquor|Soda|Sodacan|Fruit|Vice)/;
     // names compare as FNames do, ignoring case (see byName): destroying Play's `MIB1` because the original spells it `mib1` removed a live

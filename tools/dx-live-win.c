@@ -36,6 +36,8 @@
  *         actor-trace <first> <last>   for those unfrozen ticks, a breakpoint at AActor::Tick (0x103a1aa0) also writes
  *                                 <out>.actors.jsonl: each actor ticked, with the CRT rand state at its entry, so the draws
  *                                 between two entries are the earlier actor's
+ *         rng-file <path>         one hex CRT rand state per line; line k is written at the entry of unfrozen tick k, so the original draws the
+ *                                 stream another capture's trace recorded (its rngIn): the same pawn decisions, to trace them with `call`
  *         monitor <seconds>       after the resume, stay attached (breakpoints removed) that long, reporting fatal exceptions
  *         kill-on-crash <0|1>     terminate the game at its first fatal first-chance exception, after reporting it (default 1:
  *                                 no crash dialog is left on the desktop)
@@ -56,7 +58,7 @@
  *         call-pawn <name>        the actor whose gate calls arm the tracing (any when omitted)
  *         call-frames             keep the calls armed between ticks (the renders after each traced tick), until the entry of the tick after
  *                                 call-ticks' last; `namearg <i> <off>` on a call logs the object name at *(args[i]+off) (off -1: args[i]
- *                                 itself) as argName; `ecxwords <n> <off>` logs n dwords at ECX+off at the return
+ *                                 itself) as argName, at the call and at its return (re-read: the Hit a MoveActor wrote); `ecxwords <n> <off>` logs n dwords at ECX+off at the return
  *         watch <A,B,..> <Field:off:type[:mask]>...   fields of those actors
  *       Types: f f3 i3 u8 u16 u32 bit(mask) name obj state.
  *       Offsets are the linked UProperty offsets (see dump-actor-win.c).
@@ -185,6 +187,7 @@ static char out_path[512] = "trace.jsonl", player_name[96] = "JCDentonMale";
 static int release_at = 1, run_ticks = 100, pre_watch = -1, max_seconds = 0;
 static int soft_at[64], soft_count, soft_idx, soft_state;   /* pause-at: unfrozen tick counts at which the level is held for console input */
 static float forced_delta = 0;
+static unsigned *rng_force = NULL; static int rng_force_count = 0;   /* rng-file: the CRT rand state to write at each unfrozen tick's entry */
 static int monitor_seconds = 0, kill_on_crash = 1, actor_trace_first = 0, actor_trace_last = -1;
 static WatchGroup groups[16]; static int group_count;
 static Watched watched[1024]; static int watched_count;
@@ -230,6 +233,12 @@ static int read_config(const char *path) {
     else if (!strcmp(tok, "ticks")) run_ticks = atoi(strtok(NULL, " \t\r\n"));
     else if (!strcmp(tok, "max-seconds")) max_seconds = atoi(strtok(NULL, " \t\r\n"));   /* stop after that many seconds of unfrozen time, whatever the tick count */
     else if (!strcmp(tok, "delta")) forced_delta = (float)atof(strtok(NULL, " \t\r\n"));
+    else if (!strcmp(tok, "rng-file")) {   /* one hex rand state per line: line k is written at the entry of unfrozen tick k (another capture's rngIn: its draws, replayed) */
+      char *v = strtok(NULL, "\r\n"); while (v && *v == ' ') v++;
+      FILE *rf = v ? fopen(v, "r") : NULL; char rl[64];
+      if (!rf) fprintf(stderr, "rng-file: cannot open %s\n", v ? v : "(none)");
+      else { rng_force = (unsigned *)malloc(sizeof(unsigned) * 100000); while (rng_force_count < 100000 && fgets(rl, sizeof(rl), rf)) rng_force[rng_force_count++] = (unsigned)strtoul(rl, NULL, 16); fclose(rf); fprintf(stderr, "rng-file: %d states\n", rng_force_count); }
+    }
     else if (!strcmp(tok, "actor-trace")) { actor_trace_first = atoi(strtok(NULL, " \t\r\n")); actor_trace_last = atoi(strtok(NULL, " \t\r\n")); }
     else if (!strcmp(tok, "monitor")) monitor_seconds = atoi(strtok(NULL, " \t\r\n"));
     else if (!strcmp(tok, "kill-on-crash")) kill_on_crash = atoi(strtok(NULL, " \t\r\n"));
@@ -519,6 +528,7 @@ static int handle_call_event(HANDLE th, DWORD tid, uintptr_t where, int unfrozen
         fprintf(cout, "\",\"st0f\":%.21Lg,\"fpTop\":%u,\"fpTag\":%u", v, top, (unsigned)fc.FloatSave.TagWord);
       }
     }
+    if (c->namearg && c->namearg - 1 < c->nwords) { uintptr_t o = c->namearg_off < 0 ? now[c->namearg - 1] : (now[c->namearg - 1] ? read_u32(now[c->namearg - 1] + c->namearg_off) : 0); fprintf(cout, ",\"argName\":\"%s\"", object_name(o)); }   /* namearg at the return too: the Hit's Actor a MoveActor just wrote */
     if (c->retname) { char text[96]; strncpy(text, object_name(p->ecx), sizeof(text) - 1); text[sizeof(text) - 1] = 0; fprintf(cout, ",\"ecxName\":\"%s\"", text); fprintf(cout, ",\"ecxClass\":\"%s\"", object_name(read_u32(p->ecx + 0x24))); fprintf(cout, ",\"ecxIndex\":%u", read_u32(p->ecx + 0x04)); }
     if (c->ecx_n) { unsigned w[64]; memset(w, 0, sizeof(w)); read_mem(p->ecx + c->ecx_off, w, 4 * c->ecx_n); fprintf(cout, ",\"ecxWords\":"); print_words(cout, w, c->ecx_n); fprintf(cout, ",\"ecxFloats\":"); print_floats(cout, w, c->ecx_n); }
     fprintf(cout, "}\n"); fflush(cout);
@@ -736,6 +746,7 @@ static int do_trace(const char *config) {
             unsigned char b; read_mem(level_info + 0x4f0, &b, 1); players_only_in = (b & 4) ? 1 : 0;
             clock_in = read_double(level_ptr + 0xdc); ts_in = read_float(level_info + 0x478);
             strobe_flag_in = strobe_flag(); strobe_time_in = strobe_time();
+            if (released && rng_ptd && rng_force && unfrozen < rng_force_count) write_mem(rng_ptd + 0x14, &rng_force[unfrozen], 4);   /* rng-file: tick unfrozen+1 starts from the file's state */
             rng_in = rng_ptd ? read_u32(rng_ptd + 0x14) : 0; t_in = qpc_us();
             in_our_tick = 1;
             if (released) unfrozen++;

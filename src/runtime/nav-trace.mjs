@@ -14,7 +14,8 @@ export function createNavTrace() {
   trace.wrap = (services, receiver) => {
     if (!trace.pawns.has(receiver.name)) return services;
     const wrapped = { ...services };
-    const log = (fn, input, result) => { if (live(receiver)) push({ ev: 'call', fn, ...input, ret: plain(result) }); return result; };
+    // a hit record (move, slc) is already plain data: plain() would turn it into "[object Object]"
+    const log = (fn, input, result) => { if (live(receiver)) push({ ev: 'call', fn, ...input, ret: result && typeof result === 'object' && !Array.isArray(result) && !ArrayBuffer.isView(result) && typeof result.name !== 'string' ? result : plain(result) }); return result; };
     wrapped.navTrace = (fn, input) => {
       if (!live(receiver)) return null;
       push({ ev: 'enter', fn, ...input });
@@ -41,6 +42,12 @@ export function createNavTrace() {
     };
     return wrapped;
   };
+  /** Walk trace (`--nav-trace` with the JavaScript twins: ?pawnPhysics=js&walkLoopKernel=js&movePawnKernel=js): a traced pawn's physics
+   * moves (the walking loop's MoveActor calls) in the traced ticks, logged as `wmove` with the delta, the location after and the hit. */
+  trace.physicsMove = receiver => trace.pawns.has(receiver.name) && trace.tick >= trace.first && trace.tick <= trace.last
+    ? (kind, actor, delta, after, hit) => push({ ev: 'call', fn: 'wmove', kind, actor: actor?.name, delta: plain(delta), after: plain(after),
+      ret: hit && typeof hit === 'object' ? { time: hit.time, actor: hit.actor?.name ?? plain(hit.actor), normal: plain(hit.normal) } : hit })
+    : undefined;
   /** The native's entry (`begin`) and return (`end(result)`), around its worker. */
   trace.begin = (pawn, fn, target, location) => {
     if (!trace.pawns.has(pawn.name) || trace.tick < trace.first || trace.tick > trace.last) return null;

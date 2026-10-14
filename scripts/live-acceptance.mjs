@@ -277,6 +277,15 @@ async function original() {
   const config = [`out ${tracePath}`, 'player JCDentonMale', `release ${option('release', 3)}`, `ticks ${option('ticks', 600)}`,
     ...(cmds.length ? [`pause-at ${[...new Set(cmds.map(c => c.after))].sort((a, b) => a - b).join(' ')}`] : []),
     ...(option('delta', null) ? [`delta ${option('delta')}`] : []), ...(option('max-seconds', null) ? [`max-seconds ${option('max-seconds')}`] : []), ...(option('monitor', null) ? [`monitor ${option('monitor')}`] : []), ...(option('actor-trace', null) ? [`actor-trace ${option('actor-trace').replace(':', ' ')}`] : []),
+    // --rng-from <trace.jsonl>: the original draws the stream another capture's trace recorded: that trace's `rngIn` of unfrozen tick k is
+    // written into the CRT at the entry of this run's tick k (tools/dx-live-win.c `rng-file`), so the same pawns make the same decisions
+    // on a fresh load and `call` breakpoints can trace them (the capture to trace is not repeatable by loading again).
+    ...(option('rng-from', null) ? (() => {
+      const rows = readFileSync(option('rng-from'), 'utf8').trim().split('\n').map(line => JSON.parse(line)).filter(row => row.unfrozen >= 1 && row.rngIn);
+      const file = path.join(dir, `rng-force${suffix}.txt`);
+      writeFileSync(file, rows.map(row => String(row.rngIn).replace(/^0x/, '')).join('\n') + '\n');
+      return [`rng-file ${file}`];
+    })() : []),
     // --extra-config <file>: more trace.cfg lines (tools/dx-live-win.c `call` breakpoints, call-ticks, call-pawn).
     ...(option('extra-config', null) ? readFileSync(option('extra-config'), 'utf8').split('\n').filter(line => line.trim()) : []),
     ...(generators.length ? [`watch ${generators.join(',')} ${GENERATOR_FIELDS.map(spec).join(' ')}`] : []),
@@ -291,7 +300,9 @@ async function original() {
   writeFileSync(watchPath, JSON.stringify({map, pawns: names.filter(name => !extras.includes(name)), extras, generators, timers, classes: classOf}, null, 1));
   // The actors the original's level holds (a load removes some at random: OddsOfAppearing).
   const everything = wine('list', 'Actor').split('\n').map(line => /^\S+ (\S+) slot=\d+ .* odds=(\S+)/.exec(line)).filter(Boolean).map(m => ({name: m[1], odds: Number(m[2])}));
+  // tagged too (population<tag>.json): the replay of one capture must not read another's while a second runs
   writeFileSync(path.join(dir, 'population.json'), JSON.stringify(everything));
+  if (suffix) writeFileSync(path.join(dir, `population${suffix}.json`), JSON.stringify(everything));
   console.log(`${everything.length} actors in the original's level, ${everything.filter(e => e.odds < 1).length} with OddsOfAppearing < 1`);
   // The original's load decided some map actors by chance (FlyGenerator, OddsOfAppearing): Play's replay destroys the
   // ones only Play holds, but cannot create the ones only the original holds. Reload until it holds none (the
@@ -340,6 +351,15 @@ async function original() {
     writeFileSync(path.join(dir, `registry-${label}${suffix}.txt`), text);
     console.log(`registry ${label}: ${text.split('\n').length - 2} rows, ${text.split('\n').find(line => line.startsWith('available=')) ?? 'no free list'}`.slice(0, 200));
   };
+  // --dump-flags: the player's FlagBase (every flag: name, type, expiration, value) at the frozen start and at the end hold, to
+  // flags-<start|end><tag>.txt (tools/dump-flags-win.c): the mission scripts' start state (PlayerTraveling and the mission flags).
+  const flagsDump = label => {
+    if (!flag('dump-flags')) return;
+    const text = execFileSync(game.WINE, [path.join(root, 'ad/build/dump-flags-win.exe'), 'JCDentonMale'], {encoding: 'utf8', env: process.env, maxBuffer: 1 << 24});
+    writeFileSync(path.join(dir, `flags-${label}${suffix}.txt`), text);
+    console.log(`flags ${label}: ${text.split('\n').filter(line => /^\s+flag /.test(line)).length} flags; ${text.split('\n').filter(line => /FlagBase/.test(line)).join(' | ').slice(0, 300)}`);
+  };
+  flagsDump('start');
   registryDump('start');
   const child = spawn(game.WINE, [tool, 'trace', configPath], {env: process.env, stdio: ['ignore', 'pipe', 'pipe']});
   console.log('tracer pid', child.pid, `${names.length} pawns watched`);
@@ -360,7 +380,7 @@ async function original() {
     await new Promise(r => setTimeout(r, 300));
   }
   console.log(log.trim());
-  if (/paused after/.test(log)) registryDump('end');
+  if (/paused after/.test(log)) { registryDump('end'); flagsDump('end'); }
   if (option('shot', null) && /paused after/.test(log)) {
     // The level is held at the last replayed tick (the tracer returns from ULevel::Tick); the game still draws.
     let taken = null;
@@ -412,7 +432,7 @@ async function withPlay(body) {
   try {
     const page = await browser.newPage({viewport: {width: 1280, height: 720}, deviceScaleFactor: 1});
     const errors = []; page.on('pageerror', error => errors.push(error.message));
-    await page.goto(`${url}/?hold=1&seed=${option('seed', 1)}${option('script-vm', null) ? `&scriptVm=${option('script-vm')}` : ''}`);
+    await page.goto(`${url}/?hold=1&seed=${option('seed', 1)}${option('script-vm', null) ? `&scriptVm=${option('script-vm')}` : ''}${option('page-params', null) ? `&${option('page-params')}` : ''}`);   // --page-params 'pawnPhysics=js&walkLoopKernel=js&movePawnKernel=js': the JavaScript twins (the walk trace)
     await page.waitForFunction(() => window.deusExViewer?.status().ready, {}, {timeout: 240000});
     if (await page.evaluate(() => window.deusExViewer.status().map) !== map) {
       await page.locator('#map').selectOption(map);
@@ -539,7 +559,7 @@ async function evaluate() {
 
 async function play() {
   // --ticks N replays only the first N unfrozen ticks; --nav-trace A,B [--nav-ticks first:last] also records those pawns'
-  // reach and path natives' boundary calls (src/runtime/nav-trace.mjs) to nav-play.json, to compare with the original's
+  // reach and path natives' boundary calls (src/runtime/nav-trace.mjs) to nav-play<-tag>.json, to compare with the original's
   // (tools/dx-live-win.c `call`, original --extra-config).
   const limit = Number(option('ticks', 0)) || undefined;
   const traceRows = readFileSync(tracePath, 'utf8').trim().split('\n').map(parseTraceLine);   // parsed once: a long trace is large
@@ -552,11 +572,20 @@ async function play() {
     // The original's pose, exactly (the frozen-phase history of the ghost differs: its landing, its Tread loop).
     await page.evaluate(a => window.deusExViewer.viewProbe({location: a.Loc, rotation: a.VRot,
       region: {zone: a.RegZone, iLeaf: a.RegLeaf, zoneNumber: a.RegNum}}), pose);
-    const population = existsSync(path.join(dir, 'population.json')) ? JSON.parse(readFileSync(path.join(dir, 'population.json'), 'utf8')) : null;
+    const populationFile = [`population${suffix}.json`, 'population.json'].map(name => path.join(dir, name)).find(existsSync);
+    const population = populationFile ? JSON.parse(readFileSync(populationFile, 'utf8')) : null;
     if (population) {
       const result = (await page.evaluate(names => window.deusExViewer.liveProbe({population: names}), population)).population;
       console.log(`population: ${result.removed.length} actors only Play had destroyed (${result.removed.slice(0, 12).join(' ')}${result.removed.length > 12 ? ' ...' : ''}); ${result.missing.length} only the original has (${result.missing.slice(0, 12).join(' ')})`);
-      writeFileSync(path.join(dir, 'population-result.json'), JSON.stringify(result));
+      writeFileSync(path.join(dir, `population-result${suffix}.json`), JSON.stringify(result));
+    }
+    // The original's `open` leaves the player's FlagBase empty (--dump-flags, tools/dump-flags-win.c); Play's login supplies the fresh-mission marker
+    // PlayerTraveling, which makes the mission script's first Timer run FirstFrame (flags, startup text, NPCs entering the world). The replay takes
+    // the original's start: the flag is deleted (the original's DeleteFlag native). --keep-traveling keeps Play's own.
+    {
+      const flags = (await page.evaluate(remove => window.deusExViewer.liveProbe({flags: {delete: remove ? [] : ['PlayerTraveling']}}), flag('keep-traveling'))).flags;
+      writeFileSync(path.join(dir, `flags-play-start${suffix}.json`), JSON.stringify(flags));
+      console.log(`flags at the start: Play ${flags.entries.length}${flags.entries.length ? ` (${flags.entries.map(e => e.name).join(' ')})` : ''}`);
     }
     await frames(5);
     const props = [...new Set(FIELDS.map(f => f[1]))], playerProps = [...new Set(PLAYER_FIELDS.map(f => f[1]))];
@@ -666,6 +695,11 @@ async function play() {
       if (taken.rows.length) { rows.push(...taken.rows); stalls = 0; } else if (++stalls > 40) throw new Error(`the replay stopped at tick ${rows.length}${errors.length ? `: ${errors.slice(0, 3).join(' | ')}` : ''}${(await page.evaluate(() => document.querySelector('#toast')?.textContent ?? '').catch(() => '')).slice(0, 600)}`);
     }
     // the boundaries Play recorded instead of running during the replay (docs/visual-acceptance.md, record-only audit)
+    {   // the player's FlagBase at the end of the replay (the original's: flags-end<tag>.txt from --dump-flags)
+      const flags = (await page.evaluate(() => window.deusExViewer.liveProbe({flags: {}}))).flags;
+      writeFileSync(path.join(dir, `flags-play-end${suffix}.json`), JSON.stringify(flags));
+      console.log(`flags at the end: Play defaultExpiration ${flags.defaultExpiration}, ${flags.entries.length} flags${flags.entries.length ? ` (${flags.entries.map(e => e.name).join(' ')})` : ''}`);
+    }
     const deferred = (await page.evaluate(() => window.deusExViewer.liveProbe({deferred: true}))).deferred ?? [];
     writeFileSync(path.join(dir, `deferred${suffix}.json`), JSON.stringify(deferred));
     console.log(`${deferred.length} recorded boundaries: ${deferred.slice(0, 12).join('; ')}`);
@@ -679,7 +713,7 @@ async function play() {
       console.log(`object trace: ${objects.length} registry events, ${sounds.length} Galaxy PlaySound calls`); }
     if (setupNames) writeFileSync(path.join(dir, 'setup-play.json'), JSON.stringify(setup));
     if (scriptPawns) writeFileSync(path.join(dir, 'script-play.json'), JSON.stringify({pawns: scriptPawns.split(','), events: script}));
-    if (navPawns) writeFileSync(path.join(dir, 'nav-play.json'), JSON.stringify({pawns: navPawns.split(','), events: nav}));
+    if (navPawns) writeFileSync(path.join(dir, `nav-play${suffix}.json`), JSON.stringify({pawns: navPawns.split(','), events: nav}));
     if (option('shot', null)) {
       // The replay holds the level at its last tick; Play draws on: the frame at the brightness whose display ramp is the identity.
       await page.addStyleTag({content: `.toolbar, footer, #toast, #play-hint, #npc-preview-label, #panel, #crosshair, #gate { display: none !important; }

@@ -67,7 +67,8 @@ if(movingLightsParam)globalThis.DEUS_EX_MOVING_LIGHTS=movingLightsParam;
 // execUpdateParticles (particles.rs), ?gcNative= for the HUD's GC state
 // and tile natives (gc.rs, script-vm-gc.mjs), ?pawnPhysics=js for a
 // walking pawn's performPhysics (pawn_phys.rs, pawn-physics-kernel.mjs) and
-// ?actorPhysics=js for a falling non-Pawn's (fall.rs, actor-physics-kernel.mjs).
+// ?actorPhysics=js for a falling non-Pawn's (fall.rs, actor-physics-kernel.mjs), ?walkLoopKernel=js and ?movePawnKernel=js for the
+// walking loop's and a pawn MoveActor's Rust bodies (walk-loop-kernel.mjs, move-pawn-kernel.mjs; the live-scene walk trace needs the JavaScript twins).
 // ?moverTracker=off keeps movers out of the BSP (brush-tracker.mjs): drawn
 // whole and frustum-stamped, as before the moving brush tracker.
 // ?childFrames=off keeps OccludeFrame's child frames out of Play: mirror
@@ -81,7 +82,7 @@ for(const [param,global] of [['renderScan','DEUS_EX_RENDER_SCAN'],['meshLight','
   ['cycleScan','DEUS_EX_CYCLE_SCAN'],['levelScan','DEUS_EX_LEVEL_SCAN'],['farMove','DEUS_EX_FAR_MOVE'],
   ['particles','DEUS_EX_PARTICLES'],['gcNative','DEUS_EX_GC_NATIVE'],['pawnPhysics','DEUS_EX_PAWN_PHYSICS'],
   ['actorPhysics','DEUS_EX_ACTOR_PHYSICS'],['actorOcclusion','DEUS_EX_ACTOR_OCCLUSION'],
-  ['moverTracker','DEUS_EX_MOVER_TRACKER'],['childFrames','DEUS_EX_CHILD_FRAMES'],['iteratorFrames','DEUS_EX_ITERATOR_FRAMES']]) {
+  ['walkLoopKernel','DEUS_EX_WALK_LOOP_KERNEL'],['movePawnKernel','DEUS_EX_MOVE_PAWN_KERNEL'],['moverTracker','DEUS_EX_MOVER_TRACKER'],['childFrames','DEUS_EX_CHILD_FRAMES'],['iteratorFrames','DEUS_EX_ITERATOR_FRAMES']]) {
   const value=new URLSearchParams(location.search).get(param);
   if(value)globalThis[global]=value;
 }

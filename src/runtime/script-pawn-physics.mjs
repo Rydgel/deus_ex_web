@@ -244,14 +244,18 @@ export function pawnPhysicsView(actor, services) {
   pawn.moveActorHit = (delta, rotation = null, ignoreBases = false) => {
     const result = moveActor(pawn, delta, rotation && !sameRotation(rotation, pawn.rotation) ? rotation : null,
       services, dispatch, decorate, ignoreBases);
-    return { result: Boolean(result.success), time: f(result.time), normal: (result.hit?.normal ?? [0, 0, 0]).map(f),
+    const hit = { result: Boolean(result.success), time: f(result.time), normal: (result.hit?.normal ?? [0, 0, 0]).map(f),
       actor: result.hit?.actor ?? null };
+    services.moveTrace?.('moveActor', actor, delta, pawn.position, hit);   // validation only (nav-trace.mjs)
+    return hit;
   };
   pawn.moveActor = (delta, rotation, ignoreBases = false) => pawn.moveActorHit(delta, rotation, ignoreBases).result;
   Object.defineProperty(pawn, 'dispatchEvent', { value: dispatch });
   pawn.move = delta => {
     const result = moveActor(pawn, delta, null, services, dispatch, decorate);
-    return { time: f(result.time), normal: (result.hit?.normal ?? [0, 0, 0]).map(f), actor: result.hit?.actor ?? null };
+    const hit = { time: f(result.time), normal: (result.hit?.normal ?? [0, 0, 0]).map(f), actor: result.hit?.actor ?? null };
+    services.moveTrace?.('move', actor, delta, pawn.position, hit);   // validation only (nav-trace.mjs)
+    return hit;
   };
   /* ULevel::MoveActor under bTest=1 (vtable +0x88): the recovered test-move
    * the navigation natives' probing workers (checkMove/flyMove) drive. */

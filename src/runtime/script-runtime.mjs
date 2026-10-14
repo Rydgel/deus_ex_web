@@ -4198,7 +4198,7 @@ export class ScriptRuntime {
    * reads route through namedReference bindings; world queries come from the
    * level collision hash; zone events dispatch through processEvent. */
   pawnPhysicsServices(receiver) {
-    const level=this.levelFor(receiver);
+    const level=this.levelFor(receiver),that=this;
     if(!level?.hash)throw new Error('Pawn physics requires the level collision hash');
     return {
       field:(actor,name)=>this.namedReference(actor,name),
@@ -4242,6 +4242,8 @@ export class ScriptRuntime {
       // The dry walking loop in Rust (walk-loop-kernel.mjs, B5): whether it
       // ran there; otherwise the JavaScript body runs.
       walkLoop:(pawn,seconds,iterations,ops)=>this.scriptVm?.walkLoop?.walk(pawn,seconds,iterations,ops)??false,
+      // Validation (nav-trace.mjs): a traced pawn's physics moves are logged; undefined (no cost) otherwise.
+      get moveTrace(){return that.navTrace?.physicsMove(receiver);},
       random:()=>{
         if(typeof this.rng?.frand!=='function')throw new Error('Pawn physics requires the shared original RNG stream');
         return Math.fround(this.rng.frand());
