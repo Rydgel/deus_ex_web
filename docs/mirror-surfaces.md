@@ -445,13 +445,107 @@ overlap them by bounding box. Four of them are mirrored: DeusExMover0 in
 - **Child merging.** CreateChildFrame (`0x10b15a40–0x10b15ae9`) reuses a
   child only when all of these equal its arguments: Level (`+4`), Parent
   (`+8`), iSurf (`+0x14`), ZoneNumber (`+0x18`) and the four NearClip
-  floats (`+0x24`), per the SDK's FSceneNode. So it merges one surface's
-  polygons within a zone, not different surfaces on one plane. The
-  browser's per-plane groups are coarser. Within one zone the image is the
-  same, because the reflection depends only on the plane. Across zones, the
-  original's separate children may see different portal traversals, and it
-  may draw more child frames than the browser. A mover polygon, being its own surface, would
-  never share the floor's child.
+  floats (`+0x24`), per the SDK's FSceneNode. OccludeBsp's mirror request
+  passes **iSurf 0** (`push 0x0` at `0x10b18b4a`), whatever the surface, so
+  it merges *every* mirror request of one parent in one zone on one plane,
+  different surfaces included ([merged requests](#merged-mirror-requests-2026-10-14)).
+  The browser's per-plane groups for static surfaces are the same. Across
+  zones, the original's separate children may see different portal
+  traversals, and it may draw more child frames than the browser (a static
+  plane group reflects through whichever of its frames came last).
 - **Shadow blobs.** The original shows soft shadow blobs under pawns. These
   are Shadow decals attached through AttachDecal. The runtime attaches them
   (`runtime/script-decal.mjs`), but the viewer has no decal draw pass.
+
+## Merged mirror requests (2026-10-14)
+
+**Report.** In 06_HongKong_WanChai_Underworld's club, three one-way panes beside
+the dance floor reflected the room only in one of them; the other two showed
+their own flat cloudy texture, and which one reflected changed with the view
+(the user's screenshots: the middle pane reflects with the dancers, the two
+side panes grey).
+
+**Surfaces.** BreakableGlass0, 5 and 17 are three movers at (-1216, -1024,
+-832; -2056, -320), each a 128 x 128 pane brush with 8 polygons. Polygon 1
+is the dance-side face: flags `0x08400028` (Mirrored | Unlit | NotSolid |
+Semisolid, no Translucent/Masked/Modulated, so an opaque mirror), normal
+(0, 1, 0), brush-local y 2, world plane y = -2054, facing the dance floor.
+Polygon 3, at brush y -2 (world -2058), is `0x0040012c` (Unlit | TwoSided |
+Semisolid | NotSolid | Translucent, normal +Y), presumably the window the office
+side looks through (not traced). From the office the mirrored face is a back
+face: five views there request no mirror at all. The three mirrored polygons
+are three surfaces on one plane.
+
+**Original.** OccludeBsp's mirror request passes iSurf **0** to CreateChildFrame
+(`0x10b18b4a`, `push 0x0` before `call [esi+0x68]`; the other arguments are the
+parent frame, the span, Level, the zone, `-Frame->Mirror`, the reflected Coords
+and the clip plane). CreateChildFrame merges a request into a child of the same
+parent with equal iSurf, ZoneNumber and NearClip (`0x10b15a40`). The three
+requests have one plane (equal NearClip) and one zone, so they make **one** child
+frame: its span is the union of the three polygons', and it is drawn once. Each
+polygon's draw-list entry then has `PF_Invisible | PF_Occlude`
+(`0x10b18b58`..), so the one reflected image shows through all three. The
+mirror requests' nodes are not CreateChildFrame arguments; the frame's
+request list is the Rust core's record of which requests the original's calls
+merged. `scripts/validate-child-frames.mjs` compares every request's frame with
+what the original's CreateChildFrame returns (the Unicorn oracle reads `eax` at
+each call's return): 00_Training 279 requests in 55 frames, 02_NYC_Bar 34 in 18,
+11_Paris_Everett 84 in 23, all equal.
+
+**Play before.** The simulation side reported one depth-1 mirror frame and the
+frame's first request, in the BSP's front-to-back order (the order changes with
+the view). `planFramePasses` planned one pass through that request's group, so
+only that pane's group got the reflected child; the other two drew their own
+texture. Static mirrors do not split this way: a static plane is one group, the
+frame's request node picks it, and every polygon of it reflects. A mover
+polygon is its own group, so only mover mirrors on one plane can split.
+A sweep in worker mode (105 views from 15 dance-floor positions, 7 yaws each,
+ghost, the level frozen): 200 pane requests, 103 of them drawn grey; one
+child frame in every view with any request.
+
+**Fix.** The frame record keeps every merged request's node (`FR_REQ_HEAD`,
+`frames[].requests`); the session names each one's tracked mover polygon;
+`frameGroups` (mirror-passes.mjs) gives all the groups the frame looks through
+and the pass reflects through the first (the plane is the same) while every
+group takes the child's target (`mirrors.mjs` draw) and hides its meshes in the
+child pass. The sweep after: 200 of 200 requested panes draw the reflection,
+no change in requests or frames.
+
+**Original at the same views.** Frames from the original (Wine, the exact-camera
+pipeline, level frozen and held at 46.828 s; `scripts/original-views.sh`) against
+Play's at 46.829 s, 1280 x 720, raw framebuffers
+(`visual-acceptance.mjs compare`):
+
+| View (eye = Location + 40; yaw) | Play before: mean abs. diff, edge recall / precision | Play after |
+| --- | --- | --- |
+| a (-1024, -1650, -336; 49152), the report's | 13.21, .831 / .612 | 2.46, .995 / .992 |
+| b (-1300, -1650, -336; 52000) | 9.01, .938 / .779 | 2.72, .998 / .994 |
+| c (-760, -1400, -336; 46000) | 5.45, .853 / .970 | 4.08, .981 / .990 |
+| d (-1120, -1900, -336; 55000) | 5.10, .647 / .803 | 4.76, .646 / .800 |
+
+The original reflects in every pane at all four views. View d does not
+improve: both sides reflect in both panes in view, but the original's reflected
+floor and dancers are lit (olive floor) where Play's are dark red. That is
+the reflected scene's light, not the panes: which light does it is not
+traced (the club's TriggerLights and strobes, [Divergence 13 of the
+pilot](visual-acceptance.md#strobe-a-host-input-and-a-triggerlight-the-page-lit-wrongly),
+is a candidate; unverified). Views a to c carry the known uniform brightness
+gap (Play over original 1.17 to 1.20).
+
+**Persistence.** A report said the grey panes appeared after the player went
+into the office and came back. A visit does not change anything: five dance-side
+views before and after a visit to three office positions give the same
+requests, frames and reflecting panes (and the panes are grey on a fresh start;
+`validate-underworld-panes-play.mjs`). What differs by view is which request
+comes first.
+
+**Checks.** `scripts/validate-underworld-panes-play.mjs` (worker mode) looks at
+nine views (one, two and three panes requested, each pane first in some view):
+every requested pane is in the one depth-1 frame and draws the reflected child,
+before and after the office visit. It fails without the fix (the first view:
+only BreakableGlass5 draws the reflection of the three requested). `test/
+mirror-frame-groups.test.mjs` covers `frameGroups` and the plan.
+
+**Not checked.** A zone boundary between two coplanar requests (two frames):
+the page maps both frames to the same static group, which takes the last
+child's target; read from the code, not seen in a map.

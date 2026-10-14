@@ -1526,7 +1526,11 @@ decals() {
 visibility() {
   return lastVisibility ? { nodes: lastVisibility.nodes.length, zone: lastVisibility.zone, mirrors: [...lastVisibility.mirrors],
     sky: lastVisibility.sky, triangles: world?.visibility?.stats.drawnTriangles ?? null, master: lastVisibility.master ?? null,
-    groups: world?.mirrors.groups().map(group => ({ key: group.key, moving: Boolean(group.moving) })) ?? [] } : null;
+    // `active`: the group draws its reflected child this frame (not its own
+    // surface); `frames` OccludeFrame's mirror and sky frames with the requests
+    // merged into each (validate-underworld-panes-play.mjs).
+    groups: world?.mirrors.groups().map(group => ({ key: group.key, moving: Boolean(group.moving), active: Boolean(group.active.value) })) ?? [],
+    frames: (lastVisibility.frames ?? []).map(f => ({ index: f.index, parent: f.parent, kind: f.kind, group: f.group, requests: f.requests, bounds: f.bounds })) } : null;
 },
 stateDigest() {
   if (mode !== 'play' || !game) return null;

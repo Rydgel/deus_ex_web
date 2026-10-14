@@ -1752,7 +1752,13 @@ const FR_KIND: u32 = 75;
 const FR_NODE: u32 = 76;
 const FR_INDEX: u32 = 77;
 const FR_FIELDS: u32 = 78;
-const FR_WORDS: u32 = FR_FIELDS + 57;
+// The requests CreateChildFrame merged into the frame (first to last): a
+// list of (next, iNode) pairs in GSceneMem. The original's mirror requests all
+// pass iSurf 0 (0x10b18b4a), so coplanar mirrors of different surfaces, in one
+// zone, share one child frame, and the host needs each request's node.
+const FR_REQ_HEAD: u32 = FR_FIELDS + 57;
+const FR_REQ_TAIL: u32 = FR_REQ_HEAD + 1;
+const FR_WORDS: u32 = FR_REQ_TAIL + 1;
 
 fn new_record() -> u32 {
     let r = push(GSCENE, 4 * FR_WORDS, 8);
@@ -1898,6 +1904,20 @@ fn sky_coords(sky: u32) -> [u32; 12] {
     coords_bits(&c)
 }
 
+/// Append a request's node to a child frame's merged-request list.
+fn add_request(c: u32, i_node: i32) {
+    let entry = push(GSCENE, 8, 4);
+    wr(entry, 0);
+    wr(entry + 4, i_node as u32);
+    let tail = fw(c, FR_REQ_TAIL);
+    if tail == 0 {
+        set_fw(c, FR_REQ_HEAD, entry);
+    } else {
+        wr(tail, entry);
+    }
+    set_fw(c, FR_REQ_TAIL, entry);
+}
+
 /// URender::CreateChildFrame (0x10b15a40): merge into an equal child of
 /// `parent` (Level, iSurf, Parent, each NearClip component equal or
 /// unordered, ZoneNumber) or make a new one (prepended), with its own
@@ -1919,6 +1939,7 @@ fn create_child_frame(parent: u32, span: &SpanBuffer, i_surf: i32, zone: u8, mir
             let mut s = frame_span(c);
             s.merge_with(span);
             set_frame_span(c, &s);
+            add_request(c, i_node);
             if let Some(b) = bounds {
                 // Expand only (0x10b15b09..0x10b15bb2): the new value when the
                 // old is below it or unordered.
@@ -1941,6 +1962,9 @@ fn create_child_frame(parent: u32, span: &SpanBuffer, i_surf: i32, zone: u8, mir
     for k in 0..FR_WORDS {
         set_fw(f, k, fw(parent, k));
     }
+    set_fw(f, FR_REQ_HEAD, 0);
+    set_fw(f, FR_REQ_TAIL, 0);
+    add_request(f, i_node);
     set_fw(f, 42, zone as u32);
     set_fw(f, FR_ISURF, i_surf as u32);
     set_fw(f, 43, fw(parent, 43) + 1);
@@ -2071,7 +2095,7 @@ fn occlude_children(parent: u32, index: &mut u32) -> u32 {
 /// A child frame's record in the output: 0xfffffffd, its visit index, its
 /// parent's, the request kind and node, Recursion, ZoneNumber, Mirror,
 /// NearClip (4), the fields (57), Uncoords (12), its span buffer as a
-/// request carries it, and the word count of its OccludeBsp output, which
+/// request carries it, the merged requests' count and nodes, and the word count of its OccludeBsp output, which
 /// follows (returns that count's address).
 fn emit_frame(c: u32) -> u32 {
     emit(0xffff_fffd);
@@ -2109,6 +2133,19 @@ fn emit_frame(c: u32) -> u32 {
             emit(s_end(s) as u32);
             s = s_next(s);
         }
+    }
+    // The merged requests' nodes, in request order.
+    let mut count = 0;
+    let mut e = fw(c, FR_REQ_HEAD);
+    while e != 0 {
+        count += 1;
+        e = rd(e);
+    }
+    emit(count);
+    let mut e = fw(c, FR_REQ_HEAD);
+    while e != 0 {
+        emit(rd(e + 4));
+        e = rd(e);
     }
     emit(0);
     arena_top(OUT) - 4

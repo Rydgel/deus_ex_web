@@ -490,7 +490,10 @@ export function createBspOcclusion(kernel, model, { surfaceTextureFlags, zoneAct
  * emit_frame): each frame's index, its parent's (0 the root), the kind and
  * node of the request that made it, Recursion, ZoneNumber, Mirror and
  * NearClip bits, the ComputeRenderSize fields (Coords, FX..PrjYP,
- * ViewSides, ViewPlanes), Uncoords, its span and its OccludeBsp output. */
+ * ViewSides, ViewPlanes), Uncoords, its span, the nodes of every request
+ * that made or merged into it (`requests`, in request order: a mirror request
+ * passes iSurf 0, so coplanar mirrors of different surfaces in one zone share
+ * a frame, 0x10b18b4a) and its OccludeBsp output. */
 function decodeFrames(words, at, skipPoints) {
   const frames = [];
   let i = at;
@@ -508,10 +511,12 @@ function decodeFrames(words, at, skipPoints) {
       for (let k = 0; k < count; k++, i += 2) line.push([words[i] | 0, words[i + 1] | 0]);
       lines.push(line);
     }
+    const requestCount = words[i++], requests = Array.from(words.subarray(i, i + requestCount), node => node | 0);
+    i += requestCount;
     const length = words[i++];
     const body = decode(words.subarray(i, i + length), [], skipPoints);
     i += length;
-    frames.push({ index, parent, kind: kind ? 'sky' : 'mirror', iNode: iNode | 0, recursion, zone, mirror, nearClip,
+    frames.push({ index, parent, kind: kind ? 'sky' : 'mirror', iNode: iNode | 0, requests, recursion, zone, mirror, nearClip,
       fields, uncoords, span: { startY: startY | 0, endY: endY | 0, validLines: valid | 0, lines },
       draw: body.draw, children: body.children, sprites: body.sprites });
   }

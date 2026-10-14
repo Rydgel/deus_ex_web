@@ -228,7 +228,9 @@ whole recursion in one `occ_run` (`occlude.rs` `create_child_frame`,
   - A request merges into an existing child of the same parent when iSurf,
     Parent and ZoneNumber match and each NearClip component compares equal
     (unordered counts as equal). The merge widens the span and, with
-    bounds, only widens the Prj clip numbers.
+    bounds, only widens the Prj clip numbers. The frame's record keeps the
+    node of every request that made or merged into it, in request order
+    (`FR_REQ_HEAD`; `frames[].requests`).
   - Otherwise a new child is copied from the parent and prepended. Only X,
     Y, XB and YB survive the copy. It gets the given Coords, their
     transposed Uncoords, Recursion + 1, Mirror and NearClip, then
@@ -270,7 +272,12 @@ around the view, one at the eye that only child frames construct.
 Every child frame matches bit for bit: fields, Uncoords, NearClip, Mirror,
 zone, recursion, span, draw lists with every saved point, Frame->Sprite
 with span buffers and its own requests, plus NodeFlags, zone times and
-counters over the recursion.
+counters over the recursion. Each request also lands in the frame the
+original's CreateChildFrame returned for it (the oracle reads eax at its
+return, 0x10b18b55's call site and the sky request's): the frame's `requests`
+equal the owner's requests that returned it, in order (2026-10-14; 00_Training
+279 requests placed, 224 of them merged into an earlier frame; 02_NYC_Bar 34 and
+16; 11_Paris_Everett 84 and 61).
 
 | Map | Cases | Child frames | Mirror / sky | Deepest recursion |
 | --- | ---: | ---: | --- | ---: |
@@ -292,11 +299,17 @@ unchanged.
 
 - **Frames.** `sim-session.mjs` `visibility` runs the recursion. Each child
   frame carries its visible nodes, its tracked movers' polygons, its
-  Frame->Sprite and the group a mirror frame looks through: a static group
-  by its node, a mover's by its tracked polygon.
+  Frame->Sprite and the requests merged into it (`requests`: each mirror
+  request's node, with its tracked mover polygon's key when it has one). A
+  mirror frame looks through the groups of all of them: a static group by
+  its node, a mover's by its tracked polygon. Every mirror request passes
+  iSurf 0 (`0x10b18b4a`), so the requests of one parent in one zone on one
+  plane make one frame whatever their surfaces, as CreateChildFrame merges
+  them ([merged mirror requests](mirror-surfaces.md#merged-mirror-requests-2026-10-14)).
 - **Pass plan.** `mirror-passes.mjs` `planFramePasses` plans the mirror
-  passes from these frames on both sides. A pass is a mirror frame whose
-  group the page supports. Its scissor is the frame span's bounds, and its
+  passes from these frames on both sides. A pass is a mirror frame with at
+  least one group the page supports; it draws its reflected child for all of
+  its groups (`node.groups`). Its scissor is the frame span's bounds, and its
   children are its own mirror frames, up to Recursion 3. The sky frames
   made inside a mirror frame (`node.skies`) are drawn into that mirror's
   target first, each with the camera of its own Coords

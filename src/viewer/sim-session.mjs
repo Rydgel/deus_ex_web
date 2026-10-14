@@ -376,12 +376,19 @@ export function createSimSession(game, { assets = null, events = [], exportName 
     // through (a tracked mover's polygon) and its span's bounds.
     const frames = result.frames.map(frame => {
       const drawnHere = drawnOf(frame.draw);
-      const owner = frame.kind === 'mirror' && drawnHere.movers ? occlusion.tracker.surfOwner(occlusion.nodeSurf(frame.iNode)) : null;
+      const ownerOf = node => frame.kind === 'mirror' && drawnHere.movers ? occlusion.tracker.surfOwner(occlusion.nodeSurf(node)) : null;
+      const keyOf = owner => owner ? `${trackerMovers.names[owner.tag - 0x40000000]}:${owner.ordinal}` : null;
+      const owner = ownerOf(frame.iNode);
+      // Every mirror request that made or merged into this frame (the original's
+      // mirror requests all pass iSurf 0, 0x10b18b4a: coplanar mirrors in one zone,
+      // e.g. three panes side by side, share one frame), each with its tracked
+      // mover polygon's key when it has one.
+      const requests = frame.requests.map(node => ({ iNode: node, group: keyOf(ownerOf(node)) }));
       // Its DrawLodMesh inputs: the frame's Coords and FX (ComputeRenderSize
       // fields +0x34 and +0xb8; docs/script-lodmesh-lod.md "Play").
       const fieldFloats = new Float32Array(Uint32Array.from(frame.fields.slice(0, 13)).buffer);
       return { index: frame.index, parent: frame.parent, kind: frame.kind, iNode: frame.iNode, recursion: frame.recursion,
-        group: owner ? `${trackerMovers.names[owner.tag - 0x40000000]}:${owner.ordinal}` : null,
+        group: keyOf(owner), requests,
         bounds: spanBounds(frame.span), nodes: drawnHere.nodes, movers: drawnHere.movers,
         moverItems: drawnHere.moverItems,
         // The frame's Coords (origin, X, Y, Z), as its fog maps read them,
@@ -651,7 +658,7 @@ export function createSimSession(game, { assets = null, events = [], exportName 
       if (seen.sky) pass.sky = sky(view.location);
       for (const frame of seen.frames ?? []) frame.main = members?.frames.get(frame.index)?.ids ?? new Set();
       if (seen.frames?.length) pass.frames = seen.frames.map(frame => ({ index: frame.index, parent: frame.parent, kind: frame.kind,
-        iNode: frame.iNode, group: frame.group, bounds: frame.bounds, nodes: frame.nodes, movers: frame.movers, moverItems: frame.moverItems,
+        iNode: frame.iNode, group: frame.group, requests: frame.requests, bounds: frame.bounds, nodes: frame.nodes, movers: frame.movers, moverItems: frame.moverItems,
         coords: frame.coords, mirror: frame.mirror }));
     } else pass.sky = sky(view.location);
     const frustum = new THREE.Frustum().setFromProjectionMatrix(

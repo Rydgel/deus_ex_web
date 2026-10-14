@@ -96,7 +96,7 @@ export function createDrawnSet(scene) {
         // view (mirrors.mjs draw), after the mirror frames inside it.
         for (const node of passOrder(plan)) {
           for (const inside of node.skies) passes.push({ kind: 'sky', camera: inside.camera, frame: inside.frame, within: node });
-          passes.push({ kind: 'mirror', camera: node.camera, through: node.group, node, frame: node.frame });
+          passes.push({ kind: 'mirror', camera: node.camera, through: node.group, throughGroups: node.groups, node, frame: node.frame });
         }
       } else {
         mirrored = mirrors && groups.length > 0 && mirrorsMayRender(camera, groups, undefined, requested);
@@ -119,7 +119,7 @@ export function createDrawnSet(scene) {
       for (const [name, mover] of movers) {
         if (out.has(name)) continue;
         for (const mesh of mover.meshes) {
-          if (!mesh.visible || pass.through?.meshes.includes(mesh)) continue;
+          if (!mesh.visible || (pass.throughGroups ?? [pass.through]).some(group => group?.meshes.includes(mesh))) continue;
           sphere.copy(mesh.geometry.boundingSphere).applyMatrix4(mesh.matrixWorld);
           if (frustum.intersectsSphere(sphere)) { out.add(name); break; }
         }
