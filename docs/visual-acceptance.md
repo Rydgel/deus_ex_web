@@ -789,6 +789,49 @@ constant 0.0.
     AIPickRandomDestination): [pawn navigation](script-pawn-nav.md#live-divergence-checkmoves-hit-buffer-and-moveactors-early-return-2026-10-14), oracle scenes (four fail
     before the fix), 237 of 237 bit-exact. The three 1,200-tick 05_NYC_UNATCOMJ12lab traces replay equal for all 59 actors with it.
 
+17. **Pickups block a pawn's moves; MoveActor's block test was the controlled player's (fixed, 2026-10-14; the sweep's group 2, the wander destination's Z).**
+    Doberman0 and Doberman1 (Warehouse: Z 28.4 in the original, 28.3 in Play), Terrorist5 (BatteryPark: 380.23 against 363.90, the same X and Y), SecurityBot4
+    (Dockyard: the pick's calls differ, its destination does not). **Method.** `call` breakpoints at the pick worker, MoveActor and FarMoveActor for every pawn,
+    the Hit's actor named at MoveActor's return (`namearg 7 4`), `scripts/live-pick-compare.mjs` (the original's calls against Play's `--nav-trace`, pick by
+    pick), and the tracer's new `rng-file` (a fresh load draws another capture's recorded stream, so the BatteryPark divergence, which loading again does not
+    repeat, was reproduced with the original's calls: Terrorist5's tick-13 pick, 77 calls, Z 380.2277). **Evidence.** The first differing call is always a
+    MoveActor whose Hit names an item in the original (`Liquor40oz20`, `Liquor40oz48`, `HazMatSuit0`) and passes through it in Play; the bottles are where Play
+    has them with the same collision word (`0x7`: no bBlockPlayers). Engine.dll `0x103996aa..0x1039978a`: the candidate's bit is picked by the source's
+    category (bBlockPlayers for a controlled player or a Projectile, bBlockActors otherwise), not always bBlockPlayers; an item that blocks actors and not
+    players stops a pawn. **Fix and oracle.** `moveQuery` and the Rust `move_pawn.rs`; `validate-native-move-query` +280 cases (pawn and Projectile sources over every
+    candidate kind and flag word): 54 mismatches before, 0 of 760 after; the `collision-bits` scenario in `validate-pawn-move-kernel` (Rust and JS equal). **Result.**
+    Warehouse 18 of 18 picks and every watched field equal for 150 ticks (Doberman0 from tick 56 and Doberman1 from tick 42 differed), Dockyard 31 of 31,
+    Terrorist5's 77 calls equal ([pawn navigation](script-pawn-nav.md#live-divergence-pickups-block-a-pawns-moves-2026-10-14), [move query](move-query.md)).
+    **The sweep's own traces.** Fresh loads did not repeat the sweep's cases (a pickup lies in a pick's path in some loads), so the sweep's traces (their sidecar
+    files rebuilt from the trace: pawns, generators and timed actors from its first rows) were replayed with the rule before and after the fix: before,
+    **every reported case reappears with the reported values**: Hooker0 tick 8 (Dest Z -1140.60 against -1141.03) and BumMale1 tick 54 (-1136.10 against -1136.20) in
+    02_NYC_Street, Doberman0 tick 33 and Doberman1 tick 47 (28.4 against 28.3) in 02_NYC_Warehouse, SecurityBot0 tick 28 ((2523.25, 4365.28) against (2572.08, 4376.01)) in
+    09_NYC_Dockyard, Terrorist23 tick 393 in 03_NYC_MolePeople (below); after the fix none of the five differs (60 to 410 ticks, every watched actor). The Dockyard
+    waypoint is the same cause as the Z cases: the pick's test moves stop at a HazMatSuit (or a bottle) and the last in-band position is another one. The original's SecurityBot0
+    pick of that tick was also reproduced in a fresh original (`--rng-from` the sweep's trace): 4 picks, the 4th found, destination (2523.248, 4365.276); Play's 4 picks equal.
+    **Terrorist23 (group 4, Mole People tick 393).** The pawn's first walking step, with the original's MoveActor calls captured (physWalking for Terrorist23 under a gate: a
+    single real move of (0.031, 0.135, 0) and its riders, no vertical move, Z stays 47.80): Play's first step ended 3.81 higher in PHYS_Falling because the walk trace
+    (`--page-params 'pawnPhysics=js&walkLoopKernel=js&movePawnKernel=js' --nav-trace Terrorist23`, the JavaScript twins) shows the move **blocked by `Rat1`** (Hit.Time 0), then
+    the step-up (25), the move, the step down (landing on the Rat's top, 3.81 up). A Rat has bBlockPlayers and no bBlockActors (the class values in Play's linked defaults; CollisionHeight 1.75, radius 16), so the old rule stopped a Terrorist at it and the original's rule does not: the same fault.
+    With the rule fixed the sweep trace replays equal (the draws too: they differed from tick 393, original 0 and Play 2); two fresh loads of the map (m1: Terrorist23 starts to
+    walk at tick 398 with the same step, equal; m2: it does not walk in 600 ticks) never had a rat there, which is why loading again did not show it. The step-down and floor-check
+    capture the task asked for needed no new comparison: the original makes no such calls on that step.
+18. **A directly opened map has an empty FlagBase; Play's login supplies PlayerTraveling (a harness input, fixed in the replay, 2026-10-14; the sweep's group 3).**
+    Play created two flags in the Underworld at tick 61 (`M06_HONGKONG_WANCHAI_UNDERWORLD_StartupText`, `M6MissionStart`), brought `JaimeReyes1` into the Paris
+    Metro at tick 61 and relocated `Female8` in the Wan Chai Market; the original did none of it. **Method.** `tools/dump-flags-win.c` walks the player's
+    FlagBase in the running original (the player's `+0x890`; 64 bucket heads at `+0x28`, each XFlag `+0x28` name, `+0x34` next, `+0x38` type, `+0x3c`
+    expiration, `+0x40` value, `+0x128` default expiration) and `original --dump-flags` writes it at the frozen start and at the end hold
+    (`flags-start<tag>.txt`, `flags-end<tag>.txt`); Play's side is `liveProbe({flags})`. **Evidence.** Underworld, Metro and Market: **0 flags at the frozen start**
+    (default expiration 0) and **0 flags after 130 unfrozen ticks** with the default expiration at mission + 1 (7, 11, 7): the mission script's first Timer ran
+    `InitStateMachine` and found no `PlayerTraveling`, so no `FirstFrame` (which would have created `M#MissionStart` at least). The original's `open` carries no
+    travel marker. Play's `loginPlayer` supplies it unconditionally (`beginFreshMission`, [training mission entry](script-training-mission-entry.md): a fresh
+    mission entry, not general travel), so its first Timer ran `FirstFrame`: Underworld 2 flags, Metro 2 (`M10_PARIS_METRO_StartupText`, `M10MissionStart`) and
+    `Mission10.FirstFrame`'s `Jaime.EnterWorld()` (`JaimeRecruited` unset: Jaime stands in the Metro in a fresh game), Market 5 (those two and `GothAtButcher`,
+    `GothAtFlower`, `GothAtVase`) and `Mission06.FirstFrame`'s relocation. **Decision: a harness input, not Play logic.** The viewer's Player start is a mission
+    entry and keeps its marker; the replay starts where the original's directly opened map does: `liveProbe({flags: {delete: ['PlayerTraveling']}})` before the first
+    tick (the original's DeleteFlag native), `--keep-traveling` keeps Play's own. **Result.** The three maps equal for 130 ticks, the draws per tick equal at tick 61 (they
+    differed there: Metro original 0, Play 3; Market 3 and 4), the FlagBase at the end equal (default expiration 7, 11, 7; 0 flags).
+
 ### Weapon noise (2026-10-14)
 
 **Question.** The perception pilot compared a visible player that never fired or made a noise. Do NPCs hear the player's gunshots as the
@@ -945,14 +988,14 @@ count differs from tick 1 in 13 of the 19 maps with absent actors; in 4 of those
    evidence**: the seven good loads all ran with `--actor-trace` on ticks 1 to 3 (the per-actor draw attribution), the two bad ones did not; the
    breakpoints may change which loads show it, so the cause is not yet attributed per actor. The extra tick-1 draws in the bad loads (2 and 10)
    say which actor to look at. Not Play's tick logic as far as measured.
-2. **Wandering: the first destination differs, 5 actors in 3 maps.** Doberman0 and Doberman1 (Warehouse): `Destination` and `Focus` Z 28.4 in the
+2. **Wandering: the first destination differs, 5 actors in 3 maps** (**cause found 2026-10-14: [Divergence 17](#divergences-found), pickups block a pawn's moves; the four loads of this paragraph's cases reproduce with the old rule from the sweep's traces and are equal after the fix**). Doberman0 and Doberman1 (Warehouse): `Destination` and `Focus` Z 28.4 in the
    original, 28.3 in Play (the pawn's own Z), first Wandering tick 33 and 47; Hooker0 and BumMale1 (02_NYC_Street): Z lower in Play by 0.43 (-1140.60
    against -1141.03) and 0.10 (-1136.10 against -1136.20), ticks 8 and 54, which makes the acceleration differ by one float ulp and, 270 ticks
    later (some 300 ticks), `Rot` or `MoveTimer`; SecurityBot0 (Dockyard): another waypoint altogether at tick 28 (2523, 4365 against 2572, 4376). The Z cases
    are a deterministic offset (not stream noise): the wander destination's ground height. The maps that hold them also have absent generators
    (tick-1 draws differ), the Z values do not depend on that. Next: the Wandering destination body (`ScriptedPawn.PickDestination`/`GoToLocation`'s
    Z) against the original's call trace of the first pick.
-3. **MissionScript.Timer's first call, 1.0 s: tick 61, 2 actors in 2 maps, both in maps with no other difference.** JaimeReyes1 (Paris Metro):
+3. **MissionScript.Timer's first call, 1.0 s: tick 61, 2 actors in 2 maps, both in maps with no other difference** (**cause found 2026-10-14: [Divergence 18](#divergences-found), the original's directly opened map has no PlayerTraveling; a harness input, fixed in the replay**). JaimeReyes1 (Paris Metro):
    Play moves it from Z +20000 (out of the world) to 333 and seats it, state Idle to Sitting, `bInWorld` 0 to 1; reproduced with an exact
    population (the clean rerun) and identical in the first sweep. Female8 (Wan Chai Market): the original ends its StartUp at tick 63 and patrols from where it stands (972, -1256, 43); Play, at tick 61,
    moves it to (450, -973, 25) and sets it Standing instead of Patrolling. MissionScript.Timer is `if flags is null: InitStateMachine;
@@ -960,7 +1003,7 @@ count differs from tick 1 in 13 of the 19 maps with absent actors; in 4 of those
    `JaimeRecruited` is set: Play runs a FirstFrame, or reads flags, that the original's directly opened map does not. The start state of the
    flag base (PlayerTraveling, the mission flags; [mission timer](script-mission-timer.md), [training mission entry](script-training-mission-entry.md))
    is the input to measure from the original and compare with Play's; not traced further.
-4. **Walking down a step: Terrorist23, Mole People, tick 393.** The original stays PHYS_Walking (Z 47.80), Play is PHYS_Falling at Z 51.61 (3.8
+4. **Walking down a step: Terrorist23, Mole People, tick 393** (**cause found 2026-10-14: not a step-down; a Rat blocked Play's pawn, [Divergence 17](#divergences-found)**). The original stays PHYS_Walking (Z 47.80), Play is PHYS_Falling at Z 51.61 (3.8
    higher) with MoveTimer 12.51 against 8.51 and falls afterwards. A floor-following (step-down) difference in physWalking for a pawn walking a
    slope or stairs; 1 actor in 1 map in 28.
 5. **A pawn attacking the ghost player (Area 51 Bunker), 2 entries.** `MJ12Troop0.Enemy` is JCDentonMale2 in the original and JCDentonMale1 in Play from
@@ -1029,6 +1072,11 @@ node scripts/live-sweep.mjs run --maps a,b,c --ticks 1200 --max-seconds 300 [--a
 node scripts/live-sweep.mjs report [--json .work/live-acceptance/sweep-2026-10-13.json]        # the table and the ranked groups
 node scripts/live-draw-shift.mjs --map <map> --tag <tag>        # the first pawn whose StartUp Sleep draw has another stream index in Play (needs LatF in the trace)
 node scripts/live-draw-attr.mjs --map <map> --tag <tag> [--actor mib1]   # tick 1's draws per actor and call site (original --actor-trace 1:1 and the CRT call breakpoints)
+# a pick-by-pick comparison (the pick calls config: docs/script-pawn-nav.md): the original with --extra-config pick.cfg, Play with --nav-trace A,B --nav-ticks 1:150, then
+node scripts/live-pick-compare.mjs --map <map> --tag <tag> [--pawn A] [--verbose]        # each MoveActor/FarMoveActor of each pick, the destination
+scripts/live-original.sh <map> ... --rng-from .work/live-acceptance/<map>/original-trace-<tag>.jsonl --tag T   # the original draws that capture's stream (its rngIn): the same decisions in a fresh load, to trace them
+scripts/live-original.sh <map> ... --dump-flags          # the player's FlagBase at the frozen start and the end hold (flags-start<tag>.txt, flags-end<tag>.txt)
+node scripts/live-acceptance.mjs play ... [--keep-traveling] [--page-params 'pawnPhysics=js&walkLoopKernel=js&movePawnKernel=js'] # Play keeps its PlayerTraveling marker / runs the JavaScript twins (the walk trace of --nav-trace pawns)
 ```
 
 `live-original.sh` takes the Wine lock (`.work/wine-deusex.lock`), refuses to start with another DeusEx.exe running and quits the game by

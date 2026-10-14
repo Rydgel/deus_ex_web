@@ -22,6 +22,8 @@ const bits = new DataView(new ArrayBuffer(4));
 // Play's JSON keeps no sign of zero, so -0 and +0 are one value here
 const word = x => { bits.setFloat32(0, x + 0); return bits.getUint32(0); };
 const same = (a, b) => a.length === b.length && a.every((x, i) => word(x) === word(b[i]));
+// a hit normal's component below 1e-9 is the residue of a rotated brush's face (sin(pi) in the second place): not compared bit for bit
+const sameNormal = (a, b) => a.length === b.length && a.every((x, i) => word(x) === word(b[i]) || (Math.abs(x) < 1e-9 && Math.abs(b[i]) < 1e-9));
 const fmt = v => v && `(${[...v].map(x => +x.toFixed(4)).join(', ')})`;
 
 // the original: group each pick worker call with the calls it encloses
@@ -78,7 +80,7 @@ for (const [pawn, list] of O) {
       if (a.fn === 'move') {
         if (!same(a.delta, b.delta.map(f32))) first = {i, why: 'delta', orig: a.delta, play: b.delta};
         else if (!same(a.after, b.after.map(f32))) first = {i, why: 'location after the move', orig: a.after, play: b.after, delta: a.delta, before: a.before, hitOrig: a.hit, hitPlay: b.hit};
-        else if (b.hit && a.hit && (word(f32(a.hit.time)) !== word(f32(b.hit.time)) || !same(a.hit.normal, b.hit.normal.map(f32)) || (a.hit.name && b.hit.actor !== undefined && (a.hit.name === 'None' ? null : a.hit.name) !== b.hit.actor))) first = {i, why: 'hit', orig: a.hit, play: b.hit};
+        else if (b.hit && a.hit && (word(f32(a.hit.time)) !== word(f32(b.hit.time)) || !sameNormal(a.hit.normal, b.hit.normal.map(f32)) || (a.hit.name && b.hit.actor !== undefined && (a.hit.name === 'None' ? null : a.hit.name) !== b.hit.actor))) first = {i, why: 'hit', orig: a.hit, play: b.hit};
       } else if (!same(a.dest, b.dest.map(f32))) first = {i, why: 'FarMoveActor destination', orig: a.dest, play: b.dest};
       else if (!same(a.after, b.after.map(f32))) first = {i, why: 'location after FarMoveActor', orig: a.after, play: b.after};
     }

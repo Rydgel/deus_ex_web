@@ -1599,3 +1599,9 @@ actors-only, players-only and both while walk-branches pushes the pawns into the
 **Result.** The same captures replayed: Warehouse z2 18 of 18 picks equal (16 before) and every watched field equal for 150 ticks (Doberman0 from tick 56 and Doberman1
 from tick 42 before); Dockyard z2 31 of 31 (29 before); BatteryPark Terrorist5's 77 calls and destination equal. The earlier equal captures (BatteryPark z1, Warehouse z1
 and b1, Street z1) stay equal.
+
+The rule is not the pick's alone: physWalking's real moves use the same `MoveActor`. The sweep's other pawn case, Terrorist23 in 03_NYC_MolePeople (tick 393, the first
+step of a patrol), was the same fault from the other side: a rat (`Rat1`: bBlockPlayers, no bBlockActors, CollisionHeight 1.75) stood at the pawn's feet; the old rule
+blocked the Terrorist (Hit.Time 0), physWalking stepped up 25, moved, stepped down and landed on the rat 3.81 higher in PHYS_Falling, where the original's step is one move of
+(0.031, 0.135, 0) and nothing else. The sweep's traces of the five reported pawns (Street, Warehouse, Dockyard, Mole People) reproduce their original values under the old rule
+and replay equal under the new one ([visual acceptance](visual-acceptance.md#divergences-found), Divergence 17).
