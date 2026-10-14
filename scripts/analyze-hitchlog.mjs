@@ -79,8 +79,13 @@ const R = d.rows, draws = R.filter(r => r[ci.drawn]);
 // is a pause of the worker's thread (a garbage collection, or the thread being descheduled), not slow code.
 const stepMedian = Object.fromEntries(d.meta.workerKeys.map(k => [k, q(R.map(r => r[ci[`w.${k}`]]).filter(x => x >= 0), 0.5)]));
 const pauseLike = row => row && d.meta.workerKeys.filter(k => row[ci[`w.${k}`]] > Math.max(4 * stepMedian[k], 4)).length >= 3;
+// The dump keeps ranges of rows: a kept row follows the previous kept row only when its frame interval (dt) reaches back
+// to it; a gap between two drawn rows counts only inside one such run (else rows dropped between ranges read as a stall).
+const segment = new Int32Array(R.length);
+for (let i = 1; i < R.length; i++) segment[i] = segment[i - 1] + (Math.abs(R[i][ci.t] - R[i][ci.dt] - R[i - 1][ci.t]) <= 2 ? 0 : 1);
+const runOf = new Map(R.map((r, i) => [r, segment[i]]));
 const gaps = [];
-for (let i = 1; i < draws.length; i++) if (draws[i][ci.t] - draws[i - 1][ci.t] < 5000) gaps.push({ t: draws[i][ci.t], gap: draws[i][ci.t] - draws[i - 1][ci.t] });
+for (let i = 1; i < draws.length; i++) if (runOf.get(draws[i]) === runOf.get(draws[i - 1])) gaps.push({ t: draws[i][ci.t], gap: draws[i][ci.t] - draws[i - 1][ci.t] });
 gaps.sort((a, b) => b.gap - a.gap);
 const spikes = gaps.filter(g => g.gap > spikeGap);
 console.log(`\ndraw gaps > ${spikeGap} ms among the ${R.length} kept frames: ${spikes.length}`);
