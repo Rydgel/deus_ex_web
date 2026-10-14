@@ -589,8 +589,9 @@ dozen 24-bit roundings).
 
 - The light-manager tables (square root `0x10b3e1b8`, normal falloff) are
   built at init, outside PreRender. Play uses the 64-bit builds. Under
-  `0x007f`, 248 of the 2,048 square-root entries differ. The game thread's
-  control word is still unmeasured.
+  `0x007f`, 248 of the 2,048 square-root entries differ. The original builds
+  them at `0x027f` on the game thread, measured, and Play's builders equal its
+  tables bit for bit ([render-pass precision](render-pass-precision.md#measured-in-the-running-original-2026-10-14)).
 - An FPATAN whose double-double value sits within 2^-60 of a 24-bit
   midpoint depends on FPATAN's last bit. None was seen.
 - Values outside binary32's normal range, as for the BSP occlusion port:

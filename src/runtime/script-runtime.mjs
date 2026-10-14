@@ -70,7 +70,7 @@ import {
   pollTurnToward, pollWaitForLanding,
 } from './script-pawn-locomotion.mjs';
 import { runScriptPawnPhysics, pawnPhysicsView } from './script-pawn-physics.mjs';
-import { moveSmooth, moveSmoothActor } from './move-smooth.mjs';
+import { moveSmoothActor, moveSmoothPawn } from './move-smooth.mjs';
 import { execAiPickRandomDestination, execAiDirectionReachable, execFindPathToward, execFindPathTo, execEAdjustJump, actorReachable, pointWorker, aiDirection, createReachablePathnodesIterator } from './script-pawn-nav.mjs';
 import { actorLightLevelExtended, execAIGetLightLevel, execAIVisibility } from './script-ai-visibility.mjs';
 import { execMakeNoise } from './script-noise.mjs';
@@ -2695,7 +2695,7 @@ export class ScriptRuntime {
   moveSmoothPawn(actor,delta) {
     if(!this.isMapPawn(actor))throw new Error('Map pawn moveSmooth requires a serialized map pawn');
     const view=actor._pawnPhysics??pawnPhysicsView(actor,this.pawnPhysicsServices(actor));
-    return moveSmooth(view,delta,{moveActor:(_target,movement)=>view.moveActorHit(movement),dispatch:view.dispatchEvent});
+    return moveSmoothPawn(view,delta);
   }
   /** AActor::moveSmooth (0x103c9020, move-smooth.mjs) for a non-Pawn actor a
    * moving brush pushes in CheckEncroachment (0x1039a577 and 0x1039a75d call it

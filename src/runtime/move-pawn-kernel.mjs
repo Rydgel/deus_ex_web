@@ -20,7 +20,9 @@
  * Switches (Node only): MOVE_PAWN_KERNEL=js keeps every call in JavaScript;
  * MOVE_PAWN_DIFFERENTIAL=1 compares each call completed in Rust with
  * `moveQuery` on the same hits (the pure prefix: the selected hit, the
- * displacement and the time) and counts the calls.
+ * displacement and the time) and with the conditions of playerMove's two
+ * returns that leave the Hit unwritten (`hitUntouched`), and counts the
+ * calls.
  */
 import {moveQuery} from './move-query.mjs';
 import {basedOn} from './player-move.mjs';
@@ -29,7 +31,7 @@ import {handleOf} from './script-object-handles.mjs';
 const env = typeof process !== 'undefined' ? process.env ?? {} : {};
 const DISABLED = env.MOVE_PAWN_KERNEL === 'js' || globalThis.DEUS_EX_MOVE_PAWN_KERNEL === 'js';
 const DIFFERENTIAL = env.MOVE_PAWN_DIFFERENTIAL === '1';
-const counts = {calls: 0, tiny: 0, blocked: 0, handedBack: 0, declined: 0, declinedBy: {}};
+const counts = {calls: 0, tiny: 0, blocked: 0, untouched: 0, handedBack: 0, declined: 0, declinedBy: {}};
 const declined = (why, name) => {
   counts.declined++;
   if (DIFFERENTIAL) { const key = `${why} ${name ?? '?'}`; counts.declinedBy[key] = (counts.declinedBy[key] ?? 0) + 1; }
@@ -37,10 +39,19 @@ const declined = (why, name) => {
 if (DIFFERENTIAL) process.on('exit', () => process.stderr.write(`pawn move differential: ${JSON.stringify(counts)}\n`));
 
 const f = Math.fround;
+/** The conditions of playerMove's two returns before MoveActor writes its
+ * Hit (0x10399145, 0x10399228), read before the call: the differential's
+ * reference for io[13]. */
+const keepsHit = (pawn, delta, newRotation) => {
+  if (pawn.static || pawn.movable === false) return true;
+  const rotation = newRotation ?? pawn.rotation;
+  return delta.every(v => Math.abs(f(v)) < .0001) &&
+    (rotation.every((v, i) => v === pawn.rotation[i]) || !pawn.standingCount);
+};
 const int32 = v => Number.isInteger(v) && v >= -0x80000000 && v <= 0x7fffffff;
 const C_SKIP = 1, C_WORLD = 2, C_BRUSH = 4, C_PLAYER_OR_PROJECTILE = 8, C_SOURCE_PLAYER = 16, C_SOURCE_PROJECTILE = 32;
 // The ABI with move_pawn.rs: words per hit record (HIT_WORDS) and in MP_IO.
-export const HIT_WORDS = 5, IO_WORDS = 13;
+export const HIT_WORDS = 5, IO_WORDS = 14;
 
 export class MovePawnHost {
   constructor(vm) {
@@ -71,6 +82,7 @@ export class MovePawnHost {
     if (!mover.eligiblePawn(instance)) { declined('fields', actor?.name); return undefined; }
     const depth = this.contexts.length;
     const context = {pawn, actor, ops, hits: null, times: null};
+    if (DIFFERENTIAL) context.keepsHit = keepsHit(pawn, delta, newRotation);
     this.contexts.push(context);
     const x = this.x, stack = x.__stack_pointer.value;
     let code;
@@ -96,6 +108,9 @@ export class MovePawnHost {
       hit.time = time;
     }
     const result = {success, delta: queryDelta, position, time, hit};
+    // io[13]: the call returned before writing its Hit (playerMove's
+    // `hitUntouched`, which moveSmooth reads).
+    if (io[13] !== 0) result.hitUntouched = true;
     if (DIFFERENTIAL) this.verify(context, delta, result, index);
     counts.calls++;
     return result;
@@ -104,6 +119,10 @@ export class MovePawnHost {
    * hit, its adjusted time and the displacement must agree. The commit and
    * the events are the reference's own functions, called from the imports. */
   verify(context, delta, result, index) {
+    if (Boolean(result.hitUntouched) !== context.keepsHit)
+      throw new Error(`Pawn move differential mismatch for ${context.pawn.self?.name}: hitUntouched ${Boolean(result.hitUntouched)}, ` +
+        `the reference's early returns say ${context.keepsHit}`);
+    if (result.hitUntouched) counts.untouched++;
     if (context.hits === null) { if (delta.every(v => Math.abs(f(v)) < .0001)) counts.tiny++; return; }
     const {pawn, ops} = context;
     const query = moveQuery({source: pawn, worldActor: ops.worldActor, start: context.start, delta,

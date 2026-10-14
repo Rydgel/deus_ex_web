@@ -76,7 +76,9 @@ async function run(browser, testCase, query) {
         anim: window.deusExViewer.viewProbe({}).anim?.frame,
         frames: rows.reduce((n, row) => n + (row.frames?.length ?? 0), 0),
         differing: rows.reduce((n, row) => n + (row.frames ?? []).filter(f => !f.same).length, 0),
-        paths: [...new Set(rows.map(row => row.path))]};
+        paths: [...new Set(rows.map(row => row.path))], preserved: gl.getContextAttributes().preserveDrawingBuffer,
+        // A cleared buffer reads all zero: the frame must have drawn.
+        drawn: pixels.reduce((n, v, i) => n + ((i & 3) === 3 && v !== 0), 0)};
     });
     return {...result, pixels: Buffer.from(result.pixels, 'base64'), errors};
   } finally { await page.close(); }
@@ -89,7 +91,11 @@ try {
   for (const [index, testCase] of CASES.entries()) {
     if (option('case', null) !== null && Number(option('case')) !== index) continue;
     const gpu = await run(browser, testCase, ''), again = await run(browser, testCase, ''), cpu = await run(browser, testCase, '&gpuMesh=0');
-    for (const side of [gpu, again, cpu]) { assert.deepEqual(side.errors, [], `${testCase.name}: page errors`); assert.equal(side.error, null, `${testCase.name}: runtime error`); }
+    for (const side of [gpu, again, cpu]) {
+      assert.deepEqual(side.errors, [], `${testCase.name}: page errors`); assert.equal(side.error, null, `${testCase.name}: runtime error`);
+      assert.equal(side.preserved, true, `${testCase.name}: the renderer patch keeps the drawing buffer`);
+      assert.ok(side.drawn > 0, `${testCase.name}: the frame drew pixels`);
+    }
     assert.deepEqual(gpu.paths, ['gpu'], `${testCase.name}: the default run takes the GPU path`);
     assert.deepEqual(cpu.paths, ['cpu'], `${testCase.name}: ?gpuMesh=0 takes the CPU path`);
     assert.equal(gpu.anim, cpu.anim, `${testCase.name}: both runs hold the player's animation at one frame`);

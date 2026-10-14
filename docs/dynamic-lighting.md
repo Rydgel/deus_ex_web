@@ -427,6 +427,8 @@ memory.
 * Mover polygons: the brush tracker's insertion into the level BSP is not
   recovered. Mover light maps take Filter's straddle test on their own plane,
   follow translation offsets only, and use a float facet.
+* What effects the shipped content reaches, on which kind of light, and which are not
+  reached: [light effects](light-effects.md).
 * Class 2 lights use the original bodies for every effect the shipped content
   reaches ("Time-varying moving lights"). Cylinder and the spatially dynamic
   effects stay unlit with a note for class 2 (no class 2 light has them); the
@@ -439,14 +441,18 @@ memory.
   a moving Strobe light reaches a drawn surface, a drawn mesh sets one up or
   Galaxy asks for one, and hands it to the page's light maps
   ([mesh lighting](mesh-lighting.md) "LightType functions, Strobe and the
-  noise"). The movers' own polygons are not searched for Strobe lights, and only the
-  main frame's drawn surfaces are: the original's DrawFrame (`0x10b1aa99`) sets
-  up each frame's surfaces, a child frame's too. No Underworld view reaches the
-  difference (a strobe-lit surface drawn in a child frame only), see [visual
-  acceptance, Divergence 19](visual-acceptance.md#divergences-found).
-* Mesh and volumetric lighting (`LeafLights`, SetupForActor) remain part of the
-  unsupported mesh lighting.
+  noise"). Since 2026-10-14 the drawn surfaces of every frame count, the main
+  frame's and each mirror and sky child frame's, as DrawFrame (`0x10b1a2d0`) sets
+  them up: children first, then SetupForSurf (`0x10b1aa99`) for each frame's own
+  surfaces; measured in the original as SetupForSurf calls with Frame->Recursion 1
+  at a mirror view ([visual acceptance](visual-acceptance.md#strobe-in-child-frames-2026-10-14)).
+  A moving Strobe light reaches a frame when SetupDynamics' ViewPlanes test takes it
+  for that frame's four planes and Filter puts it on one of that frame's surfaces.
+  The movers' own polygons are not searched for Strobe lights.
+* Mesh and volumetric lighting (`LeafLights`, SetupForActor, LeafVolumetricLighting)
+  are in [mesh lighting](mesh-lighting.md) and [volumetric fog](volumetric-fog.md);
+  which effects they read is in [light effects](light-effects.md#who-reads-lighteffect).
 * Class 2 lights that also sit in a surface's static `LightActors` list would
-  be added twice and unshadowed by the original. Training, Liberty Island,
-  Battery Park and the Mission 5 lab have no such light, and the static path
-  does not model it.
+  be added twice and unshadowed by the original, and the static path does not
+  model it. None of the 15,707 lights the 83 maps' surfaces list is of class 2
+  ([light effects](light-effects.md#census-which-effects-on-which-kind-of-light)).

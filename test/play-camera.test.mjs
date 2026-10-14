@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import * as THREE from 'three';
-import { applyPlayFrame, createPlayCamera, PIXEL_CENTRE, projectionOf, setPixelCentre, setViewAspect } from '../src/viewer/play-camera.mjs';
+import { applyPlayFrame, createPlayCamera, PIXEL_CENTRE, PLAY_FAR, PLAY_NEAR, projectionOf, setCameraCoords, setPixelCentre, setViewAspect } from '../src/viewer/play-camera.mjs';
 
 // The pass frame's projection (play-camera.mjs setFrameProjection): in the
 // rectangle's GL window coordinates a point sits at FX15 + X * Proj.Z / Z
@@ -56,7 +56,10 @@ test('projectionOf reads the frame words and a later FOV frame clears the frame 
   const words = new Array(64).fill(0), u = new Uint32Array(1), g = new Float32Array(u.buffer);
   const word = value => (g[0] = value, u[0]);
   words[12] = 1440; words[13] = 960; words[14] = word(720.5); words[15] = word(480.5); words[20] = word(1032.5);
-  assert.deepEqual(projectionOf(words), { width: 1440, height: 960, fx15: 720.5, fy15: 480.5, projZ: f32(1032.5) });
+  words[60] = word(0.00096); words[0] = word(100); words[3] = word(1);
+  const projection = projectionOf(words);
+  assert.deepEqual({ ...projection, coords: undefined }, { width: 1440, height: 960, fx15: 720.5, fy15: 480.5, projZ: f32(1032.5), rprojZ: f32(0.00096), coords: undefined });
+  assert.deepEqual(projection.coords, [100, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0]);
   assert.equal(projectionOf(new Array(64).fill(0)), null);
   const camera = createPlayCamera();
   applyPlayFrame(camera, { location: [0, 0, 0], rotation: [0, 0, 0], fov: 75 }, { render: true, width: 1440, height: 960 }, projectionOf(words));
@@ -67,4 +70,29 @@ test('projectionOf reads the frame words and a later FOV frame clears the frame 
   assert.equal(camera.view.offsetX, -PIXEL_CENTRE);
   setViewAspect(camera, 1440 / 960, 75);
   assert.ok(Math.abs(camera.fov - THREE.MathUtils.radToDeg(2 * Math.atan(Math.tan(THREE.MathUtils.degToRad(37.5)) / 1.5))) < 1e-9);
+});
+
+test('the camera takes the frame\'s Coords: view axes, origin and the original\'s depth range', () => {
+  // A turned frame: X axis (right) = world +y, Y axis (down) = world -z (looking
+  // along +x pitched 0), Z axis (forward) = world +x. Unreal's [x, y, z] is
+  // three's [y, z, -x].
+  const coords = [10, 20, 30, 0, 1, 0, 0, 0, -1, 1, 0, 0];
+  const camera = createPlayCamera();
+  setCameraCoords(camera, coords);
+  camera.updateMatrixWorld();
+  assert.deepEqual(camera.position.toArray(), [20, 30, -10]);
+  const toCamera = point => point.clone().applyMatrix4(camera.matrixWorldInverse);
+  // One unit forward (+x world) is one unit in front of the camera.
+  const ahead = toCamera(new THREE.Vector3(20, 30, -11));
+  assert.ok(Math.abs(ahead.z + 1) < 1e-12 && Math.abs(ahead.x) < 1e-12 && Math.abs(ahead.y) < 1e-12);
+  // One unit along the X axis (world +y) is to the right; one along -Y (world +z) is up.
+  const right = toCamera(new THREE.Vector3(21, 30, -10)), up = toCamera(new THREE.Vector3(20, 31, -10));
+  assert.ok(Math.abs(right.x - 1) < 1e-12 && Math.abs(up.y - 1) < 1e-12);
+  assert.equal(camera.near, PLAY_NEAR);
+  assert.equal(camera.far, PLAY_FAR);
+  // View depth 1 is depth 0 and the far plane depth 1 (D3DDrv: _33 (1 - 1/Z), _33 = far / (far - 1)).
+  for (const [z, depth] of [[1, 0], [PLAY_FAR, 1], [100, (PLAY_FAR / (PLAY_FAR - 1)) * (1 - 1 / 100)]]) {
+    const clip = new THREE.Vector4(0, 0, -z, 1).applyMatrix4(camera.projectionMatrix);
+    assert.ok(Math.abs((clip.z / clip.w + 1) / 2 - depth) < 1e-9, `depth at ${z}`);
+  }
 });

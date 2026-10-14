@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { textureColorSpace, REENCODE_GLSL } from './original-sampling.mjs';
 import { displayRampGlsl } from './light-atlas.mjs';
 
 /** The page side of Play's light coronas (docs/coronas.md "Play"): the
@@ -22,7 +23,7 @@ export function createCoronaPass(assets, textures, { displayGamma }) {
       (loaded ? textures.get(loaded, reference.index, false)
         : assets.get(reference.package).then(asset => textures.get(asset, reference.index, false))).then(data => {
         const first = data.mips[0], gpu = new THREE.DataTexture(first.data, first.width, first.height, THREE.RGBAFormat);
-        gpu.colorSpace = THREE.SRGBColorSpace; gpu.flipY = false; gpu.magFilter = gpu.minFilter = THREE.LinearFilter;
+        gpu.colorSpace = textureColorSpace(); gpu.flipY = false; gpu.magFilter = gpu.minFilter = THREE.LinearFilter;
         gpu.generateMipmaps = false; gpu.needsUpdate = true;
         entry.texture = gpu;
       }).catch(error => notes.add(`Corona texture ${key}: ${error.message}`));
@@ -36,7 +37,7 @@ export function createCoronaPass(assets, textures, { displayGamma }) {
     material.onBeforeCompile = shader => {
       shader.uniforms.deusDisplayGamma = displayGamma;
       shader.fragmentShader = shader.fragmentShader.replace('#include <common>', '#include <common>\nuniform float deusDisplayGamma;')
-        .replace('#include <colorspace_fragment>', `gl_FragColor = sRGBTransferOETF(gl_FragColor);
+        .replace('#include <colorspace_fragment>', `${REENCODE_GLSL}
           ${displayRampGlsl('deusDisplayGamma', false)}`);
     };
     material.customProgramCacheKey = () => 'deus-corona-v1';

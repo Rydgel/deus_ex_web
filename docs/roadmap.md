@@ -407,13 +407,47 @@ conversation camera with lip sync. The render pass's translations run at its
 24-bit precision ([render-pass precision](render-pass-precision.md)).
 Twenty-six maps match the original's own frames at matched cameras and level time (122 of 130 views)
 ([visual acceptance](visual-acceptance.md)).
-Open: the LOD morph's world-space rounding, a matched capture of the security cameras'
-views (root frames with their own mirror and sky frames, decals, coronas, fog,
-LOD and lighting since 2026-10-11, [viewport window](script-window-viewport.md)), the
-host's depth range and float32 GPU transform under the frame projection, the
+Vertices reach the render device as the original builds them
+([frame projection](frame-projection.md), 2026-10-14): Render.dll's view
+transform and projection and D3DDrv's X, Y, depth and RHW run bit-exact in
+the vertex shader of world surfaces, the fog overlay and actor meshes (a mesh
+draws GetFrame's camera-space buffer), in the main frame and each mirror and
+sky child frame, over the device's depth range (near 1, far 32767) and a camera
+posed from the frame's Coords.
+The security cameras' views (root frames with their own mirror and sky frames, decals,
+coronas, fog, LOD and lighting since 2026-10-11, [viewport window](script-window-viewport.md))
+are matched against captures of the original's own screens (2026-10-14, [visual
+acceptance](visual-acceptance.md#security-cameras-2026-10-14)): five computers, thirteen
+windows, 91 to 93% of an OceanLab window's pixels identical. The comparison found the
+original's texture sampling state (mip level picked, LOD bias -0.5, texels filtered in display space,
+[texture sampling](texture-sampling.md), now in Play) and that Play's canvas is
+multisampled where the original's device is not (`?antialias=0`, the default is
+unchanged); the three maps' cameras look into rooms, so a camera view with a mirror, sky
+frame, fog or coronas is still checked against code and oracles only.
+Open: mover vertices, decals and sprites on the vertex chain
+([frame projection](frame-projection.md#unverified-and-open)), the
 darkest-pixel rounding visual acceptance found, and in live scenes (compared
 tick by tick with the original since 2026-10-13, [visual acceptance](visual-acceptance.md#live-scenes-2026-10-13))
 two Island NPCs, the Club's sitting guests and the dancers' animation.
+Lighting items closed 2026-10-14 ([light effects](light-effects.md)): every
+LightEffect the 83 maps and the packages' scripts reach has its Render.dll body
+translated and compared with the original (spotlights included); Render.dll's
+seven readers of the field are listed, and the effects no shipped light has
+(CloudCast, StaticSpot, Shock, Warp, Interference, Unused, OmniBumpMap) are
+documented as unreachable with the census. The x87 control word was measured in
+the running original: `0x007f` in every lighting computation of the render pass,
+`0x027f` when the light-manager tables are built (they equal Play's bit for bit),
+`0x037f` on the game thread after the first frame
+([render-pass precision](render-pass-precision.md#measured-in-the-running-original-2026-10-14)).
+A strobe-lit surface drawn only in a mirror's child frame flips the Strobe flag, as
+the original does ([visual acceptance](visual-acceptance.md#strobe-in-child-frames-2026-10-14)).
+Matched captures aimed at the effects (16 views, [visual acceptance](visual-acceptance.md#light-effects-against-the-original-2026-10-14))
+match the Searchlight, Rotor, Disco, SlowWave, spot, Cylinder and NonIncidence surfaces at held time; they found one
+open corona divergence (the Ship fan's ceiling lamps, a line check against the bulb decorations).
+Still open in lighting: Windows' own ddraw `DDSCL_FPUSETUP` (measured under Wine
+only), the movers' own polygons in the Strobe scan, the wavers' frames (their
+noise is a host input, checked by the oracle only) and the game thread's
+first two ticks at `0x027f` for ports outside lighting.
 SpriteAnimOnce frames and animated mesh skins
 are recovered or checked but unreachable: no shipped class, map actor or
 script uses DT_SpriteAnimOnce or gives an actor an animated texture
@@ -446,10 +480,10 @@ match the original on Training's BSP (square-root table, all radii, FGetHSV,
 438 filtered surfaces, 72,255 texels). AugLight lights Training's dark room in
 Play. Steady ordinary moving lights now use the original integer pipeline too:
 4,096 table entries, 37,763 reference texels and 11 live camera-light lightmaps
-match their documented original-code comparisons. Spotlights, other light
-effects, the live renderer's FPU control word and original-game visual
-acceptance remain open; see [ordinary moving lights](moving-normal-lighting.md)
-and [moving lights](dynamic-lighting.md).
+match their documented original-code comparisons. Spotlights and every other
+light effect the shipped content reaches followed (below); see
+[ordinary moving lights](moving-normal-lighting.md), [moving lights](dynamic-lighting.md)
+and [light effects](light-effects.md).
 
 **Mesh lighting (2026-09-28).** NPCs, props and the first-person weapon are
 lit by the recovered Render.dll FLightManager path (SetupForActor/Light) and

@@ -152,8 +152,10 @@ export function bindPlayerScene(player,collision,{model,actors,nonColliding=[],z
       return hooks.moveSmoothActor(actor,requested);
     }
     if(actor!==source)unsupported(`${actor.name}.moveSmooth`);
+    // The controlled player's own MoveActor; its early returns leave the
+    // shared Hit unwritten (hitUntouched), as for every source.
     return moveSmooth(actor,requested,{dispatch,moveActor:(target,movement)=>{
-      const r=move(movement);return {result:r.success,time:r.time,normal:r.hit?.normal??[0,0,0],actor:r.hit?.actor??null};
+      const r=move(movement);return {result:r.success,time:r.time,normal:r.hit?.normal??[0,0,0],actor:r.hit?.actor??null,hitUntouched:Boolean(r.hitUntouched)};
     }});
   };
   const moveMover=(mover,delta,rotation=null)=>{

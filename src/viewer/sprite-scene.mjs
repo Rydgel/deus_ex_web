@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { textureColorSpace, REENCODE_GLSL } from './original-sampling.mjs';
 import { toView } from '../unreal/geometry.mjs';
 import { displayRampGlsl } from './light-atlas.mjs';
 import { sharedProceduralTextures } from './procedural-textures.mjs';
@@ -34,7 +35,7 @@ export function createSpriteScene(assets, textures, { displayGamma, stamp }) {
           return;
         }
         const first = data.mips[0], gpu = new THREE.DataTexture(first.data, first.width, first.height, THREE.RGBAFormat);
-        gpu.colorSpace = THREE.SRGBColorSpace; gpu.flipY = false; gpu.magFilter = THREE.LinearFilter;
+        gpu.colorSpace = textureColorSpace(); gpu.flipY = false; gpu.magFilter = THREE.LinearFilter;
         gpu.minFilter = THREE.LinearFilter; gpu.generateMipmaps = false; gpu.needsUpdate = true;
         Object.assign(entry, { texture: gpu, width: data.values.USize ?? first.width, height: data.values.VSize ?? first.height });
       }).catch(error => { entry.failed = error.message; notes.add(`Sprite texture ${key}: ${error.message}`); });
@@ -62,7 +63,7 @@ export function createSpriteScene(assets, textures, { displayGamma, stamp }) {
     material.onBeforeCompile = shader => {
       shader.uniforms.deusDisplayGamma = displayGamma;
       shader.fragmentShader = shader.fragmentShader.replace('#include <common>', '#include <common>\nuniform float deusDisplayGamma;')
-        .replace('#include <colorspace_fragment>', `gl_FragColor = sRGBTransferOETF(gl_FragColor);
+        .replace('#include <colorspace_fragment>', `${REENCODE_GLSL}
           ${displayRampGlsl('deusDisplayGamma', mode === 'modulated')}`);
     };
     material.customProgramCacheKey = () => `deus-sprite-${mode}`;

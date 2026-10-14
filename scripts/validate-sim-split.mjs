@@ -108,8 +108,12 @@ async function run(browser, url) {
         for (let y = 0; y < height; y++) image.data.set(pixels.subarray((height - 1 - y) * width * 4, (height - y) * width * 4), y * width * 4);
         out.getContext('2d').putImageData(image, 0, 0); png = out.toDataURL('image/png').split(',')[1];
       }
-      return {hex, png, width, height};
+      // A preserved buffer that holds a drawn frame (the patch above can miss the call, and a cleared buffer reads all zero).
+      let drawn = 0; for (let i = 3; i < pixels.length; i += 4) drawn += pixels[i] !== 0;
+      return {hex, png, width, height, drawn, preserved: gl.getContextAttributes().preserveDrawingBuffer};
     }, Boolean(option('shots', null)));
+    assert.equal(frame.preserved, true, 'validate-sim-split: the renderer patch keeps the drawing buffer');
+    assert.ok(frame.drawn > 0, 'validate-sim-split: the last frame drew pixels');
     const shot = frame.hex.slice(0, 16);
     if (frame.png) await writeFile(`${option('shots', null)}/${shot}.png`, Buffer.from(frame.png, 'base64'));
     return {url, digests, shot, errors};

@@ -188,6 +188,7 @@ async function handle(data) {
         else if (data.method === 'meshLightProbe') value = meshLightProbe(host.meshLighting, game, data.args ?? {});
         else if (data.method === 'renderPassProbe') value = await renderPassProbe(game, data.args ?? {});
         else if (data.method === 'iteratorProbe') value = host.session.iteratorState(data.args ?? {});
+        else if (data.method === 'strobeProbe') value = host.session.strobeReach(data.args ?? {});
         else if (data.method === 'moverProbe') value = (await import('./mover-probe.mjs')).moverProbe(game, host.session, data.args ?? {});
         else if (data.method === 'terminalProbe') value = (await import('./terminal-probe.mjs')).terminalProbe(game, host.session, data.args ?? {});
         else if (data.method === 'moverDecalProbe') value = (await import('./mover-probe.mjs')).moverDecalProbe(game, host.session, data.args ?? {});

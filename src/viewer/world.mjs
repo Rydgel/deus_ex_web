@@ -6,6 +6,7 @@ import { brushMatrix } from './transforms.mjs';
 import { moverGroupMatrix } from './mover-matrix.mjs';
 import { createLighting, pointZone } from '../unreal/lighting.mjs';
 import { LightAtlas, applyLightAtlas } from './light-atlas.mjs';
+import { frameProjection, FRAME_PROJECTION_KEY } from './frame-projection.mjs';
 import { readPolys, moverModelFromPolys } from '../unreal/polys.mjs';
 import { createMovingLights } from './moving-lights.mjs';
 import { createMirrors } from './mirrors.mjs';
@@ -17,6 +18,7 @@ import { createLightFrame } from '../runtime/static-lighting.mjs';
 import { createNativeRng } from '../runtime/rng.mjs';
 import { createFogPass } from './fog-pass.mjs';
 import { createWorldVisibility } from './world-visibility.mjs';
+import { configureSampler } from './original-sampling.mjs';
 import { loadScriptVmKernel } from '../runtime/script-vm-kernel.mjs';
 
 /** Whether a light map record's points meet a frustum, or any of a list of
@@ -53,13 +55,12 @@ export async function createWorld(map, asset, assets, onProgress = () => {}, {ba
     if (!textureGPU.has(texKey)) {
       const first = data.mips[0];
       const tex = new THREE.DataTexture(first.data, first.width, first.height, THREE.RGBAFormat);
-      tex.colorSpace = THREE.SRGBColorSpace; tex.flipY = false;
+      tex.flipY = false;
       tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
-      tex.magFilter = flags & POLY.NoSmooth ? THREE.NearestFilter : THREE.LinearFilter;
       const last = data.mips.at(-1), complete = last.width === 1 && last.height === 1;
       if (complete && data.mips.length > 1) tex.mipmaps = data.mips;
       tex.generateMipmaps = !complete;
-      tex.minFilter = flags & POLY.NoSmooth ? THREE.NearestMipmapNearestFilter : THREE.LinearMipmapLinearFilter;
+      configureSampler(tex, Boolean(flags & POLY.NoSmooth));
       tex.needsUpdate = true;
       textureGPU.set(texKey, tex);
     }
@@ -279,7 +280,11 @@ export async function createWorld(map, asset, assets, onProgress = () => {}, {ba
       const geometry = new THREE.BufferGeometry();
       geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
       geometry.computeBoundingSphere();
-      const mesh = new THREE.Mesh(geometry, new THREE.MeshBasicMaterial({ colorWrite: false, side: Number(side) }));
+      const backdropMaterial = new THREE.MeshBasicMaterial({ colorWrite: false, side: Number(side) });
+      // Depth only, at the depth the world's polygons have (docs/frame-projection.md).
+      backdropMaterial.customProgramCacheKey = () => `deus-ex-backdrop:${FRAME_PROJECTION_KEY}`;
+      backdropMaterial.onBeforeCompile = shader => frameProjection.patch(shader);
+      const mesh = new THREE.Mesh(geometry, backdropMaterial);
       mesh.matrixAutoUpdate = false;
       mesh.userData = { actor: actorName, backdrop: true, model: model.entry.name };
       mesh.renderOrder = -1; // before anything it hides

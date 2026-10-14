@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import {POLY} from '../unreal/geometry.mjs';
 import {applyLightAtlas} from './light-atlas.mjs';
+import {D3D_LOD_BIAS_GLSL} from './original-sampling.mjs';
 
 const MAX_TEXTURES = 8;
 
@@ -110,7 +111,7 @@ function applyTextureSelection(material, textures, stride) {
       // Implicit derivatives must execute in uniform control flow. Explicit
       // textureGrad differs at mip/alpha edges on Metal, so retain the exact
       // old lookup for every sampler before selecting this triangle's texel.
-      ${textures.map((_, i) => `vec4 deusSample${i} = texture2D(deusMap${i}, vMapUv);`).join('\n')}
+      ${textures.map((_, i) => `vec4 deusSample${i} = texture2D(deusMap${i}, vMapUv, ${D3D_LOD_BIAS_GLSL});`).join('\n')}
       highp int deusTextureIndex = int(floor(vDeusLightUV.z + 0.5)) / ${stride};
       vec4 sampledDiffuseColor;
       ${textures.map((_, i) => `${i ? 'else ' : ''}${i < textures.length - 1 ? `if (deusTextureIndex == ${i})` : ''}

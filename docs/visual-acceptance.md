@@ -395,6 +395,49 @@ each capture.
   path ignore a child frame's own LOD state (a mutation of `applyPass`)
   differs in 1,359 bytes, up to 80, and fails it.
 
+### Light effects against the original (2026-10-14)
+
+The 26-map table aimed at the map's own start poses, which seldom look at an effect-lit surface. These views are aimed at one
+effect's surfaces ([light effects](light-effects.md)): the camera sits 150 to 450 units from the light and looks at it (chosen by
+Play's reach, the main frame drawing the most surfaces whose light list holds the light), or straight down from beside it. Both clocks
+are held at the same TimeSeconds (the original's, to 1 ms), the level is frozen, the frames are raw 1280x720 at Brightness 0.4, and the original's debugger
+probe (`--cw-probe`, [render-pass precision](render-pass-precision.md#measured-in-the-running-original-2026-10-14)) reads which
+spatial body ran at each camera and its control word.
+
+| Map, light | View | Play / original | Mean abs. diff. | Edge recall / precision | Outlier blocks | Original body, hits (`0x007f` all) |
+| --- | --- | ---: | ---: | ---: | ---: | --- |
+| WanChai Garage, Searchlight Light6, Light10 (periods 1 and 2) | garage1 | 1.205 | 2.65 | .986 / .995 | 0 | Searchlight 143 |
+| | garage2 | 1.208 | 3.88 | .974 / .953 | 2 | Searchlight 159 |
+| | garage3 (from beside the light, down) | 1.353 | 2.35 | .975 / .989 | 0 | Searchlight 477 |
+| Ship fan, Rotor Light10 | fan1 | 1.287 | 3.58 | .966 / .978 | 0 | normal 97 |
+| | fan2 | 1.28 | 3.74 | .959 / .966 | 0 (10 before the tracked corona trace) | Rotor 159 |
+| | fan3 (down) | 1.285 | 3.56 | .985 / .993 | 0 | normal 141 |
+| Paris Club, Disco Light3 | club1 | 1.337 | 3.26 | .963 / .977 | 0 | Disco 96 |
+| | club2 | 1.366 | 2.83 | .966 / .979 | 0 | Disco 138 |
+| | club3 (down) | 1.319 | 3.21 | .985 / .980 | 0 | Disco 274 |
+| | club4 | 1.347 | 2.76 | .982 / .979 | 0 | Disco 233 |
+| Ship's hold, SlowWave Light16, Light17 (Pulse, period 100) | below1 | 1.333 | 3.22 | .981 / .988 | 0 | SlowWave 209 |
+| | below2 (down) | 1.362 | 3.84 | .991 / .988 | 0 | SlowWave 276 |
+| NYC Street, Spotlight Light26 (a lamp's pool) | street1 | 1.330 | 1.63 | .984 / .988 | 0 | spot 5, normal 5 (built once, see below) |
+| NYC Street, Cylinder Light137 | street2 | 1.341 | 2.81 | .962 / .971 | 0 | Cylinder 6, spot 3, normal 6 |
+
+The ratio is the uniform brightness gap (1.2 to 1.46 here, higher on the darkest scenes), which stays outside this
+work. Every view's geometry, light pools, sweeping sectors and gradients line up; the Searchlight, Rotor, Disco and SlowWave bodies, which
+change every frame, match at the held phase.
+
+- *Ship fan fan2: the coronas, closed 2026-10-14.* The 10 outlier blocks were three coronas Play drew and the original hides,
+  Light34, Light35 and Light36. The original's helper finds those three blocked by the moving brush tracker's fragments of
+  DeusExMover1, which sit in Level->Model; it was not the Lightbulbs' cylinders. Play's corona scan now traces the tracked model,
+  and the matched capture gives 0 outlier blocks, mean absolute difference 3.74 (6.17 before), edge recall .959 and precision .966
+  ([coronas](coronas.md) "Lights behind a mover's fragments", `validate-coronas-tracked`, `validate-coronas-mover-play`).
+- *Garage garage2.* The 2 outlier blocks are on the ceiling's bright white strip lights; the red and blue ceiling panels differ by the
+  darkest-pixel rounding (raw 1.9 against 2.9 on the red panel, a crop at ratio 1.38).
+- *Class 0 spot, Cylinder and NonIncidence bodies.* A static light's body runs once, into the cached static map, when a surface is first
+  drawn, so a probe that attaches after the camera moved sees no call; `--cw-probe-early` attaches before it moves. Then the street's
+  spot (8 calls) and Cylinder (6) bodies and Training's corridor views (trainA, trainB: `-100,840,30` and `1200,840,30` looking down +x, the six NonIncidence
+  lights) spot, NonIncidence and normal bodies run at `0x007f`. Their frames match too: the table's street rows, and Training's trainA (Play / original 1.423,
+  mean abs. diff. 1.70, edge .954 / .957, 0 outlier blocks) and trainB (1.272, 3.77, .978 / .992, 0).
+
 ## Live scenes (2026-10-13)
 
 The sections above compare frozen levels. A live level (NPCs walking, animation, particles, generators) cannot be pixel-aligned
@@ -492,6 +535,56 @@ The matched-camera views (`visual-acceptance.mjs`) hold the state the same way: 
 light lit) or 1 (dark), the original through `dx-live-win.exe strobe hold` (the Strobe function's flip, `0x10b05b4b`, patched to a jump while it is held) and Play with
 `TimeDilation 0` and `liveProbe({strobe: {flag, time}})`. A free-running capture's phase is a coin flip on each side; Divergence 19 is the case it misread as a mirror
 defect.
+
+### Strobe in child frames (2026-10-14)
+
+Render.dll's DrawFrame (`0x10b1a2d0`) calls itself on `Frame->Child` and the siblings first (the loop at `0x10b1a339`,
+through `0x10b0102d`) and then sets up its own surfaces: SetupForSurf (`[0x10b3059c]` slot +0xc, `0x10b1aa99`) for each
+surface of the frame. The Strobe function runs inside, for every surface whose light list holds a live Strobe light, so the flag
+flips when a mirror's child frame draws a strobe-lit surface the main frame does not. `lightMapStrobe` (sim-session.mjs) scanned
+the main frame's drawn nodes; it now scans every frame's (and a moving Strobe light must pass SetupDynamics' ViewPlanes test of
+that frame).
+
+**The scene.** An aimed view of the Underworld club, camera (-1081, -2010, -336) at yaw 54769 (230 units from TriggerLight1,
+looking at the floor mirrors). Play's reach (`strobeProbe`): the main frame draws no surface whose light list holds TriggerLight1,
+the mirror's child frame draws 24 (101 nodes). The club's dancers are lit by the same light and call the Strobe function
+from SetupForActor, which would flip the flag first, so the views hide them on both sides
+(`--cmd 'set ScriptedPawn bHidden True'`; `visual-acceptance.mjs` takes `--cmd` for the original's console and Play's viewProbe).
+A search found 60 of 148 sampled cameras around it (x -1300 to -1050, y -2150 to -1900, yaw 53500 to 57500) with a child frame
+and no strobe-lit surface in the main frame.
+
+**The original** (`scripts/original-views.sh ... --strobe-poll --cw-probe`; `tools/dx-fpu-win.c` attached for 6 seconds at each camera):
+
+| Camera | SetupForSurf calls by Frame->Recursion | Kept TimeSeconds over 120 polls |
+| --- | --- | --- |
+| aimed (c0, flag held 0) | recursion 1: 3,932, recursion 0: 51, over 51 frames (DrawFrame: 51 and 51) | 117 distinct values, 116 steps: the Strobe function runs every frame; the flag changed at 76 of them (a poll can span two frames) |
+| aimed (c0, flag held 1) | recursion 1: 4,208, recursion 0: 54, over 54 frames | |
+| a direct view (d) | recursion 1: 2,351, recursion 0: 936, over 79 frames | 117 distinct values |
+| a wall view (p2) | recursion 0 only: 534, over 534 frames | 1 value: no call |
+
+So the original sets up the child frame's 77 surfaces a frame through SetupForSurf (Recursion 1) while the main frame
+sets up one, and calls the Strobe function every frame there with no mesh lit by it.
+
+**Play.** `scripts/validate-strobe-child-frames-play.mjs` (worker mode, pawns hidden): at the aimed camera the scan finds
+0 strobe-lit nodes in the main frame and 101 in the child frame, and the flag flips at all 23 new TimeSeconds; at a direct view
+(d) it flips at all 23 (6 main-frame nodes); at the wall view (p2) at none. With the first version's scan (`strobeProbe({mainOnly:
+true})`) the aimed camera flips at none of 23, so the scene discriminates the change. Cost (interleaved medians of
+2,000 calls, 3 rounds): 4.0 µs a frame at the aimed camera (0.35 µs before), 2.5 µs at a direct view (2.6), 0.35 µs where no
+frame draws a strobe-lit surface; the scan runs only in maps with a Strobe light (Underworld, Ship fan, Endgame 4).
+
+**Matched frames** (flag held 0 and 1, both clocks at TimeSeconds 54.179, pawns hidden): the reflected dance floor, lit and
+dark, equals the original's.
+
+| View | Play / original | Mean abs. diff. | Edge recall / precision | Outlier blocks |
+| --- | ---: | ---: | ---: | ---: |
+| c0_s0 (lit) | 1.212 | 4.65 | .986 / .988 | 0 |
+| c0_s1 (dark) | 1.197 | 2.92 | .992 / .989 | 0 |
+
+(The ratio is the uniform brightness gap. The unsuffixed views d and p2 are free-running in the flag, so they are polled and not
+compared.)
+
+**Not covered.** The movers' own polygons are still not searched for Strobe lights. The Strobe lists come from the lights that are
+Strobe at load. A Strobe light seen only in a sky child frame has no case in the shipped maps (the sky zones hold no lights).
 
 ### Placement constraint
 
@@ -880,11 +973,10 @@ constant 0.0.
     direct view uses, and the cadence equals the original's at all seven cameras. The change is in the harness: paired states, the Hyprland window selection (the largest client of
     the class, as `live-acceptance.mjs` does; the first client was a hidden log window), `--unfreeze`, `--strobe-poll`. **Check.** `scripts/validate-strobe-mirror-play.mjs` (worker mode; the cadence
     at seven cameras, the held lit/dark ratios within 10% of the original's, the unfrozen light; fails without the `viewProbe` change).
-    **Not reached.** `DrawFrame` (`0x10b1a2d0`) calls SetupForSurf through the light manager (`[0x10b3059c]`, slot +0xc, at `0x10b1aa99`) for each frame's surfaces, children first, so a
-    strobe-lit surface drawn only in a child frame would flip the flag; Play's `lightMapStrobe` reads the main frame's drawn nodes only. In this map a main frame that shows a mirror
-    always draws a surface the strobe lights: a sweep of 200 random views of the dance floor and its surroundings (Play, the flag's flips per new TimeSeconds over 23 frames) had 62 with a child
-    frame, 60 of them flipping at every step; the other two stand in the restroom, 900 units from the light, where the child frame shows the restroom too and neither frame draws a strobe-lit
-    surface. So the difference has no case in this map to be measured on, and `lightMapStrobe` is left as it is (unverified, not unsupported: no shipped view known to reach it).
+    **Not reached, then closed.** `DrawFrame` (`0x10b1a2d0`) calls SetupForSurf through the light manager (`[0x10b3059c]`, slot +0xc, at `0x10b1aa99`) for each frame's surfaces, children first, so a
+    strobe-lit surface drawn only in a child frame flips the flag; Play's `lightMapStrobe` read the main frame's drawn nodes only. A sweep of 200 random views of the club did not separate the two (62 had a child frame,
+    60 flipped at every step; each also drew a dancer lit by the same light, whose SetupForActor flips the flag first, or a strobe-lit surface in the main frame). With the dancers hidden and the camera aimed
+    at the floor mirrors, 230 units from the light, the scene exists: [Strobe in child frames](#strobe-in-child-frames-2026-10-14).
 
 ### Weapon noise (2026-10-14)
 
@@ -1152,8 +1244,209 @@ node scripts/visual-acceptance.mjs compare --maps 06_HongKong_WanChai_Underworld
 wine ad/build/dx-live-win.exe strobe poll 120 5 | strobe hold 0 | strobe release      # the running original's Strobe flag (free-running, held at a value, released)
 ```
 
+```bash
+# the club's floor in the mirror with no pawn mesh lit by the strobe, on both sides; the polls and a debugger probe of the original at each camera
+scripts/original-views.sh 06_HongKong_WanChai_Underworld --view c0_s0:-1081,-2010,-336:0,54769,0 --view c0_s1:-1081,-2010,-336:0,54769,0 --cmd 'set ScriptedPawn bHidden True' --strobe-poll --cw-probe
+node scripts/visual-acceptance.mjs play --maps 06_HongKong_WanChai_Underworld --view c0_s0:-1081,-2010,-336:0,54769,0 --view c0_s1:-1081,-2010,-336:0,54769,0 --cmd 'set ScriptedPawn bHidden True'
+node scripts/validate-strobe-child-frames-play.mjs                                 # Play's side: the reach, the cadence, the failing baseline
+scripts/original-fpu.sh 01_NYC_UNATCOIsland 170                                    # the original's control word at start-up and the pass's entry points (start-up scene), and its light-manager tables (.work/fpu)
+scripts/original-views.sh 04_NYC_Street --view street1:-264,-256,-452:-343,32616,0 --cw-probe --cw-probe-early   # the loaded map's pass functions and static light bodies at a camera
+node scripts/validate-original-light-tables.mjs                                    # those tables against Play's builders
+```
+
 `live-original.sh` takes the Wine lock (`.work/wine-deusex.lock`), refuses to start with another DeusEx.exe running and quits the game by
 its PID; Play runs headless Chromium in worker mode.
+
+## Security cameras (2026-10-14)
+
+The security computers' camera views ([ViewportWindow](script-window-viewport.md)) matched against the original's
+own frames: the same map, camera actors, camera rotations, level time and player pose, in the same 1280 x 720 screen.
+Five computers on five maps, thirteen camera windows of 200 x 150 pixels.
+
+### Method
+
+`scripts/camera-original.sh <map> --computer C --user U --password P --cameras A,B,C --name n` (under the Wine lock) drives
+the original through the terminal's real path and `scripts/camera-acceptance.mjs play ...` does the same in Play; `compare`
+measures each window.
+
+1. **The route.** The map is opened from the console; `ghost` lets JC fly through the walls in a straight line to the point
+   56 units in front of the computer (aim with `ViewRotation`, hold W, measure, repeat); `walk` puts him on the floor with his
+   collision; `ViewRotation` aims at the computer; the right click frobs it (`Computers.Frob`, state On: Activate,
+   `FinishAnim`, `TryInvoke`, `InvokeComputerScreen`); the login is typed (`type`, Tab, Enter). No `set Location`: the level
+   ticks ([Placement constraint](#placement-constraint)). `set DeusEx.JCDentonMale ReducedDamageType All` stops the
+   turrets and guards of an enemy's rooms (Island's holding cell) from killing him; Play's run sets the same.
+2. **Held keys.** `dxinput`'s posted `WM_KEYDOWN` does not hold a key in this game (the note under
+   [Placement constraint](#placement-constraint): W and Up did not move a ghost), though the window had the Wine focus; WinDrv
+   imports `GetKeyState`, which a posted message does not update, and a key sent through the input queue does. `shold <key> <ms>` sends it through the Wine input queue (`keybd_event`), and the ghost
+   flies at about 800 units/s. The window must be floating, 1280 x 720 and the one Wine gives the input (`focus`).
+3. **The screenshot under a modal screen.** `XModalWindow::VisibilityChanged` grabs every keyboard key and mouse button
+   (`XRootWindow::Process` returns 1 for them), so no binding (`*`, a mouse button) reaches `Shot`. The root window's own
+   `DeusExRootWindow.VirtualKeyPressed` calls `ConsoleCommand("SHOT")` for Print Screen (key 44) and Ctrl+F9, and that key does
+   get through (`key PRINT`).
+4. **Holding the level.** The tracer (`tools/dx-live-win.c`, `release 1`, `max-seconds 8`) returns from `ULevel::Tick` eight
+   seconds after the frob, with the terminal's screen open and the camera views drawing: the camera actors, the clock and the
+   lights stand, the UI goes on. Its last row and `dump-actor-win` give the state: `LevelInfo.TimeSeconds`, each camera actor's
+   Location and Rotation, JC's Location, Rotation, ViewRotation and animation fields (sequence, frame, blend arrays).
+5. **Play.** The same route (`terminalProbe` puts JC in front of the computer; the page's right click frobs it; the login is
+   typed), `viewProbe`'s dilation steps run the level to the original's TimeSeconds (a few milliseconds of difference: Play's
+   frames run ahead of its reads, so each speed stops short of the target), and the level is held (bPlayersOnly, TimeDilation
+   0.001). The cameras and JC then stand where the original's were (`terminalProbe` `placeCamera` and `playerPose`; his
+   animation frame is written with a rate of 0, because his own ticks follow the page's frames, not the level's dilation).
+   Play's canvas multisampling is off (`?antialias=0`, below).
+6. **Brightness.** The ini's default, 0.6, is not the framebuffer: Shot bakes a ramp of its own into the bitmap. Against the
+   compositor's capture of the window (`grim`, with the window made opaque), a Shot at Brightness b is the framebuffer to the
+   power 1/k with k = 0.77, 0.88, 1.02, 1.18 at b = 0.5, 0.6, 0.7, 0.8 (about 1.5 b), and at b = 2/3 it is the framebuffer
+   (0.08% of the pixels differ, the moving ones; in a bright outdoor view every Shot value from 0 to 255 maps to itself). So a Shot at 0.6 is the framebuffer to the 1.11, darker than Play's raw
+   colours by the "uniform gap" listed under Open, and a Shot at 0.8 brighter. The capture sets
+   `set WinDrv.WindowsClient Brightness 0.666667` in the original (Play's ramp is untouched, and the page is captured at its
+   identity ramp as before): the windows' mean values then agree to 1% (the ratio column below), where the earlier frames at
+   0.6 were 1.13 to 1.41 apart.
+
+### Result
+
+Mean absolute difference over 0..255 (MAD), and the share of the original's Sobel edges Play has within 2 pixels (recall) and
+the converse (precision), per window; `ratio` is Play's mean over the original's. Captures and montages in
+`.work/acceptance/<map>/<name>-*` (outside Git): `-original.png`, `-<variant>.png` (Play), `-w<k>-<variant>-montage.png`
+(original, Play, difference x6, enlarged 3x), `-state.json` (the original's measured state), `-<variant>.json`.
+
+| Map, computer (cameras; level time original / Play) | step | MAD, windows 1 / 2 / 3 | edge recall | edge precision |
+| --- | --- | ---: | ---: | ---: |
+| 14_OceanLab_Lab ComputerSecurity1 (SecurityCamera0, 4, 3: URV Bay, Crew Module, Greasel Lab; 135.612 / 135.617) | master | 0.26 / 1.58 / 0.62 | .966 / 1 / .997 | .962 / 1 / .999 |
+| | no multisampling | 0.11 / 0.86 / 0.46 | .968 / 1 / .998 | .968 / 1 / .999 |
+| | sampling state | 0.19 / 1.13 / 0.32 | .987 / 1 / .999 | .999 / 1 / .995 |
+| | sampling state and no multisampling | 0.04 / 0.31 / 0.15 | .987 / 1 / 1 | .995 / 1 / 1 |
+| | + display-space filtering | **0.00 / 0.15 / 0.02** | .989 / 1 / .999 | .994 / 1 / .998 |
+| 02_NYC_BatteryPark ComputerSecurity2 (SecurityCamera1, 2, 0: Storage Warehouse, Tunnel Bridge, Boathouse Approach; 229.006 / 229.011) | master | 0.62 / 0.21 / 0.85 | .981 / .990 / .955 | .981 / .992 / .988 |
+| | no multisampling | 0.52 / 0.16 / 0.65 | .978 / .986 / .954 | .981 / .991 / .984 |
+| | sampling state | 0.26 / 0.14 / 0.41 | .998 / .997 / .999 | .991 / .988 / .999 |
+| | sampling state and no multisampling | 0.15 / 0.08 / 0.19 | .999 / .999 / 1 | .995 / .992 / 1 |
+| | + display-space filtering | **0.00 / 0.09 / 0.01** | 1 / .997 / 1 | 1 / .997 / 1 |
+| 01_NYC_UNATCOIsland ComputerSecurity1 (SecurityCamera5, JC in view; 252.714 / 252.717), the terrorists' region masked (x 2 to 69, y 50 to 93 of the window) | master | 0.35 | .946 | .959 |
+| | no multisampling | 0.45 | .939 | .936 |
+| | sampling state | 0.12 | .992 | .985 |
+| | sampling state and no multisampling | 0.07 | .992 | .994 |
+| | + display-space filtering | **0.01** | .998 | 1 |
+| 06_HongKong_WanChai_Market ComputerSecurity0 (SecurityCamera2, 0, 1: Market lane 1, 2, 3; 175.209 / 175.223) | master | 1.54 / 1.86 / 0.63 | .989 / .990 / .984 | .997 / 1 / .991 |
+| | no multisampling | 1.07 / 1.54 / 0.37 | .993 / .990 / .984 | .988 / .999 / .987 |
+| | sampling state | 0.95 / 1.09 / 0.42 | .995 / .996 / .991 | .998 / 1 / .997 |
+| | sampling state and no multisampling | 0.37 / 0.66 / 0.14 | .997 / .997 / .999 | .997 / .999 / .997 |
+| | + display-space filtering | **0.04 / 0.20 / 0.01** | 1 / .997 / 1 | 1 / 1 / .999 |
+| 09_NYC_Ship ComputerSecurity3 (SecurityCamera1, 19, 18: Entry Area, Locker Room, Break Room; 231.290 / 231.304) | master | 0.70 / 4.71 / 0.37 | .956 / .692 / .955 | .993 / .517 / .914 |
+| | no multisampling | 0.53 / 5.11 / 0.23 | .951 / .615 / .966 | .995 / .514 / .976 |
+| | sampling state | 0.36 / 4.51 / 0.15 | .999 / .732 / .999 | .995 / .537 / .971 |
+| | sampling state and no multisampling | 0.17 / 4.39 / 0.03 | .997 / .711 / .999 | .996 / .525 / 1 |
+| | + display-space filtering | **0.05** / 4.35 / 0.11 | .999 / .710 / .984 | 1 / .527 / .950 |
+
+With the sampling state and no multisampling 91 to 93% of the OceanLab windows' pixels are identical to the original's (Battery Park: 75 to
+83%) and 98 to 99.9% of the pixels of both maps differ by at most 2 of 255; with the display-space filtering as well 98.9 to 99.8% of
+OceanLab's are identical and 89.5 to 99.3% of Battery Park's (the rest of window 2 is two walking actors). Of each OceanLab window's 30,000
+pixels 3, 287 and 116 differ by more than 10 without it (3, 171 and 15 with it); Battery Park's largest differences are 12, 7 and 23 (48, 42 and 17). The windows' mean values agree to 0.2 to 1.3%. The Island window with
+three NSF terrorists in it (Terrorist2, 18 and 30: they walk and animate differently in the two programs, [live scenes](#live-scenes-2026-10-13)) is 0.64 to 0.74 MAD and
+edge recall .77 to .81 unmasked; JC himself (mesh, lighting from the camera's frame, his shadow decal) agrees in the 24 x 32 pixels
+around him (MAD 0.14, recall .949, precision 1.0). The level times agree to 5 ms.
+
+The same variants on the stored main-frame views (`visual-acceptance.mjs play`, 4 maps x 5 views, the original's frames at the
+ini's default brightness, so MAD carries the Shot ramp above): master MAD 2.098, edge recall .9726, precision .9197; sampling
+state 1.913, .9803, .9206; sampling state and no multisampling 1.922, .9837, .9186 (OceanLab_Lab 3.07 to 2.33, Island's recall
+.978 to .992, Battery Park's .974 to .987; the Club's precision .75 is as before).
+
+Ship's window 2 (the locker room) differs by a door: a `DeusExMover` stands half open in the original and not in Play (a mover's state
+in a live level, like the actors' positions; it is the 4.4 in the table, and the other two windows are the renderer). Hong Kong's
+three windows hold the market's signs and neon, Ship's window 1 the entry's potted plants (actor meshes with masked skins).
+
+### Main views at Brightness 2/3
+
+The 20 stored main views (4 maps x 5) were retaken in the original at Brightness 2/3 (`scripts/original-views-b.sh ...
+--brightness 0.666667`, Shot == framebuffer) and compared with Play at the same held times, canvas multisampling off
+(`play --query antialias=0`, with the sampling variants below), per view and over the 20:
+
+| Play | mean luminance, Play / original | per view | mean absolute difference |
+| --- | ---: | --- | ---: |
+| master (`?sampling=legacy`) | 0.9974 | 0.80 to 1.05 | 0.347 |
+| mip state (`?sampling=srgb`) | 1.0119 | 0.80 to 1.08 | 0.285 |
+| mip state and display-space filtering (the default) | 1.0026 | 0.975 to 1.032, 17 of 20 at 1.000 | 0.065 |
+
+Per view (mean of the three channels over 0..255, Play's mean over the original's in brackets, and the mean absolute difference from the
+original's frame):
+
+| map, view | original mean | master: mean (ratio) MAD | mip state: mean (ratio) MAD | mip state and display-space filtering: mean (ratio) MAD |
+| --- | ---: | ---: | ---: | ---: |
+| 14_OceanLab_Lab down | 9.138 | 8.565 (0.937) 0.667 | 9.558 (1.046) 0.450 | 9.431 (1.032) 0.311 |
+| 14_OceanLab_Lab y0 | 8.882 | 7.135 (0.803) 1.791 | 7.137 (0.804) 1.770 | 8.663 (0.975) 0.253 |
+| 14_OceanLab_Lab y1 | 13.526 | 12.994 (0.961) 0.922 | 13.735 (1.015) 0.240 | 13.842 (1.023) 0.323 |
+| 14_OceanLab_Lab y2 | 4.747 | 4.766 (1.004) 0.026 | 4.767 (1.004) 0.021 | 4.747 (1.000) 0.001 |
+| 14_OceanLab_Lab y3 | 14.042 | 14.682 (1.046) 0.640 | 15.091 (1.075) 1.049 | 14.042 (1.000) 0.000 |
+| 01_NYC_UNATCOIsland down | 12.316 | 12.669 (1.029) 0.484 | 12.680 (1.030) 0.371 | 12.316 (1.000) 0.008 |
+| 01_NYC_UNATCOIsland y0 | 9.109 | 9.412 (1.033) 0.466 | 9.423 (1.034) 0.358 | 9.109 (1.000) 0.077 |
+| 01_NYC_UNATCOIsland y1 | 5.089 | 5.153 (1.013) 0.140 | 5.159 (1.014) 0.118 | 5.089 (1.000) 0.054 |
+| 01_NYC_UNATCOIsland y2 | 5.457 | 5.636 (1.033) 0.233 | 5.633 (1.032) 0.202 | 5.461 (1.001) 0.033 |
+| 01_NYC_UNATCOIsland y3 | 5.564 | 5.651 (1.016) 0.202 | 5.661 (1.017) 0.137 | 5.564 (1.000) 0.043 |
+| 10_Paris_Club down | 5.540 | 5.550 (1.002) 0.013 | 5.550 (1.002) 0.012 | 5.540 (1.000) 0.000 |
+| 10_Paris_Club y0 | 5.917 | 5.960 (1.007) 0.063 | 5.962 (1.008) 0.047 | 5.917 (1.000) 0.000 |
+| 10_Paris_Club y1 | 3.003 | 3.014 (1.004) 0.012 | 3.014 (1.004) 0.012 | 3.003 (1.000) 0.000 |
+| 10_Paris_Club y2 | 3.857 | 3.865 (1.002) 0.012 | 3.866 (1.002) 0.009 | 3.857 (1.000) 0.000 |
+| 10_Paris_Club y3 | 3.416 | 3.429 (1.004) 0.013 | 3.429 (1.004) 0.013 | 3.416 (1.000) 0.000 |
+| 02_NYC_BatteryPark down | 16.774 | 16.951 (1.011) 0.472 | 16.959 (1.011) 0.291 | 16.773 (1.000) 0.121 |
+| 02_NYC_BatteryPark y0 | 7.884 | 7.981 (1.012) 0.307 | 7.983 (1.012) 0.139 | 7.881 (1.000) 0.046 |
+| 02_NYC_BatteryPark y1 | 10.212 | 10.506 (1.029) 0.312 | 10.505 (1.029) 0.302 | 10.214 (1.000) 0.014 |
+| 02_NYC_BatteryPark y2 | 4.126 | 4.246 (1.029) 0.124 | 4.246 (1.029) 0.124 | 4.126 (1.000) 0.007 |
+| 02_NYC_BatteryPark y3 | 1.964 | 2.000 (1.018) 0.038 | 2.000 (1.018) 0.037 | 1.964 (1.000) 0.005 |
+
+Master's overall brightness is right on average because its per-view errors cancel (OceanLab's y0 is 20% dark, y3 5% bright; the
+per-view brightness error averages 3.0% and falls to 0.4% with the colour-space change; Paris Club's five views have a mean absolute difference of 0.000
+with it). The mip state alone brightens Play by about 1% (a finer level than trilinear gave, filtered in linear light); the display-space
+change (cause 3) removes that and the per-view errors.
+
+### Causes
+
+1. **Texture sampling.** The window's pixels are minified several times more than the main view's, so the mip choice shows.
+   Play sampled world, actor and decal textures trilinear with no bias; D3DDrv's stage setup (`0x10009e20`) is LINEAR magnification
+   and minification, MIPFILTER POINT (`UseTrilinear=False`) and a LOD bias of -0.5, and POINT filters for PF_NoSmooth. A bias scan
+   of the three OceanLab windows (-1, -0.5, -0.25, 0 on the batched world shader) has its minimum at -0.5 (MAD 0.04 / 0.31 / 0.16
+   against 0.21 / 0.88 / 0.37, 0.07 / 0.60 / 0.31 and 0.10 / 0.92 / 0.44). Fixed in `src/viewer/original-sampling.mjs`;
+   evidence, addresses and validator in [texture sampling](texture-sampling.md).
+2. **Multisampling.** `main.mjs` makes the canvas multisampled (`antialias: true`); the original's Direct3D 7 device has none. In
+   a camera window every polygon edge and every sub-4-pixel mesh took partial coverage: the OceanLab window's four small bright
+   dots (the camera frame has no sprites, decals or coronas there; its actors are a crate and four fish at that distance) are
+   3 x 3 pixels of one value in the original (220, 219, 214 / 225, 216, 215 / 220, 220, 213) and came out as 25%-step coverage
+   patterns in Play (61, 166, 112 / 114, 218, 112 / 63, 114, 61); with multisampling off they are 218, 218, 215 / 219, 218, 215
+   / 222, 220, 215. `?antialias=0` turns it off (the comparison uses it; the default is unchanged). The main frames' metrics
+   move little (above) because their edges are a smaller share of the pixels.
+3. **Filtering space.** Play uploads base textures as sRGB, so the GPU filters them in linear light and the shaders
+   re-encode; Direct3D 7 blends the 8-bit display-space values (a mix of black and white is 127, where Play gave 188). With the mip state
+   it removes most of the residual below (Hong Kong 0.37 / 0.66 / 0.14 to 0.04 / 0.20 / 0.01; OceanLab to 0.00 / 0.15 / 0.02, 99% of its
+   pixels identical; Battery Park 0.00 / 0.09 / 0.01; Island 0.01 with the moving actors masked; Ship window 3 gets worse, 0.03 to 0.11) and
+   brings the main views' mean luminance to the original's (table above). It is Play's default now (`?sampling=srgb` keeps the sRGB
+   upload and re-encode for A/B, `?sampling=legacy` is the earlier sampling entirely); it moved Play's mean luminance by 2.9% on the 20 views,
+   toward the original's, and the user approved it.
+4. **Not causes.** The window frames' projection (Coords-posed camera, the device's depth range) already matches: drawing them
+   through the exact vertex chain of [frame projection](frame-projection.md) (`fpClip` with the window's frame) changed 0 to 2 pixels
+   of 30,000 per window and the same MAD, with multisampling on and off. A sub-pixel shift of Play's frame: the best shift over
+   ±1.5 pixels is (0, 0) in every window but one (0.125 pixel, 2.6% of its error).
+
+### What stays
+
+- Blended texels' colour (Hong Kong's signs, OceanLab window 2's light strips, window 3's ceiling panel): a strip's leading edge pixel is
+  62 / 133 in the original and 32 / 168 in Play, mid-tone pixels up to 5% brighter. The vertex positions and the mip level are not the
+  cause (the chain and the bias scan); the filtering space is (cause 3: with it the same pixels are equal
+  except one per strip edge, a polygon-edge tie).
+- Moving actors: the Island view's terrorists (positions, animation) differ as in every live scene; static props, JC, the
+  turret and the decals agree.
+- Cameras with mirrors, a sky frame, fog or coronas in their view were not among the seven windows (the three maps' cameras
+  look into rooms): those parts of the camera frame stay checked against the original's code and oracles only
+  ([viewport window](script-window-viewport.md)), not against captured frames.
+- A modal screen leaves no key for bindings and the held level needs the tracer; maps whose computer cannot be reached by the
+  flight (a stalled game) fail with a message, not silently.
+
+### Running it
+
+```bash
+DX_HYPRLAND=1 scripts/camera-original.sh 14_OceanLab_Lab --computer ComputerSecurity1 --user Oceanguard --password Kraken \
+  --cameras SecurityCamera0,SecurityCamera4,SecurityCamera3 --name cs1                 # the original: frame and state
+node scripts/camera-acceptance.mjs play --map 14_OceanLab_Lab --computer ComputerSecurity1 --user Oceanguard --password Kraken \
+  --camera-actor SecurityCamera0 --name cs1 --suffix aaoff                              # Play at that state (--antialias on, --query sampling=trilinear for A/B)
+node scripts/camera-acceptance.mjs compare --map 14_OceanLab_Lab --name cs1 --suffix aaoff    # the windows' metrics and montages
+```
 
 ## Open
 
@@ -1169,11 +1462,19 @@ its PID; Play runs headless Chromium in worker mode.
 - **Population mismatches of pickups.** The population step exempts the spawned pickup families (Liquor, Medkit, ...) from the name match; an item placed by the load's chance in the
   original and not in Play blocks a pawn now that pawns collide with items as the original's do. No case seen (the bottles and the HazMatSuit were in both programs).
 
+- **Camera views not yet captured against the original** ([Security cameras](#security-cameras-2026-10-14)): a camera whose view holds a mirror, a sky
+  frame, fog or coronas (the thirteen windows look into rooms; Island ComputerSecurity0's exterior cameras were tried, and after the ghost's `walk`
+  JC left the map at the SATCOM compound, probably through a transition volume), the other computers of the census, a window zoomed or panned
+  (`Equals`, the arrows), and the three windows' door/turret choices. The camera window's moving actors and movers (Island's terrorists, Ship's
+  locker door) are not matched.
 - The player's weapon noise is compared ([Weapon noise](#weapon-noise-2026-10-14): a pistol and an assault shotgun, 1,069 and 1,586 manager calls
   equal); footsteps (held keys), the player's `TakeDamage` `Distress`, combat and the other weapons are not.
 - The uniform 1.13–1.41× raw brightness gap under Wine; a CrossOver
   capture on the Mac matched more closely. The user does not want it
-  chased: it is a known gamma issue of the game on Windows.
+  chased: it is a known gamma issue of the game on Windows. Measured since
+  ([Security cameras](#security-cameras-2026-10-14), item 6): Shot bakes a ramp
+  of the Brightness setting into its bitmap; at Brightness 2/3 it is the framebuffer
+  and Play's identity-ramp frames agree to 1% in the camera windows. Play's ramp was not touched.
 - Rounding of the darkest values, at the level of single raw steps
   (item 2 above).
 - The frozen captures stand at the map's frame-0 pose; live behaviour is
