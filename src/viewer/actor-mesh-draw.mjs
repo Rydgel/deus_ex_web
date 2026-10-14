@@ -20,6 +20,7 @@ import {displayRampGlsl} from './light-atlas.mjs';
 import {meshVertexNormalsInto,writeMeshEnvironmentUV} from '../runtime/mesh-environment.mjs';
 import {copyMeshLightColors} from './mesh-light-colors.mjs';
 import {DRAW_VERTEX_DECLARATIONS} from './gpu-mesh.mjs';
+import {frameProjection,FRAME_PROJECTION_KEY} from './frame-projection.mjs';
 import {createActorBatches,BATCH_VERTEX_DECLARATIONS,BATCH_VERTEX_TAIL} from './actor-batches.mjs';
 import {groupCorners,resolveMeshSkin} from './actor-mesh-skins.mjs';
 import {copyPositions,lodCornerIndices,setMeshBounds} from './actor-mesh-sim.mjs';
@@ -234,8 +235,8 @@ export function createMeshDraw(assets,creation,{gpu=null,texturePool,batches=nul
       const environmentGroup=Boolean(record.flags&POLY.Environment),gpuSlot=creation.path==='gpu';
       const makeMaterial=side=>{
         const material=new THREE.MeshBasicMaterial({map:texture,side,alphaTest:flags&POLY.Masked?.5:0});
-        material.customProgramCacheKey=gpuSlot?()=>`deus-ex-mesh-gpu-v1:${environmentGroup?1:0}`
-          :()=>'deus-ex-mesh-display-color-v3';
+        material.customProgramCacheKey=gpuSlot?()=>`deus-ex-mesh-gpu-v2:${environmentGroup?1:0}:${FRAME_PROJECTION_KEY}`
+          :()=>`deus-ex-mesh-display-color-v3:${FRAME_PROJECTION_KEY}`;
         material.onBeforeCompile=shader=>{
           shader.uniforms.deusDisplayGamma=displayGamma;shader.uniforms.deusModulated=modulatedUniform;
           if(gpuSlot){
@@ -252,6 +253,9 @@ export function createMeshDraw(assets,creation,{gpu=null,texturePool,batches=nul
               'gl_FragColor = sRGBTransferOETF(gl_FragColor);\ngl_FragColor.rgb *= vDeusLight;\n'+
               `if (deusModulated > 0.5) { ${displayRampGlsl('deusDisplayGamma',true)} }\n`+
               `else { ${displayRampGlsl('deusDisplayGamma',false)} }`);
+          // The original's vertex projection (docs/frame-projection.md); the GPU path projects the
+          // lighting frame's camera-space buffer.
+          frameProjection.patch(shader,{floatFloat:!gpuSlot,camera:gpuSlot});
         };
         materials.push(material);
         if(flags&(POLY.Translucent|POLY.Modulated)) {
@@ -531,6 +535,10 @@ export function createActorMeshDraw(assets,{gpu=null,lit=false,displayGamma,feed
  * attributes for an actor that fell back. */
 function gpuBeginVertex(environment){
   return `vec3 transformed;
+// The corner's point in the lighting frame's camera space (GetFrame's buffer), when its slot was lit in
+// this pass's frame: what the original projects (frame-projection.mjs).
+vec3 deusCamera = vec3( 0.0 );
+bool deusHasCamera = false;
 if (deusGpu > 0.5) {
   int deusC = int(deusCornerTexel);
   uint deusW = texelFetch(deusCornerWedges, ivec2(deusC & 1023, deusC >> 10), 0).x;
@@ -538,6 +546,16 @@ if (deusGpu > 0.5) {
   int deusV = int(deusVertexTexel) + (deusDropped ? 0 : int(deusW & 0xffffu));
   vec3 deusP = deusDropped ? vec3(0.0) : texelFetch(deusPose, ivec2(deusV & 1023, deusV >> 10), 0).xyz;
   transformed = vec3(deusP.y, deusP.z, -deusP.x);
+  if (uFpOn > 0.5 && !deusDropped) {
+    uvec2 deusMap = texelFetch(deusVertexMap, ivec2(deusV & 1023, deusV >> 10), 0).xy;
+    if (deusMap.x != 0u) {
+      uint deusStamp = texelFetch(deusParamsU, ivec2(2, int(deusMap.x - 1u)), 0).w;
+      if (deusStamp == deusLitFrame || deusStamp > deusLitRuns) {
+        deusCamera = texelFetch(deusCameraFinal, ivec2(deusV & 1023, deusV >> 10), 0).xyz;
+        deusHasCamera = true;
+      }
+    }
+  }
   uvec4 deusBytes = texelFetch(deusCorners, ivec2(deusC & 1023, deusC >> 10), 0);
   vDeusLight = vec3(texelFetch(deusByteColors, ivec2(int(deusBytes.x), 0), 0).x,
     texelFetch(deusByteColors, ivec2(int(deusBytes.y), 0), 0).x, texelFetch(deusByteColors, ivec2(int(deusBytes.z), 0), 0).x);
@@ -557,7 +575,7 @@ function batchMaterial(template,members,gpu,displayGamma){
   const material=new THREE.MeshBasicMaterial({map:template.map,side:template.side,alphaTest:template.alphaTest});
   material.color.copy(template.color);
   material.userData={...template.userData,members};
-  material.customProgramCacheKey=()=>`deus-ex-mesh-gpu-batch-v1:${environment?1:0}`;
+  material.customProgramCacheKey=()=>`deus-ex-mesh-gpu-batch-v2:${environment?1:0}:${FRAME_PROJECTION_KEY}`;
   material.onBeforeCompile=shader=>{
     shader.uniforms.deusDisplayGamma=displayGamma;shader.uniforms.deusModulated={value:0};
     Object.assign(shader.uniforms,gpu.shared,{deusGpu:{value:1},deusMembers:members});
@@ -571,6 +589,7 @@ function batchMaterial(template,members,gpu,displayGamma){
         'gl_FragColor = sRGBTransferOETF(gl_FragColor);\ngl_FragColor.rgb *= vDeusLight;\n'+
         `if (deusModulated > 0.5) { ${displayRampGlsl('deusDisplayGamma',true)} }\n`+
         `else { ${displayRampGlsl('deusDisplayGamma',false)} }`);
+    frameProjection.patch(shader,{floatFloat:false,camera:true});
   };
   return material;
 }

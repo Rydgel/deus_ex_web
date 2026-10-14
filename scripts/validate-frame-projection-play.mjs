@@ -18,7 +18,7 @@ import assert from 'node:assert/strict';
 import { chromium } from '@playwright/test';
 import { createServer } from 'vite';
 import { fileURLToPath } from 'node:url';
-import { readdir, readFile } from 'node:fs/promises';
+import { readdir, readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { gameDirectory } from './game-directory.mjs';
 import { AssetStore } from '../src/unreal/assets.mjs';
@@ -28,11 +28,14 @@ const option = (name, fallback) => { const i = process.argv.indexOf(`--${name}`)
 let root;
 try { root = gameDirectory(); } catch { console.log('SKIP validate-frame-projection-play: no installed game data'); process.exit(0); }
 const views = Number(process.argv.slice(2).find(arg => /^\d+$/.test(arg)) ?? 4), dpr = Number(option('dpr', 1));
-const maps = option('maps', '01_NYC_UNATCOIsland,10_Paris_Club,02_NYC_Bar').split(',');
+const maps = option('maps', '01_NYC_UNATCOIsland,10_Paris_Club,02_NYC_Bar,00_Training').split(',');
 // Fixed views in front of mirrors (docs/mirror-surfaces.md; the club's tunnel).
 const FIXED = {
   '10_Paris_Club': [{ location: [2063, 273, 30], rotation: [0, 32768, 0] }, { location: [2063, 273, 30], rotation: [0, 40960, 0] }],
   '02_NYC_Bar': [{ location: [-768, -600, 95], rotation: [0, 49152, 0] }],
+  '02_NYC_Hotel': [{ location: [1880, -1158, 148], rotation: [0, 32768, 0] }],
+  '02_NYC_Smug': [{ location: [-576, 1530, 250], rotation: [0, 16384, 0] }],
+  '11_Paris_Everett': [{ location: [1024, 1640, 430], rotation: [0, 53000, 0] }],
 };
 const files = [];
 for (const directory of ['Maps', 'System'])
@@ -80,6 +83,16 @@ try {
     const frames = n => page.evaluate(async n => { for (let k = 0; k < n; k++) await new Promise(r => requestAnimationFrame(r)); }, n);
     const shot = () => page.locator('#scene').screenshot();
     await frames(30);
+    // Training: the player takes the crowbar, so the first-person weapon draws in every frame.
+    if (map === '00_Training') {
+      await page.evaluate(async () => {
+        const viewer = window.deusExViewer, frame = n => new Promise(resolve => { let k = 0; const step = () => (++k >= n ? resolve() : requestAnimationFrame(step)); requestAnimationFrame(step); });
+        const at = await viewer.renderPassProbe({ locate: 'WeaponCrowbar1' });
+        await viewer.placeProbe({ location: [at[0] - 48, at[1], at[2] + 20], lookAt: 'WeaponCrowbar1' }); await frame(20);
+        await viewer.placeProbe({ lookAt: 'WeaponCrowbar1' }); await frame(10);
+        await viewer.renderPassProbe({ take: 'WeaponCrowbar1' }); await frame(90);
+      });
+    }
     // The module the page runs: the perturbation wraps `use`.
     await page.evaluate(async () => {
       const { frameProjection } = await import('/src/viewer/frame-projection.mjs');
@@ -146,6 +159,12 @@ try {
       await page.evaluate(() => { window.__fp.shift = 0; });
       const [change, noise, shifted] = [await different(a, b), await different(a, c), await different(a, d)];
       per.push(`${change.count}/${noise.count}/${shifted.count}`);
+      // --shots DIR keeps the frames of a view whose change is large (inspection).
+      if (option('shots', null) && change.count > 2000) {
+        const tag = `${option('shots', null)}/${map}-${totals.views}`;
+        await writeFile(`${tag}-on.png`, a); await writeFile(`${tag}-off.png`, b);
+        console.log(`${map} view ${JSON.stringify(view)}: ${change.count} pixels; frames in ${tag}-{on,off}.png`);
+      }
       totals.pixels = change.pixels; totals.change += change.count; totals.noise += noise.count; totals.shifted += shifted.count;
       totals.maxChange = Math.max(totals.maxChange, change.max);
       assert.equal(noise.count, 0, `${map}: the vertex stage drawn twice differs`);

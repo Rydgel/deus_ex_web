@@ -24,7 +24,7 @@ const uniforms = {
  * the frame's when the pass has one. A mesh's world position is the matrix
  * world of its group (the identity for static world geometry, so the model
  * points arrive unchanged) in three's axes, [y, z, -x] of Unreal's. */
-const PROJECT_VERTEX = `
+const projectVertex = camera => `
 vec4 mvPosition = vec4( transformed, 1.0 );
 #ifdef USE_BATCHING
 	mvPosition = batchingMatrix * mvPosition;
@@ -35,8 +35,11 @@ vec4 mvPosition = vec4( transformed, 1.0 );
 mvPosition = modelViewMatrix * mvPosition;
 gl_Position = projectionMatrix * mvPosition;
 if ( uFpOn > 0.5 ) {
-	vec3 fpWorld = ( modelMatrix * vec4( transformed, 1.0 ) ).xyz;
-	gl_Position = fpClip( fpView( vec3( -fpWorld.z, fpWorld.x, fpWorld.y ) ) );
+${camera ? `	if ( deusHasCamera ) gl_Position = fpClip( deusCamera );
+	else ` : '	'}{
+		vec3 fpWorld = ( modelMatrix * vec4( transformed, 1.0 ) ).xyz;
+		gl_Position = fpClip( fpView( vec3( -fpWorld.z, fpWorld.x, fpWorld.y ) ) );
+	}
 }
 `;
 
@@ -50,13 +53,16 @@ export const frameProjection = {
   enabled: true,
   /** Patches a material's vertex shader (an onBeforeCompile body):
    * world-space `transformed`, the frame's clip position. `floatFloat` false
-   * when the shader already carries gpu-mesh-glsl's FLOAT_FLOAT (then
-   * `zero` names its barrier uniform). */
-  patch(shader, { floatFloat = true } = {}) {
+   * when the shader already carries gpu-mesh-glsl's FLOAT_FLOAT (its barrier
+   * uniform is the one in scope); `camera` when begin_vertex left the vertex's
+   * camera-space point in `deusCamera` (`deusHasCamera`: the GPU mesh draw). */
+  patch(shader, { floatFloat = true, camera = false } = {}) {
     Object.assign(shader.uniforms, uniforms);
+    // Before main(): after every declaration the shader carries (the GPU mesh
+    // draw's float-float helpers among them). Run it last in onBeforeCompile.
     shader.vertexShader = shader.vertexShader
-      .replace('#include <common>', `#include <common>\n${frameProjectionGlsl({ floatFloat })}`)
-      .replace('#include <project_vertex>', PROJECT_VERTEX);
+      .replace('void main() {', `${frameProjectionGlsl({ floatFloat })}\nvoid main() {`)
+      .replace('#include <project_vertex>', projectVertex(camera));
   },
   /** The pass projects with `projection` (play-camera.mjs projectionOf's
    * shape, or sim-session.mjs's child frames: Proj.Z, RProj.Z, FX15, FY15 and

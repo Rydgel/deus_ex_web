@@ -152,6 +152,11 @@ export function createGpuMesh(renderer,capacities={}) {
     deusPose:{value:external(finalPose)},deusCorners:{value:external(corners)},deusCornerWedges:{value:external(cornerWedges)},
     deusEnvironmentNormals:{value:external(environmentNormals)},deusByteColors:{value:cornerColors},
     deusCameraHi:{value:new THREE.Vector3()},deusCameraLo:{value:new THREE.Vector3()},deusZero:{value:0},
+    // The camera-space final pose and the slot parameters the draw's vertex stage reads (frame-projection.mjs):
+    // a slot's camera-space point is the pass frame's when its lighting stamp is this frame's or a later
+    // run's (`deusLitFrame`, `deusLitRuns`).
+    deusVertexMap:{value:external(vertexMap)},deusParamsU:{value:external(paramsU)},deusCameraFinal:{value:external(cameraFinal)},
+    deusLitFrame:{value:0},deusLitRuns:{value:0},
   };
 
   // ---- CPU mirrors of the per-frame parameters
@@ -430,6 +435,8 @@ export function createGpuMesh(renderer,capacities={}) {
   /** Run this frame's passes; afterwards three.js state is reset. */
   function run() {
     frame++;
+    // Lighting stamps of this frame's runs: `frame` (this run) and above the runs so far (children, restores).
+    shared.deusLitFrame.value=frame>>>0;shared.deusLitRuns.value=(0x80000000+(lightRuns&0x3fffffff))>>>0;
     uploadDirty();
     // The frame numbers written by setPose/setLighting were frame+1 before
     // the increment above; they now equal `frame`.
@@ -520,6 +527,7 @@ void main(){uint t=texelIndex();vec3 p=texelFetch(uPose,at(t),0).xyz,n=texelFetc
 export const DRAW_VERTEX_DECLARATIONS=`
 uniform highp sampler2D deusPose,deusEnvironmentNormals,deusByteColors;uniform highp usampler2D deusCorners,deusCornerWedges;
 uniform vec3 deusCameraHi,deusCameraLo;uniform uint deusZero;uniform float deusGpu;
+uniform highp usampler2D deusVertexMap,deusParamsU;uniform highp sampler2D deusCameraFinal;uniform uint deusLitFrame,deusLitRuns;
 attribute float deusVertexTexel,deusCornerTexel;
 ${FLOAT_FLOAT.replace(/\bZERO\b/g,'deusZero')}
 ${ENVIRONMENT_UV}

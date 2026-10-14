@@ -1873,7 +1873,9 @@ function drawFrame(snap, time) {
   phase('coronas');
   framePhases.mainCalls += drawCalls() - calls; calls = drawCalls();
   if (weaponFrame && weaponDraw) {
-    try { weaponDraw.render(renderer, camera, weaponFrame); } catch (error) { pauseForRuntimeError(error); }
+    // The view model draws in the master frame (Canvas.DrawActor, docs/script-weapon-rendering.md).
+    useFrameProjection(playing && !runtimeError ? frame?.projection : null);
+    try { weaponDraw.render(renderer, camera, weaponFrame); } catch (error) { pauseForRuntimeError(error); } finally { vertexProjection.off(); }
     if (simVerify && !simClient) {
       const problem = sim.verifyWeapon(drew.weapon, handle => weaponDraw.built(handle));
       if (problem) pauseForRuntimeError(new Error(`simVerify: drawn sets differ: ${problem}`));
