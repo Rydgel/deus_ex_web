@@ -39,7 +39,7 @@ export function moveQuery({source,worldActor,start,delta,extent,multiLineCheck,i
   const length=Math.sqrt(delta[2]*delta[2]+delta[1]*delta[1]+delta[0]*delta[0]),size=f(length),reciprocal=f(1/length);
   const direction=delta.map(v=>f(v*reciprocal)),extended=delta.map((v,i)=>f(v+2*direction[i]));
   let hit=null,time=1,displacement=delta;
-  const sourceFlags=flags(source);
+  const sourceFlags=flags(source),actorBit=source.controlledPlayer||source.projectile?8:4,brushBit=source.controlledPlayer?8:4;
   if(sourceFlags&3){
     const hits=multiLineCheck({end:start.map((v,i)=>f(v+extended[i])),start:start.slice(),extent:extent.slice(),
       checkActors:!!(sourceFlags&1),worldActor:sourceFlags&2?worldActor:null,extra:0});
@@ -57,10 +57,16 @@ export function moveQuery({source,worldActor,start,delta,extent,multiLineCheck,i
       // recursive rider MoveActor without being blocked by it.
       if(ignoreBases&&basedOn(source,other))continue;
       if(basedOn(other,source))continue;
+      // The block test (Engine.dll 0x103996aa..0x1039978a). The CANDIDATE's bit is picked by the SOURCE's category: bBlockPlayers (8) when the source
+      // is a controlled player (GetPlayerPawn) or, for an ordinary actor, a Projectile (0x10578850), bBlockActors (4) otherwise (0x10399745 /
+      // 0x10399750; a moving brush asks GetPlayerPawn only, 0x103996ce); for an ordinary actor the SOURCE's bit is picked by the CANDIDATE's
+      // category the same way (0x1039977c / 0x1039978a). A pawn or decoration source is blocked by
+      // an item that blocks actors without blocking players (a Liquor40oz, a HazMatSuit), which the controlled-player specialization (always 8)
+      // does not see (docs/script-pawn-nav.md "Live divergence: ... pickups").
       let blocks;
       if(other===worldActor)blocks=!!(sourceFlags&2);
-      else if(other.movingBrush)blocks=!!(sourceFlags&2)&&!!(flags(other)&8);
-      else blocks=!!(flags(other)&8)&&!!(sourceFlags&((other.controlledPlayer||other.projectile)?8:4));
+      else if(other.movingBrush)blocks=!!(sourceFlags&2)&&!!(flags(other)&brushBit);
+      else blocks=!!(flags(other)&actorBit)&&!!(sourceFlags&((other.controlledPlayer||other.projectile)?8:4));
       if(blocks){hit={...candidate,location:candidate.location?.slice(),normal:candidate.normal?.slice()};break;}
     }
   }

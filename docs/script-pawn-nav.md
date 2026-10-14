@@ -1554,3 +1554,48 @@ validate-pawn-direction-reach (285 cases), validate-pawn-swimming-reach, validat
 `flyMove` (`0x103c3900`) keeps a `Hit` of its own across its moves (a local at `[ebp-0x68]`, time 1 and item -1 set inline), so the same early return
 applies to its retry; its port still makes a fresh hit per move, which cannot be told apart: its only reads of `Hit` are the target compares, and a first
 move that hit the target has already returned 5, so the stale content the original would read after a zero retry never names the target.
+
+## Live divergence: pickups block a pawn's moves (2026-10-14)
+
+The live sweep's wander-destination group ([visual acceptance](visual-acceptance.md), group 2): Doberman0 and Doberman1 in 02_NYC_Warehouse picked a
+destination whose Z was 28.4 in the original and 28.3 in Play, Terrorist5 in 02_NYC_BatteryPark one at 380.23 against 363.90 (the same X and Y).
+
+**Method.** `call` breakpoints on the pick worker, ULevel::MoveActor and FarMoveActor for every pawn (150 ticks), now with the **Hit's actor named at the
+return** (`namearg 7 4` on MoveActor; the tracer re-reads the argument at the return, where the entry value was the buffer's stale one), Play's
+`--nav-trace`, and `scripts/live-pick-compare.mjs` (the original's pick calls against Play's, pick by pick: each MoveActor's delta, location after and Hit,
+each FarMoveActor's destination, the destination). Three fresh loads of the Warehouse, two of the Dockyard, one of BatteryPark with Terrorist5's pick, and the
+tracer's new `rng-file` (it writes another capture's `rngIn` of tick k into the CRT at the entry of tick k, so a fresh load makes the **same decisions** as a
+capture that cannot be repeated by loading again: the BatteryPark load of the divergence, replayed into a fresh original, gave Terrorist5 the same pick at
+tick 13, arguments, 77 calls and destination Z 380.2277).
+
+**First differing call.** Always a MoveActor whose Hit names an item: the original's `Liquor40oz20` (Warehouse, Doberman1 tick 42 call 16, Doberman0 tick 56
+call 19), `Liquor40oz48` (BatteryPark, Terrorist5 call 20), `HazMatSuit0` (Dockyard, SecurityBot4 tick 39, the pick found nothing in both programs so
+only its calls differed). Play's move went through (Hit.Time 1). The bottle is where Play has it and carries the same collision word: the tracer's watch of the
+five Warehouse bottles (`CF:0x1dc:u32`, `Loc`, `Phys`, `Base`, at the frozen start and after settling) gave Location (1396.68494, 342.208923, 10.1104622) for
+Liquor40oz20 on both sides and the word `0x7` (bCollideActors, bCollideWorld, bBlockActors, no bBlockPlayers) for all five, as `Inventory.BecomePickup` leaves a
+pickup (`SetCollision(true, true, false)`).
+
+**Cause.** ULevel::MoveActor's block test (Engine.dll `0x103996aa..0x1039978a`, disassembly in `.cache/research/move-actor.asm`) is not "the candidate's
+bBlockPlayers and the source's category bit":
+
+```text
+0x10399729  source: GetPlayerPawn() != NULL  or  IsA(Projectile 0x10578850)   -> candidate bit 8 (bBlockPlayers), else bit 4 (bBlockActors)  (0x10399750 / 0x10399745)
+            a moving-brush candidate (0x103996b4..0x103996e9): source GetPlayerPawn() only
+0x10399760  candidate: GetPlayerPawn() != NULL  or  IsA(Projectile)               -> source bit 8, else source bit 4                       (0x1039978a / 0x1039977c)
+            both bits must be set for the candidate to block
+```
+
+`moveQuery` (and the Rust `move_pawn.rs`) took the candidate's bit 8 for every source, which is the controlled-player case the function was written
+against. A pawn or a decoration is blocked by an item that blocks actors and not players: every bottle, HazMatSuit and the like on the maps. (`actorBlockedBy`
+in check-encroachment.mjs, recovered from IsBlockedBy, already had the categories right.)
+
+**Oracle.** `validate-native-move-query` (the original's MoveActor under Unicorn): the corpus had a controlled-player source over every flag word and
+decorations with flags 15, on which both rules agree. 280 cases added, pawn and Projectile sources (`sourceKind`) over every candidate kind (actor, player, projectile,
+mover) and flag word: **54 mismatches before the fix, 0 of 760 after** (the JS twin). The Rust body: `move_pawn.rs` gets the source's category from the host's
+candidate word (`C_SOURCE_PLAYER`, `C_SOURCE_PROJECTILE`); the `collision-bits` bench-sim scenario flips the collision bits of every colliding map actor among
+actors-only, players-only and both while walk-branches pushes the pawns into them: `validate-pawn-move-kernel` (Rust and JS digests and checkpoints equal,
+525 Rust moves, 54 blocked on Island); with the old rule in Rust only the digest differs (mutant checked).
+
+**Result.** The same captures replayed: Warehouse z2 18 of 18 picks equal (16 before) and every watched field equal for 150 ticks (Doberman0 from tick 56 and Doberman1
+from tick 42 before); Dockyard z2 31 of 31 (29 before); BatteryPark Terrorist5's 77 calls and destination equal. The earlier equal captures (BatteryPark z1, Warehouse z1
+and b1, Street z1) stay equal.

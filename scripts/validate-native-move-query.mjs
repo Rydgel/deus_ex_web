@@ -22,6 +22,13 @@ for(const delta of [[0,0,0],[10,0,0]])for(const traits of [{static:true},{movabl
 for(const delta of [[10,0,-40],[60,0,-5],[5,0,-30],[-24,12,-60],[0,0,-950]])
  for(const hit of [null,{kind:'world',normal:[0,0,1],time:.5},{kind:'world',normal:[-1,0,0],time:.4},{kind:'actor',flags:15,normal:[-1,0,0],time:.3}])
   cases.push({start:[-804.27,1125.16,-84.02],delta,extent:[23.26,43.88],sourceFlags:15,sourceControlledPlayer:false,hits:hit?[hit]:[]});
+// Non-player sources against every candidate kind and flag word. The candidate's bit is picked by the SOURCE's category (bBlockPlayers for a
+// controlled player or a Projectile, bBlockActors for a pawn or a decoration) and the source's by the candidate's (Engine.dll 0x103996aa..0x1039978a):
+// a pawn is blocked by an item that blocks actors and not players (a bottle, a HazMatSuit: flags 7), a controlled player is not. The corpus above
+// had only a controlled-player source with the whole flag range, and decorations with flags 15, so the wrong rule (the candidate's bBlockPlayers
+// for every source) agreed with the original on all of it.
+for(const sourceKind of ['pawn','projectile']) for(const sourceFlags of [3,5,7,11,13,15]) for(const kind of ['actor','player','projectile','mover']) for(const flags of [0,3,5,7,11,13,15])
+ cases.push({start:[1,2,3],delta:[7.25,-1.87,.625],sourceFlags,sourceControlledPlayer:false,sourceKind,hits:[{kind,flags,time:.2},{kind:'world',time:.8}]});
 const directory=path.resolve('reports/movement/native-move-query');await mkdir(directory,{recursive:true});
 const file=path.join(directory,'cases.json');await writeFile(file,JSON.stringify(cases));
 const {stdout}=await promisify(execFile)(process.env.NATIVE_PROBE_PYTHON??'python3',['scripts/native-move-query-oracle.py',gameDirectory(),file],{maxBuffer:32*1024*1024,timeout:120000});
@@ -31,7 +38,7 @@ else {
  const {moveQuery}=await import('../src/runtime/move-query.mjs');const mismatches=[];
  cases.forEach((c,index)=>{
   const controlled=c.sourceControlledPlayer!==false;
-  const world={world:true},source={controlledPlayer:controlled,decoration:!controlled,flags:c.sourceFlags??15,static:c.static,movable:c.movable};
+  const world={world:true},source={controlledPlayer:controlled,decoration:!controlled,projectile:c.sourceKind==='projectile',flags:c.sourceFlags??15,static:c.static,movable:c.movable};
   const hits=c.hits.map((h,item)=>({time:Math.fround(h.time),actor:h.kind==='world'?world:h.kind==='self'?source:{
    flags:h.flags??15,controlledPlayer:h.kind==='player',projectile:h.kind==='projectile',movingBrush:h.kind==='mover',base:h.basedOnSource?source:null},
    location:[10,20,30],normal:h.normal??[-1,0,0],item}));

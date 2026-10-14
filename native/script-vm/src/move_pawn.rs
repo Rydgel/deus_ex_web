@@ -55,6 +55,8 @@ const C_SKIP: u32 = 1;
 const C_WORLD: u32 = 2;
 const C_BRUSH: u32 = 4;
 const C_PLAYER_OR_PROJECTILE: u32 = 8;
+const C_SOURCE_PLAYER: u32 = 16;
+const C_SOURCE_PROJECTILE: u32 = 32;
 
 // MP_IO, written at the end of a completed call: [0] the query's time,
 // [1] the selected hit's index (or -1), [2] success (0/1), [3..6] the
@@ -201,12 +203,17 @@ pub(crate) fn move_source(depth: u32, base: u32, dx: f32, dy: f32, dz: f32, has_
                     let c = unsafe { js_move_cand(depth, i as u32, ignore_bases) };
                     if c & C_SKIP != 0 { continue; }
                     let other_flags = c >> 8;
+                    // Engine.dll 0x103996aa..0x1039978a: the candidate's bit is picked by the SOURCE's category (bBlockPlayers
+                    // for a controlled player or a Projectile, bBlockActors otherwise), the source's bit by the candidate's.
+                    // (a moving brush asks GetPlayerPawn only, an ordinary actor also IsA(Projectile)).
+                    let brush_bit = if c & C_SOURCE_PLAYER != 0 { 8 } else { 4 };
+                    let actor_bit = if c & (C_SOURCE_PLAYER | C_SOURCE_PROJECTILE) != 0 { 8 } else { 4 };
                     let blocks = if c & C_WORLD != 0 {
                         source_flags & 2 != 0
                     } else if c & C_BRUSH != 0 {
-                        source_flags & 2 != 0 && other_flags & 8 != 0
+                        source_flags & 2 != 0 && other_flags & brush_bit != 0
                     } else {
-                        other_flags & 8 != 0 &&
+                        other_flags & actor_bit != 0 &&
                             source_flags & (if c & C_PLAYER_OR_PROJECTILE != 0 { 8 } else { 4 }) != 0
                     };
                     if blocks { hit = i as i32; hit_world = c & C_WORLD != 0; break; }

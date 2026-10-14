@@ -16,10 +16,23 @@ worldActor=LevelInfo iff bCollideWorld, extraNodeFlags=0. No source actor or tra
 bit mask is passed; MoveActor separately selects from the ordered hit list.
 
 Selection scans first-to-last, skips actors based on source (including self),
-accepts LevelInfo if source collides with world, moving brushes if source
-bCollideWorld and brush bBlockPlayers, generic actor if candidate bBlockPlayers
-and source blocks the candidate category (bBlockPlayers for controlled players
-or projectiles, bBlockActors otherwise). Ownership is not the SingleLine owner
+accepts LevelInfo if source collides with world, a moving brush if source
+bCollideWorld and the brush has the bit the SOURCE's category picks, a generic
+actor if it has the bit the SOURCE's category picks and the source has the bit
+the CANDIDATE's category picks. The categories (`0x103996aa..0x1039978a`):
+the source's picks bBlockPlayers (8) for a controlled player (`GetPlayerPawn`)
+or, for a generic candidate, a Projectile (`IsA(0x10578850)`), bBlockActors (4)
+otherwise; the candidate's picks bit 8 for a controlled player or a Projectile,
+bit 4 otherwise. **Correction (2026-10-14):** this section used to say the
+candidate's bit was always bBlockPlayers, which holds for a controlled-player
+source (the pilot of this file) and not for a pawn or a decoration: a bottle
+or a HazMatSuit (`BecomePickup`'s `SetCollision(true, true, false)`: flags 7)
+blocks a walking pawn and not the player, and the oracle's corpus (a
+controlled-player source over every flag word, decorations with flags 15)
+could not tell the two rules apart; now 760 cases, 280 of them pawn and
+Projectile sources over every candidate kind and flag word
+([pawn navigation](script-pawn-nav.md#live-divergence-pickups-block-a-pawns-moves-2026-10-14)).
+Ownership is not the SingleLine owner
 filter. Nondefault ignore-pawn/base flags, source brush, actor scene mutation,
 encroachment, touch/bump/base/zone events and rotation are outside this adapter.
 

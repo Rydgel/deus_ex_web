@@ -38,7 +38,7 @@ if (DIFFERENTIAL) process.on('exit', () => process.stderr.write(`pawn move diffe
 
 const f = Math.fround;
 const int32 = v => Number.isInteger(v) && v >= -0x80000000 && v <= 0x7fffffff;
-const C_SKIP = 1, C_WORLD = 2, C_BRUSH = 4, C_PLAYER_OR_PROJECTILE = 8;
+const C_SKIP = 1, C_WORLD = 2, C_BRUSH = 4, C_PLAYER_OR_PROJECTILE = 8, C_SOURCE_PLAYER = 16, C_SOURCE_PROJECTILE = 32;
 // The ABI with move_pawn.rs: words per hit record (HIT_WORDS) and in MP_IO.
 export const HIT_WORDS = 5, IO_WORDS = 13;
 
@@ -154,7 +154,8 @@ export class MovePawnHost {
         if (basedOn(other, source)) return C_SKIP;
         const flags = other.flags ?? 0;
         return (other === ops.worldActor ? C_WORLD : 0) | (other.movingBrush ? C_BRUSH : 0) |
-          (other.controlledPlayer || other.projectile ? C_PLAYER_OR_PROJECTILE : 0) | ((flags & 0xff) << 8);
+          (other.controlledPlayer || other.projectile ? C_PLAYER_OR_PROJECTILE : 0) |
+          (source.controlledPlayer ? C_SOURCE_PLAYER : 0) | (source.projectile ? C_SOURCE_PROJECTILE : 0) | ((flags & 0xff) << 8);
       },
       js_move_eligible(depth) {
         // `hits` is [] until the query ran (the reference's initial value).
