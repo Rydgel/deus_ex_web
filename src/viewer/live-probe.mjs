@@ -135,6 +135,8 @@ export function liveProbe(game, args = {}) {
     const strobe = lightGlobals(runtime).strobe;
     if (args.strobe.flag !== undefined) { strobe.flag = args.strobe.flag & 1; strobe.time = Math.fround(args.strobe.time); }
     out.strobe = { ...strobe };
+    // The Strobe-lit surfaces each frame (the main frame, then the child frames) drew at the last light-map Strobe call.
+    out.strobeScan = lightGlobals(runtime).strobeScan ?? null;
   }
   // moveTest: {pawn, at, delta}: the pick worker's test move for that pawn from that place (FarMoveActor there with test and noCheck, ULevel::MoveActor
   // with bTest=1 and bIgnorePawns=1 as checkMove makes it, FarMoveActor back), and the hit it made: what an original capture's MoveActor record

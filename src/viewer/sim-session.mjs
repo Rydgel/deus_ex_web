@@ -16,7 +16,7 @@ import { OCCLUSION_POINTS, OCCLUSION_SPRITE_KEYS, SETUP, SETUP_OUT_WORDS } from 
 import { packDynamics, patchDynamics, candidateWords, actorOcclusionMode, childFrameSprites, iteratorSpritesByOrder } from './dynamics-candidates.mjs';
 import { createLightNoise, lightNoiseSnapshot } from '../runtime/static-lighting.mjs';
 import { lightGlobals } from '../runtime/light-globals.mjs';
-import { filterMovingLight, surfaceLightClass, worldLightRadius } from '../runtime/dynamic-lighting.mjs';
+import { filterMovingLight, movingLightInView, surfaceLightClass, viewPlanesOf, worldLightRadius } from '../runtime/dynamic-lighting.mjs';
 import { dynamicActorRoute } from '../runtime/render-visibility.mjs';
 import { TRACKED_MOVER_MIRRORS, childFramesMode, iteratorFramesMode } from './mirror-passes.mjs';
 
@@ -98,8 +98,12 @@ export function createSimSession(game, { assets = null, events = [], exportName 
   // every frame), and the moving Strobe lights that reach a drawn surface.
   // Scripts never set Strobe (scripts/census-moving-lights.mjs), so the
   // lists are taken once, from the lights that are Strobe at load.
-  let strobeSurfaces = null;
+  // `strobeMainOnly` is a validation switch (strobeReach): the main frame's surfaces alone, as the first version of lightMapStrobe scanned.
+  // `strobeAlways` scans although an earlier caller flipped the flag this frame (the scan is then only recorded, never flipped).
+  let strobeSurfaces = null, strobeVisible = null, strobeMainOnly = false, strobeAlways = false;
   function lightMapStrobe(visible, scanned, timeSeconds) {
+    strobeVisible = visible;
+    const started = performance.now();
     const level = runtime.levelFor(game.player.collisionActor), model = level.model;
     const read = (actor, name) => runtime.readNamed(actor, name);
     if (!strobeSurfaces) {
@@ -124,35 +128,62 @@ export function createSimSession(game, { assets = null, events = [], exportName 
     }
     // A new TimeSeconds is needed for a flip, and some Strobe light to call.
     timeSeconds = Math.fround(timeSeconds);
-    if (lights.strobe.time === timeSeconds) return;
+    const already = lights.strobe.time === timeSeconds;
+    if (already && !strobeAlways) return;
     let moving = null;
     for (const light of scanned ?? [])
       if ((light.values.LightType & 255) === 5 && surfaceLightClass(light.values) === 2) (moving ??= []).push(light);
     if (!strobeSurfaces.size && !moving) return;
+    // (a Strobe light's liveness is read once per scan, not once per node)
+    const liveOf = new Map();
     const live = actor => {
-      const values = { LightType: read(actor, 'LightType'), LightBrightness: read(actor, 'LightBrightness'), bStatic: read(actor, 'bStatic'),
-        bNoDelete: read(actor, 'bNoDelete'), bDynamicLight: read(actor, 'bDynamicLight'), LightEffect: read(actor, 'LightEffect') };
-      return (values.LightType & 255) === 5 && surfaceLightClass(values) === 1;
-    };
-    // The level surfaces drawn (the brush tracker's fragment nodes, past the
-    // level model's, are movers' polygons: their light maps are the movers').
-    let any = false, drawn = null;
-    for (const node of visible.nodes) {
-      if (node >= model.nodes.length) continue;
-      const actors = strobeSurfaces.get(model.nodes[node].surface);
-      if (actors && actors.some(live)) { any = true; break; }
-    }
-    if (!any && moving) {
-      drawn = new Set();
-      for (const node of visible.nodes) if (node < model.nodes.length) drawn.add(model.nodes[node].surface);
-      for (const light of moving) {
-        for (const surface of filterMovingLight(model, light.location, worldLightRadius(light.values), Boolean(light.values.bSpecialLit)))
-          if (drawn.has(surface)) { any = true; break; }
-        if (any) break;
+      let alive = liveOf.get(actor);
+      if (alive === undefined) {
+        const values = { LightType: read(actor, 'LightType'), LightBrightness: read(actor, 'LightBrightness'), bStatic: read(actor, 'bStatic'),
+          bNoDelete: read(actor, 'bNoDelete'), bDynamicLight: read(actor, 'bDynamicLight'), LightEffect: read(actor, 'LightEffect') };
+        liveOf.set(actor, alive = (values.LightType & 255) === 5 && surfaceLightClass(values) === 1);
       }
+      return alive;
+    };
+    // DrawFrame (0x10b1a2d0) draws the frame's child frames first (the loop
+    // at 0x10b1a339 calls itself on Frame->Child and its siblings), then
+    // sets up its own surfaces (SetupForSurf through the light manager,
+    // 0x10b1aa99), so every frame's drawn surfaces count: the main frame's
+    // and each mirror and sky child frame's. The level surfaces drawn (the
+    // brush tracker's fragment nodes, past the level model's, are movers'
+    // polygons: their light maps are the movers').
+    const frames = [{ nodes: visible.nodes, planes: visible.master?.planes ?? null },
+      ...(strobeMainOnly ? [] : visible.frames ?? []).map(frame => ({ nodes: frame.nodes, planes: frame.planes ?? null }))];
+    const counts = [], movingCounts = [];
+    let any = false;
+    for (const { nodes, planes } of frames) {
+      let found = 0, reached = 0;
+      const drawn = new Set();
+      for (const node of nodes) {
+        if (node >= model.nodes.length) continue;
+        const surface = model.nodes[node].surface;
+        drawn.add(surface);
+        const actors = strobeSurfaces.get(surface);
+        if (actors && actors.some(live)) found++;
+      }
+      // A moving Strobe light is set up for a frame when SetupDynamics takes
+      // it (its sphere against the frame's four ViewPlanes) and Filter puts
+      // it on one of the frame's drawn surfaces.
+      if (moving) {
+        const viewPlanes = planes ? viewPlanesOf(planes) : null;
+        for (const light of moving) {
+          if (viewPlanes && !movingLightInView(light.location, light.values, viewPlanes)) continue;
+          for (const surface of filterMovingLight(model, light.location, worldLightRadius(light.values), Boolean(light.values.bSpecialLit)))
+            if (drawn.has(surface)) { reached++; break; }
+        }
+      }
+      counts.push(found); movingCounts.push(reached);
+      if (found || reached) any = true;
     }
+    // Validation (liveProbe `strobe`): the Strobe-lit surfaces each frame drew at the last call.
+    lights.strobeScan = { time: timeSeconds, frames: counts, moving: movingCounts, already, ms: performance.now() - started };
     // The Strobe function's test (0x10b05b30): a new TimeSeconds flips the flag.
-    if (any) { lights.strobe.time = timeSeconds; lights.strobe.flag ^= 1; }
+    if (any && !already) { lights.strobe.time = timeSeconds; lights.strobe.flag ^= 1; }
   }
   // RenderIterator construction for the sprite scan: the iterator's
   // RenderInterface object, owned by the actor's native object. A pre-placed
@@ -831,6 +862,61 @@ export function createSimSession(game, { assets = null, events = [], exportName 
     },
     setOcclusion(value, movers = null) { occlusion = value; trackerMovers = movers; },
     setOcclusionRebuild(rebuild) { rebuildOcclusion = rebuild; },
+    /** Validation (strobeProbe in main.mjs, scripts/validate-strobe-child-frames-play.mjs): the Strobe lists of the
+     * light-map Strobe calls. `mainOnly` scans the main frame's surfaces alone (the first version's behavior,
+     * a failing baseline for the validator); `always` records the scan of frames in which a mesh or Galaxy flipped the flag first. `set` {name, LightType} writes a map light's LightType and takes the lists again (the
+     * shipped scripts never set Strobe; the experiment makes a static light a Strobe light, as `set` would in the
+     * original). `reach` returns, for the frame lightMapStrobe saw last, each frame's (the main frame, then the
+     * child frames) drawn level surfaces whose static light list holds each light: {name: surfaces}. */
+    strobeReach({ set = null, reach = false, mainOnly = null, always = null, bench = 0 } = {}) {
+      if (mainOnly !== null) strobeMainOnly = Boolean(mainOnly);
+      if (always !== null) strobeAlways = Boolean(always);
+      const level = runtime.levelFor(game.player.collisionActor), model = level.model;
+      if (set) {
+        const actor = level.actors.find(candidate => candidate?.name === set.name);
+        if (!actor) throw new Error(`strobeReach: no actor ${set.name}`);
+        runtime.writeNamed(actor, 'LightType', set.LightType);
+        strobeSurfaces = null;
+      }
+      const out = { scan: lights.strobeScan ?? null };
+      // `bench`: the cost of the last frame's scan, `bench` repeated calls (performance.now is quantized to 0.1 ms), µs per call;
+      // the Strobe state is put back, so the repeats flip nothing.
+      if (bench && strobeVisible && lights.strobeScan) {
+        const saved = { ...lights.strobe }, previous = strobeAlways, scanned = lights.strobeScan;
+        strobeAlways = true;
+        const started = performance.now();
+        for (let i = 0; i < bench; i++) { lights.strobe.time = scanned.time; lightMapStrobe(strobeVisible, live.lights, scanned.time); }
+        out.benchMicroseconds = (performance.now() - started) * 1000 / bench;
+        Object.assign(lights.strobe, saved); strobeAlways = previous; lights.strobeScan = scanned;
+      }
+      if (!reach) return out;
+      if (!strobeVisible) return { ...out, frames: null };
+      const nameOf = new Map();
+      const lightNames = lightMap => {
+        const names = [];
+        if (!lightMap || lightMap.lightActors == null || lightMap.lightActors < 0) return names;
+        for (let i = lightMap.lightActors; i < model.lights.length && model.lights[i]; i++) {
+          const ref = model.lights[i];
+          if (!nameOf.has(ref)) nameOf.set(ref, exportName ? exportName(ref) : String(ref));
+          names.push(nameOf.get(ref));
+        }
+        return names;
+      };
+      const frames = [strobeVisible.nodes, ...(strobeVisible.frames ?? []).map(frame => frame.nodes)];
+      out.frames = frames.map(nodes => {
+        const counts = {}, seen = new Set();
+        for (const node of nodes) {
+          if (node >= model.nodes.length) continue;
+          const surface = model.nodes[node].surface;
+          if (seen.has(surface)) continue;
+          seen.add(surface);
+          const lightMap = model.surfaces[surface].lightMap >= 0 ? model.lightMaps[model.surfaces[surface].lightMap] : null;
+          for (const name of lightNames(lightMap)) counts[name] = (counts[name] ?? 0) + 1;
+        }
+        return counts;
+      });
+      return out;
+    },
     /** Validation (iteratorProbe in main.mjs): the render iterators' per-frame
      * runs since the last reset. */
     iteratorState({ reset = false } = {}) {
