@@ -601,6 +601,12 @@ not in others. It was first read as the panes' reflection lit differently (a mir
 alone) and is not: the patch is the floor's own light map, present in frames without panes, and each toggle of the page's mirror, mover, fog,
 corona and actor passes left it. See [Strobe](#strobe-a-host-input-and-a-triggerlight-the-page-lit-wrongly).
 
+**The panes' reflection from other views (2026-10-14).** The three panes reflect together in the original; Play reflected one of them, the first request in
+the BSP's order, and drew the others as their own texture (OccludeBsp's mirror requests pass iSurf 0, so CreateChildFrame merges the three coplanar
+requests into one frame; Play planned the pass through the first request's group alone). Fixed: [merged mirror
+requests](mirror-surfaces.md#merged-mirror-requests-2026-10-14); at four matched views the whole-frame mean abs. difference fell from 13.21, 9.01, 5.45 to
+2.46, 2.72, 4.08 (a fourth view's difference is the reflected scene's light, not the panes).
+
 The random stream: the first tick whose draw count differs is tick 1, 2 or 3 depending on the load (original 248, Play 247 on tick 1 of
 one load, the numbers of the Businessman1 case fixed in eb22793; not checked whether it is the same cause). Not traced.
 

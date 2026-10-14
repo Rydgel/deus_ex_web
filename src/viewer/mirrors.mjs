@@ -153,6 +153,9 @@ export function createMirrors(notes, displayGamma) {
       const result = [];
       for (const node of nodes) {
         const { group, camera: child, depth, scissor, index } = node;
+        // The groups the frame looks through: one for a frame of one request,
+        // several when OccludeBsp's requests merged (mirror-passes.mjs frameGroups).
+        const through = node.groups ?? [group];
         const nested = draw(node.children);
         const target = targetFor(depth, index);
         target.setSize(size.x, size.y);
@@ -163,7 +166,7 @@ export function createMirrors(notes, displayGamma) {
         for (const n of nested) { n.group.texture.value = n.target.texture; n.group.size.value.copy(size); n.group.active.value = 1; }
         // The mirror's own plane is the child's clip plane; its faces are not
         // part of the reflected view.
-        for (const mesh of group.meshes) mesh.visible = false;
+        for (const g of through) for (const mesh of g.meshes) mesh.visible = false;
         updateActors?.(fromView(child.position.toArray()), child, node);
         renderer.setRenderTarget(target); renderer.setClearColor(0, 1);
         renderer.clear();
@@ -178,9 +181,9 @@ export function createMirrors(notes, displayGamma) {
         // eye's side. No bias or invented distance/opacity constant.
         renderClip.copy(group.plane);renderer.clippingPlanes = clippingPlanes;
         try { renderer.render(scene, child); } finally { framePass?.(null); }
-        for (const mesh of group.meshes) mesh.visible = visibility.get(mesh);
+        for (const g of through) for (const mesh of g.meshes) mesh.visible = visibility.get(mesh);
         stats.renderedPlanes++;stats.depth=Math.max(stats.depth,depth);stats.scissorPixels+=scissor.width*scissor.height;
-        result.push({ group, target });
+        for (const g of through) result.push({ group: g, target });
       }
       return result;
     }

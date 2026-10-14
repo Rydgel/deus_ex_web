@@ -115,14 +115,27 @@ export const childFramesMode = () => (typeof process !== 'undefined' && process.
 export const iteratorFramesMode = () => (typeof process !== 'undefined' && process.env?.ITERATOR_FRAMES)
   || globalThis.DEUS_EX_ITERATOR_FRAMES || 'on';
 
-/** The mirror group a child frame looks through (sim-session.mjs
- * `visibility` frames): a moving group by its tracked polygon's key, a
- * static one by the node of the request that made the frame. */
-export function frameGroup(groups, frame) {
-  if (frame.group) return groups.find(group => group.key === frame.group) ?? null;
-  for (const group of groups) if (groupNodes(group)?.has(frame.iNode)) return group;
-  return null;
+/** The mirror groups a child frame looks through (sim-session.mjs
+ * `visibility` frames). CreateChildFrame merges every request of one parent
+ * with equal iSurf, zone and NearClip (0x10b15a40), and OccludeBsp passes
+ * iSurf 0 for each mirror request (0x10b18b4a), so one frame stands for all
+ * the coplanar mirror polygons of a zone that were requested, e.g. three
+ * panes in a row. `frame.requests` names each one: a tracked mover's polygon
+ * by its key, a static one by its node (the group holding that node). A frame
+ * without `requests` (an older producer) looks through its first request's
+ * group alone. Null when no request has a group the page supports. */
+export function frameGroups(groups, frame) {
+  const requests = frame.requests ?? [{ iNode: frame.iNode, group: frame.group }], found = [];
+  for (const request of requests) {
+    const group = request.group ? groups.find(g => g.key === request.group) ?? null
+      : groups.find(g => groupNodes(g)?.has(request.iNode)) ?? null;
+    if (group && !found.includes(group)) found.push(group);
+  }
+  return found.length ? found : null;
 }
+
+/** The first of a frame's groups (the request that made the frame). */
+export function frameGroup(groups, frame) { return frameGroups(groups, frame)?.[0] ?? null; }
 
 /** A child frame's span bounds in drawing-buffer pixels, bottom-up
  * (`rect` the frame's render viewport, top-down; `height` the buffer's),
@@ -183,7 +196,7 @@ export function planFramePasses(source, groups, size, frames, rect = null) {
     const out = [];
     for (const frame of byParent.get(parent) ?? []) {
       if (frame.kind !== 'mirror') continue;
-      const group = frameGroup(groups, frame), box = group && spanBox(frame, rect, size);
+      const through = frameGroups(groups, frame), group = through?.[0], box = group && spanBox(frame, rect, size);
       if (!box) continue;
       const depth = view.depth + 1, camera = new THREE.PerspectiveCamera();
       const world = new THREE.Matrix4().multiplyMatrices(group.matrix, view.world);
@@ -201,7 +214,7 @@ export function planFramePasses(source, groups, size, frames, rect = null) {
       // camera from its own Coords.
       const skies = (byParent.get(frame.index) ?? []).filter(f => f.kind === 'sky')
         .map(sky => ({ frame: sky, camera: skyFrameCamera(camera, frame.coords, sky.coords) }));
-      const node = { group, camera, world, depth, scissor, index: out.length, bounds, frame, skies };
+      const node = { group, groups: through, camera, world, depth, scissor, index: out.length, bounds, frame, skies };
       node.children = children({ camera, world, depth, scissor, through: group }, frame.index);
       out.push(node);
     }
@@ -251,7 +264,7 @@ export function planMirrorPasses(source, groups, size, visible = mesh => mesh.vi
       // This frame's columns [x, x+w) are the child's [W-x-w, W-x): the
       // child is mirrored against it.
       const scissor = { x: size.x - bounds.x - bounds.width, y: bounds.y, width: bounds.width, height: bounds.height };
-      const node = { group, camera, world, depth, scissor, index, bounds };
+      const node = { group, groups: [group], camera, world, depth, scissor, index, bounds };
       node.children = children({ camera, world, depth, scissor, through: group });
       return node;
     });

@@ -218,7 +218,21 @@ async function validate(mapName, { seed, count, tracker = null, views = [] }) {
   const oracle = JSON.parse(execFileSync(python, ['scripts/native-occlusion-oracle.py'],
     { input: JSON.stringify(request), encoding: 'utf8', maxBuffer: 1 << 30 })).results;
   const flags = request.model.nodes.map(n => n.flags), times = new Array(model.zones.length).fill(0);
-  const stats = { frames: 0, sky: 0, mirror: 0, deepest: 0, merged: 0, sprites: 0, childSprites: 0, polys: 0, ownFrames: 0 };
+  const stats = { frames: 0, requests: 0, sky: 0, mirror: 0, deepest: 0, merged: 0, sprites: 0, childSprites: 0, polys: 0, ownFrames: 0 };
+  // Which child frame each request made or merged into: the page needs every
+  // request's node (a frame stands for all the coplanar mirrors of a zone that
+  // were requested, since OccludeBsp passes iSurf 0, 0x10b18b4a). The original's
+  // CreateChildFrame returns the frame (the oracle records eax at its return);
+  // the frame's `requests` are the owner's requests that returned it, in order.
+  const merges = (ownerIndex, ownerRequests, oracleRequests, frames, oracleFrames, where) => {
+    for (const [k, f] of frames.entries()) {
+      if (f.parent !== ownerIndex) continue;
+      const want = ownerRequests.filter((_, j) => oracleRequests[j].frameIndex === oracleFrames[k].index).map(ch => ch.iNode);
+      same(f.requests, want, `${where}: requests merged into child frame ${f.index}`);
+      stats.requests += f.requests.length;
+    }
+    same(ownerRequests.every((_, j) => oracleRequests[j].frameIndex > 0), true, `${where}: every request returns a frame`);
+  };
   const drawLists = (got, want, where) => {
     for (let list = 0; list < 3; list++) {
       const w = want[list].map(d => ({ iNode: d.iNode, iSurf: d.iSurf, iZone: d.iZone, polyFlags: d.polyFlags >>> 0,
@@ -258,6 +272,7 @@ async function validate(mapName, { seed, count, tracker = null, views = [] }) {
       drawLists(r.draw, o.draw, where);
       requests(r.children, o.children, where);
       same(r.frames.length, o.frames.length, `${where}: child frame count`);
+      merges(0, r.children, o.children, r.frames, o.frames, where);
       for (const [k, f] of r.frames.entries()) {
         const of = o.frames[k], at = `${where} frame ${f.index} (${f.kind}, recursion ${f.recursion})`;
         same([f.index, f.parent, f.zone, f.recursion, f.mirror >>> 0], [of.index, of.parent, of.zoneNumber, of.recursion,
@@ -269,6 +284,7 @@ async function validate(mapName, { seed, count, tracker = null, views = [] }) {
         same(f.sprites, of.sprites.map(entry => ({ key: entry.sprite, span: entry.span })), `${at}: Frame->Sprite`);
         drawLists(f.draw, of.draw, at);
         requests(f.children, of.children, at);
+        merges(f.index, f.children, of.children, r.frames, o.frames, at);
         stats.frames++; stats[f.kind]++; stats.deepest = Math.max(stats.deepest, f.recursion);
         stats.childSprites += f.sprites.length;
         stats.polys += f.draw.reduce((n, l) => n + l.length, 0);
@@ -287,7 +303,7 @@ async function validate(mapName, { seed, count, tracker = null, views = [] }) {
     occlusion.dispose();
   }
   console.log(`${mapName}${tracker ? ` (${movers.length} tracked movers)` : ''}: ${cases.length} cases, ${stats.frames} child frames match ` +
-    `(${stats.mirror} mirror, ${stats.sky} sky, recursion up to ${stats.deepest}, ${stats.merged} merged requests, ` +
+    `(${stats.mirror} mirror, ${stats.sky} sky, recursion up to ${stats.deepest}, ${stats.merged} merged requests, ${stats.requests} requests placed in their frames, ` +
     `${stats.polys} child draw lists, ${stats.childSprites} child-frame sprites, ${stats.sprites} root sprites, ${stats.ownFrames} frames with their own candidates)`);
 }
 

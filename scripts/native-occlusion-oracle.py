@@ -131,6 +131,7 @@ class Occlusion(native.NativeCollision):
         cpu.mem_write(self.vtable, bytes(cpu.mem_read(URENDER_VTABLE, 0xc0)))
         self.write(self.vtable + 0x68, 'I', self.child_stub)
         self.children = []
+        self.child_returns = set()
 
     # -- emulator plumbing ---------------------------------------------------
     def alloc(self, size, align=16):
@@ -170,9 +171,17 @@ class Occlusion(native.NativeCollision):
     def on_trap_stub(self, cpu, address, size, data):
         raise RuntimeError('Unexpected virtual call on a fixture object')
 
+    def on_child_return(self, cpu, address, size, data):
+        # CreateChildFrame's result (eax): the frame the request made or merged into.
+        self.children[-1]['frame'] = cpu.reg_read(UC_X86_REG_EAX)
+
     def on_child(self, cpu, address, size, data):
         esp = cpu.reg_read(UC_X86_REG_ESP)
         frame, span, level, i_surf, i_zone, mirror, near_clip, coords, bounds = self.read(esp + 4, '9I')
+        ret = self.read(esp, 'I')[0]
+        if ret not in self.child_returns:
+            self.child_returns.add(ret)
+            cpu.hook_add(UC_HOOK_CODE, self.on_child_return, begin=ret, end=ret)
         self.children.append({
             'iSurf': i_surf, 'iZone': i_zone, 'mirrorBits': mirror,
             'nearClipBits': list(self.read(near_clip, '4I')), 'coordsBits': list(self.read(coords, '12I')),
@@ -482,6 +491,12 @@ class Occlusion(native.NativeCollision):
             frames = []
             self.occlude_children(frame, 0, case.get('sprites', []), frames, case.get('frameSprites', {}))
             result['frames'] = frames
+            # Each request's frame by visit index: the frame CreateChildFrame
+            # returned for it (a merge returns the existing one).
+            index_of = {f['pointer']: f['index'] for f in frames}
+            for owner in [result] + frames:
+                for request in owner['children']:
+                    request['frameIndex'] = index_of.get(request.get('frame'), 0)
         after = self.node_flags()
         times = [self.read(self.model + 0x108 + 24 * i, 'I')[0] for i in range(64)]
         result.update({
@@ -542,7 +557,7 @@ class Occlusion(native.NativeCollision):
                 'frameBits': list(self.read(child + 0x34, '12I')) + list(self.read(child + 0xb8, '17I')) +
                              list(self.read(child + 0xfc, '28I')),
                 'uncoordsBits': list(self.read(child + 0x64, '12I')),
-                'span': self.span(self.read(child + 0x94, 'I')[0]),
+                'span': self.span(self.read(child + 0x94, 'I')[0]), 'pointer': child,
             }
             frames.append(record)
             self.children = []
