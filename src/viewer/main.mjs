@@ -170,7 +170,10 @@ function applySimEvents(events,{world:target,actors,weapon}){
 }
 
 const $ = id => document.getElementById(id);
-const renderer = new THREE.WebGLRenderer({ canvas: $('scene'), antialias: true });
+// The canvas is multisampled; ?antialias=0 turns that off: the original's Direct3D 7 device has no multisampling, so its frames have none
+// (docs/visual-acceptance.md "Security cameras"). The validators patch this call's `antialias: true })` text.
+const rendererOptions = options => new URLSearchParams(location.search).get('antialias') === '0' ? { ...options, antialias: false } : options;
+const renderer = new THREE.WebGLRenderer(rendererOptions({ canvas: $('scene'), antialias: true }));
 renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
 // World and actor shaders apply the original display-encoded modulation
 // themselves and draw raw colours; the display ramp maps the finished frame

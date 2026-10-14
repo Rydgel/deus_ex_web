@@ -11,6 +11,7 @@
  * textures, materials and meshes follow asynchronously, and it draws once
  * they exist, with the latest record's state. */
 import * as THREE from 'three';
+import {REENCODE_GLSL} from './original-sampling.mjs';
 import {TextureStore} from '../unreal/textures.mjs';
 import {ActorMeshTextures} from './actor-mesh-textures.mjs';
 import {POLY} from '../unreal/geometry.mjs';
@@ -224,7 +225,8 @@ export function createMeshDraw(assets,creation,{gpu=null,texturePool,batches=nul
       // resource is shared, synchronously, at its former allocation point.
       const textureLease=texturePool.acquire(data,flags);textureLeases.push(textureLease);
       const texture=textureLease.texture,first=data.mips[0],key=record.key;
-      // Keep texture sampling and recovered vertex lighting in the same
+      // Texture sampling (the skins are display-space 8-bit values, filtered as
+      // such: original-sampling.mjs) and recovered vertex lighting are in the same
       // display-encoded space for the main framebuffer and mirror target.
       // D3D modulates the display-encoded texel by the vertex diffuse
       // (docs/mesh-lighting.md), before the display gamma ramp; the world
@@ -250,7 +252,7 @@ export function createMeshDraw(assets,creation,{gpu=null,texturePool,batches=nul
           shader.fragmentShader=shader.fragmentShader.replace('#include <common>',
             '#include <common>\nuniform float deusDisplayGamma;\nuniform float deusModulated;\nvarying vec3 vDeusLight;')
             .replace('#include <colorspace_fragment>',
-              'gl_FragColor = sRGBTransferOETF(gl_FragColor);\ngl_FragColor.rgb *= vDeusLight;\n'+
+              REENCODE_GLSL+'\ngl_FragColor.rgb *= vDeusLight;\n'+
               `if (deusModulated > 0.5) { ${displayRampGlsl('deusDisplayGamma',true)} }\n`+
               `else { ${displayRampGlsl('deusDisplayGamma',false)} }`);
           // The original's vertex projection (docs/frame-projection.md); the GPU path projects the
@@ -586,7 +588,7 @@ function batchMaterial(template,members,gpu,displayGamma){
     shader.fragmentShader=shader.fragmentShader.replace('#include <common>',
       '#include <common>\nuniform float deusDisplayGamma;\nuniform float deusModulated;\nvarying vec3 vDeusLight;')
       .replace('#include <colorspace_fragment>',
-        'gl_FragColor = sRGBTransferOETF(gl_FragColor);\ngl_FragColor.rgb *= vDeusLight;\n'+
+        REENCODE_GLSL+'\ngl_FragColor.rgb *= vDeusLight;\n'+
         `if (deusModulated > 0.5) { ${displayRampGlsl('deusDisplayGamma',true)} }\n`+
         `else { ${displayRampGlsl('deusDisplayGamma',false)} }`);
     frameProjection.patch(shader,{floatFloat:false,camera:true});

@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { textureColorSpace } from './original-sampling.mjs';
 import {fireTables, firePostLoad, fireConstantTimeTick, waterConstruct, wetPostLoad, wetConstantTimeTick}
   from '../runtime/fire-texture.mjs';
 import {get as textureFrame} from '../runtime/texture-animation.mjs';
@@ -82,7 +83,7 @@ export function createProceduralTextures({seed = 0x0f12e, kernel} = {}) {
       const {state, palette, tick, expand = null} = kind(data), uSize = state.uSize, vSize = state.vSize, v = data.values;
       const rgba = new Uint8Array(uSize * vSize * 4);
       const texture = new THREE.DataTexture(rgba, uSize, vSize, THREE.RGBAFormat);
-      texture.colorSpace = THREE.SRGBColorSpace; texture.flipY = false;
+      texture.colorSpace = textureColorSpace(); texture.flipY = false;
       texture.wrapS = texture.wrapT = THREE.RepeatWrapping;
       texture.magFilter = THREE.LinearFilter; texture.minFilter = THREE.LinearFilter; texture.generateMipmaps = false;
       record = {key: data.key, kind: data.procedural, state, texture, rgba, palette, expand, changed: true,

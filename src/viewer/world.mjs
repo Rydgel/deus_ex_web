@@ -18,6 +18,7 @@ import { createLightFrame } from '../runtime/static-lighting.mjs';
 import { createNativeRng } from '../runtime/rng.mjs';
 import { createFogPass } from './fog-pass.mjs';
 import { createWorldVisibility } from './world-visibility.mjs';
+import { configureSampler } from './original-sampling.mjs';
 import { loadScriptVmKernel } from '../runtime/script-vm-kernel.mjs';
 
 /** Whether a light map record's points meet a frustum, or any of a list of
@@ -54,13 +55,12 @@ export async function createWorld(map, asset, assets, onProgress = () => {}, {ba
     if (!textureGPU.has(texKey)) {
       const first = data.mips[0];
       const tex = new THREE.DataTexture(first.data, first.width, first.height, THREE.RGBAFormat);
-      tex.colorSpace = THREE.SRGBColorSpace; tex.flipY = false;
+      tex.flipY = false;
       tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
-      tex.magFilter = flags & POLY.NoSmooth ? THREE.NearestFilter : THREE.LinearFilter;
       const last = data.mips.at(-1), complete = last.width === 1 && last.height === 1;
       if (complete && data.mips.length > 1) tex.mipmaps = data.mips;
       tex.generateMipmaps = !complete;
-      tex.minFilter = flags & POLY.NoSmooth ? THREE.NearestMipmapNearestFilter : THREE.LinearMipmapLinearFilter;
+      configureSampler(tex, Boolean(flags & POLY.NoSmooth));
       tex.needsUpdate = true;
       textureGPU.set(texKey, tex);
     }

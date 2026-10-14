@@ -15,12 +15,12 @@ test('static skins share GPU texture across private decodes with independent mat
   assert.equal(a.texture,b.texture);
   assert.equal(a.texture.image.data,data.mips[0].data);
   assert.equal(a.texture.mipmaps,data.mips);
-  assert.equal(a.texture.colorSpace,THREE.SRGBColorSpace);
+  assert.equal(a.texture.colorSpace,THREE.NoColorSpace,'filtered in display space, as the original\'s 8-bit textures are (docs/texture-sampling.md)');
   assert.equal(a.texture.flipY,false);
   assert.equal(a.texture.wrapS,THREE.RepeatWrapping);
   assert.equal(a.texture.wrapT,THREE.RepeatWrapping);
   assert.equal(a.texture.magFilter,THREE.LinearFilter);
-  assert.equal(a.texture.minFilter,THREE.LinearMipmapLinearFilter);
+  assert.equal(a.texture.minFilter,THREE.LinearMipmapNearestFilter,'D3DDrv MIPFILTER POINT (docs/texture-sampling.md)');
   assert.equal(a.texture.generateMipmaps,false);
   let disposed=0;a.texture.addEventListener('dispose',()=>disposed++);
   a.release();a.release();assert.equal(disposed,0,'the surviving actor still owns the texture');
