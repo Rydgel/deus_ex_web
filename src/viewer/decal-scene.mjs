@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import { displayRampGlsl } from './light-atlas.mjs';
 import { DECAL_LAYER } from './render-layers.mjs';
 import { configureSampler, REENCODE_GLSL } from './original-sampling.mjs';
+import { frameProjection, FRAME_PROJECTION_KEY } from './frame-projection.mjs';
 
 
 /** Decals in Play, the page's side (docs/decals.md "Drawing"): the
@@ -42,8 +43,10 @@ export function createDecalScene(assets, textures, { displayGamma }) {
         shader.fragmentShader = shader.fragmentShader.replace('#include <common>', '#include <common>\nuniform float deusDisplayGamma;')
           .replace('#include <colorspace_fragment>', `${REENCODE_GLSL}
             ${displayRampGlsl('deusDisplayGamma', true)}`);
+        // ClipDecal's points through the original's vertex chain (docs/frame-projection.md "Decals").
+        frameProjection.patch(shader, { decal: true });
       };
-      material.customProgramCacheKey = () => 'deus-decal';
+      material.customProgramCacheKey = () => `deus-decal:${FRAME_PROJECTION_KEY}`;
       const geometry = new THREE.BufferGeometry();
       const mesh = new THREE.Mesh(geometry, material);
       mesh.matrixAutoUpdate = false; mesh.frustumCulled = false; mesh.visible = false;

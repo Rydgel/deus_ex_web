@@ -66,13 +66,15 @@ export function applyPlayFrame(camera, view, renderRect, projection = null) {
 const wordFloat = (() => { const u = new Uint32Array(1), f = new Float32Array(u.buffer); return word => (u[0] = word, f[0]); })();
 /** The projection fields of the pass frame OccludeBsp and the draws read
  * (occlusion frame words: 12 X, 13 Y, 14 FX15, 15 FY15, 20 Proj.Z), as the
- * numbers setFrameProjection takes; null when the words are not a drawn
- * frame. */
-export function projectionOf(words) {
+ * numbers setFrameProjection takes, with the frame's PrjXM, PrjYM, PrjXP and
+ * PrjYP (`prj`, ComputeRenderSize's fields 25..28: the planes ClipDecal's
+ * outcodes test); null when the words are not a drawn frame. */
+export function projectionOf(words, prj = null) {
   const width = words[12] | 0, height = words[13] | 0;
   if (!(width > 0 && height > 0)) return null;
   return { width, height, fx15: wordFloat(words[14]), fy15: wordFloat(words[15]), projZ: wordFloat(words[20]),
-    rprojZ: wordFloat(words[60]), coords: Array.from({ length: 12 }, (_, i) => wordFloat(words[i])) };
+    rprojZ: wordFloat(words[60]), coords: Array.from({ length: 12 }, (_, i) => wordFloat(words[i])),
+    ...(prj ? { prj: Array.from(prj, wordFloat) } : {}) };
 }
 
 /** The same from the ComputeRenderSize layout the Rust core keeps for every
@@ -80,7 +82,8 @@ export function projectionOf(words) {
  * the frame's rectangle size. */
 export function projectionOfFields(fields, width, height) {
   return { width, height, fx15: wordFloat(fields[14]), fy15: wordFloat(fields[15]), projZ: wordFloat(fields[21]),
-    rprojZ: wordFloat(fields[24]), coords: Array.from({ length: 12 }, (_, i) => wordFloat(fields[i])) };
+    rprojZ: wordFloat(fields[24]), coords: Array.from({ length: 12 }, (_, i) => wordFloat(fields[i])),
+    prj: Array.from(fields.slice(25, 29), wordFloat) };
 }
 
 const basis = new THREE.Matrix4();

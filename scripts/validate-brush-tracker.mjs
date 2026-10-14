@@ -229,12 +229,40 @@ function runRust(built, req, check, mutate = null) {
         else throw new Error(`Unknown step ${step.op}`);
       }
       assert.equal(status, 0, `step ${k} (${step.op}): tracker status ${status}`);
-      check(k, step, reporter.report(step, result));
+      check(k, step, reporter.report(step, result), t);
     });
   } finally {
     occlusion.dispose();
   }
 }
+
+/** FPoly::Transform's output (Engine 0x10387360, the oracle hooks its return and
+ * reads the polygon): for every polygon the step's rebuilds transformed, the
+ * last time (a mover pulled into several Updates is rebuilt more than once),
+ * the port's exported vertices equal the original's bit for bit and in its
+ * order. */
+function checkTransforms(where, transforms, t, req) {
+  const last = new Map();
+  for (const record of transforms) {
+    const owner = t.surfOwner(record.iLink);
+    assert.ok(owner, `${where}: Transform of iLink ${record.iLink} is a tracker surface`);
+    last.set(`${owner.tag - 0x40000000}:${owner.ordinal}`, record);
+  }
+  const exported = new Map();
+  for (const [key, record] of last) {
+    const [mover, ordinal] = key.split(':').map(Number);
+    if (!exported.has(mover)) exported.set(mover, t.moverPoints(mover, { raw: true }));
+    const { points, counts } = exported.get(mover), words = new Uint32Array(points.buffer, points.byteOffset, points.length);
+    let start = 0;
+    for (let k = 0; k < ordinal; k++) start += counts[k];
+    assert.equal(counts[ordinal], record.vertexBits.length, `${where}: ${req.actors[mover].name} polygon ${ordinal}: vertex count`);
+    for (let j = 0; j < counts[ordinal]; j++)
+      assert.deepEqual([...words.subarray(3 * (start + j), 3 * (start + j) + 3)], record.vertexBits[j].map(v => v >>> 0),
+        `${where}: ${req.actors[mover].name} polygon ${ordinal} vertex ${j}`);
+    stats.transforms++;
+  }
+}
+const stats = { transforms: 0 };
 
 const sha = text => createHash('sha256').update(text).digest('hex');
 const built = new Map();
@@ -250,15 +278,16 @@ for (const c of spec.cases) {
   const oracleMs = Date.now() - t0;
   for (const block of oracle.coverage) coverage.add(block);
   const t1 = Date.now();
-  runRust(b, req, (k, step, mine) => {
+  runRust(b, req, (k, step, mine, t) => {
     const o = oracle.results[k];
+    checkTransforms(`${c.id} step ${k} (${step.op})`, o.transforms, t, req);
     if (o.brief) {
       mine.newBlocks = o.newBlocks;
       assert.equal(sha(canonical(mine)), o.sha256,
         `${c.id} step ${k} (${step.op}, brief): ${difference(mine, mine) ?? ''}report digest differs`);
       brief++;
     } else {
-      const { newBlocks: _, ...want } = o;
+      const { newBlocks: _, transforms: __, ...want } = o;
       const d = difference(mine, want);
       assert.equal(d, null, `${c.id} step ${k} (${step.op}): ${d}`);
       full++;
@@ -272,11 +301,15 @@ for (const c of spec.cases) {
     const k = req.steps.findIndex((s, i) => i > 0 && s.set && Object.keys(s.set).length);
     const name = Object.keys(req.steps[k].set)[0];
     let detected = false;
-    runRust(b, req, (i, step, mine) => {
+    runRust(b, req, (i, step, mine, t) => {
       if (i !== k) return;
       const o = oracle.results[i];
+      // One bit of the original's last Transform output flipped must be found.
+      const bad = structuredClone(o.transforms);
+      bad.at(-1).vertexBits[0][0] ^= 1;
+      assert.throws(() => checkTransforms('mutation', bad, t, req), /vertex 0/, `${c.id} step ${k}: a flipped Transform bit went undetected`);
       if (o.brief) { mine.newBlocks = o.newBlocks; detected = sha(canonical(mine)) !== o.sha256; }
-      else { const { newBlocks: _, ...want } = o; detected = difference(mine, want) !== null; }
+      else { const { newBlocks: _, transforms: __, ...want } = o; detected = difference(mine, want) !== null; }
     }, (i, set) => {
       if (i !== k) return set;
       const fields = { ...set[name], locationBits: [...set[name].locationBits] };
@@ -288,5 +321,6 @@ for (const c of spec.cases) {
   }
 }
 console.log(`${cases} cases, ${steps} steps (${full} full reports, ${brief} brief digests) equal to the original; the oracle reached ${coverage.size} tracker blocks`);
+console.log(`FPoly::Transform: ${stats.transforms} polygon outputs (the last of each step) equal the original's, bit for bit`);
 if (mutation) console.log(`mutation check: ${mutation}`);
 console.log('validate-brush-tracker: ok');

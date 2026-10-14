@@ -28,11 +28,16 @@ export function readPolys(pkg, bytes, index) {
  * invisible polygons); Update (0x1037a400) then transforms the polygons, not
  * the brush model's compiled BSP surfaces, whose light indices are all -1.
  * Returns that model (the brush's light maps, shadow bits and light lists
- * kept) with one node per polygon and its triangle fan. */
+ * kept) with one node per polygon and its triangle fan. `trackedIndex`
+ * gives each point's place among the polygons' vertices in order (the
+ * tracker's transformed vertices, brush-tracker.mjs `moverPoints`), -1 for a
+ * polygon's base point. */
 export function moverModelFromPolys(model, polygons, { specialLit = false } = {}) {
-  const points = [], vectors = [], surfaces = [], nodes = [], triangles = [];
+  const points = [], vectors = [], surfaces = [], nodes = [], triangles = [], trackedIndex = [];
+  let vertexOrdinal = 0;
   polygons.forEach((polygon, index) => {
     const base = points.push(polygon.base) - 1, normal = vectors.push(polygon.normal) - 1;
+    trackedIndex.push(-1);
     const textureU = vectors.push(polygon.textureU) - 1, textureV = vectors.push(polygon.textureV) - 1;
     const flags = ((polygon.flags & 0x3cffffff) | (specialLit ? 0x100000 : 0)) >>> 0;
     surfaces.push({ texture: polygon.texture, flags, base, normal, textureU, textureV, lightMap: polygon.brushPolygon,
@@ -40,9 +45,9 @@ export function moverModelFromPolys(model, polygons, { specialLit = false } = {}
     const [nx, ny, nz] = polygon.normal, [bx, by, bz] = polygon.base;
     nodes.push({ plane: [nx, ny, nz, nx * bx + ny * by + nz * bz], surface: index, zones: [0, 0], vertexCount: polygon.vertices.length });
     const first = points.length;
-    for (const vertex of polygon.vertices) points.push(vertex);
+    for (const vertex of polygon.vertices) { points.push(vertex); trackedIndex.push(vertexOrdinal++); }
     if (flags & 1) return;
     for (let k = 1; k < polygon.vertices.length - 1; k++) triangles.push({ points: [first, first + k, first + k + 1], surface: index, node: index });
   });
-  return { model: { ...model, points, vectors, surfaces, nodes }, triangles };
+  return { model: { ...model, points, vectors, surfaces, nodes, trackedIndex }, triangles };
 }

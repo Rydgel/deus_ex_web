@@ -78,7 +78,8 @@ export const TRACKER = Object.freeze({ NODES: 0, NODES_NUM: 1, NODES_MAX: 2, TOP
   GENERATION: 51, WORDS: 56 });
 /** Mover record words (MV per mover). */
 export const MOVER = Object.freeze({ TAG: 0, FLAGS: 1, LOCATION: 2, ROTATION: 5, PREPIVOT: 8, MAINSCALE: 11,
-  POSTSCALE: 16, SAVEDPOS: 21, SAVEDROT: 24, MOVERLINK: 27, POLYS: 28, POLY_COUNT: 29, SPECIALLIT: 30, WORDS: 40 });
+  POSTSCALE: 16, SAVEDPOS: 21, SAVEDROT: 24, MOVERLINK: 27, POLYS: 28, POLY_COUNT: 29, SPECIALLIT: 30,
+  XVERTS: 31, REVISION: 32, REVERSED: 33, WORDS: 40 });
 /** Polygon record words (FPoly). */
 export const POLY = Object.freeze({ BASE: 0, NORMAL: 3, TEXU: 6, TEXV: 9, VERT: 12, FLAGS: 60, NUMV: 61,
   ILINK: 62, IBRUSHPOLY: 63, TEXKEY: 64, PAN: 65, TEXFLAGS: 66, WORDS: 68 });
@@ -105,6 +106,7 @@ export function createTrackerHost(kernel, model, movers, { at, caps, block, word
   if (!kernel.trackerHeaderPtr) throw new Error('The script VM core predates the brush tracker; run npm run build:wasm');
   const vectors = block(12 * caps.vectors), dsurfs = block(4 * DSURF.WORDS * Math.max(1, caps.polys)),
     moverBlock = block(4 * MOVER.WORDS * Math.max(1, movers.length)),
+    exportBlock = block(12 * Math.max(1, movers.reduce((n, m) => n + m.polys.reduce((k, p) => k + p.vertexBits.length, 0), 0))),
     polyBlock = block(4 * POLY.WORDS * Math.max(1, caps.polys)), nodeMaps = block(8 * Math.max(1, caps.nodeMaps)),
     owners = block(4 * Math.max(1, caps.owners)), helper = block(4 * Math.max(1, caps.helper)),
     scratch = block(scratchBytes);
@@ -125,7 +127,7 @@ export function createTrackerHost(kernel, model, movers, { at, caps, block, word
     const u = words();
     u.set(header.map(v => v >>> 0), headerAt());
     model.vectors.forEach((v, i) => { for (let k = 0; k < 3; k++) u[(vectors >>> 2) + 3 * i + k] = bits(v[k]); });
-    let polyAt = polyBlock >>> 2;
+    let polyAt = polyBlock >>> 2, exportAt = exportBlock;
     movers.forEach((m, i) => {
       const o = (moverBlock >>> 2) + MOVER.WORDS * i;
       u.fill(0, o, o + MOVER.WORDS);
@@ -134,7 +136,8 @@ export function createTrackerHost(kernel, model, movers, { at, caps, block, word
         ...scale(m.postScale)].map(v => v >>> 0), o);
       // AMover::PostLoad (0x103af80f): SavedPos (-12345, ...), SavedRot (123, 456, 789).
       u.set([bits(-12345), bits(-12345), bits(-12345), 123, 456, 789, 0xffffffff, polyAt << 2, m.polys.length,
-        m.specialLit ? 1 : 0], o + MOVER.SAVEDPOS);
+        m.specialLit ? 1 : 0, exportAt], o + MOVER.SAVEDPOS);
+      exportAt += 12 * m.polys.reduce((n, p) => n + p.vertexBits.length, 0);
       for (const p of m.polys) {
         u.fill(0, polyAt, polyAt + POLY.WORDS);
         u.set([...p.baseBits, ...p.normalBits, ...p.textureUBits, ...p.textureVBits].map(v => v >>> 0), polyAt);
@@ -148,6 +151,7 @@ export function createTrackerHost(kernel, model, movers, { at, caps, block, word
     });
   }
   const h = i => words()[headerAt() + i];
+  const vertexCounts = movers.map(m => m.polys.map(p => p.vertexBits.length));
   const mover = i => (moverBlock >>> 2) + MOVER.WORDS * i;
   return {
     blocks: { vectors, dsurfs, moverBlock, polyBlock, nodeMaps, owners, helper },
@@ -169,6 +173,30 @@ export function createTrackerHost(kernel, model, movers, { at, caps, block, word
     },
     /** A mover's record words (validation and Play's mover drawing). */
     moverWords: i => words().slice(mover(i), mover(i) + MOVER.WORDS),
+    /** Mover `i`'s revision: how many times Update has rebuilt it (the
+     * constructor's Update(NULL) is the first). */
+    revision: i => words()[mover(i) + MOVER.REVISION],
+    /** The vertices FPoly::Transform left in mover `i`'s polygons at its last
+     * rebuild (Update's FMemStack copies, which AddNode copies into
+     * Model->Points when a polygon reaches a leaf unsplit), as a flat
+     * Float32Array in the brush polygons' own vertex order (the reversal
+     * Transform applies when the orientation is negative is undone; `raw`
+     * keeps Transform's order), and the revision they belong to. */
+    moverPoints(i, { raw = false } = {}) {
+      const u = words(), o = mover(i), counts = vertexCounts[i], total = counts.reduce((n, c) => n + c, 0);
+      const out = new Float32Array(3 * total), from = new Float32Array(u.buffer, u[o + MOVER.XVERTS], 3 * total);
+      const reversed = u[o + MOVER.REVERSED] !== 0;
+      if (raw) { out.set(from); return { revision: u[o + MOVER.REVISION], reversed, points: out, counts }; }
+      let at = 0;
+      for (const n of counts) {
+        for (let j = 0; j < n; j++) {
+          const source = 3 * (at + (reversed ? n - 1 - j : j)), target = 3 * (at + j);
+          out[target] = from[source]; out[target + 1] = from[source + 1]; out[target + 2] = from[source + 2];
+        }
+        at += n;
+      }
+      return { revision: u[o + MOVER.REVISION], reversed, points: out, counts };
+    },
     /** Mover `i`'s fragment nodes (MoverLink, then each iRenderBound). */
     chain(i) {
       const out = [], u = words(), count = h(TRACKER.NODES_NUM);

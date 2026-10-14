@@ -156,7 +156,7 @@ export async function createWorld(map, asset, assets, onProgress = () => {}, {ba
       // (mirrors.mjs mirrorDrawFlags): the shader shows the reflection alone.
       applyLightAtlas(material, tile.page, lightingEnabled, displayGamma,
         mirror && { ...mirror, opaque: !(flags & 0x47) },
-        !mirror && !(flags & POLY.Translucent) && Boolean(flags & POLY.Modulated));
+        !mirror && !(flags & POLY.Translucent) && Boolean(flags & POLY.Modulated), null, mover);
       if (mirror) {
         // The reflected child is composited by the shader, then PF_Occlude
         // writes the mirror's depth. Ordinary translucent surfaces keep their blend.
@@ -244,9 +244,11 @@ export async function createWorld(map, asset, assets, onProgress = () => {}, {ba
         const g = buildSurfaceGeometry(model, ts, surfaceIndex, material.userData.width, material.userData.height);
         counts.degenerate += g.degenerate; counts.corrected += g.corrected;
         if (!g.positions.length) continue;
-        if (!batches.has(key)) batches.set(key, { material, mirror, positions: [], normals: [], uvs: [], lightUV: [], lightBounds: [], lightLayer: [], faces: [], nodes: [] });
+        if (!batches.has(key)) batches.set(key, { material, mirror, positions: [], normals: [], uvs: [], lightUV: [], lightBounds: [], lightLayer: [], faces: [], nodes: [], tracked: [] });
         const batch = batches.get(key);
         batch.positions.push(...g.positions); batch.normals.push(...g.normals); batch.uvs.push(...g.uvs);
+        // A mover's vertices: each one's place among the brush tracker's transformed vertices.
+        if (actorName) for (const source of g.sources) batch.tracked.push(model.trackedIndex[source]);
         for (let i = 0; i < g.positions.length; i += 3) {
           batch.lightUV.push(...(lit ? lightAtlas.coordinates(tile, fromView(g.positions.slice(i, i + 3))) : [0, 0, 0]));
           batch.lightBounds.push(...(tile.bounds ?? [0, 0, 1, 1]));
@@ -305,6 +307,13 @@ export async function createWorld(map, asset, assets, onProgress = () => {}, {ba
       // mover's group carries the transform and forces its children).
       mesh.matrixAutoUpdate = false;
       mesh.userData = { actor: actorName, faces: batch.faces, nodes: Int32Array.from(batch.nodes), model: model.entry.name };
+      if (actorName) {
+        // The vertices the original projects (docs/frame-projection.md "Movers"): the brush
+        // tracker's points in Unreal's axes. Until the simulation sends them (and without a
+        // tracker) the group matrix poses them.
+        mesh.userData.tracked = Int32Array.from(batch.tracked);
+        geometry.setAttribute('deusTracked', new THREE.BufferAttribute(new Float32Array(batch.positions.length), 3).setUsage(THREE.DynamicDrawUsage));
+      }
       parent.add(mesh);
       batch.mirror?.meshes.push(mesh);
     }
@@ -343,6 +352,8 @@ export async function createWorld(map, asset, assets, onProgress = () => {}, {ba
       // The group's and its meshes' world matrices now; syncMovers redoes
       // this on a change (nothing cascades from the root).
       group.updateMatrixWorld(true);
+      group.userData.trackedVertices = Math.max(0, ...model.trackedIndex) + 1;
+      poseFromMatrix(group);
       counts.movers++;
     } catch (error) { errors.push({ actor: actor.name, message: error.message }); }
   }
@@ -389,6 +400,41 @@ export async function createWorld(map, asset, assets, onProgress = () => {}, {ba
     return { ...update, uploaded: update.lightmaps.length };
   }
   const moverMatrix = new THREE.Matrix4();
+  // The vertices a mover's meshes project (docs/frame-projection.md "Movers"),
+  // in Unreal's axes: the brush tracker's points once the simulation sends
+  // them (`setMoverPoints`), else the group matrix's product with the rest
+  // positions. `trackedMovers`: the simulation runs the tracker, so a matrix
+  // change waits for its points instead of posing the vertices itself.
+  let trackedMovers = false, trackerVertices = true;
+  const lastMoverPoints = new Map();
+  function applyMoverPoints(name, points) {
+    const group = moverGroups.get(name);
+    if (!group || points.length !== 3 * group.userData.trackedVertices) return;
+    for (const mesh of group.children) {
+      const attribute = mesh.geometry?.getAttribute('deusTracked');
+      if (!attribute || !mesh.userData.tracked) continue;
+      const index = mesh.userData.tracked, out = attribute.array;
+      for (let v = 0; v < index.length; v++) {
+        const at = 3 * index[v];
+        out[3 * v] = points[at]; out[3 * v + 1] = points[at + 1]; out[3 * v + 2] = points[at + 2];
+      }
+      attribute.needsUpdate = true;
+    }
+  }
+  function poseFromMatrix(group) {
+    for (const mesh of group.children) {
+      const attribute = mesh.geometry?.getAttribute('deusTracked');
+      if (!attribute) continue;
+      const m = Float32Array.from(mesh.matrixWorld.elements), p = mesh.geometry.getAttribute('position').array, out = attribute.array;
+      for (let i = 0; i < p.length; i += 3) {
+        const x = p[i], y = p[i + 1], z = p[i + 2];
+        // Three's axes [y, z, -x] of Unreal's.
+        out[i] = -(m[2] * x + m[6] * y + m[10] * z + m[14]); out[i + 1] = m[0] * x + m[4] * y + m[8] * z + m[12];
+        out[i + 2] = m[1] * x + m[5] * y + m[9] * z + m[13];
+      }
+      attribute.needsUpdate = true;
+    }
+  }
   const world = { /** Validation access: the light maps (unreal/lighting.mjs); `lighting` below is their statistics. */ lightMaps: lighting, root, markers, counts, textures: textureNames.size, materials, mirrors, fog, submissionBatches, notes: [...notes], errors, sky, skyRotation,
     visibility,
     /** Whether a zone's actor (or the LevelInfo) is bFogZone. */
@@ -413,6 +459,51 @@ export async function createWorld(map, asset, assets, onProgress = () => {}, {ba
         if (moverMatrix.elements.every((value, i) => Object.is(value, group.matrix.elements[i]))) continue;
         group.matrix.copy(moverMatrix);
         group.updateMatrixWorld(true);
+        if (!trackedMovers || !trackerVertices) poseFromMatrix(group);
+      }
+    },
+    /** Validation (main.mjs moverVertexProbe): for each `{name, points}` mover, how many mesh vertices
+     * hold exactly the tracker's point (as float bits), the largest distance of a vertex from the group
+     * matrix's product with its rest position, and the number of vertices. */
+    moverVertices(movers) {
+      const f = new Float32Array(1), u = new Uint32Array(f.buffer), bits = v => (f[0] = v, u[0]);
+      return movers.map(({ name, points }) => {
+        const group = moverGroups.get(name), out = { name, vertices: 0, equal: 0, maxMatrixDistance: 0, meshes: 0 };
+        if (!group) return out;
+        for (const mesh of group.children) {
+          const attribute = mesh.geometry?.getAttribute('deusTracked');
+          if (!attribute || !mesh.userData.tracked) continue;
+          out.meshes++;
+          const index = mesh.userData.tracked, a = attribute.array, p = mesh.geometry.getAttribute('position').array, m = mesh.matrixWorld.elements;
+          for (let v = 0; v < index.length; v++) {
+            out.vertices++;
+            const at = 3 * index[v];
+            if (bits(a[3 * v]) === bits(points[at]) && bits(a[3 * v + 1]) === bits(points[at + 1]) && bits(a[3 * v + 2]) === bits(points[at + 2])) out.equal++;
+            const x = p[3 * v], y = p[3 * v + 1], z = p[3 * v + 2];
+            const wx = m[0] * x + m[4] * y + m[8] * z + m[12], wy = m[1] * x + m[5] * y + m[9] * z + m[13], wz = m[2] * x + m[6] * y + m[10] * z + m[14];
+            out.maxMatrixDistance = Math.max(out.maxMatrixDistance, Math.hypot(-wz - a[3 * v], wx - a[3 * v + 1], wy - a[3 * v + 2]));
+          }
+        }
+        return out;
+      });
+    },
+    /** The brush tracker's transformed vertices of the movers it rebuilt
+     * (sim-session.mjs `visibility().moverPoints`: mover name -> flat
+     * Float32Array in the brush polygons' vertex order, Unreal's axes). The
+     * meshes project them with the frame's vertex chain. */
+    setMoverPoints(update) {
+      trackedMovers = true;
+      for (const [name, points] of Object.entries(update ?? {})) {
+        lastMoverPoints.set(name, points);
+        if (trackerVertices) applyMoverPoints(name, points);
+      }
+    },
+    /** ?moverVertices=matrix (and deusExViewer.moverVertices(false)): the movers' meshes keep the group matrix's product with the rest positions, as before the tracker's points. */
+    useTrackerVertices(on) {
+      trackerVertices = Boolean(on);
+      for (const [name, group] of moverGroups) {
+        if (trackerVertices) { const points = lastMoverPoints.get(name); if (points) applyMoverPoints(name, points); }
+        else poseFromMatrix(group);
       }
     },
     updateLighting,

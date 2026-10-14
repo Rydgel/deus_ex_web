@@ -413,7 +413,10 @@ transform and projection and D3DDrv's X, Y, depth and RHW run bit-exact in
 the vertex shader of world surfaces, the fog overlay and actor meshes (a mesh
 draws GetFrame's camera-space buffer), in the main frame and each mirror and
 sky child frame, over the device's depth range (near 1, far 32767) and a camera
-posed from the frame's Coords.
+posed from the frame's Coords. Movers project the moving brush tracker's own
+points (FPoly::Transform's output, 15,333 polygon outputs equal under Unicorn) and
+decals project ClipDecal's fragments with its screen clamp of a flagged point (1,192
+vertices bit-equal on the CPU and on the GPU), both since 2026-10-14.
 The security cameras' views (root frames with their own mirror and sky frames, decals,
 coronas, fog, LOD and lighting since 2026-10-11, [viewport window](script-window-viewport.md))
 are matched against captures of the original's own screens (2026-10-14, [visual
@@ -424,8 +427,8 @@ original's texture sampling state (mip level picked, LOD bias -0.5, texels filte
 multisampled where the original's device is not (`?antialias=0`, the default is
 unchanged); the three maps' cameras look into rooms, so a camera view with a mirror, sky
 frame, fog or coronas is still checked against code and oracles only.
-Open: mover vertices, decals and sprites on the vertex chain
-([frame projection](frame-projection.md#unverified-and-open)), the
+Open: sprites (and particles, coronas, lasers) on the vertex chain, clipped polygons' own
+vertices ([frame projection](frame-projection.md#unverified-and-open)), the
 darkest-pixel rounding visual acceptance found, and in live scenes (compared
 tick by tick with the original since 2026-10-13, [visual acceptance](visual-acceptance.md#live-scenes-2026-10-13))
 two Island NPCs, the Club's sitting guests and the dancers' animation.
