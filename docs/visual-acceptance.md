@@ -1020,6 +1020,17 @@ Controls run during the sweep: BatteryPark and Metro with an exact population (n
 divergences: the group 1 load and JaimeReyes1); Mole People never matched in four loads (a FlyGenerator) and was not repeated; short runs of
 BatteryPark with per-actor draw attribution: seven loads equal. One load per map: group 1 shows a map can be equal in one load and not in the next.
 
+#### Groups 2 to 4 after the fixes (2026-10-14)
+
+Divergences [17](#divergences-found) (MoveActor's block test) and [18](#divergences-found) (the directly opened map's empty FlagBase) explain groups 2, 3 and 4. Each sweep case
+was replayed from the sweep's own original trace (sidecar files rebuilt from the trace) with the rule before and after the fix: Street (Hooker0, BumMale1), Warehouse (Doberman0,
+Doberman1), Dockyard (SecurityBot0) and Mole People (Terrorist23) reappear with their reported values before and are equal after. Fresh loads, original at 1/60 s with the
+pick/MoveActor call breakpoints, then Play on each (150 ticks, every watched actor and every pick call compared): Warehouse 4 loads, Street 3, Dockyard 3, BatteryPark 3 and
+the start-up agent's 14 BatteryPark traces (b1-b5, h3-h8, a1, f1-f3): all picks and fields equal after the fix; before it Warehouse z2, Dockyard z1/z2 and BatteryPark f3 differed (the pickup
+cases above). Underworld, Metro and Market equal for 130 ticks with the FlagBase empty at the start as the original's. Pilots re-run with the fix (600 ticks, fresh originals,
+population exact): Island 74 watched actors and the Club 22 equal in every field; the Underworld's 50 equal in every field. The stream-draw counts of two of those runs differ and were
+not attributed (Open below).
+
 #### Group 1 after the fix (2026-10-14)
 
 The cause of group 1 in 05_NYC_UNATCOMJ12lab, 06_HongKong_MJ12lab and 14_Oceanlab_Silo is [Divergence 14](#divergences-found): the harness's population
@@ -1083,6 +1094,18 @@ node scripts/live-acceptance.mjs play ... [--keep-traveling] [--page-params 'paw
 its PID; Play runs headless Chromium in worker mode.
 
 ## Open
+
+- **Not attributed, seen in the 2026-10-14 pilot re-runs with Divergences 17 and 18 in** (every watched actor equal in all three): the Island run's stream draws differ at tick 264
+  (original 6, Play 7); the Underworld's at tick 31 (original 1, Play 0). Whether the rule change moved either was not tested (the draws of the Island at 264/276 were the load-time Tree
+  timers and the ghost's SightCounter before, [Divergence 6](#divergences-found)). The Club is equal for the draws too.
+- **The Dockyard SecurityBot0 waypoint at tick 28 (group 2)** is Divergence 17 (a HazMatSuit or bottle stops the pick's test moves; the sweep's trace reproduces the original's destination
+  under the old rule and is equal after the fix, and the original's four picks of that tick, reproduced in a fresh original with `--rng-from`, equal Play's). Not examined beyond that.
+- **Pawns that tick after an absent generator.** The Dockyard load z1 (MilitaryBot3 and RepairBot0 draw their StartUp Sleep at another stream index from tick 1, 4 extra draws in the
+  original, six generators only it holds) and the sweep's BatteryPark load (32 pawns from tick 13, 201 draws against 199 on tick 1; its trace replays in today's Play with the same
+  divergence once the sidecar files are rebuilt) look like [Divergence 15](#divergences-found)'s case with the generator **before** the pawns in tick order (a spawned actor takes a
+  free `Level.Actors` slot, not always the end); not checked with `--actor-trace` (the tick position of the original's generators).
+- **Population mismatches of pickups.** The population step exempts the spawned pickup families (Liquor, Medkit, ...) from the name match; an item placed by the load's chance in the
+  original and not in Play blocks a pawn now that pawns collide with items as the original's do. No case seen (the bottles and the HazMatSuit were in both programs).
 
 - The player's weapon noise is compared ([Weapon noise](#weapon-noise-2026-10-14): a pistol and an assault shotgun, 1,069 and 1,586 manager calls
   equal); footsteps (held keys), the player's `TakeDamage` `Distress`, combat and the other weapons are not.
