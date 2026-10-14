@@ -23,7 +23,8 @@
 //   `--cmd '<console command>'` (repeatable, all three verbs' sides) runs a console command once after ghost and ShowHud False, on the original's
 //   console and through Play's viewProbe exec (e.g. `set ScriptedPawn bHidden True`: no pawn mesh lit by the map's Strobe light).
 //   `original --cw-probe` attaches tools/dx-fpu-win.c for 6 seconds at each camera: DrawFrame, SetupForSurf (by the frame's Recursion), GlobalLighting,
-//   the spatial light bodies and Galaxy's GlobalLighting call, with the x87 control word at each (<name>-cw.txt).
+//   the spatial light bodies and Galaxy's GlobalLighting call, with the x87 control word at each (<name>-cw.txt). `--cw-probe-early` attaches before the
+//   camera moves, so the static lights' bodies (spot, Cylinder, NonIncidence: they run once, when a surface is first drawn) are seen.
 //   `--unfreeze` (both sides) clears LevelInfo.bPlayersOnly after the clock is held, so actors with a Tick (a TriggerLight that sets
 //   its own brightness) run it at the held dilation; the other views of the run are then of that level, not the frozen one.
 //
@@ -31,7 +32,7 @@
 // gamma ramp, and Play is captured at Brightness 0.4, whose display ramp
 // (pow(x, 1/(2.5*0.4))) is the identity. Output in .work/acceptance/ (local
 // captures stay outside Git).
-import {execFileSync} from 'node:child_process';
+import {execFileSync, spawn} from 'node:child_process';
 import {existsSync, mkdirSync, readFileSync, writeFileSync, renameSync} from 'node:fs';
 import path from 'node:path';
 import {fileURLToPath} from 'node:url';
@@ -230,6 +231,17 @@ function hyprlandWindow() {
   throw new Error('the deusex.exe window does not stay floating at the capture size');
 }
 
+// The breakpoints of --cw-probe (tools/dx-fpu-win.c): DrawFrame and SetupForSurf by the frame's Recursion, the pass, GlobalLighting, Galaxy's call and
+// the spatial bodies (normal, spot, NonIncidence, Cylinder, Searchlight, SlowWave, FastWave, CloudCast, Shock, Disco, Interference, Rotor, Shell).
+const cwSpecs = () => ['frame=Engine.dll:0x1038f110', 'drawframe=Render.dll:0x10b1a2d0:n=10:rec', 'setupforsurf=Render.dll:0x10b06c90:n=2000:rec',
+  'pass-open=Render.dll:0x10b1462f:ret', 'pass-close=Render.dll:0x10b14732:ret', 'galaxy-lighting-call=Galaxy.dll:0x1060992e:ret:n=10', 'globallighting=Render.dll:0x10b05e90:n=40',
+  'tick=Engine.dll:0x103a51a0:n=2', 'light-noise=Render.dll:0x10b13080:n=2', 'setupdynamics=Render.dll:0x10b22d90:n=2', 'dyn-filter=Render.dll:0x10b24a10:n=4',
+  'computefromactor=Render.dll:0x10b05fa0:n=12', 'fghsv=Engine.dll:0x103ec8d0:n=8', 'setupforactor=Render.dll:0x10b08c70:n=12', 'light-mesh=Render.dll:0x10b027f0:n=12',
+  'leafvolumetric=Render.dll:0x10b170e0:n=4', 'merge=Render.dll:0x10b03040:n=3',
+  ...[['normal', 0x10b03360], ['spot', 0x10b04f80], ['nonincidence', 0x10b054e0], ['cylinder', 0x10b04a80], ['searchlight', 0x10b03770],
+    ['slowwave', 0x10b03de0], ['fastwave', 0x10b040b0], ['cloudcast', 0x10b04380], ['shock', 0x10b043a0], ['disco', 0x10b046f0],
+    ['interference', 0x10b04c80], ['rotor', 0x10b03ae0], ['shell', 0x10b05740]].map(([name, at]) => `body-${name}=Render.dll:0x${at.toString(16)}:n=3`)];
+
 async function original() {
   const game = await import('../ad/scripts/original-game.mjs');
   const plan = loadPlan(), scratch = path.join(out, 'steps');
@@ -300,6 +312,14 @@ async function original() {
         }
         const before = game.shots();
         const strobe = strobeOf(view.name);
+        let earlyProbe = null;
+        if (process.argv.includes('--cw-probe-early') && attempt === 0) {
+          const child = spawn(game.WINE, [path.join(root, 'ad/build/dx-fpu-win.exe'), 'cw', 'attach', '11', ...cwSpecs()], {env: process.env, stdio: ['ignore', 'pipe', 'ignore']});
+          const chunks = [];
+          child.stdout.on('data', chunk => chunks.push(chunk));
+          earlyProbe = new Promise(resolve => child.on('close', () => resolve(Buffer.concat(chunks).toString())));
+          execFileSync('sleep', ['4']);   // the debugger attaches before the camera moves
+        }
         post([`cmd set DeusEx.JCDentonMale Location (X=${x},Y=${y},Z=${z})`, 'cmd set DeusEx.JCDentonMale Velocity (X=0,Y=0,Z=0)',
           `cmd set DeusEx.JCDentonMale ViewRotation (Pitch=${pitch},Yaw=${yaw},Roll=${roll})`,
           ...(region ? [`cmd set DeusEx.JCDentonMale Region (Zone=ZoneInfo'${map}.${region.zone}',iLeaf=${region.iLeaf},ZoneNumber=${region.zoneNumber})`] : []),
@@ -312,15 +332,15 @@ async function original() {
           writeFileSync(path.join(dir, `${view.name}-strobe.txt`), tool(['poll', '120', '5']));
         }
         // --cw-probe: attach tools/dx-fpu-win.c for a few seconds at this camera: DrawFrame and SetupForSurf by the frame's Recursion (<name>-cw.txt).
-        if (process.argv.includes('--cw-probe')) {
-          const specs = ['frame=Engine.dll:0x1038f110', 'drawframe=Render.dll:0x10b1a2d0:n=10:rec', 'setupforsurf=Render.dll:0x10b06c90:n=2000:rec',
-            'pass-open=Render.dll:0x10b1462f:ret', 'pass-close=Render.dll:0x10b14732:ret', 'galaxy-lighting-call=Galaxy.dll:0x1060992e:ret:n=10', 'globallighting=Render.dll:0x10b05e90:n=40',
-            // the spatial functions (normal, spot, NonIncidence, Cylinder, Searchlight, SlowWave, FastWave, CloudCast, Shock, Disco, Interference, Rotor, Shell)
-            ...[['normal', 0x10b03360], ['spot', 0x10b04f80], ['nonincidence', 0x10b054e0], ['cylinder', 0x10b04a80], ['searchlight', 0x10b03770],
-              ['slowwave', 0x10b03de0], ['fastwave', 0x10b040b0], ['cloudcast', 0x10b04380], ['shock', 0x10b043a0], ['disco', 0x10b046f0],
-              ['interference', 0x10b04c80], ['rotor', 0x10b03ae0], ['shell', 0x10b05740]].map(([name, at]) => `body-${name}=Render.dll:0x${at.toString(16)}:n=3`)];
+        // --cw-probe-early attached before the camera was placed (below), so the static lights' bodies, which run once when a surface is first drawn, are seen.
+        if (process.argv.includes('--cw-probe') && !process.argv.includes('--cw-probe-early')) {
+          const specs = cwSpecs();
           writeFileSync(path.join(dir, `${view.name}-cw.txt`), execFileSync(game.WINE, [path.join(root, 'ad/build/dx-fpu-win.exe'), 'cw', 'attach', '6', ...specs],
             {encoding: 'utf8', env: process.env, stdio: ['ignore', 'pipe', 'ignore']}));
+        }
+        if (earlyProbe) {
+          const out = await earlyProbe;
+          writeFileSync(path.join(dir, `${view.name}-cw.txt`), out);
         }
         if (strobe !== null) {
           const tool = args => execFileSync(game.WINE, [path.join(root, 'ad/build/dx-live-win.exe'), 'strobe', ...args], {encoding: 'utf8', env: process.env});

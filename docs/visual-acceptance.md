@@ -418,8 +418,8 @@ spatial body ran at each camera and its control word.
 | | club4 | 1.347 | 2.76 | .982 / .979 | 0 | Disco 233 |
 | Ship's hold, SlowWave Light16, Light17 (Pulse, period 100) | below1 | 1.333 | 3.22 | .981 / .988 | 0 | SlowWave 209 |
 | | below2 (down) | 1.362 | 3.84 | .991 / .988 | 0 | SlowWave 276 |
-| NYC Street, Spotlight Light26 (a lamp's pool) | street1 | 1.330 | 1.63 | .984 / .988 | 0 | none (class 0: built once, see below) |
-| NYC Street, Cylinder Light137 | street2 | 1.341 | 2.81 | .962 / .971 | 0 | none |
+| NYC Street, Spotlight Light26 (a lamp's pool) | street1 | 1.330 | 1.63 | .984 / .988 | 0 | spot 5, normal 5 (built once, see below) |
+| NYC Street, Cylinder Light137 | street2 | 1.341 | 2.81 | .962 / .971 | 0 | Cylinder 6, spot 3, normal 6 |
 
 The ratio is the uniform brightness gap (1.2 to 1.46 here, higher on the darkest scenes), which stays outside this
 work. Every view's geometry, light pools, sweeping sectors and gradients line up; the Searchlight, Rotor, Disco and SlowWave bodies, which
@@ -435,9 +435,11 @@ change every frame, match at the held phase.
   lights here. Not yet traced to the original's cylinder line check; follow-up task filed.
 - *Garage garage2.* The 2 outlier blocks are on the ceiling's bright white strip lights; the red and blue ceiling panels differ by the
   darkest-pixel rounding (raw 1.9 against 2.9 on the red panel, a crop at ratio 1.38).
-- *Class 0 spot and cylinder bodies.* A static light's body runs once, into the cached static map, when the surface is first drawn,
-  so an attach after the map has loaded sees no call. `scripts/original-fpu.sh` (launch under the debugger) reaches them: see the
-  precision page.
+- *Class 0 spot, Cylinder and NonIncidence bodies.* A static light's body runs once, into the cached static map, when a surface is first
+  drawn, so a probe that attaches after the camera moved sees no call; `--cw-probe-early` attaches before it moves. Then the street's
+  spot (8 calls) and Cylinder (6) bodies and Training's corridor views (trainA, trainB: `-100,840,30` and `1200,840,30` looking down +x, the six NonIncidence
+  lights) spot, NonIncidence and normal bodies run at `0x007f`. Their frames match too: the table's street rows, and Training's trainA (Play / original 1.423,
+  mean abs. diff. 1.70, edge .954 / .957, 0 outlier blocks) and trainB (1.272, 3.77, .978 / .992, 0).
 
 ## Live scenes (2026-10-13)
 
@@ -1250,7 +1252,8 @@ wine ad/build/dx-live-win.exe strobe poll 120 5 | strobe hold 0 | strobe release
 scripts/original-views.sh 06_HongKong_WanChai_Underworld --view c0_s0:-1081,-2010,-336:0,54769,0 --view c0_s1:-1081,-2010,-336:0,54769,0 --cmd 'set ScriptedPawn bHidden True' --strobe-poll --cw-probe
 node scripts/visual-acceptance.mjs play --maps 06_HongKong_WanChai_Underworld --view c0_s0:-1081,-2010,-336:0,54769,0 --view c0_s1:-1081,-2010,-336:0,54769,0 --cmd 'set ScriptedPawn bHidden True'
 node scripts/validate-strobe-child-frames-play.mjs                                 # Play's side: the reach, the cadence, the failing baseline
-scripts/original-fpu.sh 01_NYC_UNATCOIsland 170                                    # the original's control word at the lighting entry points, and its light-manager tables (.work/fpu)
+scripts/original-fpu.sh 01_NYC_UNATCOIsland 170                                    # the original's control word at start-up and the pass's entry points (start-up scene), and its light-manager tables (.work/fpu)
+scripts/original-views.sh 04_NYC_Street --view street1:-264,-256,-452:-343,32616,0 --cw-probe --cw-probe-early   # the loaded map's pass functions and static light bodies at a camera
 node scripts/validate-original-light-tables.mjs                                    # those tables against Play's builders
 ```
 

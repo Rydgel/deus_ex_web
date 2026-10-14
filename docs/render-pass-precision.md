@@ -76,34 +76,44 @@ frame, whatever the word was before the first frame.
 
 `tools/dx-fpu-win.c` debugs the original DeusEx.exe under Wine (Wine 11.17, the 32-bit
 retail DLLs at their preferred bases; D3DDrv.dll is rebased by Wine and the tool follows it): an int3 at each listed address, the
-thread context's `FloatSave.ControlWord` at every hit, the return address and, between
-PreRender's `appEnableFastMath(1)` and PostRender's `appEnableFastMath(0)`, a pass flag.
-`scripts/original-fpu.sh` launches the game as the tool's debuggee under the shared Wine lock
-(so code that runs once at start-up is reached), runs it unfrozen on a map and dumps the
-light manager's tables at the end. Island: 2,307 frames and 4,612 ULevel::Tick calls in 170
-seconds; the Wan Chai garage: 1,873 frames. The attach mode
-(`visual-acceptance.mjs original --cw-probe`) records the same at a view's camera.
+thread context's `FloatSave.ControlWord` at every hit, the return address, a pass flag between
+PreRender's `appEnableFastMath(1)` and PostRender's `appEnableFastMath(0)` and, for the frame
+functions, the FSceneNode's Recursion. Two ways in:
 
-| Where | Address | Control word (hits) |
-| --- | --- | --- |
-| `URender::Init`, `FLightManager::Init` | `0x10b13460`, `0x10b02080` | `0x027f` (1, 1): the thread's start-up word, PC 53 |
-| D3DDrv's `SetCooperativeLevel(DDSCL_FPUSETUP)` call | `0x1000b18e` | `0x027f` before and after the first call (0.7 s after URender::Init), `0x037f` on the second; Wine's ddraw leaves the word alone |
-| `UGameEngine::Draw` entry | `0x1038f110` | `0x027f` (2), `0x037f` (2,305) |
-| `ULevel::Tick` entry | `0x103a51a0` | `0x027f` (2), `0x037f` (4,610) |
-| Galaxy Update (garage), its GlobalLighting call (lit ambient sounds, Underworld) | `0x10609510`, `0x1060992e` | `0x027f` (the first frame), `0x037f` (1,871); the GlobalLighting call itself `0x037f` (1,251 in four Underworld views) |
-| `URender::PreRender` entry | `0x10b14560` | `0x027f` (1), `0x037f` (2,305) |
-| after `appEnableFastMath(1)` | `0x10b1462f` | `0x007f` (2,306) |
-| `URender::PostRender` entry, after `appEnableFastMath(0)` | `0x10b14700`, `0x10b14732` | `0x007f` (2,305), `0x037f` (2,305) |
-| in the pass: light noise, SetupDynamics, Filter, DrawFrame | `0x10b13080`, `0x10b22d90`, `0x10b24a10`, `0x10b1a2d0` | `0x007f`, every hit (2,306; 2,306; 3,910; 2,306) |
-| in the pass: SetupForSurf, ComputeFromActor, GlobalLighting, FGetHSV | `0x10b06c90`, `0x10b05fa0`, `0x10b05e90`, `0x103ec8d0` | `0x007f`, every hit (11,547; 13,869; 57,273; 13,173) |
-| in the pass: SetupForActor, Light, LeafVolumetricLighting, the merge | `0x10b08c70`, `0x10b027f0`, `0x10b170e0`, `0x10b03040` | `0x007f`, every hit (13,777; 25,247; 2,664; 6) |
-| in the pass: normal body, Disco body | `0x10b03360`, `0x10b046f0` | `0x007f`, every hit (6; 1,618 at four Underworld views) |
+- *Launch* (`scripts/original-fpu.sh`): the game is the tool's debuggee from its first instruction, under the shared Wine lock, so
+  code that runs once at start-up is reached, and the light manager's tables are dumped at the end. Under the debugger the game
+  stayed in its start-up scene (the Deus Ex logo, 5 surfaces a frame) for the whole run: Island, 170 seconds, 2,307 frames and
+  4,612 ULevel::Tick calls; the Wan Chai garage, 1,873 frames. The pass runs the same code there, but no map content.
+- *Attach* (`visual-acceptance.mjs original --cw-probe`, `--cw-probe-early` to attach before the camera moves): the tool attaches
+  for a few seconds at a view's camera in a loaded map, 22 cameras in 7 maps (Training, NYC street, Wan Chai garage and
+  Underworld, ship's hold, ship fan, Paris club).
+
+| Where | Address | Start-up scene (launch) | Loaded maps (attach) |
+| --- | --- | --- | --- |
+| `URender::Init`, `FLightManager::Init` | `0x10b13460`, `0x10b02080` | `0x027f` (1, 1): the thread's start-up word, PC 53 | |
+| D3DDrv's `SetCooperativeLevel(DDSCL_FPUSETUP)` call | `0x1000b18e` | `0x027f` before and after the first call (0.7 s after URender::Init), `0x037f` on the second; Wine's ddraw leaves the word alone | |
+| `UGameEngine::Draw` entry | `0x1038f110` | `0x027f` (2), `0x037f` (2,305) | `0x037f` (2,814) |
+| `ULevel::Tick` entry | `0x103a51a0` | `0x027f` (2), `0x037f` (4,610) | `0x037f` (322) |
+| Galaxy Update (garage); its GlobalLighting call (lit ambient sounds) | `0x10609510`, `0x1060992e` | Update `0x027f` (the first frame), `0x037f` (1,871) | the call `0x037f` (1,665) |
+| `URender::PreRender` entry | `0x10b14560` | `0x027f` (1), `0x037f` (2,305) | |
+| after `appEnableFastMath(1)` | `0x10b1462f` | `0x007f` (2,306) | `0x007f` (2,814) |
+| `URender::PostRender` entry; after `appEnableFastMath(0)` | `0x10b14700`, `0x10b14732` | `0x007f` (2,305); `0x037f` (2,305) | `0x037f` after (2,097) |
+| in the pass: light noise, SetupDynamics, Filter, DrawFrame | `0x10b13080`, `0x10b22d90`, `0x10b24a10`, `0x10b1a2d0` | `0x007f` every hit (2,306; 2,306; 3,910; 2,306) | `0x007f` (161; 220; 644; 3,323) |
+| in the pass: SetupForSurf, ComputeFromActor, GlobalLighting, FGetHSV | `0x10b06c90`, `0x10b05fa0`, `0x10b05e90`, `0x103ec8d0` | `0x007f` (11,547; 13,869; 57,273; 13,173) | `0x007f` (87,329; 923; 42,625; 1,202) |
+| in the pass: SetupForActor, Light, LeafVolumetricLighting, the merge | `0x10b08c70`, `0x10b027f0`, `0x10b170e0`, `0x10b03040` | `0x007f` (13,777; 25,247; 2,664; 6) | `0x007f` (598; 1,944; not probed; 6) |
+| in the pass: the spatial bodies normal, spot, NonIncidence, Cylinder, Searchlight, SlowWave, Rotor, Disco | `0x10b03360`, `0x10b04f80`, `0x10b054e0`, `0x10b04a80`, `0x10b03770`, `0x10b03de0`, `0x10b03ae0`, `0x10b046f0` | normal `0x007f` (6) | `0x007f` (255; 14; 6; 6; 779; 485; 775; 2,386) |
+
+FastWave, CloudCast, Shock, Interference and Shell were probed at every camera and not reached (no light with one of them is in
+reach at these cameras); they are called through the same effect-row pointer as the others.
+The attach probe sees a static light's body (spot, NonIncidence, Cylinder) only when it attaches before the surface is first drawn, as
+that body runs once into the cached static map (`--cw-probe-early`).
 
 What follows:
 
 1. **Every lighting computation of the pass runs at `0x007f`** (PC 24, round to nearest, all
-   exceptions masked), in every one of the 148,384 recorded hits of the Island run (and of the garage's): the ports' 24-bit model is the
-   original's word. No function between them changes the word (Render.dll has no `fldcw`).
+   exceptions masked), in every recorded hit: 148,384 in the start-up scene and 143,681 in loaded maps, with the
+   light-map bodies, mesh lighting and fog's leaf lighting among them: the ports' 24-bit model is the original's word. No
+   function between them changes the word (Render.dll has no `fldcw`).
 2. **The light-manager tables** are built at `0x027f` (PC 53), on the game thread, before D3D's
    cooperative-level call can touch the word. They equal Play's builders (the 64-bit x87
    model) bit for bit: the square-root table (2,048 entries), the normal-falloff table

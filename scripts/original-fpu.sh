@@ -7,9 +7,8 @@
 # breaks at the lighting entry points for <seconds>, dumps the tables, ends the game by the PID the tool created.
 #
 #   scripts/original-fpu.sh <map> [seconds] [outdir]     (default 01_NYC_UNATCOIsland 150 .work/fpu)
-#   VIEWS="x,y,z,pitch,yaw x,y,z,pitch,yaw" scripts/original-fpu.sh <map> 200 <outdir>
-#       after the map has loaded, the level is frozen and the ghost visits each camera for 6 seconds: static lights' spatial bodies (spot,
-#       Cylinder, NonIncidence) run once, when a surface is first drawn, so they are reached only by looking at new surfaces
+#   Under the debugger the game stays in its start-up scene (the logo) for the whole run, so this reaches start-up code and the pass's
+#   entry points, not a map's content: the loaded maps' functions are probed by visual-acceptance.mjs original --cw-probe (attach).
 set -u
 MAP=${1:-01_NYC_UNATCOIsland}; SECONDS_RUN=${2:-150}
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
@@ -90,27 +89,7 @@ for _ in $(seq 1 40); do
   fi
   sleep 3
 done
-if [ -n "${VIEWS:-}" ]; then
-  # the player exists (the map is up), then freeze the level and visit the cameras (visual-acceptance.mjs's own inputs)
-  for _ in $(seq 1 60); do
-    "$DX_WINE" ad/build/dump-actor-win.exe JCDentonMale 'Player:0x5d4:u32' 2>/dev/null | grep -q '^JCDentonMale JCDentonMale.* Player=0x[1-9a-f]' && break
-    kill -0 "$TOOL" 2>/dev/null || break
-    sleep 3
-  done
-  # the map is still loading when the player first exists (a debugger slows the load): wait for its first frames
-  sleep ${LOAD_WAIT:-70}
-  { echo 'cmd set LevelInfo bPlayersOnly True'; echo 'sleep 300'; echo 'cmd set DeusEx.JCDentonMale bCheatsEnabled True'; echo 'sleep 200'; echo 'cmd ghost'; echo 'sleep 200'
-    echo 'cmd ShowHud False'; echo 'sleep 300'
-    for v in $VIEWS; do IFS=, read -r x y z pitch yaw <<<"$v"
-      echo "cmd set DeusEx.JCDentonMale Location (X=$x,Y=$y,Z=$z)"; echo 'cmd set DeusEx.JCDentonMale Velocity (X=0,Y=0,Z=0)'
-      echo "cmd set DeusEx.JCDentonMale ViewRotation (Pitch=$pitch,Yaw=$yaw,Roll=0)"; echo 'sleep 5000'; echo shot; echo 'sleep 900'
-    done; } > "$OUT/views.txt"
-  node ad/scripts/original-game.mjs run "$OUT/views.txt" >/dev/null 2>&1
-  echo "visited: $VIEWS"
-fi
 wait "$TOOL"
-# the shots this run took (newer than its views script) come out of the game directory; older Shot files are other runs' and stay
-[ -n "${VIEWS:-}" ] && for shot in "$DX_GAME"/System/Shot*.bmp; do [ "$shot" -nt "$OUT/views.txt" ] && mv "$shot" "$OUT/"; done
 cat "$OUT/cw-$MAP.txt"
 # the tool detached; quit the game through its own exit, and by its PID if that does not end it
 [ -n "$GAME_PID" ] || GAME_PID=$(pgrep -x DeusEx.exe | head -1)
