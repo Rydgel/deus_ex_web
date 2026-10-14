@@ -45,22 +45,19 @@ export function coronaFade(cache, delta) {
   }
 }
 
-/** Helper 0x10b1bc00's two line checks: ULevel::SingleLineCheck(Hit,
- * Source, End, Start, TraceFlags, Extent, NodeFlags) from the light's
- * Location (Start, +0x114) to the frame's Coords.Origin (End, `frame +
- * 0x34`, pushed from `lea edi` at 0x10b1bc43 before the calls at 0x10b1bc5b
- * and 0x10b1bcac): TRACE_Level|TRACE_Movers (6) must be clear, then
+/** Helper 0x10b1bc00's two line checks, from the frame's Coords.Origin to the
+ * light's Location: ULevel::SingleLineCheck takes (Hit, Source, End, Start,
+ * TraceFlags, Extent, NodeFlags), and the helper pushes Start = `frame + 0x34`
+ * (`lea edi` at 0x10b1bc43, pushed at 0x10b1bc4f) after End = the light's
+ * +0x114 (`ebx`, pushed at 0x10b1bc50), before the calls at 0x10b1bc5b and
+ * 0x10b1bcac: TRACE_Level|TRACE_Movers (6) must be clear, then
  * TRACE_Pawns|TRACE_Others (0x11) must be clear or hit the viewport actor.
  * `lineCheck(start, end, extent, flags, extra, source)` is level-queries.mjs
- * `lineCheck`, which takes Start first. The direction matters for cylinders
- * (UPrimitive::LineCheck, docs/primitive-collision.md): a light inside a
- * colliding actor's cylinder is hidden by it only when the eye lies
- * horizontally inward, and the eye inside the viewer's own cylinder ends
- * the trace on the viewer. validate-coronas.mjs compares these arguments
- * with the ones the original helper passes. */
+ * `lineCheck`, which takes Start first. validate-coronas.mjs compares these
+ * arguments with the ones the original helper passes. */
 export function coronaLineVisible(lineCheck, location, origin, viewer) {
-  if (!lineCheck(location, origin, [0, 0, 0], 6, 0, null).outside) return false;
-  const hit = lineCheck(location, origin, [0, 0, 0], 0x11, 0, null);
+  if (!lineCheck(origin, location, [0, 0, 0], 6, 0, null).outside) return false;
+  const hit = lineCheck(origin, location, [0, 0, 0], 0x11, 0, null);
   return Boolean(hit.outside) || hit.actor === viewer;
 }
 
