@@ -14,14 +14,15 @@ import { scriptGetStateName } from '../runtime/script-state-queries.mjs';
  * non-brush actor nothing else follows). `exec` runs further console
  * commands the same way, after the same bCheatsEnabled write (main.mjs
  * ?cheat=, e.g. DeusExPlayer.Summon). Returns the player's state. */
-export function viewProbe(game, { playersOnly = false, timeDilation = null, ghost = false, location = null, rotation = null, region = null, exec = [] } = {}) {
+export function viewProbe(game, { playersOnly = null, timeDilation = null, ghost = false, location = null, rotation = null, region = null, exec = [] } = {}) {
   const runtime = game.doors.scriptRuntime.runtime, player = game.player.collisionActor;
   // `set LevelInfo bPlayersOnly True`, which the original capture types
   // before `open` so the new level's LevelInfo starts with it: written here
   // before the held page's first tick (?hold=1), so Level.Tick runs only the
   // player from the start (level-tick.mjs).
   const info = runtime.levelFor(player).actors[0];
-  if (playersOnly) runtime.writeNamed(info, 'bPlayersOnly', true);
+  // (`playersOnly: false` clears it: `set LevelInfo bPlayersOnly False`, the capture's unfrozen run, visual-acceptance.mjs --unfreeze)
+  if (playersOnly !== null) runtime.writeNamed(info, 'bPlayersOnly', Boolean(playersOnly));
   // `set LevelInfo TimeDilation <x>`, which the capture uses to hold both
   // sides' level clocks at the same TimeSeconds (pulsing lights, panning).
   if (timeDilation !== null) runtime.writeNamed(info, 'TimeDilation', Math.fround(timeDilation));

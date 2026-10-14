@@ -16,6 +16,12 @@
 //       per-view metrics and side-by-side/difference images
 //   All three take --view name:x,y,z:pitch,yaw,roll (repeatable) to use explicit
 //   cameras instead of the planned views; the plan itself keeps its views.
+//   A view named <name>_s0 or <name>_s1 is taken with Render.dll's Strobe flag held at 0 or 1 (docs/visual-acceptance.md
+//   "Strobe, a host input"): the original through `dx-live-win.exe strobe hold` (the flag flips every frame at a new
+//   TimeSeconds, so an unheld capture is a coin flip), Play with TimeDilation 0 and the flag written (liveProbe strobe).
+//   `original --strobe-poll` also records the free-running flag per camera (<name>-strobe.txt).
+//   `--unfreeze` (both sides) clears LevelInfo.bPlayersOnly after the clock is held, so actors with a Tick (a TriggerLight that sets
+//   its own brightness) run it at the held dilation; the other views of the run are then of that level, not the frozen one.
 //
 // Frames are raw: the original's Shot bitmaps are its framebuffer before the
 // gamma ramp, and Play is captured at Brightness 0.4, whose display ramp
@@ -47,6 +53,8 @@ const freeze = !process.argv.includes('--live');
 const regionOption = option('region', null);
 const region = regionOption ? (([zone, leaf, number]) => ({zone, iLeaf: Number(leaf), zoneNumber: Number(number)}))(regionOption.split(':')) : null;
 const onlyViews = option('views', null)?.split(',') ?? null;
+// <name>_s0 / <name>_s1: the Strobe flag the frame is taken with (null: free-running).
+const strobeOf = name => { const m = /_s([01])$/.exec(name); return m ? Number(m[1]) : null; };
 // --view name:x,y,z:pitch,yaw,roll (repeatable): explicit camera(s) used in
 // place of the planned views, for one subject (a mirror, a face) at a known
 // spot. Location and rotation are integers (raw rotator units), as the plan's.
@@ -157,6 +165,7 @@ async function play() {
           return state.timeSeconds;
         }, {target, dilation: HELD_DILATION});
       }
+      if (process.argv.includes('--unfreeze')) { await page.evaluate(() => window.deusExViewer.viewProbe({playersOnly: false})); await frames(30); }
       const dir = path.join(out, map); mkdirSync(dir, {recursive: true});
       const box = await page.locator('#scene').boundingBox();
       const buffer = await page.evaluate(() => { const c = document.getElementById('scene'); return [c.width, c.height]; });
@@ -166,6 +175,15 @@ async function play() {
       for (const view of viewsOf(entry)) {
         await page.evaluate(([v, region]) => window.deusExViewer.viewProbe({location: v.location, rotation: v.rotation, region}), [view, region]);
         await frames(45);
+        const strobe = strobeOf(view.name);
+        if (strobe !== null) {
+          // Hold the level's clock (no new TimeSeconds, no flip) and write the flag, as the original's frame is taken.
+          await page.evaluate(() => window.deusExViewer.viewProbe({timeDilation: 0}));
+          await frames(3);
+          const seen = await page.evaluate(() => window.deusExViewer.liveProbe({strobe: {}}));
+          await page.evaluate(([flag, time]) => window.deusExViewer.liveProbe({strobe: {flag, time}}), [strobe, seen.strobe.time]);
+          await frames(3);
+        }
         const state = await page.evaluate(() => {
           const s = window.deusExViewer.status();
           return {position: s.position, rotation: s.rotation, runtimeError: s.runtimeError?.message ?? null};
@@ -173,6 +191,7 @@ async function play() {
         const probe = await page.evaluate(() => window.deusExViewer.viewProbe({}));
         await page.screenshot({path: path.join(dir, `${view.name}-play.png`),
           clip: {x: 0, y: 0, width: WIDTH, height: HEIGHT}});
+        if (strobe !== null) await page.evaluate(d => window.deusExViewer.viewProbe({timeDilation: d}), HELD_DILATION);
         shots.push({view: view.name, camera: state, player: {location: probe.location, region: probe.region, state: probe.state, physics: probe.physics, anim: probe.anim}});
       }
       writeFileSync(path.join(dir, 'play.json'), JSON.stringify({map, freeze, size: [box.width, box.height], ghost, timeTarget: target, timeHeld: held, shots, errors}, null, 1));
@@ -186,8 +205,9 @@ async function play() {
 // The game window under Hyprland: floating, WIDTHxHEIGHT and inside the
 // screen. Map loads tile it again, so it is checked before every shot.
 function hyprlandWindow() {
-  const find = () => JSON.parse(execFileSync('hyprctl', ['clients', '-j'], {encoding: 'utf8'}))
-    .find(c => c.class.toLowerCase() === 'deusex.exe');
+  // the game's window is the largest client of the class (a hidden log window shares it)
+  const find = () => JSON.parse(execFileSync('hyprctl', ['clients', '-j'], {encoding: 'utf8'})).filter(c => c.class.toLowerCase() === 'deusex.exe')
+    .sort((a, b) => b.size[0] * b.size[1] - a.size[0] * a.size[1])[0];
   const placed = w => w && w.floating && w.size[0] === WIDTH && w.size[1] === HEIGHT && w.at[0] >= 0 && w.at[1] >= 0;
   for (let attempt = 0; attempt < 5; attempt++) {
     const window = find();
@@ -197,8 +217,8 @@ function hyprlandWindow() {
     for (const dispatch of [`hl.dsp.window.float({ action = "set", window = "${at}" })`,
       `hl.dsp.window.resize({ x = ${WIDTH}, y = ${HEIGHT}, relative = false, window = "${at}" })`,
       `hl.dsp.window.center({ window = "${at}" })`])
-      execFileSync('hyprctl', ['dispatch', dispatch]);
-    execFileSync('sleep', ['2']);
+      { execFileSync('hyprctl', ['dispatch', dispatch]); execFileSync('sleep', ['1.5']); } // each takes effect before the next (a resize sent right after the float was ignored)
+    execFileSync('sleep', ['1']);
   }
   throw new Error('the deusex.exe window does not stay floating at the capture size');
 }
@@ -257,6 +277,7 @@ async function original() {
       writeFileSync(timesPath, JSON.stringify(times, null, 1));
       console.log(map, 'held at TimeSeconds', times[map], 'dilation', live[0][3]);
     }
+    if (process.argv.includes('--unfreeze')) post(['cmd set LevelInfo bPlayersOnly False', 'sleep 1500']);
     for (const view of viewsOf(entry)) {
       if (onlyViews && !onlyViews.includes(view.name)) continue;
       const [x, y, z] = view.location, [pitch, yaw, roll] = view.rotation;
@@ -270,10 +291,22 @@ async function original() {
           for (const shot of game.shots().filter(shot => !before.includes(shot))) renameSync(path.join(game.SYSTEM, shot), path.join(scratch, shot));
         }
         const before = game.shots();
+        const strobe = strobeOf(view.name);
         post([`cmd set DeusEx.JCDentonMale Location (X=${x},Y=${y},Z=${z})`, 'cmd set DeusEx.JCDentonMale Velocity (X=0,Y=0,Z=0)',
           `cmd set DeusEx.JCDentonMale ViewRotation (Pitch=${pitch},Yaw=${yaw},Roll=${roll})`,
           ...(region ? [`cmd set DeusEx.JCDentonMale Region (Zone=ZoneInfo'${map}.${region.zone}',iLeaf=${region.iLeaf},ZoneNumber=${region.zoneNumber})`] : []),
-          'sleep 1500', 'shot', 'sleep 900']);
+          'sleep 1500', ...(strobe === null ? ['shot', 'sleep 900'] : [])]);
+        if (strobe !== null) {
+          const tool = args => execFileSync(game.WINE, [path.join(root, 'ad/build/dx-live-win.exe'), 'strobe', ...args], {encoding: 'utf8', env: process.env});
+          // the free-running flag at this camera (a hold left by an earlier view is released first, and the flag needs a frame to move)
+          if (process.argv.includes('--strobe-poll') && strobe === 0) {
+            tool(['release']);
+            post(['sleep 400']);
+            writeFileSync(path.join(dir, `${view.name.replace(/_s0$/, '')}-strobe.txt`), tool(['poll', '120', '5']));
+          }
+          console.log(map, view.name, tool(['hold', String(strobe)]).trim());
+          post(['shot', 'sleep 900']);
+        }
         const fresh = game.shots().filter(shot => !before.includes(shot));
         taken = fresh.map(shot => {
           const png = path.join(dir, `${view.name}-original.png`), size = game.bmpToPng(path.join(game.SYSTEM, shot), png);

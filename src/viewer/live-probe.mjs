@@ -130,7 +130,12 @@ export function liveProbe(game, args = {}) {
   // created and is reported (the load must be repeated). Actors the game spawns at load (player, inventory, shadows,
   // managers) are numbered by spawn order and are not compared by name.
   // strobe: {flag, time}: Render.dll's Strobe state as the original's held frame left it (a host input, light-globals.mjs).
-  if (args.strobe) { const strobe = lightGlobals(runtime).strobe; strobe.flag = args.strobe.flag & 1; strobe.time = Math.fround(args.strobe.time); out.strobe = { ...strobe }; }
+  // `strobe: {}` only reads it.
+  if (args.strobe) {
+    const strobe = lightGlobals(runtime).strobe;
+    if (args.strobe.flag !== undefined) { strobe.flag = args.strobe.flag & 1; strobe.time = Math.fround(args.strobe.time); }
+    out.strobe = { ...strobe };
+  }
   // moveTest: {pawn, at, delta}: the pick worker's test move for that pawn from that place (FarMoveActor there with test and noCheck, ULevel::MoveActor
   // with bTest=1 and bIgnorePawns=1 as checkMove makes it, FarMoveActor back), and the hit it made: what an original capture's MoveActor record
   // (location after, Hit.Time, Hit.Normal, Hit.Actor) is compared with.
