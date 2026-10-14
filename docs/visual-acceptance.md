@@ -1206,7 +1206,7 @@ The 20 stored main views (4 maps x 5) were retaken in the original at Brightness
 | --- | ---: | --- | ---: |
 | master (`?sampling=legacy`) | 0.9974 | 0.80 to 1.05 | 0.347 |
 | mip state (`?sampling=srgb`) | 1.0119 | 0.80 to 1.08 | 0.285 |
-| mip state and display-space filtering (the default) | 1.0026 | 1.000 to 1.032, 17 of 20 at 1.000 | 0.065 |
+| mip state and display-space filtering (the default) | 1.0026 | 0.975 to 1.032, 17 of 20 at 1.000 | 0.065 |
 
 Per view (mean of the three channels over 0..255, Play's mean over the original's in brackets, and the mean absolute difference from the
 original's frame):
@@ -1235,9 +1235,9 @@ original's frame):
 | 02_NYC_BatteryPark y3 | 1.964 | 2.000 (1.018) 0.038 | 2.000 (1.018) 0.037 | 1.964 (1.000) 0.005 |
 
 Master's overall brightness is right on average because its per-view errors cancel (OceanLab's y0 is 20% dark, y3 5% bright; the
-per-view brightness error averages 3.0% and falls to 0.4% with the colour-space change; Paris Club's five views are pixel-identical
-with it). The mip state alone brightens by about 1%: the finer level the device picks carries more of the textures' contrast, which
-Play's linear-light filtering then lifts further; that is what the display-space change (below) removes.
+per-view brightness error averages 3.0% and falls to 0.4% with the colour-space change; Paris Club's five views have a mean absolute difference of 0.000
+with it). The mip state alone brightens Play by about 1% (a finer level than trilinear gave, filtered in linear light); the display-space
+change (cause 3) removes that and the per-view errors.
 
 ### Causes
 
