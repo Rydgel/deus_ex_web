@@ -488,6 +488,11 @@ validate-moving-light-effects, validate-light-animation and validate-auglight-li
 28 of them with a type other than Steady in 9 maps (Warehouse 2, Airfield 3, Helibase 1, Storage 8, Underworld 1, Graveyard 2, OceanLab_UC 8,
 OceanLab_Silo 2, Area51_Entrance 1), most off until triggered; all showed at the map's brightness before.
 
+The matched-camera views (`visual-acceptance.mjs`) hold the state the same way: a view named `<name>_s0` or `<name>_s1` is taken with the flag at 0 (the strobe
+light lit) or 1 (dark), the original through `dx-live-win.exe strobe hold` (the Strobe function's flip, `0x10b05b4b`, patched to a jump while it is held) and Play with
+`TimeDilation 0` and `liveProbe({strobe: {flag, time}})`. A free-running capture's phase is a coin flip on each side; Divergence 19 is the case it misread as a mirror
+defect.
+
 ### Placement constraint
 
 The original is never moved with `set Location` or `set Region` in a level that then ticks. The known hash corruption ("moved without
@@ -838,6 +843,49 @@ constant 0.0.
     tick (the original's DeleteFlag native), `--keep-traveling` keeps Play's own. **Result.** The three maps equal for 130 ticks, the draws per tick equal at tick 61 (they
     differed there: Metro original 0, Play 3; Market 3 and 4), the FlagBase at the end equal (default expiration 7, 11, 7; 0 flags).
 
+19. **The Underworld's reflected floor lit in the original, dark in Play: the Strobe phase of a frozen capture (a host input; no mirror or lighting defect in Play, 2026-10-14).**
+    The 2026-10-14 mirror fix left one of four matched views (d, eye (-1120, -1900, -296), yaw 55000) at 4.76 mean abs. difference with edge recall .646: both panes
+    reflect in both programs, but the original's reflected floor and dancers are lit (olive) and Play's dark red. The direct view and the walls of the same frames agree.
+    **Original.** The Strobe light-type function (Render.dll `0x10b05b30`) compares the kept time `[0x10b49ea4]` with the light actor's `Level.TimeSeconds`
+    (`[[actor+0xa8]+0x478]`); when they differ (the `jne` at `0x10b05b4b` skips the update when they are equal) it stores the new time and flips the flag `[0x10b49ea8]` (`0x10b05b58..0x10b05b61`), and a set flag
+    writes 0 to the brightness out (`0x10b05b6d..0x10b05b73`). TriggerLight1 (Strobe, brightness 200, `LightRadius` 16 so 425 units from (-1027, -1860, -226)) lights the dance floor
+    and the dancers, and a frozen level (`bPlayersOnly`, the acceptance's) never ticks it to 0 ([Strobe](#strobe-a-host-input-and-a-triggerlight-the-page-lit-wrongly)). Every frame
+    drawn at a new TimeSeconds that sets a Strobe light up flips the flag: a capture is lit or dark by the parity of the frames drawn, in either program.
+    **Measured in the original** (`tools/dx-live-win.c strobe poll`: flag and kept time, 120 samples 5 ms apart per camera, free-running, the clock held at dilation 0.001, 52 fps):
+    view d 32 distinct TimeSeconds (steps of 1.9e-5, frame 19 ms), 31 transitions, **the flag changed at all 31**; a 12 of 12, b 13 of 13, c 10 of 10. The three wall views the
+    Rust core reports as a mirror request without a child frame, (-1300, -2000, -336) yaw 43000 and (-700, -2000, -336) yaw 49152 and 55000, kept **one TimeSeconds for 120
+    samples**: no Strobe call, no flip. Play (a headless page, per frame light state): the flag flips at every new TimeSeconds at a, b, c, d (23 of 23) and does not at those three.
+    **The paired capture.** `tools/dx-live-win.c strobe hold <flag>` turns the `jne` at `0x10b05b4b` into a `jmp` and writes the flag, so the original draws in a state of
+    our choosing; Play takes the same state with the clock held (`TimeDilation 0`: no new TimeSeconds) and the flag written (`liveProbe({strobe})`). `visual-acceptance.mjs`
+    takes `--view <name>_s0` (lit) and `<name>_s1` (dark) for it. Original at TimeSeconds 52.30 (the Play run held at 52.298), Play over original:
+
+    | View | free-running capture (the mirror table's, one side lit or dark by chance) | flag 0 (lit) | flag 1 (dark) |
+    | --- | --- | --- | --- |
+    | a | 2.46, .995 / .992 | 4.15, .986 / .982 (ratio 1.215) | 2.40, .982 / .973 (1.221) |
+    | b | 2.72, .998 / .994 | 3.62, .985 / .990 (1.192) | 2.51, .995 / .984 (1.179) |
+    | c | 4.08, .981 / .990 | 3.93, .982 / .990 (1.210) | 3.20, .997 / .988 (1.208) |
+    | d | **4.76, .646 / .800** | **2.67, .979 / .987** (1.215) | **1.73, .990 / .985** (1.202) |
+    | r: the direct view from d's reflected camera (-1120, -2208, -296), yaw 10536, no mirror, TimeSeconds 53.13 | | 3.27, .982 / .970 (1.236) | 2.82, .978 / .968 (1.247) |
+
+    Mean abs. difference, edge recall / precision; no outlier block in any pair (block ratios 0.98 to 1.74 around the uniform 1.2 gap, which stays outside this change). The earlier
+    free-running a and b equal the dark pair and c the lit pair, so both programs happened to be in the same phase there and in opposite phases at d. In d the mirror area alone
+    (490 x 520 at 340, 170): ratio 1.215 (lit) and 1.203 (dark), the frame's own, with the left wall at 1.27. The original's dark frame (d_s1) is Play's dark frame: red floor,
+    dim dancers, and the lit/dark ratios of the mirror area (R, G, B) are the original's 1.79 / 2.68 / 1.97 against Play's 1.73 / 2.74 / 2.08, those of the reflected camera's
+    direct opening 1.43 / 1.69 / 1.36 against 1.40 / 1.66 / 1.35.
+    **Live, not frozen.** TriggerLight1 ticks to 0 on the first unfrozen Tick (the original: `LightBrightness` 3.8e-29 read from the running game, the flag one value for 40
+    polls, the floor dark red in d); Play after `--unfreeze` (`viewProbe({playersOnly: false})`, which was ignored and now clears the flag as `set LevelInfo bPlayersOnly False` does):
+    TriggerLight1 0 within 10 frames and the flag stops, d at 2.10 mean abs. difference (edge .926 / .939, 4 outlier blocks: the dancers have moved on the original's side), a at 3.48. A normal
+    game never shows this floor lit before the club's trigger fires; the lit frame is a frozen-capture state.
+    **Decision.** Not a Play defect: mirror and direct views follow the flag alike, the reflected scene's lights, light maps, zone and the dancers' lighting are the same set the
+    direct view uses, and the cadence equals the original's at all seven cameras. The change is in the harness: paired states, the Hyprland window selection (the largest client of
+    the class, as `live-acceptance.mjs` does; the first client was a hidden log window), `--unfreeze`, `--strobe-poll`. **Check.** `scripts/validate-strobe-mirror-play.mjs` (worker mode; the cadence
+    at seven cameras, the held lit/dark ratios within 10% of the original's, the unfrozen light; fails without the `viewProbe` change).
+    **Not reached.** `DrawFrame` (`0x10b1a2d0`) calls SetupForSurf through the light manager (`[0x10b3059c]`, slot +0xc, at `0x10b1aa99`) for each frame's surfaces, children first, so a
+    strobe-lit surface drawn only in a child frame would flip the flag; Play's `lightMapStrobe` reads the main frame's drawn nodes only. In this map a main frame that shows a mirror
+    always draws a surface the strobe lights: a sweep of 200 random views of the dance floor and its surroundings (Play, the flag's flips per new TimeSeconds over 23 frames) had 62 with a child
+    frame, 60 of them flipping at every step; the other two stand in the restroom, 900 units from the light, where the child frame shows the restroom too and neither frame draws a strobe-lit
+    surface. So the difference has no case in this map to be measured on, and `lightMapStrobe` is left as it is (unverified, not unsupported: no shipped view known to reach it).
+
 ### Weapon noise (2026-10-14)
 
 **Question.** The perception pilot compared a visible player that never fired or made a noise. Do NPCs hear the player's gunshots as the
@@ -1094,6 +1142,14 @@ node scripts/live-pick-compare.mjs --map <map> --tag <tag> [--pawn A] [--verbose
 scripts/live-original.sh <map> ... --rng-from .work/live-acceptance/<map>/original-trace-<tag>.jsonl --tag T   # the original draws that capture's stream (its rngIn): the same decisions in a fresh load, to trace them
 scripts/live-original.sh <map> ... --dump-flags          # the player's FlagBase at the frozen start and the end hold (flags-start<tag>.txt, flags-end<tag>.txt)
 node scripts/live-acceptance.mjs play ... [--keep-traveling] [--page-params 'pawnPhysics=js&walkLoopKernel=js&movePawnKernel=js'] # Play keeps its PlayerTraveling marker / runs the JavaScript twins (the walk trace of --nav-trace pawns)
+```
+
+```bash
+# matched-camera views with the Strobe flag held (Divergence 19); the original under the Wine lock (scripts/original-views.sh), then Play with the same --view options
+scripts/original-views.sh 06_HongKong_WanChai_Underworld --view d_s0:-1120,-1900,-336:0,55000,0 --view d_s1:-1120,-1900,-336:0,55000,0 [--strobe-poll] [--unfreeze]
+node scripts/visual-acceptance.mjs play --maps 06_HongKong_WanChai_Underworld --view d_s0:-1120,-1900,-336:0,55000,0 --view d_s1:-1120,-1900,-336:0,55000,0 [--unfreeze]
+node scripts/visual-acceptance.mjs compare --maps 06_HongKong_WanChai_Underworld --view d_s0:-1120,-1900,-336:0,55000,0 [--crop 490x520+340+170]
+wine ad/build/dx-live-win.exe strobe poll 120 5 | strobe hold 0 | strobe release      # the running original's Strobe flag (free-running, held at a value, released)
 ```
 
 `live-original.sh` takes the Wine lock (`.work/wine-deusex.lock`), refuses to start with another DeusEx.exe running and quits the game by
