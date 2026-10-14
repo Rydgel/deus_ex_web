@@ -6,6 +6,8 @@
 #
 #   scripts/live-original.sh <map> [live-acceptance.mjs original options...]
 #   e.g. scripts/live-original.sh 01_NYC_UNATCOIsland --ticks 600 --delta 0.0166666675 --monitor 20
+#   ATTEMPTS=n (default 8) is the number of loads tried before giving up on an exact population (a FlyGenerator the load spawned by chance, 10% per
+#   decoration that makes flies, is held by the original and not by Play: its draws shift every pawn that ticks after it).
 set -u
 MAP=${1:?usage: live-original.sh <map> [options]}; shift
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
@@ -39,7 +41,7 @@ done
 PID=$(pgrep -x DeusEx.exe | head -1)
 sleep 5
 code=1
-for attempt in 1 2 3 4; do
+for attempt in $(seq 1 ${ATTEMPTS:-8}); do
   node scripts/live-acceptance.mjs original --map "$MAP" --current "$MAP" --load-wait 40000 "$@"; code=$?
   [ "$code" = 3 ] || break
   echo "attempt $attempt: population mismatch, reloading"

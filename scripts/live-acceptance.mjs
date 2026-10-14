@@ -301,6 +301,19 @@ async function original() {
     const played = new Set(JSON.parse(readFileSync(reference, 'utf8')).names.map(name => name.toLowerCase()));
     const spawned = /^(Skill|Aug|NanoKey|ColorTheme|Shadow|ParticleProxy|Laser|Flare|Cigarettes|Candybar|Weapon|Mission|GameReplicationInfo|PlayerReplicationInfo|JCDenton|Mutator|DeusExGameInfo|PickupDistributor|AutoTurretGun|BarkManager|ParticleGenerator|DataVault|Credits|Ammo|BioelectricCell|Medkit|Binoculars|Lockpick|Multitool|LAM|Liquor|Soda|Sodacan|Fruit|Vice)/;
     const only = everything.filter(e => !played.has(e.name.toLowerCase()) && !spawned.test(e.name)).map(e => e.name);
+    // The spawned names are exempt above because their numbers follow each process's creation order, but not their number: a load that spawned one more
+    // ParticleGenerator, Medkit or Laser than Play's (or one fewer) holds an actor Play lacks that ticks and draws. The class-name families (the name
+    // without its number) are counted on both sides; the player's own (the original keeps the first load's Shadow, NanoKeyRing and PickupDistributor
+    // after a Player start, 1 more of each than Play's population probe) are the constant offsets of every map and are left out.
+    const familyOf = name => name.replace(/\d+$/, '').toLowerCase();
+    const count = names => { const m = new Map(); for (const name of names) m.set(familyOf(name), (m.get(familyOf(name)) ?? 0) + 1); return m; };
+    const playedFamilies = count(JSON.parse(readFileSync(reference, 'utf8')).names), originalFamilies = count(everything.map(e => e.name));
+    for (const family of new Set([...playedFamilies.keys(), ...originalFamilies.keys()])) {
+      if (['shadow', 'nanokeyring', 'pickupdistributor'].includes(family)) continue;
+      const difference = (originalFamilies.get(family) ?? 0) - (playedFamilies.get(family) ?? 0), listed = only.filter(name => familyOf(name) === family).length;
+      if (difference > listed) only.push(`${family}(+${difference - listed})`);
+      else if (difference < 0 && new RegExp(spawned.source, 'i').test(family)) only.push(`${family}(${difference})`);   // an exempt family Play holds more of (the others Play destroys)
+    }
     // --allow-missing generators|all: go on when the actors only the original holds are all generators (a sweep: FlyGenerators and
     // the like are chosen by chance at each load and Play's seeded load cannot be made to hold the original's set); they leave the watch
     // list and the map's record (`notInPlay`). Any other actor missing in Play still asks for a reload (exit code 3).
