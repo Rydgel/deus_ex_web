@@ -378,7 +378,7 @@ export function createSimSession(game, { assets = null, events = [], exportName 
     if (!master) {
       const built = occlusion.master({ location: frame.view.location, rotation: frame.view.rotation, width: size[0], height: size[1],
         fov: frame.view.fov, render: { width: rect.width, height: rect.height } });
-      master = { words: Array.from(built.frame), planes: Array.from(built.fields.slice(41, 57)) };
+      master = { words: Array.from(built.frame), planes: Array.from(built.fields.slice(41, 57)), prj: Array.from(built.fields.slice(25, 29)) };
       frameMasters.set(frame, master);
     }
     return master;
@@ -460,7 +460,7 @@ export function createSimSession(game, { assets = null, events = [], exportName 
     // The master frame as OccludeBsp got it, with the inputs that made it
     // (validate-master-frame-play.mjs; docs/render-pass-precision.md).
     // `planes`: the frame's four ViewPlanes (+0x12c), as words.
-    const master = { words: Array.from(words), planes: Array.from(built.fields.slice(41, 57)), location: Array.from(view.location), rotation: Array.from(view.rotation), fov: view.fov,
+    const master = { words: Array.from(words), planes: Array.from(built.fields.slice(41, 57)), prj: Array.from(built.fields.slice(25, 29)), location: Array.from(view.location), rotation: Array.from(view.rotation), fov: view.fov,
       viewport: [viewportWidth, viewportHeight], render: [width, height] };
     return { nodes, zone: words[42], mirrors, frames: childFrames ? frames : null, size: [width, height], lod, master,
       sky: result.children.some(child => child.kind === 'sky'), decals: fragments, movers, moverItems,
@@ -708,7 +708,7 @@ export function createSimSession(game, { assets = null, events = [], exportName 
     if (seen) {
       pass.visibility = { nodes: seen.nodes, movers: seen.movers, moverItems: seen.moverItems };
       pass.decals = seen.decals?.length ? seen.decals : null;
-      pass.projection = projectionOf(seen.master.words);
+      pass.projection = projectionOf(seen.master.words, seen.master.prj);
       if (pass.projection) setFrameProjection(viewportCamera, pass.projection);
       if (seen.sky) pass.sky = sky(view.location);
       for (const frame of seen.frames ?? []) frame.main = members?.frames.get(frame.index)?.ids ?? new Set();
@@ -1416,7 +1416,7 @@ export function createSimSession(game, { assets = null, events = [], exportName 
         // The pass frame's projection (Proj.Z, FX15, FY15 over the render
         // rectangle: play-camera.mjs setFrameProjection), the page's own
         // when it receives it; the FOV's without OccludeBsp.
-        try { const master = frameMaster(frame); frame.projection = master ? projectionOf(master.words) : null; }
+        try { const master = frameMaster(frame); frame.projection = master ? projectionOf(master.words, master.prj) : null; }
         catch (error) { frame.projection = null; fail(error); }
         applyPlayFrame(camera, frame.view, frame.renderRect, frame.projection);
         // The page's camera takes the original's pixel centres for the same

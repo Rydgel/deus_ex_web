@@ -229,10 +229,11 @@ against 0.15–0.16 ms without (noise). The frame's `visibility.ms` records
 both.
 
 Host choices, noted:
-- Fragments are drawn from their world points with the page's projection.
-  ClipDecal's screen clamp for points flagged outside the view is not
-  applied; the fragments lie inside the saved polygons, which OccludeBsp
-  already clipped to the view.
+- Fragments are drawn from their world points through the main frame's vertex
+  chain (2026-10-14, [frame projection](frame-projection.md), "Decals"):
+  `fpView`, then ClipDecal's tail, including the screen clamp of a point its
+  outcode flags (`0x10b1c660..0x10b1c825`), then D3DDrv's vertex. The oracle
+  checks it on 1,192 fragment points bit for bit (`validate-decal-render`).
 - The fragment order is the occlusion stream's, not DrawFrame's pass order
   (the occluding list is key-sorted there); modulated blends commute up to
   the framebuffer's rounding, and every decal is drawn before the

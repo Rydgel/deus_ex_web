@@ -29,6 +29,8 @@ import { loadScriptVmKernel } from '../src/runtime/script-vm-kernel.mjs';
 import { buildWindowSceneFrame } from '../src/runtime/script-window-scene-frame.mjs';
 import { TEXTURE_POLYFLAG_BOOLS } from '../src/runtime/bsp-occlusion.mjs';
 import { x87TanCandidates } from '../src/runtime/x87-tan.mjs';
+import { depthConstants, floatWord, frameOfFields, projectView, d3dVertex, viewPoint, wordFloat } from '../src/runtime/frame-projection.mjs';
+import { runGpuUnits } from './frame-projection-gpu-run.mjs';
 
 const python = process.env.NATIVE_PROBE_PYTHON ?? '.cache/native-probe-env/bin/python';
 if (!existsSync(python)) {
@@ -127,10 +129,18 @@ const transformPoint = (p, c) => {
 };
 
 const input = kernel.alloc(4 * 119), output = kernel.alloc(4 * 5 * 24);
-const totals = { frames: 0, children: 0, cases: 0, nonempty: 0, points: 0, mover: 0, moverTurned: 0, maps: [] };
+const totals = { frames: 0, children: 0, cases: 0, nonempty: 0, points: 0, mover: 0, moverTurned: 0, maps: [],
+  vertices: 0, flagged: 0, clamped: 0, maxClamp: 0, unclampedWrong: 0, units: [] };
+// ClipDecal's tail (Render 0x10b1c5fd..0x10b1c825): each clipped world point goes through Frame->Coords, RZ = Proj.Z / Z
+// and ScreenX/ScreenY, and a point whose outcode flags (the signs of Z*PrjXM + X, Z*PrjYM + Y, Z*PrjXP - X, Z*PrjYP - Y)
+// are set has them clamped to [0, X - 1] and [0, Y - 1] (0x10b1c7ad..0x10b1c825); D3DDrv's DrawGouraudPolygon then builds
+// the vertex (X = XB + ScreenX - 0.5, RHW = RZ * RProj.Z, depth). The reference chain (src/runtime/frame-projection.mjs)
+// and the oracle's vertex buffer must agree bit for bit.
+const depth32 = depthConstants(32);
+const clampScreen = (value, limit) => (value < 0 ? 0 : value < limit ? value : limit);
 for (const [mapName, cams] of RUNS) {
   const { map, model } = await oracleModel(mapName);
-  const request = { gameRoot: root, tangents, model, textures: TEXTURES, d3d: { colorBits: 32, fog: 0, draw: false },
+  const request = { gameRoot: root, tangents, model, textures: TEXTURES, d3d: { colorBits: 32, fog: 0, draw: true },
     frames: cams(map).map((camera, i) => ({ camera, seed: 100 + i, generate: { surfaces: 12, perSurface: 3 }, children: true })) };
   const started = performance.now();
   const result = JSON.parse(execFileSync(python, ['scripts/native-decal-render-oracle.py'],
@@ -165,6 +175,40 @@ for (const [mapName, cams] of RUNS) {
         assert.equal(bits(f(num(out[5 * k + 4]) / ds)), p[21] >>> 0, `${where}: point ${k} V`);
         totals.points++;
       }
+      // The vertices DrawGouraudPolygon built from the fragment (D3DDrv 0x100056b0): the reference chain from the world points.
+      const drawn = (c.d3d ?? []).find(event => event[0] === 'DrawPrimitiveVB');
+      if (n && drawn) {
+        const sp = frame.frame.sizeAndProj, fields = new Array(25).fill(0);
+        coords.forEach((w, i) => { fields[i] = w; });
+        Object.assign(fields, { 14: sp[6], 15: sp[7], 21: sp[13], 24: sp[16] });
+        const view = frameOfFields(fields, { width: sp[0], height: sp[1], x: sp[2], y: sp[3] });
+        assert.equal(drawn[3], n, `${where}: DrawGouraudPolygon's vertex count`);
+        // The same points through the GLSL chain on the GPU (fpVertexDecal), below.
+        const unit = { label: where, origin: coords.slice(0, 3).map(num), axes: [3, 6, 9].map(b => coords.slice(b, b + 3).map(num)),
+          proj: [num(sp[13]), num(sp[16]), num(sp[6]), num(sp[7])], rect: [sp[0], sp[1], sp[2], sp[3]],
+          depth: [depth32.zBias, depth32.zScale, 1], prj: sp.slice(17, 21).map(num), points: [], expected: [] };
+        for (let k = 0; k < n; k++) {
+          unit.points.push({ world: [num(out[5 * k]), num(out[5 * k + 1]), num(out[5 * k + 2])], view: [0, 0, 0], mode: 2 });
+          unit.expected.push(drawn[5][k].slice(0, 4).map(w => w >>> 0));
+        }
+        totals.units.push(unit);
+        for (let k = 0; k < n; k++) {
+          const p = c.points[k], world = [num(out[5 * k]), num(out[5 * k + 1]), num(out[5 * k + 2])];
+          const v = viewPoint(view, world), projected = projectView(view, v), flagged = (p[3] & 0xff) !== 0;
+          let { screenX, screenY } = projected;
+          if (flagged) {
+            totals.flagged++;
+            const clamped = [clampScreen(screenX, f(view.width - 1)), clampScreen(screenY, f(view.height - 1))];
+            totals.maxClamp = Math.max(totals.maxClamp, Math.abs(clamped[0] - screenX), Math.abs(clamped[1] - screenY));
+            if (clamped[0] !== screenX || clamped[1] !== screenY) totals.clamped++;
+            [screenX, screenY] = clamped;
+          }
+          const own = d3dVertex(view, depth32, { rz: projected.rz, screenX, screenY }), want = drawn[5][k].slice(0, 4);
+          assert.deepEqual([own.sx, own.sy, own.sz, own.rhw].map(x => floatWord(x) >>> 0), want.map(w => w >>> 0),
+            `${where}: vertex ${k}${flagged ? ' (flagged)' : ''} of the fragment ${JSON.stringify([own.sx, own.sy, own.sz, own.rhw])} vs ${JSON.stringify(want.map(wordFloat))}`);
+          totals.vertices++;
+        }
+      }
       cases++; totals.cases++; if (n) totals.nonempty++;
       if (mover && n && mover.some((r, k) => r !== (spec.moverRotation?.[k] ?? 0))) totals.moverTurned++;
     }
@@ -172,7 +216,30 @@ for (const [mapName, cams] of RUNS) {
   totals.maps.push(`${mapName} ${cases} cases (${((performance.now() - started) / 1000).toFixed(1)} s)`);
 }
 kernel.free(input); kernel.free(output);
+// The GLSL chain (fpVertexDecal and its clip form) on the GPU, headless Chromium, for the same fragments.
+{
+  const angle = process.argv.includes('--angle') ? process.argv[process.argv.indexOf('--angle') + 1] : process.platform === 'darwin' ? 'metal' : 'gl';
+  const runtime = await runGpuUnits(totals.units, { angle });
+  let checked = 0, maxPixel = 0, maxDepth = 0, flaggedGpu = 0;
+  for (const [i, u] of totals.units.entries()) {
+    const r = runtime.results[i];
+    for (const [k, expected] of u.expected.entries()) {
+      assert.deepEqual(r.vertex.slice(4 * k, 4 * k + 4).map(w => w >>> 0), expected, `${u.label}: GPU decal vertex ${k}`);
+      checked++;
+      const [cx, cy, cz, cw] = r.clip.slice(4 * k, 4 * k + 4);
+      if (cw >= 1) {
+        const rect = u.rect, nx = cx / cw, ny = cy / cw, nz = cz / cw;
+        const sx = (nx + 1) / 2 * rect[0] + rect[2] - 0.5, sy = (1 - ny) / 2 * rect[1] + rect[3] - 0.5, sz = (nz + 1) / 2;
+        const dx = Math.abs(sx - wordFloat(expected[0])), dy = Math.abs(sy - wordFloat(expected[1])), dz = Math.abs(sz - wordFloat(expected[2]));
+        maxPixel = Math.max(maxPixel, dx, dy); maxDepth = Math.max(maxDepth, dz);
+        assert.ok(dx < 2e-3 && dy < 2e-3 && dz < 3e-7, `${u.label}: GPU decal clip form of point ${k}: ${dx} ${dy} ${dz}`);
+      }
+    }
+  }
+  totals.gpu = `${checked} GPU vertices (fpVertexDecal) equal the original's bit for bit; clip form within ${maxPixel.toExponential(1)} px and ${maxDepth.toExponential(1)} depth (${runtime.renderer})`;
+}
 assert.ok(totals.nonempty > 100 && totals.children > 0, 'the cases reach nonempty fragments and child frames');
 console.log(`validate-decal-render: ${totals.maps.join(', ')}; ${totals.frames} frames (${totals.children} children), ` +
   `${totals.cases} ClipDecal cases, ${totals.nonempty} nonempty, ${totals.points} points bit-equal (position, U, V); ` +
-  `${totals.mover} of them on Mover surfaces (${totals.moverTurned} nonempty and turned by Actor.Rotation - MoverRotation); PASS`);
+  `${totals.mover} of them on Mover surfaces (${totals.moverTurned} nonempty and turned by Actor.Rotation - MoverRotation); ` +
+  `${totals.vertices} D3D vertices equal the reference chain bit for bit (${totals.flagged} points flagged outside the view, ${totals.clamped} of them moved by the screen clamp, largest ${totals.maxClamp.toExponential(2)} pixel); ${totals.gpu}; PASS`);

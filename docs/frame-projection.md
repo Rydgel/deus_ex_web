@@ -161,8 +161,9 @@ frame's Coords differ from the exact rotation by up to 0.3 pixel at 1440 wide.
 * `src/viewer/play-camera.mjs`: the camera is posed from the pass frame's
   Coords (`setCameraCoords`, called by `setFrameProjection`) and its depth range
   is the device's (`PLAY_NEAR` 1, `PLAY_FAR` 32767) in every camera, so the
-  sprites, particles, coronas, lasers and decals, which keep the camera's
-  projection, land within 0.004 pixel and 2 depth ulps of the world.
+  sprites, particles, coronas and lasers, which keep the camera's projection
+  (decals, since 2026-10-14, project through the chain), land within 0.004 pixel
+  and 2 depth ulps of the world.
 * `src/viewer/frame-projection.mjs`: the shared uniforms and `patch(shader)`,
   which replaces three.js's `project_vertex` with `fpClip(fpView(world))` (or,
   for GPU-path actor meshes, `fpClip` of the camera-space point). Applied to
@@ -265,6 +266,52 @@ So the earlier path was already within a thousandth of a pixel (doors are
 translations, whose matrix products mostly round the same way); the change is
 that the vertex is the original's, bit for bit, for turned movers too.
 
+**Decals (2026-10-14).** ClipDecal (Render.dll `0x10b1bda0`) clips a decal's
+lifted quad in world space against the saved polygon's edge planes, and its tail
+turns each surviving point into an FTransform exactly as ClipBspSurf does a
+level vertex: the clipped world point `P` (the array at `0x10b504b8`, stride
+12) less Frame->Coords' origin and three axis dot products stored as X, Y, Z
+(`0x10b1c5fd..0x10b1c65d`, the same `(dx*a.x + dy*a.y) + dz*a.z` as `fpView`);
+the four outcode terms `Z*PrjXM + X`, `Z*PrjYM + Y`, `Z*PrjXP - X`,
+`Z*PrjYP - Y` (Frame `+0xec..+0xf8`), each stored as binary32, whose sign
+bits index the tables at `0x10b2aeb4..0x10b2aec0` (flags 4, 8, 0x10, 0x20;
+nonzero when any is negative, -0.0 included) (`0x10b1c660..0x10b1c701`);
+`RZ = Proj.Z / Z` (`0x10b1c6b8`); and for an unflagged point ScreenX and
+ScreenY as everywhere (`0x10b1c70b..0x10b1c73b`). A **flagged** point takes a
+second pass (`0x10b1c74c..0x10b1c825`) that recomputes RZ, ScreenX and ScreenY
+the same way and **clamps** them to `[0.0, X - 1]` and `[0.0, Y - 1]`
+(`fild Frame->X - 1`, the constant 0.0 at `0x10b2a5c4`; a point below zero
+takes 0, one at or above the limit takes the limit); RZ keeps its unclamped
+value. DrawFrame then hands the fragment to DrawGouraudPolygon (`0x10b1b286`,
+flags `0x40`), whose vertex is the mesh vertex above (RHW = RZ * RProj.Z,
+depth `RHW * _43 + _33`). The clamp moves only points on or past the frame's
+edge (in the oracle's frames 119 of 1,192 fragment points are flagged and 64 of
+those move, by up to 1.5 pixels).
+
+* `src/viewer/frame-projection-glsl.mjs` `fpVertexDecal` and `fpClipDecal`
+  (the outcode terms in `B()` barriers, the sign bits by `floatBitsToUint`);
+  the page's frame carries PrjXM..PrjYP (`projection.prj`, ComputeRenderSize's
+  fields 25..28; the uniform `uFpPrj`, which a frame without them sets so no
+  point is flagged).
+* `decal-scene.mjs` patches its modulated material with `patch(shader, { decal:
+  true })`: the fragments' world points (decal-draw.mjs) project with the main
+  frame's chain. Mirror and sky child frames draw no decals, as the original's
+  ClipDecal returns nothing there; a ViewportWindow's decals keep the camera.
+* `validate-decal-render` (the decal oracle, ClipDecal and the unchanged
+  DrawGouraudPolygon, 762 cases, 1,192 fragment points in Training, Island and the
+  club's mirror frames) now also compares the vertex buffer: the reference chain
+  with the clamp equals D3DDrv's vertex bit for bit at all 1,192 points (**119
+  flagged, 64 of them moved by the clamp, the largest 1.5 pixels**), and the
+  GLSL `fpVertexDecal` on the GPU (headless Chromium through
+  `scripts/frame-projection-gpu-run.mjs`, shared with the mesh and surface
+  validator) equals it bit for bit too, its clip form within 1.5e-4 pixel.
+* `scripts/validate-decal-vertices-play.mjs` (Training, worker mode): a frozen
+  frame drawn with the chain and with the camera, decal layer on and off, at
+  Jaime Reyes' shadow (1,563 decal pixels with the chain, 1,558 with the camera,
+  7 differ), the same shadow at the frame's edge, and a BulletHole on a mover's
+  fragment (29 pixels, identical coverage); the page's uniforms hold the master
+  frame's PrjXM..PrjYP.
+
 ## Play
 
 `scripts/validate-frame-projection-play.mjs` (worker mode, headless Chromium,
@@ -360,15 +407,53 @@ host; the frame stays on vsync, 16.7 ms, in both):
 About 0.1 ms of page work a frame on the reference path (one corner copy per
 lit actor and frame, and the points in the worker's record).
 
+## Sprites: what the original does and where this stopped
+
+Not wired (2026-10-14; a hand-off). Read so far, all addresses in the retail DLLs:
+
+* `DrawActorSprite` (Render.dll `0x10b25080`) draws one tile through the render
+  device's vtable `+0x60` (DrawTile, called at `0x10b254bd`) for a DT_Sprite
+  item. With `S` the FDynamicSprite record (`edi`): the tile's size is `XL =
+  Texture.USize * S+0xb0 * k` and `YL = Texture.VSize * S+0xb0 * k`, `k` being
+  `S+0xc0` (1.0 when the viewport's `0x5fc` flag `0x20` is set,
+  `0x10b253a0..0x10b253b2`; `0x10b253c6..0x10b253e3`, each product stored as
+  binary32), the top left `X = S+0xa8 - XL * 0.5`, `Y = S+0xac - YL * 0.5`
+  (`0x10b25481..0x10b254b9`, the constant 0.5 at `0x10b2a5c8`), the texture
+  `Texture->Get(Viewport->CurrentTime)` (`0x10b2547b`), PolyFlags the texture's
+  `| style | 0x100`. `S+0xa8`, `S+0xac` and `S+0xb0` (the projected centre and the
+  scale) are FDynamicSprite::Setup's results, which Play's sprite scan does not
+  keep (only the integer rectangle and Z: [BSP occlusion](bsp-occlusion.md),
+  validate-sprite-setup).
+* `DrawTile` (D3DDrv.dll `0x10005ba0`, thiscall, frame at `[ebp+8]`, Info `+0xc`, X
+  `+0x10`, Y `+0x14`, XL `+0x18`, YL `+0x1c`, U `+0x20`, V `+0x24`, UL `+0x28`,
+  VL `+0x2c`, Z `+0x34`, Color `+0x38`, PolyFlags `+0x58`): `RHW = 1.0 / Z`
+  (`0x10005c41..0x10005c47`, the constant at `0x10018430`), the stored depth `RHW *
+  _43 + _33` (`0x10005c65..0x10005c71`, the same SetRes constants), `X = (XB -
+  0.5) + x`, `Y = (YB - 0.5) + y` (`fild [Frame+0xb0]`, `fsub 0.5` at `0x1001864c`,
+  `fadd`: `0x10005c74..0x10005c95`), then four 0x20-byte vertices
+  `{X, Y, depth, RHW, colour, 0, u, v}` filled from `0x10005e46`: (X, Y), (X, Y +
+  YL), (X + XL, Y + YL), (X + XL, Y) with U and V scaled by the texture's
+  `0xabc`/`0xac0` multipliers. A sprite's Z is the camera-space depth the rectangle
+  was set up with, so its RHW is the exact `1/Z` rather than `RZ * RProj.Z`.
+* To do: keep Setup's centre and scale in the sprite record (Rust, with the
+  oracle's `validate-sprite-setup` cases), run `DrawActorSprite` and `DrawTile` under
+  Unicorn at the render pass's control word (the oracle of
+  `validate-decal-render` already has D3DDrv's DrawGouraudPolygon harness to copy
+  for a DrawTile one), port the four vertices, and draw sprites as quads whose
+  vertex shader takes `(X, Y, XL, YL, Z)` and builds the vertex above
+  (`fpClip`'s mapping of a given D3D vertex is `fpClipOf`, new). Particles
+  (script `ParticleIterator`) and lasers go through the same sprite and beam
+  paths; coronas have their own tile draw (`corona-pass.mjs`) and are open as well.
+
 ## Unverified and open
 
 * **Clipped polygons.** The original draws the Sutherland-Hodgman clipped
   polygon (20% of the saved points in these frames); the GPU clips the unclipped
   polygon homogeneously. The pixels inside the frustum agree; the vertices on its
   edges are the rasterizer's.
-* **Decals, sprites, particles, coronas, lasers, the fog overlay's clip at view
-  depth 380:** the camera's projection (decals' camera-space points and DrawTile's
-  `1/Z` vertex are original facts, not wired). ViewportWindow camera frames keep
+* **Sprites, particles, coronas, lasers, the fog overlay's clip at view
+  depth 380:** the camera's projection (DrawTile's `1/Z` vertex is an original
+  fact, not wired). ViewportWindow camera frames keep
   the camera's projection (their camera is posed from Coords as well): measured
   against the original's own security-camera frames, drawing a window through the
   vertex chain (`fpClip` with the window's master frame) changes 0 to 2 of

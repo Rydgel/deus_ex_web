@@ -11,10 +11,9 @@
  *
  *   node scripts/validate-frame-projection-gpu.mjs [--angle gl|metal|vulkan] [map ...] */
 import assert from 'node:assert/strict';
-import { chromium } from '@playwright/test';
 import { available, bspOracle, meshOracle, rectOf } from './frame-projection-cases.mjs';
 import { depthConstants, floatWord, wordFloat } from '../src/runtime/frame-projection.mjs';
-import { frameProjectionGlsl } from '../src/viewer/frame-projection-glsl.mjs';
+import { runGpuUnits } from './frame-projection-gpu-run.mjs';
 
 if (!available) {
   console.log('SKIP validate-frame-projection-gpu: no native probe environment');
@@ -71,89 +70,10 @@ for (const [mapName, options] of [['01_NYC_UNATCOIsland', { seed: 5, count: 8 }]
   }
 }
 
-const vertexSource = '#version 300 es\nprecision highp float;\nvoid main(){vec2 p=vec2(float((gl_VertexID&1)<<2)-1.0,float((gl_VertexID&2)<<1)-1.0);gl_Position=vec4(p,0.0,1.0);}';
-// --no-barrier: the mutation check. Without B() the compiler may fuse and
-// reassociate; the run then reports how many vertices differ instead of failing.
 const noBarrier = process.argv.includes('--no-barrier');
-let fragmentSource = `#version 300 es
-precision highp float;precision highp int;precision highp sampler2D;
-uniform sampler2D uPoints;uniform int uMode;
-${frameProjectionGlsl()}
-layout(location=0) out vec4 oVertex;layout(location=1) out vec4 oView;layout(location=2) out vec4 oClip;
-void main(){
-  vec4 q=texelFetch(uPoints,ivec2(gl_FragCoord.xy),0);
-  vec3 v=q.w>0.5?q.xyz:fpView(q.xyz);
-  oView=vec4(v,0.0);oVertex=fpVertex(v);oClip=fpClip(v);}`;
-if (noBarrier) fragmentSource = fragmentSource.replace('float B(float x){return uintBitsToFloat(floatBitsToUint(x)^uFpZero);}', 'float B(float x){return x;}');
-
-const browser = await chromium.launch({ args: [`--use-angle=${angle}`] });
 let nearChecked = 0, checked = 0, mismatched = 0, clipChecked = 0, maxClipPixel = 0, maxClipDepth = 0;
-try {
-  const page = await browser.newPage();
-  await page.setContent('<canvas id="c" width="64" height="64"></canvas>');
-  const runtime = await page.evaluate(({ vertexSource, fragmentSource, units }) => {
-    const gl = document.getElementById('c').getContext('webgl2');
-    if (!gl.getExtension('EXT_color_buffer_float')) return { error: 'EXT_color_buffer_float missing' };
-    const compile = (type, source) => {
-      const shader = gl.createShader(type); gl.shaderSource(shader, source); gl.compileShader(shader);
-      if (!gl.getShaderParameter(shader, gl.COMPILE_STATUS)) throw new Error(gl.getShaderInfoLog(shader));
-      return shader;
-    };
-    const program = gl.createProgram();
-    gl.attachShader(program, compile(gl.VERTEX_SHADER, vertexSource));
-    gl.attachShader(program, compile(gl.FRAGMENT_SHADER, fragmentSource));
-    gl.linkProgram(program);
-    if (!gl.getProgramParameter(program, gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(program));
-    gl.useProgram(program);
-    const WIDTH = 256, results = [];
-    const targets = [0, 1, 2].map(() => {
-      const t = gl.createTexture(); gl.bindTexture(gl.TEXTURE_2D, t);
-      return t;
-    });
-    const input = gl.createTexture(), fb = gl.createFramebuffer();
-    const u = (name) => gl.getUniformLocation(program, name);
-    for (const unit of units) {
-      const rows = Math.max(1, Math.ceil(unit.points.length / WIDTH));
-      const data = new Float32Array(WIDTH * rows * 4);
-      unit.points.forEach((p, i) => { const src = p.mode ? p.view : p.world; data.set(src.map(x => x), i * 4); data[i * 4 + 3] = p.mode ? 1 : 0; });
-      if (unit.points.some(p => p.mode)) {
-        // View-space inputs arrive as words: reinterpret.
-        const words = new Uint32Array(data.buffer);
-        unit.points.forEach((p, i) => { if (p.mode) { words[i * 4] = p.view[0]; words[i * 4 + 1] = p.view[1]; words[i * 4 + 2] = p.view[2]; } });
-      }
-      gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, input);
-      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA32F, WIDTH, rows, 0, gl.RGBA, gl.FLOAT, data);
-      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
-      gl.bindFramebuffer(gl.FRAMEBUFFER, fb);
-      gl.activeTexture(gl.TEXTURE1);
-      targets.forEach((t, k) => {
-        gl.bindTexture(gl.TEXTURE_2D, t);
-        gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA32F, WIDTH, rows, 0, gl.RGBA, gl.FLOAT, null);
-        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
-        gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0 + k, gl.TEXTURE_2D, t, 0);
-      });
-      gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, input);
-      gl.drawBuffers([gl.COLOR_ATTACHMENT0, gl.COLOR_ATTACHMENT1, gl.COLOR_ATTACHMENT2]);
-      gl.viewport(0, 0, WIDTH, rows);
-      gl.uniform1i(u('uPoints'), 0);
-      gl.uniform1ui(u('uFpZero'), 0);
-      gl.uniform1f(u('uFpOn'), 1);
-      gl.uniform3fv(u('uFpOrigin'), unit.origin);
-      gl.uniform3fv(u('uFpAxisX'), unit.axes[0]); gl.uniform3fv(u('uFpAxisY'), unit.axes[1]); gl.uniform3fv(u('uFpAxisZ'), unit.axes[2]);
-      gl.uniform4fv(u('uFpProj'), unit.proj); gl.uniform4fv(u('uFpRect'), unit.rect); gl.uniform4fv(u('uFpView'), [unit.rect[0], unit.rect[1], unit.rect[2], unit.rect[3]]); gl.uniform3fv(u('uFpDepth'), unit.depth);
-      gl.drawArrays(gl.TRIANGLES, 0, 3);
-      const status = gl.checkFramebufferStatus(gl.FRAMEBUFFER), error = gl.getError();
-      if (status !== gl.FRAMEBUFFER_COMPLETE || error) throw new Error(`framebuffer ${status} error ${error}`);
-      const out = [0, 1, 2].map(k => {
-        gl.readBuffer(gl.COLOR_ATTACHMENT0 + k);
-        const pixels = new Float32Array(WIDTH * rows * 4);
-        gl.readPixels(0, 0, WIDTH, rows, gl.RGBA, gl.FLOAT, pixels);
-        return Array.from(new Uint32Array(pixels.buffer, 0, unit.points.length * 4));
-      });
-      results.push({ label: unit.label, vertex: out[0], view: out[1], clip: Array.from(new Float32Array(new Uint32Array(out[2]).buffer)) });
-    }
-    return { renderer: gl.getParameter(gl.RENDERER), results };
-  }, { vertexSource, fragmentSource, units });
+{
+  const runtime = await runGpuUnits(units, { angle, noBarrier });
   assert.ok(!runtime.error, runtime.error);
   console.log(`GPU: ${runtime.renderer} (--angle ${angle})`);
   for (const [i, u] of units.entries()) {
@@ -189,8 +109,6 @@ try {
       }
     }
   }
-} finally {
-  await browser.close();
 }
 if (noBarrier) { console.log(`without the barrier: ${mismatched} of ${checked} vertices differ`); process.exit(0); }
 console.log(`${units.length} units, ${checked} GPU vertices equal the original's bit for bit; clip form: ${clipChecked} points (+${nearChecked} around the near plane), `
