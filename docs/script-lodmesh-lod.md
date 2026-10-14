@@ -525,6 +525,35 @@ The runs spread over 2.4–3.2 ms (mirrors) and 1.5–1.9 ms (worker actors), so
 the differences are inside the noise; the engaged case adds the morph and
 corner passes to a child pass's lighting run for the slots that differ.
 
+**Cost of camera space (2026-10-14)** (interleaved A/B on the Linux host, AMD
+Radeon 780M, worker mode, GPU path, 1440×960, 400 frames a run, medians;
+the previous commit `fc0e745` served from an export of the tree against
+this change, `profile-play-browser.mjs --gpu --no-profile`):
+
+| Island's start, idle, 5 pairs | before | after |
+| --- | ---: | ---: |
+| page actors phase | 0.44 ms | 0.43 ms |
+| worker actors phase | 4.17 ms | 4.29 ms |
+| GPU per frame | 1.70 ms | 1.64 ms |
+| page frame work | 3.39 ms | 3.41 ms |
+| worker frame work | 15.92 ms | 15.99 ms |
+| frame interval | 16.7 ms (vsync) | 16.7 ms (vsync) |
+
+| Paris Club bar mirror (78, −1008, 27), 4 pairs | before | after |
+| --- | ---: | ---: |
+| page actors phase | 0.315 ms | 0.310 ms |
+| worker actors phase | 2.04 ms | 1.92 ms |
+| page mirrors phase | 3.09 ms | 2.85 ms |
+| GPU per frame | 1.51 ms | 1.52 ms |
+
+The only difference outside the run-to-run spread is Island's worker actors
+phase, +0.12 ms: each lit actor's GetFrame matrix (`lodMeshFrameMatrix`, 1.3
+to 1.7 µs a call in JavaScript, about 70 lit actors in view). A Rust port of
+that function (`frame_matrix`, bit-equal to the JavaScript on 20,000 random
+inputs) measured 1.6 µs a call, no faster, since the call's marshalling costs
+as much as the arithmetic, and was not kept. The two extra GPU passes are
+not visible in the GPU time.
+
 The first GPU version walked the per-vertex LOD lists whenever the LOD flag
 held and cost 2.00 → 2.86 ms per frame; the vertex and corner passes now
 take the exact lists unless the count is below ModelVerts (a morph alone
