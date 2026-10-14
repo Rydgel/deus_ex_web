@@ -331,6 +331,12 @@ goes through the validated `coronaLineVisible`; it reports the lights it passed
   and with the level held as the capture does, `coronas()` shows 11 offered, 6
   passed (Light44, 38, 37, 33, 31, 10), Light34 to 36 and Light60 hidden. It fails
   without the sim-host wiring (9 passed).
+- The fan2 matched capture (`scripts/original-views.sh` and `visual-acceptance.mjs
+  play`/`compare`, the original under the shared Wine lock, both clocks at
+  TimeSeconds 52.397, 1280x720): Play draws Light33's corona and the two small
+  bulbs only, as the original does; 0 outlier blocks (10 before), mean absolute
+  difference 3.74 (6.17), edge recall 0.959 and precision 0.966 (0.861 and 0.684).
+  The uniform brightness ratio (1.28) stays outside this work.
 
 **Open.**
 - The corona pass runs at the render pass's 24-bit control word (0x007f); the
@@ -341,5 +347,5 @@ goes through the validated `coronaLineVisible`; it reports the lights it passed
 - Play's collision, AI and decal traces still use the static model
   ([brush tracker](brush-tracker.md) "Collision"); in the original they see
   the same fragments. Only mesh lighting and the coronas read the tracked one.
-- The fan2 matched capture (Play against the original) was not rerun by this
-  change; see the report of the session.
+- Light33's corona itself differs slightly from the original's at its centre
+  (a coloured fringe in the difference image); not examined.
