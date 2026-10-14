@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import { displayRampGlsl } from './light-atlas.mjs';
 import { DECAL_LAYER } from './render-layers.mjs';
-import { configureSampler } from './original-sampling.mjs';
+import { configureSampler, REENCODE_GLSL } from './original-sampling.mjs';
 
 
 /** Decals in Play, the page's side (docs/decals.md "Drawing"): the
@@ -26,7 +26,7 @@ export function createDecalScene(assets, textures, { displayGamma }) {
     entries.set(key, entry);
     assets.get(reference.package).then(asset => textures.get(asset, reference.index, false)).then(data => {
       const first = data.mips[0], gpu = new THREE.DataTexture(first.data, first.width, first.height, THREE.RGBAFormat);
-      gpu.colorSpace = THREE.SRGBColorSpace; gpu.flipY = false;
+      gpu.flipY = false;
       gpu.wrapS = gpu.wrapT = THREE.RepeatWrapping;
       const last = data.mips.at(-1), complete = last.width === 1 && last.height === 1;
       if (complete && data.mips.length > 1) gpu.mipmaps = data.mips;
@@ -40,7 +40,7 @@ export function createDecalScene(assets, textures, { displayGamma }) {
       material.onBeforeCompile = shader => {
         shader.uniforms.deusDisplayGamma = displayGamma;
         shader.fragmentShader = shader.fragmentShader.replace('#include <common>', '#include <common>\nuniform float deusDisplayGamma;')
-          .replace('#include <colorspace_fragment>', `gl_FragColor = sRGBTransferOETF(gl_FragColor);
+          .replace('#include <colorspace_fragment>', `${REENCODE_GLSL}
             ${displayRampGlsl('deusDisplayGamma', true)}`);
       };
       material.customProgramCacheKey = () => 'deus-decal';

@@ -48,7 +48,9 @@ try {
   // The two pixels either side of the centre line of a 2 x 2 texture on a 64-pixel quad: POINT draws texels; LINEAR blends them.
   assert.ok(colors.some(c => c.every((v, i) => v === noSmooth.left[i])) && colors.some(c => c.every((v, i) => v === noSmooth.right[i])), `PF_NoSmooth draws texels: ${JSON.stringify(noSmooth)}`);
   assert.ok(!colors.some(c => c.every((v, i) => v === smooth.left[i])), `a smooth surface blends its texels at the boundary: ${JSON.stringify(smooth)}`);
-  console.log(`validate-texture-sampling: PASS (${checked} level checks: plain, world and batched shaders at lambda 0.25..6.75 with bias ${result.bias}; PF_NoSmooth POINT)`);
+  // The texels are filtered in display space (no sRGB decode): between 0 and 255 the pixel next to the boundary is a plain mix.
+  for (const kind of ['plain', 'world']) assert.ok(result.space[kind][0] >= 110 && result.space[kind][0] <= 136, `${kind}: 8-bit texels filter in display space (${result.space[kind]})`);
+  console.log(`validate-texture-sampling: PASS (${checked} level checks: plain, world and batched shaders at lambda 0.25..6.75 with bias ${result.bias}; PF_NoSmooth POINT; display-space filtering ${result.space.plain[0]}/${result.space.world[0]})`);
 } finally {
   await browser?.close(); await server.close();
 }

@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { frameProjection, FRAME_PROJECTION_KEY } from './frame-projection.mjs';
+import { REENCODE_GLSL } from './original-sampling.mjs';
 
 /** Padded lightmap tiles share texture pages; sample bounds prevent atlas bleeding. */
 export class LightAtlas {
@@ -204,9 +205,10 @@ export function applyLightAtlas(material, page, enabled, gamma = { value: 1 }, m
       ${mirror ? 'uniform sampler2D deusMirror; uniform vec2 deusMirrorSize; uniform float deusMirrorActive;' : ''}
       varying vec3 vDeusLightUV;
       varying vec4 vDeusLightBounds;`).replace('#include <colorspace_fragment>', `
-      // Offscreen mirror targets need the same encoded colours as the main
-      // framebuffer; Three normally leaves render-target colours linear.
-      gl_FragColor = sRGBTransferOETF(gl_FragColor);
+      // The textures hold the original's 8-bit display-space values and are
+      // filtered as such (original-sampling.mjs: no sRGB decode), so the colour
+      // is already what the framebuffer and the mirror targets hold.
+      ${REENCODE_GLSL}
       // The original fixed-function renderer modulates display-encoded texture colours.
       ${array ? `highp int deusLightLayer = int(floor(vDeusLightUV.z + 0.5)) % ${stride};` : ''}
       if (deusLightingEnabled > 0.5 && ${array ? 'deusLightLayer > 0' : 'vDeusLightUV.z > 0.5'}) {

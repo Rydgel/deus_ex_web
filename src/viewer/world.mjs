@@ -55,7 +55,7 @@ export async function createWorld(map, asset, assets, onProgress = () => {}, {ba
     if (!textureGPU.has(texKey)) {
       const first = data.mips[0];
       const tex = new THREE.DataTexture(first.data, first.width, first.height, THREE.RGBAFormat);
-      tex.colorSpace = THREE.SRGBColorSpace; tex.flipY = false;
+      tex.flipY = false;
       tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
       const last = data.mips.at(-1), complete = last.width === 1 && last.height === 1;
       if (complete && data.mips.length > 1) tex.mipmaps = data.mips;

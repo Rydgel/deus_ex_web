@@ -53,8 +53,8 @@ export async function runTextureSamplingFixture() {
     const lightmap = {width: 4, height: 4, pixels: new Float32Array(48).fill(.5), uv: () => [.5, .5]};
     const tile = atlas.add(lightmap);
     centres.forEach((cx, j) => {
-      // The world's textures are sRGB; the light-atlas hook re-encodes, so the colours round trip.
-      const texture = mippedTexture(palette(j), kind === 'plain' ? THREE.NoColorSpace : THREE.SRGBColorSpace);
+      // The world's textures are 8-bit values in display space, filtered as such (no sRGB decode), as the device's are.
+      const texture = mippedTexture(palette(j), THREE.NoColorSpace);
       configureSampler(texture, false); textures.push(texture);
       const geometry = new THREE.PlaneGeometry(S, S).toNonIndexed();
       geometry.translate(cx, HEIGHT / 2, 0);
@@ -104,6 +104,28 @@ export async function runTextureSamplingFixture() {
     noSmooth.push({noSmooth: !smooth, left: pixel(pixels, 511), right: pixel(pixels, 512), magFilter: texture.magFilter, minFilter: texture.minFilter});
     texture.dispose();
   }
-  return {rows, noSmooth, bias: D3D_LOD_BIAS, filters: {linear: THREE.LinearFilter, nearest: THREE.NearestFilter, linearMipmapNearest: THREE.LinearMipmapNearestFilter, nearestMipmapNearest: THREE.NearestMipmapNearestFilter},
+  // Filtering space: a 2 x 1 texture of 0 and 255 magnified on a 64-pixel quad. The device filters the 8-bit texels as they are: the pixel
+  // left of the boundary is a mix of the two values in display space (about 123), where a sRGB texture filtered in linear light would be 183.
+  const space = {};
+  for (const kind of ['plain', 'world']) {
+    const texture = new THREE.DataTexture(new Uint8Array([0, 0, 0, 255, 255, 255, 255, 255]), 2, 1, THREE.RGBAFormat);
+    texture.mipmaps = [{data: texture.image.data, width: 2, height: 1}, {data: new Uint8Array([128, 128, 128, 255]), width: 1, height: 1}];
+    texture.generateMipmaps = false; texture.flipY = false; texture.colorSpace = THREE.NoColorSpace; texture.needsUpdate = true;
+    configureSampler(texture, false);
+    const scene = new THREE.Scene(), atlas = new LightAtlas(16), tile = atlas.add({width: 4, height: 4, pixels: new Float32Array(48).fill(.5), uv: () => [.5, .5]});
+    const geometry = new THREE.PlaneGeometry(64, 64).toNonIndexed();
+    geometry.translate(512, HEIGHT / 2, 0);
+    const count = geometry.attributes.position.count;
+    geometry.setAttribute('lightUV', new THREE.Float32BufferAttribute(new Array(count * 3).fill(0), 3));
+    geometry.setAttribute('lightBounds', new THREE.Float32BufferAttribute(Array.from({length: count}, () => [...tile.bounds]).flat(), 4));
+    geometry.setAttribute('lightLayer', new THREE.Float32BufferAttribute(new Array(count).fill(tile.page.index), 1));
+    const material = new THREE.MeshBasicMaterial({map: texture});
+    material.userData = {flags: 0, key: 'space'};
+    if (kind === 'world') applyLightAtlas(material, tile.page, {value: 1}, {value: 1});
+    scene.add(new THREE.Mesh(geometry, material));
+    space[kind] = pixel(draw(scene), 511);
+    texture.dispose(); atlas.dispose();
+  }
+  return {rows, noSmooth, space, bias: D3D_LOD_BIAS, filters: {linear: THREE.LinearFilter, nearest: THREE.NearestFilter, linearMipmapNearest: THREE.LinearMipmapNearestFilter, nearestMipmapNearest: THREE.NearestMipmapNearestFilter},
     errors: renderer.getContext().getError()};
 }

@@ -78,6 +78,33 @@ restores the previous sampling for A/B captures.
   a palette colour (no blended levels) and the level the device state selects. A 2 x 2 texture magnified on
   a 64-pixel quad must show texels with `PF_NoSmooth` and a blend without. It fails on the previous sampling.
 
+## Filtering space (display space)
+
+Direct3D 7 has no sRGB sampling: the device's 8-bit texels are blended as they are, in display space
+(MAG, MIN and MIP filters, and the vertex diffuse that modulates them, all on the display-encoded
+values). Play uploaded every base texture as sRGB, so the GPU decoded the texels before filtering and a
+shader re-encoded the result (`sRGBTransferOETF`): the same for an unfiltered texel, but a blend of
+black and white is 188 in linear light where the device has 127, and every blended texel at a sharp
+texture edge, a sign's text or a minified bright strip is brighter than the original's. Found in the
+security-camera windows ([visual acceptance](visual-acceptance.md#security-cameras-2026-10-14)): after
+the mip state the residual was the colour of blended texels (Play's mid-tone pixels up to +5% in Hong
+Kong's signs; a strip's edge pixel 168 against 133).
+
+`configureSampler` uploads the textures as `NoColorSpace`; the light-atlas hook (world), the actor
+mesh materials, decals, sprites and coronas no longer re-encode (`REENCODE_GLSL` is empty), the fire
+and wet textures are `NoColorSpace`, and the sprite, corona and glow tints now multiply the display-space
+texel (the device's vertex diffuse does) instead of a linear-light one. `?sampling=srgb` restores the
+sRGB upload and the re-encode, `?sampling=trilinear` the earlier mip choice, `?sampling=legacy` both, for
+A/B captures. Measurement (mean absolute difference per 200 x 150 window, canvas multisampling off,
+same level time and poses): Hong Kong 0.37 / 0.66 / 0.14 with the mip state alone, 0.04 / 0.20 / 0.01
+with the colour space as well; OceanLab 0.04 / 0.31 / 0.15 to 0.00 / 0.15 / 0.02 (99% of its pixels
+identical); Battery Park 0.15 / 0.08 / 0.19 to 0.00 / 0.09 / 0.01; the windows' mean values
+go from 1.01 to 1.000 of the original's. The overall brightness of the main views does not move:
+[mean luminance A/B](#overall-brightness-ab).
+
+The validator checks the filtering space as well: a 2 x 1 texture of 0 and 255, magnified, shows 124
+next to the boundary through the plain material and the world's shader (183 if re-encoded).
+
 ## Multisampling
 
 The same comparison found that Play's canvas is multisampled (`antialias: true` in `main.mjs`) and the

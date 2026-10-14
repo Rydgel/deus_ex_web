@@ -25,7 +25,7 @@ export class ActorMeshTextures {
     let entry=this.entries.get(key);
     if(!entry) {
       const first=data.mips[0],texture=new THREE.DataTexture(first.data,first.width,first.height,THREE.RGBAFormat);
-      texture.colorSpace=THREE.SRGBColorSpace;texture.flipY=false;
+      texture.flipY=false;
       texture.wrapS=texture.wrapT=THREE.RepeatWrapping;
       const last=data.mips.at(-1),complete=last.width===1&&last.height===1;
       if(complete&&data.mips.length>1)texture.mipmaps=data.mips;
