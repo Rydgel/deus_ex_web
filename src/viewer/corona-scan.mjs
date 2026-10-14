@@ -1,5 +1,5 @@
 import { coordsTransform } from '../runtime/volumetric-fog.mjs';
-import { createCoronaCache, coronaDecay, coronaSeen, coronaIcon, coronaFrame, coronaFrameFromCamera, leafPermeatingLights } from '../runtime/coronas.mjs';
+import { createCoronaCache, coronaDecay, coronaSeen, coronaIcon, coronaFrame, coronaFrameFromCamera, coronaLineVisible, leafPermeatingLights } from '../runtime/coronas.mjs';
 import { movingLightInView, movingLightLeafLists, viewPlanesOf, worldLightRadius } from '../runtime/dynamic-lighting.mjs';
 import { actorsEpoch } from '../runtime/base-epoch.mjs';
 
@@ -20,11 +20,18 @@ import { actorsEpoch } from '../runtime/base-epoch.mjs';
  * took (the gate and the frame's ViewPlanes test) and OccludeBsp's Filter
  * left on that leaf (docs/coronas.md "Leaf lights").
  *
+ * The helper's first line check (TRACE_Level|TRACE_Movers) runs over
+ * Level->Model as the moving brush tracker left it this frame (`lineModel()`,
+ * bsp-occlusion.mjs lineModel; docs/coronas.md "Lights behind a mover's
+ * fragments"): the movers' polygons are ordinary solid nodes of it, so a
+ * fan's blades block a lamp the static BSP lets through. Without the tracker
+ * (`lineModel()` null) it is the level's own model.
+ *
  * Host choices, noted: the fade clock is the host's (`now`, seconds; the
  * original's appSeconds is the CPU clock too); with no master frame the leaf
  * lists take every candidate (no ViewPlanes to test). The map's static model
  * gives the lists the tracked BSP would (validate-leaf-lights.mjs). */
-export function createCoronaScan(runtime, { model, exportName, player }) {
+export function createCoronaScan(runtime, { model, exportName, player, lineModel = () => null }) {
   const cache = createCoronaCache(), byName = new Map();
   const read = (actor, name) => runtime.readNamed(actor, name);
 
@@ -67,7 +74,7 @@ export function createCoronaScan(runtime, { model, exportName, player }) {
    * the fade clock. Returns the icons in cache order, each
    * {x, y, size, color, skin}, and the frame's counts. */
   function update(view, rect, master, lights, now) {
-    const icons = [], stats = { leafLights: 0, visible: 0 }, visited = [];
+    const icons = [], stats = { leafLights: 0, visible: 0 }, visited = [], seen = [];
     const viewer = player(), level = viewer ? runtime.levelFor(viewer) : null;
     const region = viewer ? runtime.regionValue(viewer) : null;
     if (!level?.hash || !region || region.leaf === -1 || !region.zone) return { icons, stats };
@@ -77,17 +84,16 @@ export function createCoronaScan(runtime, { model, exportName, player }) {
     // checks end at its Coords.Origin (the helper's `frame + 0x34`).
     const { coords, frame } = master ? coronaFrame(master.words) : coronaFrameFromCamera(view, rect);
     const eye = coords.origin, slot = { next: 0 };
+    // Level->Model as the tracker left it for this frame (one view of its memory).
+    const tracked = lineModel();
+    const lineCheck = (start, end, extent, flags, extra, source) => level.hash.lineCheck(start, end, extent, flags, extra, source, tracked);
     // Helper 0x10b1bc00 for one light: the two line checks, then the entry.
     const visit = light => {
       stats.leafLights++;
       visited.push(light.name);
       const location = read(light, 'Location').map(Math.fround);
-      let visible = level.hash.lineCheck(eye, location, [0, 0, 0], 6, 0, null).outside;
-      if (visible) {
-        const hit = level.hash.lineCheck(eye, location, [0, 0, 0], 0x11, 0, null);
-        visible = hit.outside || hit.actor === viewer;
-      }
-      if (visible) stats.visible++;
+      const visible = coronaLineVisible(lineCheck, location, eye, viewer);
+      if (visible) { stats.visible++; seen.push(light.name); }
       coronaSeen(cache, slot, light, { visible, delta,
         qualifies: Boolean(read(light, 'bCorona')) && Boolean(read(light, 'Skin')) && !read(light, 'bDeleteMe'),
         actorIndex: () => level.actors.indexOf(light) });
@@ -111,7 +117,7 @@ export function createCoronaScan(runtime, { model, exportName, player }) {
         light: { location: read(light, 'Location').map(Math.fround), hue: read(light, 'LightHue'),
           saturation: read(light, 'LightSaturation'), drawScale: Math.fround(read(light, 'DrawScale')) } });
     }
-    return { icons, stats, visited, frameWords: master ? [...master.words] : null };
+    return { icons, stats, visited, seen, frameWords: master ? [...master.words] : null };
   }
   return { update };
 }

@@ -48,12 +48,16 @@ Small native-derived regression expectations are retained in the unit test;
 `node --test test/primitive-collision.test.mjs` passes.
 
 2026-10-14: the corpus gained 46 directed cases (`shipFanBulbCases`, 5,399
-cases in all): 09_NYC_ShipFan's Lightbulb12 with Light34 inside it and the
-camera 735 units away, plus neighbouring long segments (start-inside dots
-around -0.1, bottom-cap entry with the end inside or on the cap, grazing
-rays, a viewer cylinder holding the eye). See [coronas](coronas.md),
-"Lights inside a colliding actor". All 5,399 cases equal the DLL
-(`validate-native-primitive`, 0 failures, 2026-10-14).
+cases in all): a Lightbulb-sized cylinder (radius 1.6, half height 2.9) with a
+point 0.37 above its bottom cap and the camera 735 units away, plus
+neighbouring long segments (start-inside dots around -0.1, bottom-cap entry with
+the end inside or on the cap, grazing rays, a viewer cylinder holding the eye).
+All 5,399 cases equal the DLL (`validate-native-primitive`, 0 failures,
+2026-10-14). The cylinder is the class default of DeusEx.Lightbulb, not the
+in-game one: `Actor.PreBeginPlay` shortens a Decoration's CollisionHeight by 0.75
+(2.15 in the original and in Play), and ShipFan's corona divergence turned out
+to be the brush tracker's fragments, not the bulb ([coronas](coronas.md),
+"Lights behind a mover's fragments"). The cases stay as primitive coverage.
 
 This establishes these two primitive methods against original DLL execution,
 not full actor movement/events or all possible floating-point inputs. Inputs
