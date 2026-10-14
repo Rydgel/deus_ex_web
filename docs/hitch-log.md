@@ -96,8 +96,8 @@ Chromium gives every field. Without `performance.memory`, long-task and
 long-animation-frame observers, or timer queries (Firefox, Safari) those
 fields stay empty (`hasMemoryApi` in `meta`); the frame intervals, the
 worker's frame record, the WebGL call timings, the renderer counts and the
-programs are the same everywhere. Not run in Firefox or Safari here (no build
-installed); every optional API is feature-tested.
+programs are the same everywhere. Run in Playwright's Firefox 155 on the Linux
+host (2026-10-15; not in Safari); every optional API is feature-tested.
 
 ## Shader programs
 
@@ -129,3 +129,28 @@ fps in both; the difference is inside the run-to-run noise.
 ## What it found on the Linux host (2026-10-14)
 
 See [Play frame cost](play-frame-cost.md) "October 14: periodic hitches".
+
+## Firefox: the worker's idle GC (2026-10-15)
+
+Firefox 155 here reproduces the user's pattern (worker frames of 0.7 s every
+~6 s on Everett after another map). The Gecko profiler
+(`MOZ_PROFILER_STARTUP=1 MOZ_PROFILER_STARTUP_FEATURES=js,threads,markers
+MOZ_PROFILER_STARTUP_FILTERS='GeckoMain,DOM Worker' MOZ_PROFILER_SHUTDOWN=file`)
+names it: Gecko runs a full, non-incremental, compacting GC (reason DOM_WORKER,
+options Shrink) in a worker about five seconds after the worker's event queue
+first drains, whatever its allocation rate. A worker that idles between frames
+therefore pauses for the cost of its whole heap every ~5.5 s. The previous
+map's runtime stayed alive in the handle table and doubled that cost (fixed);
+`?workerBusy=1` keeps the worker's queue non-empty (one busy core) and removes
+the periodic pause in Firefox. The hand-off, what to record on the Mac: the
+default and `?workerBusy=1`, then `node scripts/analyze-hitchlog.mjs` on both.
+Details and numbers: [Play frame cost](play-frame-cost.md) "October 14, later".
+
+Tools that found it (kept out of Git, in `.work/hitch/` of the worktree):
+`run-ff.mjs` (Firefox long run with the recorder, `--via MAP`, `--profile`,
+`--worker-patch`), `ff-gc.mjs` (GC markers of a Gecko profile), `stalls.mjs`
+(worker frames over a limit with their steps and spacing), `leak-ab.mjs` (live
+heap after map A then B in Node), `heap-ab.mjs` and `snap-ab.mjs` (the same in
+the Chromium worker, with a heap snapshot), `snap-paths-all.mjs` (strong
+retention paths to a marker class), `snap-summary.mjs` / `snap-shapes.mjs`
+(composition).

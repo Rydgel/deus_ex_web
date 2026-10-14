@@ -224,7 +224,25 @@ async function runPending() {
   if (!frame) return;
   try { await handle(frame); } catch (error) { throw Object.assign(error, { posts: frame.posts }); }
 }
+// ?workerBusy=1 (diagnostic): Gecko arms a worker's idle GC timer whenever its event queue drains and
+// then runs a full compacting GC five seconds later, so a worker that idles between frames stalls for
+// the cost of its whole heap every ~5.5 s (docs/play-frame-cost.md "October 14, later"). A ping chain on
+// a private MessageChannel keeps the queue non-empty, at the price of one busy core; it runs while
+// messages keep arriving and stops a second after the last one.
+let busyUntil = 0, busyRunning = false, busyChannel = null;
+function keepBusy() {
+  if (globalThis.DEUS_EX_WORKER_BUSY !== '1') return;
+  busyUntil = performance.now() + 1000;
+  if (!busyChannel) {
+    busyChannel = new MessageChannel();
+    busyChannel.port1.onmessage = () => {
+      if (performance.now() < busyUntil) busyChannel.port2.postMessage(0); else busyRunning = false;
+    };
+  }
+  if (!busyRunning) { busyRunning = true; busyChannel.port2.postMessage(0); }
+}
 self.onmessage = ({ data }) => {
+  keepBusy();
   if (data.type !== 'frame') { enqueue(data, () => handle(data)); return; }
   mergeFrame(data);
   if (runScheduled) return;
