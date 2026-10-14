@@ -389,9 +389,10 @@ export function createMeshDraw(assets,creation,{gpu=null,texturePool,batches=nul
       const resolved=shown.lod?.resolved??null;
       let faces=0;const vertices=new Set();
       if(resolved)for(let i=0;i<resolved.length;i+=3){if(resolved[i]<0)continue;faces++;vertices.add(resolved[i]).add(resolved[i+1]).add(resolved[i+2]);}
+      // `cameraPoints`: the geometry holds the camera-space points of the state shown (applyCamera).
       return {id,path:mode,ready,visible:root.visible,lod:resolved?{count:shown.lod.count,faces,vertices:vertices.size,
         emptyGroups:groups.filter(group=>group.lodEmpty).length}:null,
-        faces:source?.faces.length??null};
+        faces:source?.faces.length??null,cameraPoints:cameraFor===shown};
     },
     /** Validation access: the GPU slot and the decoded faces. */
     get gpuHandle(){return gpuHandle;},get groups(){return groups;},get source(){return source;},
