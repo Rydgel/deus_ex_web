@@ -451,7 +451,10 @@ SetupDynamics filter puts on a drawn surface. The frame's flag goes to the
 page with the light noise (`frame.light.strobe`, world.mjs
 `beginLightFrame`), whose class 1 merge then reads it without flipping.
 Approximations: the movers' own polygons (the tracker's fragment nodes)
-are not searched for Strobe lights, and the Strobe lists are taken once
+are not searched for Strobe lights, a child frame's drawn surfaces are not scanned (the
+original's DrawFrame sets up every frame's surfaces, `0x10b1aa99`; no Underworld view
+reaches the difference, [Divergence 19](visual-acceptance.md#divergences-found)), and
+the Strobe lists are taken once
 from the lights that are Strobe at load (no script sets LightType to
 Strobe, per the census).
 

@@ -439,7 +439,11 @@ memory.
   a moving Strobe light reaches a drawn surface, a drawn mesh sets one up or
   Galaxy asks for one, and hands it to the page's light maps
   ([mesh lighting](mesh-lighting.md) "LightType functions, Strobe and the
-  noise"). The movers' own polygons are not searched for Strobe lights.
+  noise"). The movers' own polygons are not searched for Strobe lights, and only the
+  main frame's drawn surfaces are: the original's DrawFrame (`0x10b1aa99`) sets
+  up each frame's surfaces, a child frame's too. No Underworld view reaches the
+  difference (a strobe-lit surface drawn in a child frame only), see [visual
+  acceptance, Divergence 19](visual-acceptance.md#divergences-found).
 * Mesh and volumetric lighting (`LeafLights`, SetupForActor) remain part of the
   unsupported mesh lighting.
 * Class 2 lights that also sit in a surface's static `LightActors` list would

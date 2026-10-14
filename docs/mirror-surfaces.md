@@ -525,12 +525,16 @@ Play's at 46.829 s, 1280 x 720, raw framebuffers
 
 The original reflects in every pane at all four views. View d does not
 improve: both sides reflect in both panes in view, but the original's reflected
-floor and dancers are lit (olive floor) where Play's are dark red. That is
-the reflected scene's light, not the panes: which light does it is not
-traced (the club's TriggerLights and strobes, [Divergence 13 of the
-pilot](visual-acceptance.md#strobe-a-host-input-and-a-triggerlight-the-page-lit-wrongly),
-is a candidate; unverified). Views a to c carry the known uniform brightness
-gap (Play over original 1.17 to 1.20).
+floor and dancers are lit (olive floor) where Play's are dark red. **Cause
+found 2026-10-14: not the panes and not a mirror-frame lighting defect, the
+Strobe phase of a frozen capture**, a host input that alternates every drawn
+frame in both programs (Render.dll `0x10b05b30`; the club's TriggerLight1 lights
+that floor). With the flag held equal on both sides view d is at 2.67 (flag 0,
+lit) and 1.73 (flag 1, dark) mean abs. difference, edge recall .98 / .99, no
+outlier block, and the original's own dark frame is Play's dark frame:
+[Divergence 19](visual-acceptance.md#divergences-found), `scripts/validate-strobe-mirror-play.mjs`.
+Views a to c carry the known uniform brightness gap (Play over original 1.17 to
+1.20).
 
 **Persistence.** A report said the grey panes appeared after the player went
 into the office and came back. A visit does not change anything: five dance-side

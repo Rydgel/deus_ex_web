@@ -8,6 +8,13 @@
  *       dword is the thread id; the seed word is at +0x14), `count` samples
  *       `interval_ms` apart: <qpc_us> tid=<tid> slot=<n> ptd=0x<addr> state=0x<word>
  *
+ *   wine dx-live-win.exe strobe poll [count] [interval_ms]
+ *       Render.dll's Strobe state (flag 0x10b49ea8, the TimeSeconds it last saw 0x10b49ea4), `count` samples `interval_ms` apart:
+ *       <qpc_us> flag=<0|1> time=<float>
+ *   wine dx-live-win.exe strobe hold <flag>
+ *       stops the Strobe function (0x10b05b30) from flipping the flag (its `jne` at 0x10b05b4b becomes a `jmp`) and writes the flag:
+ *       a held state to capture frames in; `strobe release` restores the instruction (the flag keeps its value)
+ *
  *   wine dx-live-win.exe list <Class>
  *       the live level's actors whose class derives from <Class>: class, name, global slot, Location, state, OddsOfAppearing
  *
@@ -951,6 +958,28 @@ int main(int argc, char **argv) {
   if (!pid) { fprintf(stderr, "DeusEx.exe not running\n"); return 1; }
   process = OpenProcess(PROCESS_QUERY_INFORMATION | PROCESS_VM_READ | PROCESS_VM_WRITE | PROCESS_VM_OPERATION | PROCESS_SUSPEND_RESUME, FALSE, pid);
   if (!process) { fprintf(stderr, "cannot open DeusEx.exe\n"); return 1; }
+  if (!strcmp(argv[1], "strobe")) {
+    if (module_base("Render.dll") != 0x10b00000u) { fprintf(stderr, "Render.dll is not at its preferred base\n"); CloseHandle(process); return 1; }
+    const uintptr_t FLAG = 0x10b49ea8, TIME = 0x10b49ea4, JUMP = 0x10b05b4b;
+    const char *verb = argc > 2 ? argv[2] : "poll";
+    if (!strcmp(verb, "poll")) {
+      int count = argc > 3 ? atoi(argv[3]) : 1, interval = argc > 4 ? atoi(argv[4]) : 10;
+      for (int k = 0; k < count; k++) {
+        printf("%lld flag=%u time=%.9g\n", qpc_us(), read_u32(FLAG), read_float(TIME));
+        if (k + 1 < count) Sleep(interval);
+      }
+    } else if (!strcmp(verb, "hold") || !strcmp(verb, "release")) {
+      unsigned char op = 0; read_mem(JUMP, &op, 1);
+      if (op != 0x75 && op != 0xeb) { fprintf(stderr, "unexpected byte 0x%02x at 0x%lx\n", op, (unsigned long)JUMP); CloseHandle(process); return 1; }
+      if (!strcmp(verb, "hold")) {
+        unsigned flag = argc > 3 ? (unsigned)atoi(argv[3]) & 1 : read_u32(FLAG);
+        cb_write(JUMP, 0xeb); write_mem(FLAG, &flag, 4);
+      } else cb_write(JUMP, 0x75);
+      read_mem(JUMP, &op, 1);
+      printf("%s: byte 0x%02x flag=%u time=%.9g\n", verb, op, read_u32(FLAG), read_float(TIME));
+    } else { fprintf(stderr, "strobe poll|hold|release\n"); CloseHandle(process); return 2; }
+    CloseHandle(process); return 0;
+  }
   if (!strcmp(argv[1], "rng")) {
     int count = argc > 2 ? atoi(argv[2]) : 1, interval = argc > 3 ? atoi(argv[3]) : 100;
     Ptd ptds[16]; int n = find_ptds_of(0, ptds, 16);
