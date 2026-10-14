@@ -410,7 +410,7 @@ spatial body ran at each camera and its control word.
 | | garage2 | 1.208 | 3.88 | .974 / .953 | 2 | Searchlight 159 |
 | | garage3 (from beside the light, down) | 1.353 | 2.35 | .975 / .989 | 0 | Searchlight 477 |
 | Ship fan, Rotor Light10 | fan1 | 1.287 | 3.58 | .966 / .978 | 0 | normal 97 |
-| | fan2 | 1.463 | 6.17 | .861 / .684 | 10 | Rotor 159 |
+| | fan2 | 1.28 | 3.74 | .959 / .966 | 0 (10 before the tracked corona trace) | Rotor 159 |
 | | fan3 (down) | 1.285 | 3.56 | .985 / .993 | 0 | normal 141 |
 | Paris Club, Disco Light3 | club1 | 1.337 | 3.26 | .963 / .977 | 0 | Disco 96 |
 | | club2 | 1.366 | 2.83 | .966 / .979 | 0 | Disco 138 |
@@ -425,14 +425,11 @@ The ratio is the uniform brightness gap (1.2 to 1.46 here, higher on the darkest
 work. Every view's geometry, light pools, sweeping sectors and gradients line up; the Searchlight, Rotor, Disco and SlowWave bodies, which
 change every frame, match at the held phase.
 
-- *Ship fan fan2: an open divergence in the coronas, not in the effect.* The 10 outlier blocks are three coronas that Play draws at full
-  size and the original does not, for the ceiling lamps Light34 and Light35 (the original shows only the small bulb) and Light36 at the
-  frame's edge; Light33's corona is drawn by both. It is not the Strobe phase: the held pair fan2_s0 and fan2_s1 gives the same 10
-  blocks (and the original's kept Strobe time stays 0 there: no Strobe call at this camera). Each of these lights sits within 3 units
-  of a DeusEx.Lightbulb (bCollideActors and bBlockActors, cylinder radius 1.6, half height 2.9) with its Location 0.37 above the
-  cylinder's bottom, and the corona helper's second line check (TRACE_Pawns|TRACE_Others, [coronas](coronas.md)) would cull them (inferred, not measured). Play's
-  `level.hash.lineCheck` hits the bulb through its centre and returns clear for a segment that ends 0.4 inside its bottom face, and for all six
-  lights here. Not yet traced to the original's cylinder line check; follow-up task filed.
+- *Ship fan fan2: the coronas, closed 2026-10-14.* The 10 outlier blocks were three coronas Play drew and the original hides,
+  Light34, Light35 and Light36. The original's helper finds those three blocked by the moving brush tracker's fragments of
+  DeusExMover1, which sit in Level->Model; it was not the Lightbulbs' cylinders. Play's corona scan now traces the tracked model,
+  and the matched capture gives 0 outlier blocks, mean absolute difference 3.74 (6.17 before), edge recall .959 and precision .966
+  ([coronas](coronas.md) "Lights behind a mover's fragments", `validate-coronas-tracked`, `validate-coronas-mover-play`).
 - *Garage garage2.* The 2 outlier blocks are on the ceiling's bright white strip lights; the red and blue ceiling panels differ by the
   darkest-pixel rounding (raw 1.9 against 2.9 on the red panel, a crop at ratio 1.38).
 - *Class 0 spot, Cylinder and NonIncidence bodies.* A static light's body runs once, into the cached static map, when a surface is first
