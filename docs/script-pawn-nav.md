@@ -1513,6 +1513,18 @@ Location read at entry and return) and FarMoveActor `0x10398ba0`; `play --nav-tr
 (`nav-trace.mjs`; the AIPickRandomDestination native now logs its arguments, its test moves and the destination it wrote). The load's pick was at tick
 61: arguments (100, 421.77, yaw 0, 0, 0, 0, 1 try, multiplier 0.6123), from the pawn's start (1913.54, -758.57, -237.87).
 
+The trace config used (`--extra-config FILE`; omit `call-pawn` to trace every pawn's picks; decimal offsets, 276 = Actor.Location):
+
+```text
+call-pawn MedicalBot0
+call-ticks 1 70
+call 0x103c7fc0 aipick 9 gate namee deref 8 3 0
+call 0x103990e0 move 12 deref 0 3 276
+call 0x10398ba0 farmove 6 deref 0 3 276
+```
+
+Play's side: `live-acceptance.mjs play --map M --tag T --nav-trace MedicalBot0 --nav-ticks 1:70`, events in `nav-play.json`.
+
 **First differing call.** Both sides made the same first 20 test moves: eight 25-unit strides to 200 (a full forward step, then the down-probe
 `(0, 0, -2)` for each), a ninth stride that stops at 206.60 (partial, `Time` 0.264, a vertical face), then checkMove's step sequence at that
 wall: the step-up `(0, 0, 0)`, the retry `(-5.8, -17.46, 0)` (partial again, to 207.26) and the step-down `(0, 0, 0)`. The original then called
