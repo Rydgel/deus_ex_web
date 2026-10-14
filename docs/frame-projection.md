@@ -124,7 +124,13 @@ vertices of its 31 main frames and must **fail** on it:
 | X differs in at least one bit | 4,070 of 4,528 | 2,687 |
 | Y or X, pixel error p50 / p99 / max | 0.164 / 0.448 / 0.624 | 0.00006 / 0.0005 / 0.0035 |
 | depth differs | 4,528 of 4,528 | 1,323 (max 1.2e-7 = 2 ulp; was 1.8e-5) |
-| adjacent vertices (original depth order, 24-bit quantized) whose order differs | 57 of 4,500 | 0 of 4,500 would still be a rounding tie away from equal only by chance; see "Depth" |
+| adjacent vertices in the original's depth order (24-bit quantized) whose order or tie differs | 57 of 4,500 | 59 of 4,500 |
+
+The last row counts depth-test outcomes between vertices: neighbours the
+device's 24-bit depths order or tie one way and the host's the other. They are
+a depth unit apart (the host's float32 evaluation of the same plane), which a
+LESSEQUAL test with overlapping coplanar polygons turns into stripes; the chain
+reproduces the device's depth, so none differ on its path.
 
 The dominant error was not rounding: the original's orientation comes from
 ComputeRenderCoords' sine tables, not the rotator's exact angles, and the
@@ -199,6 +205,21 @@ on with the frame's origin moved 8 units; PNG pixels compared.
 | Training (5; 24 mirror child frames, NPCs, the crowbar) | 551 (0.03%) | 0 | 1.2 M |
 | Bar, conversation letterbox (5; 11 mirror child frames) | 260,671 (9.6%) | 0 | 1.4 M |
 
+At 2 device pixels per CSS pixel (Island 5 views, Hotel 5 views, 2.18 M pixels
+a view) the stage changes 3,180 and 1,643 pixels (0.03%, 0.015%; largest channel
+164 on a single edge pixel); a frozen frame at that ratio has a noise of its own
+(100 to 300 pixels in some views, the same with the stage off), so the
+validator asserts the zero only at 1 pixel per CSS pixel.
+
+[Visual acceptance](visual-acceptance.md) (`scripts/visual-acceptance.mjs play`
+then `compare` against the stored original frames, 1280 x 720, Training, Island,
+Paris club, Battery Park, 20 views) with the stage on, off and before this work
+(the 2026-10-07 report): mean absolute difference 1.916, 1.916, 1.915; edge recall
+0.9705, 0.9705, 0.9701; edge precision 0.9162, 0.9162, 0.9157; no view moves by more
+than 0.001 in recall or precision. Those metrics are pixel-level and do not resolve
+the 0.16-pixel shift the Coords pose removed, the 0.01% of pixels the chain
+moves, or a depth tie.
+
 The Bar's mirror views are letterboxed (the conversation camera); the camera
 path mapped the mirror child targets over the whole target instead of the
 render rectangle, the chain maps the frame's rectangle into the target (viewport
@@ -211,7 +232,28 @@ unlettered views agree to 0.01%.
 1440 x 960, 400 frames a run, medians, `profile-play-browser.mjs --gpu
 --no-profile`, `?vertexProjection=off` against the default)
 
-AB_PLACEHOLDER
+| Island's start, idle, 5 pairs | camera | chain |
+| --- | ---: | ---: |
+| page frame work | 3.43 ms | 3.42 ms |
+| page render phase | 1.53 ms | 1.55 ms |
+| page actors phase | 0.43 ms | 0.42 ms |
+| GPU per frame | 1.87 ms | 1.86 ms |
+| worker frame work | 15.82 ms | 15.87 ms |
+| draw calls | 111 | 111 |
+| frame interval | 16.7 ms (vsync) | 16.7 ms (vsync) |
+
+| Training's start (mirror floor: 24 child frames, 18 NPCs), 4 pairs | camera | chain |
+| --- | ---: | ---: |
+| page frame work | 2.39 ms | 2.46 ms |
+| page mirrors phase | 0.665 ms | 0.695 ms |
+| GPU per frame | 1.805 ms | 1.880 ms |
+| worker frame work | 7.37 ms | 7.54 ms |
+| draw calls | 73 | 73 |
+
+The vertex stage costs nothing measurable on the Island and 0.07 ms of GPU per
+frame (4%) in the mirror-heavy scene, whose child passes each draw the world
+again; the frame stays on vsync in both. Per vertex the chain is about
+twenty barriered operations and one correctly rounded division (`divRN`).
 
 ## Unverified and open
 

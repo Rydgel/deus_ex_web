@@ -123,7 +123,9 @@ try {
       await frames(40);
       await page.evaluate(() => window.dispatchEvent(new Event('blur')));
       await frames(6);
-      await page.evaluate(() => { window.deusExViewer.vertexProjection(true); window.__fp.shift = 0; window.__fp.passes.length = 0; });
+      // --noise-with off: A and C use the camera's matrices, to tell the frame's own noise from the stage's.
+      const stage = option('noise-with', 'on') !== 'off';
+      await page.evaluate(stage => { window.deusExViewer.vertexProjection(stage); window.__fp.shift = 0; window.__fp.passes.length = 0; }, stage);
       await frames(3);
       let a = await shot(), settled = false;
       for (let attempt = 0; attempt < 10 && !settled; attempt++) {
@@ -152,7 +154,7 @@ try {
       }
       await page.evaluate(() => window.deusExViewer.vertexProjection(false)); await frames(3);
       const b = await shot();
-      await page.evaluate(() => window.deusExViewer.vertexProjection(true)); await frames(3);
+      await page.evaluate(stage => window.deusExViewer.vertexProjection(stage), stage); await frames(3);
       const c = await shot();
       await page.evaluate(() => { window.__fp.shift = 8; }); await frames(3);
       const d = await shot();
@@ -167,7 +169,10 @@ try {
       }
       totals.pixels = change.pixels; totals.change += change.count; totals.noise += noise.count; totals.shifted += shifted.count;
       totals.maxChange = Math.max(totals.maxChange, change.max);
-      assert.equal(noise.count, 0, `${map}: the vertex stage drawn twice differs`);
+      // At one device pixel per CSS pixel a frozen frame is reproducible. At 2 it has a small noise of its own
+      // (104 pixels on the Island with the stage off as well, --noise-with off): bounded, not zero.
+      if (dpr === 1) assert.equal(noise.count, 0, `${map}: the vertex stage drawn twice differs`);
+      else assert.ok(noise.count < 0.001 * change.pixels, `${map}: the frame drawn twice differs in ${noise.count} pixels`);
       assert.ok(shifted.count > 0.01 * change.pixels, `${map}: moving the frame's origin changes only ${shifted.count} pixels: the shader does not consume the frame`);
       await page.evaluate(() => window.dispatchEvent(new Event('focus')));
     }
