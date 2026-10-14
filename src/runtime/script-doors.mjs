@@ -492,6 +492,7 @@ export async function createScriptDoors({
   playerScene.hooks.rotateMapActor=(actor,rotation)=>runtime.rotateMapActor(actor,rotation);
   playerScene.hooks.movePawn=(actor,delta,rotation,flags)=>runtime.movePawn(actor,delta,rotation,flags);
   playerScene.hooks.moveSmoothPawn=(actor,delta)=>runtime.moveSmoothPawn(actor,delta);
+  playerScene.hooks.moveSmoothActor=(actor,delta)=>runtime.moveSmoothActor(actor,delta);
   const triggerActions=createScriptTriggers({player:playerActor,getPlayerPawnServices:{read(object,name){
     if(name==='XLevel')return runtime.levelFor(object);
     const field={Engine:'engine',Client:'client',Viewports:'viewports',Actor:'actor'}[name];

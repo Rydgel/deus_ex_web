@@ -145,6 +145,12 @@ export function bindPlayerScene(player,collision,{model,actors,nonColliding=[],z
       if(typeof hooks.moveSmoothPawn!=='function')throw Error('map pawn moveSmooth is not linked');
       return hooks.moveSmoothPawn(actor,requested);
     }
+    // Every other blocking non-Brush hit is pushed by the same native call
+    // (0x1039a577); a map or spawned non-Pawn runs its own MoveActor.
+    if(actor!==source&&!actor.movingBrush){
+      if(typeof hooks.moveSmoothActor!=='function')throw Error('non-Pawn moveSmooth is not linked');
+      return hooks.moveSmoothActor(actor,requested);
+    }
     if(actor!==source)unsupported(`${actor.name}.moveSmooth`);
     return moveSmooth(actor,requested,{dispatch,moveActor:(target,movement)=>{
       const r=move(movement);return {result:r.success,time:r.time,normal:r.hit?.normal??[0,0,0],actor:r.hit?.actor??null};
