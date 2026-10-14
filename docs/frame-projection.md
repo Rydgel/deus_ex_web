@@ -68,8 +68,9 @@ when `ViewportColorBits` (`[dev+0xe0]`) is 16; `_33 = far / (far - 1)`
 `_43 = -_33` (`fchs` `0x1000c453`, stored `[dev+0xa40]`), `_44 = 0`, then
 `SetTransform(PROJECTION)` (device vtable `+0x2c`, `0x1000c46a`). Measured
 under Unicorn: `_33` = `0x3f800100` (32767/32766 as binary32), `_43` =
-`0xbf800100`. The viewport (`0x1000bb8b–0x1000bbd3`, vtable `+0x34`) is
-`{0, 0, ViewportX, ViewportY, MinZ 0.0, MaxZ 1.0}`. The vertex depth is
+`0xbf800100`. The viewport (`0x1000bb8b–0x1000bbd3`, `SetViewport` vtable `+0x34`) is
+`{.., .., ViewportX `[+0xd4]`, ViewportY `[+0xd8]`, MinZ 0.0 `0x1000bbb7`, MaxZ 1.0
+`0x1000bbc1`}`, so a vertex's depth is the depth-buffer value. The vertex depth is
 therefore `_33 * (1 - 1/Z)`: a perspective projection with near plane 1 and
 far plane 32767 over the device's [0, 1] depth range. Z-function LESSEQUAL;
 masked surfaces' later passes use EQUAL (`0x10003e09`, `0x10004203`), and
@@ -110,7 +111,7 @@ occur; render rectangles on two cases in three) against
 | FTransform points | 8,963: 7,129 model vertices, 1,834 clipper-made |
 | Model vertices | view point, RZ, ScreenX, ScreenY and the vertex buffer's X, Y, depth and RHW equal the reference **bit for bit in all 7,129** |
 | Clipper-made points | D3DDrv's conversion of their FTransform equals the reference (1,834); the clip itself is OccludeBsp's, validated by [validate-bsp-occlusion](bsp-occlusion.md) |
-| Rasterizer Y clamp | did not rewrite a ScreenY in any of the 8,963 points: the clip planes sit inside the screen (Prj margins, FX15 = (SXR + 1.0001)/2), so IntY never leaves [0, Y] |
+| Rasterizer Y clamp | did not rewrite a ScreenY in any of the 8,963 points (1,834 of them on the clip planes): IntY of the clipped points stays in [0, Y], consistent with the 1.0001 margin of FX15 = (SXR + 1.0001)/2; it is not ported |
 | Meshes | 2,560 camera-space points, 673 inside the frustum (flags 0): projection and vertex bit-equal |
 | Depth | `_33`, `_43`, `_34` of the 32-bit and 16-bit SetRes equal `depthConstants` |
 
