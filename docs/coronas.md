@@ -25,8 +25,9 @@ the TRACE_ flags).
 5. **Visibility.** The helper `0x10b1bc00` runs for each light of the
    viewport actor's leaf, `FLeaf.iPermeating` into `Model.Lights`, and for
    the leaf's dynamic lights (`LeafLights[iLeaf]`):
-   - **Level and movers.** `SingleLineCheck(Location → frame origin,
-     TRACE_Level|TRACE_Movers)` must be clear.
+   - **Level and movers.** `SingleLineCheck(frame origin → Location,
+     TRACE_Level|TRACE_Movers)` must be clear, over Level->Model as the
+     moving brush tracker left it ([below](#lights-behind-a-movers-fragments-2026-10-14)).
    - **Other actors.** `SingleLineCheck(…, TRACE_Pawns|TRACE_Others)` must
      be clear or hit the viewport actor.
    - **Light.** It needs `bCorona` (+0x1ec bit 2) and a Skin (+0x170), and
@@ -158,7 +159,7 @@ reloaded before the last read):
 | FX2 | `+0xc8` | `0x10b1b9fa` (`fadd`) |
 | FY2 | `+0xcc` | `0x10b1ba06` (`fadd`) |
 | X | `+0xa8` | `0x10b1ba0f` (`fild`, the size's `X * DrawScale * 0.2`) |
-| Coords.Origin, the line checks' end | `+0x34` | helper `0x10b1bc43` (`lea edi, [esi + 0x34]`, pushed before each `SingleLineCheck` call at `0x10b1bc5b` and `0x10b1bcac`) |
+| Coords.Origin, the line checks' Start | `+0x34` | helper `0x10b1bc43` (`lea edi, [esi + 0x34]`, pushed before each `SingleLineCheck` call at `0x10b1bc5b` and `0x10b1bcac`) |
 
 Coords is CreateMasterFrame's (game thread, 64 bits); X, FX2, FY2 and Proj.Z
 are the pass's: the render rectangle's width in the drawing buffer's pixels,
@@ -214,10 +215,11 @@ matching DrawFrame ahead of PostRender. It hands the page a list of icons;
   (`game.movingLights()`, with `VolumeRadius`), filtered by the master
   frame's ViewPlanes and through the map's BSP. Model references resolve to
   live actors by export name, and the two line checks are Play's translated
-  SingleLineCheck (`level.hash.lineCheck`), ending at the frame's origin.
+  SingleLineCheck (`level.hash.lineCheck`), from the frame's origin to the
+  light; the first one over the tracked model (`lineModel`, below).
 - **Draw.** Each live entry's `coronaIcon` is computed with the frame the
   pass reads (above): the master frame's words, `visibility().master` of
-  the same main frame, so the line checks end at its Coords.Origin and the
+  the same main frame, so the line checks start at its Coords.Origin and the
   icons are in the drawing buffer's pixels (X is the render rectangle's
   width in device pixels; before 2026-10-08 the scan used CSS pixels and
   `fx2 / Math.tan(fov * pi / 360)`). A session without OccludeBsp builds
@@ -227,7 +229,7 @@ matching DrawFrame ahead of PostRender. It hands the page a list of icons;
   frame.
 - **Camera frames.** A ViewportWindow's DrawWorld runs the pass on its own
   master frame (docs/script-window-viewport.md "Camera pass"): the same scan
-  and cache, with the lights of the *player's* leaf, line checks ending at the
+  and cache, with the lights of the *player's* leaf, line checks starting at the
   camera frame's origin, the camera frame's words for the placement and the
   window's width as X. The pass takes the plan's clock, which runs on from the
   main pass's by the host's elapsed time. The camera validator
@@ -266,18 +268,78 @@ Host choices, noted:
 - the display ramp applies to the finished frame, after the tile blends
   ([lighting](lighting.md), "Display ramp").
 
-## Lights inside a colliding actor (open, 2026-10-14)
+## Lights behind a mover's fragments (2026-10-14)
 
-09_NYC_ShipFan's fan2 view: the original hides the coronas of Light34 and
-Light35, each inside a DeusEx.Lightbulb collision cylinder (radius 1.6,
-height 2.9); Play draws them. The helper's direction is not the cause: it
-calls `ULevel::SingleLineCheck(Hit, Source 0, End, Start, TraceFlags, Extent,
-NodeFlags)` with End = the light's Location (`ebx = light+0x114`, pushed at
-`0x10b1bc50`) and Start = the frame's Coords.Origin (`edi = frame+0x34`, pushed
-at `0x10b1bc4f`), so it traces from the eye to the light, as Play does;
-`validate-coronas` compares those arguments with the original helper under
-Unicorn. A reversal of the direction (6ce1620) failed that comparison and was
-reverted. The primitive's start-inside and cap cases for this geometry equal the
-DLL (`validate-native-primitive`, `shipFanBulbCases`), so the remaining
-suspect is how Play registers or queries the bulbs (Lightbulb12's collision
-in the hash at that view); not traced.
+09_NYC_ShipFan, the view fan2 of the light-effects acceptance
+([visual acceptance](visual-acceptance.md)): the player at (236, -238, -55) (the
+eye 40 above, at (236, -238, -15)), yaw 25298, the level held. The original
+hides the coronas of Light34, Light35 and Light36 and draws Light33's; Play drew
+all four (10 outlier blocks). Light34 and Light35 sit 2.6 units from a
+DeusEx.Lightbulb, which first suggested the bulb's collision; it is not the
+cause.
+
+**What the original does** (`tools/dx-live-win.c trace`, a `call` breakpoint on
+`ULevel::SingleLineCheck` 0x1039aed0 with the Hit read at the return; the helper's
+two call sites return to 0x10b1bc61 and 0x10b1bcb2; a level held at dilation
+0.001 and unfrozen for two ticks, `call-frames` for the renders between them).
+Each frame the helper makes 11 first checks (TRACE_Level|TRACE_Movers, from the
+eye to the light) and 6 second ones (0x11), the same list as Play's (the start
+leaf's permeating lights; Region.iLeaf is not moved by `set Location`). Six
+first checks are clear. Five are blocked: Light60 by DeusExMover7, one light
+by the static model, and **Light34, Light35 and Light36 by the level model**
+(Hit.Actor LevelInfo0, Time 0.356, 0.282 and 0.411, Normal horizontal, Item
+292, 1942 and 1959). Items 1942 and 1959 are past the map's 1,478 nodes:
+they are the moving brush tracker's fragments ([brush tracker](brush-tracker.md))
+of DeusExMover1 (48 polygons, at (32, 48, -304)), which sit in Level->Model as
+ordinary solid nodes (in Play's tracker the same two segments hit DeusExMover1's
+polygons 9 and 16, nodes 1813 and 1830). Light34's hit names static node 292
+as the boundary; the walk ends in solid only through the fragments. The
+original's DLL on the map file's static BSP finds all four segments clear
+(`native-collision-oracle.py`, the same answer as Play's).
+
+**What it is not.** The bulbs' cylinder is 1.6 by 2.15 in the original
+(`dump-actor-win` on Lightbulb11 to 14: Radius 1.6, Height 2.1500001, flags
+0xf) and in Play. The class default is 2.9, and `Actor.PreBeginPlay` (Engine,
+`Actor.PreBeginPlay`: a Decoration or Inventory with CollisionHeight above 0.75
+is `SetCollisionSize(CollisionRadius, CollisionHeight - 0.75)`) shortens it. The
+lights are 0.38 below the 2.15 cylinder's bottom, so the segment never enters
+it; the earlier reading (a light 0.37 inside a 2.9 cylinder), and the
+reversal of the trace's direction it led to, were wrong. The direction
+stays as established above (Start the eye, End the light).
+
+**Fix.** The helper's first line check runs over `Level->Model` as the tracker
+left it for the frame, which is what mesh lighting's SetupForActor already
+reads (`bsp-occlusion.mjs lineModel`, [mesh lighting](mesh-lighting.md)
+"LineCheck and the brush tracker"): `createLevelQueries().lineCheck(..., worldModel)`
+runs SingleLineCheck's MultiLineCheck with that model for the world part and
+the level's hash for the actors, and `createCoronaScan`'s `lineModel` hands
+it the tracker's model (sim-host.mjs `occlusionNow`). The scan's first check
+goes through the validated `coronaLineVisible`; it reports the lights it passed
+(`seen`).
+
+**Check.**
+- `validate-coronas-tracked.mjs`: the 11 measured segments through Play's
+  tracked model against Engine's unchanged UModel::LineCheck under Unicorn on the
+  same level and movers (`native-tracked-linecheck-oracle.py`, now returning the
+  FCheckResult): the decisions, nodes, Time, Location and Normal of every
+  segment equal the DLL's at the game thread's control word 0x037f, and every
+  decision and node at 0x007f (below); Light34's hit is the measured one (node
+  292, Time to the bit from the DLL at 0x007f), the five clear ones are clear and
+  the blocked ones blocked; the corona scan over the tracked model is offered 11
+  lights and passes 6, over the static model it passes 9 (Light34 to 36 too).
+- `validate-coronas-mover-play.mjs`: in the browser in worker mode, at that view
+  and with the level held as the capture does, `coronas()` shows 11 offered, 6
+  passed (Light44, 38, 37, 33, 31, 10), Light34 to 36 and Light60 hidden. It fails
+  without the sim-host wiring (9 passed).
+
+**Open.**
+- The corona pass runs at the render pass's 24-bit control word (0x007f); the
+  tracked ray (ray.mjs traceRayFast) models the game thread's 0x037f. At 0x007f
+  the DLL's Time differs from it by one ulp in 3 of the 5 hits (Light34's measured
+  Time is the DLL's at 0x007f). The decisions and nodes agree on all 11
+  segments, which is all the helper reads; a 24-bit ray is not done.
+- Play's collision, AI and decal traces still use the static model
+  ([brush tracker](brush-tracker.md) "Collision"); in the original they see
+  the same fragments. Only mesh lighting and the coronas read the tracked one.
+- The fan2 matched capture (Play against the original) was not rerun by this
+  change; see the report of the session.

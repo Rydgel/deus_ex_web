@@ -24,13 +24,15 @@ export function primitiveReferenceCases() {
  return cases;
 }
 
-/** 09_NYC_ShipFan's fan2 view (docs/coronas.md "Lights inside a colliding
- * actor"): Lightbulb12's cylinder with Light34 inside it, 0.37 above the
- * bottom cap, and the camera 735 units away, in both directions; then the
- * neighbours of that case on long segments: a start inside heading out,
- * across or in (the horizontal dot around the -0.1 threshold), a far start
- * entering through the bottom cap with its end inside, on or just below it,
- * rays grazing the side, and a viewer cylinder holding the eye. */
+/** A Lightbulb-sized cylinder (the class default's radius 1.6 and half height
+ * 2.9; in the game Actor.PreBeginPlay shortens it to 2.15, docs/coronas.md
+ * "Lights behind a mover's fragments") at 09_NYC_ShipFan's Lightbulb12 with a
+ * point 0.37 above its bottom cap, and the camera of the fan2 view 735 units
+ * away, in both directions; then the neighbours of that case on long segments:
+ * a start inside heading out, across or in (the horizontal dot around the -0.1
+ * threshold), a far start entering through the bottom cap with its end inside,
+ * on or just below it, rays grazing the side, and a viewer cylinder holding the
+ * eye. */
 export function shipFanBulbCases() {
  const f=Math.fround,v=a=>a.map(f),zero=[0,0,0],cases=[];
  const bulb={location:v([-271.79,274.31,87.67]),radius:f(1.6),height:f(2.9)};

@@ -4,7 +4,7 @@ import { brushToWorld } from './coords.mjs';
 import { singleLineCheck } from './line-filter.mjs';
 import { multiLineCheck } from './multiline.mjs';
 import { primitiveLineHit } from './primitive-collision.mjs';
-import { traceRay } from './ray.mjs';
+import { traceRay, traceRayFast } from './ray.mjs';
 import { createLevelPoints } from './level-points.mjs';
 import { actorEncroachmentCheck } from './encroachment-query.mjs';
 import { traceExtent } from './extent-trace.mjs';
@@ -101,6 +101,22 @@ export function createLevelQueries(model, actors, { pointCheck, extentCheck,
     const outside = Boolean(singleLineCheck(filter, hit, source, end, start, flags, extent, extra));
     return { ...hit, outside };
   };
+  // SingleLineCheck with another model standing for Level->Model: the one the
+  // moving brush tracker filled (bsp-occlusion.mjs lineModel, docs/brush-tracker.md
+  // "Collision"). Only the world check changes; the hash and the actors'
+  // primitives are the level's. Zero extent only (the tracked model's ray is
+  // the translated UModel::LineCheck's zero-extent branch).
+  const modelLine = (worldModel, start, end, extent, flags, extra, source) => {
+    const through = { ...join, worldLineCheck: (to, from, size, nodeFlags) => {
+      if (!size.every(v => v === 0)) throw new Error('A tracked-model line check takes a zero extent');
+      const found = traceRayFast(worldModel, from, to, nodeFlags, null);
+      return found && { ...found, primitive: worldModel, item: found.node };
+    } };
+    const hit = { time: 1, actor: null, location: [0,0,0], normal: [0,0,0] };
+    const outside = Boolean(singleLineCheck({ ...filter, multiLineCheck: (...args) => multiLineCheck(through, ...args) },
+      hit, source, end, start, flags, extent, extra));
+    return { ...hit, outside };
+  };
   return {
     levelInfo, hash, addActor, removeActor, ...points,
     actorEncroachmentCheck(actor, position, rotation, extra = 0) {
@@ -117,7 +133,9 @@ export function createLevelQueries(model, actors, { pointCheck, extentCheck,
       }
       return javascriptMulti(query);
     },
-    lineCheck(start, end, extent = [0,0,0], flags = 0x17, extra = 0, source = null) {
+    /** `worldModel`: another Level->Model for the world check (modelLine). */
+    lineCheck(start, end, extent = [0,0,0], flags = 0x17, extra = 0, source = null, worldModel = null) {
+      if (worldModel) return modelLine(worldModel, start, end, extent, flags, extra, source);
       if (fast) {
         const result = fast.lineCheck(start, end, extent, flags, extra, source);
         if (result !== undefined) {

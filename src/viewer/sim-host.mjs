@@ -75,7 +75,10 @@ export async function createSimHost(map, asset, assets, { randomSeed, subtitles,
     layout: weaponGpu ? createGpuMeshLayout(weaponGpu) : null,
     onCreate: creation => events.push({ kind: 'weapon-create', creation }), onRelease: id => events.push({ kind: 'weapon-release', id }) });
   session.setWeapon(weaponSim);
-  session.setCoronas(createCoronaScan(runtime, { model: map.model, exportName, player }));
+  // The helper's TRACE_Level line check sees the movers where the brush tracker
+  // last left them (`occlusionNow`, below), as the mesh lighting's does.
+  session.setCoronas(createCoronaScan(runtime, { model: map.model, exportName, player,
+    lineModel: () => occlusionNow?.tracker?.live() ? occlusionNow.lineModel() : null }));
   const lipSync = createLipSyncChannels({ kernel: (await loadScriptVmKernel()).lipsync, ...game.lipSyncServices() });
   // The original BSP occlusion (bsp-occlusion.mjs) over the map's model, with
   // each surface texture's PolyFlags (UTexture +0x80, the packed bools).
