@@ -25,15 +25,17 @@
  * difference is lowest at -0.5 (docs/visual-acceptance.md "Security cameras"). */
 import * as THREE from 'three';
 
+/** ?sampling=trilinear: the sampling before this module (trilinear, no bias), for A/B captures. */
+export const LEGACY_SAMPLING = typeof location !== 'undefined' && new URLSearchParams(location.search).get('sampling') === 'trilinear';
 /** MIPMAPLODBIAS of every stage. */
-export const D3D_LOD_BIAS = -0.5;
+export const D3D_LOD_BIAS = LEGACY_SAMPLING ? 0 : -0.5;
 /** The bias as GLSL source (a float literal). */
-export const D3D_LOD_BIAS_GLSL = '-0.5';
+export const D3D_LOD_BIAS_GLSL = LEGACY_SAMPLING ? '0.0' : '-0.5';
 
 /** Sets a texture's filters as the device does for a surface with or without PF_NoSmooth. */
 export function configureSampler(texture, noSmooth = false) {
   texture.magFilter = noSmooth ? THREE.NearestFilter : THREE.LinearFilter;
-  texture.minFilter = noSmooth ? THREE.NearestMipmapNearestFilter : THREE.LinearMipmapNearestFilter;
+  texture.minFilter = noSmooth ? THREE.NearestMipmapNearestFilter : LEGACY_SAMPLING ? THREE.LinearMipmapLinearFilter : THREE.LinearMipmapNearestFilter;
   return texture;
 }
 
@@ -43,6 +45,6 @@ export function configureSampler(texture, noSmooth = false) {
  * once for the whole page; a three.js whose chunk no longer reads like this throws
  * rather than drawing unbiased. */
 const SAMPLE = 'texture2D( map, vMapUv )';
-if (!THREE.ShaderChunk.map_fragment.includes(`${SAMPLE};`) && !THREE.ShaderChunk.map_fragment.includes(`texture2D( map, vMapUv, ${D3D_LOD_BIAS_GLSL} )`))
+if (!THREE.ShaderChunk.map_fragment.includes(`${SAMPLE};`) && !THREE.ShaderChunk.map_fragment.includes('texture2D( map, vMapUv, '))
   throw new Error('three.js map_fragment no longer samples texture2D( map, vMapUv ): update original-sampling.mjs');
 THREE.ShaderChunk.map_fragment = THREE.ShaderChunk.map_fragment.replace(SAMPLE, `texture2D( map, vMapUv, ${D3D_LOD_BIAS_GLSL} )`);

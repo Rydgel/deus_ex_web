@@ -91,6 +91,8 @@ async function play() {
     let plan = null;
     for (let i = 0; i < 30; i++) { await settled(); plan = await probe({}); if (plan.viewports.length && plan.page.length) break; }
     if (!plan?.viewports.length) throw new Error('no camera window after the login');
+    // JC takes no damage in either program (the original's run sets the same).
+    await view({exec: ['set DeusEx.JCDentonMale ReducedDamageType All']});
     // Level time: run to the original's held TimeSeconds, then hold the level as the original does.
     let held = await view({});
     if (state) {
@@ -112,12 +114,13 @@ async function play() {
     }
     // The camera actor and the player where the original's were (the camera swings and the player walked: both are inputs of the state).
     for (const camera of state?.cameras ?? []) await probe({cameraName: camera.name, placeCamera: {location: camera.location, rotation: camera.rotation}});
-    if (state?.player) {
-      await probe({placePlayer: state.player.location});
-      await view({rotation: state.player.viewRotation});
-    }
+    if (state?.player) await probe({playerPose: {location: state.player.location, rotation: state.player.rotation, viewRotation: state.player.viewRotation,
+      // The original's level is held, JC's animation with it; Play's player keeps ticking in a players-only level and the page's frames advance his
+      // animation whatever the level's dilation: the frame is written with a rate of 0 so the pose drawn is the measured one.
+      anim: {...state.player.anim, AnimRate: 0}}});
     held = await view({playersOnly: true, timeDilation: HELD_DILATION});
     await settled(); await frames(45);
+    held = await view({});
     plan = await probe({});
     const box = await page.locator('#scene').boundingBox();
     const buffer = await page.evaluate(() => { const c = document.getElementById('scene'); return [c.width, c.height]; });
@@ -215,7 +218,10 @@ async function original() {
   // x^1.11); at 2/3 the Shot is the framebuffer (0.08% of the pixels differ from the compositor's, the moving ones). The setting is
   // the original's; Play's ramp is untouched (docs/visual-acceptance.md "Security cameras").
   post([`cmd set WinDrv.WindowsClient Brightness ${option('brightness', '0.666667')}`, 'sleep 600',
-    'cmd set DeusEx.JCDentonMale bCheatsEnabled True', 'sleep 300', 'cmd ghost', 'sleep 300']);
+    'cmd set DeusEx.JCDentonMale bCheatsEnabled True', 'sleep 300',
+    // A computer inside an enemy's rooms (Island's holding cell: a turret, guards): JC takes no damage (TakeDamage returns for
+    // ReducedDamageType 'All'), as in Play's run to the same level time; nothing else about him changes.
+    'cmd set DeusEx.JCDentonMale ReducedDamageType All', 'sleep 300', 'cmd ghost', 'sleep 300']);
   // The computer and the cameras the screen shows: their poses are read from the live level.
   const comp = actorRow(computer, 'Location:0x114:f3', 'Rotation:0x120:i3');
   if (!comp) throw new Error(`no ${computer} in the live level`);
@@ -224,12 +230,21 @@ async function original() {
   const stand = [comp.Location[0] + Math.cos(facing) * front, comp.Location[1] + Math.sin(facing) * front, comp.Location[2]];
   // Fly to the computer's front: aim (ViewRotation), hold W through the input queue for the time the distance needs (about 800 units/s
   // after a quarter second of start-up), measure, repeat.
-  for (let hop = 0; hop < 12; hop++) {
+  let still = 0, lastDistance = Infinity;
+  for (let hop = 0; hop < 40; hop++) {
     const at = player('Location:0x114:f3').Location, d = stand.map((v, i) => v - at[i]), distance = Math.hypot(...d);
     console.log(`hop ${hop}: at ${at.map(v => v.toFixed(1))} distance ${distance.toFixed(1)}`);
     if (distance < 14) break;
+    // A held key moves the ghost only while the game's window is the one Wine gives the input to (the compositor can tile it
+    // again, a conversation can restrict the input): after two hops that moved nothing, place the window again and take the focus.
+    still = Math.abs(lastDistance - distance) < 1 ? still + 1 : 0; lastDistance = distance;
+    if (still >= 2) {
+      if (still >= 8) throw new Error(`the flight does not move (at ${at.map(v => v.toFixed(1))}): the game does not take the held keys`);
+      if (process.env.DX_HYPRLAND === '1') hypr();
+      post(['focus', 'sleep 300']);
+    }
     const [pitch, yaw] = aim(at, stand);
-    const hold = Math.max(70, Math.min(1500, Math.round((distance * 0.8 / 800) * 1000)));
+    const hold = Math.max(70, Math.min(2400, Math.round((distance * 0.8 / 800) * 1000)));
     post([`cmd set DeusEx.JCDentonMale ViewRotation (Pitch=${pitch},Yaw=${yaw},Roll=0)`, 'sleep 450', `shold W ${hold}`, 'sleep 350']);
   }
   post(['cmd walk', 'sleep 2500']);
@@ -277,10 +292,17 @@ async function original() {
   // The state at the hold.
   const rows = readFileSync(tracePath, 'utf8').trim().split('\n'), last = JSON.parse(rows.at(-1));
   const time = dump('JCDentonMale', 'Player:0x5d4:u32', 'LevelTime:0xa8:pf:0x478', 'Dilation:0xa8:pf:0x474').filter(row => row.Player > 0 && row.class === 'JCDentonMale').at(-1);
-  const jcState = player('Location:0x114:f3', 'Rotation:0x120:i3', 'ViewRotation:0x3dc:i3', 'Physics:0x30:u8', 'AnimFrame:0x58:f', 'AnimRate:0x5c:f', 'Region:0xc8:u32');
+  const jcState = player('Location:0x114:f3', 'Rotation:0x120:i3', 'ViewRotation:0x3dc:i3', 'Physics:0x30:u8', 'Region:0xc8:u32',
+    'AnimSequence:0x54:name', 'AnimFrame:0x58:f', 'AnimRate:0x5c:f', 'TweenRate:0x60:f', 'AnimLast:0x220:f', 'AnimMinRate:0x224:f', 'OldAnimRate:0x228:f',
+    'B0:0x68:name', 'B1:0x6c:name', 'B2:0x70:name', 'B3:0x74:name', 'F0:0x78:f', 'F1:0x7c:f', 'F2:0x80:f', 'F3:0x84:f', 'R0:0x88:f', 'R1:0x8c:f', 'R2:0x90:f', 'R3:0x94:f',
+    'T0:0x98:f', 'T1:0x9c:f', 'T2:0xa0:f', 'T3:0xa4:f', 'L0:0x23c:f', 'L1:0x240:f', 'L2:0x244:f', 'L3:0x248:f', 'M0:0x24c:f', 'M1:0x250:f', 'M2:0x254:f', 'M3:0x258:f');
+  const anim = {AnimSequence: jcState.AnimSequence, AnimFrame: jcState.AnimFrame, AnimRate: jcState.AnimRate, TweenRate: jcState.TweenRate, AnimLast: jcState.AnimLast,
+    AnimMinRate: jcState.AnimMinRate, OldAnimRate: jcState.OldAnimRate, BlendAnimSequence: [0, 1, 2, 3].map(k => jcState[`B${k}`]), BlendAnimFrame: [0, 1, 2, 3].map(k => jcState[`F${k}`]),
+    BlendAnimRate: [0, 1, 2, 3].map(k => jcState[`R${k}`]), BlendTweenRate: [0, 1, 2, 3].map(k => jcState[`T${k}`]), BlendAnimLast: [0, 1, 2, 3].map(k => jcState[`L${k}`]),
+    BlendAnimMinRate: [0, 1, 2, 3].map(k => jcState[`M${k}`])};
   const camState = cameras.map(cam => ({name: cam, location: last.actors[cam].Location, rotation: last.actors[cam].Rotation}));
   const state = {map, computer, user, timeSeconds: time.LevelTime, tsTrace: last.tsIn, dilation: time.Dilation, tick: last.tick, cameras: camState,
-    player: {location: jcState.Location, rotation: jcState.Rotation, viewRotation: jcState.ViewRotation, physics: jcState.Physics, animFrame: jcState.AnimFrame, animRate: jcState.AnimRate}};
+    player: {location: jcState.Location, rotation: jcState.Rotation, viewRotation: jcState.ViewRotation, physics: jcState.Physics, anim}};
   writeFileSync(statePath, JSON.stringify(state, null, 1));
   console.log(taken ? `frame ${taken}` : 'NO FRAME', JSON.stringify(state));
   writeFileSync(`${tracePath}.resume`, '');

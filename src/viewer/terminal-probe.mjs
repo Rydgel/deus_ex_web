@@ -6,7 +6,7 @@
  * and points the view at it, so the page's own frob input reaches it.
  * Returns the player's FrobTarget, Location and ViewRotation and the last
  * HUD frame's ViewportWindow world frames (sim-session.mjs viewportState). */
-export function terminalProbe(game, session, { front = null, placeCamera = null, placePlayer = null, cameraName = 'SecurityCamera5', iterators = false, placeEmitters = null } = {}) {
+export function terminalProbe(game, session, { front = null, placeCamera = null, placePlayer = null, playerPose = null, cameraName = 'SecurityCamera5', iterators = false, placeEmitters = null } = {}) {
   const runtime = game.doors.scriptRuntime.runtime, player = game.player.collisionActor;
   const read = (actor, name) => runtime.readNamed(actor, name);
   let placed = null;
@@ -26,6 +26,15 @@ export function terminalProbe(game, session, { front = null, placeCamera = null,
   // `placePlayer` [x, y, z]: the player stands elsewhere (the corona pass
   // lists the lights of the player's leaf, whatever the camera frame sees).
   if (placePlayer) runtime.farMoveActor(player, placePlayer, 0, 1);
+  // `playerPose` {location, rotation, viewRotation, anim}: the player as another capture measured him (the original's
+  // security-camera screen, scripts/camera-acceptance.mjs): where he stands, which way his mesh and view face, and the
+  // animation fields the mesh's pose follows (GetFrame reads the sequence, the frame, the blend arrays).
+  if (playerPose) {
+    runtime.farMoveActor(player, playerPose.location, 0, 1);
+    if (playerPose.rotation) runtime.writeNamed(player, 'Rotation', playerPose.rotation);
+    if (playerPose.viewRotation) runtime.writeNamed(player, 'ViewRotation', playerPose.viewRotation);
+    for (const [name, value] of Object.entries(playerPose.anim ?? {})) runtime.writeNamed(player, name, value);
+  }
   // `placeEmitters` {location, rotation, count}: the first `count` LaserTriggers (the doorway beams: each
   // trigger's LaserEmitter follows it) and their beam proxies stand at the location pointing along the
   // rotation, one 32 units above the other (a fixture: the beams then lie where a mirror reflects them;
