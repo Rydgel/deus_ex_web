@@ -556,8 +556,9 @@ frame's Coords equal the Frame->Coords the LOD selects with.
 
 The simulation digest must be unchanged, since the path is render-only:
 `node scripts/bench-sim.mjs --map 01_NYC_UNATCOIsland --bypass --continue
---render-feedback --warm 60 --ticks 300 --digest-every 50` gives
-`b767a7e417fe5968`.
+--render-feedback --warm 60 --ticks 300 --digest-every 50` gave
+`b767a7e417fe5968` when this was written; on 2026-10-14 it gives
+`1f5d08a3783e1c4b` both at `fc0e745` and with the camera-space and weapon LOD changes.
 
 ## Results
 
