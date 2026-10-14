@@ -299,7 +299,7 @@ async function original() {
   writeFileSync(configPath, config.join('\n') + '\n');
   writeFileSync(watchPath, JSON.stringify({map, pawns: names.filter(name => !extras.includes(name)), extras, generators, timers, classes: classOf}, null, 1));
   // The actors the original's level holds (a load removes some at random: OddsOfAppearing).
-  const everything = wine('list', 'Actor').split('\n').map(line => /^\S+ (\S+) slot=\d+ .* odds=(\S+)/.exec(line)).filter(Boolean).map(m => ({name: m[1], odds: Number(m[2])}));
+  const everything = wine('list', 'Actor').split('\n').map(line => /^\S+ (\S+) slot=(\d+) .* odds=(\S+)/.exec(line)).filter(Boolean).map(m => ({name: m[1], odds: Number(m[3]), slot: Number(m[2])}));   // slot: the GObjObjects slot (the order a load made the actors in)
   // tagged too (population<tag>.json): the replay of one capture must not read another's while a second runs
   writeFileSync(path.join(dir, 'population.json'), JSON.stringify(everything));
   if (suffix) writeFileSync(path.join(dir, `population${suffix}.json`), JSON.stringify(everything));
