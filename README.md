@@ -36,6 +36,10 @@ or push further hosting updates unless the user asks.
 - **GPU meshes.** Actor GetFrame interpolation and DrawLodMesh lighting run as
   WebGL2 passes, bit-exact with the CPU kernels (`?gpuMesh=0` selects the CPU
   reference; software WebGL keeps it). See [GPU mesh](docs/gpu-mesh.md).
+- **Frame hitch recorder.** `?hitchlog=1` records every frame's page, worker and
+  WebGL timings plus per-second heaps, wasm memories, renderer counts and shader
+  programs; Ctrl+Shift+H saves a JSON for `scripts/analyze-hitchlog.mjs`. Off,
+  it installs nothing. See [hitch recorder](docs/hitch-log.md).
 - **Music and sound.** Galaxy's sequencer and mixer run in Rust inside an
   AudioWorklet, fed directly by the simulation over a MessageChannel: music,
   sound-effect voices and zone reverb (`?sfx=webaudio` keeps the older Web

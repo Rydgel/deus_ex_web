@@ -110,6 +110,12 @@ const canvasClear = new THREE.Color('#06101b');
 // the frame's GL work, read back frames later (docs/play-frame-cost.md).
 // Measurement only; scripts/profile-play-browser.mjs --gpu sets it.
 const gpuTimerParam=new URLSearchParams(location.search).get('gpuTimer')==='1'||hitchEnabled;
+// ?precompile=1: after a map loads, the scene's shader programs are compiled (renderer.compileAsync) while the
+// loading screen is up, instead of synchronously at the first draw of each material. ANGLE's Metal backend and
+// Apple's OpenGL compile a program in the middle of play at a cost the Linux drivers do not show; measurement
+// switch, off by default (docs/hitch-log.md "Shader programs").
+const precompileParam=new URLSearchParams(location.search).get('precompile')==='1';
+let precompileMs=null;
 // ?seed=N: the shared random stream's srand seed instead of time(NULL), for
 // comparing two runs of one scenario (scripts/validate-sim-split.mjs).
 const seedParam=new URLSearchParams(location.search).get('seed');
@@ -829,6 +835,12 @@ async function loadMap(name) {
     $('map').value = name; $('gate').hidden = true; $('reset').disabled = false;
     $('state').textContent = `${name} · ${world.textures} textures · ${world.counts.triangles.toLocaleString()} triangles`;
     if (world.errors.length) toast(`${world.errors.length} render issues — open Diagnostics for details.`);
+    if (precompileParam) {
+      const mark = performance.now();
+      $('gate-message').textContent = 'Compiling shaders';
+      try { await renderer.compileAsync(scene, camera); } catch (error) { console.warn('precompile failed', error); }
+      precompileMs = performance.now() - mark;
+    }
   } catch (error) {
     if(nextHost&&nextHost!==simHost)nextHost.dispose?.();
     if(nextWeaponDraw&&nextWeaponDraw!==weaponDraw)nextWeaponDraw.dispose();
@@ -1371,7 +1383,7 @@ function status() {
     brightness: Number($('brightness').value), displayGamma: world?.displayGamma.value ?? null,
     crt: crtEnabled, crtShader, crtCompare,
     rotation: [pitch, yaw], wireframe: $('wireframe').checked, actorMarkers: $('actor-markers').checked, cameraMoved,
-    calls: renderer.info.render.calls, frame: renderer.info.render.frame,
+    calls: renderer.info.render.calls, frame: renderer.info.render.frame, precompileMs,
   };
 }
 // A small read-only diagnostic hook also makes browser regressions reproducible.

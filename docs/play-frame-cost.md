@@ -1,5 +1,91 @@
 # Play frame cost from first principles
 
+## October 14: periodic hitches (reported on the Mac only)
+
+The user sees huge frame drops lasting a few seconds, recurring, on every map
+(Everett for one), in every browser, on a 16 GB M2 Pro Mac, never on the Linux
+host. No Mac is reachable from here, so this section is what the Linux host
+shows, under slow-machine conditions, and the tool for the Mac:
+[the hitch recorder](hitch-log.md) (`?hitchlog=1`, Ctrl+Shift+H, then
+`scripts/analyze-hitchlog.mjs`). Method: headless Chromium `--use-angle=gl`
+(AMD 780M), 1440x960, worker mode, 60 Hz, a scripted walk that turns when it
+sticks, 5-minute runs on Everett, 2 minutes on Island, Club, Wan Chai
+Underworld and Airfield.
+
+**Baseline (master ab6cb8c).** 60 fps, 5 draw gaps over 50 ms in 300 s of
+Everett, none over 270 ms. The only periodic event is the worker's JavaScript
+heap: it climbs 12-17 MB/s from 550 MB to 1.2-1.7 GB and a major GC brings
+it back, every 60-90 s (1.6 GB at 92 s, 1.0 GB at 184 s, 1.0 GB at 270 s in
+one run). With a V8 trace (`disabled-by-default-v8.gc`) aligned to the
+worker's frames, a major GC is `V8.GC_MARK_COMPACTOR` 40-120 ms, many
+incremental steps inside frames, and a `HEAP_EPILOGUE_SAFEPOINT` of up to 77
+ms; the worker frame record shows two consecutive frames in which every step
+is slow at once (tick 26, lighting 78, actors 5, then actors 121), 250 ms in
+all, with the page idle. Other runs had stalls of 265 and 364 ms at the same
+kind of event, and none in some 60-second windows. The page's own heap
+saw-tooths 350-520 MB every 12-20 s (small GCs, 6-8 ms).
+
+**Slow-machine emulation.** Taskset to 4 cores, CDP CPU throttling x4 on the
+page, a cgroup `memory.high` of 2.2 GB (the rest of the browser's 3.4 GB goes
+to zram swap): worst draw gap 417 ms (a worker frame in which every step was
+slow at once, the GC signature), six gaps over 200 ms, nothing of seconds. A worker paused for 400 ms every 15 s (Island):
+the merged frame advances the level by 0.4 s (Level.Tick clamps the delta
+to [0.005, 0.4]) and costs 12-27 ms of tick; there is no catch-up spiral.
+
+**Shader programs.** 7 (Club) to 30 (Airfield) per map, almost all in the
+first second. Late ones: Everett 3 (all within 19 s), Island 0, Club 0, Wan
+Chai 2, Airfield 19 in a minute of roaming (mesh GPU and decal variants,
+three world batches with new texture counts at 64 s). Each costs 5-25 ms
+here. This is the best candidate for a Metal-only cost that the Linux driver
+hides, so the recorder logs every program with the second it was built.
+
+**What allocated the worker's garbage.** The heap sampling profiler on the
+worker (`HeapProfiler.startSampling`, all allocations, Everett, 45 s): 57% of
+the bytes were `movingLightLeafLists` (the Filter walk that builds the
+moving-light list of every BSP leaf), run twice a frame, once for the corona
+pass and once for mesh lighting (plus once per mirror frame), though the
+corona pass reads one leaf and mesh lighting reads the leaves of the drawn
+actors. Of what survived two scavenges (and so reached the old generation):
+41% was the same walk's Map and arrays, kept for the frame.
+
+**Fixes.**
+
+- `movingLightLeafList` / `lazyLeafLists` (`dynamic-lighting.mjs`, used by
+  `corona-scan.mjs` and `mesh-lighting-view.mjs`): one leaf's list from the
+  path root to the node the leaf hangs off, the same decisions in the same
+  order. Equal to the full walk on 905,490 leaf lists of 8 maps and on
+  synthetic BSPs that force the fallback (`validate-leaf-list-lazy.mjs`); the
+  full walk is verified against Render.dll by `validate-leaf-lights.mjs`,
+  which now also compares the single-leaf walk on its tracked fragment models.
+  Same state digests and the same pixels as `?leafLists=full` (the old
+  behaviour, kept as the switch) on Everett, Island and Club
+  (`validate-sim-split.mjs --walk`, frames 240). Interleaved pairs, Everett,
+  60 s each, worker frame median [p99] ms: 10.2 [16.5], 10.2 [16.2], 10.6
+  [15.9] before; 8.3 [14.0], 7.9 [12.4], 8.3 [13.1] after. Over 300 s:
+  heap climb 12-17 MB/s -> 4.4-5.8 MB/s, worker heap peak 1.73 -> 1.24 GB,
+  browser RSS peak 4.35 -> 3.80 GB, worker minor GC time 3.4 s -> 1.6 s,
+  longest worker major GC 172 -> 65 ms. Draw gaps over 100 ms stay at one in
+  each run (they are load time): on this machine the stalls were already
+  short.
+- `decal-scene.mjs`: a visible decal group replaced its position and uv
+  attributes every frame, and three.js deletes only the buffers of the
+  attributes a geometry still holds, so each group made two GL buffers a frame
+  (14,657 `createBuffer` against 20 `deleteBuffer` in 5 minutes of Everett,
+  16,199 in 66 s of Airfield) until the page heap's next collection freed the
+  wrappers. Now persistent DynamicDraw attributes with an update range.
+  `validate-decals-play` 3512-3513 pixels darker before and after (its
+  spread is 3502-3513 across runs); the Training frame hash is unchanged.
+
+**Not established.** The Mac's multi-second drops did not appear in any of
+this. What would produce them there and not here, in decreasing order of what
+the code suggests: a major GC of the worker's 1-1.7 GB heap under macOS memory
+pressure (16 GB; compressed pages come back during marking) in a browser
+that is not V8 too; a synchronous shader compile on the draw thread (Metal);
+a texture upload shape one browser copies whole (the October 4 Firefox case);
+thermal or power limits. The recorder tells these apart from one file: a slow
+second is classified as worker frame, page frame (phase), WebGL calls, or
+neither thread.
+
 ## October 4: Firefox and Training's mirrored floor
 
 The user saw 27 fps in Firefox (not Chrome) at Training's Player start on

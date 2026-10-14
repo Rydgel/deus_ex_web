@@ -88,15 +88,42 @@ A second recording with `&sim=inline` runs the simulation on the page: Chrome's
 with the stalls, and a stall that stays with the page and its heap is
 garbage collection.
 
+## Browsers
+
+Chromium gives every field. Without `performance.memory`, long-task and
+long-animation-frame observers, or timer queries (Firefox, Safari) those
+fields stay empty (`hasMemoryApi` in `meta`); the frame intervals, the
+worker's frame record, the WebGL call timings, the renderer counts and the
+programs are the same everywhere. Not run in Firefox or Safari here (no build
+installed); every optional API is feature-tested.
+
+## Shader programs
+
+three.js compiles a program the first time a material is drawn, and checks
+its link status at once, so the thread that draws waits for the compiler.
+`programs` and `gl.compile` say how often that happens in play. On the Linux
+host a map builds 7 to 30 programs; Everett's last one is built 19 s into
+play, Airfield builds 19 more programs during a minute of roaming (5 to 25 ms
+each here). Whether ANGLE's Metal backend or Apple's OpenGL makes them
+seconds is not known here; the recorder will show it. `?precompile=1` builds
+the scene's programs while the loading screen is up (`renderer.compileAsync`):
+Airfield goes from 28-30 programs (17-19 built after play began, 150-160 ms of
+`gl.compile` in a 90 s roam) to 69 (7 late, 78 ms). It
+also compiles about 40 programs a roam never uses, so it moves the cost to
+the load rather than removing it; it is off by default, and an experiment for
+a machine whose log shows compile time in slow seconds.
+
 ## Cost
 
 Off: nothing. On: two `performance.now()` calls around each WebGL call that
 can block or draw (about 100 a frame), a 50-column `Float32Array` row per
 frame, one observer each for long tasks and long animation frames, and a
 once-a-second table row. The recorder turns `?gpuTimer=1` on (one timer query
-per frame) and adds a field to the worker's snapshot. It reads the Linux
-host's frame time within noise (see "Verification").
+per frame) and adds a field to the worker's snapshot. Measured on the Linux
+host, Everett roam, interleaved pairs with `?gpuTimer=1` in both arms: page
+2.29 ms (off) and 2.04 ms (on) per drawn frame, worker 6.65 and 6.57 ms, 59.7
+fps in both; the difference is inside the run-to-run noise.
 
-## Measured on the Linux host (2026-10-14)
+## What it found on the Linux host (2026-10-14)
 
-See the section at the end of this file, added with the results.
+See [Play frame cost](play-frame-cost.md) "October 14: periodic hitches".
