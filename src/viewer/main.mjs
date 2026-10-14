@@ -171,7 +171,7 @@ function applySimEvents(events,{world:target,actors,weapon}){
 
 const $ = id => document.getElementById(id);
 // The canvas is multisampled; ?antialias=0 turns that off: the original's Direct3D 7 device has no multisampling, so its frames have none
-// (docs/visual-acceptance.md "Security cameras"). The validators patch this call's `antialias: true })` text.
+// (docs/visual-acceptance.md "Security cameras"). The pixel validators (validate-sim-split, validate-decals-play, validate-mesh-path-frames) add preserveDrawingBuffer by patching the first occurrence of the call's closing antialias text, so that text must not appear above it.
 const rendererOptions = options => new URLSearchParams(location.search).get('antialias') === '0' ? { ...options, antialias: false } : options;
 const renderer = new THREE.WebGLRenderer(rendererOptions({ canvas: $('scene'), antialias: true }));
 renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
