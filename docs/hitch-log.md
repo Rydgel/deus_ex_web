@@ -16,8 +16,10 @@ simulation state, and without the URL switch it installs nothing
    below). A small label at the bottom left shows the elapsed time and how
    many draw gaps over 100 ms there were.
 2. Play the map for several minutes, until a few hitches have happened.
-3. Press **Ctrl+Shift+H** (also on macOS: Control, not Command), or run
-   `deusExHitch.download()` in the console. The browser saves
+3. Press **Ctrl+Shift+H** (on macOS Control or Command), or press Esc and
+   click the label's **Save hitch log** button, or run `deusExHitch.save()`
+   in the console. The label then names the saved file (or the error). The
+   browser saves
    `deusex-hitchlog-<map>-<time>.json`. Press it again later for a longer
    file; the log keeps the last 96,000 frames (26 minutes at 60 Hz, 13 at
    120 Hz) and every second of the session.

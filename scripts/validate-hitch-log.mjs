@@ -6,7 +6,7 @@
 //     with the per-second table, the worker's frame record (duration, merged
 //     posts, wasm size), the page's GL timings, the shader programs, a summary,
 //     and rows whose width matches the column list;
-//  3. Ctrl+Shift+H downloads the same log as parseable JSON.
+//  3. Ctrl+Shift+H, and the overlay's Save button, download the same log as parseable JSON.
 //
 //   node scripts/validate-hitch-log.mjs [--angle gl] [--seconds 8]
 import assert from 'node:assert/strict';
@@ -104,6 +104,10 @@ try {
   assert.deepEqual(Object.keys(saved).sort(), Object.keys(dump).sort(), 'saved log has the same sections');
   assert.ok(saved.seconds.length >= dump.seconds.length && saved.rows.length >= 1, 'saved log content');
   console.log(`download: ${download.suggestedFilename()}, ${saved.rows.length} rows`);
+  // The overlay's button saves too, and the overlay names the saved file.
+  const [clicked] = await Promise.all([page.waitForEvent('download', { timeout: 15000 }), page.getByRole('button', { name: 'Save hitch log' }).click()]);
+  assert.match(clicked.suggestedFilename(), /^deusex-hitchlog-00_Training-.*\.json$/, 'button file name');
+  assert.ok(await page.getByText(`saved ${clicked.suggestedFilename()}`).isVisible(), 'the overlay names the saved file');
   assert.deepEqual(errors, [], 'page errors');
   await context.close();
 } catch (error) {

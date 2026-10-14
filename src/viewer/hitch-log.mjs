@@ -104,7 +104,7 @@ export function createHitchLog() {
   // Per-second maxima and sums, so the whole session's table can say what a slow second was doing.
   const sec = { animMax: 0, wMax: 0, wPostsMax: 0, wLatMax: 0, outMax: 0, waitMax: 0, compile: 0, upload: 0, sync: 0, draw: 0, uploadMB: 0, phaseMax: 0, phaseKey: '' };
   const secondCreated = {};
-  let hitches = 0, overlay = null, lastMap = null, workerWasm = 0, workerMems = 0, lastProgramsLength = -1;
+  let hitches = 0, overlay = null, savedLine = null, lastMap = null, workerWasm = 0, workerMems = 0, lastProgramsLength = -1;
   const push = event => { if (events.length < MAX_EVENTS * 3) events.push(event); };
 
   function attach(context) {
@@ -138,12 +138,20 @@ export function createHitchLog() {
     for (const name of ['visibilitychange', 'focus', 'blur', 'resize', 'pointerlockchange'])
       window.addEventListener(name, () => push({ t: round(performance.now() - origin), kind: name, visible: document.visibilityState, focus: document.hasFocus() }), true);
     window.addEventListener('keydown', event => {
-      if (event.ctrlKey && event.shiftKey && event.code === 'KeyH') { event.stopImmediatePropagation(); event.preventDefault(); if (!event.repeat) download(); }
+      // Control or Command (macOS) with Shift and H.
+      if ((event.ctrlKey || event.metaKey) && event.shiftKey && event.code === 'KeyH') { event.stopImmediatePropagation(); event.preventDefault(); if (!event.repeat) save(); }
     }, true);
-    overlay = document.createElement('div');
-    overlay.style.cssText = 'position:fixed;left:8px;bottom:8px;z-index:99999;font:11px/1.3 monospace;color:#9fe;background:rgba(0,0,0,.55);padding:3px 6px;border-radius:3px;pointer-events:none;white-space:pre';
-    document.body.appendChild(overlay);
-    window.deusExHitch = { download, dump, status: () => ({ frames: count, seconds: seconds.length, events: events.length, hitches }), events: () => events, seconds: () => seconds };
+    // The overlay's text and a Save button (Esc releases the pointer first), and the last save's result.
+    const box = document.createElement('div');
+    box.style.cssText = 'position:fixed;left:8px;bottom:8px;z-index:99999;font:11px/1.3 monospace;color:#9fe;background:rgba(0,0,0,.55);padding:3px 6px;border-radius:3px;white-space:pre';
+    overlay = document.createElement('div'); overlay.style.pointerEvents = 'none';
+    const button = document.createElement('button');
+    button.textContent = 'Save hitch log'; button.style.cssText = 'margin-top:3px;font:11px monospace;cursor:pointer';
+    button.addEventListener('click', event => { event.stopPropagation(); save(); });
+    savedLine = document.createElement('div'); savedLine.style.pointerEvents = 'none';
+    box.append(overlay, button, savedLine);
+    document.body.appendChild(box);
+    window.deusExHitch = { download, save, dump, status: () => ({ frames: count, seconds: seconds.length, events: events.length, hitches }), events: () => events, seconds: () => seconds };
   }
 
   function frameStart() { /* the frame's own timestamp arrives with frameEnd; wrappers need no reset */ }
@@ -233,7 +241,7 @@ export function createHitchLog() {
       for (const key in secondCreated) delete secondCreated[key];
       Object.assign(sec, { animMax: 0, wMax: 0, wPostsMax: 0, wLatMax: 0, outMax: 0, waitMax: 0, compile: 0, upload: 0, sync: 0, draw: 0, uploadMB: 0, phaseMax: 0, phaseKey: '' });
       secondStart = time; secondFrames = 0; secondDrawn = 0; secondDtMax = 0; secondTasks = 0; secondLoaf = 0;
-      if (overlay) overlay.textContent = `hitchlog ${Math.round((time - origin) / 1000)} s, ${hitches} gaps > 100 ms\nCtrl+Shift+H saves the log`;
+      if (overlay) overlay.textContent = `hitchlog ${Math.round((time - origin) / 1000)} s, ${hitches} gaps > 100 ms\nCtrl+Shift+H or the button saves the log`;
     }
   }
 
@@ -289,6 +297,13 @@ export function createHitchLog() {
     link.download = `deusex-hitchlog-${(ctx.status().map ?? 'nomap')}-${new Date().toISOString().replace(/[:.]/g, '-')}.json`;
     document.body.appendChild(link); link.click(); link.remove();
     setTimeout(() => URL.revokeObjectURL(link.href), 20000);
+    return link.download;
+  }
+
+  /** download() with its outcome on the overlay (a failure is shown, not only logged). */
+  function save() {
+    try { const name = download(); if (savedLine) savedLine.textContent = `saved ${name}`; }
+    catch (error) { console.error('hitchlog save failed', error); if (savedLine) savedLine.textContent = `save failed: ${error?.message ?? error}`; }
   }
 
   return { attach, frameStart, snapshot, frameEnd, dump, download };
