@@ -45,9 +45,29 @@ export function coronaFade(cache, delta) {
   }
 }
 
+/** Helper 0x10b1bc00's two line checks: ULevel::SingleLineCheck(Hit,
+ * Source, End, Start, TraceFlags, Extent, NodeFlags) from the light's
+ * Location (Start, +0x114) to the frame's Coords.Origin (End, `frame +
+ * 0x34`, pushed from `lea edi` at 0x10b1bc43 before the calls at 0x10b1bc5b
+ * and 0x10b1bcac): TRACE_Level|TRACE_Movers (6) must be clear, then
+ * TRACE_Pawns|TRACE_Others (0x11) must be clear or hit the viewport actor.
+ * `lineCheck(start, end, extent, flags, extra, source)` is level-queries.mjs
+ * `lineCheck`, which takes Start first. The direction matters for cylinders
+ * (UPrimitive::LineCheck, docs/primitive-collision.md): a light inside a
+ * colliding actor's cylinder is hidden by it only when the eye lies
+ * horizontally inward, and the eye inside the viewer's own cylinder ends
+ * the trace on the viewer. validate-coronas.mjs compares these arguments
+ * with the ones the original helper passes. */
+export function coronaLineVisible(lineCheck, location, origin, viewer) {
+  if (!lineCheck(location, origin, [0, 0, 0], 6, 0, null).outside) return false;
+  const hit = lineCheck(location, origin, [0, 0, 0], 0x11, 0, null);
+  return Boolean(hit.outside) || hit.actor === viewer;
+}
+
 /** Helper 0x10b1bc00 for one light of the camera leaf: the line checks
- * already decided `visible` (SingleLineCheck TRACE_Level|TRACE_Movers
- * clear, then TRACE_Pawns|TRACE_Others clear or hitting the viewport actor);
+ * (coronaLineVisible) already decided `visible` (SingleLineCheck
+ * TRACE_Level|TRACE_Movers clear, then TRACE_Pawns|TRACE_Others clear or
+ * hitting the viewport actor);
  * `qualifies` is bCorona && Skin && !bDeleteMe. An existing entry gains 2Δ,
  * a new one takes the next free slot from `slot.next` at min(1, 2Δ). */
 export function coronaSeen(cache, slot, light, { visible, qualifies, actorIndex, delta }) {

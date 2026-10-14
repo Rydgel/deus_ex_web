@@ -1,9 +1,12 @@
 // Light coronas (docs/coronas.md): src/runtime/coronas.mjs against unchanged
 // Render.dll code (native-coronas-oracle.py) — the visibility helper
-// 0x10b1bc00 (line-check answers, bCorona/Skin/bDeleteMe gates, existing and
-// new cache slots) and the draw loop's DrawIcon arguments (validity, depth
-// cut, projection, size, hue/saturation colour times brightness) over random
-// frames, lights and caches. Compared bit-exactly.
+// 0x10b1bc00 (its two SingleLineChecks' arguments, Play's coronaLineVisible
+// against the original's: End the frame's Coords.Origin, Start the light's
+// Location, flags, extent, NodeFlags and Source; the answers, bCorona/Skin/
+// bDeleteMe gates, existing and new cache slots) and the draw loop's
+// DrawIcon arguments (validity, depth cut, projection, size, hue/saturation
+// colour times brightness) over random frames, lights and caches. Compared
+// bit-exactly.
 //
 // Then 80 more frames come from the master frame OccludeBsp reads (the Rust
 // core's CreateMasterFrame plus the render pass's ComputeRenderSize at 24 bits
@@ -24,7 +27,7 @@ import { loadScriptVmKernel } from '../src/runtime/script-vm-kernel.mjs';
 import { createBspOcclusion } from '../src/runtime/bsp-occlusion.mjs';
 import { surfaceTextureFlags, renderPassTangent, renderRectangle } from './occlusion-request.mjs';
 import { coordsTransform } from '../src/runtime/volumetric-fog.mjs';
-import { coronaSeen, coronaFade, coronaIcon, coronaFrame, coronaFrameFromCamera, leafPermeatingLights, CORONA_SLOTS } from '../src/runtime/coronas.mjs';
+import { coronaLineVisible, coronaSeen, coronaFade, coronaIcon, coronaFrame, coronaFrameFromCamera, leafPermeatingLights, CORONA_SLOTS } from '../src/runtime/coronas.mjs';
 // ORACLE_CW=0x007f: the render-pass precision audit (precision-audit.mjs).
 const assert = auditAssert();
 
@@ -119,7 +122,9 @@ const reference = JSON.parse(execFileSync(python, ['scripts/native-coronas-oracl
     lights: c.lights, leaves: c.leaves, modelLights: c.flat.map(v => v - 1), iLeaf: c.iLeaf,
     leafLists: c.leafLists } }))]), encoding: 'utf8', maxBuffer: 1 << 28 }));
 
-let icons = 0, seenCount = 0, created = 0, behind = 0;
+let icons = 0, seenCount = 0, created = 0, behind = 0, lineChecks = 0;
+// The viewport actor and another actor, as Hit.Actor answers.
+const VIEWER = { name: 'viewer' }, OTHER = { name: 'other' };
 cases.forEach((c, i) => {
   const expected = reference[i], where = `case ${i}`;
   const cache = { entries: c.entries.map(e => e ? { actor: e.light, index: e.index, brightness: num(e.brightness) }
@@ -131,15 +136,31 @@ cases.forEach((c, i) => {
     assert.equal(e.actor === null ? -1 : e.actor, light, `${where} slot ${k}: faded light`);
     if (light >= 0) assert.equal(bits(e.brightness), b, `${where} slot ${k}: faded brightness`);
   });
+  const traces = [];
   for (const s of c.seen) {
-    const light = c.lightsJs[s.light];
-    const visible = s.answers[0][0] === 1 && (s.answers[1][0] === 1 || s.answers[1][1] === 'viewer');
+    const light = c.lightsJs[s.light], answers = [...s.answers];
+    // Play's line checks (level-queries.mjs lineCheck's arguments, Start
+    // first), answered as the oracle answers the original's.
+    const lineCheck = (start, end, extent, flags, extra, source) => {
+      const role = v => v === c.coordsJs.origin ? 'frameOrigin' : v === light.location ? 'lightLocation' : 'other';
+      traces.push({ flags, end: role(end), start: role(start), endBits: end.map(bits), startBits: start.map(bits),
+        extent: extent.map(bits), nodeFlags: extra & 0xff, source: source === null ? null : source === VIEWER ? 'viewer' : 'other' });
+      if (!answers.length) throw new Error(`${where}: Play makes more line checks than the original's answers`);
+      const [outside, actor] = answers.shift();
+      return { outside: outside === 1, actor: actor === 'viewer' ? VIEWER : actor === 'other' ? OTHER : null };
+    };
+    const visible = coronaLineVisible(lineCheck, light.location, c.coordsJs.origin, VIEWER);
     const qualifies = Boolean(light.lighting & 4) && light.skin && !(light.flags & 0x80);
     const before = cache.entries.filter(e => e.actor !== null).length;
     coronaSeen(cache, slot, s.light, { visible, qualifies, actorIndex: () => s.light + 1, delta });
     if (cache.entries.filter(e => e.actor !== null).length > before) created++;
     seenCount++;
   }
+  // Each helper call's SingleLineChecks: which vectors are End and Start
+  // (the frame's Coords.Origin, the light's Location), their bits, TraceFlags,
+  // Extent, NodeFlags and Source, in call order.
+  assert.deepEqual(traces, expected.traces, `${where}: line-check arguments`);
+  lineChecks += traces.length;
   assert.equal(slot.next, expected.next, `${where}: next free slot`);
   cache.entries.forEach((e, k) => {
     const [light, index, b] = expected.cache[k];
@@ -175,6 +196,7 @@ visitCases.forEach((c, i) => {
 });
 assert.ok(visits > 50 && dynamicVisits > 20, 'leaf cases visit static and dynamic lights');
 assert.ok(icons > 100 && created > 50 && behind > 20, 'cases reach drawn icons, new entries and lights behind the eye');
+assert.ok(lineChecks > 500, 'cases reach both line checks');
 occlusion.dispose();
-console.log(`Coronas: ${LEAF_CASES} leaf visits (${visits} helper calls, ${dynamicVisits} from LeafLights), ${cases.length} frames (${fromCamera} from the master frame OccludeBsp reads; fade loop included), ${seenCount} helper calls (${created} new entries), ${icons} DrawIcon calls and ${behind} lights behind the eye match the original Render.dll.`);
+console.log(`Coronas: ${LEAF_CASES} leaf visits (${visits} helper calls, ${dynamicVisits} from LeafLights), ${cases.length} frames (${fromCamera} from the master frame OccludeBsp reads; fade loop included), ${seenCount} helper calls (${created} new entries, ${lineChecks} line checks and their arguments), ${icons} DrawIcon calls and ${behind} lights behind the eye match the original Render.dll.`);
 if (assert.enabled) assert.report('validate-coronas');

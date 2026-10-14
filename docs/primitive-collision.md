@@ -47,6 +47,14 @@ exact side/cap boundary and near-boundary cases are represented.
 Small native-derived regression expectations are retained in the unit test;
 `node --test test/primitive-collision.test.mjs` passes.
 
+2026-10-14: the corpus gained 46 directed cases (`shipFanBulbCases`, 5,399
+cases in all): 09_NYC_ShipFan's Lightbulb12 with Light34 inside it and the
+camera 735 units away, plus neighbouring long segments (start-inside dots
+around -0.1, bottom-cap entry with the end inside or on the cap, grazing
+rays, a viewer cylinder holding the eye). See [coronas](coronas.md),
+"Lights inside a colliding actor". **They have not been run against the
+DLL yet.** The zero-mismatch result above is for the first 5,353 cases.
+
 This establishes these two primitive methods against original DLL execution,
 not full actor movement/events or all possible floating-point inputs. Inputs
 must be finite ordinary game geometry with nonnegative radius/height/extents;

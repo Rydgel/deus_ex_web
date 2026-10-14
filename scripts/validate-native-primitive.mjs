@@ -20,6 +20,40 @@ export function primitiveReferenceCases() {
   cases.push({actor:{location,radius,height},start,end,extent:[[0,0,0],[20,20,43],[20,20,16],[3,7,5]][i%4]});
  }
  for(const d of [0,.00001,.0001,.001,.01,.02,.021,-.02,-.021])for(const x of [0,5,9.99,10,10.001])cases.push({actor:{location:[0,0,0],radius:10,height:20},start:[x,0,0],end:[x+d,0,0],extent:[0,0,0]});
+ cases.push(...shipFanBulbCases());
+ return cases;
+}
+
+/** 09_NYC_ShipFan's fan2 view (docs/coronas.md "Lights inside a colliding
+ * actor"): Lightbulb12's cylinder with Light34 inside it, 0.37 above the
+ * bottom cap, and the camera 735 units away, in both directions; then the
+ * neighbours of that case on long segments: a start inside heading out,
+ * across or in (the horizontal dot around the -0.1 threshold), a far start
+ * entering through the bottom cap with its end inside, on or just below it,
+ * rays grazing the side, and a viewer cylinder holding the eye. */
+export function shipFanBulbCases() {
+ const f=Math.fround,v=a=>a.map(f),zero=[0,0,0],cases=[];
+ const bulb={location:v([-271.79,274.31,87.67]),radius:f(1.6),height:f(2.9)};
+ const [lx,ly,lz]=bulb.location,light=v([-272.30,273.81,85.14]),eye=v([236,-238,-55]);
+ const line=(start,end,actor=bulb)=>cases.push({actor,start:v(start),end:v(end),extent:zero});
+ line(eye,light);line(light,eye);
+ // Light34's horizontal offset from the bulb's axis, its length and a perpendicular.
+ const ox=light[0]-lx,oy=light[1]-ly,ol=Math.hypot(ox,oy),px=-oy/ol,py=ox/ol;
+ for(const side of [1,-1])for(const dot of [-5,-.2,-.11,-.1,-.09,-.05,0,.05,5]){
+  const k=dot/ol;line(light,[light[0]+side*720*px+k*ox/ol,light[1]+side*720*py+k*oy/ol,light[2]-140]);
+ }
+ for(const depth of [.4,.37,.01,.001,0,-.001,-.01]){
+  const end=[lx+ox,ly+oy,lz-bulb.height+depth];
+  line(eye,end);line([lx+3,ly,lz-15],[lx,ly,lz-bulb.height+depth]);
+ }
+ // Along the camera's horizontal direction, passing `distance` from the axis.
+ const ux=(lx-eye[0])/Math.hypot(lx-eye[0],ly-eye[1]),uy=(ly-eye[1])/Math.hypot(lx-eye[0],ly-eye[1]);
+ for(const distance of [1.59,1.599,1.6,1.601,1.61]){
+  const s=[lx-700*ux-distance*uy,ly-700*uy+distance*ux,lz-1],e=[lx+50*ux-distance*uy,ly+50*uy+distance*ux,lz+.05];
+  line(s,e);line(e,s);
+ }
+ const viewer={location:v([236,-238,-85]),radius:f(20),height:f(43)};
+ line(light,eye,viewer);line(eye,light,viewer);
  return cases;
 }
 
