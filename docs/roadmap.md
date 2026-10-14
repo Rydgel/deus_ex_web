@@ -407,10 +407,18 @@ conversation camera with lip sync. The render pass's translations run at its
 24-bit precision ([render-pass precision](render-pass-precision.md)).
 Twenty-six maps match the original's own frames at matched cameras and level time (122 of 130 views)
 ([visual acceptance](visual-acceptance.md)).
-Open: the LOD morph's world-space rounding, a matched capture of the security cameras'
+Vertices reach the render device as the original builds them
+([frame projection](frame-projection.md), 2026-10-14): Render.dll's view
+transform and projection and D3DDrv's X, Y, depth and RHW run bit-exact in
+the vertex shader of world surfaces, the fog overlay and actor meshes (a mesh
+draws GetFrame's camera-space buffer), in the main frame and each mirror and
+sky child frame, over the device's depth range (near 1, far 32767) and a camera
+posed from the frame's Coords.
+Open: a matched capture of the security cameras'
 views (root frames with their own mirror and sky frames, decals, coronas, fog,
-LOD and lighting since 2026-10-11, [viewport window](script-window-viewport.md)), the
-host's depth range and float32 GPU transform under the frame projection, the
+LOD and lighting since 2026-10-11, [viewport window](script-window-viewport.md)),
+mover vertices, decals, sprites and ViewportWindow frames on the vertex chain
+([frame projection](frame-projection.md#unverified-and-open)), the
 darkest-pixel rounding visual acceptance found, and in live scenes (compared
 tick by tick with the original since 2026-10-13, [visual acceptance](visual-acceptance.md#live-scenes-2026-10-13))
 two Island NPCs, the Club's sitting guests and the dancers' animation.

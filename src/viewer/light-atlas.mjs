@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { frameProjection, FRAME_PROJECTION_KEY } from './frame-projection.mjs';
 
 /** Padded lightmap tiles share texture pages; sample bounds prevent atlas bleeding. */
 export class LightAtlas {
@@ -176,7 +177,7 @@ export function applyLightAtlas(material, page, enabled, gamma = { value: 1 }, m
   // been sealed by the time its program is built (the same texels, linear
   // filtered within one layer), otherwise the page texture.
   const layer = () => !array && page?.layers?.value ? page.layers : null;
-  material.customProgramCacheKey = () => `deus-ex-lightmap-v5:${mirror ? (mirror.opaque ? 'opaque' : 'composite') : ''}:${Boolean(modulated)}:${stride}:${layer() ? 'layer' : ''}`;
+  material.customProgramCacheKey = () => `deus-ex-lightmap-v5:${FRAME_PROJECTION_KEY}:${mirror ? (mirror.opaque ? 'opaque' : 'composite') : ''}:${Boolean(modulated)}:${stride}:${layer() ? 'layer' : ''}`;
   material.onBeforeCompile = shader => {
     const pageLayers = layer();
     shader.uniforms.deusLightAtlas = array ?? pageLayers ?? { value: page.texture };
@@ -220,6 +221,8 @@ export function applyLightAtlas(material, page, enabled, gamma = { value: 1 }, m
         gl_FragColor.rgb = floorColor + reflection * (1.0 - floorColor);`}
       }` : ''}
       ${displayRampGlsl('deusDisplayGamma', modulated)}`);
+    // The original's vertex projection (docs/frame-projection.md).
+    frameProjection.patch(shader);
   };
 }
 

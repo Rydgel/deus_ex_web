@@ -153,6 +153,12 @@ render-pass word (tables at `0x037f`), on the validator's own cases.
 
 ### Other render-pass routines
 
+(The vertex chain from view space to D3DDrv's vertex buffer, `0x10b14de2–0x10b14f20`,
+`0x10b10a53–0x10b10a96`, `0x10003c05–0x10003c41`, `0x10005822–0x10005869`, is in
+[frame projection](frame-projection.md): oracle `native-frame-projection-oracle.py`
+at **0x007f**, `validate-frame-projection`, binary32 per operation in
+`frame-projection.mjs`, the GLSL chain bit-equal on the GPU.)
+
 | Routine | Placement | Oracle (CW today) | Validator | Ports | At 0x007f |
 | --- | --- | --- | --- | --- | --- |
 | OccludeBsp `0x10b173d0`, ClipBspSurf, BoundVisible, span buffers | pass | occlusion oracle **0x007f** | validate-bsp-occlusion | occlude.rs (binary32) | done |
@@ -523,10 +529,11 @@ ulp) and the centre by up to 1.2e-5 pixel. The world is drawn with the same
 vertices and the same GPU arithmetic, so nothing moves visibly; what changes
 is that the projection is the frame's.
 
-**Not covered.** The GPU does the perspective divide and the viewport transform
-in float32, where the original projects each vertex on the x87 at 24 bits and
-D3D interpolates its screen-space vertices; the near plane (1) and far plane
-(65,536) are the host's, not the original's depth (D3DDrv's vertex z is `RZ *
-RProj.Z`, times the device's scale and plus its bias:
-`DrawGouraudPolygon 0x10005827-0x10005869`); the page's HUD and weapon view
-model take the camera as it is.
+**Not covered (superseded 2026-10-14).** The GPU did the perspective divide and
+the viewport transform in float32, where the original projects each vertex on
+the x87 at 24 bits, and the near and far planes (1, 65,536) were the host's,
+not the device's depth. [Frame projection](frame-projection.md) recovers
+D3DDrv's vertex (X, Y, depth `_33 * (1 - 1/Z)` over near 1, far 32767, RHW)
+and runs Render.dll's view transform and projection bit-exact in the vertex
+shader; the camera is posed from the frame's Coords (the rotator's exact angles
+differed from them by up to 0.3 pixel) and uses the device's depth range.

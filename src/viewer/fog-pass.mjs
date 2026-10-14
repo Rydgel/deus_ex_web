@@ -3,6 +3,7 @@ import { getAxes } from '../runtime/camera.mjs';
 import { movingLightConstants } from '../runtime/dynamic-lighting.mjs';
 import { coordsTransform, volumetricLight, fogMap, fogMapKernel } from '../runtime/volumetric-fog.mjs';
 import { displayRampGlsl } from './light-atlas.mjs';
+import { frameProjection, FRAME_PROJECTION_KEY } from './frame-projection.mjs';
 import { lightmapBasis } from '../unreal/lighting.mjs';
 import { toView } from '../unreal/geometry.mjs';
 
@@ -48,8 +49,13 @@ export function createFogPass({ lightAtlas, levelBrightness, hsv, displayGamma, 
     const m = new THREE.MeshBasicMaterial({ transparent: true, depthWrite: true, depthFunc: THREE.LessEqualDepth });
     m.blending = THREE.CustomBlending; m.blendSrc = THREE.OneFactor; m.blendDst = THREE.OneMinusSrcAlphaFactor;
     m.blendSrcAlpha = THREE.ZeroFactor; m.blendDstAlpha = THREE.OneFactor;
-    m.customProgramCacheKey = () => 'deus-ex-fog-v1';
+    // The overlay shares its surface's vertices and depth test (LESSEQUAL over
+    // the same plane), so it projects with the surface's chain: the camera's
+    // matrices would differ from it by a depth unit and z-fight
+    // (docs/frame-projection.md "Overlays").
+    m.customProgramCacheKey = () => `deus-ex-fog-v1:${FRAME_PROJECTION_KEY}`;
     m.onBeforeCompile = shader => {
+      frameProjection.patch(shader);
       shader.uniforms.deusFog = uniform; shader.uniforms.deusDisplayGamma = displayGamma;
       shader.vertexShader = shader.vertexShader.replace('#include <common>', `#include <common>
         attribute vec3 lightUV; attribute vec4 lightBounds; varying vec2 vDeusFogUV; varying vec4 vDeusFogBounds;`)
