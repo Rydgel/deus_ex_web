@@ -230,11 +230,14 @@ async function original() {
   const stand = [comp.Location[0] + Math.cos(facing) * front, comp.Location[1] + Math.sin(facing) * front, comp.Location[2]];
   // Fly to the computer's front: aim (ViewRotation), hold W through the input queue for the time the distance needs (about 800 units/s
   // after a quarter second of start-up), measure, repeat.
-  let still = 0, lastDistance = Infinity;
+  // The ghost coasts after a key is released: a tap of 70 ms moves it about 130 units, so it flies to within 140 units of the point
+  // (stopping when a hop no longer gets nearer) and the last of the way is walked.
+  let still = 0, lastDistance = Infinity, best = Infinity;
   for (let hop = 0; hop < 40; hop++) {
     const at = player('Location:0x114:f3').Location, d = stand.map((v, i) => v - at[i]), distance = Math.hypot(...d);
     console.log(`hop ${hop}: at ${at.map(v => v.toFixed(1))} distance ${distance.toFixed(1)}`);
-    if (distance < 14) break;
+    if (distance < 140 || (distance > best + 20 && best < 400)) break;
+    best = Math.min(best, distance);
     // A held key moves the ghost only while the game's window is the one Wine gives the input to (the compositor can tile it
     // again, a conversation can restrict the input): after two hops that moved nothing, place the window again and take the focus.
     still = Math.abs(lastDistance - distance) < 1 ? still + 1 : 0; lastDistance = distance;
@@ -244,10 +247,22 @@ async function original() {
       post(['focus', 'sleep 300']);
     }
     const [pitch, yaw] = aim(at, stand);
-    const hold = Math.max(70, Math.min(2400, Math.round((distance * 0.8 / 800) * 1000)));
+    const hold = Math.max(70, Math.min(2400, Math.round(((distance - 60) * 0.8 / 800) * 1000)));
     post([`cmd set DeusEx.JCDentonMale ViewRotation (Pitch=${pitch},Yaw=${yaw},Roll=0)`, 'sleep 450', `shold W ${hold}`, 'sleep 350']);
   }
   post(['cmd walk', 'sleep 2500']);
+  // Walking, JC stops when the key is released: the last of the way is walked in taps sized by the speed measured so far.
+  let speed = 200, blocked = 0;
+  for (let step = 0; step < 14; step++) {
+    const at = player('Location:0x114:f3').Location, d = [stand[0] - at[0], stand[1] - at[1]], distance = Math.hypot(...d);
+    console.log(`walk ${step}: at ${at.map(v => v.toFixed(1))} distance ${distance.toFixed(1)} speed ${speed.toFixed(0)}`);
+    if (distance < 12 || blocked >= 2) break;
+    const hold = Math.max(60, Math.min(900, Math.round(distance / speed * 1000 * 0.8)));
+    post([`cmd set DeusEx.JCDentonMale ViewRotation (Pitch=0,Yaw=${aim([0, 0, 0], [d[0], d[1], 0])[1]},Roll=0)`, 'sleep 500', `shold W ${hold}`, 'sleep 700']);
+    const after = player('Location:0x114:f3').Location, moved = Math.hypot(after[0] - at[0], after[1] - at[1]);
+    blocked = moved < 3 ? blocked + 1 : 0;
+    if (moved > 5) speed = Math.max(60, Math.min(400, moved / hold * 1000 * (0.5 + 0.5 * speed / Math.max(speed, 1))));
+  }
   const jc = player('Location:0x114:f3', 'Physics:0x30:u8', 'BaseEyeHeight:0x3f4:f');
   console.log(`walking at ${jc.Location.map(v => v.toFixed(2))} physics ${jc.Physics}`);
   let frobbed = null;
