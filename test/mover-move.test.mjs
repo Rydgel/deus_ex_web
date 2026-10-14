@@ -17,3 +17,9 @@ test('script rejection retains original mover pose and omits hash commit',()=>{
 test('unsupported passengers fail and tiny move does not query',()=>{
  const m=make();assert.equal(moveTranslatingMover(m,[0,0,.00009],{}),true);m.standingCount=1;assert.throws(()=>moveTranslatingMover(m,[1,0,0],{}),/based passengers/);
 });
+test('a blocking non-Pawn is pushed through the same moveSmooth as a Pawn (0x1039a577)',()=>{
+ const m=make(),deco={isPawn:false,collideWorld:true,lineage:['deusex.deusexdecoration']},log=[];
+ assert.equal(moveTranslatingMover(m,[1,2,3],{encroachmentCheck:()=>[deco],moveSmooth:(a,d)=>log.push({a,delta:d,pose:[...m.position]}),
+  dispatch:(a,event)=>{log.push(event);return false;},removeActor:()=>log.push('remove'),addActor:()=>log.push('add')}),true);
+ assert.deepEqual(log,[{a:deco,delta:[1,2,3],pose:[1,2,3]},{a:deco,delta:[-1,-2,-3],pose:[2,4,6]},'EncroachingOn','EncroachedBy','remove','add']);
+});

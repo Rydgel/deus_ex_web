@@ -31,9 +31,8 @@ node scripts/validate-native-mover-blocking.mjs --reuse
 node --test test/mover-blocking.test.mjs test/mover-move.test.mjs
 ```
 
-All six predicate/mover regression tests pass. The wrapper now skips nonblocking
-non-Pawn query candidates using this predicate. Blocking non-Pawn push remains
-an explicit unsupported branch because the composed mover push evidence is
-currently scoped to Pawn candidates. Original CheckEncroachment1039a512–1039a577
-can also push non-brush/non-Pawn targets; that further branch requires capture
-of its moveSmooth effects before extending this adapter.
+All six predicate/mover regression tests pass. The wrapper skips nonblocking
+non-Pawn query candidates using this predicate. Blocking non-Pawn candidates
+are pushed like Pawns: CheckEncroachment1039a512–1039a577 has no Pawn test
+before its `AActor::moveSmooth` call. That branch is captured and wired in
+[mover-push](mover-push.md) (108 original cases, the Paris club toilet grill).

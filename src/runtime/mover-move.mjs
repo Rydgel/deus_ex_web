@@ -25,12 +25,9 @@ export function moveTranslatingMover(mover,delta,{encroachmentCheck,moveSmooth,d
  const proposed=mover.position.map((v,i)=>f(f(v)+delta[i]));
  // CheckEncroachment(notify 0) for the brush source (check-encroachment.mjs):
  // the push, its re-query at the proposed pose and NewRotation, EncroachingOn
- // and EncroachedBy. Pushing a non-Pawn needs its own moveSmooth.
- if(checkMoverEncroachment(mover,proposed,newRotation,0,{worldActor:mover.worldActor,encroachmentCheck,dispatch,
-  moveSmooth:(actor,pushed)=>{
-   if(!actor.isPawn)throw Error('Unsupported blocking non-Pawn mover push');
-   return moveSmooth(actor,pushed);
-  }}))return false;
+ // and EncroachedBy. Every blocking non-Brush hit is pushed through its own
+ // moveSmooth (0x1039a577), Pawn or not; `moveSmooth` supplies that class's move.
+ if(checkMoverEncroachment(mover,proposed,newRotation,0,{worldActor:mover.worldActor,encroachmentCheck,dispatch,moveSmooth}))return false;
  // The original branches on current bCollideActors at each hash operation.
  if(mover.collideActors)removeActor(mover);
  mover.position=mover.position.map((v,i)=>f(f(v)+delta[i]));

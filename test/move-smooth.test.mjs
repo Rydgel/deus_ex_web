@@ -15,3 +15,13 @@ test('clear first move bypasses slide and event callbacks',()=>{
 test('zero slide progress still issues the original second MoveActor',()=>{
  let count=0;moveSmooth({rotation:[0,0,0]},[10,0,0],{moveActor:(a,d)=>{count++;if(count===1)return{result:false,time:0,normal:[1,0,0]};assert.deepEqual(d,[0,0,0]);return{result:true,time:1};}});assert.equal(count,2);
 });
+test('a second MoveActor that returns before writing Hit leaves the first hit for HitWall and TwoWallAdjust',()=>{
+ // 0x10399228: a sub-threshold Delta returns without touching the caller's FCheckResult,
+ // which moveSmooth shares between its MoveActor calls (a zero slide into a floor).
+ const actor={rotation:[0,0,0]},events=[],calls=[],responses=[{result:true,time:.25,normal:[0,0,1],actor:'floor'},{result:true,time:1,normal:[0,0,0],hitUntouched:true},{result:true,time:1}];
+ assert.equal(moveSmooth(actor,[0,0,-40],{moveActor:(a,d)=>{calls.push(d);return responses.shift();},dispatch:(a,e,args)=>events.push([e,args])}),true);
+ assert.deepEqual(events,[['HitWall',[[0,0,1],'floor']]]);assert.equal(calls.length,3);
+ // A MoveActor that writes Hit (the normal path) replaces it.
+ const written=[{result:true,time:.25,normal:[0,0,1],actor:'floor'},{result:true,time:1,normal:[0,0,0]}];
+ moveSmooth(actor,[0,0,-40],{moveActor:()=>written.shift(),dispatch:()=>assert.fail('Time 1 is a clear second move')});
+});
