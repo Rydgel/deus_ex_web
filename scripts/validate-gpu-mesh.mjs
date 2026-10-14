@@ -433,7 +433,9 @@ async function capture(page,{frames,device,tolerance,admission,lodViews}) {
         if(report.admission.behindFrame<0)continue;
         if(!focus&&v.npc.actors.some(actor=>actor.actor===player)){focus=player;report.admission.admittedFrame=frame;}
         if(focus){try{compare();}catch(error){report.errors.push(error.stack??String(error));}}
-        if(focus&&frame-report.admission.admittedFrame>=admission.frames)break;
+        // At least `frames` compared frames, then on until one of them compares the player mid-tween (when the conversation's
+        // animation change lands depends on the scene's timing: NPC collision moves it).
+        if(focus&&frame-report.admission.admittedFrame>=admission.frames&&report.admission.tweenCaptures>0)break;
       }
     }
     // Decisions Play made during the captured run (not the checks above).
