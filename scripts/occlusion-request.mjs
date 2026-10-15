@@ -42,15 +42,42 @@ export async function surfaceTextureFlags(assets, asset, model) {
   return flags;
 }
 
-/** The oracle request's `model`. */
-export function occlusionModelRequest(model, textureFlags) {
+/** Each surface's detail texture for the frame-projection oracle's detail pass (null without one): the detail texture's first
+ * mip size and its UScale and VScale words (UTexture::Lock's UScale at LOD 0 is Scale, as docs/decals.md measured), and the
+ * Pan words (0: Lock leaves the pan at zero, [docs/frame-projection.md] unverified). */
+export async function surfaceDetails(assets, asset, model) {
+  const cache = new Map(), details = [];
+  for (const surface of model.surfaces) {
+    if (!surface.texture) { details.push(null); continue; }
+    if (!cache.has(surface.texture)) {
+      const object = await assets.resolve(asset, surface.texture);
+      const values = readTexture(object.asset, object.index).values;
+      let detail = null;
+      if (values.DetailTexture) {
+        const target = await assets.resolve(object.asset, values.DetailTexture), texture = readTexture(target.asset, target.index);
+        const scale = bits(texture.values.DrawScale ?? texture.values.Scale ?? 1);
+        detail = { uSize: texture.mips[0].width, vSize: texture.mips[0].height, scaleBits: [scale, scale], panBits: [0, 0],
+          name: target.key };
+      }
+      cache.set(surface.texture, detail);
+    }
+    details.push(cache.get(surface.texture));
+  }
+  return details;
+}
+
+/** The oracle request's `model`. With `details` (surfaceDetails) each surface also carries its base point, texture axes and
+ * detail texture, and the model its vectors, for the facet the detail pass needs. */
+export function occlusionModelRequest(model, textureFlags, details = null) {
   const zoneActors = [...new Set(model.zones.map(z => z.actor).filter(a => a > 0))].map(index => ({ index }));
   return {
     nodes: model.nodes.map(n => ({ planeBits: n.plane.map(bits), zoneMask: n.zoneMask, vertexPool: n.vertexPool,
       surface: n.surface, back: n.back, front: n.front, coplanar: n.coplanar, collisionBound: n.collisionBound,
       renderBound: n.renderBound, zones: n.zones, vertexCount: n.vertexCount, flags: n.flags, leaves: n.leaves })),
     verts: model.vertices.map(v => [v.point, v.side]), pointBits: model.points.map(p => p.map(bits)),
-    surfs: model.surfaces.map((s, i) => ({ texture: i, flags: s.flags >>> 0 })),
+    surfs: model.surfaces.map((s, i) => ({ texture: i, flags: s.flags >>> 0,
+      ...(details ? { base: s.base, textureU: s.textureU, textureV: s.textureV, detail: details[i] } : {}) })),
+    ...(details ? { vectorBits: model.vectors.map(v => v.map(bits)) } : {}),
     textures: textureFlags.map(polyFlags => ({ polyFlags })),
     boundBits: model.renderBounds.map(b => [...b.min.map(bits), ...b.max.map(bits), b.valid ? 1 : 0]),
     zones: model.zones.map(z => ({ actor: z.actor })), zoneActors, rootOutside: model.rootOutside, numZones: model.zones.length,

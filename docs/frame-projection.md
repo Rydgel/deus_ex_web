@@ -714,13 +714,43 @@ Wine frame needs the poked capture.
   `100 * (D / Z - 1)` reaches 255), over a surface neutral grey (`0x808080` blended to the texture by that
   alpha), modulated into the frame with ZBIAS 15.
 
-**To do it:** an oracle case on `native-frame-projection-oracle.py` `draw_complex_surface` (surface `+0x18` a
-detail FTextureInfo with Pan, the vertex buffer read past the base pass) for the vertices and the clip; the
-port (CPU reference, then GLSL with the barrier); Play's pass (a second draw of the lit surfaces within D
-with the modulate blend, three layers, the alpha above); and the Render.dll gate above, the `DetailTextures`
-device field and the measurement in the running original (`--cw-probe` style breakpoint on `0x100048b9`) that
-this report did not make. Unverified until then; the visual-acceptance captures were taken with the original's
-shipped configuration and may already contain it.
+**The pass under Unicorn (2026-10-15).** `scripts/native-frame-projection-oracle.py` runs the unchanged `DrawComplexSurface`
+with `Surface + 0x18` set to a detail FTextureInfo (`case.detail`; each model surface's `detail` in the request:
+`occlusion-request.mjs surfaceDetails`: the first mip's size, UScale = VScale = the texture's `DrawScale` as
+[decals](decals.md) measured `UTexture::Lock` leaves it, Pan 0) over each draw list's saved polygons. What it feeds the
+pass comes from the original too:
+* the facet's MapCoords in view space: Render.dll DrawFrame's own origin block (`0x10b1aab7..0x10b1ab23`: the world
+  origin less the frame's origin, rotated by its axes) and Core's `FVector::TransformVectorBy` (`0x10119e40`) over the
+  frame's Coords for the texture axes (the x87 sequences are the original's, the oracle only supplies registers);
+* the stage values `SetTexture(0, DetailTexture)` leaves (`UIndex`, `VIndex`, `UScale`, `VScale`): its bin and stage
+  instructions (`0x10008e15..0x10008e97`, `0x10009405..0x100094b0`) over the info on a scratch device. They are
+  `UIndex = (USize < VSize)`, `VIndex = 1 - UIndex` (the longer side is always the first coordinate), and
+  `UScale = 1 / ((USize << shift) * Info.UScale)` (Play's detail textures are 128 x 128 or 256 x 256 with DrawScale
+  0.25 .. 0.5: 1/32 .. 1/128 per world unit; the layers then scale it by 1, 4.223, 17.83);
+* `SetBlending` (`0x10008270`) is the original's (not stubbed any more); the COM calls and `SetTexture` record their
+  arguments in order, `DrawPrimitiveVB` with the fan's vertices, the layer (`2 - [ebp-0x40]`) and the polygon's first
+  vertex (`[ebp-0x14]`).
+
+The recorded calls of a surface whose fans are drawn: `SetRenderState(ALPHABLENDENABLE=27, 1)`, `SRCBLEND=19 <- 9
+(DESTCOLOR)`, `DESTBLEND=20 <- 3 (SRCCOLOR)`, `ZWRITEENABLE=14 <- 0` (PF_Modulated: SetBlending(0x40)),
+`SetTextureStageState(0, COLOROP=1, 12 = BLENDDIFFUSEALPHA)`, `SetRenderState(ZBIAS=47, 15)`, `SetTexture(0, detail)`, the fans
+(layer by layer, polygon by polygon), then `COLOROP` back to the device's saved value (`+0xa00`) and `ZBIAS 0`. The
+pass does not restore `ZWRITEENABLE`: the next `SetBlending` does.
+
+`src/runtime/detail-pass.mjs` is the CPU reference, `scripts/validate-detail-pass.mjs` compares it with the oracle bit
+for bit: 84 cameras on Training's wall and Island's deck (8 to 400 units away), 462 draw-list entries with a detail
+texture, 658 polygons, 465 fans, 2,068 vertices of which 284 are the clip's; per layer, polygons wholly inside D,
+straddling it and outside all occur (layer 0: 287 / 79 / 292, layer 1: 29 / 46 / 583, layer 2: 10 / 14 / 634); the alpha ramp
+runs 1 to 255. Two details the instructions fixed that the hand-off had not: the clip vertex' Y multiplies as
+`(ScreenY * Z) * t` where X is `(t * ScreenX) * Z` (the stack order differs; found by the oracle at 2 ulps), and the
+raw texture coordinate sums `(dz*Uz + dy*Uy) + dx*Ux` (z first).
+
+**Still to do:** the Rust port from the saved polygons (`occlude.rs`), the page's draw (modulated blend, `BLENDDIFFUSEALPHA`
+over grey, `ZBIAS 15`), the switch for a device without the cap. **Unverified (inputs the oracle takes, not derives):**
+the detail texture's `Lock` (Pan 0, UScale = DrawScale, first mip) and the cache's size choice (the first mip within the
+device's maximum, shift 0); Render.dll's `esi < 2` LOD gate (`0x10b1a8f2`) is taken as always met for BSP surfaces; the facet
+Z axis and the light-map coordinates are not used by the pass and are zeros; the multitexture path (`UseMultitexture`,
+`this+0x9b4`) computes the same scratch values in its own loop (`0x10003d25..0x10003d4f`) but is not run.
 
 ## Unverified and open
 

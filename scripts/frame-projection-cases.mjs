@@ -8,7 +8,7 @@ import path from 'node:path';
 import { gameDirectory } from './game-directory.mjs';
 import { decodeMap } from '../src/unreal/map.mjs';
 import { AssetStore } from '../src/unreal/assets.mjs';
-import { bits, occlusionModelRequest, occlusionTangents, renderPassTangent, renderRectangle,
+import { bits, occlusionModelRequest, occlusionTangents, renderPassTangent, renderRectangle, surfaceDetails,
   surfaceTextureFlags as textureFlagsOf } from './occlusion-request.mjs';
 import { childFrameTangent } from '../src/runtime/bsp-occlusion.mjs';
 
@@ -44,7 +44,7 @@ function aim(eye, at, roll = 0) {
 
 /** A seeded camera sequence on a map, cameras aimed at mirror and sky
  * polygons when `aimed`. */
-export async function makeCases(mapName, { seed, count, aimed, views = [] }) {
+export async function makeCases(mapName, { seed, count, aimed, views = [], detail = false }) {
   const asset = await assets.get(mapName), map = decodeMap(asset.bytes), model = map.model;
   const textureFlags = await textureFlagsOf(assets, asset, model);
   let state = seed >>> 0;
@@ -76,7 +76,7 @@ export async function makeCases(mapName, { seed, count, aimed, views = [] }) {
     cases.push({ ...camera, width, height, fov });
   }
   cases.forEach((c, i) => Object.assign(c, { locationBits: c.location.map(bits), frameCounter: i, timeBits: bits(1 + i / 30),
-    children: aimed, d3d: true, sprites: [] }));
+    children: aimed, d3d: true, detail, sprites: [] }));
   cases.forEach((c, i) => { if (i % 3) c.render = renderRectangle(c.width, c.height, random, i % 3 === 1 ? 1 : 0.5); });
   const tangents = occlusionTangents();
   for (const c of cases) {
@@ -84,7 +84,7 @@ export async function makeCases(mapName, { seed, count, aimed, views = [] }) {
     tangents[hex64(argument)] = hex64(tangent);
     if (c.render) Object.assign(tangents, renderPassTangent(c.fov, c.render.width, 'validate-frame-projection'));
   }
-  return { model, cases, tangents, request: occlusionModelRequest(model, textureFlags) };
+  return { model, cases, tangents, request: occlusionModelRequest(model, textureFlags, detail ? await surfaceDetails(assets, asset, model) : null) };
 }
 
 export const run = request => JSON.parse(execFileSync(python, ['scripts/native-frame-projection-oracle.py'],
