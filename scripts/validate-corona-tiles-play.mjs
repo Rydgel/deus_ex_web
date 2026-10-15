@@ -164,6 +164,8 @@ try {
     await probe(first.i, false);
     const upright = h => h.topRed > 4 * h.topGreen && h.bottomGreen > 4 * h.bottomRed;
     assert.ok(upright(tileHalves), `${label}: the tile's first texture row is on top ${JSON.stringify(tileHalves)}`);
+    // The flat overlay (a pass without a frame: a camera window's) samples the same way up.
+    assert.ok(upright(flatHalves), `${label}: the flat overlay's first texture row is on top ${JSON.stringify(flatHalves)}`);
     await page.evaluate(() => { window.deusExViewer.spriteTiles(true); const pass = window.__deusCoronas.pass; pass.pool.forEach(m => { m.visible = m.__shown ?? m.visible; m.__shown = undefined; });
       pass.update = pass.keepUpdate; pass.keepUpdate = null; window.dispatchEvent(new Event('focus')); });
     summary.push(`${label}: ${state.coronas.length} coronas, ${measured} drawn alone, ${inside} inside the reference tile (${filled} fill over 30% of it, ${clipped} cross the frame's edge); `

@@ -306,8 +306,9 @@ D3DDrv's DrawTile run as original code.
 (`fpSpriteTile` is `fpSpriteIcon` and it; the barrier and correctly rounded divisions are the sprites'), used by
 `frameProjection.patchCorona`, the vertex stage of the corona pass's material (`corona-pass.mjs`), with `fpSpriteVertex`
 at Z 1.0 and the host's clip depth in the middle of the volume. `main.mjs` sets the master frame's projection around the
-pass, as for the first-person weapon; a camera window's pass has no frame and keeps the flat orthographic quad;
-`?spriteTiles=off` keeps it everywhere.
+pass, as for the first-person weapon; a camera window's pass has no frame and keeps the flat orthographic quad,
+which since the merge samples the texture the same way up (first row on top, `vMapUv` flipped as for the sprites'
+billboards); `?spriteTiles=off` keeps the quad everywhere.
 
 **Check.**
 - `validate-corona-tiles.mjs` (00_Training, 01_NYC_UNATCOIsland, 10_Paris_Club; 28 root frames, 18 of them on a render
@@ -328,6 +329,8 @@ pass, as for the first-person weapon; a camera window's pass has no frame and ke
   tile's centre and green 21,153 below, none reversed (the other views alike). **The flat overlay the page drew before drew
   every corona upside down** (the same probe: green above, red below), as the billboards drew the sprites: 16,173 of the
   corona's 18,644 lit pixels differ from the new tile (largest channel difference 31 of 255). The skin is not symmetric.
+  The flat quad now flips V as well, and the validator asserts its probe is upright too (the Ship fan numbers below
+  were measured with the old, upside-down quad).
 - Against the original (the Ship fan view fan2, [visual acceptance](visual-acceptance.md#light-effects-against-the-original-2026-10-14),
   the stored capture of the original at TimeSeconds 52.397, Play at 52.398, 1280x720, `?spriteTiles=off` for the flat
   overlay): whole frame mean absolute difference 3.71 (3.72 flat), edge recall .980 and precision .975 (.970 and .968), 0

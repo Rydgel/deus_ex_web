@@ -114,6 +114,10 @@ export const frameProjection = {
     shader.vertexShader = shader.vertexShader
       .replace('void main() {', `${frameProjectionGlsl()}\n${SPRITE_TILE_GLSL}\nuniform float uTileOn,uSpriteTiles;\nuniform vec4 uTileIcon,uTileB,uTileC;\nvoid main() {`)
       .replace('#include <project_vertex>', `#include <project_vertex>
+#ifdef USE_MAP
+	// A texture's first row is its top (D3DDrv draws V = 0 at the top of a tile); the plane has V = 1 there.
+	vMapUv.y = 1.0 - vMapUv.y;
+#endif
 	if ( uFpOn > 0.5 && uSpriteTiles > 0.5 && uTileOn > 0.5 ) {
 		vec4 tileRect, tileSrc;
 		if ( fpCanvasTile( uTileIcon, uTileB, uTileC, uFpRect.xy, tileRect, tileSrc ) ) {
