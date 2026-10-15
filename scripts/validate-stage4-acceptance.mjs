@@ -136,7 +136,9 @@ add('4.1.6', C1, '10_Paris_Club live', '22 actors, 600 ticks, then the dancers a
 add('4.1.7', C1, '06_HongKong_WanChai_Underworld live', '50 actors, 600 ticks, six dancers', 'O1',
   PILOT('06_HongKong_WanChai_Underworld'));
 add('4.1.8', C1, 'five campaign maps, 1,200 ticks', 'BatteryPark, Hotel, Market, Chateau and Area 51 Bunker: every actor equal', 'O1',
-  SWEEP({maps: ['02_NYC_BatteryPark', '02_NYC_Hotel', '06_HongKong_WanChai_Market', '10_Paris_Chateau', '15_Area51_Bunker']}));
+  // BatteryPark's first stored sweep trace (tag `sweep`) is a load whose population held a chance FlyGenerator Play's seeded load lacks (that sweep ran
+  // with --allow-missing generators); `sweep2` is a fresh original load with an exact population (docs/visual-acceptance.md "Battery Park").
+  SWEEP({maps: ['02_NYC_BatteryPark', '02_NYC_Hotel', '06_HongKong_WanChai_Market', '10_Paris_Chateau', '15_Area51_Bunker'], tags: {'02_NYC_BatteryPark': 'sweep2'}}));
 add('4.1.9', C1, '01_NYC_UNATCOIsland armed pawns', 'a pawn\'s third-person weapon: hand frame and Coords equal Render.dll, drawn in Play', 'O2',
   V('weapon-attach'), V('weapon-play'));
 missing('4.1.10', C1, 'Training first-person crowbar', 'the first-person weapon frame (view model, GPU camera passes) against the original',
@@ -469,7 +471,10 @@ const LIVE_BASES = [['original-trace', '.jsonl', 'link', true], ['original-trace
 function stageLive(map, tag, into = '.work/live-acceptance') {
   const s = tag ? `-${tag}` : '';
   const traceName = `original-trace${s}.jsonl`;
-  const sourceRoot = storeRoots.find(dir => existsSync(path.join(dir, 'live-acceptance', map, traceName)));
+  // the first root holding the trace and every required list (a root with a partial set, such as this checkout's own after an interrupted staging, is passed over)
+  const holdsAll = dir => LIVE_BASES.every(([base, ext, , required]) => !required || [`${base}${s}${ext}`, `${base}${ext}`].some(name => existsSync(path.join(dir, 'live-acceptance', map, name))));
+  const sourceRoot = storeRoots.find(dir => existsSync(path.join(dir, 'live-acceptance', map, traceName)) && holdsAll(dir))
+    ?? storeRoots.find(dir => existsSync(path.join(dir, 'live-acceptance', map, traceName)));
   if (!sourceRoot) return [`${map}/${traceName}`];
   const absent = [];
   const targetDir = path.join(root, into, map);
@@ -479,6 +484,9 @@ function stageLive(map, tag, into = '.work/live-acceptance') {
     const found = names.find(name => existsSync(path.join(sourceRoot, 'live-acceptance', map, name)));
     if (!found) { if (required) absent.push(`${map}/${names[0]}`); continue; }
     const from = path.join(sourceRoot, 'live-acceptance', map, found), to = path.join(targetDir, found);
+    // This checkout's own .work is the first store root: a second gate run finds its first run's staged files there, at the very path it stages
+    // to; unlinking the target would delete the source (a self-link, then ENOENT on the copies). What is already in place stays.
+    if (path.resolve(from) === path.resolve(to)) continue;
     try { unlinkSync(to); } catch { /* none yet */ }
     if (how === 'copy') copyFileSync(from, to); else symlinkSync(from, to);
     // the sweep's replay and compare read `watch-<tag>.json` / `population-<tag>.json` by the tag
@@ -530,22 +538,28 @@ async function judgeLive(task, add, fail, result) {
   return {...result, status: 'PASS', detail: `${map}${tag ? ` ${tag}` : ''}: ${actors.length} actors equal for ${report.ticks} ticks, clock and stream draws equal${frameNote}${flaky ? ` (the first run's ${flaky}; equal on the repeat)` : ''}`, flaky: Boolean(flaky)};
 }
 async function judgeSweep(task, add, fail, result) {
-  const {maps} = task.sweep;
+  const {maps, tags = {}} = task.sweep;
+  const tagOf = map => tags[map] ?? 'sweep';
   const fromDir = '.work/stage4-sweep-originals';
-  const absent = maps.flatMap(map => stageLive(map, 'sweep', fromDir));
+  const absent = maps.flatMap(map => stageLive(map, tagOf(map), fromDir));
   if (absent.length) return fail(`stored originals absent: ${absent.slice(0, 4).join(', ')}${absent.length > 4 ? ` +${absent.length - 4}` : ''}`, 'NO-ORIGINAL');
-  const outFile = '.work/live-acceptance/stage4-gate-sweep.json';
-  try { unlinkSync(path.join(root, outFile)); } catch { /* fresh */ }
-  const r = add(await exec(process.execPath, ['scripts/live-sweep.mjs', 'replay', '--from', path.join(root, fromDir), '--maps', maps.join(','), '--ticks', '1200', '--out', outFile, '--force'], {limitSeconds: 3000}));
-  if (r.killed || r.code !== 0) return fail(`replay: ${r.killed ?? tail(r.out)}`);
-  const data = readJson(path.join(root, outFile));
+  // live-sweep.mjs takes one --tag: one replay per tag, the maps' results are judged together
+  const byTag = new Map();
+  for (const map of maps) byTag.set(tagOf(map), [...(byTag.get(tagOf(map)) ?? []), map]);
   const problems = [];
   let watched = 0, equal = 0;
-  for (const map of maps) {
-    const e = data.maps?.[map];
-    if (!e || e.status !== 'ok') { problems.push(`${map}: ${e?.status ?? 'not replayed'} ${e?.reason ?? ''}`.trim()); continue; }
-    watched += e.watched; equal += e.equal;
-    if (e.equal !== e.watched) problems.push(`${map}: ${e.equal} of ${e.watched} actors equal (${e.diverging.slice(0, 3).map(d => `${d.actor}@${d.firstTick} ${d.field}`).join(', ')})`);
+  for (const [tag, tagged] of byTag) {
+    const outFile = `.work/live-acceptance/stage4-gate-sweep-${tag}.json`;
+    try { unlinkSync(path.join(root, outFile)); } catch { /* fresh */ }
+    const r = add(await exec(process.execPath, ['scripts/live-sweep.mjs', 'replay', '--from', path.join(root, fromDir), '--maps', tagged.join(','), '--tag', tag, '--ticks', '1200', '--out', outFile, '--force'], {limitSeconds: 3000}));
+    if (r.killed || r.code !== 0) return fail(`replay: ${r.killed ?? tail(r.out)}`);
+    const data = readJson(path.join(root, outFile));
+    for (const map of tagged) {
+      const e = data.maps?.[map];
+      if (!e || e.status !== 'ok') { problems.push(`${map}: ${e?.status ?? 'not replayed'} ${e?.reason ?? ''}`.trim()); continue; }
+      watched += e.watched; equal += e.equal;
+      if (e.equal !== e.watched) problems.push(`${map}: ${e.equal} of ${e.watched} actors equal (${e.diverging.slice(0, 3).map(d => `${d.actor}@${d.firstTick} ${d.field}`).join(', ')})`);
+    }
   }
   if (problems.length) return fail(problems.join(' | '));
   return {...result, status: 'PASS', detail: `${maps.length} maps, ${equal} of ${watched} actors equal over 1,200 ticks`};

@@ -614,8 +614,8 @@ async function play() {
     }
     if (!same()) console.log(`the player's animation is ${running}, the original's ${pose.Anim}: its flags are the former's`);
     // The original's pose, exactly (the frozen-phase history of the ghost differs: its landing, its Tread loop).
-    await page.evaluate(a => window.deusExViewer.viewProbe({location: a.Loc, rotation: a.VRot,
-      region: {zone: a.RegZone, iLeaf: a.RegLeaf, zoneNumber: a.RegNum}}), pose);
+    await page.evaluate(a => window.deusExViewer.viewProbe({location: a.Loc, rotation: a.VRot, rehash: a.rehash,
+      region: {zone: a.RegZone, iLeaf: a.RegLeaf, zoneNumber: a.RegNum}}), {...pose, rehash: flag('ghost-in-hash')});
     // --early-cmds: the console lines the original was typed in its frozen phase (a camera that follows an actor), run now through the same chain
     if (earlyCommands().length) console.log('early commands:', JSON.stringify((await page.evaluate(lines => window.deusExViewer.viewProbe({exec: lines}), earlyCommands())).output));
     const populationFile = [`population${suffix}.json`, 'population.json'].map(name => path.join(dir, name)).find(existsSync);

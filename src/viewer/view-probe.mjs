@@ -14,7 +14,7 @@ import { scriptGetStateName } from '../runtime/script-state-queries.mjs';
  * non-brush actor nothing else follows). `exec` runs further console
  * commands the same way, after the same bCheatsEnabled write (main.mjs
  * ?cheat=, e.g. DeusExPlayer.Summon). Returns the player's state. */
-export function viewProbe(game, { playersOnly = null, timeDilation = null, ghost = false, location = null, rotation = null, region = null, exec = [] } = {}) {
+export function viewProbe(game, { playersOnly = null, timeDilation = null, ghost = false, location = null, rotation = null, region = null, exec = [], rehash = false } = {}) {
   const runtime = game.doors.scriptRuntime.runtime, player = game.player.collisionActor;
   // `set LevelInfo bPlayersOnly True`, which the original capture types
   // before `open` so the new level's LevelInfo starts with it: written here
@@ -40,7 +40,9 @@ export function viewProbe(game, { playersOnly = null, timeDilation = null, ghost
     // it. A bare write of Location leaves the registered cells and location stale, so the player's first later move (a
     // SetRotation from UpdateRotation) fails its RemoveActor check ("Remove actor before changing its registered location").
     const move = () => runtime.writeNamed(player, 'Location', location.map(Math.fround));
-    if (game.player.actorRegistered) game.player.collision.queries.changeActor(player, move); else move();
+    // Only an actor that collides is in the hash: after `ghost` (SetCollision(false, false, false) removed it) the player stays out, as the
+    // original's ghost does; re-adding it made the ghost touchable (Battery Park's Anna touched it and stopped two ticks early).
+    if (game.player.actorRegistered && (rehash || runtime.readNamed(player, 'bCollideActors'))) game.player.collision.queries.changeActor(player, move); else move();
     runtime.writeNamed(player, 'Velocity', [0, 0, 0]);
   }
   if (rotation) runtime.writeNamed(player, 'ViewRotation', rotation.map(v => v | 0));
