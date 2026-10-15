@@ -1613,3 +1613,9 @@ node scripts/bench-sim.mjs --map 01_NYC_UNATCOIsland --bypass --continue --ticks
 Frame intervals depend on the display cadence; compare A/B runs on one machine,
 alternating builds. Play skips `game.tick` while `document.hidden`, so an
 interactive check needs a visible tab; the script's own Chromium page is visible.
+
+## Weapons: a share of the frame (2026-10-15)
+
+`scripts/weapon-cost.mjs` measures what one feature costs a drawn frame in the default worker mode: pairs of fresh pages of one view, interleaved, with and without it (`?weapons=off`, or any two
+query strings with `--on`/`--off`), the median over the pairs of every `framePhases` phase (the worker's `w.*` steps and the page's), and the layer's own time and the number of weapon records it made per frame
+(`lodProbe({list: 'weaponStats'})`). The pawns' third-person weapons are the first user: [weapon attachment, Cost](weapon-attachment.md#cost-2026-10-15).

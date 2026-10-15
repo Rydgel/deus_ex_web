@@ -1045,8 +1045,8 @@ export async function createActorMeshSim(runtime,assets,asset,{kernel,player:pla
     summary.triangles=actors.reduce((total,actor)=>total+actor.summary.triangles,0);
   };
   const retired=new WeakMap();
-  // The pawns' third-person weapons (actor-weapon-sim.mjs): bindings of their own on the CPU path, updated after
-  // their pawns, in the frames that draw the pawn.
+  // The pawns' third-person weapons (actor-weapon-sim.mjs): bindings of their own, lit in the frames that draw the pawn right after
+  // the pawn's own lighting there (weapons.interleave) and posed and drawn after the pawns (weapons.update).
   const weapons=createWeaponAttachments({runtime,bind:(actor,options)=>bind(actor,options),lighting,onCreate,onRelease,
     nextIndex:()=>synthetic++,errors,enabled:drawWeapons,mirrors:weaponMirrors,interleave:weaponOrder!=='late',
     // the weapons take the GPU path with the actors' layout unless ?weapons=cpu (the CPU path stays the reference and the fallback)

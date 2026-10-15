@@ -17,7 +17,8 @@
  * light's identity, location, radius, colour and fade, the ambient, the flags) and the weapon's colours: the result says whether any
  * word changed. Host check of Play's wiring against the order the disassembly gives, not a comparison of pixels.
  *
- *   node scripts/validate-weapon-order.mjs [--url http://127.0.0.1:5173] [--frames 120] [--angle gl] [--dump runs.json]
+ *   node scripts/validate-weapon-order.mjs [--url http://127.0.0.1:5173] [--frames 120] [--angle gl] [--dump runs.json] [--query weapons=cpu]
+ *   (the weapons take the GPU path by default, where their colours are the GPU's and not readable here: --query weapons=cpu compares the CPU path's corner colours too)
  */
 import assert from 'node:assert/strict';
 import {chromium} from '@playwright/test';
@@ -61,6 +62,7 @@ async function run(browser, order) {
     await page.clock.install({time: INSTALL});
     const target = new URL(base);
     for (const [key, value] of Object.entries({hold: '1', seed: '1', antialias: '0', ...(order === 'late' ? {weaponOrder: 'late'} : {})})) target.searchParams.set(key, value);
+    for (const [key, value] of new URLSearchParams(option('query', ''))) target.searchParams.set(key, value);
     await page.goto(target.href);
     await page.waitForFunction(() => window.deusExViewer?.status().ready, {}, {timeout: 240000});
     await page.evaluate(map => { const menu = document.getElementById('map'); menu.value = map; menu.dispatchEvent(new Event('change')); }, MAP);
@@ -145,8 +147,10 @@ assert.equal(JSON.stringify(runs.a.jc.map(s => s.colors)), JSON.stringify(runs.a
 const order = compare(frames.a, frames.late);
 const colours = JSON.stringify(runs.a.jc.map(s => s.colors)) === JSON.stringify(runs.late.jc.map(s => s.colors));
 const lights = frames.a.at(-1).calls.find(call => call.sink === pawnName && call.role === 'P' && call.where === 'main')?.setup ?? '{}';
+const haveColours = runs.a.jc.some(state => state.colors && (state.colors.main || Object.values(state.colors.children).some(Boolean)));
 console.log(JSON.stringify({frames: frames.a.length, twoFrameFrames: twoFrames.length, calls: order.calls, wordsChanged: order.differing.length, firstDifferences: order.differing.slice(0, 5),
-  weaponColoursEqual: colours, mainFrameLights: JSON.parse(lights).lights?.length ?? null}));
+  weaponColours: haveColours ? (colours ? 'equal' : 'differ') : 'not read (the weapon is on the GPU path)', mainFrameLights: JSON.parse(lights).lights?.length ?? null}));
+const tail = haveColours ? `weapon colours ${colours ? 'equal' : 'differ'}` : 'weapon colours not read on the GPU path';
 console.log(order.differing.length || !colours
-  ? `validate-weapon-order: PASS (the orders differ in ${order.differing.length} of ${order.calls} SetupForActor results, weapon colours ${colours ? 'equal' : 'differ'})`
-  : `validate-weapon-order: PASS (${order.calls} SetupForActor results over ${frames.a.length} frames, ${twoFrames.length} with the pawn in two frames: no word changed by the order, weapon colours equal)`);
+  ? `validate-weapon-order: PASS (the orders differ in ${order.differing.length} of ${order.calls} SetupForActor results, ${tail})`
+  : `validate-weapon-order: PASS (${order.calls} SetupForActor results over ${frames.a.length} frames, ${twoFrames.length} with the pawn in two frames: no word changed by the order, ${tail})`);
