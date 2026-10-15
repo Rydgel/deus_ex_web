@@ -84,7 +84,8 @@ export async function makeCases(mapName, { seed, count, aimed, views = [], detai
     tangents[hex64(argument)] = hex64(tangent);
     if (c.render) Object.assign(tangents, renderPassTangent(c.fov, c.render.width, 'validate-frame-projection'));
   }
-  return { model, cases, tangents, request: occlusionModelRequest(model, textureFlags, detail ? await surfaceDetails(assets, asset, model) : null) };
+  const details = detail ? await surfaceDetails(assets, asset, model) : null;
+  return { model, cases, tangents, details, request: occlusionModelRequest(model, textureFlags, details) };
 }
 
 export const run = request => JSON.parse(execFileSync(python, ['scripts/native-frame-projection-oracle.py'],
@@ -97,8 +98,8 @@ export const rectOf = c => c.render ? { width: c.render.width, height: c.render.
 /** The oracle's draw lists (main frame and child frames) for a seeded camera
  * sequence: `{ model, cases, results }`. */
 export async function bspOracle(mapName, options) {
-  const { model, cases, tangents, request } = await makeCases(mapName, options);
-  return { model, cases, results: run({ tangents, cases, model: request }).results };
+  const { model, cases, tangents, request, details } = await makeCases(mapName, options);
+  return { model, cases, details, results: run({ tangents, cases, model: request }).results };
 }
 
 /** The oracle's mesh vertices: camera-space points projected in each case's

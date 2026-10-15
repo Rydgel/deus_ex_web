@@ -11,31 +11,32 @@
  *
  *   node scripts/validate-detail-pass.mjs [map ...] */
 import assert from 'node:assert/strict';
-import { frameOfFields, depthConstants, wordFloat } from '../src/runtime/frame-projection.mjs';
-import { detailFans } from '../src/runtime/detail-pass.mjs';
+import { frameOfFields, depthConstants, wordFloat, floatWord } from '../src/runtime/frame-projection.mjs';
+import { detailFans, detailStage, facetOf } from '../src/runtime/detail-pass.mjs';
 import { available, bspOracle, rectOf } from './frame-projection-cases.mjs';
+import { detailJobs } from './detail-pass-cases.mjs';
 
 if (!available) {
   console.log('SKIP validate-detail-pass: no native probe environment');
   process.exit(0);
 }
 const only = new Set(process.argv.slice(2).filter(a => !a.startsWith('--')));
-const stats = { cases: 0, entries: 0, polys: 0, fans: 0, vertices: 0, clipVertices: 0, alphaMin: 255, alphaMax: 0, layers: [0, 1, 2].map(() => ({ inside: 0, straddle: 0, outside: 0 })) };
+const stats = { cases: 0, facets: 0, entries: 0, polys: 0, fans: 0, vertices: 0, clipVertices: 0, alphaMin: 255, alphaMax: 0, layers: [0, 1, 2].map(() => ({ inside: 0, straddle: 0, outside: 0 })) };
 
-/** Wall at Training's y = 1344 (UN_Wall_Green, DMetal_A detail), the Island pier's deck (un_dock_S, DWoodFine_A). */
-const jobs = [
-  ['00_Training', [[-736, 560], [-1100, 560]].flatMap(([x, z]) => [8, 18, 30, 55, 85, 120, 200, 400].flatMap(d =>
-    [0, 5000, -5000].map(yawOffset => ({ location: [x, 1344 - d, z], rotation: [0, 16384 + yawOffset, 0] }))))],
-  ['01_NYC_UNATCOIsland', [8, 20, 40, 70, 110, 200].flatMap(height => [0, 20000, 40000].flatMap(yaw =>
-    [-6000, -9000].map(pitch => ({ location: [-4761, 10431, -304 + height], rotation: [pitch + 65536, yaw, 0] }))))],
-];
 const f = wordFloat, word = v => v >>> 0;
 
-function checkEntry(entry, frame, depth, where) {
+function checkEntry(entry, frame, depth, where, model, details) {
   const d = entry.detail;
   assert.ok(d.calls.length > 0, `${where}: no calls recorded`);
   const facet = { origin: d.facet[0].map(f), u: d.facet[1].map(f), v: d.facet[2].map(f) };
   const stage = { uIndex: d.stage[0], vIndex: d.stage[1], uScale: f(d.stage[2]), vScale: f(d.stage[3]) };
+  // The facet and the stage as the port computes them (Render.dll's block + TransformVectorBy; SetTexture's bin and stage code).
+  const surface = model.surfaces[entry.iSurf], info = details[entry.iSurf];
+  const own = facetOf(frame, model.points[surface.base], model.vectors[surface.textureU], model.vectors[surface.textureV]);
+  for (const key of ['origin', 'u', 'v']) assert.deepEqual(own[key].map(v => word(floatWord(v))), d.facet[{ origin: 0, u: 1, v: 2 }[key]].map(word), `${where}: facet ${key}`);
+  const ownStage = detailStage(info.uSize, info.vSize, wordFloat(info.scaleBits[0]));
+  assert.deepEqual([ownStage.uIndex, ownStage.vIndex, word(floatWord(ownStage.uScale)), word(floatWord(ownStage.vScale))], d.stage.map(word), `${where}: stage values`);
+  stats.facets++;
   const polys = entry.polys.map(poly => poly.points.map(t => ({ x: f(t[0]), y: f(t[1]), z: f(t[2]), screenX: f(t[4]), screenY: f(t[5]), rz: f(t[7]) })));
   const expected = detailFans(frame, depth, facet, stage, [0, 0], polys);
   // The original's calls: the base pass, then (when a fan was drawn) the pass' state, its fans, the restore.
@@ -72,13 +73,13 @@ function checkEntry(entry, frame, depth, where) {
   stats.entries++;
 }
 
-for (const [map, views] of jobs) {
+for (const [map, views] of detailJobs) {
   if (only.size && !only.has(map)) continue;
-  const { cases, results } = await bspOracle(map, { seed: 1, count: 0, aimed: false, views, detail: true });
+  const { model, details, cases, results } = await bspOracle(map, { seed: 1, count: 0, aimed: false, views, detail: true });
   for (const [i, c] of cases.entries()) {
     const o = results[i], rect = rectOf(c);
     const frame = frameOfFields(o.frameBits, rect), depth = depthConstants(32);
-    for (const list of o.draw) for (const entry of list) if (entry.detail) checkEntry(entry, frame, depth, `${map} case ${i} (${c.location} ${c.rotation})`);
+    for (const list of o.draw) for (const entry of list) if (entry.detail) checkEntry(entry, frame, depth, `${map} case ${i} (${c.location} ${c.rotation})`, model, details);
     stats.cases++;
   }
   console.log(`${map}: ${cases.length} cameras`);

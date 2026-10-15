@@ -745,8 +745,25 @@ runs 1 to 255. Two details the instructions fixed that the hand-off had not: the
 `(ScreenY * Z) * t` where X is `(t * ScreenX) * Z` (the stack order differs; found by the oracle at 2 ulps), and the
 raw texture coordinate sums `(dz*Uz + dy*Uy) + dx*Ux` (z first).
 
-**Still to do:** the Rust port from the saved polygons (`occlude.rs`), the page's draw (modulated blend, `BLENDDIFFUSEALPHA`
-over grey, `ZBIAS 15`), the switch for a device without the cap. **Unverified (inputs the oracle takes, not derives):**
+**The Rust port (2026-10-15).** `native/script-vm/src/detail.rs` (`detail_run`, exposed as `kernel.occlusion.detailRun`)
+turns one frame's occlusion stream (OccludeBsp with saved points, option 0x100, as the decals read it), the frame's
+ComputeRenderSize fields, its rectangle offset, SetRes' `_33`/`_43` and a per-surface table (`detailTable` in
+`src/runtime/detail-pass.mjs`: a flag, the base point and the two texture axes in world coordinates, UIndex/VIndex, the
+UScale/VScale words and the Pan, 16 words a surface) into the fans: `[list, iNode, iSurf, fans]` per draw-list record that
+has any, then `[layer, first vertex, count, count x 7 words]`, the words D3DDrv's vertices carry (X, Y, depth, RHW, colour and
+the two at vertex + 0x14 / + 0x18). The facet's view-space coordinates and the stage values are computed from the table in
+the same operations as the oracle's (`facetOf`, `detailStage`; `validate-detail-pass` checks both on all 462 entries).
+`scripts/validate-detail-pass-rust.mjs` runs the Rust core's OccludeBsp and `detail_run` on the same 84 cameras and compares
+with the original under Unicorn: 265 draw-list records, 465 fans, 2,068 vertices, bit for bit, no fan more or less. The
+polygon scratch holds records of up to 256 polygons of up to 64 points (the shipped maps' largest are far below; a larger
+record is skipped, not truncated).
+
+**Still to do (Play):** the page's draw (modulated blend as recorded above, `BLENDDIFFUSEALPHA` over grey, `ZBIAS 15`), the
+sim side's call (the per-surface table from the map's textures, the frame's stream with points only for the polygons that
+can reach a layer, the fans in the snapshot), the switch for a device without the cap (`?detailTextures=0`), movers'
+surfaces (the tracker's, which the table does not cover).
+
+**Unverified (inputs the oracle takes, not derives):**
 the detail texture's `Lock` (Pan 0, UScale = DrawScale, first mip) and the cache's size choice (the first mip within the
 device's maximum, shift 0); Render.dll's `esi < 2` LOD gate (`0x10b1a8f2`) is taken as always met for BSP surfaces; the facet
 Z axis and the light-map coordinates are not used by the pass and are zeros; the multitexture path (`UseMultitexture`,

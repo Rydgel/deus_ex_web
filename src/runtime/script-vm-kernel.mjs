@@ -330,6 +330,11 @@ export function createScriptVmKernel(instance, memory) {
       childDebugPtr: typeof x.occ_child_debug_ptr !== 'function' ? null : () => x.occ_child_debug_ptr() >>> 0,
       // The host's SetupDynamics for each child frame (occ_frame_dynamics).
       setFrameHook,
+      // D3DDrv's detail-texture pass over one frame's occlusion stream (detail.rs, docs/frame-projection.md); null in a core
+      // that predates it.
+      detailRun: typeof x.detail_run !== 'function' ? null
+        : (fields, xb, yb, zbias, zscale, table, surfs, stream, words, out, cap) =>
+          x.detail_run(fields >>> 0, xb | 0, yb | 0, zbias >>> 0, zscale >>> 0, table >>> 0, surfs >>> 0, stream >>> 0, words >>> 0, out >>> 0, cap >>> 0) >>> 0,
       // FDynamicSprite::Setup (setup.rs) over packed candidates; null in a
       // core that predates it.
       setup: typeof x.occ_setup !== 'function' ? null

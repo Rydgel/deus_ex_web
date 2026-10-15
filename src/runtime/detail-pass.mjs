@@ -15,7 +15,7 @@
  * mixed by s and t on the clip vertex; UIndex and VIndex (SetTexture) say which of the two vertex slots takes U and V.
  *
  * Every operation is one `Math.fround` (the render pass runs at precision control 24: docs/render-pass-precision.md). */
-import { d3dVertex } from './frame-projection.mjs';
+import { d3dVertex, viewPoint } from './frame-projection.mjs';
 
 const f32 = Math.fround;
 const bitsOf = new Uint32Array(1), floatOf = new Float32Array(bitsOf.buffer);
@@ -41,6 +41,39 @@ export function rawUV(facet, [x, y, z]) {
   const dx = f32(x - facet.origin[0]), dy = f32(y - facet.origin[1]), dz = f32(z - facet.origin[2]);
   const dot = a => f32(f32(f32(dz * a[2]) + f32(dy * a[1])) + f32(dx * a[0]));
   return [dot(facet.u), dot(facet.v)];
+}
+
+/** The facet's MapCoords in the frame's view space as Render.dll DrawFrame makes them: the base point as ClipBspSurf
+ * transforms a model point (its origin block 0x10b1aab7 has the same operations), the texture axes through Core's
+ * FVector::TransformVectorBy (0x10119e40: ((x*A.x + y*A.y) + z*A.z) for each of the frame's axes A). */
+export function facetOf(frame, base, u, v) {
+  const axis = ([x, y, z]) => frame.axes.map(a => f32(f32(f32(x * a[0]) + f32(y * a[1])) + f32(z * a[2])));
+  return { origin: viewPoint(frame, base), u: axis(u), v: axis(v) };
+}
+
+/** What SetTexture(0, texture) leaves in stage 0 for a texture of `uSize` x `vSize` texels (its first mip, shift 0) and
+ * UScale = VScale = `scale` (D3DDrv 0x10008e15..0x10008e97): the longer side takes the first vertex coordinate, and the
+ * scales are 1 / (size * scale) as binary32. */
+export function detailStage(uSize, vSize, scale) {
+  const uIndex = uSize < vSize ? 1 : 0;
+  return { uIndex, vIndex: 1 - uIndex, uScale: f32(1 / f32(uSize * scale)), vScale: f32(1 / f32(vSize * scale)) };
+}
+
+/** The per-surface table the Rust pass reads (detail.rs): sixteen words a model surface, zero for a surface without a detail
+ * texture. `details[i]` is surfaceDetails' entry (scripts/occlusion-request.mjs: the first mip's size, the UScale words, the
+ * Pan words). */
+export const DETAIL_TABLE_WORDS = 16;
+export function detailTable(model, details) {
+  const table = new Uint32Array(DETAIL_TABLE_WORDS * model.surfaces.length);
+  model.surfaces.forEach((surface, i) => {
+    const d = details[i];
+    if (!d) return;
+    const stage = detailStage(d.uSize, d.vSize, wordFloat(d.scaleBits[0]));
+    table.set([1, ...model.points[surface.base].map(floatWord), ...model.vectors[surface.textureU].map(floatWord),
+      ...model.vectors[surface.textureV].map(floatWord), stage.uIndex, stage.vIndex, floatWord(stage.uScale), floatWord(stage.vScale),
+      d.panBits[0], d.panBits[1]], DETAIL_TABLE_WORDS * i);
+  });
+  return table;
 }
 
 /** The pass for one facet. `points` are the polygons' FTransform fields ({ x, y, z, screenX, screenY, rz } as floats),
