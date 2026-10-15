@@ -22,6 +22,12 @@
  *       which frame stamps an actor's LastRenderTime (Render.dll 0x10b25161): per stamp of a listed actor its name and the
  *       frame's Recursion, iSurf, Mirror and parent (the main frame has recursion 0, a mirror's child 1 or more)
  *
+ *   wine dx-live-win.exe weapon <seconds>
+ *       Render.dll's third-person weapon draw (docs/weapon-attachment.md): breakpoints at the Pawn.Weapon read in DrawActorSprite
+ *       (0x10b256a3), the special-triangle test in DrawLodMesh (0x10b0f212: the three special vertices, camera space), the store of
+ *       the hand coordinates (0x10b0f44d: the 12 floats) and the two DrawMesh calls that draw the weapon (0x10b257da) and its
+ *       muzzle flash (0x10b259c3: the FCoords built from the hand coordinates and the weapon's fields). One JSON line per hit
+ *
  *   wine dx-live-win.exe trace <config>
  *       attaches as a debugger and breaks at ULevel::Tick's entry (Engine.dll
  *       0x103a51a0) and return (0x103a5baf, `ret 8`) for the watched level,
@@ -948,9 +954,114 @@ static int do_stamps(int seconds, const char *names) {
   return 0;
 }
 
+/* weapon <seconds>: the original's third-person weapon draw, event by event (docs/weapon-attachment.md). */
+typedef struct { uintptr_t address; const char *site; } WeaponSite;
+static const WeaponSite weapon_sites[] = {
+  { 0x10b256a3u, "read" },     /* DrawActorSprite: mov ebx,[eax+0x3d0] (EAX = the pawn) */
+  { 0x10b0f212u, "special" },  /* DrawLodMesh: ESI, EDX, EDI = the three special vertices, camera space */
+  { 0x10b0f44du, "coords" },   /* DrawLodMesh: rep movsd of the hand coordinates (ESI) into 0x10b4ea08 */
+  { 0x10b257dau, "weapon" },   /* DrawActorSprite: call DrawMesh for the weapon (EBX; coords at [EBP-0xe8]) */
+  { 0x10b259c3u, "flash" },    /* the same call for the muzzle flash */
+};
+#define WEAPON_SITES ((int)(sizeof(weapon_sites) / sizeof(weapon_sites[0])))
+static void print_mem_words(const char *key, uintptr_t address, int count) {
+  printf(",\"%s\":[", key);
+  for (int i = 0; i < count; i++) printf("%s\"%08x\"", i ? "," : "", read_u32(address + i * 4));
+  printf("]");
+}
+static void weapon_event(const char *site, CONTEXT *ctx) {
+  uintptr_t ebp = ctx->Ebp;
+  printf("{\"t\":%lld,\"site\":\"%s\"", qpc_us(), site);
+  if (!strcmp(site, "read")) {
+    uintptr_t pawn = ctx->Eax, weapon = read_u32(pawn + 0x3d0), frame = read_u32(ebp + 8);
+    printf(",\"pawn\":\"%s\",\"weapon\":\"%s\",\"selected\":\"%s\"", object_name(pawn), object_name(weapon), object_name(read_u32(pawn + 0x3d8)));
+    if (weapon) printf(",\"thirdPersonMesh\":\"%s\",\"mesh\":\"%s\",\"flags39c\":\"%08x\",\"flash\":[%u,%u]", object_name(read_u32(weapon + 0x36c)), object_name(read_u32(weapon + 0x174)), read_u32(weapon + 0x39c), read_u32(weapon + 0x3a0) & 0xff, read_u32(weapon + 0x3a1) & 0xff);
+    if (frame) { float mirror = read_float(frame + 0x20); printf(",\"frame\":\"0x%x\",\"recursion\":%u,\"mirror\":%g", (unsigned)frame, read_u32(frame + 0x1c), mirror); }
+    printf(",\"hand\":%u", read_u32(0x10b4eb10));
+  } else if (!strcmp(site, "special")) {
+    uintptr_t verts[3] = { ctx->Esi, ctx->Edx, ctx->Edi }, mesh = ctx->Ebx, pawn = read_u32(ebp + 0xc), frame = read_u32(ebp + 8);
+    printf(",\"pawn\":\"%s\",\"mesh\":\"%s\",\"frame\":\"0x%x\",\"mirror\":%g", object_name(pawn), object_name(mesh), (unsigned)frame, read_float(frame + 0x20));
+    uintptr_t face = read_u32(mesh + 0x174); unsigned short idx[3] = { 0, 0, 0 }; read_mem(face, idx, 6);
+    printf(",\"indices\":[%u,%u,%u],\"specialVerts\":%u,\"modelVerts\":%u", idx[0], idx[1], idx[2], read_u32(mesh + 0x184), read_u32(mesh + 0x180));
+    for (int i = 0; i < 3; i++) { char key[8]; snprintf(key, sizeof(key), "v%d", i); print_mem_words(key, verts[i], 3); printf(",\"out%d\":%u", i, read_u32(verts[i] + 0xc) & 0xff); }
+  } else if (!strcmp(site, "coords")) {
+    printf(",\"pawn\":\"%s\"", object_name(read_u32(ebp + 0xc)));
+    print_mem_words("w", ctx->Esi, 12);
+  } else {
+    uintptr_t weapon = ctx->Ebx, pawn = read_u32(ebp - 0x18), frame = read_u32(ebp + 8), args = ctx->Esp;
+    printf(",\"pawn\":\"%s\",\"weapon\":\"%s\",\"mesh\":\"%s\",\"frame\":\"0x%x\",\"mirror\":%g", object_name(pawn), object_name(weapon), object_name(read_u32(weapon + 0x174)), (unsigned)frame, read_float(frame + 0x20));
+    print_mem_words("coords", ebp - 0xe8, 12);
+    print_mem_words("location", weapon + 0x114, 3); print_mem_words("rotation", weapon + 0x120, 3);
+    printf(",\"drawScale\":\"%08x\",\"scaleGlow\":\"%08x\",\"style\":%u,\"drawType\":%u,\"bits194\":\"%08x\",\"flags39c\":\"%08x\",\"fatness\":%u,\"polyFlags\":\"%08x\"",
+           read_u32(weapon + 0x17c), read_u32(weapon + 0x18c), read_u32(weapon + 0x165) & 0xff, read_u32(weapon + 0x164) & 0xff, read_u32(weapon + 0x194), read_u32(weapon + 0x39c), read_u32(weapon + 0x191) & 0xff, read_u32(args + 0x20));
+    printf(",\"span\":\"%08x\",\"zone\":\"%08x\",\"leaf\":\"%08x\",\"vol\":\"%08x\",\"pawnStyle\":%u,\"animSeq\":\"%s\",\"animFrame\":\"%08x\",\"texture\":\"%s\"",
+           read_u32(args + 0xc), read_u32(args + 0x10), read_u32(args + 0x18), read_u32(args + 0x1c), read_u32(pawn + 0x165) & 0xff, name_text(read_u32(weapon + 0x54)), read_u32(weapon + 0x58), object_name(read_u32(weapon + 0x16c)));
+  }
+  printf("}\n"); fflush(stdout);
+}
+static int do_weapon(int seconds) {
+  QueryPerformanceFrequency(&qpf);
+  pid = find_pid("DeusEx.exe");
+  if (!pid) { fprintf(stderr, "DeusEx.exe not running\n"); return 1; }
+  process = OpenProcess(PROCESS_ALL_ACCESS, FALSE, pid);
+  core_base = module_base("Core.dll");
+  uintptr_t render = module_base("Render.dll");
+  if (!process || !core_base || render != 0x10b00000u) { fprintf(stderr, "cannot read DeusEx.exe or Render.dll is at 0x%lx\n", (unsigned long)render); return 1; }
+  names_table = read_u32(core_base + OFF_NAMES_DATA);
+  if (!DebugActiveProcess(pid)) { fprintf(stderr, "DebugActiveProcess failed (%lu)\n", GetLastError()); return 1; }
+  DebugSetProcessKillOnExit(FALSE);
+  Breakpoint bps[WEAPON_SITES];
+  for (int i = 0; i < WEAPON_SITES; i++) bp_arm(&bps[i], weapon_sites[i].address);
+  DWORD pending_tid = 0; int pending = -1;
+  ULONGLONG until = GetTickCount64() + (ULONGLONG)seconds * 1000;
+  long hits[WEAPON_SITES] = { 0 };
+  DEBUG_EVENT ev;
+  while (GetTickCount64() < until) {
+    if (!WaitForDebugEvent(&ev, 100)) continue;
+    DWORD status = DBG_CONTINUE;
+    if (ev.dwDebugEventCode == EXCEPTION_DEBUG_EVENT) {
+      DWORD code = ev.u.Exception.ExceptionRecord.ExceptionCode;
+      uintptr_t where = (uintptr_t)ev.u.Exception.ExceptionRecord.ExceptionAddress;
+      HANDLE th = thread_of(ev.dwThreadId);
+      int which = -1;
+      for (int i = 0; i < WEAPON_SITES; i++) if (where == weapon_sites[i].address) which = i;
+      if (code == EXCEPTION_BREAKPOINT && which >= 0 && th) {
+        CONTEXT ctx; ctx.ContextFlags = CONTEXT_CONTROL | CONTEXT_INTEGER; GetThreadContext(th, &ctx);
+        hits[which]++;
+        weapon_event(weapon_sites[which].site, &ctx);
+        ctx.Eip = (DWORD)where; ctx.EFlags |= 0x100; SetThreadContext(th, &ctx);
+        write_mem(bps[which].address, &bps[which].original, 1); FlushInstructionCache(process, (LPCVOID)bps[which].address, 1);
+        pending = which; pending_tid = ev.dwThreadId;
+      } else if (code == EXCEPTION_SINGLE_STEP && pending >= 0 && ev.dwThreadId == pending_tid) {
+        unsigned char cc = 0xCC; write_mem(bps[pending].address, &cc, 1); FlushInstructionCache(process, (LPCVOID)bps[pending].address, 1); pending = -1;
+      } else if (code == EXCEPTION_BREAKPOINT || code == EXCEPTION_SINGLE_STEP) {
+      } else status = DBG_EXCEPTION_NOT_HANDLED;
+    } else if (ev.dwDebugEventCode == CREATE_PROCESS_DEBUG_EVENT && ev.u.CreateProcessInfo.hFile) CloseHandle(ev.u.CreateProcessInfo.hFile);
+    else if (ev.dwDebugEventCode == LOAD_DLL_DEBUG_EVENT && ev.u.LoadDll.hFile) CloseHandle(ev.u.LoadDll.hFile);
+    ContinueDebugEvent(ev.dwProcessId, ev.dwThreadId, status);
+  }
+  for (int i = 0; i < WEAPON_SITES; i++) bp_disarm(&bps[i]);
+  int quiet = 0;
+  while (quiet < 3) {
+    if (!WaitForDebugEvent(&ev, 40)) { quiet++; continue; }
+    quiet = 0; DWORD status = DBG_CONTINUE;
+    if (ev.dwDebugEventCode == EXCEPTION_DEBUG_EVENT) {
+      DWORD code = ev.u.Exception.ExceptionRecord.ExceptionCode; uintptr_t where = (uintptr_t)ev.u.Exception.ExceptionRecord.ExceptionAddress; HANDLE th = thread_of(ev.dwThreadId);
+      int ours = 0; for (int i = 0; i < WEAPON_SITES; i++) if (where == weapon_sites[i].address) ours = 1;
+      if (code == EXCEPTION_BREAKPOINT && ours && th) { CONTEXT ctx; ctx.ContextFlags = CONTEXT_CONTROL; GetThreadContext(th, &ctx); ctx.Eip = (DWORD)where; SetThreadContext(th, &ctx); }
+      else if (code != EXCEPTION_BREAKPOINT && code != EXCEPTION_SINGLE_STEP) status = DBG_EXCEPTION_NOT_HANDLED;
+    }
+    ContinueDebugEvent(ev.dwProcessId, ev.dwThreadId, status);
+  }
+  DebugActiveProcessStop(pid);
+  for (int i = 0; i < WEAPON_SITES; i++) fprintf(stderr, "%s: %ld\n", weapon_sites[i].site, hits[i]);
+  return 0;
+}
+
 int main(int argc, char **argv) {
   if (argc < 2) { fprintf(stderr, "usage: dx-live-win.exe rng [count] [interval_ms] | trace <config>\n"); return 2; }
   if (!strcmp(argv[1], "trace")) return argc > 2 ? do_trace(argv[2]) : 2;
+  if (!strcmp(argv[1], "weapon")) return argc > 2 ? do_weapon(atoi(argv[2])) : 2;
   if (!strcmp(argv[1], "stamps")) return argc > 3 ? do_stamps(atoi(argv[2]), argv[3]) : 2;
   if (!strcmp(argv[1], "list")) { QueryPerformanceFrequency(&qpf); return argc > 2 ? do_list(argv[2]) : 2; }
   QueryPerformanceFrequency(&qpf);
