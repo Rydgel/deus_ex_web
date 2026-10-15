@@ -288,16 +288,106 @@ LT_Pulse phase alone.
    - *Ocean Lab y2's 36 outlier blocks drop to 2.*
 
    `compare` reports this offset per view (`subpixel`).
-2. *The darkest pixels.* A shadowed pipe in Ocean Lab y2
-   (`SubBase.Metal.SB_PipeSec_B`) is raw (1,1,1) over a 200×200 patch in
-   the original.
-   - Before the pixel-centre fix, Play's capture was (0,0,0) there. After
-     it, Play gives 1 over most of the patch, and 0 only on the texture's
-     darkest texels, a few hundred pixels.
-   - Over five views, original raw 1 maps to Play 0 for 6,939 pixels and
-     to 1 or more for 733,665. Original 0 maps to Play 1 or more for
-     18,738 pixels and to 0 for 334,999.
-   - Rounding at the bottom of the range, in both directions; not traced.
+2. *The darkest pixels (2026-10-15: not a rounding difference).* The first reading was a shadowed pipe in Ocean Lab y2
+   (`SubBase.Metal.SB_PipeSec_B`) at raw (1,1,1) over a 200×200 patch in the original and 0 or 1 in Play, and, over five views, original
+   raw 1 against Play 0 for 6,939 pixels (and 0 against 1 or more for 18,738). Traced, those counts are the Shot ramp of the 0.6 captures and
+   animated lights' states; where neither applies the two programs round alike at the bottom of the range:
+   [The darkest pixels](#the-darkest-pixels-2026-10-15-not-a-rounding-difference).
+
+### The darkest pixels (2026-10-15, not a rounding difference)
+
+What the first reading never isolated is where the original's and Play's values at 0 and 1 come from. D3DDrv's own path to a pixel is traced in
+[texture sampling](texture-sampling.md#texture-formats-uploads-and-stage-operations-d3ddrvdll-2026-10-15): 8888 textures (measured in the running
+original), the light map's RGBA7 bytes stored as `2b` by the upload's shift, stages 0 and 1 both `MODULATE`, and no rounding between the stored byte
+and the framebuffer's one conversion. Play multiplies `texel x lightmap(b/255) x 2`: the same product. What is left to compare is the frames, with
+the two things that moved the old counts taken out.
+
+**1. The 0.6 captures are not the framebuffer.** The counts compared Play's raw frame with Shots at Brightness 0.6. A Shot is a fixed monotone
+function of the framebuffer. Against the Brightness 2/3 capture (where Shot is the framebuffer, [Security cameras](#security-cameras-2026-10-14)
+item 6), on the five Ocean Lab views' pixels that stay the same in six Play runs and agree with it (4.4 million samples of framebuffer 0 to 11), the 0.6
+Shot of framebuffer 0, 1, 2, ... 11 is 0, 1, 1, 2, 3, 3, 4, 5, 5, 6, 7, 8, which is `round(255 (fb/255)^1.11)` with 1.11 = 1/(1.5 x 0.6). Two framebuffer
+values share the Shot value 1, so a raw 1 in a 0.6 frame is not a framebuffer 1, and counting it against Play's raw 0 or 1 does not compare roundings.
+(This ramp is also the "uniform 1.13 to 1.41 raw gap" of the 0.6 frames on dark scenes; Play's ramp is untouched.)
+
+**2. Animated lights.** The pipe patch sits under an animated light. Seven Shots of Ocean Lab y2 from one running original at one held level time
+(Brightness 2/3, level time 54.6626) show the patch at 1 (85 to 89% of its samples) in three captures and at 0 (89%) in four: mean 2.13, 2.10, 2.15
+against 1.22 (the stored capture, at 55.268, shows the same 1.22). Play shows the same two states, a frame count apart: patch mean 2.104 with 85.0%
+ones against the original's 2.103 with 85.0%, and 1.218 with 89.1% zeros in both. In the matching state the whole frame is identical: Play at the
+original's own time (offset -0.6056) against the original's four 'off' captures, **99.986% of all 2.76 million samples equal**; against the three 'on'
+captures 91 to 98% (other noise lights are in other states). The moving pixels coincide: 331,873 pixels change between the original's seven captures,
+325,866 between Play's four states, 325,862 in both (all but four of Play's). The animation is the one the lighting notes describe: the noise tables take
+256 fresh draws every frame, and Pulse, the wavers and Flicker follow the level time ([static lighting](static-lighting.md#light-animation)); how many
+frames ran before a shot decides the state, in both programs, and Flicker's table entry is a host key in Play (the actor's address in the original). Ocean Lab
+y0's mean, for one, takes 7.09 in eight of 12 Play states and 9.2 to 9.7 in the other four; the original's 8.88 is another state of that family.
+
+**The comparison.** `visual-acceptance.mjs play` takes `--settle-frames n` (frames drawn after the camera is placed: another count, another noise
+state) and `--time-offset s` (hold the level at the original's time plus s: another phase). `scripts/dark-pixels.mjs` calls a pixel *steady* when six states
+(frame counts 45, 52, 61 at the original's time; offsets +0.37, +0.93, +1.61 s) agree in all three channels, and compares only those with the original's
+Brightness 2/3 frame: the 20 stored main views (4 maps x 5), `--query antialias=0`, no detail textures. A seventh state changed Ocean Lab's steady share
+by less than 0.001 percentage points.
+
+| Map | steady share | steady, identical | steady mean abs. diff. | mismatches, flat / edge pixels |
+| --- | ---: | ---: | ---: | ---: |
+| 10_Paris_Club | 100% | 99.995% | 0.00005 | 645 / 2 |
+| 01_NYC_UNATCOIsland | 77.6% | 99.611% | 0.0052 | 31,683 / 10,070 |
+| 02_NYC_BatteryPark | 96.1% | 99.229% | 0.0115 | 78,161 / 24,243 |
+| 14_OceanLab_Lab | 42.6% | 98.718% | 0.0259 | 71,023 / 4,421 |
+| all 20 views | 79.1% | **99.496%** | 0.0083 | 181,512 / 38,736 |
+
+Over the 43.7 million steady samples, the original's value (rows) against Play's (columns), for 0 to 5:
+
+| original \ Play | 0 | 1 | 2 | 3 | 4 | 5 |
+| ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| 0 | 9,818,495 | 7,494 | 526 | 165 | 148 | 51 |
+| 1 | 4,618 | 4,363,773 | 2,800 | 32 | 12 | 4 |
+| 2 | 26 | 3,108 | 3,276,980 | 2,450 | 32 | 26 |
+| 3 | 30 | 11 | 3,134 | 3,589,012 | 2,326 | 24 |
+| 4 | 26 | 7 | 17 | 2,918 | 3,223,734 | 2,431 |
+| 5 | 21 | 14 | 14 | 27 | 2,812 | 2,833,623 |
+
+The bottom of the range is not special: 0 against 1 or 1 against 0 is 0.085% of the samples at those two values, the same as 1 against 2 (0.077%) and
+4 against 5 (0.086%), in both directions. Paris Club, a dark scene with no animated light, is identical to 99.995% over 13.8 million samples.
+
+**Inputs, and which combinations round differently.** With `?lightDebug=base`, `light32` and `world` (Play's frames of the same views: the base texel b,
+the light-map sample l times 32, and white wherever the light-map shader drew; `src/viewer/light-atlas.mjs`, which generates its shader text as before
+when the switch is unset) each steady sample has its inputs and the ideal product `x = b x 2 x l / 255`. Over the 15.2 million samples with a light map
+under 8 bytes and `x` below 4, 19,559 (0.129%) differ. By `x`, the share that differs:
+
+| x, the tenth of its fraction | .0 | .1 | .2 | .3 | .4 | .5 | .6 | .7 | .8 | .9 |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| output 0 (`x` in [0, 1)) | 0.004% | 0.17% | 0.26% | 0.31% | 0.65% | 0.85% | 0.22% | 0.10% | 0.09% | 0.13% |
+| output 1 (`x` in [1, 2)) | 0.26% | 0.40% | 0.52% | 0.45% | 0.34% | 0.25% | 0.15% | 0.12% | 0.14% | 0.12% |
+
+The rate peaks next to the rounding boundary (x.5) and falls away from it, and its direction is the one a hair flips it: below x.5 the original is the
+brighter of the two in 59% of the mismatches (tenth .4), above it in 25% (tenth .5); it is 0.004% where the product is under 0.1. **Where both inputs are
+constant over the pixel's 3 x 3 neighbourhood, so that neither filter blends anything, 1 sample of 4,058,127 differs** (3,984,344 of them at output 0,
+16,204 at 1, 34,716 at 2, 22,863 at 3: zero, zero, one, zero). So the conversion of a given texel and light-map byte to a framebuffer value is the same in
+the two programs, at the bottom of the range and above. The remaining +-1 sits where the texel or the light map is filtered: bilinear weights are
+fixed-point in a GPU's sampler, the interpolated coordinates differ by a hair between wined3d's and the browser's shader, and a hair flips a value at a
+rounding boundary. (World-shader samples as a whole, unlit surfaces included: Paris Club 74 of 3.44 million, Ocean Lab 1,458 of 5.59 million, BatteryPark
+17,412 of 11.62 million, Island 29,055 of 10.51 million; the Island's are mostly its sky and water.)
+
+**What else differs in steady pixels**, outside the light-map product (172,250 of 12.5 million samples; not rounding):
+- *Surfaces the light-map shader did not draw*: actor meshes, and the sky, water and other unlit surfaces. Ocean Lab y1's lower left is one smooth,
+  reflective-looking surface (not identified; the actor meshes are another task's) where Play is brighter by 0.93 on average (19.0 against 18.1 over
+  131,559 steady samples; 47% of them higher by 1 or more, 0.5% lower, 8,797 by 4 or more): an open difference of that surface, not of the light-map
+  product. The Island's skyline and water and a mesh patch in BatteryPark y2 are the others.
+- *Polygon edges*: 38,736 samples with a step of 8 or more in the 3 x 3 neighbourhood.
+- The animated-light pixels themselves (20.9% of the samples): a different state in each program, compared in no table above.
+
+**Decision.** Nothing to port: neither D3DDrv nor Render.dll rounds in a way Play lacks, and the display ramp and brightness are untouched. The item closes
+as (1) the 0.6 Shot ramp and (2) animated lights' states, plus a residual +-1 at filtered texels that is the host GPU's sampler and interpolation
+arithmetic (Play's WebGL against wined3d's GL), which the original's code cannot decide. The table of main views at Brightness 2/3 below is one noise
+state per view: its mean absolute differences belong to those states (Ocean Lab's frames of the present runs come out at y0 1.8, y1 0.74, y2 0.001 to 0.31,
+y3 0.0003 to 0.73 and down 0.45 in different states, against the table's 0.25, 0.32, 0.001, 0.000 and 0.31).
+
+Reproduce (the original's Brightness 2/3 frames: `scripts/original-views-b.sh <maps> --brightness 0.666667`; each Play state copied to
+`<view>-<tag>.png` in `.work/acceptance/<map>/`, the `lightDebug` captures likewise):
+
+```bash
+node scripts/visual-acceptance.mjs play --maps M --query antialias=0 --settle-frames 52 --time-offset 0.37    # one state; add lightDebug=base|light32|world
+node scripts/dark-pixels.mjs --maps M --states r45,r52,r61,t037,t093,t161 --base-tag lbase --light-tag llight --world-tag lworld
+```
 
 ### The player's reflection in a mirror (2026-10-08, fixed: per-frame lighting)
 
@@ -456,7 +546,8 @@ change every frame, match at the held phase.
   capture reads: mean absolute difference 3.71, edge recall .980 and precision .975, 0 outlier blocks (the flat overlay, upside
   down, on the same code: 3.72, .970 / .968, 0).
 - *Garage garage2.* The 2 outlier blocks are on the ceiling's bright white strip lights; the red and blue ceiling panels differ by the
-  darkest-pixel rounding (raw 1.9 against 2.9 on the red panel, a crop at ratio 1.38).
+  0.6 Shot ramp and a noise state, not by rounding (raw 1.9 against 2.9 on the red panel, a crop at ratio 1.38;
+  [The darkest pixels](#the-darkest-pixels-2026-10-15-not-a-rounding-difference)).
 - *Class 0 spot, Cylinder and NonIncidence bodies.* A static light's body runs once, into the cached static map, when a surface is first
   drawn, so a probe that attaches after the camera moved sees no call; `--cw-probe-early` attaches before it moves. Then the street's
   spot (8 calls) and Cylinder (6) bodies and Training's corridor views (trainA, trainB: `-100,840,30` and `1200,840,30` looking down +x, the six NonIncidence
@@ -1481,7 +1572,8 @@ The 20 stored main views (4 maps x 5) were retaken in the original at Brightness
 | mip state and display-space filtering (the default) | 1.0026 | 0.975 to 1.032, 17 of 20 at 1.000 | 0.065 |
 
 Per view (mean of the three channels over 0..255, Play's mean over the original's in brackets, and the mean absolute difference from the
-original's frame):
+original's frame; each row is one noise state of the view's animated lights, and a view with such lights reads differently in another state:
+[The darkest pixels](#the-darkest-pixels-2026-10-15-not-a-rounding-difference)):
 
 | map, view | original mean | master: mean (ratio) MAD | mip state: mean (ratio) MAD | mip state and display-space filtering: mean (ratio) MAD |
 | --- | ---: | ---: | ---: | ---: |
@@ -1589,8 +1681,10 @@ node scripts/camera-acceptance.mjs compare --map 14_OceanLab_Lab --name cs1 --su
   ([Security cameras](#security-cameras-2026-10-14), item 6): Shot bakes a ramp
   of the Brightness setting into its bitmap; at Brightness 2/3 it is the framebuffer
   and Play's identity-ramp frames agree to 1% in the camera windows. Play's ramp was not touched.
-- Rounding of the darkest values, at the level of single raw steps
-  (item 2 above).
+- The darkest values are closed as a finding, not a rounding rule ([The darkest pixels](#the-darkest-pixels-2026-10-15-not-a-rounding-difference)):
+  the residual is +-1 at filtered texels (0.129% of the light-map samples), the host GPU's. Open there: the steady differences of the surfaces the
+  light-map shader does not draw (Ocean Lab y1's reflective-looking surface at +0.93, the Island's skyline and water, a mesh patch in BatteryPark y2), and
+  the animated-light pixels, whose states the two programs do not share.
 - The frozen captures stand at the map's frame-0 pose; live behaviour is
   compared per tick in [Live scenes](#live-scenes-2026-10-13), where the
   Club's dancers in view (stasis) and a frame with pawns close in view are still open.

@@ -2,6 +2,10 @@ import * as THREE from 'three';
 import { frameProjection, FRAME_PROJECTION_KEY } from './frame-projection.mjs';
 import { REENCODE_GLSL } from './original-sampling.mjs';
 
+/** `?lightDebug=` (validation only, docs/visual-acceptance.md "The darkest pixels"): captures of what the world shader multiplies. `base` leaves the
+ * base texel unmodulated, `light32` writes the light-map sample times 32 (white where a surface has no light map, and saturated above 8 bytes), `world`
+ * writes white for every fragment this shader draws. Unset, the generated shader is the one it always was. */
+const LIGHT_DEBUG = typeof location !== 'undefined' ? new URLSearchParams(location.search).get('lightDebug') : null;
 /** Padded lightmap tiles share texture pages; sample bounds prevent atlas bleeding. */
 export class LightAtlas {
   constructor(size = 1024) {
@@ -180,7 +184,7 @@ export function applyLightAtlas(material, page, enabled, gamma = { value: 1 }, m
   // been sealed by the time its program is built (the same texels, linear
   // filtered within one layer), otherwise the page texture.
   const layer = () => !array && page?.layers?.value ? page.layers : null;
-  material.customProgramCacheKey = () => `deus-ex-lightmap-v5:${FRAME_PROJECTION_KEY}:${mirror ? (mirror.opaque ? 'opaque' : 'composite') : ''}:${Boolean(modulated)}:${stride}:${layer() ? 'layer' : ''}${tracked ? ':tracked' : ''}`;
+  material.customProgramCacheKey = () => `deus-ex-lightmap-v5:${LIGHT_DEBUG ? `${LIGHT_DEBUG}:` : ''}${FRAME_PROJECTION_KEY}:${mirror ? (mirror.opaque ? 'opaque' : 'composite') : ''}:${Boolean(modulated)}:${stride}:${layer() ? 'layer' : ''}${tracked ? ':tracked' : ''}`;
   material.onBeforeCompile = shader => {
     const pageLayers = layer();
     shader.uniforms.deusLightAtlas = array ?? pageLayers ?? { value: page.texture };
@@ -199,6 +203,10 @@ export function applyLightAtlas(material, page, enabled, gamma = { value: 1 }, m
       varying vec4 vDeusLightBounds;`).replace('#include <begin_vertex>', `#include <begin_vertex>
       vDeusLightUV = lightUV;
       vDeusLightBounds = lightBounds;`);
+    const lightSample = array ? 'texture(deusLightAtlas, vec3(lm, float(deusLightLayer - 1)))'
+      : pageLayers ? 'texture(deusLightAtlas, vec3(lm, deusLightPage))' : 'texture2D(deusLightAtlas, lm)';
+    const lightStatement = LIGHT_DEBUG === 'base' || LIGHT_DEBUG === 'world' ? '' : LIGHT_DEBUG === 'light32'
+      ? `gl_FragColor.rgb = min(vec3(1.0), ${lightSample}.rgb * 32.0);` : `gl_FragColor.rgb *= ${lightSample}.rgb * 2.0;`;
     shader.fragmentShader = shader.fragmentShader.replace('#include <common>', `#include <common>
       uniform ${array || pageLayers ? 'highp sampler2DArray' : 'sampler2D'} deusLightAtlas;
       ${pageLayers ? 'uniform float deusLightPage;' : ''}
@@ -215,16 +223,15 @@ export function applyLightAtlas(material, page, enabled, gamma = { value: 1 }, m
       ${array ? `highp int deusLightLayer = int(floor(vDeusLightUV.z + 0.5)) % ${stride};` : ''}
       if (deusLightingEnabled > 0.5 && ${array ? 'deusLightLayer > 0' : 'vDeusLightUV.z > 0.5'}) {
         vec2 lm = clamp(vDeusLightUV.xy, vDeusLightBounds.xy, vDeusLightBounds.zw);
-        gl_FragColor.rgb *= ${array ? 'texture(deusLightAtlas, vec3(lm, float(deusLightLayer - 1)))'
-          : pageLayers ? 'texture(deusLightAtlas, vec3(lm, deusLightPage))' : 'texture2D(deusLightAtlas, lm)'}.rgb * 2.0;
-      }
+        ${lightStatement}
+      }${LIGHT_DEBUG === 'light32' ? ' else { gl_FragColor.rgb = vec3(1.0); }' : ''}
       ${mirror ? `if (deusMirrorActive > 0.5) {
         vec2 mirrorUV = gl_FragCoord.xy / deusMirrorSize;
         vec3 reflection = texture2D(deusMirror, vec2(1.0 - mirrorUV.x, mirrorUV.y)).rgb;
         ${mirror.opaque ? `gl_FragColor.rgb = reflection;` : `vec3 floorColor = clamp(gl_FragColor.rgb, 0.0, 1.0);
         gl_FragColor.rgb = floorColor + reflection * (1.0 - floorColor);`}
       }` : ''}
-      ${displayRampGlsl('deusDisplayGamma', modulated)}`);
+      ${LIGHT_DEBUG === 'world' ? 'gl_FragColor.rgb = vec3(1.0);' : ''}${displayRampGlsl('deusDisplayGamma', modulated)}`);
     // The original's vertex projection (docs/frame-projection.md).
     frameProjection.patch(shader, { tracked });
   };

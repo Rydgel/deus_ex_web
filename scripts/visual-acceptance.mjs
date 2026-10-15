@@ -61,6 +61,13 @@ const freeze = !process.argv.includes('--live');
 const regionOption = option('region', null);
 const region = regionOption ? (([zone, leaf, number]) => ({zone, iLeaf: Number(leaf), zoneNumber: Number(number)}))(regionOption.split(':')) : null;
 const onlyViews = option('views', null)?.split(',') ?? null;
+// play --settle-frames n: page frames drawn after each view's camera is placed, before its shot (default 45). The animated light maps (Flicker and
+// the wavers) draw their noise once per frame, so two runs with different counts show different noise: the pixels that move between them are
+// noise-lit (docs/visual-acceptance.md "The darkest pixels").
+const settleFrames = Number(option('settle-frames', 45));
+// play --time-offset s: Play holds its level at the original's TimeSeconds plus s (default 0). Pixels lit by animated light maps (Pulse, Flicker, the
+// wavers and their noise tables change with the level time) move between offsets; the rest do not (docs/visual-acceptance.md "The darkest pixels").
+const timeOffset = Number(option('time-offset', 0));
 // --cmd '<console command>' (repeatable): a command both sides run once, after ghost and ShowHud False (the original's console, Play's viewProbe
 // exec), e.g. `--cmd 'set ScriptedPawn bHidden True'` for a view with no actor mesh lit by the map's Strobe light.
 const consoleCommands = process.argv.flatMap((arg, i) => arg === '--cmd' ? [process.argv[i + 1]] : []);
@@ -160,7 +167,7 @@ async function play() {
       const ghost = await page.evaluate(commands => window.deusExViewer.viewProbe({ghost: true, exec: commands}), consoleCommands);
       // Level time: run the frozen level to the original's held TimeSeconds
       // (fast, then at normal speed for the last second), then hold it.
-      const target = loadTimes()[map] ?? null;
+      const heldTime = loadTimes()[map] ?? null, target = heldTime === null ? null : heldTime + timeOffset;
       let held = null;
       if (target !== null) {
         held = await page.evaluate(async ({target, dilation}) => {
@@ -188,7 +195,7 @@ async function play() {
       const shots = [];
       for (const view of viewsOf(entry)) {
         await page.evaluate(([v, region]) => window.deusExViewer.viewProbe({location: v.location, rotation: v.rotation, region}), [view, region]);
-        await frames(45);
+        await frames(settleFrames);
         const strobe = strobeOf(view.name);
         if (strobe !== null) {
           // Hold the level's clock (no new TimeSeconds, no flip) and write the flag, as the original's frame is taken.
@@ -225,7 +232,7 @@ async function play() {
         shots.push({view: view.name, camera: state, player: {location: probe.location, region: probe.region, state: probe.state, physics: probe.physics, anim: probe.anim}});
       }
       writeFileSync(path.join(dir, 'play.json'), JSON.stringify({map, freeze, size: [box.width, box.height], ghost, timeTarget: target, timeHeld: held, shots, errors}, null, 1));
-      console.log(map, `${shots.length} views`, ghost.state, held !== null ? `time ${held.toFixed(3)} (original ${target.toFixed(3)})` : '', errors.length ? `errors: ${errors.slice(0, 2).join(' | ')}` : '');
+      console.log(map, `${shots.length} views`, ghost.state, held !== null ? `time ${held.toFixed(3)} (original ${heldTime.toFixed(3)}${timeOffset ? `, offset ${timeOffset}` : ""})` : '', errors.length ? `errors: ${errors.slice(0, 2).join(' | ')}` : '');
       await page.close();
       writeFileSync(planPath, JSON.stringify(plan, null, 1));
     }

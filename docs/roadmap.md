@@ -481,8 +481,14 @@ blocks; [visual acceptance](visual-acceptance.md#light-effects-against-the-origi
 **Open.**
 - *Being worked on:* a pawn's third-person weapon, which Render.dll draws from the pawn's own draw
   (`Pawn.Weapon`'s `ThirdPersonMesh`) and Play does not draw at all (Divergence 21, found in an Island
-  close view; carried decorations and the player's own reflection are the same family); the
-  darkest-pixel rounding visual acceptance found (single raw steps at the bottom of the range).
+  close view; carried decorations and the player's own reflection are the same family).
+  The darkest-pixel item visual acceptance found (single raw steps at the bottom of the range) is **closed
+  2026-10-15 as not a rounding difference**: the counts were the Shot ramp of the 0.6 captures and animated
+  lights' states; with both taken out the two programs round alike (where the texel and light-map inputs are
+  constant over a pixel's neighbourhood, 1 of 4.06 million samples differs; D3DDrv's 8888 uploads, the RGBA7
+  doubling and the two MODULATE stages are traced), and the residual +-1 at filtered texels is the host GPU's
+  ([visual acceptance](visual-acceptance.md#the-darkest-pixels-2026-10-15-not-a-rounding-difference),
+  [texture sampling](texture-sampling.md#texture-formats-uploads-and-stage-operations-d3ddrvdll-2026-10-15)).
 - *Rendering:* the detail pass's mover surfaces, ZBIAS mapping (Wine behaves like a slope-scaled
   offset), colour interpolation and fog-map gate; clipped polygons' own vertices
   ([frame projection](frame-projection.md#unverified-and-open)); for sprites, texture LOD other than 0
@@ -879,7 +885,8 @@ worker mode.
   Play's camera now carries that offset, and the residual shift is (0, 0).
   This also removed a 1-pixel line on a masked sky polygon's wrap seam
   (Island).
-- *Left.* The darkest pixels: raw 1 in the original, 0 in Play.
+- *The darkest pixels* (raw 1 in the original, 0 in Play): closed 2026-10-15, not rounding
+  ([visual acceptance](visual-acceptance.md#the-darkest-pixels-2026-10-15-not-a-rounding-difference)).
 `tools/dump-actor-win.c` reads live actor fields from the running original.
 See [visual acceptance](visual-acceptance.md).
 

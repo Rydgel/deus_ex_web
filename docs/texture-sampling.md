@@ -36,7 +36,7 @@ level drawn is GL's nearest rule, `d = ceil(lambda + 1/2) - 1`, `lambda = log2(t
 ## Texture formats, uploads and stage operations (D3DDrv.dll, 2026-10-15)
 
 What produces a pixel's value at the dark end, from the instructions (traced for the darkest-pixel item of
-[visual acceptance](visual-acceptance.md#differences)). Every address is in D3DDrv.dll.
+[visual acceptance](visual-acceptance.md#the-darkest-pixels-2026-10-15-not-a-rounding-difference)). Every address is in D3DDrv.dll.
 
 **Which format the device picks.** `SetRes` enumerates the device's texture formats
 (`IDirect3DDevice7::EnumTextureFormats`, vtable `+0x10`, `0x1000beaf`, callback thunk `0x1000111d`, the list at
@@ -94,7 +94,10 @@ light-map integer path (shadow blur, ambient fill, spatial bodies, colour merge,
 ([static lighting](static-lighting.md)). Play's world shader multiplies `texel x lightmap(b / 255) x 2.0`
 (`applyLightAtlas`, `src/viewer/light-atlas.mjs`): the same product, the same single conversion. What the two sides do not share is the
 GPU's texture filter and framebuffer arithmetic (the original runs it under wined3d, Play under the browser's GL), which the code
-cannot decide; the measurements are in [visual acceptance](visual-acceptance.md#differences) item 2.
+cannot decide. Measured against the original's frames at the identity ramp, where the base texel and the light-map sample are constant over
+a pixel's 3 x 3 neighbourhood (so no filter blends anything) 1 sample of 4,058,127 differs, 3,984,344 of them at output 0; the +-1 that
+remains (0.129% of the light-map samples) is where a texel or light map is filtered, centred on the rounding boundary
+([visual acceptance](visual-acceptance.md#the-darkest-pixels-2026-10-15-not-a-rounding-difference)).
 
 ## What Play did before
 
