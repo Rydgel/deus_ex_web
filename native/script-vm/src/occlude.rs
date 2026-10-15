@@ -923,7 +923,6 @@ pub extern "C" fn occ_run(work: u32, bytes: u32) -> i32 {
     }
 }
 
-#[allow(unused_assignments)]
 /// Whether the detail-texture pass (detail.rs) can draw a draw item: its surface has a detail texture in the host's
 /// table (model words 19 and 20: the table's address and its record count, 16 words a surface, the first a flag) and
 /// its PolyFlags lack the portal bit Render.dll's gate tests (0x04000000).
@@ -936,6 +935,7 @@ fn detail_near(saved: u32, count: u32) -> bool {
     (0..count).any(|k| rf(rd(saved + 12 + 4 * k) + T_Z) < 380.0)
 }
 
+#[allow(unused_assignments)]
 fn occlude(rec: u32) -> u32 {
     let num_nodes = model(1);
     if num_nodes == 0 {
