@@ -36,7 +36,9 @@ for (let i = 0; i < 200; i++) {
 }
 const options = process.argv.slice(2);
 // --cases a.json,b.json: the original's own draws (scripts/weapon-original-cases.mjs), compared in situ as well
-const casesFiles = options.includes('--cases') ? options[options.indexOf('--cases') + 1].split(',') : [];
+// without --cases, the captures `.work/weapon/original-cases*.json` when this checkout has them (local files, not versioned)
+const casesFiles = options.includes('--cases') ? options[options.indexOf('--cases') + 1].split(',')
+  : ['.work/weapon/original-cases.json', '.work/weapon/original-cases-2.json', '.work/weapon/original-cases-3.json'].filter(existsSync);
 const original = {hand: [], weapon: []};
 for (const file of casesFiles) {
   if (!existsSync(file)) { console.log(`no ${file}`); continue; }

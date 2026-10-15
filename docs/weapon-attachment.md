@@ -116,6 +116,9 @@ frame's Mirror 1, every special outcode 0, the special triangle's indices `(0, 1
 `(0, 0, 0)`, `Location` the pawn's, `ScaleGlow` 1, `Fatness` 128, poly flags `0x4000` (PF_Flat: no unlit bit, so the weapon's `Region.ZoneNumber`
 is not 0), `AnimSequence` cycling `Idle1`, `Idle2`, `Idle3` (the weapon's own animation, which the third-person mesh is posed with).
 
+A third capture, `Terrorist1` (`GM_Jumpsuit`) with `WeaponRifle0` (`SniperRifle3rd`, a long two-handed mesh; the camera at its right side, 28 `CheatView`s,
+yaw 49152): **379 more draws**, all equal (1,558 in all, 3,116 word-for-word comparisons with the translation, 0 differences).
+
 **State the draw writes, seen in the running game** (`dump-actor-win.exe WeaponPistol13`, level running): `Rotation = (0, 0, 0)` (Play's
 weapon keeps the pawn's `(0, -2216, 0)`); after typing `set DeusEx.WeaponPistol FlashCount 9` into the level, `FlashCount = 9` **and
 `OldFlashCount = 9`** one draw later, with no flash drawn: the `OldFlashCount` store runs whenever the weapon is drawn.
@@ -136,5 +139,59 @@ zeroed, Mirror forced, the hand coordinates divided by the zero rotation and the
 
 * 200 random special triangles (159 drawn, 41 skipped by their outcodes) and 100 random weapon Coords: **0 differences**; a mutated
   translation (the 0.5 of M changed) fails 159 of 200, so the cases discriminate.
-* The original's own 1,179 draws (above): `handCoords` of the logged special vertices equals the logged hand coordinates, and
-  `weaponCoords` of those and the weapon's `Location` equals the Coords logged at the weapon's `DrawMesh` call, **1,179 of 1,179, every word**.
+* The original's own 1,558 draws (above): `handCoords` of the logged special vertices equals the logged hand coordinates, and
+  `weaponCoords` of those and the weapon's `Location` equals the Coords logged at the weapon's `DrawMesh` call, **1,558 of 1,558, every word**
+  (`validate-weapon-attach.mjs` runs them when `.work/weapon/original-cases*.json` exist, built by `weapon-original-cases.mjs`).
+
+## Play (2026-10-15)
+
+**Wiring.** Each armed pawn the actor mesh layer draws gets a binding for its weapon (`src/viewer/actor-weapon-sim.mjs`), created through
+`createMeshBinding`'s `attach` option on the CPU path (a few dozen vertices; the GPU path is not used for it) and updated right after its pawn
+with a view whose frames are the pawn's:
+
+* the weapon's mesh is `ThirdPersonMesh` (`runtime.prepareMeshReference`, `getMeshSurfaces`, `getMeshTextureOf`), its DrawScale `ThirdPersonScale`, its Style the
+  pawn's, its Rotation zero (`attach.overrides`);
+* the hand frame of each frame the pawn is drawn in comes from the pawn binding's `specialCamera` (the cached poses of that frame's GetFrame call through the
+  frame's matrix, the first `SpecialVerts` vertices: the buffer DrawLodMesh reads) with `weapon-attachment.mjs` (`handCoords`, `weaponCoords`, the frame's
+  PrjXM..PrjYP from `frameMaster().prj` for the outcodes); the weapon's GetFrame matrix, LOD selection and camera-space points use those Coords
+  (`attach.coords`), the pawn's own Coords are untouched;
+* the weapon is lit as DrawMesh lights it: `setupMesh(weapon, null, ctx, {sink: pawn, style: pawn.Style})`, the sink's location, leaf, zone, glow and cache from the
+  pawn, the poly flags and the unlit colour from the weapon, and the frame's Mirror 1.0 (`attach.lightFrame`);
+* the state DrawActorSprite writes is written (`writeState`): Rotation zero, `OldFlashCount = FlashCount`, `bFirstFrame` cleared, `bSteadyToggle` flipped per
+  drawn frame for a steady flash;
+* the weapon is **not stamped** (DrawActorSprite stamps the pawn only): it is in none of the frame id sets, its `drawnIn` answers false, `LastRenderTime` stays;
+  the frame passes (`framePasses`) take it in a frame when its pawn is there and had a hand (`inFrame`);
+* the page draws it like any CPU-path binding with the frustum test off (`creation.attached`: its bounds come from the world-space pose, which is not where the
+  hand puts it); `?weapons=off` draws none.
+
+**Measured.** `scripts/validate-weapon-play.mjs` (the Island view, worker mode, a headless Chromium): both armed pawns have a CPU-path binding drawn in the main frame
+with camera points and colours; the weapon's Coords equal `weaponCoords(handCoords(...))` of Play's own special vertices word for word; Rotation zero,
+`OldFlashCount = FlashCount`, the weapon stays hidden and unstamped, its pawn is stamped; `?weapons=off` has no weapon binding.
+Pixels, the Island view against a fresh original (`live-original.sh ... --tag wpn3`, the debugger log of the same run in `.work/weapon/`; Play `live-acceptance.mjs play
+--tag wpn3 --page-params antialias=0`, `visual-acceptance.mjs compare --view wpn3:0,0,0:0,0,0`): whole frame ratio 1.316, mean abs. diff. 2.92, edge recall .999 /
+precision .990, sub-pixel (0, 0), 0 outlier blocks (without the weapon: 2.94, .981 / .988); the pistol's region (`--crop 50x90+682+370`) 3.77, .991 / .991, 0 outlier
+blocks (without it: 7.94, .475 / .662, 34 outlier blocks). The side-by-side crop shows the same pistol at the same place and angle. The rifle view (`--tag rif1`,
+`Terrorist1`'s sniper rifle) matches as a whole frame (ratio 1.34, mean abs. diff. 2.50, edge recall .992 / .990, 0 outlier blocks) but is **not a discriminating test**: the rifle is
+behind the body from that side, and the numbers are the same with `?weapons=off`; its evidence is the 379 logged draws above. ThugMale3's crossbow is hidden behind its body in the
+Island view too (both frames agree).
+
+Regression on the branch (worker mode unless noted): `validate-mesh-lighting-play`, `validate-lodmesh-lod-play`, `validate-sim-split` (worker against inline: same pixels),
+`validate-mirrors-play`, `validate-gpu-mesh`, `validate-actor-mesh-scene` and the mesh unit tests all pass; the weapon changes no path an actor without a weapon takes.
+
+**Found while wiring.** The hand frame has determinant -1 (a reflection): X, Y, Z = Y x X, so the weapon mesh is authored for a reflecting transform and the original keeps its
+faces by the camera-space test alone. In a mirror's child frame Play's projection flips x for the whole pass (`uFpDepth.z`), which reverses the winding the other way:
+`decision.flipSide` makes the page draw the weapon's single-sided groups with the other side there (written, not verified).
+
+## Open
+
+* **Mirror child frames and JC's reflection** are off (`?weaponMirrors=1` turns them on): the block runs there in the original (disassembly), but no capture of the original draws an
+  armed pawn or JC in a mirror yet. The map views reached so far have none in a mirror (the Club's guards stand far from the bar mirror, the Underworld's pawns hold no weapon at
+  the start). `scripts/original-views.sh` can hold a camera at a mirror but JC cannot be given a weapon in a held level (`set Weapon` needs UObjectProperty::ImportText, not translated;
+  `ParseRightClick`/`ActivateBelt` need ticks): a live scene with the pilot's pickup commands and a mirror in view is the way. Also unverified there: the face-side flip above, the
+  outcode planes of a child frame (the master's are used).
+* **`Pawn.SelectedItem`** (a held tool, no weapon): recovered (section 3), not wired and not run under the oracle (the three rotations of the item's zeroed Rotation).
+* **A ViewportWindow's frame** (a security camera's own DrawWorld) does not draw weapons: `updateFrame` leaves them out and the pass's decisions hide them.
+* **GPU path** for the weapon bindings (a few dozen vertices each; CPU path measured only by its pixels).
+* **Order of SetupForActor calls**: the original lights the pawn then its weapon in each frame; Play runs all of a pawn's frames, then the weapon's (the sink's per-actor cache is shared).
+* **Muzzle flash**: dead by data, see above; the render-time `appFrand` it would draw from the CRT stream is not modelled.
+* **Cost**: one CPU GetFrame replay per armed pawn per drawn frame (`materialize`), not measured.
