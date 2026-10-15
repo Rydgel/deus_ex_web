@@ -13,11 +13,11 @@
  * so a weapon binding is in none of the id sets the stamps read and answers
  * `drawnIn` false. */
 import {fieldAccessors} from './actor-fields.mjs';
-import {handCoords, weaponCoords, specialOutcode} from '../runtime/weapon-attachment.mjs';
+import {handCoords, weaponCoords, selectedCoords, specialOutcode} from '../runtime/weapon-attachment.mjs';
 
 const lower = value => String(value).toLowerCase();
 
-export function createWeaponAttachments({runtime, bind, lighting, onCreate, onRelease, nextIndex, errors, enabled = true, mirrors = false}) {
+export function createWeaponAttachments({runtime, bind, lighting, onCreate, onRelease, nextIndex, errors, enabled = true, mirrors = true}) {
   const entries = new Map(), owners = new Map(), pawnClass = new WeakMap();
   let disposed = false;
   /** Whether the actor's class derives from Pawn (Render.dll's test at 0x10b25675..0x10b25694). */
@@ -34,7 +34,7 @@ export function createWeaponAttachments({runtime, bind, lighting, onCreate, onRe
   const entryFor = binding => {
     let entry = entries.get(binding);
     if (!entry) {
-      entry = { binding, pawn: binding.actor, fields: fieldAccessors(runtime, binding.actor, ['Weapon', 'Style']), weapon: null, wf: null,
+      entry = { binding, pawn: binding.actor, fields: fieldAccessors(runtime, binding.actor, ['Weapon', 'SelectedItem', 'Style']), weapon: null, item: false, wf: null,
         mesh: null, weaponBinding: null, pending: null, failedMesh: null, coords: new Map(), flip: new Map(), shown: false, mirrored: new WeakMap() };
       entries.set(binding, entry);
     }
@@ -105,6 +105,8 @@ export function createWeaponAttachments({runtime, bind, lighting, onCreate, onRe
     const weapon = entry.weapon, read = name => runtime.readNamed(weapon, name), write = (name, value) => { if (read(name) !== value) runtime.writeNamed(weapon, name, value); };
     const rotation = read('Rotation');
     if (rotation.some(value => value !== 0)) runtime.writeNamed(weapon, 'Rotation', [0, 0, 0]);
+    // A SelectedItem's block (0x10b25cdc..0x10b261a3) writes the Rotation alone: no flash state.
+    if (entry.item) return;
     if (read('bSteadyFlash3rd') && drawnFrames % 2) runtime.writeNamed(weapon, 'bSteadyToggle', !read('bSteadyToggle'));
     write('bFirstFrame', false);
     write('OldFlashCount', read('FlashCount'));
@@ -123,14 +125,17 @@ export function createWeaponAttachments({runtime, bind, lighting, onCreate, onRe
         const entry = entryFor(binding);
         live.add(entry);
         const draw = binding.lastDraw();
-        const weapon = lit && (draw.main || draw.childOnly) ? entry.fields.Weapon() : null;
-        entry.why = !lit ? 'no lighting' : !(draw.main || draw.childOnly) ? 'pawn not drawn' : !weapon ? 'no Weapon' : null;
+        // DrawActorSprite draws the pawn's Weapon, and only when it has none its SelectedItem (a held tool: 0x10b25cdc), each with its ThirdPersonMesh.
+        const shown = lit && (draw.main || draw.childOnly);
+        const held = shown ? entry.fields.Weapon() : null, selected = shown && !held ? entry.fields.SelectedItem() : null, weapon = held ?? selected;
+        entry.why = !lit ? 'no lighting' : !shown ? 'pawn not drawn' : !weapon ? 'no Weapon' : null;
         if (!weapon) { hide(entry, records); continue; }
         if (entry.weapon !== weapon) {
           retire(entry);
           entry.weapon = weapon; entry.mesh = null; entry.failedMesh = null;
           entry.wf = fieldAccessors(runtime, weapon, ['ThirdPersonMesh', 'ThirdPersonScale', 'Location']);
         }
+        entry.item = !held;
         const mesh = entry.wf.ThirdPersonMesh();
         if (!mesh) { entry.why = 'no ThirdPersonMesh'; hide(entry, records); continue; }
         if (entry.mesh !== mesh) { retire(entry); entry.mesh = mesh; entry.failedMesh = null; }
@@ -138,16 +143,17 @@ export function createWeaponAttachments({runtime, bind, lighting, onCreate, onRe
         if (!entry.weaponBinding) { entry.why = entry.failedMesh === mesh ? 'creation failed' : 'creating'; if (!entry.pending && entry.failedMesh !== mesh) create(entry); continue; }
         // The frames that drew the pawn, in DrawFrame's order: the child frames first, the main frame last.
         const frames = [];
-        // Child frames (a mirror's) draw it too in the original, with the frame's Mirror forced to 1.0; no capture of the
-        // original draws an armed pawn in one yet, so they are off unless `mirrors` (?weaponMirrors=1): unverified.
-        if (mirrors) for (const lf of view.lightFrames ?? []) if (lf.ids.has(binding.id)) frames.push({ index: lf.index, ctx: lf.ctx, lf });
-        if (draw.main) frames.push({ index: null, ctx: view.lightRoot ?? null, lf: null });
+        // Child frames (a mirror's) draw it too in the original, with the frame's Mirror forced to 1.0 and each frame's own projection
+        // planes for the special vertices' outcodes (docs/weapon-attachment.md "Mirrors"); `mirrors` false (?weaponMirrors=0) leaves them out.
+        if (mirrors) for (const lf of view.lightFrames ?? []) if (lf.ids.has(binding.id)) frames.push({ index: lf.index, ctx: lf.ctx, lf, prj: lf.prj ?? null });
+        if (draw.main) frames.push({ index: null, ctx: view.lightRoot ?? null, lf: null, prj: view.prj ?? null });
         const location = entry.wf.Location(), ok = [];
         for (const frame of frames) {
           frame.specials = binding.specialCamera(frame.ctx, frame.index);
-          const placed = hand(binding, frame.specials, view.prj ?? null);
+          // each frame's own projection planes: a mirror's child frame has its window's, not the main frame's
+          const placed = hand(binding, frame.specials, frame.prj ?? view.prj ?? null);
           if (!placed) continue;
-          frame.coords = weaponCoords(placed, location);
+          frame.coords = entry.item ? selectedCoords(placed, location) : weaponCoords(placed, location);
           ok.push(frame);
         }
         entry.why = ok.length ? null : `no hand in ${frames.length} frames`;
@@ -166,7 +172,10 @@ export function createWeaponAttachments({runtime, bind, lighting, onCreate, onRe
         // Validation access (states): what the frame drew, and the Coords DrawMesh would have got (word for word the original's).
         entry.last = { visible: record.visible, childOnly: record.childOnly, points: Boolean(record.cameraPoints), colors: Boolean(record.colors),
           frames: ok.map(frame => frame.index), coords: entry.coords.get(null) ? Array.from(entry.coords.get(null)) : null,
-          specials: ok.find(frame => frame.index === null)?.specials ?? null, prj: view.prj ?? null, location: Array.from(location) };
+          specials: ok.find(frame => frame.index === null)?.specials ?? null, prj: view.prj ?? null, location: Array.from(location),
+          // the mirror frames' hands (validation): each frame's projection planes, special vertices and Coords
+          children: ok.filter(frame => frame.index !== null).map(frame => ({ index: frame.index, prj: frame.prj ? Array.from(frame.prj) : null,
+            specials: frame.specials, coords: Array.from(frame.coords) })) };
         records.push(record);
         entry.shown = true;
       }
@@ -180,7 +189,7 @@ export function createWeaponAttachments({runtime, bind, lighting, onCreate, onRe
     },
     /** Validation access: each pawn's weapon state and why it is not drawn. */
     states: () => [...entries.values()].filter(entry => entry.weapon || entry.why).map(entry => ({ pawn: entry.pawn.name, weapon: entry.weapon?.name ?? null,
-      binding: entry.weaponBinding?.id ?? null, why: entry.why ?? null, last: entry.last ?? null, frames: [...entry.coords.keys()] })),
+      item: entry.item, binding: entry.weaponBinding?.id ?? null, why: entry.why ?? null, last: entry.last ?? null, frames: [...entry.coords.keys()] })),
     /** The weapon bindings that exist. */
     bindings: () => [...owners.keys()],
     /** Whether frame `frameIndex` is a mirror's (Mirror -1): the weapon's faces are kept by the camera-space test with

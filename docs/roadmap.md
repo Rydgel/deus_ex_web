@@ -503,11 +503,10 @@ compared in 218 queries), and the flash `UGameEngine::Draw` hands the device is 
 (`validate-player-alterations-census`) keeps every one playing.
 
 **Open.**
-- *Third-person weapon, left:* the player's reflection and any pawn in a mirror's child frame (wired behind
-  `?weaponMirrors=1`, unverified: no capture of the original draws an armed pawn or JC there yet), a held tool with no
-  weapon (`Pawn.SelectedItem`'s block, recovered, not wired), the weapon in a ViewportWindow's frame (security cameras),
-  the GPU path for weapons (they take the CPU path), and the weapon's frame-order of SetupForActor calls (all of a pawn's
-  frames, then its weapon's).
+- *Third-person weapon, left:* the weapon in a ViewportWindow's frame (security cameras), the GPU path for weapons (they take
+  the CPU path), the weapon's frame-order of SetupForActor calls (all of a pawn's frames, then its weapon's), and an armed NPC
+  in a mirror compared with the original (JC's reflection holding a pistol or a held tool is compared: [weapon
+  attachment](weapon-attachment.md#mirrors-2026-10-15); `?weaponMirrors=0` turns it off).
 - *Alterations and the flash, left:* a held underwater or drunk frame compared with the original under Wine (the flash
   pass is checked against Play itself only, and GL's 8-bit blend rounding against the device's is unmeasured), an
   exec-body differential for iterator 312, pain-zone and `DamageTrigger` scenarios, player swimming and drowning, the

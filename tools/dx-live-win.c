@@ -962,6 +962,7 @@ static const WeaponSite weapon_sites[] = {
   { 0x10b0f44du, "coords" },   /* DrawLodMesh: rep movsd of the hand coordinates (ESI) into 0x10b4ea08 */
   { 0x10b257dau, "weapon" },   /* DrawActorSprite: call DrawMesh for the weapon (EBX; coords at [EBP-0xe8]) */
   { 0x10b259c3u, "flash" },    /* the same call for the muzzle flash */
+  { 0x10b26165u, "item" },     /* DrawActorSprite: call DrawMesh for a pawn's SelectedItem when it has no Weapon (EBX = the item, [EBP-0x18] the pawn, coords at [EBP-0x1a8]) */
 };
 #define WEAPON_SITES ((int)(sizeof(weapon_sites) / sizeof(weapon_sites[0])))
 static void print_mem_words(const char *key, uintptr_t address, int count) {
@@ -980,13 +981,20 @@ static void weapon_event(const char *site, CONTEXT *ctx) {
     printf(",\"hand\":%u", read_u32(0x10b4eb10));
   } else if (!strcmp(site, "special")) {
     uintptr_t verts[3] = { ctx->Esi, ctx->Edx, ctx->Edi }, mesh = ctx->Ebx, pawn = read_u32(ebp + 0xc), frame = read_u32(ebp + 8);
-    printf(",\"pawn\":\"%s\",\"mesh\":\"%s\",\"frame\":\"0x%x\",\"mirror\":%g", object_name(pawn), object_name(mesh), (unsigned)frame, read_float(frame + 0x20));
+    printf(",\"pawn\":\"%s\",\"mesh\":\"%s\",\"frame\":\"0x%x\",\"mirror\":%g,\"recursion\":%u", object_name(pawn), object_name(mesh), (unsigned)frame, read_float(frame + 0x20), read_u32(frame + 0x1c));
+    print_mem_words("prj", frame + 0xec, 4);
     uintptr_t face = read_u32(mesh + 0x174); unsigned short idx[3] = { 0, 0, 0 }; read_mem(face, idx, 6);
     printf(",\"indices\":[%u,%u,%u],\"specialVerts\":%u,\"modelVerts\":%u", idx[0], idx[1], idx[2], read_u32(mesh + 0x184), read_u32(mesh + 0x180));
     for (int i = 0; i < 3; i++) { char key[8]; snprintf(key, sizeof(key), "v%d", i); print_mem_words(key, verts[i], 3); printf(",\"out%d\":%u", i, read_u32(verts[i] + 0xc) & 0xff); }
   } else if (!strcmp(site, "coords")) {
     printf(",\"pawn\":\"%s\"", object_name(read_u32(ebp + 0xc)));
     print_mem_words("w", ctx->Esi, 12);
+  } else if (!strcmp(site, "item")) {
+    uintptr_t item = ctx->Ebx, pawn = read_u32(ebp - 0x18), frame = read_u32(ebp + 8);
+    printf(",\"pawn\":\"%s\",\"item\":\"%s\",\"mesh\":\"%s\",\"frame\":\"0x%x\",\"mirror\":%g", object_name(pawn), object_name(item), object_name(read_u32(item + 0x174)), (unsigned)frame, read_float(frame + 0x20));
+    print_mem_words("coords", ebp - 0x1a8, 12);
+    print_mem_words("location", item + 0x114, 3); print_mem_words("rotation", item + 0x120, 3);
+    printf(",\"drawScale\":\"%08x\",\"style\":%u,\"pawnStyle\":%u,\"weapon\":\"%s\"", read_u32(item + 0x17c), read_u32(item + 0x165) & 0xff, read_u32(pawn + 0x165) & 0xff, object_name(read_u32(pawn + 0x3d0)));
   } else {
     uintptr_t weapon = ctx->Ebx, pawn = read_u32(ebp - 0x18), frame = read_u32(ebp + 8), args = ctx->Esp;
     printf(",\"pawn\":\"%s\",\"weapon\":\"%s\",\"mesh\":\"%s\",\"frame\":\"0x%x\",\"mirror\":%g", object_name(pawn), object_name(weapon), object_name(read_u32(weapon + 0x174)), (unsigned)frame, read_float(frame + 0x20));

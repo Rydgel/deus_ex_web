@@ -785,7 +785,7 @@ async function loadMap(name) {
       meshBackend: new URLSearchParams(location.search).get('meshBackend'), meshLod: new URLSearchParams(location.search).get('meshLod'),
       // ?weapons=off: no pawn's third-person weapon is drawn (docs/weapon-attachment.md), for A/B captures
       weapons: new URLSearchParams(location.search).get('weapons'),
-      // ?weaponMirrors=1: the weapon in mirror child frames too (unverified against the original)
+      // ?weaponMirrors=0: no weapon in mirror child frames (on by default: compared with the original, docs/weapon-attachment.md "Mirrors")
       weaponMirrors: new URLSearchParams(location.search).get('weaponMirrors') };
     // On the page the old map's audio unregisters its music before the next
     // map's runtime is built (the worker does the same at its load).

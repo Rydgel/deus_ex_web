@@ -959,7 +959,7 @@ export async function createMeshBinding(runtime,actor,{id,originalObjectIndex,ke
  * measured NPC identities keep their captured index. `player` is the player
  * actor or a getter for it (Player start logs a new player in). */
 export async function createActorMeshSim(runtime,assets,asset,{kernel,player:playerSource,lighting=null,layout=null,
-  childFrames=false,lod=true,weapons:drawWeapons=true,weaponMirrors=false,onCreate=()=>{},onRelease=()=>{}}={}) {
+  childFrames=false,lod=true,weapons:drawWeapons=true,weaponMirrors=true,onCreate=()=>{},onRelease=()=>{}}={}) {
   const currentPlayer=typeof playerSource==='function'?playerSource:()=>playerSource??null;
   let kernelError=null;
   if(kernel===undefined) {

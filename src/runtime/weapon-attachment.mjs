@@ -13,6 +13,7 @@
  * Plain functions over plain arrays, the reference the Play wiring and the
  * Unicorn oracle (scripts/native-weapon-attach-oracle.py) are compared with. */
 import {composeCoords} from './lodmesh-frame.mjs';
+import {rotationSineTable} from './coords.mjs';
 const f = Math.fround;
 
 /** Core FVector::SafeNormal 0x10144be0: the zero vector under 1e-8 (compared
@@ -72,6 +73,27 @@ export function weaponCoords(hand, location) {
   const identity = [[0, 0, 0], [1, 0, 0], [0, 1, 0], [0, 0, 1]];
   let coords = rows;
   for (let pass = 0; pass < 3; pass++) coords = composeCoords(coords, identity);
+  coords[0] = coords[0].map((v, i) => f(v + f(location[i])));
+  return coords.flat();
+}
+
+/** The Coords DrawMesh receives for a pawn's SelectedItem when it has no Weapon (a held tool: DrawActorSprite
+ * 0x10b25cdc..0x10b261a3): the same hand coordinates, but the item's Rotation (zeroed first, 0x10b25d6f..0x10b25d94) goes through
+ * three rotation FCoords built inline from the sine table, in the order Roll (+0x128: TransformPointBy of the origin and
+ * TransformVectorBy of the axes), Pitch (+0x120) and Yaw (+0x124) (`FCoords *= FCoords`), before the item's Location is
+ * added to the origin (0x10b260cc..0x10b2610c). At angle 0 each matrix is an identity with the table's sin 0 and cos 1,
+ * but for the negative zeros the construction carries (fchs of sin, the constants 0x80000000), so the words of a zero
+ * component can differ from weaponCoords'. */
+export function selectedCoords(hand, location) {
+  const table = rotationSineTable(), sin = table[0], cos = table[0x1000];
+  const rows = [0, 1, 2, 3].map(i => hand.slice(i * 3, i * 3 + 3));
+  const negate = value => f(-value);
+  const roll = [[-0, -0, -0], [1, -0, -0], [-0, cos, sin], [-0, negate(sin), cos]];
+  const pitch = [[0, 0, 0], [cos, 0, negate(sin)], [-0, 1, -0], [sin, -0, cos]];
+  const yaw = [[0, 0, 0], [cos, negate(sin), 0], [sin, cos, 0], [0, 0, 1]];
+  let coords = composeCoords(rows, roll);
+  coords = composeCoords(coords, pitch);
+  coords = composeCoords(coords, yaw);
   coords[0] = coords[0].map((v, i) => f(v + f(location[i])));
   return coords.flat();
 }

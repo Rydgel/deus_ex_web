@@ -27,10 +27,13 @@ for (const event of events) {
     if (event.site === 'read') current.read = event;
     else if (event.site === 'weapon') current.weapon = event;
     else if (event.site === 'flash') current.flash = event;
+    else if (event.site === 'item') current.item = event;
   }
   lastSite = event.site;
 }
 const complete = draws.filter(d => d.special && d.hand && d.read && d.weapon);
+// a pawn with no Weapon whose SelectedItem is drawn (the block after 0x10b25cdc)
+const items = draws.filter(d => d.special && d.hand && d.read && d.item);
 const byPawn = new Map();
 for (const d of draws) {
   const key = `${d.special.pawn} (${d.special.mesh})`;
@@ -38,20 +41,25 @@ for (const d of draws) {
   entry.draws++; if (d.read) { entry.weapon.add(d.read.weapon); entry.thirdPersonMesh.add(d.read.thirdPersonMesh); }
   byPawn.set(key, entry);
 }
-console.log(`${events.length} events, ${draws.length} pawn draws with special vertices, ${complete.length} with a weapon drawn`);
+console.log(`${events.length} events, ${draws.length} pawn draws with special vertices, ${complete.length} with a weapon drawn, ${items.length} with a selected item drawn`);
 for (const [key, entry] of byPawn)
   console.log(`  ${key}: ${entry.draws} draws, weapon ${[...entry.weapon].join(',') || 'none'} ${[...entry.thirdPersonMesh].join(',')}`);
 const flashes = draws.filter(d => d.flash).length;
 console.log(`muzzle flash draws: ${flashes}; frames: ${new Set(events.map(e => e.frame).filter(Boolean)).size}; mirrors: ${[...new Set(events.map(e => e.mirror))].join(',')}`);
 
 if (rest[0] === '--cases') {
-  const hand = [], weapon = [];
+  const hand = [], weapon = [], selected = [];
+  for (const d of items) {
+    hand.push({vertices: [d.special.v0, d.special.v1, d.special.v2].map(hex), outcodes: [d.special.out0, d.special.out1, d.special.out2],
+      indices: d.special.indices, expected: hex(d.hand.w), pawn: d.special.pawn});
+    selected.push({hand: hex(d.hand.w), location: hex(d.item.location), mirror: d.item.mirror, expected: hex(d.item.coords), pawn: d.special.pawn, item: d.item.item});
+  }
   for (const d of complete) {
     hand.push({vertices: [d.special.v0, d.special.v1, d.special.v2].map(hex), outcodes: [d.special.out0, d.special.out1, d.special.out2],
       indices: d.special.indices, expected: hex(d.hand.w), pawn: d.special.pawn});
     weapon.push({hand: hex(d.hand.w), location: hex(d.weapon.location), mirror: d.weapon.mirror, expected: hex(d.weapon.coords),
       pawn: d.special.pawn, weapon: d.weapon.weapon});
   }
-  writeFileSync(rest[1], JSON.stringify({hand, weapon}));
+  writeFileSync(rest[1], JSON.stringify({hand, weapon, selected}));
   console.log(`wrote ${hand.length} cases to ${rest[1]}`);
 }

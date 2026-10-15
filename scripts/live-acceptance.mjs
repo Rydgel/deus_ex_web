@@ -768,6 +768,12 @@ async function play() {
       await page.screenshot({path: file, clip: {x: 0, y: 0, width: 1280, height: 720}});
       console.log(`frame: ${file}`);
     }
+    // --after-file js [--after-out file.json] (play): an expression the page evaluates with the level held at its last tick (the weapon states of
+    // the frame just drawn: lodProbe({list: 'weapons'})); its value goes to --after-out, else to the log.
+    if (option('after-file', null)) {
+      const value = JSON.stringify(await page.evaluate(readFileSync(option('after-file'), 'utf8')));
+      if (option('after-out', null)) writeFileSync(option('after-out'), value); else console.log(value);
+    }
     console.log(map, `${rows.length} ticks replayed`, errors.length ? `errors: ${errors.slice(0, 2).join(' | ')}` : '');
   });
 }
