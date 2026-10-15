@@ -127,6 +127,8 @@ if (flag('perception')) PLAYER_FIELDS.push(['CRad', 'CollisionRadius', 0x1d4, 'f
 // pick up and fire a weapon (--cmds) are followed through these.
 if (flag('player-gear')) PLAYER_FIELDS.push(['Weapon', 'Weapon', 976, 'obj'], ['PendWeapon', 'PendingWeapon', 980, 'obj'], ['Inv', 'Inventory', 192, 'obj'], ['InHand', 'inHand', 2600, 'obj'],
   ['FrobTgt', 'FrobTarget', 2536, 'obj'], ['bFire', 'bFire', 1206, 'u8'], ['PHealth', 'Health', 1064, 'i32'], ['FrobTime', 'FrobTime', 2540, 'f']);
+// --player-blend: the player's blend channel 0 (the mouth animation Pawn.LipSynch plays while JC speaks in a conversation): BSeq0, BFrame0, BRate0, BTween0 of FIELDS.
+if (flag('player-blend')) PLAYER_FIELDS.push(...FIELDS.filter(f => ['BSeq0', 'BFrame0', 'BRate0', 'BTween0'].includes(f[0])));
 // Load-time random state of the PawnGenerators (PigeonGenerator, SeagullGenerator, ...): PostBeginPlay draws TryTimer
 // (0.25 + FRand()*0.75) and, with bRandomCount, PoolCount from the load's stream, which the two sides do not share
 // (the original seeds the CRT with time(NULL), docs/rng.md). A generator first spawns when its TryTimer runs out,
@@ -265,6 +267,28 @@ async function original() {
   // a typed `Fire` is not the binding: the alias runs through UInput::Exec only (docs/script-console-command.md "Aliases").
   const DXINPUT_KEYS = {PageDown: 'PGDN', PageUp: 'PGUP', Enter: 'ENTER', Escape: 'ESC', Space: 'SPACE', End: 'END', Home: 'HOME', Tab: 'TAB',
     ArrowUp: 'UP', ArrowDown: 'DOWN', ArrowLeft: 'LEFT', ArrowRight: 'RIGHT', ShiftLeft: 'SHIFT', ControlLeft: 'CTRL'};
+  // --cmds "N:@ctrlshot NAME": a frame of the held level while a conversation window grabs every key (ConWindowActive.VirtualKeyPressed swallows Print
+  // and the numpad `*` and answers only its own hard-coded Ctrl+F9, ConsoleCommand("SHOT")). Ctrl goes through the Wine input queue (IsKeyDown reads the
+  // thread's key state), F9 likewise. The Shot bitmap becomes .work/acceptance/<map>/NAME-original.png and NAME-time.txt holds the level time it was
+  // taken at. Play does not run it (a screenshot changes no state): `play --ticks N --shot NAME` takes its own frame at that tick.
+  const ctrlShotName = text => /^@ctrlshot (\S+)$/.exec(text)?.[1] ?? null;
+  const takeCtrlShot = name => {
+    const before = game.shots();
+    let fresh = [];
+    // (the first Ctrl+F9 of a run was once lost: tried again, the level stays held)
+    for (let attempt = 0; attempt < 3 && !fresh.length; attempt++) {
+      post(['focus', 'sdown CTRL', 'sleep 250', 'shold F9 120', 'sleep 250', 'sup CTRL', 'sleep 900']);
+      fresh = game.shots().filter(shot => !before.includes(shot));
+    }
+    const dump = execFileSync(game.WINE, [path.join(root, 'ad/build/dump-actor-win.exe'), 'JCDentonMale', 'Player:0x5d4:u32', 'LevelTime:0xa8:pf:0x478'], {encoding: 'utf8', env: process.env});
+    const live = dump.split('\n').map(line => /^JCDentonMale \S+ Player=0x([0-9a-f]+) LevelTime=(\S+)/.exec(line)).filter(m => m && m[1] !== '0');
+    if (!fresh.length) { console.log(`@ctrlshot ${name}: NO FRAME of the original`); return; }
+    const png = path.join(acceptanceDir(), `${name}-original.png`), size = game.bmpToPng(path.join(game.SYSTEM, fresh[0]), png);
+    renameSync(path.join(game.SYSTEM, fresh[0]), path.join(acceptanceDir(), `${name}-original.bmp`));
+    for (const extra of fresh.slice(1)) renameSync(path.join(game.SYSTEM, extra), path.join(scratch, extra));
+    if (live.length === 1) writeFileSync(path.join(acceptanceDir(), `${name}-time.txt`), `${live[0][2]}\n`);
+    console.log(`@ctrlshot ${name}: ${size.width}x${size.height}, level time ${live.length === 1 ? live[0][2] : '?'}`);
+  };
   const keyEdge = text => {
     const m = /^@(down|up) (\S+)$/.exec(text);
     if (!m) return null;
@@ -381,7 +405,8 @@ async function original() {
       const n = Number(match[1]);
       if (handled.has(n)) continue;
       handled.add(n);
-      post(['sleep 300', ...cmds.filter(c => c.after === n).flatMap(c => keyEdge(c.text) ?? [`cmd ${c.text}`, 'sleep 500'])]);
+      post(['sleep 300', ...cmds.filter(c => c.after === n && !ctrlShotName(c.text)).flatMap(c => keyEdge(c.text) ?? [`cmd ${c.text}`, 'sleep 500'])]);
+      for (const c of cmds.filter(c => c.after === n && ctrlShotName(c.text))) takeCtrlShot(ctrlShotName(c.text));
       writeFileSync(`${tracePath}.go`, '');
       console.log(`typed after ${n} ticks: ${cmds.filter(c => c.after === n).map(c => c.text).join(' ; ')}`);
     }
@@ -392,6 +417,8 @@ async function original() {
   if (option('shot', null) && /paused after/.test(log)) {
     // The level is held at the last replayed tick (the tracer returns from ULevel::Tick); the game still draws.
     let taken = null;
+    // --shot-ctrl: the frame is the Ctrl+F9 one (a conversation window grabs the keys the plain `shot` presses), see --cmds @ctrlshot.
+    if (flag('shot-ctrl')) { takeCtrlShot(option('shot')); taken = path.join(acceptanceDir(), `${option('shot')}-original.png`); }
     for (let attempt = 0; attempt < 3 && !taken; attempt++) {
       const before = game.shots();
       post(['sleep 1500', 'shot', 'sleep 900']);
@@ -688,7 +715,8 @@ async function play() {
     // (0x103814e0, label `inputevent`, config events.cfg) carries the CRT state at each key edge, the start of a key-edge command: its `rng` is a
     // measured input handed to Play with that command (the n-th `@down`/`@up` of a hold takes the n-th press/release record of that hold).
     const commandsWithStream = () => {
-      const list = existsSync(path.join(dir, `commands${suffix}.json`)) ? JSON.parse(readFileSync(path.join(dir, `commands${suffix}.json`), 'utf8')) : [];
+      // (an `@ctrlshot NAME` is the original's screenshot of a held tick: it changes no state, so the replay skips it)
+      const list = (existsSync(path.join(dir, `commands${suffix}.json`)) ? JSON.parse(readFileSync(path.join(dir, `commands${suffix}.json`), 'utf8')) : []).filter(c => !/^@ctrlshot /.test(c.text));
       const callsFile = `${tracePath}.calls.jsonl`;
       if (!existsSync(callsFile) || !list.some(c => c.text.startsWith('@'))) return list;
       const edges = new Map();
@@ -725,6 +753,8 @@ async function play() {
       ...(setupNames ? {setupProbe: {names: setupNames.split(','), first: setupFirst, last: setupLast}} : {}),
       ...(scriptPawns ? {scriptTrace: {pawns: scriptPawns.split(','), first: scriptFirst, last: scriptLast}} : {}), replay: {ticks: trace.map(({n, unfrozen, delta, rngIn, clockIn, tsIn, strobeIn}) => ({n, unfrozen, delta, rngIn, clockIn, tsIn, strobeIn})),   // not the watched fields: a long trace would not fit the page
       release: true, hold: true, drawTrace: flag('draw-trace'), drawStacks: flag('draw-stacks'),
+      // --phonemes file.json ([{n, name, letter}]; conversation-acceptance.mjs `phonemes`): the letters the original's audio update wrote into a speaker's nextPhoneme, a measured input
+      ...(option('phonemes', null) ? {phonemes: JSON.parse(readFileSync(option('phonemes'), 'utf8'))} : {}),
       ...(option('can-see', null) ? {canSeeProbe: {pawn: option('can-see'), first: Number(option('can-see-ticks', '1:1').split(':')[0]), last: Number(option('can-see-ticks', '1:1').split(':')[1])}} : {}),
       commands: commandsWithStream(), watch: [
       {names: ['@player'], props: playerProps}, {names: pawns, props},

@@ -1427,7 +1427,8 @@ export function createSimSession(game, { assets = null, events = [], exportName 
           // stream state, or holds the level (live-probe.mjs).
           const replay = game.liveReplay, delta = replay ? replay.before(dt) : dt;
           if (delta !== false) { game.tick(delta); replay?.after(); }
-          lipSync?.update(dt);
+          // (a replay fed the original's phoneme letters, live-probe.mjs `phonemes`, does not run Galaxy's own analysis of the audio the page plays)
+          if (!game.liveReplay?.measuredSpeech) lipSync?.update(dt);
         } catch (error) { fail(error); }
       }
       const frame = { errors, movers: movers(), view: null, renderRect: null, lights: null, light: null, sky: null, target: null, pan: null,
@@ -1444,7 +1445,9 @@ export function createSimSession(game, { assets = null, events = [], exportName 
         } catch (error) { fail(error); }
       }
       if (frame.view && !stopped()) {
-        try { frame.renderRect = forced ? { render: true, x: 0, y: 0, width, height } : { ...game.renderViewport(width, height) }; } catch (error) { fail(error); }
+        // (a live replay's forced frame size is the original's window; the root window's own render viewport still clips it: a letterboxed
+        // conversation draws the 3D view in the band between the bars, and projects from the band's centre)
+        try { frame.renderRect = { ...game.renderViewport(width, height) }; } catch (error) { fail(error); }
       }
       if (!stopped()) {
         try { live.lights = game.movingLights(); frame.lights = live.lights.map(plainLight); } catch (error) { fail(error); }

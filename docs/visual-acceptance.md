@@ -1752,6 +1752,43 @@ scripts/original-run.sh 00_Training node scripts/interface-acceptance.mjs origin
 node scripts/interface-acceptance.mjs play && node scripts/interface-acceptance.mjs compare
 ```
 
+## Conversation frames (2026-10-16)
+
+Third-person conversation frames of the original against Play's: `01_NYC_UNATCOIsland`'s MeetPaul at four held ticks (the first shot, a speaker change on the same camera, and two
+cuts), the level frozen at the load and released by the tracer at the original's own per-tick delta and stream state ([Live scenes](#live-scenes-2026-10-13)), the player
+placed 100 units in front of Paul, 1280x720, Brightness 2/3 in the original and Play's matched ramp, `?antialias=0&detailTextures=0`. The scene, why the frame is taken with Ctrl+F9,
+the timeline of the speeches and the causes with their evidence are in [conversation camera](conversation-camera.md#frames-against-the-original-2026-10-16).
+
+Each row is one frame, 921,600 pixels: the share identical (all channels), the pixels off by more than 2 and by more than 10 of 255 in any channel, the mean absolute difference over the band
+the 3D view draws in (rows 73 to 569; the frame's is 0.02 to 0.05) and the edge recall and precision of `compare`. **The two letterbox bars (73 rows above, 150 below) and the subtitle line are
+identical to the pixel in every frame** (0 of 93,440 / about 185,000 / 4,245 to 10,848 pixels differ, maximum difference 0).
+
+| Frame | tick, speech | before the harness fix: identical, >2, >10, band MAD, recall/precision | after the fix, no mouth feed: identical, >2, >10, recall/precision | after the fix and the measured mouths (the second capture, `cvA`): identical, >2, >10, band MAD, recall/precision |
+| --- | --- | --- | --- | --- |
+| 1 | 100, JC, camera 2 | not taken in that capture | .98698, 1,968, 478, 1/1 | .98698, 1,968, 478, .031, 1/1 |
+| 2 | 250, Paul, camera 2 | .33302, 349,313, 48,197, 4.41, .581/.617 | .98695, 1,993, 494, .999/1 | .98695, 1,991, 497, .032, .999/1 |
+| 3 | 600, JC, camera 4 (cut) | .42830, 327,108, 78,450, 5.34, .559/.606 | .97000, 4,073, 976, .997/.999 | .97076, 3,362, 698, .058, .997/.999 |
+| 4 | 750, Paul, camera 5 (cut) | not taken before the fix | .96725, 4,283, 1,283, 1/1 | .96789, 3,769, 1,053, .072, 1/1 |
+
+The columns "before" and "after the fix, no feed" are the first capture (`cv`, one original load); the last column is a second original load (`cvA`) with the player's mouth channel in the trace, so it is also a
+repeat of the original: frames 1 and 2 agree with the first capture's to within 3 pixels (the original's frames are reproducible from load to load). Remaining differences, zoomed ten times: one-pixel
+lines along silhouettes and mesh triangle edges (the polygon edge tie of two rasterizers) and the glint of the glasses, nothing in the shading or the textures. What was measured, besides the frames:
+the camera object read from the running original equals Play's `conversationProbe` bit for bit (location, rotation, position, actors, heights); the live comparison of the 750 ticks (`live-acceptance.mjs
+compare --tag cvA`) reads clock equal, stream draws per tick equal, and every watched actor but three equal in every watched field for the 750 ticks (88 actors: the pawns, the generators and the timed actors; Paul's blend channel included);
+the three are two guards' `LastRenderTime` at tick 1 (the render history) and the player's `AnimFrame` at the first ticks.
+
+```bash
+# the original (Wine lock): all frames of one run, one trace; each frame is a held tick (--cmds N:@ctrlshot name, the last --shot name --shot-ctrl), Brightness 2/3 in the early commands
+DX_HYPRLAND=1 scripts/live-original.sh 01_NYC_UNATCOIsland --ticks 750 --delta 0.0166666675 --monitor 20 --tag cvA --player-blend --shot cvA4 --shot-ctrl \
+  --cmds "100:@ctrlshot cvA1|250:@ctrlshot cvA2|600:@ctrlshot cvA3" --early-cmds "set WinDrv.WindowsClient Brightness 0.666667|set DeusEx.JCDentonMale Location (X=-2385,Y=8393,Z=-256.2)|set DeusEx.JCDentonMale ViewRotation (Pitch=0,Yaw=51120,Roll=0)|walk"
+node scripts/live-acceptance.mjs population --map 01_NYC_UNATCOIsland --seed 1               # Play's population, once
+node scripts/conversation-acceptance.mjs phonemes --tag cvA                                  # the original's mouth letters from the trace
+node scripts/live-acceptance.mjs play --map 01_NYC_UNATCOIsland --seed 1 --tag cvA --ticks 250 --shot cvA2 --player-blend --phonemes .work/live-acceptance/01_NYC_UNATCOIsland/phonemes-cvA.json \
+  --early-cmds "<the same>"                                                                   # Play's frame at that tick (one replay per frame)
+node scripts/conversation-acceptance.mjs compare --frames cvA1,cvA2,cvA3,cvA4                # per region and whole frame
+node scripts/conversation-acceptance.mjs timeline [--scene meetpaul|intro]                   # Play's own timeline: every state, event and camera change, with its tick
+```
+
 ## Open
 
 - **Not attributed, seen in the 2026-10-14 pilot re-runs with Divergences 17 and 18 in** (every watched actor equal in all three): the Island run's stream draws differ at tick 264
