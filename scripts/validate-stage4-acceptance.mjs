@@ -196,7 +196,7 @@ add('4.2.28', C2, 'security cameras', 'ViewportWindow windows on four maps match
   CAMERA({map: '14_OceanLab_Lab', computer: 'ComputerSecurity1', user: 'Oceanguard', password: 'Kraken', cameraActor: 'SecurityCamera0', name: 'cs1', windows: 3}),
   CAMERA({map: '02_NYC_BatteryPark', computer: 'ComputerSecurity2', user: 'NSF', password: 'righteous', cameraActor: 'SecurityCamera1', name: 'bp2', windows: 3}),
   CAMERA({map: '06_HongKong_WanChai_Market', computer: 'ComputerSecurity0', user: 'TAM', password: 'DRAGON', cameraActor: 'SecurityCamera2', name: 'hk0', windows: 3}),
-  CAMERA({map: '09_NYC_Ship', computer: 'ComputerSecurity3', user: 'SECURITY', password: 'Brooklyn', cameraActor: 'SecurityCamera1', name: 'sh3', windows: 3}));
+  CAMERA({map: '09_NYC_Ship', computer: 'ComputerSecurity3', user: 'SECURITY', password: 'Brooklyn', cameraActor: 'SecurityCamera1', name: 'sh3b', windows: 3}));
 missing('4.2.29', C2, 'camera with a mirror, sky, fog or corona in view', 'a camera frame against the original', 'the thirteen captured windows look into rooms (visual-acceptance.md "What stays")');
 missing('4.2.30', C2, '06_HongKong_WanChai_Underworld mirrored panes', 'the dance floor in the mirrored panes at a held Strobe against the original',
   'the stored d_s0 and d_s1 frames cannot be reproduced: the level time each was held at is not stored with it (times.json holds the last capture\'s, 54.18 s, written after the frames), and with that clock Play differs in 7 blocks');

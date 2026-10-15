@@ -120,6 +120,21 @@ async function play() {
       // The original's level is held, JC's animation with it; Play's player keeps ticking in a players-only level and the page's frames advance his
       // animation whatever the level's dilation: the frame is written with a rate of 0 so the pose drawn is the measured one.
       anim: {...state.player.anim, AnimRate: 0}}});
+    // The level's movers where the original's were (`original` reads them at the hold). A door an NPC opened stands open in the original's frame and
+    // the NPCs' routes are each program's own, so a mover's pose is an input of the held state like the cameras' and the player's. Only the movers
+    // whose Rotation or Location differ are written (Rotation through the actor, Location through the collision model: view-probe's moverProbe).
+    if (state?.movers?.length && option('movers', 'on') !== 'off') {
+      const written = await page.evaluate(async movers => {
+        const now = (await window.deusExViewer.liveProbe({actors: 'deusex.deusexmover', actorProps: ['Rotation', 'KeyNum']})).actors;
+        const byName = new Map(now.map(row => [row.name, row]));
+        const differs = (a, b) => a.length !== b.length || a.some((v, i) => Math.abs(v - b[i]) > 1e-3);
+        const sets = movers.filter(m => { const p = byName.get(m.name); return p && (differs(m.Rotation, p.Rotation) || differs(m.Location, p.location)); })
+          .map(m => ({name: m.name, location: m.Location, rotation: m.Rotation}));
+        if (sets.length) await window.deusExViewer.moverProbe({set: sets});
+        return sets.map(s => s.name);
+      }, state.movers);
+      console.log(`movers written from the original's state: ${written.length}${written.length ? ` (${written.join(' ')})` : ''}`);
+    }
     held = await view({playersOnly: true, timeDilation: HELD_DILATION});
     await settled(); await frames(45);
     held = await view({});
@@ -317,8 +332,14 @@ async function original() {
     AnimMinRate: jcState.AnimMinRate, OldAnimRate: jcState.OldAnimRate, BlendAnimSequence: [0, 1, 2, 3].map(k => jcState[`B${k}`]), BlendAnimFrame: [0, 1, 2, 3].map(k => jcState[`F${k}`]),
     BlendAnimRate: [0, 1, 2, 3].map(k => jcState[`R${k}`]), BlendTweenRate: [0, 1, 2, 3].map(k => jcState[`T${k}`]), BlendAnimLast: [0, 1, 2, 3].map(k => jcState[`L${k}`]),
     BlendAnimMinRate: [0, 1, 2, 3].map(k => jcState[`M${k}`])};
+  // The level's pre-placed movers at the hold (a door standing half open in a frame is a state of the original's world: KeyNum, the interpolation
+  // alpha and rate, Location). Memory reads of Mover's linked offsets (Play's slotOf: Location 0x114, PhysAlpha 0x214, PhysRate 0x218, bInterpolating
+  // 0x1ec bit 0x80, KeyNum 0x377, PrevKeyNum 0x378, NumKeys 0x379); the tracer holds the level, so the rows are one instant.
+  const movers = dump('DeusExMover', 'Location:0x114:f3', 'Rotation:0x120:i3', 'Physics:0x30:u8', 'Interp:0x1ec:bit:0x80', 'PhysAlpha:0x214:f', 'PhysRate:0x218:f',
+    'KeyNum:0x377:u8', 'PrevKeyNum:0x378:u8', 'NumKeys:0x379:u8', 'Tag:0xb0:name', 'State:0xc:obj').filter(row => /^DeusExMover\d+$/.test(row.name))
+    .map(({class: cls, ...row}) => row);
   const camState = cameras.map(cam => ({name: cam, location: last.actors[cam].Location, rotation: last.actors[cam].Rotation}));
-  const state = {map, computer, user, timeSeconds: time.LevelTime, tsTrace: last.tsIn, dilation: time.Dilation, tick: last.tick, cameras: camState,
+  const state = {map, computer, user, timeSeconds: time.LevelTime, tsTrace: last.tsIn, dilation: time.Dilation, tick: last.tick, cameras: camState, movers,
     player: {location: jcState.Location, rotation: jcState.Rotation, viewRotation: jcState.ViewRotation, physics: jcState.Physics, anim}};
   writeFileSync(statePath, JSON.stringify(state, null, 1));
   console.log(taken ? `frame ${taken}` : 'NO FRAME', JSON.stringify(state));
