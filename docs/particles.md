@@ -80,9 +80,12 @@ of appFrand draws.
 For a DT_Sprite or DT_SpriteAnimOnce item:
 - The function first writes `Level.TimeSeconds` to the actor's
   LastRenderTime.
-- It draws one tile through the render device: `Texture.USize·DrawScale`
-  by `VSize·DrawScale` times the projection, centred on the projected
-  Location. That equals a screen-aligned quad of that world size.
+- It draws one tile through the canvas (UCanvas::DrawIcon, then the render
+  device's DrawTile): `(USize·Persp)·DrawScale` by `(VSize·Persp)·DrawScale`
+  centred on the sprite's projected centre (FDynamicSprite::Setup's ScreenX,
+  ScreenY and Persp). That is a screen-aligned quad of that world size to
+  within a pixel; Play draws it with the original's vertices, see
+  [frame projection](frame-projection.md#sprites-the-tile-the-render-device-receives).
 - Its colour is white (an editor-selection tint in the editor), times
   ScaleGlow when that is not 1, each channel capped at 1, with no fog. The
   flags are the texture's PolyFlags, the style flags and `0x100`.

@@ -11,6 +11,7 @@
 import * as THREE from 'three';
 import { depthConstants, floatWord } from '../runtime/frame-projection.mjs';
 import { frameProjectionGlsl } from './frame-projection-glsl.mjs';
+import { SPRITE_TILE_GLSL } from './sprite-tile-glsl.mjs';
 
 const uniforms = {
   uFpOn: { value: 0 }, uFpZero: { value: 0 },
@@ -20,6 +21,8 @@ const uniforms = {
   uFpPrj: { value: new THREE.Vector4(1e30, 1e30, 1e30, 1e30) },
   uFpProj: { value: new THREE.Vector4() }, uFpRect: { value: new THREE.Vector4() }, uFpView: { value: new THREE.Vector4() },
   uFpDepth: { value: new THREE.Vector3(depthConstants(32).zBias, depthConstants(32).zScale, 1) },
+  // Sprites through the tile chain (sprite-tile-glsl.mjs): 0 draws them as billboards with the camera, as before.
+  uSpriteTiles: { value: 1 },
 };
 
 /** The vertex stage of project_vertex: the camera's projection, replaced by
@@ -71,6 +74,33 @@ export const frameProjection = {
       .replace('void main() {', `${tracked ? 'attribute vec3 deusTracked;\n' : ''}${frameProjectionGlsl({ floatFloat })}\nvoid main() {`)
       .replace('#include <project_vertex>', projectVertex({ camera, tracked, decal }));
   },
+  /** A sprite material's vertex shader (an onBeforeCompile body): in a pass with
+   * a frame, a sprite that carries its FDynamicSprite's Setup floats for the frame
+   * (`tile.on` 1; `tile.a`, `b`, `c` as sprite-tile-glsl.mjs documents) becomes
+   * the original's tile: DrawActorSprite's rectangle, UCanvas::DrawTile's clip
+   * and scale and D3DDrv's four vertices, from this quad's corner. Otherwise the
+   * billboard the camera projects (three.js's sprite vertex shader) stays. */
+  patchSprite(shader, tile) {
+    Object.assign(shader.uniforms, uniforms, { uTileOn: tile.on, uTileA: tile.a, uTileB: tile.b, uTileC: tile.c });
+    shader.vertexShader = shader.vertexShader
+      .replace('void main() {', `${frameProjectionGlsl()}\n${SPRITE_TILE_GLSL}\nuniform float uTileOn,uSpriteTiles;\nuniform vec4 uTileA,uTileB,uTileC;\nvoid main() {`)
+      .replace('gl_Position = projectionMatrix * mvPosition;', `gl_Position = projectionMatrix * mvPosition;
+#ifdef USE_MAP
+	// A texture's first row is its top (D3DDrv draws V = 0 at the top of a tile); three.js's sprite has V = 1 there.
+	vMapUv.y = 1.0 - vMapUv.y;
+#endif
+	if ( uFpOn > 0.5 && uSpriteTiles > 0.5 && uTileOn > 0.5 ) {
+		vec4 tileRect, tileSrc;
+		if ( fpSpriteTile( uTileA, uTileB, uTileC, uFpRect.xy, tileRect, tileSrc ) ) {
+			int corner = position.x > 0.0 ? ( position.y > 0.0 ? 3 : 2 ) : ( position.y > 0.0 ? 0 : 1 );
+			vec2 tileUv;
+			gl_Position = fpClipOf( fpSpriteVertex( tileRect, tileSrc, uTileA, uTileB, uTileC, uFpRect, uFpDepth.xy, corner, tileUv ), uTileA.x );
+#ifdef USE_MAP
+			vMapUv = tileUv;
+#endif
+		} else gl_Position = vec4( 2.0, 2.0, 2.0, 1.0 );
+	}`);
+  },
   /** The pass projects with `projection` (play-camera.mjs projectionOf's
    * shape, or sim-session.mjs's child frames: Proj.Z, RProj.Z, FX15, FY15 and
    * the Coords) into `view`, the viewport the pass renders into; `rect` is
@@ -92,6 +122,8 @@ export const frameProjection = {
     uniforms.uFpOn.value = 1;
   },
   off() { uniforms.uFpOn.value = 0; },
+  /** ?spriteTiles=off (or deusExViewer.spriteTiles(false)): sprites stay billboards. */
+  spriteTiles(on) { uniforms.uSpriteTiles.value = on ? 1 : 0; },
   /** The values the next draw uses (validators). */
   state: () => ({ on: uniforms.uFpOn.value, origin: uniforms.uFpOrigin.value.toArray(), axes: [uniforms.uFpAxisX, uniforms.uFpAxisY, uniforms.uFpAxisZ].map(u => u.value.toArray()),
     proj: uniforms.uFpProj.value.toArray(), prj: uniforms.uFpPrj.value.toArray(), rect: uniforms.uFpRect.value.toArray(), view: uniforms.uFpView.value.toArray(),

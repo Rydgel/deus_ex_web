@@ -11,6 +11,7 @@
  * (vertex, view) and floats (clip). */
 import { chromium } from '@playwright/test';
 import { frameProjectionGlsl } from '../src/viewer/frame-projection-glsl.mjs';
+import { SPRITE_TILE_GLSL } from '../src/viewer/sprite-tile-glsl.mjs';
 
 const vertexSource = '#version 300 es\nprecision highp float;\nvoid main(){vec2 p=vec2(float((gl_VertexID&1)<<2)-1.0,float((gl_VertexID&2)<<1)-1.0);gl_Position=vec4(p,0.0,1.0);}';
 
@@ -102,6 +103,95 @@ export async function runGpuUnits(units, { angle, noBarrier = false } = {}) {
     }
     return { renderer: gl.getParameter(gl.RENDERER), results };
   }, { vertexSource, fragmentSource: fragment, units });
+    if (runtime.error) throw new Error(runtime.error);
+    return runtime;
+  } finally {
+    await browser.close();
+  }
+}
+
+/** The sprite tile chain (src/viewer/sprite-tile-glsl.mjs) on the GPU: each unit is one sprite
+ * in one frame, `{a: [Z, ScreenX, ScreenY, Persp], b: [USize, VSize, DrawScale, Scale], c:
+ * [Info.USize, Info.VSize], fxy: [FX, FY], frameRect: [X, Y, XB, YB], depth: [_33, _43]}`.
+ * Returns per unit `{kept, rect, src, vertices: [{xyzw: [X, Y, depth, RHW], uv: [u, v]}]}` as
+ * binary32 words (the rectangle after the clip and the source rectangle after the scale
+ * too). `noBarrier`: the mutation check, as runGpuUnits. */
+export async function runGpuSprites(units, { angle, noBarrier = false } = {}) {
+  let fragment = `#version 300 es
+precision highp float;precision highp int;precision highp sampler2D;
+uniform sampler2D uData;
+${frameProjectionGlsl()}
+${SPRITE_TILE_GLSL}
+layout(location=0) out vec4 oVertex;layout(location=1) out vec4 oUv;layout(location=2) out vec4 oRect;layout(location=3) out vec4 oSrc;
+void main(){
+  int sprite=int(gl_FragCoord.y),corner=int(gl_FragCoord.x);
+  vec4 a=texelFetch(uData,ivec2(0,sprite),0),b=texelFetch(uData,ivec2(1,sprite),0),c=texelFetch(uData,ivec2(2,sprite),0),
+    frameRect=texelFetch(uData,ivec2(3,sprite),0),d=texelFetch(uData,ivec2(4,sprite),0);
+  vec4 rect,src;
+  bool kept=fpSpriteTile(a,b,c,c.zw,rect,src);
+  vec2 uv=vec2(0.0);
+  vec4 vertex=kept?fpSpriteVertex(rect,src,a,b,c,frameRect,d.xy,corner,uv):vec4(0.0);
+  oVertex=vertex;oUv=vec4(uv,kept?1.0:0.0,0.0);oRect=rect;oSrc=src;}`;
+  if (noBarrier) fragment = fragment.replace('float B(float x){return uintBitsToFloat(floatBitsToUint(x)^uFpZero);}', 'float B(float x){return x;}');
+  const browser = await chromium.launch({ args: [`--use-angle=${angle}`] });
+  try {
+    const page = await browser.newPage();
+    await page.setContent('<canvas id="c" width="64" height="64"></canvas>');
+    const runtime = await page.evaluate(({ vertexSource, fragmentSource, units }) => {
+      const gl = document.getElementById('c').getContext('webgl2');
+      if (!gl.getExtension('EXT_color_buffer_float')) return { error: 'EXT_color_buffer_float missing' };
+      const compile = (type, source) => {
+        const shader = gl.createShader(type); gl.shaderSource(shader, source); gl.compileShader(shader);
+        if (!gl.getShaderParameter(shader, gl.COMPILE_STATUS)) throw new Error(gl.getShaderInfoLog(shader));
+        return shader;
+      };
+      const program = gl.createProgram();
+      gl.attachShader(program, compile(gl.VERTEX_SHADER, vertexSource));
+      gl.attachShader(program, compile(gl.FRAGMENT_SHADER, fragmentSource));
+      gl.linkProgram(program);
+      if (!gl.getProgramParameter(program, gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(program));
+      gl.useProgram(program);
+      const n = units.length, data = new Float32Array(5 * n * 4);
+      units.forEach((u, i) => {
+        data.set(u.a, 20 * i); data.set(u.b, 20 * i + 4); data.set([...u.c, ...u.fxy], 20 * i + 8);
+        data.set(u.frameRect, 20 * i + 12); data.set(u.depth, 20 * i + 16);
+      });
+      const input = gl.createTexture(), fb = gl.createFramebuffer();
+      gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, input);
+      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA32F, 5, n, 0, gl.RGBA, gl.FLOAT, data);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+      gl.bindFramebuffer(gl.FRAMEBUFFER, fb);
+      gl.activeTexture(gl.TEXTURE1);
+      const targets = [0, 1, 2, 3].map(k => {
+        const t = gl.createTexture(); gl.bindTexture(gl.TEXTURE_2D, t);
+        gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA32F, 4, n, 0, gl.RGBA, gl.FLOAT, null);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+        gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0 + k, gl.TEXTURE_2D, t, 0);
+        return t;
+      });
+      gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, input);
+      gl.drawBuffers([0, 1, 2, 3].map(k => gl.COLOR_ATTACHMENT0 + k));
+      gl.viewport(0, 0, 4, n);
+      gl.uniform1i(gl.getUniformLocation(program, 'uData'), 0);
+      gl.uniform1ui(gl.getUniformLocation(program, 'uFpZero'), 0);
+      gl.drawArrays(gl.TRIANGLES, 0, 3);
+      const status = gl.checkFramebufferStatus(gl.FRAMEBUFFER), error = gl.getError();
+      if (status !== gl.FRAMEBUFFER_COMPLETE || error) throw new Error(`framebuffer ${status} error ${error}`);
+      const out = [0, 1, 2, 3].map(k => {
+        gl.readBuffer(gl.COLOR_ATTACHMENT0 + k);
+        const pixels = new Float32Array(4 * n * 4);
+        gl.readPixels(0, 0, 4, n, gl.RGBA, gl.FLOAT, pixels);
+        return new Uint32Array(pixels.buffer);
+      });
+      const results = [];
+      for (let i = 0; i < n; i++) {
+        const kept = out[1][16 * i + 2] === 0x3f800000;
+        results.push({ kept, rect: Array.from(out[2].subarray(16 * i, 16 * i + 4)), src: Array.from(out[3].subarray(16 * i, 16 * i + 4)),
+          vertices: [0, 1, 2, 3].map(c => ({ xyzw: Array.from(out[0].subarray(16 * i + 4 * c, 16 * i + 4 * c + 4)),
+            uv: Array.from(out[1].subarray(16 * i + 4 * c, 16 * i + 4 * c + 2)) })) });
+      }
+      return { renderer: gl.getParameter(gl.RENDERER), results };
+    }, { vertexSource, fragmentSource: fragment, units });
     if (runtime.error) throw new Error(runtime.error);
     return runtime;
   } finally {

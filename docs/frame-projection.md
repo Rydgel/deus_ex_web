@@ -59,7 +59,8 @@ or past the frame (`0x10b19dd1–0x10b19e10`).
   single-texture path, 0x20 for DrawGouraudPolygon. Pre-transformed vertices:
   the device's own transform and clipping are not applied (`CLIPPING` false).
 * DrawTile (`0x10005ba0`, sprites and tiles) uses RHW = `1.0 / Z`, depth the
-  same, and X = `(XB - 0.5) + x` (`0x10005c41–0x10005c95`). Not ported.
+  same, and X = `(XB - 0.5) + x` (`0x10005c41–0x10005c95`). Sprites reach it through
+  the canvas; ported 2026-10-15, see [Sprites](#sprites-the-tile-the-render-device-receives).
 
 **4. The device's depth.** `UD3DRenderDevice::SetRes` (`0x1000a4d0`), block
 `0x1000c40f–0x1000c45b`: `far = 32767` (`0x10018d00`), or 8192 (`0x10018cfc`)
@@ -161,15 +162,17 @@ frame's Coords differ from the exact rotation by up to 0.3 pixel at 1440 wide.
 * `src/viewer/play-camera.mjs`: the camera is posed from the pass frame's
   Coords (`setCameraCoords`, called by `setFrameProjection`) and its depth range
   is the device's (`PLAY_NEAR` 1, `PLAY_FAR` 32767) in every camera, so the
-  sprites, particles, coronas and lasers, which keep the camera's projection
-  (decals, since 2026-10-14, project through the chain), land within 0.004 pixel
+  coronas, which keep the camera's projection (decals since 2026-10-14 and sprites
+  and particles since 2026-10-15 project through the chain; lasers are meshes),
+  and the camera billboards of a pass without a frame, land within 0.004 pixel
   and 2 depth ulps of the world.
 * `src/viewer/frame-projection.mjs`: the shared uniforms and `patch(shader)`,
   which replaces three.js's `project_vertex` with `fpClip(fpView(world))` (or,
   for GPU-path actor meshes, `fpClip` of the camera-space point). Applied to
   world surfaces (`applyLightAtlas`: static, mover, mirror and batched
   materials), the fake-backdrop depth mesh, the fog overlay and every actor mesh
-  material. `uFpOn` selects the chain per pass: the main frame, each mirror and
+  material, and (`patchSprite`, [Sprites](#sprites-the-tile-the-render-device-receives))
+  sprite materials. `uFpOn` selects the chain per pass: the main frame, each mirror and
   sky child frame (its own Coords, projection and Frame->Mirror: a mirror child
   at odd depth flips X, as the page's sampling right to left expects), and the
   first-person weapon (the master frame). A pass without a frame (a
@@ -511,13 +514,94 @@ icons, so the visible sprites are the runtime particle items (a ParticleProxy
 per particle: two on Island's start) and effect sprites; the synthetic ones use those
 textures and others (`scripts/sprite-tile-cases.mjs`).
 
+**The port (2026-10-15).**
+
+* `src/runtime/sprite-tile.mjs`: the CPU reference, one `Math.fround` per x87
+  operation: `spriteIcon` (3), `canvasTile` (4 and 5: the clip and the U/V
+  scale), `stageScale` and `deviceVertices` (6), `spriteVertices` for the chain.
+  `test/sprite-tile.test.mjs` pins two sprites the original produced (one
+  inside the frame, one larger than it and clipped).
+* `src/viewer/sprite-tile-glsl.mjs`: `fpSpriteTile` and `fpSpriteVertex` with
+  the barrier `B()` and the correctly rounded `divRN` (the divisions are `t =
+  (X * UL) / XL`, `(((d - XL) * UL) / XL)`, the texture ratio, `1 / Z` and
+  `1 / (Size * Scale)`).
+* `validate-sprite-tiles` compares, for each of the 864 sprites, the port with the
+  oracle stage by stage: UCanvas::DrawTile's clipped rectangle and scaled source
+  rectangle, SetTexture's UMult, VMult and slots, and the four vertices' X, Y,
+  depth, RHW and both texture coordinates (placed by the oracle's slots),
+  **3,456 vertices equal bit for bit**; a bit flipped in the port is found
+  (`--mutate`). The same sprites through the GLSL on the GPU (headless Chromium,
+  ANGLE GL on this host's AMD Radeon 780M, `runGpuSprites` in
+  `scripts/frame-projection-gpu-run.mjs`) give the same vertices, clipped
+  rectangle and source rectangle **bit for bit for all 864**; without the barrier
+  (`--no-barrier`) 342 of the 864 differ.
+* **Play.** `sprite-scene.mjs` keeps three.js's `THREE.Sprite` per record; its
+  material's vertex shader (`frameProjection.patchSprite`) builds the tile when the
+  pass has a frame and the record carries the Setup floats of that frame
+  (`record.screens[frame]`, set by `setFrame` in `mainPass`, `framePass` and
+  `numberedPass`: the root's frame 0 for the main pass, the child frame's own for
+  each mirror and sky pass, none for a ViewportWindow's or Inspect's) and feeds the
+  vertex to `fpClipOf` like a world vertex (depth `RHW * _43 + _33`, the frame's
+  offset and the mirror flip). A quad the clip rejects goes outside the clip volume.
+  `?spriteTiles=off` and `deusExViewer.spriteTiles(false)` keep the billboards.
+  Brightness and the display ramp are untouched (the colour is still the
+  record's ScaleGlow).
+* **Orientation (found by this work).** A texture's first row is its top (`S_Player`'s
+  head is row 0; D3DDrv draws V = 0 at the top of a tile), and the page's textures are
+  `DataTexture`s with `flipY = false` (row 0 at V = 0), but three.js's sprite quad has V
+  = 1 at its top, so the billboards drew every sprite **upside down** against the
+  original. The tile uses D3D's V; the billboard fallback now flips V too.
+  `validate-sprite-tiles-play` (below) measures both with a probe texture.
+* `scripts/validate-sprite-tiles-play.mjs` (worker mode, headless Chromium, 1024 x
+  640, one device pixel per CSS pixel, 02_NYC_Street at ParticleGenerator3's vent and
+  rotated 2,400 units either way so the smoke straddles the frame's edges; the
+  frame frozen, the sprite scene no longer taking snapshots, one sprite at a time on
+  the camera's layer): every sprite the main frame draws carries Setup's floats
+  (9 of 9 in each view, 27 sprites), each drawn alone lies inside the reference tile
+  and mostly fills it (7 of 9 fill over 30% of it; a nearer wall hides the rest: the
+  tile's depth is the sprite's Z); with a probe texture (red first rows, green last
+  rows) the first row is on top in the tile (red 134,400 pixels above the sprite's
+  centre, 0 green; green 14,094 below, 0 red; the other two views alike) and in the
+  billboard; the tile and the billboard of the same sprite differ in 1,102 of 148,494
+  pixels (0.7%; 0.9% and 0.9% in the other views, the quad's edges); with the probe
+  on all nine sprites the whole frame differs between tiles and billboards in 7,406 of
+  288,710 sprite pixels (2.6%; 5,449 of 274,245 and 6,736 of 300,345). **Before** the
+  V flip (`SPRITE_OLD_ORIENTATION=1` drops it, the billboards as they drew before
+  2026-10-15, as at cd49899) the same probe shows green on top
+  (164,638 pixels, red 50,960 below: inverted) and the tile and the billboard of the
+  first sprite differ in 216,119 of 216,636 pixels (99.8%), the whole frame in 297,143
+  of 296,700 sprite pixels (the other two views alike). The real smoke
+  textures are fire textures that animate between screenshots, so the probe is the
+  stable measure; with them the page's tiles and billboards differ in nearly every
+  sprite pixel (150,760 of 158,597 in the first view, 190,287 of 161,661 before the
+  flip).
+* Particles are sprites: `ParticleIterator` items are `DT_Sprite` records (viaIterator)
+  with their own Setup per frame, and take the path above in the root and the child
+  frames (`validate-particles-play` passes: 7 live particles, 16 sprites). Lasers are not
+  sprites: a `LaserIterator`'s items are `DT_Mesh` LaserProxy snapshots, drawn by
+  DrawActorSprite's mesh branch (`0x10b2556a..0x10b25655`, DrawMesh) through the
+  actor mesh layer's materials, which project the camera-space buffer on the
+  chain since 2026-10-14 ([GPU mesh](gpu-mesh.md#camera-space-2026-10-14)): nothing
+  to port, but not measured separately.
+* **Coronas** are the same call (`Canvas.DrawIcon(Skin, X - size/2, Y - size/2, size,
+  size, Span 0, Z 1.0, colour, fog 0, PolyFlags 0x104)`, [coronas](coronas.md#the-pass-urenderdrawframe-0x10b1b46a0x10b1bb06))
+  with the rectangle already in screen pixels, which `corona-pass.mjs` draws as a
+  screen tile over the world with an orthographic camera and no depth test (the
+  original's Z 1.0 gives depth `_33 - _33 = 0`). It differs from the original's
+  tile by the arithmetic of 6 and 5 alone: `(XB - 0.5) + X` in binary32 and the
+  half-pixel the page adds back (about 1e-4 pixel at 1,000), UCanvas::DrawTile's
+  clip of a corona at the frame's edge (a linear map of the texture either way) and
+  the U/V roundings. **Not wired** to `fpSpriteTile`; open, small.
+
 Not covered, noted: DT_SpriteAnimOnce's frame choice (`0x10b252ac..0x10b25392`:
-Play draws the first frame), the editor and hit-test paths (PushHit, the
-selected tint), the viewer's `Sprite` override, texture LOD other than 0 and
-animated textures' AnimCur chain beyond the chosen frame's size.
-Particles (script `ParticleIterator`) and lasers go through the same sprite
-and beam paths; coronas have their own tile draw (`corona-pass.mjs`) and are
-open as well.
+Play draws the first frame; the shipped game assigns it nowhere, [particles](particles.md#dt_spriteanimonce-0x10b252ac0x10b25392-restored-at-0x10b254d3)), the editor and
+hit-test paths (PushHit, the selected tint), the viewer's `Sprite` override, texture
+LOD other than 0 (and the render device's `+0x30` minimum LOD, not measured), the
+colour D3DDrv packs from Color (Play keeps its ScaleGlow colour), a mirror or sky
+child frame's sprites in a browser (the oracle covers 27 child frames bit for bit
+and the page applies `framePass(index)`'s floats, but no Play view with a sprite
+in a mirror is measured), and a ViewportWindow's sprites (they keep the camera's
+billboards, as its world does).
 
 ## Unverified and open
 
@@ -525,9 +609,15 @@ open as well.
   polygon (20% of the saved points in these frames); the GPU clips the unclipped
   polygon homogeneously. The pixels inside the frustum agree; the vertices on its
   edges are the rasterizer's.
-* **Sprites, particles, coronas, lasers, the fog overlay's clip at view
-  depth 380:** the camera's projection (DrawTile's `1/Z` vertex is an original
-  fact, not wired). ViewportWindow camera frames keep
+* **Sprites** (and the particles, which are sprites) take the chain's vertices
+  ([Sprites](#sprites-the-tile-the-render-device-receives)). Open there: the coronas'
+  tile (the same call, arithmetic differences only), DT_SpriteAnimOnce's frame, texture
+  LOD other than 0, the colour D3DDrv packs, a Play view of sprites in a mirror frame, a
+  ViewportWindow's sprites (camera billboards). **Lasers** are meshes on the chain's
+  mesh path, not separately measured. **The fog overlay's clip at view depth 380**
+  (D3DDrv clips each fog polygon there before building its vertices) is not
+  reproduced: the fog mesh projects its surface's unclipped vertices.
+  ViewportWindow camera frames keep
   the camera's projection (their camera is posed from Coords as well): measured
   against the original's own security-camera frames, drawing a window through the
   vertex chain (`fpClip` with the window's master frame) changes 0 to 2 of

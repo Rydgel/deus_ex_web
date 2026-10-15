@@ -225,6 +225,8 @@ let frameProjection = true;
 // docs/frame-projection.md) in every pass that has a frame. ?vertexProjection=off
 // keeps the camera's matrices; deusExViewer.vertexProjection(on) switches it.
 vertexProjection.enabled = new URLSearchParams(location.search).get('vertexProjection') !== 'off';
+// Sprites as the original's tiles (sprite-scene.mjs, docs/frame-projection.md "Sprites"); ?spriteTiles=off keeps billboards.
+vertexProjection.spriteTiles(new URLSearchParams(location.search).get('spriteTiles') !== 'off');
 // The main frame's rectangle in drawing-buffer pixels (XB, YB, X, Y), set with its pass.
 let mainRect = null;
 /** The next draw projects with `projection`'s frame (a mirror or sky child's,
@@ -1561,6 +1563,8 @@ frameProjection(on) { frameProjection = Boolean(on); },
 /** Validation only: the vertex stage of the frame's projection (on, the
  * default) or the camera's matrices (off). */
 vertexProjection(on) { if (on === undefined) return vertexProjection.state(); vertexProjection.enabled = Boolean(on); return null; },
+/** Validation only: sprites as the original's tiles (on, the default) or as camera billboards (off). */
+spriteTiles(on) { vertexProjection.spriteTiles(Boolean(on)); },
 /** Validation only: draw (or leave out) the decal block in a ViewportWindow's frames. */
 viewportDecals(on) { viewportDecalsOn = Boolean(on); },
 /** Show or hide the fog pass (validation: a frame with and without it). */
