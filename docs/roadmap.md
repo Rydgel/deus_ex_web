@@ -441,10 +441,12 @@ detail-texture pass (`FSurfaceInfo.DetailTexture`); the fog map has none. **The 
 that reports `BLENDDIFFUSEALPHA` (37% of the shipped texture exports carry one); **Wine's does not, so every stored original
 capture lacks them** (measured 2026-10-15: `SetRes` clears the field, 0 of 1,860 surfaces entered the pass; with the field
 poked the pass runs and changes the frame). The pass runs unchanged under Unicorn and the Rust core's port matches it bit for
-bit (84 cameras, 465 fans, 2,068 vertices; `validate-detail-pass`, `validate-detail-pass-rust`); **Play does not draw it yet**
-(the sim-side wiring, the page's modulated draw, ZBIAS and the `?detailTextures=0` switch are the hand-off in
-[frame projection](frame-projection.md#detail-textures-the-pass-play-does-not-draw-2026-10-15)).
-Open: the detail-texture pass, DT_SpriteAnimOnce (unreachable in the shipped maps), clipped polygons' own
+bit (84 cameras, 465 fans, 2,068 vertices; `validate-detail-pass`, `validate-detail-pass-rust`); **Play draws it** (2026-10-15: OccludeBsp's
+option `0x400` keeps the saved points only of the polygons the pass can use, `detail_run` runs over the main frame and every mirror and
+sky child frame, the page draws the fans in the recorded states; ZBIAS 15 is a constant 5,000-step depth offset measured against the
+original with the pass poked in; the single-level detail textures are sampled as one level; `?detailTextures=0` models a device
+without the cap and every stored-capture comparison uses it: [frame projection](frame-projection.md#detail-textures-2026-10-15)).
+Open: the detail pass's mover surfaces, ZBIAS mapping, colour interpolation and fog-map gate (the end of that section), DT_SpriteAnimOnce (unreachable in the shipped maps), clipped polygons' own
 vertices ([frame projection](frame-projection.md#unverified-and-open)), the
 darkest-pixel rounding visual acceptance found, and in live scenes (compared
 tick by tick with the original since 2026-10-13, [visual acceptance](visual-acceptance.md#live-scenes-2026-10-13))

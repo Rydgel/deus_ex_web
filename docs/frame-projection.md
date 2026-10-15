@@ -81,8 +81,8 @@ that clips each polygon at view depth 380.0 (`0x43be0000`, `0x10004880`) before
 building its vertices (`0x100048b9–0x10004cda`, ZBIAS 15 at `0x10004a00`, back to 0
 at `0x10004d01`) is the **detail-texture** pass (`FSurfaceInfo.DetailTexture`, `+0x18`),
 not the fog map's (`+0x1c`, `0x10004d39`), which has no depth clip; this was
-mislabelled until 2026-10-15. Play does not draw detail textures:
-[Detail textures](#detail-textures-the-pass-play-does-not-draw-2026-10-15).
+mislabelled until 2026-10-15. Play draws detail textures since the same day:
+[Detail textures](#detail-textures-2026-10-15).
 
 ## The oracle
 
@@ -635,7 +635,7 @@ rows, green last rows) the first row is on top in the reflection in all 8 probed
 flips left and right only). Moving the reference tile 8 pixels (`--mutate`) fails the
 comparison.
 
-## Detail textures: the pass Play does not draw (2026-10-15)
+## Detail textures (2026-10-15)
 
 The "fog overlay's clip at view depth 380" of the earlier hand-off is not the fog's. Reading D3DDrv's
 `DrawComplexSurface` (`0x10003900`) from the instructions: the block with the 380.0 constant (`0x10004880`)
@@ -643,9 +643,8 @@ starts at `0x10004860` with `mov eax, [Surface + 0x18]` and `je 0x10004d39`; FSu
 FlatColor, Level, Texture (`+0xc`), LightMap, MacroTexture, **DetailTexture (`+0x18`)**, FogMap (`+0x1c`)
 (`UnRender.h`), so that block is the **detail-texture pass** and `0x10004d39` is the fog map's, which draws
 its polygons whole (it compares no depth). The fog overlay Play draws cannot differ from the original's for
-this reason. What can differ is that **Play draws no detail textures at all** (no `DetailTexture` in
-`src/viewer`). Traced, not run: this section is the hand-off for the pass; nothing of it is implemented or
-validated yet.
+this reason. What did differ is that **Play drew no detail textures at all**; it draws them now (the end of this section).
+The pass was traced, run under Unicorn, ported and then wired in the same day.
 
 **Whether the original draws it.**
 * Render.dll DrawFrame (`0x10b1a8df..0x10b1a92f`) builds `Surface.DetailTexture` (`[ebp - 0x8c]`, the struct at
@@ -758,53 +757,79 @@ with the original under Unicorn: 265 draw-list records, 465 fans, 2,068 vertices
 polygon scratch holds records of up to 256 polygons of up to 64 points (the shipped maps' largest are far below; a larger
 record is skipped, not truncated).
 
-**Play's draw (in progress, 2026-10-15).** Item 1 is built: `src/runtime/detail-draw.mjs` (the simulation side), OccludeBsp's option
-`0x400` (`OCCLUSION_DETAIL`, `occlude.rs` `detail_wanted` / `detail_near`: the saved points only of the polygons of a surface whose
-table record (model words 19 and 20) has a detail texture, whose draw flags lack `0x04000000` and that have a vertex of view depth
-below 380; the filtered stream is 53% of the all-points stream on the validator's close-up cameras and carries no points at all
-when no surface qualifies), `detail_run` over the main frame's and each child frame's stream (`decodeFrames` hands every child
-its stream address), and the pack in `snapshot.begin.visibility.detail` (transferred). `scripts/validate-detail-play-sim.mjs` runs
-Play's session headless and compares the pack with the CPU reference `detail-pass.mjs` over the same frame run again with all the
-points, mirror frames included; `scripts/validate-detail-pass-rust.mjs` also runs the filtered stream against the original's fans
-(465 fans, vertex for vertex; `first` counts the kept polygons only). Item 2 is built: `src/viewer/detail-scene.mjs` draws the
-pack (one mesh per frame and detail texture; `mainPass` / `framePass` show a pass's own frame's fans as the sprite scene's passes
-do) through `fpClipOf` with D3DDrv's vertices, in the recorded states, with a depth offset provisionally set from Wine's ddraw
-mapping of ZBIAS (item 3 measures it; without any offset the fans fail the depth test everywhere: the same vertices rasterized
-as other triangles differ in the last depth bits). `scripts/validate-detail-play.mjs` (worker mode, antialiasing off) checks the
-page. ZBIAS and the pixel checks are items 3-4.
-What the item list asked for, from what the oracle recorded:
-1. *Sim side.* A per-surface table from the map's textures at load (`detailTable`; `surfaceDetails` in
-   `scripts/occlusion-request.mjs` is the Node version: the texture's `DetailTexture`, its first mip's size and its `DrawScale`
-   or `Scale`, and the browser needs the same from its TextureStore). OccludeBsp keeps the saved points only when option 0x100
-   is set; Play does not set it (the decals do when they have fragments). Emit points for the polygons of a surface whose
-   table flag is set, whose draw-list flags lack `0x04000000` and that have a vertex of view depth below 380 (`occlude.rs`'s
-   output loop, `options & 0x100` at the emit), run `detailRun` for the main frame and each mirror/sky child (their `fields`,
-   rectangle offset and the frame's `stamps.plan` pass id: [sim worker](sim-worker.md)), and ship the fans in the snapshot as
-   typed arrays reused between frames. The tracker's mover surfaces are not in the table (a mover with a detail texture draws
-   none: say so in the open list).
-2. *Page.* One draw per pass after the world's surfaces and before the actors (the original draws each surface's fans right
-   after the surface), vertices as D3D's (`fpClipOf(vec4(X, Y, depth, rhw), 1/rhw)` as the base surface; a clip vertex has
-   `rhw = 1/D`), in the **recorded states**: blend `ALPHABLENDENABLE`, `SRCBLEND = DESTCOLOR`, `DESTBLEND = SRCCOLOR` (so the
-   framebuffer becomes `2 * src * dst`), `ZWRITEENABLE` off, depth test less-or-equal, `ZBIAS 15`, stage 0 `COLOROP =
-   BLENDDIFFUSEALPHA`: the stage's colour is `mix(diffuse.rgb, texel.rgb, diffuse.a)` with the diffuse `0x808080` (so alpha 0 is
-   the identity: `2 * 0.5 * dst`) and the vertex alpha interpolated; the texture sampled as the base textures are
-   ([texture sampling](texture-sampling.md): the same stage state, LOD bias -0.5, wrap, `NoColorSpace`). Brightness and the
-   display ramp stay untouched: Play draws raw colours and ramps the finished frame, as D3D does.
-3. *ZBIAS.* Play has no depth bias. The original's `ZBIAS 15` is a 0..16 step the driver interprets; under Wine's ddraw it
-   becomes a constant depth bias (believed `-15 / 16000` in the 0..1 depth range, **not measured**), about 9 world units at 100
-   units from the camera, about 0.4 at 20: wide enough to pull a fan in front of anything within a few units of the surface
-   (a sign on a wall gets the wall's detail texture). Measure it against the poked Wine capture (`--poke D3DRenderDevice0:0x78:1`,
-   the same camera) with `polygonOffset` units tried around `-15 / 16000 * 2^24`, and say which value matches.
-4. *The switch.* `?detailTextures=0` models a device without the cap (no `detailRun`, as `SetRes` zeroing `+0x78` makes
-   `DrawComplexSurface` skip the pass); every Wine capture of the original lacks the pass, so every comparison with a stored
-   capture needs it, as it needs `?antialias=0`. List in [visual acceptance](visual-acceptance.md) which rows were taken without
-   detail (all), and check which validators compare Play pixels with stored captures.
+**Play draws the pass (2026-10-15).** On by default, as the original does on a device that reports `BLENDDIFFUSEALPHA`;
+`?detailTextures=0` (Node: `DETAIL_TEXTURES=0`) models a device without the cap (no table, no option, no fans: `SetRes` zeroes
+`URenderDevice.DetailTextures`), and every comparison with a stored Wine capture needs it ([visual acceptance](visual-acceptance.md)).
 
-**Unverified (inputs the oracle takes, not derives):**
-the detail texture's `Lock` (Pan 0, UScale = DrawScale, first mip) and the cache's size choice (the first mip within the
-device's maximum, shift 0); Render.dll's `esi < 2` LOD gate (`0x10b1a8f2`) is taken as always met for BSP surfaces; the facet
-Z axis and the light-map coordinates are not used by the pass and are zeros; the multitexture path (`UseMultitexture`,
-`this+0x9b4`) computes the same scratch values in its own loop (`0x10003d25..0x10003d4f`) but is not run.
+1. *Simulation side* (`src/runtime/detail-draw.mjs`, `native/script-vm/src/occlude.rs`). The map's per-surface table is built at load
+   from its textures (`detail-pass.mjs` `modelSurfaceDetails`: the surface texture's `DetailTexture`, its first mip's size and `DrawScale`;
+   the page calls the same function for the texture to draw) and uploaded with the occlusion (model words 19 and 20). OccludeBsp's
+   option `0x400` (`OCCLUSION_DETAIL`: `detail_wanted`, `detail_near`) saves the points only of the polygons of a surface that has a
+   detail texture, whose draw flags lack `0x04000000` and that have a vertex of view depth below 380: the filtered stream is 53% of the
+   all-points stream on the validators' close-up cameras (17,013 of 32,014 words) and carries no points when no surface qualifies.
+   `detail_run` then runs over the main frame's stream and each mirror and sky child frame's (`decodeFrames` hands each child its stream
+   address, its own Coords and the shared rectangle offset); the pack (`[frames, index, words, ...]`: `detail_run`'s output per frame)
+   rides in `snapshot.begin.visibility.detail` and its buffer is transferred by the worker. A ViewportWindow's frames (security
+   cameras) keep the camera's projection and draw none. `scripts/validate-detail-play-sim.mjs` runs Play's session headless and compares
+   the pack with the CPU reference `detail-pass.mjs` over the same frame run again with all the points (7 views: Training's wall, its
+   entrance floor mirror with its child frame, the Island deck; 38 records, 58 fans, 257 vertices, every word);
+   `validate-detail-pass-rust.mjs` runs the filtered stream against the original's fans too (465 fans, vertex for vertex; `first`
+   counts the kept polygons only).
+2. *Page* (`src/viewer/detail-scene.mjs`). One mesh per frame and detail texture (render order below the decals'); `mainPass` and
+   `framePass` show only the frame a pass draws, as the sprite scene does (`stamps.plan`'s pass ids are untouched: the page draws the
+   fans of the frames its passes already draw). The vertices go through `fpClipOf(vec4(X, Y, depth, rhw), 1/rhw)`, in the recorded
+   states: `DESTCOLOR` / `SRCCOLOR` blend, no depth write, depth test less-or-equal, stage colour `mix(0x808080, texel, vertex alpha)`
+   (`BLENDDIFFUSEALPHA`), the texture sampled as the base textures are ([texture sampling](texture-sampling.md)); the host's mirror
+   clip plane is not applied to the fans (they are the frame's own); a surface with a fog map takes none (the fog note below).
+   `scripts/validate-detail-play.mjs` (worker mode, antialiasing off): the pixels the pass changes lie inside the reference fans
+   (the pack's triangles rasterized on the CPU; 0 outside in 3 views) and fill them (83% of the covered pixels change), the fans
+   darken what they cover, alpha 0 at D leaves the frame unchanged (0 pixels), a frozen frame repeats, each mirror and sky frame's pass
+   shows only its own frame's fans, and `?detailTextures=0` has no scene and no pack.
+3. *ZBIAS 15.* Measured against the original under Wine with the pass poked in (`--poke D3DRenderDevice0:0x78:1`; three Island and
+   three Training cameras; the unpoked and poked captures 2 ms apart in level time, Play at the held time). The original's contribution
+   is its poked frame less its unpoked one, Play's is its frame with the pass less the same frame without. With no depth offset every
+   fan fails the depth test (its vertices are the base surface's, rasterized as other triangles: the last depth bits differ). Beyond
+   that, Play changes pixels the original does not from an offset of about 8,000 steps of the depth buffer (2^-24) up: in `i1` (the Island
+   deck) the 7,047 pixels added going from 8,000 to 10,000 steps are changed in the original's frame in 0.2% of them, the sets from 4,000
+   to 5,000 steps in 88 to 94% (the transition lies at 5,000 to 5,500). Over the views the best constant is 4,000 to 6,000 steps (the sum
+   of missed and extra pixels is lowest there in `i1`, `i3` and `t2`; `i2` wants less), so **Play lowers the fans' depth by 5,000 steps
+   (3.0e-4) in the vertex stage**: a constant in depth that is the same on every host (a polygonOffset counts the host's own depth steps).
+   The thresholds are not constant across views, though: `t2` (a floor at a grazing angle) needs about 10,000 steps where `i1` tolerates
+   less than 8,000, and `t3` (a wall with a sign in front of it) does not want its wall's detail over the sign. A slope-scaled offset
+   fits all of them better: with polygonOffset slope factors from -6 to -28 (units -15) the pixels the original changes and Play
+   misses reach their floor exactly at factor **-15** in the three views that discriminate (`i1` 293 pixels, `i3` 137, `t2` 313), and the
+   extra pixels grow past -16. That is `ZBIAS 15` read as a slope factor, probably the way Wine's wined3d maps the render state (its
+   source is not read here: **unverified**). Play does not use it: on grazing polygons the host's slope term lost fragments in `t3` (floor
+   discs the original draws), and its units differ between backends. Result with the constant 5,000: of the original's contribution
+   Play reproduces the changed pixels with Jaccard 0.938 / 0.973 / 0.980 (Island `i1`, `i2`, `i3`) and 0.967 / 0.960 / 0.857 (Training
+   `t1`, `t2`, `t3`), and the signed change with correlation 0.93 / 0.82 / 0.91 and 0.99 / 0.82 / 0.57. The correlation is below 1 because
+   Wine's frames are darker (the contribution scales with brightness, [visual acceptance](visual-acceptance.md)) and for the reasons
+   under Unverified.
+4. *Detail textures are stored with one mip level* (893 of the 896 in the shipped packages: 128 x 128, one level; the other three are
+   256 x 64 with nine). D3DDrv uploads the level count the file stores, so a single-level texture is sampled at level 0 (MIPFILTER point,
+   no chain); Play draws them that way (`?detailMips=generate` builds a chain as the base textures get). Against the original's
+   contribution this changes Jaccard 0.890 -> 0.938 (`i1`) and 0.959 -> 0.980 (`i3`), and the pixels the original changes and Play does
+   not 7,920 -> 340 (`i1`): a generated chain smooths the pattern below the 1/255 the contribution needs.
+5. *Stored captures.* `visual-acceptance.mjs play`, `camera-acceptance.mjs` and `live-acceptance.mjs` (the only scripts that read
+   stored original frames) add `detailTextures=0` unless `--detail on`.
+
+**Fog.** DrawComplexSurface clears a surface's detail texture when it has a fog map. Play knows a surface's map as the fog pass computes
+it for the frame, so a level surface whose fog map has any light in it takes no detail texture (`fog-pass.mjs` `fogged`, per frame). The
+original's FogMap exists whenever the draw item has volumetric links (a light sphere test OccludeBsp's attachment makes, which Play does
+not run), so a fog-zone surface whose links reach it but add no light loses its detail texture there and keeps it here (**unverified**; not
+censused, and the fog path is not exercised by the validators above).
+
+**Unverified and open (the pass):** the detail texture's `Lock` (Pan 0, UScale = DrawScale, first mip) and the cache's size choice (the
+first mip within the device's maximum, shift 0); Render.dll's `esi < 2` LOD gate (`0x10b1a8f2`) is taken as always met for BSP surfaces
+(Play does not model it); the facet Z axis and the light-map coordinates are not used by the pass and are zeros; the multitexture path
+(`UseMultitexture`, `this+0x9b4`) computes the same scratch values in its own loop (`0x10003d25..0x10003d4f`) but is not run; **mover
+surfaces** (the tracker's surfaces are not in the table: a mover with a detail texture draws none); **the ZBIAS mapping** (a constant of 5,000
+steps approximates what is most likely a slope-scaled offset, above); **colour interpolation** (the vertex alpha is interpolated as GL does,
+perspective-correct, which wined3d does too; D3D hardware may interpolate colours in screen space, which changes the alpha ramp across a large
+polygon: not measured, there is no Windows original here); **draw order** (Play draws all of a frame's fans after its world surfaces, one mesh
+per texture; the original draws each surface's fans right after the surface, so where two detail surfaces overlap in depth and the
+2 * src * dst blend clamps the result differs); **fog** (above); **a ViewportWindow's frames** draw none; nothing is drawn in a pass without
+child frames (`?childFrames=off`).
 
 ## Unverified and open
 
@@ -820,8 +845,8 @@ Z axis and the light-map coordinates are not used by the pass and are zeros; the
   sprites in a browser, a ViewportWindow's sprites (camera billboards). **Lasers** are meshes on the chain's
   mesh path, not separately measured. **The fog map has no clip at view depth 380**
   (the fog pass, `0x10004d39`, compares no depth); the clip at 380 is the
-  **detail-texture** pass's, which Play does not draw at all:
-  [Detail textures](#detail-textures-the-pass-play-does-not-draw-2026-10-15).
+  **detail-texture** pass's, which Play now draws:
+  [Detail textures](#detail-textures-2026-10-15).
   ViewportWindow camera frames keep
   the camera's projection (their camera is posed from Coords as well): measured
   against the original's own security-camera frames, drawing a window through the

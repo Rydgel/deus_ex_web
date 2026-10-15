@@ -90,12 +90,19 @@ to a quarter turn) level, and one 3,000 units (16.5°) below the start yaw.
   (`pow(x, 1/(2.5·0.4))`) is the identity. The scene canvas is pinned to
   1280×720 at the page origin, and the page UI is hidden.
 
-**Detail textures are not in any stored original frame.** The original's `SetRes` clears `URenderDevice.DetailTextures`
-when the D3D7 device lacks `D3DTEXOPCAPS_BLENDDIFFUSEALPHA`, and Wine's ddraw lacks it
-([frame projection](frame-projection.md#detail-textures-the-pass-play-does-not-draw-2026-10-15)): every row of every table in
-this document was compared against a frame the original drew without the pass, whatever the ini says. A Play frame that
-draws it (it will once the port is wired in) differs by the pass's contribution (0.33 of 255 over the Island deck's frame, a
-dark scene, in the poked capture); a matched capture of the original with the pass is `--poke D3DRenderDevice0:0x78:1`.
+**Detail textures are not in any stored original frame, and Play now draws them.** The original's `SetRes` clears
+`URenderDevice.DetailTextures` when the D3D7 device lacks `D3DTEXOPCAPS_BLENDDIFFUSEALPHA`, and Wine's ddraw lacks it
+([frame projection](frame-projection.md#detail-textures-2026-10-15)): every row of every table in this document was compared
+against a frame the original drew without the pass, whatever the ini says, and **was taken with Play drawing no detail textures
+either** (before 2026-10-15 Play drew none at all). Since then Play draws the pass by default, as the original does on a device
+with the cap, so **a comparison with a stored or newly captured Wine frame needs `?detailTextures=0`**, like `?antialias=0`:
+`visual-acceptance.mjs play`, `camera-acceptance.mjs` and `live-acceptance.mjs` (the scripts that read stored original frames) add it
+unless `--detail on`, and `play --query detailTextures=1` also keeps it. The pass changes a frame by 0.3 of 255 on average over
+the Island deck's frame (a dark scene); the original with the pass is captured with `--poke D3DRenderDevice0:0x78:1` (the unpoked
+frame is the reference of the pass's own contribution: `play --detail on --detail-bias f:u[:d],...` also writes Play's frame without
+the pass and at each depth offset, `<view>-play-off.png`, `<view>-play-bias<f>_<u>_<d>.png`). The ZBIAS measurement against such
+captures is in [frame projection](frame-projection.md#detail-textures-2026-10-15): the contribution's changed pixels match with
+Jaccard 0.94 to 0.98 on five of six views.
 
 **Metrics** (`compare`, per view):
 
@@ -145,7 +152,7 @@ its own views. Frames are `<map>/<name>-original.png` and `-play.png`.
 
 **Probing the original at a camera.** `--cw-probe` attaches `tools/dx-fpu-win.c` for 6 seconds; `--cw-only` drops its
 default breakpoints and `--cw-spec label=Module.dll:0xADDR[:n=N][:ret]` (repeatable) adds yours, so the hits at any address of
-the running original are counted (D3DDrv's detail pass: [frame projection](frame-projection.md#detail-textures-the-pass-play-does-not-draw-2026-10-15)).
+the running original are counted (D3DDrv's detail pass: [frame projection](frame-projection.md#detail-textures-2026-10-15)).
 `--poke Object:offset:value` (repeatable) writes a 32-bit field of a live object before each camera
 (`tools/poke-object-win.c`, build as `dump-actor-win`); `DX_INI_SET='Section.Key=Value;...'` changes keys of the launch
 copy `DeusEx-ad.ini` (never the installed ini); `scripts/original-run.sh <map> <command...>` runs any command against the

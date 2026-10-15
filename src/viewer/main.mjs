@@ -841,9 +841,9 @@ async function loadMap(name) {
         surfaceDetails:await modelSurfaceDetails(assets,asset,nextMap.model)});}
       catch(error){nextWorld.notes.push(`Detail textures unavailable: ${error.message}`);}
     }
-    // ?detailBias=factor,units: the detail passes' depth offset (three.js polygonOffset), for A/B captures against the original.
+    // ?detailBias=factor,units[,depth]: the detail passes' depth offset (detail-scene.mjs ZBIAS), for A/B captures against the original.
     const detailBias=new URLSearchParams(location.search).get('detailBias');
-    if(nextDetailScene&&detailBias){const [factor,units]=detailBias.split(',').map(Number);nextDetailScene.setBias(factor||0,units||0);}
+    if(nextDetailScene&&detailBias){const [factor,units,depth]=detailBias.split(',').map(Number);nextDetailScene.setBias(factor||0,units||0,depth||0);}
     // The simulation's first events (the startup lighting, the admitted
     // actors' creation records) reach the page before the first frame, whose
     // actor meshes are built while the map loads.
@@ -1613,9 +1613,11 @@ decals() {
     drawnTriangles: decalScene?.count() ?? null, notes: [...(decalScene?.notes ?? [])] };
 },
 /** The last drawn frame's detail-texture fans (detail-draw.mjs, detail-scene.mjs): the pack's frames, the page's meshes (frame,
- * triangles) and the triangles drawn; `bias` sets the depth offset of the detail materials (three.js polygonOffset). */
+ * triangles) and the triangles drawn; `bias` {factor, units, depth} sets the depth offset of the fans (polygon offset and a constant),
+ * {hide} hides or shows the pass (a frame with and without it). */
 detail(bias) {
-  if (bias && detailScene) detailScene.setBias(bias.factor, bias.units);
+  if (bias && detailScene && bias.units !== undefined) detailScene.setBias(bias.factor ?? 0, bias.units, bias.depth ?? 0);
+  if (bias && detailScene && bias.hide !== undefined) detailScene.root.visible = !bias.hide;
   return { on: Boolean(detailScene), frames: lastVisibility?.detail ? unpackDetail(lastVisibility.detail).map(entry => ({ index: entry.index, words: entry.words.length })) : [],
     meshes: detailScene?.meshes() ?? [], drawnTriangles: detailScene?.count() ?? null, notes: [...(detailScene?.notes ?? [])] };
 },

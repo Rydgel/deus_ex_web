@@ -8,7 +8,8 @@
 //
 //   node scripts/visual-acceptance.mjs play [--maps a,b] [--size 1280x720] [--query sim=inline] [--detail on]
 //       (Play draws without detail textures, ?detailTextures=0, as every stored original frame lacks them; --detail on keeps them,
-//       for a capture of the original taken with --poke D3DRenderDevice0:0x78:1)
+//       for a capture of the original taken with --poke D3DRenderDevice0:0x78:1; --detail-bias u1,u2 also writes each view at those
+//       depth offsets of the detail passes as <view>-play-bias<u>.png)
 //       loads each map in Play, writes the plan (views from the player's start
 //       Location) and Play's frames
 //   node scripts/visual-acceptance.mjs original [--maps a,b]
@@ -204,6 +205,22 @@ async function play() {
         const probe = await page.evaluate(() => window.deusExViewer.viewProbe({}));
         await page.screenshot({path: path.join(dir, `${view.name}-play.png`),
           clip: {x: 0, y: 0, width: WIDTH, height: HEIGHT}});
+        // --detail-bias f:u[:d],... (with --detail on): the same view again at each depth offset of the detail passes (polygon offset
+        // slope factor f and units u, constant depth d in steps of 2^-24), as <view>-play-bias<f>_<u>_<d>.png: the measurement of ZBIAS 15
+        // against a capture of the original with the pass poked in.
+        const biases = option('detail-bias', '').split(',').filter(Boolean).map(spec => spec.split(':').map(Number));
+        if (biases.length) {
+          // The same frame without the pass (<view>-play-off.png), the reference of each bias' contribution.
+          await page.evaluate(() => window.deusExViewer.detail({hide: true}));
+          await frames(6);
+          await page.screenshot({path: path.join(dir, `${view.name}-play-off.png`), clip: {x: 0, y: 0, width: WIDTH, height: HEIGHT}});
+          await page.evaluate(() => window.deusExViewer.detail({hide: false}));
+        }
+        for (const [factor, units, depth = 0] of biases) {
+          await page.evaluate(bias => window.deusExViewer.detail(bias), {factor, units, depth: depth * 2 ** -24});
+          await frames(6);
+          await page.screenshot({path: path.join(dir, `${view.name}-play-bias${factor}_${units}_${depth}.png`), clip: {x: 0, y: 0, width: WIDTH, height: HEIGHT}});
+        }
         if (strobe !== null) await page.evaluate(d => window.deusExViewer.viewProbe({timeDilation: d}), HELD_DILATION);
         shots.push({view: view.name, camera: state, player: {location: probe.location, region: probe.region, state: probe.state, physics: probe.physics, anim: probe.anim}});
       }

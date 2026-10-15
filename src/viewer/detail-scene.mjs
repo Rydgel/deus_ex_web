@@ -20,13 +20,22 @@ import { DETAIL_RENDER_ORDER } from './render-layers.mjs';
  * draws only its own frame's fans (`mainPass`, `framePass`, as the sprite scene does); every other render of the scene
  * leaves them out. One mesh per frame and detail texture, in the simulation's record order inside it. */
 
-/** ZBIAS 15 as the host's depth offset (three.js polygonOffset: factor, units). Wine's ddraw maps ZBIAS n to a depth bias
- * of -n / 16000 in the 0..1 depth range, which GL takes in units of the depth buffer's resolution, 2^-24 (a provisional
- * value until the poked original capture measures it: docs/frame-projection.md "Detail textures"). */
-export const ZBIAS = { factor: 0, units: -15 / 16000 * 2 ** 24 };
+/** ZBIAS 15 as the host's depth offset: the fans' depth is lowered by a constant in the vertex stage, the same on every host
+ * (three.js polygonOffset counts the host's own depth steps and its slope term is host-defined). 5,000 steps of the depth
+ * buffer's 2^-24: the offset at which Play's changed pixels best match the original's own frame with the pass poked in, over
+ * the views measured (docs/frame-projection.md "Detail textures": the original under Wine behaves like a slope-scaled offset
+ * of about 15 times the polygon's depth slope, which a constant approximates within a few hundred pixels a view). `factor` and
+ * `units` are a polygonOffset, left off. */
+export const ZBIAS = { factor: 0, units: 0, depth: 5000 * 2 ** -24 };
+const DEPTH_STEP = 2 ** -24;
+/** ?detailMips=generate builds a mip chain for the detail textures stored with one level (893 of the 896 in the shipped
+ * packages), as the base textures get; the default draws them as the one level they are (docs/frame-projection.md). */
+const generateMips = typeof location !== 'undefined' && new URLSearchParams(location.search).get('detailMips') === 'generate';
 
 export function createDetailScene(assets, textures, { displayGamma, surfaceDetails }) {
   const root = new THREE.Group(), notes = new Set(), meshes = new Map(), loaded = new Map();
+  // The depth the fans are lowered by (0..1 depth), shared by every material; and the polygon offset the materials carry.
+  const bias = { value: ZBIAS.depth };
   root.matrixAutoUpdate = false; root.name = 'Detail textures';
   let used = [], drawn = 0, current = null;
 
@@ -45,8 +54,10 @@ export function createDetailScene(assets, textures, { displayGamma, surfaceDetai
       gpu.wrapS = gpu.wrapT = THREE.RepeatWrapping;
       const last = data.mips.at(-1), complete = last.width === 1 && last.height === 1;
       if (complete && data.mips.length > 1) gpu.mipmaps = data.mips;
-      gpu.generateMipmaps = !complete;
+      gpu.generateMipmaps = !complete && generateMips;
       configureSampler(gpu, false);
+      // A texture whose file stores one mip level is uploaded as one level (MIPFILTER selects level 0): no chain is generated.
+      if (data.mips.length === 1 && !generateMips) gpu.minFilter = THREE.LinearFilter;
       gpu.needsUpdate = true;
       const material = new THREE.MeshBasicMaterial({ map: gpu, transparent: true, depthWrite: false, depthFunc: THREE.LessEqualDepth,
         side: THREE.DoubleSide, fog: false });
@@ -57,14 +68,15 @@ export function createDetailScene(assets, textures, { displayGamma, surfaceDetai
       material.onBeforeCompile = shader => {
         shader.uniforms.deusDisplayGamma = displayGamma;
         Object.assign(shader.uniforms, frameProjection.uniforms);
+        shader.uniforms.uDetailBias = bias;
         // D3DDrv's vertices (X, Y, depth, RHW) through the original's mapping to clip space; a pass without a frame draws nothing.
         shader.vertexShader = shader.vertexShader
-          .replace('void main() {', `attribute vec4 deusD3d;\nattribute float deusAlpha;\nvarying float vDeusAlpha;\n${frameProjectionGlsl()}\nvoid main() {`)
+          .replace('void main() {', `attribute vec4 deusD3d;\nattribute float deusAlpha;\nvarying float vDeusAlpha;\nuniform float uDetailBias;\n${frameProjectionGlsl()}\nvoid main() {`)
           // The fans are already the frame's own (OccludeBsp's output); the host's mirror-plane clip would test the D3D vertex.
           .replace('#include <clipping_planes_vertex>', '')
           .replace('#include <project_vertex>', `
 vDeusAlpha = deusAlpha;
-if ( uFpOn > 0.5 ) gl_Position = fpClipOf( deusD3d, 1.0 / deusD3d.w );
+if ( uFpOn > 0.5 ) gl_Position = fpClipOf( vec4( deusD3d.xy, deusD3d.z - uDetailBias, deusD3d.w ), 1.0 / deusD3d.w );
 else gl_Position = vec4( 2.0, 2.0, 2.0, 1.0 );
 `);
         // COLOROP BLENDDIFFUSEALPHA with the diffuse 0x808080 and the vertex alpha: texel * a + diffuse * (1 - a).
@@ -158,14 +170,15 @@ diffuseColor = vec4( mix( vec3( 128.0 / 255.0 ), diffuseColor.rgb, clamp( vDeusA
   }
 
   return { root, update, notes, count: () => drawn,
-    /** Measurement: the depth offset of every detail material (three.js polygonOffset: factor, units). */
-    setBias(factor, units) {
-      ZBIAS.factor = factor; ZBIAS.units = units;
+    /** Measurement: the fans' depth offset, a polygon offset (slope factor, units) and a constant `depth` (0..1 depth). */
+    setBias(factor, units, depth = 0) {
+      Object.assign(ZBIAS, { factor, units, depth }); bias.value = depth;
       for (const entry of loaded.values()) if (entry.material) {
         entry.material.polygonOffset = factor !== 0 || units !== 0;
         entry.material.polygonOffsetFactor = factor; entry.material.polygonOffsetUnits = units;
       }
-    }, mainPass: on => pass(on ? 0 : null), framePass: record => pass(record ? record.index : null),
+    },
+    mainPass: on => pass(on ? 0 : null), framePass: record => pass(record ? record.index : null),
     /** The frame whose fans are shown (validation). */
     shown: () => current,
     /** Every mesh with its frame and triangle count (validation). */
