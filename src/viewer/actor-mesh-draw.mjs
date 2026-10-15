@@ -62,7 +62,7 @@ export function createMeshDraw(assets,creation,{gpu=null,texturePool,batches=nul
   // The main frame's lighting this frame (its packed words or plain record), kept
   // to give the actor its main lighting back after a child frame's pass
   // lit it with that frame's Coords and Mirror (applyPass).
-  let mainLighting=null,variantLit=false;
+  let mainLighting=null,variantLit=false,flipSide=false;
   // The LOD state of the main frame (the GPU record's parameters, null at
   // full detail) and which child frame's state is on the slot or geometry
   // (docs/script-lodmesh-lod.md "Child frames"): the key of its GPU
@@ -332,7 +332,9 @@ export function createMeshDraw(assets,creation,{gpu=null,texturePool,batches=nul
       group.geometry=geometry;
       const mesh=new THREE.Mesh(geometry,material);mesh.matrixAutoUpdate=false;
       mesh.onAfterRender=rendered;
-      if(gpuSlot)mesh.frustumCulled=false;
+      // A pawn's weapon (creation.attached) draws camera-space points the hand's Coords place; its world-space
+      // pose, which the bounds come from, is not where it is drawn, and the simulation side decides what is drawn.
+      if(gpuSlot||creation.attached)mesh.frustumCulled=false;
       Object.assign(group,{mesh,sided,material,texture});
       mesh.userData={actor:`${actorName} (mesh inspection)`,faces:record.faces};root.add(mesh);
       if(sided){
@@ -454,6 +456,12 @@ export function createMeshDraw(assets,creation,{gpu=null,texturePool,batches=nul
     applyPass(decision){
       if(!ready||!decision)return false;
       root.visible=decision.root;
+      // A pawn's weapon in a mirror's frame (decision.flipSide): its faces are kept with Mirror 1.0, so the pass's
+      // reversed winding shows the other side of them.
+      if(creation.attached&&Boolean(decision.flipSide)!==flipSide){
+        flipSide=Boolean(decision.flipSide);
+        for(const group of groups)if(!group.sided)group.mesh.material.side=flipSide?THREE.BackSide:THREE.FrontSide;
+      }
       if(!decision.root){hideBatched();return false;}
       if(decision.spheres)setSpheres(decision.spheres);
       if(decision.groups)groups.forEach((group,i)=>showGroup(group,Boolean(decision.groups[i])));

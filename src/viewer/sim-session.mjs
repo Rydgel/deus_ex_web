@@ -1174,7 +1174,9 @@ export function createSimSession(game, { assets = null, events = [], exportName 
             lightFrames: lightFramesOf(result.frames), lodFrames: fov !== undefined ? lodFramesOf(result.frames, fov) : null };
         } : null;
         frame = actorScene.update({ lit: Boolean(meshLighting?.frame), frustum, camera: view, cull: !children, children,
-          items: inspect ? [] : live.meshItems, occlude, lod: inspect ? null : lodOf(current?.visibility), ...(pack ? { pack } : {}) });
+          items: inspect ? [] : live.meshItems, occlude, lod: inspect ? null : lodOf(current?.visibility),
+          // the main frame's PrjXM..PrjYP, which DrawLodMesh's outcodes of a pawn's special vertices read (docs/weapon-attachment.md)
+          prj: inspect ? null : frameMaster()?.prj ?? null, ...(pack ? { pack } : {}) });
       } catch (error) { failed = true; errors.push(plainError(error)); }
       return { errors, frame };
     },

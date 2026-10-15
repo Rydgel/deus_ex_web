@@ -780,7 +780,11 @@ async function loadMap(name) {
       // cameras (a ViewportWindow's frame draws the player, whom Draw's bBehindView stops excluding).
       childFrames: nextWorld.mirrors.stats.planes > 0 || nextMap.actors.some(actor => actor.className === 'SecurityCamera' || actor.className === 'ComputerSecurity'),
       gpu: nextGpuMesh?.capacities ?? null, weaponGpu: nextWeaponGpu?.capacities ?? null,
-      meshBackend: new URLSearchParams(location.search).get('meshBackend'), meshLod: new URLSearchParams(location.search).get('meshLod') };
+      meshBackend: new URLSearchParams(location.search).get('meshBackend'), meshLod: new URLSearchParams(location.search).get('meshLod'),
+      // ?weapons=off: no pawn's third-person weapon is drawn (docs/weapon-attachment.md), for A/B captures
+      weapons: new URLSearchParams(location.search).get('weapons'),
+      // ?weaponMirrors=1: the weapon in mirror child frames too (unverified against the original)
+      weaponMirrors: new URLSearchParams(location.search).get('weaponMirrors') };
     // On the page the old map's audio unregisters its music before the next
     // map's runtime is built (the worker does the same at its load).
     if (!simClient) simHost?.disposeAudio?.();
