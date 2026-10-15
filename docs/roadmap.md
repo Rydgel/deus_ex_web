@@ -528,9 +528,13 @@ compared in 218 queries), and the flash `UGameEngine::Draw` hands the device is 
   but no shipped class, map actor or script uses DT_SpriteAnimOnce or gives an actor an animated texture
   ([particles](particles.md#dt_spriteanimonce-0x10b252ac0x10b25392-restored-at-0x10b254d3),
   [texture animation](texture-animation.md#play)).
-- **Full Stage 4 acceptance**: a gate against "Done when" below (representative scenes for the animated
-  actors, effects, sound, text and interfaces, synchronized speech and the conversation camera), as
-  Stage 3 has its conformance gate. Not written yet.
+- **Full Stage 4 acceptance**: drafted 2026-10-15 as [Stage 4 exit criteria](stage-4-exit-criteria.md) and
+  `scripts/validate-stage4-acceptance.mjs` (representative scenes for the animated actors, effects, sound,
+  text and interfaces, synchronized speech and the conversation camera, each tied to its check against the
+  original or marked `MISSING`), for the user to adopt. First run: 44 of 70 gating criteria pass, 2 fail
+  (BatteryPark's live actors, Ship's camera window 2), 3 pass only in `?sim=inline`, 21 have no original-side
+  check (the interfaces, the conversation frame and speech audio first among them); the doc orders the remaining
+  work.
 
 Frame cost and the Rust-core ports that keep these effects inside the frame budget are in
 [play frame cost](play-frame-cost.md).
