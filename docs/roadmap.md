@@ -504,10 +504,12 @@ compared in 218 queries), and the flash `UGameEngine::Draw` hands the device is 
 
 **Open.**
 - *Third-person weapon, left:* the weapon in a ViewportWindow's frame compared with the original's pixels (wired and checked
-  in Play; the armed terrorists in the Island camera window walk differently in the two programs), the GPU path for weapons (they take
-  the CPU path), the weapon's frame-order of SetupForActor calls (all of a pawn's frames, then its weapon's), and an armed NPC
+  in Play; the armed terrorists in the Island camera window walk differently in the two programs), and an armed NPC
   in a mirror compared with the original (JC's reflection holding a pistol or a held tool is compared: [weapon
-  attachment](weapon-attachment.md#mirrors-2026-10-15); `?weaponMirrors=0` turns it off).
+  attachment](weapon-attachment.md#mirrors-2026-10-15); `?weaponMirrors=0` turns it off). The weapons take the GPU mesh path
+  (bit exact against the CPU path, 0 differing pixels; `?weapons=cpu` keeps the reference) and their SetupForActor calls follow the
+  original's order, compared on JC in two frames ([weapon attachment](weapon-attachment.md#order-of-setupforactor-calls-and-the-gpu-path-analysis-2026-10-15);
+  no light in the scenes checked enters one frame's lists and not the other's, the only case the order can change).
 - *Alterations and the flash, left:* a held underwater or drunk frame compared with the original under Wine (the flash
   pass is checked against Play itself only, and GL's 8-bit blend rounding against the device's is unmeasured), an
   exec-body differential for iterator 312, pain-zone and `DamageTrigger` scenarios, player swimming and drowning, the

@@ -85,9 +85,12 @@ Frame cost and the 120 fps target are tracked in
 - Every visible actor mesh draws with original lighting
   ([NPC mesh preview](docs/npc-mesh-preview.md), [mesh lighting](docs/mesh-lighting.md))
   and DrawLodMesh's distance LOD ([LOD](docs/script-lodmesh-lod.md); `?meshLod=off`
-  draws full detail). An armed pawn holds its gun in the main frame, posed from
-  its mesh's special triangle as Render.dll does ([weapon attachment](docs/weapon-attachment.md);
-  `?weapons=off`; mirror frames are unverified and off).
+  draws full detail). An armed pawn holds its gun in every frame that draws him
+  (the main frame, mirrors, a security camera's window), posed from its mesh's
+  special triangle as Render.dll does and lit right after the pawn in the original's
+  order ([weapon attachment](docs/weapon-attachment.md)); on the GPU mesh path
+  ([GPU mesh](docs/gpu-mesh.md#a-pawns-weapon-2026-10-15)) unless `?weapons=cpu`;
+  `?weapons=off`, `?weaponMirrors=0`).
 - Unit/format tests, real-data validation commands, and browser regression
   tests. Optional local native-DLL comparisons check translated routines against
   the original DLLs under an emulator ([native exec diff](docs/native-exec-diff.md),

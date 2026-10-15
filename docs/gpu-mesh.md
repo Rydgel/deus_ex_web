@@ -334,6 +334,32 @@ exact cache poses followed by `meshLod.after`
 child LOD states, and the colours that follow. The passes cost two more
 full-screen draws over the vertex arena per lighting run.
 
+## A pawn's weapon (2026-10-15)
+
+A pawn's third-person weapon ([weapon attachment](weapon-attachment.md)) is a binding of its own with an `attach` (`actor-weapon-sim.mjs`, `createMeshBinding`'s `attach`
+option) and takes this path like any actor unless `?weapons=cpu` (the CPU path stays the reference and the fallback: more than 32 selected lights, a layout that is full,
+`?gpuMesh=0`). It differs from an actor in four things, all of them DrawActorSprite's (Render.dll `0x10b256b1..0x10b257df`):
+
+* **Camera space comes from the hand.** DrawMesh poses the weapon with the Coords DrawLodMesh made from the pawn's special vertices in that frame, so the slot's frame
+  matrix (F12..F15, `lodMeshCameraMatrix`) is made from `attach.coords(frameIndex)` of the frame being lit and not from that frame's Frame->Coords. Each frame the pawn is
+  drawn in gives the slot a lighting record of its own, as for any actor (the child frames' through the passes' decisions, the main frame's in the record). The pose pass
+  still runs the weapon's world-space GetFrame plan and keeps its cache poses (the camera passes read those), but nothing draws the world-space pose: the draw takes the
+  corner's camera-space point because the slot was lit in the pass's frame.
+* **The light sink is the pawn.** The SetupForActor result is the one the pawn's frame loop took right after the pawn's own call in that frame (`attach.takePrepared`, in the
+  original's order), with the pawn's location, leaf, zone, glow and cache and the weapon's poly flags: `plainLighting` carries it like any other.
+* **Frame->Mirror is 1.0 for the weapon's DrawMesh** (`0x10b2571a`) whatever the frame's. A lighting run has one Mirror (`uMirror`, -1 in a mirror's child frame), so the face
+  pass reads a slot's own from F11.w when it is not 0 (`setLighting` writes the lighting record's `mirror`: 1 for a weapon; 0, the run's, for every other slot and for the
+  packed records). The faces the weapon keeps in a mirror's frame are then the ones the original keeps; the page flips the side the pass draws (`decision.flipSide`, the
+  projection's reversed winding) as on the CPU path.
+* **No frustum test.** The groups' world-space bounds are not where the hand puts the weapon, and DrawMesh draws it whole: `decideGroups` keeps every group (bar the LOD's
+  empty ones), three.js's `frustumCulled` is off, and a weapon never joins an actor batch (its faces' side changes with the pass).
+
+The simulation side's layout and the page's allocate in the same order for a weapon as for any binding. A weapon created and dropped before the page saw it (its pawn changed
+weapon while its resources decoded) is created and released on the page too, or the two layouts' slot numbers would part ways.
+
+`validate-gpu-mesh` compares the weapons like any actor (the "Attached" scenes below); `validate-weapon-gpu-play` compares the pixels of the GPU path against the CPU path
+in Play's worker mode.
+
 ## Distance LOD
 
 Added 2026-10-07 ([LOD](script-lodmesh-lod.md)). DrawLodMesh's selection,
@@ -559,6 +585,13 @@ Since 2026-10-14 the same run compares the camera-space pose (`cameraFinal`,
 child frame and in the child LOD states, derives the lighting reference from
 the CPU twin's buffer (kernel `cameraSpace`), and checks that the lighting
 frame's Coords equal the Frame->Coords the LOD selects with.
+
+**Attached bindings** (`--attached`, on by default; `--maps none` runs them alone): two scenes in `?sim=inline`, the Island pistol and crossbow (Terrorist22 and ThugMale3 in view, the
+main frame) and the MJ12 lab's mirror scene (JC holding the pistol in BehindView, `05_NYC_UNATCOMJ12lab`: his back in the main frame, his reflection in the pane's child frame).
+Every weapon binding on the GPU path is compared with the CPU twin like an actor (world and camera-space pose, the LOD, corner dwords, colours, the drawn test); the page's
+lighting run with the Mirror -1 of a mirror's frame must give the colours of the kernel with Mirror 1.0 (the slot's lane: without it the drawn test and the colours fail, checked
+by dropping `F11.w` from `setLighting`); and each real child frame of a weapon (its own hand Coords and SetupForActor result) is lit through a Mirror -1 run and compared the
+same way.
 
 The simulation digest must be unchanged, since the path is render-only:
 `node scripts/bench-sim.mjs --map 01_NYC_UNATCOIsland --bypass --continue

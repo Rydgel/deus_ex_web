@@ -76,7 +76,7 @@ void main(){vec2 p=vec2(float((gl_VertexID&1)<<2)-1.0,float((gl_VertexID&2)<<1)-
 // U10.yzw the LOD: returned ordinary count C, morph start (int), flags (1 LOD, 2 morph)
 // U11 lodFrame, the morph's inverse (float bits), 0, 0
 // F0 matrix row 0 (m0)  F1..F3 rows 1..3  F4 mesh origin  F5+k channel alpha
-// F10 ambient rgb, ScaleGlow*1.4 (24-bit)   F11 unlit rgb
+// F10 ambient rgb, ScaleGlow*1.4 (24-bit)   F11 unlit rgb, Mirror override (0: the run's Mirror; a pawn's weapon: 1)
 // F12..F15 the lighting frame's GetFrame matrix (rows 0..3): the camera-space publication
 export const PARAMS=`
 uniform usampler2D uParamsU;uniform sampler2D uParamsF;
@@ -330,7 +330,9 @@ void main(){
     float nz=B(B(bx*ay)-B(by*ax)),ny=B(B(bz*ax)-B(bx*az)),nx=B(B(by*az)-B(bz*ay));
     float scale=tableRsqrt(B(B(B(B(nx*nx)+B(ny*ny))+B(nz*nz))+EPSILON));
     vec3 n=vec3(B(nx*scale),B(ny*scale),B(nz*scale));
-    float dot=B(B(B(B(n.x*p0.x)+B(n.z*p0.z))+B(n.y*p0.y))*uMirror);
+    // The slot's own Mirror when it has one: DrawActorSprite forces Frame->Mirror to 1.0 for a pawn's weapon (0x10b2571a).
+    float slotMirror=pf(slot,11).w;
+    float dot=B(B(B(B(n.x*p0.x)+B(n.z*p0.z))+B(n.y*p0.y))*(slotMirror!=0.0?slotMirror:uMirror));
     uint flags=face.w|u2.x;
     bool drawn=(face.w&1u)==0u&&((face.w&0x100u)!=0u||dot<0.0);
     oFace=vec4(n,drawn?((flags&0x400000u)!=0u?2.0:1.0):0.0);

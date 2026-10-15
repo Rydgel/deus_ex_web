@@ -7,14 +7,17 @@
  * vertices. Floats are returned with their bit patterns. */
 const bits=value=>{const v=new DataView(new ArrayBuffer(4));v.setFloat32(0,value,true);return v.getUint32(0,true);};
 
-export function lodProbe(actorSim,{all=false,list=false,settings=null}={},weaponSim=null){
+export function lodProbe(actorSim,{all=false,list=false,settings=null,reset=false,mode=null,colors=false}={},weaponSim=null){
   if(!actorSim)return null;
   // `settings`: URender's MLOD/MLMODE/MLFIX for the next frames (an object
   // as setLodSettings takes it), or false for the shipped ones.
   if(settings===false)actorSim.resetLodSettings();
   else if(settings)actorSim.setLodSettings(settings);
   // `list`: every binding's actor, mesh and Location (to aim views).
-  if(list==='weapons')return actorSim.weaponStates();
+  if(list==='weapons')return actorSim.weaponStates(Boolean(colors));
+  // `setupLog` (validate-weapon-order.mjs): `mode` 'on' keeps every SetupForActor call, 'take' returns and clears them, 'off' stops.
+  if(list==='setupLog')return actorSim.setupLog(mode);
+  if(list==='weaponStats')return actorSim.weaponStats(Boolean(reset));
   if(list)return actorSim.all().map(binding=>{let location=null;try{location=binding.location;}catch{}
     return {id:binding.id,actor:binding.actor?.name??null,mesh:binding.mesh?.key??null,path:binding.path,location};});
   const rows=[];

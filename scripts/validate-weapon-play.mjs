@@ -2,7 +2,8 @@
  * The Island view of the live-scene pilots (`CheatView DeusEx.Terrorist` twelve times: Terrorist22 close at its
  * right side, ThugMale3 beside it), the level running, through scripts/live-acceptance.mjs's `script` verb (a headless
  * Chromium, the page and the simulation worker as in Play). Checks, per armed pawn drawn:
- *   - the weapon has a binding of its own on the CPU path, drawn in the main frame with camera points and colours;
+ *   - the weapon has a binding of its own, on the GPU mesh path (the CPU path with ?weapons=cpu or without the GPU path), drawn in the main frame
+ *     (on the CPU path with camera points and colours);
  *   - its Coords (the 12 words DrawMesh gets) equal the translation of src/runtime/weapon-attachment.mjs applied to the
  *     pawn's special vertices as Play's own pose gives them in that frame: the wiring passes the frame's vertices, the
  *     weapon's Location and the outcodes through unchanged (the translation itself is validate-weapon-attach.mjs's);
@@ -29,7 +30,9 @@ const probe = `(async () => {
   const weapons = await read(mine.map(s => s.weapon).filter(Boolean), ['Rotation', 'FlashCount', 'OldFlashCount', 'bHidden', 'LastRenderTime', 'ThirdPersonMesh']);
   const pawns = await read(mine.map(s => s.pawn), ['LastRenderTime']);
   const bindings = await window.deusExViewer.lodProbe({list: true});
-  return {mine, weapons: weapons.read, pawns: pawns.read, thirdPerson: bindings.filter(b => /3rd/.test(b.mesh ?? '')).map(b => ({actor: b.actor, path: b.path}))};
+  return {mine, weapons: weapons.read, pawns: pawns.read, thirdPerson: bindings.filter(b => /3rd/.test(b.mesh ?? '')).map(b => ({actor: b.actor, path: b.path})),
+    // whether the page runs the GPU mesh path at all (a software renderer does not): the other bindings' paths
+    gpuMesh: bindings.some(b => !/3rd/.test(b.mesh ?? '') && b.path === 'gpu')};
 })()`;
 mkdirSync('.work/weapon', {recursive: true});
 writeFileSync('.work/weapon/validate-weapon-play-probe.js', probe);
@@ -47,7 +50,8 @@ check(on.mine.length === 2, `both armed pawns are in view (${on.mine.length})`);
 for (const state of on.mine) {
   const name = `${state.pawn}/${state.weapon}`;
   check(state.binding !== null && state.why === null, `${name}: a binding is drawn (${state.why})`);
-  check(state.last?.visible && state.last.points && state.last.colors && JSON.stringify(state.last.frames) === '[null]', `${name}: drawn in the main frame with camera points and colours`);
+  const lit = on.gpuMesh ? state.last?.lighting : state.last?.points && state.last.colors;
+  check(state.last?.visible && lit && JSON.stringify(state.last.frames) === '[null]', `${name}: drawn in the main frame ${on.gpuMesh ? 'with lighting for the GPU passes' : 'with camera points and colours'}`);
   if (!state.last?.specials) { check(false, `${name}: no special vertices`); continue; }
   // The outcodes come from the frame's projection planes; Play's frame has them.
   const codes = state.last.specials.map(v => state.last.prj ? specialOutcode(v, state.last.prj) : 0);
@@ -63,7 +67,13 @@ for (const state of on.mine) {
   check(weapon.LastRenderTime <= 0, `${name}: the weapon is not stamped (${weapon.LastRenderTime})`);
   check(on.pawns[state.pawn].LastRenderTime > 0, `${name}: its pawn is`);
 }
-check(on.thirdPerson.length === 2 && on.thirdPerson.every(b => b.path === 'cpu'), `two third-person bindings on the CPU path (${JSON.stringify(on.thirdPerson)})`);
+// The weapons take the GPU mesh path when the page has it (docs/gpu-mesh.md), the CPU path (the reference) otherwise or with ?weapons=cpu.
+const wantPath = on.gpuMesh ? 'gpu' : 'cpu';
+check(on.thirdPerson.length === 2 && on.thirdPerson.every(b => b.path === wantPath), `two third-person bindings on the ${wantPath} path (${JSON.stringify(on.thirdPerson)})`);
+if (on.gpuMesh) {
+  const cpu = run(['--page-params', 'weapons=cpu']);
+  check(cpu.thirdPerson.length === 2 && cpu.thirdPerson.every(b => b.path === 'cpu'), `?weapons=cpu: two third-person bindings on the CPU path (${JSON.stringify(cpu.thirdPerson)})`);
+}
 const off = run(['--page-params', 'weapons=off']);
 check(off.thirdPerson.length === 0 && off.mine.every(s => s.binding === null), '?weapons=off: no weapon binding');
 console.log(failures ? `${failures} failures` : 'weapon in Play: all checks pass');

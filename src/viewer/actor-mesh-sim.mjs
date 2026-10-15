@@ -107,10 +107,11 @@ const plainPlan=plan=>({matrix:plan.matrix.map(row=>[...row]),origin:[...plan.or
     blend:Boolean(op.blend),alpha:op.alpha,count:op.count,fill:op.fill?[...op.fill]:null}))});
 /** SetupForActor's result as gpu-mesh.mjs setLighting reads it, with the
  * frame's GetFrame matrix (`camera`, 4 rows of 3: lodMeshCameraMatrix) that
- * publishes the cache poses in that frame's camera space. */
-const plainLighting=(prepared,camera)=>({flags:prepared.flags,ambient:[...prepared.setup.ambient],scaleGlow:prepared.setup.scaleGlow,
+ * publishes the cache poses in that frame's camera space. `mirror`: the Frame->Mirror
+ * the face pass takes instead of the run's (a pawn's weapon: 1.0, whatever the frame's). */
+const plainLighting=(prepared,camera,mirror=0)=>({flags:prepared.flags,ambient:[...prepared.setup.ambient],scaleGlow:prepared.setup.scaleGlow,
   unlit:[...prepared.unlit],camera:camera.flat(),lights:prepared.setup.lights.map(light=>({location:[...light.location],rradius:light.rradius,
-    color:[...light.color]}))});
+    color:[...light.color]})),...(mirror?{mirror}:{})});
 
 /** One actor's mesh binding on the simulation side. `layout` is this side's
  * GPU mesh layout (null: the CPU path); `onRecord` is not used here, the
@@ -291,7 +292,7 @@ export async function createMeshBinding(runtime,actor,{id,originalObjectIndex,ke
     const drawn=cameraDrawn(ctx,variant?variant.selection:baseSelection,variant?variant.returned:lastReturned,opsOfFrame(frameIndex),frameIndex),
       topology=drawn.lighting;
     // The weapon is lit as DrawMesh does: the pawn is the light sink and the frame's Mirror is 1.0 (attach.lightFrame).
-    if(attach){ctx=attach.lightFrame(ctx);prepared??=lighting.setupMesh(actor,null,ctx,attach.setup());}
+    if(attach){ctx=attach.lightFrame(ctx);prepared??=attach.takePrepared(frameIndex)??lighting.setupMesh(actor,null,ctx,attach.setup());}
     const result=lighting.lightMesh(actor,drawn.positions,topology.faces,topology.faceWords,prepared,ctx,true);
     if(!result)return null;
     return {colors:result.colors.slice(),points:drawn.positions,summary:{lights:result.setup.lights.length,flags:result.flags}};
@@ -432,7 +433,9 @@ export async function createMeshBinding(runtime,actor,{id,originalObjectIndex,ke
      * LOD state differs from the base's, with its own emptied groups and
      * (when the boxes cannot tell) its own exact spheres. */
     function decideGroups(frustum,assign,variant=null){
-      const whole=certifyFrustum(frustum,unionBox),empty=variant?variantEmpty(variant):null;
+      // A pawn's weapon is drawn in camera space from the hand's Coords (attach.coords): the world-space bounds the frustum test
+      // would read are not where it is drawn, and DrawMesh draws it whole (the CPU path's frustumCulled is off the same way).
+      const whole=attach?1:certifyFrustum(frustum,unionBox),empty=variant?variantEmpty(variant):null;
       // A group the LOD empties draws nothing.
       for(const group of groups.values())
         assign(group,!(empty?empty.get(group):group.lodEmpty)&&(whole>=0?whole===1:groupVisible(group,frustum,variant)));
@@ -591,7 +594,7 @@ export async function createMeshBinding(runtime,actor,{id,originalObjectIndex,ke
       if(name!==setupName){setupName=name;setupHit=setupSequence(payload.sequences,name);}
       u32[at+SETUP.SEQ]=setupHit?1:0;i32[at+SETUP.SEQ_START]=setupHit?.startFrame??0;i32[at+SETUP.SEQ_FRAMES]=setupHit?.numFrames??0;
     }
-    return {id,actor,creation,dispose,mesh:meshReference,payload,packSetup,admitted,childAdmitted,get block(){return block;},
+    const binding={id,actor,creation,dispose,mesh:meshReference,payload,packSetup,admitted,childAdmitted,get block(){return block;},
       get viewDependent(){return hasEnvironment&&mode==='cpu';},
       get path(){return mode;},
       /** This binding's special vertices (the invisible attachment triangle the LodMesh keeps ahead of its
@@ -716,12 +719,12 @@ export async function createMeshBinding(runtime,actor,{id,originalObjectIndex,ke
         // the current plan published through that frame's GetFrame matrix and
         // morphed by `selection`/`returned` (default: the main frame's); and
         // that matrix (4 rows of 3).
-        cameraDrawn:(ctx=null,selection=gpuLodScalars?lastSelection:null,returned=lastReturned)=>{
-          materialize();return cameraDrawn(ctx,selection,returned,lastPlan.channels);
+        cameraDrawn:(ctx=null,selection=gpuLodScalars?lastSelection:null,returned=lastReturned,frameIndex=null)=>{
+          materialize();return cameraDrawn(ctx,selection,returned,lastPlan.channels,frameIndex);
         },
-        cameraMatrix:(ctx=null)=>{
+        cameraMatrix:(ctx=null,frameIndex=null)=>{
           const at=ctx??lighting.frame;
-          return lodMeshCameraMatrix(payload,actor,[...at.origin,...at.axes[0],...at.axes[1],...at.axes[2]],services);
+          return lodMeshCameraMatrix(payload,actor,attach?attach.coords(frameIndex):[...at.origin,...at.axes[0],...at.axes[1],...at.axes[2]],services);
         }}),
       get location(){return [...read(actor,'Location')];},get rotation(){return [...read(actor,'Rotation')];},
       /** Validation access (lod-probe.mjs): the last update's LOD inputs,
@@ -899,19 +902,23 @@ export async function createMeshBinding(runtime,actor,{id,originalObjectIndex,ke
           // `view.lightRoot`: the lighting frame of a root frame that is not the
           // main viewport's (a ViewportWindow's DrawWorld, updateFrame), for the
           // pass that is not a child frame's.
-          const lightIn=lf=>{
+          const lightFrame=lf=>{
             const ctx=lf?lf.ctx:view.lightRoot??null,pool=lf?lf.index:0;
             if(mode==='gpu'){
-              const prepared=lighting.setupMesh(actor,at>=0?setupFields(view.reads.views()):null,ctx);
+              // A weapon takes the SetupForActor result its pawn's frame loop made right after the pawn's own (attach.takePrepared), with the pawn as sink.
+              const prepared=attach?attach.takePrepared(lf?lf.index:null)??lighting.setupMesh(actor,null,attach.lightFrame(ctx),attach.setup())
+                :lighting.setupMesh(actor,at>=0?setupFields(view.reads.views()):null,ctx);
               if(!prepared)return;
               if(lf){frameSetups.set(lf.index,prepared);frameCtxs.set(lf.index,ctx);}else{lastSetup=prepared;lastLitFrame=layout.frame+1;}
               if(!lf)summary.lighting={lights:prepared.setup.lights.length,flags:prepared.flags};
               if(layout.reserveLights(prepared.setup.lights.length,pool)){
                 // The frame's GetFrame matrix: the page publishes the cached
                 // poses in this frame's camera space for the lighting passes.
-                const here=ctx??lighting.frame,camera=lodMeshCameraMatrix(payload,actor,[...here.origin,...here.axes[0],...here.axes[1],...here.axes[2]],services);
-                if(lf)frameLights.set(lf.index,{lighting:plainLighting(prepared,camera)});
-                else record.lighting=view.pack?view.pack.lighting(prepared,camera):plainLighting(prepared,camera);
+                // (a weapon's: the hand's Coords of the frame, GetFrame's Coords for DrawMesh, and the Mirror its lighting forces to 1.0)
+                const here=ctx??lighting.frame,camera=lodMeshCameraMatrix(payload,actor,
+                  attach?attach.coords(lf?lf.index:null):[...here.origin,...here.axes[0],...here.axes[1],...here.axes[2]],services);
+                if(lf)frameLights.set(lf.index,{lighting:plainLighting(prepared,camera,attach?1:0)});
+                else record.lighting=view.pack&&!attach?view.pack.lighting(prepared,camera):plainLighting(prepared,camera,attach?1:0);
               } else {
                 toCpu(`more than ${prepared.setup.lights.length-1} selected lights`);
                 record.posed=posedCopy();
@@ -928,6 +935,9 @@ export async function createMeshBinding(runtime,actor,{id,originalObjectIndex,ke
               if(lit){if(lf)frameLights.set(lf.index,{colors:lit.colors,cameraPoints:lit.points});else{record.colors=lit.colors;record.cameraPoints=lit.points;summary.lighting=lit.summary;}}
             }
           };
+          // A pawn's weapon is lit right after its pawn in each frame (actor-weapon-sim.mjs afterLight): DrawActorSprite makes the
+          // pawn's DrawMesh call and then the weapon's, which share the pawn's SetupForActor cache.
+          const lightIn=lf=>{lightFrame(lf);view.afterLight?.(binding,lf?lf.index:null,lf?lf.ctx:view.lightRoot??null,lf);};
           for(const lf of view.lightFrames??[])if(lf.ids.has(id))lightIn(lf);
           // The main frame's pass: the actor in its Frame->Sprite (inside the
           // frustum: the host's culling); an actor only child frames draw
@@ -947,6 +957,7 @@ export async function createMeshBinding(runtime,actor,{id,originalObjectIndex,ke
         record.changed=poseChanged;
         return record;
       },summary};
+    return binding;
   } catch(error) {dispose();throw error;}
 }
 
@@ -959,7 +970,7 @@ export async function createMeshBinding(runtime,actor,{id,originalObjectIndex,ke
  * measured NPC identities keep their captured index. `player` is the player
  * actor or a getter for it (Player start logs a new player in). */
 export async function createActorMeshSim(runtime,assets,asset,{kernel,player:playerSource,lighting=null,layout=null,
-  childFrames=false,lod=true,weapons:drawWeapons=true,weaponMirrors=true,onCreate=()=>{},onRelease=()=>{}}={}) {
+  childFrames=false,lod=true,weapons:drawWeapons=true,weaponMirrors=true,weaponOrder=null,weaponPath=null,onCreate=()=>{},onRelease=()=>{}}={}) {
   const currentPlayer=typeof playerSource==='function'?playerSource:()=>playerSource??null;
   let kernelError=null;
   if(kernel===undefined) {
@@ -1034,10 +1045,12 @@ export async function createActorMeshSim(runtime,assets,asset,{kernel,player:pla
     summary.triangles=actors.reduce((total,actor)=>total+actor.summary.triangles,0);
   };
   const retired=new WeakMap();
-  // The pawns' third-person weapons (actor-weapon-sim.mjs): bindings of their own on the CPU path, updated after
-  // their pawns, in the frames that draw the pawn.
+  // The pawns' third-person weapons (actor-weapon-sim.mjs): bindings of their own, lit in the frames that draw the pawn right after
+  // the pawn's own lighting there (weapons.interleave) and posed and drawn after the pawns (weapons.update).
   const weapons=createWeaponAttachments({runtime,bind:(actor,options)=>bind(actor,options),lighting,onCreate,onRelease,
-    nextIndex:()=>synthetic++,errors,enabled:drawWeapons,mirrors:weaponMirrors});
+    nextIndex:()=>synthetic++,errors,enabled:drawWeapons,mirrors:weaponMirrors,interleave:weaponOrder!=='late',
+    // the weapons take the GPU path with the actors' layout unless ?weapons=cpu (the CPU path stays the reference and the fallback)
+    layout:weaponPath==='cpu'?null:layout});
   const admit=(actor,readMesh=null)=>{
     if(disposed||!actor||bindings.has(actor)||pending.has(actor))return;
     let mesh;
@@ -1279,6 +1292,8 @@ export async function createActorMeshSim(runtime,assets,asset,{kernel,player:pla
         // every frame that draws an actor).
         if(lod&&view.lod)view={...view,lodFrame:lodFrame(view.lod,lodSettings),
           lodFrames:view.lodFrames?.map(entry=>({index:entry.index,ids:entry.ids,frame:lodFrame(entry.lod,lodSettings)}))??null};
+        // The pawns' lighting makes the weapons' SetupForActor calls in the original's order (actor-weapon-sim.mjs interleave).
+        view=weapons.interleave(view);
         for(const binding of actors)records.push(binding.update(reads?{...view,reads}:view));
         drawItems(view.items??[],view,records);
         drawExtras(view,records);
@@ -1309,6 +1324,7 @@ export async function createActorMeshSim(runtime,assets,asset,{kernel,player:pla
       try{
         if(lod&&view.lod)view={...view,lodFrame:lodFrame(view.lod,lodSettings),
           lodFrames:view.lodFrames?.map(entry=>({index:entry.index,ids:entry.ids,frame:lodFrame(entry.lod,lodSettings)}))??null};
+        view=weapons.interleave(view);
         for(const binding of actors)if(ids.has(binding.id))records.push(binding.update(view));
         // The iterator items the frames draw (shared with the main frame's or this planning's extras),
         // each with its own item (beginFrameItems).
@@ -1370,7 +1386,19 @@ export async function createActorMeshSim(runtime,assets,asset,{kernel,player:pla
     },
     resetLodSettings(){lodSettings=RENDER_LOD_SETTINGS;},
     /** Validation: the pawns' third-person weapons (actor-weapon-sim.mjs states). */
-    weaponStates:()=>weapons.states(),
+    weaponStates:colors=>weapons.states(colors),
+    /** Validation (scripts/validate-weapon-order.mjs): 'on' starts keeping every SetupForActor call (actor, light sink, frame, result), 'take'
+     * returns the calls since and clears them, 'off' returns them and stops. */
+    setupLog:mode=>{
+      if(!lighting)return null;
+      const log=lighting.setupLog;
+      if(mode==='on')lighting.setupLog=[];
+      else if(mode==='take'&&log)lighting.setupLog=[];
+      else if(mode==='off')lighting.setupLog=null;
+      return mode==='on'?null:log??null;
+    },
+    /** Host timing of the weapon layer since the last reset (scripts/weapon-cost.mjs). */
+    weaponStats:reset=>weapons.stats(reset),
     /** URender's current LOD settings (the weapon's selection uses them too). */
     lodSettings:()=>lodSettings,
     /** Iterator item bindings in use (validation access). */

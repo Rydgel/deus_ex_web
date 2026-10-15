@@ -147,8 +147,8 @@ zeroed, Mirror forced, the hand coordinates divided by the zero rotation and the
 ## Play (2026-10-15)
 
 **Wiring.** Each armed pawn the actor mesh layer draws gets a binding for its weapon (`src/viewer/actor-weapon-sim.mjs`), created through
-`createMeshBinding`'s `attach` option on the CPU path (a few dozen vertices; the GPU path is not used for it) and updated right after its pawn
-with a view whose frames are the pawn's:
+`createMeshBinding`'s `attach` option, on the GPU mesh path when the page has it (`?weapons=cpu` and `?gpuMesh=0` take the CPU path, the reference: "The GPU path" below),
+lit right after its pawn in each frame ("Order of SetupForActor calls") and posed and drawn after the pawns with a view whose frames are the pawn's:
 
 * the weapon's mesh is `ThirdPersonMesh` (`runtime.prepareMeshReference`, `getMeshSurfaces`, `getMeshTextureOf`), its DrawScale `ThirdPersonScale`, its Style the
   pawn's, its Rotation zero (`attach.overrides`);
@@ -162,11 +162,11 @@ with a view whose frames are the pawn's:
   drawn frame for a steady flash;
 * the weapon is **not stamped** (DrawActorSprite stamps the pawn only): it is in none of the frame id sets, its `drawnIn` answers false, `LastRenderTime` stays;
   the frame passes (`framePasses`) take it in a frame when its pawn is there and had a hand (`inFrame`);
-* the page draws it like any CPU-path binding with the frustum test off (`creation.attached`: its bounds come from the world-space pose, which is not where the
+* the page draws it like any binding with the frustum test off (`creation.attached`: its bounds come from the world-space pose, which is not where the
   hand puts it); `?weapons=off` draws none.
 
-**Measured.** `scripts/validate-weapon-play.mjs` (the Island view, worker mode, a headless Chromium): both armed pawns have a CPU-path binding drawn in the main frame
-with camera points and colours; the weapon's Coords equal `weaponCoords(handCoords(...))` of Play's own special vertices word for word; Rotation zero,
+**Measured.** `scripts/validate-weapon-play.mjs` (the Island view, worker mode, a headless Chromium): both armed pawns have a binding (on the GPU path; on the CPU path with
+`?weapons=cpu`) drawn in the main frame, with its lighting record (camera points and colours on the CPU path); the weapon's Coords equal `weaponCoords(handCoords(...))` of Play's own special vertices word for word; Rotation zero,
 `OldFlashCount = FlashCount`, the weapon stays hidden and unstamped, its pawn is stamped; `?weapons=off` has no weapon binding.
 Pixels, the Island view against a fresh original (`live-original.sh ... --tag wpn3`, the debugger log of the same run in `.work/weapon/`; Play `live-acceptance.mjs play
 --tag wpn3 --page-params antialias=0`, `visual-acceptance.mjs compare --view wpn3:0,0,0:0,0,0`): whole frame ratio 1.316, mean abs. diff. 2.92, edge recall .999 /
@@ -271,28 +271,98 @@ per-call stamp (`ExtraTag`) only needs to differ between calls. Within one pawn 
 the `fade & 1` visibility shortcut for the lights whose `(Index ^ FrameCount) & 15` is nonzero) and writes it back (`fade + step`, `fade - step`, at most 16 entries), so the calls
 `[pawn@child, weapon@child, pawn@main, weapon@main]` of the original and `[pawn@child, pawn@main, weapon@child, weapon@main]` of Play start the second frame's calls from different caches. A light's fade only
 decides *whether it is still added* (a light that stops being visible stays in the list until its fade runs out, `max(0, fade - step)`), so the colours differ only on the frames where a light's fade crosses zero or a
-moving light enters one frame's `LeafLights` and not the other's; with one frame (a pawn in the main frame alone, the usual case) both orders are the same sequence. Not measured, and **not changed**: interleaving the weapon's
-per-frame lighting into the pawn's frame loop needs `createMeshBinding.update` to run its frames one at a time (pose, light, then the weapon's pose and light for that frame, then the next frame), which its records (one set of
-camera points and colours per binding per game frame) do not allow yet. The plan: a per-frame callback in the binding's frame loop (`view.afterFrame(binding, frameIndex)`) that runs the weapon binding's frame-k part
-(`GetFrame` with `entry.coords[k]`, LOD, `setupMesh` with the pawn as the sink) and stores the result in the weapon's per-frame record, assembled into the weapon's one record at the end; compare it with the present order on
-a pawn in two frames (the lab scene's `jcb`, where JC is in both) by the colours' words.
+moving light enters one frame's `LeafLights` and not the other's; with one frame (a pawn in the main frame alone, the usual case) both orders are the same sequence.
 
-**The GPU path.** A weapon binding takes the CPU path because `bind(weapon, { layout: null })` is passed no GPU layout. What a GPU weapon needs, from [gpu mesh](gpu-mesh.md): (1) the pose pass takes GetFrame's
-plan and the frame matrix (`lodMeshFrameMatrix`) from `attach.coords(frameIndex)` instead of the actor's world transform, once per frame the weapon is drawn in (as for an actor in several frames: `lodFrames`); (2) the
-vertex stage must publish camera-space points from the *hand's* Coords, not the world pose (the page draws attached bindings with the frustum test off for this reason: their world-space bounds are not where the hand
-puts them), which is the camera-space path of "Camera space (2026-10-14)" taking the weapon's per-frame Coords; (3) the light constants come from `attach.setup` (the sink pawn's location, leaf, zone and glow, the weapon's
-poly flags) as `setLighting` already reads them; (4) `validate-gpu-mesh` gains an attached binding case (the Island pistol and the lab's mirror frame) compared with the CPU path word for word (the tolerance of the other meshes: 1 ulp
-position, 1 byte colour). Weapons are a few dozen vertices each and one per armed pawn in view, so the gain is the CPU GetFrame replay and lighting per armed pawn per frame (`materialize`, not measured). Not started.
+**The order, implemented (2026-10-15).** The addresses are section 2's: `DrawActorSprite` (`0x10b25080`) makes the pawn's `DrawMesh` call at `0x10b25624` and, in the same invocation, the weapon's at `0x10b257da`, and
+DrawFrame invokes it once per sprite per frame, so within a frame the pawn's SetupForActor is followed by its weapon's. The pawn binding lights its frames in `lightIn` (`createMeshBinding`: the child frames in DrawFrame's order, the main
+frame last); that function now calls a hook after each frame (`view.afterLight`, made by `weapons.interleave`, `actor-weapon-sim.mjs`), which is the weapon's part of that frame in the original's place: the hand from the pawn's special vertices as
+that frame's GetFrame call made them (`binding.specialCamera`, with the frame's own projection planes), the weapon's Coords, and its SetupForActor result (`lighting.setupMesh(weapon, ..., {sink: pawn})`, which reads the cache the pawn's call
+just wrote). `weapons.update` then poses and draws the weapon with those results (`attach.takePrepared`); a frame the hook did not reach (the pawn's lighting did not run there) is placed and lit by `update` as before, in the old position.
+`?weaponOrder=late` keeps the earlier order (all of a pawn's frames, then the weapon's) as a switch, for this comparison. The CPU path is untouched: the same functions run, in the original's order.
+
+**Compared with the old order** (`scripts/validate-weapon-order.mjs`, worker mode): the `jcb` scene (05_NYC_UNATCOMJ12lab, JC with the pistol, `BehindView 1`, the view off the line to the mirror, so he is lit in the pane's child frame and in the main
+frame), loaded under a paused Playwright clock (`?hold=1&seed=1`, 16 ms frames, the console commands at fixed frames), so a run repeats exactly. The simulation side keeps every SetupForActor call (the actor, the light sink, the frame's origin
+words and the result: the ambient, `ScaleGlow`, the flags and each light's identity, location, radius, colour and fade as words) from the first BehindView frame, 120 frames. In every frame the sink's calls are `pawn@child weapon@child pawn@main
+weapon@main` with the hook and `pawn@child pawn@main weapon@child weapon@main` with `?weaponOrder=late` (the validator asserts both, so the comparison does tell the orders apart). The same order twice gives identical words (604 results, and the
+weapon's float32 corner colours); the two orders give **0 words different** in the 604 SetupForActor results and equal weapon colours in the main and the child frame. The reason is in this scene's lights: JC's three
+(`TriggerLight0`, `2`, `6`) are constant, visible from his location in every call, and their fades are at 255, so each call applies the same step in either order. A pawn's calls in one frame all see the same location (the sink's), so
+each light's visibility is the same in all of them; the orders can part only where a light is in one frame's `LeafLights` and not the other's (a moving light that enters the main frame's view planes but not the mirror's), in the frame
+it first appears: the late order's `weapon@child` then finds it in the cache `pawn@main` wrote, and the original's does not. No scene of the maps checked has that yet; the order is implemented because the disassembly gives it.
+
+**The GPU path (2026-10-15).** A weapon binding takes the GPU mesh path when the page has it (`bind(weapon, {attach, layout})` with the actors' layout); `?weapons=cpu` and `?gpuMesh=0` keep the CPU path, which stays the
+reference and the fallback (more than 32 selected lights, a layout that is full). [GPU mesh](gpu-mesh.md#a-pawns-weapon-2026-10-15) has the mechanism: (1) the camera-space publication takes the Coords of the frame being lit,
+`attach.coords(frameIndex)` (the hand's), as the slot's frame matrix in place of the lighting frame's, once per frame the weapon is drawn in; (2) the light constants come from the SetupForActor result the pawn's frame loop took for the
+weapon right after the pawn's own (`attach.takePrepared`, `attach.setup`: the pawn as sink, "Order of SetupForActor calls"); (3) the face pass takes the slot's own Mirror (F11.w, 1.0) in place of the run's, since DrawActorSprite forces
+Frame->Mirror to 1.0 for the weapon's DrawMesh whatever the frame's (`0x10b2571a`); (4) no frustum test (the world-space bounds are not where the hand puts the weapon) and no actor batching (the faces' side flips with the pass).
+
+*Compared with the CPU path.* `validate-gpu-mesh` has two weapon scenes (`?sim=inline`, bit exact against the CPU twin and the kernel, the tolerances of the other meshes being 1 ulp, 2 ulp for a tween and 1 byte): the Island view of
+Terrorist22's pistol and ThugMale3's crossbow (20 weapon-binding comparisons over 10 captures: 3,690 world-pose, final-pose and camera-space components, 2,790 lit corners) and the MJ12 lab's `jcb` scene (JC's pistol in BehindView, main frame
+and reflection: 10 comparisons, 1,770 components, 1,290 corners, and 10 real child frames with their own hand and SetupForActor result lit through a Mirror -1 run: 1,530 corners, 1,770 components): **0 differences**, 0 ulp and 0 bytes,
+no drawn-test disagreement. The slot's Mirror lane is checked by running every weapon's lighting under a Mirror -1 run against the kernel at Mirror 1.0; dropping the lane from `setLighting` fails both scenes. In Play's worker mode
+`validate-weapon-gpu-play` loads the same two scenes under a paused clock (`?hold=1&seed=1`, 16 ms frames) with `?weapons=cpu` twice (the control), the default and `?weapons=off`, and compares the drawing buffers: **the GPU path draws the CPU
+path's pixels exactly** (0 of 921,600 pixels differ in either scene, as in the control); the weapons cover 3,103 and 783 pixels in the two scenes, so the comparison sees them.
+
+## Cost (2026-10-15)
+
+**Method** (`scripts/weapon-cost.mjs`, Play's default worker mode, a fresh headless Chromium per run, `--use-angle=gl` on the Linux host's AMD iGPU, 1440x960, the player floating in the `ghost` cheat at the view, level running, 240 drawn frames after
+4 s): pairs of runs of one view, interleaved (the side that goes first alternates), the default against `?weapons=off`, five pairs per scene; each phase is the mean per drawn frame over a run's frames (`deusExViewer.framePhases`: the worker's steps
+`w.*` and the page's own), and the table has the median over the pairs. The weapon layer's own time is counted where it runs (`weapons.stats`: `weapons.update` and the hook the pawns' lighting makes, the wall time per
+worker frame; also `lodProbe({list: 'weaponStats'})`). The page is vsync-limited here (60 Hz, the draw interval is 16.7 ms with and without the weapons), so the costs below are host work, not frame rate. The host was shared with other
+agents' jobs (load average 7 to 9 on 16 cores), so a single phase wobbles by about 0.3 ms between runs, and the difference of two phases by as much; the layer's own time is the precise column. Linux AMD numbers: the Mac the 120 fps
+target is defined on was not at hand.
+
+The scenes put armed pawns in view (`.work/weapon/find-view.mjs`: Frame->Sprite pawns whose weapon the last update drew, over rings of eye positions around the clusters of armed pawns a census of the maps in Play found): 02_NYC_Street at
+(1374, 1390, -374) looking along -x at the UNATCO troops and terrorists, 06_HongKong_WanChai_Street at (-1700, -1300, 2122) at the MJ12 troops on the roof, the Island at (3240, -100, 1178) at Terrorist22 and ThugMale3, and the Paris Club at
+(-623, 177, -40) at ThugMale0 (the Club has three armed pawns in all). Armed pawns drawn is the mean number of weapon records an update made.
+
+*Before* (the CPU path, commit `88b6f96`; per drawn frame, ms):
+
+| Scene | armed pawns drawn | the weapon layer's own time (sim side) | worker `w.actors` on / off | page `actors` on - off | page `render` on - off |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| NYC Street | 11 | 1.27 (0.116 each) | 4.89 / 3.69 | +0.23 | +0.33 |
+| Hong Kong Wan Chai Street | 3 | 0.42 (0.139) | 4.24 / 3.85 | +0.06 | +0.16 |
+| Island | 2 | 0.30 (0.151) | 3.43 / 3.05 | +0.07 | +0.12 |
+| Paris Club | 1 | 0.32 | 2.83 / 2.43 | +0.03 | +0.01 |
+
+So an armed pawn in view cost the worker 0.12 to 0.3 ms a frame (the Club's assault shotgun mesh is the largest), the page's record application a few hundredths and its draw submission about 0.03 ms (a weapon's mesh groups are three.js
+meshes like any actor's); eleven pawns in view cost 1.27 ms of the worker's ~14 ms and about 0.6 ms of the page's.
+
+*After* (the GPU path, this branch; same scenes, same method):
+
+| Scene | armed pawns drawn | the weapon layer's own time (sim side) | worker `w.actors` on / off | page `actors` on - off | page `render` on - off |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| NYC Street | 11 | 0.94 (0.085 each) | 4.48 / 3.28 | +0.05 | +0.35 |
+| Hong Kong Wan Chai Street | 3 | 0.25 (0.084) | 3.70 / 3.55 | -0.01 | -0.02 |
+| Island | 2 | 0.22 (0.110) | 3.20 / 3.05 | 0.00 | +0.03 |
+| Paris Club | 1 | 0.22 | 2.57 / 2.31 | +0.01 | +0.21 |
+
+The layer's own time falls by 26 to 40 percent and the page's record application to nothing the noise hides (the CPU path copied corner colours and camera-space points into the geometry attributes of every weapon every frame; the GPU path
+sends one lighting record and a plan). The draw submission is unchanged, as it should be. What is left on the simulation side is not the GetFrame replay and lighting the GPU took over: in the NYC scene (sub-timers added for the
+measurement, 11 weapons, 0.995 ms) the hand placement is 0.40 ms (`specialCamera`: the pawn's special vertices published through the frame's matrix, the outcodes, `handCoords`, `weaponCoords`: about 36 microseconds per weapon and frame), the
+binding's update 0.31 ms (pose change detection, the plan, the LOD selection, the lighting record), SetupForActor 0.12 ms and the layer's bookkeeping 0.16 ms. The update no longer allocates its frame lists, Maps, Sets and view objects per armed
+pawn per frame (they are reused; `last` for validation is built on demand), but `specialCamera` and the hand still allocate their small arrays.
+
+*GPU against CPU in one session* (the default against `?weapons=cpu`, interleaved, five pairs per scene; per drawn frame, ms, GPU / CPU):
+
+| Scene | armed pawns drawn | the layer's own time | page `actors` | page `render` | page `total` | worker `w.actors` |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| NYC Street | 11 | 0.84 / 1.06 | 0.57 / 0.79 | 1.74 / 1.64 | 3.52 / 3.66 | 4.36 / 4.24 |
+| Hong Kong Wan Chai Street | 3 | 0.23 / 0.37 | 0.56 / 0.69 | 0.84 / 0.97 | 2.74 / 3.18 | 3.35 / 3.87 |
+| Island | 2 | 0.21 / 0.26 | 0.51 / 0.51 | 1.40 / 1.25 | 3.04 / 2.80 | 3.27 / 3.08 |
+| Paris Club | 1 | 0.18 / 0.24 | 0.39 / 0.39 | 1.79 / 1.70 | 5.39 / 5.25 | 2.19 / 2.20 |
+
+Here too the layer's own time falls (19 to 38 percent), and the page's record application with it where several weapons are in view; every other phase of the two sides is within the run-to-run wobble of this shared host
+(`w.actors` and the worker total differ by up to a millisecond either way, which no weapon explains).
 
 ## Open
 
 * **A ViewportWindow's frame against the original**: wired and checked in Play (above), not compared with the original's own camera window (the debugger and the terminal route's tracer cannot hold the game together).
-* **GPU path** for the weapon bindings: plan above; CPU path measured only by its pixels.
-* **Order of SetupForActor calls**: the analysis above; it can change a light's fade only on frames where a pawn with a weapon is in two frames; Play still runs all of a pawn's frames, then its weapon's.
+* **GPU path**: done (above). The CPU path stays the reference; `?weapons=cpu`.
+* **Order of SetupForActor calls**: implemented and compared (above). Not compared in a scene where a light first enters one frame's `LeafLights` and not the other's, which is the only case the orders can differ in; the lab scene has none.
 * **An NPC in a mirror**: the same wiring as JC's (verified for JC in a mirror, both frames, `jcb`); no capture of the original has an armed NPC in a mirror yet (the maps' mirrors sit at
   the height of a standing pawn's belt or above its hands except the lab's panes, and the Club's guards stand away from them).
 * **Muzzle flash**: dead by data, see above; the render-time `appFrand` it would draw from the CRT stream is not modelled.
-* **Cost**: one CPU GetFrame replay per armed pawn per drawn frame (`materialize`), not measured.
+* **Cost**: measured (above): 0.08 to 0.15 ms of the worker's frame per armed pawn in view on the GPU path (0.12 to 0.3 on the CPU path), the hand placement being the largest part left; not measured on the Mac.
 
 **Screenshots** (Play, worker mode, default settings; outside the repository): `.work/weapon/club-guard-front.png` and `club-guard-side.png` (10_Paris_Club: the guard `ThugMale4` with his assault shotgun, the camera behind him on
 `CheatView`), `jc-reflection-pistol.png` and `jc-reflection-pistol-zoom.png` (05_NYC_UNATCOMJ12lab: JC's reflection holding the pistol, the first-person pistol below); the comparisons with the original:

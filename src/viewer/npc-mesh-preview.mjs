@@ -25,6 +25,8 @@ export function bindingView(binding,drawOf,draw=null){
   return {
     get actor(){return binding.actor;},get summary(){return binding.summary;},get path(){return binding.path;},
     get mesh(){return binding.mesh;},get block(){return binding.block;},
+    /** A pawn's third-person weapon (actor-weapon-sim.mjs): lit and posed from the hand's Coords. */
+    get attached(){return Boolean(binding.attachedTo);},
     get root(){return drawOf(binding.id)?.root??hiddenRoot;},
     get location(){return binding.location;},get rotation(){return binding.rotation;},
     /** Validation access (scripts/validate-gpu-mesh.mjs): the simulation
