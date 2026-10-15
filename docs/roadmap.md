@@ -495,14 +495,23 @@ doubling and the two MODULATE stages are traced), and the residual +-1 at filter
 ([visual acceptance](visual-acceptance.md#the-darkest-pixels-2026-10-15-not-a-rounding-difference),
 [texture sampling](texture-sampling.md#texture-formats-uploads-and-stage-operations-d3ddrvdll-2026-10-15)).
 
+**Player alterations and the viewport flash** (2026-10-15, [screen flash](screen-flash.md)): wine, liquor, Zyme and
+poison no longer pause (`Window.SetBackgroundSmoothing`, native 1423, translated and compared in 350 cases), tear gas and EMP
+grenades play (iterator native 312, `VisibleCollidingActors` in `Actor.HurtRadius`, over `ActorRadiusCheck` `0x103589e0`,
+compared in 218 queries), and the flash `UGameEngine::Draw` hands the device is drawn (`EndFlash` compared with D3DDrv
+`0x10007c90` in 67 cases; the pass sits after the HUD and before the display ramp). A census of 19 scenarios
+(`validate-player-alterations-census`) keeps every one playing.
+
 **Open.**
-- *Being worked on:* the player's status effects (drinking, drugs, poison, gas and the rest pause at natives Play has
-  not recovered) and the screen flash (`FlashScale`/`FlashFog`, zone `ViewFlash`/`ViewFog`), which Play does not draw.
 - *Third-person weapon, left:* the player's reflection and any pawn in a mirror's child frame (wired behind
   `?weaponMirrors=1`, unverified: no capture of the original draws an armed pawn or JC there yet), a held tool with no
   weapon (`Pawn.SelectedItem`'s block, recovered, not wired), the weapon in a ViewportWindow's frame (security cameras),
   the GPU path for weapons (they take the CPU path), and the weapon's frame-order of SetupForActor calls (all of a pawn's
   frames, then its weapon's).
+- *Alterations and the flash, left:* a held underwater or drunk frame compared with the original under Wine (the flash
+  pass is checked against Play itself only, and GL's 8-bit blend rounding against the device's is unmeasured), an
+  exec-body differential for iterator 312, pain-zone and `DamageTrigger` scenarios, player swimming and drowning, the
+  poison and fire sources (Greasel spit, darts, flames) and `summon` of a class the map did not load.
 - *Rendering:* the detail pass's mover surfaces, ZBIAS mapping (Wine behaves like a slope-scaled
   offset), colour interpolation and fog-map gate; clipped polygons' own vertices
   ([frame projection](frame-projection.md#unverified-and-open)); for sprites, texture LOD other than 0

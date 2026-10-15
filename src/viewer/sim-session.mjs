@@ -11,6 +11,7 @@ import { fromView } from '../unreal/geometry.mjs';
 import { createPlayCamera, applyPlayFrame, pointCamera, projectionOf, projectionOfFields, setFrameProjection, verticalFov, setPixelCentre,
   setProjectionState } from './play-camera.mjs';
 import { createDrawnSet } from './drawn-set.mjs';
+import { viewportFlash } from '../runtime/screen-flash.mjs';
 import { createMeshFramePack, PACK_WORDS } from './mesh-frame-pack.mjs';
 import { createDecalDraw } from '../runtime/decal-draw.mjs';
 import { OCCLUSION_DETAIL, OCCLUSION_POINTS, OCCLUSION_SPRITE_KEYS, SETUP, SETUP_OUT_WORDS } from '../runtime/bsp-occlusion.mjs';
@@ -855,14 +856,18 @@ export function createSimSession(game, { assets = null, events = [], exportName 
      * steps. */
     hud({ width, height, view }) {
       const errors = [];
-      let commands = [], infoLink = null;
+      let commands = [], infoLink = null, flash = null;
       try {
         game.hud.host?.setViewportPlanner?.(planViewportPass);
         viewportFrames = 0; lastViewportPlans = [];
         commands = plainHudCommands(game.hud.commands(width, height, view));
         infoLink = infoLinkText();
+        // UGameEngine::Draw's flash planes for UD3DRenderDevice::EndFlash (docs/screen-flash.md), read where the
+        // original reads them: the viewport actor's FlashScale and FlashFog after the tick, at the HUD draw.
+        const viewer = game.player.collisionActor;
+        flash = viewportFlash({ flashScale: runtime.readNamed(viewer, 'FlashScale'), flashFog: runtime.readNamed(viewer, 'FlashFog') });
       } catch (error) { failed = true; errors.push(plainError(error)); }
-      return { errors, commands, infoLink };
+      return { errors, commands, infoLink, flash };
     },
     /** SetupDynamics' sprite scan with the render iterators (sprite-scan.mjs):
      * the sprite records in draw order. The laser DT_Mesh items stay in
@@ -1112,7 +1117,7 @@ export function createSimSession(game, { assets = null, events = [], exportName 
       if (input.play && game.hud && view) {
         const hud = this.hud({ width, height, view });
         collect(hud.errors);
-        snapshot.hud = { commands: hud.commands, infoLink: hud.infoLink };
+        snapshot.hud = { commands: hud.commands, infoLink: hud.infoLink, flash: hud.flash };
       }
       // Galaxy's Update runs inside the HUD draw (UGameEngine::Draw order).
       snapshot.audioMs = input.play ? game.takeAudioMs?.() ?? 0 : 0;

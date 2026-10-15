@@ -274,6 +274,12 @@ export function createCollisionHash({ tables, seed, maxCells = 1000000, store = 
     lineCandidates(query) {
       return candidateOrder(lineQueryCells(query));
     },
+    /** The registrations a query over explicit cells visits (ActorRadiusCheck's cell box,
+     * collision-hash-radius.mjs), in its order, each once. */
+    cellCandidates(cells) {
+      check(cells);
+      return candidateOrder(cells);
+    },
     /** The registrations actorEncroachmentCheck({bounds}) would visit. */
     boundsCandidates({ bounds }) {
       const cells = collisionHashBounds(bounds); check(cells);

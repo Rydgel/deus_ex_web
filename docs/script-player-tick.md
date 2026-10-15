@@ -346,3 +346,16 @@ native cursor coordinates remain platform differences. User.ini AXIS Speed,
 PlayerInput sensitivity/smoothing and UpdateRotation remain original code; see
 [script-console-command.md](script-console-command.md) for the full wrapper and
 device trace.
+
+## DrugEffects, Bleed and the flash (2026-10-15)
+
+In `PlayerWalking`'s PlayerTick (`DeusExPlayer.uc` 3681) the order is RefreshSystems, DrugEffects, Bleed, HighlightCenterObject; the
+conversation and spectate-style states call DrugEffects and Bleed, then `ViewFlash(deltaTime)` themselves (`.uc` 7399..7404:
+"must update viewflash manually incase a flash happens during a convo"), and `PlayerPawn.PlayerTick` calls `ViewFlash` for the
+ordinary state. `DrugEffects` reaches four Extension natives on the HUD root window: `SetBackground` (1421), `SetBackgroundStyle`
+(1422), `SetBackgroundSmoothing` (1423, translated 2026-10-15 from Extension.dll `0x10051dc0` / `XWindow::SetBackgroundSmoothing`
+`0x1004d700` / `XGC::EnableSmoothing` `0x100270e0`, 350 oracle cases) and `SetBackgroundStretching` (1424). It also adds a
+ViewRotation sway and sets `DesiredFOV`, which `PlayerPawn` folds into `FOVAngle` (the camera reads `FOVAngle`). `Bleed` spawns
+`BloodDrop` actors while `bleedRate > 0` (the `hit-shot-bleed` census scenario plays). The flash `ViewFlash` integrates is drawn by
+D3DDrv `EndFlash`: [screen flash](screen-flash.md) holds the script arithmetic, the Engine/D3DDrv evidence, the census of what
+paused and the open list.

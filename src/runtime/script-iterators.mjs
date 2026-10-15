@@ -512,3 +512,53 @@ export function createBasedActorsIterator({
     },
   };
 }
+
+/** Original execVisibleCollidingActors 0x103e55b0 (native index 312, `Actor.HurtRadius`'s iterator). The exec evaluates
+BaseClass (null becomes class Actor), the out Actor, an optional Radius (omitted or 0.0 becomes 1000.0), an optional Loc
+(default the receiver's Location) and an optional bIgnoreHidden, then takes the list the collision hash's ActorRadiusCheck
+(0x103589e0, collision-hash-radius.mjs) returns for Loc and Radius once. Each resume clears *Actor and walks on: a candidate
+yields when its class reaches BaseClass, it is not hidden while bIgnoreHidden (the +0x28 word's bit 2) and
+Level->Model->FastLineCheck(candidate.Location, Loc) succeeds. docs/screen-flash.md "Iterator 312". */
+export function createVisibleCollidingActorsIterator({
+  receiver,
+  argumentCount,
+  evaluateArgument,
+  actorClass,
+  levelFor,
+  isA,
+  actorWord,
+  radiusActors,
+}) {
+  if (typeof evaluateArgument !== 'function') throw new TypeError('VisibleCollidingActors requires evaluateArgument');
+  if (typeof levelFor !== 'function') throw new TypeError('VisibleCollidingActors requires levelFor');
+  if (typeof isA !== 'function' || typeof actorWord !== 'function' || typeof radiusActors !== 'function') throw new TypeError('VisibleCollidingActors requires isA, actorWord and radiusActors');
+  if (argumentCount < 2 || argumentCount > 5) throw new RangeError(`VisibleCollidingActors takes two to five arguments; got ${String(argumentCount)}`);
+
+  const baseValue = refValue(evaluateArgument(0));
+  const outActor = writeSlot(evaluateArgument(1));
+  let radius = f32(argumentCount > 2 ? refValue(evaluateArgument(2)) ?? 0 : 0);
+  if (radius === 0) radius = 1000;
+  const loc = ((argumentCount > 3 ? refValue(evaluateArgument(3)) : undefined) ?? receiver.position).map(f32);
+  const ignoreHidden = Boolean(argumentCount > 4 ? refValue(evaluateArgument(4)) : false);
+  const baseClass = baseValue === null || baseValue === undefined ? actorClass : baseValue;
+  const level = levelFor(receiver);
+  const list = radiusActors(level, { location: loc, radius });
+  let index = 0;
+  return {
+    next() {
+      outActor.set(null);
+      const model = level?.model, check = level?.fastLineCheck ?? fastLineCheck;
+      while (index < list.length) {
+        const actor = list[index++];
+        if (!actor) continue;
+        if (!isA(actor, baseClass)) continue;
+        if (ignoreHidden && (actorWord(actor) & 2)) continue;
+        if (!model) throw new TypeError('VisibleCollidingActors requires the level BSP model');
+        if (!(check(model, actor.position.map(f32), loc) & 0xff)) continue;
+        outActor.set(actor);
+        return true;
+      }
+      return false;
+    },
+  };
+}

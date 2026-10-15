@@ -22,6 +22,7 @@ import { DECAL_LAYER } from './render-layers.mjs';
 import { createCoronaPass } from './corona-pass.mjs';
 import { TextureStore } from '../unreal/textures.mjs';
 import { createHudRenderer } from './hud.mjs';
+import { createFlashPass } from './flash-pass.mjs';
 import { createActorMeshDraw } from './actor-mesh-draw.mjs';
 import { bindingView } from './npc-mesh-preview.mjs';
 import { createGpuMesh } from './gpu-mesh.mjs';
@@ -247,6 +248,7 @@ function useFrameProjection(projection, mirror = 1) {
   vertexProjection.use(projection, rect, view, mirror);
 }
 let hudRenderer=null;
+const flashPass=createFlashPass();
 let npcPreview=null;
 let spriteScene=null,coronaPass=null,decalScene=null,detailScene=null;
 // Actor mesh animation and lighting run on the GPU (docs/gpu-mesh.md), on by
@@ -2002,6 +2004,10 @@ function drawFrame(snap, time) {
     hudRenderer.render(renderer, renderer.domElement.width, renderer.domElement.height, snap.hud.commands,
       { viewport: command => { try { viewportWorldPass(command); } catch (error) { pauseForRuntimeError(error); } } });
     updateInfoLinkAccessibility(snap.hud.infoLink);
+  }
+  // UD3DRenderDevice::EndFlash follows the PostRenderFlash event that paints the HUD windows (docs/screen-flash.md).
+  if (playing && !runtimeError && snap?.hud?.flash) {
+    try { flashPass.render(renderer, snap.hud.flash); } catch (error) { pauseForRuntimeError(error); }
   }
   framePhases.hudCalls += drawCalls() - calls;
   phase('hud');

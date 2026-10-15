@@ -23,7 +23,8 @@ import { loadTraceKernel } from './trace-kernel.mjs';
 import { RustScriptVm, classDefaultsChanged } from './script-vm-rust.mjs';
 import { ObjectArena } from './script-object-arena.mjs';
 import { destroyScriptProperty } from './script-property-destroy.mjs';
-import { createAllActorsIterator, createTraceActorsIterator, createTraceVisibleActorsIterator, createTraceTextureIterator, createRadiusActorsIterator, createVisibleActorsIterator, createBasedActorsIterator, createCycleActorsIterator } from './script-iterators.mjs';
+import { createAllActorsIterator, createTraceActorsIterator, createTraceVisibleActorsIterator, createTraceTextureIterator, createRadiusActorsIterator, createVisibleActorsIterator, createVisibleCollidingActorsIterator, createBasedActorsIterator, createCycleActorsIterator } from './script-iterators.mjs';
+import { actorRadiusCheck } from './collision-hash-radius.mjs';
 import { scriptTrace, scriptFastTrace } from './script-trace.mjs';
 import { setActorTimer, updateActorTimer } from './script-timers.mjs';
 import { sleepActor, pollActorSleep } from './script-sleep.mjs';
@@ -148,7 +149,7 @@ import { setToggleNative } from './script-window-toggle-set.mjs';
 import { configureChildNative } from './script-window-configure-child.mjs';
 import { setWindowPositionNative } from './script-window-position.mjs';
 import { setWindowAlignmentsNative } from './script-window-alignments.mjs';
-import { setBackgroundStyleNative } from './script-window-background-style.mjs';
+import { setBackgroundStyleNative, setBackgroundSmoothingNative } from './script-window-background-style.mjs';
 import { raiseWindowNative, hideWindowNative } from './script-window-order.mjs';
 import { lowerWindowNative } from './script-window-lower.mjs';
 import { setWindowBackgroundNative, setWindowTileColorNative } from './script-window-surface.mjs';
@@ -3451,6 +3452,11 @@ export class ScriptRuntime {
       const newStyle=refValue(call.evaluateArgument(0));
       return setBackgroundStyleNative({window:call.receiver,newStyle},this.windowLifecycle?.backgroundStyle);
     }
+    if(call.index===1423){
+      if(call.argumentCount!==1)throw new Error('Window.SetBackgroundSmoothing requires one bool argument');
+      const newValue=refValue(call.evaluateArgument(0));
+      return setBackgroundSmoothingNative({window:call.receiver,newValue},this.windowLifecycle?.backgroundStyle);
+    }
     if(call.index===1421){
       if(call.argumentCount!==1)throw new Error('Window.SetBackground requires one Texture argument');
       const background=refValue(call.evaluateArgument(0));
@@ -4494,7 +4500,7 @@ export class ScriptRuntime {
         :call.index===1003?createTraceVisibleActorsIterator:createTraceTextureIterator;
       return create({...call,levelFor:this.levelFor,readActor:(actor,name)=>this.readNamed(actor,name)});
     }
-    if(call.index===310||call.index===311||call.index===306||call.index===1002){
+    if(call.index===310||call.index===311||call.index===312||call.index===306||call.index===1002){
       // execRadiusActors/execVisibleActors/execBasedActors/execCycleActors
       // scan Level->Actors in native order; the candidate Class->+0x28
       // ancestry walk is the attached instance's cls chain, same as
@@ -4515,6 +4521,15 @@ export class ScriptRuntime {
           scan:render?(array,cursor,steps,bound,base)=>render.cycleScan(array,cursor,steps,bound,base):null});
       }
       if(call.index===310)return createRadiusActorsIterator({...call,actorClass:this.actorClass.record,levelFor:this.levelFor,isA});
+      // execVisibleCollidingActors 0x103e55b0: the list is the collision hash's ActorRadiusCheck 0x103589e0
+      // (collision-hash-radius.mjs), filtered by class, bHidden and Model->FastLineCheck.
+      if(call.index===312)return createVisibleCollidingActorsIterator({...call,actorClass:this.actorClass.record,levelFor:this.levelFor,isA,
+        actorWord:actor=>actorWordOf(this.instance(actor)),
+        radiusActors:(level,query)=>{
+          const hash=level?.hash?.hash;
+          if(typeof hash?.cellCandidates!=='function')throw new Error('VisibleCollidingActors requires the level collision hash');
+          return actorRadiusCheck(hash,query,actor=>actor.position);
+        }});
       // VisibleActors tests the candidate's whole +0x28 word for bHidden.
       return createVisibleActorsIterator({...call,actorClass:this.actorClass.record,levelFor:this.levelFor,isA,
         actorWord:actor=>actorWordOf(this.instance(actor))});
