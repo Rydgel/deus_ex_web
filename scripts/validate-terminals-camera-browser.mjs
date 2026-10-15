@@ -12,7 +12,7 @@
 //
 //   node scripts/validate-terminals-camera-browser.mjs [--url http://...] [--query sim=inline] [--shot camera.png]
 //        [--map M --computer C --user U --password P --camera-actor A --click x,y]
-//        [--camera x,y,z,pitch,yaw] [--player x,y,z] [--emitters x,y,z,pitch,yaw,count] [--expect mirror,sky,decals,coronas,fog,items,extras]
+//        [--camera x,y,z,pitch,yaw] [--player x,y,z] [--emitters x,y,z,pitch,yaw,count] [--expect mirror,sky,decals,coronas,fog,items,extras,weapons]
 //
 // --camera stands the camera actor (SecurityCamera5; --camera-actor) elsewhere in the map (a fixture: the original
 // camera does not move), to put the view where a map's mirrors, sky, decals or
@@ -151,6 +151,15 @@ try {
     await Promise.race([window.deusExViewer.settled(), new Promise(resolve => setTimeout(resolve, 2000))]);
     return {sim, passes, again: await window.deusExViewer.lodProbe({})};
   });
+  // The pawns the camera frame draws that hold a weapon, with their weapon bindings' state, at one moment (the terrorists walk in and out of the view):
+  // the plan's actors and the weapon states are read in the same worker turn as closely as the calls allow, over a few tries.
+  let weaponsInView = [];
+  for (let attempt = 0; attempt < 30 && !weaponsInView.length; attempt++) {
+    const plans = (await probe({})).viewports, rows = await page.evaluate(() => window.deusExViewer.lodProbe({list: 'weapons'}));
+    weaponsInView = rows.filter(row => row.weapon && plans.some(plan => plan.actors.includes(row.pawn))).map(row => ({pawn: row.pawn, weapon: row.weapon, binding: row.binding, why: row.why,
+      visible: row.last?.visible ?? null, frames: row.last?.frames ?? null}));
+    if (!weaponsInView.length) await frames(4);
+  }
   const lodRows = sample.sim, passRows = sample.passes ?? [];
   const lodSignature = row => JSON.stringify([row.returned, row.state, row.admitted, row.vertices, row.selection,
     (row.frames ?? []).map(f => [f.index, f.returned, f.state, f.admitted, f.vertices, f.selection])]);
@@ -161,7 +170,7 @@ try {
   const itemFrame = await probe({iterators: true});
   const iterators = itemFrame.iterators, itemPlan = itemFrame.viewports.find(candidate => candidate.location.every((v, i) => v === itemFrame.camera.location[i]));
   const status = await page.evaluate(() => window.deusExViewer.status());
-  report = {sim, watched, iterators, itemPlan, lodRows, passRows, stableIds, decalShare, lighting, cone: state.cone, frameMs: +interval.toFixed(1), camera: state.camera, plans: state.viewports, passes: state.page, crop, stats, runtimeError: status.runtimeError?.message ?? null, pageErrors: errors};
+  report = {weaponsInView, sim, watched, iterators, itemPlan, lodRows, passRows, stableIds, decalShare, lighting, cone: state.cone, frameMs: +interval.toFixed(1), camera: state.camera, plans: state.viewports, passes: state.page, crop, stats, runtimeError: status.runtimeError?.message ?? null, pageErrors: errors};
 } finally { await browser.close(); await server?.close(); if (!option('shot', null)) rmSync(scratch, {recursive: true, force: true}); }
 console.log(JSON.stringify({...report, iterators: undefined, lodRows: undefined, passRows: undefined, stableIds: undefined, lighting: undefined, cone: report.cone.length,
   plans: report.plans.map(plan => ({...plan, coronas: plan.coronas && {...plan.coronas, frameWords: undefined, placed: plan.coronas.placed.length}}))}, null, 1));
@@ -283,6 +292,15 @@ if (plan.coronas?.icons > 0) {
 }
 assert.equal(drawnPass.frames, plan.frames.length, "the page draws each child frame the camera's OccludeBsp made");
 for (const feature of expectedFeatures) {
+  // A pawn in the camera frame holding a weapon draws it there (DrawActorSprite's block runs in every root frame, a ViewportWindow's included;
+  // docs/weapon-attachment.md): the pawn is drawn by this frame (the player's own view need not hold it) and its weapon binding is drawn in it.
+  if (feature === 'weapons') {
+    const armed = report.weaponsInView;
+    assert.ok(armed.length > 0, 'a pawn holding a weapon in the camera frame');
+    for (const row of armed) assert.ok(row.binding !== null && row.why === null && row.visible && JSON.stringify(row.frames) === '[null]',
+      `${row.pawn}'s ${row.weapon} is drawn in the camera's root frame (${JSON.stringify(row.why)}, ${JSON.stringify(row.frames)})`);
+    console.log(`weapons in the camera frame: ${armed.map(row => `${row.pawn}/${row.weapon}`).join(' ')}`);
+  }
   if (feature === 'mirror') assert.ok(plan.frames.some(frame => frame.kind === 'mirror'), 'the camera frame has a mirror child frame');
   if (feature === 'sky') assert.ok(plan.sky, 'the camera frame has a sky frame');
   if (feature === 'decals') assert.ok(plan.decals > 0, 'the camera frame draws decals');

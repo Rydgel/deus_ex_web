@@ -250,12 +250,50 @@ blocks; over the MedKit in the reflection (40x40 +640+425) MAD 5.18, recall 1.00
 original, Play, Play without: the same box, handle and cross in the same hand).
 
 
+## A ViewportWindow's frame (security cameras, 2026-10-15)
+
+`DrawWorld` is one function for every root frame ([script-window-viewport](script-window-viewport.md#camera-pass): the window's frame goes through the same OccludeFrame and DrawFrame), so DrawActorSprite's
+weapon block runs for a pawn in the camera's Frame->Sprite exactly as for the main frame's, with the window frame's own Coords, Mirror 1 and PrjXM..PrjYP. Play's `updateFrame` (the second DrawWorld's actor update)
+now updates the weapons of the pawns in the frame after their pawns (`weapons.update(..., hideOthers = false)`), with the camera master frame's projection planes (`prj: seen.master.prj`), and the pass's
+decisions no longer hide a weapon binding whose pawn is in the frame and had a hand there (`weaponInRoot`: a weapon is in no Frame->Sprite of its own). A mirror inside the camera's view uses the same child-frame path as the main frame's.
+
+**Checked in Play** (`validate-terminals-camera-browser.mjs --expect weapons`, worker mode, 01_NYC_UNATCOIsland ComputerSecurity1: the Temp Holding Cell window of SecurityCamera5): the armed terrorists in the camera frame
+(Terrorist18 `WeaponPistol10`, Terrorist30 `WeaponPistol20`, Terrorist2 `WeaponPistol25` over the tries) each have a weapon binding drawn in the window's root frame (`frames [null]`), whereas before the step the
+window drew their bodies without it. **Not compared with the original's pixels**: those three terrorists walk and animate differently in the two programs (the matched window captures mask their region,
+[security cameras](visual-acceptance.md#security-cameras-2026-10-14)), and the debugger cannot be attached beside the terminal route's tracer; the evidence is the shared function and Play's own check.
+
+## Order of SetupForActor calls, and the GPU path: analysis (2026-10-15)
+
+**The order.** In DrawActorSprite the pawn's DrawMesh (GetFrame, DrawLodMesh, SetupForActor, Light) comes first and the weapon's second, in each frame; the frames follow DrawFrame's order (children first, the main frame last,
+each frame visiting its sprites). Play updates a pawn binding over all of its frames and then updates the weapon binding over all of its frames (`weapons.update` after `binding.update`). Across *different* pawns the order does
+not matter: SetupForActor's per-actor cache is `GCache` item `(Actor.Index * 256) + 0x30`, so each pawn's cache is touched only by that pawn's calls and its weapon's (the weapon is lit with the pawn as the sink), and the
+per-call stamp (`ExtraTag`) only needs to differ between calls. Within one pawn it can matter: `setupForActor` (mesh-lighting.mjs) reads the cache at every call (the cached candidates and their fades, `newCache`,
+the `fade & 1` visibility shortcut for the lights whose `(Index ^ FrameCount) & 15` is nonzero) and writes it back (`fade + step`, `fade - step`, at most 16 entries), so the calls
+`[pawn@child, weapon@child, pawn@main, weapon@main]` of the original and `[pawn@child, pawn@main, weapon@child, weapon@main]` of Play start the second frame's calls from different caches. A light's fade only
+decides *whether it is still added* (a light that stops being visible stays in the list until its fade runs out, `max(0, fade - step)`), so the colours differ only on the frames where a light's fade crosses zero or a
+moving light enters one frame's `LeafLights` and not the other's; with one frame (a pawn in the main frame alone, the usual case) both orders are the same sequence. Not measured, and **not changed**: interleaving the weapon's
+per-frame lighting into the pawn's frame loop needs `createMeshBinding.update` to run its frames one at a time (pose, light, then the weapon's pose and light for that frame, then the next frame), which its records (one set of
+camera points and colours per binding per game frame) do not allow yet. The plan: a per-frame callback in the binding's frame loop (`view.afterFrame(binding, frameIndex)`) that runs the weapon binding's frame-k part
+(`GetFrame` with `entry.coords[k]`, LOD, `setupMesh` with the pawn as the sink) and stores the result in the weapon's per-frame record, assembled into the weapon's one record at the end; compare it with the present order on
+a pawn in two frames (the lab scene's `jcb`, where JC is in both) by the colours' words.
+
+**The GPU path.** A weapon binding takes the CPU path because `bind(weapon, { layout: null })` is passed no GPU layout. What a GPU weapon needs, from [gpu mesh](gpu-mesh.md): (1) the pose pass takes GetFrame's
+plan and the frame matrix (`lodMeshFrameMatrix`) from `attach.coords(frameIndex)` instead of the actor's world transform, once per frame the weapon is drawn in (as for an actor in several frames: `lodFrames`); (2) the
+vertex stage must publish camera-space points from the *hand's* Coords, not the world pose (the page draws attached bindings with the frustum test off for this reason: their world-space bounds are not where the hand
+puts them), which is the camera-space path of "Camera space (2026-10-14)" taking the weapon's per-frame Coords; (3) the light constants come from `attach.setup` (the sink pawn's location, leaf, zone and glow, the weapon's
+poly flags) as `setLighting` already reads them; (4) `validate-gpu-mesh` gains an attached binding case (the Island pistol and the lab's mirror frame) compared with the CPU path word for word (the tolerance of the other meshes: 1 ulp
+position, 1 byte colour). Weapons are a few dozen vertices each and one per armed pawn in view, so the gain is the CPU GetFrame replay and lighting per armed pawn per frame (`materialize`, not measured). Not started.
+
 ## Open
 
-* **A ViewportWindow's frame** (a security camera's own DrawWorld) does not draw weapons: `updateFrame` leaves them out and the pass's decisions hide them.
-* **GPU path** for the weapon bindings (a few dozen vertices each; CPU path measured only by its pixels).
-* **Order of SetupForActor calls**: the original lights the pawn then its weapon in each frame; Play runs all of a pawn's frames, then the weapon's (the sink's per-actor cache is shared).
+* **A ViewportWindow's frame against the original**: wired and checked in Play (above), not compared with the original's own camera window (the debugger and the terminal route's tracer cannot hold the game together).
+* **GPU path** for the weapon bindings: plan above; CPU path measured only by its pixels.
+* **Order of SetupForActor calls**: the analysis above; it can change a light's fade only on frames where a pawn with a weapon is in two frames; Play still runs all of a pawn's frames, then its weapon's.
 * **An NPC in a mirror**: the same wiring as JC's (verified for JC in a mirror, both frames, `jcb`); no capture of the original has an armed NPC in a mirror yet (the maps' mirrors sit at
   the height of a standing pawn's belt or above its hands except the lab's panes, and the Club's guards stand away from them).
 * **Muzzle flash**: dead by data, see above; the render-time `appFrand` it would draw from the CRT stream is not modelled.
 * **Cost**: one CPU GetFrame replay per armed pawn per drawn frame (`materialize`), not measured.
+
+**Screenshots** (Play, worker mode, default settings; outside the repository): `.work/weapon/club-guard-front.png` and `club-guard-side.png` (10_Paris_Club: the guard `ThugMale4` with his assault shotgun, the camera behind him on
+`CheatView`), `jc-reflection-pistol.png` and `jc-reflection-pistol-zoom.png` (05_NYC_UNATCOMJ12lab: JC's reflection holding the pistol, the first-person pistol below); the comparisons with the original:
+`jcm-hand-orig-on-off.png`, `jci-medkit-orig-on-off.png`.

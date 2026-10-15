@@ -1316,6 +1316,9 @@ export async function createActorMeshSim(runtime,assets,asset,{kernel,player:pla
           const item=ids.has(binding.id)?scope?.itemOf.get(binding):null;
           if(item)records.push(withItem(item,()=>binding.update(view),binding));
         }
+        // The pawns' third-person weapons of this frame, after their pawns' (DrawActorSprite draws the weapon inside the pawn's draw in
+        // every frame, a ViewportWindow's root frame included); the pawns this frame does not draw are left to the pass's decisions.
+        weapons.update(actors.filter(binding=>ids.has(binding.id)),view,records,false);
       }finally{frameViewer=null;}
       if(!records.length)return null;
       const root=view.lightRoot??lighting?.frame;
@@ -1323,6 +1326,9 @@ export async function createActorMeshSim(runtime,assets,asset,{kernel,player:pla
       layout?.endFrame();
       return {records:records.filter(Boolean),camera};
     },
+    /** Whether a weapon binding (attachedTo a pawn) is drawn in the root frame whose Frame->Sprite holds `ids` (a ViewportWindow's): its pawn is
+     * in it and had a hand there. */
+    weaponInRoot(binding,ids){return Boolean(binding.attachedTo)&&weapons.inFrame(binding,ids,null);},
     /** A mirror child pass's decisions, per binding id (`frustum`: the
      * pass camera's). */
     passVisibility(frustum){

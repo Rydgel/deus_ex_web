@@ -503,7 +503,8 @@ compared in 218 queries), and the flash `UGameEngine::Draw` hands the device is 
 (`validate-player-alterations-census`) keeps every one playing.
 
 **Open.**
-- *Third-person weapon, left:* the weapon in a ViewportWindow's frame (security cameras), the GPU path for weapons (they take
+- *Third-person weapon, left:* the weapon in a ViewportWindow's frame compared with the original's pixels (wired and checked
+  in Play; the armed terrorists in the Island camera window walk differently in the two programs), the GPU path for weapons (they take
   the CPU path), the weapon's frame-order of SetupForActor calls (all of a pawn's frames, then its weapon's), and an armed NPC
   in a mirror compared with the original (JC's reflection holding a pistol or a held tool is compared: [weapon
   attachment](weapon-attachment.md#mirrors-2026-10-15); `?weaponMirrors=0` turns it off).
