@@ -270,6 +270,67 @@ geometry, so the frame under "Or better than kings. Gods." is black. The
 original shows the same black frame (observed in the running original game,
 2026-10-02).
 
+## Frames against the original (2026-10-16)
+
+Until now the camera, the letterbox and the subtitles were compared with the DLLs and run end to end, but no frame of the original's conversation had
+been compared with Play's. Four held frames of MeetPaul, taken in the running original under Wine and in Play from the same inputs, now are
+(`scripts/conversation-acceptance.mjs`, `scripts/live-acceptance.mjs`; the numbers are in [visual acceptance](visual-acceptance.md#conversation-frames-2026-10-16)).
+
+**The scene.** `01_NYC_UNATCOIsland`, frozen at the load (`bPlayersOnly`, the live scenes' frozen start); the console puts the player where a conversation can start
+(a ghost: `set Location (X=-2385,Y=8393,Z=-256.2)` 100 units in front of Paul, `set ViewRotation` toward him, then `walk`, which registers the collision there: the
+rest height is Z -256.2, the value Play's physics gives and the original's held player reads). The tracer releases the level at its third tick with the delta forced to
+1/60 s and records the CRT stream state of every tick ([live scenes](visual-acceptance.md#live-scenes-2026-10-13)). MeetPaul is radius-invoked (radius 180, and it is
+also `bInvokeFrob`): `ScriptedPawn.Tick`'s low-priority branch calls `StartConversation(Self, IM_Radius)`, and the original's conversation starts at unfrozen tick 6, its
+letterbox bars finish their slide about 0.7 s later, and its speeches follow the timeline of the table below. Every camera shot of MeetPaul is authored (`randomCamera` is
+false and each speech is preceded by a `ConEventMoveCamera`), so the stream does not choose a camera.
+
+| Unfrozen tick | Speech (sound id) | Camera position (ConCamera.SetCameraValues) | What the frame shows |
+| --- | --- | --- | --- |
+| 100 | 287 JC: "Paul! I thought you were in Hong Kong." | 2 `CP_SideAbove` | the first shot: both speakers from above, the bars settled, JC's subtitle |
+| 250 | 288 Paul: "Welcome to the Coalition, JC..." | 2 | the same camera on the other speaker: his name and line in cyan |
+| 600 | 289 JC: "Didn't think you'd have a choice..." | 4 `CP_ShoulderLeft` | the cut: over JC's shoulder to Paul, the skyline |
+| 750 | 290 Paul: "The NSF -- they hit one of our shipments..." | 5 `CP_ShoulderRight` | the cut to the other shoulder |
+
+**Holding and taking the frame.** The tracer holds the level at a tick (it returns from `ULevel::Tick`; the game keeps drawing) and the frame is the original's own `Shot` at
+Brightness 2/3, where it is the framebuffer (Play's ramp is the identity at its 0.4; [method](visual-acceptance.md#method)). A conversation window swallows every key:
+`ConWindowActive.VirtualKeyPressed` returns True for all of them but Up and Down, so Print Screen (which the interface frames use under a modal screen) and the numpad `*`
+never reach `Shot`, and the typed console is not reachable either (Enter and Space would skip the speech). The window answers one key itself, the hard-coded Ctrl+F9
+(`ConsoleCommand("SHOT")`), and it reads Ctrl through `IsKeyDown`, so the harness holds Ctrl through the Wine input queue (`sdown CTRL`) and sends F9
+(`live-acceptance.mjs --cmds "N:@ctrlshot name"`, `--shot-ctrl`). A force-played conversation (the intro's) swallows nothing but Escape, and takes the numpad `*`
+(`@numshot`, `--shot-num`). The first Ctrl+F9 of a run was once lost, so the harness repeats it while the level stays held. Play replays the trace's ticks and takes the
+page's frame at the last one (`live-acceptance.mjs play --ticks N --shot name`), the page's canvas pinned to 1280x720 as in the interface frames, `?antialias=0&detailTextures=0`.
+
+**What the frames said, and the causes.**
+
+1. **The replay harness drew the 3D view without the letterbox (a harness defect, fixed).** The first comparison put the whole 3D view 38.5 pixels lower in Play (the best
+   vertical alignment of the two frames' band is 38.5 rows; mean absolute difference 3.0, edge recall .58). `sim-session.mjs begin()` took the render rectangle of a live replay as the
+   whole frame (`forced ? {x: 0, y: 0, width, height}`): the replay forces the frame size to the original's window, and that branch skipped the root window's own
+   render viewport. The projection then centred on the full frame (360) instead of the band between the bars (321.5), a difference of exactly 38.5 rows. The page's
+   own path was right: a free-running Play frame of the same shot (`live-acceptance.mjs snap`, 600 page frames after the release, the camera of the 600-tick frame) aligns with the
+   original's frame at 0 rows and 0 columns (mean absolute luminance difference 0.45 over the band at that alignment; the animation and speech phase of a free run are not matched). The replay now takes `game.renderViewport(width, height)` at the forced size.
+   The letterbox bars and the subtitle were pixel-equal from the first comparison.
+2. **The mouth is a host input (measured and fed, not a divergence).** Paul's and JC's mouth shapes follow `Pawn.nextPhoneme`, which only Galaxy's audio update writes, from
+   the audio the host plays in real time ([lip sync](lip-sync.md): "Inputs that only the host can supply"). A replay has no such audio, so the original's mouths moved and Play's
+   did not (Paul's `BlendAnimSequence[0]`: `MouthClosed` against `None` from tick 145; 356 pixels over 10 in the face of the 600-tick frame). The original's letters are
+   read back from the trace (the tick each `MouthA`...`MouthClosed` blend started, for Paul and, with `--player-blend`, for JC: 46 letters), fed to `nextPhoneme` at the
+   tick they took effect (`live-acceptance.mjs play --phonemes`, `conversation-acceptance.mjs phonemes`; `live-probe.mjs` `phonemes`), and the replay does not run Galaxy's
+   own analysis of the page's audio then. `Pawn.LipSynch` (script) maps the letters as in Play. With the feed every watched field of every watched actor, Paul's and JC's blend
+   channels included, is equal for all 750 ticks except the player's `AnimFrame` at the first ticks (0.0985 against 0.0860 at tick 1, a tween phase; equal later) and two
+   guards' `LastRenderTime` (the render history before the release, a measured input of [live scenes](visual-acceptance.md#live-scenes-2026-10-13)).
+3. **What remains is the polygon edge.** All four frames are within 2 of 255 everywhere except 0.07 to 0.11% of the pixels, one-pixel lines on the silhouettes and mesh
+   triangle edges and the glints of the glasses (zoomed ten times: [visual acceptance](visual-acceptance.md#conversation-frames-2026-10-16)); the shading of the faces (the two `ConLight`s of
+   `CreateHighlights`), the hair, the jackets, the floor, the skyline and the subtitle text equal the original's.
+
+**The camera itself, read from the running original.** With the level held at tick 250 the camera object `ConCamera0` and the actors it places itself by were read out of the
+original (`dump-actor-win.exe`, the offsets Play's `conversationProbe({offsets})` gives): `LastLocation` (-2455.69531, 8316.91895, -164.018921), `LastRotation` (59636, 3394, 0),
+`cameraPosition` 2, `cameraMode` 1, `firstActor` JC, `secondActor` PaulDenton0, `heightModifier` 10.5, `centerModifier` 0, `distanceMultiplier` 1, `rotation` (59636, 17824, 0),
+`setActorCount` 1, `firstActorRotation` 51105, `bUsingFallback` 0; JC and Paul have `BaseEyeHeight` 40, `CollisionHeight` 43, `CollisionRadius` 20 and the `BreatheLight` frame
+0.774999082. Play's `conversationProbe` at the same tick reads the same values, the camera's location and rotation bit for bit.
+
+Not covered by these frames, by name: the camera's transition frames (`cameraTransition` is 255, a cut, in all of MeetPaul), the choice screen (the buttons, the focus; only
+its layout is compared with Extension.dll, `validate-island-conversation`), the later speeches and cameras (positions 0 and 7), the interactive camera, the speech audio
+(Galaxy's MPEG decoder is not translated), and any conversation off Island and the intro (below).
+
 ## Open
 
 * With the browser's render feedback the terrorists near the dock can fight

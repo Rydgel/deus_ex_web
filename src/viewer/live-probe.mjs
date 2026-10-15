@@ -319,6 +319,11 @@ export function liveProbe(game, args = {}) {
       // console commands typed into the original between two ticks ({after, text}: after that many ticks), run here the same way through the
       // recovered console command chain (APlayerPawn::execConsoleCommand) before the next tick; their results are returned by `take` as `commands`
       commands: commands.map(command => ({ ...command })), commandLog: [], canSee: args.replay.canSeeProbe ?? null,
+      // measured speech ({n, name, letter}, sorted by n): the letter Galaxy's audio update wrote into a speaker's nextPhoneme before tick n. The update
+      // analyses the audio the host plays in real time (docs/lip-sync.md "Inputs that only the host can supply"), which a replay does not run, so the
+      // original's letters are a measured input like the stream state; Pawn.LipSynch (script) maps them to the mouth animations as it does in Play.
+      phonemes: (args.replay.phonemes ?? []).map(entry => ({ ...entry })).sort((a, b) => a.n - b.n),
+      measuredSpeech: Boolean(args.replay.phonemes),
       snapshot() {
         const result = {};
         for (const group of actors) for (const [name, actor] of group.items) {
@@ -389,6 +394,10 @@ export function liveProbe(game, args = {}) {
           if (!runtime.actorLifecycle.construction.registry.original?.release(entry.index)) this.preFreesRejected = (this.preFreesRejected ?? 0) + 1;
         }
         game.random.seed(parseInt(tick.rngIn, 16) >>> 0);
+        while (this.phonemes.length && this.phonemes[0].n <= this.index + 1) {
+          const { name, letter } = this.phonemes.shift(), speaker = byName(name);
+          if (speaker) runtime.writeNamed(speaker, 'nextPhoneme', letter);
+        }
         const strobe = lightGlobals(runtime).strobe;
         this.current = { n: this.index + 1, delta: tick.delta, rngIn: hex(game.random.state), clockIn: level.timeSeconds, tsIn: runtime.readNamed(info, 'TimeSeconds'),
           strobeIn: [strobe.flag, strobe.time] };

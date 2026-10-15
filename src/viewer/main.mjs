@@ -1509,6 +1509,12 @@ async windowProbe() {
   if (simClient) return simClient.call('windowProbe');
   return game ? (await import('./window-probe.mjs')).windowProbe(game) : null;
 },
+/** Validation only: conversation-probe.mjs (ConPlay's state and event, the conversation camera and letterbox) on the
+ * simulation side. */
+async conversationProbe(args) {
+  if (simClient) return simClient.call('conversationProbe', args);
+  return game ? (await import('./conversation-probe.mjs')).conversationProbe(game, args) : null;
+},
 /** Validation only: mover-probe.mjs (the moving brush tracker's movers) on
  * the simulation side. */
 /** Validation only: terminal-probe.mjs (place the player at a terminal, the
