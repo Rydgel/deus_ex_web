@@ -466,8 +466,8 @@ fn setup(c: u32, r: u32, view: &View) -> u32 {
 /// Setup for `count` candidates at `candidates` (CW words each) on the
 /// frame words (a root frame skips the candidates C_FLAGS excludes): results
 /// to `out` (OW words each); the accepted ones, in
-/// order, become occ_run's sprite list (MODEL 17, 6 words each: key, X1, Y1,
-/// X2, Y2, Z bits), whose capacity the host keeps at least `count`. Returns
+/// order, become occ_run's sprite list (MODEL 17, 9 words each: key, X1, Y1,
+/// X2, Y2, Z bits, ScreenX, ScreenY, Persp bits), whose capacity the host keeps at least `count`. Returns
 /// the number accepted.
 #[no_mangle]
 pub extern "C" fn occ_setup(candidates: u32, count: u32, out: u32) -> u32 {
@@ -485,9 +485,9 @@ pub extern "C" fn occ_setup(candidates: u32, count: u32, out: u32) -> u32 {
         let status = setup(c, r, &view);
         wr(r, status);
         if status == ACCEPTED && list != 0 {
-            let s = list + 24 * accepted;
+            let s = list + 36 * accepted;
             wr(s, rd(c + 4 * C_KEY));
-            for k in 1..6 {
+            for k in 1..9 {
                 wr(s + 4 * k, rd(r + 4 * k));
             }
             accepted += 1;

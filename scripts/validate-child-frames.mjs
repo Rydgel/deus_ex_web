@@ -68,6 +68,7 @@ function difference(a, b, at = '') {
   }
   return `${at}: Rust ${JSON.stringify(a)?.slice(0, 200)} | original ${JSON.stringify(b)?.slice(0, 200)}`;
 }
+const screens = list => list.map(entry => ({ key: entry.key ?? entry.sprite, zBits: entry.zBits >>> 0, screenBits: entry.screenBits.map(v => v >>> 0) }));
 function same(got, want, label) {
   const d = difference(got, want);
   if (d) throw new Error(`${label}${d}`);
@@ -269,6 +270,7 @@ async function validate(mapName, { seed, count, tracker = null, views = [] }) {
           stats.ownFrames += c.frameActors[index] ? 1 : 0;
         } } });
       same(r.sprites, o.sprites.map(entry => ({ key: entry.sprite, span: entry.span })), `${where}: Frame->Sprite`);
+      same(screens(r.spriteScreens), screens(o.sprites), `${where}: Frame->Sprite centre and scale`);
       drawLists(r.draw, o.draw, where);
       requests(r.children, o.children, where);
       same(r.frames.length, o.frames.length, `${where}: child frame count`);
@@ -282,6 +284,7 @@ async function validate(mapName, { seed, count, tracker = null, views = [] }) {
         same(f.uncoords.map(v => v >>> 0), of.uncoordsBits.map(v => v >>> 0), `${at}: Uncoords`);
         same(f.span, of.span, `${at}: span`);
         same(f.sprites, of.sprites.map(entry => ({ key: entry.sprite, span: entry.span })), `${at}: Frame->Sprite`);
+        same(screens(f.spriteScreens), screens(of.sprites), `${at}: Frame->Sprite centre and scale`);
         drawLists(f.draw, of.draw, at);
         requests(f.children, of.children, at);
         merges(f.index, f.children, of.children, r.frames, o.frames, at);

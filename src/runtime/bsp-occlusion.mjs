@@ -216,7 +216,7 @@ export function createBspOcclusion(kernel, model, { surfaceTextureFlags, zoneAct
     bounds = block(28 * model.renderBounds.length + 16), zones = block(16 * 64), skyRecords = block(4 * 7 * 64),
     cache = block(8 * Math.max(1, caps.points)), work = block(workBytes),
     dynamics = block(12 * caps.nodes);
-  let sprites = block(24 * 256), spriteCapacity = 256;
+  let sprites = block(36 * 256), spriteCapacity = 256;
   const words = () => new Uint32Array(memory.buffer), bytes = () => new Uint8Array(memory.buffer);
   {
     const u = words(), b = bytes();
@@ -265,7 +265,7 @@ export function createBspOcclusion(kernel, model, { surfaceTextureFlags, zoneAct
   const ensureSprites = count => {
     if (count <= spriteCapacity) return;
     release(sprites);
-    spriteCapacity = Math.max(count, 2 * spriteCapacity); sprites = block(24 * spriteCapacity); header[17] = sprites;
+    spriteCapacity = Math.max(count, 2 * spriteCapacity); sprites = block(36 * spriteCapacity); header[17] = sprites;
   };
   // Setup's mesh records by mesh key, and its candidate and result blocks.
   const meshRecords = new Map();
@@ -351,7 +351,7 @@ export function createBspOcclusion(kernel, model, { surfaceTextureFlags, zoneAct
     setupResults: count => words().slice(results >>> 2, (results >>> 2) + SETUP_OUT_WORDS * count),
     /** One OccludeBsp call on `frameWords` (occlusionFrameWords) with the
      * frame's sprites (FDynamicSprite after Setup), in SetupDynamics order:
-     * `{key, x1, y1, x2, y2, zBits}` with Y1 >= 0, Y2 <= the frame's height
+     * `{key, x1, y1, x2, y2, zBits, screenBits?}` (ScreenX, ScreenY, Persp bits) with Y1 >= 0, Y2 <= the frame's height
      * and Y1 < Y2 (Setup's checks); or, with `setupCount`, Setup on that
      * many packed candidates (setupCandidates) gives them. */
     run(frameWords, frameSprites = [], { setupCount = -1, skipPoints = false, skipSpritePixels = false, children = null } = {}) {
@@ -359,8 +359,8 @@ export function createBspOcclusion(kernel, model, { surfaceTextureFlags, zoneAct
       ensureSprites(viaSetup ? setupCount : frameSprites.length);
       if (!viaSetup) {
         const u = words();
-        frameSprites.forEach((sprite, i) => u.set([sprite.key, sprite.x1, sprite.y1, sprite.x2, sprite.y2, sprite.zBits]
-          .map(v => v >>> 0), (sprites >>> 2) + 6 * i));
+        frameSprites.forEach((sprite, i) => u.set([sprite.key, sprite.x1, sprite.y1, sprite.x2, sprite.y2, sprite.zBits,
+          ...(sprite.screenBits ?? [0, 0, 0])].map(v => v >>> 0), (sprites >>> 2) + 9 * i));
         header[18] = frameSprites.length;
       }
       setHeader();
@@ -519,18 +519,20 @@ function decodeFrames(words, at, skipPoints) {
     i += length;
     frames.push({ index, parent, kind: kind ? 'sky' : 'mirror', iNode: iNode | 0, requests, recursion, zone, mirror, nearClip,
       fields, uncoords, span: { startY: startY | 0, endY: endY | 0, validLines: valid | 0, lines },
-      draw: body.draw, children: body.children, sprites: body.sprites });
+      draw: body.draw, children: body.children, sprites: body.sprites, spriteScreens: body.spriteScreens });
   }
   return frames;
 }
 
 function decode(words, status, skipPoints = false, skipSpritePixels = false) {
-  const draw = [[], [], []], children = [], sprites = [];
+  const draw = [[], [], []], children = [], sprites = [], spriteScreens = [];
   let i = 0;
   while (i < words.length) {
     if (words[i] === 0xfffffffe) {
-      const key = words[i + 1], startY = words[i + 2], endY = words[i + 3], valid = words[i + 4];
-      i += 5;
+      // key, the sprite's Z, Setup's ScreenX, ScreenY, Persp (bits; docs/frame-projection.md "Sprites"), span.
+      const key = words[i + 1], startY = words[i + 6], endY = words[i + 7], valid = words[i + 8];
+      spriteScreens.push({ key, zBits: words[i + 2], screenBits: [words[i + 3], words[i + 4], words[i + 5]] });
+      i += 9;
       if (skipSpritePixels) {
         // The caller reads only the sprite's key: step over its rows.
         for (let y = startY | 0; y < (endY | 0); y++) i += 2 * words[i] + 1;
@@ -572,5 +574,5 @@ function decode(words, status, skipPoints = false, skipSpritePixels = false) {
     }
     draw[list].push({ iNode: iNode | 0, iSurf: iSurf | 0, iZone, polyFlags: polyFlags >>> 0, zoneKey, polys });
   }
-  return { draw, children, sprites, nodesDraw: status[2], polysDraw: status[3] };
+  return { draw, children, sprites, spriteScreens, nodesDraw: status[2], polysDraw: status[3] };
 }

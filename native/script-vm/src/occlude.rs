@@ -35,8 +35,10 @@ use core::ptr::{addr_of, addr_of_mut};
 /// actor key, LastRenderTime bits, its SkyZone (+1, 0 = none), 0), 11 zone count (Model.NumZones), 12
 /// RootOutside, 13 point cache (2 words per point: FTransform, stamp), 14
 /// Stamp, 15 LevelInfo key, 16 the dynamics table (3 words per node: pending
-/// chunks, front and back final chunks), 17 the frame's sprites (6 words
-/// each: key, X1, Y1, X2, Y2, Z bits, in SetupDynamics order), 18 their
+/// chunks, front and back final chunks), 17 the frame's sprites (9 words
+/// each: key, X1, Y1, X2, Y2, Z bits, then FDynamicSprite +0xa8, +0xac, +0xb0
+/// (Setup's ScreenX, ScreenY and Persp bits, 0 on the mesh path and for a
+/// host-given rectangle), in SetupDynamics order), 18 their
 /// count. Addresses are byte addresses in this memory.
 static mut MODEL: [u32; 20] = [0; 20];
 /// Frame words (FSceneNode fields, f32 bits unless noted): 0..12 Coords,
@@ -1352,6 +1354,12 @@ fn occlude(rec: u32) -> u32 {
     while s != 0 {
         emit(0xffff_fffe);
         emit(rd(s + 4 * SP_KEY));
+        // The sprite's Z (camera-space depth) and Setup's ScreenX, ScreenY,
+        // Persp as this frame's Setup left them.
+        emit(rd(s + 4 * SP_Z));
+        for k in 0..3 {
+            emit(rd(s + 4 * (SP_SCREEN + k)));
+        }
         if options & 0x200 != 0 {
             for _ in 0..3 {
                 emit(0);
@@ -2164,7 +2172,10 @@ const SP_PROXY: u32 = 6;
 const SP_HAS_SPAN: u32 = 26;
 const SP_RENDER_NEXT: u32 = 27;
 const SP_SPAN: u32 = 28;
-const SP_WORDS: u32 = 36;
+/// Setup's ScreenX, ScreenY and Persp (FDynamicSprite +0xa8, +0xac, +0xb0): the
+/// centre and scale DrawActorSprite builds its tile from.
+const SP_SCREEN: u32 = 36;
+const SP_WORDS: u32 = 39;
 // chunk and final chunk: next, sprite, raster, Z.
 // raster (FRasterPoly): StartY, EndY, then [X0, X1] per line.
 
@@ -2252,13 +2263,16 @@ fn setup_sprites() {
     let uo = [ff(48), ff(49), ff(50)];
     let ux = [[ff(51), ff(52), ff(53)], [ff(54), ff(55), ff(56)], [ff(57), ff(58), ff(59)]];
     for i in 0..count {
-        let rec = input + 24 * i;
+        let rec = input + 36 * i;
         let (x1, y1, x2, y2) = (rd(rec + 4) as i32, rd(rec + 8) as i32, rd(rec + 12) as i32, rd(rec + 16) as i32);
         let z = f32::from_bits(rd(rec + 20));
         let s = push(GDYN, 4 * SP_WORDS, 8);
         wr(s, rd(rec));
         for k in 1..6 {
             wr(s + 4 * k, rd(rec + 4 * k));
+        }
+        for k in 0..3 {
+            wr(s + 4 * (SP_SCREEN + k), rd(rec + 4 * (6 + k)));
         }
         wr(s + 4 * SP_HAS_SPAN, 0);
         wr(s + 4 * SP_RENDER_NEXT, 0);

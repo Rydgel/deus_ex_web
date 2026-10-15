@@ -450,7 +450,7 @@ export function createSimSession(game, { assets = null, events = [], exportName 
         // Its projection (Proj.Z, RProj.Z, FX15, FY15, Coords) for the page's vertex stage
         // (docs/frame-projection.md); the rectangle is the root's.
         projection: projectionOfFields(frame.fields, width, height),
-        sprites: frame.sprites.map(sprite => sprite.key),
+        sprites: frame.sprites.map(sprite => sprite.key), spriteScreens: frame.spriteScreens,
         lod: { coords: Array.from(fieldFloats.subarray(0, 12)), fx: fieldFloats[12] } };
     });
     // DrawLodMesh's inputs from the master frame: Frame->Coords and FX
@@ -464,7 +464,7 @@ export function createSimSession(game, { assets = null, events = [], exportName 
       viewport: [viewportWidth, viewportHeight], render: [width, height] };
     return { nodes, zone: words[42], mirrors, frames: childFrames ? frames : null, size: [width, height], lod, master,
       sky: result.children.some(child => child.kind === 'sky'), decals: fragments, movers, moverItems,
-      sprites: result.sprites.map(sprite => sprite.key),
+      sprites: result.sprites.map(sprite => sprite.key), spriteScreens: result.spriteScreens,
       // Host timings (ms): the movers' Update, OccludeBsp with its decode
       // (and the movers' draw lists), then the decal block.
       ms: { movers: moversMs, occlusion: occluded - started, decals: performance.now() - occluded } };
@@ -556,6 +556,18 @@ export function createSimSession(game, { assets = null, events = [], exportName 
   // (`args`), as Setup candidates in SetupDynamics' order. Frame->Sprite
   // marks each sprite record's `main` and gives the drawn bindings' ids
   // (`visibility.main`); the frame's visibility and sky follow.
+  // A frame's Setup results for the sprite records its Frame->Sprite holds
+  // (bsp-occlusion.mjs `spriteScreens`): record.screens[frame] = [Z, ScreenX,
+  // ScreenY, Persp] as float32 (the sprite draw's inputs, docs/frame-projection.md "Sprites").
+  const screenBits = new Uint32Array(4), screenFloats = new Float32Array(screenBits.buffer);
+  function noteSpriteScreens(entries, frameIndex, screens) {
+    for (const { key, zBits, screenBits: bits } of screens ?? []) {
+      const record = entries[key]?.sprite;
+      if (!record) continue;
+      screenBits.set([zBits, bits[0], bits[1], bits[2]]);
+      (record.screens ??= {})[frameIndex] = [...screenFloats];
+    }
+  }
   function occludeMain(args = {}) {
     const pending = pendingOcclusion;
     pendingOcclusion = null;
@@ -577,13 +589,15 @@ export function createSimSession(game, { assets = null, events = [], exportName 
     const result = visibility(pending.view, pending.width, pending.height, entries.length, { frameDynamics }), main = new Set();
     iteratorStats.msVisibility += performance.now() - occludeStarted;
     iteratorStats.visited += result.frames?.length ?? 0;
-    for (const sprite of live.sprites) { sprite.main = false; sprite.frames = null; }
+    for (const sprite of live.sprites) { sprite.main = false; sprite.frames = null; sprite.screens = null; }
     for (const key of result.sprites) {
       const entry = entries[key];
       if (entry.sprite) entry.sprite.main = true; else main.add(entry.binding.id);
     }
+    // Each frame's Setup centre and scale for the sprite records it draws (frame 0 the root's).
+    noteSpriteScreens(entries, 0, result.spriteScreens);
     result.main = main;
-    delete result.sprites;
+    delete result.sprites; delete result.spriteScreens;
     // Each child frame's Frame->Sprite: its bindings (`main`) and, on the
     // sprite records, the frames that draw them; `children` every binding
     // some child frame draws.
@@ -596,7 +610,8 @@ export function createSimSession(game, { assets = null, events = [], exportName 
         if (entry.sprite) (entry.sprite.frames ??= []).push(frame.index);
         else { frame.main.add(entry.binding.id); children.add(entry.binding.id); }
       }
-      delete frame.sprites;
+      noteSpriteScreens(frameEntries, frame.index, frame.spriteScreens);
+      delete frame.sprites; delete frame.spriteScreens;
     }
     result.children = children;
     // Which claimed iterator items each child frame's Frame->Sprite holds (validation: iteratorState).

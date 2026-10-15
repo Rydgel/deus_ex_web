@@ -1260,9 +1260,9 @@ pub extern "C" fn decal_clip_frame(model: u32, store: u32, frame: u32, stream: u
         while i < words {
             let tag = rd(i);
             if tag == 0xffff_fffe || tag == 0xffff_ffff {
-                // A sprite's or a child request's span lines.
-                let (start, end) = if tag == 0xffff_fffe { (rd(i + 2) as i32, rd(i + 3) as i32) } else { (rd(i + 5) as i32, rd(i + 6) as i32) };
-                i += if tag == 0xffff_fffe { 5 } else { 8 };
+                // A sprite's (key, Z, ScreenX, ScreenY, Persp, then its span) or a child request's span lines.
+                let (start, end) = if tag == 0xffff_fffe { (rd(i + 6) as i32, rd(i + 7) as i32) } else { (rd(i + 5) as i32, rd(i + 6) as i32) };
+                i += if tag == 0xffff_fffe { 9 } else { 8 };
                 for _ in start..end {
                     let count = rd(i);
                     i += 1 + 2 * count;

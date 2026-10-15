@@ -535,7 +535,9 @@ class Occlusion(native.NativeCollision):
         link = self.read(frame + 0xa4, 'I')[0]
         while link:
             span = self.read(link + 0xc, 'I')[0]
-            drawn.append({'sprite': sprites[link], 'span': self.span(span)})
+            # The sprite's Z (+8) and Setup's ScreenX, ScreenY, Persp (+0xa8): DrawActorSprite's inputs.
+            drawn.append({'sprite': sprites[link], 'span': self.span(span), 'zBits': self.read(link + 8, 'I')[0],
+                          'screenBits': list(self.read(link + 0xa8, '3I'))})
             link = self.read(link + 0x10, 'I')[0]
         count, post = self.read(self.render + 0xec, 'II')
         for i in range(count):

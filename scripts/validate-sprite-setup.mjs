@@ -341,6 +341,11 @@ async function validate(mapName, seed) {
       const r = occlusion.run(words, [], { setupCount: realPairs.length });
       compareSetups(occlusion.setupResults(realPairs.length), o.setups, realPairs, where, stats, meshes);
       assert.deepEqual(r.sprites, o.sprites.map(entry => ({ key: entry.sprite, span: entry.span })), `${where}: Frame->Sprite`);
+      // The Z and Setup's ScreenX, ScreenY, Persp the original left in each drawn FDynamicSprite (what DrawActorSprite
+      // builds its tile from, docs/frame-projection.md "Sprites"), kept through the sprite list and the output.
+      assert.deepEqual(r.spriteScreens.map(s => ({ key: s.key, zBits: s.zBits >>> 0, screenBits: s.screenBits.map(v => v >>> 0) })),
+        o.sprites.map(entry => ({ key: entry.sprite, zBits: entry.zBits >>> 0, screenBits: entry.screenBits.map(v => v >>> 0) })), `${where}: Frame->Sprite centre and scale`);
+      for (const entry of o.sprites) if (entry.screenBits.some(v => v)) stats.screens = (stats.screens ?? 0) + 1;
       drawn += r.sprites.length;
       offered += o.setups.filter(s => s.result).length;
       stats.chain = (stats.chain ?? 0) + 1;
