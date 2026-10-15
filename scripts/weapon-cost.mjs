@@ -66,6 +66,9 @@ async function measure(browser, query) {
       .map(([key, value]) => [key, value / draws]));
     // the weapon layer's own time on the simulation side (actor-weapon-sim.mjs stats), per worker frame it ran in
     phases['weapons.sim'] = stats.updates ? stats.ms / stats.updates : 0;
+    // ... and how many weapon records an update made on average (the weapons drawn per frame: `last` of a state keeps the last drawn state, so the
+    // states at the end are not a count)
+    phases['weapons.records'] = stats.updates ? stats.records / stats.updates : 0;
     return {query, draws: totals.draws, runtimeError: totals.runtimeError, errors, intervalMedian: median(intervals),
       intervalMean: intervals.reduce((a, b) => a + b, 0) / intervals.length, phases,
       weapons: {armed: states.filter(s => s.weapon).length, drawn: drawn.length, pawns: drawn.map(s => `${s.pawn}/${s.weapon}`)}};

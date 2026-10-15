@@ -277,6 +277,7 @@ export function createGpuMesh(renderer,capacities={}) {
       slotParamsU[u+8]=u32[at];
       for(let i=0;i<3;i++){slotParamsF[fl+40+i]=f32[at+1+i];slotParamsF[fl+44+i]=f32[at+5+i];}
       slotParamsF[fl+43]=r24prod(f32[at+4],1.4);
+      slotParamsF[fl+47]=0;
       for(let k=0;k<count;k++){
         const base=at+LIGHTING_HEAD+LIGHTING_LIGHT*k,to=lightCount*8;
         for(let i=0;i<7;i++)lightData[to+i]=f32[base+i];
@@ -287,6 +288,7 @@ export function createGpuMesh(renderer,capacities={}) {
       slotParamsU[u+8]=flags>>>0;
       slotParamsF[fl+40]=ambient[0];slotParamsF[fl+41]=ambient[1];slotParamsF[fl+42]=ambient[2];slotParamsF[fl+43]=r24prod(f32(scaleGlow),1.4);
       slotParamsF[fl+44]=unlit[0];slotParamsF[fl+45]=unlit[1];slotParamsF[fl+46]=unlit[2];
+      slotParamsF[fl+47]=lighting.mirror??0;
       for(const light of lights){
         const at=lightCount*8,{location,color}=light;
         lightData[at]=location[0];lightData[at+1]=location[1];lightData[at+2]=location[2];lightData[at+3]=light.rradius;

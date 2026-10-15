@@ -783,7 +783,8 @@ async function loadMap(name) {
       childFrames: nextWorld.mirrors.stats.planes > 0 || nextMap.actors.some(actor => actor.className === 'SecurityCamera' || actor.className === 'ComputerSecurity'),
       gpu: nextGpuMesh?.capacities ?? null, weaponGpu: nextWeaponGpu?.capacities ?? null,
       meshBackend: new URLSearchParams(location.search).get('meshBackend'), meshLod: new URLSearchParams(location.search).get('meshLod'),
-      // ?weapons=off: no pawn's third-person weapon is drawn (docs/weapon-attachment.md), for A/B captures
+      // ?weapons=off: no pawn's third-person weapon is drawn (docs/weapon-attachment.md), for A/B captures; ?weapons=cpu: they take the
+      // CPU path (the reference) instead of the GPU mesh path
       weapons: new URLSearchParams(location.search).get('weapons'),
       // ?weaponMirrors=0: no weapon in mirror child frames (on by default: compared with the original, docs/weapon-attachment.md "Mirrors")
       weaponMirrors: new URLSearchParams(location.search).get('weaponMirrors'),
@@ -820,6 +821,8 @@ async function loadMap(name) {
       const view=binding=>{let value=views.get(binding);if(!value)views.set(binding,value=bindingView(binding,drawOf));return value;};
       nextNpcPreview={root:draw.root,draw,summary:actorSim.summary,kernel:actorSim.kernel??null,
         get actors(){return actorSim.actors.map(view);},get npcActors(){return actorSim.npcActors.map(view);},
+        /** The pawns' third-person weapon bindings (validation access, page only). */
+        get weaponBindings(){return actorSim.all().filter(binding=>binding.attachedTo).map(view);},
         /** Iterator item bindings in use (validation access, page only). */
         itemStats:()=>actorSim.itemSlots?.().map(({actor,ids})=>({actor,slots:ids.length,
           drawn:ids.filter(id=>id!==null&&drawOf(id)?.root.visible).length}))??null,

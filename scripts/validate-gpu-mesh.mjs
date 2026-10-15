@@ -18,6 +18,12 @@
  *     LOD reduces, the final (morphed) pose and the resolved corner dwords
  *     against actor-mesh-lod.mjs on the exact output, and the colours and
  *     drawn test over its reduced faces.
+ *   - a pawn's third-person weapon (docs/weapon-attachment.md, `--attached`): its binding takes the GPU path with the hand's Coords as the
+ *     frame's GetFrame matrix, lit with the pawn as sink and Frame->Mirror 1.0 whatever the frame's. The Island pistol (the armed Terrorist22
+ *     and ThugMale3 in view, main frame) and the MJ12 lab's mirror scene (JC's pistol in BehindView: his back in the main frame, his
+ *     reflection in the pane's child frame) are compared like any actor (pose, camera-space pose, LOD, colours, the drawn test), the
+ *     child frame's lighting run with the slot's Mirror 1.0 under a Mirror -1 run, and the real child frame's own hand and SetupForActor
+ *     result (docs/weapon-attachment.md "GPU path").
  * On Island the walk then continues into MeetPaul: the player's mesh is
  * admitted mid-animation when the conversation turns on bBehindView, and
  * every frame after that is compared, so a slot whose first GPU pass a
@@ -27,6 +33,7 @@
  *     [--maps 00_Training,01_NYC_UNATCOIsland] [--frames 5,30,60,90,120,160,200,250,300,360]
  *     [--device cpu]   (CPU substitutes for the GPU readbacks: JavaScript
  *                       lighting path, CPU positions; checks the harness)
+ *     [--attached off]  (skip the pawns' weapon scenes: the Island pistol and the lab mirror scene)
  *     [--angle metal|gl|vulkan]  (ANGLE backend: metal on macOS, gl elsewhere.
  *                       Linux Chromium ignores metal and falls back to
  *                       SwiftShader, a software renderer whose float results
@@ -59,15 +66,15 @@ if(!url){
   await server.listen();
   url=server.resolvedUrls.local[0].replace(/\/$/,'');
 }
-const maps=option('maps','00_Training,01_NYC_UNATCOIsland').split(',');
+const maps=option('maps','00_Training,01_NYC_UNATCOIsland').split(',').filter(name=>name!=='none');
 const frames=option('frames','5,30,60,90,120,160,200,250,300,360').split(',').map(Number);
 const TOLERANCE={ulp:1,tweenUlp:2,byte:1,edgeOn:2**-20,uv:2**-20};
 
 const hook=`\nwindow.__deusValidation={get npc(){return npcPreview;},get gpu(){return gpuMesh;},
   get lighting(){return meshLighting;},get camera(){return camera;},get game(){return game;},THREE};\n`;
 
-async function capture(page,{frames,device,tolerance,admission,lodViews}) {
-  return page.evaluate(async({frames,device,tolerance,admission,lodViews})=>{
+async function capture(page,{frames,device,tolerance,admission,lodViews,attachedOnly=false}) {
+  return page.evaluate(async({frames,device,tolerance,admission,lodViews,attachedOnly})=>{
     const {accumulateFaceNormal,faceKept}=await import('/src/runtime/mesh-lighting.mjs');
     const {meshVertexNormalsInto,writeMeshEnvironmentUV}=await import('/src/runtime/mesh-environment.mjs');
     const {certificateStats}=await import('/src/viewer/gpu-mesh-bounds.mjs');
@@ -85,6 +92,8 @@ async function capture(page,{frames,device,tolerance,admission,lodViews}) {
       child:{actors:0,corners:0,maxByte:0,drawnDisagreements:0,restoredOff:0,corner:null},
       variant:{actors:0,morph:0,corners:0,maxByte:0,drawnDisagreements:0,restoredOff:0,corner:null,components:0,maxUlp:0,worst:null,wedges:0,wedgeMismatches:0,dropped:0},
       coverage:{translucent:0,modulated:0,masked:0,environment:0,unlit:0,mixedUnlit:0,blend:0,tween:0,movingLights:0,lod:0,lodMorph:0,lodReduced:0},
+      // the pawns' third-person weapons: bindings compared in the main frame, and in a real child frame (their own hand and SetupForActor result)
+      attached:{compared:0,lit:0,childFrames:0,childCorners:0,childMaxByte:0,childDrawnDisagreements:0,childCamera:{components:0,exact:0,maxUlp:0,worst:null}},
       fallbacks:{},errors:[]};
     const frustum=new THREE.Frustum(),matrix=new THREE.Matrix4();
     let focus=null;
@@ -107,14 +116,15 @@ async function capture(page,{frames,device,tolerance,admission,lodViews}) {
       frustum.setFromProjectionMatrix(matrix.multiplyMatrices(camera.projectionMatrix,camera.matrixWorldInverse),
         THREE.WebGLCoordinateSystem,camera.reversedDepth);
       const cameraPosition=[-camera.position.z,camera.position.x,camera.position.y];
-      for(const actor of npc.actors){
+      for(const actor of attachedOnly?(npc.weaponBindings??[]):[...npc.actors,...(npc.weaponBindings??[])]){
+        const attached=Boolean(actor.attached);
         if(actor.path!=='gpu'){const key=actor.summary.gpuFallback??'cpu';report.fallbacks[key]=(report.fallbacks[key]??0)+1;continue;}
         if(!actor.root.visible)continue;
         const state=actor.gpuState();const exactBefore=state.exactValid;
         // An actor admitted after this frame's GPU run is posed and updated
         // by the next frame before it is drawn; nothing of it is drawn yet.
         if(!state.handle||!state.plan||state.plannedFrame>gpu.frame||!state.updated){report.pending=(report.pending??0)+1;continue;}
-        report.actors++;
+        report.actors++;if(attached)report.attached.compared++;
         const {handle,plan,faces,faceWords,groups}=state,V=handle.mesh.V,F=handle.mesh.F;
         const tween=plan.channels.some(op=>op.tween&&op.alpha>0);
         if(focus&&actor.actor===focus){report.admission.captures++;if(tween)report.admission.tweenCaptures++;}
@@ -131,7 +141,8 @@ async function capture(page,{frames,device,tolerance,admission,lodViews}) {
         for(const group of groups.values()){
           report.groups++;
           const exact=!group.lodEmpty&&frustum.intersectsSphere(group.exact.boundingSphere);
-          if(exact!==group.mainVisible){report.visibilityMismatches++;(report.badVisibility??=[]).push({capture:report.captures,
+          // (a pawn's weapon draws whole from the hand's Coords: its world-space bounds are not where it is drawn)
+          if(!attached&&exact!==group.mainVisible){report.visibilityMismatches++;(report.badVisibility??=[]).push({capture:report.captures,
             actor:actor.summary.actor,exact,main:group.mainVisible,box:[...group.viewBox].map(x=>+x.toFixed(2)),
             sphere:[...group.exact.boundingSphere.center.toArray().map(x=>+x.toFixed(2)),+group.exact.boundingSphere.radius.toFixed(2)]});}
         }
@@ -205,6 +216,7 @@ async function capture(page,{frames,device,tolerance,admission,lodViews}) {
         }
         // Colours: only actors relit in the frame just run.
         if(state.litFrame!==gpu.frame||!state.setup||!lighting?.frame)continue;
+        if(attached)report.attached.lit++;
         const {setup,flags:actorFlags,unlit}=state.setup;
         if(setup.lights.some(light=>!light.light.values?.bStatic))report.coverage.movingLights++;
         const frame=lighting.frame;
@@ -274,8 +286,10 @@ async function capture(page,{frames,device,tolerance,admission,lodViews}) {
           const reflectPoint=p=>{const d=2*(plane[0]*p[0]+plane[1]*p[1]+plane[2]*p[2]-plane[3]);return p.map((c,i)=>f32(c-d*plane[i]));};
           const reflectVector=p=>{const d=2*(plane[0]*p[0]+plane[1]*p[1]+plane[2]*p[2]);return p.map((c,i)=>f32(c-d*plane[i]));};
           const child={origin:reflectPoint(mainCamera.origin),axes:mainCamera.axes.map(reflectVector),mirror:-1};
+          // (a pawn's weapon carries Mirror 1.0 in its slot: DrawActorSprite forces it, 0x10b2571a, whatever the frame's)
+          const childMirror=attached?1:-1;
           const plain={flags:actorFlags,ambient:[...setup.ambient],scaleGlow:setup.scaleGlow,unlit:[...unlit],
-            lights:setup.lights.map(light=>({location:[...light.location],rradius:light.rradius,color:[...light.color]}))};
+            lights:setup.lights.map(light=>({location:[...light.location],rradius:light.rradius,color:[...light.color]})),...(attached?{mirror:1}:{})};
           // Each frame's lighting carries its GetFrame matrix (the camera passes).
           const plainChild={...plain,camera:state.cameraMatrix(child).flat()},plainMain={...plain,camera:state.cameraMatrix(null).flat()};
           // Compares one lighting run's corner bytes and drawn faces with the
@@ -319,7 +333,7 @@ async function capture(page,{frames,device,tolerance,admission,lodViews}) {
           gpu.beginLightRun();
           if(!gpu.setLighting(handle,plainChild))throw new Error('child frame lighting did not fit');
           gpu.lightRun(child);
-          checkLit(report.child,{points:state.cameraDrawn(child).positions,facesList:litFaces,words:litWords,camera:child,mirror:-1,
+          checkLit(report.child,{points:state.cameraDrawn(child).positions,facesList:litFaces,words:litWords,camera:child,mirror:childMirror,
             colors:gpu.read('corners',handle.cbase,F*3),faceTexels:gpu.read('faces',handle.fbase,F)});
           // The page puts the main lighting back after the pass.
           const restoreMain=()=>{gpu.beginLightRun();gpu.setLighting(handle,plainMain);gpu.lightRun(mainCamera);};
@@ -368,7 +382,7 @@ async function capture(page,{frames,device,tolerance,admission,lodViews}) {
               report.variant.label={count:spec.count,morph:spec.morph,start:variant.params.start};
               const variantCamera=state.cameraDrawn(child,selection,spec.count);
               checkLit(report.variant,{points:variantCamera.positions,facesList:variant.drawn.lighting.faces,words:variant.drawn.lighting.faceWords,
-                camera:child,mirror:-1,colors:gpu.read('corners',handle.cbase,F*3),faceTexels:gpu.read('faces',handle.fbase,F)});
+                camera:child,mirror:childMirror,colors:gpu.read('corners',handle.cbase,F*3),faceTexels:gpu.read('faces',handle.fbase,F)});
               // The main frame's pass: its LOD state and lighting again.
               gpu.beginLightRun();gpu.setLod(handle,mainParams);gpu.setLighting(handle,plainMain);gpu.lightRun(mainCamera);
               const backFinal=gpu.read('final',handle.vbase,V),backWedges=gpu.read('cornerWedges',handle.cbase,F*3),backColors=gpu.read('corners',handle.cbase,F*3);
@@ -376,6 +390,55 @@ async function capture(page,{frames,device,tolerance,admission,lodViews}) {
               for(let i=0;i<F*3;i++)if((backWedges[i]>>>0)!==(gpuWedges[i]>>>0))report.variant.restoredOff++;
               for(let i=0;i<F*3*4;i+=4)for(let channel=0;channel<3;channel++)
                 if(backColors[i+channel]!==deviceColors[i+channel]&&drawn[Math.floor(i/12)])report.variant.restoredOff++;
+            }
+          }
+        }
+      }
+      // A pawn's weapon in the child frames of the frame just run (a mirror's): the frame's own hand (the weapon's Coords there) and
+      // SetupForActor result, lit through the page's lighting run in a Mirror -1 frame, against the CPU twin and the kernel `light` with the
+      // Mirror 1.0 the weapon forces. Done after the main-frame comparisons: it leaves the slot lit with the child's.
+      if(device!=='cpu')for(const actor of npc.weaponBindings??[]){
+        if(actor.path!=='gpu'||!actor.root.visible)continue;
+        const state=actor.gpuState();
+        if(!state.handle||!state.plan||state.plannedFrame>gpu.frame||!state.updated||!state.frameSetups.size)continue;
+        const {handle,faces,faceWords}=state,V=handle.mesh.V,F=handle.mesh.F,stats=report.attached;
+        const published=state.plan.channels.find(op=>op.channel<0)?.count??V;
+        state.exactOutput();
+        const lod=state.lodDrawn(),litFaces=lod?lod.lighting.faces:faces,litWords=lod?lod.lighting.faceWords:faceWords;
+        for(const [index,prepared] of state.frameSetups){
+          const {setup,flags,unlit}=prepared,camera=state.cameraMatrix(null,index);
+          const plain={flags,ambient:[...setup.ambient],scaleGlow:setup.scaleGlow,unlit:[...unlit],camera:camera.flat(),mirror:1,
+            lights:setup.lights.map(light=>({location:[...light.location],rradius:light.rradius,color:[...light.color]}))};
+          gpu.beginLightRun();
+          if(!gpu.setLighting(handle,plain))throw new Error('attached child frame lighting did not fit');
+          // the run is a mirror's (Mirror -1); the slot's own Mirror 1.0 is what the weapon is lit with
+          gpu.lightRun({origin:[0,0,0],axes:[[1,0,0],[0,1,0],[0,0,1]],mirror:-1});
+          const points=state.cameraDrawn(null,undefined,undefined,index).positions;
+          compareCamera(stats.childCamera,gpu.read('cameraFinal',handle.vbase,V),points,published,actor.summary.actor);
+          const reference=npc.kernel.light({points,faces:litWords,origin:[0,0,0],axes:[[1,0,0],[0,1,0],[0,0,1]],mirror:1,
+            ambient:setup.ambient,scaleGlow:setup.scaleGlow,unlit,lights:setup.lights,flags,cameraSpace:true});
+          const colors=gpu.read('corners',handle.cbase,F*3),faceTexels=gpu.read('faces',handle.fbase,F);
+          const cameraPoints=Array.from({length:V},(_,i)=>[points[i*3],points[i*3+1],points[i*3+2]]);
+          const sums=cameraPoints.map(()=>[0,0,0]),keep=new Uint8Array(F),excluded=new Set();
+          for(let face=0;face<F;face++){
+            const [a,b,c]=litFaces[face].vertices,p0=cameraPoints[a];
+            const unit=accumulateFaceNormal(p0,cameraPoints[b],cameraPoints[c],sums[a],sums[b],sums[c]);
+            keep[face]=faceKept(unit,p0,1,litFaces[face].flags)?1:0;
+            if((faceTexels[face*4+3]>0.5?1:0)!==keep[face]){
+              stats.childDrawnDisagreements++;
+              const dot=unit[0]*p0[0]+unit[1]*p0[1]+unit[2]*p0[2];
+              report.maxEdgeOn=Math.max(report.maxEdgeOn,Math.abs(dot)/Math.hypot(...p0));
+              for(const vertex of litFaces[face].vertices)excluded.add(vertex);
+            }
+          }
+          stats.childFrames++;
+          for(let face=0;face<F;face++){
+            if(!keep[face])continue;
+            for(let k=0;k<3;k++){
+              if(excluded.has(litFaces[face].vertices[k]))continue;
+              stats.childCorners++;
+              for(let channel=0;channel<3;channel++)
+                stats.childMaxByte=Math.max(stats.childMaxByte,Math.abs(colors[(face*3+k)*4+channel]-Math.round(reference[face*9+k*3+channel]*255)));
             }
           }
         }
@@ -441,9 +504,21 @@ async function capture(page,{frames,device,tolerance,admission,lodViews}) {
     // Decisions Play made during the captured run (not the checks above).
     report.certified=certificateStats.certified-certifiedBefore;report.ambiguous=certificateStats.ambiguous-ambiguousBefore;
     return report;
-  },{frames,device,tolerance,admission,lodViews});
+  },{frames,device,tolerance,admission,lodViews,attachedOnly});
 }
 
+// The pawns' third-person weapons on the GPU path (docs/weapon-attachment.md "GPU path"): scenes that put an armed pawn in view, each the
+// console commands of the scene's other validators, typed live (`call`: viewProbe's arguments, then `frames` display frames).
+const cheat=Array.from({length:12},()=>'CheatView DeusEx.Terrorist');
+const ATTACHED_SCENES=[
+  {name:'Island pistol (main frame)',map:'01_NYC_UNATCOIsland',main:true,child:false,steps:[
+    {call:{exec:[...cheat,'set DeusEx.JCDentonMale ViewRotation (Pitch=-500,Yaw=46936,Roll=0)']}},{call:{playersOnly:false},frames:150}]},
+  {name:'lab mirror (JC in BehindView: main frame and reflection)',map:'05_NYC_UNATCOMJ12lab',main:true,child:true,steps:[
+    {call:{location:[-3086.76978,1400.20129,-155.809525],region:{zone:'LevelInfo0',iLeaf:3650,zoneNumber:7}}},{call:{playersOnly:false},frames:60},
+    {call:{exec:['summon DeusEx.WeaponPistol']},frames:60},{call:{rotation:[-10130,16432,0]},frames:60},{call:{exec:['ParseRightClick']},frames:120},
+    {call:{exec:['ActivateBelt 1']},frames:120},{call:{exec:['BehindView 1']}},{call:{rotation:[-400,62536,0]},frames:120}]},
+];
+const attachedFrames=[2,5,8,11,14,17,20,23,26,29];
 const browser=await chromium.launch({args:[`--use-angle=${angle}`]});
 let failed=false;
 const coverage={},failureNotes=[];
@@ -507,6 +582,60 @@ try {
       bitExactFraction:+(report.exact/Math.max(1,report.components)).toFixed(6),...report},null,1));
     await page.close();
   }
+if(option('attached','on')!=='off')try {
+  const attachedBrowser=await chromium.launch({args:[`--use-angle=${angle}`]});
+  try {
+    for(const scene of ATTACHED_SCENES){
+      const page=await attachedBrowser.newPage({viewport:{width:1440,height:960}});
+      const errors=[];page.on('pageerror',error=>errors.push(error.message));
+      await page.route(/\/src\/viewer\/main\.mjs(?:\?|$)/,async route=>{
+        const response=await route.fetch();
+        await route.fulfill({response,body:(await response.text())+hook});
+      });
+      await page.goto(`${url}/?gpuMesh=1&sim=inline&antialias=0`);
+      await page.waitForFunction(()=>window.deusExViewer?.status().ready,{}, {timeout:240000});
+      await page.locator('#map').selectOption(scene.map);
+      await page.waitForFunction(map=>{const s=window.deusExViewer?.status();return s?.ready&&s.map===map;},scene.map,{timeout:240000});
+      await page.waitForFunction(()=>{const s=window.deusExViewer?.status();
+        return s?.runtimeError||s?.gameplay?.hud?.health?.head?.displayedHealth===100;},{}, {timeout:240000});
+      await page.locator('#scene').click({position:{x:600,y:350}});
+      await page.waitForTimeout(1500);
+      await page.evaluate(async steps=>{
+        for(const step of steps){
+          if(step.call)await window.deusExViewer.viewProbe(step.call);
+          for(let i=0;i<(step.frames??0);i++)await new Promise(requestAnimationFrame);
+        }
+      },scene.steps);
+      const report=await capture(page,{frames:attachedFrames,device,tolerance:TOLERANCE,admission:null,lodViews:0,attachedOnly:true});
+      report.pageErrors=errors;
+      const a=report.attached;
+      const checks=[
+        ['attached: bindings compared on the GPU path',a.compared>0],
+        ['attached: position ulp',report.maxUlp<=TOLERANCE.ulp&&report.maxUlpTween<=TOLERANCE.tweenUlp],
+        ['attached: camera-space final pose ulp (main frame)',report.camera.maxUlp<=TOLERANCE.tweenUlp],
+        ['attached: final pose ulp (morph pass)',report.maxFinalUlp<=TOLERANCE.tweenUlp],
+        ['attached: resolved corner dwords',report.wedgeMismatches===0],
+        ...(scene.main?[['attached: lit and compared in the main frame',a.lit>0&&report.corners>0],
+          ['attached: colour bytes (main frame)',report.maxByte<=TOLERANCE.byte]]:[]),
+        ['attached: edge-on drawn disagreements',report.maxEdgeOn<TOLERANCE.edgeOn],
+        ['attached: Mirror 1.0 slot lane under a Mirror -1 run (colour bytes)',report.child.maxByte<=TOLERANCE.byte],
+        ['attached: Mirror 1.0 slot lane under a Mirror -1 run (compared)',device==='cpu'||(report.child.actors>0&&report.child.corners>0)],
+        ['attached: child frame lighting restored',report.child.restoredOff===0],
+        ...(scene.child?[['attached: real child frame compared',device==='cpu'||(a.childFrames>0&&a.childCorners>0)],
+          ['attached: real child frame colour bytes',a.childMaxByte<=TOLERANCE.byte],
+          ['attached: real child frame camera-space pose ulp',a.childCamera.maxUlp<=TOLERANCE.tweenUlp],
+          ['attached: real child frame drawn disagreements',a.childDrawnDisagreements===0||report.maxEdgeOn<TOLERANCE.edgeOn]]:[]),
+        ['attached: no errors',!report.errors.length&&!errors.length],
+      ];
+      const failures=checks.filter(([,ok])=>!ok).map(([name])=>name);
+      failed||=failures.length>0;
+      if(failures.length)failureNotes.push(`${scene.name}: ${failures.join(', ')}${report.errors.length?` (${report.errors[0].split('\n')[0]})`:''}${errors.length?` (page: ${errors[0]})`:''}`);
+      console.log(JSON.stringify({scene:scene.name,device,tolerance:TOLERANCE,failures,
+        bitExactFraction:+(report.exact/Math.max(1,report.components)).toFixed(6),...report},null,1));
+      await page.close();
+    }
+  } finally {await attachedBrowser.close();}
+} catch(error) {failed=true;failureNotes.push(`attached scenes: ${error.stack??error}`);}
 } finally {await browser.close();await server?.close();}
 // Face flags, animation modes and moving lights must all be exercised by the
 // maps compared in this run.

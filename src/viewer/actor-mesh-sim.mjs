@@ -107,10 +107,11 @@ const plainPlan=plan=>({matrix:plan.matrix.map(row=>[...row]),origin:[...plan.or
     blend:Boolean(op.blend),alpha:op.alpha,count:op.count,fill:op.fill?[...op.fill]:null}))});
 /** SetupForActor's result as gpu-mesh.mjs setLighting reads it, with the
  * frame's GetFrame matrix (`camera`, 4 rows of 3: lodMeshCameraMatrix) that
- * publishes the cache poses in that frame's camera space. */
-const plainLighting=(prepared,camera)=>({flags:prepared.flags,ambient:[...prepared.setup.ambient],scaleGlow:prepared.setup.scaleGlow,
+ * publishes the cache poses in that frame's camera space. `mirror`: the Frame->Mirror
+ * the face pass takes instead of the run's (a pawn's weapon: 1.0, whatever the frame's). */
+const plainLighting=(prepared,camera,mirror=0)=>({flags:prepared.flags,ambient:[...prepared.setup.ambient],scaleGlow:prepared.setup.scaleGlow,
   unlit:[...prepared.unlit],camera:camera.flat(),lights:prepared.setup.lights.map(light=>({location:[...light.location],rradius:light.rradius,
-    color:[...light.color]}))});
+    color:[...light.color]})),...(mirror?{mirror}:{})});
 
 /** One actor's mesh binding on the simulation side. `layout` is this side's
  * GPU mesh layout (null: the CPU path); `onRecord` is not used here, the
@@ -432,7 +433,9 @@ export async function createMeshBinding(runtime,actor,{id,originalObjectIndex,ke
      * LOD state differs from the base's, with its own emptied groups and
      * (when the boxes cannot tell) its own exact spheres. */
     function decideGroups(frustum,assign,variant=null){
-      const whole=certifyFrustum(frustum,unionBox),empty=variant?variantEmpty(variant):null;
+      // A pawn's weapon is drawn in camera space from the hand's Coords (attach.coords): the world-space bounds the frustum test
+      // would read are not where it is drawn, and DrawMesh draws it whole (the CPU path's frustumCulled is off the same way).
+      const whole=attach?1:certifyFrustum(frustum,unionBox),empty=variant?variantEmpty(variant):null;
       // A group the LOD empties draws nothing.
       for(const group of groups.values())
         assign(group,!(empty?empty.get(group):group.lodEmpty)&&(whole>=0?whole===1:groupVisible(group,frustum,variant)));
@@ -716,12 +719,12 @@ export async function createMeshBinding(runtime,actor,{id,originalObjectIndex,ke
         // the current plan published through that frame's GetFrame matrix and
         // morphed by `selection`/`returned` (default: the main frame's); and
         // that matrix (4 rows of 3).
-        cameraDrawn:(ctx=null,selection=gpuLodScalars?lastSelection:null,returned=lastReturned)=>{
-          materialize();return cameraDrawn(ctx,selection,returned,lastPlan.channels);
+        cameraDrawn:(ctx=null,selection=gpuLodScalars?lastSelection:null,returned=lastReturned,frameIndex=null)=>{
+          materialize();return cameraDrawn(ctx,selection,returned,lastPlan.channels,frameIndex);
         },
-        cameraMatrix:(ctx=null)=>{
+        cameraMatrix:(ctx=null,frameIndex=null)=>{
           const at=ctx??lighting.frame;
-          return lodMeshCameraMatrix(payload,actor,[...at.origin,...at.axes[0],...at.axes[1],...at.axes[2]],services);
+          return lodMeshCameraMatrix(payload,actor,attach?attach.coords(frameIndex):[...at.origin,...at.axes[0],...at.axes[1],...at.axes[2]],services);
         }}),
       get location(){return [...read(actor,'Location')];},get rotation(){return [...read(actor,'Rotation')];},
       /** Validation access (lod-probe.mjs): the last update's LOD inputs,
@@ -902,16 +905,20 @@ export async function createMeshBinding(runtime,actor,{id,originalObjectIndex,ke
           const lightFrame=lf=>{
             const ctx=lf?lf.ctx:view.lightRoot??null,pool=lf?lf.index:0;
             if(mode==='gpu'){
-              const prepared=lighting.setupMesh(actor,at>=0?setupFields(view.reads.views()):null,ctx);
+              // A weapon takes the SetupForActor result its pawn's frame loop made right after the pawn's own (attach.takePrepared), with the pawn as sink.
+              const prepared=attach?attach.takePrepared(lf?lf.index:null)??lighting.setupMesh(actor,null,attach.lightFrame(ctx),attach.setup())
+                :lighting.setupMesh(actor,at>=0?setupFields(view.reads.views()):null,ctx);
               if(!prepared)return;
               if(lf){frameSetups.set(lf.index,prepared);frameCtxs.set(lf.index,ctx);}else{lastSetup=prepared;lastLitFrame=layout.frame+1;}
               if(!lf)summary.lighting={lights:prepared.setup.lights.length,flags:prepared.flags};
               if(layout.reserveLights(prepared.setup.lights.length,pool)){
                 // The frame's GetFrame matrix: the page publishes the cached
                 // poses in this frame's camera space for the lighting passes.
-                const here=ctx??lighting.frame,camera=lodMeshCameraMatrix(payload,actor,[...here.origin,...here.axes[0],...here.axes[1],...here.axes[2]],services);
-                if(lf)frameLights.set(lf.index,{lighting:plainLighting(prepared,camera)});
-                else record.lighting=view.pack?view.pack.lighting(prepared,camera):plainLighting(prepared,camera);
+                // (a weapon's: the hand's Coords of the frame, GetFrame's Coords for DrawMesh, and the Mirror its lighting forces to 1.0)
+                const here=ctx??lighting.frame,camera=lodMeshCameraMatrix(payload,actor,
+                  attach?attach.coords(lf?lf.index:null):[...here.origin,...here.axes[0],...here.axes[1],...here.axes[2]],services);
+                if(lf)frameLights.set(lf.index,{lighting:plainLighting(prepared,camera,attach?1:0)});
+                else record.lighting=view.pack&&!attach?view.pack.lighting(prepared,camera):plainLighting(prepared,camera,attach?1:0);
               } else {
                 toCpu(`more than ${prepared.setup.lights.length-1} selected lights`);
                 record.posed=posedCopy();
@@ -963,7 +970,7 @@ export async function createMeshBinding(runtime,actor,{id,originalObjectIndex,ke
  * measured NPC identities keep their captured index. `player` is the player
  * actor or a getter for it (Player start logs a new player in). */
 export async function createActorMeshSim(runtime,assets,asset,{kernel,player:playerSource,lighting=null,layout=null,
-  childFrames=false,lod=true,weapons:drawWeapons=true,weaponMirrors=true,weaponOrder=null,onCreate=()=>{},onRelease=()=>{}}={}) {
+  childFrames=false,lod=true,weapons:drawWeapons=true,weaponMirrors=true,weaponOrder=null,weaponPath=null,onCreate=()=>{},onRelease=()=>{}}={}) {
   const currentPlayer=typeof playerSource==='function'?playerSource:()=>playerSource??null;
   let kernelError=null;
   if(kernel===undefined) {
@@ -1041,7 +1048,9 @@ export async function createActorMeshSim(runtime,assets,asset,{kernel,player:pla
   // The pawns' third-person weapons (actor-weapon-sim.mjs): bindings of their own on the CPU path, updated after
   // their pawns, in the frames that draw the pawn.
   const weapons=createWeaponAttachments({runtime,bind:(actor,options)=>bind(actor,options),lighting,onCreate,onRelease,
-    nextIndex:()=>synthetic++,errors,enabled:drawWeapons,mirrors:weaponMirrors,interleave:weaponOrder!=='late'});
+    nextIndex:()=>synthetic++,errors,enabled:drawWeapons,mirrors:weaponMirrors,interleave:weaponOrder!=='late',
+    // the weapons take the GPU path with the actors' layout unless ?weapons=cpu (the CPU path stays the reference and the fallback)
+    layout:weaponPath==='cpu'?null:layout});
   const admit=(actor,readMesh=null)=>{
     if(disposed||!actor||bindings.has(actor)||pending.has(actor))return;
     let mesh;

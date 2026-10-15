@@ -111,7 +111,8 @@ export function createMeshDraw(assets,creation,{gpu=null,texturePool,batches=nul
    * GPU-path group joins the batch of its texture, side, alpha test and
    * environment flag; a transparent one draws its own mesh. */
   function rebatch(group){
-    const material=group.material,want=batches&&mode==='gpu'&&!material.transparent
+    // (a pawn's weapon draws alone: the side of its faces flips with the pass, applyPass)
+    const material=group.material,want=batches&&mode==='gpu'&&!creation.attached&&!material.transparent
       ?`${group.texture.uuid}:${material.side}:${material.alphaTest>0?1:0}:${group.environment?1:0}`:null;
     if(group.batchEntry&&group.batchEntry.key===want)return;
     if(group.batchEntry){batches.remove(group.batchEntry);group.batchEntry=null;}

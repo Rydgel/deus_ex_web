@@ -127,7 +127,13 @@ export function createWeaponAttachments({runtime, bind, lighting, onCreate, onRe
     };
     entry.pending = bind(weapon, { attach, layout, visible: () => true, childVisible: () => true, reads: false, originalObjectIndex: nextIndex() })
       .then(binding => {
-        if (disposed || entries.get(entry.binding) !== entry || entry.weapon !== weapon || entry.mesh !== mesh) { binding.dispose(); return; }
+        if (disposed || entries.get(entry.binding) !== entry || entry.weapon !== weapon || entry.mesh !== mesh) {
+          // A GPU slot the simulation side's layout gave this binding exists on the page's only once the page has seen it created: let it
+          // see the release too, or the two layouts' slots part ways.
+          if (!disposed && binding.creation.path === 'gpu') { onCreate(binding.creation); binding.dispose(); onRelease(binding.id); }
+          else binding.dispose();
+          return;
+        }
         entry.weaponBinding = binding; owners.set(binding, entry); binding.attachedTo = entry.binding;
         entry.ids = new Set([binding.id]);
         binding.creation.visible = false;
@@ -158,7 +164,7 @@ export function createWeaponAttachments({runtime, bind, lighting, onCreate, onRe
     const { lastRecord: record, lastView: view } = entry;
     if (!record) return null;
     const ok = entry.bufs[entry.cur].ok, main = ok.find(frame => frame.index === null);
-    return { visible: record.visible, childOnly: record.childOnly, points: Boolean(record.cameraPoints), colors: Boolean(record.colors),
+    return { visible: record.visible, childOnly: record.childOnly, points: Boolean(record.cameraPoints), colors: Boolean(record.colors), lighting: Boolean(record.lighting),
       frames: ok.map(frame => frame.index), coords: main ? Array.from(main.coords) : null,
       specials: main?.specials ?? null, prj: view.prj ?? null, location: Array.from(entry.lastLocation),
       // the mirror frames' hands (validation): each frame's projection planes, special vertices and Coords

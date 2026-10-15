@@ -64,7 +64,7 @@ export async function createSimHost(map, asset, assets, { randomSeed, subtitles,
       { exportName, exportIndex: name => exportIndexByName.get(name),
         lineModel: () => occlusionNow?.tracker?.live() ? occlusionNow.lineModel() : null });
     // Player start logs in a new player; the layer follows the current one.
-    actorSim = await createActorMeshSim(runtime, assets, asset, { player, lighting: meshLighting, childFrames, lod: meshLod !== 'off', weapons: weapons !== 'off', weaponMirrors: weaponMirrors !== '0', weaponOrder,
+    actorSim = await createActorMeshSim(runtime, assets, asset, { player, lighting: meshLighting, childFrames, lod: meshLod !== 'off', weapons: weapons !== 'off', weaponMirrors: weaponMirrors !== '0', weaponOrder, weaponPath: weapons === 'cpu' ? 'cpu' : null,
       layout: gpu ? createGpuMeshLayout(gpu) : null,
       onCreate: creation => events.push({ kind: 'mesh-create', creation }), onRelease: id => events.push({ kind: 'mesh-release', id }),
       ...(meshBackend === 'javascript' ? { kernel: null } : {}) });
