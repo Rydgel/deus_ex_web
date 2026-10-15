@@ -47,6 +47,13 @@ export function writeIni({soft = process.env.DX_SOFT === '1'} = {}) {
     WindowedViewportY: HEIGHT, WindowedColorBits: 32, CaptureMouse: 'False', ...(soft ? {UseDirectDraw: 'False'} : {})});
   if (soft) ini = setKeys(ini, 'Engine.Engine', {GameRenderDevice: 'SoftDrv.SoftwareRenderDevice'});
   ini = setKeys(ini, 'Galaxy.GalaxyAudioSubsystem', {MusicVolume: 0, SoundVolume: 0, SpeechVolume: 0});
+  // DX_INI_SET='Section.Name.Key=Value;Other.Key=Value': further keys of the copy (a measurement's setting, e.g.
+  // D3DDrv.D3DRenderDevice.DetailTextures=False); the user's DeusEx.ini stays as it is.
+  for (const item of (process.env.DX_INI_SET || '').split(';').filter(Boolean)) {
+    const eq = item.indexOf('='), dot = item.lastIndexOf('.', eq);
+    if (eq < 0 || dot < 0) throw new Error(`DX_INI_SET ${item}: expected Section.Key=Value`);
+    ini = setKeys(ini, item.slice(0, dot), {[item.slice(dot + 1, eq)]: item.slice(eq + 1)});
+  }
   writeFileSync(path.join(SYSTEM, 'DeusEx-ad.ini'), ini, 'latin1');
   // Cinematics keep JC in state Paralyzed ('ignores all'), so console typing via
   // Talk is unavailable there. Bindings still reach the engine's own commands:

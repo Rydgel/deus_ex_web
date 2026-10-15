@@ -233,7 +233,10 @@ function hyprlandWindow() {
 
 // The breakpoints of --cw-probe (tools/dx-fpu-win.c): DrawFrame and SetupForSurf by the frame's Recursion, the pass, GlobalLighting, Galaxy's call and
 // the spatial bodies (normal, spot, NonIncidence, Cylinder, Searchlight, SlowWave, FastWave, CloudCast, Shock, Disco, Interference, Rotor, Shell).
-const cwSpecs = () => ['frame=Engine.dll:0x1038f110', 'drawframe=Render.dll:0x10b1a2d0:n=10:rec', 'setupforsurf=Render.dll:0x10b06c90:n=2000:rec',
+// --cw-spec label=Module.dll:0xADDR[:n=N][:ret] (repeatable) adds breakpoints to --cw-probe's; --cw-only drops the default ones (a count at an address
+// in the running original, e.g. D3DDrv's detail-texture pass, docs/frame-projection.md "Detail textures").
+const cwSpecs = () => [...(process.argv.includes('--cw-only') ? [] : defaultCwSpecs()), ...optionAll('cw-spec')];
+const defaultCwSpecs = () => ['frame=Engine.dll:0x1038f110', 'drawframe=Render.dll:0x10b1a2d0:n=10:rec', 'setupforsurf=Render.dll:0x10b06c90:n=2000:rec',
   'pass-open=Render.dll:0x10b1462f:ret', 'pass-close=Render.dll:0x10b14732:ret', 'galaxy-lighting-call=Galaxy.dll:0x1060992e:ret:n=10', 'globallighting=Render.dll:0x10b05e90:n=40',
   'tick=Engine.dll:0x103a51a0:n=2', 'light-noise=Render.dll:0x10b13080:n=2', 'setupdynamics=Render.dll:0x10b22d90:n=2', 'dyn-filter=Render.dll:0x10b24a10:n=4',
   'computefromactor=Render.dll:0x10b05fa0:n=12', 'fghsv=Engine.dll:0x103ec8d0:n=8', 'setupforactor=Render.dll:0x10b08c70:n=12', 'light-mesh=Render.dll:0x10b027f0:n=12',
@@ -322,6 +325,12 @@ async function original() {
           child.stdout.on('data', chunk => chunks.push(chunk));
           earlyProbe = new Promise(resolve => child.on('close', () => resolve(Buffer.concat(chunks).toString())));
           execFileSync('sleep', ['4']);   // the debugger attaches before the camera moves
+        }
+        // --poke Object:offset:value (repeatable): a 32-bit field of a live object of the original, written before each camera
+        // (tools/poke-object-win.c), e.g. D3DRenderDevice0:0x78:1 sets the device's DetailTextures that Wine's ddraw caps made 0.
+        for (const spec of optionAll('poke')) {
+          const [object, offset, value] = spec.split(':');
+          console.log(execFileSync(game.WINE, [path.join(root, 'ad/build/poke-object-win.exe'), object, offset, value], {encoding: 'utf8', env: process.env}).trim());
         }
         post([`cmd set DeusEx.JCDentonMale Location (X=${x},Y=${y},Z=${z})`, 'cmd set DeusEx.JCDentonMale Velocity (X=0,Y=0,Z=0)',
           `cmd set DeusEx.JCDentonMale ViewRotation (Pitch=${pitch},Yaw=${yaw},Roll=${roll})`,

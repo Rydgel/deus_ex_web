@@ -653,9 +653,44 @@ validated yet.
   clear, and `UBitmap::__Client->TextureLODSet[0]` (`[Client + 0x78]` by the `UClient` layout of `UnCamera.h`)
   is 0 (`TextureDetail=High`, as the shipped DeusEx.ini and the Wine install's); it then
   `Lock`s the detail texture (vtable `+0x54`, LOD -1) into `[ebp - 0x394]` and `Unlock`s it after the draw
-  (`0x10b1b38b..0x10b1b3a1`). The `D3DRenderDevice` section of both ini files has `DetailTextures=True`; whether
-  D3DDrv reads that field is not traced.
+  (`0x10b1b38b..0x10b1b3a1`). The `D3DRenderDevice` section of both ini files has `DetailTextures=True`.
+* The `esi` of that gate is the base texture's LOD (the `Lock` at `0x10b1a889` takes it): a surface drawn at LOD 2 or
+  coarser gets no detail texture (`cmp esi, 2; jge`, `0x10b1a8f2`).
+* **D3DDrv reads the field first thing** (measured below): `DrawComplexSurface` starts (`0x1000395f..0x10003973`) with
+  `if (Surface.DetailTexture && (Surface.FogMap || !this->DetailTextures)) Surface.DetailTexture = NULL`, where
+  `this+0x78` is `URenderDevice.DetailTextures` (Engine.dll's `URenderDevice::StaticConstructor` registers it,
+  `0x103715ec`: `push 0x78`, next to `Coronas` at `+0x60`, `HighDetailActors` `+0x64`). So a surface with a fog map
+  never gets a detail texture, and the pass at `0x10004860` runs only when the device's field is set.
+* **`SetRes` clears the field** (`0x1000c4f1..0x1000c515`): when `this+0x358`, the `dwTextureOpCaps` of the D3D7
+  device description (`D3DDEVICEDESC7 +0xc4` from `+0x294`), has no `D3DTEXOPCAPS_BLENDDIFFUSEALPHA` (`0x800`,
+  `test ah, 8`), `this->DetailTextures = 0` whatever the ini says. The pass sets stage 0's `COLOROP` to exactly that
+  operation, so the device is asked about it first.
 * 846 of the 2,287 texture exports of `Textures/*.utx` carry a `DetailTexture` reference (37%).
+
+**Measured in the running original (2026-10-15, Wine, `01_NYC_UNATCOIsland`, the pier deck at the `down` view
+`-4761,10431,-256:62536,0,0`, 1280 x 720, level time held at 52.32):**
+* `wine ad/build/dump-actor-win.exe D3DRenderDevice DetailTextures:0x78:u32 TexOpCaps:0x358:u32` reads
+  `DetailTextures=0x0` and `TexOpCaps=0xfef7ff` (bit `0x800` clear) with `DetailTextures=True` in the ini copy: **Wine's
+  ddraw does not report `BLENDDIFFUSEALPHA`, so on this host the original's `SetRes` turns the pass off.**
+* Breakpoint counters (`visual-acceptance.mjs original --cw-probe --cw-only --cw-spec ...`, 18 frames): 1,860
+  `DrawComplexSurface` calls, every one through the clearing store at `0x10003970`, 0 entries at `0x1000486e`, 0
+  layers (`0x100048b9`), 0 fan draws (`0x10004c92`); the fog pass (`0x10004d39`) 1,859.
+* With the field written to 1 after the window is placed (`--poke D3DRenderDevice0:0x78:1`,
+  `tools/poke-object-win.c`; the same frame, 15 frames counted): 1,701 calls, 0 through the clearing store, **1,330
+  detail passes, 3,989 layers (three per pass), 93 fan draws** (most surfaces of this open scene are beyond 380
+  units; the fans are the deck and the rails near the camera), fog pass 371. Wine draws the pass (its
+  `BLENDDIFFUSEALPHA` is implemented, only not advertised).
+* The two matched original frames (field 0 against field 1; the same camera, `TimeSeconds` 52.3189 against 52.3221):
+  mean absolute difference 0.33 of 255, maximum 8, 291,011 of 921,600 pixels differ in some channel, all on the deck
+  (the difference image is a floor texture); the frame mean falls 9.42 to 9.21, the deck's rows 9.07 to 8.58 (a detail
+  texture whose mean is below grey darkens what it covers).
+
+**What this settles.** The original draws detail textures: on a device that reports `BLENDDIFFUSEALPHA` (every D3D7
+class driver on Windows is expected to; **not measured here**, the only original that runs on this host is under
+Wine) with the shipped `DetailTextures=True` and `TextureDetail=High`. **Every earlier acceptance capture of the
+original was taken without it**, whatever the ini says; an original frame that contains the pass needs the field
+poked, as above. Play therefore draws the pass as the original does on a device with the cap, and a comparison with a
+Wine frame needs the poked capture.
 
 **The pass** (`0x10004860..0x10004d0b`, D3DDrv):
 * Three layers. Layer k uses fade distance `D = 380 * 0.2367985^k` (`0x10018640`: 380, 89.98, 21.31) and a texture

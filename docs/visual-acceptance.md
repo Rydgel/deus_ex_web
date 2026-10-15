@@ -136,6 +136,14 @@ its own views. Frames are `<map>/<name>-original.png` and `-play.png`.
 `<name>-crop-*.png`), and `--play-name <suffix>` compares
 `<name>-<suffix>.png` of Play, for an experiment's frame.
 
+**Probing the original at a camera.** `--cw-probe` attaches `tools/dx-fpu-win.c` for 6 seconds; `--cw-only` drops its
+default breakpoints and `--cw-spec label=Module.dll:0xADDR[:n=N][:ret]` (repeatable) adds yours, so the hits at any address of
+the running original are counted (D3DDrv's detail pass: [frame projection](frame-projection.md#detail-textures-the-pass-play-does-not-draw-2026-10-15)).
+`--poke Object:offset:value` (repeatable) writes a 32-bit field of a live object before each camera
+(`tools/poke-object-win.c`, build as `dump-actor-win`); `DX_INI_SET='Section.Key=Value;...'` changes keys of the launch
+copy `DeusEx-ad.ini` (never the installed ini); `scripts/original-run.sh <map> <command...>` runs any command against the
+game under the Wine lock.
+
 **Placing the player's Region.** `set Location` moves the player without
 SetActorZone, so its Region (zone, leaf) stays the start's under `ghost`
 (measured on both sides: the original's JC read leaf 111, zone 3 after the
