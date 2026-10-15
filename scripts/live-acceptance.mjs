@@ -601,9 +601,21 @@ async function play() {
   const frozen = traceRows.filter(row => row.unfrozen === 0);
   const pose = frozen[frozen.length - 1].actors['@player'];
   await withPlay(async ({page, frames, errors, ghost}) => {
+    // The ghost's own script starts its flying animation (the Tread loop) in the first player ticks after `ghost`, and the request below writes
+    // only the original's sequence, frame, rate and tween: AnimLast, OldAnimRate, bAnimLoop and bAnimNotify stay the ones the animation that
+    // was running when the replay began had. The page's frames before it are not ticks (the worker merges posts), so on a slow run the idle
+    // sequence (BreatheLight: no notifies, bAnimNotify 0) was still running, the Tread loop never ran its PlayFootStep notifies (one FRand each)
+    // and the replay's draw count was one short from tick 45 (Underworld; Battery Park tick 10). Wait until the player runs the pose's sequence.
+    let running = null;
+    const same = () => String(running).toLowerCase() === String(pose.Anim).toLowerCase();
+    for (let k = 0; k < 300 && !same(); k++) {
+      running = (await page.evaluate(() => window.deusExViewer.liveProbe({read: {names: ['@player'], props: ['AnimSequence']}}))).read?.['@player']?.AnimSequence ?? null;
+      if (!same()) await frames(2);
+    }
+    if (!same()) console.log(`the player's animation is ${running}, the original's ${pose.Anim}: its flags are the former's`);
     // The original's pose, exactly (the frozen-phase history of the ghost differs: its landing, its Tread loop).
-    await page.evaluate(a => window.deusExViewer.viewProbe({location: a.Loc, rotation: a.VRot,
-      region: {zone: a.RegZone, iLeaf: a.RegLeaf, zoneNumber: a.RegNum}}), pose);
+    await page.evaluate(a => window.deusExViewer.viewProbe({location: a.Loc, rotation: a.VRot, rehash: a.rehash,
+      region: {zone: a.RegZone, iLeaf: a.RegLeaf, zoneNumber: a.RegNum}}), {...pose, rehash: flag('ghost-in-hash')});
     // --early-cmds: the console lines the original was typed in its frozen phase (a camera that follows an actor), run now through the same chain
     if (earlyCommands().length) console.log('early commands:', JSON.stringify((await page.evaluate(lines => window.deusExViewer.viewProbe({exec: lines}), earlyCommands())).output));
     const populationFile = [`population${suffix}.json`, 'population.json'].map(name => path.join(dir, name)).find(existsSync);
@@ -622,7 +634,7 @@ async function play() {
       console.log(`flags at the start: Play ${flags.entries.length}${flags.entries.length ? ` (${flags.entries.map(e => e.name).join(' ')})` : ''}`);
     }
     await frames(5);
-    const props = [...new Set(FIELDS.map(f => f[1]))], playerProps = [...new Set(PLAYER_FIELDS.map(f => f[1]))];
+    const props = [...new Set([...FIELDS.map(f => f[1]), ...(option('extra-props', '') ?? '').split(',').filter(Boolean)])], playerProps = [...new Set([...PLAYER_FIELDS.map(f => f[1]), ...(option('extra-props', '') ?? '').split(',').filter(Boolean)])];
     // the player's animation too, in the call that arms the replay: no frozen tick runs between (a looping ghost
     // animation reaching its end can call script that draws)
     const setupNames = option('setup-probe', null), [setupFirst, setupLast] = option('setup-ticks', `1:${trace.length}`).split(':').map(Number);   // Setup's result for those actors (setup-play.json)

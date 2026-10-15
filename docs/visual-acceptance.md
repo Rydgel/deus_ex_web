@@ -1386,6 +1386,60 @@ both **equal** (bp1: 194 and 194 draws on tick 1, 64 of 64 pawns equal over 80 t
 and 31, 64 of 64 equal); 16 good loads against 2 bad overall. The next step is a `SpawnActor` call log (`call 0x10394f60`) of a bad load when one shows, compared with Play's spawn results at
 `Trashbag1`'s location, or a spawn-collision oracle at that location.
 
+### The live replay's start state, Battery Park's two loads and the Underworld's flaky draw (2026-10-16)
+
+Three findings from the Stage 4 gate's red and flaky live rows ([Stage 4 exit criteria](stage-4-exit-criteria.md), 4.1.7 and 4.1.8). Two are defects of the
+replay harness (`live-acceptance.mjs play`, `viewProbe`), not of the simulation; the third is a property of the stored original trace.
+
+**1. The Underworld's draw count at tick 45 (4.1.7, flaky): the player's animation flags at the start of the replay.** It was not "first replay against repeat": it
+differed on 1 of 4, 2 of 3, 4 of 5, 1 of 6, 1 of 8 and 2 of 5 runs in six batches before the change (other agents' jobs were running; the rate was not measured against the load), and on none of 10 runs after it. `--draw-trace` (per-actor draws of every tick) puts the difference on the player: tick 45 draws original 3 = `MJ12Troop0` 1 + `JCDentonMale1` 2, Play 2 on a
+failing run (`JCDentonMale1` 1). JS stacks of the player's draws (a temporary hook, not kept) name the missing one: a script `FRand` called by the player's
+`PlayFootStep` event, the animation notify of its `Tread` loop (`selectAnimNotify`); the other is the LOS worker's far-path draw in `ShowSelf`. A watch of the player's animation
+fields at the start of the replay separates good runs from bad ones exactly:
+
+| run | bAnimNotify | bAnimLoop | AnimLast | OldAnimRate | draws at tick 45 |
+| --- | ---: | ---: | ---: | ---: | --- |
+| good (w-1, w-2, w-5) | 1 | 1 | 0.9167 (Tread, 12 frames) | 1.25 | equal |
+| bad (w-3, w-4) | 0 | 1 | 0.8 (BreatheLight, 5 frames) | 0.5 | one short |
+
+The harness arms the replay with the original's pose and writes only `AnimSequence`, `AnimFrame`, `AnimRate` and `TweenRate` of the player (`live-acceptance.mjs`
+request). Everything else the animation keeps (`AnimLast`, `OldAnimRate`, `bAnimLoop`, `bAnimNotify`, from `play-anim.mjs` `startAnimation`) is whatever the animation
+running when the write happened set. The ghost starts in its idle `BreatheLight` (no notifies, so `bAnimNotify` 0) and its own script switches to the `Tread` loop in
+its first player ticks after `ghost`; the page's frames before the write are not necessarily ticks (the worker merges the page's posts, [sim-worker](sim-worker.md); how many player ticks ran before the write is not
+recorded), so on some runs the write came first, `Tread` ran with the idle sequence's flags and its footstep notifies never fired: one `FRand` short, from the tick the first notify falls on. **Fix:** the
+harness waits until the player's own animation is the pose's sequence before it writes the pose (`play()`), so the flags are the ones the original's script gives
+that animation. After the fix: 10 of 10
+Underworld replays with equal draws and `flaky: false` in the gate, and Battery Park's `sweep2` replays (below) are equal for the draws too (3 of 3; before, tick 10 differed:
+the same `PlayFootStep` draw). The gate's one-repeat allowance for stream draws is no longer needed for this map; it is left in place (the user's call to remove it).
+The fields the original does not record for the player (`AnimLast`, `OldAnimRate`, `bAnimNotify`, `bAnimLoop`) are not compared: the stored traces predate them, and
+`--extra-props bAnimNotify,AnimLast,...` watches them on Play's side.
+
+**2. Battery Park (4.1.8): which load is "bad", and the ghost's hash entry.** The doc's hypothesis (`Trashbag1`'s `Containers.Destroyed` spawn) is not what
+the stored trace shows. Facts, in the order they were established:
+
+- The stored sweep trace's load is the unusual one: its `population-result` is `{"removed": [], "missing": ["FlyGenerator4"]}`, a `FlyGenerator` the original's load
+  spawned by chance (10% per fly-making decoration, [Divergence 15](#divergences-found)) and Play's seeded load lacks. The 2026-10-13 sweep ran with
+  `--allow-missing generators`, which takes such an actor off the watch list and replays anyway; every other stored load of the map (`bp1`, `bp2` and the fresh one below) has
+  `missing: []`. That is the original's own evidence (its GObjects dump of that load against Play's seed-1 population), and the tick-1 draw count of the trace
+  (original 201, Play 199) is that generator's two draws. Which `Level.Actors` slot the generator took (it can tick before the pawns it shifts, which Divergence 15's
+  load did not show) is not measured: no `SpawnActor` log of a load with a chance generator exists, and none was captured here.
+- A **fresh original load with an exact population** (`live-original.sh`, the Wine lock, `--tag sweep2`, 1,200 ticks: "1305 actors in the original's level, 0 with
+  OddsOfAppearing < 1; population: the original holds nothing Play lacks", first attempt) replays **64 of 64 actors equal for 1,200 ticks, clock and stream draws equal**,
+  including `Trashbag1` and the pawns the old trace diverged on (tick-1 draws 207 and 207; Play's `Trashbag1` 30 of them). The old trace replayed on today's code is unchanged (32 of 64, UNATCOTroop2
+  from tick 13): the load, not Play. It stays in the store under `-sweep`; the gate reads `-sweep2` for Battery Park (`tags` of the `SWEEP` check).
+- The fresh trace first replayed 63 of 64: `AnnaNavarre0` stopped at tick 161 (original 163), one draw more in Play. She runs to the player (`RunningTo`, `OrderActor`
+  = JC); `RunningTo.Touch` goes to `Done` when she touches him, and Play's `Touch(JCDentonMale1)` fired at tick 160 (touch trace: `AddTouch`, `BeginTouch`), while the
+  original's state change shows at 163 (Anna: radius 22, JC: 20, his `bCollideActors` 0 after `ghost`). Cause: `viewProbe`'s placement of the player (commit 6619d4c,
+  2026-10-15) moves it with `changeActor`, which removes and **re-adds it to the collision hash whatever its `bCollideActors`**: `ghost`'s `SetCollision(false, ...)` had
+  taken it out, so every live replay of a ghost has had a touchable player since then. Fix: re-register only a player that collides (`view-probe.mjs`;
+  `--ghost-in-hash` restores the old behaviour for A/B). With it **Anna matches for 1,200 ticks** (the original's JC is out of the hash: her stop at 163 is the state
+  code's `IsOverlapping`, as Play's now).
+- Result for the five maps of 4.1.8: `validate-stage4-acceptance.mjs --only '^4\.1\.8$'`, 356 s, PASS: 5 maps, every actor equal over 1,200 ticks.
+
+**3. The gate itself.** A second run of the gate in one checkout failed its live rows with ENOENT: this checkout's `.work` is the first store root and also where the
+staging goes, so the second run unlinked its own staged files before copying them from themselves. `stageLive` now leaves a file in place that is already at its target and
+passes over a root that holds only some of the required lists.
+
 ### Pilot 4: 10_Paris_Club, dancers in view (2026-10-15)
 
 **How the view was reached without moving anything.** `PlayerPawn.CheatView(class<actor>)` (exec, needs `bCheatsEnabled`) makes the first actor of the class the player's `ViewTarget` and sets
@@ -1570,6 +1624,23 @@ Ship's window 2 (the locker room) differs by a door: a `DeusExMover` stands half
 in a live level, like the actors' positions; it is the 4.4 in the table, and the other two windows are the renderer). Hong Kong's
 three windows hold the market's signs and neon, Ship's window 1 the entry's potted plants (actor meshes with masked skins).
 
+**Ship window 2, recaptured 2026-10-16 (tag `sh3b`, level time 132.264 s).** The door is not a Play mover defect: `camera-acceptance.mjs original` now reads the level's
+pre-placed movers at the hold (Mover's linked offsets: Location 0x114, Rotation 0x120, Physics 0x30, bInterpolating 0x1ec bit 0x80, PhysAlpha 0x214, PhysRate 0x218, KeyNum
+0x377, PrevKeyNum 0x378, NumKeys 0x379; `dump-actor-win.exe DeusExMover ...`, 69 movers into `sh3b-state.json`). Three stand open and at rest (`DeusExMover39`, `40` and `65`: `KeyNum`
+1, `PrevKeyNum` 1, `bInterpolating` 0, `PhysAlpha` 0), the other 66 are at 0; in Play at the same level time all 69 are closed (Play's own NPCs did not open them). The three are
+`TriggerToggle` doors without a designer Tag, so no trigger of the map moves them; `RunningTo.HitWall` calls `CheckOpenDoor`, the way a pawn on its route frobs a door (the first
+capture, at 231.289 s, showed a door standing open in this window). Who opened them in the original was not measured. Play now writes the original's Rotation and
+Location of the movers that differ (`moverProbe set`, an input of the held state like the cameras' and the player's poses; `--movers off` skips it):
+
+| window 2 | mean abs. diff. | edge recall | edge precision |
+| --- | ---: | ---: | ---: |
+| `sh3b`, Play's own movers | 4.23 | .788 | .695 |
+| `sh3b`, the original's mover poses written | 1.13 | .918 | .794 |
+
+(The other two windows: 0.05 and 0.28 mean abs. difference.) What stays in window 2, and keeps 4.2.28 red: a red-uniformed NPC in the doorway in Play and not in the original (the
+moving actors are not matched, as before), and the back wall's locker doors drawn lighter in Play (the five movers in front of it, `DeusExMover8`, `19`, `21`, `23` and `37`, are at key 0
+in both). Neither was examined further.
+
 ### Main views at Brightness 2/3
 
 The 20 stored main views (4 maps x 5) were retaken in the original at Brightness 2/3 (`scripts/original-views-b.sh ...
@@ -1685,13 +1756,17 @@ node scripts/interface-acceptance.mjs play && node scripts/interface-acceptance.
 
 - **Not attributed, seen in the 2026-10-14 pilot re-runs with Divergences 17 and 18 in** (every watched actor equal in all three): the Island run's stream draws differ at tick 264
   (original 6, Play 7); the Underworld's at tick 31 (original 1, Play 0). Whether the rule change moved either was not tested (the draws of the Island at 264/276 were the load-time Tree
-  timers and the ghost's SightCounter before, [Divergence 6](#divergences-found)). The Club is equal for the draws too.
+  timers and the ghost's SightCounter before, [Divergence 6](#divergences-found)). The Club is equal for the draws too. **Explained 2026-10-16** for the Underworld (a draw short at tick 45, and tick 31 in the earlier runs: the player's animation flags at the start of the replay,
+  [the live replay's start state](#the-live-replays-start-state-battery-parks-two-loads-and-the-underworlds-flaky-draw-2026-10-16)); the Island's tick 264 was not looked at again.
 - **The Dockyard SecurityBot0 waypoint at tick 28 (group 2)** is Divergence 17 (a HazMatSuit or bottle stops the pick's test moves; the sweep's trace reproduces the original's destination
   under the old rule and is equal after the fix, and the original's four picks of that tick, reproduced in a fresh original with `--rng-from`, equal Play's). Not examined beyond that.
 - **Pawns that tick after an absent generator.** The Dockyard load z1 (MilitaryBot3 and RepairBot0 draw their StartUp Sleep at another stream index from tick 1, 4 extra draws in the
   original, six generators only it holds) and the sweep's BatteryPark load (32 pawns from tick 13, 201 draws against 199 on tick 1; its trace replays in today's Play with the same
   divergence once the sidecar files are rebuilt) look like [Divergence 15](#divergences-found)'s case with the generator **before** the pawns in tick order (a spawned actor takes a
-  free `Level.Actors` slot, not always the end); not checked with `--actor-trace` (the tick position of the original's generators).
+  free `Level.Actors` slot, not always the end); not checked with `--actor-trace` (the tick position of the original's generators). **BatteryPark settled 2026-10-16:** that trace's load
+  held a chance `FlyGenerator4` Play's load lacks (its own population dump), and a fresh exact-population load replays 64 of 64 over 1,200 ticks
+  ([the live replay's start state](#the-live-replays-start-state-battery-parks-two-loads-and-the-underworlds-flaky-draw-2026-10-16)); the generator's slot is still unmeasured, and the
+  Dockyard z1 load was not re-examined.
 - **Population mismatches of pickups.** The population step exempts the spawned pickup families (Liquor, Medkit, ...) from the name match; an item placed by the load's chance in the
   original and not in Play blocks a pawn now that pawns collide with items as the original's do. No case seen (the bottles and the HazMatSuit were in both programs).
 

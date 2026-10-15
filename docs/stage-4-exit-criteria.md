@@ -12,16 +12,16 @@ last agent compared". This note fixes both: a list of scenes, a criterion for ea
 
 ## Scoreboard
 
-First run, 2026-10-15 on master 2386f69 plus this branch (Linux host, AMD, 30 GB, 16 cores, `--jobs 2`): 60 min 36 s wall, peak 5575 MiB across the checks that ran together. **44 of 70 criteria pass; the gate is red.** 75 criteria in all, 5 excluded. The originals came from the stores listed under [Stored originals](#stored-originals).
+First run, 2026-10-15 on master 2386f69 plus this branch (Linux host, AMD, 30 GB, 16 cores, `--jobs 2`): 60 min 36 s wall, peak 5575 MiB across the checks that ran together. **44 of 70 criteria pass; the gate is red** (2026-10-16: 4.1.7 no longer flaky and 4.1.8 passes, [visual acceptance](visual-acceptance.md#the-live-replays-start-state-battery-parks-two-loads-and-the-underworlds-flaky-draw-2026-10-16); 45 of 70). 75 criteria in all, 5 excluded. The originals came from the stores listed under [Stored originals](#stored-originals).
 
 | Clause | PASS | FAIL | INLINE | NO-ORIGINAL | MISSING | EXCLUDED |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: |
-| 4.1 Animated actors | 8 | 1 | 0 | 0 | 2 | 0 |
+| 4.1 Animated actors | 9 | 0 | 0 | 0 | 2 | 0 |
 | 4.2 Effects | 17 | 1 | 3 | 0 | 9 | 3 |
 | 4.3 Sound | 5 | 0 | 0 | 0 | 2 | 0 |
 | 4.4 Text and interfaces | 10 | 0 | 0 | 0 | 4 | 2 |
 | 4.5 Speech, lip sync and the conversation camera | 4 | 0 | 0 | 0 | 4 | 0 |
-| **Total** | **44** | **2** | **3** | **0** | **21** | **5** |
+| **Total** | **45** | **1** | **3** | **0** | **21** | **5** |
 
 **Update, interface frames (2026-10-15, [interface frames](interface-frames.md)):** rows 4.4.11 to 4.4.14 are `PASS`, from 18 views of 00_Training compared with
 the original's frames (the HUD, eight persona screens, the main menu, three Settings screens, a datacube and the keypad) and from the four stored security-computer screens (outside their camera windows); the clause 4.4 row of the first-run table reads
@@ -40,8 +40,8 @@ A mode in brackets names how the check exercises Play (see [How the gate judges]
 | 4.1.4 | animation state | animation phase, controls, blend and the dilated delta equal the original | O2 | `anim-dilation-play` [worker], `animation-tick` [oracle], `animation-controls` [oracle], `get-anim-group` [oracle], `tween-blend` [oracle] | PASS |
 | 4.1.5 | 01_NYC_UNATCOIsland live | 88 actors, 600 ticks: every watched field, the clock and the stream draws equal | O1 | `live 01_NYC_UNATCOIsland` [worker] | PASS |
 | 4.1.6 | 10_Paris_Club live | 22 actors, 600 ticks, then the dancers animating in view and their frame | O1 | `live 10_Paris_Club` [worker], `live 10_Paris_Club (cvclub)` [worker] | PASS |
-| 4.1.7 | 06_HongKong_WanChai_Underworld live | 50 actors, 600 ticks, six dancers | O1 | `live 06_HongKong_WanChai_Underworld` [worker] (flaky) | PASS |
-| 4.1.8 | five campaign maps, 1,200 ticks | BatteryPark, Hotel, Market, Chateau and Area 51 Bunker: every actor equal | O1 | `sweep replay 5 maps` [worker] | FAIL |
+| 4.1.7 | 06_HongKong_WanChai_Underworld live | 50 actors, 600 ticks, six dancers | O1 | `live 06_HongKong_WanChai_Underworld` [worker] | PASS |
+| 4.1.8 | five campaign maps, 1,200 ticks | BatteryPark, Hotel, Market, Chateau and Area 51 Bunker: every actor equal | O1 | `sweep replay 5 maps` [worker] | PASS |
 | 4.1.9 | 01_NYC_UNATCOIsland armed pawns | a pawn's third-person weapon: hand frame and Coords equal Render.dll, drawn in Play | O2 | `weapon-attach` [oracle], `weapon-play` [worker] | PASS |
 | 4.1.10 | Training first-person crowbar | the first-person weapon frame (view model, GPU camera passes) against the original | - | missing: only the selection (validate-weapon-lod) is compared with the original; no matched capture of the held weapon | MISSING |
 | 4.1.11 | 05_NYC_UNATCOMJ12lab mirror | the player holding a pistol and a MedKit in a mirror child frame: the frame's planes and the Coords equal the running original's logged draws | O1 | `weapon-attach` [oracle], `weapon-mirror-play` [worker] | not yet run (added after the first run, master 88b6f96) |
@@ -78,7 +78,7 @@ A mode in brackets names how the check exercises Play (see [How the gate judges]
 | 4.2.25 | viewport flash | EndFlash equals D3DDrv; the flash pass draws | O2 | `d3d-endflash` [oracle], `flash-play` [worker], `player-alterations-census` [node] | PASS |
 | 4.2.26 | underwater or drunk frame | a held flash frame against the original under Wine | - | missing: the pass is checked against Play itself only; GL's 8-bit blend rounding against the device's is unmeasured (roadmap section 4 Open) | MISSING |
 | 4.2.27 | vertices and visibility | Render.dll's projection, D3DDrv's vertices and OccludeBsp equal the original | O2 | `frame-projection` [oracle], `frame-projection-movers` [oracle], `frame-projection-play` [worker], `master-frame-play` [worker], `bsp-occlusion` [oracle] | PASS |
-| 4.2.28 | security cameras | ViewportWindow windows on four maps match the original's computer screens | O1 | `camera 14_OceanLab_Lab cs1` [worker], `camera 02_NYC_BatteryPark bp2` [worker], `camera 06_HongKong_WanChai_Market hk0` [worker], `camera 09_NYC_Ship sh3` [worker] | FAIL |
+| 4.2.28 | security cameras | ViewportWindow windows on four maps match the original's computer screens | O1 | `camera 14_OceanLab_Lab cs1` [worker], `camera 02_NYC_BatteryPark bp2` [worker], `camera 06_HongKong_WanChai_Market hk0` [worker], `camera 09_NYC_Ship sh3b` [worker] | FAIL |
 | 4.2.29 | camera with a mirror, sky, fog or corona in view | a camera frame against the original | - | missing: the thirteen captured windows look into rooms (visual-acceptance.md "What stays") | MISSING |
 | 4.2.30 | 06_HongKong_WanChai_Underworld mirrored panes | the dance floor in the mirrored panes at a held Strobe against the original | - | missing: the stored d_s0 and d_s1 frames cannot be reproduced: the level time each was held at is not stored with it (times.json holds the last capture's, 54.18 s, written after the frames), and with that clock Play differs in 7 blocks | MISSING |
 | 4.2.31 | animated mesh skins and DT_SpriteAnimOnce | frames no shipped class, actor or script reaches | - | excluded: unreachable: documented in particles.md and texture-animation.md | EXCLUDED |
@@ -166,7 +166,7 @@ says why it has its value and how strong that reason is.
 | Security-camera window | mean abs. difference at most 1.0, edge recall and precision at least 0.90 | The documented values with the sampling state and display-space filtering are 0.00 to 0.15. The precision of a Battery Park window moved between .948 and .99 across runs (two walking actors), hence 0.90. Weak. |
 | Matched capture settings | `?antialias=0`, `?detailTextures=0` | Every stored original lacks multisampling and the detail pass (Wine's device has no `BLENDDIFFUSEALPHA`); Play's defaults (both on) stay as they are. |
 | Interface frames | at least 99% of the pixels identical, at most 64 pixels off by more than 10 of 255, mean absolute difference at most 0.1, edge recall and precision at least 0.99, no outlier block; a security computer's screen outside its camera windows: at most 20 pixels off by more than 2 and none by more than 10 | The 18 views are within 2 of 255 everywhere but one world scanline of 57 pixels (up to 27 levels) and, in the datacube view, 90 pixels of at most 13 levels. Strong for what it excludes: Play before the two fixes fails every frame they changed (the closest has 105 pixels over 10). Weak for the margins (7 pixels over the worst measured, .9922 against .99). The four terminal screens read 0 pixels over 2 outside the camera windows (the largest difference 0), so the 20-pixel allowance is a margin, not a measurement. |
-| Live-scene tolerance | every watched field of every actor, the clock and the stream draws equal; a stream-draw-only difference is repeated once | The Underworld's draw count differed at tick 45 on the first replay in two of two fresh runs and was equal on the repeat (the unattributed intermittent of [visual acceptance](visual-acceptance.md#open)); a repeat that passes is reported as `flaky`. |
+| Live-scene tolerance | every watched field of every actor, the clock and the stream draws equal; a stream-draw-only difference is repeated once | The Underworld's draw count differed at tick 45 on some replays (two of two fresh runs, then 1 of 4 to 4 of 5 in six batches): attributed 2026-10-16 to the player's animation flags at the start of the replay (`bAnimNotify` 0 when the replay began before the ghost's own script had started its `Tread` loop, so its `PlayFootStep` `FRand` was missing) and fixed in the harness; 10 of 10 replays are equal since and the gate reports `flaky: false`, so the repeat is no longer needed for this map. The allowance stays until the user removes it; a repeat that passes is still reported as `flaky`. |
 
 **Real-x87 probes.** `window-scene-frame` runs a small probe executable under Wine to measure `appTan` on hardware. The gate points those validators
 at `/usr/bin/wine` and the `~/.wine-deusex` prefix when they exist (`X87_PROBE_WINE`, `WINEPREFIX`); it starts no DeusEx.exe.
@@ -277,7 +277,9 @@ each criterion's inputs from one root (the first that holds them) and links or c
 | The Club dancers' frame | worktree `agent-ab57e232707486ccf` `.work/acceptance/10_Paris_Club/cvclub-original.png` | 4.1.6 |
 | Pilot traces of 2026-10-15 (Island, Club, Underworld) with their watch and population lists | worktree `agent-ab57e232707486ccf` `.work/live-acceptance/<map>/original-trace*.jsonl` | 4.1.5 to 4.1.7 |
 | The 28-map sweep's traces (2026-10-13) | main `.work/live/.work/live-acceptance/<map>/original-trace-sweep.jsonl` | 4.1.8 |
+| BatteryPark's fresh exact-population load, 1,200 ticks (2026-10-16, tag `sweep2`; the sweep's own BatteryPark load, tag `sweep`, held a chance FlyGenerator Play's load lacks and is kept, unread by the gate) | main `.work/live-acceptance/02_NYC_BatteryPark/original-trace-sweep2.jsonl` with `watch-`, `population-` and `commands-sweep2.json` | 4.1.8 |
 | Security-camera frames and measured state | worktree `agent-a011db8f1b061eb8e` `.work/acceptance/<map>/{cs1,bp2,hk0,sh3}-original.png`, `-state.json` | 4.2.28 |
+| The Ship camera recaptured with the level's movers measured (2026-10-16, tag `sh3b`, level time 132.264 s in `sh3b-time.txt`; the first `sh3` capture is kept) | main `.work/acceptance/09_NYC_Ship/sh3b-original.png`, `.bmp`, `-state.json` (with `movers`) | 4.2.28 |
 | The original's third-person weapon draws | main `.work/weapon/original-cases*.json` | 4.1.9 |
 | The interface frames of 00_Training (18 views, 2026-10-15) and each frame's level time | main `.work/acceptance/00_Training/ui-<view>-original.png` and `ui-<view>-time.txt` (also `ui-e1` to `ui-e4`, the pointer experiment) | 4.4.11 to 4.4.14 |
 | The light manager's tables from the running original | main `.work/live/.work/fpu` | 4.2.9 |
@@ -328,14 +330,18 @@ Nothing below was fixed in this task beyond wiring existing checks; each item is
    DLLs, and MeetPaul runs end to end, but there is no original frame of the conversation (letterbox, behind view, subtitles), no original audio of the speech
    (Galaxy's MPEG decoder is not translated; the host's decode and rounding are unverified), the intro's `CameraPoint` shots have no gate-readable frame, and
    lip sync is wired for one conversation. Holds up "synchronized speech and conversation camera behavior".
-3. **Two live results are red and one is flaky (4.1.8, 4.2.28, 4.1.7).** *4.1.8:* `02_NYC_BatteryPark` replays 32 of 64 actors equal (UNATCOTroop2 `State` and Terrorist5 `Loc` from tick
-   13 to 14); the working hypothesis, not verified, is `Trashbag1`'s `Containers.Destroyed` spawn result ([visual
-   acceptance](visual-acceptance.md#re-run-on-master-9fb73f2-2026-10-15)); the next step is a `ULevel::SpawnActor` call log of a bad original load. *4.2.28:* Ship's
-   security window 2 (mean abs. difference 4.35, recall .71): a `DeusExMover` stands half open in the original and closed in Play, a mover's state in a live level.
-   Both are campaign maps; both are already documented as open. *4.1.7:* the Underworld passes only on its repeat. The first replay of its trace differs in the stream's
-   draw count at tick 45 (original 3, Play 2; every actor and the clock equal) in two of two fresh runs, and the repeat is equal; the gate's one-repeat rule
-   shows it as `flaky` instead of red. Unattributed (the first run after staging the trace; one of the two was under load); a candidate real nondeterminism in the
-   replay, not yet looked at.
+3. **One live result is still red (4.2.28's Ship window); 4.1.7 and 4.1.8 were settled 2026-10-16** ([visual
+   acceptance](visual-acceptance.md#the-live-replays-start-state-battery-parks-two-loads-and-the-underworlds-flaky-draw-2026-10-16)). *4.1.7* (flaky): the player's animation flags at the start of the
+   replay (`bAnimNotify` 0 when the replay began before the ghost's own script started its `Tread` loop, so the loop's `PlayFootStep` `FRand` was missing at tick 45); the harness now
+   waits for the pose's sequence: 10 of 10 replays equal, not flaky. *4.1.8* (red): the stored BatteryPark trace was the unusual load (a chance `FlyGenerator4` Play's seeded load
+   lacks, from the original's own population dump; the sweep ran with `--allow-missing generators`), not a `Trashbag1` spawn; a fresh exact-population load (tag `sweep2`, stored, read by
+   the gate) replays 64 of 64 over 1,200 ticks once `viewProbe` stops re-adding the ghost to the collision hash (it had made JC touchable: Anna stopped two ticks early). The gate now
+   passes it. *4.2.28* (red): Ship's window 2 differs by doors an NPC opened: a fresh capture (`sh3b`, with the level's movers read from the original) shows `DeusExMover39`, `40` and
+   `65` at `KeyNum` 1 and resting, the other 66 closed; Play's are closed at the same level time (NPC routes are each program's own, who opened them was not measured). The harness now
+   writes the original's measured mover poses into Play (an input of the held state, like the cameras' and the player's): window 2 goes from mean abs. difference 4.23, recall .788,
+   precision .695 to 1.13, .918, .794 (gate run: precision .757, the only threshold missed). **What is left in that window:** an NPC (red uniform) standing in the doorway in Play and absent in
+   the original, and the locker doors on the back wall, drawn lighter in Play than in the original (movers closed in both). The first needs the NPCs' poses and animation as measured inputs
+   too (a second original capture reading the pawns), the second a look at mover lighting in a camera frame; neither was done, so the row stays `FAIL`.
 4. **Three checks run in the wrong mode (`INLINE`: 4.2.12, 4.2.18, 4.2.20).** `validate-particles-play`, `validate-mirrors-play` and `validate-fire-texture-play` force
    `?sim=inline`. Each passes; each needs a sim-side probe call (the way `decalProbe` does) so it runs in the default worker mode, after which three criteria
    turn green with no new evidence. Small and mechanical.

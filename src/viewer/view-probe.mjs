@@ -14,7 +14,7 @@ import { scriptGetStateName } from '../runtime/script-state-queries.mjs';
  * non-brush actor nothing else follows). `exec` runs further console
  * commands the same way, after the same bCheatsEnabled write (main.mjs
  * ?cheat=, e.g. DeusExPlayer.Summon). Returns the player's state. */
-export function viewProbe(game, { playersOnly = null, timeDilation = null, ghost = false, location = null, rotation = null, region = null, exec = [] } = {}) {
+export function viewProbe(game, { playersOnly = null, timeDilation = null, ghost = false, location = null, rotation = null, region = null, exec = [], rehash = false } = {}) {
   const runtime = game.doors.scriptRuntime.runtime, player = game.player.collisionActor;
   // `set LevelInfo bPlayersOnly True`, which the original capture types
   // before `open` so the new level's LevelInfo starts with it: written here
@@ -42,8 +42,9 @@ export function viewProbe(game, { playersOnly = null, timeDilation = null, ghost
     const move = () => runtime.writeNamed(player, 'Location', location.map(Math.fround));
     // A ghost has no collision (PlayerPawn.Ghost: SetCollision(false, false, false) removed the hash entry; `actorRegistered` is the host's
     // flag and does not follow it): a bare write is what the original's SET does, and `walk` re-adds the actor at the new Location. Moving it
-    // through changeActor there would register a ghost, and the next SetCollision(true) fails ("Actor is already registered").
-    if (game.player.actorRegistered && read('bCollideActors')) game.player.collision.queries.changeActor(player, move); else move();
+    // through changeActor there would register a ghost (Battery Park's Anna touched it and stopped two ticks early), and the next
+    // SetCollision(true) fails ("Actor is already registered"). `rehash` (live-acceptance --ghost-in-hash) keeps the old behaviour.
+    if (game.player.actorRegistered && (rehash || read('bCollideActors'))) game.player.collision.queries.changeActor(player, move); else move();
     runtime.writeNamed(player, 'Velocity', [0, 0, 0]);
   }
   if (rotation) runtime.writeNamed(player, 'ViewRotation', rotation.map(v => v | 0));
