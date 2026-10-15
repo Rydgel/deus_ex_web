@@ -20,6 +20,8 @@ const lower = value => String(value).toLowerCase();
 export function createWeaponAttachments({runtime, bind, lighting, onCreate, onRelease, nextIndex, errors, enabled = true, mirrors = true}) {
   const entries = new Map(), owners = new Map(), pawnClass = new WeakMap();
   let disposed = false;
+  // Host timing (scripts/weapon-cost.mjs): the wall time of update() calls and the weapon records they made.
+  const stats = { ms: 0, updates: 0, records: 0 };
   /** Whether the actor's class derives from Pawn (Render.dll's test at 0x10b25675..0x10b25694). */
   const isPawn = actor => {
     let known = pawnClass.get(actor);
@@ -112,7 +114,7 @@ export function createWeaponAttachments({runtime, bind, lighting, onCreate, onRe
     write('OldFlashCount', read('FlashCount'));
   }
 
-  return {
+  const api = {
     /** The weapons of `bindings` (the pawns updated this frame, with `view` as they were), appended to `records`.
      * `hideOthers`: the pawns no frame drew hide their weapon too (the main frame's update; a ViewportWindow's pass
      * leaves the others to its decisions). */
@@ -210,5 +212,19 @@ export function createWeaponAttachments({runtime, bind, lighting, onCreate, onRe
       for (const entry of entries.values()) retire(entry);
       entries.clear();
     },
+    /** Host timing: what update() cost since the last reset (ms), the calls and the weapon records they made. */
+    stats(reset = false) {
+      const result = { ...stats };
+      if (reset) { stats.ms = 0; stats.updates = 0; stats.records = 0; }
+      return result;
+    },
   };
+  const update = api.update;
+  api.update = (bindings, view, records, hideOthers) => {
+    if (disposed || !enabled) return;
+    const started = performance.now(), before = records.length;
+    try { update(bindings, view, records, hideOthers); }
+    finally { stats.ms += performance.now() - started; stats.updates++; stats.records += records.length - before; }
+  };
+  return api;
 }

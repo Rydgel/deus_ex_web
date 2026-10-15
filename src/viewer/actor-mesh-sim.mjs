@@ -1371,6 +1371,8 @@ export async function createActorMeshSim(runtime,assets,asset,{kernel,player:pla
     resetLodSettings(){lodSettings=RENDER_LOD_SETTINGS;},
     /** Validation: the pawns' third-person weapons (actor-weapon-sim.mjs states). */
     weaponStates:()=>weapons.states(),
+    /** Host timing of the weapon layer since the last reset (scripts/weapon-cost.mjs). */
+    weaponStats:reset=>weapons.stats(reset),
     /** URender's current LOD settings (the weapon's selection uses them too). */
     lodSettings:()=>lodSettings,
     /** Iterator item bindings in use (validation access). */
