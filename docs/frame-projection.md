@@ -813,6 +813,16 @@ record is skipped, not truncated).
 5. *Stored captures.* `visual-acceptance.mjs play`, `camera-acceptance.mjs` and `live-acceptance.mjs` (the only scripts that read
    stored original frames) add `detailTextures=0` unless `--detail on`.
 
+**Cost** (Linux host, headless Chromium, the default worker mode, the page's and the worker's phase timers over 10 windows of 120 drawn
+frames, two interleaved loads each of the default against `?detailTextures=0`; medians, ms per drawn frame): page total 2.04 -> 2.05
+(Island deck, 8 fan triangles), 1.58 -> 1.69 (Training wall, 4), 3.26 -> 3.33 (Island start view, 15); the worker 10.82 -> 11.21,
+5.13 -> 5.16, 14.06 -> 14.72, of which the actors phase (where OccludeBsp and `detail_run` run) 1.51 -> 1.54, 0.59 -> 0.64, 3.55 ->
+3.69. So the pass costs about 0.1 ms in the page and 0.05 to 0.15 ms in the worker's occlusion step; the rest of the worker's difference is the
+run-to-run noise of the other phases (a frame's other work varies by that much between loads). Not measured on the reference machine
+(the Mac) or in a detail-heavy interior at 120 fps. The fog path ran on the Bar, the Wan Chai market and the Ship without page errors: in the
+Bar's start view every fan belongs to a fogged surface (15 surfaces have a map) and none is drawn, in the Ship's 3 of 21 surfaces are fogged
+and 55 triangles draw.
+
 **Fog.** DrawComplexSurface clears a surface's detail texture when it has a fog map. Play knows a surface's map as the fog pass computes
 it for the frame, so a level surface whose fog map has any light in it takes no detail texture (`fog-pass.mjs` `fogged`, per frame). The
 original's FogMap exists whenever the draw item has volumetric links (a light sphere test OccludeBsp's attachment makes, which Play does
