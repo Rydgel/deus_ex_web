@@ -23,7 +23,7 @@
  *   go to the worklet and its reports come back on the port, never through
  *   the page.
  * - `call` {id, method, args}: `view`, `reset` (Player start: reset, then the
- *   movers and PlayerCalcView), `stateDigest`, `decalProbe`, `liveProbe` (the live-scene replay), `placeProbe`, `laserProbe`, `meshLightProbe`, `lodProbe` and `renderPassProbe` (validation), `musicStatus` (the library
+ *   movers and PlayerCalcView), `stateDigest`, `decalProbe`, `particleProbe`, `liveProbe` (the live-scene replay), `placeProbe`, `laserProbe`, `meshLightProbe`, `lodProbe` and `renderPassProbe` (validation), `musicStatus` (the library
  *   service's counters), `musicDrive` (galaxy-music-library.mjs
  *   driveMusicLibrary, validation only).
  *
@@ -33,7 +33,7 @@
 // ?hitchlog=1 (hitch-log.mjs): the worker's frame record and wasm sizes.
 let hitchWasm = null, hitchFrames = 0;
 let host = null, loadId = null, assets = null, decodeMap = null, createSimHost = null, setHostClock = null, plainError = null, stateDigest = null,
-  decalProbe = null, placeProbe = null, laserProbe = null, meshLightProbe = null, renderPassProbe = null;
+  decalProbe = null, particleProbe = null, placeProbe = null, laserProbe = null, meshLightProbe = null, renderPassProbe = null;
 // Galaxy's music library service and its module (set by `music`).
 let musicLibrary = null, music = null;
 // Audio events since the last snapshot; sound bytes cross once per key.
@@ -107,7 +107,7 @@ async function handle(data) {
         import('../unreal/map.mjs'), import('./sim-host.mjs'), import('../runtime/host-clock.mjs'), import('./sim-session.mjs'),
         import('../runtime/state-digest.mjs'), import('../runtime/galaxy-music-library.mjs'), import('./decal-probe.mjs')]);
       decodeMap = map.decodeMap; createSimHost = simHost.createSimHost; setHostClock = clock.setHostClock; music = library;
-      plainError = session.plainError; stateDigest = digest.stateDigest; decalProbe = probe.decalProbe;
+      plainError = session.plainError; stateDigest = digest.stateDigest; decalProbe = probe.decalProbe; particleProbe = probe.particleProbe;
       placeProbe = probe.placeProbe; laserProbe = probe.laserProbe;
       meshLightProbe = probe.meshLightProbe; renderPassProbe = probe.renderPassProbe;
       assets = new AssetStore(data.files.map(file => ({ path: file.path, read: file.file ? () => file.file.arrayBuffer()
@@ -182,6 +182,7 @@ async function handle(data) {
         else if (data.method === 'stateDigest') value = stateDigest(game.doors.scriptRuntime.runtime,
           game.doors.scriptRuntime.runtime.levelFor(game.player.collisionActor));
         else if (data.method === 'decalProbe') value = decalProbe(game, data.args ?? {});
+        else if (data.method === 'particleProbe') value = particleProbe(game, data.args ?? {});
         else if (data.method === 'viewProbe') value = (await import('./view-probe.mjs')).viewProbe(game, data.args ?? {});
         else if (data.method === 'liveProbe') value = (await import('./live-probe.mjs')).liveProbe(game, data.args ?? {});
         else if (data.method === 'placeProbe') value = placeProbe(game, data.args ?? {});

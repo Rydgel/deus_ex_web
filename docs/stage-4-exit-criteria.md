@@ -17,11 +17,11 @@ First run, 2026-10-15 on master 2386f69 plus this branch (Linux host, AMD, 30 GB
 | Clause | PASS | FAIL | INLINE | NO-ORIGINAL | MISSING | EXCLUDED |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: |
 | 4.1 Animated actors | 9 | 0 | 0 | 0 | 2 | 0 |
-| 4.2 Effects | 17 | 1 | 3 | 0 | 9 | 3 |
+| 4.2 Effects | 20 | 1 | 0 | 0 | 9 | 3 |
 | 4.3 Sound | 5 | 0 | 0 | 0 | 2 | 0 |
 | 4.4 Text and interfaces | 10 | 0 | 0 | 0 | 4 | 2 |
 | 4.5 Speech, lip sync and the conversation camera | 4 | 0 | 0 | 0 | 4 | 0 |
-| **Total** | **45** | **1** | **3** | **0** | **21** | **5** |
+| **Total** | **48** | **1** | **0** | **0** | **21** | **5** |
 
 **Update, interface frames (2026-10-15, [interface frames](interface-frames.md)):** rows 4.4.11 to 4.4.14 are `PASS`, from 18 views of 00_Training compared with
 the original's frames (the HUD, eight persona screens, the main menu, three Settings screens, a datacube and the keypad) and from the four stored security-computer screens (outside their camera windows); the clause 4.4 row of the first-run table reads
@@ -62,15 +62,15 @@ A mode in brackets names how the check exercises Play (see [How the gate judges]
 | 4.2.9 | light maps | static and animated light maps, spatial and moving light effects equal Render.dll | O2 | 8 validators (moving-light-effects, leaf-lights, light-spatial, ...) [oracle] | PASS |
 | 4.2.10 | light effects in Play | the Disco floor, a barrel fire and AugLight in Play against the original bodies | O3 | `light-spatial-play` [worker], `moving-light-effects-play` [worker], `auglight-lighting` [oracle] | PASS |
 | 4.2.11 | coronas | visibility helper, DrawIcon arguments, tracker trace and the tile chain | O2 | `coronas-play` [worker], `coronas-tracked` [oracle], `corona-tiles` [worker], `corona-tiles-play` [worker], `coronas-mover-play` [worker], `coronas` [oracle] | PASS |
-| 4.2.12 | particles and sprites | ParticleIterator, FDynamicSprite and the tile chain | O2 | `particles-play` [inline], `sprite-setup` [oracle], `sprite-tiles` [worker], `sprite-tiles-play` [worker], `sprite-tiles-mirror-play` [worker], `native-particles` [oracle] | INLINE |
+| 4.2.12 | particles and sprites | ParticleIterator, FDynamicSprite and the tile chain | O2 | `particles-play` [worker], `sprite-setup` [oracle], `sprite-tiles` [worker], `sprite-tiles-play` [worker], `sprite-tiles-mirror-play` [worker], `native-particles` [oracle] | PASS |
 | 4.2.13 | 04_NYC_Street vents | a frame with particles and sprites against the original with the generators' state matched | - | missing: no matched capture holds a particle or sprite whose generator state the original side fixed | MISSING |
 | 4.2.14 | decals | AttachDecal, ClipDecal and the vertices of a decal equal Engine.dll and Render.dll | O2 | `decal-vertices-play` [worker], `decals-play` [worker], `decal-attach` [oracle], `decal-render` [worker], `decal-startup` [oracle] | PASS |
 | 4.2.15 | Training shadows, bullet holes | a decal frame against the original | - | missing: no matched capture shows a decal; blood and scorch marks need combat | MISSING |
 | 4.2.16 | volumetric fog (02_NYC_Bar) | ComputeFromActor and the fog loop equal Render.dll; the pass in Play | O3 | `volumetric-fog-play` [worker], `volumetric-fog` [oracle] | PASS |
 | 4.2.17 | 02_NYC_Bar smoke haze | a fog frame against the original | - | missing: the stored frames are 08_NYC_Bar, whose zones hold no fog; 02_NYC_Bar has no original capture | MISSING |
-| 4.2.18 | mirrors | frame cases, child frames, nesting, the sky inside a mirror, the strobe | O2 | `mirrors-play` [inline], `mirror-plan-play` [worker], `underworld-panes-play` [worker], `strobe-mirror-play` [worker], `sky-in-mirror-play` [worker], `child-frames` [oracle], `mirrors` [oracle] | INLINE |
+| 4.2.18 | mirrors | frame cases, child frames, nesting, the sky inside a mirror, the strobe | O2 | `mirrors-play` [worker], `mirror-plan-play` [worker], `underworld-panes-play` [worker], `strobe-mirror-play` [worker], `sky-in-mirror-play` [worker], `child-frames` [oracle], `mirrors` [oracle] | PASS |
 | 4.2.19 | 02_NYC_Hotel bathroom mirror | an opaque unlit mirror against the original | - | missing: no stored original frame of 02_NYC_Hotel (only mirrors-play, Play against itself) | MISSING |
-| 4.2.20 | Fire.dll textures | fire and water textures, animated and auto-panned surfaces | O2 | `fire-texture-rust` [node], `native-fire-texture` [oracle], `fire-texture-play` [inline], `texture-animation-play` [worker], `native-texture-animation` [oracle], `native-surface-pan` [oracle] | INLINE |
+| 4.2.20 | Fire.dll textures | fire and water textures, animated and auto-panned surfaces | O2 | `fire-texture-rust` [node], `native-fire-texture` [oracle], `fire-texture-play` [worker], `texture-animation-play` [worker], `native-texture-animation` [oracle], `native-surface-pan` [oracle] | PASS |
 | 4.2.21 | detail textures | the D3DDrv detail pass equals the original body; Play draws it | O2 | `detail-pass` [oracle], `detail-pass-rust` [oracle], `detail-play-sim` [node], `detail-play` [worker] | PASS |
 | 4.2.22 | detail pass in a frame | Play's detail pass against a capture of the original with the pass poked in | - | missing: measured once (Jaccard 0.94 to 0.98 on five of six views, docs/frame-projection.md); those captures are not in a store the gate reads | MISSING |
 | 4.2.23 | lasers | LaserIterator.CurrentItem equals the original; the Island doorway beams draw | O2 | `lasers-play` [worker], `native-laser` [oracle] | PASS |
@@ -342,9 +342,11 @@ Nothing below was fixed in this task beyond wiring existing checks; each item is
    precision .695 to 1.13, .918, .794 (gate run: precision .757, the only threshold missed). **What is left in that window:** an NPC (red uniform) standing in the doorway in Play and absent in
    the original, and the locker doors on the back wall, drawn lighter in Play than in the original (movers closed in both). The first needs the NPCs' poses and animation as measured inputs
    too (a second original capture reading the pawns), the second a look at mover lighting in a camera frame; neither was done, so the row stays `FAIL`.
-4. **Three checks run in the wrong mode (`INLINE`: 4.2.12, 4.2.18, 4.2.20).** `validate-particles-play`, `validate-mirrors-play` and `validate-fire-texture-play` force
-   `?sim=inline`. Each passes; each needs a sim-side probe call (the way `decalProbe` does) so it runs in the default worker mode, after which three criteria
-   turn green with no new evidence. Small and mechanical.
+4. **Three checks ran in the wrong mode (`INLINE`: 4.2.12, 4.2.18, 4.2.20): done 2026-10-16.** `validate-particles-play`, `validate-mirrors-play` and `validate-fire-texture-play`
+   forced `?sim=inline`. They now run in Play's default worker mode with the same assertions: the particles check moves the player to ParticleGenerator3 and reads the
+   generator's iterator through a sim-side `particleProbe` (`decal-probe.mjs`, `sim-worker.mjs`, `deusExViewer.particleProbe`), the mirrors check places and hides the
+   player through the existing `placeProbe`, and the fire-texture check reads the page's own actor mesh layer and waits for the fires' first tick (in the worker the first
+   frame reaches the page after the simulation's first run). `--only '^4\.2\.(12|18|20)$'`: 19 checks, 3 PASS (514 s at 2 jobs).
 5. **Effects with a translation but no matched original frame (`MISSING` 4.2.13, .15, .17, .19, .22, .24, .26, .29, .30).** Each is one original capture session
    (the `.work/live` tree, `scripts/original-views.sh`) and one `frames` row: particles and sprites with the generator's state matched; a decal; `02_NYC_Bar`'s
    fog; the Hotel's bathroom mirror; the detail pass with the pass poked in; a laser beam; a held flash frame (underwater or drunk); a camera view with a mirror,

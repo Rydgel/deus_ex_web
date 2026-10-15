@@ -16,7 +16,7 @@ import { createDecalScene } from './decal-scene.mjs';
 import { createDetailScene } from './detail-scene.mjs';
 import { unpackDetail } from '../runtime/detail-draw.mjs';
 import { detailTexturesOn, modelSurfaceDetails } from '../runtime/detail-pass.mjs';
-import { decalProbe, placeProbe, laserProbe, meshLightProbe, renderPassProbe } from './decal-probe.mjs';
+import { decalProbe, particleProbe, placeProbe, laserProbe, meshLightProbe, renderPassProbe } from './decal-probe.mjs';
 import { viewProbe } from './view-probe.mjs';
 import { DECAL_LAYER } from './render-layers.mjs';
 import { createCoronaPass } from './corona-pass.mjs';
@@ -1484,6 +1484,11 @@ musicDrive(args) {
 decalProbe(args) {
   if (simClient) return simClient.call('decalProbe', args);
   return game ? decalProbe(game, args) : null;
+},
+/** Validation only: decal-probe.mjs particleProbe (a ParticleGenerator's iterator state) on the simulation side. */
+particleProbe(args) {
+  if (simClient) return simClient.call('particleProbe', args);
+  return game ? particleProbe(game, args) : null;
 },
 /** Validation only: view-probe.mjs (the original captures' camera commands)
  * on the simulation side. */
