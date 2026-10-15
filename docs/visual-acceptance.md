@@ -90,6 +90,13 @@ to a quarter turn) level, and one 3,000 units (16.5°) below the start yaw.
   (`pow(x, 1/(2.5·0.4))`) is the identity. The scene canvas is pinned to
   1280×720 at the page origin, and the page UI is hidden.
 
+**Detail textures are not in any stored original frame.** The original's `SetRes` clears `URenderDevice.DetailTextures`
+when the D3D7 device lacks `D3DTEXOPCAPS_BLENDDIFFUSEALPHA`, and Wine's ddraw lacks it
+([frame projection](frame-projection.md#detail-textures-the-pass-play-does-not-draw-2026-10-15)): every row of every table in
+this document was compared against a frame the original drew without the pass, whatever the ini says. A Play frame that
+draws it (it will once the port is wired in) differs by the pass's contribution (0.33 of 255 over the Island deck's frame, a
+dark scene, in the poked capture); a matched capture of the original with the pass is `--poke D3DRenderDevice0:0x78:1`.
+
 **Metrics** (`compare`, per view):
 
 - mean channel values and their ratio, Play over original;

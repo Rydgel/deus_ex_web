@@ -437,10 +437,13 @@ to D3DDrv's vertices: 694 tiles and 2,776 vertices bit-equal on the CPU and the 
 A mirror frame's sprites are measured in a browser too (2026-10-15, 11 sprite-frame pairs of
 the Paris club's wall mirrors inside their reference tiles, [frame projection](frame-projection.md#sprites-the-tile-the-render-device-receives)).
 The 380-unit clip the 2026-10-14 hand-off called the fog overlay's belongs to D3DDrv's
-detail-texture pass (`FSurfaceInfo.DetailTexture`); the fog map has none. **Play draws no detail
-textures** (37% of the shipped texture exports carry one; the original's ini and Render.dll gate
-enable the pass at TextureDetail=High): traced from the instructions, not yet ported or measured in
-the running original ([frame projection](frame-projection.md#detail-textures-the-pass-play-does-not-draw-2026-10-15)).
+detail-texture pass (`FSurfaceInfo.DetailTexture`); the fog map has none. **The original draws detail textures** on a device
+that reports `BLENDDIFFUSEALPHA` (37% of the shipped texture exports carry one); **Wine's does not, so every stored original
+capture lacks them** (measured 2026-10-15: `SetRes` clears the field, 0 of 1,860 surfaces entered the pass; with the field
+poked the pass runs and changes the frame). The pass runs unchanged under Unicorn and the Rust core's port matches it bit for
+bit (84 cameras, 465 fans, 2,068 vertices; `validate-detail-pass`, `validate-detail-pass-rust`); **Play does not draw it yet**
+(the sim-side wiring, the page's modulated draw, ZBIAS and the `?detailTextures=0` switch are the hand-off in
+[frame projection](frame-projection.md#detail-textures-the-pass-play-does-not-draw-2026-10-15)).
 Open: the detail-texture pass, DT_SpriteAnimOnce (unreachable in the shipped maps), clipped polygons' own
 vertices ([frame projection](frame-projection.md#unverified-and-open)), the
 darkest-pixel rounding visual acceptance found, and in live scenes (compared

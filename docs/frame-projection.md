@@ -758,10 +758,33 @@ with the original under Unicorn: 265 draw-list records, 465 fans, 2,068 vertices
 polygon scratch holds records of up to 256 polygons of up to 64 points (the shipped maps' largest are far below; a larger
 record is skipped, not truncated).
 
-**Still to do (Play):** the page's draw (modulated blend as recorded above, `BLENDDIFFUSEALPHA` over grey, `ZBIAS 15`), the
-sim side's call (the per-surface table from the map's textures, the frame's stream with points only for the polygons that
-can reach a layer, the fans in the snapshot), the switch for a device without the cap (`?detailTextures=0`), movers'
-surfaces (the tracker's, which the table does not cover).
+**Hand-off: Play's draw (not done).** What the next step has to build, from what the oracle recorded:
+1. *Sim side.* A per-surface table from the map's textures at load (`detailTable`; `surfaceDetails` in
+   `scripts/occlusion-request.mjs` is the Node version: the texture's `DetailTexture`, its first mip's size and its `DrawScale`
+   or `Scale`, and the browser needs the same from its TextureStore). OccludeBsp keeps the saved points only when option 0x100
+   is set; Play does not set it (the decals do when they have fragments). Emit points for the polygons of a surface whose
+   table flag is set, whose draw-list flags lack `0x04000000` and that have a vertex of view depth below 380 (`occlude.rs`'s
+   output loop, `options & 0x100` at the emit), run `detailRun` for the main frame and each mirror/sky child (their `fields`,
+   rectangle offset and the frame's `stamps.plan` pass id: [sim worker](sim-worker.md)), and ship the fans in the snapshot as
+   typed arrays reused between frames. The tracker's mover surfaces are not in the table (a mover with a detail texture draws
+   none: say so in the open list).
+2. *Page.* One draw per pass after the world's surfaces and before the actors (the original draws each surface's fans right
+   after the surface), vertices as D3D's (`fpClipOf(vec4(X, Y, depth, rhw), 1/rhw)` as the base surface; a clip vertex has
+   `rhw = 1/D`), in the **recorded states**: blend `ALPHABLENDENABLE`, `SRCBLEND = DESTCOLOR`, `DESTBLEND = SRCCOLOR` (so the
+   framebuffer becomes `2 * src * dst`), `ZWRITEENABLE` off, depth test less-or-equal, `ZBIAS 15`, stage 0 `COLOROP =
+   BLENDDIFFUSEALPHA`: the stage's colour is `mix(diffuse.rgb, texel.rgb, diffuse.a)` with the diffuse `0x808080` (so alpha 0 is
+   the identity: `2 * 0.5 * dst`) and the vertex alpha interpolated; the texture sampled as the base textures are
+   ([texture sampling](texture-sampling.md): the same stage state, LOD bias -0.5, wrap, `NoColorSpace`). Brightness and the
+   display ramp stay untouched: Play draws raw colours and ramps the finished frame, as D3D does.
+3. *ZBIAS.* Play has no depth bias. The original's `ZBIAS 15` is a 0..16 step the driver interprets; under Wine's ddraw it
+   becomes a constant depth bias (believed `-15 / 16000` in the 0..1 depth range, **not measured**), about 9 world units at 100
+   units from the camera, about 0.4 at 20: wide enough to pull a fan in front of anything within a few units of the surface
+   (a sign on a wall gets the wall's detail texture). Measure it against the poked Wine capture (`--poke D3DRenderDevice0:0x78:1`,
+   the same camera) with `polygonOffset` units tried around `-15 / 16000 * 2^24`, and say which value matches.
+4. *The switch.* `?detailTextures=0` models a device without the cap (no `detailRun`, as `SetRes` zeroing `+0x78` makes
+   `DrawComplexSurface` skip the pass); every Wine capture of the original lacks the pass, so every comparison with a stored
+   capture needs it, as it needs `?antialias=0`. List in [visual acceptance](visual-acceptance.md) which rows were taken without
+   detail (all), and check which validators compare Play pixels with stored captures.
 
 **Unverified (inputs the oracle takes, not derives):**
 the detail texture's `Lock` (Pan 0, UScale = DrawScale, first mip) and the cache's size choice (the first mip within the
