@@ -92,6 +92,7 @@ import { execScriptSpawn, spawnActor } from './script-spawn.mjs';
 import { createFlagBase } from './script-triggers.mjs';
 import { addPawn, removePawn } from './pawn-list.mjs';
 import { importText } from './config-text.mjs';
+import { importClassText } from './script-class-import-text.mjs';
 import { setActorZone } from './zone.mjs';
 import { prepareContextResults, zeroContextResult } from './script-context-results.mjs';
 import { cleanupScriptReferences, cleanupLevelDestroyed, cleanupSites, cleanupFields, cleanupImageSites } from './script-cleanup.mjs';
@@ -2305,6 +2306,39 @@ export class ScriptRuntime {
     this.processEvent(actor,name,args);
     return undefined;
   }
+  /** UClassProperty::ImportText (Core 0x10167110): UObjectProperty::ImportText
+   * (0x10166e20) with its metaclass check, for the text of a `class<...>`
+   * console parameter. ReadToken(Buffer, 0x400 chars, DottedNames 1); the
+   * token `None` stores None; spaces are skipped and ONE character is then
+   * consumed whatever it is; a quote there starts `Class'Package.Object'`
+   * (not linked: an explicit boundary), any other character leaves the token
+   * to StaticFindObject(PropertyClass, ANY_PACKAGE, token, 0), whose miss
+   * returns NULL. Back in UClassProperty::ImportText a found value that is not
+   * a UClass or not IsChildOf(MetaClass, +0x64) is cleared to None while the
+   * result stays non-NULL. Returns null for a NULL result, else the value and
+   * the characters consumed. StaticFindObject finds the classes Play has
+   * linked (the native object table holds every class of a loaded package;
+   * a class Play has not linked yet is an explicit boundary, not a miss). */
+  importClassText(rest,field,record) {
+    const path=field.metadata.metaClass?.path;
+    const metaKey=path?lower(path.includes('.')?path:`${record.key.split('.')[0]}.${path}`):null;
+    // StaticFindObject(UClass, ANY_PACKAGE, token, 0) over the linked classes.
+    const find=token=>{
+      const key=lower(token),dotted=key.includes('.');
+      const matches=[...this.linkedClasses].filter(cls=>dotted?cls.record.key===key:cls.record.key.split('.').pop()===key);
+      if(matches.length>1)throw new Error(`ScriptConsoleExec class name ${token} matches ${matches.length} linked classes (hash order is not recovered)`);
+      if(!matches.length)throw new Error(`ScriptConsoleExec class ${token} is not a linked class in Play; StaticFindObject would search every loaded package`);
+      return matches[0];
+    };
+    const result=importClassText(rest,{find,
+      isClassChildOf:found=>{
+        if(metaKey===null)return true;
+        for(let cls=found;cls;cls=cls.base)if(cls.record.key===metaKey)return true;
+        return false;
+      },
+      quoted:()=>{throw new Error(`ScriptConsoleExec Class'Package.Object' text is not recovered: ${field.key}`);}});
+    return result===null?null:{value:result.value?result.value.record:null,consumed:result.consumed};
+  }
   /** UObject::ScriptConsoleExec (Core 0x10150860, thunk 0x10101870): run an
    * exec command line such as a User.ini binding's `ActivateBelt 3` on
    * `receiver`. Returns false when the command names no exec function, true
@@ -2386,6 +2420,19 @@ export class ScriptRuntime {
         // token, which is not "None", and StaticFindObject finds nothing, so
         // the value is None and ImportText returns NULL.
         args[index]=null;imported=false;
+      }else if(field.metadata.type==='class'&&(field.metadata.arrayDim??1)<=1){
+        // UClassProperty::ImportText 0x10167110 = UObjectProperty::ImportText
+        // 0x10166e20, then the metaclass check (docs/script-console-exec.md).
+        const parsed=this.importClassText(rest,field,record);
+        if(parsed===null){args[index]=null;imported=false;}
+        else{
+          args[index]=parsed.value;at=Math.min(text.length,text.length-rest.length+parsed.consumed);
+          // The original's returned pointer can lie one wide char past the
+          // terminator; a parameter that follows would parse memory beyond the
+          // string, which has no source here.
+          if(text.length-rest.length+parsed.consumed>text.length&&index+1<fn.parameters.length)
+            throw new Error(`ScriptConsoleExec parameter after an object parameter that ends the text is not recovered: ${field.key}`);
+        }
       }else throw new Error(`ScriptConsoleExec ImportText is not linked for ${field.metadata.type} ${field.key}`);
       if(!imported){
         if(!field.metadata.optional){failed=true;this.warning?.({type:'ScriptConsoleExec',kind:'BadProperty',function:record.key,parameter:field.key});}
