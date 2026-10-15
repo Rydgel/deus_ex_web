@@ -250,9 +250,21 @@ blocks; over the MedKit in the reflection (40x40 +640+425) MAD 5.18, recall 1.00
 original, Play, Play without: the same box, handle and cross in the same hand).
 
 
+## A ViewportWindow's frame (security cameras, 2026-10-15)
+
+`DrawWorld` is one function for every root frame ([script-window-viewport](script-window-viewport.md#camera-pass): the window's frame goes through the same OccludeFrame and DrawFrame), so DrawActorSprite's
+weapon block runs for a pawn in the camera's Frame->Sprite exactly as for the main frame's, with the window frame's own Coords, Mirror 1 and PrjXM..PrjYP. Play's `updateFrame` (the second DrawWorld's actor update)
+now updates the weapons of the pawns in the frame after their pawns (`weapons.update(..., hideOthers = false)`), with the camera master frame's projection planes (`prj: seen.master.prj`), and the pass's
+decisions no longer hide a weapon binding whose pawn is in the frame and had a hand there (`weaponInRoot`: a weapon is in no Frame->Sprite of its own). A mirror inside the camera's view uses the same child-frame path as the main frame's.
+
+**Checked in Play** (`validate-terminals-camera-browser.mjs --expect weapons`, worker mode, 01_NYC_UNATCOIsland ComputerSecurity1: the Temp Holding Cell window of SecurityCamera5): the armed terrorists in the camera frame
+(Terrorist18 `WeaponPistol10`, Terrorist30 `WeaponPistol20`, Terrorist2 `WeaponPistol25` over the tries) each have a weapon binding drawn in the window's root frame (`frames [null]`), whereas before the step the
+window drew their bodies without it. **Not compared with the original's pixels**: those three terrorists walk and animate differently in the two programs (the matched window captures mask their region,
+[security cameras](visual-acceptance.md#security-cameras-2026-10-14)), and the debugger cannot be attached beside the terminal route's tracer; the evidence is the shared function and Play's own check.
+
 ## Open
 
-* **A ViewportWindow's frame** (a security camera's own DrawWorld) does not draw weapons: `updateFrame` leaves them out and the pass's decisions hide them.
+* **A ViewportWindow's frame against the original**: wired and checked in Play (below), not compared with the original's own camera window (the debugger and the terminal route's tracer cannot hold the game together).
 * **GPU path** for the weapon bindings (a few dozen vertices each; CPU path measured only by its pixels).
 * **Order of SetupForActor calls**: the original lights the pawn then its weapon in each frame; Play runs all of a pawn's frames, then the weapon's (the sink's per-actor cache is shared).
 * **An NPC in a mirror**: the same wiring as JC's (verified for JC in a mirror, both frames, `jcb`); no capture of the original has an armed NPC in a mirror yet (the maps' mirrors sit at

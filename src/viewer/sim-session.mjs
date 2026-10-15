@@ -760,9 +760,13 @@ export function createSimSession(game, { assets = null, events = [], exportName 
       pass.late = actorScene.updateFrame({ lit, frustum, camera: viewportCamera, cull: false, main: ids, children: childIds,
         ...(seen ? { lod: { ...seen.lod, fov: command.fov },
           lodFrames: childFrames ? lodFramesOf(seen.frames, command.fov) : null, lightFrames: childFrames ? lightFramesOf(seen.frames) : null,
+          // the camera frame's own PrjXM..PrjYP (its outcodes of a pawn's special vertices, docs/weapon-attachment.md)
+          prj: seen.master.prj,
           lightRoot: lit ? meshLighting.childFrame({ coords: seen.lod.coords, mirror: 1, planes: seen.master.planes }) : null } : {}),
         ...(framePack ? { pack: framePack } : {}) }, updateIds);
-      pass.decisions = new Map(actorScene.all().filter(binding => !ids.has(binding.id)).map(binding => [binding.id, { root: false }]));
+      // (a pawn's weapon is in the frame when its pawn is and had a hand there: it is in no Frame->Sprite of its own)
+      pass.decisions = new Map(actorScene.all().filter(binding => !(binding.attachedTo ? actorScene.weaponInRoot(binding, ids) : ids.has(binding.id)))
+        .map(binding => [binding.id, { root: false }]));
       // The child frames' passes, as the main frame's stamps() decides them:
       // each frame draws the actors its Frame->Sprite holds, lit and LOD-chosen
       // for it, in DrawFrame's order, and the camera's own frame again after.
