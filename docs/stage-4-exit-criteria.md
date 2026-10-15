@@ -40,7 +40,8 @@ A mode in brackets names how the check exercises Play (see [How the gate judges]
 | 4.1.8 | five campaign maps, 1,200 ticks | BatteryPark, Hotel, Market, Chateau and Area 51 Bunker: every actor equal | O1 | `sweep replay 5 maps` [worker] | FAIL |
 | 4.1.9 | 01_NYC_UNATCOIsland armed pawns | a pawn's third-person weapon: hand frame and Coords equal Render.dll, drawn in Play | O2 | `weapon-attach` [oracle], `weapon-play` [worker] | PASS |
 | 4.1.10 | Training first-person crowbar | the first-person weapon frame (view model, GPU camera passes) against the original | - | missing: only the selection (validate-weapon-lod) is compared with the original; no matched capture of the held weapon | MISSING |
-| 4.1.11 | mirrors and camera windows | an armed pawn or the player in a mirror child frame, a weapon in a camera window | - | missing: wired behind ?weaponMirrors=1, unverified: no original capture draws an armed pawn there (roadmap section 4 Open) | MISSING |
+| 4.1.11 | 05_NYC_UNATCOMJ12lab mirror | the player holding a pistol and a MedKit in a mirror child frame: the frame's planes and the Coords equal the running original's logged draws | O1 | `weapon-attach` [oracle], `weapon-mirror-play` [worker] | not yet run (added after the first run, master 88b6f96) |
+| 4.1.12 | an armed NPC in a mirror, a weapon in a camera window | an armed pawn in a mirror child frame and a weapon in a ViewportWindow against the original's frames | - | missing: wired and checked in Play (`terminals-camera-browser --expect weapons`); no original capture of an armed NPC in a mirror or of a camera window with an armed pawn | MISSING |
 
 ### 4.2 Effects
 
@@ -279,6 +280,11 @@ a frame and the clock beside it can come from different captures. Two cases show
 is paired with a later clock and Play differs in three blocks, while the capture in the worktree above, with its own 52.397 s clock, matches with
 none; and the Underworld's `d_s0` and `d_s1` frames predate the clock stored for their map (54.18 s), so they cannot be reproduced at all and
 4.2.30 is `MISSING` rather than failing for the wrong reason. A capture should write `<view>-time.txt` beside its frame.
+
+**Consolidated 2026-10-15** into the main checkout's `.work`: the pilot traces and the 28-map sweep's (`.work/live-acceptance`, from
+`agent-ab57e…`), the lab mirror capture (`.work/live-acceptance/05_NYC_UNATCOMJ12lab`), the Ship fan's `fan2` frame with its 52.397 s clock
+(`.work/acceptance/09_NYC_ShipFan`, the clock added to `.work/acceptance/times.json`), the Club dancers' `cvclub` frame and the four
+security-camera frames with their state; copied without overwriting anything already there. The paragraph below is the state before.
 
 **These need consolidating before the gate is anyone's routine.** Four of the stores are inside other agents' worktrees, which are removed
 when those agents' branches close, and the pilot traces of 2026-10-15 are the only ones that match the current master (the older pilot traces in

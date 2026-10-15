@@ -141,8 +141,10 @@ add('4.1.9', C1, '01_NYC_UNATCOIsland armed pawns', 'a pawn\'s third-person weap
   V('weapon-attach'), V('weapon-play'));
 missing('4.1.10', C1, 'Training first-person crowbar', 'the first-person weapon frame (view model, GPU camera passes) against the original',
   'only the selection (validate-weapon-lod) is compared with the original; no matched capture of the held weapon');
-missing('4.1.11', C1, 'mirrors and camera windows', 'an armed pawn or the player in a mirror child frame, a weapon in a camera window',
-  'wired behind ?weaponMirrors=1, unverified: no original capture draws an armed pawn there (roadmap section 4 Open)');
+add('4.1.11', C1, '05_NYC_UNATCOMJ12lab mirror', 'the player holding a pistol and a MedKit in a mirror child frame: the frame\'s planes and the Coords equal the running original\'s logged draws', 'O1',
+  V('weapon-attach'), V('weapon-mirror-play'));
+missing('4.1.12', C1, 'an armed NPC in a mirror, a weapon in a camera window', 'an armed pawn in a mirror child frame and a weapon in a ViewportWindow against the original\'s frames',
+  'wired and checked in Play (validate-terminals-camera-browser --expect weapons); no original capture of an armed NPC in a mirror (the maps\' mirrors miss a standing pawn\'s hands) or of a camera window with an armed pawn (docs/weapon-attachment.md Open)');
 
 // 4.2 Effects --------------------------------------------------------------------------------------------
 add('4.2.1', C2, '01_NYC_UNATCOIsland', 'sky, water, skyline and decorations, five frozen frames', 'O1', frozen(['01_NYC_UNATCOIsland']));
