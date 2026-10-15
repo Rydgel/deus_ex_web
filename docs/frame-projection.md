@@ -76,10 +76,13 @@ therefore `_33 * (1 - 1/Z)`: a perspective projection with near plane 1 and
 far plane 32767 over the device's [0, 1] depth range. Z-function LESSEQUAL;
 masked surfaces' later passes use EQUAL (`0x10003e09`, `0x10004203`), and
 the light-map and fog passes set `D3DRENDERSTATE_ZBIAS` 15 around their
-overlay (`0x10004a00`, back to 0 at `0x10004d01`); decals draw with no depth
-bias ([decals](decals.md#drawing)). The fog pass (`0x100048b9–0x10004aaf`)
-clips each polygon at view depth 380.0 (`0x43be0000`, `0x10004880`) before
-building its vertices.
+overlay; decals draw with no depth bias ([decals](decals.md#drawing)). The pass
+that clips each polygon at view depth 380.0 (`0x43be0000`, `0x10004880`) before
+building its vertices (`0x100048b9–0x10004cda`, ZBIAS 15 at `0x10004a00`, back to 0
+at `0x10004d01`) is the **detail-texture** pass (`FSurfaceInfo.DetailTexture`, `+0x18`),
+not the fog map's (`+0x1c`, `0x10004d39`), which has no depth clip; this was
+mislabelled until 2026-10-15. Play does not draw detail textures:
+[Detail textures](#detail-textures-the-pass-play-does-not-draw-2026-10-15).
 
 ## The oracle
 
@@ -632,6 +635,58 @@ rows, green last rows) the first row is on top in the reflection in all 8 probed
 flips left and right only). Moving the reference tile 8 pixels (`--mutate`) fails the
 comparison.
 
+## Detail textures: the pass Play does not draw (2026-10-15)
+
+The "fog overlay's clip at view depth 380" of the earlier hand-off is not the fog's. Reading D3DDrv's
+`DrawComplexSurface` (`0x10003900`) from the instructions: the block with the 380.0 constant (`0x10004880`)
+starts at `0x10004860` with `mov eax, [Surface + 0x18]` and `je 0x10004d39`; FSurfaceInfo is PolyFlags,
+FlatColor, Level, Texture (`+0xc`), LightMap, MacroTexture, **DetailTexture (`+0x18`)**, FogMap (`+0x1c`)
+(`UnRender.h`), so that block is the **detail-texture pass** and `0x10004d39` is the fog map's, which draws
+its polygons whole (it compares no depth). The fog overlay Play draws cannot differ from the original's for
+this reason. What can differ is that **Play draws no detail textures at all** (no `DetailTexture` in
+`src/viewer`). Traced, not run: this section is the hand-off for the pass; nothing of it is implemented or
+validated yet.
+
+**Whether the original draws it.**
+* Render.dll DrawFrame (`0x10b1a8df..0x10b1a92f`) builds `Surface.DetailTexture` (`[ebp - 0x8c]`, the struct at
+  `[ebp - 0xa4]`) when the surface texture's `+0x58` (UTexture.DetailTexture) is set, `PolyFlags & 0x04000000` is
+  clear, and `UBitmap::__Client->TextureLODSet[0]` (`[Client + 0x78]` by the `UClient` layout of `UnCamera.h`)
+  is 0 (`TextureDetail=High`, as the shipped DeusEx.ini and the Wine install's); it then
+  `Lock`s the detail texture (vtable `+0x54`, LOD -1) into `[ebp - 0x394]` and `Unlock`s it after the draw
+  (`0x10b1b38b..0x10b1b3a1`). The `D3DRenderDevice` section of both ini files has `DetailTextures=True`; whether
+  D3DDrv reads that field is not traced.
+* 846 of the 2,287 texture exports of `Textures/*.utx` carry a `DetailTexture` reference (37%).
+
+**The pass** (`0x10004860..0x10004d0b`, D3DDrv):
+* Three layers. Layer k uses fade distance `D = 380 * 0.2367985^k` (`0x10018640`: 380, 89.98, 21.31) and a texture
+  scale `4.223^k` (`0x10018644`: 1, 4.223, 17.83), both multiplied in place at the end of each layer
+  (`0x10004cb7..0x10004cd5`). `RHW_D = 1 / D` and the clip depth `RHW_D * _43 + _33` are computed once per layer
+  (`0x100048b9..0x100048db`).
+* Per polygon (the facet's saved polygons): a vertex is inside when its view depth `FTransform + 8` is below D
+  (`fcomp`, `0x100048f6`); a polygon with none inside is skipped (`0x1000491f`), otherwise the vertex buffer is
+  locked (32-vertex chunks, wrap at `0x1f40`) and a triangle fan is drawn (`0x10004c92`).
+* State, once per surface (`0x100049dc..0x10004a1e`): `SetBlending(0x40)` (PF_Modulated, destination times source),
+  texture stage 0 `COLOROP` = 12 (`D3DTOP_BLENDDIFFUSEALPHA`), `ZBIAS` 15, `SetTexture(0, DetailTexture)`; restored at
+  `0x10004cda..0x10004d0b`.
+* Vertices (0x24 bytes): an inside vertex repeats the base pass's X, Y, depth and RHW (the device's per-vertex
+  scratch at `+0xbfc..+0xc08`), with colour `0x808080 | min(255, round((D / Z - 1) * 100)) << 24`
+  (`0x10018648` = 100.0) and texture coordinates `(U_base - DetailTexture.Pan) * UScale * layerScale`
+  (`0x10004bd4..0x10004c2a`). An edge whose ends fall on different sides of D adds a Sutherland-Hodgman vertex:
+  `t = (Z_a - D) / (Z_a - Z_b)`, `s = 1 - t`, X = `(t * ScreenX_b * Z_b + s * ScreenX_a * Z_a) / D + XB - 0.5`
+  (Y alike with ScreenY and YB; `0x10004a72..0x10004aaf`), depth the layer's clip depth, RHW `1 / D`, colour
+  `0x808080` (alpha 0), and the texture coordinates mixed by t and s the same way.
+* So a layer fades the detail texture in from nothing at D to full strength by about `D / 3.55` (alpha
+  `100 * (D / Z - 1)` reaches 255), over a surface neutral grey (`0x808080` blended to the texture by that
+  alpha), modulated into the frame with ZBIAS 15.
+
+**To do it:** an oracle case on `native-frame-projection-oracle.py` `draw_complex_surface` (surface `+0x18` a
+detail FTextureInfo with Pan, the vertex buffer read past the base pass) for the vertices and the clip; the
+port (CPU reference, then GLSL with the barrier); Play's pass (a second draw of the lit surfaces within D
+with the modulate blend, three layers, the alpha above); and the Render.dll gate above, the `DetailTextures`
+device field and the measurement in the running original (`--cw-probe` style breakpoint on `0x100048b9`) that
+this report did not make. Unverified until then; the visual-acceptance captures were taken with the original's
+shipped configuration and may already contain it.
+
 ## Unverified and open
 
 * **Clipped polygons.** The original draws the Sutherland-Hodgman clipped
@@ -644,9 +699,10 @@ comparison.
   A mirror frame's sprites are measured in a browser since 2026-10-15 (above). Open there:
   DT_SpriteAnimOnce's frame, texture LOD other than 0, the colour D3DDrv packs, a sky frame's
   sprites in a browser, a ViewportWindow's sprites (camera billboards). **Lasers** are meshes on the chain's
-  mesh path, not separately measured. **The fog overlay's clip at view depth 380**
-  (D3DDrv clips each fog polygon there before building its vertices) is not
-  reproduced: the fog mesh projects its surface's unclipped vertices.
+  mesh path, not separately measured. **The fog map has no clip at view depth 380**
+  (the fog pass, `0x10004d39`, compares no depth); the clip at 380 is the
+  **detail-texture** pass's, which Play does not draw at all:
+  [Detail textures](#detail-textures-the-pass-play-does-not-draw-2026-10-15).
   ViewportWindow camera frames keep
   the camera's projection (their camera is posed from Coords as well): measured
   against the original's own security-camera frames, drawing a window through the
