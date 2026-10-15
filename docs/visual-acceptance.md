@@ -621,8 +621,9 @@ was built afterwards). It was not deliberately reproduced; every later run (more
 Live runs start from the map's own start pose (only `ViewRotation` may be set). Reaching other places by the original's own movement did not
 work here: posted `W` and `Up` key events (`down`/`up`, held 2.5 s) did not move a ghost (Location unchanged, Physics 4; unexplained, a
 guess is that the game drops held keys while its window is unfocused), and after `set DeusEx.JCDentonMale Velocity (X=-300,Y=-135,Z=0)` the
-first read, seconds later, showed Velocity 0 and Location unchanged. So the
-Club's dancers, 2,300 units away behind walls, are not in view in any live run yet.
+first read, seconds later, showed Velocity 0 and Location unchanged. Nothing had to move: the camera can
+follow another actor without touching any actor, and that is how the Club's dancers, 2,300 units away behind walls, came
+into view ([Pilot 4](#pilot-4-10_paris_club-dancers-in-view-2026-10-15)).
 
 ### Pilot 1: 01_NYC_UNATCOIsland (2026-10-11 to 13)
 
@@ -666,8 +667,8 @@ being viewed:
   and by tick 300 18 of the 19 have `bStasis` set (cleared at load; `bForceStasis` is set for all 19), so `AActor::InStasis` (time since
   `LastRenderTime` over 5 s, distance over 1,200 or the zone unseen) returns true and their animation is not advanced: the dancers' `Dance`
   stays at AnimFrame -0.0833 (Female3 -0.1) on both sides to tick 600, `Tween` 0.28. The two agree, but this is the stasis gate, not the dance: **the
-  dancing animation is not compared.** It needs a view (or placement) the original can reach without `set Location`; a rotation of the view
-  cannot see through the walls. Island is no different at the start pose: 45 of its 58 NPCs are in stasis at tick 600 (3 are rendered, 13 never enter it);
+  dancing animation was not compared in this pilot** (it is in [Pilot 4](#pilot-4-10_paris_club-dancers-in-view-2026-10-15): a camera that follows another
+  actor renders the dancers without moving anything; a rotation of the view alone cannot see through the walls). Island is no different at the start pose: 45 of its 58 NPCs are in stasis at tick 600 (3 are rendered, 13 never enter it);
   the pilot's evidence is in the 36 that move.
 - A view-dependent field matters here, so it is reported as view-dependent rather than forced: `LastRenderTime`, `bStasis`, and what
   `ScriptedPawn.Tick` gates on `LastRendered()`/`DistanceFromPlayer` (`bCheckPlayer`, `bCheckOther`, low-priority work, ScriptedPawn.uc).
@@ -1003,6 +1004,26 @@ constant 0.0.
     60 flipped at every step; each also drew a dancer lit by the same light, whose SetupForActor flips the flag first, or a strobe-lit surface in the main frame). With the dancers hidden and the camera aimed
     at the floor mirrors, 230 units from the light, the scene exists: [Strobe in child frames](#strobe-in-child-frames-2026-10-14).
 
+20. **Console parameters of type `class<...>` were not parsed (fixed, 2026-10-15; found by the Pilot 4 camera command).** `PlayerPawn.CheatView(class<actor> aClass)` and `ViewClass` stopped at
+    `ScriptConsoleExec ImportText is not linked for class`. The original path is `UClassProperty::ImportText` (vtable `0x10175ec4` slot `+0x84`, thunk `0x10101190`, body `0x10167110`) over `UObjectProperty::ImportText`
+    (`0x10166e20`: `ReadToken(.., 0x400, DottedNames 1)`, `None`, spaces skipped and one character consumed whatever it is, `StaticFindObject(PropertyClass, ANY_PACKAGE, token, 0)`, a quote starting
+    `Class'Package.Object'`), then the metaclass check (the value must be exactly a `UClass` and reach `[property+0x64]` through SuperField `+0x28`, else it is cleared to None). Translated in
+    `src/runtime/script-class-import-text.mjs`; `scripts/native-class-import-oracle.py` runs the unchanged DLL body through the real vtable slot over a fixture of named objects, and
+    `scripts/validate-class-import-text.mjs` compares 28 texts (pointer returned, value stored, every `StaticFindObject` argument): equal, 12 found, 3 cleared by the metaclass check, 10 NULL; the same validator
+    runs `CheatView` in Play (00_Training: first actor of the class, cycling, back to None, bBehindView). Evidence and the explicit boundaries (the quoted spelling, a class Play has not linked,
+    a parameter after one that ends the text: the original's pointer lies one character past the terminator): [console exec](script-console-exec.md#class-parameters-2026-10-15).
+21. **A pawn's third-person weapon is not drawn (open, found 2026-10-15 in the Island close view; not fixed).** Evidence. *The frame*: the only difference between the original's and Play's
+    frames of the Island view is a metal object with two screwed lugs at the pawn's right hand (diff image, cropped and brightened). *The weapon actor is hidden in both programs*: the
+    original (`DX_POST` in `live-original.sh`, `dump-actor-win.exe` on the running game) reads `Terrorist22.Weapon = WeaponPistol13` with `Mesh = Glock` (the first-person mesh), `bHidden 1`, `bOnlyOwnerSee 1`,
+    `Owner`/`Base`/`Instigator` the pawn and `Location` the pawn's (Play: the same name and values; `Inventory.BecomeItem`). So the drawn object is not the hidden actor being drawn as an actor. *Render.dll draws it from the pawn's own
+    draw*: the mesh branch after the pawn's `FDynamicSprite` (`0x10b25675..0x10b25cab`) tests `[0x10b4eb10]`, walks the actor's class chain to `[0x10b5d698]` (APawn), reads `Pawn.Weapon` (`+0x3d0`, `0x10b256a3`)
+    and, regardless of `bHidden`, **swaps `Weapon.Mesh` (`+0x174`) with `ThirdPersonMesh` (`+0x36c`), `DrawScale` (`+0x17c`) with `ThirdPersonScale` (`+0x370`), the byte `+0x165` with `+0x3a2`, `+0x16c` with `+0x3ac`**, zeroes the
+    weapon's Rotation (`+0x120`), builds FCoords from `[0x10b4ea08]` (unit coords) and the weapon's Location, takes the poly flags from `0x10b26230`, draws it with `0x10b01221` (the mesh draw) and swaps everything back; a second block (`0x10b25a74`,
+    `Pawn+0x558`, the carried decoration) does the same for a carried decoration. Read from the disassembly; no breakpoint at `0x10b256a3` in the running original was made, and the weapon mesh `Glock3rd` (`ThirdPersonMesh`)
+    was not identified in the frame by pixel. *Play*: nothing reads `ThirdPersonMesh` except preparing the meshes (`script-doors.mjs`), so no armed pawn's weapon is drawn and no carried decoration is drawn at the hand.
+    Hand-off: a weapon binding in `actor-mesh-sim.mjs` (`createMeshBinding` reads the actor's Mesh once; render.rs `mesh_reads` reads `+0x174`) that takes the swapped fields while the pawn is drawn, in the original's order
+    (after the pawn, inside its draw, so SetupForActor's cache order follows), then a frame comparison of this view (`--tag cvisl`, 12 `CheatView DeusEx.Terrorist`, `--render-history`) and of any armed pawn close in view.
+
 ### Weapon noise (2026-10-14)
 
 **Question.** The perception pilot compared a visible player that never fired or made a noise. Do NPCs hear the player's gunshots as the
@@ -1080,13 +1101,13 @@ function `AICanHear` and the score callbacks are exercised with the shots at 300
 
 It shows, per tick and with the original's own inputs, that Play's live NPC code agrees with the original for 59 of 59 Island actors, 20
 of 20 Club actors and 50 of 50 Underworld actors over ten seconds (master bcff6b0, each replay of the original's trace of the load it was
-taken from), including animation (the Underworld's six dancers and its walkers, the Island's
+taken from; re-run 2026-10-15 on master 9fb73f2 with fresh originals: 88, 22 and 50, [above](#re-run-on-master-9fb73f2-2026-10-15)), including animation (the Underworld's six dancers and its walkers, the Island's
 walkers), timers, state changes and the stream's use. It found defects the frozen acceptance and the unit oracles missed because they ran
 the player or looked at one frame: calcVelocity (1), physWalking (2), the first path choice (3), the render feedback that sets
 `LastRenderTime` and the zone times (8, 9), the pawn rotation step (10), the page's missing glass (11) and animated TriggerLights (12). It does not show:
-the dancers' animation where no one sees them (the Club: stasis, above); patrols past the first path choice, any NPC beyond 600 ticks, combat, conversations, anything
-that needs the player to move or act; lights and particles (the frame at tick 600 has none in view that move); frames with a pawn
-in view (Island's start view has none close). The comparison is replay-synchronised: it cannot say that two free-running games would
+patrols past the first path choice, any NPC beyond 600 to 1,200 ticks, combat, conversations, anything
+that needs the player to move or act; lights and particles (the frame at tick 600 has none in view that move); a pawn's carried weapon in a frame
+(Divergence 21) and the BatteryPark load of the sweep (above). Pawns close in view, and the Club's dancers animating in view, are compared since Pilot 4. The comparison is replay-synchronised: it cannot say that two free-running games would
 look alike, only that, given the same inputs, Play's tick computes the original's result. Everything above runs on one Wine/D3D host.
 
 ### Sweep: 28 maps, 1200 ticks each (2026-10-13)
@@ -1234,6 +1255,67 @@ unchanged), and Terrorist5's pick (BatteryPark load 3: the same XY, Z 380.23 in 
 equal for both (the pick makes the same draws), so the difference was in the band search's test moves in the world (`MoveActor` with `bTest`), not in
 the draws. MedicalBot0's is fixed (Divergence 16); Terrorist5's is not (BatteryPark load 3, and Terrorist7 in a 150-tick load at tick 49 with Z 363.9 against 363.8).
 
+### Re-run on master 9fb73f2 (2026-10-15)
+
+**Pilots**, fresh originals (`live-original.sh`, the Wine lock, population exact: the Club's first load held `FlyGenerator0`, which Play's seeded load lacks, and
+was reloaded once), 600 ticks at 1/60 s, seed 1, every watched field per tick, the level clock and the stream draws of every tick:
+
+| map | watched | equal for 600 ticks | clock | stream draws per tick |
+| --- | ---: | ---: | --- | --- |
+| 01_NYC_UNATCOIsland | 88 (58 pawns, the player, generators, carcasses and the timed actors of the load-time inputs) | 88 | equal | equal |
+| 10_Paris_Club | 22 (19 NPCs, the player, 2 RatGenerators) | 22 | equal | equal |
+| 06_HongKong_WanChai_Underworld | 50 (47 pawns, the player, 2 fish generators) | 50 | equal | equal |
+
+(The draw-count differences of two of the 2026-10-14 re-runs, unattributed then, did not recur in these three fresh originals: still unexplained, not seen.)
+
+**The sweep's stored traces, replayed in Play only** (`node scripts/live-sweep.mjs replay --from <the earlier tree's .work/live-acceptance>`; the 28 originals of the
+2026-10-13 sweep are linked, their watch and population lists taken tagged when the earlier tree kept them tagged; the replay is the same inputs on the current code): **957 of 989
+watched actors equal over 1,200 ticks, 27 of 28 maps equal for every actor.** Per sweep group: group 1's maps 05_NYC_UNATCOMJ12lab 58/58, 06_HongKong_MJ12lab 54/54,
+14_Oceanlab_Silo 32/32; group 2's 02_NYC_Street 45/45, 02_NYC_Warehouse 32/32, 09_NYC_Dockyard 34/34; group 3's Market 46/46 and Metro 61/61; group 4's Mole People
+31/31; group 5's 15_Area51_Bunker 44/44 (its `@player` ViewRotation roll difference at tick 901 is gone too); the other 17 maps as before. **02_NYC_BatteryPark, the sweep's
+first bad load, is the one that does not: 32 of 64 equal** (32 pawns differ from tick 13 to 70, UNATCOTroop2 `State`, Terrorist5 `Loc`, ...; tick 1 draws original 201,
+Play 199; `FlyGenerator4` only the original holds). It is now a replay, not a story about loads that do not repeat.
+
+*What was found about it.* Play's per-actor draws of that replay (`--draw-trace`) put 24 of tick 1's 199 on `Trashbag1`, which
+ticks before every pawn the replay diverges on (Rats, ChildMale0, JunkieMale2, then `Trashbag1`, then the pawns; the equal actors are the ones before it), and a script trace of it
+(`--script-trace Trashbag1`) shows `Tick`, `FellOutOfWorld`, `Destroyed` (Containers.Destroyed, bytecode dumped with `dump-script-function.mjs`: `for i<4: if FRand() < 0.75 { three FRand
+for the offset; Trash = Spawn(TrashPaper, Loc); if Trash != None { SetPhysics, RotRand, VRand } }`, then `if FRand() < 0.5 { Spawn(Rat) }`): in Play the first `Spawn` returned None and the second
+succeeded (11 FRand, one RotRand, one VRand). A pawn after it that reads two draws more or fewer wakes on another tick, which is the sweep's pattern, so **the working
+hypothesis is that Spawn(TrashPaper) (or the Rat) succeeds or fails at a location in the original's bad load where Play's does not (another spawn collision answer), 2 draws
+apart**. Not verified: the original's own `SpawnActor` results for that load do not exist (the load is not repeatable) and no original `call` log of it was kept.
+Two fresh BatteryPark loads with the per-actor attribution armed (`--actor-trace 1:1`, call breakpoints on the CRT draws and on `ULevel::SpawnActor` `0x10394f60`, Play replayed on each):
+both **equal** (bp1: 194 and 194 draws on tick 1, 64 of 64 pawns equal over 80 ticks, `Rat0`/`Rat4` swap one draw as before: Play 2/0, original 1/1; bp2: 207 and 207, `Trashbag1` 31
+and 31, 64 of 64 equal); 16 good loads against 2 bad overall. The next step is a `SpawnActor` call log (`call 0x10394f60`) of a bad load when one shows, compared with Play's spawn results at
+`Trashbag1`'s location, or a spawn-collision oracle at that location.
+
+### Pilot 4: 10_Paris_Club, dancers in view (2026-10-15)
+
+**How the view was reached without moving anything.** `PlayerPawn.CheatView(class<actor>)` (exec, needs `bCheatsEnabled`) makes the first actor of the class the player's `ViewTarget` and sets
+`bBehindView`; `DeusExPlayer.PlayerCalcView` then takes `Super.PlayerCalcView`, and `PlayerPawn.CalcBehindView(Dist 180)` puts the camera 150 units behind the target along the player's own
+`ViewRotation` (a `Trace` shortens it). `set ...ViewRotation` is the only other command. No actor is moved, `set Location`/`Region` is not used, and the player stays where the
+map put it (`live-acceptance.mjs --early-cmds "CheatView DeusEx.Female4|set DeusEx.JCDentonMale ViewRotation (Pitch=0,Yaw=49152,Roll=0)"`: typed into the original in the frozen phase,
+run in Play after its placement). The view renders three dancers from the first frame, so `LastRenderTime` stays current, `bStasis` is set and `AActor::InStasis` is false.
+Play stopped at `ScriptConsoleExec ImportText is not linked for class` before any of it: [Divergence 20](#divergences-found).
+
+| View | ticks | actors equal | the dancers | stream draws | frame at the last tick (`--shot`, `?detailTextures=0`, held level) |
+| --- | ---: | ---: | --- | --- | --- |
+| A: behind Female3 (`Female4`), looking along -y: Female3 150 units ahead, Nurse0 and Businessman5 in line beyond | 600 | 22 of 22 | Female3, Nurse0, Businessman5: rendered at 600 of 600 ticks, 600 distinct AnimFrames each (`BreatheLight`, then `Dance`), the frame advancing at 599 of 599 steps, Rotation 11, 79 and 64 distinct values (they turn); Hooker0, out of view: 2 distinct frames, in stasis | equal | ratio 1.308, mean abs. diff. 2.93, edge recall .988, precision .990, sub-pixel (0, 0), 0 outlier blocks (block ratio 1.131 to 1.409) |
+| B: behind Businessman5 (`Businessman1`), looking along +y, pitch -1500 | 300 | 22 of 22 | the same three, 300 of 300 ticks rendered, 300 distinct frames each | equal | 1.309, 2.92, .988 / .986, (0, 0), 0 outlier blocks (1.126 to 1.426) |
+
+The same trace of the Club's earlier pilot (start view): the dancers were rendered at **0** of 600 ticks and held 2 distinct AnimFrames. **Every watched field of every NPC, the dancers'
+`AnimSequence`, `AnimFrame`, `AnimRate`, `TweenRate`, flags, blend channel and Rotation among them, is equal per tick while they dance in view**, and the frames agree outside the known
+uniform gap (the ratio): the dancers' meshes close in the frame (Female3 fills a fifth of its width) have the original's pose, skin and lighting.
+
+**An Island scene (third view), and what it found.** `CheatView DeusEx.Terrorist` twelve times (the 12th Terrorist of the actor array is `Terrorist22`, standing in a room at (2954, -271, 1088)) with yaw 40000, pitch -1000:
+Play and the original show the same pawn from behind at 150 units, a barrel and brick walls; 300 ticks, **88 of 88 actors equal and the stream draws equal** once the original's render history is
+a measured input (`--render-history`: the frames the original drew while the twelve commands were typed, and the start view's, stamped other pawns' `LastRenderTime`, which Play, replaying one
+view, cannot repeat: 19 actors differed in `LastRenderTime` from tick 1, and the stream at tick 21, without it; the stasis gate reads that field for 5 s). The frame: ratio 1.311, mean abs. diff. 3.30, edge recall
+.958 / precision .986, sub-pixel (0, 0.125), 0 outlier blocks, and **one difference the diff image isolates: the original draws a small metal object (the pawn's pistol, below) at the
+pawn's right hand and Play draws nothing** ([Divergence 21](#divergences-found)).
+
+**Not covered.** A moving camera (the held tick's pose is compared; a view that follows a walking pawn is the same code but was not run), pawns that fight or are shot while close, and the
+Underworld's dancers from close (its start view renders them at a distance).
+
 ### Running it
 
 ```bash
@@ -1252,6 +1334,13 @@ node scripts/live-acceptance.mjs play --map <map> --seed 1 --tag name --shot nam
 node scripts/live-acceptance.mjs compare --map <map> --tag name                                         # clock, stream, Strobe flips, every field
 node scripts/live-sweep.mjs run --maps a,b,c --ticks 1200 --max-seconds 300 [--allow-missing all]   # a sweep over maps (one original at a time)
 node scripts/live-sweep.mjs report [--json .work/live-acceptance/sweep-2026-10-13.json]        # the table and the ranked groups
+node scripts/live-sweep.mjs replay --from <tree>/.work/live-acceptance [--maps a,b] [--force]    # Play only: the stored originals of an earlier sweep replayed on the current code
+# a camera that follows another actor, no actor moved (the same --early-cmds and --render-history on `original` and `play`; --shot for the frame):
+DX_HYPRLAND=1 scripts/live-original.sh 10_Paris_Club --ticks 600 --delta 0.0166666675 --monitor 20 --shot cv --tag cv --early-cmds "CheatView DeusEx.Female4|set DeusEx.JCDentonMale ViewRotation (Pitch=0,Yaw=49152,Roll=0)"
+node scripts/live-acceptance.mjs play --map 10_Paris_Club --seed 1 --tag cv --shot cv --early-cmds "<the same>" [--render-history]
+node scripts/live-acceptance.mjs snap --map <map> --exec "CheatView ...|set ..." --run-frames 120 --name v.png        # a Play frame of such a view (to choose it)
+node scripts/live-acceptance.mjs read --map <map> --names A,B --props P,Q [--run-frames N] [--offsets]            # what Play holds (or the linked offsets for dump-actor-win.exe)
+DX_POST=script.sh scripts/live-original.sh <map> ...                                                              # a script run with the original still up (dump-actor-win.exe on its actors)
 node scripts/live-draw-shift.mjs --map <map> --tag <tag>        # the first pawn whose StartUp Sleep draw has another stream index in Play (needs LatF in the trace)
 node scripts/live-draw-attr.mjs --map <map> --tag <tag> [--actor mib1]   # tick 1's draws per actor and call site (original --actor-trace 1:1 and the CRT call breakpoints)
 # a pick-by-pick comparison (the pick calls config: docs/script-pawn-nav.md): the original with --extra-config pick.cfg, Play with --nav-trace A,B --nav-ticks 1:150, then

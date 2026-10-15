@@ -5,6 +5,8 @@
 //   node scripts/live-sweep.mjs run --maps a,b,c [--ticks 1200] [--max-seconds 300] [--seed 1] [--tag sweep] [--out .work/live-acceptance/sweep.json] [--force]
 //        [--allow-missing generators]   # go on when the only actors Play's load lacks are generators (chosen by chance at each load); they are not watched
 //   node scripts/live-sweep.mjs report [--out ...]      # the table, the ranked groups and the skipped maps, as markdown on stdout
+//   node scripts/live-sweep.mjs replay --from <dir> [--maps a,b,c] [--tag sweep] [--out ...] [--force]   # Play only: replays the stored original traces
+//        # of an earlier sweep (<dir>/<map>/original-trace-<tag>.jsonl, watch.json, population.json; linked, the originals are not touched) and compares
 //
 // Pipeline: Play's population probe of map k+1 and Play's replay of map k run in Chromium while the original runs map k+1 (one Wine
 // game, one headless browser at a time). A map whose original does not load, never matches Play's population, crashes or yields too
@@ -12,7 +14,7 @@
 // cuts a slow map's ticks (the tracer's `max-seconds`) instead of stalling the sweep. Results accumulate in the JSON (a finished map is
 // not repeated without --force).
 import {spawn, execFileSync} from 'node:child_process';
-import {existsSync, mkdirSync, readFileSync, writeFileSync, createReadStream} from 'node:fs';
+import {existsSync, mkdirSync, readFileSync, writeFileSync, createReadStream, readdirSync, symlinkSync, copyFileSync} from 'node:fs';
 import {createInterface} from 'node:readline';
 import path from 'node:path';
 import {fileURLToPath} from 'node:url';
@@ -164,6 +166,43 @@ function groups(list, key) {
   return [...by.entries()].map(([k, items]) => ({key: k, actors: items.length, maps: new Set(items.map(i => i.map)).size, items}))
     .sort((a, b) => b.maps - a.maps || b.actors - a.actors);
 }
+// Play only: the traces of an earlier sweep (`--from`, normally another checkout's .work/live-acceptance) are linked into this tree's map
+// directories and replayed with the current code; nothing new is asked of the original. An earlier sweep wrote the watch list as
+// watch.json (not watch-<tag>.json), which is copied under the tagged name.
+async function replaySweep() {
+  const from = path.resolve(root, option('from', ''));
+  if (!option('from', '') || !existsSync(from)) { console.error('usage: live-sweep.mjs replay --from <dir with <map>/original-trace-<tag>.jsonl> [--maps a,b,c]'); process.exit(2); }
+  const listed = (option('maps', '') || '').split(',').filter(Boolean);
+  const maps = listed.length ? listed : readdirSync(from).filter(name => existsSync(path.join(from, name, `original-trace-${tag}.jsonl`))).sort();
+  const data = load();
+  data.ticks = ticks;
+  const todo = maps.filter(m => flag('force') || data.maps[m]?.status !== 'ok');
+  log(`${todo.length} maps to replay (${maps.length - todo.length} already done): ${todo.join(' ')}`);
+  for (const map of todo) {
+    const dir = mapDir(map), src = path.join(from, map);
+    mkdirSync(dir, {recursive: true});
+    for (const name of [`original-trace-${tag}.jsonl`, `original-trace-${tag}.jsonl.strobe`]) {
+      if (existsSync(path.join(src, name)) && !existsSync(path.join(dir, name))) symlinkSync(path.join(src, name), path.join(dir, name));
+    }
+    // the sidecars of the traced run: watch-<tag>.json and population-<tag>.json when the earlier tree kept them tagged (a later run of the map
+    // overwrote the untagged files), else the untagged ones; always overwritten here, a stale copy of another load's list would be a different replay
+    const sidecar = base => [`${base}-${tag}.json`, `${base}.json`].find(name => existsSync(path.join(src, name)));
+    for (const [base, to] of [['watch', [`watch-${tag}.json`, 'watch.json']], ['population', [`population-${tag}.json`]]]) {
+      const name = sidecar(base);
+      if (name) for (const target of to) copyFileSync(path.join(src, name), path.join(dir, target));
+    }
+    if (!existsSync(path.join(dir, `original-trace-${tag}.jsonl`))) { log(`${map}: no stored trace`); continue; }
+    const entry = data.maps[map] = {map};
+    log(`${map}: replay`);
+    const t0 = Date.now();
+    const cmp = await replayAndCompare(map);
+    if (cmp.error) { entry.status = 'play-error'; entry.reason = cmp.error; log(`${map}: PLAY ERROR ${cmp.error}`); }
+    else { Object.assign(entry, await summarise(map), {status: 'ok', replaySeconds: Math.round((Date.now() - t0) / 1000)}); log(`${map}: ${entry.equal}/${entry.watched} equal over ${entry.ticks} ticks, ${entry.diverging.length} diverging`); }
+    save(data);
+  }
+  log('replay finished');
+}
+
 function report() {
   const data = load();
   const maps = Object.values(data.maps), ok = maps.filter(m => m.status === 'ok');
@@ -210,5 +249,6 @@ function report() {
 const fmt = v => Array.isArray(v) ? `(${v.map(fmt).join(', ')})` : typeof v === 'number' ? String(+v.toPrecision(7)) : String(v);
 
 if (verb === 'run') await runSweep();
+else if (verb === 'replay') await replaySweep();
 else if (verb === 'report') report();
-else console.log('usage: live-sweep.mjs run --maps a,b | report');
+else console.log('usage: live-sweep.mjs run --maps a,b | replay --from <dir> | report');

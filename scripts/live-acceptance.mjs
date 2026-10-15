@@ -36,6 +36,7 @@ const root = fileURLToPath(new URL('..', import.meta.url));
 const option = (name, fallback) => { const i = process.argv.indexOf(`--${name}`); return i < 0 ? fallback : process.argv[i + 1]; };
 const flag = name => process.argv.includes(`--${name}`);
 const verb = process.argv[2];
+const earlyCommands = () => (option('early-cmds', '') ?? '').split('|').map(line => line.trim()).filter(Boolean);
 const map = option('map', '10_Paris_Club');
 const dir = path.join(root, '.work/live-acceptance', map);
 mkdirSync(dir, {recursive: true});
@@ -82,6 +83,10 @@ const FIELDS = [
 ];
 // The load-time draws of the pawns (see GENERATOR_FIELDS): label of FIELDS -> written into Play's pawn before the first tick.
 const PAWN_LOAD_FIELDS = ['Sight', 'TRate', 'TCount'];
+// --render-history: also each pawn's LastRenderTime at the original's last frozen tick. The frames the original drew before the tracer attached
+// (the start view, and every view a typed --early-cmds line passed through) stamped it; Play replays one view, so the older stamps are a measured host
+// input (the stasis gate reads them for 5 seconds: AActor::InStasis, docs/script-actor-tick.md). Compared from tick 1 on like every field.
+const renderHistoryFields = () => flag('render-history') ? [...PAWN_LOAD_FIELDS, 'LRT'] : PAWN_LOAD_FIELDS;
 // --perception: what carries a ScriptedPawn's perception and reaction (ScriptedPawn.CheckEnemyPresence/CheckCycle/UpdateReactionLevel, the
 // HandleXxx reactions, SeekPawn/SeekLevel, the agitation and alarm timers), at the linked offsets Play's slotOf gives (liveProbe offsets with
 // offsetMasks: bool properties give their UBoolProperty::BitMask) and the first eight AlliancesEx entries (name, AllianceLevel, AgitationLevel;
@@ -183,7 +188,10 @@ async function original() {
     // --no-ghost: the player stays a normal visible player at the map's start (the perception pilot); --player-alliance NAME: `set` of the player's
     // Alliance (non-location, so safe in a level that then ticks): NPCs that hate NAME see the player as one of them.
     post(['cmd set DeusEx.JCDentonMale bCheatsEnabled True', 'sleep 200', ...(flag('no-ghost') ? [] : ['cmd ghost', 'sleep 200']), 'cmd ShowHud False', 'sleep 500',
-      ...(option('player-alliance', null) ? [`cmd set DeusEx.JCDentonMale Alliance ${option('player-alliance')}`, 'sleep 500'] : [])]);
+      ...(option('player-alliance', null) ? [`cmd set DeusEx.JCDentonMale Alliance ${option('player-alliance')}`, 'sleep 500'] : []),
+      // --early-cmds "line|line": console lines typed in the frozen phase, before the tracer attaches (Play runs the same lines after its placement). They must
+      // not move or re-hash an actor: `CheatView <class>` (the camera follows another actor, PlayerPawn.CalcBehindView) and `set ...ViewRotation` are the intended use.
+      ...earlyCommands().flatMap(line => [`cmd ${line}`, 'sleep 600'])]);
     // The window is placed (floating, 1280x720, inside the screen) before the tracer attaches, with a throwaway shot (the
     // first frame after a resize is stale): a resize while the tracer holds the level did not take (2026-10-13).
     if (option('shot', null) && process.env.DX_HYPRLAND === '1') {
@@ -453,7 +461,7 @@ async function withPlay(body) {
 
 // snap --at x,y,z [--pitch p --yaw y]: a Play frame from that place, to choose a camera.
 async function snap() {
-  const location = option('at', null)?.split(',').map(Number);
+  const location = option('at', null)?.split(',').map(Number) ?? null;
   const rotation = [Number(option('pitch', 0)), Number(option('yaw', 0)), 0];
   await withPlay(async ({page, frames}) => {
     await page.addStyleTag({content: `.toolbar, footer, #toast, #play-hint, #npc-preview-label, #panel, #crosshair, #gate { display: none !important; }
@@ -461,9 +469,17 @@ async function snap() {
 #scene { position: fixed !important; left: 0 !important; top: 0 !important; margin: 0 !important; border: 0 !important; transform: none !important; width: 1280px !important; height: 720px !important; }`});
     await page.evaluate(() => window.dispatchEvent(new Event('resize')));
     await page.evaluate(() => { const el = document.getElementById('brightness'); el.value = '0.4'; el.dispatchEvent(new Event('input')); });
-    const region = (await page.evaluate(at => window.deusExViewer.liveProbe({pointRegion: at}), location)).pointRegion;  // Play only: a camera for looking
-    await page.evaluate(([at, rot, reg]) => window.deusExViewer.viewProbe({location: at, rotation: rot, region: {zone: reg.zone, iLeaf: reg.iLeaf, zoneNumber: reg.zoneNumber}}), [location, rotation, region]);
-    await frames(45);
+    // --exec "line|line": console commands typed first (Play only, a way to choose the camera a --cmds line gives: `CheatView DeusEx.Businessman`);
+    // --run-frames N: the level is released (bPlayersOnly False) and runs N page frames before the shot, so what a view shows is live.
+    let region = null;
+    if (location) {
+      region = (await page.evaluate(at => window.deusExViewer.liveProbe({pointRegion: at}), location)).pointRegion;  // Play only: a camera for looking
+      await page.evaluate(([at, rot, reg]) => window.deusExViewer.viewProbe({location: at, rotation: rot, region: {zone: reg.zone, iLeaf: reg.iLeaf, zoneNumber: reg.zoneNumber}}), [location, rotation, region]);
+    }
+    const exec = option('exec', '').split('|').filter(Boolean);
+    if (exec.length) console.log(JSON.stringify((await page.evaluate(lines => window.deusExViewer.viewProbe({exec: lines}), exec)).output));
+    if (option('run-frames', null)) await page.evaluate(() => window.deusExViewer.viewProbe({playersOnly: false}));
+    await frames(Number(option('run-frames', 45)));
     const file = path.join(dir, option('name', 'snap.png'));
     await page.screenshot({path: file, clip: {x: 0, y: 0, width: 1280, height: 720}});
     console.log(file, JSON.stringify(region));
@@ -553,6 +569,18 @@ async function sweep() {
 }
 
 // eval --expr 'js': the expression in the page after the map's frozen start (a quick look at Play's state: window.deusExViewer.status().notes, ...).
+// read --names A,B --props P,Q [--run-frames N]: those properties of those actors in Play's frozen start (liveProbe `read`); with --run-frames the
+// level is released and runs N page frames first. Prints JSON. Play only: what an actor holds (its Weapon, bHidden) when a frame shows something else.
+async function readActors() {
+  const names = option('names', '').split(',').filter(Boolean), props = option('props', '').split(',').filter(Boolean);
+  await withPlay(async ({page, frames}) => {
+    if (option('run-frames', null)) { await page.evaluate(() => window.deusExViewer.viewProbe({playersOnly: false})); await frames(Number(option('run-frames'))); }
+    // --offsets: the linked offsets (and bool masks) of those properties instead of their values, for tools/dump-actor-win.c
+    if (flag('offsets')) { console.log(JSON.stringify((await page.evaluate(args => window.deusExViewer.liveProbe({offsets: Object.fromEntries(args.names.map(name => [name, args.props])), offsetMasks: true}), {names, props})).offsets, null, 1)); return; }
+    const result = await page.evaluate(args => window.deusExViewer.liveProbe({read: args}), {names, props}); console.log(JSON.stringify(result?.read ?? result, null, 1));
+  });
+}
+
 async function evaluate() {
   await withPlay(async ({page, frames}) => { await frames(30); console.log(JSON.stringify(await page.evaluate(option('expr')), null, 1)); });
 }
@@ -572,6 +600,8 @@ async function play() {
     // The original's pose, exactly (the frozen-phase history of the ghost differs: its landing, its Tread loop).
     await page.evaluate(a => window.deusExViewer.viewProbe({location: a.Loc, rotation: a.VRot,
       region: {zone: a.RegZone, iLeaf: a.RegLeaf, zoneNumber: a.RegNum}}), pose);
+    // --early-cmds: the console lines the original was typed in its frozen phase (a camera that follows an actor), run now through the same chain
+    if (earlyCommands().length) console.log('early commands:', JSON.stringify((await page.evaluate(lines => window.deusExViewer.viewProbe({exec: lines}), earlyCommands())).output));
     const populationFile = [`population${suffix}.json`, 'population.json'].map(name => path.join(dir, name)).find(existsSync);
     const population = populationFile ? JSON.parse(readFileSync(populationFile, 'utf8')) : null;
     if (population) {
@@ -665,8 +695,8 @@ async function play() {
       .map(name => [name, Object.fromEntries(GENERATOR_FIELDS.map(([label, prop]) => [prop, frozen[frozen.length - 1].actors[name][label]]))]));
     const lastFrozen = frozen[frozen.length - 1].actors;
     // --no-pawn-load / --no-timer-load: diagnostics, a replay without the pawns' (SightCounter, TimerRate, TimerCounter) or the timed actors' load-time inputs.
-    const pawnWrites = flag('no-pawn-load') ? {} : Object.fromEntries(pawns.filter(name => lastFrozen[name] && PAWN_LOAD_FIELDS.every(label => lastFrozen[name][label] !== undefined))
-      .map(name => [name, Object.fromEntries(PAWN_LOAD_FIELDS.map(label => [FIELDS.find(f => f[0] === label)[1], lastFrozen[name][label]]))]));
+    const pawnWrites = flag('no-pawn-load') ? {} : Object.fromEntries(pawns.filter(name => lastFrozen[name] && renderHistoryFields().every(label => lastFrozen[name][label] !== undefined))
+      .map(name => [name, Object.fromEntries(renderHistoryFields().map(label => [FIELDS.find(f => f[0] === label)[1], lastFrozen[name][label]]))]));
     const timerWrites = flag('no-timer-load') ? {} : Object.fromEntries(timers.filter(name => lastFrozen[name]?.TRate !== undefined).map(name => [name, {TimerRate: lastFrozen[name].TRate, TimerCounter: lastFrozen[name].TCount}]));
     const request = {write: {...timerWrites, ...pawnWrites, '@player': {AnimSequence: pose.Anim, AnimFrame: pose.Frame, AnimRate: pose.Rate, TweenRate: pose.Tween, ...(option('player-alliance', null) ? {Alliance: option('player-alliance')} : {}),
       // FrobTime accumulates the player's tick deltas (HighlightCenterObject runs when it reaches 0.1 s); the frozen phase's deltas are the host's, so the original's value is a measured input
@@ -823,6 +853,7 @@ else if (verb === 'population') await population();
 else if (verb === 'screen') await screen();
 else if (verb === 'sweep') await sweep();
 else if (verb === 'eval') await evaluate();
+else if (verb === 'read') await readActors();
 else if (verb === 'play') await play();
 else if (verb === 'compare') compare();
 else console.log('usage: live-acceptance.mjs original|play|compare|snap --map <map>');

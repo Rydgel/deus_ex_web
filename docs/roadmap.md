@@ -449,8 +449,13 @@ without the cap and every stored-capture comparison uses it: [frame projection](
 Open: the detail pass's mover surfaces, ZBIAS mapping, colour interpolation and fog-map gate (the end of that section), DT_SpriteAnimOnce (unreachable in the shipped maps), clipped polygons' own
 vertices ([frame projection](frame-projection.md#unverified-and-open)), the
 darkest-pixel rounding visual acceptance found, and in live scenes (compared
-tick by tick with the original since 2026-10-13, [visual acceptance](visual-acceptance.md#live-scenes-2026-10-13))
-two Island NPCs, the Club's sitting guests and the dancers' animation.
+tick by tick with the original since 2026-10-13, [visual acceptance](visual-acceptance.md#live-scenes-2026-10-13)):
+nothing is open in the three pilots (re-run 2026-10-15 on master 9fb73f2 with fresh originals: Island 88, the Club 22 and the Underworld 50 actors equal
+in every field for 600 ticks, stream draws equal; 27 of the sweep's 28 maps replay equal for every actor over 1,200 ticks, 957 of 989 actors in all) and the Club's dancers are compared
+animating in view (Pilot 4, a camera that follows another actor: 22 of 22 equal, three dancers rendered at every tick, frames at 1.31 / mean abs. diff. 2.9 with no outlier block). What is
+open: the sweep's BatteryPark load (32 of 64 pawns from tick 13: tick 1 draws 201 against 199, narrowed to `Trashbag1`'s `Containers.Destroyed` spawn results, not a Play-side cause yet),
+**a pawn's third-person weapon, which Render.dll draws from the pawn's own draw and Play does not draw at all** (Divergence 21, found in an Island close view), a moving camera and pawns that fight while close,
+the player moving or acting (held keys cannot be posted), and any NPC beyond 1,200 ticks.
 Lighting items closed 2026-10-14 ([light effects](light-effects.md)): every
 LightEffect the 83 maps and the packages' scripts reach has its Render.dll body
 translated and compared with the original (spotlights included); Render.dll's
