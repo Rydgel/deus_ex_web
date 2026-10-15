@@ -10,7 +10,7 @@ import { createWorld } from './world.mjs';
 import { createSimHost } from './sim-host.mjs';
 import { createSimClient } from './sim-client.mjs';
 import { frameProjection as vertexProjection } from './frame-projection.mjs';
-import { createPlayCamera, pointCamera, applyPlayFrame, verticalFov, rotatorEuler, setPixelCentre, PLAY_NEAR, PLAY_FAR } from './play-camera.mjs';
+import { createPlayCamera, pointCamera, applyPlayFrame, verticalFov, rotatorEuler, setPixelCentre, projectionState, setProjectionState, PLAY_NEAR, PLAY_FAR } from './play-camera.mjs';
 import { createSpriteScene } from './sprite-scene.mjs';
 import { createDecalScene } from './decal-scene.mjs';
 import { decalProbe, placeProbe, laserProbe, meshLightProbe, renderPassProbe } from './decal-probe.mjs';
@@ -551,9 +551,13 @@ function framePassHelpers(frames, stampFrame, spritesOf) {
       if (actors) { node.reapply(); renderer.setRenderTarget(target); }
     }
   };
-  const updateActors = npcPreview && !runtimeError ? (position, passCamera, node) => {
-    const at = passIndex, decisions = node ? stampFrame?.passDecisions[passIndex++] : stampFrame?.mainDecisions;
-    if (node && !decisions) throw new Error('The page drew a mirror pass the simulation side did not plan');
+  // Without the simulation side's actor decisions (it stopped on an error)
+  // the actors' last state draws.
+  const updateActors = npcPreview && !runtimeError && stampFrame?.plan?.actors ? (position, passCamera, node) => {
+    const at = passIndex, decisions = node ? stampFrame.passDecisions[passIndex++] : stampFrame.mainDecisions;
+    // Both sides plan the passes from the same frame (mirrors.mjs render `plan`); the pass ids prove it.
+    if (node && (!decisions || stampFrame.passIds[at] !== node.id))
+      throw new Error(`The page drew mirror pass ${node.id} (${at}) where the simulation side planned ${stampFrame.passIds[at] ?? 'none'}`);
     // A child frame's pass lights the actors it draws with that frame's Coords and Mirror.
     const light = node ? stampFrame?.passFrames?.[at] ?? null : null;
     npcPreview.draw.pass(decisions ?? new Map(), position, light);
@@ -615,7 +619,7 @@ function viewportWorldPass(command) {
   // rectangle, which the camera frame's shader then samples. Without child
   // frames the mirror surfaces draw unreflected.
   world.mirrors.render(renderer, scene, viewportCamera, { markers: world.markers, sky: plan.sky, frames: frames ?? [], rect,
-    framePass, skyIn: frames ? drawSkyFrame : null, updateActors, viewport: rect });
+    framePass, skyIn: frames ? drawSkyFrame : null, updateActors, viewport: rect, plan: stampFrame?.plan ?? null });
   const box = renderViewportFor(command), markersVisible = world.markers.visible;
   renderer.setViewport(...box); renderer.setScissor(...box); renderer.setScissorTest(true);
   world.markers.visible = false;
@@ -1653,7 +1657,7 @@ function simFrameInput(time) {
     size: [renderer.domElement.width, renderer.domElement.height], aspect: canvasAspect, resizes: resizeCount,
     seconds: time / 1000, mirrors: world.mirrors.enabled, pixelRatio: renderer.getPixelRatio(), now: performance.now() / 1000,
     inspect: playing ? null : { camera: { position: camera.position.toArray(), quaternion: camera.quaternion.toArray(),
-      fov: camera.fov, aspect: camera.aspect, near: camera.near, far: camera.far },
+      ...projectionState(camera) },
       view: { location: fromView(camera.position.toArray()), rotation: [toUnits(pitch), toUnits(-yaw), 0] },
       sky: world.sky ? { location: [...world.sky], rotation: [...(world.skyRotation ?? [0, 0, 0])] } : null } };
 }
@@ -1728,13 +1732,21 @@ function drawFrame(snap, time) {
   // ?sim=worker a display frame without a new snapshot draws nothing).
   framePhases.draws++; frameCount++;
   let playerView = null, renderRect = null;
-  const playing = mode === 'play' && Boolean(game);
+  // A snapshot draws as the frame it was simulated for, whatever the page's
+  // mode and canvas are now (with ?sim=worker it was posted a display frame
+  // or more ago): a Play frame from its view, an Inspect frame from the
+  // camera posted with it (its projection too), which the simulation side
+  // planned its passes and culled with. The page's own camera returns after.
+  const playing = (snap ? Boolean(snap.begin) : mode === 'play') && Boolean(game);
   const axis = (positive, negative) => positive.some(k => keys.has(k)) - negative.some(k => keys.has(k));
   const x = axis(['KeyD','ArrowRight'], ['KeyA','ArrowLeft']), z = axis(['KeyW','ArrowUp'], ['KeyS','ArrowDown']);
-  // Inspect in the worker: the snapshot was culled for the camera posted
-  // with its frame, which draws it; the free camera returns after.
-  const live = snap?.inspect && simClient ? { position: camera.position.clone(), quaternion: camera.quaternion.clone() } : null;
-  if (live) { camera.position.fromArray(snap.inspect.camera.position); camera.quaternion.fromArray(snap.inspect.camera.quaternion); camera.updateMatrixWorld(); }
+  const posted = simClient ? snap?.inspect?.camera ?? null : null;
+  const live = posted || (simClient && playing && mode !== 'play') ? { position: camera.position.clone(), quaternion: camera.quaternion.clone(),
+    projection: projectionState(camera), userData: { ...camera.userData }, pitch, yaw } : null;
+  if (posted) {
+    camera.position.fromArray(posted.position); camera.quaternion.fromArray(posted.quaternion);
+    setProjectionState(camera, posted); camera.updateMatrixWorld();
+  }
   if (snap) {
     hitch?.snapshot(snap);
     // The worker's audio since the last snapshot, as its callbacks ran
@@ -1776,7 +1788,7 @@ function drawFrame(snap, time) {
     if (x || z || keys.has('Space') || keys.has('ControlLeft') || keys.has('ControlRight')) cameraMoved = true;
     // Host status only: the frob target's name and highlight are the
     // original HUD's FrobDisplayWindow.
-    $('play-hint').textContent = runtimeError?.travel ? `Map ended · travel to ${runtimeError.travel.url} is Stage 6 · Player start replays`
+    if (mode === 'play') $('play-hint').textContent = runtimeError?.travel ? `Map ended · travel to ${runtimeError.travel.url} is Stage 6 · Player start replays`
     : runtimeError ? 'Play paused · Player start resets the scene' : paused ? 'Click the view to resume' : '';
   }
   phase('tick');
@@ -1881,7 +1893,7 @@ function drawFrame(snap, time) {
   if (simVerify) for (const set of Object.values(drew)) set.clear();
   const { framePass, drawSkyFrame, updateActors } = framePassHelpers(frames, stampFrame, record => spriteScene?.framePass(record.index));
   world.mirrors.render(renderer, scene, camera, { markers: world.markers, sky: world.sky, requested,
-    frames, rect: frames ? (renderRect ?? null) : null, framePass, skyIn: frames ? drawSkyFrame : null, updateActors });
+    frames, rect: frames ? (renderRect ?? null) : null, framePass, skyIn: frames ? drawSkyFrame : null, updateActors, plan: stampFrame?.plan ?? null });
   phase('mirrors');
   let calls = drawCalls(); framePhases.mirrorCalls += calls;
   // The ramp pass maps the raw clear colour back to the UI colour.
@@ -1954,7 +1966,10 @@ function drawFrame(snap, time) {
     const surface = hit && (hit.object.userData.faceMaterials?.[hit.faceIndex] ?? hit.object.material.userData);
     $('surface-info').textContent = hit ? `${surface.key}\n${surface.width} × ${surface.height} · ${surface.mipCount} mips\nSurface ${hit.object.userData.faces?.[hit.faceIndex] ?? '—'} · ${hit.object.userData.actor ?? hit.object.name ?? 'world'}\nFlags 0x${(surface.flags ?? 0).toString(16)}` : 'No surface under the crosshair.';
   }
-  if (live) { camera.position.copy(live.position); camera.quaternion.copy(live.quaternion); camera.updateMatrixWorld(); }
+  if (live) {
+    camera.position.copy(live.position); camera.quaternion.copy(live.quaternion); setProjectionState(camera, live.projection);
+    camera.userData = live.userData; ({ pitch, yaw } = live); camera.updateMatrixWorld();
+  }
 }
 /** ?sim=worker in lockstep: a snapshot drawn as it arrives. */
 function drawLockstep(snapshot) {

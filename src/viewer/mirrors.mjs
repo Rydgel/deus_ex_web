@@ -47,7 +47,7 @@ export const mirrorDrawFlags = flags => ((flags & 0x47 ? flags : flags | POLY.In
  * to MIRROR_RECURSION_LIMIT. Masked, modulated and two-sided mirrors remain
  * explicit boundaries; see mirror-surfaces.md. */
 export function createMirrors(notes, displayGamma) {
-  const planes = new Map(), size = new THREE.Vector2();
+  const planes = new Map(), size = new THREE.Vector2(), plannedSize = new THREE.Vector2();
   const modelPlanes = new WeakMap();
   // Keep one global clipping-plane shader shape for both child and parent
   // draws.  Changing between zero and one planes makes three.js reselect a
@@ -122,23 +122,30 @@ export function createMirrors(notes, displayGamma) {
    * (top-down, drawing-buffer pixels) is the region the frame draws into when
    * it is not the whole buffer (a ViewportWindow's frame): each child's image
    * sits in its target at that region, flipped across the buffer's centre for
-   * an odd depth, where the parent's shader samples it. */
+   * an odd depth, where the parent's shader samples it. `plan` (the
+   * snapshot's `stamps.plan`, sim-session.mjs) is what the simulation side
+   * planned its passes with, {size, mirrors}: the passes are planned with that
+   * drawing-buffer size and switch, not the canvas's now (a resize can land
+   * between a frame's post and its draw), so the page draws the passes whose
+   * actor decisions it holds. */
   function render(renderer, scene, source, { markers, updateActors, sky, requested = null, frames = null, rect = null,
-    framePass = null, skyIn = null, viewport = null } = {}) {
+    framePass = null, skyIn = null, viewport = null, plan: planned = null } = {}) {
     stats.renderedPlanes = 0;stats.depth=0;stats.scissorPixels=0;
     if (!planes.size) return;
     for (const group of planes.values()) group.active.value = 0;
-    // Diagnostics switch: every mirror draws without its reflection.
-    if (!api.enabled) return;
+    // Diagnostics switch: every mirror draws without its reflection. The
+    // simulation side's frame also has none without its world frame.
+    if (!(planned ? planned.mirrors : api.enabled)) return;
     // The plane test below needs the planes' world matrices; each
     // renderer.render call updates the whole scene itself (auto-update), so
     // only the plane meshes and their ancestors are updated here.
     source.updateMatrixWorld();
     for (const group of planes.values()) for (const mesh of group.meshes) mesh.updateWorldMatrix(true, false);
     for (const group of planes.values()) follow(group);
-    const plan = frames ? planFramePasses(source, [...planes.values()], renderer.getDrawingBufferSize(size), frames, rect) : null;
-    if (frames ? !plan.length : !mayRender(source, requested)) return;
     renderer.getDrawingBufferSize(size);
+    const planSize = planned ? plannedSize.fromArray(planned.size) : size;
+    const plan = frames ? planFramePasses(source, [...planes.values()], planSize, frames, rect) : null;
+    if (frames ? !plan.length : !mayRender(source, requested)) return;
     const target = renderer.getRenderTarget(), clearColor = renderer.getClearColor(new THREE.Color());
     const clearAlpha = renderer.getClearAlpha();
     const gamma = displayGamma.value, markerVisible = markers?.visible;
@@ -188,7 +195,7 @@ export function createMirrors(notes, displayGamma) {
       return result;
     }
     try {
-      const rendered = draw(plan ?? planMirrorPasses(source, [...planes.values()], size, mesh => visibility.get(mesh), requested));
+      const rendered = draw(plan ?? planMirrorPasses(source, [...planes.values()], planSize, mesh => visibility.get(mesh), requested));
       for (const group of planes.values()) group.active.value = 0;
       for (const { group, target } of rendered) { group.texture.value = target.texture; group.size.value.copy(size); group.active.value = 1; }
       if (sky && !frames) notes.add('Mirror views through sky-zone openings are not yet verified.');

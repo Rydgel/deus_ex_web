@@ -122,6 +122,20 @@ export function setFrameProjection(camera, projection) {
   camera.setViewOffset(width, height, -(fx15 - width / 2), -(fy15 - height / 2), width, height);
 }
 
+/** A camera's projection inputs as plain data: Inspect posts its free
+ * camera's with each frame, the simulation side culls with them and the
+ * page draws that frame's snapshot with them (main.mjs drawFrame). */
+export function projectionState(camera) {
+  return { fov: camera.fov, aspect: camera.aspect, near: camera.near, far: camera.far,
+    view: camera.view?.enabled ? { ...camera.view } : null };
+}
+export function setProjectionState(camera, { fov, aspect, near, far, view = null }) {
+  camera.fov = fov; camera.aspect = aspect; camera.near = near; camera.far = far;
+  if (view) camera.setViewOffset(view.fullWidth, view.fullHeight, view.offsetX, view.offsetY, view.width, view.height);
+  else camera.clearViewOffset();
+  camera.updateProjectionMatrix();
+}
+
 /** The original's pixel centres, as a constant where no pass frame is at
  * hand (a session without OccludeBsp, Inspect). Render.dll projects to ScreenX = X·RZ +
  * FX15, with FX15 = (SizeX + 1.0001)·0.5 (ComputeRenderSize, occlude.rs);
