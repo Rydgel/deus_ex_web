@@ -296,8 +296,8 @@ Brightness 2/3, where it is the framebuffer (Play's ramp is the identity at its 
 `ConWindowActive.VirtualKeyPressed` returns True for all of them but Up and Down, so Print Screen (which the interface frames use under a modal screen) and the numpad `*`
 never reach `Shot`, and the typed console is not reachable either (Enter and Space would skip the speech). The window answers one key itself, the hard-coded Ctrl+F9
 (`ConsoleCommand("SHOT")`), and it reads Ctrl through `IsKeyDown`, so the harness holds Ctrl through the Wine input queue (`sdown CTRL`) and sends F9
-(`live-acceptance.mjs --cmds "N:@ctrlshot name"`, `--shot-ctrl`). A force-played conversation (the intro's) swallows nothing but Escape, and takes the numpad `*`
-(`@numshot`, `--shot-num`). The first Ctrl+F9 of a run was once lost, so the harness repeats it while the level stays held. Play replays the trace's ticks and takes the
+(`live-acceptance.mjs --cmds "N:@ctrlshot name"`, `--shot-ctrl`). A force-played conversation (the intro's) passes every key but Escape to the root window, which answers Ctrl+F9 and Print Screen itself (`DeusExRootWindow.VirtualKeyPressed`), so the same
+`@ctrlshot` takes the intro's frames; the numpad `*` binding did not fire there (four tries, no bitmap). The first Ctrl+F9 of a run was once lost, so the harness repeats it while the level stays held. Play replays the trace's ticks and takes the
 page's frame at the last one (`live-acceptance.mjs play --ticks N --shot name`), the page's canvas pinned to 1280x720 as in the interface frames, `?antialias=0&detailTextures=0`.
 
 **What the frames said, and the causes.**
@@ -331,6 +331,36 @@ Not covered by these frames, by name: the camera's transition frames (`cameraTra
 its layout is compared with Extension.dll, `validate-island-conversation`), the later speeches and cameras (positions 0 and 7), the interactive camera, the speech audio
 (Galaxy's MPEG decoder is not translated), and any conversation off Island and the intro (below).
 
+## Hand-off (2026-10-16): the intro, a second conversation and the gate rows
+
+The first agent stopped at its context budget with 4.5.5 compared (above) and 4.5.7, 4.5.8 and the gate rows open. Everything below is measured; nothing is claimed beyond it.
+
+**Stored originals** (main checkout `.work`, new names, nothing overwritten): `acceptance/01_NYC_UNATCOIsland/cvA{1..4}-original.png` with `cvA{n}-time.txt` and
+`live-acceptance/01_NYC_UNATCOIsland/{original-trace,watch,population,commands,hold,phonemes}-cvA.*` (MeetPaul, ticks 100/250/600/750, `--player-blend`); for the intro,
+`acceptance/00_Intro/in2-in{1,3,4}-original.png` with `-time.txt` (ticks 170, 1000, 2250: the Earth globe, a shot in the VersaLife room, a clinic shot) and
+`live-acceptance/00_Intro/*-in2.*` (the 2,250-tick trace). The in2 frame at tick 530 was not taken (Ctrl+F9 lost three times at that hold); the first Ctrl+F9 of the first MeetPaul run was lost once. `scripts/live-original.sh` with `--hold` never reaches `DX_POST` (node stays alive on the tracer); read the held original by running the script by hand and
+`touch <trace>.resume` after, as the camera numbers above were read.
+
+**4.5.7, the intro (00_Intro, `--no-ghost`).** The original's frames are captured (Ctrl+F9 works in the force-played conversation). Play's replay of the same trace
+(`live-acceptance.mjs play --map 00_Intro --seed 1 --tag in1 --no-ghost [--keep-traveling]`, `--early-cmds "set WinDrv.WindowsClient Brightness 0.666667"`) is **not** equal and was not compared as frames:
+(a) from tick 1 the player differs (original Z -80.2, Physics 0, no velocity; Play Z -80.33, falling at -15.8: `play()` places a no-ghost player at the original's Location but not its Physics, and Play's frozen
+phase is only ten frames long against the original's tens of seconds); (b) the stream's draw count differs at tick 38 and many pawns' `DistanceFromPlayer` differ in the sixth digit from tick 2 (the player's Z, a consequence of (a)),
+Bob Page and Walton Simons play `Fighter` in the original at tick 16-18 and `BreatheLight` in Play; (c) the firefight outside reaches the player: Play's JC is `Dying` at tick 1,200, the conversation ends and
+`MissionIntro.PostIntro` sends `OPEN DXONLY` (a labeled boundary) at tick 1,243, where the original goes on to tick 2,250 and beyond. Next: write the player's `Physics` and `Velocity` from the trace's first row
+(and run the frozen phase until it lands, as the original's did), re-run the compare, and only then look at the pawns; `--keep-traveling` is right for 00_Intro (`MissionIntro.InitStateMachine` deletes every flag and
+sets `PlayerTraveling` itself), and the intro's unfrozen tick for a shot is the Play timeline's level time less 0.2 s, times 60 (`conversation-acceptance.mjs timeline --scene intro`: cuts at 2.55, 8.57, 10.88, 12.4, 21.4, 26.0, 35.0, 42.9, 50.9, 64.0 s).
+
+**4.5.8, the second conversation: `01_NYC_UNATCOHQ` MeetManderley** (the campaign's next third-person conversation: `JosephManderley0`, radius 160 and frob, flag `M01ReadyForBriefing` false, audio package Mission01, JC and Manderley, ConEventMoveCamera
+positions 3, 4, 5 and 0, 7 later; `.work/dump-con.mjs`-style dump of its events: speeches 233 to 243). Every map's object-index capture already exists (all 83, [captures](object-index-captures.md)), so no new capture was needed. In Play it starts with the player
+placed at (310, -164, 287.629913) facing Manderley (yaw 63442, a ghost `set Location` at Z 305, then `walk`, which rests at Z 287.629913): `conversation-acceptance.mjs timeline --scene manderley` shows the third-person camera, the letterbox and the subtitle
+from level tick 2, speech 233 with the fallback camera (`bUsingFallback`: the authored position 3 is obstructed by the room at this spot), cuts to positions 4 and 5 at about 11.8 s and 19.4 s. The Play side of the population exists
+(`live-acceptance.mjs population --map 01_NYC_UNATCOHQ`). Not done: the original's capture (`live-original.sh 01_NYC_UNATCOHQ --ticks 1200 --player-blend --shot m4 --shot-ctrl --cmds "60:@ctrlshot m1|200:@ctrlshot m2|800:@ctrlshot m3" --early-cmds "...Location (X=310,Y=-164,Z=287.629913)...|walk"` is the intended run), its
+phoneme feed, the Play replays and the compare; whether the original also takes the fallback camera is the first thing to read.
+
+**The gate rows.** None of 4.5.5, 4.5.7 and 4.5.8 is a check yet (`validate-stage4-acceptance.mjs` keeps them `missing`, with the reasons above). The shape: a `conversation` check kind that stages the stored trace and frames of a tag into the checkout's `.work`,
+runs `live-acceptance.mjs population` then one `play --tag T --ticks N --shot name --phonemes ... --player-blend --early-cmds ...` per frame (about 2 minutes each, the replays share nothing), runs `conversation-acceptance.mjs compare`, and judges: the two bars and
+the subtitle identical (0 pixels over 2), the band at least .95 identical, at most 1,600 pixels over 10 of 255, edge recall and precision at least .99 (the measured worst of MeetPaul: .9679, 1,053, .997/.999; thresholds not yet adopted).
+
 ## Open
 
 * With the browser's render feedback the terrorists near the dock can fight
@@ -339,8 +369,8 @@ its layout is compared with Extension.dll, `validate-island-conversation`), the 
   October 1, when physProjectile was translated ([projectile](projectile.md),
   bit-exact against the original body; `validate-island-tracer` flies real
   Tracers on Island).
-* Lip sync is implemented ([lip sync](lip-sync.md)); other maps need their
-  object-index capture first ([captures](object-index-captures.md)).
+* Lip sync is implemented ([lip sync](lip-sync.md)); every map's object-index capture exists ([captures](object-index-captures.md)); MeetManderley starts in Play
+  ([hand-off](#hand-off-2026-10-16-the-intro-a-second-conversation-and-the-gate-rows)), with no original frame yet.
 * The choice is made through the original input path (2026-10-01): Down
   reaches `RootWindow.VirtualKeyPressed`, whose `MoveFocusDown` (native 1445,
   `XWindow::MoveFocus`; the 1442–1447 family is bound,
@@ -354,8 +384,7 @@ its layout is compared with Extension.dll, `validate-island-conversation`), the 
   the sniper rifle and its ammunition, ending at tick 7203, and the mini
   crossbow and poison darts, ending at tick 7253, both without a runtime
   error; the validator keeps only the GEP gun branch.
-* ConLight light on actor meshes, `ConEventMoveCamera`'s other camera types
-  and the interactive camera are reached by the original script but not
-  compared with the original renderer.
+* ConLight light on actor meshes is compared on the four MeetPaul frames ([frames](#frames-against-the-original-2026-10-16)); `ConEventMoveCamera`'s other camera types
+  (positions 0, 3, 7, the fallback cameras) and the interactive camera are reached by the original script but not compared with the original renderer.
 * `GetCurrentColorDepth`, `GetRes`, `SetRes` and the other viewport commands
   remain boundaries.

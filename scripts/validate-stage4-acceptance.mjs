@@ -269,10 +269,10 @@ add('4.5.3', C5, '01_NYC_UNATCOIsland MeetPaul camera', 'CreateConCamera, the le
   V('root-raw-background'), V('root-render-viewport'), V('conversation-move-camera'), V('island-conversation'));
 add('4.5.4', C5, 'speech timing and audio', 'speech lookup, sound length and the retained archive equal the original', 'O2',
   V('conversation-speech'), V('conversation-speech-audio'), V('conversation-sound-length'), V('conversation-audio-integration'), V('infolink-audio'));
-missing('4.5.5', C5, 'MeetPaul frame', 'the third-person conversation frame (letterbox, behind view, camera, subtitles) against the original\'s', 'no original capture of a conversation; nothing in a store the gate reads');
+missing('4.5.5', C5, 'MeetPaul frame', 'the third-person conversation frame (letterbox, behind view, camera, subtitles) against the original\'s', 'compared by hand 2026-10-16 (docs/conversation-camera.md "Frames against the original": four frames, bars and subtitle pixel-equal, the band within polygon edges; stored as cvA1..4 in the main .work); the gate check kind that replays and judges them is not written yet');
 missing('4.5.6', C5, 'speech audio', 'the speech samples the player hears against Galaxy\'s', 'Galaxy\'s MPEG decoder is not translated; the host\'s decode and rounding are unverified (docs/lip-sync.md)');
-missing('4.5.7', C5, '00_Intro camera shots', 'the intro\'s CameraPoint shots against the original', 'compared only on the mirror capture of mirror-surfaces.md; no gate-readable stored frame');
-missing('4.5.8', C5, 'a second third-person conversation', 'a conversation on another map, with the third-person camera, lip sync and speech', 'lip sync is wired for MeetPaul only: other maps need their object-index capture first (docs/conversation-camera.md Open, docs/object-index-captures.md)');
+missing('4.5.7', C5, '00_Intro camera shots', 'the intro\'s CameraPoint shots against the original', 'the original\'s frames at ticks 170, 1000 and 2250 are stored (main .work, tag in2), but Play\'s replay of the intro diverges from tick 1 (docs/conversation-camera.md "Hand-off"), so no comparison is claimed');
+missing('4.5.8', C5, 'a second third-person conversation', 'a conversation on another map, with the third-person camera, lip sync and speech', 'chosen: 01_NYC_UNATCOHQ MeetManderley (every map\'s object-index capture already exists, docs/object-index-captures.md); it starts and plays in Play with the camera, but no original capture was taken yet (docs/conversation-camera.md "Hand-off")');
 
 // --- runner ----------------------------------------------------------------------------------------------
 const probePython = path.join(root, '.cache/native-probe-env/bin/python');

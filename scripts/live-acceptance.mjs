@@ -271,15 +271,13 @@ async function original() {
   // and the numpad `*` and answers only its own hard-coded Ctrl+F9, ConsoleCommand("SHOT")). Ctrl goes through the Wine input queue (IsKeyDown reads the
   // thread's key state), F9 likewise. The Shot bitmap becomes .work/acceptance/<map>/NAME-original.png and NAME-time.txt holds the level time it was
   // taken at. Play does not run it (a screenshot changes no state): `play --ticks N --shot NAME` takes its own frame at that tick.
-  // `@numshot NAME` is the same with the numpad `*` (GreyStar=Shot), which a force-played conversation (the intro) lets through: its window swallows
-  // nothing but Escape and answers no Ctrl+F9.
-  const ctrlShotName = text => /^@(?:ctrl|num)shot (\S+)$/.exec(text)?.[1] ?? null;
-  const takeCtrlShot = (name, numpad = false) => {
+  const ctrlShotName = text => /^@ctrlshot (\S+)$/.exec(text)?.[1] ?? null;
+  const takeCtrlShot = name => {
     const before = game.shots();
     let fresh = [];
     // (the first Ctrl+F9 of a run was once lost: tried again, the level stays held)
     for (let attempt = 0; attempt < 3 && !fresh.length; attempt++) {
-      post(numpad ? ['sleep 300', 'shot', 'sleep 900'] : ['focus', 'sdown CTRL', 'sleep 250', 'shold F9 120', 'sleep 250', 'sup CTRL', 'sleep 900']);
+      post(['focus', 'sdown CTRL', 'sleep 250', 'shold F9 120', 'sleep 250', 'sup CTRL', 'sleep 900']);
       fresh = game.shots().filter(shot => !before.includes(shot));
     }
     const dump = execFileSync(game.WINE, [path.join(root, 'ad/build/dump-actor-win.exe'), 'JCDentonMale', 'Player:0x5d4:u32', 'LevelTime:0xa8:pf:0x478'], {encoding: 'utf8', env: process.env});
@@ -408,7 +406,7 @@ async function original() {
       if (handled.has(n)) continue;
       handled.add(n);
       post(['sleep 300', ...cmds.filter(c => c.after === n && !ctrlShotName(c.text)).flatMap(c => keyEdge(c.text) ?? [`cmd ${c.text}`, 'sleep 500'])]);
-      for (const c of cmds.filter(c => c.after === n && ctrlShotName(c.text))) takeCtrlShot(ctrlShotName(c.text), c.text.startsWith('@numshot'));
+      for (const c of cmds.filter(c => c.after === n && ctrlShotName(c.text))) takeCtrlShot(ctrlShotName(c.text));
       writeFileSync(`${tracePath}.go`, '');
       console.log(`typed after ${n} ticks: ${cmds.filter(c => c.after === n).map(c => c.text).join(' ; ')}`);
     }
@@ -420,7 +418,7 @@ async function original() {
     // The level is held at the last replayed tick (the tracer returns from ULevel::Tick); the game still draws.
     let taken = null;
     // --shot-ctrl: the frame is the Ctrl+F9 one (a conversation window grabs the keys the plain `shot` presses), see --cmds @ctrlshot.
-    if (flag('shot-ctrl')) { takeCtrlShot(option('shot'), flag('shot-num')); taken = path.join(acceptanceDir(), `${option('shot')}-original.png`); }
+    if (flag('shot-ctrl')) { takeCtrlShot(option('shot')); taken = path.join(acceptanceDir(), `${option('shot')}-original.png`); }
     for (let attempt = 0; attempt < 3 && !taken; attempt++) {
       const before = game.shots();
       post(['sleep 1500', 'shot', 'sleep 900']);
@@ -706,7 +704,7 @@ async function play() {
     // measured input handed to Play with that command (the n-th `@down`/`@up` of a hold takes the n-th press/release record of that hold).
     const commandsWithStream = () => {
       // (an `@ctrlshot NAME` is the original's screenshot of a held tick: it changes no state, so the replay skips it)
-      const list = (existsSync(path.join(dir, `commands${suffix}.json`)) ? JSON.parse(readFileSync(path.join(dir, `commands${suffix}.json`), 'utf8')) : []).filter(c => !/^@(ctrl|num)shot /.test(c.text));
+      const list = (existsSync(path.join(dir, `commands${suffix}.json`)) ? JSON.parse(readFileSync(path.join(dir, `commands${suffix}.json`), 'utf8')) : []).filter(c => !/^@ctrlshot /.test(c.text));
       const callsFile = `${tracePath}.calls.jsonl`;
       if (!existsSync(callsFile) || !list.some(c => c.text.startsWith('@'))) return list;
       const edges = new Map();

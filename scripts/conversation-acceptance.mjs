@@ -21,6 +21,8 @@ const option = (name, fallback) => {
  * MeetPaul is radius-invoked (radiusDistance 180) from the owner's low-priority tick: the level released with the player inside the radius starts it. */
 export const SCENES = {
   meetpaul: {map: '01_NYC_UNATCOIsland', location: [-2385, 8393, -256.2], rotation: [0, 51120, 0], conversation: 'MeetPaul'},
+  // 01_NYC_UNATCOHQ: MeetManderley (radius 160, third person, JC and Manderley, cameras 3, 4, 5, audio package Mission01), the campaign's next one after MeetPaul.
+  manderley: {map: '01_NYC_UNATCOHQ', location: [310, -164, 305], rotation: [0, 63442, 0], conversation: 'MeetManderley'},
   // 00_Intro: no placement and no ghost (the map's own player, which CameraPoint.Idle paralyses and hides); the shots are CameraPoint's.
   intro: {map: '00_Intro', noGhost: true, conversation: 'Intro'},
 };
