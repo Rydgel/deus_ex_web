@@ -46,4 +46,6 @@ for attempt in $(seq 1 ${ATTEMPTS:-8}); do
   [ "$code" = 3 ] || break
   echo "attempt $attempt: population mismatch, reloading"
 done
+# DX_POST=script: run (bash, same environment) with the game still up after the last attempt: a look at actors with tools/dump-actor-win.c
+[ "$code" = 0 ] && [ -n "${DX_POST:-}" ] && bash "$DX_POST"
 exit $code

@@ -44,12 +44,51 @@ The `ImportText` bodies the bound commands reach:
 | `UIntProperty` | `0x10165f00` | value left 0, returns the buffer | `appAtoi` only when the text starts with `-` or a digit; skips every `-`/digit; never NULL |
 | `UFloatProperty` | `0x10166940` | value 0 | `appAtof`, then skips to `,` `)` CR LF; never NULL (so a bare `AltFire` imports 0) |
 | `UBoolProperty` | `0x10166380` | `ReadToken` yields an empty token, which matches no spelling: NULL | `ReadToken(0x400)`, then `appStricmp` against `1`, `True`, `True` (`0x101b1344`, `0x101b1348`, `0x101a7d4c`) to set the bit, `0`, `False`, `False` (`0x101b1354`, `0x101b1358`, `0x101a7dcc`) to clear it; anything else NULL. It never reads its port flags, so the console's flags 1 take the same fixed spellings as config I/O ([config text](script-config.md)), as `ShowHud False` uses |
-| `UObjectProperty` | `0x10166e20` | `ReadToken` (`0x10164cb0`) yields an empty token, not `None`; `StaticFindObject` finds nothing, so it stores None and returns NULL | not linked (explicit boundary) |
+| `UObjectProperty` | `0x10166e20` | `ReadToken` (`0x10164cb0`) yields an empty token, not `None`; `StaticFindObject` finds nothing, so it stores None and returns NULL | an actor/object name: not linked (explicit boundary) |
+| `UClassProperty` | `0x10167110` | as `UObjectProperty` | [Class parameters](#class-parameters-2026-10-15) |
 
 So `PutInHand` runs `PutInHand(None)`, and `DropItem` runs `DropItem(None,
 False)`. Both parameters are optional, so the parse stops at the first one.
 Any other parameter type stays an explicit boundary. An int past 32 bits is
 also unrecovered.
+
+## Class parameters (2026-10-15)
+
+`PlayerPawn.CheatView(class<actor> aClass)` and `ViewClass(class<actor> aClass,
+optional bool bQuiet)` take a class by name (`CheatView DeusEx.Female4`); the live
+scenes use them to put the camera behind a pawn
+([visual acceptance](visual-acceptance.md#pilot-4-10_paris_club-dancers-in-view-2026-10-15)).
+Play stopped at `ScriptConsoleExec ImportText is not linked for class`. The
+original path is `UClassProperty::ImportText` (vtable `0x10175ec4` slot `+0x84`,
+a thunk `0x10101190` to `0x10167110`), which calls `UObjectProperty::ImportText`
+(`0x10166e20`, thunk `0x10101a37`):
+
+1. `ReadToken(Buffer, Temp, 0x400, DottedNames = 1)` (`0x101020db`); a NULL token is a NULL result.
+2. The token `None` (`appStricmp`, `0x1010239c`) stores None and returns the buffer after the token.
+3. Spaces are skipped (`0x10166eaf`) and **one wide character is consumed whatever it is** (`0x10166eba`, `add esi, 2`).
+   A quote there is `Class'Package.Object'` (`0x10166ed6..0x10166f2f`: `ReadToken` the path, the closing quote,
+   `StaticFindObject(UClass, ANY_PACKAGE, class name, 0)`, then the object inside it); Play does not link it
+   (an explicit error). Any other character leaves the token to `StaticFindObject(PropertyClass, ANY_PACKAGE, token,
+   0)` (`0x1010326a`, arguments `[property+0x5c]`, -1, the token, 0); the result is written to the parameter whether or not
+   it is found, and a miss returns NULL.
+4. `UClassProperty::ImportText` (`0x10167110..0x10167174`): a found value that is not exactly a `UClass`
+   (`[object+0x24] == 0x101f1c18`) or whose SuperField chain (`+0x28`) does not reach `MetaClass` (`[property+0x64]`) is
+   cleared to None, and the result stays the buffer.
+
+A text that ends at the token returns a pointer **one wide character past the terminator** (`DeusEx.Female4` returns 15
+of 14 characters): a parameter that follows (ViewClass's `bQuiet`) would parse the memory after the string, which has no
+source; Play stops there with an error instead of guessing. `src/runtime/script-class-import-text.mjs` is the
+translation; `ScriptRuntime.importClassText` supplies `StaticFindObject` over the classes Play has linked (a class
+Play has not linked yet is an explicit error, not a miss, because the original's table holds every class of a loaded
+package, and two linked classes with one bare name are an error because hash order is not recovered) and the metaclass
+from the parameter (`metadata.metaClass`).
+
+`scripts/native-class-import-oracle.py` runs `UClassProperty::ImportText` from the unchanged Core.dll through the real
+vtable slot (`UObjectProperty::ImportText` and `ReadToken` run unchanged; `StaticFindObject` and `appStricmp` are host
+leaves that record their arguments) over a fixture of named objects; `scripts/validate-class-import-text.mjs` compares
+28 texts (the pointer, the stored value, every `StaticFindObject` argument): 12 found, 3 cleared by the metaclass check, 10
+NULL, equal. The same validator runs `CheatView` in Play (00_Training): the first actor of the class becomes `ViewTarget`
+with `bBehindView`, the next calls cycle through the class and back to None, and an unlinked class is the explicit error.
 
 The executor rule (`0x10150978–0x101509df`) is translated. It applies only
 to the first parameter, and only when that parameter IsA `UObjectProperty`

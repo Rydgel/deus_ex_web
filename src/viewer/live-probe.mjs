@@ -62,6 +62,15 @@ export function liveProbe(game, args = {}) {
       }));
     }
   }
+  // read: {names, props}: those properties of those actors (plain values; an actor reads as its name), the same read the replay's rows make
+  // (`node scripts/live-acceptance.mjs read --names A,B --props P,Q` looks at an actor in Play's frozen start).
+  if (args.read) {
+    out.read = {};
+    for (const name of args.read.names) {
+      const actor = byName(name);
+      out.read[name] = actor ? Object.fromEntries(args.read.props.map(prop => { try { return [prop, plain(runtime.readNamed(actor, prop))]; } catch (error) { return [prop, `error: ${error.message}`]; } })) : null;
+    }
+  }
   // The Region (zone, leaf, zone number) PointRegion gives at a point: what the original's
   // `set ... Region (...)` is given after `set Location` (visual-acceptance.md "Placing the player's Region").
   if (args.pointRegion) {
