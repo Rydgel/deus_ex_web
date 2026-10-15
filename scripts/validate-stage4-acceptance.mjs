@@ -101,6 +101,7 @@ const FAMILY = (pattern, label) => ({type: 'family', pattern, label});
 const FRAMES = spec => ({type: 'frames', ...spec});
 const CAMERA = spec => ({type: 'camera', ...spec});
 const INTERFACE = spec => ({type: 'interface', ...spec});
+const TERMINAL = spec => ({type: 'terminal', ...spec});
 const LIVE = spec => ({type: 'live', ...spec});
 const SWEEP = spec => ({type: 'sweep', ...spec});
 const CENSUS = spec => ({type: 'census', ...spec});
@@ -252,8 +253,12 @@ add('4.4.12', C4, 'persona screens', 'inventory (empty and with an item), health
   INTERFACE({map: '00_Training', views: CRITERIA_VIEWS['4.4.12']}));
 add('4.4.13', C4, 'main menu and Settings', 'the main menu, the Settings menu, Game Options and Adjust Colors in a frame against the original\'s', 'O1',
   INTERFACE({map: '00_Training', views: CRITERIA_VIEWS['4.4.13']}));
-add('4.4.14', C4, '00_Training datacube and keypad', 'a datacube\'s information display and the keypad in a frame against the original\'s', 'O1',
-  INTERFACE({map: '00_Training', views: CRITERIA_VIEWS['4.4.14']}));
+add('4.4.14', C4, 'datacube, keypad and computer screens', 'a datacube\'s information display, the keypad and a security computer\'s screen (four maps) in a frame against the original\'s; the screen outside the camera windows', 'O1',
+  INTERFACE({map: '00_Training', views: CRITERIA_VIEWS['4.4.14']}),
+  TERMINAL({map: '14_OceanLab_Lab', computer: 'ComputerSecurity1', user: 'Oceanguard', password: 'Kraken', cameraActor: 'SecurityCamera0', name: 'cs1'}),
+  TERMINAL({map: '02_NYC_BatteryPark', computer: 'ComputerSecurity2', user: 'NSF', password: 'righteous', cameraActor: 'SecurityCamera1', name: 'bp2'}),
+  TERMINAL({map: '06_HongKong_WanChai_Market', computer: 'ComputerSecurity0', user: 'TAM', password: 'DRAGON', cameraActor: 'SecurityCamera2', name: 'hk0'}),
+  TERMINAL({map: '09_NYC_Ship', computer: 'ComputerSecurity3', user: 'SECURITY', password: 'Brooklyn', cameraActor: 'SecurityCamera1', name: 'sh3'}));
 excluded('4.4.15', C4, 'Load Game, Save Game, QuickSave screens', 'the save-game directory screens', 'Stage 6 (saved games; native 3013)');
 excluded('4.4.16', C4, 'multiplayer menus and screens', 'the multiplayer join, host and in-game screens', 'multiplayer is the last priority and may stay unsupported (AGENTS.md)');
 
@@ -322,6 +327,7 @@ function expand(check, criterion) {
     return [{key: `${criterion.id}:${name}`, label: name, frames: check, mutex: ['acceptance'], estimate: 30 * check.maps.length + 20, memory: 1500}];
   }
   if (check.type === 'interface') return [{key: `${criterion.id}:interface ${check.map}`, label: `interface ${check.map} (${check.views.length} views)`, interface: check, mutex: ['acceptance'], estimate: 120, memory: 1800}];
+  if (check.type === 'terminal') return [{key: `${criterion.id}:terminal ${check.name}`, label: `terminal ${check.map} ${check.name}`, terminal: check, mutex: ['acceptance'], estimate: 120, memory: 1800}];
   if (check.type === 'camera') return [{key: `${criterion.id}:camera ${check.name}`, label: `camera ${check.map} ${check.name}`, camera: check, mutex: ['acceptance'], estimate: 120, memory: 1800}];
   if (check.type === 'live') return [{key: `${criterion.id}:live ${check.map}${check.tag ? ` ${check.tag}` : ''}`, label: `live ${check.map}${check.tag ? ` (${check.tag})` : ''}`, live: check, mutex: check.shot ? [`live:${check.map}`, 'acceptance'] : [`live:${check.map}`], estimate: 120, memory: 1500}];
   if (check.type === 'sweep') return [{key: `${criterion.id}:sweep`, label: `sweep replay ${check.maps.length} maps`, sweep: check, mutex: ['live-sweep'], estimate: 75 * check.maps.length, memory: 1500}];
@@ -394,6 +400,7 @@ async function runTask(task) {
   }
   if (task.frames) return judgeFrames(task, add, fail, result);
   if (task.interface) return judgeInterface(task, add, fail, result);
+  if (task.terminal) return judgeTerminal(task, add, fail, result);
   if (task.camera) return judgeCamera(task, add, fail, result);
   if (task.live) return judgeLive(task, add, fail, result);
   if (task.sweep) return judgeSweep(task, add, fail, result);
@@ -496,12 +503,38 @@ async function judgeInterface(task, add, fail, result) {
 }
 
 // security cameras ----------------------------------------------------------------------------------------
+// One Play run per computer serves both its camera windows (4.2.28) and its terminal screen (4.4.14): the tasks run one after another (the
+// 'acceptance' mutex), the first does the run and later ones read its frame.
+const cameraPlays = new Map();
+async function cameraPlay(c, add) {
+  const key = `${c.map}:${c.name}`;
+  if (!cameraPlays.has(key)) cameraPlays.set(key, exec(process.execPath, ['scripts/camera-acceptance.mjs', 'play', '--map', c.map, '--computer', c.computer, '--user', c.user,
+    '--password', c.password, '--camera-actor', c.cameraActor, '--name', c.name, '--suffix', 'gate', '--antialias', 'off'], {limitSeconds: 1500}));
+  const play = await cameraPlays.get(key);
+  if (!play.counted) { play.counted = true; add(play); }
+  return play;
+}
+// The terminal screen outside the camera windows (4.4.14): the interface the original draws around the views, which the camera windows' own metrics skip.
+// The four stored frames read 0 pixels off by more than 2 of 255 outside the windows (the largest difference 0 to 2); a few pixels of margin.
+const TERMINAL_OVER2 = 20, TERMINAL_OVER10 = 0;
+async function judgeTerminal(task, add, fail, result) {
+  const c = task.terminal;
+  const absent = missingFiles([[`acceptance/${c.map}/${c.name}-original.png`], [`acceptance/${c.map}/${c.name}-state.json`, {copy: true}]]);
+  if (absent.length) return fail(`stored originals absent: ${absent.join(', ')}`, 'NO-ORIGINAL');
+  const play = await cameraPlay(c, add);
+  if (play.killed || play.code !== 0) return fail(`play step: ${play.killed ?? tail(play.out)}`);
+  const chrome = add(await exec(process.execPath, ['scripts/camera-acceptance.mjs', 'chrome', '--map', c.map, '--name', c.name, '--suffix', 'gate'], {limitSeconds: 300}));
+  if (chrome.killed || chrome.code !== 0) return fail(`chrome step: ${chrome.killed ?? tail(chrome.out)}`);
+  const row = JSON.parse(chrome.out.trim().split('\n').filter(line => line.startsWith('{')).at(-1));
+  if (row.over2 > TERMINAL_OVER2 || row.over10 > TERMINAL_OVER10)
+    return fail(`${c.map} ${c.name}: ${row.over2} pixels off by more than 2 and ${row.over10} by more than 10 outside the camera windows (of ${row.outsidePixels})`);
+  return {...result, status: 'PASS', detail: `${c.name}: ${row.outsidePixels} pixels outside the camera windows, ${row.over2} off by more than 2 (largest difference ${row.maxDifference})`};
+}
 async function judgeCamera(task, add, fail, result) {
   const c = task.camera;
   const absent = missingFiles([[`acceptance/${c.map}/${c.name}-original.png`], [`acceptance/${c.map}/${c.name}-state.json`, {copy: true}]]);
   if (absent.length) return fail(`stored originals absent: ${absent.join(', ')}`, 'NO-ORIGINAL');
-  const play = add(await exec(process.execPath, ['scripts/camera-acceptance.mjs', 'play', '--map', c.map, '--computer', c.computer, '--user', c.user, '--password', c.password,
-    '--camera-actor', c.cameraActor, '--name', c.name, '--suffix', 'gate', '--antialias', 'off'], {limitSeconds: 1500}));
+  const play = await cameraPlay(c, add);
   if (play.killed || play.code !== 0) return fail(`play step: ${play.killed ?? tail(play.out)}`);
   const compare = add(await exec(process.execPath, ['scripts/camera-acceptance.mjs', 'compare', '--map', c.map, '--name', c.name, '--suffix', 'gate'], {limitSeconds: 300}));
   if (compare.killed || compare.code !== 0) return fail(`compare step: ${compare.killed ?? tail(compare.out)}`);

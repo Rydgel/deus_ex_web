@@ -350,7 +350,27 @@ function compareWindows() {
   for (const row of rows) console.log(JSON.stringify({window: row.window, ratio: row.ratio, mad: row.mad, edgeRecall: row.edgeRecall, edgePrecision: row.edgePrecision, blocks: row.blockRatio}));
 }
 
+// chrome: the terminal's screen outside the camera windows (title bar, buttons, text, window frames: the interface the original draws around the views) against the
+// original's frame: the pixels off by more than 2 and by more than 10 of 255 over everything the camera windows' rectangles (from `<name>-<suffix>.json`) do not
+// cover. One JSON row on stdout and `<name>-<suffix>-chrome.json` (docs/interface-frames.md "Computer screens").
+function chrome() {
+  const rects = JSON.parse(readFileSync(path.join(dir, `${name}-${PLAY}.json`), 'utf8')).rects;
+  const rgb = file => execFileSync('magick', [file, '-depth', '8', 'rgb:-'], {maxBuffer: 1 << 28});
+  const A = rgb(path.join(dir, `${name}-original.png`)), B = rgb(path.join(dir, `${name}-${PLAY}.png`));
+  let over2 = 0, over10 = 0, outside = 0, max = 0;
+  for (let y = 0; y < HEIGHT; y++) for (let x = 0; x < WIDTH; x++) {
+    if (rects.some(([rx, ry, rw, rh]) => x >= rx && x < rx + rw && y >= ry && y < ry + rh)) continue;
+    outside++;
+    const i = 3 * (y * WIDTH + x), d = Math.max(Math.abs(A[i] - B[i]), Math.abs(A[i + 1] - B[i + 1]), Math.abs(A[i + 2] - B[i + 2]));
+    if (d > 2) over2++; if (d > 10) over10++; max = Math.max(max, d);
+  }
+  const row = {map, name, suffix: PLAY, rects, outsidePixels: outside, over2, over10, maxDifference: max};
+  writeFileSync(path.join(dir, `${name}-${PLAY}-chrome.json`), JSON.stringify(row, null, 1));
+  console.log(JSON.stringify(row));
+}
+
 if (verb === 'play') await play();
 else if (verb === 'original') await original();
 else if (verb === 'compare') compareWindows();
-else console.log('usage: camera-acceptance.mjs play|original --map M --computer C --user U --password P --name n');
+else if (verb === 'chrome') chrome();
+else console.log('usage: camera-acceptance.mjs play|original|compare|chrome --map M --computer C --user U --password P --name n');
