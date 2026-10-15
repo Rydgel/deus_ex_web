@@ -68,9 +68,20 @@ absolute difference and the edge metrics of `visual-acceptance.mjs compare`, and
 replaces the scenario by an experiment's views (`{name: {modal, steps}}`), run in order on both sides; `--settle ms` is the wait after the camera
 is placed (12 s, so the start text and the load's log lines are gone).
 
+## Computer screens
+
+The security-camera captures ([visual acceptance](visual-acceptance.md#security-cameras-2026-10-14)) are frames of a computer's screen too: the NetworkTerminalSecurity window
+after the login, with its title, its buttons and three camera windows, taken in the original at a held level time and reproduced in Play by `camera-acceptance.mjs`.
+Their metrics cover only the three 200 x 150 camera windows; `camera-acceptance.mjs chrome` compares everything else. On the four stored frames (Ocean Lab, Battery
+Park, the Hong Kong market, the Ship) **no pixel of the 831,600 outside the windows differs, at all** (the largest difference is 0 of 255 on the Ship's; the 241,
+58, 1,774 and 8,086 pixels off by more than 2 are all inside the camera windows: their cause is [the camera comparison's](visual-acceptance.md#result)). So the
+terminal's own interface (the window frame, title bar, text, buttons) is exact, here with both programs' Brightness at the identity. These frames do not cover the
+login screen before the login or the other terminal families (the personal computer's e-mail, the public bulletins, an ATM, `terminals-play` runs those through the real
+frob path without an original frame); capturing them needs a live level held by the tracer, as the cameras do.
+
 ## The gate
 
-Rows 4.4.11 to 4.4.14 of the [Stage 4 gate](stage-4-exit-criteria.md) are one `interface` check each (`validate-stage4-acceptance.mjs`): the check stages the
+Rows 4.4.11 to 4.4.14 of the [Stage 4 gate](stage-4-exit-criteria.md) are one `interface` check each (4.4.14 adds four `terminal` checks: the screens above, sharing Play's run with 4.2.28's camera checks) (`validate-stage4-acceptance.mjs`): the check stages the
 stored frames and level times into the checkout's `.work` (a link or a copy, never over a file Play writes), runs Play's whole sequence once
 (`interface-acceptance.mjs play --suffix gate`: 18 views, about two minutes), compares, and judges its own views from the shared report: at least 99% of
 the pixels identical, at most 64 pixels off by more than 10 of 255, mean absolute difference at most 0.1, edge recall and precision at least 0.99 and no outlier
@@ -167,8 +178,8 @@ persona screens (inventory twice, health, skills, goals and notes, logs, images,
 three Settings screens (the Settings menu, Game Options, Adjust Colors), a datacube's information display and the keypad. The interface is equal to the
 original's to within 2 of 255 everywhere (cause 1 and 2 were the only differences), and the interface text is the original's own glyph output.
 
-Not covered, by name: a computer's login screen and the screens behind it (they need a live level held by the tracer, as the security cameras do:
-[visual acceptance](visual-acceptance.md#security-cameras-2026-10-14)); the DataLink and InfoLink windows and conversation screens in a frame; a held weapon's
+Not covered, by name: a computer's login screen before the login and the other terminal families' screens (they need a live level held by the tracer, as the security cameras do:
+[visual acceptance](visual-acceptance.md#security-cameras-2026-10-14); the security terminals' screen after login is covered above); the DataLink and InfoLink windows and conversation screens in a frame; a held weapon's
 ammo display and the first-person weapon (gate row 4.1.10); the Controls, Sound and Display screens (the two programs' ini differ, above); Load and Save Game
 (Stage 6); another map's HUD or another resolution (the root's integer multipliers are the same code, but only 1280x720 was compared); the cause of cause
 5; a mouse hover's colour change on a button under the pointer (the scenario parks the cursor).

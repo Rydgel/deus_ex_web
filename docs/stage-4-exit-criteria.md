@@ -24,7 +24,7 @@ First run, 2026-10-15 on master 2386f69 plus this branch (Linux host, AMD, 30 GB
 | **Total** | **44** | **2** | **3** | **0** | **21** | **5** |
 
 **Update, interface frames (2026-10-15, [interface frames](interface-frames.md)):** rows 4.4.11 to 4.4.14 are `PASS`, from 18 views of 00_Training compared with
-the original's frames (the HUD, eight persona screens, the main menu, three Settings screens, a datacube and the keypad); the clause 4.4 row of the first-run table reads
+the original's frames (the HUD, eight persona screens, the main menu, three Settings screens, a datacube and the keypad) and from the four stored security-computer screens (outside their camera windows); the clause 4.4 row of the first-run table reads
 14 PASS, 0 MISSING and the total 48 of 70 PASS, 17 MISSING. The comparison found two divergences of Play, both fixed (the GC's authored underline texture and the window system's real-time tick).
 
 The table below is the whole gate, one row per criterion (`--markdown` re-renders it from the report). The ids are stable; `4.n.m` is clause n, row m.
@@ -114,7 +114,7 @@ A mode in brackets names how the check exercises Play (see [How the gate judges]
 | 4.4.11 | 00_Training HUD | the HUD, belt and log in a frame against the original's: the health display, compass, key ring and a belt slot with its item, a log line and its timeout | O1 | `interface 00_Training (3 views)` [worker] | PASS |
 | 4.4.12 | persona screens | inventory (empty and with an item), health, skills, goals and notes, logs, images, conversations and augmentations in a frame against the original's | O1 | `interface 00_Training (9 views)` [worker] | PASS |
 | 4.4.13 | main menu and Settings | the main menu, the Settings menu, Game Options and Adjust Colors in a frame against the original's | O1 | `interface 00_Training (4 views)` [worker] | PASS |
-| 4.4.14 | 00_Training datacube and keypad | a datacube's information display and the keypad in a frame against the original's | O1 | `interface 00_Training (2 views)` [worker] | PASS |
+| 4.4.14 | datacube, keypad and computer screens | a datacube's information display, the keypad and a security computer's screen (four maps) in a frame against the original's; the screen outside the camera windows | O1 | `interface 00_Training (2 views)` [worker], `terminal 14_OceanLab_Lab cs1` [worker], `terminal 02_NYC_BatteryPark bp2` [worker], `terminal 06_HongKong_WanChai_Market hk0` [worker], `terminal 09_NYC_Ship sh3` [worker] | PASS |
 | 4.4.15 | Load Game, Save Game, QuickSave screens | the save-game directory screens | - | excluded: Stage 6 (saved games; native 3013) | EXCLUDED |
 | 4.4.16 | multiplayer menus and screens | the multiplayer join, host and in-game screens | - | excluded: multiplayer is the last priority and may stay unsupported (AGENTS.md) | EXCLUDED |
 
@@ -165,7 +165,7 @@ says why it has its value and how strong that reason is.
 | Brightness | not judged | Play's raw frames are 1.1 to 1.45 times the original's under Wine: a known Windows gamma issue, kept out of scope on the user's instruction. Security-camera windows are captured at Brightness 2/3, where the ramp is the identity. |
 | Security-camera window | mean abs. difference at most 1.0, edge recall and precision at least 0.90 | The documented values with the sampling state and display-space filtering are 0.00 to 0.15. The precision of a Battery Park window moved between .948 and .99 across runs (two walking actors), hence 0.90. Weak. |
 | Matched capture settings | `?antialias=0`, `?detailTextures=0` | Every stored original lacks multisampling and the detail pass (Wine's device has no `BLENDDIFFUSEALPHA`); Play's defaults (both on) stay as they are. |
-| Interface frames | at least 99% of the pixels identical, at most 64 pixels off by more than 10 of 255, mean absolute difference at most 0.1, edge recall and precision at least 0.99, no outlier block | The 18 views are within 2 of 255 everywhere but one world scanline of 57 pixels (up to 27 levels) and, in the datacube view, 90 pixels of at most 13 levels. Strong for what it excludes: Play before the two fixes fails every frame they changed (the closest has 105 pixels over 10). Weak for the margins (7 pixels over the worst measured, .9922 against .99). |
+| Interface frames | at least 99% of the pixels identical, at most 64 pixels off by more than 10 of 255, mean absolute difference at most 0.1, edge recall and precision at least 0.99, no outlier block; a security computer's screen outside its camera windows: at most 20 pixels off by more than 2 and none by more than 10 | The 18 views are within 2 of 255 everywhere but one world scanline of 57 pixels (up to 27 levels) and, in the datacube view, 90 pixels of at most 13 levels. Strong for what it excludes: Play before the two fixes fails every frame they changed (the closest has 105 pixels over 10). Weak for the margins (7 pixels over the worst measured, .9922 against .99). The four terminal screens read 0 pixels over 2 outside the camera windows (the largest difference 0), so the 20-pixel allowance is a margin, not a measurement. |
 | Live-scene tolerance | every watched field of every actor, the clock and the stream draws equal; a stream-draw-only difference is repeated once | The Underworld's draw count differed at tick 45 on the first replay in two of two fresh runs and was equal on the repeat (the unattributed intermittent of [visual acceptance](visual-acceptance.md#open)); a repeat that passes is reported as `flaky`. |
 
 **Real-x87 probes.** `window-scene-frame` runs a small probe executable under Wine to measure `appTan` on hardware. The gate points those validators
@@ -218,7 +218,7 @@ reach those functions with real scene inputs. Nothing compares what the speakers
 (hundreds of cases per family); the HUD, a datacube, a computer, the keypad and the DataLink run the original bytecode through the real frob and input
 paths. The first run found that **no frame of the original's HUD, menus or screens had ever been compared with Play's** (4.4.11 to 4.4.14); [interface frames](interface-frames.md)
 now compares 18 views of 00_Training pixel for pixel (equal to within 2 of 255 apart from one scanline of the world), which found and fixed two divergences. Still not compared
-in a frame: a computer's login screen, the DataLink, InfoLink and conversation windows, a held weapon's ammo display, another map's HUD or another resolution.
+in a frame: a computer's login screen (the four security terminals' screens after login are, outside their camera windows), the DataLink, InfoLink and conversation windows, a held weapon's ammo display, another map's HUD or another resolution.
 
 **Speech, lip sync and the conversation camera.** Galaxy's lip-sync analysis equals the DLL bit for bit, MeetPaul runs end to end with the camera,
 the letterbox and the render clip checked against Extension.dll, and Paul's mouth follows the letters in the browser. There is no frame or sound of
@@ -321,7 +321,7 @@ From the first scoreboard: 26 of 70 gating criteria were not `PASS` (2 `FAIL`, 3
 Nothing below was fixed in this task beyond wiring existing checks; each item is sized for one agent.
 
 1. **The interfaces against the original's frames (4.4.11 to 4.4.14): done 2026-10-15** ([interface frames](interface-frames.md): the recipe, 18 views, the two divergences found and
-   fixed, the gate rows `PASS`). What a frame still does not cover: a computer's login screen (it needs a live level held by the tracer, as the security cameras do), the DataLink,
+   fixed, the gate rows `PASS`). The terminal screens of four security computers are compared too (the camera frames outside their windows are pixel-equal). What a frame still does not cover: a computer's login screen before the login (it needs a live level held by the tracer, as the security cameras do), the DataLink,
    InfoLink and conversation windows, a held weapon's ammo display (with 4.1.10), another map's HUD and another resolution, and one open difference of the pointer input (a stationary
    cursor over a screen that replaced another: the original focuses the button under it, Play does not; the cause is unmeasured).
 2. **Speech and the conversation camera have no original frame or sound (4.5.5 to 4.5.8).** The camera, letterbox and lip-sync code are compared with the
