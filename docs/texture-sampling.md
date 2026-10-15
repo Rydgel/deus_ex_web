@@ -33,6 +33,69 @@ In GL terms (what wined3d and a host both end up with) that is `LINEAR_MIPMAP_NE
 detail bias of -0.5, and `NEAREST_MIPMAP_NEAREST` with `NEAREST` magnification for `PF_NoSmooth`. The
 level drawn is GL's nearest rule, `d = ceil(lambda + 1/2) - 1`, `lambda = log2(texels per pixel) - 0.5`.
 
+## Texture formats, uploads and stage operations (D3DDrv.dll, 2026-10-15)
+
+What produces a pixel's value at the dark end, from the instructions (traced for the darkest-pixel item of
+[visual acceptance](visual-acceptance.md#differences)). Every address is in D3DDrv.dll.
+
+**Which format the device picks.** `SetRes` enumerates the device's texture formats
+(`IDirect3DDevice7::EnumTextureFormats`, vtable `+0x10`, `0x1000beaf`, callback thunk `0x1000111d`, the list at
+`this+0x950`) and registers formats through `0x10009d60` (thunk `0x100010d2`), a record of the 32-byte
+`DDPIXELFORMAT` (`+0x00..0x1f`), the name pointer (`+0x24`), the bit count (`+0x28`) and the largest width and height
+(`+0x2c`, `+0x30`: the device's maximum, `this+0x328/0x32c`, clamped by the 256 the caller passes, `push 0x100` twice).
+* **8888 at `this+0x1b0`:** registered when the display depth `this+0xe0` is at least 24 (`cmp eax,0x18; jb`,
+  `0x1000bec9`) and an enumerated format has flags `0x41` (`DDPF_RGB | DDPF_ALPHAPIXELS`), 32 bits, masks A
+  `0xff000000`, R `0xff0000`, G `0xff00`, B `0xff` (`0x1000bef5..0x1000bf34`).
+* **A1R5G5B5 at `this+0x214`:** only when no 32-bit record was registered (`this+0x278` list empty,
+  `0x1000bf3c..0x1000bfb2`: masks `0x7c00`, `0x3e0`, `0x1f`, alpha `0x8000`).
+* **Measured in the running original** (Wine, `dump-actor-win D3DRenderDevice`, 14_OceanLab_Lab): `+0x1b0` size `0x20`,
+  flags `0x41`, 32 bits, masks `0xff0000 / 0xff00 / 0xff / 0xff000000`, largest texture `0x100 x 0x100`; `+0x214` is 0; display
+  bits `0x20`; `UseMipmapping` and `UseMultitexture` words nonzero (`0x800`, `0x200`), `UseTrilinear` 0;
+  `TextureOpCaps` `0xfef7ff` (`scripts/original-run.sh 14_OceanLab_Lab wine ad/build/dump-actor-win.exe D3DRenderDevice Fmt8888Size:0x1b0:u32
+  Fmt8888Flags:0x1b4:u32 Fmt8888Bits:0x1bc:u32 Fmt8888Rmask:0x1c0:u32 Fmt1555Size:0x214:u32 DisplayBits:0xe0:u32 UseMultitexture:0x9b4:u32`).
+  So this device draws every texture as 8888, with nothing quantized to 16 bits.
+
+**The upload** (`CacheTextureInfo`, `0x10008a60`). `Info.Format` (`+0x24`) selects a converter record (`0x10008b0e..0x10008b73`):
+format 0 (P8) `this+0x28c` with 8888 or `+0x29c` with 16 bits, format 1 (RGBA7) `+0x284` or `+0x294`, format 3 (DXT1) `+0x27c`
+(set in the constructor, `0x10001f72..0x10001fba`; any other format is an error string). A record is a pair
+`{descriptor, format record}`; the descriptors (`0x100182dc` P8 16-bit, `0x100182e8` RGBA7 16-bit, `0x100182f4` P8 8888,
+`0x10018300` RGBA7 8888, `0x1001830c` DXT1) each hold two jump thunks, slot 0 *prepare* and slot 1 *fill a mip level*, which the
+upload calls around the surface lock (`0x10008fc1`, `0x100090df`).
+* **RGBA7 to 8888** (the light maps): slot 0 is a bare `ret 0x10` (`0x10002090`); slot 1 is `0x10002120`, which copies each
+  source DWORD shifted left by one (`shl ebx,1`, `0x1000215c`; `shl ebp,1`, `0x100021b3`). Every byte is `2 x` the stored value,
+  alpha too, so a light-map channel `b` (7 bits, Render.dll caps it at 127) is stored as `2b`, at most 254.
+* **P8 to 8888:** slot 0 (`0x10002320`) builds the 256-entry table at `0x1002f030` from the palette bytes (alpha `[+3]`, red `[+0]`,
+  green `[+1]`, blue `[+2]` into `A8R8G8B8`) and, for a masked polygon (`PolyFlags & 2`), zeroes entry 0 (`0x1000235e..0x10002363`);
+  slot 1 (`0x10002230`) expands the rows through it (`mov ebx,[ebx*4+0x1002f030]`, `0x10002282`, `0x100022c9`).
+* The 16-bit converters (RGBA7 `0x10002390`, P8 `0x100025a0`, the 1555 records) are not reached on this device.
+
+**The stage operations** (`0x10009e20`, thiscall on the device, `IDirect3DDevice7::SetTextureStageState`, vtable `+0x94`; the mode word
+`this+0x9fc` is 1 only for PCI vendor `0x121a` (3dfx) device 5, a Voodoo3 (`this+0x924`/`+0x928`, `0x1000c213..0x1000c240`), 0 otherwise):
+
+| Stage | Colour | Alpha | Set at |
+| --- | --- | --- | --- |
+| 0 (base texture) | `MODULATE`, ARG1 texture, ARG2 diffuse | texture alpha (`SELECTARG1`) or `MODULATE` with diffuse | `0x10009eba`, `0x10009f92`, `0x1000a20b` |
+| 1 (light map) | `MODULATE`, ARG1 texture, ARG2 current; off (`DISABLE`) until a surface asks | `SELECTARG2` (current) | `0x1000a011`, `0x1000a04f`; `SetBlending` (`0x10008270`) turns it on with `PolyFlags & 0x1000000` (`0x100084b6..0x100084fe`: stage 1 colour `MODULATE`, alpha `SELECTARG2`) |
+| 2 (third pass) | `MODULATE`, ARG1 current, ARG2 diffuse | `MODULATE` | `0x1000a12a`, `0x1000a167` |
+
+No stage uses `MODULATE2X` or `MODULATE4X`: **the light map's doubling is the RGBA7 upload's shift, not a stage operation**, so the
+product the device computes is `texel x (2b / 255)` (stage 0's `texel x diffuse`, then stage 1's `x light-map texel`), and the
+brightest light is `254 / 255`. `DrawComplexSurface` (`0x10003900`) draws base texture and light map in one pass through stages 0 and 1
+when `UseMultitexture` (`this+0x9b4`) is set, a light map is present and there is no macro texture (`0x100039bd..0x100039d8`); the
+fog map, the detail texture and the macro texture are further passes (`SetBlending(0x40)`, `2 x src x dst`, `0x1000421a`,
+`0x1000453a`, `0x100049e0`; the fog pass `0x10000000`, `ONE / INVSRCCOLOR`, `0x10004d47`). The vertex diffuse of that pass is the
+product of the two textures' `MaxColor / 255` floats, `FISTP(v x 256 - 0.5)` per channel clamped to 0..255 (`0x10003ab0..0x10003bd9`);
+with 8888 textures `SetTexture` uses `MaxColor` 255 (`0x10008ef9`, [mesh lighting](mesh-lighting.md#d3d-output-ud3drenderdevicedrawgouraudpolygon-0x100056b0)),
+so the product is 1.0 and the diffuse is white (`256 - 0.5 = 255.5` rounds to even 256, clamped to 255).
+
+**Where the original rounds.** Nothing in D3DDrv or Render.dll rounds between the stored light-map byte and the framebuffer: the byte
+goes up as `2b`, the device multiplies in the GPU's arithmetic, and the framebuffer takes one conversion to 8 bits. Render.dll's own
+light-map integer path (shadow blur, ambient fill, spatial bodies, colour merge, the 127 cap) is bit-exact in Play
+([static lighting](static-lighting.md)). Play's world shader multiplies `texel x lightmap(b / 255) x 2.0`
+(`applyLightAtlas`, `src/viewer/light-atlas.mjs`): the same product, the same single conversion. What the two sides do not share is the
+GPU's texture filter and framebuffer arithmetic (the original runs it under wined3d, Play under the browser's GL), which the code
+cannot decide; the measurements are in [visual acceptance](visual-acceptance.md#differences) item 2.
+
 ## What Play did before
 
 World textures and actor skins were `LinearMipmapLinear` (trilinear) with no bias, which blends two
