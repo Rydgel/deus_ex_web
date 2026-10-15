@@ -74,8 +74,23 @@ function placeSprites(random, camera, textures, real, count) {
   return sprites;
 }
 
-/** Oracle results for `count` seeded cameras on `mapName` (`aimed`: at mirrors, for child frames). */
-export async function spriteTileOracle(mapName, { seed, count, aimed = true, perCamera = 40, ticks = 90, extraTextures = [] }) {
+/** Light coronas for one camera (docs/coronas.md "On the tile chain"): the lights DrawFrame's draw loop gets in its
+ * cache, placed like the sprites (mostly in the view, some across its edges, at the near plane and behind the
+ * camera), with the real corona skins (the Effects textures the maps' lights use) and the synthetic ones, a
+ * DrawScale from a few pixels to far larger than the frame (the corona is X * DrawScale * 0.2 wide), any
+ * LightHue and LightSaturation and a fade brightness. */
+function placeCoronas(random, camera, textures, skins, count) {
+  const pick = list => list[Math.floor(random() * list.length)];
+  return placeSprites(random, camera, textures, [], count).map(s => ({
+    texture: random() < 0.6 ? pick(skins) : s.texture, location: s.location,
+    drawScale: f(pick([0.005, 0.02, 0.05, 0.1, 0.25, 0.5, 1, 2, 4, 10, 25, 0.01 + random() * 3])),
+    hue: Math.floor(random() * 256), saturation: random() < 0.3 ? 255 : Math.floor(random() * 256),
+    brightness: f(pick([1, 1, 0.8, 0.5, 0.02, random()])) }));
+}
+
+/** Oracle results for `count` seeded cameras on `mapName` (`aimed`: at mirrors, for child frames). With `coronas` (a
+ * number per camera) each case also runs DrawFrame's corona draw loop on its root frame. */
+export async function spriteTileOracle(mapName, { seed, count, aimed = true, perCamera = 40, ticks = 90, extraTextures = [], coronas = 0 }) {
   const { sprites: records, view } = await mapSprites(mapName, ticks);
   const { model, cases, tangents, request } = await makeCases(mapName, { seed, count, aimed, views: [view] });
   // Textures: the real sprites' first, then a spread of sizes and scales.
@@ -88,6 +103,9 @@ export async function spriteTileOracle(mapName, { seed, count, aimed = true, per
   for (const [usize, vsize, scale] of [[64, 64, 1], [128, 128, 1], [32, 64, 1], [256, 128, 0.5], [16, 16, 2], [1, 1, 1], [8, 128, 1], [512, 512, 1]])
     textures.push({ key: `synthetic ${usize}x${vsize} x${scale}`, usize, vsize, scaleBits: bits(f(scale)), polyFlags: 0 });
   for (const extra of extraTextures) textures.push(extra);
+  // The lights' Skins on the maps: Effects 127 and 129, 128 x 128.
+  const skins = [];
+  if (coronas) for (const index of [127, 129]) { skins.push(textures.length); textures.push(await textureSpec({ package: 'Effects', index })); }
   let state = (seed * 2654435761) >>> 0;
   const random = () => ((state = (Math.imul(state, 1664525) + 1013904223) >>> 0) / 2 ** 32);
   const real = records.slice(0, 24).map(record => ({ ...record, drawScale: f(record.drawScale), scaleGlow: f(record.scaleGlow),
@@ -97,8 +115,12 @@ export async function spriteTileOracle(mapName, { seed, count, aimed = true, per
     sprites: placed[i].map(s => ({ actor: { locationBits: s.location.map(bits), rotation: [0, 0, 0], drawType: 1, texture: s.texture,
       drawScaleBits: bits(s.drawScale), scaleGlowBits: bits(s.scaleGlow), style: s.style,
       flags194: random() < 0.15 ? 2 : 0, flags15c: 0 } })) }));
+  // Each case's light coronas (the draw loop's cache), after the sprites' random stream.
+  const lights = cases.map(c => (coronas ? placeCoronas(random, c, textures, skins, coronas) : []));
+  if (coronas) oracleCases.forEach((c, i) => { c.coronas = lights[i].map(light => ({ texture: light.texture, locationBits: light.location.map(bits),
+    drawScaleBits: bits(light.drawScale), hue: light.hue, saturation: light.saturation, brightnessBits: bits(light.brightness) })); });
   const result = JSON.parse(execFileSync(python, ['scripts/native-sprite-draw-oracle.py'],
     { input: JSON.stringify({ gameRoot: root, tangents, model: request, textures, cases: oracleCases, d3d: { colorBits: 32 } }),
       encoding: 'utf8', maxBuffer: 1 << 30 }));
-  return { model, cases: oracleCases, placed, textures, results: result.results, uvScale: result.uvScale, view, records };
+  return { model, cases: oracleCases, placed, lights, textures, results: result.results, uvScale: result.uvScale, view, records };
 }

@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { depthConstants, floatWord } from '../src/runtime/frame-projection.mjs';
-import { canvasTile, spriteIcon, spriteVertices, stageScale } from '../src/runtime/sprite-tile.mjs';
+import { canvasTile, iconVertices, spriteIcon, spriteVertices, stageScale } from '../src/runtime/sprite-tile.mjs';
 
 // Two sprites whose numbers the unchanged original produced under Unicorn
 // (scripts/validate-sprite-tiles.mjs, 00_Training, a 1280 x 720 frame): the
@@ -51,4 +51,30 @@ test('DrawTile draws nothing for an empty, behind or outside rectangle', () => {
 test('a taller than wide texture swaps the stage slots, the logical coordinates stay', () => {
   const stage = stageScale({ infoUSize: 32, infoVSize: 64, uScale: 1, vScale: 1 });
   assert.deepEqual([stage.uSlot, stage.vSlot, stage.uMult, stage.vMult], [1, 0, 0.03125, 0.015625]);
+});
+
+// Two light coronas the original's DrawFrame loop produced under Unicorn (scripts/validate-corona-tiles.mjs, 00_Training,
+// the maps' 128 x 128 corona skin, Scale 1): the rectangle DrawFrame hands UCanvas::DrawIcon with Z 1.0, whose tile has
+// depth exactly 0 and RHW exactly 1. The first lies inside a 1280 x 720 frame, the second crosses the left edge of a
+// 1024 x 768 one.
+test('a corona inside the frame', () => {
+  const texture = { usize: 128, vsize: 128, infoUSize: 128, infoVSize: 128, uScale: 1, vScale: 1 };
+  const result = iconVertices({ x: 735.225341796875, y: 645.8365478515625, xl: 64, yl: 64 }, 1, texture, frame, depth);
+  assert.deepEqual(result.tile, { x: 735.225341796875, y: 645.8365478515625, xl: 64, yl: 64, u: 0, v: 0, ul: 128, vl: 128 });
+  const corner = (x, y, u, v) => ({ x, y, z: 0, rhw: 1, u, v });
+  assert.deepEqual(result.vertices, [corner(734.725341796875, 645.3365478515625, 0, 0), corner(734.725341796875, 709.3365478515625, 0, 1),
+    corner(798.725341796875, 709.3365478515625, 1, 1), corner(798.725341796875, 645.3365478515625, 1, 0)]);
+});
+
+test('a corona across the left edge is clipped and its source rectangle moves with it', () => {
+  const texture = { usize: 128, vsize: 128, infoUSize: 128, infoVSize: 128, uScale: 1, vScale: 1 };
+  const result = iconVertices({ x: -4.773994445800781, y: 193.463134765625, xl: 204.8000030517578, yl: 204.8000030517578 }, 1, texture,
+    { fx: 1024, fy: 768, xb: 0, yb: 0 }, depth);
+  assert.deepEqual([result.tile.x, result.tile.y, result.tile.xl, result.tile.yl, result.tile.u, result.tile.v, result.tile.ul, result.tile.vl],
+    [0, 193.463134765625, 200.0260009765625, 204.8000030517578, 2.9837465286254883, 0, 125.01625061035156, 128]);
+  const [v0, v1, v2, v3] = result.vertices;
+  assert.deepEqual([v0.x, v0.y, v2.x, v2.y], [-0.5, 192.963134765625, 199.5260009765625, 397.76312255859375]);
+  assert.deepEqual([v0.z, v0.rhw, v2.z, v2.rhw], [0, 1, 0, 1]);
+  assert.deepEqual([v0.u, v0.v, v2.u, v2.v], [0.023310519754886627, 0, 1, 1]);
+  assert.deepEqual([v1.x, v1.y, v3.x, v3.y], [v0.x, v2.y, v2.x, v0.y]);
 });

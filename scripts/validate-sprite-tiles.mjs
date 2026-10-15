@@ -45,7 +45,7 @@ const RUNS = [
   ['10_Paris_Club', { seed: 7, count: 8, perCamera: 90 }],
 ];
 const units = [];
-const totals = { maps: [], frames: 0, children: 0, sprites: 0, drawn: 0, rejected: 0, checked: 0, interior: 0, left: 0, top: 0, right: 0, bottom: 0, whole: 0,
+const totals = { maps: [], childSprites: 0, frames: 0, children: 0, sprites: 0, drawn: 0, rejected: 0, checked: 0, interior: 0, left: 0, top: 0, right: 0, bottom: 0, whole: 0,
   nearPlane: 0, renderRect: 0, translucent: 0, vertices: 0 };
 
 for (const [mapName, options] of RUNS) {
@@ -56,6 +56,9 @@ for (const [mapName, options] of RUNS) {
     const c = cases[ci];
     totals.renderRect += c.render ? 1 : 0;
     const frames = [{ index: 0, sprites: result.sprites }, ...(result.frames ?? []).map(frame => ({ index: frame.index, sprites: frame.sprites }))];
+    // The canvas stays on the master frame while a child frame's sprites draw (docs/frame-projection.md "The canvas' frame"):
+    // DrawTile clips to and D3DDrv offsets by the master's X, Y, XB, YB, FX, FY. Every frame's own are those.
+    const sizes = new Set();
     for (const frame of frames) {
       totals.frames++; if (frame.index) totals.children++;
       for (const entry of frame.sprites) {
@@ -82,6 +85,8 @@ for (const [mapName, options] of RUNS) {
           `${where}: DrawTile's rectangle and source rectangle`);
         // The clip against [0, FX] x [0, FY] keeps or rejects the rectangle.
         const [width, height, xb, yb, fx, fy] = tile.sizeAndProj;
+        sizes.add(JSON.stringify(tile.sizeAndProj.slice(0, 6)));
+        if (frame.index) totals.childSprites++;
         const vbs = events.filter(e => e[0] === 'DrawPrimitiveVB'), device = events.find(e => e[0] === 'DeviceDrawTile');
         const [x, y] = [num(icon[1]), num(icon[2])];
         const kept = xl > 0 && yl > 0 && f(x + xl) > 0 && f(y + yl) > 0 && x < num(fx) && y < num(fy);
@@ -134,6 +139,7 @@ for (const [mapName, options] of RUNS) {
         void z; void width; void height; void xb; void yb;
       }
     }
+    assert.ok(sizes.size <= 1, `${mapName} case ${ci}: every frame has the master frame's X, Y, XB, YB, FX, FY (${[...sizes]})`);
   }
   totals.maps.push(`${mapName} ${cases.length} cameras, ${records.length} runtime particle items, ${mapDrawn} tiles (${((performance.now() - started) / 1000).toFixed(0)} s)`);
 }
@@ -155,6 +161,6 @@ for (const [mapName, options] of RUNS) {
 assert.ok(totals.children > 0 && totals.drawn > 200, 'the cases reach child frames and many tiles');
 assert.ok(totals.interior > 100 && totals.left && totals.top && totals.right && totals.bottom && totals.whole && totals.nearPlane, 'the cases reach every clip branch');
 console.log(`validate-sprite-tiles: ${totals.maps.join('; ')}; ${totals.frames} frames (${totals.children} child frames, ${totals.renderRect} cameras on a render rectangle), `
-  + `${totals.sprites} Frame->Sprite sprites through DrawActorSprite -> DrawIcon -> UCanvas::DrawTile: ${totals.drawn} reach D3DDrv's DrawTile (${totals.vertices} vertices), `
+  + `${totals.sprites} Frame->Sprite sprites (${totals.childSprites} in child frames, whose X, Y, XB, YB, FX, FY are the master frame's, the frame the canvas holds) through DrawActorSprite -> DrawIcon -> UCanvas::DrawTile: ${totals.drawn} reach D3DDrv's DrawTile (${totals.vertices} vertices), `
   + `${totals.checked} vertices (position, depth, RHW, texture coordinates) equal the port bit for bit, ${totals.rejected} clipped away, ${totals.interior} inside the frame; clipped at left ${totals.left}, top ${totals.top}, right ${totals.right}, bottom ${totals.bottom}, all four ${totals.whole}; `
   + `${totals.nearPlane} within 4 units of the camera, ${totals.translucent} translucent; ${totals.gpu}; PASS`);

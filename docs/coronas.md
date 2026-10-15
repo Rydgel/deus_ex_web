@@ -223,10 +223,12 @@ matching DrawFrame ahead of PostRender. It hands the page a list of icons;
   icons are in the drawing buffer's pixels (X is the render rectangle's
   width in device pixels; before 2026-10-08 the scan used CSS pixels and
   `fx2 / Math.tan(fov * pi / 360)`). A session without OccludeBsp builds
-  the fields with `coronaFrameFromCamera`. The tile is drawn in an
-  orthographic overlay over the render rectangle with the canvas's
-  translucent blend (ONE, INVSRCCOLOR); the display ramp maps the finished
-  frame.
+  the fields with `coronaFrameFromCamera`. The tile is the original's
+  ([below](#on-the-tile-chain-2026-10-15)): in the master frame the vertex
+  shader builds UCanvas::DrawTile's clip and D3DDrv's four vertices from the
+  DrawIcon rectangle, drawn over the world with the canvas's translucent blend
+  (ONE, INVSRCCOLOR) and no depth test; the display ramp maps the finished
+  frame. A camera window's pass (no frame) keeps a flat orthographic tile.
 - **Camera frames.** A ViewportWindow's DrawWorld runs the pass on its own
   master frame (docs/script-window-viewport.md "Camera pass"): the same scan
   and cache, with the lights of the *player's* leaf, line checks starting at the
@@ -267,6 +269,78 @@ Host choices, noted:
   to test);
 - the display ramp applies to the finished frame, after the tile blends
   ([lighting](lighting.md), "Display ramp").
+
+## On the tile chain (2026-10-15)
+
+The pass ends in `Canvas.DrawIcon(Skin, X - size/2, Y - size/2, size, size, Span 0, Z 1.0, colour, fog 0,
+0x104)`; the call is the sprites' ([frame projection](frame-projection.md#sprites-the-tile-the-render-device-receives)),
+so everything after it is the same chain, with its arguments:
+
+- **The call** (Render.dll `0x10b1ba5e..0x10b1baea`). PolyFlags `push 0x104` (`0x10b1ba5e`), Fog and Color as
+  FPlane temporaries (`0x10b1ba63..0x10b1baaf`: Core's constructors through `0x10b5d528`, `0x10b5d530`,
+  `0x10b5d5c4`; the colour the oracle shows is brightness times the hue colour with W 0), `push 0x3f800000` = **Z 1.0** (`0x10b1bac7`), `push 0` the span, XL
+  and YL = size (`[ebp - 0x70]`, `0x10b1bace`), Y and X less `size * 0.5` (`fld [ebp - 0x70]; fmul [0x10b2a5c8]` at
+  `0x10b1bab5`, `fsub st(1)` at `0x10b1bad0` and `0x10b1bae1`, each stored to its argument slot at precision 24), the
+  Skin `[ebx + 0x170]`, and `call [edx + 0x60]` (`0x10b1baea`) through the viewport's canvas `[Viewport + 0x5c]`:
+  UCanvas::DrawIcon `0x10376640`, which hands UCanvas::DrawTile `0x10376160` the texture's size as the source
+  rectangle, which calls D3DDrv's DrawTile `0x10005ba0` (the sprites' steps 4 to 6).
+- **Z 1.0.** D3DDrv's `RHW = 1.0 / Z` is exactly 1 and `depth = RHW * _43 + _33 = _33 - _33` is exactly 0 (`_43 = -_33`),
+  so the tile passes every depth test and writes nothing the original's translucent tile would not: Play draws it after
+  the world with no depth test, as before.
+- **The canvas' frame.** DrawTile clips to `[0, FX] x [0, FY]` of `Canvas+0x7c` and D3DDrv offsets by that frame's XB, YB.
+  Neither DrawFrame nor DrawActorSprite updates the canvas (no virtual `+0x58` call in `0x10b1a2d0..0x10b1b745` or
+  `0x10b25080..0x10b25700`); the canvas is put on a frame once, in the Engine function containing `0x1038f68e` (the
+  `frame` probe starts at `0x1038f110`), `Viewport->Canvas->Update(Frame)` (`[edx + 0x58]` on `[edi + 0x5c]`) with
+  `CreateMasterFrame`'s result (`call [edx + 0x64]` at `0x1038f5dc`). For the corona pass, which runs in the top-level
+  frame only, that is the frame it reads: the master frame (FX, FY the render rectangle's width and height, XB, YB its
+  offset).
+
+`scripts/native-sprite-draw-oracle.py` runs the loop `0x10b1b745..0x10b1bafc` unchanged over a prepared cache (a `coronas` list
+in a case: texture, Location, DrawScale, hue, saturation, brightness; slot k holds light k at Level.Actors index k + 1) on the
+root frame the unchanged CreateMasterFrame, ComputeRenderSize and OccludeBsp left, after the frame's sprites, with the sprite
+oracle's canvas, D3D device and texture fixtures; the loop's own Coords transform, Proj.Z, FX2, FY2 and X, DrawIcon, DrawTile and
+D3DDrv's DrawTile run as original code.
+
+**Port.** `src/runtime/sprite-tile.mjs iconVertices(icon, 1, texture, frame, depth)` (DrawTile's clip and U/V scale, then
+`deviceVertices`; `spriteVertices` is `spriteIcon` followed by it); GLSL `fpCanvasTile` in `src/viewer/sprite-tile-glsl.mjs`
+(`fpSpriteTile` is `fpSpriteIcon` and it; the barrier and correctly rounded divisions are the sprites'), used by
+`frameProjection.patchCorona`, the vertex stage of the corona pass's material (`corona-pass.mjs`), with `fpSpriteVertex`
+at Z 1.0 and the host's clip depth in the middle of the volume. `main.mjs` sets the master frame's projection around the
+pass, as for the first-person weapon; a camera window's pass has no frame and keeps the flat orthographic quad;
+`?spriteTiles=off` keeps it everywhere.
+
+**Check.**
+- `validate-corona-tiles.mjs` (00_Training, 01_NYC_UNATCOIsland, 10_Paris_Club; 28 root frames, 18 of them on a render
+  rectangle; 784 lights, the maps' corona skins Effects 127 and 129 and other sizes, DrawScale from 0.005 to 25, any hue,
+  saturation and brightness; around seeded cameras in the view, across its edges and behind the eye): the loop reaches
+  DrawIcon for exactly the 759 lights the port's `coronaIcon` draws (25 are behind the eye), with the port's X, Y, size,
+  colour and PolyFlags 0x104 and Z 1.0 bit for bit on the real master frame; UCanvas::DrawTile receives the rectangle and
+  the texture's size, reaches D3DDrv's DrawTile for 694 and clips 65 away exactly as the port does; the 694 tiles' **2,776
+  vertices** (X, Y, depth, RHW, both texture coordinates, placed by SetTexture's slots) equal `iconVertices` bit for bit,
+  every depth is 0 and every RHW 1; 201 are clipped at the left, 204 at the top, 200 at the right, 210 at the bottom, 104 at
+  all four; 484 use the maps' skins, 41 are taller than wide. The GLSL on the GPU (headless Chromium, ANGLE GL on this host's
+  AMD Radeon 780M) gives the same vertices, clipped rectangle and scaled source for all 694; without the barrier 43 differ,
+  and `--mutate` (one bit of the port) fails the comparison.
+- `validate-corona-tiles-play.mjs` (worker mode, headless Chromium, 1024 x 640, 02_NYC_BatteryPark's Light410 centred and
+  with the view turned 1,900 either way; the frame frozen): the corona alone against the frame without coronas has its lit
+  pixels (18,644, 18,471, 18,536) inside the reference tile (`iconVertices` from the icon and the frame's rectangle) and filling
+  over 30% of it. With a probe texture (red first rows, green last rows) the first row is on top: red 19,537 pixels above the
+  tile's centre and green 21,153 below, none reversed (the other views alike). **The flat overlay the page drew before drew
+  every corona upside down** (the same probe: green above, red below), as the billboards drew the sprites: 16,173 of the
+  corona's 18,644 lit pixels differ from the new tile (largest channel difference 31 of 255). The skin is not symmetric.
+- Against the original (the Ship fan view fan2, [visual acceptance](visual-acceptance.md#light-effects-against-the-original-2026-10-14),
+  the stored capture of the original at TimeSeconds 52.397, Play at 52.398, 1280x720, `?spriteTiles=off` for the flat
+  overlay): whole frame mean absolute difference 3.71 (3.72 flat), edge recall .980 and precision .975 (.970 and .968), 0
+  outlier blocks in both. The 200 x 200 crop on Light33's corona: mean absolute difference 5.90 (6.11 flat), edge precision
+  .999 (.988), the lowest block brightness ratio 1.01 (0.98). The uniform brightness ratio (1.28) stays outside this work.
+- `validate-coronas`, `validate-coronas-play` (the placement of 1 icon still equals the master frame's) and the sprite
+  validators stay green (`validate-sprite-tiles`: the same 864 sprites and 3,456 vertices on the CPU and the GPU after
+  the GLSL split; `validate-sprite-tiles-play`).
+
+**Not covered**, noted: the colour D3DDrv packs from the FPlane (Play keeps brightness times the hue colour, as the icon
+carries it), texture LOD other than 0 and the render device's minimum LOD (assumed 0 as for sprites), the blend state D3DDrv's
+SetBlending picks for PolyFlags 0x104 (Play keeps the canvas's translucent blend, ONE and INVSRCCOLOR), and a camera window's
+coronas, which stay flat tiles in the window's own frame (its world keeps the camera's projection too).
 
 ## Lights behind a mover's fragments (2026-10-14)
 
@@ -348,4 +422,7 @@ goes through the validated `coronaLineVisible`; it reports the lights it passed
   ([brush tracker](brush-tracker.md) "Collision"); in the original they see
   the same fragments. Only mesh lighting and the coronas read the tracked one.
 - Light33's corona itself differs slightly from the original's at its centre
-  (a coloured fringe in the difference image); not examined.
+  (a coloured fringe in the difference image); not examined. Drawing the corona
+  the right way up ([above](#on-the-tile-chain-2026-10-15)) lowered the crop's
+  mean absolute difference from 6.11 to 5.90; the rest of the fringe is not
+  explained (the colour D3DDrv packs, or the display ramp, are the candidates).

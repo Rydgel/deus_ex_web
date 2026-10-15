@@ -79,8 +79,18 @@ export function deviceVertices(tile, z, frame, depth, texture) {
     { x: x1, y: y1, z: sz, rhw, u: u1, v: v1 }, { x: x1, y: y0, z: sz, rhw, u: u1, v: v0 }];
 }
 
+/** From the canvas on: the four vertices of a rectangle handed to UCanvas::DrawIcon
+ * at depth `z`, or null where DrawTile draws nothing. A sprite's rectangle is
+ * DrawActorSprite's (`spriteIcon`) with the sprite's camera-space Z; a light
+ * corona's is DrawFrame's own `{ x, y, xl: size, yl: size }` (coronas.mjs
+ * coronaIcon) with Z 1.0 (Render.dll 0x10b1bac7, `push 0x3f800000`), whose
+ * depth `1 * _43 + _33` is 0 (docs/coronas.md "On the tile chain"). */
+export function iconVertices(icon, z, texture, frame, depth = depthConstants(32)) {
+  const tile = canvasTile(icon, frame, texture);
+  return tile ? { icon, tile, vertices: deviceVertices(tile, z, frame, depth, texture) } : null;
+}
+
 /** The whole chain: a sprite's four vertices, or null where DrawTile draws nothing. */
 export function spriteVertices(sprite, texture, frame, depth = depthConstants(32)) {
-  const icon = spriteIcon(sprite, texture), tile = canvasTile(icon, frame, texture);
-  return tile ? { icon, tile, vertices: deviceVertices(tile, sprite.z, frame, depth, texture) } : null;
+  return iconVertices(spriteIcon(sprite, texture), sprite.z, texture, frame, depth);
 }

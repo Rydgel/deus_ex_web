@@ -3,9 +3,15 @@
  * the correctly rounded divRN of frame-projection-glsl.mjs (they must be in
  * scope), so each x87 operation of the render pass is one binary32 operation.
  *
+ *   fpSpriteIcon(a, b)
+ *       DrawActorSprite's rectangle (X, Y, XL, YL) handed to UCanvas::DrawIcon
+ *   fpCanvasTile(icon, b, c, fxy, rect, src)
+ *       UCanvas::DrawTile's clip and scale of a rectangle handed to DrawIcon
+ *       (a sprite's, or a light corona's (X, Y, size, size) with Z 1.0:
+ *       docs/coronas.md "On the tile chain"); false where DrawTile returns
+ *       without drawing
  *   fpSpriteTile(a, b, c, fxy, rect, src)
- *       DrawActorSprite's rectangle and UCanvas::DrawTile's clip and scale;
- *       false where DrawTile returns without drawing
+ *       the two together
  *   fpSpriteVertex(rect, src, a, b, c, frameRect, depth, corner, uv)
  *       D3DDrv's DrawTile: corner 0..3 of the fan (X, Y), (X, Y + YL),
  *       (X + XL, Y + YL), (X + XL, Y) as (X, Y, depth, RHW), with its logical
@@ -17,10 +23,12 @@
  * fxy = (FX, FY) of the frame; frameRect = (X, Y, XB, YB); depth = (_33, _43)
  */
 export const SPRITE_TILE_GLSL = `
-bool fpSpriteTile(vec4 a,vec4 b,vec4 c,vec2 fxy,out vec4 rect,out vec4 src){
-  rect=vec4(0.0);src=vec4(0.0);
+vec4 fpSpriteIcon(vec4 a,vec4 b){
   float xl=B(B(b.x*a.w)*b.z),yl=B(B(b.y*a.w)*b.z);
-  float x=B(a.y-B(xl*0.5)),y=B(a.z-B(yl*0.5));
+  return vec4(B(a.y-B(xl*0.5)),B(a.z-B(yl*0.5)),xl,yl);}
+bool fpCanvasTile(vec4 icon,vec4 b,vec4 c,vec2 fxy,out vec4 rect,out vec4 src){
+  rect=vec4(0.0);src=vec4(0.0);
+  float x=icon.x,y=icon.y,xl=icon.z,yl=icon.w;
   float u=0.0,v=0.0,ul=b.x,vl=b.y;
   if(!(xl>0.0)||!(yl>0.0))return false;
   float x2=B(x+xl),y2=B(y+yl);
@@ -36,6 +44,8 @@ bool fpSpriteTile(vec4 a,vec4 b,vec4 c,vec2 fxy,out vec4 rect,out vec4 src){
   src=vec4(B(u*fu),B(v*fv),B(ul*fu),B(vl*fv));
   rect=vec4(x,y,xl,yl);
   return true;}
+bool fpSpriteTile(vec4 a,vec4 b,vec4 c,vec2 fxy,out vec4 rect,out vec4 src){
+  return fpCanvasTile(fpSpriteIcon(a,b),b,c,fxy,rect,src);}
 vec4 fpSpriteVertex(vec4 rect,vec4 src,vec4 a,vec4 b,vec4 c,vec4 frameRect,vec2 depth,int corner,out vec2 uv){
   float rhw=divRN(1.0,a.x);
   float sz=B(B(rhw*depth.y)+depth.x);

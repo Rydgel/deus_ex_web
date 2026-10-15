@@ -431,8 +431,10 @@ original's texture sampling state (mip level picked, LOD bias -0.5, texels filte
 multisampled where the original's device is not (`?antialias=0`, the default is
 unchanged); the three maps' cameras look into rooms, so a camera view with a mirror, sky
 frame, fog or coronas is still checked against code and oracles only.
-Open: coronas' tile on the vertex chain (the same DrawIcon call, drawn as a screen tile
-already; arithmetic-only differences), a mirror frame's sprites measured in a browser,
+Light coronas draw through the same tile chain since 2026-10-15 (DrawFrame's loop, DrawIcon and DrawTile
+to D3DDrv's vertices: 694 tiles and 2,776 vertices bit-equal on the CPU and the GPU,
+[coronas](coronas.md#on-the-tile-chain-2026-10-15)); the flat overlay they drew before was upside down.
+Open: a mirror frame's sprites measured in a browser,
 DT_SpriteAnimOnce (unreachable in the shipped maps), clipped polygons' own
 vertices ([frame projection](frame-projection.md#unverified-and-open)), the
 darkest-pixel rounding visual acceptance found, and in live scenes (compared

@@ -430,6 +430,9 @@ change every frame, match at the held phase.
   DeusExMover1, which sit in Level->Model; it was not the Lightbulbs' cylinders. Play's corona scan now traces the tracked model,
   and the matched capture gives 0 outlier blocks, mean absolute difference 3.74 (6.17 before), edge recall .959 and precision .966
   ([coronas](coronas.md) "Lights behind a mover's fragments", `validate-coronas-tracked`, `validate-coronas-mover-play`).
+  After the coronas moved to the original's tile chain (2026-10-15, [coronas](coronas.md#on-the-tile-chain-2026-10-15)) the same
+  capture reads: mean absolute difference 3.71, edge recall .980 and precision .975, 0 outlier blocks (the flat overlay, upside
+  down, on the same code: 3.72, .970 / .968, 0).
 - *Garage garage2.* The 2 outlier blocks are on the ceiling's bright white strip lights; the red and blue ceiling panels differ by the
   darkest-pixel rounding (raw 1.9 against 2.9 on the red panel, a crop at ratio 1.38).
 - *Class 0 spot, Cylinder and NonIncidence bodies.* A static light's body runs once, into the cached static map, when a surface is first

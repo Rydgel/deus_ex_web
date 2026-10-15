@@ -101,6 +101,32 @@ export const frameProjection = {
 		} else gl_Position = vec4( 2.0, 2.0, 2.0, 1.0 );
 	}`);
   },
+  /** A light corona's material (an onBeforeCompile body for a MeshBasicMaterial plane): in
+   * a pass with a frame, a corona (`tile.on` 1; `tile.icon` the rectangle DrawFrame hands
+   * UCanvas::DrawIcon, `tile.b`, `c` as sprite-tile-glsl.mjs documents) becomes the
+   * original's tile with Z 1.0: UCanvas::DrawTile's clip and scale and D3DDrv's four
+   * vertices (docs/coronas.md "On the tile chain"), from this quad's corner. The vertex
+   * depth `1 * _43 + _33` is 0 and the tile is drawn with no depth test, so clip depth is
+   * set to the middle of the volume (the host's mapping of depth 0 would sit on the near
+   * plane). Without a frame the flat orthographic tile stays. */
+  patchCorona(shader, tile) {
+    Object.assign(shader.uniforms, uniforms, { uTileOn: tile.on, uTileIcon: tile.icon, uTileB: tile.b, uTileC: tile.c });
+    shader.vertexShader = shader.vertexShader
+      .replace('void main() {', `${frameProjectionGlsl()}\n${SPRITE_TILE_GLSL}\nuniform float uTileOn,uSpriteTiles;\nuniform vec4 uTileIcon,uTileB,uTileC;\nvoid main() {`)
+      .replace('#include <project_vertex>', `#include <project_vertex>
+	if ( uFpOn > 0.5 && uSpriteTiles > 0.5 && uTileOn > 0.5 ) {
+		vec4 tileRect, tileSrc;
+		if ( fpCanvasTile( uTileIcon, uTileB, uTileC, uFpRect.xy, tileRect, tileSrc ) ) {
+			int corner = position.x > 0.0 ? ( position.y > 0.0 ? 3 : 2 ) : ( position.y > 0.0 ? 0 : 1 );
+			vec2 tileUv;
+			gl_Position = fpClipOf( fpSpriteVertex( tileRect, tileSrc, vec4( 1.0, 0.0, 0.0, 0.0 ), uTileB, uTileC, uFpRect, uFpDepth.xy, corner, tileUv ), 1.0 );
+			gl_Position.z = 0.0;
+#ifdef USE_MAP
+			vMapUv = tileUv;
+#endif
+		} else gl_Position = vec4( 2.0, 2.0, 2.0, 1.0 );
+	}`);
+  },
   /** The pass projects with `projection` (play-camera.mjs projectionOf's
    * shape, or sim-session.mjs's child frames: Proj.Z, RProj.Z, FX15, FY15 and
    * the Coords) into `view`, the viewport the pass renders into; `rect` is

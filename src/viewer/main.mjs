@@ -1937,8 +1937,11 @@ function drawFrame(snap, time) {
   // Coronas close DrawFrame, before PostRender's weapon and HUD.
   if (coronaFrame && coronaPass) {
     lastCoronaScan = coronaFrame.frame;
+    // The tile DrawFrame hands the canvas projects in the master frame (docs/coronas.md "On the tile chain").
+    useFrameProjection(playing && !runtimeError ? frame?.projection : null);
     try { coronaPass.update(coronaFrame.frame, coronaFrame.width, coronaFrame.height); coronaPass.render(renderer); }
     catch (error) { pauseForRuntimeError(error); }
+    finally { vertexProjection.off(); }
   }
   phase('coronas');
   framePhases.mainCalls += drawCalls() - calls; calls = drawCalls();

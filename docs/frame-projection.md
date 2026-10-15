@@ -585,13 +585,22 @@ textures and others (`scripts/sprite-tile-cases.mjs`).
   to port, but not measured separately.
 * **Coronas** are the same call (`Canvas.DrawIcon(Skin, X - size/2, Y - size/2, size,
   size, Span 0, Z 1.0, colour, fog 0, PolyFlags 0x104)`, [coronas](coronas.md#the-pass-urenderdrawframe-0x10b1b46a0x10b1bb06))
-  with the rectangle already in screen pixels, which `corona-pass.mjs` draws as a
-  screen tile over the world with an orthographic camera and no depth test (the
-  original's Z 1.0 gives depth `_33 - _33 = 0`). It differs from the original's
-  tile by the arithmetic of 6 and 5 alone: `(XB - 0.5) + X` in binary32 and the
-  half-pixel the page adds back (about 1e-4 pixel at 1,000), UCanvas::DrawTile's
-  clip of a corona at the frame's edge (a linear map of the texture either way) and
-  the U/V roundings. **Not wired** to `fpSpriteTile`; open, small.
+  with the rectangle already in screen pixels: steps 4 to 6 above with Z 1.0 (RHW 1,
+  depth `_33 - _33 = 0`). They draw through `iconVertices` / `fpCanvasTile` (the sprite
+  chain's second half, split out of `fpSpriteTile`) in the master frame since 2026-10-15:
+  [coronas "On the tile chain"](coronas.md#on-the-tile-chain-2026-10-15),
+  `validate-corona-tiles` (694 tiles, 2,776 vertices bit-equal to DrawFrame's loop under
+  Unicorn, on the CPU and the GPU) and `validate-corona-tiles-play`. The flat overlay
+  they drew before was upside down, like the billboards.
+* **The canvas' frame.** UCanvas::DrawTile clips to, and D3DDrv's DrawTile offsets by,
+  `Canvas+0x7c`. Neither DrawFrame nor DrawActorSprite calls the canvas' virtual `+0x58`
+  (Update); the canvas is put on the master frame once, in the Engine function containing
+  `0x1038f68e` (`Viewport->Canvas->Update(Frame)` with CreateMasterFrame's result), so the
+  sprites of a mirror or sky child frame are clipped to and offset by the **master frame's**
+  FX, FY, XB and YB, not the child's. The oracle gives the canvas the frame it is drawing
+  (the child's); the two agree because every child frame has the master's size and offset:
+  `validate-sprite-tiles` asserts X, Y, XB, YB, FX and FY of all 55 frames of its cameras
+  (27 child frames, 252 child-frame sprites) equal the root's.
 
 Not covered, noted: DT_SpriteAnimOnce's frame choice (`0x10b252ac..0x10b25392`:
 Play draws the first frame; the shipped game assigns it nowhere, [particles](particles.md#dt_spriteanimonce-0x10b252ac0x10b25392-restored-at-0x10b254d3)), the editor and
@@ -610,8 +619,9 @@ billboards, as its world does).
   polygon homogeneously. The pixels inside the frustum agree; the vertices on its
   edges are the rasterizer's.
 * **Sprites** (and the particles, which are sprites) take the chain's vertices
-  ([Sprites](#sprites-the-tile-the-render-device-receives)). Open there: the coronas'
-  tile (the same call, arithmetic differences only), DT_SpriteAnimOnce's frame, texture
+  ([Sprites](#sprites-the-tile-the-render-device-receives); the light coronas' tile is on
+  the same chain since 2026-10-15, [coronas](coronas.md#on-the-tile-chain-2026-10-15)).
+  Open there: DT_SpriteAnimOnce's frame, texture
   LOD other than 0, the colour D3DDrv packs, a Play view of sprites in a mirror frame, a
   ViewportWindow's sprites (camera billboards). **Lasers** are meshes on the chain's
   mesh path, not separately measured. **The fog overlay's clip at view depth 380**

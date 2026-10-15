@@ -115,7 +115,8 @@ export async function runGpuUnits(units, { angle, noBarrier = false } = {}) {
  * [Info.USize, Info.VSize], fxy: [FX, FY], frameRect: [X, Y, XB, YB], depth: [_33, _43]}`.
  * Returns per unit `{kept, rect, src, vertices: [{xyzw: [X, Y, depth, RHW], uv: [u, v]}]}` as
  * binary32 words (the rectangle after the clip and the source rectangle after the scale
- * too). `noBarrier`: the mutation check, as runGpuUnits. */
+ * too). A unit with `icon: [X, Y, XL, YL]` is a light corona: that rectangle goes to UCanvas::DrawTile
+ * directly (`fpCanvasTile`) and `a[0]` is its Z (1.0). `noBarrier`: the mutation check, as runGpuUnits. */
 export async function runGpuSprites(units, { angle, noBarrier = false } = {}) {
   let fragment = `#version 300 es
 precision highp float;precision highp int;precision highp sampler2D;
@@ -126,9 +127,9 @@ layout(location=0) out vec4 oVertex;layout(location=1) out vec4 oUv;layout(locat
 void main(){
   int sprite=int(gl_FragCoord.y),corner=int(gl_FragCoord.x);
   vec4 a=texelFetch(uData,ivec2(0,sprite),0),b=texelFetch(uData,ivec2(1,sprite),0),c=texelFetch(uData,ivec2(2,sprite),0),
-    frameRect=texelFetch(uData,ivec2(3,sprite),0),d=texelFetch(uData,ivec2(4,sprite),0);
+    frameRect=texelFetch(uData,ivec2(3,sprite),0),d=texelFetch(uData,ivec2(4,sprite),0),icon=texelFetch(uData,ivec2(5,sprite),0);
   vec4 rect,src;
-  bool kept=fpSpriteTile(a,b,c,c.zw,rect,src);
+  bool kept=d.z>0.5?fpCanvasTile(icon,b,c,c.zw,rect,src):fpSpriteTile(a,b,c,c.zw,rect,src);
   vec2 uv=vec2(0.0);
   vec4 vertex=kept?fpSpriteVertex(rect,src,a,b,c,frameRect,d.xy,corner,uv):vec4(0.0);
   oVertex=vertex;oUv=vec4(uv,kept?1.0:0.0,0.0);oRect=rect;oSrc=src;}`;
@@ -151,14 +152,14 @@ void main(){
       gl.linkProgram(program);
       if (!gl.getProgramParameter(program, gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(program));
       gl.useProgram(program);
-      const n = units.length, data = new Float32Array(5 * n * 4);
+      const n = units.length, data = new Float32Array(6 * n * 4);
       units.forEach((u, i) => {
-        data.set(u.a, 20 * i); data.set(u.b, 20 * i + 4); data.set([...u.c, ...u.fxy], 20 * i + 8);
-        data.set(u.frameRect, 20 * i + 12); data.set(u.depth, 20 * i + 16);
+        data.set(u.a, 24 * i); data.set(u.b, 24 * i + 4); data.set([...u.c, ...u.fxy], 24 * i + 8);
+        data.set(u.frameRect, 24 * i + 12); data.set([...u.depth, u.icon ? 1 : 0, 0], 24 * i + 16); data.set(u.icon ?? [0, 0, 0, 0], 24 * i + 20);
       });
       const input = gl.createTexture(), fb = gl.createFramebuffer();
       gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, input);
-      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA32F, 5, n, 0, gl.RGBA, gl.FLOAT, data);
+      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA32F, 6, n, 0, gl.RGBA, gl.FLOAT, data);
       gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
       gl.bindFramebuffer(gl.FRAMEBUFFER, fb);
       gl.activeTexture(gl.TEXTURE1);
