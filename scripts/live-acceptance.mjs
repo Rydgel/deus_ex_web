@@ -480,6 +480,8 @@ async function snap() {
     if (exec.length) console.log(JSON.stringify((await page.evaluate(lines => window.deusExViewer.viewProbe({exec: lines}), exec)).output));
     if (option('run-frames', null)) await page.evaluate(() => window.deusExViewer.viewProbe({playersOnly: false}));
     await frames(Number(option('run-frames', 45)));
+    // --after-file js: an expression the page evaluates before the shot (a probe that changes what is drawn)
+    if (option('after-file', null)) { console.log(JSON.stringify(await page.evaluate(readFileSync(option('after-file'), 'utf8')))); await frames(8); }
     const file = path.join(dir, option('name', 'snap.png'));
     await page.screenshot({path: file, clip: {x: 0, y: 0, width: 1280, height: 720}});
     console.log(file, JSON.stringify(region));
@@ -582,7 +584,9 @@ async function readActors() {
 }
 
 async function evaluate() {
-  await withPlay(async ({page, frames}) => { await frames(30); console.log(JSON.stringify(await page.evaluate(option('expr')), null, 1)); });
+  // --expr "js" or --expr-file path (a longer script: an async function the page awaits)
+  const expression = option('expr-file', null) ? readFileSync(option('expr-file'), 'utf8') : option('expr');
+  await withPlay(async ({page, frames}) => { await frames(30); console.log(JSON.stringify(await page.evaluate(expression), null, 1)); });
 }
 
 async function play() {
@@ -750,7 +754,7 @@ async function play() {
 #app { height: 100vh !important; } #viewport { position: fixed !important; inset: 0 !important; width: 1280px; height: 720px; }
 #scene { position: fixed !important; left: 0 !important; top: 0 !important; margin: 0 !important; border: 0 !important; transform: none !important; width: 1280px !important; height: 720px !important; }`});
       await page.evaluate(() => window.dispatchEvent(new Event('resize')));
-      await page.evaluate(() => { const el = document.getElementById('brightness'); el.value = '0.4'; el.dispatchEvent(new Event('input')); });
+      await page.evaluate(value => { const el = document.getElementById('brightness'); el.value = value; el.dispatchEvent(new Event('input')); }, option('brightness', '0.4'));
       await frames(30);
       // The original's Strobe state at its held frame (hold<tag>.json, the original run's), unless --own-strobe: the flag flips with every
       // drawn frame at a new time, so which phase a held frame shows depends on the host's frame timing, in either program.
@@ -852,7 +856,7 @@ else if (verb === 'snap') await snap();
 else if (verb === 'population') await population();
 else if (verb === 'screen') await screen();
 else if (verb === 'sweep') await sweep();
-else if (verb === 'eval') await evaluate();
+else if (verb === 'eval' || verb === 'script') await evaluate();
 else if (verb === 'read') await readActors();
 else if (verb === 'play') await play();
 else if (verb === 'compare') compare();

@@ -478,17 +478,31 @@ open corona divergence, the Ship fan's ceiling lamps, **closed 2026-10-14**: the
 blocked by the moving brush tracker's fragments of a mover, and Play's corona scan now traces the tracked model (0 outlier
 blocks; [visual acceptance](visual-acceptance.md#light-effects-against-the-original-2026-10-14), [coronas](coronas.md)).
 
+**A pawn's third-person weapon** (2026-10-15, [weapon attachment](weapon-attachment.md), Divergence 21 of [visual
+acceptance](visual-acceptance.md#divergences-found)): Render.dll draws it inside the pawn's own DrawActorSprite, the
+weapon's `ThirdPersonMesh` posed with the hand frame DrawLodMesh makes from the pawn mesh's special triangle. The
+mechanism is recovered with addresses, run under Unicorn (Core's SafeNormal and FCoords operators unchanged) and measured
+in the running original (1,558 draws, every word of the hand frame and of the weapon's Coords equal); Play draws it in the
+main frame on the CPU path, lit with the pawn as light sink, and the Island view's pistol region against the original's
+frame goes from edge recall 0.48 and 34 outlier blocks to 0.99 and none. The "carried decoration" of the first reading
+was a Capture-the-Flag flag (multiplayer) and the muzzle flash is dead by data (no class sets `MuzzleFlashMesh`).
+
+**The darkest pixels** visual acceptance found (single raw steps at the bottom of the range) are **closed
+2026-10-15 as not a rounding difference**: the counts were the Shot ramp of the 0.6 captures and animated
+lights' states; with both taken out the two programs round alike (where the texel and light-map inputs are
+constant over a pixel's neighbourhood, 1 of 4.06 million samples differs; D3DDrv's 8888 uploads, the RGBA7
+doubling and the two MODULATE stages are traced), and the residual +-1 at filtered texels is the host GPU's
+([visual acceptance](visual-acceptance.md#the-darkest-pixels-2026-10-15-not-a-rounding-difference),
+[texture sampling](texture-sampling.md#texture-formats-uploads-and-stage-operations-d3ddrvdll-2026-10-15)).
+
 **Open.**
-- *Being worked on:* a pawn's third-person weapon, which Render.dll draws from the pawn's own draw
-  (`Pawn.Weapon`'s `ThirdPersonMesh`) and Play does not draw at all (Divergence 21, found in an Island
-  close view; carried decorations and the player's own reflection are the same family).
-  The darkest-pixel item visual acceptance found (single raw steps at the bottom of the range) is **closed
-  2026-10-15 as not a rounding difference**: the counts were the Shot ramp of the 0.6 captures and animated
-  lights' states; with both taken out the two programs round alike (where the texel and light-map inputs are
-  constant over a pixel's neighbourhood, 1 of 4.06 million samples differs; D3DDrv's 8888 uploads, the RGBA7
-  doubling and the two MODULATE stages are traced), and the residual +-1 at filtered texels is the host GPU's
-  ([visual acceptance](visual-acceptance.md#the-darkest-pixels-2026-10-15-not-a-rounding-difference),
-  [texture sampling](texture-sampling.md#texture-formats-uploads-and-stage-operations-d3ddrvdll-2026-10-15)).
+- *Being worked on:* the player's status effects (drinking, drugs, poison, gas and the rest pause at natives Play has
+  not recovered) and the screen flash (`FlashScale`/`FlashFog`, zone `ViewFlash`/`ViewFog`), which Play does not draw.
+- *Third-person weapon, left:* the player's reflection and any pawn in a mirror's child frame (wired behind
+  `?weaponMirrors=1`, unverified: no capture of the original draws an armed pawn or JC there yet), a held tool with no
+  weapon (`Pawn.SelectedItem`'s block, recovered, not wired), the weapon in a ViewportWindow's frame (security cameras),
+  the GPU path for weapons (they take the CPU path), and the weapon's frame-order of SetupForActor calls (all of a pawn's
+  frames, then its weapon's).
 - *Rendering:* the detail pass's mover surfaces, ZBIAS mapping (Wine behaves like a slope-scaled
   offset), colour interpolation and fog-map gate; clipped polygons' own vertices
   ([frame projection](frame-projection.md#unverified-and-open)); for sprites, texture LOD other than 0

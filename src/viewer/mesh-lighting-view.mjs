@@ -257,8 +257,8 @@ export function createMeshLightingView(runtime, levelSource, { exportName, expor
     /** SetupForActor for one DrawLodMesh pass of `actor`: the selected
      * lights, ambient and ScaleGlow, the actor poly flags and the unlit
      * colour. Mutates the light manager's caches exactly once per call. */
-    setupMesh(actor, fields = null, ctx = null) {
-      if (ctx) return withFrame(ctx, () => view.setupMesh(actor, fields));
+    setupMesh(actor, fields = null, ctx = null, options = null) {
+      if (ctx) return withFrame(ctx, () => view.setupMesh(actor, fields, null, options));
       if (!frame) return null;
       // `fields`: the same reads from the mesh scene's Rust pass
       // (npc-mesh-preview.mjs MB), compared under RENDER_SCAN=verify.
@@ -267,8 +267,13 @@ export function createMeshLightingView(runtime, levelSource, { exportName, expor
         for (const key of Object.keys(want)) if (!same(want[key], fields[key]))
           throw new Error(`RENDER_SCAN=verify: ${actor.name} ${key} is ${fields[key]} in mesh_reads, ${want[key]} by readNamed`);
       }
-      const v = fields ?? setupFields(actor);
-      const zoneActor = v.zone, zoneNumber = v.zoneNumber;
+      // A pawn's third-person weapon (docs/weapon-attachment.md): DrawMesh's Actor is the weapon, with the
+      // pawn's Style copied in, and its LightSink the pawn. The poly flags and the unlit colour are the
+      // weapon's; SetupForActor takes the light sink's location, leaf, zone, glow and flags, and its
+      // per-actor cache is the sink's (`options.sink`, `options.style`).
+      const v = fields ?? (options?.style === undefined ? setupFields(actor) : { ...setupFields(actor), Style: options.style });
+      const s = options?.sink ? setupFields(options.sink) : v;
+      const zoneActor = s.zone, zoneNumber = v.zoneNumber;
       const values = { Style: v.Style, bNoSmooth: v.bNoSmooth, bSelected: false,
         bMeshEnviroMap: v.bMeshEnviroMap, bMeshCurvy: v.bMeshCurvy,
         bUnlit: v.bUnlit, ZoneNumber: zoneNumber };
@@ -280,13 +285,14 @@ export function createMeshLightingView(runtime, levelSource, { exportName, expor
           read(zone, 'AmbientSaturation') ?? 0]);
         return ambient;
       };
-      const location = v.location.map(f);
-      const iLeaf = v.iLeaf;
+      const location = s.location.map(f);
+      const iLeaf = s.iLeaf;
+      const lightSink = options?.sink ?? actor;
       const sink = {
-        self: actor, index: actor, location, iLeaf,
+        self: lightSink, index: lightSink, location, iLeaf,
         zone: zoneActor ? { ambient: ambientOf(zoneActor) } : null,
-        AmbientGlow: v.AmbientGlow, ScaleGlow: v.ScaleGlow,
-        bUnlit: Boolean(values.bUnlit), bSpecialLit: Boolean(v.bSpecialLit),
+        AmbientGlow: s.AmbientGlow, ScaleGlow: s.ScaleGlow,
+        bUnlit: Boolean(options?.sink ? s.bUnlit : values.bUnlit), bSpecialLit: Boolean(s.bSpecialLit),
       }, scene = {
         levelInfo: { ambient: ambientOf(frame.levelInfo), brightness: frame.levelBrightness, timeSeconds: frame.timeSeconds },
         noise: globals.noise,

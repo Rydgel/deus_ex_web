@@ -1103,7 +1103,14 @@ constant 0.0.
     `scripts/validate-class-import-text.mjs` compares 28 texts (pointer returned, value stored, every `StaticFindObject` argument): equal, 12 found, 3 cleared by the metaclass check, 10 NULL; the same validator
     runs `CheatView` in Play (00_Training: first actor of the class, cycling, back to None, bBehindView). Evidence and the explicit boundaries (the quoted spelling, a class Play has not linked,
     a parameter after one that ends the text: the original's pointer lies one character past the terminator): [console exec](script-console-exec.md#class-parameters-2026-10-15).
-21. **A pawn's third-person weapon is not drawn (open, found 2026-10-15 in the Island close view; not fixed).** Evidence. *The frame*: the only difference between the original's and Play's
+21. **A pawn's third-person weapon is not drawn (found 2026-10-15 in the Island close view; fixed in the main frame the same day, mirror frames open).**
+    **Result** ([weapon attachment](weapon-attachment.md)): the mechanism was confirmed by a debugger on the running original (`dx-live-win.exe weapon`: breakpoints at `0x10b256a3`,
+    `0x10b0f212`, `0x10b0f44d`, `0x10b257da`; 1,558 draws of `Terrorist22`'s Glock, `ThugMale3`'s mini crossbow and `Terrorist1`'s sniper rifle), the hand frame DrawLodMesh builds from the pawn mesh's special triangle and the
+    weapon's Coords run under Unicorn and match the original on every word, and Play now draws the weapon (`actor-weapon-sim.mjs`). *The "carried decoration" below was a misreading*: `Pawn+0x558` is
+    `PlayerReplicationInfo` and the block draws a Capture-the-Flag flag (multiplayer). *Frames*: the Island view (`--tag wpn3`, `?antialias=0`, a fresh original and the replay of its 40 ticks, the
+    level held): whole frame ratio 1.316, mean abs. diff. 2.92 (2.94 without the weapon), edge recall .999 / precision .990 (.981 / .988), sub-pixel (0, 0), 0 outlier blocks; over the pistol's
+    region (50x90 px) the mean abs. diff. 7.94 -> 3.77, edge recall .475 / precision .662 -> .991 / .991 and 34 -> 0 outlier blocks (block ratios up to 9.0 -> 1.4: the known 1.3 brightness gap
+    only). Not covered: a mirror's child frame and JC's reflection (`?weaponMirrors=1`, unverified), a tool held with no weapon (`SelectedItem`), a camera window. Original evidence follows. *The frame*: the only difference between the original's and Play's
     frames of the Island view is a metal object with two screwed lugs at the pawn's right hand (diff image, cropped and brightened). *The weapon actor is hidden in both programs*: the
     original (`DX_POST` in `live-original.sh`, `dump-actor-win.exe` on the running game) reads `Terrorist22.Weapon = WeaponPistol13` with `Mesh = Glock` (the first-person mesh), `bHidden 1`, `bOnlyOwnerSee 1`,
     `Owner`/`Base`/`Instigator` the pawn and `Location` the pawn's (Play: the same name and values; `Inventory.BecomeItem`). So the drawn object is not the hidden actor being drawn as an actor. *Render.dll draws it from the pawn's own
@@ -1431,6 +1438,10 @@ DX_HYPRLAND=1 scripts/live-original.sh 10_Paris_Club --ticks 600 --delta 0.01666
 node scripts/live-acceptance.mjs play --map 10_Paris_Club --seed 1 --tag cv --shot cv --early-cmds "<the same>" [--render-history]
 node scripts/live-acceptance.mjs snap --map <map> --exec "CheatView ...|set ..." --run-frames 120 --name v.png        # a Play frame of such a view (to choose it)
 node scripts/live-acceptance.mjs read --map <map> --names A,B --props P,Q [--run-frames N] [--offsets]            # what Play holds (or the linked offsets for dump-actor-win.exe)
+node scripts/live-acceptance.mjs script --map <map> --expr-file probe.js        # an async expression the page evaluates after 30 frames (window.deusExViewer.lodProbe({list: 'weapons'}) lists the pawns' weapons)
+node scripts/live-acceptance.mjs snap --map <map> --exec "..." --brightness 1.0 [--after-file probe.js]   # snap's brightness and a probe run before the shot
+# the original's third-person weapon draw, event by event (DX_POST runs it with the level up; docs/weapon-attachment.md), then the cases the validator compares:
+wine ad/build/dx-live-win.exe weapon 8 > .work/weapon/log.jsonl && node scripts/weapon-original-cases.mjs .work/weapon/log.jsonl --cases .work/weapon/original-cases.json
 DX_POST=script.sh scripts/live-original.sh <map> ...                                                              # a script run with the original still up (dump-actor-win.exe on its actors)
 node scripts/live-draw-shift.mjs --map <map> --tag <tag>        # the first pawn whose StartUp Sleep draw has another stream index in Play (needs LatF in the trace)
 node scripts/live-draw-attr.mjs --map <map> --tag <tag> [--actor mib1]   # tick 1's draws per actor and call site (original --actor-trace 1:1 and the CRT call breakpoints)

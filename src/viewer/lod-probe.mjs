@@ -14,6 +14,7 @@ export function lodProbe(actorSim,{all=false,list=false,settings=null}={},weapon
   if(settings===false)actorSim.resetLodSettings();
   else if(settings)actorSim.setLodSettings(settings);
   // `list`: every binding's actor, mesh and Location (to aim views).
+  if(list==='weapons')return actorSim.weaponStates();
   if(list)return actorSim.all().map(binding=>{let location=null;try{location=binding.location;}catch{}
     return {id:binding.id,actor:binding.actor?.name??null,mesh:binding.mesh?.key??null,path:binding.path,location};});
   const rows=[];

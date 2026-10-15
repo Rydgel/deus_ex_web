@@ -22,6 +22,8 @@ function transform(v,coords,point) {
   return out;
 }
 const compose=(coords,matrix)=>coords.map((v,i)=>transform(v,matrix,i===0));
+/** Core's FCoords *= FCoords (docs/weapon-attachment.md): `coords` (Origin, X, Y, Z) seen through `matrix`. */
+export const composeCoords=compose;
 function rotate(coords,rotation) {
   const [p,y,r]=rotation,s=rotatorSin,c=a=>s((a+0x4000)|0);
   for(const rows of [

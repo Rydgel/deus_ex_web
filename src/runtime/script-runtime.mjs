@@ -1684,7 +1684,12 @@ export class ScriptRuntime {
     return pending;
   }
   async prepareMesh(receiver) {
-    const reference=this.readNamed(receiver,'Mesh');
+    return this.prepareMeshReference(this.readNamed(receiver,'Mesh'));
+  }
+  /** prepareMesh for a mesh the caller names: a pawn's weapon is drawn with its
+   * ThirdPersonMesh swapped into Mesh (docs/weapon-attachment.md), which the
+   * actor's own Mesh field never holds. */
+  async prepareMeshReference(reference) {
     if(!reference||!['LodMesh','Mesh'].includes(reference.kind))return null;
     const resource=await this.prepareResource(reference);
     if(!MESH_PAYLOADS.has(resource.payloadStatus))
@@ -1737,8 +1742,17 @@ export class ScriptRuntime {
     if(!reference)throw new Error('Original GetTexture requires Actor.Mesh');
     return getMeshTexture(reference,receiver,index,this.meshTextureServices());
   }
+  /** getActorMeshTexture for a mesh the caller names (a weapon's ThirdPersonMesh). */
+  getMeshTextureOf(reference,receiver,index) {
+    if(!reference)throw new Error('Original GetTexture requires a mesh');
+    return getMeshTexture(reference,receiver,index,this.meshTextureServices());
+  }
   getActorMeshSurfaces(receiver,options={}) {
-    const mesh=this.meshPayload(receiver);
+    return this.getMeshSurfaces(this.readNamed(receiver,'Mesh'),options);
+  }
+  /** readLodMeshSurfaces of a prepared mesh the caller names. */
+  getMeshSurfaces(reference,options={}) {
+    const mesh=this.meshResource(reference)?.payload??null;
     if(!mesh)throw new Error('Original surface decoding requires a prepared LodMesh');
     if(mesh.payloadStatus!=='decoded-lodmesh')throw new Error('Classic UMesh surfaces are not bound (Stage 4 rendering)');
     return readLodMeshSurfaces(mesh,options);
