@@ -8,7 +8,8 @@ import { constructRenderIterator, renderIteratorNativeClass } from '../runtime/s
 import * as THREE from 'three';
 import { TextureStore } from '../unreal/textures.mjs';
 import { fromView } from '../unreal/geometry.mjs';
-import { createPlayCamera, applyPlayFrame, pointCamera, projectionOf, projectionOfFields, setFrameProjection, verticalFov, setPixelCentre } from './play-camera.mjs';
+import { createPlayCamera, applyPlayFrame, pointCamera, projectionOf, projectionOfFields, setFrameProjection, verticalFov, setPixelCentre,
+  setProjectionState } from './play-camera.mjs';
 import { createDrawnSet } from './drawn-set.mjs';
 import { createMeshFramePack, PACK_WORDS } from './mesh-frame-pack.mjs';
 import { createDecalDraw } from '../runtime/decal-draw.mjs';
@@ -756,8 +757,8 @@ export function createSimSession(game, { assets = null, events = [], exportName 
       if (drawn && seen?.frames?.length && size) {
         const { passes } = drawn.passes({ camera: viewportCamera, sky: pass.sky, drawWorld: false, size: { x: size[0], y: size[1] },
           mirrors: mirrorsOn, frames: seen.frames, rect: { x: command.x, y: command.y, width: command.width, height: command.height } });
-        const passDecisions = [], passFrames = [], passSky = [], stamps = { passDecisions, passFrames, passSky, mainDecisions: null,
-          skyDecisions: null, skyFrame: null };
+        const passDecisions = [], passIds = [], passFrames = [], passSky = [], stamps = { passDecisions, passIds, passFrames, passSky, mainDecisions: null,
+          skyDecisions: null, skyFrame: null, plan: { size: [size[0], size[1]], mirrors: mirrorsOn, actors: true } };
         let insideSky = [];
         for (const one of passes) {
           const frame = one.frame;
@@ -767,7 +768,9 @@ export function createSimSession(game, { assets = null, events = [], exportName 
           if (one.within && !frameIds.size) continue;
           const decisions = actorScene.framePasses(drawn.frustum(one.camera), frameIds, frame.index);
           if (one.within) insideSky.push({ frame: frame.index, decisions, light: lightCameraOf(frame) });
-          else if (one.kind === 'mirror') { passDecisions.push(decisions); passFrames.push(lightCameraOf(frame)); passSky.push(insideSky); insideSky = []; }
+          else if (one.kind === 'mirror') {
+            passDecisions.push(decisions); passIds.push(one.node.id); passFrames.push(lightCameraOf(frame)); passSky.push(insideSky); insideSky = [];
+          }
           else { stamps.skyDecisions = decisions; stamps.skyFrame = lightCameraOf(frame); }
         }
         // The camera frame's own decisions again after its child passes.
@@ -1019,8 +1022,8 @@ export function createSimSession(game, { assets = null, events = [], exportName 
       if (input.inspect) {
         const c = input.inspect.camera;
         inspectCamera.position.fromArray(c.position); inspectCamera.quaternion.fromArray(c.quaternion);
-        inspectCamera.fov = c.fov; inspectCamera.aspect = c.aspect; inspectCamera.near = c.near; inspectCamera.far = c.far;
-        inspectCamera.updateProjectionMatrix(); inspectCamera.updateMatrixWorld();
+        // The posted camera's whole projection (its pixel centre's view offset too): the page draws the snapshot with it.
+        setProjectionState(inspectCamera, c); inspectCamera.updateMatrixWorld();
         inspect = inspectCamera;
       }
       // The frame's packed GetFrame plans and SetupForActor results
@@ -1071,11 +1074,17 @@ export function createSimSession(game, { assets = null, events = [], exportName 
         const sky = !drawWorld ? null : input.play ? begun?.sky ?? null : input.inspect?.sky ?? null;
         const requested = input.play && begun?.visibility ? new Set(begun.visibility.mirrors) : null;
         const frames = input.play ? begun?.visibility?.frames ?? null : null;
-        const stamps = this.stamps({ size: { x: width, y: height }, drawWorld, sky, mirrors: input.mirrors, sprites, camera: inspect, requested,
-          actorPasses: Boolean(actorScene) && !stopped(), frames, rect: begun?.renderRect ?? null });
+        // The mirror frames are DrawWorld's child frames: none without the
+        // world frame (an empty render viewport draws no 3D).
+        const mirrors = input.mirrors && drawWorld, actorPasses = Boolean(actorScene) && !stopped();
+        const stamps = this.stamps({ size: { x: width, y: height }, drawWorld, sky, mirrors, sprites, camera: inspect, requested,
+          actorPasses, frames, rect: begun?.renderRect ?? null });
         collect(stamps.errors);
-        snapshot.stamps = { passDecisions: stamps.passDecisions, passFrames: stamps.passFrames, passSky: stamps.passSky, mainDecisions: stamps.mainDecisions,
-          skyDecisions: stamps.skyDecisions, skyFrame: stamps.skyFrame };
+        // `plan`: what the passes were planned with, which the page plans its
+        // draw with too (the canvas may have changed since the post).
+        snapshot.stamps = { passDecisions: stamps.passDecisions, passIds: stamps.passIds, passFrames: stamps.passFrames, passSky: stamps.passSky,
+          mainDecisions: stamps.mainDecisions, skyDecisions: stamps.skyDecisions, skyFrame: stamps.skyFrame,
+          plan: { size: [width, height], mirrors, actors: actorPasses } };
       }
       time('mirrors');
       if (drawWorld && input.play && coronaScan && view && !stopped()) {
@@ -1162,11 +1171,13 @@ export function createSimSession(game, { assets = null, events = [], exportName 
     /** Render feedback for the frame (Render.dll 0x10b25150): the drawn set
      * of every pass (drawn-set.mjs), stamped where the page's draws stamped
      * it, before the corona pass, the weapon and the HUD. Returns the actor
-     * layer's decision for each mirror pass in draw order and, when mirrors
-     * drew, the main frame's again. `size` is the drawing buffer's. */
+     * layer's decision for each mirror pass in draw order with the pass's
+     * `id` (mirror-passes.mjs), which the page checks against the pass it
+     * draws, and, when mirrors drew, the main frame's again. `size` is the
+     * drawing buffer's. */
     stamps({ size, drawWorld, sky = null, mirrors = true, sprites = [], camera: inspect = null, actorPasses = true, requested = null,
       frames = null, rect = null }) {
-      const errors = [], passDecisions = [], passFrames = [], passSky = [];
+      const errors = [], passDecisions = [], passIds = [], passFrames = [], passSky = [];
       let mainDecisions = null, skyDecisions = null, skyFrame = null, insideSky = [];
       const lightCamera = lightCameraOf;
       stamped = { movers: new Set(), sprites: new Set(), actors: new Set(), occluded: new Set(), bindings: new Map(),
@@ -1220,7 +1231,9 @@ export function createSimSession(game, { assets = null, events = [], exportName 
               // that mirror's pass (the page draws it into the mirror's
               // target first); a frame that draws no actor needs none.
               if (pass.within) insideSky.push({ frame: frame.index, decisions, light: lightCamera(frame) });
-              else if (pass.kind === 'mirror') { passDecisions.push(decisions); passFrames.push(lightCamera(frame)); passSky.push(insideSky); insideSky = []; }
+              else if (pass.kind === 'mirror') {
+                passDecisions.push(decisions); passIds.push(pass.node.id); passFrames.push(lightCamera(frame)); passSky.push(insideSky); insideSky = [];
+              }
               else { skyDecisions = decisions; skyFrame = lightCamera(frame); }
               if (pass === lastMirror || (pass.kind === 'sky' && !pass.within)) mainDecisions = actorScene.framePasses(null, null);
             }
@@ -1230,7 +1243,7 @@ export function createSimSession(game, { assets = null, events = [], exportName 
           if (pass.kind === 'sky' || !actorScene) continue;
           const frustum = drawn.frustum(pass.camera);
           const decisions = pass.kind === 'mirror' && actorPasses ? actorScene.passVisibility(frustum) : null;
-          if (decisions) { passDecisions.push(decisions); passFrames.push(null); passSky.push([]); }
+          if (decisions) { passDecisions.push(decisions); passIds.push(pass.node.id); passFrames.push(null); passSky.push([]); }
           for (const binding of bindings)
             if (!stamped.bindings.has(binding.id) && binding.drawnIn(frustum, decisions?.get(binding.id) ?? null)) {
               stamped.actors.add(binding.actor); stamped.bindings.set(binding.id, binding.actor); stamped.source.set(binding.actor, pass.kind);
@@ -1281,7 +1294,7 @@ export function createSimSession(game, { assets = null, events = [], exportName 
         // draw whatever their own bHidden).
         for (const actor of stamped.occluded) if (!stamped.actors.has(actor)) runtime.writeNamed(actor, 'LastRenderTime', time);
       } catch (error) { failed = true; errors.push(plainError(error)); }
-      return { errors, passDecisions, passFrames, passSky, mainDecisions, skyDecisions, skyFrame };
+      return { errors, passDecisions, passIds, passFrames, passSky, mainDecisions, skyDecisions, skyFrame };
     },
     /** DrawFrame's corona pass, which closes the world frame
      * (corona-scan.mjs): the icons over the render rect's size, or else the

@@ -349,6 +349,32 @@ by the page and applied before the next tick would not be exact.
 - The actor layer's decision for each mirror pass is computed there and
   handed to the page in pass order, with the main frame's again after the
   passes, as `mirrors.mjs` calls `updateActors`.
+- The page plans the passes it draws from the snapshot's frame, never from
+  its own state at draw time (2026-10-15). With the worker a snapshot is
+  drawn a display frame or more after its post, and a resize (or a Play/Inspect
+  switch) can land in between: the page then planned at its new canvas size,
+  or as Inspect with its free camera, and drew mirror passes the simulation
+  side had not planned ("The page drew a mirror pass the simulation side did
+  not plan", seen in sweeps under CPU load: a frame posted while the canvas
+  was 1×0 and drawn at 1024×531). Now `stamps.plan` carries the inputs the
+  simulation side planned with (`size`, the `mirrors` switch, `actors`:
+  whether it made actor decisions) and `mirrors.mjs` plans with them; a
+  snapshot draws as the mode it was simulated in, an Inspect one with the
+  posted camera's whole projection (`projectionState`, its pixel centre's
+  view offset included, which the session's camera now takes too); and
+  each pass carries an `id` (mirror-passes.mjs: the OccludeFrame frame, or
+  the groups it looks through) that the page checks against `passIds`, so
+  a pass drawn with another pass's decisions throws instead of passing
+  silently. A frame whose render viewport is empty draws no 3D
+  ([conversation camera](conversation-camera.md): the session already ran
+  no OccludeBsp, sky, corona pass or view model for it), so it has no
+  mirror passes on either side either; before, both fell back to frustum
+  planning with whatever aspect the camera kept, and stamped the actors
+  those passes saw. `validate-mirror-plan-play` resizes the window across
+  a collapsed canvas and back while facing the 02_NYC_Bar mirror, in Play
+  and in Inspect, and switches Play to Inspect there, facing the mirror
+  and turned away; at 7bca031 it fails with 8 page errors, no CPU load
+  needed.
 - A host change: a binding is stamped once the simulation side has it, and a
   sprite once its texture has decoded on the simulation side; before, both
   waited for the page's own decode. The original loads synchronously, and

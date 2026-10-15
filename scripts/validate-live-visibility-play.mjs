@@ -44,10 +44,19 @@ try {
   await page.locator('#map').selectOption(map);
   await page.waitForFunction(m => { const s = window.deusExViewer?.status(); return s?.ready && s.map === m; }, map, {timeout: 300000});
   const frames = n => page.evaluate(async n => { for (let k = 0; k < n; k++) await new Promise(r => requestAnimationFrame(r)); }, n);
-  // The frozen start of the live acceptance: bPlayersOnly from the first tick, then the ghost.
+  // The frozen start of the live acceptance: bPlayersOnly from the first tick, then the ghost once the player stands (the
+  // original's capture types it after the frozen map has opened, the player landed from the PlayerStart). A ghost after a
+  // fixed count of display frames caught him mid-fall at a height that followed the host's frame rate, and Businessman1's
+  // reflection lies on a span edge (docs/visual-acceptance.md "Live scenes", 12): under CPU load the view dropped him.
   await page.evaluate(() => window.deusExViewer.viewProbe({playersOnly: true, timeDilation: 1}));
   await page.evaluate(() => window.deusExViewer.release());
-  await frames(10);
+  let standing = null, last = null;
+  for (let k = 0; k < 300 && !standing; k++) {
+    await frames(2);
+    const view = await page.evaluate(() => window.deusExViewer.viewProbe({}));
+    if (view.physics === 1 && last === view.location.join()) standing = view; else last = view.location.join();
+  }
+  assert.ok(standing, 'the player stands (PHYS_Walking, still) before the ghost');
   const start = await page.evaluate(() => window.deusExViewer.viewProbe({ghost: true}));
   // The level clock past InStasis's 5 s (a zone time of zero reads as stale only then).
   await page.evaluate(() => window.deusExViewer.viewProbe({timeDilation: 30}));

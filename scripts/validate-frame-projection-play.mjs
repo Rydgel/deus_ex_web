@@ -81,6 +81,12 @@ try {
     await page.locator('#map').selectOption(map);
     await page.waitForFunction(map => { const s = window.deusExViewer?.status(); return s?.ready && s.map === map; }, map, { timeout: 240000 });
     const frames = n => page.evaluate(async n => { for (let k = 0; k < n; k++) await new Promise(r => requestAnimationFrame(r)); }, n);
+    // `n` frames the page drew: in worker mode a display frame without a new snapshot draws nothing (the worker is
+    // slower under load), and a page-side switch shows only in a frame drawn after it.
+    const drawn = n => page.evaluate(async n => {
+      const draws = () => window.deusExViewer.framePhases(false).draws, until = draws() + n;
+      while (draws() < until) await new Promise(r => requestAnimationFrame(r));
+    }, n);
     const shot = () => page.locator('#scene').screenshot();
     await frames(30);
     // Training: the player takes the crowbar, so the first-person weapon draws in every frame.
@@ -122,14 +128,14 @@ try {
       await page.evaluate(args => window.deusExViewer.placeProbe(args), view);
       await frames(40);
       await page.evaluate(() => window.dispatchEvent(new Event('blur')));
-      await frames(6);
+      await drawn(6);
       // --noise-with off: A and C use the camera's matrices, to tell the frame's own noise from the stage's.
       const stage = option('noise-with', 'on') !== 'off';
       await page.evaluate(stage => { window.deusExViewer.vertexProjection(stage); window.__fp.shift = 0; window.__fp.passes.length = 0; }, stage);
-      await frames(3);
+      await drawn(3);
       let a = await shot(), settled = false;
       for (let attempt = 0; attempt < 10 && !settled; attempt++) {
-        await frames(8);
+        await drawn(8);
         const again = await shot();
         settled = (await different(a, again)).count === 0;
         a = again;
@@ -139,7 +145,7 @@ try {
       totals.settled++;
       // The passes the frame was drawn with.
       const passes = await page.evaluate(() => { window.__fp.passes.length = 0; return null; });
-      await frames(2);
+      await drawn(2);
       const seen = await page.evaluate(() => window.__fp.passes);
       const main = await page.evaluate(() => window.deusExViewer.visibility()?.master);
       // Mirror child frames the page drew (Frame->Mirror -1 at odd depths), and the mirrors the main frame requested.
@@ -152,11 +158,11 @@ try {
         const origin = main.words.slice(0, 3).map(w => { const u = new Uint32Array([w >>> 0]); return new Float32Array(u.buffer)[0]; });
         assert.deepEqual(last.origin, origin, `${map}: the main pass projects with the master frame's origin`);
       }
-      await page.evaluate(() => window.deusExViewer.vertexProjection(false)); await frames(3);
+      await page.evaluate(() => window.deusExViewer.vertexProjection(false)); await drawn(3);
       const b = await shot();
-      await page.evaluate(stage => window.deusExViewer.vertexProjection(stage), stage); await frames(3);
+      await page.evaluate(stage => window.deusExViewer.vertexProjection(stage), stage); await drawn(3);
       const c = await shot();
-      await page.evaluate(() => { window.__fp.shift = 8; }); await frames(3);
+      await page.evaluate(() => { window.__fp.shift = 8; }); await drawn(3);
       const d = await shot();
       await page.evaluate(() => { window.__fp.shift = 0; });
       const [change, noise, shifted] = [await different(a, b), await different(a, c), await different(a, d)];

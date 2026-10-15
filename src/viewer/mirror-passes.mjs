@@ -214,7 +214,8 @@ export function planFramePasses(source, groups, size, frames, rect = null) {
       // camera from its own Coords.
       const skies = (byParent.get(frame.index) ?? []).filter(f => f.kind === 'sky')
         .map(sky => ({ frame: sky, camera: skyFrameCamera(camera, frame.coords, sky.coords) }));
-      const node = { group, groups: through, camera, world, depth, scissor, index: out.length, bounds, frame, skies };
+      // `id` names the pass on both sides (the frame OccludeFrame numbered).
+      const node = { id: `frame ${frame.index}`, group, groups: through, camera, world, depth, scissor, index: out.length, bounds, frame, skies };
       node.children = children({ camera, world, depth, scissor, through: group }, frame.index);
       out.push(node);
     }
@@ -264,13 +265,15 @@ export function planMirrorPasses(source, groups, size, visible = mesh => mesh.vi
       // This frame's columns [x, x+w) are the child's [W-x-w, W-x): the
       // child is mirrored against it.
       const scissor = { x: size.x - bounds.x - bounds.width, y: bounds.y, width: bounds.width, height: bounds.height };
-      const node = { group, groups: [group], camera, world, depth, scissor, index, bounds };
-      node.children = children({ camera, world, depth, scissor, through: group });
+      // `id` names the pass on both sides: the groups it looks through from the root.
+      const id = view.id ? `${view.id}>${group.key}` : group.key;
+      const node = { id, group, groups: [group], camera, world, depth, scissor, index, bounds };
+      node.children = children({ id, camera, world, depth, scissor, through: group });
       return node;
     });
   }
   source.updateMatrixWorld();
-  return children({ camera: source, world: source.matrixWorld, depth: 0,
+  return children({ id: null, camera: source, world: source.matrixWorld, depth: 0,
     scissor: { x: 0, y: 0, width: size.x, height: size.y }, through: null });
 }
 
