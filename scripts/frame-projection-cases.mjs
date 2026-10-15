@@ -44,7 +44,7 @@ function aim(eye, at, roll = 0) {
 
 /** A seeded camera sequence on a map, cameras aimed at mirror and sky
  * polygons when `aimed`. */
-async function makeCases(mapName, { seed, count, aimed, views = [] }) {
+export async function makeCases(mapName, { seed, count, aimed, views = [] }) {
   const asset = await assets.get(mapName), map = decodeMap(asset.bytes), model = map.model;
   const textureFlags = await textureFlagsOf(assets, asset, model);
   let state = seed >>> 0;

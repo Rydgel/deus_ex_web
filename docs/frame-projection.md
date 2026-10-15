@@ -407,43 +407,117 @@ host; the frame stays on vsync, 16.7 ms, in both):
 About 0.1 ms of page work a frame on the reference path (one corner copy per
 lit actor and frame, and the points in the worker's record).
 
-## Sprites: what the original does and where this stopped
+## Sprites: the tile the render device receives
 
-Not wired (2026-10-14; a hand-off). Read so far, all addresses in the retail DLLs:
+(2026-10-15.) A sprite is a screen-aligned textured rectangle, drawn after
+Render.dll's projection of one point: the chain below is the original's, read
+from the retail DLLs and run unchanged under Unicorn
+(`scripts/native-sprite-draw-oracle.py`, `scripts/validate-sprite-tiles.mjs`).
+It corrects the 2026-10-14 hand-off: the call at `0x10b254bd` goes through the
+**canvas**, not straight to the render device.
 
-* `DrawActorSprite` (Render.dll `0x10b25080`) draws one tile through the render
-  device's vtable `+0x60` (DrawTile, called at `0x10b254bd`) for a DT_Sprite
-  item. With `S` the FDynamicSprite record (`edi`): the tile's size is `XL =
-  Texture.USize * S+0xb0 * k` and `YL = Texture.VSize * S+0xb0 * k`, `k` being
-  `S+0xc0` (1.0 when the viewport's `0x5fc` flag `0x20` is set,
-  `0x10b253a0..0x10b253b2`; `0x10b253c6..0x10b253e3`, each product stored as
-  binary32), the top left `X = S+0xa8 - XL * 0.5`, `Y = S+0xac - YL * 0.5`
-  (`0x10b25481..0x10b254b9`, the constant 0.5 at `0x10b2a5c8`), the texture
-  `Texture->Get(Viewport->CurrentTime)` (`0x10b2547b`), PolyFlags the texture's
-  `| style | 0x100`. `S+0xa8`, `S+0xac` and `S+0xb0` (the projected centre and the
-  scale) are FDynamicSprite::Setup's results, which Play's sprite scan does not
-  keep (only the integer rectangle and Z: [BSP occlusion](bsp-occlusion.md),
-  validate-sprite-setup).
-* `DrawTile` (D3DDrv.dll `0x10005ba0`, thiscall, frame at `[ebp+8]`, Info `+0xc`, X
-  `+0x10`, Y `+0x14`, XL `+0x18`, YL `+0x1c`, U `+0x20`, V `+0x24`, UL `+0x28`,
-  VL `+0x2c`, Z `+0x34`, Color `+0x38`, PolyFlags `+0x58`): `RHW = 1.0 / Z`
-  (`0x10005c41..0x10005c47`, the constant at `0x10018430`), the stored depth `RHW *
-  _43 + _33` (`0x10005c65..0x10005c71`, the same SetRes constants), `X = (XB -
-  0.5) + x`, `Y = (YB - 0.5) + y` (`fild [Frame+0xb0]`, `fsub 0.5` at `0x1001864c`,
-  `fadd`: `0x10005c74..0x10005c95`), then four 0x20-byte vertices
-  `{X, Y, depth, RHW, colour, 0, u, v}` filled from `0x10005e46`: (X, Y), (X, Y +
-  YL), (X + XL, Y + YL), (X + XL, Y) with U and V scaled by the texture's
-  `0xabc`/`0xac0` multipliers. A sprite's Z is the camera-space depth the rectangle
-  was set up with, so its RHW is the exact `1/Z` rather than `RZ * RProj.Z`.
-* To do: keep Setup's centre and scale in the sprite record (Rust, with the
-  oracle's `validate-sprite-setup` cases), run `DrawActorSprite` and `DrawTile` under
-  Unicorn at the render pass's control word (the oracle of
-  `validate-decal-render` already has D3DDrv's DrawGouraudPolygon harness to copy
-  for a DrawTile one), port the four vertices, and draw sprites as quads whose
-  vertex shader takes `(X, Y, XL, YL, Z)` and builds the vertex above
-  (`fpClip`'s mapping of a given D3D vertex is `fpClipOf`, new). Particles
-  (script `ParticleIterator`) and lasers go through the same sprite and beam
-  paths; coronas have their own tile draw (`corona-pass.mjs`) and are open as well.
+1. **DrawFrame** (`0x10b1a2d0`) walks the frame's Frame->Sprite (`+0xa4`, the
+   RenderNext chain, `0x10b1b3f6..0x10b1b44b`) once in its pass 1 and once in
+   pass 2: a sprite whose actor Style is STY_Translucent (3) draws in pass 2,
+   the others in pass 1 (a span-based device, `[RenDev+0x48]`, draws every
+   sprite in pass 2), each through DrawActorSprite (thunk `0x10b011c2`, thiscall `(Frame,
+   Sprite)`, `ret 8`) with the frame being drawn.
+2. **FDynamicSprite::Setup** gave the sprite its camera-space depth Z (`+0x8`),
+   projected centre ScreenX, ScreenY (`+0xa8`, `+0xac`) and scale Persp = RZ
+   (`+0xb0`), plus the copies SetupSprite made of ScaleGlow (`+0xbc`) and
+   DrawScale (`+0xc0`) ([BSP occlusion](bsp-occlusion.md#setup-each-actors-screen-rectangle)).
+   They are now kept: the Rust sprite list is 9 words (key, rectangle, Z,
+   ScreenX, ScreenY, Persp), the Frame->Sprite output carries Z and the three
+   words after each key, `bsp-occlusion.mjs` returns them as `spriteScreens` for
+   the root and each child frame, and `sim-session.mjs` hands every sprite
+   record the values of each frame it draws in (`record.screens[frame] = [Z,
+   ScreenX, ScreenY, Persp]`, frame 0 the root's). Each frame's Setup differs:
+   a mirror or sky child frame constructs its own FDynamicSprite from its own
+   Coords. `validate-sprite-setup` and `validate-child-frames` compare the Z and
+   the three words of every drawn sprite with the original constructor, Setup
+   and OccludeBsp (1,206 sprites of the root frames, the child frames of
+   Training and Island), bit for bit.
+3. **URender::DrawActorSprite** (`0x10b25080`), sprite path (DrawType 1, 7, or
+   an actor-icon when the viewer's ShowFlags has 0x20, which Play never sets):
+   stamps `LastRenderTime` with Level.TimeSeconds (`0x10b25150..0x10b25161`),
+   takes Color = FPlane(1, 1, 1, -0) (an editor build tints a selected actor), and
+   for ScaleGlow ≠ 1 multiplies the three channels by it and caps each at 1
+   (`0x10b2524e..0x10b252a5`); the texture is `Texture->Get(CurrentTime)`
+   (`0x10b2547b`, Engine `0x10301136`: Update, then AnimCur); the tile is
+   `XL = (USize * Persp) * DrawScale`, `YL = (VSize * Persp) * DrawScale` (each
+   product rounded at precision 24, `0x10b253c6..0x10b253e3`: not Setup's
+   `(USize * DrawScale) * Persp`), `X = ScreenX - XL * 0.5`, `Y = ScreenY - YL *
+   0.5` (`0x10b25481..0x10b254b9`, the 0.5 at `0x10b2a5c8`); PolyFlags =
+   Texture.PolyFlags | the actor's style flags (`0x10b26230`: Style 2 -> 2, 3 ->
+   4, 4 -> 0x40, bits of `+0x194`, `+0x15c` and the zone) | 0x100. It calls the
+   canvas, `Viewport+0x5c`, vtable `+0x60` = **UCanvas::DrawIcon**(Texture, X,
+   Y, XL, YL, Span = the sprite's span buffer `+0xc`, Z = `+0x8`, Color, Fog =
+   FPlane(0, 0, 0, 0), PolyFlags).
+   The viewer's `Sprite` field (`+0x168`, when the viewer IsA APlayerPawn)
+   would replace the texture (`0x10b253e8..0x10b25418`); a Deus Ex player has
+   none, so Play does not model it (the decal path's `Sprite` override is the
+   same).
+4. **UCanvas::DrawIcon** (Engine `0x10376640`, export thunk `0x10303f35`)
+   calls vtable `+0x5c` = UCanvas::DrawTile(Texture, X, Y, XL, YL, 0, 0,
+   (float)Texture.USize, (float)Texture.VSize, Span, Z, Color, Fog, PolyFlags).
+5. **UCanvas::DrawTile** (Engine `0x10376160`, thunk `0x103019fb`): returns
+   unless XL > 0, YL > 0, X + XL > 0, Y + YL > 0, X < FX and Y < FY (Frame =
+   `Canvas+0x7c`, the frame the canvas was last updated with; FX, FY `+0xb8`,
+   `+0xbc`). It clips the rectangle to [0, FX] x [0, FY], moving the source
+   rectangle with it: for X < 0, `t = (X * UL) / XL`, X = 0, XL = X + XL, U = U -
+   t, UL = UL + t; at the right, `d = FX - X`, and if XL > d, `UL = (((d - XL) *
+   UL) / XL) + UL`, XL = d; the same for Y with V and FY (`0x10376236..0x103762f6`).
+   Then Update(CurrentTime) and AnimCur (outside the editor), `Texture->Lock(Info,
+   CurrentTime, LOD -1, RenDev)` (vtable `+0x54`; LOD -1 is
+   `Client.TextureLODSet[LODSet]`, 0 with the installed High detail, raised to
+   the render device's `+0x30` if that is larger: assumed 0, not measured),
+   `f = (Info.USize * Info.UScale) / Texture.USize` (fild, fmul, fidiv at
+   precision 24) multiplies U and UL, `g = (Info.VSize * Info.VScale) /
+   Texture.VSize` V and VL (`0x10376357..0x103763a0`), PolyFlags |= Texture.PolyFlags
+   & 2, and `RenDev->DrawTile(Frame, Info, X, Y, XL, YL, U, V, UL, VL, Span, Z,
+   Color, Fog, PolyFlags)` (RenDev = `Viewport+0x64`, vtable `+0x7c`), then Unlock.
+   At LOD 0 Info.USize is mip 0's, `Info.UScale = Info.VScale = Texture.Scale`
+   (the packages' `DrawScale` property; `UTexture::Lock` `0x103ecc90..0x103ecd93`).
+6. **UD3DRenderDevice::DrawTile** (D3DDrv `0x10005ba0`; the frame argument is
+   the canvas' frame): SetBlending, SetTexture, then `RHW = 1.0 / Z`
+   (`0x10005c41..0x10005c47`), `depth = RHW * _43 + _33` (`0x10005c65..0x10005c71`,
+   the SetRes constants above), `X = (XB - 0.5) + x`, `Y = (YB - 0.5) + y`
+   (`fild [Frame+0xb0]`, `fsub 0.5` at `0x1001864c`, `fadd`:
+   `0x10005c74..0x10005c95`), and four 0x20-byte vertices `{X, Y, depth, RHW,
+   colour, 0, tc0, tc1}` (`0x10005e46..0x10005f57`): (X0, Y0), (X0, Y0 + YL),
+   (X0 + XL, Y0 + YL), (X0 + XL, Y0) with (U, V), (U, V + VL), (U + UL, V + VL), (U +
+   UL, V) each scaled by the stage's UMult and VMult (`SetTexture`'s `1.0 /
+   ((Size << mip) * Scale)`, `0x10008e63..0x10008e94`; stored at the stage's UIndex
+   and VIndex slots, which swap when the texture is taller than wide:
+   `0x10008e24..0x10008e49`: the D3D texture is transposed, the logical (u, v)
+   are the same), `DrawPrimitiveVB(D3DPT_TRIANGLEFAN, VB, start, 4, 0)`.
+   The same depth constants and Z buffer as the polygons: a sprite's Z is the
+   exact camera-space depth, so its RHW is `1/Z` rather than `RZ * RProj.Z`.
+
+**The oracle** runs 2 and 3..6 as written (the canvas is an object with
+Engine's own UCanvas vtable; the D3D device, textures and SetTexture
+bookkeeping are the decal oracle's) after the unchanged constructor, Setup and
+OccludeBsp, in every frame including mirror and sky children.
+`validate-sprite-tiles` on 00_Training, 01_NYC_UNATCOIsland and 10_Paris_Club
+(27 cameras, 55 frames of which 27 children, 18 cameras on a render
+rectangle): **864 sprites** through DrawActorSprite, DrawIcon and
+UCanvas::DrawTile, all reaching D3DDrv's DrawTile (3,456 vertices); DrawActorSprite's
+X, Y, XL, YL follow from Setup's floats as in 3 (bit for bit), DrawIcon's source
+rectangle is the texture's size, `LastRenderTime` is stamped; 307 tiles lie
+inside the frame, 333 are clipped at the left, 406 at the top, 360 at the
+right, 385 at the bottom, 213 at all four, 132 are within 4 units of the camera,
+338 are translucent. The map's own DT_Sprite actors are bHidden editor
+icons, so the visible sprites are the runtime particle items (a ParticleProxy
+per particle: two on Island's start) and effect sprites; the synthetic ones use those
+textures and others (`scripts/sprite-tile-cases.mjs`).
+
+Not covered, noted: DT_SpriteAnimOnce's frame choice (`0x10b252ac..0x10b25392`:
+Play draws the first frame), the editor and hit-test paths (PushHit, the
+selected tint), the viewer's `Sprite` override, texture LOD other than 0 and
+animated textures' AnimCur chain beyond the chosen frame's size.
+Particles (script `ParticleIterator`) and lasers go through the same sprite
+and beam paths; coronas have their own tile draw (`corona-pass.mjs`) and are
+open as well.
 
 ## Unverified and open
 
