@@ -364,7 +364,9 @@ Nothing below was fixed in this task beyond wiring existing checks; each item is
 interface rows once with `compare step:` and a byte array (the `interface-acceptance.mjs compare` child exited non-zero while the other 4.4
 checks ran beside it); the same compare run by hand exited 0 with every view within the thresholds, and `--only '^4\.4\.1[1-4]$'` passed
 4 of 4. Unattributed: a shared file under `.work/acceptance/00_Training` or ImageMagick under load are the candidates. Run the interface
-rows alone before believing such a failure.
+rows alone before believing such a failure. The same day `--only '^4\.1\.[5-8]$'` failed 4.1.8 in 0 s with `ENOENT` on
+`.work/live-acceptance/stage4-gate-sweep-sweep2.json` (the replay child exited without writing it while the pilots' checks ran beside it);
+`--only '^4\.1\.8$'` alone passed. Both point at checks sharing `.work` paths when two run at once.
 
 **Not covered by this definition:** the 14 other frozen maps (a re-run command is in [What exists](#what-exists-and-the-gate-does-not-run)), pawns that fight or
 are shot while close, a moving camera in a live scene, and any NPC beyond 1,200 ticks; Stage 5 and 6 items are under [Excluded](#excluded).
