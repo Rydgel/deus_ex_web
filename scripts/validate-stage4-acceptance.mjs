@@ -7,6 +7,8 @@
  *     (Unicorn, NATIVE_PROBE_PYTHON) and Play's live inputs through the same code;
  *   - matched frames: `visual-acceptance.mjs play` + `compare` against the original's stored frames, judged by
  *     metrics chosen in this file (THRESHOLDS);
+ *   - the interface (HUD, persona screens, menus, a datacube and the keypad): `interface-acceptance.mjs play` + `compare` against stored frames,
+ *     judged by INTERFACE_THRESHOLDS (docs/interface-frames.md);
  *   - the security cameras: `camera-acceptance.mjs play` + `compare` against stored frames and state;
  *   - live scenes: `live-acceptance.mjs play` + `compare` (the original's per-tick trace replayed in Play) and
  *     `live-sweep.mjs replay` over stored traces.
@@ -27,6 +29,7 @@ import {spawn, execFileSync} from 'node:child_process';
 import {copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, statSync, symlinkSync, unlinkSync, writeFileSync} from 'node:fs';
 import path from 'node:path';
 import {fileURLToPath} from 'node:url';
+import {CRITERIA_VIEWS, ORDER as INTERFACE_ORDER} from './interface-views.mjs';
 
 const root = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const argv = process.argv.slice(2);
@@ -41,6 +44,18 @@ const THRESHOLDS = Object.freeze({
   subpixel: 0.25,        // |dx|, |dy| of the best-fit sub-pixel offset where the frame has enough gradient to measure it
   cameraMad: 1.0,        // mean abs. difference of a security camera window (200x150), Brightness 2/3 identity ramp
   cameraRecall: 0.90,    // a camera window's edge recall and precision (walking actors in a window moved the precision between runs: .95 to .99)
+});
+// The interface frames (docs/interface-frames.md): the 18 views of 00_Training compare equal to within 2 of 255 everywhere but one world scanline of
+// 57 pixels (up to 27 levels) and, in the datacube view, 90 pixels of at most 13 levels. Strong for what it excludes: a missing underline, a stale log
+// line, a wrong button or a shifted glyph are hundreds to thousands of pixels: Play before the two fixes of docs/interface-frames.md fails every one of
+// the frames they changed (the closest, ui-health, has 105 pixels over 10). Weak for the margins: set from the 18 measured values (identical at least
+// .9922; at most 57 pixels over 10, the world's scanline, plus a margin of 7).
+const INTERFACE_THRESHOLDS = Object.freeze({
+  identical: 0.99,       // share of the 921,600 pixels equal in all three channels
+  over10: 64,            // pixels off by more than 10 of 255 in a channel (the measured worst is 57)
+  mad: 0.1,              // mean absolute difference over 0..255 (the measured worst is 0.00)
+  edge: 0.99,            // edge recall and precision
+  outlierBlocks: 0,
 });
 // Views of flat, nearly black walls, where the strongest 5% of gradients are texture noise and the edge precision reads low with no visible
 // difference (docs/visual-acceptance.md "Flags explained by the metric or by timing"; Smug y0/y1 show the same pattern, recall 1.0 and
@@ -85,6 +100,7 @@ const V = (name, ...args) => ({type: 'validator', name, args});
 const FAMILY = (pattern, label) => ({type: 'family', pattern, label});
 const FRAMES = spec => ({type: 'frames', ...spec});
 const CAMERA = spec => ({type: 'camera', ...spec});
+const INTERFACE = spec => ({type: 'interface', ...spec});
 const LIVE = spec => ({type: 'live', ...spec});
 const SWEEP = spec => ({type: 'sweep', ...spec});
 const CENSUS = spec => ({type: 'census', ...spec});
@@ -230,10 +246,14 @@ add('4.4.8', C4, 'computers and security', 'ComputerWindow playback and the term
 add('4.4.9', C4, 'Training keypad', 'the keypad window takes input through the original path', 'O3', V('keypad'));
 add('4.4.10', C4, 'InfoLink, DataLink and conversation windows', 'the DataLink transmission, the InfoLink window and conversation screens run the original bytecode', 'O3',
   V('infolink-shell'), V('infolink-content'), V('instructor-conversation'), V('conversation-tile'));
-missing('4.4.11', C4, 'HUD frame', 'the HUD, belt and log in a frame against the original\'s', 'whole-renderer pixel identity of the interface is not established (script-play-hud.md)');
-missing('4.4.12', C4, 'inventory, goals and logs screens', 'a persona screen in a frame against the original\'s', 'no captured frame of the original\'s screens');
-missing('4.4.13', C4, 'main menu and Settings', 'a menu in a frame against the original\'s', 'no captured frame of the original\'s menus');
-missing('4.4.14', C4, 'datacube, keypad and computer screens', 'an information, keypad or login screen in a frame against the original\'s', 'no captured frame; the security-camera screens of 4.2.28 compare only the camera windows');
+add('4.4.11', C4, '00_Training HUD', 'the HUD, belt and log in a frame against the original\'s: the health display, compass, key ring and a belt slot with its item, a log line and its timeout', 'O1',
+  INTERFACE({map: '00_Training', views: CRITERIA_VIEWS['4.4.11']}));
+add('4.4.12', C4, 'persona screens', 'inventory (empty and with an item), health, skills, goals and notes, logs, images, conversations and augmentations in a frame against the original\'s', 'O1',
+  INTERFACE({map: '00_Training', views: CRITERIA_VIEWS['4.4.12']}));
+add('4.4.13', C4, 'main menu and Settings', 'the main menu, the Settings menu, Game Options and Adjust Colors in a frame against the original\'s', 'O1',
+  INTERFACE({map: '00_Training', views: CRITERIA_VIEWS['4.4.13']}));
+add('4.4.14', C4, '00_Training datacube and keypad', 'a datacube\'s information display and the keypad in a frame against the original\'s', 'O1',
+  INTERFACE({map: '00_Training', views: CRITERIA_VIEWS['4.4.14']}));
 excluded('4.4.15', C4, 'Load Game, Save Game, QuickSave screens', 'the save-game directory screens', 'Stage 6 (saved games; native 3013)');
 excluded('4.4.16', C4, 'multiplayer menus and screens', 'the multiplayer join, host and in-game screens', 'multiplayer is the last priority and may stay unsupported (AGENTS.md)');
 
@@ -301,6 +321,7 @@ function expand(check, criterion) {
     const name = `frames ${check.maps.join(',')}${check.explicit ? ` [${check.explicit.map(v => v.split(':')[0]).join(',')}]` : ''}`;
     return [{key: `${criterion.id}:${name}`, label: name, frames: check, mutex: ['acceptance'], estimate: 30 * check.maps.length + 20, memory: 1500}];
   }
+  if (check.type === 'interface') return [{key: `${criterion.id}:interface ${check.map}`, label: `interface ${check.map} (${check.views.length} views)`, interface: check, mutex: ['acceptance'], estimate: 120, memory: 1800}];
   if (check.type === 'camera') return [{key: `${criterion.id}:camera ${check.name}`, label: `camera ${check.map} ${check.name}`, camera: check, mutex: ['acceptance'], estimate: 120, memory: 1800}];
   if (check.type === 'live') return [{key: `${criterion.id}:live ${check.map}${check.tag ? ` ${check.tag}` : ''}`, label: `live ${check.map}${check.tag ? ` (${check.tag})` : ''}`, live: check, mutex: check.shot ? [`live:${check.map}`, 'acceptance'] : [`live:${check.map}`], estimate: 120, memory: 1500}];
   if (check.type === 'sweep') return [{key: `${criterion.id}:sweep`, label: `sweep replay ${check.maps.length} maps`, sweep: check, mutex: ['live-sweep'], estimate: 75 * check.maps.length, memory: 1500}];
@@ -372,6 +393,7 @@ async function runTask(task) {
     return {...result, status: task.mode === 'inline' ? 'INLINE' : 'PASS', detail: (task.mode === 'inline' ? 'passes, but forces ?sim=inline (not the default worker mode): ' : '') + tail(r.out, 1)};
   }
   if (task.frames) return judgeFrames(task, add, fail, result);
+  if (task.interface) return judgeInterface(task, add, fail, result);
   if (task.camera) return judgeCamera(task, add, fail, result);
   if (task.live) return judgeLive(task, add, fail, result);
   if (task.sweep) return judgeSweep(task, add, fail, result);
@@ -434,6 +456,43 @@ async function judgeFrames(task, add, fail, result) {
   }
   if (problems.length) return fail(problems.join(' | '));
   return {...result, status: 'PASS', detail: `${maps.length} map(s), ${lines.length} view(s): recall/precision/outliers ${lines.slice(0, 5).join(' ')}${lines.length > 5 ? ' ...' : ''}`};
+}
+
+// the interface ----------------------------------------------------------------------------------------------
+// The scenario is one sequence (the log's lines and the notes accumulate from view to view): Play runs all 18 views once per map, in order, and
+// each criterion judges its own views from the shared report. The criteria's tasks run one after another (the 'acceptance' mutex), so the first
+// does the run and the others read it.
+const interfaceRuns = new Map();
+async function judgeInterface(task, add, fail, result) {
+  const {map, views} = task.interface;
+  const needed = [...new Set([...views, INTERFACE_ORDER[0]])];
+  const absent = missingFiles(needed.flatMap(view => [[`acceptance/${map}/${view}-original.png`], [`acceptance/${map}/${view}-time.txt`, {copy: true}]]));
+  if (absent.length) return fail(`stored originals absent: ${absent.slice(0, 4).join(', ')}${absent.length > 4 ? ` +${absent.length - 4}` : ''}`, 'NO-ORIGINAL');
+  if (!interfaceRuns.has(map)) interfaceRuns.set(map, (async () => {
+    const play = await exec(process.execPath, ['scripts/interface-acceptance.mjs', 'play', '--map', map, '--suffix', 'gate'], {limitSeconds: 900});
+    if (play.killed || play.code !== 0 || /ERRORS/.test(play.out)) return {play, error: `play step: ${play.killed ?? tail(play.out)}`};
+    const compare = await exec(process.execPath, ['scripts/interface-acceptance.mjs', 'compare', '--map', map, '--suffix', 'gate'], {limitSeconds: 600});
+    if (compare.killed || compare.code !== 0) return {play, compare, error: `compare step: ${compare.killed ?? tail(compare.out)}`};
+    return {play, compare, report: readJson(path.join(root, `.work/acceptance/${map}/interface-gate-report.json`))};
+  })());
+  const run = await interfaceRuns.get(map);
+  if (!run.counted) { run.counted = true; for (const r of [run.play, run.compare]) if (r) add(r); }
+  if (run.error) return fail(run.error);
+  const T = INTERFACE_THRESHOLDS, problems = [], lines = [];
+  for (const view of views) {
+    const m = run.report[view];
+    if (!m || m.error) { problems.push(`${view}: ${m?.error ?? 'no comparison'}`); continue; }
+    const off = [];
+    if (m.identical < T.identical) off.push(`${(m.identical * 100).toFixed(2)}% identical < ${T.identical * 100}%`);
+    if (m.over10 > T.over10) off.push(`${m.over10} pixels off by more than 10 > ${T.over10}`);
+    if (m.mad > T.mad) off.push(`MAD ${m.mad} > ${T.mad}`);
+    if (m.edgeRecall < T.edge || m.edgePrecision < T.edge) off.push(`edges ${m.edgeRecall}/${m.edgePrecision} < ${T.edge}`);
+    if (m.outlierBlocks > T.outlierBlocks) off.push(`${m.outlierBlocks} outlier blocks`);
+    if (off.length) problems.push(`${view}: ${off.join('; ')}`);
+    lines.push(`${view.slice(3)} ${m.identical}/${m.over10}`);
+  }
+  if (problems.length) return fail(problems.join(' | '));
+  return {...result, status: 'PASS', detail: `${views.length} view(s), identical share / pixels off by more than 10: ${lines.slice(0, 5).join(' ')}${lines.length > 5 ? ' ...' : ''}`};
 }
 
 // security cameras ----------------------------------------------------------------------------------------

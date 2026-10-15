@@ -536,7 +536,8 @@ compared in 218 queries), and the flash `UGameEngine::Draw` hands the device is 
   original or marked `MISSING`), for the user to adopt. First run: 44 of 70 gating criteria pass, 2 fail
   (BatteryPark's live actors, Ship's camera window 2), 3 pass only in `?sim=inline`, 21 have no original-side
   check (the interfaces, the conversation frame and speech audio first among them); the doc orders the remaining
-  work.
+  work. Since then the interfaces are compared with the original's frames ([interface frames](interface-frames.md):
+  rows 4.4.11 to 4.4.14 pass, two divergences found and fixed).
 
 Frame cost and the Rust-core ports that keep these effects inside the frame budget are in
 [play frame cost](play-frame-cost.md).

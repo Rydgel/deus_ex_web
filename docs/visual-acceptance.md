@@ -1665,6 +1665,21 @@ node scripts/camera-acceptance.mjs play --map 14_OceanLab_Lab --computer Compute
 node scripts/camera-acceptance.mjs compare --map 14_OceanLab_Lab --name cs1 --suffix aaoff    # the windows' metrics and montages
 ```
 
+## Interface frames (2026-10-15)
+
+The HUD, the persona screens, the main menu and three Settings screens, a datacube's information display and the keypad of 00_Training, 18 views taken in
+the original under Wine and in Play with the same inputs (a console line, a key, a click, a wait) at one held level time, Brightness 2/3 in the original and
+Play's matched ramp, compared pixel for pixel: every frame is within 2 of 255 of the original's except one scanline of the world (57 pixels, up to 27 levels) and 90
+scattered pixels of at most 13 levels in the datacube frame. Two divergences were found and fixed (the GC's authored underline texture, so the accelerator letters
+of the buttons are underlined; the window system's real-time tick, so the HUD log's timeout runs while the level is held); one difference of the pointer input is open
+(a stationary cursor over a screen that replaced another). The recipe, the scenario, the numbers before and after each fix and the causes with their evidence are in
+[interface frames](interface-frames.md); the Stage 4 gate's rows 4.4.11 to 4.4.14 run them (`validate-stage4-acceptance.mjs --only '^4\.4\.1[1-4]$'`).
+
+```bash
+scripts/original-run.sh 00_Training node scripts/interface-acceptance.mjs original     # the original's frames and their level times (Wine lock)
+node scripts/interface-acceptance.mjs play && node scripts/interface-acceptance.mjs compare
+```
+
 ## Open
 
 - **Not attributed, seen in the 2026-10-14 pilot re-runs with Divergences 17 and 18 in** (every watched actor equal in all three): the Island run's stream draws differ at tick 264

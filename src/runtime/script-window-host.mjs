@@ -613,12 +613,24 @@ export async function createWindowHost({runtime, assets, player, gameConfig = nu
     for (let o = 0xd4; o <= 0xe8; o += 4) W.setU32(win, o, 0);
     W.setU32(win, 0, F.VTABLES.window);
   }
+  // XGC::operator new (Extension.dll 0x10002c40) is UObject::StaticConstructObject(GC's class, ...), so InitProperties copies the class's
+  // authored defaults into the new object before XGC::XGC (0x10026ad0) runs, and the constructor never writes the slot of the one
+  // default GC carries: underlineTexture (+0x84), tagged reference 20, Texture Extension.Solid (docs/interface-frames.md). Every
+  // underlined accelerator letter of the original's buttons is drawn from it (GC.DrawText's second emit, script-gc-draw-text.mjs).
+  const gcDefaultSlots = [];
+  for (const field of gcClass.propertyOrder ?? []) {
+    if (!gcClass.defaults?.has(field.key)) continue;
+    if (field.kind !== 'ObjectProperty') boundary(`GC class default ${field.key} is a ${field.kind}: only object references are recovered`);
+    const offset = runtime.classLoader.graph.slotOf(field.loadRecord, 0x48);
+    gcDefaultSlots.push({offset, value: runtime.defaultValue(gcClass, field)});
+  }
   // XWindow::Init XGC allocation leaves (operator new + XGC::XGC).
   function allocateGc(outer) {
     const gc = {name: `GC${nameCounter++}`, outer};
     heap.allocate(gc, 0xb8 + 0x10);
     takeOriginalSlot(gc, 'GC');
     runtime.attach(gc, gcClass);
+    for (const {offset, value} of gcDefaultSlots) heap.write(gc, offset, 'ptr', value);
     return gc;
   }
   const initServices = {

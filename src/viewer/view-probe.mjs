@@ -40,7 +40,10 @@ export function viewProbe(game, { playersOnly = null, timeDilation = null, ghost
     // it. A bare write of Location leaves the registered cells and location stale, so the player's first later move (a
     // SetRotation from UpdateRotation) fails its RemoveActor check ("Remove actor before changing its registered location").
     const move = () => runtime.writeNamed(player, 'Location', location.map(Math.fround));
-    if (game.player.actorRegistered) game.player.collision.queries.changeActor(player, move); else move();
+    // A ghost has no collision (PlayerPawn.Ghost: SetCollision(false, false, false) removed the hash entry; `actorRegistered` is the host's
+    // flag and does not follow it): a bare write is what the original's SET does, and `walk` re-adds the actor at the new Location. Moving it
+    // through changeActor there would register a ghost, and the next SetCollision(true) fails ("Actor is already registered").
+    if (game.player.actorRegistered && read('bCollideActors')) game.player.collision.queries.changeActor(player, move); else move();
     runtime.writeNamed(player, 'Velocity', [0, 0, 0]);
   }
   if (rotation) runtime.writeNamed(player, 'ViewRotation', rotation.map(v => v | 0));

@@ -275,7 +275,11 @@ export async function createGame(map, asset, assets, { randomSeed = Math.floor(D
       // Pawn physics and UpdateEyeHeight. No host player simulation follows it.
       player.timeDilation = levelDilation.get();
       doors.tick(seconds);
-      hud?.tick(doors.scriptRuntime.lastTickDelta);
+      // The window system ticks on wall-clock time, not the level's: UExtensionEngine::Tick (Extension.dll 0x100266a0) calls TickWindows
+      // (0x1003a4a0), which overwrites its argument with GetWindowsTickOffset(1) = f32(appSeconds() - last) and ticks every root with it, then
+      // runs the level's tick. So a held or slowed level (TimeDilation 0.001, a menu's pause) does not slow the log's timeout, the mission text or a
+      // button's delay, and the level's [0.005, 0.4] delta clamp does not apply (docs/interface-frames.md "Window ticks are real time").
+      hud?.tick(seconds);
     },
     /** Render.dll's auto-pan inputs (docs/texture-animation.md): the
      * LevelInfo's TimeSeconds and a zone actor's live TexUPanSpeed and

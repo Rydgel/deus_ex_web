@@ -23,6 +23,10 @@ First run, 2026-10-15 on master 2386f69 plus this branch (Linux host, AMD, 30 GB
 | 4.5 Speech, lip sync and the conversation camera | 4 | 0 | 0 | 0 | 4 | 0 |
 | **Total** | **44** | **2** | **3** | **0** | **21** | **5** |
 
+**Update, interface frames (2026-10-15, [interface frames](interface-frames.md)):** rows 4.4.11 to 4.4.14 are `PASS`, from 18 views of 00_Training compared with
+the original's frames (the HUD, eight persona screens, the main menu, three Settings screens, a datacube and the keypad); the clause 4.4 row of the first-run table reads
+14 PASS, 0 MISSING and the total 48 of 70 PASS, 17 MISSING. The comparison found two divergences of Play, both fixed (the GC's authored underline texture and the window system's real-time tick).
+
 The table below is the whole gate, one row per criterion (`--markdown` re-renders it from the report). The ids are stable; `4.n.m` is clause n, row m.
 A mode in brackets names how the check exercises Play (see [How the gate judges](#how-the-gate-judges)).
 
@@ -98,7 +102,7 @@ A mode in brackets names how the check exercises Play (see [How the gate judges]
 | Id | Scene | Criterion | Ev. | Checks (mode) | Status |
 | --- | --- | --- | --- | --- | --- |
 | 4.4.1 | fonts and text layout | font load, glyph metrics, text layout and the parser equal the original | O2 | `text-parser-diff` [oracle], `text-layout-diff` [oracle], `font-load` [oracle], `font-load-graph` [oracle], `gc-get-text-extent` [oracle], `gc-draw-text` [oracle] | PASS |
-| 4.4.2 | GC drawing | every GC native (draw, state, clip) equals Extension.dll | O2 | 49 validators (gc-get-text-extent, gc-draw-text, gc-set-text-color, ...) [oracle] | PASS |
+| 4.4.2 | GC drawing | every GC native (draw, state, clip) equals Extension.dll | O2 | 50 validators (gc-get-text-extent, gc-draw-text, gc-set-text-color, ...) [oracle] | PASS |
 | 4.4.3 | window system | window natives, hierarchy, focus, input, scroll and list equal Extension.dll | O2 | 91 validators (window-baseline-play, window-background-smoothing, window-list-family, ...) [node/oracle/worker] | PASS |
 | 4.4.4 | text and edit windows | TextWindow and EditWindow natives equal Extension.dll | O2 | 50 validators (edit-insert-text, text-set-text, text-set-text-timeout, ...) [oracle] | PASS |
 | 4.4.5 | 00_Training HUD | the HUD tree, belt, ammo, log and glyph output run on the original bytecode and natives | O3 | `play-hud` [node] | PASS |
@@ -107,10 +111,10 @@ A mode in brackets names how the check exercises Play (see [How the gate judges]
 | 4.4.8 | computers and security | ComputerWindow playback and the terminals reach screens through the real frob path; camera screen in the browser | O3 | `terminals-play` [node], `terminals-camera-browser` [worker], `window-computer-playback` [oracle], `window-computer` [oracle] | PASS |
 | 4.4.9 | Training keypad | the keypad window takes input through the original path | O3 | `keypad` [node] | PASS |
 | 4.4.10 | InfoLink, DataLink and conversation windows | the DataLink transmission, the InfoLink window and conversation screens run the original bytecode | O3 | `instructor-conversation` [node], `infolink-shell` [node], `infolink-content` [node], `conversation-tile` [oracle] | PASS |
-| 4.4.11 | HUD frame | the HUD, belt and log in a frame against the original's | - | missing: whole-renderer pixel identity of the interface is not established (script-play-hud.md) | MISSING |
-| 4.4.12 | inventory, goals and logs screens | a persona screen in a frame against the original's | - | missing: no captured frame of the original's screens | MISSING |
-| 4.4.13 | main menu and Settings | a menu in a frame against the original's | - | missing: no captured frame of the original's menus | MISSING |
-| 4.4.14 | datacube, keypad and computer screens | an information, keypad or login screen in a frame against the original's | - | missing: no captured frame; the security-camera screens of 4.2.28 compare only the camera windows | MISSING |
+| 4.4.11 | 00_Training HUD | the HUD, belt and log in a frame against the original's: the health display, compass, key ring and a belt slot with its item, a log line and its timeout | O1 | `interface 00_Training (3 views)` [worker] | PASS |
+| 4.4.12 | persona screens | inventory (empty and with an item), health, skills, goals and notes, logs, images, conversations and augmentations in a frame against the original's | O1 | `interface 00_Training (9 views)` [worker] | PASS |
+| 4.4.13 | main menu and Settings | the main menu, the Settings menu, Game Options and Adjust Colors in a frame against the original's | O1 | `interface 00_Training (4 views)` [worker] | PASS |
+| 4.4.14 | 00_Training datacube and keypad | a datacube's information display and the keypad in a frame against the original's | O1 | `interface 00_Training (2 views)` [worker] | PASS |
 | 4.4.15 | Load Game, Save Game, QuickSave screens | the save-game directory screens | - | excluded: Stage 6 (saved games; native 3013) | EXCLUDED |
 | 4.4.16 | multiplayer menus and screens | the multiplayer join, host and in-game screens | - | excluded: multiplayer is the last priority and may stay unsupported (AGENTS.md) | EXCLUDED |
 
@@ -161,6 +165,7 @@ says why it has its value and how strong that reason is.
 | Brightness | not judged | Play's raw frames are 1.1 to 1.45 times the original's under Wine: a known Windows gamma issue, kept out of scope on the user's instruction. Security-camera windows are captured at Brightness 2/3, where the ramp is the identity. |
 | Security-camera window | mean abs. difference at most 1.0, edge recall and precision at least 0.90 | The documented values with the sampling state and display-space filtering are 0.00 to 0.15. The precision of a Battery Park window moved between .948 and .99 across runs (two walking actors), hence 0.90. Weak. |
 | Matched capture settings | `?antialias=0`, `?detailTextures=0` | Every stored original lacks multisampling and the detail pass (Wine's device has no `BLENDDIFFUSEALPHA`); Play's defaults (both on) stay as they are. |
+| Interface frames | at least 99% of the pixels identical, at most 64 pixels off by more than 10 of 255, mean absolute difference at most 0.1, edge recall and precision at least 0.99, no outlier block | The 18 views are within 2 of 255 everywhere but one world scanline of 57 pixels (up to 27 levels) and, in the datacube view, 90 pixels of at most 13 levels. Strong for what it excludes: Play before the two fixes fails every frame they changed (the closest has 105 pixels over 10). Weak for the margins (7 pixels over the worst measured, .9922 against .99). |
 | Live-scene tolerance | every watched field of every actor, the clock and the stream draws equal; a stream-draw-only difference is repeated once | The Underworld's draw count differed at tick 45 on the first replay in two of two fresh runs and was equal on the repeat (the unattributed intermittent of [visual acceptance](visual-acceptance.md#open)); a repeat that passes is reported as `flaky`. |
 
 **Real-x87 probes.** `window-scene-frame` runs a small probe executable under Wine to measure `appTan` on hardware. The gate points those validators
@@ -211,8 +216,9 @@ reach those functions with real scene inputs. Nothing compares what the speakers
 
 **Text and interfaces.** The window system, GC drawing, text, edit, list and scroll windows are compared with Extension.dll natives one by one
 (hundreds of cases per family); the HUD, a datacube, a computer, the keypad and the DataLink run the original bytecode through the real frob and input
-paths. **No frame of the original's HUD, menus or screens has ever been compared with Play's** (4.4.11 to 4.4.14): `script-play-hud.md` says so
-(whole-renderer pixel identity is not established). This clause rests on translations and reach, not on what the player sees.
+paths. The first run found that **no frame of the original's HUD, menus or screens had ever been compared with Play's** (4.4.11 to 4.4.14); [interface frames](interface-frames.md)
+now compares 18 views of 00_Training pixel for pixel (equal to within 2 of 255 apart from one scanline of the world), which found and fixed two divergences. Still not compared
+in a frame: a computer's login screen, the DataLink, InfoLink and conversation windows, a held weapon's ammo display, another map's HUD or another resolution.
 
 **Speech, lip sync and the conversation camera.** Galaxy's lip-sync analysis equals the DLL bit for bit, MeetPaul runs end to end with the camera,
 the letterbox and the render clip checked against Extension.dll, and Paul's mouth follows the letters in the browser. There is no frame or sound of
@@ -273,6 +279,7 @@ each criterion's inputs from one root (the first that holds them) and links or c
 | The 28-map sweep's traces (2026-10-13) | main `.work/live/.work/live-acceptance/<map>/original-trace-sweep.jsonl` | 4.1.8 |
 | Security-camera frames and measured state | worktree `agent-a011db8f1b061eb8e` `.work/acceptance/<map>/{cs1,bp2,hk0,sh3}-original.png`, `-state.json` | 4.2.28 |
 | The original's third-person weapon draws | main `.work/weapon/original-cases*.json` | 4.1.9 |
+| The interface frames of 00_Training (18 views, 2026-10-15) and each frame's level time | main `.work/acceptance/00_Training/ui-<view>-original.png` and `ui-<view>-time.txt` (also `ui-e1` to `ui-e4`, the pointer experiment) | 4.4.11 to 4.4.14 |
 | The light manager's tables from the running original | main `.work/live/.work/fpu` | 4.2.9 |
 
 **A clock per frame, not per map, is what a store should keep.** `times.json` holds one level time per map and each capture overwrites it, so
@@ -310,15 +317,13 @@ recorded time)` is killed and fails. The matched-frame checks share `.work/accep
 
 ## Remaining Stage 4 work, in the order it blocks
 
-From the first scoreboard: 26 of 70 gating criteria are not `PASS` (2 `FAIL`, 3 `INLINE`, 21 `MISSING`). Ordered by how much of "Done when" each holds up.
+From the first scoreboard: 26 of 70 gating criteria were not `PASS` (2 `FAIL`, 3 `INLINE`, 21 `MISSING`); item 1 is closed since (22 now). Ordered by how much of "Done when" each holds up.
 Nothing below was fixed in this task beyond wiring existing checks; each item is sized for one agent.
 
-1. **The interfaces have never been compared with the original's frames (4.4.11 to 4.4.14).** This holds up the whole "text and interfaces" clause: its ten
-   passing criteria rest on translations (O2) and on Play running the original bytecode (O3, P); what the player sees (HUD, belt, log; inventory, goals, logs; the main menu and Settings; a
-   datacube, the keypad, a login screen) is compared with nothing. Needed first: an original-side capture recipe for interface frames (`ShowHud True`, a
-   screen opened through its exec function or a menu button; a modal screen takes every key but Print Screen, which reaches `Shot`, as the
-   security-camera method (item 3 of [its method](visual-acceptance.md#method-2)) found, and Brightness 2/3 makes the frame the framebuffer) and the same view in Play. Then four rows
-   become `frames`-style checks. The largest gap.
+1. **The interfaces against the original's frames (4.4.11 to 4.4.14): done 2026-10-15** ([interface frames](interface-frames.md): the recipe, 18 views, the two divergences found and
+   fixed, the gate rows `PASS`). What a frame still does not cover: a computer's login screen (it needs a live level held by the tracer, as the security cameras do), the DataLink,
+   InfoLink and conversation windows, a held weapon's ammo display (with 4.1.10), another map's HUD and another resolution, and one open difference of the pointer input (a stationary
+   cursor over a screen that replaced another: the original focuses the button under it, Play does not; the cause is unmeasured).
 2. **Speech and the conversation camera have no original frame or sound (4.5.5 to 4.5.8).** The camera, letterbox and lip-sync code are compared with the
    DLLs, and MeetPaul runs end to end, but there is no original frame of the conversation (letterbox, behind view, subtitles), no original audio of the speech
    (Galaxy's MPEG decoder is not translated; the host's decode and rounding are unverified), the intro's `CameraPoint` shots have no gate-readable frame, and
