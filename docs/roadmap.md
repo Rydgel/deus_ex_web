@@ -401,26 +401,46 @@ maps, moving lights on light maps, BSP occlusion (OccludeBsp, the master
 frame, dynamics, the moving brush tracker and child frames in the Rust core), mirrors on every static and mover plane
 with nesting, Fire.dll fire and water textures, animated and auto-panned
 surfaces, particles and sprites, light coronas, laser beams, volumetric fog
-on BSP and mover surfaces, ambient sound, script sounds, sound effects and zone reverb
+on BSP and mover surfaces, detail textures, ambient sound, script sounds, sound effects and zone reverb
 through Galaxy's mixer, Galaxy music, decals (movers included), and the third-person
 conversation camera with lip sync. The render pass's translations run at its
 24-bit precision ([render-pass precision](render-pass-precision.md)).
 Twenty-six maps match the original's own frames at matched cameras and level time (122 of 130 views)
 ([visual acceptance](visual-acceptance.md)).
-Vertices reach the render device as the original builds them
-([frame projection](frame-projection.md), 2026-10-14): Render.dll's view
-transform and projection and D3DDrv's X, Y, depth and RHW run bit-exact in
-the vertex shader of world surfaces, the fog overlay and actor meshes (a mesh
-draws GetFrame's camera-space buffer), in the main frame and each mirror and
-sky child frame, over the device's depth range (near 1, far 32767) and a camera
-posed from the frame's Coords. Movers project the moving brush tracker's own
-points (FPoly::Transform's output, 15,333 polygon outputs equal under Unicorn) and
-decals project ClipDecal's fragments with its screen clamp of a flagged point (1,192
-vertices bit-equal on the CPU and on the GPU), both since 2026-10-14; sprites and particles
-(DrawActorSprite through UCanvas::DrawIcon and DrawTile to D3DDrv's four vertices, 864 sprites
-and 3,456 vertices of Training, Island and the club, child frames included, bit-equal on the
-CPU and on the GPU; FDynamicSprite::Setup's centre and scale kept per frame) since 2026-10-15, which
-also found that the billboards drew every sprite upside down.
+
+**Vertices as the original builds them** ([frame projection](frame-projection.md), 2026-10-14 and 15).
+Render.dll's view transform and projection and D3DDrv's X, Y, depth and RHW run bit-exact in the
+vertex shader, in the main frame and each mirror and sky child frame, over the device's depth range
+(near 1, far 32767) and a camera posed from the frame's Coords, for:
+- world surfaces, the fog overlay and actor meshes (a mesh draws GetFrame's camera-space buffer);
+- movers: the moving brush tracker's own points (FPoly::Transform's output, 15,333 polygon outputs
+  equal under Unicorn; 2026-10-14);
+- decals: ClipDecal's fragments with its screen clamp of a flagged point (1,192 vertices bit-equal on
+  the CPU and on the GPU; 2026-10-14);
+- sprites and particles: DrawActorSprite through UCanvas::DrawIcon and DrawTile to D3DDrv's four
+  vertices (864 sprites and 3,456 vertices of Training, Island and the club, child frames included,
+  bit-equal on the CPU and on the GPU; FDynamicSprite::Setup's centre and scale kept per frame;
+  2026-10-15), with a mirror frame's sprites measured in a browser (11 sprite-frame pairs of the Paris
+  club's wall mirrors inside their reference tiles). The billboards they replace drew every sprite
+  upside down;
+- light coronas: DrawFrame's loop through the same tile chain (694 tiles and 2,776 vertices bit-equal
+  on the CPU and the GPU, [coronas](coronas.md#on-the-tile-chain-2026-10-15); 2026-10-15). The flat
+  overlay drew them upside down too; a camera window's overlay now samples them the right way up.
+
+**Detail textures** ([frame projection](frame-projection.md#detail-textures-2026-10-15), 2026-10-15).
+The 380-unit clip the 2026-10-14 hand-off called the fog overlay's belongs to D3DDrv's detail-texture
+pass (`FSurfaceInfo.DetailTexture`); the fog map has none. **The original draws detail textures** on a
+device that reports `BLENDDIFFUSEALPHA` (37% of the shipped texture exports carry one); **Wine's does
+not, so every stored original capture lacks them** (`SetRes` clears the field: 0 of 1,860 surfaces
+entered the pass; with the field poked the pass runs and changes the frame). The pass runs unchanged
+under Unicorn and the Rust core's port matches it bit for bit (84 cameras, 465 fans, 2,068 vertices;
+`validate-detail-pass`, `validate-detail-pass-rust`). **Play draws it by default**: OccludeBsp's option
+`0x400` keeps the saved points only of the polygons the pass can use, `detail_run` runs over the main
+frame and every mirror and sky child frame, and the page draws the fans in the recorded D3D states.
+ZBIAS 15 is a constant 5,000-step depth offset measured against the original with the pass poked in,
+and the single-level detail textures are sampled as one level. `?detailTextures=0` models a device
+without the cap; every stored-capture comparison uses it. About 0.1 ms a frame on each thread (Linux host).
+
 The security cameras' views (root frames with their own mirror and sky frames, decals,
 coronas, fog, LOD and lighting since 2026-10-11, [viewport window](script-window-viewport.md))
 are matched against captures of the original's own screens (2026-10-14, [visual
@@ -431,31 +451,15 @@ original's texture sampling state (mip level picked, LOD bias -0.5, texels filte
 multisampled where the original's device is not (`?antialias=0`, the default is
 unchanged); the three maps' cameras look into rooms, so a camera view with a mirror, sky
 frame, fog or coronas is still checked against code and oracles only.
-Light coronas draw through the same tile chain since 2026-10-15 (DrawFrame's loop, DrawIcon and DrawTile
-to D3DDrv's vertices: 694 tiles and 2,776 vertices bit-equal on the CPU and the GPU,
-[coronas](coronas.md#on-the-tile-chain-2026-10-15)); the flat overlay they drew before was upside down.
-A mirror frame's sprites are measured in a browser too (2026-10-15, 11 sprite-frame pairs of
-the Paris club's wall mirrors inside their reference tiles, [frame projection](frame-projection.md#sprites-the-tile-the-render-device-receives)).
-The 380-unit clip the 2026-10-14 hand-off called the fog overlay's belongs to D3DDrv's
-detail-texture pass (`FSurfaceInfo.DetailTexture`); the fog map has none. **The original draws detail textures** on a device
-that reports `BLENDDIFFUSEALPHA` (37% of the shipped texture exports carry one); **Wine's does not, so every stored original
-capture lacks them** (measured 2026-10-15: `SetRes` clears the field, 0 of 1,860 surfaces entered the pass; with the field
-poked the pass runs and changes the frame). The pass runs unchanged under Unicorn and the Rust core's port matches it bit for
-bit (84 cameras, 465 fans, 2,068 vertices; `validate-detail-pass`, `validate-detail-pass-rust`); **Play draws it** (2026-10-15: OccludeBsp's
-option `0x400` keeps the saved points only of the polygons the pass can use, `detail_run` runs over the main frame and every mirror and
-sky child frame, the page draws the fans in the recorded states; ZBIAS 15 is a constant 5,000-step depth offset measured against the
-original with the pass poked in; the single-level detail textures are sampled as one level; `?detailTextures=0` models a device
-without the cap and every stored-capture comparison uses it: [frame projection](frame-projection.md#detail-textures-2026-10-15)).
-Open: the detail pass's mover surfaces, ZBIAS mapping, colour interpolation and fog-map gate (the end of that section), DT_SpriteAnimOnce (unreachable in the shipped maps), clipped polygons' own
-vertices ([frame projection](frame-projection.md#unverified-and-open)), the
-darkest-pixel rounding visual acceptance found, and in live scenes (compared
-tick by tick with the original since 2026-10-13, [visual acceptance](visual-acceptance.md#live-scenes-2026-10-13)):
-nothing is open in the three pilots (re-run 2026-10-15 on master 9fb73f2 with fresh originals: Island 88, the Club 22 and the Underworld 50 actors equal
-in every field for 600 ticks, stream draws equal; 27 of the sweep's 28 maps replay equal for every actor over 1,200 ticks, 957 of 989 actors in all) and the Club's dancers are compared
-animating in view (Pilot 4, a camera that follows another actor: 22 of 22 equal, three dancers rendered at every tick, frames at 1.31 / mean abs. diff. 2.9 with no outlier block). What is
-open: the sweep's BatteryPark load (32 of 64 pawns from tick 13: tick 1 draws 201 against 199, narrowed to `Trashbag1`'s `Containers.Destroyed` spawn results, not a Play-side cause yet),
-**a pawn's third-person weapon, which Render.dll draws from the pawn's own draw and Play does not draw at all** (Divergence 21, found in an Island close view), a moving camera and pawns that fight while close,
-the player moving or acting (held keys cannot be posted), and any NPC beyond 1,200 ticks.
+
+**Live scenes** (compared tick by tick with the original since 2026-10-13,
+[visual acceptance](visual-acceptance.md#live-scenes-2026-10-13)). Re-run on 2026-10-15 (master 9fb73f2)
+with fresh originals: Island 88, the Club 22 and the Underworld 50 actors equal in every field for 600
+ticks, stream draws equal; 27 of the 28-map sweep's maps replay equal for every actor over 1,200 ticks
+(957 of 989 actors). The Club's dancers are compared animating in view (Pilot 4, a camera that follows
+another actor: 22 of 22 equal, three dancers rendered at every tick, frames at 1.31 / mean abs. diff. 2.9
+with no outlier block).
+
 Lighting items closed 2026-10-14 ([light effects](light-effects.md)): every
 LightEffect the 83 maps and the packages' scripts reach has its Render.dll body
 translated and compared with the original (spotlights included); Render.dll's
@@ -470,18 +474,36 @@ A strobe-lit surface drawn only in a mirror's child frame flips the Strobe flag,
 the original does ([visual acceptance](visual-acceptance.md#strobe-in-child-frames-2026-10-14)).
 Matched captures aimed at the effects (16 views, [visual acceptance](visual-acceptance.md#light-effects-against-the-original-2026-10-14))
 match the Searchlight, Rotor, Disco, SlowWave, spot, Cylinder and NonIncidence surfaces at held time; they found one
-open corona divergence (the Ship fan's ceiling lamps, a line check against the bulb decorations).
-Still open in lighting: Windows' own ddraw `DDSCL_FPUSETUP` (measured under Wine
-only), the movers' own polygons in the Strobe scan, the wavers' frames (their
-noise is a host input, checked by the oracle only) and the game thread's
-first two ticks at `0x027f` for ports outside lighting.
-SpriteAnimOnce frames and animated mesh skins
-are recovered or checked but unreachable: no shipped class, map actor or
-script uses DT_SpriteAnimOnce or gives an actor an animated texture
-([particles](particles.md#dt_spriteanimonce-0x10b252ac0x10b25392-restored-at-0x10b254d3),
-[texture animation](texture-animation.md#play)). Full Stage 4 acceptance
-remains open. Frame cost and
-the Rust-core ports that keep these effects inside the frame budget are in
+open corona divergence, the Ship fan's ceiling lamps, **closed 2026-10-14**: the original's helper finds them
+blocked by the moving brush tracker's fragments of a mover, and Play's corona scan now traces the tracked model (0 outlier
+blocks; [visual acceptance](visual-acceptance.md#light-effects-against-the-original-2026-10-14), [coronas](coronas.md)).
+
+**Open.**
+- *Being worked on:* a pawn's third-person weapon, which Render.dll draws from the pawn's own draw
+  (`Pawn.Weapon`'s `ThirdPersonMesh`) and Play does not draw at all (Divergence 21, found in an Island
+  close view; carried decorations and the player's own reflection are the same family); the
+  darkest-pixel rounding visual acceptance found (single raw steps at the bottom of the range).
+- *Rendering:* the detail pass's mover surfaces, ZBIAS mapping (Wine behaves like a slope-scaled
+  offset), colour interpolation and fog-map gate; clipped polygons' own vertices
+  ([frame projection](frame-projection.md#unverified-and-open)); for sprites, texture LOD other than 0
+  and the colour D3DDrv packs; a sky frame's sprites and a camera window's sprites and coronas in a
+  browser; Light33's corona centre on the Ship.
+- *Lighting:* Windows' own ddraw `DDSCL_FPUSETUP` (measured under Wine only), the movers' own polygons
+  in the Strobe scan, the wavers' frames (their noise is a host input, checked by the oracle only) and
+  the game thread's first two ticks at `0x027f` for ports outside lighting.
+- *Live scenes:* the sweep's BatteryPark load (32 of 64 pawns from tick 13: tick 1 draws 201 against
+  199, narrowed to `Trashbag1`'s `Containers.Destroyed` spawn results, not a Play-side cause yet; not
+  seen again in 16 fresh loads), a moving camera and pawns that fight while close, the player moving
+  or acting (held keys cannot be posted), and any NPC beyond 1,200 ticks.
+- *Unreachable, documented:* SpriteAnimOnce frames and animated mesh skins are recovered or checked,
+  but no shipped class, map actor or script uses DT_SpriteAnimOnce or gives an actor an animated texture
+  ([particles](particles.md#dt_spriteanimonce-0x10b252ac0x10b25392-restored-at-0x10b254d3),
+  [texture animation](texture-animation.md#play)).
+- **Full Stage 4 acceptance**: a gate against "Done when" below (representative scenes for the animated
+  actors, effects, sound, text and interfaces, synchronized speech and the conversation camera), as
+  Stage 3 has its conformance gate. Not written yet.
+
+Frame cost and the Rust-core ports that keep these effects inside the frame budget are in
 [play frame cost](play-frame-cost.md).
 
 Decode and render original character, weapon, and prop meshes, skins, animation
@@ -1120,6 +1142,18 @@ Add visibility/culling, batching, caching, and asset lifetime management where
 measurements justify them. Validate supported desktop browsers, graphics capability
 errors, resize/fullscreen, pointer-lock loss, pause/tab suspension, audio activation,
 local file access, and persistent storage behavior.
+
+**Progress (2026-10-14/15): periodic hitches.** `?hitchlog=1` records what the page, the
+simulation worker and WebGL did in every frame and saves a file to send back
+([hitch log](hitch-log.md), `scripts/analyze-hitchlog.mjs`). It found that the previous map's
+runtime stayed alive after a map change (the process-wide handle table, finalization records,
+listeners: fixed, the next map's host releases it), that the worker allocated more per frame than
+it needed (a recycled pack buffer and leaner decodes), and that Firefox gives a worker whose queue
+drains a full compacting GC every ~5.5 s, while the page's collections are incremental: on the
+user's Mac, Firefox's worker stalled 208 to 398 ms (1.1 to 2.4 s before the leak fix) and the inline
+simulation none over 200 ms at the same 111 fps, so **Play runs the simulation inline in Firefox**
+(`?sim=worker` keeps the worker; [sim worker](sim-worker.md)). Chrome and Safari on the Mac are not
+re-recorded since the fixes. Firefox runs in Playwright on the Linux host; Safari is untested.
 
 Done when declared browser/performance targets pass repeatable tests, long sessions
 and repeated map changes remain stable, and failures offer useful recovery paths.
