@@ -606,11 +606,31 @@ Not covered, noted: DT_SpriteAnimOnce's frame choice (`0x10b252ac..0x10b25392`:
 Play draws the first frame; the shipped game assigns it nowhere, [particles](particles.md#dt_spriteanimonce-0x10b252ac0x10b25392-restored-at-0x10b254d3)), the editor and
 hit-test paths (PushHit, the selected tint), the viewer's `Sprite` override, texture
 LOD other than 0 (and the render device's `+0x30` minimum LOD, not measured), the
-colour D3DDrv packs from Color (Play keeps its ScaleGlow colour), a mirror or sky
-child frame's sprites in a browser (the oracle covers 27 child frames bit for bit
-and the page applies `framePass(index)`'s floats, but no Play view with a sprite
-in a mirror is measured), and a ViewportWindow's sprites (they keep the camera's
-billboards, as its world does).
+colour D3DDrv packs from Color (Play keeps its ScaleGlow colour), a sky child
+frame's sprites in a browser (a mirror's are measured, below), and a ViewportWindow's
+sprites (they keep the camera's billboards, as its world does).
+
+**A mirror frame's sprites in a browser (2026-10-15).** The oracle covers 27 child
+frames bit for bit; `scripts/validate-sprite-tiles-mirror-play.mjs` measures the page.
+The shipped maps' sprites are runtime items far from their mirrors (a census of 16 maps with
+mirror polygons and particle sources against the sprite scan found only two sprites in front of
+a mirror, Hotel's smoke puff and Cathedral's gen_white, and 27 cameras aimed at their
+reflections drew neither in a child frame), so the validator shows sprites where it needs
+them: the map's `Light` actors are DT_Sprite editor icons with `bHidden` set (Engine.Light's
+defaults), and `placeProbe({set})` clears it on the six nearest to a mirror polygon, which the
+simulation side's scan then offers like any sprite. 10_Paris_Club, the wall mirrors at BSP
+nodes 16 and 38, the player 450 and 300 units out along the polygon's normal and 0, -200
+and 200 aside, looking at it (worker mode, headless Chromium, 1024 x 640, one device pixel
+per CSS pixel, the frame frozen): 8 of the 12 views have a sprite in the mirror's child
+frame (OccludeBsp's `frames`, `screens[frame]` Setup floats, 11 sprite-frame pairs). Each is
+drawn alone in that child frame (hidden in the main frame and the other passes) against the
+frame with no sprite: the 18,370 pixels it adds all lie inside the reference tile
+(`spriteVertices` from the child frame's Setup floats, with the master frame's rectangle as
+the canvas' frame) and reach 3 or 4 of the tile's sides in all 11 (the mirror's polygon clips
+the others), none only in the horizontally mirrored tile; with the probe texture (red first
+rows, green last rows) the first row is on top in the reflection in all 8 probed (a mirror
+flips left and right only). Moving the reference tile 8 pixels (`--mutate`) fails the
+comparison.
 
 ## Unverified and open
 
@@ -621,9 +641,9 @@ billboards, as its world does).
 * **Sprites** (and the particles, which are sprites) take the chain's vertices
   ([Sprites](#sprites-the-tile-the-render-device-receives); the light coronas' tile is on
   the same chain since 2026-10-15, [coronas](coronas.md#on-the-tile-chain-2026-10-15)).
-  Open there: DT_SpriteAnimOnce's frame, texture
-  LOD other than 0, the colour D3DDrv packs, a Play view of sprites in a mirror frame, a
-  ViewportWindow's sprites (camera billboards). **Lasers** are meshes on the chain's
+  A mirror frame's sprites are measured in a browser since 2026-10-15 (above). Open there:
+  DT_SpriteAnimOnce's frame, texture LOD other than 0, the colour D3DDrv packs, a sky frame's
+  sprites in a browser, a ViewportWindow's sprites (camera billboards). **Lasers** are meshes on the chain's
   mesh path, not separately measured. **The fog overlay's clip at view depth 380**
   (D3DDrv clips each fog polygon there before building its vertices) is not
   reproduced: the fog mesh projects its surface's unclipped vertices.

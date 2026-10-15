@@ -434,8 +434,9 @@ frame, fog or coronas is still checked against code and oracles only.
 Light coronas draw through the same tile chain since 2026-10-15 (DrawFrame's loop, DrawIcon and DrawTile
 to D3DDrv's vertices: 694 tiles and 2,776 vertices bit-equal on the CPU and the GPU,
 [coronas](coronas.md#on-the-tile-chain-2026-10-15)); the flat overlay they drew before was upside down.
-Open: a mirror frame's sprites measured in a browser,
-DT_SpriteAnimOnce (unreachable in the shipped maps), clipped polygons' own
+A mirror frame's sprites are measured in a browser too (2026-10-15, 11 sprite-frame pairs of
+the Paris club's wall mirrors inside their reference tiles, [frame projection](frame-projection.md#sprites-the-tile-the-render-device-receives)).
+Open: DT_SpriteAnimOnce (unreachable in the shipped maps), clipped polygons' own
 vertices ([frame projection](frame-projection.md#unverified-and-open)), the
 darkest-pixel rounding visual acceptance found, and in live scenes (compared
 tick by tick with the original since 2026-10-13, [visual acceptance](visual-acceptance.md#live-scenes-2026-10-13))
