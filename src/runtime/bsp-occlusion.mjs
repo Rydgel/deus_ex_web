@@ -98,7 +98,9 @@ export function childFrameTangent(fov, width) {
 
 // occ_run option bits (occlude.rs FRAME word 46).
 export const OCCLUSION_SHOW_PLAYER_CTRL = 1, OCCLUSION_SHINY_SURFACES = 2, OCCLUSION_TOGGLE = 4,
-  OCCLUSION_POINTS = 0x100, OCCLUSION_SPRITE_KEYS = 0x200;
+  OCCLUSION_POINTS = 0x100, OCCLUSION_SPRITE_KEYS = 0x200,
+  /** The points of the polygons the detail-texture pass can use only (occlude.rs `detail_wanted`; the model's detail table). */
+  OCCLUSION_DETAIL = 0x400;
 
 /** FDynamicSprite::Setup's candidate words (setup.rs), one per actor or
  * render-iterator item SetupDynamics constructs a sprite for: the key the
@@ -200,9 +202,11 @@ function masterFrame(kernel, { location, rotation, width, height, fov, orthoZoom
  * texture PolyFlags (`surfaceTextureFlags[i]`, 0 without a texture) and
  * each zone's actor key (`zoneActors[i]`, 0 for none: the LevelInfo); the
  * zones' skies come per frame (setZoneSkies). `kernel` is the script-VM
- * kernel's `occlusion` facade. */
+ * kernel's `occlusion` facade. `detailTable` (detail-pass.mjs `detailTable`,
+ * 16 words a model surface) is what option OCCLUSION_DETAIL filters the
+ * saved polygons with; the host's detail pass reads the same table. */
 export function createBspOcclusion(kernel, model, { surfaceTextureFlags, zoneActors = [],
-  workBytes = 32 << 20, tracker = null } = {}) {
+  workBytes = 32 << 20, tracker = null, detailTable = null } = {}) {
   const { memory, alloc, free } = kernel;
   const nodeCount = model.nodes.length, pointCount = model.points.length;
   const blocks = [];
@@ -215,7 +219,7 @@ export function createBspOcclusion(kernel, model, { surfaceTextureFlags, zoneAct
     points = block(12 * caps.points + 16), surfs = block(8 * caps.surfs),
     bounds = block(28 * model.renderBounds.length + 16), zones = block(16 * 64), skyRecords = block(4 * 7 * 64),
     cache = block(8 * Math.max(1, caps.points)), work = block(workBytes),
-    dynamics = block(12 * caps.nodes);
+    dynamics = block(12 * caps.nodes), detail = detailTable?.length ? block(4 * detailTable.length) : 0;
   let sprites = block(36 * 256), spriteCapacity = 256;
   const words = () => new Uint32Array(memory.buffer), bytes = () => new Uint8Array(memory.buffer);
   {
@@ -245,12 +249,13 @@ export function createBspOcclusion(kernel, model, { surfaceTextureFlags, zoneAct
       u[(zones >>> 2) + 4 * i + 2] = 0;
     }
     u.fill(0, cache >>> 2, (cache >>> 2) + 2 * Math.max(1, caps.points));
+    if (detail) u.set(detailTable, detail >>> 2);
   }
   const trackerHost = tracker ? createTrackerHost(kernel, model, tracker.movers,
     { at: { nodes, verts, points, surfs }, caps, block, words: () => new Uint32Array(memory.buffer) }) : null;
   const header = [nodes, nodeCount, verts, model.vertices.length, points, pointCount, surfs, model.surfaces.length,
     bounds, model.renderBounds.length, zones, model.zones.length, model.rootOutside, cache, 0, 0xfffffffe,
-    dynamics, sprites, 0, 0];
+    dynamics, sprites, 0, detail, detail ? detailTable.length / 16 : 0];
   let stamp = 0;
   const setHeader = () => {
     header[14] = stamp;
@@ -399,7 +404,7 @@ export function createBspOcclusion(kernel, model, { surfaceTextureFlags, zoneAct
       // child frames in OccludeFrame's order.
       // A view: decode copies what it keeps, and runs before the kernel is called again.
       const all = words().subarray(st[5] >>> 2, (st[5] >>> 2) + st[1]);
-      return { ...decode(all.subarray(0, st[6]), st, skipPoints, skipSpritePixels), frames: decodeFrames(all, st[6], skipPoints),
+      return { ...decode(all.subarray(0, st[6]), st, skipPoints, skipSpritePixels), frames: decodeFrames(all, st[6], skipPoints, st[5]),
         stream: { at: st[5], words: st[6] } };
     },
     /** Validation: the child frames' Setup results for the watched candidate indices (up to 8), read after a run; `watch([])` stops it. */
@@ -479,6 +484,8 @@ export function createBspOcclusion(kernel, model, { surfaceTextureFlags, zoneAct
       } }) };
     },
     blocks: { nodes, verts, points, surfs },
+    /** The detail table as uploaded (`detailTable`): its address and record count, for the kernel's detail pass; null without one. */
+    detail: detail ? { table: detail, surfaces: detailTable.length / 16 } : null,
     /** Model.Zones[i].LastRenderTime bits. */
     zoneTime: i => words()[(zones >>> 2) + 4 * i + 1],
     // The tracker goes first (the original deletes GBrushTracker before the
@@ -494,8 +501,9 @@ export function createBspOcclusion(kernel, model, { surfaceTextureFlags, zoneAct
  * ViewSides, ViewPlanes), Uncoords, its span, the nodes of every request
  * that made or merged into it (`requests`, in request order: a mirror request
  * passes iSurf 0, so coplanar mirrors of different surfaces in one zone share
- * a frame, 0x10b18b4a) and its OccludeBsp output. */
-function decodeFrames(words, at, skipPoints) {
+ * a frame, 0x10b18b4a) and its OccludeBsp output (`stream`: its address in the
+ * kernel memory and word count, for the detail pass). */
+function decodeFrames(words, at, skipPoints, base = 0) {
   const frames = [];
   let i = at;
   while (i < words.length) {
@@ -516,10 +524,12 @@ function decodeFrames(words, at, skipPoints) {
     i += requestCount;
     const length = words[i++];
     const body = decode(words.subarray(i, i + length), [], skipPoints);
+    // The frame's OccludeBsp output where the kernel left it (valid until the next run), for the detail pass.
+    const stream = { at: base + 4 * i, words: length };
     i += length;
     frames.push({ index, parent, kind: kind ? 'sky' : 'mirror', iNode: iNode | 0, requests, recursion, zone, mirror, nearClip,
       fields, uncoords, span: { startY: startY | 0, endY: endY | 0, validLines: valid | 0, lines },
-      draw: body.draw, children: body.children, sprites: body.sprites, spriteScreens: body.spriteScreens });
+      draw: body.draw, children: body.children, sprites: body.sprites, spriteScreens: body.spriteScreens, stream });
   }
   return frames;
 }

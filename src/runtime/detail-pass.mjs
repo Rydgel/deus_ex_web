@@ -16,6 +16,7 @@
  *
  * Every operation is one `Math.fround` (the render pass runs at precision control 24: docs/render-pass-precision.md). */
 import { d3dVertex, viewPoint } from './frame-projection.mjs';
+import { readTexture } from '../unreal/textures.mjs';
 
 const f32 = Math.fround;
 const bitsOf = new Uint32Array(1), floatOf = new Float32Array(bitsOf.buffer);
@@ -63,6 +64,40 @@ export function detailStage(uSize, vSize, scale) {
  * texture. `details[i]` is surfaceDetails' entry (scripts/occlusion-request.mjs: the first mip's size, the UScale words, the
  * Pan words). */
 export const DETAIL_TABLE_WORDS = 16;
+
+/** Whether Play draws the pass: the shipped device reports BLENDDIFFUSEALPHA (D3DDrv's SetRes keeps
+ * URenderDevice.DetailTextures from the ini), so the default is on. `?detailTextures=0` (Node: DETAIL_TEXTURES=0) models
+ * a device without that cap, where SetRes zeroes the field and DrawComplexSurface skips the pass; Wine's ddraw lacks the cap,
+ * so every stored Wine capture of the original needs it (docs/visual-acceptance.md). */
+export const detailTexturesMode = () => (typeof process !== 'undefined' && process.env?.DETAIL_TEXTURES)
+  || globalThis.DEUS_EX_DETAIL_TEXTURES || 'on';
+export const detailTexturesOn = () => !['0', 'off', 'false', 'no'].includes(String(detailTexturesMode()).toLowerCase());
+
+/** Each model surface's detail texture (null without one), from the map's textures: the surface texture's `DetailTexture`,
+ * its first mip's size and its UScale and VScale words (UTexture::Lock's UScale at LOD 0 is Scale, as docs/decals.md measured;
+ * the property is named DrawScale in the packages), the Pan words (0: Lock leaves the pan at zero, docs/frame-projection.md
+ * "Unverified") and `ref`/`name`, the texture's identity for the page's own load. Both the simulation side (the table below)
+ * and the page (the texture to draw) call it; a texture is read once per base texture. */
+export async function modelSurfaceDetails(assets, asset, model) {
+  const cache = new Map(), details = [];
+  for (const surface of model.surfaces) {
+    if (!surface.texture) { details.push(null); continue; }
+    if (!cache.has(surface.texture)) {
+      const object = await assets.resolve(asset, surface.texture);
+      const values = readTexture(object.asset, object.index).values;
+      let detail = null;
+      if (values.DetailTexture) {
+        const target = await assets.resolve(object.asset, values.DetailTexture), texture = readTexture(target.asset, target.index);
+        const scale = floatWord(f32(texture.values.DrawScale ?? texture.values.Scale ?? 1));
+        detail = { uSize: texture.mips[0].width, vSize: texture.mips[0].height, scaleBits: [scale, scale], panBits: [0, 0],
+          name: target.key, ref: { package: target.asset.name, index: target.index, key: target.key } };
+      }
+      cache.set(surface.texture, detail);
+    }
+    details.push(cache.get(surface.texture));
+  }
+  return details;
+}
 export function detailTable(model, details) {
   const table = new Uint32Array(DETAIL_TABLE_WORDS * model.surfaces.length);
   model.surfaces.forEach((surface, i) => {

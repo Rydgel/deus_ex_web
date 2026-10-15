@@ -42,29 +42,9 @@ export async function surfaceTextureFlags(assets, asset, model) {
   return flags;
 }
 
-/** Each surface's detail texture for the frame-projection oracle's detail pass (null without one): the detail texture's first
- * mip size and its UScale and VScale words (UTexture::Lock's UScale at LOD 0 is Scale, as docs/decals.md measured), and the
- * Pan words (0: Lock leaves the pan at zero, [docs/frame-projection.md] unverified). */
-export async function surfaceDetails(assets, asset, model) {
-  const cache = new Map(), details = [];
-  for (const surface of model.surfaces) {
-    if (!surface.texture) { details.push(null); continue; }
-    if (!cache.has(surface.texture)) {
-      const object = await assets.resolve(asset, surface.texture);
-      const values = readTexture(object.asset, object.index).values;
-      let detail = null;
-      if (values.DetailTexture) {
-        const target = await assets.resolve(object.asset, values.DetailTexture), texture = readTexture(target.asset, target.index);
-        const scale = bits(texture.values.DrawScale ?? texture.values.Scale ?? 1);
-        detail = { uSize: texture.mips[0].width, vSize: texture.mips[0].height, scaleBits: [scale, scale], panBits: [0, 0],
-          name: target.key };
-      }
-      cache.set(surface.texture, detail);
-    }
-    details.push(cache.get(surface.texture));
-  }
-  return details;
-}
+/** Each surface's detail texture for the frame-projection oracle's detail pass (null without one):
+ * src/runtime/detail-pass.mjs modelSurfaceDetails, which Play's simulation side builds its table with. */
+export { modelSurfaceDetails as surfaceDetails } from '../src/runtime/detail-pass.mjs';
 
 /** The oracle request's `model`. With `details` (surfaceDetails) each surface also carries its base point, texture axes and
  * detail texture, and the model its vectors, for the facet the detail pass needs. */

@@ -13,7 +13,7 @@ import { AssetStore } from '../src/unreal/assets.mjs';
 import { depthConstants, floatWord } from '../src/runtime/frame-projection.mjs';
 import { detailTable } from '../src/runtime/detail-pass.mjs';
 import { loadScriptVmKernel } from '../src/runtime/script-vm-kernel.mjs';
-import { createBspOcclusion, OCCLUSION_POINTS, OCCLUSION_SHOW_PLAYER_CTRL, OCCLUSION_SHINY_SURFACES } from '../src/runtime/bsp-occlusion.mjs';
+import { createBspOcclusion, OCCLUSION_POINTS, OCCLUSION_DETAIL, OCCLUSION_SHOW_PLAYER_CTRL, OCCLUSION_SHINY_SURFACES } from '../src/runtime/bsp-occlusion.mjs';
 import { available, bspOracle, rectOf } from './frame-projection-cases.mjs';
 import { surfaceTextureFlags } from './occlusion-request.mjs';
 import { detailJobs } from './detail-pass-cases.mjs';
@@ -30,16 +30,17 @@ for (const directory of ['Maps', 'System', 'Textures'])
 const assets = new AssetStore(files);
 const vm = await loadScriptVmKernel(), kernel = vm.occlusion;
 if (!kernel?.detailRun) throw new Error('The script VM core predates the detail pass; run npm run build:wasm');
-const stats = { cases: 0, records: 0, fans: 0, vertices: 0 };
+const stats = { cases: 0, records: 0, fans: 0, vertices: 0, filteredRecords: 0, wordsAll: 0, wordsFiltered: 0 };
 const word = v => v >>> 0;
 
 for (const [map, views] of detailJobs) {
   if (only.size && !only.has(map)) continue;
   const { model, details, cases, results } = await bspOracle(map, { seed: 1, count: 0, aimed: false, views, detail: true });
   const asset = await assets.get(map);
+  const table = detailTable(model, details);
   const occlusion = createBspOcclusion(kernel, model, { surfaceTextureFlags: await surfaceTextureFlags(assets, asset, model),
-    zoneActors: model.zones.map(z => (z.actor > 0 ? z.actor : 0)) });
-  const table = detailTable(model, details), tableAt = kernel.alloc(4 * table.length), outCap = 1 << 20, outAt = kernel.alloc(4 * outCap);
+    zoneActors: model.zones.map(z => (z.actor > 0 ? z.actor : 0)), detailTable: table });
+  const tableAt = kernel.alloc(4 * table.length), outCap = 1 << 20, outAt = kernel.alloc(4 * outCap);
   const fieldsAt = kernel.alloc(4 * 80);
   new Uint32Array(kernel.memory.buffer).set(table, tableAt >>> 2);
   const depth = depthConstants(32);
@@ -92,6 +93,39 @@ for (const [map, views] of detailJobs) {
         }
         stats.records++;
       }
+      // The same frame with option OCCLUSION_DETAIL (Play's: the saved points only of the polygons the pass can use): the fans
+      // are the same vertex for vertex; `first` counts the kept polygons only.
+      frame[46] = OCCLUSION_SHOW_PLAYER_CTRL | OCCLUSION_SHINY_SURFACES | OCCLUSION_DETAIL;
+      const f = occlusion.run(frame, []);
+      new Uint32Array(kernel.memory.buffer).set(master.fields, fieldsAt >>> 2);
+      const writtenF = kernel.detailRun(fieldsAt, rect.x, rect.y, floatWord(depth.zBias), floatWord(depth.zScale), tableAt, model.surfaces.length,
+        f.stream.at, f.stream.words, outAt, outCap);
+      assert.notEqual(writtenF, 0xffffffff, `${where}: the output buffer overflowed (filtered)`);
+      const filtered = new Uint32Array(kernel.memory.buffer, outAt, writtenF), gotF = new Map();
+      for (let at = 0; at < writtenF;) {
+        const [list, node, , fans] = filtered.subarray(at, at + 4);
+        at += 4;
+        const fanList = [];
+        for (let k = 0; k < fans; k++) {
+          const [layer, , count] = filtered.subarray(at, at + 3);
+          at += 3;
+          const vertices = [];
+          for (let v = 0; v < count; v++, at += 7) vertices.push([...filtered.subarray(at, at + 7)]);
+          fanList.push({ layer, count, vertices });
+        }
+        gotF.set(`${list}:${node | 0}`, fanList);
+      }
+      assert.deepEqual([...gotF.keys()].sort(), [...got.keys()].sort(), `${where}: filtered draw list records with detail fans`);
+      for (const [key, fans] of got) {
+        const have = gotF.get(key);
+        assert.equal(have.length, fans.length, `${where} ${key}: filtered number of fans`);
+        for (const [k, fan] of fans.entries()) {
+          assert.deepEqual([have[k].layer, have[k].count], [fan.layer, fan.count], `${where} ${key} filtered fan ${k}: layer, count`);
+          assert.deepEqual(have[k].vertices.map(v => v.map(word)), fan.vertices.map(v => v.map(word)), `${where} ${key} filtered fan ${k}: vertices`);
+        }
+        stats.filteredRecords++;
+      }
+      stats.wordsAll += r.stream.words; stats.wordsFiltered += f.stream.words;
       stats.cases++;
     }
   } finally {

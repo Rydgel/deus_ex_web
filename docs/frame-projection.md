@@ -758,7 +758,16 @@ with the original under Unicorn: 265 draw-list records, 465 fans, 2,068 vertices
 polygon scratch holds records of up to 256 polygons of up to 64 points (the shipped maps' largest are far below; a larger
 record is skipped, not truncated).
 
-**Hand-off: Play's draw (not done).** What the next step has to build, from what the oracle recorded:
+**Play's draw (in progress, 2026-10-15).** Item 1 is built: `src/runtime/detail-draw.mjs` (the simulation side), OccludeBsp's option
+`0x400` (`OCCLUSION_DETAIL`, `occlude.rs` `detail_wanted` / `detail_near`: the saved points only of the polygons of a surface whose
+table record (model words 19 and 20) has a detail texture, whose draw flags lack `0x04000000` and that have a vertex of view depth
+below 380; the filtered stream is 53% of the all-points stream on the validator's close-up cameras and carries no points at all
+when no surface qualifies), `detail_run` over the main frame's and each child frame's stream (`decodeFrames` hands every child
+its stream address), and the pack in `snapshot.begin.visibility.detail` (transferred). `scripts/validate-detail-play-sim.mjs` runs
+Play's session headless and compares the pack with the CPU reference `detail-pass.mjs` over the same frame run again with all the
+points, mirror frames included; `scripts/validate-detail-pass-rust.mjs` also runs the filtered stream against the original's fans
+(465 fans, vertex for vertex; `first` counts the kept polygons only). The page's draw, ZBIAS and the pixel checks are items 2-4.
+What the item list asked for, from what the oracle recorded:
 1. *Sim side.* A per-surface table from the map's textures at load (`detailTable`; `surfaceDetails` in
    `scripts/occlusion-request.mjs` is the Node version: the texture's `DetailTexture`, its first mip's size and its `DrawScale`
    or `Scale`, and the browser needs the same from its TextureStore). OccludeBsp keeps the saved points only when option 0x100

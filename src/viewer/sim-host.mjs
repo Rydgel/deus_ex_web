@@ -33,6 +33,8 @@ import { loadScriptVmKernel } from '../runtime/script-vm-kernel.mjs';
 import { createBspOcclusion, texturePolyFlags } from '../runtime/bsp-occlusion.mjs';
 import { collectTrackerMovers, moverTrackerMode, trackerDecalSource, trackerMoverSpec, trackerTextureFlags } from '../runtime/brush-tracker.mjs';
 import { readTexture } from '../unreal/textures.mjs';
+import { detailTable, detailTexturesOn, modelSurfaceDetails } from '../runtime/detail-pass.mjs';
+import { createDetailDraw } from '../runtime/detail-draw.mjs';
 
 // The handle limit when each host started (script-object-handles.mjs): a
 // host's identities are the handles from its start to the next host's.
@@ -99,6 +101,11 @@ export async function createSimHost(map, asset, assets, { randomSeed, subtitles,
     }
     const kernel = (await loadScriptVmKernel()).occlusion;
     if (!kernel) throw new Error('the script VM core predates it; run npm run build:wasm');
+    // D3DDrv's detail-texture pass (detail-draw.mjs): the per-surface table from the map's textures, unless
+    // ?detailTextures=0 models a device without BLENDDIFFUSEALPHA, where the original skips the pass.
+    let detail = null;
+    if (detailTexturesOn() && kernel.detailRun) detail = detailTable(map.model, await modelSurfaceDetails(assets, asset, map.model));
+    else if (detailTexturesOn()) notes.push('Detail textures unavailable: the script VM core predates detail.rs; run npm run build:wasm');
     // Engine's moving brush tracker (brush-tracker.mjs, docs/brush-tracker.md)
     // on the same model: its movers with their polygons' texture PolyFlags.
     let trackerMovers = null;
@@ -122,7 +129,8 @@ export async function createSimHost(map, asset, assets, { randomSeed, subtitles,
       const specs = trackerMovers ? movers.map((m, i) => trackerMoverSpec(m, i, { hidden: read(actors[i], 'bHidden'),
         location: read(actors[i], 'Location'), rotation: read(actors[i], 'Rotation'), prePivot: read(actors[i], 'PrePivot') })) : null;
       current = createBspOcclusion(kernel, map.model, { surfaceTextureFlags,
-        zoneActors: map.model.zones.map(zone => (zone.actor > 0 ? zone.actor : 0)), tracker: specs ? { movers: specs } : null });
+        zoneActors: map.model.zones.map(zone => (zone.actor > 0 ? zone.actor : 0)), tracker: specs ? { movers: specs } : null,
+        detailTable: detail?.some(Boolean) ? detail : null });
       // The constructor's Update(NULL) at the game thread's control word,
       // unmeasured: PC64 is the assumption (docs/brush-tracker.md "Precision").
       if (specs) {
@@ -133,6 +141,7 @@ export async function createSimHost(map, asset, assets, { randomSeed, subtitles,
       // holds it (script-decal.mjs levelDecals, docs/decals.md "Movers").
       level.decalSource = specs ? trackerDecalSource(current, map.model, kernel.memory, actors, read) : null;
       session.setOcclusion(current, specs ? { names: movers.map(m => m.name), actors, indices: movers.map(m => index.get(m.name)) } : null);
+      session.setDetail(createDetailDraw(kernel, current));
       occlusionNow = current;
     };
     buildOcclusion();
@@ -147,6 +156,8 @@ export async function createSimHost(map, asset, assets, { randomSeed, subtitles,
   let audioDisposed = false;
   const disposeAudio = () => { if (audioDisposed) return; audioDisposed = true; runtime.audio?.dispose?.(); };
   return { game, session, actorSim, weaponSim, meshLighting, lipSync, notes, events, hudTextures, disposeAudio,
+    // The current BSP occlusion (validation: scripts/validate-detail-play-sim.mjs runs a reference pass over it).
+    occlusion: () => occlusionNow,
     // The next map's host replaces this one: nothing runs this runtime again,
     // so its identities leave the process-wide handle table, which would
     // otherwise keep the whole runtime alive (script-object-handles.mjs).

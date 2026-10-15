@@ -39,8 +39,10 @@ use core::ptr::{addr_of, addr_of_mut};
 /// each: key, X1, Y1, X2, Y2, Z bits, then FDynamicSprite +0xa8, +0xac, +0xb0
 /// (Setup's ScreenX, ScreenY and Persp bits, 0 on the mesh path and for a
 /// host-given rectangle), in SetupDynamics order), 18 their
-/// count. Addresses are byte addresses in this memory.
-static mut MODEL: [u32; 20] = [0; 20];
+/// count, 19 the detail-texture table (detail.rs: 16 words a surface, the
+/// first a flag) and 20 its record count. Addresses are byte addresses in
+/// this memory.
+static mut MODEL: [u32; 22] = [0; 22];
 /// Frame words (FSceneNode fields, f32 bits unless noted): 0..12 Coords,
 /// 12 X (int), 13 Y (int), 14 FX15, 15 FY15, 16 FX2, 17 FY2, 18 FX, 19 FY,
 /// 20 Proj.Z, 21 PrjXM, 22 PrjYM, 23 PrjXP, 24 PrjYP, 25..37 ViewSides,
@@ -48,7 +50,8 @@ static mut MODEL: [u32; 20] = [0; 20];
 /// counter (0x10b5a700), 45 Level.TimeSeconds, 46 option bits (1 viewer
 /// ShowFlags & 0x800, 2 RenDev ShinySurfaces, 4 URender Toggle; 0x100 asks
 /// the output to carry each saved polygon's points, 0x200 leaves the
-/// sprites' span buffers out of it), 47
+/// sprites' span buffers out of it, 0x400 carries the points of the
+/// polygons the detail-texture pass can use only), 47
 /// Viewport ExtraPolyFlags, 48..60 Uncoords, 60 RProj.Z, 61 and 62 the
 /// viewport's width and height when the frame's X and Y are a render
 /// rectangle (the screen span's size; 0: X and Y).
@@ -921,6 +924,18 @@ pub extern "C" fn occ_run(work: u32, bytes: u32) -> i32 {
 }
 
 #[allow(unused_assignments)]
+/// Whether the detail-texture pass (detail.rs) can draw a draw item: its surface has a detail texture in the host's
+/// table (model words 19 and 20: the table's address and its record count, 16 words a surface, the first a flag) and
+/// its PolyFlags lack the portal bit Render.dll's gate tests (0x04000000).
+fn detail_wanted(dl: u32) -> bool {
+    let surf = rd(dl + 4);
+    surf < model(20) && rd(model(19) + 64 * surf) != 0 && rd(dl + 12) & 0x0400_0000 == 0
+}
+/// Whether a saved polygon has a vertex inside the first detail layer's distance, 380 (D3DDrv 0x100048f6).
+fn detail_near(saved: u32, count: u32) -> bool {
+    (0..count).any(|k| rf(rd(saved + 12 + 4 * k) + T_Z) < 380.0)
+}
+
 fn occlude(rec: u32) -> u32 {
     let num_nodes = model(1);
     if num_nodes == 0 {
@@ -1334,11 +1349,14 @@ fn occlude(rec: u32) -> u32 {
                 s = rd(s);
             }
             emit(polys);
+            // Option 0x400 (the detail-texture pass, detail.rs): the points of the polygons that pass can use only.
+            let detail_item = options & 0x400 != 0 && detail_wanted(dl);
             while saved != 0 {
                 let count = rd(saved + 8);
                 emit(rd(saved + 4));
-                emit(if options & 0x100 != 0 { count } else { 0 });
-                for k in 0..if options & 0x100 != 0 { count } else { 0 } {
+                let keep = options & 0x100 != 0 || (detail_item && detail_near(saved, count));
+                emit(if keep { count } else { 0 });
+                for k in 0..if keep { count } else { 0 } {
                     let p = rd(saved + 12 + 4 * k);
                     for f in [T_X, T_Y, T_Z, T_SX, T_SY, T_INTY, T_RZ] {
                         emit(rd(p + f));

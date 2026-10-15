@@ -162,7 +162,10 @@ async function handle(data) {
         wasm: hitchWasm.wasmBytes(), mems: hitchWasm.wasmCount() };
       if (data.status) snapshot.status = { gameplay: host.game.status(), summary: host.actorSim ? structuredClone(host.actorSim.summary) : null,
         music: musicLibrary?.status() ?? null };
-      send({ type: 'frame', load: loadId, posts: data.posts, snapshot }, snapshot.pack ? [snapshot.pack.buffer] : []);
+      // The packed words are transferred: the mesh pack, and the detail-texture pass's fans (detail-draw.mjs).
+      const transfer = snapshot.pack ? [snapshot.pack.buffer] : [], fans = snapshot.begin?.visibility?.detail;
+      if (fans) transfer.push(fans.buffer);
+      send({ type: 'frame', load: loadId, posts: data.posts, snapshot }, transfer);
       return;
     }
     case 'call': {

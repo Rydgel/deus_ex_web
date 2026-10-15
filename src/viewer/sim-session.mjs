@@ -13,7 +13,7 @@ import { createPlayCamera, applyPlayFrame, pointCamera, projectionOf, projection
 import { createDrawnSet } from './drawn-set.mjs';
 import { createMeshFramePack, PACK_WORDS } from './mesh-frame-pack.mjs';
 import { createDecalDraw } from '../runtime/decal-draw.mjs';
-import { OCCLUSION_POINTS, OCCLUSION_SPRITE_KEYS, SETUP, SETUP_OUT_WORDS } from '../runtime/bsp-occlusion.mjs';
+import { OCCLUSION_DETAIL, OCCLUSION_POINTS, OCCLUSION_SPRITE_KEYS, SETUP, SETUP_OUT_WORDS } from '../runtime/bsp-occlusion.mjs';
 import { packDynamics, patchDynamics, candidateWords, actorOcclusionMode, childFrameSprites, iteratorSpritesByOrder } from './dynamics-candidates.mjs';
 import { createLightNoise, lightNoiseSnapshot } from '../runtime/static-lighting.mjs';
 import { lightGlobals } from '../runtime/light-globals.mjs';
@@ -81,6 +81,8 @@ export function createSimSession(game, { assets = null, events = [], exportName 
   // DrawFrame's decal block after the main frame's OccludeBsp
   // (decal-draw.mjs, docs/decals.md), with the kernel's frame words.
   let decalDraw = null, occlusionFramePtr = null;
+  // D3DDrv's detail-texture pass over the main frame and its child frames (detail-draw.mjs); null without a detail table.
+  let detailDraw = null;
   const f32 = new Float32Array(1), u32 = new Uint32Array(f32.buffer);
   const weaponFrustum = new THREE.Frustum(), weaponMatrix = new THREE.Matrix4();
   // The live records of this frame's moving-light scan, for the simulation
@@ -388,7 +390,8 @@ export function createSimSession(game, { assets = null, events = [], exportName 
   // frame left it: the original updates the moving brush tracker on the game
   // thread (64 bits) when a mover moves, never inside a render-pass DrawWorld,
   // where the x87 model now runs at 24 bits (render-precision.mjs).
-  function visibility(view, width, height, setupCount = -1, { decals: decalBlock = true, movers: moverUpdate = true, frameDynamics = null } = {}) {
+  function visibility(view, width, height, setupCount = -1, { decals: decalBlock = true, movers: moverUpdate = true, frameDynamics = null,
+    detail: detailBlock = true, origin = null } = {}) {
     const level = runtime.levelFor(game.player.collisionActor), info = level.actors[0];
     const moversStarted = performance.now();
     if (moverUpdate) updateMovers();
@@ -406,12 +409,16 @@ export function createSimSession(game, { assets = null, events = [], exportName 
     // The decal block clips against the saved polygons' points (option
     // 0x100); Setup's sprites need only their keys (0x200).
     const decals = decalBlock && (decalDraw?.wanted(level) ?? false);
+    // The detail pass takes the saved points of the polygons it can use (a ViewportWindow's frames keep the camera's
+    // projection and draw none: docs/frame-projection.md "Detail textures").
+    const details = detailBlock && detailDraw && origin;
     words[44] = ++drawWorlds; words[45] = u32[0];
-    words[46] = 3 | (decals ? OCCLUSION_POINTS : 0) | (setupCount >= 0 ? OCCLUSION_SPRITE_KEYS : 0); words[47] = 0;
+    words[46] = 3 | (decals ? OCCLUSION_POINTS : 0) | (setupCount >= 0 ? OCCLUSION_SPRITE_KEYS : 0) | (details ? OCCLUSION_DETAIL : 0); words[47] = 0;
     const started = performance.now();
     const result = occlusion.run(words, [], { setupCount, skipPoints: true, skipSpritePixels: true,
       children: childFrames ? { fov: view.fov, orthoZoom: 0, frameDynamics } : null });
     const { nodes, movers, moverItems } = drawnOf(result.draw);
+    const detail = details ? detailDraw.frames(built, origin, result) : null;
     // The mirror requests: a level node, or a tracked mover's polygon
     // (mirror-passes.mjs requestedGroup).
     const mirrors = [];
@@ -463,7 +470,7 @@ export function createSimSession(game, { assets = null, events = [], exportName 
     // `planes`: the frame's four ViewPlanes (+0x12c), as words.
     const master = { words: Array.from(words), planes: Array.from(built.fields.slice(41, 57)), prj: Array.from(built.fields.slice(25, 29)), location: Array.from(view.location), rotation: Array.from(view.rotation), fov: view.fov,
       viewport: [viewportWidth, viewportHeight], render: [width, height] };
-    return { nodes, zone: words[42], mirrors, frames: childFrames ? frames : null, size: [width, height], lod, master,
+    return { nodes, zone: words[42], mirrors, frames: childFrames ? frames : null, size: [width, height], lod, master, detail,
       sky: result.children.some(child => child.kind === 'sky'), decals: fragments, movers, moverItems,
       sprites: result.sprites.map(sprite => sprite.key), spriteScreens: result.spriteScreens,
       // Host timings (ms): the movers' Update, OccludeBsp with its decode
@@ -587,7 +594,8 @@ export function createSimSession(game, { assets = null, events = [], exportName 
       occlusion.childSetupDebug.watch(entries.flatMap((entry, i) => entry.binding?.actor && probing.names.has(entry.binding.actor.name) ? [i] : []));
     else occlusion.childSetupDebug.watch([]);
     const occludeStarted = performance.now();
-    const result = visibility(pending.view, pending.width, pending.height, entries.length, { frameDynamics }), main = new Set();
+    const rect = pending.frame.renderRect;
+    const result = visibility(pending.view, pending.width, pending.height, entries.length, { frameDynamics, origin: [rect?.x ?? 0, rect?.y ?? 0] }), main = new Set();
     iteratorStats.msVisibility += performance.now() - occludeStarted;
     iteratorStats.visited += result.frames?.length ?? 0;
     for (const sprite of live.sprites) { sprite.main = false; sprite.frames = null; sprite.screens = null; }
@@ -719,10 +727,10 @@ export function createSimSession(game, { assets = null, events = [], exportName 
         const entries = packDynamics(occlusion, { sprites, iterators: live.iterators, ...frameArgs });
         const own = new Map(), root = rescanning ? { entries, words: candidateWords(occlusion, entries.length) } : null;
         const frameDynamics = childFrames && rescanning ? frame => childDynamics(frame, frameArgs, own, known, root) : null;
-        seen = visibility(view, command.width, command.height, entries.length, { decals: true, movers: false, frameDynamics });
+        seen = visibility(view, command.width, command.height, entries.length, { decals: true, movers: false, frameDynamics, detail: false });
         members = frameMembers(seen, entries, own);
       } finally { rescanFirstPerson = true; planningCamera = false; }
-    } else if (occlusion) seen = visibility(view, command.width, command.height, -1, { decals: true, movers: false });
+    } else if (occlusion) seen = visibility(view, command.width, command.height, -1, { decals: true, movers: false, detail: false });
     const ids = members?.root.ids ?? new Set(), childIds = members?.children ?? new Set(), updateIds = new Set([...ids, ...childIds]);
     if (seen) {
       pass.visibility = { nodes: seen.nodes, movers: seen.movers, moverItems: seen.moverItems };
@@ -998,6 +1006,8 @@ export function createSimSession(game, { assets = null, events = [], exportName 
     /** Validation (mover-probe.mjs): the last main frame's decal fragments
      * (decal-draw.mjs groups: texture, view-space triangle positions). */
     decalFragments() { return current?.visibility?.decals ?? null; },
+    /** The detail pass over this occlusion (detail-draw.mjs createDetailDraw), or null. */
+    setDetail(draw) { detailDraw?.dispose(); detailDraw = draw; },
     /** The kernel's decal facade and its frame-words pointer for the decal block. */
     setDecalKernel(kernel, framePtr) { decalDraw?.dispose(); decalDraw = kernel ? createDecalDraw(runtime, kernel) : null; occlusionFramePtr = framePtr; },
     setCoronas(scan) { coronaScan = scan; },
@@ -1378,7 +1388,7 @@ export function createSimSession(game, { assets = null, events = [], exportName 
     recyclePack(buffer) {
       if (buffer instanceof ArrayBuffer && buffer.byteLength >= PACK_WORDS * 4 && packSpares.length < 4) packSpares.push(buffer);
     },
-    dispose() { weaponSim?.dispose(); decalDraw?.dispose(); },
+    dispose() { weaponSim?.dispose(); decalDraw?.dispose(); detailDraw?.dispose(); },
     /** The frame's first steps: the tick (and lip sync), PlayerCalcView, the
      * render viewport, SetupDynamics' moving-light scan, the sky frame, the
      * frob target and the surface pan inputs. `run` is false while the page
@@ -1436,7 +1446,7 @@ export function createSimSession(game, { assets = null, events = [], exportName 
           // The dynamics wait for the sprite scan and the actor layer.
           if (actorOcclusion && occlusion.setupSupported) pendingOcclusion = { view: frame.view, width: w, height: h, frame };
           else {
-            try { frame.visibility = visibility(frame.view, w, h); attachMoverPoints(frame.visibility); }
+            try { frame.visibility = visibility(frame.view, w, h, -1, { origin: [rect?.x ?? 0, rect?.y ?? 0] }); attachMoverPoints(frame.visibility); }
             catch (error) { fail(error); }
             // DrawWorld draws the sky frame only when OccludeBsp made one.
             if (frame.visibility && !frame.visibility.sky) frame.sky = null;
