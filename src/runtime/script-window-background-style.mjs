@@ -268,3 +268,49 @@ export function setBackgroundStyleNative({window, newStyle}, services = {}) {
   const result = setGcStyleNative(gc, style, services);
   return {style, gc, ...result};
 }
+
+// ---------------------------------------------------------------------------
+// Window.SetBackgroundSmoothing (native 1423): exec 0x10051dc0 reads one bool
+// through GNatives and calls XWindow::SetBackgroundSmoothing 0x1004d700,
+// which stores bit 2 of Window+0x38 from the low bit of the argument and, for
+// a non-null XGC (+0x130), calls XGC::EnableSmoothing 0x100270e0: the
+// xor-mask-xor fold of the argument's bit 0 into XGC+0x48 and then
+// GeneratePolyFlags 0x1002af00 (the synchronous leaf, as for SetStyle).
+// ---------------------------------------------------------------------------
+export const WINDOW_BACKGROUND_SMOOTHING_NATIVE = freeze({
+  package: 'Extension',
+  function: 'Window.SetBackgroundSmoothing',
+  nativeIndex: 1423,
+  execBody: 0x10051dc0,
+  execEnd: 0x10051e03,
+  setBackgroundSmoothingBody: 0x1004d700,
+  setBackgroundSmoothingEnd: 0x1004d75e,
+  enableSmoothingBody: 0x100270e0,
+  enableSmoothingEnd: 0x10027130,
+  generatePolyFlags: 0x1002af00,
+});
+
+const SMOOTHING_FLAGS_OFFSET = 0x38;
+const SMOOTHING_BIT = 0x04;
+
+/** Execute Window.SetBackgroundSmoothing, including its nullable XGC branch. */
+export function setBackgroundSmoothingNative({window, newValue}, services = {}) {
+  const target = objectReference(window, 'Window');
+  const value = typeof newValue === 'boolean' ? (newValue ? 1 : 0) : newValue;
+  if (!Number.isInteger(value) || value < -0x80000000 || value > 0xffffffff) {
+    fail('Window.SetBackgroundSmoothing requires an int argument', {kind: 'VALUE', value: newValue});
+  }
+  const native = WINDOW_BACKGROUND_SMOOTHING_NATIVE.setBackgroundSmoothingBody;
+  const flags = readRaw(target, SMOOTHING_FLAGS_OFFSET, 'u32', services, 'Window.SetBackgroundSmoothing/read-flags', native);
+  writeRaw(target, SMOOTHING_FLAGS_OFFSET, 'u32', (((value & 1) << 2) | (flags & ~SMOOTHING_BIT)) >>> 0, services,
+    'Window.SetBackgroundSmoothing/write-flags', native);
+  const gc = readRaw(target, WINDOW_BACKGROUND_STYLE_OFFSETS.gc, 'ptr', services, 'Window.SetBackgroundSmoothing/read-gc', native);
+  if (!gc) return {gc: null, generatedPolyFlags: false};
+  const enable = WINDOW_BACKGROUND_SMOOTHING_NATIVE.enableSmoothingBody;
+  const gcFlags = readRaw(gc, GC_STYLE_OFFSETS.flags, 'u32', services, 'XGC::EnableSmoothing/read-flags', enable);
+  const next = ((((gcFlags ^ value) & 1) ^ gcFlags) >>> 0);
+  writeRaw(gc, GC_STYLE_OFFSETS.flags, 'u32', next, services, 'XGC::EnableSmoothing/write-flags', enable);
+  const generate = required(services.generatePolyFlags, 'generatePolyFlags');
+  sync(generate({gc, flags: next, native: WINDOW_BACKGROUND_SMOOTHING_NATIVE.generatePolyFlags, source: enable}), 'GeneratePolyFlags');
+  return {gc, flags: next, generatedPolyFlags: true};
+}

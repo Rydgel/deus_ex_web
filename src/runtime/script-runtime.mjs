@@ -148,7 +148,7 @@ import { setToggleNative } from './script-window-toggle-set.mjs';
 import { configureChildNative } from './script-window-configure-child.mjs';
 import { setWindowPositionNative } from './script-window-position.mjs';
 import { setWindowAlignmentsNative } from './script-window-alignments.mjs';
-import { setBackgroundStyleNative } from './script-window-background-style.mjs';
+import { setBackgroundStyleNative, setBackgroundSmoothingNative } from './script-window-background-style.mjs';
 import { raiseWindowNative, hideWindowNative } from './script-window-order.mjs';
 import { lowerWindowNative } from './script-window-lower.mjs';
 import { setWindowBackgroundNative, setWindowTileColorNative } from './script-window-surface.mjs';
@@ -3436,6 +3436,11 @@ export class ScriptRuntime {
       if(call.argumentCount!==1)throw new Error('Window.SetBackgroundStyle requires one byte argument');
       const newStyle=refValue(call.evaluateArgument(0));
       return setBackgroundStyleNative({window:call.receiver,newStyle},this.windowLifecycle?.backgroundStyle);
+    }
+    if(call.index===1423){
+      if(call.argumentCount!==1)throw new Error('Window.SetBackgroundSmoothing requires one bool argument');
+      const newValue=refValue(call.evaluateArgument(0));
+      return setBackgroundSmoothingNative({window:call.receiver,newValue},this.windowLifecycle?.backgroundStyle);
     }
     if(call.index===1421){
       if(call.argumentCount!==1)throw new Error('Window.SetBackground requires one Texture argument');

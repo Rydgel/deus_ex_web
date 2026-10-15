@@ -78,12 +78,12 @@ const SCENARIOS = {
 
 /** The outcome each scenario had at the last run: `plays`, or `pause` with the text its error message holds. */
 const EXPECTED = {
-  'drink-wine': { status: 'pause', message: 'native 1423 in deusexplayer.drugeffects' },
-  'drink-liquor40oz': { status: 'pause', message: 'native 1423 in deusexplayer.drugeffects' },
+  'drink-wine': { status: 'plays' },
+  'drink-liquor40oz': { status: 'plays' },
   'smoke-cigarettes': { status: 'plays' },
   'tear-gas-grenade': { status: 'pause', message: 'iterator native is not implemented: 312' },
   'emp-grenade': { status: 'pause', message: 'iterator native is not implemented: 312' },
-  'hit-poison': { status: 'pause', message: 'native 1423 in deusexplayer.drugeffects' },
+  'hit-poison': { status: 'plays' },
   'hit-poison-gas': { status: 'plays' },
   'hit-tear-gas': { status: 'plays' },
   'hit-radiation': { status: 'plays' },
@@ -94,8 +94,8 @@ const EXPECTED = {
   'hit-emp': { status: 'plays' },
   'hit-shocked': { status: 'plays' },
   'hit-shot-bleed': { status: 'plays' },
-  'drink-liquor-bottle': { status: 'pause', message: 'native 1423 in deusexplayer.drugeffects' },
-  'take-zyme': { status: 'pause', message: 'native 1423 in deusexplayer.drugeffects' },
+  'drink-liquor-bottle': { status: 'plays' },
+  'take-zyme': { status: 'plays' },
   'take-ambrosia': { status: 'plays' },
 };
 
