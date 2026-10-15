@@ -167,8 +167,12 @@ host behavior.
 
 ## Modes
 
-- `?sim=worker` (the default since 2026-10-04): the simulation in the
-  worker (step 8).
+- `?sim=worker` (the default since 2026-10-04, except in Firefox since
+  2026-10-15): the simulation in the worker (step 8).
+- Firefox defaults to `?sim=inline`: Gecko gives a worker that idles between
+  frames a full compacting GC every ~5.5 s, a stall of the whole heap's cost,
+  where the page's collections are incremental ([hitch log](hitch-log.md)
+  "Firefox"). `?sim=worker` still selects the worker there.
 - `?sim=inline`: the simulation frame and the page's draw both run on the
   main thread, separated by the snapshot. The Training previews, the NPC
   focus list and `?simVerify=1` drive or read the runtime on the page, so

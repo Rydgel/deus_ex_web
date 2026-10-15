@@ -146,6 +146,17 @@ the periodic pause in Firefox. The hand-off, what to record on the Mac: the
 default and `?workerBusy=1`, then `node scripts/analyze-hitchlog.mjs` on both.
 Details and numbers: [Play frame cost](play-frame-cost.md) "October 14, later".
 
+**On the user's Mac (Firefox 157, Apple M1 class, 120 Hz, Everett after another
+map, 2026-10-15, after the leak fix).** The recorder's contiguous rows, about
+20 s of play each: the worker stalls 208-398 ms every ~5.5 s (7 over 200 ms in
+two runs; before the leak fix 1.1-2.4 s), `?sim=inline` has none over 200 ms
+(worst gap 108 ms, p99 24.7 ms) at the same frame rate (111 fps; page frame
+work 6 ms median, 12 ms p99). Play therefore defaults to `?sim=inline` in
+Firefox (main.mjs `simMode`); `?sim=worker` keeps the worker there. On the
+Linux host under an 8-job validator sweep Firefox inline drew 35 fps against
+the worker's 45, with no stall over 200 ms against 16: a slower machine trades
+frame rate for the stalls.
+
 Tools that found it (kept out of Git, in `.work/hitch/` of the worktree):
 `run-ff.mjs` (Firefox long run with the recorder, `--via MAP`, `--profile`,
 `--worker-patch`), `ff-gc.mjs` (GC markers of a Gecko profile), `stalls.mjs`

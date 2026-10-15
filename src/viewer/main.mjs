@@ -148,8 +148,13 @@ const drew={movers:new Set(),sprites:new Set(),actors:new Set(),weapon:new Set()
 // hold plain data only, as they do to and from the worker. The Training
 // previews, the NPC focus list and ?simVerify=1 (which implies inline) drive
 // or read the runtime on the page.
+// Firefox defaults to inline: Gecko runs a full compacting GC in a worker about five seconds after its event queue
+// drains, so a worker that idles between frames pauses for its whole heap every ~5.5 s, while the page's collections
+// are incremental (docs/hitch-log.md "Firefox"; on the user's Mac: 208-398 ms stalls in the worker, none inline, at the
+// same frame rate). ?sim=worker still forces the worker there.
+const geckoPage=/\bFirefox\//.test(navigator.userAgent);
 const simMode=(({inline:'inline',clone:'clone',worker:'worker'})[new URLSearchParams(location.search).get('sim')])
-  ??(simVerify?'inline':'worker');
+  ??(simVerify||geckoPage?'inline':'worker');
 // ?hold=1 with ?sim=worker: each snapshot is drawn as it arrives and
 // deusExViewer.settled() waits for it, so a test steps one simulation frame
 // per display frame (scripts/validate-sim-split.mjs).
