@@ -67,9 +67,16 @@ window timers, menus, cursor rendering and debug overlays remain unsupported
 when reached. These are explicit errors, not silent substitute behavior.
 
 The final WebGL tile compositor is a browser adapter. Whole-renderer pixel
-identity against the original rasterizer is not established. Original 3D mesh
-lighting also remains separate from this HUD work. Window audio requests are
-recorded at their native call boundary until a playback backend is connected.
+identity against the original rasterizer is not established in general; for
+the interface it is measured since 2026-10-15 ([interface frames](interface-frames.md)):
+18 views of 00_Training (the HUD with its belt, log and the log's timeout, eight
+persona screens, the main menu and three Settings screens, a datacube's
+information display and the keypad) are within 2 of 255 of the original's frames
+at every pixel but one scanline of the world, after two fixes the frames found
+(GC's authored underline texture, and window ticks on real time rather than the
+level's dilated delta). Original 3D mesh lighting also remains separate from
+this HUD work. Window audio requests are recorded at their native call boundary
+until a playback backend is connected.
 
 ## Compositor batching boundary
 

@@ -68,6 +68,16 @@ absolute difference and the edge metrics of `visual-acceptance.mjs compare`, and
 replaces the scenario by an experiment's views (`{name: {modal, steps}}`), run in order on both sides; `--settle ms` is the wait after the camera
 is placed (12 s, so the start text and the load's log lines are gone).
 
+## The gate
+
+Rows 4.4.11 to 4.4.14 of the [Stage 4 gate](stage-4-exit-criteria.md) are one `interface` check each (`validate-stage4-acceptance.mjs`): the check stages the
+stored frames and level times into the checkout's `.work` (a link or a copy, never over a file Play writes), runs Play's whole sequence once
+(`interface-acceptance.mjs play --suffix gate`: 18 views, about two minutes), compares, and judges its own views from the shared report: at least 99% of
+the pixels identical, at most 64 pixels off by more than 10 of 255, mean absolute difference at most 0.1, edge recall and precision at least 0.99 and no outlier
+block. The thresholds are the gate's, not the original's: they sit just beyond the measured worst values (57 pixels, the world's scanline; .9922 identical), and
+they fail every frame the two fixes changed when those are taken out (the closest, `ui-health`, has 105 pixels over 10). `NO-ORIGINAL` when a stored frame or its
+`<view>-time.txt` is absent. `scripts/validate-gc-underline-default.mjs` (a `gc-*` validator, so row 4.4.2) checks the cause-1 default itself.
+
 ## Results (2026-10-15)
 
 Each row is one frame, 921,600 pixels: the share identical (all three channels), the pixels off by more than 2 and by more than 10 of 255 in any
