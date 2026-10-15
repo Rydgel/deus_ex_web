@@ -41,7 +41,7 @@ import { createDetailDraw } from '../runtime/detail-draw.mjs';
 const hostStarts = [];
 
 export async function createSimHost(map, asset, assets, { randomSeed, subtitles, stampScene, panZones, childFrames,
-  gpu = null, weaponGpu = null, meshBackend = null, meshLod = null, weapons = null, weaponMirrors = null, musicLibrary = null, onConversationSpeech = null, onAudioVoice = null,
+  gpu = null, weaponGpu = null, meshBackend = null, meshLod = null, weapons = null, weaponMirrors = null, weaponOrder = null, musicLibrary = null, onConversationSpeech = null, onAudioVoice = null,
   onProgress = () => {} }) {
   const events = [], notes = [], hostIndex = hostStarts.push(handleLimit()) - 1;
   let game;
@@ -64,7 +64,7 @@ export async function createSimHost(map, asset, assets, { randomSeed, subtitles,
       { exportName, exportIndex: name => exportIndexByName.get(name),
         lineModel: () => occlusionNow?.tracker?.live() ? occlusionNow.lineModel() : null });
     // Player start logs in a new player; the layer follows the current one.
-    actorSim = await createActorMeshSim(runtime, assets, asset, { player, lighting: meshLighting, childFrames, lod: meshLod !== 'off', weapons: weapons !== 'off', weaponMirrors: weaponMirrors !== '0',
+    actorSim = await createActorMeshSim(runtime, assets, asset, { player, lighting: meshLighting, childFrames, lod: meshLod !== 'off', weapons: weapons !== 'off', weaponMirrors: weaponMirrors !== '0', weaponOrder,
       layout: gpu ? createGpuMeshLayout(gpu) : null,
       onCreate: creation => events.push({ kind: 'mesh-create', creation }), onRelease: id => events.push({ kind: 'mesh-release', id }),
       ...(meshBackend === 'javascript' ? { kernel: null } : {}) });

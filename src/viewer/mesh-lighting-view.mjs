@@ -162,6 +162,8 @@ export function createMeshLightingView(runtime, levelSource, { exportName, expor
     manager,kernel,
     /** Validation only: {name, records} of the actor whose setups are kept. */
     watch: null,
+    /** Validation only: an array that keeps every setupMesh call's actor, sink, frame and result (null: off). */
+    setupLog: null,
     get frame() { return frame; },
     /** Validation access: this frame's light record of `actor`, made as
      * the JavaScript selection's lightOf makes it. The Rust selection fills
@@ -191,6 +193,7 @@ export function createMeshLightingView(runtime, levelSource, { exportName, expor
         origin = location.map(f);
       }
       frameCount++;
+      if (view.setupLog) view.setupLog.push({ frame: frameCount });
       const viewport = { currentTime: seconds, lastUpdateTime: lastTime ?? seconds, frameCount };
       lastTime = seconds;
       // Level->Actors(0) is the LevelInfo (SetupForActor asserts it).
@@ -319,6 +322,8 @@ export function createMeshLightingView(runtime, levelSource, { exportName, expor
         if (mode === 'verify') verifySetup(actor, setupForActor(manager, sink, scene), setup);
       } else setup = setupForActor(manager, sink, scene);
       const flags = polyFlags | setup.flags;
+      // Validation only (scripts/validate-weapon-order.mjs): every call's actor, light sink, frame and result, in call order.
+      if (view.setupLog) view.setupLog.push({ actor: actor.name, sink: lightSink.name, mirror: frame.mirror, origin: frame.origin.map(u32), setup: describe(setup) });
       // Validation only (decal-probe.mjs meshLightProbe): one watched
       // actor's light infos with the inputs their type functions read.
       if (strobeBefore) view.watch.records.push({ timeSeconds: frame.timeSeconds, strobeBefore, origin: [...frame.origin], mirror: frame.mirror,

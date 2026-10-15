@@ -786,7 +786,9 @@ async function loadMap(name) {
       // ?weapons=off: no pawn's third-person weapon is drawn (docs/weapon-attachment.md), for A/B captures
       weapons: new URLSearchParams(location.search).get('weapons'),
       // ?weaponMirrors=0: no weapon in mirror child frames (on by default: compared with the original, docs/weapon-attachment.md "Mirrors")
-      weaponMirrors: new URLSearchParams(location.search).get('weaponMirrors') };
+      weaponMirrors: new URLSearchParams(location.search).get('weaponMirrors'),
+      // ?weaponOrder=late: each weapon is lit after all of its pawn's frames (the order before the interleaving; docs/weapon-attachment.md)
+      weaponOrder: new URLSearchParams(location.search).get('weaponOrder') };
     // On the page the old map's audio unregisters its music before the next
     // map's runtime is built (the worker does the same at its load).
     if (!simClient) simHost?.disposeAudio?.();

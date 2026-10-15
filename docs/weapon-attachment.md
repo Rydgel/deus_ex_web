@@ -271,11 +271,23 @@ per-call stamp (`ExtraTag`) only needs to differ between calls. Within one pawn 
 the `fade & 1` visibility shortcut for the lights whose `(Index ^ FrameCount) & 15` is nonzero) and writes it back (`fade + step`, `fade - step`, at most 16 entries), so the calls
 `[pawn@child, weapon@child, pawn@main, weapon@main]` of the original and `[pawn@child, pawn@main, weapon@child, weapon@main]` of Play start the second frame's calls from different caches. A light's fade only
 decides *whether it is still added* (a light that stops being visible stays in the list until its fade runs out, `max(0, fade - step)`), so the colours differ only on the frames where a light's fade crosses zero or a
-moving light enters one frame's `LeafLights` and not the other's; with one frame (a pawn in the main frame alone, the usual case) both orders are the same sequence. Not measured, and **not changed**: interleaving the weapon's
-per-frame lighting into the pawn's frame loop needs `createMeshBinding.update` to run its frames one at a time (pose, light, then the weapon's pose and light for that frame, then the next frame), which its records (one set of
-camera points and colours per binding per game frame) do not allow yet. The plan: a per-frame callback in the binding's frame loop (`view.afterFrame(binding, frameIndex)`) that runs the weapon binding's frame-k part
-(`GetFrame` with `entry.coords[k]`, LOD, `setupMesh` with the pawn as the sink) and stores the result in the weapon's per-frame record, assembled into the weapon's one record at the end; compare it with the present order on
-a pawn in two frames (the lab scene's `jcb`, where JC is in both) by the colours' words.
+moving light enters one frame's `LeafLights` and not the other's; with one frame (a pawn in the main frame alone, the usual case) both orders are the same sequence.
+
+**The order, implemented (2026-10-15).** The addresses are section 2's: `DrawActorSprite` (`0x10b25080`) makes the pawn's `DrawMesh` call at `0x10b25624` and, in the same invocation, the weapon's at `0x10b257da`, and
+DrawFrame invokes it once per sprite per frame, so within a frame the pawn's SetupForActor is followed by its weapon's. The pawn binding lights its frames in `lightIn` (`createMeshBinding`: the child frames in DrawFrame's order, the main
+frame last); that function now calls a hook after each frame (`view.afterLight`, made by `weapons.interleave`, `actor-weapon-sim.mjs`), which is the weapon's part of that frame in the original's place: the hand from the pawn's special vertices as
+that frame's GetFrame call made them (`binding.specialCamera`, with the frame's own projection planes), the weapon's Coords, and its SetupForActor result (`lighting.setupMesh(weapon, ..., {sink: pawn})`, which reads the cache the pawn's call
+just wrote). `weapons.update` then poses and draws the weapon with those results (`attach.takePrepared`); a frame the hook did not reach (the pawn's lighting did not run there) is placed and lit by `update` as before, in the old position.
+`?weaponOrder=late` keeps the earlier order (all of a pawn's frames, then the weapon's) as a switch, for this comparison. The CPU path is untouched: the same functions run, in the original's order.
+
+**Compared with the old order** (`scripts/validate-weapon-order.mjs`, worker mode): the `jcb` scene (05_NYC_UNATCOMJ12lab, JC with the pistol, `BehindView 1`, the view off the line to the mirror, so he is lit in the pane's child frame and in the main
+frame), loaded under a paused Playwright clock (`?hold=1&seed=1`, 16 ms frames, the console commands at fixed frames), so a run repeats exactly. The simulation side keeps every SetupForActor call (the actor, the light sink, the frame's origin
+words and the result: the ambient, `ScaleGlow`, the flags and each light's identity, location, radius, colour and fade as words) from the first BehindView frame, 120 frames. In every frame the sink's calls are `pawn@child weapon@child pawn@main
+weapon@main` with the hook and `pawn@child pawn@main weapon@child weapon@main` with `?weaponOrder=late` (the validator asserts both, so the comparison does tell the orders apart). The same order twice gives identical words (604 results, and the
+weapon's float32 corner colours); the two orders give **0 words different** in the 604 SetupForActor results and equal weapon colours in the main and the child frame. The reason is in this scene's lights: JC's three
+(`TriggerLight0`, `2`, `6`) are constant, visible from his location in every call, and their fades are at 255, so each call applies the same step in either order. A pawn's calls in one frame all see the same location (the sink's), so
+each light's visibility is the same in all of them; the orders can part only where a light is in one frame's `LeafLights` and not the other's (a moving light that enters the main frame's view planes but not the mirror's), in the frame
+it first appears: the late order's `weapon@child` then finds it in the cache `pawn@main` wrote, and the original's does not. No scene of the maps checked has that yet; the order is implemented because the disassembly gives it.
 
 **The GPU path.** A weapon binding takes the CPU path because `bind(weapon, { layout: null })` is passed no GPU layout. What a GPU weapon needs, from [gpu mesh](gpu-mesh.md): (1) the pose pass takes GetFrame's
 plan and the frame matrix (`lodMeshFrameMatrix`) from `attach.coords(frameIndex)` instead of the actor's world transform, once per frame the weapon is drawn in (as for an actor in several frames: `lodFrames`); (2) the
@@ -288,7 +300,7 @@ position, 1 byte colour). Weapons are a few dozen vertices each and one per arme
 
 * **A ViewportWindow's frame against the original**: wired and checked in Play (above), not compared with the original's own camera window (the debugger and the terminal route's tracer cannot hold the game together).
 * **GPU path** for the weapon bindings: plan above; CPU path measured only by its pixels.
-* **Order of SetupForActor calls**: the analysis above; it can change a light's fade only on frames where a pawn with a weapon is in two frames; Play still runs all of a pawn's frames, then its weapon's.
+* **Order of SetupForActor calls**: implemented and compared (above). Not compared in a scene where a light first enters one frame's `LeafLights` and not the other's, which is the only case the orders can differ in; the lab scene has none.
 * **An NPC in a mirror**: the same wiring as JC's (verified for JC in a mirror, both frames, `jcb`); no capture of the original has an armed NPC in a mirror yet (the maps' mirrors sit at
   the height of a standing pawn's belt or above its hands except the lab's panes, and the Club's guards stand away from them).
 * **Muzzle flash**: dead by data, see above; the render-time `appFrand` it would draw from the CRT stream is not modelled.
