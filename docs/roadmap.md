@@ -485,9 +485,8 @@ blocks; [visual acceptance](visual-acceptance.md#light-effects-against-the-origi
   darkest-pixel rounding visual acceptance found (single raw steps at the bottom of the range).
 - *Player alterations and the viewport flash* ([screen flash](screen-flash.md), 2026-10-15): wine, liquor, Zyme and poison no
   longer pause (`Window.SetBackgroundSmoothing` translated, 350 cases) and the flash is drawn (`EndFlash` compared with D3DDrv
-  `0x10007c90` in 67 cases; the pass sits after the HUD and before the display ramp). Open: iterator native 312
-  (`VisibleCollidingActors` in `Actor.HurtRadius`: every grenade and explosion; the collision hash's `ActorRadiusCheck` is to be
-  recovered first), a held underwater or drunk frame compared with the original under Wine (the flash pass is checked against
+  `0x10007c90` in 67 cases; the pass sits after the HUD and before the display ramp); iterator native 312 (`VisibleCollidingActors` in
+  `Actor.HurtRadius`: every grenade and explosion) runs through `ActorRadiusCheck` `0x103589e0`, compared in 218 queries. Open: a held underwater or drunk frame compared with the original under Wine (the flash pass is checked against
   Play itself only), pain-zone and `DamageTrigger` scenarios, player swimming and drowning, the poison and fire sources
   (Greasel spit, darts, flames) and `summon` of a class the map did not load.
 - *Rendering:* the detail pass's mover surfaces, ZBIAS mapping (Wine behaves like a slope-scaled

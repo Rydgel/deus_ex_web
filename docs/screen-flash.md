@@ -23,7 +23,7 @@ heap, about 8 minutes).
 | --- | --- | --- | --- |
 | drink wine, 40oz liquor, liquor bottle, take Zyme (`drink-wine`, `drink-liquor40oz`, `drink-liquor-bottle`, `take-zyme`) | Island, Bar, Hotel | `Window.SetBackgroundSmoothing` (native 1423, exec `0x10051dc0`) in `DeusExPlayer.DrugEffects` | plays: `drugEffectTimer` +5 / +10 / +5 / +60, FOV and ViewRotation sway, DrunkFX background (below) |
 | poison (`hit-poison`: `StartPoison` adds 4 s to `drugEffectTimer`, four `PoisonEffect` ticks) | Island | the same native, from `DrugEffects` | plays |
-| tear gas grenade, EMP grenade (`tear-gas-grenade`, `emp-grenade`) | Island | `Actor.HurtRadius` in the thrown projectile's `Explode`: `foreach VisibleCollidingActors` = iterator native 312, exec `0x103e55b0` (`Original iterator native is not implemented: 312`) | **still pauses** (below) |
+| tear gas grenade, EMP grenade (`tear-gas-grenade`, `emp-grenade`; both summoned: Island holds no such pickup) | Island | `Actor.HurtRadius` in the thrown projectile's `Explode`: `foreach VisibleCollidingActors` = iterator native 312, exec `0x103e55b0` (`Original iterator native is not implemented: 312`) | plays: `HurtRadius` runs through the translated iterator 312 (below); the explosion's flash (peak 2.06 scale, fog 0.69) and EMP `EnergyDrain` are computed |
 | cigarettes (5 `PoisonGas` damage, smoke puff, cough), ambrosia (message only) | Island, Ship | plays | plays |
 | `TakeDamage` of PoisonGas, TearGas, Radiation, HalonGas, Flamed (CatchFire, burning), Burned, Drowned, EMP (EnergyDrain), Shocked, Shot (bleeding, BloodDrop spawns) | Island | plays | plays |
 
@@ -99,29 +99,35 @@ Scripts (DeusEx.u / PlayerPawn.uc):
 | --- | --- |
 | `Window.SetBackgroundSmoothing` (1423): `src/runtime/script-window-background-style.mjs` | `scripts/validate-window-background-smoothing.mjs`: 350 cases (window flags, XGC flags, int arguments, null and non-null XGC) equal to Extension.dll `0x1004d700` + `0x100270e0` run in Unicorn (raw access order, final fields, `GeneratePolyFlags` leaf calls) |
 | `EndFlash`: `src/runtime/screen-flash.mjs` `endFlash` | `scripts/validate-d3d-endflash.mjs`: 67 cases equal to D3DDrv.dll `0x10007c90` under a stubbed COM device: the gate, every device call and its arguments in order, the four 36-byte vertices, the cursor and discard; includes the byte-valued ties; a mutant using `floor` fails |
+| `ActorRadiusCheck`: `src/runtime/collision-hash-radius.mjs` | `scripts/validate-native-hash-radius.mjs`: 218 queries equal to Engine.dll `0x103589e0` (cells, hit order) |
 | `viewportFlash` (Draw's derivation) | disassembly only (`0x1038f36e..0x1038f54e`), not executed natively: the formula is pinned by `validate-d3d-endflash.mjs` unit checks; the NetMode/ScreenFlashes gate assumes standalone with `ScreenFlashes=True` |
 | The pass in Play: `src/viewer/flash-pass.mjs`, snapshot field `hud.flash` (`sim-session.mjs`) | `scripts/validate-flash-play.mjs` (worker mode): neutral flash leaves the frame unchanged, a fog/scale state tints it |
 
+## Iterator 312 (`VisibleCollidingActors`): done 2026-10-15
+
+`Actor.HurtRadius` (`bIgnoreLOS` false) runs `foreach VisibleCollidingActors(Actor, Victims, DamageRadius, HitLocation)` for every
+grenade, rocket and explosion. Exec `0x103e55b0` (thunk `0x103016d1`): arguments `BaseClass` (null becomes Actor), out `Actor`,
+`Radius` (omitted or 0.0 becomes 1000.0f), `Loc` (default the caller's Location, `+0x114`), `bIgnoreHidden`; the list is
+`Level.Hash->ActorRadiusCheck(GMem, Loc, Radius, 0)` (`XLevel+0xf8`, vtable slot `+0x18`, body `0x103589e0`); per candidate:
+`IsA(BaseClass)`, not hidden when `bIgnoreHidden` (`Actor+0x28` bit 2), and `Level.Model->FastLineCheck(actor.Location, Loc)`
+(UModel `0x10301a37`); the first passing candidate is the out value and the next resume goes on down the list.
+`ActorRadiusCheck` (`src/runtime/collision-hash-radius.mjs`): the cell box `(v -/+ r + 32768) * 1/256` per axis (X on the x87 stack
+until the float32 store, Y and Z stored first), FISTP, clamped to [0, 0x3fff]; the hash walk X outer, Z inner; a hit when
+`dx*dx + dy*dy + dz*dz < r*r` strictly, the sum extended and `r*r` a float32; results prepended (reverse visiting order).
+Compared with the unchanged body by `scripts/validate-native-hash-radius.mjs` (218 queries on the original's permutation tables
+and the seed-independent domain: cell boxes and hit list order, including the strict tie at exactly 100 units). The iterator
+(`createVisibleCollidingActorsIterator`, `script-iterators.mjs`, routed in `script-runtime.mjs`) is the exec's argument and filter
+order; its integration is checked by the census rows `tear-gas-grenade` and `emp-grenade` (both play), not by an oracle of the
+exec body itself (open: an exec-body differential with a native hash fixture).
+
 ## Not done, in order
 
-1. **Iterator native 312 (`VisibleCollidingActors`)**, which `Actor.HurtRadius` runs for every grenade, rocket and explosion
-   (`bIgnoreLOS` false). Exec `0x103e55b0` (thunk `0x103016d1`) decoded: arguments `BaseClass` (null -> Actor), out `Actor`,
-   `Radius` (omitted or 0.0 -> 1000.0f; the test is an equality with `0x10426d54` = 0.0), `Loc` (omitted -> the
-   caller's `Location`, `+0x114`), `bIgnoreHidden` (optional bool); `FMemMark` on `GMem`; the list is
-   `Level.Hash->ActorRadiusCheck(GMem, Loc, Radius, 0)` (`XLevel+0xf8`, vtable `+0x18`, FCollisionHashBase slot 6); per
-   candidate the actor is skipped unless it `IsA(BaseClass)` (class walk `+0x24`/`+0x28`), is not hidden when `bIgnoreHidden`
-   (`Actor+0x28` bit 2), and `Level.Model->FastLineCheck(actor.Location, Loc)` (UModel `0x10301a37`) succeeds; the out
-   variable is set to the first passing candidate and the iterator advances through the list. **Untranslated**:
-   `ActorRadiusCheck` (the collision hash's radius query: cell traversal and result order) is not in `collision-hash.mjs`
-   (which has registration, removal and the line query), so this needs the hash routine recovered and compared with the
-   unchanged body first ([collision hash](collision-hash.md)), then the iterator on top, then the census rows
-   `tear-gas-grenade` and `emp-grenade`.
-2. **Comparison with the original** (step 5): a held underwater tint (a `ghost` camera in a `WaterZone` with `ViewFog`, e.g.
+1. **Comparison with the original** (step 5): a held underwater tint (a `ghost` camera in a `WaterZone` with `ViewFog`, e.g.
    02_NYC_Underground) and a drunk/poisoned frame at a held tick under Wine; compare with `?detailTextures=0&antialias=0`.
    Not done: `validate-flash-play.mjs` checks the pass's direction and the neutral case against Play itself only. The
    quantisation of the GL blend (`dst * alpha` in 8 bits) against the device's is unmeasured.
-3. The DrunkFX background (modulated tile over the whole HUD) draws through the existing HUD renderer's DSTY_Modulated
+2. The DrunkFX background (modulated tile over the whole HUD) draws through the existing HUD renderer's DSTY_Modulated
    path; its look has not been compared with the original.
-4. Pain zones and `DamageTrigger` scenarios, the underwater tint scenario, player swimming and drowning
+3. Pain zones and `DamageTrigger` scenarios, the underwater tint scenario, player swimming and drowning
    ([swimming](swimming.md#unsupported-and-unresolved)); the sources of poison and fire themselves (Greasel spit, darts,
    flamethrower flames); `summon` of a class the map did not load.
