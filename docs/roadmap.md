@@ -483,6 +483,13 @@ blocks; [visual acceptance](visual-acceptance.md#light-effects-against-the-origi
   (`Pawn.Weapon`'s `ThirdPersonMesh`) and Play does not draw at all (Divergence 21, found in an Island
   close view; carried decorations and the player's own reflection are the same family); the
   darkest-pixel rounding visual acceptance found (single raw steps at the bottom of the range).
+- *Player alterations and the viewport flash* ([screen flash](screen-flash.md), 2026-10-15): wine, liquor, Zyme and poison no
+  longer pause (`Window.SetBackgroundSmoothing` translated, 350 cases) and the flash is drawn (`EndFlash` compared with D3DDrv
+  `0x10007c90` in 67 cases; the pass sits after the HUD and before the display ramp). Open: iterator native 312
+  (`VisibleCollidingActors` in `Actor.HurtRadius`: every grenade and explosion; the collision hash's `ActorRadiusCheck` is to be
+  recovered first), a held underwater or drunk frame compared with the original under Wine (the flash pass is checked against
+  Play itself only), pain-zone and `DamageTrigger` scenarios, player swimming and drowning, the poison and fire sources
+  (Greasel spit, darts, flames) and `summon` of a class the map did not load.
 - *Rendering:* the detail pass's mover surfaces, ZBIAS mapping (Wine behaves like a slope-scaled
   offset), colour interpolation and fog-map gate; clipped polygons' own vertices
   ([frame projection](frame-projection.md#unverified-and-open)); for sprites, texture LOD other than 0
