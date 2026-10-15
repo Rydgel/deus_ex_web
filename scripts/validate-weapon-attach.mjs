@@ -9,10 +9,10 @@
  * `--cases <file>` (the original's own: `.work/weapon/original-cases.json`, built by
  * scripts/weapon-original-cases.mjs from the running game's breakpoints). */
 import {execFileSync} from 'node:child_process';
-import {existsSync, readFileSync} from 'node:fs';
+import {existsSync, readFileSync, readdirSync} from 'node:fs';
 import {gameDirectory} from './game-directory.mjs';
 import {rotationSineTable} from '../src/runtime/coords.mjs';
-import {handCoords, weaponCoords, specialOutcode} from '../src/runtime/weapon-attachment.mjs';
+import {handCoords, weaponCoords, selectedCoords, specialOutcode} from '../src/runtime/weapon-attachment.mjs';
 
 const root = gameDirectory();
 const python = process.env.NATIVE_PROBE_PYTHON ?? '.cache/native-probe-env/bin/python';
@@ -38,12 +38,12 @@ const options = process.argv.slice(2);
 // --cases a.json,b.json: the original's own draws (scripts/weapon-original-cases.mjs), compared in situ as well
 // without --cases, the captures `.work/weapon/original-cases*.json` when this checkout has them (local files, not versioned)
 const casesFiles = options.includes('--cases') ? options[options.indexOf('--cases') + 1].split(',')
-  : ['.work/weapon/original-cases.json', '.work/weapon/original-cases-2.json', '.work/weapon/original-cases-3.json'].filter(existsSync);
-const original = {hand: [], weapon: []};
+  : (existsSync('.work/weapon') ? readdirSync('.work/weapon').filter(name => /^original-cases(-\d+)?\.json$/.test(name)).sort().map(name => `.work/weapon/${name}`) : []);
+const original = {hand: [], weapon: [], selected: []};
 for (const file of casesFiles) {
   if (!existsSync(file)) { console.log(`no ${file}`); continue; }
   const loaded = JSON.parse(readFileSync(file, 'utf8'));
-  original.hand.push(...loaded.hand); original.weapon.push(...loaded.weapon);
+  original.hand.push(...loaded.hand); original.weapon.push(...loaded.weapon); original.selected.push(...(loaded.selected ?? []));
 }
 
 const handCases = [...hand, ...original.hand.map(c => ({vertices: c.vertices.map(w => w.map(float)), outcodes: c.outcodes,
@@ -58,8 +58,21 @@ for (let i = 0; i < 100; i++) {
 for (const c of original.weapon) weaponCases.push({hand: c.hand.map(float), location: c.location.map(float), mirror: c.mirror ?? 1,
   drawScale: 1, thirdPersonScale: 1, expected: c.expected});
 
+// A SelectedItem's block (a held tool, no Weapon): any twelve floats as the hand coordinates (the hand's own are products of unit vectors
+// and ones with signed zeros), the item's Rotation nonzero (the block zeroes it first).
+const specials = [0, -0, 1, -1, 0.5, 100, -100, 1e-8];
+const selectedCases = [];
+for (let i = 0; i < 100; i++) {
+  const hand12 = Array.from({length: 12}, () => i % 4 === 0 ? specials[Math.floor(random() * specials.length)] : between(-300, 300));
+  selectedCases.push({hand: hand12.map(Math.fround), location: [between(-4000, 4000), between(-4000, 4000), between(-1000, 1000)],
+    rotation: [0x1234 * (i % 7), 0x5678 * (i % 5), 0x9abc * (i % 3)], mirror: i % 3 ? 1 : -1, drawScale: 1, thirdPersonScale: i % 5 ? 1 : 0.5});
+}
+for (const c of original.selected) selectedCases.push({hand: c.hand.map(float), location: c.location.map(float), rotation: [0, 0, 0], mirror: c.mirror ?? 1,
+  drawScale: 1, thirdPersonScale: 1, expected: c.expected});
 const oracleInput = {
   sines,
+  selected: selectedCases.map(c => ({hand: c.hand.map(word), location: c.location.map(word), rotation: c.rotation, mirror: word(c.mirror),
+    drawScale: word(c.drawScale), thirdPersonScale: word(c.thirdPersonScale)})),
   hand: handCases.map(c => ({
     vertices: c.vertices.map((v, i) => ({words: v.map(word), outcode: c.outcodes?.[i] ?? specialOutcode(v, c.prj)})),
     indices: c.indices,
@@ -93,5 +106,13 @@ weaponCases.forEach((c, i) => {
   if (theirs.drawScale !== word(c.thirdPersonScale) || theirs.thirdPersonScale !== word(c.drawScale)) fail('scale swap', i, 'swapped', 'not');
   if (c.expected) { inSitu++; if (mine.some((w, k) => w !== c.expected[k])) fail('weapon coords (running original)', i, hex(c.expected), hex(mine)); }
 });
-console.log(`hand ${handCases.length} cases (${produced} drawn, ${skipped} skipped by outcode), weapon ${weaponCases.length} cases, ${inSitu} comparisons with the running original, ${failures} failures`);
+selectedCases.forEach((c, i) => {
+  const mine = selectedCoords(c.hand, c.location).map(word), theirs = out.selected[i];
+  if (mine.some((w, k) => w !== theirs.coords[k])) fail('selected coords', i, hex(theirs.coords), hex(mine));
+  if (theirs.rotation.some(w => w !== 0)) fail('selected rotation', i, 'zero', hex(theirs.rotation));
+  if (theirs.mirror !== 0x3f800000) fail('selected mirror', i, '1.0', theirs.mirror.toString(16));
+  if (theirs.drawScale !== word(c.thirdPersonScale) || theirs.thirdPersonScale !== word(c.drawScale)) fail('selected scale swap', i, 'swapped', 'not');
+  if (c.expected) { inSitu++; if (mine.some((w, k) => w !== c.expected[k])) fail('selected coords (running original)', i, hex(c.expected), hex(mine)); }
+});
+console.log(`hand ${handCases.length} cases (${produced} drawn, ${skipped} skipped by outcode), weapon ${weaponCases.length} cases, selected item ${selectedCases.length} cases, ${inSitu} comparisons with the running original, ${failures} failures`);
 process.exit(failures ? 1 : 0);

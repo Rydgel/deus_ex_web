@@ -460,7 +460,10 @@ export function createSimSession(game, { assets = null, events = [], exportName 
         // (docs/frame-projection.md); the rectangle is the root's.
         projection: projectionOfFields(frame.fields, width, height),
         sprites: frame.sprites.map(sprite => sprite.key), spriteScreens: frame.spriteScreens,
-        lod: { coords: Array.from(fieldFloats.subarray(0, 12)), fx: fieldFloats[12] } };
+        lod: { coords: Array.from(fieldFloats.subarray(0, 12)), fx: fieldFloats[12] },
+        // Its PrjXM..PrjYP (+0xec..+0xf8): the planes DrawLodMesh's outcodes of a pawn's special vertices read in this frame
+        // (docs/weapon-attachment.md "Mirror frames"); a child's are those of its own clipped window, not the main frame's.
+        prj: Array.from(new Float32Array(Uint32Array.from(frame.fields.slice(25, 29)).buffer)) };
     });
     // DrawLodMesh's inputs from the master frame: Frame->Coords and FX
     // (docs/script-lodmesh-lod.md "Play").
@@ -505,7 +508,7 @@ export function createSimSession(game, { assets = null, events = [], exportName 
     axes: [frame.coords.slice(3, 6), frame.coords.slice(6, 9), frame.coords.slice(9, 12)], mirror: frame.mirror });
   function lightFramesOf(frames) {
     if (!frames || !meshLighting?.frame) return null;
-    return drawFrameOrder(frames).map(frame => ({ index: frame.index, kind: frame.kind, ids: frame.main ?? new Set(),
+    return drawFrameOrder(frames).map(frame => ({ index: frame.index, kind: frame.kind, ids: frame.main ?? new Set(), prj: frame.prj ?? null,
       ctx: meshLighting.childFrame({ coords: frame.coords, mirror: frame.mirror, planes: frame.planes }) })).filter(entry => entry.ctx);
   }
   // SetupDynamics for a child frame (docs/bsp-occlusion.md "Child frames"),

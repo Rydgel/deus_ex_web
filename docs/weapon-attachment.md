@@ -89,11 +89,12 @@ All of it is inside `DrawActorSprite`, after the pawn's own draw and the restore
 
 ### 3. Other items the pawn can hold
 
-* **No `Weapon`, a `SelectedItem`** (`Pawn+0x3d8`, `0x10b25cdc..0x10b261ac`): the same swap of `ThirdPersonMesh` and
+* **No `Weapon`, a `SelectedItem`** (`Pawn+0x3d8`, `0x10b25cdc..0x10b261ac`; implemented, see "Held items" below): the same swap of `ThirdPersonMesh` and
   `ThirdPersonScale`, the Style copy, Rotation zeroed, `Mirror` 1.0, but the Coords go through three rotation
-  FCoords built from the item's (zeroed) Roll, Pitch and Yaw (`FVector::TransformPointBy/TransformVectorBy`, `FCoords::operator*=`:
-  identity matrices) before the Location is added; no muzzle flash. A `DeusExPlayer` holding a tool or an item with no weapon
-  (`UpdateInHand` sets `SelectedItem = inHand`; a weapon sets `Weapon` as well) shows it this way in a mirror.
+  FCoords built inline from the item's (zeroed) Roll, Pitch and Yaw and the sine table (Roll by `FVector::TransformPointBy/TransformVectorBy`, Pitch and Yaw by
+  `FCoords::operator*=`: identity matrices with the signed zeros their construction carries) before the Location is added; no muzzle flash, and the only state it writes is the
+  zeroed Rotation. A `DeusExPlayer` holding a tool or an item with no weapon (`UpdateInHand` sets `SelectedItem = inHand`; a weapon sets `Weapon` as well, and then
+  only the Weapon is drawn) shows it this way in a mirror.
 * **`Pawn.PlayerReplicationInfo.HasFlag`** (`0x10b25a74..0x10b25c6d`, `Pawn+0x558` then `+0x354`): a Capture-the-Flag flag
   carried at the pawn's location with a rotation by `Pawn+0x3f4`: multiplayer. The earlier note of this as "the carried
   decoration" was wrong (DeusExPlayer.CarriedDecoration is not read by Render.dll). Multiplayer is out of scope here.
@@ -180,18 +181,81 @@ Regression on the branch (worker mode unless noted): `validate-mesh-lighting-pla
 
 **Found while wiring.** The hand frame has determinant -1 (a reflection): X, Y, Z = Y x X, so the weapon mesh is authored for a reflecting transform and the original keeps its
 faces by the camera-space test alone. In a mirror's child frame Play's projection flips x for the whole pass (`uFpDepth.z`), which reverses the winding the other way:
-`decision.flipSide` makes the page draw the weapon's single-sided groups with the other side there (written, not verified).
+`decision.flipSide` makes the page draw the weapon's single-sided groups with the other side there (verified against the original, "Mirrors" below).
+
+## Mirrors (2026-10-15)
+
+**Scene** (`05_NYC_UNATCOMJ12lab`, found by `.work/weapon/*-census.mjs` over the maps' mirrored surfaces, player starts and pawns). The player starts at
+`PlayerStart0` (-3087, 1400, -155), 225 units in front of a translucent mirror pane (surface 3611, plane x = -2862, y 1360..1488, z -160..-64, flags `0x8c0000c`) and, looking along
++x, sees his whole reflection in it. JC is armed through original paths only, typed after N unfrozen ticks with the level held (`live-original.sh --no-ghost --cmds`, run by Play at the
+same ticks): `summon DeusEx.WeaponPistol` (20), `set ... ViewRotation (Pitch=-10130,Yaw=16432)` to look at it (50), `ParseRightClick` (90, the pickup), `ActivateBelt 1` (130), the view
+turned to the pane (170), the frame at tick 300 with the level held (`--tag jcm`). The player is excluded from the main frame in first person, so the pistol is drawn in the mirror's child
+frame alone. A second scene (`--tag jcb`) adds `BehindView 1` and a view off the line to the mirror: JC's back in the main frame, his reflection beside it, both drawing the pistol.
+
+**The running original** (`wine dx-live-win.exe weapon 6` with the level up afterwards, `DX_POST`): 234 draws of `JCDentonMale2` (`GM_Trench`, 336 model vertices, `WeaponPistol3`/`Glock3rd`), every one in
+the mirror's child frame (`Recursion` 1, Mirror -1: the `read`, `special` and `coords` events 234 times each) and the weapon's `DrawMesh` with the frame's Mirror at **1.0** (the forced value, 234 events).
+The child frame's PrjXM..PrjYP are `3e36ee45 3e6bb90c 3ec81e6e 3e4958ba`: the planes of the pane's clipped window, not the main frame's. The special vertices' outcodes are read against them in each frame
+(`DrawLodMesh` 0x10b0efd3..), so Play now passes every frame its own planes (the Rust core's per-frame fields 25..28, `frames[].prj`, `lightFrames[].prj`). Play's child frame in the replay of the same run has
+exactly those four words.
+
+**Translation.** `validate-weapon-attach.mjs` takes the 234 draws as cases (`weapon-original-cases.mjs --cases`: the logged special vertices and outcodes, the logged hand coordinates and the
+Coords handed to the weapon's `DrawMesh`): hand and weapon Coords equal word for word (3,584 comparisons with the running original in all, 0 failures; the 1,558 main-frame draws above and these 468).
+
+**Pixels** (`live-acceptance.mjs play --tag jcm --shot jcm --no-ghost --page-params "antialias=0&weaponMirrors=1"`, `visual-acceptance.mjs compare`, the level held at tick 300; the Wine brightness gap, ratio
+about 1.3, is the known uniform one):
+
+| Scene, region | Play | MAD | edge recall / precision | outlier blocks |
+| --- | --- | ---: | ---: | ---: |
+| jcm, whole frame | weapon in the mirror | 2.03 | .978 / .972 | 0 |
+| jcm, JC's reflection (160x180 +560+340) | weapon in the mirror | 4.90 | .999 / .999 | 0 |
+| jcm, the pistol's region in the reflection (40x44 +645+425) | `weaponMirrors=1` | 4.72 | **1.000 / 1.000** | 0 |
+| | `weaponMirrors=0` (no pistol) | 4.85 | .795 / 1.000 | 0 |
+| | `weaponMirrors=1` without `flipSide` | 4.82 | .807 / 1.000 | 1 |
+| jcb, whole frame | weapon in the mirror | 2.21 | .987 / .992 | 0 |
+| jcb, the main-frame pistol (50x60 +745+355) | either | 3.51 | 1.000 / 1.000 | 0 |
+| jcb, the reflection (70x100 +815+250) | `weaponMirrors=1` / `=0` | 4.82 / 4.82 | 1.000 / .997 vs .986 / .986 | 0 |
+
+The pistol drawn in the reflection is the same one at the same place and angle as the original's (`.work/weapon/jcm-hand-orig-on-off.png`: original, Play on, Play off). The face-side flip is verified
+by the third row: without `decision.flipSide` the weapon's faces are culled the wrong way and the pistol is missing as when it is off (.807 against .795 recall); with it the region matches.
+
+**On by default** since this step: `?weaponMirrors=0` turns it off (`?weapons=off` still turns every third-person weapon off). `scripts/validate-weapon-mirror-play.mjs` is the Play-side check (the
+scene above in worker mode with the console commands run live: a binding drawn in child frame 1 alone with the frame's own planes, the Coords equal to the translation over that frame's special
+vertices, the switches; with the capture of the original in `.work/live-acceptance/05_NYC_UNATCOMJ12lab` it replays the run and compares the child frame's planes with the logged words).
+Not compared: an NPC in a mirror (the capture of the Underworld/Club views has none; the NPC path is the player's one with its pawn drawn in both frames, which `jcb` covers for JC).
+
+**Found while capturing.** `viewProbe`'s `location` wrote Play's player Location without moving its hash entry, so the replay's first `SetRotation` after a placement that differs from the player's own settle
+(the original's JC rests at z -155.8095, Play's at -155.968) paused with "Remove actor before changing its registered location". The placement now re-registers the player (`changeActor`).
+
+## Held items (SelectedItem with no Weapon, 2026-10-15)
+
+**Which pawns.** `Pawn.SelectedItem` is set by `DeusExPlayer.UpdateInHand` (and by nothing for a ScriptedPawn), so the pawn is the player holding a pickup: of the classes in Engine.u, DeusEx.u and DeusExItems.u
+whose defaults set `ThirdPersonMesh`, the weapons and also `MedKit`, `Lockpick`, `Multitool`, `Binoculars`, `BioelectricCell`, `Flare`, `NanoKey`, `NanoKeyRing`, `Credits`, `WeaponMod`, `AdaptiveArmor`, `BallisticArmor`,
+`HazMatSuit`, `TechGoggles`, the augmentation cannisters and `DataVaultImage` (40 classes in all with a mesh; `.work/weapon/third-person-classes.mjs`). When the player holds one of those with no weapon
+(`Weapon` None, `SelectedItem` the item) it is drawn in his hand in every frame that draws him: in a mirror.
+
+**The running original** (the same lab scene, `--tag jci`, `summon DeusEx.MedKit` instead of the pistol, the `weapon` debugger with the new site `0x10b26165`, the item block's `DrawMesh` call): 234 draws, every one
+with `Weapon` None and `SelectedItem` `MedKit0`, mesh `MedKit3rd`, DrawScale 1, Style the pawn's, Rotation (0, 0, 0), the frame's Mirror at 1.0, in the mirror's child frame (Recursion 1).
+
+**Oracle and translation.** `scripts/native-weapon-attach-oracle.py` runs the unchanged instructions `0x10b25d37..0x10b26118` (the swap, the zeroed Rotation, the forced Mirror, the three rotations built
+from `GMath`'s sine table, Core's `TransformPointBy`/`TransformVectorBy`, the `FVector`/`FCoords` constructors and `FCoords::operator*=`, the Location sums) at precision control 24;
+`selectedCoords` (`src/runtime/weapon-attachment.mjs`) is the translation: the roll rotation (origin `(-0,-0,-0)`, X `(1,-0,-0)`, Y `(-0,cos,sin)`, Z `(-0,-sin,cos)`) applied by transform, the pitch
+(X `(cos,0,-sin)`, Y `(-0,1,-0)`, Z `(sin,-0,cos)`) and the yaw (X `(cos,-sin,0)`, Y `(sin,cos,0)`, Z `(0,0,1)`) by `*=`, the Location added. Roll goes first, then Pitch, then Yaw. 100 random cases
+(random hand coordinates with zeros, negative zeros and tiny values, a nonzero Rotation to be zeroed, both Mirror signs, both scale swaps) and the 234 original draws (`weapon-original-cases.mjs --cases`):
+0 differences (4,052 comparisons with the running original in all); dropping the three rotations from the translation fails 19 of the random cases (a zero's sign), so they discriminate. The block writes the
+Rotation alone (no flash state).
+
+**Play.** `actor-weapon-sim.mjs` draws the pawn's `SelectedItem` when it has no `Weapon` (a held `Weapon` wins, as in the original), with `selectedCoords`; the validator checks both in the lab scene (`summon
+DeusEx.MedKit`: `item` true, drawn in child frame 1 alone, Coords equal the translation). **Pixels** (`--tag jci`, `?antialias=0`): whole frame ratio 1.317, MAD 2.10, edge recall .977 / precision .976, 0 outlier
+blocks; over the MedKit in the reflection (40x40 +640+425) MAD 5.18, recall 1.000 / precision 1.000, 0 outlier blocks, and with `?weapons=off` 7.86, .287 / .762, 22 outlier blocks (`.work/weapon/jci-medkit-orig-on-off.png`:
+original, Play, Play without: the same box, handle and cross in the same hand).
+
 
 ## Open
 
-* **Mirror child frames and JC's reflection** are off (`?weaponMirrors=1` turns them on): the block runs there in the original (disassembly), but no capture of the original draws an
-  armed pawn or JC in a mirror yet. The map views reached so far have none in a mirror (the Club's guards stand far from the bar mirror, the Underworld's pawns hold no weapon at
-  the start). `scripts/original-views.sh` can hold a camera at a mirror but JC cannot be given a weapon in a held level (`set Weapon` needs UObjectProperty::ImportText, not translated;
-  `ParseRightClick`/`ActivateBelt` need ticks): a live scene with the pilot's pickup commands and a mirror in view is the way. Also unverified there: the face-side flip above, the
-  outcode planes of a child frame (the master's are used).
-* **`Pawn.SelectedItem`** (a held tool, no weapon): recovered (section 3), not wired and not run under the oracle (the three rotations of the item's zeroed Rotation).
 * **A ViewportWindow's frame** (a security camera's own DrawWorld) does not draw weapons: `updateFrame` leaves them out and the pass's decisions hide them.
 * **GPU path** for the weapon bindings (a few dozen vertices each; CPU path measured only by its pixels).
 * **Order of SetupForActor calls**: the original lights the pawn then its weapon in each frame; Play runs all of a pawn's frames, then the weapon's (the sink's per-actor cache is shared).
+* **An NPC in a mirror**: the same wiring as JC's (verified for JC in a mirror, both frames, `jcb`); no capture of the original has an armed NPC in a mirror yet (the maps' mirrors sit at
+  the height of a standing pawn's belt or above its hands except the lab's panes, and the Club's guards stand away from them).
 * **Muzzle flash**: dead by data, see above; the render-time `appFrand` it would draw from the CRT stream is not modelled.
 * **Cost**: one CPU GetFrame replay per armed pawn per drawn frame (`materialize`), not measured.
