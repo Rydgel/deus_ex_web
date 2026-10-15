@@ -13,6 +13,9 @@ import { frameProjection as vertexProjection } from './frame-projection.mjs';
 import { createPlayCamera, pointCamera, applyPlayFrame, verticalFov, rotatorEuler, setPixelCentre, projectionState, setProjectionState, PLAY_NEAR, PLAY_FAR } from './play-camera.mjs';
 import { createSpriteScene } from './sprite-scene.mjs';
 import { createDecalScene } from './decal-scene.mjs';
+import { createDetailScene } from './detail-scene.mjs';
+import { unpackDetail } from '../runtime/detail-draw.mjs';
+import { detailTexturesOn, modelSurfaceDetails } from '../runtime/detail-pass.mjs';
 import { decalProbe, placeProbe, laserProbe, meshLightProbe, renderPassProbe } from './decal-probe.mjs';
 import { viewProbe } from './view-probe.mjs';
 import { DECAL_LAYER } from './render-layers.mjs';
@@ -245,7 +248,7 @@ function useFrameProjection(projection, mirror = 1) {
 }
 let hudRenderer=null;
 let npcPreview=null;
-let spriteScene=null,coronaPass=null,decalScene=null;
+let spriteScene=null,coronaPass=null,decalScene=null,detailScene=null;
 // Actor mesh animation and lighting run on the GPU (docs/gpu-mesh.md), on by
 // default since validate-gpu-mesh passed on Training and Island; ?gpuMesh=0
 // selects the CPU kernels, which stay the reference and the fallback. A
@@ -542,6 +545,7 @@ function framePassHelpers(frames, stampFrame, spritesOf) {
   const framePass = frames ? record => {
     useFrameProjection(record?.projection, record?.mirror);
     world.fog?.framePass(record, renderer);
+    detailScene?.framePass(record);
     if (!record) { world.visibility.all(); spriteScene?.framePass(null); return; }
     world.visibility.select(record.nodes, record.movers ?? null);
     spritesOf(record);
@@ -829,6 +833,17 @@ async function loadMap(name) {
     // Decals (docs/decals.md): DrawFrame's decal block on the simulation
     // side (decal-draw.mjs), its fragments drawn by the page.
     const nextDecalScene=nextSim?createDecalScene(assets,new TextureStore(assets),{displayGamma:nextWorld.displayGamma}):null;
+    // Detail textures (docs/frame-projection.md "Detail textures"): D3DDrv's pass on the simulation side (detail-draw.mjs),
+    // its fans drawn by the page. ?detailTextures=0 models a device without BLENDDIFFUSEALPHA: no pass.
+    let nextDetailScene=null;
+    if(nextSim&&detailTexturesOn()){
+      try{nextDetailScene=createDetailScene(assets,new TextureStore(assets),{displayGamma:nextWorld.displayGamma,
+        surfaceDetails:await modelSurfaceDetails(assets,asset,nextMap.model)});}
+      catch(error){nextWorld.notes.push(`Detail textures unavailable: ${error.message}`);}
+    }
+    // ?detailBias=factor,units: the detail passes' depth offset (three.js polygonOffset), for A/B captures against the original.
+    const detailBias=new URLSearchParams(location.search).get('detailBias');
+    if(nextDetailScene&&detailBias){const [factor,units]=detailBias.split(',').map(Number);nextDetailScene.setBias(factor||0,units||0);}
     // The simulation's first events (the startup lighting, the admitted
     // actors' creation records) reach the page before the first frame, whose
     // actor meshes are built while the map loads.
@@ -841,6 +856,9 @@ async function loadMap(name) {
     if(decalScene){scene.remove(decalScene.root);decalScene.dispose();}
     decalScene=nextDecalScene;
     if(decalScene)scene.add(decalScene.root);
+    if(detailScene){scene.remove(detailScene.root);detailScene.dispose();}
+    detailScene=nextDetailScene;
+    if(detailScene)scene.add(detailScene.root);
     hudRenderer?.dispose();hudRenderer=nextHud;
     simHost?.dispose();simHost=nextHost;meshLighting=nextHost.meshLighting??null;weaponDraw?.dispose();weaponGpu?.dispose();simStatus=null;simAnswers={keys:{},pointerGrab:false};simLastPost=null;
     weaponDraw=nextWeaponDraw;weaponGpu=nextWeaponGpu;weaponSummary=null;
@@ -1594,6 +1612,13 @@ decals() {
   return { groups: (lastVisibility?.decals ?? []).map(group => ({ texture: group.texture.key, triangles: group.positions.length / 9 })),
     drawnTriangles: decalScene?.count() ?? null, notes: [...(decalScene?.notes ?? [])] };
 },
+/** The last drawn frame's detail-texture fans (detail-draw.mjs, detail-scene.mjs): the pack's frames, the page's meshes (frame,
+ * triangles) and the triangles drawn; `bias` sets the depth offset of the detail materials (three.js polygonOffset). */
+detail(bias) {
+  if (bias && detailScene) detailScene.setBias(bias.factor, bias.units);
+  return { on: Boolean(detailScene), frames: lastVisibility?.detail ? unpackDetail(lastVisibility.detail).map(entry => ({ index: entry.index, words: entry.words.length })) : [],
+    meshes: detailScene?.meshes() ?? [], drawnTriangles: detailScene?.count() ?? null, notes: [...(detailScene?.notes ?? [])] };
+},
 /** The last drawn frame's OccludeBsp result (sim-session.mjs visibility):
  * node count, mirror requests, sky, the world triangles it kept and the
  * master frame's words with the view, viewport and render rectangle that
@@ -1903,6 +1928,10 @@ function drawFrame(snap, time) {
   }
   phase('weapon');
   if (simVerify) for (const set of Object.values(drew)) set.clear();
+  // The detail-texture pass' fans (sim-session.mjs visibility): every frame's, shown by the pass that draws it.
+  // A surface with a fog map takes no detail texture (DrawComplexSurface clears it): the fog pass' maps of this update say which.
+  try { detailScene?.update(visible?.detail ?? null, world.fog ? (index, surface) => world.fog.fogged(index)?.has(surface) ?? false : null); }
+  catch (error) { pauseForRuntimeError(error); }
   const { framePass, drawSkyFrame, updateActors } = framePassHelpers(frames, stampFrame, record => spriteScene?.framePass(record.index));
   world.mirrors.render(renderer, scene, camera, { markers: world.markers, sky: world.sky, requested,
     frames, rect: frames ? (renderRect ?? null) : null, framePass, skyIn: frames ? drawSkyFrame : null, updateActors, plan: stampFrame?.plan ?? null });
@@ -1927,9 +1956,9 @@ function drawFrame(snap, time) {
   if (drawWorld) {
     // The main frame draws only the polygons OccludeBsp kept (world-visibility.mjs).
     if (visible) world.visibility.select(visible.nodes, visible.movers ?? null);
-    spriteScene?.mainPass(true);
+    spriteScene?.mainPass(true); detailScene?.mainPass(true);
     useFrameProjection(playing && !runtimeError ? frame?.projection : null);
-    try { renderer.render(scene, camera); } finally { world.visibility.all(); spriteScene?.mainPass(false); vertexProjection.off(); }
+    try { renderer.render(scene, camera); } finally { world.visibility.all(); spriteScene?.mainPass(false); detailScene?.mainPass(false); vertexProjection.off(); }
   }
   if (simVerify && !simClient && stampFrame) {
     const problem = sim.verifyStamps(drew, { built: id => Boolean(npcPreview?.draw.bindings.get(id)?.ready),

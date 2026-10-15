@@ -6,7 +6,9 @@
 // same fields and runs ghost/ShowHud through the original console chain on
 // the simulation side, worker mode by default).
 //
-//   node scripts/visual-acceptance.mjs play [--maps a,b] [--size 1280x720] [--query sim=inline]
+//   node scripts/visual-acceptance.mjs play [--maps a,b] [--size 1280x720] [--query sim=inline] [--detail on]
+//       (Play draws without detail textures, ?detailTextures=0, as every stored original frame lacks them; --detail on keeps them,
+//       for a capture of the original taken with --poke D3DRenderDevice0:0x78:1)
 //       loads each map in Play, writes the plan (views from the player's start
 //       Location) and Play's frames
 //   node scripts/visual-acceptance.mjs original [--maps a,b]
@@ -130,7 +132,10 @@ async function play() {
       // Frozen (the default): the page holds its frame loop (?hold=1) until
       // LevelInfo.bPlayersOnly is set, as the original's console sets it
       // before `open`; --live lets the level run.
-      const query = [freeze ? 'hold=1' : '', option('query', '')].filter(Boolean).join('&');
+      // Every stored original frame lacks the detail-texture pass (docs/visual-acceptance.md "Detail textures"): Play draws without it
+      // (?detailTextures=0) unless --detail on, for a comparison with a capture of the original taken with the pass poked in.
+      const query = [freeze ? 'hold=1' : '', option('detail', 'off') === 'on' || /detailTextures=/.test(option('query', '')) ? '' : 'detailTextures=0',
+        option('query', '')].filter(Boolean).join('&');
       await page.goto(`${url}/${query ? `?${query}` : ''}`);
       await page.waitForFunction(() => window.deusExViewer?.status().ready, {}, {timeout: 240000});
       if (await page.evaluate(() => window.deusExViewer.status().map) !== map) {

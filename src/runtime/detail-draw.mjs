@@ -61,12 +61,12 @@ export function createDetailDraw(kernel, occlusion) {
   };
 }
 
-/** The pack's frames: [{ index, words }] with `words` a view of the pack (detail_run's output). */
+/** The pack's frames: [{ index, words, offset }] with `words` a view of the pack (detail_run's output) at word `offset`. */
 export function unpackDetail(pack) {
   const out = [];
   for (let at = 1, n = 0; n < pack[0]; n++) {
     const length = pack[at + 1];
-    out.push({ index: pack[at], words: pack.subarray(at + 2, at + 2 + length) });
+    out.push({ index: pack[at], words: pack.subarray(at + 2, at + 2 + length), offset: at + 2 });
     at += 2 + length;
   }
   return out;

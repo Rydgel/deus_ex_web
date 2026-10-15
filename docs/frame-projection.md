@@ -766,7 +766,12 @@ when no surface qualifies), `detail_run` over the main frame's and each child fr
 its stream address), and the pack in `snapshot.begin.visibility.detail` (transferred). `scripts/validate-detail-play-sim.mjs` runs
 Play's session headless and compares the pack with the CPU reference `detail-pass.mjs` over the same frame run again with all the
 points, mirror frames included; `scripts/validate-detail-pass-rust.mjs` also runs the filtered stream against the original's fans
-(465 fans, vertex for vertex; `first` counts the kept polygons only). The page's draw, ZBIAS and the pixel checks are items 2-4.
+(465 fans, vertex for vertex; `first` counts the kept polygons only). Item 2 is built: `src/viewer/detail-scene.mjs` draws the
+pack (one mesh per frame and detail texture; `mainPass` / `framePass` show a pass's own frame's fans as the sprite scene's passes
+do) through `fpClipOf` with D3DDrv's vertices, in the recorded states, with a depth offset provisionally set from Wine's ddraw
+mapping of ZBIAS (item 3 measures it; without any offset the fans fail the depth test everywhere: the same vertices rasterized
+as other triangles differ in the last depth bits). `scripts/validate-detail-play.mjs` (worker mode, antialiasing off) checks the
+page. ZBIAS and the pixel checks are items 3-4.
 What the item list asked for, from what the oracle recorded:
 1. *Sim side.* A per-surface table from the map's textures at load (`detailTable`; `surfaceDetails` in
    `scripts/occlusion-request.mjs` is the Node version: the texture's `DetailTexture`, its first mip's size and its `DrawScale`

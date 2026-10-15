@@ -86,6 +86,9 @@ export function createFogPass({ lightAtlas, levelBrightness, hsv, displayGamma, 
   // [{surface, texels}]), the tiles a child pass replaced, and the mover
   // items' meshes (each with the frame it belongs to).
   let childMaps = new Map(), passTiles = null, itemsUsed = 0;
+  // Per frame (0 the root's), the level surfaces whose fog map has any light in it this update: SetupForSurf gave them a FogMap,
+  // and D3DDrv's DrawComplexSurface drops the detail texture of a surface with one (frame-projection.md "Detail textures").
+  let foggedSurfaces = new Map();
   const items = [], sources = new Map(), region = new THREE.Box2(), at = new THREE.Vector2();
   /** DrawFrame's order: a frame's children (in their list order, which is
    * the order OccludeFrame visits them) before the frame; the root (0) last
@@ -252,7 +255,7 @@ export function createFogPass({ lightAtlas, levelBrightness, hsv, displayGamma, 
      * frame's maps in place for its pass. */
     update(view, frustum, drawn = null, { moverItems = null, fogZone = null, frames = null, nodeSurface = null } = {}) {
       stats.drawn = 0; stats.texels = 0; stats.movers = 0; stats.moverCase = null; stats.frameMaps = 0; stats.frameCase = null;
-      childMaps = new Map(); itemsUsed = 0;
+      childMaps = new Map(); itemsUsed = 0; foggedSurfaces = new Map();
       for (const slot of items) slot.mesh.visible = false;
       if ((!surfaces.length && !moverPolygons.size) || !lights.length) return;
       const state = { missFlag: 0 };
@@ -273,16 +276,19 @@ export function createFogPass({ lightAtlas, levelBrightness, hsv, displayGamma, 
             note('frameCase', { ...what, mover: item.mover, polygon: item.polygon }, texels, input, missFlag, coords);
           });
           childMaps.set(frame.index, maps);
+          foggedSurfaces.set(frame.index, new Set(maps.filter(map => map.texels.some(Boolean)).map(map => map.surface.surfaceIndex)));
         }
       }
       // The root frame, drawn last.
       const [x, y, z] = getAxes(view.rotation.map(v => v | 0));
       // ViewCoords (0,1,0), (0,0,-1), (1,0,0) under the view rotation.
       const coords = { origin: view.location.map(Math.fround), x: y, y: z.map(v => -v), z: x };
-      const frameLights = lightsFor(coords), dirty = new Set();
+      const frameLights = lightsFor(coords), dirty = new Set(), rootFogged = new Set();
+      foggedSurfaces.set(0, rootFogged);
       for (const surface of surfaces) surface.mainVisible = surface.mesh.visible = false;
       levelMaps(drawn, frustum, coords, frameLights, state, (surface, texels) => {
         const { record, tile, mesh, fogPage } = surface;
+        if (texels.some(Boolean)) rootFogged.add(surface.surfaceIndex);
         writeTile(fogPage.pixels, size, tile.x, tile.y, record, texels);
         dirty.add(fogPage);
         surface.mainVisible = mesh.visible = true; stats.drawn++; stats.texels += record.width * record.height;
@@ -300,6 +306,8 @@ export function createFogPass({ lightAtlas, levelBrightness, hsv, displayGamma, 
       });
       for (const fogPage of dirty) fogPage.texture.needsUpdate = true;
     },
+    /** The surfaces of frame `index` (0 the root) with a fog map this update, a Set, or null when none was computed. */
+    fogged(index) { return foggedSurfaces.get(index) ?? null; },
     /** A child frame's pass (`frame` a record of `update`'s frames), or the
      * end of one (null): its level-surface maps go into the atlas tiles they
      * share with the root frame's, only its own fog meshes and mover items

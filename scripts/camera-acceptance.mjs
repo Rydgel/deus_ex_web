@@ -59,7 +59,9 @@ async function play() {
     // The original's device has no multisampling (D3D7, no AA setting in DeusEx.ini), so its frames have none: Play's canvas
     // is multisampled by default (main.mjs), which anti-aliases every polygon edge and every sub-4-pixel mesh. The comparison
     // runs with ?antialias=0 unless --antialias on.
-    const query = [option('antialias', 'off') === 'on' ? '' : 'antialias=0', option('query', '')].filter(Boolean).join('&');
+    // The original's frames lack the detail-texture pass (docs/visual-acceptance.md "Detail textures"): Play draws without it unless --detail on.
+    const query = [option('antialias', 'off') === 'on' ? '' : 'antialias=0',
+      option('detail', 'off') === 'on' || /detailTextures=/.test(option('query', '')) ? '' : 'detailTextures=0', option('query', '')].filter(Boolean).join('&');
     await page.goto(`${url}/${query ? `?${query}` : ''}`);
     await page.waitForFunction(() => window.deusExViewer?.status().ready, {}, {timeout: 240000});
     if (await page.evaluate(() => window.deusExViewer.status().map) !== map) {
