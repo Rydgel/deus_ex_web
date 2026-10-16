@@ -602,7 +602,9 @@ Measured from the CRT state (the `rand` word of the msvcrt thread data, `+0x14`)
 - It is seeded from `time(NULL)` at startup ([RNG](rng.md)), so a load's random decisions differ between runs and between the two programs.
   Of Island's 2,427 actors, `FlyGenerator1` existed in some loads and not in others; the driver reloads the original until it holds no
   actor Play's seeded load lacks (`play-population.json`; exit code 3 asks `live-original.sh` to retry) and Play destroys the ones only it
-  holds.
+  holds. The match is by name, and a chance FlyGenerator's name is a per-process counter, not its decoration: a matched name can stand elsewhere
+  (2026-10-16, [the Street's steam](#04_nyc_streets-steam-vents-row-4213-fail-on-the-steams-per-pixel-agreement-only)). Both populations now carry
+  locations and the driver reports such a generator (`generatorsElsewhere` in `watch<tag>.json`).
 - The stream advances while the level is frozen and between ticks: exactly 256 draws between two consecutive Ticks in 600 of 600 inter-tick
   gaps of a Club trace and 23 of 23 of an Island one (URender::PreRender's light noise, [dynamic lighting](dynamic-lighting.md)), about
   100,000 to 200,000 draws per second for Island and Club frozen or live. A tick's own draws are the scripts' and natives': 317 in Island's
@@ -1919,39 +1921,82 @@ what the original repeats of itself. The energy of Play's beams varies from run 
 The thresholds of the gate row (coverage at least .85, energy .75 to 1.33, y-offset at most 2.5 px) are set from these two views and are weak. Stored:
 `.work/acceptance/01_NYC_UNATCOIsland/{laser1,laser2}-original.png`, `-time.txt` and `laser1b-original.png`.
 
-### 04_NYC_Street's steam vents (row 4.2.13, `FAIL`: two causes, one found)
+### 04_NYC_Street's steam vents (row 4.2.13, `FAIL` on the steam's per-pixel agreement only)
 
 The vent of `ParticleGenerator2` (614, 67, -507) in the alley, the camera 160 units back and 40 above it looking along +x and slightly up. The scene is a live one: the
-original (`scripts/live-original.sh 04_NYC_Street --ticks 600 --delta 0.0166666675 --shot vents2 --base-shot --tag vents2 --render-history --actor-trace 1:40
---early-cmds 'set DeusEx.JCDentonMale Location (X=454,Y=67,Z=-467)|set DeusEx.JCDentonMale ViewRotation (Pitch=1800,Yaw=0,Roll=0)'`) runs 600 ticks, the tracer
-recording each tick's delta and CRT rand state, and holds the level; Play replays the same ticks with the same delta and stream state per tick (the generators'
-random state is the measured host input, as in the other live pilots), then both draw the held frame. A ghost placed with `set Location` in the frozen phase and
-released into a ticking level did not crash the original here (two runs; the earlier note was for `set Location` plus `set Region`). The load's chance
-FlyGenerators (3 to 10 a load) make the population match Play's seeded load only about one load in six to ten: the first capture matched at the third load, the
-second at the second, and a diagnostic run (a 60-tick trace) failed twelve loads in a row before it was stopped (`ATTEMPTS=40` is the budget). `--base-shot` takes the frozen start's frame at the same camera before the first tick (`<name>-base-original.png`,
-Play's `<name>-play-base.png`): the steam is the held frame less that one.
+original runs 600 ticks, the tracer recording each tick's delta and CRT rand state, and holds the level; Play replays the same ticks with the same delta and stream
+state per tick (the generators' load-time draws are the measured host input, as in the other live pilots), then both draw the held frame. `--base-shot` takes the
+frozen start's frame at the same camera before the first tick (`<name>-base-original.png`, Play's `<name>-play-base.png`): the steam is the held frame less that one.
+A ghost placed with `set Location` in the frozen phase and released into a ticking level did not crash the original here (five runs; the earlier note was for
+`set Location` plus `set Region`).
 
-| | |
-| --- | --- |
-| 600 ticks, every watched actor (pawns, generators' TryTimer and PoolCount) | equal for 600 ticks, clock equal (with `--render-history`: without it four pawns differ in `LastRenderTime` at tick 1 only) |
-| stream draws per tick | **differ at tick 45** (original 6, Play 14); in the first capture at tick 18 (3 against 11) |
-| the held frame | Play / original 1.275, mean abs. diff. 3.34, edge recall .937, precision .950, 0 outlier blocks |
-| the steam (frame less the frozen start's) | luma difference correlation **.990**, Play's sum over the original's 1.199 (the frame's ratio 1.275), residual .16, **agreement .954** (the gate's threshold .98 was set from the Bar's haze: .93 in the gate run) |
+The recipe since 2026-10-16 (the Mac, CrossOver; after `node scripts/live-acceptance.mjs population --map 04_NYC_Street --seed 1`):
+`scripts/live-original.sh 04_NYC_Street --ticks 600 --delta 0.0166666675 --shot vents4 --base-shot --extra-shots 3 --tag vents4 --render-history --actor-trace 1:60
+--original-brightness 0.666667 --early-cmds 'KillAll FlyGenerator|set DeusEx.JCDentonMale Location (X=454,Y=67,Z=-467)|set DeusEx.JCDentonMale ViewRotation (Pitch=1800,Yaw=0,Roll=0)'`,
+then `live-acceptance.mjs play --map 04_NYC_Street --seed 1 --tag vents4 --shot vents4 --base-shot --render-history --early-cmds '<the same lines>'` (with
+`--extra-shots 3` for the floor below), `compare --tag vents4` and `visual-acceptance.mjs compare --maps 04_NYC_Street --contribution --view vents4:0,0,0:0,0,0`.
+Brightness 2/3 makes the original's Shot the framebuffer (Play at 0.4, its identity, as in the other Mac rows): the frames' ratio reads .993 and 1.005 where
+vents2 (the Linux host, its default ramp) read 1.275.
 
-* **Cause of the draw difference, from Play's side and the original's trace.** The extra 8 draws are `FlyGenerator14`'s own tick in Play (`drawTrace`, and the new
-  `live-acceptance.mjs play --draw-stack-actor NAME` for the script call stack: `PawnGenerator.Tick` -> `SpawnScout` / `GeneratePawn` -> a spawned pawn's
-  `aiPickRandomDestination`): the generator's first tick, which spawns its `GeneratorScout` (`PawnGenerator.SpawnScout`, once, `bScoutInit`). In the original the
-  generator's `TryTimer` reads 0 over those ticks and its `PoolCount` stays 8, and the stream shows no draw there. So in the original the first tick (the scout
-  spawn) is not at that tick; in Play it is later: the actors' tick gate (`AActor::InStasis`, the 5-second `LastRenderTime` test,
-  [script actor tick](script-actor-tick.md)) is the suspect, because the render history the replay writes into Play is the pawns' `LastRenderTime` and these
-  generators are not pawns. **Unverified.** The next step is to add the generators' `LastRenderTime` and `DistanceFromPlayer` to the watched fields and to
-  `--render-history` (the original's last frozen row written into Play before the first tick) and replay again; the original's actor trace
-  (`original-trace-vents2.jsonl.actors.jsonl`, ticks 1 to 40) holds each actor's tick entries.
-* **What stays unmatched in the steam.** `SmokePuff1` is a FireTexture (the beams' case): the puffs' internal pattern follows a spark stream the programs do not
-  share, so the comparison is of where the steam is and how much (the contribution), not of its pixels.
+| | vents3 | vents4 |
+| --- | --- | --- |
+| 600 ticks, every watched actor (16 pawns, 5 timed actors, the player, `PigeonGenerator2`'s generator fields) | equal, clock equal | equal, clock equal (two replays) |
+| stream draws per tick | equal at all 600 ticks (two replays) | equal at all 600 ticks (two replays) |
+| the held frame | Play / original .993, mean abs. diff. .97, edge recall .973, precision .976, 0 outlier blocks | 1.005, .76, .980, .981, 0 |
+| the steam (frame less the frozen start's) | correlation .991, Play's sum over the original's .985, residual .116, **agreement .89** (a second replay .941) | .9945, 1.010, .096, **agreement .910** (a second replay .884) |
 
-Stored: `.work/live-acceptance/04_NYC_Street/{original-trace-vents2.jsonl (+ .strobe, .actors.jsonl), watch-, population-, commands-, hold-vents2.json}` and
-`.work/acceptance/04_NYC_Street/vents2-original.png`, `vents2-base-original.png` (main checkout).
+**The draw difference of vents2 (8 more in Play at tick 45) was the population, not the tick gate.**
+
+* **The stasis suspicion is refuted on both sides.** `AActor::InStasis` (Engine.dll `0x1036bfe0`) returns 0 unless TimeSeconds less `LastRenderTime` is above 5
+  *and* `bStasis` (+0x28 bit 0x200000) is set (`fcomp [0x1042ada8]`, then `test eax,0x200000; je` to the `xor eax,eax` return), before it reads Physics, the zone
+  table or `DistanceFromPlayer` ([script actor tick](script-actor-tick.md)). Every PawnGenerator of the map has `bStasis` clear: Play's class defaults
+  (`live-acceptance.mjs read`) and the original's load records (`generators-load-vents3/-vents4.json`, the `flies3` trace: `Stasis` 0, `LastRenderTime` -10,
+  Physics 0). In the original's `flies3` trace (120 ticks, the FlyGenerators kept) every generator ticks from the first unfrozen tick: each spawns its
+  `GeneratorScout` there. `--render-history` writes the generators' `LastRenderTime` too now; it changes nothing for them.
+* **The 8 draws are `GeneratePawn`'s.** `PawnGenerator.Tick` counts `TryTimer` down; when it runs out, `IsActorUnnecessary` (`DistanceFromPlayer >= ActiveArea`,
+  700 for a FlyGenerator) either generates a fly (`TryTimer` 0.25) or sets `TryTimer` 0. The original's `TryTimer` reading 0 from that tick on is the second branch;
+  `flies3` shows the same for all five of its FlyGenerators (998 to 7,231 units from the camera). Play's `FlyGenerator14` is `Trashbag4`'s, at (541, 101, -485),
+  95 units from the camera: it generates when the original's `TryTimer` (written into Play) runs out. So vents2's `FlyGenerator14` was another decoration's, at least
+  700 units away. Read from the branch, not measured: vents2's generator locations were not recorded and its store is on the Linux host.
+* **Why the names matched.** `DeusExDecoration.PreBeginPlay` spawns a FlyGenerator for a decoration with `bGenerateFlies` when `FRand() < 0.1` (76 of the
+  Street's 189 decorations; Play's seed-1 load picks 10). The names are a per-process counter that continues across loads (the sweep's note above): a fresh
+  original process names them from `FlyGenerator0` (`flies3` 0 to 4, vents3 0 to 5, vents4 0 to 3), Play's seed-1 load `FlyGenerator10` to 19. vents2's matching
+  population at the third load was the reload loop's counter reaching Play's range, whatever decorations made them. Nor were the generators compared: Play did not
+  watch them and the comparison's field list held neither `TryTimer` nor `PoolCount`, so "equal for 600 ticks" was not a comparison for them.
+* **Fix, in the harness** (208ce98; Play's tick code is unchanged). The generators are watched on both sides (`Location`, `DistanceFromPlayer`, `LastRenderTime`,
+  `bStasis`, Physics, `PawnCount`, `bScoutInit`, `Scout` besides `TryTimer` and `PoolCount`) and compared. Both populations carry locations and the driver reports a
+  same-named FlyGenerator that stands elsewhere. This row's recipe removes the chance FlyGenerators in both programs with the original's own `KillAll FlyGenerator`
+  (`PlayerPawn.KillAll`, a cheat exec of the script, which Play runs through its console chain), typed in the frozen phase before the population is listed. The
+  original's generators are recorded first (`generators-load<tag>.json`); the driver checks that none is left (exit 4: the Mac's console drops characters under
+  load), and `dx-live-win list` leaves out destroyed actors (`bDeleteMe`), which keep their objects until `ULevel::CleanupDestroyed` purges them. vents3 and vents4
+  matched the population at the first load (978 actors on both sides) and replay equal. vents4's load had one near the camera: `FlyGenerator2` on `Trashbag3`
+  (882, 279, -485), the decoration of Play's `FlyGenerator13`, 478 units away.
+
+**The steam's agreement is the puff texture's phase.** Agreement (of the pixels the original's steam raises by at least 1 level, the share where Play's adds at
+least a quarter of the scaled value) fails in the plume's faint part: in vents3 .50 to .85 for the pixels the original raises by 1 to 10 levels, .976 at 10 to 20,
+1.000 above 20. `SmokePuff1` is a FireTexture: Fire.dll draws its sparks from a 512-byte table of the process's rand ([fire texture](fire-texture.md)) and the
+texture ticks with every drawn frame, so at a held tick the puffs' pattern changes from frame to frame in either program (Play's base frames of two replays are
+byte-equal, the held frames are not). vents4 holds four frames of the original (`--extra-shots 3`, about two seconds apart) and a second replay four of Play
+(`--extra-shots 3`, 90 page frames apart); `node scripts/contribution-floor.mjs --map 04_NYC_Street --shot vents4`:
+
+| pairs (the first frame the reference) | agreement | correlation | Play's sum over the reference's | residual |
+| --- | --- | --- | --- | --- |
+| the original against itself (12) | .867 to .934 (median .913) | .984 to .992 | .92 to 1.08 | .110 to .164 |
+| Play against the original (16) | .846 to .944 (median .898) | .985 to .993 | .92 to 1.10 | .110 to .160 |
+| Play against itself (12) | .845 to .979 (median .906) | .987 to .994 | .91 to 1.10 | .099 to .146 |
+
+The gate's .98 (set from the Bar's haze, which has no FireTexture) is above every pair of the original against itself. Play against the original lies in the
+original's own range; its median is .015 below the original's, and Play's frames vary more (pixels the steam raises by at least a level: Play 301k to 338k, the
+original 322k to 337k). With four frames a side that is not separable from the phase: recorded, not attributed. The steam's level histograms overlap bin by bin
+(the frames' sums 7.12 to 7.84 M in Play, 7.13 to 7.72 M in the original). What would match the pixels is the puff texture's state at the shot (its pixels, sparks
+and random table read from the original's UFireTexture, Play's procedural textures held at it): not done.
+
+The row stays `FAIL` on that one measure. A floor from the original's own frames, as the beams' `beamsFloor`, would be: the gate's run takes Play's frames with
+`--extra-shots 3` against the stored four, and Play's median agreement must reach the original's own minimum (here .898 against .867). The gate is not changed here.
+
+Stored: `.work/live-acceptance/04_NYC_Street/{original-trace-vents4.jsonl (+ .strobe, .actors.jsonl), watch-, population-, commands-, hold-, generators-load-vents4.json}`
+(vents3 and the 120-tick `flies3` likewise) and `.work/acceptance/04_NYC_Street/vents4-original.png`, `vents4-original-{2,3,4}.png`, `vents4-base-original.png`
+(vents3's too), main checkout on the Mac. vents2 stays on the Linux host.
 
 ### 00_Training's held viewport flash (row 4.2.26)
 

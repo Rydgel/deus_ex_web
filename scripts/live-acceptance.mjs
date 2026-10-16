@@ -488,6 +488,22 @@ async function original() {
       }
     }
     console.log(taken ? `frame: ${taken}` : 'NO FRAME of the original');
+    // --extra-shots N: N more frames of the same held tick (<name>-original-2.png ...), a second or more apart: the original against itself, what
+    // changes from frame to frame at a held level (a FireTexture ticks each drawn frame: the steam's puffs, docs/visual-acceptance.md) is its own floor.
+    for (let k = 2; k <= 1 + Number(option('extra-shots', 0)); k++) {
+      let extra = null;
+      for (let attempt = 0; attempt < 3 && !extra; attempt++) {
+        const before = game.shots();
+        post(['sleep 1500', 'shot', 'sleep 900']);
+        const fresh = game.shots().filter(shot => !before.includes(shot));
+        if (fresh.length) {
+          const png = path.join(acceptanceDir(), `${option('shot')}-original-${k}.png`), size = game.bmpToPng(path.join(game.SYSTEM, fresh[0]), png);
+          renameSync(path.join(game.SYSTEM, fresh[0]), path.join(acceptanceDir(), `${option('shot')}-original-${k}.bmp`));
+          if (size.width === 1280 && size.height === 720) extra = png;
+        }
+      }
+      console.log(extra ? `frame ${k}: ${extra}` : `NO FRAME ${k} of the original`);
+    }
     // Render.dll's Strobe flag and the TimeSeconds it last saw, as the held frames left them (the tracer writes them at every held Tick):
     // a host input of the frame, like the rand state (docs/visual-acceptance.md "Strobe").
     const strobePath = `${tracePath}.strobe`;
@@ -901,6 +917,11 @@ async function play() {
       const file = path.join(acceptanceDir(), `${option('shot')}-play.png`);
       await page.screenshot({path: file, clip: {x: 0, y: 0, width: 1280, height: 720}});
       console.log(`frame: ${file}`);
+      // --extra-shots N: N more frames of the held tick (<name>-play-2.png ...), 90 page frames apart: Play against itself, as the original's (above)
+      for (let k = 2; k <= 1 + Number(option('extra-shots', 0)); k++) {
+        await frames(90);
+        await page.screenshot({path: path.join(acceptanceDir(), `${option('shot')}-play-${k}.png`), clip: {x: 0, y: 0, width: 1280, height: 720}});
+      }
     }
     // --after-file js [--after-out file.json] (play): an expression the page evaluates with the level held at its last tick (the weapon states of
     // the frame just drawn: lodProbe({list: 'weapons'})); its value goes to --after-out, else to the log.
