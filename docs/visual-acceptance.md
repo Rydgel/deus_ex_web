@@ -1940,7 +1940,7 @@ vents2 (the Linux host, its default ramp) read 1.275.
 
 | | vents3 | vents4 |
 | --- | --- | --- |
-| 600 ticks, every watched actor (16 pawns, 5 timed actors, the player, `PigeonGenerator2`'s generator fields) | equal, clock equal | equal, clock equal (two replays) |
+| 600 ticks, every watched actor (22: 16 pawns, 4 timed actors, the player, `PigeonGenerator2`'s generator fields) | equal, clock equal | equal, clock equal (two replays) |
 | stream draws per tick | equal at all 600 ticks (two replays) | equal at all 600 ticks (two replays) |
 | the held frame | Play / original .993, mean abs. diff. .97, edge recall .973, precision .976, 0 outlier blocks | 1.005, .76, .980, .981, 0 |
 | the steam (frame less the frozen start's) | correlation .991, Play's sum over the original's .985, residual .116, **agreement .89** (a second replay .941) | .9945, 1.010, .096, **agreement .910** (a second replay .884) |
@@ -1979,11 +1979,11 @@ texture ticks with every drawn frame, so at a held tick the puffs' pattern chang
 byte-equal, the held frames are not). vents4 holds four frames of the original (`--extra-shots 3`, about two seconds apart) and a second replay four of Play
 (`--extra-shots 3`, 90 page frames apart); `node scripts/contribution-floor.mjs --map 04_NYC_Street --shot vents4`:
 
-| pairs (the first frame the reference) | agreement | correlation | Play's sum over the reference's | residual |
-| --- | --- | --- | --- | --- |
-| the original against itself (12) | .867 to .934 (median .913) | .984 to .992 | .92 to 1.08 | .110 to .164 |
-| Play against the original (16) | .846 to .944 (median .898) | .985 to .993 | .92 to 1.10 | .110 to .160 |
-| Play against itself (12) | .845 to .979 (median .906) | .987 to .994 | .91 to 1.10 | .099 to .146 |
+| pairs (the first frame the reference) | agreement | agreement over the pixels raised 10 levels or more | correlation | Play's sum over the reference's | residual |
+| --- | --- | --- | --- | --- | --- |
+| the original against itself (12) | .867 to .934 (median .913) | .985 to 1.000 (median .999) | .984 to .992 | .92 to 1.08 | .110 to .164 |
+| Play against the original (16) | .846 to .944 (median .898) | .977 to 1.000 (median .997) | .985 to .993 | .92 to 1.10 | .110 to .160 |
+| Play against itself (12) | .845 to .979 (median .906) | .988 to 1.000 (median .999) | .987 to .994 | .91 to 1.10 | .099 to .146 |
 
 The gate's .98 (set from the Bar's haze, which has no FireTexture) is above every pair of the original against itself. Play against the original lies in the
 original's own range; its median is .015 below the original's, and Play's frames vary more (pixels the steam raises by at least a level: Play 301k to 338k, the
@@ -1991,8 +1991,10 @@ original 322k to 337k). With four frames a side that is not separable from the p
 (the frames' sums 7.12 to 7.84 M in Play, 7.13 to 7.72 M in the original). What would match the pixels is the puff texture's state at the shot (its pixels, sparks
 and random table read from the original's UFireTexture, Play's procedural textures held at it): not done.
 
-The row stays `FAIL` on that one measure. A floor from the original's own frames, as the beams' `beamsFloor`, would be: the gate's run takes Play's frames with
-`--extra-shots 3` against the stored four, and Play's median agreement must reach the original's own minimum (here .898 against .867). The gate is not changed here.
+The row stays `FAIL` on that one measure. Two measured candidates for the steam, neither wired (the gate is not changed here): (a) a floor from the original's
+own frames, as the beams' `beamsFloor`: the gate's run takes Play's frames with `--extra-shots 3` against the stored four, and Play's median agreement must reach
+the original's own minimum (here .898 against .867); (b) agreement over the pixels the original raises by 10 levels or more, the plume's body: the original against
+itself .985 to 1.000, Play against the original .977 to 1.000, so a single pair at .98 would still fail on some of Play's frames.
 
 Stored: `.work/live-acceptance/04_NYC_Street/{original-trace-vents4.jsonl (+ .strobe, .actors.jsonl), watch-, population-, commands-, hold-, generators-load-vents4.json}`
 (vents3 and the 120-tick `flies3` likewise) and `.work/acceptance/04_NYC_Street/vents4-original.png`, `vents4-original-{2,3,4}.png`, `vents4-base-original.png`

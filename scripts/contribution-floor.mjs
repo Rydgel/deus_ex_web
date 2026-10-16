@@ -45,14 +45,19 @@ function metrics(ref, other) {
   let so = 0, sp = 0, soo = 0, spp = 0, sop = 0, absO = 0;
   for (let i = 0; i < n; i++) { so += a[i]; sp += b[i]; soo += a[i] * a[i]; spp += b[i] * b[i]; sop += a[i] * b[i]; absO += Math.abs(a[i]); }
   const k = soo ? sop / soo : 0, correlation = (sop - so * sp / n) / Math.sqrt(Math.max(1e-9, (soo - so * so / n) * (spp - sp * sp / n)));
-  let resid = 0, own = 0, agree = 0;
-  for (let i = 0; i < n; i++) { resid += Math.abs(b[i] - k * a[i]); if (a[i] >= 1) { own++; if (b[i] >= 0.25 * k * a[i]) agree++; } }
-  return {correlation, gap: other.sum / Math.max(1, ref.sum), residual: resid / Math.max(1e-9, absO), agreement: own ? agree / own : null};
+  // agreement10: the same share over the pixels the reference raises by at least 10 levels (the plume's body, not its faint fringe)
+  let resid = 0, own = 0, agree = 0, own10 = 0, agree10 = 0;
+  for (let i = 0; i < n; i++) {
+    resid += Math.abs(b[i] - k * a[i]);
+    if (a[i] >= 1) { own++; if (b[i] >= 0.25 * k * a[i]) agree++; }
+    if (a[i] >= 10) { own10++; if (b[i] >= 0.25 * k * a[i]) agree10++; }
+  }
+  return {correlation, gap: other.sum / Math.max(1, ref.sum), residual: resid / Math.max(1e-9, absO), agreement: own ? agree / own : null, agreement10: own10 ? agree10 / own10 : null};
 }
 const pairs = (refs, others, same) => refs.flatMap((ref, i) => others.flatMap((other, j) => same && i === j ? [] : [metrics(ref, other)]));
 const summary = (label, list) => {
   const out = {group: label, pairs: list.length};
-  for (const key of ['agreement', 'correlation', 'gap', 'residual']) {
+  for (const key of ['agreement', 'agreement10', 'correlation', 'gap', 'residual']) {
     const v = list.map(m => m[key]).sort((x, y) => x - y);
     out[key] = {min: +v[0].toFixed(4), median: +v[v.length >> 1].toFixed(4), max: +v[v.length - 1].toFixed(4)};
   }
