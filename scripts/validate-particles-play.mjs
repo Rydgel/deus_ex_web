@@ -33,32 +33,23 @@ let report;
 try {
   const page = await browser.newPage({viewport: {width: 1024, height: 640}});
   const errors = []; page.on('pageerror', error => errors.push(error.message));
+  // The sprite scene is the page's own; the generator and the player belong to the simulation (the worker in Play's
+  // default mode) and are moved and read through deusExViewer.particleProbe (decal-probe.mjs).
   await page.route(/\/src\/viewer\/main\.mjs(?:\?|$)/, async route => {
     const response = await route.fetch();
     await route.fulfill({response, body: (await response.text()) +
-      '\nwindow.__deusParticles={get sprites(){return spriteScene;},get game(){return game;}};\n'});
+      '\nwindow.__deusParticles={get sprites(){return spriteScene;}};\n'});
   });
-  // Reads the runtime through main.mjs: the page's own simulation (?sim=inline).
-  await page.goto(`${url.replace(/\/$/, '')}/?sim=inline`);
+  await page.goto(`${url.replace(/\/$/, '')}/`);
   await page.waitForFunction(() => window.deusExViewer?.status().ready, {}, {timeout: 240000});
   await page.locator('#map').selectOption(map);
   await page.waitForFunction(map => { const s = window.deusExViewer?.status(); return s?.ready && s.map === map; }, map, {timeout: 240000});
-  await page.evaluate(() => {
-    const game = window.__deusParticles.game, runtime = game.doors.scriptRuntime.runtime, player = game.player.collisionActor;
-    const g = runtime.levelFor(player).actors.find(a => a?.name === 'ParticleGenerator3'), loc = runtime.readNamed(g, 'Location');
-    runtime.farMoveActor(player, [loc[0] - 160, loc[1], loc[2] + 40], 0, 1);
-    runtime.writeNamed(player, 'ViewRotation', [65536 - 1200, 0, 0]);
-  });
+  await page.evaluate(() => window.deusExViewer.particleProbe({place: 'ParticleGenerator3'}));
   const frames = n => page.evaluate(async n => { for (let k = 0; k < n; k++) await new Promise(r => requestAnimationFrame(r)); }, n);
-  const sample = () => page.evaluate(() => {
-    const game = window.__deusParticles.game, runtime = game.doors.scriptRuntime.runtime, level = runtime.levelFor(game.player.collisionActor);
-    const g = level.actors.find(a => a?.name === 'ParticleGenerator3'), it = runtime.readNamed(g, 'RenderInterface');
-    const proxy = runtime.readNamed(g, 'proxy'), time = runtime.readNamed(level.actors[0], 'TimeSeconds');
-    const particles = it ? runtime.readNamed(it, 'Particles').filter(p => p['deusex.particleiterator.sparticle.bactive'])
-      .map(p => ({ z: p['deusex.particleiterator.sparticle.location'][2], life: p['deusex.particleiterator.sparticle.lifespan'] })) : [];
-    return { iterator: it ? runtime.instance(it).cls.record.key : null, frozen: runtime.readNamed(g, 'bFrozen'), time,
-      proxyLast: runtime.readNamed(proxy, 'LastRenderTime'), particles, sprites: window.__deusParticles.sprites.count(),
-      notes: [...window.__deusParticles.sprites.notes], runtimeError: window.deusExViewer.status().runtimeError?.message ?? null };
+  const sample = () => page.evaluate(async () => {
+    const state = await window.deusExViewer.particleProbe({sample: 'ParticleGenerator3'});
+    return { ...state, sprites: window.__deusParticles.sprites.count(), notes: [...window.__deusParticles.sprites.notes],
+      runtimeError: window.deusExViewer.status().runtimeError?.message ?? null };
   });
   await frames(180);
   const first = await sample();

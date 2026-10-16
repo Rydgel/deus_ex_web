@@ -27,6 +27,28 @@ export function decalProbe(game, { place = false, pawn = null } = {}) {
     time: read(level.actors[0], 'TimeSeconds'), records: level.decals?.store.count ?? 0 };
 }
 
+/** Validation only (scripts/validate-particles-play.mjs): `{place: name}` moves
+ * the player to a ParticleGenerator (160 units short of it, 40 above, looking
+ * up by 1,200 units of pitch); `{sample: name}` reads the generator's
+ * RenderInterface ParticleIterator, its frozen flag, its proxy's
+ * LastRenderTime and the live particles' heights, on whichever side runs the
+ * simulation (sim-worker.mjs `call`, or the page with ?sim=inline). */
+export function particleProbe(game, { place = null, sample = null } = {}) {
+  const runtime = game.doors.scriptRuntime.runtime, player = game.player.collisionActor, read = (a, n) => runtime.readNamed(a, n);
+  const level = runtime.levelFor(player);
+  if (place) {
+    const generator = level.actors.find(a => a?.name === place), loc = read(generator, 'Location');
+    runtime.farMoveActor(player, [loc[0] - 160, loc[1], loc[2] + 40], 0, 1);
+    runtime.writeNamed(player, 'ViewRotation', [65536 - 1200, 0, 0]);
+    return { generator: generator.name, location: loc };
+  }
+  const generator = level.actors.find(a => a?.name === sample), iterator = read(generator, 'RenderInterface'), proxy = read(generator, 'proxy');
+  const particles = iterator ? read(iterator, 'Particles').filter(p => p['deusex.particleiterator.sparticle.bactive'])
+    .map(p => ({ z: p['deusex.particleiterator.sparticle.location'][2], life: p['deusex.particleiterator.sparticle.lifespan'] })) : [];
+  return { iterator: iterator ? runtime.instance(iterator).cls.record.key : null, frozen: read(generator, 'bFrozen'),
+    time: read(level.actors[0], 'TimeSeconds'), proxyLast: read(proxy, 'LastRenderTime'), particles };
+}
+
 /** Validation only (validate-volumetric-fog-play.mjs, validate-coronas-play
  * and other checks of a view): move the player to `location` (optional) and
  * set its ViewRotation to `rotation`, or aim the view from the eye at the

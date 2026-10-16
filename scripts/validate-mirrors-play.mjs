@@ -51,11 +51,12 @@ try {
   await page.route(/\/src\/viewer\/main\.mjs(?:\?|$)/, async route => {
     const response = await route.fetch();
     await route.fulfill({response, body: (await response.text()) +
-      '\nwindow.__deusMirrors={get world(){return world;},get game(){return game;},get camera(){return camera;},get renderer(){return renderer;}};\n'});
+      '\nwindow.__deusMirrors={get world(){return world;},get camera(){return camera;},get renderer(){return renderer;}};\n'});
   });
   // --query a=1&b=2: viewer switches, e.g. simVerify=1 (docs/sim-worker.md).
-  // Reads the runtime through main.mjs: the page's own simulation (?sim=inline).
-  await page.goto(`${url.replace(/\/$/, '')}/?${option('query', null) ? `${option('query', null)}&` : ''}sim=inline`);
+  // Play's default mode: the simulation in the worker. The player is moved and hidden through deusExViewer.placeProbe
+  // (decal-probe.mjs); the renderer, the world and the camera are the page's own.
+  await page.goto(`${url.replace(/\/$/, '')}/${option('query', null) ? `?${option('query', null)}` : ''}`);
   await page.waitForFunction(() => window.deusExViewer?.status().ready, {}, {timeout: 240000});
   const frames = n => page.evaluate(async n => { for (let k = 0; k < n; k++) await new Promise(r => requestAnimationFrame(r)); }, n);
   // The mirror's CSS-pixel screen rectangle, from its mesh bounds.
@@ -92,10 +93,8 @@ try {
       if (Math.max(Math.abs(p[i] - q[i]), Math.abs(p[i + 1] - q[i + 1]), Math.abs(p[i + 2] - q[i + 2])) > 12) differing++;
     return differing / (p.length / 4);
   }, [a, b]);
-  const hidePlayer = hidden => page.evaluate(hidden => {
-    const game = window.__deusMirrors.game;
-    game.doors.scriptRuntime.runtime.writeNamed(game.player.collisionActor, 'bHidden', hidden);
-  }, hidden);
+  const hidePlayer = hidden => page.evaluate(hidden =>
+    window.deusExViewer.placeProbe({set: {actor: '$player', fields: {bHidden: hidden}}}), hidden);
   // The player shown and hidden, with reflections on and off.
   async function playerCheck(c) {
     const share = {};
@@ -103,10 +102,11 @@ try {
       await page.evaluate(enabled => { window.__deusMirrors.world.mirrors.enabled = enabled; }, enabled);
       await frames(4);
       const shown = (await page.screenshot()).toString('base64');
-      await hidePlayer(true); await frames(4);
+      // The worker's next snapshot carries the flag to the page: a few frames more than inline.
+      await hidePlayer(true); await frames(12);
       const hidden = (await page.screenshot()).toString('base64');
       if (shots && enabled) writeFileSync(`${shots}/mirror-${c.map}-player-hidden.png`, Buffer.from(hidden, 'base64'));
-      await hidePlayer(false); await frames(4);
+      await hidePlayer(false); await frames(12);
       share[enabled ? 'reflected' : 'mainOnly'] = await changedShare(shown, hidden);
     }
     await page.evaluate(() => { window.__deusMirrors.world.mirrors.enabled = true; });
@@ -146,11 +146,7 @@ try {
   for (const c of CASES) {
     await page.locator('#map').selectOption(c.map);
     await page.waitForFunction(map => { const s = window.deusExViewer?.status(); return s?.ready && s.map === map; }, c.map, {timeout: 240000});
-    await page.evaluate(({location, yaw}) => {
-      const game = window.__deusMirrors.game, runtime = game.doors.scriptRuntime.runtime, player = game.player.collisionActor;
-      runtime.farMoveActor(player, location, 0, 1);
-      runtime.writeNamed(player, 'ViewRotation', [0, yaw, 0]);
-    }, c);
+    await page.evaluate(({location, yaw}) => window.deusExViewer.placeProbe({location, rotation: [0, yaw, 0]}), c);
     await frames(90);
     // The player's view can still be moving after the move (it took about
     // 1.3 s in 02_NYC_Bar): wait until the eye has stayed put for 30 frames,

@@ -37,8 +37,8 @@ try {
     const response = await route.fetch();
     await route.fulfill({response, body: (await response.text()) + hook});
   });
-  // Reads the runtime through main.mjs: the page's own simulation (?sim=inline).
-  await page.goto(`${url.replace(/\/$/, '')}/?sim=inline`);
+  // Play's default mode: the simulation in the worker. The checks read the page's actor mesh layer and world.
+  await page.goto(`${url.replace(/\/$/, '')}/`);
   await page.waitForFunction(() => window.deusExViewer?.status().ready, {}, {timeout: 240000});
   if (map !== '00_Training') {
     await page.locator('#map').selectOption(map);
@@ -47,7 +47,9 @@ try {
   report = await page.evaluate(async () => {
     const npc = window.__deusFire.npc;
     const frames = () => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
-    await frames();
+    // In the worker mode the first frame reaches the page after the simulation's first run: wait for the fires'
+    // first tick (the page's world update) before the baseline.
+    for (let k = 0; k < 6000 && !npc.proceduralTextures().some(entry => entry.phase > 0); k++) await frames();
     const before = npc.proceduralTextures();
     for (let k = 0; k < 10; k++) await frames();
     const after = npc.proceduralTextures();
