@@ -138,12 +138,16 @@ pub struct Output {
     /// Callbacks past GetCurrentPosition, and resyncs among them (host diagnostics).
     pub callbacks: u32,
     pub resyncs: u32,
+    /// The last replay mismatch of ring.rs (validator diagnostics).
+    pub mismatch: [u32; 6],
+    /// FNV-1a of the staging ring after the last resync's render (validator).
+    pub resync_hash: u32,
 }
 
 impl Output {
     pub(crate) fn new() -> Self {
         Output { size: 0, head_a: 0, head_b: 0, avg_bytes: 0, align_word: 0, latency: 0x28, staging: Vec::new(),
-            secondary: Secondary::new(), last_render: NULL_REGION, callbacks: 0, resyncs: 0 }
+            secondary: Secondary::new(), last_render: NULL_REGION, callbacks: 0, resyncs: 0, mismatch: [0; 6], resync_hash: 0 }
     }
 }
 
@@ -295,6 +299,9 @@ impl Library {
             self.player.ahead = fill as u32;
             self.player.output.resyncs += 1;
             self.render_staging(b, b, n, n)?;
+            // Replay (row 4.3.7 check 3): the staging ring the resync copies, as the capture hashes it at 0x106143b3.
+            let o = &mut self.player.output;
+            o.resync_hash = bytes_of(&o.staging[..(o.size / 2) as usize]).iter().fold(0x811c_9dc5u32, |h, &b| (h ^ b as u32).wrapping_mul(0x0100_0193));
             let (hr, r) = self.lock_retry(0, size, DSBLOCK_ENTIREBUFFER);
             if hr == DS_OK {
                 self.copy_out(0, r.p1, size)?;
@@ -380,7 +387,8 @@ pub extern "C" fn galaxy_output_staging() -> *const i16 {
 
 /// Ring size, head A, head B, ahead, the last R (NULL_REGION if none), callbacks, resyncs, then the
 /// open's words: kernel mode 0x10697cfc, output format 0x10698179, latency 0x1064a65c, rate 0x10697d18,
-/// nAvgBytesPerSec, nBlockAlign | wBitsPerSample << 16, the open flag 0x10698394, effect slots 0x1068828d.
+/// nAvgBytesPerSec, nBlockAlign | wBitsPerSample << 16, the open flag 0x10698394, effect slots 0x1068828d,
+/// the FNV-1a of the staging ring after the last resync's render.
 #[no_mangle]
 pub extern "C" fn galaxy_output_state(index: u32) -> u32 {
     with_library(|l| {
@@ -401,6 +409,7 @@ pub extern "C" fn galaxy_output_state(index: u32) -> u32 {
             12 => o.align_word,
             13 => l.player.output_open as u32,
             14 => l.first_music_voice as u32,
+            15 => o.resync_hash,
             _ => 0,
         }
     })

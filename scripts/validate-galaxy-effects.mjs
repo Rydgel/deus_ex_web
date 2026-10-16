@@ -7,8 +7,8 @@
  * - glxLoadSample on every shipped WAV sound (549, from DeusExSounds,
  *   Ambient and MoverSFX) and on synthetic WAVs for the loader's other
  *   branches: the glxSample record and its Data block (with the 31-byte pad);
- * - glxStartSample, glxControlSample, glxControlVoice (status, mode, volume)
- *   and glxStopSample, each op's result and the 32 first voice records, and
+ * - glxStartSample, glxControlSample, glxControlVoice (status, mode, volume),
+ *   glxStopSample and glxUnloadSample, each op's result and the 32 first voice records, and
  *   the mixer's output: the sequencer/mixer trace (U/T/K/M/R) and the
  *   renderer's int16 PCM of both buses per 20 ms callback, with music playing
  *   alongside in some programs; seeded random programs of the subsystem's
@@ -224,6 +224,14 @@ function cases(waves, synthetic, realNames, cosOf) {
     {op: 'controlSample', slot: 2, freq: 30000, vol: -1, pan: -1}, run(2),
     // An idle voice (type 0, no GLX_PANNING): pan -1 keeps its +0x14.
     {op: 'controlSample', slot: 9, freq: 22050, vol: 0x100, pan: -1}])});
+  // UnregisterSound's glxUnloadSample: the voices playing the sample stop (two here), another sample's voice plays
+  // on; a NULL sample; a sample loaded and never started.
+  out.push({name: 'voices-unload', program: voiceProgram([hum, baby, beep], [
+    {op: 'startSample', voice: 1, sample: hum, freq: 22050, vol: 0x7fff, pan: 0x3000},
+    {op: 'startSample', voice: 2, sample: hum, freq: 16000, vol: 0x6000, pan: 0x5000},
+    {op: 'startSample', voice: 3, sample: baby, freq: 22050, vol: 0x7fff, pan: 0x4000}, run(4),
+    {op: 'unloadSample', sample: hum}, run(4), {op: 'unloadSample', sample: null}, {op: 'unloadSample', sample: beep}, run(2),
+    {op: 'unloadSample', sample: baby}, run(2)])});
   // No effect channels (Init clamps EffectsChannels to 0..32): the start refuses.
   out.push({name: 'voices-no-channels', program: voiceProgram([hum], [{op: 'poke', address: 0x1068828d, width: 1, value: 0},
     {op: 'startSample', voice: 1, sample: hum, freq: 22050, vol: 0x7fff, pan: 0x4000}, run(1)])});
@@ -380,6 +388,13 @@ function replay(x, c, samples, modules, mutant) {
     } else if (s.op === 'stopSample') {
       const result = x.galaxy_sample_stop(ptr(s.slot)) >>> 0;
       check('stopSample'); g.pull(); g.record('V', voices(result)); g.close();
+    } else if (s.op === 'unloadSample') {
+      const sample = s.sample ? (addr.get(s.sample) ?? 0) : 0;
+      const result = x.galaxy_sample_unload(sample) >>> 0;
+      check('unloadSample'); g.pull();
+      const freed = sample && !x.galaxy_sample_record(sample) ? 1 : 0;
+      if (s.sample) addr.delete(s.sample);
+      g.record('U', Buffer.concat([voices(result), u32(freed)])); g.close();
     } else if (s.op === 'controlVoice') {
       const result = x.galaxy_voice_control(ptr(s.slot), s.cmd, s.p1 ?? 0, s.p2 ?? 0) >>> 0;
       check('controlVoice'); g.pull(); g.record('V', voices(result)); g.close();
@@ -493,6 +508,8 @@ const UNREACHED = {
   0x1060cf5c: 'the status of a 3D voice (+0x11 bit 2; Use3dHardware False)',
   0x1061848a: 'the release of a 3D voice (Use3dHardware False)',
   0x10618503: 'the ring buffer free (types 0xe000, 0x40)',
+  0x1061953a: 'glxUnloadSample of a sample a 3D voice plays (+0x11 bit 2; Use3dHardware False)',
+  0x10619567: "glxUnloadSample's free of +0x40: zero in every WAV record (glxLoadSample zeroes the record, rep stosd 0x10618eef; of the WAV loader only the IMA ADPCM branch writes it, 0x10619b30: no shipped WAV is ADPCM)",
   // glxSetSampleReverb and the reverb setup
   0x1061147b: 'the 3DNow and MMX reverb engines (0x106220e7, 0x1062135b): the CPU has SSE, which selects 0x10622d33',
   0x10611577: 'EAX reverb properties on a free (output type 3 or 5): output type 0',

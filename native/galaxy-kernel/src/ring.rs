@@ -55,6 +55,20 @@ pub const UNSUPPORTED_RING_DECODER: u32 = 0x150; // 0x1061a170 (IMA ADPCM, type 
 pub const UNSUPPORTED_RING_REFILL: u32 = 0x151; // the type 0x8000 source refill through [0x1069838c] (GLX_LOADASSTREAMING)
 pub const UNSUPPORTED_RING_ACCESS: u32 = 0x152; // a ring copy or a source read outside its allocation
 pub const UNSUPPORTED_RING_FREE: u32 = 0x153; // free() of an address that is no ring
+pub const RING_REPLAY_MISMATCH: u32 = 0x154; // a decoder call whose arguments differ from the capture's, or none left (galaxy_ring_record_*)
+
+/// One MPEG decoder call of a capture of the running original (0x1061a690:
+/// the source offset, Remaining and Chunk it was called with, the Consumed
+/// and Produced it answered and the bytes it wrote at Dest1 and Dest2).
+pub struct RecordedCall {
+    pub src_off: u32,
+    pub remaining: i32,
+    pub chunk: i32,
+    pub consumed: i32,
+    pub produced: i32,
+    pub bytes1: Vec<u8>,
+    pub bytes2: Vec<u8>,
+}
 
 // Test-only translation mutants (validate-galaxy-ring-voice.mjs).
 pub const MUTANT_NO_HEAD_START: u32 = 501; // the first fill at the read head (no + 0x2000)
@@ -116,6 +130,21 @@ impl Library {
     /// Stereo (record type 0x40): min(Chunk / 2, Remaining / 4) frames, the
     /// left samples to Dest1 and the right ones to Dest2 (when not null).
     fn decode_leaf(&mut self, record: &[u8; 0x48], src: u32, remaining: i32, dst1: u32, dst2: u32, chunk: i32) -> Result<(i32, i32), u32> {
+        if let Some(queue) = self.effects.recorded.as_mut() {
+            // The replay of a capture: the original decoder's answer for this call.
+            let call = queue.pop_front().ok_or(RING_REPLAY_MISMATCH)?;
+            let off = src.wrapping_sub(get32(record, 0x44));
+            if off != call.src_off || remaining != call.remaining || chunk != call.chunk {
+                self.player.output.mismatch = [off, remaining as u32, chunk as u32, call.src_off, call.remaining as u32, call.chunk as u32];
+                return Err(RING_REPLAY_MISMATCH);
+            }
+            let (b1, b2) = (call.bytes1, call.bytes2);
+            self.ring_write(dst1, b1.len() as u32, |b| b.copy_from_slice(&b1));
+            if dst2 != 0 {
+                self.ring_write(dst2, b2.len() as u32, |b| b.copy_from_slice(&b2));
+            }
+            return Ok((call.consumed, call.produced));
+        }
         let stereo = get16(record, 0x2c) & 0x40 != 0;
         let remaining = remaining.max(0) as u32;
         let chunk = chunk.max(0) as u32;
@@ -361,6 +390,42 @@ pub extern "C" fn galaxy_ring_deliver_one() -> u32 {
             }
         }
     })
+}
+
+/// Replay: start (1) or stop (0) answering the decoder from a capture's calls.
+#[no_mangle]
+pub extern "C" fn galaxy_ring_record_mode(enable: u32) {
+    with_library(|l| l.effects.recorded = if enable != 0 { Some(std::collections::VecDeque::new()) } else { None });
+}
+
+/// Replay: one captured decoder call; galaxy_input holds its Dest1 bytes (`n1`) then its Dest2 bytes.
+#[no_mangle]
+pub extern "C" fn galaxy_ring_record_push(src_off: u32, remaining: i32, chunk: i32, consumed: i32, produced: i32, n1: u32, len: u32) {
+    let bytes = INPUT.with(|i| {
+        let mut input = i.borrow_mut();
+        let n = (len as usize).min(input.len());
+        let b = input[..n].to_vec();
+        *input = Vec::new();
+        b
+    });
+    let n1 = (n1 as usize).min(bytes.len());
+    with_library(|l| {
+        if let Some(q) = l.effects.recorded.as_mut() {
+            q.push_back(RecordedCall { src_off, remaining, chunk, consumed, produced, bytes1: bytes[..n1].to_vec(), bytes2: bytes[n1..].to_vec() });
+        }
+    });
+}
+
+/// Replay: the captured decoder calls not yet taken.
+#[no_mangle]
+pub extern "C" fn galaxy_ring_record_left() -> u32 {
+    with_library(|l| l.effects.recorded.as_ref().map_or(0, |q| q.len() as u32))
+}
+
+/// Replay: the last mismatch (the call's source offset, Remaining, Chunk, then the capture's).
+#[no_mangle]
+pub extern "C" fn galaxy_ring_mismatch(index: u32) -> u32 {
+    with_library(|l| l.player.output.mismatch.get(index as usize).copied().unwrap_or(0))
 }
 
 /// The ring of voice slot `slot` (RING_ALLOC bytes), or null.

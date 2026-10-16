@@ -29,6 +29,22 @@
  *       <qpc_us> <size> <A> <B> <ahead> <frames mixed 0x10698194> <cnt1 0x10698204> <cnt2 0x1069834c>
  *       (size, A, B and ahead are one 16-byte read)
  *
+ *   wine dx-live-win.exe galaxy capture <out file> <seconds> <map> [stop file]
+ *       Galaxy.dll from the game's launch (docs/audio-output-scope.md §5.2, Stage 4 row 4.3.7 check 3): starts DeusEx.exe <map>
+ *       INI=DeusEx-ad.ini USERINI=User-ad.ini under the debugger, arms breakpoints when Galaxy.dll loads (it must be at its preferred
+ *       base) and records, in event order, every library call the subsystem makes (glxInit's EffectsChannels, the output open,
+ *       the volume setters, glxLoadMusic with its input bytes and status, each sample's glxSample record and data at its first
+ *       glxStartSample, glxStart/Stop/ControlMusic,
+ *       glxUnloadMusic, glxStart/Control/StopSample, glxControlVoice with its result, glxSetSampleReverb's block, glxUnloadSample,
+ *       Update's inline voice clears and break flag, Update's critical section), every game-thread breakpoint inside the library
+ *       lock (after the call's own EnterCriticalSection, or inside Update's), so their order against the timer thread's is the
+ *       critical section's and no game-thread trap can meet a timer-thread one (CrossOver garbles two concurrent int3 traps:
+ *       the second is reported from its exception dispatcher and the thread resumes past the int3); each timer callback's cursor
+ *       pair, Lock results, R, heads, `ahead` and a 32-bit FNV-1a of each copied staging segment (the whole staging ring at a
+ *       resync; the first 24 callbacks' segments in full); and the stream decoder thread's messages and each MPEG decoder call's
+ *       arguments, results and output bytes. Until <seconds> pass or the stop file appears; then it disarms, detaches and exits
+ *       (the game goes on). Records: u32 type, u32 payload length, u32 thread id, payload (see the GX_ constants).
+ *
  *   wine dx-live-win.exe list <Class>
  *       the live level's actors whose class derives from <Class>: class, name, global slot, Location, state, OddsOfAppearing
  *
@@ -1288,6 +1304,366 @@ static int do_galaxy_poll(int count, int interval, const char *prefix) {
   return 0;
 }
 
+/* ---------------- galaxy capture (see the file comment) ---------------- */
+enum { GX_INIT = 1, GX_CHANNELS, GX_OPEN, GX_SAMPLE_VOLUME, GX_MUSIC_VOLUME, GX_LOAD_MUSIC, GX_LOAD_MUSIC_RESULT, GX_UNLOAD_MUSIC,
+  GX_START_MUSIC, GX_STOP_MUSIC, GX_CONTROL_MUSIC, GX_CLEAR_ACTIVE, GX_BREAK, GX_LOAD_SAMPLE, GX_LOAD_SAMPLE_RESULT, GX_START_SAMPLE,
+  GX_START_SAMPLE_RESULT, GX_CONTROL_SAMPLE, GX_CONTROL_VOICE, GX_CONTROL_VOICE_RESULT, GX_STOP_SAMPLE, GX_SAMPLE_REVERB,
+  GX_UNLOAD_SAMPLE, GX_UPDATE_LOCK, GX_UPDATE_UNLOCK, GX_SAMPLE_RECORD,
+  GX_CB_POSITION = 30, GX_CB_LOCK, GX_CB_LOST, GX_CB_COPIED, GX_CB_RESYNC, GX_CB_END,
+  GX_DEC_MESSAGE = 40, GX_DEC_CALL, GX_DEC_END, GX_END = 99 };
+typedef struct { uintptr_t address; unsigned char original; int kind; } GxBp;
+enum { K_INIT, K_CHANNELS, K_OPEN, K_SVOL, K_MVOL, K_LOADM, K_LOADM_RET, K_UNLOADM, K_STARTM, K_STOPM, K_CTLM, K_CLEAR, K_BREAK,
+  K_LOADS, K_LOADS_RET, K_STARTS, K_STARTS_RET, K_CTLS, K_CTLV, K_CTLV_RET, K_STOPS, K_REVERB, K_UNLOADS, K_ULOCK, K_UUNLOCK,
+  K_CB_POS, K_CB_LOCK_RESYNC, K_CB_LOCK_A, K_CB_LOCK_B, K_CB_LOST, K_CB_COPIED, K_CB_RESYNC, K_CB_END, K_DEC_MSG, K_DEC_CALL, K_DEC_END };
+static const struct { uintptr_t address; int kind; } gx_sites[] = {
+  {0x1060df30, K_INIT}, {0x1060ebc0, K_CHANNELS}, {0x10613350, K_OPEN},
+  {0x1060ec19, K_SVOL}, {0x1060eb79, K_MVOL},                       /* after EnterCriticalSection */
+  {0x10618be0, K_LOADM}, {0x1060a783, K_LOADM_RET}, {0x10619465, K_UNLOADM}, {0x106122bd, K_STARTM}, {0x106183bd, K_STOPM},
+  {0x1060d0f2, K_CTLM}, {0x1060a82a, K_CLEAR}, {0x1060a88d, K_BREAK},
+  /* glxStartSample past its 3D poll call (0x10612370): a breakpoint on a `call` corrupts the game when stepped off under
+   * CrossOver (as on Update's unlock call); the stack is the same, so are the argument offsets. */
+  {0x10612375, K_STARTS}, {0x1060a43a, K_STARTS_RET}, {0x1060d29b, K_CTLS},
+  {0x1060cf21, K_CTLV}, {0x10609a2a, K_CTLV_RET}, {0x1060ce94, K_CTLV_RET}, {0x1060ced0, K_CTLV_RET}, {0x10618437, K_STOPS},
+  /* Update's lock (a marker). Not its unlock call at 0x1060abd6: stepping off a breakpoint on that `call` corrupts the
+   * game under CrossOver (EDI 0 in UGameEngine::Draw after Update returns; seen in a bisection of the breakpoint kinds). */
+  {0x106113df, K_REVERB}, {0x1061951f, K_UNLOADS}, {0x1060954e, K_ULOCK},
+  {0x106142d9, K_CB_POS}, {0x10614421, K_CB_LOCK_RESYNC}, {0x1061451c, K_CB_LOCK_A}, {0x106145f4, K_CB_LOCK_B},
+  {0x106143e1, K_CB_LOST}, {0x106144d7, K_CB_LOST}, {0x106145af, K_CB_LOST}, {0x10614657, K_CB_COPIED}, {0x106143b3, K_CB_RESYNC},
+  {0x10614681, K_CB_END}, {0x1060e363, K_DEC_MSG}, {0x1060e5a1, K_DEC_CALL}, {0x1060e80d, K_DEC_END},
+};
+#define GX_SITES ((int)(sizeof(gx_sites) / sizeof(gx_sites[0])))
+static GxBp gxbp[GX_SITES];
+static FILE *gx_out;
+static struct { unsigned handle; unsigned char record[0x48]; } gx_samples[4096]; static int gx_nsamples;
+static int gx_copied_full = 0;
+static void gx_record(unsigned type, DWORD tid, const void *payload, unsigned len, const void *extra, unsigned extra_len) {
+  unsigned head[3] = { type, len + extra_len, (unsigned)tid };
+  fwrite(head, 4, 3, gx_out);
+  if (len) fwrite(payload, 1, len, gx_out);
+  if (extra_len) fwrite(extra, 1, extra_len, gx_out);
+}
+static unsigned fnv1a(const unsigned char *b, size_t n, unsigned h) { for (size_t i = 0; i < n; i++) { h ^= b[i]; h *= 0x01000193u; } return h; }
+/* The staging bytes [pos, pos + n) of a ring of `size` bytes at `ring`, wrapping. */
+static int gx_ring_bytes(uintptr_t ring, unsigned size, unsigned pos, unsigned n, unsigned char *out) {
+  if (n > size) return 0;
+  unsigned first = size - pos < n ? size - pos : n;
+  return read_mem(ring + pos, out, first) && (n == first || read_mem(ring, out + first, n - first));
+}
+static unsigned char gx_buffer[0x40000];
+static void gx_mem_record(unsigned type, DWORD tid, unsigned w0, unsigned w1, uintptr_t mem) {
+  /* glxMemory {'MEMO', 0xc, Data, Length, 0}: the flags, the length and the bytes. */
+  unsigned desc[5] = {0}; read_mem(mem, desc, sizeof(desc));
+  unsigned len = desc[3], head[3] = { w0, w1, len };
+  unsigned char *bytes = (unsigned char *)malloc(len ? len : 1);
+  if (len && !read_mem(desc[2], bytes, len)) len = 0, head[2] = 0xffffffffu;
+  gx_record(type, tid, head, sizeof(head), bytes, len);
+  free(bytes);
+}
+static void gx_event(int kind, DWORD tid, CONTEXT *c) {
+  uintptr_t esp = c->Esp; unsigned w[16] = {0};
+  switch (kind) {
+    case K_INIT: gx_record(GX_INIT, tid, NULL, 0, NULL, 0); break;
+    case K_CHANNELS: read_mem(esp + 4, w, 4); gx_record(GX_CHANNELS, tid, w, 4, NULL, 0); break;
+    case K_OPEN: read_mem(esp + 4, w, 16); gx_record(GX_OPEN, tid, w, 16, NULL, 0); break;
+    case K_SVOL: case K_MVOL: read_mem(esp + 8, w, 8); gx_record(kind == K_SVOL ? GX_SAMPLE_VOLUME : GX_MUSIC_VOLUME, tid, w, 8, NULL, 0); break;
+    case K_LOADM: read_mem(esp + 4, w, 8); gx_mem_record(GX_LOAD_MUSIC, tid, w[1], 0, w[0]); break;
+    case K_LOADM_RET: w[0] = c->Eax; gx_record(GX_LOAD_MUSIC_RESULT, tid, w, 4, NULL, 0); break;
+    case K_UNLOADM: gx_record(GX_UNLOAD_MUSIC, tid, NULL, 0, NULL, 0); break;
+    case K_STARTM: gx_record(GX_START_MUSIC, tid, NULL, 0, NULL, 0); break;
+    case K_STOPM: gx_record(GX_STOP_MUSIC, tid, NULL, 0, NULL, 0); break;
+    case K_CTLM: read_mem(esp + 0x10, w, 8); gx_record(GX_CONTROL_MUSIC, tid, w, 8, NULL, 0); break;
+    case K_CLEAR: w[0] = read_u32(c->Esi + 0x64); gx_record(GX_CLEAR_ACTIVE, tid, w, 4, NULL, 0); break;
+    case K_BREAK: gx_record(GX_BREAK, tid, NULL, 0, NULL, 0); break;
+    case K_LOADS: read_mem(esp + 4, w, 8); gx_mem_record(GX_LOAD_SAMPLE, tid, w[1], 0, w[0]); break;
+    case K_LOADS_RET: {
+      unsigned char rec[0x4c] = {0}; memcpy(rec, &c->Eax, 4);
+      if (c->Eax) read_mem(c->Eax, rec + 4, 0x48);
+      gx_record(GX_LOAD_SAMPLE_RESULT, tid, rec, sizeof(rec), NULL, 0); break;
+    }
+    case K_STARTS: {
+      read_mem(esp + 0x20, w, 24);
+      /* A sample seen for the first time (or changed): its 0x48-byte glxSample and its data (an MPEG record's +0x30 bytes;
+       * a PCM record's Length frames and the loader's 31 pad bytes), read here, under the library lock, rather than at
+       * glxLoadSample (outside it, where a trap could meet the timer thread's). */
+      unsigned char rec[0x48];
+      if (w[1] && read_mem(w[1], rec, sizeof(rec))) {
+        int seen = 0;
+        for (int i = 0; i < gx_nsamples; i++) if (gx_samples[i].handle == w[1]) { seen = !memcmp(gx_samples[i].record, rec, sizeof(rec)); if (!seen) memcpy(gx_samples[i].record, rec, sizeof(rec)); break; }
+        if (!seen) {
+          int known = 0; for (int i = 0; i < gx_nsamples; i++) if (gx_samples[i].handle == w[1]) known = 1;
+          if (!known && gx_nsamples < 4096) { gx_samples[gx_nsamples].handle = w[1]; memcpy(gx_samples[gx_nsamples].record, rec, sizeof(rec)); gx_nsamples++; }
+          unsigned short type; unsigned length, data; memcpy(&type, rec + 0x2c, 2); memcpy(&length, rec + 0x30, 4); memcpy(&data, rec + 0x44, 4);
+          unsigned n = type & 0x4000 ? length : length * (type & 4 ? 2 : 1) * (type & 0x40 ? 2 : 1) + 0x1f;
+          if (n > 0x1000000) n = 0;
+          unsigned char *bytes = (unsigned char *)malloc(n ? n : 1);
+          unsigned head[2] = { w[1], n };
+          if (n && (!data || !read_mem(data, bytes, n))) { head[1] = 0xffffffffu; n = 0; }
+          unsigned char payload[8 + 0x48]; memcpy(payload, head, 8); memcpy(payload + 8, rec, sizeof(rec));
+          gx_record(GX_SAMPLE_RECORD, tid, payload, sizeof(payload), bytes, n);
+          free(bytes);
+        }
+      }
+      gx_record(GX_START_SAMPLE, tid, w, 24, NULL, 0); break;
+    }
+    case K_STARTS_RET: w[0] = c->Eax; gx_record(GX_START_SAMPLE_RESULT, tid, w, 4, NULL, 0); break;
+    case K_CTLS: read_mem(esp + 0x14, w, 16); gx_record(GX_CONTROL_SAMPLE, tid, w, 16, NULL, 0); break;
+    case K_CTLV: read_mem(esp + 0xc, w, 16); gx_record(GX_CONTROL_VOICE, tid, w, 16, NULL, 0); break;
+    case K_CTLV_RET: w[0] = c->Eax; w[1] = (unsigned)c->Eip; gx_record(GX_CONTROL_VOICE_RESULT, tid, w, 8, NULL, 0); break;
+    case K_STOPS: w[0] = c->Esi; w[1] = read_u32(esp + 0x40c);  /* the voice, and the return address (a call from glxStartSample or glxUnloadSample is part of it) */
+      gx_record(GX_STOP_SAMPLE, tid, w, 8, NULL, 0); break;
+    case K_REVERB: { unsigned char block[0x70] = {0}; uintptr_t at = read_u32(esp + 0x18); memcpy(block, &at, 4); if (at) read_mem(at, block + 4, 0x6c);
+      gx_record(GX_SAMPLE_REVERB, tid, block, sizeof(block), NULL, 0); break; }
+    case K_UNLOADS: w[0] = c->Edi; gx_record(GX_UNLOAD_SAMPLE, tid, w, 4, NULL, 0);
+      /* the address may be reused by a later load: the next start dumps it again */
+      for (int i = 0; i < gx_nsamples; i++) if (gx_samples[i].handle == w[0]) { gx_samples[i] = gx_samples[--gx_nsamples]; break; }
+      break;
+    case K_ULOCK: gx_record(GX_UPDATE_LOCK, tid, NULL, 0, NULL, 0); break;
+    case K_UUNLOCK: gx_record(GX_UPDATE_UNLOCK, tid, NULL, 0, NULL, 0); break;
+    case K_CB_POS: w[0] = c->Eax; read_mem(esp + 0x20, w + 1, 8); gx_record(GX_CB_POSITION, tid, w, 12, NULL, 0); break;
+    case K_CB_LOCK_RESYNC: case K_CB_LOCK_A: case K_CB_LOCK_B:
+      w[0] = kind - K_CB_LOCK_RESYNC; w[1] = c->Eax; gx_record(GX_CB_LOCK, tid, w, 8, NULL, 0); break;
+    case K_CB_LOST: w[0] = (unsigned)c->Eip; gx_record(GX_CB_LOST, tid, w, 4, NULL, 0); break;
+    case K_CB_COPIED: case K_CB_RESYNC: {
+      unsigned size = read_u32(GX(0x10697cd0)), a = read_u32(GX(0x10697cd4)), b = read_u32(GX(0x10697cd8)), ahead = read_u32(GX(0x10697cdc));
+      uintptr_t ring = read_u32(GX(0x10697ccc));
+      if (kind == K_CB_RESYNC) {
+        w[0] = size; w[1] = a; w[2] = b; w[3] = ahead; w[4] = 0;
+        if (size <= sizeof(gx_buffer) && read_mem(ring, gx_buffer, size)) w[4] = fnv1a(gx_buffer, size, 0x811c9dc5u);
+        gx_record(GX_CB_RESYNC, tid, w, 20, NULL, 0);
+      } else {
+        unsigned r = c->Ebx;
+        w[0] = r; w[1] = a; w[2] = b; w[3] = ahead; w[4] = w[5] = 0;
+        unsigned char *sa = gx_buffer, *sb = gx_buffer + 0x20000;
+        int ok = r <= 0x20000 && gx_ring_bytes(ring, size, a, r, sa) && gx_ring_bytes(ring, size, b, r, sb);
+        if (ok) { w[4] = fnv1a(sa, r, 0x811c9dc5u); w[5] = fnv1a(sb, r, 0x811c9dc5u); } else w[4] = w[5] = 0xffffffffu;
+        if (ok && gx_copied_full < 24) { gx_copied_full++; memcpy(sa + r, sb, r); gx_record(GX_CB_COPIED, tid, w, 24, sa, 2 * r); }
+        else gx_record(GX_CB_COPIED, tid, w, 24, NULL, 0);
+      }
+      break;
+    }
+    case K_CB_END: w[0] = read_u32(GX(0x10697cd4)); w[1] = read_u32(GX(0x10697cd8)); w[2] = read_u32(GX(0x10697cdc));
+      gx_record(GX_CB_END, tid, w, 12, NULL, 0); break;
+    case K_DEC_MSG: read_mem(esp + 0x48, w, 12); gx_record(GX_DEC_MESSAGE, tid, w, 12, NULL, 0); break;
+    case K_DEC_CALL: {
+      /* After 0x1061a690 returns: its 8 cdecl arguments are still on the stack. */
+      unsigned a[8]; read_mem(esp, a, sizeof(a));
+      unsigned consumed = read_u32(a[6]), produced = read_u32(a[7]);
+      unsigned head[10] = { a[0], a[1], a[2], a[3], a[4], a[5], consumed, produced, 0, 0 };
+      unsigned n1 = a[3] && produced <= 0x10000 ? produced : 0, n2 = a[4] && produced <= 0x10000 ? produced : 0;
+      if (n1 && !read_mem(a[3], gx_buffer, n1)) n1 = 0;
+      if (n2 && !read_mem(a[4], gx_buffer + n1, n2)) n2 = 0;
+      head[8] = n1; head[9] = n2;
+      gx_record(GX_DEC_CALL, tid, head, sizeof(head), gx_buffer, n1 + n2);
+      break;
+    }
+    case K_DEC_END: gx_record(GX_DEC_END, tid, NULL, 0, NULL, 0); break;
+  }
+}
+typedef struct { DWORD tid; int index; } GxPending;
+/* The game's threads, from the debug events. (Suspending the others while one steps off a breakpoint did not keep
+ * CrossOver from garbling a concurrent trap; the breakpoints are placed so that none can meet another instead.) */
+static struct { DWORD tid; HANDLE h; } gx_threads[128]; static int gx_nthreads;
+static DWORD gx_suspended_for;
+static void gx_thread_add(DWORD tid, HANDLE h) { if (gx_nthreads < 128) { gx_threads[gx_nthreads].tid = tid; gx_threads[gx_nthreads].h = h; gx_nthreads++; } }
+static void gx_thread_remove(DWORD tid) { for (int i = 0; i < gx_nthreads; i++) if (gx_threads[i].tid == tid) { gx_threads[i] = gx_threads[--gx_nthreads]; return; } }
+static void gx_suspend_others(DWORD tid) {
+  for (int i = 0; i < gx_nthreads; i++) if (gx_threads[i].tid != tid) SuspendThread(gx_threads[i].h);
+  gx_suspended_for = tid;
+}
+static void gx_resume_others(void) {
+  if (!gx_suspended_for) return;
+  for (int i = 0; i < gx_nthreads; i++) if (gx_threads[i].tid != gx_suspended_for) ResumeThread(gx_threads[i].h);
+  gx_suspended_for = 0;
+}
+/* CrossOver sometimes reports one of our int3s from inside its exception dispatcher: the event's address and the thread's
+ * context are the dispatcher's, and continuing would resume the game's thread one byte past the int3. The faulting context is
+ * then a CONTEXT record on the thread's stack (ContextFlags with the i386 bit, Eip one past one of our breakpoints): record the
+ * event from it and rewind that record's Eip, with the trap flag set, so the dispatcher resumes on the original instruction. */
+static int gx_recover(DWORD tid, uintptr_t where, int *npending, GxPending *pending, long *hits) {
+  HANDLE th = thread_of(tid);
+  CONTEXT now; memset(&now, 0, sizeof(now)); now.ContextFlags = CONTEXT_CONTROL;
+  if (!th || !GetThreadContext(th, &now)) return 0;
+  static unsigned stack[2048];
+  if (!read_mem(now.Esp, stack, sizeof(stack))) { SIZE_T n = 0; ReadProcessMemory(process, (LPCVOID)(uintptr_t)now.Esp, stack, 4096, &n); if (!n) return 0; }
+  const unsigned EIP_AT = 0xb8 / 4;
+  for (int k = EIP_AT; k < 2048 - 0x40; k++) {
+    for (int i = 0; i < GX_SITES; i++) {
+      if (stack[k] != gxbp[i].address + 1) continue;
+      unsigned flags = stack[k - EIP_AT];
+      if ((flags & 0xffff0000u) != 0x00010000u) continue;
+      uintptr_t rec = now.Esp + 4 * (k - EIP_AT);
+      CONTEXT c; memset(&c, 0, sizeof(c));
+      if (!read_mem(rec, &c, sizeof(CONTEXT) < 0x2cc ? sizeof(CONTEXT) : 0x2cc)) return 0;
+      fprintf(stderr, "galaxy capture: recovered int3 0x%08lx of thread %lu from a CONTEXT at 0x%08lx (event at 0x%08lx, eip %08lx)\n",
+        (unsigned long)gxbp[i].address, tid, (unsigned long)rec, (unsigned long)where, now.Eip);
+      c.Eip = (DWORD)gxbp[i].address;
+      gx_event(gxbp[i].kind, tid, &c);
+      hits[i]++;
+      unsigned eip = (unsigned)gxbp[i].address, eflags = c.EFlags | 0x100;
+      write_mem(rec + 0xb8, &eip, 4); write_mem(rec + 0xc0, &eflags, 4);
+      write_mem(gxbp[i].address, &gxbp[i].original, 1); FlushInstructionCache(process, (LPCVOID)gxbp[i].address, 1);
+      if (*npending < 64) { pending[*npending].tid = tid; pending[*npending].index = i; (*npending)++; }
+      return 1;
+    }
+  }
+  return 0;
+}
+
+static int do_galaxy_capture(const char *out_path, int seconds, const char *map, const char *stop_path) {
+  QueryPerformanceFrequency(&qpf);
+  gx_out = fopen(out_path, "wb");
+  if (!gx_out) { fprintf(stderr, "cannot write %s\n", out_path); return 1; }
+  static char cmdline[512];
+  snprintf(cmdline, sizeof(cmdline), "\"C:\\Deus Ex GOTY Edition\\System\\DeusEx.exe\" %s INI=DeusEx-ad.ini USERINI=User-ad.ini", map);
+  STARTUPINFOA si; PROCESS_INFORMATION pi; memset(&si, 0, sizeof(si)); si.cb = sizeof(si); memset(&pi, 0, sizeof(pi));
+  if (!CreateProcessA("C:\\Deus Ex GOTY Edition\\System\\DeusEx.exe", cmdline, NULL, NULL, FALSE, DEBUG_ONLY_THIS_PROCESS, NULL,
+      "C:\\Deus Ex GOTY Edition\\System", &si, &pi)) { fprintf(stderr, "CreateProcess failed (%lu)\n", GetLastError()); return 1; }
+  pid = pi.dwProcessId; process = pi.hProcess;
+  DebugSetProcessKillOnExit(FALSE);
+  fprintf(stderr, "galaxy capture: DeusEx.exe pid %lu\n", pid);
+  /* Per-thread re-arm after a hit: the thread single-steps the original instruction. */
+  GxPending pending[64]; int npending = 0;
+  int armed = 0; long events = 0, hits[GX_SITES] = {0};
+  ULONGLONG until = GetTickCount64() + (ULONGLONG)seconds * 1000;
+  DEBUG_EVENT ev; int exited = 0;
+  while (!exited && GetTickCount64() < until) {
+    if (stop_path) { FILE *f = fopen(stop_path, "r"); if (f) { fclose(f); break; } }
+    if (!WaitForDebugEvent(&ev, 100)) continue;
+    DWORD status = DBG_CONTINUE;
+    if (ev.dwDebugEventCode == LOAD_DLL_DEBUG_EVENT) {
+      /* The DLL's export directory name (the loader list may not hold it yet at this event). */
+      char name[64] = "";
+      uintptr_t image = (uintptr_t)ev.u.LoadDll.lpBaseOfDll;
+      unsigned nt = read_u32(image + 0x3c), exports = read_u32(image + nt + 0x78);
+      if (nt && exports) { unsigned at = read_u32(image + exports + 0x0c); if (at) read_mem(image + at, name, sizeof(name) - 1); }
+      HMODULE base = (HMODULE)ev.u.LoadDll.lpBaseOfDll;
+      if (!_stricmp(name, "Galaxy.dll") && !armed) {
+        galaxy_base = (uintptr_t)base;
+        if (galaxy_base != 0x10600000u) { fprintf(stderr, "Galaxy.dll at 0x%lx, not its preferred base\n", (unsigned long)galaxy_base); break; }
+        /* GX_ONLY (diagnostics): a comma-separated list of breakpoint kinds to arm, or "none". */
+        const char *only = getenv("GX_ONLY");
+        for (int i = 0; i < GX_SITES; i++) {
+          gxbp[i].address = gx_sites[i].address; gxbp[i].kind = gx_sites[i].kind;
+          read_mem(gxbp[i].address, &gxbp[i].original, 1);
+          int arm = 1;
+          if (only) { char key[16]; snprintf(key, sizeof(key), ",%d,", gx_sites[i].kind); char list[256]; snprintf(list, sizeof(list), ",%s,", only); arm = strstr(list, key) != NULL; }
+          if (!arm) { gxbp[i].address = 0; continue; }
+          unsigned char cc = 0xCC; write_mem(gxbp[i].address, &cc, 1);
+        }
+        FlushInstructionCache(process, NULL, 0);
+        armed = 1;
+        fprintf(stderr, "galaxy capture: Galaxy.dll loaded, %d breakpoints armed\n", GX_SITES);
+      }
+      if (ev.u.LoadDll.hFile) CloseHandle(ev.u.LoadDll.hFile);
+    } else if (ev.dwDebugEventCode == CREATE_PROCESS_DEBUG_EVENT) {
+      if (ev.u.CreateProcessInfo.hFile) CloseHandle(ev.u.CreateProcessInfo.hFile);
+      gx_thread_add(ev.dwThreadId, ev.u.CreateProcessInfo.hThread);
+    } else if (ev.dwDebugEventCode == CREATE_THREAD_DEBUG_EVENT) {
+      /* a thread created while the others are suspended for a step starts suspended too */
+      gx_thread_add(ev.dwThreadId, ev.u.CreateThread.hThread);
+      if (gx_suspended_for) SuspendThread(ev.u.CreateThread.hThread);
+    } else if (ev.dwDebugEventCode == EXIT_THREAD_DEBUG_EVENT) {
+      gx_thread_remove(ev.dwThreadId);
+    } else if (ev.dwDebugEventCode == EXIT_PROCESS_DEBUG_EVENT) {
+      exited = 1;
+    } else if (ev.dwDebugEventCode == EXCEPTION_DEBUG_EVENT) {
+      DWORD code = ev.u.Exception.ExceptionRecord.ExceptionCode;
+      uintptr_t where = (uintptr_t)ev.u.Exception.ExceptionRecord.ExceptionAddress;
+      int which = -1;
+      if (armed && code == EXCEPTION_BREAKPOINT) for (int i = 0; i < GX_SITES; i++) if (gxbp[i].address == where) { which = i; break; }
+      if (armed && code == EXCEPTION_BREAKPOINT && which < 0) {
+        /* CrossOver sometimes reports another address for one of our int3s: the thread's EIP is then just past it. */
+        HANDLE th = thread_of(ev.dwThreadId);
+        CONTEXT ctx; ctx.ContextFlags = CONTEXT_CONTROL;
+        if (th && GetThreadContext(th, &ctx)) for (int i = 0; i < GX_SITES; i++) if (gxbp[i].address + 1 == ctx.Eip) {
+          fprintf(stderr, "galaxy capture: breakpoint reported at 0x%08lx, thread %lu's EIP 0x%08lx: ours at 0x%08lx\n",
+            (unsigned long)where, ev.dwThreadId, (unsigned long)ctx.Eip, (unsigned long)gxbp[i].address);
+          which = i; where = gxbp[i].address; break;
+        }
+      }
+      int step = -1;
+      if (code == EXCEPTION_SINGLE_STEP) for (int i = 0; i < npending; i++) if (pending[i].tid == ev.dwThreadId) { step = i; break; }
+      if (which >= 0) {
+        HANDLE th = thread_of(ev.dwThreadId);
+        CONTEXT ctx; ctx.ContextFlags = CONTEXT_CONTROL | CONTEXT_INTEGER;
+        if (!th || !GetThreadContext(th, &ctx)) fprintf(stderr, "galaxy capture: no context for thread %lu at 0x%08lx (%lu)\n", ev.dwThreadId, (unsigned long)where, GetLastError());
+        else {
+          ctx.Eip = (DWORD)where;
+          gx_event(gxbp[which].kind, ev.dwThreadId, &ctx);
+          hits[which]++; events++;
+          /* Write back only EIP and EFlags (a fresh CONTEXT_CONTROL): under CrossOver a CONTEXT_INTEGER write can put back
+           * stale registers (seen: EDI 0 after Galaxy's Update returned into UGameEngine::Draw). */
+          CONTEXT set; memset(&set, 0, sizeof(set)); set.ContextFlags = CONTEXT_CONTROL;
+          GetThreadContext(th, &set);
+          set.Eip = (DWORD)where; set.EFlags |= 0x100; set.ContextFlags = CONTEXT_CONTROL;
+          SetThreadContext(th, &set);
+          write_mem(where, &gxbp[which].original, 1); FlushInstructionCache(process, (LPCVOID)where, 1);
+          if (npending < 64) { pending[npending].tid = ev.dwThreadId; pending[npending].index = which; npending++; }
+        }
+      } else if (step >= 0) {
+        unsigned char cc = 0xCC; int index = pending[step].index;
+        write_mem(gxbp[index].address, &cc, 1); FlushInstructionCache(process, (LPCVOID)gxbp[index].address, 1);
+        pending[step] = pending[--npending];
+        if (gx_suspended_for == ev.dwThreadId) gx_resume_others();
+      } else if (armed && code == EXCEPTION_BREAKPOINT && gx_recover(ev.dwThreadId, where, &npending, pending, hits)) {
+        events++;
+      } else if (code == EXCEPTION_BREAKPOINT || code == EXCEPTION_SINGLE_STEP) {
+        /* the loader's initial breakpoint, or a stale step: log the thread's context and every thread's EIP */
+        HANDLE th = thread_of(ev.dwThreadId);
+        CONTEXT ctx; memset(&ctx, 0, sizeof(ctx)); ctx.ContextFlags = CONTEXT_CONTROL | CONTEXT_INTEGER;
+        if (th) GetThreadContext(th, &ctx);
+        fprintf(stderr, "galaxy capture: %s at 0x%08lx thread %lu (not ours): eip %08lx esp %08lx eflags %08lx; pending %d\n",
+          code == EXCEPTION_BREAKPOINT ? "breakpoint" : "single step", (unsigned long)where, ev.dwThreadId, ctx.Eip, ctx.Esp, ctx.EFlags, npending);
+        HANDLE snap = CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, 0); THREADENTRY32 te; te.dwSize = sizeof(te);
+        if (Thread32First(snap, &te)) do {
+          if (te.th32OwnerProcessID != pid) continue;
+          HANDLE t2 = thread_of(te.th32ThreadID); CONTEXT c2; memset(&c2, 0, sizeof(c2)); c2.ContextFlags = CONTEXT_CONTROL;
+          if (t2 && GetThreadContext(t2, &c2)) {
+            int at_bp = -1; for (int i = 0; i < GX_SITES; i++) if (gxbp[i].address + 1 == c2.Eip || gxbp[i].address == c2.Eip) at_bp = i;
+            fprintf(stderr, "    thread %lu eip %08lx%s\n", te.th32ThreadID, c2.Eip, at_bp >= 0 ? " (at one of ours)" : "");
+          }
+        } while (Thread32Next(snap, &te));
+        CloseHandle(snap);
+      } else {
+        status = DBG_EXCEPTION_NOT_HANDLED;
+        HANDLE th = thread_of(ev.dwThreadId);
+        CONTEXT ctx; memset(&ctx, 0, sizeof(ctx)); ctx.ContextFlags = CONTEXT_CONTROL | CONTEXT_INTEGER;
+        if (th) GetThreadContext(th, &ctx);
+        ULONG_PTR *info = ev.u.Exception.ExceptionRecord.ExceptionInformation;
+        fprintf(stderr, "galaxy capture: exception 0x%08lx (%s chance) at 0x%08lx thread %lu, info %lx %lx; eax %08lx ebx %08lx ecx %08lx edx %08lx esi %08lx edi %08lx esp %08lx\n",
+          code, ev.u.Exception.dwFirstChance ? "first" : "second", (unsigned long)where, ev.dwThreadId,
+          (unsigned long)info[0], (unsigned long)info[1], ctx.Eax, ctx.Ebx, ctx.Ecx, ctx.Edx, ctx.Esi, ctx.Edi, ctx.Esp);
+      }
+    }
+    ContinueDebugEvent(ev.dwProcessId, ev.dwThreadId, status);
+  }
+  /* Disarm, rewind any thread caught on a breakpoint, finish pending steps, then detach. */
+  gx_resume_others();
+  if (armed && !exited) {
+    for (int i = 0; i < GX_SITES; i++) { write_mem(gxbp[i].address, &gxbp[i].original, 1); }
+    FlushInstructionCache(process, NULL, 0);
+    int quiet = 0;
+    while (quiet < 5) {
+      if (!WaitForDebugEvent(&ev, 50)) { quiet++; continue; }
+      quiet = 0; DWORD status = DBG_CONTINUE;
+      if (ev.dwDebugEventCode == EXCEPTION_DEBUG_EVENT) {
+        DWORD code = ev.u.Exception.ExceptionRecord.ExceptionCode; uintptr_t where = (uintptr_t)ev.u.Exception.ExceptionRecord.ExceptionAddress;
+        int ours = 0; for (int i = 0; i < GX_SITES; i++) if (gxbp[i].address == where) ours = 1;
+        HANDLE th = thread_of(ev.dwThreadId);
+        if (code == EXCEPTION_BREAKPOINT && ours && th) { CONTEXT ctx; ctx.ContextFlags = CONTEXT_CONTROL; GetThreadContext(th, &ctx); ctx.Eip = (DWORD)where; SetThreadContext(th, &ctx); }
+        else if (code != EXCEPTION_BREAKPOINT && code != EXCEPTION_SINGLE_STEP) status = DBG_EXCEPTION_NOT_HANDLED;
+      } else if (ev.dwDebugEventCode == LOAD_DLL_DEBUG_EVENT && ev.u.LoadDll.hFile) CloseHandle(ev.u.LoadDll.hFile);
+      ContinueDebugEvent(ev.dwProcessId, ev.dwThreadId, status);
+    }
+  }
+  gx_record(GX_END, 0, &events, 4, NULL, 0);
+  fclose(gx_out);
+  if (!exited) DebugActiveProcessStop(pid);
+  fprintf(stderr, "galaxy capture: %ld events%s\n", events, exited ? " (the game exited)" : "");
+  for (int i = 0; i < GX_SITES; i++) if (hits[i]) fprintf(stderr, "  0x%08lx kind %d: %ld\n", (unsigned long)gxbp[i].address, gxbp[i].kind, hits[i]);
+  return 0;
+}
+
 int main(int argc, char **argv) {
   if (argc < 2) { fprintf(stderr, "usage: dx-live-win.exe rng [count] [interval_ms] | trace <config>\n"); return 2; }
   if (!strcmp(argv[1], "trace")) return argc > 2 ? do_trace(argv[2]) : 2;
@@ -1296,8 +1672,9 @@ int main(int argc, char **argv) {
   if (!strcmp(argv[1], "stamps")) return argc > 3 ? do_stamps(atoi(argv[2]), argv[3]) : 2;
   if (!strcmp(argv[1], "list")) { QueryPerformanceFrequency(&qpf); return argc > 2 ? do_list(argv[2]) : 2; }
   if (!strcmp(argv[1], "galaxy")) {
-    if (argc < 6 || strcmp(argv[2], "poll")) { fprintf(stderr, "galaxy poll <count> <interval_ms> <out prefix>\n"); return 2; }
-    return do_galaxy_poll(atoi(argv[3]), atoi(argv[4]), argv[5]);
+    if (argc >= 6 && !strcmp(argv[2], "poll")) return do_galaxy_poll(atoi(argv[3]), atoi(argv[4]), argv[5]);
+    if (argc >= 6 && !strcmp(argv[2], "capture")) return do_galaxy_capture(argv[3], atoi(argv[4]), argv[5], argc > 6 ? argv[6] : NULL);
+    fprintf(stderr, "galaxy poll <count> <interval_ms> <out prefix> | galaxy capture <out file> <seconds> <map> [stop file]\n"); return 2;
   }
   QueryPerformanceFrequency(&qpf);
   pid = find_pid("DeusEx.exe");
