@@ -358,35 +358,52 @@ only the speaking branch assigns (0): the channel jumps to MouthClosed with fram
 which stayed in `nextPhoneme` and made the first `LipSynch` of Bob's next speech tween one tick before the original's. It now leaves those jumps out (three in the intro, none in MeetPaul) and takes a restart of the blended sequence (BlendAnimFrame -1, rate 10, the sequence unchanged) as a letter
 (one in the intro, at 773: the letter before it blended nothing). MeetPaul's feed is unchanged (the same 46 letters), and the intro then replays equal to tick 2,250.
 
-## Hand-off (2026-10-16): the intro, a second conversation and the gate rows
+## MeetManderley against the original (2026-10-16, gate row 4.5.8)
 
-The first agent stopped at its context budget with 4.5.5 compared (above) and 4.5.7, 4.5.8 and the gate rows open. Everything below is measured; nothing is claimed beyond it.
+The campaign's next third-person conversation, `01_NYC_UNATCOHQ`'s MeetManderley (radius 160 and frob, JC and `JosephManderley0`, audio package Mission01, speeches 233 to 243), was captured in the running original twice
+(tags `mmA`, 1,100 ticks, and `mmB`, 580 ticks; two loads: the original's frames and traces are reproducible) and replayed in Play from the same inputs as MeetPaul: the level frozen at the load, the ghost put at (310, -164, 287.6299)
+facing Manderley (yaw 63442) and set walking (`set ... Location`, `set ... ViewRotation`, `walk`; the player is a ghost when it is moved, so the collision hash is not stale), released by the tracer at the original's per-tick delta and stream state, the measured mouth letters fed
+(`conversation-acceptance.mjs phonemes --scene manderley`, 61 and 31 letters), Brightness 2/3, `?antialias=0&detailTextures=0`. `live-original.sh` found the original's population equal to Play's seeded load on the first try (885 actors, none missing).
 
-**Stored originals** (main checkout `.work`, new names, nothing overwritten): `acceptance/01_NYC_UNATCOIsland/cvA{1..4}-original.png` with `cvA{n}-time.txt` and
-`live-acceptance/01_NYC_UNATCOIsland/{original-trace,watch,population,commands,hold,phonemes}-cvA.*` (MeetPaul, ticks 100/250/600/750, `--player-blend`); for the intro,
-`acceptance/00_Intro/in2-in{1,3,4}-original.png` with `-time.txt` (ticks 170, 1000, 2250: the Earth globe, a shot in the VersaLife room, a clinic shot) and
-`live-acceptance/00_Intro/*-in2.*` (the 2,250-tick trace). The in2 frame at tick 530 was not taken (Ctrl+F9 lost three times at that hold); the first Ctrl+F9 of the first MeetPaul run was lost once. `scripts/live-original.sh` with `--hold` never reaches `DX_POST` (node stays alive on the tracer); read the held original by running the script by hand and
-`touch <trace>.resume` after, as the camera numbers above were read.
+**The original's timeline** (read from the trace: the speakers' state and mouth channels): the conversation starts at unfrozen tick 14 (both are in `Conversation`); JC speaks from 14 to about 76 (speech 233, "Reporting for duty, sir."), Manderley from about 114 to 451 (234), JC from 530 (235,
+"A refreshing change from the academy, sir."), Manderley again from about 652 (238, "Don't despise training, my boy..."). Ctrl+F9 took no frame at tick 100 and at tick 1,100 (neither mouth moved at either tick), and one at ticks 40, 300, 450, 580 and 700.
 
-**4.5.7, the intro (00_Intro, `--no-ghost`).** Resolved: [the intro against the original](#the-intro-against-the-original-2026-10-16-gate-row-457). (What follows is the state when the first agent stopped; the replay diverged from tick 1 because of `FindBase`'s extent, not the player's Physics write the lead suggested.) The original's frames are captured (Ctrl+F9 works in the force-played conversation). Play's replay of the same trace
-(`live-acceptance.mjs play --map 00_Intro --seed 1 --tag in1 --no-ghost [--keep-traveling]`, `--early-cmds "set WinDrv.WindowsClient Brightness 0.666667"`) is **not** equal and was not compared as frames:
-(a) from tick 1 the player differs (original Z -80.2, Physics 0, no velocity; Play Z -80.33, falling at -15.8: `play()` places a no-ghost player at the original's Location but not its Physics, and Play's frozen
-phase is only ten frames long against the original's tens of seconds); (b) the stream's draw count differs at tick 38 and many pawns' `DistanceFromPlayer` differ in the sixth digit from tick 2 (the player's Z, a consequence of (a)),
-Bob Page and Walton Simons play `Fighter` in the original at tick 16-18 and `BreatheLight` in Play; (c) the firefight outside reaches the player: Play's JC is `Dying` at tick 1,200, the conversation ends and
-`MissionIntro.PostIntro` sends `OPEN DXONLY` (a labeled boundary) at tick 1,243, where the original goes on to tick 2,250 and beyond. Next: write the player's `Physics` and `Velocity` from the trace's first row
-(and run the frozen phase until it lands, as the original's did), re-run the compare, and only then look at the pawns; `--keep-traveling` is right for 00_Intro (`MissionIntro.InitStateMachine` deletes every flag and
-sets `PlayerTraveling` itself), and the intro's unfrozen tick for a shot is the Play timeline's level time less 0.2 s, times 60 (`conversation-acceptance.mjs timeline --scene intro`: cuts at 2.55, 8.57, 10.88, 12.4, 21.4, 26.0, 35.0, 42.9, 50.9, 64.0 s).
+**What the replay said.** Over the replayed ticks every watched actor (the player, Manderley and the 20 pawns of the level, JC's and Manderley's blend channels included), the clock and the stream draws equal the original's, in both loads, with the one exception MeetPaul has: the player's `AnimFrame` at tick 1
+(0.3139 against 0.3014 here, 0.0985 against 0.0860 on Island: the same 0.0125, a tween phase; equal from the next ticks on). The frames:
 
-**4.5.8, the second conversation: `01_NYC_UNATCOHQ` MeetManderley** (the campaign's next third-person conversation: `JosephManderley0`, radius 160 and frob, flag `M01ReadyForBriefing` false, audio package Mission01, JC and Manderley, ConEventMoveCamera
-positions 3, 4, 5 and 0, 7 later; `.work/dump-con.mjs`-style dump of its events: speeches 233 to 243). Every map's object-index capture already exists (all 83, [captures](object-index-captures.md)), so no new capture was needed. In Play it starts with the player
-placed at (310, -164, 287.629913) facing Manderley (yaw 63442, a ghost `set Location` at Z 305, then `walk`, which rests at Z 287.629913): `conversation-acceptance.mjs timeline --scene manderley` shows the third-person camera, the letterbox and the subtitle
-from level tick 2, speech 233 with the fallback camera (`bUsingFallback`: the authored position 3 is obstructed by the room at this spot), cuts to positions 4 and 5 at about 11.8 s and 19.4 s. The Play side of the population exists
-(`live-acceptance.mjs population --map 01_NYC_UNATCOHQ`). Not done: the original's capture (`live-original.sh 01_NYC_UNATCOHQ --ticks 1200 --player-blend --shot m4 --shot-ctrl --cmds "60:@ctrlshot m1|200:@ctrlshot m2|800:@ctrlshot m3" --early-cmds "...Location (X=310,Y=-164,Z=287.629913)...|walk"` is the intended run), its
-phoneme feed, the Play replays and the compare; whether the original also takes the fallback camera is the first thing to read.
+| Frame | Load, tick | Speech, camera | band identical, >2, >10; over 10 off the edges; recall/precision |
+| --- | --- | --- | --- |
+| mm2 | mmA, 450 | 234 Manderley, the fallback camera | .95527, 7,239, 1,926; 94; .999/.999 |
+| mm3 | mmA, 700 | 238 Manderley, camera 4, over JC's shoulder | .96407, 5,131, 1,893; 81; .999/1 |
+| mmB2 | mmB, 300 | 234 Manderley, the fallback camera | .95542, 7,158, 1,848; 90; .999/1 |
+| mmB3 | mmB, 580 | 235 JC, the fallback camera | .95202, 8,216, 2,375; 91; .999/1 |
 
-**The gate rows.** None of 4.5.5, 4.5.7 and 4.5.8 is a check yet (`validate-stage4-acceptance.mjs` keeps them `missing`, with the reasons above). The shape: a `conversation` check kind that stages the stored trace and frames of a tag into the checkout's `.work`,
-runs `live-acceptance.mjs population` then one `play --tag T --ticks N --shot name --phonemes ... --player-blend --early-cmds ...` per frame (about 2 minutes each, the replays share nothing), runs `conversation-acceptance.mjs compare`, and judges: the two bars and
-the subtitle identical (0 pixels over 2), the band at least .95 identical, at most 1,600 pixels over 10 of 255, edge recall and precision at least .99 (the measured worst of MeetPaul: .9679, 1,053, .997/.999; thresholds not yet adopted).
+The two letterbox bars and the subtitle line are identical to the pixel in all four (maximum difference 0), no outlier block. **The fallback camera:** the first thing to read was whether the original also takes the fallback camera for the speeches whose authored position 3 the room obstructs.
+Play's camera at tick 450 (`conversationProbe`: position 0, `bUsingFallback` true, location (344.37, -263.31, 326.61), rotation (-19, 14668, 0), the level time 120.2646 equal to the capture's 120.26458) gives mm2's frame to the polygon edge, so the original takes it too (the camera object itself was not read from the original this time).
+
+**The frame at tick 40 (mmB1), stored and not compared.** The letterbox was settled in the original's frame (bars 74 rows above, the subtitle to row 587) and still sliding in Play's (the first non-black row 56, the subtitle to row 624); Play's frame at tick 60 is settled (74, 587). The bars' slide
+is a window animation: the original, held at the tick while the game keeps drawing, finished it in real time; Play's is driven by the level's ticks and stops with the hold. Both agree whenever the held tick is more than about 42 ticks past the conversation's start (every other frame here and in MeetPaul).
+Not examined beyond these measurements (which of the two clocks the original's window uses is read from the held frame, not from its code).
+
+**A harness defect found on the way: the player was not standing when the replay began.** One gate run of mmA failed at tick 1 (the player's Z 287.61 against 287.8, so every pawn's DistanceFromPlayer differed): `walk` puts the ghost on its feet with Physics falling, and the player takes a few ticks to settle (this one, 0.17 below its rest height,
+fell 2 units, landed and was lifted to 287.799988, the original's rest height). The replay began before that in a slow run. `live-acceptance.mjs play` now ticks the frozen level until the player is in the pose's Physics, at its Location and at rest, for every pose in Physics 1 (it did so for the intro's no-ghost player first).
+MeetPaul's gate row passes unchanged with it.
+
+## Stored originals, the gate rows and how to repeat them (2026-10-16)
+
+The gate rows 4.5.5, 4.5.7 and 4.5.8 are `conversation` checks in `scripts/validate-stage4-acceptance.mjs` (`--only '^4\.5\.[578]$'`; about 5, 4 and 6.5 minutes): the check stages the tag's trace, lists and frames from the stores, regenerates the mouth letters from the trace
+(`conversation-acceptance.mjs phonemes`, a derived file), replays one frame at a time (`live-acceptance.mjs play --ticks N --shot name`), compares the traced actors over the longest replay (`live-acceptance.mjs compare`, the measured exceptions allowed by name), and compares each frame by region
+(`conversation-acceptance.mjs compare`: letterbox bars, subtitle, the 3D band, and the pixels off by more than 10 away from every hard edge). The thresholds are mine ([judgement chosen in the gate](stage-4-exit-criteria.md#how-the-gate-judges)).
+
+**Stored originals** (main checkout `.work`, new names, nothing overwritten; the gate reads them from there):
+`acceptance/01_NYC_UNATCOIsland/cvA{1..4}-original.png` with `cvA{n}-time.txt` and `live-acceptance/01_NYC_UNATCOIsland/{original-trace,watch,population,commands,hold,phonemes}-cvA.*` (MeetPaul, ticks 100/250/600/750, `--player-blend`);
+`acceptance/00_Intro/in2-in{1,3,4}-original.png` with `-time.txt` (ticks 170, 1000, 2250: the Earth globe, a shot in the VersaLife room, a clinic shot) and `live-acceptance/00_Intro/*-in2.*` (the 2,250-tick trace; the frame at tick 530 was not taken, Ctrl+F9 lost three times at that hold);
+`acceptance/01_NYC_UNATCOHQ/{mm2,mm3,mmB1,mmB2,mmB3}-original.png` (and `.bmp`, `-time.txt`) and `live-acceptance/01_NYC_UNATCOHQ/{original-trace,watch,population,commands,hold}-{mmA,mmB}.*` (MeetManderley, `--player-blend`; mm1 at tick 100 and mm4 at tick 1,100 gave no bitmap). Ctrl+F9 was also lost once at the first hold of the first MeetPaul run.
+The tag's mouth letters are not stored: the gate and `conversation-acceptance.mjs phonemes --scene S --tag T` rebuild them.
+
+**Repeating a capture.** `scripts/live-original.sh <map> --ticks N --delta 0.0166666675 --monitor 20 --tag T --player-blend --shot LAST --shot-ctrl --cmds "N1:@ctrlshot A|N2:@ctrlshot B" --early-cmds "set WinDrv.WindowsClient Brightness 0.666667|set ... Location|set ... ViewRotation|walk"`
+(`DX_HYPRLAND=1`; Wine lock; first run `live-acceptance.mjs population --map <map> --seed 1`). A fresh worktree needs the ignored Wine tools (`ad/build/{dump-actor-win,dump-flags-win,dx-live-win}.exe`, `ad/tools/dxinput.exe`), copied from another worktree. `scripts/live-original.sh` with `--hold` never reaches `DX_POST`
+(node stays alive on the tracer); read the held original by running the script by hand and `touch <trace>.resume` after.
 
 ## Open
 
@@ -396,8 +413,11 @@ the subtitle identical (0 pixels over 2), the band at least .95 identical, at mo
   October 1, when physProjectile was translated ([projectile](projectile.md),
   bit-exact against the original body; `validate-island-tracer` flies real
   Tracers on Island).
-* Lip sync is implemented ([lip sync](lip-sync.md)); every map's object-index capture exists ([captures](object-index-captures.md)); MeetManderley starts in Play
-  ([hand-off](#hand-off-2026-10-16-the-intro-a-second-conversation-and-the-gate-rows)), with no original frame yet.
+* Lip sync is implemented ([lip sync](lip-sync.md)); every map's object-index capture exists ([captures](object-index-captures.md)); MeetManderley is compared with the original ([above](#meetmanderley-against-the-original-2026-10-16-gate-row-458)).
+* **The letterbox slide in a held frame.** The original's bars finish sliding in real time while the level is held; Play's, driven by the level's ticks, stop mid-slide at the hold (MeetManderley tick 40: rows 56/624 against the original's 74/587; Play settles by tick 60). Frames taken within about 42 ticks of a
+  conversation's start (and so the first speech of the intro) cannot be matched by tick; not examined in the original's or Play's code.
+* **A pawn placed inside the floor.** The ghost put 0.17 below its rest height by `set Location` and set walking falls 2 units, lands and is lifted to the original's rest height (287.799988) in Play; the original's own sequence for that placement was not traced (its end state is the same).
+* **The player's `AnimFrame` at the replay's first ticks** is 0.0125 behind the original's in every conversation capture (Island 0.0985/0.0860, Manderley 0.3139/0.3014 and 0.3008/0.2883) and equal after a few ticks; allowed by name in the gate, not explained (a tween phase of the written pose).
 * The choice is made through the original input path (2026-10-01): Down
   reaches `RootWindow.VirtualKeyPressed`, whose `MoveFocusDown` (native 1445,
   `XWindow::MoveFocus`; the 1442–1447 family is bound,
@@ -411,7 +431,7 @@ the subtitle identical (0 pixels over 2), the band at least .95 identical, at mo
   the sniper rifle and its ammunition, ending at tick 7203, and the mini
   crossbow and poison darts, ending at tick 7253, both without a runtime
   error; the validator keeps only the GEP gun branch.
-* ConLight light on actor meshes is compared on the four MeetPaul frames ([frames](#frames-against-the-original-2026-10-16)); `ConEventMoveCamera`'s other camera types
-  (positions 0, 3, 7, the fallback cameras) and the interactive camera are reached by the original script but not compared with the original renderer.
+* ConLight light on actor meshes is compared on the four MeetPaul frames ([frames](#frames-against-the-original-2026-10-16)) and four MeetManderley frames; `ConEventMoveCamera`'s camera positions 2, 4, 5 and the fallback camera are compared with the original's frames;
+  positions 3 and 7, the camera transitions (`cameraTransition` other than a cut) and the interactive camera are reached by the original script but not compared with the original renderer.
 * `GetCurrentColorDepth`, `GetRes`, `SetRes` and the other viewport commands
   remain boundaries.

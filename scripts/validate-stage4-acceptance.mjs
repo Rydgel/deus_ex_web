@@ -68,14 +68,14 @@ const INTERFACE_THRESHOLDS = Object.freeze({
 // (rows 0..72 and 570..719), the subtitle in the lower bar, and the 3D band between them (the whole frame in the intro, whose window is 16:9 of the
 // width). The bars and the subtitle are drawn by the same code on both sides and measured equal to the pixel in all 4 MeetPaul frames (0 of ~280,000
 // pixels, maximum difference 0). The band differs where the two rasterizers tie on a polygon edge: 99% or more of its pixels off by more than 10 lie
-// within 1 px of a hard step (a >24 of 255 step to a neighbour, in either frame), the rest are at most 63 pixels per frame, off by at most 23.
-// Chosen from the 7 frames compared (4 of MeetPaul, 3 of the intro; the measured worst in each comment): strong for a misplaced or missing bar, a shifted
+// within 1 px of a hard step (a >24 of 255 step to a neighbour, in either frame), the rest are at most 93 pixels per frame, off by at most 25.
+// Chosen from the frames compared (4 of MeetPaul, 3 of the intro, MeetManderley's; the measured worst in each comment): strong for a misplaced or missing bar, a shifted
 // camera or viewport (the harness defect fixed 2026-10-16 read .33 identical, 349,313 pixels over 2), wrong text, colour, shading or texture (those
 // are thousands of pixels away from edges); weak for the polygon edge, which is not judged by a count (it follows the silhouettes' length).
 const CONVERSATION_THRESHOLDS = Object.freeze({
   barsOver2: 0,          // the two bars and the subtitle: pixels off by more than 2 of 255 (measured 0)
   bandIdentical: 0.94,   // share of the band's pixels equal in all channels (measured .951 to .983)
-  awayOver10: 100,       // pixels off by more than 10 of 255 and farther than 1 px from every hard step (measured at most 63)
+  awayOver10: 150,       // pixels off by more than 10 of 255 and farther than 1 px from every hard step (measured at most 93: the dark wood of Manderley's office)
   edge: 0.99,            // the frame's edge recall and precision (measured at least .997)
   outlierBlocks: 0,      // 16x9 blocks whose luminance ratio is 1.6x off the frame's median (measured 0)
 });
@@ -162,6 +162,8 @@ const add = (id, clause, scene, claim, evidence, ...checks) => CRITERIA.push({id
 const missing = (id, clause, scene, claim, reason) => CRITERIA.push({id, clause, scene, claim, evidence: '-', missing: reason, checks: []});
 const excluded = (id, clause, scene, claim, reason) => CRITERIA.push({id, clause, scene, claim, evidence: '-', excluded: reason, checks: []});
 
+// the console lines of the Manderley captures: Brightness 2/3 (the display ramp is the identity), the ghost placed at the rest height in front of Manderley, then `walk`
+const MANDERLEY_START = 'set WinDrv.WindowsClient Brightness 0.666667|set DeusEx.JCDentonMale Location (X=310,Y=-164,Z=287.629913)|set DeusEx.JCDentonMale ViewRotation (Pitch=0,Yaw=63442,Roll=0)|walk';
 const C1 = 'Animated actors', C2 = 'Effects', C3 = 'Sound', C4 = 'Text and interfaces', C5 = 'Speech, lip sync and the conversation camera';
 
 // 4.1 Animated actors -----------------------------------------------------------------------------------
@@ -310,7 +312,14 @@ add('4.5.7', C5, '00_Intro camera shots', 'the intro\'s CameraPoint shots agains
     frames: [{name: 'in2-in1', tick: 170}, {name: 'in2-in3', tick: 1000}, {name: 'in2-in4', tick: 2250}],
     earlyCmds: 'set WinDrv.WindowsClient Brightness 0.666667'}),
   V('native-find-base'));   // the replay's first tick: SetPhysics(PHYS_None) reaches FindBase (a wrong extent put the standing player back in PHYS_Falling)
-missing('4.5.8', C5, 'a second third-person conversation', 'a conversation on another map, with the third-person camera, lip sync and speech', 'chosen: 01_NYC_UNATCOHQ MeetManderley (every map\'s object-index capture already exists, docs/object-index-captures.md); it starts and plays in Play with the camera, but no original capture was taken yet (docs/conversation-camera.md "Hand-off")');
+add('4.5.8', C5, '01_NYC_UNATCOHQ MeetManderley', 'a conversation on another map, with the third-person camera, lip sync and speech (the lines and their timing; the audio samples are 4.5.6)', 'O1',
+  // two loads of the original (tags mmA, mmB), each with the player's blend channel; the frames are at speeches of JC and Manderley and at two cameras. mmB1 (tick 40,
+  // the first speech) is stored and not compared: the letterbox is still sliding at tick 40, the original's bars finished while it was held and Play's, driven by the
+  // level's ticks, are frozen mid-slide at the hold (docs/conversation-camera.md).
+  CONVERSATION({scene: 'manderley', map: '01_NYC_UNATCOHQ', tag: 'mmA', playerBlend: true, liveAllow: {'@player': ['Frame']},
+    frames: [{name: 'mm2', tick: 450}, {name: 'mm3', tick: 700}], earlyCmds: MANDERLEY_START}),
+  CONVERSATION({scene: 'manderley', map: '01_NYC_UNATCOHQ', tag: 'mmB', playerBlend: true, liveAllow: {'@player': ['Frame']},
+    frames: [{name: 'mmB2', tick: 300}, {name: 'mmB3', tick: 580}], earlyCmds: MANDERLEY_START}));
 
 // --- runner ----------------------------------------------------------------------------------------------
 const probePython = path.join(root, '.cache/native-probe-env/bin/python');
@@ -369,7 +378,7 @@ function expand(check, criterion) {
   if (check.type === 'camera') return [{key: `${criterion.id}:camera ${check.name}`, label: `camera ${check.map} ${check.name}`, camera: check, mutex: ['acceptance'], estimate: 120, memory: 1800}];
   if (check.type === 'live') return [{key: `${criterion.id}:live ${check.map}${check.tag ? ` ${check.tag}` : ''}`, label: `live ${check.map}${check.tag ? ` (${check.tag})` : ''}`, live: check, mutex: check.shot ? [`live:${check.map}`, 'acceptance'] : [`live:${check.map}`], estimate: 120, memory: 1500}];
   // one task per scene: the frames' replays share the tag's play-rows file, so they run one after the other
-  if (check.type === 'conversation') return [{key: `${criterion.id}:conversation ${check.scene}`, label: `conversation ${check.map} (${check.frames.length} frames)`, conversation: check, mutex: [`live:${check.map}`, 'acceptance'],
+  if (check.type === 'conversation') return [{key: `${criterion.id}:conversation ${check.scene} ${check.tag}`, label: `conversation ${check.map} ${check.tag} (${check.frames.length} frames)`, conversation: check, mutex: [`live:${check.map}`, 'acceptance'],
     estimate: 130 * check.frames.length, memory: 1800}];
   if (check.type === 'sweep') return [{key: `${criterion.id}:sweep`, label: `sweep replay ${check.maps.length} maps`, sweep: check, mutex: ['live-sweep'], estimate: 75 * check.maps.length, memory: 1500}];
   if (check.type === 'census') return [{key: `${criterion.id}:census-ui-screens`, label: 'census-ui-screens', census: check, estimate: 150, memory: 1500}];
@@ -758,7 +767,7 @@ async function judgeConversation(task, add, fail, result) {
   }
   if (liveProblems.length) problems.push(`live: ${liveProblems.slice(0, 6).join(', ')}`);
   if (problems.length) return fail(`${c.map} ${c.tag}: ${problems.join('; ')}`);
-  return {...result, status: 'PASS', detail: `${c.map} ${c.tag}: ${notes.join('; ')}; ${watched} watched actors equal for ${liveReport.ticks} ticks${Object.keys(allow).length ? ' but the measured exceptions' : ''}, clock and stream draws equal`};
+  return {...result, status: 'PASS', detail: `${c.map} ${c.tag}: ${notes.join('; ')}; ${watched} watched actors equal for the ${Math.max(...c.frames.map(f => f.tick))} ticks replayed${Object.keys(allow).length ? ' but the measured exceptions' : ''}, clock and stream draws equal`};
 }
 async function judgeSweep(task, add, fail, result) {
   const {maps, tags = {}} = task.sweep;
