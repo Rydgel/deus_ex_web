@@ -46,7 +46,8 @@ starts the game or a browser.
     (2,997–6,081 px over the whole swing). Windows 1 and 2 show sky.
   - Fog: Area 51's radiation camera, `15_Area51_Final ComputerSecurity0`,
     window 2. The camera is still and sits inside a fog sphere, so fog covers
-    every pixel. Nothing else that moves is in view.
+    every pixel. The census found nothing else moving in view; the capture
+    showed two wandering Grays and a carcass the census missed (below).
   - Sky, still cameras: Dockyard, `09_NYC_Dockyard ComputerSecurity1`. Two
     still cameras show sky, with only doors and gates in view.
   - Corona: no candidate is clean. The best one needs the camera held at a
@@ -255,8 +256,12 @@ penalties written out.
    units). Light97, Light98, Light99 and Light100 are all Steady, with
    VolumeRadius 14, VolumeBrightness 64 and LightBrightness 55, in bFogZone
    zone 2 (ZoneInfo1). Fog covers every pixel at 0.1 or more, reaching
-   saturation (0.99 or more) on about 1,360 px. Nothing else is in view: no
-   pawn, mover, device, animated texture or noise light.
+   saturation (0.99 or more) on about 1,360 px. The census found nothing else
+   in view: no pawn, mover, device, animated texture or noise light. The
+   capture (2026-10-17) showed that wrong: Gray0 and Gray3 (Wandering) stand
+   in the original's view, and ScientistMaleCarcass2 lies 130 units from the
+   camera in Play's. The census's line test from the camera to each pawn's
+   Location missed the Grays.
 2. Ship CS3[1] "Locker Room" and CS3[0] "Entry Area" are already stored as
    `sh3` and `sh3b`. Window 2 has heavy fog but also the door and the
    wandering Mechanic5. Window 1's fog is faint (at most 0.05, about 12/255),
@@ -324,6 +329,24 @@ the cameras in window order. As written, `camera-original.sh` and
   terminal and pans it (the UI path above). In the meantime, `cs0` window 2
   covers the corona rule by absence.
   `DX_HYPRLAND=1 scripts/camera-original.sh 01_NYC_UNATCOIsland --computer ComputerSecurity2 --user NSF001 --password smashthestate --cameras SecurityCamera3,SecurityCamera7 --name cs2`.
+
+## Captured against the original (2026-10-17)
+
+The recommended views were captured on the Mac under CrossOver and compared
+with Play at the same held level time, with the original's pawns, carcasses
+and movers written into Play. Details and the route's Mac changes are in
+[visual acceptance](visual-acceptance.md#on-the-mac-and-windows-with-a-mirror-sky-or-fog-2026-10-17-rows-4228-and-4229).
+
+| Store | View | MAD per window | edge recall | edge precision | Verdict at the gate's thresholds |
+| --- | --- | ---: | ---: | ---: | --- |
+| `cs0` | Island ComputerSecurity0: sky, sky, floor mirror | 0.06 / 0.02 / 0.04 | .997 / 1 / 1 | .999 / .999 / 1 | pass |
+| `dk1` | Dockyard ComputerSecurity1: sky, sky, office | 0.02 / 0.02 / 0.08 | 1 / 1 / .996 | 1 / 1 / .972 | pass |
+| `a51f` | Area 51 Final ComputerSecurity0: corridor, fog | 0.90 / 0.69 | .696 / .920 | .930 / .867 | window 2 fails precision: two Grays and a carcass placed differently, not the fog |
+| `sh3b` | Ship ComputerSecurity3: faint fog, heavy fog, break room | 0.06 / 0.89 / 0.03 | .999 / .950 / .998 | .999 / .758 / .997 | window 2 fails precision: five locker doors lit differently |
+
+Play's plan confirms the effect in each window: sky child frames in `cs0`
+windows 1 and 2, a mirror child frame in window 3, and fog maps on 176
+surfaces in `a51f` window 2.
 
 ## Views that find no camera
 

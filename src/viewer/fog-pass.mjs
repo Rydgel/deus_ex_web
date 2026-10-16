@@ -156,16 +156,23 @@ export function createFogPass({ lightAtlas, levelBrightness, hsv, displayGamma, 
       if (texels) each(surface, texels, input, missFlag);
     }
   }
+  const noteItem = (item, why) => { if (stats.moverItems.length < 48) stats.moverItems.push(`${item.mover}:${item.polygon} z${item.zone} ${why}`); };
   /** The mover draw items' maps of one frame (sim-session.mjs moverItems):
    * an item in a bFogZone zone, of a lit polygon, gets one. Each goes to a
    * mesh over the item's fragments tagged with `frame`. */
   function moverMaps(moverItems, fogZone, coords, frameLights, state, frame, each) {
     for (const item of moverItems ?? []) {
       const record = moverPolygons.get(`${item.mover}:${item.polygon}`);
-      if (!record || !item.facet || !fogZone?.(item.zone)) continue;
+      // Diagnostics: each item of the root frame, with the map's largest texel or why it has none (stats.moverItems).
+      const why = !record ? 'no lit polygon record' : !item.facet ? 'no facet' : !fogZone?.(item.zone) ? `zone ${item.zone} not bFogZone` : null;
+      if (why) { if (frame === 0) noteItem(item, why); continue; }
       const basis = moverBasis(record, item.facet);
       const input = fogInput(record, moverGrid(basis), coords, frameLights, state), missFlag = state.missFlag;
       const texels = kernel ? fogMapKernel(kernel, input) : fogMap(input);
+      if (frame === 0) {
+        const g = input.grid, far = g.base.map((v, k) => v + g.stepU[k] * record.width + g.stepV[k] * record.height), r = v => v.map(x => Math.round(x)).join(',');
+        noteItem(item, `${texels ? `max texel ${Math.max(...texels)}` : 'no texels'} lattice ${r(g.base)}..${r(far)} ${record.width}x${record.height} facet ${r(item.facet.slice(0, 3))} n ${item.facet.slice(9, 12).map(x => x.toFixed(2)).join(',')}`);
+      }
       if (!texels) continue;
       itemMesh(item, record, basis, texels, frame);
       each(item, texels, input, missFlag, basis);
@@ -254,7 +261,7 @@ export function createFogPass({ lightAtlas, levelBrightness, hsv, displayGamma, 
      * flag carried through. `framePass(frame, renderer)` puts a child
      * frame's maps in place for its pass. */
     update(view, frustum, drawn = null, { moverItems = null, fogZone = null, frames = null, nodeSurface = null } = {}) {
-      stats.drawn = 0; stats.texels = 0; stats.movers = 0; stats.moverCase = null; stats.frameMaps = 0; stats.frameCase = null;
+      stats.drawn = 0; stats.texels = 0; stats.movers = 0; stats.moverCase = null; stats.frameMaps = 0; stats.frameCase = null; stats.moverItems = [];
       childMaps = new Map(); itemsUsed = 0; foggedSurfaces = new Map();
       for (const slot of items) slot.mesh.visible = false;
       if ((!surfaces.length && !moverPolygons.size) || !lights.length) return;

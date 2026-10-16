@@ -105,6 +105,9 @@ if (hitchEnabled) globalThis.DEUS_EX_HITCHLOG = '1';
 // ?childFog=off: the child frames' passes reuse the root frame's fog maps
 // (as before each frame had its own, fog-pass.mjs framePass).
 const childFog = new URLSearchParams(location.search).get('childFog') !== 'off';
+// ?cameraFog=off|nomovers (an experiment, docs/visual-acceptance.md "Security cameras"): a ViewportWindow's frame draws no fog maps, or none
+// on its mover draw items, to attribute a camera window's difference to the fog pass.
+const cameraFog = new URLSearchParams(location.search).get('cameraFog');
 // The original's display gamma ramp maps the finished 8-bit framebuffer, HUD
 // included (D3DDrv SetGammaRamp, display-ramp.mjs): shaders draw raw colours
 // and one pass ramps the frame. ?gamma=material keeps the earlier ramp in
@@ -604,9 +607,9 @@ function viewportWorldPass(command) {
   if ((world.fog?.stats.surfaces || world.fog?.stats.moverPolygons) && !runtimeError && plan.visibility) {
     try {
       world.fog.update({ location: command.location, rotation: command.rotation }, viewportFrustum(command),
-        new Set(Array.from(plan.visibility.nodes, node => world.nodeSurface[node])),
-        { moverItems: plan.visibility.moverItems ?? null, fogZone: world.fogZone, frames: childFog ? frames : null, nodeSurface: world.nodeSurface });
-      const { drawn, texels, movers, frameMaps } = world.fog.stats; fogMaps = { drawn, texels, movers, frameMaps };
+        new Set(cameraFog === 'off' ? [] : Array.from(plan.visibility.nodes, node => world.nodeSurface[node])),
+        { moverItems: cameraFog ? null : plan.visibility.moverItems ?? null, fogZone: world.fogZone, frames: childFog && cameraFog !== 'off' ? frames : null, nodeSurface: world.nodeSurface });
+      const { drawn, texels, movers, frameMaps, moverItems } = world.fog.stats; fogMaps = { drawn, texels, movers, frameMaps, moverItems };
     } catch (error) { pauseForRuntimeError(error); }
   }
   // Each sprite record the frame draws: the camera frame's, and each child frame's.

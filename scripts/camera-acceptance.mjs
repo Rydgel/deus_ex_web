@@ -181,7 +181,9 @@ async function play() {
     const summary = value => Array.isArray(value) ? `array(${value.length})` : value && typeof value === 'object' ? Object.fromEntries(Object.entries(value).slice(0, 14).map(([k, v]) => [k, Array.isArray(v) ? `array(${v.length})` : (v && typeof v === 'object') ? Object.keys(v).slice(0, 6) : v])) : value;
     const report = {map, computer, camera: plan.camera, rects: plan.page.map(p => p.rect), planDetail: plan.viewports.map(v => Object.fromEntries(Object.entries(v).map(([k, val]) => [k, summary(val)]))), pagePasses: plan.page.map(p => Object.fromEntries(Object.entries(p).map(([k, val]) => [k, summary(val)]))), plans: plan.viewports.map(v => ({location: v.location, rotation: v.rotation, fov: v.fov, nodes: v.nodes, actors: v.actors, decals: v.decals, frames: v.frames?.map(f => f.kind)})),
       player: {location: held.location, viewRotation: held.viewRotation, region: held.region, anim: held.anim}, timeSeconds: held.timeSeconds, timeDilation: held.timeDilation,
-      runtimeError: status.runtimeError?.message ?? null, errors};
+      runtimeError: status.runtimeError?.message ?? null, errors,
+      // each window's mover draw items in the fog pass: the map's largest texel, or why the item has none (fog-pass.mjs moverMaps)
+      fogMoverItems: plan.page.map(p => p.fog?.moverItems ?? null)};
     writeFileSync(path.join(dir, `${name}-${PLAY}.json`), JSON.stringify(report, null, 1));
     console.log(JSON.stringify(report));
   } finally { await browser.close(); await server?.close(); }
@@ -280,6 +282,19 @@ async function original() {
       'cmd ghost', 'sleep 500']);
   }
   if (player('Physics:0x30:u8').Physics !== 4) throw new Error('JC does not fly after `ghost`: the console did not take the cheat lines');
+  // The Brightness line too: a dropped one leaves the Shot at the ini's 0.6, about 1.3 times darker than Play's frame at every pixel
+  // (Battery Park's first Mac capture, ratio 1.28 to 1.33). UClient's Brightness is +0x58 by the SDK's UnCamera.h (UObject 0x28, Engine,
+  // the Viewports array, DrawCycles, the bitfield, six viewport ints); WindowedViewportX (+0x40) reading the window's width checks the layout.
+  const brightness = Number(option('brightness', '0.666667'));
+  const client = () => dump('WindowsClient', 'Brightness:0x58:f', 'WindowedViewportX:0x40:u32').find(row => /^WindowsClient\d+$/.test(row.name));
+  for (let attempt = 0; attempt < 4; attempt++) {
+    const row = client();
+    if (!row || row.WindowedViewportX !== WIDTH) throw new Error(`the WindowsClient layout does not read back (${JSON.stringify(row)})`);
+    if (Math.abs(row.Brightness - brightness) < 1e-4) break;
+    console.log(`Brightness reads ${row.Brightness} (attempt ${attempt + 1}): typing it again`);
+    post([`cmd set WinDrv.WindowsClient Brightness ${option('brightness', '0.666667')}`, 'sleep 800']);
+  }
+  if (Math.abs(client().Brightness - brightness) >= 1e-4) throw new Error('the console did not take the Brightness line');
   // The computer and the cameras the screen shows: their poses are read from the live level.
   const comp = actorRow(computer, 'Location:0x114:f3', 'Rotation:0x120:i3');
   if (!comp) throw new Error(`no ${computer} in the live level`);
