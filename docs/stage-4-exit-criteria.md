@@ -155,7 +155,7 @@ A mode in brackets names how the check exercises Play (see [How the gate judges]
 | 4.3.4 | music | IT loader, sequencer and Update's music section equal Galaxy.dll | O2 | `galaxy-music-sequencer` [oracle], `galaxy-music-update` [oracle], `galaxy-music-loader` [oracle] | PASS |
 | 4.3.5 | Island, Training and the intro in Play | ambient voices, music and window sounds reach the mixer in the worker and the worklet | O3 | `galaxy-music-host` [worker], `galaxy-music-play` [node], `galaxy-effects-play` [node], `window-sound-play` [node], `window-sound-browser` [worker] | PASS |
 | 4.3.6 | 06_HongKong_WanChai_Underworld, 400 ticks: a pistol picked up, drawn and fired | the original's Galaxy PlaySound calls of the scene against Play's replay: every call's sound, emitter, volume, radius, pitch, channel id and order | O1 | `sounds 06_HongKong_WanChai_Underworld (snd1)` [worker] | FAIL |
-| 4.3.7 | audible output | the output Galaxy produces for the speakers | - | missing: the music bus delay, the ring heads' spacing, MPEG and ADPCM samples and 3D voices are unmeasured or untranslated (docs/galaxy-music.md, galaxy-audio.md) | MISSING |
+| 4.3.7 | 00_Training from its load, 30 s: Galaxy's output buffer | every byte Galaxy's timer callback copies into the DirectSound buffer, and where it lands, equals the translation's when the original's library calls and cursor positions are replayed; Play places the music bus D bytes ahead of the effects bus as the original does, D measured; speech through Galaxy's ring transport (criterion adopted 2026-10-16, [audio output scope](audio-output-scope.md) §6) | - | missing: none of the five checks is built (`galaxy-output-callback`, `-poll`, `-replay`, `-play`, `galaxy-ring-voice`); the capture of the original (§5) is not taken | MISSING |
 
 ### 4.4 Text and interfaces
 
@@ -340,6 +340,10 @@ These keep the gate neither green nor red; each names the stage or the reason.
   [Stage 5](roadmap.md#5-implement-the-full-gameplay-systems)).
 - **Load Game, Save Game and QuickSave screens** (4.4.15): Stage 6, they stop at the save-game directory (native 3013).
 - **Multiplayer screens** (4.4.16): the last priority, allowed to stay unsupported.
+- **Inside row 4.3.7** (the user's decisions of 2026-10-16, [audio output scope](audio-output-scope.md) §6 and §7): unreachable on the reference machine or
+  in the shipped data, so not claimed: hardware 3D voices (no A3D or EAX), ADPCM WAVs and the `'AS  '`, `.snd`, `SCRS` and MPEG-in-WAV loaders (none shipped:
+  `scripts/census-sound-formats.mjs`), the WinMM fallback and the non-SSE kernels. Host output, not claimed: the callback schedule (Play's fixed 882-frame
+  callbacks), D's host part (pinned as a measured input), and everything after the DirectSound buffer (dsound or the browser's ring, resampler, device and latency).
 - **Animated mesh skins and `DT_SpriteAnimOnce`** (4.2.31): no shipped class, map actor or script reaches them
   ([particles](particles.md#dt_spriteanimonce-0x10b252ac0x10b25392-restored-at-0x10b254d3), [texture animation](texture-animation.md#play)).
 - **`UseVertexFog`, Glide's fog pass, `RendMap` wireframe and particle mesh branches** (4.2.32): not used by the shipped D3D configuration or
@@ -478,8 +482,14 @@ Nothing below was fixed in this task beyond wiring existing checks; each item is
    `--pre-shot-cmd` / `--pre-shot-wait`, `--rng-pin` (and `dx-live-win.exe rngpin`), `compare --beams`, `compare --flash-base`, `--decal-state` and `play --camera-transit`, `live-acceptance.mjs --base-shot` / `--draw-stack-actor`, the gate's `base`, `playerPose`, `unfreeze`, `rngPin`, `beams`, `twin`, `baseShot`, `preShot` / `preShotWait`, `flashBase`, `decalState`, `cmds` and `cameraTransit` options.
 6. **Sound against a live scene (4.3.6) is a check and it fails; the speakers (4.3.7) are unchecked.** `live-sound-compare.mjs --gate` compares the original's `PlaySound` calls of the
    Underworld `snd1` capture with Play's replay (stored in the main `.work`, see [Stored originals](#stored-originals)): 56 of 82 ticks with calls equal, first differing tick 278 (hand-off in
-   [galaxy-audio](galaxy-audio.md#hand-off-the-sound-gate-2026-10-16)). Not measurable yet: the music bus delay and the ring heads' spacing (a loopback
-   recording of the original), MPEG and ADPCM samples, 3D voices.
+   [galaxy-audio](galaxy-audio.md#hand-off-the-sound-gate-2026-10-16)). **4.3.7 has an adopted plan (2026-10-16, [audio output scope](audio-output-scope.md))**: the user accepted all six
+   recommendations. (1) Play reproduces Galaxy's two ring heads, so music sounds about 0.96 s after the effects rendered with it, as in the original. (2) D's host part (the
+   write cursor's lead at the first callback, CrossOver's dsound on the reference machine) is measured once and pinned as a labelled host input. (3) The checks are the
+   callback under Unicorn, the tracer's read-only poll and a capture replayed through the translation; a loopback recording is optional confirmation only. (4) Speech
+   takes Galaxy's ring transport (glxStartSample's ring branch, the refill posts, the decoder thread's ring logic) with the browser's decode as its decoder: the 93 ms head
+   start, the end and the four stereo lines on two slots. (5) Excluded: hardware 3D voices, ADPCM and the other unshipped loaders, the WinMM fallback, the non-SSE kernels. (6) Play
+   keeps its fixed 882-frame callbacks as host timing; bit-equality is claimed under a replayed schedule only. Work, in order: the poll mode of `dx-live-win.exe` and its capture
+   (§5.1), the callback's translation against the oracle, the two heads in the worklet, the ring transport, then the capture mode and replay (§5.2).
 7. **The first-person weapon and weapons in mirrors (4.1.10, 4.1.12; 4.1.11 done 2026-10-16).** 4.1.11 (the player's pistol and MedKit in the lab mirror)
    passes on the Mac's captures (see the scoreboard's update). No agent is working on the other two (no branch is left, 2026-10-16). 4.1.10 stays `MISSING` until a matched capture of
    the held first-person weapon exists, 4.1.12 until one of an armed NPC in a mirror or a camera window does (the maps' mirrors miss a standing pawn's hands).

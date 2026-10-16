@@ -1,14 +1,15 @@
 # Audible output: scope for Stage 4 gate row 4.3.7 (2026-10-16)
 
 Row 4.3.7 of [stage-4-exit-criteria](stage-4-exit-criteria.md) ("audible output: the output Galaxy produces for the speakers") is
-`MISSING` and had no plan. This note is the plan, for the user to adopt or change. Nothing here is implemented. It records:
+`MISSING` and had no plan. This note is the plan. **The user adopted all six recommendations of §7 on 2026-10-16**, so §6 is the row's
+criterion, with check 5 (the speech ring transport) included. Nothing here is implemented yet. It records:
 
 1. the chain from Galaxy's mixer to the speakers, in the original and in Play, with the status of each stage (§1);
 2. what was traced in Galaxy.dll for it on 2026-10-16 (§2: read from code with capstone, **not** oracle-checked);
 3. each open part: what the original does, what Play does, and how it could be measured, with a judgement of each route (§3);
 4. the census of the shipped sound formats, ADPCM included (§4, `scripts/census-sound-formats.mjs`);
 5. the capture plan for what needs the running original (§5; nothing was run under CrossOver or Wine);
-6. a proposed criterion (§6) and the decisions left to the user (§7).
+6. the row's criterion (§6) and the user's decisions behind it (§7).
 
 Galaxy.dll is the GOTY `System/Galaxy.dll` (SHA256 `606e71d1…`, preferred base `0x10600000`), as in [galaxy-audio](galaxy-audio.md) and
 [galaxy-music](galaxy-music.md). Addresses in Engine.dll are at its preferred base `0x10300000`.
@@ -301,7 +302,7 @@ it is recorded.
 * Scene: a known effect started in the same frame as a song section change, and the offset between their onsets measured by
   cross-correlation with the sounds' own PCM. Expected: about 960 ms minus the write lead measured in §5.1.
 
-## 6. Proposed criterion for row 4.3.7
+## 6. Criterion for row 4.3.7 (adopted 2026-10-16)
 
 **Scene and claim.** "Galaxy's output buffer": for a recorded scene of the running original (00_Training from its LoadMap, 30 s, §5.2),
 every byte the timer callback copies into the DirectSound buffer, and the ring position it lands at, equals what the translated library
@@ -334,13 +335,15 @@ SSE, confirmed by §5.1).
 4. `galaxy-output-play` [node]: the worklet processor under Node with two heads at the stored D: its output equals `render_ring`'s staging
    ring read at its play position, and an effect started in the batch of a song change sounds `size − D` bytes before the song's first
    frame.
-5. If the user adopts the ring transport for speech (§7, item 4): `galaxy-ring-voice` [oracle], the ring branch, the refill posts and the
+5. `galaxy-ring-voice` [oracle] (the ring transport for speech, adopted in §7 item 4): the ring branch, the refill posts and the
    decoder thread with the MPEG decoder as a PCM leaf, against the translation: first audible sample, refills, end, the stereo pair.
 
-Until checks 1 to 4 pass the row stays `MISSING`; with the exclusions adopted its text would name the two-head placement, the ring
-transport (if adopted) and the capture as the missing parts.
+Until checks 1 to 5 pass the row stays `MISSING`; its text names the two-head placement, the ring transport and the capture as the
+missing parts.
 
-## 7. Decisions for the user
+## 7. Decisions (adopted 2026-10-16)
+
+The user accepted all six recommendations below on 2026-10-16. Each *Recommended* line is now the decision.
 
 1. **Reproduce the two ring heads in Play?** Music would sound about 0.96 s after effects rendered with it, and effects D later than now,
    as in the original. *Recommended: yes.* It is Galaxy's own code, deterministic given D, cheap (`render_ring` exists and is
