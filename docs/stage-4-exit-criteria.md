@@ -447,8 +447,8 @@ Nothing below was fixed in this task beyond wiring existing checks; each item is
    the held first-person weapon exists, 4.1.12 until one of an armed NPC in a mirror or a camera window does (the maps' mirrors miss a standing pawn's hands).
 8. **Stores and clocks.** Consolidate the originals into the main `.work` ([Stored originals](#stored-originals)) and store each frame's level time with it, so
    the gate runs anywhere without `DX_ORIGINALS`. As of 2026-10-16 the gate is bound to one machine: the Linux host holds every store but the Mac's
-   two (4.1.9, 4.1.11), so a full run on the Mac reads `NO-ORIGINAL` for nearly every O1 row. Either copy the Linux stores to the Mac (or the reverse), or run the full gate on the Linux host after
-   copying the Mac's weapon and lab files there. The names collide: the Mac's `original-cases{,-2,-3}.json` would replace the Linux ones, so keep one set per machine or rename one.
+   three (4.1.9, 4.1.11, 4.2.26: the flash frames exist only on the Mac), so a full run on the Mac reads `NO-ORIGINAL` for nearly every O1 row and one on the Linux host for 4.2.26.
+   Either copy the Linux stores to the Mac (or the reverse), or run the full gate on the Linux host after copying the Mac's weapon, lab and flash files there. The names collide: the Mac's `original-cases{,-2,-3}.json` would replace the Linux ones, so keep one set per machine or rename one.
 9. **Judgement for the user to adopt or change.** The scene list (weak reasons are marked), the thresholds and the three explained-block allowances in [How
    the gate judges](#how-the-gate-judges), the five-map sweep subset, and that `INLINE` counts against a criterion.
 
