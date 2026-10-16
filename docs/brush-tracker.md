@@ -271,6 +271,15 @@ draw item in a bFogZone zone gets its own fog map over its tracker
 surface's lattice (`surfaceFacet`), drawn over that item's fragments
 (`nodePolygon`; [volumetric fog](volumetric-fog.md), "Play").
 
+**Line checks (2026-10-16).** Every `UModel::FastLineCheck` of the game reads `XLevel->Model`, so the fragments block
+those lines as they block the renderer's: CheckHearSound's sound obstruction, MakeNoise, FastTrace, the pawn natives and
+Galaxy's occlusion in Update. sim-host.mjs gives the level's model `trackedLineNodes()` while the tracker lives (the node
+block as `bsp-occlusion.mjs` `lineNodes` reads it in place), and `fast-line-check.mjs` traverses it
+([FastLineCheck](fast-line-check.md) "Over the tracked model"; checked against Engine.dll by
+`validate-fast-line-check-tracked.mjs`). A destroyed mover's fragments stay where they were until its next rendered
+Update: the Underworld's broken BreakableGlass0 still blocks the line to its own fragments' sound in the same frame, as
+in the original (row 4.3.6's capture `sndm`).
+
 **Switch.** `?moverTracker=off` (Node: `MOVER_TRACKER=off`) keeps the
 earlier behaviour: movers stay out of the BSP, draw whole and are stamped
 from the frustum set.

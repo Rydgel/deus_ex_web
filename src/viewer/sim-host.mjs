@@ -145,6 +145,11 @@ export async function createSimHost(map, asset, assets, { randomSeed, subtitles,
       // AttachDecal and the decal block over the level model as the tracker
       // holds it (script-decal.mjs levelDecals, docs/decals.md "Movers").
       level.decalSource = specs ? trackerDecalSource(current, map.model, kernel.memory, actors, read) : null;
+      // Every UModel::FastLineCheck of the game (CheckHearSound, MakeNoise, FastTrace, the pawn natives, Galaxy's
+      // Update) reads Level->Model, which the tracker extends in place: the movers' fragments block those lines too
+      // (fast-line-check.mjs, docs/brush-tracker.md "Line checks"). Not enumerable: the model crosses no thread with it.
+      if (level.model) Object.defineProperty(level.model, 'trackedLineNodes', { configurable: true, enumerable: false, writable: true,
+        value: () => (occlusionNow?.tracker?.live() ? occlusionNow.lineNodes() : null) });
       session.setOcclusion(current, specs ? { names: movers.map(m => m.name), actors, indices: movers.map(m => index.get(m.name)) } : null);
       session.setDetail(createDetailDraw(kernel, current));
       occlusionNow = current;

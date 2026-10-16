@@ -50,3 +50,28 @@ Implementation: `src/runtime/fast-line-check.mjs`. The native sound helper
 uses this as its default obstruction query; a supplied fastLineCheck service
 can still bind an already translated native model representation. Audio
 events and the complete live level graph remain separate requirements.
+
+## Over the tracked model (2026-10-16)
+
+The model the original traverses is `XLevel->Model` (`+0x98`), the one UModel the moving brush tracker extends in
+place ([brush tracker](brush-tracker.md) "Line checks"): every mover's fragment nodes hang in it where the tracker last
+left them, and FastLineCheck's link walk reaches them like any static node. Play's checks had read the map's static
+BSP. Found by the Underworld sound capture `sndm` (row 4.3.6, [galaxy-audio](galaxy-audio.md)): the first shot broke
+BreakableGlass0 and GlassFragment9's `GlassBreakLarge` (volume 2.0) reached Galaxy at 0.7 in the original, CheckHearSound's
+blocked branch (x 0.35, `0x103e1bf3..0x103e1c13`), and at 2.0 in Play. On the static nodes both Engine.dll's
+FastLineCheck under Unicorn and Play's say the line from the player to the fragment is clear, at control words 0x037f,
+0x027f and 0x007f alike; on the tracked model both say blocked: the pane's fragments still stand between until the next
+rendered frame updates the destroyed mover.
+
+`fastLineCheck(model, first, second)` now reads the tracker's node block in place when the model carries
+`trackedLineNodes()` (sim-host.mjs sets it on the level's model while the tracker lives; `bsp-occlusion.mjs` `lineNodes`:
+the kernel's memory, the block, the node count the tracker holds and RootOutside, nodes in the original 64-byte FBspNode
+layout). The traversal and its arithmetic are unchanged. Every caller follows: CheckHearSound, MakeNoise, FastTrace (native
+548), the pawn natives (navigation, perception), the iterators and Galaxy's occlusion in Update.
+
+`scripts/validate-fast-line-check-tracked.mjs` builds the tracker of 06_HongKong_WanChai_Underworld, 00_Training and
+01_NYC_UNATCOIsland as sim-host does, and runs Engine.dll's FastLineCheck (`0x103f3280`,
+`scripts/native-fast-line-check-oracle.py` over the NativeCollision harness) on every node of the tracked model and of
+the static one: the capture's line (blocked, as the original's attenuation shows), four lines through each mover in random
+directions and 400 random lines between placements per map. 1,493 lines are equal on both models; 26 are blocked only by a
+mover's fragments.
