@@ -1952,8 +1952,10 @@ Stored: `.work/live-acceptance/04_NYC_Street/{original-trace-vents2.jsonl (+ .st
 Taken on the Mac under CrossOver at Brightness 2/3 (the Shot is the framebuffer), Training's corridor camera `-100,840,30:0,0,0`, three captures each with its own
 clock: `flash0` without the flash and two states held through `ConstantGlowScale`/`ConstantGlowFog` (`--pre-shot-cmd`, `--pre-shot-wait 5000`, `--player-state` for
 the read-back). `compare --flash-base flash0` reads each program's flash as a map of levels from its own frame without it; the maps are equal at all 369 (channel,
-level) pairs in both states. The recipe, the fog cutoff that keeps the first state's fog at 0 in both programs, and the void band where Play shows its
-canvas clear colour are in [screen flash](screen-flash.md#against-the-original-2026-10-16-gate-row-4226).
+level) pairs in both states. The recipe and the fog cutoff that keeps the first state's fog at 0 in both programs are in
+[screen flash](screen-flash.md#against-the-original-2026-10-16-gate-row-4226). `flash0` also found that Play showed its page colour where nothing is drawn,
+where the original clears every frame to black; that is fixed ([the screen clear](screen-flash.md#the-screen-clear-fixed-2026-10-16)), and `flash0` now
+reads mean abs. difference 0.00 against the original at the identity ramp.
 
 ```bash
 scripts/original-views.sh 00_Training --view flash0:-100,840,30:0,0,0 --brightness 0.666667 --player-state

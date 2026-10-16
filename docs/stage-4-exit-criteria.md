@@ -44,9 +44,11 @@ back from the running game. *flashA* is the recipe's scale -0.5 and fog (0.3,0.1
 fog x 10 x 0.005, so that fog never rises, in either program (measured: scale 0.5, fog 0): the multiply branch, alpha 128. *flashB* is fog (0.6,0.45,0.4) and no scale: the additive
 branch, alpha 255, fog bytes (153,115,102), saturating. The check judges the flash as a per-channel map of levels (each program's frame with the flash against its own frame without
 it): 369 of 369 (channel, level) pairs equal in both states, no sample off its level's map in either program (a Play that draws no flash differs at 363), and the frames
-(edges .985/.999 and .998/.999). flashA's 32 outlier blocks are all in the frame without the flash too: the band above the corridor, where Play draws nothing and shows its canvas
-clear colour (`#06101b` in linear light, raw (0,1,3); 242,417 pixels, 242,415 of them black in the original), a frame-clear difference outside this row, open. The blend's
-rounding is measured against the original under CrossOver on the M2, not against a Windows D3D driver.
+(edges .985/.999 and .998/.999). The blend's rounding is measured against the original under CrossOver on the M2, not against a Windows D3D driver.
+The frame without the flash found one divergence of Play, fixed the same day ([the screen clear](screen-flash.md#the-screen-clear-fixed-2026-10-16)). Where nothing is drawn,
+Play showed its page colour (`#06101b` in linear light, raw (0,1,3), 242,417 pixels above the corridor, 32 outlier blocks); the original clears every frame to black
+(`UGameEngine::Draw` always sets `LOCKR_ClearScreen` with `ScreenClear` (0,0,0,0), and D3DDrv's `Lock` clears the target to it). A Play frame now clears to black:
+`flash0` reads mean abs. difference 0.00 and 0 outlier blocks, and the row judges `flash0` as a frame too (rerun: flash0 1/.999/0, flashA .999/.999/0, flashB 1/.999/0).
 
 **Current state, counted from the rows below (2026-10-16, not a gate run):** 76 criteria, 6 excluded (4.5.6 joined the excluded rows and 4.1.11 was added after the first run), 70 gating; **60 PASS, 3 FAIL, 7 MISSING**.
 Only the full gate run (`node scripts/validate-stage4-acceptance.mjs`) is the gate; the per-row statuses come from the subset runs named in the updates above.

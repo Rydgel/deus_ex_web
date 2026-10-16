@@ -169,7 +169,8 @@ const FLASH_BASE = 'flash0:-100,840,30:0,0,0';
 // `extra`: `base` names the effect of a contribution check ('fog': the stored <view>-base frames are the original without it, Play's own frame
 // without it comes from `--base fog`); `playerPose`: Play writes the player's animation the original measured (<view>-state.json); `preShot` and
 // `preShotWait`: console lines both programs run at the camera before the shot and the wait after them (`--pre-shot-cmd`, `--pre-shot-wait`);
-// `flashBase`: the view without the flash, played in a run of its own (its own clock), and the flash judged as a map of levels from it.
+// `flashBase`: the view without the flash, played in a run of its own (its own clock) and judged as a frame too, and the flash judged as a map of
+// levels from it.
 const effectViews = (key, extra = {}) => FRAMES({maps: [EFFECT_VIEWS[key].map], explicit: EFFECT_VIEWS[key].views, flat: {}, ...extra});
 
 // Pilots: the original's per-tick trace of the load, replayed in Play (docs/visual-acceptance.md "Live scenes").
@@ -596,20 +597,17 @@ async function judgeFrames(task, add, fail, result) {
   const report = readJson(path.join(root, '.work/acceptance/report.json'));
   const problems = [];
   const lines = [];
-  for (const map of maps) for (const name of names) {
+  // With a flash base, the frame without the flash is judged as a frame too (the screen clear and the scene the flash is mapped from).
+  for (const map of maps) for (const name of baseName ? [baseName, ...names] : names) {
     const m = report[map]?.[name];
     if (!m) { problems.push(`${map} ${name}: no comparison`); continue; }
     const isFlat = FLAT_VIEWS.has(`${map}:${name}`);
-    // With a flash base, an outlier block the frame without the flash has too (same programs, same camera) is the scene's, judged by the frame rows,
-    // not the flash's: it is reported and allowed here.
-    const baseBlocks = baseName ? new Set((report[map]?.[baseName]?.outlierBlocks ?? []).map(([x, y]) => `${x}:${y}`)) : new Set();
-    const sceneBlocks = m.outlierBlocks.filter(([x, y]) => baseBlocks.has(`${x}:${y}`)).length;
-    const off = frameProblems(m, isFlat, (EXPLAINED_BLOCKS[`${map}:${name}`] ?? 0) + sceneBlocks);
+    const off = frameProblems(m, isFlat, EXPLAINED_BLOCKS[`${map}:${name}`] ?? 0);
     if (task.frames.base) off.push(...contributionProblems(m));
     if (task.frames.beams) off.push(...beamProblems(m));
-    if (task.frames.flashBase) off.push(...flashProblems(m));
+    if (task.frames.flashBase && name !== baseName) off.push(...flashProblems(m));
     if (off.length) problems.push(`${map} ${name}: ${off.join('; ')}`);
-    lines.push(`${name} ${m.edgeRecall}/${m.edgePrecision}/${m.outlierBlocks.length}${sceneBlocks ? ` (${sceneBlocks} also without the flash)` : ''}${m.contribution ? ` haze r ${m.contribution.correlation}` : ''}${m.beams ? ` beams ${m.beams.coverage}/${m.beams.energy}/${m.beams.yRms}` : ''}${m.flashMap ? ` flash ${m.flashMap.levels - m.flashMap.differing}/${m.flashMap.levels} levels equal, fog (${m.flashMap.zero})` : ''}`);
+    lines.push(`${name} ${m.edgeRecall}/${m.edgePrecision}/${m.outlierBlocks.length}${m.contribution ? ` haze r ${m.contribution.correlation}` : ''}${m.beams ? ` beams ${m.beams.coverage}/${m.beams.energy}/${m.beams.yRms}` : ''}${m.flashMap ? ` flash ${m.flashMap.levels - m.flashMap.differing}/${m.flashMap.levels} levels equal, fog (${m.flashMap.zero})` : ''}`);
   }
   if (problems.length) return fail(problems.join(' | '));
   return {...result, status: 'PASS', detail: `${maps.length} map(s), ${lines.length} view(s): recall/precision/outliers ${lines.slice(0, 5).join(' ')}${lines.length > 5 ? ' ...' : ''}`};

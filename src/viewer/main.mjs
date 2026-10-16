@@ -115,7 +115,7 @@ const displayRamp = rampPerFragment ? null : createDisplayRamp();
 let crtEnabled = false, crtMaterialRamp = null, crtShortcutHeld = false;
 let crtShader = 'aperture', crtCompare = false;
 let crtToggleVersion = 0;
-const canvasClear = new THREE.Color('#06101b');
+const canvasClear = new THREE.Color('#06101b'), screenClear = new THREE.Color(0, 0, 0);
 // ?gpuTimer=1: one EXT_disjoint_timer_query_webgl2 TIME_ELAPSED query around
 // the frame's GL work, read back frames later (docs/play-frame-cost.md).
 // Measurement only; scripts/profile-play-browser.mjs --gpu sets it.
@@ -1923,8 +1923,11 @@ function drawFrame(snap, time) {
     frames, rect: frames ? (renderRect ?? null) : null, framePass, skyIn: frames ? drawSkyFrame : null, updateActors, plan: stampFrame?.plan ?? null });
   phase('mirrors');
   let calls = drawCalls(); framePhases.mirrorCalls += calls;
-  // The ramp pass maps the raw clear colour back to the UI colour.
-  renderer.setClearColor(displayRamp ? displayRamp.rawClear(canvasClear, world.displayGamma.value) : canvasClear, 1); renderer.clear();
+  // A Play frame clears as the original's: UGameEngine::Draw locks the viewport with LOCKR_ClearScreen on every frame (Engine `or al, 1` at
+  // 0x1038f557) and ScreenClear (0,0,0,0) (0x1038f564..0x1038f56c), and D3DDrv's Lock (0x10002fb0) clears target and Z (flags 3) to that
+  // colour, each component v * 256 - 0.5 rounded and clamped: black, which the ramp keeps (docs/screen-flash.md "The screen clear"). An Inspect
+  // frame keeps the page's colour; the ramp pass maps the raw clear colour back to it.
+  renderer.setClearColor(playing ? screenClear : displayRamp ? displayRamp.rawClear(canvasClear, world.displayGamma.value) : canvasClear, 1); renderer.clear();
   const clipped = drawWorld && renderRect && (renderRect.x || renderRect.y
     || renderRect.width !== renderer.domElement.width || renderRect.height !== renderer.domElement.height);
   if (clipped) {

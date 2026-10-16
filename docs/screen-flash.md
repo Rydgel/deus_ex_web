@@ -126,21 +126,38 @@ Play's (`play`, worker mode, `?antialias=0&detailTextures=0`) at the same camera
 
 | State | Read back from the original | Fog bytes, alpha | The original's map (levels 0 to 154 held) | Equal (channel, level) | Stray samples, original / Play | Frame: edges, outlier blocks |
 | --- | --- | --- | --- | ---: | ---: | --- |
-| `flash0`: none (50.800 s) | scale 1, fog 0 | none | - | - | - | .998 / .999, 32 (below) |
-| `flashA`: `ConstantGlowScale -0.5`, `ConstantGlowFog (0.3,0.1,0)` (51.001 s) | scale 0.500000596, fog 0 | (0,0,0), 128 | v to round(v x 128/255): 1, 2 to 1, 3 to 2, ..., 152 to 76, 153 to 77 | 369 / 369 | 0 / 0 | .985 / .999, 32, all also in `flash0` |
-| `flashB`: `ConstantGlowScale 0`, `ConstantGlowFog (0.6,0.45,0.4)` (50.427 s) | scale 1, fog (0.599999428, 0.44999969, 0.399999738) | (153,115,102), 255 | v to min(255, fog + v); 54, 4 and 2 saturated pixels | 369 / 369 | 0 / 0 | .998 / .999, 0 |
+| `flash0`: none (50.800 s) | scale 1, fog 0 | none | - | - | - | 1 / .999, 0 (32 before [the screen clear](#the-screen-clear-fixed-2026-10-16)) |
+| `flashA`: `ConstantGlowScale -0.5`, `ConstantGlowFog (0.3,0.1,0)` (51.001 s) | scale 0.500000596, fog 0 | (0,0,0), 128 | v to round(v x 128/255): 1, 2 to 1, 3 to 2, ..., 152 to 76, 153 to 77 | 369 / 369 | 0 / 0 | .999 / .999, 0 (32 before the screen clear) |
+| `flashB`: `ConstantGlowScale 0`, `ConstantGlowFog (0.6,0.45,0.4)` (50.427 s) | scale 1, fog (0.599999428, 0.44999969, 0.399999738) | (153,115,102), 255 | v to min(255, fog + v); 54, 4 and 2 saturated pixels | 369 / 369 | 0 / 0 | 1 / .999, 0 |
 
 A Play frame without the flash against `flashA` differs at 363 of the 369 levels. The gate (`frames 00_Training [flashA]`, `[flashB]`, `flashBase`) plays
-`flash0` once and each state in its own run, and fails on any differing level or stray sample; an outlier block of a state's frame is allowed only where
-`flash0`'s comparison has it too (the scene's, judged by the frame rows).
+`flash0` once and each state in its own run, judges `flash0` and the state as frames, and fails on any differing level or stray sample.
 
 What this does not cover: levels above the frame's (154 here), the DrunkFX HUD background (`ShowHud False` hides the HUD; it is another draw), a zone's
 `ViewFog`/`ViewFlash` as the source (the goal is the same sum, but the ghost camera's `set Location` does not move `HeadRegion`), a flash in motion (a
 damage flash decays over ticks) and a Windows D3D driver: both blends ran on the M2, the original's under CrossOver.
 
-Found on the way, open (not the flash): the band above the corridor (rows 0 to about 195) where Play draws nothing and shows its canvas clear colour,
-`canvasClear` `#06101b` (`main.mjs`), which three.js takes to linear light and `rawClear` writes raw: (0,1,3) on 242,417 pixels, 242,415 of them black
-in the original. Whether the original clears to black there (D3DDrv's `Lock` with a clear colour) or draws a black surface was not measured.
+### The screen clear (fixed 2026-10-16)
+
+Found by `flash0`: in the band above the corridor (rows 0 to about 195) Play drew nothing and showed the page's canvas colour, `canvasClear` `#06101b`
+(`main.mjs`), which three.js takes to linear light and `rawClear` writes raw: (0,1,3) on 242,417 pixels, 242,415 of them black in the original. That was
+32 outlier blocks in every frame of that view at Brightness 2/3. What the original does there, from the retail binaries (capstone over the GOTY
+`Engine.dll` and `D3DDrv.dll`):
+
+* `UGameEngine::Draw` locks the viewport once per frame, `UViewport::Lock(FlashScale, FlashFog, ScreenClear, LockFlags, HitData, HitSize)` through vslot
+  `0x60` at `0x1038f59a`. `ScreenClear` is built in place by Core's `FPlane::FPlane(float,float,float,float)` (`??0FPlane@@QAE@MMMM@Z`, import
+  `0x10599b7c`) from four pushed zeros (`0x1038f564..0x1038f56c`). `LockFlags` is `[ebp-0x44] | 1` (`or al, 1` at `0x1038f557`), where `[ebp-0x44]` is 0
+  or 1 from the result of the call at `0x1038f266` (vslot `0x54`, not identified; it cannot clear the bit). So bit 0, `LOCKR_ClearScreen` (= 1 in the SDK's `UnRenDev.h`), is set on every frame.
+* `UD3DRenderDevice::Lock` (thunk `0x100010e1` to `0x10002fb0`) stores `LockFlags` at `this+0xa68`, `FlashScale` at `+0xa48` and `FlashFog` at `+0xa58`.
+  It then calls `IDirect3DDevice7::Clear(0, NULL, flags, colour, 1.0f, 0)` (vslot `0x28`, `0x100031c5`) with flags 3 (target and Z) when `+0xa68` bit 0
+  is set, 2 (Z only) otherwise (`0x100030b5..0x100030ca`). The colour is `ScreenClear`, each component `v * 256.0f - 0.5f` and `fistp`, clamped to
+  [0, 255] (constants `0x10018554` = 256.0 and `0x1002a898` = 0.5), packed `R<<16 | G<<8 | B`: 0x000000.
+
+So every pixel the frame leaves undrawn is black, before the ramp, which keeps 0 at 0. Play's frames now clear as the device does: a Play frame clears
+to black, and an Inspect frame keeps the page's colour (`drawFrame` in `main.mjs`, by the frame's `playing`). `flash0` then reads mean absolute
+difference 0.00, the three channel means equal, 0 outlier blocks. 10,898 pixels (1.2%) still differ, mostly by one level and at most by 22: the scene,
+not the clear. The gate judges `flash0` as a frame, so the clear is held by row 4.2.26. Not checked here: child frames (mirrors, camera windows), which
+clear in their own passes.
 
 ## Iterator 312 (`VisibleCollidingActors`): done 2026-10-15
 
