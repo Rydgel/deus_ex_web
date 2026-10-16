@@ -6,7 +6,7 @@
  * and points the view at it, so the page's own frob input reaches it.
  * Returns the player's FrobTarget, Location and ViewRotation and the last
  * HUD frame's ViewportWindow world frames (sim-session.mjs viewportState). */
-export function terminalProbe(game, session, { front = null, placeCamera = null, placePlayer = null, playerPose = null, cameraName = 'SecurityCamera5', iterators = false, placeEmitters = null } = {}) {
+export function terminalProbe(game, session, { front = null, placeCamera = null, placePlayer = null, playerPose = null, pawnPoses = null, cameraName = 'SecurityCamera5', iterators = false, placeEmitters = null } = {}) {
   const runtime = game.doors.scriptRuntime.runtime, player = game.player.collisionActor;
   const read = (actor, name) => runtime.readNamed(actor, name);
   let placed = null;
@@ -34,6 +34,25 @@ export function terminalProbe(game, session, { front = null, placeCamera = null,
     if (playerPose.rotation) runtime.writeNamed(player, 'Rotation', playerPose.rotation);
     if (playerPose.viewRotation) runtime.writeNamed(player, 'ViewRotation', playerPose.viewRotation);
     for (const [name, value] of Object.entries(playerPose.anim ?? {})) runtime.writeNamed(player, name, value);
+  }
+  // `pawnPoses` [{name, location, rotation, hidden, anim}]: the level's pawns as another capture measured them (the original's held
+  // level, scripts/camera-acceptance.mjs `original --pawns`): where each stands, which way it faces, whether it is hidden and the
+  // animation fields its mesh's pose follows. A pawn's route is each program's own, so its pose at the hold is an input of the held
+  // state, like the player's and the movers'. The held level is players-only, so a pawn written here does not tick on; its
+  // AnimRate is written as measured. Returns the names written and the ones this level lacks.
+  let pawns = null;
+  if (pawnPoses) {
+    const byName = new Map(runtime.levelFor(player).actors.filter(Boolean).map(actor => [actor.name, actor]));
+    pawns = { written: [], missing: [] };
+    for (const pose of pawnPoses) {
+      const actor = byName.get(pose.name);
+      if (!actor) { pawns.missing.push(pose.name); continue; }
+      runtime.farMoveActor(actor, pose.location, 0, 1);
+      if (pose.rotation) runtime.writeNamed(actor, 'Rotation', pose.rotation);
+      if (pose.hidden !== undefined) runtime.writeNamed(actor, 'bHidden', Boolean(pose.hidden));
+      for (const [name, value] of Object.entries(pose.anim ?? {})) runtime.writeNamed(actor, name, value);
+      pawns.written.push(pose.name);
+    }
   }
   // `placeEmitters` {location, rotation, count}: the first `count` LaserTriggers (the doorway beams: each
   // trigger's LaserEmitter follows it) and their beam proxies stand at the location pointing along the
@@ -75,7 +94,7 @@ export function terminalProbe(game, session, { front = null, placeCamera = null,
         cone.push({ name: actor.name, hidden: Boolean(read(actor, 'bHidden')), distance: Math.round(len), lastRenderTime: read(actor, 'LastRenderTime') });
     }
   }
-  return { placed, cone, camera: cam ? { location: [...read(cam, 'Location')], rotation: [...read(cam, 'Rotation')] } : null, frobTarget: read(player, 'FrobTarget')?.name ?? null, location: [...read(player, 'Location')],
+  return { placed, cone, pawns, camera: cam ? { location: [...read(cam, 'Location')], rotation: [...read(cam, 'Rotation')] } : null, frobTarget: read(player, 'FrobTarget')?.name ?? null, location: [...read(player, 'Location')],
     viewRotation: [...read(player, 'ViewRotation')], viewports: session.viewportState(),
     // The iterator state of the same frame (iteratorState), for the camera frame's items.
     iterators: iterators ? session.iteratorState() : null };

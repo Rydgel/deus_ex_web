@@ -5,6 +5,7 @@
 //
 //   node scripts/camera-acceptance.mjs play     --map M --computer C --user U --password P --name n [--state state.json]
 //   node scripts/camera-acceptance.mjs original --map M --computer C --user U --password P --name n   (see original())
+//     [--cameras A,B,C] [--pawns] [--fly-stop 140] [--fly-tap 70] [--hold-seconds 8] [--after-login-click X,Y]
 //
 // `original` writes `.work/acceptance/<map>/<name>-original.png` and
 // `<name>-state.json` (the level time, the camera actor's and the player's
@@ -34,8 +35,29 @@ const dir = path.join(out, map);
 mkdirSync(dir, {recursive: true});
 const statePath = option('state', path.join(dir, `${name}-state.json`));
 const HELD_DILATION = 0.001;
+// --after-login-click X,Y: a click on the screen after the login, in both programs (the same 1280x720 screen): a terminal with special
+// options (Area 51 Final's ComputerSecurity0) opens on ComputerScreenSpecialOptions, whose Security button (520,430) shows the cameras.
+const afterLoginClick = option('after-login-click', null)?.split(',').map(Number) ?? null;
 // Play's files are `<name>-<suffix>.png/.json` (--suffix, default play): an experiment's frame beside the baseline's.
 const PLAY = option('suffix', 'play');
+
+/** The map's placed pawns and carcasses, from its data: every actor whose class is a Pawn and not a PlayerPawn (Engine.Camera viewpoints
+ * and the player classes are PlayerPawns), or a Carcass (a placed body falls and settles in each program's own way: Area 51 Final's
+ * ScientistMaleCarcass2 lies in Play's radiation-camera view and not in the original's), as {name, className}. */
+async function mapPawns(mapName) {
+  const {readdir, readFile} = await import('node:fs/promises');
+  const {AssetStore} = await import('../src/unreal/assets.mjs'), {decodeMap} = await import('../src/unreal/map.mjs');
+  const {ClassDefaults} = await import('../src/unreal/classes.mjs'), {gameDirectory} = await import('./game-directory.mjs');
+  const game = gameDirectory(), files = [];
+  for (const d of ['Maps', 'System']) for (const n of await readdir(path.join(game, d))) files.push({path: `${d}/${n}`, read: () => readFile(path.join(game, d, n))});
+  const assets = new AssetStore(files), defaults = new ClassDefaults(assets), asset = await assets.get(mapName), out = [];
+  for (const actor of decodeMap(asset.bytes).actors) {
+    let lineage; try { lineage = await defaults.lineage(asset, asset.pkg.exports[actor.index - 1].classIndex); } catch { continue; }
+    if ((lineage.includes('engine.pawn') && !lineage.includes('engine.playerpawn')) || lineage.includes('engine.carcass'))
+      out.push({name: actor.name, className: actor.className});
+  }
+  return out;
+}
 
 async function play() {
   const {chromium} = await import('@playwright/test');
@@ -90,6 +112,11 @@ async function play() {
     if (await top() !== 'deusex.networkterminalsecurity') throw new Error(`the right click did not frob ${computer} (top window ${await top()})`);
     await page.keyboard.type(user); await page.keyboard.press('Tab');
     await page.keyboard.type(password); await page.keyboard.press('Enter');
+    if (afterLoginClick) {
+      for (let i = 0; i < 6; i++) await settled();
+      await page.mouse.click(afterLoginClick[0], afterLoginClick[1]);
+      await page.mouse.move(1270, 710);
+    }
     let plan = null;
     for (let i = 0; i < 30; i++) { await settled(); plan = await probe({}); if (plan.viewports.length && plan.page.length) break; }
     if (!plan?.viewports.length) throw new Error('no camera window after the login');
@@ -120,6 +147,11 @@ async function play() {
       // The original's level is held, JC's animation with it; Play's player keeps ticking in a players-only level and the page's frames advance his
       // animation whatever the level's dilation: the frame is written with a rate of 0 so the pose drawn is the measured one.
       anim: {...state.player.anim, AnimRate: 0}}});
+    // The level's pawns where the original's stood, facing and posed as they were (`original --pawns`): an input of the held state.
+    if (state?.pawns?.length && option('pawns', 'on') !== 'off') {
+      const result = (await probe({pawnPoses: state.pawns})).pawns;
+      console.log(`pawns written from the original's state: ${result.written.length}${result.missing.length ? `; not in Play's level: ${result.missing.join(' ')}` : ''}`);
+    }
     // The level's movers where the original's were (`original` reads them at the hold). A door an NPC opened stands open in the original's frame and
     // the NPCs' routes are each program's own, so a mover's pose is an input of the held state like the cameras' and the player's. Only the movers
     // whose Rotation or Location differ are written (Rotation through the actor, Location through the collision model: view-probe's moverProbe).
@@ -239,6 +271,15 @@ async function original() {
     // A computer inside an enemy's rooms (Island's holding cell: a turret, guards): JC takes no damage (TakeDamage returns for
     // ReducedDamageType 'All'), as in Play's run to the same level time; nothing else about him changes.
     'cmd set DeusEx.JCDentonMale ReducedDamageType All', 'sleep 300', 'cmd ghost', 'sleep 300']);
+  // A loaded Mac's console drops typed characters (docs/visual-acceptance.md): a dropped `bCheatsEnabled` or `ghost` line leaves JC walking
+  // (Physics 1), and the flight then stalls against the first wall. Read Physics back and type the cheat lines again until JC flies
+  // (PHYS_Flying, 4).
+  for (let attempt = 0; attempt < 4 && player('Physics:0x30:u8').Physics !== 4; attempt++) {
+    console.log(`ghost not taken (attempt ${attempt + 1}): typing the cheat lines again`);
+    post(['sleep 500', 'cmd set DeusEx.JCDentonMale bCheatsEnabled True', 'sleep 400', 'cmd set DeusEx.JCDentonMale ReducedDamageType All', 'sleep 400',
+      'cmd ghost', 'sleep 500']);
+  }
+  if (player('Physics:0x30:u8').Physics !== 4) throw new Error('JC does not fly after `ghost`: the console did not take the cheat lines');
   // The computer and the cameras the screen shows: their poses are read from the live level.
   const comp = actorRow(computer, 'Location:0x114:f3', 'Rotation:0x120:i3');
   if (!comp) throw new Error(`no ${computer} in the live level`);
@@ -249,11 +290,17 @@ async function original() {
   // after a quarter second of start-up), measure, repeat.
   // The ghost coasts after a key is released: a tap of 70 ms moves it about 130 units, so it flies to within 140 units of the point
   // (stopping when a hop no longer gets nearer) and the last of the way is walked.
+  // --fly-stop: where the flight hands over to the walk. A computer on a raised platform (Area 51 Final's ComputerSecurity0) needs the
+  // flight to end above the platform: `walk` drops JC to the floor below him, and he cannot climb back.
+  // --fly-tap: the shortest held W of a hop (ms), for a last approach shorter than a 70 ms tap's coast.
+  const flyStop = Number(option('fly-stop', 140)), flyTap = Number(option('fly-tap', 70));
+  // Under CrossOver the held keys move the ghost only once the window has the Wine focus: take it before the first hop.
+  post(['focus', 'sleep 300']);
   let still = 0, lastDistance = Infinity, best = Infinity;
   for (let hop = 0; hop < 40; hop++) {
     const at = player('Location:0x114:f3').Location, d = stand.map((v, i) => v - at[i]), distance = Math.hypot(...d);
     console.log(`hop ${hop}: at ${at.map(v => v.toFixed(1))} distance ${distance.toFixed(1)}`);
-    if (distance < 140 || (distance > best + 20 && best < 400)) break;
+    if (distance < flyStop || (distance > best + 20 && best < 400)) break;
     best = Math.min(best, distance);
     // A held key moves the ghost only while the game's window is the one Wine gives the input to (the compositor can tile it
     // again, a conversation can restrict the input): after two hops that moved nothing, place the window again and take the focus.
@@ -264,7 +311,7 @@ async function original() {
       post(['focus', 'sleep 300']);
     }
     const [pitch, yaw] = aim(at, stand);
-    const hold = Math.max(70, Math.min(2400, Math.round(((distance - 60) * 0.8 / 800) * 1000)));
+    const hold = Math.max(flyTap, Math.min(2400, Math.round(((distance - 60) * 0.8 / 800) * 1000)));
     post([`cmd set DeusEx.JCDentonMale ViewRotation (Pitch=${pitch},Yaw=${yaw},Roll=0)`, 'sleep 450', `shold W ${hold}`, 'sleep 350']);
   }
   post(['cmd walk', 'sleep 2500']);
@@ -303,7 +350,8 @@ async function original() {
   const finished = new Promise(resolve => child.on('exit', resolve));
   for (let i = 0; i < 100 && !/rand state block/.test(log); i++) await sleep(100);
   // The frob, the login (typed on the keyboard), then wait for the hold.
-  post(['rclick 640 360', 'sleep 2800', `type ${user}`, 'sleep 300', 'key Tab', 'sleep 300', `type ${password}`, 'sleep 300', 'key Enter', 'sleep 1500']);
+  post(['rclick 640 360', 'sleep 2800', `type ${user}`, 'sleep 300', 'key Tab', 'sleep 300', `type ${password}`, 'sleep 300', 'key Enter', 'sleep 1500',
+    ...(afterLoginClick ? [`click ${afterLoginClick.join(' ')}`, 'sleep 1500', 'move 1270 710', 'sleep 300'] : [])]);
   for (let i = 0; i < 300 && !/paused after/.test(log); i++) await sleep(100);
   if (!/paused after/.test(log)) throw new Error(`the level was not held:\n${log}`);
   console.log(log.trim().split('\n').pop().slice(0, 140));
@@ -338,8 +386,31 @@ async function original() {
   const movers = dump('DeusExMover', 'Location:0x114:f3', 'Rotation:0x120:i3', 'Physics:0x30:u8', 'Interp:0x1ec:bit:0x80', 'PhysAlpha:0x214:f', 'PhysRate:0x218:f',
     'KeyNum:0x377:u8', 'PrevKeyNum:0x378:u8', 'NumKeys:0x379:u8', 'Tag:0xb0:name', 'State:0xc:obj').filter(row => /^DeusExMover\d+$/.test(row.name))
     .map(({class: cls, ...row}) => row);
+  // --pawns: the level's placed pawns at the hold (an NPC's route is each program's own: Ship's window 2 has a sailor in the doorway in Play
+  // and not in the original). Their names come from the map's data (every actor whose class is a Pawn and not a PlayerPawn); dump-actor-win
+  // matches a name substring, so the pawns are read one name prefix at a time (the name without its number) and kept by exact name. Location, Rotation, Physics, bHidden
+  // (+0x28 bit 0x2) and the animation fields GetFrame reads, at the linked offsets the player's are read with.
+  let pawns;
+  if (process.argv.includes('--pawns')) {
+    const placed = await mapPawns(map), names = new Set(placed.map(p => p.name));
+    const anims = ['AnimSequence:0x54:name', 'AnimFrame:0x58:f', 'AnimRate:0x5c:f', 'TweenRate:0x60:f', 'AnimLast:0x220:f', 'AnimMinRate:0x224:f', 'OldAnimRate:0x228:f',
+      'B0:0x68:name', 'B1:0x6c:name', 'B2:0x70:name', 'B3:0x74:name', 'F0:0x78:f', 'F1:0x7c:f', 'F2:0x80:f', 'F3:0x84:f', 'R0:0x88:f', 'R1:0x8c:f', 'R2:0x90:f', 'R3:0x94:f',
+      'T0:0x98:f', 'T1:0x9c:f', 'T2:0xa0:f', 'T3:0xa4:f', 'L0:0x23c:f', 'L1:0x240:f', 'L2:0x244:f', 'L3:0x248:f', 'M0:0x24c:f', 'M1:0x250:f', 'M2:0x254:f', 'M3:0x258:f'];
+    const rows = new Map();
+    // by name prefix: an actor's name is its class's at placement, but a class's children keep the parent's prefix (SecurityBot0 is a SecurityBot2)
+    for (const cls of new Set(placed.map(p => p.name.replace(/\d+$/, '')))) {
+      for (const row of dump(cls, 'Location:0x114:f3', 'Rotation:0x120:i3', 'Physics:0x30:u8', 'Hidden:0x28:bit:0x2', ...anims))
+        if (names.has(row.name) && Array.isArray(row.Location)) rows.set(row.name, row);
+    }
+    pawns = [...rows.values()].map(r => ({name: r.name, location: r.Location, rotation: r.Rotation, physics: r.Physics, hidden: Boolean(r.Hidden),
+      anim: {AnimSequence: r.AnimSequence, AnimFrame: r.AnimFrame, AnimRate: r.AnimRate, TweenRate: r.TweenRate, AnimLast: r.AnimLast, AnimMinRate: r.AnimMinRate,
+        OldAnimRate: r.OldAnimRate, BlendAnimSequence: [0, 1, 2, 3].map(k => r[`B${k}`]), BlendAnimFrame: [0, 1, 2, 3].map(k => r[`F${k}`]),
+        BlendAnimRate: [0, 1, 2, 3].map(k => r[`R${k}`]), BlendTweenRate: [0, 1, 2, 3].map(k => r[`T${k}`]), BlendAnimLast: [0, 1, 2, 3].map(k => r[`L${k}`]),
+        BlendAnimMinRate: [0, 1, 2, 3].map(k => r[`M${k}`])}}));
+    console.log(`pawns at the hold: ${pawns.length} of the map's ${placed.length} (absent: ${placed.filter(p => !rows.has(p.name)).map(p => p.name).join(' ') || 'none'})`);
+  }
   const camState = cameras.map(cam => ({name: cam, location: last.actors[cam].Location, rotation: last.actors[cam].Rotation}));
-  const state = {map, computer, user, timeSeconds: time.LevelTime, tsTrace: last.tsIn, dilation: time.Dilation, tick: last.tick, cameras: camState, movers,
+  const state = {map, computer, user, timeSeconds: time.LevelTime, tsTrace: last.tsIn, dilation: time.Dilation, tick: last.tick, cameras: camState, movers, ...(pawns ? {pawns} : {}),
     player: {location: jcState.Location, rotation: jcState.Rotation, viewRotation: jcState.ViewRotation, physics: jcState.Physics, anim}};
   writeFileSync(statePath, JSON.stringify(state, null, 1));
   console.log(taken ? `frame ${taken}` : 'NO FRAME', JSON.stringify(state));
