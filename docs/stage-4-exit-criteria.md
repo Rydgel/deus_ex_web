@@ -74,7 +74,7 @@ A mode in brackets names how the check exercises Play (see [How the gate judges]
 | 4.2.21 | detail textures | the D3DDrv detail pass equals the original body; Play draws it | O2 | `detail-pass` [oracle], `detail-pass-rust` [oracle], `detail-play-sim` [node], `detail-play` [worker] | PASS |
 | 4.2.22 | detail pass in a frame | Play's detail pass against a capture of the original with the pass poked in | - | missing: measured once (Jaccard 0.94 to 0.98 on five of six views, docs/frame-projection.md); those captures are not in a store the gate reads | MISSING |
 | 4.2.23 | lasers | LaserIterator.CurrentItem equals the original; the Island doorway beams draw | O2 | `lasers-play` [worker], `native-laser` [oracle] | PASS |
-| 4.2.24 | 01_NYC_UNATCOIsland doorway | a beam frame against the original | - | missing: no original capture of a beam (docs/lasers.md) | MISSING |
+| 4.2.24 | 01_NYC_UNATCOIsland doorway | a beam frame against the original: the beams' geometry (the beam texture is an animated fire: its sparks are not matched) | O1 | `frames 01_NYC_UNATCOIsland [laser1,laser2]` [worker] | PASS |
 | 4.2.25 | viewport flash | EndFlash equals D3DDrv; the flash pass draws | O2 | `d3d-endflash` [oracle], `flash-play` [worker], `player-alterations-census` [node] | PASS |
 | 4.2.26 | underwater or drunk frame | a held flash frame against the original under Wine | - | missing: the pass is checked against Play itself only; GL's 8-bit blend rounding against the device's is unmeasured (roadmap section 4 Open) | MISSING |
 | 4.2.27 | vertices and visibility | Render.dll's projection, D3DDrv's vertices and OccludeBsp equal the original | O2 | `frame-projection` [oracle], `frame-projection-movers` [oracle], `frame-projection-play` [worker], `master-frame-play` [worker], `bsp-occlusion` [oracle] | PASS |
@@ -285,6 +285,7 @@ each criterion's inputs from one root (the first that holds them) and links or c
 | The light manager's tables from the running original | main `.work/live/.work/fpu` | 4.2.9 |
 | 02_NYC_Bar's smoke haze: three views with the fog zones on and off (2026-10-16, level time 52.355 s in each `-time.txt`) | main `.work/acceptance/02_NYC_Bar/{fog3,fog5,fog0}{,-base}-original.png` and `-time.txt` | 4.2.17 |
 | 02_NYC_Hotel's bathroom mirror, JC's `Tread` frozen (2026-10-16, 52.370 s) | main `.work/acceptance/02_NYC_Hotel/{hotel1,hotel2}-original.png`, `-time.txt`, `-state.json` | 4.2.19 |
+| Island's doorway beams, SetupDynamics pinned to rand state 0x2f6e2b1b, the level unfrozen (2026-10-16, 52.363 s; `laser1b` is a second frame of laser1, the original's own variation) | main `.work/acceptance/01_NYC_UNATCOIsland/{laser1,laser2}-original.png`, `-time.txt`, `laser1b-original.png` | 4.2.24 |
 
 **A clock per frame, not per map, is what a store should keep.** `times.json` holds one level time per map and each capture overwrites it, so
 a frame and the clock beside it can come from different captures. Two cases showed up in the first run: the main `.work/live` tree's `fan2-original.png`

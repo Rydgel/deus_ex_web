@@ -22,6 +22,10 @@
  *       which frame stamps an actor's LastRenderTime (Render.dll 0x10b25161): per stamp of a listed actor its name and the
  *       frame's Recursion, iSurf, Mirror and parent (the main frame has recursion 0, a mirror's child 1 or more)
  *
+ *   wine dx-live-win.exe rngpin <seconds> <hex state>
+ *       every URender::SetupDynamics run (Render.dll 0x10b22d90) starts from that CRT rand state for <seconds>: a frame whose render
+ *       iterators draw from the shared stream (a laser's last item) is the same frame whenever it is taken
+ *
  *   wine dx-live-win.exe weapon <seconds>
  *       Render.dll's third-person weapon draw (docs/weapon-attachment.md): breakpoints at the Pawn.Weapon read in DrawActorSprite
  *       (0x10b256a3), the special-triangle test in DrawLodMesh (0x10b0f212: the three special vertices, camera space), the store of
@@ -954,6 +958,73 @@ static int do_stamps(int seconds, const char *names) {
   return 0;
 }
 
+/* rngpin <seconds> <hex state>: for <seconds>, every run of URender::SetupDynamics (Render.dll 0x10b22d90: the main frame's, and each
+ * child frame's from OccludeFrame) starts from the CRT rand state <hex state> (the word at +0x14 of the game thread's msvcrt thread
+ * data). The render iterators' items draw from the shared stream (a LaserIterator's last item sits at a random place along its beam),
+ * so a frame taken while this runs is the same frame whenever it is taken: Play pins the same state at its own SetupDynamics runs
+ * (visual-acceptance.mjs --rng-pin, view-probe.mjs rngPin). Prints the number of runs pinned. */
+#define SETUP_DYNAMICS 0x10b22d90u
+static int do_rngpin(int seconds, unsigned state) {
+  QueryPerformanceFrequency(&qpf);
+  pid = find_pid("DeusEx.exe");
+  if (!pid) { fprintf(stderr, "DeusEx.exe not running\n"); return 1; }
+  process = OpenProcess(PROCESS_ALL_ACCESS, FALSE, pid);
+  core_base = module_base("Core.dll");
+  uintptr_t render = module_base("Render.dll");
+  if (!process || !core_base || render != 0x10b00000u) { fprintf(stderr, "cannot read DeusEx.exe or Render.dll is at 0x%lx\n", (unsigned long)render); return 1; }
+  if (!DebugActiveProcess(pid)) { fprintf(stderr, "DebugActiveProcess failed (%lu)\n", GetLastError()); return 1; }
+  DebugSetProcessKillOnExit(FALSE);
+  Breakpoint b; bp_arm(&b, SETUP_DYNAMICS);
+  DWORD pending_tid = 0; int pending = 0;
+  uintptr_t ptd = 0; DWORD ptd_tid = 0;
+  ULONGLONG until = GetTickCount64() + (ULONGLONG)seconds * 1000;
+  long hits = 0;
+  DEBUG_EVENT ev;
+  while (GetTickCount64() < until) {
+    if (!WaitForDebugEvent(&ev, 100)) continue;
+    DWORD status = DBG_CONTINUE;
+    if (ev.dwDebugEventCode == EXCEPTION_DEBUG_EVENT) {
+      DWORD code = ev.u.Exception.ExceptionRecord.ExceptionCode;
+      uintptr_t where = (uintptr_t)ev.u.Exception.ExceptionRecord.ExceptionAddress;
+      HANDLE th = thread_of(ev.dwThreadId);
+      if (code == EXCEPTION_BREAKPOINT && where == SETUP_DYNAMICS && th) {
+        CONTEXT ctx; ctx.ContextFlags = CONTEXT_CONTROL | CONTEXT_INTEGER; GetThreadContext(th, &ctx);
+        if (!ptd || ptd_tid != ev.dwThreadId) {
+          Ptd ptds[8]; int n = find_ptds_of(ev.dwThreadId, ptds, 8);
+          ptd = 0; for (int i = 0; i < n; i++) if (read_u32(ptds[i].ptd + 0x14) != 1 && !ptd) ptd = ptds[i].ptd;
+          if (!ptd && n) ptd = ptds[n - 1].ptd;
+          ptd_tid = ev.dwThreadId;
+          fprintf(stderr, "rand state block 0x%lx of thread %lu\n", (unsigned long)ptd, (unsigned long)ev.dwThreadId);
+        }
+        if (ptd) { write_mem(ptd + 0x14, &state, 4); hits++; }
+        ctx.Eip = (DWORD)where; ctx.EFlags |= 0x100; SetThreadContext(th, &ctx);
+        write_mem(b.address, &b.original, 1); FlushInstructionCache(process, (LPCVOID)b.address, 1);
+        pending = 1; pending_tid = ev.dwThreadId;
+      } else if (code == EXCEPTION_SINGLE_STEP && pending && ev.dwThreadId == pending_tid) {
+        unsigned char cc = 0xCC; write_mem(b.address, &cc, 1); FlushInstructionCache(process, (LPCVOID)b.address, 1); pending = 0;
+      } else if (code == EXCEPTION_BREAKPOINT || code == EXCEPTION_SINGLE_STEP) {
+      } else status = DBG_EXCEPTION_NOT_HANDLED;
+    } else if (ev.dwDebugEventCode == CREATE_PROCESS_DEBUG_EVENT && ev.u.CreateProcessInfo.hFile) CloseHandle(ev.u.CreateProcessInfo.hFile);
+    else if (ev.dwDebugEventCode == LOAD_DLL_DEBUG_EVENT && ev.u.LoadDll.hFile) CloseHandle(ev.u.LoadDll.hFile);
+    ContinueDebugEvent(ev.dwProcessId, ev.dwThreadId, status);
+  }
+  bp_disarm(&b);
+  int quiet = 0;
+  while (quiet < 3) {
+    if (!WaitForDebugEvent(&ev, 40)) { quiet++; continue; }
+    quiet = 0; DWORD status = DBG_CONTINUE;
+    if (ev.dwDebugEventCode == EXCEPTION_DEBUG_EVENT) {
+      DWORD code = ev.u.Exception.ExceptionRecord.ExceptionCode; uintptr_t where = (uintptr_t)ev.u.Exception.ExceptionRecord.ExceptionAddress; HANDLE th = thread_of(ev.dwThreadId);
+      if (code == EXCEPTION_BREAKPOINT && where == SETUP_DYNAMICS && th) { CONTEXT ctx; ctx.ContextFlags = CONTEXT_CONTROL; GetThreadContext(th, &ctx); ctx.Eip = (DWORD)where; SetThreadContext(th, &ctx); }
+      else if (code != EXCEPTION_BREAKPOINT && code != EXCEPTION_SINGLE_STEP) status = DBG_EXCEPTION_NOT_HANDLED;
+    }
+    ContinueDebugEvent(ev.dwProcessId, ev.dwThreadId, status);
+  }
+  DebugActiveProcessStop(pid);
+  fprintf(stderr, "%ld SetupDynamics runs pinned to 0x%08x in %d s\n", hits, state, seconds);
+  return 0;
+}
+
 /* weapon <seconds>: the original's third-person weapon draw, event by event (docs/weapon-attachment.md). */
 typedef struct { uintptr_t address; const char *site; } WeaponSite;
 static const WeaponSite weapon_sites[] = {
@@ -1070,6 +1141,7 @@ int main(int argc, char **argv) {
   if (argc < 2) { fprintf(stderr, "usage: dx-live-win.exe rng [count] [interval_ms] | trace <config>\n"); return 2; }
   if (!strcmp(argv[1], "trace")) return argc > 2 ? do_trace(argv[2]) : 2;
   if (!strcmp(argv[1], "weapon")) return argc > 2 ? do_weapon(atoi(argv[2])) : 2;
+  if (!strcmp(argv[1], "rngpin")) return argc > 3 ? do_rngpin(atoi(argv[2]), (unsigned)strtoul(argv[3], NULL, 16)) : 2;
   if (!strcmp(argv[1], "stamps")) return argc > 3 ? do_stamps(atoi(argv[2]), argv[3]) : 2;
   if (!strcmp(argv[1], "list")) { QueryPerformanceFrequency(&qpf); return argc > 2 ? do_list(argv[2]) : 2; }
   QueryPerformanceFrequency(&qpf);

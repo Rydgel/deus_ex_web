@@ -1813,6 +1813,44 @@ original's first capture than in Play, a frame of the loop); with the pose measu
 shelves, the door in the reflection and the sink agree to within the uniform gap (no outlier block). Stored: `.work/acceptance/02_NYC_Hotel/
 {hotel1,hotel2}-original.png`, `-time.txt`, `-state.json`.
 
+### 01_NYC_UNATCOIsland's doorway beams (row 4.2.24)
+
+The five `LaserTrigger` beams across the doorway (`laser` in the gate), cameras (1920, -1069, -60) and (1850, -1000, -60) looking at the beams
+(`laser1`, `laser2`), the level unfrozen at TimeDilation 0.001 (`--unfreeze`: a `LaserEmitter` adds its beams in `Tick`, so a frozen level has none)
+and held at level time 52.363 s.
+
+* **The random stream of a frame.** A `LaserIterator`'s last item sits at a random place along its beam: `CurrentItem` draws from the shared CRT stream
+  while it runs inside `URender::SetupDynamics`, and the original's frames draw whatever the stream holds, so it is a host input of the frame like the
+  Strobe flag. `tools/dx-live-win.c rngpin <seconds> <hex state>` breaks at SetupDynamics' entry (Render.dll `0x10b22d90`) and writes the CRT rand state
+  (+0x14 of the game thread's msvcrt thread data) before each run (9,276 runs in a 94 s capture; the polled state reads the pinned value 38 of 40 times
+  while it runs); `visual-acceptance.mjs original --rng-pin 0x2f6e2b1b` keeps it attached for the views. Play's side is the same state written at the start
+  of each of its SetupDynamics runs (`viewProbe({rngPin})`, `sprite-scan.mjs` `pin`; `play --rng-pin`). The pin is arbitrary: both programs start
+  from one state, so the items' own draws are the same.
+* **What stays unmatched: the beam's texture.** `LaserBeam1` is a FireTexture. Its sparks come from a stream seeded by the process (the original) or by
+  the host (Play, `procedural-textures.mjs`), and it ticks every frame, so the bright dashes of a beam differ from frame to frame **in the original
+  itself**, pinned or not: `laser1` and a second capture of it (`laser1b`, the same run, a frame later) agree in where the beam is (coverage 1.0 of 120
+  blocks, y-offset of the centroids .31 px rms, energy ratio .99, block-energy correlation .994) but not in the dashes. The comparison is therefore of
+  the geometry, in 64 x 64 blocks of red excess (`R - max(G, B)`, Play's at the frame's own brightness ratio): where there is beam, how much, and where
+  in the block (`visual-acceptance.mjs compare --beams`, `beamMetrics`; `beamsFloor` is the original against its own second frame).
+
+| View | Play / original | Mean abs. diff. | Edge recall / precision | Outlier blocks | Beam blocks in both, of either | Beam energy Play / original | y-offset of the centroids (rms) |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| laser1 (four beams) | 1.283 | 4.83 | .944 / .931 | 0 | .942 (120 blocks) | .873 (1.007 in an earlier run) | 1.27 px (original against itself .31) |
+| laser2 (one beam to the wall plate) | 1.294 | 4.17 | .981 / .965 | 0 | .877 (73 blocks) | .995 (.884 in an earlier run) | 1.63 px |
+
+The beam's pixel overlap is not a usable measure: the same frames' red masks overlap at recall .62 and precision .51 (original against Play) and .77 (the
+original's two frames against each other, Jaccard of the 5x5-blurred excess); the occupancy of the original against Play at a level of 3 reads .778
+against .769 for the original against itself. A beam's vertical centroid per column (rows 236 to 254 of laser1, 497 columns) differs by -0.11 px on
+average (rms .56 px) from Play's, and the original's two frames differ by .04 / .60 px and .01 / .73 px: Play's beam is where the original's is, to
+what the original repeats of itself. The energy of Play's beams varies from run to run by the fire texture (laser1 .87 to 1.01, laser2 .88 to 1.0).
+
+* **A third view shows what the frame cannot hold.** `laser3` (2000, -1150, -40) has an NPC standing in the doorway in the original at the held clock
+  (the NPCs of an unfrozen level walk their own routes, each program's own) and Play does not: the beams end at his body, the block-energy ratio is
+  1.86 and the y-offset 4.4 px. It is not in the gate; Play's beams there are the same beams without the actor in them.
+
+The thresholds of the gate row (coverage at least .85, energy .75 to 1.33, y-offset at most 2.5 px) are set from these two views and are weak. Stored:
+`.work/acceptance/01_NYC_UNATCOIsland/{laser1,laser2}-original.png`, `-time.txt` and `laser1b-original.png`.
+
 ## Open
 
 - **Not attributed, seen in the 2026-10-14 pilot re-runs with Divergences 17 and 18 in** (every watched actor equal in all three): the Island run's stream draws differ at tick 264

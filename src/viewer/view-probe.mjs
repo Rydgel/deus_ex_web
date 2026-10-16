@@ -14,7 +14,7 @@ import { scriptGetStateName } from '../runtime/script-state-queries.mjs';
  * non-brush actor nothing else follows). `exec` runs further console
  * commands the same way, after the same bCheatsEnabled write (main.mjs
  * ?cheat=, e.g. DeusExPlayer.Summon). Returns the player's state. */
-export function viewProbe(game, { playersOnly = null, timeDilation = null, ghost = false, location = null, rotation = null, region = null, exec = [], rehash = false } = {}) {
+export function viewProbe(game, { playersOnly = null, timeDilation = null, ghost = false, location = null, rotation = null, region = null, exec = [], rehash = false, rngPin = undefined } = {}) {
   const runtime = game.doors.scriptRuntime.runtime, player = game.player.collisionActor;
   // `set LevelInfo bPlayersOnly True`, which the original capture types
   // before `open` so the new level's LevelInfo starts with it: written here
@@ -23,6 +23,10 @@ export function viewProbe(game, { playersOnly = null, timeDilation = null, ghost
   const info = runtime.levelFor(player).actors[0];
   // (`playersOnly: false` clears it: `set LevelInfo bPlayersOnly False`, the capture's unfrozen run, visual-acceptance.mjs --unfreeze)
   if (playersOnly !== null) runtime.writeNamed(info, 'bPlayersOnly', Boolean(playersOnly));
+  // `rngPin` (a CRT rand state, hex text, or null to release): every SetupDynamics run of Play's frames starts from that state of the shared stream,
+  // as the original's does with tools/dx-live-win.c `rngpin` (visual-acceptance.mjs --rng-pin): a frame whose items draw from the stream
+  // (the lasers' last item) is then the same frame in both programs.
+  if (rngPin !== undefined) game.rngPin = rngPin === null ? null : parseInt(rngPin, 16) >>> 0;
   // `set LevelInfo TimeDilation <x>`, which the capture uses to hold both
   // sides' level clocks at the same TimeSeconds (pulsing lights, panning).
   if (timeDilation !== null) runtime.writeNamed(info, 'TimeDilation', Math.fround(timeDilation));

@@ -185,6 +185,8 @@ async function play() {
       const entry = plan[map] ?? (plan[map] = {start: start.location, startRotation: start.viewRotation,
         views: viewsFrom(start.location, start.viewRotation[1])});
       const ghost = await page.evaluate(commands => window.deusExViewer.viewProbe({ghost: true, exec: commands}), consoleCommands);
+      // --rng-pin <hex state>: every SetupDynamics run starts from that state of the shared stream (the original's `rngpin`).
+      if (option('rng-pin', null)) await page.evaluate(pin => window.deusExViewer.viewProbe({rngPin: pin}), option('rng-pin', null));
       // Level time: run the frozen level to the original's held TimeSeconds
       // (fast, then at normal speed for the last second), then hold it.
       const heldTime = heldTimeOf(map, viewsOf(entry).filter(view => !isBase(view.name) && (!onlyViews || onlyViews.includes(view.name)))), target = heldTime === null ? null : heldTime + timeOffset;
@@ -372,6 +374,14 @@ async function original() {
     // The views without the effect (<name>-base) come last: --base-cmd turns the effect off once, in this same level and at the same held clock.
     const ordered = [...viewsOf(entry).filter(view => !isBase(view.name)), ...viewsOf(entry).filter(view => isBase(view.name))];
     let baseDone = false;
+    // --rng-pin <hex state>: tools/dx-live-win.c `rngpin` stays attached for the views and starts every SetupDynamics run of the original from that CRT
+    // rand state, so the render iterators' draws (a laser's last item) are the same in every frame, as Play's with the same --rng-pin.
+    let pinDone = null;
+    if (option('rng-pin', null)) {
+      const child = spawn(game.WINE, [path.join(root, 'ad/build/dx-live-win.exe'), 'rngpin', String(30 + 16 * ordered.length), option('rng-pin', null)], {env: process.env, stdio: ['ignore', 'inherit', 'inherit']});
+      pinDone = new Promise(resolve => child.on('close', resolve));
+      execFileSync('sleep', ['6']);   // the debugger attaches before the camera moves
+    }
     for (const view of ordered) {
       if (onlyViews && !onlyViews.includes(view.name)) continue;
       if (isBase(view.name) && !baseDone) {
@@ -469,6 +479,7 @@ async function original() {
       console.log(map, view.name, taken.length ? `${taken[0].width}x${taken[0].height}` : 'NO SHOT');
       if (taken.length && (taken[0].width !== WIDTH || taken[0].height !== HEIGHT)) throw new Error(`${map} ${view.name}: the original's frame is ${taken[0].width}x${taken[0].height}, not ${WIDTH}x${HEIGHT}`);
     }
+    if (pinDone) await pinDone;
   }
 }
 
@@ -597,6 +608,44 @@ function contribution(dir, name) {
     correlation: +corr.toFixed(4), scale: +k.toFixed(3), residual: +(resid / Math.max(1e-9, absO)).toFixed(3), effectPixels: own, agreement: own ? +(agree / own).toFixed(3) : null};
 }
 
+// compare --beams: the laser beams' geometry. A beam is the only strongly red thing in the Island doorways, so a pixel's beam energy is its red excess
+// `R - max(G, B)` (floored at 0, ignored under 2 levels; Play's divided by the frame's brightness ratio, the Wine gap this document does not judge).
+// The beams' texture, LaserBeam1, is a FireTexture whose sparks the original draws from a process-seeded stream and Play from a host-seeded one, and it
+// ticks every frame, so two frames of the original itself differ in the bright dashes of every beam (pinning the stream at SetupDynamics, which fixes the
+// items' own draws, does not change that): the pixels cannot be matched and the comparison is of what the texture does not move, in 64 x 64 blocks:
+// where there is beam energy (blocks with energy in both, of those with it in either), how much of it (Play's total over the original's) and where in
+// the block (the centroid's offset in y and x, rms over the blocks that hold energy in both), and the Pearson correlation of the block energies.
+// The same numbers between two frames of the original (a second capture of the view, <view>b-original.png) are the floor, `beamsFloor`.
+function beamMetrics(a, b, block = 64) {
+  const A = readRgb(a), B = readRgb(b), {w, h} = A, n = w * h;
+  let sa = 0, sb = 0;
+  for (let i = 0; i < 3 * n; i++) { sa += A.data[i]; sb += B.data[i]; }
+  const ratio = (sb + 3) / (sa + 3), gx = Math.ceil(w / block), gy = Math.ceil(h / block);
+  const blocks = (img, scale) => {
+    const e = new Float64Array(gx * gy), cx = new Float64Array(gx * gy), cy = new Float64Array(gx * gy);
+    for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+      const i = y * w + x, v = Math.max(0, (img.data[3 * i] - Math.max(img.data[3 * i + 1], img.data[3 * i + 2])) / scale);
+      if (v < 2) continue;
+      const k = Math.floor(y / block) * gx + Math.floor(x / block);
+      e[k] += v; cx[k] += v * x; cy[k] += v * y;
+    }
+    for (let k = 0; k < e.length; k++) if (e[k]) { cx[k] /= e[k]; cy[k] /= e[k]; }
+    return {e, cx, cy};
+  };
+  const P = blocks(A, 1), Q = blocks(B, ratio), BLOCK_ENERGY = 200;   // red-excess levels summed over a block: below it the block holds no beam
+  let m = gx * gy, sp = 0, sq = 0, spp = 0, sqq = 0, spq = 0, both = 0, either = 0;
+  const dx = [], dy = [];
+  for (let k = 0; k < m; k++) {
+    const p = P.e[k], q = Q.e[k];
+    sp += p; sq += q; spp += p * p; sqq += q * q; spq += p * q;
+    if (p > BLOCK_ENERGY || q > BLOCK_ENERGY) { either++; if (p > BLOCK_ENERGY && q > BLOCK_ENERGY) { both++; dx.push(Q.cx[k] - P.cx[k]); dy.push(Q.cy[k] - P.cy[k]); } }
+  }
+  const rms = list => Math.sqrt(list.reduce((s, v) => s + v * v, 0) / Math.max(1, list.length)), mean = list => list.reduce((s, v) => s + v, 0) / Math.max(1, list.length);
+  const correlation = (spq - sp * sq / m) / Math.sqrt(Math.max(1e-9, (spp - sp * sp / m) * (sqq - sq * sq / m)));
+  return {ratio: +ratio.toFixed(3), block, energy: +(sq / Math.max(1e-9, sp)).toFixed(3), correlation: +correlation.toFixed(4),
+    coverage: either ? +(both / either).toFixed(3) : null, blocks: either, yMean: +mean(dy).toFixed(2), yRms: +rms(dy).toFixed(2), xMean: +mean(dx).toFixed(2), xRms: +rms(dx).toFixed(2)};
+}
+
 // compare --crop WxH+X+Y: the metrics over that region only (the crops are
 // kept as <view>-crop-original.png / -play.png); --play-name <suffix>: compare
 // <view>-<suffix>.png of Play (an experiment's frame) instead of <view>-play.png.
@@ -613,6 +662,11 @@ function compare() {
         a = cropped(a, 'original'); b = cropped(b, playName); prefix = `${prefix}-crop`;
       }
       const result = compareOne(a, b, prefix);
+      if (process.argv.includes('--beams') && !crop && playName === 'play') {
+        result.beams = beamMetrics(a, b);
+        const twin = path.join(dir, `${view.name}b-original.png`);
+        if (existsSync(twin)) result.beamsFloor = beamMetrics(a, twin);   // a second frame of the original's own view: its frame-to-frame variation
+      }
       if (process.argv.includes('--contribution') && !crop && playName === 'play') { const c = contribution(dir, view.name); if (c) result.contribution = c; }
       (report[map] ??= {})[view.name] = result;
       const {outlierBlocks, ...brief} = result;
