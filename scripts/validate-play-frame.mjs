@@ -83,7 +83,9 @@ for(const [seconds,scale,expected] of [[1/64,1,1/64],[1/8,1,1/8],[1,1,Math.froun
     runtime.namedReference(call.actor,'Owner').get()!==game.player.collisionActor),
     'only actors whose owner skipped its own tick stay deferred');
   assert.ok(calls.every(call=>call.seconds===expected));
-  assert.deepEqual(hudDeltas,[expected],'HUD shares the actor delta');
+  // The window system ticks on the host's real time, not the level's dilated, clamped delta: UExtensionEngine::Tick -> TickWindows ->
+  // GetWindowsTickOffset(1) (docs/interface-frames.md "Window ticks are real time").
+  assert.deepEqual(hudDeltas,[seconds],'HUD ticks on the unscaled, unclamped host delta');
   assert.equal(level.timeSeconds,elapsed,'double clock advances before the actor clamp');
   assert.equal(time.get(),Math.fround(elapsed),'scripts see the current level time');
 }
