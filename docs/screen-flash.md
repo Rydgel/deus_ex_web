@@ -149,7 +149,8 @@ Found by `flash0`: in the band above the corridor (rows 0 to about 195) Play dre
   `0x10599b7c`) from four pushed zeros (`0x1038f564..0x1038f56c`). `LockFlags` is `[ebp-0x44] | 1` (`or al, 1` at `0x1038f557`), where `[ebp-0x44]` is 0
   or 1 from the result of the call at `0x1038f266` (vslot `0x54`, not identified; it cannot clear the bit). So bit 0, `LOCKR_ClearScreen` (= 1 in the SDK's `UnRenDev.h`), is set on every frame.
 * `UD3DRenderDevice::Lock` (thunk `0x100010e1` to `0x10002fb0`) stores `LockFlags` at `this+0xa68`, `FlashScale` at `+0xa48` and `FlashFog` at `+0xa58`.
-  It then calls `IDirect3DDevice7::Clear(0, NULL, flags, colour, 1.0f, 0)` (vslot `0x28`, `0x100031c5`) with flags 3 (target and Z) when `+0xa68` bit 0
+  It then calls `IDirect3DDevice7::Clear(0, NULL, flags, colour, 1.0f, 0)` (vslot `0x28`, the eleventh method in the SDK's DirectX 7 `d3d.h`,
+  `(DWORD, LPD3DRECT, DWORD, D3DCOLOR, D3DVALUE, DWORD)`; the call at `0x100031c5` through the device at `this+0x9a4`) with flags 3 (target and Z) when `+0xa68` bit 0
   is set, 2 (Z only) otherwise (`0x100030b5..0x100030ca`). The colour is `ScreenClear`, each component `v * 256.0f - 0.5f` and `fistp`, clamped to
   [0, 255] (constants `0x10018554` = 256.0 and `0x1002a898` = 0.5), packed `R<<16 | G<<8 | B`: 0x000000.
 

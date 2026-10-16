@@ -510,8 +510,10 @@ compared in 218 queries), and the flash `UGameEngine::Draw` hands the device is 
   (bit exact against the CPU path, 0 differing pixels; `?weapons=cpu` keeps the reference) and their SetupForActor calls follow the
   original's order, compared on JC in two frames ([weapon attachment](weapon-attachment.md#order-of-setupforactor-calls-and-the-gpu-path-analysis-2026-10-15);
   no light in the scenes checked enters one frame's lists and not the other's, the only case the order can change).
-- *Alterations and the flash, left:* a held underwater or drunk frame compared with the original under Wine (the flash
-  pass is checked against Play itself only, and GL's 8-bit blend rounding against the device's is unmeasured), an
+- *Alterations and the flash, left:* the flash pass against the original is done (2026-10-16, Stage 4 row 4.2.26,
+  [screen flash](screen-flash.md#against-the-original-2026-10-16-gate-row-4226): two held states, the 8-bit blend equal
+  to the original's at every level under CrossOver on the M2; and [the screen clear](screen-flash.md#the-screen-clear-fixed-2026-10-16)
+  it found, fixed); left: a zone's tint and a drunk frame with the HUD shown against the original, an
   exec-body differential for iterator 312, pain-zone and `DamageTrigger` scenarios, player swimming and drowning, the
   poison and fire sources (Greasel spit, darts, flames) and `summon` of a class the map did not load.
 - *Rendering:* the detail pass's mover surfaces, ZBIAS mapping (Wine behaves like a slope-scaled
