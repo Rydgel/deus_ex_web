@@ -201,6 +201,12 @@ exactly those four words.
 **Translation.** `validate-weapon-attach.mjs` takes the 234 draws as cases (`weapon-original-cases.mjs --cases`: the logged special vertices and outcodes, the logged hand coordinates and the
 Coords handed to the weapon's `DrawMesh`): hand and weapon Coords equal word for word (3,584 comparisons with the running original in all, 0 failures; the 1,558 main-frame draws above and these 468).
 
+**Captured again on the Mac (2026-10-16, CrossOver).** The same scenes on the Mac's bottle (`scripts/live-original.sh`, tags `jcm` and `jci`, the commands above; then `weapon 6`), for
+the Stage 4 gate's row 4.1.11, whose Linux captures were out of reach: 143 pawn draws of JC with the pistol (142 with the weapon drawn) and 157 with the MedKit (156 drawn), every one in the
+mirror's child frame with **the same PrjXM..PrjYP words** as the Linux capture (`3e36ee45 3e6bb90c 3ec81e6e 3e4958ba`). The Island view above (`CheatView DeusEx.Terrorist` twelve times,
+`weapon 8` and `weapon 16`) gave 590 draws with the weapon drawn (Terrorist22's pistol; ThugMale3's crossbow once; the rifle capture of Terrorist1 was not retaken, so the Mac corpus is narrower than the Linux one). `validate-weapon-attach.mjs` over these 888 draws: 1,776 comparisons, 0 failures; Play's replay of
+the Mac `jcm` trace (`validate-weapon-mirror-play.mjs`) has the logged words. The frame rate under Rosetta is lower, so a 6 s capture holds fewer draws than the Linux one.
+
 **Pixels** (`live-acceptance.mjs play --tag jcm --shot jcm --no-ghost --page-params "antialias=0&weaponMirrors=1"`, `visual-acceptance.mjs compare`, the level held at tick 300; the Wine brightness gap, ratio
 about 1.3, is the known uniform one):
 

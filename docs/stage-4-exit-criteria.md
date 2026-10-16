@@ -31,6 +31,24 @@ the original's frames (the HUD, eight persona screens, the main menu, three Sett
 region (letterbox bars and subtitle identical, the 3D band within the polygon edge), plus the per-tick comparison of every traced actor over the longest replay. The clause 4.5 row reads 7 PASS, 1 MISSING (4.5.6, the speech audio) and the totals 48 PASS, 18 MISSING.
 The comparison found one divergence of Play, fixed: `AActor::FindBase` traced a box of the wrong extent.
 
+**Update, the player's weapon in a mirror (2026-10-16, the Mac, [weapon attachment](weapon-attachment.md#mirrors-2026-10-15)):** row 4.1.11 is `PASS` (`--only '^4\.1\.(9|11)$'`: 4 checks, 320 s,
+4.1.9 passes on the same files). Its stored originals were on the Linux host only, which was unreachable, and a first run here read `NO-ORIGINAL`; they were captured again on the Mac under
+CrossOver (`scripts/live-original.sh` now runs there, see [Stored originals](#stored-originals)). The two captures agree: the mirror's child frame logged the same
+PrjXM..PrjYP words (`3e36ee45 3e6bb90c 3ec81e6e 3e4958ba`) in all 143 draws, and Play's replay of the Mac trace reproduces them. `weapon-attach` compared 888 draws of the running
+original (590 Island main-frame draws, 142 of the pistol and 156 of the MedKit in the mirror): 1,776 comparisons, 0 failures.
+
+**Current state, counted from the rows below (2026-10-16, not a gate run):** 76 criteria, 6 excluded (4.5.6 joined the excluded rows and 4.1.11 was added after the first run), 70 gating; **59 PASS, 3 FAIL, 8 MISSING**.
+Only the full gate run (`node scripts/validate-stage4-acceptance.mjs`) is the gate; the per-row statuses come from the subset runs named in the updates above.
+
+| Clause | PASS | FAIL | MISSING | EXCLUDED |
+| --- | ---: | ---: | ---: | ---: |
+| 4.1 Animated actors | 10 | 0 | 2 | 0 |
+| 4.2 Effects | 23 | 2 | 5 | 3 |
+| 4.3 Sound | 5 | 1 | 1 | 0 |
+| 4.4 Text and interfaces | 14 | 0 | 0 | 2 |
+| 4.5 Speech, lip sync and the conversation camera | 7 | 0 | 0 | 1 |
+| **Total** | **59** | **3** | **8** | **6** |
+
 The table below is the whole gate, one row per criterion (`--markdown` re-renders it from the report). The ids are stable; `4.n.m` is clause n, row m.
 A mode in brackets names how the check exercises Play (see [How the gate judges](#how-the-gate-judges)).
 
@@ -48,7 +66,7 @@ A mode in brackets names how the check exercises Play (see [How the gate judges]
 | 4.1.8 | five campaign maps, 1,200 ticks | BatteryPark, Hotel, Market, Chateau and Area 51 Bunker: every actor equal | O1 | `sweep replay 5 maps` [worker] | PASS |
 | 4.1.9 | 01_NYC_UNATCOIsland armed pawns | a pawn's third-person weapon: hand frame and Coords equal Render.dll, drawn in Play | O2 | `weapon-attach` [oracle], `weapon-play` [worker] | PASS |
 | 4.1.10 | Training first-person crowbar | the first-person weapon frame (view model, GPU camera passes) against the original | - | missing: only the selection (validate-weapon-lod) is compared with the original; no matched capture of the held weapon | MISSING |
-| 4.1.11 | 05_NYC_UNATCOMJ12lab mirror | the player holding a pistol and a MedKit in a mirror child frame: the frame's planes and the Coords equal the running original's logged draws | O1 | `weapon-attach` [oracle], `weapon-mirror-play` [worker] | not yet run (added after the first run, master 88b6f96) |
+| 4.1.11 | 05_NYC_UNATCOMJ12lab mirror | the player holding a pistol and a MedKit in a mirror child frame: the frame's planes and the Coords equal the running original's logged draws | O1 | `weapon-attach` [oracle], `weapon-mirror-play` [worker] | PASS |
 | 4.1.12 | an armed NPC in a mirror, a weapon in a camera window | an armed pawn in a mirror child frame and a weapon in a ViewportWindow against the original's frames | - | missing: wired and checked in Play (`terminals-camera-browser --expect weapons`); no original capture of an armed NPC in a mirror or of a camera window with an armed pawn | MISSING |
 
 ### 4.2 Effects
@@ -210,8 +228,9 @@ What each clause rests on, in plain words. The criteria tables above give the id
 (4.1.1). The per-tick replay compares every watched field of every NPC with the original's own trace while they walk, dance and animate
 (4.1.5 to 4.1.8): this is the strongest actor evidence and covers animation, because `AnimSequence`, `AnimFrame`, `AnimRate`, `TweenRate`, blend
 channels and `Rotation` are among the fields. The code path under both (GetFrame, LOD, skins, lighting, the animation phases) is compared with
-Engine.dll and Render.dll executed unchanged (4.1.2 to 4.1.4). Not covered: the player's own mesh in a mirror, the first-person weapon and an armed
-pawn in a child frame (4.1.10, 4.1.11), and anything that needs the player to move or act while an NPC is watched.
+Engine.dll and Render.dll executed unchanged (4.1.2 to 4.1.4). The player's pistol and MedKit in a mirror's child frame are compared with the running
+original's logged draws (4.1.11). Not covered: the first-person weapon (4.1.10), an armed NPC in a child frame or a camera window (4.1.12), and anything that
+needs the player to move or act while an NPC is watched.
 
 **Effects.** Each effect has the same two layers: its translation against the DLL's code (O2, and O3 on Play's inputs), and a matched frame
 where the original was captured with the effect in view. Where only the first exists the row says `MISSING` and names the frame that is
@@ -284,6 +303,12 @@ whichever checkout took them, so today they are scattered. The gate searches the
 this checkout's `.work`, the main checkout's `.work` and the main checkout's `.work/live/.work` (the tree the original is driven from), takes
 each criterion's inputs from one root (the first that holds them) and links or copies them into its own `.work` (never into a file Play writes).
 
+**Two machines.** "main" below is the Linux host's main checkout (`~/projects/deus_ex_web`, where the first run was made). On 2026-10-16 the Mac's main checkout
+held none of these stores, so a gate run there reads `NO-ORIGINAL` for every row below except the ones marked *Mac*. The Linux host was unreachable that day,
+so its stores could not be listed; that they are all there is inferred from where the first run was made. Captures can now be taken on either machine:
+`scripts/live-original.sh` drives the CrossOver bottle `DeusEx` on the Mac (CrossOver's wine, no `flock`, the game's process found by its Windows path), and
+the debugger tools (`ad/build/dx-live-win.exe`, `dump-actor-win.exe`, built with `i686-w64-mingw32-gcc -O2 ... -lpsapi`) break and read the same addresses there.
+
 | What | Where it is today | Used by |
 | --- | --- | --- |
 | Frozen frames, 26 maps x 5 views, and the held level times | main `.work/acceptance/<map>/{y0..y3,down}-original.png`, `times.json` | 4.1.1, 4.2.1 to 4.2.4, 4.2.8 |
@@ -299,6 +324,8 @@ each criterion's inputs from one root (the first that holds them) and links or c
 | The intro's three held frames (2026-10-16, tag `in2`, ticks 170/1000/2250, each with `in2-in<n>-time.txt`) and its 2,250-tick trace with the watch and population lists and the commands | main `.work/acceptance/00_Intro/in2-in{1,3,4}-original.png`, `.work/live-acceptance/00_Intro/{original-trace,watch,population,commands,hold}-in2.*` | 4.5.7 |
 | MeetManderley's frames and traces (2026-10-16, tags `mmA` 1,100 ticks and `mmB` 580 ticks, two loads; frames mm2, mm3, mmB1 (stored, not compared: the letterbox is still sliding at tick 40 in Play), mmB2, mmB3 with `-time.txt`) | main `.work/acceptance/01_NYC_UNATCOHQ/{mm2,mm3,mmB1,mmB2,mmB3}-original.png`, `.work/live-acceptance/01_NYC_UNATCOHQ/{original-trace,watch,population,commands,hold}-{mmA,mmB}.*` | 4.5.8 |
 | The original's third-person weapon draws | main `.work/weapon/original-cases*.json` | 4.1.9 |
+| *Mac*: the original's third-person weapon draws, captured again under CrossOver (2026-10-16): `original-cases.json` 590 Island main-frame draws with the weapon drawn (591 pawn draws of Terrorist22 with `WeaponPistol13`, 1 of ThugMale3 with `WeaponMiniCrossbow1`; `CheatView DeusEx.Terrorist` twelve times, pitch -500, yaw 46936; `weapon 8` and `weapon 16` with the level running). A narrower corpus than the Linux set: no rifle (the `SniperRifle3rd` capture of Terrorist1 was not retaken) and one crossbow draw against 784, `-2` 142 draws of JC's pistol in the lab mirror (`jcm`), `-3` 156 of his MedKit there (`jci`) | Mac main `.work/weapon/original-cases{,-2,-3}.json`, the logs `island-weapon-mac{,-8,-16}.jsonl`, `jcm-weapon-mac.jsonl`, `jci-weapon-mac.jsonl` | 4.1.9, 4.1.11 |
+| *Mac*: the lab mirror scenes (2026-10-16, tags `jcm` and `jci`, 300 ticks: `summon` at 20, `ViewRotation (Pitch=-10130,Yaw=16432)` at 50, `ParseRightClick` at 90, `ActivateBelt 1` at 130, `ViewRotation (0,0,0)` at 170; `--no-ghost`, population equal to Play's seed 1) with their held frames (no `-time.txt`: the plain `--shot` path does not write one; the frames are not compared by the gate) | Mac main `.work/live-acceptance/05_NYC_UNATCOMJ12lab/{original-trace,watch,population,commands,hold}-{jcm,jci}.*`, `.work/acceptance/05_NYC_UNATCOMJ12lab/{jcm,jci}-original.png` | 4.1.11 |
 | The interface frames of 00_Training (18 views, 2026-10-15) and each frame's level time | main `.work/acceptance/00_Training/ui-<view>-original.png` and `ui-<view>-time.txt` (also `ui-e1` to `ui-e4`, the pointer experiment) | 4.4.11 to 4.4.14 |
 | The Underworld's sound capture (2026-10-13/14, tag `snd1`: a pistol summoned, picked up, drawn and fired in a normal player, 400 ticks; the tracer's `gplay`, `addobj`, `unhash` and `hear` call records, the registry at the frozen start and end) | main `.work/live-acceptance/06_HongKong_WanChai_Underworld/{original-trace-snd1.jsonl{,.strobe,.calls.jsonl},registry-start-snd1.txt,registry-end-snd1.txt,watch-snd1.json,commands-snd1.json,deferred-snd1.json}` (copied 2026-10-16 from worktree `agent-a011db8f1b061eb8e`, nothing overwritten) | 4.3.6 |
 | The light manager's tables from the running original | main `.work/live/.work/fpu` | 4.2.9 |
@@ -342,7 +369,7 @@ recorded time)` is killed and fails. The matched-frame checks share `.work/accep
 
 ## Remaining Stage 4 work, in the order it blocks
 
-From the first scoreboard: 26 of 70 gating criteria were not `PASS` (2 `FAIL`, 3 `INLINE`, 21 `MISSING`); item 1 is closed since (22 now). Ordered by how much of "Done when" each holds up.
+From the first scoreboard: 26 of 70 gating criteria were not `PASS` (2 `FAIL`, 3 `INLINE`, 21 `MISSING`); item 1 is closed since (22 now; 11 by the row count of 2026-10-16: 3 `FAIL`, 8 `MISSING`). Ordered by how much of "Done when" each holds up.
 Nothing below was fixed in this task beyond wiring existing checks; each item is sized for one agent.
 
 1. **The interfaces against the original's frames (4.4.11 to 4.4.14): done 2026-10-15** ([interface frames](interface-frames.md): the recipe, 18 views, the two divergences found and
@@ -394,10 +421,13 @@ Nothing below was fixed in this task beyond wiring existing checks; each item is
    Underworld `snd1` capture with Play's replay (stored in the main `.work`, see [Stored originals](#stored-originals)): 56 of 82 ticks with calls equal, first differing tick 278 (hand-off in
    [galaxy-audio](galaxy-audio.md#hand-off-the-sound-gate-2026-10-16)). Not measurable yet: the music bus delay and the ring heads' spacing (a loopback
    recording of the original), MPEG and ADPCM samples, 3D voices.
-7. **The first-person weapon and weapons in mirrors (4.1.10, 4.1.11).** In flight with another agent (the third-person weapon's leftovers); the rows stay
-   `MISSING` until a matched capture of the held weapon and of an armed pawn in a mirror exists.
+7. **The first-person weapon and weapons in mirrors (4.1.10, 4.1.12; 4.1.11 done 2026-10-16).** 4.1.11 (the player's pistol and MedKit in the lab mirror)
+   passes on the Mac's captures (see the scoreboard's update). No agent is working on the other two (no branch is left, 2026-10-16). 4.1.10 stays `MISSING` until a matched capture of
+   the held first-person weapon exists, 4.1.12 until one of an armed NPC in a mirror or a camera window does (the maps' mirrors miss a standing pawn's hands).
 8. **Stores and clocks.** Consolidate the originals into the main `.work` ([Stored originals](#stored-originals)) and store each frame's level time with it, so
-   the gate runs anywhere without `DX_ORIGINALS`.
+   the gate runs anywhere without `DX_ORIGINALS`. As of 2026-10-16 the gate is bound to one machine: the Linux host holds every store but the Mac's
+   two (4.1.9, 4.1.11), so a full run on the Mac reads `NO-ORIGINAL` for nearly every O1 row. Either copy the Linux stores to the Mac (or the reverse), or run the full gate on the Linux host after
+   copying the Mac's weapon and lab files there. The names collide: the Mac's `original-cases{,-2,-3}.json` would replace the Linux ones, so keep one set per machine or rename one.
 9. **Judgement for the user to adopt or change.** The scene list (weak reasons are marked), the thresholds and the three explained-block allowances in [How
    the gate judges](#how-the-gate-judges), the five-map sweep subset, and that `INLINE` counts against a criterion.
 
