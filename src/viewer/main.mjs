@@ -371,20 +371,23 @@ if(musicOutput)for(const type of ['pointerdown','keydown'])
   document.addEventListener(type,()=>{if(infoLinkAudioContext?.state!=='running')activateInfoLinkAudio().catch(()=>{});},true);
 /** Galaxy's EffectsChannels from DeusEx.ini, clamped to 0..32 as the
  * subsystem's Init (0x10605580) does; the worklet opens the library with it. */
-async function readEffectsChannels(files){
+async function readGalaxyOutputConfig(files){
   const file=files.find(entry=>String(entry.path).replaceAll('\\','/').split('/').pop().toLowerCase()==='deusex.ini');
   if(!file)throw new Error('DeusEx.ini is not among the game files');
   const data=await file.read(),text=new TextDecoder('latin1').decode(data instanceof Uint8Array?data:new Uint8Array(data));
   const value=parseIniValue(text,'Galaxy.GalaxyAudioSubsystem','EffectsChannels');
   if(value===undefined)throw new Error('Galaxy EffectsChannels is not in DeusEx.ini');
-  return Math.max(0,Math.min(32,msvcrtWtoi(value)));
+  // Latency as script-audio-live.mjs reads it (0x10605ad0's clamp to 10..250).
+  const latency=parseIniValue(text,'Galaxy.GalaxyAudioSubsystem','Latency');
+  return {effectsChannels:Math.max(0,Math.min(32,msvcrtWtoi(value))),
+    latency:latency===undefined?40:Math.max(10,Math.min(250,msvcrtWtoi(latency)))};
 }
 /** A new simulation side's music library: the worker gets its end of the
  * channel; ?sim=inline keeps one library on the page for its lifetime. */
 async function connectMusic(files){
   if(!musicOutput)return;
   try{
-    musicOutput.configure({effectsChannels:await readEffectsChannels(files)});
+    musicOutput.configure(await readGalaxyOutputConfig(files));
     if(simClient)simClient.connectMusic(musicOutput.simulationPort());
     else if(!pageMusicLibrary)pageMusicLibrary=connectMusicLibraryPort(musicOutput.simulationPort(),{effects:true});
   }catch(error){musicError=String(error?.message??error);}

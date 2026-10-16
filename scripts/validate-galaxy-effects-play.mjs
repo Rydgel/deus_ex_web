@@ -93,10 +93,10 @@ const library = createMusicLibraryProxy((message, transfer) => channel.port2.pos
 channel.port2.onmessage = ({data}) => library.report(data);
 processor.page({type: 'connect', port: channel.port1, effectsChannels: 16, pc: 64, ahead: 176400 - 882 * 4});
 while (!processor.open) await turn();
-// The worklet's render cost per 20 ms callback (host measurement, real time:
+// The worklet's timer callback cost per 20 ms (host measurement, real time:
 // performance.now is the simulated clock here).
-const renderTimes = [], render = processor.kernel.render;
-processor.kernel.render = frames => { const t = process.hrtime.bigint(); const r = render(frames); renderTimes.push(Number(process.hrtime.bigint() - t) / 1000); return r; };
+const renderTimes = [], callback = processor.kernel.callback;
+processor.kernel.callback = (play, write) => { const t = process.hrtime.bigint(); const r = callback(play, write); renderTimes.push(Number(process.hrtime.bigint() - t) / 1000); return r; };
 
 // The page's part for speech: decode requests (script-audio-live.mjs).
 const decodes = [];
@@ -230,6 +230,7 @@ assert.equal(results.sampleLoads, status.samples, 'every registered sample reach
 assert.ok(status.samples > 0, 'some sounds registered');
 assert.ok(results.voiceOps > 0, 'voice ops reached the worklet');
 assert.ok(peak > 0, 'the output is not silent');
+assert.equal(processor.stats.resyncs, 1, 'one resync: the first timer callback');
 starts = startsSeen.size;
 // The listener's zone reverb (UseReverb True in the installed DeusEx.ini):
 // Update hands each changed glxReverb over; on a reverb map the SSE engine is
@@ -260,7 +261,9 @@ const sortedTimes = renderTimes.toSorted((a, b) => a - b), at = q => sortedTimes
 const report = {frames: FRAMES, quanta, callbacks: processor.stats.callbacks, batches: status.batches, reports: status.reports,
   samples: status.samples, sampleBytes: status.sampleBytes, voiceOps: results.voiceOps, voiceStarts: starts, maxActive,
   reverb: {zone: listenerZone?.name ?? null, bReverbZone: zoneReverb, calls: results.reverbCalls, installed: Boolean(reverbState & 1)},
-  renderUs: {median: Math.round(at(0.5)), p99: Math.round(at(0.99)), max: Math.round(sortedTimes.at(-1))},
+  // The first callback is the start-up resync: size − D bytes rendered at once (output.rs).
+  renderUs: {median: Math.round(at(0.5)), p99: Math.round(at(0.99)), max: Math.round(sortedTimes.at(-1)), first: Math.round(renderTimes[0])},
+  resyncs: processor.stats.resyncs,
   channelChecks: checks, heldChecks, speech, activeBeforeReset: before.toString(2), activeAfterReset: afterReset.toString(2), peak: Number(peak.toFixed(4)), underruns: processor.stats.underruns,
   notes: notes.slice(0, 8)};
 console.log(JSON.stringify(report));

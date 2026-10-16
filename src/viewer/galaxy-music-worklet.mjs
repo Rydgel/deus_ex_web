@@ -1,26 +1,33 @@
 /** Galaxy's output (docs/galaxy-music.md "Phase 5: Output", docs/galaxy-audio.md
- * "Effects through Galaxy's mixer"): the AudioWorklet that owns the one
- * Galaxy library instance (the Rust kernel, native/galaxy-kernel,
- * src/runtime/galaxy-kernel.wasm) and plays its output: the music bus A
- * stored and the effects bus B (sound effects, ambient sounds) added onto the
- * same frames, as the renderer 0x106146a0 converts them at coincident heads.
+ * "Effects through Galaxy's mixer", docs/audio-output-scope.md §6): the
+ * AudioWorklet that owns the one Galaxy library instance (the Rust kernel,
+ * native/galaxy-kernel, src/runtime/galaxy-kernel.wasm) and plays its
+ * DirectSound secondary buffer.
  *
  * The original mixes on a winmm timer thread: every Latency/2 = 20 ms the
- * callback 0x106142a0 renders what the DirectSound play cursor advanced, in
- * mixer calls of n = remaining frames (each at most 512), under the library
- * lock the game thread's Update also holds. Here the schedule is fixed:
- * callbacks of exactly 882 frames (20 ms at 44.1 kHz), back to back in
- * output time, each rendered when the ring holds less than one 128-frame
- * render quantum. The original's cursor jitter and its two ring heads
- * (bus B about a ring ahead of bus A) are host timing and are not
- * reproduced.
+ * callback 0x106142a0 reads the buffer's play and write cursors, renders
+ * what they advanced into a 176,400-byte staging ring with the music bus A
+ * at head A (just behind the play cursor) and the effects bus B at head B =
+ * A + D (ahead of it), and copies both segments into the buffer, under the
+ * library lock the game thread's Update also holds. Here the translated
+ * callback (output.rs) runs on the kernel's model of that buffer: the play
+ * cursor is this processor's own consumption position, the write cursor is
+ * play + WRITE_LEAD, so D = 7,056 (Galaxy's Latency bytes) + WRITE_LEAD, and
+ * the output is the buffer read at the play position. Music is therefore
+ * heard size − D bytes after the effects the same mixer call rendered, as in
+ * the original. Host timing (scope §7 item 6): the callbacks are exactly
+ * 882 frames of consumption apart (20 ms at 44.1 kHz), the first one when
+ * the library opens; a callback falls inside a 128-frame quantum, which is
+ * split there. The original's cursor jitter is not reproduced.
  *
  * Messages.
  * - Page port (`this.port`): `init {wasm}` the kernel bytes (compiled here;
  *   some worklet scopes lack fetch); `connect {port, effectsChannels, pc,
- *   ahead}` a new simulation side: the library is opened afresh (glxInit's
- *   state, Init's EffectsChannels, the output open) and `port` becomes the
- *   batch source; `status {id}` answered with the counters (only on request).
+ *   ahead, latency, writeLead}` a new simulation side: the library is opened
+ *   afresh (glxInit's state, Init's EffectsChannels, the output open at
+ *   `latency` with a fresh secondary buffer played from its start) and
+ *   `port` becomes the batch source; `status {id}` answered with the
+ *   counters (only on request).
  * - Simulation port: `batch {id, ops, modules}` (galaxy-music-library.mjs
  *   encodeMusicBatch), applied whole on arrival, which is always between two
  *   callbacks (Update's critical section against the timer callback). After
@@ -45,7 +52,13 @@ export const OPS = Object.freeze({
 export const ARITY = Object.freeze({ 1: 2, 2: 2, 3: 2, 4: 2, 5: 2, 6: 2, 7: 2, 8: 2, 9: 2, 10: 3, 11: 6, 12: 4, 13: 1, 14: 27,
   15: 3, 16: 3, 17: 1 });
 export const CALLBACK_FRAMES = 882;
-const SLACK = 1024, RING = 2048;
+/** The write cursor's lead over the play cursor at the first callback, in
+ * bytes: D's host part (scope §3.1, §7 item 2). PLACEHOLDER, NOT MEASURED:
+ * 0 until the poll of the running original (scope §5.1) measures CrossOver's
+ * dsound lead on the reference machine; D is then 7,056 + the lead. A
+ * `connect` message may override it (validators). */
+export const WRITE_LEAD = 0;
+const SLACK = 1024;
 // glxVoices at the preferred base, 0xa0 bytes each (galaxy-music-library.mjs VOICE_BASE).
 const VOICE_BASE = 0x1068dca0, VOICE_SIZE = 0xa0;
 const slotOf = voice => { const off = (voice >>> 0) - VOICE_BASE; return off >= 0 && off % VOICE_SIZE === 0 && off / VOICE_SIZE < 32 ? off / VOICE_SIZE : -1; };
@@ -199,6 +212,13 @@ export function createMusicKernel(exports) {
     heldSlots: () => [...held.keys()],
     voicesPtr: () => x.galaxy_voices_ptr(),
     reverbState: () => x.galaxy_reverb_state() >>> 0,
+    /** The secondary buffer at `latency` ms (the open's DirectSound setup). */
+    openOutput: latency => x.galaxy_output_open(latency),
+    /** One timer callback with the cursors (play, write); 0 or a fault. */
+    callback: (play, write) => x.galaxy_output_callback(play >>> 0, write >>> 0) >>> 0,
+    /** The output's state words (output.rs galaxy_output_state). */
+    output: index => x.galaxy_output_state(index) >>> 0,
+    secondaryPtr: () => x.galaxy_output_secondary(),
     render: frames => x.galaxy_render(frames),
     fault: () => x.galaxy_fault(),
     memory: () => x.memory.buffer,
@@ -212,12 +232,12 @@ export class GalaxyMusicProcessor extends Base {
   constructor(options) {
     super(options);
     this.kernel = null; this.open = false; this.sim = null; this.config = null; this.queue = [];
-    // The ring of rendered frames (float, per channel) and the callback's PCM view.
-    this.left = new Float32Array(RING); this.right = new Float32Array(RING);
-    this.read = 0; this.fill = 0; this.pcm = null; this.pcmPtr = 0; this.pcmMemory = null;
+    // The secondary buffer (int16 frames, read in place), the play cursor in
+    // bytes, the frames of consumption left before the next callback.
+    this.size = 0; this.play = 0; this.untilCallback = 0; this.view = null; this.viewMemory = null;
     this.reported = { batch: -1, state: -1, active: -1, positions: '' };
     this.stats = { rate: globalThis.sampleRate ?? null, connects: 0, batches: 0, ops: 0, lastBatch: 0, loads: 0,
-      callbacks: 0, quanta: 0, underruns: 0, reports: 0, fault: 0, error: null };
+      callbacks: 0, quanta: 0, underruns: 0, resyncs: 0, reports: 0, fault: 0, error: null };
     this.port.onmessage = ({ data }) => this.page(data);
   }
 
@@ -231,7 +251,8 @@ export class GalaxyMusicProcessor extends Base {
       } else if (data.type === 'connect') {
         if (this.sim) { this.sim.onmessage = null; this.sim.close(); }
         this.sim = data.port; this.queue = []; this.open = false;
-        this.config = { effectsChannels: data.effectsChannels, pc: data.pc, ahead: data.ahead };
+        this.config = { effectsChannels: data.effectsChannels, pc: data.pc, ahead: data.ahead, latency: data.latency ?? 40,
+          writeLead: data.writeLead ?? WRITE_LEAD };
         this.stats.connects++; this.stats.lastBatch = 0; this.stats.fault = 0;
         this.reported = { batch: -1, state: -1, active: -1, positions: '' };
         this.sim.onmessage = ({ data: message }) => this.batch(message);
@@ -246,10 +267,13 @@ export class GalaxyMusicProcessor extends Base {
   start() {
     if (!this.kernel || !this.config || this.open) return;
     if (this.stats.rate !== 44100) { this.stats.error = `the context runs at ${this.stats.rate} Hz, not 44100`; return; }
-    const { effectsChannels, pc, ahead } = this.config;
+    const { effectsChannels, pc, ahead, latency } = this.config;
     const status = this.kernel.open(effectsChannels, pc, ahead);
     if (status !== 0) { this.stats.error = `output open returned ${status}`; return; }
-    this.open = true; this.read = 0; this.fill = 0;
+    // A fresh secondary buffer (CreateSoundBuffer), played from its start.
+    this.kernel.openOutput(latency);
+    this.size = this.kernel.output(0); this.play = 0; this.untilCallback = 0; this.view = null;
+    this.open = true;
     for (const message of this.queue.splice(0)) this.apply(message);
     this.report();
   }
@@ -285,46 +309,53 @@ export class GalaxyMusicProcessor extends Base {
     this.sim.postMessage({ type: 'report', batch: this.stats.lastBatch, state, active, positions });
   }
 
-  /** One timer callback: 882 frames of bus A, int16 / 32768, into the ring. */
-  render() {
-    const ptr = this.kernel.render(CALLBACK_FRAMES);
-    if (!ptr) { this.stats.fault = this.kernel.fault(); return false; }
-    const memory = this.kernel.memory();
-    if (ptr !== this.pcmPtr || memory !== this.pcmMemory) {
-      this.pcm = new Int16Array(memory, ptr, CALLBACK_FRAMES * 2); this.pcmPtr = ptr; this.pcmMemory = memory;
-    }
-    const pcm = this.pcm, left = this.left, right = this.right;
-    let at = (this.read + this.fill) % RING;
-    for (let i = 0; i < CALLBACK_FRAMES; i++) {
-      left[at] = pcm[2 * i] / 32768; right[at] = pcm[2 * i + 1] / 32768;
-      if (++at === RING) at = 0;
-    }
-    this.fill += CALLBACK_FRAMES; this.stats.callbacks++;
+  /** One timer callback 0x106142a0 at the current play cursor. */
+  callback() {
+    const play = this.play, write = (play + this.config.writeLead) % this.size;
+    if (this.kernel.callback(play, write)) { this.stats.fault = this.kernel.fault(); return false; }
+    this.stats.callbacks++; this.stats.resyncs = this.kernel.output(6);
     this.report();
     return true;
+  }
+
+  /** The secondary buffer's frames, viewed in place (again after a memory growth). */
+  frames() {
+    const memory = this.kernel.memory();
+    if (this.view === null || memory !== this.viewMemory) {
+      this.view = new Int16Array(memory, this.kernel.secondaryPtr(), this.size >> 1); this.viewMemory = memory;
+    }
+    return this.view;
   }
 
   process(inputs, outputs) {
     const channels = outputs[0], left = channels[0], right = channels[1] ?? channels[0], n = left.length;
     this.stats.quanta++;
-    if (this.open && !this.stats.fault && this.fill < n) this.render();
-    if (this.fill < n) {
-      // Nothing rendered: before the library opens, or after a fault.
+    let i = 0;
+    while (this.open && !this.stats.fault && i < n) {
+      if (this.untilCallback === 0) {
+        if (!this.callback()) break;
+        this.untilCallback = CALLBACK_FRAMES;
+      }
+      const run = Math.min(n - i, this.untilCallback), size = this.size;
+      const view = this.frames();
+      let at = this.play >> 1;
+      for (let k = 0; k < run; k++) {
+        left[i + k] = view[at] / 32768; right[i + k] = view[at + 1] / 32768;
+        at += 2; if (at === size >> 1) at = 0;
+      }
+      this.play = (this.play + 4 * run) % size; i += run; this.untilCallback -= run;
+    }
+    if (i < n) {
+      // Nothing to play: before the library opens, or after a fault.
       if (this.open) this.stats.underruns++;
-      left.fill(0); right.fill(0);
-      return true;
+      left.fill(0, i); right.fill(0, i);
     }
-    let at = this.read;
-    for (let i = 0; i < n; i++) {
-      left[i] = this.left[at]; right[i] = this.right[at];
-      if (++at === RING) at = 0;
-    }
-    this.read = at; this.fill -= n;
     return true;
   }
 
   status() {
-    return { ...this.stats, open: this.open, connected: Boolean(this.sim), queued: this.queue.length, fill: this.fill,
+    return { ...this.stats, open: this.open, connected: Boolean(this.sim), queued: this.queue.length, play: this.play,
+      writeLead: this.config?.writeLead ?? null, heads: this.open ? [this.kernel.output(1), this.kernel.output(2)] : null,
       state: this.open ? this.kernel.state() : null, reverb: this.open ? this.kernel.reverbState() & 3 : null,
       results: this.kernel ? { ...this.kernel.results } : null };
   }

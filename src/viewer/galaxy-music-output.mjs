@@ -7,21 +7,23 @@
  *
  * Host choices: the context is the page's AudioContext at 44100 Hz (created
  * by the caller on a user gesture); the pan table is built at x87 precision
- * control 64 (the sequencer oracle's 0x037f control word); the ring fill
- * `ahead` (0x10697cdc) is pinned to 176400 − 882·4 bytes before each
- * callback (the mixer only tests it against 0). */
+ * control 64 (the sequencer oracle's 0x037f control word). `ahead` is the
+ * fill galaxy_render pins on the coincident-head path, which the worklet no
+ * longer plays (its timer callback keeps 0x10697cdc itself, output.rs); the
+ * write cursor's lead is the worklet's WRITE_LEAD (a labelled placeholder). */
 export const MUSIC_PAN_PC = 64;
 export const MUSIC_AHEAD = 176400 - 882 * 4;
 
 export function createMusicOutput({ effectsChannels = 16 } = {}) {
   let node = null, starting = null, pending = null, nextStatus = 1, last = null, error = null, asked = -Infinity;
   const waiters = new Map();
-  const config = { effectsChannels };
+  const config = { effectsChannels, latency: 40 };
   const connect = port => node.port.postMessage({ type: 'connect', port, effectsChannels: config.effectsChannels,
-    pc: MUSIC_PAN_PC, ahead: MUSIC_AHEAD }, [port]);
+    pc: MUSIC_PAN_PC, ahead: MUSIC_AHEAD, latency: config.latency }, [port]);
   const output = {
-    /** EffectsChannels from DeusEx.ini (Init clamps it to 0..32). */
-    configure({ effectsChannels: channels }) { config.effectsChannels = channels; },
+    /** EffectsChannels (Init clamps it to 0..32) and Latency (clamped to
+     * 10..250 by 0x10605ad0; the output open clamps it to 5..495) from DeusEx.ini. */
+    configure({ effectsChannels: channels, latency = config.latency }) { config.effectsChannels = channels; config.latency = latency; },
     /** A new simulation side: returns its port; the worklet gets the other
      * end now, or when it exists. The library is opened afresh for it. */
     simulationPort() {

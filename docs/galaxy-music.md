@@ -582,8 +582,10 @@ under the same lock. In the browser:
 | Original | Browser |
 | --- | --- |
 | library state (glxInit, voices, song) | the worklet's kernel instance (`src/viewer/galaxy-music-worklet.mjs`) |
-| timer callback 0x106142a0, every 20 ms | a callback of exactly 882 frames whenever the worklet's ring holds less than one 128-frame quantum |
-| mixer calls of n = remaining frames (≤ 512) | the same: `galaxy_render(882)` re-pins `ahead` and runs the mixer entry until the callback is rendered |
+| timer callback 0x106142a0, every 20 ms | the translated callback (`output.rs`, [mixer](galaxy-music/mixer.md) §9) every 882 frames of the worklet's consumption (since 2026-10-16; before, `galaxy_render(882)` at coincident heads) |
+| DirectSound play and write cursors | the worklet's consumption position, and that plus `WRITE_LEAD` (a labelled placeholder until §5.1 of [audio-output-scope](audio-output-scope.md) measures it) |
+| mixer calls of n = remaining frames (≤ 512) | the same, inside the renderer the callback calls |
+| the secondary buffer (1 s, looping) | the kernel's model of it, read in place at the play position |
 | Update's glx* calls under the lock | one batch per critical section, from the simulation's `library` service |
 | Update's read of `[0x10698201]` | `library.order()` (below) |
 
@@ -653,10 +655,18 @@ Update's read.
 - `galaxy_host_open(EffectsChannels, 64, 172872)`: EffectsChannels from
   DeusEx.ini (16, clamped to 0..32 as Init does); pan table built at x87
   precision control 64 (the sequencer oracle's 0x037f; open question
-  above); the ring fill `ahead` (0x10697cdc) pinned to 176400 − 882·4 bytes
-  before every callback. The mixer only tests `ahead` against 0, so any
-  nonzero pin renders the same; glxControlMusic(1)'s ring flush
-  (`ahead = 0`) has nothing to flush here and the next callback re-pins it.
+  above); 172872 is the fill `galaxy_render` pins on the coincident-head
+  path, which validators still use. Then `galaxy_output_open(Latency)`
+  (DeusEx.ini Latency, 10..250 as 0x10605ad0 clamps it; 40 installed): a
+  fresh secondary buffer and staging ring, heads and `ahead` zero, played
+  from the buffer's start. The first callback runs before the first frame
+  is played and is the original's start-up resync: it renders size − D
+  bytes (about 0.96 s) at once, a single long callback (about 8 ms in
+  Node's Wasm on the M2 Pro) that falls on the buffer's silent start. From
+  then on the callback keeps `ahead` itself, and glxControlMusic(1)
+  (`MUSICORDER`) flushes the ring as in the original (the next callback
+  resyncs: again about 0.96 s rendered at once, which can glitch the
+  browser's output once; console only).
 - Map change: `createSimHost` takes `musicLibrary` and passes it through
   `createGame` and `createScriptDoors` to `createLiveAudio({library})`.
   `disposeAudio()` (also run by `dispose()`) calls the live audio's
@@ -669,21 +679,26 @@ Update's read.
 - `?music=0`: no worklet and no channel; `createLiveAudio` gets no library
   (the headless mirror).
 
-**Output.** Bus A as the store path converts it to int16 (the PCM kernel's
-contract), played as float = int16 / 32768, stereo, interleaved left, right.
-The ring holds at most 882 + 127 frames (about 23 ms). Underruns count the
-quanta played as silence while the library is open (only a fault can cause
-one in this pull schedule); audio device glitches are not visible to the
+**Output.** The secondary buffer as the callback leaves it (bus A stored at
+head A, bus B saturating-added at head B = A + D, both copied in), played
+from the play cursor as float = int16 / 32768, stereo, interleaved left,
+right. Music therefore sounds size − D bytes after the effects the same
+mixer call rendered, as in the original (validate-galaxy-output-play.mjs).
+A callback falls inside a 128-frame quantum, which is split there.
+Underruns count the quanta played as silence while the library is open
+(only a fault can cause one); audio device glitches are not visible to the
 worklet. No volume control exists in the viewer.
 
 **Host timing, not the original's.**
 
-- The callback schedule is fixed (882 frames back to back); the original's
-  play-cursor jitter and the request lengths it causes are not reproduced.
-- A batch takes effect at the next callback, about 0 to 23 ms of output
-  later; in the original, Update's changes reach the next timer callback.
-- The original writes music about one ring (1 s) behind the play cursor
-  (§1.3, derived and unmeasured); the browser plays it within one callback.
+- The callback schedule is fixed (882 frames of consumption apart); the
+  original's play-cursor jitter and the request lengths it causes are not
+  reproduced (scope §7 item 6).
+- A batch takes effect at the next callback, up to 20 ms of output later; in
+  the original, Update's changes reach the next timer callback too. The
+  effects are then heard about D later, the music about one ring later.
+- D's host part, the write cursor's lead, is the placeholder `WRITE_LEAD = 0`
+  (galaxy-music-worklet.mjs) until it is measured on the reference machine.
 - The counters (0x10698204, 0x1069834c) run free from the library's open,
   as in the original, so a song's first tick phase depends on when it
   starts.
@@ -691,7 +706,7 @@ worklet. No volume control exists in the viewer.
 **Status.** `deusExViewer.status().music`: `{enabled, error, context,
 output: {running, error, worklet}, library}`, with the worklet's counters
 (`open`, `connects`, `batches`, `ops`, `loads`, `callbacks`, `quanta`,
-`underruns`, `reports`, `fault`, `error`, `state`, the last load/control
+`underruns`, `resyncs`, `play`, `writeLead`, `heads`, `reports`, `fault`, `error`, `state`, the last load/control
 results) and the simulation's (`issued`, `acknowledged`, `order`,
 `reportedOrder`, `reports`, module bytes; in the worker they ride the
 game status the snapshot already carries every 15th frame).

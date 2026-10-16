@@ -50,8 +50,9 @@ pub const MUTANT_RESEAT_ONCE: u32 = 405; // the A == B re-seat only at the first
 
 /// The secondary buffer's model (see the module comment).
 pub struct Secondary {
-    /// The buffer's bytes (nAvgBytesPerSec of them, CreateSoundBuffer at 0x10613841).
-    pub data: Vec<u8>,
+    /// The buffer's bytes (nAvgBytesPerSec of them, CreateSoundBuffer at
+    /// 0x10613841), held as int16 so the host can read the frames in place.
+    pub data: Vec<i16>,
     /// What the next GetCurrentPosition answers.
     pub play: u32,
     pub write: u32,
@@ -90,7 +91,7 @@ impl Secondary {
     /// Lock(offset, bytes, &p1, &b1, &p2, &b2, flags): ENTIREBUFFER takes the
     /// whole buffer; a range past the end wraps into a second region at 0.
     fn lock(&mut self, offset: u32, bytes: u32, flags: u32) -> (u32, Region) {
-        let len = self.data.len() as u32;
+        let len = 2 * self.data.len() as u32;
         let mut hr = self.lock_hr.pop_front().unwrap_or(DS_OK);
         let mut r = Region { p1: NULL_REGION, b1: 0, p2: NULL_REGION, b2: 0 };
         if hr == DS_OK {
@@ -134,14 +135,15 @@ pub struct Output {
     pub secondary: Secondary,
     /// The last normal render's byte count (R), or NULL_REGION if none ran (validator).
     pub last_render: u32,
-    /// Callbacks that ran past the open gate.
+    /// Callbacks past GetCurrentPosition, and resyncs among them (host diagnostics).
     pub callbacks: u32,
+    pub resyncs: u32,
 }
 
 impl Output {
     pub(crate) fn new() -> Self {
         Output { size: 0, head_a: 0, head_b: 0, avg_bytes: 0, align_word: 0, latency: 0x28, staging: Vec::new(),
-            secondary: Secondary::new(), last_render: NULL_REGION, callbacks: 0 }
+            secondary: Secondary::new(), last_render: NULL_REGION, callbacks: 0, resyncs: 0 }
     }
 }
 
@@ -149,6 +151,11 @@ fn bytes_of(v: &[i16]) -> &[u8] {
     // SAFETY: i16 has no padding and any byte pattern is valid; little-endian
     // on every target the kernel runs on (wasm32, x86).
     unsafe { std::slice::from_raw_parts(v.as_ptr() as *const u8, v.len() * 2) }
+}
+
+fn bytes_of_mut(v: &mut [i16]) -> &mut [u8] {
+    // SAFETY: as bytes_of; the borrow is unique.
+    unsafe { std::slice::from_raw_parts_mut(v.as_mut_ptr() as *mut u8, v.len() * 2) }
 }
 
 impl Library {
@@ -168,9 +175,10 @@ impl Library {
         o.head_a = 0;
         o.head_b = 0;
         o.staging = vec![0; (o.size / 2) as usize];
-        o.secondary.data = vec![0; o.size as usize];
+        o.secondary.data = vec![0; (o.size / 2) as usize];
         o.last_render = NULL_REGION;
         o.callbacks = 0;
+        o.resyncs = 0;
         self.player.ahead = 0;
         OK
     }
@@ -217,11 +225,11 @@ impl Library {
         }
         let o = &mut self.player.output;
         let (from, to, n) = (from as usize, to as usize, n as usize);
-        if to == NULL_REGION as usize || from + n > o.size as usize || to + n > o.secondary.data.len() {
+        if to == NULL_REGION as usize || from + n > o.size as usize || to + n > 2 * o.secondary.data.len() {
             return Err(UNSUPPORTED_OUTPUT_COPY);
         }
         let src = &bytes_of(&o.staging)[from..from + n];
-        o.secondary.data[to..to + n].copy_from_slice(src);
+        bytes_of_mut(&mut o.secondary.data)[to..to + n].copy_from_slice(src);
         Ok(())
     }
 
@@ -285,6 +293,7 @@ impl Library {
                 fill = fill.wrapping_add(size as i32);
             }
             self.player.ahead = fill as u32;
+            self.player.output.resyncs += 1;
             self.render_staging(b, b, n, n)?;
             let (hr, r) = self.lock_retry(0, size, DSBLOCK_ENTIREBUFFER);
             if hr == DS_OK {
@@ -356,9 +365,10 @@ pub extern "C" fn galaxy_output_callback(play: u32, write: u32) -> u32 {
     })
 }
 
-/// The secondary buffer's bytes (the output the host plays).
+/// The secondary buffer's bytes (the output the host plays: interleaved
+/// int16 stereo frames, `size` bytes).
 #[no_mangle]
-pub extern "C" fn galaxy_output_secondary() -> *const u8 {
+pub extern "C" fn galaxy_output_secondary() -> *const i16 {
     with_library(|l| l.player.output.secondary.data.as_ptr())
 }
 
@@ -368,7 +378,7 @@ pub extern "C" fn galaxy_output_staging() -> *const i16 {
     with_library(|l| l.player.output.staging.as_ptr())
 }
 
-/// Ring size, head A, head B, ahead, the last R (NULL_REGION if none), callbacks.
+/// Ring size, head A, head B, ahead, the last R (NULL_REGION if none), callbacks, resyncs.
 #[no_mangle]
 pub extern "C" fn galaxy_output_state(index: u32) -> u32 {
     with_library(|l| {
@@ -380,6 +390,7 @@ pub extern "C" fn galaxy_output_state(index: u32) -> u32 {
             3 => l.player.ahead,
             4 => o.last_render,
             5 => o.callbacks,
+            6 => o.resyncs,
             _ => 0,
         }
     })

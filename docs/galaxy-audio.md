@@ -352,8 +352,12 @@ voice pool does. `?sfx=webaudio` keeps the Web Audio mapping above, for A/B.
 `native/galaxy-kernel/src/effects.rs`): glxLoadSample with its WAV loader
 (RegisterSound's call), glxStartSample, glxControlSample, glxControlVoice
 (the status poll) and glxStopSample. The mixer already mixed the effect
-slots; `galaxy_render` now stores bus A and adds bus B onto the same frames
-(the renderer's placement at coincident heads). The effects reverb is the
+slots; `galaxy_render` stores bus A and adds bus B onto the same frames
+(the renderer's placement at coincident heads). Since 2026-10-16 the worklet
+plays the translated timer callback's secondary buffer instead
+([mixer](galaxy-music/mixer.md) §9, [galaxy-music](galaxy-music.md) "Phase
+5"): bus B at head B = A + D, music heard size − D bytes after the effects
+rendered with it, as in the original. The effects reverb is the
 renderer's hook between the mix and the conversions
 ([reverb](galaxy-music/reverb.md), `reverb.rs`).
 
@@ -411,9 +415,10 @@ voices on 2026-10-16 (next section).
   the reverb on.
 
 **Open.**
-- The original's two ring heads put effects about a ring ahead of music
-  (mixer.md §1.3; derived and unmeasured). The browser plays both buses
-  at the same output position.
+- ~~The original's two ring heads~~: reproduced since 2026-10-16 (the
+  translated callback, oracle-checked); D's host part (the write cursor's
+  lead) is a labelled placeholder until measured
+  ([audio-output-scope](audio-output-scope.md) §5.1).
 - The timer thread's MXCSR is assumed to be 0x1f80.
 - The game thread's x87 control word is open: 0x007f would change the
   reverb coefficients.
