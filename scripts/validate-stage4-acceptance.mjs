@@ -64,6 +64,21 @@ const INTERFACE_THRESHOLDS = Object.freeze({
   edge: 0.99,            // edge recall and precision
   outlierBlocks: 0,
 });
+// The conversation frames (docs/conversation-camera.md "Frames against the original"): a third-person frame at 1280x720 is the letterbox bars
+// (rows 0..72 and 570..719), the subtitle in the lower bar, and the 3D band between them (the whole frame in the intro, whose window is 16:9 of the
+// width). The bars and the subtitle are drawn by the same code on both sides and measured equal to the pixel in all 4 MeetPaul frames (0 of ~280,000
+// pixels, maximum difference 0). The band differs where the two rasterizers tie on a polygon edge: 99% or more of its pixels off by more than 10 lie
+// within 1 px of a hard step (a >24 of 255 step to a neighbour, in either frame), the rest are at most 63 pixels per frame, off by at most 23.
+// Chosen from the 7 frames compared (4 of MeetPaul, 3 of the intro; the measured worst in each comment): strong for a misplaced or missing bar, a shifted
+// camera or viewport (the harness defect fixed 2026-10-16 read .33 identical, 349,313 pixels over 2), wrong text, colour, shading or texture (those
+// are thousands of pixels away from edges); weak for the polygon edge, which is not judged by a count (it follows the silhouettes' length).
+const CONVERSATION_THRESHOLDS = Object.freeze({
+  barsOver2: 0,          // the two bars and the subtitle: pixels off by more than 2 of 255 (measured 0)
+  bandIdentical: 0.94,   // share of the band's pixels equal in all channels (measured .951 to .983)
+  awayOver10: 100,       // pixels off by more than 10 of 255 and farther than 1 px from every hard step (measured at most 63)
+  edge: 0.99,            // the frame's edge recall and precision (measured at least .997)
+  outlierBlocks: 0,      // 16x9 blocks whose luminance ratio is 1.6x off the frame's median (measured 0)
+});
 // Views of flat, nearly black walls, where the strongest 5% of gradients are texture noise and the edge precision reads low with no visible
 // difference (docs/visual-acceptance.md "Flags explained by the metric or by timing"; Smug y0/y1 show the same pattern, recall 1.0 and
 // mean abs. difference under 1.3). They are judged by the recall and the outlier blocks alone.
@@ -110,6 +125,7 @@ const CAMERA = spec => ({type: 'camera', ...spec});
 const INTERFACE = spec => ({type: 'interface', ...spec});
 const TERMINAL = spec => ({type: 'terminal', ...spec});
 const LIVE = spec => ({type: 'live', ...spec});
+const CONVERSATION = spec => ({type: 'conversation', ...spec});
 const SWEEP = spec => ({type: 'sweep', ...spec});
 const CENSUS = spec => ({type: 'census', ...spec});
 
@@ -283,9 +299,17 @@ add('4.5.3', C5, '01_NYC_UNATCOIsland MeetPaul camera', 'CreateConCamera, the le
   V('root-raw-background'), V('root-render-viewport'), V('conversation-move-camera'), V('island-conversation'));
 add('4.5.4', C5, 'speech timing and audio', 'speech lookup, sound length and the retained archive equal the original', 'O2',
   V('conversation-speech'), V('conversation-speech-audio'), V('conversation-sound-length'), V('conversation-audio-integration'), V('infolink-audio'));
-missing('4.5.5', C5, 'MeetPaul frame', 'the third-person conversation frame (letterbox, behind view, camera, subtitles) against the original\'s', 'compared by hand 2026-10-16 (docs/conversation-camera.md "Frames against the original": four frames, bars and subtitle pixel-equal, the band within polygon edges; stored as cvA1..4 in the main .work); the gate check kind that replays and judges them is not written yet');
+add('4.5.5', C5, 'MeetPaul frame', 'the third-person conversation frame (letterbox, behind view, camera, subtitles) against the original\'s', 'O1',
+  CONVERSATION({scene: 'meetpaul', map: '01_NYC_UNATCOIsland', tag: 'cvA', playerBlend: true,
+    frames: [{name: 'cvA1', tick: 100}, {name: 'cvA2', tick: 250}, {name: 'cvA3', tick: 600}, {name: 'cvA4', tick: 750}],
+    liveAllow: {'@player': ['Frame'], SecurityBot0: ['LRT'], UNATCOTroop1: ['LRT']},   // measured: the player's AnimFrame at tick 1-5 (a tween phase), two guards' LastRenderTime at tick 1 (the render history before the release)
+    earlyCmds: 'set WinDrv.WindowsClient Brightness 0.666667|set DeusEx.JCDentonMale Location (X=-2385,Y=8393,Z=-256.2)|set DeusEx.JCDentonMale ViewRotation (Pitch=0,Yaw=51120,Roll=0)|walk'}));
 missing('4.5.6', C5, 'speech audio', 'the speech samples the player hears against Galaxy\'s', 'Galaxy\'s MPEG decoder is not translated; the host\'s decode and rounding are unverified (docs/lip-sync.md)');
-missing('4.5.7', C5, '00_Intro camera shots', 'the intro\'s CameraPoint shots against the original', 'the original\'s frames at ticks 170, 1000 and 2250 are stored (main .work, tag in2), but Play\'s replay of the intro diverges from tick 1 (docs/conversation-camera.md "Hand-off"), so no comparison is claimed');
+add('4.5.7', C5, '00_Intro camera shots', 'the intro\'s CameraPoint shots against the original', 'O1',
+  CONVERSATION({scene: 'intro', map: '00_Intro', tag: 'in2', noGhost: true, keepTraveling: true,
+    frames: [{name: 'in2-in1', tick: 170}, {name: 'in2-in3', tick: 1000}, {name: 'in2-in4', tick: 2250}],
+    earlyCmds: 'set WinDrv.WindowsClient Brightness 0.666667'}),
+  V('native-find-base'));   // the replay's first tick: SetPhysics(PHYS_None) reaches FindBase (a wrong extent put the standing player back in PHYS_Falling)
 missing('4.5.8', C5, 'a second third-person conversation', 'a conversation on another map, with the third-person camera, lip sync and speech', 'chosen: 01_NYC_UNATCOHQ MeetManderley (every map\'s object-index capture already exists, docs/object-index-captures.md); it starts and plays in Play with the camera, but no original capture was taken yet (docs/conversation-camera.md "Hand-off")');
 
 // --- runner ----------------------------------------------------------------------------------------------
@@ -344,6 +368,9 @@ function expand(check, criterion) {
   if (check.type === 'terminal') return [{key: `${criterion.id}:terminal ${check.name}`, label: `terminal ${check.map} ${check.name}`, terminal: check, mutex: ['acceptance'], estimate: 120, memory: 1800}];
   if (check.type === 'camera') return [{key: `${criterion.id}:camera ${check.name}`, label: `camera ${check.map} ${check.name}`, camera: check, mutex: ['acceptance'], estimate: 120, memory: 1800}];
   if (check.type === 'live') return [{key: `${criterion.id}:live ${check.map}${check.tag ? ` ${check.tag}` : ''}`, label: `live ${check.map}${check.tag ? ` (${check.tag})` : ''}`, live: check, mutex: check.shot ? [`live:${check.map}`, 'acceptance'] : [`live:${check.map}`], estimate: 120, memory: 1500}];
+  // one task per scene: the frames' replays share the tag's play-rows file, so they run one after the other
+  if (check.type === 'conversation') return [{key: `${criterion.id}:conversation ${check.scene}`, label: `conversation ${check.map} (${check.frames.length} frames)`, conversation: check, mutex: [`live:${check.map}`, 'acceptance'],
+    estimate: 130 * check.frames.length, memory: 1800}];
   if (check.type === 'sweep') return [{key: `${criterion.id}:sweep`, label: `sweep replay ${check.maps.length} maps`, sweep: check, mutex: ['live-sweep'], estimate: 75 * check.maps.length, memory: 1500}];
   if (check.type === 'census') return [{key: `${criterion.id}:census-ui-screens`, label: 'census-ui-screens', census: check, estimate: 150, memory: 1500}];
   return [{key: `${criterion.id}:${labelOf(check)}`, label: labelOf(check), error: `unknown check type ${check.type}`}];
@@ -417,6 +444,7 @@ async function runTask(task) {
   if (task.terminal) return judgeTerminal(task, add, fail, result);
   if (task.camera) return judgeCamera(task, add, fail, result);
   if (task.live) return judgeLive(task, add, fail, result);
+  if (task.conversation) return judgeConversation(task, add, fail, result);
   if (task.sweep) return judgeSweep(task, add, fail, result);
   if (task.census) return judgeCensus(task, add, fail, result);
   return fail('no runner');
@@ -669,6 +697,68 @@ async function judgeLive(task, add, fail, result) {
   }
   if (problems.length) return fail(`${map}${tag ? ` ${tag}` : ''}: ${problems.join('; ')}`);
   return {...result, status: 'PASS', detail: `${map}${tag ? ` ${tag}` : ''}: ${actors.length} actors equal for ${report.ticks} ticks, clock and stream draws equal${frameNote}${flaky ? ` (the first run's ${flaky}; equal on the repeat)` : ''}`, flaky: Boolean(flaky)};
+}
+// conversation frames -------------------------------------------------------------------------------------
+// The original's held frames of a conversation (taken with Ctrl+F9 at a tick of the traced load, `live-original.sh --cmds "N:@ctrlshot name"`) against
+// Play's replay of the same trace stopped at the same tick: `live-acceptance.mjs play --ticks N --shot name` (the measured phonemes fed, the player's
+// placement as the original's console typed it), then `conversation-acceptance.mjs compare`, which splits the frame into the letterbox bars, the
+// subtitle and the 3D band. One replay per frame; the replays share the trace's play-rows file, so they run in turn.
+async function judgeConversation(task, add, fail, result) {
+  const c = task.conversation, T = {...CONVERSATION_THRESHOLDS, ...task.conversation.thresholds};
+  const absent = stageLive(c.map, c.tag);
+  for (const frame of c.frames) {
+    if (!stage(`acceptance/${c.map}/${frame.name}-original.png`)) absent.push(`acceptance/${c.map}/${frame.name}-original.png`);
+    stage(`acceptance/${c.map}/${frame.name}-time.txt`, {copy: true});
+  }
+  if (absent.length) return fail(`stored originals absent: ${absent.join(', ')}`, 'NO-ORIGINAL');
+  // The speakers' mouth letters, read back from the staged trace (a measured host input: Galaxy's audio analysis writes them from the speech it plays in
+  // real time, docs/lip-sync.md); the file is derived, so it is regenerated here, not stored.
+  const phonemes = path.join('.work/live-acceptance', c.map, `phonemes-${c.tag}.json`);
+  const letters = add(await exec(process.execPath, ['scripts/conversation-acceptance.mjs', 'phonemes', '--scene', c.scene, '--tag', c.tag], {limitSeconds: 300}));
+  if (letters.killed || letters.code !== 0) return fail(`phonemes: ${letters.killed ?? tail(letters.out)}`);
+  for (const frame of c.frames) {
+    const args = ['scripts/live-acceptance.mjs', 'play', '--map', c.map, '--seed', '1', '--tag', c.tag, '--ticks', String(frame.tick), '--shot', frame.name,
+      ...(c.playerBlend ? ['--player-blend'] : []), ...(existsSync(path.join(root, phonemes)) ? ['--phonemes', phonemes] : []),
+      ...(c.noGhost ? ['--no-ghost'] : []), ...(c.keepTraveling ? ['--keep-traveling'] : []), ...(c.earlyCmds ? ['--early-cmds', c.earlyCmds] : [])];
+    const play = add(await exec(process.execPath, args, {limitSeconds: 900}));
+    if (play.killed || play.code !== 0) return fail(`play ${frame.name}: ${play.killed ?? tail(play.out)}`);
+    if (!existsSync(path.join(root, '.work/acceptance', c.map, `${frame.name}-play.png`))) return fail(`play ${frame.name}: no frame was written`);
+  }
+  // The traced actors over the longest replay (the last one): the speakers' mouths follow the measured phonemes, so Paul's and JC's blend channels,
+  // the cameras' actors and every pawn of the load must equal the original's per tick, apart from the measured exceptions c.liveAllow names (actor ->
+  // fields): a host input before the release that the replay cannot reproduce (docs/conversation-camera.md, item 2).
+  const live = add(await exec(process.execPath, ['scripts/live-acceptance.mjs', 'compare', '--map', c.map, '--tag', c.tag, ...(c.playerBlend ? ['--player-blend'] : [])], {limitSeconds: 600}));
+  if (live.killed || live.code !== 0) return fail(`live compare: ${live.killed ?? tail(live.out)}`);
+  const liveReport = readJson(path.join(root, '.work/live-acceptance', c.map, 'report.json'));
+  const liveProblems = [], allow = c.liveAllow ?? {};
+  for (const [name, e] of Object.entries(liveReport.actors)) {
+    if (e.firstDifference === null) continue;
+    const extra = Object.keys(e.fields ?? {}).filter(field => !(allow[name] ?? []).includes(field));
+    if (extra.length) liveProblems.push(`${name}@${e.firstDifference} ${extra.slice(0, 3).join(',')}`);
+  }
+  if (liveReport.clock?.firstDifference) liveProblems.push('clock differs');
+  if (liveReport.rng?.firstTickWithDifferentDrawCount) liveProblems.push(`stream draws differ at tick ${liveReport.rng.firstTickWithDifferentDrawCount.tick}`);
+  const watched = Object.keys(liveReport.actors).length;
+  const compare = add(await exec(process.execPath, ['scripts/conversation-acceptance.mjs', 'compare', '--scene', c.scene, '--frames', c.frames.map(f => f.name).join(',')], {limitSeconds: 600}));
+  if (compare.killed || compare.code !== 0) return fail(`compare: ${compare.killed ?? tail(compare.out)}`);
+  const report = readJson(path.join(root, '.work/acceptance', c.map, `conversation-${c.scene}-play-report.json`));
+  const problems = [], notes = [];
+  for (const frame of c.frames) {
+    const row = report[frame.name];
+    if (!row || row.error) { problems.push(`${frame.name}: ${row?.error ?? 'no comparison'}`); continue; }
+    const R = row.regions, off = [];
+    for (const part of ['topBar', 'bottomBar', 'subtitle']) if (R[part].pixels && R[part].over2 > T.barsOver2) off.push(`${part} ${R[part].over2} pixels over 2`);
+    if (R.band.identical < T.bandIdentical) off.push(`band identical ${R.band.identical}`);
+    if (row.awayFromEdges.over10 > T.awayOver10) off.push(`${row.awayFromEdges.over10} pixels over 10 away from the edges`);
+    if (row.edgeRecall < T.edge) off.push(`edge recall ${row.edgeRecall}`);
+    if (row.edgePrecision < T.edge) off.push(`edge precision ${row.edgePrecision}`);
+    if (row.outlierBlocks > T.outlierBlocks) off.push(`${row.outlierBlocks} outlier blocks`);
+    if (off.length) problems.push(`${frame.name} (tick ${frame.tick}): ${off.join(', ')}`);
+    notes.push(`${frame.name} band ${R.band.identical}/${R.band.over2}/${R.band.over10}, ${row.awayFromEdges.over10} of the over 10 off the edges, bars+subtitle over2 ${R.topBar.over2 + R.bottomBar.over2 + R.subtitle.over2}, edges ${row.edgeRecall}/${row.edgePrecision}`);
+  }
+  if (liveProblems.length) problems.push(`live: ${liveProblems.slice(0, 6).join(', ')}`);
+  if (problems.length) return fail(`${c.map} ${c.tag}: ${problems.join('; ')}`);
+  return {...result, status: 'PASS', detail: `${c.map} ${c.tag}: ${notes.join('; ')}; ${watched} watched actors equal for ${liveReport.ticks} ticks${Object.keys(allow).length ? ' but the measured exceptions' : ''}, clock and stream draws equal`};
 }
 async function judgeSweep(task, add, fail, result) {
   const {maps, tags = {}} = task.sweep;

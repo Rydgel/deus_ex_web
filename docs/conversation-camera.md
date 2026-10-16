@@ -331,6 +331,33 @@ Not covered by these frames, by name: the camera's transition frames (`cameraTra
 its layout is compared with Extension.dll, `validate-island-conversation`), the later speeches and cameras (positions 0 and 7), the interactive camera, the speech audio
 (Galaxy's MPEG decoder is not translated), and any conversation off Island and the intro (below).
 
+## The intro against the original (2026-10-16, gate row 4.5.7)
+
+The intro (`00_Intro`, `--no-ghost --keep-traveling`, tag `in2`, 2,250 ticks, frames at ticks 170, 1,000 and 2,250) replays equal to the original in every watched field of
+all 82 watched actors, the clock and the stream draws for all 2,250 ticks, and its three frames match within the polygon edge ([visual acceptance](visual-acceptance.md#conversation-frames-2026-10-16)).
+At 1280x720 the force-played conversation's window is 16:9 of the width, the whole frame: no bars and no subtitle, the 3D view fills it. Before the fix below the replay diverged from tick 1
+(the player's Z and Physics, a stream draw at tick 38, `Fighter` against `BreatheLight` on Bob Page and Walton Simons at tick 16 to 18, JC `Dying` at tick 1,200). All of that was one cause in Play and one in the harness.
+
+**The cause in Play: `AActor::FindBase` traced a box with the wrong extent.** The original's player stands in `PlayerWalking` (Physics 1, Z -80.2) through the frozen phase; at unfrozen tick 1 `CameraPoint.Idle` sends it to
+`Paralyzed, Letterbox` and the label's `SetPhysics(PHYS_None)` leaves Physics 0 and Z -80.2. Play ended tick 1 in Physics 2 (falling), Velocity -15.8 and Z -80.33. A script trace of the player's tick 1
+(`live-acceptance.mjs play --script-trace 'JCDentonMale*' --script-ticks 1:1`) read: `gotoState Paralyzed Letterbox`, `SetCollision` (native 262), the label's `SetPhysics` (native 3970), and inside it the `BaseChange` event whose own
+`SetPhysics(PHYS_Falling)` (`Pawn.BaseChange`: `Base == None && Physics == PHYS_None`). `SetPhysics(PHYS_None)` runs `FindBase`, which traces 8 units straight down from `Location` for the actor's cylinder; with no hit it
+clears `Base` through `SetSupportBase(null)`/`SetBase`, whose notification is `BaseChange`. The standing player's trace did not hit: `findActorBase` passed the extent as `{CollisionRadius, CollisionHeight, CollisionRadius}`, so the box's half height was 20
+(the radius) where the player's is 43: its lowest position, 8 units down, reached 28 below the center and the floor it rests on is 43 below. The body of `AActor::FindBase` (Engine.dll `0x103c9470`) loads `+0x1d8` (height) then `+0x1d4` (radius), stores the radius, radius and height to
+the three stack slots it passes by value (`0x103c94a8` to `0x103c9511`): the extent is `(CollisionRadius, CollisionRadius, CollisionHeight)`, X, Y, Z. `findActorBase` now builds it so
+(`src/runtime/script-actor-collision.mjs`), and `scripts/validate-native-find-base.mjs` (original body under Unicorn, `native-find-base-oracle.py`; the level's `SingleLineCheck` is the only stub) compares 144 cases (4 cylinder sizes,
+3 locations including the intro player's, 3 bases, 4 answers) for the call's start, end, flags (`0x17`), extent and extra node flags and for the resulting Base, Physics, standing counts and `Detach`/`Attach`/`BaseChange` events: equal, and with the
+old order the same validator reports the extent. The function runs for every actor whose `SetPhysics(PHYS_None/Walking/...)` has no explicit floor, at every map's start too: the replays of rows 4.1.5 to 4.1.8 (Island, Club, Underworld, five campaign maps at 1,200 ticks)
+and `npm test` (652 tests) pass unchanged.
+
+**The harness: a standing player.** `live-acceptance.mjs play --no-ghost` placed the player at the original's pose but left it in the Physics its login gave it (falling); the original's had landed in a frozen phase of tens of seconds.
+The replay now ticks the frozen level (`bPlayersOnly`) until the player is in the pose's Physics, at the pose's Location and without velocity (`the player after N frames` in the log; 4 to 6 page frames), because the first tick in Physics 1 can still be 0.4 units off its rest height.
+
+**The mouth, a second look.** With the measured letters fed, one actor differed: Bob Page's blend channel at tick 773 (`BlendAnimFrame` -1 against 0, `BlendTweenRate` 10 against 0). `Pawn.LipSynch` ends a speech with `TweenBlendAnim('MouthClosed', tweentime)` where `tweentime` is a local that
+only the speaking branch assigns (0): the channel jumps to MouthClosed with frame 0 and rate 0, and no letter was written (Galaxy analyses only while `bIsSpeaking`). The letter extraction (`conversation-acceptance.mjs phonemes`) took that jump for a letter 'X',
+which stayed in `nextPhoneme` and made the first `LipSynch` of Bob's next speech tween one tick before the original's. It now leaves those jumps out (three in the intro, none in MeetPaul) and takes a restart of the blended sequence (BlendAnimFrame -1, rate 10, the sequence unchanged) as a letter
+(one in the intro, at 773: the letter before it blended nothing). MeetPaul's feed is unchanged (the same 46 letters), and the intro then replays equal to tick 2,250.
+
 ## Hand-off (2026-10-16): the intro, a second conversation and the gate rows
 
 The first agent stopped at its context budget with 4.5.5 compared (above) and 4.5.7, 4.5.8 and the gate rows open. Everything below is measured; nothing is claimed beyond it.
@@ -341,7 +368,7 @@ The first agent stopped at its context budget with 4.5.5 compared (above) and 4.
 `live-acceptance/00_Intro/*-in2.*` (the 2,250-tick trace). The in2 frame at tick 530 was not taken (Ctrl+F9 lost three times at that hold); the first Ctrl+F9 of the first MeetPaul run was lost once. `scripts/live-original.sh` with `--hold` never reaches `DX_POST` (node stays alive on the tracer); read the held original by running the script by hand and
 `touch <trace>.resume` after, as the camera numbers above were read.
 
-**4.5.7, the intro (00_Intro, `--no-ghost`).** The original's frames are captured (Ctrl+F9 works in the force-played conversation). Play's replay of the same trace
+**4.5.7, the intro (00_Intro, `--no-ghost`).** Resolved: [the intro against the original](#the-intro-against-the-original-2026-10-16-gate-row-457). (What follows is the state when the first agent stopped; the replay diverged from tick 1 because of `FindBase`'s extent, not the player's Physics write the lead suggested.) The original's frames are captured (Ctrl+F9 works in the force-played conversation). Play's replay of the same trace
 (`live-acceptance.mjs play --map 00_Intro --seed 1 --tag in1 --no-ghost [--keep-traveling]`, `--early-cmds "set WinDrv.WindowsClient Brightness 0.666667"`) is **not** equal and was not compared as frames:
 (a) from tick 1 the player differs (original Z -80.2, Physics 0, no velocity; Play Z -80.33, falling at -15.8: `play()` places a no-ghost player at the original's Location but not its Physics, and Play's frozen
 phase is only ten frames long against the original's tens of seconds); (b) the stream's draw count differs at tick 38 and many pawns' `DistanceFromPlayer` differ in the sixth digit from tick 2 (the player's Z, a consequence of (a)),

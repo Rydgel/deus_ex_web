@@ -70,8 +70,9 @@ export function isBasedOn(actor,other){
 }
 
 /** AActor::FindBase(0x103c9470): one downward extent trace 8.0 units below
- * Location, extent pushed as {CollisionRadius, CollisionHeight,
- * CollisionRadius}, flags 0x17, through the XLevel vtable +0xc0
+ * Location, extent (CollisionRadius, CollisionRadius, CollisionHeight)
+ * (the stack slots stored at 0x103c94a8-0x103c9511: X and Y from +0x1d4, Z
+ * from +0x1d8; 2026-10-16, it was {R, H, R}), flags 0x17, through the XLevel vtable +0xc0
  * SingleLineCheck. When the hit actor differs from Base the result is
  * IsBasedOn-gated (a hit already standing on the source is skipped) before
  * SetSupportBase; a null hit still reaches SetSupportBase(null), which
@@ -79,7 +80,7 @@ export function isBasedOn(actor,other){
 export function findActorBase(actor,{lineCheck,dispatch}){
  const [x,y,z]=actor.position;
  const radius=f(actor.radius??0),height=f(actor.height??0);
- const hit=lineCheck([x,y,z].map(f),[x,y,f(z-8)].map(f),[radius,height,radius],0x17,0,actor);
+ const hit=lineCheck([x,y,z].map(f),[x,y,f(z-8)].map(f),[radius,radius,height],0x17,0,actor);
  const target=hit?.actor??null;
  if(target===(actor.base??null))return;
  if(target&&isBasedOn(target,actor))return;
