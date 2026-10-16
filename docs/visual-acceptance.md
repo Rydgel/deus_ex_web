@@ -2052,6 +2052,7 @@ identity ramp under CrossOver the frames are equal to within 0.02 levels. Stored
 `.work/uw30/capture{1..7}/`, unread by the gate.
 
 ```bash
+i686-w64-mingw32-gcc -O2 -o ad/build/dx-live-win.exe tools/dx-live-win.c -lpsapi   # an older build has no `level=` read: the frame then keeps the load's clock and the gate's hold check fails
 node scripts/visual-acceptance.mjs play --maps 06_HongKong_WanChai_Underworld --view uw_s0:-1081,-2010,-336:0,54769,0   # the plan, on a checkout without the map in it
 scripts/original-views.sh 06_HongKong_WanChai_Underworld --brightness 0.666667 --view uw_s0:-1081,-2010,-336:0,54769,0 --view uw_s1:-1081,-2010,-336:0,54769,0 --view uwd_s0:-1120,-1900,-336:0,55000,0 --view uwd_s1:-1120,-1900,-336:0,55000,0 --cmd 'set ScriptedPawn bHidden True' --cmd-check 'Hooker0 bHidden:0x28:bit:0x2 1' --strobe-poll
 node scripts/validate-stage4-acceptance.mjs --only '^4\.2\.30$'
