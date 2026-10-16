@@ -83,7 +83,7 @@ const FIELDS = [
 ];
 // The load-time draws of the pawns (see GENERATOR_FIELDS): label of FIELDS -> written into Play's pawn before the first tick.
 const PAWN_LOAD_FIELDS = ['Sight', 'TRate', 'TCount'];
-// --render-history: also each pawn's LastRenderTime at the original's last frozen tick. The frames the original drew before the tracer attached
+// --render-history: also each pawn's (and generator's) LastRenderTime at the original's last frozen tick. The frames the original drew before the tracer attached
 // (the start view, and every view a typed --early-cmds line passed through) stamped it; Play replays one view, so the older stamps are a measured host
 // input (the stasis gate reads them for 5 seconds: AActor::InStasis, docs/script-actor-tick.md). Compared from tick 1 on like every field.
 const renderHistoryFields = () => flag('render-history') ? [...PAWN_LOAD_FIELDS, 'LRT'] : PAWN_LOAD_FIELDS;
@@ -134,7 +134,15 @@ if (flag('player-blend')) PLAYER_FIELDS.push(...FIELDS.filter(f => ['BSeq0', 'BF
 // (the original seeds the CRT with time(NULL), docs/rng.md). A generator first spawns when its TryTimer runs out,
 // so Play's own draws moved those ticks (and the draws they make) by several ticks. Like the player's pose, the
 // original's values are a measured input: read at the release (the last frozen row), written into Play before its first tick.
-const GENERATOR_FIELDS = [['TryTimer', 'TryTimer', 0x540, 'f'], ['PoolCount', 'PoolCount', 0x3b4, 'i32']];
+const GENERATOR_LOAD_FIELDS = [['TryTimer', 'TryTimer', 0x540, 'f'], ['PoolCount', 'PoolCount', 0x3b4, 'i32']];
+// Watched too, on both sides (row 4.2.13, docs/visual-acceptance.md "04_NYC_Street's steam vents"): what decides whether a generator's tick
+// generates (PawnGenerator.Tick: IsActorUnnecessary is DistanceFromPlayer >= ActiveArea, so where it is), whether it ticks at all (AActor::InStasis
+// 0x1036bfe0 returns 0 at a clear bStasis before it reads LastRenderTime's zone table) and its scout. A chance FlyGenerator of one load and the
+// same-named one of another are two decorations' (DeusExDecoration.PreBeginPlay's FRand() < 0.1, numbered in spawn order): Location tells them apart.
+// Offsets: Play's slotOf (liveProbe offsets) for PawnGenerator, the PawnGenerator layout every generator class shares.
+const GENERATOR_FIELDS = [...GENERATOR_LOAD_FIELDS, ['Loc', 'Location', 0x114, 'f3'], ['Dist', 'DistanceFromPlayer', 0x38, 'f'],
+  ['LRT', 'LastRenderTime', 0x34, 'f'], ['Stasis', 'bStasis', 0x28, 'bit', 0x200000], ['Phys', 'Physics', 0x30, 'u8'],
+  ['PawnCount', 'PawnCount', 0x3b0, 'i32'], ['ScoutInit', 'bScoutInit', 0x550, 'bit', 0x2], ['Scout', 'Scout', 0x538, 'obj']];
 
 const spec = ([label, , off, type, mask]) => `${label}:0x${off.toString(16)}:${type}${mask ? `:0x${mask.toString(16)}` : ''}`;
 
@@ -187,20 +195,41 @@ async function original() {
     writeFileSync(lastPath, map);
     post(['cmd set LevelInfo bPlayersOnly True', 'sleep 300', 'cmd set LevelInfo TimeDilation 1', 'sleep 300',
       `cmd open ${map}`, `sleep ${loadWait}`], loadWait + 60000);
+    // The load's generators as it made them, before an --early-cmds `KillAll` removes some (generators-load<tag>.json): class, name, slot, Location
+    // (do_list) and the fields of GENERATOR_FIELDS plus ActiveArea (dump-actor-win), the original's side of which chance FlyGenerator is where.
+    if (earlyCommands().some(line => /^KillAll\s/i.test(line))) {
+      const listed = wine('list', 'PawnGenerator').split('\n').map(line => /^(\S+) (\S+) slot=(\d+) loc=\(([^)]*)\)/.exec(line)).filter(Boolean)
+        .map(m => ({cls: m[1], name: m[2], slot: Number(m[3]), loc: m[4].split(',').map(Number)}));
+      // one walk of the object array for all of them (a name substring; dump-actor-win has no signed type: i32 reads as u32)
+      const specs = [...GENERATOR_FIELDS, ['ActiveArea', 'ActiveArea', 0x398, 'f']].map(([label, prop, off, type, mask]) => spec([label, prop, off, type === 'i32' ? 'u32' : type, mask]));
+      const dumped = execFileSync(game.WINE, [path.join(root, 'ad/build/dump-actor-win.exe'), 'Generator', ...specs], {encoding: 'utf8', env: process.env, maxBuffer: 1 << 24}).split('\n');
+      for (const entry of listed) {
+        const line = dumped.find(text => text.startsWith(`${entry.cls} ${entry.name} `));
+        entry.fields = line ? Object.fromEntries([...line.matchAll(/(\w+)=(\S+)/g)].map(m => [m[1], m[2]])) : null;
+      }
+      writeFileSync(path.join(dir, `generators-load${suffix}.json`), JSON.stringify(listed, null, 1));
+      console.log(`generators at the load: ${listed.map(e => `${e.name}@(${e.loc.map(Math.round)})`).join(' ')}`);
+    }
     // --no-ghost: the player stays a normal visible player at the map's start (the perception pilot); --player-alliance NAME: `set` of the player's
     // Alliance (non-location, so safe in a level that then ticks): NPCs that hate NAME see the player as one of them.
-    post(['cmd set DeusEx.JCDentonMale bCheatsEnabled True', 'sleep 200', ...(flag('no-ghost') ? [] : ['cmd ghost', 'sleep 200']), 'cmd ShowHud False', 'sleep 500',
+    // --original-brightness b: the original's Brightness (`set WinDrv.WindowsClient Brightness b`; Shot bakes a ramp of it into the bitmap, 0.666667 makes
+    // the Shot the framebuffer, visual-acceptance.mjs --brightness). Play's page keeps --brightness (0.4, its identity).
+    post([...(option('original-brightness', null) ? [`cmd set WinDrv.WindowsClient Brightness ${option('original-brightness')}`, 'sleep 600'] : []),
+      'cmd set DeusEx.JCDentonMale bCheatsEnabled True', 'sleep 200', ...(flag('no-ghost') ? [] : ['cmd ghost', 'sleep 200']), 'cmd ShowHud False', 'sleep 500',
       ...(option('player-alliance', null) ? [`cmd set DeusEx.JCDentonMale Alliance ${option('player-alliance')}`, 'sleep 500'] : []),
       // --early-cmds "line|line": console lines typed in the frozen phase, before the tracer attaches (Play runs the same lines after its placement). They must
       // not move or re-hash an actor: `CheatView <class>` (the camera follows another actor, PlayerPawn.CalcBehindView) and `set ...ViewRotation` are the intended use.
       ...earlyCommands().flatMap(line => [`cmd ${line}`, 'sleep 600'])]);
     // The window is placed (floating, 1280x720, inside the screen) before the tracer attaches, with a throwaway shot (the
     // first frame after a resize is stale): a resize while the tracer holds the level did not take (2026-10-13).
-    if (option('shot', null) && process.env.DX_HYPRLAND === '1') {
-      hyprlandWindow();
-      const stale = game.shots();
-      post(['sleep 3000', 'shot', 'sleep 900']);
-      for (const shot of game.shots().filter(shot => !stale.includes(shot))) renameSync(path.join(game.SYSTEM, shot), path.join(scratch, shot));
+    // (the Mac's CrossOver window keeps the size its ini gives it: no placement there, the base frame below is still taken)
+    if (option('shot', null)) {
+      if (process.env.DX_HYPRLAND === '1') {
+        hyprlandWindow();
+        const stale = game.shots();
+        post(['sleep 3000', 'shot', 'sleep 900']);
+        for (const shot of game.shots().filter(shot => !stale.includes(shot))) renameSync(path.join(game.SYSTEM, shot), path.join(scratch, shot));
+      }
       // --base-shot: the frozen start's frame at this camera (before the tracer releases the level): <shot>-base-original.png, with the clock it was taken at
       // beside it, the frame without the particles and sprites the ticks make (play --base-shot writes Play's).
       if (flag('base-shot')) {
@@ -259,6 +288,15 @@ async function original() {
     }
     writeFileSync(path.join(dir, 'sweep-original.json'), JSON.stringify({map, base, results}, null, 1));
     return;
+  }
+  // An --early-cmds `KillAll <Class>` that the console lost (a loaded host drops typed characters, docs/visual-acceptance.md) leaves that class's
+  // actors in the level: typed once more, then the run stops (exit 4) rather than trace a scene that is not the one asked for.
+  for (const killed of earlyCommands().map(line => /^KillAll\s+(\w+)$/i.exec(line)?.[1]).filter(Boolean)) {
+    const left = () => wine('list', killed).split('\n').filter(line => /^\S+ \S+ slot=/.test(line)).length;
+    if (left()) { post([`cmd KillAll ${killed}`, 'sleep 800']); }
+    const remaining = left();
+    if (remaining) { console.log(`KillAll ${killed}: ${remaining} still in the level`); process.exitCode = 4; return; }
+    console.log(`KillAll ${killed}: none left`);
   }
   const generators = flag('no-generators') ? [] : wine('list', 'PawnGenerator').split('\n').map(line => /^\S+ (\S+) slot=/.exec(line)?.[1]).filter(Boolean);
   const watchOption = option('watch', 'auto');
@@ -342,11 +380,20 @@ async function original() {
   writeFileSync(configPath, config.join('\n') + '\n');
   writeFileSync(watchPath, JSON.stringify({map, pawns: names.filter(name => !extras.includes(name)), extras, generators, timers, classes: classOf}, null, 1));
   // The actors the original's level holds (a load removes some at random: OddsOfAppearing).
-  const everything = wine('list', 'Actor').split('\n').map(line => /^\S+ (\S+) slot=(\d+) .* odds=(\S+)/.exec(line)).filter(Boolean).map(m => ({name: m[1], odds: Number(m[3]), slot: Number(m[2])}));   // slot: the GObjObjects slot (the order a load made the actors in)
+  const everything = wine('list', 'Actor').split('\n').map(line => /^\S+ (\S+) slot=(\d+) loc=\(([^)]*)\) .* odds=(\S+)/.exec(line)).filter(Boolean)
+    .map(m => ({name: m[1], odds: Number(m[4]), slot: Number(m[2]), loc: m[3].split(',').map(Number)}));   // slot: the GObjObjects slot (the order a load made the actors in)
   // tagged too (population<tag>.json): the replay of one capture must not read another's while a second runs
   writeFileSync(path.join(dir, 'population.json'), JSON.stringify(everything));
   if (suffix) writeFileSync(path.join(dir, `population${suffix}.json`), JSON.stringify(everything));
   console.log(`${everything.length} actors in the original's level, ${everything.filter(e => e.odds < 1).length} with OddsOfAppearing < 1`);
+  // A chance FlyGenerator (DeusExDecoration.PreBeginPlay, FRand() < 0.1 for each of the map's fly-making decorations, named in spawn order) passes the
+  // name match whichever decoration made it: the ones whose name both loads hold at other places are reported (generatorsElsewhere in watch<tag>.json),
+  // not reloaded for (two loads all but never pick the same decorations). Row 4.2.13 removes them in both programs instead (--early-cmds KillAll).
+  const playedLocations = existsSync(path.join(dir, 'play-population.json')) ? JSON.parse(readFileSync(path.join(dir, 'play-population.json'), 'utf8')).locations ?? null : null;
+  const elsewhere = playedLocations ? everything.filter(e => /^FlyGenerator\d+$/i.test(e.name) && playedLocations[e.name] && e.loc
+    && Math.hypot(...e.loc.map((v, i) => v - playedLocations[e.name][i])) > 1).map(e => ({name: e.name, original: e.loc, play: playedLocations[e.name].map(v => +v.toFixed(1))})) : [];
+  if (elsewhere.length) console.log(`POPULATION note: ${elsewhere.length} same-named FlyGenerators stand elsewhere in Play's load: ${elsewhere.map(e => `${e.name} (${e.original.map(Math.round)}) vs (${e.play.map(Math.round)})`).join(', ')}`);
+  if (elsewhere.length) writeFileSync(watchPath, JSON.stringify({...JSON.parse(readFileSync(watchPath, 'utf8')), generatorsElsewhere: elsewhere}, null, 1));
   // The original's load decided some map actors by chance (FlyGenerator, OddsOfAppearing): Play's replay destroys the
   // ones only Play holds, but cannot create the ones only the original holds. Reload until it holds none (the
   // driver's exit code 3 asks for a retry); `--no-population-check` runs on regardless.
@@ -530,7 +577,9 @@ async function snap() {
 async function population() {
   await withPlay(async ({page}) => {
     const {actors} = await page.evaluate(() => window.deusExViewer.liveProbe({actors: 'engine.actor'}));
-    writeFileSync(path.join(dir, 'play-population.json'), JSON.stringify({seed: Number(option('seed', 1)), names: actors.map(a => a.name), timers: actors.filter(a => a.timer).map(a => a.name)}));
+    // locations: where each actor of the seeded load stands (a chance FlyGenerator's name says nothing about which decoration made it)
+    writeFileSync(path.join(dir, 'play-population.json'), JSON.stringify({seed: Number(option('seed', 1)), names: actors.map(a => a.name), timers: actors.filter(a => a.timer).map(a => a.name),
+      locations: Object.fromEntries(actors.map(a => [a.name, a.location]))}));
     console.log(map, `seed ${option('seed', 1)}:`, actors.length, 'actors');
   });
 }
@@ -677,6 +726,9 @@ async function play() {
       console.log(`population: ${result.removed.length} actors only Play had destroyed (${result.removed.slice(0, 12).join(' ')}${result.removed.length > 12 ? ' ...' : ''}); ${result.missing.length} only the original has (${result.missing.slice(0, 12).join(' ')})`);
       writeFileSync(path.join(dir, `population-result${suffix}.json`), JSON.stringify(result));
     }
+    // the generators watched on Play's side: the original's that Play's level holds (the population step cannot make one only the original has)
+    const missing = new Set((population ? JSON.parse(readFileSync(path.join(dir, `population-result${suffix}.json`), 'utf8')).missing : []).map(name => name.toLowerCase()));
+    const watchedGenerators = generators.filter(name => !missing.has(name.toLowerCase()));
     // The original's `open` leaves the player's FlagBase empty (--dump-flags, tools/dump-flags-win.c); Play's login supplies the fresh-mission marker
     // PlayerTraveling, which makes the mission script's first Timer run FirstFrame (flags, startup text, NPCs entering the world). The replay takes
     // the original's start: the flag is deleted (the original's DeleteFlag native). --keep-traveling keeps Play's own.
@@ -776,8 +828,11 @@ async function play() {
         return {...command, rng: records.splice(at, 1)[0].rng};
       });
     };
-    const generatorWrites = Object.fromEntries(generators.filter(name => frozen[frozen.length - 1].actors[name])
-      .map(name => [name, Object.fromEntries(GENERATOR_FIELDS.map(([label, prop]) => [prop, frozen[frozen.length - 1].actors[name][label]]))]));
+    // (--render-history: their LastRenderTime too, when the trace has it; the generators are in Play's level: a name only the original holds is not written)
+    const generatorLoad = [...GENERATOR_LOAD_FIELDS, ...(flag('render-history') ? GENERATOR_FIELDS.filter(f => f[0] === 'LRT') : [])];
+    const generatorWrites = Object.fromEntries(watchedGenerators.filter(name => frozen[frozen.length - 1].actors[name])
+      .map(name => [name, Object.fromEntries(generatorLoad.filter(([label]) => frozen[frozen.length - 1].actors[name][label] !== undefined)
+        .map(([label, prop]) => [prop, frozen[frozen.length - 1].actors[name][label]]))]));
     const lastFrozen = frozen[frozen.length - 1].actors;
     // --no-pawn-load / --no-timer-load: diagnostics, a replay without the pawns' (SightCounter, TimerRate, TimerCounter) or the timed actors' load-time inputs.
     const pawnWrites = flag('no-pawn-load') ? {} : Object.fromEntries(pawns.filter(name => lastFrozen[name] && renderHistoryFields().every(label => lastFrozen[name][label] !== undefined))
@@ -798,7 +853,7 @@ async function play() {
       ...(option('phonemes', null) ? {phonemes: JSON.parse(readFileSync(option('phonemes'), 'utf8'))} : {}),
       ...(option('can-see', null) ? {canSeeProbe: {pawn: option('can-see'), first: Number(option('can-see-ticks', '1:1').split(':')[0]), last: Number(option('can-see-ticks', '1:1').split(':')[1])}} : {}),
       commands: commandsWithStream(), watch: [
-      {names: ['@player'], props: playerProps}, {names: pawns, props},
+      {names: ['@player'], props: playerProps}, {names: pawns, props}, ...(watchedGenerators.length ? [{names: watchedGenerators, props: GENERATOR_FIELDS.map(f => f[1])}] : []),
       // --extra-watch actors are not pawns: the fields every Actor has
       ...(extras.length ? [{names: extras, props: ['Location', 'Rotation', 'Velocity', 'Physics', 'AnimSequence', 'AnimFrame', 'AnimRate', 'TweenRate', 'LifeSpan', 'LastRenderTime', 'DistanceFromPlayer', 'TimerRate', 'TimerCounter', ...(flag('touching') ? ['Touching'] : [])]}] : [])]}};
     const started = await page.evaluate(r => window.deusExViewer.liveProbe(r), request);
@@ -912,7 +967,8 @@ function compare() {
     for (let i = 0; i < rows.length; i++) {
       const o = rows[i].actors[name], p = played.rows[i]?.actors[name];
       if (!o || !p) continue;
-      for (const [label, prop] of [...FIELDS, ...PLAYER_FIELDS.slice(11)].map(f => [f[0], f[1] === '$state' ? 'State' : f[1]])) {
+      for (const [label, prop] of [...FIELDS, ...PLAYER_FIELDS.slice(11), ...GENERATOR_LOAD_FIELDS, ...GENERATOR_FIELDS.slice(GENERATOR_LOAD_FIELDS.length).filter(f => !FIELDS.some(g => g[0] === f[0]))]
+        .map(f => [f[0], f[1] === '$state' ? 'State' : f[1]])) {
         if (!(label in o) || !(prop in p)) continue;
         let ov = o[label], pv = p[prop];
         const index = indexOf.get(label);

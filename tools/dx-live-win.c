@@ -858,7 +858,7 @@ static int do_trace(const char *config) {
 }
 
 
-/* list <Class>: the live level's actors whose class derives from <Class>. */
+/* list <Class>: the live level's actors whose class derives from <Class> (destroyed ones, bDeleteMe, left out). */
 static int is_a(uintptr_t cls, const char *wanted) {
   for (int depth = 0; cls && depth < 64; depth++) {
     if (!strcmp(object_name(cls), wanted)) return 1;
@@ -881,6 +881,9 @@ static int do_list(const char *wanted) {
     if (!obj || read_u32(obj + 0xac) != level_ptr) continue;
     uintptr_t cls = read_u32(obj + OFF_OBJECT_CLASS);
     if (!cls || !is_a(cls, wanted)) continue;
+    /* a destroyed actor (bDeleteMe, Actor +0x28 bit 0x80) keeps its object, name and XLevel until ULevel::CleanupDestroyed purges it,
+       and is no longer in the level: a `KillAll` typed in the frozen phase leaves such actors behind */
+    if (read_u32(obj + 0x28) & 0x80) continue;
     float loc[3]; read_mem(obj + 0x114, loc, 12);
     unsigned sf = read_u32(obj + 0xc); unsigned node = sf ? read_u32(sf + 0x18) : 0;
     float odds = 1; read_mem(obj + 0x160, &odds, 4);   /* Actor.OddsOfAppearing: below 1, a load may have removed the actor */
