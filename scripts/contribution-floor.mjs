@@ -4,7 +4,10 @@
 // (`live-acceptance.mjs original|play --extra-shots N`), this compares every frame with every other frame of the same program and of the other:
 // the metrics of visual-acceptance.mjs `compare --contribution` (the same formulas), the first frame of each pair the reference.
 //
-//   node scripts/contribution-floor.mjs --map 04_NYC_Street --shot vents4
+//   node scripts/contribution-floor.mjs --map 04_NYC_Street --shot vents4 [--extra 3] [--json]
+//
+// --extra N: the first frame and N more of each side (default: every numbered frame there is); --json: one object {originalSelf, cross, playSelf}
+// on the last line (the Stage 4 gate's row 4.2.13 reads it: Play's median agreement against the original at least the original's own minimum).
 //
 // Reads .work/acceptance/<map>/<shot>-original.png, <shot>-original-<k>.png, <shot>-base-original.png and <shot>-play.png, <shot>-play-<k>.png,
 // <shot>-play-base.png. Prints, for the original against itself, Play against the original (the original's frame the reference, as the gate's
@@ -17,6 +20,7 @@ import {fileURLToPath} from 'node:url';
 const root = fileURLToPath(new URL('..', import.meta.url));
 const option = (name, fallback) => { const i = process.argv.indexOf(`--${name}`); return i < 0 ? fallback : process.argv[i + 1]; };
 const map = option('map', '04_NYC_Street'), shot = option('shot', 'vents4'), dir = path.join(root, '.work/acceptance', map);
+const extra = option('extra', null) === null ? Infinity : Number(option('extra'));
 const readRgb = file => {
   const [w, h] = execFileSync('magick', ['identify', '-format', '%w %h', file], {encoding: 'utf8'}).split(' ').map(Number);
   return {w, h, data: execFileSync('magick', [file, '-depth', '8', 'rgb:-'], {maxBuffer: 1 << 28})};
@@ -24,7 +28,7 @@ const readRgb = file => {
 const luma = (d, i) => 0.299 * d[i] + 0.587 * d[i + 1] + 0.114 * d[i + 2];
 const frames = side => {
   const first = path.join(dir, `${shot}-${side}.png`), list = existsSync(first) ? [first] : [];
-  for (let k = 2; existsSync(path.join(dir, `${shot}-${side}-${k}.png`)); k++) list.push(path.join(dir, `${shot}-${side}-${k}.png`));
+  for (let k = 2; k <= 1 + extra && existsSync(path.join(dir, `${shot}-${side}-${k}.png`)); k++) list.push(path.join(dir, `${shot}-${side}-${k}.png`));
   return list;
 };
 // each frame less its program's frame without the effect: the luma difference and the RGB sum
@@ -57,13 +61,15 @@ function metrics(ref, other) {
 const pairs = (refs, others, same) => refs.flatMap((ref, i) => others.flatMap((other, j) => same && i === j ? [] : [metrics(ref, other)]));
 const summary = (label, list) => {
   const out = {group: label, pairs: list.length};
+  if (!list.length) return out;
   for (const key of ['agreement', 'agreement10', 'correlation', 'gap', 'residual']) {
     const v = list.map(m => m[key]).sort((x, y) => x - y);
     out[key] = {min: +v[0].toFixed(4), median: +v[v.length >> 1].toFixed(4), max: +v[v.length - 1].toFixed(4)};
   }
   return out;
 };
+const groups = {originalSelf: summary('original against itself', pairs(O, O, true)), cross: summary('Play against the original', pairs(O, P, false)),
+  playSelf: summary('Play against itself', pairs(P, P, true))};
 console.log(`${map} ${shot}: ${originals.length} original frames, ${plays.length} Play frames`);
-console.log(JSON.stringify(summary('original against itself', pairs(O, O, true))));
-console.log(JSON.stringify(summary('Play against the original', pairs(O, P, false))));
-console.log(JSON.stringify(summary('Play against itself', pairs(P, P, true))));
+if (process.argv.includes('--json')) console.log(JSON.stringify({map, shot, originals: originals.length, plays: plays.length, ...groups}));
+else for (const group of Object.values(groups)) console.log(JSON.stringify(group));
