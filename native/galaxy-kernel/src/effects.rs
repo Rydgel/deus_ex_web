@@ -721,6 +721,33 @@ pub extern "C" fn galaxy_sample_forget(addr: u32) {
     with_library(|l| l.forget_sample_data(addr))
 }
 
+/// Replay (row 4.3.7 check 3): a sample as a capture of the original read it, galaxy_input holding its
+/// 0x48-byte glxSample then its data; the model's record (its Data +0x44 the model's data address).
+#[no_mangle]
+pub extern "C" fn galaxy_sample_raw(len: u32) -> u32 {
+    let bytes = INPUT.with(|i| {
+        let mut input = i.borrow_mut();
+        let n = (len as usize).min(input.len());
+        let b = input[..n].to_vec();
+        *input = Vec::new();
+        b
+    });
+    if bytes.len() < 0x48 {
+        return 0;
+    }
+    with_library(|l| {
+        let addr = l.effects.malloc(0x48);
+        let data = bytes[0x48..].to_vec();
+        let data_addr = l.effects.malloc(data.len() as u32);
+        let mut record = [0u8; 0x48];
+        record.copy_from_slice(&bytes[..0x48]);
+        put32(&mut record, 0x44, data_addr);
+        l.effects.samples.push(EffectSample { addr, record, data_addr, data, host: false });
+        l.rebuild_regions();
+        addr
+    })
+}
+
 /// A host-decoded speech record (`Library::host_sample`): its address.
 #[no_mangle]
 pub extern "C" fn galaxy_sample_host(rate: u32, frames: u32, channels: u32) -> u32 {

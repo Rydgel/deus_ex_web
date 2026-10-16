@@ -12,8 +12,9 @@
  * The replay drives the translated library (native/galaxy-kernel) from
  * `Library::new` with the same calls in the same order: glxInit's
  * EffectsChannels, the output open (PC 53, the measured pan table), the
- * setters, glxLoadMusic and glxLoadSample on the captured bytes (an MPEG
- * load becomes the stand-in record, fed by the capture's decoder answers),
+ * setters, glxLoadMusic on the captured bytes, each sample as the
+ * original's record and data (read at its first glxStartSample; an MPEG
+ * record becomes the stand-in, fed by the capture's decoder answers),
  * the music and sample calls, Update's inline stores, the reverb blocks; each
  * timer callback with the captured cursors and Lock results; each decoder
  * message where the original handled it (after the callback it fell inside),
@@ -22,8 +23,7 @@
  *    two copied segments (every byte the callback copies into the
  *    DirectSound buffer, at its ring position) and, at a resync, of the whole
  *    staging ring it copies; the first 24 callbacks' segments byte for byte;
- *  - glxLoadMusic's status, each WAV load's record, glxStartSample's and
- *    glxControlVoice's results;
+ *  - glxLoadMusic's status, glxStartSample's and glxControlVoice's results;
  *  - each decoder message against the replay's own refill posts, and each
  *    decoder call's arguments (source offset, Remaining, Chunk).
  *
@@ -42,7 +42,7 @@ const {MUSIC_PAN_PC} = await import('../src/viewer/galaxy-music-output.mjs');
 const GX = {INIT: 1, CHANNELS: 2, OPEN: 3, SAMPLE_VOLUME: 4, MUSIC_VOLUME: 5, LOAD_MUSIC: 6, LOAD_MUSIC_RESULT: 7, UNLOAD_MUSIC: 8,
   START_MUSIC: 9, STOP_MUSIC: 10, CONTROL_MUSIC: 11, CLEAR_ACTIVE: 12, BREAK: 13, LOAD_SAMPLE: 14, LOAD_SAMPLE_RESULT: 15,
   START_SAMPLE: 16, START_SAMPLE_RESULT: 17, CONTROL_SAMPLE: 18, CONTROL_VOICE: 19, CONTROL_VOICE_RESULT: 20, STOP_SAMPLE: 21,
-  SAMPLE_REVERB: 22, UNLOAD_SAMPLE: 23, UPDATE_LOCK: 24, UPDATE_UNLOCK: 25,
+  SAMPLE_REVERB: 22, UNLOAD_SAMPLE: 23, UPDATE_LOCK: 24, UPDATE_UNLOCK: 25, SAMPLE_RECORD: 26,
   CB_POSITION: 30, CB_LOCK: 31, CB_LOST: 32, CB_COPIED: 33, CB_RESYNC: 34, CB_END: 35,
   DEC_MESSAGE: 40, DEC_CALL: 41, DEC_END: 42, END: 99};
 const NAMES = Object.fromEntries(Object.entries(GX).map(([k, v]) => [v, k]));
@@ -65,7 +65,7 @@ const x = instance.exports;
 const input = bytes => { const at = x.galaxy_input(bytes.length); new Uint8Array(x.memory.buffer, at, bytes.length).set(bytes); };
 const handles = new Map();  // original glxSample address -> the model's
 const stats = {callbacks: 0, resyncs: 0, bytes: 0, full: 0, wavLoads: 0, mpegLoads: 0, music: 0, starts: 0, controls: 0, polls: 0,
-  stops: 0, reverbs: 0, messages: 0, decoderCalls: 0, mismatches: 0};
+  stops: 0, reverbs: 0, messages: 0, decoderCalls: 0, mismatches: 0, nonzero: 0, peak: 0};
 const fail = (i, what) => {
   const r = records[i];
   console.log(`FAIL record ${i} (${NAMES[r?.type] ?? r?.type}, thread ${r?.tid}): ${what}`);
@@ -125,6 +125,11 @@ function runCallback(cb, i) {
     const ring = new Uint8Array(x.memory.buffer, x.galaxy_output_staging(), size);
     const seg = pos => { const out = new Uint8Array(R); for (let k = 0; k < R; k++) out[k] = ring[(pos + k) % size]; return out; };
     const sa = seg(preA), sb = seg(preB);
+    // How much of what was copied is sound (int16 samples of either segment that are not 0).
+    for (const segment of [sa, sb]) {
+      const v = new Int16Array(segment.buffer, segment.byteOffset, segment.length >> 1);
+      for (const sample of v) if (sample) { stats.nonzero++; stats.peak = Math.max(stats.peak, Math.abs(sample)); }
+    }
     if (c.full) {
       for (const [mine, theirs, which] of [[sa, c.full.subarray(0, R), 'A'], [sb, c.full.subarray(R), 'B']])
         for (let k = 0; k < R; k++) if (mine[k] !== theirs[k]) fail(i, `callback ${stats.callbacks}: bus ${which} segment byte ${k} (ring ${(which === 'A' ? preA : preB) + k}): ${mine[k]}, captured ${theirs[k]}`);
@@ -207,6 +212,32 @@ for (let i = 0; i < records.length; i++) {
       }
       break;
     }
+    case GX.SAMPLE_RECORD: {
+      // A sample as the original's glxSample record and data read at its first glxStartSample (under the library lock).
+      const original = w[0], n = w[1], record = payload.subarray(8, 8 + 0x48), data = payload.subarray(8 + 0x48);
+      if (n === 0xffffffff) fail(i, `the capture could not read sample 0x${original.toString(16)}'s data`);
+      const kind = record.readUInt16LE(0x2c);
+      let h;
+      if (kind & 0x4000) {
+        // An MPEG record: the stand-in (effects.rs host_sample) with the MP3 bytes as its source; the decoder's
+        // answers come from the capture.
+        h = x.galaxy_sample_host(record.readUInt32LE(0x3c), 0, kind & 0x40 ? 2 : 1) >>> 0;
+        input(data);
+        x.galaxy_sample_attach(h, data.length);
+        fault(i, 'the MPEG stand-in record');
+        const mine = Buffer.from(new Uint8Array(x.memory.buffer, x.galaxy_sample_record(h), 0x48));
+        for (const [o, len] of [[0, 4], [0x28, 2], [0x2a, 2], [0x2c, 2], [0x30, 4], [0x34, 4], [0x38, 4], [0x3c, 4]])
+          if (mine.readUIntLE(o, len) !== record.readUIntLE(o, len)) fail(i, `the MPEG record's +0x${o.toString(16)}: ${mine.readUIntLE(o, len)}, the original's ${record.readUIntLE(o, len)}`);
+        stats.mpegLoads++;
+      } else {
+        input(Buffer.concat([record, data]));
+        h = x.galaxy_sample_raw(0x48 + data.length) >>> 0;
+        fault(i, 'the sample record');
+        stats.wavLoads++;
+      }
+      handles.set(original, h); sources.set(original, record.readUInt32LE(0x44));
+      break;
+    }
     case GX.START_SAMPLE: {
       const [voice, sample, freq, vol, pan, flags] = w;
       if (sample && !handles.has(sample)) fail(i, `glxStartSample of an unknown sample 0x${sample.toString(16)}`);
@@ -263,6 +294,7 @@ for (let i = 0; i < records.length; i++) {
 }
 if (!stats.callbacks) fail(records.length - 1, 'no timer callback in the capture');
 console.log(`PASS validate-galaxy-output-replay: ${records.length} records; ${stats.callbacks} timer callbacks (${stats.resyncs} resyncs), ` +
-  `${stats.bytes} copied bytes equal (FNV-1a per segment, ${stats.full} callbacks byte for byte); ${stats.wavLoads} WAV and ${stats.mpegLoads} MPEG loads, ` +
+  `${stats.bytes} copied bytes equal (FNV-1a per segment, ${stats.full} callbacks byte for byte; ${stats.nonzero} nonzero samples, peak ${stats.peak}); ` +
+  `${stats.wavLoads} PCM and ${stats.mpegLoads} MPEG samples, ` +
   `${stats.music} music loads, ${stats.starts} starts, ${stats.controls} controls, ${stats.polls} status polls, ${stats.stops} stops, ` +
   `${stats.reverbs} reverb blocks; ${stats.messages} decoder messages, ${stats.decoderCalls} decoder calls`);

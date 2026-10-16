@@ -33,10 +33,13 @@
  *       Galaxy.dll from the game's launch (docs/audio-output-scope.md §5.2, Stage 4 row 4.3.7 check 3): starts DeusEx.exe <map>
  *       INI=DeusEx-ad.ini USERINI=User-ad.ini under the debugger, arms breakpoints when Galaxy.dll loads (it must be at its preferred
  *       base) and records, in event order, every library call the subsystem makes (glxInit's EffectsChannels, the output open,
- *       the volume setters, glxLoadMusic and glxLoadSample with their input bytes and results, glxStart/Stop/ControlMusic,
+ *       the volume setters, glxLoadMusic with its input bytes and status, each sample's glxSample record and data at its first
+ *       glxStartSample, glxStart/Stop/ControlMusic,
  *       glxUnloadMusic, glxStart/Control/StopSample, glxControlVoice with its result, glxSetSampleReverb's block, glxUnloadSample,
- *       Update's inline voice clears and break flag, Update's critical section), the library calls after their own
- *       EnterCriticalSection, so their order against the timer thread's is the critical section's; each timer callback's cursor
+ *       Update's inline voice clears and break flag, Update's critical section), every game-thread breakpoint inside the library
+ *       lock (after the call's own EnterCriticalSection, or inside Update's), so their order against the timer thread's is the
+ *       critical section's and no game-thread trap can meet a timer-thread one (CrossOver garbles two concurrent int3 traps:
+ *       the second is reported from its exception dispatcher and the thread resumes past the int3); each timer callback's cursor
  *       pair, Lock results, R, heads, `ahead` and a 32-bit FNV-1a of each copied staging segment (the whole staging ring at a
  *       resync; the first 24 callbacks' segments in full); and the stream decoder thread's messages and each MPEG decoder call's
  *       arguments, results and output bytes. Until <seconds> pass or the stop file appears; then it disarms, detaches and exits
@@ -1285,7 +1288,7 @@ static int do_galaxy_poll(int count, int interval, const char *prefix) {
 enum { GX_INIT = 1, GX_CHANNELS, GX_OPEN, GX_SAMPLE_VOLUME, GX_MUSIC_VOLUME, GX_LOAD_MUSIC, GX_LOAD_MUSIC_RESULT, GX_UNLOAD_MUSIC,
   GX_START_MUSIC, GX_STOP_MUSIC, GX_CONTROL_MUSIC, GX_CLEAR_ACTIVE, GX_BREAK, GX_LOAD_SAMPLE, GX_LOAD_SAMPLE_RESULT, GX_START_SAMPLE,
   GX_START_SAMPLE_RESULT, GX_CONTROL_SAMPLE, GX_CONTROL_VOICE, GX_CONTROL_VOICE_RESULT, GX_STOP_SAMPLE, GX_SAMPLE_REVERB,
-  GX_UNLOAD_SAMPLE, GX_UPDATE_LOCK, GX_UPDATE_UNLOCK,
+  GX_UNLOAD_SAMPLE, GX_UPDATE_LOCK, GX_UPDATE_UNLOCK, GX_SAMPLE_RECORD,
   GX_CB_POSITION = 30, GX_CB_LOCK, GX_CB_LOST, GX_CB_COPIED, GX_CB_RESYNC, GX_CB_END,
   GX_DEC_MESSAGE = 40, GX_DEC_CALL, GX_DEC_END, GX_END = 99 };
 typedef struct { uintptr_t address; unsigned char original; int kind; } GxBp;
@@ -1297,9 +1300,11 @@ static const struct { uintptr_t address; int kind; } gx_sites[] = {
   {0x1060ec19, K_SVOL}, {0x1060eb79, K_MVOL},                       /* after EnterCriticalSection */
   {0x10618be0, K_LOADM}, {0x1060a783, K_LOADM_RET}, {0x10619465, K_UNLOADM}, {0x106122bd, K_STARTM}, {0x106183bd, K_STOPM},
   {0x1060d0f2, K_CTLM}, {0x1060a82a, K_CLEAR}, {0x1060a88d, K_BREAK},
-  {0x10618e60, K_LOADS}, {0x10606bb1, K_LOADS_RET}, {0x10612370, K_STARTS}, {0x1060a43a, K_STARTS_RET}, {0x1060d29b, K_CTLS},
+  {0x10612370, K_STARTS}, {0x1060a43a, K_STARTS_RET}, {0x1060d29b, K_CTLS},
   {0x1060cf21, K_CTLV}, {0x10609a2a, K_CTLV_RET}, {0x1060ce94, K_CTLV_RET}, {0x1060ced0, K_CTLV_RET}, {0x10618437, K_STOPS},
-  {0x106113df, K_REVERB}, {0x1061951f, K_UNLOADS}, {0x1060954e, K_ULOCK}, {0x1060abd6, K_UUNLOCK},
+  /* Update's lock (a marker). Not its unlock call at 0x1060abd6: stepping off a breakpoint on that `call` corrupts the
+   * game under CrossOver (EDI 0 in UGameEngine::Draw after Update returns; seen in a bisection of the breakpoint kinds). */
+  {0x106113df, K_REVERB}, {0x1061951f, K_UNLOADS}, {0x1060954e, K_ULOCK},
   {0x106142d9, K_CB_POS}, {0x10614421, K_CB_LOCK_RESYNC}, {0x1061451c, K_CB_LOCK_A}, {0x106145f4, K_CB_LOCK_B},
   {0x106143e1, K_CB_LOST}, {0x106144d7, K_CB_LOST}, {0x106145af, K_CB_LOST}, {0x10614657, K_CB_COPIED}, {0x106143b3, K_CB_RESYNC},
   {0x10614681, K_CB_END}, {0x1060e363, K_DEC_MSG}, {0x1060e5a1, K_DEC_CALL}, {0x1060e80d, K_DEC_END},
@@ -1307,6 +1312,7 @@ static const struct { uintptr_t address; int kind; } gx_sites[] = {
 #define GX_SITES ((int)(sizeof(gx_sites) / sizeof(gx_sites[0])))
 static GxBp gxbp[GX_SITES];
 static FILE *gx_out;
+static struct { unsigned handle; unsigned char record[0x48]; } gx_samples[4096]; static int gx_nsamples;
 static int gx_copied_full = 0;
 static void gx_record(unsigned type, DWORD tid, const void *payload, unsigned len, const void *extra, unsigned extra_len) {
   unsigned head[3] = { type, len + extra_len, (unsigned)tid };
@@ -1352,7 +1358,31 @@ static void gx_event(int kind, DWORD tid, CONTEXT *c) {
       if (c->Eax) read_mem(c->Eax, rec + 4, 0x48);
       gx_record(GX_LOAD_SAMPLE_RESULT, tid, rec, sizeof(rec), NULL, 0); break;
     }
-    case K_STARTS: read_mem(esp + 0x20, w, 24); gx_record(GX_START_SAMPLE, tid, w, 24, NULL, 0); break;
+    case K_STARTS: {
+      read_mem(esp + 0x20, w, 24);
+      /* A sample seen for the first time (or changed): its 0x48-byte glxSample and its data (an MPEG record's +0x30 bytes;
+       * a PCM record's Length frames and the loader's 31 pad bytes), read here, under the library lock, rather than at
+       * glxLoadSample (outside it, where a trap could meet the timer thread's). */
+      unsigned char rec[0x48];
+      if (w[1] && read_mem(w[1], rec, sizeof(rec))) {
+        int seen = 0;
+        for (int i = 0; i < gx_nsamples; i++) if (gx_samples[i].handle == w[1]) { seen = !memcmp(gx_samples[i].record, rec, sizeof(rec)); if (!seen) memcpy(gx_samples[i].record, rec, sizeof(rec)); break; }
+        if (!seen) {
+          int known = 0; for (int i = 0; i < gx_nsamples; i++) if (gx_samples[i].handle == w[1]) known = 1;
+          if (!known && gx_nsamples < 4096) { gx_samples[gx_nsamples].handle = w[1]; memcpy(gx_samples[gx_nsamples].record, rec, sizeof(rec)); gx_nsamples++; }
+          unsigned short type; unsigned length, data; memcpy(&type, rec + 0x2c, 2); memcpy(&length, rec + 0x30, 4); memcpy(&data, rec + 0x44, 4);
+          unsigned n = type & 0x4000 ? length : length * (type & 4 ? 2 : 1) * (type & 0x40 ? 2 : 1) + 0x1f;
+          if (n > 0x1000000) n = 0;
+          unsigned char *bytes = (unsigned char *)malloc(n ? n : 1);
+          unsigned head[2] = { w[1], n };
+          if (n && (!data || !read_mem(data, bytes, n))) { head[1] = 0xffffffffu; n = 0; }
+          unsigned char payload[8 + 0x48]; memcpy(payload, head, 8); memcpy(payload + 8, rec, sizeof(rec));
+          gx_record(GX_SAMPLE_RECORD, tid, payload, sizeof(payload), bytes, n);
+          free(bytes);
+        }
+      }
+      gx_record(GX_START_SAMPLE, tid, w, 24, NULL, 0); break;
+    }
     case K_STARTS_RET: w[0] = c->Eax; gx_record(GX_START_SAMPLE_RESULT, tid, w, 4, NULL, 0); break;
     case K_CTLS: read_mem(esp + 0x14, w, 16); gx_record(GX_CONTROL_SAMPLE, tid, w, 16, NULL, 0); break;
     case K_CTLV: read_mem(esp + 0xc, w, 16); gx_record(GX_CONTROL_VOICE, tid, w, 16, NULL, 0); break;
@@ -1404,8 +1434,8 @@ static void gx_event(int kind, DWORD tid, CONTEXT *c) {
   }
 }
 typedef struct { DWORD tid; int index; } GxPending;
-/* The game's threads, from the debug events: while one steps off a breakpoint, the others are suspended, so that no
- * second trap is raised meanwhile (CrossOver garbles an exception raised while another thread single-steps). */
+/* The game's threads, from the debug events. (Suspending the others while one steps off a breakpoint did not keep
+ * CrossOver from garbling a concurrent trap; the breakpoints are placed so that none can meet another instead.) */
 static struct { DWORD tid; HANDLE h; } gx_threads[128]; static int gx_nthreads;
 static DWORD gx_suspended_for;
 static void gx_thread_add(DWORD tid, HANDLE h) { if (gx_nthreads < 128) { gx_threads[gx_nthreads].tid = tid; gx_threads[gx_nthreads].h = h; gx_nthreads++; } }
@@ -1447,7 +1477,6 @@ static int gx_recover(DWORD tid, uintptr_t where, int *npending, GxPending *pend
       write_mem(rec + 0xb8, &eip, 4); write_mem(rec + 0xc0, &eflags, 4);
       write_mem(gxbp[i].address, &gxbp[i].original, 1); FlushInstructionCache(process, (LPCVOID)gxbp[i].address, 1);
       if (*npending < 64) { pending[*npending].tid = tid; pending[*npending].index = i; (*npending)++; }
-      gx_suspend_others(tid);
       return 1;
     }
   }
@@ -1485,9 +1514,14 @@ static int do_galaxy_capture(const char *out_path, int seconds, const char *map,
       if (!_stricmp(name, "Galaxy.dll") && !armed) {
         galaxy_base = (uintptr_t)base;
         if (galaxy_base != 0x10600000u) { fprintf(stderr, "Galaxy.dll at 0x%lx, not its preferred base\n", (unsigned long)galaxy_base); break; }
+        /* GX_ONLY (diagnostics): a comma-separated list of breakpoint kinds to arm, or "none". */
+        const char *only = getenv("GX_ONLY");
         for (int i = 0; i < GX_SITES; i++) {
           gxbp[i].address = gx_sites[i].address; gxbp[i].kind = gx_sites[i].kind;
           read_mem(gxbp[i].address, &gxbp[i].original, 1);
+          int arm = 1;
+          if (only) { char key[16]; snprintf(key, sizeof(key), ",%d,", gx_sites[i].kind); char list[256]; snprintf(list, sizeof(list), ",%s,", only); arm = strstr(list, key) != NULL; }
+          if (!arm) { gxbp[i].address = 0; continue; }
           unsigned char cc = 0xCC; write_mem(gxbp[i].address, &cc, 1);
         }
         FlushInstructionCache(process, NULL, 0);
@@ -1531,10 +1565,14 @@ static int do_galaxy_capture(const char *out_path, int seconds, const char *map,
           ctx.Eip = (DWORD)where;
           gx_event(gxbp[which].kind, ev.dwThreadId, &ctx);
           hits[which]++; events++;
-          ctx.EFlags |= 0x100; SetThreadContext(th, &ctx);
+          /* Write back only EIP and EFlags (a fresh CONTEXT_CONTROL): under CrossOver a CONTEXT_INTEGER write can put back
+           * stale registers (seen: EDI 0 after Galaxy's Update returned into UGameEngine::Draw). */
+          CONTEXT set; memset(&set, 0, sizeof(set)); set.ContextFlags = CONTEXT_CONTROL;
+          GetThreadContext(th, &set);
+          set.Eip = (DWORD)where; set.EFlags |= 0x100; set.ContextFlags = CONTEXT_CONTROL;
+          SetThreadContext(th, &set);
           write_mem(where, &gxbp[which].original, 1); FlushInstructionCache(process, (LPCVOID)where, 1);
           if (npending < 64) { pending[npending].tid = ev.dwThreadId; pending[npending].index = which; npending++; }
-          gx_suspend_others(ev.dwThreadId);
         }
       } else if (step >= 0) {
         unsigned char cc = 0xCC; int index = pending[step].index;
