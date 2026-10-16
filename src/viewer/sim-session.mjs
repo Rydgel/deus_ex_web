@@ -47,7 +47,7 @@ export const plainHudCommands = commands => commands.map(command => command.kind
  * release records, lighting changes); each frame() snapshot takes it. */
 export function createSimSession(game, { assets = null, events = [], exportName = null } = {}) {
   const runtime = game.doors.scriptRuntime.runtime;
-  let failed = false, panZones = [], lastViewLocation = null, current = null, lipSync = null;
+  let failed = false, panZones = [], lastViewLocation = null, current = null;
   // Inspect's free camera, from the page's plain camera state.
   const inspectCamera = createPlayCamera();
   // Play's camera, pointed as the page points its own (play-camera.mjs); the
@@ -1025,7 +1025,6 @@ export function createSimSession(game, { assets = null, events = [], exportName 
     /** The kernel's decal facade and its frame-words pointer for the decal block. */
     setDecalKernel(kernel, framePtr) { decalDraw?.dispose(); decalDraw = kernel ? createDecalDraw(runtime, kernel) : null; occlusionFramePtr = framePtr; },
     setCoronas(scan) { coronaScan = scan; },
-    setLipSync(channels) { lipSync = channels; },
     /** One frame of the simulation side (docs/sim-worker.md "Frame
      * protocol"), its steps in the order and with the gating animate()
      * gave them, as one plain snapshot for the page. `input`: `play` (Play
@@ -1057,7 +1056,7 @@ export function createSimSession(game, { assets = null, events = [], exportName 
         coronas: null, weapon: null, hud: null, audioMs: 0, events: null, pack: null, display: null };
       let begun = null;
       if (input.play) {
-        begun = this.begin({ dt: input.dt, run: input.run, halted: input.halted, width, height, lipSync,
+        begun = this.begin({ dt: input.dt, run: input.run, halted: input.halted, width, height,
           aspect: input.aspect, resizes: input.resizes });
         collect(begun.errors);
         const { errors: _, ...frame } = begun;
@@ -1411,7 +1410,7 @@ export function createSimSession(game, { assets = null, events = [], exportName 
      * pauses the simulation; `halted` while it stopped on an error of its
      * own. A step that throws stops the later gated steps, as
      * pauseForRuntimeError did. */
-    begin({ dt, run, halted, width, height, lipSync = null, aspect = null, resizes = 0 }) {
+    begin({ dt, run, halted, width, height, aspect = null, resizes = 0 }) {
       // The page's resize() since the last frame: the canvas aspect and the
       // default FOV, before PlayerCalcView points the camera.
       if (aspect !== null && resizes !== resizesSeen) {
@@ -1429,8 +1428,7 @@ export function createSimSession(game, { assets = null, events = [], exportName 
           // stream state, or holds the level (live-probe.mjs).
           const replay = game.liveReplay, delta = replay ? replay.before(dt) : dt;
           if (delta !== false) { game.tick(delta); replay?.after(); }
-          // (a replay fed the original's phoneme letters, live-probe.mjs `phonemes`, does not run Galaxy's own analysis of the audio the page plays)
-          if (!game.liveReplay?.measuredSpeech) lipSync?.update(dt);
+          // Lip sync is Galaxy Update's step 12, after the HUD frame (script-audio-live.mjs).
         } catch (error) { fail(error); }
       }
       const frame = { errors, movers: movers(), view: null, renderRect: null, lights: null, light: null, sky: null, target: null, pan: null,

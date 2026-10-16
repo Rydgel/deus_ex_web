@@ -394,6 +394,10 @@ export async function createGame(map, asset, assets, { randomSeed = Math.floor(D
     // motion under pointer lock). The root accepts them only while a modal
     // owns the original mouse-event grab counter.
     windowPointer(sample) { return Boolean(hud?.pointer(sample)); },
+    /** The page's 16-bit decode of a speech sound (`sound` its key) for
+     * Galaxy's speech voices and lip sync (script-audio-live.mjs
+     * attachDecoded; docs/galaxy-audio.md "Speech through Galaxy's voices"). */
+    attachSpeech(sound, pcm) { return doors.scriptRuntime?.runtime?.audio?.attachDecoded(sound, pcm) ?? false; },
     /** The pawn fields Galaxy's lip-sync update reads and writes
      * (galaxy-lipsync-channels.mjs): IsA Pawn, bIsSpeaking, nextPhoneme. A
      * destroyed actor counts as none (UGalaxyAudioSubsystem::NoteDestroy

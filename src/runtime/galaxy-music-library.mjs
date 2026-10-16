@@ -195,22 +195,28 @@ export const MUSIC_OP = Object.freeze({
   setSampleVolume: 1, setMusicVolume: 2, loadMusic: 3, unloadMusic: 4, stopMusic: 5,
   startMusic: 6, controlMusic: 7, clearVoiceActive: 8, setBreakFlag: 9,
   loadSample: 10, startSample: 11, controlSample: 12, stopSample: 13, setSampleReverb: 14,
+  loadHostSample: 15, attachSample: 16, releaseSample: 17,
 });
-/** Int32 arguments per op after its code (loadMusic/loadSample: blob index, byte
- * length[, handle]; setSampleReverb: the 0x6c-byte glxReverb as 27 words). */
-export const OP_ARITY = Object.freeze({ 1: 2, 2: 2, 3: 2, 4: 2, 5: 2, 6: 2, 7: 2, 8: 2, 9: 2, 10: 3, 11: 6, 12: 4, 13: 1, 14: 27 });
+/** Int32 arguments per op after its code (loadMusic/loadSample/attachSample:
+ * blob index, byte length[, handle]; setSampleReverb: the 0x6c-byte glxReverb
+ * as 27 words; loadHostSample: rate, frames, handle; releaseSample: handle). */
+export const OP_ARITY = Object.freeze({ 1: 2, 2: 2, 3: 2, 4: 2, 5: 2, 6: 2, 7: 2, 8: 2, 9: 2, 10: 3, 11: 6, 12: 4, 13: 1, 14: 27,
+  15: 3, 16: 3, 17: 1 });
+/** The ops whose first argument is a blob (bytes in `modules`). */
+const BLOB_OPS = new Set([MUSIC_OP.loadMusic, MUSIC_OP.loadSample, MUSIC_OP.attachSample]);
 /** Update's FArray::Add(1024) after the module bytes (0x1060a702..0x1060a735). */
 export const MUSIC_SLACK = 1024;
 /** Voice handles: glxVoices at the preferred base, 0xa0 bytes each. */
 export const VOICE_BASE = 0x1068dca0, VOICE_SIZE = 0xa0;
 
 /** One batch as a message: `ops` holds [code, ...args] per op (Int32, the
- * arity of OP_ARITY); a blob op (loadMusic, loadSample) holds the index of its
- * bytes in `modules` and the byte length. Blob bytes are transferred, so they
- * cross once: a copy, or with `owned` the caller's own whole-buffer arrays,
- * which are then detached. Returns {message, transfer}. `ops` entries are
- * [name, ...args]: loadMusic's argument a Uint8Array; loadSample's the bytes
- * and the expected handle; setSampleReverb's 27 words. */
+ * arity of OP_ARITY); a blob op (loadMusic, loadSample, attachSample) holds
+ * the index of its bytes in `modules` and the byte length. Blob bytes are
+ * transferred, so they cross once: a copy, or with `owned` the caller's own
+ * whole-buffer arrays, which are then detached. Returns {message, transfer}.
+ * `ops` entries are [name, ...args]: loadMusic's argument a Uint8Array;
+ * loadSample's the bytes and the expected handle; attachSample's the 16-bit
+ * PCM and the handle; setSampleReverb's 27 words. */
 export function encodeMusicBatch(id, ops, { owned = false } = {}) {
   let length = 0;
   for (const [name] of ops) {
@@ -223,11 +229,11 @@ export function encodeMusicBatch(id, ops, { owned = false } = {}) {
   for (const [name, ...args] of ops) {
     const code = MUSIC_OP[name];
     words[at++] = code;
-    if (code === MUSIC_OP.loadMusic || code === MUSIC_OP.loadSample) {
+    if (BLOB_OPS.has(code)) {
       const bytes = args[0] instanceof Uint8Array ? args[0] : new Uint8Array(args[0]);
       const copy = owned && bytes.byteOffset === 0 && bytes.byteLength === bytes.buffer.byteLength ? bytes : bytes.slice();
       words[at++] = modules.length; words[at++] = copy.length;
-      if (code === MUSIC_OP.loadSample) words[at++] = args[1] | 0;
+      if (code !== MUSIC_OP.loadMusic) words[at++] = args[1] | 0;
       modules.push(copy.buffer);
     } else if (code === MUSIC_OP.setSampleReverb) {
       const block = args[0];
@@ -317,6 +323,13 @@ export async function createSampleRegistry() {
       x.galaxy_sample_forget(handle);
       return out;
     },
+    /** A host-decoded speech record (effects.rs `host_sample`, a stand-in
+     * for the MPEG loader's): the same 0x48-byte heap allocation the worklet
+     * makes for its loadHostSample op. */
+    loadHost(rate, frames) {
+      const handle = x.galaxy_sample_host(rate >>> 0, frames >>> 0) >>> 0;
+      return { handle, type: 0x24, length: frames >>> 0, loopStart: 0, loopEnd: 0, c4Speed: rate >>> 0, host: true };
+    },
   };
 }
 
@@ -327,10 +340,12 @@ export async function createSampleRegistry() {
  * service also carries the effect voices: registerSample, startSample,
  * controlSample, stopSample, voiceActive, setSampleReverb. */
 export function createMusicLibraryProxy(post, { samples = null } = {}) {
-  let depth = 0, open = null, issued = 0, reported = { batch: 0, ...stateOf(INITIAL_STATE), active: 0, any: false };
+  let depth = 0, open = null, issued = 0,
+    reported = { batch: 0, ...stateOf(INITIAL_STATE), active: 0, any: false, positions: new Map() };
   // Unacknowledged batches' ops that touch the mirrored state.
   const pending = [];
-  const counts = { batches: 0, ops: 0, modules: 0, moduleBytes: 0, reports: 0, samples: 0, sampleBytes: 0, voiceOps: 0 };
+  const counts = { batches: 0, ops: 0, modules: 0, moduleBytes: 0, reports: 0, samples: 0, sampleBytes: 0, voiceOps: 0,
+    hostSamples: 0, attaches: 0, attachBytes: 0, releases: 0 };
   let registry = null, registryError = null;
   const ready = samples ? Promise.resolve(samples).then(r => { registry = r; }, error => { registryError = String(error?.message ?? error); }) : null;
   const registered = new Map();
@@ -394,6 +409,35 @@ export function createMusicLibraryProxy(post, { samples = null } = {}) {
       }
       return entry;
     },
+    /** A speech MP3's record (docs/galaxy-audio.md "Speech through Galaxy's
+     * voices"; the stand-in of effects.rs `host_sample`): {handle, c4Speed =
+     * `rate`, ...} at once from the registry, and the loadHostSample op that
+     * makes the worklet's same record. Its PCM comes later (attachSample). */
+    registerHostSample(key, rate, frames) {
+      let entry = registered.get(key);
+      if (entry) return entry;
+      if (!registry) throw new Error(registryError ?? 'Galaxy sample registry not ready');
+      entry = registry.loadHost(rate, frames);
+      registered.set(key, entry);
+      counts.hostSamples++;
+      call(['loadHostSample', rate, frames, entry.handle]);
+      return entry;
+    },
+    /** The host's 16-bit PCM for a host record (copied at the call). The
+     * worklet holds a start of that record until its PCM is here. */
+    attachSample(handle, pcm) {
+      counts.attaches++; counts.attachBytes += pcm.length;
+      call(['attachSample', new Uint8Array(pcm.buffer, pcm.byteOffset, pcm.byteLength).slice(), handle]);
+    },
+    /** Drops a host record's PCM in the worklet (no voice plays it). */
+    releaseSample(handle) { counts.releases++; call(['releaseSample', handle]); },
+    /** The mixer's read head of a voice playing a host record (samples since
+     * its start: voice +0x46 minus +0x4e), as the worklet last reported it,
+     * or null (not reported: a held start, another sample, no report yet). */
+    voicePosition(voice) {
+      const slot = voiceSlot(voice);
+      return slot < 0 ? null : reported.positions.get(slot) ?? null;
+    },
     /** glxStartSample(voice, sample, frequency, volume, pan, flags): the fixed
      * voice's handle (the subsystem passes channel + 1). */
     startSample(voice, sample, frequency, volume, pan, flags = 0) {
@@ -421,11 +465,13 @@ export function createMusicLibraryProxy(post, { samples = null } = {}) {
       }
       return slot < 32 ? (reported.active >>> slot) & 1 : 0;
     },
-    /** A worklet report: the last batch it applied and the library state. */
+    /** A worklet report: the last batch it applied, the library state, the
+     * effect voices' Active bits and the host voices' read heads. */
     report(data) {
       if (data?.type !== 'report') return;
       counts.reports++;
-      reported = { batch: data.batch, ...stateOf(data.state), active: data.active >>> 0, any: true };
+      reported = { batch: data.batch, ...stateOf(data.state), active: data.active >>> 0, any: true,
+        positions: new Map(data.positions ?? []) };
       while (pending.length && pending[0].id <= data.batch) pending.shift();
     },
     status() {

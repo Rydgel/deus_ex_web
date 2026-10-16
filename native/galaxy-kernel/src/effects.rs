@@ -34,12 +34,29 @@
 //! handles (CreateMutexA, voice +0x98) are the oracle's: MUTEX_BASE + 4·n
 //! for the n-th call since the library was opened. No code path reads an
 //! absolute address's value.
+//!
+//! Host-decoded speech (`host_sample`, `host_sample_attach`,
+//! `host_sample_release`; docs/galaxy-audio.md "Speech through Galaxy's
+//! voices") is a stand-in, not a translation. The original's MP3 speech is
+//! loaded by the MPEG path 0x10620b30 into a streamed record (type 0x4024,
+//! +0x30 the MP3 byte length, measured under Unicorn, docs/lip-sync.md) and
+//! plays through glxStartSample's ring branch, fed by the decoder thread
+//! 0x1060e340. That decoder is not ported (the user's decision of
+//! 2026-10-16): the browser decodes the MP3, and its 16-bit PCM is given the
+//! record the WAVE loader writes for 16-bit mono PCM (type 0x24), so it plays
+//! through the non-ring branch and the same mixer. The record takes a bump-heap
+//! address as a WAVE record does (the simulation's registry and the worklet
+//! allocate in the same order); the PCM lives in a separate pool (HOST_POOL),
+//! attached when the host decode arrives and released when no voice plays it.
 use super::*;
 use crate::sequencer::{Region, UNSUPPORTED_DIVIDE, UNSUPPORTED_READ};
 
 pub(crate) const EFFECT_HEAP: u32 = 0x6000_0000;
 pub(crate) const VOICE_BASE: u32 = 0x1068dca0;
 pub(crate) const MUTEX_BASE: u32 = 0x1000;
+/// The host-decoded PCM pool (not an original allocation; see the file comment).
+pub(crate) const HOST_POOL: u32 = 0x8000_0000;
+pub(crate) const HOST_POOL_END: u32 = 0xf000_0000;
 const AMIGA_PERIOD_INDEX: u32 = (0x1063de90 - 0x1063daa0) / 4; // the dword the start reads in player mode 1
 
 const RIFF_FMT: &[u8; 4] = b"fmt ";
@@ -54,6 +71,8 @@ pub const UNSUPPORTED_RING_VOICE: u32 = 0x133; // glxStartSample's ring path (ty
 pub const UNSUPPORTED_AUTO_VOICE: u32 = 0x134; // glxStartSample(Voice = 0): the free-voice search
 pub const UNSUPPORTED_VOICE: u32 = 0x135; // a voice pointer outside the voice table
 pub const UNSUPPORTED_SHORT_PEEK: u32 = 0x136; // fewer than 0x50 bytes: the dispatch reads uninitialised stack
+pub const HOST_SAMPLE_MISSING: u32 = 0x137; // attach/release of an address that is no host-decoded record
+pub const HOST_POOL_FULL: u32 = 0x138; // the host PCM pool would pass HOST_POOL_END
 
 // Test-only translation mutants (validate-galaxy-effects.mjs).
 pub const MUTANT_LOOP_END_PLUS_ONE: u32 = 301; // the smpl loop end taken as exclusive (+1)
@@ -68,6 +87,9 @@ pub(crate) struct EffectSample {
     pub record: [u8; 0x48],
     pub data_addr: u32,
     pub data: Vec<u8>,
+    /// A host-decoded speech record (`host_sample`), whose data is attached
+    /// and released by the host.
+    pub host: bool,
 }
 
 /// The effect side's library state.
@@ -245,9 +267,74 @@ impl Library {
             remaining = remaining.wrapping_add(0xffff_fff8u32.wrapping_sub(size.wrapping_add(1) & !1));
         }
         let (data_addr, bytes) = data.unwrap_or((0, Vec::new()));
-        self.effects.samples.push(EffectSample { addr, record: *record, data_addr, data: bytes });
+        self.effects.samples.push(EffectSample { addr, record: *record, data_addr, data: bytes, host: false });
         self.rebuild_regions();
         Ok(result)
+    }
+
+    // ---- host-decoded speech (a stand-in; see the file comment) -------------------
+
+    /// The record for a speech MP3 the host decodes: what the WAVE loader
+    /// (0x10619a26..0x10619a9d) writes for 16-bit mono PCM at `rate`, with
+    /// `frames` until the PCM is attached and no data. The record takes the
+    /// bump heap's next 0x48 bytes, as glxLoadSample's malloc (0x10618ed0).
+    pub fn host_sample(&mut self, rate: u32, frames: u32) -> u32 {
+        let addr = self.effects.malloc(0x48);
+        let mut record = [0u8; 0x48];
+        put32(&mut record, 0, SAMP);
+        put32(&mut record, 4, 0x40);
+        put16(&mut record, 0x28, 0x4000);
+        put32(&mut record, 0x30, frames);
+        put16(&mut record, 0x2a, 0x7fff);
+        put16(&mut record, 0x2c, 0x24);
+        put32(&mut record, 0x3c, rate);
+        self.effects.samples.push(EffectSample { addr, record, data_addr: 0, data: Vec::new(), host: true });
+        addr
+    }
+
+    fn host_index(&self, addr: u32) -> Result<usize, u32> {
+        self.effects.samples.iter().position(|s| s.addr == addr && s.host).ok_or(HOST_SAMPLE_MISSING)
+    }
+
+    /// The host's decoded 16-bit PCM for the record at `addr`: Length (+0x30)
+    /// becomes its frame count and Data (+0x44) its pool address; 31 zero
+    /// bytes follow, as after a WAVE data chunk (0x10619acc). The pool
+    /// address is past every attached host sample's data (HOST_POOL when none
+    /// is attached).
+    pub fn host_sample_attach(&mut self, addr: u32, pcm: &[u8]) -> Result<u32, u32> {
+        let index = self.host_index(addr)?;
+        let frames = (pcm.len() / 2) as u32;
+        let size = frames * 2 + 0x1f;
+        let mut top = HOST_POOL;
+        for s in &self.effects.samples {
+            if s.host && s.data_addr != 0 && s.addr != addr {
+                top = top.max(s.data_addr + ((s.data.len() as u32 + 15) & !15));
+            }
+        }
+        if (top as u64) + (size as u64) > HOST_POOL_END as u64 {
+            return Err(HOST_POOL_FULL);
+        }
+        let mut data = vec![0u8; size as usize];
+        data[..frames as usize * 2].copy_from_slice(&pcm[..frames as usize * 2]);
+        let sample = &mut self.effects.samples[index];
+        put32(&mut sample.record, 0x30, frames);
+        put32(&mut sample.record, 0x44, top);
+        sample.data_addr = top;
+        sample.data = data;
+        self.rebuild_regions();
+        Ok(addr)
+    }
+
+    /// Drops the PCM of the record at `addr` (the record stays registered, as
+    /// USound +0x50 keeps it): Data (+0x44) is 0 again.
+    pub fn host_sample_release(&mut self, addr: u32) -> Result<u32, u32> {
+        let index = self.host_index(addr)?;
+        let sample = &mut self.effects.samples[index];
+        put32(&mut sample.record, 0x44, 0);
+        sample.data_addr = 0;
+        sample.data = Vec::new();
+        self.rebuild_regions();
+        Ok(0)
     }
 
     // ---- voices -------------------------------------------------------------------
@@ -587,6 +674,33 @@ pub extern "C" fn galaxy_sample_data_len(addr: u32) -> u32 {
 #[no_mangle]
 pub extern "C" fn galaxy_sample_forget(addr: u32) {
     with_library(|l| l.forget_sample_data(addr))
+}
+
+/// A host-decoded speech record (`Library::host_sample`): its address.
+#[no_mangle]
+pub extern "C" fn galaxy_sample_host(rate: u32, frames: u32) -> u32 {
+    with_library(|l| l.host_sample(rate, frames))
+}
+
+/// Attaches galaxy_input's `len` bytes (16-bit PCM) to the host record at
+/// `addr`; the address, or 0 with galaxy_fault set. The input is released.
+#[no_mangle]
+pub extern "C" fn galaxy_sample_attach(addr: u32, len: u32) -> u32 {
+    let r = INPUT.with(|i| {
+        let mut input = i.borrow_mut();
+        let n = (len as usize).min(input.len());
+        let r = with_library(|l| l.host_sample_attach(addr, &input[..n]));
+        *input = Vec::new();
+        r
+    });
+    code(r)
+}
+
+/// Releases the PCM of the host record at `addr`.
+#[no_mangle]
+pub extern "C" fn galaxy_sample_release(addr: u32) -> u32 {
+    let r = with_library(|l| l.host_sample_release(addr));
+    code(r)
 }
 
 /// glxStartSample; the voice pointer (preferred base) or 0; a fault sets galaxy_fault.

@@ -572,7 +572,8 @@ Play's music is the library itself: the Rust kernel runs in an AudioWorklet
 and plays bus A. Since 2026-10-06 its effect voices play there too, on bus
 B with the zone reverb ([galaxy-audio](galaxy-audio.md) "Effects through
 Galaxy's mixer"; `?sfx=webaudio` keeps the Web Audio mapping `galaxyVoice`).
-Conversation speech keeps its own transport (`playConversationSpeech`).
+Since 2026-10-16 speech plays there as well, from the browser's MP3 decode
+([galaxy-audio](galaxy-audio.md) "Speech through Galaxy's voices").
 
 **Threads.** The original mixes on a winmm timer thread (§1.3 of
 [mixer](galaxy-music/mixer.md)) and the game thread's Update calls glx*

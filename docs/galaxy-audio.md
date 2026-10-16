@@ -1,11 +1,13 @@
 # Galaxy audio subsystem
 
-Play's sound effects, ambient sounds and music go through Galaxy's own
-library: the translated subsystem (`src/runtime/galaxy-audio.mjs`) drives
-the library's voices and music in an AudioWorklet, with the zone reverb
-("Effects through Galaxy's mixer" below). Conversation and DataLink speech
-keeps its own Web Audio transport. This note records the original
-subsystem, then its translation and how Play uses it.
+Play's sound effects, ambient sounds, speech and music go through Galaxy's
+own library: the translated subsystem (`src/runtime/galaxy-audio.mjs`)
+drives the library's voices and music in an AudioWorklet, with the zone
+reverb ("Effects through Galaxy's mixer" below). Speech (conversation,
+DataLink and bark lines) takes the same channels and voices from the
+browser's MP3 decode, as Galaxy's MPEG decoder is not ported ("Speech
+through Galaxy's voices" below). This note records the original subsystem,
+then its translation and how Play uses it.
 
 The audio device is `UGalaxyAudioSubsystem` (`DeusEx.ini`
 `AudioDevice=Galaxy.GalaxyAudioSubsystem`), Galaxy.dll SHA256
@@ -187,13 +189,18 @@ stored double, Galaxy's `_ftol`). The Galaxy library's voices are services:
 `fastLineCheck`, `globalLighting`, `sample(sound)` (`{rate}`), `index(actor)`
 and `atan2`. FPATAN is a transcendental: `atan2` is the host's double, which
 can differ from the hardware's extended result in its last bits before the
-float store (the oracle runs it in double too). The music section (step 14)
+float store (the oracle runs it in double too). Step 12's gate and cadence
+(a voice, an Actor, a SLOT_Talk id, IsA Pawn, time not below the next
+analysis time, bIsSpeaking; next = float(next + 0.1)) are in the channel
+loop, and the analysis of the voice's data is the optional
+`services.lipSync(channel)` ([lip-sync](lip-sync.md)); the oracle harness
+supplies none, so its runs skip the step. The music section (step 14)
 is galaxy-music.mjs's, called after the channel loop inside the library's
 `lock()`/`unlock()` (`services.library`, `services.music`; see
 [galaxy-music](galaxy-music.md) "Phase 4"), then the reverb tail
 ([reverb](galaxy-music/reverb.md) §2; `config.useReverb`, the listener's
 Region.Zone, `services.library.setSampleReverb`). Not translated: the 3D
-hardware voices and the lip-sync sampling (step 12). Update's
+hardware voices and step 12 for a non-streamed (WAV) Talk sample. Update's
 category ratio reads the live SoundVolume/SpeechVolume bytes, which natives
 268/269 change (galaxy-volumes.mjs).
 
@@ -292,8 +299,10 @@ startup and Login (script-doors.mjs `level.engine.audio`):
    id and Update pans it from that position. Wired 2026-10-14
    (validate-window-sound-play, validate-window-sound-browser).
 5. `execStopSound` (`0x103e27d0`, native 265) reads Id and calls Audio's
-   StopSoundId (+0x78) when Audio is set. Conversation speech stops are
-   consumed by the speech transport first.
+   StopSoundId (+0x78) when Audio is set, conversation speech stops
+   included.
+6. Speech: ConPlay, DataLinkPlay and BarkManager lines are PlaySound calls
+   like any other (item 1, then "Speech through Galaxy's voices").
 
 A runtime spawn (a fragment, a projectile, a LaserEmitter, a weapon that was `summon`ed or dropped) has no entry in the
 capture. Its id is formed from the slot the original's `AddObject` rule gives it, continued from the map's measured registry
@@ -301,8 +310,7 @@ state and every creation and release since (`original-object-index.mjs`; [object
 "Runtime spawns"): `ScriptRuntime.soundObjectIndex` answers `measured` for the capture and `modeled` for such a slot, and the
 sound takes the real chain above. Only an emitter with neither (an object that existed before the model was seeded and is not
 in the capture) stays the recorded boundary that returns the placeholder channel 0; StopSound(0) can only match an idle
-channel, because a real id carries a nonzero object index and slot-0 sounds take Galaxy's counter ids. Speech keeps its own
-transport. Galaxy compares ids for equality and reads their slot bits only, so a unique, stable modeled id gives the
+channel, because a real id carries a nonzero object index and slot-0 sounds take Galaxy's counter ids. Galaxy compares ids for equality and reads their slot bits only, so a unique, stable modeled id gives the
 original's audible behaviour; its magnitude is the original's only where the model replays every creation (the weapon scene
 of that note: the first 310, or without Mission06's flags 417, registry takes equal).
 
@@ -370,8 +378,9 @@ renderer's hook between the mix and the conversions
   the mixer thread also clears Active asynchronously to Update's read.
 * Before the first report (the worklet opens on the page's first gesture),
   the voice status comes from the host clock. A load path that is not
-  translated (the MP3 Menu_SpeechTest) gives a silent host voice that
-  finishes at once, and is noted.
+  translated (an ADPCM WAV, say) gives a silent host voice that finishes at
+  once, and is noted; MP3s take the host decode ("Speech through Galaxy's
+  voices").
 * `dispose()` stops the voices with the map, as SetViewport's StopSound
   loop does at a Player start.
 * UseReverb comes from DeusEx.ini (True as installed). Update hands the
@@ -379,11 +388,8 @@ renderer's hook between the mix and the conversions
 
 **What the simulation reads back is unchanged.** The voice status is the
 library's Active byte, and PlaySound's result is the channel logic's.
-Speech keeps its transport, so `GetSpeechLength` (computed from the sound
-data) and lip sync are unaffected. Lip sync reads the speech source's
-position on the page, as before (validate-island-lipsync passes). Moving
-speech onto Galaxy's voices would need the MPEG decoder (`0x10620b30`,
-streamed ring voices), which is not translated.
+`GetSpeechLength` is computed from the sound data. Speech joined these
+voices on 2026-10-16 (next section).
 
 **Verification.**
 
@@ -411,13 +417,149 @@ streamed ring voices), which is not translated.
 - The timer thread's MXCSR is assumed to be 0x1f80.
 - The game thread's x87 control word is open: 0x007f would change the
   reverb coefficients.
-- The MPEG and ADPCM sample paths and the 3D voices are not translated.
+- The MPEG and ADPCM sample paths and the 3D voices are not translated
+  (speech plays from the browser's decode, next section).
 
 Remaining: runtime spawns' global indices (the seeded spawn registry), the
-demo-recording and networked ProcessRemoteFunction paths, the lip-sync
-sampling of Galaxy-played speech (speech keeps its transport), and
+demo-recording and networked ProcessRemoteFunction paths, and
 UnregisterSound (Play never destroys a USound). Music is phase 4/5 of
 [galaxy-music](galaxy-music.md).
+
+## Speech through Galaxy's voices (2026-10-16)
+
+**The original.** Speech is plain `Actor.PlaySound` (native 264); the
+DeusEx.u bytecode (`scripts/dump-script-function.mjs DeusEx ...`):
+
+* `ConPlay.PlaySpeech`: with `bForcePlay`, the player (when there is no
+  speaker or the speaker is farther than 400) or else the speaker plays
+  `PlaySound(Speech, SLOT_Talk, , , 65536)`. Otherwise the speaker plays it
+  with Radius 65536 when `con.bCannotBeInterrupted || !con.bFirstPerson`
+  (natives 132 `||`, 129 `!`), else `512 + initialRadius` (native 174,
+  float addition). Then `StartSpeakingAnimation`.
+* `DataLinkPlay.PlaySpeech`: `Player.PlaySound(Speech, SLOT_Talk)` (the
+  execPlaySound defaults). `DataLinkPlay.StartConversation`:
+  `Player.PlaySound(startSound, SLOT_None)`, the DataLinkStart WAV.
+* `BarkManager.StartBark`: `newBarkPawn.PlaySound(speechAudio, SLOT_Talk, ,
+  , 1024)`.
+* Their stops are `Player.StopSound(playingSoundID)` (native 265,
+  StopSoundId).
+
+So speech takes "What reaches Galaxy" items 1-3 and 5, and Update gives a
+slot-5 channel its distance factor, its pan and the speech category ratio,
+without the occlusion test (step 5). RegisterSound's glxLoadSample takes the
+MPEG path `0x10620b30` for these MP3s (a streamed record, type `0x4024`,
+[lip-sync](lip-sync.md)), which glxStartSample's ring branch plays, fed by
+the decoder thread `0x1060e340`.
+
+**Before.** The three ConPlay/DataLinkPlay sites were taken out at the
+player's ClientHearSound and played by the page at the fixed gain
+`parameters[0]/100`: no channel, so no distance, pan or ratio (the
+DataLinkStart WAV cue went that way too). Barks took the real chain, but the
+translated glxLoadSample refuses an MP3 (fault `0x130`, the MPEG dispatch),
+so a bark was a silent voice under Galaxy's voices and a noted "mp3 sample"
+under the Web Audio mapping: barks were inaudible. A speech MP3 run through
+the sample registry gives `{handle: 0, fault: 0x130}`; the DataLinkStart WAV
+loads.
+
+**Now.**
+
+1. The chain: `script-conplay-live.mjs` no longer consumes natives 264 and
+   265 at those sites. A 264 there runs the general route (the measured or
+   modeled emitter index, `playSoundServices`; an emitter with neither takes
+   the general route's boundary) and records what reaches the player's
+   ClientHearSound (`soundRequests`, `onConversationSpeech`: diagnostics and
+   validators only). StopSound is the original native.
+2. RegisterSound of an MP3 sound (`script-audio-live.mjs` `hostSample`): a
+   host-decoded record. Its rate is the MPEG frame header's, which the MPEG
+   loader puts at `+0x3c` (44100 for the shipped speech), so step 13's
+   frequency `ftol(rate · pitch · doppler)` is the original's. Its frame
+   count is a walk over the MPEG frame headers (`mp3Frames`) until a decode
+   gives the real one; only the host clock reads it.
+3. The record (`effects.rs` `host_sample`, a stand-in, not a translation):
+   what the WAVE loader writes for 16-bit mono PCM (type `0x24`, PANNING
+   `0x4000`, Length, rate), allocated from the bump heap as glxLoadSample's
+   `malloc(0x48)`, so the simulation's registry and the worklet agree on the
+   handle (`loadHostSample` op). Its PCM lives in a separate pool from
+   `0x80000000` (`HOST_POOL`), not an original allocation.
+4. The decode: when a voice starts on such a record, the simulation asks the
+   page (`onVoice({op: 'decode', sound, bytes, rate})`). `main.mjs`
+   `decodeSpeech` decodes the MP3 in an OfflineAudioContext at the header's
+   rate and converts it with `pcm16` (round to nearest, clamp; unverified
+   against Galaxy's decoder), then answers `speech-pcm` (worker) or
+   `game.attachSpeech` (inline). A failed decode answers an empty PCM: the
+   voice plays nothing and finishes, noted.
+5. The mixer: `attachSample` gives the record its PCM (Length the decoded
+   frames, 31 zero bytes after them, as after a WAVE data chunk). The worklet
+   holds a start whose record has no PCM yet: the slot is stopped (as
+   glxStartSample stops it first), the start's arguments wait (a
+   controlSample updates them, a stopSample or a new start drops them), the
+   slot counts as Active for Update's "voice finished" poll, and
+   glxStartSample runs when the PCM arrives. From then on it is an ordinary
+   non-ring effect voice: glxControlSample from Update each frame, mixed on
+   bus B with the zone reverb, Active cleared at its end. The original's ring
+   voice starts at once on a zeroed ring that the decoder thread fills; here
+   the decoded line starts whole once decoded (host timing, tens of
+   milliseconds).
+6. Release: when no voice plays the record, the simulation drops the PCM and
+   `releaseSample` drops the worklet's; the next voice asks for the decode
+   again. Memory follows the lines playing, not the map's whole speech (the
+   original keeps the MP3 and a 64 KB ring).
+7. Lip sync is Update's step 12 over Galaxy's own channels
+   ([lip-sync](lip-sync.md)) on the same PCM. The mixer position is the
+   worklet's read head (voice `+0x46` minus `+0x4e`, reported with the
+   Active bits), or the host clock before the worklet reports and under the
+   Web Audio mapping.
+8. The Web Audio mapping (`?sfx=webaudio`, and headless runs without a
+   worklet): the speech voice is a host voice like the WAVs; the page decodes
+   the MP3 for each start and keeps no buffer.
+
+Any MP3 USound takes this path, including UserInterface.Menu_SpeechTest
+(11,388 bytes, 44100 Hz), which `MenuChoice_SpeechVolume.ScalePositionChanged`
+plays with `Player.PlaySound(Menu_SpeechTest, SLOT_Talk, , true)` when the
+speech volume slider moves; that site was not exercised in Play here.
+
+**Original against substitute.** From the original: the script sites and
+their radii, execPlaySound, CheckHearSound, execClientHearSound, PlaySound's
+channel choice, Update's priority, volume, pan, ratio and voice calls every
+frame, StopSoundId, NoteDestroy, step 12's gate, cadence and analysis,
+glxStartSample's non-ring branch, glxControlSample and the mixer.
+Substitutes, unverified: the browser's MP3 decode and its 16-bit rounding
+(row 4.5.6, excluded by the user's decision of 2026-10-16); the non-streamed
+record and the non-ring branch in place of the streamed record and the ring
+branch; the hold until the decode arrives in place of the decoder thread's
+fill; the PCM pool; the frame-count estimate.
+
+**Verification.**
+
+| Validator | What it shows |
+| --- | --- |
+| `validate-island-bark.mjs` | Island, the player placed at ComputerSecurity1: Terrorist30's bark (`ConAudioAIBarks_896`) holds a Galaxy channel with its BarkManager slot's id 573066, SLOT_Talk, Radius 1024, a host-decoded record at 44100 Hz, no silent-sample note. With the clock held, the listener's view swept around the emitter: each Update's voice volume and pan equal Update's formulas recomputed in doubles (within 2 units); straight on the volume falls 21503, 18457, 13977, 9497, 5017, 1657 at 64, 200, 400, 600, 800, 950 units to the `0x80` floor at 1100, the pan stays 16384; turned 60 degrees either way the pan is 25940 or 6827, and 22356 or 10410 inside `0.1 · Radius`. Terrorist18's own bark reaches no listener from there (CheckHearSound). |
+| `validate-island-lipsync.mjs` | MeetPaul headless to its first choice: Paul's 4 lines on Galaxy channels with his SLOT_Talk ids (Radius 65536, ConPlay.PlaySpeech's third-person branch, so the volume stays at 32767), 9 decodes, each Update's voice volume and pan against the formulas over 1,955 Updates (pan 16267-16383), 438 analyses on step 12's cadence, Paul's letters and mouth sequences, no PCM kept after a Player start. |
+| `validate-galaxy-effects-play.mjs` | The worklet processor under Node: on Island one of Paul's prepared lines through the original execClientHearSound: loadHostSample with the registry's handle, the start held (Active, not mixed) until the ffmpeg decode is attached, then the voice table's record, frequency, volume and pan, the read head advancing to the PCM's 16,128 frames, the voice ending on its own and the channel freed, one attach, one held start run, one release. |
+| `validate-island-conversation.mjs`, `validate-instructor-conversation.mjs`, `validate-training-datalink-live.mjs`, `validate-crowbar-crate.mjs` | The conversation and DataLink flows with speech on Galaxy's channels; a Player start stops the speech channel. |
+| `validate-native-galaxy-audio.mjs`, `validate-galaxy-volumes.mjs`, `validate-galaxy-effects.mjs`, `validate-galaxy-lipsync.mjs` | The oracle checks, unchanged: 165 cases and 1,954 calls, 768 volume cases, the library entries, 200 analyses bit-exact. |
+| `validate-galaxy-effects-browser.mjs --pairs 0` | Headless Chromium, worker mode: Galaxy voices, the reverb and `?sfx=webaudio` as before. |
+
+In headless Chromium (worker mode, MeetPaul placed as
+`scripts/conversation-acceptance.mjs` places it; a scratch check, not
+committed) Paul's first three lines were decoded on the page, held in the
+worklet and started on their PCM (3 attaches, 3 held starts, 2 releases by
+then), with 0 faults, 0 underruns, 0 handle mismatches, no Web Audio voice
+on the page and no console error; with `?sfx=webaudio` the page started 27
+voices, the speech among them, with 0 failures.
+
+**Open.**
+
+* The start: the original's ring voice starts at once and its decoder thread
+  fills the ring ahead of the mixer; how far ahead, and the end of a ring
+  voice (what the decoder thread and Active do at the end of the MP3), are
+  not traced. Here the line starts whole after the host decode and ends at
+  the decoded length.
+* Step 12 for a WAV on SLOT_Talk (the non-streamed record, 0.1 s ahead) is
+  not translated.
+* The page converts the decode to 16-bit on its main thread once per line
+  (as the earlier transport did for lip sync): a one-off cost at a line's
+  start, not measured against the 8.3 ms frame budget.
 
 ## Hand-off: the sound gate (2026-10-16)
 

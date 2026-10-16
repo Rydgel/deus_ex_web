@@ -66,12 +66,11 @@ export function createSimClient({ onProgress = () => {}, onFrame = null, onFailu
     connectMusic(port) { worker.postMessage({ type: 'music', port }, [port]); },
     queue(command) { commands.push(command); },
     get outstanding() { return outstanding; },
-    /** Post one frame. `speech` holds the lip-sync channels' mixer
-     * positions, `status` asks for the game status. */
-    post(input, { speech = [], status = false } = {}) {
+    /** Post one frame. `status` asks for the game status. */
+    post(input, { status = false } = {}) {
       outstanding++;
       const returned = spares.splice(0);
-      worker.postMessage({ type: 'frame', input, commands: commands.splice(0), clock: clock(), speech, status, returned }, returned);
+      worker.postMessage({ type: 'frame', input, commands: commands.splice(0), clock: clock(), status, returned }, returned);
     },
     /** A snapshot's pack buffer the page is done with: it goes back to the
      * worker with the next post, which reuses it for a later frame instead of

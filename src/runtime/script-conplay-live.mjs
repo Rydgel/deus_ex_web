@@ -259,7 +259,11 @@ export async function createLiveConPlayRuntime({runtime,assets,level,player,shel
     native.destroy=receiver=>runtime.destroyObjectBase(receiver);
     return object;
   }
-  const activeAudio=new Map(),soundRequests=[];
+  // A record of the conversation sounds the player hears (validation and
+  // diagnostics only): what each original PlaySound below delivered to the
+  // player's ClientHearSound. The sound itself takes the original chain into
+  // Galaxy (docs/galaxy-audio.md "Speech through Galaxy's voices").
+  const soundRequests=[];
   function handleNative(call){
     const scriptPath=String(call.script?.entry?.path??call.record?.entry?.path??'').toLowerCase();
     if(call.index===3002||call.index===3003){
@@ -282,28 +286,28 @@ export async function createLiveConPlayRuntime({runtime,assets,level,player,shel
         throw new Error('CreateConCamera requires a Conversation and no arguments');
       return {handled:true,value:camera()};
     }
-    if(call.index===264&&['conplay.playspeech','datalinkplay.playspeech','datalinkplay.startconversation'].includes(scriptPath)){
-      const services=runtime.soundServices(call);
+    // Actor.PlaySound (native 264) of ConPlay/DataLinkPlay speech and the
+    // DataLink start cue: the general route (script-doors.mjs nativeCall) of
+    // the original execPlaySound, CheckHearSound and the player's
+    // execClientHearSound into Galaxy's PlaySound (slot 5 for speech), with
+    // the same measured or modeled emitter index, recorded on the way. An
+    // emitter with neither takes the general route's boundary. Their
+    // StopSound (native 265) is the original's (no case here): Galaxy's
+    // StopSoundId.
+    const soundIndex=call.index===264&&['conplay.playspeech','datalinkplay.playspeech','datalinkplay.startconversation'].includes(scriptPath)
+      ?runtime.soundObjectIndex(call.receiver):null;
+    if(soundIndex){
+      const services=runtime.playSoundServices(call);
+      if(soundIndex.source==='modeled')runtime.audio?.noteModeledId(call.receiver);
       const result=execActorPlaySound(call,{...services,processNativeEvent:(receiver,name,args)=>{
-        if(name!=='ClientHearSound')return services.processNativeEvent(receiver,name,args);
-        if(receiver!==player)throw new Error('Conversation ClientHearSound reached another listener');
-        const [emitter,id,sound,location,parameters]=args;
-        const audio=sounds.get(sound);if(!audio)throw new Error('Conversation speech is not prepared');
-        const request={kind:'speech',audio,emitter,id,location,parameters};
-        activeAudio.set(id,request);soundRequests.push(request);onSpeech?.(request);
+        if(name==='ClientHearSound'&&receiver===player){
+          const [emitter,id,sound,location,parameters]=args;
+          const request={kind:'speech',audio:sounds.get(sound)??null,sound,emitter,id,location:[...location],parameters:[...parameters]};
+          soundRequests.push(request);onSpeech?.(request);
+        }
+        return services.processNativeEvent(receiver,name,args);
       }});
       return {handled:true,value:result.resultWritten?result.result:undefined};
-    }
-    // Only these original player.StopSound(playingSoundID) sites belong to
-    // this speech transport. Other actors (notably Decoration.Timer) retain
-    // their normal native route; reject before consuming any VM operands.
-    if(call.index===265&&call.receiver===player&&[
-      'conplaybase.stopspeech','conplaybase.terminateconversation',
-      'datalinkplay.terminateconversation','datalinkplay.abortdatalink','datalinkplay.abortandsavehistory',
-    ].includes(scriptPath)){
-      const id=call.argumentCount?refValue(call.evaluateArgument(0)):0;
-      if(activeAudio.has(id)){const request={kind:'stop',id};soundRequests.push(request);onSpeech?.(request);activeAudio.delete(id);}
-      return {handled:true,value:undefined};
     }
     return {handled:false};
   }
@@ -312,7 +316,7 @@ export async function createLiveConPlayRuntime({runtime,assets,level,player,shel
   // ConPlay actors and ConHistory objects are purged by LoadMap's collection
   // (docs/script-loadmap-gc.md). Only the host's own tracking is dropped here.
   function reset(){
-    for(const id of activeAudio.keys())onSpeech?.({kind:'stop',id});activeAudio.clear();soundRequests.length=0;
+    soundRequests.length=0;
   }
   return {handleNative,reset,spawned,sounds,soundRequests,galaxy,
     // Call reset against the old player before adopting the next Login result.
