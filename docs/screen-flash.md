@@ -102,6 +102,45 @@ Scripts (DeusEx.u / PlayerPawn.uc):
 | `ActorRadiusCheck`: `src/runtime/collision-hash-radius.mjs` | `scripts/validate-native-hash-radius.mjs`: 218 queries equal to Engine.dll `0x103589e0` (cells, hit order) |
 | `viewportFlash` (Draw's derivation) | disassembly only (`0x1038f36e..0x1038f54e`), not executed natively: the formula is pinned by `validate-d3d-endflash.mjs` unit checks; the NetMode/ScreenFlashes gate assumes standalone with `ScreenFlashes=True` |
 | The pass in Play: `src/viewer/flash-pass.mjs`, snapshot field `hud.flash` (`sim-session.mjs`) | `scripts/validate-flash-play.mjs` (worker mode): neutral flash leaves the frame unchanged, a fog/scale state tints it |
+| The pass against the original's frames | Stage 4 gate row 4.2.26 (`frames 00_Training [flashA]`, `[flashB]`): two held states, the flash's per-channel map of levels equal to the running original's at all 369 (channel, level) pairs; [below](#against-the-original-2026-10-16-gate-row-4226) |
+
+## Against the original (2026-10-16, gate row 4.2.26)
+
+Held frames of the running original under CrossOver on the Mac (`scripts/original-views.sh`, which now runs there, and `visual-acceptance.mjs original`) against
+Play's (`play`, worker mode, `?antialias=0&detailTextures=0`) at the same camera, Training's corridor `-100,840,30` looking down +x, and the same level time.
+
+* **Holding a flash.** A written `FlashScale`/`FlashFog` moves back toward its goal every tick, so the state is held through the goal: both programs run
+  `set DeusEx.JCDentonMale ConstantGlowScale s` and `ConstantGlowFog (X=..,Y=..,Z=..)` at the camera (`--pre-shot-cmd`) and wait 5 s (`--pre-shot-wait 5000`;
+  300 page frames in Play). `original --player-state` reads the player's `FlashScale` (`+0x610`) and `FlashFog` (`+0x61c`) after the shot into
+  `<view>-state.json`: the scale read 0.500000596 for a goal of 0.5, so the approach had converged.
+* **The fog cutoff at a held tick (measured).** `ViewFlash` sets each `FlashFog` component under 0.019 to 0 after the step (`.uc` 10206), and at the held
+  level's TimeDilation 0.001 the step is fog x 10 x 0.005 s: a fog goal under 0.38 never leaves 0. The first state's fog (0.3,0.1,0) read back (0,0,0)
+  from the original, and Play's frame shows none either (the flash maps below are equal). By the same rule (derived, not measured) a scale goal above
+  0.62 snaps back to 1 at a held tick: the first step `1 + (g - 1) / 20` stays above 0.981.
+* **Brightness 2/3.** The Shot bakes the Brightness ramp into its bitmap; at 2/3 it is the identity and the bitmap is the framebuffer
+  ([visual acceptance](visual-acceptance.md#main-views-at-brightness-23)), and Play's ramp at 0.4 is the identity. The flash is `fog + frame * alpha` in
+  framebuffer levels, which any other ramp would bend.
+* **The comparison.** The Shot includes the flash (the frame halves at scale 0.5). `compare --flash-base flash0` reads each program's flash as a per-channel
+  map of levels, the output level in the frame with the flash for every input level of the same program's frame without it (`flash0`, a capture of its
+  own), and compares the original's map with Play's where both frames hold the level. What the two programs draw differently in the scene drops out.
+
+| State | Read back from the original | Fog bytes, alpha | The original's map (levels 0 to 154 held) | Equal (channel, level) | Stray samples, original / Play | Frame: edges, outlier blocks |
+| --- | --- | --- | --- | ---: | ---: | --- |
+| `flash0`: none (50.800 s) | scale 1, fog 0 | none | - | - | - | .998 / .999, 32 (below) |
+| `flashA`: `ConstantGlowScale -0.5`, `ConstantGlowFog (0.3,0.1,0)` (51.001 s) | scale 0.500000596, fog 0 | (0,0,0), 128 | v to round(v x 128/255): 1, 2 to 1, 3 to 2, ..., 152 to 76, 153 to 77 | 369 / 369 | 0 / 0 | .985 / .999, 32, all also in `flash0` |
+| `flashB`: `ConstantGlowScale 0`, `ConstantGlowFog (0.6,0.45,0.4)` (50.427 s) | scale 1, fog (0.599999428, 0.44999969, 0.399999738) | (153,115,102), 255 | v to min(255, fog + v); 54, 4 and 2 saturated pixels | 369 / 369 | 0 / 0 | .998 / .999, 0 |
+
+A Play frame without the flash against `flashA` differs at 363 of the 369 levels. The gate (`frames 00_Training [flashA]`, `[flashB]`, `flashBase`) plays
+`flash0` once and each state in its own run, and fails on any differing level or stray sample; an outlier block of a state's frame is allowed only where
+`flash0`'s comparison has it too (the scene's, judged by the frame rows).
+
+What this does not cover: levels above the frame's (154 here), the DrunkFX HUD background (`ShowHud False` hides the HUD; it is another draw), a zone's
+`ViewFog`/`ViewFlash` as the source (the goal is the same sum, but the ghost camera's `set Location` does not move `HeadRegion`), a flash in motion (a
+damage flash decays over ticks) and a Windows D3D driver: both blends ran on the M2, the original's under CrossOver.
+
+Found on the way, open (not the flash): the band above the corridor (rows 0 to about 195) where Play draws nothing and shows its canvas clear colour,
+`canvasClear` `#06101b` (`main.mjs`), which three.js takes to linear light and `rawClear` writes raw: (0,1,3) on 242,417 pixels, 242,415 of them black
+in the original. Whether the original clears to black there (D3DDrv's `Lock` with a clear colour) or draws a black surface was not measured.
 
 ## Iterator 312 (`VisibleCollidingActors`): done 2026-10-15
 
@@ -122,10 +161,10 @@ exec body itself (open: an exec-body differential with a native hash fixture).
 
 ## Not done, in order
 
-1. **Comparison with the original** (step 5): a held underwater tint (a `ghost` camera in a `WaterZone` with `ViewFog`, e.g.
-   02_NYC_Underground) and a drunk/poisoned frame at a held tick under Wine; compare with `?detailTextures=0&antialias=0`.
-   Not done: `validate-flash-play.mjs` checks the pass's direction and the neutral case against Play itself only. The
-   quantisation of the GL blend (`dst * alpha` in 8 bits) against the device's is unmeasured.
+1. **Comparison with the original** (step 5): **the pass, done 2026-10-16** ([above](#against-the-original-2026-10-16-gate-row-4226): two held
+   states, the multiply and the additive branch, the GL blend's 8-bit result equal to the original's at every level the frame holds, on the M2).
+   Still open: a zone's tint as the source (a `ghost` camera in a `WaterZone` with `ViewFog`, e.g. 02_NYC_Underground, needs `HeadRegion` moved
+   by a real move), a drunk or poisoned frame (the DrunkFX background with the HUD shown, the view sway) and a decaying damage flash.
 2. The DrunkFX background (modulated tile over the whole HUD) draws through the existing HUD renderer's DSTY_Modulated
    path; its look has not been compared with the original. **Fixed 2026-10-16:** DrunkFX is a Fire.dll WetTexture and the HUD
    renderer drew its stored mip, which Serialize leaves zeroed, so the modulated tile (2·src·dst) turned the whole frame black for

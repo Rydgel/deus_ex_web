@@ -57,6 +57,11 @@ const THRESHOLDS = Object.freeze({
   beamCoverage: 0.85,              // blocks with beam energy in both frames, of those with it in either
   beamEnergyLow: 0.75, beamEnergyHigh: 1.33,   // Play's total beam energy (at the frame's brightness ratio) over the original's
   beamYRms: 2.5,                   // rms offset in y of the energy centroid of the blocks that hold beam in both, in pixels
+  // The viewport flash as a per-channel map of levels (visual-acceptance.mjs `compare --flash-base`): Training's two held states measure 0 of 369
+  // (channel, level) pairs differing and 0 stray pixels of 2,764,800 samples in either program; a Play that draws no flash differs at 363. Strong for the
+  // pass's arithmetic and rounding over the levels the frame holds (0 to 154), nothing above them.
+  flashMapDiffering: 0,            // (channel, level) pairs whose output level differs between the programs
+  flashMapStrays: 0,               // samples off their input level's majority output, in either program
 });
 // The interface frames (docs/interface-frames.md): the 18 views of 00_Training compare equal to within 2 of 255 everywhere but one world scanline of
 // 57 pixels (up to 27 levels) and, in the datacube view, 90 pixels of at most 13 levels. Strong for what it excludes: a missing underline, a stale log
@@ -155,9 +160,16 @@ const EFFECT_VIEWS = Object.freeze({
   bar: {map: '02_NYC_Bar', views: ['fog3:-1200,-357,90:65501,16384,0', 'fog5:-1518,261,90:65513,57344,0', 'fog0:-900,-57,90:65501,32768,0']},
   laser: {map: '01_NYC_UNATCOIsland', views: ['laser1:1920,-1069,-60:63036,16384,0', 'laser2:1850,-1000,-60:64036,15000,0']},
   hotel: {map: '02_NYC_Hotel', views: ['hotel1:1880,-1158,148:0,32768,0', 'hotel2:1880,-1158,148:63036,32768,0']},
+  // Held viewport flashes (docs/screen-flash.md "Against the original"), captured on the Mac at Brightness 2/3 (the Shot is the framebuffer), one capture
+  // and clock per state; FLASH_BASE is the same camera without the flash, a capture of its own.
+  flashA: {map: '00_Training', views: ['flashA:-100,840,30:0,0,0']},
+  flashB: {map: '00_Training', views: ['flashB:-100,840,30:0,0,0']},
 });
+const FLASH_BASE = 'flash0:-100,840,30:0,0,0';
 // `extra`: `base` names the effect of a contribution check ('fog': the stored <view>-base frames are the original without it, Play's own frame
-// without it comes from `--base fog`); `playerPose`: Play writes the player's animation the original measured (<view>-state.json).
+// without it comes from `--base fog`); `playerPose`: Play writes the player's animation the original measured (<view>-state.json); `preShot` and
+// `preShotWait`: console lines both programs run at the camera before the shot and the wait after them (`--pre-shot-cmd`, `--pre-shot-wait`);
+// `flashBase`: the view without the flash, played in a run of its own (its own clock), and the flash judged as a map of levels from it.
 const effectViews = (key, extra = {}) => FRAMES({maps: [EFFECT_VIEWS[key].map], explicit: EFFECT_VIEWS[key].views, flat: {}, ...extra});
 
 // Pilots: the original's per-tick trace of the load, replayed in Play (docs/visual-acceptance.md "Live scenes").
@@ -248,8 +260,12 @@ add('4.2.23', C2, 'lasers', 'LaserIterator.CurrentItem equals the original; the 
 add('4.2.24', C2, '01_NYC_UNATCOIsland doorway', 'a beam frame against the original: the beams\' geometry (the beam texture is an animated fire: its sparks are not matched)', 'O1',
   effectViews('laser', {unfreeze: true, rngPin: '0x2f6e2b1b', beams: true, twin: ['laser1']}));
 add('4.2.25', C2, 'viewport flash', 'EndFlash equals D3DDrv; the flash pass draws', 'O2', V('d3d-endflash'), V('flash-play'), V('player-alterations-census'));
-missing('4.2.26', C2, 'underwater or drunk frame', 'a held flash frame against the original under Wine',
-  'the pass is checked against Play itself only; GL\'s 8-bit blend rounding against the device\'s is unmeasured (roadmap section 4 Open)');
+// The flash held through ConstantGlowScale/ConstantGlowFog (a written FlashScale/FlashFog decays in a second at a held level). flashA: scale 0.5 and the
+// recipe's fog (0.3,0.1,0), which ViewFlash cuts to 0 at a held tick in both programs (each step is fog * 10 * 0.005 < 0.019): the multiply branch, alpha 128.
+// flashB: fog (0.6,0.45,0.4), no scale: the additive branch, alpha 255, fog bytes (153,115,102), saturating.
+add('4.2.26', C2, '00_Training held viewport flash', 'two held flash states against the original\'s frames: the flash as a per-channel map of levels (each program\'s frame with it from its own frame without it) equal at every level, and the frames', 'O1',
+  effectViews('flashA', {preShot: ['set DeusEx.JCDentonMale ConstantGlowScale -0.5', 'set DeusEx.JCDentonMale ConstantGlowFog (X=0.3,Y=0.1,Z=0)'], preShotWait: 5000, flashBase: FLASH_BASE}),
+  effectViews('flashB', {preShot: ['set DeusEx.JCDentonMale ConstantGlowScale 0', 'set DeusEx.JCDentonMale ConstantGlowFog (X=0.6,Y=0.45,Z=0.4)'], preShotWait: 5000, flashBase: FLASH_BASE}));
 add('4.2.27', C2, 'vertices and visibility', 'Render.dll\'s projection, D3DDrv\'s vertices and OccludeBsp equal the original', 'O2',
   V('frame-projection'), V('frame-projection-movers'), V('frame-projection-play'), V('bsp-occlusion'), V('master-frame-play'));
 add('4.2.28', C2, 'security cameras', 'ViewportWindow windows on four maps match the original\'s computer screens', 'O1',
@@ -497,6 +513,16 @@ function beamProblems(m) {
   if (!(c.yRms <= THRESHOLDS.beamYRms)) off.push(`beam y offset ${c.yRms} px rms > ${THRESHOLDS.beamYRms}`);
   return off;
 }
+// The viewport flash as a map of levels against THRESHOLDS: the original's and Play's output level for every input level both frames hold.
+function flashProblems(m) {
+  const f = m.flashMap, off = [];
+  if (!f) return ['no flash map (the frames without the flash are absent)'];
+  if (!f.levels) off.push('no input level shared by the two frames without the flash');
+  if (f.differing > THRESHOLDS.flashMapDiffering) off.push(`flash map: ${f.differing} of ${f.levels} levels differ (${f.firstDiffering.join(' ')}, original/Play)`);
+  if (f.straysOriginal > THRESHOLDS.flashMapStrays || f.straysPlay > THRESHOLDS.flashMapStrays) off.push(`flash map: ${f.straysOriginal} / ${f.straysPlay} stray samples (original / Play)`);
+  return off;
+}
+const flashBasePlays = new Map();
 function contributionProblems(m) {
   const c = m.contribution, off = [];
   if (!c) return ['no contribution measured'];
@@ -510,6 +536,8 @@ function contributionProblems(m) {
 async function judgeFrames(task, add, fail, result) {
   const {maps, views, explicit, flat = {}} = task.frames;
   const names = explicit ? explicit.map(v => v.split(':')[0]) : views;
+  // `flashBase`: the view without the flash is staged from the same store (its frame and clock) and played in a run of its own.
+  const baseName = task.frames.flashBase?.split(':')[0] ?? null, staged = baseName ? [...names, baseName] : names;
   // One store supplies the whole run: the first root that holds the first frame. Its times.json (the level time each map was held at) goes
   // with it, since a map captured twice (the frozen set at 46.8 s, the effect views at 52.3 s) has a clock per capture.
   // The files a view needs from the store: its frame; with a contribution check (`base`) the original without the effect; with `playerPose`
@@ -519,16 +547,16 @@ async function judgeFrames(task, add, fail, result) {
   const source = storeRoots.find(dir => existsSync(path.join(dir, `acceptance/${maps[0]}/${names[0]}-original.png`)));
   const absent = [];
   if (!source) absent.push(`acceptance/${maps[0]}/${names[0]}-original.png`);
-  else for (const map of maps) for (const name of names) for (const file of storedFiles(name)) if (!existsSync(path.join(source, `acceptance/${map}/${file}`))) absent.push(`acceptance/${map}/${file}`);
+  else for (const map of maps) for (const name of staged) for (const file of storedFiles(name)) if (!existsSync(path.join(source, `acceptance/${map}/${file}`))) absent.push(`acceptance/${map}/${file}`);
   // A frame keeps its own clock beside it (<view>-time.txt, written by `visual-acceptance.mjs original`); the older captures have one clock per
   // map in times.json, which the run then needs.
   const hasTime = (map, name) => existsSync(path.join(source ?? '', `acceptance/${map}/${name}-time.txt`));
-  const needsTimes = source && maps.some(map => names.some(name => !hasTime(map, name)));
+  const needsTimes = source && maps.some(map => staged.some(name => !hasTime(map, name)));
   if (needsTimes && !existsSync(path.join(source, 'acceptance/times.json'))) absent.push('acceptance/times.json');
   if (absent.length) return fail(`stored originals absent: ${absent.slice(0, 4).join(', ')}${absent.length > 4 ? ` +${absent.length - 4}` : ''}`, 'NO-ORIGINAL');
   for (const map of maps) {
     mkdirSync(path.join(root, '.work/acceptance', map), {recursive: true});
-    for (const name of names) {
+    for (const name of staged) {
       // A checkout that holds the originals itself (its own captures) is its own source: nothing is linked or copied over a file onto itself
       // (unlinking the target would delete the original).
       const bring = (file, copy) => {
@@ -547,12 +575,23 @@ async function judgeFrames(task, add, fail, result) {
     copyFileSync(path.join(source, 'acceptance/times.json'), timesTo);
   }
   const viewArgs = explicit ? explicit.flatMap(v => ['--view', v]) : [];
+  // Play's frame without the flash, at the base's own clock: one run per gate, shared by the flash states (the 'acceptance' mutex orders them).
+  if (task.frames.flashBase) {
+    const key = `${maps.join(',')}:${task.frames.flashBase}`;
+    if (!flashBasePlays.has(key)) flashBasePlays.set(key, exec(process.execPath, ['scripts/visual-acceptance.mjs', 'play', '--maps', maps.join(','), '--query', 'antialias=0',
+      '--view', task.frames.flashBase], {limitSeconds: 900}));
+    const basePlay = await flashBasePlays.get(key);
+    if (!basePlay.counted) { basePlay.counted = true; add(basePlay); }
+    if (basePlay.killed || basePlay.code !== 0 || /errors:/.test(basePlay.out)) return fail(`play step (${baseName}): ${basePlay.killed ?? tail(basePlay.out)}`);
+  }
   // `detail`: the original was captured with the detail pass poked in (--poke D3DRenderDevice0:0x78:1), so Play keeps its pass.
   const play = add(await exec(process.execPath, ['scripts/visual-acceptance.mjs', 'play', '--maps', maps.join(','), '--query', 'antialias=0', ...(task.frames.detail ? ['--detail', 'on'] : []),
     ...(task.frames.base ? ['--base', task.frames.base] : []), ...(task.frames.playerPose ? ['--player-pose'] : []),
-    ...(task.frames.unfreeze ? ['--unfreeze'] : []), ...(task.frames.rngPin ? ['--rng-pin', task.frames.rngPin] : []), ...viewArgs], {limitSeconds: 900}));
+    ...(task.frames.unfreeze ? ['--unfreeze'] : []), ...(task.frames.rngPin ? ['--rng-pin', task.frames.rngPin] : []),
+    ...(task.frames.preShot ?? []).flatMap(line => ['--pre-shot-cmd', line]), ...(task.frames.preShotWait ? ['--pre-shot-wait', String(task.frames.preShotWait)] : []), ...viewArgs], {limitSeconds: 900}));
   if (play.killed || play.code !== 0 || /errors:/.test(play.out)) return fail(`play step: ${play.killed ?? tail(play.out)}`);
-  const compare = add(await exec(process.execPath, ['scripts/visual-acceptance.mjs', 'compare', '--maps', maps.join(','), ...(task.frames.base ? ['--contribution'] : []), ...(task.frames.beams ? ['--beams'] : []), ...viewArgs], {limitSeconds: 300}));
+  const compare = add(await exec(process.execPath, ['scripts/visual-acceptance.mjs', 'compare', '--maps', maps.join(','), ...(task.frames.base ? ['--contribution'] : []), ...(task.frames.beams ? ['--beams'] : []),
+    ...(task.frames.flashBase ? ['--flash-base', baseName, '--view', task.frames.flashBase] : []), ...viewArgs], {limitSeconds: 300}));
   if (compare.killed || compare.code !== 0) return fail(`compare step: ${compare.killed ?? tail(compare.out)}`);
   const report = readJson(path.join(root, '.work/acceptance/report.json'));
   const problems = [];
@@ -561,11 +600,16 @@ async function judgeFrames(task, add, fail, result) {
     const m = report[map]?.[name];
     if (!m) { problems.push(`${map} ${name}: no comparison`); continue; }
     const isFlat = FLAT_VIEWS.has(`${map}:${name}`);
-    const off = frameProblems(m, isFlat, EXPLAINED_BLOCKS[`${map}:${name}`] ?? 0);
+    // With a flash base, an outlier block the frame without the flash has too (same programs, same camera) is the scene's, judged by the frame rows,
+    // not the flash's: it is reported and allowed here.
+    const baseBlocks = baseName ? new Set((report[map]?.[baseName]?.outlierBlocks ?? []).map(([x, y]) => `${x}:${y}`)) : new Set();
+    const sceneBlocks = m.outlierBlocks.filter(([x, y]) => baseBlocks.has(`${x}:${y}`)).length;
+    const off = frameProblems(m, isFlat, (EXPLAINED_BLOCKS[`${map}:${name}`] ?? 0) + sceneBlocks);
     if (task.frames.base) off.push(...contributionProblems(m));
     if (task.frames.beams) off.push(...beamProblems(m));
+    if (task.frames.flashBase) off.push(...flashProblems(m));
     if (off.length) problems.push(`${map} ${name}: ${off.join('; ')}`);
-    lines.push(`${name} ${m.edgeRecall}/${m.edgePrecision}/${m.outlierBlocks.length}${m.contribution ? ` haze r ${m.contribution.correlation}` : ''}${m.beams ? ` beams ${m.beams.coverage}/${m.beams.energy}/${m.beams.yRms}` : ''}`);
+    lines.push(`${name} ${m.edgeRecall}/${m.edgePrecision}/${m.outlierBlocks.length}${sceneBlocks ? ` (${sceneBlocks} also without the flash)` : ''}${m.contribution ? ` haze r ${m.contribution.correlation}` : ''}${m.beams ? ` beams ${m.beams.coverage}/${m.beams.energy}/${m.beams.yRms}` : ''}${m.flashMap ? ` flash ${m.flashMap.levels - m.flashMap.differing}/${m.flashMap.levels} levels equal, fog (${m.flashMap.zero})` : ''}`);
   }
   if (problems.length) return fail(problems.join(' | '));
   return {...result, status: 'PASS', detail: `${maps.length} map(s), ${lines.length} view(s): recall/precision/outliers ${lines.slice(0, 5).join(' ')}${lines.length > 5 ? ' ...' : ''}`};

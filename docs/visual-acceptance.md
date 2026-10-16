@@ -1947,6 +1947,23 @@ Play's `<name>-play-base.png`): the steam is the held frame less that one.
 Stored: `.work/live-acceptance/04_NYC_Street/{original-trace-vents2.jsonl (+ .strobe, .actors.jsonl), watch-, population-, commands-, hold-vents2.json}` and
 `.work/acceptance/04_NYC_Street/vents2-original.png`, `vents2-base-original.png` (main checkout).
 
+### 00_Training's held viewport flash (row 4.2.26)
+
+Taken on the Mac under CrossOver at Brightness 2/3 (the Shot is the framebuffer), Training's corridor camera `-100,840,30:0,0,0`, three captures each with its own
+clock: `flash0` without the flash and two states held through `ConstantGlowScale`/`ConstantGlowFog` (`--pre-shot-cmd`, `--pre-shot-wait 5000`, `--player-state` for
+the read-back). `compare --flash-base flash0` reads each program's flash as a map of levels from its own frame without it; the maps are equal at all 369 (channel,
+level) pairs in both states. The recipe, the fog cutoff that keeps the first state's fog at 0 in both programs, and the void band where Play shows its
+canvas clear colour are in [screen flash](screen-flash.md#against-the-original-2026-10-16-gate-row-4226).
+
+```bash
+scripts/original-views.sh 00_Training --view flash0:-100,840,30:0,0,0 --brightness 0.666667 --player-state
+scripts/original-views.sh 00_Training --view flashA:-100,840,30:0,0,0 --brightness 0.666667 --player-state --pre-shot-cmd 'set DeusEx.JCDentonMale ConstantGlowScale -0.5' --pre-shot-cmd 'set DeusEx.JCDentonMale ConstantGlowFog (X=0.3,Y=0.1,Z=0)' --pre-shot-wait 5000
+scripts/original-views.sh 00_Training --view flashB:-100,840,30:0,0,0 --brightness 0.666667 --player-state --pre-shot-cmd 'set DeusEx.JCDentonMale ConstantGlowScale 0' --pre-shot-cmd 'set DeusEx.JCDentonMale ConstantGlowFog (X=0.6,Y=0.45,Z=0.4)' --pre-shot-wait 5000
+node scripts/validate-stage4-acceptance.mjs --only '^4\.2\.26$'
+```
+
+`original` needs the map in the plan, which `play` writes: on a checkout without one, run `play --maps 00_Training --view flash0:...` first.
+
 ## Open
 
 - **Not attributed, seen in the 2026-10-14 pilot re-runs with Divergences 17 and 18 in** (every watched actor equal in all three): the Island run's stream draws differ at tick 264

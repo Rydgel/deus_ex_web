@@ -37,17 +37,28 @@ CrossOver (`scripts/live-original.sh` now runs there, see [Stored originals](#st
 PrjXM..PrjYP words (`3e36ee45 3e6bb90c 3ec81e6e 3e4958ba`) in all 143 draws, and Play's replay of the Mac trace reproduces them. `weapon-attach` compared 888 draws of the running
 original (590 Island main-frame draws, 142 of the pistol and 156 of the MedKit in the mirror): 1,776 comparisons, 0 failures.
 
-**Current state, counted from the rows below (2026-10-16, not a gate run):** 76 criteria, 6 excluded (4.5.6 joined the excluded rows and 4.1.11 was added after the first run), 70 gating; **59 PASS, 3 FAIL, 8 MISSING**.
+**Update, the viewport flash (2026-10-16, the Mac, [screen flash](screen-flash.md#against-the-original-2026-10-16-gate-row-4226)):** row 4.2.26 is `PASS` (`--only '^4\.2\.26$'`: 2 checks, 87 s,
+the same result in a second run). The original was captured under CrossOver at Brightness 2/3 (the Shot is the framebuffer; Play's ramp at 0.4 is the identity) at Training's corridor camera
+`-100,840,30`, one capture and clock per frame: the frame without the flash (`flash0`) and two states held through `ConstantGlowScale`/`ConstantGlowFog`, their `FlashScale`/`FlashFog` read
+back from the running game. *flashA* is the recipe's scale -0.5 and fog (0.3,0.1,0); `ViewFlash` sets a fog component under 0.019 to 0 after each step and a held tick's step is
+fog x 10 x 0.005, so that fog never rises, in either program (measured: scale 0.5, fog 0): the multiply branch, alpha 128. *flashB* is fog (0.6,0.45,0.4) and no scale: the additive
+branch, alpha 255, fog bytes (153,115,102), saturating. The check judges the flash as a per-channel map of levels (each program's frame with the flash against its own frame without
+it): 369 of 369 (channel, level) pairs equal in both states, no sample off its level's map in either program (a Play that draws no flash differs at 363), and the frames
+(edges .985/.999 and .998/.999). flashA's 32 outlier blocks are all in the frame without the flash too: the band above the corridor, where Play draws nothing and shows its canvas
+clear colour (`#06101b` in linear light, raw (0,1,3); 242,417 pixels, 242,415 of them black in the original), a frame-clear difference outside this row, open. The blend's
+rounding is measured against the original under CrossOver on the M2, not against a Windows D3D driver.
+
+**Current state, counted from the rows below (2026-10-16, not a gate run):** 76 criteria, 6 excluded (4.5.6 joined the excluded rows and 4.1.11 was added after the first run), 70 gating; **60 PASS, 3 FAIL, 7 MISSING**.
 Only the full gate run (`node scripts/validate-stage4-acceptance.mjs`) is the gate; the per-row statuses come from the subset runs named in the updates above.
 
 | Clause | PASS | FAIL | MISSING | EXCLUDED |
 | --- | ---: | ---: | ---: | ---: |
 | 4.1 Animated actors | 10 | 0 | 2 | 0 |
-| 4.2 Effects | 23 | 2 | 5 | 3 |
+| 4.2 Effects | 24 | 2 | 4 | 3 |
 | 4.3 Sound | 5 | 1 | 1 | 0 |
 | 4.4 Text and interfaces | 14 | 0 | 0 | 2 |
 | 4.5 Speech, lip sync and the conversation camera | 7 | 0 | 0 | 1 |
-| **Total** | **59** | **3** | **8** | **6** |
+| **Total** | **60** | **3** | **7** | **6** |
 
 The table below is the whole gate, one row per criterion (`--markdown` re-renders it from the report). The ids are stable; `4.n.m` is clause n, row m.
 A mode in brackets names how the check exercises Play (see [How the gate judges](#how-the-gate-judges)).
@@ -98,7 +109,7 @@ A mode in brackets names how the check exercises Play (see [How the gate judges]
 | 4.2.23 | lasers | LaserIterator.CurrentItem equals the original; the Island doorway beams draw | O2 | `lasers-play` [worker], `native-laser` [oracle] | PASS |
 | 4.2.24 | 01_NYC_UNATCOIsland doorway | a beam frame against the original: the beams' geometry (the beam texture is an animated fire: its sparks are not matched) | O1 | `frames 01_NYC_UNATCOIsland [laser1,laser2]` [worker] | PASS |
 | 4.2.25 | viewport flash | EndFlash equals D3DDrv; the flash pass draws | O2 | `d3d-endflash` [oracle], `flash-play` [worker], `player-alterations-census` [node] | PASS |
-| 4.2.26 | underwater or drunk frame | a held flash frame against the original under Wine | - | missing: the pass is checked against Play itself only; GL's 8-bit blend rounding against the device's is unmeasured (roadmap section 4 Open) | MISSING |
+| 4.2.26 | 00_Training held viewport flash | two held flash states (scale 0.5 with the fog cut to 0 by `ViewFlash`; fog (153,115,102) at alpha 255) against the original's frames under CrossOver: the flash as a per-channel map of levels (each program's frame with it from its own frame without it) equal at every level, and the frames | O1 | `frames 00_Training [flashA]` [worker], `frames 00_Training [flashB]` [worker] | PASS |
 | 4.2.27 | vertices and visibility | Render.dll's projection, D3DDrv's vertices and OccludeBsp equal the original | O2 | `frame-projection` [oracle], `frame-projection-movers` [oracle], `frame-projection-play` [worker], `master-frame-play` [worker], `bsp-occlusion` [oracle] | PASS |
 | 4.2.28 | security cameras | ViewportWindow windows on four maps match the original's computer screens | O1 | `camera 14_OceanLab_Lab cs1` [worker], `camera 02_NYC_BatteryPark bp2` [worker], `camera 06_HongKong_WanChai_Market hk0` [worker], `camera 09_NYC_Ship sh3b` [worker] | FAIL |
 | 4.2.29 | camera with a mirror, sky, fog or corona in view | a camera frame against the original | - | missing: the thirteen captured windows look into rooms (visual-acceptance.md "What stays") | MISSING |
@@ -315,7 +326,7 @@ each criterion's inputs from one root (the first that holds them) and links or c
 **Two machines.** "main" below is the Linux host's main checkout (`~/projects/deus_ex_web`, where the first run was made). On 2026-10-16 the Mac's main checkout
 held none of these stores, so a gate run there reads `NO-ORIGINAL` for every row below except the ones marked *Mac*. The Linux host was unreachable that day,
 so its stores could not be listed; that they are all there is inferred from where the first run was made. Captures can now be taken on either machine:
-`scripts/live-original.sh` drives the CrossOver bottle `DeusEx` on the Mac (CrossOver's wine, no `flock`, the game's process found by its Windows path), and
+`scripts/live-original.sh` and `scripts/original-views.sh` drive the CrossOver bottle `DeusEx` on the Mac (CrossOver's wine, no `flock`, no Hyprland, the game's process found by its Windows path), and
 the debugger tools (`ad/build/dx-live-win.exe`, `dump-actor-win.exe`, built with `i686-w64-mingw32-gcc -O2 ... -lpsapi`) break and read the same addresses there.
 
 | What | Where it is today | Used by |
@@ -335,6 +346,7 @@ the debugger tools (`ad/build/dx-live-win.exe`, `dump-actor-win.exe`, built with
 | The original's third-person weapon draws | main `.work/weapon/original-cases*.json` | 4.1.9 |
 | *Mac*: the original's third-person weapon draws, captured again under CrossOver (2026-10-16): `original-cases.json` 590 Island main-frame draws with the weapon drawn (591 pawn draws of Terrorist22 with `WeaponPistol13`, 1 of ThugMale3 with `WeaponMiniCrossbow1`; `CheatView DeusEx.Terrorist` twelve times, pitch -500, yaw 46936; `weapon 8` and `weapon 16` with the level running). A narrower corpus than the Linux set: no rifle (the `SniperRifle3rd` capture of Terrorist1 was not retaken) and one crossbow draw against 784, `-2` 142 draws of JC's pistol in the lab mirror (`jcm`), `-3` 156 of his MedKit there (`jci`) | Mac main `.work/weapon/original-cases{,-2,-3}.json`, the logs `island-weapon-mac{,-8,-16}.jsonl`, `jcm-weapon-mac.jsonl`, `jci-weapon-mac.jsonl` | 4.1.9, 4.1.11 |
 | *Mac*: the lab mirror scenes (2026-10-16, tags `jcm` and `jci`, 300 ticks: `summon` at 20, `ViewRotation (Pitch=-10130,Yaw=16432)` at 50, `ParseRightClick` at 90, `ActivateBelt 1` at 130, `ViewRotation (0,0,0)` at 170; `--no-ghost`, population equal to Play's seed 1) with their held frames (no `-time.txt`: the plain `--shot` path does not write one; the frames are not compared by the gate) | Mac main `.work/live-acceptance/05_NYC_UNATCOMJ12lab/{original-trace,watch,population,commands,hold}-{jcm,jci}.*`, `.work/acceptance/05_NYC_UNATCOMJ12lab/{jcm,jci}-original.png` | 4.1.11 |
+| *Mac*: Training's held viewport flash (2026-10-16, Brightness 2/3, camera `-100,840,30:0,0,0`, three captures under CrossOver, each with its `-time.txt` and `-state.json` (the player's `FlashScale`/`FlashFog` after the shot)): `flash0` without the flash (50.800 s), `flashA` scale -0.5 and fog (0.3,0.1,0) (51.001 s; read back scale 0.5, fog 0), `flashB` fog (0.6,0.45,0.4) (50.427 s; read back scale 1, fog (0.6,0.45,0.4)) | Mac main `.work/acceptance/00_Training/{flash0,flashA,flashB}-original.{png,bmp}`, `-time.txt`, `-state.json` | 4.2.26 |
 | The interface frames of 00_Training (18 views, 2026-10-15) and each frame's level time | main `.work/acceptance/00_Training/ui-<view>-original.png` and `ui-<view>-time.txt` (also `ui-e1` to `ui-e4`, the pointer experiment) | 4.4.11 to 4.4.14 |
 | The Underworld's sound capture (2026-10-13/14, tag `snd1`: a pistol summoned, picked up, drawn and fired in a normal player, 400 ticks; the tracer's `gplay`, `addobj`, `unhash` and `hear` call records, the registry at the frozen start and end) | main `.work/live-acceptance/06_HongKong_WanChai_Underworld/{original-trace-snd1.jsonl{,.strobe,.calls.jsonl},registry-start-snd1.txt,registry-end-snd1.txt,watch-snd1.json,commands-snd1.json,deferred-snd1.json}` (copied 2026-10-16 from worktree `agent-a011db8f1b061eb8e`, nothing overwritten) | 4.3.6 |
 | The light manager's tables from the running original | main `.work/live/.work/fpu` | 4.2.9 |
@@ -378,7 +390,7 @@ recorded time)` is killed and fails. The matched-frame checks share `.work/accep
 
 ## Remaining Stage 4 work, in the order it blocks
 
-From the first scoreboard: 26 of 70 gating criteria were not `PASS` (2 `FAIL`, 3 `INLINE`, 21 `MISSING`); item 1 is closed since (22 now; 11 by the row count of 2026-10-16: 3 `FAIL`, 8 `MISSING`). Ordered by how much of "Done when" each holds up.
+From the first scoreboard: 26 of 70 gating criteria were not `PASS` (2 `FAIL`, 3 `INLINE`, 21 `MISSING`); item 1 is closed since (22 now; 10 by the row count of 2026-10-16: 3 `FAIL`, 7 `MISSING`). Ordered by how much of "Done when" each holds up.
 Nothing below was fixed in this task beyond wiring existing checks; each item is sized for one agent.
 
 1. **The interfaces against the original's frames (4.4.11 to 4.4.14): done 2026-10-15** ([interface frames](interface-frames.md): the recipe, 18 views, the two divergences found and
@@ -407,17 +419,15 @@ Nothing below was fixed in this task beyond wiring existing checks; each item is
    generator's iterator through a sim-side `particleProbe` (`decal-probe.mjs`, `sim-worker.mjs`, `deusExViewer.particleProbe`), the mirrors check places and hides the
    player through the existing `placeProbe`, and the fire-texture check reads the page's own actor mesh layer and waits for the fires' first tick (in the worker the first
    frame reaches the page after the simulation's first run). `--only '^4\.2\.(12|18|20)$'`: 19 checks, 3 PASS (514 s at 2 jobs).
-5. **Effects with a translation but no matched original frame: 2026-10-16, four of nine done, one found red, four open** ([effect frames](visual-acceptance.md#effect-frames-2026-10-16)).
+5. **Effects with a translation but no matched original frame: 2026-10-16, five of nine done, one found red, three open** ([effect frames](visual-acceptance.md#effect-frames-2026-10-16)).
    `PASS`: 4.2.17 (the Bar's haze: the frame and the fog's contribution against the original's), 4.2.19 (the Hotel mirror, the player posed as the original had him), 4.2.24
-   (Island's doorway beams: geometry; the beam texture is an animated fire whose sparks are an unmatched host input). `FAIL` with the cause half found: **4.2.13** (the Street's steam: the
+   (Island's doorway beams: geometry; the beam texture is an animated fire whose sparks are an unmatched host input), 4.2.26 (Training's held viewport flash, the Mac at Brightness 2/3: two states,
+   the multiply and the additive branch, the flash's map of levels equal at all 369 (channel, level) pairs; see the scoreboard's update and [screen flash](screen-flash.md#against-the-original-2026-10-16-gate-row-4226);
+   the recipe's fog (0.3,0.1,0) never shows at a held tick, in either program, so the "steady red tint" noted before the capture was not that state's). `FAIL` with the cause half found: **4.2.13** (the Street's steam: the
    original's 600 ticks replay equal in every watched actor and the held frame and the steam correlate .99, but Play draws 8 more stream values at one tick, a `FlyGenerator`'s first tick
    (its scout spawn) running later than the original's; the suspect is the actors' tick gate reading `LastRenderTime`, which the replay's render history writes for pawns only; next: add the
    generators' `LastRenderTime` and `DistanceFromPlayer` to the watched fields and `--render-history`, replay, and set the steam threshold (agreement .95 against the gate's .98) once the draws agree).
    **Open, with the tooling already in `visual-acceptance.mjs` (`original` / `play` / `compare`) and the recipe each needs:**
-   * **4.2.26 flash** (no capture taken): hold the flash with `ConstantGlowScale` and `ConstantGlowFog`, not by writing `FlashScale`/`FlashFog` (a held level's actor delta has a floor of 0.005 s and
-     `ViewFlash` moves toward its goal by 10 * delta a tick, so a written flash decays in about a second in either program; the glow's goal is the steady state both reach). Original:
-     `scripts/original-views.sh 00_Training --view flashA:-100,840,30:0,0,0 --pre-shot-cmd 'set DeusEx.JCDentonMale ConstantGlowScale -0.5' --pre-shot-cmd 'set DeusEx.JCDentonMale ConstantGlowFog (X=0.3,Y=0.1,Z=0)' --pre-shot-wait 3000`;
-     Play: the same options on `play` (checked: a steady red tint at that camera); one run per flash state, then a `frames` row (`effectViews` with `preShot` arguments to add in `judgeFrames`).
    * **4.2.15 decal** (not captured): Training's pawns' shadows, the level unfrozen as the beams' (`--unfreeze`; `shadow1:61,1326,-23:62166,61567,0` and `shadow2:211,1266,-33:62500,61567,0` show them in Play).
      The base frame without decals: original `--base-cmd 'set WinDrv.WindowsClient Decals False'`, Play `--base decal` (`deusExViewer.decals({hide})`, added), `compare --contribution`.
    * **4.2.22 detail pass** (not captured): original with `--poke D3DRenderDevice0:0x78:1` and, for the base views, `--base-poke D3DRenderDevice0:0x78:0` (`<view>-base`), Play `--detail on --base detail`,
@@ -427,7 +437,7 @@ Nothing below was fixed in this task beyond wiring existing checks; each item is
    * **4.2.30 the Underworld's mirrored panes at a held Strobe** (not captured): `scripts/original-views.sh 06_HongKong_WanChai_Underworld --view uw_s0:-1081,-2010,-336:0,54769,0 --view uw_s1:... --cmd 'set ScriptedPawn bHidden True'`
      now writes each frame's `-time.txt`; a `frames` row over new names.
    Tools added for these and used above: per-frame `-time.txt` and `times` staging, `--base` / `--base-cmd` / `--base-poke` / `--contribution`, `--freeze-player` / `--player-state` / `--player-pose`,
-   `--pre-shot-cmd` / `--pre-shot-wait`, `--rng-pin` (and `dx-live-win.exe rngpin`), `compare --beams`, `live-acceptance.mjs --base-shot` / `--draw-stack-actor`, the gate's `base`, `playerPose`, `unfreeze`, `rngPin`, `beams`, `twin` and `baseShot` options.
+   `--pre-shot-cmd` / `--pre-shot-wait`, `--rng-pin` (and `dx-live-win.exe rngpin`), `compare --beams`, `compare --flash-base`, `live-acceptance.mjs --base-shot` / `--draw-stack-actor`, the gate's `base`, `playerPose`, `unfreeze`, `rngPin`, `beams`, `twin`, `baseShot`, `preShot` / `preShotWait` and `flashBase` options.
 6. **Sound against a live scene (4.3.6) is a check and it fails; the speakers (4.3.7) are unchecked.** `live-sound-compare.mjs --gate` compares the original's `PlaySound` calls of the
    Underworld `snd1` capture with Play's replay (stored in the main `.work`, see [Stored originals](#stored-originals)): 56 of 82 ticks with calls equal, first differing tick 278 (hand-off in
    [galaxy-audio](galaxy-audio.md#hand-off-the-sound-gate-2026-10-16)). Not measurable yet: the music bus delay and the ring heads' spacing (a loopback

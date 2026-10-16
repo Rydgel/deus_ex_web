@@ -30,6 +30,8 @@
 //   camera moves, so the static lights' bodies (spot, Cylinder, NonIncidence: they run once, when a surface is first drawn) are seen.
 //   `--unfreeze` (both sides) clears LevelInfo.bPlayersOnly after the clock is held, so actors with a Tick (a TriggerLight that sets
 //   its own brightness) run it at the held dilation; the other views of the run are then of that level, not the frozen one.
+//   `compare --flash-base <view>`: each view's viewport flash as a per-channel map of levels from the base view (the same camera without the flash)
+//   to the view, the original's against Play's (flashMap below; held flash states through --pre-shot-cmd, docs/screen-flash.md).
 //
 // Frames are raw: the original's Shot bitmaps are its framebuffer before the
 // gamma ramp, and Play is captured at Brightness 0.4, whose display ramp
@@ -618,6 +620,35 @@ function contribution(dir, name) {
     correlation: +corr.toFixed(4), scale: +k.toFixed(3), residual: +(resid / Math.max(1e-9, absO)).toFixed(3), effectPixels: own, agreement: own ? +(agree / own).toFixed(3) : null};
 }
 
+// compare --flash-base <view>: the viewport flash as a map of levels. EndFlash makes each channel `fog + frame * alpha` on the 8-bit back buffer
+// (docs/screen-flash.md), so a program's frame with the flash is a function of its own frame without it at the same camera (<view>-original.png and
+// <view>-play.png of the base view): per channel, the level each input level goes to (the majority output; a pixel off it is a stray: the flash is not
+// one map, or the scene moved between the two frames). The original's map and Play's are compared at every (channel, level) both base frames hold, so
+// what the scene draws differently (judged by the frame rows) drops out and the pass's own arithmetic and rounding remain.
+function flashMap(dir, base, name) {
+  const files = [`${base}-original.png`, `${name}-original.png`, `${base}-play.png`, `${name}-play.png`].map(f => path.join(dir, f));
+  if (!files.every(f => existsSync(f))) return null;
+  const [o0, o1, p0, p1] = files.map(readRgb);
+  const levels = (a, b) => {
+    const counts = new Uint32Array(3 * 256 * 256);
+    for (let i = 0; i < a.data.length; i++) counts[((i % 3) * 256 + a.data[i]) * 256 + b.data[i]]++;
+    const out = new Int16Array(3 * 256).fill(-1);
+    let strays = 0;
+    for (let k = 0; k < 3 * 256; k++) {
+      let best = -1, total = 0;
+      for (let u = 0; u < 256; u++) { const n = counts[k * 256 + u]; total += n; if (n && (best < 0 || n > counts[k * 256 + best])) best = u; }
+      if (best >= 0) { out[k] = best; strays += total - counts[k * 256 + best]; }
+    }
+    return {out, strays};
+  };
+  const O = levels(o0, o1), P = levels(p0, p1), differing = [];
+  let shared = 0;
+  for (let k = 0; k < 3 * 256; k++) if (O.out[k] >= 0 && P.out[k] >= 0) { shared++; if (O.out[k] !== P.out[k]) differing.push(`${'RGB'[k >> 8]}${k & 255}:${O.out[k]}/${P.out[k]}`); }
+  return {levels: shared, differing: differing.length, firstDiffering: differing.slice(0, 6), straysOriginal: O.strays, straysPlay: P.strays,
+    // what level 0 and the base's brightest level go to in the original, per channel (the fog bytes, and the scale or the saturation)
+    zero: [0, 1, 2].map(c => O.out[c * 256]), top: [0, 1, 2].map(c => { let v = 255; while (v > 0 && O.out[c * 256 + v] < 0) v--; return [v, O.out[c * 256 + v]]; })};
+}
+
 // compare --beams: the laser beams' geometry. A beam is the only strongly red thing in the Island doorways, so a pixel's beam energy is its red excess
 // `R - max(G, B)` (floored at 0, ignored under 2 levels; Play's divided by the frame's brightness ratio, the Wine gap this document does not judge).
 // The beams' texture, LaserBeam1, is a FireTexture whose sparks the original draws from a process-seeded stream and Play from a host-seeded one, and it
@@ -678,6 +709,8 @@ function compare() {
         if (existsSync(twin)) result.beamsFloor = beamMetrics(a, twin);   // a second frame of the original's own view: its frame-to-frame variation
       }
       if (process.argv.includes('--contribution') && !crop && playName === 'play') { const c = contribution(dir, view.name); if (c) result.contribution = c; }
+      const flashBase = option('flash-base', null);
+      if (flashBase && view.name !== flashBase && !crop && playName === 'play') { const f = flashMap(dir, flashBase, view.name); if (f) result.flashMap = f; }
       (report[map] ??= {})[view.name] = result;
       const {outlierBlocks, ...brief} = result;
       console.log(map, view.name, JSON.stringify(brief), `${outlierBlocks?.length ?? 0} outlier blocks`);
