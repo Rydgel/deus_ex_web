@@ -220,7 +220,9 @@ export function createSimSession(game, { assets = null, events = [], exportName 
   const iteratorStats = { scans: 0, rescans: 0, visited: 0, drawsScan: 0, drawsRescan: 0, draws: 0, lastFrames: [], msRescan: 0, msPack: 0, msScan: 0, msVisibility: 0,
     patched: 0, packed: 0 };
   const spriteScan = createSpriteScan(runtime, { player: () => game.player.collisionActor, constructIterator,
-    frand: () => { iteratorStats.draws++; return runtime.rng.frand(); } });
+    frand: () => { iteratorStats.draws++; return runtime.rng.frand(); },
+    // validation only: viewProbe({rngPin}) sets game.rngPin, the state every SetupDynamics run starts from
+    pin: () => { if (game.rngPin != null) game.random.seed(game.rngPin); } });
   // A sprite's texture size (Texture.USize/VSize, else its first mip), as
   // the page's sprite scene sizes it; a sprite draws once its texture has
   // decoded, here as on the page (sprite-scene.mjs).

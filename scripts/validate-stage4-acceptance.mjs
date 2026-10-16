@@ -51,6 +51,12 @@ const THRESHOLDS = Object.freeze({
   contributionCorrelation: 0.90,
   contributionGap: 0.08,           // |play sum / original sum / frame ratio - 1|
   contributionAgreement: 0.98,     // share of the original's effect pixels (difference >= 1 level) where Play's is at least a quarter of its scaled value
+  // The laser beams' geometry in 64 x 64 blocks (visual-acceptance.mjs `compare --beams`). Island's doorway beams measure coverage .94 and .88, Play's
+  // energy over the original's .87 to 1.01 and .88 to 1.0 over runs (the fire texture) and a y-offset of the centroids of 1.3 and 1.6 px rms; two frames of the original itself, whose beams'
+  // texture is an animated fire, read 1.0, .99 and .3 px. Weak: set from two views; the sparks of the beam texture are an unmatched host input.
+  beamCoverage: 0.85,              // blocks with beam energy in both frames, of those with it in either
+  beamEnergyLow: 0.75, beamEnergyHigh: 1.33,   // Play's total beam energy (at the frame's brightness ratio) over the original's
+  beamYRms: 2.5,                   // rms offset in y of the energy centroid of the blocks that hold beam in both, in pixels
 });
 // The interface frames (docs/interface-frames.md): the 18 views of 00_Training compare equal to within 2 of 255 everywhere but one world scanline of
 // 57 pixels (up to 27 levels) and, in the datacube view, 90 pixels of at most 13 levels. Strong for what it excludes: a missing underline, a stale log
@@ -143,6 +149,7 @@ const EFFECT_VIEWS = Object.freeze({
   fan: {map: '09_NYC_ShipFan', views: ['fan2:236,-238,-55:63686,25298,0']},
   // 2026-10-16 captures (visual-acceptance.md "Effect frames"), each frame with its own <view>-time.txt.
   bar: {map: '02_NYC_Bar', views: ['fog3:-1200,-357,90:65501,16384,0', 'fog5:-1518,261,90:65513,57344,0', 'fog0:-900,-57,90:65501,32768,0']},
+  laser: {map: '01_NYC_UNATCOIsland', views: ['laser1:1920,-1069,-60:63036,16384,0', 'laser2:1850,-1000,-60:64036,15000,0']},
   hotel: {map: '02_NYC_Hotel', views: ['hotel1:1880,-1158,148:0,32768,0', 'hotel2:1880,-1158,148:63036,32768,0']},
 });
 // `extra`: `base` names the effect of a contribution check ('fog': the stored <view>-base frames are the original without it, Play's own frame
@@ -215,8 +222,9 @@ add('4.2.11', C2, 'coronas', 'visibility helper, DrawIcon arguments, tracker tra
   V('coronas'), V('coronas-tracked'), V('corona-tiles'), V('corona-tiles-play'), V('coronas-mover-play'), V('coronas-play'));
 add('4.2.12', C2, 'particles and sprites', 'ParticleIterator, FDynamicSprite and the tile chain', 'O2',
   V('native-particles'), V('sprite-setup'), V('sprite-tiles'), V('sprite-tiles-play'), V('sprite-tiles-mirror-play'), V('particles-play'));
-missing('4.2.13', C2, '04_NYC_Street vents', 'a frame with particles and sprites against the original with the generators\' state matched',
-  'no matched capture holds a particle or sprite whose generator state the original side fixed');
+add('4.2.13', C2, '04_NYC_Street vents', 'a frame with particles and sprites against the original with the generators\' state matched: the original\'s 600 ticks (stream state per tick) replayed in Play, then the held frame and the steam (the frame less the frozen start\'s) against the original\'s',
+  'O1', LIVE({map: '04_NYC_Street', tag: 'vents2', shot: 'vents2', baseShot: true, renderHistory: true,
+    earlyCmds: 'set DeusEx.JCDentonMale Location (X=454,Y=67,Z=-467)|set DeusEx.JCDentonMale ViewRotation (Pitch=1800,Yaw=0,Roll=0)'}));
 add('4.2.14', C2, 'decals', 'AttachDecal, ClipDecal and the vertices of a decal equal Engine.dll and Render.dll', 'O2',
   V('decal-attach'), V('decal-render'), V('decal-startup'), V('decal-vertices-play'), V('decals-play'));
 missing('4.2.15', C2, 'Training shadows, bullet holes', 'a decal frame against the original', 'no matched capture shows a decal; blood and scorch marks need combat');
@@ -233,7 +241,8 @@ add('4.2.21', C2, 'detail textures', 'the D3DDrv detail pass equals the original
 missing('4.2.22', C2, 'detail pass in a frame', 'Play\'s detail pass against a capture of the original with the pass poked in',
   'measured once (Jaccard 0.94 to 0.98 on five of six views, docs/frame-projection.md); those captures are not in a store the gate reads');
 add('4.2.23', C2, 'lasers', 'LaserIterator.CurrentItem equals the original; the Island doorway beams draw', 'O2', V('native-laser'), V('lasers-play'));
-missing('4.2.24', C2, '01_NYC_UNATCOIsland doorway', 'a beam frame against the original', 'no original capture of a beam (docs/lasers.md)');
+add('4.2.24', C2, '01_NYC_UNATCOIsland doorway', 'a beam frame against the original: the beams\' geometry (the beam texture is an animated fire: its sparks are not matched)', 'O1',
+  effectViews('laser', {unfreeze: true, rngPin: '0x2f6e2b1b', beams: true, twin: ['laser1']}));
 add('4.2.25', C2, 'viewport flash', 'EndFlash equals D3DDrv; the flash pass draws', 'O2', V('d3d-endflash'), V('flash-play'), V('player-alterations-census'));
 missing('4.2.26', C2, 'underwater or drunk frame', 'a held flash frame against the original under Wine',
   'the pass is checked against Play itself only; GL\'s 8-bit blend rounding against the device\'s is unmeasured (roadmap section 4 Open)');
@@ -474,6 +483,14 @@ function frameProblems(m, isFlat = false, allowedBlocks = 0) {
   return off;
 }
 // One view's effect contribution against THRESHOLDS: Play's difference of the frame with and without the effect against the original's.
+function beamProblems(m) {
+  const c = m.beams, off = [];
+  if (!c) return ['no beam metrics'];
+  if (!(c.coverage >= THRESHOLDS.beamCoverage)) off.push(`beam coverage ${c.coverage} < ${THRESHOLDS.beamCoverage}`);
+  if (!(c.energy >= THRESHOLDS.beamEnergyLow && c.energy <= THRESHOLDS.beamEnergyHigh)) off.push(`beam energy ${c.energy} outside ${THRESHOLDS.beamEnergyLow}..${THRESHOLDS.beamEnergyHigh}`);
+  if (!(c.yRms <= THRESHOLDS.beamYRms)) off.push(`beam y offset ${c.yRms} px rms > ${THRESHOLDS.beamYRms}`);
+  return off;
+}
 function contributionProblems(m) {
   const c = m.contribution, off = [];
   if (!c) return ['no contribution measured'];
@@ -491,7 +508,8 @@ async function judgeFrames(task, add, fail, result) {
   // with it, since a map captured twice (the frozen set at 46.8 s, the effect views at 52.3 s) has a clock per capture.
   // The files a view needs from the store: its frame; with a contribution check (`base`) the original without the effect; with `playerPose`
   // the player's animation the original measured.
-  const storedFiles = name => [`${name}-original.png`, ...(task.frames.base ? [`${name}-base-original.png`] : []), ...(task.frames.playerPose ? [`${name}-state.json`] : [])];
+  const storedFiles = name => [`${name}-original.png`, ...(task.frames.base ? [`${name}-base-original.png`] : []), ...(task.frames.playerPose ? [`${name}-state.json`] : []),
+    ...(task.frames.twin?.includes(name) ? [`${name}b-original.png`] : [])];
   const source = storeRoots.find(dir => existsSync(path.join(dir, `acceptance/${maps[0]}/${names[0]}-original.png`)));
   const absent = [];
   if (!source) absent.push(`acceptance/${maps[0]}/${names[0]}-original.png`);
@@ -525,9 +543,10 @@ async function judgeFrames(task, add, fail, result) {
   const viewArgs = explicit ? explicit.flatMap(v => ['--view', v]) : [];
   // `detail`: the original was captured with the detail pass poked in (--poke D3DRenderDevice0:0x78:1), so Play keeps its pass.
   const play = add(await exec(process.execPath, ['scripts/visual-acceptance.mjs', 'play', '--maps', maps.join(','), '--query', 'antialias=0', ...(task.frames.detail ? ['--detail', 'on'] : []),
-    ...(task.frames.base ? ['--base', task.frames.base] : []), ...(task.frames.playerPose ? ['--player-pose'] : []), ...viewArgs], {limitSeconds: 900}));
+    ...(task.frames.base ? ['--base', task.frames.base] : []), ...(task.frames.playerPose ? ['--player-pose'] : []),
+    ...(task.frames.unfreeze ? ['--unfreeze'] : []), ...(task.frames.rngPin ? ['--rng-pin', task.frames.rngPin] : []), ...viewArgs], {limitSeconds: 900}));
   if (play.killed || play.code !== 0 || /errors:/.test(play.out)) return fail(`play step: ${play.killed ?? tail(play.out)}`);
-  const compare = add(await exec(process.execPath, ['scripts/visual-acceptance.mjs', 'compare', '--maps', maps.join(','), ...(task.frames.base ? ['--contribution'] : []), ...viewArgs], {limitSeconds: 300}));
+  const compare = add(await exec(process.execPath, ['scripts/visual-acceptance.mjs', 'compare', '--maps', maps.join(','), ...(task.frames.base ? ['--contribution'] : []), ...(task.frames.beams ? ['--beams'] : []), ...viewArgs], {limitSeconds: 300}));
   if (compare.killed || compare.code !== 0) return fail(`compare step: ${compare.killed ?? tail(compare.out)}`);
   const report = readJson(path.join(root, '.work/acceptance/report.json'));
   const problems = [];
@@ -538,8 +557,9 @@ async function judgeFrames(task, add, fail, result) {
     const isFlat = FLAT_VIEWS.has(`${map}:${name}`);
     const off = frameProblems(m, isFlat, EXPLAINED_BLOCKS[`${map}:${name}`] ?? 0);
     if (task.frames.base) off.push(...contributionProblems(m));
+    if (task.frames.beams) off.push(...beamProblems(m));
     if (off.length) problems.push(`${map} ${name}: ${off.join('; ')}`);
-    lines.push(`${name} ${m.edgeRecall}/${m.edgePrecision}/${m.outlierBlocks.length}${m.contribution ? ` haze r ${m.contribution.correlation}` : ''}`);
+    lines.push(`${name} ${m.edgeRecall}/${m.edgePrecision}/${m.outlierBlocks.length}${m.contribution ? ` haze r ${m.contribution.correlation}` : ''}${m.beams ? ` beams ${m.beams.coverage}/${m.beams.energy}/${m.beams.yRms}` : ''}`);
   }
   if (problems.length) return fail(problems.join(' | '));
   return {...result, status: 'PASS', detail: `${maps.length} map(s), ${lines.length} view(s): recall/precision/outliers ${lines.slice(0, 5).join(' ')}${lines.length > 5 ? ' ...' : ''}`};
@@ -665,11 +685,12 @@ function stageLive(map, tag, into = '.work/live-acceptance') {
   return absent;
 }
 async function judgeLive(task, add, fail, result) {
-  const {map, tag = null, shot = null, earlyCmds = null, renderHistory = false} = task.live;
+  const {map, tag = null, shot = null, earlyCmds = null, renderHistory = false, baseShot = false} = task.live;
   const absent = stageLive(map, tag);
   if (shot) { if (!stage(`acceptance/${map}/${shot}-original.png`)) absent.push(`acceptance/${map}/${shot}-original.png`); stage('acceptance/times.json', {copy: true}); }
+  if (shot && baseShot && !stage(`acceptance/${map}/${shot}-base-original.png`)) absent.push(`acceptance/${map}/${shot}-base-original.png`);
   if (absent.length) return fail(`stored originals absent: ${absent.join(', ')}`, 'NO-ORIGINAL');
-  const extra = [...(tag ? ['--tag', tag] : []), ...(shot ? ['--shot', shot] : []), ...(earlyCmds ? ['--early-cmds', earlyCmds] : []), ...(renderHistory ? ['--render-history'] : [])];
+  const extra = [...(tag ? ['--tag', tag] : []), ...(shot ? ['--shot', shot] : []), ...(earlyCmds ? ['--early-cmds', earlyCmds] : []), ...(renderHistory ? ['--render-history'] : []), ...(baseShot ? ['--base-shot'] : [])];
   // One replay of the original's trace. A run whose only difference is the stream's draw count is repeated once: that count differed in
   // single runs under host load and not on the repeat (docs/visual-acceptance.md "Open", unattributed), and the repeat is reported.
   const replay = async () => {
@@ -693,13 +714,14 @@ async function judgeLive(task, add, fail, result) {
   if (first.draws) problems.push(first.draws);
   let frameNote = '';
   if (shot) {
-    const frame = add(await exec(process.execPath, ['scripts/visual-acceptance.mjs', 'compare', '--maps', map, '--view', `${shot}:0,0,0:0,0,0`], {limitSeconds: 300}));
+    const frame = add(await exec(process.execPath, ['scripts/visual-acceptance.mjs', 'compare', '--maps', map, ...(baseShot ? ['--contribution'] : []), '--view', `${shot}:0,0,0:0,0,0`], {limitSeconds: 300}));
     const line = frame.out.trim().split('\n').find(l => l.startsWith(`${map} ${shot} `));
     const m = line ? JSON.parse(line.slice(`${map} ${shot} `.length, line.lastIndexOf('}') + 1)) : null;
     const blocks = line ? Number(/ (\d+) outlier blocks/.exec(line)?.[1]) : NaN;
     if (!m) problems.push('no frame comparison');
     else {
       const off = frameProblems({...m, outlierBlocks: Array.from({length: blocks}, () => [])});
+      if (baseShot) off.push(...contributionProblems(m));
       if (off.length) problems.push(`frame ${shot}: ${off.join(', ')}`);
       frameNote = `; frame ${shot} ${m.edgeRecall}/${m.edgePrecision}/${blocks}`;
     }

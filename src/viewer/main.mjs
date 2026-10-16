@@ -1630,7 +1630,9 @@ showCoronas(on) {
 },
 /** The last drawn frame's decal fragments (decal-draw.mjs, decal-scene.mjs):
  * per texture the triangles the simulation clipped, and those drawn. */
-decals() {
+decals(options) {
+  // {hide} hides or shows the decal layer (a frame with and without it: visual-acceptance.mjs play --base decal)
+  if (options && decalScene && options.hide !== undefined) decalScene.root.visible = !options.hide;
   return { groups: (lastVisibility?.decals ?? []).map(group => ({ texture: group.texture.key, triangles: group.positions.length / 9 })),
     drawnTriangles: decalScene?.count() ?? null, notes: [...(decalScene?.notes ?? [])] };
 },

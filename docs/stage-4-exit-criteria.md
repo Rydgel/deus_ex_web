@@ -17,11 +17,11 @@ First run, 2026-10-15 on master 2386f69 plus this branch (Linux host, AMD, 30 GB
 | Clause | PASS | FAIL | INLINE | NO-ORIGINAL | MISSING | EXCLUDED |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: |
 | 4.1 Animated actors | 9 | 0 | 0 | 0 | 2 | 0 |
-| 4.2 Effects | 20 | 1 | 0 | 0 | 9 | 3 |
+| 4.2 Effects | 23 | 2 | 0 | 0 | 5 | 3 |
 | 4.3 Sound | 5 | 0 | 0 | 0 | 2 | 0 |
 | 4.4 Text and interfaces | 10 | 0 | 0 | 0 | 4 | 2 |
-| 4.5 Speech, lip sync and the conversation camera | 7 | 0 | 0 | 0 | 1 | 0 |
-| **Total** | **51** | **1** | **0** | **0** | **18** | **5** |
+| 4.5 Speech, lip sync and the conversation camera | 7 | 0 | 0 | 0 | 0 | 1 |
+| **Total** | see the note below | | | | | |
 
 **Update, interface frames (2026-10-15, [interface frames](interface-frames.md)):** rows 4.4.11 to 4.4.14 are `PASS`, from 18 views of 00_Training compared with
 the original's frames (the HUD, eight persona screens, the main menu, three Settings screens, a datacube and the keypad) and from the four stored security-computer screens (outside their camera windows); the clause 4.4 row of the first-run table reads
@@ -67,7 +67,7 @@ A mode in brackets names how the check exercises Play (see [How the gate judges]
 | 4.2.10 | light effects in Play | the Disco floor, a barrel fire and AugLight in Play against the original bodies | O3 | `light-spatial-play` [worker], `moving-light-effects-play` [worker], `auglight-lighting` [oracle] | PASS |
 | 4.2.11 | coronas | visibility helper, DrawIcon arguments, tracker trace and the tile chain | O2 | `coronas-play` [worker], `coronas-tracked` [oracle], `corona-tiles` [worker], `corona-tiles-play` [worker], `coronas-mover-play` [worker], `coronas` [oracle] | PASS |
 | 4.2.12 | particles and sprites | ParticleIterator, FDynamicSprite and the tile chain | O2 | `particles-play` [worker], `sprite-setup` [oracle], `sprite-tiles` [worker], `sprite-tiles-play` [worker], `sprite-tiles-mirror-play` [worker], `native-particles` [oracle] | PASS |
-| 4.2.13 | 04_NYC_Street vents | a frame with particles and sprites against the original with the generators' state matched | - | missing: no matched capture holds a particle or sprite whose generator state the original side fixed | MISSING |
+| 4.2.13 | 04_NYC_Street vents | a frame with particles and sprites against the original with the generators' state matched: the original's 600 ticks replayed in Play, then the held frame and the steam against the original's | O1 | `live 04_NYC_Street (vents2)` [worker] | FAIL |
 | 4.2.14 | decals | AttachDecal, ClipDecal and the vertices of a decal equal Engine.dll and Render.dll | O2 | `decal-vertices-play` [worker], `decals-play` [worker], `decal-attach` [oracle], `decal-render` [worker], `decal-startup` [oracle] | PASS |
 | 4.2.15 | Training shadows, bullet holes | a decal frame against the original | - | missing: no matched capture shows a decal; blood and scorch marks need combat | MISSING |
 | 4.2.16 | volumetric fog (02_NYC_Bar) | ComputeFromActor and the fog loop equal Render.dll; the pass in Play | O3 | `volumetric-fog-play` [worker], `volumetric-fog` [oracle] | PASS |
@@ -78,7 +78,7 @@ A mode in brackets names how the check exercises Play (see [How the gate judges]
 | 4.2.21 | detail textures | the D3DDrv detail pass equals the original body; Play draws it | O2 | `detail-pass` [oracle], `detail-pass-rust` [oracle], `detail-play-sim` [node], `detail-play` [worker] | PASS |
 | 4.2.22 | detail pass in a frame | Play's detail pass against a capture of the original with the pass poked in | - | missing: measured once (Jaccard 0.94 to 0.98 on five of six views, docs/frame-projection.md); those captures are not in a store the gate reads | MISSING |
 | 4.2.23 | lasers | LaserIterator.CurrentItem equals the original; the Island doorway beams draw | O2 | `lasers-play` [worker], `native-laser` [oracle] | PASS |
-| 4.2.24 | 01_NYC_UNATCOIsland doorway | a beam frame against the original | - | missing: no original capture of a beam (docs/lasers.md) | MISSING |
+| 4.2.24 | 01_NYC_UNATCOIsland doorway | a beam frame against the original: the beams' geometry (the beam texture is an animated fire: its sparks are not matched) | O1 | `frames 01_NYC_UNATCOIsland [laser1,laser2]` [worker] | PASS |
 | 4.2.25 | viewport flash | EndFlash equals D3DDrv; the flash pass draws | O2 | `d3d-endflash` [oracle], `flash-play` [worker], `player-alterations-census` [node] | PASS |
 | 4.2.26 | underwater or drunk frame | a held flash frame against the original under Wine | - | missing: the pass is checked against Play itself only; GL's 8-bit blend rounding against the device's is unmeasured (roadmap section 4 Open) | MISSING |
 | 4.2.27 | vertices and visibility | Render.dll's projection, D3DDrv's vertices and OccludeBsp equal the original | O2 | `frame-projection` [oracle], `frame-projection-movers` [oracle], `frame-projection-play` [worker], `master-frame-play` [worker], `bsp-occlusion` [oracle] | PASS |
@@ -171,6 +171,8 @@ says why it has its value and how strong that reason is.
 | Matched capture settings | `?antialias=0`, `?detailTextures=0` | Every stored original lacks multisampling and the detail pass (Wine's device has no `BLENDDIFFUSEALPHA`); Play's defaults (both on) stay as they are. |
 | Interface frames | at least 99% of the pixels identical, at most 64 pixels off by more than 10 of 255, mean absolute difference at most 0.1, edge recall and precision at least 0.99, no outlier block; a security computer's screen outside its camera windows: at most 20 pixels off by more than 2 and none by more than 10 | The 18 views are within 2 of 255 everywhere but one world scanline of 57 pixels (up to 27 levels) and, in the datacube view, 90 pixels of at most 13 levels. Strong for what it excludes: Play before the two fixes fails every frame they changed (the closest has 105 pixels over 10). Weak for the margins (7 pixels over the worst measured, .9922 against .99). The four terminal screens read 0 pixels over 2 outside the camera windows (the largest difference 0), so the 20-pixel allowance is a margin, not a measurement. |
 | Conversation frames | the letterbox bars and the subtitle: no pixel off by more than 2 of 255; the 3D band: at least 94% of its pixels identical and at most 1,300 off by more than 10; edge recall and precision at least 0.99; no outlier block; and, over the longest replay, every watched actor, the clock and the stream draws equal except the measured exceptions (the player's `AnimFrame` at ticks 1-5, two guards' `LastRenderTime` at tick 1) | The four MeetPaul frames read: bars and subtitle identical to the pixel (maximum difference 0), the band .954 to .981 identical with at most 1,053 pixels over 10 (polygon edges and the glasses' glints), edges at least .997, no outlier block; the 88 watched actors equal for 750 ticks. **The values are my choice**: 20% to 25% above the measured worst. Strong for a misplaced bar or viewport (the replay harness defect fixed 2026-10-16 read .33 identical, 349,313 pixels over 2), wrong text or colour, a shifted camera; weak for the polygon edge. The mouth is gated by the actor comparison, not the pixels: the face is a few hundred pixels (the frame numbers move by about 700 over 10 without the feed), but without the measured phonemes the player's blend channel differs at tick 8 and Paul's at tick 145 (checked 2026-10-16), which the actor comparison rejects. |
+| Effect contribution (the frame with an effect less the frame without it, original against Play) | correlation at least .90, Play's sum within 8% of the frame's brightness ratio times the original's, agreement at least .98 | The Bar's haze: .93, .93 and .99, 1% to 4%, 1.0; the other views' differences are .0 to .37. Weak: three views, and the original's two frames are two captures (the animated light maps' noise state is in their difference). The steam's agreement reads .95 and keeps row 4.2.13 red for that and the draw count. |
+| Laser beams' geometry (64 x 64 blocks of red excess) | blocks with beam in both, of either, at least .85; Play's energy over the original's .75 to 1.33; y-offset of the centroids at most 2.5 px rms | .94 and .88; .87 to 1.01 over runs; 1.3 and 1.6 px, against the original's own two frames 1.0, .99 and .3 px. Weak: two views; the beam texture is an animated fire (an unmatched host input) that moves the energy by 10% to 15% between runs. |
 | Live-scene tolerance | every watched field of every actor, the clock and the stream draws equal; a stream-draw-only difference is repeated once | The Underworld's draw count differed at tick 45 on some replays (two of two fresh runs, then 1 of 4 to 4 of 5 in six batches): attributed 2026-10-16 to the player's animation flags at the start of the replay (`bAnimNotify` 0 when the replay began before the ghost's own script had started its `Tread` loop, so its `PlayFootStep` `FRand` was missing) and fixed in the harness; 10 of 10 replays are equal since and the gate reports `flaky: false`, so the repeat is no longer needed for this map. The allowance stays until the user removes it; a repeat that passes is still reported as `flaky`. |
 
 **Real-x87 probes.** `window-scene-frame` runs a small probe executable under Wine to measure `appTan` on hardware. The gate points those validators
@@ -301,6 +303,8 @@ each criterion's inputs from one root (the first that holds them) and links or c
 | The light manager's tables from the running original | main `.work/live/.work/fpu` | 4.2.9 |
 | 02_NYC_Bar's smoke haze: three views with the fog zones on and off (2026-10-16, level time 52.355 s in each `-time.txt`) | main `.work/acceptance/02_NYC_Bar/{fog3,fog5,fog0}{,-base}-original.png` and `-time.txt` | 4.2.17 |
 | 02_NYC_Hotel's bathroom mirror, JC's `Tread` frozen (2026-10-16, 52.370 s) | main `.work/acceptance/02_NYC_Hotel/{hotel1,hotel2}-original.png`, `-time.txt`, `-state.json` | 4.2.19 |
+| Island's doorway beams, SetupDynamics pinned to rand state 0x2f6e2b1b, the level unfrozen (2026-10-16, 52.363 s; `laser1b` is a second frame of laser1, the original's own variation) | main `.work/acceptance/01_NYC_UNATCOIsland/{laser1,laser2}-original.png`, `-time.txt`, `laser1b-original.png` | 4.2.24 |
+| 04_NYC_Street's steam vent: 600 ticks with the stream state per tick, the held frame and the frozen start's (2026-10-16, tag `vents2`) | main `.work/live-acceptance/04_NYC_Street/*vents2*`, `.work/acceptance/04_NYC_Street/vents2-original.png`, `vents2-base-original.png` | 4.2.13 |
 
 **A clock per frame, not per map, is what a store should keep.** `times.json` holds one level time per map and each capture overwrites it, so
 a frame and the clock beside it can come from different captures. Two cases showed up in the first run: the main `.work/live` tree's `fan2-original.png`
@@ -364,11 +368,27 @@ Nothing below was fixed in this task beyond wiring existing checks; each item is
    generator's iterator through a sim-side `particleProbe` (`decal-probe.mjs`, `sim-worker.mjs`, `deusExViewer.particleProbe`), the mirrors check places and hides the
    player through the existing `placeProbe`, and the fire-texture check reads the page's own actor mesh layer and waits for the fires' first tick (in the worker the first
    frame reaches the page after the simulation's first run). `--only '^4\.2\.(12|18|20)$'`: 19 checks, 3 PASS (514 s at 2 jobs).
-5. **Effects with a translation but no matched original frame (`MISSING` 4.2.13, .15, .17, .19, .22, .24, .26, .29, .30).** Each is one original capture session
-   (the `.work/live` tree, `scripts/original-views.sh`) and one `frames` row: particles and sprites with the generator's state matched; a decal; `02_NYC_Bar`'s
-   fog; the Hotel's bathroom mirror; the detail pass with the pass poked in; a laser beam; a held flash frame (underwater or drunk); a camera view with a mirror,
-   sky, fog or corona in it; and the Underworld's mirrored panes at a held Strobe (the stored frames lack their clock, see [Stored originals](#stored-originals)).
-   Order by campaign reach: fog and the Hotel mirror (the NYC chapter), particles, the laser beam (Liberty Island), then the rest.
+5. **Effects with a translation but no matched original frame: 2026-10-16, four of nine done, one found red, four open** ([effect frames](visual-acceptance.md#effect-frames-2026-10-16)).
+   `PASS`: 4.2.17 (the Bar's haze: the frame and the fog's contribution against the original's), 4.2.19 (the Hotel mirror, the player posed as the original had him), 4.2.24
+   (Island's doorway beams: geometry; the beam texture is an animated fire whose sparks are an unmatched host input). `FAIL` with the cause half found: **4.2.13** (the Street's steam: the
+   original's 600 ticks replay equal in every watched actor and the held frame and the steam correlate .99, but Play draws 8 more stream values at one tick, a `FlyGenerator`'s first tick
+   (its scout spawn) running later than the original's; the suspect is the actors' tick gate reading `LastRenderTime`, which the replay's render history writes for pawns only; next: add the
+   generators' `LastRenderTime` and `DistanceFromPlayer` to the watched fields and `--render-history`, replay, and set the steam threshold (agreement .95 against the gate's .98) once the draws agree).
+   **Open, with the tooling already in `visual-acceptance.mjs` (`original` / `play` / `compare`) and the recipe each needs:**
+   * **4.2.26 flash** (no capture taken): hold the flash with `ConstantGlowScale` and `ConstantGlowFog`, not by writing `FlashScale`/`FlashFog` (a held level's actor delta has a floor of 0.005 s and
+     `ViewFlash` moves toward its goal by 10 * delta a tick, so a written flash decays in about a second in either program; the glow's goal is the steady state both reach). Original:
+     `scripts/original-views.sh 00_Training --view flashA:-100,840,30:0,0,0 --pre-shot-cmd 'set DeusEx.JCDentonMale ConstantGlowScale -0.5' --pre-shot-cmd 'set DeusEx.JCDentonMale ConstantGlowFog (X=0.3,Y=0.1,Z=0)' --pre-shot-wait 3000`;
+     Play: the same options on `play` (checked: a steady red tint at that camera); one run per flash state, then a `frames` row (`effectViews` with `preShot` arguments to add in `judgeFrames`).
+   * **4.2.15 decal** (not captured): Training's pawns' shadows, the level unfrozen as the beams' (`--unfreeze`; `shadow1:61,1326,-23:62166,61567,0` and `shadow2:211,1266,-33:62500,61567,0` show them in Play).
+     The base frame without decals: original `--base-cmd 'set WinDrv.WindowsClient Decals False'`, Play `--base decal` (`deusExViewer.decals({hide})`, added), `compare --contribution`.
+   * **4.2.22 detail pass** (not captured): original with `--poke D3DRenderDevice0:0x78:1` and, for the base views, `--base-poke D3DRenderDevice0:0x78:0` (`<view>-base`), Play `--detail on --base detail`,
+     `compare --contribution`; a `frames` row with `detail: true, base: 'detail'`. Cameras of [frame projection](frame-projection.md#detail-textures-2026-10-15): Training `-736,1314,560:0,16384,0`
+     and `-1100,1224,560:0,21384,0`, Island `-4761,10431,-234:56536,20000,0` and `-4761,10431,-256:62536,0,0`.
+   * **4.2.29 a camera window holding a mirror, sky, fog or corona** (not started): needs a computer whose cameras look at one (`camera-original.sh`, `camera-acceptance.mjs`; a census of the shipped cameras' views is the first step).
+   * **4.2.30 the Underworld's mirrored panes at a held Strobe** (not captured): `scripts/original-views.sh 06_HongKong_WanChai_Underworld --view uw_s0:-1081,-2010,-336:0,54769,0 --view uw_s1:... --cmd 'set ScriptedPawn bHidden True'`
+     now writes each frame's `-time.txt`; a `frames` row over new names.
+   Tools added for these and used above: per-frame `-time.txt` and `times` staging, `--base` / `--base-cmd` / `--base-poke` / `--contribution`, `--freeze-player` / `--player-state` / `--player-pose`,
+   `--pre-shot-cmd` / `--pre-shot-wait`, `--rng-pin` (and `dx-live-win.exe rngpin`), `compare --beams`, `live-acceptance.mjs --base-shot` / `--draw-stack-actor`, the gate's `base`, `playerPose`, `unfreeze`, `rngPin`, `beams`, `twin` and `baseShot` options.
 6. **Sound has no check against what a live scene or the speakers get (4.3.6, 4.3.7).** `live-sound-compare.mjs` compares the original's `PlaySound` calls of one
    capture with Play's; its stored trace needs consolidating and a row. Not measurable yet: the music bus delay and the ring heads' spacing (a loopback
    recording of the original), MPEG and ADPCM samples, 3D voices.

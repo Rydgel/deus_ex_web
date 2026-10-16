@@ -201,6 +201,17 @@ async function original() {
       const stale = game.shots();
       post(['sleep 3000', 'shot', 'sleep 900']);
       for (const shot of game.shots().filter(shot => !stale.includes(shot))) renameSync(path.join(game.SYSTEM, shot), path.join(scratch, shot));
+      // --base-shot: the frozen start's frame at this camera (before the tracer releases the level): <shot>-base-original.png, with the clock it was taken at
+      // beside it, the frame without the particles and sprites the ticks make (play --base-shot writes Play's).
+      if (flag('base-shot')) {
+        const before = game.shots();
+        post(['sleep 1500', 'shot', 'sleep 900']);
+        const fresh = game.shots().filter(name => !before.includes(name));
+        if (!fresh.length) throw new Error('no base frame');
+        const png = path.join(acceptanceDir(), `${option('shot')}-base-original.png`);
+        game.bmpToPng(path.join(game.SYSTEM, fresh[0]), png);
+        renameSync(path.join(game.SYSTEM, fresh[0]), path.join(acceptanceDir(), `${option('shot')}-base-original.bmp`));
+      }
     }
     // Placement. The original is never moved with `set Location` or `set Region` in a level that
     // then ticks: the collision hash is not updated, and the live level crashed (a General
@@ -675,6 +686,22 @@ async function play() {
       console.log(`flags at the start: Play ${flags.entries.length}${flags.entries.length ? ` (${flags.entries.map(e => e.name).join(' ')})` : ''}`);
     }
     await frames(5);
+    // The page as a 1280x720 frame at the brightness whose display ramp is the identity (the held frame's, and --base-shot's).
+    let prepared = false;
+    const preparePage = async () => {
+      if (prepared) return; prepared = true;
+      await page.addStyleTag({content: `.toolbar, footer, #toast, #play-hint, #npc-preview-label, #panel, #crosshair, #gate { display: none !important; }
+#app { height: 100vh !important; } #viewport { position: fixed !important; inset: 0 !important; width: 1280px; height: 720px; }
+#scene { position: fixed !important; left: 0 !important; top: 0 !important; margin: 0 !important; border: 0 !important; transform: none !important; width: 1280px !important; height: 720px !important; }`});
+      await page.evaluate(() => window.dispatchEvent(new Event('resize')));
+      await page.evaluate(value => { const el = document.getElementById('brightness'); el.value = value; el.dispatchEvent(new Event('input')); }, option('brightness', '0.4'));
+    };
+    // --base-shot (play, with --shot name): the frozen start's frame at the same camera, before the first tick (<name>-play-base.png): the frame
+    // without the particles and sprites the ticks make, the base of `visual-acceptance.mjs compare --contribution` (the original's is <name>-base-original.png).
+    if (flag('base-shot') && option('shot', null)) {
+      await preparePage(); await frames(30);
+      await page.screenshot({path: path.join(acceptanceDir(), `${option('shot')}-play-base.png`), clip: {x: 0, y: 0, width: 1280, height: 720}});
+    }
     const props = [...new Set([...FIELDS.map(f => f[1]), ...(option('extra-props', '') ?? '').split(',').filter(Boolean)])], playerProps = [...new Set([...PLAYER_FIELDS.map(f => f[1]), ...(option('extra-props', '') ?? '').split(',').filter(Boolean)])];
     // the player's animation too, in the call that arms the replay: no frozen tick runs between (a looping ghost
     // animation reaching its end can call script that draws)
@@ -766,7 +793,7 @@ async function play() {
       ...(trace[0]?.viewport?.[0] && !flag('own-viewport') ? {renderSize: trace[0].viewport} : {}),   // the original's frame size (--own-viewport: Play's page)
       ...(setupNames ? {setupProbe: {names: setupNames.split(','), first: setupFirst, last: setupLast}} : {}),
       ...(scriptPawns ? {scriptTrace: {pawns: scriptPawns.split(','), first: scriptFirst, last: scriptLast}} : {}), replay: {ticks: trace.map(({n, unfrozen, delta, rngIn, clockIn, tsIn, strobeIn}) => ({n, unfrozen, delta, rngIn, clockIn, tsIn, strobeIn})),   // not the watched fields: a long trace would not fit the page
-      release: true, hold: true, drawTrace: flag('draw-trace'), drawStacks: flag('draw-stacks'),
+      release: true, hold: true, drawTrace: flag('draw-trace'), drawStacks: flag('draw-stacks'), drawStackActor: option('draw-stack-actor', null),
       // --phonemes file.json ([{n, name, letter}]; conversation-acceptance.mjs `phonemes`): the letters the original's audio update wrote into a speaker's nextPhoneme, a measured input
       ...(option('phonemes', null) ? {phonemes: JSON.parse(readFileSync(option('phonemes'), 'utf8'))} : {}),
       ...(option('can-see', null) ? {canSeeProbe: {pawn: option('can-see'), first: Number(option('can-see-ticks', '1:1').split(':')[0]), last: Number(option('can-see-ticks', '1:1').split(':')[1])}} : {}),
@@ -781,7 +808,7 @@ async function play() {
     while (rows.length < trace.length) {
       await frames(20);
       const taken = await page.evaluate(() => window.deusExViewer.liveProbe({take: true}));
-      if (taken.debug?.length) { (globalThis.__debugRows ??= []).push(...taken.debug); } nav.push(...(taken.nav ?? [])); touch.push(...(taken.touch ?? [])); events.push(...(taken.events ?? [])); objects.push(...(taken.objects ?? [])); sounds.push(...(taken.sounds ?? [])); script.push(...(taken.script ?? [])); setup.push(...(taken.setup ?? [])); commandLog.push(...(taken.commands ?? []));
+      if (taken.debug?.length) { (globalThis.__debugRows ??= []).push(...taken.debug); } nav.push(...(taken.nav ?? [])); touch.push(...(taken.touch ?? [])); events.push(...(taken.events ?? [])); objects.push(...(taken.objects ?? [])); sounds.push(...(taken.sounds ?? [])); script.push(...(taken.script ?? [])); setup.push(...(taken.setup ?? [])); commandLog.push(...(taken.commands ?? [])); for (const line of taken.stackLog ?? []) console.log(line);
       if (taken.rows.length) { rows.push(...taken.rows); stalls = 0; } else if (++stalls > 40) throw new Error(`the replay stopped at tick ${rows.length}${errors.length ? `: ${errors.slice(0, 3).join(' | ')}` : ''}${(await page.evaluate(() => document.querySelector('#toast')?.textContent ?? '').catch(() => '')).slice(0, 600)}`);
     }
     // the boundaries Play recorded instead of running during the replay (docs/visual-acceptance.md, record-only audit)
@@ -806,11 +833,7 @@ async function play() {
     if (navPawns) writeFileSync(path.join(dir, `nav-play${suffix}.json`), JSON.stringify({pawns: navPawns.split(','), events: nav}));
     if (option('shot', null)) {
       // The replay holds the level at its last tick; Play draws on: the frame at the brightness whose display ramp is the identity.
-      await page.addStyleTag({content: `.toolbar, footer, #toast, #play-hint, #npc-preview-label, #panel, #crosshair, #gate { display: none !important; }
-#app { height: 100vh !important; } #viewport { position: fixed !important; inset: 0 !important; width: 1280px; height: 720px; }
-#scene { position: fixed !important; left: 0 !important; top: 0 !important; margin: 0 !important; border: 0 !important; transform: none !important; width: 1280px !important; height: 720px !important; }`});
-      await page.evaluate(() => window.dispatchEvent(new Event('resize')));
-      await page.evaluate(value => { const el = document.getElementById('brightness'); el.value = value; el.dispatchEvent(new Event('input')); }, option('brightness', '0.4'));
+      await preparePage();
       await frames(30);
       // The original's Strobe state at its held frame (hold<tag>.json, the original run's), unless --own-strobe: the flag flips with every
       // drawn frame at a new time, so which phase a held frame shows depends on the host's frame timing, in either program.

@@ -33,7 +33,9 @@ import { laserIteratorItems } from '../runtime/script-laser.mjs';
 import { handleOf } from '../runtime/script-object-handles.mjs';
 import { RENDER_ITERATOR, RENDER_SHIFT, RENDER_SPRITE } from '../runtime/script-vm-render.mjs';
 
-export function createSpriteScan(runtime, { player, constructIterator, frand }) {
+/** `pin`: validation only (visual-acceptance.mjs --rng-pin), called at the start of every SetupDynamics run (scan, rescan): the shared stream is set
+ * to the state the original's frame was pinned to (docs/visual-acceptance.md "Effect frames"). */
+export function createSpriteScan(runtime, { player, constructIterator, frand, pin = null }) {
   const notes = new Set();
   const read = (actor, name) => runtime.readNamed(actor, name);
   const newOut = () => ({ sprites: [], meshItems: [], iterators: new Set(), iteratorIndex: new Map() });
@@ -109,6 +111,7 @@ export function createSpriteScan(runtime, { player, constructIterator, frand }) 
    * sprite records and the iterator items that draw as meshes, with the
    * iterating actors (and their Level.Actors indices). */
   function scan({ firstPerson = true } = {}) {
+    pin?.();
     const out = newOut(), viewer = player(), level = runtime.levelFor(viewer);
     const visit = makeVisit(out, firstPerson);
     // The render scan (script-vm-render.mjs) leaves the actors visit()
@@ -132,6 +135,7 @@ export function createSpriteScan(runtime, { player, constructIterator, frand }) 
    * Returns the frame's items (sprite records and mesh items, as `scan`
    * does for the iterating actors alone). */
   function rescan(iteratorIndex, { firstPerson = true } = {}) {
+    pin?.();
     const out = newOut(), visit = makeVisit(out, firstPerson);
     for (const [actor, index] of iteratorIndex) visit(actor, index);
     return out;
