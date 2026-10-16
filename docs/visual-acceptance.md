@@ -699,6 +699,9 @@ dark, equals the original's.
 (The ratio is the uniform brightness gap. The unsuffixed views d and p2 are free-running in the flag, so they are polled and not
 compared.)
 
+The gate's frames of this camera and of view d (row 4.2.30, 2026-10-16, the Mac at the identity ramp, each frame at its own clock):
+[the mirrored panes at a held Strobe](#06_hongkong_wanchai_underworlds-mirrored-panes-at-a-held-strobe-row-4230).
+
 **Not covered.** The movers' own polygons are still not searched for Strobe lights. The Strobe lists come from the lights that are
 Strobe at load. A Strobe light seen only in a sky child frame has no case in the shipped maps (the sky zones hold no lights).
 
@@ -1512,6 +1515,9 @@ scripts/original-views.sh 06_HongKong_WanChai_Underworld --view d_s0:-1120,-1900
 node scripts/visual-acceptance.mjs play --maps 06_HongKong_WanChai_Underworld --view d_s0:-1120,-1900,-336:0,55000,0 --view d_s1:-1120,-1900,-336:0,55000,0 [--unfreeze]
 node scripts/visual-acceptance.mjs compare --maps 06_HongKong_WanChai_Underworld --view d_s0:-1120,-1900,-336:0,55000,0 [--crop 490x520+340+170]
 wine ad/build/dx-live-win.exe strobe poll 120 5 | strobe hold 0 | strobe release      # the running original's Strobe flag (free-running, held at a value, released)
+wine ad/build/dx-live-win.exe strobe poll 1 0 <LevelInfo hex>                          # the same and the level's TimeSeconds, read through the LevelInfo's address
+# gate row 4.2.30: both states at two cameras, each frame with its own clock and hold record (#06_hongkong_wanchai_underworlds-mirrored-panes-at-a-held-strobe-row-4230)
+scripts/original-views.sh 06_HongKong_WanChai_Underworld --brightness 0.666667 --view uw_s0:-1081,-2010,-336:0,54769,0 --view uw_s1:-1081,-2010,-336:0,54769,0 --view uwd_s0:-1120,-1900,-336:0,55000,0 --view uwd_s1:-1120,-1900,-336:0,55000,0 --cmd 'set ScriptedPawn bHidden True' --cmd-check 'Hooker0 bHidden:0x28:bit:0x2 1' --strobe-poll
 ```
 
 ```bash
@@ -1997,6 +2003,59 @@ edge lies on; fixed the same day ([edges on pixel centres](frame-projection.md#e
 scripts/original-views.sh 00_Training --view detailT1:-736,1314,560:0,16384,0 --view detailT2:-1100,1224,560:0,21384,0 --view detailT1-base:-736,1314,560:0,16384,0 --view detailT2-base:-1100,1224,560:0,21384,0 --view detailT1b-base:-736,1314,560:0,16384,0 --view detailT2b-base:-1100,1224,560:0,21384,0 --brightness 0.666667 --poke D3DRenderDevice0:0x78:1 --base-poke D3DRenderDevice0:0x78:0
 scripts/original-views.sh 01_NYC_UNATCOIsland --view detailI1:-4761,10431,-234:56536,20000,0 --view detailI2:-4761,10431,-256:62536,0,0 --view detailI1-base:-4761,10431,-234:56536,20000,0 --view detailI2-base:-4761,10431,-256:62536,0,0 --view detailI1b-base:-4761,10431,-234:56536,20000,0 --view detailI2b-base:-4761,10431,-256:62536,0,0 --brightness 0.666667 --poke D3DRenderDevice0:0x78:1 --base-poke D3DRenderDevice0:0x78:0
 node scripts/validate-stage4-acceptance.mjs --only '^4\.2\.22$'
+```
+
+### 06_HongKong_WanChai_Underworld's mirrored panes at a held Strobe (row 4.2.30)
+
+Taken on the Mac under CrossOver at Brightness 2/3, one capture with the level frozen and the dancers hidden (`--cmd 'set ScriptedPawn bHidden True'`), Render.dll's Strobe
+flag held through `dx-live-win.exe strobe hold` for each frame, both states at two cameras: `uw` (-1081, -2010, -336) at yaw 54769, the aimed camera of
+[Strobe in child frames](#strobe-in-child-frames-2026-10-14) (its main frame draws no strobe-lit surface: the floor is lit in the panes only), and `uwd`
+(-1120, -1900, -336) at yaw 55000, two panes beside the direct floor (Divergence 19's view d). `_s0` is the flag at 0 (TriggerLight1 lit), `_s1` at 1 (dark).
+Play holds its clock (`TimeDilation 0`) and writes the same flag (`liveProbe({strobe})`). Free-running, the flag changed at every new kept time at both
+cameras (`uw-strobe.txt`: 20 of 20 steps over 120 polls; `uwd-strobe.txt`: 26 of 26), so an unheld frame is a coin flip.
+
+* **Each frame has its own clock.** The original's clock runs on at the held dilation 0.001 while the views are taken (the free-running poll, the hold
+  and the reads take tens of seconds of wall time), and two Disco lights in view follow it: `Light2` (-1026, -1630, -48) and `Light21` (-1027, -1453, -48),
+  `LightEffect` 10 (`LE_Disco`), 378 and 520 units from the camera, whose spatial pattern moves with `Level.TimeSeconds` over the walls behind the panes, direct
+  and in the reflection (Play's own frames 0.16 s apart differ there and nowhere else). A first capture held Play at the clock read after the load (52.506 s)
+  while its shots were 0.13 to 0.22 s later: 3, 8, 6 and 6 outlier blocks on those walls; `uw_s1` played at its shot's level time read 0 (mean abs.
+  difference 0.15, edges 1/.998). `original` now keeps as a held-Strobe view's `-time.txt` the level time read just before its shot
+  (`dx-live-win.exe strobe poll 1 0 <LevelInfo>`: the `TimeSeconds` at +0x478 of the live player's LevelInfo, read through its address, without the walk
+  over the object array that takes a minute on a loaded host), and the gate plays each frame in a run of its own (`play` holds one clock per run).
+* **The hold beside each frame.** `<view>-strobe-held.txt` holds the hold (byte `0xeb` at `0x10b05b4b`, the flag written, the kept time), a poll after the shot
+  (the same flag and kept time: no flip was drawn), and the level time and camera just before and just after the shot (0.003 s apart in the stored
+  capture). The gate's `strobeHeld` refuses a record whose flag is not the name's, whose flag or kept time moved, whose camera is not the view's, or whose
+  level time ran 0.01 s or more over the shot. It refuses the records of two discarded captures: one whose dilation line was dropped (52 s over
+  the shot), and one whose slow reads bracketed the shot over 0.09 s.
+* **Dropped console input on a loaded host.** The Mac was running other sessions' oracles (load average 13 to 24), and the original's console dropped typed
+  characters. One capture's `TimeDilation` line failed, so its level ran at dilation 1 from 98 s; another's `bHidden` line failed, so the dancers are in its frames.
+  `original` now reads the held dilation back and types its line again (the stored capture needed one retry). It refuses a level that was not frozen before
+  the load (LevelInfo `bPlayersOnly`, `+0x4f0 & 4`): its TriggerLight would have ticked to its own brightness. `--cmd-check '<object> <field:offset:type[:mask]> <value>'`
+  reads back a field the `--cmd` lines set and types them again (`Hooker0 bHidden:0x28:bit:0x2 1`). **Unexplained, seen five times:** after none to four
+  shots the game ignored every posted key (console lines, Escape, the Shot key) while it went on ticking and drawing, and the run ended with `NO SHOT`.
+  It was not the hold: holds, releases, polls and reads in the menu map did not cause it. It was not a covered window: it happened with the game window in
+  front (raised through System Events; the user allowed it). It was not time: shots kept working for five minutes in the menu map. The game's thread
+  key state read no modifier held, and its focus and active window were the viewport. Each time the game was restarted; the stored capture shows none of it.
+
+| View | Shot's level time | Play / original | Mean abs. diff. | Edge recall / precision | Outlier blocks |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| uw_s0 (lit) | 52.418 | 1.000 | 0.02 | 1 / 1 | 0 |
+| uw_s1 (dark) | 52.456 | 1.000 | 0.02 | 1 / 1 | 0 |
+| uwd_s0 (lit) | 52.497 | 1.000 | 0.01 | 1 / 1 | 0 |
+| uwd_s1 (dark) | 52.536 | 1.000 | 0.00 | 1 / 1 | 0 |
+
+Block ratios .986 to 1.019, the same numbers in two gate runs. The Strobe state is what the frames hold: each original against Play's frame of the other
+state reads 53 (`uw`) and 30 (`uwd`) outlier blocks, mean abs. difference 8.9 and 4.4, edge recall .79 and .67 against the lit originals. The 2026-10-14 pair
+of the same camera (`c0_s0`, `c0_s1`, Linux Wine at the default ramp) read ratio 1.21 and 1.20, mean abs. difference 4.65 and 2.92 (the uniform gap); at the
+identity ramp under CrossOver the frames are equal to within 0.02 levels. Stored (Mac main): `.work/acceptance/06_HongKong_WanChai_Underworld/
+{uw_s0,uw_s1,uwd_s0,uwd_s1}-original.{png,bmp}`, `-time.txt`, `-strobe-held.txt` and the polls `uw-strobe.txt`, `uwd-strobe.txt`; the discarded captures are in
+`.work/uw30/capture{1..7}/`, unread by the gate.
+
+```bash
+i686-w64-mingw32-gcc -O2 -o ad/build/dx-live-win.exe tools/dx-live-win.c -lpsapi   # an older build has no `level=` read: the frame then keeps the load's clock and the gate's hold check fails
+node scripts/visual-acceptance.mjs play --maps 06_HongKong_WanChai_Underworld --view uw_s0:-1081,-2010,-336:0,54769,0   # the plan, on a checkout without the map in it
+scripts/original-views.sh 06_HongKong_WanChai_Underworld --brightness 0.666667 --view uw_s0:-1081,-2010,-336:0,54769,0 --view uw_s1:-1081,-2010,-336:0,54769,0 --view uwd_s0:-1120,-1900,-336:0,55000,0 --view uwd_s1:-1120,-1900,-336:0,55000,0 --cmd 'set ScriptedPawn bHidden True' --cmd-check 'Hooker0 bHidden:0x28:bit:0x2 1' --strobe-poll
+node scripts/validate-stage4-acceptance.mjs --only '^4\.2\.30$'
 ```
 
 ## Open
