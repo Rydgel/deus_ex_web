@@ -8,8 +8,9 @@
 #   COUNT=n INTERVAL=ms (default 3000 samples, 1 ms apart)
 #   scripts/galaxy-output-capture.sh replay [out dir]
 #       check 3's capture (docs/audio-output-scope.md §5.2): `dx-live-win.exe galaxy capture` starts the game on 00_Training under
-#       the debugger, so the record begins before glxInit, with the shipped Galaxy volumes; 5 s after the player is up a walk
-#       forward and back and a jump (WALK, dxinput lines: footsteps and a landing, effect voices), PLAY seconds later (default
+#       the debugger, so the record begins before glxInit, with the shipped Galaxy volumes; on the title map a console
+#       `open 00_Training`, LOAD seconds later (default 30) a walk forward and back and a jump (WALK, dxinput lines:
+#       footsteps and a landing, effect voices), PLAY seconds later (default
 #       20) a console `musicorder 2` (glxControlMusic(1, 2): the resync while the song plays), AFTER seconds later (default 15)
 #       the capture stops and detaches, and the game is quit. Writes <out>/replay-training.bin.
 #
@@ -82,8 +83,14 @@ trap 'finish_replay; quit_game; release_bottle' EXIT
 wait_player || { echo "the player never came up" >&2; exit 1; }
 PID=$(game_pids | head -1)
 if [ "$MODE" = replay ]; then
-  # The scene: a walk forward and back and a jump (the player's footstep and landing sounds: effect voices on bus B),
-  # then music alone, then MUSICORDER.
+  # The scene: the title map (the engine starts on entry.dx and DX.dx whatever the command line says), a console
+  # `open 00_Training` (LoadMap: SetViewport stops the channels and keeps the output; the song changes), a walk forward
+  # and back and a jump (the player's footstep and landing sounds: effect voices on bus B), music alone, MUSICORDER.
+  sleep 5
+  printf 'cmd open 00_Training\n' > /tmp/galaxy-output-open.txt
+  node ad/scripts/original-game.mjs run /tmp/galaxy-output-open.txt >/dev/null 2>&1
+  sleep "${LOAD:-30}"
+  wait_player || { echo "the player never came back after the load" >&2; exit 1; }
   sleep 5
   printf '%b' "${WALK:-key W 2500\nsleep 700\nkey S 2500\nsleep 700\nkey Space 100\nsleep 1500\nkey W 1500\n}" > /tmp/galaxy-output-walk.txt
   node ad/scripts/original-game.mjs run /tmp/galaxy-output-walk.txt >/dev/null 2>&1

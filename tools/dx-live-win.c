@@ -1300,7 +1300,9 @@ static const struct { uintptr_t address; int kind; } gx_sites[] = {
   {0x1060ec19, K_SVOL}, {0x1060eb79, K_MVOL},                       /* after EnterCriticalSection */
   {0x10618be0, K_LOADM}, {0x1060a783, K_LOADM_RET}, {0x10619465, K_UNLOADM}, {0x106122bd, K_STARTM}, {0x106183bd, K_STOPM},
   {0x1060d0f2, K_CTLM}, {0x1060a82a, K_CLEAR}, {0x1060a88d, K_BREAK},
-  {0x10612370, K_STARTS}, {0x1060a43a, K_STARTS_RET}, {0x1060d29b, K_CTLS},
+  /* glxStartSample past its 3D poll call (0x10612370): a breakpoint on a `call` corrupts the game when stepped off under
+   * CrossOver (as on Update's unlock call); the stack is the same, so are the argument offsets. */
+  {0x10612375, K_STARTS}, {0x1060a43a, K_STARTS_RET}, {0x1060d29b, K_CTLS},
   {0x1060cf21, K_CTLV}, {0x10609a2a, K_CTLV_RET}, {0x1060ce94, K_CTLV_RET}, {0x1060ced0, K_CTLV_RET}, {0x10618437, K_STOPS},
   /* Update's lock (a marker). Not its unlock call at 0x1060abd6: stepping off a breakpoint on that `call` corrupts the
    * game under CrossOver (EDI 0 in UGameEngine::Draw after Update returns; seen in a bisection of the breakpoint kinds). */
@@ -1387,10 +1389,14 @@ static void gx_event(int kind, DWORD tid, CONTEXT *c) {
     case K_CTLS: read_mem(esp + 0x14, w, 16); gx_record(GX_CONTROL_SAMPLE, tid, w, 16, NULL, 0); break;
     case K_CTLV: read_mem(esp + 0xc, w, 16); gx_record(GX_CONTROL_VOICE, tid, w, 16, NULL, 0); break;
     case K_CTLV_RET: w[0] = c->Eax; w[1] = (unsigned)c->Eip; gx_record(GX_CONTROL_VOICE_RESULT, tid, w, 8, NULL, 0); break;
-    case K_STOPS: w[0] = c->Esi; gx_record(GX_STOP_SAMPLE, tid, w, 4, NULL, 0); break;
+    case K_STOPS: w[0] = c->Esi; w[1] = read_u32(esp + 0x40c);  /* the voice, and the return address (a call from glxStartSample or glxUnloadSample is part of it) */
+      gx_record(GX_STOP_SAMPLE, tid, w, 8, NULL, 0); break;
     case K_REVERB: { unsigned char block[0x70] = {0}; uintptr_t at = read_u32(esp + 0x18); memcpy(block, &at, 4); if (at) read_mem(at, block + 4, 0x6c);
       gx_record(GX_SAMPLE_REVERB, tid, block, sizeof(block), NULL, 0); break; }
-    case K_UNLOADS: w[0] = c->Edi; gx_record(GX_UNLOAD_SAMPLE, tid, w, 4, NULL, 0); break;
+    case K_UNLOADS: w[0] = c->Edi; gx_record(GX_UNLOAD_SAMPLE, tid, w, 4, NULL, 0);
+      /* the address may be reused by a later load: the next start dumps it again */
+      for (int i = 0; i < gx_nsamples; i++) if (gx_samples[i].handle == w[0]) { gx_samples[i] = gx_samples[--gx_nsamples]; break; }
+      break;
     case K_ULOCK: gx_record(GX_UPDATE_LOCK, tid, NULL, 0, NULL, 0); break;
     case K_UUNLOCK: gx_record(GX_UPDATE_UNLOCK, tid, NULL, 0, NULL, 0); break;
     case K_CB_POS: w[0] = c->Eax; read_mem(esp + 0x20, w + 1, 8); gx_record(GX_CB_POSITION, tid, w, 12, NULL, 0); break;

@@ -9,8 +9,9 @@
 //!   WAV sounds (mono, 16-bit, 11025..44100 Hz);
 //! - glxStartSample 0x10612310 for a fixed voice (Voice != 0: the subsystem
 //!   always passes its channel + 1, 0x1060a42e..0x1060a435);
-//! - glxControlSample 0x1060d280, glxControlVoice 0x1060cf00 and
-//!   glxStopSample 0x10618410.
+//! - glxControlSample 0x1060d280, glxControlVoice 0x1060cf00,
+//!   glxStopSample 0x10618410 and glxUnloadSample 0x10619500 (checked by
+//!   the capture replay of row 4.3.7, validate-galaxy-output-replay.mjs).
 //!
 //! The mixer (sequencer.rs `mix`, mixer.rs) already mixes every effect slot
 //! [0, EffectsChannels) onto bus B; these entries write the voice records it
@@ -630,6 +631,31 @@ impl Library {
         Ok(0)
     }
 
+    /// glxUnloadSample 0x10619500(Sample), UnregisterSound's call: under the library lock, every voice
+    /// that is Active, started first (`V+0x11 & 8`) and plays the sample is stopped (glxStopSample; the
+    /// 3D stop 0x10618590 for `V+0x11 & 4`, not translated), then the record's +0x40 and Data (+0x44)
+    /// and the record are freed (0x1061955f..0x10619591).
+    pub fn glx_unload_sample(&mut self, sample: u32) -> Result<u32, u32> {
+        if sample == 0 {
+            return Ok(0x11);
+        }
+        let Some(index) = self.effects.samples.iter().position(|s| s.addr == sample) else { return Err(UNSUPPORTED_READ) };
+        if get32(&self.effects.samples[index].record, 0) != SAMP {
+            return Ok(0x11);
+        }
+        for v in 0..VOICES {
+            if self.vb(v, 0x0f) != 0 && self.vb(v, 0x11) & 8 != 0 && self.vd(v, 0x42) == sample {
+                if self.vb(v, 0x11) & 4 != 0 {
+                    return Err(UNSUPPORTED_VOICE);
+                }
+                self.glx_stop_sample(VOICE_BASE + v as u32 * VOICE as u32)?;
+            }
+        }
+        self.effects.samples.remove(index);
+        self.rebuild_regions();
+        Ok(0)
+    }
+
     /// Bit i = voice i's Active byte (+0x0f), for the effect voices [0, min(32, first)).
     pub fn effects_active(&self) -> u32 {
         let mut bits = 0u32;
@@ -791,6 +817,13 @@ pub extern "C" fn galaxy_sample_control(voice: u32, frequency: i32, volume: i32,
 #[no_mangle]
 pub extern "C" fn galaxy_sample_stop(voice: u32) -> u32 {
     let r = with_library(|l| l.glx_stop_sample(voice));
+    code(r)
+}
+
+/// glxUnloadSample; 0, 0x11, or 0 with galaxy_fault set.
+#[no_mangle]
+pub extern "C" fn galaxy_sample_unload(sample: u32) -> u32 {
+    let r = with_library(|l| l.glx_unload_sample(sample));
     code(r)
 }
 
