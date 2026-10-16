@@ -554,6 +554,8 @@ impl Library {
             0x10697cf0 => self.music_master = value as u8,
             0x1069817c => self.player.sfx_master = value as u8,
             0x10697cdc => self.player.ahead = value,
+            0x10698394 => self.player.output_open = value as u8,
+            0x1064a65c => self.player.output.latency = value,
             _ => return false,
         }
         true

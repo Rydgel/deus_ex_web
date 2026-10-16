@@ -23,11 +23,13 @@ mod effects;
 mod ext;
 mod host;
 mod mixer;
+mod output;
 mod reverb;
 mod sequencer;
 mod x87;
 pub use effects::*;
 pub use mixer::*;
+pub use output::*;
 pub use reverb::*;
 pub use sequencer::*;
 

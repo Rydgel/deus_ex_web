@@ -54,7 +54,8 @@ and the speech PCM (row 3).
 
 ## 2. Galaxy.dll traces of 2026-10-16
 
-Read from the disassembly (capstone over the hash-pinned DLL, a scratch helper outside Git); none of this has been run under the oracle yet.
+Read from the disassembly (capstone over the hash-pinned DLL, a scratch helper outside Git). §2.2 has since been run under the
+oracle (check 1, below); §2.3 and §2.4 are check 5's.
 
 ### 2.1 The output is opened once per session
 
@@ -72,6 +73,13 @@ is using DirectSound", "Galaxy initialized", then three "Galaxy SetViewport: Win
 LoadMap) and no "Safely failed to initialize Galaxy".
 
 ### 2.2 The timer callback `0x106142a0`
+
+**Settled by the oracle (2026-10-16, check 1 `galaxy-output-callback`):** the callback is translated
+(`native/galaxy-kernel/src/output.rs`) and bit-equal with the original under Unicorn over 17 cases and 405 callbacks, 352 of 352
+instructions covered ([mixer](galaxy-music/mixer.md) §9). Everything below holds; the oracle added that GetCurrentPosition failing
+skips the whole callback, that the `A == B` re-seat runs at every callback (not only the first), that the resync's Lock copies
+`size` bytes whatever the returned length, that a failed Lock skips only that head's copy (the heads still advance by R), and that
+`ahead` stays at `size` after the first callback, so only the first callback and `MUSICORDER` reach the resync.
 
 The disassembly confirms [mixer](galaxy-music/mixer.md) §1.3 and adds:
 

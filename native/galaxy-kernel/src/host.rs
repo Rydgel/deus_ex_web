@@ -17,13 +17,18 @@ fn library<R>(f: impl FnOnce(&mut Library) -> R) -> R {
 /// glxInit's state, the subsystem Init's 0x1060ebc0(EffectsChannels), then
 /// the output open as DX runs it on the reference machine (44100 Hz, 16-bit
 /// stereo, flags 7, MMX and SSE; `pc` = the x87 precision bits the pan table
-/// is built under), and the ring fill the timer callbacks start from.
+/// is built under), the ring fill galaxy_render pins (the coincident-head
+/// path), and the timer callback's buffers (output.rs).
 #[no_mangle]
 pub extern "C" fn galaxy_host_open(effects_channels: u32, pc: u32, ahead: u32) -> u32 {
     galaxy_reset(effects_channels);
     library(|l| {
         let status = l.setup_output(pc, [1, 1, 0], 44100, 2, 16, 7);
         l.player.ahead_pin = ahead;
+        // The secondary buffer and staging ring at the installed Latency 40
+        // (galaxy_output_open reopens them at another).
+        let rate = l.player.rate;
+        l.open_output(rate, 40);
         status
     })
 }

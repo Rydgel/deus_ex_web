@@ -163,6 +163,7 @@ pub(crate) struct Player {
     pub fault: u32,
     pub callbacks_done: u32, // callbacks completed without a fault (galaxy_seq_callback_count)
     pub mixer: crate::mixer::Mixer, // the six buses and mixer state (mixer.rs)
+    pub output: crate::output::Output, // the timer callback's heads, staging ring and secondary buffer (output.rs)
 }
 
 impl Player {
@@ -199,6 +200,7 @@ impl Player {
             fault: 0,
             callbacks_done: 0,
             mixer: crate::mixer::Mixer::new(),
+            output: crate::output::Output::new(),
         }
     }
 }
