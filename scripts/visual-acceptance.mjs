@@ -21,7 +21,8 @@
 //   cameras instead of the planned views; the plan itself keeps its views.
 //   A view named <name>_s0 or <name>_s1 is taken with Render.dll's Strobe flag held at 0 or 1 (docs/visual-acceptance.md
 //   "Strobe, a host input"): the original through `dx-live-win.exe strobe hold` (the flag flips every frame at a new
-//   TimeSeconds, so an unheld capture is a coin flip), Play with TimeDilation 0 and the flag written (liveProbe strobe).
+//   TimeSeconds, so an unheld capture is a coin flip), Play with TimeDilation 0 and the flag written (liveProbe strobe); `original` writes
+//   the held state beside the frame (<name>-strobe-held.txt: the hold, a poll after the shot, the level time then).
 //   `original --strobe-poll` also records the free-running flag per camera (<name>-strobe.txt), for any view.
 //   `--cmd '<console command>'` (repeatable, all three verbs' sides) runs a console command once after ghost and ShowHud False, on the original's
 //   console and through Play's viewProbe exec (e.g. `set ScriptedPawn bHidden True`: no pawn mesh lit by the map's Strobe light).
@@ -397,11 +398,39 @@ async function original() {
         `cmd set LevelInfo TimeDilation ${HELD_DILATION}`, 'sleep 500']);
       // The held level time, through the live player's Level (old levels'
       // LevelInfo objects can linger until garbage collection).
-      const dump = execFileSync(game.WINE, [path.join(root, 'ad/build/dump-actor-win.exe'), 'JCDentonMale',
-        'Player:0x5d4:u32', 'LevelTime:0xa8:pf:0x478', 'Dilation:0xa8:pf:0x474'], {encoding: 'utf8', env: process.env});
-      const live = dump.split('\n').map(line => /^JCDentonMale \S+ Player=0x([0-9a-f]+) LevelTime=(\S+) Dilation=(\S+)/.exec(line))
-        .filter(m => m && m[1] !== '0');
+      const readLive = () => execFileSync(game.WINE, [path.join(root, 'ad/build/dump-actor-win.exe'), 'JCDentonMale',
+        'Player:0x5d4:u32', 'LevelTime:0xa8:pf:0x478', 'Dilation:0xa8:pf:0x474'], {encoding: 'utf8', env: process.env})
+        .split('\n').map(line => /^JCDentonMale \S+ Player=0x([0-9a-f]+) LevelTime=(\S+) Dilation=(\S+)/.exec(line)).filter(m => m && m[1] !== '0');
+      // The game can drop a typed character (the line then fails as an unknown command or property, silently): the held dilation is read back and
+      // its line typed again, and a level that was not frozen before the load is refused (its actors have ticked: a TriggerLight is at its own
+      // brightness, no longer the map's). bPlayersOnly is LevelInfo +0x4f0 & 4 (tools/dx-live-win.c); the live LevelInfo is the one at the player's time.
+      let live = readLive();
+      for (let retry = 0; retry < 3 && live.length === 1 && Math.abs(Number(live[0][3]) - HELD_DILATION) > 1e-6; retry++) {
+        console.log(map, `dilation ${live[0][3]}: the dilation line again`);
+        post([`cmd set LevelInfo TimeDilation ${HELD_DILATION}`, 'sleep 500']);
+        live = readLive();
+      }
+      // --cmd-check '<object> <field:offset:type[:mask]> <value>' (repeatable): a field the --cmd lines set, read back from the running original
+      // (dump-actor-win.exe); the --cmd lines are typed again while one reads otherwise, e.g. 'Hooker0 bHidden:0x28:bit:0x2 1' for `set ScriptedPawn bHidden True`.
+      const cmdChecks = optionAll('cmd-check').map(text => text.split(' '));
+      const checkCmds = () => cmdChecks.filter(([object, field, value]) => {
+        const row = execFileSync(game.WINE, [path.join(root, 'ad/build/dump-actor-win.exe'), object, field], {encoding: 'utf8', env: process.env})
+          .split('\n').map(line => line.trim().split(' ')).find(parts => parts[1] === object);
+        return row?.[2] !== `${field.split(':')[0]}=${value}`;
+      });
+      for (let retry = 0, off = checkCmds(); off.length; retry++, off = checkCmds()) {
+        if (retry === 3) throw new Error(`${map}: the --cmd lines did not take (${off.map(c => c.join(' ')).join(', ')})`);
+        console.log(map, `${off.map(c => c.join(' ')).join(', ')} reads otherwise: the --cmd lines again`);
+        post(consoleCommands.flatMap(command => [`cmd ${command}`, 'sleep 300']));
+      }
       if (live.length !== 1) throw new Error(`${map}: ${live.length} live players in the original`);
+      if (Math.abs(Number(live[0][3]) - HELD_DILATION) > 1e-6) throw new Error(`${map}: the original's dilation is ${live[0][3]}, not ${HELD_DILATION}`);
+      if (freeze) {
+        const levels = execFileSync(game.WINE, [path.join(root, 'ad/build/dump-actor-win.exe'), 'LevelInfo', 'Time:0x478:f', 'PlayersOnly:0x4f0:bit:0x4'],
+          {encoding: 'utf8', env: process.env}).split('\n').map(line => /^LevelInfo \S+ Time=(\S+) PlayersOnly=(\d)/.exec(line)).filter(Boolean)
+          .sort((a, b) => Math.abs(Number(a[1]) - Number(live[0][2])) - Math.abs(Number(b[1]) - Number(live[0][2])));
+        if (levels[0]?.[2] !== '1') throw new Error(`${map}: the original's level is not frozen (LevelInfo bPlayersOnly ${levels[0]?.[2]}): the line before the load was dropped; take the capture again`);
+      }
       const times = loadTimes(); times[map] = Number(live[0][2]);
       writeFileSync(timesPath, JSON.stringify(times, null, 1));
       console.log(map, 'held at TimeSeconds', times[map], 'dilation', live[0][3]);
@@ -437,6 +466,7 @@ async function original() {
         }
         const before = game.shots();
         const strobe = strobeOf(view.name);
+        let frameTime = null;
         let earlyProbe = null;
         if (process.argv.includes('--cw-probe-early') && attempt === 0) {
           const child = spawn(game.WINE, [path.join(root, 'ad/build/dx-fpu-win.exe'), 'cw', 'attach', '11', ...cwSpecs()], {env: process.env, stdio: ['ignore', 'pipe', 'ignore']});
@@ -483,8 +513,27 @@ async function original() {
             post(['sleep 400']);
             writeFileSync(path.join(dir, `${view.name.replace(/_s0$/, '')}-strobe.txt`), tool(['poll', '120', '5']));
           }
-          console.log(map, view.name, tool(['hold', String(strobe)]).trim());
+          const hold = tool(['hold', String(strobe)]).trim();
+          console.log(map, view.name, hold);
+          // The live player's camera and its LevelInfo (its row: the class object JCDentonMale is listed too, with class Class). The walk over the
+          // object array takes seconds, a minute on a loaded host, so the clock around the shot is read through the LevelInfo's address instead.
+          const live = () => execFileSync(game.WINE, [path.join(root, 'ad/build/dump-actor-win.exe'), 'JCDentonMale', 'Player:0x5d4:u32', 'Level:0xa8:u32',
+            'Location:0x114:f3', 'ViewRotation:0x3dc:i3'], {encoding: 'utf8', env: process.env}).split('\n')
+            .map(line => /^JCDentonMale \S+ Player=0x([0-9a-f]+) Level=0x([0-9a-f]+) Location=(\S+) ViewRotation=(\S+)/.exec(line.trim())).find(m => m && m[1] !== '0');
+          const camera = live();
+          const clock = () => camera ? /level=(\S+)/.exec(tool(['poll', '1', '0', camera[2]]))?.[1] ?? null : null;
+          // The clock runs on at the held dilation while the views are taken (the poll's waits and the hold make it tenths of a second of level time over a
+          // run), and an animated light in view follows it: the frame keeps the level time read just before its shot as its own clock (<view>-time.txt).
+          const t0 = clock();
+          if (t0 !== null) frameTime = Number(t0);
           post(['shot', 'sleep 900']);
+          const t1 = clock();
+          // The held state beside the frame (<view>-strobe-held.txt): the hold (the patched byte, the flag written, Render.dll's kept time), a poll
+          // after the shot (still the held flag and kept time: no flip was drawn in between), the level time just before and just after the shot, and the
+          // camera before and after (a console line the game dropped would leave the previous view's camera).
+          const after = tool(['poll', '1']).trim(), then = live();
+          const row = (t, m) => `level time ${t ?? 'unread'} ${m ? `Location=${m[3]} ViewRotation=${m[4]}` : 'camera unread'}`;
+          writeFileSync(path.join(dir, `${view.name}-strobe-held.txt`), `${hold}\npoll after shot: ${after}\nbefore shot: ${row(t0, camera)}\nafter shot: ${row(t1, then)}\n`);
         }
         const fresh = game.shots().filter(shot => !before.includes(shot));
         taken = fresh.map(shot => {
@@ -492,8 +541,8 @@ async function original() {
           renameSync(path.join(game.SYSTEM, shot), path.join(dir, `${view.name}-original.bmp`));
           return size;
         });
-        // The frame's own clock, beside it (the level time the clock was held at, read from the running original).
-        if (taken.length) writeFileSync(timeFile(map, view.name), `${loadTimes()[map]}\n`);
+        // The frame's own clock, beside it (the level time the clock was held at, read from the running original; a held-Strobe view's, the time at its shot).
+        if (taken.length) writeFileSync(timeFile(map, view.name), `${frameTime ?? loadTimes()[map]}\n`);
         // --player-state: the player's animation as the frame had it (a mirror or a camera window shows his mesh). Under `ghost` the original's
         // JC stands in `Still` at frame 0 with rate 0 (measured, constant over seconds); Play's, which has run its CheatFlying state far longer in
         // level time than the original's held clock allowed, loops `Tread`: the pose is an input of the held state, so Play writes the original's.

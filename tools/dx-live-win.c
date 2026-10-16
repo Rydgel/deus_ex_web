@@ -8,9 +8,10 @@
  *       dword is the thread id; the seed word is at +0x14), `count` samples
  *       `interval_ms` apart: <qpc_us> tid=<tid> slot=<n> ptd=0x<addr> state=0x<word>
  *
- *   wine dx-live-win.exe strobe poll [count] [interval_ms]
+ *   wine dx-live-win.exe strobe poll [count] [interval_ms] [levelinfo]
  *       Render.dll's Strobe state (flag 0x10b49ea8, the TimeSeconds it last saw 0x10b49ea4), `count` samples `interval_ms` apart:
- *       <qpc_us> flag=<0|1> time=<float>
+ *       <qpc_us> flag=<0|1> time=<float>; with the address of a LevelInfo (hex, the live player's +0xa8) also its TimeSeconds (+0x478),
+ *       ` level=<float>`: a read of the level's clock that does not walk the object array
  *   wine dx-live-win.exe strobe hold <flag>
  *       stops the Strobe function (0x10b05b30) from flipping the flag (its `jne` at 0x10b05b4b becomes a `jmp`) and writes the flag:
  *       a held state to capture frames in; `strobe release` restores the instruction (the flag keeps its value)
@@ -1155,8 +1156,11 @@ int main(int argc, char **argv) {
     const char *verb = argc > 2 ? argv[2] : "poll";
     if (!strcmp(verb, "poll")) {
       int count = argc > 3 ? atoi(argv[3]) : 1, interval = argc > 4 ? atoi(argv[4]) : 10;
+      uintptr_t info = argc > 5 ? (uintptr_t)strtoul(argv[5], NULL, 16) : 0;
       for (int k = 0; k < count; k++) {
-        printf("%lld flag=%u time=%.9g\n", qpc_us(), read_u32(FLAG), read_float(TIME));
+        printf("%lld flag=%u time=%.9g", qpc_us(), read_u32(FLAG), read_float(TIME));
+        if (info) printf(" level=%.9g", read_float(info + 0x478));
+        printf("\n");
         if (k + 1 < count) Sleep(interval);
       }
     } else if (!strcmp(verb, "hold") || !strcmp(verb, "release")) {

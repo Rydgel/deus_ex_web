@@ -75,17 +75,29 @@ moved up by 1/256 px with its attributes read back ([edges on pixel centres](fra
 the row still `PASS` twice. What is left: on Island's far deck, a few thousand pixels changed by one level in one program only, equally in both (attributed to the colour interpolation and
 the ZBIAS constant, unverified). The pass blends on CrossOver's wined3d on the M2, not on a Windows D3D7 driver.
 
-**Current state, counted from the rows below (2026-10-16, not a gate run):** 76 criteria, 6 excluded (4.5.6 joined the excluded rows and 4.1.11 was added after the first run), 70 gating; **62 PASS, 3 FAIL, 5 MISSING**.
+**Update, the Underworld's mirrored panes at a held Strobe (2026-10-16, the Mac, [visual acceptance](visual-acceptance.md#06_hongkong_wanchai_underworlds-mirrored-panes-at-a-held-strobe-row-4230)):** row 4.2.30 is `PASS`
+(`--only '^4\.2\.30$'`: 4 checks, 182 s, the same numbers in a second run). The stored `d_s0`/`d_s1` frames had no clock of their own; the row is a new capture under CrossOver at
+Brightness 2/3, the level frozen and the dancers hidden, Render.dll's Strobe flag held for each frame (`dx-live-win.exe strobe hold`), both states at two cameras: `uw`, the aimed camera whose
+main frame draws no strobe-lit surface (the floor lit in the panes only), and `uwd`, two panes beside the direct floor. Each frame keeps the level time read just before its shot as its clock,
+because the level's clock runs on at the held dilation between shots and the club's two Disco lights (`LE_Disco`, 378 and 520 units away) follow it: held at the clock read after the load,
+a first capture read 3 to 8 outlier blocks on the walls they light; at each shot's own clock, none. Play plays each frame in a run of its own at that clock. The frames: mean abs. difference
+0.00 to 0.02, edges 1/1, no outlier block, Play / original 1.000. Each original against Play's frame of the other state reads 53 and 30 outlier blocks, so the frames discriminate the state.
+The gate also reads each frame's hold record (`<view>-strobe-held.txt`): the flag the name asks for, held through the shot (the same flag and kept time polled after it), the view's camera, and
+a level clock that moved less than 0.01 s over the shot. On the way, under other sessions' load, the original's console dropped typed characters (a capture's dilation line, another's
+`bHidden` line); `visual-acceptance.mjs original` now reads the dilation back, refuses a level not frozen before the load and takes `--cmd-check` for a `--cmd` line's field. Unexplained and
+labelled: five times the game stopped taking posted keys after none to four shots, which ended those runs with `NO SHOT`.
+
+**Current state, counted from the rows below (2026-10-16, not a gate run):** 76 criteria, 6 excluded (4.5.6 joined the excluded rows and 4.1.11 was added after the first run), 70 gating; **63 PASS, 3 FAIL, 4 MISSING**.
 Only the full gate run (`node scripts/validate-stage4-acceptance.mjs`) is the gate; the per-row statuses come from the subset runs named in the updates above.
 
 | Clause | PASS | FAIL | MISSING | EXCLUDED |
 | --- | ---: | ---: | ---: | ---: |
 | 4.1 Animated actors | 10 | 0 | 2 | 0 |
-| 4.2 Effects | 26 | 2 | 2 | 3 |
+| 4.2 Effects | 27 | 2 | 1 | 3 |
 | 4.3 Sound | 5 | 1 | 1 | 0 |
 | 4.4 Text and interfaces | 14 | 0 | 0 | 2 |
 | 4.5 Speech, lip sync and the conversation camera | 7 | 0 | 0 | 1 |
-| **Total** | **62** | **3** | **5** | **6** |
+| **Total** | **63** | **3** | **4** | **6** |
 
 The table below is the whole gate, one row per criterion (`--markdown` re-renders it from the report). The ids are stable; `4.n.m` is clause n, row m.
 A mode in brackets names how the check exercises Play (see [How the gate judges](#how-the-gate-judges)).
@@ -140,7 +152,7 @@ A mode in brackets names how the check exercises Play (see [How the gate judges]
 | 4.2.27 | vertices and visibility | Render.dll's projection, D3DDrv's vertices and OccludeBsp equal the original | O2 | `frame-projection` [oracle], `frame-projection-movers` [oracle], `frame-projection-play` [worker], `master-frame-play` [worker], `bsp-occlusion` [oracle] | PASS |
 | 4.2.28 | security cameras | ViewportWindow windows on four maps match the original's computer screens | O1 | `camera 14_OceanLab_Lab cs1` [worker], `camera 02_NYC_BatteryPark bp2` [worker], `camera 06_HongKong_WanChai_Market hk0` [worker], `camera 09_NYC_Ship sh3b` [worker] | FAIL |
 | 4.2.29 | camera with a mirror, sky, fog or corona in view | a camera frame against the original | - | missing: no capture yet. The census of the shipped cameras ([camera view census](camera-view-census.md)) found 6 of 155 cameras with a mirror in view, 25 sky, 5 fog, 4 a corona; of the thirteen 4.2.28 windows two already hold fog by Play's rule (Ship 1 faintly, Ship 2 heavily), not judged for it | MISSING |
-| 4.2.30 | 06_HongKong_WanChai_Underworld mirrored panes | the dance floor in the mirrored panes at a held Strobe against the original | - | missing: the stored d_s0 and d_s1 frames cannot be reproduced: the level time each was held at is not stored with it (times.json holds the last capture's, 54.18 s, written after the frames), and with that clock Play differs in 7 blocks | MISSING |
+| 4.2.30 | 06_HongKong_WanChai_Underworld mirrored panes | the dance floor in the mirrored panes at a held Strobe against the original: both states (lit and dark) at two cameras, the floor seen only in the panes and two panes beside the direct floor | O1 | `frames 06_HongKong_WanChai_Underworld [uw_s0]` [worker], `frames 06_HongKong_WanChai_Underworld [uw_s1]` [worker], `frames 06_HongKong_WanChai_Underworld [uwd_s0]` [worker], `frames 06_HongKong_WanChai_Underworld [uwd_s1]` [worker] | PASS |
 | 4.2.31 | animated mesh skins and DT_SpriteAnimOnce | frames no shipped class, actor or script reaches | - | excluded: unreachable: documented in particles.md and texture-animation.md | EXCLUDED |
 | 4.2.32 | UseVertexFog, Glide fog, wireframe and particle mesh branches | options the shipped D3D configuration does not use | - | excluded: unreachable in the shipped game (roadmap section 4, census-lodmesh-branches.mjs) | EXCLUDED |
 | 4.2.33 | swimming and drowning visuals | water entry, underwater movement and the drowning flash | - | excluded: Stage 5 (swimming is a gameplay system) | EXCLUDED |
@@ -273,8 +285,8 @@ needs the player to move or act while an NPC is watched.
 
 **Effects.** Each effect has the same two layers: its translation against the DLL's code (O2, and O3 on Play's inputs), and a matched frame
 where the original was captured with the effect in view. Where only the first exists the row says `MISSING` and names the frame that is
-absent: today a camera window with a mirror, sky, fog or corona in view (4.2.29) and the Underworld's mirrored panes at a held Strobe (4.2.30); the particles, decals, fog,
-lasers, the Hotel mirror, the flash and the detail pass have their frames since 2026-10-16.
+absent: today a camera window with a mirror, sky, fog or corona in view (4.2.29); the particles, decals, fog,
+lasers, the Hotel mirror, the flash, the detail pass and the Underworld's mirrored panes at a held Strobe have their frames since 2026-10-16.
 
 **Sound.** All of it is O2 and O3: Galaxy.dll's functions (PlaySound, Update, the mixer, the effects voices, the reverb, the IT sequencer) run
 unchanged under Unicorn and Play's translations match them bit for bit on large corpora; the Play-side checks show the worker and the worklet
@@ -382,6 +394,7 @@ the debugger tools (`ad/build/dx-live-win.exe`, `dump-actor-win.exe`, built with
 | *Mac*: Training's held viewport flash (2026-10-16, Brightness 2/3, camera `-100,840,30:0,0,0`, three captures under CrossOver, each with its `-time.txt` and `-state.json` (the player's `FlashScale`/`FlashFog` after the shot)): `flash0` without the flash (50.800 s), `flashA` scale -0.5 and fog (0.3,0.1,0) (51.001 s; read back scale 0.5, fog 0), `flashB` fog (0.6,0.45,0.4) (50.427 s; read back scale 1, fog (0.6,0.45,0.4)) | Mac main `.work/acceptance/00_Training/{flash0,flashA,flashB}-original.{png,bmp}`, `-time.txt`, `-state.json` | 4.2.26 |
 | *Mac*: Training's pawns' shadows (2026-10-16, Brightness 2/3, level time 54.507 s in each `-time.txt`, one capture under CrossOver in the row's order: `shadow2` then `shadow3`, then both after `set WinDrv.WindowsClient Decals False`; mib1 and ScientistMale0 ordered to stand while frozen, the meshes hidden and the level frozen before each shot), each frame with the 19 Shadow actors' state read after it (`-decals.json`). The four earlier captures that found what to hold are kept beside them, unread by the gate | Mac main `.work/acceptance/00_Training/{shadow2,shadow3}{,-base}-original.{png,bmp}`, `-time.txt`, `-decals.json`; `.work/decal15/capture{1..4}/` | 4.2.15 |
 | *Mac*: the detail pass (2026-10-16, Brightness 2/3, one capture per map under CrossOver with the render device's `DetailTextures` (`+0x78`) poked to 1 for the views and to 0 for their `-base` frames; each base view taken twice, the second (`<view>b-base`) unread by the gate): Training's walls `detailT1`, `detailT2` (50.629 s), Island's deck `detailI1`, `detailI2` (50.734 s), each with its `-time.txt` | Mac main `.work/acceptance/00_Training/{detailT1,detailT2}{,-base,b-base}-original.{png,bmp}`, `.work/acceptance/01_NYC_UNATCOIsland/{detailI1,detailI2}{,-base,b-base}-original.{png,bmp}`, `-time.txt` | 4.2.22 |
+| *Mac*: the Underworld's mirrored panes at a held Strobe (2026-10-16, Brightness 2/3, one capture under CrossOver, the level frozen and the dancers hidden, Render.dll's Strobe flag held for each frame): `uw_s0`, `uw_s1` at (-1081,-2010,-336) yaw 54769 and `uwd_s0`, `uwd_s1` at (-1120,-1900,-336) yaw 55000, each with its own clock in `-time.txt` (the level time just before its shot: 52.418, 52.456, 52.497, 52.536 s) and its hold record in `-strobe-held.txt` (the hold, a poll after the shot, the level time and camera before and after it), and the free-running polls `uw-strobe.txt`, `uwd-strobe.txt`; seven discarded captures beside them, unread by the gate | Mac main `.work/acceptance/06_HongKong_WanChai_Underworld/{uw_s0,uw_s1,uwd_s0,uwd_s1}-original.{png,bmp}`, `-time.txt`, `-strobe-held.txt`, `{uw,uwd}-strobe.txt`; `.work/uw30/capture{1..7}/` | 4.2.30 |
 | The interface frames of 00_Training (18 views, 2026-10-15) and each frame's level time | main `.work/acceptance/00_Training/ui-<view>-original.png` and `ui-<view>-time.txt` (also `ui-e1` to `ui-e4`, the pointer experiment) | 4.4.11 to 4.4.14 |
 | The Underworld's sound capture (2026-10-13/14, tag `snd1`: a pistol summoned, picked up, drawn and fired in a normal player, 400 ticks; the tracer's `gplay`, `addobj`, `unhash` and `hear` call records, the registry at the frozen start and end) | main `.work/live-acceptance/06_HongKong_WanChai_Underworld/{original-trace-snd1.jsonl{,.strobe,.calls.jsonl},registry-start-snd1.txt,registry-end-snd1.txt,watch-snd1.json,commands-snd1.json,deferred-snd1.json}` (copied 2026-10-16 from worktree `agent-a011db8f1b061eb8e`, nothing overwritten) | 4.3.6 |
 | The light manager's tables from the running original | main `.work/live/.work/fpu` | 4.2.9 |
@@ -394,7 +407,8 @@ the debugger tools (`ad/build/dx-live-win.exe`, `dump-actor-win.exe`, built with
 a frame and the clock beside it can come from different captures. Two cases showed up in the first run: the main `.work/live` tree's `fan2-original.png`
 is paired with a later clock and Play differs in three blocks, while the capture in the worktree above, with its own 52.397 s clock, matches with
 none; and the Underworld's `d_s0` and `d_s1` frames predate the clock stored for their map (54.18 s), so they cannot be reproduced at all and
-4.2.30 is `MISSING` rather than failing for the wrong reason. A capture should write `<view>-time.txt` beside its frame.
+4.2.30 was `MISSING` rather than failing for the wrong reason (closed 2026-10-16 by a new capture, the *Mac* row above). A capture should write `<view>-time.txt` beside its frame;
+a held-Strobe frame's is the level time at its own shot, since the level's clock runs on between the shots of one capture.
 
 **Consolidated 2026-10-15** into the main checkout's `.work`: the pilot traces and the 28-map sweep's (`.work/live-acceptance`, from
 `agent-ab57e…`), the lab mirror capture (`.work/live-acceptance/05_NYC_UNATCOMJ12lab`), the Ship fan's `fan2` frame with its 52.397 s clock
@@ -454,7 +468,7 @@ Nothing below was fixed in this task beyond wiring existing checks; each item is
    generator's iterator through a sim-side `particleProbe` (`decal-probe.mjs`, `sim-worker.mjs`, `deusExViewer.particleProbe`), the mirrors check places and hides the
    player through the existing `placeProbe`, and the fire-texture check reads the page's own actor mesh layer and waits for the fires' first tick (in the worker the first
    frame reaches the page after the simulation's first run). `--only '^4\.2\.(12|18|20)$'`: 19 checks, 3 PASS (514 s at 2 jobs).
-5. **Effects with a translation but no matched original frame: 2026-10-16, seven of nine done, one found red, two open** ([effect frames](visual-acceptance.md#effect-frames-2026-10-16)).
+5. **Effects with a translation but no matched original frame: 2026-10-16, eight of nine done, one found red, one open** ([effect frames](visual-acceptance.md#effect-frames-2026-10-16)).
    `PASS`: 4.2.17 (the Bar's haze: the frame and the fog's contribution against the original's), 4.2.19 (the Hotel mirror, the player posed as the original had him), 4.2.24
    (Island's doorway beams: geometry; the beam texture is an animated fire whose sparks are an unmatched host input), 4.2.15 (Training's pawns' shadows, the Mac at Brightness 2/3: the
    frames, the shadows' contribution and every Shadow's state at the shot equal, the walkers ordered to stand and the camera moved as the original's console moves it; see the scoreboard's
@@ -462,7 +476,10 @@ Nothing below was fixed in this task beyond wiring existing checks; each item is
    the multiply and the additive branch, the flash's map of levels equal at all 369 (channel, level) pairs; see the scoreboard's update and [screen flash](screen-flash.md#against-the-original-2026-10-16-gate-row-4226);
    the recipe's fog (0.3,0.1,0) never shows at a held tick, in either program, so the "steady red tint" noted before the capture was not that state's), 4.2.22 (the detail pass,
    the Mac at Brightness 2/3 with the device's `DetailTextures` poked: two Training walls and two views of Island's deck, the frames and the pass's contribution against the original's,
-   Jaccard .97 to .9998 of the changed pixels; the frame's top row, which Play's fans missed, fixed the same day ([edges on pixel centres](frame-projection.md#edges-on-pixel-centres-2026-10-16)); see the scoreboard's update and [frame projection](frame-projection.md#against-the-original-in-a-frame-2026-10-16-gate-row-4222)). `FAIL` with the cause half found: **4.2.13** (the Street's steam: the
+   Jaccard .97 to .9998 of the changed pixels; the frame's top row, which Play's fans missed, fixed the same day ([edges on pixel centres](frame-projection.md#edges-on-pixel-centres-2026-10-16)); see the scoreboard's update and [frame projection](frame-projection.md#against-the-original-in-a-frame-2026-10-16-gate-row-4222)), 4.2.30 (the Underworld's mirrored panes at a held
+Strobe, the Mac at Brightness 2/3: both states at two cameras, each frame at the level time of its own shot because the club's Disco lights follow the clock that runs on between shots, and its hold
+record read by the gate; frames equal to within 0.02 levels, the other state's frame 30 to 53 outlier blocks off; see the scoreboard's update and
+[visual acceptance](visual-acceptance.md#06_hongkong_wanchai_underworlds-mirrored-panes-at-a-held-strobe-row-4230)). `FAIL` with the cause half found: **4.2.13** (the Street's steam: the
    original's 600 ticks replay equal in every watched actor and the held frame and the steam correlate .99, but Play draws 8 more stream values at one tick, a `FlyGenerator`'s first tick
    (its scout spawn) running later than the original's; the suspect is the actors' tick gate reading `LastRenderTime`, which the replay's render history writes for pawns only; next: add the
    generators' `LastRenderTime` and `DistanceFromPlayer` to the watched fields and `--render-history`, replay, and set the steam threshold (agreement .95 against the gate's .98) once the draws agree).
@@ -476,10 +493,9 @@ Nothing below was fixed in this task beyond wiring existing checks; each item is
      ComputerSecurity0 `a51f` window 2 for fog (a still camera inside a fog sphere, nothing moving in view); Dockyard ComputerSecurity1 `dk1` for sky from two still cameras. No clean corona view exists
      (the best, Island ComputerSecurity2's SecurityCamera3, shows it during 44% of its swing at the window's top edge with pawns in view; switching it off on its own terminal to hold it still is untried).
      The commands are written for the Linux host; the Mac's bottle runs `camera-original.sh` only if it gets the same Darwin changes as `live-original.sh`.
-   * **4.2.30 the Underworld's mirrored panes at a held Strobe** (not captured): `scripts/original-views.sh 06_HongKong_WanChai_Underworld --view uw_s0:-1081,-2010,-336:0,54769,0 --view uw_s1:... --cmd 'set ScriptedPawn bHidden True'`
-     now writes each frame's `-time.txt`; a `frames` row over new names.
    Tools added for these and used above: per-frame `-time.txt` and `times` staging, `--base` / `--base-cmd` / `--base-poke` / `--contribution`, `--freeze-player` / `--player-state` / `--player-pose`,
-   `--pre-shot-cmd` / `--pre-shot-wait`, `--rng-pin` (and `dx-live-win.exe rngpin`), `compare --beams`, `compare --flash-base`, `--decal-state` and `play --camera-transit`, `live-acceptance.mjs --base-shot` / `--draw-stack-actor`, the gate's `base`, `playerPose`, `unfreeze`, `rngPin`, `beams`, `twin`, `baseShot`, `preShot` / `preShotWait`, `flashBase`, `decalState`, `cmds` and `cameraTransit` options.
+   `--pre-shot-cmd` / `--pre-shot-wait`, `--rng-pin` (and `dx-live-win.exe rngpin`), `compare --beams`, `compare --flash-base`, `--decal-state` and `play --camera-transit`, a held-Strobe view's
+   own clock and hold record (`dx-live-win.exe strobe poll ... <LevelInfo>`), `original`'s dilation read-back, frozen-level check and `--cmd-check`, `live-acceptance.mjs --base-shot` / `--draw-stack-actor`, the gate's `base`, `playerPose`, `unfreeze`, `rngPin`, `beams`, `twin`, `baseShot`, `preShot` / `preShotWait`, `flashBase`, `decalState`, `cmds`, `cameraTransit` and `strobeHeld` options.
 6. **Sound against a live scene (4.3.6) is a check and it fails; the speakers (4.3.7) are unchecked.** `live-sound-compare.mjs --gate` compares the original's `PlaySound` calls of the
    Underworld `snd1` capture with Play's replay (stored in the main `.work`, see [Stored originals](#stored-originals)): 56 of 82 ticks with calls equal, first differing tick 278 (hand-off in
    [galaxy-audio](galaxy-audio.md#hand-off-the-sound-gate-2026-10-16)). **4.3.7 has an adopted plan (2026-10-16, [audio output scope](audio-output-scope.md))**: the user accepted all six
@@ -495,9 +511,9 @@ Nothing below was fixed in this task beyond wiring existing checks; each item is
    the held first-person weapon exists, 4.1.12 until one of an armed NPC in a mirror or a camera window does (the maps' mirrors miss a standing pawn's hands).
 8. **Stores and clocks.** Consolidate the originals into the main `.work` ([Stored originals](#stored-originals)) and store each frame's level time with it, so
    the gate runs anywhere without `DX_ORIGINALS`. As of 2026-10-16 the gate is bound to one machine: the Linux host holds every store but the Mac's
-   five (4.1.9, 4.1.11, 4.2.26, 4.2.15, 4.2.22: the flash, shadow and detail frames exist only on the Mac), so a full run on the Mac reads `NO-ORIGINAL` for nearly every O1 row and one on the Linux host for 4.2.26, 4.2.15 and 4.2.22.
-   Either copy the Linux stores to the Mac (or the reverse), or run the full gate on the Linux host after copying the Mac's weapon, lab, flash, shadow and detail files there. The names collide: the Mac's `original-cases{,-2,-3}.json` would replace the Linux ones, so keep one set per machine or rename one;
-   likewise the Mac's `acceptance/times.json` holds its own captures' clocks (Training and Island from the 4.2.22 runs), which the gate does not need for frames that carry a `-time.txt`, and must not replace the Linux one.
+   six (4.1.9, 4.1.11, 4.2.26, 4.2.15, 4.2.22, 4.2.30: the flash, shadow, detail and held-Strobe frames exist only on the Mac), so a full run on the Mac reads `NO-ORIGINAL` for nearly every O1 row and one on the Linux host for 4.2.26, 4.2.15, 4.2.22 and 4.2.30.
+   Either copy the Linux stores to the Mac (or the reverse), or run the full gate on the Linux host after copying the Mac's weapon, lab, flash, shadow, detail and Underworld files there. The names collide: the Mac's `original-cases{,-2,-3}.json` would replace the Linux ones, so keep one set per machine or rename one;
+   likewise the Mac's `acceptance/times.json` holds its own captures' clocks (Training and Island from the 4.2.22 runs, the Underworld from 4.2.30's), which the gate does not need for frames that carry a `-time.txt`, and must not replace the Linux one.
 9. **Judgement for the user to adopt or change.** The scene list (weak reasons are marked), the thresholds and the three explained-block allowances in [How
    the gate judges](#how-the-gate-judges), the five-map sweep subset, and that `INLINE` counts against a criterion.
 

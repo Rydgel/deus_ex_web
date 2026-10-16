@@ -173,6 +173,13 @@ const EFFECT_VIEWS = Object.freeze({
   // poked to 1 (CrossOver's ddraw, like Linux Wine's, does not report BLENDDIFFUSEALPHA, so SetRes leaves it 0) and each view again with it 0 (<view>-base).
   detailT: {map: '00_Training', views: ['detailT1:-736,1314,560:0,16384,0', 'detailT2:-1100,1224,560:0,21384,0']},
   detailI: {map: '01_NYC_UNATCOIsland', views: ['detailI1:-4761,10431,-234:56536,20000,0', 'detailI2:-4761,10431,-256:62536,0,0']},
+  // The Underworld's dance floor in the mirrored panes (docs/visual-acceptance.md "Strobe in child frames"), captured on the Mac at Brightness 2/3 with the
+  // dancers hidden and Render.dll's Strobe flag held (<view>_s0 lit, _s1 dark, the hold beside each frame in <view>-strobe-held.txt), one capture: uw is the
+  // aimed camera whose main frame draws no strobe-lit surface (the floor only in the panes), uwd sees two panes beside the direct floor. The level's clock runs
+  // on at the held dilation between the shots and the club's two Disco lights (LE_Disco: Light2, Light21) follow it, so each frame keeps the level time of
+  // its own shot (<view>-time.txt) and is played in a run of its own.
+  uw: {map: '06_HongKong_WanChai_Underworld', views: ['uw_s0:-1081,-2010,-336:0,54769,0', 'uw_s1:-1081,-2010,-336:0,54769,0',
+    'uwd_s0:-1120,-1900,-336:0,55000,0', 'uwd_s1:-1120,-1900,-336:0,55000,0']},
 });
 const FLASH_BASE = 'flash0:-100,840,30:0,0,0';
 // `extra`: `base` names the effect of a contribution check ('fog': the stored <view>-base frames are the original without it, Play's own frame
@@ -293,8 +300,10 @@ add('4.2.28', C2, 'security cameras', 'ViewportWindow windows on four maps match
   CAMERA({map: '06_HongKong_WanChai_Market', computer: 'ComputerSecurity0', user: 'TAM', password: 'DRAGON', cameraActor: 'SecurityCamera2', name: 'hk0', windows: 3}),
   CAMERA({map: '09_NYC_Ship', computer: 'ComputerSecurity3', user: 'SECURITY', password: 'Brooklyn', cameraActor: 'SecurityCamera1', name: 'sh3b', windows: 3}));
 missing('4.2.29', C2, 'camera with a mirror, sky, fog or corona in view', 'a camera frame against the original', 'the thirteen captured windows look into rooms (visual-acceptance.md "What stays")');
-missing('4.2.30', C2, '06_HongKong_WanChai_Underworld mirrored panes', 'the dance floor in the mirrored panes at a held Strobe against the original',
-  'the stored d_s0 and d_s1 frames cannot be reproduced: the level time each was held at is not stored with it (times.json holds the last capture\'s, 54.18 s, written after the frames), and with that clock Play differs in 7 blocks');
+// Both Strobe states at both cameras, one Play run per frame (each at its own clock); `strobeHeld`: each stored frame's hold record must show the flag
+// its name asks for, held through the shot, the view's camera and a level clock held over the shot.
+add('4.2.30', C2, '06_HongKong_WanChai_Underworld mirrored panes', 'the dance floor in the mirrored panes at a held Strobe against the original: both states (lit and dark) at two cameras, the floor seen only in the panes and two panes beside the direct floor', 'O1',
+  ...EFFECT_VIEWS.uw.views.map(view => FRAMES({maps: [EFFECT_VIEWS.uw.map], explicit: [view], flat: {}, cmds: ['set ScriptedPawn bHidden True'], strobeHeld: true})));
 excluded('4.2.31', C2, 'animated mesh skins and DT_SpriteAnimOnce', 'frames no shipped class, actor or script reaches', 'unreachable: documented in particles.md and texture-animation.md');
 excluded('4.2.32', C2, 'UseVertexFog, Glide fog, wireframe and particle mesh branches', 'options the shipped D3D configuration does not use', 'unreachable in the shipped game (roadmap section 4, census-lodmesh-branches.mjs)');
 excluded('4.2.33', C2, 'swimming and drowning visuals', 'water entry, underwater movement and the drowning flash', 'Stage 5 (swimming is a gameplay system)');
@@ -552,6 +561,28 @@ function decalStateProblems(m) {
   if (d.differing.length) off.push(`${d.differing.length} shadows differ (${d.differing.slice(0, 3).join(' | ')})`);
   return off;
 }
+// A frame taken at a held Strobe (<name>_s0 / _s1): the original's hold record (visual-acceptance.mjs `original`, <view>-strobe-held.txt) shows the
+// flip patched out (byte 0xeb at 0x10b05b4b), the name's flag written, the same flag and kept time polled after the shot, the view's camera before
+// and after the shot, and a level time that moved under 0.01 s between those two reads.
+function strobeHeldProblems(map, name, spec) {
+  const want = /_s([01])$/.exec(name)?.[1], file = path.join(root, '.work/acceptance', map, `${name}-strobe-held.txt`);
+  if (want === undefined) return [`${name}: no _s0/_s1 in the name`];
+  if (!existsSync(file)) return [`no hold record (${name}-strobe-held.txt)`];
+  const lines = readFileSync(file, 'utf8').split('\n'), line = label => lines.find(l => l.startsWith(`${label}: `)) ?? '';
+  const held = /^hold: byte 0xeb flag=(\d) time=(\S+)/.exec(line('hold')), polled = /^poll after shot: \d+ flag=(\d) time=(\S+)/.exec(line('poll after shot'));
+  if (!held) return [`the hold record does not show the flip patched out: ${line('hold')}`];
+  const off = [];
+  if (held[1] !== want) off.push(`held flag ${held[1]}, the view asks for ${want}`);
+  if (!polled || polled[1] !== held[1] || polled[2] !== held[2]) off.push(`the flag or kept time moved by the shot: ${line('hold')} / ${line('poll after shot')}`);
+  if (spec) {
+    const [, at, rotation] = spec.split(':'), camera = `Location=(${at}) ViewRotation=(${rotation})`;
+    for (const label of ['before shot', 'after shot']) if (!line(label).endsWith(camera)) off.push(`camera ${label}: ${line(label)}, the view's is ${camera}`);
+  }
+  // the clock held at the shot: seconds of wall time between the two reads are thousandths of a second of level time at the held dilation 0.001
+  const [t0, t1] = ['before shot', 'after shot'].map(label => Number(/level time (\S+)/.exec(line(label))?.[1]));
+  if (!(t1 - t0 >= 0 && t1 - t0 < 0.01)) off.push(`the level time ran from ${t0} to ${t1} over the shot (not held)`);
+  return off;
+}
 const flashBasePlays = new Map();
 function contributionProblems(m) {
   const c = m.contribution, off = [];
@@ -573,7 +604,8 @@ async function judgeFrames(task, add, fail, result) {
   // The files a view needs from the store: its frame; with a contribution check (`base`) the original without the effect; with `playerPose`
   // the player's animation the original measured.
   const storedFiles = name => [`${name}-original.png`, ...(task.frames.base ? [`${name}-base-original.png`] : []), ...(task.frames.playerPose ? [`${name}-state.json`] : []),
-    ...(task.frames.twin?.includes(name) ? [`${name}b-original.png`] : []), ...(task.frames.decalState ? [`${name}-decals.json`] : [])];
+    ...(task.frames.twin?.includes(name) ? [`${name}b-original.png`] : []), ...(task.frames.decalState ? [`${name}-decals.json`] : []),
+    ...(task.frames.strobeHeld ? [`${name}-strobe-held.txt`] : [])];
   const source = storeRoots.find(dir => existsSync(path.join(dir, `acceptance/${maps[0]}/${names[0]}-original.png`)));
   const absent = [];
   if (!source) absent.push(`acceptance/${maps[0]}/${names[0]}-original.png`);
@@ -595,7 +627,7 @@ async function judgeFrames(task, add, fail, result) {
         try { unlinkSync(to); } catch { /* none yet */ }
         if (copy) copyFileSync(from, to); else symlinkSync(from, to);
       };
-      for (const file of storedFiles(name)) bring(file, file.endsWith('.json'));
+      for (const file of storedFiles(name)) bring(file, file.endsWith('.json') || file.endsWith('.txt'));
       if (hasTime(map, name)) bring(`${name}-time.txt`, true);
     }
   }
@@ -638,6 +670,7 @@ async function judgeFrames(task, add, fail, result) {
     if (task.frames.beams) off.push(...beamProblems(m));
     if (task.frames.flashBase && name !== baseName) off.push(...flashProblems(m));
     if (task.frames.decalState) off.push(...decalStateProblems(m));
+    if (task.frames.strobeHeld) off.push(...strobeHeldProblems(map, name, explicit?.find(v => v.split(':')[0] === name)));
     if (off.length) problems.push(`${map} ${name}: ${off.join('; ')}`);
     lines.push(`${name} ${m.edgeRecall}/${m.edgePrecision}/${m.outlierBlocks.length}${m.contribution ? ` ${{decal: 'decals', detail: 'detail'}[task.frames.base] ?? 'haze'} r ${m.contribution.correlation}` : ''}${m.beams ? ` beams ${m.beams.coverage}/${m.beams.energy}/${m.beams.yRms}` : ''}${m.flashMap ? ` flash ${m.flashMap.levels - m.flashMap.differing}/${m.flashMap.levels} levels equal, fog (${m.flashMap.zero})` : ''}${m.decalState ? ` shadows ${m.decalState.matched - m.decalState.differing.length}/${m.decalState.shadows} equal (${m.decalState.attached[0]} attached)` : ''}`);
   }
