@@ -584,8 +584,12 @@ add whatever the previous MMX code left there (`0x10623009..0x1062301a`).
 1. **Two-head placement and the music delay** (§1.3) is read from code and
    unmeasured. Confirm by recording.
 2. **The live sqrt table variant** (PC 24/53/64) depends on the game thread's control
+   word at Galaxy Init. *Measured 2026-10-16 (audio-output-scope.md §5.1): the running
+   original's table is the PC 53 variant (control word 0x027f at Init); the timer thread's
+   MXCSR is 0x1f80.* As first written:
    word at Galaxy Init. Also the timer thread's MXCSR (assumed `0x1f80`).
-3. **Whether the CrossOver/Windows open takes the DS path** (EMULDRIVER, primary
+3. *Measured 2026-10-16: the CrossOver open takes the DS path (`[0x10698178] = 1`, the
+   SSE kernel, mode 0x47).* **Whether the CrossOver/Windows open takes the DS path** (EMULDRIVER, primary
    `SetFormat` acceptance). Init's probe passed; the open was not observed.
 4. **Envelope pass `0x10614a42..0x1061517f` and sequencer tick `0x10615710`**: module
    voices only. Hand-off to agent C:
@@ -858,10 +862,11 @@ live-capture technique):
 
 ### 8.5 Open
 
-* The timer thread's MXCSR on the reference machine. 0x1f80 is assumed (the
-  Windows default; Galaxy has no `ldmxcsr`).
-* The bus placement (§1.3, music about 1 s behind effects) and the
-  CrossOver open path (§6.1, §6.3).
+* ~~The timer thread's MXCSR on the reference machine.~~ Measured 0x1f80
+  (audio-output-scope.md §5.1).
+* ~~The bus placement (§1.3) and the CrossOver open path (§6.1, §6.3).~~ The
+  callback is oracle-checked (§9) and D measured: 8,820 bytes (§5.1 of the
+  scope), the DS path and the SSE kernel taken.
 * The real heap's contents next to sample allocations
   (`HAZARD_FOREIGN_READ`) and the block adjacency behind
   `HAZARD_BUS_UNDERRUN`.

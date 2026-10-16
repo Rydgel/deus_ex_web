@@ -583,7 +583,7 @@ under the same lock. In the browser:
 | --- | --- |
 | library state (glxInit, voices, song) | the worklet's kernel instance (`src/viewer/galaxy-music-worklet.mjs`) |
 | timer callback 0x106142a0, every 20 ms | the translated callback (`output.rs`, [mixer](galaxy-music/mixer.md) §9) every 882 frames of the worklet's consumption (since 2026-10-16; before, `galaxy_render(882)` at coincident heads) |
-| DirectSound play and write cursors | the worklet's consumption position, and that plus `WRITE_LEAD` (a labelled placeholder until §5.1 of [audio-output-scope](audio-output-scope.md) measures it) |
+| DirectSound play and write cursors | the worklet's consumption position, and that plus `WRITE_LEAD` = 1,764 bytes (measured, §5.1 of [audio-output-scope](audio-output-scope.md); a host input) |
 | mixer calls of n = remaining frames (≤ 512) | the same, inside the renderer the callback calls |
 | the secondary buffer (1 s, looping) | the kernel's model of it, read in place at the play position |
 | Update's glx* calls under the lock | one batch per critical section, from the simulation's `library` service |
@@ -654,8 +654,8 @@ Update's read.
   first wait in the worklet until the library is open.
 - `galaxy_host_open(EffectsChannels, 64, 172872)`: EffectsChannels from
   DeusEx.ini (16, clamped to 0..32 as Init does); pan table built at x87
-  precision control 64 (the sequencer oracle's 0x037f; open question
-  above); 172872 is the fill `galaxy_render` pins on the coincident-head
+  precision control 53 (`MUSIC_PAN_PC`: the running original's table is the
+  PC 53 variant, measured 2026-10-16); 172872 is the fill `galaxy_render` pins on the coincident-head
   path, which validators still use. Then `galaxy_output_open(Latency)`
   (DeusEx.ini Latency, 10..250 as 0x10605ad0 clamps it; 40 installed): a
   fresh secondary buffer and staging ring, heads and `ahead` zero, played
@@ -697,8 +697,9 @@ worklet. No volume control exists in the viewer.
 - A batch takes effect at the next callback, up to 20 ms of output later; in
   the original, Update's changes reach the next timer callback too. The
   effects are then heard about D later, the music about one ring later.
-- D's host part, the write cursor's lead, is the placeholder `WRITE_LEAD = 0`
-  (galaxy-music-worklet.mjs) until it is measured on the reference machine.
+- D's host part, the write cursor's lead, is `WRITE_LEAD = 1764`
+  (galaxy-music-worklet.mjs), measured on the reference machine (D = 8,820
+  bytes, [audio-output-scope](audio-output-scope.md) §5.1): a labelled host input.
 - The counters (0x10698204, 0x1069834c) run free from the library's open,
   as in the original, so a song's first tick phase depends on when it
   starts.

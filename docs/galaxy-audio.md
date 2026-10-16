@@ -417,9 +417,10 @@ voices on 2026-10-16 (next section).
 **Open.**
 - ~~The original's two ring heads~~: reproduced since 2026-10-16 (the
   translated callback, oracle-checked); D's host part (the write cursor's
-  lead) is a labelled placeholder until measured
+  lead) is measured on the reference machine and pinned (1,764 bytes, D = 8,820;
+  [audio-output-scope](audio-output-scope.md) §5.1).
+- ~~The timer thread's MXCSR is assumed to be 0x1f80.~~ Measured 0x1f80
   ([audio-output-scope](audio-output-scope.md) §5.1).
-- The timer thread's MXCSR is assumed to be 0x1f80.
 - The game thread's x87 control word is open: 0x007f would change the
   reverb coefficients.
 - The MPEG and ADPCM sample paths and the 3D voices are not translated

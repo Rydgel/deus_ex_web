@@ -378,7 +378,9 @@ pub extern "C" fn galaxy_output_staging() -> *const i16 {
     with_library(|l| l.player.output.staging.as_ptr())
 }
 
-/// Ring size, head A, head B, ahead, the last R (NULL_REGION if none), callbacks, resyncs.
+/// Ring size, head A, head B, ahead, the last R (NULL_REGION if none), callbacks, resyncs, then the
+/// open's words: kernel mode 0x10697cfc, output format 0x10698179, latency 0x1064a65c, rate 0x10697d18,
+/// nAvgBytesPerSec, nBlockAlign | wBitsPerSample << 16, the open flag 0x10698394, effect slots 0x1068828d.
 #[no_mangle]
 pub extern "C" fn galaxy_output_state(index: u32) -> u32 {
     with_library(|l| {
@@ -391,6 +393,14 @@ pub extern "C" fn galaxy_output_state(index: u32) -> u32 {
             4 => o.last_render,
             5 => o.callbacks,
             6 => o.resyncs,
+            7 => l.player.kernel_mode as u32,
+            8 => l.player.output_format as u32,
+            9 => o.latency,
+            10 => l.player.rate,
+            11 => o.avg_bytes,
+            12 => o.align_word,
+            13 => l.player.output_open as u32,
+            14 => l.first_music_voice as u32,
             _ => 0,
         }
     })

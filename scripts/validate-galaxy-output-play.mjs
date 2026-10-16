@@ -7,8 +7,8 @@
  * by validate-galaxy-output-callback.mjs) with its own consumption position as
  * the play cursor and play + lead as the write cursor, so D = 7,056 + lead.
  *
- * For each lead (the worklet's WRITE_LEAD, a labelled placeholder until the
- * poll of the running original measures it, and 1764 to show the placement
+ * For each lead (the worklet's WRITE_LEAD, measured on the reference machine
+ * and checked by validate-galaxy-output-poll.mjs, and 0 to show the placement
  * follows D):
  *  1. the worklet's output equals a reference loop on a second kernel
  *     instance that runs one callback every 882 frames of play cursor
@@ -160,7 +160,7 @@ async function musicOnly(messages, applied, lead, frames) {
 
 const firstNonzero = (s, from = 0) => { for (let f = from; 2 * f < s.length; f++) if (s[2 * f] || s[2 * f + 1]) return f; return -1; };
 
-for (const lead of [worklet.WRITE_LEAD, 1764]) {
+for (const lead of [worklet.WRITE_LEAD, 0]) {
   const D = LATENCY_BYTES + lead;
   const w = await runWorklet(lead);
   const frames = w.stream.length / 2;
@@ -180,7 +180,7 @@ for (const lead of [worklet.WRITE_LEAD, 1764]) {
     if (w.stream[2 * (songAt + t)] !== music[2 * t] || w.stream[2 * (songAt + t) + 1] !== music[2 * t + 1])
       assert.fail(`lead ${lead}: song frame ${t} at absolute frame ${songAt + t}: worklet ${w.stream[2 * (songAt + t)]}/${w.stream[2 * (songAt + t) + 1]}, music-only ${music[2 * t]}/${music[2 * t + 1]}`);
   }
-  console.log(`PASS lead ${lead} (D = ${D} bytes${lead === worklet.WRITE_LEAD ? ', the PLACEHOLDER lead' : ''}): ${frames} frames, ${w.callbacks} callbacks, ` +
+  console.log(`PASS lead ${lead} (D = ${D} bytes${lead === worklet.WRITE_LEAD ? ', the measured lead' : ''}): ${frames} frames, ${w.callbacks} callbacks, ` +
     `equal to the reference loop; the staging ring at the cursor after ${ref.staged} callbacks; batch after callback ${c}: effect at frame ${effectAt}, ` +
     `song frame 0 at ${songAt} (first sound ${songAt + musicFirst}), ${songAt - effectAt} frames = size − D apart`);
 }

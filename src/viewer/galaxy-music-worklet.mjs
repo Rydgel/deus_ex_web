@@ -13,7 +13,8 @@
  * callback (output.rs) runs on the kernel's model of that buffer: the play
  * cursor is this processor's own consumption position, the write cursor is
  * play + WRITE_LEAD, so D = 7,056 (Galaxy's Latency bytes) + WRITE_LEAD, and
- * the output is the buffer read at the play position. Music is therefore
+ * the output is the buffer read at the play position (D = 8,820 as
+ * measured, WRITE_LEAD below). Music is therefore
  * heard size − D bytes after the effects the same mixer call rendered, as in
  * the original. Host timing (scope §7 item 6): the callbacks are exactly
  * 882 frames of consumption apart (20 ms at 44.1 kHz), the first one when
@@ -53,11 +54,16 @@ export const ARITY = Object.freeze({ 1: 2, 2: 2, 3: 2, 4: 2, 5: 2, 6: 2, 7: 2, 8
   15: 4, 16: 3, 17: 1 });
 export const CALLBACK_FRAMES = 882;
 /** The write cursor's lead over the play cursor at the first callback, in
- * bytes: D's host part (scope §3.1, §7 item 2). PLACEHOLDER, NOT MEASURED:
- * 0 until the poll of the running original (scope §5.1) measures CrossOver's
- * dsound lead on the reference machine; D is then 7,056 + the lead. A
- * `connect` message may override it (validators). */
-export const WRITE_LEAD = 0;
+ * bytes: D's host part (scope §3.1, §7 item 2), a labelled HOST INPUT
+ * measured on the reference machine (CrossOver's dsound in the bottle
+ * "DeusEx", 2026-10-16, scripts/galaxy-output-capture.sh): D = (B − A) mod
+ * size = 8,820 bytes in every sample of two launches, before and after a map
+ * load, so the lead is 8,820 − 7,056 = 1,764 bytes (441 frames, 10 ms).
+ * Another machine's DirectSound would give another value, as another
+ * Windows driver would have. validate-galaxy-output-poll.mjs checks it
+ * against the stored capture. A `connect` message may override it
+ * (validators). */
+export const WRITE_LEAD = 1764;
 const SLACK = 1024;
 // glxVoices at the preferred base, 0xa0 bytes each (galaxy-music-library.mjs VOICE_BASE).
 const VOICE_BASE = 0x1068dca0, VOICE_SIZE = 0xa0;
