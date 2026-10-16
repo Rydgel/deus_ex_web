@@ -908,12 +908,14 @@ left it out.
 * **Where such edges come from.** D3D7 puts pixel centres on integer coordinates. Render.dll clips the polygons it hands D3DDrv at the frame's
   border in screen space, so a fan's clipped edges lie at D3D X 0 and Y 0 (column 0's and row 0's centres) and at X = FX, Y = FY (no pixel of the
   frame): in Play's pack at the four 4.2.22 cameras, Y -3e-5 to 720.0002 and X -6e-5 to 1280.0002 (the pack equals D3DDrv's own fans under
-  Unicorn, `validate-detail-pass-rust`). The other draws on the vertex chain put no frame-border edge on centres: world surfaces and meshes are
-  clipped by the host at the viewport, not in screen space, and a decal's clamped point and a sprite tile's clipped corner land on D3D -0.5
-  (`fpVertexDecal`; `fpSpriteVertex`, `XB - 0.5 + x`). An interior edge exactly on a row of centres needs two vertices at an integer Y: not seen,
+  Unicorn, `validate-detail-pass-rust`). The other draws on the vertex chain put no frame-border edge on centres: world surfaces, their fog
+  overlays (`fog-pass.mjs`, `frameProjection.patch` over the surface's own vertices) and meshes are clipped by the host at the viewport, not in
+  screen space, and a decal's clamped point and a sprite tile's clipped corner land on D3D -0.5 (`fpVertexDecal`; `fpSpriteVertex`,
+  `XB - 0.5 + x`). An interior edge exactly on a row of centres needs two vertices at an integer Y: not seen,
   not censused.
-* **The rules.** D3D's documented rasterization rule is the top-left convention: a pixel whose centre lies on an edge is drawn when the edge is a
-  top or a left edge, not when it is a bottom or a right one. The original under CrossOver fills the on-centre top and left edges (row 0 and
+* **The rules.** D3D's documented rasterization rule is the top-left convention (the DirectX SDK's rasterization rules; not in `Reference/`,
+  not measured on Windows here): a pixel whose centre lies on an edge is drawn when the edge is a top or a left edge, not when it is a bottom or
+  a right one. The original under CrossOver fills the on-centre top and left edges (row 0 and
   column 0 of the 4.2.22 views); its fans' bottom and right edges lie on no pixel of the frame, and no Windows D3D7 driver was measured. The host
   (`scripts/probe-fill-rule.mjs`: a rectangle whose four edges lie on centres; Playwright Chromium on the Mac, `--use-angle=metal`, M2 Pro) fills a
   centre on a **left or bottom** edge and leaves one on a **top or right** edge, the same on the canvas and on a render target, for both windings
@@ -926,7 +928,8 @@ left it out.
   measured snapping threshold: a top edge on centres then lies above them and its row is filled, a bottom edge on centres lies above them
   and its row is left out, whatever the host's own rule. The fragment stage reads that fan's texture coordinates and alpha one derivative
   step back (`+ 1/256 dFdy`), where the unmoved fan has them. X is not moved (the host agrees with D3D there; a host that does not would need
-  the same in X). Every other fan is drawn as before.
+  the same in X). Every other fan is drawn as before. No other gate row draws the fans: every other row that reads a stored original runs
+  Play with `?detailTextures=0`, so 4.2.22 and the detail validators are the whole check of this change.
 * **Measured** (the four stored views, Play at their clocks; before is master 61a0df5):
 
   | View | row 0 changed, original / Play | Jaccard | same change in every channel | contribution correlation |

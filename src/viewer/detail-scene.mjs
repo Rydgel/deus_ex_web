@@ -28,17 +28,18 @@ import { DETAIL_RENDER_ORDER } from './render-layers.mjs';
  * `units` are a polygonOffset, left off. */
 export const ZBIAS = { factor: 0, units: 0, depth: 5000 * 2 ** -24 };
 const DEPTH_STEP = 2 ** -24;
-/** A fan's edge on a row of pixel centres, broken upwards (docs/frame-projection.md "Edges on pixel centres (2026-10-16)"). Render.dll clips the
- * fans' polygons at the frame's top at D3D Y 0, row 0's pixel centres: D3D's top-left convention fills a centre on a top edge and
- * leaves one on a bottom edge, and the original under CrossOver fills row 0. The host fills a centre on a bottom edge and leaves
- * one on a top edge (measured on ANGLE over Metal, scripts/probe-fill-rule.mjs; its vertical edges agree with D3D's, left in,
- * right out). A fan with two vertices on one of the frame's rows of centres (within FILL_TIE_ROW of an integer Y: an edge or a
- * chord on it; the clip at the frame's bottom, Y 720 in a 720-row frame, lies on no row it has) is moved up by FILL_TIE_Y, so an
- * edge on centres lies strictly above them: the centres a top edge passes through are inside and those a bottom edge passes
- * through outside, whatever the host's own rule. 1/256 is twice the smallest shift the host's vertex snapping keeps (1/512;
- * 1/1024 is lost). The fragment stage reads such a fan's texture coordinates and alpha back where the unmoved fan has them (one
- * derivative step). Every other fan is drawn as before, so the shift's cost (a horizontal edge within 1/256 px below a row of
- * centres takes that row, and the derivative step's second-order error) falls only on the fans that need it. */
+/** A fan's edge on a row of pixel centres, broken upwards (docs/frame-projection.md "Edges on pixel centres (2026-10-16)").
+ * Render.dll clips the fans' polygons at the frame's top at D3D Y 0, row 0's pixel centres: D3D's top-left convention (the
+ * DirectX SDK's rasterization rules, not measured on Windows) fills a centre on a top edge and leaves one on a bottom edge, and
+ * the original under CrossOver fills row 0. The host fills a centre on a bottom edge and leaves one on a top edge (measured on
+ * ANGLE over Metal, scripts/probe-fill-rule.mjs; its vertical edges agree with D3D's, left in, right out). A fan with two
+ * vertices on one of the frame's rows of centres (within FILL_TIE_ROW of an integer Y: an edge or a chord on it; the clip at the
+ * frame's bottom, Y 720 in a 720-row frame, lies on no row it has) is moved up by FILL_TIE_Y, so an edge on centres lies
+ * strictly above them: the centres a top edge passes through are inside and those a bottom edge passes through outside,
+ * whatever the host's own rule. 1/256 is twice the smallest shift the host's vertex snapping keeps (1/512; 1/1024 is lost). The
+ * fragment stage reads such a fan's texture coordinates and alpha back where the unmoved fan has them (one derivative step).
+ * Every other fan is drawn as before, so the shift's cost (a horizontal edge within 1/256 px below a row of centres takes that
+ * row, and the derivative step's second-order error) falls only on the fans that need it. */
 export const FILL_TIE_Y = 1 / 256, FILL_TIE_ROW = 2 ** -10;
 /** ?detailMips=generate builds a mip chain for the detail textures stored with one level (893 of the 896 in the shipped
  * packages), as the base textures get; the default draws them as the one level they are (docs/frame-projection.md). */
