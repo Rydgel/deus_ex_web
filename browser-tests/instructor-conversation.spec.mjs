@@ -8,7 +8,10 @@ test('ordinary use renders and plays the instructor, terminates, and survives Pl
  await page.route('**/src/viewer/main.mjs*',async route=>{
   const response=await route.fetch();
   await route.fulfill({response,body:(await response.text()).replace('window.deusExViewer = { status };',`window.deusExViewer = { status };\nwindow.__instructorFixture={
-   game:()=>game, audio:()=>[...conversationAudio.values()].map(e=>Boolean(e.source)),
+   // Speech plays on Galaxy's channels (docs/galaxy-audio.md "Speech through Galaxy's voices"):
+   // each SLOT_Talk channel's host-decoded sample, true once the page's decode is attached.
+   game:()=>game, audio:()=>{const a=game.doors.scriptRuntime.runtime.audio;
+    return a.galaxy.state.channels.filter(c=>(c.id&0xe)===10&&a.samples.get(c.sound)?.host).map(c=>Boolean(a.samples.get(c.sound).host.pcm));},
    aim(){yaw=0;pitch=-.3;camera.rotation.set(pitch,yaw,0);},
    park(){paused=true;},resume(){paused=false;},
    subtitlesDefault:()=>subtitlePreference,

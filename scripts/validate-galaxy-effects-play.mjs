@@ -19,13 +19,29 @@
  *    library's Active byte for every effect voice;
  *  - the output carries the effects (bus B) and the music;
  *  - a Player start stops every channel's voice, and dispose() stops them
- *    with the map (and unregisters the music).
+ *    with the map (and unregisters the music);
+ *  - speech (docs/galaxy-audio.md "Speech through Galaxy's voices"), when
+ *    ffmpeg is installed: on a map with PaulDenton0, one of his prepared
+ *    speech lines (the shortest) reaches the player's original
+ *    execClientHearSound (SLOT_Talk, ConPlay.PlaySpeech's Radius 65536: at
+    the map's start Paul is farther than a bark's 1024, where PlaySound's
+    priority would be negative and take no channel) and so Galaxy's PlaySound.
+ *    Update registers the host-decoded record (loadHostSample, the registry's
+ *    handle), starts the voice, which the worklet holds (Active, nothing
+ *    mixed) until this harness, in the page's role, answers the decode
+ *    request with ffmpeg's 16-bit decode (attachSample). Then the voice table
+ *    holds the record with the channel's frequency, volume and pan, the
+ *    reported read head advances to the PCM's length, the voice ends on its
+ *    own, the channel frees, and the PCM is released (releaseSample).
  *
  *   node scripts/validate-galaxy-effects-play.mjs [--map 01_NYC_UNATCOIsland] [--frames 600]
  */
 import assert from 'node:assert/strict';
-import {spawnSync} from 'node:child_process';
+import {execFileSync, spawnSync} from 'node:child_process';
+import {mkdtempSync, readFileSync, rmSync, writeFileSync} from 'node:fs';
 import {readdir, readFile} from 'node:fs/promises';
+import {tmpdir} from 'node:os';
+import path from 'node:path';
 import {fileURLToPath} from 'node:url';
 
 const argv = process.argv.slice(2);
@@ -82,7 +98,10 @@ while (!processor.open) await turn();
 const renderTimes = [], render = processor.kernel.render;
 processor.kernel.render = frames => { const t = process.hrtime.bigint(); const r = render(frames); renderTimes.push(Number(process.hrtime.bigint() - t) / 1000); return r; };
 
-const game = await createGame(decodeMap(asset.bytes), asset, assets, {randomSeed: 1, presentation: true, musicLibrary: library});
+// The page's part for speech: decode requests (script-audio-live.mjs).
+const decodes = [];
+const game = await createGame(decodeMap(asset.bytes), asset, assets, {randomSeed: 1, presentation: true, musicLibrary: library,
+  onAudioVoice: event => { if (event.op === 'decode') decodes.push(event); }});
 const runtime = game.doors.scriptRuntime.runtime, audio = runtime.audio;
 assert.equal(audio.library, library, 'createLiveAudio got the host library');
 assert.equal(audio.galaxyVoices, true, "effects through Galaxy's voices");
@@ -106,15 +125,14 @@ const voiceTable = () => new Uint8Array(processor.kernel.memory(), processor.ker
 const settle = async () => { for (let i = 0; i < 20 && library.status().acknowledged !== library.status().issued; i++) await turn(); };
 
 const galaxy = audio.galaxy;
-let checks = 0, starts = 0, maxActive = 0;
+let checks = 0, starts = 0, maxActive = 0, heldChecks = 0;
 const startsSeen = new Set();
-for (let f = 0; f < FRAMES; f++) {
-  await frame();
-  await settle();
+/** One frame's checks; false when a batch is not acknowledged yet. */
+function check(f) {
   const status = library.status();
   assert.equal(processor.stats.error, null, processor.stats.error);
   assert.equal(processor.stats.fault, 0, `worklet fault 0x${processor.stats.fault.toString(16)}`);
-  if (status.acknowledged !== status.issued) continue;
+  if (status.acknowledged !== status.issued) return false;
   // The library's Active bits, against the proxy's answers and the channels.
   const active = processor.kernel.active();
   maxActive = Math.max(maxActive, active.toString(2).replaceAll('0', '').length);
@@ -128,6 +146,8 @@ for (let f = 0; f < FRAMES; f++) {
     const at = index * VOICE_SIZE;
     const sample = audio.voices.get(c.voice)?.sample;
     if (!sample) return;
+    // A speech start the worklet holds until its decode arrives: Active, not in the table yet.
+    if (processor.kernel.heldSlots().includes(index)) { assert.ok(sample.host, 'only a host-decoded record is held'); heldChecks++; return; }
     startsSeen.add(`${index}:${sample.handle}`);
     assert.equal(view.getUint32(at + 0x42, true), sample.handle, `channel ${index}: SmpHdr is the registered sample`);
     const host = audio.voices.get(c.voice);
@@ -136,7 +156,73 @@ for (let f = 0; f < FRAMES; f++) {
     assert.equal(view.getUint16(at + 0x14, true), host.pan & 0xffff, `channel ${index}: pan`);
     checks++;
   });
+  return true;
 }
+for (let f = 0; f < FRAMES; f++) {
+  await frame();
+  await settle();
+  check(f);
+}
+
+// Speech through Galaxy's voices (see the file comment).
+let speech = null;
+const scripts = game.doors.scriptRuntime, paul = runtime.levelFor(game.player.collisionActor).actors.find(a => a?.name === 'PaulDenton0');
+let ffmpeg = true;
+try { execFileSync('ffmpeg', ['-version'], {stdio: 'ignore'}); } catch { ffmpeg = false; }
+if (paul && ffmpeg) {
+  const lines = [...scripts.liveConPlay.sounds.values()].filter(entry => entry.format === 'mp3').sort((a, b) => a.bytes.length - b.bytes.length);
+  assert.ok(lines.length, "Paul's conversations prepared speech");
+  const line = lines[0], player = game.player.collisionActor, dir = mkdtempSync(path.join(tmpdir(), 'effects-play-speech-'));
+  const id = (runtime.soundObjectIndex(paul).index << 4) | 0xa;
+  // APawn::execClientHearSound: Volume X*0.01, Radius Y, Pitch Z*0.01; then Galaxy's PlaySound.
+  runtime.processNativeEvent(player, 'ClientHearSound', [paul, id, line.sound, runtime.readNamed(paul, 'Location').slice(), [100, 65536, 100]]);
+  const channelIndex = galaxy.state.channels.findIndex(c => c.id === id);
+  assert.ok(channelIndex >= 0, 'the speech holds a Galaxy channel');
+  speech = {sound: line.sound.key, bytes: line.bytes.length, channel: channelIndex, held: 0, played: 0, positions: [], frames: null, freedAt: null};
+  try {
+    for (let f = 0; f < 900 && speech.freedAt === null; f++) {
+      await frame();
+      // Before the page's answer: the worklet holds the start (Active, nothing mixed).
+      if (decodes.length) {
+        await settle();
+        if (processor.kernel.heldSlots().includes(channelIndex)) {
+          speech.held++;
+          assert.equal(library.voiceActive(galaxy.state.channels[channelIndex].voice), 1, 'a held voice is Active to the poll');
+        }
+      }
+      for (const request of decodes.splice(0)) {
+        assert.equal(request.sound, speech.sound, 'the decode request is the line\'s');
+        writeFileSync(path.join(dir, 'in.mp3'), request.bytes);
+        execFileSync('ffmpeg', ['-loglevel', 'error', '-y', '-i', path.join(dir, 'in.mp3'), '-f', 's16le', '-ac', '1', '-ar', String(request.rate),
+          path.join(dir, 'out.raw')]);
+        const pcm = new Uint8Array(readFileSync(path.join(dir, 'out.raw')));
+        speech.frames = pcm.length / 2;
+        assert.ok(game.attachSpeech(request.sound, pcm), 'the PCM is attached while the voice waits');
+      }
+      await settle();
+      if (!check(f)) continue;
+      const c = galaxy.state.channels[channelIndex];
+      if (c.id !== id) { speech.freedAt = f; break; }
+      if (!c.voice) continue;
+      if (processor.kernel.heldSlots().includes(channelIndex)) { speech.held++; continue; }
+      const position = library.voicePosition(c.voice);
+      if (position === null) continue;
+      speech.played++;
+      assert.ok(position >= (speech.positions.at(-1) ?? 0) && position <= speech.frames, `read head ${position} within the PCM`);
+      speech.positions.push(position);
+    }
+  } finally { rmSync(dir, {recursive: true, force: true}); }
+  const sample = audio.hostSamples.get(speech.sound), results = processor.kernel.results;
+  assert.ok(speech.held > 0, 'the worklet held the start until the decode arrived');
+  assert.ok(speech.played > 10, `the voice played through the mixer (${speech.played} frames)`);
+  assert.ok(speech.positions.at(-1) > speech.frames * 0.8, `the read head reached the end (${speech.positions.at(-1)} of ${speech.frames})`);
+  assert.notEqual(speech.freedAt, null, 'the voice ended on its own and Update freed the channel');
+  assert.equal(sample.rate, 44100, 'the record\'s rate is the MPEG header\'s');
+  assert.deepEqual([results.hostSamples, results.attaches, results.heldStarts, results.releases], [1, 1, 1, 1],
+    'one record, one attach, the held start run, one release');
+  assert.equal(sample.host.pcm, null, 'the simulation dropped the PCM with the voice');
+  speech.positions = speech.positions.length;
+} else console.log(`${map}: speech phase skipped (${paul ? 'ffmpeg is not installed' : 'no PaulDenton0'})`);
 const results = processor.kernel.results;
 const status = library.status();
 assert.equal(results.sampleMismatches, 0, 'sample handles agree');
@@ -175,7 +261,7 @@ const report = {frames: FRAMES, quanta, callbacks: processor.stats.callbacks, ba
   samples: status.samples, sampleBytes: status.sampleBytes, voiceOps: results.voiceOps, voiceStarts: starts, maxActive,
   reverb: {zone: listenerZone?.name ?? null, bReverbZone: zoneReverb, calls: results.reverbCalls, installed: Boolean(reverbState & 1)},
   renderUs: {median: Math.round(at(0.5)), p99: Math.round(at(0.99)), max: Math.round(sortedTimes.at(-1))},
-  channelChecks: checks, activeBeforeReset: before.toString(2), activeAfterReset: afterReset.toString(2), peak: Number(peak.toFixed(4)), underruns: processor.stats.underruns,
+  channelChecks: checks, heldChecks, speech, activeBeforeReset: before.toString(2), activeAfterReset: afterReset.toString(2), peak: Number(peak.toFixed(4)), underruns: processor.stats.underruns,
   notes: notes.slice(0, 8)};
 console.log(JSON.stringify(report));
 process.exit(0);

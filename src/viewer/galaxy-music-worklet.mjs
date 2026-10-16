@@ -25,9 +25,11 @@
  *   encodeMusicBatch), applied whole on arrival, which is always between two
  *   callbacks (Update's critical section against the timer callback). After
  *   a batch, and after a callback that changed them, `report {batch, state,
- *   active}` goes back (galaxy_music_state: order | playing << 8 | song
- *   length << 16 | loaded << 24; active: bit i = effect voice i's Active
- *   byte, the subsystem's "voice finished" poll).
+ *   active, positions}` goes back (galaxy_music_state: order | playing << 8 |
+ *   song length << 16 | loaded << 24; active: bit i = effect voice i's Active
+ *   byte, the subsystem's "voice finished" poll; positions: [slot, read
+ *   head] of each voice playing host-decoded speech, the lip-sync window's
+ *   mixer position).
  *
  * Self-contained (no imports) so that Vite serves and copies it as is; Node
  * imports it for the validator (registerProcessor is then absent). */
@@ -38,33 +40,56 @@ export const OPS = Object.freeze({
   setSampleVolume: 1, setMusicVolume: 2, loadMusic: 3, unloadMusic: 4, stopMusic: 5,
   startMusic: 6, controlMusic: 7, clearVoiceActive: 8, setBreakFlag: 9,
   loadSample: 10, startSample: 11, controlSample: 12, stopSample: 13, setSampleReverb: 14,
+  loadHostSample: 15, attachSample: 16, releaseSample: 17,
 });
-export const ARITY = Object.freeze({ 1: 2, 2: 2, 3: 2, 4: 2, 5: 2, 6: 2, 7: 2, 8: 2, 9: 2, 10: 3, 11: 6, 12: 4, 13: 1, 14: 27 });
+export const ARITY = Object.freeze({ 1: 2, 2: 2, 3: 2, 4: 2, 5: 2, 6: 2, 7: 2, 8: 2, 9: 2, 10: 3, 11: 6, 12: 4, 13: 1, 14: 27,
+  15: 3, 16: 3, 17: 1 });
 export const CALLBACK_FRAMES = 882;
 const SLACK = 1024, RING = 2048;
+// glxVoices at the preferred base, 0xa0 bytes each (galaxy-music-library.mjs VOICE_BASE).
+const VOICE_BASE = 0x1068dca0, VOICE_SIZE = 0xa0;
+const slotOf = voice => { const off = (voice >>> 0) - VOICE_BASE; return off >= 0 && off % VOICE_SIZE === 0 && off / VOICE_SIZE < 32 ? off / VOICE_SIZE : -1; };
 
 /** Each op of a batch message as (code, a, b, blob, args): `args` its
- * Int32 arguments (a, b the first two), `blob` the loadMusic/loadSample op's
- * bytes (a module with the slack, or a sample), else null. */
+ * Int32 arguments (a, b the first two), `blob` the loadMusic/loadSample/
+ * attachSample op's bytes (a module with the slack, a sample, or a host
+ * decode's 16-bit PCM), else null. */
 export function forEachMusicOp(message, visit) {
   const ops = message.ops;
   for (let i = 0; i < ops.length;) {
     const code = ops[i], arity = ARITY[code];
     if (arity === undefined || i + 1 + arity > ops.length) throw new Error(`Bad Galaxy library op ${code} at word ${i}`);
     const args = ops.subarray(i + 1, i + 1 + arity), a = args[0] ?? 0, b = args[1] ?? 0;
-    const blob = code === OPS.loadMusic || code === OPS.loadSample ? new Uint8Array(message.modules[a], 0, b) : null;
+    const blob = code === OPS.loadMusic || code === OPS.loadSample || code === OPS.attachSample
+      ? new Uint8Array(message.modules[a], 0, b) : null;
     visit(code, a, b, blob, args);
     i += 1 + arity;
   }
 }
 
-/** The library behind the kernel's host exports (host.rs); one op = one call. */
+/** The library behind the kernel's host exports (host.rs); one op = one call.
+ *
+ * Host-decoded speech (docs/galaxy-audio.md "Speech through Galaxy's
+ * voices"): loadHostSample makes the record (effects.rs `host_sample`, the
+ * registry's same allocation), attachSample gives it the page's decoded PCM
+ * and releaseSample drops it. A start of a record whose PCM has not arrived
+ * is held: the voice is stopped as glxStartSample stops it first, the start's
+ * arguments are kept (a controlSample updates them, a stopSample or a later
+ * start drops the hold), the slot counts as Active, and the start runs when
+ * the PCM arrives. In the original the voice starts on a zeroed ring that the
+ * decoder thread 0x1060e340 fills; here the PCM starts whole once decoded
+ * (host timing). */
 export function createMusicKernel(exports) {
   const x = exports;
   const results = { load: null, control: null, stop: null, start: null, unload: null, sampleLoads: 0, sampleMismatches: 0,
-    lastSample: null, voiceOps: 0, reverb: null, reverbCalls: 0 };
+    lastSample: null, voiceOps: 0, reverb: null, reverbCalls: 0, hostSamples: 0, attaches: 0, releases: 0, holds: 0, heldStarts: 0 };
+  // Host records by handle ({attached}); held starts by voice slot.
+  const hosts = new Map(), held = new Map();
+  const start = (voice, sample, frequency, volume, pan, flags) =>
+    x.galaxy_sample_start(voice, sample >>> 0, frequency, volume, pan, flags >>> 0);
   return {
-    open(effectsChannels, pc, ahead) { return x.galaxy_host_open(effectsChannels, pc, ahead); },
+    // A fresh library (a new simulation side): its sample heap starts again, so no host record or hold carries over.
+    open(effectsChannels, pc, ahead) { hosts.clear(); held.clear(); return x.galaxy_host_open(effectsChannels, pc, ahead); },
     apply(code, a, b, module, args = null) {
       switch (code) {
         case OPS.setSampleVolume: return x.galaxy_set_sample_volume(a, b);
@@ -95,9 +120,56 @@ export function createMusicKernel(exports) {
           }
           return handle;
         }
-        case OPS.startSample: results.voiceOps++; return x.galaxy_sample_start(args[0], args[1] >>> 0, args[2], args[3], args[4], args[5] >>> 0);
-        case OPS.controlSample: results.voiceOps++; return x.galaxy_sample_control(args[0] >>> 0, args[1], args[2], args[3]);
-        case OPS.stopSample: results.voiceOps++; return x.galaxy_sample_stop(args[0] >>> 0);
+        case OPS.startSample: {
+          results.voiceOps++;
+          const [voice, sample, frequency, volume, pan, flags] = args, handle = 0x1068dc00 + VOICE_SIZE * voice, slot = slotOf(handle);
+          held.delete(slot);
+          const host = hosts.get(sample >>> 0);
+          if (host && !host.attached && slot >= 0) {
+            x.galaxy_sample_stop(handle >>> 0);
+            held.set(slot, { voice, sample: sample >>> 0, frequency, volume, pan, flags });
+            results.holds++;
+            return handle >>> 0;
+          }
+          return start(voice, sample, frequency, volume, pan, flags);
+        }
+        case OPS.controlSample: {
+          results.voiceOps++;
+          const hold = held.get(slotOf(args[0]));
+          if (hold) { hold.frequency = args[1]; hold.volume = args[2]; hold.pan = args[3]; return 0; }
+          return x.galaxy_sample_control(args[0] >>> 0, args[1], args[2], args[3]);
+        }
+        case OPS.stopSample: results.voiceOps++; held.delete(slotOf(args[0])); return x.galaxy_sample_stop(args[0] >>> 0);
+        case OPS.loadHostSample: {
+          const handle = x.galaxy_sample_host(args[0] >>> 0, args[1] >>> 0) >>> 0;
+          results.hostSamples++;
+          if (handle !== args[2] >>> 0) {
+            results.sampleMismatches++;
+            throw new Error(`Galaxy host sample handle 0x${handle.toString(16)} differs from the registry's 0x${(args[2] >>> 0).toString(16)}`);
+          }
+          hosts.set(handle, { attached: false });
+          return handle;
+        }
+        case OPS.attachSample: {
+          const handle = args[2] >>> 0, host = hosts.get(handle);
+          if (!host) throw new Error(`Galaxy attachSample to an unknown host sample 0x${handle.toString(16)}`);
+          const ptr = x.galaxy_input(module.length);
+          new Uint8Array(x.memory.buffer, ptr, module.length).set(module);
+          if (!x.galaxy_sample_attach(handle, module.length)) return 0;
+          host.attached = true; results.attaches++;
+          for (const [slot, hold] of held) if (hold.sample === handle) {
+            held.delete(slot); results.heldStarts++;
+            start(hold.voice, hold.sample, hold.frequency, hold.volume, hold.pan, hold.flags);
+          }
+          return handle;
+        }
+        case OPS.releaseSample: {
+          const handle = args[0] >>> 0, host = hosts.get(handle);
+          if (!host) throw new Error(`Galaxy releaseSample of an unknown host sample 0x${handle.toString(16)}`);
+          for (const [slot, hold] of held) if (hold.sample === handle) held.delete(slot);
+          host.attached = false; results.releases++;
+          return x.galaxy_sample_release(handle);
+        }
         case OPS.setSampleReverb: {
           // glxSetSampleReverb(&Reverb): Update's 0x6c-byte block as 27 words.
           new Uint8Array(x.memory.buffer, x.galaxy_reverb_block(), 0x6c).set(new Uint8Array(args.buffer, args.byteOffset, 0x6c));
@@ -108,7 +180,23 @@ export function createMusicKernel(exports) {
       }
     },
     state: () => x.galaxy_music_state() >>> 0,
-    active: () => x.galaxy_effects_active() >>> 0,
+    /** The effect voices' Active bits, a held start counting as Active. */
+    active: () => { let bits = x.galaxy_effects_active() >>> 0; for (const slot of held.keys()) bits |= 1 << slot; return bits >>> 0; },
+    /** [slot, read head] for each Active voice playing a host record: voice
+     * +0x46 (the position, in samples for 16-bit data) minus +0x4e (the
+     * data start), the samples the mixer has passed. */
+    positions: () => {
+      if (!hosts.size) return [];
+      const out = [], view = new DataView(x.memory.buffer, x.galaxy_voices_ptr(), 32 * VOICE_SIZE);
+      for (let slot = 0; slot < 32; slot++) {
+        const at = slot * VOICE_SIZE;
+        if (!view.getUint8(at + 0x0f) || !hosts.has(view.getUint32(at + 0x42, true))) continue;
+        out.push([slot, (view.getUint32(at + 0x46, true) - view.getUint32(at + 0x4e, true)) >>> 0]);
+      }
+      return out;
+    },
+    /** The voice slots whose start waits for its host record's PCM. */
+    heldSlots: () => [...held.keys()],
     voicesPtr: () => x.galaxy_voices_ptr(),
     reverbState: () => x.galaxy_reverb_state() >>> 0,
     render: frames => x.galaxy_render(frames),
@@ -127,7 +215,7 @@ export class GalaxyMusicProcessor extends Base {
     // The ring of rendered frames (float, per channel) and the callback's PCM view.
     this.left = new Float32Array(RING); this.right = new Float32Array(RING);
     this.read = 0; this.fill = 0; this.pcm = null; this.pcmPtr = 0; this.pcmMemory = null;
-    this.reported = { batch: -1, state: -1, active: -1 };
+    this.reported = { batch: -1, state: -1, active: -1, positions: '' };
     this.stats = { rate: globalThis.sampleRate ?? null, connects: 0, batches: 0, ops: 0, lastBatch: 0, loads: 0,
       callbacks: 0, quanta: 0, underruns: 0, reports: 0, fault: 0, error: null };
     this.port.onmessage = ({ data }) => this.page(data);
@@ -145,7 +233,7 @@ export class GalaxyMusicProcessor extends Base {
         this.sim = data.port; this.queue = []; this.open = false;
         this.config = { effectsChannels: data.effectsChannels, pc: data.pc, ahead: data.ahead };
         this.stats.connects++; this.stats.lastBatch = 0; this.stats.fault = 0;
-        this.reported = { batch: -1, state: -1, active: -1 };
+        this.reported = { batch: -1, state: -1, active: -1, positions: '' };
         this.sim.onmessage = ({ data: message }) => this.batch(message);
         this.start();
       } else if (data.type === 'status') {
@@ -184,15 +272,17 @@ export class GalaxyMusicProcessor extends Base {
     this.stats.batches++; this.stats.lastBatch = message.id;
   }
 
-  /** The applied batch, the library state and the effect voices' Active
-   * bits, to the simulation, when changed. */
+  /** The applied batch, the library state, the effect voices' Active bits
+   * and the host voices' read heads, to the simulation, when changed. */
   report() {
     if (!this.sim || !this.open) return;
-    const state = this.kernel.state(), active = this.kernel.active();
-    if (state === this.reported.state && active === this.reported.active && this.stats.lastBatch === this.reported.batch) return;
-    this.reported.state = state; this.reported.active = active; this.reported.batch = this.stats.lastBatch;
+    const state = this.kernel.state(), active = this.kernel.active(), positions = this.kernel.positions();
+    const key = positions.length ? positions.join(';') : '';
+    if (state === this.reported.state && active === this.reported.active && this.stats.lastBatch === this.reported.batch
+      && key === this.reported.positions) return;
+    this.reported.state = state; this.reported.active = active; this.reported.batch = this.stats.lastBatch; this.reported.positions = key;
     this.stats.reports++;
-    this.sim.postMessage({ type: 'report', batch: this.stats.lastBatch, state, active });
+    this.sim.postMessage({ type: 'report', batch: this.stats.lastBatch, state, active, positions });
   }
 
   /** One timer callback: 882 frames of bus A, int16 / 32768, into the ring. */

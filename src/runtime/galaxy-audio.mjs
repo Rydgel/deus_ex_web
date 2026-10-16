@@ -12,8 +12,11 @@ import { x87load, x87double, x87int32, x87mul, x87add, x87neg, x87div, x87cmp, x
  * `controlVoice(voice, frequency, volume, pan)` (0x1060d280) and
  * `stopVoice(voice)` (0x10618410). The music section is galaxy-music.mjs's,
  * reached through `services.music` inside `services.library`'s lock; the 3D
- * hardware path (Use3dHardware is False in the installed DeusEx.ini) and the
- * lip-sync sampling of a speaking pawn are outside this module.
+ * hardware path (Use3dHardware is False in the installed DeusEx.ini) is
+ * outside this module. Step 12, the lip-sync sampling of a speaking pawn's
+ * Talk channel, keeps its gate and cadence here and calls the optional
+ * `lipSync(channel, index)` for the analysis of the voice's data
+ * (galaxy-lipsync-channels.mjs); without it the step is skipped.
  *
  * World services: `listener()` the viewport Actor and its ViewTarget,
  * `read(object, name)`, `isA(object, key)`, `index(actor)` the UObject index
@@ -130,7 +133,7 @@ export function createGalaxyAudio(config, services) {
   };
   const ambientVolume = actor => x87mul(x87mul(x87int32(read(actor, 'SoundVolume') & 0xff), X(config.ambientFactor)), INV_255);
 
-  /** 0x10609510 without the 3D/lip-sync branches.
+  /** 0x10609510 without the 3D branches (and step 12 only with `services.lipSync`).
    * `deltaTime` is the elapsed time since the last Update (the original reads
    * appSecondsSlow against `+0x880`); it is clamped to [0, 1] here as at
    * 0x106095aa. `coords` is the listener FCoords: origin, x, y, z axes. */
@@ -263,6 +266,17 @@ export function createGalaxyAudio(config, services) {
         doppler = f32(shift);
       }
       const sample = services.sample(channel.sound);
+      // Step 12, the lip-sync sampling (0x1060a05b..0x1060a268,
+      // docs/lip-sync.md): a voice, an Actor and a SLOT_Talk id
+      // (0x10609c86..0x10609ca3), the Actor IsA Pawn, time (+0x30) not below
+      // the next analysis time (+0x34; fcomp, C0 skips, so unordered skips)
+      // and bIsSpeaking. `services.lipSync(channel)` analyses the voice's
+      // data; false when the host has no data for it yet (the voice is held
+      // until its decode arrives), and then `next` stays. next = float(next
+      // + 0.1), the double at 0x1063d768 (0x1060a259).
+      if (services.lipSync && channel.voice && channel.actor && speech && services.isA(channel.actor, 'engine.pawn')
+        && !lt(x87cmp(X(channel.time), X(channel.lipSync))) && read(channel.actor, 'bIsSpeaking')
+        && services.lipSync(channel, index)) channel.lipSync = f32(x87add(X(channel.lipSync), TENTH));
       const frequency = x87ftol(x87mul(x87mul(x87int32(sample.rate), X(channel.pitch)), X(doppler)));
       if (channel.voice) services.controlVoice(channel.voice, frequency, volume, pan);
       else {

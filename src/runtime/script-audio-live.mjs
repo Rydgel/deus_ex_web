@@ -12,6 +12,7 @@ import {lightTypeBrightness} from './static-lighting.mjs';
 import {lightGlobals} from './light-globals.mjs';
 import {msvcrtWtoi} from './script-text-parser.mjs';
 import {RENDER_AMBIENT, RENDER_SHIFT} from './script-vm-render.mjs';
+import {mp3Frames, mp3SampleRate} from './galaxy-lipsync-channels.mjs';
 
 /** Galaxy's channel logic (galaxy-audio.mjs) over the live level: ambient
  * sounds from Update's scan, and PlaySound through execPlaySound and the
@@ -33,7 +34,17 @@ import {RENDER_AMBIENT, RENDER_SHIFT} from './script-vm-render.mjs';
  * Host clock (not Galaxy's mixer): a voice plays the sound at `frequency /
  * rate`, loops between the WAV's own `smpl` loop points when it has them,
  * and finishes after its frames otherwise; its clock advances by the elapsed
- * time times its last frequency each Update. */
+ * time times its last frequency each Update.
+ *
+ * Speech (an MP3 USound: conversation, DataLink and bark lines) goes through
+ * the same channels and voices (docs/galaxy-audio.md "Speech through
+ * Galaxy's voices"). Galaxy's MPEG loader and decoder are not translated, so
+ * the sample is a host-decoded record: its rate is the MPEG header's (the
+ * loader's record +0x3c), and the 16-bit PCM is the page's decode, asked for
+ * with an `onVoice({op: 'decode', sound, bytes, rate})` event when a voice
+ * starts and given back through `attachDecoded(sound, pcm)`. It is attached
+ * to the library's record while a voice plays it and dropped when none does.
+ * The same PCM is Update's lip-sync input (step 12, `setLipSync`). */
 const f = Math.fround;
 
 /** RIFF WAVE: sample rate, frame count and the first `smpl` loop. */
@@ -110,6 +121,25 @@ export async function createLiveAudio({runtime, level, player, onVoice = null, l
   // Every AmbientSound of the level, decoded before the first tick (the
   // update is synchronous; RegisterSound's decode is the host's).
   const samples = new Map(), notes = new Set();
+  // Speech samples by sound key (attachDecoded), and the counts of what the
+  // host decode did (status).
+  const hostSamples = new Map(), speech = {requests: 0, attached: 0, dropped: 0, failed: 0, releases: 0};
+  /** RegisterSound for an MP3 sound: a host-decoded record (the stand-in of
+   * Galaxy's MPEG loader 0x10620b30, effects.rs `host_sample`). The rate is
+   * the MPEG header's, which the original loader puts at +0x3c (44100 for the
+   * shipped speech, docs/lip-sync.md); the frame count is a walk over the
+   * MPEG frame headers until a decode gives the real one. No PCM yet. */
+  function hostSample(sound, bytes) {
+    const rate = mp3SampleRate(bytes);
+    if (!rate) { notes.add(`${sound.key}: MP3 sound without an MPEG frame header; the sound is silent`); return null; }
+    const frames = mp3Frames(bytes) ?? 0;
+    const sample = {sound, rate, frames, loop: null, bytes, handle: 0,
+      host: {pcm: null, attached: false, requested: false, users: 0}};
+    if (galaxyVoices) sample.handle = library.registerHostSample(sound.key, rate, frames).handle;
+    samples.set(sound, sample);
+    hostSamples.set(sound.key, sample);
+    return sample;
+  }
   // RegisterSound decodes on first use; the export's package bytes are in
   // memory once its package is loaded, so the decode can run synchronously.
   function decodeSample(sound) {
@@ -118,6 +148,7 @@ export async function createLiveAudio({runtime, level, player, onVoice = null, l
     const decoded = decodeSoundResource({pkg: asset.pkg, bytes: asset.bytes, entry: asset.pkg.exports[index - 1]});
     const start = asset.pkg.exports[index - 1].serialOffset + decoded.lazy.inlineOffset;
     const bytes = decoded.bytes ?? asset.bytes.slice(start, start + decoded.lazy.byteCount);
+    if (decoded.lazy.formatName.toLowerCase() === 'mp3') return hostSample(sound, bytes);
     if (galaxyVoices) {
       // RegisterSound 0x10606af0: glxLoadSample(&Mem{Data, Num}, 2) on the
       // FSoundData bytes. The registry's record gives Update its C4Speed.
@@ -224,6 +255,7 @@ export async function createLiveAudio({runtime, level, player, onVoice = null, l
       return host?.playing ?? false;
     },
     startVoice: (channel, sample, frequency, volume, pan) => {
+      if (sample.host) useHostSample(sample);
       if (galaxyVoices) {
         // glxStartSample(channel + 1, sample, ...) (0x1060a435): the voice is
         // the fixed slot's. A sound the translated loader cannot register
@@ -239,8 +271,9 @@ export async function createLiveAudio({runtime, level, player, onVoice = null, l
       }
       const voice = nextVoice++;
       voices.set(voice, {sample, frequency, volume, pan, position: 0, playing: true});
+      // `speech`: the page decodes the MP3 itself and keeps no buffer after the stop.
       if (sample.bytes) onVoice?.({op: 'start', voice, channel, sound: sample.sound.key, bytes: sample.bytes, rate: sample.rate,
-        loop: sample.loop, frequency, volume, pan, digital});
+        loop: sample.loop, frequency, volume, pan, digital, speech: Boolean(sample.host)});
       return voice;
     },
     controlVoice: (voice, frequency, volume, pan) => {
@@ -252,10 +285,60 @@ export async function createLiveAudio({runtime, level, player, onVoice = null, l
     stopVoice: voice => {
       const host = voices.get(voice);
       voices.delete(voice);
-      if (galaxyVoices) { if (host && !host.silent) library.stopSample(voice); return; }
-      onVoice?.({op: 'stop', voice});
+      if (galaxyVoices) { if (host && !host.silent) library.stopSample(voice); }
+      else onVoice?.({op: 'stop', voice});
+      if (host?.sample.host) leaveHostSample(host.sample);
+    },
+    // Step 12's analysis (galaxy-audio.mjs owns the gate and the cadence):
+    // the voice's PCM at the mixer position. The library's read head once the
+    // worklet reports (a held start has none: not started yet); the host
+    // clock before that and under the Web Audio mapping.
+    lipSync: channel => {
+      if (!lipSync?.enabled()) return false;
+      const sample = samples.get(channel.sound), pcm = sample?.host?.pcm;
+      if (!pcm?.length) return false;
+      const position = galaxyVoices && library.live() ? library.voicePosition(channel.voice) : voices.get(channel.voice)?.position;
+      if (position === null || position === undefined) return false;
+      lipSync.analyze(channel.actor, {pcm, rate: sample.rate, position});
+      return true;
     },
   });
+  // The lip-sync analysis (galaxy-lipsync-channels.mjs createLipSyncAnalysis),
+  // set by the host that loaded the kernel; none: step 12 analyses nothing.
+  let lipSync = null;
+  /** A voice starts on a speech sample: its PCM goes to the library's record,
+   * or the page is asked for the decode (once until it arrives). */
+  function useHostSample(sample) {
+    const host = sample.host;
+    host.users++;
+    if (host.pcm) { if (galaxyVoices && !host.attached) { library.attachSample(sample.handle, host.pcm); host.attached = true; } return; }
+    if (host.requested) return;
+    host.requested = true; speech.requests++;
+    onVoice?.({op: 'decode', sound: sample.sound.key, bytes: sample.bytes, rate: sample.rate});
+  }
+  /** A voice of a speech sample stopped: with none left, the PCM is dropped
+   * (from the library's record too); the next voice asks for it again. */
+  function leaveHostSample(sample) {
+    const host = sample.host;
+    host.users = Math.max(0, host.users - 1);
+    if (host.users) return;
+    if (host.attached) { library.releaseSample(sample.handle); host.attached = false; speech.releases++; }
+    host.pcm = null;
+  }
+  /** The page's 16-bit decode of a speech sample (`sound` its key); empty
+   * when the decode failed (the voice then plays nothing and finishes). */
+  function attachDecoded(sound, pcm) {
+    const sample = hostSamples.get(sound);
+    if (!sample) return false;
+    const host = sample.host;
+    host.requested = false;
+    if (!host.users) { speech.dropped++; return false; }
+    if (!pcm.length) { speech.failed++; notes.add(`${sound}: the host could not decode the speech; it plays nothing`); }
+    host.pcm = pcm; speech.attached++;
+    sample.frames = pcm.length >> 1;
+    if (galaxyVoices && !host.attached) { library.attachSample(sample.handle, pcm); host.attached = true; }
+    return true;
+  }
 
   let disposed = false;
   /** UGameEngine::Draw's Audio->Update (0x1038f638) for the frame's view. */
@@ -311,5 +394,8 @@ export async function createLiveAudio({runtime, level, player, onVoice = null, l
     if (music.state.current !== null) music.unregisterMusic(music.state.current);
   }
   return {galaxy, music, volumes, library, galaxyConfig, musicLog, update, reset, dispose, notes, voices, galaxyVoices, modeledIds, noteModeledId,
+    samples, hostSamples, speech, attachDecoded,
+    setLipSync: analysis => { lipSync = analysis; },
+    get lipSync() { return lipSync; },
     setDigitalVolume: value => { digital = value & 127; }};
 }

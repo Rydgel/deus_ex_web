@@ -1,16 +1,22 @@
 # Conversation lip sync (Galaxy.dll)
 
-Status: implemented in Play (October 1, 2026). The analysis is bit-exact
-with Galaxy.dll on its inputs; the inputs themselves (the decoded speech and
-the mixer position) are host measurements, real-time in the original too.
+Status: implemented in Play (October 1, 2026); since October 16 it runs
+inside Galaxy's Update over Galaxy's own channels, on the PCM the mixer
+plays ([galaxy-audio](galaxy-audio.md) "Speech through Galaxy's voices").
+The analysis is bit-exact with Galaxy.dll on its inputs; the inputs
+themselves (the decoded speech and the mixer position) are host
+measurements, real-time in the original too.
 
 Files: `native/script-vm/src/lipsync.rs` (the analysis, Rust), the
 `lipsync` group of `src/runtime/script-vm-kernel.mjs` (its bindings),
-`src/runtime/galaxy-lipsync-channels.mjs` (the channels and the update),
-`src/viewer/game.mjs` `lipSyncServices` (IsA Pawn, bIsSpeaking,
-nextPhoneme) and `src/viewer/main.mjs` (the speech decode and the per-frame
-update). Validators: `validate-galaxy-lipsync` (kernel against the original)
-and `validate-island-lipsync` (MeetPaul end to end).
+`src/runtime/galaxy-audio.mjs` (step 12's gate and cadence in Update's
+channel loop), `src/runtime/galaxy-lipsync-channels.mjs` (the analysis of
+the window at the mixer position), `src/runtime/script-audio-live.mjs` (the
+PCM and the mixer position), `src/viewer/game.mjs` `lipSyncServices` (IsA
+Pawn, bIsSpeaking, nextPhoneme), `src/viewer/sim-host.mjs` (sets the
+analysis) and `src/viewer/main.mjs` `decodeSpeech` (the speech decode).
+Validators: `validate-galaxy-lipsync` (kernel against the original) and
+`validate-island-lipsync` (MeetPaul end to end).
 
 ## Who drives the mouth
 
@@ -153,15 +159,16 @@ first band's frequency after its float store) is equivalent, since
 original's results are cached in `.cache/galaxy-lipsync-reference-*.json` by
 input, oracle and twiddle table.
 
-`validate-island-lipsync` runs MeetPaul headless to its first choice and feeds
-the speech the player hears through the channels (PCM from ffmpeg, position
-from the channel's own time): Paul's speech is on SLOT_Talk, the opening
-DataLink's non-Talk channel is never analysed, every analysis follows 0.1 s of
-channel time with `next` advancing by float sums (the one non-Talk speech,
-the opening DataLink, plays on JC in slot 0), Paul's `nextPhoneme` takes
-several letters, and Pawn.LipSynch tweens only `Mouth*` sequences into blend
-slot 0. In the browser, Paul's letters and mouth sequences follow the playing
-speech (sampled every 100 ms) on his channel 571418 (35713 << 4 | Talk).
+`validate-island-lipsync` runs MeetPaul headless to its first choice. The
+speech takes the original chain into Galaxy's channels and the harness
+answers each decode request with ffmpeg's PCM (the page's part; the mixer
+position is the host voice's clock): Paul's speech is on SLOT_Talk, the
+DataLink start cue's non-Talk channel (JC, slot 0) is never analysed, every
+analysis follows 0.1 s of channel time with `next` advancing by float sums,
+Paul's `nextPhoneme` takes several letters, and Pawn.LipSynch tweens only
+`Mouth*` sequences into blend slot 0 (438 analyses over Paul's 4 lines). In
+the browser, Paul's letters and mouth sequences follow the playing speech
+(sampled every 100 ms) on his channel 571418 (35713 << 4 | Talk).
 
 ## Inputs that only the host can supply
 
@@ -170,13 +177,19 @@ These are real-time in the original and differ run to run there too:
 * the decoded PCM: Galaxy's own MP3 decoder output (not translated). The
   host decodes the same MP3 at its native rate (an OfflineAudioContext at
   44100, since the default context resamples) and converts to 16-bit; the
-  decoder's output and rounding are unverified against Galaxy's.
-* the mixer position at each update: from the playing source,
-  `(currentTime − start) × rate × playbackRate`, taken modulo the 0x7fff
-  ring length; assumes the decoder stays ≥ 1024 samples ahead of the mixer.
-* channel lifetime: created from the conversation speech request
-  (ClientHearSound), ended by StopSound or when the source ends (the
-  original polls the voice's state, `0x1060cf00`).
+  decoder's output and rounding are unverified against Galaxy's. Galaxy's
+  mixer plays the same PCM.
+* the mixer position at each update: Galaxy's voice read head as the
+  worklet reports it (voice `+0x46` minus `+0x4e`, the samples the mixer
+  has passed; reported with the Active bits after each 20 ms callback), or
+  the host voice's clock (elapsed time × frequency) before the worklet
+  reports and under the Web Audio mapping; taken modulo the 0x7fff ring
+  length; assumes the decoder stays ≥ 1024 samples ahead of the mixer. A
+  voice the worklet holds until its decode arrives has no read head, and is
+  not analysed (as a voice not yet started).
+* channel lifetime: Galaxy's channel, from PlaySound to StopSound, a
+  stolen channel or the voice-finished poll (`0x1060cf00`, the library's
+  Active byte).
 * the update runs once per Play frame after the game tick with the frame's
   wall-clock delta. The original's `Audio->Update` is called from
   `UGameEngine::Draw` (`0x1038f638`, Audio vtable +0x60 with the view's
@@ -184,8 +197,8 @@ These are real-time in the original and differ run to run there too:
   created), not from `UGameEngine::Tick` (which never reads `Audio`, +0x4c):
   each frame the level tick, where LipSynch reads `nextPhoneme`, comes before
   the update that writes it, so a letter takes effect at the next tick, as in
-  Play. A failed second decode (the 16-bit PCM) leaves that speech without
-  lip sync and is counted in `status().audio.lipSyncFailures`.
+  Play. A failed decode leaves the line silent and without lip sync; it is
+  counted in `status().audio.failures` and noted by the live audio.
 * a speech that is not MP3 (no MPEG frame header) gets no lip sync: the
   non-streamed path (record data, 0.1 s ahead) is not translated.
 
@@ -204,5 +217,6 @@ These are real-time in the original and differ run to run there too:
   window never holds stale ring data, is assumed.
 * The D3D control-word question (single precision under FPUSETUP) is open as
   for every x87 translation; this one assumes 0x037f.
-* Lip sync for speech heard without ClientHearSound's conversation transport
-  (barks through other PlaySound sites) is not wired.
+* Barks reach step 12 like any speech; BarkManager does not set
+  `bIsSpeaking` (ConPlay's StartSpeakingAnimation does), so the gate leaves a
+  bark unanalysed unless its pawn is in a conversation, as in the original.

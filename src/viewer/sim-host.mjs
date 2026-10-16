@@ -28,7 +28,7 @@ import { createGpuMeshLayout } from './gpu-mesh-layout.mjs';
 import { createWeaponOverlaySim } from './weapon-overlay-sim.mjs';
 import { createCoronaScan } from './corona-scan.mjs';
 import { createMeshLightingView } from './mesh-lighting-view.mjs';
-import { createLipSyncChannels } from '../runtime/galaxy-lipsync-channels.mjs';
+import { createLipSyncAnalysis } from '../runtime/galaxy-lipsync-channels.mjs';
 import { loadScriptVmKernel } from '../runtime/script-vm-kernel.mjs';
 import { createBspOcclusion, texturePolyFlags } from '../runtime/bsp-occlusion.mjs';
 import { collectTrackerMovers, moverTrackerMode, trackerDecalSource, trackerMoverSpec, trackerTextureFlags } from '../runtime/brush-tracker.mjs';
@@ -86,7 +86,12 @@ export async function createSimHost(map, asset, assets, { randomSeed, subtitles,
   // last left them (`occlusionNow`, below), as the mesh lighting's does.
   session.setCoronas(createCoronaScan(runtime, { model: map.model, exportName, player,
     lineModel: () => occlusionNow?.tracker?.live() ? occlusionNow.lineModel() : null }));
-  const lipSync = createLipSyncChannels({ kernel: (await loadScriptVmKernel()).lipsync, ...game.lipSyncServices() });
+  // Galaxy Update's step 12 analysis (script-audio-live.mjs, docs/lip-sync.md);
+  // a replay fed the original's phoneme letters (live-probe.mjs `phonemes`)
+  // does not run Galaxy's own analysis.
+  const lipSync = createLipSyncAnalysis({ kernel: (await loadScriptVmKernel()).lipsync, ...game.lipSyncServices(),
+    enabled: () => !game.liveReplay?.measuredSpeech });
+  runtime.audio?.setLipSync(lipSync);
   // The original BSP occlusion (bsp-occlusion.mjs) over the map's model, with
   // each surface texture's PolyFlags (UTexture +0x80, the packed bools).
   try {
@@ -151,7 +156,6 @@ export async function createSimHost(map, asset, assets, { randomSeed, subtitles,
     if (decals) session.setDecalKernel(decals, () => kernel.framePtr());
     else notes.push('Decals unavailable: the script VM core predates decal.rs; run npm run build:wasm');
   } catch (error) { notes.push(`BSP occlusion unavailable: ${error.message}`); }
-  session.setLipSync(lipSync);
   session.setPanZones(panZones);
   let audioDisposed = false;
   const disposeAudio = () => { if (audioDisposed) return; audioDisposed = true; runtime.audio?.dispose?.(); };

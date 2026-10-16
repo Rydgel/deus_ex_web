@@ -100,8 +100,11 @@ tick(70);
 const fresh=start(troop,'MunitionsTrooperFrob');
 assert.equal(audio.filter(e=>e.kind==='speech').at(-1).audio.soundId,19);
 const activeAudio=audio.at(-1);assert.equal(activeAudio.kind,'speech');
+// The speech holds Galaxy's channel (docs/galaxy-audio.md "Speech through Galaxy's voices"); Player start's StopSound loop frees it.
+const speechChannel=()=>runtime.audio.galaxy.state.channels.some(c=>c.id===activeAudio.id);
+assert.equal(speechChannel(),true,'the speech holds a Galaxy channel');
 game.reset();player=game.player.collisionActor;assert.equal(get(player,'conPlay'),null);assert.equal(get(player,'conHistory'),null);
-assert.equal(shell.isDestroyed(fresh.window),true);assert.equal(audio.at(-1).kind,'stop');
+assert.equal(shell.isDestroyed(fresh.window),true);assert.equal(speechChannel(),false,'Player start stopped the speech channel');
 assert.equal(ready(),false);assert.equal(get(get(frob,'eventList'),'cycleIndex'),0);
 tick(200);finish(start(live('UNATCOTroop3'),'MunitionsTrooperFrob'));
 assert.equal(host.npcFailures.size,0);

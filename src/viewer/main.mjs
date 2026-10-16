@@ -31,7 +31,7 @@ import { createWeaponOverlayDraw } from './weapon-overlay-draw.mjs';
 import { packViews } from './mesh-frame-pack.mjs';
 import {pointerButtonKey,windowPointerSample} from './window-pointer.mjs';
 import { typedCharacters } from './typed-characters.mjs';
-import {mp3SampleRate,pcm16} from '../runtime/galaxy-lipsync-channels.mjs';
+import {pcm16} from '../runtime/galaxy-lipsync-channels.mjs';
 import { setDisplayRampPerFragment } from './light-atlas.mjs';
 import { createDisplayRamp, brightnessGamma } from './display-ramp.mjs';
 import { CRT_PRESETS, prepareCrtPreset } from './crt-shader.mjs';
@@ -276,7 +276,6 @@ let meshLighting=null;
 let simClient=null,simAnswers={keys:{},pointerGrab:false},simStatus=null,simPosts=0;
 // The worker's last frame post (the page clock, ms).
 let simLastPost=null;
-const lipSyncPositions=new Map();
 let infoLinkAudioContext=null;
 // Galaxy's music (docs/galaxy-music.md "Phase 5: Output"): an AudioWorklet
 // owns the library (galaxy-music-output.mjs); the simulation talks to it on
@@ -286,10 +285,9 @@ let infoLinkAudioContext=null;
 const musicEnabled=new URLSearchParams(location.search).get('music')!=='0';
 const musicOutput=musicEnabled?createMusicOutput():null;
 let pageMusicLibrary=null,musicError=null;
-const conversationAudio=new Map();
-// Galaxy's lip-sync channels for the speech being played (docs/lip-sync.md).
-let lipSync=null;
-const audioTransport={requests:0,starts:0,failures:0,lastRequest:null,lastStarted:null,lastError:null};
+// The host decode of speech for Galaxy's speech voices and lip sync
+// (decodeSpeech; docs/galaxy-audio.md "Speech through Galaxy's voices").
+const speechDecode={requests:0,decoded:0,failures:0,lastSound:null,lastError:null};
 // Galaxy voices (docs/galaxy-audio.md): each runtime start/control/stop
 // drives one buffer source through a stereo panner and a gain. The mapping of
 // Galaxy's volume (0..32767), pan (0..32767, 16383 centre) and digital master
@@ -310,12 +308,14 @@ async function galaxyVoice(event){
       galaxyAudio.stops++;return;
     }
     if(event.op==='control'){const entry=galaxyVoices.get(event.voice);if(entry)applyGalaxyVoice(entry,event);galaxyAudio.controls++;return;}
+    if(event.op==='decode'){void decodeSpeech(event);return;}
     const context=await activateInfoLinkAudio();
     const entry={rate:event.rate,source:null,stopped:false,gain:context.createGain(),panner:context.createStereoPanner()};
     entry.panner.connect(entry.gain);entry.gain.connect(context.destination);
     galaxyVoices.set(event.voice,entry);applyGalaxyVoice(entry,event);
-    let buffer=galaxyBuffers.get(event.sound);
-    if(!buffer){buffer=context.decodeAudioData(event.bytes.slice().buffer);galaxyBuffers.set(event.sound,buffer);}
+    // A speech MP3 is decoded for each voice and not kept.
+    let buffer=event.speech?null:galaxyBuffers.get(event.sound);
+    if(!buffer){buffer=context.decodeAudioData(event.bytes.slice().buffer);if(!event.speech)galaxyBuffers.set(event.sound,buffer);}
     const decoded=await buffer;
     if(entry.stopped)return;
     const source=context.createBufferSource();source.buffer=decoded;
@@ -328,47 +328,22 @@ function stopGalaxyVoices(){
   for(const entry of galaxyVoices.values()){entry.stopped=true;try{entry.source?.stop();}catch{}entry.gain.disconnect();}
   galaxyVoices.clear();
 }
-/** `lips`: also stop Galaxy's lip-sync channels (the worker's follow the
- * speech events on their own side). */
-function stopConversationAudio(id,lips=true){
-  for(const [key,entry] of conversationAudio)if(id===undefined||id===key){
-    entry.cancelled=true;entry.source?.stop();conversationAudio.delete(key);
-  }
-  if(!lips)return;
-  if(id===undefined)lipSync?.clear();else lipSync?.stop(id);
-}
-async function playConversationSpeech(event){
-  stopConversationAudio(event.id,!simClient);
-  if(event.kind==='stop')return;
-  if(!simClient)lipSync?.start(event);
-  const sound=event.audio.sound?.key??event.audio.soundObject;
-  audioTransport.requests++;audioTransport.lastRequest={id:event.id,sound};
-  const entry={cancelled:false,source:null,sound};conversationAudio.set(event.id,entry);
+/** A speech sound's 16-bit PCM for the simulation (script-audio-live.mjs
+ * asks with an `op: 'decode'` voice event): the browser's MP3 decode at the
+ * MPEG header's rate (an OfflineAudioContext at that rate, so not resampled;
+ * Galaxy's own MPEG decoder is not translated), through pcm16. The same PCM
+ * feeds Galaxy's speech voice and its lip-sync analysis. A failed decode
+ * answers an empty PCM, so the voice plays nothing and finishes. */
+async function decodeSpeech(event){
+  speechDecode.requests++;speechDecode.lastSound=event.sound;
+  let pcm;
   try{
-    const context=await activateInfoLinkAudio(),bytes=event.audio.bytes;
-    const buffer=await context.decodeAudioData(bytes.buffer.slice(bytes.byteOffset,bytes.byteOffset+bytes.byteLength));
-    if(entry.cancelled)return;
-    const source=context.createBufferSource();entry.source=source;source.buffer=buffer;
-    source.playbackRate.value=event.parameters[2]/100;
-    const gain=context.createGain();gain.gain.value=event.parameters[0]/100;
-    source.connect(gain);gain.connect(context.destination);
-    source.onended=()=>{if(conversationAudio.get(event.id)===entry){conversationAudio.delete(event.id);lipSync?.stop(event.id);}};
-    source.start();const startedAt=context.currentTime;
-    audioTransport.starts++;audioTransport.lastStarted={id:event.id,sound};
-    // Lip sync analyses the speech at its own rate (the MP3 header's, Galaxy's
-    // record +0x3c); the realtime decode above may be resampled.
-    // A failed second decode leaves this speech without lip sync (the
-    // speech itself is playing); the reason is in status().audio.
-    const rate=mp3SampleRate(bytes);
-    if(rate&&lipSync){
-      try{
-        const offline=new OfflineAudioContext(1,Math.max(1,Math.ceil(buffer.duration*rate)),rate);
-        const pcm=pcm16((await offline.decodeAudioData(bytes.buffer.slice(bytes.byteOffset,bytes.byteOffset+bytes.byteLength))).getChannelData(0));
-        if(!entry.cancelled)lipSync.attach(event.id,{pcm,rate,position:()=>(context.currentTime-startedAt)*rate*source.playbackRate.value});
-      }catch(error){audioTransport.lipSyncFailures=(audioTransport.lipSyncFailures??0)+1;audioTransport.lipSyncError=String(error?.message??error);}
-    }
-  }catch(error){if(entry.cancelled)return;conversationAudio.delete(event.id);
-    audioTransport.failures++;audioTransport.lastError=String(error.message);pauseForRuntimeError(error);}
+    const offline=new OfflineAudioContext(1,1,event.rate),bytes=event.bytes;
+    pcm=pcm16((await offline.decodeAudioData(bytes.buffer.slice(bytes.byteOffset,bytes.byteOffset+bytes.byteLength))).getChannelData(0));
+    speechDecode.decoded++;
+  }catch(error){pcm=new Uint8Array(0);speechDecode.failures++;speechDecode.lastError=String(error?.message??error);}
+  if(simClient)simClient.queue({op:'speech-pcm',sound:event.sound,pcm});
+  else{try{game?.attachSpeech(event.sound,pcm);}catch(error){pauseForRuntimeError(error);}}
 }
 let revision = 0, lastTime = performance.now(), fpsTime = lastTime, frameCount = 0;
 let cameraMoved = false, lastInspect = 0;
@@ -419,7 +394,6 @@ function musicStatus(output=musicOutput?.status()??null){
     library:simClient?simStatus?.music??null:pageMusicLibrary?.status()??null};
 }
 function stopInfoLinkPresentation(){
-  stopConversationAudio();
   stopGalaxyVoices();
   $('infolink-shell').hidden=true;
 }
@@ -716,7 +690,6 @@ function setMode(next) {
   return reply;
 }
 function pauseForRuntimeError(error) {
-  stopConversationAudio();
   runtimeError={message:error.message,stack:error.stack,travel:error.travel??null};paused=true;
   keys.clear();drag=false;document.exitPointerLock?.();
   showStats();
@@ -744,7 +717,7 @@ function remoteHost(loaded) {
   const summary = loaded.summary;
   return { game: loaded.game ? { remote: true, notes: loaded.gameNotes, hud: loaded.hud } : null, session: loaded.game ? { remote: true } : null,
     actorSim: summary ? { summary, actors: [], npcActors: [] } : null, lit: loaded.lit, meshLighting: null,
-    lipSync: loaded.game ? workerLipSync : null, notes: loaded.notes, events: loaded.events, hudTextures: loaded.hudTextures, dispose() {} };
+    notes: loaded.notes, events: loaded.events, hudTextures: loaded.hudTextures, dispose() {} };
 }
 async function loadMap(name) {
   if (!assets || !assets.files.has(name.toLowerCase())) throw new Error(`Map is not available: ${name}`);
@@ -795,7 +768,7 @@ async function loadMap(name) {
     if (!simClient) simHost?.disposeAudio?.();
     nextHost = simClient ? remoteHost(await simClient.load(name, hostOptions)) : await createSimHost(nextMap, asset, assets, { ...hostOptions,
       musicLibrary: pageMusicLibrary,
-      onConversationSpeech: event => { void playConversationSpeech(event); }, onAudioVoice: event => { void galaxyVoice(event); },
+      onAudioVoice: event => { void galaxyVoice(event); },
       onProgress: message => { $('gate-message').textContent = message; } });
     nextWorld.notes.push(...nextHost.notes);
     nextGame = nextHost.game; nextSim = nextHost.game ? nextHost.session : null;
@@ -884,7 +857,6 @@ async function loadMap(name) {
     $('npc-status').textContent=npcPreview?`${npcPreview.summary.npcs??npcPreview.actors.length} NPCs · ${npcPreview.summary.props??0} props · live`:'';
     if (world) { scene.remove(world.root); world.dispose(); }
     world = nextWorld; map = nextMap; currentMap = name; scene.add(world.root); revision++;
-    lipSync = nextGame ? nextHost.lipSync : null;
     game = nextGame;sim = nextSim;runtimeError=null; $('mode').options[0].disabled = !game; const viewReply = setMode(game ? mode : 'inspect'); paused = false;
     // The previews drive the runtime directly: on the page only.
     const training = Boolean(game) && name === '00_Training' && !simClient;
@@ -1311,16 +1283,6 @@ const simInput = {
   reset(options) { if (!game) return; if (simClient) simClient.queue({ op: 'resetInput', options }); else game.resetInput(options); },
   subtitles(value) { if (!game) return; if (simClient) simClient.queue({ op: 'subtitles', value }); else game.subtitles = value; },
 };
-/** Galaxy's lip-sync channels in the worker, seen from the page's speech
- * playback: attach (the decoded PCM and the mixer position, sampled at each
- * frame's post), stop and clear go with the next frame; the channels start
- * on the worker's side. */
-const workerLipSync = {
-  start() {},
-  attach(id, { pcm, rate, position }) { lipSyncPositions.set(id, position); simClient.queue({ op: 'lipsync-attach', id, pcm, rate }); },
-  stop(id) { lipSyncPositions.delete(id); simClient.queue({ op: 'lipsync-stop', id }); },
-  clear() { lipSyncPositions.clear(); simClient.queue({ op: 'lipsync-clear' }); },
-};
 function look(dx, dy) {
   if (mode === 'play' && game) {
     try { simInput.motion(dx, dy); cameraMoved = true; }
@@ -1444,8 +1406,7 @@ function status() {
     movers: world?.counts.movers ?? 0, position: fromView(camera.position.toArray()),
     mode, paused, runtimeError, gameplay: simClient ? simStatus?.gameplay ?? null : game?.status() ?? null, sim: simMode,
     galaxy:{...galaxyAudio,voices:galaxyVoices.size},music:musicStatus(),
-    audio:{...audioTransport,contextState:infoLinkAudioContext?.state??'uninitialized',
-      active:[...conversationAudio].map(([id,entry])=>({id,sound:entry.sound,started:Boolean(entry.source)}))},
+    audio:{...speechDecode,contextState:infoLinkAudioContext?.state??'uninitialized'},
     npcPreview:npcPreview?{...npcPreview.summary,visible:npcPreview.root.visible}:null,
     weaponViewModel:weaponSummary,
     lighting: world?.lighting ?? null, lightingEnabled: Boolean(world?.lightingEnabled.value), horizontalFOV: 75,
@@ -1729,8 +1690,7 @@ function simFrameInput(time) {
 function postSimFrame(time) {
   if (!simClient || !sim || !world || loading || held) return false;
   const dt = Math.max(0, (time - (simLastPost ?? time - 1000 / 60)) / 1000);
-  simClient.post({ ...simFrameInput(time), dt }, { speech: [...lipSyncPositions].map(([id, position]) => [id, position()]),
-    status: !simStatus || simPosts % 15 === 0 });
+  simClient.post({ ...simFrameInput(time), dt }, { status: !simStatus || simPosts % 15 === 0 });
   simLastPost = time; simPosts++;
   return true;
 }
@@ -1814,7 +1774,7 @@ function drawFrame(snap, time) {
     hitch?.snapshot(snap);
     // The worker's audio since the last snapshot, as its callbacks ran
     // during the tick, then the frame's errors.
-    for (const { kind, event } of snap.audio ?? []) { if (kind === 'voice') void galaxyVoice(event); else void playConversationSpeech(event); }
+    for (const { kind, event } of snap.audio ?? []) if (kind === 'voice') void galaxyVoice(event);
     if (snap.display) applyDisplaySettings(snap.display);
     if (snap.answers) simAnswers = snap.answers;
     for (const message of snap.toasts ?? []) toast(message);

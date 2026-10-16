@@ -178,10 +178,15 @@ browser does not reproduce.
 
 ## 7. Not translated / open
 
-* glxLoadSample's other loaders and the MPEG path (Menu_SpeechTest is the
-  one shipped effect it would need); ADPCM/MPEG WAVs, streaming and the ring
-  path of glxStartSample (compressed, streamed and stereo samples) and the
-  decoder thread `0x1060e340` that feeds them.
+* glxLoadSample's other loaders and the MPEG path (speech, and
+  Menu_SpeechTest); ADPCM/MPEG WAVs, streaming and the ring path of
+  glxStartSample (compressed, streamed and stereo samples) and the decoder
+  thread `0x1060e340` that feeds them. Speech MP3s instead take a stand-in
+  record from the browser's decode (`effects.rs` `host_sample`,
+  `host_sample_attach`, `host_sample_release`: the WAVE loader's 16-bit mono
+  record, its PCM in a separate pool, the non-ring branch;
+  [galaxy-audio](../galaxy-audio.md) "Speech through Galaxy's voices"),
+  which no oracle covers.
 * glxUnloadSample (Play never destroys a USound).
 * 3D hardware voices (Use3dHardware False).
 * The real heap behind the address model: records and data take a bump

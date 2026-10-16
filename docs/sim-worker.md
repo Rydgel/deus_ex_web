@@ -74,7 +74,7 @@ reaches the drawing side's ~8 ms.
 atlases, moving-light texels, texture animation, fog maps, mirrors' passes,
 the GPU mesh passes, sprites and coronas from their lists, the HUD batches
 from its command list, the display ramp; the DOM; input capture; Web Audio
-(voices, speech, the AudioContext gesture); asset files for its own decoding.
+(voices, the speech MP3 decode, the AudioContext gesture); asset files for its own decoding.
 
 No runtime file uses the DOM (`document`, `window`, canvas, Web Audio):
 `createGame(..., {presentation: true})` already boots in Node with the HUD
@@ -116,7 +116,7 @@ its own asset store; the worker never sends package bytes.
 | Weapon | the RenderOverlays DrawActor commands and the weapon's plan and lighting |
 | Coronas | the corona icons `{x, y, size, color, skin}` after visibility (and, for validation, each icon's placement inputs and the master frame's words) |
 | HUD | the GC command list `{texture, x, y, width, height, u, v, ul, vl, color, style}` (glyphs are already DrawTile commands) |
-| Audio | Galaxy voice ops (sound bytes once per key), speech start and stop. Galaxy's music does not travel in the snapshot: the library service talks to the music worklet on its own MessageChannel (below) |
+| Audio | Galaxy voice ops under `?sfx=webaudio` (sound bytes once per key, a speech MP3's every start) and speech decode requests. Galaxy's music and effect voices do not travel in the snapshot: the library service talks to the music worklet on its own MessageChannel (below) |
 | DOM mirror | InfoLink `{visible, title, queued, text}`, notes |
 
 The main thread keeps no reference to a runtime object.
@@ -195,11 +195,15 @@ host behavior.
   mouse grab; the snapshot carries the root's grab flags and the bound keys,
   one frame old.
 - **Audio.** The simulation reads nothing back from Web Audio: voice "playing"
-  state, PlaySound's result and GetSpeechLength come from bytes and a host
-  clock. Voice and speech events cross as messages. Lip sync is the one loop:
-  the page decodes speech PCM (`OfflineAudioContext`) and reads the mixer
-  position; it sends `{id, pcm}` once and the position each frame, and
-  `lipSync.update` runs in the worker.
+  state, PlaySound's result and GetSpeechLength come from bytes, a host
+  clock and the worklet's reports. Speech is the one loop through the page
+  ([galaxy audio](galaxy-audio.md) "Speech through Galaxy's voices"): a
+  speech voice's start asks for its decode (an `op: 'decode'` voice event
+  with the MP3 bytes), the page decodes it (`OfflineAudioContext` at the
+  MPEG header's rate, 16-bit) and queues a `speech-pcm {sound, pcm}`
+  command; the worker attaches the PCM to Galaxy's record, which forwards it
+  to the worklet, and keeps it for Update's lip-sync step, whose mixer
+  position is the worklet's reported read head.
 - **Music** ([Galaxy music](galaxy-music.md) "Phase 5: Output"). The Galaxy
   library runs in an AudioWorklet on the page's AudioContext (44100 Hz).
   The page creates one MessageChannel per simulation side and wires it once:
@@ -514,12 +518,12 @@ Step 8, third part (`sim-worker.mjs`, `sim-client.mjs`, `host-clock.mjs`):
   answers of the last snapshot: per key code, whether the last press was
   handled or consumed (a key not yet seen counts as handled, so it is
   prevented); for the pointer, whether a modal held the mouse.
-- **Audio.** Galaxy's voice events and the conversation speech events
-  cross with the snapshot. A voice's sound bytes cross once per sound key;
-  a speech's bytes once per line. Both are sliced from the package's
-  buffer. Galaxy's lip-sync channels live in the worker and start and stop
-  at the speech event. The page sends the decoded PCM, the mixer position
-  at each post, and the stops and clears from its playback.
+- **Audio.** Galaxy's voice events (`?sfx=webaudio`) and speech decode
+  requests cross with the snapshot. A voice's sound bytes cross once per
+  sound key, a speech MP3's with each start (the page keeps no speech
+  buffer) and with each decode request. They are sliced from the package's
+  buffer. The decoded PCM comes back as a `speech-pcm` command with the
+  next frame.
 - **Calls.** Player start (`reset`, then the movers and PlayerCalcView),
   the mode change's PlayerCalcView and `stateDigest` are processed in order
   with the frames.

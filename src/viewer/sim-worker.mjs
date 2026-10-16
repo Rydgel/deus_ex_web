@@ -42,25 +42,20 @@ const audio = [], sentSounds = new Set();
 // page's synchronous decisions (preventDefault, pointer capture).
 const keyAnswers = {};
 let pointerGrab = false, toasts = [];
-// Lip-sync channels' mixer positions, sampled by the page at the frame post.
-const speechPositions = new Map();
 
 const send = (message, transfer = []) => self.postMessage(message, transfer);
 const errorOf = error => plainError ? plainError(error) : { name: 'Error', message: String(error?.message ?? error), stack: error?.stack ?? null };
 
+// A Web Audio voice's bytes cross once per sound; a speech sound's (an MP3 the
+// page keeps no buffer of) and a decode request's every time.
 function plainVoice(event) {
   const out = { ...event };
-  if (event.op === 'start') {
-    out.bytes = sentSounds.has(event.sound) ? null : event.bytes.slice();
-    sentSounds.add(event.sound);
+  if (event.op === 'decode') out.bytes = event.bytes.slice();
+  else if (event.op === 'start') {
+    out.bytes = sentSounds.has(event.sound) && !event.speech ? null : event.bytes.slice();
+    if (!event.speech) sentSounds.add(event.sound);
   }
   return out;
-}
-function plainSpeech(event) {
-  if (event.kind === 'stop') return { kind: 'stop', id: event.id };
-  const sound = event.audio.sound?.key ?? null;
-  return { kind: event.kind, id: event.id, parameters: [...event.parameters],
-    audio: { sound: sound ? { key: sound } : null, soundObject: event.audio.soundObject ?? null, bytes: event.audio.bytes.slice() } };
 }
 
 function command(game, entry, errors) {
@@ -73,13 +68,8 @@ function command(game, entry, errors) {
       case 'pointer': pointerGrab = game.windowPointer(entry.sample); break;
       case 'resetInput': game.resetInput(entry.options); break;
       case 'subtitles': game.subtitles = entry.value; break;
-      case 'lipsync-attach': {
-        const { id, pcm, rate } = entry;
-        host.lipSync.attach(id, { pcm, rate, position: () => speechPositions.get(id) ?? 0 });
-        break;
-      }
-      case 'lipsync-stop': host.lipSync.stop(entry.id); break;
-      case 'lipsync-clear': host.lipSync.clear(); break;
+      // The page's decode of a speech sound (main.mjs decodeSpeech).
+      case 'speech-pcm': game.attachSpeech(entry.sound, entry.pcm); break;
       default: throw new Error(`Unknown simulation command ${entry.op}`);
     }
   } catch (error) {
@@ -121,16 +111,9 @@ async function handle(data) {
       // The old map's audio unregisters its music first (sim-host.mjs
       // disposeAudio), so that batch reaches the worklet before any of the
       // next map's.
-      host?.dispose?.(); host = null; loadId = data.id; audio.length = 0; speechPositions.clear(); pending = null;
+      host?.dispose?.(); host = null; loadId = data.id; audio.length = 0; pending = null;
       const asset = await assets.get(data.map);
       host = await createSimHost(decodeMap(asset.bytes), asset, assets, { ...data.options, musicLibrary,
-        onConversationSpeech: event => {
-          // Galaxy's lip-sync channels follow the speech on this side
-          // (main.mjs playConversationSpeech on the page before).
-          host?.lipSync.stop(event.id);
-          if (event.kind !== 'stop') host?.lipSync.start(event);
-          audio.push({ kind: 'speech', event: plainSpeech(event) });
-        },
         onAudioVoice: event => audio.push({ kind: 'voice', event: plainVoice(event) }),
         onProgress: message => send({ type: 'progress', message }) });
       const summary = host.actorSim?.summary;
@@ -144,7 +127,6 @@ async function handle(data) {
       setHostClock(data.clock);
       for (const buffer of data.returned ?? []) host.session.recyclePack(buffer);
       const hitchStart = hitchWasm ? performance.now() : 0;
-      for (const [id, position] of data.speech ?? []) speechPositions.set(id, position);
       const errors = [];
       for (const entry of data.commands) command(host.game, entry, errors);
       const input = errors.length ? { ...data.input, halted: true } : data.input;
