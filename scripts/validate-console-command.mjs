@@ -217,7 +217,18 @@ assert.equal(commands.consoleCommand(player, 'SET InputExt NoSuchKey 1'), 'Unrec
 assert.equal(commands.consoleCommand(player, 'SET InputExt'), 'Unrecognized property ');
 // UObject::GlobalSetProperty for a script class (0x101523a0): every live object that IsA the class takes the ImportText of the value
 // (the live-scene acceptance aims the player with `set JCDentonMale ViewRotation (...)`). AActor::PostEditChange (0x10369140) is a game no-op.
-// The class defaults and SaveConfig are not modelled; property kinds other than int/float/bool/name/Rotator/Vector are not linked and throw.
+// Then the named class's own Defaults take it (0x101524b1..0x101524ca), not a subclass's; SaveConfig is not modelled; property kinds other than
+// int/float/bool/name/Rotator/Vector are not linked and throw.
+{
+  const fieldOf = (cls, name) => runtime.lookupMember(cls, 'fields', name);
+  const playerClass = runtime.instance(player).cls, deusExPlayer = (() => { let c = playerClass; while (c && c.record?.key !== 'deusex.deusexplayer') c = c.base; return c; })();
+  const unlit = fieldOf(playerClass, 'bUnlit'), own = runtime.classDefaultReference(playerClass, unlit).get(), parent = runtime.classDefaultReference(deusExPlayer, unlit).get();
+  assert.equal(commands.consoleCommand(player, `SET DeusExPlayer bUnlit ${parent ? 'False' : 'True'}`), '');
+  assert.equal(runtime.classDefaultReference(deusExPlayer, unlit).get(), !parent, 'SET imports the value into the named class\'s defaults');
+  assert.equal(runtime.classDefaultReference(playerClass, unlit).get(), own, 'a subclass\'s defaults are its own copy');
+  runtime.classDefaultReference(deusExPlayer, unlit).set(parent);
+  runtime.writeNamed(player, 'bUnlit', own);
+}
 {
   const before = [...runtime.readNamed(player, 'ViewRotation')];
   assert.equal(commands.consoleCommand(player, 'SET JCDentonMale ViewRotation (Pitch=-10130,Yaw=49096,Roll=0)'), '');

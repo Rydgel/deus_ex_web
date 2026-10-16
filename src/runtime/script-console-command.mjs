@@ -609,11 +609,13 @@ export function createConsoleCommands({runtime, input, services}) {
   /** UObject::GlobalSetProperty 0x101523a0 (Immediate) for a script class (`set JCDentonMale ViewRotation (Pitch=-10130,Yaw=49096,Roll=0)`):
    * ParseToken for the property, FindField, spaces skipped, then for every object that IsA the class ImportText of the value into the property
    * followed by PostEditChange (vtable +0x40: AActor::PostEditChange 0x10369140 is UObject::PostEditChange and an Editor-only flag, a game
-   * no-op). The live actors of the player's level are the objects modelled. The original goes on to import the text into the class defaults and
-   * SaveConfig(CPF_Config) the class: not modelled, so only properties of live instances change (a later instance spawned from the class
-   * defaults, such as the Player start's second Login, would not carry the value). Property kinds: int (UIntProperty::ImportText 0x10165f00),
-   * float, bool, name, and the Rotator/Vector structs over int/float members (UStructProperty::ImportText 0x101698b0); other kinds are
-   * not linked and throw. Returns false when no live actor IsA the class (the class lookup is left to the caller's unsupported report). */
+   * no-op). The live actors of the player's level are the objects modelled. Then the text is imported into the named class's own Defaults
+   * (0x101524b1..0x101524ca: ImportText into `Class+0x4d4` plus the offset; a subclass's defaults are its own copy and keep their value), so an
+   * object spawned from the class afterwards carries it (a `summon` typed after the `set`, the Player start's second Login). The
+   * SaveConfig(CPF_Config) of the class that follows (0x10152505) is not modelled: it writes the class's config properties to its INI.
+   * Property kinds: int (UIntProperty::ImportText 0x10165f00), float, bool, name, and the Rotator/Vector structs over int/float members
+   * (UStructProperty::ImportText 0x101698b0); other kinds are not linked and throw. Returns false when no live actor IsA the class (the class
+   * lookup is left to the caller's unsupported report). */
   function scriptClassSet(token, rest, cmd, ar) {
     const viewportActor = services.viewport ? read(services.viewport(), 'Actor') : null;
     if (!viewportActor) return false;
@@ -629,9 +631,8 @@ export function createConsoleCommands({runtime, input, services}) {
     while (value[0] === ' ') value = value.slice(1);
     const meta = field.metadata, kind = meta.type;
     if ((meta.arrayDim ?? 1) > 1) throw new UnsupportedConsoleCommandError(`UObject::GlobalSetProperty of a fixed array (${propertyName.token}) is not linked: ${cmd}`);
-    for (const actor of targets) {
+    const importInto = current => {
       let imported;
-      const current = runtime.readField(actor, field);
       if (kind === 'int') {
         // UIntProperty::ImportText 0x10165f00: appAtoi only when the text starts with '-' or a digit; otherwise NULL and the value stays
         imported = /^[-0-9]/.test(value) ? (importText('int', value).value | 0) : current;
@@ -644,8 +645,17 @@ export function createConsoleCommands({runtime, input, services}) {
         importNumericStruct(value, names, rotator, next, message => ar.log(message));
         imported = next;
       } else throw new UnsupportedConsoleCommandError(`UObject::GlobalSetProperty of ${kind} property ${propertyName.token} is not linked: ${cmd}`);
-      runtime.writeField(actor, field, imported);
+      return imported;
+    };
+    for (const actor of targets) runtime.writeField(actor, field, importInto(runtime.readField(actor, field)));
+    // The named class's own Defaults (Class->Defaults, not its subclasses' copies).
+    let named = null;
+    for (let c = runtime.instance(targets[0]).cls; c && !named; c = c.base) {
+      const key = c.record?.key?.toLowerCase();
+      if (key === wanted || (!wanted.includes('.') && key?.endsWith(`.${wanted}`))) named = c;
     }
+    const defaults = runtime.classDefaultReference(named, field);
+    defaults.set(importInto(defaults.get()));
     return true;
   }
 
