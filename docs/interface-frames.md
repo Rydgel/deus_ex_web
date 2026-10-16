@@ -153,6 +153,16 @@ mission start text, a button's activation delay or an InfoLink's typing. Play no
 the page's frame time, which the worker's clock models as the wall clock), with no dilation and no clamp. The original's own check is the frame:
 six seconds on, no log line, and Play's frame equal.
 
+**2b. Windows before the level, and the window clock in a live replay (2026-10-16).** UExtensionEngine::Tick calls TickWindows
+(`0x100266ce`) before UGameEngine::Tick (`0x100266d9`); Play ticked the level first, so a window the level created got a window tick in
+the same frame. `game.mjs` now ticks the windows first. In a live replay the original's window time is a measured input: under the
+tracer the original runs about 210 ms of wall clock per level tick, and the Underworld bark's display (HUDBarkDisplayItem.Tick adds
+`DeltaSeconds` to `timeDisplayed` until `timeToDisplay`) closed 5 ticks after the bark there and 82 ticks after it in Play, which gave
+the windows the level's 1/60 s. The tracer records RootTick's argument (`0x1003be90`, the f32 TickWindows passes every root;
+`call Extension.dll@0x1003be90 roottick 1 always`: Extension.dll is rebased, to `0x1950000` in the Mac bottle) and the replay ticks the
+windows with the frames the original ran since the previous level tick (`live-acceptance.mjs` `windowSeconds`). Checked by the
+Underworld capture `sndm5` (row 4.3.6): every registry take, the bark's windows freed at the original's tick included.
+
 **3. Brightness (the harness, fixed).** The first comparison of the main menu was 1.70 times brighter in Play, in a ramp that the page's slider did not
 explain: `ShowMainMenu` runs `FLUSH`, which re-reads Brightness from the client config (D3DDrv `Flush`, modelled in `script-window-host.mjs`), and Play's
 config still said 0.6 while the page's slider had been set to 0.4 (the identity ramp). The scenario sets the config's Brightness through the console on both

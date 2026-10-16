@@ -405,6 +405,10 @@ export function liveProbe(game, args = {}) {
           };
         }
         game.random.seed(parseInt(tick.rngIn, 16) >>> 0);
+        // The window system's wall-clock deltas (RootTick 0x1003be90, tools/dx-live-win.c `roottick`): every frame the original ran since
+        // the previous level tick, held frames included, ticks the windows before this level tick (game.mjs tick). Without them the windows
+        // take the level's delta.
+        this.windowSeconds = Array.isArray(tick.windowSeconds) ? tick.windowSeconds : null;
         // AIProcess's 2 ms rdtsc budget (aievent.rs PROCESS_STOP): the receiver the original's firstProcess was left at after this
         // tick (tools/dx-live-win.c `aiFirst`, actor|event), a measured host input like the stream state. The player's runtime
         // number differs between the programs (JCDentonMale2 there, JCDentonMale1 here).

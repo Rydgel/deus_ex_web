@@ -73,6 +73,7 @@
  *         kill-on-crash <0|1>     terminate the game at its first fatal first-chance exception, after reporting it (default 1:
  *                                 no crash dialog is left on the desktop)
  *         call <addr> <label> <nwords> [gate] [always] [name0] [namee] [deref <argidx> <ndwords> <byteoffset>]... (up to three)
+ *                                 (<addr> may be Module.dll@0xADDR: a preferred-base address rebased to where the module is loaded)
  *                                 a breakpoint at a function's entry (call-ticks only): its label, ECX, the first
  *                                 `nwords` stack dwords and, at its return (a one-shot breakpoint at the return
  *                                 address), EAX, those dwords again and `ndwords` at the pointer passed as argument
@@ -227,7 +228,7 @@ static Watched watched[1024]; static int watched_count;
 static int in_our_tick = 0; static uintptr_t rng_ptd = 0;   /* inside a ULevel::Tick of the traced level; the msvcrt thread-data block of the rand state (+0x14) */
 #define MAXCALLS 32
 #define MAXRET 64
-typedef struct { uintptr_t address; unsigned char original; char label[24]; int nwords, deref_count, deref_arg[3], deref_n[3], deref_off[3], gate, always, name0, namee, retname, namearg, namearg_off, ecx_n, ecx_off, span_on, span_arg, span_off, fret, fname_count, fname_arg[2]; char only[48]; } CallBp;
+typedef struct { uintptr_t address; unsigned char original; char module[40]; char label[24]; int nwords, deref_count, deref_arg[3], deref_n[3], deref_off[3], gate, always, name0, namee, retname, namearg, namearg_off, ecx_n, ecx_off, span_on, span_arg, span_off, fret, fname_count, fname_arg[2]; char only[48]; } CallBp;
 typedef struct { uintptr_t address; unsigned char original; int refs; } RetBp;
 typedef struct { int active; uintptr_t ret; unsigned esp, ecx; int call; unsigned args[16]; unsigned deref_ptr[3]; unsigned long seq; } Pending;
 static CallBp calls[MAXCALLS]; static int call_count;
@@ -282,6 +283,9 @@ static int read_config(const char *path) {
       CallBp *c = &calls[call_count]; memset(c, 0, sizeof(*c));
       char *a = strtok(NULL, " \t\r\n"), *l = strtok(NULL, " \t\r\n"), *n = strtok(NULL, " \t\r\n");
       if (!a || !l || !n) continue;
+      /* `Module.dll@0xADDR`: an address at the module's preferred base, rebased after attaching (Wine rebases a DLL whose preferred
+         base another one took first, Extension.dll's 0x10000000 among them). */
+      char *at = strchr(a, '@'); if (at) { *at = 0; strncpy(c->module, a, sizeof(c->module) - 1); a = at + 1; }
       c->address = strtoul(a, NULL, 0); strncpy(c->label, l, sizeof(c->label) - 1); c->nwords = atoi(n); if (c->nwords > 16) c->nwords = 16;
       for (char *o; (o = strtok(NULL, " \t\r\n"));) {
         if (!strcmp(o, "gate")) c->gate = 1; else if (!strcmp(o, "always")) c->always = 1;
@@ -687,6 +691,13 @@ static int do_trace(const char *config) {
   if (!process || !core_base || !engine_base) { fprintf(stderr, "cannot read DeusEx.exe\n"); return 1; }
   if (engine_base != 0x10300000u) { fprintf(stderr, "Engine.dll is at 0x%lx, not its preferred base\n", (unsigned long)engine_base); return 1; }
   strobe_ok = module_base("Render.dll") == 0x10b00000u;
+  for (int i = 0; i < call_count; i++) {
+    if (!calls[i].module[0]) continue;
+    uintptr_t base = module_base(calls[i].module), preferred = base ? read_u32(base + read_u32(base + 0x3c) + 0x34) : 0;
+    if (!base) { fprintf(stderr, "call %s: %s is not loaded\n", calls[i].label, calls[i].module); return 1; }
+    calls[i].address = calls[i].address - preferred + base;
+    fprintf(stderr, "call %s: %s at 0x%lx (preferred 0x%lx): 0x%lx\n", calls[i].label, calls[i].module, (unsigned long)base, (unsigned long)preferred, (unsigned long)calls[i].address);
+  }
   names_table = read_u32(core_base + OFF_NAMES_DATA);
   if (!resolve_actors()) return 1;
   fprintf(stderr, "level 0x%lx info 0x%lx player 0x%lx, %d watched\n", (unsigned long)level_ptr, (unsigned long)level_info, (unsigned long)player_ptr, watched_count);

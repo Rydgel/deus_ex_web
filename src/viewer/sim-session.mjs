@@ -1427,7 +1427,7 @@ export function createSimSession(game, { assets = null, events = [], exportName 
           // Validation: liveProbe's replay of an original trace sets this tick's delta and
           // stream state, or holds the level (live-probe.mjs).
           const replay = game.liveReplay, delta = replay ? replay.before(dt) : dt;
-          if (delta !== false) { game.tick(delta); replay?.after(); }
+          if (delta !== false) { game.tick(delta, replay?.windowSeconds ?? null); replay?.after(); }
           // Lip sync is Galaxy Update's step 12, after the HUD frame (script-audio-live.mjs).
         } catch (error) { fail(error); }
       }
