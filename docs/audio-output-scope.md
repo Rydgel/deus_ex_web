@@ -391,7 +391,7 @@ image, so the capture traces from the launch instead, with load inputs as bytes 
 ## 6. Criterion for row 4.3.7 (adopted 2026-10-16)
 
 **Scene and claim.** "Galaxy's output buffer": for a recorded scene of the running original (the launch to the title map, a console
-`open 00_Training`, a walk and a jump, `MUSICORDER 2`: about 75 s with music and PCM effect voices, §5.2), every byte the timer callback
+`open 00_Training`, a walk and a jump, `MUSICORDER 2`: 4,851 callbacks, about 97 s of output, with music and PCM effect voices, §5.2), every byte the timer callback
 copies into the DirectSound buffer, and the ring position it lands at, equals what the translated library produces when replayed with
 the original's library calls and cursor positions; and Play's worklet places bus B D bytes ahead of bus A as the original does, with D
 the measured value. Evidence O1 (the stored captures) and O2 (the callback and ring oracles). The captured scene has no speech: the ring

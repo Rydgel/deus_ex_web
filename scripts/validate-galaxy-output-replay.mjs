@@ -350,6 +350,6 @@ console.log(`PASS validate-galaxy-output-replay: ${records.length} records; ${st
   `${stats.bytes} copied bytes equal (FNV-1a per segment, ${stats.full} callbacks byte for byte; ${stats.nonzero} nonzero samples, ${stats.nonzeroA} at A and ${stats.nonzeroB} at B; peak ${stats.peak}); ` +
   `${stats.wavLoads} PCM and ${stats.mpegLoads} MPEG samples, ` +
   `${stats.music} music loads, ${stats.starts} starts, ${stats.controls} controls, ${stats.polls} status polls, ${stats.stops} stops ` +
-  `(${stats.nestedStops} inside a start or an unload), ` +
+  `and ${stats.nestedStops} more inside a start or an unload (part of that call), ` +
   `${stats.unloads} unloads (${stats.unloadsUnseen} of samples never started), ` +
   `${stats.reverbs} reverb blocks; ${stats.messages} decoder messages, ${stats.decoderCalls} decoder calls`);
