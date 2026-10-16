@@ -6,7 +6,9 @@ Galaxy.dll under Unicorn, with the real SSE mixer, conversion and renderer
       RegisterSound 0x10606af0 calls it (0x10606b85..0x10606bac), on RIFF
       WAVE bytes (the dispatch, the WAV loader 0x10619940, the memory stream);
   glxStartSample 0x10612310, glxControlSample 0x1060d280, glxControlVoice
-      0x1060cf00, glxStopSample 0x10618410, glxSetSampleVolume 0x1060ec00;
+      0x1060cf00, glxStopSample 0x10618410, glxSetSampleVolume 0x1060ec00,
+      glxUnloadSample 0x10619500 (UnregisterSound's: the voices playing the
+      sample stopped, its blocks freed);
   the timer callback's renderer 0x106146a0, which mixes the effect voices
       [0, EffectsChannels) onto bus B and converts it with the saturating
       add (and bus A, the music, with the store).
@@ -32,6 +34,8 @@ Ops (each W/V record closes a digest group):
   {"op":"controlSample","slot":s|null,"freq","vol","pan"}   record V
   {"op":"stopSample","slot":s|null}                          record V
   {"op":"controlVoice","slot":s|null,"cmd","p1","p2"}        record V
+  {"op":"unloadSample","sample":name|null}   glxUnloadSample(the named sample's record or 0);
+      record U = V, then u32 1 when the record and its Data block were freed
   {"op":"sampleVolume","volume":v,"mode":m}                  glxSetSampleVolume; record V
   {"op":"sampleReverb","block":H,"cos":[[xSig,xSE,cSig,cSE],...]}  glxSetSampleReverb(&block)
       (the 0x6c-byte glxReverb H); FCOS's result for each listed input (hex
@@ -58,7 +62,7 @@ seq = importlib.util.module_from_spec(s); s.loader.exec_module(seq)
 lo, at, orig = seq.lo, seq.at, seq.orig
 
 LOAD_SAMPLE, START_SAMPLE, CONTROL_SAMPLE, CONTROL_VOICE, STOP_SAMPLE = 0x10618e60, 0x10612310, 0x1060d280, 0x1060cf00, 0x10618410
-SET_SAMPLE_VOLUME = 0x1060ec00
+SET_SAMPLE_VOLUME, UNLOAD_SAMPLE = 0x1060ec00, 0x10619500
 SET_SAMPLE_REVERB, REVERB_FCOS, REVERB_HOOK, REVERB_CTX, REVERB_KERNEL = 0x106113d0, 0x10610ac1, 0x10688288, 0x10688284, 0x10622d33
 FP = [getattr(x86_const, f'UC_X86_REG_FP{i}') for i in range(8)]
 EFFECT_HEAP, EFFECT_HEAP_SIZE = 0x60000000, 0x04000000
@@ -75,6 +79,7 @@ FUNCTIONS = [
     (0x1060d280, 0x1060d366, 'glxControlSample 0x1060d280'),
     (0x1060cf00, 0x1060d0d3, 'glxControlVoice 0x1060cf00'),
     (0x10618410, 0x1061858b, 'glxStopSample 0x10618410'),
+    (0x10619500, 0x106195aa, 'glxUnloadSample 0x10619500'),
     (0x106113d0, 0x10611610, 'glxSetSampleReverb 0x106113d0'),
     (0x106109f0, 0x1061122f, 'reverb setup 0x106109f0'),
     (0x10622d33, 0x10622f1b, 'SSE reverb kernel 0x10622d33'),
@@ -220,6 +225,19 @@ class EffectsOracle(seq.MixerOracle):
         elif op == 'stopSample':
             result = self.ccall(STOP_SAMPLE, self.voice_pointer(step.get('slot')))
             self.record(b'V', self.voices_record(result)); self.end_group()
+        elif op == 'unloadSample':
+            name = step.get('sample')
+            sample = self.sample_addr.get(name, 0) if name else 0
+            data = self.read(sample + 0x44, 'I')[0] if sample else 0
+            self.heap = self.effect_heap
+            try:
+                result = self.ccall(UNLOAD_SAMPLE, sample)
+            finally:
+                self.heap = self.music_heap
+            freed = int(bool(sample) and sample not in self.effect_heap.blocks and data not in self.effect_heap.blocks)
+            if name:
+                del self.sample_addr[name]
+            self.record(b'U', self.voices_record(result) + struct.pack('<I', freed)); self.end_group()
         elif op == 'controlVoice':
             result = self.ccall(CONTROL_VOICE, self.voice_pointer(step.get('slot')), step['cmd'], step.get('p1', 0), step.get('p2', 0))
             self.record(b'V', self.voices_record(result)); self.end_group()
