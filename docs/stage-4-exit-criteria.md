@@ -20,12 +20,16 @@ First run, 2026-10-15 on master 2386f69 plus this branch (Linux host, AMD, 30 GB
 | 4.2 Effects | 17 | 1 | 3 | 0 | 9 | 3 |
 | 4.3 Sound | 5 | 0 | 0 | 0 | 2 | 0 |
 | 4.4 Text and interfaces | 10 | 0 | 0 | 0 | 4 | 2 |
-| 4.5 Speech, lip sync and the conversation camera | 6 | 0 | 0 | 0 | 2 | 0 |
-| **Total** | **47** | **1** | **3** | **0** | **19** | **5** |
+| 4.5 Speech, lip sync and the conversation camera | 7 | 0 | 0 | 0 | 1 | 0 |
+| **Total** | **48** | **1** | **3** | **0** | **18** | **5** |
 
 **Update, interface frames (2026-10-15, [interface frames](interface-frames.md)):** rows 4.4.11 to 4.4.14 are `PASS`, from 18 views of 00_Training compared with
 the original's frames (the HUD, eight persona screens, the main menu, three Settings screens, a datacube and the keypad) and from the four stored security-computer screens (outside their camera windows); the clause 4.4 row of the first-run table reads
 14 PASS, 0 MISSING and the total 48 of 70 PASS, 17 MISSING. The comparison found two divergences of Play, both fixed (the GC's authored underline texture and the window system's real-time tick).
+
+**Update, conversation frames (2026-10-16, [conversation camera](conversation-camera.md)):** rows 4.5.5 (MeetPaul), 4.5.7 (the intro) and 4.5.8 (MeetManderley) are `PASS`, from the new `conversation` check kind: held frames of the original (Ctrl+F9 in the running game) against Play's replay of the same trace at the same tick, judged by
+region (letterbox bars and subtitle identical, the 3D band within the polygon edge), plus the per-tick comparison of every traced actor over the longest replay. The clause 4.5 row reads 7 PASS, 1 MISSING (4.5.6, the speech audio) and the totals 48 PASS, 18 MISSING.
+The comparison found one divergence of Play, fixed: `AActor::FindBase` traced a box of the wrong extent.
 
 The table below is the whole gate, one row per criterion (`--markdown` re-renders it from the report). The ids are stable; `4.n.m` is clause n, row m.
 A mode in brackets names how the check exercises Play (see [How the gate judges](#how-the-gate-judges)).
@@ -126,10 +130,10 @@ A mode in brackets names how the check exercises Play (see [How the gate judges]
 | 4.5.2 | 01_NYC_UNATCOIsland MeetPaul | speech reaches the lip-sync channels and Paul's mouth follows the letters | O3 | `island-lipsync` [node] | PASS |
 | 4.5.3 | 01_NYC_UNATCOIsland MeetPaul camera | CreateConCamera, the letterbox raw background, the render viewport clip and the player in behind view | O3 | `island-conversation` [node], `root-raw-background` [oracle], `root-render-viewport` [oracle], `conversation-move-camera` [node] | PASS |
 | 4.5.4 | speech timing and audio | speech lookup, sound length and the retained archive equal the original | O2 | `conversation-sound-length` [oracle], `conversation-audio-integration` [node], `conversation-speech-audio` [oracle], `infolink-audio` [node], `conversation-speech` [oracle] | PASS |
-| 4.5.5 | MeetPaul frame | the third-person conversation frame (letterbox, behind view, camera, subtitles) against the original's | O1 | `conversation 01_NYC_UNATCOIsland (4 frames)` [worker] | PASS |
+| 4.5.5 | MeetPaul frame | the third-person conversation frame (letterbox, behind view, camera, subtitles) against the original's | O1 | `conversation 01_NYC_UNATCOIsland cvA (4 frames)` [worker] | PASS |
 | 4.5.6 | speech audio | the speech samples the player hears against Galaxy's | - | missing: Galaxy's MPEG decoder is not translated; the host's decode and rounding are unverified (docs/lip-sync.md) | MISSING |
-| 4.5.7 | 00_Intro camera shots | the intro's CameraPoint shots against the original | O1 | `conversation 00_Intro (3 frames)` [worker], `native-find-base` [oracle] | PASS |
-| 4.5.8 | a second third-person conversation | a conversation on another map, with the third-person camera, lip sync and speech | - | missing: chosen: 01_NYC_UNATCOHQ MeetManderley (every map's object-index capture already exists, docs/object-index-captures.md); it starts and plays in Play with the camera, but no original capture was taken yet (docs/conversation-camera.md "Hand-off") | MISSING |
+| 4.5.7 | 00_Intro camera shots | the intro's CameraPoint shots against the original | O1 | `conversation 00_Intro in2 (3 frames)` [worker], `native-find-base` [oracle] | PASS |
+| 4.5.8 | 01_NYC_UNATCOHQ MeetManderley | a conversation on another map, with the third-person camera, lip sync and speech (the lines and their timing; the audio samples are 4.5.6) | O1 | `conversation 01_NYC_UNATCOHQ mmA (2 frames)` [worker], `conversation 01_NYC_UNATCOHQ mmB (2 frames)` [worker] | PASS |
 
 ## How the gate judges
 
@@ -222,8 +226,8 @@ now compares 18 views of 00_Training pixel for pixel (equal to within 2 of 255 a
 in a frame: a computer's login screen (the four security terminals' screens after login are, outside their camera windows), the DataLink, InfoLink and conversation windows, a held weapon's ammo display, another map's HUD or another resolution.
 
 **Speech, lip sync and the conversation camera.** Galaxy's lip-sync analysis equals the DLL bit for bit, MeetPaul runs end to end with the camera,
-the letterbox and the render clip checked against Extension.dll, and Paul's mouth follows the letters in the browser. There is no frame or sound of
-the original's conversation to compare (4.5.5, 4.5.6).
+the letterbox and the render clip checked against Extension.dll, and Paul's mouth follows the letters in the browser. The conversation frames of MeetPaul (4.5.5),
+the intro (4.5.7) and MeetManderley (4.5.8) are compared with the original's own frames (2026-10-16); the speech audio is not (4.5.6).
 
 ## What exists and the gate does not run
 
@@ -283,6 +287,7 @@ each criterion's inputs from one root (the first that holds them) and links or c
 | The Ship camera recaptured with the level's movers measured (2026-10-16, tag `sh3b`, level time 132.264 s in `sh3b-time.txt`; the first `sh3` capture is kept) | main `.work/acceptance/09_NYC_Ship/sh3b-original.png`, `.bmp`, `-state.json` (with `movers`) | 4.2.28 |
 | MeetPaul's four held frames (2026-10-16, tag `cvA`, ticks 100/250/600/750, each with `cvA<n>-time.txt`), the 750-tick trace with the player's blend channel, the watch and population lists, the commands and the measured phonemes | main `.work/acceptance/01_NYC_UNATCOIsland/cvA{1..4}-original.png`, `.work/live-acceptance/01_NYC_UNATCOIsland/{original-trace,watch,population,commands,hold,phonemes}-cvA.*` | 4.5.5 |
 | The intro's three held frames (2026-10-16, tag `in2`, ticks 170/1000/2250, each with `in2-in<n>-time.txt`) and its 2,250-tick trace with the watch and population lists and the commands | main `.work/acceptance/00_Intro/in2-in{1,3,4}-original.png`, `.work/live-acceptance/00_Intro/{original-trace,watch,population,commands,hold}-in2.*` | 4.5.7 |
+| MeetManderley's frames and traces (2026-10-16, tags `mmA` 1,100 ticks and `mmB` 580 ticks, two loads; frames mm2, mm3, mmB1 (stored, not compared: the letterbox is still sliding at tick 40 in Play), mmB2, mmB3 with `-time.txt`) | main `.work/acceptance/01_NYC_UNATCOHQ/{mm2,mm3,mmB1,mmB2,mmB3}-original.png`, `.work/live-acceptance/01_NYC_UNATCOHQ/{original-trace,watch,population,commands,hold}-{mmA,mmB}.*` | 4.5.8 |
 | The original's third-person weapon draws | main `.work/weapon/original-cases*.json` | 4.1.9 |
 | The interface frames of 00_Training (18 views, 2026-10-15) and each frame's level time | main `.work/acceptance/00_Training/ui-<view>-original.png` and `ui-<view>-time.txt` (also `ui-e1` to `ui-e4`, the pointer experiment) | 4.4.11 to 4.4.14 |
 | The light manager's tables from the running original | main `.work/live/.work/fpu` | 4.2.9 |
@@ -329,10 +334,9 @@ Nothing below was fixed in this task beyond wiring existing checks; each item is
    fixed, the gate rows `PASS`). The terminal screens of four security computers are compared too (the camera frames outside their windows are pixel-equal). What a frame still does not cover: a computer's login screen before the login (it needs a live level held by the tracer, as the security cameras do), the DataLink,
    InfoLink and conversation windows, a held weapon's ammo display (with 4.1.10), another map's HUD and another resolution, and one open difference of the pointer input (a stationary
    cursor over a screen that replaced another: the original focuses the button under it, Play does not; the cause is unmeasured).
-2. **Speech and the conversation camera have no original frame or sound (4.5.5 to 4.5.8).** The camera, letterbox and lip-sync code are compared with the
-   DLLs, and MeetPaul runs end to end, but there is no original frame of the conversation (letterbox, behind view, subtitles), no original audio of the speech
-   (Galaxy's MPEG decoder is not translated; the host's decode and rounding are unverified), the intro's `CameraPoint` shots have no gate-readable frame, and
-   lip sync is wired for one conversation. Holds up "synchronized speech and conversation camera behavior".
+2. **Speech has no original sound (4.5.6).** The conversation frames are compared with the original's (4.5.5 MeetPaul, 4.5.7 the intro, 4.5.8 MeetManderley, 2026-10-16: letterbox, behind view, camera, subtitles,
+   lip sync through the per-tick actor trace), but there is no original audio of the speech (Galaxy's MPEG decoder is not translated; the host's decode and rounding are unverified). The comparison found one divergence of Play,
+   fixed ([conversation camera](conversation-camera.md#the-intro-against-the-original-2026-10-16-gate-row-457): `AActor::FindBase`'s trace extent). Holds up "synchronized speech and conversation camera behavior".
 3. **One live result is still red (4.2.28's Ship window); 4.1.7 and 4.1.8 were settled 2026-10-16** ([visual
    acceptance](visual-acceptance.md#the-live-replays-start-state-battery-parks-two-loads-and-the-underworlds-flaky-draw-2026-10-16)). *4.1.7* (flaky): the player's animation flags at the start of the
    replay (`bAnimNotify` 0 when the replay began before the ghost's own script started its `Tread` loop, so the loop's `PlayFootStep` `FRand` was missing at tick 45); the harness now

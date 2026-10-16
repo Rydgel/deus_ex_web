@@ -1790,6 +1790,18 @@ the three are two guards' `LastRenderTime` at tick 1 (the render history) and th
 99% lie on an edge (silhouettes, mesh triangle edges, brush edges: the count follows the edges' length, so the gate judges the pixels away from them); the rest are at most 63 per frame, off by at most 23 (MeetPaul's four: 15 to 37, at most 23). The live comparison
 of the replay (`live-acceptance.mjs compare --tag in2`) reads all 82 watched actors, the clock and the stream draws equal for 2,250 ticks.
 
+**MeetManderley (`01_NYC_UNATCOHQ`, 2026-10-16, gate row 4.5.8).** Four held frames of two loads of the original (tags `mmA`, `mmB`) against Play's replays, as MeetPaul: the two bars and the subtitle identical to the pixel in all four, no outlier block
+([conversation camera](conversation-camera.md#meetmanderley-against-the-original-2026-10-16-gate-row-458)).
+
+| Frame | load, tick, speech | identical, >2, >10 (band), over 10 off the edges, recall/precision |
+| --- | --- | --- |
+| mm2 | mmA, 450, 234 Manderley (the fallback camera) | .95527, 7,239, 1,926; 94; .999/.999 |
+| mm3 | mmA, 700, 238 Manderley (camera 4) | .96407, 5,131, 1,893; 81; .999/1 |
+| mmB2 | mmB, 300, 234 Manderley (the fallback camera) | .95542, 7,158, 1,848; 90; .999/1 |
+| mmB3 | mmB, 580, 235 JC (the fallback camera) | .95202, 8,216, 2,375; 91; .999/1 |
+
+The live comparison reads all 22 watched actors, the clock and the stream draws equal for the replayed ticks (700 and 580; 1,100 in an earlier full replay of `mmA`), apart from the player's `AnimFrame` at tick 1.
+
 ```bash
 # the original (Wine lock): all frames of one run, one trace; each frame is a held tick (--cmds N:@ctrlshot name, the last --shot name --shot-ctrl), Brightness 2/3 in the early commands
 DX_HYPRLAND=1 scripts/live-original.sh 01_NYC_UNATCOIsland --ticks 750 --delta 0.0166666675 --monitor 20 --tag cvA --player-blend --shot cvA4 --shot-ctrl \

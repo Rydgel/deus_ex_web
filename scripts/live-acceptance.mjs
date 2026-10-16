@@ -645,9 +645,12 @@ async function play() {
       region: {zone: a.RegZone, iLeaf: a.RegLeaf, zoneNumber: a.RegNum}}), {...pose, rehash: flag('ghost-in-hash')});
     // --early-cmds: the console lines the original was typed in its frozen phase (a camera that follows an actor), run now through the same chain
     if (earlyCommands().length) console.log('early commands:', JSON.stringify((await page.evaluate(lines => window.deusExViewer.viewProbe({exec: lines}), earlyCommands())).output));
-    // A no-ghost player placed at the original's pose stands in the Physics its login left it (falling); the original's had landed during a frozen
-    // phase of tens of seconds (the intro: Physics 1, Velocity 0, Z -80.2). The frozen level (bPlayersOnly) is ticked until the player is in the pose's Physics.
-    if (flag('no-ghost') && pose.Phys !== undefined) {
+    // A player placed at the original's pose (a no-ghost player, or a ghost put on its feet by `walk`) is not standing yet: it stands in the Physics its login or
+    // `walk` left it (falling), and settles in a few ticks (a fall, the landing, a lift to the rest height: Manderley's `set Location` 0.17 below its rest height 287.8
+    // fell 2 units and came back in five ticks). The original's stood in a frozen phase of tens of seconds (the intro: Physics 1, Velocity 0, Z -80.2). The frozen
+    // level (bPlayersOnly) is ticked until the player is in the pose's Physics, at its Location, at rest. A replay that began before it (the page's frames are not
+    // ticks when the worker is busy) read the player's Z a few hundredths off at tick 1 and every pawn's DistanceFromPlayer with it.
+    if ((flag('no-ghost') || pose.Phys === 1) && pose.Phys !== undefined) {
       const stand = async () => (await page.evaluate(() => window.deusExViewer.liveProbe({read: {names: ['@player'], props: ['Physics', 'Location', 'Velocity', 'Base']}}))).read?.['@player'];
       let now = await stand(), waited = 0;
       // landed and at rest where the original's stood (the landing is a few frozen ticks and a tick's delta is the host's frame time, so the first
