@@ -391,9 +391,34 @@ export function liveProbe(game, args = {}) {
         if (runtime.scriptTrace) runtime.scriptTrace.tick = this.index + 1;
         if (this.preFrees?.length) while (this.preFrees.length && this.preFrees[0].u <= this.index + 1) {
           const entry = this.preFrees.shift();
+          // An AI event object (the sender the player's landing left in the original's manager) is freed by UEventManager::CleanupEvents,
+          // at the end of the manager's Tick after the actors (ULevel::Tick 0x103a5a2b): after the objects this tick's actors create.
+          if (/^AI(SenderEvent|ReceiverEvent|EventType)$/.test(entry.cls ?? '') && runtime.scriptVm?.aiEvents) { (this.preFreesAfterAi ??= []).push(entry); continue; }
           if (!runtime.actorLifecycle.construction.registry.original?.release(entry.index)) this.preFreesRejected = (this.preFreesRejected ?? 0) + 1;
         }
+        if (this.preFreesAfterAi?.length && runtime.scriptVm?.aiEvents) {
+          const manager = runtime.scriptVm.aiEvents, pending = this.preFreesAfterAi;
+          manager.afterTick = () => {
+            manager.afterTick = null;
+            for (const entry of pending.splice(0))
+              if (!runtime.actorLifecycle.construction.registry.original?.release(entry.index)) this.preFreesRejected = (this.preFreesRejected ?? 0) + 1;
+          };
+        }
         game.random.seed(parseInt(tick.rngIn, 16) >>> 0);
+        // The window system's wall-clock deltas (RootTick 0x1003be90, tools/dx-live-win.c `roottick`): every frame the original ran since
+        // the previous level tick, held frames included, ticks the windows before this level tick (game.mjs tick). Without them the windows
+        // take the level's delta.
+        this.windowSeconds = Array.isArray(tick.windowSeconds) ? tick.windowSeconds : null;
+        // AIProcess's 2 ms rdtsc budget (aievent.rs PROCESS_STOP): the receiver the original's firstProcess was left at after this
+        // tick (tools/dx-live-win.c `aiFirst`, actor|event), a measured host input like the stream state. The player's runtime
+        // number differs between the programs (JCDentonMale2 there, JCDentonMale1 here).
+        const aiManager = runtime.scriptVm?.aiEvents;
+        this.aiStop = null;
+        if (tick.aiFirst !== undefined && aiManager?.setProcessStop) {
+          const [who, event] = String(tick.aiFirst).split('|'), actor = who === 'None' ? null : /^JCDenton/i.test(who) ? player : byName(who);
+          aiManager.setProcessStop(actor, event);
+          this.aiStop = { misses: aiManager.processStopMisses(), unresolved: who !== 'None' && !actor };
+        }
         while (this.phonemes.length && this.phonemes[0].n <= this.index + 1) {
           const { name, letter } = this.phonemes.shift(), speaker = byName(name);
           if (speaker) runtime.writeNamed(speaker, 'nextPhoneme', letter);
@@ -408,6 +433,12 @@ export function liveProbe(game, args = {}) {
         const row = this.current; this.current = null;
         row.rngOut = hex(game.random.state); row.clockOut = level.timeSeconds; row.tsOut = runtime.readNamed(info, 'TimeSeconds');
         row.strobeOut = [lightGlobals(runtime).strobe.flag, lightGlobals(runtime).strobe.time];
+        if (this.aiStop) {
+          // the stop named an actor Play does not have, or a receiver its ring did not reach this tick
+          if (this.aiStop.unresolved) row.aiStopUnresolved = true;
+          if (runtime.scriptVm.aiEvents.processStopMisses() > this.aiStop.misses) row.aiStopMissed = true;
+          this.aiStop = null;
+        }
         row.actors = this.snapshot();
         if (this.canSee && row.n >= this.canSee.first && row.n <= this.canSee.last) row.canSee = canSeeProbe(this.canSee.pawn);
         if (this.draws) { row.draws = {}; for (const name of this.draws) row.draws[name] = (row.draws[name] ?? 0) + 1; this.draws.length = 0; }

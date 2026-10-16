@@ -1443,6 +1443,10 @@ export async function createWindowHost({runtime, assets, player, gameConfig = nu
     let count = 0;
     for (let node = Lg.read(base + GC.freeList, 'u32'); node; node = Lg.read(base + GC.freeList, 'u32')) {
       Lg.write(base + GC.freeList, 'u32', Lg.read(node + GC.stackTop, 'u32'));
+      // `call [vtable+0xc]` with 1 (0x10026d9a): the node's whole deleting destructor, its ~UObject's slot
+      // release included, before the next node and before this GC's own ~UObject.
+      const holder = pushedNodes.get(node);
+      if (holder) { pushedNodes.delete(node); giveBackOriginalSlot(holder); }
       heap.freeRaw(node);
       count++;
     }
@@ -1578,8 +1582,19 @@ export async function createWindowHost({runtime, assets, player, gameConfig = nu
     safeDestroy: ({object}) => safeDestroy(object),
     destroy: destroyServices,
   };
+  // XGC::PushGC's new node (0x10027944) comes from XGC::operator new (0x10002c40), UObject::StaticConstructObject of the GC
+  // class: a registered GC that takes a GObjObjects slot (AddObject) and keeps it on the GC's free list until XGC::Destroy
+  // deletes it (destroyGc). The first text DrawText of a window's GC makes one (the Underworld capture's GC519..GC521,
+  // docs/object-index-captures.md). Its slot holder, by the node's address.
+  const pushedNodes = new Map();
   const gcServices = {mem: heap.mem, objectAddress: object => object.base??heap.objectAddress(object),
-    allocateObject: ()=>heap.allocRaw(GC.size),constructUObject: ()=>{},
+    allocateObject: () => {
+      const node = heap.allocRaw(GC.size), holder = {name: `GC${nameCounter++}`};
+      takeOriginalSlot(holder, 'GC');
+      pushedNodes.set(node, holder);
+      return node;
+    },
+    constructUObject: ()=>{},
   };
   const drawCommands=[];
   const canvas={name:'PlayHUDCanvas'};heap.allocate(canvas,0x80);

@@ -51,6 +51,10 @@ const THRESHOLDS = Object.freeze({
   contributionCorrelation: 0.90,
   contributionGap: 0.08,           // |play sum / original sum / frame ratio - 1|
   contributionAgreement: 0.98,     // share of the original's effect pixels (difference >= 1 level) where Play's is at least a quarter of its scaled value
+  // An effect drawn with a FireTexture (04_NYC_Street's steam, row 4.2.13) changes from frame to frame at a held tick in the original itself (the sparks,
+  // an unmatched host input as the beams' texture): its agreement is judged against the original's own floor instead (a LIVE check's `floorShots`):
+  // over every pair of the stored frames and Play's (`--extra-shots`), Play's median agreement against the original at least the original's minimum
+  // against itself (scripts/contribution-floor.mjs). The steam measured .898 against .867 (four frames a side; the original against itself .867 to .934).
   // The laser beams' geometry in 64 x 64 blocks (visual-acceptance.mjs `compare --beams`). Island's doorway beams measure coverage .94 and .88, Play's
   // energy over the original's .87 to 1.01 and .88 to 1.0 over runs (the fire texture) and a y-offset of the centroids of 1.3 and 1.6 px rms; two frames of the original itself, whose beams'
   // texture is an animated fire, read 1.0, .99 and .3 px. Weak: set from two views; the sparks of the beam texture are an unmatched host input.
@@ -257,9 +261,11 @@ add('4.2.11', C2, 'coronas', 'visibility helper, DrawIcon arguments, tracker tra
   V('coronas'), V('coronas-tracked'), V('corona-tiles'), V('corona-tiles-play'), V('coronas-mover-play'), V('coronas-play'));
 add('4.2.12', C2, 'particles and sprites', 'ParticleIterator, FDynamicSprite and the tile chain', 'O2',
   V('native-particles'), V('sprite-setup'), V('sprite-tiles'), V('sprite-tiles-play'), V('sprite-tiles-mirror-play'), V('particles-play'));
-add('4.2.13', C2, '04_NYC_Street vents', 'a frame with particles and sprites against the original with the generators\' state matched: the original\'s 600 ticks (stream state per tick) replayed in Play, then the held frame and the steam (the frame less the frozen start\'s) against the original\'s',
-  'O1', LIVE({map: '04_NYC_Street', tag: 'vents2', shot: 'vents2', baseShot: true, renderHistory: true,
-    earlyCmds: 'set DeusEx.JCDentonMale Location (X=454,Y=67,Z=-467)|set DeusEx.JCDentonMale ViewRotation (Pitch=1800,Yaw=0,Roll=0)'}));
+add('4.2.13', C2, '04_NYC_Street vents', 'a frame with particles and sprites against the original with the generators\' state matched: the original\'s 600 ticks (stream state per tick) replayed in Play (the load\'s chance FlyGenerators removed in both by the original\'s KillAll), then the held frame and the steam (the frame less the frozen start\'s) against the original\'s, the steam\'s per-pixel agreement against the original\'s own frame-to-frame floor',
+  // vents4 (the Mac, Brightness 2/3): the load's chance FlyGenerators removed in both programs by the original's KillAll (their names are a per-process
+  // counter, so a name match does not hold the same decorations: docs/visual-acceptance.md "04_NYC_Street's steam vents"); four held frames a side
+  'O1', LIVE({map: '04_NYC_Street', tag: 'vents4', shot: 'vents4', baseShot: true, renderHistory: true, floorShots: 3,
+    earlyCmds: 'KillAll FlyGenerator|set DeusEx.JCDentonMale Location (X=454,Y=67,Z=-467)|set DeusEx.JCDentonMale ViewRotation (Pitch=1800,Yaw=0,Roll=0)'}));
 add('4.2.14', C2, 'decals', 'AttachDecal, ClipDecal and the vertices of a decal equal Engine.dll and Render.dll', 'O2',
   V('decal-attach'), V('decal-render'), V('decal-startup'), V('decal-vertices-play'), V('decals-play'));
 // The pawns' Shadow decals with the level unfrozen (Shadow.Tick attaches them), held at the shot: the two pawns in view that walk (mib1 Wandering,
@@ -584,13 +590,14 @@ function strobeHeldProblems(map, name, spec) {
   return off;
 }
 const flashBasePlays = new Map();
-function contributionProblems(m) {
+function contributionProblems(m, {floor = false} = {}) {
   const c = m.contribution, off = [];
   if (!c) return ['no contribution measured'];
   if (!c.effectPixels) off.push('the original shows no contribution');
   if (!(c.correlation >= THRESHOLDS.contributionCorrelation)) off.push(`contribution correlation ${c.correlation} < ${THRESHOLDS.contributionCorrelation}`);
   if (!(Math.abs(c.gap / m.ratio - 1) <= THRESHOLDS.contributionGap)) off.push(`contribution gap ${c.gap} against the frame's ratio ${m.ratio}`);
-  if (!(c.agreement >= THRESHOLDS.contributionAgreement)) off.push(`contribution agreement ${c.agreement} < ${THRESHOLDS.contributionAgreement}`);
+  // (floor: judged against the original's own frames instead, judgeLive)
+  if (!floor && !(c.agreement >= THRESHOLDS.contributionAgreement)) off.push(`contribution agreement ${c.agreement} < ${THRESHOLDS.contributionAgreement}`);
   return off;
 }
 // matched frames -----------------------------------------------------------------------------------------
@@ -804,12 +811,15 @@ function stageLive(map, tag, into = '.work/live-acceptance') {
   return absent;
 }
 async function judgeLive(task, add, fail, result) {
-  const {map, tag = null, shot = null, earlyCmds = null, renderHistory = false, baseShot = false} = task.live;
+  const {map, tag = null, shot = null, earlyCmds = null, renderHistory = false, baseShot = false, floorShots = 0} = task.live;
   const absent = stageLive(map, tag);
   if (shot) { if (!stage(`acceptance/${map}/${shot}-original.png`)) absent.push(`acceptance/${map}/${shot}-original.png`); stage('acceptance/times.json', {copy: true}); }
   if (shot && baseShot && !stage(`acceptance/${map}/${shot}-base-original.png`)) absent.push(`acceptance/${map}/${shot}-base-original.png`);
+  // floorShots: the original's further frames of the same held tick (`live-original.sh --extra-shots`), the contribution's own floor (THRESHOLDS)
+  for (let k = 2; shot && k <= 1 + floorShots; k++) if (!stage(`acceptance/${map}/${shot}-original-${k}.png`)) absent.push(`acceptance/${map}/${shot}-original-${k}.png`);
   if (absent.length) return fail(`stored originals absent: ${absent.join(', ')}`, 'NO-ORIGINAL');
-  const extra = [...(tag ? ['--tag', tag] : []), ...(shot ? ['--shot', shot] : []), ...(earlyCmds ? ['--early-cmds', earlyCmds] : []), ...(renderHistory ? ['--render-history'] : []), ...(baseShot ? ['--base-shot'] : [])];
+  const extra = [...(tag ? ['--tag', tag] : []), ...(shot ? ['--shot', shot] : []), ...(earlyCmds ? ['--early-cmds', earlyCmds] : []), ...(renderHistory ? ['--render-history'] : []), ...(baseShot ? ['--base-shot'] : []),
+    ...(floorShots ? ['--extra-shots', String(floorShots)] : [])];
   // One replay of the original's trace. A run whose only difference is the stream's draw count is repeated once: that count differed in
   // single runs under host load and not on the repeat (docs/visual-acceptance.md "Open", unattributed), and the repeat is reported.
   const replay = async () => {
@@ -840,9 +850,20 @@ async function judgeLive(task, add, fail, result) {
     if (!m) problems.push('no frame comparison');
     else {
       const off = frameProblems({...m, outlierBlocks: Array.from({length: blocks}, () => [])});
-      if (baseShot) off.push(...contributionProblems(m));
-      if (off.length) problems.push(`frame ${shot}: ${off.join(', ')}`);
+      if (baseShot) off.push(...contributionProblems(m, {floor: floorShots > 0}));
       frameNote = `; frame ${shot} ${m.edgeRecall}/${m.edgePrecision}/${blocks}`;
+      // the contribution's agreement against the original's own frame-to-frame floor (every frame pair, the stored frames and this run's)
+      if (baseShot && floorShots) {
+        const run = add(await exec(process.execPath, ['scripts/contribution-floor.mjs', '--map', map, '--shot', shot, '--extra', String(floorShots), '--json'], {limitSeconds: 600}));
+        const floor = (() => { try { return JSON.parse(run.out.trim().split('\n').pop()); } catch { return null; } })();
+        if (!floor || floor.originals !== 1 + floorShots || floor.plays !== 1 + floorShots) off.push(`no contribution floor (${run.killed ?? tail(run.out)})`);
+        else {
+          const median = floor.cross.agreement.median, minimum = floor.originalSelf.agreement.min;
+          if (!(median >= minimum)) off.push(`contribution agreement: Play's median against the original ${median} < the original's own minimum ${minimum}`);
+          frameNote += `; steam agreement median ${median} (${floor.cross.agreement.min} to ${floor.cross.agreement.max}) against the original's own ${minimum} to ${floor.originalSelf.agreement.max}`;
+        }
+      }
+      if (off.length) problems.push(`frame ${shot}: ${off.join(', ')}`);
     }
   }
   if (problems.length) return fail(`${map}${tag ? ` ${tag}` : ''}: ${problems.join('; ')}`);

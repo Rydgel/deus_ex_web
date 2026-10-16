@@ -644,6 +644,31 @@ worklet reports, and under the Web Audio mapping, the host clock's stand-in (the
 whole chunks; a decoder that answers nothing once mid-stream would take the second attempt, which the leaf never exercises); the
 decoder thread's timing against the mixer on the reference machine (host).
 
+## Row 4.3.6: the Underworld's sound calls equal the original's (2026-10-16)
+
+The Linux capture `snd1` was out of reach, so the scene was captured again on the Mac under CrossOver (the commands and the
+tracer config: [object-index-captures](object-index-captures.md) "Repeating the scene"). Five captures, each replayed and compared
+(`live-sound-compare.mjs --gate`, `live-events-compare.mjs`, `live-acceptance.mjs compare`), found these causes; each fix is the
+original's code or a measured host input:
+
+| Capture | First difference | Cause | Fix (commit) |
+| --- | --- | --- | --- |
+| `sndm` | tick 210: GlassFragment9's `GlassBreakLarge` at 0.7 in the original, 2.0 in Play | CheckHearSound's FastLineCheck runs on `XLevel->Model`, which the moving brush tracker extends with every mover's fragments: the broken pane's fragments still stand between the player and its fragment, so the original took the blocked branch (x 0.35). Play's checks read the static BSP. Engine.dll's FastLineCheck under Unicorn and Play's agree on both models (1,493 lines on three maps, `validate-fast-line-check-tracked`) | every FastLineCheck reads the tracker's node block (90a08da) |
+| `sndm` | tick 212: a GC (GC519) in the original where Play created a FlagBool | XGC::PushGC's node (0x100278d0 via XGC::operator new 0x10002c40) is a registered GC that takes a slot when DrawText first pushes a window's GC; XGC::Destroy deletes each node before the GC | PushGC takes the slot, destroyGc gives each node's back (baf9ad1) |
+| `sndm`, `sndm2` | tick 213: Female6 flees in Play, dances on in the original; then footsteps, the recoil's yaw and the casings from the stream | AIProcess stops after 2 ms of rdtsc (`GTimestamp` is set on every RDTSC CPU) and resumes the ring next tick; under the tracer the original reaches a few receivers per tick | the tracer records where `firstProcess` was left (`aiFirst`), the replay stops there; the landing's pre-scene sender is freed at the end of the manager's Tick (dd1d407) |
+| `sndm3` | tick 217: the original frees the bark's display item and windows, Play at 294 | the window system ticks with wall-clock time (TickWindows), about 210 ms per tick under the tracer, and before the level | windows tick first; the replay feeds the original's RootTick deltas (`roottick`); `Module.dll@` call addresses (Extension.dll is rebased) (ea0910c) |
+
+**Result on `sndm5`** (main `.work/live-acceptance/06_HongKong_WanChai_Underworld/*-sndm5.*`, Mac): the gate's steps (`population`,
+`play --tag sndm5 --no-ghost --object-trace 1:400`, `live-sound-compare --gate`) give 68 of 68 ticks with sound calls equal, 103 of
+103 calls in order, sound, emitter, volume, radius, pitch and channel id, the registry's 557 of 557 takes equal; the AI event
+manager's 654 calls and callbacks equal on all 400 ticks, and the 50 watched actors equal for 400 ticks. The scene: the pistol
+summoned, picked up and drawn, three shots (the first breaks BreakableGlass0 and starts a TriadRedArrow conversation and bark), the
+NPCs' HandleShot and Distress, footsteps, three shell casings bouncing.
+
+What the row does not cover: speech PCM (row 4.5.6, excluded), Galaxy's output after PlaySound (row 4.3.7), other maps and scenes,
+and the original running at full speed (the capture's own wall-clock pace, ~210 ms per tick under the tracer, sets the AI budget's
+stops and the window time, which the replay takes as measured inputs).
+
 ## Hand-off: the sound gate (2026-10-16)
 
 The task was the Stage 4 gate's sound rows (4.3.6, 4.3.7, 4.5.6, [stage-4-exit-criteria](stage-4-exit-criteria.md)). Only step 1 was done; the user then

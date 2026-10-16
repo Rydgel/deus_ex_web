@@ -270,16 +270,21 @@ export async function createGame(map, asset, assets, { randomSeed = Math.floor(D
   const game = {
     takeAudioMs() { const ms = audioMs; audioMs = 0; return ms; },
     player, doors, collision, notes, start, interaction, random, hud,
-    tick(seconds) {
+    /** One engine frame's ticks: the windows, then the level. `windowSeconds`, an array (a live replay's measured input), lists the
+     * original's RootTick deltas since the previous level tick, which then replace this frame's own time for the windows; older callers'
+     * second argument (an input object) is ignored. */
+    tick(seconds, windowSeconds = null) {
       // Actor.Tick owns ReadInput, PlayerInput/PlayerTick, ProcessState, timers,
       // Pawn physics and UpdateEyeHeight. No host player simulation follows it.
       player.timeDilation = levelDilation.get();
+      // The window system ticks on wall-clock time, not the level's, and before it: UExtensionEngine::Tick (Extension.dll 0x100266a0) calls
+      // TickWindows (0x1003a4a0, at 0x100266ce), which overwrites its argument with GetWindowsTickOffset(1) = f32(appSeconds() - last) and ticks
+      // every root with it (RootTick 0x1003be90), then runs UGameEngine::Tick (0x100266d9). So a held or slowed level (TimeDilation 0.001, a
+      // menu's pause) does not slow the log's timeout, the mission text or a button's delay, the level's [0.005, 0.4] delta clamp does not
+      // apply (docs/interface-frames.md "Window ticks are real time"), and a window the level creates first ticks in the next frame.
+      if (Array.isArray(windowSeconds)) for (const delta of windowSeconds) hud?.tick(delta);
+      else hud?.tick(seconds);
       doors.tick(seconds);
-      // The window system ticks on wall-clock time, not the level's: UExtensionEngine::Tick (Extension.dll 0x100266a0) calls TickWindows
-      // (0x1003a4a0), which overwrites its argument with GetWindowsTickOffset(1) = f32(appSeconds() - last) and ticks every root with it, then
-      // runs the level's tick. So a held or slowed level (TimeDilation 0.001, a menu's pause) does not slow the log's timeout, the mission text or a
-      // button's delay, and the level's [0.005, 0.4] delta clamp does not apply (docs/interface-frames.md "Window ticks are real time").
-      hud?.tick(seconds);
     },
     /** Render.dll's auto-pan inputs (docs/texture-animation.md): the
      * LevelInfo's TimeSeconds and a zone actor's live TexUPanSpeed and

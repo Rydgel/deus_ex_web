@@ -699,6 +699,21 @@ async function play() {
   const limit = Number(option('ticks', 0)) || undefined;
   const traceRows = readFileSync(tracePath, 'utf8').trim().split('\n').map(parseTraceLine);   // parsed once: a long trace is large
   const trace = traceRows.filter(row => row.unfrozen >= 1).slice(0, limit);
+  // The window system's wall-clock deltas (Extension RootTick 0x1003be90, the tracer's `roottick` call records: args[0] is the f32 TickWindows
+  // passes every root), a measured input like the stream state: the frames the original ran after unfrozen tick k-1, held frames included, tick
+  // the windows before level tick k (game.mjs tick). Tick 1 takes the last frame of the frozen phase only (Play's warm-up has run its own).
+  const rootTicks = new Map();
+  if (existsSync(`${tracePath}.calls.jsonl`)) for (const line of readFileSync(`${tracePath}.calls.jsonl`, 'utf8').split('\n')) {
+    if (!line.includes('"fn":"roottick"') || !line.includes('"ev":"enter"')) continue;
+    const r = parseTraceLine(line);
+    if (!rootTicks.has(r.u)) rootTicks.set(r.u, []);
+    rootTicks.get(r.u).push(r.floats[0]);
+  }
+  const windowDeltas = unfrozen => {
+    const list = rootTicks.get(unfrozen - 1);
+    if (!list?.length) return {};
+    return {windowSeconds: unfrozen === 1 ? list.slice(-1) : list};
+  };
   const {pawns, extras = [], generators = [], timers = []} = JSON.parse(readFileSync(watchPath, 'utf8'));
   // Play is placed where the original's player stood when the replay begins: the last frozen tick's exit.
   const frozen = traceRows.filter(row => row.unfrozen === 0);
@@ -863,7 +878,7 @@ async function play() {
       ...(navPawns ? {navTrace: {pawns: navPawns.split(','), first: navFirst, last: navLast}} : {}),
       ...(trace[0]?.viewport?.[0] && !flag('own-viewport') ? {renderSize: trace[0].viewport} : {}),   // the original's frame size (--own-viewport: Play's page)
       ...(setupNames ? {setupProbe: {names: setupNames.split(','), first: setupFirst, last: setupLast}} : {}),
-      ...(scriptPawns ? {scriptTrace: {pawns: scriptPawns.split(','), first: scriptFirst, last: scriptLast}} : {}), replay: {ticks: trace.map(({n, unfrozen, delta, rngIn, clockIn, tsIn, strobeIn}) => ({n, unfrozen, delta, rngIn, clockIn, tsIn, strobeIn})),   // not the watched fields: a long trace would not fit the page
+      ...(scriptPawns ? {scriptTrace: {pawns: scriptPawns.split(','), first: scriptFirst, last: scriptLast}} : {}), replay: {ticks: trace.map(({n, unfrozen, delta, rngIn, clockIn, tsIn, strobeIn, aiFirst}) => ({n, unfrozen, delta, rngIn, clockIn, tsIn, strobeIn, aiFirst, ...windowDeltas(unfrozen)})),   // not the watched fields: a long trace would not fit the page
       release: true, hold: true, drawTrace: flag('draw-trace'), drawStacks: flag('draw-stacks'), drawStackActor: option('draw-stack-actor', null),
       // --phonemes file.json ([{n, name, letter}]; conversation-acceptance.mjs `phonemes`): the letters the original's audio update wrote into a speaker's nextPhoneme, a measured input
       ...(option('phonemes', null) ? {phonemes: JSON.parse(readFileSync(option('phonemes'), 'utf8'))} : {}),

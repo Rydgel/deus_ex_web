@@ -483,6 +483,13 @@ export function createBspOcclusion(kernel, model, { surfaceTextureFlags, zoneAct
         return Number.isInteger(i) && i >= 0 && i < count ? node(i) : undefined;
       } }) };
     },
+    /** The same Level->Model as a node block read in place (fast-line-check.mjs
+     * reads each node's plane, children and NodeFlags from it): the kernel's
+     * memory, the block's address, the node count the tracker holds now and
+     * RootOutside. */
+    lineNodes() {
+      return { memory, at: nodes, count: trackerHost ? trackerHost.header(TRACKER.NODES_NUM) : nodeCount, rootOutside: model.rootOutside };
+    },
     blocks: { nodes, verts, points, surfs },
     /** The detail table as uploaded (`detailTable`): its address and record count, for the kernel's detail pass; null without one. */
     detail: detail ? { table: detail, surfaces: detailTable.length / 16 } : null,

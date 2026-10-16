@@ -82,8 +82,8 @@ the arena's reserved region), `FindEvent`, the natives, `AIProcess`, `ComputeSen
 an `fst`/`fstp`). The host (`src/runtime/script-vm-aievent.mjs`) supplies what the original reads from actors and runs in script: an
 actor's flags (`bDeleteMe`, Pawn, Inventory, `bDetectable`), location, collision size, `LastRenderTime`, `DistanceFromPlayer`,
 `HearingThreshold`, owner and level clock, `AActor::InStasis`, `APawn::AICanSee`, `ULevel::SingleLineCheck`, and the script calls
-`AIEvent` and `AIComputeScore` make. The rdtsc time budget AIProcess checks while `GTimestamp` is set (a profiling flag) is not
-modelled; it is off in play.
+`AIEvent` and `AIComputeScore` make. AIProcess's rdtsc time budget (below, "The time budget") is host time: a replay gives it as a
+measured input (`ai_set_process_stop`).
 
 ## Verification
 
@@ -132,9 +132,34 @@ modelled; it is off in play.
 
 ## Open items
 
-* The rdtsc time budget `AIProcess` checks while `GTimestamp` is set (a profiling flag) is not modelled; it is off in play.
+* The rdtsc time budget `AIProcess` checks while `GTimestamp` is set is host time: Play processes the whole ring each tick unless a
+  replay gives the original's stop (below).
 * `AICanSmell` is the original's constant 0.0; smell events are carried and never detected, as in the original.
 * A player-fired weapon is compared with the original ([Weapon noise](visual-acceptance.md#weapon-noise-2026-10-14)): `WeaponFire`,
   `LoudNoise`, `Projectile`, `Futz`, the hit objects' noises, `HandleShot` / `HandleDistress` deliveries and the callbacks' parameters equal,
   with the CRT state at every call, for a pistol and an assault shotgun. Not compared: the player's footsteps (the harness cannot hold a key), the
   player's own `TakeDamage` `Distress`, weapons with a silencer or projectiles.
+
+## The time budget (2026-10-16)
+
+`GTimestamp` is not a profiling flag in play: Core sets it when the CPU has RDTSC, and every machine that runs the game has. AIProcess
+(`0x10384080`) reads rdtsc at its start (`0x103840ec`) and computes its budget as `1 - ftol(-0.002 / GSecondsPerCycle)` cycles, 2 ms
+(the double `-0.002` at `0x1042d170`, `0x103840ba..0x103840e5`). After each receiver that did work (`[ebp-0x44]` set at `0x103842b9`)
+it reads rdtsc again and leaves the receiver loop when more than the budget has passed (`0x10384470..0x1038449a`, an unsigned compare of
+the low words). The slot update and the callbacks then run for the receivers visited, and `firstProcess` is left at the next one: the
+rest of the ring waits for the next tick, and a receiver reached more than 16 ticks after a send misses it.
+
+So how far AIProcess gets in a tick is the host's speed. The Underworld sound captures show it: under the tracer's breakpoints the
+original runs about 210 ms of wall clock per tick, and in `sndm2` (with a breakpoint inside AICanSee) the shot's HandleShot callbacks
+reached one receiver per tick (Businessman1 at 212, Female6's HandleDistress at 215, Female7 at 216, ...) where Play delivered them all at
+211; in `sndm` Female6 never reacted. The tracer now records, at each tick's exit, the receiver `firstProcess` was left at
+(`tools/dx-live-win.c` `aiFirst`: ALevelInfo `+0x550` is the manager, `+0x38` firstProcess, a receiver's eventType `+0x28` and
+eventActor `+0x2c`), and the replay hands it to the next AIProcess (`live-probe.mjs`, `AiEventHost.setProcessStop`, `aievent.rs`
+`ai_set_process_stop`): the loop stops before that receiver, and a stop the ring does not reach counts in `ai_process_stop_misses`
+(the replay's row `aiStopMissed`). In `sndm3` the ring made whole laps except at ticks 212 and 213; with the stops replayed every AI
+callback, NPC reaction and Galaxy PlaySound of the scene matched in tick, emitter, sound, volume, radius and pitch.
+
+The sender the player's landing leaves in the manager before the scene, which Play does not hold, is freed in the original by
+CleanupEvents at the end of the manager's Tick, after the objects that tick's actors create; the replay now releases its slot
+there (`AiEventHost.afterTick`) instead of at the start of the tick.
+

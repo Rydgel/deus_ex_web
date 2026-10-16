@@ -176,6 +176,42 @@ original), so from tick 270 the spawns themselves differ.
   flags in (insertion order here, the native walks its hash buckets), and the free-list order of a seed with several holes;
 * after a Player start (LoadMap) the model is not re-seeded: the map change frees and creates objects it does not see.
 
-**Repeating the scene** (one original at a time, `scripts/live-original.sh`, the Wine lock): `live-original.sh <map> --registry
---tag T --extra-config <cfg with call-ticks, call-frames and the four call lines> --cmds ...`, then `live-acceptance.mjs play
---tag T --object-trace 1:N`, then `live-sound-compare.mjs --tag T`. The captures stay in `.work/` (outside Git).
+**Repeating the scene** (one original at a time, `scripts/live-original.sh`, the Wine lock; on the Mac also the sessions' bottle lock
+`.work/bottle.lock`). The scene of row 4.3.6's capture `sndm5` (Mac, 2026-10-16):
+
+```
+scripts/live-original.sh 06_HongKong_WanChai_Underworld --tag sndm5 --ticks 400 --delta 0.0166666675 --no-ghost --registry \
+  --extra-config sound.cfg --cmds "20:summon DeusEx.WeaponPistol|50:set DeusEx.JCDentonMale ViewRotation (Pitch=-10130,Yaw=49096,Roll=0)|90:ParseRightClick|130:ActivateBelt 1|170:set DeusEx.JCDentonMale ViewRotation (Pitch=0,Yaw=49096,Roll=0)|210:@down Enter|210:@up Enter|270:@down Enter|270:@up Enter|330:@down Enter|330:@up Enter"
+```
+
+with `sound.cfg`:
+
+```
+call-ticks 1 400
+call-frames
+call 0x10157830 addobj 1 always retname
+call 0x10157760 unhash 1 always retname
+call 0x10608100 gplay 9 always name0 namearg 2 -1
+call 0x103e1b00 hear 7 always name0 namee namearg 2 -1
+call 0x103814e0 inputevent 4 always
+call 0x10382c60 aisend 5 always name0 fname 1
+call 0x10382fe0 aistart 5 always name0 fname 1
+call 0x103831e0 aiend 3 always name0 fname 1
+call 0x103832c0 aiclear 2 always name0 fname 1
+call 0x10384980 aievent 5 always name0 fname 1 fname 4 namearg 3 0 deref 3 5 0
+call Extension.dll@0x1003be90 roottick 1 always
+```
+
+(`live-acceptance.mjs population --map ... --seed 1` first; rebuild `ad/build/dx-live-win.exe` from `tools/dx-live-win.c`.) Then
+`live-acceptance.mjs play --map ... --seed 1 --tag T --no-ghost --object-trace 1:400` and `live-sound-compare.mjs --tag T --gate`. The
+replay takes four measured inputs from the capture besides the deltas and the stream: the key edges' stream state (`inputevent`), the
+receiver AIProcess's 2 ms rdtsc budget left `firstProcess` at each tick (the trace rows' `aiFirst`,
+[AI event manager](ai-event-manager.md) "The time budget"), the window system's wall-clock deltas (`roottick`,
+[interface frames](interface-frames.md) 2b) and the pre-scene objects the original frees (`preFrees`, the AI ones at the end of the
+manager's Tick). The captures stay in `.work/` (outside Git).
+
+**Row 4.3.6 on `sndm5` (2026-10-16).** Every registry take and free of the 400 ticks is the original's (557 of 557 takes, class and
+slot), so every runtime-spawned emitter has the original's id: the summoned pistol, the glass fragment, the three shell casings, the
+tracers. What it took, in the order the captures found it ([galaxy-audio](galaxy-audio.md) "Row 4.3.6"): FastLineCheck over the
+tracker's model, XGC::PushGC's registered nodes, AIProcess's budget, the window clock and order, and the landing sender's free in
+CleanupEvents.
