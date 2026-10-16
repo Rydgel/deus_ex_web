@@ -839,7 +839,65 @@ perspective-correct, which wined3d does too; D3D hardware may interpolate colour
 polygon: not measured, there is no Windows original here); **draw order** (Play draws all of a frame's fans after its world surfaces, one mesh
 per texture; the original draws each surface's fans right after the surface, so where two detail surfaces overlap in depth and the
 2 * src * dst blend clamps the result differs); **fog** (above); **a ViewportWindow's frames** draw none; nothing is drawn in a pass without
-child frames (`?childFrames=off`).
+child frames (`?childFrames=off`); **the frame's top row** (the fans' edge on its pixel centres, measured below).
+
+### Against the original in a frame (2026-10-16, gate row 4.2.22)
+
+Stored frames of the original with the pass, captured on the Mac under CrossOver (the bottle `DeusEx`, Apple M2 Pro) and read by the gate.
+**The device there is Linux Wine's:** read from the running game before any poke, `D3DRenderDevice0` has `DetailTextures=0x0` and
+`TexOpCaps=0xfef7ff` (`dump-actor-win.exe D3DRenderDevice DetailTextures:0x78:u32 TexOpCaps:0x358:u32`; bit `0x800`, `BLENDDIFFUSEALPHA`,
+clear), so `SetRes` turns the pass off on this host too, and the poke's own log reads `0x0 -> 0x1` at the first camera.
+
+* *Method.* One capture per map at Brightness 2/3 (the Shot is the framebuffer; Play's ramp at its 0.4 is the identity), the level frozen and
+  held: the two cameras with the field poked to 1 before each (`--poke D3DRenderDevice0:0x78:1`), then the same two with it poked to 0
+  (`--base-poke D3DRenderDevice0:0x78:0`, `<view>-base`), then each base view once more (`<view>b-base`, not read by the gate: the original's
+  own variation between two frames). The cameras are the recipe's: Training's wall at 30 and 120 units (`detailT1` `-736,1314,560:0,16384,0`
+  and `detailT2` `-1100,1224,560:0,21384,0`, `validate-detail-play-sim`'s "wall at 30" and "wall at 120"), the Island deck from 70 units
+  (`detailI1` `-4761,10431,-234:56536,20000,0`, that validator's "deck from 70, yaw") and the deck at the `down` view measured above
+  (`detailI2` `-4761,10431,-256:62536,0,0`). Clocks: Training 50.629 s, Island 50.734 s, in each frame's `-time.txt`. Play draws its pass
+  (`play --detail on`) and takes its frame without it from the same frame with the detail scene hidden (`--base detail`); `compare
+  --contribution` reads the pass as an effect that darkens.
+* *The original's own variation.* Training's twin base frames are equal to the pixel; Island's differ in at most 77 pixels by more than 2
+  levels (`detailI2`, the largest 4). The `detailI1` twin also holds a console line the original printed, "Unrecognized class
+  DeusEx.JCDentonMtale" (a keystroke its console dropped while the line for that view was typed): no other pixel differs by more than 2.
+  No animated surface is in view.
+* *Result* (`node scripts/validate-stage4-acceptance.mjs --only '^4\.2\.22$'`: 2 checks, 79 s, `PASS` in two runs). The frames: mean abs.
+  difference 0.01 to 0.02, edge recall and precision .997 to 1, no outlier block, brightness ratio 1. The pass's contribution, original
+  against Play:
+
+  | View | correlation | Play's sum / original's | residual | agreement | changed pixels, original / Play | Jaccard | same change in every channel |
+  | --- | ---: | ---: | ---: | ---: | --- | ---: | ---: |
+  | `detailT1` | .9986 | .998 | .004 | .998 | 863,686 / 862,501 | .9985 | .995 |
+  | `detailT2` | .9992 | .999 | .003 | .999 | 590,624 / 589,907 | .9986 | .997 |
+  | `detailI1` | .9952 to .9958 | .999 to 1.0 | .015 to .016 | .999 | 588,426 / 589,505 | .9901 | .971 |
+  | `detailI2` | .9926 to .9943 | .998 | .025 to .03 | .998 | 298,340 / 298,586 | .9726 | .946 |
+
+  Island's two numbers are two Play runs (its frame moves by a few pixels between loads). The 2026-10-15 measurement (Linux Wine at the
+  Shot's default ramp, before Play [cleared its frame to black](screen-flash.md#the-screen-clear-fixed-2026-10-16)) read Jaccard .938 to .980
+  and correlation .57 to .99 over its six views.
+* *What is left.* **The top row.** At these cameras the fans' vertices run from Y -3e-5 to 720.0002 and X -6e-5 to 1280.0002 (Play's pack,
+  read in the headless session: `.work/detail22/fan-extent.mjs`), so a fan's top and left edges lie on the first row's and the first column's
+  pixel centres. The original fills both. Play fills the column and not the row: on row 0 the original's pass changes 1,204 pixels in `detailT1`,
+  719 in `detailT2` and 521 in `detailI1`, Play's 0, 0 and 259. The bottom row and the side columns are equal in every view, and the base
+  frames agree on row 0 as on the rows below it (30 pixels differ in `detailT1`, against 25 and 40 on rows 1 and 2), so it is the fans'
+  rasterization of an edge exactly on pixel centres: D3D's top-left rule takes a top edge's centres, and the host's rasterizer (headless
+  Chromium on the Mac, its WebGL backend not recorded) does not. **Not fixed:** how the original's driver (here wined3d emulating D3D's rule; a Windows D3D7 driver
+  was not measured) and each host backend place such an edge is not established, and the other draws on the vertex chain would need the same
+  treatment. **Inside the frame**, Training's views differ in 52 to 71 pixels per view; Island's in 2,052 to 4,260, almost all by one level
+  (`detailI2`: 3,797 of 4,027 original-only and 4,036 of 4,273 Play-only) and on the deck's far rows (rows 120 to 360 of `detailI2`), in equal
+  numbers in both programs: where the fade's alpha is small and the blend moves a pixel by one level or not. Attributed to the colour
+  interpolation and the ZBIAS constant above, **unverified**.
+
+Stored (Mac main `.work`, not in Git): `.work/acceptance/00_Training/{detailT1,detailT2}{,-base,b-base}-original.{png,bmp}` and
+`.work/acceptance/01_NYC_UNATCOIsland/{detailI1,detailI2}{,-base,b-base}-original.{png,bmp}`, each with its `-time.txt`.
+
+```bash
+scripts/original-views.sh 00_Training --view detailT1:-736,1314,560:0,16384,0 --view detailT2:-1100,1224,560:0,21384,0 --view detailT1-base:-736,1314,560:0,16384,0 --view detailT2-base:-1100,1224,560:0,21384,0 --view detailT1b-base:-736,1314,560:0,16384,0 --view detailT2b-base:-1100,1224,560:0,21384,0 --brightness 0.666667 --poke D3DRenderDevice0:0x78:1 --base-poke D3DRenderDevice0:0x78:0
+scripts/original-views.sh 01_NYC_UNATCOIsland --view detailI1:-4761,10431,-234:56536,20000,0 --view detailI2:-4761,10431,-256:62536,0,0 --view detailI1-base:-4761,10431,-234:56536,20000,0 --view detailI2-base:-4761,10431,-256:62536,0,0 --view detailI1b-base:-4761,10431,-234:56536,20000,0 --view detailI2b-base:-4761,10431,-256:62536,0,0 --brightness 0.666667 --poke D3DRenderDevice0:0x78:1 --base-poke D3DRenderDevice0:0x78:0
+node scripts/validate-stage4-acceptance.mjs --only '^4\.2\.22$'
+```
+
+`original` needs the map in `.work/acceptance/plan.json`, which `play` writes (`play --maps 01_NYC_UNATCOIsland --view ...` first on a checkout without it).
 
 ## Unverified and open
 

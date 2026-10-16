@@ -432,7 +432,8 @@ The 380-unit clip the 2026-10-14 hand-off called the fog overlay's belongs to D3
 pass (`FSurfaceInfo.DetailTexture`); the fog map has none. **The original draws detail textures** on a
 device that reports `BLENDDIFFUSEALPHA` (37% of the shipped texture exports carry one); **Wine's does
 not, so every stored original capture lacks them** (`SetRes` clears the field: 0 of 1,860 surfaces
-entered the pass; with the field poked the pass runs and changes the frame). The pass runs unchanged
+entered the pass; with the field poked the pass runs and changes the frame), except gate row 4.2.22's, taken with the
+field poked (2026-10-16, [frame projection](frame-projection.md#against-the-original-in-a-frame-2026-10-16-gate-row-4222)). The pass runs unchanged
 under Unicorn and the Rust core's port matches it bit for bit (84 cameras, 465 fans, 2,068 vertices;
 `validate-detail-pass`, `validate-detail-pass-rust`). **Play draws it by default**: OccludeBsp's option
 `0x400` keeps the saved points only of the polygons the pass can use, `detail_run` runs over the main

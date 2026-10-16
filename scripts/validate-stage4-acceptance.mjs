@@ -169,6 +169,10 @@ const EFFECT_VIEWS = Object.freeze({
   // shadow1 (61,1326,-23:62166,61567,0) is not used: an animated console screen and a flickering patch in it change between any two frames of
   // either program, so its contribution measures them (correlation .945 and .78 in two captures); shadow3 sees the same shadows without them.
   shadow: {map: '00_Training', views: ['shadow2:211,1266,-33:62500,61567,0', 'shadow3:61,1326,-23:61166,59067,0']},
+  // The D3DDrv detail pass (docs/frame-projection.md "Detail textures"), captured on the Mac at Brightness 2/3 with the render device's DetailTextures
+  // poked to 1 (CrossOver's ddraw, like Linux Wine's, does not report BLENDDIFFUSEALPHA, so SetRes leaves it 0) and each view again with it 0 (<view>-base).
+  detailT: {map: '00_Training', views: ['detailT1:-736,1314,560:0,16384,0', 'detailT2:-1100,1224,560:0,21384,0']},
+  detailI: {map: '01_NYC_UNATCOIsland', views: ['detailI1:-4761,10431,-234:56536,20000,0', 'detailI2:-4761,10431,-256:62536,0,0']},
 });
 const FLASH_BASE = 'flash0:-100,840,30:0,0,0';
 // `extra`: `base` names the effect of a contribution check ('fog': the stored <view>-base frames are the original without it, Play's own frame
@@ -268,8 +272,9 @@ add('4.2.20', C2, 'Fire.dll textures', 'fire and water textures, animated and au
   V('native-fire-texture'), V('fire-texture-rust'), V('native-texture-animation'), V('native-surface-pan'), V('fire-texture-play'), V('texture-animation-play'));
 add('4.2.21', C2, 'detail textures', 'the D3DDrv detail pass equals the original body; Play draws it', 'O2',
   V('detail-pass'), V('detail-pass-rust'), V('detail-play-sim'), V('detail-play'));
-missing('4.2.22', C2, 'detail pass in a frame', 'Play\'s detail pass against a capture of the original with the pass poked in',
-  'measured once (Jaccard 0.94 to 0.98 on five of six views, docs/frame-projection.md); those captures are not in a store the gate reads');
+// The pass in a frame: Play keeps its pass (`detail`) and its frame without it is the same frame with the detail scene hidden (`base: 'detail'`).
+add('4.2.22', C2, '00_Training and 01_NYC_UNATCOIsland detail pass', 'a frame with the detail pass against the original\'s with the pass poked in: the frames, and the pass\'s contribution (the frame less the frame without the pass) against the original\'s', 'O1',
+  effectViews('detailT', {detail: true, base: 'detail'}), effectViews('detailI', {detail: true, base: 'detail'}));
 add('4.2.23', C2, 'lasers', 'LaserIterator.CurrentItem equals the original; the Island doorway beams draw', 'O2', V('native-laser'), V('lasers-play'));
 add('4.2.24', C2, '01_NYC_UNATCOIsland doorway', 'a beam frame against the original: the beams\' geometry (the beam texture is an animated fire: its sparks are not matched)', 'O1',
   effectViews('laser', {unfreeze: true, rngPin: '0x2f6e2b1b', beams: true, twin: ['laser1']}));
@@ -634,7 +639,7 @@ async function judgeFrames(task, add, fail, result) {
     if (task.frames.flashBase && name !== baseName) off.push(...flashProblems(m));
     if (task.frames.decalState) off.push(...decalStateProblems(m));
     if (off.length) problems.push(`${map} ${name}: ${off.join('; ')}`);
-    lines.push(`${name} ${m.edgeRecall}/${m.edgePrecision}/${m.outlierBlocks.length}${m.contribution ? ` ${task.frames.base === 'decal' ? 'decals' : 'haze'} r ${m.contribution.correlation}` : ''}${m.beams ? ` beams ${m.beams.coverage}/${m.beams.energy}/${m.beams.yRms}` : ''}${m.flashMap ? ` flash ${m.flashMap.levels - m.flashMap.differing}/${m.flashMap.levels} levels equal, fog (${m.flashMap.zero})` : ''}${m.decalState ? ` shadows ${m.decalState.matched - m.decalState.differing.length}/${m.decalState.shadows} equal (${m.decalState.attached[0]} attached)` : ''}`);
+    lines.push(`${name} ${m.edgeRecall}/${m.edgePrecision}/${m.outlierBlocks.length}${m.contribution ? ` ${{decal: 'decals', detail: 'detail'}[task.frames.base] ?? 'haze'} r ${m.contribution.correlation}` : ''}${m.beams ? ` beams ${m.beams.coverage}/${m.beams.energy}/${m.beams.yRms}` : ''}${m.flashMap ? ` flash ${m.flashMap.levels - m.flashMap.differing}/${m.flashMap.levels} levels equal, fog (${m.flashMap.zero})` : ''}${m.decalState ? ` shadows ${m.decalState.matched - m.decalState.differing.length}/${m.decalState.shadows} equal (${m.decalState.attached[0]} attached)` : ''}`);
   }
   if (problems.length) return fail(problems.join(' | '));
   return {...result, status: 'PASS', detail: `${maps.length} map(s), ${lines.length} view(s): recall/precision/outliers ${lines.slice(0, 5).join(' ')}${lines.length > 5 ? ' ...' : ''}`};

@@ -90,7 +90,7 @@ to a quarter turn) level, and one 3,000 units (16.5°) below the start yaw.
   (`pow(x, 1/(2.5·0.4))`) is the identity. The scene canvas is pinned to
   1280×720 at the page origin, and the page UI is hidden.
 
-**Detail textures are not in any stored original frame, and Play now draws them.** The original's `SetRes` clears
+**Detail textures are not in any stored original frame but row 4.2.22's, and Play now draws them.** The original's `SetRes` clears
 `URenderDevice.DetailTextures` when the D3D7 device lacks `D3DTEXOPCAPS_BLENDDIFFUSEALPHA`, and Wine's ddraw lacks it
 ([frame projection](frame-projection.md#detail-textures-2026-10-15)): every row of every table in this document was compared
 against a frame the original drew without the pass, whatever the ini says, and **was taken with Play drawing no detail textures
@@ -1980,6 +1980,22 @@ hold is for, the five captures that found them and the numbers are in [decals](d
 ```bash
 scripts/original-views.sh 00_Training --view shadow2:211,1266,-33:62500,61567,0 --view shadow3:61,1326,-23:61166,59067,0 --view shadow2-base:211,1266,-33:62500,61567,0 --view shadow3-base:61,1326,-23:61166,59067,0 --brightness 0.666667 --cmd 'set MIB Orders Standing' --cmd 'set ScientistMale Orders Standing' --unfreeze --base-cmd 'set WinDrv.WindowsClient Decals False' --pre-shot-cmd 'set ScriptedPawn bHidden True' --pre-shot-cmd 'set LevelInfo bPlayersOnly True' --decal-state
 node scripts/validate-stage4-acceptance.mjs --only '^4\.2\.15$'
+```
+
+### 00_Training's and Island's detail pass (row 4.2.22)
+
+Taken on the Mac under CrossOver at Brightness 2/3, one capture per map, the level frozen: two of Training's walls (`detailT1` at 30 units, `detailT2` at 120, 50.629 s)
+and two views of Island's pier deck (`detailI1`, `detailI2`, 50.734 s), each with the render device's `DetailTextures` poked to 1 before the camera (`--poke`; CrossOver's
+ddraw, like Linux Wine's, reports no `BLENDDIFFUSEALPHA`, so `SetRes` leaves the field 0) and again with it poked to 0 (`--base-poke`, `<view>-base`), and each base view a
+second time (`<view>b-base`, the original's own variation, unread by the gate). Play keeps its pass (`--detail on`) and hides it for its frame without (`--base detail`);
+`compare --contribution` reads the pass as an effect that darkens. Both frames and the pass's contribution equal the original's within the gate's thresholds (correlation
+.993 to .999, Jaccard of the changed pixels .973 to .9986); Play's fans miss the frame's top row, whose pixel centres their edge lies on. The numbers, the device read and
+what is left are in [frame projection](frame-projection.md#against-the-original-in-a-frame-2026-10-16-gate-row-4222).
+
+```bash
+scripts/original-views.sh 00_Training --view detailT1:-736,1314,560:0,16384,0 --view detailT2:-1100,1224,560:0,21384,0 --view detailT1-base:-736,1314,560:0,16384,0 --view detailT2-base:-1100,1224,560:0,21384,0 --view detailT1b-base:-736,1314,560:0,16384,0 --view detailT2b-base:-1100,1224,560:0,21384,0 --brightness 0.666667 --poke D3DRenderDevice0:0x78:1 --base-poke D3DRenderDevice0:0x78:0
+scripts/original-views.sh 01_NYC_UNATCOIsland --view detailI1:-4761,10431,-234:56536,20000,0 --view detailI2:-4761,10431,-256:62536,0,0 --view detailI1-base:-4761,10431,-234:56536,20000,0 --view detailI2-base:-4761,10431,-256:62536,0,0 --view detailI1b-base:-4761,10431,-234:56536,20000,0 --view detailI2b-base:-4761,10431,-256:62536,0,0 --brightness 0.666667 --poke D3DRenderDevice0:0x78:1 --base-poke D3DRenderDevice0:0x78:0
+node scripts/validate-stage4-acceptance.mjs --only '^4\.2\.22$'
 ```
 
 ## Open
