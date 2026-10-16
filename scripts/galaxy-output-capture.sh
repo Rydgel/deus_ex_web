@@ -6,12 +6,19 @@
 #
 #   scripts/galaxy-output-capture.sh [out dir]      (default: the main checkout's .work/audio-output)
 #   COUNT=n INTERVAL=ms (default 3000 samples, 1 ms apart)
+#   scripts/galaxy-output-capture.sh replay [out dir]
+#       check 3's capture (docs/audio-output-scope.md §5.2): `dx-live-win.exe galaxy capture` starts the game on 00_Training under
+#       the debugger, so the record begins before glxInit; PLAY seconds after the player is up (default 30) a console
+#       `musicorder 2` (glxControlMusic(1, 2): the resync with the ambient voices playing), AFTER seconds later (default 15) the
+#       capture stops and detaches, and the game is quit. Writes <out>/replay-training.bin.
 #
 # Takes the sessions' bottle lock (.work/bottle.lock, mkdir) on the Mac and releases it once the game is quit.
 # Writes <out>/training-load{1,2}.{json,pan.bin,poll.txt}. Needs ad/build/dx-live-win.exe built from tools/dx-live-win.c
 # (i686-w64-mingw32-gcc -O2 -o ad/build/dx-live-win.exe tools/dx-live-win.c -lpsapi), ad/build/dump-actor-win.exe and ad/tools/dxinput.exe.
 set -u
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
+MODE=poll
+if [ "${1:-}" = replay ]; then MODE=replay; shift; fi
 OUT=${1:-/Users/gcc/Documents/deus_ex_web/.work/audio-output}
 COUNT=${COUNT:-3000} INTERVAL=${INTERVAL:-1}
 if [ "$(uname)" = Darwin ]; then
@@ -46,7 +53,17 @@ wait_player() {
   done
   return 1
 }
-node ad/scripts/original-game.mjs launch 00_Training.dx || { release_bottle; exit 1; }
+uptime >&2
+if [ "$MODE" = replay ]; then
+  STOP="$OUT/replay-training.stop"; rm -f "$STOP" "$OUT/replay-training.bin"
+  # The game's INI copies (original-game.mjs writeIni), then the game started by the tracer under the debugger.
+  node -e "import('./ad/scripts/original-game.mjs').then(m => m.writeIni())" || { release_bottle; exit 1; }
+  ( cd "${DX_GAME:-$HOME/Library/Application Support/CrossOver/Bottles/$CX_BOTTLE/drive_c/Deus Ex GOTY Edition}/System" 2>/dev/null || true
+    "$DX_WINE" "$ROOT/ad/build/dx-live-win.exe" galaxy capture "$OUT/replay-training.bin" 600 00_Training.dx "$STOP" ) > "$OUT/replay-training.log" 2>&1 &
+  TRACER=$!
+else
+  node ad/scripts/original-game.mjs launch 00_Training.dx || { release_bottle; exit 1; }
+fi
 PID=
 quit_game() {
   [ -n "$PID" ] || PID=$(game_pids | head -1)
@@ -54,9 +71,20 @@ quit_game() {
   for _ in $(seq 1 20); do [ -n "$(game_pids)" ] || return 0; sleep 1; done
   [ -n "$PID" ] && kill "$PID" 2>/dev/null
 }
-trap 'quit_game; release_bottle' EXIT
+finish_replay() { [ "$MODE" = replay ] && [ -n "${TRACER:-}" ] && { touch "$STOP"; wait "$TRACER" 2>/dev/null; TRACER=; }; return 0; }
+trap 'finish_replay; quit_game; release_bottle' EXIT
 wait_player || { echo "the player never came up" >&2; exit 1; }
 PID=$(game_pids | head -1)
+if [ "$MODE" = replay ]; then
+  sleep "${PLAY:-30}"
+  printf 'cmd musicorder 2\n' > /tmp/galaxy-output-musicorder.txt
+  node ad/scripts/original-game.mjs run /tmp/galaxy-output-musicorder.txt >/dev/null 2>&1
+  sleep "${AFTER:-15}"
+  finish_replay
+  tail -5 "$OUT/replay-training.log" >&2
+  ls -la "$OUT/replay-training.bin" >&2
+  exit 0
+fi
 sleep 5
 "$DX_WINE" ad/build/dx-live-win.exe galaxy poll "$COUNT" "$INTERVAL" "$OUT/training-load1" || exit 1
 printf 'cmd open 00_Training\n' > /tmp/galaxy-output-open.txt

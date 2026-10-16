@@ -110,12 +110,14 @@ pub(crate) struct Effects {
     pub rings: Vec<Option<Vec<u8>>>,
     /// Refill messages posted to the decoder thread (wParam, lParam), not yet handled.
     pub posts: std::collections::VecDeque<(u32, u32)>,
+    /// A capture's MPEG decoder answers, in call order (ring.rs `decode_leaf`, the replay of row 4.3.7 check 3).
+    pub recorded: Option<std::collections::VecDeque<crate::ring::RecordedCall>>,
 }
 
 impl Effects {
     pub(crate) fn new() -> Self {
         Effects { samples: Vec::new(), heap_top: EFFECT_HEAP, mutexes: 0, forgotten: Vec::new(), rings: (0..VOICES).map(|_| None).collect(),
-            posts: std::collections::VecDeque::new() }
+            posts: std::collections::VecDeque::new(), recorded: None }
     }
     fn malloc(&mut self, size: u32) -> u32 {
         let ptr = self.heap_top;
