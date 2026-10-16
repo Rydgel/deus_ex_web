@@ -111,6 +111,8 @@ const INTERFACE = spec => ({type: 'interface', ...spec});
 const TERMINAL = spec => ({type: 'terminal', ...spec});
 const LIVE = spec => ({type: 'live', ...spec});
 const SWEEP = spec => ({type: 'sweep', ...spec});
+// A live scene's Galaxy PlaySound calls (scripts/live-sound-compare.mjs --gate): the original's stored calls file against Play's replay of the same trace.
+const SOUNDS = spec => ({type: 'sounds', ...spec});
 const CENSUS = spec => ({type: 'census', ...spec});
 
 const FROZEN = Object.freeze(['y0', 'y1', 'y2', 'y3', 'down']);
@@ -242,8 +244,8 @@ add('4.3.4', C3, 'music', 'IT loader, sequencer and Update\'s music section equa
   V('galaxy-music-loader'), V('galaxy-music-sequencer'), V('galaxy-music-update'));
 add('4.3.5', C3, 'Island, Training and the intro in Play', 'ambient voices, music and window sounds reach the mixer in the worker and the worklet', 'O3',
   V('galaxy-effects-play'), V('galaxy-music-play'), V('galaxy-music-host'), V('window-sound-play'), V('window-sound-browser'));
-missing('4.3.6', C3, 'a live scene\'s script sounds', 'the original\'s PlaySound calls of a scene against Play\'s',
-  'scripts/live-sound-compare.mjs compares one capture (Underworld, tag snd1); its stored original trace is not in a store the gate reads');
+add('4.3.6', C3, '06_HongKong_WanChai_Underworld, 400 ticks: a pistol picked up, drawn and fired', 'the original\'s Galaxy PlaySound calls of the scene against Play\'s replay: every call\'s sound, emitter, volume, radius, pitch, channel id and order', 'O1',
+  SOUNDS({map: '06_HongKong_WanChai_Underworld', tag: 'snd1', ticks: 400}));
 missing('4.3.7', C3, 'audible output', 'the output Galaxy produces for the speakers', 'the music bus delay, the ring heads\' spacing, MPEG and ADPCM samples and 3D voices are unmeasured or untranslated (docs/galaxy-music.md, galaxy-audio.md)');
 
 // 4.4 Text and interfaces -----------------------------------------------------------------------------------
@@ -344,6 +346,7 @@ function expand(check, criterion) {
   if (check.type === 'terminal') return [{key: `${criterion.id}:terminal ${check.name}`, label: `terminal ${check.map} ${check.name}`, terminal: check, mutex: ['acceptance'], estimate: 120, memory: 1800}];
   if (check.type === 'camera') return [{key: `${criterion.id}:camera ${check.name}`, label: `camera ${check.map} ${check.name}`, camera: check, mutex: ['acceptance'], estimate: 120, memory: 1800}];
   if (check.type === 'live') return [{key: `${criterion.id}:live ${check.map}${check.tag ? ` ${check.tag}` : ''}`, label: `live ${check.map}${check.tag ? ` (${check.tag})` : ''}`, live: check, mutex: check.shot ? [`live:${check.map}`, 'acceptance'] : [`live:${check.map}`], estimate: 120, memory: 1500}];
+  if (check.type === 'sounds') return [{key: `${criterion.id}:sounds ${check.map} ${check.tag}`, label: `sounds ${check.map} (${check.tag})`, sounds: check, mutex: [`live:${check.map}`], estimate: 200, memory: 1500}];
   if (check.type === 'sweep') return [{key: `${criterion.id}:sweep`, label: `sweep replay ${check.maps.length} maps`, sweep: check, mutex: ['live-sweep'], estimate: 75 * check.maps.length, memory: 1500}];
   if (check.type === 'census') return [{key: `${criterion.id}:census-ui-screens`, label: 'census-ui-screens', census: check, estimate: 150, memory: 1500}];
   return [{key: `${criterion.id}:${labelOf(check)}`, label: labelOf(check), error: `unknown check type ${check.type}`}];
@@ -418,6 +421,7 @@ async function runTask(task) {
   if (task.camera) return judgeCamera(task, add, fail, result);
   if (task.live) return judgeLive(task, add, fail, result);
   if (task.sweep) return judgeSweep(task, add, fail, result);
+  if (task.sounds) return judgeSounds(task, add, fail, result);
   if (task.census) return judgeCensus(task, add, fail, result);
   return fail('no runner');
 }
@@ -669,6 +673,33 @@ async function judgeLive(task, add, fail, result) {
   }
   if (problems.length) return fail(`${map}${tag ? ` ${tag}` : ''}: ${problems.join('; ')}`);
   return {...result, status: 'PASS', detail: `${map}${tag ? ` ${tag}` : ''}: ${actors.length} actors equal for ${report.ticks} ticks, clock and stream draws equal${frameNote}${flaky ? ` (the first run's ${flaky}; equal on the repeat)` : ''}`, flaky: Boolean(flaky)};
+}
+// The original's Galaxy PlaySound calls of a live scene (the tracer's `gplay` records in original-trace<tag>.jsonl.calls.jsonl, Galaxy 0x10608100) against
+// Play's replay of the same trace. Every call must equal in order (per tick), sound, emitter, volume, radius, pitch and channel id; the slot model that
+// gives a runtime-spawned emitter its id is seeded from registry-start<tag>.txt (docs/object-index-captures.md). The `population` step comes first: its
+// play-population.json names the pre-placed actors whose own measured indices the slot model takes.
+async function judgeSounds(task, add, fail, result) {
+  const {map, tag, ticks} = task.sounds;
+  const absent = stageLive(map, tag);
+  for (const name of [`original-trace-${tag}.jsonl.calls.jsonl`, `registry-start-${tag}.txt`, `commands-${tag}.json`]) {
+    if (!stage(`live-acceptance/${map}/${name}`, {copy: !name.endsWith('.calls.jsonl')})) absent.push(`${map}/${name}`);
+  }
+  if (absent.length) return fail(`stored originals absent: ${absent.join(', ')}`, 'NO-ORIGINAL');
+  const population = add(await exec(process.execPath, ['scripts/live-acceptance.mjs', 'population', '--map', map, '--seed', '1'], {limitSeconds: 600}));
+  if (population.killed || population.code !== 0) return fail(`population step: ${population.killed ?? tail(population.out)}`);
+  // --no-ghost: the capture's player is a normal one (it picks up the pistol and fires it), not the cheat-flying ghost of the other pilots
+  const play = add(await exec(process.execPath, ['scripts/live-acceptance.mjs', 'play', '--map', map, '--seed', '1', '--tag', tag, '--no-ghost', '--object-trace', `1:${ticks}`], {limitSeconds: 1500}));
+  if (play.killed || play.code !== 0) return fail(`play step: ${play.killed ?? tail(play.out)}`);
+  const compare = add(await exec(process.execPath, ['scripts/live-sound-compare.mjs', '--map', map, '--tag', tag, '--gate'], {limitSeconds: 300}));
+  if (compare.killed) return fail(`compare step: ${compare.killed}`);
+  const line = compare.out.split('\n').find(l => l.startsWith('GATE '));
+  if (!line) return fail(`compare step: ${tail(compare.out)}`);
+  const g = JSON.parse(line.slice(5));
+  const detail = `${map} ${tag}: ${g.equalTicks} of ${g.ticksWithCalls} ticks with sound calls equal, ${g.equalCalls} of ${g.originalCalls} calls (Play made ${g.playCalls}), first differing tick ${g.firstDifferentTick ?? 'none'}; ` +
+    `matched ignoring order within the tick ${g.matchedLoosely}, channel id equal in ${g.idsEqualLoosely}; registry takes equal for ${g.registryTakesEqual} of ${g.registryTakes[0]}/${g.registryTakes[1]}` +
+    (g.firstDifferentRegistryTake ? ` (then original ${g.firstDifferentRegistryTake.original}, Play ${g.firstDifferentRegistryTake.play})` : '');
+  if (g.firstDifferentTick !== null || g.originalCalls !== g.playCalls) return fail(detail);
+  return {...result, status: 'PASS', detail};
 }
 async function judgeSweep(task, add, fail, result) {
   const {maps, tags = {}} = task.sweep;

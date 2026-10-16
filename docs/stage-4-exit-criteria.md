@@ -18,7 +18,7 @@ First run, 2026-10-15 on master 2386f69 plus this branch (Linux host, AMD, 30 GB
 | --- | ---: | ---: | ---: | ---: | ---: | ---: |
 | 4.1 Animated actors | 9 | 0 | 0 | 0 | 2 | 0 |
 | 4.2 Effects | 20 | 1 | 0 | 0 | 9 | 3 |
-| 4.3 Sound | 5 | 0 | 0 | 0 | 2 | 0 |
+| 4.3 Sound | 5 | 1 | 0 | 0 | 1 | 0 |
 | 4.4 Text and interfaces | 10 | 0 | 0 | 0 | 4 | 2 |
 | 4.5 Speech, lip sync and the conversation camera | 4 | 0 | 0 | 0 | 4 | 0 |
 | **Total** | **48** | **1** | **0** | **0** | **21** | **5** |
@@ -94,7 +94,7 @@ A mode in brackets names how the check exercises Play (see [How the gate judges]
 | 4.3.3 | zone reverb | reverb coefficients and the SSE kernel equal Galaxy.dll | O2 | `galaxy-reverb` [oracle] | PASS |
 | 4.3.4 | music | IT loader, sequencer and Update's music section equal Galaxy.dll | O2 | `galaxy-music-sequencer` [oracle], `galaxy-music-update` [oracle], `galaxy-music-loader` [oracle] | PASS |
 | 4.3.5 | Island, Training and the intro in Play | ambient voices, music and window sounds reach the mixer in the worker and the worklet | O3 | `galaxy-music-host` [worker], `galaxy-music-play` [node], `galaxy-effects-play` [node], `window-sound-play` [node], `window-sound-browser` [worker] | PASS |
-| 4.3.6 | a live scene's script sounds | the original's PlaySound calls of a scene against Play's | - | missing: scripts/live-sound-compare.mjs compares one capture (Underworld, tag snd1); its stored original trace is not in a store the gate reads | MISSING |
+| 4.3.6 | 06_HongKong_WanChai_Underworld, 400 ticks: a pistol picked up, drawn and fired | the original's Galaxy PlaySound calls of the scene against Play's replay: every call's sound, emitter, volume, radius, pitch, channel id and order | O1 | `sounds 06_HongKong_WanChai_Underworld (snd1)` [worker] | FAIL |
 | 4.3.7 | audible output | the output Galaxy produces for the speakers | - | missing: the music bus delay, the ring heads' spacing, MPEG and ADPCM samples and 3D voices are unmeasured or untranslated (docs/galaxy-music.md, galaxy-audio.md) | MISSING |
 
 ### 4.4 Text and interfaces
@@ -236,7 +236,7 @@ gate leaves out on purpose. Nothing here is a claim; it is the list a reader sho
 - **Diagnosis tools over stored captures.** `live-events-compare.mjs` (the AI event manager's calls of a pistol and an assault shotgun, 1,069 and
   1,586 manager calls equal), `live-pick-compare.mjs` (pick-by-pick path choices), `live-draw-attr.mjs` / `live-draw-shift.mjs` (stream attribution),
   `live-sound-compare.mjs` (the original's PlaySound calls against Play's). They compare against the original's call logs but each wants one
-  specific capture; only the sound one has a row (4.3.6, `MISSING`: its stored trace is not in a store the gate reads).
+  specific capture; only the sound one has a row (4.3.6, `FAIL`: the strict `--gate` mode runs in the gate from the stored `snd1` capture).
 - **Play against itself.** `validate-gpu-mesh` (the GPU passes equal the CPU kernels, the CPU path being the reference), `mesh-path-frames`,
   `world-batch-gpu`, `light-atlas-upload`, `sim-split`, `scene-matrices`, `hitch-log`, `actor-mesh-scene`: host rendering and plumbing, evidence
   class P. They keep the frame cost and the page honest; they say nothing about the original.
@@ -282,6 +282,7 @@ each criterion's inputs from one root (the first that holds them) and links or c
 | The Ship camera recaptured with the level's movers measured (2026-10-16, tag `sh3b`, level time 132.264 s in `sh3b-time.txt`; the first `sh3` capture is kept) | main `.work/acceptance/09_NYC_Ship/sh3b-original.png`, `.bmp`, `-state.json` (with `movers`) | 4.2.28 |
 | The original's third-person weapon draws | main `.work/weapon/original-cases*.json` | 4.1.9 |
 | The interface frames of 00_Training (18 views, 2026-10-15) and each frame's level time | main `.work/acceptance/00_Training/ui-<view>-original.png` and `ui-<view>-time.txt` (also `ui-e1` to `ui-e4`, the pointer experiment) | 4.4.11 to 4.4.14 |
+| The Underworld's sound capture (2026-10-13/14, tag `snd1`: a pistol summoned, picked up, drawn and fired in a normal player, 400 ticks; the tracer's `gplay`, `addobj`, `unhash` and `hear` call records, the registry at the frozen start and end) | main `.work/live-acceptance/06_HongKong_WanChai_Underworld/{original-trace-snd1.jsonl{,.strobe,.calls.jsonl},registry-start-snd1.txt,registry-end-snd1.txt,watch-snd1.json,commands-snd1.json,deferred-snd1.json}` (copied 2026-10-16 from worktree `agent-a011db8f1b061eb8e`, nothing overwritten) | 4.3.6 |
 | The light manager's tables from the running original | main `.work/live/.work/fpu` | 4.2.9 |
 | 02_NYC_Bar's smoke haze: three views with the fog zones on and off (2026-10-16, level time 52.355 s in each `-time.txt`) | main `.work/acceptance/02_NYC_Bar/{fog3,fog5,fog0}{,-base}-original.png` and `-time.txt` | 4.2.17 |
 | 02_NYC_Hotel's bathroom mirror, JC's `Tread` frozen (2026-10-16, 52.370 s) | main `.work/acceptance/02_NYC_Hotel/{hotel1,hotel2}-original.png`, `-time.txt`, `-state.json` | 4.2.19 |
@@ -354,8 +355,9 @@ Nothing below was fixed in this task beyond wiring existing checks; each item is
    fog; the Hotel's bathroom mirror; the detail pass with the pass poked in; a laser beam; a held flash frame (underwater or drunk); a camera view with a mirror,
    sky, fog or corona in it; and the Underworld's mirrored panes at a held Strobe (the stored frames lack their clock, see [Stored originals](#stored-originals)).
    Order by campaign reach: fog and the Hotel mirror (the NYC chapter), particles, the laser beam (Liberty Island), then the rest.
-6. **Sound has no check against what a live scene or the speakers get (4.3.6, 4.3.7).** `live-sound-compare.mjs` compares the original's `PlaySound` calls of one
-   capture with Play's; its stored trace needs consolidating and a row. Not measurable yet: the music bus delay and the ring heads' spacing (a loopback
+6. **Sound against a live scene (4.3.6) is a check and it fails; the speakers (4.3.7) are unchecked.** `live-sound-compare.mjs --gate` compares the original's `PlaySound` calls of the
+   Underworld `snd1` capture with Play's replay (stored in the main `.work`, see [Stored originals](#stored-originals)): 56 of 82 ticks with calls equal, first differing tick 278 (hand-off in
+   [galaxy-audio](galaxy-audio.md#hand-off-the-sound-gate-2026-10-16)). Not measurable yet: the music bus delay and the ring heads' spacing (a loopback
    recording of the original), MPEG and ADPCM samples, 3D voices.
 7. **The first-person weapon and weapons in mirrors (4.1.10, 4.1.11).** In flight with another agent (the third-person weapon's leftovers); the rows stay
    `MISSING` until a matched capture of the held weapon and of an armed pawn in a mirror exists.

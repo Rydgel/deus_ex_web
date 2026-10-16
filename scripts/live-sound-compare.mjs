@@ -5,7 +5,12 @@
 // sounds-play<tag>.json (`live-acceptance.mjs play --object-trace first:last`, the slot model started from
 // registry-start<tag>.txt).
 //
-//   node scripts/live-sound-compare.mjs --map 06_HongKong_WanChai_Underworld --tag snd1 [--list]
+//   node scripts/live-sound-compare.mjs --map 06_HongKong_WanChai_Underworld --tag snd1 [--list] [--gate]
+//
+// --gate (the Stage 4 gate's row 4.3.6, docs/stage-4-exit-criteria.md): the strict comparison. Per tick, the original's calls and Play's are
+// lined up in the order they were made and every call must be equal in its sound, emitter class, volume bits, radius, pitch bits and channel
+// id (slot and sequence); the last line is `GATE {json}` and the exit status is 1 while any tick differs. The scene's replay is Play's
+// (`live-acceptance.mjs play --tag T --no-ghost --object-trace 1:N` after the `population` step); the original's side is the stored calls file.
 import {existsSync, readFileSync, writeFileSync} from 'node:fs';
 import path from 'node:path';
 import {fileURLToPath} from 'node:url';
@@ -88,4 +93,33 @@ const showN = Number(option('show', 12));
 for (const {o, p} of matched.filter(({o, p}) => o.id !== p.id).slice(0, showN)) console.log(`  id differs: original ${fmt(o)}  play id=${p.id} (slot ${p.id >> 4})`);
 for (const o of onlyOriginal.slice(0, showN)) console.log(`  only the original: ${fmt(o)}`);
 for (const p of onlyPlay.slice(0, showN)) console.log(`  only Play:         ${fmt(p)}`);
+// --- the strict comparison (--gate) --------------------------------------------
+const strictKey = c => [stem(c.actor), String(c.sound ?? '').split('.').pop().toLowerCase(), bits(c.volume), c.radius, bits(c.pitch), c.id].join('|');
+const ticksOf = list => { const m = new Map(); for (const c of list) { if (!m.has(c.u)) m.set(c.u, []); m.get(c.u).push(c); } return m; };
+const oByTick = ticksOf(oSounds), pByTick = ticksOf(soundsPlay);
+const allTicks = [...new Set([...oByTick.keys(), ...pByTick.keys()])].sort((a, b) => a - b);
+let equalCalls = 0, equalTicks = 0, firstDifferentTick = null, orderOnlyTicks = 0;
+const differing = [];
+for (const u of allTicks) {
+  const a = oByTick.get(u) ?? [], b = pByTick.get(u) ?? [];
+  let same = a.length === b.length;
+  if (same) for (let i = 0; i < a.length; i++) if (strictKey(a[i]) !== strictKey(b[i])) same = false;
+  if (same) { equalTicks++; equalCalls += a.length; continue; }
+  firstDifferentTick ??= u;
+  const sorted = list => list.map(strictKey).sort().join('\n');
+  if (a.length === b.length && sorted(a) === sorted(b)) orderOnlyTicks++;
+  differing.push({u, original: a.length, play: b.length});
+}
+const gate = {originalCalls: oSounds.length, playCalls: soundsPlay.length, ticksWithCalls: allTicks.length, equalTicks, equalCalls, differingTicks: differing.length,
+  orderOnlyTicks, firstDifferentTick, matchedLoosely: matched.length, idsEqualLoosely: matched.filter(({o, p}) => o.id === p.id).length, firstDifferentRegistryTake: null};
+{
+  let i = 0; while (i < oAdds.length && i < pAdds.length && oAdds[i].index === pAdds[i].index && stem(oAdds[i].cls) === stem(pAdds[i].cls)) i++;
+  gate.registryTakesEqual = i; gate.registryTakes = [oAdds.length, pAdds.length];
+  gate.firstDifferentRegistryTake = i < Math.max(oAdds.length, pAdds.length) ? {original: oAdds[i] ? `${oAdds[i].cls}@${oAdds[i].index} u${oAdds[i].u}` : null, play: pAdds[i] ? `${pAdds[i].cls}@${pAdds[i].index} u${pAdds[i].u}` : null} : null;
+}
+if (flag('gate')) {
+  console.log(`strict: ${equalTicks} of ${allTicks.length} ticks with sound calls equal in order, sound, emitter, volume, radius, pitch and channel id (${equalCalls} of ${oSounds.length} calls); first differing tick ${firstDifferentTick ?? 'none'}`);
+  console.log(`GATE ${JSON.stringify(gate)}`);
+  process.exitCode = firstDifferentTick === null ? 0 : 1;
+}
 writeFileSync(path.join(dir, `sound-compare${suffix}.json`), JSON.stringify({oAdds, pAdds, oFrees, oSounds, soundsPlay, oHears}, null, 1));
