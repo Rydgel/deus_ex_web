@@ -36,9 +36,12 @@ const {WRITE_LEAD} = await import('../src/viewer/galaxy-music-worklet.mjs');
 const {MUSIC_PAN_PC} = await import('../src/viewer/galaxy-music-output.mjs');
 
 const polls = ['training-load1', 'training-load2'];
-for (const name of polls) for (const ext of ['json', 'pan.bin', 'poll.txt'])
-  if (!existsSync(path.join(store, `${name}.${ext}`)))
-    throw new Error(`${store}/${name}.${ext} is missing: run scripts/galaxy-output-capture.sh with the CrossOver bottle free`);
+// The store lives outside Git (the main checkout's .work): a checkout without it skips (the sweep's SKIP line).
+const missing = polls.flatMap(name => ['json', 'pan.bin', 'poll.txt'].map(ext => `${name}.${ext}`)).filter(f => !existsSync(path.join(store, f)));
+if (missing.length) {
+  console.log(`SKIP validate-galaxy-output-poll: ${store} lacks ${missing.join(', ')} (run scripts/galaxy-output-capture.sh with the CrossOver bottle free)`);
+  process.exit(0);
+}
 
 // Play's output open, as the worklet makes it.
 const {instance} = await WebAssembly.instantiate(await readFile('src/runtime/galaxy-kernel.wasm'));

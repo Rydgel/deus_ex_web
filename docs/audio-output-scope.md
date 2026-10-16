@@ -2,7 +2,8 @@
 
 Row 4.3.7 of [stage-4-exit-criteria](stage-4-exit-criteria.md) ("audible output: the output Galaxy produces for the speakers") is
 `MISSING` and had no plan. This note is the plan. **The user adopted all six recommendations of §7 on 2026-10-16**, so §6 is the row's
-criterion, with check 5 (the speech ring transport) included. Nothing here is implemented yet. It records:
+criterion, with check 5 (the speech ring transport) included. Checks 1, 2, 4 and 5 are implemented and pass; check 3 is not built (§6
+"Status", §5.2). It records:
 
 1. the chain from Galaxy's mixer to the speakers, in the original and in Play, with the status of each stage (§1);
 2. what was traced in Galaxy.dll for it on 2026-10-16 (§2: read from code with capstone, **not** oracle-checked);
@@ -326,6 +327,33 @@ name, the logged ops applied in order between callbacks, and each callback run b
 `(play, write)`; every copied byte and position compared with the log. The breakpoints slow the game: the schedule is whatever it was, and
 it is recorded.
 
+**Not built (2026-10-16), and the design above needs these changes first.** Checks 1, 2, 4 and 5 now exist; this capture and check 3 do
+not. What the translation now shows a replay needs:
+
+* **No snapshot.** The Rust library cannot restore itself from a raw globals block (`0x10697c00..0x10698400`), the voice table and the
+  music player's state: those are typed fields, patterns and instruments, not one image. Trace instead **from the process launch**: start
+  DeusEx.exe under the debugger (or attach at the `LOAD_DLL_DEBUG_EVENT` of Galaxy.dll), so the record begins before glxInit, and the
+  replay starts from `Library::new`, `setup_output` and `open_output` with nothing to restore. The window is then the launch to 00_Training
+  plus 30 s.
+* **Inputs as bytes, not names.** Dump every glxLoadSample input (RegisterSound's `{'MEMO', 0xc, Data, Num}` bytes) and every glxLoadMusic
+  input (the module and its 1024-byte slack, which Update fills from the UMusic) with the handle it returned; the replay maps each
+  original handle to the model's by load order. No registry walk.
+* **The decoder's output.** Speech in the window plays through Galaxy's MPEG decoder (row 4.5.6, excluded). Record, per `0x1061a690` call,
+  its Consumed and Produced and the bytes it wrote at Dest1 and Dest2, so the replay's PCM leaf (ring.rs) is fed the original decoder's
+  own output and the ring bytes can match.
+* **The decoder thread's events.** Its message handling is not under the library lock: record each handled message (wParam, lParam)
+  where it falls between callbacks, and deliver it there in the replay (ring.rs's "after the callback that posted it" is the host model
+  Play uses; the replay should not assume it).
+* **Hashes in the tracer.** Copying `[A, A+R)` and `[B, B+R)` out of the game for every callback is about 400 KB/s; hash each segment
+  in the tracer (a 64-bit FNV-1a over the bytes, the same in the validator) and dump whole segments only for the first callbacks and
+  the resyncs.
+* **Breakpoint placement.** Each library entry's breakpoint goes after its own EnterCriticalSection returns (so the game thread's calls
+  order correctly against the timer thread's); Update's inline stores (`0x1060a83d` voice `+0x0f`, `0x1060a88d` the break flag) are
+  inside Update's own critical section.
+* **A scene to avoid or label:** a stereo line (one of the four) whose next slot is restarted with a WAV while the pair's first voice
+  plays: the original then writes the second channel through the stale Link into that WAV's data (`HAZARD_RING_FOREIGN_WRITE`, not
+  modelled).
+
 ### 5.3 Loopback (optional, confirmation only)
 
 * Mac: route CrossOver's output to the installed BlackHole 2ch device and record it with `ffmpeg -f avfoundation -i ":BlackHole 2ch" -ar
@@ -374,6 +402,13 @@ SSE, confirmed by §5.1).
 
 Until checks 1 to 5 pass the row stays `MISSING`; its text names the two-head placement, the ring transport and the capture as the
 missing parts.
+
+**Status (2026-10-16, branch `claude/galaxy-output-437-5085f1`):** check 1 passes (`validate-galaxy-output-callback.mjs`: 17 cases, 405
+callbacks, 809 Locks, 352 of 352 instructions, bit-equal); check 2 passes (`validate-galaxy-output-poll.mjs`: D = 8,820 bytes in every
+sample of two polls across a map load, Play's constants equal, `MUSIC_PAN_PC` changed from 64 to 53 on that evidence); check 4 passes
+(`validate-galaxy-output-play.mjs`); check 5 passes (`validate-galaxy-ring-voice.mjs`: 14 cases, 2,631 decoder messages, bit-equal).
+Check 3 (`galaxy-output-replay`) is not built: §5.2 above. The row stays `MISSING`; the two-head placement and the ring transport are no
+longer missing, the capture and its replay are.
 
 ## 7. Decisions (adopted 2026-10-16)
 
