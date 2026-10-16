@@ -154,8 +154,9 @@ function compare() {
     const text = execFileSync(process.execPath, args, {encoding: 'utf8'});
     const json = /(\{.*\})/.exec(text.trim().split('\n').at(-1))?.[1];
     const metrics = json ? JSON.parse(json) : {error: text.trim().split('\n').at(-1)};
+    // visual-acceptance.mjs prints the outlier blocks as a count after the JSON ("<map> <view> {...} 3 outlier blocks")
     const row = {frame: name, ...compareFrames(a, b), mad: metrics.mad, ratio: metrics.ratio, edgeRecall: metrics.edgeRecall, edgePrecision: metrics.edgePrecision,
-      outlierBlocks: metrics.outlierBlocks?.length, error: metrics.error};
+      outlierBlocks: Number(/\} (\d+) outlier blocks/.exec(text)?.[1] ?? NaN), error: metrics.error};
     report[name] = row;
     console.log(JSON.stringify(row));
   }
