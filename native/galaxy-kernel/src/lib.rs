@@ -25,12 +25,14 @@ mod host;
 mod mixer;
 mod output;
 mod reverb;
+mod ring;
 mod sequencer;
 mod x87;
 pub use effects::*;
 pub use mixer::*;
 pub use output::*;
 pub use reverb::*;
+pub use ring::*;
 pub use sequencer::*;
 
 // glxLoadMusic results (GALAXY.H GLXERR_* numbering, as returned by the DLL).

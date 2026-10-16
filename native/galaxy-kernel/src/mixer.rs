@@ -203,6 +203,7 @@ struct Memory<'a> {
     instruments: &'a [Option<Instrument>],
     patterns: &'a [Option<Pattern>],
     effects: &'a [crate::effects::EffectSample],
+    rings: &'a [Option<Vec<u8>>],
     fab: &'a [(u32, Vec<u8>)],
     own: Option<View<'a>>,
     hazards: u32,
@@ -248,6 +249,10 @@ impl<'a> Memory<'a> {
             // The WAV loader zeroes the 31 bytes after the data (0x10619acc), so
             // no part of an effect sample's allocation is unwritten.
             Region::Effect(i) => (&self.effects[i as usize].data, (0, 0)),
+            // glxStartSample zeroes the first 0x10000 bytes of the ring's
+            // malloc(0x1001f); the kernel's read of the sample after the
+            // loop end (x[p+1] at p = 0x7fff) reaches the unwritten tail.
+            Region::Ring(s) => (self.rings[s as usize].as_ref()?, (crate::ring::RING_BYTES, crate::ring::RING_ALLOC as u32)),
         };
         Some(View { base: start, bytes, tail })
     }
@@ -370,6 +375,7 @@ impl Library {
             instruments: &self.instruments,
             patterns: &self.patterns,
             effects: &self.effects.samples,
+            rings: &self.effects.rings,
             fab: &player.mixer.fab,
             own: None,
             hazards: 0,

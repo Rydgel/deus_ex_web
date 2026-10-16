@@ -199,9 +199,9 @@ export const MUSIC_OP = Object.freeze({
 });
 /** Int32 arguments per op after its code (loadMusic/loadSample/attachSample:
  * blob index, byte length[, handle]; setSampleReverb: the 0x6c-byte glxReverb
- * as 27 words; loadHostSample: rate, frames, handle; releaseSample: handle). */
+ * as 27 words; loadHostSample: rate, frames, handle, channels; releaseSample: handle). */
 export const OP_ARITY = Object.freeze({ 1: 2, 2: 2, 3: 2, 4: 2, 5: 2, 6: 2, 7: 2, 8: 2, 9: 2, 10: 3, 11: 6, 12: 4, 13: 1, 14: 27,
-  15: 3, 16: 3, 17: 1 });
+  15: 4, 16: 3, 17: 1 });
 /** The ops whose first argument is a blob (bytes in `modules`). */
 const BLOB_OPS = new Set([MUSIC_OP.loadMusic, MUSIC_OP.loadSample, MUSIC_OP.attachSample]);
 /** Update's FArray::Add(1024) after the module bytes (0x1060a702..0x1060a735). */
@@ -324,11 +324,13 @@ export async function createSampleRegistry() {
       return out;
     },
     /** A host-decoded speech record (effects.rs `host_sample`, a stand-in
-     * for the MPEG loader's): the same 0x48-byte heap allocation the worklet
-     * makes for its loadHostSample op. */
-    loadHost(rate, frames) {
-      const handle = x.galaxy_sample_host(rate >>> 0, frames >>> 0) >>> 0;
-      return { handle, type: 0x24, length: frames >>> 0, loopStart: 0, loopEnd: 0, c4Speed: rate >>> 0, host: true };
+     * for the MPEG loader's: type 0x4024 mono, 0x4044 stereo, played on
+     * Galaxy's ring transport): the same 0x48-byte heap allocation the
+     * worklet makes for its loadHostSample op. */
+    loadHost(rate, frames, channels = 1) {
+      const handle = x.galaxy_sample_host(rate >>> 0, frames >>> 0, channels >>> 0) >>> 0;
+      return { handle, type: channels === 2 ? 0x4044 : 0x4024, length: (frames * 2 * channels) >>> 0, loopStart: 0, loopEnd: 0,
+        c4Speed: rate >>> 0, channels, host: true };
     },
   };
 }
@@ -341,7 +343,7 @@ export async function createSampleRegistry() {
  * controlSample, stopSample, voiceActive, setSampleReverb. */
 export function createMusicLibraryProxy(post, { samples = null } = {}) {
   let depth = 0, open = null, issued = 0,
-    reported = { batch: 0, ...stateOf(INITIAL_STATE), active: 0, any: false, positions: new Map() };
+    reported = { batch: 0, ...stateOf(INITIAL_STATE), active: 0, any: false, positions: new Map(), windows: new Map() };
   // Unacknowledged batches' ops that touch the mirrored state.
   const pending = [];
   const counts = { batches: 0, ops: 0, modules: 0, moduleBytes: 0, reports: 0, samples: 0, sampleBytes: 0, voiceOps: 0,
@@ -413,14 +415,14 @@ export function createMusicLibraryProxy(post, { samples = null } = {}) {
      * voices"; the stand-in of effects.rs `host_sample`): {handle, c4Speed =
      * `rate`, ...} at once from the registry, and the loadHostSample op that
      * makes the worklet's same record. Its PCM comes later (attachSample). */
-    registerHostSample(key, rate, frames) {
+    registerHostSample(key, rate, frames, channels = 1) {
       let entry = registered.get(key);
       if (entry) return entry;
       if (!registry) throw new Error(registryError ?? 'Galaxy sample registry not ready');
-      entry = registry.loadHost(rate, frames);
+      entry = registry.loadHost(rate, frames, channels);
       registered.set(key, entry);
       counts.hostSamples++;
-      call(['loadHostSample', rate, frames, entry.handle]);
+      call(['loadHostSample', rate, frames, entry.handle, channels]);
       return entry;
     },
     /** The host's 16-bit PCM for a host record (copied at the call). The
@@ -437,6 +439,13 @@ export function createMusicLibraryProxy(post, { samples = null } = {}) {
     voicePosition(voice) {
       const slot = voiceSlot(voice);
       return slot < 0 ? null : reported.positions.get(slot) ?? null;
+    },
+    /** The lip-sync window of a voice playing a host record, as the worklet
+     * last reported it: {available, bytes} (the 1024 int16 samples of its
+     * ring at the read head, zero past the voice's loop end; ring.rs), or null. */
+    voiceWindow(voice) {
+      const slot = voiceSlot(voice);
+      return slot < 0 ? null : reported.windows.get(slot) ?? null;
     },
     /** glxStartSample(voice, sample, frequency, volume, pan, flags): the fixed
      * voice's handle (the subsystem passes channel + 1). */
@@ -471,7 +480,8 @@ export function createMusicLibraryProxy(post, { samples = null } = {}) {
       if (data?.type !== 'report') return;
       counts.reports++;
       reported = { batch: data.batch, ...stateOf(data.state), active: data.active >>> 0, any: true,
-        positions: new Map(data.positions ?? []) };
+        positions: new Map(data.positions ?? []),
+        windows: new Map((data.windows ?? []).map(([slot, available, bytes]) => [slot, { available, bytes }])) };
       while (pending.length && pending[0].id <= data.batch) pending.shift();
     },
     status() {

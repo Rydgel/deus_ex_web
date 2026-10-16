@@ -16,15 +16,17 @@
 //! [0, EffectsChannels) onto bus B; these entries write the voice records it
 //! reads.
 //!
+//! The ring path of glxStartSample and glxStopSample (types 0xe000 and 0x40:
+//! compressed, streamed and stereo samples, a 64 KB ring the decoder thread
+//! 0x1060e340 feeds) is translated with the decoder thread in ring.rs.
+//!
 //! Not translated (a fault code instead of a guess): the other loaders of
 //! glxLoadSample's dispatch ('AS  ' 0x1062b640, '.snd' 0x1062b4c0, 'SCRS'
-//! 0x1062b410, the MPEG path 0x10620b30: UserInterface.Menu_SpeechTest is
-//! the one shipped effect it would take), IMA ADPCM and MPEG WAVs, streaming
-//! loads (flags 8), and the ring path of glxStartSample (types 0xe000 and
-//! 0x40: compressed, streamed and stereo samples, which the decoder thread
-//! 0x1060e340 feeds). Output type [0x1069817a] is 0 (Use3dHardware False),
-//! so the 3D voice poll 0x106126f0 and the 3D branches of the stop and the
-//! status query do nothing.
+//! 0x1062b410, the MPEG path 0x10620b30, whose record `host_sample` stands
+//! in for), IMA ADPCM and MPEG WAVs, and streaming loads (flags 8). Output
+//! type [0x1069817a] is 0 (Use3dHardware False), so the 3D voice poll
+//! 0x106126f0 and the 3D branches of the stop and the status query do
+//! nothing.
 //!
 //! Address model: the records and their data get the addresses of a bump
 //! heap at EFFECT_HEAP (16-byte rounding, at least 16, nothing reused), the
@@ -36,18 +38,22 @@
 //! absolute address's value.
 //!
 //! Host-decoded speech (`host_sample`, `host_sample_attach`,
-//! `host_sample_release`; docs/galaxy-audio.md "Speech through Galaxy's
-//! voices") is a stand-in, not a translation. The original's MP3 speech is
-//! loaded by the MPEG path 0x10620b30 into a streamed record (type 0x4024,
-//! +0x30 the MP3 byte length, measured under Unicorn, docs/lip-sync.md) and
-//! plays through glxStartSample's ring branch, fed by the decoder thread
-//! 0x1060e340. That decoder is not ported (the user's decision of
-//! 2026-10-16): the browser decodes the MP3, and its 16-bit PCM is given the
-//! record the WAVE loader writes for 16-bit mono PCM (type 0x24), so it plays
-//! through the non-ring branch and the same mixer. The record takes a bump-heap
-//! address as a WAVE record does (the simulation's registry and the worklet
-//! allocate in the same order); the PCM lives in a separate pool (HOST_POOL),
-//! attached when the host decode arrives and released when no voice plays it.
+//! `host_sample_release`; docs/galaxy-audio.md "Speech on Galaxy's ring
+//! transport"): the record stands in for the MPEG loader 0x10620b30's. That
+//! loader writes SAMP, +0x04 0x40, +0x28 0x4000, +0x2a 0x7fff, +0x2c 0x4024
+//! (mono) or 0x4044 (any other MPEG mode: stereo), +0x30 the MP3's byte
+//! length, +0x34 = +0x38 = 0, +0x3c the rate of its table 0x10640f40, +0x44
+//! the MP3 bytes (0x10620cd5..0x10620d99). The stand-in writes the same
+//! fields except that the source is the browser's decode of the MP3 (row
+//! 4.5.6, the user's decision of 2026-10-16): +0x30 is the PCM's byte length
+//! and +0x44 the PCM (16-bit, interleaved for stereo), which ring.rs's
+//! decoder leaf reads in place of the MPEG decoder 0x1061a690. So speech
+//! plays through glxStartSample's ring branch, the refill posts and the
+//! decoder thread's ring logic, as in the original. The record takes a
+//! bump-heap address as a WAVE record does (the simulation's registry and the
+//! worklet allocate in the same order); the PCM lives in a separate pool
+//! (HOST_POOL), attached when the host decode arrives and released when no
+//! voice plays it.
 use super::*;
 use crate::sequencer::{Region, UNSUPPORTED_DIVIDE, UNSUPPORTED_READ};
 
@@ -67,7 +73,7 @@ const RIFF_SMPL: &[u8; 4] = b"smpl";
 pub const UNSUPPORTED_SAMPLE_LOADER: u32 = 0x130; // 'AS  ', '.snd', 'SCRS' or the MPEG dispatch of glxLoadSample
 pub const UNSUPPORTED_SAMPLE_CODING: u32 = 0x131; // a WAV data chunk of format 0x11 (IMA ADPCM) or 0x55 (MPEG)
 pub const UNSUPPORTED_STREAMING: u32 = 0x132; // flags 8 (GLX_LOADASSTREAMING)
-pub const UNSUPPORTED_RING_VOICE: u32 = 0x133; // glxStartSample's ring path (types 0xe000 / 0x40)
+pub const UNSUPPORTED_RING_VOICE: u32 = 0x133; // (retired: the ring path is translated, ring.rs)
 pub const UNSUPPORTED_AUTO_VOICE: u32 = 0x134; // glxStartSample(Voice = 0): the free-voice search
 pub const UNSUPPORTED_VOICE: u32 = 0x135; // a voice pointer outside the voice table
 pub const UNSUPPORTED_SHORT_PEEK: u32 = 0x136; // fewer than 0x50 bytes: the dispatch reads uninitialised stack
@@ -100,11 +106,16 @@ pub(crate) struct Effects {
     /// Data of a sample whose record was kept but whose bytes the host
     /// dropped (galaxy_sample_forget): reads of it fault.
     pub forgotten: Vec<u32>,
+    /// Ring voices' 64 KB rings by voice slot (ring.rs address model).
+    pub rings: Vec<Option<Vec<u8>>>,
+    /// Refill messages posted to the decoder thread (wParam, lParam), not yet handled.
+    pub posts: std::collections::VecDeque<(u32, u32)>,
 }
 
 impl Effects {
     pub(crate) fn new() -> Self {
-        Effects { samples: Vec::new(), heap_top: EFFECT_HEAP, mutexes: 0, forgotten: Vec::new() }
+        Effects { samples: Vec::new(), heap_top: EFFECT_HEAP, mutexes: 0, forgotten: Vec::new(), rings: (0..VOICES).map(|_| None).collect(),
+            posts: std::collections::VecDeque::new() }
     }
     fn malloc(&mut self, size: u32) -> u32 {
         let ptr = self.heap_top;
@@ -274,19 +285,22 @@ impl Library {
 
     // ---- host-decoded speech (a stand-in; see the file comment) -------------------
 
-    /// The record for a speech MP3 the host decodes: what the WAVE loader
-    /// (0x10619a26..0x10619a9d) writes for 16-bit mono PCM at `rate`, with
-    /// `frames` until the PCM is attached and no data. The record takes the
-    /// bump heap's next 0x48 bytes, as glxLoadSample's malloc (0x10618ed0).
-    pub fn host_sample(&mut self, rate: u32, frames: u32) -> u32 {
+    /// The record for a speech MP3 the host decodes (the stand-in of the
+    /// MPEG loader's, see the file comment): type 0x4024 for a mono stream,
+    /// 0x4044 for `channels` 2, the rate, and `frames` frames of 16-bit PCM
+    /// as the source length until the PCM is attached; no data. The record
+    /// takes the bump heap's next 0x48 bytes, as glxLoadSample's malloc
+    /// (0x10618ed0).
+    pub fn host_sample(&mut self, rate: u32, frames: u32, channels: u32) -> u32 {
         let addr = self.effects.malloc(0x48);
         let mut record = [0u8; 0x48];
+        let stereo = channels == 2;
         put32(&mut record, 0, SAMP);
         put32(&mut record, 4, 0x40);
         put16(&mut record, 0x28, 0x4000);
-        put32(&mut record, 0x30, frames);
+        put32(&mut record, 0x30, frames.wrapping_mul(if stereo { 4 } else { 2 }));
         put16(&mut record, 0x2a, 0x7fff);
-        put16(&mut record, 0x2c, 0x24);
+        put16(&mut record, 0x2c, if stereo { 0x4044 } else { 0x4024 });
         put32(&mut record, 0x3c, rate);
         self.effects.samples.push(EffectSample { addr, record, data_addr: 0, data: Vec::new(), host: true });
         addr
@@ -296,11 +310,11 @@ impl Library {
         self.effects.samples.iter().position(|s| s.addr == addr && s.host).ok_or(HOST_SAMPLE_MISSING)
     }
 
-    /// The host's decoded 16-bit PCM for the record at `addr`: Length (+0x30)
-    /// becomes its frame count and Data (+0x44) its pool address; 31 zero
-    /// bytes follow, as after a WAVE data chunk (0x10619acc). The pool
-    /// address is past every attached host sample's data (HOST_POOL when none
-    /// is attached).
+    /// The host's decoded 16-bit PCM (interleaved for a stereo record) for
+    /// the record at `addr`: the source length (+0x30) becomes its byte
+    /// length and the source (+0x44) its pool address; 31 zero bytes follow.
+    /// The pool address is past every attached host sample's data (HOST_POOL
+    /// when none is attached).
     pub fn host_sample_attach(&mut self, addr: u32, pcm: &[u8]) -> Result<u32, u32> {
         let index = self.host_index(addr)?;
         let frames = (pcm.len() / 2) as u32;
@@ -317,7 +331,7 @@ impl Library {
         let mut data = vec![0u8; size as usize];
         data[..frames as usize * 2].copy_from_slice(&pcm[..frames as usize * 2]);
         let sample = &mut self.effects.samples[index];
-        put32(&mut sample.record, 0x30, frames);
+        put32(&mut sample.record, 0x30, frames * 2);
         put32(&mut sample.record, 0x44, top);
         sample.data_addr = top;
         sample.data = data;
@@ -339,7 +353,7 @@ impl Library {
 
     // ---- voices -------------------------------------------------------------------
 
-    fn voice_slot(&self, voice: u32) -> Result<usize, u32> {
+    pub(crate) fn voice_slot(&self, voice: u32) -> Result<usize, u32> {
         let off = voice.wrapping_sub(VOICE_BASE);
         if off % VOICE as u32 != 0 || off / VOICE as u32 >= VOICES as u32 {
             return Err(UNSUPPORTED_VOICE);
@@ -347,7 +361,7 @@ impl Library {
         Ok((off / VOICE as u32) as usize)
     }
 
-    fn sample_record(&self, addr: u32) -> Result<[u8; 0x48], u32> {
+    pub(crate) fn sample_record(&self, addr: u32) -> Result<[u8; 0x48], u32> {
         self.effects.sample(addr).map(|s| s.record).ok_or(UNSUPPORTED_READ)
     }
 
@@ -361,9 +375,7 @@ impl Library {
             return Ok(0);
         }
         let kind = get16(&rec, 0x2c);
-        if kind & 0xe000 != 0 || kind & 0x40 != 0 {
-            return Err(UNSUPPORTED_RING_VOICE);
-        }
+        let ring = kind & 0xe000 != 0 || kind & 0x40 != 0;
         if voice == 0 {
             return Err(UNSUPPORTED_AUTO_VOICE);
         }
@@ -379,7 +391,8 @@ impl Library {
             if data == 0 {
                 continue; // 0x10612424: the next voice, no failure
             }
-            let start_time = if flags & 1 != 0 { 0xffff_fffe } else { self.player.tick_count };
+            // 0x1061243a..0x1061246f: a ring pair's second voice starts at -2 too.
+            let start_time = if flags & 1 != 0 || (ring && i != 0) { 0xffff_fffe } else { self.player.tick_count };
             self.sd(v, 0x08, start_time);
             self.sb(v, 0x0c, 0x3c);
             self.sb(v, 0x0d, 0);
@@ -403,21 +416,37 @@ impl Library {
             self.sw(v, 0x3c, 0);
             self.sb(v, 0x3e, 0);
             self.sd(v, 0x42, sample);
-            let mut ptr = data;
+            // 0x106124d7..0x10612502: a ring voice's data is a fresh 64 KB ring (ring.rs).
+            let mut ptr = if ring { self.ring_alloc(v) } else { data };
             if kind & 4 != 0 {
                 ptr >>= 1;
             }
             self.sd(v, 0x46, ptr);
             self.sw(v, 0x4a, 0);
             self.sw(v, 0x4c, kind);
-            self.sd(v, 0x4e, ptr);
-            self.sd(v, 0x52, get32(&rec, 0x34).wrapping_add(ptr));
-            self.sd(v, 0x56, get32(&rec, 0x38).wrapping_add(ptr));
-            self.sd(v, 0x88, 0);
-            self.sd(v, 0x5a, get32(&rec, 0x30).wrapping_add(ptr));
-            self.sd(v, 0x8c, 0);
-            self.sd(v, 0x90, 0);
-            self.sd(v, 0x94, 0);
+            if !ring {
+                self.sd(v, 0x4e, ptr);
+                self.sd(v, 0x52, get32(&rec, 0x34).wrapping_add(ptr));
+                self.sd(v, 0x56, get32(&rec, 0x38).wrapping_add(ptr));
+                self.sd(v, 0x88, 0);
+                self.sd(v, 0x5a, get32(&rec, 0x30).wrapping_add(ptr));
+                self.sd(v, 0x8c, 0);
+                self.sd(v, 0x90, 0);
+                self.sd(v, 0x94, 0);
+            } else {
+                // 0x10612562..0x1061258f: looped, loop always, over [ring, ring + 0x7fff];
+                // the write position's 0x10000 sentinel (the decoder thread's first fill).
+                self.sb(v, 0x4c, self.vb(v, 0x4c) | 0x88);
+                let end = ptr.wrapping_add(if self.mutant(crate::ring::MUTANT_RING_LOOP_8000) { 0x8000 } else { 0x7fff });
+                self.sd(v, 0x56, end);
+                self.sd(v, 0x5a, end);
+                self.sd(v, 0x4e, ptr);
+                self.sd(v, 0x52, ptr);
+                self.sd(v, 0x88, 0x10000);
+                self.sd(v, 0x8c, 0);
+                self.sd(v, 0x90, 0x10000);
+                self.sd(v, 0x94, 0x10000);
+            }
             let c4 = if frequency == -1 { get32(&rec, 0x3c) } else { frequency as u32 };
             self.sd(v, 0x5e, c4);
             let vol = if volume == -1 { get16(&rec, 0x2a) } else { volume as u16 };
@@ -577,7 +606,16 @@ impl Library {
             }
             let kind = self.vw(v, 0x4c);
             if kind & 0xe000 != 0 || kind & 0x40 != 0 {
-                return Err(UNSUPPORTED_RING_VOICE); // never started by this translation
+                // 0x10618503..0x10618530: free the ring, clear the stream fields.
+                let ring = self.vd(v, 0x4e);
+                if ring != 0 {
+                    self.ring_free(if kind & 4 != 0 { ring.wrapping_add(ring) } else { ring })?;
+                }
+                self.sd(v, 0x4e, 0);
+                self.sd(v, 0x88, 0);
+                self.sd(v, 0x8c, 0);
+                self.sd(v, 0x90, 0);
+                self.sd(v, 0x94, 0);
             }
             self.sd(v, 0x08, 0);
             self.sb(v, 0x0f, 0);
@@ -615,6 +653,11 @@ impl Library {
         for (i, s) in self.effects.samples.iter().enumerate() {
             if s.data_addr != 0 && !s.data.is_empty() {
                 r.push((s.data_addr, s.data.len() as u32, Region::Effect(i as u16)));
+            }
+        }
+        for (slot, ring) in self.effects.rings.iter().enumerate() {
+            if ring.is_some() {
+                r.push((crate::ring::RING_POOL + slot as u32 * crate::ring::RING_STRIDE, crate::ring::RING_ALLOC as u32, Region::Ring(slot as u16)));
             }
         }
     }
@@ -678,8 +721,8 @@ pub extern "C" fn galaxy_sample_forget(addr: u32) {
 
 /// A host-decoded speech record (`Library::host_sample`): its address.
 #[no_mangle]
-pub extern "C" fn galaxy_sample_host(rate: u32, frames: u32) -> u32 {
-    with_library(|l| l.host_sample(rate, frames))
+pub extern "C" fn galaxy_sample_host(rate: u32, frames: u32, channels: u32) -> u32 {
+    with_library(|l| l.host_sample(rate, frames, channels))
 }
 
 /// Attaches galaxy_input's `len` bytes (16-bit PCM) to the host record at

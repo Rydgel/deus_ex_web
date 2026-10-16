@@ -480,7 +480,8 @@ loads.
    frequency `ftol(rate · pitch · doppler)` is the original's. Its frame
    count is a walk over the MPEG frame headers (`mp3Frames`) until a decode
    gives the real one; only the host clock reads it.
-3. The record (`effects.rs` `host_sample`, a stand-in, not a translation):
+3. (Replaced on 2026-10-16 by "Speech on Galaxy's ring transport" below: the record is now the MPEG loader's stand-in of type
+   0x4024/0x4044 and plays on the ring transport. As first written:) The record (`effects.rs` `host_sample`, a stand-in, not a translation):
    what the WAVE loader writes for 16-bit mono PCM (type `0x24`, PANNING
    `0x4000`, Length, rate), allocated from the bump heap as glxLoadSample's
    `malloc(0x48)`, so the simulation's registry and the worklet agree on the
@@ -565,6 +566,82 @@ voices, the speech among them, with 0 failures.
 * The page converts the decode to 16-bit on its main thread once per line
   (as the earlier transport did for lip sync): a one-off cost at a line's
   start, not measured against the 8.3 ms frame budget.
+
+## Speech on Galaxy's ring transport (2026-10-16)
+
+Since this date speech no longer plays from a non-ring stand-in record: it plays on the original's ring transport, translated
+(`native/galaxy-kernel/src/ring.rs`, the ring branches in `effects.rs`) and checked against the original under Unicorn (Stage 4 gate
+row 4.3.7, check 5, `scripts/validate-galaxy-ring-voice.mjs`). Items 3 to 5 of "Speech through Galaxy's voices" above are replaced by
+this section; the chain (items 1, 2, 6 to 8) is unchanged.
+
+**What is translated** (addresses at the preferred base):
+
+* **glxStartSample's ring branch** (`0x10612452..0x1061258f`): for a record of type `& 0xe000` or `& 0x40`, `malloc(0x1001f)` with the
+  first 0x10000 bytes zeroed (the last 0x1f never written), the voice's type `|= 0x88` (looped, loop always), loop start = data start
+  = the ring, loop end = end = ring + 0x7fff samples, the write position `V+0x88 = 0x10000` (a sentinel), the source offset `V+0x8c =
+  0`, `V+0x90 = V+0x94 = 0x10000`. A pair's second voice (type 0x40) starts at time −2 like a `flags & 1` start; a pair's default pan
+  (−1) is 0 and 0x7fff. No decode and no message at the start.
+* **The refill posts** (`0x106151bb..0x1061520c`, already traced in `sequencer.rs`): at each sequencer tick, for every effect slot
+  with `V+0x10`, `V+0x0f` and `V+0x11 & 8` and a ring type, `PostThreadMessageA(decoder, 0x400, slot, V+0x46 − V+0x52)` before the
+  segment is mixed. A pair's second voice has `V+0x11 & 8` clear: one post feeds both rings.
+* **The decoder thread's handler** (`0x1060e363..0x1060e80d`): the Link chain's mutexes; the read head in bytes; the first fill at
+  `(read + 0x2000) & 0xffff`; `n = (read − write) mod 0x10000`, at most 0x8000 bytes per message; decoder calls of `min(n, 0x10000 −
+  write)` bytes into the voice's ring and its Link voice's ring, the source offset advancing by what each call consumed, a second
+  attempt after an empty answer; at the end of the stream (two empty answers, the record not looped) and **only when the read head
+  is below the write position** (`cmp; jge`, ring-relative bytes), the loop bits `0x88` cleared and loop end = end = the write
+  position; the rest of the ring (and the Link's) zeroed from the write position for `n` bytes; the write position and offset stored.
+* **glxStopSample's ring free** (`0x10618503..0x10618530`): `free(V+0x4e · bps)`, then `V+0x4e`, `V+0x88..V+0x94` zeroed.
+
+**Stand-ins, labelled.** The MPEG decoder `0x1061a690` is not ported (row 4.5.6, the user's decision): the record's source is the
+browser's decode (interleaved for stereo) instead of the MP3 bytes, and `decode_leaf` copies what fits (mono: `min(Chunk, Remaining)`
+bytes; stereo: `min(Chunk / 2, Remaining / 4)` frames, left to the voice's ring, right to the Link's); the oracle replaces `0x1061a690`
+with the same leaf. So `+0x30` holds the PCM's byte length and `+0x44` the PCM, where the MPEG loader stores the MP3's (the other
+fields are the loader's: `0x10620cd5..0x10620d99`, type 0x4024 for MPEG mode 3, 0x4044 for any other). A message is handled after the
+timer callback that posted it, in post order (the original's HIGHEST-priority thread may run during the rest of the callback on
+another core; the bytes it writes are behind the posted read head, or 0x2000 bytes ahead of it at the first fill, which the rest of
+a callback does not reach). The ring of voice slot s is at `0x68000000 + s·0x10020` (the address is only ever used as a pointer).
+
+**What the oracle settled** ([audio-output-scope](audio-output-scope.md) §2.3 and §2.4 were read from code; the 14 cases measure them):
+
+* **The head start**: the first decoded sample sits 4,096 samples (0x2000 bytes, 92.9 ms) after the read head at the first refill
+  post, which itself comes at the first sequencer tick after the start (e.g. 110 samples later at the default tempo).
+* **The refills**: the first message fills 0x8000 bytes, the second the rest of the ring up to the read head, then one tick's worth
+  each (882 or 970 bytes at the default tempo, the tick's 441/485 samples).
+* **One sample lost per ring lap**: the mixer's ring loop is `[ring, ring + 0x7fff]` (mixer.md §2.3: the bound sample is mixed, then
+  the position wraps to loop start + 1), 32,767 samples, while the decoder writes a 65,536-byte (32,768-sample) ring. Every lap after
+  the first the mixer skips ring index 0, so one decoded sample is dropped every 32,767 samples (0.743 s at 44.1 kHz). Measured on
+  the verified kernel: the lag between the samples mixed and the decoded index at the read head is 4,294 before the first wrap and
+  4,293 after it.
+* **The end**: a line whose data all fits in the first fill (under about 16,000 samples) ends right after its last sample. A longer
+  line's end is set only once the read head has wrapped below the write position, so the voice keeps playing the zeroed ring for up
+  to a lap: on the 100,000-frame test line Active cleared about 27,000 samples (0.61 s) after the last decoded sample. Update's
+  "voice finished" poll (Active) frees the channel that much later than the speech's audio ends.
+* **Stereo**: a 0x4044 record starts two voices, the channel's slot and the next, stopping what played on the next slot; one post
+  feeds both rings; glxControlSample walks the Link to both. When the next slot is later restarted with a WAV while the pair's first
+  voice still plays, the decoder writes the second channel and its zeroing through the stale Link at that voice's `+0x52`, the WAV's
+  data and the heap after it (original memory corruption; the translation drops those writes, `HAZARD_RING_FOREIGN_WRITE`, and the
+  oracle cases avoid it). A restart of the next slot with another ring voice is modelled (the pair writes into that ring).
+* **The ring's tail**: the kernel reads `x[p + 1]` at the loop end, the never-written bytes `0x10000..0x10001` of the allocation
+  (`HAZARD_UNWRITTEN_TAIL`; its weight is 0 at a step of exactly 0x10000).
+
+**Play.** The registry and the worklet make the stand-in record (`loadHostSample` with the MPEG mode's channels); the page decodes
+both channels of a stereo line (`decodeSpeech`, interleaved); the worklet holds a start until the PCM arrives (host timing, as
+before), then glxStartSample runs the ring branch; after each timer callback the worklet handles the posted refills
+(`galaxy_ring_deliver`); the voice ends when the decoder thread and the mixer end it. Lip sync reads the same samples the original
+reads (Update's step 12 for a streamed record, `0x1060a0e9..0x1060a10e`): the worklet reports, with each read head, the ring's 1024
+samples at `V+0x46 − V+0x52`, zero past the loop end `V+0x56` (`voiceWindow`), and the analysis runs on that window. Before the
+worklet reports, and under the Web Audio mapping, the host clock's stand-in (the PCM at the clock's position, no head start) stays.
+
+**Verification.**
+
+| Validator | What it shows |
+| --- | --- |
+| `validate-galaxy-ring-voice.mjs` | 14 cases, 1,446 timer callbacks, 2,631 decoder messages, bit-equal with the original: the record, the voice records after every library call and every message, every live ring's 64 KB after every message, the callback's buffer calls, heads and mixed output (secondary buffer and staging ring digests), the mixer trace with its posts. Mono lines at 44,100, 47,000, 30,000 and 44,099 Hz, a stereo pair over a playing WAV with glxControlSample on the pair, a pair's default pan, a line shorter than the head start, a stop and restarts on one slot, two lines with music and an effect, a pair whose second slot is the first music voice, the record defaults (−1), three seeded random programs. Coverage: every instruction of the ring paths except the 8-bit, type 0x8000, ADPCM and stereo-PCM-WAV branches (none reachable with the shipped sounds) and null-pointer guards. Mutants 501 (no head start), 502 (loop end + 0x8000), 503 (no fill cap) and 504 (end without the read-head test) are caught; 505 (one attempt) is equivalent under the leaf. |
+| `validate-galaxy-effects-play.mjs` | Island's bark through the worklet under Node: held until the ffmpeg decode, the ring's refills taken, the read head through the ring's first lap past the head start, the lip-sync window holding the line, the voice ending on its own. |
+
+**Open.** The decoder's own output (row 4.5.6, excluded) and how the real MPEG decoder splits its answers (the leaf answers in
+whole chunks; a decoder that answers nothing once mid-stream would take the second attempt, which the leaf never exercises); the
+decoder thread's timing against the mixer on the reference machine (host).
 
 ## Hand-off: the sound gate (2026-10-16)
 

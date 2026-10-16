@@ -27,63 +27,24 @@
  * (validate-galaxy-music-loader.mjs writes them) and
  * src/runtime/galaxy-kernel.wasm. Oracle outputs are cached in
  * .cache/galaxy-output, keyed by the oracle scripts, the samples and the cases. */
-import {execFileSync} from 'node:child_process';
-import {createHash} from 'node:crypto';
 import {existsSync} from 'node:fs';
-import {mkdir, readFile, writeFile} from 'node:fs/promises';
+import {mkdir, readFile} from 'node:fs/promises';
 import path from 'node:path';
-import {AssetStore} from '../src/unreal/assets.mjs';
-import {decodeSoundResource} from '../src/runtime/script-sound-resource.mjs';
-import {gameDirectory} from './game-directory.mjs';
+import {SIZE, STEP, LATENCY_BYTES, DS_OK, DSERR_BUFFERLOST, DSERR_INVALIDPARAM, E_FAIL, waves, rng, pick, runOracle, replay,
+  firstDiff, chunks, explain, runs} from './galaxy-output-lib.mjs';
 
-const python = process.env.NATIVE_PROBE_PYTHON ?? '.cache/native-probe-env/bin/python';
 const ORACLE = 'scripts/native-galaxy-output-oracle.py';
-const ORACLE_DEPS = [ORACLE, 'scripts/native-galaxy-effects-oracle.py', 'scripts/native-galaxy-music-sequencer-oracle.py',
+const ORACLE_DEPS = ['scripts/native-galaxy-effects-oracle.py', 'scripts/native-galaxy-music-sequencer-oracle.py',
   'scripts/native-galaxy-music-oracle.py', 'scripts/native-collision-oracle.py'];
 const CACHE = '.cache/galaxy-output';
-const SAMPLES = path.join(CACHE, 'samples');
 const MODULES = '.cache/galaxy-music/modules';
 const WASM = 'src/runtime/galaxy-kernel.wasm';
 const args = process.argv.slice(2);
-const sha = bytes => createHash('sha256').update(bytes).digest();
-const SIZE = 176400, STEP = 3528, LATENCY_BYTES = 7056;
-const VOICE = 0xa0;
-const DS_OK = 0, DSERR_BUFFERLOST = 0x88780096, DSERR_INVALIDPARAM = 0x80070057, E_FAIL = 0x80004005;
-const NULL_REGION = 0xffffffff;
 const MUTANTS = {401: 'cursors not masked', 402: 'the resync returns', 403: 'ahead tested unsigned',
   404: 'BUFFERLOST not retried', 405: 'heads re-seated only at the first callback'};
 
-// ---- samples ----------------------------------------------------------------------------
-
 const NAMES = ['DeusExSounds.Generic.AlarmUnitHum', 'Ambient.Ambient.BabyCrying', 'DeusExSounds.Weapons.PlasmaRifleFire',
   'DeusExSounds.Generic.Beep1', 'MoverSFX.Door.MetalDoorClose'];
-
-/** The WAV payloads of NAMES (Package.Group.Name, case-insensitive). */
-async function waves() {
-  const root = gameDirectory(), want = new Map(NAMES.map(n => [n.toLowerCase(), n])), out = new Map();
-  const files = ['System/DeusExSounds.u', 'Sounds/Ambient.uax', 'Sounds/MoverSFX.uax'].map(f => ({path: path.join(root, f), read: () => readFile(path.join(root, f))}));
-  const assets = new AssetStore(files);
-  for (const name of ['DeusExSounds', 'Ambient', 'MoverSFX']) {
-    const asset = await assets.get(name);
-    for (const entry of asset.pkg.exports) {
-      if (entry.className !== 'Sound') continue;
-      const key = [...asset.exportsByPath].find(([, i]) => asset.pkg.exports[i - 1] === entry)?.[0];
-      const full = `${name}.${key ?? entry.objectName}`.toLowerCase();
-      if (!want.has(full)) continue;
-      const decoded = decodeSoundResource({pkg: asset.pkg, bytes: asset.bytes, entry});
-      const start = entry.serialOffset + decoded.lazy.inlineOffset;
-      out.set(want.get(full), asset.bytes.slice(start, start + decoded.lazy.byteCount));
-    }
-  }
-  for (const n of NAMES) if (!out.has(n)) throw new Error(`no shipped sound ${n}`);
-  return out;
-}
-
-function rng(seed) {
-  let s = seed >>> 0 || 1;
-  return () => { s ^= s << 13; s >>>= 0; s ^= s >>> 17; s ^= s << 5; s >>>= 0; return s; };
-}
-const pick = (r, list) => list[r() % list.length];
 
 // ---- cases -------------------------------------------------------------------------------
 
@@ -207,184 +168,16 @@ function cases() {
   return out;
 }
 
-// ---- oracle --------------------------------------------------------------------------------
-
-async function runOracle(list, samples) {
-  await mkdir(SAMPLES, {recursive: true});
-  const key = createHash('sha256');
-  for (const f of ORACLE_DEPS) key.update(await readFile(f));
-  for (const [name, bytes] of samples) {
-    key.update(name); key.update(bytes);
-    const file = path.join(SAMPLES, `${name}.wav`);
-    if (!existsSync(file)) await writeFile(file, bytes);
-  }
-  const casesJson = JSON.stringify(list.map(({name, program}) => ({name, program})));
-  key.update(casesJson);
-  const digest = key.digest('hex'), keyFile = path.join(CACHE, 'key.txt');
-  if (!args.includes('--refresh') && existsSync(keyFile) && (await readFile(keyFile, 'utf8')) === digest) return;
-  await writeFile(path.join(CACHE, 'cases.json'), casesJson);
-  console.log(`oracle: ${list.length} cases ...`);
-  execFileSync(python, [ORACLE, gameDirectory(), MODULES, SAMPLES, path.join(CACHE, 'cases.json'), CACHE],
-    {stdio: ['ignore', 'inherit', 'inherit']});
-  await writeFile(keyFile, digest);
-}
-
-// ---- Rust kernel ------------------------------------------------------------------------------
-
-class Groups {
-  constructor(x) { this.x = x; this.cursor = 0; this.hash = createHash('sha256'); this.digests = []; this.records = []; this.keep = 256; }
-  bytes(ptr, len) { return new Uint8Array(this.x.memory.buffer, ptr, len); }
-  pull() {
-    const x = this.x;
-    if (!x.galaxy_trace_ptr()) return;
-    const gn = x.galaxy_trace_groups_len();
-    const ends = gn ? new Uint32Array(x.memory.buffer, x.galaxy_trace_groups_ptr(), gn).slice() : [];
-    for (const e of ends) { this.feed(this.bytes(x.galaxy_trace_ptr() + this.cursor, e - this.cursor)); this.close(); this.cursor = e; }
-    if (gn) { x.galaxy_trace_consume(); this.cursor -= ends[gn - 1]; }
-    const len = x.galaxy_trace_len();
-    this.feed(this.bytes(x.galaxy_trace_ptr() + this.cursor, len - this.cursor));
-    this.cursor = len;
-  }
-  feed(bytes) { this.hash.update(bytes); if (this.digests.length < this.keep) this.records.push(Buffer.from(bytes)); }
-  record(tag, payload) {
-    const head = Buffer.alloc(5); head[0] = tag.charCodeAt(0); head.writeUInt32LE(payload.length, 1);
-    this.feed(head); this.feed(payload);
-  }
-  close() { this.digests.push(this.hash.digest().subarray(0, 8)); this.hash = createHash('sha256'); }
-}
-
-const u32 = v => { const b = Buffer.alloc(4); b.writeUInt32LE(v >>> 0, 0); return b; };
-
-function replay(x, c, samples, modules, mutant) {
-  x.galaxy_set_mutant(mutant);
-  x.galaxy_reset(16);
-  x.galaxy_seq_setup(64);
-  x.galaxy_output_open(40);
-  x.galaxy_seq_trace(1);
-  x.galaxy_output_log(1);
-  const g = new Groups(x), addr = new Map(), stats = {callbacks: 0, resyncs: 0, locks: 0, lost: 0, split: 0, renders: 0, bytes: 0, peak: 0};
-  const check = what => { const f = x.galaxy_fault(); if (f) throw new Error(`${c.name} ${what}: fault 0x${f.toString(16)}`); };
-  const voicesRecord = result => Buffer.concat([u32(result), Buffer.from(new Uint8Array(x.memory.buffer, x.galaxy_voices_ptr(), 32 * VOICE))]);
-  const ptr = slot => slot == null ? 0 : 0x1068dca0 + slot * VOICE;
-  const secondaries = [];
-  for (const s of c.program) {
-    if (s.op === 'loadSample') {
-      const bytes = samples.get(s.sample);
-      const input = x.galaxy_input(bytes.length);
-      new Uint8Array(x.memory.buffer, input, bytes.length).set(bytes);
-      const result = x.galaxy_sample_load(bytes.length) >>> 0;
-      check(`loadSample ${s.sample}`); g.pull();
-      let payload = u32(result);
-      if (result) {
-        const record = Buffer.from(new Uint8Array(x.memory.buffer, x.galaxy_sample_record(result), 0x48));
-        const n = x.galaxy_sample_data_len(result);
-        payload = Buffer.concat([payload, record, u32(n), Buffer.from(new Uint8Array(x.memory.buffer, x.galaxy_sample_data(result), n))]);
-        addr.set(s.sample, result);
-      }
-      g.record('W', payload); g.close();
-    } else if (s.op === 'startSample') {
-      const result = x.galaxy_sample_start(s.voice, s.sample ? (addr.get(s.sample) ?? 0) : 0, s.freq, s.vol, s.pan, s.flags ?? 0) >>> 0;
-      check('startSample'); g.pull(); g.record('V', voicesRecord(result)); g.close();
-    } else if (s.op === 'stopSample') {
-      const result = x.galaxy_sample_stop(ptr(s.slot)) >>> 0;
-      check('stopSample'); g.pull(); g.record('V', voicesRecord(result)); g.close();
-    } else if (s.op === 'sampleVolume') {
-      const result = x.galaxy_set_sample_volume(s.volume, s.mode) >>> 0;
-      g.pull(); g.record('V', voicesRecord(result)); g.close();
-    } else if (s.op === 'load') {
-      const module = modules[s.module];
-      const input = x.galaxy_input(module.length);
-      new Uint8Array(x.memory.buffer, input, module.length).set(module);
-      x.galaxy_seq_load(module.length, 127, 76); g.pull();
-    } else if (s.op === 'start') { x.galaxy_seq_start(16, s.section); g.pull(); }
-    else if (s.op === 'control') { x.galaxy_seq_control(s.cmd, s.arg); g.pull(); }
-    else if (s.op === 'poke') { if (!x.galaxy_poke(s.address, s.value)) throw new Error(`poke ${s.address.toString(16)}`); }
-    else if (s.op === 'openFlag') { if (!x.galaxy_poke(0x10698394, s.value)) throw new Error('poke 0x10698394'); }
-    else if (s.op === 'dsCallback') {
-      if (s.latency !== undefined && !x.galaxy_poke(0x1064a65c, s.latency)) throw new Error('poke 0x1064a65c');
-      x.galaxy_output_log_clear();
-      if (s.positionHr !== undefined) x.galaxy_output_position_result(s.positionHr >>> 0);
-      for (const hr of s.lock ?? []) x.galaxy_output_lock_result(hr >>> 0);
-      x.galaxy_output_callback(s.play >>> 0, s.write >>> 0);
-      check('dsCallback');
-      g.pull();
-      const n = x.galaxy_output_log_len(), lp = x.galaxy_output_log_ptr(), log = n ? new Uint32Array(x.memory.buffer, lp, n).slice() : new Uint32Array(0);
-      const size = x.galaxy_output_state(0);
-      const sp = x.galaxy_output_secondary(), gp = x.galaxy_output_staging();
-      const secondary = Buffer.from(new Uint8Array(x.memory.buffer, sp, SIZE));
-      const staging = Buffer.from(new Uint8Array(x.memory.buffer, gp, size));
-      const words = [n, ...log, x.galaxy_output_state(1), x.galaxy_output_state(2), x.galaxy_output_state(3), x.galaxy_output_state(4)];
-      g.record('O', Buffer.concat([Buffer.concat(words.map(u32)), sha(secondary).subarray(0, 16), sha(staging).subarray(0, 16)]));
-      g.close();
-      if (secondaries.length < 24) secondaries.push(secondary);
-      stats.callbacks++;
-      for (let i = 0; i < log.length;) {
-        const op = log[i];
-        if (op === 2) { stats.locks++; if (log[i + 4] === DSERR_BUFFERLOST) stats.lost++; if (log[i + 3] & 2) stats.resyncs++; if (log[i + 8]) stats.split++; }
-        i += {1: 4, 2: 9, 3: 5, 4: 4, 5: 1}[op];
-      }
-      const r = x.galaxy_output_state(4) >>> 0;
-      if (r !== NULL_REGION) { stats.renders++; stats.bytes += r; }
-      for (let k = 0; k < secondary.length; k += 2) stats.peak = Math.max(stats.peak, Math.abs(secondary.readInt16LE(k)));
-    } else throw new Error(`op ${s.op}`);
-  }
-  x.galaxy_seq_end(); g.pull();
-  return {digests: g.digests, records: g.records, stats, secondaries};
-}
-
-function firstDiff(a, b) {
-  const n = Math.min(a.length, b.length);
-  for (let i = 0; i < n; i++) if (Buffer.compare(Buffer.from(a[i]), Buffer.from(b[i]))) return i;
-  return a.length === b.length ? -1 : n;
-}
-const chunks = (buf, size) => Array.from({length: buf.length / size}, (_, i) => buf.subarray(i * size, (i + 1) * size));
-
-function parseRecords(buf) {
-  const out = [];
-  for (let at = 0; at + 5 <= buf.length;) { const len = buf.readUInt32LE(at + 1); out.push({tag: String.fromCharCode(buf[at]), payload: buf.subarray(at + 5, at + 5 + len)}); at += 5 + len; }
-  return out;
-}
-
-/** The first differing record, decoded for O. */
-function explain(oracleFull, rustRecords, group) {
-  const ours = parseRecords(Buffer.concat(rustRecords)), theirs = parseRecords(oracleFull);
-  for (let i = 0; i < Math.min(ours.length, theirs.length); i++) {
-    const o = ours[i], t = theirs[i];
-    if (o.tag === t.tag && !Buffer.compare(o.payload, t.payload)) continue;
-    if (o.tag !== t.tag) return `record ${i}: tag ${o.tag} vs ${t.tag}`;
-    if (o.tag === 'O') {
-      const words = p => Array.from({length: (p.length - 32) / 4}, (_, k) => p.readUInt32LE(4 * k));
-      return `record ${i} (O): Rust [${words(o.payload).map(w => w.toString(16)).join(' ')}] vs original [${words(t.payload).map(w => w.toString(16)).join(' ')}]` +
-        `; secondary ${o.payload.subarray(-32, -16).equals(t.payload.subarray(-32, -16)) ? 'equal' : 'differs'}, staging ${o.payload.subarray(-16).equals(t.payload.subarray(-16)) ? 'equal' : 'differs'}`;
-    }
-    for (let k = 0; k < Math.min(o.payload.length, t.payload.length); k++) {
-      if (o.payload[k] !== t.payload[k]) return `record ${i} (${o.tag}) byte ${k}: ${o.payload[k]} vs ${t.payload[k]}`;
-    }
-    return `record ${i} (${o.tag}) lengths ${o.payload.length} vs ${t.payload.length}`;
-  }
-  return `group ${group} (records beyond the kept window)`;
-}
-
-// Unreached instruction runs of the callback (start address -> reason); any other fails.
+// Unreachable instruction runs of the callback (start address -> reason); any other fails.
 const UNREACHED = {};
-function runs(entry) {
-  const covered = new Set(entry.covered), out = [];
-  let run = null;
-  for (const [a, text] of entry.instructions) {
-    if (covered.has(a)) { run = null; continue; }
-    if (!run) out.push(run = {start: a, count: 0, first: text});
-    run.count++;
-  }
-  return out;
-}
 
 // ---- main -----------------------------------------------------------------------------------------
 
-const samples = await waves();
+const samples = await waves(NAMES);
 const only = args.includes('--cases') ? new Set(args[args.indexOf('--cases') + 1].split(',')) : null;
 const list = cases().filter(c => !only || only.has(c.name));
 await mkdir(CACHE, {recursive: true});
-await runOracle(list, samples);
+await runOracle({oracle: ORACLE, deps: ORACLE_DEPS, cache: CACHE, list, samples, refresh: args.includes('--refresh')});
 const {instance} = await WebAssembly.instantiate(await readFile(WASM));
 const x = instance.exports;
 const modules = {Intro_Music: await readFile(path.join(MODULES, 'Intro_Music.it'))};

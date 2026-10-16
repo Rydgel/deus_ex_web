@@ -31,8 +31,11 @@
  *    mixed) until this harness, in the page's role, answers the decode
  *    request with ffmpeg's 16-bit decode (attachSample). Then the voice table
  *    holds the record with the channel's frequency, volume and pan, the
- *    reported read head advances to the PCM's length, the voice ends on its
- *    own, the channel frees, and the PCM is released (releaseSample).
+ *    voice plays on Galaxy's ring transport (the decoder thread's refills),
+ *    the reported read head advances through the ring to the PCM's length
+ *    past the 4,096-sample head start, the lip-sync window at it holds the
+ *    line, the voice ends on its own, the channel frees, and the PCM is
+ *    released (releaseSample).
  *
  *   node scripts/validate-galaxy-effects-play.mjs [--map 01_NYC_UNATCOIsland] [--frames 600]
  */
@@ -178,7 +181,8 @@ if (paul && ffmpeg) {
   runtime.processNativeEvent(player, 'ClientHearSound', [paul, id, line.sound, runtime.readNamed(paul, 'Location').slice(), [100, 65536, 100]]);
   const channelIndex = galaxy.state.channels.findIndex(c => c.id === id);
   assert.ok(channelIndex >= 0, 'the speech holds a Galaxy channel');
-  speech = {sound: line.sound.key, bytes: line.bytes.length, channel: channelIndex, held: 0, played: 0, positions: [], frames: null, freedAt: null};
+  speech = {sound: line.sound.key, bytes: line.bytes.length, channel: channelIndex, held: 0, played: 0, positions: [], frames: null, freedAt: null,
+    audibleWindows: 0};
   try {
     for (let f = 0; f < 900 && speech.freedAt === null; f++) {
       await frame();
@@ -193,10 +197,10 @@ if (paul && ffmpeg) {
       for (const request of decodes.splice(0)) {
         assert.equal(request.sound, speech.sound, 'the decode request is the line\'s');
         writeFileSync(path.join(dir, 'in.mp3'), request.bytes);
-        execFileSync('ffmpeg', ['-loglevel', 'error', '-y', '-i', path.join(dir, 'in.mp3'), '-f', 's16le', '-ac', '1', '-ar', String(request.rate),
+        execFileSync('ffmpeg', ['-loglevel', 'error', '-y', '-i', path.join(dir, 'in.mp3'), '-f', 's16le', '-ac', String(request.channels ?? 1), '-ar', String(request.rate),
           path.join(dir, 'out.raw')]);
         const pcm = new Uint8Array(readFileSync(path.join(dir, 'out.raw')));
-        speech.frames = pcm.length / 2;
+        speech.frames = pcm.length / 2 / (request.channels ?? 1);
         assert.ok(game.attachSpeech(request.sound, pcm), 'the PCM is attached while the voice waits');
       }
       await settle();
@@ -205,19 +209,25 @@ if (paul && ffmpeg) {
       if (c.id !== id) { speech.freedAt = f; break; }
       if (!c.voice) continue;
       if (processor.kernel.heldSlots().includes(channelIndex)) { speech.held++; continue; }
+      // The read head is the ring's (ring.rs): the line's samples start 0x2000
+      // bytes (4,096 samples) past the read head of the first refill post.
       const position = library.voicePosition(c.voice);
       if (position === null) continue;
       speech.played++;
-      assert.ok(position >= (speech.positions.at(-1) ?? 0) && position <= speech.frames, `read head ${position} within the PCM`);
+      assert.ok(position >= (speech.positions.at(-1) ?? 0) && position < 0x7fff, `read head ${position} within the ring's first lap`);
       speech.positions.push(position);
+      const window = library.voiceWindow(c.voice);
+      if (window && new Int16Array(window.bytes.buffer, 0, window.available).some(v => v !== 0)) speech.audibleWindows++;
     }
   } finally { rmSync(dir, {recursive: true, force: true}); }
   const sample = audio.hostSamples.get(speech.sound), results = processor.kernel.results;
   assert.ok(speech.held > 0, 'the worklet held the start until the decode arrived');
   assert.ok(speech.played > 10, `the voice played through the mixer (${speech.played} frames)`);
-  assert.ok(speech.positions.at(-1) > speech.frames * 0.8, `the read head reached the end (${speech.positions.at(-1)} of ${speech.frames})`);
+  assert.ok(speech.positions.at(-1) > 4096 + speech.frames * 0.8, `the read head reached the end (${speech.positions.at(-1)} of 4096 + ${speech.frames})`);
+  assert.ok(speech.audibleWindows > 0, 'the lip-sync window at the read head held the decoded line');
   assert.notEqual(speech.freedAt, null, 'the voice ended on its own and Update freed the channel');
   assert.equal(sample.rate, 44100, 'the record\'s rate is the MPEG header\'s');
+  assert.ok(processor.stats.refills > 0, 'the decoder thread took refill posts');
   assert.deepEqual([results.hostSamples, results.attaches, results.heldStarts, results.releases], [1, 1, 1, 1],
     'one record, one attach, the held start run, one release');
   assert.equal(sample.host.pcm, null, 'the simulation dropped the PCM with the voice');

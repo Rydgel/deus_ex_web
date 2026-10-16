@@ -331,15 +331,18 @@ function stopGalaxyVoices(){
 /** A speech sound's 16-bit PCM for the simulation (script-audio-live.mjs
  * asks with an `op: 'decode'` voice event): the browser's MP3 decode at the
  * MPEG header's rate (an OfflineAudioContext at that rate, so not resampled;
- * Galaxy's own MPEG decoder is not translated), through pcm16. The same PCM
- * feeds Galaxy's speech voice and its lip-sync analysis. A failed decode
+ * Galaxy's own MPEG decoder is not translated), through pcm16, both channels
+ * interleaved for a stereo stream. The same PCM feeds Galaxy's ring voices
+ * and so its lip-sync analysis. A failed decode
  * answers an empty PCM, so the voice plays nothing and finishes. */
 async function decodeSpeech(event){
   speechDecode.requests++;speechDecode.lastSound=event.sound;
   let pcm;
   try{
-    const offline=new OfflineAudioContext(1,1,event.rate),bytes=event.bytes;
-    pcm=pcm16((await offline.decodeAudioData(bytes.buffer.slice(bytes.byteOffset,bytes.byteOffset+bytes.byteLength))).getChannelData(0));
+    const channels=event.channels===2?2:1,offline=new OfflineAudioContext(channels,1,event.rate),bytes=event.bytes;
+    const decoded=await offline.decodeAudioData(bytes.buffer.slice(bytes.byteOffset,bytes.byteOffset+bytes.byteLength));
+    // A stereo stream (the record 0x4044) as interleaved frames, the second channel repeated if the decode has one.
+    pcm=channels===2?pcm16(decoded.getChannelData(0),decoded.getChannelData(Math.min(1,decoded.numberOfChannels-1))):pcm16(decoded.getChannelData(0));
     speechDecode.decoded++;
   }catch(error){pcm=new Uint8Array(0);speechDecode.failures++;speechDecode.lastError=String(error?.message??error);}
   if(simClient)simClient.queue({op:'speech-pcm',sound:event.sound,pcm});

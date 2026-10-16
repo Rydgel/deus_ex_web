@@ -32,11 +32,11 @@
  *   encodeMusicBatch), applied whole on arrival, which is always between two
  *   callbacks (Update's critical section against the timer callback). After
  *   a batch, and after a callback that changed them, `report {batch, state,
- *   active, positions}` goes back (galaxy_music_state: order | playing << 8 |
- *   song length << 16 | loaded << 24; active: bit i = effect voice i's Active
- *   byte, the subsystem's "voice finished" poll; positions: [slot, read
- *   head] of each voice playing host-decoded speech, the lip-sync window's
- *   mixer position).
+ *   active, positions, windows}` goes back (galaxy_music_state: order |
+ *   playing << 8 | song length << 16 | loaded << 24; active: bit i = effect
+ *   voice i's Active byte, the subsystem's "voice finished" poll; positions:
+ *   [slot, read head] of each voice playing host-decoded speech; windows:
+ *   [slot, available, bytes], the lip-sync window at that read head).
  *
  * Self-contained (no imports) so that Vite serves and copies it as is; Node
  * imports it for the validator (registerProcessor is then absent). */
@@ -50,7 +50,7 @@ export const OPS = Object.freeze({
   loadHostSample: 15, attachSample: 16, releaseSample: 17,
 });
 export const ARITY = Object.freeze({ 1: 2, 2: 2, 3: 2, 4: 2, 5: 2, 6: 2, 7: 2, 8: 2, 9: 2, 10: 3, 11: 6, 12: 4, 13: 1, 14: 27,
-  15: 3, 16: 3, 17: 1 });
+  15: 4, 16: 3, 17: 1 });
 export const CALLBACK_FRAMES = 882;
 /** The write cursor's lead over the play cursor at the first callback, in
  * bytes: D's host part (scope §3.1, §7 item 2). PLACEHOLDER, NOT MEASURED:
@@ -82,16 +82,17 @@ export function forEachMusicOp(message, visit) {
 
 /** The library behind the kernel's host exports (host.rs); one op = one call.
  *
- * Host-decoded speech (docs/galaxy-audio.md "Speech through Galaxy's
- * voices"): loadHostSample makes the record (effects.rs `host_sample`, the
- * registry's same allocation), attachSample gives it the page's decoded PCM
- * and releaseSample drops it. A start of a record whose PCM has not arrived
- * is held: the voice is stopped as glxStartSample stops it first, the start's
- * arguments are kept (a controlSample updates them, a stopSample or a later
- * start drops the hold), the slot counts as Active, and the start runs when
- * the PCM arrives. In the original the voice starts on a zeroed ring that the
- * decoder thread 0x1060e340 fills; here the PCM starts whole once decoded
- * (host timing). */
+ * Host-decoded speech (docs/galaxy-audio.md "Speech on Galaxy's ring
+ * transport"): loadHostSample makes the record (effects.rs `host_sample`, the
+ * registry's same allocation; type 0x4024 or 0x4044), attachSample gives it
+ * the page's decoded PCM and releaseSample drops it. The voice plays on
+ * Galaxy's ring transport (ring.rs: glxStartSample's ring branch, the
+ * mixer's refill posts, the decoder thread fed by the PCM). A start of a
+ * record whose PCM has not arrived is held: the voice is stopped as
+ * glxStartSample stops it first, the start's arguments are kept (a
+ * controlSample updates them, a stopSample or a later start drops the hold),
+ * the slot counts as Active, and glxStartSample runs when the PCM arrives
+ * (host timing: the original's decoder reads its MP3 bytes from the start). */
 export function createMusicKernel(exports) {
   const x = exports;
   const results = { load: null, control: null, stop: null, start: null, unload: null, sampleLoads: 0, sampleMismatches: 0,
@@ -154,7 +155,7 @@ export function createMusicKernel(exports) {
         }
         case OPS.stopSample: results.voiceOps++; held.delete(slotOf(args[0])); return x.galaxy_sample_stop(args[0] >>> 0);
         case OPS.loadHostSample: {
-          const handle = x.galaxy_sample_host(args[0] >>> 0, args[1] >>> 0) >>> 0;
+          const handle = x.galaxy_sample_host(args[0] >>> 0, args[1] >>> 0, (args[3] || 1) >>> 0) >>> 0;
           results.hostSamples++;
           if (handle !== args[2] >>> 0) {
             results.sampleMismatches++;
@@ -208,6 +209,29 @@ export function createMusicKernel(exports) {
       }
       return out;
     },
+    /** The lip-sync window of each Active voice playing a host record, as
+     * Update's step 12 reads it for a streamed record (0x1060a0e9..0x1060a10e,
+     * 0x10609180): from the ring at `V+0x46 − V+0x52`, the samples below the
+     * loop end `V+0x56` (unsigned), at most 1024, zero after them:
+     * [slot, available, 2048 bytes]. */
+    windows: () => {
+      if (!hosts.size) return [];
+      const out = [], view = new DataView(x.memory.buffer, x.galaxy_voices_ptr(), 32 * VOICE_SIZE);
+      for (let slot = 0; slot < 32; slot++) {
+        const at = slot * VOICE_SIZE;
+        if (!view.getUint8(at + 0x0f) || !hosts.has(view.getUint32(at + 0x42, true))) continue;
+        const ring = x.galaxy_ring_bytes(slot);
+        if (!ring) continue;
+        const pos = view.getUint32(at + 0x46, true), start = view.getUint32(at + 0x52, true), end = view.getUint32(at + 0x56, true);
+        const available = pos >= end ? 0 : Math.min(1024, end - pos), from = 2 * ((pos - start) >>> 0);
+        const bytes = new Uint8Array(2048);
+        if (available && from + 2 * available <= 0x1001f) bytes.set(new Uint8Array(x.memory.buffer, ring + from, 2 * available));
+        out.push([slot, available, bytes]);
+      }
+      return out;
+    },
+    /** The decoder thread's refills posted during the last callback (ring.rs). */
+    deliver: () => x.galaxy_ring_deliver() >>> 0,
     /** The voice slots whose start waits for its host record's PCM. */
     heldSlots: () => [...held.keys()],
     voicesPtr: () => x.galaxy_voices_ptr(),
@@ -237,7 +261,7 @@ export class GalaxyMusicProcessor extends Base {
     this.size = 0; this.play = 0; this.untilCallback = 0; this.view = null; this.viewMemory = null;
     this.reported = { batch: -1, state: -1, active: -1, positions: '' };
     this.stats = { rate: globalThis.sampleRate ?? null, connects: 0, batches: 0, ops: 0, lastBatch: 0, loads: 0,
-      callbacks: 0, quanta: 0, underruns: 0, resyncs: 0, reports: 0, fault: 0, error: null };
+      callbacks: 0, quanta: 0, underruns: 0, resyncs: 0, refills: 0, reports: 0, fault: 0, error: null };
     this.port.onmessage = ({ data }) => this.page(data);
   }
 
@@ -306,13 +330,18 @@ export class GalaxyMusicProcessor extends Base {
       && key === this.reported.positions) return;
     this.reported.state = state; this.reported.active = active; this.reported.batch = this.stats.lastBatch; this.reported.positions = key;
     this.stats.reports++;
-    this.sim.postMessage({ type: 'report', batch: this.stats.lastBatch, state, active, positions });
+    const windows = positions.length ? this.kernel.windows() : [];
+    this.sim.postMessage({ type: 'report', batch: this.stats.lastBatch, state, active, positions, windows },
+      windows.map(([, , bytes]) => bytes.buffer));
   }
 
   /** One timer callback 0x106142a0 at the current play cursor. */
   callback() {
     const play = this.play, write = (play + this.config.writeLead) % this.size;
     if (this.kernel.callback(play, write)) { this.stats.fault = this.kernel.fault(); return false; }
+    // The stream decoder thread's messages posted during the callback (ring.rs: after the callback, in post order).
+    this.stats.refills += this.kernel.deliver();
+    if (this.kernel.fault()) { this.stats.fault = this.kernel.fault(); return false; }
     this.stats.callbacks++; this.stats.resyncs = this.kernel.output(6);
     this.report();
     return true;

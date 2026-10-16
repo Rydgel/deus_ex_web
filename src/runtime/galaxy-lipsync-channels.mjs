@@ -10,8 +10,11 @@
 // Host inputs, real-time in the original too (docs/lip-sync.md): the PCM is
 // the host's decode of the speech MP3 at its own rate converted to 16-bit
 // (Galaxy's own decoder is not translated), the same PCM Galaxy's mixer
-// plays (docs/galaxy-audio.md "Speech through Galaxy's voices"), and the
-// mixer position is the library's read head when the worklet reports it.
+// plays (docs/galaxy-audio.md "Speech on Galaxy's ring transport"). With
+// Galaxy's voices the window is the worklet's report of the voice's ring at
+// its read head, which the decoder thread filled (ring.rs); before the
+// worklet reports and under the Web Audio mapping it is taken from the PCM
+// at the host clock's position (a host approximation: no head start).
 
 const RING = 0x7fff; // samples in a streamed voice's loop (0x106120ca)
 
@@ -32,6 +35,14 @@ function mpegHeader(bytes, from) {
 /** MPEG audio frame header sample rate (Galaxy's record +0x3c for speech). */
 export function mp3SampleRate(bytes) {
   return mpegHeader(bytes, 0)?.rate ?? null;
+}
+
+/** The channels of the first MPEG audio frame: 1 for mode 3 (single
+ * channel), else 2; the MPEG loader types a mode-3 stream 0x4024 (mono) and
+ * any other 0x4044 (stereo, 0x10620ccc..0x10620cff). Null without a header. */
+export function mp3Channels(bytes) {
+  const header = mpegHeader(bytes, 0);
+  return header ? ((bytes[header.at + 3] >> 6) === 3 ? 1 : 2) : null;
 }
 
 // Kilobits per second by [MPEG-1 ? 0 : 1][layer 3..1 as 0..2][index].
@@ -69,32 +80,42 @@ export function mp3Frames(bytes) {
 }
 
 /** Float PCM (-1..1) as little-endian int16 bytes, round to nearest and
- * clamp: an assumption about Galaxy's decoder output (unverified). */
-export function pcm16(samples) {
-  const bytes = new Uint8Array(samples.length * 2), view = new DataView(bytes.buffer);
-  for (let i = 0; i < samples.length; i++)
-    view.setInt16(2 * i, Math.max(-32768, Math.min(32767, Math.round(samples[i] * 32768))), true);
+ * clamp: an assumption about Galaxy's decoder output (unverified). With a
+ * second channel the frames are interleaved (left, right), the stereo
+ * record's source (ring.rs's decoder leaf). */
+export function pcm16(samples, right = null) {
+  const channels = right ? 2 : 1, bytes = new Uint8Array(samples.length * 2 * channels), view = new DataView(bytes.buffer);
+  const q = v => Math.max(-32768, Math.min(32767, Math.round(v * 32768)));
+  for (let i = 0; i < samples.length; i++) {
+    view.setInt16(2 * channels * i, q(samples[i]), true);
+    if (right) view.setInt16(4 * i + 2, q(right[i] ?? 0), true);
+  }
   return bytes;
 }
 
 /**
  * services: {kernel (scriptVmKernel.lipsync), setPhoneme(actor, letter),
  * enabled() (optional: false while a replay feeds the original's letters)}.
- * `analyze(actor, {pcm, rate, position})`: the window of a streamed voice
- * (0x1060a0e9: the ring position `[0x46] - [0x52]`, the next 1024 samples to
- * be mixed, zero-filled past the end of the ring, no wrap) at `position`
- * (samples the mixer has passed), analysed at `rate` into the Pawn's
- * nextPhoneme. Returns the letter.
+ * `analyze(actor, {window, available, rate})`: the window of a streamed
+ * voice (0x1060a0e9: the ring at `[0x46] - [0x52]`, the next 1024 samples to
+ * be mixed, zero past the loop end `[0x56]`, no wrap) as the worklet read it
+ * from the ring, analysed at `rate` into the Pawn's nextPhoneme; or
+ * `analyze(actor, {pcm, rate, position})`, the host clock's stand-in: the
+ * PCM at `position` (samples the mixer has passed), the ring index
+ * `position mod 0x7fff`. Returns the letter.
  */
 export function createLipSyncAnalysis(services) {
   const analysis = {
     analyses: 0,
     enabled: () => services.enabled?.() ?? true,
-    analyze(actor, { pcm, rate, position }) {
-      const stream = Math.max(0, Math.floor(position));
-      const ring = stream % RING, available = Math.min(1024, RING - ring);
-      const window = new Uint8Array(2048);
-      window.set(pcm.subarray(Math.min(pcm.length, stream * 2), Math.min(pcm.length, (stream + available) * 2)));
+    analyze(actor, { pcm = null, rate, position = 0, window = null, available = 0 }) {
+      if (!window) {
+        const stream = Math.max(0, Math.floor(position));
+        const ring = stream % RING;
+        available = Math.min(1024, RING - ring);
+        window = new Uint8Array(2048);
+        window.set(pcm.subarray(Math.min(pcm.length, stream * 2), Math.min(pcm.length, (stream + available) * 2)));
+      }
       const letter = services.kernel.analyze(window, available, rate);
       services.setPhoneme(actor, letter);
       analysis.analyses++;

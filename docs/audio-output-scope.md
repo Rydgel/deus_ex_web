@@ -32,7 +32,7 @@ not checked against the original; **H** host by nature (an OS, driver, browser o
 | 6 | The timer callback `0x106142a0` (winmm `timeSetEvent`, every Latency/2 = 20 ms): DirectSound cursors, the two ring heads A `0x10697cd4` and B `0x10697cd8`, the fill count `ahead` `0x10697cdc`, the start-up resync, the Lock/copy/Unlock | [mixer](galaxy-music/mixer.md) §1.3, §2.2 below | **U**. Play renders 882 frames whenever its ring holds less than a 128-frame quantum, at coincident heads |
 | 7 | The cursor schedule: how far the play cursor moved in each 20 ms (the bytes R each callback renders), and the write cursor's lead over the play cursor at the first callback | §3.1 | **H** (timer jitter, the DirectSound implementation's cursor granularity and write lead) |
 | 8 | The renderer `0x106146a0`, the mixer `0x10614920` (segmenting, sequencer tick, envelopes, refill posts), the SSE kernel `0x10622730`, the reverb hook `0x10622d33`, the conversions `0x10622fe4` (bus A stored, bus B saturating-added) | [mixer](galaxy-music/mixer.md) §1.4–§2.6, §8 | **O2** (rows 4.3.2–4.3.4; `render_ring` against the original renderer with bus B half a ring ahead, `render` at coincident heads) |
-| 9 | Ring voices (streamed, compressed or stereo records): glxStartSample's ring branch `0x10612562..0x1061258f`, the refill posts `0x106151f5`, the decoder thread's ring logic | §2.3, §2.4 | **U**. Play plays speech through the non-ring branch from a stand-in record (`effects.rs` `host_sample`), **T** |
+| 9 | Ring voices (streamed, compressed or stereo records): glxStartSample's ring branch `0x10612562..0x1061258f`, the refill posts `0x106151f5`, the decoder thread's ring logic | §2.3, §2.4 | **O2** since 2026-10-16 (check 5), with the MPEG decoder as a PCM leaf; the record's source is the browser's decode (`effects.rs` `host_sample`, labelled) |
 | 10 | Hardware 3D voices (`0x10612800`, `0x106126f0`, the A3D/EAX open) | §2.6 | **U**, unreachable on the reference machine (§2.6) |
 | 11 | The output buffer: Galaxy's 176,400-byte staging ring `[0x10697ccc]` copied into a 1 s DirectSound secondary buffer `[0x10697cc8]`, 44,100 Hz, 16-bit, stereo, flags `GLOBALFOCUS | GETCURRENTPOSITION2`, looping | [mixer](galaxy-music/mixer.md) §1.2 | the boundary of "the output Galaxy produces". Galaxy never calls SetVolume, SetPan or SetFrequency on the buffer (§2.2) |
 | 12 | DirectSound's mixing of the buffer into the device format (kmixer on XP, WASAPI shared mode on Vista and later, Wine's dsound on the reference machine), resampling, the driver and the DAC | | **H** |
@@ -116,6 +116,12 @@ The disassembly confirms [mixer](galaxy-music/mixer.md) §1.3 and adds:
 
 ### 2.3 Ring voices: start, refill, end
 
+**Settled by the oracle (2026-10-16, check 5 `galaxy-ring-voice`):** translated (`native/galaxy-kernel/src/ring.rs`) and bit-equal with
+the original over 14 cases ([galaxy-audio](galaxy-audio.md) "Speech on Galaxy's ring transport"). The reading below holds, with two
+corrections: the end is set only when the read head is below the write position, so a line longer than the first fill plays up to a
+further ring lap of zeros before Active clears (0.61 s on a 100,000-frame line); and the mixer's ring loop is 32,767 samples against
+the decoder's 32,768, so one decoded sample is skipped every lap after the first.
+
 * **Start** (glxStartSample, Type `& 0xe000` or `& 0x40`): `malloc(0x1001f)`, 64 KB zeroed (`0x106124e9..0x10612502`); Type `|= 0x88`
   (looped, loop always); loop start = start, loop end = end = start + 0x7fff samples; the write position `V+0x88 = 0x10000` (a sentinel),
   the source offset `V+0x8c = 0`, `V+0x90 = V+0x94 = 0x10000` (`0x10612562..0x1061258f`). No decode and no message at the start: the voice
@@ -135,6 +141,9 @@ The disassembly confirms [mixer](galaxy-music/mixer.md) §1.3 and adds:
   thread works in bytes, the voice's positions are in samples for 16-bit data (`shr 1`).
 
 ### 2.4 The MPEG loader's record type, and the stereo lines
+
+**Settled (check 5):** the pair, its Link and one post feeding both rings run as read; Play now decodes both channels and starts the
+pair (`decodeSpeech`, the record 0x4044).
 
 `0x10620ccc..0x10620cff`: the record's Type is `0x4024` (streamed, panning, 16-bit) for a mono MPEG stream and `0x4044` (streamed,
 **stereo**, 16-bit) for any other mode (the `sub 3; neg; sbb; and 0x20` on the header's mode). Panning `0x4000`, volume `0x7fff`, rate

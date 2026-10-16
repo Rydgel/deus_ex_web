@@ -603,8 +603,10 @@ add whatever the previous MMX code left there (`0x10623009..0x1062301a`).
    * `V+0x4c` bits: 4 = 16-bit, 8 = loop, 0x10 = ping-pong, 0x80 = loop always,
      0x40 = pair, 0x2000 / 0x4000 / 0x8000 = decoded or streamed.
 6. **Decoder-thread race:** refills are posted once per sequencer tick (about 10.4 ms
-   at the default tempo 120 with `0x10698342 = 48`). Whether the decoder always stays
-   ahead of the mixer is not established; lip-sync.md assumes it.
+   at the default tempo 120 with `0x10698342 = 48`). The ring logic is translated and
+   oracle-checked (galaxy-audio.md "Speech on Galaxy's ring transport"): each message
+   fills up to the read head, so the decoder is a ring ahead once two messages ran; the
+   thread's scheduling on the reference machine is host timing.
 7. **`V+0x0c` bit 7** (likely note-off) and `V+0x4c & 0x80` semantics need agent C's
    writers.
 8. **Not read:** the 3DNow and MMX kernels in detail; the x86 kernel beyond its
