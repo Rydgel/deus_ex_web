@@ -407,7 +407,10 @@ checks ran beside it); the same compare run by hand exited 0 with every view wit
 4 of 4. Unattributed: a shared file under `.work/acceptance/00_Training` or ImageMagick under load are the candidates. Run the interface
 rows alone before believing such a failure. The same day `--only '^4\.1\.[5-8]$'` failed 4.1.8 in 0 s with `ENOENT` on
 `.work/live-acceptance/stage4-gate-sweep-sweep2.json` (the replay child exited without writing it while the pilots' checks ran beside it);
-`--only '^4\.1\.8$'` alone passed. Both point at checks sharing `.work` paths when two run at once.
+`--only '^4\.1\.8$'` alone passed. Both point at checks sharing `.work` paths when two run at once. **Cause of the 4.1.8 failure, fixed 2026-10-16:**
+the staging linked to a link an earlier run had made, so the sweep's trace became a link to itself and the replay found "no stored trace"; both
+stagers now link to the real file (`realpathSync`). **Intermittent, unattributed:** 4.5.8's `mmA` frame `mm2` (tick 450) read band identical .43 in one
+`--jobs 1` run on 2026-10-16 (a different camera shot) and passed on the next; the fallback camera's choice at that tick is the first suspect.
 
 **Not covered by this definition:** the 14 other frozen maps (a re-run command is in [What exists](#what-exists-and-the-gate-does-not-run)), pawns that fight or
 are shot while close, a moving camera in a live scene, and any NPC beyond 1,200 ticks; Stage 5 and 6 items are under [Excluded](#excluded).
