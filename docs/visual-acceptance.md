@@ -1721,7 +1721,7 @@ change (cause 3) removes that and the per-view errors.
 - Moving actors: the Island view's terrorists (positions, animation) differ as in every live scene; static props, JC, the
   turret and the decals agree.
 - Cameras with mirrors, a sky frame, fog or coronas in their view were not among the seven windows (the three maps' cameras
-  look into rooms): those parts of the camera frame stay checked against the original's code and oracles only
+  look into rooms; but see the [camera view census](camera-view-census.md), 2026-10-16: by Play's fog rule the Ship's windows 1 and 2, captured later, hold volumetric fog, not judged for it): those parts of the camera frame stay checked against the original's code and oracles only
   ([viewport window](script-window-viewport.md)), not against captured frames.
 - A modal screen leaves no key for bindings and the held level needs the tracer; maps whose computer cannot be reached by the
   flight (a stalled game) fail with a message, not silently.
@@ -2018,7 +2018,8 @@ node scripts/validate-stage4-acceptance.mjs --only '^4\.2\.22$'
   original and not in Play blocks a pawn now that pawns collide with items as the original's do. No case seen (the bottles and the HazMatSuit were in both programs).
 
 - **Camera views not yet captured against the original** ([Security cameras](#security-cameras-2026-10-14)): a camera whose view holds a mirror, a sky
-  frame, fog or coronas (the thirteen windows look into rooms; Island ComputerSecurity0's exterior cameras were tried, and after the ghost's `walk`
+  frame, fog or coronas (eleven of the thirteen windows look into rooms; the Ship's windows 1 and 2 hold volumetric fog by Play's rule, faint and heavy, unjudged:
+  [camera view census](camera-view-census.md), which also ranks the cameras that see a mirror, sky, fog or corona; Island ComputerSecurity0's exterior cameras were tried, and after the ghost's `walk`
   JC left the map at the SATCOM compound, probably through a transition volume), the other computers of the census, a window zoomed or panned
   (`Equals`, the arrows), and the three windows' door/turret choices. The camera window's moving actors and movers (Island's terrorists, Ship's
   locker door) are not matched.
