@@ -105,6 +105,14 @@ export class AiEventHost {
   end(sender, event, type) { this.trace?.({fn: 'end', sender: sender?.name ?? 'None', event: this.spelling(this.nid(event)), type: type & 255}); this.x.ai_end(handleOf(sender), this.nid(event), type & 255); }
   clear(sender, event) { this.trace?.({fn: 'clear', sender: sender?.name ?? 'None', event: this.spelling(this.nid(event))}); this.x.ai_clear(handleOf(sender), this.nid(event)); }
   destroyActor(actor) { this.x.ai_destroy_actor(handleOf(actor)); }
+  /** A replay's measured input for the next AIProcess: the receiver (actor, event name) the original's firstProcess was left at
+   * when its 2 ms rdtsc budget ran out (aievent.rs PROCESS_STOP); null clears it. */
+  setProcessStop(actor, event) {
+    if (!actor) { this.x.ai_set_process_stop(0, 0, 0); return; }
+    this.x.ai_set_process_stop(1, handleOf(actor), this.nid(event));
+  }
+  /** The stops a replay named that the ring did not reach. */
+  processStopMisses() { return this.x.ai_process_stop_misses(); }
   /** UEventManager::Tick. */
   tick() {
     // AICanSee runs in Rust once the perception natives' field table is built (script-vm-perception.mjs ready(705)); until then, here.
@@ -112,7 +120,10 @@ export class AiEventHost {
     view.setUint32(this.x.ai_direct_ptr(), this.vm.perception.ready(705) ? 1 : 0, true);
     // the score callbacks run in Rust (dispatch.rs call_score) while processEvent and its parts are the runtime's own
     view.setUint32(this.x.vm_scores_ptr() + 8, this.vm.events.allowed({runtimeEvents: true}) & 1, true);
-    return this.guarded(() => this.x.ai_tick());
+    const result = this.guarded(() => this.x.ai_tick());
+    // Validation only (live-probe objectTrace): the frees a replay measured in the original's CleanupEvents, which ends this Tick.
+    this.afterTick?.();
+    return result;
   }
 
   kind(actor) {

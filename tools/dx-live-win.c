@@ -794,7 +794,16 @@ static int do_trace(const char *config) {
           { uintptr_t vp = player_ptr ? read_u32(player_ptr + 0x5d4) : 0; if (vp) { vp_x = read_u32(vp + 0x78); vp_y = read_u32(vp + 0x7c); } }
           int record = pre_watch < 0 || released || tick > release_at - pre_watch;
           if (record) {
-            fprintf(out, "{\"n\":%d,\"unfrozen\":%d,\"viewport\":[%u,%u],\"tickType\":%d,\"delta\":%.9g,\"playersOnly\":%d,\"clockIn\":%.17g,\"tsIn\":%.9g,\"rngIn\":\"0x%08x\","
+            /* AIProcess (Engine 0x10384080) stops once 2 ms of rdtsc have passed since its start (K = -0.002 s at 0x1042d170
+               over GSecondsPerCycle, checked after each receiver that did work, 0x1038447e..0x1038449a) and leaves firstProcess at
+               the next receiver: host time, a measured input of the replay ("aiFirst": actor|event of that receiver). The
+               UEventManager is ALevelInfo +0x550 (InitEventManager 0x10384a90), firstProcess +0x38; a receiver's eventType +0x28
+               (its eventName +0x28), eventActor +0x2c. */
+            uintptr_t ai_manager = read_u32(level_info + 0x550), ai_first = ai_manager ? read_u32(ai_manager + 0x38) : 0;
+            uintptr_t ai_type = ai_first ? read_u32(ai_first + 0x28) : 0;
+            char ai_who[96]; strncpy(ai_who, ai_first ? object_name(read_u32(ai_first + 0x2c)) : "None", sizeof(ai_who) - 1); ai_who[sizeof(ai_who) - 1] = 0;
+            fprintf(out, "{\"aiFirst\":\"%s|%s\",", ai_who, ai_type ? name_text(read_u32(ai_type + 0x28)) : "None");
+            fprintf(out, "\"n\":%d,\"unfrozen\":%d,\"viewport\":[%u,%u],\"tickType\":%d,\"delta\":%.9g,\"playersOnly\":%d,\"clockIn\":%.17g,\"tsIn\":%.9g,\"rngIn\":\"0x%08x\","
               "\"clockOut\":%.17g,\"tsOut\":%.9g,\"rngOut\":\"0x%08x\",\"inTick\":%u,\"usIn\":%lld,\"usOut\":%lld,\"strobeIn\":[%u,%.9g],\"strobeOut\":[%u,%.9g],\"actors\":{",
               tick, released ? unfrozen : 0, vp_x, vp_y, tick_type, delta_in, players_only_in, clock_in, ts_in, rng_in,
               read_double(level_ptr + 0xdc), read_float(level_info + 0x478), rng_ptd ? read_u32(rng_ptd + 0x14) : 0, read_u32(level_ptr + 0x108), t_in, qpc_us(),

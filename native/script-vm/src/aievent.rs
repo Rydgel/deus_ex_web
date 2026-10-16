@@ -126,6 +126,13 @@ static mut POOL: *mut Pool = core::ptr::null_mut();
 // AIProcess's candidate array (the original's static 0x10585090) and AIEvent's parameter block for the host.
 static mut CANDIDATES: [u32; MAX_CANDIDATES] = [0; MAX_CANDIDATES];
 static mut PARAMS: [u32; 5] = [0; 5];
+// AIProcess's time budget (0x10384080): with GTimestamp set (any CPU with RDTSC) the original reads rdtsc at the start and,
+// after each receiver that did work, stops once more than `1 - ftol(-0.002 / GSecondsPerCycle)` cycles (2 ms) have passed
+// (0x103840ba..0x103840f2, 0x10384470..0x1038449a): the rest of the ring waits for the next tick. That is host time; Play
+// processes the whole ring unless a replay gives, for one tick, the receiver the original's firstProcess was left at
+// ([active, actor, event name], `ai_set_process_stop`): the loop then stops before it. A stop never met counts a miss.
+static mut PROCESS_STOP: [u32; 3] = [0; 3];
+static mut PROCESS_STOP_MISSES: u32 = 0;
 static mut LOCS: [u32; 6] = [0; 6];
 /// 1: AICanSee runs in Rust (percep.rs ai_can_see_direct) when the host has the perception field table; 0: the host's leaf.
 static mut DIRECT: u32 = 0;
@@ -705,6 +712,9 @@ fn process() {
     let next_slot = (m().current_slot + 1) & 15;
     let mut r = m().first_process;
     let mut visited = 0u32;
+    // The original stops once its 2 ms rdtsc budget is spent (below); a replay names where it stopped.
+    let stop = unsafe { core::mem::replace(&mut *addr_of_mut!(PROCESS_STOP), [0; 3]) };
+    let mut stopped = stop[0] == 0;
     while r != 0 {
         if rcv(r).destroyed == 0 {
             if is_deleted(rcv(r).actor) {
@@ -719,6 +729,13 @@ fn process() {
         if r == m().first_process {
             r = 0;
         }
+        if stop[0] != 0 && r != 0 && rcv(r).actor == stop[1] && rcv(r).ty != 0 && ty(rcv(r).ty).name == stop[2] {
+            stopped = true;
+            break;
+        }
+    }
+    if !stopped && !(stop[1] == rcv_actor(m().first_process) && stop[2] == rcv_name(m().first_process)) {
+        unsafe { *addr_of_mut!(PROCESS_STOP_MISSES) += 1 };
     }
     m().current_slot = next_slot;
     // senders with nothing in any slot are deleted; the new current slot takes the current settings
@@ -1047,6 +1064,21 @@ pub extern "C" fn ai_process() {
 #[no_mangle]
 pub extern "C" fn ai_cleanup() {
     cleanup();
+}
+/// The next AIProcess stops before the receiver of `actor` and event `name` (a replay's measured stop); `active` 0 clears it.
+#[no_mangle]
+pub extern "C" fn ai_set_process_stop(active: u32, actor: u32, name: u32) {
+    unsafe { *addr_of_mut!(PROCESS_STOP) = [active, actor, name] };
+}
+#[no_mangle]
+pub extern "C" fn ai_process_stop_misses() -> u32 {
+    unsafe { *addr_of_mut!(PROCESS_STOP_MISSES) }
+}
+fn rcv_actor(r: u32) -> u32 {
+    if r != 0 { rcv(r).actor } else { 0 }
+}
+fn rcv_name(r: u32) -> u32 {
+    if r != 0 && rcv(r).ty != 0 { ty(rcv(r).ty).name } else { 0 }
 }
 /// UEventManager::Tick.
 #[no_mangle]
