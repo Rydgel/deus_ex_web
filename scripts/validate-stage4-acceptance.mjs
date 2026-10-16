@@ -26,7 +26,7 @@
  * default is this checkout's .work, the main checkout's .work and its .work/live/.work (where the originals are
  * captured). Native validators get NATIVE_PROBE_PYTHON from .cache/native-probe-env when it exists. */
 import {spawn, execFileSync} from 'node:child_process';
-import {copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, statSync, symlinkSync, unlinkSync, writeFileSync} from 'node:fs';
+import {copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, statSync, symlinkSync, unlinkSync, writeFileSync} from 'node:fs';
 import path from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {CRITERIA_VIEWS, ORDER as INTERFACE_ORDER} from './interface-views.mjs';
@@ -114,7 +114,9 @@ const stage = (relative, {copy = false} = {}) => {
   const target = path.join(root, '.work', relative);
   if (existsSync(target)) return true;
   try { unlinkSync(target); } catch { /* nothing to replace, or a dangling link now replaced */ }
-  const source = findStored(relative);
+  // the real file behind the store's entry (it can itself be a link an earlier staging made; a loop or a broken link is no source)
+  let source = findStored(relative);
+  try { source = source && realpathSync(source); } catch { source = null; }
   if (!source) return false;
   mkdirSync(path.dirname(target), {recursive: true});
   if (copy) copyFileSync(source, target); else symlinkSync(source, target);
@@ -133,6 +135,8 @@ const TERMINAL = spec => ({type: 'terminal', ...spec});
 const LIVE = spec => ({type: 'live', ...spec});
 const CONVERSATION = spec => ({type: 'conversation', ...spec});
 const SWEEP = spec => ({type: 'sweep', ...spec});
+// A live scene's Galaxy PlaySound calls (scripts/live-sound-compare.mjs --gate): the original's stored calls file against Play's replay of the same trace.
+const SOUNDS = spec => ({type: 'sounds', ...spec});
 const CENSUS = spec => ({type: 'census', ...spec});
 
 const FROZEN = Object.freeze(['y0', 'y1', 'y2', 'y3', 'down']);
@@ -269,8 +273,8 @@ add('4.3.4', C3, 'music', 'IT loader, sequencer and Update\'s music section equa
   V('galaxy-music-loader'), V('galaxy-music-sequencer'), V('galaxy-music-update'));
 add('4.3.5', C3, 'Island, Training and the intro in Play', 'ambient voices, music and window sounds reach the mixer in the worker and the worklet', 'O3',
   V('galaxy-effects-play'), V('galaxy-music-play'), V('galaxy-music-host'), V('window-sound-play'), V('window-sound-browser'));
-missing('4.3.6', C3, 'a live scene\'s script sounds', 'the original\'s PlaySound calls of a scene against Play\'s',
-  'scripts/live-sound-compare.mjs compares one capture (Underworld, tag snd1); its stored original trace is not in a store the gate reads');
+add('4.3.6', C3, '06_HongKong_WanChai_Underworld, 400 ticks: a pistol picked up, drawn and fired', 'the original\'s Galaxy PlaySound calls of the scene against Play\'s replay: every call\'s sound, emitter, volume, radius, pitch, channel id and order', 'O1',
+  SOUNDS({map: '06_HongKong_WanChai_Underworld', tag: 'snd1', ticks: 400}));
 missing('4.3.7', C3, 'audible output', 'the output Galaxy produces for the speakers', 'the music bus delay, the ring heads\' spacing, MPEG and ADPCM samples and 3D voices are unmeasured or untranslated (docs/galaxy-music.md, galaxy-audio.md)');
 
 // 4.4 Text and interfaces -----------------------------------------------------------------------------------
@@ -389,6 +393,7 @@ function expand(check, criterion) {
   // one task per scene: the frames' replays share the tag's play-rows file, so they run one after the other
   if (check.type === 'conversation') return [{key: `${criterion.id}:conversation ${check.scene} ${check.tag}`, label: `conversation ${check.map} ${check.tag} (${check.frames.length} frames)`, conversation: check, mutex: [`live:${check.map}`, 'acceptance'],
     estimate: 130 * check.frames.length, memory: 1800}];
+  if (check.type === 'sounds') return [{key: `${criterion.id}:sounds ${check.map} ${check.tag}`, label: `sounds ${check.map} (${check.tag})`, sounds: check, mutex: [`live:${check.map}`], estimate: 200, memory: 1500}];
   if (check.type === 'sweep') return [{key: `${criterion.id}:sweep`, label: `sweep replay ${check.maps.length} maps`, sweep: check, mutex: ['live-sweep'], estimate: 75 * check.maps.length, memory: 1500}];
   if (check.type === 'census') return [{key: `${criterion.id}:census-ui-screens`, label: 'census-ui-screens', census: check, estimate: 150, memory: 1500}];
   return [{key: `${criterion.id}:${labelOf(check)}`, label: labelOf(check), error: `unknown check type ${check.type}`}];
@@ -464,6 +469,7 @@ async function runTask(task) {
   if (task.live) return judgeLive(task, add, fail, result);
   if (task.conversation) return judgeConversation(task, add, fail, result);
   if (task.sweep) return judgeSweep(task, add, fail, result);
+  if (task.sounds) return judgeSounds(task, add, fail, result);
   if (task.census) return judgeCensus(task, add, fail, result);
   return fail('no runner');
 }
@@ -673,10 +679,16 @@ function stageLive(map, tag, into = '.work/live-acceptance') {
     const names = [`${base}${s}${ext}`, `${base}${ext}`];
     const found = names.find(name => existsSync(path.join(sourceRoot, 'live-acceptance', map, name)));
     if (!found) { if (required) absent.push(`${map}/${names[0]}`); continue; }
-    const from = path.join(sourceRoot, 'live-acceptance', map, found), to = path.join(targetDir, found);
-    // This checkout's own .work is the first store root: a second gate run finds its first run's staged files there, at the very path it stages
-    // to; unlinking the target would delete the source (a self-link, then ENOENT on the copies). What is already in place stays.
-    if (path.resolve(from) === path.resolve(to)) continue;
+    const to = path.join(targetDir, found);
+    // The real file behind any chain of links: a store root can hold links an earlier staging made (this checkout's own .work is the first root,
+    // and live-sweep's replay links the trace from --from back into it), so linking to the link itself made a loop the second time (2026-10-16:
+    // the sweep's trace pointed at itself and the replay found "no stored trace").
+    let from;
+    try { from = realpathSync(path.join(sourceRoot, 'live-acceptance', map, found)); } catch { if (required) absent.push(`${map}/${found}`); continue; }
+    // What is already in place stays: the target is that file, or already leads to it.
+    let current = null;
+    try { current = realpathSync(to); } catch { /* none yet, or a broken link */ }
+    if (current === from) continue;
     try { unlinkSync(to); } catch { /* none yet */ }
     if (how === 'copy') copyFileSync(from, to); else symlinkSync(from, to);
     // the sweep's replay and compare read `watch-<tag>.json` / `population-<tag>.json` by the tag
@@ -790,6 +802,34 @@ async function judgeConversation(task, add, fail, result) {
   if (liveProblems.length) problems.push(`live: ${liveProblems.slice(0, 6).join(', ')}`);
   if (problems.length) return fail(`${c.map} ${c.tag}: ${problems.join('; ')}`);
   return {...result, status: 'PASS', detail: `${c.map} ${c.tag}: ${notes.join('; ')}; ${watched} watched actors equal for the ${Math.max(...c.frames.map(f => f.tick))} ticks replayed${Object.keys(allow).length ? ' but the measured exceptions' : ''}, clock and stream draws equal`};
+}
+
+// The original's Galaxy PlaySound calls of a live scene (the tracer's `gplay` records in original-trace<tag>.jsonl.calls.jsonl, Galaxy 0x10608100) against
+// Play's replay of the same trace. Every call must equal in order (per tick), sound, emitter, volume, radius, pitch and channel id; the slot model that
+// gives a runtime-spawned emitter its id is seeded from registry-start<tag>.txt (docs/object-index-captures.md). The `population` step comes first: its
+// play-population.json names the pre-placed actors whose own measured indices the slot model takes.
+async function judgeSounds(task, add, fail, result) {
+  const {map, tag, ticks} = task.sounds;
+  const absent = stageLive(map, tag);
+  for (const name of [`original-trace-${tag}.jsonl.calls.jsonl`, `registry-start-${tag}.txt`, `commands-${tag}.json`]) {
+    if (!stage(`live-acceptance/${map}/${name}`, {copy: !name.endsWith('.calls.jsonl')})) absent.push(`${map}/${name}`);
+  }
+  if (absent.length) return fail(`stored originals absent: ${absent.join(', ')}`, 'NO-ORIGINAL');
+  const population = add(await exec(process.execPath, ['scripts/live-acceptance.mjs', 'population', '--map', map, '--seed', '1'], {limitSeconds: 600}));
+  if (population.killed || population.code !== 0) return fail(`population step: ${population.killed ?? tail(population.out)}`);
+  // --no-ghost: the capture's player is a normal one (it picks up the pistol and fires it), not the cheat-flying ghost of the other pilots
+  const play = add(await exec(process.execPath, ['scripts/live-acceptance.mjs', 'play', '--map', map, '--seed', '1', '--tag', tag, '--no-ghost', '--object-trace', `1:${ticks}`], {limitSeconds: 1500}));
+  if (play.killed || play.code !== 0) return fail(`play step: ${play.killed ?? tail(play.out)}`);
+  const compare = add(await exec(process.execPath, ['scripts/live-sound-compare.mjs', '--map', map, '--tag', tag, '--gate'], {limitSeconds: 300}));
+  if (compare.killed) return fail(`compare step: ${compare.killed}`);
+  const line = compare.out.split('\n').find(l => l.startsWith('GATE '));
+  if (!line) return fail(`compare step: ${tail(compare.out)}`);
+  const g = JSON.parse(line.slice(5));
+  const detail = `${map} ${tag}: ${g.equalTicks} of ${g.ticksWithCalls} ticks with sound calls equal, ${g.equalCalls} of ${g.originalCalls} calls (Play made ${g.playCalls}), first differing tick ${g.firstDifferentTick ?? 'none'}; ` +
+    `matched ignoring order within the tick ${g.matchedLoosely}, channel id equal in ${g.idsEqualLoosely}; registry takes equal for ${g.registryTakesEqual} of ${g.registryTakes[0]}/${g.registryTakes[1]}` +
+    (g.firstDifferentRegistryTake ? ` (then original ${g.firstDifferentRegistryTake.original}, Play ${g.firstDifferentRegistryTake.play})` : '');
+  if (g.firstDifferentTick !== null || g.originalCalls !== g.playCalls) return fail(detail);
+  return {...result, status: 'PASS', detail};
 }
 async function judgeSweep(task, add, fail, result) {
   const {maps, tags = {}} = task.sweep;

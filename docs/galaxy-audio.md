@@ -418,3 +418,47 @@ demo-recording and networked ProcessRemoteFunction paths, the lip-sync
 sampling of Galaxy-played speech (speech keeps its transport), and
 UnregisterSound (Play never destroys a USound). Music is phase 4/5 of
 [galaxy-music](galaxy-music.md).
+
+## Hand-off: the sound gate (2026-10-16)
+
+The task was the Stage 4 gate's sound rows (4.3.6, 4.3.7, 4.5.6, [stage-4-exit-criteria](stage-4-exit-criteria.md)). Only step 1 was done; the user then
+decided to keep the browser's MP3 decoder for speech (no port of Galaxy's MPEG decoder; row 4.5.6 is the coordinator's to mark EXCLUDED) and the work stopped.
+
+**Done: 4.3.6, the live scene's script sounds, is a gate check and it fails.**
+
+* The stored original: the Underworld's `snd1` capture (a normal player, `summon DeusEx.WeaponPistol`, pickup, draw, three shots, 400 ticks; the tracer's `gplay` /
+  `addobj` / `unhash` / `hear` call records) was copied, nothing overwritten, from worktree `agent-a011db8f1b061eb8e` into the main checkout's
+  `.work/live-acceptance/06_HongKong_WanChai_Underworld/` (`original-trace-snd1.jsonl{,.strobe,.calls.jsonl}`, `registry-start-snd1.txt`, `registry-end-snd1.txt`,
+  `watch-snd1.json`, `commands-snd1.json`, `deferred-snd1.json`). No other stored capture holds `gplay` records (searched the main `.work`, `.work/live` and
+  every agent worktree); a second scene needs a new Wine capture with the four call lines (docs/object-index-captures.md "Repeating the scene").
+* `scripts/live-sound-compare.mjs --gate`: per tick, the original's `PlaySound` calls and Play's are lined up in call order and each must equal in sound, emitter
+  class, volume bits, radius, pitch bits and channel id; the last line is `GATE {json}`, exit status 1 while any tick differs.
+* `scripts/validate-stage4-acceptance.mjs`: a `SOUNDS` check (`judgeSounds`): stage the capture, `live-acceptance.mjs population --seed 1` (writes
+  `play-population.json`, which names the pre-placed actors whose own measured indices the slot model takes; without it the model measured 0 and every id differed),
+  `live-acceptance.mjs play --seed 1 --tag snd1 --no-ghost --object-trace 1:400`, then the strict compare. **`--no-ghost` is required**: the capture's player is a
+  normal one; without it Play's player is the cheat-flying ghost (Physics 4, 24 units up, `CheatFlying`), never picks up the pistol, and Play makes 32 calls
+  instead of 110.
+* Result (`--only '^4\.3\.6$'`, from a clean `.work`, 109 s, peak 1.3 GB, FAIL): 56 of 82 ticks with sound calls equal, 82 of 112 calls (Play made 110), **first
+  differing tick 278**; ignoring order inside a tick 93 calls match, channel id equal in 89 (pre-placed emitters 85 of 85, runtime-spawned 4 of 8). The registry
+  takes agree for the first 417 of 563/587, to tick 212, where the original creates a bark window's graphics context (`GC519`) and Play a `FlagBool`
+  (`triadredarrow_barkfutz_played`).
+
+**What differs (not yet attributed to a cause).** From tick 278 on: NPC footsteps (Secretary0, Female7, Female5, Female3, Businessman1; the original steps
+`TileStep4`/`TileStep2`, Play `tilestep1`/`tilestep3`, one or a few ticks apart), and the shell casing's `ShellHit` calls (original `ShellCasing1` slot 50924,
+Play slot 50797; `ShellCasing2` 50786 against 51053; tick 295's volumes 0.553 against 0.563 and tick 355's 0.736 against 0.513). The earlier doc
+([object-index-captures](object-index-captures.md)) saw the shots hit other things in Play (blood actors against a wall). Next steps: run
+`live-acceptance.mjs compare --tag snd1` to see the first tick at which the watched NPCs (the walkers above) or the player diverge; the footstep choice is
+script (`PlayFootStep`'s random sound pick from the stream), so a stream-draw count difference upstream shifts every later pick; then the tick-212 bark window
+(`ConPlayBark` and its `GC`/`Window` objects: the original's registry takes there, which Play does in another order) and the casing's slot (an event-freed slot order).
+
+**Not done.**
+
+* 4.5.6 (speech samples against Galaxy's decoder): not started. Existing evidence is in this file and [lip-sync](lip-sync.md): speech is MPEG-1 Layer III 44.1 kHz
+  mono, loaded by `0x10618e60`, decoded by the MPEG decoder at `0x10620b30` into the streamed ring voices. Whether the game ships any ADPCM sample was not
+  checked. The user keeps the browser decoder.
+* 4.3.7 (what reaches the speakers): not started. Candidates in [galaxy-music](galaxy-music.md): the music bus delay, the two ring heads' spacing (mixer.md
+  1.3, derived and unmeasured), MPEG/ADPCM samples, 3D voices. A loopback recording of the original under Wine is the only measurement path; whether it is
+  reliable enough, and which parts are host output by nature (the browser's resampler and device), is the decision still to be recorded.
+* The worktree `agent-ad32397fa8ffa8fb9` was set up by symlinking `node_modules`, `Deus Ex GOTY Edition`, `Reference` and the `.cache` entries (not `.cache/wasm`),
+  copying `ad/build/*.exe` and `ad/tools/dxinput.exe`, and `npm run build:wasm` (no warnings seen in the log tail).
+
