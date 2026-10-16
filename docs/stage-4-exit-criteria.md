@@ -282,11 +282,20 @@ These keep the gate neither green nor red; each names the stage or the reason.
 - **Speech audio decoding** (4.5.6): the user decided on 2026-10-16 to keep the browser's MP3 decoder for speech rather than port Galaxy's
   MPEG decoder. Speech plays and lip sync runs Galaxy's translated analysis on the browser-decoded samples; the samples themselves are not
   claimed equal to the original's.
-  **Not covered by that exclusion, and open (found 2026-10-16):** conversation and DataLink speech bypass Galaxy's voices. The page plays
-  them through their own Web Audio source at a fixed gain (`playConversationSpeech` in src/viewer/main.mjs: `parameters[0]/100`), so speech has
-  no distance factor, no pan and no category ratio, where the original plays it through PlaySound (slot 5) and Update scales and pans it every
-  frame ([galaxy audio](galaxy-audio.md), steps 7 and 8). Audible on barks and overheard conversations at a distance. The fix keeps the
-  browser's MP3 decode and feeds its samples to the translated Galaxy voice path instead of the separate source.
+  **Not covered by that exclusion: speech bypassed Galaxy's voices (found 2026-10-16), fixed the same day** (fa359b3, merged 98b4a4d;
+  [galaxy audio](galaxy-audio.md#speech-through-galaxys-voices-2026-10-16), [lip sync](lip-sync.md)). The page had played conversation and DataLink
+  lines through their own Web Audio source at a fixed gain, with no distance factor, pan or category ratio, and barks were silent (they reached Galaxy, but
+  the translated `glxLoadSample` rejects MP3: fault 0x130). Now the ConPlay and DataLinkPlay PlaySound/StopSound sites take the original chain (`execPlaySound`,
+  `CheckHearSound`, `execClientHearSound`, Galaxy's PlaySound on slot 5, StopSoundId), and Update sets the voice's distance factor, pan and speech ratio every
+  frame. The radii are the original's: ConPlay.PlaySpeech's 65536 (512 + initialRadius for an interruptible first-person conversation) and BarkManager.StartBark's 1024.
+  **Labelled stand-in:** a speech MP3 registers as a host-decoded record shaped like the WAVE loader's 16-bit mono record, with the MPEG header's rate as the
+  loader's +0x3c; the page decodes it (OfflineAudioContext, 16-bit) and Galaxy's mixer plays it on bus B with the zone reverb (glxStartSample's non-ring branch).
+  The original streams speech through a 0x4024 ring voice fed by a decoder thread, so the record, the decode and the start latency stay unverified with 4.5.6.
+  Lip sync is Update's step 12 over Galaxy's channels on the same samples, at the mixer's read head. Checked: `island-bark` sweeps a bark's voice over distance and
+  direction against Update's formulas (21503 down to the 0x80 floor at 1,100 units, centred straight on, pan 25940/6827 at ±60°, each within 2 units of
+  the recomputed value), `island-lipsync`, `galaxy-effects-play` (hold, attach, mix, end and release in the worklet) and the conversation flows; the oracle
+  validators are unchanged and pass. Not run: `browser-tests/instructor-conversation.spec.mjs` (its patch of main.mjs no longer matched before the change), the
+  speech-volume slider's test sound, and a frame-time A/B.
 - **Swimming and drowning visuals** (4.2.33): Stage 5, a gameplay system (ladders and flying are done, swimming is next in
   [Stage 5](roadmap.md#5-implement-the-full-gameplay-systems)).
 - **Load Game, Save Game and QuickSave screens** (4.4.15): Stage 6, they stop at the save-game directory (native 3013).
@@ -379,6 +388,8 @@ Nothing below was fixed in this task beyond wiring existing checks; each item is
 2. **Speech has no original sound (4.5.6).** The conversation frames are compared with the original's (4.5.5 MeetPaul, 4.5.7 the intro, 4.5.8 MeetManderley, 2026-10-16: letterbox, behind view, camera, subtitles,
    lip sync through the per-tick actor trace), but there is no original audio of the speech (Galaxy's MPEG decoder is not translated; the host's decode and rounding are unverified). The comparison found one divergence of Play,
    fixed ([conversation camera](conversation-camera.md#the-intro-against-the-original-2026-10-16-gate-row-457): `AActor::FindBase`'s trace extent). Holds up "synchronized speech and conversation camera behavior".
+   Speech now plays through Galaxy's voices with the original's distance, pan and speech ratio (fixed 2026-10-16, see [Excluded](#excluded)); what stays
+   unverified is the decoded audio itself and its stand-in record, under the user's 4.5.6 decision.
 3. **One live result is still red (4.2.28's Ship window); 4.1.7 and 4.1.8 were settled 2026-10-16** ([visual
    acceptance](visual-acceptance.md#the-live-replays-start-state-battery-parks-two-loads-and-the-underworlds-flaky-draw-2026-10-16)). *4.1.7* (flaky): the player's animation flags at the start of the
    replay (`bAnimNotify` 0 when the replay began before the ghost's own script started its `Tread` loop, so the loop's `PlayFootStep` `FRand` was missing at tick 45); the harness now
