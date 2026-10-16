@@ -127,7 +127,10 @@ exec body itself (open: an exec-body differential with a native hash fixture).
    Not done: `validate-flash-play.mjs` checks the pass's direction and the neutral case against Play itself only. The
    quantisation of the GL blend (`dst * alpha` in 8 bits) against the device's is unmeasured.
 2. The DrunkFX background (modulated tile over the whole HUD) draws through the existing HUD renderer's DSTY_Modulated
-   path; its look has not been compared with the original.
+   path; its look has not been compared with the original. **Fixed 2026-10-16:** DrunkFX is a Fire.dll WetTexture and the HUD
+   renderer drew its stored mip, which Serialize leaves zeroed, so the modulated tile (2·src·dst) turned the whole frame black for
+   as long as `drugEffectTimer` ran (wine, liquor, Zyme, a poison's four seconds). The HUD now draws a Fire or Wet texture from the
+   page's live procedural set (procedural-textures.mjs), as BSP surfaces, mesh skins and sprites do.
 3. Pain zones and `DamageTrigger` scenarios, the underwater tint scenario, player swimming and drowning
    ([swimming](swimming.md#unsupported-and-unresolved)); the sources of poison and fire themselves (Greasel spit, darts,
    flamethrower flames); `summon` of a class the map did not load.

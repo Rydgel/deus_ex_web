@@ -5,6 +5,7 @@
  */
 import * as THREE from 'three';
 import {TextureStore} from '../unreal/textures.mjs';
+import {sharedProceduralTextures} from './procedural-textures.mjs';
 export async function createHudRenderer({assets,preload=[]}){
   const scene=new THREE.Scene(),camera=new THREE.OrthographicCamera(0,1,0,1,-1,1);
   const textures=new Map(),materials=new Map(),batches=[];
@@ -13,7 +14,16 @@ export async function createHudRenderer({assets,preload=[]}){
   async function imageFor(ref){
     if(images.has(ref.key))return images.get(ref.key);
     if(!pending.has(ref.key))pending.set(ref.key,(async()=>{
-      const data=await store.get(await assets.get(ref.package),ref.index,'point'),image={key:ref.key,...data.mips[0]};
+      const asset=await assets.get(ref.package),data=await store.get(asset,ref.index,'point');
+      // A Fire.dll texture (the drunk and drugged HUD background DrunkFX is a WetTexture) is the page's live procedural
+      // texture, as on BSP surfaces, mesh skins and sprites: its stored mip is Serialize's zeroed one, which a modulated tile
+      // turns into a black screen.
+      if(data.procedural==='FireTexture'||data.procedural==='WetTexture'){
+        const live=sharedProceduralTextures().acquire(await store.get(asset,ref.index,false));
+        const image={key:ref.key,width:data.values.USize|0,height:data.values.VSize|0,gpu:live.texture};
+        images.set(ref.key,image);return image;
+      }
+      const image={key:ref.key,...data.mips[0]};
       images.set(ref.key,image);return image;
     })());
     return pending.get(ref.key);
@@ -23,6 +33,7 @@ export async function createHudRenderer({assets,preload=[]}){
   await Promise.all(preload.map(imageFor));
   function material(image,style){
     const key=`${image.key}:${style}`;
+    if(!textures.has(image.key)&&image.gpu)textures.set(image.key,image.gpu);
     if(!textures.has(image.key)){
       const texture=new THREE.DataTexture(image.data,image.width,image.height,THREE.RGBAFormat);
       texture.magFilter=texture.minFilter=THREE.NearestFilter;texture.flipY=false;
@@ -121,6 +132,6 @@ export async function createHudRenderer({assets,preload=[]}){
     renderer.clearDepth();renderer.render(scene,camera);
   }
   return {render,draw,
-    dispose(){for(const b of batches)b.mesh.geometry.dispose();for(const m of materials.values())m.dispose();for(const t of textures.values())t.dispose();},
+    dispose(){for(const b of batches)b.mesh.geometry.dispose();for(const m of materials.values())m.dispose();for(const [key,t] of textures)if(!images.get(key)?.gpu)t.dispose();},
   };
 }
