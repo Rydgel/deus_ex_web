@@ -645,6 +645,17 @@ async function play() {
       region: {zone: a.RegZone, iLeaf: a.RegLeaf, zoneNumber: a.RegNum}}), {...pose, rehash: flag('ghost-in-hash')});
     // --early-cmds: the console lines the original was typed in its frozen phase (a camera that follows an actor), run now through the same chain
     if (earlyCommands().length) console.log('early commands:', JSON.stringify((await page.evaluate(lines => window.deusExViewer.viewProbe({exec: lines}), earlyCommands())).output));
+    // A no-ghost player placed at the original's pose stands in the Physics its login left it (falling); the original's had landed during a frozen
+    // phase of tens of seconds (the intro: Physics 1, Velocity 0, Z -80.2). The frozen level (bPlayersOnly) is ticked until the player is in the pose's Physics.
+    if (flag('no-ghost') && pose.Phys !== undefined) {
+      const stand = async () => (await page.evaluate(() => window.deusExViewer.liveProbe({read: {names: ['@player'], props: ['Physics', 'Location', 'Velocity', 'Base']}}))).read?.['@player'];
+      let now = await stand(), waited = 0;
+      // landed and at rest where the original's stood (the landing is a few frozen ticks and a tick's delta is the host's frame time, so the first
+      // tick in the pose's Physics can still be moving to its rest height)
+      const rested = () => now?.Physics === pose.Phys && now.Location.every((v, i) => Math.abs(v - pose.Loc[i]) < 1e-3) && now.Velocity.every(v => v === 0);
+      for (; waited < 240 && !rested(); waited += 2) { await frames(2); now = await stand(); }
+      console.log(`the player after ${waited} frames: Physics ${now?.Physics} (the original's ${pose.Phys}), Location ${JSON.stringify(now?.Location)}, Velocity ${JSON.stringify(now?.Velocity)}, Base ${now?.Base?.name ?? now?.Base}`);
+    }
     const populationFile = [`population${suffix}.json`, 'population.json'].map(name => path.join(dir, name)).find(existsSync);
     const population = populationFile ? JSON.parse(readFileSync(populationFile, 'utf8')) : null;
     if (population) {

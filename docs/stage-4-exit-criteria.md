@@ -20,8 +20,8 @@ First run, 2026-10-15 on master 2386f69 plus this branch (Linux host, AMD, 30 GB
 | 4.2 Effects | 17 | 1 | 3 | 0 | 9 | 3 |
 | 4.3 Sound | 5 | 0 | 0 | 0 | 2 | 0 |
 | 4.4 Text and interfaces | 10 | 0 | 0 | 0 | 4 | 2 |
-| 4.5 Speech, lip sync and the conversation camera | 5 | 0 | 0 | 0 | 3 | 0 |
-| **Total** | **46** | **1** | **3** | **0** | **20** | **5** |
+| 4.5 Speech, lip sync and the conversation camera | 6 | 0 | 0 | 0 | 2 | 0 |
+| **Total** | **47** | **1** | **3** | **0** | **19** | **5** |
 
 **Update, interface frames (2026-10-15, [interface frames](interface-frames.md)):** rows 4.4.11 to 4.4.14 are `PASS`, from 18 views of 00_Training compared with
 the original's frames (the HUD, eight persona screens, the main menu, three Settings screens, a datacube and the keypad) and from the four stored security-computer screens (outside their camera windows); the clause 4.4 row of the first-run table reads
@@ -128,7 +128,7 @@ A mode in brackets names how the check exercises Play (see [How the gate judges]
 | 4.5.4 | speech timing and audio | speech lookup, sound length and the retained archive equal the original | O2 | `conversation-sound-length` [oracle], `conversation-audio-integration` [node], `conversation-speech-audio` [oracle], `infolink-audio` [node], `conversation-speech` [oracle] | PASS |
 | 4.5.5 | MeetPaul frame | the third-person conversation frame (letterbox, behind view, camera, subtitles) against the original's | O1 | `conversation 01_NYC_UNATCOIsland (4 frames)` [worker] | PASS |
 | 4.5.6 | speech audio | the speech samples the player hears against Galaxy's | - | missing: Galaxy's MPEG decoder is not translated; the host's decode and rounding are unverified (docs/lip-sync.md) | MISSING |
-| 4.5.7 | 00_Intro camera shots | the intro's CameraPoint shots against the original | - | missing: the original's frames at ticks 170, 1000 and 2250 are stored (main .work, tag in2), but Play's replay of the intro diverges from tick 1 (docs/conversation-camera.md "Hand-off"), so no comparison is claimed | MISSING |
+| 4.5.7 | 00_Intro camera shots | the intro's CameraPoint shots against the original | O1 | `conversation 00_Intro (3 frames)` [worker], `native-find-base` [oracle] | PASS |
 | 4.5.8 | a second third-person conversation | a conversation on another map, with the third-person camera, lip sync and speech | - | missing: chosen: 01_NYC_UNATCOHQ MeetManderley (every map's object-index capture already exists, docs/object-index-captures.md); it starts and plays in Play with the camera, but no original capture was taken yet (docs/conversation-camera.md "Hand-off") | MISSING |
 
 ## How the gate judges
@@ -282,6 +282,7 @@ each criterion's inputs from one root (the first that holds them) and links or c
 | Security-camera frames and measured state | worktree `agent-a011db8f1b061eb8e` `.work/acceptance/<map>/{cs1,bp2,hk0,sh3}-original.png`, `-state.json` | 4.2.28 |
 | The Ship camera recaptured with the level's movers measured (2026-10-16, tag `sh3b`, level time 132.264 s in `sh3b-time.txt`; the first `sh3` capture is kept) | main `.work/acceptance/09_NYC_Ship/sh3b-original.png`, `.bmp`, `-state.json` (with `movers`) | 4.2.28 |
 | MeetPaul's four held frames (2026-10-16, tag `cvA`, ticks 100/250/600/750, each with `cvA<n>-time.txt`), the 750-tick trace with the player's blend channel, the watch and population lists, the commands and the measured phonemes | main `.work/acceptance/01_NYC_UNATCOIsland/cvA{1..4}-original.png`, `.work/live-acceptance/01_NYC_UNATCOIsland/{original-trace,watch,population,commands,hold,phonemes}-cvA.*` | 4.5.5 |
+| The intro's three held frames (2026-10-16, tag `in2`, ticks 170/1000/2250, each with `in2-in<n>-time.txt`) and its 2,250-tick trace with the watch and population lists and the commands | main `.work/acceptance/00_Intro/in2-in{1,3,4}-original.png`, `.work/live-acceptance/00_Intro/{original-trace,watch,population,commands,hold}-in2.*` | 4.5.7 |
 | The original's third-person weapon draws | main `.work/weapon/original-cases*.json` | 4.1.9 |
 | The interface frames of 00_Training (18 views, 2026-10-15) and each frame's level time | main `.work/acceptance/00_Training/ui-<view>-original.png` and `ui-<view>-time.txt` (also `ui-e1` to `ui-e4`, the pointer experiment) | 4.4.11 to 4.4.14 |
 | The light manager's tables from the running original | main `.work/live/.work/fpu` | 4.2.9 |

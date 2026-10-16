@@ -1777,6 +1777,19 @@ the camera object read from the running original equals Play's `conversationProb
 compare --tag cvA`) reads clock equal, stream draws per tick equal, and every watched actor but three equal in every watched field for the 750 ticks (88 actors: the pawns, the generators and the timed actors; Paul's blend channel included);
 the three are two guards' `LastRenderTime` at tick 1 (the render history) and the player's `AnimFrame` at the first ticks.
 
+**The intro (`00_Intro`, 2026-10-16, gate row 4.5.7).** The same comparison for the intro's three held frames (the original's Ctrl+F9 frames, tag `in2`, the whole frame is the 3D view at 1280x720: no bars, no subtitle), after the `FindBase` fix
+([conversation camera](conversation-camera.md#the-intro-against-the-original-2026-10-16-gate-row-457)), with the measured mouth letters and the player standing as the original's:
+
+| Frame | tick | identical, >2, >10 (band = whole frame), over 10 off the edges, recall/precision |
+| --- | --- | --- |
+| in1 | 170 | .98333, 4,925, 2,933; 21; .999/1 |
+| in3 | 1,000 | .95588, 6,346, 3,775; 31; .999/1 |
+| in4 | 2,250 | .95128, 5,037, 1,001; 63; .999/.999 |
+
+"Off the edges" is `conversation-acceptance.mjs compare`'s `awayFromEdges`: the pixels off by more than 10 of 255 that are farther than 1 px from every hard step (a step of more than 24 of 255 to a right, lower or diagonal neighbour, in either frame). Of the 2,933 and 3,775 pixels over 10,
+99% lie on an edge (silhouettes, mesh triangle edges, brush edges: the count follows the edges' length, so the gate judges the pixels away from them); the rest are at most 63 per frame, off by at most 23 (MeetPaul's four: 15 to 37, at most 23). The live comparison
+of the replay (`live-acceptance.mjs compare --tag in2`) reads all 82 watched actors, the clock and the stream draws equal for 2,250 ticks.
+
 ```bash
 # the original (Wine lock): all frames of one run, one trace; each frame is a held tick (--cmds N:@ctrlshot name, the last --shot name --shot-ctrl), Brightness 2/3 in the early commands
 DX_HYPRLAND=1 scripts/live-original.sh 01_NYC_UNATCOIsland --ticks 750 --delta 0.0166666675 --monitor 20 --tag cvA --player-blend --shot cvA4 --shot-ctrl \
@@ -1786,7 +1799,7 @@ node scripts/conversation-acceptance.mjs phonemes --tag cvA                     
 node scripts/live-acceptance.mjs play --map 01_NYC_UNATCOIsland --seed 1 --tag cvA --ticks 250 --shot cvA2 --player-blend --phonemes .work/live-acceptance/01_NYC_UNATCOIsland/phonemes-cvA.json \
   --early-cmds "<the same>"                                                                   # Play's frame at that tick (one replay per frame)
 node scripts/conversation-acceptance.mjs compare --frames cvA1,cvA2,cvA3,cvA4                # per region and whole frame
-node scripts/conversation-acceptance.mjs timeline [--scene meetpaul|intro]                   # Play's own timeline: every state, event and camera change, with its tick
+node scripts/conversation-acceptance.mjs timeline [--scene meetpaul|intro|manderley]         # Play's own timeline: every state, event and camera change, with its tick
 ```
 
 ## Open

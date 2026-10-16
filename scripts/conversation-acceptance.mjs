@@ -11,6 +11,7 @@ import path from 'node:path';
 import {fileURLToPath} from 'node:url';
 
 export const root = fileURLToPath(new URL('..', import.meta.url));
+const flag = name => process.argv.includes(`--${name}`);
 const option = (name, fallback) => {
   const joined = process.argv.find(arg => arg.startsWith(`--${name}=`));
   if (joined) return joined.slice(name.length + 3);
@@ -24,7 +25,8 @@ export const SCENES = {
   // 01_NYC_UNATCOHQ: MeetManderley (radius 160, third person, JC and Manderley, cameras 3, 4, 5, audio package Mission01), the campaign's next one after MeetPaul.
   manderley: {map: '01_NYC_UNATCOHQ', location: [310, -164, 305], rotation: [0, 63442, 0], conversation: 'MeetManderley'},
   // 00_Intro: no placement and no ghost (the map's own player, which CameraPoint.Idle paralyses and hides); the shots are CameraPoint's.
-  intro: {map: '00_Intro', noGhost: true, conversation: 'Intro'},
+  // At 1280x720 the force-played conversation's window is 16:9 of the width, the whole frame: no bars and no subtitle (the whole frame is the 3D band).
+  intro: {map: '00_Intro', noGhost: true, conversation: 'Intro', bars: {top: 0, bottom: 720}},
 };
 
 async function withPlay(body) {
@@ -118,29 +120,39 @@ export const WIDTH = 1280, HEIGHT = 720;
  * that are not black in either frame, padded by 2). */
 export const BARS = {top: 73, bottom: 570};
 const rgb = file => execFileSync('magick', [file, '-depth', '8', 'rgb:-'], {maxBuffer: 1 << 28});
-export function compareFrames(a, b, {stored = null} = {}) {
+export function compareFrames(a, b, {bars = BARS} = {}) {
   const A = rgb(a), B = rgb(b);
   if (A.length !== WIDTH * HEIGHT * 3 || B.length !== WIDTH * HEIGHT * 3) throw new Error(`${a} or ${b} is not ${WIDTH}x${HEIGHT}`);
   // the subtitle box: non-black pixels of the lower bar in either frame
   let x0 = WIDTH, y0 = HEIGHT, x1 = -1, y1 = -1;
-  for (let y = BARS.bottom; y < HEIGHT; y++) for (let x = 0; x < WIDTH; x++) {
+  for (let y = bars.bottom; y < HEIGHT; y++) for (let x = 0; x < WIDTH; x++) {
     const i = (y * WIDTH + x) * 3;
     if (A[i] || A[i + 1] || A[i + 2] || B[i] || B[i + 1] || B[i + 2]) { x0 = Math.min(x0, x); x1 = Math.max(x1, x); y0 = Math.min(y0, y); y1 = Math.max(y1, y); }
   }
-  const box = x1 < 0 ? null : {x: Math.max(0, x0 - 2), y: Math.max(BARS.bottom, y0 - 2), width: Math.min(WIDTH, x1 + 3) - Math.max(0, x0 - 2), height: Math.min(HEIGHT, y1 + 3) - Math.max(BARS.bottom, y0 - 2)};
-  const region = (x, y) => y < BARS.top ? 'topBar' : y >= BARS.bottom ? (box && x >= box.x && x < box.x + box.width && y >= box.y && y < box.y + box.height ? 'subtitle' : 'bottomBar') : 'band';
+  const box = x1 < 0 ? null : {x: Math.max(0, x0 - 2), y: Math.max(bars.bottom, y0 - 2), width: Math.min(WIDTH, x1 + 3) - Math.max(0, x0 - 2), height: Math.min(HEIGHT, y1 + 3) - Math.max(bars.bottom, y0 - 2)};
+  const region = (x, y) => y < bars.top ? 'topBar' : y >= bars.bottom ? (box && x >= box.x && x < box.x + box.width && y >= box.y && y < box.y + box.height ? 'subtitle' : 'bottomBar') : 'band';
   const names = ['topBar', 'band', 'bottomBar', 'subtitle', 'frame'];
   const stat = Object.fromEntries(names.map(n => [n, {pixels: 0, same: 0, over2: 0, over10: 0, max: 0, sum: 0}]));
   const blocks = new Map();
+  // Where the two rasterizers can differ: a pixel within 1 px of a hard step (more than 24 of 255 to a right, lower or diagonal neighbour, in either frame): the
+  // silhouettes, mesh triangle edges, brush edges and glints. A pixel off by more than 10 away from every step is a difference of shading, texture or colour.
+  const step = (I, i, j) => Math.max(Math.abs(I[i] - I[j]), Math.abs(I[i + 1] - I[j + 1]), Math.abs(I[i + 2] - I[j + 2])) > 24;
+  const edge = new Uint8Array(WIDTH * HEIGHT), near = new Uint8Array(WIDTH * HEIGHT);
+  for (let y = 0; y < HEIGHT - 1; y++) for (let x = 1; x < WIDTH - 1; x++) for (const [dx, dy] of [[1, 0], [0, 1], [1, 1], [-1, 1]]) {
+    const i = (y * WIDTH + x) * 3, j = ((y + dy) * WIDTH + x + dx) * 3;
+    if (step(A, i, j) || step(B, i, j)) { edge[y * WIDTH + x] = 1; edge[(y + dy) * WIDTH + x + dx] = 1; }
+  }
+  for (let y = 1; y < HEIGHT - 1; y++) for (let x = 1; x < WIDTH - 1; x++) if (edge[y * WIDTH + x]) for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) near[(y + dy) * WIDTH + x + dx] = 1;
+  let awayOver10 = 0, awayMax = 0;
   for (let y = 0; y < HEIGHT; y++) for (let x = 0; x < WIDTH; x++) {
     const i = (y * WIDTH + x) * 3;
     const d = Math.max(Math.abs(A[i] - B[i]), Math.abs(A[i + 1] - B[i + 1]), Math.abs(A[i + 2] - B[i + 2]));
     const sum = Math.abs(A[i] - B[i]) + Math.abs(A[i + 1] - B[i + 1]) + Math.abs(A[i + 2] - B[i + 2]);
     for (const n of [region(x, y), 'frame']) { const s = stat[n]; s.pixels++; if (d === 0) s.same++; if (d > 2) s.over2++; if (d > 10) s.over10++; s.max = Math.max(s.max, d); s.sum += sum; }
-    if (d > 10) { const key = `${Math.floor(x / 40) * 40},${Math.floor(y / 40) * 40}`; blocks.set(key, (blocks.get(key) ?? 0) + 1); }
+    if (d > 10) { const key = `${Math.floor(x / 40) * 40},${Math.floor(y / 40) * 40}`; blocks.set(key, (blocks.get(key) ?? 0) + 1); if (!near[y * WIDTH + x]) { awayOver10++; awayMax = Math.max(awayMax, d); } }
   }
   const rows = Object.fromEntries(names.map(n => { const s = stat[n]; return [n, {pixels: s.pixels, identical: s.pixels ? +(s.same / s.pixels).toFixed(5) : null, over2: s.over2, over10: s.over10, max: s.max, mad: s.pixels ? +(s.sum / (3 * s.pixels)).toFixed(3) : null}]; }));
-  return {regions: rows, subtitleBox: box, worstBlocks: [...blocks].sort((p, q) => q[1] - p[1]).slice(0, 8).map(([k, n]) => `${k}:${n}`)};
+  return {regions: rows, awayFromEdges: {over10: awayOver10, max: awayMax}, subtitleBox: box, worstBlocks: [...blocks].sort((p, q) => q[1] - p[1]).slice(0, 8).map(([k, n]) => `${k}:${n}`)};
 }
 function compare() {
   const scene = SCENES[option('scene', 'meetpaul')];
@@ -155,7 +167,7 @@ function compare() {
     const json = /(\{.*\})/.exec(text.trim().split('\n').at(-1))?.[1];
     const metrics = json ? JSON.parse(json) : {error: text.trim().split('\n').at(-1)};
     // visual-acceptance.mjs prints the outlier blocks as a count after the JSON ("<map> <view> {...} 3 outlier blocks")
-    const row = {frame: name, ...compareFrames(a, b), mad: metrics.mad, ratio: metrics.ratio, edgeRecall: metrics.edgeRecall, edgePrecision: metrics.edgePrecision,
+    const row = {frame: name, ...compareFrames(a, b, {bars: scene.bars}), mad: metrics.mad, ratio: metrics.ratio, edgeRecall: metrics.edgeRecall, edgePrecision: metrics.edgePrecision,
       outlierBlocks: Number(/\} (\d+) outlier blocks/.exec(text)?.[1] ?? NaN), error: metrics.error};
     report[name] = row;
     console.log(JSON.stringify(row));
@@ -174,16 +186,30 @@ function phonemes() {
   const dir = path.join(root, '.work/live-acceptance', scene.map);
   const parse = line => JSON.parse(line.replace(/-?nan\([a-z0-9]+\)|-?nan\b|-?inf\b/gi, 'null'));
   const rows = readFileSync(path.join(dir, `original-trace-${tag}.jsonl`), 'utf8').trim().split('\n').map(parse).filter(row => row.unfrozen >= 1);
-  const out = [], last = {};
+  const out = [], last = {}, lastFrame = {};
+  let jumps = 0, restarts = 0;
   for (const row of rows) for (const [name, actor] of Object.entries(row.actors)) {
     if (actor.BSeq0 === undefined) continue;
     const sequence = actor.BSeq0 === 'None' || actor.BSeq0 === null ? null : actor.BSeq0;
-    if (sequence !== (last[name] ?? null) && sequence in MOUTHS) out.push({n: row.unfrozen, name, letter: MOUTHS[sequence]});
-    last[name] = sequence;
+    if (sequence !== (last[name] ?? null) && sequence in MOUTHS) {
+      // Pawn.LipSynch's end of speech (`else if (bWasSpeaking)`) tweens MouthClosed with `tweentime`, a local that only the speaking branch assigns: 0.
+      // The blend channel jumps (BlendAnimFrame 0, BlendTweenRate 0) and no letter was written (Galaxy analyses only while bIsSpeaking). A letter
+      // tween starts at BlendAnimFrame -1 with BlendTweenRate 10 (0.1 s), or, with a slow frame rate, jumps the same way: that case is not told apart
+      // (only a jump to the closed mouth is taken for the end of speech). The left-in stale letter made the intro's Bob Page tween MouthClosed
+      // at the first LipSynch of his next speech, one tick before the original's (docs/conversation-camera.md, the intro).
+      if (sequence === 'MouthClosed' && actor.BFrame0 === 0 && actor.BTween0 === 0) jumps++;
+      else out.push({n: row.unfrozen, name, letter: MOUTHS[sequence]});
+    } else if (sequence === (last[name] ?? null) && sequence in MOUTHS && actor.BFrame0 === -1 && lastFrame[name] !== -1 && actor.BTween0 === 10) {
+      // The same sequence tweened again: a letter whose sequence is the one already blended, after a letter that blended nothing (an animation the
+      // mesh lacks, or none yet): Pawn.LipSynch moved lastPhoneme, the channel did not change name.
+      out.push({n: row.unfrozen, name, letter: MOUTHS[sequence]}); restarts++;
+    }
+    last[name] = sequence; lastFrame[name] = actor.BFrame0;
   }
-  writeFileSync(path.join(dir, `phonemes-${tag}.json`), JSON.stringify(out));
+  writeFileSync(path.join(dir, `phonemes-${option('out', tag)}.json`), JSON.stringify(out));
+  if (jumps || restarts) console.log(`${jumps} end-of-speech jumps to MouthClosed left out, ${restarts} restarts of the blended sequence taken as letters`);
   const by = {}; for (const e of out) by[e.name] = (by[e.name] ?? 0) + 1;
-  console.log(`${out.length} letters`, JSON.stringify(by), '->', path.join(dir, `phonemes-${tag}.json`));
+  console.log(`${out.length} letters`, JSON.stringify(by), '->', path.join(dir, `phonemes-${option('out', tag)}.json`));
 }
 
 const verb = process.argv[2];
