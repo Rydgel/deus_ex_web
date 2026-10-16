@@ -7,6 +7,7 @@
 #   scripts/galaxy-output-capture.sh [out dir]      (default: the main checkout's .work/audio-output)
 #   COUNT=n INTERVAL=ms (default 3000 samples, 1 ms apart)
 #
+# Takes the sessions' bottle lock (.work/bottle.lock, mkdir) on the Mac and releases it once the game is quit.
 # Writes <out>/training-load{1,2}.{json,pan.bin,poll.txt}. Needs ad/build/dx-live-win.exe built from tools/dx-live-win.c
 # (i686-w64-mingw32-gcc -O2 -o ad/build/dx-live-win.exe tools/dx-live-win.c -lpsapi), ad/build/dump-actor-win.exe and ad/tools/dxinput.exe.
 set -u
@@ -25,8 +26,15 @@ cd "$ROOT" || exit 1
 mkdir -p "$OUT"
 exec 9>"$LOCK"
 if command -v flock >/dev/null; then flock 9; else echo "no flock: $LOCK is advisory" >&2; fi
+# The sessions' bottle lock (one session at a time on the CrossOver bottle): a directory whose `owner` file names the holder.
+BOTTLE_LOCK=${BOTTLE_LOCK:-/Users/gcc/Documents/deus_ex_web/.work/bottle.lock}
+if [ "$(uname)" = Darwin ]; then
+  if ! mkdir "$BOTTLE_LOCK" 2>/dev/null; then echo "the bottle is held: $(cat "$BOTTLE_LOCK/owner" 2>/dev/null)" >&2; exit 9; fi
+  printf 'owner: row 4.3.7 galaxy output poll (scripts/galaxy-output-capture.sh)\nsince: %s\nrelease: removed by the script when the game is quit\n' "$(date '+%F %R')" > "$BOTTLE_LOCK/owner"
+fi
+release_bottle() { [ "$(uname)" = Darwin ] && grep -q 'row 4.3.7' "$BOTTLE_LOCK/owner" 2>/dev/null && rm -f "$BOTTLE_LOCK/owner" && rmdir "$BOTTLE_LOCK"; }
 game_pids() { ps -e -o pid=,comm= | awk '/DeusEx\.exe$/ {print $1}'; }
-if [ -n "$(game_pids)" ]; then echo "a DeusEx.exe is running; not starting" >&2; exit 9; fi
+if [ -n "$(game_pids)" ]; then echo "a DeusEx.exe is running; not starting" >&2; release_bottle; exit 9; fi
 player_up() { "$DX_WINE" ad/build/dump-actor-win.exe JCDentonMale 'Player:0x5d4:u32' 2>/dev/null | grep -q '^JCDentonMale JCDentonMale.* Player=0x[1-9a-f]'; }
 wait_player() {
   for _ in $(seq 1 60); do
@@ -38,7 +46,7 @@ wait_player() {
   done
   return 1
 }
-node ad/scripts/original-game.mjs launch 00_Training.dx || exit 1
+node ad/scripts/original-game.mjs launch 00_Training.dx || { release_bottle; exit 1; }
 PID=
 quit_game() {
   [ -n "$PID" ] || PID=$(game_pids | head -1)
@@ -46,7 +54,7 @@ quit_game() {
   for _ in $(seq 1 20); do [ -n "$(game_pids)" ] || return 0; sleep 1; done
   [ -n "$PID" ] && kill "$PID" 2>/dev/null
 }
-trap quit_game EXIT
+trap 'quit_game; release_bottle' EXIT
 wait_player || { echo "the player never came up" >&2; exit 1; }
 PID=$(game_pids | head -1)
 sleep 5
