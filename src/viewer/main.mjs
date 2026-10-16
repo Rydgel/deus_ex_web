@@ -12,6 +12,7 @@ import { createSimClient } from './sim-client.mjs';
 import { frameProjection as vertexProjection } from './frame-projection.mjs';
 import { createPlayCamera, pointCamera, applyPlayFrame, verticalFov, rotatorEuler, setPixelCentre, projectionState, setProjectionState, PLAY_NEAR, PLAY_FAR } from './play-camera.mjs';
 import { createSpriteScene } from './sprite-scene.mjs';
+import { sharedProceduralTextures } from './procedural-textures.mjs';
 import { createDecalScene } from './decal-scene.mjs';
 import { createDetailScene } from './detail-scene.mjs';
 import { unpackDetail } from '../runtime/detail-draw.mjs';
@@ -1424,7 +1425,12 @@ function status() {
   };
 }
 // A small read-only diagnostic hook also makes browser regressions reproducible.
-window.deusExViewer = { status, framePhases(reset = true) {
+window.deusExViewer = { status,
+/** The page's procedural textures held at the original's state (procedural-textures.mjs `hold`): {kind, pixels: {name: hex}} or null. */
+proceduralHold(spec) { return sharedProceduralTextures().hold(spec); },
+/** The page's procedural textures: key, kind, size, GlobalPhase and a pixel checksum each. */
+proceduralRecords() { return sharedProceduralTextures().records(); },
+framePhases(reset = true) {
   const result = { ...framePhases, runtimeError: runtimeError?.message ?? null, paused };
   if (reset) for (const key of Object.keys(framePhases)) framePhases[key] = 0;
   return result;

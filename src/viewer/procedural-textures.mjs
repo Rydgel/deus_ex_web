@@ -32,7 +32,7 @@ const fireKernelMode = () => (typeof process !== 'undefined' && process.env?.FIR
  * fireKernelMode). The choice holds for the set: its textures share one
  * generator. */
 export function createProceduralTextures({seed = 0x0f12e, kernel} = {}) {
-  let globals = null, rust = null, kernelGlobals = null;
+  let globals = null, rust = null, kernelGlobals = null, heldKind = null;
   const records = new Map(), notes = new Set();
   const clock = () => performance.now() / 1000;
 
@@ -116,9 +116,27 @@ export function createProceduralTextures({seed = 0x0f12e, kernel} = {}) {
     /** Get(Viewport->CurrentTime) for every fire, then the uploads. */
     update(time = clock()) {
       for (const record of records.values()) {
-        textureFrame(record, time);
+        if (record.kind !== heldKind) textureFrame(record, time);
         if (record.changed) upload(record);
       }
+    },
+    /** A held frame against the original's (docs/visual-acceptance.md "04_NYC_Street's steam vents"): `hold({kind, pixels})` stops the
+     * ticks of every texture of that kind, as the tracer's `fire hold` stops UFireTexture::ConstantTimeTick in the original, and writes
+     * into the named textures (the object name, the key's last part) the P8 pixels read there (`dx-live-win fire read`, hex): a measured
+     * host input, as the stream state of a replayed tick. `hold(null)` lets them tick again. Returns each name's written size or why not. */
+    hold(spec) {
+      heldKind = spec ? spec.kind ?? 'FireTexture' : null;
+      const written = {};
+      for (const [name, hex] of Object.entries(spec?.pixels ?? {})) {
+        const record = [...records.values()].find(r => r.key.split('.').pop().toLowerCase() === name.toLowerCase());
+        if (!record) { written[name] = 'not acquired'; continue; }
+        const pixels = record.state.pixels;
+        if (hex.length !== 2 * pixels.length) { written[name] = `${hex.length / 2} bytes for ${pixels.length}`; continue; }
+        for (let i = 0; i < pixels.length; i++) pixels[i] = parseInt(hex.substr(2 * i, 2), 16);
+        upload(record);
+        written[name] = pixels.length;
+      }
+      return {held: heldKind, written};
     },
     /** Validation (validate-fire-texture-rust): the raw records in
      * acquisition order, the shared module state, and `step(record)`, one
