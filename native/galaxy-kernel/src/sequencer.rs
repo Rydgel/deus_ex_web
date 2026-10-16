@@ -114,6 +114,8 @@ pub(crate) enum Region {
     Events(u16),
     /// An effect sample's Data allocation (effects.rs), by registry index.
     Effect(u16),
+    /// A ring voice's 64 KB ring (ring.rs), by voice slot.
+    Ring(u16),
 }
 
 /// Comparison trace (format in scripts/native-galaxy-music-sequencer-oracle.py).
@@ -163,6 +165,7 @@ pub(crate) struct Player {
     pub fault: u32,
     pub callbacks_done: u32, // callbacks completed without a fault (galaxy_seq_callback_count)
     pub mixer: crate::mixer::Mixer, // the six buses and mixer state (mixer.rs)
+    pub output: crate::output::Output, // the timer callback's heads, staging ring and secondary buffer (output.rs)
 }
 
 impl Player {
@@ -199,6 +202,7 @@ impl Player {
             fault: 0,
             callbacks_done: 0,
             mixer: crate::mixer::Mixer::new(),
+            output: crate::output::Output::new(),
         }
     }
 }
@@ -251,6 +255,7 @@ impl Library {
             Region::PatternHeader(p) => &self.patterns[p as usize].as_ref().unwrap().header,
             Region::Events(p) => &self.patterns[p as usize].as_ref().unwrap().events,
             Region::Effect(i) => &self.effects.samples[i as usize].data,
+            Region::Ring(s) => self.effects.rings[s as usize].as_ref().unwrap(),
         }
     }
 
@@ -586,6 +591,8 @@ impl Library {
                 continue;
             }
             let lparam = self.vd(v, 0x46).wrapping_sub(self.vd(v, 0x52));
+            // PostThreadMessageA(decoder thread, 0x400, v, lparam): handled by ring.rs.
+            self.effects.posts.push_back((v as u32, lparam));
             if let Some(t) = self.player.trace.as_mut() {
                 let mut p = Vec::with_capacity(12);
                 for x in [0x400u32, v as u32, lparam] {

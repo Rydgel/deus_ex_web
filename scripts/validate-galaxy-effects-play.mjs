@@ -31,8 +31,11 @@
  *    mixed) until this harness, in the page's role, answers the decode
  *    request with ffmpeg's 16-bit decode (attachSample). Then the voice table
  *    holds the record with the channel's frequency, volume and pan, the
- *    reported read head advances to the PCM's length, the voice ends on its
- *    own, the channel frees, and the PCM is released (releaseSample).
+ *    voice plays on Galaxy's ring transport (the decoder thread's refills),
+ *    the reported read head advances through the ring to the PCM's length
+ *    past the 4,096-sample head start, the lip-sync window at it holds the
+ *    line, the voice ends on its own, the channel frees, and the PCM is
+ *    released (releaseSample).
  *
  *   node scripts/validate-galaxy-effects-play.mjs [--map 01_NYC_UNATCOIsland] [--frames 600]
  */
@@ -93,10 +96,10 @@ const library = createMusicLibraryProxy((message, transfer) => channel.port2.pos
 channel.port2.onmessage = ({data}) => library.report(data);
 processor.page({type: 'connect', port: channel.port1, effectsChannels: 16, pc: 64, ahead: 176400 - 882 * 4});
 while (!processor.open) await turn();
-// The worklet's render cost per 20 ms callback (host measurement, real time:
+// The worklet's timer callback cost per 20 ms (host measurement, real time:
 // performance.now is the simulated clock here).
-const renderTimes = [], render = processor.kernel.render;
-processor.kernel.render = frames => { const t = process.hrtime.bigint(); const r = render(frames); renderTimes.push(Number(process.hrtime.bigint() - t) / 1000); return r; };
+const renderTimes = [], callback = processor.kernel.callback;
+processor.kernel.callback = (play, write) => { const t = process.hrtime.bigint(); const r = callback(play, write); renderTimes.push(Number(process.hrtime.bigint() - t) / 1000); return r; };
 
 // The page's part for speech: decode requests (script-audio-live.mjs).
 const decodes = [];
@@ -178,7 +181,8 @@ if (paul && ffmpeg) {
   runtime.processNativeEvent(player, 'ClientHearSound', [paul, id, line.sound, runtime.readNamed(paul, 'Location').slice(), [100, 65536, 100]]);
   const channelIndex = galaxy.state.channels.findIndex(c => c.id === id);
   assert.ok(channelIndex >= 0, 'the speech holds a Galaxy channel');
-  speech = {sound: line.sound.key, bytes: line.bytes.length, channel: channelIndex, held: 0, played: 0, positions: [], frames: null, freedAt: null};
+  speech = {sound: line.sound.key, bytes: line.bytes.length, channel: channelIndex, held: 0, played: 0, positions: [], frames: null, freedAt: null,
+    audibleWindows: 0};
   try {
     for (let f = 0; f < 900 && speech.freedAt === null; f++) {
       await frame();
@@ -193,10 +197,10 @@ if (paul && ffmpeg) {
       for (const request of decodes.splice(0)) {
         assert.equal(request.sound, speech.sound, 'the decode request is the line\'s');
         writeFileSync(path.join(dir, 'in.mp3'), request.bytes);
-        execFileSync('ffmpeg', ['-loglevel', 'error', '-y', '-i', path.join(dir, 'in.mp3'), '-f', 's16le', '-ac', '1', '-ar', String(request.rate),
+        execFileSync('ffmpeg', ['-loglevel', 'error', '-y', '-i', path.join(dir, 'in.mp3'), '-f', 's16le', '-ac', String(request.channels ?? 1), '-ar', String(request.rate),
           path.join(dir, 'out.raw')]);
         const pcm = new Uint8Array(readFileSync(path.join(dir, 'out.raw')));
-        speech.frames = pcm.length / 2;
+        speech.frames = pcm.length / 2 / (request.channels ?? 1);
         assert.ok(game.attachSpeech(request.sound, pcm), 'the PCM is attached while the voice waits');
       }
       await settle();
@@ -205,19 +209,25 @@ if (paul && ffmpeg) {
       if (c.id !== id) { speech.freedAt = f; break; }
       if (!c.voice) continue;
       if (processor.kernel.heldSlots().includes(channelIndex)) { speech.held++; continue; }
+      // The read head is the ring's (ring.rs): the line's samples start 0x2000
+      // bytes (4,096 samples) past the read head of the first refill post.
       const position = library.voicePosition(c.voice);
       if (position === null) continue;
       speech.played++;
-      assert.ok(position >= (speech.positions.at(-1) ?? 0) && position <= speech.frames, `read head ${position} within the PCM`);
+      assert.ok(position >= (speech.positions.at(-1) ?? 0) && position < 0x7fff, `read head ${position} within the ring's first lap`);
       speech.positions.push(position);
+      const window = library.voiceWindow(c.voice);
+      if (window && new Int16Array(window.bytes.buffer, 0, window.available).some(v => v !== 0)) speech.audibleWindows++;
     }
   } finally { rmSync(dir, {recursive: true, force: true}); }
   const sample = audio.hostSamples.get(speech.sound), results = processor.kernel.results;
   assert.ok(speech.held > 0, 'the worklet held the start until the decode arrived');
   assert.ok(speech.played > 10, `the voice played through the mixer (${speech.played} frames)`);
-  assert.ok(speech.positions.at(-1) > speech.frames * 0.8, `the read head reached the end (${speech.positions.at(-1)} of ${speech.frames})`);
+  assert.ok(speech.positions.at(-1) > 4096 + speech.frames * 0.8, `the read head reached the end (${speech.positions.at(-1)} of 4096 + ${speech.frames})`);
+  assert.ok(speech.audibleWindows > 0, 'the lip-sync window at the read head held the decoded line');
   assert.notEqual(speech.freedAt, null, 'the voice ended on its own and Update freed the channel');
   assert.equal(sample.rate, 44100, 'the record\'s rate is the MPEG header\'s');
+  assert.ok(processor.stats.refills > 0, 'the decoder thread took refill posts');
   assert.deepEqual([results.hostSamples, results.attaches, results.heldStarts, results.releases], [1, 1, 1, 1],
     'one record, one attach, the held start run, one release');
   assert.equal(sample.host.pcm, null, 'the simulation dropped the PCM with the voice');
@@ -230,6 +240,7 @@ assert.equal(results.sampleLoads, status.samples, 'every registered sample reach
 assert.ok(status.samples > 0, 'some sounds registered');
 assert.ok(results.voiceOps > 0, 'voice ops reached the worklet');
 assert.ok(peak > 0, 'the output is not silent');
+assert.equal(processor.stats.resyncs, 1, 'one resync: the first timer callback');
 starts = startsSeen.size;
 // The listener's zone reverb (UseReverb True in the installed DeusEx.ini):
 // Update hands each changed glxReverb over; on a reverb map the SSE engine is
@@ -260,7 +271,9 @@ const sortedTimes = renderTimes.toSorted((a, b) => a - b), at = q => sortedTimes
 const report = {frames: FRAMES, quanta, callbacks: processor.stats.callbacks, batches: status.batches, reports: status.reports,
   samples: status.samples, sampleBytes: status.sampleBytes, voiceOps: results.voiceOps, voiceStarts: starts, maxActive,
   reverb: {zone: listenerZone?.name ?? null, bReverbZone: zoneReverb, calls: results.reverbCalls, installed: Boolean(reverbState & 1)},
-  renderUs: {median: Math.round(at(0.5)), p99: Math.round(at(0.99)), max: Math.round(sortedTimes.at(-1))},
+  // The first callback is the start-up resync: size − D bytes rendered at once (output.rs).
+  renderUs: {median: Math.round(at(0.5)), p99: Math.round(at(0.99)), max: Math.round(sortedTimes.at(-1)), first: Math.round(renderTimes[0])},
+  resyncs: processor.stats.resyncs,
   channelChecks: checks, heldChecks, speech, activeBeforeReset: before.toString(2), activeAfterReset: afterReset.toString(2), peak: Number(peak.toFixed(4)), underruns: processor.stats.underruns,
   notes: notes.slice(0, 8)};
 console.log(JSON.stringify(report));

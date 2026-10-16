@@ -2,7 +2,8 @@
 
 Row 4.3.7 of [stage-4-exit-criteria](stage-4-exit-criteria.md) ("audible output: the output Galaxy produces for the speakers") is
 `MISSING` and had no plan. This note is the plan. **The user adopted all six recommendations of §7 on 2026-10-16**, so §6 is the row's
-criterion, with check 5 (the speech ring transport) included. Nothing here is implemented yet. It records:
+criterion, with check 5 (the speech ring transport) included. Checks 1, 2, 4 and 5 are implemented and pass; check 3 is not built (§6
+"Status", §5.2). It records:
 
 1. the chain from Galaxy's mixer to the speakers, in the original and in Play, with the status of each stage (§1);
 2. what was traced in Galaxy.dll for it on 2026-10-16 (§2: read from code with capstone, **not** oracle-checked);
@@ -32,7 +33,7 @@ not checked against the original; **H** host by nature (an OS, driver, browser o
 | 6 | The timer callback `0x106142a0` (winmm `timeSetEvent`, every Latency/2 = 20 ms): DirectSound cursors, the two ring heads A `0x10697cd4` and B `0x10697cd8`, the fill count `ahead` `0x10697cdc`, the start-up resync, the Lock/copy/Unlock | [mixer](galaxy-music/mixer.md) §1.3, §2.2 below | **U**. Play renders 882 frames whenever its ring holds less than a 128-frame quantum, at coincident heads |
 | 7 | The cursor schedule: how far the play cursor moved in each 20 ms (the bytes R each callback renders), and the write cursor's lead over the play cursor at the first callback | §3.1 | **H** (timer jitter, the DirectSound implementation's cursor granularity and write lead) |
 | 8 | The renderer `0x106146a0`, the mixer `0x10614920` (segmenting, sequencer tick, envelopes, refill posts), the SSE kernel `0x10622730`, the reverb hook `0x10622d33`, the conversions `0x10622fe4` (bus A stored, bus B saturating-added) | [mixer](galaxy-music/mixer.md) §1.4–§2.6, §8 | **O2** (rows 4.3.2–4.3.4; `render_ring` against the original renderer with bus B half a ring ahead, `render` at coincident heads) |
-| 9 | Ring voices (streamed, compressed or stereo records): glxStartSample's ring branch `0x10612562..0x1061258f`, the refill posts `0x106151f5`, the decoder thread's ring logic | §2.3, §2.4 | **U**. Play plays speech through the non-ring branch from a stand-in record (`effects.rs` `host_sample`), **T** |
+| 9 | Ring voices (streamed, compressed or stereo records): glxStartSample's ring branch `0x10612562..0x1061258f`, the refill posts `0x106151f5`, the decoder thread's ring logic | §2.3, §2.4 | **O2** since 2026-10-16 (check 5), with the MPEG decoder as a PCM leaf; the record's source is the browser's decode (`effects.rs` `host_sample`, labelled) |
 | 10 | Hardware 3D voices (`0x10612800`, `0x106126f0`, the A3D/EAX open) | §2.6 | **U**, unreachable on the reference machine (§2.6) |
 | 11 | The output buffer: Galaxy's 176,400-byte staging ring `[0x10697ccc]` copied into a 1 s DirectSound secondary buffer `[0x10697cc8]`, 44,100 Hz, 16-bit, stereo, flags `GLOBALFOCUS | GETCURRENTPOSITION2`, looping | [mixer](galaxy-music/mixer.md) §1.2 | the boundary of "the output Galaxy produces". Galaxy never calls SetVolume, SetPan or SetFrequency on the buffer (§2.2) |
 | 12 | DirectSound's mixing of the buffer into the device format (kmixer on XP, WASAPI shared mode on Vista and later, Wine's dsound on the reference machine), resampling, the driver and the DAC | | **H** |
@@ -43,18 +44,20 @@ not checked against the original; **H** host by nature (an OS, driver, browser o
 | --- | --- | --- | --- |
 | P1 | Update, PlaySound and the library calls on the simulation side (worker, or the page with `?sim=inline`) | `src/runtime/galaxy-audio.mjs`, `galaxy-music-library.mjs` | **O2** as row 1 |
 | P2 | Batches over a MessagePort to the worklet, applied whole between callbacks | `galaxy-music-library.mjs`, `src/viewer/galaxy-music-worklet.mjs` | **H** |
-| P3 | The kernel in the worklet: `galaxy_render(882)` = the mixer, then bus A stored and bus B added onto the same frames | `native/galaxy-kernel/src/mixer.rs` `render`, `host.rs` | **O2** for the frames it renders; the placement is the original's resync placement used for every callback (§3.1) |
+| P3 | The kernel in the worklet: the translated timer callback (`output.rs`) every 882 frames of consumption, with play = the consumption position and write = play + `WRITE_LEAD` (since 2026-10-16; before, `galaxy_render(882)` at coincident heads) | `native/galaxy-kernel/src/output.rs`, `mixer.rs` `render_ring`, `host.rs` | **O2** (check 1: the callback; check 4: the worklet plays its buffer, music size − D after effects). D's host part is the measured `WRITE_LEAD` 1,764 (§5.1, check 2), a labelled host input |
 | P4 | Speech PCM: the page's `OfflineAudioContext(1, 1, rate).decodeAudioData`, channel 0, `pcm16` (round half up, clamp), attached to the stand-in record; the start waits for the decode | `src/viewer/main.mjs` `decodeSpeech`, `galaxy-lipsync-channels.mjs` `pcm16` | substitute, **T**; content excluded with 4.5.6 |
-| P5 | The worklet's ring: 2,048 frames, int16 / 32768 into float32, 128-frame quanta | `galaxy-music-worklet.mjs` `render`, `process` | **H** (exact conversion; the latency is the host's) |
+| P5 | The worklet reads the secondary buffer at its play cursor: int16 / 32768 into float32, 128-frame quanta split at each callback | `galaxy-music-worklet.mjs` `process` | **H** (exact conversion; the latency is the host's) |
 | P6 | The AudioContext at 44,100 Hz (refuses any other rate), its destination, the browser's resampler when the device runs at another rate, the OS mixer, the device | `galaxy-music-output.mjs`, `main.mjs` | **H** |
 
 No stage is "translated but unchecked" apart from the speech stand-in (P4 and row 9's substitute). Everything Play computes between the
-library calls and the int16 frames is the original's code, oracle-checked; what differs is **where in time** those frames go (rows 6, 7, 9)
-and the speech PCM (row 3).
+library calls and the int16 frames is the original's code, oracle-checked; since 2026-10-16 that includes where the frames go (row 6,
+checks 1 and 4) and the ring voices (row 9, check 5); D's host part (row 7) is measured and pinned (check 2); what differs is the cursor
+schedule (host) and the speech PCM (row 3).
 
 ## 2. Galaxy.dll traces of 2026-10-16
 
-Read from the disassembly (capstone over the hash-pinned DLL, a scratch helper outside Git); none of this has been run under the oracle yet.
+Read from the disassembly (capstone over the hash-pinned DLL, a scratch helper outside Git). §2.2 has since been run under the
+oracle (check 1, below); §2.3 and §2.4 are check 5's.
 
 ### 2.1 The output is opened once per session
 
@@ -72,6 +75,13 @@ is using DirectSound", "Galaxy initialized", then three "Galaxy SetViewport: Win
 LoadMap) and no "Safely failed to initialize Galaxy".
 
 ### 2.2 The timer callback `0x106142a0`
+
+**Settled by the oracle (2026-10-16, check 1 `galaxy-output-callback`):** the callback is translated
+(`native/galaxy-kernel/src/output.rs`) and bit-equal with the original under Unicorn over 17 cases and 405 callbacks, 352 of 352
+instructions covered ([mixer](galaxy-music/mixer.md) §9). Everything below holds; the oracle added that GetCurrentPosition failing
+skips the whole callback, that the `A == B` re-seat runs at every callback (not only the first), that the resync's Lock copies
+`size` bytes whatever the returned length, that a failed Lock skips only that head's copy (the heads still advance by R), and that
+`ahead` stays at `size` after the first callback, so only the first callback and `MUSICORDER` reach the resync.
 
 The disassembly confirms [mixer](galaxy-music/mixer.md) §1.3 and adds:
 
@@ -107,6 +117,12 @@ The disassembly confirms [mixer](galaxy-music/mixer.md) §1.3 and adds:
 
 ### 2.3 Ring voices: start, refill, end
 
+**Settled by the oracle (2026-10-16, check 5 `galaxy-ring-voice`):** translated (`native/galaxy-kernel/src/ring.rs`) and bit-equal with
+the original over 14 cases ([galaxy-audio](galaxy-audio.md) "Speech on Galaxy's ring transport"). The reading below holds, with two
+corrections: the end is set only when the read head is below the write position, so a line longer than the first fill plays up to a
+further ring lap of zeros before Active clears (0.61 s on a 100,000-frame line); and the mixer's ring loop is 32,767 samples against
+the decoder's 32,768, so one decoded sample is skipped every lap after the first.
+
 * **Start** (glxStartSample, Type `& 0xe000` or `& 0x40`): `malloc(0x1001f)`, 64 KB zeroed (`0x106124e9..0x10612502`); Type `|= 0x88`
   (looped, loop always); loop start = start, loop end = end = start + 0x7fff samples; the write position `V+0x88 = 0x10000` (a sentinel),
   the source offset `V+0x8c = 0`, `V+0x90 = V+0x94 = 0x10000` (`0x10612562..0x1061258f`). No decode and no message at the start: the voice
@@ -126,6 +142,9 @@ The disassembly confirms [mixer](galaxy-music/mixer.md) §1.3 and adds:
   thread works in bytes, the voice's positions are in samples for 16-bit data (`shr 1`).
 
 ### 2.4 The MPEG loader's record type, and the stereo lines
+
+**Settled (check 5):** the pair, its Link and one post feeding both rings run as read; Play now decodes both channels and starts the
+pair (`decodeSpeech`, the record 0x4044).
 
 `0x10620ccc..0x10620cff`: the record's Type is `0x4024` (streamed, panning, 16-bit) for a mono MPEG stream and `0x4044` (streamed,
 **stereo**, 16-bit) for any other mode (the `sub 3; neg; sbb; and 0x20` on the header's mode). Panning `0x4000`, volume `0x7fff`, rate
@@ -159,11 +178,13 @@ that instant. On the reference machine that lead is **Wine's dsound's**, not a W
 0.96 s minus the lead) after effects rendered at the same time, which also means about 1 s between an Update that changes the song or
 section and the change being heard.
 
-**Play.** `galaxy_render(882)` places both buses on the same frames (the original's resync placement, kept for every callback), so music
-and effects rendered together sound together, and an Update's change sounds after the worklet's ring plus the browser's output latency (tens
-of milliseconds). The worklet could reproduce the placement exactly: keep a 176,400-byte staging ring, take the worklet's consumption
-position as the play cursor and play + D − 7,056 as the write cursor, and run the translated callback (§6, check 1) around the existing
-`render_ring`. Effects would then be D later than now, music about 1 s later.
+**Play (since 2026-10-16).** The worklet keeps the 176,400-byte staging ring and the secondary buffer (`output.rs`), takes its own
+consumption position as the play cursor and play + `WRITE_LEAD` as the write cursor (D = 7,056 + `WRITE_LEAD`), and runs the translated
+callback every 882 frames; its output is the buffer at the play cursor. `validate-galaxy-output-play.mjs` (check 4) shows the output equals a
+reference loop on a second kernel instance frame for frame, that it is the staging ring at the cursor after every callback, and that an effect
+started in the batch of a song change sounds size − D bytes before the song's first frame (leads 0 and 1764). `WRITE_LEAD` is 1,764 (`galaxy-music-worklet.mjs`), CrossOver's lead as §5.1 measured it (D = 8,820). Before, `galaxy_render(882)` placed both buses on the same
+frames (the resync placement for every callback). The first callback's resync renders size − D bytes at once (about 8 ms of the audio thread,
+on the buffer's silent start); a `MUSICORDER` resync does the same while playing and can glitch the browser's output once.
 
 **Routes.**
 
@@ -215,11 +236,11 @@ not use.
 
 | Item | Original | Play | Route |
 | --- | --- | --- | --- |
-| The cursor schedule (R per callback) | Host: the play cursor's granularity (Wine mixes in periods) and timer jitter; the PCM depends on the call boundaries ([mixer](galaxy-music/mixer.md) §5) | Fixed 882-frame callbacks | Poll (§5.1) records R; capture (§5.2) records it for replay. Keep host |
-| The timer thread's MXCSR (0x1f80 assumed) | Windows/Wine thread default; Galaxy has no `ldmxcsr` | 0x1f80 | GetThreadContext with `CONTEXT_EXTENDED_REGISTERS` on the game's threads in §5.1 (whether Wine fills the FXSAVE area for that flag is unverified) |
-| The pan table's precision (`[0x10698390]`, 64 KB, built at Init after D3D's setup) | PC 24, 53 or 64 give different tables ([mixer](galaxy-music/mixer.md) §4) | PC 64 (`MUSIC_PAN_PC`) | One read of the table in §5.1 against the three variants: exact |
+| The cursor schedule (R per callback) | Host. **Measured (§5.1):** the play cursor moves in 2,048-byte steps (Wine's dsound mixes 512-frame periods), so R is 2,048, 4,096 or 6,144 bytes (4,096 two times in three), at a median interval of 20.0 ms (16.7 to 61.4 ms) | Fixed 882-frame callbacks | Kept host (§7 item 6); the capture (§5.2) would record it for replay |
+| The timer thread's MXCSR | **Measured (§5.1): 0x1f80** on every thread but the game thread (the three TIME_CRITICAL threads, the winmm timer's among them; Wine fills the FXSAVE area) | 0x1f80 | Settled |
+| The pan table's precision (`[0x10698390]`, 64 KB, built at Init) | **Measured (§5.1): the PC 53 variant** word for word (PC 64 differs at `T[0x7fff]`): the game thread's control word at Galaxy Init is the Windows default 0x027f | PC 53 (`MUSIC_PAN_PC`, changed from 64 on 2026-10-16) | Settled |
 | The heap behind the mixer's two hazards (reads before a sample, negative run counts) | Real heap contents | The bump-heap model | Only a live heap dump; rare songs; leave open |
-| The DirectSound or WinMM path, the kernel taken | DS expected (`[0x10698178] = 1`), SSE kernel (`[0x10697cfc]`) | DS-shaped, SSE | §5.1 reads both |
+| The DirectSound or WinMM path, the kernel taken | **Measured (§5.1):** DirectSound (`[0x10698178] = 1`), format bits 7, SSE kernel (mode 0x47; MMX 1, SSE 1, 3DNow 0), 3D type 0 and the subsystem's `+0x74` 0 | DS-shaped, SSE | Settled |
 
 ## 4. Census of the shipped sound formats
 
@@ -248,7 +269,21 @@ tracer run with `$DX_WINE` (Mac: `CX_BOTTLE=DeusEx /Applications/CrossOver.app/C
 `WINEPREFIX=~/.wine-deusex wine`). Store the results under `.work/audio-output/` (outside Git). Resolve Galaxy.dll's load base in the
 process (as the tracer does for Core and Engine) and rebase every address below.
 
-### 5.1 `dx-live-win.exe galaxy poll <count> <interval_ms>` (new mode, read-only)
+### 5.1 `dx-live-win.exe galaxy poll <count> <interval_ms> <prefix>` (read-only; built and run 2026-10-16)
+
+**Run and stored.** `scripts/galaxy-output-capture.sh` (the bottle "DeusEx", under the lock): 00_Training at its first frame, `galaxy poll
+3000 1`, a console `open 00_Training`, the poll again. Stored with the gate's originals in the main checkout's `.work/audio-output/`
+(`training-load{1,2}.{json,pan.bin,poll.txt}`, outside Git). The player and its XLevel differ between the two polls (JCDentonMale0 at
+0x04a8a000, JCDentonMale1 at 0x04a88c00): the load happened. Results, the same in an earlier launch: **D = 8,820 bytes in all 6,000
+samples, across the map load**, so the write lead is 1,764 bytes (441 frames, 10 ms; Play's `WRITE_LEAD`); WAVEFORMATEX PCM, 2 channels,
+44,100 Hz, 176,400 bytes/s, block 4, 16-bit; DirectSound, format bits 7, the open flag 1, kernel mode 0x47 (the SSE row), Latency 40,
+16 effect slots; no 3D (type 0, `+0x74` 0); the pan table the PC 53 variant; MXCSR 0x1f80 on the other threads (the game thread's control
+word was 0x007f when sampled inside Render.dll, its MXCSR 0x1fa4: control 0x1f80 with sticky flags); R and the intervals as in §3.5;
+`ahead` 176,400 between callbacks (lower values are reads inside a callback, between its subtraction and its render). The decoder
+thread is the one at priority 2 (HIGHEST) inside `win32u.dll` (GetMessageA). `validate-galaxy-output-poll.mjs` (check 2) reads the
+store and fails if Play's constants differ.
+
+The plan as written:
 
 Like `strobe poll`: no debugger, ReadProcessMemory with QPC timestamps. Per sample: `size [0x10697cd0]`, `A [0x10697cd4]`, `B [0x10697cd8]`,
 `ahead [0x10697cdc]`, the likely frames counter `[0x10698194]`, `cnt1 [0x10698204]`, `cnt2 [0x1069834c]`. Once, at the start: WAVEFORMATEX (18
@@ -291,6 +326,33 @@ Replay (a new validator): the translated library opened as the snapshot says, th
 name, the logged ops applied in order between callbacks, and each callback run by a Rust translation of `0x106142a0` fed the logged
 `(play, write)`; every copied byte and position compared with the log. The breakpoints slow the game: the schedule is whatever it was, and
 it is recorded.
+
+**Not built (2026-10-16), and the design above needs these changes first.** Checks 1, 2, 4 and 5 now exist; this capture and check 3 do
+not. What the translation now shows a replay needs:
+
+* **No snapshot.** The Rust library cannot restore itself from a raw globals block (`0x10697c00..0x10698400`), the voice table and the
+  music player's state: those are typed fields, patterns and instruments, not one image. Trace instead **from the process launch**: start
+  DeusEx.exe under the debugger (or attach at the `LOAD_DLL_DEBUG_EVENT` of Galaxy.dll), so the record begins before glxInit, and the
+  replay starts from `Library::new`, `setup_output` and `open_output` with nothing to restore. The window is then the launch to 00_Training
+  plus 30 s.
+* **Inputs as bytes, not names.** Dump every glxLoadSample input (RegisterSound's `{'MEMO', 0xc, Data, Num}` bytes) and every glxLoadMusic
+  input (the module and its 1024-byte slack, which Update fills from the UMusic) with the handle it returned; the replay maps each
+  original handle to the model's by load order. No registry walk.
+* **The decoder's output.** Speech in the window plays through Galaxy's MPEG decoder (row 4.5.6, excluded). Record, per `0x1061a690` call,
+  its Consumed and Produced and the bytes it wrote at Dest1 and Dest2, so the replay's PCM leaf (ring.rs) is fed the original decoder's
+  own output and the ring bytes can match.
+* **The decoder thread's events.** Its message handling is not under the library lock: record each handled message (wParam, lParam)
+  where it falls between callbacks, and deliver it there in the replay (ring.rs's "after the callback that posted it" is the host model
+  Play uses; the replay should not assume it).
+* **Hashes in the tracer.** Copying `[A, A+R)` and `[B, B+R)` out of the game for every callback is about 400 KB/s; hash each segment
+  in the tracer (a 64-bit FNV-1a over the bytes, the same in the validator) and dump whole segments only for the first callbacks and
+  the resyncs.
+* **Breakpoint placement.** Each library entry's breakpoint goes after its own EnterCriticalSection returns (so the game thread's calls
+  order correctly against the timer thread's); Update's inline stores (`0x1060a83d` voice `+0x0f`, `0x1060a88d` the break flag) are
+  inside Update's own critical section.
+* **A scene to avoid or label:** a stereo line (one of the four) whose next slot is restarted with a WAV while the pair's first voice
+  plays: the original then writes the second channel through the stale Link into that WAV's data (`HAZARD_RING_FOREIGN_WRITE`, not
+  modelled).
 
 ### 5.3 Loopback (optional, confirmation only)
 
@@ -340,6 +402,13 @@ SSE, confirmed by §5.1).
 
 Until checks 1 to 5 pass the row stays `MISSING`; its text names the two-head placement, the ring transport and the capture as the
 missing parts.
+
+**Status (2026-10-16, branch `claude/galaxy-output-437-5085f1`):** check 1 passes (`validate-galaxy-output-callback.mjs`: 17 cases, 405
+callbacks, 809 Locks, 352 of 352 instructions, bit-equal); check 2 passes (`validate-galaxy-output-poll.mjs`: D = 8,820 bytes in every
+sample of two polls across a map load, Play's constants equal, `MUSIC_PAN_PC` changed from 64 to 53 on that evidence); check 4 passes
+(`validate-galaxy-output-play.mjs`); check 5 passes (`validate-galaxy-ring-voice.mjs`: 14 cases, 2,631 decoder messages, bit-equal).
+Check 3 (`galaxy-output-replay`) is not built: §5.2 above. The row stays `MISSING`; the two-head placement and the ring transport are no
+longer missing, the capture and its replay are.
 
 ## 7. Decisions (adopted 2026-10-16)
 

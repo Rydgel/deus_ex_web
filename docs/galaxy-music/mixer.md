@@ -217,7 +217,8 @@ underrun resync.
 Corroboration: music control `0x1060d0e0` mode 1 sets `0x10697cdc = 0`
 (`0x1060d193`, reached from `0x106071a8`). That forces the step-5 resync, which drops
 the pre-buffered music. This only makes sense if music is buffered about 1 s deep.
-**Unmeasured. See §7.**
+**Unmeasured. See §7.** The callback itself is now translated and oracle-checked (§9); D
+is the open measurement (audio-output-scope.md §5.1).
 
 The WinMM callback `0x10618100` has the same structure: `waveOutGetPosition`, the
 same `A` / `B` / `ahead`, two `0x106146a0` calls (`0x10618213`, `0x10618241`), and no
@@ -583,8 +584,12 @@ add whatever the previous MMX code left there (`0x10623009..0x1062301a`).
 1. **Two-head placement and the music delay** (§1.3) is read from code and
    unmeasured. Confirm by recording.
 2. **The live sqrt table variant** (PC 24/53/64) depends on the game thread's control
+   word at Galaxy Init. *Measured 2026-10-16 (audio-output-scope.md §5.1): the running
+   original's table is the PC 53 variant (control word 0x027f at Init); the timer thread's
+   MXCSR is 0x1f80.* As first written:
    word at Galaxy Init. Also the timer thread's MXCSR (assumed `0x1f80`).
-3. **Whether the CrossOver/Windows open takes the DS path** (EMULDRIVER, primary
+3. *Measured 2026-10-16: the CrossOver open takes the DS path (`[0x10698178] = 1`, the
+   SSE kernel, mode 0x47).* **Whether the CrossOver/Windows open takes the DS path** (EMULDRIVER, primary
    `SetFormat` acceptance). Init's probe passed; the open was not observed.
 4. **Envelope pass `0x10614a42..0x1061517f` and sequencer tick `0x10615710`**: module
    voices only. Hand-off to agent C:
@@ -602,8 +607,10 @@ add whatever the previous MMX code left there (`0x10623009..0x1062301a`).
    * `V+0x4c` bits: 4 = 16-bit, 8 = loop, 0x10 = ping-pong, 0x80 = loop always,
      0x40 = pair, 0x2000 / 0x4000 / 0x8000 = decoded or streamed.
 6. **Decoder-thread race:** refills are posted once per sequencer tick (about 10.4 ms
-   at the default tempo 120 with `0x10698342 = 48`). Whether the decoder always stays
-   ahead of the mixer is not established; lip-sync.md assumes it.
+   at the default tempo 120 with `0x10698342 = 48`). The ring logic is translated and
+   oracle-checked (galaxy-audio.md "Speech on Galaxy's ring transport"): each message
+   fills up to the read head, so the decoder is a ring ahead once two messages ran; the
+   thread's scheduling on the reference machine is host timing.
 7. **`V+0x0c` bit 7** (likely note-off) and `V+0x4c & 0x80` semantics need agent C's
    writers.
 8. **Not read:** the 3DNow and MMX kernels in detail; the x86 kernel beyond its
@@ -855,10 +862,11 @@ live-capture technique):
 
 ### 8.5 Open
 
-* The timer thread's MXCSR on the reference machine. 0x1f80 is assumed (the
-  Windows default; Galaxy has no `ldmxcsr`).
-* The bus placement (§1.3, music about 1 s behind effects) and the
-  CrossOver open path (§6.1, §6.3).
+* ~~The timer thread's MXCSR on the reference machine.~~ Measured 0x1f80
+  (audio-output-scope.md §5.1).
+* ~~The bus placement (§1.3) and the CrossOver open path (§6.1, §6.3).~~ The
+  callback is oracle-checked (§9) and D measured: 8,820 bytes (§5.1 of the
+  scope), the DS path and the SSE kernel taken.
 * The real heap's contents next to sample allocations
   (`HAZARD_FOREIGN_READ`) and the block adjacency behind
   `HAZARD_BUS_UNDERRUN`.
@@ -893,3 +901,109 @@ NATIVE_PROBE_PYTHON=.cache/native-probe-env/bin/python node scripts/validate-gal
 The oracle outputs (about 25 s to produce) are cached in
 `.cache/galaxy-music/mixer` and keyed by the oracle scripts and the case
 list. The host-CPU check builds `.cache/galaxy-music/mixer/hw/galaxy-mixer-hw`.
+
+## 9. The DirectSound timer callback, translated (2026-10-16)
+
+`0x106142a0..0x10614693` is translated in `native/galaxy-kernel/src/output.rs`
+(`output_callback`) around the existing renderer (`render_ring`, §8) and checked
+against the original under Unicorn by `scripts/validate-galaxy-output-callback.mjs`
+(Stage 4 gate row 4.3.7, check 1, [audio-output-scope](../audio-output-scope.md) §6).
+
+### 9.1 What the disassembly settles
+
+Read with capstone over the hash-pinned DLL, then run under the oracle (§9.2). It
+confirms §1.3 and adds:
+
+* **Signature.** stdcall with the five dwords of a winmm `TIMECALLBACK` (`ret 0x14`),
+  all unused. The first gate is the open flag `[0x10698394]` (`0x106142a3..0x106142aa`,
+  return without the lock).
+* **The 3D poll `0x106126f0`** walks the effect slots: for a slot with `V+0x88 ≠ 0` and
+  `V+0x11 & 4`, a status query through the hardware buffer when the 3D type
+  `[0x1069817a]` is 2, 3, 4 or 5 (`0x10612725..0x10612736`); with type 0 (the reference
+  machine) nothing happens. `V+0x88` is also a ring voice's write position (§2.3 of the
+  scope); its `0x10000` sentinel passes the first test and `V+0x11 = 8` drops it.
+* **GetCurrentPosition failing** (`jne 0x10614681`) skips everything: no render, no
+  head or `ahead` change, straight to LeaveCriticalSection.
+* **The cursor arithmetic** (`0x106142e1..0x1061433a`): `mask = ~((dword[0x1067b6e4] &
+  0xffff) − 1)` (nBlockAlign; the dword read also holds wBitsPerSample, masked off),
+  `play = (play mod size) & mask`, `target = ((write mod size) + L) mod size & mask`
+  with `L = hi32((nAvgBytesPerSec · Latency) · 0x10624dd3) >> 6` (the product is a
+  32-bit `imul`). All divisions unsigned.
+* **The re-seat** `A == B → A = play, B = target` runs at **every** callback, not only
+  the first: coincident heads (an empty resync, below) are seated again.
+* **`ahead` is signed**: `ahead −= min(lenA, lenB)` (`cmp; jl` signed), resync when
+  `ahead ≤ 0` (`test; jg`).
+* **The resync** (`0x10614387..0x10614471`): `n = (A − B) mod size`, `ahead = (B − A)
+  mod size`, `render(staging, size, B, B, n, n)` (its result discarded), then
+  `Lock(0, size, &p1, &b1, NULL, NULL, DSBLOCK_ENTIREBUFFER)` and a copy of **`size`
+  bytes** from the staging ring's start into `p1` whatever `b1` says, then
+  `Unlock(p1, b1, NULL, 0)`. The staging bytes in `[A, B)` are not rendered by it: the
+  whole-buffer copy carries what was there (the open's silence at the first callback,
+  stale music and effects after a `MUSICORDER` resync). The callback then **continues**
+  into the normal render (`0x10614484`) unless `ahead` is 0 (`je 0x10614681`: only when
+  `A == B`, which renders nothing).
+* **The normal render**: `R = render(staging, size, A, B, lenA, lenB)`, then for A and
+  then B `Lock(head, R, &p1, &b1, &p2, &b2, 0)`, a copy of `b1` bytes from `staging +
+  head` into `p1` and of `b2` bytes from **`staging + 0`** into `p2` (the callback relies
+  on DirectSound's split at the buffer's end), `Unlock(p1, b1, p2, b2)`. At the first
+  callback `lenA = lenB = 0`, so R = 0 and both zero-length Locks and Unlocks are still
+  issued.
+* **Lock failures.** `DSERR_BUFFERLOST` (`0x88780096`) → `Restore` (`+0x50`), `Play(0, 0,
+  DSBPLAY_LOOPING)` (`+0x30`), Lock again, once. Any other failure, or a second failure,
+  skips that head's copy and Unlock; **the heads still advance by R**
+  (`0x10614657..0x1061467b`). Unlock's and Play's results are never read.
+* **No other method** of the secondary buffer is called (vtable `+0x10`, `+0x2c`, `+0x30`,
+  `+0x4c`, `+0x50`; the oracle fails a case on any other entry).
+* Consequence for `ahead`: after the first callback it is `size` (the resync sets it to
+  D, the resync's render adds `size − D`), and each callback subtracts `min(lenA, lenB)`
+  and the render adds the same (both multiples of nBlockAlign). It stays at `size`, so a
+  cursor jump can never make it `≤ 0`: only the first callback, `glxControlMusic(1, n)`
+  (`MUSICORDER`, `ahead = 0`) and the dead `0x1060deb0` reach the resync.
+
+### 9.2 Evidence
+
+`scripts/native-galaxy-output-oracle.py` extends the effects oracle (`--real-kernel`
+state, the sample entries; §8.1) with the state the output open leaves:
+`[0x10697cc8]` a fabricated IDirectSoundBuffer, the staging ring `[0x10697ccc]`
+silenced, `[0x1064a65c]` the latency (40, the `.data` value), and `[0x10698394] = 1`
+(the open's last store `0x10613aca`, which the sequencer oracle's open tail stops short
+of). The callback owns A, B and `ahead` from the open tail's zeros. The fabricated
+buffer's five methods are Python leaves that answer a scripted cursor pair and Lock
+result and the DirectSound split of a looping buffer (the same host model as
+`output.rs` `Secondary`: ENTIREBUFFER the whole buffer, a range past the end a second
+region at 0, `offset ≥ size` or `bytes > size` `DSERR_INVALIDPARAM`; Wine's
+`IDirectSoundBufferImpl_Lock` behaviour as recalled, **not measured**, and unable to
+change the bytes for the ranges Galaxy asks for).
+
+`node scripts/validate-galaxy-output-callback.mjs`: 17 cases, 405 callbacks, 26
+resyncs, 809 Locks (21 split at the end, 11 `DSERR_BUFFERLOST`), every one bit-equal:
+per callback, every call on the buffer with its arguments and results, A, B, `ahead`,
+R, and digests of the secondary buffer and the staging ring (every copied byte), with
+the mixer trace (M/R/K/U/T) and the end state between them, and the full secondary
+buffer after each of the first 24 callbacks. Cases: the first callback (silent, and with
+music and three effect voices), 80 steady callbacks with jittered cursors and write
+leads, both heads wrapping with odd and out-of-range cursors (`% size`, the mask),
+cursor jumps of more than one and two rings, write leads that make lenA ≠ lenB,
+`DSERR_BUFFERLOST` on each Lock (once, twice, on the resync's Lock), `DSERR_INVALIDPARAM`,
+GetCurrentPosition failing, `MUSICORDER 2` and `0` with Intro_Music and effect voices
+playing, an underrun from a fabricated small `ahead`, coincident cursors (`target =
+play`: the empty resync and the re-seat), the closed output, latencies 5, 250 and 495,
+and four seeded random programs. Coverage of `0x106142a0..0x10614693`: 352 of 352
+instructions. Mutants 401 (no cursor mask), 402 (the resync returns), 403 (`ahead`
+tested unsigned), 404 (no BUFFERLOST retry) and 405 (re-seat only at the first
+callback) are each caught.
+
+### 9.3 Interface
+
+* `Library::open_output(rate, latency)`: the DirectSound setup after the open's tail
+  (latency clamp and store, ring size = nAvgBytesPerSec, the 1-second secondary buffer
+  zeroed, the staging ring silenced, heads and `ahead` zeroed). `galaxy_host_open`
+  calls it at Latency 40; `galaxy_output_open(latency)` reopens at another.
+* `galaxy_output_callback(play, write)`: one callback with GetCurrentPosition answering
+  the pair; 0 or the fault. `galaxy_output_secondary()` the buffer's bytes (what the
+  host plays); `galaxy_output_state(i)`: 0 size, 1 A, 2 B, 3 `ahead`, 4 the last R
+  (`0xffffffff` when no normal render ran), 5 callbacks.
+* Validator only: `galaxy_output_staging`, `galaxy_output_position_result`,
+  `galaxy_output_lock_result`, `galaxy_output_log*`.
+* Faults: 0x140 a copy outside the staging ring or the buffer, 0x141 a ring size of 0
+  or odd, 0x142 (reserved) a hardware 3D type.

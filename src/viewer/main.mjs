@@ -331,15 +331,18 @@ function stopGalaxyVoices(){
 /** A speech sound's 16-bit PCM for the simulation (script-audio-live.mjs
  * asks with an `op: 'decode'` voice event): the browser's MP3 decode at the
  * MPEG header's rate (an OfflineAudioContext at that rate, so not resampled;
- * Galaxy's own MPEG decoder is not translated), through pcm16. The same PCM
- * feeds Galaxy's speech voice and its lip-sync analysis. A failed decode
+ * Galaxy's own MPEG decoder is not translated), through pcm16, both channels
+ * interleaved for a stereo stream. The same PCM feeds Galaxy's ring voices
+ * and so its lip-sync analysis. A failed decode
  * answers an empty PCM, so the voice plays nothing and finishes. */
 async function decodeSpeech(event){
   speechDecode.requests++;speechDecode.lastSound=event.sound;
   let pcm;
   try{
-    const offline=new OfflineAudioContext(1,1,event.rate),bytes=event.bytes;
-    pcm=pcm16((await offline.decodeAudioData(bytes.buffer.slice(bytes.byteOffset,bytes.byteOffset+bytes.byteLength))).getChannelData(0));
+    const channels=event.channels===2?2:1,offline=new OfflineAudioContext(channels,1,event.rate),bytes=event.bytes;
+    const decoded=await offline.decodeAudioData(bytes.buffer.slice(bytes.byteOffset,bytes.byteOffset+bytes.byteLength));
+    // A stereo stream (the record 0x4044) as interleaved frames, the second channel repeated if the decode has one.
+    pcm=channels===2?pcm16(decoded.getChannelData(0),decoded.getChannelData(Math.min(1,decoded.numberOfChannels-1))):pcm16(decoded.getChannelData(0));
     speechDecode.decoded++;
   }catch(error){pcm=new Uint8Array(0);speechDecode.failures++;speechDecode.lastError=String(error?.message??error);}
   if(simClient)simClient.queue({op:'speech-pcm',sound:event.sound,pcm});
@@ -371,20 +374,23 @@ if(musicOutput)for(const type of ['pointerdown','keydown'])
   document.addEventListener(type,()=>{if(infoLinkAudioContext?.state!=='running')activateInfoLinkAudio().catch(()=>{});},true);
 /** Galaxy's EffectsChannels from DeusEx.ini, clamped to 0..32 as the
  * subsystem's Init (0x10605580) does; the worklet opens the library with it. */
-async function readEffectsChannels(files){
+async function readGalaxyOutputConfig(files){
   const file=files.find(entry=>String(entry.path).replaceAll('\\','/').split('/').pop().toLowerCase()==='deusex.ini');
   if(!file)throw new Error('DeusEx.ini is not among the game files');
   const data=await file.read(),text=new TextDecoder('latin1').decode(data instanceof Uint8Array?data:new Uint8Array(data));
   const value=parseIniValue(text,'Galaxy.GalaxyAudioSubsystem','EffectsChannels');
   if(value===undefined)throw new Error('Galaxy EffectsChannels is not in DeusEx.ini');
-  return Math.max(0,Math.min(32,msvcrtWtoi(value)));
+  // Latency as script-audio-live.mjs reads it (0x10605ad0's clamp to 10..250).
+  const latency=parseIniValue(text,'Galaxy.GalaxyAudioSubsystem','Latency');
+  return {effectsChannels:Math.max(0,Math.min(32,msvcrtWtoi(value))),
+    latency:latency===undefined?40:Math.max(10,Math.min(250,msvcrtWtoi(latency)))};
 }
 /** A new simulation side's music library: the worker gets its end of the
  * channel; ?sim=inline keeps one library on the page for its lifetime. */
 async function connectMusic(files){
   if(!musicOutput)return;
   try{
-    musicOutput.configure({effectsChannels:await readEffectsChannels(files)});
+    musicOutput.configure(await readGalaxyOutputConfig(files));
     if(simClient)simClient.connectMusic(musicOutput.simulationPort());
     else if(!pageMusicLibrary)pageMusicLibrary=connectMusicLibraryPort(musicOutput.simulationPort(),{effects:true});
   }catch(error){musicError=String(error?.message??error);}

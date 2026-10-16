@@ -179,14 +179,17 @@ These are real-time in the original and differ run to run there too:
   44100, since the default context resamples) and converts to 16-bit; the
   decoder's output and rounding are unverified against Galaxy's. Galaxy's
   mixer plays the same PCM.
-* the mixer position at each update: Galaxy's voice read head as the
-  worklet reports it (voice `+0x46` minus `+0x4e`, the samples the mixer
-  has passed; reported with the Active bits after each 20 ms callback), or
-  the host voice's clock (elapsed time × frequency) before the worklet
-  reports and under the Web Audio mapping; taken modulo the 0x7fff ring
-  length; assumes the decoder stays ≥ 1024 samples ahead of the mixer. A
-  voice the worklet holds until its decode arrives has no read head, and is
-  not analysed (as a voice not yet started).
+* the window at each update: since 2026-10-16 speech plays on Galaxy's
+  ring transport ([galaxy-audio](galaxy-audio.md) "Speech on Galaxy's ring
+  transport"), and the worklet reports, after each 20 ms callback, each
+  speech voice's ring at its read head as step 12 reads it (1024 samples
+  from `+0x46 − +0x52`, zero past the loop end `+0x56`): the same samples
+  the original analyses, the decoder thread's fill included (its 4,096-sample
+  head start, its lead and the zeroed tail). Before the worklet reports and
+  under the Web Audio mapping, the host voice's clock (elapsed time ×
+  frequency) indexes the PCM, modulo the 0x7fff ring length, without the
+  head start. A voice the worklet holds until its decode arrives has no
+  read head, and is not analysed (as a voice not yet started).
 * channel lifetime: Galaxy's channel, from PlaySound to StopSound, a
   stolen channel or the voice-finished poll (`0x1060cf00`, the library's
   Active byte).
@@ -213,8 +216,9 @@ These are real-time in the original and differ run to run there too:
 
 * Galaxy's MP3 decoder is not translated; the host's decode and its float to
   16-bit rounding are unverified against it.
-* Whether the decoder stays at least 1024 samples ahead of the mixer, so the
-  window never holds stale ring data, is assumed.
+* The window is the ring's (reported by the worklet), so the decoder's lead
+  is the translation's; its timing against the mixer on the reference
+  machine (a separate thread there) is host timing.
 * The D3D control-word question (single precision under FPUSETUP) is open as
   for every x87 translation; this one assumes 0x037f.
 * Barks reach step 12 like any speech; BarkManager does not set

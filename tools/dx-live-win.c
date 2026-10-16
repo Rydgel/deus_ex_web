@@ -16,6 +16,19 @@
  *       stops the Strobe function (0x10b05b30) from flipping the flag (its `jne` at 0x10b05b4b becomes a `jmp`) and writes the flag:
  *       a held state to capture frames in; `strobe release` restores the instruction (the flag keeps its value)
  *
+ *   wine dx-live-win.exe galaxy poll <count> <interval_ms> <out prefix>
+ *       Galaxy.dll's output state, read only (no debugger; docs/audio-output-scope.md §5.1), the addresses rebased to Galaxy.dll's
+ *       load base. Once, to <prefix>.json: WAVEFORMATEX 0x1067b6d8, the output path 0x10698178 (1 DirectSound, 2 WinMM), the
+ *       format bits 0x10698179, the 3D type 0x1069817a, the open flag 0x10698394, the kernel mode 0x10697cfc, the CPU flags
+ *       (MMX 0x1068dc80, SSE 0x10698340, 3DNow 0x10698190), the output rate 0x10697d18, the latency 0x1064a65c, the effect slots
+ *       0x1068828d, the secondary buffer 0x10697cc8 and staging ring 0x10697ccc pointers, the live UGalaxyAudioSubsystem's
+ *       config words (+0x2c..+0x7c, +0x74 the 3D voices), the live player's XLevel and Level (one map load from the next) and,
+ *       per thread of the game, eight sampled EIPs (with their modules)
+ *       and its x87 control word and MXCSR (GetThreadContext, CONTEXT_EXTENDED_REGISTERS: the FXSAVE area). The 64 KB pan
+ *       table [0x10698390] to <prefix>.pan.bin. Then `count` samples `interval_ms` apart to <prefix>.poll.txt:
+ *       <qpc_us> <size> <A> <B> <ahead> <frames mixed 0x10698194> <cnt1 0x10698204> <cnt2 0x1069834c>
+ *       (size, A, B and ahead are one 16-byte read)
+ *
  *   wine dx-live-win.exe list <Class>
  *       the live level's actors whose class derives from <Class>: class, name, global slot, Location, state, OddsOfAppearing
  *
@@ -1141,6 +1154,120 @@ static int do_weapon(int seconds) {
   return 0;
 }
 
+/* galaxy poll <count> <interval_ms> <prefix> (see the file comment). */
+static uintptr_t galaxy_base;
+#define GX(a) (galaxy_base + ((uintptr_t)(a) - 0x10600000u))
+static unsigned char read_u8(uintptr_t address) { unsigned char v = 0; read_mem(address, &v, 1); return v; }
+typedef struct { uintptr_t base, size; char name[64]; } ModuleRange;
+static int module_ranges(ModuleRange *out, int max) {
+  HMODULE modules[1024]; DWORD needed = 0; int n = 0;
+  if (!EnumProcessModulesEx(process, modules, sizeof(modules), &needed, LIST_MODULES_ALL)) return 0;
+  for (DWORD i = 0; i < needed / sizeof(HMODULE) && i < 1024 && n < max; i++) {
+    MODULEINFO info;
+    if (!GetModuleInformation(process, modules[i], &info, sizeof(info))) continue;
+    out[n].base = (uintptr_t)info.lpBaseOfDll; out[n].size = info.SizeOfImage;
+    if (!GetModuleBaseNameA(process, modules[i], out[n].name, sizeof(out[n].name))) strcpy(out[n].name, "?");
+    n++;
+  }
+  return n;
+}
+static const char *module_of(ModuleRange *m, int n, uintptr_t eip) {
+  for (int i = 0; i < n; i++) if (eip >= m[i].base && eip < m[i].base + m[i].size) return m[i].name;
+  return "?";
+}
+static int do_galaxy_poll(int count, int interval, const char *prefix) {
+  QueryPerformanceFrequency(&qpf);
+  pid = find_pid("DeusEx.exe");
+  if (!pid) { fprintf(stderr, "DeusEx.exe not running\n"); return 1; }
+  process = OpenProcess(PROCESS_QUERY_INFORMATION | PROCESS_VM_READ, FALSE, pid);
+  galaxy_base = module_base("Galaxy.dll"); core_base = module_base("Core.dll");
+  if (!process || !galaxy_base || !core_base) { fprintf(stderr, "cannot read DeusEx.exe (Galaxy.dll 0x%lx)\n", (unsigned long)galaxy_base); return 1; }
+  names_table = read_u32(core_base + OFF_NAMES_DATA);
+  char path[700];
+  /* The pan table. */
+  uintptr_t pan = read_u32(GX(0x10698390));
+  static unsigned char table[0x10000];
+  int pan_ok = pan && read_mem(pan, table, sizeof(table));
+  snprintf(path, sizeof(path), "%s.pan.bin", prefix);
+  if (pan_ok) { FILE *f = fopen(path, "wb"); if (f) { fwrite(table, 1, sizeof(table), f); fclose(f); } }
+  /* The live UGalaxyAudioSubsystem (the object array, by class name). */
+  uintptr_t gog = read_u32(core_base + OFF_GOG_DATA), subsystem = 0, player = 0;
+  unsigned objects = read_u32(core_base + OFF_GOG_COUNT);
+  for (unsigned slot = 0; slot < objects && (!subsystem || !player); slot++) {
+    uintptr_t obj = read_u32(gog + slot * 4);
+    if (!obj) continue;
+    uintptr_t cls = read_u32(obj + OFF_OBJECT_CLASS);
+    if (!cls) continue;
+    const char *cname = object_name(cls), *oname = object_name(obj);
+    if (!subsystem && !strcmp(cname, "GalaxyAudioSubsystem") && strcmp(oname, "GalaxyAudioSubsystem")) subsystem = obj;
+    /* The live player (not the class object): its XLevel (+0xac) and Level (+0xa8) tell one map load from the next. */
+    if (!player && !strcmp(cname, "JCDentonMale") && strcmp(oname, "JCDentonMale") && read_u32(obj + 0x5d4)) player = obj;
+  }
+  snprintf(path, sizeof(path), "%s.json", prefix);
+  FILE *out = fopen(path, "w");
+  if (!out) { fprintf(stderr, "cannot write %s\n", path); return 1; }
+  unsigned char wfx[18]; read_mem(GX(0x1067b6d8), wfx, sizeof(wfx));
+  fprintf(out, "{\"qpcUs\":%lld,\"galaxyBase\":\"0x%08lx\",\"waveFormat\":\"", qpc_us(), (unsigned long)galaxy_base);
+  for (int i = 0; i < 18; i++) fprintf(out, "%02x", wfx[i]);
+  fprintf(out, "\",\"path\":%u,\"formatBits\":%u,\"type3d\":%u,\"open\":%u,\"kernelMode\":%u,\"mmx\":%u,\"sse\":%u,\"amd3dnow\":%u,"
+    "\"rate\":%u,\"latency\":%u,\"effectSlots\":%u,\"secondary\":\"0x%08x\",\"staging\":\"0x%08x\",\"panTable\":\"0x%08x\",\"panRead\":%d,",
+    read_u8(GX(0x10698178)), read_u8(GX(0x10698179)), read_u8(GX(0x1069817a)), read_u8(GX(0x10698394)), read_u8(GX(0x10697cfc)),
+    read_u8(GX(0x1068dc80)), read_u8(GX(0x10698340)), read_u8(GX(0x10698190)), read_u32(GX(0x10697d18)), read_u32(GX(0x1064a65c)),
+    read_u8(GX(0x1068828d)), read_u32(GX(0x10697cc8)), read_u32(GX(0x10697ccc)), (unsigned)pan, pan_ok);
+  if (subsystem) {
+    fprintf(out, "\"subsystem\":{\"name\":\"%s\",\"address\":\"0x%08lx\"", object_name(subsystem), (unsigned long)subsystem);
+    for (unsigned off = 0x2c; off <= 0x7c; off += 4) fprintf(out, ",\"+0x%02x\":%u", off, read_u32(subsystem + off));
+    fprintf(out, "},");
+  } else fprintf(out, "\"subsystem\":null,");
+  if (player) fprintf(out, "\"player\":{\"name\":\"%s\",\"address\":\"0x%08lx\",\"xlevel\":\"0x%08x\",\"level\":\"0x%08x\"},",
+    object_name(player), (unsigned long)player, read_u32(player + 0xac), read_u32(player + 0xa8));
+  else fprintf(out, "\"player\":null,");
+  /* The threads: sampled EIPs, then the x87 control word and MXCSR. */
+  ModuleRange mods[512]; int nmods = module_ranges(mods, 512);
+  fprintf(out, "\"threads\":[");
+  HANDLE snap = CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, 0);
+  THREADENTRY32 entry; entry.dwSize = sizeof(entry);
+  int first = 1;
+  if (Thread32First(snap, &entry)) do {
+    if (entry.th32OwnerProcessID != pid) continue;
+    HANDLE th = OpenThread(THREAD_GET_CONTEXT | THREAD_SUSPEND_RESUME | THREAD_QUERY_INFORMATION, FALSE, entry.th32ThreadID);
+    if (!th) continue;
+    fprintf(out, "%s{\"tid\":%lu,\"priority\":%ld,\"eips\":[", first ? "" : ",", entry.th32ThreadID, (long)GetThreadPriority(th));
+    first = 0;
+    for (int k = 0; k < 8; k++) {
+      CONTEXT ctx; memset(&ctx, 0, sizeof(ctx)); ctx.ContextFlags = CONTEXT_CONTROL;
+      if (SuspendThread(th) != (DWORD)-1) { GetThreadContext(th, &ctx); ResumeThread(th); }
+      fprintf(out, "%s[\"0x%08lx\",\"%s\"]", k ? "," : "", (unsigned long)ctx.Eip, module_of(mods, nmods, ctx.Eip));
+      Sleep(3);
+    }
+    CONTEXT ctx; memset(&ctx, 0, sizeof(ctx)); ctx.ContextFlags = CONTEXT_FULL | CONTEXT_FLOATING_POINT | CONTEXT_EXTENDED_REGISTERS;
+    int got = 0;
+    if (SuspendThread(th) != (DWORD)-1) { got = GetThreadContext(th, &ctx); ResumeThread(th); }
+    unsigned short fxcw = 0; unsigned mxcsr = 0, mask = 0;
+    memcpy(&fxcw, ctx.ExtendedRegisters, 2); memcpy(&mxcsr, ctx.ExtendedRegisters + 24, 4); memcpy(&mask, ctx.ExtendedRegisters + 28, 4);
+    fprintf(out, "],\"context\":%d,\"fpcw\":\"0x%04lx\",\"fxsaveFcw\":\"0x%04x\",\"mxcsr\":\"0x%08x\",\"mxcsrMask\":\"0x%08x\"}",
+      got, (unsigned long)(ctx.FloatSave.ControlWord & 0xffff), fxcw, mxcsr, mask);
+    CloseHandle(th);
+  } while (Thread32Next(snap, &entry));
+  CloseHandle(snap);
+  fprintf(out, "]}\n");
+  fclose(out);
+  /* The samples. */
+  snprintf(path, sizeof(path), "%s.poll.txt", prefix);
+  FILE *poll = fopen(path, "w");
+  if (!poll) { fprintf(stderr, "cannot write %s\n", path); return 1; }
+  for (int k = 0; k < count; k++) {
+    unsigned heads[4] = {0}; read_mem(GX(0x10697cd0), heads, sizeof(heads));
+    fprintf(poll, "%lld %u %u %u %d %u %d %d\n", qpc_us(), heads[0], heads[1], heads[2], (int)heads[3], read_u32(GX(0x10698194)),
+      (int)read_u32(GX(0x10698204)), (int)read_u32(GX(0x1069834c)));
+    if (k + 1 < count) Sleep(interval);
+  }
+  fclose(poll);
+  fprintf(stderr, "galaxy poll: %d samples, Galaxy.dll at 0x%lx, subsystem %s\n", count, (unsigned long)galaxy_base, subsystem ? object_name(subsystem) : "not found");
+  CloseHandle(process);
+  return 0;
+}
+
 int main(int argc, char **argv) {
   if (argc < 2) { fprintf(stderr, "usage: dx-live-win.exe rng [count] [interval_ms] | trace <config>\n"); return 2; }
   if (!strcmp(argv[1], "trace")) return argc > 2 ? do_trace(argv[2]) : 2;
@@ -1148,6 +1275,10 @@ int main(int argc, char **argv) {
   if (!strcmp(argv[1], "rngpin")) return argc > 3 ? do_rngpin(atoi(argv[2]), (unsigned)strtoul(argv[3], NULL, 16)) : 2;
   if (!strcmp(argv[1], "stamps")) return argc > 3 ? do_stamps(atoi(argv[2]), argv[3]) : 2;
   if (!strcmp(argv[1], "list")) { QueryPerformanceFrequency(&qpf); return argc > 2 ? do_list(argv[2]) : 2; }
+  if (!strcmp(argv[1], "galaxy")) {
+    if (argc < 6 || strcmp(argv[2], "poll")) { fprintf(stderr, "galaxy poll <count> <interval_ms> <out prefix>\n"); return 2; }
+    return do_galaxy_poll(atoi(argv[3]), atoi(argv[4]), argv[5]);
+  }
   QueryPerformanceFrequency(&qpf);
   pid = find_pid("DeusEx.exe");
   if (!pid) { fprintf(stderr, "DeusEx.exe not running\n"); return 1; }

@@ -152,8 +152,18 @@ async function drivenProcessor(callbacks) {
   assert.equal(s.loads, 1);
   assert.equal(processor.kernel.results.load, 0, 'glxLoadMusic status');
   assert.ok(s.callbacks >= 700, `${s.callbacks} callbacks`);
-  // The kernel smoke run: order 0 at the first callback, 1 at the 314th, 2 at the 628th.
-  assert.deepEqual(orders, [[1, 0], [314, 1], [628, 2]], 'order changes');
+  // The kernel smoke run renders order 1 in its 314th 882-frame callback and
+  // order 2 in its 628th. The worklet's first timer callback (output.rs, the
+  // original's start-up resync) renders size − D bytes at once, F0 frames,
+  // then 882 per callback: a change in frame f shows at callback 1 when f <
+  // F0, else at 2 + floor((f − F0) / 882) (267 and 581 with D = 7,056).
+  const F0 = (176400 - 7056 - worklet.WRITE_LEAD) / 4, at = f => f < F0 ? 1 : 2 + Math.floor((f - F0) / 882);
+  assert.equal(orders.length, 3, `order changes ${JSON.stringify(orders)}`);
+  assert.deepEqual(orders[0], [1, 0], 'order 0 at the first callback');
+  for (const [i, n] of [[1, 314], [2, 628]]) {
+    const [k, order] = orders[i];
+    assert.ok(order === i && k >= at(882 * (n - 1)) && k <= at(882 * n - 1), `order ${i} at callback ${k}, not in [${at(882 * (n - 1))}, ${at(882 * n - 1)}]`);
+  }
   const status = library.status();
   assert.equal(status.acknowledged, status.issued, 'every batch acknowledged');
   assert.equal(library.order(), processor.kernel.state() & 0xff, "the proxy's order() is the library's");
