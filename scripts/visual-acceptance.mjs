@@ -89,6 +89,26 @@ const loadPlan = () => existsSync(planPath) ? JSON.parse(readFileSync(planPath, 
 // `play` runs Play's frozen level to the same TimeSeconds before holding it).
 const timesPath = path.join(out, 'times.json');
 const loadTimes = () => existsSync(timesPath) ? JSON.parse(readFileSync(timesPath, 'utf8')) : {};
+// A frame keeps its own clock beside it: `original` writes <map>/<view>-time.txt (the level time the view was held at) next to each frame,
+// and `play` runs to the time of the views it takes when each has one. times.json keeps one time per map, overwritten by the next capture of
+// the map, so a frame and the clock beside it can come from different captures (docs/stage-4-exit-criteria.md "Stored originals").
+const timeFile = (map, view) => path.join(out, map, `${view}-time.txt`);
+// An effect's contribution (the pass or the zone the frame is judged for) is the frame with it less the frame without it. A view named
+// <name>-base is the original's frame without the effect (taken by `original` after --base-cmd, which turns it off in the live level: the
+// same camera and clock as <name>, a different capture); `play --base fog|detail` writes Play's own frame without it, <name>-play-base.png;
+// `compare --contribution` compares the two differences (docs/visual-acceptance.md "Effect frames").
+const isBase = name => /-base$/.test(name);
+const baseCommand = option('base-cmd', null), baseKind = option('base', null);
+const BASE_OFF = {fog: () => window.deusExViewer.showFog(false), detail: () => window.deusExViewer.detail({hide: true})};
+const BASE_ON = {fog: () => window.deusExViewer.showFog(true), detail: () => window.deusExViewer.detail({hide: false})};
+function heldTimeOf(map, views) {
+  const times = views.map(view => existsSync(timeFile(map, view.name)) ? Number(readFileSync(timeFile(map, view.name), 'utf8')) : null);
+  const stored = times.filter(time => time !== null);
+  if (!stored.length) return loadTimes()[map] ?? null;
+  if (stored.length !== times.length || stored.some(time => time !== stored[0]))
+    throw new Error(`${map}: the views were captured at different level times (${times.join(', ')}); Play holds one clock per run: take them in separate runs (--view)`);
+  return stored[0];
+}
 const HELD_DILATION = 0.001;
 mkdirSync(out, {recursive: true});
 
@@ -167,7 +187,7 @@ async function play() {
       const ghost = await page.evaluate(commands => window.deusExViewer.viewProbe({ghost: true, exec: commands}), consoleCommands);
       // Level time: run the frozen level to the original's held TimeSeconds
       // (fast, then at normal speed for the last second), then hold it.
-      const heldTime = loadTimes()[map] ?? null, target = heldTime === null ? null : heldTime + timeOffset;
+      const heldTime = heldTimeOf(map, viewsOf(entry).filter(view => !isBase(view.name) && (!onlyViews || onlyViews.includes(view.name)))), target = heldTime === null ? null : heldTime + timeOffset;
       let held = null;
       if (target !== null) {
         held = await page.evaluate(async ({target, dilation}) => {
@@ -193,9 +213,17 @@ async function play() {
       if (buffer[0] !== WIDTH || buffer[1] !== HEIGHT || box.x !== 0 || box.y !== 0 || box.width !== WIDTH || box.height !== HEIGHT)
         throw new Error(`the scene canvas is ${box.width}x${box.height} at ${box.x},${box.y} (buffer ${buffer.join('x')}), not ${WIDTH}x${HEIGHT}`);
       const shots = [];
-      for (const view of viewsOf(entry)) {
+      for (const view of viewsOf(entry).filter(view => !isBase(view.name))) {
         await page.evaluate(([v, region]) => window.deusExViewer.viewProbe({location: v.location, rotation: v.rotation, region}), [view, region]);
         await frames(settleFrames);
+        // --player-pose: the player's animation as `original --player-state` measured it for this view (<view>-state.json); AnimRate 0 because
+        // the player's own ticks follow the page's frames, not the held level (the security-camera captures write it the same way).
+        const stateFile = path.join(dir, `${view.name}-state.json`);
+        if (process.argv.includes('--player-pose') && existsSync(stateFile)) {
+          const {player} = JSON.parse(readFileSync(stateFile, 'utf8'));
+          await page.evaluate(anim => window.deusExViewer.placeProbe({set: {actor: '$player', fields: anim}}), {...player.anim, AnimRate: 0});
+          await frames(6);
+        }
         const strobe = strobeOf(view.name);
         if (strobe !== null) {
           // Hold the level's clock (no new TimeSeconds, no flip) and write the flag, as the original's frame is taken.
@@ -212,6 +240,14 @@ async function play() {
         const probe = await page.evaluate(() => window.deusExViewer.viewProbe({}));
         await page.screenshot({path: path.join(dir, `${view.name}-play.png`),
           clip: {x: 0, y: 0, width: WIDTH, height: HEIGHT}});
+        if (baseKind) {
+          // The same view without the effect (--base fog|detail): <view>-play-base.png.
+          await page.evaluate(BASE_OFF[baseKind]);
+          await frames(6);
+          await page.screenshot({path: path.join(dir, `${view.name}-play-base.png`), clip: {x: 0, y: 0, width: WIDTH, height: HEIGHT}});
+          await page.evaluate(BASE_ON[baseKind]);
+          await frames(3);
+        }
         // --detail-bias f:u[:d],... (with --detail on): the same view again at each depth offset of the detail passes (polygon offset
         // slope factor f and units u, constant depth d in steps of 2^-24), as <view>-play-bias<f>_<u>_<d>.png: the measurement of ZBIAS 15
         // against a capture of the original with the pass poked in.
@@ -333,8 +369,16 @@ async function original() {
       console.log(map, 'held at TimeSeconds', times[map], 'dilation', live[0][3]);
     }
     if (process.argv.includes('--unfreeze')) post(['cmd set LevelInfo bPlayersOnly False', 'sleep 1500']);
-    for (const view of viewsOf(entry)) {
+    // The views without the effect (<name>-base) come last: --base-cmd turns the effect off once, in this same level and at the same held clock.
+    const ordered = [...viewsOf(entry).filter(view => !isBase(view.name)), ...viewsOf(entry).filter(view => isBase(view.name))];
+    let baseDone = false;
+    for (const view of ordered) {
       if (onlyViews && !onlyViews.includes(view.name)) continue;
+      if (isBase(view.name) && !baseDone) {
+        if (!baseCommand) throw new Error(`${view.name} needs --base-cmd '<console command that turns the effect off>'`);
+        post([`cmd ${baseCommand}`, 'sleep 800']);
+        baseDone = true;
+      }
       const [x, y, z] = view.location, [pitch, yaw, roll] = view.rotation;
       let taken = [];
       for (let attempt = 0; attempt < 3 && !(taken.length && taken[0].width === WIDTH && taken[0].height === HEIGHT); attempt++) {
@@ -364,7 +408,7 @@ async function original() {
         post([`cmd set DeusEx.JCDentonMale Location (X=${x},Y=${y},Z=${z})`, 'cmd set DeusEx.JCDentonMale Velocity (X=0,Y=0,Z=0)',
           `cmd set DeusEx.JCDentonMale ViewRotation (Pitch=${pitch},Yaw=${yaw},Roll=${roll})`,
           ...(region ? [`cmd set DeusEx.JCDentonMale Region (Zone=ZoneInfo'${map}.${region.zone}',iLeaf=${region.iLeaf},ZoneNumber=${region.zoneNumber})`] : []),
-          'sleep 1500', ...(strobe === null ? ['shot', 'sleep 900'] : [])]);
+          'sleep 1500', ...(process.argv.includes('--freeze-player') ? ['cmd set DeusEx.JCDentonMale AnimRate 0', 'sleep 400'] : []), ...(strobe === null ? ['shot', 'sleep 900'] : [])]);
         // --strobe-poll on a view with no _s0/_s1 suffix: the free-running flag at this camera, 120 samples 5 ms apart (<name>-strobe.txt).
         if (strobe === null && process.argv.includes('--strobe-poll')) {
           const tool = args => execFileSync(game.WINE, [path.join(root, 'ad/build/dx-live-win.exe'), 'strobe', ...args], {encoding: 'utf8', env: process.env});
@@ -400,6 +444,27 @@ async function original() {
           renameSync(path.join(game.SYSTEM, shot), path.join(dir, `${view.name}-original.bmp`));
           return size;
         });
+        // The frame's own clock, beside it (the level time the clock was held at, read from the running original).
+        if (taken.length) writeFileSync(timeFile(map, view.name), `${loadTimes()[map]}\n`);
+        // --player-state: the player's animation as the frame had it (a mirror or a camera window shows his mesh). Under `ghost` the original's
+        // JC stands in `Still` at frame 0 with rate 0 (measured, constant over seconds); Play's, which has run its CheatFlying state far longer in
+        // level time than the original's held clock allowed, loops `Tread`: the pose is an input of the held state, so Play writes the original's.
+        if (taken.length && process.argv.includes('--player-state')) {
+          const text = execFileSync(game.WINE, [path.join(root, 'ad/build/dump-actor-win.exe'), 'JCDentonMale', 'Player:0x5d4:u32', 'Location:0x114:f3', 'Rotation:0x120:i3',
+            'ViewRotation:0x3dc:i3', 'AnimSequence:0x54:name', 'AnimFrame:0x58:f', 'AnimRate:0x5c:f', 'TweenRate:0x60:f', 'AnimLast:0x220:f', 'AnimMinRate:0x224:f', 'OldAnimRate:0x228:f',
+            'B0:0x68:name', 'B1:0x6c:name', 'B2:0x70:name', 'B3:0x74:name', 'F0:0x78:f', 'F1:0x7c:f', 'F2:0x80:f', 'F3:0x84:f', 'R0:0x88:f', 'R1:0x8c:f', 'R2:0x90:f', 'R3:0x94:f',
+            'T0:0x98:f', 'T1:0x9c:f', 'T2:0xa0:f', 'T3:0xa4:f', 'L0:0x23c:f', 'L1:0x240:f', 'L2:0x244:f', 'L3:0x248:f', 'M0:0x24c:f', 'M1:0x250:f', 'M2:0x254:f', 'M3:0x258:f'], {encoding: 'utf8', env: process.env});
+          const row = {};
+          for (const line of text.split(/\r?\n/)) {
+            const m = /^JCDentonMale (\S+) (.*)$/.exec(line);
+            if (!m || /Player=0x0\b/.test(m[2])) continue;
+            for (const part of m[2].matchAll(/(\w+)=(\([^)]*\)|\S+)/g)) row[part[1]] = part[2].startsWith('(') ? part[2].slice(1, -1).split(',').map(Number) : Number.isNaN(Number(part[2])) ? part[2] : Number(part[2]);
+          }
+          const four = key => [0, 1, 2, 3].map(k => row[`${key}${k}`]);
+          writeFileSync(path.join(dir, `${view.name}-state.json`), JSON.stringify({map, view: view.name, timeSeconds: loadTimes()[map], player: {location: row.Location, rotation: row.Rotation, viewRotation: row.ViewRotation,
+            anim: {AnimSequence: row.AnimSequence, AnimFrame: row.AnimFrame, AnimRate: row.AnimRate, TweenRate: row.TweenRate, AnimLast: row.AnimLast, AnimMinRate: row.AnimMinRate, OldAnimRate: row.OldAnimRate,
+              BlendAnimSequence: four('B'), BlendAnimFrame: four('F'), BlendAnimRate: four('R'), BlendTweenRate: four('T'), BlendAnimLast: four('L'), BlendAnimMinRate: four('M')}}}, null, 1));
+        }
       }
       console.log(map, view.name, taken.length ? `${taken[0].width}x${taken[0].height}` : 'NO SHOT');
       if (taken.length && (taken[0].width !== WIDTH || taken[0].height !== HEIGHT)) throw new Error(`${map} ${view.name}: the original's frame is ${taken[0].width}x${taken[0].height}, not ${WIDTH}x${HEIGHT}`);
@@ -507,6 +572,31 @@ function compareOne(a, b, prefix) {
   };
 }
 
+// The contribution of an effect: (frame with it) - (frame without it), the original's against Play's, per channel in 8-bit levels. The two
+// programs' brightness differs by a uniform factor (the Wine gamma issue, not judged), so what is compared is the pattern: the sum of Play's
+// difference over the original's (the gap's order), the Pearson correlation of the two luma differences over the frame, the mean absolute
+// residual after the best scale (k = sum(P O) / sum(O^2)) as a share of the mean absolute original difference, and, over the pixels where
+// the original's difference is at least 1 level (the effect's own pixels), the share where Play's has the same sign and at least a
+// quarter of the scaled value.
+function contribution(dir, name) {
+  const files = [`${name}-original.png`, `${name}-base-original.png`, `${name}-play.png`, `${name}-play-base.png`].map(f => path.join(dir, f));
+  if (!files.every(f => existsSync(f))) return null;
+  const [ow, o0, pw, p0] = files.map(readRgb), n = ow.w * ow.h;
+  const lum = (a, b) => { const d = new Float32Array(n); for (let i = 0; i < n; i++) d[i] = luma(a.data, 3 * i) - luma(b.data, 3 * i); return d; };
+  const O = lum(ow, o0), P = lum(pw, p0);
+  let so = 0, sp = 0, soo = 0, spp = 0, sop = 0, absO = 0, absP = 0, sumO = 0, sumP = 0;
+  for (let c = 0; c < 3; c++) for (let i = 0; i < n; i++) { sumO += ow.data[3 * i + c] - o0.data[3 * i + c]; sumP += pw.data[3 * i + c] - p0.data[3 * i + c]; }
+  for (let i = 0; i < n; i++) { so += O[i]; sp += P[i]; soo += O[i] * O[i]; spp += P[i] * P[i]; sop += O[i] * P[i]; absO += Math.abs(O[i]); absP += Math.abs(P[i]); }
+  const k = soo ? sop / soo : 0, corr = (sop - so * sp / n) / Math.sqrt(Math.max(1e-9, (soo - so * so / n) * (spp - sp * sp / n)));
+  let resid = 0, own = 0, agree = 0;
+  for (let i = 0; i < n; i++) {
+    resid += Math.abs(P[i] - k * O[i]);
+    if (O[i] >= 1) { own++; if (P[i] >= 0.25 * k * O[i]) agree++; }
+  }
+  return {originalSum: sumO, playSum: sumP, gap: +(sumP / Math.max(1, sumO)).toFixed(3), meanAbsOriginal: +(absO / n).toFixed(4), meanAbsPlay: +(absP / n).toFixed(4),
+    correlation: +corr.toFixed(4), scale: +k.toFixed(3), residual: +(resid / Math.max(1e-9, absO)).toFixed(3), effectPixels: own, agreement: own ? +(agree / own).toFixed(3) : null};
+}
+
 // compare --crop WxH+X+Y: the metrics over that region only (the crops are
 // kept as <view>-crop-original.png / -play.png); --play-name <suffix>: compare
 // <view>-<suffix>.png of Play (an experiment's frame) instead of <view>-play.png.
@@ -514,7 +604,7 @@ function compare() {
   const report = {}, plan = loadPlan(), crop = option('crop', null), playName = option('play-name', 'play');
   for (const map of maps) {
     const dir = path.join(out, map);
-    for (const view of viewsOf(plan[map] ?? {views: []})) {
+    for (const view of viewsOf(plan[map] ?? {views: []}).filter(view => !isBase(view.name))) {
       let a = path.join(dir, `${view.name}-original.png`), b = path.join(dir, `${view.name}-${playName}.png`);
       if (!existsSync(a) || !existsSync(b)) continue;
       let prefix = path.join(dir, playName === 'play' ? view.name : `${view.name}-${playName}`);
@@ -523,6 +613,7 @@ function compare() {
         a = cropped(a, 'original'); b = cropped(b, playName); prefix = `${prefix}-crop`;
       }
       const result = compareOne(a, b, prefix);
+      if (process.argv.includes('--contribution') && !crop && playName === 'play') { const c = contribution(dir, view.name); if (c) result.contribution = c; }
       (report[map] ??= {})[view.name] = result;
       const {outlierBlocks, ...brief} = result;
       console.log(map, view.name, JSON.stringify(brief), `${outlierBlocks?.length ?? 0} outlier blocks`);

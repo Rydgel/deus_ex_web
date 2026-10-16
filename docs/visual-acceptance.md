@@ -1752,6 +1752,67 @@ scripts/original-run.sh 00_Training node scripts/interface-acceptance.mjs origin
 node scripts/interface-acceptance.mjs play && node scripts/interface-acceptance.mjs compare
 ```
 
+## Effect frames (2026-10-16)
+
+Effects whose translation was compared with the DLLs but whose frame was not ([Stage 4 gate](stage-4-exit-criteria.md) rows 4.2.13 to 4.2.30,
+`MISSING` at the first run), each one original capture session and a gate row. All are matched-camera frames of the [Method](#method) above: the original
+under Wine at Brightness 0.4, level frozen and held at its own clock, Play at `?antialias=0&detailTextures=0` and that clock, raw 1280x720. What the
+captures added to the tooling:
+
+* **A frame keeps its own clock.** `visual-acceptance.mjs original` writes `<map>/<view>-time.txt` (the level time the clock was held at) beside each
+  frame, and `play` runs to the time of the views it takes (`times.json`, one time per map overwritten by each capture, is only the fallback). The gate
+  stages the `-time.txt` files with the frames and needs `times.json` only for frames that have none.
+* **An effect's contribution.** A view named `<name>-base` is the original's frame without the effect: `original --base-cmd '<console command>'`
+  takes the named views first, runs the command once in the same live level and held clock, then the `-base` views. `play --base fog|detail` writes
+  Play's own frame without the effect (`<name>-play-base.png`: the fog pass hidden, or the detail pass). `compare --contribution` compares the two
+  differences (frame less frame without it), the original's against Play's: the sum of Play's over the original's (to be read against the frame's
+  own brightness ratio, the Wine gap this document does not judge), the Pearson correlation of the two luma differences, the mean absolute residual
+  after the best scale and the share of the original's effect pixels (difference of at least one level) where Play's is at least a quarter of its
+  scaled value.
+* **The player's pose.** A mirror shows JC's mesh. Under `ghost` the player stays in the CheatFlying state and his `Tread` animation loops in real
+  time even at a held level, so a mirror frame holds a frame of it nobody chose: `original --freeze-player` writes `AnimRate 0` before the shot,
+  `--player-state` reads his animation fields into `<view>-state.json`, and `play --player-pose` writes them back (`AnimRate` 0, as the
+  security-camera captures do). The phase of that loop at a shot is whatever the clock of each program gave it, so the pose is an input of the held state.
+* **Stores.** The captures are in the main checkout's `.work/acceptance/<map>/` under new names; the gate reads them from there. (A checkout that
+  holds its own captures is its own source: the gate used to unlink and relink a stored frame onto itself, deleting it; it skips a frame that is
+  already in place.)
+
+### 02_NYC_Bar's smoke haze (row 4.2.17)
+
+Light90 (-1200, -57, 129; `VolumeRadius` 128, `VolumeBrightness` 32) and the bar's fog zones. Three cameras around it (`bar` in the gate),
+original at level time 52.355 s. The original without the haze is the same level after `set ZoneInfo bFogZone False` (the zones' flag SetupForSurf
+reads, the `+0x388 & 2` of [volumetric fog](volumetric-fog.md)). The haze is a few levels of 255 over most of a wall
+(mean absolute difference of the two original frames 1.0 to 2.4 levels), so the frames alone say little: the contribution is what is compared.
+
+| View | Play / original | Mean abs. diff. | Edge recall / precision | Outlier blocks | Haze: Play over original (sum) | correlation | residual | pixels with haze, Play's too |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| fog3 (-1200,-357,90 looking +y at the light) | 1.347 | 3.07 | .999 / .994 | 0 | 1.361 | .930 | .18 | 910,834 of 910,834 |
+| fog5 (-1518,261,90 toward the doorway) | 1.340 | 2.74 | .997 / .990 | 0 | 1.394 | .928 | .22 | 895,773 of 895,773 |
+| fog0 (-900,-57,90 looking -x) | 1.350 | 2.32 | .992 / .988 | 0 | 1.344 | .991 | .18 | 300,239 of 300,239 |
+
+Play's haze is the original's times the frame's own gap (1.361, 1.394 and 1.344 against ratios 1.347, 1.340 and 1.350: within 1.0%, 4.0% and 0.4%), and
+it correlates with the original's .93, .93 and .99. A control: the original's haze of one view against Play's haze of each of the three views
+reads .93, .93 and .99 on the diagonal and -0.04 to .37 off it. The residual (.18 to .22 of the original's haze) has the surfaces' texture in it
+(the original's two frames are two captures: the animated light maps' noise state is in their difference, and the 8-bit rounding of `dst * (1 - alpha)`);
+Play's haze is smooth where the original's is not, and no region of the original's haze is missing from Play's. The gate row's thresholds
+(correlation .90, gap within 8% of the frame's ratio, agreement .98) are set from these three views and are weak. Stored: `.work/acceptance/02_NYC_Bar/
+{fog3,fog5,fog0}{,-base}-original.png` and their `-time.txt`.
+
+### 02_NYC_Hotel's bathroom mirror (row 4.2.19)
+
+The opaque unlit mirror over the sink, with JC in the reflection (`hotel` in the gate): `hotel1` at (1880, -1158, 148) level, `hotel2` the same place
+looking 2,500 units down so the mirror fills the middle of the frame; original at level time 52.370 s, JC's `Tread` frozen at frame 0.2488.
+
+| View | Play / original | Mean abs. diff. | Edge recall / precision | Outlier blocks |
+| --- | ---: | ---: | ---: | ---: |
+| hotel1 | 1.282 | 4.45 | .984 / .994 | 0 |
+| hotel2 | 1.273 | 4.58 | .982 / .983 | 0 |
+
+With the pose of Play's own `Tread` loop in place of the original's, the frame reads recall .970 and precision .974 in `hotel2` (his arms lower in the
+original's first capture than in Play, a frame of the loop); with the pose measured and written they are the same frame. The mirror's tile floor, the
+shelves, the door in the reflection and the sink agree to within the uniform gap (no outlier block). Stored: `.work/acceptance/02_NYC_Hotel/
+{hotel1,hotel2}-original.png`, `-time.txt`, `-state.json`.
+
 ## Open
 
 - **Not attributed, seen in the 2026-10-14 pilot re-runs with Divergences 17 and 18 in** (every watched actor equal in all three): the Island run's stream draws differ at tick 264

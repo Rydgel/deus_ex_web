@@ -67,9 +67,9 @@ A mode in brackets names how the check exercises Play (see [How the gate judges]
 | 4.2.14 | decals | AttachDecal, ClipDecal and the vertices of a decal equal Engine.dll and Render.dll | O2 | `decal-vertices-play` [worker], `decals-play` [worker], `decal-attach` [oracle], `decal-render` [worker], `decal-startup` [oracle] | PASS |
 | 4.2.15 | Training shadows, bullet holes | a decal frame against the original | - | missing: no matched capture shows a decal; blood and scorch marks need combat | MISSING |
 | 4.2.16 | volumetric fog (02_NYC_Bar) | ComputeFromActor and the fog loop equal Render.dll; the pass in Play | O3 | `volumetric-fog-play` [worker], `volumetric-fog` [oracle] | PASS |
-| 4.2.17 | 02_NYC_Bar smoke haze | a fog frame against the original | - | missing: the stored frames are 08_NYC_Bar, whose zones hold no fog; 02_NYC_Bar has no original capture | MISSING |
+| 4.2.17 | 02_NYC_Bar smoke haze | a fog frame against the original, and the haze (the frame with the fog zones less the frame without) against the original's | O1 | `frames 02_NYC_Bar [fog3,fog5,fog0]` [worker] | PASS |
 | 4.2.18 | mirrors | frame cases, child frames, nesting, the sky inside a mirror, the strobe | O2 | `mirrors-play` [worker], `mirror-plan-play` [worker], `underworld-panes-play` [worker], `strobe-mirror-play` [worker], `sky-in-mirror-play` [worker], `child-frames` [oracle], `mirrors` [oracle] | PASS |
-| 4.2.19 | 02_NYC_Hotel bathroom mirror | an opaque unlit mirror against the original | - | missing: no stored original frame of 02_NYC_Hotel (only mirrors-play, Play against itself) | MISSING |
+| 4.2.19 | 02_NYC_Hotel bathroom mirror | an opaque unlit mirror against the original, the player in the reflection posed as the original had him | O1 | `frames 02_NYC_Hotel [hotel1,hotel2]` [worker] | PASS |
 | 4.2.20 | Fire.dll textures | fire and water textures, animated and auto-panned surfaces | O2 | `fire-texture-rust` [node], `native-fire-texture` [oracle], `fire-texture-play` [worker], `texture-animation-play` [worker], `native-texture-animation` [oracle], `native-surface-pan` [oracle] | PASS |
 | 4.2.21 | detail textures | the D3DDrv detail pass equals the original body; Play draws it | O2 | `detail-pass` [oracle], `detail-pass-rust` [oracle], `detail-play-sim` [node], `detail-play` [worker] | PASS |
 | 4.2.22 | detail pass in a frame | Play's detail pass against a capture of the original with the pass poked in | - | missing: measured once (Jaccard 0.94 to 0.98 on five of six views, docs/frame-projection.md); those captures are not in a store the gate reads | MISSING |
@@ -283,6 +283,8 @@ each criterion's inputs from one root (the first that holds them) and links or c
 | The original's third-person weapon draws | main `.work/weapon/original-cases*.json` | 4.1.9 |
 | The interface frames of 00_Training (18 views, 2026-10-15) and each frame's level time | main `.work/acceptance/00_Training/ui-<view>-original.png` and `ui-<view>-time.txt` (also `ui-e1` to `ui-e4`, the pointer experiment) | 4.4.11 to 4.4.14 |
 | The light manager's tables from the running original | main `.work/live/.work/fpu` | 4.2.9 |
+| 02_NYC_Bar's smoke haze: three views with the fog zones on and off (2026-10-16, level time 52.355 s in each `-time.txt`) | main `.work/acceptance/02_NYC_Bar/{fog3,fog5,fog0}{,-base}-original.png` and `-time.txt` | 4.2.17 |
+| 02_NYC_Hotel's bathroom mirror, JC's `Tread` frozen (2026-10-16, 52.370 s) | main `.work/acceptance/02_NYC_Hotel/{hotel1,hotel2}-original.png`, `-time.txt`, `-state.json` | 4.2.19 |
 
 **A clock per frame, not per map, is what a store should keep.** `times.json` holds one level time per map and each capture overwrites it, so
 a frame and the clock beside it can come from different captures. Two cases showed up in the first run: the main `.work/live` tree's `fan2-original.png`

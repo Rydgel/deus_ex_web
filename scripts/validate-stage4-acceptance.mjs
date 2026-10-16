@@ -44,6 +44,13 @@ const THRESHOLDS = Object.freeze({
   subpixel: 0.25,        // |dx|, |dy| of the best-fit sub-pixel offset where the frame has enough gradient to measure it
   cameraMad: 1.0,        // mean abs. difference of a security camera window (200x150), Brightness 2/3 identity ramp
   cameraRecall: 0.90,    // a camera window's edge recall and precision (walking actors in a window moved the precision between runs: .95 to .99)
+  // An effect's contribution (the frame with it less the frame without it, original against Play: visual-acceptance.mjs `compare --contribution`).
+  // 02_NYC_Bar's smoke haze measures correlation .93, .93 and .99 and Play's haze over the original's within 1% to 4% of the frame's own
+  // brightness ratio (the haze scales with the gap), every pixel the original's haze reaches also lit by Play's. Weak: set from three views; the
+  // original's two frames are two captures, so the animated light maps' noise state is in its difference.
+  contributionCorrelation: 0.90,
+  contributionGap: 0.08,           // |play sum / original sum / frame ratio - 1|
+  contributionAgreement: 0.98,     // share of the original's effect pixels (difference >= 1 level) where Play's is at least a quarter of its scaled value
 });
 // The interface frames (docs/interface-frames.md): the 18 views of 00_Training compare equal to within 2 of 255 everywhere but one world scanline of
 // 57 pixels (up to 27 levels) and, in the datacube view, 90 pixels of at most 13 levels. Strong for what it excludes: a missing underline, a stale log
@@ -118,8 +125,13 @@ const EFFECT_VIEWS = Object.freeze({
   street: {map: '04_NYC_Street', views: ['street1:-264,-256,-452:-343,32616,0', 'street2:993,-1703,-261:62999,31953,0']},
   training: {map: '00_Training', views: ['trainA:-100,840,30:0,0,0', 'trainB:1200,840,30:0,0,0']},
   fan: {map: '09_NYC_ShipFan', views: ['fan2:236,-238,-55:63686,25298,0']},
+  // 2026-10-16 captures (visual-acceptance.md "Effect frames"), each frame with its own <view>-time.txt.
+  bar: {map: '02_NYC_Bar', views: ['fog3:-1200,-357,90:65501,16384,0', 'fog5:-1518,261,90:65513,57344,0', 'fog0:-900,-57,90:65501,32768,0']},
+  hotel: {map: '02_NYC_Hotel', views: ['hotel1:1880,-1158,148:0,32768,0', 'hotel2:1880,-1158,148:63036,32768,0']},
 });
-const effectViews = key => FRAMES({maps: [EFFECT_VIEWS[key].map], explicit: EFFECT_VIEWS[key].views, flat: {}});
+// `extra`: `base` names the effect of a contribution check ('fog': the stored <view>-base frames are the original without it, Play's own frame
+// without it comes from `--base fog`); `playerPose`: Play writes the player's animation the original measured (<view>-state.json).
+const effectViews = (key, extra = {}) => FRAMES({maps: [EFFECT_VIEWS[key].map], explicit: EFFECT_VIEWS[key].views, flat: {}, ...extra});
 
 // Pilots: the original's per-tick trace of the load, replayed in Play (docs/visual-acceptance.md "Live scenes").
 const PILOT = (map, extra = {}) => LIVE({map, ...extra});
@@ -192,10 +204,10 @@ add('4.2.14', C2, 'decals', 'AttachDecal, ClipDecal and the vertices of a decal 
 missing('4.2.15', C2, 'Training shadows, bullet holes', 'a decal frame against the original', 'no matched capture shows a decal; blood and scorch marks need combat');
 add('4.2.16', C2, 'volumetric fog (02_NYC_Bar)', 'ComputeFromActor and the fog loop equal Render.dll; the pass in Play', 'O3',
   V('volumetric-fog'), V('volumetric-fog-play'));
-missing('4.2.17', C2, '02_NYC_Bar smoke haze', 'a fog frame against the original', 'the stored frames are 08_NYC_Bar, whose zones hold no fog; 02_NYC_Bar has no original capture');
+add('4.2.17', C2, '02_NYC_Bar smoke haze', 'a fog frame against the original: the frame, and the haze (the frame with the fog zones less the frame without) against the original\'s', 'O1', effectViews('bar', {base: 'fog'}));
 add('4.2.18', C2, 'mirrors', 'frame cases, child frames, nesting, the sky inside a mirror, the strobe', 'O2',
   V('mirrors'), V('child-frames'), V('mirror-plan-play'), V('mirrors-play'), V('sky-in-mirror-play'), V('strobe-mirror-play'), V('underworld-panes-play'));
-missing('4.2.19', C2, '02_NYC_Hotel bathroom mirror', 'an opaque unlit mirror against the original', 'no stored original frame of 02_NYC_Hotel (only mirrors-play, Play against itself)');
+add('4.2.19', C2, '02_NYC_Hotel bathroom mirror', 'an opaque unlit mirror against the original, the player in the reflection posed as the original had him', 'O1', effectViews('hotel', {playerPose: true}));
 add('4.2.20', C2, 'Fire.dll textures', 'fire and water textures, animated and auto-panned surfaces', 'O2',
   V('native-fire-texture'), V('fire-texture-rust'), V('native-texture-animation'), V('native-surface-pan'), V('fire-texture-play'), V('texture-animation-play'));
 add('4.2.21', C2, 'detail textures', 'the D3DDrv detail pass equals the original body; Play draws it', 'O2',
@@ -424,33 +436,61 @@ function frameProblems(m, isFlat = false, allowedBlocks = 0) {
   if (m.subpixel && (Math.abs(m.subpixel[0]) > THRESHOLDS.subpixel || Math.abs(m.subpixel[1]) > THRESHOLDS.subpixel)) off.push(`sub-pixel offset ${m.subpixel}`);
   return off;
 }
+// One view's effect contribution against THRESHOLDS: Play's difference of the frame with and without the effect against the original's.
+function contributionProblems(m) {
+  const c = m.contribution, off = [];
+  if (!c) return ['no contribution measured'];
+  if (!c.effectPixels) off.push('the original shows no contribution');
+  if (!(c.correlation >= THRESHOLDS.contributionCorrelation)) off.push(`contribution correlation ${c.correlation} < ${THRESHOLDS.contributionCorrelation}`);
+  if (!(Math.abs(c.gap / m.ratio - 1) <= THRESHOLDS.contributionGap)) off.push(`contribution gap ${c.gap} against the frame's ratio ${m.ratio}`);
+  if (!(c.agreement >= THRESHOLDS.contributionAgreement)) off.push(`contribution agreement ${c.agreement} < ${THRESHOLDS.contributionAgreement}`);
+  return off;
+}
 // matched frames -----------------------------------------------------------------------------------------
 async function judgeFrames(task, add, fail, result) {
   const {maps, views, explicit, flat = {}} = task.frames;
   const names = explicit ? explicit.map(v => v.split(':')[0]) : views;
   // One store supplies the whole run: the first root that holds the first frame. Its times.json (the level time each map was held at) goes
   // with it, since a map captured twice (the frozen set at 46.8 s, the effect views at 52.3 s) has a clock per capture.
+  // The files a view needs from the store: its frame; with a contribution check (`base`) the original without the effect; with `playerPose`
+  // the player's animation the original measured.
+  const storedFiles = name => [`${name}-original.png`, ...(task.frames.base ? [`${name}-base-original.png`] : []), ...(task.frames.playerPose ? [`${name}-state.json`] : [])];
   const source = storeRoots.find(dir => existsSync(path.join(dir, `acceptance/${maps[0]}/${names[0]}-original.png`)));
   const absent = [];
   if (!source) absent.push(`acceptance/${maps[0]}/${names[0]}-original.png`);
-  else for (const map of maps) for (const name of names) if (!existsSync(path.join(source, `acceptance/${map}/${name}-original.png`))) absent.push(`acceptance/${map}/${name}-original.png`);
-  if (source && !existsSync(path.join(source, 'acceptance/times.json'))) absent.push('acceptance/times.json');
+  else for (const map of maps) for (const name of names) for (const file of storedFiles(name)) if (!existsSync(path.join(source, `acceptance/${map}/${file}`))) absent.push(`acceptance/${map}/${file}`);
+  // A frame keeps its own clock beside it (<view>-time.txt, written by `visual-acceptance.mjs original`); the older captures have one clock per
+  // map in times.json, which the run then needs.
+  const hasTime = (map, name) => existsSync(path.join(source ?? '', `acceptance/${map}/${name}-time.txt`));
+  const needsTimes = source && maps.some(map => names.some(name => !hasTime(map, name)));
+  if (needsTimes && !existsSync(path.join(source, 'acceptance/times.json'))) absent.push('acceptance/times.json');
   if (absent.length) return fail(`stored originals absent: ${absent.slice(0, 4).join(', ')}${absent.length > 4 ? ` +${absent.length - 4}` : ''}`, 'NO-ORIGINAL');
   for (const map of maps) {
     mkdirSync(path.join(root, '.work/acceptance', map), {recursive: true});
     for (const name of names) {
-      const to = path.join(root, '.work/acceptance', map, `${name}-original.png`);
-      try { unlinkSync(to); } catch { /* none yet */ }
-      symlinkSync(path.join(source, `acceptance/${map}/${name}-original.png`), to);
+      // A checkout that holds the originals itself (its own captures) is its own source: nothing is linked or copied over a file onto itself
+      // (unlinking the target would delete the original).
+      const bring = (file, copy) => {
+        const from = path.join(source, `acceptance/${map}/${file}`), to = path.join(root, '.work/acceptance', map, file);
+        if (path.resolve(from) === path.resolve(to)) return;
+        try { unlinkSync(to); } catch { /* none yet */ }
+        if (copy) copyFileSync(from, to); else symlinkSync(from, to);
+      };
+      for (const file of storedFiles(name)) bring(file, file.endsWith('.json'));
+      if (hasTime(map, name)) bring(`${name}-time.txt`, true);
     }
   }
-  const timesTo = path.join(root, '.work/acceptance/times.json');
-  try { unlinkSync(timesTo); } catch { /* none yet */ }
-  copyFileSync(path.join(source, 'acceptance/times.json'), timesTo);
+  if (needsTimes && path.resolve(source) !== path.resolve(path.join(root, '.work'))) {
+    const timesTo = path.join(root, '.work/acceptance/times.json');
+    try { unlinkSync(timesTo); } catch { /* none yet */ }
+    copyFileSync(path.join(source, 'acceptance/times.json'), timesTo);
+  }
   const viewArgs = explicit ? explicit.flatMap(v => ['--view', v]) : [];
-  const play = add(await exec(process.execPath, ['scripts/visual-acceptance.mjs', 'play', '--maps', maps.join(','), '--query', 'antialias=0', ...viewArgs], {limitSeconds: 900}));
+  // `detail`: the original was captured with the detail pass poked in (--poke D3DRenderDevice0:0x78:1), so Play keeps its pass.
+  const play = add(await exec(process.execPath, ['scripts/visual-acceptance.mjs', 'play', '--maps', maps.join(','), '--query', 'antialias=0', ...(task.frames.detail ? ['--detail', 'on'] : []),
+    ...(task.frames.base ? ['--base', task.frames.base] : []), ...(task.frames.playerPose ? ['--player-pose'] : []), ...viewArgs], {limitSeconds: 900}));
   if (play.killed || play.code !== 0 || /errors:/.test(play.out)) return fail(`play step: ${play.killed ?? tail(play.out)}`);
-  const compare = add(await exec(process.execPath, ['scripts/visual-acceptance.mjs', 'compare', '--maps', maps.join(','), ...viewArgs], {limitSeconds: 300}));
+  const compare = add(await exec(process.execPath, ['scripts/visual-acceptance.mjs', 'compare', '--maps', maps.join(','), ...(task.frames.base ? ['--contribution'] : []), ...viewArgs], {limitSeconds: 300}));
   if (compare.killed || compare.code !== 0) return fail(`compare step: ${compare.killed ?? tail(compare.out)}`);
   const report = readJson(path.join(root, '.work/acceptance/report.json'));
   const problems = [];
@@ -460,8 +500,9 @@ async function judgeFrames(task, add, fail, result) {
     if (!m) { problems.push(`${map} ${name}: no comparison`); continue; }
     const isFlat = FLAT_VIEWS.has(`${map}:${name}`);
     const off = frameProblems(m, isFlat, EXPLAINED_BLOCKS[`${map}:${name}`] ?? 0);
+    if (task.frames.base) off.push(...contributionProblems(m));
     if (off.length) problems.push(`${map} ${name}: ${off.join('; ')}`);
-    lines.push(`${name} ${m.edgeRecall}/${m.edgePrecision}/${m.outlierBlocks.length}`);
+    lines.push(`${name} ${m.edgeRecall}/${m.edgePrecision}/${m.outlierBlocks.length}${m.contribution ? ` haze r ${m.contribution.correlation}` : ''}`);
   }
   if (problems.length) return fail(problems.join(' | '));
   return {...result, status: 'PASS', detail: `${maps.length} map(s), ${lines.length} view(s): recall/precision/outliers ${lines.slice(0, 5).join(' ')}${lines.length > 5 ? ' ...' : ''}`};
