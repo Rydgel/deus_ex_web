@@ -324,8 +324,10 @@ add('4.3.4', C3, 'music', 'IT loader, sequencer and Update\'s music section equa
 add('4.3.5', C3, 'Island, Training and the intro in Play', 'ambient voices, music and window sounds reach the mixer in the worker and the worklet', 'O3',
   V('galaxy-effects-play'), V('galaxy-music-play'), V('galaxy-music-host'), V('window-sound-play'), V('window-sound-browser'));
 add('4.3.6', C3, '06_HongKong_WanChai_Underworld, 400 ticks: a pistol picked up, drawn and fired', 'the original\'s Galaxy PlaySound calls of the scene against Play\'s replay: every call\'s sound, emitter, volume, radius, pitch, channel id and order', 'O1',
-  SOUNDS({map: '06_HongKong_WanChai_Underworld', tag: 'snd1', ticks: 400}));
-missing('4.3.7', C3, 'audible output', 'the output Galaxy produces for the speakers', 'the music bus delay, the ring heads\' spacing, MPEG and ADPCM samples and 3D voices are unmeasured or untranslated (docs/galaxy-music.md, galaxy-audio.md)');
+  SOUNDS({map: '06_HongKong_WanChai_Underworld', tag: 'sndm5', ticks: 400}));
+add('4.3.7', C3, '00_Training, captured from the launch (4,851 callbacks): Galaxy\'s output buffer', 'every byte Galaxy\'s timer callback copies into the DirectSound buffer, and where it lands, equals the translation\'s under the original\'s replayed library calls and cursor positions; Play places the music bus D bytes ahead of the effects bus, D measured; speech through Galaxy\'s ring transport against the original\'s instructions (docs/audio-output-scope.md section 6)', 'O1',
+  V('galaxy-output-callback'), V('galaxy-output-poll', '--store', '.work/audio-output'), V('galaxy-output-replay', '--capture', '.work/audio-output/replay-training.bin'),
+  V('galaxy-output-play'), V('galaxy-ring-voice'));
 
 // 4.4 Text and interfaces -----------------------------------------------------------------------------------
 add('4.4.1', C4, 'fonts and text layout', 'font load, glyph metrics, text layout and the parser equal the original', 'O2',
@@ -526,7 +528,9 @@ async function runTask(task) {
 
 // Stored originals a validator compares with when this checkout has them (it falls back to fabricated cases without them, which would
 // prove less than the criterion says), so the gate stages them and reports NO-ORIGINAL when they are absent.
-const VALIDATOR_ORIGINALS = {'weapon-attach': ['weapon/original-cases.json', 'weapon/original-cases-2.json', 'weapon/original-cases-3.json']};
+const VALIDATOR_ORIGINALS = {'weapon-attach': ['weapon/original-cases.json', 'weapon/original-cases-2.json', 'weapon/original-cases-3.json'],
+  'galaxy-output-poll': ['training-load1', 'training-load2'].flatMap(poll => ['.json', '.pan.bin', '.poll.txt'].map(ext => `audio-output/${poll}${ext}`)),
+  'galaxy-output-replay': ['audio-output/replay-training.bin']};
 const readJson = file => JSON.parse(readFileSync(file, 'utf8'));
 
 // One frame's metrics against THRESHOLDS: the list of what is off.

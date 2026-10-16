@@ -87,17 +87,17 @@ a level clock that moved less than 0.01 s over the shot. On the way, under other
 `bHidden` line); `visual-acceptance.mjs original` now reads the dilation back, refuses a level not frozen before the load and takes `--cmd-check` for a `--cmd` line's field. Unexplained and
 labelled: five times the game stopped taking posted keys after none to four shots, which ended those runs with `NO SHOT`.
 
-**Current state, counted from the rows below (2026-10-16, not a gate run):** 76 criteria, 6 excluded (4.5.6 joined the excluded rows and 4.1.11 was added after the first run), 70 gating; **63 PASS, 3 FAIL, 4 MISSING**.
+**Current state, counted from the rows below (2026-10-16, not a gate run):** 76 criteria, 6 excluded (4.5.6 joined the excluded rows and 4.1.11 was added after the first run), 70 gating; **65 PASS, 2 FAIL, 3 MISSING** (4.3.6 and 4.3.7 passed on the Mac late on 2026-10-16).
 Only the full gate run (`node scripts/validate-stage4-acceptance.mjs`) is the gate; the per-row statuses come from the subset runs named in the updates above.
 
 | Clause | PASS | FAIL | MISSING | EXCLUDED |
 | --- | ---: | ---: | ---: | ---: |
 | 4.1 Animated actors | 10 | 0 | 2 | 0 |
 | 4.2 Effects | 27 | 2 | 1 | 3 |
-| 4.3 Sound | 5 | 1 | 1 | 0 |
+| 4.3 Sound | 7 | 0 | 0 | 0 |
 | 4.4 Text and interfaces | 14 | 0 | 0 | 2 |
 | 4.5 Speech, lip sync and the conversation camera | 7 | 0 | 0 | 1 |
-| **Total** | **63** | **3** | **4** | **6** |
+| **Total** | **65** | **2** | **3** | **6** |
 
 The table below is the whole gate, one row per criterion (`--markdown` re-renders it from the report). The ids are stable; `4.n.m` is clause n, row m.
 A mode in brackets names how the check exercises Play (see [How the gate judges](#how-the-gate-judges)).
@@ -166,8 +166,8 @@ A mode in brackets names how the check exercises Play (see [How the gate judges]
 | 4.3.3 | zone reverb | reverb coefficients and the SSE kernel equal Galaxy.dll | O2 | `galaxy-reverb` [oracle] | PASS |
 | 4.3.4 | music | IT loader, sequencer and Update's music section equal Galaxy.dll | O2 | `galaxy-music-sequencer` [oracle], `galaxy-music-update` [oracle], `galaxy-music-loader` [oracle] | PASS |
 | 4.3.5 | Island, Training and the intro in Play | ambient voices, music and window sounds reach the mixer in the worker and the worklet | O3 | `galaxy-music-host` [worker], `galaxy-music-play` [node], `galaxy-effects-play` [node], `window-sound-play` [node], `window-sound-browser` [worker] | PASS |
-| 4.3.6 | 06_HongKong_WanChai_Underworld, 400 ticks: a pistol picked up, drawn and fired | the original's Galaxy PlaySound calls of the scene against Play's replay: every call's sound, emitter, volume, radius, pitch, channel id and order | O1 | `sounds 06_HongKong_WanChai_Underworld (snd1)` [worker] | FAIL |
-| 4.3.7 | 00_Training from its load, 30 s: Galaxy's output buffer | every byte Galaxy's timer callback copies into the DirectSound buffer, and where it lands, equals the translation's when the original's library calls and cursor positions are replayed; Play places the music bus D bytes ahead of the effects bus as the original does, D measured; speech through Galaxy's ring transport (criterion adopted 2026-10-16, [audio output scope](audio-output-scope.md) §6) | - | missing: none of the five checks is built (`galaxy-output-callback`, `-poll`, `-replay`, `-play`, `galaxy-ring-voice`); the capture of the original (§5) is not taken | MISSING |
+| 4.3.6 | 06_HongKong_WanChai_Underworld, 400 ticks: a pistol picked up, drawn and fired | the original's Galaxy PlaySound calls of the scene against Play's replay: every call's sound, emitter, volume, radius, pitch, channel id and order | O1 | `sounds 06_HongKong_WanChai_Underworld (sndm5)` [worker] | PASS |
+| 4.3.7 | 00_Training, captured from the launch: the title map, a console `open 00_Training`, a walk and a jump, `MUSICORDER 2` (4,851 callbacks): Galaxy's output buffer | every byte Galaxy's timer callback copies into the DirectSound buffer, and where it lands, equals the translation's when the original's library calls and cursor positions are replayed (music and PCM effect voices); Play places the music bus D bytes ahead of the effects bus, D = 8,820 measured; speech through Galaxy's ring transport against the original's instructions (criterion adopted 2026-10-16, [audio output scope](audio-output-scope.md) §6) | O1, O2 | `galaxy-output-callback` [oracle], `galaxy-output-poll` [stored], `galaxy-output-replay` [stored], `galaxy-output-play` [node], `galaxy-ring-voice` [oracle] | PASS |
 
 ### 4.4 Text and interfaces
 
@@ -402,6 +402,8 @@ the debugger tools (`ad/build/dx-live-win.exe`, `dump-actor-win.exe`, built with
 | 02_NYC_Hotel's bathroom mirror, JC's `Tread` frozen (2026-10-16, 52.370 s) | main `.work/acceptance/02_NYC_Hotel/{hotel1,hotel2}-original.png`, `-time.txt`, `-state.json` | 4.2.19 |
 | Island's doorway beams, SetupDynamics pinned to rand state 0x2f6e2b1b, the level unfrozen (2026-10-16, 52.363 s; `laser1b` is a second frame of laser1, the original's own variation) | main `.work/acceptance/01_NYC_UNATCOIsland/{laser1,laser2}-original.png`, `-time.txt`, `laser1b-original.png` | 4.2.24 |
 | *Mac*: 04_NYC_Street's steam vent (2026-10-16, tag `vents4`, Brightness 2/3, `KillAll FlyGenerator` before the population is listed): 600 ticks with the stream state per tick, the load's generators before the kill, the held frame, three more frames of the same held tick and the frozen start's (vents2, the Linux host's, is no longer read) | main `.work/live-acceptance/04_NYC_Street/{original-trace-vents4.jsonl (+ .strobe, .actors.jsonl), watch-, population-, commands-, hold-, generators-load-vents4.json}`, `.work/acceptance/04_NYC_Street/vents4-original.png`, `vents4-original-{2,3,4}.png`, `vents4-base-original.png` | 4.2.13 |
+| *Mac*: the Underworld's sound scene (2026-10-16, tag `sndm5`: the `snd1` commands, with the tracer recording AIProcess's stop point and the windows' wall-clock deltas each tick; `snd1` and `sndm` to `sndm4` lack those inputs and cannot replay equal) | Mac main `.work/live-acceptance/06_HongKong_WanChai_Underworld/{original-trace-sndm5.jsonl{,.strobe,.calls.jsonl},registry-start-sndm5.txt,registry-end-sndm5.txt,watch-sndm5.json,commands-sndm5.json,population-sndm5.json,deferred-sndm5.json}` | 4.3.6 |
+| *Mac*: Galaxy's output (2026-10-16, under CrossOver): two read-only polls of 00_Training across a console map load (`scripts/galaxy-output-capture.sh`), and the launch capture `replay-training.bin` (23:05, 4,263,809 bytes, SHA256 abdd181a…1ba4ae) with its `.log`; `earlier/` holds three earlier captures, unread by the gate | Mac main `.work/audio-output/{training-load1,training-load2}.{json,pan.bin,poll.txt}`, `replay-training.{bin,log}` | 4.3.7 |
 
 **A clock per frame, not per map, is what a store should keep.** `times.json` holds one level time per map and each capture overwrites it, so
 a frame and the clock beside it can come from different captures. Two cases showed up in the first run: the main `.work/live` tree's `fan2-original.png`
@@ -505,9 +507,15 @@ record read by the gate; frames equal to within 0.02 levels, the other state's f
    Tools added for these and used above: per-frame `-time.txt` and `times` staging, `--base` / `--base-cmd` / `--base-poke` / `--contribution`, `--freeze-player` / `--player-state` / `--player-pose`,
    `--pre-shot-cmd` / `--pre-shot-wait`, `--rng-pin` (and `dx-live-win.exe rngpin`), `compare --beams`, `compare --flash-base`, `--decal-state` and `play --camera-transit`, a held-Strobe view's
    own clock and hold record (`dx-live-win.exe strobe poll ... <LevelInfo>`), `original`'s dilation read-back, frozen-level check and `--cmd-check`, `live-acceptance.mjs --base-shot` / `--draw-stack-actor`, the gate's `base`, `playerPose`, `unfreeze`, `rngPin`, `beams`, `twin`, `baseShot`, `preShot` / `preShotWait`, `flashBase`, `decalState`, `cmds`, `cameraTransit` and `strobeHeld` options.
-6. **Sound against a live scene (4.3.6) is a check and it fails; the speakers (4.3.7) are unchecked.** `live-sound-compare.mjs --gate` compares the original's `PlaySound` calls of the
-   Underworld `snd1` capture with Play's replay (stored in the main `.work`, see [Stored originals](#stored-originals)): 56 of 82 ticks with calls equal, first differing tick 278 (hand-off in
-   [galaxy-audio](galaxy-audio.md#hand-off-the-sound-gate-2026-10-16)). **4.3.7 has an adopted plan (2026-10-16, [audio output scope](audio-output-scope.md))**: the user accepted all six
+6. **Sound: 4.3.6 and 4.3.7 done 2026-10-16.** *4.3.6* passes on `sndm5`, a capture of the Underworld scene on the Mac: 68 of 68 ticks with calls, 103 of 103 calls, 557 of 557
+   registry takes, the AI manager's 654 calls and 50 actors equal for 400 ticks ([galaxy audio](galaxy-audio.md), "Row 4.3.6"; [object index captures](object-index-captures.md)). Five causes were
+   fixed in Play: FastLineCheck reads the level's model as the moving-brush tracker holds it (the movers' fragments block sound obstruction; `validate-fast-line-check-tracked`, 1,493 lines on
+   three maps against Engine.dll), XGC::PushGC's new node takes a GObjObjects slot, AIProcess's 2 ms rdtsc budget and the windows' wall-clock deltas are measured inputs of the live replay
+   (host timing, recorded by the tracer), windows tick before the level as UExtensionEngine::Tick orders them, and the pre-scene AI sender is freed where the original frees it. The Linux
+   `snd1` capture lacks the recorded inputs and is no longer the row's. The live rows whose stores are on the Linux host (4.1.5 to 4.1.8, 4.5.5, 4.5.7, 4.5.8) also go through the line-check
+   and window-order changes and were not rerun. *4.3.7* passes on its five checks (the launch capture replays bit-equal: 4,851 callbacks, both resyncs, 34,222,080 copied bytes; the poll measures
+   D = 8,820 bytes, write lead 1,764 = Play's `WRITE_LEAD`). Speech is not in the live scene: two breakpoints hit at once on different threads garble the record under CrossOver, so the
+   ring transport is checked by the oracle only ([audio output scope](audio-output-scope.md) §5.2). The plan the user adopted (2026-10-16): the user accepted all six
    recommendations. (1) Play reproduces Galaxy's two ring heads, so music sounds about 0.96 s after the effects rendered with it, as in the original. (2) D's host part (the
    write cursor's lead at the first callback, CrossOver's dsound on the reference machine) is measured once and pinned as a labelled host input. (3) The checks are the
    callback under Unicorn, the tracer's read-only poll and a capture replayed through the translation; a loopback recording is optional confirmation only. (4) Speech
