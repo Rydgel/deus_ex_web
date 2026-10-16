@@ -306,7 +306,7 @@ add('4.5.5', C5, 'MeetPaul frame', 'the third-person conversation frame (letterb
     frames: [{name: 'cvA1', tick: 100}, {name: 'cvA2', tick: 250}, {name: 'cvA3', tick: 600}, {name: 'cvA4', tick: 750}],
     liveAllow: {'@player': ['Frame'], SecurityBot0: ['LRT'], UNATCOTroop1: ['LRT']},   // measured: the player's AnimFrame at tick 1-5 (a tween phase), two guards' LastRenderTime at tick 1 (the render history before the release)
     earlyCmds: 'set WinDrv.WindowsClient Brightness 0.666667|set DeusEx.JCDentonMale Location (X=-2385,Y=8393,Z=-256.2)|set DeusEx.JCDentonMale ViewRotation (Pitch=0,Yaw=51120,Roll=0)|walk'}));
-missing('4.5.6', C5, 'speech audio', 'the speech samples the player hears against Galaxy\'s', 'Galaxy\'s MPEG decoder is not translated; the host\'s decode and rounding are unverified (docs/lip-sync.md)');
+excluded('4.5.6', C5, 'speech audio', 'the speech samples the player hears against Galaxy\'s', 'the user\'s decision (2026-10-16): speech stays decoded by the browser\'s MP3 decoder, not a port of Galaxy\'s MPEG decoder; lip sync runs the translated analysis on those samples (docs/lip-sync.md)');
 add('4.5.7', C5, '00_Intro camera shots', 'the intro\'s CameraPoint shots against the original', 'O1',
   CONVERSATION({scene: 'intro', map: '00_Intro', tag: 'in2', noGhost: true, keepTraveling: true,
     frames: [{name: 'in2-in1', tick: 170}, {name: 'in2-in3', tick: 1000}, {name: 'in2-in4', tick: 2250}],

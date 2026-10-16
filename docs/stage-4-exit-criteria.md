@@ -131,7 +131,7 @@ A mode in brackets names how the check exercises Play (see [How the gate judges]
 | 4.5.3 | 01_NYC_UNATCOIsland MeetPaul camera | CreateConCamera, the letterbox raw background, the render viewport clip and the player in behind view | O3 | `island-conversation` [node], `root-raw-background` [oracle], `root-render-viewport` [oracle], `conversation-move-camera` [node] | PASS |
 | 4.5.4 | speech timing and audio | speech lookup, sound length and the retained archive equal the original | O2 | `conversation-sound-length` [oracle], `conversation-audio-integration` [node], `conversation-speech-audio` [oracle], `infolink-audio` [node], `conversation-speech` [oracle] | PASS |
 | 4.5.5 | MeetPaul frame | the third-person conversation frame (letterbox, behind view, camera, subtitles) against the original's | O1 | `conversation 01_NYC_UNATCOIsland cvA (4 frames)` [worker] | PASS |
-| 4.5.6 | speech audio | the speech samples the player hears against Galaxy's | - | missing: Galaxy's MPEG decoder is not translated; the host's decode and rounding are unverified (docs/lip-sync.md) | MISSING |
+| 4.5.6 | speech audio | the speech samples the player hears against Galaxy's | - | excluded: the user's decision (2026-10-16): speech stays decoded by the browser's MP3 decoder, not a port of Galaxy's MPEG decoder; lip sync runs the translated analysis on those samples (docs/lip-sync.md) | EXCLUDED |
 | 4.5.7 | 00_Intro camera shots | the intro's CameraPoint shots against the original | O1 | `conversation 00_Intro in2 (3 frames)` [worker], `native-find-base` [oracle] | PASS |
 | 4.5.8 | 01_NYC_UNATCOHQ MeetManderley | a conversation on another map, with the third-person camera, lip sync and speech (the lines and their timing; the audio samples are 4.5.6) | O1 | `conversation 01_NYC_UNATCOHQ mmA (2 frames)` [worker], `conversation 01_NYC_UNATCOHQ mmB (2 frames)` [worker] | PASS |
 
@@ -258,6 +258,14 @@ gate leaves out on purpose. Nothing here is a claim; it is the list a reader sho
 
 These keep the gate neither green nor red; each names the stage or the reason.
 
+- **Speech audio decoding** (4.5.6): the user decided on 2026-10-16 to keep the browser's MP3 decoder for speech rather than port Galaxy's
+  MPEG decoder. Speech plays and lip sync runs Galaxy's translated analysis on the browser-decoded samples; the samples themselves are not
+  claimed equal to the original's.
+  **Not covered by that exclusion, and open (found 2026-10-16):** conversation and DataLink speech bypass Galaxy's voices. The page plays
+  them through their own Web Audio source at a fixed gain (`playConversationSpeech` in src/viewer/main.mjs: `parameters[0]/100`), so speech has
+  no distance factor, no pan and no category ratio, where the original plays it through PlaySound (slot 5) and Update scales and pans it every
+  frame ([galaxy audio](galaxy-audio.md), steps 7 and 8). Audible on barks and overheard conversations at a distance. The fix keeps the
+  browser's MP3 decode and feeds its samples to the translated Galaxy voice path instead of the separate source.
 - **Swimming and drowning visuals** (4.2.33): Stage 5, a gameplay system (ladders and flying are done, swimming is next in
   [Stage 5](roadmap.md#5-implement-the-full-gameplay-systems)).
 - **Load Game, Save Game and QuickSave screens** (4.4.15): Stage 6, they stop at the save-game directory (native 3013).
