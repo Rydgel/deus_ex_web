@@ -32,6 +32,9 @@
 //   its own brightness) run it at the held dilation; the other views of the run are then of that level, not the frozen one.
 //   `compare --flash-base <view>`: each view's viewport flash as a per-channel map of levels from the base view (the same camera without the flash)
 //   to the view, the original's against Play's (flashMap below; held flash states through --pre-shot-cmd, docs/screen-flash.md).
+//   `--decal-state` (both sides): after each shot, the level's Shadow decals and their owners as the frame had them (<view>-decals.json from the
+//   running original, <view>-play-decals.json from Play); `compare --decal-state` matches them by owner (decalState below, docs/decals.md).
+//   `play --camera-transit` places each camera as the original's console does: Location, frames, then ViewRotation.
 //
 // Frames are raw: the original's Shot bitmaps are its framebuffer before the
 // gamma ramp, and Play is captured at Brightness 0.4, whose display ramp
@@ -119,6 +122,13 @@ function heldTimeOf(map, views) {
 }
 const HELD_DILATION = 0.001;
 mkdirSync(out, {recursive: true});
+// --decal-state: a Shadow's inputs (its owner's Location, the trace's hit as its own Location, DrawScale, Rotation: Shadow.Tick) and its attachment
+// (bHasDecal, SurfList.Num), the owner's LastRenderTime (Tick's doDraw) and the level time of the read. The original's offsets are the linked
+// properties' (UProperty +0x48, read in Play with liveProbe `offsets`): Shadow.lastLocation +0x32c and bHasDecal +0x338 mask 1 past ADecal's 0x32c.
+const DECAL_FIELDS = ['Owner:0x3c:obj', 'Location:0x114:f3', 'Rotation:0x120:i3', 'DrawScale:0x17c:f', 'HasDecal:0x338:bit:0x1', 'LastLocation:0x32c:f3',
+  'Surfaces:0x324:u32', 'LastRenderTime:0x34:f', 'LastRenderedTime:0x31c:f', 'LevelTime:0xa8:pf:0x478', 'OwnerX:0x3c:pf:0x114', 'OwnerY:0x3c:pf:0x118',
+  'OwnerZ:0x3c:pf:0x11c', 'OwnerVX:0x3c:pf:0x144', 'OwnerVY:0x3c:pf:0x148', 'OwnerVZ:0x3c:pf:0x14c', 'OwnerLastRenderTime:0x3c:pf:0x34'];
+const SHADOW_PROPS = ['Owner', 'Location', 'Rotation', 'DrawScale', 'bHasDecal', 'lastLocation', 'SurfList', 'LastRenderTime', 'LastRenderedTime'];
 
 // Views from a start Location: the four axis yaws level, and one looking
 // down the start yaw. Integers, so both consoles get the same floats.
@@ -224,6 +234,13 @@ async function play() {
         throw new Error(`the scene canvas is ${box.width}x${box.height} at ${box.x},${box.y} (buffer ${buffer.join('x')}), not ${WIDTH}x${HEIGHT}`);
       const shots = [];
       for (const view of viewsOf(entry).filter(view => !isBase(view.name))) {
+        // --camera-transit: the camera placed as the original's console places it, `set Location` and then, typed lines later, `set ViewRotation`:
+        // frames are drawn at the new Location with the previous rotation, and what they draw is stamped LastRenderTime (with the level unfrozen,
+        // Shadow.Tick attaches the shadow of a pawn drawn there only: 00_Training's ScientistMale0 from shadow2's Location at the start's rotation).
+        if (process.argv.includes('--camera-transit')) {
+          await page.evaluate(([v, region]) => window.deusExViewer.viewProbe({location: v.location, region}), [view, region]);
+          await frames(6);
+        }
         await page.evaluate(([v, region]) => window.deusExViewer.viewProbe({location: v.location, rotation: v.rotation, region}), [view, region]);
         await frames(settleFrames);
         // --player-pose: the player's animation as `original --player-state` measured it for this view (<view>-state.json); AnimRate 0 because
@@ -251,6 +268,16 @@ async function play() {
         const probe = await page.evaluate(() => window.deusExViewer.viewProbe({}));
         await page.screenshot({path: path.join(dir, `${view.name}-play.png`),
           clip: {x: 0, y: 0, width: WIDTH, height: HEIGHT}});
+        if (process.argv.includes('--decal-state')) {
+          const {actors} = await page.evaluate(props => window.deusExViewer.liveProbe({actors: 'deusex.shadow', actorProps: props}), SHADOW_PROPS);
+          const owners = [...new Set(actors.map(row => row.Owner).filter(Boolean))];
+          const {read} = await page.evaluate(names => window.deusExViewer.liveProbe({read: {names, props: ['Location', 'Velocity', 'LastRenderTime']}}), owners);
+          const time = (await page.evaluate(() => window.deusExViewer.viewProbe({}))).timeSeconds;
+          writeFileSync(path.join(dir, `${view.name}-play-decals.json`), JSON.stringify({map, view: view.name, shadows: actors.map(row => ({name: row.name, owner: row.Owner,
+            location: row.Location, rotation: row.Rotation, drawScale: row.DrawScale, hasDecal: row.bHasDecal, lastLocation: row.lastLocation, surfaces: row.SurfList.length,
+            lastRenderTime: row.LastRenderTime, lastRenderedTime: row.LastRenderedTime, time, ownerLocation: read[row.Owner]?.Location ?? null,
+            ownerVelocity: read[row.Owner]?.Velocity ?? null, ownerLastRenderTime: read[row.Owner]?.LastRenderTime ?? null}))}, null, 1));
+        }
         if (baseKind) {
           // The same view without the effect (--base fog|detail): <view>-play-base.png.
           await page.evaluate(BASE_OFF[baseKind]);
@@ -487,6 +514,23 @@ async function original() {
             anim: {AnimSequence: row.AnimSequence, AnimFrame: row.AnimFrame, AnimRate: row.AnimRate, TweenRate: row.TweenRate, AnimLast: row.AnimLast, AnimMinRate: row.AnimMinRate, OldAnimRate: row.OldAnimRate,
               BlendAnimSequence: four('B'), BlendAnimFrame: four('F'), BlendAnimRate: four('R'), BlendTweenRate: four('T'), BlendAnimLast: four('L'), BlendAnimMinRate: four('M')}, flash: {FlashScale: row.FlashScale, FlashFog: row.FlashFog}}}, null, 1));
         }
+        // --decal-state: the level's Shadow actors as the frame had them (rows of class Shadow: the name also matches properties and states).
+        if (taken.length && process.argv.includes('--decal-state')) {
+          const text = execFileSync(game.WINE, [path.join(root, 'ad/build/dump-actor-win.exe'), 'Shadow', ...DECAL_FIELDS], {encoding: 'utf8', env: process.env});
+          const shadows = [];
+          for (const line of text.split(/\r?\n/)) {
+            const m = /^Shadow (\S+) (.*)$/.exec(line);
+            if (!m) continue;
+            const row = {};
+            for (const part of m[2].matchAll(/(\w+)=(\([^)]*\)|\S+)/g)) row[part[1]] = part[2].startsWith('(') ? part[2].slice(1, -1).split(',').map(Number) : Number.isNaN(Number(part[2])) ? part[2] : Number(part[2]);
+            const owned = row.Owner !== 'None';
+            shadows.push({name: m[1], owner: owned ? row.Owner : null, location: row.Location, rotation: row.Rotation, drawScale: row.DrawScale, hasDecal: row.HasDecal,
+              lastLocation: row.LastLocation, surfaces: row.Surfaces, lastRenderTime: row.LastRenderTime, lastRenderedTime: row.LastRenderedTime, time: row.LevelTime,
+              ownerLocation: owned ? [row.OwnerX, row.OwnerY, row.OwnerZ] : null, ownerVelocity: owned ? [row.OwnerVX, row.OwnerVY, row.OwnerVZ] : null,
+              ownerLastRenderTime: owned ? row.OwnerLastRenderTime : null});
+          }
+          writeFileSync(path.join(dir, `${view.name}-decals.json`), JSON.stringify({map, view: view.name, timeSeconds: loadTimes()[map], shadows}, null, 1));
+        }
       }
       console.log(map, view.name, taken.length ? `${taken[0].width}x${taken[0].height}` : 'NO SHOT');
       if (taken.length && (taken[0].width !== WIDTH || taken[0].height !== HEIGHT)) throw new Error(`${map} ${view.name}: the original's frame is ${taken[0].width}x${taken[0].height}, not ${WIDTH}x${HEIGHT}`);
@@ -600,7 +644,8 @@ function compareOne(a, b, prefix) {
 // difference over the original's (the gap's order), the Pearson correlation of the two luma differences over the frame, the mean absolute
 // residual after the best scale (k = sum(P O) / sum(O^2)) as a share of the mean absolute original difference, and, over the pixels where
 // the original's difference is at least 1 level (the effect's own pixels), the share where Play's has the same sign and at least a
-// quarter of the scaled value.
+// quarter of the scaled value. An effect that darkens (a modulated decal, `2 tex dst`) has a negative sum: its own pixels are those at least
+// 1 level darker and the gap is Play's sum over the original's as signed sums (`sign`; the haze, which brightens, reads as before).
 function contribution(dir, name) {
   const files = [`${name}-original.png`, `${name}-base-original.png`, `${name}-play.png`, `${name}-play-base.png`].map(f => path.join(dir, f));
   if (!files.every(f => existsSync(f))) return null;
@@ -611,12 +656,13 @@ function contribution(dir, name) {
   for (let c = 0; c < 3; c++) for (let i = 0; i < n; i++) { sumO += ow.data[3 * i + c] - o0.data[3 * i + c]; sumP += pw.data[3 * i + c] - p0.data[3 * i + c]; }
   for (let i = 0; i < n; i++) { so += O[i]; sp += P[i]; soo += O[i] * O[i]; spp += P[i] * P[i]; sop += O[i] * P[i]; absO += Math.abs(O[i]); absP += Math.abs(P[i]); }
   const k = soo ? sop / soo : 0, corr = (sop - so * sp / n) / Math.sqrt(Math.max(1e-9, (soo - so * so / n) * (spp - sp * sp / n)));
+  const sign = sumO < 0 ? -1 : 1;
   let resid = 0, own = 0, agree = 0;
   for (let i = 0; i < n; i++) {
     resid += Math.abs(P[i] - k * O[i]);
-    if (O[i] >= 1) { own++; if (P[i] >= 0.25 * k * O[i]) agree++; }
+    if (sign * O[i] >= 1) { own++; if (sign * P[i] >= 0.25 * k * sign * O[i]) agree++; }
   }
-  return {originalSum: sumO, playSum: sumP, gap: +(sumP / Math.max(1, sumO)).toFixed(3), meanAbsOriginal: +(absO / n).toFixed(4), meanAbsPlay: +(absP / n).toFixed(4),
+  return {originalSum: sumO, playSum: sumP, sign, gap: +(sumP / (sign * Math.max(1, sign * sumO))).toFixed(3), meanAbsOriginal: +(absO / n).toFixed(4), meanAbsPlay: +(absP / n).toFixed(4),
     correlation: +corr.toFixed(4), scale: +k.toFixed(3), residual: +(resid / Math.max(1e-9, absO)).toFixed(3), effectPixels: own, agreement: own ? +(agree / own).toFixed(3) : null};
 }
 
@@ -647,6 +693,52 @@ function flashMap(dir, base, name) {
   return {levels: shared, differing: differing.length, firstDiffering: differing.slice(0, 6), straysOriginal: O.strays, straysPlay: P.strays,
     // what level 0 and the base's brightest level go to in the original, per channel (the fog bytes, and the scale or the saturation)
     zero: [0, 1, 2].map(c => O.out[c * 256]), top: [0, 1, 2].map(c => { let v = 255; while (v > 0 && O.out[c * 256 + v] < 0) v--; return [v, O.out[c * 256 + v]]; })};
+}
+
+// compare --decal-state: each view's Shadow decals, the original's (<view>-decals.json) against Play's (<view>-play-decals.json), matched by owner
+// (names compare without case: the programs spell some map actors differently, the original's `mib1` is Play's `MIB1`). Per shadow: bHasDecal and the
+// number of surfaces it is attached to, and for one attached in both its Location (Shadow.Tick's trace hit), Rotation (Rotator(HitNormal)) and DrawScale
+// (from the owner's collision size and the hit's distance); the owner's Location over all of them (a pawn that walked moves its shadow).
+// The player is matched as the player (Play's start reloads the map, so its JC is JCDentonMale1 where the original's is JCDentonMale2). A shadow the
+// frame drew is one whose LastRenderedTime (stamped by the decal block for a nonempty fragment) is within DRAWN_WITHIN of the read's level time: at
+// the held dilation a frame advances the clock by microseconds, and a shadow last drawn at the previous camera is 1e-3 s (Play) to 2e-2 s older.
+const DRAWN_WITHIN = 2e-4;
+function decalState(dir, name) {
+  const files = [`${name}-decals.json`, `${name}-play-decals.json`].map(f => path.join(dir, f));
+  if (!files.every(f => existsSync(f))) return null;
+  const key = s => /^jcdentonmale\d*$/i.test(s.owner) ? '(player)' : s.owner.toLowerCase();
+  const [O, P] = files.map(f => JSON.parse(readFileSync(f, 'utf8')).shadows.filter(s => s.owner));
+  const byOwner = new Map(P.map(s => [key(s), s]));
+  const drawn = list => list.filter(s => s.lastRenderedTime > 0 && s.time - s.lastRenderedTime < DRAWN_WITHIN).map(key).sort();
+  // The fields are float32 in both programs (the original's printed with %.9g, which gives a float32 back exactly): compared as float32, bit for bit.
+  const gap = (a, b) => a && b ? Math.max(...a.map((v, i) => Math.abs(v - b[i]))) : Infinity;
+  const same32 = (a, b) => a && b && a.length === b.length && a.every((v, i) => Math.fround(v) === Math.fround(b[i]));
+  const differing = [], unmatched = [...O.filter(s => !byOwner.has(key(s))).map(s => s.owner),
+    ...P.filter(s => !O.some(o => key(o) === key(s))).map(s => `${s.owner} (Play)`)];
+  let matched = 0, maxLocation = 0, maxDrawScale = 0, maxOwnerLocation = 0;
+  for (const o of O) {
+    const p = byOwner.get(key(o));
+    if (!p) continue;
+    matched++;
+    const off = [];
+    if (o.hasDecal !== p.hasDecal) off.push(`bHasDecal ${o.hasDecal}/${p.hasDecal}`);
+    if (o.surfaces !== p.surfaces) off.push(`surfaces ${o.surfaces}/${p.surfaces}`);
+    // attached in either: where its owner stands; attached in both: where the decal is, turned how and how large
+    if (o.surfaces || p.surfaces) {
+      maxOwnerLocation = Math.max(maxOwnerLocation, gap(o.ownerLocation, p.ownerLocation));
+      if (!same32(o.ownerLocation, p.ownerLocation)) off.push(`owner at ${o.ownerLocation.join(',')}/${p.ownerLocation?.join(',')}`);
+    }
+    if (o.surfaces && p.surfaces) {
+      maxLocation = Math.max(maxLocation, gap(o.location, p.location));
+      maxDrawScale = Math.max(maxDrawScale, Math.abs(o.drawScale - p.drawScale));
+      if (!same32(o.location, p.location)) off.push(`Location ${o.location.join(',')}/${p.location.join(',')}`);
+      if (!same32([o.drawScale], [p.drawScale])) off.push(`DrawScale ${o.drawScale}/${p.drawScale}`);
+      if (o.rotation.some((v, i) => v !== p.rotation[i])) off.push(`Rotation ${o.rotation.join(',')}/${p.rotation.join(',')}`);
+    }
+    if (off.length) differing.push(`${o.owner}: ${off.join(', ')}`);
+  }
+  return {shadows: O.length, matched, unmatched, attached: [O.filter(s => s.surfaces).length, P.filter(s => s.surfaces).length], drawn: [drawn(O), drawn(P)], differing,
+    maxLocation: +maxLocation.toPrecision(3), maxDrawScale: +maxDrawScale.toPrecision(3), maxOwnerLocation: +maxOwnerLocation.toPrecision(3)};
 }
 
 // compare --beams: the laser beams' geometry. A beam is the only strongly red thing in the Island doorways, so a pixel's beam energy is its red excess
@@ -709,6 +801,7 @@ function compare() {
         if (existsSync(twin)) result.beamsFloor = beamMetrics(a, twin);   // a second frame of the original's own view: its frame-to-frame variation
       }
       if (process.argv.includes('--contribution') && !crop && playName === 'play') { const c = contribution(dir, view.name); if (c) result.contribution = c; }
+      if (process.argv.includes('--decal-state') && !crop && playName === 'play') { const d = decalState(dir, view.name); if (d) result.decalState = d; }
       const flashBase = option('flash-base', null);
       if (flashBase && view.name !== flashBase && !crop && playName === 'play') { const f = flashMap(dir, flashBase, view.name); if (f) result.flashMap = f; }
       (report[map] ??= {})[view.name] = result;

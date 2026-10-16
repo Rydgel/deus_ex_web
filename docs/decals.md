@@ -315,7 +315,73 @@ Host choices, noted:
 - Rotation words are read from the movers' actors at each call. ClipDecal
   and the Mover branch read `Surf.Actor->Rotation` at theirs.
 
+## Against the original (2026-10-16, gate row 4.2.15)
+
+Training's pawns' Shadow decals in a frame of the original, captured on the Mac under CrossOver at Brightness 2/3 (the Shot is the
+framebuffer; Play's ramp at 0.4 is the identity), against Play's frame at the same camera and clock. Two cameras over the gallery where
+JaimeReyes0, WaltonSimons0 and mib1 stand in a row: `shadow2` (211,1266,-33 looking along yaw 61567, pitch 62500) and `shadow3`
+(61,1326,-23, yaw 59067, pitch 61166), each with its frame without decals (`<view>-base`: the original after `set WinDrv.WindowsClient
+Decals False`, which DrawFrame and AttachDecal both read; Play's decal layer hidden) and the state of every Shadow actor at the shot.
+
+**What the frame depends on.** `DeusEx.Shadow.Tick` (embedded source) does nothing while its owner stands still and it holds a decal
+(`VSize(Owner.Location - lastLocation) < 0.1`, `bHasDecal`). Otherwise it detaches, and re-attaches only if the shadow or its owner was
+drawn within the last second of level time (`LastRendered()`, native 723, reads Actor.LastRenderTime; the player always): a trace 480
+units down from the owner, `DrawScale = CollisionRadius/15 - (dist - CollisionHeight)/130` (times ScriptedPawn.ShadowScale, floored at 0),
+`SetRotation(Rotator(HitNormal))`, `AttachDecal(32, (0.1,0.1,0))`. A frozen level shows only the spawn's `Decal.BeginPlay` attach
+(`AttachDecal(100)` from the feet, DrawScale 1, rotation (16384,0,0)); the first unfrozen Tick (`lastLocation` is still zero) detaches every
+shadow and attaches again those whose owner has been drawn. So the shadows in a frame follow the owners' Locations and what each program
+drew since the release, and the captures hold or measure each:
+
+- **The level is unfrozen** after the clock is held (`--unfreeze`), so Shadow.Tick runs.
+- **The walkers stand.** mib1 (class MIB, Orders Wandering) picks a destination with `FRand` as soon as it lands; ScientistMale0
+  (ScientistMale, Patrolling) walks its route. Their walks are each program's own: the original free-runs near 200 ticks a second at the
+  actor-delta floor of 0.005 s while Play steps 60, and the destination is a draw from a stream the programs do not share. Measured in a
+  capture without the hold: at the freeze, the original's mib1 at (329.91, 1236.84) heading (25.7, 28.6), Play's at (292.61, 1215.74) heading
+  (38.3, 2.2). Both consoles type `set MIB Orders Standing` and `set ScientistMale Orders Standing` (`--cmd`) while the pawns are still
+  frozen in StartUp, so their first tick enters Standing. An input of the held state, like the hidden meshes below; their walks are not compared.
+- **The meshes are hidden at the shot** (`--pre-shot-cmd 'set ScriptedPawn bHidden True'`): the pawns' BreatheLight poses move between a frame
+  and its frame without decals (in the original seconds apart), which a contribution would count. A hidden owner that stands keeps its decal
+  (Tick's early return), so only the shadows' inputs remain.
+- **The level is frozen again before the shot** (`--pre-shot-cmd 'set LevelInfo bPlayersOnly True'`). The original runs on while the
+  state is read, about a second after its Shot: a first capture read mib1's shadow 140 units from where its frame had it. Frozen, the read is
+  the frame's state. The state at the shot then depends on the order of the views (the first view's shot freezes it), so the store holds the
+  row's order.
+- **The camera moves as the original's console moves it.** The original types `set Location`, then `set ViewRotation`, and draws frames in
+  between at the new Location with the old rotation; Play's probe placed both at once. ScientistMale0 is drawn only in such a frame (from
+  `shadow2`'s Location at the start's rotation (0,0,0): its LastRenderTime 54.5185 s, between the hold at 54.5071 s and the shot), so its
+  shadow was attached in the original and not in Play until `play --camera-transit` (Location, six frames, then the rotation).
+- **No animated surface in view.** The recipe's first camera (`shadow1`, 61,1326,-23 at yaw 61567, pitch 62166) holds a console's
+  animated screen and a flickering patch, which change between any two frames of either program: its contribution read correlation .945 and
+  .78 in two captures with the same shadows bit-equal. `shadow3` sees the same three shadows without them.
+
+**Result** (original held at 54.507 s, `shadow2` and `shadow3` in that order; the gate's run twice, the same numbers):
+
+| | shadow2 | shadow3 |
+| --- | ---: | ---: |
+| Frame: mean abs. difference, edge recall / precision, outlier blocks | 0.01, 1 / 1, 0 | 0.01, 1 / 1, 0 |
+| Shadows drawn (stamped `LastRenderedTime` at the shot), both programs | JaimeReyes0, WaltonSimons0 | JaimeReyes0, WaltonSimons0, mib1, the player |
+| Contribution (frame less frame without decals): correlation, residual, Play's sum over the original's, agreement | 1.0, 0, 1.0, 1.0 | 1.0, 0, 1.0, 1.0 |
+| Samples the decals change (either program), of them changed by a different amount | 57,851, 146 (by one level) | 57,571, 128 (by one level) |
+| Shadow actors equal (bHasDecal, surfaces; owner Location where attached; Location, DrawScale, Rotation where attached in both) | 19 of 19, 5 attached | 19 of 19, 5 attached |
+
+The state is compared as float32, bit for bit: for example JaimeReyes0's shadow at (361.279, 1206.008, -95.5), DrawScale 1.30025649
+(20/15 - (42.6 - 38.3)/130), Rotation (16383, -32767, 0) for a floor normal, in both programs; the 14 pawns never drawn hold a detached shadow at
+their spawn place in both. The frames otherwise differ in 21,317 and 16,687 samples (at most 17 and 7 levels), the same in the frames without
+decals: the scene's, not the decals'. The one-level differences are the modulated blend's rounding (`2 tex dst` on the 8-bit target against
+GL's blend), not measured further, and against CrossOver's D3D on the M2, not a Windows driver.
+
+Tooling: `visual-acceptance.mjs --decal-state` (both sides: `dump-actor-win.exe Shadow` in the original, Shadow.lastLocation +0x32c and
+bHasDecal +0x338 mask 1 by the linked properties, `liveProbe` in Play; `compare --decal-state`), `play --camera-transit`, `--cmd` in the gate,
+and `compare --contribution` for an effect that darkens (its own pixels are those at least one level darker; the haze reads as before).
+Not in a frame: bullet holes, scorch marks and blood, which need combat. Weak: two views of one gallery, and the two walkers are held, not matched.
+
+```bash
+scripts/original-views.sh 00_Training --view shadow2:211,1266,-33:62500,61567,0 --view shadow3:61,1326,-23:61166,59067,0 --view shadow2-base:211,1266,-33:62500,61567,0 --view shadow3-base:61,1326,-23:61166,59067,0 --brightness 0.666667 --cmd 'set MIB Orders Standing' --cmd 'set ScientistMale Orders Standing' --unfreeze --base-cmd 'set WinDrv.WindowsClient Decals False' --pre-shot-cmd 'set ScriptedPawn bHidden True' --pre-shot-cmd 'set LevelInfo bPlayersOnly True' --decal-state
+node scripts/validate-stage4-acceptance.mjs --only '^4\.2\.15$'
+```
+
 ## Open
 
+- Bullet holes, scorch marks and blood in a frame against the original (they need combat).
 - Decals in sky child frames.
 - The game-thread control word (above).

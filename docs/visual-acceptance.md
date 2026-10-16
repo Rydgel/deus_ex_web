@@ -1966,6 +1966,22 @@ node scripts/validate-stage4-acceptance.mjs --only '^4\.2\.26$'
 
 `original` needs the map in the plan, which `play` writes: on a checkout without one, run `play --maps 00_Training --view flash0:...` first.
 
+### 00_Training's pawns' shadows (row 4.2.15)
+
+Taken on the Mac under CrossOver at Brightness 2/3, the level unfrozen so `Shadow.Tick` attaches the shadows: `shadow2` (211,1266,-33) and `shadow3` (61,1326,-23)
+over the gallery, in that order and in one run (one clock, 54.507 s), each with its frame after `set WinDrv.WindowsClient Decals False` (`<view>-base`, Play's
+`--base decal`) and the state of every Shadow actor read after the shot (`--decal-state`: `<view>-decals.json`, Play's `<view>-play-decals.json`). Four
+inputs are held: the walkers stand (`--cmd 'set MIB Orders Standing'`, `--cmd 'set ScientistMale Orders Standing'`, typed while the level is still frozen),
+the meshes are hidden and the level frozen again before each shot (`--pre-shot-cmd`), and Play moves its camera as the original's console does (`play
+--camera-transit`: Location, frames, then ViewRotation). `compare --contribution` now reads an effect that darkens by its own sign; `compare --decal-state`
+matches the shadows by owner and compares them as float32. Both frames, the contributions and the 19 shadows' state equal the original's; what each
+hold is for, the five captures that found them and the numbers are in [decals](decals.md#against-the-original-2026-10-16-gate-row-4215).
+
+```bash
+scripts/original-views.sh 00_Training --view shadow2:211,1266,-33:62500,61567,0 --view shadow3:61,1326,-23:61166,59067,0 --view shadow2-base:211,1266,-33:62500,61567,0 --view shadow3-base:61,1326,-23:61166,59067,0 --brightness 0.666667 --cmd 'set MIB Orders Standing' --cmd 'set ScientistMale Orders Standing' --unfreeze --base-cmd 'set WinDrv.WindowsClient Decals False' --pre-shot-cmd 'set ScriptedPawn bHidden True' --pre-shot-cmd 'set LevelInfo bPlayersOnly True' --decal-state
+node scripts/validate-stage4-acceptance.mjs --only '^4\.2\.15$'
+```
+
 ## Open
 
 - **Not attributed, seen in the 2026-10-14 pilot re-runs with Divergences 17 and 18 in** (every watched actor equal in all three): the Island run's stream draws differ at tick 264

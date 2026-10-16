@@ -164,13 +164,20 @@ const EFFECT_VIEWS = Object.freeze({
   // and clock per state; FLASH_BASE is the same camera without the flash, a capture of its own.
   flashA: {map: '00_Training', views: ['flashA:-100,840,30:0,0,0']},
   flashB: {map: '00_Training', views: ['flashB:-100,840,30:0,0,0']},
+  // Training's pawns' shadows (docs/decals.md "Against the original"), captured on the Mac at Brightness 2/3 with the level unfrozen and the pawns'
+  // meshes hidden at the shot, each view with its frame without decals (<view>-base) and the shadows' state (<view>-decals.json). The recipe's
+  // shadow1 (61,1326,-23:62166,61567,0) is not used: an animated console screen and a flickering patch in it change between any two frames of
+  // either program, so its contribution measures them (correlation .945 and .78 in two captures); shadow3 sees the same shadows without them.
+  shadow: {map: '00_Training', views: ['shadow2:211,1266,-33:62500,61567,0', 'shadow3:61,1326,-23:61166,59067,0']},
 });
 const FLASH_BASE = 'flash0:-100,840,30:0,0,0';
 // `extra`: `base` names the effect of a contribution check ('fog': the stored <view>-base frames are the original without it, Play's own frame
 // without it comes from `--base fog`); `playerPose`: Play writes the player's animation the original measured (<view>-state.json); `preShot` and
 // `preShotWait`: console lines both programs run at the camera before the shot and the wait after them (`--pre-shot-cmd`, `--pre-shot-wait`);
 // `flashBase`: the view without the flash, played in a run of its own (its own clock) and judged as a frame too, and the flash judged as a map of
-// levels from it.
+// levels from it; `decalState`: the shadows' state the original had at each shot (<view>-decals.json) against Play's (`--decal-state`); `cmds`:
+// console lines both programs run once after ghost, with the level still frozen (`--cmd`); `cameraTransit`: Play places each camera as the original's
+// console does, Location and then ViewRotation, with frames between (`--camera-transit`).
 const effectViews = (key, extra = {}) => FRAMES({maps: [EFFECT_VIEWS[key].map], explicit: EFFECT_VIEWS[key].views, flat: {}, ...extra});
 
 // Pilots: the original's per-tick trace of the load, replayed in Play (docs/visual-acceptance.md "Live scenes").
@@ -244,7 +251,13 @@ add('4.2.13', C2, '04_NYC_Street vents', 'a frame with particles and sprites aga
     earlyCmds: 'set DeusEx.JCDentonMale Location (X=454,Y=67,Z=-467)|set DeusEx.JCDentonMale ViewRotation (Pitch=1800,Yaw=0,Roll=0)'}));
 add('4.2.14', C2, 'decals', 'AttachDecal, ClipDecal and the vertices of a decal equal Engine.dll and Render.dll', 'O2',
   V('decal-attach'), V('decal-render'), V('decal-startup'), V('decal-vertices-play'), V('decals-play'));
-missing('4.2.15', C2, 'Training shadows, bullet holes', 'a decal frame against the original', 'no matched capture shows a decal; blood and scorch marks need combat');
+// The pawns' Shadow decals with the level unfrozen (Shadow.Tick attaches them), held at the shot: the two pawns in view that walk (mib1 Wandering,
+// ScientistMale0 Patrolling) are ordered to stand while still frozen in StartUp (their walks are each program's own random draws from a tick count
+// the programs do not share), the meshes are hidden and the level frozen again before the shot, so the state read after it is the frame's; Play
+// moves its camera as the original's console does (a pawn drawn only in those frames gets its shadow).
+add('4.2.15', C2, '00_Training pawns\' shadows', 'a decal frame against the original: the frames, the shadows\' contribution (the frame less the frame without decals) and the shadows\' state at the shot (drawn set, owners, Location, DrawScale, Rotation, surfaces) equal; bullet holes, blood and scorch marks need combat and are not in it', 'O1',
+  effectViews('shadow', {unfreeze: true, base: 'decal', decalState: true, cameraTransit: true, cmds: ['set MIB Orders Standing', 'set ScientistMale Orders Standing'],
+    preShot: ['set ScriptedPawn bHidden True', 'set LevelInfo bPlayersOnly True']}));
 add('4.2.16', C2, 'volumetric fog (02_NYC_Bar)', 'ComputeFromActor and the fog loop equal Render.dll; the pass in Play', 'O3',
   V('volumetric-fog'), V('volumetric-fog-play'));
 add('4.2.17', C2, '02_NYC_Bar smoke haze', 'a fog frame against the original: the frame, and the haze (the frame with the fog zones less the frame without) against the original\'s', 'O1', effectViews('bar', {base: 'fog'}));
@@ -523,6 +536,17 @@ function flashProblems(m) {
   if (f.straysOriginal > THRESHOLDS.flashMapStrays || f.straysPlay > THRESHOLDS.flashMapStrays) off.push(`flash map: ${f.straysOriginal} / ${f.straysPlay} stray samples (original / Play)`);
   return off;
 }
+// The shadows' state at the shot (visual-acceptance.mjs `compare --decal-state`): every Shadow of the original found in Play by its owner, the same
+// shadows drawn in the frame, each attached to as many surfaces with the same bHasDecal, and, attached in either, its owner at the same float32
+// Location; attached in both, the decal's Location, DrawScale (float32) and Rotation equal. No tolerance: the inputs of the frame are held, not near.
+function decalStateProblems(m) {
+  const d = m.decalState, off = [];
+  if (!d) return ['no decal state (<view>-decals.json or <view>-play-decals.json absent)'];
+  if (d.unmatched.length) off.push(`shadows in one program only: ${d.unmatched.slice(0, 4).join(', ')}`);
+  if (d.drawn[0].join() !== d.drawn[1].join()) off.push(`drawn shadows ${d.drawn[0].join(',')} / ${d.drawn[1].join(',')} (original / Play)`);
+  if (d.differing.length) off.push(`${d.differing.length} shadows differ (${d.differing.slice(0, 3).join(' | ')})`);
+  return off;
+}
 const flashBasePlays = new Map();
 function contributionProblems(m) {
   const c = m.contribution, off = [];
@@ -544,7 +568,7 @@ async function judgeFrames(task, add, fail, result) {
   // The files a view needs from the store: its frame; with a contribution check (`base`) the original without the effect; with `playerPose`
   // the player's animation the original measured.
   const storedFiles = name => [`${name}-original.png`, ...(task.frames.base ? [`${name}-base-original.png`] : []), ...(task.frames.playerPose ? [`${name}-state.json`] : []),
-    ...(task.frames.twin?.includes(name) ? [`${name}b-original.png`] : [])];
+    ...(task.frames.twin?.includes(name) ? [`${name}b-original.png`] : []), ...(task.frames.decalState ? [`${name}-decals.json`] : [])];
   const source = storeRoots.find(dir => existsSync(path.join(dir, `acceptance/${maps[0]}/${names[0]}-original.png`)));
   const absent = [];
   if (!source) absent.push(`acceptance/${maps[0]}/${names[0]}-original.png`);
@@ -588,10 +612,12 @@ async function judgeFrames(task, add, fail, result) {
   // `detail`: the original was captured with the detail pass poked in (--poke D3DRenderDevice0:0x78:1), so Play keeps its pass.
   const play = add(await exec(process.execPath, ['scripts/visual-acceptance.mjs', 'play', '--maps', maps.join(','), '--query', 'antialias=0', ...(task.frames.detail ? ['--detail', 'on'] : []),
     ...(task.frames.base ? ['--base', task.frames.base] : []), ...(task.frames.playerPose ? ['--player-pose'] : []),
-    ...(task.frames.unfreeze ? ['--unfreeze'] : []), ...(task.frames.rngPin ? ['--rng-pin', task.frames.rngPin] : []),
+    ...(task.frames.unfreeze ? ['--unfreeze'] : []), ...(task.frames.rngPin ? ['--rng-pin', task.frames.rngPin] : []), ...(task.frames.decalState ? ['--decal-state'] : []),
+    ...(task.frames.cmds ?? []).flatMap(line => ['--cmd', line]), ...(task.frames.cameraTransit ? ['--camera-transit'] : []),
     ...(task.frames.preShot ?? []).flatMap(line => ['--pre-shot-cmd', line]), ...(task.frames.preShotWait ? ['--pre-shot-wait', String(task.frames.preShotWait)] : []), ...viewArgs], {limitSeconds: 900}));
   if (play.killed || play.code !== 0 || /errors:/.test(play.out)) return fail(`play step: ${play.killed ?? tail(play.out)}`);
   const compare = add(await exec(process.execPath, ['scripts/visual-acceptance.mjs', 'compare', '--maps', maps.join(','), ...(task.frames.base ? ['--contribution'] : []), ...(task.frames.beams ? ['--beams'] : []),
+    ...(task.frames.decalState ? ['--decal-state'] : []),
     ...(task.frames.flashBase ? ['--flash-base', baseName, '--view', task.frames.flashBase] : []), ...viewArgs], {limitSeconds: 300}));
   if (compare.killed || compare.code !== 0) return fail(`compare step: ${compare.killed ?? tail(compare.out)}`);
   const report = readJson(path.join(root, '.work/acceptance/report.json'));
@@ -606,8 +632,9 @@ async function judgeFrames(task, add, fail, result) {
     if (task.frames.base) off.push(...contributionProblems(m));
     if (task.frames.beams) off.push(...beamProblems(m));
     if (task.frames.flashBase && name !== baseName) off.push(...flashProblems(m));
+    if (task.frames.decalState) off.push(...decalStateProblems(m));
     if (off.length) problems.push(`${map} ${name}: ${off.join('; ')}`);
-    lines.push(`${name} ${m.edgeRecall}/${m.edgePrecision}/${m.outlierBlocks.length}${m.contribution ? ` haze r ${m.contribution.correlation}` : ''}${m.beams ? ` beams ${m.beams.coverage}/${m.beams.energy}/${m.beams.yRms}` : ''}${m.flashMap ? ` flash ${m.flashMap.levels - m.flashMap.differing}/${m.flashMap.levels} levels equal, fog (${m.flashMap.zero})` : ''}`);
+    lines.push(`${name} ${m.edgeRecall}/${m.edgePrecision}/${m.outlierBlocks.length}${m.contribution ? ` ${task.frames.base === 'decal' ? 'decals' : 'haze'} r ${m.contribution.correlation}` : ''}${m.beams ? ` beams ${m.beams.coverage}/${m.beams.energy}/${m.beams.yRms}` : ''}${m.flashMap ? ` flash ${m.flashMap.levels - m.flashMap.differing}/${m.flashMap.levels} levels equal, fog (${m.flashMap.zero})` : ''}${m.decalState ? ` shadows ${m.decalState.matched - m.decalState.differing.length}/${m.decalState.shadows} equal (${m.decalState.attached[0]} attached)` : ''}`);
   }
   if (problems.length) return fail(problems.join(' | '));
   return {...result, status: 'PASS', detail: `${maps.length} map(s), ${lines.length} view(s): recall/precision/outliers ${lines.slice(0, 5).join(' ')}${lines.length > 5 ? ' ...' : ''}`};
