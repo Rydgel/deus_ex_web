@@ -876,7 +876,7 @@ clear), so `SetRes` turns the pass off on this host too, and the poke's own log 
   Shot's default ramp, before Play [cleared its frame to black](screen-flash.md#the-screen-clear-fixed-2026-10-16)) read Jaccard .938 to .980
   and correlation .57 to .99 over its six views.
 * *What is left.* **The top row.** At these cameras the fans' vertices run from Y -3e-5 to 720.0002 and X -6e-5 to 1280.0002 (Play's pack,
-  read in the headless session: `.work/detail22/fan-extent.mjs`), so a fan's top and left edges lie on the first row's and the first column's
+  read in the headless session by a scratch probe outside Git, the Mac's `.work/detail22/fan-extent.mjs`), so a fan's top and left edges lie on the first row's and the first column's
   pixel centres. The original fills both. Play fills the column and not the row: on row 0 the original's pass changes 1,204 pixels in `detailT1`,
   719 in `detailT2` and 521 in `detailI1`, Play's 0, 0 and 259. The bottom row and the side columns are equal in every view, and the base
   frames agree on row 0 as on the rows below it (30 pixels differ in `detailT1`, against 25 and 40 on rows 1 and 2), so it is the fans'
