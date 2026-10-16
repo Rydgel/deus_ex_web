@@ -360,13 +360,90 @@ pawn per frame (they are reused; `last` for validation is built on demand), but 
 Here too the layer's own time falls (19 to 38 percent), and the page's record application with it where several weapons are in view; every other phase of the two sides is within the run-to-run wobble of this shared host
 (`w.actors` and the worker total differ by up to a millisecond either way, which no weapon explains).
 
+## The first-person weapon against the original (2026-10-17, gate row 4.1.10)
+
+The first-person weapon is not part of the pawn's draw: `PlayerPawn.RenderOverlays` calls `Weapon.RenderOverlays`, which sets the weapon's
+`Location` (`Owner.Location + CalcDrawOffset()`) and `Rotation` (the view's) and calls `Canvas.DrawActor`. That reaches `URender::DrawActor`
+(Render.dll `0x10b262c0`, `(Frame, Actor)`, `ret 8`), which builds an `FDynamicSprite` on the canvas frame and calls `DrawActorSprite`
+([LOD](script-lodmesh-lod.md)). Until now only the LOD selection was compared with the original (`validate-weapon-lod`).
+
+**The capture** (the Mac, CrossOver; `live-acceptance.mjs population --map 00_Training --seed 1` first, the population equal on the first load):
+
+```bash
+scripts/live-original.sh 00_Training --tag fpw --ticks 300 --no-ghost --shot fpw --extra-config .work/fpw/extra.cfg \
+  --cmds "20:summon DeusEx.WeaponCrowbar|50:set DeusEx.JCDentonMale ViewRotation (Pitch=-10130,Yaw=0,Roll=0)|90:ParseRightClick|130:ActivateBelt 1|170:set DeusEx.JCDentonMale ViewRotation (Pitch=0,Yaw=0,Roll=0)"
+```
+
+with the tracer lines `call-ticks 1 300`, `call-frames`, `call Extension.dll@0x1003be90 roottick 1 always` (the window clock, [object index
+captures](object-index-captures.md)) and `call 0x10b262c0 fpdraw 2 always namearg 1 -1 deref 1 6 0x114 deref 1 4 0x54 deref 0 12 0x34`: every
+`DrawActor` with the weapon's `Location` and `Rotation`, its `AnimSequence`/`AnimFrame`/`AnimRate`/`TweenRate` and the frame's `Coords`. The
+calls stay armed through the final hold, so the draws of the held frame are logged: **73 draws during the hold, all the same words**. The
+original names the summoned weapon `WeaponCrowbar10`; Play names it `WeaponCrowbar1`, which repeats the name of the map's own crowbar (a naming
+difference noted here, not compared; the probe reads the player's `Weapon` by reference, `liveProbe` `@weapon`).
+
+**Play's replay of the trace** (`scripts/validate-weapon-view-original.mjs`, worker mode, 28 s): `live-acceptance.mjs play --tag fpw --shot fpw
+--no-ghost --after-file scripts/weapon-view-probe.js`, then `live-acceptance.mjs compare`, `visual-acceptance.mjs compare` (the frame and the
+crowbar's region) and `scripts/weapon-view-compare.mjs` (the held draw):
+
+| | |
+| --- | --- |
+| 300 ticks | clock equal, stream draws per tick equal, every watched actor equal but the player's animation frame (below) |
+| the held first-person draw | **equal bit for bit**: `Location` (-1101.2435, 843.8439, -49.8), `Rotation` (0, 0, 0), `Idle1` at `AnimFrame` 0x3f1eb3a2 (0.61993), `AnimRate` 0.2, `TweenRate` 1, the frame's 12 `Coords` words; the GPU binding's `Location` the same |
+| the held frame | ratio 1.28 (the known uniform brightness gap), mean abs. difference 2.88, edge recall .996, precision .987, 0 outlier blocks |
+| the crowbar's region (280x600 +790+120) | ratio 1.266, mean abs. difference 3.17, edge recall .997, precision .991, 0 outlier blocks |
+
+**One difference, not attributed:** the player's own `BreatheLight` frame lags by 0.0125 from tick 1 to tick 90. Play's first replayed tick advances it by
+0.003875 where the original's advances 0.016375 (rate 0.5 x delta 0.0327); every later tick advances it equally, and the pickup restarts the animation
+at tick 90, after which the frames are equal through tick 300. JC's body is not drawn in first person, so the frame does not show it. The conversation
+rows list the same start-state difference as a measured exception; the validator allows exactly this (`@player` `Frame` alone, from tick 1, at most 90
+ticks). Stored (Mac main): `.work/live-acceptance/00_Training/{original-trace-fpw.jsonl (+ .calls.jsonl, .strobe), watch-, population-, commands-,
+hold-fpw.json, play-population.json}` and `.work/acceptance/00_Training/fpw-original.{png,bmp}`.
+
+## An armed NPC in a mirror and a weapon in a camera window (2026-10-17, gate row 4.1.12)
+
+**The armed NPC, by the original's own path.** A summoned `MJ12Troop` carries a `WeaponAssaultGun`, ammunition and a knife in its class defaults
+(`InitialInventory`), but `ScriptedPawn.InitializeInventory` ends with `SetupWeapon(false)`, which puts the weapon away unless `bKeepWeaponDrawn`.
+The console sets that first: `set DeusEx.MJ12Troop bKeepWeaponDrawn True` writes the live troopers and the class's defaults
+(`UObject::GlobalSetProperty`, Core `0x101524b1..0x101524ca`), so the trooper summoned afterwards holds its rifle. Play's console `SET` did not
+import into the defaults (documented as not modelled); it does now (deb9666), and Play's summoned trooper holds `WeaponAssaultGun11`.
+`set DeusEx.MJ12Troop Orders Standing` keeps it in place.
+
+**The mirror** (the lab pane of [Mirrors](#mirrors-2026-10-15)), summoned at an angle so that its reflection stands beside its body from JC's eye:
+
+```bash
+DX_POST=.work/fpw/post-lab.sh scripts/live-original.sh 05_NYC_UNATCOMJ12lab --tag npm --ticks 300 --no-ghost --shot npm --extra-config .work/fpw/extra-lab.cfg \
+  --cmds "20:set DeusEx.MJ12Troop bKeepWeaponDrawn True|30:set DeusEx.MJ12Troop Orders Standing|40:set DeusEx.JCDentonMale ViewRotation (Pitch=0,Yaw=8000,Roll=0)|80:summon DeusEx.MJ12Troop|120:set DeusEx.JCDentonMale ViewRotation (Pitch=0,Yaw=1500,Roll=0)"
+```
+
+`DX_POST` runs `dx-live-win.exe weapon 8` after the hold: **84 draws of the trooper's rifle** (`MJ12Troop3`, `WeaponAssaultGun17`, mesh
+`AssaultGun3rd`), every one in the mirror's child frame (`Recursion` 1, the frame's Mirror -1, the weapon's forced 1), PrjXM..PrjYP
+`3eaa0a27 3e745120 3e6e2da4 3e50b683`. Play's replay of the trace draws the rifle in child frame 1 (and the main frame) with **those four words**.
+In the held frames (ratio 1.32): whole frame edges .983/.988, 0 outlier blocks; the reflection (160x220 +540+310) 1.000/.998, 0 blocks; the trooper
+(300x340 +980+280) .992/.997, 0 blocks. Every watched actor and the clock are equal for 300 ticks. The stream's draw count is shifted by one tick at
+six pairs of ticks (104/105, 121/122, 162/163, 227/228, 245/246, 250/251; equal totals): in Play the extra draw is JC's `ShowSelf` line-of-sight
+`FRand` (`losWorker`) for the summoned listener, one tick early. The summon is a console line typed while the level is held, and the replay hands the
+original's stream state only to `@down`/`@up` key edges (the `inputevent` records), so the trooper's spawn-time draws (its `SightCounter`) come from
+another state. Open: give a typed console line the stream state of its Enter key edge (and capture with the `inputevent` call line).
+
+**The camera window** (Island `ComputerSecurity1`, the Temp Holding Cell window of `SecurityCamera5`): `DX_POST=.work/fpw/post-cam.sh
+scripts/camera-original.sh 01_NYC_UNATCOIsland --computer ComputerSecurity1 --user NSF001 --password smashthestate --cameras SecurityCamera5 --name cw5`.
+The route holds the level with its tracer, takes the screen and releases the level with the terminal still open; `DX_POST` then runs
+`dx-live-win.exe weapon 10`: **92 draws of `Terrorist18`'s `WeaponCombatKnife11`**, all in the window's root frame (`Recursion` 0, PrjXM..PrjYP
+`3f800001 3f400001 3f800001 3f400001`: the window's 4:3, not the 16:9 main frame's), and 15 of JC (in the camera's view, no weapon). The level had
+run 480 s by then, and the terrorists walk their own routes in each program, so the window's pixels are not compared (gate row 4.2.28's case).
+
+**The translation against these draws:** `weapon-original-cases.mjs --cases` gives `original-cases-4.json` (the mirror, 84) and
+`original-cases-5.json` (the camera window, 92); `validate-weapon-attach.mjs` over them: hand coordinates and weapon Coords equal word for word,
+**352 comparisons with the running original, 0 failures**. (The camera capture ran HEAD's `camera-acceptance.mjs`: the working copy's uncommitted
+Brightness check read the `WindowsClient` layout as garbage on this run.)
+
 ## Open
 
-* **A ViewportWindow's frame against the original**: wired and checked in Play (above), not compared with the original's own camera window (the debugger and the terminal route's tracer cannot hold the game together).
+* **A ViewportWindow's frame against the original**: the original's draws in the window frame are compared with the translation (above, 4.1.12); the window's pixels with an armed pawn are not (the NPCs' routes are each program's own).
 * **GPU path**: done (above). The CPU path stays the reference; `?weapons=cpu`.
 * **Order of SetupForActor calls**: implemented and compared (above). Not compared in a scene where a light first enters one frame's `LeafLights` and not the other's, which is the only case the orders can differ in; the lab scene has none.
-* **An NPC in a mirror**: the same wiring as JC's (verified for JC in a mirror, both frames, `jcb`); no capture of the original has an armed NPC in a mirror yet (the maps' mirrors sit at
-  the height of a standing pawn's belt or above its hands except the lab's panes, and the Club's guards stand away from them).
+* **An NPC in a mirror**: compared (above, 4.1.12): the summoned trooper's rifle in the lab pane. Open there: the replay's stream state for a console line typed while the level is held.
+* **The first-person weapon**: compared (above, 4.1.10); the player's animation frame lags in the replay's first 90 ticks (not attributed).
 * **Muzzle flash**: dead by data, see above; the render-time `appFrand` it would draw from the CRT stream is not modelled.
 * **Cost**: measured (above): 0.08 to 0.15 ms of the worker's frame per armed pawn in view on the GPU path (0.12 to 0.3 on the CPU path), the hand placement being the largest part left; not measured on the Mac.
 

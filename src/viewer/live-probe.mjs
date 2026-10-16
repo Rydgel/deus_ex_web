@@ -42,6 +42,8 @@ export function liveProbe(game, args = {}) {
   // programs for some map actors (the original's `mib1` and `Light1` are Play's `MIB1` and `light1`). A name given in the original's spelling finds Play's actor.
   const byName = name => {
     if (name === '@player') return player;
+    // the player's held Weapon by reference (a spawned weapon's name can repeat a map actor's in Play: scripts/weapon-view-probe.js)
+    if (name === '@weapon') return runtime.readNamed(player, 'Weapon') ?? null;
     const exact = level.actors.find(actor => actor?.name === name);
     if (exact) return exact;
     const lower = String(name).toLowerCase();
