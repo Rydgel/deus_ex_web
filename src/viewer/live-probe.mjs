@@ -412,7 +412,13 @@ export function liveProbe(game, args = {}) {
       const draws = state.draws = [];
       for (const name of ['frand', 'rand']) {
         const original = game.random[name];
-        game.random[name] = (...rest) => { draws.push(current?.name ?? '-'); return original(...rest); };
+        game.random[name] = (...rest) => {
+          draws.push(current?.name ?? '-');
+          // drawStackActor: where that actor's draws come from (the script call stack's last frames), by replayed tick (rows' index)
+          if (args.replay.drawStackActor && current?.name === args.replay.drawStackActor)
+            (state.stackLog ??= []).push(`${name} @${state.index} ${new Error().stack.split('\n').slice(2, 12).map(l => l.trim().replace(/^at /, '').replace(/\(.*[\\/]/, '(')).join(' < ')}`);
+          return original(...rest);
+        };
       }
       if (game.player.nativeRandom) game.player.nativeRandom = game.random.frand;   // the player's landing recovery captured the original
       const tickActor = runtime.processActorTick.bind(runtime);
@@ -436,6 +442,7 @@ export function liveProbe(game, args = {}) {
   if (args.take && replay) {
     if (replay.setupProbe) out.setup = replay.setupProbe.rows.splice(0);
     if (replay.commandLog.length) out.commands = replay.commandLog.splice(0);
+    if (replay.stackLog?.length) out.stackLog = replay.stackLog.splice(0);
     out.rows = replay.rows.slice(replay.cursor); replay.cursor = replay.rows.length;
     out.index = replay.index;
     if (runtime.navTrace) out.nav = runtime.navTrace.events.splice(0);

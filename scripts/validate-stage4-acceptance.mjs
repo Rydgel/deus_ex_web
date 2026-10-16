@@ -204,8 +204,9 @@ add('4.2.11', C2, 'coronas', 'visibility helper, DrawIcon arguments, tracker tra
   V('coronas'), V('coronas-tracked'), V('corona-tiles'), V('corona-tiles-play'), V('coronas-mover-play'), V('coronas-play'));
 add('4.2.12', C2, 'particles and sprites', 'ParticleIterator, FDynamicSprite and the tile chain', 'O2',
   V('native-particles'), V('sprite-setup'), V('sprite-tiles'), V('sprite-tiles-play'), V('sprite-tiles-mirror-play'), V('particles-play'));
-missing('4.2.13', C2, '04_NYC_Street vents', 'a frame with particles and sprites against the original with the generators\' state matched',
-  'no matched capture holds a particle or sprite whose generator state the original side fixed');
+add('4.2.13', C2, '04_NYC_Street vents', 'a frame with particles and sprites against the original with the generators\' state matched: the original\'s 600 ticks (stream state per tick) replayed in Play, then the held frame and the steam (the frame less the frozen start\'s) against the original\'s',
+  'O1', LIVE({map: '04_NYC_Street', tag: 'vents2', shot: 'vents2', baseShot: true, renderHistory: true,
+    earlyCmds: 'set DeusEx.JCDentonMale Location (X=454,Y=67,Z=-467)|set DeusEx.JCDentonMale ViewRotation (Pitch=1800,Yaw=0,Roll=0)'}));
 add('4.2.14', C2, 'decals', 'AttachDecal, ClipDecal and the vertices of a decal equal Engine.dll and Render.dll', 'O2',
   V('decal-attach'), V('decal-render'), V('decal-startup'), V('decal-vertices-play'), V('decals-play'));
 missing('4.2.15', C2, 'Training shadows, bullet holes', 'a decal frame against the original', 'no matched capture shows a decal; blood and scorch marks need combat');
@@ -647,11 +648,12 @@ function stageLive(map, tag, into = '.work/live-acceptance') {
   return absent;
 }
 async function judgeLive(task, add, fail, result) {
-  const {map, tag = null, shot = null, earlyCmds = null, renderHistory = false} = task.live;
+  const {map, tag = null, shot = null, earlyCmds = null, renderHistory = false, baseShot = false} = task.live;
   const absent = stageLive(map, tag);
   if (shot) { if (!stage(`acceptance/${map}/${shot}-original.png`)) absent.push(`acceptance/${map}/${shot}-original.png`); stage('acceptance/times.json', {copy: true}); }
+  if (shot && baseShot && !stage(`acceptance/${map}/${shot}-base-original.png`)) absent.push(`acceptance/${map}/${shot}-base-original.png`);
   if (absent.length) return fail(`stored originals absent: ${absent.join(', ')}`, 'NO-ORIGINAL');
-  const extra = [...(tag ? ['--tag', tag] : []), ...(shot ? ['--shot', shot] : []), ...(earlyCmds ? ['--early-cmds', earlyCmds] : []), ...(renderHistory ? ['--render-history'] : [])];
+  const extra = [...(tag ? ['--tag', tag] : []), ...(shot ? ['--shot', shot] : []), ...(earlyCmds ? ['--early-cmds', earlyCmds] : []), ...(renderHistory ? ['--render-history'] : []), ...(baseShot ? ['--base-shot'] : [])];
   // One replay of the original's trace. A run whose only difference is the stream's draw count is repeated once: that count differed in
   // single runs under host load and not on the repeat (docs/visual-acceptance.md "Open", unattributed), and the repeat is reported.
   const replay = async () => {
@@ -675,13 +677,14 @@ async function judgeLive(task, add, fail, result) {
   if (first.draws) problems.push(first.draws);
   let frameNote = '';
   if (shot) {
-    const frame = add(await exec(process.execPath, ['scripts/visual-acceptance.mjs', 'compare', '--maps', map, '--view', `${shot}:0,0,0:0,0,0`], {limitSeconds: 300}));
+    const frame = add(await exec(process.execPath, ['scripts/visual-acceptance.mjs', 'compare', '--maps', map, ...(baseShot ? ['--contribution'] : []), '--view', `${shot}:0,0,0:0,0,0`], {limitSeconds: 300}));
     const line = frame.out.trim().split('\n').find(l => l.startsWith(`${map} ${shot} `));
     const m = line ? JSON.parse(line.slice(`${map} ${shot} `.length, line.lastIndexOf('}') + 1)) : null;
     const blocks = line ? Number(/ (\d+) outlier blocks/.exec(line)?.[1]) : NaN;
     if (!m) problems.push('no frame comparison');
     else {
       const off = frameProblems({...m, outlierBlocks: Array.from({length: blocks}, () => [])});
+      if (baseShot) off.push(...contributionProblems(m));
       if (off.length) problems.push(`frame ${shot}: ${off.join(', ')}`);
       frameNote = `; frame ${shot} ${m.edgeRecall}/${m.edgePrecision}/${blocks}`;
     }

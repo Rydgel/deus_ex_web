@@ -71,6 +71,12 @@ const timeOffset = Number(option('time-offset', 0));
 // --cmd '<console command>' (repeatable): a command both sides run once, after ghost and ShowHud False (the original's console, Play's viewProbe
 // exec), e.g. `--cmd 'set ScriptedPawn bHidden True'` for a view with no actor mesh lit by the map's Strobe light.
 const consoleCommands = process.argv.flatMap((arg, i) => arg === '--cmd' ? [process.argv[i + 1]] : []);
+// --pre-shot-cmd '<console command>' (repeatable): typed once per view just before the shot (the original's console after the camera is placed, Play's
+// viewProbe exec), for a state the level's slow clock would otherwise let drift or reset: `set DeusEx.JCDentonMale FlashFog (X=...)`.
+const preShotCommands = process.argv.flatMap((arg, i) => arg === '--pre-shot-cmd' ? [process.argv[i + 1]] : []);
+// --pre-shot-wait ms: how long after them the shot waits (default 300): a state that converges (the viewport flash moves toward its goal by
+// 10 * delta each tick, and a held level's actor delta has a floor of 0.005 s, so a flash set directly decays in a second) needs seconds.
+const preShotWait = Number(option('pre-shot-wait', 300));
 // <name>_s0 / <name>_s1: the Strobe flag the frame is taken with (null: free-running).
 const strobeOf = name => { const m = /_s([01])$/.exec(name); return m ? Number(m[1]) : null; };
 // --view name:x,y,z:pitch,yaw,roll (repeatable): explicit camera(s) used in
@@ -99,8 +105,8 @@ const timeFile = (map, view) => path.join(out, map, `${view}-time.txt`);
 // `compare --contribution` compares the two differences (docs/visual-acceptance.md "Effect frames").
 const isBase = name => /-base$/.test(name);
 const baseCommand = option('base-cmd', null), baseKind = option('base', null);
-const BASE_OFF = {fog: () => window.deusExViewer.showFog(false), detail: () => window.deusExViewer.detail({hide: true})};
-const BASE_ON = {fog: () => window.deusExViewer.showFog(true), detail: () => window.deusExViewer.detail({hide: false})};
+const BASE_OFF = {fog: () => window.deusExViewer.showFog(false), detail: () => window.deusExViewer.detail({hide: true}), decal: () => window.deusExViewer.decals({hide: true})};
+const BASE_ON = {fog: () => window.deusExViewer.showFog(true), detail: () => window.deusExViewer.detail({hide: false}), decal: () => window.deusExViewer.decals({hide: false})};
 function heldTimeOf(map, views) {
   const times = views.map(view => existsSync(timeFile(map, view.name)) ? Number(readFileSync(timeFile(map, view.name), 'utf8')) : null);
   const stored = times.filter(time => time !== null);
@@ -220,10 +226,11 @@ async function play() {
         await frames(settleFrames);
         // --player-pose: the player's animation as `original --player-state` measured it for this view (<view>-state.json); AnimRate 0 because
         // the player's own ticks follow the page's frames, not the held level (the security-camera captures write it the same way).
+        if (preShotCommands.length) { await page.evaluate(lines => window.deusExViewer.viewProbe({exec: lines}), preShotCommands); await frames(Math.max(6, Math.round(preShotWait / 1000 * 60))); }
         const stateFile = path.join(dir, `${view.name}-state.json`);
         if (process.argv.includes('--player-pose') && existsSync(stateFile)) {
           const {player} = JSON.parse(readFileSync(stateFile, 'utf8'));
-          await page.evaluate(anim => window.deusExViewer.placeProbe({set: {actor: '$player', fields: anim}}), {...player.anim, AnimRate: 0});
+          await page.evaluate(fields => window.deusExViewer.placeProbe({set: {actor: '$player', fields}}), {...player.anim, AnimRate: 0});
           await frames(6);
         }
         const strobe = strobeOf(view.name);
@@ -385,8 +392,8 @@ async function original() {
     for (const view of ordered) {
       if (onlyViews && !onlyViews.includes(view.name)) continue;
       if (isBase(view.name) && !baseDone) {
-        if (!baseCommand) throw new Error(`${view.name} needs --base-cmd '<console command that turns the effect off>'`);
-        post([`cmd ${baseCommand}`, 'sleep 800']);
+        if (!baseCommand && !optionAll('base-poke').length) throw new Error(`${view.name} needs --base-cmd '<console command that turns the effect off>' or --base-poke`);
+        if (baseCommand) post([`cmd ${baseCommand}`, 'sleep 800']);
         baseDone = true;
       }
       const [x, y, z] = view.location, [pitch, yaw, roll] = view.rotation;
@@ -411,14 +418,16 @@ async function original() {
         }
         // --poke Object:offset:value (repeatable): a 32-bit field of a live object of the original, written before each camera
         // (tools/poke-object-win.c), e.g. D3DRenderDevice0:0x78:1 sets the device's DetailTextures that Wine's ddraw caps made 0.
-        for (const spec of optionAll('poke')) {
+        // --base-poke (repeatable): the pokes of the -base views, in place of --poke's (the detail pass off: D3DRenderDevice0:0x78:0).
+        for (const spec of isBase(view.name) && optionAll('base-poke').length ? optionAll('base-poke') : optionAll('poke')) {
           const [object, offset, value] = spec.split(':');
           console.log(execFileSync(game.WINE, [path.join(root, 'ad/build/poke-object-win.exe'), object, offset, value], {encoding: 'utf8', env: process.env}).trim());
         }
         post([`cmd set DeusEx.JCDentonMale Location (X=${x},Y=${y},Z=${z})`, 'cmd set DeusEx.JCDentonMale Velocity (X=0,Y=0,Z=0)',
           `cmd set DeusEx.JCDentonMale ViewRotation (Pitch=${pitch},Yaw=${yaw},Roll=${roll})`,
           ...(region ? [`cmd set DeusEx.JCDentonMale Region (Zone=ZoneInfo'${map}.${region.zone}',iLeaf=${region.iLeaf},ZoneNumber=${region.zoneNumber})`] : []),
-          'sleep 1500', ...(process.argv.includes('--freeze-player') ? ['cmd set DeusEx.JCDentonMale AnimRate 0', 'sleep 400'] : []), ...(strobe === null ? ['shot', 'sleep 900'] : [])]);
+          'sleep 1500', ...(process.argv.includes('--freeze-player') ? ['cmd set DeusEx.JCDentonMale AnimRate 0', 'sleep 400'] : []),
+          ...preShotCommands.flatMap(line => [`cmd ${line}`, 'sleep 300']), ...(preShotCommands.length && preShotWait > 300 ? [`sleep ${preShotWait - 300}`] : []), ...(strobe === null ? ['shot', 'sleep 900'] : [])]);
         // --strobe-poll on a view with no _s0/_s1 suffix: the free-running flag at this camera, 120 samples 5 ms apart (<name>-strobe.txt).
         if (strobe === null && process.argv.includes('--strobe-poll')) {
           const tool = args => execFileSync(game.WINE, [path.join(root, 'ad/build/dx-live-win.exe'), 'strobe', ...args], {encoding: 'utf8', env: process.env});
@@ -463,7 +472,8 @@ async function original() {
           const text = execFileSync(game.WINE, [path.join(root, 'ad/build/dump-actor-win.exe'), 'JCDentonMale', 'Player:0x5d4:u32', 'Location:0x114:f3', 'Rotation:0x120:i3',
             'ViewRotation:0x3dc:i3', 'AnimSequence:0x54:name', 'AnimFrame:0x58:f', 'AnimRate:0x5c:f', 'TweenRate:0x60:f', 'AnimLast:0x220:f', 'AnimMinRate:0x224:f', 'OldAnimRate:0x228:f',
             'B0:0x68:name', 'B1:0x6c:name', 'B2:0x70:name', 'B3:0x74:name', 'F0:0x78:f', 'F1:0x7c:f', 'F2:0x80:f', 'F3:0x84:f', 'R0:0x88:f', 'R1:0x8c:f', 'R2:0x90:f', 'R3:0x94:f',
-            'T0:0x98:f', 'T1:0x9c:f', 'T2:0xa0:f', 'T3:0xa4:f', 'L0:0x23c:f', 'L1:0x240:f', 'L2:0x244:f', 'L3:0x248:f', 'M0:0x24c:f', 'M1:0x250:f', 'M2:0x254:f', 'M3:0x258:f'], {encoding: 'utf8', env: process.env});
+            'T0:0x98:f', 'T1:0x9c:f', 'T2:0xa0:f', 'T3:0xa4:f', 'L0:0x23c:f', 'L1:0x240:f', 'L2:0x244:f', 'L3:0x248:f', 'M0:0x24c:f', 'M1:0x250:f', 'M2:0x254:f', 'M3:0x258:f',
+            'FlashScale:0x610:f3', 'FlashFog:0x61c:f3'], {encoding: 'utf8', env: process.env});
           const row = {};
           for (const line of text.split(/\r?\n/)) {
             const m = /^JCDentonMale (\S+) (.*)$/.exec(line);
@@ -473,7 +483,7 @@ async function original() {
           const four = key => [0, 1, 2, 3].map(k => row[`${key}${k}`]);
           writeFileSync(path.join(dir, `${view.name}-state.json`), JSON.stringify({map, view: view.name, timeSeconds: loadTimes()[map], player: {location: row.Location, rotation: row.Rotation, viewRotation: row.ViewRotation,
             anim: {AnimSequence: row.AnimSequence, AnimFrame: row.AnimFrame, AnimRate: row.AnimRate, TweenRate: row.TweenRate, AnimLast: row.AnimLast, AnimMinRate: row.AnimMinRate, OldAnimRate: row.OldAnimRate,
-              BlendAnimSequence: four('B'), BlendAnimFrame: four('F'), BlendAnimRate: four('R'), BlendTweenRate: four('T'), BlendAnimLast: four('L'), BlendAnimMinRate: four('M')}}}, null, 1));
+              BlendAnimSequence: four('B'), BlendAnimFrame: four('F'), BlendAnimRate: four('R'), BlendTweenRate: four('T'), BlendAnimLast: four('L'), BlendAnimMinRate: four('M')}, flash: {FlashScale: row.FlashScale, FlashFog: row.FlashFog}}}, null, 1));
         }
       }
       console.log(map, view.name, taken.length ? `${taken[0].width}x${taken[0].height}` : 'NO SHOT');

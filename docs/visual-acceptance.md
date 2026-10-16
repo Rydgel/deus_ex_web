@@ -1851,6 +1851,40 @@ what the original repeats of itself. The energy of Play's beams varies from run 
 The thresholds of the gate row (coverage at least .85, energy .75 to 1.33, y-offset at most 2.5 px) are set from these two views and are weak. Stored:
 `.work/acceptance/01_NYC_UNATCOIsland/{laser1,laser2}-original.png`, `-time.txt` and `laser1b-original.png`.
 
+### 04_NYC_Street's steam vents (row 4.2.13, `FAIL`: two causes, one found)
+
+The vent of `ParticleGenerator2` (614, 67, -507) in the alley, the camera 160 units back and 40 above it looking along +x and slightly up. The scene is a live one: the
+original (`scripts/live-original.sh 04_NYC_Street --ticks 600 --delta 0.0166666675 --shot vents2 --base-shot --tag vents2 --render-history --actor-trace 1:40
+--early-cmds 'set DeusEx.JCDentonMale Location (X=454,Y=67,Z=-467)|set DeusEx.JCDentonMale ViewRotation (Pitch=1800,Yaw=0,Roll=0)'`) runs 600 ticks, the tracer
+recording each tick's delta and CRT rand state, and holds the level; Play replays the same ticks with the same delta and stream state per tick (the generators'
+random state is the measured host input, as in the other live pilots), then both draw the held frame. A ghost placed with `set Location` in the frozen phase and
+released into a ticking level did not crash the original here (two runs; the earlier note was for `set Location` plus `set Region`). The load's chance
+FlyGenerators (3 to 10 a load) make the population match Play's seeded load only about one load in six to ten: the first capture matched at the third load, the
+second at the second, and a diagnostic run (a 60-tick trace) failed twelve loads in a row before it was stopped (`ATTEMPTS=40` is the budget). `--base-shot` takes the frozen start's frame at the same camera before the first tick (`<name>-base-original.png`,
+Play's `<name>-play-base.png`): the steam is the held frame less that one.
+
+| | |
+| --- | --- |
+| 600 ticks, every watched actor (pawns, generators' TryTimer and PoolCount) | equal for 600 ticks, clock equal (with `--render-history`: without it four pawns differ in `LastRenderTime` at tick 1 only) |
+| stream draws per tick | **differ at tick 45** (original 6, Play 14); in the first capture at tick 18 (3 against 11) |
+| the held frame | Play / original 1.275, mean abs. diff. 3.34, edge recall .937, precision .950, 0 outlier blocks |
+| the steam (frame less the frozen start's) | luma difference correlation **.990**, Play's sum over the original's 1.199 (the frame's ratio 1.275), residual .16, **agreement .954** (the gate's threshold .98 was set from the Bar's haze: .93 in the gate run) |
+
+* **Cause of the draw difference, from Play's side and the original's trace.** The extra 8 draws are `FlyGenerator14`'s own tick in Play (`drawTrace`, and the new
+  `live-acceptance.mjs play --draw-stack-actor NAME` for the script call stack: `PawnGenerator.Tick` -> `SpawnScout` / `GeneratePawn` -> a spawned pawn's
+  `aiPickRandomDestination`): the generator's first tick, which spawns its `GeneratorScout` (`PawnGenerator.SpawnScout`, once, `bScoutInit`). In the original the
+  generator's `TryTimer` reads 0 over those ticks and its `PoolCount` stays 8, and the stream shows no draw there. So in the original the first tick (the scout
+  spawn) is not at that tick; in Play it is later: the actors' tick gate (`AActor::InStasis`, the 5-second `LastRenderTime` test,
+  [script actor tick](script-actor-tick.md)) is the suspect, because the render history the replay writes into Play is the pawns' `LastRenderTime` and these
+  generators are not pawns. **Unverified.** The next step is to add the generators' `LastRenderTime` and `DistanceFromPlayer` to the watched fields and to
+  `--render-history` (the original's last frozen row written into Play before the first tick) and replay again; the original's actor trace
+  (`original-trace-vents2.jsonl.actors.jsonl`, ticks 1 to 40) holds each actor's tick entries.
+* **What stays unmatched in the steam.** `SmokePuff1` is a FireTexture (the beams' case): the puffs' internal pattern follows a spark stream the programs do not
+  share, so the comparison is of where the steam is and how much (the contribution), not of its pixels.
+
+Stored: `.work/live-acceptance/04_NYC_Street/{original-trace-vents2.jsonl (+ .strobe, .actors.jsonl), watch-, population-, commands-, hold-vents2.json}` and
+`.work/acceptance/04_NYC_Street/vents2-original.png`, `vents2-base-original.png` (main checkout).
+
 ## Open
 
 - **Not attributed, seen in the 2026-10-14 pilot re-runs with Divergences 17 and 18 in** (every watched actor equal in all three): the Island run's stream draws differ at tick 264
