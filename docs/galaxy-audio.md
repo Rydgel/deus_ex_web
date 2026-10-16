@@ -706,7 +706,8 @@ script (`PlayFootStep`'s random sound pick from the stream), so a stream-draw co
 * 4.5.6 (speech samples against Galaxy's decoder): not started. Existing evidence is in this file and [lip-sync](lip-sync.md): speech is MPEG-1 Layer III 44.1 kHz
   mono, loaded by `0x10618e60`, decoded by the MPEG decoder at `0x10620b30` into the streamed ring voices. Whether the game ships any ADPCM sample was not
   checked. The user keeps the browser decoder.
-* 4.3.7 (what reaches the speakers): not started. Candidates in [galaxy-music](galaxy-music.md): the music bus delay, the two ring heads' spacing (mixer.md
+* 4.3.7 (what reaches the speakers): not started. *(Later on 2026-10-16: done, all five checks pass; see
+  [audio-output-scope](audio-output-scope.md) §6.)* Candidates in [galaxy-music](galaxy-music.md): the music bus delay, the two ring heads' spacing (mixer.md
   1.3, derived and unmeasured), MPEG/ADPCM samples, 3D voices. A loopback recording of the original under Wine is the only measurement path; whether it is
   reliable enough, and which parts are host output by nature (the browser's resampler and device), is the decision still to be recorded.
 * The worktree `agent-ad32397fa8ffa8fb9` was set up by symlinking `node_modules`, `Deus Ex GOTY Edition`, `Reference` and the `.cache` entries (not `.cache/wasm`),

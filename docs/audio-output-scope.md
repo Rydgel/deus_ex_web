@@ -2,14 +2,14 @@
 
 Row 4.3.7 of [stage-4-exit-criteria](stage-4-exit-criteria.md) ("audible output: the output Galaxy produces for the speakers") is
 `MISSING` and had no plan. This note is the plan. **The user adopted all six recommendations of §7 on 2026-10-16**, so §6 is the row's
-criterion, with check 5 (the speech ring transport) included. Checks 1, 2, 4 and 5 are implemented and pass; check 3 is not built (§6
-"Status", §5.2). It records:
+criterion, with check 5 (the speech ring transport) included. All five checks are implemented and pass (§6 "Status"); the
+two captures of the running original are stored (§5.1, §5.2). It records:
 
 1. the chain from Galaxy's mixer to the speakers, in the original and in Play, with the status of each stage (§1);
 2. what was traced in Galaxy.dll for it on 2026-10-16 (§2: read from code with capstone, **not** oracle-checked);
 3. each open part: what the original does, what Play does, and how it could be measured, with a judgement of each route (§3);
 4. the census of the shipped sound formats, ADPCM included (§4, `scripts/census-sound-formats.mjs`);
-5. the capture plan for what needs the running original (§5; nothing was run under CrossOver or Wine);
+5. the captures of the running original under CrossOver, what they found and how they are replayed (§5);
 6. the row's criterion (§6) and the user's decisions behind it (§7).
 
 Galaxy.dll is the GOTY `System/Galaxy.dll` (SHA256 `606e71d1…`, preferred base `0x10600000`), as in [galaxy-audio](galaxy-audio.md) and
@@ -260,9 +260,10 @@ glxLoadSample's dispatch (`0x10618f1c..0x10618f9c`: `'AS  '` at +8, `.snd` at +0
 every first frame is at byte 0. This agrees with the census in [effects](galaxy-music/effects.md) §1 and extends it to every package and
 to the MPEG modes.
 
-## 5. Capture plan (the running original; not run)
+## 5. Captures of the running original (run 2026-10-16 under CrossOver)
 
-Nothing here was run: another session uses the bottle. All of it follows the existing live tooling: `tools/dx-live-win.c` built as
+Both captures were run on the Mac (the bottle "DeusEx", under the sessions' `.work/bottle.lock`) and are stored in the main checkout's
+`.work/audio-output/`. They follow the existing live tooling: `tools/dx-live-win.c` built as
 `ad/build/dx-live-win.exe` (`i686-w64-mingw32-gcc -O2 -o ad/build/dx-live-win.exe tools/dx-live-win.c -lpsapi`), the game started by
 `node ad/scripts/original-game.mjs launch <map>.dx` under the lock that `scripts/live-original.sh` takes (`.work/wine-deusex.lock`), and the
 tracer run with `$DX_WINE` (Mac: `CX_BOTTLE=DeusEx /Applications/CrossOver.app/Contents/SharedSupport/CrossOver/bin/wine`; Linux host:
@@ -298,61 +299,84 @@ again after a map load. Settles: D (`(B − A) mod size`, constant across the ru
 `D − 7056`, R's distribution, DS against WinMM ([mixer](galaxy-music/mixer.md) §6.3), SSE, the pan table's precision variant (§6.2), the
 MXCSR (§8.5) and the 3D type. A short run; worth doing first.
 
-### 5.2 `dx-live-win.exe galaxy capture <config>` (new mode, debugger)
+### 5.2 `dx-live-win.exe galaxy capture <out> <seconds> <map> [stop file]` (debugger; built and run 2026-10-16)
 
-For a bit-exact replay. Breakpoints:
+**Run and stored.** `scripts/galaxy-output-capture.sh replay` (the bottle "DeusEx", under `.work/bottle.lock`, 2026-10-16 23:05 CEST, load average 4.2). The tracer
+starts DeusEx.exe itself under the debugger and arms its breakpoints at Galaxy.dll's `LOAD_DLL_DEBUG_EVENT`, so the record begins before
+glxInit and the replay starts from `Library::new` with nothing to restore. The scene: the title map (the launched engine loads `entry.dx`
+then `DX.dx` whatever the command line says), a console `open 00_Training` (SetViewport stops the channels and keeps the output; the
+song changes), about 35 s later (the load, the player back) a walk forward and back and a jump (dxinput: `W` 2.5 s, `S` 2.5 s, `Space`, `W` 1.5 s: footsteps and a
+landing on the effect voices), 20 s of the level, a console `musicorder 2` (glxControlMusic(1, 2): the resync while the song and effect
+voices play), 15 s more; then the tracer detaches and the game is quit. The INI copies keep the shipped Galaxy volumes
+(`MusicVolume=153`, `SoundVolume=204`, `SpeechVolume=255`; `original-game.mjs writeIni` would silence them). Stored as
+`replay-training.bin` (4,263,809 bytes, SHA256 `abdd181a…1ba4ae`) and `replay-training.log`, made by the tracer of commit 02a7aeb
+(`ad/build/dx-live-win.exe` built from `tools/dx-live-win.c`). Replayed (check 3): 25,994 records; 4,851 timer callbacks and both resyncs (the first callback's
+and `MUSICORDER`'s); **34,222,080 copied bytes equal** (17.0 M nonzero samples, peak 18,232), the first 23 callbacks byte for byte; 5 PCM
+samples, 2 music loads, 6 starts, 9 controls, 13 status polls, 12 stops (6 from the subsystem, returning to `0x10607e7e`; 6 inside
+glxStartSample, `0x10612419`), 1 unload (of a sample never started), 1 reverb block. The log holds 2 first-chance access violations and 30
+first-chance C++ exceptions on the game thread, each handled by the game (none in the earlier captures; the record and its replay are
+unaffected). Beside it, unread by the gate, `earlier/`: the same scene by the tracer before the stops carried their return address
+(`replay-training-4byte-stops.bin`, 5,644 callbacks), a launch with the music alone (`replay-training-music.bin`, 2,941 callbacks) and the
+title map with a walk (`replay-title-walk.bin`, 3,349 callbacks); each replays equal.
 
-* `0x106142bf` (the callback holds the lock): a `cb` record with the QPC time;
-* `0x106142d9` (after GetCurrentPosition): play `[esp+0x20]`, write `[esp+0x24]`;
-* `0x10614657` (after the copies): R (`ebx`), A and B before the advance, `ahead`, and the bytes `[A, A+R)` and `[B, B+R)` of the staging ring
-  `[0x10697ccc]` (wrapping); for the resync branch (`0x10614387`), the whole 176,400-byte ring after its copy (`0x10614447`);
-* the library entries, each logged **after its EnterCriticalSection returns** (so the game thread's calls order correctly against the timer
-  thread's), with their arguments and return value: glxStartSample, glxControlSample, glxControlVoice, glxStopSample, the music and effects
-  master setters (`0x1060eb60`, `0x1060ec00`), glxLoadMusic `0x10618be0` (with the UMusic's name from RegisterMusic's caller), glxStartMusic
-  `0x106122a0`, glxStopMusic `0x106183a0`, glxUnloadMusic `0x10619450`, glxControlMusic `0x1060d0e0`, glxSetSampleReverb `0x106113d0` (its
-  0x6c-byte block), glxLoadSample `0x10618e60` (with the USound's path from RegisterSound `0x10606af0`), and Update's inline library stores
-  that `host.rs` already names (`galaxy_music_clear_active`, the voice `+0x0f` stores at `0x1060a83d`; `galaxy_music_break`, `[0x10697ca8] = 1`
-  at `0x1060a88d`; [update-transition](galaxy-music/update-transition.md) §2). This is the op set of `galaxy-music-library.mjs` `MUSIC_OP`, so the
-  replay feeds the existing host entries.
+**The record.** Typed records (`u32 type, u32 length, u32 thread`, payload), in event order:
 
-Window: arm at a LoadMap (SetViewport's stop loop clears the effect voices; Update loads the map's song fresh), and at the first callback
-after it snapshot, under the lock, the voice table (`0x1068dca0`, 256 × 0xa0), Galaxy's globals block (`0x10697c00..0x10698400`, which holds
-the heads, counters, tick lengths, masters and the reverb state) and the reverb context if any. Every sound registered before the window
-is mapped from its handle to its USound name by a registry dump (each USound's `+0x50`). Scene: 00_Training from its load, 30 s: the song's
-load and start, the ambient voices, the player's footsteps, a LightSwitch click; then a `MUSICORDER 2` console command with an ambient voice
-playing (the resync of §2.2).
+* the library calls, each at a site **after its own EnterCriticalSection returns** (or, for Update's inline stores, inside Update's
+  critical section), so they order correctly against the timer callbacks, which hold the same lock (`0x1067b670`) throughout: glxInit
+  (EffectsChannels), the output open, the two master setters, glxLoadMusic (the module and its 1,024-byte slack as bytes) and its status,
+  glxUnloadMusic, glxStartMusic, glxStopMusic, glxControlMusic, Update's clear-active (`0x1060a82a`) and break-flag (`0x1060a88d`)
+  stores, glxStartSample (at `0x10612375`) and its result, glxControlSample, glxControlVoice and its result, glxStopSample with its voice
+  and **return address** (a stop inside glxStartSample, which stops the voice first, or inside glxUnloadSample is part of that call),
+  glxSetSampleReverb (its 0x6c-byte block), glxUnloadSample, Update's lock;
+* each sample at its **first glxStartSample** (inside the lock): the 0x48-byte record and its data (PCM: `Length × bytes × channels +
+  0x1f`; MPEG: the record's source bytes), again when the record changed; an unloaded sample's address leaves the cache (it may be reused);
+* each timer callback: GetCurrentPosition's result and cursors (`0x106142d9`), each Lock's result (`0x10614421`, `0x1061451c`,
+  `0x106145f4`) and `DSERR_BUFFERLOST` retry (`0x106143e1`, `0x106144d7`, `0x106145af`), the resync's staging ring as a 32-bit FNV-1a
+  (`0x106143b3`), and after the copies (`0x10614657`) R, the heads before the advance, `ahead` and a 32-bit FNV-1a of each copied
+  segment (`[A, A+R)`, `[B, B+R)` of the staging ring, wrapping), the segments themselves for the first 24 callbacks; the heads after
+  (`0x10614681`);
+* the stream decoder thread: each handled message (`0x1060e363`), each MPEG decoder call's arguments, answer and output bytes
+  (`0x1060e5a1`), the message's end (`0x1060e80d`).
 
-Replay (a new validator): the translated library opened as the snapshot says, the samples and the song loaded from the packages by
-name, the logged ops applied in order between callbacks, and each callback run by a Rust translation of `0x106142a0` fed the logged
-`(play, write)`; every copied byte and position compared with the log. The breakpoints slow the game: the schedule is whatever it was, and
-it is recorded.
+**What CrossOver's debugger forced** (each found by a crash or a garbled record, and the design changed until the capture ran clean):
 
-**Not built (2026-10-16), and the design above needs these changes first.** Checks 1, 2, 4 and 5 now exist; this capture and check 3 do
-not. What the translation now shows a replay needs:
+* **Two int3 traps at once are garbled.** With breakpoints on the game thread outside the lock (glxLoadSample, RegisterSound), a trap
+  coinciding with one of the timer thread's was reported for the wrong thread, or a thread resumed past its int3 (illegal instruction at
+  `0x10606bb2`, an access violation at `0x1061451d`). Every game-thread site is now inside the library lock, which the timer thread holds
+  for its whole callback, so the two never trap together; samples are read at their first start instead of at their load.
+* **A breakpoint on a `call` corrupts the game when stepped off.** Update's unlock call (`0x1060abd6`: EDI 0 in UGameEngine::Draw after
+  Update returns) and glxStartSample's 3D poll call (`0x10612370`: EIP 1) both crashed it; the sites moved one instruction on (the start's
+  to `0x10612375`, same stack) or were dropped (Update's unlock: the lock marker is enough).
+* The launched engine ignores the command-line map (above), and the INI copy silences Galaxy (above).
+* Suspending the other threads while one steps off a breakpoint did not prevent the garbling, and is not used. CrossOver also reports
+  some of the tracer's int3s from inside its exception dispatcher (the event's context is the dispatcher's); the tracer recovers the
+  faulting context from the thread's stack and continues there.
 
-* **No snapshot.** The Rust library cannot restore itself from a raw globals block (`0x10697c00..0x10698400`), the voice table and the
-  music player's state: those are typed fields, patterns and instruments, not one image. Trace instead **from the process launch**: start
-  DeusEx.exe under the debugger (or attach at the `LOAD_DLL_DEBUG_EVENT` of Galaxy.dll), so the record begins before glxInit, and the
-  replay starts from `Library::new`, `setup_output` and `open_output` with nothing to restore. The window is then the launch to 00_Training
-  plus 30 s.
-* **Inputs as bytes, not names.** Dump every glxLoadSample input (RegisterSound's `{'MEMO', 0xc, Data, Num}` bytes) and every glxLoadMusic
-  input (the module and its 1024-byte slack, which Update fills from the UMusic) with the handle it returned; the replay maps each
-  original handle to the model's by load order. No registry walk.
-* **The decoder's output.** Speech in the window plays through Galaxy's MPEG decoder (row 4.5.6, excluded). Record, per `0x1061a690` call,
-  its Consumed and Produced and the bytes it wrote at Dest1 and Dest2, so the replay's PCM leaf (ring.rs) is fed the original decoder's
-  own output and the ring bytes can match.
-* **The decoder thread's events.** Its message handling is not under the library lock: record each handled message (wParam, lParam)
-  where it falls between callbacks, and deliver it there in the replay (ring.rs's "after the callback that posted it" is the host model
-  Play uses; the replay should not assume it).
-* **Hashes in the tracer.** Copying `[A, A+R)` and `[B, B+R)` out of the game for every callback is about 400 KB/s; hash each segment
-  in the tracer (a 64-bit FNV-1a over the bytes, the same in the validator) and dump whole segments only for the first callbacks and
-  the resyncs.
-* **Breakpoint placement.** Each library entry's breakpoint goes after its own EnterCriticalSection returns (so the game thread's calls
-  order correctly against the timer thread's); Update's inline stores (`0x1060a83d` voice `+0x0f`, `0x1060a88d` the break flag) are
-  inside Update's own critical section.
-* **A scene to avoid or label:** a stereo line (one of the four) whose next slot is restarted with a WAV while the pair's first voice
-  plays: the original then writes the second channel through the stale Link into that WAV's data (`HAZARD_RING_FOREIGN_WRITE`, not
-  modelled).
+**The replay** (`validate-galaxy-output-replay.mjs`, check 3): the translated library (the Rust kernel) from `Library::new`, opened as
+the capture says (PC 53, Latency 40, EffectsChannels), the calls applied in the captured order, each sample from its captured bytes (an
+MPEG record becomes the stand-in fed by the captured decoder answers), each timer callback run by `output.rs` with the captured cursors
+and Lock results, each decoder message where the original handled it. It compares, and fails at the first difference: each callback's R,
+heads before and after, `ahead`, the two segments' FNV-1a, the resync ring's FNV-1a, the first 24 callbacks byte for byte;
+glxLoadMusic's status, glxStartSample's and glxControlVoice's results; each decoder message against the replay's own refill posts. A
+wrong translation must be caught **at a callback's comparison**: mutants 201 (the kernel step without `& ~1`), 202 (rounding half away
+from zero), 402 (the resync returns), 403 (`ahead <= 0` tested unsigned), and the replay with every glxStartSample, glxControlSample and
+glxControlVoice dropped (the effect voices are in the compared bytes) all fail there. The scene cannot catch the mutants of paths it
+does not reach: 204 (no saturation: peak 18,232), 401 (the cursors are already block-aligned), 404 (no `DSERR_BUFFERLOST`), 405 (the heads
+meet only at the open), 301 and 304 (the loader's: the replay takes each record and its padded data from the capture), 302 (every
+glxControlSample of the scene repeats its voice's start values, so no step changes), 303 (no start passes pan −1), 305 and 306 (the one
+glxSetSampleReverb block is all zeros: the reverb kernel never runs). The oracle checks (check 1, `galaxy-effects`, `galaxy-reverb`)
+catch those.
+
+**Not in the scene: speech.** The capture holds no MPEG sample and no decoder message: nothing in the scene speaks. A scene with speech
+was not attempted: the decoder thread's sites are outside the library lock (its message loop does not take it), so they can trap together
+with the timer thread's, which garbles the record or crashes the game (above). Speech's ring transport is covered by check 5's oracle
+(`galaxy-ring-voice`, against Galaxy.dll's own instructions), and its PCM is row 4.5.6's (excluded). A live speech capture needs the
+decoder sites made safe first (one thread trapping at a time, for example by single-stepping the decoder thread only while the timer
+thread is outside its callback).
+
+*The design first written here* (a snapshot of the globals block, the voice table and the music player at a LoadMap, samples mapped by
+USound name, segments copied whole) was dropped before it was built: the Rust library has typed state and cannot be restored from a raw
+image, so the capture traces from the launch instead, with load inputs as bytes and segments hashed in the tracer.
 
 ### 5.3 Loopback (optional, confirmation only)
 
@@ -366,10 +390,12 @@ not. What the translation now shows a replay needs:
 
 ## 6. Criterion for row 4.3.7 (adopted 2026-10-16)
 
-**Scene and claim.** "Galaxy's output buffer": for a recorded scene of the running original (00_Training from its LoadMap, 30 s, §5.2),
-every byte the timer callback copies into the DirectSound buffer, and the ring position it lands at, equals what the translated library
-produces when replayed with the original's library calls and cursor positions; and Play's worklet places bus B D bytes ahead of bus A as
-the original does, with D the measured value. Evidence O1 (the stored capture) and O2 (the callback oracle).
+**Scene and claim.** "Galaxy's output buffer": for a recorded scene of the running original (the launch to the title map, a console
+`open 00_Training`, a walk and a jump, `MUSICORDER 2`: about 75 s with music and PCM effect voices, §5.2), every byte the timer callback
+copies into the DirectSound buffer, and the ring position it lands at, equals what the translated library produces when replayed with
+the original's library calls and cursor positions; and Play's worklet places bus B D bytes ahead of bus A as the original does, with D
+the measured value. Evidence O1 (the stored captures) and O2 (the callback and ring oracles). The captured scene has no speech: the ring
+transport is claimed on O2 alone (check 5; §5.2 "Not in the scene").
 
 **Not claimed (host output, excluded):**
 
@@ -393,7 +419,8 @@ SSE, confirmed by §5.1).
    `MUSICORDER` resync with effect voices playing; heads, `ahead`, R, every Lock range and copied byte.
 2. `galaxy-output-poll` [stored capture]: §5.1's values stored with the gate's originals; the check reads D, the path, the kernel, the pan
    table's variant and the MXCSR from the store and fails if Play's constants differ.
-3. `galaxy-output-replay` [stored capture + oracle]: §5.2's replay, every copied byte equal.
+3. `galaxy-output-replay` [stored capture]: §5.2's replay, every copied byte equal (Node and the store; no Unicorn: the original's
+   side is the capture).
 4. `galaxy-output-play` [node]: the worklet processor under Node with two heads at the stored D: its output equals `render_ring`'s staging
    ring read at its play position, and an effect started in the batch of a song change sounds `size − D` bytes before the song's first
    frame.
@@ -403,12 +430,16 @@ SSE, confirmed by §5.1).
 Until checks 1 to 5 pass the row stays `MISSING`; its text names the two-head placement, the ring transport and the capture as the
 missing parts.
 
-**Status (2026-10-16, branch `claude/galaxy-output-437-5085f1`):** check 1 passes (`validate-galaxy-output-callback.mjs`: 17 cases, 405
-callbacks, 809 Locks, 352 of 352 instructions, bit-equal); check 2 passes (`validate-galaxy-output-poll.mjs`: D = 8,820 bytes in every
-sample of two polls across a map load, Play's constants equal, `MUSIC_PAN_PC` changed from 64 to 53 on that evidence); check 4 passes
-(`validate-galaxy-output-play.mjs`); check 5 passes (`validate-galaxy-ring-voice.mjs`: 14 cases, 2,631 decoder messages, bit-equal).
-Check 3 (`galaxy-output-replay`) is not built: §5.2 above. The row stays `MISSING`; the two-head placement and the ring transport are no
-longer missing, the capture and its replay are.
+**Status (2026-10-16, branch `claude/galaxy-output-437-5085f1`): all five checks pass.** Check 1
+(`validate-galaxy-output-callback.mjs`: 17 cases, 405 callbacks, 809 Locks, 352 of 352 instructions, bit-equal); check 2
+(`validate-galaxy-output-poll.mjs`: D = 8,820 bytes in every sample of two polls across a map load, Play's constants equal,
+`MUSIC_PAN_PC` changed from 64 to 53 on that evidence); check 3 (`validate-galaxy-output-replay.mjs` on the stored
+`replay-training.bin`: 4,851 callbacks, both resyncs, 34,222,080 copied bytes equal, mutants 201, 202, 402, 403 and the replay without
+the effect voices all caught at a callback's comparison); check 4 (`validate-galaxy-output-play.mjs`); check 5
+(`validate-galaxy-ring-voice.mjs`: 14 cases, 2,631 decoder messages, bit-equal). glxUnloadSample, which the capture's scene calls
+(UnregisterSound), is in the kernel and checked against the original by `validate-galaxy-effects.mjs` (case `voices-unload`). Checks 2 and 3
+read the main checkout's `.work/audio-output/` and print `SKIP` without it. The row can move to `PASS`; its limits are the exclusions
+above and speech's live timing (ring voices are checked against the original's instructions, not against a capture).
 
 ## 7. Decisions (adopted 2026-10-16)
 

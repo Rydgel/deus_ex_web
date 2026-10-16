@@ -187,7 +187,11 @@ browser does not reproduce.
   record, its PCM in a separate pool, the non-ring branch;
   [galaxy-audio](../galaxy-audio.md) "Speech through Galaxy's voices"),
   which no oracle covers.
-* glxUnloadSample (Play never destroys a USound).
+* glxUnloadSample in Play, which never destroys a USound. The kernel has it
+  (`glx_unload_sample`, `galaxy_sample_unload`, 2026-10-16) for the replay of
+  the original's capture (row 4.3.7, whose scene unregisters a sound), checked
+  against the original by the case `voices-unload`; a 3D voice's release in it
+  is not translated (Use3dHardware False).
 * 3D hardware voices (Use3dHardware False).
 * The real heap behind the address model: records and data take a bump
   heap's addresses at `0x60000000`; voice handles are the voices' addresses
