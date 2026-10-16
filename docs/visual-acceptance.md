@@ -1989,8 +1989,9 @@ and two views of Island's pier deck (`detailI1`, `detailI2`, 50.734 s), each wit
 ddraw, like Linux Wine's, reports no `BLENDDIFFUSEALPHA`, so `SetRes` leaves the field 0) and again with it poked to 0 (`--base-poke`, `<view>-base`), and each base view a
 second time (`<view>b-base`, the original's own variation, unread by the gate). Play keeps its pass (`--detail on`) and hides it for its frame without (`--base detail`);
 `compare --contribution` reads the pass as an effect that darkens. Both frames and the pass's contribution equal the original's within the gate's thresholds (correlation
-.993 to .999, Jaccard of the changed pixels .973 to .9986); Play's fans miss the frame's top row, whose pixel centres their edge lies on. The numbers, the device read and
-what is left are in [frame projection](frame-projection.md#against-the-original-in-a-frame-2026-10-16-gate-row-4222).
+.993 to 1.0, Jaccard of the changed pixels .97 to .9998). The comparison found that Play's fans missed the frame's top row, whose pixel centres their clipped
+edge lies on; fixed the same day ([edges on pixel centres](frame-projection.md#edges-on-pixel-centres-2026-10-16)). The numbers, the device read and what is left are in
+[frame projection](frame-projection.md#against-the-original-in-a-frame-2026-10-16-gate-row-4222).
 
 ```bash
 scripts/original-views.sh 00_Training --view detailT1:-736,1314,560:0,16384,0 --view detailT2:-1100,1224,560:0,21384,0 --view detailT1-base:-736,1314,560:0,16384,0 --view detailT2-base:-1100,1224,560:0,21384,0 --view detailT1b-base:-736,1314,560:0,16384,0 --view detailT2b-base:-1100,1224,560:0,21384,0 --brightness 0.666667 --poke D3DRenderDevice0:0x78:1 --base-poke D3DRenderDevice0:0x78:0

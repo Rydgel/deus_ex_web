@@ -1916,7 +1916,9 @@ function drawFrame(snap, time) {
   if (simVerify) for (const set of Object.values(drew)) set.clear();
   // The detail-texture pass' fans (sim-session.mjs visibility): every frame's, shown by the pass that draws it.
   // A surface with a fog map takes no detail texture (DrawComplexSurface clears it): the fog pass' maps of this update say which.
-  try { detailScene?.update(visible?.detail ?? null, world.fog ? (index, surface) => world.fog.fogged(index)?.has(surface) ?? false : null); }
+  // `rows`: the frame's rows of pixel centres (an edge on one is drawn by D3D's tie rule, detail-scene.mjs FILL_TIE_Y).
+  const detailRows = renderRect?.render && renderRect.height > 0 ? [renderRect.y, renderRect.y + renderRect.height - 1] : [0, renderer.domElement.height - 1];
+  try { detailScene?.update(visible?.detail ?? null, world.fog ? (index, surface) => world.fog.fogged(index)?.has(surface) ?? false : null, detailRows); }
   catch (error) { pauseForRuntimeError(error); }
   const { framePass, drawSkyFrame, updateActors } = framePassHelpers(frames, stampFrame, record => spriteScene?.framePass(record.index));
   world.mirrors.render(renderer, scene, camera, { markers: world.markers, sky: world.sky, requested,

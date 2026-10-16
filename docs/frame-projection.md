@@ -777,7 +777,8 @@ record is skipped, not truncated).
    counts the kept polygons only).
 2. *Page* (`src/viewer/detail-scene.mjs`). One mesh per frame and detail texture (render order below the decals'); `mainPass` and
    `framePass` show only the frame a pass draws, as the sprite scene does (`stamps.plan`'s pass ids are untouched: the page draws the
-   fans of the frames its passes already draw). The vertices go through `fpClipOf(vec4(X, Y, depth, rhw), 1/rhw)`, in the recorded
+   fans of the frames its passes already draw). The vertices go through `fpClipOf(vec4(X, Y, depth, rhw), 1/rhw)` (a fan with an edge on a row of pixel centres moved up by 1/256 px,
+   [edges on pixel centres](#edges-on-pixel-centres-2026-10-16)), in the recorded
    states: `DESTCOLOR` / `SRCCOLOR` blend, no depth write, depth test less-or-equal, stage colour `mix(0x808080, texel, vertex alpha)`
    (`BLENDDIFFUSEALPHA`), the texture sampled as the base textures are ([texture sampling](texture-sampling.md)); the host's mirror
    clip plane is not applied to the fans (they are the frame's own); a surface with a fog map takes none (the fog note below).
@@ -839,7 +840,8 @@ perspective-correct, which wined3d does too; D3D hardware may interpolate colour
 polygon: not measured, there is no Windows original here); **draw order** (Play draws all of a frame's fans after its world surfaces, one mesh
 per texture; the original draws each surface's fans right after the surface, so where two detail surfaces overlap in depth and the
 2 * src * dst blend clamps the result differs); **fog** (above); **a ViewportWindow's frames** draw none; nothing is drawn in a pass without
-child frames (`?childFrames=off`); **the frame's top row** (the fans' edge on its pixel centres, measured below).
+child frames (`?childFrames=off`); **an edge on a row of pixel centres** (D3D's tie rule is emulated by a 1/256 px shift with a band,
+[below](#edges-on-pixel-centres-2026-10-16)).
 
 ### Against the original in a frame (2026-10-16, gate row 4.2.22)
 
@@ -880,10 +882,9 @@ clear), so `SetRes` turns the pass off on this host too, and the poke's own log 
   pixel centres. The original fills both. Play fills the column and not the row: on row 0 the original's pass changes 1,204 pixels in `detailT1`,
   719 in `detailT2` and 521 in `detailI1`, Play's 0, 0 and 259. The bottom row and the side columns are equal in every view, and the base
   frames agree on row 0 as on the rows below it (30 pixels differ in `detailT1`, against 25 and 40 on rows 1 and 2), so it is the fans'
-  rasterization of an edge exactly on pixel centres: D3D's top-left rule takes a top edge's centres, and the host's rasterizer (headless
-  Chromium on the Mac, its WebGL backend not recorded) does not. **Not fixed:** how the original's driver (here wined3d emulating D3D's rule; a Windows D3D7 driver
-  was not measured) and each host backend place such an edge is not established, and the other draws on the vertex chain would need the same
-  treatment. **Inside the frame**, Training's views differ in 52 to 71 pixels per view; Island's in 2,052 to 4,260, almost all by one level
+  rasterization of an edge exactly on pixel centres: D3D's top-left rule takes a top edge's centres, and the host's rasterizer does not.
+  **Fixed the same day** ([edges on pixel centres](#edges-on-pixel-centres-2026-10-16)): row 0 now changes equally in Training's views
+  (1,204 / 1,205 and 719 / 719). **Inside the frame**, Training's views differ in 52 to 71 pixels per view; Island's in 2,052 to 4,260, almost all by one level
   (`detailI2`: 3,797 of 4,027 original-only and 4,036 of 4,273 Play-only) and on the deck's far rows (rows 120 to 360 of `detailI2`), in equal
   numbers in both programs: where the fade's alpha is small and the blend moves a pixel by one level or not. Attributed to the colour
   interpolation and the ZBIAS constant above, **unverified**.
@@ -898,6 +899,53 @@ node scripts/validate-stage4-acceptance.mjs --only '^4\.2\.22$'
 ```
 
 `original` needs the map in `.work/acceptance/plan.json`, which `play` writes (`play --maps 01_NYC_UNATCOIsland --view ...` first on a checkout without it).
+
+### Edges on pixel centres (2026-10-16)
+
+Found by gate row 4.2.22 (above): the fans' edges at the frame's top lie on row 0's pixel centres, where the original fills the row and Play
+left it out.
+
+* **Where such edges come from.** D3D7 puts pixel centres on integer coordinates. Render.dll clips the polygons it hands D3DDrv at the frame's
+  border in screen space, so a fan's clipped edges lie at D3D X 0 and Y 0 (column 0's and row 0's centres) and at X = FX, Y = FY (no pixel of the
+  frame): in Play's pack at the four 4.2.22 cameras, Y -3e-5 to 720.0002 and X -6e-5 to 1280.0002 (the pack equals D3DDrv's own fans under
+  Unicorn, `validate-detail-pass-rust`). The other draws on the vertex chain put no frame-border edge on centres: world surfaces and meshes are
+  clipped by the host at the viewport, not in screen space, and a decal's clamped point and a sprite tile's clipped corner land on D3D -0.5
+  (`fpVertexDecal`; `fpSpriteVertex`, `XB - 0.5 + x`). An interior edge exactly on a row of centres needs two vertices at an integer Y: not seen,
+  not censused.
+* **The rules.** D3D's documented rasterization rule is the top-left convention: a pixel whose centre lies on an edge is drawn when the edge is a
+  top or a left edge, not when it is a bottom or a right one. The original under CrossOver fills the on-centre top and left edges (row 0 and
+  column 0 of the 4.2.22 views); its fans' bottom and right edges lie on no pixel of the frame, and no Windows D3D7 driver was measured. The host
+  (`scripts/probe-fill-rule.mjs`: a rectangle whose four edges lie on centres; Playwright Chromium on the Mac, `--use-angle=metal`, M2 Pro) fills a
+  centre on a **left or bottom** edge and leaves one on a **top or right** edge, the same on the canvas and on a render target, for both windings
+  and clip w 1, 37.25 and 1000: its vertical edges agree with D3D's, its horizontal ones are the other way round. With every edge moved up and
+  left by d, from d = 1/512 the centres of a top edge are filled and those of a bottom edge are not; at d = 1/1024 and 1/2048 the move is lost to
+  the host's vertex snapping (WebGL's `SUBPIXEL_BITS` reads 4, ANGLE's floor, not the hardware's step). The Linux host's ANGLE over GL was not
+  measured.
+* **What Play does** (`src/viewer/detail-scene.mjs` `FILL_TIE_Y`). A fan with two vertices on one of the frame's rows of centres (within 2^-10 px
+  of an integer Y; the rows from the frame's rectangle, so the bottom clip at Y 720 counts for none) is moved up by 1/256 px, twice the
+  measured snapping threshold: a top edge on centres then lies above them and its row is filled, a bottom edge on centres lies above them
+  and its row is left out, whatever the host's own rule. The fragment stage reads that fan's texture coordinates and alpha one derivative
+  step back (`+ 1/256 dFdy`), where the unmoved fan has them. X is not moved (the host agrees with D3D there; a host that does not would need
+  the same in X). Every other fan is drawn as before.
+* **Measured** (the four stored views, Play at their clocks; before is master 61a0df5):
+
+  | View | row 0 changed, original / Play | Jaccard | same change in every channel | contribution correlation |
+  | --- | --- | --- | --- | --- |
+  | `detailT1` | 1,204 / 0 -> 1,204 / 1,205 | .9985 -> .9998 | .995 -> .996 | .9986 -> 1.0 |
+  | `detailT2` | 719 / 0 -> 719 / 719 | .9986 -> .9998 | .997 -> .998 | .9992 -> .9999 |
+  | `detailI1` | 521 / 259 -> 521 / 587 | .9894 to .9901 -> .9895 | .971 to .972 -> .969 | .995 to .996 -> .996 |
+  | `detailI2` | no fan on row 0 | .9719 to .9726 -> .9715 | .943 to .946 -> .944 | .993 -> .993 |
+
+  `detailI1`'s row 0 now differs from the original as its rows 1 to 3 do (26 to 41 pixels changed by the original only and 60 to 94 by Play
+  only, nearly all by one level: the far deck's pattern under "What is left" above). Island's Play frames differ between two loads in about
+  8,500 pixels by up to 4 levels, so its counts move by a few hundred between runs (the ranges are two or three runs). Two versions were
+  tried first: every fan moved without the derivative step raised the pixels changed by one program only inside Training's views from
+  52 / 71 to 281 / 276 (the attributes moved with the fan); every fan moved with the step cost `detailI2` .0014 of Jaccard over three runs
+  (it has no fan on row 0, only one with its two clip vertices at Y 720). Hence the rule above. After it: `--only '^4\.2\.22$'` passes twice, `validate-detail-play` passes (0 changed pixels outside
+  the reference fans, the mirror's and sky's passes drawing only their own fans) and `validate-detail-play-sim` passes (sim side, unchanged).
+* **Unverified:** the band (a horizontal edge within 1/256 px below a row of centres takes that row in Play and would not in D3D), the
+  derivative step's second-order error in a moved fan, the host's rule on other backends (Linux ANGLE over GL, Firefox), and a Windows D3D7
+  driver's (only the documented convention and CrossOver's are known).
 
 ## Unverified and open
 

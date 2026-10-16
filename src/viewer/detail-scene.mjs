@@ -28,6 +28,18 @@ import { DETAIL_RENDER_ORDER } from './render-layers.mjs';
  * `units` are a polygonOffset, left off. */
 export const ZBIAS = { factor: 0, units: 0, depth: 5000 * 2 ** -24 };
 const DEPTH_STEP = 2 ** -24;
+/** A fan's edge on a row of pixel centres, broken upwards (docs/frame-projection.md "Edges on pixel centres (2026-10-16)"). Render.dll clips the
+ * fans' polygons at the frame's top at D3D Y 0, row 0's pixel centres: D3D's top-left convention fills a centre on a top edge and
+ * leaves one on a bottom edge, and the original under CrossOver fills row 0. The host fills a centre on a bottom edge and leaves
+ * one on a top edge (measured on ANGLE over Metal, scripts/probe-fill-rule.mjs; its vertical edges agree with D3D's, left in,
+ * right out). A fan with two vertices on one of the frame's rows of centres (within FILL_TIE_ROW of an integer Y: an edge or a
+ * chord on it; the clip at the frame's bottom, Y 720 in a 720-row frame, lies on no row it has) is moved up by FILL_TIE_Y, so an
+ * edge on centres lies strictly above them: the centres a top edge passes through are inside and those a bottom edge passes
+ * through outside, whatever the host's own rule. 1/256 is twice the smallest shift the host's vertex snapping keeps (1/512;
+ * 1/1024 is lost). The fragment stage reads such a fan's texture coordinates and alpha back where the unmoved fan has them (one
+ * derivative step). Every other fan is drawn as before, so the shift's cost (a horizontal edge within 1/256 px below a row of
+ * centres takes that row, and the derivative step's second-order error) falls only on the fans that need it. */
+export const FILL_TIE_Y = 1 / 256, FILL_TIE_ROW = 2 ** -10;
 /** ?detailMips=generate builds a mip chain for the detail textures stored with one level (893 of the 896 in the shipped
  * packages), as the base textures get; the default draws them as the one level they are (docs/frame-projection.md). */
 const generateMips = typeof location !== 'undefined' && new URLSearchParams(location.search).get('detailMips') === 'generate';
@@ -38,6 +50,7 @@ export function createDetailScene(assets, textures, { displayGamma, surfaceDetai
   const bias = { value: ZBIAS.depth };
   root.matrixAutoUpdate = false; root.name = 'Detail textures';
   let used = [], drawn = 0, current = null;
+  const tieRows = new Int32Array(64);   // the rows of pixel centres a fan's vertices lie on (update's scratch)
 
   /** The detail texture of a model surface as a loadable entry: `surfaceDetails[i]` is modelSurfaceDetails' entry. */
   function textureOf(surface) {
@@ -71,18 +84,22 @@ export function createDetailScene(assets, textures, { displayGamma, surfaceDetai
         shader.uniforms.uDetailBias = bias;
         // D3DDrv's vertices (X, Y, depth, RHW) through the original's mapping to clip space; a pass without a frame draws nothing.
         shader.vertexShader = shader.vertexShader
-          .replace('void main() {', `attribute vec4 deusD3d;\nattribute float deusAlpha;\nvarying float vDeusAlpha;\nuniform float uDetailBias;\n${frameProjectionGlsl()}\nvoid main() {`)
+          .replace('void main() {', `attribute vec4 deusD3d;\nattribute float deusAlpha;\nattribute float deusTie;\nvarying float vDeusAlpha;\nvarying float vDeusTie;\nuniform float uDetailBias;\n${frameProjectionGlsl()}\nvoid main() {`)
           // The fans are already the frame's own (OccludeBsp's output); the host's mirror-plane clip would test the D3D vertex.
           .replace('#include <clipping_planes_vertex>', '')
           .replace('#include <project_vertex>', `
-vDeusAlpha = deusAlpha;
-if ( uFpOn > 0.5 ) gl_Position = fpClipOf( vec4( deusD3d.xy, deusD3d.z - uDetailBias, deusD3d.w ), 1.0 / deusD3d.w );
+vDeusAlpha = deusAlpha; vDeusTie = deusTie;
+if ( uFpOn > 0.5 ) gl_Position = fpClipOf( vec4( deusD3d.x, deusD3d.y - deusTie, deusD3d.z - uDetailBias, deusD3d.w ), 1.0 / deusD3d.w );
 else gl_Position = vec4( 2.0, 2.0, 2.0, 1.0 );
 `);
         // COLOROP BLENDDIFFUSEALPHA with the diffuse 0x808080 and the vertex alpha: texel * a + diffuse * (1 - a).
-        shader.fragmentShader = shader.fragmentShader.replace('#include <clipping_planes_fragment>', '').replace('#include <common>', '#include <common>\nuniform float deusDisplayGamma;\nvarying float vDeusAlpha;')
-          .replace('#include <map_fragment>', `#include <map_fragment>
-diffuseColor = vec4( mix( vec3( 128.0 / 255.0 ), diffuseColor.rgb, clamp( vDeusAlpha, 0.0, 1.0 ) ), 1.0 );`)
+        shader.fragmentShader = shader.fragmentShader.replace('#include <clipping_planes_fragment>', '').replace('#include <common>', '#include <common>\nuniform float deusDisplayGamma;\nvarying float vDeusAlpha;\nvarying float vDeusTie;')
+          // A fan moved up by vDeusTie px (window y grows upwards) has at this pixel what the unmoved fan has vDeusTie px lower: its
+          // texture coordinates and alpha are read one derivative step back up (0 for every other fan).
+          .replace('#include <map_fragment>', `vec2 deusMapUv = vMapUv + vDeusTie * dFdy( vMapUv );
+float deusFanAlpha = vDeusAlpha + vDeusTie * dFdy( vDeusAlpha );
+${THREE.ShaderChunk.map_fragment.replace(/\bvMapUv\b/g, 'deusMapUv')}
+diffuseColor = vec4( mix( vec3( 128.0 / 255.0 ), diffuseColor.rgb, clamp( deusFanAlpha, 0.0, 1.0 ) ), 1.0 );`)
           .replace('#include <colorspace_fragment>', `${REENCODE_GLSL}
             ${displayRampGlsl('deusDisplayGamma', true)}`);
       };
@@ -109,7 +126,7 @@ diffuseColor = vec4( mix( vec3( 128.0 / 255.0 ), diffuseColor.rgb, clamp( vDeusA
       while (capacity < vertices) capacity *= 2;
       item.geometry.dispose();
       const attribute = (size, name) => item.geometry.setAttribute(name, new THREE.BufferAttribute(new Float32Array(capacity * size), size).setUsage(THREE.DynamicDrawUsage));
-      attribute(4, 'deusD3d'); attribute(1, 'deusAlpha'); attribute(2, 'uv');
+      attribute(4, 'deusD3d'); attribute(1, 'deusAlpha'); attribute(1, 'deusTie'); attribute(2, 'uv');
       // three.js needs a position attribute to size the draw: the vertex shader ignores it.
       item.geometry.setAttribute('position', item.geometry.getAttribute('deusD3d'));
       item.capacity = capacity;
@@ -118,8 +135,9 @@ diffuseColor = vec4( mix( vec3( 128.0 / 255.0 ), diffuseColor.rgb, clamp( vDeusA
   }
 
   /** One frame's pack (detail-draw.mjs) or null: the geometry of every frame's fans. `skip(frame, surface)` leaves a surface's
-   * fans out (a surface with a fog map takes no detail texture). */
-  function update(pack, skip = null) {
+   * fans out (a surface with a fog map takes no detail texture). `rows` = [first, last]: the frame's rows of pixel centres in
+   * the vertices' Y (its rectangle); a tie on a row outside them is moot (null: every row counts). */
+  function update(pack, skip = null, rows = null) {
     for (const item of used) item.mesh.visible = false;
     used = []; drawn = 0; current = null;
     if (!pack) return;
@@ -136,16 +154,24 @@ diffuseColor = vec4( mix( vec3( 128.0 / 255.0 ), diffuseColor.rgb, clamp( vDeusA
       for (const [entry, vertices] of counts) {
         const item = meshFor(index, entry, vertices);
         fill.set(entry, { item, at: 0, d3d: item.geometry.getAttribute('deusD3d').array, alpha: item.geometry.getAttribute('deusAlpha').array,
-          uv: item.geometry.getAttribute('uv').array });
+          tie: item.geometry.getAttribute('deusTie').array, uv: item.geometry.getAttribute('uv').array });
       }
       forEachFan(words, (list, node, surface, layer, count, w, at) => {
         const entry = textureOf(surface), out = entry && fill.get(entry);
         if (!out || skip?.(index, surface)) return;
         const base = offset + at;
+        // FILL_TIE_Y for a fan with two vertices on one row of pixel centres, else 0.
+        let tie = 0, onRows = 0;
+        for (let v = 0; v < count && !tie; v++) {
+          const y = floats[base + 7 * v + 1], row = Math.round(y);
+          if (Math.abs(y - row) >= FILL_TIE_ROW || (rows && (row < rows[0] || row > rows[1]))) continue;
+          for (let r = 0; r < onRows; r++) if (tieRows[r] === row) tie = FILL_TIE_Y;
+          if (onRows < tieRows.length) tieRows[onRows++] = row;
+        }
         const put = v => {
           const src = base + 7 * v, k = out.at++;
           out.d3d[4 * k] = floats[src]; out.d3d[4 * k + 1] = floats[src + 1]; out.d3d[4 * k + 2] = floats[src + 2]; out.d3d[4 * k + 3] = floats[src + 3];
-          out.alpha[k] = (pack[src + 4] >>> 24) / 255;
+          out.alpha[k] = (pack[src + 4] >>> 24) / 255; out.tie[k] = tie;
           out.uv[2 * k] = floats[src + 5]; out.uv[2 * k + 1] = floats[src + 6];
         };
         // The fan's triangles (v0, vi, vi+1).
@@ -153,7 +179,7 @@ diffuseColor = vec4( mix( vec3( 128.0 / 255.0 ), diffuseColor.rgb, clamp( vDeusA
         drawn += count - 2;
       });
       for (const { item, at, d3d, alpha, uv } of fill.values()) {
-        for (const name of ['deusD3d', 'deusAlpha', 'uv']) {
+        for (const name of ['deusD3d', 'deusAlpha', 'deusTie', 'uv']) {
           const attribute = item.geometry.getAttribute(name);
           attribute.clearUpdateRanges(); attribute.addUpdateRange(0, attribute.itemSize * at); attribute.needsUpdate = true;
         }
