@@ -45,6 +45,12 @@
  *       arguments, results and output bytes. Until <seconds> pass or the stop file appears; then it disarms, detaches and exits
  *       (the game goes on). Records: u32 type, u32 payload length, u32 thread id, payload (see the GX_ constants).
  *
+ *   wine dx-live-win.exe fire hold|release|read <texture name>
+ *       Fire.dll (relocated or not): `hold` makes UFireTexture::ConstantTimeTick (0x10507ff0 at the preferred base) return at once (its
+ *       `push ebp` becomes `ret`), so every FireTexture keeps its pixels while the game draws on, a held texture to capture frames in
+ *       (as `strobe hold`); `release` restores the byte. `read` prints a FireTexture's state (docs/fire-texture.md "Layout"): the
+ *       header fields, mip 0's P8 pixels (Mips +0xa4; FMipmap.DataArray's data at +0x1c) as hex, and whether the tick is held
+ *
  *   wine dx-live-win.exe list <Class>
  *       the live level's actors whose class derives from <Class>: class, name, global slot, Location, state, OddsOfAppearing
  *
@@ -1704,6 +1710,45 @@ int main(int argc, char **argv) {
       read_mem(JUMP, &op, 1);
       printf("%s: byte 0x%02x flag=%u time=%.9g\n", verb, op, read_u32(FLAG), read_float(TIME));
     } else { fprintf(stderr, "strobe poll|hold|release\n"); CloseHandle(process); return 2; }
+    CloseHandle(process); return 0;
+  }
+  if (!strcmp(argv[1], "fire")) {
+    /* the image may be relocated (it was, in a CrossOver process on 2026-10-17): the tick is at its RVA from the loaded base, the
+       image checked by its preferred base in the PE header */
+    const uintptr_t base = module_base("Fire.dll"), preferred = base ? read_u32(base + read_u32(base + 0x3c) + 0x34) : 0;
+    if (!base || preferred != 0x10500000u) { fprintf(stderr, "Fire.dll not found or not the GOTY image (base 0x%lx, preferred 0x%lx)\n", (unsigned long)base, (unsigned long)preferred); CloseHandle(process); return 1; }
+    const uintptr_t TICK = base + (0x10507ff0u - 0x10500000u);
+    const char *verb = argc > 2 ? argv[2] : "read";
+    unsigned char op = 0; read_mem(TICK, &op, 1);
+    if (op != 0x55 && op != 0xc3) { fprintf(stderr, "unexpected byte 0x%02x at 0x%lx\n", op, (unsigned long)TICK); CloseHandle(process); return 1; }
+    if (!strcmp(verb, "hold") || !strcmp(verb, "release")) {
+      cb_write(TICK, !strcmp(verb, "hold") ? 0xc3 : 0x55);
+      read_mem(TICK, &op, 1);
+      printf("%s: byte 0x%02x at 0x%lx (Fire.dll at 0x%lx)\n", verb, op, (unsigned long)TICK, (unsigned long)base);
+    } else if (!strcmp(verb, "read") && argc > 3) {
+      core_base = module_base("Core.dll");
+      names_table = read_u32(core_base + OFF_NAMES_DATA);
+      uintptr_t gog = read_u32(core_base + OFF_GOG_DATA), found = 0;
+      unsigned count = read_u32(core_base + OFF_GOG_COUNT);
+      for (unsigned slot = 0; slot < count && !found; slot++) {
+        uintptr_t obj = read_u32(gog + slot * 4);
+        if (obj && !strcmp(object_name(obj), argv[3]) && !strcmp(object_name(read_u32(obj + OFF_OBJECT_CLASS)), "FireTexture")) found = obj;
+      }
+      if (!found) { fprintf(stderr, "no FireTexture named %s\n", argv[3]); CloseHandle(process); return 1; }
+      unsigned char ubits = 0, drawPhase = 0, auxPhase = 0, renderHeat = 0; unsigned usize = read_u32(found + 0x34), vsize = read_u32(found + 0x38);
+      read_mem(found + 0x30, &ubits, 1); read_mem(found + 0xd4, &drawPhase, 1); read_mem(found + 0xd5, &auxPhase, 1); read_mem(found + 0xd9, &renderHeat, 1);
+      uintptr_t mips = read_u32(found + 0xa4), data = mips ? read_u32(mips + 0x1c) : 0;
+      printf("texture %s obj=0x%lx tick=%s usize=%u vsize=%u ubits=%u globalPhase=%u drawPhase=%u auxPhase=%u renderHeat=%u sparks=%u/%u starStatus=%u mips=%u\n",
+        argv[3], (unsigned long)found, op == 0xc3 ? "held" : "running", usize, vsize, ubits, read_u32(found + 0xd0), drawPhase, auxPhase, renderHeat,
+        read_u32(found + 0xf0), read_u32(found + 0xec), read_u32(found + 0x508), read_u32(found + 0xa8));
+      if (!data || !usize || !vsize || usize * vsize > (1u << 20)) { fprintf(stderr, "no mip 0 data\n"); CloseHandle(process); return 1; }
+      unsigned char *pixels = malloc(usize * vsize);
+      if (!pixels || !read_mem(data, pixels, usize * vsize)) { fprintf(stderr, "cannot read the pixels\n"); CloseHandle(process); return 1; }
+      printf("pixels ");
+      for (unsigned i = 0; i < usize * vsize; i++) printf("%02x", pixels[i]);
+      printf("\n");
+      free(pixels);
+    } else { fprintf(stderr, "fire hold|release|read <texture name>\n"); CloseHandle(process); return 2; }
     CloseHandle(process); return 0;
   }
   if (!strcmp(argv[1], "rng")) {

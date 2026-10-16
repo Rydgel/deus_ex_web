@@ -603,7 +603,7 @@ Measured from the CRT state (the `rand` word of the msvcrt thread data, `+0x14`)
   Of Island's 2,427 actors, `FlyGenerator1` existed in some loads and not in others; the driver reloads the original until it holds no
   actor Play's seeded load lacks (`play-population.json`; exit code 3 asks `live-original.sh` to retry) and Play destroys the ones only it
   holds. The match is by name, and a chance FlyGenerator's name is a per-process counter, not its decoration: a matched name can stand elsewhere
-  (2026-10-16, [the Street's steam](#04_nyc_streets-steam-vents-row-4213-fail-the-result-flips-with-the-puff-textures-phase)). Both populations now carry
+  (2026-10-16, [the Street's steam](#04_nyc_streets-steam-vents-row-4213-pass-the-puff-texture-held-at-the-originals-pixels)). Both populations now carry
   locations and the driver reports such a generator (`generatorsElsewhere` in `watch<tag>.json`).
 - The stream advances while the level is frozen and between ticks: exactly 256 draws between two consecutive Ticks in 600 of 600 inter-tick
   gaps of a Club trace and 23 of 23 of an Island one (URender::PreRender's light noise, [dynamic lighting](dynamic-lighting.md)), about
@@ -1987,7 +1987,7 @@ what the original repeats of itself. The energy of Play's beams varies from run 
 The thresholds of the gate row (coverage at least .85, energy .75 to 1.33, y-offset at most 2.5 px) are set from these two views and are weak. Stored:
 `.work/acceptance/01_NYC_UNATCOIsland/{laser1,laser2}-original.png`, `-time.txt` and `laser1b-original.png`.
 
-### 04_NYC_Street's steam vents (row 4.2.13, `FAIL`: the result flips with the puff texture's phase)
+### 04_NYC_Street's steam vents (row 4.2.13, `PASS`: the puff texture held at the original's pixels)
 
 The vent of `ParticleGenerator2` (614, 67, -507) in the alley, the camera 160 units back and 40 above it looking along +x and slightly up. The scene is a live one: the
 original runs 600 ticks, the tracer recording each tick's delta and CRT rand state, and holds the level; Play replays the same ticks with the same delta and stream
@@ -1996,13 +1996,26 @@ frozen start's frame at the same camera before the first tick (`<name>-base-orig
 A ghost placed with `set Location` in the frozen phase and released into a ticking level did not crash the original here (five runs; the earlier note was for
 `set Location` plus `set Region`).
 
-The recipe since 2026-10-16 (the Mac, CrossOver; after `node scripts/live-acceptance.mjs population --map 04_NYC_Street --seed 1`):
-`scripts/live-original.sh 04_NYC_Street --ticks 600 --delta 0.0166666675 --shot vents4 --base-shot --extra-shots 3 --tag vents4 --render-history --actor-trace 1:60
---original-brightness 0.666667 --early-cmds 'KillAll FlyGenerator|set DeusEx.JCDentonMale Location (X=454,Y=67,Z=-467)|set DeusEx.JCDentonMale ViewRotation (Pitch=1800,Yaw=0,Roll=0)'`,
-then `live-acceptance.mjs play --map 04_NYC_Street --seed 1 --tag vents4 --shot vents4 --base-shot --render-history --early-cmds '<the same lines>'` (with
-`--extra-shots 3` for the floor below), `compare --tag vents4` and `visual-acceptance.mjs compare --maps 04_NYC_Street --contribution --view vents4:0,0,0:0,0,0`.
-Brightness 2/3 makes the original's Shot the framebuffer (Play at 0.4, its identity, as in the other Mac rows): the frames' ratio reads .993 and 1.005 where
-vents2 (the Linux host, its default ramp) read 1.275.
+The recipe since 2026-10-17 (the Mac, CrossOver; after `node scripts/live-acceptance.mjs population --map 04_NYC_Street --seed 1`):
+`scripts/live-original.sh 04_NYC_Street --ticks 600 --delta 0.0166666675 --shot vents5 --base-shot --extra-shots 3 --fire-hold SmokePuff1 --tag vents5 --render-history
+--actor-trace 1:60 --original-brightness 0.666667 --early-cmds 'KillAll FlyGenerator|set DeusEx.JCDentonMale Location (X=454,Y=67,Z=-467)|set DeusEx.JCDentonMale ViewRotation (Pitch=1800,Yaw=0,Roll=0)'`,
+then `live-acceptance.mjs play --map 04_NYC_Street --seed 1 --tag vents5 --shot vents5 --base-shot --render-history --fire-hold --early-cmds '<the same lines>'`,
+`compare --tag vents5` and `visual-acceptance.mjs compare --maps 04_NYC_Street --contribution --view vents5:0,0,0:0,0,0` (the gate's LIVE check with `fireHold`).
+vents3 and vents4 are the same recipe without `--fire-hold` (vents4 with the extra frames). Brightness 2/3 makes the original's Shot the framebuffer (Play at 0.4, its
+identity, as in the other Mac rows): the frames' ratio reads .993 to 1.005 where vents2 (the Linux host, its default ramp) read 1.275.
+
+**The puff texture held (2026-10-17, vents5).** As 4.2.24's `rngpin` makes the beams' stream a measured input, the steam's FireTexture is held: after the 600 ticks the
+tracer's `fire hold` makes Fire.dll's UFireTexture::ConstantTimeTick (`0x10507ff0` at the preferred base; the image was relocated to `0x1c70000` in this process, so the
+patch goes to the loaded base plus the RVA) return at once, every fire keeps its pixels while the game draws on, and `fire read SmokePuff1` stores the texture's P8 mip 0
+(64x64, one mip; GlobalPhase 702, 344 of 1,024 sparks at the read) in `fire-vents5.json`. The original's four frames of the hold are byte-equal: the puffs were the only
+thing changing from frame to frame. Play's replay holds its own fires (`proceduralHold`: the ticks of every FireTexture stopped) and writes those pixels into its
+SmokePuff1 before its frames ([fire texture](fire-texture.md#held-against-the-original-2026-10-17)). Five gate runs, the same each time:
+
+| vents5, the fire held | |
+| --- | --- |
+| 600 ticks, 22 watched actors | equal, clock and stream draws equal |
+| the held frame | Play / original 1.000, mean abs. diff. 0.03, edge recall .998, precision .999, block ratios .997 to 1.002, 0 outlier blocks |
+| the steam (frame less the frozen start's) | correlation 1.000, Play's sum over the original's 1.000, residual .001, **agreement 1.000** (339,172 pixels) |
 
 | | vents3 | vents4 |
 | --- | --- | --- |
@@ -2057,11 +2070,11 @@ original 322k to 337k). With four frames a side that is not separable from the p
 (the frames' sums 7.12 to 7.84 M in Play, 7.13 to 7.72 M in the original). What would match the pixels is the puff texture's state at the shot (its pixels, sparks
 and random table read from the original's UFireTexture, Play's procedural textures held at it): not done.
 
-Two measured candidates for the steam: (a) a floor from the original's own frames, as the beams' `beamsFloor`: the gate's run takes Play's frames with
+What follows is the state before the hold. Two measured candidates for the steam: (a) a floor from the original's own frames, as the beams' `beamsFloor`: the gate's run takes Play's frames with
 `--extra-shots 3` against the stored four, and Play's median agreement must reach the original's own minimum (here .898 against .867); (b) agreement over the pixels
 the original raises by 10 levels or more, the plume's body: the original against itself .985 to 1.000, Play against the original .977 to 1.000, so a single pair at
 .98 would still fail on some of Play's frames. **(a) was adopted on 2026-10-16** and is wired (`floorShots: 3` of the row's LIVE check; `contribution-floor.mjs --extra 3
---json`). Eight runs of `validate-stage4-acceptance.mjs --only '^4\.2\.13$'`: 4 PASS, 4 FAIL, so the row stays `FAIL`:
+--json`). Eight runs of `validate-stage4-acceptance.mjs --only '^4\.2\.13$'`: 4 PASS, 4 FAIL (the hold above superseded it on 2026-10-17):
 
 | run | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
@@ -2073,11 +2086,11 @@ the original raises by 10 levels or more, the plume's body: the original against
 own frames against the stored one have one outlier block in two of three pairs (x1.76 and x1.74 at the plume's base, block 5,7), and 4 of the 12 pairs of the original
 against itself have one. Play's steam is not systematically brighter: over 20 of Play's frames (runs 4 to 8, four each) its sum is .988 of the original's four (spread .64 M
 against .76 M); the gate's gap reads above 1 because the stored frame is the original's dimmest of the four (21.39 M against 21.39 to 23.18 M). Judging the blocks against
-the original's own pairs too (one run's 16 Play/original pairs: median 0 outlier blocks; the original's own pairs at most 1) is not decided here.
+the original's own pairs too (one run's 16 Play/original pairs: median 0 outlier blocks; the original's own pairs at most 1) was not adopted: the hold made it moot.
 
-Stored: `.work/live-acceptance/04_NYC_Street/{original-trace-vents4.jsonl (+ .strobe, .actors.jsonl), watch-, population-, commands-, hold-, generators-load-vents4.json}`
-(vents3 and the 120-tick `flies3` likewise) and `.work/acceptance/04_NYC_Street/vents4-original.png`, `vents4-original-{2,3,4}.png`, `vents4-base-original.png`
-(vents3's too), main checkout on the Mac. vents2 stays on the Linux host.
+Stored: `.work/live-acceptance/04_NYC_Street/{original-trace-vents5.jsonl (+ .strobe, .actors.jsonl), watch-, population-, commands-, hold-, generators-load-, fire-vents5.json}`
+(vents4, vents3 and the 120-tick `flies3` likewise, without `fire-`) and `.work/acceptance/04_NYC_Street/vents5-original.png`, `vents5-original-{2,3,4}.png`,
+`vents5-base-original.png` (vents4's and vents3's too), main checkout on the Mac. vents2 stays on the Linux host.
 
 ### 00_Training's held viewport flash (row 4.2.26)
 

@@ -54,7 +54,8 @@ const THRESHOLDS = Object.freeze({
   // An effect drawn with a FireTexture (04_NYC_Street's steam, row 4.2.13) changes from frame to frame at a held tick in the original itself (the sparks,
   // an unmatched host input as the beams' texture): its agreement is judged against the original's own floor instead (a LIVE check's `floorShots`):
   // over every pair of the stored frames and Play's (`--extra-shots`), Play's median agreement against the original at least the original's minimum
-  // against itself (scripts/contribution-floor.mjs). The steam measured .898 against .867 (four frames a side; the original against itself .867 to .934).
+  // against itself (scripts/contribution-floor.mjs). The steam measured .898 against .867 (four frames a side; the original against itself .867 to .934);
+  // since 2026-10-17 its row holds the texture at the original's pixels instead (a LIVE check's `fireHold`) and is judged at the thresholds above.
   // The laser beams' geometry in 64 x 64 blocks (visual-acceptance.mjs `compare --beams`). Island's doorway beams measure coverage .94 and .88, Play's
   // energy over the original's .87 to 1.01 and .88 to 1.0 over runs (the fire texture) and a y-offset of the centroids of 1.3 and 1.6 px rms; two frames of the original itself, whose beams'
   // texture is an animated fire, read 1.0, .99 and .3 px. Weak: set from two views; the sparks of the beam texture are an unmatched host input.
@@ -261,10 +262,12 @@ add('4.2.11', C2, 'coronas', 'visibility helper, DrawIcon arguments, tracker tra
   V('coronas'), V('coronas-tracked'), V('corona-tiles'), V('corona-tiles-play'), V('coronas-mover-play'), V('coronas-play'));
 add('4.2.12', C2, 'particles and sprites', 'ParticleIterator, FDynamicSprite and the tile chain', 'O2',
   V('native-particles'), V('sprite-setup'), V('sprite-tiles'), V('sprite-tiles-play'), V('sprite-tiles-mirror-play'), V('particles-play'));
-add('4.2.13', C2, '04_NYC_Street vents', 'a frame with particles and sprites against the original with the generators\' state matched: the original\'s 600 ticks (stream state per tick) replayed in Play (the load\'s chance FlyGenerators removed in both by the original\'s KillAll), then the held frame and the steam (the frame less the frozen start\'s) against the original\'s, the steam\'s per-pixel agreement against the original\'s own frame-to-frame floor',
-  // vents4 (the Mac, Brightness 2/3): the load's chance FlyGenerators removed in both programs by the original's KillAll (their names are a per-process
-  // counter, so a name match does not hold the same decorations: docs/visual-acceptance.md "04_NYC_Street's steam vents"); four held frames a side
-  'O1', LIVE({map: '04_NYC_Street', tag: 'vents4', shot: 'vents4', baseShot: true, renderHistory: true, floorShots: 3,
+add('4.2.13', C2, '04_NYC_Street vents', 'a frame with particles and sprites against the original with the generators\' state matched: the original\'s 600 ticks (stream state per tick) replayed in Play (the load\'s chance FlyGenerators removed in both by the original\'s KillAll), then the held frame and the steam (the frame less the frozen start\'s) against the original\'s, the steam\'s FireTexture held at the original\'s pixels',
+  // vents5 (the Mac, Brightness 2/3): the load's chance FlyGenerators removed in both programs by the original's KillAll (their names are a per-process
+  // counter, so a name match does not hold the same decorations: docs/visual-acceptance.md "04_NYC_Street's steam vents"), and the steam's FireTexture
+  // held at the original's frames (`dx-live-win fire hold`, its pixels read and written into Play's), so the frame is judged per pixel at the normal
+  // thresholds. vents4's floorShots (the agreement against the original's own frame-to-frame floor, adopted 2026-10-16) is superseded.
+  'O1', LIVE({map: '04_NYC_Street', tag: 'vents5', shot: 'vents5', baseShot: true, renderHistory: true, fireHold: true,
     earlyCmds: 'KillAll FlyGenerator|set DeusEx.JCDentonMale Location (X=454,Y=67,Z=-467)|set DeusEx.JCDentonMale ViewRotation (Pitch=1800,Yaw=0,Roll=0)'}));
 add('4.2.14', C2, 'decals', 'AttachDecal, ClipDecal and the vertices of a decal equal Engine.dll and Render.dll', 'O2',
   V('decal-attach'), V('decal-render'), V('decal-startup'), V('decal-vertices-play'), V('decals-play'));
@@ -781,7 +784,8 @@ async function judgeCamera(task, add, fail, result) {
 // was typed and the held Strobe state (copied). A tagged run prefers `<base>-<tag>.<ext>` and falls back to the untagged name; one
 // store root supplies all of them (the first root holding the trace), so files of two runs never mix. Play's own outputs are never staged.
 const LIVE_BASES = [['original-trace', '.jsonl', 'link', true], ['original-trace', '.jsonl.strobe', 'link', false], ['watch', '.json', 'copy', true], ['population', '.json', 'copy', true],
-  ['commands', '.json', 'copy', false], ['deferred', '.json', 'copy', false], ['hold', '.json', 'copy', false], ['registry-start', '.txt', 'copy', false]];
+  ['commands', '.json', 'copy', false], ['deferred', '.json', 'copy', false], ['hold', '.json', 'copy', false], ['registry-start', '.txt', 'copy', false],
+  ['fire', '.json', 'copy', false]];   // fire<tag>.json: the held FireTextures' pixels at the original's frames (`original --fire-hold`)
 function stageLive(map, tag, into = '.work/live-acceptance') {
   const s = tag ? `-${tag}` : '';
   const traceName = `original-trace${s}.jsonl`;
@@ -815,15 +819,18 @@ function stageLive(map, tag, into = '.work/live-acceptance') {
   return absent;
 }
 async function judgeLive(task, add, fail, result) {
-  const {map, tag = null, shot = null, earlyCmds = null, renderHistory = false, baseShot = false, floorShots = 0} = task.live;
+  const {map, tag = null, shot = null, earlyCmds = null, renderHistory = false, baseShot = false, floorShots = 0, fireHold = false} = task.live;
   const absent = stageLive(map, tag);
   if (shot) { if (!stage(`acceptance/${map}/${shot}-original.png`)) absent.push(`acceptance/${map}/${shot}-original.png`); stage('acceptance/times.json', {copy: true}); }
   if (shot && baseShot && !stage(`acceptance/${map}/${shot}-base-original.png`)) absent.push(`acceptance/${map}/${shot}-base-original.png`);
   // floorShots: the original's further frames of the same held tick (`live-original.sh --extra-shots`), the contribution's own floor (THRESHOLDS)
   for (let k = 2; shot && k <= 1 + floorShots; k++) if (!stage(`acceptance/${map}/${shot}-original-${k}.png`)) absent.push(`acceptance/${map}/${shot}-original-${k}.png`);
+  if (fireHold && !existsSync(path.join(root, '.work/live-acceptance', map, `fire${tag ? `-${tag}` : ''}.json`))) absent.push(`live-acceptance/${map}/fire${tag ? `-${tag}` : ''}.json`);
   if (absent.length) return fail(`stored originals absent: ${absent.join(', ')}`, 'NO-ORIGINAL');
   const extra = [...(tag ? ['--tag', tag] : []), ...(shot ? ['--shot', shot] : []), ...(earlyCmds ? ['--early-cmds', earlyCmds] : []), ...(renderHistory ? ['--render-history'] : []), ...(baseShot ? ['--base-shot'] : []),
-    ...(floorShots ? ['--extra-shots', String(floorShots)] : [])];
+    ...(floorShots ? ['--extra-shots', String(floorShots)] : []),
+    // fireHold: the original's fires were held at its frames (`dx-live-win fire hold`) and their pixels stored; Play holds its own at them
+    ...(fireHold ? ['--fire-hold'] : [])];
   // One replay of the original's trace. A run whose only difference is the stream's draw count is repeated once: that count differed in
   // single runs under host load and not on the repeat (docs/visual-acceptance.md "Open", unattributed), and the repeat is reported.
   const replay = async () => {

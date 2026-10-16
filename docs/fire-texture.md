@@ -249,7 +249,7 @@ Host choices, noted in the viewer: every acquired fire updates each frame in
 acquisition order (the original updates the drawn ones in draw order with one
 shared generator), and the module tables take their appRand bytes from a
 host-seeded MSVCRT stream. Sprites (a ParticleGenerator's SmokePuff1, for
-one) are not drawn yet.
+one) draw from the same set (`sprite-scene.mjs`, docs/particles.md).
 
 Wet textures go through the same path: drtywater_a is live on Island's and
 Training's BSP water, and the gas clouds tick at their MaxFrameRate of 20. A
@@ -263,6 +263,25 @@ NanoKey's, LaserTriggers', BarrelFires' and canister's were), and each fire's
 GlobalPhase and pixels advance between frames. With `--map 00_TrainingFinal`
 the BSP's BP_FX_03 is live too and no BSP surface fails on a fire. On
 Island and in Training it also requires drtywater_a live and ticking.
+
+## Held against the original (2026-10-17)
+
+A fire ticks with every drawn frame, so at a held tick of a live capture its pixels are each program's own frame phase: the steam's
+SmokePuff1 made the original's four frames of one hold disagree with each other (agreement .867 to .934, row 4.2.13). The texture is
+made a measured input instead, as the beams' stream is pinned (`rngpin`):
+
+- **The original.** `dx-live-win.exe fire hold` writes `ret` over the first byte (`push ebp`) of UFireTexture::ConstantTimeTick
+  (`0x10507ff0` at the preferred base; the patch goes to the loaded base plus the RVA, as Fire.dll was relocated to `0x1c70000` in one
+  process) and `fire release` restores it. Every FireTexture then keeps its pixels while the game draws on. `fire read <name>` prints the
+  layout's header fields and mip 0's P8 pixels: Mips (`+0xa4`) element 0's `DataArray` data at `+0x1c` (FMipmap is FMipmapBase, 16 bytes,
+  then the TLazyArray, whose FLazyLoader vtable, SavedAr and SavedPos come before the TArray). `live-acceptance.mjs original --fire-hold
+  NAME,..` holds, reads into `fire<tag>.json`, takes the frames, then releases. Four frames of one hold were byte-equal.
+- **Play.** `createProceduralTextures().hold({kind, pixels})` (`window.deusExViewer.proceduralHold`) stops the ticks of every texture of
+  that kind and writes the given pixels into the named textures (the record's buffer, a view of the kernel block when fire.rs runs it,
+  then the usual upload); `live-acceptance.mjs play --fire-hold` applies `fire<tag>.json` before the held frames. Wet textures keep
+  ticking on both sides (only the fire tick is patched).
+- **Result.** The Street's steam (row 4.2.13, vents5): the held frame equal to 0.03 levels on average, the steam's contribution
+  correlation 1.000 and agreement 1.000 against the original's ([visual acceptance](visual-acceptance.md#04_nyc_streets-steam-vents-row-4213-pass-the-puff-texture-held-at-the-originals-pixels)).
 
 ## Rust kernel
 

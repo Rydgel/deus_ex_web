@@ -474,6 +474,20 @@ async function original() {
   if (/paused after/.test(log)) { registryDump('end'); flagsDump('end'); }
   if (option('shot', null) && /paused after/.test(log)) {
     // The level is held at the last replayed tick (the tracer returns from ULevel::Tick); the game still draws.
+    // --fire-hold NAME,..: Fire.dll's ticks stopped first (`dx-live-win fire hold`: UFireTexture::ConstantTimeTick returns at once), so every
+    // frame of the hold shows the same fire pixels, and those FireTextures' state read (`fire read`) into fire<tag>.json; Play's replay
+    // (play --fire-hold) holds its own fires and writes those pixels into them before its frames (a measured host input, as the Strobe).
+    if (option('fire-hold', null)) {
+      console.log(wine('fire', 'hold').trim());
+      execFileSync('sleep', ['0.5']);
+      const fires = {};
+      for (const name of option('fire-hold').split(',')) {
+        const [head, pixels] = wine('fire', 'read', name).trim().split('\n');
+        fires[name] = {...Object.fromEntries([...head.matchAll(/(\w+)=(\S+)/g)].map(m => [m[1], m[2]])), pixels: pixels.replace(/^pixels /, '')};
+        console.log(`fire ${name}: ${head.slice(0, 160)}`);
+      }
+      writeFileSync(path.join(dir, `fire${suffix}.json`), JSON.stringify(fires));
+    }
     let taken = null;
     // --shot-ctrl: the frame is the Ctrl+F9 one (a conversation window grabs the keys the plain `shot` presses), see --cmds @ctrlshot.
     if (flag('shot-ctrl')) { takeCtrlShot(option('shot')); taken = path.join(acceptanceDir(), `${option('shot')}-original.png`); }
@@ -506,6 +520,7 @@ async function original() {
     }
     // Render.dll's Strobe flag and the TimeSeconds it last saw, as the held frames left them (the tracer writes them at every held Tick):
     // a host input of the frame, like the rand state (docs/visual-acceptance.md "Strobe").
+    if (option('fire-hold', null)) console.log(wine('fire', 'release').trim());
     const strobePath = `${tracePath}.strobe`;
     if (existsSync(strobePath)) {
       const [flag, time] = readFileSync(strobePath, 'utf8').trim().split(/\s+/).map(Number);
@@ -928,6 +943,16 @@ async function play() {
         const {strobe} = JSON.parse(readFileSync(holdFile, 'utf8'));
         console.log('strobe set to the original\'s:', JSON.stringify(await page.evaluate(s => window.deusExViewer.liveProbe({strobe: s}), strobe)));
         await frames(30);
+      }
+      // --fire-hold: the original's fires held at its frames' pixels (fire<tag>.json, `original --fire-hold`)
+      const firePath = path.join(dir, `fire${suffix}.json`);
+      if (flag('fire-hold') || option('fire-hold', null)) {
+        if (!existsSync(firePath)) throw new Error(`--fire-hold: no ${firePath}`);
+        const fires = JSON.parse(readFileSync(firePath, 'utf8'));
+        const held = await page.evaluate(spec => window.deusExViewer.proceduralHold(spec), {kind: 'FireTexture', pixels: Object.fromEntries(Object.entries(fires).map(([name, f]) => [name, f.pixels]))});
+        console.log('fires held at the original\'s:', JSON.stringify(held));
+        if (Object.values(held.written).some(v => typeof v !== 'number')) throw new Error(`--fire-hold: ${JSON.stringify(held.written)}`);
+        await frames(10);
       }
       const file = path.join(acceptanceDir(), `${option('shot')}-play.png`);
       await page.screenshot({path: file, clip: {x: 0, y: 0, width: 1280, height: 720}});
