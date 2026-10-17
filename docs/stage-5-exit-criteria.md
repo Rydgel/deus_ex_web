@@ -91,7 +91,7 @@ report (`--stage4-report`), so presentation proof is not repeated.
 | 5.2.3 | 01_NYC_UNATCOIsland | the player's noise reaches the guards: gunshots (WeaponFire, LoudNoise), the HandleShot/HandleLoudNoise callbacks; footsteps by speed and floor | O1 | `island-hearing` | O1: live trace on Island of the event traffic for a pistol and, with a walking player, for footsteps; footsteps need a held key the harness cannot post (O3 on Play's footstep inputs then) | live-events-compare O1: 1,069 and 1,586 manager calls equal in the Underworld (pistol, assault shotgun) | MISSING |
 | 5.2.4 | 01_NYC_UNATCOIsland cameras | SecurityCamera sees the player: tracking, the alarm event, NSFCam01..03 trigger libertyturret1; UN_CamSystem01..04 (bNoAlarm) do not | O1 | `island-camera` | O1: live trace of the original with the player in a camera's cone and the camera's state, the alarm flag and the turret's state per tick | - | MISSING |
 | 5.2.5 | 01_NYC_UNATCOIsland laser trap | a LaserTrigger beam broken by the player triggers AlarmUnit0 (SetAlarmFlag -> StatueAlarmTriggered) and the guards react | O1 | `island-laser` | O1: live trace of the original with the player placed across statue_lasertrap and the beam, trigger and flag state | - | FAIL |
-| 5.2.6 | 01_NYC_UNATCOIsland laser trap | hacking ControlPanel0 with a multitool switches statue_lasertrap off: hack time (skill, hackStrength), the multitool's use, the lasers' state | O1 | `island-hack-panel` | O1: live trace of the original (Multitool selected, ParseRightClick on the panel) with the hack progress, multitool charge and laser state per tick | - | FAIL |
+| 5.2.6 | 01_NYC_UNATCOIsland laser trap | hacking ControlPanel0 with a multitool switches statue_lasertrap off: hack time (skill, hackStrength), the multitool's use, the lasers' state | O1 | `island-hack-panel` | O1: live trace of the original (Multitool selected, a left-button click on the panel: ParseLeftClick, never the right button) with the hack progress, multitool charge and laser state per tick | - | MISSING |
 | 5.2.7 | 01_NYC_UNATCOIsland | a pawn reacts to a body: a killed or knocked-out Terrorist is seen (CheckCarcassPresence, HaveSeenCarcass, AddCarcass) and the finder investigates or flees | O1 | `island-carcass` | O1: live trace of the original with a carcass in a patrol's view | validate-pawn-carcass (natives 2108/2109, O2) | FAIL |
 
 ### 5.3 Exploration and the character systems
@@ -106,7 +106,7 @@ report (`--stage4-report`), so presentation proof is not repeated.
 | 5.3.6 | 00_Training crate stack | pick up a metal crate, drop it, stack and climb: GrabDecoration, DropDecoration, Bump, physFalling and physRolling of the crate, the climb | O3 | `crate-stack` | O3: the decoration's falling and rolling and the player's stepping on Play's inputs | validate-plant-push, validate-decoration-settle-roll (O2) | MISSING |
 | 5.3.7 | 00_Training swim | enter the contaminated water with and without the HazMat suit: WaterZone0 and DamageTrigger1 radiation, the suit's duration and armor, swimming and leaving by the ramp | O1 | `hazmat-swim` | O1: live trace of the original (HazMatSuit activated by ActivateBelt, the player placed in the water, Health and the suit's charge per tick) | validate-native-swimming 1093 cases (O2); alterations census hit-radiation, hit-drowned (P) | MISSING |
 | 5.3.8 | 01_NYC_UNATCOIsland water | swim from the dock, dive to the ruins: breath (swimTimer, UnderWaterTime), drowning damage, surfacing | O1 | `island-swim` | O1: live trace of the original with the player placed under water until breath runs out | validate-native-swimming (O2); validate-island-swimming (the fish, P) | MISSING |
-| 5.3.9 | 01_NYC_UNATCOIsland terminals | ComputerPersonal0 login with a user list, email; ATM0; ComputerSecurity camera views and door/turret choices | O1 | `island-terminal` | O1: frames of the original's login and screens plus the computer state after choices | security terminal screens O1 (4.4.13); Terminals in Play (P) | FAIL |
+| 5.3.9 | 01_NYC_UNATCOIsland terminals | ComputerPersonal0 login with a user list, email; ATM0; ComputerSecurity camera views and door/turret choices | O1 | `island-terminal` | O1: frames of the original's login and screens plus the computer state after choices | security terminal screens O1 (4.4.13); Terminals in Play (P) | MISSING |
 | 5.3.10 | 01_NYC_UNATCOIsland doors | keyed, locked, breakable and keypad doors: the satcomhatch with the UNhatchdoor NanoKey, commvan_door keypad 0451, breakable and lockpicked movers, StatueRuinDoors | O1 | `island-doors` | O1: live trace of the original at each door (key use, pick, damage) with mover and lock state per tick | validate-island-cell-door, validate-island-blowitup (mover bodies, O2); validate-native-mover-move, -interpolation, -scene (O2) | MISSING |
 | 5.3.11 | 01_NYC_UNATCOIsland inventory | pick up and use items (MedKit, food, ammo, mods, Lockpick, Multitool), skill points (SkillAwardTrigger) and the skills screen, the AugmentationCannister and installing an augmentation, goals and notes | O1 | `island-items` | O1: live trace of the original (ParseRightClick pickups, ActivateBelt, console) with inventory, health, skill and goal state | alterations census: 19 scenarios play (P); persona screens O1 (4.4.11, 4.4.12) | MISSING |
 | 5.3.12 | 01_NYC_UNATCOIsland | move objects and fall: carry or push barrels and crates, throw them (kinetic damage), fall damage from a height | O1 | `island-movables-fall` | O1: live trace of the original with a thrown or pushed decoration and a measured fall | validate-plant-push (O2); landing/falling oracles (O2) | MISSING |
@@ -129,8 +129,8 @@ report (`--stage4-report`), so presentation proof is not repeated.
 
 | Id | Scene | Scenario | Ev. | Census | Proof that would pass it | Existing, partial | Status |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| 5.5.1 | 01_NYC_UNATCOIsland front entrance | with the key from Filben the front doors (StatueRuinDoors) open; without it they stay locked, the player can pick (ls 0.1) or break them | O1 | `route-front` | O1: live trace of the original at the doors with and without the key, with the lockpick and with damage | - | FAIL |
-| 5.5.2 | 01_NYC_UNATCOIsland back entrance | the back way in (DL_BackEntrance, DeusExMover2): lockpick, multitool or break it; the guards at the lower deck | O1 | `route-back` | O1: live trace of the original at DeusExMover2 and the patrol | - | FAIL |
+| 5.5.1 | 01_NYC_UNATCOIsland front entrance | with the key from Filben (its first choice) the front doors (StatueRuinDoors, four movers) unlock and open; without it they stay locked and the player can pick them (lockStrength 0.1); they cannot be broken (bBreakable false) | O1 | `route-front` | O1: live trace of the original at the doors with and without the key and with the lockpick (key ring or Lockpick in hand, left-button click, then the right button to open) | - | MISSING |
+| 5.5.2 | 01_NYC_UNATCOIsland back entrance | the back way in (DL_BackEntrance, DeusExMover2: lockStrength 0.1, doorStrength 0.5, no key): lockpick it or break it; no hackable device guards it; the guards at the lower deck | O1 | `route-back` | O1: live trace of the original at DeusExMover2 (Lockpick in hand, left-button click, then the right button to open; the break by damage) and the patrol | - | MISSING |
 | 5.5.3 | 01_NYC_UNATCOIsland airshafts | the airshaft route around the laser trap to Gunther's cell (DL_libertyruinsairshaft x3): crouch through the shafts, the NPCs and alarms bypassed | O1 | `route-airshaft` | O1: the same state comparisons with the player placed in the shaft | - | MISSING |
 | 5.5.4 | 01_NYC_UNATCOIsland water route | the east side by water: swim to the ruins, the electric arcs (ElectricityEmitter x3, LibElectric, EMP damage drains energy), ControlPanel1 and the fork lift | O1 | `route-water` | O1: live trace of the original from the water to the arcs, the panel and the lift | - | MISSING |
 | 5.5.5 | 01_NYC_UNATCOIsland | kill the commander: TerroristCommander_Dead -> DL_LeaderKilled (InSpite after NotKilled) -> StatueMissionComplete | O1 | `objective-kill` | O1: live trace of the original from the commander's death through Mission01.Timer | - | FAIL |
@@ -297,6 +297,28 @@ No row has a proof check yet: the 33 `MISSING` rows play in the census and name 
 rows cannot be started. This is the honest first number: Stage 4's gate started at 44 of 70 because 60 checks against stored originals already existed, and for gameplay they do not. The strongest
 existing evidence is listed per row under "Existing, partial" (the Underworld's weapon-noise traces for gunshots, the perception pilot, the first-person crowbar, MeetPaul's frames, the native oracles for
 swimming, ladders, falling and movers).
+
+### After the Island devices (gap 3, lockpick, hack, front/back doors, terminals; 2026-10-17)
+
+Census rerun on the Linux host (Island 468 s, the three Training maps 863 s, both equal to the stored outcomes): **37 plays, 1 pause, 9 no-effect, 3 undriven** (was 33, 1, 13, 3). `island-hack-panel`, `route-back`,
+`route-front` and `island-terminal` play (the first three were driver limits, the terminals a driver limit plus a Play gap, see findings 3 and 7); `meet-filben` now drives both branches of its Choice.
+Scoreboard of that census (`validate-stage5-acceptance.mjs --census ... --report`): **0 of 50 pass, FAIL 10, MISSING 37, UNDRIVEN 3** (5.2.6, 5.3.9, 5.5.1 and 5.5.2 moved from FAIL to MISSING: they play and need
+their O1 captures). The tables of the rows above are regenerated from that report.
+
+| Clause | PASS | FAIL | MISSING | UNDRIVEN | EXCLUDED |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| 5.1 Combat | 0 | 3 | 6 | 0 | 0 |
+| 5.2 Stealth | 0 | 3 | 4 | 0 | 0 |
+| 5.3 Exploration and the character systems | 0 | 0 | 13 | 0 | 0 |
+| 5.4 Conversation | 0 | 1 | 6 | 1 | 0 |
+| 5.5 Alternate-route objectives | 0 | 1 | 6 | 0 | 0 |
+| 5.6 Systems interacting | 0 | 2 | 2 | 2 | 0 |
+| 5.7 Excluded | 0 | 0 | 0 | 0 | 5 |
+| **Total** | **0** | **10** | **37** | **3** | **5** |
+
+What backs the four newly playing rows is the recovered script source (`DeusExPlayer.ParseLeftClick`/`ParseRightClick`, `HackableDevices`, `DeusExMover`, `Computers`, `ConPlayBase.SetupEventTransferObject`) running as
+bytecode in Play, plus the native oracle for the one native step Play was missing (the owned zero-extent PointCheck, 32,064 original cases). No row has an original trace of the pick, hack or key sequence yet
+(the harness can type `@down Enter`/`@up Enter`, which are the `LeftMouse`/Enter binding `ParseLeftClick|Fire`, but placing the player in a ticking level without `set Location` is the open question).
 
 ## Remaining Stage 5 work, in the order it blocks
 
