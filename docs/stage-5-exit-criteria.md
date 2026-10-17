@@ -172,7 +172,12 @@ How the scenarios are driven (and what that means for reading the table):
 * **Items** come from `summon` (the console cheat the original supports, as the alterations census does) and the map's own pickups; **the player is placed** at the approach (fixture write),
   checked to stand on dry ground in the world: a placement outside it makes physFalling dispatch `FellOutOfWorld` and the player dies (`OPEN DXONLY` is the first thing a death reaches, below).
 * **Stasis devices need the renderer's feedback.** A headless frame draws no meshes, so a keypad, panel or door never gets a fresh `LastRenderTime` and its Timer never runs; the driver stamps the
-  device the player works on, as the Stage 3 route does ([route](script-training-route.md)).
+  device the player works on, as the Stage 3 route does ([route](script-training-route.md)). A state machine such as a `Computers` terminal also needs the seconds a player spends walking up to it
+  (its level-start animation, `Frob` refuses while `bAnimating`), so the driver stamps it for 3 s before the frob.
+* **Tools are used with the left button.** `c.useTool` (a Lockpick or NanoKeyRing on a mover, a Multitool on a hackable device) is `ParseLeftClick`; `c.frob` is the right button (`ParseRightClick`,
+  `DoFrob(Self, None)`: pickups, doors that are unlocked, terminals). `useTool` aims until the view trace selects the target, lets the player land (the placement is a few units off the floor) and
+  requires the selection to hold for 12 frames standing still before it presses: the pick and hack Timers stop, and spend the tool, as soon as `frobTarget != Self`. `c.restart()` is the original
+  Player start inside a scenario (`route-front` and `meet-filben` run two branches).
 * **Delegated scenarios** run an existing Play validator unchanged (`validate-crowbar-crate`, `-training-ladder`, `-instructor-conversation`, `-island-conversation`, `-island-bark`) and
   `phase1-route` runs the Stage 3 route probe: they play because those validators pass.
 * **Weak spots of the drivers** (so a `plays` is not read as more than it is): `island-hearing` cannot separate sight from hearing in the open; `island-sight` and the combat scenarios use one
@@ -208,20 +213,20 @@ How the scenarios are driven (and what that means for reading the table):
 | `island-hearing` | 5.2.3 | 01_NYC_UNATCOIsland | plays | {before:standing,quietBeforeShots:true,state:dying,enemy:true,playerDied:false,note:sight and hearing cannot be told apart in the open} |
 | `island-camera` | 5.2.4 | 01_NYC_UNATCOIsland | plays | {seen:[[200,true,true],[350,true,true],[500,true,true]],alarm:true,state:active} |
 | `island-laser` | 5.2.5 | 01_NYC_UNATCOIsland | no-effect | the beam fires (lastAlarmTime 0.57) but StatueAlarmTriggered is never set: the chain stops at AlarmUnit0, as in `alarm-chain` |
-| `island-hack-panel` | 5.2.6 | 01_NYC_UNATCOIsland | no-effect | the effect did not happen |
+| `island-hack-panel` | 5.2.6 | 01_NYC_UNATCOIsland | plays | {started:true,frames:239,hackStrength:0,lasersOn:[[true,true,true,true,true],[false,false,false,false,false]],multitool:[1,0],playerDied:false} |
 | `island-carcass` | 5.2.7 | 01_NYC_UNATCOIsland | pause | CriticalDelete deleting destructor is not recovered for native vtable 0x10027fe8 |
 | `island-swim` | 5.3.8 | 01_NYC_UNATCOIsland | plays | {physics:3,swimTimer:[19.533340454101562,5.533483505249023],health:[100,100],drowned:false} |
-| `island-terminal` | 5.3.9 | 01_NYC_UNATCOIsland | no-effect | the effect did not happen |
+| `island-terminal` | 5.3.9 | 01_NYC_UNATCOIsland | plays | {ComputerPersonal0:true,ComputerPersonal0.window:networkterminalpersonal,ATM0:true,ComputerSecurity1:true,ComputerSecurity1.window:networkterminalsecu |
 | `island-doors` | 5.3.10 | 01_NYC_UNATCOIsland | plays | {keyTaken:false,keypadDoor:true} |
 | `island-items` | 5.3.11 | 01_NYC_UNATCOIsland | plays | {hurt:80,healed:87,points:[5000,5025]} |
 | `island-movables-fall` | 5.3.12 | 01_NYC_UNATCOIsland | plays | {carried:true,item:Trashbag0,fall:8,h0:100,h:92} |
 | `meet-paul` | 5.4.3 | 01_NYC_UNATCOIsland | plays | {delegate:validate-island-conversation.mjs,peakMiB:55,last:{\ok\:true,\start\:1420,\choice\:4268,\camera\:\ConCamera0\,\letterboxFrames\:2849,\paulSpe |
-| `meet-filben` | 5.4.4 | 01_NYC_UNATCOIsland | plays | {met:true,gaveKey:false,nanokeys:0} |
+| `meet-filben` | 5.4.4 | 01_NYC_UNATCOIsland | plays | {trust:{met:true,ended:true,gaveKey:true,keys:[ruin_key],seconds:5.5},refuse:{met:true,ended:true,gaveKey:false,keys:[],seconds:7}} |
 | `gunther-rescued` | 5.4.5 | 01_NYC_UNATCOIsland | undriven | the cell door DeusExMover10 is reached by no frob approach tried (8 bearings, 3 distances, 2 heights around its Location); the walk to it is not driven |
 | `meet-terrorist` | 5.4.6 | 01_NYC_UNATCOIsland | plays | {played:false,complete:true,attacked:true,commander:conversation,at:[2887,38,2528]} |
 | `overheard-barks` | 5.4.7 | 01_NYC_UNATCOIsland | plays | {delegate:validate-island-bark.mjs,peakMiB:1294,last:island-bark: Terrorist30's bark deusexconaudioaibarks.conaudioaibarks_896 on Galaxy channel 57306 |
-| `route-front` | 5.5.1 | 01_NYC_UNATCOIsland | no-effect | the player was killed at the door (OPEN DXONLY) before the pick finished |
-| `route-back` | 5.5.2 | 01_NYC_UNATCOIsland | no-effect | the effect did not happen |
+| `route-front` | 5.5.1 | 01_NYC_UNATCOIsland | plays | {authored:{breakable:[false,false,false,false],lockStrength:0.10000000149011612},bareRightClick:[locked,locked,locked,locked],picking:true,pickFrames: |
+| `route-back` | 5.5.2 | 01_NYC_UNATCOIsland | plays | {lockStrength:0.10000000149011612,bareRightClick:{locked:true,open:false},picking:true,pickFrames:245,unlocked:true,open:true,died:false,picks:0} |
 | `route-airshaft` | 5.5.3 | 01_NYC_UNATCOIsland | plays | {played:true} |
 | `route-water` | 5.5.4 | 01_NYC_UNATCOIsland | plays | {energy:[100,98],health:[100,95],died:false} |
 | `objective-kill` | 5.5.5 | 01_NYC_UNATCOIsland | no-effect | the effect did not happen |
@@ -240,9 +245,16 @@ How the scenarios are driven (and what that means for reading the table):
    (5.1.5, 5.2.7, 5.5.5, the aggression count of `Mission01`) passes through it.
 2. **The player's death ends at `OPEN DXONLY`** (`UGameEngine::Exec OPEN is not implemented`): `island-death` reaches the Dying state and a killed player (`route-front`: shot by the guards at the statue doors)
    stops there. That is the reload after death, Stage 6's neighbour; the question is where Play should stop.
-3. **Lockpicking and hacking on Island devices never complete** (`island-hack-panel`, `route-back`; `route-front` was killed first): 30 to 40 s of Level time with the device stamped as rendered, the pick or
-   multitool unchanged, the door still locked and `ControlPanel0`'s lasers on. The Training route's `gundoor` pick and `Keypad2` hack run. Not diagnosed: the target selection, the tool in hand, the
-   skill and a Timer that never runs are the candidates.
+3. **Lockpicking and hacking on Island devices never completed: the driver gave the wrong input, not Play** (`island-hack-panel`, `route-back`, `route-front`; fixed 2026-10-17).
+   The driver used the right button (`game.use()` = `ParseRightClick`), which frobs the target with nothing in hand (`DoFrob(Self, None)`, `DeusExPlayer.uc` `ParseRightClick`): `HackableDevices.Frob`
+   and `DeusExMover.Frob` start a hack or a pick only when handed the Multitool or Lockpick, and a Multitool or Lockpick reaches them from the LEFT button (`ParseLeftClick`:
+   `DoFrob(Self, inHand)` for a Lockpick or NanoKeyRing on a `DeusExMover` and a Multitool on a `HackableDevices`; the Training route fires with `LeftMouse`). The old runs stood 30 to 40 s in front of
+   the device with nothing started (and at the statue doors the guards shot the player meanwhile). With `c.useTool` (aim until the view trace selects the target, let the player land, hold the
+   selection standing still, press the left button) the original bodies run: `ControlPanel0` hacks in 239 frames (`hackStrength` 0.1, `HackTime` 4, 10 hacks at skill value 0.1), its `UnTriggerEvent`
+   switches all five `statue_lasertrap` lasers off and the Multitool is spent; `DeusExMover2` picks in 245 frames (`lockStrength` 0.1, `pickTime` 4), the Lockpick is spent, the right button opens
+   it. A pick or hack aborted by looking away (`frobTarget != Self`, the Timer's own test) also spends the tool: that was the first symptom of an approach that did not hold the target.
+   One real Play gap showed on the way: with the statue doors opening under fire, a `Tracer` (zero extent) inside a moving mover's bounds stopped Play at "Owned zero-extent PointCheck is not yet
+   verified"; recovered from Engine.dll and compared with the original on 32,064 points ([point-check](point-check.md#owned-zero-extent-descent-2026-10-17)).
 4. **A thrown LAM spawns nothing** (`lam-wall`): the weapon goes Active to Idle on Fire and no `LAM` projectile appears; the EMP grenade at `SecurityBot0` does spawn an `EMPGrenade` and changes nothing
    (`emp-electronics`). `AlarmUnit1.Trigger` leaves `bActive` false (`alarm-chain`); on Island the laser beam fires but `StatueAlarmTriggered` is never set (`island-laser`), the same unit. Six pistol shots at the 00_TrainingCombat range register on no target (`pistol-range`).
 5. **Radiation costs the player once** (`hazmat-swim`): `WaterZone0` (`DamagePerSec` 20, Radiation, `bPainZone`) took 10 health on entry and no more over 20 s; with the HazMat suit active the entry took 8. A
@@ -250,7 +262,14 @@ How the scenarios are driven (and what that means for reading the table):
 6. **NPC reaction to being hurt is not stable** (`island-shoot-npc`): 20 pistol shots took `Terrorist0` from 75 to 17 and left it `Standing` with no Enemy in the final driver, while the first variant of the
    driver (a different stance) saw it flee with the player as Enemy. `island-sight` (700 units, open ground) saw no reaction in 10 s while at 350 units the Terrorist engages and the player is shot to 0
    (`island-npc-shoots-player`, with Tracers in flight). No original trace exists for any of this.
-7. **Terminals**: `ATM0` opens its window through the frob path, `ComputerPersonal0` and `ComputerSecurity1` open none (`island-terminal`).
+7. **Terminals** (`island-terminal`; fixed 2026-10-17, a driver limit): `ATM0` is a decoration and opens its window on the frob; `ComputerPersonal0` and `ComputerSecurity1` are `Computers` state machines
+   (`Computers.uc`, `auto state Off`). `bOn` is true in the class defaults and the map, so the level start runs `Off.Begin`: `PlayAnim('Deactivate')`, `FinishAnim()`, `bOn=false`; `Frob` returns without opening while `bAnimating`, and
+   `On.Begin` (Activate animation, `TryInvoke` -> `Invoke` -> `InvokeComputerScreen`) is skipped when `bOn` is already true. A computer nobody has drawn sits in stasis (`bStasis`, `LastRenderTime -10`), so
+   its animation never ran in the headless census and the frob (made at once) found it animating. Stamped as the renderer's feedback would and given the 3 s a player spends walking up, `ComputerPersonal0`
+   opens `NetworkTerminalPersonal` and `ComputerSecurity1` `NetworkTerminalSecurity` through the frob path, as `ATM0` does. This is the same state machine as in the original; the login, user list and screens
+   are Stage 4's (4.4.13) and the Terminals-in-Play work, not driven here. A second Play gap showed with the player standing at the personal terminal beside `UNATCOTroop6` (26 units away, inside both cylinders): that pawn's own `SetLocation` call
+   (its state code, from `Actor.Tick`) met the player and `CheckEncroachment` dispatched `Pawn.EncroachingOn`, a value-returning event the pawn-physics dispatch called without a result block
+   ("Return-value ProcessEvent requires a caller result reference"); it now gets the block as `dispatchSpawnedEvent` gives it (why the call came some seconds after the window closed was not traced).
 8. **`M00MeetPage` does not play** (`meet-page-final`) when the player walks into `ConversationTrigger1`; `MeetTerrorist` does (the Aggressive branch with the first choice: `StatueMissionComplete` and
    `PlayerAttackedStatueTerrorist` set, `MeetTerrorist_Played` not), and `mission-complete` then plays Mission01.Timer's world edit (Terrorists dead, `UN_maindoor` unlocked, Paul moved). Shooting the commander
    from his room (`objective-kill`) did not hurt him.
@@ -286,8 +305,9 @@ Nothing below was fixed in this task. Each item is sized for one agent; "unblock
 1. **Finish a pawn's death** (finding 1): `CriticalDelete` of a `ConHistory` (vtable `0x10027fe8`) in `script-runtime.mjs:943`; the body is recovered for the LoadMap collection. Small, and everything that kills
    a pawn waits on it. Unblocks 5.1.5, 5.2.7, 5.5.5 and every row that ends with a body.
 2. **Decide and implement where a player's death stops** (finding 2): `OPEN DXONLY`, the Dying state's chain up to the reload. Needs the user's call (below). Unblocks the end of 5.1.6, 5.1.8, 5.5.1.
-3. **Island devices that never finish** (findings 3, 4, 7): lockpick and hack outside Training, the LAM throw, the AlarmUnit trigger, the personal and security terminals. One agent diagnosing each against the
-   original body (`DeusExMover.Timer`, `HackableDevices`, `ThrownProjectile`, `AlarmUnit.Trigger`, `Computers.Frob`). Unblocks 5.1.4, 5.2.6, 5.3.9, 5.5.1, 5.5.2, 5.6.2.
+3. **Island devices that never finish** (findings 3, 4, 7): lockpick and hack outside Training and the personal and security terminals are done (2026-10-17: the driver gave the wrong input, plus the two Play gaps of
+   findings 3 and 7); the LAM throw and the AlarmUnit trigger (finding 4) remain, one agent diagnosing each against the original body (`ThrownProjectile`, `AlarmUnit.Trigger`). Unblocks 5.1.4, 5.6.2 (5.2.6,
+   5.3.9, 5.5.1 and 5.5.2 now play and wait for their O1 captures).
 4. **NPC combat against the player, compared with the original** (finding 6): the first capture nobody has taken. `live-acceptance.mjs original --no-ghost` on Island with a visible player at 350 and 700 units
    from `Terrorist0`, the pistol drawn and fired by key edges, 600 ticks; replay in Play; fix the first divergence. The Stage 4 notes say a summoned MJ12Troop beside the player did not attack in Play and no
    original run exists. Unblocks 5.1.5, 5.1.6, 5.2.2, 5.2.3, 5.6.1 (and the O1 for 5.1.7, 5.1.8).

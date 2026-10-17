@@ -58,7 +58,7 @@ add('5.2.4', '01_NYC_UNATCOIsland cameras', 'SecurityCamera sees the player: tra
 add('5.2.5', '01_NYC_UNATCOIsland laser trap', 'a LaserTrigger beam broken by the player triggers AlarmUnit0 (SetAlarmFlag -> StatueAlarmTriggered) and the guards react', 'O1', 'island-laser',
   'O1: live trace of the original with the player placed across statue_lasertrap and the beam, trigger and flag state');
 add('5.2.6', '01_NYC_UNATCOIsland laser trap', 'hacking ControlPanel0 with a multitool switches statue_lasertrap off: hack time (skill, hackStrength), the multitool\'s use, the lasers\' state', 'O1', 'island-hack-panel',
-  'O1: live trace of the original (Multitool selected, ParseRightClick on the panel) with the hack progress, multitool charge and laser state per tick');
+  'O1: live trace of the original (Multitool selected, a left-button click on the panel: ParseLeftClick, never the right button) with the hack progress, multitool charge and laser state per tick');
 add('5.2.7', '01_NYC_UNATCOIsland', 'a pawn reacts to a body: a killed or knocked-out Terrorist is seen (CheckCarcassPresence, HaveSeenCarcass, AddCarcass) and the finder investigates or flees', 'O1', 'island-carcass',
   'O1: live trace of the original with a carcass in a patrol\'s view', {have: ['validate-pawn-carcass (natives 2108/2109, O2)']});
 
@@ -117,10 +117,10 @@ add('5.4.8', '00_TrainingFinal', 'M00MeetPage and holo-Jaime: ConversationTrigge
   'O1: live trace of the original with the flags and the holo pawns\' bInWorld');
 
 // 5.5 Alternate-route objectives (Liberty Island) ---------------------------------------------------------------------------------------------
-add('5.5.1', '01_NYC_UNATCOIsland front entrance', 'with the key from Filben the front doors (StatueRuinDoors) open; without it they stay locked, the player can pick (ls 0.1) or break them', 'O1', 'route-front',
-  'O1: live trace of the original at the doors with and without the key, with the lockpick and with damage', {weak: 'Which of the four StatueRuinDoors movers and which key the transfer gives are read from the data, not run.'});
-add('5.5.2', '01_NYC_UNATCOIsland back entrance', 'the back way in (DL_BackEntrance, DeusExMover2): lockpick, multitool or break it; the guards at the lower deck', 'O1', 'route-back',
-  'O1: live trace of the original at DeusExMover2 and the patrol');
+add('5.5.1', '01_NYC_UNATCOIsland front entrance', 'with the key from Filben (its first choice) the front doors (StatueRuinDoors, four movers) unlock and open; without it they stay locked and the player can pick them (lockStrength 0.1); they cannot be broken (bBreakable false)', 'O1', 'route-front',
+  'O1: live trace of the original at the doors with and without the key and with the lockpick (key ring or Lockpick in hand, left-button click, then the right button to open)', {weak: 'The approach to the doors is placed; the guards near them are not compared.'});
+add('5.5.2', '01_NYC_UNATCOIsland back entrance', 'the back way in (DL_BackEntrance, DeusExMover2: lockStrength 0.1, doorStrength 0.5, no key): lockpick it or break it; no hackable device guards it; the guards at the lower deck', 'O1', 'route-back',
+  'O1: live trace of the original at DeusExMover2 (Lockpick in hand, left-button click, then the right button to open; the break by damage) and the patrol', {weak: 'The census drives the lockpick only; the approach is placed.'});
 add('5.5.3', '01_NYC_UNATCOIsland airshafts', 'the airshaft route around the laser trap to Gunther\'s cell (DL_libertyruinsairshaft x3): crouch through the shafts, the NPCs and alarms bypassed', 'O1', 'route-airshaft',
   'O1: the same state comparisons with the player placed in the shaft', {weak: 'The shaft geometry is not read from the BSP here; the DataLinks name the route.'});
 add('5.5.4', '01_NYC_UNATCOIsland water route', 'the east side by water: swim to the ruins, the electric arcs (ElectricityEmitter x3, LibElectric, EMP damage drains energy), ControlPanel1 and the fork lift', 'O1', 'route-water',
