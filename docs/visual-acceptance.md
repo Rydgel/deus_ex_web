@@ -1713,8 +1713,18 @@ fogged wall's colour (a fit over the region, original = 0.04 x Play + 38, per ch
 - Play's light map of a locker face (`DeusExMover8` face 4, the brush's LightMap[iBrushPoly], 2x4 texels over x 2340..2372, z -261..-161,
   lights Light28 and Light150, both static) reads 10 to 35 of 255.
 
-So the original lights or blends these five mover faces differently from Play, and from what their light maps give. Not resolved: what the
-original draws for them (a trace of `DrawComplexSurface` for those surfaces, its FSurfaceInfo's LightMap and FogMap, would settle it).
+- The original does draw the doors: their vent slots show in its frame, and with the five doors moved 6,000 units down in Play (the mover
+  writer, so the brush tracker follows) the window reads worse (MAD 0.98, precision .878) and shows the cabinets' backs
+  (`NYC_GalvMetl_A`, 24 units behind), flatter than the original's region. The doors' texture `ShipLockr` is not masked.
+- The poses agree: the original's measured Location and Rotation (0,-147456,0) of each door equal Play's, KeyNum 0, not interpolating.
+  No moving light reaches them (the two security cameras' status lights have radius 50, the cage lights brightness 0); every light that
+  does is static (class 0).
+
+So the original lights these five mover faces evenly, about 1.5 times brighter than Play, where Play's light map gives them a diagonal dark
+gradient. The suspect is the mover light map's grid: [dynamic lighting](dynamic-lighting.md) lists the grid's derivation for brush surfaces
+(`lightmapBasis` over the transformed brush basis, not SetupForSurf's own lattice code) as not checked against the original. Not resolved:
+the original's texels for one of these faces (a trace of SetupForSurf or D3DDrv's `DrawComplexSurface` for `DeusExMover8` face 4, its
+FSurfaceInfo LightMap, against Play's 2x4 values) would settle it.
 
 **Not covered:** the Ship's window 2 (its five locker doors, above); the corona (no clean view, [camera view census](camera-view-census.md)).
 
