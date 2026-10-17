@@ -190,40 +190,111 @@ try {
     for (const [who, suffix] of [['claudia', 'female1tex0'], ['claudia', 'framestex1'], ['rydgel', look.textures.trousers.toLowerCase()]]) assert.ok(find(who, suffix).length, `${who} ${suffix} skin drawn`);
     console.log(`PASS skins: ${skins.length} generated (${skins.map(skin => skin.key.replace(/^easter:|DeusExCharacters\.Skins\./g, '')).join(', ')})`);
 
-    // Frob: the original RightMouse binding on each, then the other's answer.
+    // Frob: the original RightMouse binding on each. The speaker's line shows in the HUD log as its clip starts and the clip plays as the
+    // speaker's speech through the game's own path (Actor.PlaySound -> Galaxy channel -> the host decode -> the ring voice, then the lip-sync
+    // analysis writes the speaker's nextPhoneme and the original Pawn.LipSynch tweens its Mouth* blend animation); the other's answer and clip
+    // follow after the line's clip has ended.
     const place_ = async (location, yaw, pitch = 0) => { await page.evaluate(args => window.deusExViewer.viewProbe(args), {location, rotation: [pitch, yaw, 0]}); };
-    const aim = {claudia: [[place.crate.x + 66, place.crate.y, place.floor + 43], 32768, -4000], rydgel: [[place.rydgel.x + 45, place.rydgel.y, place.floor + 43], 32768]};
+    const aim = {claudia: [[place.crate.x + 66, place.crate.y, place.floor + 43], 32768, -4000], rydgel: [[place.rydgel.x + 45, place.rydgel.y, place.floor + 43], 32768, 0]};
+    const faceView = {claudia: [aim.claudia[0], 32768, -300], rydgel: [aim.rydgel[0], 32768, -300]};
     const before = {claudia: s.claudia, rydgel: s.rydgel};
+    const mouthOf = actor => actor.speech.blend[0] ?? 'None', idle = mouth => mouth === 'None' || mouth === '' || mouth === 'MouthClosed';
     await mkdir(shots ?? '.', {recursive: true});
     if (shots) {
       await place_([-960, -420, -132.5], 32768);
       await page.waitForTimeout(2500);
       await page.screenshot({path: `${shots}/easter-wide.png`});
     }
-    for (const who of ['claudia', 'rydgel']) {
+    // Without a clip nothing moves their mouths: they idle for 1.5 s with no blend animation, no letter, no speaking flag.
+    {
+      assert.equal(s.voice.available, true, `the clips loaded (${s.voice.error})`);
+      for (let i = 0; i < 6; i++) {
+        const t = await status(page);
+        for (const who of ['claudia', 'rydgel']) {
+          assert.ok(!t[who].speech.speaking && !t[who].speech.wasSpeaking && t[who].speech.nextPhoneme === '' && idle(mouthOf(t[who])) && mouthOf(t[who]) !== 'MouthClosed', `${who}'s mouth is still without a clip: ${JSON.stringify(t[who].speech)}`);
+        }
+        assert.deepEqual(t.voice.log, []);
+        await page.waitForTimeout(250);
+      }
+      console.log('PASS no clip, no mouth: nextPhoneme empty, no Mouth* blend animation, bIsSpeaking clear (6 samples over 1.5 s)');
+    }
+    const exchange = async (who, index, {shotsFor = null, clickTwice = false} = {}) => {
       const other = who === 'claudia' ? 'rydgel' : 'claudia', pairs = EASTER.pairs[who];
       await place_(...aim[who]);
-      const target = await until(page, `${who} as FrobTarget`, t => t.frobTarget === before[who].name, 15);
-      if (shots) { await page.waitForTimeout(1200); await page.screenshot({path: `${shots}/easter-${who}.png`}); }
-      const lines = target.log.length;
+      const target = await until(page, `${who} as FrobTarget`, t => t.frobTarget === before[who].name && !t.voice.busy, 20);
+      if (shots && index === 0) { await page.waitForTimeout(800); await page.screenshot({path: `${shots}/easter-${who}.png`}); }
+      const lines = target.log.length, logLength = target.voice.log.length;
       await page.mouse.move(720, 450);
       await page.mouse.click(720, 450, {button: 'right'});
-      const said = await until(page, `${who}'s frob line`, t => t.log.length > lines, 10);
-      assert.equal(said.log[lines], `${EASTER[who].name}: ${pairs[0][0]}`, `${who}'s first line`);
-      assert.equal(said.log.length, lines + 1, 'the answer is not instant');
-      const answered = await until(page, `${other}'s answer`, t => t.log.length > lines + 1, 10);
-      assert.equal(answered.log[lines + 1], `${EASTER[other].name}: ${pairs[0][1]}`, `${other}'s answer`);
-      if (shots && who === 'claudia') { await page.waitForTimeout(500); await page.screenshot({path: `${shots}/easter-claudia-frob.png`}); }
-      console.log(`PASS frob ${who}: "${said.log[lines]}" then "${answered.log[lines + 1]}"`);
+      const samples = [], captured = {claudia: [], rydgel: []};
+      let clicked = false;
+      const end = Date.now() + 40000;
+      for (;;) {
+        const t = await status(page);
+        samples.push({at: Date.now(), t});
+        if (t.voice.log.length >= logLength + 2) break;
+        assert.ok(Date.now() < end, `the exchange did not finish: ${JSON.stringify(t.voice)}`);
+        const speaker = t.voice.current?.speaker;
+        if (clickTwice && !clicked && speaker === who) { clicked = true; await page.mouse.click(720, 450, {button: 'right'}); }
+        // two screenshots per speaker mid-word, with different mouth shapes
+        if (shotsFor && speaker && shotsFor.includes(speaker)) {
+          const mouth = mouthOf(t[speaker]);
+          if (!idle(mouth) && captured[speaker].length < 2 && !captured[speaker].includes(mouth)) {
+            if (captured[speaker].length === 0 || Date.now() - captured[speaker].at > 400) {
+              await place_(...faceView[speaker]);
+              captured[speaker].push(mouth); captured[speaker].at = Date.now();
+              await page.waitForTimeout(150);
+              await page.screenshot({path: `${shots}/easter-${speaker}-midword-${captured[speaker].length}-${mouth}.png`});
+            }
+          }
+        }
+        await page.waitForTimeout(80);
+      }
+      const done = samples.at(-1).t, [line, answer] = done.voice.log.slice(logLength);
+      // The clips: the frobbed one's line, then the other's answer, both through the speech path (a Galaxy channel held each) with no error.
+      assert.equal(line.id, `frob-${who}-${index}`); assert.equal(line.speaker, who);
+      assert.equal(answer.id, `reply-${who}-${index}`); assert.equal(answer.speaker, other);
+      for (const clip of [line, answer]) {
+        assert.ok(clip.seen && clip.error === null, `${clip.id} played on a Galaxy channel: ${JSON.stringify(clip)}`);
+        assert.ok(clip.seconds >= clip.length && clip.seconds <= clip.length + 3, `${clip.id} lasted ${clip.seconds} s for a ${clip.length} s clip`);
+        // the speaker's mouth changed while it played: several letters and several Mouth* sequences
+        const mouths = new Set(clip.mouths.filter(mouth => mouth.startsWith('Mouth') && mouth !== 'MouthClosed'));
+        assert.ok(new Set(clip.letters).size >= 2 && mouths.size >= 2, `${clip.id}: the lip sync moved the mouth (letters ${clip.letters}, mouths ${clip.mouths})`);
+        assert.ok(clip.mouths.every(mouth => mouth.startsWith('Mouth')), `${clip.id} mouths are Mouth* sequences`);
+      }
+      // The HUD lines: the line as its clip starts, the answer as its clip starts, after the line's clip has ended and replyGap.
+      assert.equal(line.logAtStart, lines + 1, 'the line shows as its clip starts');
+      assert.equal(answer.logAtStart, lines + 2, 'the answer shows as its clip starts');
+      assert.equal(done.log[lines], `${EASTER[who].name}: ${pairs[index][0]}`, `${who}'s line`);
+      assert.equal(done.log[lines + 1], `${EASTER[other].name}: ${pairs[index][1]}`, `${other}'s answer`);
+      assert.ok(answer.started - line.ended >= EASTER.replyGap - 0.05 && answer.started - line.ended <= EASTER.replyGap + 0.4, `the answer starts ${(answer.started - line.ended).toFixed(2)} s after the line's clip ended`);
+      // While a clip played the other one's mouth did not move and its flags stayed clear; the log showed the answer only after the line's clip.
+      for (const {t} of samples) {
+        const speaker = t.voice.current?.speaker;
+        if (speaker) {
+          const silent = speaker === who ? other : who;
+          assert.ok(!t[silent].speech.speaking && idle(mouthOf(t[silent])), `the one not speaking keeps still: ${JSON.stringify(t[silent].speech)}`);
+          assert.equal(t.log.length, speaker === who ? lines + 1 : lines + 2, `HUD lines while ${t.voice.current.id} plays`);
+        }
+      }
+      // Afterwards both flags are clear and the speakers' mouths closed (the closing tween).
+      const closed = await until(page, 'mouths closed', t => !t.voice.busy && [who, other].every(name => !t[name].speech.speaking && mouthOf(t[name]) === 'MouthClosed'), 15);
+      assert.equal(closed.voice.audio.failed, 0, 'no failed host decode');
+      return {line, answer, lines, captured, clicked};
+    };
+    for (const who of ['claudia', 'rydgel']) {
+      const r = await exchange(who, 0, {shotsFor: shots ? ['claudia', 'rydgel'] : null, clickTwice: who === 'claudia'});
+      if (who === 'claudia') {
+        // A frob during an exchange does nothing: no extra line, no extra clip, the rotation not advanced.
+        assert.equal(r.clicked, true, 'the second click was made during Claudia\'s clip');
+      }
+      console.log(`PASS frob ${who}: "${r.line.id}" (${r.line.seconds} s, letters ${r.line.letters.join('')}, mouths ${[...new Set(r.line.mouths)].join(',')}) then "${r.answer.id}" (${r.answer.seconds} s, letters ${r.answer.letters.join('')}), answer ${(r.answer.started - r.line.ended).toFixed(2)} s after the line's clip`);
     }
-    // A second frob of Claudia takes her next line.
+    // A second frob of Claudia takes her next line (the click during the first exchange did not advance the rotation).
     {
-      await place_(...aim.claudia);
-      const t = await until(page, 'Claudia as FrobTarget again', t => t.frobTarget === before.claudia.name, 15), lines = t.log.length;
-      await page.mouse.click(720, 450, {button: 'right'});
-      const said = await until(page, 'second line', t => t.log.length > lines, 10);
-      assert.equal(said.log[lines], `${EASTER.claudia.name}: ${EASTER.pairs.claudia[1][0]}`);
-      await until(page, 'second answer', t => t.log.length > lines + 1, 10);
+      const r = await exchange('claudia', 1);
+      assert.equal(r.line.id, 'frob-claudia-1');
+      console.log('PASS second frob of Claudia: ' + r.line.id + ' then ' + r.answer.id);
     }
     // They stayed put: same place, same state, same health, no error.
     const after = await status(page);
@@ -239,11 +310,13 @@ try {
     const again = await until(page, 'both actors again after Reset', s => s.active && s.time < after.time && s.claudia?.state === 'Sitting' && s.rydgel?.state === 'Standing');
     assert.deepEqual(again.claudia.location, before.claudia.location);
     assert.deepEqual(again.log, [], 'a fresh player log');
+    assert.deepEqual(again.voice.log, [], 'a fresh voice log');
     await place_(...aim.rydgel);
     await until(page, 'Rydgel as FrobTarget after Reset', t => t.frobTarget === again.rydgel.name, 15);
     await page.mouse.click(720, 450, {button: 'right'});
     const reset = await until(page, 'a frob line after Reset', t => t.log.length > 0, 10);
     assert.equal(reset.log[0], `${EASTER.rydgel.name}: ${EASTER.pairs.rydgel[0][0]}`, 'the speaker rotation starts again');
+    await until(page, 'the clip plays after Reset', t => t.voice.log.length >= 1 || t.voice.current?.channel, 15);
     assert.deepEqual(errors, [], 'no page error');
     console.log('PASS Reset: placed again on the new level, frob and rotation restart');
     await page.close();

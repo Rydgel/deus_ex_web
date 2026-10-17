@@ -4,7 +4,8 @@ An opt-in extra for Play, designed with the user. It is **not** part of the fait
 `?easter=1` to the page and, on **10_Paris_Club**, two extra people stand at the bar. **Claudia** sits on a wooden crate and **Rydgel**
 leans on the counter beside her (they are teammates who built the place; the names live in `src/viewer/easter-config.mjs`, one place,
 and are the pawns' own `FamiliarName`/`UnfamiliarName`, so the original HUD shows them over the target brackets). Right-click either
-one and the original HUD log shows their line; the other answers about 1.6 s later.
+one and the original HUD log shows their line, spoken in their own voice with their mouth moving ("Voices", below); the other answers a quarter
+of a second after the clip has ended, also spoken.
 
 ## What it touches (each hook is a no-op without the flag)
 
@@ -13,10 +14,11 @@ one and the original HUD log shows their line; the other answers about 1.6 s lat
 | `src/viewer/main.mjs` | `applyEaster()` (called first in `applyStartCheats`, i.e. after every Player start) reads `?easter=1` and, only then, imports `easter-page.mjs`; `deusExViewer.easterProbe(args)`, a validation probe like `viewProbe` |
 | `src/viewer/sim-worker.mjs` | one `call` method, `easter`, that imports `easter-sim.mjs` on demand |
 | `src/viewer/actor-mesh-draw.mjs` | after a face group's skin is decoded, `easterSkins.current` (null unless the mod registered) may swap the decoded skin; the await sequence of the stock path is unchanged |
+| `src/runtime/script-audio-live.mjs` | `moddedSounds`, an empty WeakMap (synthetic Sound object -> MP3 bytes) that `decodeSample` asks first; the mod registers its twelve clips in it, nothing else does, so the stock path is unchanged |
 
 Everything else is new and in its own modules: `easter-config.mjs` (names, classes, place, lines), `easter-sim.mjs` (spawning and the
 frob and reply hooks, simulation side), `easter-page.mjs` (page side start), `easter-skins.mjs` (the registry the draw asks),
-`easter-skin-art.mjs` (the skins). The state digest of a flag-off run equals a run on master without the mod
+`easter-skin-art.mjs` (the skins), `easter-speech.mjs` (the clips and their playback, below), `easter-audio/` (the clips). The state digest of a flag-off run equals a run on master without the mod
 (validate-sim-split, below).
 
 ## Built from the game's own pieces
@@ -156,6 +158,39 @@ The piper binary is `$EASTER_PIPER` or `.cache/piper-env/bin/piper`. Piper's dec
 the same voice but is not byte-identical (durations move by a few tenths of a second); the committed clips and `manifest.json` (voice,
 licence, sha256, duration, level per clip) are the artifact.
 
+### Playback: the game's own speech path
+
+A clip is played as the speech of its speaker actor, the path `ConPlay.PlaySpeech` takes (docs/galaxy-audio.md "Speech through Galaxy's voices",
+docs/lip-sync.md), by `easter-speech.mjs` and the hooks in `easter-sim.mjs` (simulation side, the worker by default):
+
+1. **The sound**: each clip is a synthetic `Sound` object (key `easter.<id>`) registered in `moddedSounds`; `decodeSample` finds it there and takes the
+   same host-decoded MPEG record path an original speech MP3 takes (`hostSample`: the rate and frame count come from the MPEG header, a record
+   in Galaxy's registry), because the clips are the game's own format.
+2. **The call**: `Actor.PlaySound(Sound, SLOT_Talk, , , 1024)` on the speaker through the original native `execPlaySound` (script-sound.mjs:
+   CheckHearSound, the player's `ClientHearSound`, Galaxy's `PlaySound`). The radius is `BarkManager.StartBark`'s 1024 (an ambient exchange, not
+   a camera conversation; `ConPlay` uses 65536 for its forced speech). The channel id needs the speaker's global object index; a spawned pawn has
+   none the runtime measured, so unless the object-index model has one (`soundObjectIndex`) the mod gives each speaker a fixed index far above any
+   real one (0xfe0000 and 0xfe0001), used only to key its channel.
+3. **The voice**: Galaxy's Update starts the voice on the next frame (a mono 44.1 kHz record, 0x4024); the page decodes the MP3 (`decodeSpeech`, an
+   OfflineAudioContext at the clip's rate, the same for every speech MP3), the worklet plays it on the ring transport, and the voice's end clears
+   the channel.
+4. **The mouth**: Update's step 12 analyses a Talk-slot channel whose Actor IsA Pawn and whose `bIsSpeaking` is set, every 0.1 s of channel time, and
+   writes the speaker's `nextPhoneme` (bit-exact with Galaxy.dll, docs/lip-sync.md). `ConPlay.StartSpeakingAnimation` sets `bIsSpeaking` and
+   `bWasSpeaking` on the speaker, which the mod does (the same two writes) when the clip starts and clears `bIsSpeaking` (`StopSpeakingAnimation`)
+   when the Galaxy channel is gone. The original `Pawn.LipSynch(deltaTime)` is called from the Tick of `ScriptedPawn`'s Conversation states only
+   (the bytecode: nothing else calls it), and these pawns stand in Sitting/Standing, so the mod calls the same original bytecode body after each
+   level tick while the clip plays, with the level's delta, and once more at the end (`bWasSpeaking`: it tweens the mouth closed). The letters
+   take effect one tick after they are written, as in the original (Audio->Update runs after the level tick); the call is placed after the
+   whole level tick instead of inside the actor's own, which changes only the order within a frame.
+5. **The HUD and the reply**: the line shows through `ClientMessage` as the clip starts. When the Galaxy channel ends (the voice finished: the clip's
+   length plus the decode and the ring's tail, about 0.9 s after the audible end for a 3 s line) the reply is scheduled `replyGap` (0.25 s) later and
+   plays the same way for the other speaker. If the clips cannot be loaded, or a play fails, the exchange stays text-only with the old 1.6 s timing; if a clip
+   never gets a channel its length plus 0.75 s ends it. A frob during an exchange does nothing.
+
+What is ours: the arrangement, the voices, the radius choice, the mod's object indices, the call to `LipSynch` outside a Conversation state. What is
+the game's: the speech chain from `PlaySound` to the ring voice, the lip-sync analysis, `LipSynch` and the `GFM`/`GM_*` mouth animations. Without
+`?easter=1` nothing registers a modded sound and none of this runs.
+
 ## Verification
 
 ```
@@ -163,9 +198,12 @@ node scripts/validate-easter-egg-play.mjs [--shots DIR]
 node scripts/validate-sim-split.mjs --a <server of the pre-mod build> --map 10_Paris_Club --frames 240 --every 60
 ```
 
-`validate-easter-egg-play.mjs` (worker mode, Playwright): with the flag both actors are at their places as the stock classes in the
+`validate-easter-egg-play.mjs` (worker mode, Playwright, real right-clicks): with the flag both actors are at their places as the stock classes in the
 original Sitting/Standing states with their names, MultiSkins and a hidden Chair1 under a wooden crate; each recipe's skin was drawn with
-its design colour; a real right-click on each shows the line, the answer comes later, a second frob takes the next line; neither pawn
+its design colour; a real right-click on each starts the speaker's clip as speech: its HUD line shows as the clip starts, the speaker's Galaxy channel holds the clip, its
+mouth (letters and `Mouth*` blend sequences) changes while it plays and is closed after, the other one's mouth stays still, the answer's clip starts
+`replyGap` after the line's clip has ended with its own HUD line, a frob during the exchange does nothing, a second frob takes the next line; before any frob,
+six samples over 1.5 s show no letter, no `Mouth*` animation and `bIsSpeaking` clear; neither pawn
 moves, changes state or loses health; without the flag a second page has no mod state, no skin hook and none of the mod's actors
 among the mesh bindings; after the page's Reset (a Player start reloads the level) they are placed again and the speaker rotation
 restarts. The second command is the digest comparison with a build without the mod (the pre-mod commit served from its own copy):

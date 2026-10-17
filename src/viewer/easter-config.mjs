@@ -58,9 +58,11 @@ export const EASTER = Object.freeze({
     kneeFrontForward: 26.6,
     heelClearance: 0.8,
   }),
-  // The line a frob shows is `Name: line`; the other answers `replyDelay` seconds later (level time). Each pair is
+  // The line a frob shows is `Name: line`; the other answers `replyDelay` seconds later (level time; the text-only fallback). Each pair is
   // [line of the one frobbed, the other's answer]; a speaker's pairs come in turn, the first one on the first frob.
   replyDelay: 1.6,
+  // With the voice clips the answer follows this many seconds after the line's clip has ended.
+  replyGap: 0.25,
   pairs: Object.freeze({
     claudia: Object.freeze([
       ["Shh, I'm chasing one last ulp.", "She said that an hour ago. Don't tell her I noticed."],
