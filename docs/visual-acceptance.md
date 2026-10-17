@@ -1664,8 +1664,10 @@ camera window). One bottle hold (the lock `.work/bottle.lock`), Brightness 2/3, 
 - **Typed lines are checked.** On a loaded Mac the console drops characters (the live scenes' driver checks for the same): Battery Park's
   first capture walked into a wall (the `ghost` or `bCheatsEnabled` line was lost), and its second came out about 1.3 times darker than Play
   everywhere (ratio 1.28 to 1.33, the edges equal: the Brightness line was lost, so the Shot carried the ini's 0.6 ramp). The route now reads
-  JC's `Physics` back (PHYS_Flying, 4) and UClient's `Brightness` (+0x58 by the SDK's `UnCamera.h`, checked by `WindowedViewportX` at +0x40
-  reading 1280) and types each line again until they read right.
+  JC's `Physics` back (PHYS_Flying, 4) and UClient's `Brightness` and types each line again until they read right. The UClient fields follow
+  the SDK's `UnCamera.h` order with five more dwords before the viewport ints in Deus Ex's build, read from the running game's
+  `WindowsClient0`: `WindowedViewportX` +0x54 (1280, the layout check), `WindowedViewportY` +0x58 (720), `Brightness` +0x6c, `MipFactor` +0x70
+  (the header's offsets, +0x40 and +0x58, read 0).
 - **A raised computer.** Area 51 Final's ComputerSecurity0 stands on a platform: from the flight's usual 140 units, `walk` dropped JC to the
   floor below it (z -798 against the platform's -715) and the frob took `MIB1`. `--fly-stop 50 --fly-tap 40` ends the flight above the platform.
 - **Special options.** The same terminal opens on ComputerScreenSpecialOptions (it has an "Augmentation Containment" option); its Security
@@ -1680,21 +1682,24 @@ camera window). One bottle hold (the lock `.work/bottle.lock`), Brightness 2/3, 
 | --- | --- | ---: | ---: | ---: | ---: | ---: |
 | `cs0` | 01_NYC_UNATCOIsland ComputerSecurity0 (SecurityCamera4, 2, 1: SATCOM Compound and Exterior UNATCO HQ with sky, Interior UNATCO HQ with the lobby's floor mirror) | 375.097 | 51 / 0 | **0.06 / 0.02 / 0.04** | .997 / 1 / 1 | .999 / .999 / 1 |
 | `dk1` | 09_NYC_Dockyard ComputerSecurity1 (SecurityCamera7, 0 with sky, 1) | 277.308 | 21 / 14 | **0.02 / 0.02 / 0.08** | 1 / 1 / .996 | 1 / 1 / .972 |
-| `a51f` | 15_Area51_Final ComputerSecurity0 (SecurityCamera0, 1 with fog; window 3 has no camera) | 265.672 | not measured / 2 | 0.90 / 0.69 | .696 / .920 | .930 / **.867** |
+| `a51f` | 15_Area51_Final ComputerSecurity0 (SecurityCamera0, 1 with fog; window 3 has no camera) | 348.499 | 54 / 2 | **0.02 / 0.08** | .999 / .997 | 1 / .981 |
 | `cs1` | 14_OceanLab_Lab ComputerSecurity1 (SecurityCamera0, 4, 3) | 247.782 | 18 / 0 | **0.01 / 0.13 / 0.02** | 1 / 1 / .999 | .990 / 1 / 1 |
 | `hk0` | 06_HongKong_WanChai_Market ComputerSecurity0 (SecurityCamera2, 0, 1) | 294.792 | 38 / 2 | **0.05 / 0.19 / 0.02** | .997 / 1 / .999 | 1 / 1 / .999 |
-| `bp2` | 02_NYC_BatteryPark ComputerSecurity2 (SecurityCamera1, 2, 0) | 460.177 | 41 / 1 | 2.97 / 1.07 / 2.01 (Brightness line lost) | .999 / .992 / .996 | .986 / .993 / .997 |
+| `bp2` | 02_NYC_BatteryPark ComputerSecurity2 (SecurityCamera1, 2, 0) | 388.938 | 37 / 4 | **0.01 / 0.06 / 0.01** | .999 / .999 / .999 | 1 / 1 / .999 |
 | `sh3b` | 09_NYC_Ship ComputerSecurity3 (SecurityCamera1 with faint fog, 19 with heavy fog, 18) | 266.111 | 20 / 4 | 0.06 / 0.89 / 0.03 | .999 / .950 / .998 | .999 / **.758** / .997 |
 
 Play's own plan confirms what each window holds: `cs0` windows 1 and 2 each draw a sky child frame and window 3 a mirror child frame
 (`<name>-play.json` `plans[].frames`); `a51f` window 2 draws fog maps on 176 surfaces (4,795 texels) and `sh3b` window 2 on 30 surfaces and 7
-mover items. So **4.2.29 holds a mirror and sky against the original (`cs0`) and sky again (`dk1`)**, both well inside the thresholds.
+mover items. So **4.2.29 holds a mirror and sky against the original (`cs0`), sky again (`dk1`) and volumetric fog (`a51f` window 2)**, all
+well inside the thresholds, and 4.2.28's OceanLab, Battery Park and Market terminals pass on the Mac stores.
 
-**`a51f` window 2, fog.** The radiation room's green haze agrees (MAD 0.69, ratio 1.04; with camera fog off in Play, see below, the same
-comparison on the Ship reads 6.7). What fails precision: two wandering `Gray`s (Gray0, Gray3) stand in the original's view and have walked
-elsewhere in Play (this capture was taken before `--pawns`; the census's line test had missed them), and `ScientistMaleCarcass2`, 130 units
-from the camera, lies in Play's view and not in the original's (a placed carcass falls and settles in each program's own way). `--pawns` now
-measures carcasses too; a recapture with it is the next step. Window 1 holds the pointer and SpiderBot2 and is not judged for the fog.
+**`a51f` window 2, fog.** The radiation room's green haze (Light97 to Light100, Steady, the camera inside Light98's sphere; Play draws fog
+maps on 176 surfaces, 4,795 texels) agrees with the original's: MAD 0.08, ratio 1.005. The first capture (265.672 s, before `--pawns`) read
+0.69 with precision .867: two wandering `Gray`s (Gray0, Gray3) stood in the original's view and had walked elsewhere in Play (the census's
+line test had missed them), and `ScientistMaleCarcass2`, 130 units from the camera, lay in Play's view and not in the original's (a placed
+carcass falls and settles in each program's own way). The recapture (348.499 s) measured 54 of the map's 61 pawns and carcasses (the seven
+absent ones were gone from the original's level) and wrote them: window 2 then reads 0.08 / .997 / .981. Battery Park's first capture
+(460.177 s, its Brightness line lost) was taken again at 388.938 s with the read-back.
 
 **`sh3b` window 2, the locker room** (all 20 pawns and the four open doors written; the red-uniformed NPC of the Linux capture is gone). What
 stays is the back wall's five locker doors (`DeusExMover8`, `19`, `21`, `23`, `37`, closed in both): in the original they read almost flat at the
@@ -1711,7 +1716,7 @@ fogged wall's colour (a fit over the region, original = 0.04 x Play + 38, per ch
 So the original lights or blends these five mover faces differently from Play, and from what their light maps give. Not resolved: what the
 original draws for them (a trace of `DrawComplexSurface` for those surfaces, its FSurfaceInfo's LightMap and FogMap, would settle it).
 
-**Not covered yet:** `bp2` recaptured with the Brightness check, `a51f` recaptured with `--pawns`.
+**Not covered:** the Ship's window 2 (its five locker doors, above); the corona (no clean view, [camera view census](camera-view-census.md)).
 
 ### Main views at Brightness 2/3
 

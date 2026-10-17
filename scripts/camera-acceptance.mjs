@@ -283,10 +283,12 @@ async function original() {
   }
   if (player('Physics:0x30:u8').Physics !== 4) throw new Error('JC does not fly after `ghost`: the console did not take the cheat lines');
   // The Brightness line too: a dropped one leaves the Shot at the ini's 0.6, about 1.3 times darker than Play's frame at every pixel
-  // (Battery Park's first Mac capture, ratio 1.28 to 1.33). UClient's Brightness is +0x58 by the SDK's UnCamera.h (UObject 0x28, Engine,
-  // the Viewports array, DrawCycles, the bitfield, six viewport ints); WindowedViewportX (+0x40) reading the window's width checks the layout.
+  // (Battery Park's first Mac capture, ratio 1.28 to 1.33). UClient's fields follow the SDK's UnCamera.h order with five more dwords before the
+  // viewport ints in Deus Ex's build; read from the running game (WindowsClient0): WindowedViewportX +0x54 (1280), WindowedViewportY +0x58
+  // (720), WindowedColorBits +0x5c, the fullscreen three, Brightness +0x6c, MipFactor +0x70. WindowedViewportX reading the window's width
+  // checks the layout.
   const brightness = Number(option('brightness', '0.666667'));
-  const client = () => dump('WindowsClient', 'Brightness:0x58:f', 'WindowedViewportX:0x40:u32').find(row => /^WindowsClient\d+$/.test(row.name));
+  const client = () => dump('WindowsClient', 'Brightness:0x6c:f', 'WindowedViewportX:0x54:u32').find(row => /^WindowsClient\d+$/.test(row.name));
   for (let attempt = 0; attempt < 4; attempt++) {
     const row = client();
     if (!row || row.WindowedViewportX !== WIDTH) throw new Error(`the WindowsClient layout does not read back (${JSON.stringify(row)})`);

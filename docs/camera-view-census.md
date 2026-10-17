@@ -341,7 +341,7 @@ and movers written into Play. Details and the route's Mac changes are in
 | --- | --- | ---: | ---: | ---: | --- |
 | `cs0` | Island ComputerSecurity0: sky, sky, floor mirror | 0.06 / 0.02 / 0.04 | .997 / 1 / 1 | .999 / .999 / 1 | pass |
 | `dk1` | Dockyard ComputerSecurity1: sky, sky, office | 0.02 / 0.02 / 0.08 | 1 / 1 / .996 | 1 / 1 / .972 | pass |
-| `a51f` | Area 51 Final ComputerSecurity0: corridor, fog | 0.90 / 0.69 | .696 / .920 | .930 / .867 | window 2 fails precision: two Grays and a carcass placed differently, not the fog |
+| `a51f` | Area 51 Final ComputerSecurity0: corridor, fog | 0.02 / 0.08 | .999 / .997 | 1 / .981 | pass (the first capture, before the pawns were measured, failed on two Grays and a carcass placed differently, not on the fog) |
 | `sh3b` | Ship ComputerSecurity3: faint fog, heavy fog, break room | 0.06 / 0.89 / 0.03 | .999 / .950 / .998 | .999 / .758 / .997 | window 2 fails precision: five locker doors lit differently |
 
 Play's plan confirms the effect in each window: sky child frames in `cs0`
