@@ -22,7 +22,28 @@ const commander = c => c.actor('TerroristCommander0');
 /** The commander's room: DL_LeaderNotKilled sits inside it (2887,38,2494); the player walks in from there. */
 const toCommander = (c, seconds, until) => walkAndTalk(c, [2887, 38, 2494 + 45], c.pos(commander(c)), seconds, until);
 const forward = (c, a) => { const yaw = c.read(a, 'Rotation')[1] / 65536 * 2 * PI; return [Math.cos(yaw), Math.sin(yaw)]; };
-const lockpicking = async (c, door, seconds) => { c.watched.add(door); await c.frob(door, [64, 80, 48]); c.frames(60 * seconds); };
+/** The player's NanoKey ring: the key IDs on `KeyList` (NanoKeyRing.HasKey walks the same list). */
+function keyIds(c) { const ids = []; for (let k = c.read(c.player(), 'KeyList'); k && ids.length < 64; k = c.read(k, 'NextKey')) ids.push(String(c.read(k, 'KeyID'))); return ids; }
+/** Let a tool in hand work on a device until its own timer stops it (`busy` names the bPicking/bHacking field), at most `seconds` of Level time; returns the frames it took. */
+function untilDone(c, device, busy, seconds) { let n = 0; for (; n < 60 * seconds && c.read(device, busy); n++) c.frames(1); return n; }
+/** A door opened with the right button (ParseRightClick: DoFrob(Self, None)) has left KeyNum 0 or is moving. */
+const opened = (c, door) => c.read(door, 'KeyNum') !== 0 || Boolean(c.read(door, 'bInterpolating'));
+/** MeetFilben to its end through the conversation window's keys. Its Choice: the first button "You can trust me." (Enter) jumps to GetKeyB (TransferObject of Filben's
+ * `ruin_key` NanoKey, FilbenGaveKey), the second "I can't promise..." (Down, Enter) to NoKeyB (no key). The conversation sets M01PlayerMetFilben at its first event, so the
+ * flag is no sign of the end: the end is the player's ConPlay going away. */
+async function meetFilben(c, choice) {
+  const f = c.actor('HarleyFilben0'); if (!f) throw new Undriven('no HarleyFilben0');
+  const fp = c.pos(f); c.stand([fp[0] - 80, fp[1], fp[2]], fp); c.frames(30);
+  await c.frob(f, [60, 80, 48]).catch(() => null);
+  let started = false, i = 0;
+  for (; i < 240; i++) {
+    const playing = Boolean(c.read(c.player(), 'conPlay'));
+    started ||= playing; if (started && !playing) break;
+    if (choice) { c.game.windowKey('ArrowDown', true); c.game.windowKey('ArrowDown', false); c.frames(3); }
+    c.game.windowKey('Enter', true); c.game.windowKey('Enter', false); c.frames(27);
+  }
+  return {met: c.flag('m01playermetfilben'), ended: started && !c.read(c.player(), 'conPlay'), gaveKey: c.flag('filbengavekey'), keys: keyIds(c), seconds: i / 2};
+}
 
 Object.assign(DRIVERS, {
   async 'island-shoot-npc'(c) {
@@ -92,10 +113,14 @@ Object.assign(DRIVERS, {
     return ok(c.flag('statuealarmtriggered'), {alarmFlag: c.flag('statuealarmtriggered'), lastAlarm: c.read(laser, 'lastAlarmTime'), isOn: c.read(laser, 'bIsOn'), at: c.pos(c.player()).map(Math.round)});
   },
   async 'island-hack-panel'(c) {
-    const panel = c.actor('ControlPanel0'), laser = c.actor('LaserTrigger0'); if (!panel || !laser) throw new Undriven('no ControlPanel0');
-    const tool = await armed(c, 'Multitool'); const uses0 = c.read(tool, 'NumCopies');
-    c.watched.add(panel); await c.frob(panel, [48, 36, 64]); c.frames(60 * 40);
-    return ok(!c.read(laser, 'bIsOn') || c.read(tool, 'NumCopies') < uses0, {laserOn: c.read(laser, 'bIsOn'), multitool: [uses0, c.read(tool, 'NumCopies')], hacking: c.read(panel, 'bHacking')});
+    const panel = c.actor('ControlPanel0'), lasers = c.byTag('statue_lasertrap'); if (!panel || !lasers.length) throw new Undriven('no ControlPanel0 or statue_lasertrap lasers');
+    const tool = await armed(c, 'Multitool'); const copies0 = c.read(tool, 'NumCopies'), on0 = lasers.map(l => Boolean(c.read(l, 'bIsOn')));
+    // The Multitool is used with the LEFT button (ParseLeftClick: DoFrob(Self, inHand) on a HackableDevices); the right button frobs with nothing in hand and never starts a hack.
+    c.watched.add(panel);
+    const died = await c.guard(async () => { await c.useTool(panel, [48, 36, 64]); });
+    const started = Boolean(c.read(panel, 'bHacking')), frames = untilDone(c, panel, 'bHacking', 40);
+    return ok(started && c.read(panel, 'hackStrength') === 0 && lasers.every(l => !c.read(l, 'bIsOn')) && (c.gone(tool) || c.read(tool, 'NumCopies') < copies0),
+      {started, frames, hackStrength: c.read(panel, 'hackStrength'), lasersOn: [on0, lasers.map(l => Boolean(c.read(l, 'bIsOn')))], multitool: [copies0, c.gone(tool) ? 0 : c.read(tool, 'NumCopies')], playerDied: died});
   },
   async 'island-carcass'(c) {
     const a = c.actor('Terrorist4'), b = c.actor('Terrorist27'); if (!a || !b) throw new Undriven('no Terrorist4/27');
@@ -113,12 +138,22 @@ Object.assign(DRIVERS, {
     return ok(c.read(c.player(), 'Physics') === 3 && (min < t0 || died), {physics: c.read(c.player(), 'Physics'), swimTimer: [t0, min], health: [h0, c.health(c.player())], drowned: died});
   },
   async 'island-terminal'(c) {
-    const out = {};
-    for (const name of ['ComputerPersonal0', 'ATM0', 'ComputerSecurity1']) {
+    const out = {}, names = ['ComputerPersonal0', 'ATM0', 'ComputerSecurity1'];
+    for (const name of names) {
       const a = c.actor(name); if (!a) { out[name] = 'absent'; continue; }
-      try { await c.frob(a, [64, 48, 80]); c.frames(90); out[name] = Boolean(c.topModal()); c.closeModals(); } catch (error) { if (!(error instanceof Undriven)) throw error; out[name] = 'not reachable'; }
+      // A terminal is a state machine (Computers.uc, auto state Off): the map's saved bOn runs the Deactivate animation (FinishAnim) when the level starts, and Frob
+      // refuses while bAnimating. A device nobody has drawn sits in stasis, so the driver stamps it as the renderer's feedback would (watched) and gives it the
+      // seconds a player spends walking up to it before pressing use (Computers.Frob returns without opening while bAnimating).
+      c.watched.clear(); c.watched.add(a); c.frames(180);
+      try {
+        await c.frob(a, [64, 48, 80]); c.frames(120); out[name] = Boolean(c.topModal());
+        const window = (() => { try { const t = c.read(a, 'termwindow'); return t ? c.runtime.instance(t).cls.record.key.split('.').pop() : null; } catch { return null; } })();
+        if (window) out[`${name}.window`] = window;
+        c.closeModals(); c.frames(60);
+      } catch (error) { if (!(error instanceof Undriven)) throw error; out[name] = 'not reachable'; }
     }
-    return ok(Object.values(out).filter(v => v === true).length >= 2 && !Object.values(out).includes(false), out);
+    c.watched.clear();
+    return ok(names.every(name => out[name] === true), out);
   },
   async 'island-doors'(c) {
     const out = {};
@@ -152,12 +187,11 @@ Object.assign(DRIVERS, {
     return ok(out.carried && out.fall > 0, {...out, h0, h: c.health(c.player())});
   },
   async 'meet-filben'(c) {
-    const f = c.actor('HarleyFilben0'); if (!f) throw new Undriven('no HarleyFilben0');
-    const fp = c.pos(f); c.stand([fp[0] - 80, fp[1], fp[2]], fp); c.frames(30);
-    await c.frob(f, [60, 80, 48]).catch(() => null);
-    // Down then Enter: the second choice ("You can trust me") is the branch that hands over the key.
-    for (let i = 0; i < 120 && !c.flag('m01playermetfilben'); i++) { c.game.windowKey('ArrowDown', true); c.game.windowKey('ArrowDown', false); c.frames(3); c.game.windowKey('Enter', true); c.game.windowKey('Enter', false); c.frames(27); }
-    return ok(c.flag('m01playermetfilben'), {met: c.flag('m01playermetfilben'), gaveKey: c.flag('filbengavekey'), nanokeys: c.byClass('NanoKey').filter(k => c.read(k, 'Owner') === c.player()).length});
+    // Both branches of the Choice, the map reloaded between them: "You can trust me." (Enter) hands over the `ruin_key`, "I can't promise..." (Down, Enter) does not.
+    // (The first version of this driver stopped at the M01PlayerMetFilben flag, which the conversation sets at its first event: it never reached the Choice.)
+    const trust = await meetFilben(c, 0); c.restart();
+    const refuse = await meetFilben(c, 1);
+    return ok(trust.ended && trust.gaveKey && trust.keys.includes('ruin_key') && refuse.ended && !refuse.gaveKey && !refuse.keys.includes('ruin_key'), {trust, refuse});
   },
   async 'gunther-rescued'() { throw new Undriven('the cell door DeusExMover10 is reached by no frob approach tried (8 bearings, 3 distances, 2 heights around its Location); the walk to it is not driven'); },
   async 'meet-terrorist'(c) {
@@ -166,14 +200,40 @@ Object.assign(DRIVERS, {
     return ok(c.flag('meetterrorist_played') || c.flag('statuemissioncomplete'), {played: c.flag('meetterrorist_played'), complete: c.flag('statuemissioncomplete'), attacked: c.flag('playerattackedstatueterrorist'), commander: stateName(c, commander(c)), at: c.pos(c.player()).map(Math.round)});
   },
   async 'route-front'(c) {
-    const door = c.actor('DeusExMover12'); if (!door) throw new Undriven('no DeusExMover12');
-    const tool = await armed(c, 'Lockpick'); const died = await c.guard(() => lockpicking(c, door, 30));
-    return ok(!c.read(door, 'bLocked'), {locked: c.read(door, 'bLocked'), picks: c.read(tool, 'NumCopies'), at: c.pos(door).map(Math.round), playerDied: died}, died ? 'the player was killed at the door (OPEN DXONLY) before the pick finished' : undefined);
+    const doors = c.byTag('StatueRuinDoors'), door = c.actor('DeusExMover12'); if (!door || doors.length !== 4) throw new Undriven('the StatueRuinDoors are not the four movers led by DeusExMover12');
+    const state = () => doors.map(d => `${c.read(d, 'bLocked') ? 'locked' : 'unlocked'}${opened(c, d) ? '+open' : ''}`);
+    const out = {authored: {breakable: doors.map(d => Boolean(c.read(d, 'bBreakable'))), lockStrength: c.read(door, 'lockStrength')}};
+    // 1. The Lockpick (no key). The bare right button on the locked door leaves it locked (DeusExMover.Frob: msgLocked); the Lockpick, used with the LEFT button
+    //    (ParseLeftClick: DoFrob(Self, inHand) for a Lockpick or NanoKeyRing on a DeusExMover), picks all four; the right button then opens them.
+    const tool = await armed(c, 'Lockpick'); c.watched.add(door);
+    out.pickDied = await c.guard(async () => {
+      await c.frob(door, [64, 80, 48]); c.frames(60); out.bareRightClick = state();
+      await c.useTool(door, [64, 80, 48]); out.picking = Boolean(c.read(door, 'bPicking')); out.pickFrames = untilDone(c, door, 'bPicking', 40);
+      out.afterPick = state(); await c.frob(door, [64, 80, 48]); c.frames(60 * 4); out.afterOpen = state();
+    });
+    out.picks = c.gone(tool) ? 0 : c.read(tool, 'NumCopies');
+    const pickOk = out.picking && out.afterPick?.every(s => s === 'unlocked') && out.afterOpen?.every(s => s.endsWith('+open'));
+    // 2. The key from Filben (the map reloaded): the first choice of MeetFilben gives the ruin_key; the key ring in hand (belt 0) toggles the lock of all four.
+    c.restart();
+    const meet = await meetFilben(c, 0); out.meet = {gaveKey: meet.gaveKey, keys: meet.keys, ended: meet.ended};
+    out.keyDied = await c.guard(async () => {
+      await c.equip(c.read(c.player(), 'KeyRing')); c.watched.add(door);
+      await c.useTool(door, [64, 80, 48]); c.frames(30); out.keyUnlocked = state();
+      await c.frob(door, [64, 80, 48]); c.frames(60 * 4); out.keyOpened = state();
+    });
+    const keyOk = meet.keys.includes('ruin_key') && out.keyUnlocked?.every(s => s === 'unlocked') && out.keyOpened?.every(s => s.endsWith('+open'));
+    return ok(pickOk && keyOk, out, !pickOk ? 'the Lockpick did not unlock and open the StatueRuinDoors' : 'the key from Filben did not unlock and open the StatueRuinDoors');
   },
   async 'route-back'(c) {
     const door = c.actor('DeusExMover2'); if (!door) throw new Undriven('no DeusExMover2');
-    const tool = await armed(c, 'Lockpick'); const died = await c.guard(() => lockpicking(c, door, 30));
-    return ok(!c.read(door, 'bLocked'), {locked: c.read(door, 'bLocked'), picks: c.read(tool, 'NumCopies'), playerDied: died});
+    const tool = await armed(c, 'Lockpick'); c.watched.add(door); const out = {lockStrength: c.read(door, 'lockStrength')};
+    out.died = await c.guard(async () => {
+      await c.frob(door, [48, 70, 36]); c.frames(60); out.bareRightClick = {locked: c.read(door, 'bLocked'), open: opened(c, door)};
+      await c.useTool(door, [48, 70, 36]); out.picking = Boolean(c.read(door, 'bPicking')); out.pickFrames = untilDone(c, door, 'bPicking', 40);
+      out.unlocked = !c.read(door, 'bLocked'); await c.frob(door, [48, 70, 36]); c.frames(60 * 4); out.open = opened(c, door);
+    });
+    out.picks = c.gone(tool) ? 0 : c.read(tool, 'NumCopies');
+    return ok(out.picking && out.unlocked && out.open && out.picks === 0, out);
   },
   async 'route-airshaft'(c) {
     const shafts = c.byClass('DataLinkTrigger').filter(t => /airshaft/i.test(String(c.read(t, 'datalinkTag'))));

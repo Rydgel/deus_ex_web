@@ -54,12 +54,30 @@ export async function openSession(map, assets) {
     /** A point `distance` units from `target` along the heading `bearing` (radians), at the target's height. */
     approach: (target, distance, bearing = PI) => { const t = c.pos(target); return [t[0] + Math.cos(bearing) * distance, t[1] + Math.sin(bearing) * distance, t[2]]; },
     /** Frob an actor from the first approach (8 bearings, 3 distances) from which the view trace selects it; the fixture refuses a miss. */
-    async frob(target, distances = [48, 70, 36]) {
+    async frob(target, distances = [48, 70, 36]) { return c.approach_(target, distances, options => fixture.frob(target, options)); },
+    /** Use the tool in hand on `target` the way the original does (ParseLeftClick: DoFrob(Self, inHand) for a Lockpick or NanoKeyRing on a DeusExMover and a
+     * Multitool on a HackableDevices): aim until the view trace selects it, then press the left mouse button. `c.frob` is the right button (ParseRightClick:
+     * DoFrob(Self, None)), which never starts a hack or a pick. */
+    async useTool(target, distances = [48, 70, 36], hold = 1) {
+      return c.approach_(target, distances, options => {
+        fixture.aim(target, options);
+        // The placement is a few units off the floor: the player lands (real physics) and is aimed again from where it stands, so the view trace holds the target
+        // for the whole work (Timer of the pick or the hack: `frobTarget != Self` stops it and the tool is spent).
+        frames(45);
+        const aimed = fixture.aim(target, {position: [...game.player.position], maxFrames: 25});
+        // A marginal selection (a trace that grazes the brush) flips between ticks: the approach must hold the target for a while standing still.
+        for (let i = 0; i < 12; i++) { frames(1); if (game.interaction.frobTarget !== target) throw new Error(`View trace did not select ${target.name} (lost after landing, frame ${i})`); }
+        game.inputButton('LeftMouse', true); frames(hold); game.inputButton('LeftMouse', false);
+        return aimed;
+      });
+    },
+    /** Try the approaches (lift x distance x 8 bearings) until `act` gets a view trace that selects the target. */
+    async approach_(target, distances, act, lifts = [0, 28]) {
       let last = null;
       const at = read(target, 'Location');
-      for (const lift of [0, 28]) for (const distance of distances) for (let k = 0; k < 8; k++) {
+      for (const lift of lifts) for (const distance of distances) for (let k = 0; k < 8; k++) {
         const bearing = k * PI / 4;
-        try { return await fixture.frob(target, {position: [at[0] + Math.cos(bearing) * distance, at[1] + Math.sin(bearing) * distance, at[2] + lift], maxFrames: 25}); }
+        try { return await act({position: [at[0] + Math.cos(bearing) * distance, at[1] + Math.sin(bearing) * distance, at[2] + lift], maxFrames: 25}); }
         catch (error) { if (!/View trace did not select/.test(error.message)) throw error; last = error; }
       }
       throw new Undriven(`no approach selects ${target.name} (${String(last.message).slice(0, 90)})`);
@@ -124,6 +142,8 @@ export async function openSession(map, assets) {
     },
     /** A Trigger actor's call on `target` (the turret's Tag has no trigger in the map: a camera or computer sends it in the original). */
     trigger(target) { game.hud.scoped(() => runtime.processEvent(target, 'Trigger', [player(), player()])); },
+    /** The original Player start again inside one scenario (as between scenarios): the map reloaded, so a door, a panel or a flag is back as authored. */
+    restart() { watched.clear(); game.reset(); frames(2); frames(30); runtime.writeNamed(player(), 'bCheatsEnabled', true); },
   };
   const peak = {};
   let used = false;

@@ -91,7 +91,7 @@ report (`--stage4-report`), so presentation proof is not repeated.
 | 5.2.3 | 01_NYC_UNATCOIsland | the player's noise reaches the guards: gunshots (WeaponFire, LoudNoise), the HandleShot/HandleLoudNoise callbacks; footsteps by speed and floor | O1 | `island-hearing` | O1: live trace on Island of the event traffic for a pistol and, with a walking player, for footsteps; footsteps need a held key the harness cannot post (O3 on Play's footstep inputs then) | live-events-compare O1: 1,069 and 1,586 manager calls equal in the Underworld (pistol, assault shotgun) | MISSING |
 | 5.2.4 | 01_NYC_UNATCOIsland cameras | SecurityCamera sees the player: tracking, the alarm event, NSFCam01..03 trigger libertyturret1; UN_CamSystem01..04 (bNoAlarm) do not | O1 | `island-camera` | O1: live trace of the original with the player in a camera's cone and the camera's state, the alarm flag and the turret's state per tick | - | MISSING |
 | 5.2.5 | 01_NYC_UNATCOIsland laser trap | a LaserTrigger beam broken by the player triggers AlarmUnit0 (SetAlarmFlag -> StatueAlarmTriggered) and the guards react | O1 | `island-laser` | O1: live trace of the original with the player placed across statue_lasertrap and the beam, trigger and flag state | - | FAIL |
-| 5.2.6 | 01_NYC_UNATCOIsland laser trap | hacking ControlPanel0 with a multitool switches statue_lasertrap off: hack time (skill, hackStrength), the multitool's use, the lasers' state | O1 | `island-hack-panel` | O1: live trace of the original (Multitool selected, ParseRightClick on the panel) with the hack progress, multitool charge and laser state per tick | - | FAIL |
+| 5.2.6 | 01_NYC_UNATCOIsland laser trap | hacking ControlPanel0 with a multitool switches statue_lasertrap off: hack time (skill, hackStrength), the multitool's use, the lasers' state | O1 | `island-hack-panel` | O1: live trace of the original (Multitool selected, a left-button click on the panel: ParseLeftClick, never the right button) with the hack progress, multitool charge and laser state per tick | - | MISSING |
 | 5.2.7 | 01_NYC_UNATCOIsland | a pawn reacts to a body: a killed or knocked-out Terrorist is seen (CheckCarcassPresence, HaveSeenCarcass, AddCarcass) and the finder investigates or flees | O1 | `island-carcass` | O1: live trace of the original with a carcass in a patrol's view | validate-pawn-carcass (natives 2108/2109, O2) | FAIL |
 
 ### 5.3 Exploration and the character systems
@@ -106,7 +106,7 @@ report (`--stage4-report`), so presentation proof is not repeated.
 | 5.3.6 | 00_Training crate stack | pick up a metal crate, drop it, stack and climb: GrabDecoration, DropDecoration, Bump, physFalling and physRolling of the crate, the climb | O3 | `crate-stack` | O3: the decoration's falling and rolling and the player's stepping on Play's inputs | validate-plant-push, validate-decoration-settle-roll (O2) | MISSING |
 | 5.3.7 | 00_Training swim | enter the contaminated water with and without the HazMat suit: WaterZone0 and DamageTrigger1 radiation, the suit's duration and armor, swimming and leaving by the ramp | O1 | `hazmat-swim` | O1: live trace of the original (HazMatSuit activated by ActivateBelt, the player placed in the water, Health and the suit's charge per tick) | validate-native-swimming 1093 cases (O2); alterations census hit-radiation, hit-drowned (P) | MISSING |
 | 5.3.8 | 01_NYC_UNATCOIsland water | swim from the dock, dive to the ruins: breath (swimTimer, UnderWaterTime), drowning damage, surfacing | O1 | `island-swim` | O1: live trace of the original with the player placed under water until breath runs out | validate-native-swimming (O2); validate-island-swimming (the fish, P) | MISSING |
-| 5.3.9 | 01_NYC_UNATCOIsland terminals | ComputerPersonal0 login with a user list, email; ATM0; ComputerSecurity camera views and door/turret choices | O1 | `island-terminal` | O1: frames of the original's login and screens plus the computer state after choices | security terminal screens O1 (4.4.13); Terminals in Play (P) | FAIL |
+| 5.3.9 | 01_NYC_UNATCOIsland terminals | ComputerPersonal0 login with a user list, email; ATM0; ComputerSecurity camera views and door/turret choices | O1 | `island-terminal` | O1: frames of the original's login and screens plus the computer state after choices | security terminal screens O1 (4.4.13); Terminals in Play (P) | MISSING |
 | 5.3.10 | 01_NYC_UNATCOIsland doors | keyed, locked, breakable and keypad doors: the satcomhatch with the UNhatchdoor NanoKey, commvan_door keypad 0451, breakable and lockpicked movers, StatueRuinDoors | O1 | `island-doors` | O1: live trace of the original at each door (key use, pick, damage) with mover and lock state per tick | validate-island-cell-door, validate-island-blowitup (mover bodies, O2); validate-native-mover-move, -interpolation, -scene (O2) | MISSING |
 | 5.3.11 | 01_NYC_UNATCOIsland inventory | pick up and use items (MedKit, food, ammo, mods, Lockpick, Multitool), skill points (SkillAwardTrigger) and the skills screen, the AugmentationCannister and installing an augmentation, goals and notes | O1 | `island-items` | O1: live trace of the original (ParseRightClick pickups, ActivateBelt, console) with inventory, health, skill and goal state | alterations census: 19 scenarios play (P); persona screens O1 (4.4.11, 4.4.12) | MISSING |
 | 5.3.12 | 01_NYC_UNATCOIsland | move objects and fall: carry or push barrels and crates, throw them (kinetic damage), fall damage from a height | O1 | `island-movables-fall` | O1: live trace of the original with a thrown or pushed decoration and a measured fall | validate-plant-push (O2); landing/falling oracles (O2) | MISSING |
@@ -129,8 +129,8 @@ report (`--stage4-report`), so presentation proof is not repeated.
 
 | Id | Scene | Scenario | Ev. | Census | Proof that would pass it | Existing, partial | Status |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| 5.5.1 | 01_NYC_UNATCOIsland front entrance | with the key from Filben the front doors (StatueRuinDoors) open; without it they stay locked, the player can pick (ls 0.1) or break them | O1 | `route-front` | O1: live trace of the original at the doors with and without the key, with the lockpick and with damage | - | FAIL |
-| 5.5.2 | 01_NYC_UNATCOIsland back entrance | the back way in (DL_BackEntrance, DeusExMover2): lockpick, multitool or break it; the guards at the lower deck | O1 | `route-back` | O1: live trace of the original at DeusExMover2 and the patrol | - | FAIL |
+| 5.5.1 | 01_NYC_UNATCOIsland front entrance | with the key from Filben (its first choice) the front doors (StatueRuinDoors, four movers) unlock and open; without it they stay locked and the player can pick them (lockStrength 0.1); they cannot be broken (bBreakable false) | O1 | `route-front` | O1: live trace of the original at the doors with and without the key and with the lockpick (key ring or Lockpick in hand, left-button click, then the right button to open) | - | MISSING |
+| 5.5.2 | 01_NYC_UNATCOIsland back entrance | the back way in (DL_BackEntrance, DeusExMover2: lockStrength 0.1, doorStrength 0.5, no key): lockpick it or break it; no hackable device guards it; the guards at the lower deck | O1 | `route-back` | O1: live trace of the original at DeusExMover2 (Lockpick in hand, left-button click, then the right button to open; the break by damage) and the patrol | - | MISSING |
 | 5.5.3 | 01_NYC_UNATCOIsland airshafts | the airshaft route around the laser trap to Gunther's cell (DL_libertyruinsairshaft x3): crouch through the shafts, the NPCs and alarms bypassed | O1 | `route-airshaft` | O1: the same state comparisons with the player placed in the shaft | - | MISSING |
 | 5.5.4 | 01_NYC_UNATCOIsland water route | the east side by water: swim to the ruins, the electric arcs (ElectricityEmitter x3, LibElectric, EMP damage drains energy), ControlPanel1 and the fork lift | O1 | `route-water` | O1: live trace of the original from the water to the arcs, the panel and the lift | - | MISSING |
 | 5.5.5 | 01_NYC_UNATCOIsland | kill the commander: TerroristCommander_Dead -> DL_LeaderKilled (InSpite after NotKilled) -> StatueMissionComplete | O1 | `objective-kill` | O1: live trace of the original from the commander's death through Mission01.Timer | - | FAIL |
@@ -172,7 +172,12 @@ How the scenarios are driven (and what that means for reading the table):
 * **Items** come from `summon` (the console cheat the original supports, as the alterations census does) and the map's own pickups; **the player is placed** at the approach (fixture write),
   checked to stand on dry ground in the world: a placement outside it makes physFalling dispatch `FellOutOfWorld` and the player dies (`OPEN DXONLY` is the first thing a death reaches, below).
 * **Stasis devices need the renderer's feedback.** A headless frame draws no meshes, so a keypad, panel or door never gets a fresh `LastRenderTime` and its Timer never runs; the driver stamps the
-  device the player works on, as the Stage 3 route does ([route](script-training-route.md)).
+  device the player works on, as the Stage 3 route does ([route](script-training-route.md)). A state machine such as a `Computers` terminal also needs the seconds a player spends walking up to it
+  (its level-start animation, `Frob` refuses while `bAnimating`), so the driver stamps it for 3 s before the frob.
+* **Tools are used with the left button.** `c.useTool` (a Lockpick or NanoKeyRing on a mover, a Multitool on a hackable device) is `ParseLeftClick`; `c.frob` is the right button (`ParseRightClick`,
+  `DoFrob(Self, None)`: pickups, doors that are unlocked, terminals). `useTool` aims until the view trace selects the target, lets the player land (the placement is a few units off the floor) and
+  requires the selection to hold for 12 frames standing still before it presses: the pick and hack Timers stop, and spend the tool, as soon as `frobTarget != Self`. `c.restart()` is the original
+  Player start inside a scenario (`route-front` and `meet-filben` run two branches).
 * **Delegated scenarios** run an existing Play validator unchanged (`validate-crowbar-crate`, `-training-ladder`, `-instructor-conversation`, `-island-conversation`, `-island-bark`) and
   `phase1-route` runs the Stage 3 route probe: they play because those validators pass.
 * **Weak spots of the drivers** (so a `plays` is not read as more than it is): `island-hearing` cannot separate sight from hearing in the open; `island-sight` and the combat scenarios use one
@@ -208,20 +213,20 @@ How the scenarios are driven (and what that means for reading the table):
 | `island-hearing` | 5.2.3 | 01_NYC_UNATCOIsland | plays | {before:standing,quietBeforeShots:true,state:dying,enemy:true,playerDied:false,note:sight and hearing cannot be told apart in the open} |
 | `island-camera` | 5.2.4 | 01_NYC_UNATCOIsland | plays | {seen:[[200,true,true],[350,true,true],[500,true,true]],alarm:true,state:active} |
 | `island-laser` | 5.2.5 | 01_NYC_UNATCOIsland | no-effect | the beam fires (lastAlarmTime 0.57) but StatueAlarmTriggered is never set: the chain stops at AlarmUnit0, as in `alarm-chain` |
-| `island-hack-panel` | 5.2.6 | 01_NYC_UNATCOIsland | no-effect | the effect did not happen |
+| `island-hack-panel` | 5.2.6 | 01_NYC_UNATCOIsland | plays | {started:true,frames:239,hackStrength:0,lasersOn:[[true,true,true,true,true],[false,false,false,false,false]],multitool:[1,0],playerDied:false} |
 | `island-carcass` | 5.2.7 | 01_NYC_UNATCOIsland | pause | CriticalDelete deleting destructor is not recovered for native vtable 0x10027fe8 |
 | `island-swim` | 5.3.8 | 01_NYC_UNATCOIsland | plays | {physics:3,swimTimer:[19.533340454101562,5.533483505249023],health:[100,100],drowned:false} |
-| `island-terminal` | 5.3.9 | 01_NYC_UNATCOIsland | no-effect | the effect did not happen |
+| `island-terminal` | 5.3.9 | 01_NYC_UNATCOIsland | plays | {ComputerPersonal0:true,ComputerPersonal0.window:networkterminalpersonal,ATM0:true,ComputerSecurity1:true,ComputerSecurity1.window:networkterminalsecu |
 | `island-doors` | 5.3.10 | 01_NYC_UNATCOIsland | plays | {keyTaken:false,keypadDoor:true} |
 | `island-items` | 5.3.11 | 01_NYC_UNATCOIsland | plays | {hurt:80,healed:87,points:[5000,5025]} |
 | `island-movables-fall` | 5.3.12 | 01_NYC_UNATCOIsland | plays | {carried:true,item:Trashbag0,fall:8,h0:100,h:92} |
 | `meet-paul` | 5.4.3 | 01_NYC_UNATCOIsland | plays | {delegate:validate-island-conversation.mjs,peakMiB:55,last:{\ok\:true,\start\:1420,\choice\:4268,\camera\:\ConCamera0\,\letterboxFrames\:2849,\paulSpe |
-| `meet-filben` | 5.4.4 | 01_NYC_UNATCOIsland | plays | {met:true,gaveKey:false,nanokeys:0} |
+| `meet-filben` | 5.4.4 | 01_NYC_UNATCOIsland | plays | {trust:{met:true,ended:true,gaveKey:true,keys:[ruin_key],seconds:5.5},refuse:{met:true,ended:true,gaveKey:false,keys:[],seconds:7}} |
 | `gunther-rescued` | 5.4.5 | 01_NYC_UNATCOIsland | undriven | the cell door DeusExMover10 is reached by no frob approach tried (8 bearings, 3 distances, 2 heights around its Location); the walk to it is not driven |
 | `meet-terrorist` | 5.4.6 | 01_NYC_UNATCOIsland | plays | {played:false,complete:true,attacked:true,commander:conversation,at:[2887,38,2528]} |
 | `overheard-barks` | 5.4.7 | 01_NYC_UNATCOIsland | plays | {delegate:validate-island-bark.mjs,peakMiB:1294,last:island-bark: Terrorist30's bark deusexconaudioaibarks.conaudioaibarks_896 on Galaxy channel 57306 |
-| `route-front` | 5.5.1 | 01_NYC_UNATCOIsland | no-effect | the player was killed at the door (OPEN DXONLY) before the pick finished |
-| `route-back` | 5.5.2 | 01_NYC_UNATCOIsland | no-effect | the effect did not happen |
+| `route-front` | 5.5.1 | 01_NYC_UNATCOIsland | plays | {authored:{breakable:[false,false,false,false],lockStrength:0.10000000149011612},bareRightClick:[locked,locked,locked,locked],picking:true,pickFrames: |
+| `route-back` | 5.5.2 | 01_NYC_UNATCOIsland | plays | {lockStrength:0.10000000149011612,bareRightClick:{locked:true,open:false},picking:true,pickFrames:245,unlocked:true,open:true,died:false,picks:0} |
 | `route-airshaft` | 5.5.3 | 01_NYC_UNATCOIsland | plays | {played:true} |
 | `route-water` | 5.5.4 | 01_NYC_UNATCOIsland | plays | {energy:[100,98],health:[100,95],died:false} |
 | `objective-kill` | 5.5.5 | 01_NYC_UNATCOIsland | no-effect | the effect did not happen |
@@ -240,9 +245,16 @@ How the scenarios are driven (and what that means for reading the table):
    (5.1.5, 5.2.7, 5.5.5, the aggression count of `Mission01`) passes through it.
 2. **The player's death ends at `OPEN DXONLY`** (`UGameEngine::Exec OPEN is not implemented`): `island-death` reaches the Dying state and a killed player (`route-front`: shot by the guards at the statue doors)
    stops there. That is the reload after death, Stage 6's neighbour; the question is where Play should stop.
-3. **Lockpicking and hacking on Island devices never complete** (`island-hack-panel`, `route-back`; `route-front` was killed first): 30 to 40 s of Level time with the device stamped as rendered, the pick or
-   multitool unchanged, the door still locked and `ControlPanel0`'s lasers on. The Training route's `gundoor` pick and `Keypad2` hack run. Not diagnosed: the target selection, the tool in hand, the
-   skill and a Timer that never runs are the candidates.
+3. **Lockpicking and hacking on Island devices never completed: the driver gave the wrong input, not Play** (`island-hack-panel`, `route-back`, `route-front`; fixed 2026-10-17).
+   The driver used the right button (`game.use()` = `ParseRightClick`), which frobs the target with nothing in hand (`DoFrob(Self, None)`, `DeusExPlayer.uc` `ParseRightClick`): `HackableDevices.Frob`
+   and `DeusExMover.Frob` start a hack or a pick only when handed the Multitool or Lockpick, and a Multitool or Lockpick reaches them from the LEFT button (`ParseLeftClick`:
+   `DoFrob(Self, inHand)` for a Lockpick or NanoKeyRing on a `DeusExMover` and a Multitool on a `HackableDevices`; the Training route fires with `LeftMouse`). The old runs stood 30 to 40 s in front of
+   the device with nothing started (and at the statue doors the guards shot the player meanwhile). With `c.useTool` (aim until the view trace selects the target, let the player land, hold the
+   selection standing still, press the left button) the original bodies run: `ControlPanel0` hacks in 239 frames (`hackStrength` 0.1, `HackTime` 4, 10 hacks at skill value 0.1), its `UnTriggerEvent`
+   switches all five `statue_lasertrap` lasers off and the Multitool is spent; `DeusExMover2` picks in 245 frames (`lockStrength` 0.1, `pickTime` 4), the Lockpick is spent, the right button opens
+   it. A pick or hack aborted by looking away (`frobTarget != Self`, the Timer's own test) also spends the tool: that was the first symptom of an approach that did not hold the target.
+   One real Play gap showed on the way: with the statue doors opening under fire, a `Tracer` (zero extent) inside a moving mover's bounds stopped Play at "Owned zero-extent PointCheck is not yet
+   verified"; recovered from Engine.dll and compared with the original on 32,064 points ([point-check](point-check.md#owned-zero-extent-descent-2026-10-17)).
 4. **A thrown LAM spawns nothing** (`lam-wall`): the weapon goes Active to Idle on Fire and no `LAM` projectile appears; the EMP grenade at `SecurityBot0` does spawn an `EMPGrenade` and changes nothing
    (`emp-electronics`). `AlarmUnit1.Trigger` leaves `bActive` false (`alarm-chain`); on Island the laser beam fires but `StatueAlarmTriggered` is never set (`island-laser`), the same unit. Six pistol shots at the 00_TrainingCombat range register on no target (`pistol-range`).
 5. **Radiation costs the player once** (`hazmat-swim`): `WaterZone0` (`DamagePerSec` 20, Radiation, `bPainZone`) took 10 health on entry and no more over 20 s; with the HazMat suit active the entry took 8. A
@@ -250,7 +262,14 @@ How the scenarios are driven (and what that means for reading the table):
 6. **NPC reaction to being hurt is not stable** (`island-shoot-npc`): 20 pistol shots took `Terrorist0` from 75 to 17 and left it `Standing` with no Enemy in the final driver, while the first variant of the
    driver (a different stance) saw it flee with the player as Enemy. `island-sight` (700 units, open ground) saw no reaction in 10 s while at 350 units the Terrorist engages and the player is shot to 0
    (`island-npc-shoots-player`, with Tracers in flight). No original trace exists for any of this.
-7. **Terminals**: `ATM0` opens its window through the frob path, `ComputerPersonal0` and `ComputerSecurity1` open none (`island-terminal`).
+7. **Terminals** (`island-terminal`; fixed 2026-10-17, a driver limit): `ATM0` is a decoration and opens its window on the frob; `ComputerPersonal0` and `ComputerSecurity1` are `Computers` state machines
+   (`Computers.uc`, `auto state Off`). `bOn` is true in the class defaults and the map, so the level start runs `Off.Begin`: `PlayAnim('Deactivate')`, `FinishAnim()`, `bOn=false`; `Frob` returns without opening while `bAnimating`, and
+   `On.Begin` (Activate animation, `TryInvoke` -> `Invoke` -> `InvokeComputerScreen`) is skipped when `bOn` is already true. A computer nobody has drawn sits in stasis (`bStasis`, `LastRenderTime -10`), so
+   its animation never ran in the headless census and the frob (made at once) found it animating. Stamped as the renderer's feedback would and given the 3 s a player spends walking up, `ComputerPersonal0`
+   opens `NetworkTerminalPersonal` and `ComputerSecurity1` `NetworkTerminalSecurity` through the frob path, as `ATM0` does. This is the same state machine as in the original; the login, user list and screens
+   are Stage 4's (4.4.13) and the Terminals-in-Play work, not driven here. A second Play gap showed with the player standing at the personal terminal beside `UNATCOTroop6` (26 units away, inside both cylinders): that pawn's own `SetLocation` call
+   (its state code, from `Actor.Tick`) met the player and `CheckEncroachment` dispatched `Pawn.EncroachingOn`, a value-returning event the pawn-physics dispatch called without a result block
+   ("Return-value ProcessEvent requires a caller result reference"); it now gets the block as `dispatchSpawnedEvent` gives it (why the call came some seconds after the window closed was not traced).
 8. **`M00MeetPage` does not play** (`meet-page-final`) when the player walks into `ConversationTrigger1`; `MeetTerrorist` does (the Aggressive branch with the first choice: `StatueMissionComplete` and
    `PlayerAttackedStatueTerrorist` set, `MeetTerrorist_Played` not), and `mission-complete` then plays Mission01.Timer's world edit (Terrorists dead, `UN_maindoor` unlocked, Paul moved). Shooting the commander
    from his room (`objective-kill`) did not hurt him.
@@ -279,6 +298,28 @@ rows cannot be started. This is the honest first number: Stage 4's gate started 
 existing evidence is listed per row under "Existing, partial" (the Underworld's weapon-noise traces for gunshots, the perception pilot, the first-person crowbar, MeetPaul's frames, the native oracles for
 swimming, ladders, falling and movers).
 
+### After the Island devices (gap 3, lockpick, hack, front/back doors, terminals; 2026-10-17)
+
+Census rerun on the Linux host (Island 468 s, the three Training maps 863 s, both equal to the stored outcomes): **37 plays, 1 pause, 9 no-effect, 3 undriven** (was 33, 1, 13, 3). `island-hack-panel`, `route-back`,
+`route-front` and `island-terminal` play (the first three were driver limits, the terminals a driver limit plus a Play gap, see findings 3 and 7); `meet-filben` now drives both branches of its Choice.
+Scoreboard of that census (`validate-stage5-acceptance.mjs --census ... --report`): **0 of 50 pass, FAIL 10, MISSING 37, UNDRIVEN 3** (5.2.6, 5.3.9, 5.5.1 and 5.5.2 moved from FAIL to MISSING: they play and need
+their O1 captures). The tables of the rows above are regenerated from that report.
+
+| Clause | PASS | FAIL | MISSING | UNDRIVEN | EXCLUDED |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| 5.1 Combat | 0 | 3 | 6 | 0 | 0 |
+| 5.2 Stealth | 0 | 3 | 4 | 0 | 0 |
+| 5.3 Exploration and the character systems | 0 | 0 | 13 | 0 | 0 |
+| 5.4 Conversation | 0 | 1 | 6 | 1 | 0 |
+| 5.5 Alternate-route objectives | 0 | 1 | 6 | 0 | 0 |
+| 5.6 Systems interacting | 0 | 2 | 2 | 2 | 0 |
+| 5.7 Excluded | 0 | 0 | 0 | 0 | 5 |
+| **Total** | **0** | **10** | **37** | **3** | **5** |
+
+What backs the four newly playing rows is the recovered script source (`DeusExPlayer.ParseLeftClick`/`ParseRightClick`, `HackableDevices`, `DeusExMover`, `Computers`, `ConPlayBase.SetupEventTransferObject`) running as
+bytecode in Play, plus the native oracle for the one native step Play was missing (the owned zero-extent PointCheck, 32,064 original cases). No row has an original trace of the pick, hack or key sequence yet
+(the harness can type `@down Enter`/`@up Enter`, which are the `LeftMouse`/Enter binding `ParseLeftClick|Fire`, but placing the player in a ticking level without `set Location` is the open question).
+
 ## Remaining Stage 5 work, in the order it blocks
 
 Nothing below was fixed in this task. Each item is sized for one agent; "unblocks" names the rows.
@@ -286,8 +327,9 @@ Nothing below was fixed in this task. Each item is sized for one agent; "unblock
 1. **Finish a pawn's death** (finding 1): `CriticalDelete` of a `ConHistory` (vtable `0x10027fe8`) in `script-runtime.mjs:943`; the body is recovered for the LoadMap collection. Small, and everything that kills
    a pawn waits on it. Unblocks 5.1.5, 5.2.7, 5.5.5 and every row that ends with a body.
 2. **Decide and implement where a player's death stops** (finding 2): `OPEN DXONLY`, the Dying state's chain up to the reload. Needs the user's call (below). Unblocks the end of 5.1.6, 5.1.8, 5.5.1.
-3. **Island devices that never finish** (findings 3, 4, 7): lockpick and hack outside Training, the LAM throw, the AlarmUnit trigger, the personal and security terminals. One agent diagnosing each against the
-   original body (`DeusExMover.Timer`, `HackableDevices`, `ThrownProjectile`, `AlarmUnit.Trigger`, `Computers.Frob`). Unblocks 5.1.4, 5.2.6, 5.3.9, 5.5.1, 5.5.2, 5.6.2.
+3. **Island devices that never finish** (findings 3, 4, 7): lockpick and hack outside Training and the personal and security terminals are done (2026-10-17: the driver gave the wrong input, plus the two Play gaps of
+   findings 3 and 7); the LAM throw and the AlarmUnit trigger (finding 4) remain, one agent diagnosing each against the original body (`ThrownProjectile`, `AlarmUnit.Trigger`). Unblocks 5.1.4, 5.6.2 (5.2.6,
+   5.3.9, 5.5.1 and 5.5.2 now play and wait for their O1 captures).
 4. **NPC combat against the player, compared with the original** (finding 6): the first capture nobody has taken. `live-acceptance.mjs original --no-ghost` on Island with a visible player at 350 and 700 units
    from `Terrorist0`, the pistol drawn and fired by key edges, 600 ticks; replay in Play; fix the first divergence. The Stage 4 notes say a summoned MJ12Troop beside the player did not attack in Play and no
    original run exists. Unblocks 5.1.5, 5.1.6, 5.2.2, 5.2.3, 5.6.1 (and the O1 for 5.1.7, 5.1.8).
