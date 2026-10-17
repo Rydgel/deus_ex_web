@@ -48,3 +48,31 @@ export const EASTER = Object.freeze({
     ]),
   }),
 });
+
+/** Spoken voices (docs/easter-egg.md "Voices"): synthesised once by scripts/easter-voices.mjs with Piper from these rhasspy/piper-voices
+ * models (both datasets are public domain, LibriVox recordings; the repository is MIT) and committed as MP3 clips under
+ * src/viewer/easter-audio/. The models themselves are never committed. Nothing here is original game data. */
+export const EASTER_VOICES = Object.freeze({
+  revision: 'c10ece1aade47bb51c153c893d14e5bf8e5b7117',
+  speakers: Object.freeze({
+    // Claudia: US English female, one speaker, trained from scratch on about 11.5 h of LibriVox.
+    claudia: Object.freeze({ voice: 'en_US-kristin-medium', path: 'en/en_US/kristin/medium', license: 'public domain (LibriVox)',
+      onnxSha256: '5849957f929cbf720c258f8458692d6103fff2f0e3d3b19c8259474bb06a18d4', jsonSha256: '5681426d4aead22195de70531eeeeddb46493cfaffc5764b2ea3db73428b651c' }),
+    // Rydgel: US English male, one speaker, trained from scratch on about 15.5 h of LibriVox.
+    rydgel: Object.freeze({ voice: 'en_US-norman-medium', path: 'en/en_US/norman/medium', license: 'public domain (LibriVox)',
+      onnxSha256: 'b9739443232a80a59c7d18810dd856899bf16a7964725f5ab81ea49b1351cb71', jsonSha256: '6c2db7f558a4a8deb9fe822583c1c5105f6c4e834dd0f9de8ad17a888ee9fe1d' }),
+  }),
+});
+
+/** Every spoken line: `frob-<who>-<i>` is `who`'s i-th frob line (said by `who`), `reply-<who>-<i>` the answer to it (said by the other).
+ * The id names the clip file (easter-audio/<id>.mp3) and, as `easter.<id>`, the speech sound the mod plays. */
+export function easterClips() {
+  const other = who => (who === 'claudia' ? 'rydgel' : 'claudia');
+  const clips = [];
+  for (const who of ['claudia', 'rydgel'])
+    EASTER.pairs[who].forEach(([line, reply], i) => {
+      clips.push({ id: `frob-${who}-${i}`, kind: 'frob', frobbed: who, index: i, speaker: who, text: line });
+      clips.push({ id: `reply-${who}-${i}`, kind: 'reply', frobbed: who, index: i, speaker: other(who), text: reply });
+    });
+  return clips;
+}

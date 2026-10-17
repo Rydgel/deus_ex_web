@@ -89,6 +89,45 @@ turn (the first on the first frob):
 | Rydgel | Bar's open. Mind the crate. | Claudia: The crate is load-bearing. |
 | Rydgel | We built this place. Mostly she built it. | Claudia: He held the ladder. It counts. |
 
+## Voices
+
+Every frob line and every reply is also spoken: 12 clips (`src/viewer/easter-audio/<id>.mp3`, ids `frob-<who>-<i>` and
+`reply-<who>-<i>`, listed by `easterClips()` in `easter-config.mjs`), synthesised locally with Piper
+(https://github.com/rhasspy/piper, the `piper-tts` PyPI package, 1.8.0 with onnxruntime 1.31.0 in a git-ignored virtualenv) and committed as
+our own assets. The browser's speech API is not used.
+
+| Speaker | Voice (rhasspy/piper-voices at revision `c10ece1a…`) | Training data and licence (its MODEL_CARD) | Size |
+|---|---|---|---|
+| Claudia | `en_US-kristin-medium`, 22.05 kHz, one speaker, median pitch of her clips about 163 Hz | LibriVox recordings, about 11.5 h, trained from scratch; **public domain** | 63.5 MB |
+| Rydgel | `en_US-norman-medium`, 22.05 kHz, one speaker, median pitch about 100 Hz | LibriVox recordings, about 15.5 h, trained from scratch; **public domain** | 63.5 MB |
+
+Both were picked for their licences: the model cards of 22 English voices were read, and these two have a public domain dataset and no
+restricted base model (the LibriVox set by Bryce Beattie: `kristin`, `norman`, `john` (a finetune of Kristin), `bryce`, `cori`), so the
+generated audio can be committed and redistributed freely. Passed over: `ryan` and `hfc_female`/`hfc_male` (CC BY-NC-SA 4.0), `lessac`
+(Blizzard 2013 licence) and its finetunes `joe`, `amy`, `sam` and `kathleen` (a finetune of `ryan`), whatever the finetune data's own licence,
+`amy`/`jenny_dioco`/`kusal`/`alan` (card says "See URL"), and the CC BY and CC BY-SA ones (`alba`, `libritts_r`, `southern_english_female`,
+`northern_english_male`), which would need attribution or share-alike. The `piper-voices` repository is MIT; `piper-tts` itself is GPL-3.0,
+which covers the program and not the audio it writes. Whether Kristin sounds "young" is not something the model card says; she is the clearest-licensed
+female US voice (a measured median of 163 Hz is mid-range female). The model files (`en_US-<voice>.onnx` and `.onnx.json`, with their sha256 in
+`EASTER_VOICES`) stay in `.cache/piper-voices` and are never committed.
+
+Clips: mono, 44.1 kHz, **MPEG-1 Layer III at 48 kbps CBR with no tags or Xing frame**, so a file starts `FF FB 30 C4` like the game's own speech
+(`DeusExConAudio*.u` frames, docs/lip-sync.md) and goes through the same transport; leading silence cut to 20 ms and trailing to 60 ms;
+0.7 to 3.2 s each, 144,192 bytes in all (4.4 to 19.0 kB each). The level is matched to the game's speech, measured on 65 clips from
+`DeusExConAudioMission01`..`04` and `AIBarks` (ffmpeg's decode, RMS over the voiced part): median **-13.4 dBFS** (p10 -16.6, p90 -11.2), sample
+peaks 0.0 to +1.2 dBFS (the game's speech is mastered hot and its MP3s overshoot). The clips are at **-13.6 to -14.1 dBFS RMS** with peaks
+-2.0 to 0.0 dBFS (a limiter at -2 dB before the encoder, tightened until the decoded MP3 stays under -0.3 where it can).
+
+```
+node scripts/easter-voices.mjs --download     # fetches the two models into .cache/piper-voices, sha256-checked (127 MB)
+node scripts/easter-voices.mjs [--only ID]    # regenerates the clips and manifest.json from easter-config.mjs
+node scripts/easter-voices.mjs --check        # measures the committed clips against manifest.json and the level target
+```
+
+The piper binary is `$EASTER_PIPER` or `.cache/piper-env/bin/piper`. Piper's decoder draws random noise, so a regeneration speaks the same words in
+the same voice but is not byte-identical (durations move by a few tenths of a second); the committed clips and `manifest.json` (voice,
+licence, sha256, duration, level per clip) are the artifact.
+
 ## Verification
 
 ```
