@@ -173,6 +173,60 @@ Diagnostics, still open:
 - A class 2 light in a static list is skipped, with a note; none has been
   seen.
 
+## Mover surfaces in SetupForSurf (2026-10-17)
+
+Read from Render.dll's listing while chasing the Ship locker doors
+([visual acceptance](visual-acceptance.md#on-the-mac-and-windows-with-a-mirror-sky-or-fog-2026-10-17-rows-4228-and-4229)).
+
+**The facet.** DrawFrame fills the facet's MapCoords from the surface as
+stored (`0x10b1a977..0x10b1aa38`): origin `Points[Surf.pBase]` (FBspSurf
++0x8), X `Vectors[vTextureU]` (+0x10), Y `Vectors[vTextureV]` (+0x14), Z
+`Vectors[vNormal]` (+0xc). There is no pan and no mover branch. For a
+brush-tracker surface those are the tracker's world-space values. It calls
+the light manager's SetupForSurf (`0x10b1aa99`) before turning the facet into
+view space.
+
+**The light map.** SetupForSurf (`0x10b06c90`) proceeds as follows:
+
+- **Model.** It asks the level's brush tracker (Level +0xfc, vtable +0xc)
+  whether the surface is dynamic. For one that is, it takes `Surf.Actor`
+  (+0x24) and that actor's Brush (+0x178) as the model, and otherwise the
+  level's (`0x10b06e29..0x10b06e66`).
+- **Index.** The light-map index is the level surface's iLightMap, which
+  the tracker set to the polygon's iBrushPoly. It indexes that model's
+  LightMap array (stride 40).
+- **Light-map record.** The light map's FTextureInfo (`0x10b49e20`) takes
+  the index's Pan, UScale, VScale, UClamp and VClamp unchanged
+  (`0x10b07c96..0x10b07ce2`).
+- **Grid.** ComputeFromActor (`0x10b05fa0`) builds the grid once per surface
+  (the flag at `0x10b3cad0`). It runs `FCoords::Inverse` on the facet
+  (`0x10b06175`) and takes the inverse's columns X″ and Y″. Then:
+  base = Origin + Pan.X·X″ + Pan.Y·Y″ (`0x10b38a90`), U step = UScale·X″
+  (`0x10b49e10`), V step = VScale·Y″ (`0x10b3d378`).
+- **Play.** `lightmapBasis` is the same formula. Play builds it on the
+  brush's own polygon basis and moves it by the brush's matrix, which a
+  rigid transform makes equal.
+- **Static lights** (`0x10b070a5`). They come from the model's Lights list
+  starting at the index's iLightActors, with the shadow mask
+  `Model.LightBits + DataOffset` advanced by `ceil(UClamp/8)·VClamp` per
+  entry. This is Play's path.
+- **`bDynamicLightMover`** (Mover +0x38c bit 0x10; by the SDK's AMover
+  layout, KeyNum at +0x377 places the bitfield at +0x38c). For a dynamic
+  surface whose actor sets it and has a leaf (Region.iLeaf +0xcc ≠ −1), the
+  lights instead come from the **level's** leaf
+  (`Leaves[iLeaf].iPermeating` into `Model.Lights`, `0x10b06f0b..0x10b06fd8`).
+  - A light passes only if it is in front of the facet:
+    `(L − Origin)·Z` against the constant at `0x10b2a5f0`.
+  - Its `+0x1ec` bit 0 must equal the actor's.
+  - It goes to AddLight with no shadow mask.
+  - The leaf's dynamic lights follow the same way (`0x10b06fd8..`).
+
+  93 of the 2,075 movers on the single-player maps set it, among them
+  Training Combat's BreakableGlass0..3, Island's DeusExMover1 and Battery
+  Park's DeusExMover0, 8, 39 and 40.
+  **Play does not model this branch**: it lights every mover from its brush's
+  light maps.
+
 ## Singular light-map bases
 
 SetupForSurf inverts the facet's FCoords (Core `FCoords::Inverse`, call at
