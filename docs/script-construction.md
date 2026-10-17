@@ -243,10 +243,22 @@ target map frozen. In all three captures the launch load initialized no NPCs, wh
 | Underworld `sndm5` (557 traced `AddObject`s) | `WeaponStealthPistol0`, `AmmoPepper0`, `Credits0, 2, 4..8, 10, 11`, `WeaponAssaultGun3` | new classes start at 0; the map holds Credits1, 3, 9, 12, 17; Training took rifles 0..2 |
 
 After the fix, Play's replays name what their own session spawned by the same rule. The lab replay's summoned trooper is `MJ12Troop3`. Its stream
-draws are now equal on every tick (before the fix they were shifted by one tick at six pairs, through the duplicate name). The Underworld replay
-names 145 of the 557 takes like the original. What differs is the session's history (the 24 actors of classes Training spawned first), the AI event
-manager's objects (355 `AIEventType`/`AISenderEvent`/`AIReceiverEvent` that Play's Rust manager does not materialize), the window system's objects
-(Play's window host numbered every window class from one shared counter) and a flag object (Play names a `FlagBool` by its flag). Rows 4.3.6 (103 of 103 calls, 557 of 557 registry takes) and 4.1.10 pass unchanged.
+draws are now equal on every tick (before the fix they were shifted by one tick at six pairs, through the duplicate name).
+
+**Windows and GCs, per class.** The window host numbered every window class and the GC from one shared counter (`TileWindow450` where the
+original has `TileWindow18`). It now takes each class's own counter, the `Class+0x488` that the class's other objects share (`script-window-host.mjs`
+`nextName`). No loaded object holds a window's generated name, so the counter's next value is the name.
+
+**The session's counters, a measured input of a live replay.** A capture's counters carry its whole session, including the maps the game loaded
+before the traced one. When the tracer records `AddObject` (`call 0x10157830 addobj 1 always retname`, the 4.3.6 recipe), `live-acceptance.mjs play`
+reads each class's first traced name. It hands that name's number to the replay (`liveProbe` `classCounters`, `ScriptRuntime.applyClassCounterSeed`),
+and the class's next generated name starts there (`--own-names` keeps Play's own). On the Underworld capture `sndm5`, the original's 557 takes are
+taken in the same slots, and every object Play names now has the original's name: 193 of 193 (55 classes seeded), actors, windows and GCs alike.
+What stays unnamed in Play is 364 takes: the AI event manager's 362 objects (`AIEventType`, `AISenderEvent`, `AIReceiverEvent`, which Play's Rust
+manager counts in the slot model but does not materialize), a `LinkerLoad`, and a `FlagBool` that Play names by its flag. Row 4.3.6 passes unchanged
+(103 of 103 calls, 557 of 557 registry takes). The `fpw` and `npm` captures did not record `AddObject`, so their earlier sessions' counters are not
+replayed: Play names the summoned crowbar `WeaponCrowbar0` and the trooper's rifle by its own session. Captures meant to replay spawned names should
+include the `addobj` call line.
 
 ## Explicitly unresolved branches
 

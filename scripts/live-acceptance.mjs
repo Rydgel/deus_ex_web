@@ -902,7 +902,24 @@ async function play() {
     const pawnWrites = flag('no-pawn-load') ? {} : Object.fromEntries(pawns.filter(name => lastFrozen[name] && renderHistoryFields().every(label => lastFrozen[name][label] !== undefined))
       .map(name => [name, Object.fromEntries(renderHistoryFields().map(label => [FIELDS.find(f => f[0] === label)[1], lastFrozen[name][label]]))]));
     const timerWrites = flag('no-timer-load') ? {} : Object.fromEntries(timers.filter(name => lastFrozen[name]?.TRate !== undefined).map(name => [name, {TimerRate: lastFrozen[name].TRate, TimerCounter: lastFrozen[name].TCount}]));
-    const request = {write: {...timerWrites, ...pawnWrites, '@player': {AnimSequence: pose.Anim, AnimFrame: pose.Frame, AnimRate: pose.Rate, TweenRate: pose.Tween, ...(option('player-alliance', null) ? {Alliance: option('player-alliance')} : {}),
+    // The original's class counters (UClass+0x488: MakeUniqueObjectName's suffix, docs/script-construction.md "Spawned names against the original")
+    // carry the capture's whole session (the maps it loaded before this one): a measured input like the stream state. A class's first traced
+    // AddObject (the `addobj` call records' name and class at the return) gives its counter; --own-names keeps Play's own.
+    const classCounters = (() => {
+      const file = `${tracePath}.calls.jsonl`;
+      if (flag('own-names') || !existsSync(file)) return null;
+      const counters = {};
+      for (const line of readFileSync(file, 'utf8').split('\n')) {
+        if (!line.includes('"fn":"addobj"') || !line.includes('"ecxName"')) continue;
+        const r = parseTraceLine(line), cls = r.ecxClass, name = String(r.ecxName ?? '');
+        if (!cls || counters[cls] !== undefined) continue;
+        const prefix = cls.replace(/[0-9]+$/, ''), m = name.toLowerCase().startsWith(prefix.toLowerCase()) ? /^(\d+)$/.exec(name.slice(prefix.length)) : null;
+        if (m) counters[cls] = Number(m[1]);
+      }
+      return Object.keys(counters).length ? counters : null;
+    })();
+    if (classCounters) console.log(`class counters from the original's traced names: ${Object.keys(classCounters).length} classes`);
+    const request = {...(classCounters ? {classCounters} : {}), write: {...timerWrites, ...pawnWrites, '@player': {AnimSequence: pose.Anim, AnimFrame: pose.Frame, AnimRate: pose.Rate, TweenRate: pose.Tween, ...(option('player-alliance', null) ? {Alliance: option('player-alliance')} : {}),
       // FrobTime accumulates the player's tick deltas (HighlightCenterObject runs when it reaches 0.1 s); the frozen phase's deltas are the host's, so the original's value is a measured input
       ...(flag('player-gear') && pose.FrobTime !== undefined ? {FrobTime: pose.FrobTime} : {})}, ...generatorWrites},
       ...(touchWindow ? {touchTrace: {first: touchWindow[0], last: touchWindow[1]}} : {}),

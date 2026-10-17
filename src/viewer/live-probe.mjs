@@ -50,6 +50,8 @@ export function liveProbe(game, args = {}) {
     return level.actors.find(actor => actor?.name && actor.name.toLowerCase() === lower) ?? null;
   };
   const out = {};
+  // classCounters {Class: n}: the original's class counters as its traced AddObject names show them (script-runtime.mjs applyClassCounterSeed)
+  if (args.classCounters) runtime.classCounterSeeds = new Map(Object.entries(args.classCounters).map(([cls, n]) => [cls.toLowerCase(), n | 0]));
   // slotOf offsets of named properties, to write the original's watch config.
   if (args.offsets) {
     const { slotOf } = runtime.classLoader.graph;

@@ -75,9 +75,11 @@ export function seedScriptObjectRegistry({count, freeIndices = []} = {}) {
 
 /** Name lookup and FName interning are explicit host boundaries, shared with
  * loaded objects. Never use only a list of spawned actors for collision checks. */
-export function makeUniqueScriptObjectName(cls,outer,{findObject,internName}) {
+export function makeUniqueScriptObjectName(cls,outer,{findObject,internName,counterSeed=null}) {
   if(typeof findObject!=='function'||typeof internName!=='function'||!Number.isInteger(cls.nameCounter))
     throw new Error('Unique naming requires the original class counter, object lookup and name table');
+  // a live replay's measured counter for the class, once (script-runtime.mjs applyClassCounterSeed)
+  counterSeed?.(cls);
   const prefix=cls.record.name.replace(/[0-9]+$/,'');
   for(;;){
     const suffix=String(cls.nameCounter|0);

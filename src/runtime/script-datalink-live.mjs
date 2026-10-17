@@ -107,6 +107,7 @@ export async function prepareLiveActorSpawnWorld({runtime,engine,deusEx,level,le
       // exports (the map's actors, MyLevel, its models) are not in this host registry (a pre-placed actor hashes by its measured index), so a
       // generated name is also checked against the map's export table: a summoned MJ12Troop in 05_NYC_UNATCOMJ12lab skips the placed
       // MJ12Troop0..2 and is MJ12Troop3, as the original names it (a destroyed map actor keeps its name until LoadMap's collection).
+      counterSeed:cls=>runtime.applyClassCounterSeed(cls),
       uniqueFindObject:(o,name)=>lookup.findObject(o,name)??(o===outer&&mapExportNames.has(String(name).toLowerCase())?{preplaced:name}:null),
       initNativeProperties:()=>{},
       nativeConstructor:constructActorBase,

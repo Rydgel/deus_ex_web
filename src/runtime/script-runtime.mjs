@@ -943,6 +943,14 @@ export class ScriptRuntime {
     } else throw new Error(`CriticalDelete deleting destructor is not recovered for native vtable 0x${(object.nativeVtable >>> 0).toString(16)}`);
     return undefined;
   }
+  /** A live replay's measured class counters (Class+0x488, which MakeUniqueObjectName reads and the whole session advanced: the capture's
+   * earlier maps), from the original's traced AddObject names (live-probe.mjs `classCounters`): the class's next generated name starts
+   * there, once. */
+  applyClassCounterSeed(cls) {
+    const seeds=this.classCounterSeeds,key=cls?.record?.name?.toLowerCase();
+    if(!seeds?.size||!key||!seeds.has(key))return;
+    cls.nameCounter=seeds.get(key);seeds.delete(key);
+  }
   playerNativeObject(player) {
     const instance = this.instance(player);
     if (Number.isInteger(instance.nativeObject?.index)) return instance.nativeObject;

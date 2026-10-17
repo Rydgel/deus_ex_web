@@ -544,7 +544,12 @@ export async function createWindowHost({runtime, assets, player, gameConfig = nu
   // ------------------------------------------------------------------
   // Object creation: StaticConstructObject + family constructor.
   // ------------------------------------------------------------------
-  let nameCounter = 0;
+  // Names: UObject::StaticConstructObject with NAME_None, MakeUniqueObjectName (Core 0x101575b0): the class name without its trailing digits
+  // and the class's own counter (Class+0x488, shared with every other object of the class), so a window and a GC are numbered per class (the
+  // Underworld capture's TextWindow9, TileWindow18, GC505 at the same moment), not from one counter. No map export or loaded object holds such a
+  // name, so the counter's next value is the name.
+  const nextName = cls => { runtime.applyClassCounterSeed?.(cls); const prefix = cls.record.name.replace(/[0-9]+$/, ''), suffix = String(cls.nameCounter | 0); cls.nameCounter = (cls.nameCounter + 1) | 0;
+    return prefix.slice(0, 62 - suffix.length) + suffix; };
   // A window and a graphics context are UObjects: each takes a GObjObjects slot
   // when it is created and gives it back when it is deleted. Host windows are
   // outside the host registry, so the original's slot model (seeded when the
@@ -569,7 +574,7 @@ export async function createWindowHost({runtime, assets, player, gameConfig = nu
     if (!cls) boundary(`Window host received an unlinked class ${classObject?.key}`);
     const family = nativeWindowFamily(cls);
     if (!family || !FAMILIES[family]) boundary(`Window family is not admitted: ${cls.record.key} (${family ?? 'no native window ancestry'})`);
-    const object = {name: `${cls.record.name}${nameCounter++}`, outer};
+    const object = {name: nextName(cls), outer};
     heap.allocate(object, NATIVE_WINDOW_CLASS_SIZES[family] + 0x80);
     takeOriginalSlot(object, cls.record.name);
     runtime.attach(object, cls);
@@ -626,7 +631,7 @@ export async function createWindowHost({runtime, assets, player, gameConfig = nu
   }
   // XWindow::Init XGC allocation leaves (operator new + XGC::XGC).
   function allocateGc(outer) {
-    const gc = {name: `GC${nameCounter++}`, outer};
+    const gc = {name: nextName(gcClass), outer};
     heap.allocate(gc, 0xb8 + 0x10);
     takeOriginalSlot(gc, 'GC');
     runtime.attach(gc, gcClass);
@@ -1589,7 +1594,7 @@ export async function createWindowHost({runtime, assets, player, gameConfig = nu
   const pushedNodes = new Map();
   const gcServices = {mem: heap.mem, objectAddress: object => object.base??heap.objectAddress(object),
     allocateObject: () => {
-      const node = heap.allocRaw(GC.size), holder = {name: `GC${nameCounter++}`};
+      const node = heap.allocRaw(GC.size), holder = {name: nextName(gcClass)};
       takeOriginalSlot(holder, 'GC');
       pushedNodes.set(node, holder);
       return node;
