@@ -22,12 +22,12 @@ const excluded = (id, scene, claim, reason) => CRITERIA.push({id, clause: Number
 add('5.1.1', '00_Training crates', 'the crowbar breaks a Cratepick crate: swing, damage, fragments, contents, the Mission00 timer starts DL_Lockpick', 'O1', 'crowbar-crate',
   'O1: live trace of the original (crowbar summoned, ParseRightClick, ActivateBelt, a Fire edge at the crate) with the crate, fragment and contents state per tick',
   {have: ['validate-crowbar-crate (P)', 'validate-weapon-view-original (4.1.10 O1: the swing\'s draws)', 'script-crate-destruction.md']});
-add('5.1.2', '00_TrainingCombat pistol range', 'take a pistol and Ammo10mm, shoot the range targets: ammo, recoil, trace hit, target and trigger state, DL_TArgetRangeshot1/2', 'O1', 'pistol-range',
+add('5.1.2', '00_TrainingCombat pistol range', 'take a pistol and Ammo10mm, walk in (DL_TArgetRange opens the cover over Switch3), press Switch3 (the target DeusExMover4 with BreakableGlass0 slides in; its MoverCollider passes the DirectionalTriggers that open the blast door), shoot the glass through the station window: ammo, recoil, trace hit, target and trigger state, DL_TArgetRangeshot1/2', 'O1', 'pistol-range',
   'O1: live trace of the original firing at the range (edge-triggered Fire) with ammo, hit actor, mover and DataLink-flag state per tick',
   {have: ['weapon noise O1 in the Underworld (pistol shots\' event traffic, not the hit or the ammo)']});
 add('5.1.3', '00_TrainingCombat rifle range', 'take the rifle and Ammo3006, scope on, shoot: scope FOV, accuracy, hit; DL_RifleRangeShot1 sets SkillWeaponRifle to 3', 'O1', 'rifle-scope',
   'O1: live trace of the original (scope toggle and Fire edges) with the scope state, FOV, ammo and the skill level');
-add('5.1.4', '00_TrainingCombat demolitions', 'throw a LAM at BreakableWall1: it sticks, explodes (HurtRadius), the wall breaks, the Mission00 DataLinks follow', 'O1', 'lam-wall',
+add('5.1.4', '00_TrainingCombat demolitions', 'place a LAM on BreakableWall1 (WeaponLAM.Fire\'s Place path near a Mover; a thrown LAM bounces off), shoot it (ThrownProjectile.TakeDamage): it explodes (HurtRadius), the wall breaks (BlowItUp), DL_FinishWall follows', 'O1', 'lam-wall',
   'O1: live trace of the original (LAM selected, Fire edge) with the LAM actor, the explosion\'s damage to the wall and its fragments',
   {have: ['alterations census (grenade throws play, P)', 'validate-island-blowitup (mover BlowItUp O2)']});
 add('5.1.5', '01_NYC_UNATCOIsland', 'the player\'s pistol hurts and kills a standing Terrorist: damage, hit reaction, hostile response, death, carcass and its inventory', 'O1', 'island-shoot-npc',
@@ -55,7 +55,7 @@ add('5.2.3', '01_NYC_UNATCOIsland', 'the player\'s noise reaches the guards: gun
   {have: ['live-events-compare O1: 1,069 and 1,586 manager calls equal in the Underworld (pistol, assault shotgun)'], weak: 'Gunshot events are compared in the Underworld, not on Island; the code is shared. Adopt the Underworld evidence for the gunshot half, or require an Island capture.'});
 add('5.2.4', '01_NYC_UNATCOIsland cameras', 'SecurityCamera sees the player: tracking, the alarm event, NSFCam01..03 trigger libertyturret1; UN_CamSystem01..04 (bNoAlarm) do not', 'O1', 'island-camera',
   'O1: live trace of the original with the player in a camera\'s cone and the camera\'s state, the alarm flag and the turret\'s state per tick');
-add('5.2.5', '01_NYC_UNATCOIsland laser trap', 'a LaserTrigger beam broken by the player triggers AlarmUnit0 (SetAlarmFlag -> StatueAlarmTriggered) and the guards react', 'O1', 'island-laser',
+add('5.2.5', '01_NYC_UNATCOIsland laser trap', 'a LaserTrigger beam broken by the player raises the alarm (LaserTrigger.BeginAlarm: klaxon and an \'alarm\' AI event; the laser has no Event) and a guard in Alerting state triggers AlarmUnit0 (SetAlarmFlag -> StatueAlarmTriggered)', 'O1', 'island-laser',
   'O1: live trace of the original with the player placed across statue_lasertrap and the beam, trigger and flag state');
 add('5.2.6', '01_NYC_UNATCOIsland laser trap', 'hacking ControlPanel0 with a multitool switches statue_lasertrap off: hack time (skill, hackStrength), the multitool\'s use, the lasers\' state', 'O1', 'island-hack-panel',
   'O1: live trace of the original (Multitool selected, ParseRightClick on the panel) with the hack progress, multitool charge and laser state per tick');
@@ -135,7 +135,7 @@ add('5.5.7', '01_NYC_UNATCOIsland', 'StatueMissionComplete changes the world (Mi
 // 5.6 Systems interacting ---------------------------------------------------------------------------------------------------------------------
 add('5.6.1', '01_NYC_UNATCOIsland', 'a shot near guards: noise, hostility, pursuit, distress to other pawns, the player hurt and healed with a MedKit', 'O1', 'noise-wakes-guards',
   'O1: live trace of the original of the whole encounter', {have: ['5.1.5, 5.1.6, 5.2.3 each partial']});
-add('5.6.2', '00_TrainingFinal alarm', 'an AlarmUnit trips: AlarmDispatcher, soldiers go hostile, the doors', 'O1', 'alarm-chain', 'O1: live trace of the original from the alarm\'s trigger');
+add('5.6.2', '00_TrainingFinal alarm', 'an AlarmUnit trips (bActive for its alarmTimeout, 10 s): AlarmDispatcher fires SoldierNeutral (AllianceTriggers), CloseDoor (ExitDoor) and failmessage (DL_FailedStealth)', 'O1', 'alarm-chain', 'O1: live trace of the original from the alarm\'s trigger');
 add('5.6.3', '01_NYC_UNATCOIsland', 'light against sight: the same pose seen or not seen as the player lights or darkens it (AugLight, a light switch, the NPC\'s lighting of the player)', 'O1', 'light-vs-sight',
   'O1: live trace of the original with perception fields at two light states', {have: ['validate-pawn-perception, AICanSee (O2)', 'lighting oracles (O2)']});
 add('5.6.4', '01_NYC_UNATCOIsland', 'an explosion: a barrel or CrateExplosiveSmall near a Terrorist, a breakable door and a decoration: HurtRadius, damage to each, noise, chain explosions', 'O1', 'explosion-world',

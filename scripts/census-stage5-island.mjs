@@ -1,5 +1,5 @@
 /** The 01_NYC_UNATCOIsland drivers of the Stage 5 census (scripts/census-stage5.mjs), added to the session's DRIVERS. Same rules as census-stage5-session.mjs. */
-import {Undriven, PI} from './census-stage5-drivers.mjs';
+import {Undriven, PI, near} from './census-stage5-drivers.mjs';
 import {DRIVERS, ok} from './census-stage5-session.mjs';
 
 const carcasses = c => c.actors().filter(a => /carcass$/.test(c.runtime.instance(a).cls.record.key));
@@ -8,6 +8,11 @@ const HOSTILE = /attack|alert|flee|seek|search|hunt|react|run|fear|disabled|stun
 /** What a pawn does about the player: its Enemy or a reacting state (not the boot state, nor the one it already stood in). */
 const reacting = (c, pawn, before) => Boolean(c.read(pawn, 'Enemy')) || (HOSTILE.test(stateName(c, pawn)) && stateName(c, pawn) !== before);
 async function armed(c, cls = 'WeaponPistol') { const w = await c.give(cls); await c.equip(w); return w; }
+const ammoOf = (c, weapon) => c.read(c.read(weapon, 'AmmoType'), 'AmmoAmount');
+/** `count` free packs of an ammo class (`summon`, then the public frob path: the pickup merges into the carried ammo). */
+async function pack(c, cls, count) {
+  for (let i = 0; i < count; i++) { c.exec(`summon ${cls}`); c.frames(5); const box = c.byClass(cls).filter(a => !c.read(a, 'Owner')).at(-1); if (!box) throw new Undriven(`no ${cls} summoned`); await c.take(box); }
+}
 /** Walk toward `to` from `from` (a real movement: Touches and conversations follow it), pressing Enter for conversations, until `until()` or `seconds`. */
 function walkAndTalk(c, from, to, seconds, until) {
   c.stand(from, to); c.frames(20);
@@ -27,10 +32,18 @@ const lockpicking = async (c, door, seconds) => { c.watched.add(door); await c.f
 Object.assign(DRIVERS, {
   async 'island-shoot-npc'(c) {
     const t = c.actor('Terrorist0'); if (!t) throw new Undriven('no Terrorist0');
-    await armed(c); const where = c.openStand(t, 220), n0 = carcasses(c).length;
-    const h0 = c.health(t); let shots = 0;
-    const died = await c.guard(async () => { for (; shots < 20 && !c.gone(t) && c.health(t) > 0; shots++) c.shoot(4, 30); c.frames(180); });
-    return ok(c.gone(t) || c.health(t) <= 0, {h0, health: c.gone(t) ? null : c.health(t), shots, state: c.gone(t) ? null : stateName(c, t), enemy: !c.gone(t) && c.read(t, 'Enemy') === c.player(), newCarcasses: carcasses(c).length - n0, playerDied: died, bearing: where.bearing});
+    // The summoned Pistol carries PickupAmmoCount 6 rounds and no reserve, and a hit Terrorist runs (Fleeing from the third hit): a player picks up a second pack
+    // and keeps the sights on the target. Each shot is aimed at the target's current place (a fixture write of the player's own position and view), reload waits.
+    const w = await armed(c); await pack(c, 'Ammo10mm', 2); const where = c.openStand(t, 220), n0 = carcasses(c).length;
+    const h0 = c.health(t), ammo0 = ammoOf(c, w); let shots = 0;
+    const died = await c.guard(async () => {
+      for (; shots < 40 && !c.gone(t) && c.health(t) > 0; shots++) {
+        c.stand(c.pos(c.player()), c.pos(t)); c.shoot(4, 30);
+        if (c.read(w, 'ClipCount') >= c.read(w, 'ReloadCount')) c.frames(150);
+      }
+      c.frames(180);
+    });
+    return ok(c.gone(t) || c.health(t) <= 0, {h0, health: c.gone(t) ? null : c.health(t), shots, ammo: [ammo0, ammoOf(c, w)], state: c.gone(t) ? null : stateName(c, t), enemy: !c.gone(t) && c.read(t, 'Enemy') === c.player(), newCarcasses: carcasses(c).length - n0, playerDied: died, bearing: where.bearing});
   },
   async 'island-npc-shoots-player'(c) {
     const t = c.actor('Terrorist0'); if (!t) throw new Undriven('no Terrorist0');
@@ -89,7 +102,8 @@ Object.assign(DRIVERS, {
     const lp = c.pos(laser), [fx, fy] = forward(c, laser);
     c.stand([lp[0] + fx * 120, lp[1] + fy * 120, lp[2] - 40], lp); c.frames(20);
     c.fixture.driveLegacy({forward: 1}); c.frames(100); c.fixture.driveLegacy({forward: 0}); c.frames(120);
-    return ok(c.flag('statuealarmtriggered'), {alarmFlag: c.flag('statuealarmtriggered'), lastAlarm: c.read(laser, 'lastAlarmTime'), isOn: c.read(laser, 'bIsOn'), at: c.pos(c.player()).map(Math.round)});
+    return ok(c.flag('statuealarmtriggered'), {alarmFlag: c.flag('statuealarmtriggered'), lastAlarm: c.read(laser, 'lastAlarmTime'), isOn: c.read(laser, 'bIsOn'), at: c.pos(c.player()).map(Math.round)},
+      'the beam fires (LaserTrigger.BeginAlarm: klaxon and an alarm AI event, lastAlarmTime set) but no guard triggers AlarmUnit0, so StatueAlarmTriggered is never set: the three Terrorists in view attack the player, who is dead in 15 s (the laser has no Event; AlarmUnit0 is triggered from ScriptedPawn.Alerting)');
   },
   async 'island-hack-panel'(c) {
     const panel = c.actor('ControlPanel0'), laser = c.actor('LaserTrigger0'); if (!panel || !laser) throw new Undriven('no ControlPanel0');
@@ -99,6 +113,10 @@ Object.assign(DRIVERS, {
   },
   async 'island-carcass'(c) {
     const a = c.actor('Terrorist4'), b = c.actor('Terrorist27'); if (!a || !b) throw new Undriven('no Terrorist4/27');
+    // MissionScript.Timer's first call runs FirstFrame (ResetGoals and ResetConversationHistory behind the M1MissionStart flag) about a second into the
+    // level, long before a player can walk to a Terrorist; the placement below must not run ahead of it (a conversation started in that first second
+    // would have its history deleted by FirstFrame, an order the original's inputs cannot produce).
+    for (let i = 0; i < 240 && !c.flag('m1missionstart'); i++) c.frames(5);
     const ap = c.pos(a), before = stateName(c, b);
     c.stand([ap[0] - 200, ap[1], ap[2]], ap); c.frames(10);
     c.damage(a, 1000, 'Shot', c.player());
@@ -218,10 +236,24 @@ Object.assign(DRIVERS, {
   },
   async 'emp-electronics'(c) {
     const bot = c.actor('SecurityBot0'); if (!bot) throw new Undriven('no SecurityBot0');
-    await armed(c, 'WeaponEMPGrenade'); const bp = c.pos(bot), before = {state: stateName(c, bot), emp: c.read(bot, 'EMPHitPoints'), health: c.health(bot)};
-    c.stand(c.approach(bot, 250, 0), bp); c.frames(10); let thrown = 0;
-    const died = await c.guard(async () => { c.game.pressFire(); c.frames(8); c.game.releaseFire(); for (let t = 0; t < 8; t++) { c.frames(60); thrown = Math.max(thrown, c.byClass('EMPGrenade').length); } });
-    return ok(stateName(c, bot) !== before.state || c.read(bot, 'EMPHitPoints') < before.emp || c.health(bot) < before.health, {before, state: stateName(c, bot), emp: c.read(bot, 'EMPHitPoints'), health: c.health(bot), grenades: thrown, playerDied: died});
+    // SecurityBot0 patrols (95 units/s) before it stops at its last point: the grenade's fuse (about 3.5 s) and flight (about 550 units, ThrownProjectile bounces on)
+    // decide where it explodes, so a thrower aims at a bot that is standing. The previous driver threw at the bot's start while it walked away: the blast (EMP,
+    // HurtRadius rings to 512 units) went off 590 units from it.
+    let bp = c.pos(bot), still = 0;
+    for (let i = 0; i < 40 && still < 2; i++) { c.frames(60); const p = c.pos(bot); still = near(p, bp) < 1 ? still + 1 : 0; bp = p; }
+    if (still < 2) throw new Undriven('SecurityBot0 never stood still');
+    const before = {state: stateName(c, bot), emp: c.read(bot, 'EMPHitPoints'), health: c.health(bot)}, attempts = [];
+    let thrown = 0, died = false;
+    // From 550 units the throw lands within the blast radius on the bearings that look over level ground; the first bearing whose place is in the world is tried, then the next.
+    for (const bearing of [PI / 2, 0, PI, -PI / 2, PI / 4, -PI / 4, 3 * PI / 4, -3 * PI / 4]) {
+      const spot = c.approach(bot, 550, bearing); spot[2] = bp[2] - 11;
+      if (!c.inWorld(spot)) continue;
+      const w = await armed(c, 'WeaponEMPGrenade'); c.stand(spot, bp); c.frames(10);
+      died = await c.guard(async () => { c.game.pressFire(); c.frames(8); c.game.releaseFire(); for (let t = 0; t < 8; t++) { c.frames(60); thrown = Math.max(thrown, c.byClass('EMPGrenade').length); } });
+      attempts.push([Math.round(bearing * 100) / 100, c.read(bot, 'EMPHitPoints')]);
+      if (died || c.read(bot, 'EMPHitPoints') < before.emp || attempts.length >= 4) break;
+    }
+    return ok(stateName(c, bot) !== before.state || c.read(bot, 'EMPHitPoints') < before.emp || c.health(bot) < before.health, {before, attempts, state: stateName(c, bot), emp: c.read(bot, 'EMPHitPoints'), health: c.health(bot), grenades: thrown, playerDied: died});
   },
   async 'flags-change-world'() { throw new Undriven('needs GuntherFreed (see gunther-rescued) and the Filben and commander flows; only the conversation flows of meet-filben and meet-terrorist are driven'); },
 });
