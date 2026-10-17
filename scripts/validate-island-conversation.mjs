@@ -66,6 +66,8 @@ if (process.argv[2] !== 'child') {
   assert.ok(run.clippedFrames > 2000, `clipped frames ${run.clippedFrames}`);
   assert.deepEqual(run.letterboxMismatches, [], 'one Solid tile per clip rect, at its pixels, on every frame');
   assert.deepEqual(run.renderMismatches, [], 'the 3D view is the band between the bars on every clipped frame');
+  // Only the conversation's first frame precedes the bars' first window tick (the windows tick before the level).
+  assert.equal(run.untickedFrames, 1, `frames painted before the bars' first tick: ${run.untickedFrames}`);
   // The held bars (the most frequent layout) are CalculateWindowSizes' full
   // size from the class's own height percentages.
   assert.deepEqual(run.settled, run.heldBars, 'the letterbox held during the conversation');
@@ -150,7 +152,7 @@ runtime.invokeNative = call => {
 };
 createPlayerInputFixture(game).key('KeyW', true);
 const player = game.player.collisionActor;
-let firstError = null, cameraOffEye = 0, letterbox = null, state = null, clippedFrames = 0;
+let firstError = null, cameraOffEye = 0, letterbox = null, state = null, clippedFrames = 0, untickedFrames = 0;
 const layouts = new Map();
 let heldBars = null;
 const letterboxMismatches = [], renderMismatches = [];
@@ -185,10 +187,18 @@ while (!firstError && tick < 5200) {
         layouts.set(key, (layouts.get(key) ?? 0) + 1);
         clippedFrames++;
         if (JSON.stringify(letterbox.tiles) !== JSON.stringify(letterbox.expected)) letterboxMismatches.push({ tick, ...letterbox });
-        // The 3D view (PreRender's render viewport) is the band the bars leave.
+        // The 3D view (PreRender's render viewport) is the band the bars leave. On the frame the conversation starts the bars have
+        // not ticked: UExtensionEngine::Tick runs TickWindows (Extension 0x100266ce) before UGameEngine::Tick (0x100266d9), which
+        // ticks the levels (ULevel::Tick, vtable +0x5c, 0x1039015f) before Client->Tick renders (+0x64, 0x1039106e), so the window
+        // the level tick creates is painted before its first Tick: the root's clip list is still empty, no bar is drawn and the 3D
+        // view is the whole frame (game.mjs ticks in that order since ea0910c).
         const rect = game.renderViewport(1440, 960), [top, bottom] = letterbox.tiles;
         renderRect = rect;
-        if (letterbox.tiles.length !== 2 || !rect.render || rect.x !== 0 || rect.width !== 1440
+        if (rects.length === 0) {
+          untickedFrames++;
+          if (letterbox.tiles.length !== 0 || !rect.render || rect.x !== 0 || rect.y !== 0 || rect.width !== 1440 || rect.height !== 960)
+            renderMismatches.push({ tick, rect, tiles: letterbox.tiles });
+        } else if (letterbox.tiles.length !== 2 || !rect.render || rect.x !== 0 || rect.width !== 1440
           || rect.y !== top[1] + top[3] || rect.y + rect.height !== bottom[1]) renderMismatches.push({ tick, rect, tiles: letterbox.tiles });
       }
       state = runtime.instance(conPlay)?.state?.stateNode?.record?.name ?? null;
@@ -211,6 +221,10 @@ if (!firstError && state === 'WaitForInput') {
   const before = inventory();
   const step = () => { simulatedMs += 1000 / 60; tick++; game.tick(1 / 60); game.hud.commands(1440, 960, game.view()); };
   createPlayerInputFixture(game).key('KeyW', false);
+  // The root gives the first choice the focus in its next Tick (no focus: the top modal's preferred focus, else MoveTabGroup(3),
+  // docs/script-window-root-tick.md). The windows tick before the level (UExtensionEngine::Tick, game.mjs since ea0910c), so the
+  // frame whose level tick created the buttons painted them unfocused, as the original does; a frame passes before the player's key.
+  step();
   choosing.focus.push(focused());
   try {
     for (const code of ['ArrowDown', 'Enter']) {
@@ -228,5 +242,5 @@ if (!firstError && state === 'WaitForInput') {
   choosing.paulOrders = read(paul, 'Orders');
 }
 console.log(JSON.stringify({ firstError, conversation, camera, conLights: lights.length,
-  lightsHeld: held.every(l => lights.includes(l)), cameraOffEye, letterbox, heldBars, settled: JSON.parse([...layouts].sort((a, b) => b[1] - a[1])[0]?.[0] ?? 'null'), clippedFrames, letterboxMismatches: letterboxMismatches.slice(0, 3), renderRect, renderMismatches: renderMismatches.slice(0, 3), paulSpeech, choiceButtons, choiceTick, state, identities, choosing }));
+  lightsHeld: held.every(l => lights.includes(l)), cameraOffEye, letterbox, heldBars, settled: JSON.parse([...layouts].sort((a, b) => b[1] - a[1])[0]?.[0] ?? 'null'), clippedFrames, untickedFrames, letterboxMismatches: letterboxMismatches.slice(0, 3), renderRect, renderMismatches: renderMismatches.slice(0, 3), paulSpeech, choiceButtons, choiceTick, state, identities, choosing }));
 process.exit(0);

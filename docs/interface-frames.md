@@ -55,6 +55,14 @@ The poses of the last three were found by the original's own FrobTarget: a ghost
 (`SetCollision(true)` registers the player at the new Location; a bare `set Location` of a walking player asserts, but the ghost has no hash entry, see
 `view-probe.mjs`), and the right click frobs what the walking player highlights. Both programs selected the same object at every pose.
 
+**The world frames (2026-10-17).** Four more views end the run: `ui-base-start`, `ui-base-belt`, `ui-base-datacube` and `ui-base-keypad`. Each is the camera
+of its views with `ShowHud False`, reached by the same steps (the ghost at the start view; ghost, the pose and `walk` at a frob pose) after everything the
+scenario changes in the world. `interface-views.mjs` `baseOf` names each view's world frame: `ui-base-belt` for `ui-belt` and `ui-inv2`, the datacube's and
+the keypad's for theirs, and `ui-base-start` for the other 14. `compare` reports, besides the whole frame's numbers, `identicalInterface`, the share of identical
+pixels among `interfacePixels`, which are the pixels where the two programs' world frames agree. The world itself is row 4.1.1's subject and is judged
+there. In the original, `ui-base-start` equals 4.1.1's own `y0` frame pixel for pixel (taken hours apart), and each world frame's camera, Physics and
+Brightness read the same as its views' (`-capture.json`).
+
 ## Running it
 
 ```bash
@@ -207,7 +215,11 @@ tracer the original runs about 210 ms of wall clock per level tick, and the Unde
 the windows the level's 1/60 s. The tracer records RootTick's argument (`0x1003be90`, the f32 TickWindows passes every root;
 `call Extension.dll@0x1003be90 roottick 1 always`: Extension.dll is rebased, to `0x1950000` in the Mac bottle) and the replay ticks the
 windows with the frames the original ran since the previous level tick (`live-acceptance.mjs` `windowSeconds`). Checked by the
-Underworld capture `sndm5` (row 4.3.6): every registry take, the bark's windows freed at the original's tick included.
+Underworld capture `sndm5` (row 4.3.6): every registry take, the bark's windows freed at the original's tick included. A consequence, also the original's
+(UGameEngine::Tick ticks the levels, ULevel::Tick through vtable `+0x5c` at `0x1039015f`, before `Client->Tick` renders at `0x1039106e`):
+a window the level tick creates is painted once before its first Tick. MeetPaul's first conversation frame has the root's raw-background
+flag but an empty clip list (no bars, the whole 3D view), and the choice buttons are painted unfocused until the root's next Tick gives
+the first one the focus; `validate-island-conversation` checks both (one unticked frame; a frame passes before the choice keys).
 
 **3. Brightness (the harness, fixed).** The first comparison of the main menu was 1.70 times brighter in Play, in a ramp that the page's slider did not
 explain: `ShowMainMenu` runs `FLUSH`, which re-reads Brightness from the client config (D3DDrv `Flush`, modelled in `script-window-host.mjs`), and Play's
