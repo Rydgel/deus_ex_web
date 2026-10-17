@@ -2,6 +2,18 @@
  * here; the HUD shows them through the pawns' own FamiliarName/UnfamiliarName (DeusExPlayer.GetDisplayName) and the frob
  * lines and banter use them as speakers. Nothing here is original data: the placement was measured in 10_Paris_Club's
  * collision (docs/easter-egg.md "Where they stand") and the classes are stock DeusEx.u pawn and decoration classes. */
+/** Rydgel's look (the one setting to switch it): 'trench' is DeusEx.FordSchick (HumanCivilian, mesh GM_Trench: a coat, an undershirt, trousers,
+ * a head), 'suit' is DeusEx.Businessman2 (HumanCivilian, mesh GM_Suit: a jacket whose V shows a shirt, trousers, a head). `textures` are the
+ * stock skins each class names in its own MultiSkins slots, by role: easter-skin-art.mjs paints the role's recipe over the copy it makes of
+ * each (the class's own glasses and ponytail parts stay hidden by the masks it already holds). */
+export const RYDGEL_LOOK = 'trench';
+export const RYDGEL_LOOKS = Object.freeze({
+  suit: Object.freeze({ pawnClass: 'Businessman2', mesh: 'GM_Suit', textures: Object.freeze({ head: 'Businessman2Tex0', jacket: 'Businessman2Tex1', trousers: 'Businessman2Tex2' }),
+    maskTail: Object.freeze(['GrayMaskTex', 'BlackMaskTex', 'PinkMaskTex']) }),
+  trench: Object.freeze({ pawnClass: 'FordSchick', mesh: 'GM_Trench', textures: Object.freeze({ head: 'FordSchickTex0', shirt: 'FordSchickTex1', coat: 'FordSchickTex2', trousers: 'PantsTex3' }),
+    maskTail: Object.freeze(['GrayMaskTex', 'BlackMaskTex']) }),
+});
+
 export const EASTER = Object.freeze({
   map: '10_Paris_Club',
   claudia: Object.freeze({
@@ -15,8 +27,9 @@ export const EASTER = Object.freeze({
   }),
   rydgel: Object.freeze({
     name: 'Rydgel',
-    // Stock class: DeusEx.Businessman2 (HumanCivilian, mesh GM_Suit: jacket, trousers, head, glasses and ponytail slots).
-    pawnClass: 'Businessman2',
+    // The stock class of the chosen look (RYDGEL_LOOKS above).
+    pawnClass: RYDGEL_LOOKS[RYDGEL_LOOK].pawnClass,
+    look: RYDGEL_LOOK,
   }),
   // Measured on 10_Paris_Club's collision: the bar counter's front plane is x = -1127.5 (top z = -143.5) and the floor in front
   // of it, z = -191.5, runs to a 16 unit step at x = -1008.5; the walls are at y = -639.5 and y = -128.5.
@@ -27,14 +40,29 @@ export const EASTER = Object.freeze({
     // to Seat.Rotation + (0,-16384,0), so the hidden seat is yawed a quarter turn from her facing.
     rydgel: Object.freeze({ x: -1104, y: -448, yaw: 0 }),
     claudiaYaw: 0,
-    // The hidden seat sits on the floor at the crate's centre; its sit point is raised by `sitLift` (the crate's height, tuned on
-    // screen) and its collision radius is `seatRadius` so Sitting's approach point is clear of the crate (docs/easter-egg.md).
-    sitLift: 28,
-    seatRadius: 40,
+    // The hidden seat sits on the floor at the crate's centre; its first sit point is derived (easter-sim.mjs) so the pose's seat plane
+    // meets the crate's top surface: `hipDrop` is the distance from the mesh origin (Location + PrePivot) down to the lowest seat vertex of
+    // GFM_TShirtPants' SitBreathe frame, (11000 - 6193) / 256 on the mesh's origin and scale, and `lidEmbed` how far under the lid's
+    // top that plane is put (no visible gap).
+    hipDrop: 18.78,
+    lidEmbed: 0.3,
+    // The same frame's extents forward of the origin (the mesh's -y, (raw y) / -256, in units): the back of the hips 3.9 behind it; the heels
+    // 15.0 and the ankles 15.7 in front of it (the shin slopes back as it goes down); the back of the knees 20.0 (the knee underside's
+    // rear vertices) and the kneecaps 26.6. Her sit point is derived from these and the live crate (easter-sim.mjs): the heels
+    // `heelClearance` in front of the crate's front face, which puts the backs of her knees about 5 units past the face (the shins
+    // cannot hang vertically in front of it: they slope back by that much) and 18 of the 24 units of her thigh on the lid.
+    hipBack: 3.9,
+    heelForward: 15.0,
+    ankleForward: 15.7,
+    kneeBackForward: 20.0,
+    kneeFrontForward: 26.6,
+    heelClearance: 0.8,
   }),
-  // The line a frob shows is `Name: line`; the other answers `replyDelay` seconds later (level time). Each pair is
+  // The line a frob shows is `Name: line`; the other answers `replyDelay` seconds later (level time; the text-only fallback). Each pair is
   // [line of the one frobbed, the other's answer]; a speaker's pairs come in turn, the first one on the first frob.
   replyDelay: 1.6,
+  // With the voice clips the answer follows this many seconds after the line's clip has ended.
+  replyGap: 0.25,
   pairs: Object.freeze({
     claudia: Object.freeze([
       ["Shh, I'm chasing one last ulp.", "She said that an hour ago. Don't tell her I noticed."],
@@ -48,3 +76,31 @@ export const EASTER = Object.freeze({
     ]),
   }),
 });
+
+/** Spoken voices (docs/easter-egg.md "Voices"): synthesised once by scripts/easter-voices.mjs with Piper from these rhasspy/piper-voices
+ * models (both datasets are public domain, LibriVox recordings; the repository is MIT) and committed as MP3 clips under
+ * src/viewer/easter-audio/. The models themselves are never committed. Nothing here is original game data. */
+export const EASTER_VOICES = Object.freeze({
+  revision: 'c10ece1aade47bb51c153c893d14e5bf8e5b7117',
+  speakers: Object.freeze({
+    // Claudia: US English female, one speaker, trained from scratch on about 11.5 h of LibriVox.
+    claudia: Object.freeze({ voice: 'en_US-kristin-medium', path: 'en/en_US/kristin/medium', license: 'public domain (LibriVox)',
+      onnxSha256: '5849957f929cbf720c258f8458692d6103fff2f0e3d3b19c8259474bb06a18d4', jsonSha256: '5681426d4aead22195de70531eeeeddb46493cfaffc5764b2ea3db73428b651c' }),
+    // Rydgel: US English male, one speaker, trained from scratch on about 15.5 h of LibriVox.
+    rydgel: Object.freeze({ voice: 'en_US-norman-medium', path: 'en/en_US/norman/medium', license: 'public domain (LibriVox)',
+      onnxSha256: 'b9739443232a80a59c7d18810dd856899bf16a7964725f5ab81ea49b1351cb71', jsonSha256: '6c2db7f558a4a8deb9fe822583c1c5105f6c4e834dd0f9de8ad17a888ee9fe1d' }),
+  }),
+});
+
+/** Every spoken line: `frob-<who>-<i>` is `who`'s i-th frob line (said by `who`), `reply-<who>-<i>` the answer to it (said by the other).
+ * The id names the clip file (easter-audio/<id>.mp3) and, as `easter.<id>`, the speech sound the mod plays. */
+export function easterClips() {
+  const other = who => (who === 'claudia' ? 'rydgel' : 'claudia');
+  const clips = [];
+  for (const who of ['claudia', 'rydgel'])
+    EASTER.pairs[who].forEach(([line, reply], i) => {
+      clips.push({ id: `frob-${who}-${i}`, kind: 'frob', frobbed: who, index: i, speaker: who, text: line });
+      clips.push({ id: `reply-${who}-${i}`, kind: 'reply', frobbed: who, index: i, speaker: other(who), text: reply });
+    });
+  return clips;
+}

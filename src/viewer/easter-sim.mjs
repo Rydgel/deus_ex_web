@@ -5,14 +5,17 @@
  *  - Claudia: DeusEx.Female1 (HumanCivilian, mesh GFM_TShirtPants) with Orders Sitting on a Chair1 (a Seat) kept hidden on the lid
  *    of a CrateBreakableMedGeneral, so ScriptedPawn.Sitting's own bytecode walks her to it, plays SitBegin and loops SitBreathe;
  *  - Rydgel: DeusEx.Businessman2 (HumanCivilian, mesh GM_Suit) with Orders Standing at the bar, ScriptedPawn.Standing's idle loop.
- * Their skins are the page's (easter-skins.mjs); here only the stock glasses slots and the ponytail slot are switched on through
- * the actors' own MultiSkins. A frob (the player's RightMouse binding with FrobTarget on one of them) shows the speaker's line
- * through the player's own ClientMessage (PlayerPawnExt.ClientMessage -> DeusExRootWindow.ClientMessage -> the HUD log), and
- * the other answers `replyDelay` level seconds later.
+ * Their skins are the page's (easter-skins.mjs); here only Claudia's stock glasses slots are switched on through
+ * her own MultiSkins (Rydgel's class MultiSkins stay as the class has them). A frob (the player's RightMouse binding with FrobTarget on one of them) shows the speaker's line
+ * through the player's own ClientMessage (PlayerPawnExt.ClientMessage -> DeusExRootWindow.ClientMessage -> the HUD log) as the speaker's
+ * voice clip starts through the game's own speech path (easter-speech.mjs: Actor.PlaySound on the speaker, Galaxy's channel and voice,
+ * the lip-sync analysis and Pawn.LipSynch), and the other answers `replyGap` level seconds after the clip ends (`replyDelay` after the
+ * line when the clips are not available).
  *
  * Fidelity: none of this is original behavior. The pieces are original (classes, meshes, animations, states, the message path);
  * the arrangement, names and lines are ours. */
 import { EASTER } from './easter-config.mjs';
+import { loadClips, playSpeech, speechChannel, setSpeaking, lipSynch } from './easter-speech.mjs';
 
 const lower = text => String(text).toLowerCase();
 const prepared = new WeakSet();
@@ -58,6 +61,8 @@ async function stockTexture(runtime, packageName, path) {
 
 /** The state the hooks share: the two pawns by actor, and the speech queue. */
 const state = { active: false, actors: new Map(), next: { claudia: 0, rydgel: 0 }, queue: [], names: {} };
+/** The voice state: the clips (null when they could not be loaded), the clip playing now, and what happened to the last ones. */
+const voice = { clips: null, error: null, current: null, lastTime: 0, speakers: new Map(), log: [] };
 
 export async function easterCall(game, args = {}) {
   switch (args.op ?? 'setup') {
@@ -72,6 +77,7 @@ async function setup(game) {
   if (live()) return summary(game);
   // A Player start (the page's Reset) reloads the level and purges the old generation: the actors of an earlier setup are gone with it.
   state.active = false; state.actors.clear(); state.queue.length = 0; state.next = { claudia: 0, rydgel: 0 };
+  voice.current = null; voice.speakers.clear(); voice.log.length = 0;
   const { claudia, rydgel, place } = EASTER;
   const [pawnC, pawnR, seatClass, crateClass] = [await stockClass(runtime, claudia.pawnClass), await stockClass(runtime, rydgel.pawnClass),
     await stockClass(runtime, claudia.seatClass), await stockClass(runtime, claudia.crateClass)];
@@ -89,7 +95,7 @@ async function setup(game) {
   write(crate, 'bInvincible', true);
   write(crate, 'bPushable', false);
   // The seat: a stock Chair1, hidden, on the floor at the crate's centre, found by Tag through the pawn's own OrderTag. Its first
-  // sit point is raised to the crate lid. The seat is not for walking to: Sitting would walk a spawned pawn with MoveActor, which
+  // sit point is put at the crate lid (below). The seat is not for walking to: Sitting would walk a spawned pawn with MoveActor, which
   // Play has only for map pawns (script-runtime.mjs movePawn), and its SetBasedPawnSize Move is the same call. Claudia is
   // spawned already seated instead (below), the state Sitting's own sit-down reaches.
   const seatHeight = runtime.defaultValue(seatClass, runtime.lookupMember(seatClass, 'fields', 'CollisionHeight'));
@@ -98,23 +104,37 @@ async function setup(game) {
   write(seat, 'Tag', 'EasterSeat');
   write(seat, 'bHidden', true);
   write(seat, 'Physics', 0);
-  const sitPoint = read(seat, 'sitPoint').map(point => [...point]);
-  sitPoint[0] = [0, 0, sitPoint[0][2] + place.sitLift];
-  write(seat, 'sitPoint', sitPoint);
-  runtime.callFunction(runtime.lookup(seat, 'SetCollision'), seat, 3, () => false);
-  // Claudia, at ScriptedPawn.Sitting's end state: Tick's SitPosition (seat + sit point - (0,0,1) * newAssHeight, with the sit-height
-  // collision box), SetBasedPawnSize(radius, GetSitHeight()) applied without its Move (CollisionHeight, PrePivot, DesiredPrePivot,
-  // PrePivotOffset, BaseEyeHeight as that function leaves them) and the seat's slot taken, so the state enters its own
-  // ContinueSitting label: PlaySitting's SitBreathe loop, then stasis.
+  // Claudia's metrics first (ScriptedPawn.Sitting's end state: SitPosition = seat + sit point - (0,0,1) * newAssHeight, the sit-height collision
+  // box, SetBasedPawnSize(radius, GetSitHeight()) applied without its Move: CollisionHeight, PrePivot, DesiredPrePivot, PrePivotOffset,
+  // BaseEyeHeight as that function leaves them), because the sit point is derived from them below.
   const field = name => runtime.lookupMember(pawnC, 'fields', name), defaults = name => runtime.defaultValue(pawnC, field(name));
   const full = defaults('CollisionHeight'), baseAss = defaults('BaseAssHeight'), defaultEye = defaults('BaseEyeHeight');
   const standHeight = full - 4.5, sitHeight = standHeight + baseAss * 0.5, assHeight = standHeight + baseAss;
+  // Where the pose's seat plane meets the lid. The mesh is drawn from Location + PrePivot (lodmesh-frame.mjs), and GFM_TShirtPants'
+  // SitBreathe frame has its lowest seat vertex place.hipDrop below that origin (docs/easter-egg.md "Her seat"), so her Location is
+  // set so the seat plane lies place.lidEmbed under the lid's top surface; the sit point is whatever puts SitPosition there.
+  // (the live crate's collision height: a spawned decoration's CollisionHeight is not always its class default)
+  const lidTop = read(crate, 'Location')[2] + read(crate, 'CollisionHeight');
+  const pivot = standHeight - sitHeight;
+  const claudiaZ = lidTop - place.lidEmbed + place.hipDrop - pivot;
+  const sitPoint = read(seat, 'sitPoint').map(point => [...point]);
+  // The sit point also moves toward the room (the pawn's facing, Seat.Rotation + (0,-16384,0) turned back: local (0, -sitForward)): she sits
+  // on the lid with her thighs over it up to the backs of her knees and her lower legs hanging in front of the crate's face.
+  // How far toward the room: her heels (the rearmost point of the lower leg) `heelClearance` in front of the crate's front face.
+  const sitForward = read(crate, 'CollisionRadius') - place.heelForward + place.heelClearance;
+  sitPoint[0] = [0, -sitForward, claudiaZ - seatAt[2] - (sitHeight - assHeight)];
+  const facing = place.claudiaYaw / 65536 * 2 * Math.PI, toward = [Math.cos(facing) * sitForward, Math.sin(facing) * sitForward];
+  write(seat, 'sitPoint', sitPoint);
+  runtime.callFunction(runtime.lookup(seat, 'SetCollision'), seat, 3, () => false);
   const sitZ = seatAt[2] + sitPoint[0][2] + (sitHeight - assHeight);
-  const claudiaActor = spawn(pawnC, [place.crate.x, place.crate.y, sitZ], place.claudiaYaw, { noCollisionFail: true });
+  const claudiaActor = spawn(pawnC, [place.crate.x + toward[0], place.crate.y + toward[1], sitZ], place.claudiaYaw, { noCollisionFail: true });
   write(claudiaActor, 'CollisionHeight', sitHeight);
   write(claudiaActor, 'PrePivotOffset', [0, 0, standHeight - sitHeight]);
-  write(claudiaActor, 'PrePivot', [0, 0, full - sitHeight]);
-  write(claudiaActor, 'DesiredPrePivot', [0, 0, full - sitHeight]);
+  // PrePivot is the value the state's own LoopAnimPivot('SitBreathe') tweens it to (DesiredPrePivot = NewPrePivot + PrePivotOffset, with
+  // no NewPrePivot): SetBasedPawnSize first leaves full - sitHeight and the first pivot call moves it to PrePivotOffset, so a pawn spawned
+  // in the steady state starts at that value and does not drop by the difference in its first 0.15 s.
+  write(claudiaActor, 'PrePivot', [0, 0, pivot]);
+  write(claudiaActor, 'DesiredPrePivot', [0, 0, pivot]);
   write(claudiaActor, 'BaseEyeHeight', sitHeight - (standHeight - defaultEye));
   // PHYS_Flying, which Sitting sets (SetPhysics, native 3970) as it sits down: no gravity under a pawn on a crate.
   runtime.callFunction(runtime.lookup(claudiaActor, 'SetPhysics'), claudiaActor, 1, () => 4);
@@ -140,20 +160,26 @@ async function setup(game) {
       write(actor, flag, false);
   }
   // Stock slots switched on through the actors' own MultiSkins: the glasses (FramesTex1 and LensesTex2, the pair this map's own Female1
-  // wears on GFM_SuitSkirt) in GFM_TShirtPants' glasses slots 3 and 4, and the ponytail (PonytailTex1) in GM_Suit's slot 7.
+  // wears on GFM_SuitSkirt) in GFM_TShirtPants' glasses slots 3 and 4.
   const skins = async (actor, slots) => {
     const multiSkins = [...read(actor, 'MultiSkins')];
     for (const [slot, path] of Object.entries(slots)) multiSkins[slot] = await stockTexture(runtime, 'DeusExCharacters', path);
     write(actor, 'MultiSkins', multiSkins);
   };
+  // What each class's own MultiSkins hold before the mod writes any slot (status: `defaultSkins`): Rydgel's slot 7 is the class's own
+  // choice for GM_Suit's ponytail part, left as it is (no ponytail: Businessman2 does not draw one).
+  const nameOf = value => (value && typeof value === 'object' ? value.name ?? value.key ?? null : value);
+  state.defaultSkins = { claudia: [...read(claudiaActor, 'MultiSkins')].map(nameOf), rydgel: [...read(rydgelActor, 'MultiSkins')].map(nameOf) };
   await skins(claudiaActor, { 3: 'Skins.FramesTex1', 4: 'Skins.LensesTex2' });
-  await skins(rydgelActor, { 7: 'Skins.PonytailTex1' });
   write(claudiaActor, 'Orders', 'Sitting');
   write(claudiaActor, 'OrderTag', 'EasterSeat');
   write(rydgelActor, 'Orders', 'Standing');
   Object.assign(state, { active: true, runtime, game, player, level, crate, seat, names: { claudia: claudiaActor.name, rydgel: rydgelActor.name } });
   state.actors.set(claudiaActor, 'claudia');
   state.actors.set(rydgelActor, 'rydgel');
+  voice.speakers.set(claudiaActor, 0); voice.speakers.set(rydgelActor, 1);
+  // The 12 spoken lines (a clip that cannot be fetched leaves the mod text-only, as before voices).
+  if (!voice.clips) try { voice.clips = await loadClips(); } catch (error) { voice.error = String(error?.message ?? error); }
   installHooks(game);
   return summary(game);
 }
@@ -180,15 +206,21 @@ function status(game) {
     return { name: actor.name, className: instance?.cls?.record?.key ?? null, mesh: nm(read(actor, 'Mesh')), location: [...read(actor, 'Location')].map(Math.fround), rotation: [...read(actor, 'Rotation')], orders: read(actor, 'Orders'),
       state: instance?.state?.stateNode?.record?.name ?? null, physics: read(actor, 'Physics'), sitting: read(actor, 'bSitting'),
       anim: read(actor, 'AnimSequence'), familiar: read(actor, 'FamiliarName'), unfamiliar: read(actor, 'UnfamiliarName'),
+      collisionHeight: read(actor, 'CollisionHeight'), collisionRadius: read(actor, 'CollisionRadius'), prePivot: [...read(actor, 'PrePivot')], drawScale: read(actor, 'DrawScale'),
+      speech: { speaking: read(actor, 'bIsSpeaking'), wasSpeaking: read(actor, 'bWasSpeaking'), nextPhoneme: read(actor, 'nextPhoneme'), lastPhoneme: read(actor, 'lastPhoneme'),
+        blend: [...read(actor, 'BlendAnimSequence')].map(nm) },
       conList: nm(read(actor, 'ConListItems')), seat: nm(read(actor, 'SeatActor')), base: nm(read(actor, 'Base')), health: read(actor, 'Health'), invincible: read(actor, 'bInvincible'),
       multiSkins: [0, 1, 2, 3, 4, 5, 6, 7].map(i => nm(read(actor, 'MultiSkins')[i])) };
   };
   // The player's own log (DeusExPlayer.AddLog, which ClientMessage reaches): its entries, oldest first.
   const log = [];
   for (let entry = read(state.player, 'FirstLog'); entry && log.length < 64; entry = read(entry, 'Next')) log.push(read(entry, 'Text'));
-  const out = { active: true, time: read(state.level.actors[0], 'TimeSeconds'), pending: state.queue.length, log, frobTarget: nm(read(state.player, 'FrobTarget')) };
+  const out = { active: true, defaultSkins: state.defaultSkins, time: read(state.level.actors[0], 'TimeSeconds'), pending: state.queue.length, log, frobTarget: nm(read(state.player, 'FrobTarget')) };
   for (const [actor, id] of state.actors) out[id] = describe(actor);
-  out.crate = { name: state.crate.name, location: [...read(state.crate, 'Location')], physics: read(state.crate, 'Physics') };
+  out.crate = { name: state.crate.name, location: [...read(state.crate, 'Location')], physics: read(state.crate, 'Physics'),
+    collisionHeight: read(state.crate, 'CollisionHeight'), collisionRadius: read(state.crate, 'CollisionRadius') };
+  out.voice = { available: Boolean(voice.clips), error: voice.error, busy: busy(), current: voice.current && { id: voice.current.clip.id, speaker: voice.current.clip.speaker, seen: voice.current.seen, channel: Boolean(speechChannel(runtime, voice.current.actor, voice.current.clip.sound)) },
+    log: voice.log.slice(-24), audio: runtime.audio ? { ...runtime.audio.speech, channels: runtime.audio.galaxy.state.channels.filter(channel => channel.actor).length } : null };
   out.seat = { name: state.seat.name, location: [...read(state.seat, 'Location')], hidden: read(state.seat, 'bHidden') };
   return out;
 }
@@ -207,7 +239,9 @@ function installHooks(game) {
   };
   game.tick = function tick() {
     const result = tick_.apply(this, arguments);
-    if (state.queue.length) { if (live()) deliver(); else state.queue.length = 0; }
+    if (state.queue.length || voice.current) {
+      if (live()) { deliver(); tickSpeech(); } else { state.queue.length = 0; voice.current = null; }
+    }
     return result;
   };
   const tick_ = tick;
@@ -220,14 +254,71 @@ function say(who, text) {
   runtime.processEvent(player, 'ClientMessage', [`${EASTER[who].name}: ${text}`, 'None', false]);
 }
 
-/** The speaker's next pair: its line now, the other's answer after `replyDelay`. */
+/** How many lines the player's HUD log holds (DeusExPlayer.AddLog's list), for the status and the validator. */
+function logLength() {
+  const read = (actor, name) => state.runtime.readNamed(actor, name);
+  let n = 0;
+  for (let entry = read(state.player, 'FirstLog'); entry && n < 64; entry = read(entry, 'Next')) n++;
+  return n;
+}
+const actorOf = who => [...state.actors].find(([, id]) => id === who)[0];
+/** A clip is playing or the answer is pending: a frob then does nothing (they are mid-exchange). */
+const busy = () => Boolean(voice.current) || state.queue.length > 0;
+
+/** The speaker's next pair: its line now (with its clip), the other's answer (and its clip) after the line has ended, or after
+ * `replyDelay` when the clips are not available. A frob during an exchange does nothing. */
 export function frobbed(who) {
+  if (busy()) return;
   const pairs = EASTER.pairs[who], index = state.next[who]++ % pairs.length, other = who === 'claudia' ? 'rydgel' : 'claudia';
+  const line = voice.clips?.get(`frob-${who}-${index}`), reply = voice.clips?.get(`reply-${who}-${index}`);
   say(who, pairs[index][0]);
-  state.queue.push({ at: now() + EASTER.replyDelay, who: other, text: pairs[index][1] });
+  if (line && reply) speak(line, () => state.queue.push({ at: now() + EASTER.replyGap, who: other, text: pairs[index][1], clip: reply }));
+  else state.queue.push({ at: now() + EASTER.replyDelay, who: other, text: pairs[index][1] });
 }
 
 function deliver() {
   const time = now();
-  while (state.queue.length && state.queue[0].at <= time) { const item = state.queue.shift(); say(item.who, item.text); }
+  while (state.queue.length && state.queue[0].at <= time) {
+    const item = state.queue.shift();
+    say(item.who, item.text);
+    if (item.clip) speak(item.clip, null);
+  }
+}
+
+/** The clip as the speaker's speech: StartSpeakingAnimation's two writes, then the original PlaySound path (easter-speech.mjs). A play
+ * that fails (no audio subsystem, no channel index) leaves the exchange silent and timed by the clip's length instead. */
+function speak(clip, onEnd) {
+  const { runtime } = state, actor = actorOf(clip.speaker), at = now();
+  setSpeaking(runtime, actor, true);
+  const current = voice.current = { clip, actor, onEnd, started: at, seen: false, error: null, letters: [], mouths: [], logAtStart: logLength() };
+  voice.lastTime = at;
+  try { current.id = playSpeech(runtime, actor, clip.sound, voice.speakers); } catch (error) { current.error = String(error?.message ?? error); voice.error = current.error; }
+}
+
+/** After each level tick while a clip plays: the original Pawn.LipSynch on the speaker (the Conversation states' Tick does this in the
+ * original), the letters and mouth sequences seen, and the end of the clip: its Galaxy channel gone (the voice finished), or the clip's
+ * length plus a margin when it never got one. */
+function tickSpeech() {
+  const { runtime } = state, current = voice.current;
+  if (!current) return;
+  const time = now(), dt = Math.max(0, time - voice.lastTime), age = time - current.started;
+  voice.lastTime = time;
+  const channel = speechChannel(runtime, current.actor, current.clip.sound);
+  if (channel) current.seen = true;
+  const read = name => runtime.readNamed(current.actor, name);
+  if (read('bIsSpeaking')) {
+    lipSynch(runtime, current.actor, dt);
+    const letter = read('nextPhoneme'), first = read('BlendAnimSequence')[0], mouth = String(first?.name ?? first ?? '');
+    if (letter && current.letters.at(-1) !== letter) current.letters.push(letter);
+    if (mouth.startsWith('Mouth') && current.mouths.at(-1) !== mouth) current.mouths.push(mouth);
+  }
+  const length = current.clip.seconds;
+  if (!(current.seen ? !channel : age > length + 0.75) && age <= length + 6) return;
+  // StopSpeakingAnimation, then one more LipSynch (bWasSpeaking: it tweens the mouth closed).
+  setSpeaking(runtime, current.actor, false);
+  lipSynch(runtime, current.actor, dt);
+  voice.log.push({ id: current.clip.id, speaker: current.clip.speaker, started: Number(current.started.toFixed(3)), ended: Number(time.toFixed(3)), seconds: Number(age.toFixed(2)),
+    length: Number(length.toFixed(2)), seen: current.seen, error: current.error, letters: current.letters, mouths: current.mouths, logAtStart: current.logAtStart });
+  voice.current = null;
+  current.onEnd?.();
 }

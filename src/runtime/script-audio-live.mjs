@@ -67,6 +67,11 @@ export function wavInfo(bytes) {
   return { rate, frames, loop };
 }
 
+/** Speech sounds the opt-in ?easter=1 mod plays (docs/easter-egg.md "Voices"): a synthetic Sound object (no package export) to its MP3
+ * bytes. Empty unless the mod registered one, so the stock path is unchanged without the flag; decodeSample asks it first and
+ * takes the same host-decoded record path an original speech MP3 takes. */
+export const moddedSounds = new WeakMap();
+
 /** `library` is the Galaxy library service object (galaxy-music-library.mjs):
  * the browser host's AudioWorklet proxy, or by default the recording mirror.
  * It outlives this runtime: the subsystem's music state does not (see
@@ -151,6 +156,8 @@ export async function createLiveAudio({runtime, level, player, onVoice = null, l
   // RegisterSound decodes on first use; the export's package bytes are in
   // memory once its package is loaded, so the decode can run synchronously.
   function decodeSample(sound) {
+    const modded = moddedSounds.get(sound);
+    if (modded) return hostSample(sound, modded);
     const {asset, index} = sound;
     if (!asset?.bytes || !Number.isInteger(index)) return null;
     const decoded = decodeSoundResource({pkg: asset.pkg, bytes: asset.bytes, entry: asset.pkg.exports[index - 1]});
