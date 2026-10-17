@@ -1778,8 +1778,12 @@ wall's five closed locker doors (`DeusExMover8`, `19`, `21`, `23`, `37`): bright
   `itemMesh` now does the same with the facet's normal. Items wound the other way already drew (presumably the open doors of window 2,
   which `?cameraFog=nomovers` removed when it moved the window from 0.89 to 0.98; not examined).
 
-With the fix, `lockx`'s five doors equal the original to 0.1 of luminance (31.9, 37.8, 33.6, 30.2, 33.9 in both), and `sh3b` window 2
-reads MAD 0.32, edge recall .999, precision .976 (from 0.89 / .950 / .758): row 4.2.28 passes on the Mac stores. What remains in the window is a
+With the fix, `lockx`'s five doors equal the original to 0.1 of luminance (31.9, 37.8, 33.6, 30.2, 33.9 in both; the frame compares at MAD
+0.03, edge recall 1, precision .999, ratio 1.000, no outlier block: `visual-acceptance.mjs play|compare --maps 09_NYC_Ship --view
+lockx:2440,-1560,-200:0,16384,0`, the original from `original-views.sh` at Brightness 2/3), and `sh3b` window 2
+reads MAD 0.32, edge recall .999, precision .976 (from 0.89 / .950 / .758): row 4.2.28 passes on the Mac stores. The rows that draw
+movers still pass with the fix: 4.2.6's three frame checks (Ship, ShipFan `fan2`, ShipBelow `below1`/`below2`), `validate-frame-projection-movers`
+and `validate-coronas-mover-play` (11 lights offered, 6 passed, 3 drawn); no other camera store has a mover item with a non-zero fog texel. What remains in the window is a
 dark patch on the floor in Play only (the comparison's worst block ratio, 1.78), inside the thresholds and not examined.
 
 **Not covered:** the corona (no clean view, [camera view census](camera-view-census.md)).
