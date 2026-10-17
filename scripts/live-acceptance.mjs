@@ -857,21 +857,30 @@ async function play() {
       // (an `@ctrlshot NAME` is the original's screenshot of a held tick: it changes no state, so the replay skips it)
       const list = (existsSync(path.join(dir, `commands${suffix}.json`)) ? JSON.parse(readFileSync(path.join(dir, `commands${suffix}.json`), 'utf8')) : []).filter(c => !/^@ctrlshot /.test(c.text));
       const callsFile = `${tracePath}.calls.jsonl`;
-      if (!existsSync(callsFile) || !list.some(c => c.text.startsWith('@'))) return list;
+      if (!existsSync(callsFile)) return list;
       const edges = new Map();
       for (const line of readFileSync(callsFile, 'utf8').split('\n')) {
         if (!line.includes('"fn":"inputevent"') || !line.includes('"ev":"enter"')) continue;
         const r = parseTraceLine(line), action = parseInt(r.args[2], 16);
         if (r.inTick !== 0 || (action !== 1 && action !== 3)) continue;
         if (!edges.has(r.u)) edges.set(r.u, []);
-        edges.get(r.u).push({action, rng: r.rng});
+        edges.get(r.u).push({key: parseInt(r.args[1], 16), action, rng: r.rng});
       }
+      // A hold's records are taken in order. A typed console line is the console key (T), Backspaces, the characters (not press/release
+      // events) and Enter: the console's KeyEvent runs the line inside Enter's InputEvent, so the line takes the next Enter press's state
+      // (2026-10-17: a summon typed in a hold drew the summoned pawn's spawn-time FRand from another state, docs/weapon-attachment.md). A key
+      // edge takes the next record of its key and action (EInputKey: the virtual-key codes of the keys --cmds names; any key if unknown).
+      const KEYS = {Enter: 0x0d, PageDown: 0x22, PageUp: 0x21, Escape: 0x1b, Space: 0x20, Tab: 0x09, End: 0x23, Home: 0x24, ArrowLeft: 0x25, ArrowUp: 0x26,
+        ArrowRight: 0x27, ArrowDown: 0x28, ShiftLeft: 0x10, ControlLeft: 0x11};
+      const keyCode = code => KEYS[code] ?? (/^Key([A-Z])$/.exec(code)?.[1].charCodeAt(0)) ?? (/^Digit(\d)$/.exec(code) ? 0x30 + Number(code.slice(5)) : null);
+      const cursor = new Map();
       return list.map(command => {
-        const m = /^@(down|up) /.exec(command.text);
-        if (!m) return command;
-        const wanted = m[1] === 'down' ? 1 : 3, records = edges.get(command.after) ?? [], at = records.findIndex(e => e.action === wanted);
+        const m = /^@(down|up) (\S+)$/.exec(command.text), records = edges.get(command.after) ?? [], from = cursor.get(command.after) ?? 0;
+        const action = m && m[1] === 'up' ? 3 : 1, key = m ? keyCode(m[2]) : 0x0d;
+        const at = records.findIndex((e, i) => i >= from && e.action === action && (key === null || e.key === key));
         if (at < 0) return command;
-        return {...command, rng: records.splice(at, 1)[0].rng};
+        cursor.set(command.after, at + 1);
+        return {...command, rng: records[at].rng};
       });
     };
     // (--render-history: their LastRenderTime too, when the trace has it; the generators are in Play's level: a name only the original holds is not written)
