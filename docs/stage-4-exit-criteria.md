@@ -88,6 +88,12 @@ a level clock that moved less than 0.01 s over the shot. On the way, under other
 labelled: five times the game stopped taking posted keys after none to four shots, which ended those runs with `NO SHOT`.
 
 **Current state: a full gate run on the Mac, 2026-10-17** (master ceec4ed in a clean worktree, every store the Mac's own, `node scripts/validate-stage4-acceptance.mjs --jobs 2`: 369 checks in 4,232 s wall, peak 2,523 MiB; the report in the Mac's `.work/stage4-gate.json`): 76 criteria, 6 excluded, 70 gating; **68 PASS, 2 FAIL, 0 NO-ORIGINAL, 0 MISSING**. The two FAIL rows are 4.5.7 (`in2-in4` .93702 band identical) and 4.5.8 (`mmB3` .93931), kept FAIL on the Mac stores until the Linux host is back by the user's decision (item 9). The gate is therefore red; every other criterion passes. 
+
+**The two rows on the Linux host, 2026-10-17** (master 829ad63, the Linux main checkout and its Wine/Mesa stores, `--only '^4\.1\.[5-8]$|^4\.5\.[578]$' --jobs 2`:
+10 checks, peak 2.2 GB): **4.5.7 and 4.5.8 PASS** (the intro's three frames, MeetManderley's four, `native-find-base`), and the live rows whose stores are
+on this host pass on the code with the line-check and window-order changes: 4.1.5 (Island), 4.1.6 (the Club and its dancers' frame), 4.1.7 (the
+Underworld), 4.1.8 (the five-map sweep) and 4.5.5 (MeetPaul). With the Mac's run of the other 68, every gating criterion passes: **70 of 70**, the
+conversation rows on the stores their thresholds were calibrated against (item 9). One full run on a single machine holding every store remains to do.
 Only the full gate run (`node scripts/validate-stage4-acceptance.mjs`) is the gate; the row statuses below agree with the run of 2026-10-17. Run it from a clean worktree of master (other sessions' uncommitted edits in a shared checkout reach Play through Vite).
 
 | Clause | PASS | FAIL | MISSING | EXCLUDED |
