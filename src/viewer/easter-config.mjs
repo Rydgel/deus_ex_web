@@ -33,16 +33,17 @@ export const EASTER = Object.freeze({
     // top that plane is put (no visible gap).
     hipDrop: 18.78,
     lidEmbed: 0.3,
-    // The same frame's extents forward of the origin (the mesh's -y, (raw y) / -256): the heels 15.0, the toes and knees to 26.6, the back of the hips
-    // 3.9 behind it. The validator checks the heels clear the crate's front face and the hips stay on the lid with these.
-    heelForward: 15.0,
+    // The same frame's extents forward of the origin (the mesh's -y, (raw y) / -256, in units): the back of the hips 3.9 behind it; the heels
+    // 15.0 and the ankles 15.7 in front of it (the shin slopes back as it goes down); the back of the knees 20.0 (the knee underside's
+    // rear vertices) and the kneecaps 26.6. Her sit point is derived from these and the live crate (easter-sim.mjs): the heels
+    // `heelClearance` in front of the crate's front face, which puts the backs of her knees about 5 units past the face (the shins
+    // cannot hang vertically in front of it: they slope back by that much) and 18 of the 24 units of her thigh on the lid.
     hipBack: 3.9,
-    seatRadius: 40,
-    // Her sit point is moved this far toward the room (her facing) from the crate's centre, so she sits on the front part of the lid
-    // and her lower legs hang in front of the crate's front face (x = crate.x + 34) instead of through it: measured on GFM_TShirtPants'
-    // SitBreathe frame (docs/easter-egg.md "Her seat"), the heels are 15 and the knees and toes 21 to 27 units in front of the pose's
-    // origin, the back of her hips 4 behind it.
-    sitForward: 24,
+    heelForward: 15.0,
+    ankleForward: 15.7,
+    kneeBackForward: 20.0,
+    kneeFrontForward: 26.6,
+    heelClearance: 0.8,
   }),
   // The line a frob shows is `Name: line`; the other answers `replyDelay` seconds later (level time). Each pair is
   // [line of the one frobbed, the other's answer]; a speaker's pairs come in turn, the first one on the first frob.

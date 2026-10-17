@@ -112,10 +112,12 @@ async function setup(game) {
   const pivot = standHeight - sitHeight;
   const claudiaZ = lidTop - place.lidEmbed + place.hipDrop - pivot;
   const sitPoint = read(seat, 'sitPoint').map(point => [...point]);
-  // The sit point also moves toward the room (the pawn's facing, Seat.Rotation + (0,-16384,0) turned back: local (0, -sitForward)), so
-  // she sits on the front part of the lid with her lower legs hanging in front of the crate.
-  sitPoint[0] = [0, -place.sitForward, claudiaZ - seatAt[2] - (sitHeight - assHeight)];
-  const facing = place.claudiaYaw / 65536 * 2 * Math.PI, toward = [Math.cos(facing) * place.sitForward, Math.sin(facing) * place.sitForward];
+  // The sit point also moves toward the room (the pawn's facing, Seat.Rotation + (0,-16384,0) turned back: local (0, -sitForward)): she sits
+  // on the lid with her thighs over it up to the backs of her knees and her lower legs hanging in front of the crate's face.
+  // How far toward the room: her heels (the rearmost point of the lower leg) `heelClearance` in front of the crate's front face.
+  const sitForward = read(crate, 'CollisionRadius') - place.heelForward + place.heelClearance;
+  sitPoint[0] = [0, -sitForward, claudiaZ - seatAt[2] - (sitHeight - assHeight)];
+  const facing = place.claudiaYaw / 65536 * 2 * Math.PI, toward = [Math.cos(facing) * sitForward, Math.sin(facing) * sitForward];
   write(seat, 'sitPoint', sitPoint);
   runtime.callFunction(runtime.lookup(seat, 'SetCollision'), seat, 3, () => false);
   const sitZ = seatAt[2] + sitPoint[0][2] + (sitHeight - assHeight);

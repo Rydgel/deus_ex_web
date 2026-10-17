@@ -76,14 +76,19 @@ try {
     assert.equal(s.claudia.sitting, true);
     assert.equal(s.claudia.seat, s.seat.name);
     assert.equal(s.seat.hidden, true);
-    near(s.claudia.location[0], place.crate.x + place.sitForward, 0.5, 'Claudia x'); near(s.claudia.location[1], place.crate.y, 0.5, 'Claudia y');
+    near(s.claudia.location[0], place.crate.x + 34 - place.heelForward + place.heelClearance, 0.5, 'Claudia x'); near(s.claudia.location[1], place.crate.y, 0.5, 'Claudia y');
     assert.ok(s.claudia.location[2] > place.floor + 48 && s.claudia.location[2] < place.floor + 110, `Claudia sits above the crate lid (z ${s.claudia.location[2]})`);
     // No float and no clipping (docs/easter-egg.md "Her seat"): the pose's seat plane (the mesh origin Location + PrePivot, hipDrop below it)
     // lies on the crate's top surface, the heels are in front of its front face and the back of the hips is still over the lid.
     const lidTop = s.crate.location[2] + s.crate.collisionHeight, seatPlane = s.claudia.location[2] + s.claudia.prePivot[2] - place.hipDrop;
     near(seatPlane, lidTop - place.lidEmbed, 0.15, 'the pose\'s seat plane meets the crate lid');
-    assert.ok(s.claudia.location[0] + place.heelForward >= s.crate.location[0] + s.crate.collisionRadius + 2, 'her heels clear the crate\'s front face');
-    assert.ok(s.claudia.location[0] - place.hipBack >= s.crate.location[0] - s.crate.collisionRadius, 'the back of her hips is over the lid');
+    // Along the room axis (+x; the pose's forward distances are place.*Forward): the front face, the hips and thighs on the lid, the backs of the knees
+    // just past the edge, the shins (heels and ankles, the rearmost points of the lower leg) in front of the face.
+    const face = s.crate.location[0] + s.crate.collisionRadius, hipX = s.claudia.location[0] - place.hipBack, kneeX = s.claudia.location[0] + place.kneeBackForward;
+    assert.ok(hipX >= s.crate.location[0] - s.crate.collisionRadius, 'the back of her hips is over the lid');
+    assert.ok(face - hipX >= 0.7 * (place.hipBack + place.kneeBackForward), `her thighs rest on the lid: ${(face - hipX).toFixed(1)} of ${place.hipBack + place.kneeBackForward} units`);
+    assert.ok(kneeX >= face && kneeX - face <= 8, `the backs of her knees are at the front edge, a few units past it: ${(kneeX - face).toFixed(1)}`);
+    assert.ok(s.claudia.location[0] + place.heelForward >= face + 0.5 && s.claudia.location[0] + place.ankleForward >= face + 0.5, 'her shins hang clear of the crate\'s front face');
     assert.equal(s.claudia.drawScale, 1);
     assert.equal(s.claudia.conList, null, 'no original conversation list: a frob reaches only the mod\'s line'); assert.equal(s.rydgel.conList, null);
     assert.equal(s.claudia.familiar, claudia.name); assert.equal(s.claudia.unfamiliar, claudia.name);

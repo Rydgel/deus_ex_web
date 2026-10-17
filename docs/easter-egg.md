@@ -65,11 +65,14 @@ The first placement (`sitLift 28`, tuned on screen, crate centre) was wrong twic
 hovered; `Location.z + PrePivot.z - hipDrop` = -125.3 + 9 - 18.8 = -135.1 against the lid at -143.0) and the lower legs, 15 to 27 in front of the origin, were
 inside the 68 wide crate (front face 34 from its centre). Now `easter-sim.mjs` derives her Location from the crate: the seat plane lies
 `lidEmbed` (0.3) under the lid's top surface (Location.z = lid top - lidEmbed + hipDrop - PrePivotOffset, which makes the first sit point's
-z, `sitPoint.z = Location.z - seat.z - (sitHeight - assHeight)`), and she sits `sitForward` = 24 toward the room from the crate's centre
-(`sitPoint = (0, -24, z)` in the seat's frame, which is yawed a quarter turn from her facing), so her hips are over the front part of the
-lid (back of the hips 20 from the centre, 14 inside the front face), the heels are 5 and the knees 10 to 16 in front of the face, and the
-shins hang in the open. The validator asserts the seat plane against the lid, the heel clearance and the hip overlap from the config
-numbers, and the side-on screenshots below show it (camera in ghost mode at the lid's height: the thighs lie along the lid's top line).
+z, `sitPoint.z = Location.z - seat.z - (sitHeight - assHeight)`), and she sits toward the room by `crate radius - heelForward + heelClearance` = 34 - 15.0 + 0.8 = 19.8
+from the crate's centre (`sitPoint = (0, -19.8, z)` in the seat's frame, which is yawed a quarter turn from her facing): the heels, the
+rearmost points of the lower leg, are 0.8 in front of the front face and the shins hang in the open. The shin slopes back as it goes down
+(the knee underside's rear vertices are 20.0 in front of the origin, the heels 15.0), so the backs of her knees end 5.8 past the face
+and the kneecaps 12.6; 18.1 of the 23.9 units from the back of the hips to the back of the knees are on the lid. (A first version with
+the sit point 24 forward had only the hips on the lid and the thighs over the edge; hanging the shins closer to the face would put the
+ankles inside it.) The validator asserts the seat plane against the lid, the hips and thighs over it, the backs of the knees a few units past the edge and
+the heels and ankles clear of the face, all from the live crate and the config numbers, and the side-on screenshots below show it (camera in ghost mode at the lid's height: the thighs lie along the lid's top line).
 
 ## Skins (`easter-skin-art.mjs`)
 
