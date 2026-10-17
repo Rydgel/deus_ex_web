@@ -841,8 +841,8 @@ async function judgeLive(task, add, fail, result) {
     ...(floorShots ? ['--extra-shots', String(floorShots)] : []),
     // fireHold: the original's fires were held at its frames (`dx-live-win fire hold`) and their pixels stored; Play holds its own at them
     ...(fireHold ? ['--fire-hold'] : [])];
-  // One replay of the original's trace. A run whose only difference is the stream's draw count is repeated once: that count differed in
-  // single runs under host load and not on the repeat (docs/visual-acceptance.md "Open", unattributed), and the repeat is reported.
+  // One replay of the original's trace. The one repeat a stream-draw-only difference used to get is gone (user, 2026-10-17): the Underworld's draw
+  // count was attributed to the harness's animation flags and fixed, and the single --jobs 1 run of 2026-10-17 passed with no repeat.
   const replay = async () => {
     const play = add(await exec(process.execPath, ['scripts/live-acceptance.mjs', 'play', '--map', map, '--seed', '1', ...extra], {limitSeconds: 1500}));
     if (play.killed || play.code !== 0) return {error: `play step: ${play.killed ?? tail(play.out)}`};
@@ -857,8 +857,7 @@ async function judgeLive(task, add, fail, result) {
     const draws = report.rng?.firstTickWithDifferentDrawCount ? `stream draws differ at tick ${report.rng.firstTickWithDifferentDrawCount.tick}` : null;
     return {report, actors, problems, draws};
   };
-  let first = await replay(), flaky = null;
-  if (!first.error && !first.problems.length && first.draws) { flaky = first.draws; first = await replay(); }
+  const first = await replay();
   if (first.error) return fail(first.error);
   const {report, actors} = first, problems = [...first.problems];
   if (first.draws) problems.push(first.draws);
@@ -888,7 +887,7 @@ async function judgeLive(task, add, fail, result) {
     }
   }
   if (problems.length) return fail(`${map}${tag ? ` ${tag}` : ''}: ${problems.join('; ')}`);
-  return {...result, status: 'PASS', detail: `${map}${tag ? ` ${tag}` : ''}: ${actors.length} actors equal for ${report.ticks} ticks, clock and stream draws equal${frameNote}${flaky ? ` (the first run's ${flaky}; equal on the repeat)` : ''}`, flaky: Boolean(flaky)};
+  return {...result, status: 'PASS', detail: `${map}${tag ? ` ${tag}` : ''}: ${actors.length} actors equal for ${report.ticks} ticks, clock and stream draws equal${frameNote}`};
 }
 // conversation frames -------------------------------------------------------------------------------------
 // The original's held frames of a conversation (taken with Ctrl+F9 at a tick of the traced load, `live-original.sh --cmds "N:@ctrlshot name"`) against

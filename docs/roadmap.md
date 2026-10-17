@@ -395,7 +395,8 @@ of general script compatibility.
 
 ## 4. Restore the remaining presentation
 
-**In progress.** Restored so far, each with its evidence below: original
+**Complete (2026-10-17).** The adopted gate passes 70 of 70 in one `--jobs 1` run with every store;
+see [Stage 4 close](stage-4-exit-criteria.md#stage-4-close). Restored, each with its evidence below: original
 mesh lighting (CPU kernels and an exact GPU path), static and animated light
 maps, moving lights on light maps, BSP occlusion (OccludeBsp, the master
 frame, dynamics, the moving brush tracker and child frames in the Rust core), mirrors on every static and mover plane
@@ -540,7 +541,8 @@ compared in 218 queries), and the flash `UGameEngine::Draw` hands the device is 
   (BatteryPark's live actors, Ship's camera window 2), 3 pass only in `?sim=inline`, 21 have no original-side
   check (the interfaces, the conversation frame and speech audio first among them); the doc orders the remaining
   work. Since then the interfaces are compared with the original's frames ([interface frames](interface-frames.md):
-  rows 4.4.11 to 4.4.14 pass, two divergences found and fixed).
+  rows 4.4.11 to 4.4.14 pass, two divergences found and fixed). Adopted by the user 2026-10-17; the official
+  run passes 70 of 70 ([Stage 4 close](stage-4-exit-criteria.md#stage-4-close)).
 
 Frame cost and the Rust-core ports that keep these effects inside the frame budget are in
 [play frame cost](play-frame-cost.md).

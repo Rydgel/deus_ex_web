@@ -1,7 +1,7 @@
 # Stage 4 exit criteria: a finite definition of "Done when"
 
-Status: **draft for the user to adopt** (written 2026-10-15 from master 2386f69). Nothing here is a Stage 4 claim; it is the definition the
-claims will be judged against. The acceptance test is `scripts/validate-stage4-acceptance.mjs` (see [Running the gate](#running-the-gate));
+Status: **adopted by the user 2026-10-17** (the scenes, thresholds, flat views, the five-map sweep, the exclusions, brightness not judged, the official
+run at `--jobs 1`; written 2026-10-15 from master 2386f69). **Stage 4 is complete: the adopted gate passes 70 of 70 in one run** ([Stage 4 close](#stage-4-close)). The acceptance test is `scripts/validate-stage4-acceptance.mjs` (see [Running the gate](#running-the-gate));
 like the Stage 3 gate ([Stage 3 exit criteria](stage-3-exit-criteria.md)) it exits 1 until every criterion passes.
 
 The roadmap's criterion for section 4 ("Restore the remaining presentation"): *representative scenes reproduce the original animated actors,
@@ -9,6 +9,22 @@ effects, sound, text, and interfaces, including synchronized speech and conversa
 not evidence that it renders or plays correctly.* Section 4 had no finite scene list, so "representative" and "reproduce" have meant "whatever the
 last agent compared". This note fixes both: a list of scenes, a criterion for each, and the check that proves it against the original, or the word
 `MISSING`. Where the choice is mine and the reason is weak, the text says so; the user adopts or changes the list.
+
+## Stage 4 close
+
+The official run, 2026-10-17, master 5d7285c, the Linux host (AMD, 30 GB, 16 cores) holding every store (its own and the Mac's copied to `.work/mac-stores`,
+`DX_ORIGINALS=.work:.work/mac-stores:.work/live/.work:.work/mac-stores/live/.work`), `--jobs 1`: 369 checks in 7,890 s (2 h 12 min), peak 4,272 MiB.
+**70 PASS, 0 FAIL, 0 NO-ORIGINAL, 0 SKIPPED, 0 INLINE, 0 MISSING, 6 EXCLUDED** (`.work/stage4-gate-final.json`, not in Git).
+
+The two allowances the user adopted to drop if this run passed without them:
+* **The live stream-draw repeat is removed.** No live check needed it in the run (every live row equal on its first replay), so a stream-draw difference now fails its row.
+* **The explained-block allowances stay.** Street `y2` had 2 outlier blocks in the run (its allowance), so the condition did not hold for Street; `y3` and Garage `garage2`
+  had 0. The allowances' reason is unchanged ([How the gate judges](#how-the-gate-judges)).
+
+Not Stage 4 claims, carried past the close: the gate's concurrency flakes (the interface compare and Battery Park under load, the reason the official run is `--jobs 1`); the
+items listed as open in [Remaining Stage 4 work](#remaining-stage-4-work-in-the-order-it-blocks) that no gating row holds (4.2.29's camera windows, 4.2.28's window residue
+judged within its thresholds, the pointer focus difference); the Wine brightness gap (a Windows-side difference, not judged by the user's decision); speech's decoded audio
+under the user's 4.5.6 exclusion.
 
 ## Scoreboard
 
@@ -246,7 +262,7 @@ says why it has its value and how strong that reason is.
 | Outlier blocks | none | The metric flags 16x9 blocks whose luminance ratio is 1.6x off the frame's median; every currently clean view has none. Strong: a missing or extra object shows up as one. |
 | Sub-pixel offset | at most 0.25 px where measurable | The pixel-centre defect was 0.5 px; the measured offsets are 0 to 0.125. Strong. |
 | Flat views | recall and outlier blocks only | In flat, nearly black views the strongest 5% of gradients are texture noise and the precision reads low with no visible difference ([visual acceptance](visual-acceptance.md#results), "Flags explained by the metric"). Eight views are listed in `FLAT_VIEWS` (Club y1, y2, y3, down; Airfield y1; Smug y0, y1; Ship y2); Smug y0 and y1 are my addition, with the same pattern. Weak: chosen by reading the table. |
-| Explained blocks | up to two outlier blocks in Street y2, Street y3 and Garage garage2 | The panning sky follows `Level.TimeSeconds` and the animated light maps' noise state is not shared, both documented as host inputs; the first runs differed by one block in Street and two in the Garage, and by different views between runs. Weak: the allowance was read from the runs. |
+| Explained blocks | up to two outlier blocks in Street y2, Street y3 and Garage garage2 | The panning sky follows `Level.TimeSeconds` and the animated light maps' noise state is not shared, both documented as host inputs; the first runs differed by one block in Street and two in the Garage, and by different views between runs. Weak: the allowance was read from the runs. Kept at the close: the official run of 2026-10-17 had 2 blocks in Street y2. |
 | Brightness | not judged | Play's raw frames are 1.1 to 1.45 times the original's under Wine: a known Windows gamma issue, kept out of scope on the user's instruction. Security-camera windows are captured at Brightness 2/3, where the ramp is the identity. |
 | Security-camera window | mean abs. difference at most 1.0, edge recall and precision at least 0.90 | The documented values with the sampling state and display-space filtering are 0.00 to 0.15. The precision of a Battery Park window moved between .948 and .99 across runs (two walking actors), hence 0.90. Weak. |
 | Matched capture settings | `?antialias=0`, `?detailTextures=0` | Every stored original lacks multisampling, and all but 4.2.22's lack the detail pass (Wine's and CrossOver's devices have no `BLENDDIFFUSEALPHA`; 4.2.22's frames were taken with the pass poked in, and Play keeps its pass for them, `detail: true`); Play's defaults (both on) stay as they are. |
@@ -255,7 +271,7 @@ says why it has its value and how strong that reason is.
 | Effect contribution (the frame with an effect less the frame without it, original against Play) | correlation at least .90, Play's sum within 8% of the frame's brightness ratio times the original's, agreement at least .98; an effect drawn with a FireTexture (a LIVE check's `floorShots`): Play's median agreement over every Play/original frame pair at least the original's minimum against itself | The Bar's haze: .93, .93 and .99, 1% to 4%, 1.0; the other views' differences are .0 to .37. Weak: three views, and the original's two frames are two captures (the animated light maps' noise state is in their difference). The steam (row 4.2.13): its puffs change every drawn frame, and the original's four held frames read .867 to .934 against each other; the floor rule (adopted 2026-10-16) passed 4 of 8 runs, and was superseded on 2026-10-17 by holding the texture at the original's pixels (`fireHold`): correlation 1.000, gap 1.000, agreement 1.000 in 5 of 5 runs at the thresholds of this row. Training's shadows (an effect that darkens: its own pixels are those at least one level darker) read 1.0, 0% and 1.0 in both views; a view with an animated screen in it read .945 and .78 with the shadows bit-equal, so such a view is not used. The detail pass (darkens) reads .993 to 1.0, 0% to 0.2% and .998 to 1.0 in its four views. |
 | Shadows' state at the shot (4.2.15) | every Shadow of the original found in Play by its owner; the same shadows drawn; bHasDecal and the surface count equal; owner Location equal where attached in either; Location, DrawScale and Rotation equal where attached in both | No tolerance: compared as float32, bit for bit (the original's values printed with `%.9g`). Measured equal in both views (19 of 19). Strong for the decal's inputs: a walker mid-walk at the shot (37 units apart), a shadow attached in one program only (ScientistMale0 before the camera transit) and a camera order that froze the player's shadow elsewhere each failed it. |
 | Laser beams' geometry (64 x 64 blocks of red excess) | blocks with beam in both, of either, at least .85; Play's energy over the original's .75 to 1.33; y-offset of the centroids at most 2.5 px rms | .94 and .88; .87 to 1.01 over runs; 1.3 and 1.6 px, against the original's own two frames 1.0, .99 and .3 px. Weak: two views; the beam texture is an animated fire (an unmatched host input) that moves the energy by 10% to 15% between runs. |
-| Live-scene tolerance | every watched field of every actor, the clock and the stream draws equal; a stream-draw-only difference is repeated once | The Underworld's draw count differed at tick 45 on some replays (two of two fresh runs, then 1 of 4 to 4 of 5 in six batches): attributed 2026-10-16 to the player's animation flags at the start of the replay (`bAnimNotify` 0 when the replay began before the ghost's own script had started its `Tread` loop, so its `PlayFootStep` `FRand` was missing) and fixed in the harness; 10 of 10 replays are equal since and the gate reports `flaky: false`, so the repeat is no longer needed for this map. The allowance stays until the user removes it; a repeat that passes is still reported as `flaky`. |
+| Live-scene tolerance | every watched field of every actor, the clock and the stream draws equal; no repeat (the one repeat of a stream-draw-only difference was removed at the close, 2026-10-17) | The Underworld's draw count differed at tick 45 on some replays (two of two fresh runs, then 1 of 4 to 4 of 5 in six batches): attributed 2026-10-16 to the player's animation flags at the start of the replay (`bAnimNotify` 0 when the replay began before the ghost's own script had started its `Tread` loop, so its `PlayFootStep` `FRand` was missing) and fixed in the harness; 10 of 10 replays are equal since and the gate reports `flaky: false`, so the repeat is no longer needed for this map. Removed at the close: the official run of 2026-10-17 needed no repeat. |
 
 **Real-x87 probes.** `window-scene-frame` runs a small probe executable under Wine to measure `appTan` on hardware. The gate points those validators
 at `/usr/bin/wine` and the `~/.wine-deusex` prefix when they exist (`X87_PROBE_WINE`, `WINEPREFIX`); it starts no DeusEx.exe.
