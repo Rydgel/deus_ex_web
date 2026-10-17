@@ -27,10 +27,22 @@ export const EASTER = Object.freeze({
     // to Seat.Rotation + (0,-16384,0), so the hidden seat is yawed a quarter turn from her facing.
     rydgel: Object.freeze({ x: -1104, y: -448, yaw: 0 }),
     claudiaYaw: 0,
-    // The hidden seat sits on the floor at the crate's centre; its sit point is raised by `sitLift` (the crate's height, tuned on
-    // screen) and its collision radius is `seatRadius` so Sitting's approach point is clear of the crate (docs/easter-egg.md).
-    sitLift: 28,
+    // The hidden seat sits on the floor at the crate's centre; its first sit point is derived (easter-sim.mjs) so the pose's seat plane
+    // meets the crate's top surface: `hipDrop` is the distance from the mesh origin (Location + PrePivot) down to the lowest seat vertex of
+    // GFM_TShirtPants' SitBreathe frame, (11000 - 6193) / 256 on the mesh's origin and scale, and `lidEmbed` how far under the lid's
+    // top that plane is put (no visible gap).
+    hipDrop: 18.78,
+    lidEmbed: 0.3,
+    // The same frame's extents forward of the origin (the mesh's -y, (raw y) / -256): the heels 15.0, the toes and knees to 26.6, the back of the hips
+    // 3.9 behind it. The validator checks the heels clear the crate's front face and the hips stay on the lid with these.
+    heelForward: 15.0,
+    hipBack: 3.9,
     seatRadius: 40,
+    // Her sit point is moved this far toward the room (her facing) from the crate's centre, so she sits on the front part of the lid
+    // and her lower legs hang in front of the crate's front face (x = crate.x + 34) instead of through it: measured on GFM_TShirtPants'
+    // SitBreathe frame (docs/easter-egg.md "Her seat"), the heels are 15 and the knees and toes 21 to 27 units in front of the pose's
+    // origin, the back of her hips 4 behind it.
+    sitForward: 24,
   }),
   // The line a frob shows is `Name: line`; the other answers `replyDelay` seconds later (level time). Each pair is
   // [line of the one frobbed, the other's answer]; a speaker's pairs come in turn, the first one on the first frob.

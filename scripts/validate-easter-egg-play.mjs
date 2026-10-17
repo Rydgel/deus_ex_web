@@ -76,8 +76,15 @@ try {
     assert.equal(s.claudia.sitting, true);
     assert.equal(s.claudia.seat, s.seat.name);
     assert.equal(s.seat.hidden, true);
-    near(s.claudia.location[0], place.crate.x, 0.5, 'Claudia x'); near(s.claudia.location[1], place.crate.y, 0.5, 'Claudia y');
+    near(s.claudia.location[0], place.crate.x + place.sitForward, 0.5, 'Claudia x'); near(s.claudia.location[1], place.crate.y, 0.5, 'Claudia y');
     assert.ok(s.claudia.location[2] > place.floor + 48 && s.claudia.location[2] < place.floor + 110, `Claudia sits above the crate lid (z ${s.claudia.location[2]})`);
+    // No float and no clipping (docs/easter-egg.md "Her seat"): the pose's seat plane (the mesh origin Location + PrePivot, hipDrop below it)
+    // lies on the crate's top surface, the heels are in front of its front face and the back of the hips is still over the lid.
+    const lidTop = s.crate.location[2] + s.crate.collisionHeight, seatPlane = s.claudia.location[2] + s.claudia.prePivot[2] - place.hipDrop;
+    near(seatPlane, lidTop - place.lidEmbed, 0.15, 'the pose\'s seat plane meets the crate lid');
+    assert.ok(s.claudia.location[0] + place.heelForward >= s.crate.location[0] + s.crate.collisionRadius + 2, 'her heels clear the crate\'s front face');
+    assert.ok(s.claudia.location[0] - place.hipBack >= s.crate.location[0] - s.crate.collisionRadius, 'the back of her hips is over the lid');
+    assert.equal(s.claudia.drawScale, 1);
     assert.equal(s.claudia.conList, null, 'no original conversation list: a frob reaches only the mod\'s line'); assert.equal(s.rydgel.conList, null);
     assert.equal(s.claudia.familiar, claudia.name); assert.equal(s.claudia.unfamiliar, claudia.name);
     assert.deepEqual(s.claudia.multiSkins.slice(3, 5), ['FramesTex1', 'LensesTex2'], 'the stock glasses slots are on');
@@ -127,8 +134,8 @@ try {
     console.log(`PASS skins: ${skins.length} generated (${skins.map(skin => skin.key.replace(/^easter:|DeusExCharacters\.Skins\./g, '')).join(', ')})`);
 
     // Frob: the original RightMouse binding on each, then the other's answer.
-    const place_ = async (location, yaw) => { await page.evaluate(args => window.deusExViewer.viewProbe(args), {location, rotation: [0, yaw, 0]}); };
-    const aim = {claudia: [[place.crate.x + 50, place.crate.y, place.floor + 43], 32768], rydgel: [[place.rydgel.x + 45, place.rydgel.y, place.floor + 43], 32768]};
+    const place_ = async (location, yaw, pitch = 0) => { await page.evaluate(args => window.deusExViewer.viewProbe(args), {location, rotation: [pitch, yaw, 0]}); };
+    const aim = {claudia: [[place.crate.x + 66, place.crate.y, place.floor + 43], 32768, -4000], rydgel: [[place.rydgel.x + 45, place.rydgel.y, place.floor + 43], 32768]};
     const before = {claudia: s.claudia, rydgel: s.rydgel};
     await mkdir(shots ?? '.', {recursive: true});
     if (shots) {

@@ -89,7 +89,7 @@ async function setup(game) {
   write(crate, 'bInvincible', true);
   write(crate, 'bPushable', false);
   // The seat: a stock Chair1, hidden, on the floor at the crate's centre, found by Tag through the pawn's own OrderTag. Its first
-  // sit point is raised to the crate lid. The seat is not for walking to: Sitting would walk a spawned pawn with MoveActor, which
+  // sit point is put at the crate lid (below). The seat is not for walking to: Sitting would walk a spawned pawn with MoveActor, which
   // Play has only for map pawns (script-runtime.mjs movePawn), and its SetBasedPawnSize Move is the same call. Claudia is
   // spawned already seated instead (below), the state Sitting's own sit-down reaches.
   const seatHeight = runtime.defaultValue(seatClass, runtime.lookupMember(seatClass, 'fields', 'CollisionHeight'));
@@ -98,23 +98,35 @@ async function setup(game) {
   write(seat, 'Tag', 'EasterSeat');
   write(seat, 'bHidden', true);
   write(seat, 'Physics', 0);
-  const sitPoint = read(seat, 'sitPoint').map(point => [...point]);
-  sitPoint[0] = [0, 0, sitPoint[0][2] + place.sitLift];
-  write(seat, 'sitPoint', sitPoint);
-  runtime.callFunction(runtime.lookup(seat, 'SetCollision'), seat, 3, () => false);
-  // Claudia, at ScriptedPawn.Sitting's end state: Tick's SitPosition (seat + sit point - (0,0,1) * newAssHeight, with the sit-height
-  // collision box), SetBasedPawnSize(radius, GetSitHeight()) applied without its Move (CollisionHeight, PrePivot, DesiredPrePivot,
-  // PrePivotOffset, BaseEyeHeight as that function leaves them) and the seat's slot taken, so the state enters its own
-  // ContinueSitting label: PlaySitting's SitBreathe loop, then stasis.
+  // Claudia's metrics first (ScriptedPawn.Sitting's end state: SitPosition = seat + sit point - (0,0,1) * newAssHeight, the sit-height collision
+  // box, SetBasedPawnSize(radius, GetSitHeight()) applied without its Move: CollisionHeight, PrePivot, DesiredPrePivot, PrePivotOffset,
+  // BaseEyeHeight as that function leaves them), because the sit point is derived from them below.
   const field = name => runtime.lookupMember(pawnC, 'fields', name), defaults = name => runtime.defaultValue(pawnC, field(name));
   const full = defaults('CollisionHeight'), baseAss = defaults('BaseAssHeight'), defaultEye = defaults('BaseEyeHeight');
   const standHeight = full - 4.5, sitHeight = standHeight + baseAss * 0.5, assHeight = standHeight + baseAss;
+  // Where the pose's seat plane meets the lid. The mesh is drawn from Location + PrePivot (lodmesh-frame.mjs), and GFM_TShirtPants'
+  // SitBreathe frame has its lowest seat vertex place.hipDrop below that origin (docs/easter-egg.md "Her seat"), so her Location is
+  // set so the seat plane lies place.lidEmbed under the lid's top surface; the sit point is whatever puts SitPosition there.
+  // (the live crate's collision height: a spawned decoration's CollisionHeight is not always its class default)
+  const lidTop = read(crate, 'Location')[2] + read(crate, 'CollisionHeight');
+  const pivot = standHeight - sitHeight;
+  const claudiaZ = lidTop - place.lidEmbed + place.hipDrop - pivot;
+  const sitPoint = read(seat, 'sitPoint').map(point => [...point]);
+  // The sit point also moves toward the room (the pawn's facing, Seat.Rotation + (0,-16384,0) turned back: local (0, -sitForward)), so
+  // she sits on the front part of the lid with her lower legs hanging in front of the crate.
+  sitPoint[0] = [0, -place.sitForward, claudiaZ - seatAt[2] - (sitHeight - assHeight)];
+  const facing = place.claudiaYaw / 65536 * 2 * Math.PI, toward = [Math.cos(facing) * place.sitForward, Math.sin(facing) * place.sitForward];
+  write(seat, 'sitPoint', sitPoint);
+  runtime.callFunction(runtime.lookup(seat, 'SetCollision'), seat, 3, () => false);
   const sitZ = seatAt[2] + sitPoint[0][2] + (sitHeight - assHeight);
-  const claudiaActor = spawn(pawnC, [place.crate.x, place.crate.y, sitZ], place.claudiaYaw, { noCollisionFail: true });
+  const claudiaActor = spawn(pawnC, [place.crate.x + toward[0], place.crate.y + toward[1], sitZ], place.claudiaYaw, { noCollisionFail: true });
   write(claudiaActor, 'CollisionHeight', sitHeight);
   write(claudiaActor, 'PrePivotOffset', [0, 0, standHeight - sitHeight]);
-  write(claudiaActor, 'PrePivot', [0, 0, full - sitHeight]);
-  write(claudiaActor, 'DesiredPrePivot', [0, 0, full - sitHeight]);
+  // PrePivot is the value the state's own LoopAnimPivot('SitBreathe') tweens it to (DesiredPrePivot = NewPrePivot + PrePivotOffset, with
+  // no NewPrePivot): SetBasedPawnSize first leaves full - sitHeight and the first pivot call moves it to PrePivotOffset, so a pawn spawned
+  // in the steady state starts at that value and does not drop by the difference in its first 0.15 s.
+  write(claudiaActor, 'PrePivot', [0, 0, pivot]);
+  write(claudiaActor, 'DesiredPrePivot', [0, 0, pivot]);
   write(claudiaActor, 'BaseEyeHeight', sitHeight - (standHeight - defaultEye));
   // PHYS_Flying, which Sitting sets (SetPhysics, native 3970) as it sits down: no gravity under a pawn on a crate.
   runtime.callFunction(runtime.lookup(claudiaActor, 'SetPhysics'), claudiaActor, 1, () => 4);
@@ -180,6 +192,7 @@ function status(game) {
     return { name: actor.name, className: instance?.cls?.record?.key ?? null, mesh: nm(read(actor, 'Mesh')), location: [...read(actor, 'Location')].map(Math.fround), rotation: [...read(actor, 'Rotation')], orders: read(actor, 'Orders'),
       state: instance?.state?.stateNode?.record?.name ?? null, physics: read(actor, 'Physics'), sitting: read(actor, 'bSitting'),
       anim: read(actor, 'AnimSequence'), familiar: read(actor, 'FamiliarName'), unfamiliar: read(actor, 'UnfamiliarName'),
+      collisionHeight: read(actor, 'CollisionHeight'), collisionRadius: read(actor, 'CollisionRadius'), prePivot: [...read(actor, 'PrePivot')], drawScale: read(actor, 'DrawScale'),
       conList: nm(read(actor, 'ConListItems')), seat: nm(read(actor, 'SeatActor')), base: nm(read(actor, 'Base')), health: read(actor, 'Health'), invincible: read(actor, 'bInvincible'),
       multiSkins: [0, 1, 2, 3, 4, 5, 6, 7].map(i => nm(read(actor, 'MultiSkins')[i])) };
   };
@@ -188,7 +201,8 @@ function status(game) {
   for (let entry = read(state.player, 'FirstLog'); entry && log.length < 64; entry = read(entry, 'Next')) log.push(read(entry, 'Text'));
   const out = { active: true, time: read(state.level.actors[0], 'TimeSeconds'), pending: state.queue.length, log, frobTarget: nm(read(state.player, 'FrobTarget')) };
   for (const [actor, id] of state.actors) out[id] = describe(actor);
-  out.crate = { name: state.crate.name, location: [...read(state.crate, 'Location')], physics: read(state.crate, 'Physics') };
+  out.crate = { name: state.crate.name, location: [...read(state.crate, 'Location')], physics: read(state.crate, 'Physics'),
+    collisionHeight: read(state.crate, 'CollisionHeight'), collisionRadius: read(state.crate, 'CollisionRadius') };
   out.seat = { name: state.seat.name, location: [...read(state.seat, 'Location')], hidden: read(state.seat, 'bHidden') };
   return out;
 }

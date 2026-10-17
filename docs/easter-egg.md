@@ -26,7 +26,7 @@ frob and reply hooks, simulation side), `easter-page.mjs` (page side start), `ea
 | Claudia | `DeusEx.Female1` (HumanCivilian, mesh `GFM_TShirtPants`, 64 sequences incl. `SitBegin`, `SitBreathe`) | the class of this map's own Female0; the mesh has glasses slots and a sitting pose |
 | Rydgel | `DeusEx.Businessman2` (HumanCivilian, mesh `GM_Suit`) | the GM_Suit mesh has a ponytail slot (slot 7, the Triad `PonytailTex1`), glasses slots, a jacket whose skirt is its own masked slot, a separate trousers slot |
 | the crate | `CrateBreakableMedGeneral` (wood, 68 x 68 x 48) | set `bInvincible` and not pushable, so nothing moves her seat |
-| her seat | `Chair1` (a stock `Seat`), `bHidden`, collision off, at the crate's centre with its sit point raised 28 | lets `ScriptedPawn.Sitting` run: she is spawned in the state that state ends in |
+| her seat | `Chair1` (a stock `Seat`), `bHidden`, collision off, at the crate's centre, its sit point derived so the pose's seat plane meets the lid and moved 24 toward the room ("Her seat") | lets `ScriptedPawn.Sitting` run: she is spawned in the state that state ends in |
 | glasses | `FramesTex1` + `LensesTex2` in `GFM_TShirtPants` slots 3 and 4 (the pair the map's own Female1 wears on another mesh), through her MultiSkins; the frames texture itself is drawn round (below) | the mesh has the geometry, the stock Female1 skin masks it |
 | laptop | **none**: no mesh in DeusEx.u or DeusExDeco.u is a laptop (the nearest are `ComputerPersonal`, a whole desktop, and `DataCube`, a frobbable text slate); she types at nothing | not invented |
 
@@ -49,6 +49,27 @@ z = -143.5); in front of it the floor is z = -191.5 up to a 16-unit riser at x =
 centre (-1090, -388, -167.5) (lid -143.5, level with the counter), Claudia on it facing the room (+x), Rydgel at (-1104, -448, -144)
 facing the room, leaning on the counter beside the crate. The Bartender0 stands behind the counter at (-1233, -468). The spot is
 `10_Paris_Club` player coordinates (x -1040, y -388 faces Claudia from the room, 50 units).
+
+## Her seat
+
+`ScriptedPawn.Sitting` places a pawn at `SitPosition = seat.Location + sitPoint rotated by the seat - (0,0,1) * newAssHeight`, and the mesh is
+drawn from `Location + PrePivot` (lodmesh-frame.mjs), with `PrePivot.z` at its steady value `PrePivotOffset` = default collision height - sit height (9 for
+Female1: stand height 38.5, sit height 29.5, DrawScale 1): `SetBasedPawnSize` first leaves full - sit height (13.5) and the state's own
+`LoopAnimPivot('SitBreathe')` tweens it to `DesiredPrePivot = PrePivotOffset` within 0.15 s, so a pawn spawned in the steady state starts there. Her pose is the `SitBreathe` frame of `GFM_TShirtPants` (frame 305), measured on the
+mesh's own vertices (`decodeLodMeshPayload` + `readLodMeshFrame`; mesh scale 1/256, origin z 11000, front = raw -y): the lowest seat vertices
+are at raw z 6193, so **18.78 below the origin** (`hipDrop`); the back of the hips is 3.9 behind it, the heels (raw y -3847 to -4011) are
+15.0 to 15.7 and the knees and toes 20.0 to 26.6 in front of it, the soles are 43.0 below it (24 above the floor when the seat plane is on a
+48 high crate).
+
+The first placement (`sitLift 28`, tuned on screen, crate centre) was wrong twice: the seat plane was 7.9 units above the lid (she
+hovered; `Location.z + PrePivot.z - hipDrop` = -125.3 + 9 - 18.8 = -135.1 against the lid at -143.0) and the lower legs, 15 to 27 in front of the origin, were
+inside the 68 wide crate (front face 34 from its centre). Now `easter-sim.mjs` derives her Location from the crate: the seat plane lies
+`lidEmbed` (0.3) under the lid's top surface (Location.z = lid top - lidEmbed + hipDrop - PrePivotOffset, which makes the first sit point's
+z, `sitPoint.z = Location.z - seat.z - (sitHeight - assHeight)`), and she sits `sitForward` = 24 toward the room from the crate's centre
+(`sitPoint = (0, -24, z)` in the seat's frame, which is yawed a quarter turn from her facing), so her hips are over the front part of the
+lid (back of the hips 20 from the centre, 14 inside the front face), the heels are 5 and the knees 10 to 16 in front of the face, and the
+shins hang in the open. The validator asserts the seat plane against the lid, the heel clearance and the hip overlap from the config
+numbers, and the side-on screenshots below show it (camera in ghost mode at the lid's height: the thighs lie along the lid's top line).
 
 ## Skins (`easter-skin-art.mjs`)
 
