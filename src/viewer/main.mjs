@@ -675,9 +675,17 @@ function resetCamera() {
   if (mode === 'play' && game && !simClient) applyPlayerView(sim.view());
   return reply;
 }
+/** ?easter=1 (docs/easter-egg.md): an opt-in mod. Without the flag this is a no-op and its module is never loaded. */
+const easterParam = new URLSearchParams(location.search).get('easter') === '1';
+function applyEaster() {
+  if (!easterParam || !game) return null;
+  return import('./easter-page.mjs').then(({ startEaster }) => startEaster({ game, simClient, assets, mapName: currentMap }))
+    .catch(error => toast(`?easter: ${error.message}`));
+}
 /** ?cheat= after a Player start; failures are shown, not thrown. */
 function applyStartCheats() {
-  if (!startCheats.length || !game) return null;
+  const easter = applyEaster();
+  if (!startCheats.length || !game) return easter;
   const args = { exec: startCheats };
   return Promise.resolve().then(() => simClient ? simClient.call('viewProbe', args) : viewProbe(game, args))
     .catch(error => toast(`?cheat: ${error.message}`));
@@ -1471,6 +1479,12 @@ particleProbe(args) {
 viewProbe(args) {
   if (simClient) return simClient.call('viewProbe', args);
   return game ? viewProbe(game, args) : null;
+},
+/** Validation only: easter-sim.mjs (docs/easter-egg.md) on the simulation side: `{op: 'status'}` reads the ?easter=1 mod's actors;
+ * `{op: 'frob', who}` does what a frob of one does. Nothing runs unless this is called. */
+async easterProbe(args) {
+  if (simClient) return simClient.call('easter', args);
+  return game ? (await import('./easter-sim.mjs')).easterCall(game, args) : null;
 },
 /** Validation only: live-probe.mjs, the replay of an original trace on the live level
  * (scripts/live-acceptance.mjs, docs/visual-acceptance.md "Live scenes"). */
