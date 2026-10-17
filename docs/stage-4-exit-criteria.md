@@ -547,8 +547,8 @@ record read by the gate; frames equal to within 0.02 levels, the other state's f
 9. **Judgement for the user to adopt or change.** **The renderer the identical-share thresholds are calibrated against (2026-10-17).** The .94 (conversation 3D frames) and .99 (interface)
    identical-pixel shares were set against captures of the original under Wine/Mesa on the Linux host. Under CrossOver/Metal on the Mac the original's frames repeat byte for byte but differ from
    Play by exactly 1 level in about 2 to 6% of world pixels (balanced, dark mesh shading and silhouettes; Play's vertex colours are the original's bytes; the counts off by more than 2 and 10 levels
-   match the Linux captures'). Neither backend is a Windows D3D7 device. Which is the reference, Mesa, Metal, or either within the measured gap, is the user's call; until then 4.5.7 and 4.5.8 FAIL on
-   the Mac stores with that cause, and the interface rows are judged on the interface's own pixels. Neither the Linux nor the Mac stores can make both sets pass as written. The scene list (weak reasons are marked), the thresholds and the three explained-block allowances in [How
+   match the Linux captures'). Neither backend is a Windows D3D7 device. **The user's decision (2026-10-17): 4.5.7 and 4.5.8 stay FAIL on the Mac stores until the Linux host is back, and the thresholds
+   are not changed** (they are judged against the Wine/Mesa captures there); so 4.5.7 and 4.5.8 FAIL on the Mac stores with that cause, and the interface rows are judged on the interface's own pixels. Neither the Linux nor the Mac stores can make both sets pass as written. The scene list (weak reasons are marked), the thresholds and the three explained-block allowances in [How
    the gate judges](#how-the-gate-judges), the five-map sweep subset, and that `INLINE` counts against a criterion.
 
 **A gate flake seen on 2026-10-16** (master 17c4f1a plus the interface branch): `--only '^4\.4\.'` at two jobs failed all four
