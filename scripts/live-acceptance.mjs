@@ -762,7 +762,16 @@ async function play() {
       // landed and at rest where the original's stood (the landing is a few frozen ticks and a tick's delta is the host's frame time, so the first
       // tick in the pose's Physics can still be moving to its rest height)
       const rested = () => now?.Physics === pose.Phys && now.Location.every((v, i) => Math.abs(v - pose.Loc[i]) < 1e-3) && now.Velocity.every(v => v === 0);
-      for (; waited < 240 && !rested(); waited += 2) { await frames(2); now = await stand(); }
+      // settled in the pose's Physics: the rest height after a landing is the frozen phase's own outcome (its frames' deltas are the host's: the
+      // original under CrossOver rested MeetPaul's ghost at Z -256.2948 where Play and the Linux host's capture rest at -256.2, 2026-10-17), so a
+      // player settled elsewhere is put at the original's pose, a measured input like the pose itself
+      const settled = () => now?.Physics === pose.Phys && now.Velocity.every(v => v === 0);
+      for (; waited < 240 && !rested(); waited += 2) { await frames(2); now = await stand(); if (settled() && !rested() && waited >= 20) break; }
+      if (settled() && !rested()) {
+        console.log(`the player rests at ${JSON.stringify(now.Location)}, the original's at ${JSON.stringify(pose.Loc)}: placed at the original's`);
+        await page.evaluate(a => window.deusExViewer.viewProbe({location: a.Loc, rotation: a.VRot, region: {zone: a.RegZone, iLeaf: a.RegLeaf, zoneNumber: a.RegNum}}), pose);
+        await frames(4); now = await stand();
+      }
       console.log(`the player after ${waited} frames: Physics ${now?.Physics} (the original's ${pose.Phys}), Location ${JSON.stringify(now?.Location)}, Velocity ${JSON.stringify(now?.Velocity)}, Base ${now?.Base?.name ?? now?.Base}`);
     }
     const populationFile = [`population${suffix}.json`, 'population.json'].map(name => path.join(dir, name)).find(existsSync);
