@@ -94,6 +94,13 @@ labelled: five times the game stopped taking posted keys after none to four shot
 on this host pass on the code with the line-check and window-order changes: 4.1.5 (Island), 4.1.6 (the Club and its dancers' frame), 4.1.7 (the
 Underworld), 4.1.8 (the five-map sweep) and 4.5.5 (MeetPaul). With the Mac's run of the other 68, every gating criterion passes: **70 of 70**, the
 conversation rows on the stores their thresholds were calibrated against (item 9). One full run on a single machine holding every store remains to do.
+
+**One machine, every store, 2026-10-17** (the Linux host, master 73b6a62, the Mac's stores copied to `.work/mac-stores` and read after the Linux ones:
+`DX_ORIGINALS=.work:.work/mac-stores:.work/live/.work:.work/mac-stores/live/.work`). The full run (`--jobs 2`, 369 checks, 3,853 s, peak 6,372 MiB) read
+62 PASS, 5 FAIL, 3 NO-ORIGINAL. The three `NO-ORIGINAL` rows (4.1.10, 4.2.15, 4.2.30) lacked five small files the first copy left out (a population list, two
+decal-state files, two held-Strobe markers); copied, all three PASS. Four of the five FAIL rows were the interface rows' `compare step` crash seen before beside
+other checks, and the fifth Battery Park's camera window 3 (precision .789) in the same run; run alone (`--jobs 1`) all five PASS. So every gating criterion passes
+on one machine: **70 of 70**, with two concurrency flakes of the gate itself open (the interface compare beside other checks, the walking actors of `bp2` under load).
 Only the full gate run (`node scripts/validate-stage4-acceptance.mjs`) is the gate; the row statuses below agree with the run of 2026-10-17. Run it from a clean worktree of master (other sessions' uncommitted edits in a shared checkout reach Play through Vite).
 
 | Clause | PASS | FAIL | MISSING | EXCLUDED |
