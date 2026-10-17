@@ -1161,6 +1161,13 @@ exploration, conversation, and alternate-route objectives, with the systems
 interacting correctly. Extend the same compatibility checks as later missions
 exercise additional behavior; a single successful route does not cover a mission.
 
+The finite definition of this criterion is drafted in [Stage 5 exit criteria](stage-5-exit-criteria.md)
+(50 scenarios on the three Training maps and Liberty Island, each with the original-side evidence that would
+prove it), built on [what the original offers a player there](stage-5-inventory.md). Its measure is
+`scripts/census-stage5.mjs` (what Play does when the scenarios are driven) and its test is
+`scripts/validate-stage5-acceptance.mjs`, red until every criterion passes (first scoreboard 2026-10-17:
+0 of 50).
+
 ## 6. Persist progress and complete the campaign
 
 Implement game saves, quicksave/load, map transitions, and restoration of previously

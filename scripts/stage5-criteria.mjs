@@ -94,7 +94,7 @@ add('5.3.11', '01_NYC_UNATCOIsland inventory', 'pick up and use items (MedKit, f
   {have: ['alterations census: 19 scenarios play (P)', 'persona screens O1 (4.4.11, 4.4.12)']});
 add('5.3.12', '01_NYC_UNATCOIsland', 'move objects and fall: carry or push barrels and crates, throw them (kinetic damage), fall damage from a height', 'O1', 'island-movables-fall',
   'O1: live trace of the original with a thrown or pushed decoration and a measured fall', {have: ['validate-plant-push (O2)', 'landing/falling oracles (O2)']});
-add('5.3.13', '00_TrainingFinal and 01_NYC_UNATCOIsland movers', 'an elevator and switch-driven doors: ElevatorMover1 (ExitDoor sequence) carries the player; Switch1 -> UN_maindoor; the fork lift (DeusExMover11)', 'O1', 'elevator',
+add('5.3.13', '00_TrainingFinal and 01_NYC_UNATCOIsland movers', 'a switch-driven mover: 00_TrainingFinal Switch1 opens FirstStealthDoor. Not driven: ElevatorMover1 (ExitDoor) is moved by SequenceTriggers no player input reaches, Island\'s Switch1 -> UN_maindoor (opened by Mission01) and the fork lift (DeusExMover11, a button in the ruins)', 'O1', 'elevator',
   'O1: live trace of the original with the player on the mover', {have: ['validate-native-mover-move, -interpolation, -scene (O2)', 'validate-island-cell-door']});
 
 // 5.4 Conversation -----------------------------------------------------------------------------------------------------------------------
