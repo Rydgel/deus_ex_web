@@ -99,8 +99,9 @@ export function allocateFreshScriptObject({cls,outer,name='None',flags=0,templat
   if(!(registry instanceof ScriptObjectRegistry)||typeof initProperties!=='function'
     ||typeof findObject!=='function'||typeof internName!=='function')
     throw new Error('Fresh construction services are incomplete');
+  // `uniqueFindObject`: the lookup a generated name is checked with when it must also see objects outside this registry (the map's exports)
   const resolved=String(name).toLowerCase()==='none'
-    ?makeUniqueScriptObjectName(cls,outer,services):internName(name);
+    ?makeUniqueScriptObjectName(cls,outer,{...services,findObject:services.uniqueFindObject??findObject}):internName(name);
   if(!resolved||typeof resolved.name!=='string'||!Number.isInteger(resolved.index))
     throw new Error('Construction requires a resolved original FName');
   if(findObject(outer,resolved.name))throw new Error('Existing-name object replacement is not implemented');

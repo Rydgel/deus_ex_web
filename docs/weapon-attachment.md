@@ -378,8 +378,9 @@ with the tracer lines `call-ticks 1 300`, `call-frames`, `call Extension.dll@0x1
 captures](object-index-captures.md)) and `call 0x10b262c0 fpdraw 2 always namearg 1 -1 deref 1 6 0x114 deref 1 4 0x54 deref 0 12 0x34`: every
 `DrawActor` with the weapon's `Location` and `Rotation`, its `AnimSequence`/`AnimFrame`/`AnimRate`/`TweenRate` and the frame's `Coords`. The
 calls stay armed through the final hold, so the draws of the held frame are logged: **73 draws during the hold, all the same words**. The
-original names the summoned weapon `WeaponCrowbar10`; Play names it `WeaponCrowbar1`, which repeats the name of the map's own crowbar (a naming
-difference noted here, not compared; the probe reads the player's `Weapon` by reference, `liveProbe` `@weapon`).
+original names the summoned weapon `WeaponCrowbar10`: the capture session's earlier, unfrozen Island load had taken crowbar names up to 9
+([construction](script-construction.md#spawned-names-against-the-original-2026-10-17)). Play named it `WeaponCrowbar1`, the map crowbar's own name,
+until the fix of 2026-10-17, and now names it `WeaponCrowbar0`. The probe reads the player's `Weapon` by reference (`liveProbe` `@weapon`).
 
 **Play's replay of the trace** (`scripts/validate-weapon-view-original.mjs`, worker mode, 28 s): `live-acceptance.mjs play --tag fpw --shot fpw
 --no-ghost --after-file scripts/weapon-view-probe.js`, then `live-acceptance.mjs compare`, `visual-acceptance.mjs compare` (the frame and the
@@ -419,11 +420,9 @@ DX_POST=.work/fpw/post-lab.sh scripts/live-original.sh 05_NYC_UNATCOMJ12lab --ta
 `AssaultGun3rd`), every one in the mirror's child frame (`Recursion` 1, the frame's Mirror -1, the weapon's forced 1), PrjXM..PrjYP
 `3eaa0a27 3e745120 3e6e2da4 3e50b683`. Play's replay of the trace draws the rifle in child frame 1 (and the main frame) with **those four words**.
 In the held frames (ratio 1.32): whole frame edges .983/.988, 0 outlier blocks; the reflection (160x220 +540+310) 1.000/.998, 0 blocks; the trooper
-(300x340 +980+280) .992/.997, 0 blocks. Every watched actor and the clock are equal for 300 ticks. The stream's draw count is shifted by one tick at
-six pairs of ticks (104/105, 121/122, 162/163, 227/228, 245/246, 250/251; equal totals): in Play the extra draw is JC's `ShowSelf` line-of-sight
-`FRand` (`losWorker`) for the summoned listener, one tick early. The summon is a console line typed while the level is held, and the replay hands the
-original's stream state only to `@down`/`@up` key edges (the `inputevent` records), so the trooper's spawn-time draws (its `SightCounter`) come from
-another state. Open: give a typed console line the stream state of its Enter key edge (and capture with the `inputevent` call line).
+(300x340 +980+280) .992/.997, 0 blocks. Every watched actor, the clock and the stream's draw count are equal for 300 ticks. A first replay had the draw count shifted by one tick at six pairs
+of ticks. That came from Play naming the summoned trooper `MJ12Troop0`, a placed trooper's name, not from the typed summon's stream state as first
+noted; with the name fixed ([construction](script-construction.md#spawned-names-against-the-original-2026-10-17)) the replay equals the original.
 
 **The camera window** (Island `ComputerSecurity1`, the Temp Holding Cell window of `SecurityCamera5`): `DX_POST=.work/fpw/post-cam.sh
 scripts/camera-original.sh 01_NYC_UNATCOIsland --computer ComputerSecurity1 --user NSF001 --password smashthestate --cameras SecurityCamera5 --name cw5`.
@@ -442,7 +441,7 @@ Brightness check read the `WindowsClient` layout as garbage on this run.)
 * **A ViewportWindow's frame against the original**: the original's draws in the window frame are compared with the translation (above, 4.1.12); the window's pixels with an armed pawn are not (the NPCs' routes are each program's own).
 * **GPU path**: done (above). The CPU path stays the reference; `?weapons=cpu`.
 * **Order of SetupForActor calls**: implemented and compared (above). Not compared in a scene where a light first enters one frame's `LeafLights` and not the other's, which is the only case the orders can differ in; the lab scene has none.
-* **An NPC in a mirror**: compared (above, 4.1.12): the summoned trooper's rifle in the lab pane. Open there: the replay's stream state for a console line typed while the level is held.
+* **An NPC in a mirror**: compared (above, 4.1.12): the summoned trooper's rifle in the lab pane.
 * **The first-person weapon**: compared (above, 4.1.10); the player's animation frame lags in the replay's first 90 ticks (not attributed).
 * **Muzzle flash**: dead by data, see above; the render-time `appFrand` it would draw from the CRT stream is not modelled.
 * **Cost**: measured (above): 0.08 to 0.15 ms of the worker's frame per armed pawn in view on the GPU path (0.12 to 0.3 on the CPU path), the hand placement being the largest part left; not measured on the Mac.

@@ -1313,12 +1313,10 @@ export async function createScriptDoors({
             if (ammoRef) {
               const ammoClass = await runtime.loadClass(ammoRef.asset, ammoRef.index);
               await prepareNpcClass(ammoClass);
-              if (ammoClass.nameCounter === 0) ammoClass.nameCounter = 1;
             }
-            // Fresh-object naming continues each class's original counter;
-            // the player-startup subsystem spawn applies the same convention
-            // (script-player-startup.mjs).
-            if (itemClass.nameCounter === 0) itemClass.nameCounter = 1;
+            // Fresh-object naming continues each class's counter from 0 (MakeUniqueObjectName, Core 0x101575b0), skipping the names the
+            // map's exports hold (script-datalink-live.mjs `uniqueFindObject`): the original's Underworld capture sndm5 names its first
+            // spawns WeaponStealthPistol0, AmmoPepper0 and Credits0, 2, 4 (the map holds Credits1, 3, 9). The former preset to 1 is gone.
           }
         }
       } catch (error) {
@@ -1352,9 +1350,7 @@ export async function createScriptDoors({
         if (ammoRef) {
           const ammoClass = await runtime.loadClass(ammoRef.asset, ammoRef.index);
           await prepareNpcClass(ammoClass);
-          if (ammoClass.nameCounter === 0) ammoClass.nameCounter = 1;
         }
-        if (cls.nameCounter === 0) cls.nameCounter = 1;
       } catch (error) {
         npcFailures.set(actor, String(error?.message ?? error));
       }
@@ -2111,7 +2107,7 @@ export async function createScriptDoors({
     await attachLocalViewportConsole({runtime,assets,engine,viewport:level.engine.client.viewports[0],player:playerActor});
   let windowHost=null,playerLogs=null;
   // Cold LoadMap owns Game creation and startup before player subsystems.
-  await prepareLiveActorSpawnWorld({runtime,engine,deusEx,level,levelInfo});
+  await prepareLiveActorSpawnWorld({runtime,engine,deusEx,level,levelInfo,mapAsset:asset});
   // Live Actor.Destroy. The DataLink spawn world above installs the spawn-side
   // actorLifecycle and the minimal no-hash level fields; merge the world
   // destruction services onto them afterwards and publish the level's real

@@ -222,6 +222,32 @@ above, then temporarily installs AActor vtable `0x104268dc` before
 CameraPoint overwrites it with `0x10427178`. The copy-constructor body
 (`0x10331980`) is separate and is not part of fresh construction.
 
+## Spawned names against the original (2026-10-17)
+
+Play's `makeUniqueScriptObjectName` is the algorithm above. Its `StaticFindObject` check, though, only saw Play's host registry, which does not
+hold the map's pre-placed actors (they hash by their measured index). So a spawned actor could take a map export's name: Training's summoned
+crowbar was `WeaponCrowbar1`, like the map's own crowbar, and 05_NYC_UNATCOMJ12lab's summoned trooper was `MJ12Troop0`, like a placed trooper.
+A preset of item classes' counters to 1 (b882853, no recorded evidence; the class serialization above resets the counter to 0) hid the first.
+Now a generated name is also checked against the map package's export table (`script-datalink-live.mjs` `uniqueFindObject`; a destroyed map
+actor keeps its name until LoadMap's collection, as in the original), and the preset is gone.
+
+**Evidence: the names three captures of the original gave, explained by the rule.** Counters start at 0 when the class loads and live as long
+as it does, so they carry the whole session. `live-original.sh` launches the game on the map, opens a second map unfrozen, and then reopens the
+target map frozen. In all three captures the launch load initialized no NPCs, while the second, unfrozen load did.
+
+| Capture | Original name | Explained by |
+| --- | --- | --- |
+| lab `npm`, the summoned trooper | `MJ12Troop3` | counter 0; the lab holds MJ12Troop0, 1, 2 (Play now names it the same) |
+| lab `npm`, its rifle | `WeaponAssaultGun17` | Training's three troopers took 0..2, the lab's ten carriers 3, 4, 9..16 (it holds 1, 5..8): the summon takes 17 |
+| Training `fpw`, the summoned crowbar | `WeaponCrowbar10` | Island's five thugs (ThugMale0, 3, 5, 7, 9) took 4, 5, 7, 8, 9 (it holds 0..3, 6); Training's NPCs carry none |
+| Underworld `sndm5` (557 traced `AddObject`s) | `WeaponStealthPistol0`, `AmmoPepper0`, `Credits0, 2, 4..8, 10, 11`, `WeaponAssaultGun3` | new classes start at 0; the map holds Credits1, 3, 9, 12, 17; Training took rifles 0..2 |
+
+After the fix, Play's replays name what their own session spawned by the same rule. The lab replay's summoned trooper is `MJ12Troop3`. Its stream
+draws are now equal on every tick (before the fix they were shifted by one tick at six pairs, through the duplicate name). The Underworld replay
+names 145 of the 557 takes like the original. What differs is the session's history (the 24 actors of classes Training spawned first), the AI event
+manager's objects (355 `AIEventType`/`AISenderEvent`/`AIReceiverEvent` that Play's Rust manager does not materialize), the window system's objects
+(Play's window host numbered every window class from one shared counter) and a flag object (Play names a `FlagBool` by its flag). Rows 4.3.6 (103 of 103 calls, 557 of 557 registry takes) and 4.1.10 pass unchanged.
+
 ## Explicitly unresolved branches
 
 The accepted contract does not establish existing-object reuse and

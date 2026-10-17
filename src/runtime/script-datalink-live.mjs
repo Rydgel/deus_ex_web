@@ -31,7 +31,7 @@ function get(runtime,object,name){return runtime.readNamed(object,name);}
 
 /** Build the exact script/native world prerequisites for DataLinkPlay Spawn
  * and the shipped DataVaultImage class the DL_Rooftops transfer event uses. */
-export async function prepareLiveActorSpawnWorld({runtime,engine,deusEx,level,levelInfo}){
+export async function prepareLiveActorSpawnWorld({runtime,engine,deusEx,level,levelInfo,mapAsset=null}){
   const [dataLinkClass,imageClass]=await Promise.all([
     runtime.loadClass(deusEx,requiredExport(deusEx,'DataLinkPlay')),
     runtime.loadClass(deusEx,requiredExport(deusEx,'Image02_NYC_Warehouse')),
@@ -90,6 +90,7 @@ export async function prepareLiveActorSpawnWorld({runtime,engine,deusEx,level,le
     object.nameIndex=names.intern(object.name).index;registry.add(object);
   }
   const lookup=createScriptObjectLookup({registry,names});
+  const mapExportNames=new Set((mapAsset?.pkg?.exports??[]).map(entry=>String(entry.name).toLowerCase()));
   level.nativeObject=nativeLevel;level.undo=null;level.spawnTracking=false;
   level.tickParity=false;level.spawnNotifyGuard={active:false};
   level.pendingDeleted=null;level.collisionHash=null;
@@ -102,6 +103,11 @@ export async function prepareLiveActorSpawnWorld({runtime,engine,deusEx,level,le
     construction:{
       validate:args=>args.outer===outer&&args.template===null,
       registry,names,findObject:lookup.findObject,internName:name=>names.intern(name),
+      // MakeUniqueObjectName's StaticFindObject(NULL, Outer, candidate) (Core 0x101575b0) sees every loaded object. The level package's own
+      // exports (the map's actors, MyLevel, its models) are not in this host registry (a pre-placed actor hashes by its measured index), so a
+      // generated name is also checked against the map's export table: a summoned MJ12Troop in 05_NYC_UNATCOMJ12lab skips the placed
+      // MJ12Troop0..2 and is MJ12Troop3, as the original names it (a destroyed map actor keeps its name until LoadMap's collection).
+      uniqueFindObject:(o,name)=>lookup.findObject(o,name)??(o===outer&&mapExportNames.has(String(name).toLowerCase())?{preplaced:name}:null),
       initNativeProperties:()=>{},
       nativeConstructor:constructActorBase,
       transientPackage,
