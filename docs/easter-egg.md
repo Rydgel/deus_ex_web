@@ -24,7 +24,7 @@ frob and reply hooks, simulation side), `easter-page.mjs` (page side start), `ea
 | Piece | Stock thing | Why |
 |---|---|---|
 | Claudia | `DeusEx.Female1` (HumanCivilian, mesh `GFM_TShirtPants`, 64 sequences incl. `SitBegin`, `SitBreathe`) | the class of this map's own Female0; the mesh has glasses slots and a sitting pose |
-| Rydgel | `DeusEx.Businessman2` (HumanCivilian, mesh `GM_Suit`) | the GM_Suit mesh has a ponytail part (slot 7; the class holds the stock `PinkMaskTex` there, which hides it, and the mod leaves it so: he wears his hair loose), glasses slots (`GrayMaskTex`, `BlackMaskTex`, also the class's own), a jacket whose skirt is its own masked slot, a separate trousers slot |
+| Rydgel | **one setting**, `RYDGEL_LOOK` in `easter-config.mjs`: `'trench'` (default) is `DeusEx.FordSchick` (HumanCivilian, mesh `GM_Trench`: a hip-length jacket, a separate undershirt, trousers, head), `'suit'` is `DeusEx.Businessman2` (HumanCivilian, mesh `GM_Suit`: a suit jacket whose V shows a shirt, trousers, head) | neither draws a ponytail: `GM_Suit` has a ponytail part (slot 7) that the class holds the stock `PinkMaskTex` for, and `GM_Trench` has none; the glasses slots hold the class's own `GrayMaskTex`/`BlackMaskTex` (the mod writes none of Rydgel's MultiSkins). FordSchick is the HumanCivilian `GM_Trench` class with the plainest jacket and undershirt (the other civilian ones are two bums, a scientist and a doctor, with a coat of rags or a lab coat) |
 | the crate | `CrateBreakableMedGeneral` (wood, 68 x 68 x 48) | set `bInvincible` and not pushable, so nothing moves her seat |
 | her seat | `Chair1` (a stock `Seat`), `bHidden`, collision off, at the crate's centre, its sit point derived so the pose's seat plane meets the lid and moved 24 toward the room ("Her seat") | lets `ScriptedPawn.Sitting` run: she is spawned in the state that state ends in |
 | glasses | `FramesTex1` + `LensesTex2` in `GFM_TShirtPants` slots 3 and 4 (the pair the map's own Female1 wears on another mesh), through her MultiSkins; the frames texture itself is drawn round (below) | the mesh has the geometry, the stock Female1 skin masks it |
@@ -87,17 +87,20 @@ group keys differ per actor and recipe, so no other actor shares them. Starting 
 | | 6 `PantsTex2` (trousers and shoes) | olive, with thigh pocket patches; the two foot regions white |
 | | 7 `Female1Tex1` (the knit top) | oversized purple hoodie: recoloured knit, darker hood gathering at the neck, two drawstrings, cuff bands, a front pocket |
 | | 3 `FramesTex1` (modulated) | a round dark ring drawn over the neutral grey (the stock ring is a wayfarer) |
-| Rydgel | 0 `Businessman2Tex0` -> pixels of `NathanMadisonTex0` (a clean-shaven GM_Suit head, auburn hair) | hair golden and loose (no ponytail: strands of the same hair carry on down over the nape, each column its own length), a tattoo on the neck's side below the hair, a gold ear stud |
-| | 3 and 4 `Businessman2Tex1` (jacket; slot 4 is its masked skirt) | the suit's front (a deep V of black shirt with an orange tie, satin lapels with a notch, a double-breasted overlap, two buttons) becomes an olive field jacket worn open over a **plain dark brown-black crew-neck tee**: the V is cut down to a rounded jersey opening with a finely ribbed neckband (no tie, no collar, no shirt buttons), the lapels, overlap and buttons are blurred into flat jacket cloth, a zip runs from the opening's foot to the hem; two gold chains and a pendant hang over the tee, a round chest patch, a zipped sleeve pocket, a ribbed hem; the skirt cut at the hem so a bomber ends there and the belt shows. The neck's collar piece (the strip at the top of the texture) is the tee's rib |
-| | 1 `Businessman2Tex2` (trousers) | dark charcoal, a mustard belt with a buckle at the waist band |
-| | 7 (the ponytail part) | none: the class's own `PinkMaskTex`, drawn nowhere |
+| Rydgel (role `head`) | `Businessman2Tex0` (suit look, slots 0 and 2) or `FordSchickTex0` (trench, slots 0 and 3) -> pixels of `NathanMadisonTex0` (a clean-shaven head, auburn hair; every male head texture shares one layout) | hair golden and loose (no ponytail: strands of the same hair carry on down over the nape, each column its own length), a tattoo on the neck's side below the hair, a gold ear stud |
+| (role `jacket`, suit look) | 3 and 4 `Businessman2Tex1` (jacket; slot 4 is its masked skirt) | the suit's front (a deep V of black shirt with an orange tie, satin lapels with a notch, a double-breasted overlap, two buttons) becomes an olive field jacket worn open over a **plain dark brown-black crew-neck tee**: the V is cut down to a rounded jersey opening with a finely ribbed neckband (no tie, no collar, no shirt buttons), the lapels, overlap and buttons are blurred into flat jacket cloth, a zip runs from the opening's foot to the hem; two gold chains and a pendant hang over the tee, a zipped sleeve pocket, a ribbed hem (no chest patch); the skirt cut at the hem so a bomber ends there and the belt shows. The neck's collar piece (the strip at the top of the texture) is the tee's rib |
+| (role `trousers`) | `Businessman2Tex2` or `PantsTex3` (slot 1 or 2) | dark charcoal, a mustard belt with a buckle at the waist band (the two textures share one layout) |
+| (role `shirt`, trench look) | 4 `FordSchickTex1` (the undershirt, 64 x 128: the neck opening at the top, the chest from v 0.1, the waist at v 0.4) | the stock beige undershirt becomes the plain dark brown-black crew-neck tee: its shading scaled down to near black, a ribbed band round the neck opening, two gold chains and a pendant hanging from the neck over the chest |
+| (role `coat`, trench look) | 1 and 5 `FordSchickTex2` (the jacket, 128 x 256: the body panel above, the sleeve below, collar and cuff in brown corduroy) | the stock denim becomes olive field-jacket cloth (the jacket's colour in the suit look too), the brown trim a darker olive-brown, the dark snap buttons left |
+| | 7 (the ponytail part, suit look) | none: the class's own `PinkMaskTex`, drawn nowhere |
 
 UV layouts (found with the mesh's own triangles drawn over each texture, frame 0 of `Still`; coordinates are fractions of the
 texture): `GFM_TShirtPants` slot 0 is the head (face lower left, hair cap upper right, hands are on slot 7's texture bottom centre),
 slot 6 the trousers with the shoes at the left strip and right edge, slot 7 the top (back left, sleeves middle, front right). `GM_Suit`
 slot 0 head and hands (hands strip on top), slot 1 trousers (waist band on top, fly right), slot 3 the jacket (front on the right, the
 black V opening at u ~0.83), slot 4 its skirt below v 0.66, slot 7 the ponytail (strands in the top ninth of the 64 x 32 `PonytailTex1`, unused now). On the jacket texture (256 x 128) the stock V runs from u 0.773 to 0.88 at the top to its tip at (0.827, 0.51), the lapel bands outside it, the overlap and two buttons below it, and the neck's collar piece is the strip u 0.31 to 0.53, v 0 to 0.04.
-On `GM_Suit`'s head texture the hair is the band v 0.3 to 0.8, the face lower left, the neck below v 0.8 (hands on top).
+`GM_Trench` (found from the texture sizes and shapes, then in Play): slot 4 is the undershirt (64 x 128), slots 1 and 5 the jacket (128 x 256), slot 2 the trousers (128 x 128, the same layout as `GM_Suit`'s), slots 0 and 3 the head, 6 and 7 the glasses parts (masked by the class).
+On the head texture (one layout for all male heads) the hair is the band v 0.3 to 0.8, the face lower left, the neck below v 0.8 (hands on top).
 
 ## Frob lines and banter
 
@@ -173,9 +176,10 @@ frame's pixels (`877312b4d8bcc358`) are equal in both builds.
 ## Rough or open
 
 - No laptop prop (none exists) and no typing animation: she sits in `SitBreathe`. Her pose is the chair-sit pose on a crate, not cross-legged.
-- Rydgel's jacket keeps `GM_Suit`'s tailored silhouette (padded shoulders, straight sleeves, a hip-length cut); with the V cut down, the lapels flattened and a zip it reads as an open field jacket over a tee in the pictures, not a suit. If it still reads too formal in the user's eye, the closest stock male meshes are `GM_Trench` (an open coat) and `GM_Jumpsuit` (a zip-up top); neither was tried.
+- Rydgel's default look is `GM_Trench` on `FordSchick`: a hip-length jacket with a stand collar, open over a dark crew-neck tee, no lapels. The `'suit'` look (`GM_Suit`, tried first) keeps a suit's silhouette (padded shoulders, straight sleeves) and reads as an open field jacket only with its V cut down, lapels flattened and a zip painted; switch with `RYDGEL_LOOK`. Both pass the validator.
+- `FordSchick` is a named character class (a unique NPC in the game, not a generic civilian): the mod clears its ConListItems and sets the same flags as the others, so no conversation, bark or reaction reaches him; nothing else of the class is used.
 - Rydgel's loose hair is the head mesh's own short cap plus painted strands over the nape: the mesh has no longer hair geometry.
-- Rydgel's idle is the stock `BreatheLight`/head-turn loop, not hands in pockets (no such animation on `GM_Suit`).
+- Rydgel's idle is the stock `BreatheLight`/head-turn loop, not hands in pockets (no such animation on `GM_Suit` or `GM_Trench`).
 - Hair length and shape are the meshes' (short on both heads): the bob and the loose strands are colour only; the neck tattoo sits where
   the mesh shows little neck under the tee collar.
 - The skins are 128-wide recolours lit by the club's dim blue light; the colours in the pictures are the lighting's too.

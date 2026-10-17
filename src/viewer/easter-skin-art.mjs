@@ -122,7 +122,7 @@ export const RECIPES = {
   rydgel: {
     // The head and hands of NathanMadisonTex0 (a clean-shaven GM_Suit head, auburn hair) with the hair gone golden and worn loose (no
     // ponytail: slot 7 keeps the class's own mask), hanging in strands over the nape, a tattoo on the neck's side below it and a gold stud in the ear.
-    businessman2tex0: { from: 'Skins.NathanMadisonTex0', paint(image) {
+    head: { from: 'Skins.NathanMadisonTex0', paint(image) {
       const { width, height } = image, isHair = (px, u, v) => {
         if (px[3] === 0) return false;
         const [h, s] = rgbToHsv(px[0], px[1], px[2]);
@@ -161,8 +161,8 @@ export const RECIPES = {
     // brown-black crew-neck tee. The stock front is a suit's: a deep V of black shirt with an orange tie, satin lapels with a notch, a
     // double-breasted overlap and two buttons. Here the V is cut down to a rounded tee opening (no tie, the neck's collar piece a
     // plain rib), the lapels, overlap and buttons are flattened into the jacket's own cloth, and a zip runs from the opening's foot
-    // to the hem; a chest patch, a sleeve pocket, a ribbed hem and two chains stay.
-    businessman2tex1: { paint(image) {
+    // to the hem; a sleeve pocket, a ribbed hem and two chains stay.
+    jacket: { paint(image) {
       const { width, height } = image, front = (u, v) => u >= 0.715 && u <= 0.945 && v <= 0.655;
       const centre = 0.8267, edges = [[0, 0.773], [0.15, 0.767], [0.29, 0.773], [0.39, 0.795], [0.45, 0.81], [0.51, 0.8267]];
       // The stock V's half width at v (the black shirt's left edge by v, mirrored about the centre), and the rounded opening that replaces it.
@@ -228,9 +228,6 @@ export const RECIPES = {
         if (v > 0.655 && v < 0.74) { const rib = Math.sin(u * 256 * 1.6) * 0.5 + 0.5; tint(px, 84, 0.42, 0.55 + 0.25 * rib); }
         // sleeve pocket with a zip
         if (inRect(u, v, [0.43, 0.32, 0.53, 0.46])) { const edge = u < 0.438 || u > 0.522 || v < 0.328 || v > 0.452; if (edge) blend(px, [30, 38, 18], 0.6); else if (Math.abs(v - 0.345) < 0.007) blend(px, [196, 188, 150], 0.9); }
-        // chest patch (a round badge) on the wearer's left chest
-        const badge = disc(u, v, 0.885, 0.215, 0.027, 0.047, 0.2);
-        if (badge) blend(px, disc(u, v, 0.885, 0.215, 0.019, 0.033, 0.3) >= 1 ? [44, 52, 30] : [196, 160, 52], badge);
         // two chains over the tee, in the opening of the jacket
         for (const [sag, w] of [[0.075, 0.006], [0.15, 0.006]]) {
           const d = Math.abs(v - (0.02 + sag * (1 - ((u - centre) / 0.055) ** 2)));
@@ -240,7 +237,7 @@ export const RECIPES = {
       });
     } },
     // Businessman2Tex2 (slot 1): dark trousers, a mustard belt with a buckle at the waist.
-    businessman2tex2: { paint(image) {
+    trousers: { paint(image) {
       paint(image, (px, u, v) => {
         if (px[3] === 0) return;
         tint(px, 225, 0.12, 0.36);
@@ -251,16 +248,49 @@ export const RECIPES = {
         }
       });
     } },
+    // The trench look (GM_Trench, DeusEx.FordSchick): FordSchickTex1 is the undershirt (64 x 128: the neck opening at the top, the chest
+    // from v 0.1, the waist at v 0.4, the hips below): a plain dark brown-black crew-neck tee, a ribbed neckband round the opening, two gold
+    // chains and a pendant hanging from the neck over the chest.
+    shirt: { paint(image) {
+      const { width, height } = image;
+      const noise = (x, y) => { let h = Math.imul(x, 374761393) + Math.imul(y, 668265263) | 0; h = Math.imul(h ^ (h >>> 13), 1274126177); return ((h ^ (h >>> 16)) >>> 0) / 4294967296; };
+      paint(image, (px, u, v) => {
+        if (px[3] === 0) return;
+        const x = Math.floor(u * width), y = Math.floor(v * height), [, , value] = rgbToHsv(px[0], px[1], px[2]);
+        // jersey: the stock shading, scaled down to near black, a touch of grain
+        const band = v < 0.115 && u > 0.2 && u < 0.8 ? 0.05 + 0.03 * (0.5 + 0.5 * Math.sin(u * 64 * 4.2)) : 0;
+        const [r, g, b] = hsvToRgb(24, 0.5, clamp(0.045 + value * 0.11 + 0.01 * noise(x, y) + band, 0, 1));
+        px[0] = r; px[1] = g; px[2] = b;
+        for (const [reach, sag, w] of [[0.2, 0.075, 0.012], [0.16, 0.19, 0.012]]) {
+          const d = Math.abs(v - (0.1 + sag * (1 - ((u - 0.5) / reach) ** 2)));
+          if (Math.abs(u - 0.5) < reach && d < w) blend(px, [226, 190, 96], 0.95);
+        }
+        blend(px, [236, 206, 120], 0.95 * disc(u, v, 0.5, 0.305, 0.04, 0.026));
+      });
+    } },
+    // FordSchickTex2 (slots 1 and 5, the coat; 128 x 256, the body panel above and the sleeve below, collar and cuff in brown corduroy):
+    // the stock denim becomes the olive field jacket cloth, the brown trim a darker olive-brown.
+    coat: { paint(image) {
+      paint(image, (px) => {
+        if (px[3] === 0) return;
+        const [h, sat, value] = rgbToHsv(px[0], px[1], px[2]);
+        if (h >= 15 && h <= 50 && sat > 0.4) tint(px, 40, 0.42, 0.55);
+        else tint(px, 84, 0.4, 1.3, 0.1 * (1 - value));
+      });
+    } },
   },
 };
 
 /** The skin function for the page's actor mesh draw. */
-export function createEasterSkins({ claudia, rydgel }) {
+export function createEasterSkins({ claudia, rydgel, rydgelTextures }) {
   const names = new Map([[claudia, 'claudia'], [rydgel, 'rydgel']]), made = new Map();
+  // Rydgel's recipes are by role (head, jacket, shirt, coat, trousers); the look says which stock skin each role is.
+  const roles = new Map(Object.entries(rydgelTextures).map(([role, texture]) => [texture.toLowerCase(), role]));
   const skin = async ({ actorName, assets, textures, data, flags }) => {
     const who = names.get(actorName);
     if (!who) return { data, flags };
-    const recipe = RECIPES[who][String(data.key).split('.').pop().toLowerCase()];
+    const stock = String(data.key).split('.').pop().toLowerCase();
+    const recipe = RECIPES[who][who === 'rydgel' ? roles.get(stock) : stock];
     if (!recipe) return { data, flags };
     const key = `easter:${who}:${data.key}:${data.masked}`;
     if (!made.has(key)) {

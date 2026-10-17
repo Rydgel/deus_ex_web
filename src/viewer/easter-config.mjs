@@ -2,6 +2,18 @@
  * here; the HUD shows them through the pawns' own FamiliarName/UnfamiliarName (DeusExPlayer.GetDisplayName) and the frob
  * lines and banter use them as speakers. Nothing here is original data: the placement was measured in 10_Paris_Club's
  * collision (docs/easter-egg.md "Where they stand") and the classes are stock DeusEx.u pawn and decoration classes. */
+/** Rydgel's look (the one setting to switch it): 'trench' is DeusEx.FordSchick (HumanCivilian, mesh GM_Trench: a coat, an undershirt, trousers,
+ * a head), 'suit' is DeusEx.Businessman2 (HumanCivilian, mesh GM_Suit: a jacket whose V shows a shirt, trousers, a head). `textures` are the
+ * stock skins each class names in its own MultiSkins slots, by role: easter-skin-art.mjs paints the role's recipe over the copy it makes of
+ * each (the class's own glasses and ponytail parts stay hidden by the masks it already holds). */
+export const RYDGEL_LOOK = 'trench';
+export const RYDGEL_LOOKS = Object.freeze({
+  suit: Object.freeze({ pawnClass: 'Businessman2', mesh: 'GM_Suit', textures: Object.freeze({ head: 'Businessman2Tex0', jacket: 'Businessman2Tex1', trousers: 'Businessman2Tex2' }),
+    maskTail: Object.freeze(['GrayMaskTex', 'BlackMaskTex', 'PinkMaskTex']) }),
+  trench: Object.freeze({ pawnClass: 'FordSchick', mesh: 'GM_Trench', textures: Object.freeze({ head: 'FordSchickTex0', shirt: 'FordSchickTex1', coat: 'FordSchickTex2', trousers: 'PantsTex3' }),
+    maskTail: Object.freeze(['GrayMaskTex', 'BlackMaskTex']) }),
+});
+
 export const EASTER = Object.freeze({
   map: '10_Paris_Club',
   claudia: Object.freeze({
@@ -15,8 +27,9 @@ export const EASTER = Object.freeze({
   }),
   rydgel: Object.freeze({
     name: 'Rydgel',
-    // Stock class: DeusEx.Businessman2 (HumanCivilian, mesh GM_Suit: jacket, trousers, head; its glasses and ponytail parts stay hidden by the class's own masks).
-    pawnClass: 'Businessman2',
+    // The stock class of the chosen look (RYDGEL_LOOKS above).
+    pawnClass: RYDGEL_LOOKS[RYDGEL_LOOK].pawnClass,
+    look: RYDGEL_LOOK,
   }),
   // Measured on 10_Paris_Club's collision: the bar counter's front plane is x = -1127.5 (top z = -143.5) and the floor in front
   // of it, z = -191.5, runs to a 16 unit step at x = -1008.5; the walls are at y = -639.5 and y = -128.5.
