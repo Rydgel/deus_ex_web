@@ -201,12 +201,22 @@ export function createFogPass({ lightAtlas, levelBrightness, hsv, displayGamma, 
     writeTile(slot.texture.image.data, w, 1, 1, record, texels);
     slot.texture.needsUpdate = true;
     const positions = [], uvs = [], bounds = [], box = [1.5 / w, 1.5 / h, (w - 1.5) / w, (h - 1.5) / h];
+    // Each fan triangle faces the eye as the world's do (geometry.mjs
+    // buildSurfaceGeometry): one whose Unreal winding runs along the facet's
+    // normal is reversed, since toView flips handedness; the fragments arrive
+    // in the polygon's own order, and a front-side material culled them all.
+    const normal = item.facet.slice(9, 12);
     for (const points of item.fragments) {
+      const at = k => [points[3 * k], points[3 * k + 1], points[3 * k + 2]];
       const vertex = k => {
-        const p = [points[3 * k], points[3 * k + 1], points[3 * k + 2]], uv = basis.uv(p);
+        const p = at(k), uv = basis.uv(p);
         positions.push(...toView(p)); uvs.push((1 + uv[0]) / w, (1 + uv[1]) / h, 1); bounds.push(...box);
       };
-      for (let k = 1; k + 1 < points.length / 3; k++) { vertex(0); vertex(k); vertex(k + 1); }
+      for (let k = 1; k + 1 < points.length / 3; k++) {
+        const [a, b, c] = [at(0), at(k), at(k + 1)], e = b.map((v, i) => v - a[i]), f = c.map((v, i) => v - a[i]);
+        const along = (e[1] * f[2] - e[2] * f[1]) * normal[0] + (e[2] * f[0] - e[0] * f[2]) * normal[1] + (e[0] * f[1] - e[1] * f[0]) * normal[2];
+        if (along > 0) { vertex(0); vertex(k + 1); vertex(k); } else { vertex(0); vertex(k); vertex(k + 1); }
+      }
     }
     const geometry = slot.mesh.geometry;
     geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
