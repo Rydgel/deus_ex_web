@@ -1599,8 +1599,10 @@ this cause. Play already quantizes each vertex's diffuse colour to a byte as the
 nearest-even, [GPU mesh](gpu-mesh.md)); what remains is downstream of Render.dll: the Gouraud interpolation, the bilinear filtering and the final
 rounding of the D3D7 device's pipeline, here CrossOver's Direct3D on Metal, against Chromium's WebGL on the same GPU. The Linux host's captures
 (Wine on OpenGL, Play in Chromium there) agreed to .951-.983. Matching it would mean modelling one translation layer's rasterizer bit for bit, which
-would move Play away from the other's; not attempted. A second MeetManderley load replaying the first load's stream (`--rng-from`, tag `mmBs`) was
-queued to show the same for mmB3.
+would move Play away from the other's; not attempted. A third MeetManderley load replaying `mmB`'s per-tick stream (`--rng-from`, tag `mmBs`;
+the load-time draws, every pawn's `SightCounter`, and the player's starting animation phase still differ, so 21 of the 22 watched actors differ in
+some field from tick 1) gives the same scene: mmB1 byte-equal, mmB2 and mmB3 .99944 and .99945 identical (272 and 284 pixels over 2, one over 10 off
+the edges), against Play's .942 and .9396 there. MeetManderley's original repeats too; its gap to Play is the same fixed difference.
 
 Stored (Mac main checkout): `.work/live-acceptance/<map>/` `original-trace.jsonl` (+ `.calls.jsonl`, `.strobe`), `watch.json`, `population.json` for the
 three pilots; `*-cvclub.*`, `*-sweep.*` (Hotel, Market, Chateau, Bunker), `*-sweep2.*` (BatteryPark), `*-cvA.*`, `*-in2.*`, `*-mmA.*`, `*-mmB.*`, `*-npm.*`;
