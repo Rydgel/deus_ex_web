@@ -1535,6 +1535,56 @@ node scripts/validate-original-light-tables.mjs                                 
 `live-original.sh` takes the Wine lock (`.work/wine-deusex.lock`), refuses to start with another DeusEx.exe running and quits the game by
 its PID; Play runs headless Chromium in worker mode.
 
+### Mac recaptures of the live and conversation stores (2026-10-17)
+
+The Linux host's stores of gate rows 4.1.5 to 4.1.8, 4.5.5, 4.5.7 and 4.5.8 were unreachable, and the night's Play changes (FastLineCheck over the
+moving-brush tracker, XGC's GC slot, AIProcess's budget and the windows' wall-clock deltas as recorded inputs, the windows ticking before the level,
+console `set` writing class defaults, the generator watch) had not been checked against these scenes. All were captured again under CrossOver with
+the gates' tags and recipes, the tracer recording the inputs the replay now takes: each run's `--extra-config` holds `call-ticks 1 N`, `call-frames`,
+`call 0x103814e0 inputevent 4 always` and `call Extension.dll@0x1003be90 roottick 1 always` (`.work/live-acceptance/cfg/inputs-N.cfg`); AIProcess's
+stop point is in every trace row. Three batches under the bottle lock, 02:40 to 04:06: the pilots (Island, Club, Club `cvclub` at Brightness 2/3,
+Underworld; every population matched at the first load), the sweep (BatteryPark `sweep2`, Hotel, Market, Chateau, Area 51 Bunker `sweep`, 1,200
+ticks each), and MeetPaul `cvA` (the seventh Island load: six held a chance FlyGenerator Play's lacks), the intro `in2`, MeetManderley `mmA` (700
+ticks, the frames at 450 and 700) and `mmB`, and the lab mirror scene `npm` with the `inputevent` line.
+
+| Row | Mac capture | Result |
+| --- | --- | --- |
+| 4.1.5 | Island pilot, 600 ticks | PASS: 88 actors, clock and stream draws equal |
+| 4.1.6 | Club pilot and `cvclub` | PASS: 22 actors each; the dancers' frame edges .998/.998, 0 outlier blocks |
+| 4.1.7 | Underworld pilot | PASS: 50 actors |
+| 4.1.8 | the five maps, 1,200 ticks | PASS: 189 of 189 actors |
+| 4.5.5 | `cvA`, four frames | PASS (after the fix below): 88 actors; bands .966, .966, .950, .942 identical, bars and subtitle exact, 12 to 38 pixels over 10 off the edges |
+| 4.5.7 | `in2`, three frames | FAIL: in1 .973, in3 .946, **in4 .937** identical (the gate's .94); 21, 46 and 60 pixels over 10 off the edges; 82 actors equal |
+| 4.5.8 | `mmA`, `mmB` | mmA PASS (.942, .955; 22 actors); mmB FAIL: mmB2 .942, **mmB3 .9396** identical; 94 and 86 pixels over 10 off the edges |
+
+**Two harness fixes the captures needed.**
+
+* **A typed console line takes its Enter press's stream state** (0040075). A line `--cmds` types while the level is held arrives as the console key
+  (T), Backspaces, the characters and Enter; the console runs it inside Enter's InputEvent. The replay handed the recorded states to `@down`/`@up`
+  key edges only, so a `summon` typed in a hold drew the summoned pawn's spawn-time `FRand` from another state. Now a typed line takes the next
+  Enter press of its hold and a key edge the next record of its own key and action. The lab mirror scene `npm` (summon at tick 80), recaptured with the
+  `inputevent` line, replays **59 of 59 actors equal, clock and stream draws equal at every tick** (it was shifted by a tick at six pairs of ticks);
+  row 4.3.6's `sndm5` still passes.
+* **The player's rest after `walk` is the original's** (3093fca). The conversation recipes type `set ... Location` and `walk` in the frozen phase;
+  the ghost falls and lands with the frames' deltas, the host's, so its rest height is the frozen phase's outcome: MeetPaul's rests at Z -256.2948
+  under CrossOver, at -256.2 in Play (and at 9f1c2fc, before the night's changes: not a regression). Play re-ran the typed lines after placing
+  the player and settled at its own height, and every pawn's `DistanceFromPlayer` differed from tick 1 (4.5.5 failed with the bands at .40). The
+  replay now puts a player settled in the pose's Physics away from the original's rest at the original's pose.
+
+**What fails 4.5.7 and 4.5.8: one-level noise in the Mac's frames.** The bands' counts of pixels off by more than 2 and by more than 10 are those of
+the Linux captures (in4: 5,066 and 993 against 5,037 and 1,001), and so are the pixels off by more than 10 away from the edges; what drops is the share
+of pixels exactly equal, by about .02 in every conversation frame (MeetPaul .966/.966/.950/.942 against Linux's .987/.987/.971/.968). In in4, 49,767
+pixels are off by exactly one level, as many brighter as darker, nearly all in dark pixels (under 64), on mesh surfaces (the near character's
+jacket) and along silhouettes. Play's frame is deterministic (two gate runs gave the same counts), so the noise is in the original's frame:
+CrossOver's Direct3D (on Metal) rounding mesh shading differently from the Linux host's Wine, whose frames this threshold (.94, "measured .951 to
+.983") was set from. Not measured: whether two loads of the original on the Mac give the same frames (the Linux captures did, to within 3 pixels),
+which would say whether the noise is fixed per frame or varies. The rows stay `FAIL`; the threshold is not changed here.
+
+Stored (Mac main checkout): `.work/live-acceptance/<map>/` `original-trace.jsonl` (+ `.calls.jsonl`, `.strobe`), `watch.json`, `population.json` for the
+three pilots; `*-cvclub.*`, `*-sweep.*` (Hotel, Market, Chateau, Bunker), `*-sweep2.*` (BatteryPark), `*-cvA.*`, `*-in2.*`, `*-mmA.*`, `*-mmB.*`, `*-npm.*`;
+`.work/acceptance/10_Paris_Club/cvclub-original.png`, `01_NYC_UNATCOIsland/cvA{1..4}-original.png`, `00_Intro/in2-in{1,3,4}-original.png`,
+`01_NYC_UNATCOHQ/{mm2,mm3,mmB1,mmB2,mmB3}-original.png` with their `-time.txt`, `05_NYC_UNATCOMJ12lab/npm-original.png`.
+
 ## Security cameras (2026-10-14)
 
 The security computers' camera views ([ViewportWindow](script-window-viewport.md)) matched against the original's
