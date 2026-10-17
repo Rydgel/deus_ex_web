@@ -25,6 +25,29 @@ function planeDistance(position,p){
   const value=sum(sum(sum(terms[2],terms[1]),terms[0]),w),stored=rounded(value,24);
   return {raw:Number(value.n)*2**value.e,stored:f(Number(stored.n)*2**stored.e)};
 }
+const wide=(a,b)=>({n:a.n*b.n,e:a.e+b.e});     // two float32 words multiply exactly (48 bits): fld/fmul keeps the product in the x87 stack
+const negate=a=>({n:-a.n,e:a.e});
+const store32=a=>{const s=rounded(a,24);return f(Number(s.n)*2**s.e);};  // fstp dword: the one rounding to float32
+/** UModel.PointCheck's zero-extent descent for an OWNED model (Engine.dll 103f16c5-103f1794; docs/point-check-zero-extent.md). The owner's coordinates
+ * (`ownerCoords` = the 12 floats origin, X, Y, Z axes, from the owner's vtable +0x88) carry each node plane before the point is tested:
+ *   N' = (X.n, Y.n, Z.n)    each ((a.y*n.y + a.x*n.x) + a.z*n.z), stored as float32 (103f16f8-103f174f)
+ *   T  = Origin.TransformVectorBy(coords), each ((o.x*a.x + o.y*a.y) + o.z*a.z), float32 (Core 10119e40)
+ *   D  = T | N' = ((T.z*N'.z + T.y*N'.y) + T.x*N'.x) kept in x87 (Core 10117710 returns it in st0)
+ *   the point is in front when ((N'.z*p.z + N'.y*p.y) + N'.x*p.x) - (plane.W - D) > 0, every sum rounded to the x87 mantissa (`sum` here).
+ * Returns the front test for a node plane. The world model (no owner) carries the identity coordinates and keeps the double expression of checkPoint. */
+function ownedZeroExtentPlanes(coords,position) {
+  const origin=coords.slice(0,3).map(binary),axes=[coords.slice(3,6),coords.slice(6,9),coords.slice(9,12)].map(a=>a.map(binary));
+  const location=position.map(binary);
+  const T=axes.map(a=>store32(sum(sum(wide(origin[0],a[0]),wide(origin[1],a[1])),wide(origin[2],a[2])))).map(binary);
+  return p=>{
+    const n=p.slice(0,3).map(binary);
+    const N=axes.map(a=>store32(sum(sum(wide(a[1],n[1]),wide(a[0],n[0])),wide(a[2],n[2])))).map(binary);
+    const d=sum(sum(wide(T[2],N[2]),wide(T[1],N[1])),wide(T[0],N[0]));
+    const w=sum(binary(p[3]),negate(d));
+    const point=sum(sum(wide(N[2],location[2]),wide(N[1],location[1])),wide(N[0],location[0]));
+    return sum(point,negate(w)).n>0n;
+  };
+}
 function vector(v,label) {
   if (!v || v.length!==3 || !v.every(Number.isFinite)) throw Error(`Invalid ${label}`);
   const result=v.map(f);
@@ -82,13 +105,16 @@ function checkPoint(model,position,extent,extraNodeFlags,ownerCoords,result) {
     return node;
   }
   if (extent.every(v=>v===0)) {
-    if(rows)throw Error('Owned zero-extent PointCheck is not yet verified');
-    let index=0,outside=Boolean(model.rootOutside);
+    // 103f16c5: one descent. Owned, the plane is first carried by the owner's coordinates (below); the leaf the walk ends in is recorded as Item = 2*node+side.
+    let index=0,outside=Boolean(model.rootOutside),last=0,side=0;
+    const carried=rows&&ownedZeroExtentPlanes(ownerCoords,position);
     while (index!==-1) {
       const node=nodeAt(index),p=node.plane,solid=node.vertexCount>0&&!(node.flags&0x21);
-      if (dot(position,p)-p[3]>0) {outside ||= solid;index=node.front;}
-      else {outside &&= !solid;index=node.back;}
+      last=index;
+      if (carried?carried(p):dot(position,p)-p[3]>0) {outside ||= solid;index=node.front;side=1;}
+      else {outside &&= !solid;index=node.back;side=0;}
     }
+    if(result)result.item=side+last*2;
     return outside;
   }
   function intersects(index) {
