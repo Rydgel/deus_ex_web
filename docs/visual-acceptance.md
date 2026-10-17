@@ -1575,10 +1575,32 @@ ticks, the frames at 450 and 700) and `mmB`, and the lab mirror scene `npm` with
 the Linux captures (in4: 5,066 and 993 against 5,037 and 1,001), and so are the pixels off by more than 10 away from the edges; what drops is the share
 of pixels exactly equal, by about .02 in every conversation frame (MeetPaul .966/.966/.950/.942 against Linux's .987/.987/.971/.968). In in4, 49,767
 pixels are off by exactly one level, as many brighter as darker, nearly all in dark pixels (under 64), on mesh surfaces (the near character's
-jacket) and along silhouettes. Play's frame is deterministic (two gate runs gave the same counts), so the noise is in the original's frame:
-CrossOver's Direct3D (on Metal) rounding mesh shading differently from the Linux host's Wine, whose frames this threshold (.94, "measured .951 to
-.983") was set from. Not measured: whether two loads of the original on the Mac give the same frames (the Linux captures did, to within 3 pixels),
-which would say whether the noise is fixed per frame or varies. The rows stay `FAIL`; the threshold is not changed here.
+jacket) and along silhouettes. Play's frame is deterministic (two gate runs gave the same counts), so the difference is between the two programs' frames,
+not in either one's repetition.
+
+**The original against itself (second loads, tags `in2r`, `mmBr`, 2026-10-17).** The coordinator asked whether the original's own frames carry
+the noise (then the frames would be judged against the original's own floor, as 4.2.13 and 4.2.24 are) or repeat (then the gap is a fixed rendering
+difference). A second load of each, the same commands, placement and frame ticks:
+
+| frame | the two loads: identical, over 2, over 10, over 10 off the edges, edges |
+| --- | --- |
+| **in2-in4** (tick 2,250) | **1.000, 0, 0, 0, 1/1**: byte-equal |
+| in2-in1 (170) | .994, 5,241, 4,239, 1,968, .991/.988 |
+| in2-in3 (1,000) | .642, 211,633, 111,875, 97,298, .823/.850 |
+| mmB1 (40) | .99945, 284, 235, 1, 1/.999 |
+| mmB2 (300) | .948, 8,704, 2,298, 487, 1/1 |
+| mmB3 (580) | .856, 62,307, 41,922, 23,337, .884/.909 |
+
+Each load draws from its own stream (the CRT seeded from the clock), so most frames show two different scenes (gestures, idle animations, the
+intro's people in in3): load against load is not a measure of rendering there. The intro's tick 2,250 is a scripted shot whose state no draw changes,
+and its frames are **byte-equal across the two loads**: the original's frame of that state is fixed, so Play's 49,767 pixels off by one level there are
+a fixed difference between the two programs' rasterization, not noise the original has. That is branch two of the decision: the rows stay `FAIL` with
+this cause. Play already quantizes each vertex's diffuse colour to a byte as the original's `DrawGouraudPolygon` does (`FISTP(L·scale·255)`,
+nearest-even, [GPU mesh](gpu-mesh.md)); what remains is downstream of Render.dll: the Gouraud interpolation, the bilinear filtering and the final
+rounding of the D3D7 device's pipeline, here CrossOver's Direct3D on Metal, against Chromium's WebGL on the same GPU. The Linux host's captures
+(Wine on OpenGL, Play in Chromium there) agreed to .951-.983. Matching it would mean modelling one translation layer's rasterizer bit for bit, which
+would move Play away from the other's; not attempted. A second MeetManderley load replaying the first load's stream (`--rng-from`, tag `mmBs`) was
+queued to show the same for mmB3.
 
 Stored (Mac main checkout): `.work/live-acceptance/<map>/` `original-trace.jsonl` (+ `.calls.jsonl`, `.strobe`), `watch.json`, `population.json` for the
 three pilots; `*-cvclub.*`, `*-sweep.*` (Hotel, Market, Chateau, Bunker), `*-sweep2.*` (BatteryPark), `*-cvA.*`, `*-in2.*`, `*-mmA.*`, `*-mmB.*`, `*-npm.*`;
