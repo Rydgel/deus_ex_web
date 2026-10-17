@@ -128,6 +128,15 @@ function heldTimeOf(map, views) {
   return stored[0];
 }
 const HELD_DILATION = 0.001;
+// An actor's animation fields (AActor offsets, the player-state read's) and the anim record placeProbe writes back.
+const ANIM_FIELDS = ['AnimSequence:0x54:name', 'AnimFrame:0x58:f', 'AnimRate:0x5c:f', 'TweenRate:0x60:f', 'AnimLast:0x220:f', 'AnimMinRate:0x224:f', 'OldAnimRate:0x228:f',
+  'B0:0x68:name', 'B1:0x6c:name', 'B2:0x70:name', 'B3:0x74:name', 'F0:0x78:f', 'F1:0x7c:f', 'F2:0x80:f', 'F3:0x84:f', 'R0:0x88:f', 'R1:0x8c:f', 'R2:0x90:f', 'R3:0x94:f',
+  'T0:0x98:f', 'T1:0x9c:f', 'T2:0xa0:f', 'T3:0xa4:f', 'L0:0x23c:f', 'L1:0x240:f', 'L2:0x244:f', 'L3:0x248:f', 'M0:0x24c:f', 'M1:0x250:f', 'M2:0x254:f', 'M3:0x258:f'];
+const animOf = row => {
+  const four = key => [0, 1, 2, 3].map(k => row[`${key}${k}`]);
+  return {AnimSequence: row.AnimSequence, AnimFrame: row.AnimFrame, AnimRate: row.AnimRate, TweenRate: row.TweenRate, AnimLast: row.AnimLast, AnimMinRate: row.AnimMinRate,
+    OldAnimRate: row.OldAnimRate, BlendAnimSequence: four('B'), BlendAnimFrame: four('F'), BlendAnimRate: four('R'), BlendTweenRate: four('T'), BlendAnimLast: four('L'), BlendAnimMinRate: four('M')};
+};
 mkdirSync(out, {recursive: true});
 // --decal-state: a Shadow's inputs (its owner's Location, the trace's hit as its own Location, DrawScale, Rotation: Shadow.Tick) and its attachment
 // (bHasDecal, SurfList.Num), the owner's LastRenderTime (Tick's doDraw) and the level time of the read. The original's offsets are the linked
@@ -214,7 +223,11 @@ async function play() {
       if (option('rng-pin', null)) await page.evaluate(pin => window.deusExViewer.viewProbe({rngPin: pin}), option('rng-pin', null));
       // Level time: run the frozen level to the original's held TimeSeconds
       // (fast, then at normal speed for the last second), then hold it.
-      const heldTime = heldTimeOf(map, viewsOf(entry).filter(view => !isBase(view.name) && (!onlyViews || onlyViews.includes(view.name)))), target = heldTime === null ? null : heldTime + timeOffset;
+      const timedViews = viewsOf(entry).filter(view => !isBase(view.name) && (!onlyViews || onlyViews.includes(view.name)));
+      // With the views' own clocks the level is held 3 ms short of the first one: the approach below lands up to a frame past its target (0.8 ms) and
+      // the settle frames run on at the held dilation, and each view's own clock is then reached from below at 0.03 ms a frame before its shot.
+      const heldTime = heldTimeOf(map, timedViews), perViewClock = heldTime !== null && timedViews.some(view => viewTimeOf(map, view) !== null);
+      const target = heldTime === null ? null : heldTime + timeOffset - (perViewClock ? 0.003 : 0);
       let held = null;
       if (target !== null) {
         held = await page.evaluate(async ({target, dilation}) => {
@@ -250,20 +263,6 @@ async function play() {
         }
         await page.evaluate(([v, region]) => window.deusExViewer.viewProbe({location: v.location, rotation: v.rotation, region}), [view, region]);
         await frames(settleFrames);
-        // The view's own clock (heldTimeOf): the held level is run on to it at a twentieth of the speed (under a millisecond a frame), then held again.
-        const own = held !== null ? viewTimeOf(map, view) : null;
-        if (own !== null) {
-          const reached = await page.evaluate(async ({target, dilation}) => {
-            const probe = args => window.deusExViewer.viewProbe(args), frame = () => new Promise(r => requestAnimationFrame(r));
-            let state = await probe({});
-            if (state.timeSeconds >= target) return state.timeSeconds;
-            state = await probe({timeDilation: 0.05});
-            while (state.timeSeconds < target) { await frame(); state = await probe({}); }
-            state = await probe({timeDilation: dilation});
-            return state.timeSeconds;
-          }, {target: own + timeOffset, dilation: HELD_DILATION});
-          viewHeld.set(view.name, reached);
-        }
         // --player-pose: the player's animation as `original --player-state` measured it for this view (<view>-state.json); AnimRate 0 because
         // the player's own ticks follow the page's frames, not the held level (the security-camera captures write it the same way).
         if (preShotCommands.length) { await page.evaluate(lines => window.deusExViewer.viewProbe({exec: lines}), preShotCommands); await frames(Math.max(6, Math.round(preShotWait / 1000 * 60))); }
@@ -272,6 +271,28 @@ async function play() {
           const {player} = JSON.parse(readFileSync(stateFile, 'utf8'));
           await page.evaluate(fields => window.deusExViewer.placeProbe({set: {actor: '$player', fields}}), {...player.anim, AnimRate: 0});
           await frames(6);
+        }
+        // The actors' animation as `original --actor-pose` read it after this view's shot (<view>-actor-pose.json), stopped as they were there.
+        const actorPoseFile = path.join(dir, `${view.name}-actor-pose.json`);
+        if (existsSync(actorPoseFile)) {
+          for (const [actor, anim] of Object.entries(JSON.parse(readFileSync(actorPoseFile, 'utf8')).actors))
+            await page.evaluate(([actor, fields]) => window.deusExViewer.placeProbe({set: {actor, fields}}), [actor, {...anim, AnimRate: 0}]);
+          await frames(6);
+        }
+        // The view's own clock (heldTimeOf), last before the shot: the held level is run on to it (at a twentieth of the speed, then at 0.002 for the
+        // last millisecond: 0.03 ms a frame) and stopped there (TimeDilation 0) for the shot, as the original's clock is stopped for its own.
+        const own = held !== null ? viewTimeOf(map, view) : null;
+        if (own !== null) {
+          const reached = await page.evaluate(async ({target}) => {
+            const probe = args => window.deusExViewer.viewProbe(args), frame = () => new Promise(r => requestAnimationFrame(r));
+            let state = await probe({});
+            if (state.timeSeconds < target - 0.001) { state = await probe({timeDilation: 0.05}); while (state.timeSeconds < target - 0.001) { await frame(); state = await probe({}); } }
+            if (state.timeSeconds < target) { state = await probe({timeDilation: 0.002}); while (state.timeSeconds < target) { await frame(); state = await probe({}); } }
+            state = await probe({timeDilation: 0});
+            return state.timeSeconds;
+          }, {target: own + timeOffset});
+          await frames(3);
+          viewHeld.set(view.name, reached);
         }
         const strobe = strobeOf(view.name);
         if (strobe !== null) {
@@ -323,7 +344,7 @@ async function play() {
           await frames(6);
           await page.screenshot({path: path.join(dir, `${view.name}-play-bias${factor}_${units}_${depth}.png`), clip: {x: 0, y: 0, width: WIDTH, height: HEIGHT}});
         }
-        if (strobe !== null) await page.evaluate(d => window.deusExViewer.viewProbe({timeDilation: d}), HELD_DILATION);
+        if (strobe !== null || own !== null) await page.evaluate(d => window.deusExViewer.viewProbe({timeDilation: d}), HELD_DILATION);
         shots.push({view: view.name, time: viewHeld.get(view.name) ?? held, camera: state, player: {location: probe.location, region: probe.region, state: probe.state, physics: probe.physics, anim: probe.anim}});
       }
       writeFileSync(path.join(dir, 'play.json'), JSON.stringify({map, freeze, size: [box.width, box.height], ghost, timeTarget: target, timeHeld: held, shots, errors}, null, 1));
@@ -472,6 +493,26 @@ async function original() {
       console.log(map, 'held at TimeSeconds', times[map], 'dilation', live[0][3]);
     }
     if (process.argv.includes('--unfreeze')) post(['cmd set LevelInfo bPlayersOnly False', 'sleep 1500']);
+    // --actor-pose <Class> (repeatable): the class's actors are stopped (AnimRate 0) once the level is held and their animation is read after each
+    // shot into <view>-actor-pose.json, which `play` writes back. An actor in view animates in a frozen level (AActor::Tick advances the animation
+    // before its players-only return), so its phase is the count of ticks since the load in each program, a host input of the held state like
+    // the player's pose in a mirror: Street's BlackHelicopter1, 300 units from the start, turns its rotor through the y3 view's sky.
+    const poseClasses = optionAll('actor-pose');
+    const readPoses = () => Object.fromEntries(poseClasses.flatMap(cls => {
+      const text = execFileSync(game.WINE, [path.join(root, 'ad/build/dump-actor-win.exe'), cls, ...ANIM_FIELDS], {encoding: 'utf8', env: process.env});
+      return text.split(/\r?\n/).map(line => /^(\S+) (\S+) (.*)$/.exec(line.trim())).filter(m => m && m[1] === cls).map(m => {
+        const row = {};
+        for (const part of m[3].matchAll(/(\w+)=(\([^)]*\)|\S+)/g)) row[part[1]] = part[2].startsWith('(') ? part[2].slice(1, -1).split(',').map(Number) : Number.isNaN(Number(part[2])) ? part[2] : Number(part[2]);
+        return [m[2], animOf(row)];
+      });
+    }));
+    for (let retry = 0; poseClasses.length; retry++) {
+      post(poseClasses.flatMap(cls => [`cmd set ${cls} AnimRate 0`, 'sleep 400']));
+      const moving = Object.entries(readPoses()).filter(([, anim]) => anim.AnimRate !== 0).map(([name]) => name);
+      if (!moving.length) break;
+      if (retry === 3) throw new Error(`${map}: ${moving.join(', ')} still animate after AnimRate 0`);
+      console.log(map, `${moving.join(', ')} still animate: the AnimRate lines again`);
+    }
     // The level time at a shot: the live player's LevelInfo (its address read once: the walk over the object array takes seconds) and its TimeSeconds
     // (+0x478) through dx-live-win's poll, which reads it without the walk. null when either read fails (the frame then keeps the load's held time).
     let levelAddress = null;
@@ -542,9 +583,27 @@ async function original() {
         // (a minute on a loaded host), and an animated light follows it (an LT_Pulse of period 8 turns 4.4 times a second of level time), so the level time
         // is read just before the shot (dx-live-win's poll of the live LevelInfo, as for a held-Strobe view) and kept as the frame's clock; `play` steps
         // its held clock to each view's own time. The held time of the load stays the fallback when the read fails.
+        // The clock is stopped for the shot: ULevel::Tick multiplies the frame's delta by TimeDilation and adds it to TimeSeconds with no clamp
+        // (Engine 0x103a5468..0x103a5487), so at 0 the level time stands still, while the frame drawn after the read comes a few wall seconds (a few
+        // milliseconds of level time at 0.001) later. Two reads 0.4 s apart prove it stopped (a dropped line is typed again); the read after the shot
+        // proves it stayed (<view>-clock.txt: the reads before and after, and whether they agree).
         if (strobe === null) {
-          frameTime = shotClock();
+          let t0 = null, t1 = null;
+          for (let retry = 0; retry < 4; retry++) {
+            post(['cmd set LevelInfo TimeDilation 0', 'sleep 600']);
+            t0 = shotClock();
+            post(['sleep 400']);
+            const again = shotClock();
+            if (t0 !== null && t0 === again) break;
+            console.log(map, view.name, `the clock moved after TimeDilation 0 (${t0} to ${again}): the line again`);
+            t0 = null;
+          }
           post(['shot', 'sleep 900']);
+          t1 = shotClock();
+          post([`cmd set LevelInfo TimeDilation ${HELD_DILATION}`, 'sleep 400']);
+          frameTime = t0 ?? shotClock();
+          writeFileSync(path.join(dir, `${view.name}-clock.txt`), `before shot ${t0}\nafter shot ${t1}\nstopped ${t0 !== null && t0 === t1}\n`);
+          if (!(t0 !== null && t0 === t1)) console.log(map, view.name, `the clock was not stopped over the shot (${t0} to ${t1})`);
         }
         // --strobe-poll on a view with no _s0/_s1 suffix: the free-running flag at this camera, 120 samples 5 ms apart (<name>-strobe.txt).
         if (strobe === null && process.argv.includes('--strobe-poll')) {
@@ -622,6 +681,7 @@ async function original() {
             anim: {AnimSequence: row.AnimSequence, AnimFrame: row.AnimFrame, AnimRate: row.AnimRate, TweenRate: row.TweenRate, AnimLast: row.AnimLast, AnimMinRate: row.AnimMinRate, OldAnimRate: row.OldAnimRate,
               BlendAnimSequence: four('B'), BlendAnimFrame: four('F'), BlendAnimRate: four('R'), BlendTweenRate: four('T'), BlendAnimLast: four('L'), BlendAnimMinRate: four('M')}, flash: {FlashScale: row.FlashScale, FlashFog: row.FlashFog}}}, null, 1));
         }
+        if (taken.length && poseClasses.length) writeFileSync(path.join(dir, `${view.name}-actor-pose.json`), JSON.stringify({map, view: view.name, actors: readPoses()}, null, 1));
         // --decal-state: the level's Shadow actors as the frame had them (rows of class Shadow: the name also matches properties and states).
         if (taken.length && process.argv.includes('--decal-state')) {
           const text = execFileSync(game.WINE, [path.join(root, 'ad/build/dump-actor-win.exe'), 'Shadow', ...DECAL_FIELDS], {encoding: 'utf8', env: process.env});
