@@ -125,6 +125,52 @@ this view), listed here so the numbers are read correctly; `ui-datacube` has 90 
 
 Before the matched Brightness (the first comparison of the main menu), its mean luminance ratio was 1.70 and 6% of the pixels were identical: see cause 3.
 
+## The Mac capture (2026-10-17)
+
+The Linux host and its stored frames were unreachable, so the 18 views were captured again on the Mac under CrossOver, in one hold of the
+original (`DX_INI_SET='WinDrv.WindowsClient.Brightness=0.666667' scripts/original-run.sh 00_Training node scripts/interface-acceptance.mjs original`;
+`original-run.sh` now has the Darwin branch `original-views.sh` has). Two changes to the capture:
+- **Read-backs.** A loaded host drops typed characters, and a dropped console line fails silently
+  ([visual acceptance](visual-acceptance.md#06_hongkong_wanchai_underworlds-mirrored-panes-at-a-held-strobe-row-4230)).
+  `original` now reads each setup line's effect back and types the line again:
+  - Brightness: WindowsClient0 `+0x6c`;
+  - `ghost`: JC's Physics `+0x30` reads 4;
+  - the held dilation;
+  - the camera's Location and ViewRotation.
+
+  It also refuses a level that was not frozen before the load (LevelInfo `bPlayersOnly`). After each view it writes `<view>-capture.json`, which the
+  gate does not read: the level time, the player's pose and Physics, and Brightness. In the stored run all setup lines took at once; one aborted run
+  before it needed `ghost` typed again.
+- **Brightness in the launch ini.** The installed `DeusEx.ini` on the Mac holds Brightness 0.6, and the main menu's `FLUSH` re-reads the
+  configured Brightness (cause 3). The launch copy therefore holds 2/3 too, and every view's record reads 0.666667, the menu views and those after them included.
+
+Stored: `.work/acceptance/00_Training/ui-<view>-original.{png,bmp}`, `-time.txt` (46.494 s for `ui-hud` to 47.024 s for `ui-keypad`) and
+`-capture.json`, Mac main checkout. Against Play (gate run, `--only '^4\.(4\.1[1-4]|2\.9)$' --jobs 1`):
+
+| View | identical | >2 | >10 | MAD | edges | identical outside `y0`'s noise |
+| --- | ---: | ---: | ---: | ---: | --- | ---: |
+| `ui-hud`, `ui-hud-late` | .97643, .97634 | 93 | 0 | 0.01 | 1/1 | 1.00000 (0 pixels differ) |
+| `ui-inv` to `ui-augs` (8 persona screens) | .98809 to .98868 | 24 to 27 | 0 | 0.00 | 1/1 | 1.00000 (0 pixels differ) |
+| `ui-menu`, `ui-settings`, `ui-options`, `ui-colors` | .98819 to .98899 | 24 to 27 | 0 | 0.00 | 1/1 | 1.00000 (0 pixels differ) |
+| `ui-belt`, `ui-inv2` | .98417, .99238 | 0 | 0 | 0.00 to 0.01 | 1/1 | (another camera) |
+| `ui-datacube`, `ui-keypad` | .97459, .99238 | 3, 4 | 1, 0 | 0.00 to 0.01 | 1/1, .999/.999 | (another camera) |
+
+Every view is within the gate's thresholds except the share of identical pixels (99%). **What differs is the world under the interface, not the
+interface.**
+- The frozen world frame `y0` (row 4.1.1's start view, the same camera, `ShowHud False`, captured on the Mac at 04:23) reads .97608 identical against Play:
+  21,900 pixels off by exactly 1, as many brighter as darker. Those pixels are spread over every value from 1 to 39 (0.2% to 2% of each value's
+  samples), so this is not a ramp mapping a value to its neighbour. It is a 1-level rounding by position over the lit surfaces.
+- In all 14 views at that camera, **every pixel outside `y0`'s 22,043 differing pixels is identical** (0 differ). Inside them, the modal screens'
+  darkening mask brings about half to equal.
+- The four posed views show the same 1-level noise at their own cameras (0 to 4 pixels off by more than 2).
+- Not a Play regression: Play built from `04c331d` (before the screen clear 3c72bfa and the later changes, a scratch worktree) gives the same 21,900
+  pixels against the Mac's `y0`, and the current Play differs from it in 145 pixels.
+
+On Linux the same world under the interface matched to .9926. The noise is therefore the original's world rendering under CrossOver on the M2,
+attributed to wined3d over Metal rounding the texture and light-map modulation differently from Wine over Mesa on the AMD host; that attribution is
+unverified. The rows read `FAIL` on this capture with the threshold set from the Linux frames. Which share of identical pixels a Mac capture should
+be held to (for example, the share outside the world frame's own noise) is the gate's choice, not this capture's.
+
 ## Causes
 
 **1. The underlined accelerator letters (a divergence of Play, fixed).** Every persona screen differed from the original's in 60 to 140 pixels of

@@ -121,6 +121,13 @@ What follows:
    exponents (512), dumped from the running original (`validate-original-light-tables`, a
    skipped check without the local dump). The oracles' init word `0x037f` was harmless (the
    tables are identical at `0x027f` and `0x037f`); `0x027f` is now the measured word.
+   **On the Mac (2026-10-17, gate row 4.2.9's store):** the same five tables read from the running original under CrossOver
+   (Rosetta's x87), without a debugger: `dx-fpu-win.exe dump` (a `ReadProcessMemory` of the live process) at the start of the
+   interface capture's hold and again after its 18 views, in two launches. All four dumps are byte-equal, and they equal Play's
+   builders bit for bit (`validate-original-light-tables .work/fpu`: 0 of 2,048, 4,096, 2,048, 1,024 and 512 entries differ).
+   Stored in the Mac main checkout's `.work/fpu/*.bin`, where the gate's `findStored('fpu')` looks first (`.work/fpu-before` holds the
+   start-of-hold dump). The tables are built once, by `URender::Init`, so a read of the running game is the same data as the Linux
+   run's end-of-run dump under the debugger. The control-word columns above were measured on Linux only.
 3. **The game thread** runs at `0x037f` (PC 64) from the first PostRender on:
    `appEnableFastMath(0)` is `_controlfp(0, _MCW_PC)`, whose 0 is `_PC_64`. Before it (the first
    Draw, the first two ticks) it runs at the start-up `0x027f`. The only lighting computation

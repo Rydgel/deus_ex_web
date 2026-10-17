@@ -188,12 +188,21 @@ async function original() {
     }
     throw new Error('the deusex.exe window does not stay floating at the capture size');
   };
+  // The live player's row (the class object JCDentonMale is listed too, with class Class): the level time, the dilation, the pose and Physics.
   const levelTime = () => {
-    const text = execFileSync(game.WINE, [path.join(root, 'ad/build/dump-actor-win.exe'), 'JCDentonMale', 'Player:0x5d4:u32', 'LevelTime:0xa8:pf:0x478', 'Dilation:0xa8:pf:0x474'],
-      {encoding: 'utf8', env: process.env});
-    const live = text.split('\n').map(line => /^JCDentonMale \S+ Player=0x([0-9a-f]+) LevelTime=(\S+) Dilation=(\S+)/.exec(line)).filter(m => m && m[1] !== '0');
+    const text = execFileSync(game.WINE, [path.join(root, 'ad/build/dump-actor-win.exe'), 'JCDentonMale', 'Player:0x5d4:u32', 'LevelTime:0xa8:pf:0x478', 'Dilation:0xa8:pf:0x474',
+      'Location:0x114:f3', 'ViewRotation:0x3dc:i3', 'Physics:0x30:u8'], {encoding: 'utf8', env: process.env});
+    const live = text.split('\n').map(line => /^JCDentonMale \S+ Player=0x([0-9a-f]+) LevelTime=(\S+) Dilation=(\S+) Location=\((\S+)\) ViewRotation=\((\S+)\) Physics=(\d+)/.exec(line.trim()))
+      .filter(m => m && m[1] !== '0');
     if (live.length !== 1) throw new Error(`${live.length} live players in the original`);
-    return {time: Number(live[0][2]), dilation: Number(live[0][3])};
+    return {time: Number(live[0][2]), dilation: Number(live[0][3]), location: live[0][4].split(',').map(Number), viewRotation: live[0][5].split(',').map(Number), physics: Number(live[0][6])};
+  };
+  // UClient's Brightness (WindowsClient0 +0x6c in Deus Ex's build, WindowedViewportX +0x54 the layout check; visual-acceptance.mjs reads the same).
+  const brightness = () => {
+    const text = execFileSync(game.WINE, [path.join(root, 'ad/build/dump-actor-win.exe'), 'WindowsClient', 'Brightness:0x6c:f', 'X:0x54:u32'], {encoding: 'utf8', env: process.env});
+    const m = text.split(/\r?\n/).map(line => /^WindowsClient WindowsClient\d+ Brightness=(\S+) X=(0x[0-9a-f]+|\d+)/.exec(line)).find(Boolean);
+    if (!m || Number(m[2]) !== WIDTH) throw new Error(`the WindowsClient layout does not read back (${text.trim().slice(0, 120)})`);
+    return Number(m[1]);
   };
   const loadWait = Number(option('load-wait', 35000));
   if (!process.argv.includes('--reuse')) {
@@ -211,6 +220,26 @@ async function original() {
       `cmd set LevelInfo TimeDilation ${HELD_DILATION}`, 'sleep 500',
       `cmd set DeusEx.JCDentonMale Location (X=${camera.location[0]},Y=${camera.location[1]},Z=${camera.location[2]})`, 'cmd set DeusEx.JCDentonMale Velocity (X=0,Y=0,Z=0)',
       `cmd set DeusEx.JCDentonMale ViewRotation (Pitch=${camera.rotation[0]},Yaw=${camera.rotation[1]},Roll=${camera.rotation[2]})`, `sleep ${option('settle', 12000)}`]);
+    // A loaded host drops typed characters (the line then fails silently, docs/visual-acceptance.md "06_HongKong_WanChai_Underworld's mirrored panes"): each setup
+    // line's effect is read back and the line typed again, and a level that was not frozen before the load is refused (LevelInfo bPlayersOnly +0x4f0 & 4).
+    const want = Number(option('brightness', '0.666667'));
+    const checks = [
+      ['Brightness', () => Math.abs(brightness() - want) < 1e-4, [`cmd set WinDrv.WindowsClient Brightness ${option('brightness', '0.666667')}`, 'sleep 800']],
+      ['ghost', () => levelTime().physics === 4, ['cmd set DeusEx.JCDentonMale bCheatsEnabled True', 'sleep 300', 'cmd ghost', 'sleep 300']],
+      ['dilation', () => Math.abs(levelTime().dilation - HELD_DILATION) < 1e-6, [`cmd set LevelInfo TimeDilation ${HELD_DILATION}`, 'sleep 500']],
+      ['camera', () => { const p = levelTime(); return p.location.every((v, k) => v === camera.location[k]) && p.viewRotation.every((v, k) => v === camera.rotation[k]); },
+        [`cmd set DeusEx.JCDentonMale Location (X=${camera.location[0]},Y=${camera.location[1]},Z=${camera.location[2]})`, 'cmd set DeusEx.JCDentonMale Velocity (X=0,Y=0,Z=0)',
+          `cmd set DeusEx.JCDentonMale ViewRotation (Pitch=${camera.rotation[0]},Yaw=${camera.rotation[1]},Roll=${camera.rotation[2]})`, 'sleep 1500']]];
+    for (const [label, ok, again] of checks) for (let retry = 0; !ok(); retry++) {
+      if (retry === 3) throw new Error(`the console did not take the ${label} line`);
+      console.log(`${label} reads otherwise: the line again`);
+      post(again);
+    }
+    const levels = execFileSync(game.WINE, [path.join(root, 'ad/build/dump-actor-win.exe'), 'LevelInfo', 'Time:0x478:f', 'PlayersOnly:0x4f0:bit:0x4'], {encoding: 'utf8', env: process.env})
+      .split('\n').map(line => /^LevelInfo \S+ Time=(\S+) PlayersOnly=(\d)/.exec(line)).filter(Boolean);
+    const now = levelTime().time;
+    levels.sort((a, b) => Math.abs(Number(a[1]) - now) - Math.abs(Number(b[1]) - now));
+    if (levels[0]?.[2] !== '1') throw new Error(`the original's level is not frozen (LevelInfo bPlayersOnly ${levels[0]?.[2]}): the line before the load was dropped; take the capture again`);
   }
   const first = levelTime();
   console.log(`held at level time ${first.time} dilation ${first.dilation}`);
@@ -233,7 +262,14 @@ async function original() {
         const png = path.join(dir, `${view.name}-original.png`), size = game.bmpToPng(path.join(game.SYSTEM, fresh[0]), png);
         renameSync(path.join(game.SYSTEM, fresh[0]), path.join(dir, `${view.name}-original.bmp`));
         for (const extra of fresh.slice(1)) renameSync(path.join(game.SYSTEM, extra), path.join(scratch, extra));
-        if (size.width === WIDTH && size.height === HEIGHT) { taken = png; writeFileSync(timePath(view.name), `${time.time}\n`); console.log(view.name, `${size.width}x${size.height}`, 'level time', time.time, 'dilation', time.dilation); }
+        if (size.width === WIDTH && size.height === HEIGHT) {
+          taken = png; writeFileSync(timePath(view.name), `${time.time}\n`);
+          // the player and the client after the view (unread by the gate): a pose or ghost/walk line the game dropped shows here, a Brightness the menu's
+          // FLUSH re-read too
+          const state = {time: time.time, dilation: time.dilation, location: time.location, viewRotation: time.viewRotation, physics: time.physics, brightness: brightness()};
+          writeFileSync(path.join(dir, `${view.name}-capture.json`), JSON.stringify(state) + '\n');
+          console.log(view.name, `${size.width}x${size.height}`, JSON.stringify(state));
+        }
       }
     }
     if (!taken) throw new Error(`${view.name}: no ${WIDTH}x${HEIGHT} shot`);
