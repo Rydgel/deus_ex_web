@@ -24,6 +24,7 @@ import {DRAW_VERTEX_DECLARATIONS} from './gpu-mesh.mjs';
 import {frameProjection,FRAME_PROJECTION_KEY} from './frame-projection.mjs';
 import {createActorBatches,BATCH_VERTEX_DECLARATIONS,BATCH_VERTEX_TAIL} from './actor-batches.mjs';
 import {groupCorners,resolveMeshSkin} from './actor-mesh-skins.mjs';
+import {easterSkins} from './easter-skins.mjs';
 import {copyPositions,lodCornerIndices,setMeshBounds} from './actor-mesh-sim.mjs';
 
 /** The decoded mesh of a creation record, shared by its bindings. */
@@ -253,7 +254,9 @@ export function createMeshDraw(assets,creation,{gpu=null,texturePool,batches=nul
     for(const record of groupRecords){
       const {indices,uvs,corners}=groupCorners(faces,record);
       const reference=record.texture,skinAsset=reference.package===asset.name?asset:await assets.get(reference.package);
-      const {data,flags}=await resolveMeshSkin(textures,skinAsset,reference.index,record.flags);
+      // ?easter=1 (easter-skins.mjs): the two mod actors' recoloured skins; no-op while no skins are registered.
+      const resolved=await resolveMeshSkin(textures,skinAsset,reference.index,record.flags);
+      const {data,flags}=easterSkins.current?await easterSkins.current({actorName,record,faces,assets,textures,...resolved}):resolved;
       // Keep the original private decoder/await sequence: only the GPU
       // resource is shared, synchronously, at its former allocation point.
       const textureLease=texturePool.acquire(data,flags);textureLeases.push(textureLease);

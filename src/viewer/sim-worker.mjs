@@ -166,6 +166,7 @@ async function handle(data) {
         else if (data.method === 'decalProbe') value = decalProbe(game, data.args ?? {});
         else if (data.method === 'particleProbe') value = particleProbe(game, data.args ?? {});
         else if (data.method === 'viewProbe') value = (await import('./view-probe.mjs')).viewProbe(game, data.args ?? {});
+        else if (data.method === 'easter') value = await (await import('./easter-sim.mjs')).easterCall(game, data.args ?? {});
         else if (data.method === 'liveProbe') value = (await import('./live-probe.mjs')).liveProbe(game, data.args ?? {});
         else if (data.method === 'placeProbe') value = placeProbe(game, data.args ?? {});
         else if (data.method === 'laserProbe') value = laserProbe(game, host.actorSim);
