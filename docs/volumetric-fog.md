@@ -252,7 +252,14 @@ generic over three register models (`Reg`):
     texture of its own. The light UVs are `lightmapBasis.uv` of the fragment
     points, with texel centres at +0.5, the light atlas's convention. A
     polygon split across zones therefore fogs only its pieces in fog zones,
-    each with its own map, as the original does.
+    each with its own map, as the original does. Each fan triangle is wound
+    to face the eye as the level's are (`buildSurfaceGeometry` reverses one
+    whose Unreal winding runs along the normal; `itemMesh` does the same
+    with the facet's normal). Until 2026-10-17 (52741bb) the fans kept the
+    polygon's order, and an item wound along its normal was culled by the
+    front-side material: the Ship locker room's five closed lockers drew
+    no fog, 12 to 15 levels darker than the original
+    ([visual acceptance](visual-acceptance.md), the Ship's window 2).
 - **Child frames** (2026-10-07, with `?childFrames` on). SetupForSurf
   takes the frame DrawFrame is drawing as its first argument and stores it
   at `0x10b38a7c` (`0x10b06d3d`). The fog loop and ComputeFromActor read
@@ -320,9 +327,12 @@ Unverified or host choices, noted:
   and colour; GlobalLighting's LightType animation is not applied to them.
 - **Not fogged.** Meshes draw unfogged as D3D does ("Mesh fog").
 - **Mover lattice.** The lattice's derivation (`lightmapBasis`, in doubles
-  rounded to floats) is the one used for level surfaces, and it is not
-  separately checked against SetupForSurf's own lattice code. No checked
-  view yet shows one polygon split into several fogged items.
+  rounded to floats) is the one used for level surfaces. One case is
+  checked against the running original (2026-10-17): the Ship's five
+  locker faces, where SetupForSurf's grid (base 0x10b38a90, steps
+  0x10b49e10 and 0x10b3d378) and the fog map it fills (*0x10b38aa0) equal
+  Play's. No checked view yet shows one polygon split into several fogged
+  items.
 - **Gamma.** The display ramp maps the finished frame after the pass
   blends ([lighting](lighting.md), "Display ramp"), as the original's
   SetGammaRamp does. Until 2026-10-03 it applied per fragment, before

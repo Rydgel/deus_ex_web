@@ -1736,12 +1736,13 @@ camera window). One bottle hold (the lock `.work/bottle.lock`), Brightness 2/3, 
 | `cs1` | 14_OceanLab_Lab ComputerSecurity1 (SecurityCamera0, 4, 3) | 247.782 | 18 / 0 | **0.01 / 0.13 / 0.02** | 1 / 1 / .999 | .990 / 1 / 1 |
 | `hk0` | 06_HongKong_WanChai_Market ComputerSecurity0 (SecurityCamera2, 0, 1) | 294.792 | 38 / 2 | **0.05 / 0.19 / 0.02** | .997 / 1 / .999 | 1 / 1 / .999 |
 | `bp2` | 02_NYC_BatteryPark ComputerSecurity2 (SecurityCamera1, 2, 0) | 388.938 | 37 / 4 | **0.01 / 0.06 / 0.01** | .999 / .999 / .999 | 1 / 1 / .999 |
-| `sh3b` | 09_NYC_Ship ComputerSecurity3 (SecurityCamera1 with faint fog, 19 with heavy fog, 18) | 266.111 | 20 / 4 | 0.06 / 0.89 / 0.03 | .999 / .950 / .998 | .999 / **.758** / .997 |
+| `sh3b` | 09_NYC_Ship ComputerSecurity3 (SecurityCamera1 with faint fog, 19 with heavy fog, 18) | 266.111 | 20 / 4 | **0.06 / 0.32 / 0.03** | .999 / .999 / .998 | .999 / .976 / .997 |
 
 Play's own plan confirms what each window holds: `cs0` windows 1 and 2 each draw a sky child frame and window 3 a mirror child frame
 (`<name>-play.json` `plans[].frames`); `a51f` window 2 draws fog maps on 176 surfaces (4,795 texels) and `sh3b` window 2 on 30 surfaces and 7
 mover items. So **4.2.29 holds a mirror and sky against the original (`cs0`), sky again (`dk1`) and volumetric fog (`a51f` window 2)**, all
-well inside the thresholds, and 4.2.28's OceanLab, Battery Park and Market terminals pass on the Mac stores.
+well inside the thresholds, and 4.2.28's OceanLab, Battery Park, Market and Ship terminals pass on the Mac stores (the Ship's window 2 since
+the fix to mover fog below; it read 0.89 / .950 / .758 before).
 
 **`a51f` window 2, fog.** The radiation room's green haze (Light97 to Light100, Steady, the camera inside Light98's sphere; Play draws fog
 maps on 176 surfaces, 4,795 texels) agrees with the original's: MAD 0.08, ratio 1.005. The first capture (265.672 s, before `--pawns`) read
@@ -1751,32 +1752,37 @@ carcass falls and settles in each program's own way). The recapture (348.499 s) 
 absent ones were gone from the original's level) and wrote them: window 2 then reads 0.08 / .997 / .981. Battery Park's first capture
 (460.177 s, its Brightness line lost) was taken again at 388.938 s with the read-back.
 
-**`sh3b` window 2, the locker room** (all 20 pawns and the four open doors written; the red-uniformed NPC of the Linux capture is gone). What
-stays is the back wall's five locker doors (`DeusExMover8`, `19`, `21`, `23`, `37`, closed in both): in the original they read almost flat at the
-fogged wall's colour (a fit over the region, original = 0.04 x Play + 38, per channel R 38, G 39, B 32), in Play their faces are darker
-(means 26/28/21 against 40/41/33) with the panel texture showing. It is not Play's fog pass:
+**`sh3b` window 2, the locker room: mover fog (fixed 52741bb).** With all 20 pawns and the four open doors written, what stayed was the back
+wall's five closed locker doors (`DeusExMover8`, `19`, `21`, `23`, `37`): brighter and flatter in the original. It was not lighting:
 
-- `?cameraFog=off` (new, an experiment switch for a ViewportWindow's frame) moves window 2 from MAD 0.89 to 6.72: the level surfaces' fog is
-  right. `?cameraFog=nomovers` (no maps on mover draw items) moves it to 0.98 and leaves the locker block's ratio at 1.742.
-- Play does give the five locker items fog maps (largest texels 7 to 14 of 127, `fogMoverItems` in `-play.json`), over lattices that cover the
-  faces. Light0's VolumeFog is 20, so one volumetric light's alpha table stops at about 20 of 127: fog alone cannot hide a surface's texture.
-- Play's light map of a locker face (`DeusExMover8` face 4, the brush's LightMap[iBrushPoly], 2x4 texels over x 2340..2372, z -261..-161,
-  lights Light28 and Light150, both static) reads 10 to 35 of 255.
+- **The original's inputs equal Play's.** Read in the running original under `call` breakpoints through the hold (`camera-acceptance.mjs
+  original --trace-extra`, the tracer's new `abs`, `absptr` and `ecxobj`): each ComputeFromActor (Render 0x10b05fa0) on these faces, with
+  SetupForSurf's light-map grid (base 0x10b38a90, steps 0x10b49e10 and 0x10b3d378, the facet at *0x10b49e08), takes the lights Play takes
+  (Light28 and Light150, static) over Play's grid; the map after each light's merge (0x10b03040) equals Play's texels (`DeusExMover37` face
+  4 after Light150: 10/11/8 15/17/12 15/16/11 24/27/19 ...); the fog map SetupForSurf fills (*0x10b38aa0) equals Play's (13/13/11/6
+  11/11/10/5 ...). The poses equal (Rotation (0,-147456,0), KeyNum 0), no moving light reaches them, `ShipLockr` is not masked.
+- **D3DDrv's small maps are not it.** The faces' maps are 2x4. SetTexture (D3DDrv 0x10008a60) fits a texture to the device's caps
+  (the Mac's D3DRenderDevice0 reads MinW 4, MinH 4, aspect 2), so a 2x4 map is a 4x4 surface; the RGBA7 converter (0x10002120 on the
+  32-bit path) writes only UClamp x VClamp texels, each shifted left once, and leaves the rest. But the bin's UV multiplier (+0x40,
+  1/(enlarged width x UScale)) is the stage's (+0xabc + 0x2c per stage), and DrawComplexSurface takes (UDot - Pan.X + 0.5 UScale) x it: the
+  faces' vertices span texels 0.504 to 1.496 in U, the written ones, so the unwritten texels are never sampled.
+- **The difference is additive, one door at a time.** The main view facing the lockers (`lockx`, 2440,-1560,-200, yaw 16384, the original
+  at 51.148 s, Play at 51.146 s) shows the shape the window's downscale hid: each door reads +11.8 to +14.8 brighter in the original
+  (luminance), constant across the door both ways and with its texture's contrast kept, while the level frames between the doors read
+  equal (ratio 1.00). Play's frame without fog (`play --base fog`) gives the frames +12 to +14 from their fog maps and the doors +0.0.
+- **Play built the doors' fog maps and never drew them.** The fog pass made the five items' maps (texels 6 to 10 of 127 in the main
+  view) and their meshes were visible, but a fog shader patched to write solid magenta with depth Always and render order 90 coloured
+  every fogged level surface and none of the doors. The item fans came from the fragments in the polygon's own order; `toView` flips
+  handedness, and the material draws front faces only, so a fragment whose Unreal winding runs along the facet's normal was culled.
+  [geometry.mjs](../src/unreal/geometry.mjs) `buildSurfaceGeometry` reverses such a triangle for every level surface; fog-pass.mjs
+  `itemMesh` now does the same with the facet's normal. Items wound the other way already drew (presumably the open doors of window 2,
+  which `?cameraFog=nomovers` removed when it moved the window from 0.89 to 0.98; not examined).
 
-- The original does draw the doors: their vent slots show in its frame, and with the five doors moved 6,000 units down in Play (the mover
-  writer, so the brush tracker follows) the window reads worse (MAD 0.98, precision .878) and shows the cabinets' backs
-  (`NYC_GalvMetl_A`, 24 units behind), flatter than the original's region. The doors' texture `ShipLockr` is not masked.
-- The poses agree: the original's measured Location and Rotation (0,-147456,0) of each door equal Play's, KeyNum 0, not interpolating.
-  No moving light reaches them (the two security cameras' status lights have radius 50, the cage lights brightness 0); every light that
-  does is static (class 0).
+With the fix, `lockx`'s five doors equal the original to 0.1 of luminance (31.9, 37.8, 33.6, 30.2, 33.9 in both), and `sh3b` window 2
+reads MAD 0.32, edge recall .999, precision .976 (from 0.89 / .950 / .758): row 4.2.28 passes on the Mac stores. What remains in the window is a
+dark patch on the floor in Play only (the comparison's worst block ratio, 1.78), inside the thresholds and not examined.
 
-So the original lights these five mover faces evenly, about 1.5 times brighter than Play, where Play's light map gives them a diagonal dark
-gradient. The suspect is the mover light map's grid: [dynamic lighting](dynamic-lighting.md) lists the grid's derivation for brush surfaces
-(`lightmapBasis` over the transformed brush basis, not SetupForSurf's own lattice code) as not checked against the original. Not resolved:
-the original's texels for one of these faces (a trace of SetupForSurf or D3DDrv's `DrawComplexSurface` for `DeusExMover8` face 4, its
-FSurfaceInfo LightMap, against Play's 2x4 values) would settle it.
-
-**Not covered:** the Ship's window 2 (its five locker doors, above); the corona (no clean view, [camera view census](camera-view-census.md)).
+**Not covered:** the corona (no clean view, [camera view census](camera-view-census.md)).
 
 ### Main views at Brightness 2/3
 
@@ -2285,7 +2291,7 @@ node scripts/validate-stage4-acceptance.mjs --only '^4\.2\.30$'
   and the three windows' door/turret choices. Mirror, sky and fog windows are compared since 2026-10-17
   ([On the Mac](#on-the-mac-and-windows-with-a-mirror-sky-or-fog-2026-10-17-rows-4228-and-4229); the Island SATCOM terminal's route works on the
   Mac with the closer flight stop, JC staying in the van). The camera windows' pawns, carcasses and movers are written from the original's
-  measured state (`--pawns`, the mover poses); the Ship locker room's five locker doors still differ in their lighting there.
+  measured state (`--pawns`, the mover poses); the Ship locker room's doors, the last difference, were Play's mover fog (fixed 52741bb).
 - The player's weapon noise is compared ([Weapon noise](#weapon-noise-2026-10-14): a pistol and an assault shotgun, 1,069 and 1,586 manager calls
   equal); footsteps (held keys), the player's `TakeDamage` `Distress`, combat and the other weapons are not.
 - The uniform 1.13–1.41× raw brightness gap under Wine; a CrossOver
