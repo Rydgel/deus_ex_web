@@ -431,4 +431,7 @@ node scripts/census-stage5.mjs [--only slug,slug] [--json out.json]       # driv
 node scripts/validate-stage5-acceptance.mjs                               # the gate: exit 1 until every criterion passes
 node scripts/validate-stage5-acceptance.mjs --report [file]               # the scoreboard, exit 0
 node scripts/validate-stage5-acceptance.mjs --markdown [file]             # the tables of this page from a report
+node scripts/validate-stage5-live.mjs --scene cmb1                       # a proof check: the stored Island scene cmb1..cmb4 replayed in Play (SKIP without the store)
+node scripts/validate-stage5-live.mjs --scene cmb1 --print-capture       # the original's capture command of that scene (writes its tracer config; the bottle lock first)
+node scripts/stage5-capture-rehearsal.mjs --scene cmb1                    # rehearse a scene's input list in Play, headless, before a capture (class P)
 ```

@@ -1472,6 +1472,9 @@ New watch options: `--player-health` (the player's six hit regions) and `--los-f
 alternating-trace bit that decides whether a far listener's `ShowSelf` check draws its `FRand`). The first was added for the combat rows. The second was
 watched while the tick-parity draw was being traced, and was equal for every pawn.
 
+Note for the next Island capture: every `original` run also writes the untagged `population.json` of the map, which the Island pilot (4.1.5, untagged) reads. After these
+captures it is `cmb4`'s. Each of those loads held exactly Play's population after `KillAll FlyGenerator`, and 4.1.5 passed on it, but a later capture of another scene replaces it again.
+
 ### Pilot 4: 10_Paris_Club, dancers in view (2026-10-15)
 
 **How the view was reached without moving anything.** `PlayerPawn.CheatView(class<actor>)` (exec, needs `bCheatsEnabled`) makes the first actor of the class the player's `ViewTarget` and sets
