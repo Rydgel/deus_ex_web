@@ -940,6 +940,12 @@ export class ScriptRuntime {
       // UObject's deleting destructor 0x1015dd00: ~UObject, then operator delete.
       destructScriptObject(object, release);
       freeScriptObject(object, release);
+    } else if (object.nativeVtable === 0x10027fe8) {
+      // ConHistory (DeusEx vtable 0x10027fe8, slot +0x0c = 0x100146a0, flags 1): ~DConHistory (ConSys 0x10003400: the class vtable, ConditionalDestroy
+      // = DConHistory::Destroy 0x1000ca20 deleting every event from firstEvent, the three FString members, the DConObject vtable, ConditionalDestroy
+      // again and ~UObject), then ??3UObject(this, 0x5c). The class member teardown only frees native storage the host does not have, which is what
+      // deleteObject is (docs/script-loadmap-gc.md "ConHistory CriticalDelete"; the events own destructor 0x10014730 is the same shape).
+      this.deleteObject(target);
     } else throw new Error(`CriticalDelete deleting destructor is not recovered for native vtable 0x${(object.nativeVtable >>> 0).toString(16)}`);
     return undefined;
   }

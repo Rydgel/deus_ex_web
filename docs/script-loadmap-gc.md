@@ -176,6 +176,31 @@ None of the complete destructors checked here destroys another UObject:
 `~XFlagBase` (`0x1001b530`) and `~APlayerPawnExt` (`0x1001c150`) only
 guard-call `ConditionalDestroy` and free their own members.
 
+### ConHistory CriticalDelete (native 751)
+
+`DeusExPlayer.ResetConversationHistory` runs `CriticalDelete(conHistory); conHistory = None` when a history exists. Its callers in the retail bytecode
+are `ResetPlayerToDefaults` (so `DeusExGameInfo.Login`, `ResetPlayer` and `RestartLevel`) and `MissionScript.FirstFrame` (behind `M<n>MissionStart`: the
+first `Timer` call of every mission map). It is not reached by a pawn's death: the Stage 5 census first attributed the pause to the kill of `Terrorist4`
+(`island-carcass`) because its driver placed the player beside that Terrorist within the first second, so the Terrorist's greeting created a history before
+`Mission01.Timer`'s first call and `FirstFrame` deleted it. The driver now lets `FirstFrame` run first (the order a real player's walk produces).
+
+`execCriticalDelete` (Core `0x1013db50`) calls the object's vtable slot `+0x0c` with 1. DeusEx vtable `0x10027fe8` slot `+0x0c` is `0x100146a0`:
+
+1. `call [0x10027000]` = ConSys `??1DConHistory` (`0x10003400`): store the DConHistory vtable `0x10013568`; `ConditionalDestroy(this)` (the guarded
+   call that reaches slot `+0x24` = `DConHistory::Destroy` `0x1000ca20`, which deletes every event from `firstEvent` through the event's scalar deleting
+   destructor with 1, reading `next` (`+0x44`) first, then `UObject::Destroy`); the three FString members at `+0x40`, `+0x34`, `+0x28`
+   (`strDescription`, `strLocation`, `conOwnerName`: Realloc to zero, Remove, `~FArray`); the DConObject vtable `0x100131c4`; `ConditionalDestroy` again (guarded:
+   no-op); `~UObject` (`0x10150040`: registry slot cleared, appended to `GObjAvailable`, state frame freed).
+2. Flag 1: `??3UObject(this, 0x5c)` frees the allocation.
+
+An event's deleting destructor `0x10014730` has the same shape (`~DConHistoryEvent` `0x100038a0`: ConditionalDestroy, two FStrings at `+0x34` and `+0x28`,
+the DConObject vtable, ConditionalDestroy, `~UObject`; size `0x48`). Because the FStrings are JS strings in Play, the member teardown frees nothing the host
+holds, so `ScriptRuntime.criticalDelete` runs `deleteObject` (ConditionalDestroy, `destructScriptObject`, `freeScriptObject`) for vtable `0x10027fe8`. The chain
+`next` (`+0x58`) is not followed by either body: only the deleted history's events go. `validate-con-history-delete.mjs` pins the bodies and slots and checks, in
+Play on Island, a history made by a real conversation and a three-event history: events released in `firstEvent` order, then the history, `GObjAvailable`
+in that order (AddObject then reuses the history's slot), `conHistory` cleared by the script. That is class O2 evidence (the DLL's instructions, Play's
+registry); there is no live-original trace of a deletion.
+
 ## Play's reload
 
 `game.reset()` first calls `retirePlayer()` in `script-doors.mjs`. That

@@ -46,6 +46,8 @@ export async function openSession(map, assets) {
     gone: a => !level().actors.includes(a) || Boolean(runtime.instance(a).pendingKill) || Boolean(read(a, 'bDeleteMe')),
     flag: name => Boolean(read(player(), 'FlagBase')?.getBool(name)),
     health: a => read(a, 'Health'),
+    /** Whether a point lies inside the world (a zone other than 0): a placement outside it makes the player fall out of the world and die. */
+    inWorld: p => (level().pointRegion?.(p)?.zoneNumber ?? 0) !== 0,
     /** Place the player at `from` looking at `to` (fixture write; the aim is real once ticks run). */
     stand(from, to) {
       const eye = from[2] + game.player.baseEyeHeight, dx = to[0] - from[0], dy = to[1] - from[1];
@@ -268,12 +270,32 @@ export const DRIVERS = {
   },
   // 00_TrainingCombat --------------------------------------------------------------------------------------------------------------
   async 'pistol-range'(c) {
+    // The range is a chain the lesson's data builds (docs/stage-5-exit-criteria.md): DataLinkTrigger2 (65,-544) plays DL_TArgetRange, whose conversation event
+    // opens the cover shield1 over Switch3; Switch3 (Event guntarget1) slides the target DeusExMover4, which carries BreakableGlass0 and a MoverCollider, from y -3280
+    // to y -1216, and the MoverCollider passes the four DirectionalTriggers (ClassProximityType MoverCollider) that open the blast door DeusExMover7 on the way;
+    // the glass is the target (Event shootplay -> DataLinkTrigger4 -> DL_TArgetRangeshot1). A shot must reach the glass through the window of the station (the
+    // opening spans z -110 to -47 over the sill at y -656; the settled player's eye is at -72) and the old driver's placement missed it three ways: it was
+    // placed 36 units above the floor (the eye fell below the aim), at x 65 between the two lanes, and nothing had moved the target.
     const pistol = await c.give('WeaponPistol'); await c.equip(pistol);
-    const ammo0 = c.read(pistol, 'AmmoType') ? c.read(c.read(pistol, 'AmmoType'), 'AmmoAmount') : null;
-    c.stand([65, -543, -76], [65, -3280, -84]); c.frames(10);
-    for (let i = 0; i < 6; i++) c.shoot(4, 40);
-    const ammo = c.read(pistol, 'AmmoType') ? c.read(c.read(pistol, 'AmmoType'), 'AmmoAmount') : null;
-    return ok(ammo !== null && ammo < ammo0 && c.flag('dl_targetrangeshot1_played'), {ammo0, ammo, glass: c.byClass('BreakableGlass').map(g => c.gone(g) ? 'broken' : 'whole'), shot1: c.flag('dl_targetrangeshot1_played')});
+    for (let i = 0; i < 2; i++) { c.exec('summon Ammo10mm'); c.frames(5); const box = c.byClass('Ammo10mm').filter(a => !c.read(a, 'Owner')).at(-1); if (box) await c.take(box); }
+    const ammoOf = () => c.read(c.read(pistol, 'AmmoType'), 'AmmoAmount'), ammo0 = ammoOf();
+    const glass = c.actor('BreakableGlass0'), target = c.actor('DeusExMover4'), door = c.actor('DeusExMover7'), sw = c.actor('Switch3');
+    if (!glass || !target || !door || !sw) throw new Undriven('the range targets are not in the map');
+    c.fixture.place([65, -440, -112], {yaw: -PI / 2}); c.frames(10);
+    c.fixture.driveLegacy({forward: 1}); c.frames(80); c.fixture.driveLegacy({forward: 0});
+    for (let t = 0; t < 40 && !c.flag('dl_targetrange_played'); t++) c.frames(60);
+    c.frames(60);
+    const intro = c.flag('dl_targetrange_played');
+    await c.frob(sw, [40, 48, 36, 60]);
+    for (let t = 0; t < 30 && (c.read(target, 'bInterpolating') || c.read(target, 'KeyNum') === 0); t++) c.frames(30);
+    const slid = {target: c.pos(target).map(Math.round), doorKey: c.read(door, 'KeyNum')};
+    let shots = 0;
+    for (; shots < 30 && !c.gone(glass) && !c.read(glass, 'bDestroyed') && !c.flag('dl_targetrangeshot1_played'); shots++) {
+      c.stand(c.pos(c.player()), c.pos(glass)); c.frames(3); c.shoot(4, 40);
+      if (c.read(pistol, 'ClipCount') >= c.read(pistol, 'ReloadCount')) c.frames(150);
+    }
+    for (let t = 0; t < 40 && !c.flag('dl_targetrangeshot1_played'); t++) c.frames(60);
+    return ok(c.flag('dl_targetrangeshot1_played'), {intro, shield1: c.read(c.actor('DeusExMover1'), 'KeyNum'), ...slid, shots, ammo: [ammo0, ammoOf()], glassGone: c.gone(glass), glass: c.pos(glass).map(Math.round), shot1: c.flag('dl_targetrangeshot1_played')});
   },
   async 'rifle-scope'(c) {
     const rifle = await c.give('WeaponRifle'); await c.equip(rifle);
@@ -285,12 +307,35 @@ export const DRIVERS = {
     return ok(scoped, {scoped, ammo, fov: c.read(c.player(), 'DesiredFOV'), skill: 'SkillWeaponRifle'});
   },
   async 'lam-wall'(c) {
-    const lam = await c.give('WeaponLAM'); await c.equip(lam);
+    // The lesson's input (the original's path for a LAM at a Mover): WeaponLAM.Tick runs NearWallCheck (a 32-unit trace from the player at a Level or Mover hit, which
+    // BreakableWall1 is: DeusExMover) and WeaponLAM.Fire then places the grenade on the wall (state NormalFire, the 'Place' animation) instead of throwing it. A thrown
+    // LAM bounces off the wall and back to the player (ThrownProjectile.Flying.HitWall), which is what the previous driver saw from 250 units. A placed LAM is a
+    // proximity mine for NPCs only in single-player (ThrownProjectile.Tick) and ThrownProjectile.TakeDamage explodes it: the player backs off and shoots it.
+    const lam = await c.give('WeaponLAM'), pistol = await c.give('WeaponPistol'); await c.equip(lam);
     const wall = c.actor('BreakableWall1'); if (!wall) throw new Undriven('no BreakableWall1');
-    const w = c.pos(wall); c.stand([w[0] - 250, w[1], w[2] + 20], w);
-    const n0 = c.byClass('LAM').length, st0 = c.state(lam);
-    c.frames(10); c.shoot(10, 600);
-    return ok(c.gone(wall) || c.read(wall, 'bHidden'), {wall: wall.name, gone: c.gone(wall), lams: [n0, c.byClass('LAM').length], weaponState: [st0, c.state(lam)], inHand: c.read(c.player(), 'inHand')?.name});
+    const w = c.pos(wall), at = (bearing, d) => [w[0] + Math.cos(bearing) * d, w[1] + Math.sin(bearing) * d, w[2] - 16];
+    // BreakableWall1 closes a corridor and one side of it is outside the level: a player placed there falls out of the world and dies (the previous driver's
+    // placement did exactly that). The open side is the first of four bearings whose standing place 110 units off lies in the world.
+    const bearing = [-PI / 2, PI / 2, 0, PI].find(b => c.inWorld(at(b, 110)));
+    if (bearing === undefined) throw new Undriven('no standing place 110 units from BreakableWall1 lies in the world');
+    const before = c.byClass('LAM').map(l => l.name);
+    c.stand(at(bearing, 110), w); c.frames(10);
+    c.fixture.driveLegacy({forward: 1});
+    for (let i = 0; i < 240 && !c.read(lam, 'bNearWall'); i++) c.frames(1);
+    c.fixture.driveLegacy({forward: 0}); c.frames(10);
+    const near = Boolean(c.read(lam, 'bNearWall'));
+    c.shoot(4, 90);
+    const placed = c.byClass('LAM').filter(l => !before.includes(l.name)).at(-1);
+    if (!placed) return ok(false, {near, weaponState: c.state(lam), ammo: c.read(c.read(lam, 'AmmoType'), 'AmmoAmount')}, 'the LAM was not placed or thrown');
+    const stuck = Boolean(c.read(placed, 'bStuck')), proximity = Boolean(c.read(placed, 'bProximityTriggered'));
+    await c.equip(pistol);
+    c.stand(at(bearing, 150), c.pos(placed)); c.frames(10);
+    let shots = 0;
+    for (; shots < 6 && !c.gone(placed) && !c.read(wall, 'bDestroyed'); shots++) { c.stand(at(bearing, 150), c.pos(placed)); c.shoot(4, 30); }
+    // BlowItUp triggers the wall's Event (FinishWall): DataLinkTrigger11 plays DL_FinishWall, whose played flag is set when the transmission ends.
+    for (let i = 0; i < 40 && !c.flag('dl_finishwall_played'); i++) c.frames(60);
+    const broken = Boolean(c.read(wall, 'bDestroyed')) || c.gone(wall) || Boolean(c.read(wall, 'bHidden'));
+    return ok(broken && c.flag('dl_finishwall_played'), {near, placed: placed.name, stuck, proximity, shots, lamGone: c.gone(placed), wallDestroyed: Boolean(c.read(wall, 'bDestroyed')), doorStrength: c.read(wall, 'doorStrength'), playerHealth: c.health(c.player()), finishWall: c.flag('dl_finishwall_played')});
   },
   // 00_TrainingFinal ---------------------------------------------------------------------------------------------------------------
   async 'stealth-maze'(c) {
@@ -308,13 +353,18 @@ export const DRIVERS = {
   },
   async 'alarm-chain'(c) {
     const unit = c.actor('AlarmUnit1'); if (!unit) throw new Undriven('no AlarmUnit1');
-    const soldier = c.actor('Soldier0');
-    const before = {state: c.state(soldier), enemy: c.read(soldier, 'Enemy')?.name ?? null};
+    const soldier = c.actor('Soldier0'), door = c.byTag('ExitDoor')[0];
+    const before = {state: c.state(soldier), enemy: c.read(soldier, 'Enemy')?.name ?? null, door: door ? c.read(door, 'KeyNum') : null};
     const up = c.pos(unit); c.stand([up[0] - 200, up[1], up[2] + 20], up);
     c.trigger(unit); // the AlarmUnit is tripped by a Trigger call (a laser, camera or the maze's trigger); it has no use action
-    c.frames(60 * 12);
-    const after = {state: c.state(soldier), enemy: c.read(soldier, 'Enemy')?.name ?? null, active: Boolean(c.read(unit, 'bActive'))};
-    return ok(after.active, {before, after, soldierAlliance: c.read(soldier, 'Alliance')}, 'AlarmUnit1.Trigger left bActive false');
+    // AlarmUnit.Trigger sets bActive and fires its Event (AlarmDispatcher: SoldierNeutral, CloseDoor, failmessage); AlarmUnit.Tick calls UnTrigger when curTime
+    // reaches alarmTimeout (10 s on AlarmUnit1), so the unit is read while it rings and again after the timeout. The previous driver read bActive once at 12 s, after
+    // the timeout, and took the original's own deactivation for a failure.
+    let rang = false, ringing = 0; for (let t = 0; t < 14; t++) { c.frames(60); if (c.read(unit, 'bActive')) { rang = true; ringing = t + 1; } }
+    const after = {state: c.state(soldier), enemy: c.read(soldier, 'Enemy')?.name ?? null, door: door ? c.read(door, 'KeyNum') : null, active: Boolean(c.read(unit, 'bActive'))};
+    const failMessage = c.flag('dl_failedstealth_played');
+    return ok(rang && failMessage && after.door !== before.door && !after.active, {before, after, rang, ringingSeconds: ringing, alarmTimeout: c.read(unit, 'alarmTimeout'), failMessage, soldierAlliance: c.read(soldier, 'Alliance')},
+      !rang ? 'AlarmUnit1.Trigger left bActive false' : 'the AlarmDispatcher chain (failure DataLink, ExitDoor) or the timeout did not follow');
   },
   async 'meet-page-final'(c) {
     const trigger = c.byTag('ConversationTrigger').find(t => c.read(t, 'conversationTag') === 'm00meetpage'); if (!trigger) throw new Undriven('no m00meetpage trigger');
