@@ -4317,6 +4317,8 @@ export class ScriptRuntime {
         const record=this.lookup(target,name);
         if(!record)return undefined;
         if(!record.function)throw new Error(`Original event is not prepared: ${record.key}`);
+        // A native caller of a value-returning event (CheckEncroachment's EncroachingOn) passes ProcessEvent a result block, as dispatchSpawnedEvent does.
+        if(record.function.result)return this.dispatchSpawnedEvent(target,name,args);
         return this.processEvent(target,name,args);
       },
       isProbing:(actor,name)=>this.isProbing(actor,name),
