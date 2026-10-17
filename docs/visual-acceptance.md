@@ -1445,6 +1445,33 @@ the stored trace shows. Facts, in the order they were established:
 staging goes, so the second run unlinked its own staged files before copying them from themselves. `stageLive` now leaves a file in place that is already at its target and
 passes over a root that holds only some of the required lists.
 
+### A placed player, the level's tick parity and the frozen render stamps (2026-10-17, Stage 5)
+
+The Stage 5 combat captures ([Stage 5 exit criteria](stage-5-exit-criteria.md#first-original-captures-island-combat-2026-10-17)) place a visible player 150 to 700
+units from Island's Terrorists. Their first replays were equal for every pawn but showed four differences, all of them inputs of the replay rather than Play's game
+code. Each is now measured from the original:
+
+1. **The placement.** The original's player is moved in the frozen phase by `ghost` (`SetCollision(false, ...)` takes it out of the collision hash), a SET of
+   `Location`, and `walk` (`PlayerPawn.StartWalk`: `SetCollision(true, ...)` adds it at the new place, `SetPhysics(PHYS_Walking)`, `ClientReStart`). So the hash is never stale,
+   the crash of 2026-10-11 (a SET of Location of a colliding player) cannot happen, and Play runs the same lines. `--early-cmds` now run in Play before the
+   pose's placement and the wait for the pose's sequence, in the original's order, not after them.
+2. **The player's animation state.** A placed player lands, and `PlayLanded` then `TweenToWaiting` leave the same sequence name as a `TweenAnim` (`AnimLast` 0, `bAnimLoop` off).
+   The replay wrote only sequence, frame, rate and tween, so its first tick ended the "tween" and restarted the loop: the frame was 0.0125 behind for about 90 ticks. This is
+   the conversation captures' unexplained `AnimFrame` lag ([conversation camera](conversation-camera.md)). The tracer now records `AnimLast`, `AnimMinRate`,
+   `OldAnimRate` and the `bAnimFinished`, `bAnimLoop` and `bAnimNotify` bits of the player (`PLAYER_FIELDS`), and the replay writes them. For an older trace, it ticks the
+   frozen level until the player runs the pose's sequence as a loop.
+3. **`ULevel::TickTag` parity.** The tag flips at every level tick since the load, so its parity at the release counts the frozen ticks, which differ between
+   the programs. An actor whose Owner never ticks is deferred and skipped on every other tick (`AActor::Tick`'s owner-first rule, [actor tick](script-actor-tick.md)). A
+   `BulletHole` owned by the level is one such actor: its 1 s timer fires after 2 s, on ticks of one parity. With the wrong parity, Play drew the decal's `FRand` one tick
+   early or late (ticks 338/339, 441/442, 445/446, and a `ShellCasing`'s `LoudNoise` value at 445). The tracer records the player's `bTicked` (+0x28 bit 0x200, the
+   tag of every tick it runs). The replay sets Play's tag to the original's at the release (`liveProbe` `tickTag`), or to `--tick-tag 0|1` for an older trace.
+4. **Render stamps of the frozen phase.** The original drew the start view at the dock before the placement, which stamped `LastRenderTime` for Paul, SecurityBot0 and
+   UNATCOTroop1. `--render-history` (4.1.6's option) writes them.
+
+New watch options: `--player-health` (the player's six hit regions) and `--los-flag` (`Pawn.bLOSflag`, +0x318 bit 0x80000, the sight worker's
+alternating-trace bit that decides whether a far listener's `ShowSelf` check draws its `FRand`). The first was added for the combat rows. The second was
+watched while the tick-parity draw was being traced, and was equal for every pawn.
+
 ### Pilot 4: 10_Paris_Club, dancers in view (2026-10-15)
 
 **How the view was reached without moving anything.** `PlayerPawn.CheatView(class<actor>)` (exec, needs `bCheatsEnabled`) makes the first actor of the class the player's `ViewTarget` and sets

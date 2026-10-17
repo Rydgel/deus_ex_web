@@ -71,7 +71,7 @@ export const EXPECTED = {
   'island-melee-ko': {status: 'plays'},
   'island-death': {status: 'plays'},
   'island-turret': {status: 'plays'},
-  'island-sight': {status: 'no-effect'},
+  'island-sight': {status: 'plays'},
   'island-hearing': {status: 'plays'},
   'island-camera': {status: 'plays'},
   'island-laser': {status: 'no-effect'},

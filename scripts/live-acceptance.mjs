@@ -115,11 +115,22 @@ const PERCEPTION_FIELDS = [
   ...[0, 1, 2, 3, 4, 5, 6, 7].flatMap(i => [[`AlName${i}`, `$AlName${i}`, 2028 + 16 * i, 'name'], [`AlLvl${i}`, `$AlLvl${i}`, 2032 + 16 * i, 'f'], [`AlAgit${i}`, `$AlAgit${i}`, 2036 + 16 * i, 'f']]),
 ];
 if (flag('perception')) FIELDS.push(...PERCEPTION_FIELDS);
+// --los-flag: Pawn.bLOSflag (+0x318 bit 0x80000), the alternating-trace bit the sight worker 0x103beb50 toggles on every FOV-checked call: it decides
+// whether a far listener's ShowSelf check draws its FRand (script-pawn-perception.mjs losWorker), so a phase difference shifts a draw by one tick.
+if (flag('los-flag')) FIELDS.push(['LOSflag', 'bLOSflag', 0x318, 'bit', 0x80000]);
 // --touching: Actor.Touching[0..3] (+0xe8..+0xf4) of every watched actor, the extras' included (the four slots BeginTouch/AddTouch fill and evict).
 if (flag('touching')) FIELDS.push(...[0, 1, 2, 3].map(i => [`Touch${i}`, 'Touching', 0xe8 + 4 * i, 'obj', 0, i]));
 // The player's pose, read back from the original (the placement of Play's replay): view rotation and Region.
 const PLAYER_FIELDS = FIELDS.slice(0, 10).concat([FIELDS[10]],
-  [['VRot', 'ViewRotation', 0x3dc, 'i3'], ['RegZone', '$regionZone', 0xc8, 'obj'], ['RegLeaf', '$regionLeaf', 0xcc, 'i32'], ['RegNum', '$regionNum', 0xd0, 'u8']]);
+  [['VRot', 'ViewRotation', 0x3dc, 'i3'], ['RegZone', '$regionZone', 0xc8, 'obj'], ['RegLeaf', '$regionLeaf', 0xcc, 'i32'], ['RegNum', '$regionNum', 0xd0, 'u8'],
+  // The rest of the player's animation state (script-anim.mjs: +0x220 AnimLast, +0x224 AnimMinRate, +0x228 OldAnimRate, the bits of +0x28), written into Play with
+  // the sequence and frame: a TweenAnim (TweenToWaiting after a landing) leaves the same sequence name with AnimLast 0 and bAnimLoop off, and the replay's first
+  // tick then ended that "tween" (AnimEnd, PlayWaiting) where the original's loop ran on (Stage 5 capture cmb1, 2026-10-17).
+  ['ALast', 'AnimLast', 0x220, 'f'], ['AMin', 'AnimMinRate', 0x224, 'f'], ['AOld', 'OldAnimRate', 0x228, 'f'],
+  ['AnimFin', 'bAnimFinished', 0x28, 'bit', 0x8], ['AnimLoop', 'bAnimLoop', 0x28, 'bit', 0x10], ['AnimNote', 'bAnimNotify', 0x28, 'bit', 0x20],
+  // Actor.bTicked (+0x28 bit 0x200): the player ticks every tick, so it is ULevel::TickTag of that tick (docs/script-actor-tick.md); the replay starts Play's
+  // tag at the original's parity (the frozen ticks of the two programs differ in number).
+  ['Ticked', 'bTicked', 0x28, 'bit', 0x200]]);
 // --perception: the player's AIVisibility cache (Actor +0x2e8: VisUpdateTime, CurrentVisibility, LastVisibility), which every AICanSee on the player reads.
 if (flag('perception')) PLAYER_FIELDS.push(['CRad', 'CollisionRadius', 0x1d4, 'f'], ['CHeight', 'CollisionHeight', 0x1d8, 'f'], ['BaseEye', 'BaseEyeHeight', 0x3f4, 'f'], ['VisT', 'VisUpdateTime', 0x2e8, 'f'], ['CurVis', 'CurrentVisibility', 0x2ec, 'f'], ['LastVis', 'LastVisibility', 0x2f0, 'f']);
 
@@ -127,6 +138,10 @@ if (flag('perception')) PLAYER_FIELDS.push(['CRad', 'CollisionRadius', 0x1d4, 'f
 // pick up and fire a weapon (--cmds) are followed through these.
 if (flag('player-gear')) PLAYER_FIELDS.push(['Weapon', 'Weapon', 976, 'obj'], ['PendWeapon', 'PendingWeapon', 980, 'obj'], ['Inv', 'Inventory', 192, 'obj'], ['InHand', 'inHand', 2600, 'obj'],
   ['FrobTgt', 'FrobTarget', 2536, 'obj'], ['bFire', 'bFire', 1206, 'u8'], ['PHealth', 'Health', 1064, 'i32'], ['FrobTime', 'FrobTime', 2540, 'f']);
+// --player-health: the player's hit regions (Pawn.HealthHead..HealthArmRight, the linked offsets of Play's class graph): where an NPC's shots land
+// (DeusExPlayer.TakeDamage/HandleDamage) in the combat scenes of the Stage 5 gate (docs/stage-5-exit-criteria.md).
+if (flag('player-health')) PLAYER_FIELDS.push(['HHead', 'HealthHead', 1376, 'i32'], ['HTorso', 'HealthTorso', 1380, 'i32'], ['HLegL', 'HealthLegLeft', 1384, 'i32'],
+  ['HLegR', 'HealthLegRight', 1388, 'i32'], ['HArmL', 'HealthArmLeft', 1392, 'i32'], ['HArmR', 'HealthArmRight', 1396, 'i32']);
 // --player-blend: the player's blend channel 0 (the mouth animation Pawn.LipSynch plays while JC speaks in a conversation): BSeq0, BFrame0, BRate0, BTween0 of FIELDS.
 if (flag('player-blend')) PLAYER_FIELDS.push(...FIELDS.filter(f => ['BSeq0', 'BFrame0', 'BRate0', 'BTween0'].includes(f[0])));
 // Load-time random state of the PawnGenerators (PigeonGenerator, SeagullGenerator, ...): PostBeginPlay draws TryTimer
@@ -739,6 +754,10 @@ async function play() {
     // was running when the replay began had. The page's frames before it are not ticks (the worker merges posts), so on a slow run the idle
     // sequence (BreatheLight: no notifies, bAnimNotify 0) was still running, the Tread loop never ran its PlayFootStep notifies (one FRand each)
     // and the replay's draw count was one short from tick 45 (Underworld; Battery Park tick 10). Wait until the player runs the pose's sequence.
+    // --early-cmds: the console lines the original was typed in its frozen phase (a camera that follows an actor, a placement), run first through the same
+    // chain, as the original ran them before its frozen frames: a placement's `walk` (PlayerPawn.StartWalk: ClientReStart, PlayWaiting) restarts the idle
+    // animation, and run after the pose's write it left the player's BreatheLight 0.0125 behind the original's for 90 ticks (Stage 5 capture cmb1, 2026-10-17).
+    if (earlyCommands().length) console.log('early commands:', JSON.stringify((await page.evaluate(lines => window.deusExViewer.viewProbe({exec: lines}), earlyCommands())).output));
     let running = null;
     const same = () => String(running).toLowerCase() === String(pose.Anim).toLowerCase();
     for (let k = 0; k < 300 && !same(); k++) {
@@ -749,8 +768,6 @@ async function play() {
     // The original's pose, exactly (the frozen-phase history of the ghost differs: its landing, its Tread loop).
     await page.evaluate(a => window.deusExViewer.viewProbe({location: a.Loc, rotation: a.VRot, rehash: a.rehash,
       region: {zone: a.RegZone, iLeaf: a.RegLeaf, zoneNumber: a.RegNum}}), {...pose, rehash: flag('ghost-in-hash')});
-    // --early-cmds: the console lines the original was typed in its frozen phase (a camera that follows an actor), run now through the same chain
-    if (earlyCommands().length) console.log('early commands:', JSON.stringify((await page.evaluate(lines => window.deusExViewer.viewProbe({exec: lines}), earlyCommands())).output));
     // A player placed at the original's pose (a no-ghost player, or a ghost put on its feet by `walk`) is not standing yet: it stands in the Physics its login or
     // `walk` left it (falling), and settles in a few ticks (a fall, the landing, a lift to the rest height: Manderley's `set Location` 0.17 below its rest height 287.8
     // fell 2 units and came back in five ticks). The original's stood in a frozen phase of tens of seconds (the intro: Physics 1, Velocity 0, Z -80.2). The frozen
@@ -773,6 +790,16 @@ async function play() {
         await frames(4); now = await stand();
       }
       console.log(`the player after ${waited} frames: Physics ${now?.Physics} (the original's ${pose.Phys}), Location ${JSON.stringify(now?.Location)}, Velocity ${JSON.stringify(now?.Velocity)}, Base ${now?.Base?.name ?? now?.Base}`);
+    }
+    // A trace without the player's AnimLast and loop bits (before 2026-10-17): the original's player stood for its whole frozen phase, so it runs the pose's sequence
+    // as a playing loop (frame and rate positive); Play's placement may have landed it (PlayLanded, then TweenToWaiting: the same sequence name, AnimLast 0, no loop).
+    // The frozen level is ticked until the player runs that loop, so the flags the write below leaves are the loop's.
+    if (pose.ALast === undefined && pose.Frame >= 0 && pose.Rate > 0) {
+      const anim = async () => (await page.evaluate(() => window.deusExViewer.liveProbe({read: {names: ['@player'], props: ['AnimSequence', 'AnimFrame', 'AnimLast', 'bAnimLoop']}}))).read?.['@player'];
+      let now = await anim(), waited = 0;
+      const looping = () => String(now?.AnimSequence).toLowerCase() === String(pose.Anim).toLowerCase() && now.AnimFrame >= 0 && now.AnimLast > 0 && now.bAnimLoop;
+      for (; waited < 240 && !looping(); waited += 2) { await frames(2); now = await anim(); }
+      console.log(`the player's animation after ${waited} frames: ${JSON.stringify(now)}${looping() ? '' : ` (not the original's running ${pose.Anim} loop)`}`);
     }
     const populationFile = [`population${suffix}.json`, 'population.json'].map(name => path.join(dir, name)).find(existsSync);
     const population = populationFile ? JSON.parse(readFileSync(populationFile, 'utf8')) : null;
@@ -919,7 +946,13 @@ async function play() {
       return Object.keys(counters).length ? counters : null;
     })();
     if (classCounters) console.log(`class counters from the original's traced names: ${Object.keys(classCounters).length} classes`);
-    const request = {...(classCounters ? {classCounters} : {}), write: {...timerWrites, ...pawnWrites, '@player': {AnimSequence: pose.Anim, AnimFrame: pose.Frame, AnimRate: pose.Rate, TweenRate: pose.Tween, ...(option('player-alliance', null) ? {Alliance: option('player-alliance')} : {}),
+    // ULevel::TickTag during the first replayed tick: the opposite of the player's bTicked at the last frozen tick (the trace's), or --tick-tag 0|1
+    // for a trace without it; otherwise Play keeps its own parity.
+    const tickTag = () => option('tick-tag', null) !== null ? Number(option('tick-tag')) : pose.Ticked === undefined ? null : 1 - Number(Boolean(pose.Ticked));
+    // the rest of the animation state when the trace has it (PLAYER_FIELDS: captures from 2026-10-17 on)
+    const animState = pose.ALast === undefined ? {} : {AnimLast: pose.ALast, AnimMinRate: pose.AMin, OldAnimRate: pose.AOld,
+      bAnimFinished: Boolean(pose.AnimFin), bAnimLoop: Boolean(pose.AnimLoop), bAnimNotify: Boolean(pose.AnimNote)};
+    const request = {...(classCounters ? {classCounters} : {}), write: {...timerWrites, ...pawnWrites, '@player': {AnimSequence: pose.Anim, AnimFrame: pose.Frame, AnimRate: pose.Rate, TweenRate: pose.Tween, ...animState, ...(option('player-alliance', null) ? {Alliance: option('player-alliance')} : {}),
       // FrobTime accumulates the player's tick deltas (HighlightCenterObject runs when it reaches 0.1 s); the frozen phase's deltas are the host's, so the original's value is a measured input
       ...(flag('player-gear') && pose.FrobTime !== undefined ? {FrobTime: pose.FrobTime} : {})}, ...generatorWrites},
       ...(touchWindow ? {touchTrace: {first: touchWindow[0], last: touchWindow[1]}} : {}),
@@ -929,7 +962,7 @@ async function play() {
       ...(trace[0]?.viewport?.[0] && !flag('own-viewport') ? {renderSize: trace[0].viewport} : {}),   // the original's frame size (--own-viewport: Play's page)
       ...(setupNames ? {setupProbe: {names: setupNames.split(','), first: setupFirst, last: setupLast}} : {}),
       ...(scriptPawns ? {scriptTrace: {pawns: scriptPawns.split(','), first: scriptFirst, last: scriptLast}} : {}), replay: {ticks: trace.map(({n, unfrozen, delta, rngIn, clockIn, tsIn, strobeIn, aiFirst}) => ({n, unfrozen, delta, rngIn, clockIn, tsIn, strobeIn, aiFirst, ...windowDeltas(unfrozen)})),   // not the watched fields: a long trace would not fit the page
-      release: true, hold: true, drawTrace: flag('draw-trace'), drawStacks: flag('draw-stacks'), drawStackActor: option('draw-stack-actor', null),
+      release: true, hold: true, tickTag: tickTag(), drawTrace: flag('draw-trace'), drawStacks: flag('draw-stacks'), drawStackActor: option('draw-stack-actor', null),
       // --phonemes file.json ([{n, name, letter}]; conversation-acceptance.mjs `phonemes`): the letters the original's audio update wrote into a speaker's nextPhoneme, a measured input
       ...(option('phonemes', null) ? {phonemes: JSON.parse(readFileSync(option('phonemes'), 'utf8'))} : {}),
       ...(option('can-see', null) ? {canSeeProbe: {pawn: option('can-see'), first: Number(option('can-see-ticks', '1:1').split(':')[0]), last: Number(option('can-see-ticks', '1:1').split(':')[1])}} : {}),

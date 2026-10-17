@@ -95,11 +95,12 @@ const saveCaches = () => {
   writeFileSync(memoryPath, JSON.stringify(peaks, null, 2) + '\n');
 };
 
-const SWEEP_EXCLUDED = new Set(['validate-stage4-acceptance.mjs', 'validate-stage5-acceptance.mjs']);
+const SWEEP_EXCLUDED = new Set(['validate-stage4-acceptance.mjs', 'validate-stage5-acceptance.mjs', 'validate-stage5-live.mjs']);
 const all = (await readdir(path.join(root, 'scripts')))
   .filter(name => name.startsWith('validate-') && name.endsWith('.mjs'))
   .filter(name => !filter || name.includes(filter))
   // The Stage 4 and Stage 5 gates compose other validators and the census (about an hour at two jobs, docs/stage-4-exit-criteria.md): they run on their own, or when --filter names them.
+  // validate-stage5-live.mjs is one of the Stage 5 gate's proof checks: it needs --scene and the stored original of that scene.
   .filter(name => !SWEEP_EXCLUDED.has(name) || (filter && name.includes(filter)));
 // Longest-known-first: an unknown validator sorts to the front so it is
 // measured early rather than becoming a late straggler.

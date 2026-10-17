@@ -473,6 +473,10 @@ export function liveProbe(game, args = {}) {
       runtime.writeNamed(info, 'bPlayersOnly', false);
       level.timeSeconds = first.clockIn;
       runtime.writeNamed(info, 'TimeSeconds', Math.fround(first.tsIn));
+      // ULevel::TickTag (+0x10c, docs/script-actor-tick.md) flips at every level tick since the load, so its parity at the release counts the original's
+      // frozen ticks: a measured input (live-acceptance.mjs: the player's bTicked in the trace). An actor whose Owner never ticks (a decal on LevelInfo) is
+      // deferred and skipped on every other tick, so its timers run on the ticks of one parity.
+      if (args.replay.tickTag === 0 || args.replay.tickTag === 1) level.tickTag = args.replay.tickTag;
     }
     // (while the warm-up holds the level, nothing else moves the clock: the tick is skipped)
     out.initial = state.snapshot();

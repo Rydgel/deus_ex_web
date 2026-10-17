@@ -417,7 +417,13 @@ The tag's mouth letters are not stored: the gate and `conversation-acceptance.mj
 * **The letterbox slide in a held frame.** The original's bars finish sliding in real time while the level is held; Play's, driven by the level's ticks, stop mid-slide at the hold (MeetManderley tick 40: rows 56/624 against the original's 74/587; Play settles by tick 60). Frames taken within about 42 ticks of a
   conversation's start (and so the first speech of the intro) cannot be matched by tick; not examined in the original's or Play's code.
 * **A pawn placed inside the floor.** The ghost put 0.17 below its rest height by `set Location` and set walking falls 2 units, lands and is lifted to the original's rest height (287.799988) in Play; the original's own sequence for that placement was not traced (its end state is the same).
-* **The player's `AnimFrame` at the replay's first ticks** is 0.0125 behind the original's in every conversation capture (Island 0.0985/0.0860, Manderley 0.3139/0.3014 and 0.3008/0.2883) and equal after a few ticks; allowed by name in the gate, not explained (a tween phase of the written pose).
+* **The player's `AnimFrame` at the replay's first ticks** is 0.0125 behind the original's in every conversation capture (Island 0.0985/0.0860, Manderley 0.3139/0.3014 and 0.3008/0.2883) and equal after a few ticks; allowed by name in the gate.
+  **Explained 2026-10-17** (the Stage 5 combat captures, [Stage 5 exit criteria](stage-5-exit-criteria.md#first-original-captures-island-combat-2026-10-17)): a harness input, not Play's animation.
+  The replay wrote the pose's sequence, frame, rate and tween only. A placed player lands in Play's frozen phase (`PlayLanded`, then `TweenToWaiting`: a
+  `TweenAnim` to the same sequence name, which sets `AnimLast` 0 and clears `bAnimLoop`), so the first replayed tick ended that "tween" (`AnimEnd`, `PlayWaiting`
+  restarting the loop) where the original's loop ran on. `live-acceptance.mjs` now records the player's `AnimLast`, `AnimMinRate`, `OldAnimRate` and the three
+  animation bits and writes them with the pose; for a trace without them it ticks the frozen level until the player runs the pose's sequence as a loop. The gate's
+  allowance can be retested on the stored conversation traces.
 * The choice is made through the original input path (2026-10-01): Down
   reaches `RootWindow.VirtualKeyPressed`, whose `MoveFocusDown` (native 1445,
   `XWindow::MoveFocus`; the 1442–1447 family is bound,

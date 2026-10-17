@@ -97,10 +97,21 @@ Object.assign(DRIVERS, {
     return ok(false, {tried, active: c.read(turret, 'bActive'), state: stateName(c, turret)}, 'the active turret never targeted or hurt the player from 8 bearings at 260 units');
   },
   async 'island-sight'(c) {
+    // The original's two captures of this pose set (docs/stage-5-exit-criteria.md, scenes cmb2 and cmb1 of validate-stage5-live.mjs): 700 units behind Terrorist0
+    // (bearing PI, 133 degrees off its facing) no Terrorist notices the player in 600 ticks; 700 units in front (the bearing of its facing, Rotation.Yaw 8624)
+    // Terrorist0 and ThugMale7 seek the player from tick 41 and attack from tick 178. The driver stood only behind it before, and read the original's
+    // "not seen" as no effect. The player looks at Terrorist0 from both poses, so a rendered frame stamps it (LastRenderTime): a headless frame does not,
+    // and after 5 s in stasis (AActor::InStasis) it stopped ticking its perception at all; the driver stamps it as the renderer's feedback would.
     const t = c.actor('Terrorist0'); if (!t) throw new Undriven('no Terrorist0');
-    c.frames(300); const before = stateName(c, t); c.openStand(t, 700); let out;
+    c.watched.add(t);
+    c.frames(300); const before = stateName(c, t);
+    c.openStand(t, 700, [PI]); let hidden;
+    const diedHidden = await c.guard(async () => { hidden = c.engage(t, 10); });
+    const unseen = !reacting(c, t, before) && !hidden?.enemy;
+    const facing = c.read(t, 'Rotation')[1] * PI / 32768;
+    c.openStand(t, 700, [facing, facing + PI / 8, facing - PI / 8]); let out;
     const died = await c.guard(async () => { out = c.engage(t, 10); });
-    return ok(reacting(c, t, before) || out?.enemy, {before, out, playerDied: died});
+    return ok(unseen && (reacting(c, t, before) || out?.enemy), {before, behind: {unseen, out: hidden, playerDied: diedHidden}, inView: {out, state: stateName(c, t), playerDied: died}});
   },
   async 'island-hearing'(c) {
     const t = c.actor('Terrorist0'); if (!t) throw new Undriven('no Terrorist0');

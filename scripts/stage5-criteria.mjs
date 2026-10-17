@@ -16,6 +16,7 @@ export const CLAUSES = Object.freeze({
 
 export const CRITERIA = [];
 const add = (id, scene, claim, ev, census, need, extra = {}) => CRITERIA.push({id, clause: Number(id.split('.')[1]), scene, claim, ev, census, proof: [], have: [], need, weak: null, excluded: null, ...extra});
+const live = (...scenes) => scenes.map(scene => ({type: 'validator', name: 'validate-stage5-live.mjs', args: ['--scene', scene]}));
 const excluded = (id, scene, claim, reason) => CRITERIA.push({id, clause: Number(id.split('.')[1]), scene, claim, ev: '-', census: null, proof: [], have: [], need: null, weak: null, excluded: reason});
 
 // 5.1 Combat -----------------------------------------------------------------------------------------------------------------------------
@@ -32,14 +33,17 @@ add('5.1.4', '00_TrainingCombat demolitions', 'place a LAM on BreakableWall1 (We
   {have: ['alterations census (grenade throws play, P)', 'validate-island-blowitup (mover BlowItUp O2)']});
 add('5.1.5', '01_NYC_UNATCOIsland', 'the player\'s pistol hurts and kills a standing Terrorist: damage, hit reaction, hostile response, death, carcass and its inventory', 'O1', 'island-shoot-npc',
   'O1: live trace of the original (pistol summoned and drawn, Fire edges at a Terrorist in view) with the pawn\'s Health, state, Orders, Enemy and the carcass',
-  {have: ['weapon noise O1 (the NPCs\' event handlers for a player\'s shots in the Underworld)', 'carcass memory natives 2108/2109 (O2)']});
+  {have: ['validate-stage5-live cmb1 (O1: one pistol shot kills Terrorist0; Dying, TerroristCarcass1 created at the original\'s tick)', 'validate-stage5-live cmb2 (O1: two hits, TakingHit, Fleeing)', 'weapon noise O1 (the NPCs\' event handlers for a player\'s shots in the Underworld)', 'carcass memory natives 2108/2109 (O2)'],
+    need: 'the carcass\'s contents compared with the original\'s (the tracer resolves watched names once, when it attaches; a carcass is spawned later): cmb1 and cmb2 cover the damage, the hit reaction, the hostile response, the death and the carcass\'s creation'});
 add('5.1.6', '01_NYC_UNATCOIsland', 'a hostile Terrorist attacks the player: it aims and fires (Tracer, physProjectile), the player\'s Health, armor and hit regions change, the AI keeps attacking or takes cover', 'O1', 'island-npc-shoots-player',
   'O1: live trace of the original with a visible, hostile-allied player in an NPC\'s view and the NPC\'s state, fire, projectile and the player\'s damage per tick',
-  {have: ['validate-island-tracer (tracer flight, P)', 'validate-native-projectile (O2)'], weak: 'The Stage 4 note ("Not covered") says a summoned MJ12Troop beside the player did not attack in 400 ticks; no original run of NPC-versus-player combat exists.'});
+  {proof: live('cmb1', 'cmb2', 'cmb3', 'cmb4'), have: ['validate-island-tracer (tracer flight, P)', 'validate-native-projectile (O2)'],
+    weak: 'Four scenes against one group (Terrorist0, ThugMale7, Terrorist10) on open ground; the player stands still (the harness cannot hold a key). The armor (cmb4) is compared through the player\'s hit regions per tick; its Charge is not a watched field (a summoned actor). No scene has the AI take cover.'});
 add('5.1.7', '01_NYC_UNATCOIsland', 'a baton or crowbar knocks a Terrorist out: KnockedOut carcass, "Unconscious", and Mission01.Timer\'s aggression count', 'O1', 'island-melee-ko',
   'O1: live trace of the original (WeaponBaton drawn, Fire edge at a Terrorist) with the pawn\'s state, the carcass and its itemName');
 add('5.1.8', '01_NYC_UNATCOIsland', 'player death: lethal damage reaches Dying, the death state and view; the game does not continue the level', 'O1', 'island-death',
-  'O1: live trace of the original from lethal damage (TakeDamage via console) to the death state; Play stops at the same point of the original (the screen after it is Stage 6\'s load menu)');
+  'O1: live trace of the original from lethal damage (TakeDamage via console) to the death state; Play stops at the same point of the original (the screen after it is Stage 6\'s load menu)',
+  {have: ['a first capture of cmb1 (2026-10-17, replaced): the Terrorists\' fire killed the player at tick 791 and Play\'s replay was equal through Dying to tick 900; the stored scenes keep the player alive']});
 add('5.1.9', '01_NYC_UNATCOIsland AutoTurret', 'NSFTurret01 fires at the player when its cameras trigger libertyturret1; the player can shoot it down', 'O1', 'island-turret',
   'O1: live trace of the original with the turret active (bActive via trigger) and the player in its range',
   {have: ['validate-island-tracer']});
@@ -49,10 +53,12 @@ add('5.2.1', '00_TrainingFinal stealth maze', 'walk in and out of the soldiers\'
   'O1: live trace of the original with the player at fixed poses in a Soldier\'s patrol (no held keys needed) and the soldiers\' states, alarm and trigger flags');
 add('5.2.2', '01_NYC_UNATCOIsland', 'a visible player in the open: a patrolling Terrorist sees it (AICanSee, SightCounter, CycleCumulative), turns, calls the alert; a hidden player is not seen', 'O1', 'island-sight',
   'O1: live trace of the original (no ghost, player standing at a measured pose in a patrol\'s view and out of it) with the perception fields of the Perception pilot',
-  {have: ['perception pilot O1 in the Underworld (civilians flee a visible mj12-allied player)', 'validate-pawn-perception / AICanSee x87 (O2)']});
+  {proof: live('cmb1', 'cmb2'), have: ['perception pilot O1 in the Underworld (civilians flee a visible mj12-allied player)', 'validate-pawn-perception / AICanSee x87 (O2)'],
+    weak: 'The two poses are 700 units in front of Terrorist0 (seen: it and ThugMale7 seek from tick 41; the patrolling Terrorist10 joins) and 700 units behind it (no Terrorist notices the player in 600 ticks). "Hidden" here is out of the view cone, not in darkness: light against sight is 5.6.3.'});
 add('5.2.3', '01_NYC_UNATCOIsland', 'the player\'s noise reaches the guards: gunshots (WeaponFire, LoudNoise), the HandleShot/HandleLoudNoise callbacks; footsteps by speed and floor', 'O1', 'island-hearing',
   'O1: live trace on Island of the event traffic for a pistol and, with a walking player, for footsteps; footsteps need a held key the harness cannot post (O3 on Play\'s footstep inputs then)',
-  {have: ['live-events-compare O1: 1,069 and 1,586 manager calls equal in the Underworld (pistol, assault shotgun)'], weak: 'Gunshot events are compared in the Underworld, not on Island; the code is shared. Adopt the Underworld evidence for the gunshot half, or require an Island capture.'});
+  {have: ['validate-stage5-live cmb2 (O1 on Island: an unseen player\'s two pistol shots, every AI event manager call equal, the three NSF pawns woken)', 'live-events-compare O1: 1,069 and 1,586 manager calls equal in the Underworld (pistol, assault shotgun)'],
+    need: 'footsteps (a held key the harness cannot post: O3 on Play\'s footstep inputs); the gunshot half has an Island O1 (cmb2)', weak: 'Gunshot events are compared in the Underworld, not on Island; the code is shared. Adopt the Underworld evidence for the gunshot half, or require an Island capture.'});
 add('5.2.4', '01_NYC_UNATCOIsland cameras', 'SecurityCamera sees the player: tracking, the alarm event, NSFCam01..03 trigger libertyturret1; UN_CamSystem01..04 (bNoAlarm) do not', 'O1', 'island-camera',
   'O1: live trace of the original with the player in a camera\'s cone and the camera\'s state, the alarm flag and the turret\'s state per tick');
 add('5.2.5', '01_NYC_UNATCOIsland laser trap', 'a LaserTrigger beam broken by the player raises the alarm (LaserTrigger.BeginAlarm: klaxon and an \'alarm\' AI event; the laser has no Event) and a guard in Alerting state triggers AlarmUnit0 (SetAlarmFlag -> StatueAlarmTriggered)', 'O1', 'island-laser',
@@ -60,7 +66,7 @@ add('5.2.5', '01_NYC_UNATCOIsland laser trap', 'a LaserTrigger beam broken by th
 add('5.2.6', '01_NYC_UNATCOIsland laser trap', 'hacking ControlPanel0 with a multitool switches statue_lasertrap off: hack time (skill, hackStrength), the multitool\'s use, the lasers\' state', 'O1', 'island-hack-panel',
   'O1: live trace of the original (Multitool selected, a left-button click on the panel: ParseLeftClick, never the right button) with the hack progress, multitool charge and laser state per tick');
 add('5.2.7', '01_NYC_UNATCOIsland', 'a pawn reacts to a body: a killed or knocked-out Terrorist is seen (CheckCarcassPresence, HaveSeenCarcass, AddCarcass) and the finder investigates or flees', 'O1', 'island-carcass',
-  'O1: live trace of the original with a carcass in a patrol\'s view', {have: ['validate-pawn-carcass (natives 2108/2109, O2)']});
+  'O1: live trace of the original with a carcass in a patrol\'s view', {have: ['validate-pawn-carcass (natives 2108/2109, O2)', 'validate-stage5-live cmb1 (O1: TerroristCarcass1 and its Carcass AI events equal, but the other Terrorists are already attacking the player and no Carcass callback is delivered)']});
 
 // 5.3 Exploration and the character systems --------------------------------------------------------------------------------------------
 add('5.3.1', '00_Training phase 1', 'PlayerStart to DL_part2 by the player\'s own inputs: doors, NanoKey and key ring, crowbar and crates, lockpicking gundoor, datacube and keypad 0012, multitool hack of Keypad2, the cadet\'s body to the table, the dark room, the repair bot', 'O1', 'phase1-route',
@@ -134,7 +140,7 @@ add('5.5.7', '01_NYC_UNATCOIsland', 'StatueMissionComplete changes the world (Mi
 
 // 5.6 Systems interacting ---------------------------------------------------------------------------------------------------------------------
 add('5.6.1', '01_NYC_UNATCOIsland', 'a shot near guards: noise, hostility, pursuit, distress to other pawns, the player hurt and healed with a MedKit', 'O1', 'noise-wakes-guards',
-  'O1: live trace of the original of the whole encounter', {have: ['5.1.5, 5.1.6, 5.2.3 each partial']});
+  'O1: live trace of the original of the whole encounter', {have: ['5.1.5, 5.1.6, 5.2.3 each partial', 'validate-stage5-live cmb2 (O1: the shots near the guards, their hostility, distress and the player hurt; no MedKit)']});
 add('5.6.2', '00_TrainingFinal alarm', 'an AlarmUnit trips (bActive for its alarmTimeout, 10 s): AlarmDispatcher fires SoldierNeutral (AllianceTriggers), CloseDoor (ExitDoor) and failmessage (DL_FailedStealth)', 'O1', 'alarm-chain', 'O1: live trace of the original from the alarm\'s trigger');
 add('5.6.3', '01_NYC_UNATCOIsland', 'light against sight: the same pose seen or not seen as the player lights or darkens it (AugLight, a light switch, the NPC\'s lighting of the player)', 'O1', 'light-vs-sight',
   'O1: live trace of the original with perception fields at two light states', {have: ['validate-pawn-perception, AICanSee (O2)', 'lighting oracles (O2)']});
