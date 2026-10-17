@@ -4,8 +4,13 @@
  * The setup's FCOS is a transcendental Unicorn computes in double, so the
  * host's real x87 is the reference for it.
  *
- * Optional research tool, x86 Linux only: build with
+ * Optional research tool. On x86 Linux build it with
  *   gcc -m32 -O1 -o galaxy-reverb-hw scripts/native-galaxy-reverb-hw.c
+ * and it runs on the host's x87 and SSE units. Elsewhere (the Mac) build the
+ * Windows executable with
+ *   i686-w64-mingw32-gcc -O1 -o galaxy-reverb-hw.exe scripts/native-galaxy-reverb-hw.c
+ * and run it under CrossOver/Wine (CX_BOTTLE=DeusEx): on Apple silicon that is
+ * Rosetta 2's translation of the x87 and SSE instructions, not an x87 unit.
  * It embeds no original data: it reads the hash-pinned Galaxy.dll given on
  * the command line and maps its sections at the preferred base 0x10600000
  * (no relocation needed). The only import the two functions reach is
@@ -35,7 +40,12 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#ifdef _WIN32
+#include <windows.h>
+#include <malloc.h>
+#else
 #include <sys/mman.h>
+#endif
 
 #define BASE 0x10600000u
 #define SETUP 0x106109f0u
@@ -80,8 +90,12 @@ static void map_image(const uint8_t *dll, size_t size) {
     uint16_t sections = rd16(dll + pe + 6), optional = rd16(dll + pe + 0x14);
     uint32_t base = rd32(dll + pe + 0x34), image = rd32(dll + pe + 0x50);
     if (base != BASE) { fprintf(stderr, "unexpected image base %#x\n", base); exit(2); }
+#ifdef _WIN32
+    void *p = VirtualAlloc((void *)(uintptr_t)BASE, image, MEM_RESERVE | MEM_COMMIT, PAGE_EXECUTE_READWRITE);
+#else
     void *p = mmap((void *)(uintptr_t)BASE, image, PROT_READ | PROT_WRITE | PROT_EXEC,
                    MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED_NOREPLACE, -1, 0);
+#endif
     if (p != (void *)(uintptr_t)BASE) { fprintf(stderr, "cannot map %#x\n", BASE); exit(2); }
     memcpy(p, dll, 0x400);
     const uint8_t *table = dll + pe + 0x18 + optional;
@@ -120,7 +134,11 @@ int main(int argc, char **argv) {
     map_image(dll, dll_size);
     setup_fn setup = (setup_fn)(uintptr_t)SETUP;
     kernel_fn kernel = (kernel_fn)(uintptr_t)KERNEL;
+#ifdef _WIN32
+    uint8_t *ctx = _aligned_malloc((CTX_SIZE + 63) & ~63u, 64);
+#else
     uint8_t *ctx = aligned_alloc(64, (CTX_SIZE + 63) & ~63u);
+#endif
     memset(ctx, 0, CTX_SIZE);
     uint8_t reverb[REVERB_SIZE];
     uint32_t mxcsr = 0x1f80;

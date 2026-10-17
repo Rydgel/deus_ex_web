@@ -23,7 +23,11 @@
  *
  *   node scripts/validate-galaxy-reverb.mjs [--refresh]
  *
- * Needs gcc -m32 on x86 Linux (steps 1-3 skip loudly without it). */
+ * Steps 1-3 need a 32-bit x86 run of the harness: gcc -m32 on x86 Linux (the
+ * host's x87 and SSE units), else the Windows build (i686-w64-mingw32-gcc)
+ * under CrossOver/Wine, bottle DeusEx (REVERB_HW_WINE, REVERB_HW_BOTTLE,
+ * REVERB_HW_CC override): on the Mac that is Rosetta 2's translation of the
+ * x87 and SSE instructions, not an x87 unit. Without either they skip loudly. */
 import {execFileSync, spawnSync} from 'node:child_process';
 import {createHash} from 'node:crypto';
 import {existsSync} from 'node:fs';
@@ -48,16 +52,29 @@ function rng(seed) {
 
 // ---- the native harness ----------------------------------------------------------------
 await mkdir(CACHE, {recursive: true});
+// The harness: a native 32-bit build where gcc -m32 works (x86 Linux), else the Windows build under CrossOver/Wine.
 const build = spawnSync('gcc', ['-m32', '-O1', '-o', HW, 'scripts/native-galaxy-reverb-hw.c'], {encoding: 'utf8'});
-const hardware = build.status === 0;
-if (!hardware) console.log(`SKIP hardware steps: gcc -m32 failed (${(build.stderr || build.error?.message || '').split('\n')[0]})`);
+const WINE = process.env.REVERB_HW_WINE || '/Applications/CrossOver.app/Contents/SharedSupport/CrossOver/bin/wine';
+const BOTTLE = process.env.REVERB_HW_BOTTLE || 'DeusEx', MINGW = process.env.REVERB_HW_CC || 'i686-w64-mingw32-gcc';
+let runner = null;
+if (build.status === 0) runner = {how: 'native x86 (gcc -m32): the host x87 and SSE units', command: HW, prefix: [], env: process.env};
+else if (existsSync(WINE)) {
+  const exe = `${HW}.exe`, cross = spawnSync(MINGW, ['-O1', '-o', exe, 'scripts/native-galaxy-reverb-hw.c'], {encoding: 'utf8'});
+  if (cross.status === 0) runner = {how: `the Windows build under CrossOver/Wine (${WINE}, bottle ${BOTTLE})` +
+    (process.platform === 'darwin' && process.arch === 'arm64' ? ': Rosetta 2 translates the x87 and SSE instructions, not an x87 unit' : ''),
+    command: WINE, prefix: [exe], env: {...process.env, CX_BOTTLE: BOTTLE}};
+  else console.log(`SKIP hardware steps: gcc -m32 failed and ${MINGW} failed (${(cross.stderr || cross.error?.message || '').split('\n')[0]})`);
+} else console.log(`SKIP hardware steps: gcc -m32 failed (${(build.stderr || build.error?.message || '').split('\n')[0]}) and no Wine at ${WINE}`);
+const hardware = runner !== null;
+const hardwareName = runner?.command === HW ? 'real x87' : 'Rosetta/Wine x87';
+if (hardware) console.log(`hardware steps: ${runner.how}`);
 const dll = path.join(gameDirectory(), 'System', 'Galaxy.dll');
 
 /** Run a harness script (Buffer parts); returns the records [{tag, payload}]. */
 async function harness(name, parts) {
   const script = path.join(CACHE, `${name}.script`), out = path.join(CACHE, `${name}.out`);
   await writeFile(script, Buffer.concat(parts));
-  const run = spawnSync(HW, [dll, script, out], {encoding: 'utf8', maxBuffer: 1 << 20});
+  const run = spawnSync(runner.command, [...runner.prefix, dll, script, out], {encoding: 'utf8', maxBuffer: 1 << 20, env: runner.env});
   if (run.status !== 0) throw new Error(`reverb harness failed (${run.status}): ${run.stderr}`);
   const bytes = await readFile(out), records = [];
   for (let at = 0; at < bytes.length;) {
@@ -139,7 +156,7 @@ if (hardware) {
   const pc = cw => sweeps[cw].filter((r, i) => r.k !== rows[i].k || r.oneMinusK !== rows[i].oneMinusK).length;
   results.sweep = {cutoffs: LAST + 1, xDiff, kDiff, faults, exceptions: exceptions.length, statusWords: [...statusWords],
     pc53Differs: pc(0x027f), pc24Differs: pc(0x007f)};
-  console.log(`FCOS sweep (CutoffHz 0..${LAST}, cw 0x037f, real x87): inputs ${xDiff ? 'DIFFER' : 'equal'}, ` +
+  console.log(`FCOS sweep (CutoffHz 0..${LAST}, cw 0x037f, ${hardwareName}): inputs ${xDiff ? 'DIFFER' : 'equal'}, ` +
     `${LIST(exceptions.length)} FCOS results off the correctly rounded cosine (at most 2^${worst.toFixed(1)} absolute, ${worstUlps} units in the last place near cos = 0), ${faults} undecided; ` +
     `k and 1-k ${kDiff ? 'DIFFER' : 'equal at every input'}; ` +
     `status words ${[...statusWords].join(',')}; under 0x027f k differs from 0x037f at ${results.sweep.pc53Differs} cutoffs, under 0x007f at ${results.sweep.pc24Differs}`);
@@ -217,7 +234,7 @@ if (hardware) {
   });
   const differs = cw => blocks.filter((b, i) => byCw[cw][i].result !== byCw[0x037f][i].result || Buffer.compare(byCw[cw][i].header, byCw[0x037f][i].header)).length;
   results.setup = {blocks: blocks.length, shippedZones: zones.length, distinctShipped: distinct.size, equal, pc53Differs: differs(0x027f), pc24Differs: differs(0x007f)};
-  console.log(`setup (real x87, cw 0x037f): ${equal}/${blocks.length} parameter blocks equal (${zones.length} reverb zones in the shipped maps, ` +
+  console.log(`setup (${hardwareName}, cw 0x037f): ${equal}/${blocks.length} parameter blocks equal (${zones.length} reverb zones in the shipped maps, ` +
     `${distinct.size} distinct blocks; 400 random; 10 edges); vs 0x037f, ${results.setup.pc53Differs} differ under 0x027f and ${results.setup.pc24Differs} under 0x007f`);
   for (const d of distinct.values()) console.log(`  ${d.zones.length} zone(s): ${d.zones.slice(0, 4).join(', ')}${d.zones.length > 4 ? ', ...' : ''}`);
 }
@@ -264,10 +281,11 @@ if (hardware) {
     else fail(`kernel ${c.label}: the whole context after the calls differs`);
   }
   results.kernel = {contexts: contexts.length, calls, frames: framesRun, equalCalls, dumps, equalDumps};
-  console.log(`kernel (host SSE, MXCSR 0x1f80): ${equalCalls}/${calls} calls (${framesRun} frames, the delay lines wrapping) equal in dry output and ` +
+  console.log(`kernel (${hardwareName === 'real x87' ? 'host SSE' : hardwareName}, MXCSR 0x1f80): ${equalCalls}/${calls} calls (${framesRun} frames, the delay lines wrapping) equal in dry output and ` +
     `context header, ${equalDumps}/${dumps} whole contexts (0x60188 bytes, the delay lines) equal`);
 }
 
+if (hardware) results.hardware = runner.how;
 await writeFile(path.join(CACHE, 'results.json'), JSON.stringify(results, null, 1));
 if (failures) { console.log(`${failures} failure(s)`); process.exit(1); }
 console.log('Galaxy reverb: all checks passed');

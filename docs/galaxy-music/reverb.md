@@ -121,6 +121,22 @@ dry[f] += x0 · Volume; pos = (pos + 1) & 0x3fff          ; ctx+4
 * **Kernel on the host SSE unit**: 264 native calls (65,739 frames, the
   delay lines wrapping, denormal and zero tails) on 6 contexts: every dry
   output and context header, and the whole 0x60188-byte contexts, equal.
+* **The same steps on the Mac (2026-10-17), through Rosetta 2, not x87
+  hardware.** `native-galaxy-reverb-hw.c` also builds as a Windows executable
+  (`i686-w64-mingw32-gcc`; `VirtualAlloc` maps Galaxy.dll at `0x10600000` in
+  place of `mmap`) and `validate-galaxy-reverb.mjs` runs it under CrossOver's
+  Wine (bottle DeusEx) when `gcc -m32` is not available. On Apple silicon the
+  x87 and SSE instructions then run as Rosetta 2 translates them: a software
+  implementation of the x87, not the unit the original ran on. Results:
+  the FCOS input equal at every cutoff; k and 1 − k equal at all 44,101;
+  414/414 parameter blocks equal; under 0x027f nothing differs from 0x037f,
+  under 0x007f 30,050 cutoffs and 398 blocks do (the Linux counts); the
+  kernel's 264 calls (65,739 frames) and 6 whole contexts equal. Rosetta's
+  FCOS itself is off the correctly rounded cosine at 6,989 inputs (AMD's at
+  5,820), by at most 2^-64 absolute as on AMD (status words 0x3800, 0x3820,
+  0x3a20): another implementation's last-bit pattern, which no stored
+  coefficient sees. The Linux path is unchanged (`mmap`, `aligned_alloc`);
+  it was not rerun, the host being out of reach.
 * **Setter and renderer under Unicorn** (`validate-galaxy-effects.mjs`,
   the oracle's FCOS replaced by the model's value for its input): 4
   programs with 13 reverb changes (install, change, Volume 0 free, reinstall,
@@ -134,5 +150,6 @@ dry[f] += x0 · Volume; pos = (pos + 1) & 0x3fff          ; ctx+4
 * The game thread's x87 control word (0x037f assumed; 0x007f would change
   the coefficients and taps, §5).
 * `glxSampleReverb.Time` (EAX-only) is not computed.
-* Intel x87 FCOS is not measured (AMD here); a different 1-ulp pattern
-  would still have to leave k unchanged.
+* Intel x87 FCOS is not measured (AMD on the Linux host; Rosetta 2's
+  software x87 on the Mac, whose different last-bit pattern leaves k and
+  1 − k unchanged at every input); a third pattern would still have to.
