@@ -5,8 +5,8 @@
  *  - Claudia: DeusEx.Female1 (HumanCivilian, mesh GFM_TShirtPants) with Orders Sitting on a Chair1 (a Seat) kept hidden on the lid
  *    of a CrateBreakableMedGeneral, so ScriptedPawn.Sitting's own bytecode walks her to it, plays SitBegin and loops SitBreathe;
  *  - Rydgel: DeusEx.Businessman2 (HumanCivilian, mesh GM_Suit) with Orders Standing at the bar, ScriptedPawn.Standing's idle loop.
- * Their skins are the page's (easter-skins.mjs); here only the stock glasses slots and the ponytail slot are switched on through
- * the actors' own MultiSkins. A frob (the player's RightMouse binding with FrobTarget on one of them) shows the speaker's line
+ * Their skins are the page's (easter-skins.mjs); here only Claudia's stock glasses slots are switched on through
+ * her own MultiSkins (Rydgel's class MultiSkins stay as the class has them). A frob (the player's RightMouse binding with FrobTarget on one of them) shows the speaker's line
  * through the player's own ClientMessage (PlayerPawnExt.ClientMessage -> DeusExRootWindow.ClientMessage -> the HUD log), and
  * the other answers `replyDelay` level seconds later.
  *
@@ -152,14 +152,17 @@ async function setup(game) {
       write(actor, flag, false);
   }
   // Stock slots switched on through the actors' own MultiSkins: the glasses (FramesTex1 and LensesTex2, the pair this map's own Female1
-  // wears on GFM_SuitSkirt) in GFM_TShirtPants' glasses slots 3 and 4, and the ponytail (PonytailTex1) in GM_Suit's slot 7.
+  // wears on GFM_SuitSkirt) in GFM_TShirtPants' glasses slots 3 and 4.
   const skins = async (actor, slots) => {
     const multiSkins = [...read(actor, 'MultiSkins')];
     for (const [slot, path] of Object.entries(slots)) multiSkins[slot] = await stockTexture(runtime, 'DeusExCharacters', path);
     write(actor, 'MultiSkins', multiSkins);
   };
+  // What each class's own MultiSkins hold before the mod writes any slot (status: `defaultSkins`): Rydgel's slot 7 is the class's own
+  // choice for GM_Suit's ponytail part, left as it is (no ponytail: Businessman2 does not draw one).
+  const nameOf = value => (value && typeof value === 'object' ? value.name ?? value.key ?? null : value);
+  state.defaultSkins = { claudia: [...read(claudiaActor, 'MultiSkins')].map(nameOf), rydgel: [...read(rydgelActor, 'MultiSkins')].map(nameOf) };
   await skins(claudiaActor, { 3: 'Skins.FramesTex1', 4: 'Skins.LensesTex2' });
-  await skins(rydgelActor, { 7: 'Skins.PonytailTex1' });
   write(claudiaActor, 'Orders', 'Sitting');
   write(claudiaActor, 'OrderTag', 'EasterSeat');
   write(rydgelActor, 'Orders', 'Standing');
@@ -199,7 +202,7 @@ function status(game) {
   // The player's own log (DeusExPlayer.AddLog, which ClientMessage reaches): its entries, oldest first.
   const log = [];
   for (let entry = read(state.player, 'FirstLog'); entry && log.length < 64; entry = read(entry, 'Next')) log.push(read(entry, 'Text'));
-  const out = { active: true, time: read(state.level.actors[0], 'TimeSeconds'), pending: state.queue.length, log, frobTarget: nm(read(state.player, 'FrobTarget')) };
+  const out = { active: true, defaultSkins: state.defaultSkins, time: read(state.level.actors[0], 'TimeSeconds'), pending: state.queue.length, log, frobTarget: nm(read(state.player, 'FrobTarget')) };
   for (const [actor, id] of state.actors) out[id] = describe(actor);
   out.crate = { name: state.crate.name, location: [...read(state.crate, 'Location')], physics: read(state.crate, 'Physics'),
     collisionHeight: read(state.crate, 'CollisionHeight'), collisionRadius: read(state.crate, 'CollisionRadius') };

@@ -24,7 +24,7 @@ frob and reply hooks, simulation side), `easter-page.mjs` (page side start), `ea
 | Piece | Stock thing | Why |
 |---|---|---|
 | Claudia | `DeusEx.Female1` (HumanCivilian, mesh `GFM_TShirtPants`, 64 sequences incl. `SitBegin`, `SitBreathe`) | the class of this map's own Female0; the mesh has glasses slots and a sitting pose |
-| Rydgel | `DeusEx.Businessman2` (HumanCivilian, mesh `GM_Suit`) | the GM_Suit mesh has a ponytail slot (slot 7, the Triad `PonytailTex1`), glasses slots, a jacket whose skirt is its own masked slot, a separate trousers slot |
+| Rydgel | `DeusEx.Businessman2` (HumanCivilian, mesh `GM_Suit`) | the GM_Suit mesh has a ponytail part (slot 7; the class holds the stock `PinkMaskTex` there, which hides it, and the mod leaves it so: he wears his hair loose), glasses slots (`GrayMaskTex`, `BlackMaskTex`, also the class's own), a jacket whose skirt is its own masked slot, a separate trousers slot |
 | the crate | `CrateBreakableMedGeneral` (wood, 68 x 68 x 48) | set `bInvincible` and not pushable, so nothing moves her seat |
 | her seat | `Chair1` (a stock `Seat`), `bHidden`, collision off, at the crate's centre, its sit point derived so the pose's seat plane meets the lid and moved 24 toward the room ("Her seat") | lets `ScriptedPawn.Sitting` run: she is spawned in the state that state ends in |
 | glasses | `FramesTex1` + `LensesTex2` in `GFM_TShirtPants` slots 3 and 4 (the pair the map's own Female1 wears on another mesh), through her MultiSkins; the frames texture itself is drawn round (below) | the mesh has the geometry, the stock Female1 skin masks it |
@@ -84,16 +84,17 @@ group keys differ per actor and recipe, so no other actor shares them. Starting 
 | | 6 `PantsTex2` (trousers and shoes) | olive, with thigh pocket patches; the two foot regions white |
 | | 7 `Female1Tex1` (the knit top) | oversized purple hoodie: recoloured knit, darker hood gathering at the neck, two drawstrings, cuff bands, a front pocket |
 | | 3 `FramesTex1` (modulated) | a round dark ring drawn over the neutral grey (the stock ring is a wayfarer) |
-| Rydgel | 0 `Businessman2Tex0` -> pixels of `NathanMadisonTex0` (a clean-shaven GM_Suit head, auburn hair) | hair golden; a neck tattoo; a gold ear stud |
-| | 3 and 4 `Businessman2Tex1` (jacket; slot 4 is its masked skirt) | grey suit -> olive field jacket over a dark brown-black tee (the stock black shirt; the orange tie darkened away), two gold chains and a pendant, a round chest patch, a zipped sleeve pocket, a ribbed hem; the skirt cut at the hem so a bomber ends there and the belt shows |
+| Rydgel | 0 `Businessman2Tex0` -> pixels of `NathanMadisonTex0` (a clean-shaven GM_Suit head, auburn hair) | hair golden and loose (no ponytail: strands of the same hair carry on down over the nape, each column its own length), a tattoo on the neck's side below the hair, a gold ear stud |
+| | 3 and 4 `Businessman2Tex1` (jacket; slot 4 is its masked skirt) | the suit's front (a deep V of black shirt with an orange tie, satin lapels with a notch, a double-breasted overlap, two buttons) becomes an olive field jacket worn open over a **plain dark brown-black crew-neck tee**: the V is cut down to a rounded jersey opening with a finely ribbed neckband (no tie, no collar, no shirt buttons), the lapels, overlap and buttons are blurred into flat jacket cloth, a zip runs from the opening's foot to the hem; two gold chains and a pendant hang over the tee, a round chest patch, a zipped sleeve pocket, a ribbed hem; the skirt cut at the hem so a bomber ends there and the belt shows. The neck's collar piece (the strip at the top of the texture) is the tee's rib |
 | | 1 `Businessman2Tex2` (trousers) | dark charcoal, a mustard belt with a buckle at the waist band |
-| | 7 `PonytailTex1` (masked) | golden |
+| | 7 (the ponytail part) | none: the class's own `PinkMaskTex`, drawn nowhere |
 
 UV layouts (found with the mesh's own triangles drawn over each texture, frame 0 of `Still`; coordinates are fractions of the
 texture): `GFM_TShirtPants` slot 0 is the head (face lower left, hair cap upper right, hands are on slot 7's texture bottom centre),
 slot 6 the trousers with the shoes at the left strip and right edge, slot 7 the top (back left, sleeves middle, front right). `GM_Suit`
 slot 0 head and hands (hands strip on top), slot 1 trousers (waist band on top, fly right), slot 3 the jacket (front on the right, the
-black V opening at u ~0.83), slot 4 its skirt below v 0.66, slot 7 the ponytail (strands in the top ninth of the 64 x 32 texture).
+black V opening at u ~0.83), slot 4 its skirt below v 0.66, slot 7 the ponytail (strands in the top ninth of the 64 x 32 `PonytailTex1`, unused now). On the jacket texture (256 x 128) the stock V runs from u 0.773 to 0.88 at the top to its tip at (0.827, 0.51), the lapel bands outside it, the overlap and two buttons below it, and the neck's collar piece is the strip u 0.31 to 0.53, v 0 to 0.04.
+On `GM_Suit`'s head texture the hair is the band v 0.3 to 0.8, the face lower left, the neck below v 0.8 (hands on top).
 
 ## Frob lines and banter
 
@@ -169,6 +170,8 @@ frame's pixels (`877312b4d8bcc358`) are equal in both builds.
 ## Rough or open
 
 - No laptop prop (none exists) and no typing animation: she sits in `SitBreathe`. Her pose is the chair-sit pose on a crate, not cross-legged.
+- Rydgel's jacket keeps `GM_Suit`'s tailored silhouette (padded shoulders, straight sleeves, a hip-length cut); with the V cut down, the lapels flattened and a zip it reads as an open field jacket over a tee in the pictures, not a suit. If it still reads too formal in the user's eye, the closest stock male meshes are `GM_Trench` (an open coat) and `GM_Jumpsuit` (a zip-up top); neither was tried.
+- Rydgel's loose hair is the head mesh's own short cap plus painted strands over the nape: the mesh has no longer hair geometry.
 - Rydgel's idle is the stock `BreatheLight`/head-turn loop, not hands in pockets (no such animation on `GM_Suit`).
 - Hair length and shape are the meshes' (short on both heads): the bob and the loose strands are colour only; the neck tattoo sits where
   the mesh shows little neck under the tee collar.

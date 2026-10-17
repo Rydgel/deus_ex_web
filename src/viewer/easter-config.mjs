@@ -15,7 +15,7 @@ export const EASTER = Object.freeze({
   }),
   rydgel: Object.freeze({
     name: 'Rydgel',
-    // Stock class: DeusEx.Businessman2 (HumanCivilian, mesh GM_Suit: jacket, trousers, head, glasses and ponytail slots).
+    // Stock class: DeusEx.Businessman2 (HumanCivilian, mesh GM_Suit: jacket, trousers, head; its glasses and ponytail parts stay hidden by the class's own masks).
     pawnClass: 'Businessman2',
   }),
   // Measured on 10_Paris_Club's collision: the bar counter's front plane is x = -1127.5 (top z = -143.5) and the floor in front

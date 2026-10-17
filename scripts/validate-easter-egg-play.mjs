@@ -7,7 +7,7 @@
  *    original ScriptedPawn.Sitting state on the hidden stock Chair1 over a CrateBreakableMedGeneral, and Businessman2 (GM_Suit)
  *    in the original Standing state; the HUD names are the pawns' own FamiliarName/UnfamiliarName; the crate is wooden;
  *  - their skins are generated: every recipe's skin was asked for by the page's mesh draw and its pixels are the colours the design
- *    names (purple hoodie, olive trousers, olive jacket, golden hair and ponytail);
+ *    names (purple hoodie, olive trousers, olive jacket over a plain dark tee, golden loose hair, no ponytail);
  *  - a real right-click on each (the original RightMouse binding, FrobTarget on the pawn) shows its line in the original HUD log
  *    and the other's answer follows after replyDelay;
  *  - they stay put: neither pawn moves, changes state or loses health through the frobs.
@@ -98,7 +98,10 @@ try {
     near(s.rydgel.location[0], place.rydgel.x, 0.5, 'Rydgel x'); near(s.rydgel.location[1], place.rydgel.y, 0.5, 'Rydgel y');
     near(s.rydgel.location[2], place.floor + 47.5, 1.5, 'Rydgel z');
     assert.equal(s.rydgel.familiar, rydgel.name); assert.equal(s.rydgel.unfamiliar, rydgel.name);
-    assert.equal(s.rydgel.multiSkins[7], 'PonytailTex1');
+    // No ponytail: GM_Suit's slot 7 keeps the class's own stock mask texture (the game hides unused parts this way).
+    assert.equal(s.rydgel.multiSkins[7], s.defaultSkins.rydgel[7], 'slot 7 is the class\'s own');
+    assert.match(s.rydgel.multiSkins[7], /MaskTex$/, 'the ponytail slot holds a stock mask texture');
+    assert.deepEqual(s.rydgel.multiSkins.slice(5, 8), ['GrayMaskTex', 'BlackMaskTex', 'PinkMaskTex']);
     console.log(`PASS actors: ${s.claudia.name} (${s.claudia.className}, ${s.claudia.anim}) and ${s.rydgel.name} (${s.rydgel.className}, ${s.rydgel.anim}) on ${s.crate.name}`);
 
     // Skins: every recipe was asked for by the mesh draw; the pixels carry the design's colours.
@@ -123,13 +126,43 @@ try {
     assert.ok(skins, 'the page registered the mod\'s skin hook');
     const find = (who, suffix) => skins.filter(skin => skin.key.startsWith(`easter:${who}:`) && skin.key.toLowerCase().includes(`.${suffix}:`));
     const expected = [['claudia', 'female1tex1', [255, 295], 'purple hoodie'], ['claudia', 'pantstex2', [60, 100], 'olive trousers'],
-      ['rydgel', 'businessman2tex1', [70, 105], 'olive jacket'], ['rydgel', 'ponytailtex1', [38, 52], 'golden ponytail'],
+      ['rydgel', 'businessman2tex1', [70, 105], 'olive jacket'],
       ['rydgel', 'businessman2tex0', [20, 50], 'golden hair on the head skin']];
     for (const [who, suffix, [low, high], what] of expected) {
       const found = find(who, suffix);
       assert.ok(found.length, `${what}: no ${who} ${suffix} skin was drawn`);
       for (const skin of found) { assert.ok(skin.mips >= 7, `${skin.key} has its mip chain`); assert.ok(skin.hue >= low && skin.hue <= high, `${what}: ${skin.key} hue ${skin.hue?.toFixed(0)} outside ${low}-${high}`); }
     }
+    assert.equal(find('rydgel', 'ponytailtex1').length, 0, 'no ponytail skin is drawn');
+    // Rydgel's tee (Businessman2Tex1's front): the opening is a plain dark brown-black jersey (no tie: no bright column, no mid-tone
+    // pattern), and the lapel zone, the overlap and the buttons are flattened cloth (a narrow spread of brightness).
+    const tee = await page.evaluate(async () => {
+      const {easterSkins} = await import('/src/viewer/easter-skins.mjs');
+      const data = [...easterSkins.current.generated].find(([key]) => key.startsWith('easter:rydgel:') && key.includes('Businessman2Tex1') && key.endsWith(':false'))?.[1];
+      if (!data) return null;
+      const m = data.mips[0], at = (u, v) => { const i = (Math.floor(v * m.height) * m.width + Math.floor(u * m.width)) * 4; return [m.data[i], m.data[i + 1], m.data[i + 2], m.data[i + 3]]; };
+      const value = ([r, g, b]) => Math.max(r, g, b) / 255, stats = (box, skip) => {
+        const values = [];
+        for (let v = box[1]; v < box[3]; v += 1 / m.height) for (let u = box[0]; u < box[2]; u += 1 / m.width) { const px = at(u, v); if (px[3] && !(skip && skip(u, v, px))) values.push(value(px)); }
+        const mean = values.reduce((a, b) => a + b, 0) / values.length;
+        return {n: values.length, mean, max: Math.max(...values), min: Math.min(...values), spread: Math.sqrt(values.reduce((a, b) => a + (b - mean) ** 2, 0) / values.length)};
+      };
+      const gold = (u, v, [r, g, b]) => r > 150 && r > b * 1.6;
+      return {
+        // inside the opening, away from the chains, the pendant and the chest patch
+        opening: stats([0.797, 0.235, 0.855, 0.32], (u, v, px) => gold(u, v, px)),
+        // the stock lapel notch and band, left of the opening, and the overlap and button zone below it, away from the zip
+        lapel: stats([0.747, 0.08, 0.758, 0.34]),
+        overlap: stats([0.75, 0.42, 0.91, 0.63], (u) => Math.abs(u - 0.8267) < 0.012),
+        zip: stats([0.8227, 0.4, 0.8307, 0.63]),
+      };
+    });
+    assert.ok(tee, 'the jacket skin was drawn');
+    assert.ok(tee.opening.max < 0.2 && tee.opening.spread < 0.03, 'the tee opening is a plain dark jersey: ' + JSON.stringify(tee.opening));
+    assert.ok(tee.lapel.spread < 0.07 && tee.lapel.min > 0.3, 'the lapel zone is flat cloth: ' + JSON.stringify(tee.lapel));
+    assert.ok(tee.overlap.spread < 0.08 && tee.overlap.min > 0.27, 'the double-breasted overlap and its buttons are gone: ' + JSON.stringify(tee.overlap));
+    assert.ok(tee.zip.min < 0.2 && tee.zip.max > 0.5, 'a zip runs down the front: ' + JSON.stringify(tee.zip));
+    console.log('PASS tee: opening ' + JSON.stringify(tee.opening) + ', lapel spread ' + tee.lapel.spread.toFixed(3) + ', overlap spread ' + tee.overlap.spread.toFixed(3));
     for (const [who, suffix] of [['claudia', 'female1tex0'], ['claudia', 'framestex1'], ['rydgel', 'businessman2tex2']]) assert.ok(find(who, suffix).length, `${who} ${suffix} skin drawn`);
     console.log(`PASS skins: ${skins.length} generated (${skins.map(skin => skin.key.replace(/^easter:|DeusExCharacters\.Skins\./g, '')).join(', ')})`);
 
