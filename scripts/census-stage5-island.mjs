@@ -30,7 +30,7 @@ Object.assign(DRIVERS, {
     await armed(c); const where = c.openStand(t, 220), n0 = carcasses(c).length;
     const h0 = c.health(t); let shots = 0;
     const died = await c.guard(async () => { for (; shots < 20 && !c.gone(t) && c.health(t) > 0; shots++) c.shoot(4, 30); c.frames(180); });
-    return ok(c.gone(t) || c.health(t) < h0, {h0, health: c.gone(t) ? null : c.health(t), shots, state: c.gone(t) ? null : stateName(c, t), enemy: !c.gone(t) && c.read(t, 'Enemy') === c.player(), newCarcasses: carcasses(c).length - n0, playerDied: died, bearing: where.bearing});
+    return ok(c.gone(t) || c.health(t) <= 0, {h0, health: c.gone(t) ? null : c.health(t), shots, state: c.gone(t) ? null : stateName(c, t), enemy: !c.gone(t) && c.read(t, 'Enemy') === c.player(), newCarcasses: carcasses(c).length - n0, playerDied: died, bearing: where.bearing});
   },
   async 'island-npc-shoots-player'(c) {
     const t = c.actor('Terrorist0'); if (!t) throw new Undriven('no Terrorist0');
@@ -89,7 +89,7 @@ Object.assign(DRIVERS, {
     const lp = c.pos(laser), [fx, fy] = forward(c, laser);
     c.stand([lp[0] + fx * 120, lp[1] + fy * 120, lp[2] - 40], lp); c.frames(20);
     c.fixture.driveLegacy({forward: 1}); c.frames(100); c.fixture.driveLegacy({forward: 0}); c.frames(120);
-    return ok(c.flag('statuealarmtriggered') || c.read(laser, 'lastAlarmTime') > 0, {alarmFlag: c.flag('statuealarmtriggered'), lastAlarm: c.read(laser, 'lastAlarmTime'), isOn: c.read(laser, 'bIsOn'), at: c.pos(c.player()).map(Math.round)});
+    return ok(c.flag('statuealarmtriggered'), {alarmFlag: c.flag('statuealarmtriggered'), lastAlarm: c.read(laser, 'lastAlarmTime'), isOn: c.read(laser, 'bIsOn'), at: c.pos(c.player()).map(Math.round)});
   },
   async 'island-hack-panel'(c) {
     const panel = c.actor('ControlPanel0'), laser = c.actor('LaserTrigger0'); if (!panel || !laser) throw new Undriven('no ControlPanel0');

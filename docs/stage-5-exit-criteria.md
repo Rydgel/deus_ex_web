@@ -73,10 +73,10 @@ report (`--stage4-report`), so presentation proof is not repeated.
 | Id | Scene | Scenario | Ev. | Census | Proof that would pass it | Existing, partial | Status |
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | 5.1.1 | 00_Training crates | the crowbar breaks a Cratepick crate: swing, damage, fragments, contents, the Mission00 timer starts DL_Lockpick | O1 | `crowbar-crate` | O1: live trace of the original (crowbar summoned, ParseRightClick, ActivateBelt, a Fire edge at the crate) with the crate, fragment and contents state per tick | validate-crowbar-crate (P); validate-weapon-view-original (4.1.10 O1: the swing's draws); script-crate-destruction.md | MISSING |
-| 5.1.2 | 00_TrainingCombat pistol range | take a pistol and Ammo10mm, shoot the range targets: ammo, recoil, trace hit, target and trigger state, DL_TArgetRangeshot1/2 | O1 | `pistol-range` | O1: live trace of the original firing at the range (edge-triggered Fire) with ammo, hit actor, mover and DataLink-flag state per tick | weapon noise O1 in the Underworld (pistol shots' event traffic, not the hit or the ammo) | MISSING |
+| 5.1.2 | 00_TrainingCombat pistol range | take a pistol and Ammo10mm, shoot the range targets: ammo, recoil, trace hit, target and trigger state, DL_TArgetRangeshot1/2 | O1 | `pistol-range` | O1: live trace of the original firing at the range (edge-triggered Fire) with ammo, hit actor, mover and DataLink-flag state per tick | weapon noise O1 in the Underworld (pistol shots' event traffic, not the hit or the ammo) | FAIL |
 | 5.1.3 | 00_TrainingCombat rifle range | take the rifle and Ammo3006, scope on, shoot: scope FOV, accuracy, hit; DL_RifleRangeShot1 sets SkillWeaponRifle to 3 | O1 | `rifle-scope` | O1: live trace of the original (scope toggle and Fire edges) with the scope state, FOV, ammo and the skill level | - | MISSING |
 | 5.1.4 | 00_TrainingCombat demolitions | throw a LAM at BreakableWall1: it sticks, explodes (HurtRadius), the wall breaks, the Mission00 DataLinks follow | O1 | `lam-wall` | O1: live trace of the original (LAM selected, Fire edge) with the LAM actor, the explosion's damage to the wall and its fragments | alterations census (grenade throws play, P); validate-island-blowitup (mover BlowItUp O2) | FAIL |
-| 5.1.5 | 01_NYC_UNATCOIsland | the player's pistol hurts and kills a standing Terrorist: damage, hit reaction, hostile response, death, carcass and its inventory | O1 | `island-shoot-npc` | O1: live trace of the original (pistol summoned and drawn, Fire edges at a Terrorist in view) with the pawn's Health, state, Orders, Enemy and the carcass | weapon noise O1 (the NPCs' event handlers for a player's shots in the Underworld); carcass memory natives 2108/2109 (O2) | MISSING |
+| 5.1.5 | 01_NYC_UNATCOIsland | the player's pistol hurts and kills a standing Terrorist: damage, hit reaction, hostile response, death, carcass and its inventory | O1 | `island-shoot-npc` | O1: live trace of the original (pistol summoned and drawn, Fire edges at a Terrorist in view) with the pawn's Health, state, Orders, Enemy and the carcass | weapon noise O1 (the NPCs' event handlers for a player's shots in the Underworld); carcass memory natives 2108/2109 (O2) | FAIL |
 | 5.1.6 | 01_NYC_UNATCOIsland | a hostile Terrorist attacks the player: it aims and fires (Tracer, physProjectile), the player's Health, armor and hit regions change, the AI keeps attacking or takes cover | O1 | `island-npc-shoots-player` | O1: live trace of the original with a visible, hostile-allied player in an NPC's view and the NPC's state, fire, projectile and the player's damage per tick | validate-island-tracer (tracer flight, P); validate-native-projectile (O2) | MISSING |
 | 5.1.7 | 01_NYC_UNATCOIsland | a baton or crowbar knocks a Terrorist out: KnockedOut carcass, "Unconscious", and Mission01.Timer's aggression count | O1 | `island-melee-ko` | O1: live trace of the original (WeaponBaton drawn, Fire edge at a Terrorist) with the pawn's state, the carcass and its itemName | - | MISSING |
 | 5.1.8 | 01_NYC_UNATCOIsland | player death: lethal damage reaches Dying, the death state and view; the game does not continue the level | O1 | `island-death` | O1: live trace of the original from lethal damage (TakeDamage via console) to the death state; Play stops at the same point of the original (the screen after it is Stage 6's load menu) | - | MISSING |
@@ -90,7 +90,7 @@ report (`--stage4-report`), so presentation proof is not repeated.
 | 5.2.2 | 01_NYC_UNATCOIsland | a visible player in the open: a patrolling Terrorist sees it (AICanSee, SightCounter, CycleCumulative), turns, calls the alert; a hidden player is not seen | O1 | `island-sight` | O1: live trace of the original (no ghost, player standing at a measured pose in a patrol's view and out of it) with the perception fields of the Perception pilot | perception pilot O1 in the Underworld (civilians flee a visible mj12-allied player); validate-pawn-perception / AICanSee x87 (O2) | FAIL |
 | 5.2.3 | 01_NYC_UNATCOIsland | the player's noise reaches the guards: gunshots (WeaponFire, LoudNoise), the HandleShot/HandleLoudNoise callbacks; footsteps by speed and floor | O1 | `island-hearing` | O1: live trace on Island of the event traffic for a pistol and, with a walking player, for footsteps; footsteps need a held key the harness cannot post (O3 on Play's footstep inputs then) | live-events-compare O1: 1,069 and 1,586 manager calls equal in the Underworld (pistol, assault shotgun) | MISSING |
 | 5.2.4 | 01_NYC_UNATCOIsland cameras | SecurityCamera sees the player: tracking, the alarm event, NSFCam01..03 trigger libertyturret1; UN_CamSystem01..04 (bNoAlarm) do not | O1 | `island-camera` | O1: live trace of the original with the player in a camera's cone and the camera's state, the alarm flag and the turret's state per tick | - | MISSING |
-| 5.2.5 | 01_NYC_UNATCOIsland laser trap | a LaserTrigger beam broken by the player triggers AlarmUnit0 (SetAlarmFlag -> StatueAlarmTriggered) and the guards react | O1 | `island-laser` | O1: live trace of the original with the player placed across statue_lasertrap and the beam, trigger and flag state | - | MISSING |
+| 5.2.5 | 01_NYC_UNATCOIsland laser trap | a LaserTrigger beam broken by the player triggers AlarmUnit0 (SetAlarmFlag -> StatueAlarmTriggered) and the guards react | O1 | `island-laser` | O1: live trace of the original with the player placed across statue_lasertrap and the beam, trigger and flag state | - | FAIL |
 | 5.2.6 | 01_NYC_UNATCOIsland laser trap | hacking ControlPanel0 with a multitool switches statue_lasertrap off: hack time (skill, hackStrength), the multitool's use, the lasers' state | O1 | `island-hack-panel` | O1: live trace of the original (Multitool selected, ParseRightClick on the panel) with the hack progress, multitool charge and laser state per tick | - | FAIL |
 | 5.2.7 | 01_NYC_UNATCOIsland | a pawn reacts to a body: a killed or knocked-out Terrorist is seen (CheckCarcassPresence, HaveSeenCarcass, AddCarcass) and the finder investigates or flees | O1 | `island-carcass` | O1: live trace of the original with a carcass in a patrol's view | validate-pawn-carcass (natives 2108/2109, O2) | FAIL |
 
@@ -164,7 +164,7 @@ report (`--stage4-report`), so presentation proof is not repeated.
 
 `node scripts/census-stage5.mjs` drives the 50 scenarios in Play's own frame (headless: `createGame`, `sim-session` tick, sprite scan and HUD, the player-input fixture), one session per
 map with the original Player start between scenarios, a child per map under an RSS watchdog. Headless is the established census practice (alterations census, Stage 3 probes); the
-default worker page runs the same simulation code. **Full runs on the Linux host: 36 plays, 1 pause, 10 no-effect, 3 undriven (1,353 s, peak 4,390 MiB; a second run with the expectations stored passed in 1,448 s, peak 3,313 MiB, every outcome equal).** The expected outcomes are stored in
+default worker page runs the same simulation code. **Full runs on the Linux host: 36 plays, 1 pause, 10 no-effect, 3 undriven (1,353 s, peak 4,390 MiB; a second run with the expectations stored passed in 1,448 s, peak 3,313 MiB, every outcome equal). On review three predicates were tightened to the effect their rows name (`pistol-range`: a range target registers; `island-shoot-npc`: the Terrorist is killed; `island-laser`: `StatueAlarmTriggered` is set) and those three rerun as no-effect: 33 plays, 1 pause, 13 no-effect, 3 undriven.** The expected outcomes are stored in
 the script (`EXPECTED`), so a regrown boundary fails the run and a fixed one must be recorded. The census is class P: it says what Play does, never that it equals the original.
 
 How the scenarios are driven (and what that means for reading the table):
@@ -191,7 +191,7 @@ How the scenarios are driven (and what that means for reading the table):
 | `crate-stack` | 5.3.6 | 00_Training | plays | {crate:CrateUnbreakableSmall0,carried:true,dropped:true,at:[7262,-1493,-14]} |
 | `hazmat-swim` | 5.3.7 | 00_Training | plays | {bare:10,suited:8,swimming:true,active:true} |
 | `training-datalinks` | 5.4.1 | 00_Training | plays | {triggers:18,played:17,died:false,missing:[]} |
-| `pistol-range` | 5.1.2 | 00_TrainingCombat | plays | {ammo0:6,ammo:0,glass:[whole,whole,whole,whole],shot1:false} |
+| `pistol-range` | 5.1.2 | 00_TrainingCombat | no-effect | ammo spent (6 to 0) but no target registers: glass whole, DL_TArgetRangeshot1 not played |
 | `rifle-scope` | 5.1.3 | 00_TrainingCombat | plays | {scoped:true,ammo:4,fov:10,skill:SkillWeaponRifle} |
 | `lam-wall` | 5.1.4 | 00_TrainingCombat | no-effect | the effect did not happen |
 | `instructor-take` | 5.4.2 | 00_TrainingCombat | plays | {delegate:validate-instructor-conversation.mjs,peakMiB:1886,last:Instructor Play flow passed: both owners, Frob/Take, natural FlagTrigger, 29 transfer |
@@ -199,7 +199,7 @@ How the scenarios are driven (and what that means for reading the table):
 | `elevator` | 5.3.13 | 00_TrainingFinal | plays | {before:0,after:1,moving:false,note:ElevatorMover1 (ExitDoor) is moved by mission triggers only: not driven} |
 | `alarm-chain` | 5.6.2 | 00_TrainingFinal | no-effect | AlarmUnit1.Trigger left bActive false |
 | `meet-page-final` | 5.4.8 | 00_TrainingFinal | no-effect | the effect did not happen |
-| `island-shoot-npc` | 5.1.5 | 01_NYC_UNATCOIsland | plays | {h0:75,health:17,shots:20,state:standing,enemy:false,newCarcasses:0,playerDied:false,bearing:3.141592653589793} |
+| `island-shoot-npc` | 5.1.5 | 01_NYC_UNATCOIsland | no-effect | 20 shots took Terrorist0 from 75 to 17 health, not killed; still standing, no Enemy |
 | `island-npc-shoots-player` | 5.1.6 | 01_NYC_UNATCOIsland | plays | {enemy:true,tracers:1,minHealth:0,states:[standing,attacking],physics:1,died:false,h:0} |
 | `island-melee-ko` | 5.1.7 | 01_NYC_UNATCOIsland | plays | {gone:true,fresh:[{name:TerroristCarcass1,itemName:Unconscious}],playerDied:false} |
 | `island-death` | 5.1.8 | 01_NYC_UNATCOIsland | plays | {health:-500,state:deusex.deusexplayer.dying,reachedOpenDxOnly:false} |
@@ -207,7 +207,7 @@ How the scenarios are driven (and what that means for reading the table):
 | `island-sight` | 5.2.2 | 01_NYC_UNATCOIsland | no-effect | the effect did not happen |
 | `island-hearing` | 5.2.3 | 01_NYC_UNATCOIsland | plays | {before:standing,quietBeforeShots:true,state:dying,enemy:true,playerDied:false,note:sight and hearing cannot be told apart in the open} |
 | `island-camera` | 5.2.4 | 01_NYC_UNATCOIsland | plays | {seen:[[200,true,true],[350,true,true],[500,true,true]],alarm:true,state:active} |
-| `island-laser` | 5.2.5 | 01_NYC_UNATCOIsland | plays | {alarmFlag:false,lastAlarm:0.5666667222976685,isOn:true,at:[1862,-949,-96]} |
+| `island-laser` | 5.2.5 | 01_NYC_UNATCOIsland | no-effect | the beam fires (lastAlarmTime 0.57) but StatueAlarmTriggered is never set: the chain stops at AlarmUnit0, as in `alarm-chain` |
 | `island-hack-panel` | 5.2.6 | 01_NYC_UNATCOIsland | no-effect | the effect did not happen |
 | `island-carcass` | 5.2.7 | 01_NYC_UNATCOIsland | pause | CriticalDelete deleting destructor is not recovered for native vtable 0x10027fe8 |
 | `island-swim` | 5.3.8 | 01_NYC_UNATCOIsland | plays | {physics:3,swimTimer:[19.533340454101562,5.533483505249023],health:[100,100],drowned:false} |
@@ -244,7 +244,7 @@ How the scenarios are driven (and what that means for reading the table):
    multitool unchanged, the door still locked and `ControlPanel0`'s lasers on. The Training route's `gundoor` pick and `Keypad2` hack run. Not diagnosed: the target selection, the tool in hand, the
    skill and a Timer that never runs are the candidates.
 4. **A thrown LAM spawns nothing** (`lam-wall`): the weapon goes Active to Idle on Fire and no `LAM` projectile appears; the EMP grenade at `SecurityBot0` does spawn an `EMPGrenade` and changes nothing
-   (`emp-electronics`). `AlarmUnit1.Trigger` leaves `bActive` false (`alarm-chain`).
+   (`emp-electronics`). `AlarmUnit1.Trigger` leaves `bActive` false (`alarm-chain`); on Island the laser beam fires but `StatueAlarmTriggered` is never set (`island-laser`), the same unit. Six pistol shots at the 00_TrainingCombat range register on no target (`pistol-range`).
 5. **Radiation costs the player once** (`hazmat-swim`): `WaterZone0` (`DamagePerSec` 20, Radiation, `bPainZone`) took 10 health on entry and no more over 20 s; with the HazMat suit active the entry took 8. A
    debug series (a second look at the same zone) shows `PainTime` counting the breath, not a pain interval.
 6. **NPC reaction to being hurt is not stable** (`island-shoot-npc`): 20 pistol shots took `Terrorist0` from 75 to 17 and left it `Standing` with no Enemy in the final driver, while the first variant of the
@@ -261,20 +261,20 @@ ride (no player input reaches its SequenceTriggers).
 
 ## Scoreboard (2026-10-17, first run)
 
-`node scripts/validate-stage5-acceptance.mjs --census .work/stage5-census.json --report` on the census above: **0 of 50 criteria pass; the gate is red** (exit 1). 55 rows, 5 excluded.
+`node scripts/validate-stage5-acceptance.mjs --census .work/stage5-census.json --report` on the census above: **0 of 50 criteria pass; the gate is red** (exit 1). 55 rows, 5 excluded (after the three tightened predicates).
 
 | Clause | PASS | FAIL | MISSING | UNDRIVEN | EXCLUDED |
 | --- | ---: | ---: | ---: | ---: | ---: |
-| 5.1 Combat | 0 | 1 | 8 | 0 | 0 |
-| 5.2 Stealth | 0 | 3 | 4 | 0 | 0 |
+| 5.1 Combat | 0 | 3 | 6 | 0 | 0 |
+| 5.2 Stealth | 0 | 4 | 3 | 0 | 0 |
 | 5.3 Exploration and the character systems | 0 | 1 | 12 | 0 | 0 |
 | 5.4 Conversation | 0 | 1 | 6 | 1 | 0 |
 | 5.5 Alternate-route objectives | 0 | 3 | 4 | 0 | 0 |
 | 5.6 Systems interacting | 0 | 2 | 2 | 2 | 0 |
 | 5.7 Excluded | 0 | 0 | 0 | 0 | 5 |
-| **Total** | **0** | **11** | **36** | **3** | **5** |
+| **Total** | **0** | **14** | **33** | **3** | **5** |
 
-No row has a proof check yet: the 36 `MISSING` rows play in the census and name the capture that would prove them; the 11 `FAIL` rows do not play (one pause, ten no-effect); the 3 `UNDRIVEN`
+No row has a proof check yet: the 33 `MISSING` rows play in the census and name the capture that would prove them; the 14 `FAIL` rows do not play (one pause, thirteen no-effect); the 3 `UNDRIVEN`
 rows cannot be started. This is the honest first number: Stage 4's gate started at 44 of 70 because 60 checks against stored originals already existed, and for gameplay they do not. The strongest
 existing evidence is listed per row under "Existing, partial" (the Underworld's weapon-noise traces for gunshots, the perception pilot, the first-person crowbar, MeetPaul's frames, the native oracles for
 swimming, ladders, falling and movers).
@@ -295,7 +295,7 @@ Nothing below was fixed in this task. Each item is sized for one agent; "unblock
 6. **The undriven scenarios**: the cell door and Gunther (5.4.5, 5.6.6), a lit/dark pair of poses (5.6.3), the `M00MeetPage` trigger (5.4.8), the commander from his room (5.5.5), the `ElevatorMover1` ride
    (5.3.13). Each is a driver plus whatever pause it finds; the first two are the biggest.
 7. **Proof captures, by clause value**: conversation branches (5.4.3 to 5.4.6: choices, transfers, flags; the harness types Enter and Down as key edges), weapons and damage (5.1.1 to 5.1.3, 5.1.7), the
-   routes (5.5), Training's lessons one capture each (5.3.1 to 5.3.4), and O3 comparisons for the native-body rows (5.3.5, 5.3.6, 5.3.2). The 36 `MISSING` rows are this item; none can start before items 1 to 4
+   routes (5.5), Training's lessons one capture each (5.3.1 to 5.3.4), and O3 comparisons for the native-body rows (5.3.5, 5.3.6, 5.3.2). The 33 `MISSING` rows are this item; none can start before items 1 to 4
    say Play does the scenario.
 
 ## What the user should decide

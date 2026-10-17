@@ -253,7 +253,7 @@ export const DRIVERS = {
     c.stand([65, -543, -76], [65, -3280, -84]); c.frames(10);
     for (let i = 0; i < 6; i++) c.shoot(4, 40);
     const ammo = c.read(pistol, 'AmmoType') ? c.read(c.read(pistol, 'AmmoType'), 'AmmoAmount') : null;
-    return ok(ammo !== null && ammo < ammo0, {ammo0, ammo, glass: c.byClass('BreakableGlass').map(g => c.gone(g) ? 'broken' : 'whole'), shot1: c.flag('dl_targetrangeshot1_played')});
+    return ok(ammo !== null && ammo < ammo0 && c.flag('dl_targetrangeshot1_played'), {ammo0, ammo, glass: c.byClass('BreakableGlass').map(g => c.gone(g) ? 'broken' : 'whole'), shot1: c.flag('dl_targetrangeshot1_played')});
   },
   async 'rifle-scope'(c) {
     const rifle = await c.give('WeaponRifle'); await c.equip(rifle);
