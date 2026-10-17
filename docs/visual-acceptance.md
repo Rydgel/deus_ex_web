@@ -2268,6 +2268,91 @@ scripts/original-views.sh 06_HongKong_WanChai_Underworld --brightness 0.666667 -
 node scripts/validate-stage4-acceptance.mjs --only '^4\.2\.30$'
 ```
 
+## The frames rows recaptured on the Mac (2026-10-17)
+
+The matched-frame rows 4.1.1, 4.2.1 to 4.2.8, 4.2.17, 4.2.19 and 4.2.24 read stores the Linux host took (2026-10-07 to 10-16), and the host was
+unreachable, so a gate run on the Mac read `NO-ORIGINAL` for them. They were captured again on the Mac under CrossOver with the same cameras, recipes
+and file names (the gate's wiring is unchanged), each frame with its own `<view>-time.txt`: 17 maps, 85 frames kept (13 more taken and superseded), in four holds of the bottle.
+
+* **Brightness 2/3, chosen over the Linux stores' setting.** The Shot bakes the display ramp of the Brightness setting into its bitmap
+  (`framebuffer^(1/(1.5 b))`, [Main views at Brightness 2/3](#main-views-at-brightness-23)); at 2/3 it is the identity and the bitmap is the
+  framebuffer, which Play's frame at 0.4 (its identity ramp) is too. The Linux stores were taken at the ini's ramp, so every frame carried the uniform
+  1.13 to 1.46 gap the metrics had to be made ratio-invariant for (outlier blocks against the median ratio, the haze's sum read against the frame's
+  ratio, the beams' energy divided by it); at 2/3 the two programs' frames are compared level for level. The alternative, the ini's ramp as on Linux
+  (0.6 on the Mac), keeps a host ramp in the store that Play does not draw and that the metrics only tolerate. The thresholds are unchanged: every
+  metric is ratio-invariant, so they mean the same at either setting. The frames now agree far more closely (edges .99 to 1.0 on nearly every view
+  against .95 to .99; the Bar's haze correlates .9942 to .9999 against .93).
+* **Read-backs.** On a loaded Mac the console drops typed characters. `original` already read back the held dilation and the frozen level; it now
+  reads the Brightness back too (`WindowsClient0` +0x6c, the camera route's read; the class default object's row comes first and u32 fields print in hex)
+  and types the line again until it takes. It took at the first try on every map.
+* **A clock per shot.** The first captures kept one clock per load: the level time read after the hold, before the read-backs and the views. The held
+  level runs on at TimeDilation 0.001 while those take their wall time, and an animated light follows the clock: the Garage's down view `garage3` failed
+  on one block, a wall lit red in the original and not in Play (red 11.39 against 3.47 in block (1,1), green and blue equal), lit by `Light24` and
+  `Light26`, red `LT_Pulse` lights of period 8 (4.4 cycles a second of level time). Play at the stored clock plus 0.01 to 0.05 s read 4.90, 6.86,
+  9.07, 11.20 and 12.83 there: the shot was about 40 ms of level time (40 s of wall time) after its clock. `original` now reads the live LevelInfo's
+  `TimeSeconds` for each view (`dx-live-win.exe strobe poll`, as the held-Strobe views of 4.2.30 already did) and keeps it as the frame's clock, and
+  `play` takes the views of one capture in one run, each at its own time.
+* **The clock stopped for the shot.** A read before the `shot` key still precedes the frame the original draws by the key's way through the game
+  (a few wall seconds, 4 to 5 ms of level time): Street's `y2` holds a sky beam that moves a block in a few milliseconds, and Play stepped over the
+  stored clock read 3 outlier blocks up to +2 ms and 1 at +3 and +4 ms. `ULevel::Tick` multiplies the frame's delta by `TimeDilation` and adds it to
+  `TimeSeconds` with no clamp (Engine `0x103a5468..0x103a5487`; no pause test on that path), so at 0 the level time stands still: `original` types
+  `TimeDilation 0` at each free-running view, proves it with two reads 0.4 s apart (the line typed again when they differ), shoots, reads again and
+  restores 0.001; `<view>-clock.txt` keeps the reads (all five Street frames: equal before and after). Play had held its first view up to 3.5 ms late
+  (the approach's last frame and the settle frames): it holds 3 ms short of the first view's clock and steps each view's time from below (at 0.05,
+  then 0.002 for the last millisecond: 0.03 ms a frame), after the pre-shot commands and the poses, then holds it at 0 for the shot; Street's shots
+  land within 0.01 ms of the original's clocks.
+* **An actor's pose.** `y3` still read 2 to 6 outlier blocks, by the number of Play's page frames before it: `BlackHelicopter1`, 300 units from
+  the start, turns its rotor through that view's sky, and an actor in view animates in a frozen level (`AActor::Tick` advances the animation before its
+  players-only return, [Flags explained by the metric or by timing](#twenty-six-maps-frozen-at-held-level-time-2026-10-07)), so its phase is each
+  program's tick count since the load, a host input of the held state like the player's pose in a mirror. `original --actor-pose BlackHelicopter`
+  stops the class (`AnimRate 0`, read back) once the level is held and reads its instances' animation after each shot into `<view>-actor-pose.json`
+  (`Fly`, frame 0.2105 at the rate it had, 2.75); `play` writes it back (`AnimRate` 0) whenever the file is there. `y2` and `y3` then read 0 outlier
+  blocks (the gate allows them 2 each for this).
+
+Which clock each store keeps (the gate reads the `-time.txt` either way): the first effect batch (Training's `trainA`/`trainB`, ShipFan, ShipBelow,
+the 02 Bar's haze, the Hotel, Island's beams) the load's held time; the Garage, the frozen sets of the other eleven maps, Street's `street1`/`street2`
+and the Club's `club1` to `club4` the time read before each shot (no stop); Street's frozen set the stopped clock with the helicopter posed. The
+earlier clocks are within a few milliseconds of their shots (tens for the first batch); those views hold nothing fast enough to show it (they pass
+at the gate's thresholds, below). Retaking them with the stopped clock is a bottle hold of about 45 minutes and was not needed for a verdict.
+
+| Row | Views | Edge recall / precision / outlier blocks |
+| --- | --- | --- |
+| 4.1.1 | Training y0..down | 1/1/0, .999/.999/0, .999/.999/0, .999/.999/0, 1/.999/0 |
+| 4.2.1 | Island y0..down | 1/1/0, .999/.999/0, 1/.999/0, 1/1/0, 1/1/0 |
+| 4.2.2 | Street y0..down; street1, street2 | 1/1/0, 1/1/0, 1/1/0, 1/1/0, 1/.999/0; 1/1/0, .999/1/0 |
+| 4.2.3 | Battery Park and Helibase, 10 views | .998 to 1 / .997 to 1 / 0 each |
+| 4.2.4 | the 08 Bar y0..down | 1/1/0, .999/.999/0, .999/.999/0, 1/1/0, 1/1/0 |
+| 4.2.5 | Club y0..down; club1..club4 | .996 to .998 / .991 to .998 / 0; .999 to 1 / .999 to 1 / 0 |
+| 4.2.6 | Ship y0..down; fan2; below1, below2 | 1/1/0, 1/1/0, .977/.982/0, 1/1/0, 1/1/0; .994/.994/0; .998/.998 to .999/0, 1/.999/0 |
+| 4.2.7 | garage1..garage3 | 1/.999/0, 1/1/0, 1/1/0 |
+| 4.2.8 | trainA, trainB; Everett, Smuggler's, 747, Market (20 views) | 1/.999/0, 1/1/0; .997 to 1 / .997 to 1 / 0 |
+| 4.2.17 | fog3, fog5, fog0 | 1/1/0 each; haze correlation .9993, .9942, .9999 |
+| 4.2.19 | hotel1, hotel2 | .999/.999/0, 1/.999/0 |
+| 4.2.24 | laser1, laser2 (two runs) | .955 to .961 / .929 to .932 / 0, beams .912 / 1.268 to 1.308 / 2.19 to 2.23 px; .987 to .989 / .981 to .982 / 0, beams .893 to 1 / .968 to 1.131 / .31 to 2.0 px |
+
+All twelve rows pass, and a regression run of every frames row on the Mac with the final tooling (`--only` 4.1.1, 4.2.1 to 4.2.8, 4.2.13, 4.2.15,
+4.2.17, 4.2.19, 4.2.22, 4.2.24, 4.2.26, 4.2.30) read 27 of 27 checks `PASS`.
+
+* **Found, not pursued: Island's beams carry more energy in Play.** At the identity ramp the laser1 beams read 1.27 and 1.31 times the original's red
+  excess (two runs; laser2 .97 to 1.13), against 1.01 between the original's own two frames of that view (`laser1b`: coverage .912, y-offset 1.78 px, the
+  same geometry as Play's). The Linux store read .87 to 1.0, but at the ini's ramp the energy is divided by the frame's ratio, which an additive beam over
+  a dark background does not follow. The row passes (the threshold is 1.33), close to its edge. The beam texture `LaserBeam1` is a FireTexture whose sparks
+  are each program's own; holding it at the original's pixels (as 4.2.13 holds the steam's `SmokePuff1`) would separate the texture from the draw.
+
+Stored: the main checkout's `.work/acceptance/<map>/<view>-original.png` (and `.bmp`), `-time.txt`, and `-clock.txt` / `-actor-pose.json` where
+taken; the Hotel's `-state.json`; the plan's entries for the frozen maps (Play's start views, `play` writes them; `original` needs the map in the
+plan). Play's frames in these runs came from the shared checkout, which held other sessions' uncommitted edits to `main.mjs` and `fog-pass.mjs`.
+
+```bash
+scripts/original-views-b.sh 00_Training,01_NYC_UNATCOIsland,04_NYC_Street,02_NYC_BatteryPark --brightness 0.666667            # frozen views, several maps per launch
+scripts/original-views-b.sh 04_NYC_Street --brightness 0.666667 --actor-pose BlackHelicopter                                # Street's, the helicopter posed
+scripts/original-views.sh 06_HongKong_WanChai_Garage --brightness 0.666667 --view garage1:3449,-1156,-111:63907,5810,0 --view garage2:3575,-968,-168:735,1653,0 --view garage3:3889,-988,-40:53536,0,0
+scripts/original-views.sh 02_NYC_Bar --brightness 0.666667 --view fog3:-1200,-357,90:65501,16384,0 ... --view fog3-base:-1200,-357,90:65501,16384,0 ... --base-cmd 'set ZoneInfo bFogZone False'
+scripts/original-views.sh 02_NYC_Hotel --brightness 0.666667 --view hotel1:1880,-1158,148:0,32768,0 --view hotel2:1880,-1158,148:63036,32768,0 --freeze-player --player-state
+scripts/original-views.sh 01_NYC_UNATCOIsland --brightness 0.666667 --view laser1:1920,-1069,-60:63036,16384,0 --view laser1b:1920,-1069,-60:63036,16384,0 --view laser2:1850,-1000,-60:64036,15000,0 --unfreeze --rng-pin 0x2f6e2b1b
+node scripts/validate-stage4-acceptance.mjs --only '^4\.(1\.1|2\.(1|2|3|4|5|6|7|8|17|19|24))$'
+```
+
 ## Open
 
 - **Not attributed, seen in the 2026-10-14 pilot re-runs with Divergences 17 and 18 in** (every watched actor equal in all three): the Island run's stream draws differ at tick 264
