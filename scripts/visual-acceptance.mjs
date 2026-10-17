@@ -404,6 +404,22 @@ async function original() {
       // The game can drop a typed character (the line then fails as an unknown command or property, silently): the held dilation is read back and
       // its line typed again, and a level that was not frozen before the load is refused (its actors have ticked: a TriggerLight is at its own
       // brightness, no longer the map's). bPlayersOnly is LevelInfo +0x4f0 & 4 (tools/dx-live-win.c); the live LevelInfo is the one at the player's time.
+      // --brightness, read back: a dropped line leaves the Shot at the ini's ramp (0.6 on the Mac: about 1.3 times darker at every pixel). UClient's
+      // Brightness is WindowsClient0 +0x6c in Deus Ex's build, WindowedViewportX +0x54 the layout check (scripts/camera-acceptance.mjs, the same read).
+      if (option('brightness', null)) {
+        const want = Number(option('brightness')), readClient = () => {
+          const text = execFileSync(game.WINE, [path.join(root, 'ad/build/dump-actor-win.exe'), 'WindowsClient', 'Brightness:0x6c:f', 'X:0x54:u32'], {encoding: 'utf8', env: process.env});
+          // the instance's row (the class default object's comes first, "Class WindowsClient"); u32 fields print in hex
+          const m = text.split(/\r?\n/).map(line => /^WindowsClient WindowsClient\d+ Brightness=(\S+) X=(0x[0-9a-f]+|\d+)/.exec(line)).find(Boolean);
+          if (!m || Number(m[2]) !== WIDTH) throw new Error(`${map}: the WindowsClient layout does not read back (${text.trim().slice(0, 120)})`);
+          return Number(m[1]);
+        };
+        for (let retry = 0, value = readClient(); Math.abs(value - want) >= 1e-4; retry++, value = readClient()) {
+          if (retry === 3) throw new Error(`${map}: the console did not take the Brightness line (reads ${value})`);
+          console.log(map, `Brightness reads ${value}: the line again`);
+          post([`cmd set WinDrv.WindowsClient Brightness ${option('brightness')}`, 'sleep 800']);
+        }
+      }
       let live = readLive();
       for (let retry = 0; retry < 3 && live.length === 1 && Math.abs(Number(live[0][3]) - HELD_DILATION) > 1e-6; retry++) {
         console.log(map, `dilation ${live[0][3]}: the dilation line again`);
