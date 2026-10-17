@@ -68,8 +68,10 @@ export async function easterCall(game, args = {}) {
 }
 
 async function setup(game) {
-  if (state.active) return summary(game);
   const runtime = game.doors.scriptRuntime.runtime, player = game.player.collisionActor, level = runtime.levelFor(player);
+  if (live()) return summary(game);
+  // A Player start (the page's Reset) reloads the level and purges the old generation: the actors of an earlier setup are gone with it.
+  state.active = false; state.actors.clear(); state.queue.length = 0; state.next = { claudia: 0, rydgel: 0 };
   const { claudia, rydgel, place } = EASTER;
   const [pawnC, pawnR, seatClass, crateClass] = [await stockClass(runtime, claudia.pawnClass), await stockClass(runtime, rydgel.pawnClass),
     await stockClass(runtime, claudia.seatClass), await stockClass(runtime, claudia.crateClass)];
@@ -163,8 +165,14 @@ function summary(game) {
     crate: state.crate.name, seat: state.seat.name };
 }
 
+/** Whether the setup's level is still the live one: a Player start (Reset) purges it and everything the setup spawned. */
+function live() {
+  if (!state.active) return false;
+  try { return state.runtime.levelFor(state.game.player.collisionActor) === state.level && state.game.player.collisionActor === state.player; } catch { return false; }
+}
+
 function status(game) {
-  if (!state.active) return { active: false };
+  if (!live()) return { active: false };
   const runtime = state.runtime, read = (actor, name) => runtime.readNamed(actor, name);
   const nm = value => (value && typeof value === 'object' ? value.name ?? value.key ?? null : value);
   const describe = actor => {
@@ -187,9 +195,11 @@ function status(game) {
 
 /** The hooks, installed on this game object only: a frob (RightMouse press on one of them) and the reply timer. */
 function installHooks(game) {
+  if (game.easterHooks) return;
+  game.easterHooks = true;
   const button = game.inputButton, tick = game.tick;
   game.inputButton = function inputButton(name, pressed) {
-    const target = pressed && lower(name) === 'rightmouse' ? state.runtime.readNamed(state.player, 'FrobTarget') : null;
+    const target = pressed && lower(name) === 'rightmouse' && live() ? state.runtime.readNamed(state.player, 'FrobTarget') : null;
     const result = button.apply(this, arguments);
     const who = target ? state.actors.get(target) : null;
     if (who) frobbed(who);
@@ -197,7 +207,7 @@ function installHooks(game) {
   };
   game.tick = function tick() {
     const result = tick_.apply(this, arguments);
-    if (state.queue.length) deliver();
+    if (state.queue.length) { if (live()) deliver(); else state.queue.length = 0; }
     return result;
   };
   const tick_ = tick;

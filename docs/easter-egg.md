@@ -100,8 +100,11 @@ node scripts/validate-sim-split.mjs --a <server of the pre-mod build> --map 10_P
 original Sitting/Standing states with their names, MultiSkins and a hidden Chair1 under a wooden crate; each recipe's skin was drawn with
 its design colour; a real right-click on each shows the line, the answer comes later, a second frob takes the next line; neither pawn
 moves, changes state or loses health; without the flag a second page has no mod state, no skin hook and none of the mod's actors
-among the mesh bindings. The second command is the digest comparison with a build without the mod (the pre-mod commit served from its
-own checkout).
+among the mesh bindings; after the page's Reset (a Player start reloads the level) they are placed again and the speaker rotation
+restarts. The second command is the digest comparison with a build without the mod (the pre-mod commit served from its own copy):
+measured 2026-10-17 with `46f6e56` as A and this tree's flag-off page as B on 10_Paris_Club, `?hold=1&seed=1`, 240 frames: the four
+state digests (frames 60, 120, 180, 240: `c6e1c86bc6d14e36`, `537a540d0fa0cff2`, `ea1cfbc800c1057b`, `c3442ba3627c793d`) and the last
+frame's pixels (`877312b4d8bcc358`) are equal in both builds.
 
 ## Rough or open
 

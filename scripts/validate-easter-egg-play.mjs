@@ -169,8 +169,19 @@ try {
       assert.equal(after[who].health, before[who].health);
       assert.equal(after[who].invincible, true);
     }
-    assert.deepEqual(errors, [], 'no page error');
     console.log('PASS stay put: positions, states and health unchanged through the frobs');
+    // A Player start (the page's Reset) reloads the level: the mod places them again, on the new generation, and frobs still work.
+    await page.evaluate(() => document.getElementById('reset').click());
+    const again = await until(page, 'both actors again after Reset', s => s.active && s.time < after.time && s.claudia?.state === 'Sitting' && s.rydgel?.state === 'Standing');
+    assert.deepEqual(again.claudia.location, before.claudia.location);
+    assert.deepEqual(again.log, [], 'a fresh player log');
+    await place_(...aim.rydgel);
+    await until(page, 'Rydgel as FrobTarget after Reset', t => t.frobTarget === again.rydgel.name, 15);
+    await page.mouse.click(720, 450, {button: 'right'});
+    const reset = await until(page, 'a frob line after Reset', t => t.log.length > 0, 10);
+    assert.equal(reset.log[0], `${EASTER.rydgel.name}: ${EASTER.pairs.rydgel[0][0]}`, 'the speaker rotation starts again');
+    assert.deepEqual(errors, [], 'no page error');
+    console.log('PASS Reset: placed again on the new level, frob and rotation restart');
     await page.close();
   }
 
