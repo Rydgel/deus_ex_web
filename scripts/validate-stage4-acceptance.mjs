@@ -704,7 +704,10 @@ async function judgeFrames(task, add, fail, result) {
 const interfaceRuns = new Map();
 async function judgeInterface(task, add, fail, result) {
   const {map, views} = task.interface;
-  const needed = [...new Set([...views, INTERFACE_ORDER[0]])];
+  // Each view's world frame (interface-views.mjs `baseOf`: the same camera without the interface, taken last in the same run) is staged with it: the
+  // share of identical pixels is judged on the interface's own pixels, those where the two programs' world frames agree (the world is row 4.1.1's).
+  const {baseOf} = await import('./interface-views.mjs');
+  const needed = [...new Set([...views, ...views.map(baseOf).filter(Boolean), INTERFACE_ORDER[0]])];
   const absent = missingFiles(needed.flatMap(view => [[`acceptance/${map}/${view}-original.png`], [`acceptance/${map}/${view}-time.txt`, {copy: true}]]));
   if (absent.length) return fail(`stored originals absent: ${absent.slice(0, 4).join(', ')}${absent.length > 4 ? ` +${absent.length - 4}` : ''}`, 'NO-ORIGINAL');
   if (!interfaceRuns.has(map)) interfaceRuns.set(map, (async () => {
@@ -722,16 +725,18 @@ async function judgeInterface(task, add, fail, result) {
     const m = run.report[view];
     if (!m || m.error) { problems.push(`${view}: ${m?.error ?? 'no comparison'}`); continue; }
     const off = [];
-    if (m.identical < T.identical) off.push(`${(m.identical * 100).toFixed(2)}% identical < ${T.identical * 100}%`);
+    // the interface's own pixels when the view's world frame was compared; the whole frame otherwise (the stricter share)
+    const share = m.identicalInterface ?? m.identical;
+    if (share < T.identical) off.push(`${(share * 100).toFixed(2)}% identical${m.identicalInterface !== undefined ? ` on the interface's ${m.interfacePixels} pixels` : ''} < ${T.identical * 100}% (whole frame ${(m.identical * 100).toFixed(2)}%)`);
     if (m.over10 > T.over10) off.push(`${m.over10} pixels off by more than 10 > ${T.over10}`);
     if (m.mad > T.mad) off.push(`MAD ${m.mad} > ${T.mad}`);
     if (m.edgeRecall < T.edge || m.edgePrecision < T.edge) off.push(`edges ${m.edgeRecall}/${m.edgePrecision} < ${T.edge}`);
     if (m.outlierBlocks > T.outlierBlocks) off.push(`${m.outlierBlocks} outlier blocks`);
     if (off.length) problems.push(`${view}: ${off.join('; ')}`);
-    lines.push(`${view.slice(3)} ${m.identical}/${m.over10}`);
+    lines.push(`${view.slice(3)} ${m.identicalInterface ?? '-'}/${m.identical}/${m.over10}`);
   }
   if (problems.length) return fail(problems.join(' | '));
-  return {...result, status: 'PASS', detail: `${views.length} view(s), identical share / pixels off by more than 10: ${lines.slice(0, 5).join(' ')}${lines.length > 5 ? ' ...' : ''}`};
+  return {...result, status: 'PASS', detail: `${views.length} view(s), identical share on the interface's pixels / on the whole frame / pixels off by more than 10: ${lines.slice(0, 5).join(' ')}${lines.length > 5 ? ' ...' : ''}`};
 }
 
 // security cameras ----------------------------------------------------------------------------------------

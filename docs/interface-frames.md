@@ -91,9 +91,11 @@ frob path without an original frame); capturing them needs a live level held by 
 
 Rows 4.4.11 to 4.4.14 of the [Stage 4 gate](stage-4-exit-criteria.md) are one `interface` check each (4.4.14 adds four `terminal` checks: the screens above, sharing Play's run with 4.2.28's camera checks) (`validate-stage4-acceptance.mjs`): the check stages the
 stored frames and level times into the checkout's `.work` (a link or a copy, never over a file Play writes), runs Play's whole sequence once
-(`interface-acceptance.mjs play --suffix gate`: 18 views, about two minutes), compares, and judges its own views from the shared report: at least 99% of
-the pixels identical, at most 64 pixels off by more than 10 of 255, mean absolute difference at most 0.1, edge recall and precision at least 0.99 and no outlier
-block. The thresholds are the gate's, not the original's: they sit just beyond the measured worst values (57 pixels, the world's scanline; .9922 identical), and
+(`interface-acceptance.mjs play --suffix gate`: 18 views and their 4 world frames, about three minutes), compares, and judges its own views from the shared
+report: at least 99% of the interface's own pixels identical (since 2026-10-17: the pixels where the view's world frame agrees between the programs, see
+[the Mac capture](#the-mac-capture-2026-10-17); the whole frame's share is reported beside it), and on the whole frame at most 64 pixels off by more than 10 of
+255, mean absolute difference at most 0.1, edge recall and precision at least 0.99 and no outlier block (the block count is read from `compare`'s output since
+2026-10-17: before, the report carried no count and the block check could not fail). The thresholds are the gate's, not the original's: they sit just beyond the measured worst values (57 pixels, the world's scanline; .9922 identical), and
 they fail every frame the two fixes changed when those are taken out (the closest, `ui-health`, has 105 pixels over 10). `NO-ORIGINAL` when a stored frame or its
 `<view>-time.txt` is absent. `scripts/validate-gc-underline-default.mjs` (a `gc-*` validator, so row 4.4.2) checks the cause-1 default itself.
 
@@ -176,8 +178,26 @@ interface.**
 
 On Linux the same world under the interface matched to .9926. The noise is therefore the original's world rendering under CrossOver on the M2,
 attributed to wined3d over Metal rounding the texture and light-map modulation differently from Wine over Mesa on the AMD host; that attribution is
-unverified. The rows read `FAIL` on this capture with the threshold set from the Linux frames. Which share of identical pixels a Mac capture should
-be held to (for example, the share outside the world frame's own noise) is the gate's choice, not this capture's.
+unverified. The rows read `FAIL` on this first capture with the threshold set from the Linux frames.
+
+**Decision (the gate's coordinator, 2026-10-17):** judge the 99% share of identical pixels on the interface's own pixels. Those are the pixels where
+the world frame at the same camera already agrees between Play and the original; the world is row 4.1.1's subject and is judged there with its own
+metrics. Every other check stays on the whole frame, and both shares are reported. Implemented with the four world frames above (the scenario's last
+views), taken in the same hold and the same Play run, rather than borrowing 4.1.1's `y0`: no row then depends on another's store. A second capture
+of all 22 views took one hold (load 8 to 14 from a concurrent gate run, every setup line read back first time). Its 18 views' frames read the same
+numbers as the first capture's.
+
+| View | interface's pixels | identical among them | whole frame (reported) | >2 | >10 | MAD | edges | outlier blocks |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | --- | ---: |
+| 14 views at the start camera (`ui-base-start`) | 899,557 | 1.00000 | .97634 to .98899 | 24 to 93 | 0 | 0.00 to 0.01 | 1/1 | 0 |
+| `ui-belt`, `ui-inv2` (`ui-base-belt`) | 906,675 | 1.00000 | .98417, .99238 | 0 | 0 | 0.00 to 0.01 | 1/1 | 0 |
+| `ui-datacube` (`ui-base-datacube`) | 897,633 | 1.00000 | .97459 | 3 | 1 | 0.01 | 1/1 | 0 |
+| `ui-keypad` (`ui-base-keypad`) | 908,061 | 1.00000 | .99238 | 4 | 0 | 0.00 | .999/.999 | 0 |
+| the world frames themselves (not judged) | | | .97399 to .98531 | 0 to 93 | 0 to 1 | 0.00 to 0.01 | .998 to 1 | 0 |
+
+Every interface pixel is identical in every view. The gate passed twice: `--only '^4\.4\.1[1-4]$' --jobs 1` gave 8 checks, 4 PASS (the four terminals unchanged).
+Stored on the Mac: `ui-<view>` and `ui-base-*` `-original.{png,bmp}`, `-time.txt` (47.292 s to 48.249 s) and `-capture.json`. The first capture, without the world
+frames, is kept in `.work/ui-capture/first`.
 
 ## Causes
 

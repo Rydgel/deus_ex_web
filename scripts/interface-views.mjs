@@ -56,12 +56,25 @@ export const VIEWS = {
     ...shotSteps, ['rclick', 640, 360], ['wait', WAIT_SCREEN]]},
   'ui-keypad': {modal: true, steps: [['cmd', 'ghost'], ['pose', [1942, 940, -108], [2457, 0, 0]], ['cmd', 'walk'], ['wait', WAIT_SCREEN], ['rclick', 640, 360], ['wait', WAIT_SCREEN],
     ...shotSteps, ['key', 'ESC'], ['wait', WAIT_SCREEN]]},
+  // The world each view is drawn over, without the interface (`ShowHud False`), taken last in the same run: the camera of each view, reached by the
+  // same steps (the ghost at the start view; ghost, pose and `walk` at a frob pose), after everything the scenario changed in the world (the crowbar is
+  // in the belt). The comparison judges the share of identical pixels on the interface's own pixels: those where the two programs' world frames
+  // already agree (the world is row 4.1.1's subject, judged there with its own metrics). Decided 2026-10-17 after the Mac capture, whose world
+  // differs from Play by 1 level in 2.4% of the start view's pixels (docs/interface-frames.md "The Mac capture").
+  'ui-base-start': {world: true, steps: [['cmd', 'ghost'], ['pose', CAMERAS['00_Training'].location, CAMERAS['00_Training'].rotation], ['cmd', 'ShowHud False'], ['wait', WAIT_SCREEN], ...shotSteps]},
+  'ui-base-belt': {world: true, steps: [['cmd', 'ghost'], ['pose', [1106, 330, -65], [56706, 16384, 0]], ['cmd', 'walk'], ['wait', WAIT_SCREEN], ['cmd', 'ShowHud False'], ['wait', WAIT_SCREEN], ...shotSteps]},
+  'ui-base-datacube': {world: true, steps: [['cmd', 'ghost'], ['pose', [1462, 826, -100], [54388, 8181, 0]], ['cmd', 'walk'], ['wait', WAIT_SCREEN], ['cmd', 'ShowHud False'], ['wait', WAIT_SCREEN], ...shotSteps]},
+  'ui-base-keypad': {world: true, steps: [['cmd', 'ghost'], ['pose', [1942, 940, -108], [2457, 0, 0]], ['cmd', 'walk'], ['wait', WAIT_SCREEN], ['cmd', 'ShowHud False'], ['wait', WAIT_SCREEN], ...shotSteps]},
 };
+
+/** Each view's world frame (above): the frame of the same camera without the interface. */
+export const BASES = {'ui-belt': 'ui-base-belt', 'ui-inv2': 'ui-base-belt', 'ui-datacube': 'ui-base-datacube', 'ui-keypad': 'ui-base-keypad'};
+export const baseOf = view => VIEWS[view]?.world ? null : BASES[view] ?? 'ui-base-start';
 
 /** The order is part of the scenario: the log's lines and the notes accumulate from view to view, the crowbar stays in the belt, and the frobbed screens
  * leave the player walking at their pose. One capture of the original and every Play run take the whole list in this order. */
 export const ORDER = ['ui-hud', 'ui-hud-late', 'ui-inv', 'ui-health', 'ui-skills', 'ui-goals', 'ui-logs', 'ui-images', 'ui-conversations', 'ui-augs',
-  'ui-menu', 'ui-settings', 'ui-options', 'ui-colors', 'ui-belt', 'ui-inv2', 'ui-datacube', 'ui-keypad'];
+  'ui-menu', 'ui-settings', 'ui-options', 'ui-colors', 'ui-belt', 'ui-inv2', 'ui-datacube', 'ui-keypad', 'ui-base-start', 'ui-base-belt', 'ui-base-datacube', 'ui-base-keypad'];
 
 /** The criteria of the Stage 4 gate (docs/stage-4-exit-criteria.md) and the views each judges. */
 export const CRITERIA_VIEWS = {

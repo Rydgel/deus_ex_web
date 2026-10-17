@@ -21,7 +21,7 @@ import {execFileSync} from 'node:child_process';
 import {existsSync, mkdirSync, readFileSync, renameSync, writeFileSync} from 'node:fs';
 import path from 'node:path';
 import {fileURLToPath} from 'node:url';
-import {CAMERAS, ORDER, VIEWS, WAIT_CMD} from './interface-views.mjs';
+import {CAMERAS, ORDER, VIEWS, WAIT_CMD, baseOf} from './interface-views.mjs';
 
 const root = fileURLToPath(new URL('..', import.meta.url));
 const out = path.join(root, '.work/acceptance');
@@ -296,8 +296,24 @@ function compare() {
       if (d === 0) same++; if (d > 2) over2++; if (d > 10) over10++;
     }
     const n = A.length / 3;
-    const row = {view: view.name, crop, pixels: n, identical: +(same / n).toFixed(5), over2, over10, mad: metrics.mad, ratio: metrics.ratio,
-      edgeRecall: metrics.edgeRecall, edgePrecision: metrics.edgePrecision, outlierBlocks: metrics.outlierBlocks?.length, error: metrics.error};
+    // The interface's own pixels: those where the view's world frame (interface-views.mjs `baseOf`, the same camera without the interface, taken in the same
+    // run) is identical in the two programs. The share of identical pixels among them is the interface's; the world's own differences are row 4.1.1's.
+    let world = null;
+    const base = crop ? null : baseOf(view.name), baseFiles = base && [path.join(dir, `${base}-original.png`), path.join(dir, `${base}-${PLAY}.png`)];
+    if (baseFiles && baseFiles.every(existsSync)) {
+      const W = rgb(baseFiles[0]), V = rgb(baseFiles[1]);
+      let inside = 0, insideSame = 0;
+      for (let i = 0; i < A.length; i += 3) {
+        if (W[i] !== V[i] || W[i + 1] !== V[i + 1] || W[i + 2] !== V[i + 2]) continue;
+        inside++; if (A[i] === B[i] && A[i + 1] === B[i + 1] && A[i + 2] === B[i + 2]) insideSame++;
+      }
+      world = {base, interfacePixels: inside, identicalInterface: inside ? +(insideSame / inside).toFixed(5) : null};
+    }
+    const blocks = Number(/(\d+) outlier blocks\s*$/.exec(text.trim())?.[1] ?? NaN);
+    const row = {view: view.name, crop, pixels: n, identical: +(same / n).toFixed(5), ...(world ?? {}), over2, over10, mad: metrics.mad, ratio: metrics.ratio,
+      // visual-acceptance.mjs prints the blocks' count after its JSON line (the JSON leaves the blocks out): read it there, so the gate's outlier-block check
+      // judges a number (it read undefined before 2026-10-17, which no threshold fails)
+      edgeRecall: metrics.edgeRecall, edgePrecision: metrics.edgePrecision, outlierBlocks: blocks, error: metrics.error ?? (Number.isInteger(blocks) ? undefined : 'no outlier-block count')};
     report[view.name] = row;
     console.log(JSON.stringify(row));
   }
