@@ -359,8 +359,10 @@ async function original() {
   const holdSeconds = Number(option('hold-seconds', 8));
   const tracePath = path.join(holdDir, 'trace.jsonl'), cfg = path.join(holdDir, 'trace.cfg');
   const cameras = (option('cameras', cameraName)).split(',');
+  // --trace-extra <file>: more tracer config lines (`call` breakpoints with `call-frames`, logged to <trace>.calls.jsonl through the hold).
+  const traceExtra = option('trace-extra', null) ? readFileSync(option('trace-extra'), 'utf8').split('\n').filter(line => line.trim()) : [];
   writeFileSync(cfg, [`out ${tracePath}`, 'player JCDentonMale', 'release 1', 'ticks 100000000', `max-seconds ${holdSeconds}`, 'kill-on-crash 0',
-    `watch ${cameras.join(',')} Location:0x114:f3 Rotation:0x120:i3`].join('\n') + '\n');
+    `watch ${cameras.join(',')} Location:0x114:f3 Rotation:0x120:i3`, ...traceExtra].join('\n') + '\n');
   rmSync(`${tracePath}.resume`, {force: true});
   const child = spawn(game.WINE, [path.join(root, 'ad/build/dx-live-win.exe'), 'trace', cfg], {env: process.env, stdio: ['ignore', 'pipe', 'pipe']});
   let log = ''; child.stderr.on('data', chunk => { log += chunk; });

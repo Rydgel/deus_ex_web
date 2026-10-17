@@ -95,6 +95,7 @@
  *         kill-on-crash <0|1>     terminate the game at its first fatal first-chance exception, after reporting it (default 1:
  *                                 no crash dialog is left on the desktop)
  *         call <addr> <label> <nwords> [gate] [always] [name0] [namee] [deref <argidx> <ndwords> <byteoffset>]... (up to three)
+ *                 [abs <addr> <n>] [absptr <addr> <n> <off>] (up to four, read at the return) [ecxobj <off>] (the object named at ECX+off)
  *                                 (<addr> may be Module.dll@0xADDR: a preferred-base address rebased to where the module is loaded)
  *                                 a breakpoint at a function's entry (call-ticks only): its label, ECX, the first
  *                                 `nwords` stack dwords and, at its return (a one-shot breakpoint at the return
@@ -250,7 +251,7 @@ static Watched watched[1024]; static int watched_count;
 static int in_our_tick = 0; static uintptr_t rng_ptd = 0;   /* inside a ULevel::Tick of the traced level; the msvcrt thread-data block of the rand state (+0x14) */
 #define MAXCALLS 32
 #define MAXRET 64
-typedef struct { uintptr_t address; unsigned char original; char module[40]; char label[24]; int nwords, deref_count, deref_arg[3], deref_n[3], deref_off[3], gate, always, name0, namee, retname, namearg, namearg_off, ecx_n, ecx_off, span_on, span_arg, span_off, fret, fname_count, fname_arg[2]; char only[48]; } CallBp;
+typedef struct { uintptr_t address; unsigned char original; char module[40]; char label[24]; int nwords, deref_count, deref_arg[3], deref_n[3], deref_off[3], gate, always, name0, namee, retname, namearg, namearg_off, ecx_n, ecx_off, span_on, span_arg, span_off, fret, fname_count, fname_arg[2], abs_count, abs_ptr[4], abs_n[4], abs_off[4], ecxobj, ecxobj_off; unsigned abs_addr[4]; char only[48]; } CallBp;
 typedef struct { uintptr_t address; unsigned char original; int refs; } RetBp;
 typedef struct { int active; uintptr_t ret; unsigned esp, ecx; int call; unsigned args[16]; unsigned deref_ptr[3]; unsigned long seq; } Pending;
 static CallBp calls[MAXCALLS]; static int call_count;
@@ -318,6 +319,12 @@ static int read_config(const char *path) {
         else if (!strcmp(o, "fret")) c->fret = 1;
         else if (!strcmp(o, "fname") && c->fname_count < 2) c->fname_arg[c->fname_count++] = atoi(strtok(NULL, " \t\r\n"));
         else if (!strcmp(o, "ecxwords")) { c->ecx_n = atoi(strtok(NULL, " \t\r\n")); c->ecx_off = (int)strtol(strtok(NULL, " \t\r\n"), NULL, 0); if (c->ecx_n > 64) c->ecx_n = 64; }
+        /* `abs <addr> <n>`: n dwords at an absolute address (a global: Render.dll's light-map grid) at the return; `absptr <addr> <n> <off>`:
+           n dwords at *(addr)+off (the object a global points at); up to four. `ecxobj <off>`: the name of the object whose pointer is
+           at ECX+off (ComputeFromActor's FLightInfo holds its light actor at +0). */
+        else if (!strcmp(o, "abs") && c->abs_count < 4) { c->abs_addr[c->abs_count] = (unsigned)strtoul(strtok(NULL, " \t\r\n"), NULL, 0); c->abs_n[c->abs_count] = atoi(strtok(NULL, " \t\r\n")); if (c->abs_n[c->abs_count] > 128) c->abs_n[c->abs_count] = 128; c->abs_ptr[c->abs_count] = 0; c->abs_off[c->abs_count] = 0; c->abs_count++; }
+        else if (!strcmp(o, "absptr") && c->abs_count < 4) { c->abs_addr[c->abs_count] = (unsigned)strtoul(strtok(NULL, " \t\r\n"), NULL, 0); c->abs_n[c->abs_count] = atoi(strtok(NULL, " \t\r\n")); if (c->abs_n[c->abs_count] > 128) c->abs_n[c->abs_count] = 128; c->abs_off[c->abs_count] = (int)strtol(strtok(NULL, " \t\r\n"), NULL, 0); c->abs_ptr[c->abs_count] = 1; c->abs_count++; }
+        else if (!strcmp(o, "ecxobj")) { c->ecxobj = 1; c->ecxobj_off = (int)strtol(strtok(NULL, " \t\r\n"), NULL, 0); }
         else if (!strcmp(o, "deref") && c->deref_count < 3) { c->deref_arg[c->deref_count] = atoi(strtok(NULL, " \t\r\n")); c->deref_n[c->deref_count] = atoi(strtok(NULL, " \t\r\n")); c->deref_off[c->deref_count] = (int)strtol(strtok(NULL, " \t\r\n"), NULL, 0); if (c->deref_n[c->deref_count] > 128) c->deref_n[c->deref_count] = 128; c->deref_count++; }
       }
       call_count++;
@@ -588,6 +595,18 @@ static int handle_call_event(HANDLE th, DWORD tid, uintptr_t where, int unfrozen
     if (c->namearg && c->namearg - 1 < c->nwords) { uintptr_t o = c->namearg_off < 0 ? now[c->namearg - 1] : (now[c->namearg - 1] ? read_u32(now[c->namearg - 1] + c->namearg_off) : 0); fprintf(cout, ",\"argName\":\"%s\"", object_name(o)); }   /* namearg at the return too: the Hit's Actor a MoveActor just wrote */
     if (c->retname) { char text[96]; strncpy(text, object_name(p->ecx), sizeof(text) - 1); text[sizeof(text) - 1] = 0; fprintf(cout, ",\"ecxName\":\"%s\"", text); fprintf(cout, ",\"ecxClass\":\"%s\"", object_name(read_u32(p->ecx + 0x24))); fprintf(cout, ",\"ecxIndex\":%u", read_u32(p->ecx + 0x04)); }
     if (c->ecx_n) { unsigned w[64]; memset(w, 0, sizeof(w)); read_mem(p->ecx + c->ecx_off, w, 4 * c->ecx_n); fprintf(cout, ",\"ecxWords\":"); print_words(cout, w, c->ecx_n); fprintf(cout, ",\"ecxFloats\":"); print_floats(cout, w, c->ecx_n); }
+    if (c->ecxobj) fprintf(cout, ",\"ecxObj\":\"%s\"", object_name(read_u32(p->ecx + c->ecxobj_off)));
+    if (c->abs_count) {
+      fprintf(cout, ",\"abs\":[");
+      for (int d = 0; d < c->abs_count; d++) {
+        unsigned w[128]; memset(w, 0, sizeof(w));
+        uintptr_t at = c->abs_ptr[d] ? read_u32(c->abs_addr[d]) : c->abs_addr[d];
+        if (at) read_mem(at + (c->abs_ptr[d] ? c->abs_off[d] : 0), w, 4 * c->abs_n[d]);
+        fprintf(cout, "%s{\"addr\":\"0x%x\",\"ptr\":%d,\"at\":\"0x%x\",\"words\":", d ? "," : "", c->abs_addr[d], c->abs_ptr[d], (unsigned)at); print_words(cout, w, c->abs_n[d]);
+        fprintf(cout, ",\"floats\":"); print_floats(cout, w, c->abs_n[d]); fprintf(cout, "}");
+      }
+      fprintf(cout, "]");
+    }
     fprintf(cout, "}\n"); fflush(cout);
     if (c->gate && gate_depth > 0) gate_depth--;
     p->active = 0; while (pend_count > 0 && !pend[pend_count - 1].active) pend_count--;
