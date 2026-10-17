@@ -235,12 +235,12 @@ add('4.1.8', C1, 'five campaign maps, 1,200 ticks', 'BatteryPark, Hotel, Market,
   SWEEP({maps: ['02_NYC_BatteryPark', '02_NYC_Hotel', '06_HongKong_WanChai_Market', '10_Paris_Chateau', '15_Area51_Bunker'], tags: {'02_NYC_BatteryPark': 'sweep2'}}));
 add('4.1.9', C1, '01_NYC_UNATCOIsland armed pawns', 'a pawn\'s third-person weapon: hand frame and Coords equal Render.dll, drawn in Play', 'O2',
   V('weapon-attach'), V('weapon-play'));
-missing('4.1.10', C1, 'Training first-person crowbar', 'the first-person weapon frame (view model, GPU camera passes) against the original',
-  'only the selection (validate-weapon-lod) is compared with the original; no matched capture of the held weapon');
+add('4.1.10', C1, 'Training first-person crowbar', 'the first-person weapon held at tick 300: its draw (Render.dll DrawActor 0x10b262c0: Location, Rotation, animation, the camera Coords) equal to the original\'s logged draws, the frame and the crowbar\'s region against the original\'s, the 300 ticks replayed', 'O1',
+  V('weapon-view-original'));
 add('4.1.11', C1, '05_NYC_UNATCOMJ12lab mirror', 'the player holding a pistol and a MedKit in a mirror child frame: the frame\'s planes and the Coords equal the running original\'s logged draws', 'O1',
   V('weapon-attach'), V('weapon-mirror-play'));
-missing('4.1.12', C1, 'an armed NPC in a mirror, a weapon in a camera window', 'an armed pawn in a mirror child frame and a weapon in a ViewportWindow against the original\'s frames',
-  'wired and checked in Play (validate-terminals-camera-browser --expect weapons); no original capture of an armed NPC in a mirror (the maps\' mirrors miss a standing pawn\'s hands) or of a camera window with an armed pawn (docs/weapon-attachment.md Open)');
+add('4.1.12', C1, 'an armed NPC in the lab mirror, a weapon in Island\'s camera window', 'a summoned MJ12Troop\'s rifle in the lab mirror\'s child frame and Terrorist18\'s knife in Island ComputerSecurity1\'s ViewportWindow: hand frame and Coords equal the running original\'s logged draws (not the windows\' pixels: the camera window\'s NPCs walk their own routes)', 'O1',
+  V('weapon-attach'));
 
 // 4.2 Effects --------------------------------------------------------------------------------------------
 add('4.2.1', C2, '01_NYC_UNATCOIsland', 'sky, water, skyline and decorations, five frozen frames', 'O1', frozen(['01_NYC_UNATCOIsland']));
@@ -308,7 +308,10 @@ add('4.2.28', C2, 'security cameras', 'ViewportWindow windows on four maps match
   CAMERA({map: '02_NYC_BatteryPark', computer: 'ComputerSecurity2', user: 'NSF', password: 'righteous', cameraActor: 'SecurityCamera1', name: 'bp2', windows: 3}),
   CAMERA({map: '06_HongKong_WanChai_Market', computer: 'ComputerSecurity0', user: 'TAM', password: 'DRAGON', cameraActor: 'SecurityCamera2', name: 'hk0', windows: 3}),
   CAMERA({map: '09_NYC_Ship', computer: 'ComputerSecurity3', user: 'SECURITY', password: 'Brooklyn', cameraActor: 'SecurityCamera1', name: 'sh3b', windows: 3}));
-missing('4.2.29', C2, 'camera with a mirror, sky, fog or corona in view', 'a camera frame against the original', 'the thirteen captured windows look into rooms (visual-acceptance.md "What stays")');
+add('4.2.29', C2, 'camera windows with a mirror, sky or fog in view', 'Island cs0 (sky in windows 1 and 2, the floor mirror in 3), Dockyard dk1 (sky), Area 51 Final a51f (fog in window 2) against the original\'s computer screens; no corona view is clean (docs/camera-view-census.md)', 'O1',
+  CAMERA({map: '01_NYC_UNATCOIsland', computer: 'ComputerSecurity0', user: 'SATCOM', password: 'UNATCO_001', cameraActor: 'SecurityCamera4', name: 'cs0', windows: 3}),
+  CAMERA({map: '09_NYC_Dockyard', computer: 'ComputerSecurity1', user: 'USFEMA', password: 'SECURITY', cameraActor: 'SecurityCamera7', name: 'dk1', windows: 3}),
+  CAMERA({map: '15_Area51_Final', computer: 'ComputerSecurity0', user: 'Area51', password: 'bravo13', cameraActor: 'SecurityCamera0', name: 'a51f', windows: 2, playArgs: ['--after-login-click', '520,430']}));
 // Both Strobe states at both cameras, one Play run per frame (each at its own clock); `strobeHeld`: each stored frame's hold record must show the flag
 // its name asks for, held through the shot, the view's camera and a level clock held over the shot.
 add('4.2.30', C2, '06_HongKong_WanChai_Underworld mirrored panes', 'the dance floor in the mirrored panes at a held Strobe against the original: both states (lit and dark) at two cameras, the floor seen only in the panes and two panes beside the direct floor', 'O1',
@@ -358,7 +361,7 @@ add('4.4.14', C4, 'datacube, keypad and computer screens', 'a datacube\'s inform
   TERMINAL({map: '14_OceanLab_Lab', computer: 'ComputerSecurity1', user: 'Oceanguard', password: 'Kraken', cameraActor: 'SecurityCamera0', name: 'cs1'}),
   TERMINAL({map: '02_NYC_BatteryPark', computer: 'ComputerSecurity2', user: 'NSF', password: 'righteous', cameraActor: 'SecurityCamera1', name: 'bp2'}),
   TERMINAL({map: '06_HongKong_WanChai_Market', computer: 'ComputerSecurity0', user: 'TAM', password: 'DRAGON', cameraActor: 'SecurityCamera2', name: 'hk0'}),
-  TERMINAL({map: '09_NYC_Ship', computer: 'ComputerSecurity3', user: 'SECURITY', password: 'Brooklyn', cameraActor: 'SecurityCamera1', name: 'sh3'}));
+  TERMINAL({map: '09_NYC_Ship', computer: 'ComputerSecurity3', user: 'SECURITY', password: 'Brooklyn', cameraActor: 'SecurityCamera1', name: 'sh3b'}));
 excluded('4.4.15', C4, 'Load Game, Save Game, QuickSave screens', 'the save-game directory screens', 'Stage 6 (saved games; native 3013)');
 excluded('4.4.16', C4, 'multiplayer menus and screens', 'the multiplayer join, host and in-game screens', 'multiplayer is the last priority and may stay unsupported (AGENTS.md)');
 
@@ -531,7 +534,9 @@ async function runTask(task) {
 
 // Stored originals a validator compares with when this checkout has them (it falls back to fabricated cases without them, which would
 // prove less than the criterion says), so the gate stages them and reports NO-ORIGINAL when they are absent.
-const VALIDATOR_ORIGINALS = {'weapon-attach': ['weapon/original-cases.json', 'weapon/original-cases-2.json', 'weapon/original-cases-3.json'],
+const VALIDATOR_ORIGINALS = {'weapon-attach': ['', '-2', '-3', '-4', '-5'].map(n => `weapon/original-cases${n}.json`),
+  'weapon-view-original': [...['original-trace-fpw.jsonl', 'original-trace-fpw.jsonl.calls.jsonl', 'original-trace-fpw.jsonl.strobe', 'watch-fpw.json', 'population-fpw.json',
+    'commands-fpw.json', 'hold-fpw.json', 'play-population.json'].map(file => `live-acceptance/00_Training/${file}`), 'acceptance/00_Training/fpw-original.png'],
   'galaxy-output-poll': ['training-load1', 'training-load2'].flatMap(poll => ['.json', '.pan.bin', '.poll.txt'].map(ext => `audio-output/${poll}${ext}`)),
   'galaxy-output-replay': ['audio-output/replay-training.bin']};
 const readJson = file => JSON.parse(readFileSync(file, 'utf8'));
@@ -736,7 +741,7 @@ const cameraPlays = new Map();
 async function cameraPlay(c, add) {
   const key = `${c.map}:${c.name}`;
   if (!cameraPlays.has(key)) cameraPlays.set(key, exec(process.execPath, ['scripts/camera-acceptance.mjs', 'play', '--map', c.map, '--computer', c.computer, '--user', c.user,
-    '--password', c.password, '--camera-actor', c.cameraActor, '--name', c.name, '--suffix', 'gate', '--antialias', 'off'], {limitSeconds: 1500}));
+    '--password', c.password, '--camera-actor', c.cameraActor, '--name', c.name, '--suffix', 'gate', '--antialias', 'off', ...(c.playArgs ?? [])], {limitSeconds: 1500}));
   const play = await cameraPlays.get(key);
   if (!play.counted) { play.counted = true; add(play); }
   return play;
