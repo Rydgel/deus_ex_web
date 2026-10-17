@@ -101,8 +101,8 @@ const loadPlan = () => existsSync(planPath) ? JSON.parse(readFileSync(planPath, 
 // `play` runs Play's frozen level to the same TimeSeconds before holding it).
 const timesPath = path.join(out, 'times.json');
 const loadTimes = () => existsSync(timesPath) ? JSON.parse(readFileSync(timesPath, 'utf8')) : {};
-// A frame keeps its own clock beside it: `original` writes <map>/<view>-time.txt (the level time the view was held at) next to each frame,
-// and `play` runs to the time of the views it takes when each has one. times.json keeps one time per map, overwritten by the next capture of
+// A frame keeps its own clock beside it: `original` writes <map>/<view>-time.txt (the level time read just before the view's shot, since
+// 2026-10-17; the time the level was held at in older stores) next to each frame, and `play` runs to each view's time when each has one. times.json keeps one time per map, overwritten by the next capture of
 // the map, so a frame and the clock beside it can come from different captures (docs/stage-4-exit-criteria.md "Stored originals").
 const timeFile = (map, view) => path.join(out, map, `${view}-time.txt`);
 // An effect's contribution (the pass or the zone the frame is judged for) is the frame with it less the frame without it. A view named
@@ -113,12 +113,18 @@ const isBase = name => /-base$/.test(name);
 const baseCommand = option('base-cmd', null), baseKind = option('base', null);
 const BASE_OFF = {fog: () => window.deusExViewer.showFog(false), detail: () => window.deusExViewer.detail({hide: true}), decal: () => window.deusExViewer.decals({hide: true})};
 const BASE_ON = {fog: () => window.deusExViewer.showFog(true), detail: () => window.deusExViewer.detail({hide: false}), decal: () => window.deusExViewer.decals({hide: false})};
+// A view's stored clock (<view>-time.txt), or null.
+const viewTimeOf = (map, view) => existsSync(timeFile(map, view.name)) ? Number(readFileSync(timeFile(map, view.name), 'utf8')) : null;
+// The clock Play holds its level at before the first view: the views' own times run forward in the order they were taken (each frame keeps the level
+// time read just before its shot, the original's clock running on at the held dilation between them), and Play steps its held clock to each view's
+// time before that view's shot; times.json's one time per map is the fallback of older stores.
 function heldTimeOf(map, views) {
-  const times = views.map(view => existsSync(timeFile(map, view.name)) ? Number(readFileSync(timeFile(map, view.name), 'utf8')) : null);
+  const times = views.map(view => viewTimeOf(map, view));
   const stored = times.filter(time => time !== null);
   if (!stored.length) return loadTimes()[map] ?? null;
-  if (stored.length !== times.length || stored.some(time => time !== stored[0]))
-    throw new Error(`${map}: the views were captured at different level times (${times.join(', ')}); Play holds one clock per run: take them in separate runs (--view)`);
+  if (stored.length !== times.length) throw new Error(`${map}: some views have a stored clock and some do not (${times.join(', ')}): take them in separate runs (--view)`);
+  if (times.some((time, i) => i && time < times[i - 1]))
+    throw new Error(`${map}: the views' clocks do not run forward in the order given (${times.join(', ')}); Play's clock only moves forward: order the views by their time`);
   return stored[0];
 }
 const HELD_DILATION = 0.001;
@@ -233,7 +239,7 @@ async function play() {
       const buffer = await page.evaluate(() => { const c = document.getElementById('scene'); return [c.width, c.height]; });
       if (buffer[0] !== WIDTH || buffer[1] !== HEIGHT || box.x !== 0 || box.y !== 0 || box.width !== WIDTH || box.height !== HEIGHT)
         throw new Error(`the scene canvas is ${box.width}x${box.height} at ${box.x},${box.y} (buffer ${buffer.join('x')}), not ${WIDTH}x${HEIGHT}`);
-      const shots = [];
+      const shots = [], viewHeld = new Map();
       for (const view of viewsOf(entry).filter(view => !isBase(view.name))) {
         // --camera-transit: the camera placed as the original's console places it, `set Location` and then, typed lines later, `set ViewRotation`:
         // frames are drawn at the new Location with the previous rotation, and what they draw is stamped LastRenderTime (with the level unfrozen,
@@ -244,6 +250,20 @@ async function play() {
         }
         await page.evaluate(([v, region]) => window.deusExViewer.viewProbe({location: v.location, rotation: v.rotation, region}), [view, region]);
         await frames(settleFrames);
+        // The view's own clock (heldTimeOf): the held level is run on to it at a twentieth of the speed (under a millisecond a frame), then held again.
+        const own = held !== null ? viewTimeOf(map, view) : null;
+        if (own !== null) {
+          const reached = await page.evaluate(async ({target, dilation}) => {
+            const probe = args => window.deusExViewer.viewProbe(args), frame = () => new Promise(r => requestAnimationFrame(r));
+            let state = await probe({});
+            if (state.timeSeconds >= target) return state.timeSeconds;
+            state = await probe({timeDilation: 0.05});
+            while (state.timeSeconds < target) { await frame(); state = await probe({}); }
+            state = await probe({timeDilation: dilation});
+            return state.timeSeconds;
+          }, {target: own + timeOffset, dilation: HELD_DILATION});
+          viewHeld.set(view.name, reached);
+        }
         // --player-pose: the player's animation as `original --player-state` measured it for this view (<view>-state.json); AnimRate 0 because
         // the player's own ticks follow the page's frames, not the held level (the security-camera captures write it the same way).
         if (preShotCommands.length) { await page.evaluate(lines => window.deusExViewer.viewProbe({exec: lines}), preShotCommands); await frames(Math.max(6, Math.round(preShotWait / 1000 * 60))); }
@@ -304,7 +324,7 @@ async function play() {
           await page.screenshot({path: path.join(dir, `${view.name}-play-bias${factor}_${units}_${depth}.png`), clip: {x: 0, y: 0, width: WIDTH, height: HEIGHT}});
         }
         if (strobe !== null) await page.evaluate(d => window.deusExViewer.viewProbe({timeDilation: d}), HELD_DILATION);
-        shots.push({view: view.name, camera: state, player: {location: probe.location, region: probe.region, state: probe.state, physics: probe.physics, anim: probe.anim}});
+        shots.push({view: view.name, time: viewHeld.get(view.name) ?? held, camera: state, player: {location: probe.location, region: probe.region, state: probe.state, physics: probe.physics, anim: probe.anim}});
       }
       writeFileSync(path.join(dir, 'play.json'), JSON.stringify({map, freeze, size: [box.width, box.height], ghost, timeTarget: target, timeHeld: held, shots, errors}, null, 1));
       console.log(map, `${shots.length} views`, ghost.state, held !== null ? `time ${held.toFixed(3)} (original ${heldTime.toFixed(3)}${timeOffset ? `, offset ${timeOffset}` : ""})` : '', errors.length ? `errors: ${errors.slice(0, 2).join(' | ')}` : '');
@@ -452,6 +472,21 @@ async function original() {
       console.log(map, 'held at TimeSeconds', times[map], 'dilation', live[0][3]);
     }
     if (process.argv.includes('--unfreeze')) post(['cmd set LevelInfo bPlayersOnly False', 'sleep 1500']);
+    // The level time at a shot: the live player's LevelInfo (its address read once: the walk over the object array takes seconds) and its TimeSeconds
+    // (+0x478) through dx-live-win's poll, which reads it without the walk. null when either read fails (the frame then keeps the load's held time).
+    let levelAddress = null;
+    const shotClock = () => {
+      try {
+        if (levelAddress === null) {
+          const m = execFileSync(game.WINE, [path.join(root, 'ad/build/dump-actor-win.exe'), 'JCDentonMale', 'Player:0x5d4:u32', 'Level:0xa8:u32'], {encoding: 'utf8', env: process.env})
+            .split('\n').map(line => /^JCDentonMale \S+ Player=0x([0-9a-f]+) Level=0x([0-9a-f]+)/.exec(line.trim())).find(m => m && m[1] !== '0');
+          levelAddress = m ? m[2] : '';
+        }
+        if (!levelAddress) return null;
+        const level = /level=(\S+)/.exec(execFileSync(game.WINE, [path.join(root, 'ad/build/dx-live-win.exe'), 'strobe', 'poll', '1', '0', levelAddress], {encoding: 'utf8', env: process.env}))?.[1];
+        return level === undefined || !Number.isFinite(Number(level)) ? null : Number(level);
+      } catch { return null; }
+    };
     // The views without the effect (<name>-base) come last: --base-cmd turns the effect off once, in this same level and at the same held clock.
     const ordered = [...viewsOf(entry).filter(view => !isBase(view.name)), ...viewsOf(entry).filter(view => isBase(view.name))];
     let baseDone = false;
@@ -502,7 +537,15 @@ async function original() {
           `cmd set DeusEx.JCDentonMale ViewRotation (Pitch=${pitch},Yaw=${yaw},Roll=${roll})`,
           ...(region ? [`cmd set DeusEx.JCDentonMale Region (Zone=ZoneInfo'${map}.${region.zone}',iLeaf=${region.iLeaf},ZoneNumber=${region.zoneNumber})`] : []),
           'sleep 1500', ...(process.argv.includes('--freeze-player') ? ['cmd set DeusEx.JCDentonMale AnimRate 0', 'sleep 400'] : []),
-          ...preShotCommands.flatMap(line => [`cmd ${line}`, 'sleep 300']), ...(preShotCommands.length && preShotWait > 300 ? [`sleep ${preShotWait - 300}`] : []), ...(strobe === null ? ['shot', 'sleep 900'] : [])]);
+          ...preShotCommands.flatMap(line => [`cmd ${line}`, 'sleep 300']), ...(preShotCommands.length && preShotWait > 300 ? [`sleep ${preShotWait - 300}`] : [])]);
+        // A free-running view's own clock: the held level runs on at TimeDilation 0.001 while the read-backs and the earlier views take their seconds
+        // (a minute on a loaded host), and an animated light follows it (an LT_Pulse of period 8 turns 4.4 times a second of level time), so the level time
+        // is read just before the shot (dx-live-win's poll of the live LevelInfo, as for a held-Strobe view) and kept as the frame's clock; `play` steps
+        // its held clock to each view's own time. The held time of the load stays the fallback when the read fails.
+        if (strobe === null) {
+          frameTime = shotClock();
+          post(['shot', 'sleep 900']);
+        }
         // --strobe-poll on a view with no _s0/_s1 suffix: the free-running flag at this camera, 120 samples 5 ms apart (<name>-strobe.txt).
         if (strobe === null && process.argv.includes('--strobe-poll')) {
           const tool = args => execFileSync(game.WINE, [path.join(root, 'ad/build/dx-live-win.exe'), 'strobe', ...args], {encoding: 'utf8', env: process.env});
@@ -597,7 +640,7 @@ async function original() {
           writeFileSync(path.join(dir, `${view.name}-decals.json`), JSON.stringify({map, view: view.name, timeSeconds: loadTimes()[map], shadows}, null, 1));
         }
       }
-      console.log(map, view.name, taken.length ? `${taken[0].width}x${taken[0].height}` : 'NO SHOT');
+      console.log(map, view.name, taken.length ? `${taken[0].width}x${taken[0].height} at ${readFileSync(timeFile(map, view.name), 'utf8').trim()}` : 'NO SHOT');
       if (taken.length && (taken[0].width !== WIDTH || taken[0].height !== HEIGHT)) throw new Error(`${map} ${view.name}: the original's frame is ${taken[0].width}x${taken[0].height}, not ${WIDTH}x${HEIGHT}`);
     }
     if (pinDone) await pinDone;
