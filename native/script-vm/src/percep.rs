@@ -725,9 +725,12 @@ impl Run {
         if check() {
             unsafe { js_percep_begin(self.frame, node, receiver) };
         }
-        let flag = |i: u32, default: bool| if argc > i { nothing & (1 << i) == 0 && values[i as usize] != 0.0 } else { default };
-        // Number(undefined) is NaN (UNDEF_F64 is a NaN).
-        let visibility = if argc > 1 { values[1] } else { 1.0 };
+        // execAICanSee 0x103c8270 pre-stores each slot before stepping its token (visibility 1.0f, the flags 1, 1, 0, 1): an EX_Nothing
+        // argument keeps that default, as an omitted tail does (CheckEnemyParams' AICanSee(checkPawn, , false, false, true, true)).
+        // (A JavaScript leaf's undefined float is UNDEF_F64 as EX_Nothing is: the default, as execAICanSee's opt reads both.)
+        let given = |i: u32| argc > i && nothing & (1 << i) == 0;
+        let flag = |i: u32, default: bool| if given(i) { values[i as usize] != 0.0 } else { default };
+        let visibility = if argc > 1 && values[1].to_bits() != UNDEF_F64_BITS { values[1] } else { 1.0 };
         let checks = [flag(2, true), flag(3, true), flag(4, false), flag(5, true)];
         match self.ai_can_see_body(receiver, other, visibility, checks) {
             Ok(value) => {
