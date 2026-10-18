@@ -182,14 +182,24 @@ function compare() {
 // .work/live-acceptance/<map>/phonemes-<tag>.json for `live-acceptance.mjs play --phonemes` (a measured host input, docs/lip-sync.md).
 const MOUTHS = {MouthA: 'A', MouthE: 'E', MouthF: 'F', MouthM: 'M', MouthO: 'O', MouthT: 'T', MouthU: 'U', MouthClosed: 'X'};
 function phonemes() {
+  // (--map: a live scene's map without a SCENES entry, the Stage 5 conversation scenes of scripts/validate-stage5-live.mjs)
   const scene = SCENES[option('scene', 'meetpaul')], tag = option('tag', 'cv');
-  const dir = path.join(root, '.work/live-acceptance', scene.map);
+  const dir = path.join(root, '.work/live-acceptance', option('map', scene.map));
   const parse = line => JSON.parse(line.replace(/-?nan\([a-z0-9]+\)|-?nan\b|-?inf\b/gi, 'null'));
   const rows = readFileSync(path.join(dir, `original-trace-${tag}.jsonl`), 'utf8').trim().split('\n').map(parse).filter(row => row.unfrozen >= 1);
   const out = [], last = {}, lastFrame = {};
   let jumps = 0, restarts = 0;
+  // A trace with the speakers' nextPhoneme (live-acceptance.mjs --inventory: `NextPh`, the FString the audio update writes) gives the letters themselves:
+  // the value a row holds is the one LipSynch read during that tick (written by the update after the previous one), fed before that tick.
+  const measured = new Set(), heldLetter = {};
   for (const row of rows) for (const [name, actor] of Object.entries(row.actors)) {
-    if (actor.BSeq0 === undefined) continue;
+    if (actor.NextPh === undefined) continue;
+    measured.add(name);
+    if (actor.NextPh !== (heldLetter[name] ?? '')) out.push({n: row.unfrozen, name, letter: actor.NextPh});
+    heldLetter[name] = actor.NextPh;
+  }
+  for (const row of rows) for (const [name, actor] of Object.entries(row.actors)) {
+    if (actor.BSeq0 === undefined || measured.has(name)) continue;
     const sequence = actor.BSeq0 === 'None' || actor.BSeq0 === null ? null : actor.BSeq0;
     if (sequence !== (last[name] ?? null) && sequence in MOUTHS) {
       // Pawn.LipSynch's end of speech (`else if (bWasSpeaking)`) tweens MouthClosed with `tweentime`, a local that only the speaking branch assigns: 0.
@@ -206,6 +216,8 @@ function phonemes() {
     }
     last[name] = sequence; lastFrame[name] = actor.BFrame0;
   }
+  out.sort((a, b) => a.n - b.n);
+  if (measured.size) console.log(`${measured.size} speakers' letters read from their nextPhoneme`);
   writeFileSync(path.join(dir, `phonemes-${option('out', tag)}.json`), JSON.stringify(out));
   if (jumps || restarts) console.log(`${jumps} end-of-speech jumps to MouthClosed left out, ${restarts} restarts of the blended sequence taken as letters`);
   const by = {}; for (const e of out) by[e.name] = (by[e.name] ?? 0) + 1;

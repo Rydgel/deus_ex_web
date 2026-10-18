@@ -87,6 +87,7 @@ export function gcPushGC(object, services = {}) {
     if (typeof services.allocateObject !== 'function' || typeof services.constructUObject !== 'function')
       fail('GC.PushGC requires services.allocateObject/constructUObject', {kind: 'SERVICE'});
     node = services.allocateObject({outer: self, size: GC.size});
+    if (globalThis.__gcAllocLog) globalThis.__gcAllocLog.push({tick: globalThis.__liveTick ?? null, window: globalThis.__gcWindow ?? null, stack: new Error('gc alloc').stack});   // (live-acceptance.mjs play --gc-trace)
     if (!node) return depth;
     gcConstructGC(node, self, L, services);
   }

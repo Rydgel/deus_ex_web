@@ -131,7 +131,7 @@
  *                                 (every `retname` return offers its object, an UnhashObject's too: a name freed before its
  *                                 first tick exit could bind to the dying object, whose XLevel is still set)
  *       Types: f f3 i3 u8 u16 u32 bit(mask) name obj state, chain[:max] (a linked list through the field's offset, Actor.Inventory
- *       +0xc0 the owner's first item and each item's next: the names in order, at most max, default 32).
+ *       +0xc0 the owner's first item and each item's next: the names in order, at most max, default 32), str (an FString's text).
  *       Offsets are the linked UProperty offsets (see dump-actor-win.c).
  *
  * Retail offsets (docs/script-level-tick.md): ULevel InTick +0x108, TickTag
@@ -388,6 +388,18 @@ static void print_fields(FILE *out, const unsigned char *block, size_t size, uin
     else if (!strcmp(f->type, "bit")) { memcpy(&u, p, 4); fprintf(out, "%d", (u & f->mask) ? 1 : 0); }
     else if (!strcmp(f->type, "name")) { memcpy(&u, p, 4); fprintf(out, "\"%s\"", name_text(u)); }
     else if (!strcmp(f->type, "obj")) { memcpy(&u, p, 4); fprintf(out, "\"%s\"", u ? object_name(u) : "None"); }
+    else if (!strcmp(f->type, "str")) {
+      /* an FString (TArray<TCHAR>: +0 Data, +4 ArrayNum with the terminator, +8 ArrayMax): its text, at most 32 characters, as ASCII
+         (Pawn.nextPhoneme/lastPhoneme, the one-letter strings Galaxy's audio update and Pawn.LipSynch write) */
+      unsigned data, num; memcpy(&data, p, 4); memcpy(&num, p + 4, 4);
+      fprintf(out, "\"");
+      for (unsigned k = 0; data && k + 1 < num && k < 32; k++) {
+        unsigned short ch = 0;
+        if (!read_mem(data + k * 2, &ch, 2) || !ch) break;
+        if (ch == '"' || ch == '\\') fprintf(out, "\\%c", ch); else if (ch >= 0x20 && ch < 0x7f) fprintf(out, "%c", ch); else fprintf(out, "\\u%04x", ch);
+      }
+      fprintf(out, "\"");
+    }
     else if (!strcmp(f->type, "chain")) {
       /* a linked list through one object field (Actor.Inventory +0xc0: an owner's first item, then each item's next): the names in order,
          at most `mask` of them (default 32), stopping at a repeat */
