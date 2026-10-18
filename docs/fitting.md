@@ -214,6 +214,26 @@ every sine-table entry exactly before connecting this path to Play.
 All 704 coordinate cases and all 16,384 sine-table entries match exactly,
 including signed zero. The full table's little-endian float32 SHA-256 is
 `9893d14bd21e5c4194832659571b30363ddfb08d468ed662a4b6d5ae172262dc`.
+
+**Entry 8192 is the real x87's, not the oracle's (2026-10-18).** appSin is a bare
+`fsin` (thunk `0x101033a0`), and FSIN reduces its operand with a 66-bit pi. At entry
+8192 the angle is the double nearest pi, and FSIN returns pi66 - pi =
+1.2246063538223773e-16 (float word `0x250d3000`), where a correctly rounded sine
+(Math.sin, Python's math.sin and Unicorn's softfloat FSIN, which goes through a host
+double) gives 1.2246467991473532e-16 (`0x250d3132`). Two measurements: the
+constructor's own sequence (`fild`, `fmul qword [0x10178040]`, `fstp qword`, `fsin`,
+`fstp dword`) for all 16,384 entries on the Mac's x87 through Rosetta 2
+(`tools/x87-sintable-probe.c` under CrossOver, at precision control 53 and 64: this is
+the only entry that differs), and the original's own play (Stage 5 capture `cmb5`:
+`Tantalus`'s momentum, `Vector(ViewRotation)` at yaw 32768, gave the Terrorist a
+`Velocity.Y` of -3.06962686e-15 that only this entry reproduces; Play had
+-3.0697283e-15). The entry is the sine of yaw 32768..32771 and the cosine of
+16384..16387, so every rotator at a right angle reads it. `coords.mjs`
+(`HARDWARE_SINE_WORDS`) writes the measured word, and the Unicorn oracles write it
+over their tables (`native-collision-oracle.py` `HARDWARE_TRIG`: when the
+constructor's sine loop ends, and over the probes' own math.sin tables). The table's
+SHA-256 is now `b8d756044134efb1bbedbe2b842138d6b8d8dc970ef1a69edd0d03cb07ece10c`.
+Unverified: the Linux host's AMD x87 (its captures predate this entry's change).
 Node unit tests retain original coordinate captures and that table hash;
 `browser-tests/native-math.spec.mjs` verifies the same hash and a combined
 transform capture in Chromium. The Chromium check passes.

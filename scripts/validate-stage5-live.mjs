@@ -27,8 +27,16 @@
  *         stepped into the line, and the others miss; no kill.
  *   cmb4  cmb1's pose with BallisticArmor instead of the pistol: picked up, put in hand (ActivateBelt 1) and activated by the Enter edge at 180
  *         (ParseLeftClick: an activatable inHand's Activate); 900 ticks of the Terrorists' fire on an armored player.
+ *   cmb5  a body found by a pawn that was not fighting: Terrorist16 on the statue's terrace killed at tick 20 by DeusExPlayer.Tantalus from a ledge
+ *         900 units east, out of every NSF pawn's view; 900 ticks. The stored original: TerroristCarcass1 at 98 (its Inventory chain: the pistol, its
+ *         ammo and the combat knife), the patrolling Terrorist21 meets it at 512 (CarcassTimer 120, Seeking, SeekType 4: SEEKTYPE_Carcass).
+ *   cmb6  cmb1's inputs with the carcass watched; the stored original: the Terrorists' own fire kills ThugMale7 at 395 (ThugMale2Carcass0) and the
+ *         player's three shots miss Terrorist0.
+ *   cmb7  cmb2's pose with a MedKit picked up too (belt slot 2), shots at 300 and 360, the MedKit put in hand at 650 and used by the Enter edge at
+ *         700; the stored original: the second shot kills Terrorist0, the others attack, the player is hurt from 548 and healed to 100 at 701.
+ * A scene's `carcasses` are watched from the tick they appear (--carcass-watch: the tracer's late-watch, Play's lazy lookup), with their Inventory chain.
  * cmb1's stored original: Terrorist0 and ThugMale7 seek the player from tick 41 and attack from 178; the player's first shot (420) kills Terrorist0
- * (TerroristCarcass1 at 469). */
+ * (TerroristCarcass1 at 469). cmb3's: the Terrorists' fire kills the player at 863 (Dying, DeathFront through 900). */
 import {spawn} from 'node:child_process';
 import {existsSync, mkdirSync, readFileSync, writeFileSync} from 'node:fs';
 import path from 'node:path';
@@ -41,7 +49,7 @@ const option = name => { const i = argv.indexOf(`--${name}`); return i < 0 ? nul
 const PISTOL = yaw => `20:summon DeusEx.WeaponPistol|50:set DeusEx.JCDentonMale ViewRotation (Pitch=-10130,Yaw=${yaw},Roll=0)|90:ParseRightClick|130:ActivateBelt 1`;
 const SHOTS = ticks => ticks.map(t => `${t}:@down Enter|${t}:@up Enter`).join('|');
 // `KillAll FlyGenerator` first: the load's chance FlyGenerators (10% per fly-making decoration) removed in both programs, as row 4.2.13 does.
-const PLACE = (x, y, z, yaw) => `KillAll FlyGenerator|ghost|set DeusEx.JCDentonMale Location (X=${x},Y=${y},Z=${z})|walk|set DeusEx.JCDentonMale ViewRotation (Pitch=0,Yaw=${yaw},Roll=0)`;
+const PLACE = (x, y, z, yaw, pitch = 0) => `KillAll FlyGenerator|ghost|set DeusEx.JCDentonMale Location (X=${x},Y=${y},Z=${z})|walk|set DeusEx.JCDentonMale ViewRotation (Pitch=${pitch},Yaw=${yaw},Roll=0)`;
 export const SCENES = {
   cmb1: {map: '01_NYC_UNATCOIsland', ticks: 900, early: PLACE(10146.3, 685.2, -88, 40960),
     cmds: `${PISTOL(40960)}|170:set DeusEx.JCDentonMale ViewRotation (Pitch=-536,Yaw=40960,Roll=0)|${SHOTS([420, 480, 540])}`},
@@ -53,6 +61,20 @@ export const SCENES = {
   cmb4: {map: '01_NYC_UNATCOIsland', ticks: 900, early: PLACE(10146.3, 685.2, -88, 40960),
     cmds: '20:summon DeusEx.BallisticArmor|50:set DeusEx.JCDentonMale ViewRotation (Pitch=-10130,Yaw=40960,Roll=0)|90:ParseRightClick|130:ActivateBelt 1'
       + `|170:set DeusEx.JCDentonMale ViewRotation (Pitch=0,Yaw=40960,Roll=0)|${SHOTS([180])}`},
+  // a body found by a pawn that was not fighting: Terrorist16 (standing on the statue's terrace at (321, -961, 512), facing yaw 28425) killed at tick 20 by
+  // DeusExPlayer.Tantalus (the cheat: every health 0 and TakeDamage from the player, no shot, so no WeaponFire or LoudNoise from the player) from the ledge
+  // 900 units east of it and 287 above, out of every NSF pawn's view; the patrolling Terrorist21 (1,032 units off: out of the death cry's and the distress's
+  // 800-unit hearing) walks its route and meets the carcass (CheckCarcassPresence). The carcass and its Inventory chain are watched from the tick it appears.
+  cmb5: {map: '01_NYC_UNATCOIsland', ticks: 900, early: PLACE(1221, -961, 799, 32768, -3632), cmds: '20:Tantalus', carcasses: ['TerroristCarcass1']},
+  // cmb1's inputs again (the pistol's first shot at 420 killed Terrorist0 in both captures of cmb1), with the carcass the kill spawns watched: its Inventory chain
+  cmb6: {map: '01_NYC_UNATCOIsland', ticks: 900, early: PLACE(10146.3, 685.2, -88, 40960),
+    cmds: `${PISTOL(40960)}|170:set DeusEx.JCDentonMale ViewRotation (Pitch=-536,Yaw=40960,Roll=0)|${SHOTS([420, 480, 540])}`, carcasses: ['TerroristCarcass1']},
+  // shots near unaware guards, then a MedKit: cmb2's pose (700 units behind Terrorist0); the pistol and a MedKit summoned and picked up facing away (the pistol in
+  // belt slot 1, the MedKit in 2), the pistol drawn and turned on Terrorist0 at 200, Enter edges at 300 and 360; at 650 the MedKit is put in hand (ActivateBelt 2)
+  // and the Enter edge at 700 uses it (ParseLeftClick: inHand.Activate, MedKit's Activated state: HealPlayer(healAmount, True), UseOnce)
+  cmb7: {map: '01_NYC_UNATCOIsland', ticks: 900, early: PLACE(8951.3, 190.2, -84, 32768),
+    cmds: '20:summon DeusEx.WeaponPistol|50:set DeusEx.JCDentonMale ViewRotation (Pitch=-10130,Yaw=32768,Roll=0)|90:ParseRightClick|100:summon DeusEx.MedKit|140:ParseRightClick'
+      + `|170:ActivateBelt 1|200:set DeusEx.JCDentonMale ViewRotation (Pitch=-536,Yaw=0,Roll=0)|${SHOTS([300, 360])}|650:ActivateBelt 2|${SHOTS([700])}`},
 };
 export const SCENE_FLAGS = ['--no-ghost', '--perception', '--player-gear', '--player-health', '--los-flag'];
 // The replay's measured inputs beyond the trace rows: --render-history writes each pawn's LastRenderTime at the original's last frozen tick (the frames the
@@ -68,7 +90,9 @@ export const CAPTURE_CONFIG = ['call-ticks 1 900', 'call-frames', 'call 0x101578
 /** The original's capture command of a scene (for the doc and a recapture). */
 export const captureCommand = tag => {
   const s = SCENES[tag];
-  return `scripts/live-original.sh ${s.map} --tag ${tag} --ticks ${s.ticks} --delta 0.0166666675 ${SCENE_FLAGS.join(' ')} --registry --extra-config .work/live-acceptance/cfg/combat-900.cfg --early-cmds "${s.early}" --cmds "${s.cmds}"`;
+  // (--carcass-watch: the carcasses the scene spawns, bound by the tracer when they appear: tools/dx-live-win.c late-watch)
+  return `scripts/live-original.sh ${s.map} --tag ${tag} --ticks ${s.ticks} --delta 0.0166666675 ${SCENE_FLAGS.join(' ')} --registry --extra-config .work/live-acceptance/cfg/combat-900.cfg`
+    + `${s.carcasses ? ` --carcass-watch ${s.carcasses.join(',')}` : ''} --early-cmds "${s.early}" --cmds "${s.cmds}"`;
 };
 
 const exec = (args, limitSeconds) => new Promise(resolve => {

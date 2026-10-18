@@ -316,8 +316,10 @@ export function liveProbe(game, args = {}) {
   };
   if (args.replay) {
     const { watch = [], ticks, hold = true, warm = 3, commands = [] } = args.replay;
-    const actors = watch.map(({ names, props }) => ({ props, items: names.map(name => [name, byName(name)]) }));
-    for (const group of actors) for (const [name, actor] of group.items) if (!actor) throw new Error(`liveProbe: no actor ${name}`);
+    // A `late` group (live-acceptance.mjs --carcass-watch) names actors the scene spawns: each is looked up at every row until the level holds
+    // it, and its rows start there (the original's tracer binds the same name at the tick exit after its AddObject, tools/dx-live-win.c late-watch).
+    const actors = watch.map(({ names, props, late = false }) => ({ props, late, items: names.map(name => [name, byName(name)]) }));
+    for (const group of actors) for (const [name, actor] of group.items) if (!actor && !group.late) throw new Error(`liveProbe: no actor ${name}`);
     const state = game.liveReplay = {
       ticks, hold, warm, index: 0, rows: [], cursor: 0, current: null, preFrees: args.objectTrace?.pending ?? null,
       // console commands typed into the original between two ticks ({after, text}: after that many ticks), run here the same way through the
@@ -330,10 +332,18 @@ export function liveProbe(game, args = {}) {
       measuredSpeech: Boolean(args.replay.phonemes),
       snapshot() {
         const result = {};
-        for (const group of actors) for (const [name, actor] of group.items) {
+        for (const group of actors) for (const item of group.items) {
+          if (!item[1] && group.late) item[1] = byName(item[0]);
+          const [name, actor] = item;
+          if (!actor) continue;
           const row = {};
           for (const prop of group.props) {
-            if (prop === '$state') {
+            if (prop === '$inventoryChain') {
+              // the Inventory linked list (Actor.Inventory, then each item's own), names in order, as the tracer's `chain` field (at most 32, no repeat)
+              const chain = [];
+              for (let held = runtime.readNamed(actor, 'Inventory'); held && chain.length < 32 && !chain.includes(held.name); held = runtime.readNamed(held, 'Inventory')) chain.push(held.name);
+              row[prop] = chain;
+            } else if (prop === '$state') {
               const instance = runtime.instance(actor), node = instance?.state ? (instance.state.stateNode ?? instance.cls) : null;
               row.State = scriptGetStateName(node);
             } else if (prop.startsWith('$Al')) {

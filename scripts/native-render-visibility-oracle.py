@@ -123,6 +123,7 @@ class BoundsOracle(light_oracle.native.NativeCollision):
         table = b''.join(struct.pack('<f', math.sin(i * 0.0003834951969714103)) for i in range(16384))
         assert hashlib.sha256(table).hexdigest() == '9893d14bd21e5c4194832659571b30363ddfb08d468ed662a4b6d5ae172262dc'
         self.cpu.mem_write(0x101b32a4, table)
+        self.cpu.mem_write(0x101b32a4 + 4 * 8192, struct.pack('<I', 0x250d3000))  # the measured x87 FSIN entry (native-collision-oracle.py HARDWARE_TRIG)
 
     def box(self, address, value):
         self.write(address, '6fB', *value['min'], *value['max'], int(value.get('valid', True)))

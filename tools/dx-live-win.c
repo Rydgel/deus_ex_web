@@ -115,7 +115,12 @@
  *                                 call-ticks' last; `namearg <i> <off>` on a call logs the object name at *(args[i]+off) (off -1: args[i]
  *                                 itself) as argName, at the call and at its return (re-read: the Hit a MoveActor wrote); `ecxwords <n> <off>` logs n dwords at ECX+off at the return
  *         watch <A,B,..> <Field:off:type[:mask]>...   fields of those actors
- *       Types: f f3 i3 u8 u16 u32 bit(mask) name obj state.
+ *         late-watch <A,B,..> <Field:...>...   the same, for actors the level may not hold yet (a carcass spawned mid-scene): a name
+ *                                 not found when the tracer attaches is bound at the first tick exit after an object of that name, spawned
+ *                                 into the traced level, appears (offered at a `retname` call's return at UObject::AddObject, and by the
+ *                                 GObjObjects slots that changed since the last tick); the actor's rows start at that tick
+ *       Types: f f3 i3 u8 u16 u32 bit(mask) name obj state, chain[:max] (a linked list through the field's offset, Actor.Inventory
+ *       +0xc0 the owner's first item and each item's next: the names in order, at most max, default 32).
  *       Offsets are the linked UProperty offsets (see dump-actor-win.c).
  *
  * Retail offsets (docs/script-level-tick.md): ULevel InTick +0x108, TickTag
@@ -235,8 +240,13 @@ typedef struct { char field[48]; unsigned offset; char type[8]; unsigned mask; }
 typedef struct {
   char names[2048];
   FieldSpec fields[192]; int field_count;
+  int late;   /* `late-watch`: a name not on the level when the tracer attaches is bound when an object of that name appears (a carcass spawned mid-scene) */
 } WatchGroup;
 typedef struct { char name[96]; uintptr_t address; int group; } Watched;
+/* A late-watch name not bound yet: `candidate` is an object of that name the registry gained (an AddObject return, or a slot of GObjObjects
+   that changed since the last tick), bound at the next tick exit once its XLevel is the traced level (SpawnActor sets it after AddObject). */
+typedef struct { char name[96]; int group; uintptr_t candidate; int bound; } LateName;
+static LateName late_names[64]; static int late_count;
 
 static char out_path[512] = "trace.jsonl", player_name[96] = "JCDentonMale";
 static int release_at = 1, run_ticks = 100, pre_watch = -1, max_seconds = 0;
@@ -329,8 +339,8 @@ static int read_config(const char *path) {
       }
       call_count++;
     }
-    else if (!strcmp(tok, "watch") && group_count < 16) {
-      WatchGroup *g = &groups[group_count++];
+    else if ((!strcmp(tok, "watch") || !strcmp(tok, "late-watch")) && group_count < 16) {
+      WatchGroup *g = &groups[group_count++]; g->late = !strcmp(tok, "late-watch");
       char *n = strtok(NULL, " \t\r\n"); if (!n) continue;
       strncpy(g->names, n, sizeof(g->names) - 1);
       for (char *f; (f = strtok(NULL, " \t\r\n")) && g->field_count < 192;) if (parse_field(f, &g->fields[g->field_count])) g->field_count++;
@@ -359,6 +369,19 @@ static void print_fields(FILE *out, const unsigned char *block, size_t size, uin
     else if (!strcmp(f->type, "bit")) { memcpy(&u, p, 4); fprintf(out, "%d", (u & f->mask) ? 1 : 0); }
     else if (!strcmp(f->type, "name")) { memcpy(&u, p, 4); fprintf(out, "\"%s\"", name_text(u)); }
     else if (!strcmp(f->type, "obj")) { memcpy(&u, p, 4); fprintf(out, "\"%s\"", u ? object_name(u) : "None"); }
+    else if (!strcmp(f->type, "chain")) {
+      /* a linked list through one object field (Actor.Inventory +0xc0: an owner's first item, then each item's next): the names in order,
+         at most `mask` of them (default 32), stopping at a repeat */
+      uintptr_t seen[64]; int n = 0, most = f->mask > 1 && f->mask <= 64 ? (int)f->mask : 32;
+      memcpy(&u, p, 4); fprintf(out, "[");
+      while (u && n < most) {
+        int again = 0; for (int k = 0; k < n; k++) if (seen[k] == u) again = 1;
+        if (again) break;
+        seen[n] = u; fprintf(out, "%s\"%s\"", n ? "," : "", object_name(u)); n++;
+        u = read_u32(u + f->offset);
+      }
+      fprintf(out, "]");
+    }
     else if (!strcmp(f->type, "state")) {
       /* FStateFrame* at the field offset (Actor +0x0c): StateNode at +0x18, then its name; Node (+4) is the running function/state code. */
       memcpy(&u, p, 4);
@@ -413,7 +436,52 @@ static int resolve_actors(void) {
         }
     }
   }
+  /* late-watch names the level does not hold yet: bound when they appear (late_offer, late_bind) */
+  for (int g = 0; g < group_count; g++) {
+    if (!groups[g].late) continue;
+    char list[2048]; strncpy(list, groups[g].names, sizeof(list) - 1); list[sizeof(list) - 1] = 0;
+    for (char *n = strtok(list, ","); n; n = strtok(NULL, ",")) {
+      int held = 0; for (int i = 0; i < watched_count; i++) if (watched[i].group == g && !strcmp(watched[i].name, n)) held = 1;
+      if (!held && late_count < 64) { LateName *l = &late_names[late_count++]; memset(l, 0, sizeof(*l)); strncpy(l->name, n, sizeof(l->name) - 1); l->group = g; }
+    }
+  }
   return 1;
+}
+
+/* An object the registry gained (its name is set: AddObject's return, or a changed slot): a candidate for a late-watch name. */
+static int late_pending(void) { for (int i = 0; i < late_count; i++) if (!late_names[i].bound) return 1; return 0; }
+static void late_offer(uintptr_t obj) {
+  if (!obj || !late_pending()) return;
+  const char *name = object_name(obj);
+  for (int i = 0; i < late_count; i++) if (!late_names[i].bound && !strcmp(late_names[i].name, name)) late_names[i].candidate = obj;
+}
+/* The slots of GObjObjects that changed since the last tick exit are offered too: one read of the pointer array per tick while a name is
+   pending (a slot reused at the same address is missed there; an AddObject breakpoint, `call ... retname` at UObject::AddObject, offers
+   every new object at its return). The first call takes the array the tracer attached to. */
+static unsigned *late_slots; static unsigned late_slot_count;
+static void late_scan(void) {
+  if (!late_pending()) return;
+  uintptr_t gog = read_u32(core_base + OFF_GOG_DATA); unsigned count = read_u32(core_base + OFF_GOG_COUNT);
+  if (!gog || !count || count > (1u << 22)) return;
+  unsigned *now = (unsigned *)malloc(count * 4);
+  if (!now || !read_mem(gog, now, count * 4)) { free(now); return; }
+  if (late_slots) for (unsigned s = 0; s < count; s++) if (now[s] && (s >= late_slot_count || now[s] != late_slots[s])) late_offer(now[s]);
+  free(late_slots); late_slots = now; late_slot_count = count;
+}
+/* At a tick exit: a candidate on the traced level becomes a watched actor, printed from this tick on. */
+static void late_bind(void) {
+  for (int i = 0; i < late_count; i++) {
+    LateName *l = &late_names[i];
+    if (l->bound || !l->candidate) continue;
+    uintptr_t xlevel = read_u32(l->candidate + 0xac);
+    if (!xlevel) continue;   /* not spawned into a level yet: asked again at the next tick exit */
+    if (xlevel != level_ptr || strcmp(object_name(l->candidate), l->name)) { l->candidate = 0; continue; }
+    if (watched_count >= 1024) continue;
+    strncpy(watched[watched_count].name, l->name, sizeof(watched[0].name) - 1);
+    watched[watched_count].address = l->candidate; watched[watched_count].group = l->group; watched_count++;
+    l->bound = 1;
+    fprintf(stderr, "late-watch: %s bound (0x%lx)\n", l->name, (unsigned long)l->candidate);
+  }
 }
 
 /* ---------------- debugger loop ---------------- */
@@ -593,7 +661,7 @@ static int handle_call_event(HANDLE th, DWORD tid, uintptr_t where, int unfrozen
       }
     }
     if (c->namearg && c->namearg - 1 < c->nwords) { uintptr_t o = c->namearg_off < 0 ? now[c->namearg - 1] : (now[c->namearg - 1] ? read_u32(now[c->namearg - 1] + c->namearg_off) : 0); fprintf(cout, ",\"argName\":\"%s\"", object_name(o)); }   /* namearg at the return too: the Hit's Actor a MoveActor just wrote */
-    if (c->retname) { char text[96]; strncpy(text, object_name(p->ecx), sizeof(text) - 1); text[sizeof(text) - 1] = 0; fprintf(cout, ",\"ecxName\":\"%s\"", text); fprintf(cout, ",\"ecxClass\":\"%s\"", object_name(read_u32(p->ecx + 0x24))); fprintf(cout, ",\"ecxIndex\":%u", read_u32(p->ecx + 0x04)); }
+    if (c->retname) { char text[96]; strncpy(text, object_name(p->ecx), sizeof(text) - 1); text[sizeof(text) - 1] = 0; fprintf(cout, ",\"ecxName\":\"%s\"", text); fprintf(cout, ",\"ecxClass\":\"%s\"", object_name(read_u32(p->ecx + 0x24))); fprintf(cout, ",\"ecxIndex\":%u", read_u32(p->ecx + 0x04)); late_offer(p->ecx); }
     if (c->ecx_n) { unsigned w[64]; memset(w, 0, sizeof(w)); read_mem(p->ecx + c->ecx_off, w, 4 * c->ecx_n); fprintf(cout, ",\"ecxWords\":"); print_words(cout, w, c->ecx_n); fprintf(cout, ",\"ecxFloats\":"); print_floats(cout, w, c->ecx_n); }
     if (c->ecxobj) fprintf(cout, ",\"ecxObj\":\"%s\"", object_name(read_u32(p->ecx + c->ecxobj_off)));
     if (c->abs_count) {
@@ -741,7 +809,8 @@ static int do_trace(const char *config) {
   }
   names_table = read_u32(core_base + OFF_NAMES_DATA);
   if (!resolve_actors()) return 1;
-  fprintf(stderr, "level 0x%lx info 0x%lx player 0x%lx, %d watched\n", (unsigned long)level_ptr, (unsigned long)level_info, (unsigned long)player_ptr, watched_count);
+  late_scan();
+  fprintf(stderr, "level 0x%lx info 0x%lx player 0x%lx, %d watched, %d late-watch names pending\n", (unsigned long)level_ptr, (unsigned long)level_info, (unsigned long)player_ptr, watched_count, late_count);
   FILE *out = fopen(out_path, "w");
   if (!out) { fprintf(stderr, "cannot write %s\n", out_path); return 1; }
   char resume_path[640]; snprintf(resume_path, sizeof(resume_path), "%s.resume", out_path);
@@ -845,6 +914,7 @@ static int do_trace(const char *config) {
           unsigned vp_x = 0, vp_y = 0;   /* the player's UViewport: SizeX +0x78, SizeY +0x7c (Player at +0x5d4) */
           { uintptr_t vp = player_ptr ? read_u32(player_ptr + 0x5d4) : 0; if (vp) { vp_x = read_u32(vp + 0x78); vp_y = read_u32(vp + 0x7c); } }
           int record = pre_watch < 0 || released || tick > release_at - pre_watch;
+          if (late_count) { late_scan(); late_bind(); }
           if (record) {
             /* AIProcess (Engine 0x10384080) stops once 2 ms of rdtsc have passed since its start (K = -0.002 s at 0x1042d170
                over GSecondsPerCycle, checked after each receiver that did work, 0x1038447e..0x1038449a) and leaves firstProcess at

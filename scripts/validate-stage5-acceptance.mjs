@@ -78,9 +78,13 @@ const stage4Row = id => {
   stage4 ??= JSON.parse(readFileSync(file, 'utf8'));
   return (stage4.criteria ?? stage4.rows ?? [])[id] ?? (Array.isArray(stage4.criteria) ? stage4.criteria.find(r => r.id === id) : null);
 };
+// A validator several rows name (a live scene that proves two rows) runs once per gate run; its result is the same for each.
+const validatorRuns = new Map();
 async function runProof(check) {
   if (check.type === 'validator') {
-    const run = await exec(process.execPath, [`scripts/${check.name}`, ...(check.args ?? [])], {limitSeconds: check.limitSeconds ?? 1800});
+    const key = JSON.stringify([check.name, check.args ?? []]);
+    if (!validatorRuns.has(key)) validatorRuns.set(key, exec(process.execPath, [`scripts/${check.name}`, ...(check.args ?? [])], {limitSeconds: check.limitSeconds ?? 1800}));
+    const run = await validatorRuns.get(key);
     if (run.code === 0 && !/^SKIP/m.test(run.out)) return {ok: true, note: `${check.name} ${run.seconds}s`};
     return {ok: false, note: `${check.name}: ${(/^SKIP.*$/m.exec(run.out)?.[0] ?? run.out.trim().split('\n').slice(-2).join(' | ')).slice(0, 160)}`};
   }

@@ -608,6 +608,7 @@ class NavProbe:
         table = bytes().join(struct.pack('<f', math.sin(i * 6.283185307179586 / 16384))
                              for i in range(16384))
         cpu.mem_write(SINE_TABLE, table)
+        cpu.mem_write(SINE_TABLE + 4 * 8192, struct.pack('<I', 0x250d3000))  # the measured x87 FSIN entry (native-collision-oracle.py HARDWARE_TRIG)
         # The AI-pick bodies are the only corpus callers of appFrand; replace the
         # Core import with the scripted queue so random draws are deterministic
         # and observable (the real MSVCRT rand would need thread-local state).

@@ -26,6 +26,7 @@ class Probe(mesh.Probe):
         table = b''.join(struct.pack('<f', math.sin(i * 0.0003834951969714103)) for i in range(16384))
         assert hashlib.sha256(table).hexdigest() == '9893d14bd21e5c4194832659571b30363ddfb08d468ed662a4b6d5ae172262dc'
         self.cpu.mem_write(0x101b32a4, table)
+        self.cpu.mem_write(0x101b32a4 + 4 * 8192, struct.pack('<I', 0x250d3000))  # the measured x87 FSIN entry (native-collision-oracle.py HARDWARE_TRIG)
         self.write(0x10599bc8, 'I', self.stub('CacheCreate', b'\xc2\x18\x00'))
         self.write(0x10599bcc, 'I', self.stub('CacheFlush', b'\xc2\x10\x00'))
         self.actors = {name: self.alloc(0x700) for name in ['actor', 'owner']}

@@ -329,8 +329,11 @@ binding's key edges (`ParseLeftClick|Fire`); the harness cannot hold a key, so t
 | --- | --- | --- | --- |
 | `cmb1` | 700 units in front of `Terrorist0`; pistol; Enter at 420, 480, 540 | `Terrorist0` and `ThugMale7` seek the player from tick 41, all three attack from 178 and hit the player's legs and torso; the first shot (420) kills `Terrorist0` (`Dying`, `TerroristCarcass1` at 469) | 88 actors equal for 900 ticks; 1,571 AI events and 1,291 creations equal |
 | `cmb2` | 700 units behind it (the census's old pose), facing away; pistol; turned on it at 590, Enter at 600, 630, 660 | nobody notices the player for 600 ticks; two hits take `Terrorist0` to 43 (`TakingHit`) and 30 (`Fleeing`); the others attack | 88 actors equal for 900 ticks; 1,421 AI events and 1,150 creations equal |
-| `cmb3` | 150 units behind it at head height; pistol; Enter at 300, 360, 420, 480 | both notice the player at tick 42; the first shot hits `ThugMale7` (100 to 68), who stepped into the line; no kill | 88 actors equal for 900 ticks; 1,514 AI events and 1,364 creations equal |
+| `cmb3` | 150 units behind it at head height; pistol; Enter at 300, 360, 420, 480 | both notice the player at tick 42; the first shot hits `ThugMale7` (100 to 68), who stepped into the line; no Terrorist dies; their fire kills the player at tick 863 (`HealthTorso` -4: `Dying`, `DeathFront`) | 88 actors equal for 900 ticks, through 37 ticks of `Dying`; 1,514 AI events and 1,364 creations equal |
 | `cmb4` | `cmb1`'s pose; `BallisticArmor` picked up, put in hand and activated by the Enter edge at 180 | the three attack from about tick 180; nine Tracers in 720 ticks take the armored player from 100 to 95 (legs and arms) | 88 actors equal for 900 ticks; 1,567 AI events and 1,284 creations equal |
+| `cmb5` (2026-10-18) | a ledge 900 units east of `Terrorist16` on the statue's terrace and 287 above it, out of every NSF pawn's view; `Tantalus` at tick 20; `TerroristCarcass1` watched from the tick it appears | `Terrorist16` dies at 21; its carcass at 98 holds `WeaponPistol`, `Ammo10mm` and `WeaponCombatKnife`; no pawn hears the death (the nearest, `Terrorist21`, is 1,032 units off); the patrolling `Terrorist21` meets the body at 512 (`CarcassTimer` 120, `Seeking`, `SeekType` 4, `SEEKTYPE_Carcass`) | 88 of 89 actors equal for 900 ticks; the carcass's `LastRenderTime` is stamped one tick late (below); 1,352 AI events and 935 creations equal |
+| `cmb6` (2026-10-18) | `cmb1`'s inputs, with `TerroristCarcass1` watched | the Terrorists' own fire kills `ThugMale7` at 395 (`ThugMale2Carcass0`); the player's shots miss `Terrorist0`, so no `TerroristCarcass1` appears | 89 actors equal for 900 ticks; 1,569 AI events and 1,310 creations equal |
+| `cmb7` (2026-10-18) | `cmb2`'s pose; the pistol and a `MedKit` picked up facing away (belt slots 1 and 2); turned on `Terrorist0` at 200; Enter at 300 and 360; `ActivateBelt 2` at 650, Enter at 700 | the first shot hits `Terrorist0` (62, `TakingHit`), the second kills it; the three attack, the player is hurt from tick 548 (95 at 669: torso 90, leg 86, arm 95), and the MedKit heals every region to 100 at 701 | 88 actors equal for 900 ticks; 1,447 AI events and 1,134 creations equal |
 
 **What the first replays found.** Every pawn was equal from the first replay. The differences that remained came from three inputs of the replay, each now measured from the original
 ([visual acceptance](visual-acceptance.md#a-placed-player-the-levels-tick-parity-and-the-frozen-render-stamps-2026-10-17-stage-5)):
@@ -348,10 +351,8 @@ live traces (4.1.5, 4.1.6, 4.1.7, 4.2.13, 4.3.6, 4.5.5) were rerun after these c
 pawn in stasis after 5 s besides. It now stands behind it (the effect: no reaction) and then in its view (the effect: seeking and attacking), with the pawn stamped as the
 renderer would stamp it. It plays.
 
-**Rows.** 5.2.2 passes on `cmb1` and `cmb2`, and 5.1.6 on all four. The armor is compared through the hit regions it protects; its `Charge` is not a watched field, because the armor is a summoned actor. No scene has a Terrorist take cover; the row's "or takes cover" is the AI's choice, not something the scene asks for. The other rows these scenes touch keep their `need`: 5.1.5 (the carcass's contents: the
-tracer resolves watched names when it attaches, and a carcass is spawned later), 5.2.3 (footsteps), 5.2.7 (in `cmb1` the other Terrorists are already attacking when `Terrorist0`
-dies, and no `Carcass` callback is delivered), 5.6.1 (the MedKit) and 5.1.8. A first capture of `cmb1`, replaced when the new fields were added, had the Terrorists kill the player at
-tick 791, and Play was equal through `Dying` to tick 900. None of the stored scenes keeps that death.
+**Rows.** 5.2.2 passes on `cmb1` and `cmb2`, and 5.1.6 on `cmb1` to `cmb4`, `cmb6` and `cmb7`. The armor is compared through the hit regions it protects; its `Charge` is not a watched field, because the armor is a summoned actor. No scene has a Terrorist take cover; the row's "or takes cover" is the AI's choice, not something the scene asks for. 5.6.1 passes on `cmb7`. 5.1.5 and 5.2.7 name `cmb5` and fail on its one open difference ([below](#second-captures-a-body-found-the-carcasss-contents-the-medkit-2026-10-18)). 5.2.3 keeps its footsteps `need`. 5.1.8 is not proved: `cmb3` keeps the player's
+death (tick 863) and Play is equal through 37 ticks of `Dying`, but the death state's end is not captured (the row's `need`).
 
 **Open: the subtitle windows' lifetime and the registry slots.** In `cmb2` and `cmb3` some objects take a different registry slot, while every creation is equal in class and tick: 50 of
 1,150 and 64 of 1,364. The first difference in `cmb2` is the bark subtitle of tick 660 (`ConAudioAIBarks_859`, 1.976 s by both programs' `GetSpeechLength`; the MP3 is 1.985 s). Play frees its
@@ -359,6 +360,50 @@ tick 791, and Play was equal through `Dying` to tick 900. None of the stored sce
 held at tick 660 to type the key edges, where Play's replay gives it all of that time. In `cmb3` the tick-43 bark is freed at 50 in the original and at 51 in Play, then a `BloodSplat`
 takes another slot at 821. Not explained. It is the window system's time while the tracer holds the level (Stage 4's interface timing), not a game-state difference, and it changes
 nothing a watched actor reads. The Stage 5 check therefore judges the creations by class and tick and reports the slots. Row 4.3.6 keeps its strict slot check.
+
+### Second captures: a body found, the carcass's contents, the MedKit (2026-10-18)
+
+**Watching an actor the scene spawns.** The tracer resolved its watched names once, when it attached, so a carcass spawned mid-scene could not be watched. A `late-watch` group of
+`tools/dx-live-win.c` names actors the level may not hold yet: an object of that name is offered at the return of `UObject::AddObject` (the captures' `addobj` breakpoint, `retname`) and by
+any `GObjObjects` slot that changed since the last tick, and it is bound at the first tick exit once its `XLevel` is the traced level (SpawnActor sets it after AddObject). Its rows start
+there. A field type `chain` follows a linked list through one offset: `Actor.Inventory` (+0xc0) is the carcass's first item and each item's next. `live-acceptance.mjs --carcass-watch A,B`
+writes the group with the Actor fields, the fields `DeusExCarcass.InitFor` and the dying pawn set (`KillerAlliance`, `Alliance`, `CarcassName`, `MaxDamage`, `bNotDead`, `bEmitCarcass`,
+`bInit`; Play's linked offsets for `TerroristCarcass0`) and the chain. Play's replay looks the name up at every row until its level holds it, and `compare` checks the tick each carcass
+appears at (`Present`) and the chain by its items' classes in order (their numbers follow each program's creation order). In `cmb5` both programs bind `TerroristCarcass1` at tick 98.
+
+**`cmb5`: a pawn finding a body it was not fighting over.** A kill next to other pawns wakes them first: the dying pawn raises `Distress` and `LoudNoise` (`PlayDyingSound`), and in
+Play's rehearsal of `Tantalus` on `Terrorist0` the two pawns near it attacked the player on the next tick; in `cmb1` the body was found by pawns already in `Attacking`, where
+`CheckCarcassPresence` adds it (`AddCarcass`, `CarcassTimer` 120) and they stay in `Attacking`. So the victim is a pawn no other pawn can hear: `Terrorist16`, wandering in place on the statue's terrace, whose nearest NSF neighbours are 1,032
+(`Terrorist21`) and 1,153 units off counted as `APawn::AICanHear` counts (height twice, 800 units the default radius). The kill is `DeusExPlayer.Tantalus` (the cheat: every health 0 and
+`TakeDamage` from the player): no `WeaponFire` and no `LoudNoise` from the player, and the death cry's `LoudNoise` is the dying pawn's own, which `HandleLoudNoise` ignores (not a valid
+enemy). The pose, a ledge 900 units east and 287 above, with a clear line to `Terrorist16` and out of every NSF pawn's cone, was screened in Play (class P) and rehearsed headless. In the
+original `Terrorist21` patrols on, sees the body at tick 512 and seeks it (`CarcassTimer` 120, `SeekType` 4). The `Carcass` AI event is raised by the carcass, but its callback is commented
+out in the original's `UpdateReactionCallbacks`, so no `Carcass` callback is ever delivered: the finding is the polled sight check, and the 5.2.7 note of the first captures was the
+original's behaviour, not a gap. `stage5-capture-rehearsal.mjs` now holds the level (`bPlayersOnly`) while the early lines are typed, as the capture does; before, 60 unfrozen ticks ran
+first, and `Terrorist16` had wandered off by the kill.
+
+**What the replays found.** Two differences, each an original cause, fixed in Play:
+
+1. **Core's sine table at pi.** `Terrorist16`'s `Velocity.Y` after the kill (`Tantalus`'s momentum, `Vector(ViewRotation)` at yaw 32768) was -3.06962686e-15 in the original and
+   -3.0697283e-15 in Play, and `cmb7`'s `Terrorist0` had the same 0.99997 ratio in `Acceleration.Y` at tick 366. FGlobalMath fills the table with a bare `fsin`, which reduces with a 66-bit pi:
+   entry 8192 (the double nearest pi) is pi66 - pi, word `0x250d3000`, where Math.sin, Python's math.sin and Unicorn's FSIN (through a host double) give `0x250d3132`. Measured for all
+   16,384 entries on the real x87 through Rosetta 2 (`tools/x87-sintable-probe.c`, the constructor's sequence at precision control 53 and 64: the only entry that differs). Play's table
+   (`coords.mjs`, which the Rust kernel copies) and the Unicorn oracles (`native-collision-oracle.py` `HARDWARE_TRIG`) now hold the measured word ([fitting](fitting.md)). Every rotator at a
+   right angle reads this entry (the sine of yaw 32768, the cosine of 16384). The validators that read the table were rerun: below. Unverified on the Linux host's AMD x87.
+2. **`RandomBiasedRotation`'s draws.** `cmb7`'s `Terrorist10` (tick 781) and `cmb6`'s `Terrorist0` (796) sprinted toward a destination 0.02 to 0.06 units off the original's, one sine-table
+   step of direction: `ComputeBestFiringPosition`'s sprint calls native 717, and Play gave the helper (`AActor::RandomBiasedRotation` 0x1036d030) a float32 copy of each `appFrand` draw. The
+   helper uses appFrand's retained x87 product (`call [0x10599cb8]`, then `fadd st0,st0` on ST0; [rng](rng.md)), as native 709 already did. Both replays are equal since.
+
+**Open: a spawned actor's first render stamp.** `TerroristCarcass1`'s `LastRenderTime` is -10 at tick 99 in Play and 187.668228 (tick 98's time) in the original, and equal from tick 100.
+The original's `DrawActorSprite` stamps the carcass in the first frame after the tick that spawned it. Play's actor mesh layer admits a spawned mesh actor through an asynchronous binding
+(`actor-mesh-sim.mjs` `admit`: `createMeshBinding` awaits the mesh resource and each group's skin), so that frame neither draws nor stamps it. It is one tick, and nothing in the scene
+reads the carcass's stamp, but it is a difference in a watched field, so `cmb5` fails, and with it 5.1.5 and 5.2.7. The fix belongs to the mesh layer (a binding available in the frame
+its actor first appears in, with its resources resident as the original's are); it is not made here.
+
+**The other two scenes.** `cmb6` repeats `cmb1`'s inputs with `TerroristCarcass1` watched, for the contents of a pistol kill: this time the Terrorists' own fire killed `ThugMale7` at 395 and
+the player's three shots missed `Terrorist0`. The scene replays equal and proves 5.1.6; the contents are compared on `cmb5`'s carcass, and the pistol kills (`cmb1` at 420, `cmb7` at 360)
+by the death and the carcass's creation. `cmb7` is 5.6.1's whole encounter: two shots from 700 units behind `Terrorist0` (the second kills it), the others attack, the player is hurt from
+548 and the MedKit heals every region to 100 at 701. The MedKit's own state (a summoned actor) is not watched; the heal is read through the player's `Health` and hit regions.
 
 ## Scoreboard (2026-10-17, after the combat captures)
 
@@ -399,9 +444,9 @@ Nothing below was fixed by the census task; the two gap tasks closed items 1 and
 3. **Island devices that never finish** (findings 3, 4, 7): **done 2026-10-17 by the two gap tasks.** Lockpick and hack outside Training and the personal and security terminals were the
    driver's wrong input, plus two Play gaps (findings 3 and 7); the LAM, the EMP grenade, the AlarmUnit and the pistol range were driver faults (finding 4). 5.1.2, 5.1.4, 5.2.6, 5.3.9, 5.5.1, 5.5.2,
    5.6.2 and 5.6.5 now play and wait for their O1 captures; the Island laser needs a guard in `Alerting` (finding 4, item 4 below).
-4. **NPC combat against the player, compared with the original** (finding 6): **first captures done 2026-10-17** ([below](#first-original-captures-island-combat-2026-10-17)). Four
-   scenes on Island replay equal, and `validate-stage5-live.mjs` is the proof check. 5.2.2 passes; the rest of the clause still lacks these, each named in the row's `need`: the carcass's
-   contents (5.1.5), footsteps (5.2.3), a pawn finding a body it was not already fighting over (5.2.7), the MedKit (5.6.1) and a death kept in a stored capture (5.1.8).
+4. **NPC combat against the player, compared with the original** (finding 6): **first captures done 2026-10-17, second 2026-10-18** ([above](#first-original-captures-island-combat-2026-10-17)).
+   Seven scenes on Island, and `validate-stage5-live.mjs` is the proof check. 5.2.2, 5.1.6 and 5.6.1 pass. Still open, each named in the row's `need`: `cmb5`'s carcass render stamp, a tick
+   late in Play (5.1.5, 5.2.7: the actor mesh layer's asynchronous admission), footsteps (5.2.3) and the death state's end (5.1.8: `cmb3` keeps the death and 37 ticks of `Dying`).
 5. **Pain zones and the HazMat suit** (finding 5): the zone's `DamagePerSec` over time and the suit's absorption, against a capture of Training's pool. Unblocks 5.3.7, 5.6.x radiation.
 6. **The undriven scenarios**: the cell door and Gunther (5.4.5, 5.6.6), a lit/dark pair of poses (5.6.3), the `M00MeetPage` trigger (5.4.8), the commander from his room (5.5.5), the `ElevatorMover1` ride
    (5.3.13). Each is a driver plus whatever pause it finds; the first two are the biggest.
@@ -431,7 +476,7 @@ node scripts/census-stage5.mjs [--only slug,slug] [--json out.json]       # driv
 node scripts/validate-stage5-acceptance.mjs                               # the gate: exit 1 until every criterion passes
 node scripts/validate-stage5-acceptance.mjs --report [file]               # the scoreboard, exit 0
 node scripts/validate-stage5-acceptance.mjs --markdown [file]             # the tables of this page from a report
-node scripts/validate-stage5-live.mjs --scene cmb1                       # a proof check: the stored Island scene cmb1..cmb4 replayed in Play (SKIP without the store)
+node scripts/validate-stage5-live.mjs --scene cmb1                       # a proof check: the stored Island scene cmb1..cmb7 replayed in Play (SKIP without the store)
 node scripts/validate-stage5-live.mjs --scene cmb1 --print-capture       # the original's capture command of that scene (writes its tracer config; the bottle lock first)
 node scripts/stage5-capture-rehearsal.mjs --scene cmb1                    # rehearse a scene's input list in Play, headless, before a capture (class P)
 ```
