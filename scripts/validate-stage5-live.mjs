@@ -136,6 +136,11 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
   const dir = path.join(root, '.work/live-acceptance', scene.map);
   const stored = ['original-trace', 'watch', 'population', 'commands'].map(base => path.join(dir, `${base}-${tag}.${base === 'original-trace' ? 'jsonl' : 'json'}`));
   const absent = stored.filter(file => !existsSync(file));
+  // A scene with a watch list replays the other pawns' load fields (live-acceptance.mjs `loadPawns`): a watch file without them is a capture from before that
+  // group, whose replay draws on Play's own SightCounters (die1's first capture: the player's ShowSelf draw at tick 4, the original's at 12).
+  if (!absent.length && scene.watch && !(JSON.parse(readFileSync(stored[1], 'utf8')).loadPawns?.length)) {
+    console.log(`FAIL ${tag}: the stored watch file has no loadPawns (a capture from before the load-field group: recapture with --print-capture)`); process.exit(1);
+  }
   // (exit 0, as the sweep's store-dependent validators do; the Stage 5 gate counts a SKIP as not passing)
   if (absent.length) { console.log(`SKIP no stored original for ${tag}: ${absent.map(f => path.relative(root, f)).join(', ')}`); process.exit(0); }
   const problems = [];
@@ -145,7 +150,8 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
   const compare = await exec(['scripts/live-acceptance.mjs', 'compare', '--map', scene.map, '--tag', tag, ...SCENE_FLAGS], 600);
   console.log(compare.out.trim());
   const report = JSON.parse(readFileSync(path.join(dir, 'report.json'), 'utf8'));
-  // (the actors Play watched: the trace's timed actors and load-field pawns are written into Play, not compared)
+  // (the actors Play watched: the trace's timed actors and load-field pawns are written into Play, not compared; a watched name Play's level lacks fails
+  // the replay before the comparison, liveProbe's `no actor`)
   const actors = Object.entries(report.actors).filter(([, e]) => e.compared !== false && (e.compared || e.firstDifference !== null)), different = actors.filter(([, e]) => e.firstDifference !== null);
   if (different.length) problems.push(`${different.length} of ${actors.length} actors differ (${different.sort((a, b) => a[1].firstDifference - b[1].firstDifference).slice(0, 4).map(([n, e]) => `${n}@${e.firstDifference}`).join(' ')})`);
   if (report.clock?.firstDifference) problems.push(`clock differs at tick ${report.clock.firstDifference.tick}`);
