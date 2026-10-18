@@ -711,10 +711,18 @@ fn process() {
     m().ref_processing += 1;
     let next_slot = (m().current_slot + 1) & 15;
     let mut r = m().first_process;
+    let start = r;
     let mut visited = 0u32;
     // The original stops once its 2 ms rdtsc budget is spent (below); a replay names where it stopped.
     let stop = unsafe { core::mem::replace(&mut *addr_of_mut!(PROCESS_STOP), [0; 3]) };
     let mut stopped = stop[0] == 0;
+    // The replay reads the original's firstProcess at the tick's exit, after CleanupEvents moved it past the receivers destroyed during the
+    // tick: when the start itself was destroyed (its callback changed its actor's state, which cleared the callback) a whole ring visited
+    // leaves firstProcess at the next live receiver. A stop at the first live receiver after the start is that case as well as a budget
+    // spent on the start alone; the ring is then visited whole (Stage 5 gA, tick 487: Terrorist30's alarm, then its LoudNoise receiver
+    // delivered in the original's tick, its HandleLoudNoise clearing the alarm callback; firstProcess Terrorist30|Distress at the exit).
+    let mut live_after_start = 0u32;
+    let mut deferred = false;
     while r != 0 {
         if rcv(r).destroyed == 0 {
             if is_deleted(rcv(r).actor) {
@@ -722,6 +730,9 @@ fn process() {
             }
             if rcv(r).destroyed == 0 {
                 process_receiver(r);
+                if r != start {
+                    live_after_start += 1;
+                }
             }
         }
         visited += 1;
@@ -729,12 +740,16 @@ fn process() {
         if r == m().first_process {
             r = 0;
         }
-        if stop[0] != 0 && r != 0 && rcv(r).actor == stop[1] && rcv(r).ty != 0 && ty(rcv(r).ty).name == stop[2] {
+        if stop[0] != 0 && !deferred && r != 0 && rcv(r).actor == stop[1] && rcv(r).ty != 0 && ty(rcv(r).ty).name == stop[2] {
+            if live_after_start == 0 {
+                deferred = true;
+                continue;
+            }
             stopped = true;
             break;
         }
     }
-    if !stopped && !(stop[1] == rcv_actor(m().first_process) && stop[2] == rcv_name(m().first_process)) {
+    if !stopped && !deferred && !(stop[1] == rcv_actor(m().first_process) && stop[2] == rcv_name(m().first_process)) {
         unsafe { *addr_of_mut!(PROCESS_STOP_MISSES) += 1 };
     }
     m().current_slot = next_slot;
