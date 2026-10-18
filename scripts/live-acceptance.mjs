@@ -1215,13 +1215,19 @@ function compare() {
   // name and index) the tracer reads freed memory at its address (Stage 5 tC: ThugMale3's StateNode name blank two ticks after Mission01's Destroy, Gunther's
   // state frame reused as another actor's Dead), while Play reads the object it released. Its release is compared instead: the same index freed at the same u
   // in Play's object log (objects-play<tag>.json, --object-trace), and its rows after that tick are not compared. Without both logs nothing changes.
-  const callsFile = `${tracePath}.calls.jsonl`, objectsFile = path.join(dir, `objects-play${suffix}.json`);
+  // (the actor is an object of its name at the frozen start: its index in registry-start<tag>.txt, `slot N index N ptr P Class.Name`)
+  const callsFile = `${tracePath}.calls.jsonl`, objectsFile = path.join(dir, `objects-play${suffix}.json`), registryFile = path.join(dir, `registry-start${suffix}.txt`);
   const releasedOriginal = new Map(), releasedPlay = new Map();
-  if (existsSync(callsFile) && existsSync(objectsFile)) {
+  if (existsSync(callsFile) && existsSync(objectsFile) && existsSync(registryFile)) {
+    const indexOfName = new Map();
+    for (const line of readFileSync(registryFile, 'utf8').split(/\r?\n/)) {
+      const m = /^slot\s+\d+ index\s+(\d+) ptr \S+ [^.\s]+\.(\S+)$/.exec(line);
+      if (m) indexOfName.set(m[2].toLowerCase(), [...(indexOfName.get(m[2].toLowerCase()) ?? []), Number(m[1])]);
+    }
     for (const line of readFileSync(callsFile, 'utf8').split('\n')) {
       if (!line.includes('"fn":"unhash"') || !line.includes('"ev":"ret"')) continue;
-      const record = JSON.parse(line);
-      if (record.ecxName && !releasedOriginal.has(record.ecxName.toLowerCase())) releasedOriginal.set(record.ecxName.toLowerCase(), {u: record.u, index: record.ecxIndex});
+      const record = JSON.parse(line), key = record.ecxName?.toLowerCase();
+      if (key && indexOfName.get(key)?.includes(record.ecxIndex) && !releasedOriginal.has(key)) releasedOriginal.set(key, {u: record.u, index: record.ecxIndex});
     }
     for (const event of JSON.parse(readFileSync(objectsFile, 'utf8'))) if (event.ev === 'free' && !releasedPlay.has(event.index)) releasedPlay.set(event.index, event.u);
   }

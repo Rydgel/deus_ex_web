@@ -81,6 +81,9 @@ const SHOTS = ticks => ticks.map(t => `${t}:@down Enter|${t}:@up Enter`).join('|
 const PLACE = (x, y, z, yaw, pitch = 0) => `KillAll FlyGenerator|ghost|set DeusEx.JCDentonMale Location (X=${x},Y=${y},Z=${z})|walk|set DeusEx.JCDentonMale ViewRotation (Pitch=${pitch},Yaw=${yaw},Roll=0)`;
 // A conversation's choice: `downs` ArrowDown edges ten ticks apart from tick t, then the Enter edge 20 ticks after the last (the focus starts on the first choice).
 const CHOOSE = (t, downs) => [...Array.from({length: downs}, (_, i) => `${t + 10 * i}:@down ArrowDown|${t + 10 * i}:@up ArrowDown`), `${t + 10 * downs + 20}:@down Enter|${t + 10 * downs + 20}:@up Enter`].join('|');
+// A frob fan for a pawn that walks away: eight view yaws around `yaw` (0, -4500, +4500, ... units, pitch -3500 at a standing pawn's chest 30 to 100 units
+// off), each followed 7 ticks later by the right button (DeusExPlayer.HighlightCenterObject traces for the frob target every 0.1 s), from tick t.
+const FROB_FAN = (t, yaw) => [0, -4500, 4500, -9000, 9000, -13500, 13500, 0].map((d, k) => `${t + 8 * k}:set DeusEx.JCDentonMale ViewRotation (Pitch=-3500,Yaw=${(yaw + d + 65536) % 65536},Roll=0)|${t + 8 * k + 7}:ParseRightClick`).join('|');
 // The pawns within about 4,000 units of MeetPaul's pose at the dock (the conversation's owner, the dock's bots and guard, the nearest Terrorist).
 const DOCK = ['PaulDenton0', 'SecurityBot0', 'UNATCOTroop1', 'MedicalBot3', 'MedicalBot1', 'MedicalBot0', 'Terrorist12'];
 // Filben's corner (the informant, the sitting BumFemale0 and the two nearest NSF).
@@ -143,8 +146,13 @@ export const SCENES = {
   // original's own input too).
   fT: {map: '01_NYC_UNATCOIsland', ticks: 1200, conversation: true, early: PLACE(1496.6, -9968.3, -250, 0), pawns: ['HarleyFilben0', 'BumFemale0'], watch: FILBEN,
     cmds: `${SHOTS([60, 100, 140, 180, 220, 260])}|${CHOOSE(300, 0)}|${SHOTS([360, 400])}|534:ParseRightClick|564:ParseRightClick|${SHOTS([600, 640, 680, 720, 760])}`},
-  fN: {map: '01_NYC_UNATCOIsland', ticks: 1250, conversation: true, early: PLACE(1496.6, -9968.3, -250, 0), pawns: ['HarleyFilben0', 'BumFemale0'], watch: FILBEN,
-    cmds: `${SHOTS([60, 100, 140, 180, 220, 260])}|${CHOOSE(300, 1)}|${SHOTS([370, 410, 450, 490, 530, 570])}|646:ParseRightClick|676:ParseRightClick|${SHOTS([710, 750, 790])}`},
+  // fT's inputs to MeetFilben's end (the original's conPlay clears at 469 in both captures of fT), then a frob fan from the end of the one-second guard
+  // (529): Filben wanders off at once (HarleyStartsToWander) on a path the load's stream chooses (fT's two captures: east, still in range at 596;
+  // south-east, out of the frob line at 505), so one view rarely finds him. MeetFilben2's GaveKey branch, its last speech run out.
+  fK: {map: '01_NYC_UNATCOIsland', ticks: 1250, conversation: true, early: PLACE(1496.6, -9968.3, -250, 0), pawns: ['HarleyFilben0', 'BumFemale0'], watch: FILBEN,
+    cmds: `${SHOTS([60, 100, 140, 180, 220, 260])}|${CHOOSE(300, 0)}|${SHOTS([360, 400])}|${FROB_FAN(531, 0)}|${SHOTS([620, 660, 700, 740, 780])}`},
+  fN: {map: '01_NYC_UNATCOIsland', ticks: 1300, conversation: true, early: PLACE(1496.6, -9968.3, -250, 0), pawns: ['HarleyFilben0', 'BumFemale0'], watch: FILBEN,
+    cmds: `${SHOTS([60, 100, 140, 180, 220, 260])}|${CHOOSE(300, 1)}|${SHOTS([370, 410, 450, 490, 530, 570])}|${FROB_FAN(643, 0)}|${SHOTS([720, 760, 800])}`},
   // GuntherRescued (radius 70 around GuntherHermann0, needs GuntherFreed). A pistol summoned and picked up at the map's start (carried: ConEventCheckObject walks
   // the Inventory; a summoned weapon's landing is a LoudNoise of radius 768, DeusExWeapon.PlayLandingSound, which near the cell brings Terrorist18), then the
   // player placed on the floor at the cell's wall button DeusExMover8 (ghost, a SET of Location, walk: the harness cannot walk; a placement touches nothing,
@@ -177,7 +185,7 @@ export const SCENES = {
   // by the right button. StatueMissionComplete makes Mission01.Timer's mission-complete pass (MS_MissionComplete: every Terrorist but the commander killed,
   // the ThugMale2s, SecurityBot3 and Gunther destroyed, Paul moved to PaulTeleport, the custody and post-mission troops entering the world, the NSF turrets
   // and the statue's lasers destroyed) and its DataLink DL_LeaderNotKilled (MS_DL2_Played).
-  tC: {map: '01_NYC_UNATCOIsland', ticks: 1300, conversation: true, early: PLACE(2887, 38, 2539, 63000), pawns: ['TerroristCommander0', 'Terrorist8', 'Terrorist9', 'PaulDenton0'], watch: COMMANDER,
+  tC: {map: '01_NYC_UNATCOIsland', ticks: 1300, conversation: true, windowVisibility: true, early: PLACE(2887, 38, 2539, 63000), pawns: ['TerroristCommander0', 'Terrorist8', 'Terrorist9', 'PaulDenton0'], watch: COMMANDER,
     cmds: `${SHOTS([60, 100, 140])}|${CHOOSE(200, 1)}|${SHOTS([280, 320, 360, 400, 440])}|900:ParseRightClick|${SHOTS([960, 1000, 1040, 1080, 1120, 1180])}`},
   // "Except send YOU back to the people..." (first, Aggressive): PlayerAttackedStatueTerrorist, the commander's last speech runs out, StatueMissionComplete, the
   // trigger TerroristCommanderAttacks. The player is then placed at Filben, never met before: MeetFilbenAfterStatue (radius 60, needs M01PlayerMetFilben false
@@ -225,18 +233,19 @@ export const captureConfig = scene => [`call-ticks 1 ${scene.ticks}`, 'call-fram
   'call 0x103831e0 aiend 3 always name0 fname 1', 'call 0x103832c0 aiclear 2 always name0 fname 1',
   'call 0x10384980 aievent 5 always name0 fname 1 fname 4 namearg 3 0 deref 3 5 0', 'call Extension.dll@0x1003be90 roottick 1 always',
   ...(scene.levelEnd ? ['call 0x1038fa10 settravel 4 always'] : []),
-  // A conversation scene also records XWindow::SetVisibility (Extension.dll 0x1004c7d0; ECX the window, the bool its new visibility): which windows the HUD
-  // shows and hides when a conversation ends (tC: Play shows HUDLogDisplay at MeetTerrorist's end, where the original first draws it at TerroristFollowup's).
-  ...(scene.conversation ? ['call Extension.dll@0x1004c7d0 setvis 1 always retname'] : [])];
+  // A scene with `windowVisibility` also records XWindow::SetVisibility (Extension.dll 0x1004c7d0; ECX the window, the bool its new visibility): which windows
+  // the HUD shows and hides (tC: Play shows HUDLogDisplay at MeetTerrorist's end, where the original first draws it at TerroristFollowup's). The HUD calls it
+  // for three windows every frame, which slows the traced game to about 0.5 s a tick.
+  ...(scene.windowVisibility ? ['call Extension.dll@0x1004c7d0 setvis 1 always retname'] : [])];
 export const CAPTURE_CONFIG = captureConfig({ticks: 900});
-const configFile = scene => `.work/live-acceptance/cfg/${scene.levelEnd ? 'death' : scene.conversation ? 'conversation' : 'combat'}-${scene.ticks}.cfg`;
+const configFile = scene => `.work/live-acceptance/cfg/${scene.levelEnd ? 'death' : scene.windowVisibility ? 'windows' : 'combat'}-${scene.ticks}.cfg`;
 /** The original's capture command of a scene (for the doc and a recapture). */
 export const captureCommand = tag => {
   const s = SCENES[tag];
   // (--carcass-watch: the carcasses the scene spawns, bound by the tracer when they appear: tools/dx-live-win.c late-watch; --watch: the pawns watched, all
   // ScriptedPawns when absent; --wait-seconds: the tracer's time, a long scene's run to the level's end)
   return `scripts/live-original.sh ${s.map} --tag ${tag} --ticks ${s.ticks} --delta 0.0166666675 ${sceneFlags(s).join(' ')}${s.conversation ? ' --dump-flags' : ''} --registry --extra-config ${configFile(s)}`
-    + `${s.carcasses ? ` --carcass-watch ${s.carcasses.join(',')}` : ''}${s.watch ? ` --watch ${s.watch.join(',')}` : ''}${s.levelEnd ? ` --wait-seconds ${Math.ceil(s.ticks * 0.6)}` : ''}`
+    + `${s.carcasses ? ` --carcass-watch ${s.carcasses.join(',')}` : ''}${s.watch ? ` --watch ${s.watch.join(',')}` : ''}${s.levelEnd || s.conversation ? ` --wait-seconds ${Math.ceil(s.ticks * (s.windowVisibility ? 1.2 : 0.8))}` : ''}`
     + ` --early-cmds "${s.early}" --cmds "${s.cmds}"`;
 };
 
