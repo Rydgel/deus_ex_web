@@ -50,6 +50,35 @@ async function meetFilben(c, choice) {
   return {met: c.flag('m01playermetfilben'), ended: started && !c.read(c.player(), 'conPlay'), gaveKey: c.flag('filbengavekey'), keys: keyIds(c), seconds: i / 2};
 }
 
+/** Free Gunther the way the cell is built (01_NYC_UNATCOIsland): the wall button DeusExMover8 (unlocked, TriggerOpenTimed, Event temp_celldoor) slides 8 units and
+ * its FinishedOpening triggers temp_celldoor, the cell door DeusExMover10 (TriggerToggle: DeusExMover.Trigger has no lock test), which turns a quarter (KeyRot[1]
+ * yaw 16384); its Event guntherdoor reaches FlagTrigger4 (bTrigger on StatueMissionComplete false) -> guntherfreedflag -> FlagTrigger2 sets GuntherFreed. The walk
+ * in crosses AllianceTrigger0 (touch, Event GuntherHermann: Alliance UNATCO) and enters GuntherRescued's radius (70; it needs GuntherFreed). The conversation adds
+ * 150 skill points, then CheckObject walks the player's weapons (WeaponAssaultGun, WeaponStealthPistol, WeaponPistol, WeaponCombatKnife, else nothing): with
+ * `weapon` in hand the first choice is "As you wish. Take my ..." -> TransferObject to Gunther -> GuntherRespectsPlayer and the trigger GuntherAttacks
+ * (OrdersTrigger0: RunningTo GuntherSpot). The old census aimed at DeusExMover10's Location, its hinge pivot 170 units above the floor (PrePivot -48,0,96). */
+async function freeGunther(c, weapon) {
+  const button = c.actor('DeusExMover8'), door = c.actor('DeusExMover10'), g = c.actor('GuntherHermann0');
+  if (!button || !door || !g) throw new Undriven('no DeusExMover8, DeusExMover10 or GuntherHermann0');
+  for (let i = 0; i < 240 && !c.flag('m1missionstart'); i++) c.frames(5);
+  const item = weapon ? await armed(c, weapon) : null;
+  const before = {alliance: c.read(g, 'Alliance'), orders: c.read(g, 'Orders')}, sp0 = c.read(c.player(), 'SkillPointsAvail');
+  c.watched.add(button); c.watched.add(door); c.watched.add(g);
+  await c.frob(button, [40, 48, 60, 36]);
+  for (let t = 0; t < 20 && (c.read(door, 'KeyNum') !== 1 || c.read(door, 'bInterpolating')); t++) c.frames(30);
+  const doorState = {key: c.read(door, 'KeyNum'), yaw: c.read(door, 'Rotation')[1]}, freed = c.flag('guntherfreed');
+  c.stand(c.pos(c.player()), c.pos(g)); c.frames(5);
+  c.fixture.driveLegacy({forward: 1});
+  for (let i = 0; i < 600 && !c.read(c.player(), 'conPlay'); i++) { c.frames(1); if (i % 30 === 29) c.stand(c.pos(c.player()), c.pos(g)); }
+  c.fixture.driveLegacy({forward: 0});
+  const conPlay = c.read(c.player(), 'conPlay'), con = conPlay ? String(c.read(c.read(conPlay, 'con'), 'conName')) : null;
+  for (let s = 0; s < 120 && c.read(c.player(), 'conPlay'); s++) { c.game.windowKey('Enter', true); c.game.windowKey('Enter', false); c.frames(30); }
+  c.frames(60);
+  return {door: doorState, freed, con, played: c.flag('guntherrescued_played'), respects: c.flag('guntherrespectsplayer'), weapon: item?.name ?? null,
+    gave: item ? c.read(item, 'Owner') === g : null, skillPoints: [sp0, c.read(c.player(), 'SkillPointsAvail')], before,
+    after: {alliance: c.read(g, 'Alliance'), orders: c.read(g, 'Orders'), state: stateName(c, g)}};
+}
+
 Object.assign(DRIVERS, {
   async 'island-shoot-npc'(c) {
     const t = c.actor('Terrorist0'); if (!t) throw new Undriven('no Terrorist0');
@@ -130,12 +159,42 @@ Object.assign(DRIVERS, {
     return ok(seen.some(s => s[1] || s[2]), {seen, alarm: c.flag('statuealarmtriggered'), state: stateName(c, cam)});
   },
   async 'island-laser'(c) {
-    const laser = c.actor('LaserTrigger0'); if (!laser) throw new Undriven('no LaserTrigger0');
-    const lp = c.pos(laser), [fx, fy] = forward(c, laser);
+    const laser = c.actor('LaserTrigger0'), unit = c.actor('AlarmUnit0'), t18 = c.actor('Terrorist18'); if (!laser || !unit || !t18) throw new Undriven('no LaserTrigger0, AlarmUnit0 or Terrorist18');
+    for (let i = 0; i < 240 && !c.flag('m1missionstart'); i++) c.frames(5);
+    // 1. The beam. LaserTrigger.BeginAlarm rings Klaxon2, sets lastAlarmTime and starts an 'Alarm' AI event (the laser has no Event). A guard that handles it
+    //    (ScriptedPawn.HandleAlarm) sets AlarmTimer = 120 before HandleEnemy; state Alerting then skips the alarm box while AlarmTimer > 0 (Alert: Goto('Done') ->
+    //    Attacking), so no guard who heard the laser rings AlarmUnit0 for two minutes. Terrorist18 (RaiseAlarm BeforeAttacking) passes through Alerting for one frame.
+    const guards = ['Terrorist18', 'Terrorist30', 'Terrorist14', 'Terrorist2'].map(n => c.actor(n)).filter(Boolean);
+    const lp = c.pos(laser), [fx, fy] = forward(c, laser), seen = {};
     c.stand([lp[0] + fx * 120, lp[1] + fy * 120, lp[2] - 40], lp); c.frames(20);
-    c.fixture.driveLegacy({forward: 1}); c.frames(100); c.fixture.driveLegacy({forward: 0}); c.frames(120);
-    return ok(c.flag('statuealarmtriggered'), {alarmFlag: c.flag('statuealarmtriggered'), lastAlarm: c.read(laser, 'lastAlarmTime'), isOn: c.read(laser, 'bIsOn'), at: c.pos(c.player()).map(Math.round)},
-      'the beam fires (LaserTrigger.BeginAlarm: klaxon and an alarm AI event, lastAlarmTime set) but no guard triggers AlarmUnit0, so StatueAlarmTriggered is never set: the three Terrorists in view attack the player, who is dead in 15 s (the laser has no Event; AlarmUnit0 is triggered from ScriptedPawn.Alerting)');
+    c.fixture.driveLegacy({forward: 1});
+    const beamDied = await c.guard(async () => {
+      for (let f = 0; f < 480; f++) {
+        c.frames(1); if (f === 100) c.fixture.driveLegacy({forward: 0});
+        for (const g of guards) { const s = stateName(c, g); (seen[g.name] ??= new Set()).add(s); }
+      }
+    });
+    c.fixture.driveLegacy({forward: 0});
+    const beam = {lastAlarm: c.read(laser, 'lastAlarmTime'), klaxon: c.read(laser, 'AmbientSound')?.name ?? null, alarmTimers: guards.map(g => Math.round(c.read(g, 'AlarmTimer'))),
+      t18: [...seen.Terrorist18 ?? []], hostile: guards.filter(g => c.read(g, 'Enemy') === c.player()).length, unitRang: Boolean(c.read(unit, 'bActive')), flag: c.flag('statuealarmtriggered'), playerDied: beamDied};
+    const beamOk = beam.lastAlarm > 0 && beam.alarmTimers.every(t => t > 100) && beam.hostile > 0 && beam.t18.includes('alerting') && !beam.unitRang && !beam.flag;
+    // 2. The alarm box (the map reloaded). A RaiseAlarm BeforeAttacking guard that takes the player as its enemy with AlarmTimer 0 (it saw him; it heard no alarm)
+    //    goes Alerting, FindTarget picks AlarmUnit0 (within 2400, not hostile), runs to it and TriggerAlarm()s it: SetAlarmFlag -> FlagTrigger3 -> StatueAlarmTriggered.
+    c.restart();
+    for (let i = 0; i < 240 && !c.flag('m1missionstart'); i++) c.frames(5);
+    const t = c.actor('Terrorist18'), box = c.actor('AlarmUnit0'); c.watched.add(t);
+    for (let i = 0; i < 10 && (i < 6 || stateName(c, t) !== 'sitting'); i++) c.frames(60);
+    const yaw = c.read(t, 'Rotation')[1] / 65536 * 2 * PI, states = new Set();
+    c.openStand(t, 260, [yaw, yaw + 0.4, yaw - 0.4, yaw + 0.8, yaw - 0.8]);
+    let ranTo = null;
+    const boxDied = await c.guard(async () => {
+      for (let s = 0; s < 60 && !c.flag('statuealarmtriggered'); s++) {
+        c.stand(c.pos(c.player()), c.pos(t)); c.frames(30); states.add(stateName(c, t)); ranTo ??= c.read(t, 'AlarmActor')?.name ?? null;
+      }
+    });
+    const alarmBox = {states: [...states], alarmActor: ranTo, unitRang: Boolean(c.read(box, 'bActive')), flag: c.flag('statuealarmtriggered'), playerDied: boxDied};
+    return ok(beamOk && alarmBox.flag && ranTo === 'AlarmUnit0', {beam, alarmBox},
+      !beamOk ? 'the beam did not ring the klaxon and send the guards that heard it to attack with AlarmTimer 120' : 'Terrorist18, seeing the player with AlarmTimer 0, did not ring AlarmUnit0');
   },
   async 'island-hack-panel'(c) {
     const panel = c.actor('ControlPanel0'), lasers = c.byTag('statue_lasertrap'); if (!panel || !lasers.length) throw new Undriven('no ControlPanel0 or statue_lasertrap lasers');
@@ -222,7 +281,11 @@ Object.assign(DRIVERS, {
     const refuse = await meetFilben(c, 1);
     return ok(trust.ended && trust.gaveKey && trust.keys.includes('ruin_key') && refuse.ended && !refuse.gaveKey && !refuse.keys.includes('ruin_key'), {trust, refuse});
   },
-  async 'gunther-rescued'() { throw new Undriven('the cell door DeusExMover10 is reached by no frob approach tried (8 bearings, 3 distances, 2 heights around its Location); the walk to it is not driven'); },
+  async 'gunther-rescued'(c) {
+    const out = await freeGunther(c, 'WeaponPistol');
+    return ok(out.door.key === 1 && out.freed && out.con === 'GuntherRescued' && out.played && out.respects && out.gave && out.skillPoints[1] - out.skillPoints[0] === 150
+      && out.after.alliance === 'UNATCO' && out.after.orders === 'RunningTo', out);
+  },
   async 'meet-terrorist'(c) {
     toCommander(c, 40, () => c.flag('meetterrorist_played') || c.flag('statuemissioncomplete'));
     c.advance(40, () => c.flag('statuemissioncomplete'));
@@ -279,9 +342,28 @@ Object.assign(DRIVERS, {
   },
   async 'objective-kill'(c) {
     const cm = commander(c); if (!cm) throw new Undriven('no commander');
-    await armed(c); c.stand([2887, 38, 2494 + 45], c.pos(cm)); c.frames(10);
-    const died = await c.guard(async () => { for (let i = 0; i < 25 && !c.gone(cm) && c.health(cm) > 0; i++) c.shoot(4, 30); c.frames(60 * 8); });
-    return ok(c.flag('terroristcommander_dead') && c.flag('statuemissioncomplete'), {dead: c.flag('terroristcommander_dead'), health: c.gone(cm) ? null : c.health(cm), complete: c.flag('statuemissioncomplete'), killedPlayed: c.flag('dl_leaderkilled_played'), playerDied: died});
+    // MeetTerrorist is the commander's radius conversation (bInvokeRadius, radiusDistance 140; DeusExPlayer.CheckConversationInvokeRadius: Max(16, radiusDistance)).
+    // The previous driver placed the player 45 units from him: the conversation started on his first low-priority tick, state Conversation put the pistol away
+    // (conPlay.SetInHand(InHand); PutInHand(None)) and the clicks went to the conversation window, so no shot was fired. A player who means to kill him shoots from
+    // outside the radius: 300 units in front of him, inside his room. He is stamped as a rendered pawn (headless frames draw no mesh).
+    for (let i = 0; i < 240 && !c.flag('m1missionstart'); i++) c.frames(5);
+    const w = await armed(c); await pack(c, 'Ammo10mm', 2);
+    const yaw = c.read(cm, 'Rotation')[1] / 65536 * 2 * PI, from = c.approach(cm, 300, yaw);
+    if (!c.inWorld(from)) throw new Undriven('the place 300 units in front of the commander is outside the world');
+    c.watched.add(cm); c.stand(from, c.pos(cm)); c.frames(45);
+    const h0 = c.health(cm), at = Math.round(near(c.pos(c.player()), c.pos(cm)));
+    let shots = 0;
+    const died = await c.guard(async () => {
+      for (; shots < 25 && !c.gone(cm) && c.health(cm) > 0; shots++) {
+        c.stand(c.pos(c.player()), c.pos(cm)); c.frames(3); c.shoot(4, 30);
+        if (c.read(w, 'ClipCount') >= c.read(w, 'ReloadCount')) c.frames(150);
+      }
+      // Mission01.Timer: TerroristCommander_Dead -> DL_LeaderKilled (MS_DL_Played); the DataLink's own event sets StatueMissionComplete; its Played flag follows its end.
+      for (let t = 0; t < 60 && !c.flag('dl_leaderkilled_played'); t++) c.frames(60);
+    });
+    const out = {h0, distance: at, shots, dead: c.flag('terroristcommander_dead'), health: c.gone(cm) ? null : c.health(cm), complete: c.flag('statuemissioncomplete'),
+      killedPlayed: c.flag('dl_leaderkilled_played'), meetTerroristPlayed: c.flag('meetterrorist_played'), playerDied: died};
+    return ok(out.dead && out.complete && out.killedPlayed && !out.meetTerroristPlayed, out);
   },
   async 'objective-spare'(c) {
     toCommander(c, 40, () => c.flag('statuemissioncomplete')); c.advance(40, () => c.flag('statuemissioncomplete')); c.frames(60 * 6);
@@ -298,7 +380,35 @@ Object.assign(DRIVERS, {
     const died = await c.guard(async () => { for (let i = 0; i < 3; i++) c.shoot(4, 40); out = c.engage(t, 20); });
     return ok(died || (out && out.minHealth < 100 && (out.enemy || out.tracers > 0)), {out, died, h: c.health(c.player())});
   },
-  async 'light-vs-sight'() { throw new Undriven('needs a measured lit/dark pair of poses in an NPC\'s view and the NPC\'s perception fields; no such pose is read from the map yet'); },
+  async 'light-vs-sight'(c) {
+    // The Island has no LightSwitch or TriggerLight, and AugLight also starts a 'Beam' AI event that ScriptedPawn.CheckBeamPresence answers with HandleSighting
+    // (any player Beam within 1200 units in view), a second path that would not isolate the light. So the pair is the map's own lighting: two poses 500 units in
+    // front of Terrorist4 (Orders Standing), 15 degrees apart, both with a clear line of sight (AICanSee's SingleLineCheck). The dark one is in shadow (AIGetLightLevel
+    // 0.0043, ambient only: every static light's trace is blocked), the lit one 0.055. AICanSee's acc = 64 (r^2+h^2)/dist^2 * AIVisibility - VisibilityThreshold
+    // (0.01) is below zero in the dark and above it in the light; any acc > 0 brings EnemyReadiness to 1 within 4.5 s (CheckCycle).
+    const {actorLightLevelExtended} = await import('../src/runtime/script-ai-visibility.mjs');
+    const {x87store} = await import('../src/runtime/script-vm.mjs');
+    const out = {};
+    for (const [label, degrees] of [['dark', -5], ['lit', 10]]) {
+      if (label === 'lit') c.restart();
+      for (let i = 0; i < 240 && !c.flag('m1missionstart'); i++) c.frames(5);
+      const n = c.actor('Terrorist4'), other = c.actor('Terrorist27'); if (!n) throw new Undriven('no Terrorist4');
+      const np = c.pos(n), yaw = c.read(n, 'Rotation')[1] / 65536 * 2 * PI;
+      c.watched.add(n); if (other) c.watched.add(other);
+      c.stand(c.approach(n, 500, yaw + degrees * PI / 180), np); c.frames(10);
+      const pl = c.player(), at = c.pos(pl);
+      const los = c.runtime.perceptionServices({receiver: n}).singleLineCheck(c.level(), n, pl, at, [np[0], np[1], np[2] + c.read(n, 'BaseEyeHeight')]);
+      const light = x87store(actorLightLevelExtended(pl, at, c.runtime.perceptionServices({receiver: pl})));
+      let readiness = 0, seenAt = null;
+      const died = await c.guard(async () => {
+        for (let s = 0; s < 10; s++) { c.frames(60); readiness = Math.max(readiness, c.read(n, 'EnemyReadiness')); if (seenAt === null && c.read(n, 'Enemy') === pl) seenAt = s + 1; }
+      });
+      out[label] = {at: at.map(Math.round), distance: Math.round(near(at, np)), physics: c.read(pl, 'Physics'), los, light: Math.round(light * 1e4) / 1e4,
+        visibility: Math.round(c.read(pl, 'CurrentVisibility') * 1e4) / 1e4, readiness: Math.round(readiness * 1000) / 1000, seenAt, state: stateName(c, n), playerDied: died};
+    }
+    const {dark, lit} = out;
+    return ok(dark.los && lit.los && dark.physics === 1 && lit.physics === 1 && dark.light < lit.light && dark.readiness === 0 && dark.seenAt === null && lit.seenAt !== null, out);
+  },
   async 'explosion-world'(c) {
     await armed(c); const crate = c.actor('CrateExplosiveSmall10'); if (!crate) throw new Undriven('no CrateExplosiveSmall10');
     c.stand(c.approach(crate, 300, PI), c.pos(crate)); c.frames(10); const h0 = c.health(c.player());
@@ -326,5 +436,33 @@ Object.assign(DRIVERS, {
     }
     return ok(stateName(c, bot) !== before.state || c.read(bot, 'EMPHitPoints') < before.emp || c.health(bot) < before.health, {before, attempts, state: stateName(c, bot), emp: c.read(bot, 'EMPHitPoints'), health: c.health(bot), grenades: thrown, playerDied: died});
   },
-  async 'flags-change-world'() { throw new Undriven('needs GuntherFreed (see gunther-rescued) and the Filben and commander flows; only the conversation flows of meet-filben and meet-terrorist are driven'); },
+  async 'flags-change-world'(c) {
+    // Each flag from its original source, in one map each (c.restart between); Gunther's alliance (AllianceTrigger0's touch on the walk in) and orders are checked.
+    // FilbenGaveKey, M01PlayerAggressive and KnowsShipment are read here only by conversation branches (ConEventCheckFlag in FilbenSecondBark/FilbenFinalBark/MeetFilben2;
+    // PaulCongratulations, MeetKaplan, TrooperCongratulation, postmissiontroopsssecure; MoleConvos), which this driver does not play. Three of those conversations fire
+    // OrdersTriggers (PaulWandering, HarleyStartsToWander, BumFemaleWanders); which branches carry them was not traced.
+    // 1. GuntherFreed (the cell button chain, unarmed: NothingChoice -> GiveNothingNicely) -> Gunther's alliance (AllianceTrigger0) and orders (GuntherAttacks).
+    const gunther = await freeGunther(c, null);
+    // 2. FilbenGaveKey: MeetFilben's first choice (TransferObject of ruin_key).
+    c.restart(); for (let i = 0; i < 240 && !c.flag('m1missionstart'); i++) c.frames(5);
+    const filben = await meetFilben(c, 0);
+    // 3. KnowsShipment: DL_NearTop (DataLinkTrigger5) sets it from its conversation.
+    c.restart(); for (let i = 0; i < 240 && !c.flag('m1missionstart'); i++) c.frames(5);
+    const nearTop = c.byClass('DataLinkTrigger').find(t => /^dl_neartop$/i.test(String(c.read(t, 'datalinkTag'))));
+    if (!nearTop) throw new Undriven('no DL_NearTop trigger');
+    const np = c.pos(nearTop); c.fixture.place([np[0] - 20, np[1], np[2] + 45], {yaw: 0}); c.frames(10);
+    c.fixture.driveLegacy({forward: 1}); c.frames(40); c.fixture.driveLegacy({forward: 0});
+    for (let t = 0; t < 40 && !c.flag('knowsshipment'); t++) c.frames(60);
+    const shipment = c.flag('knowsshipment');
+    // 4. M01PlayerAggressive: Mission01.Timer counts the living Terrorists plus the carcasses JC did not kill (or only knocked out) and sets it below 23. The map holds
+    //    29 Terrorists and one placed TerroristCarcass, so eight kills by the player set it; each kill is TakeDamage with the player as instigator (as island-carcass).
+    const victims = c.byClass('Terrorist').filter(t => !c.gone(t)).slice(0, 8);
+    for (const t of victims) c.damage(t, 1000, 'Shot', c.player());
+    for (let t = 0; t < 5 && !c.flag('m01playeraggressive'); t++) c.frames(60);
+    const aggressive = {killed: victims.length, flag: c.flag('m01playeraggressive')};
+    const out = {gunther: {freed: gunther.freed, before: gunther.before, after: gunther.after, respects: gunther.respects}, filben: {gaveKey: filben.gaveKey, keys: filben.keys},
+      shipment, aggressive};
+    return ok(gunther.freed && gunther.before.alliance !== 'UNATCO' && gunther.after.alliance === 'UNATCO' && gunther.after.orders === 'RunningTo'
+      && filben.gaveKey && filben.keys.includes('ruin_key') && shipment && aggressive.flag, out);
+  },
 });

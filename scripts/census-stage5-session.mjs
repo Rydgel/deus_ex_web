@@ -349,7 +349,23 @@ export const DRIVERS = {
     if (!door || !sw) throw new Undriven('no FirstStealthDoor switch');
     const before = c.read(door, 'KeyNum'); await c.frob(sw); c.frames(240);
     const after = c.read(door, 'KeyNum'), moving = Boolean(c.read(door, 'bInterpolating'));
-    return ok(after !== before || moving, {before, after, moving, note: 'ElevatorMover1 (ExitDoor) is moved by mission triggers only: not driven'});
+    // ElevatorMover1 (Tag ExitDoor) is the course's exit door, a 64-unit slide on y (KeyPos[1] 0,64,0), not a ride. SequenceTrigger0 (Tag OpenDoor, SeqNum 0) and
+    // SequenceTrigger1 (Tag CloseDoor, SeqNum 1) call ElevatorMover.SetSeq, which moves only when KeyNum differs (ElevatorMover.uc SetSeq): the door starts at key 0, so
+    // OpenDoor alone moves nothing. A soldier who sees the player rings an AlarmUnit (Event AlarmDispatcher: SoldierNeutral, CloseDoor, failmessage) and the door slides
+    // to key 1; Switch0 (Event ButtonDispatcher: SoldierHostile, OpenDoor, SoldierPatrol, SpecialEventMsg) slides it back to key 0. Both are the player's inputs.
+    const exit = c.actor('ElevatorMover1'), reset = c.actor('Switch0'), soldier = c.actor('Soldier0');
+    if (!exit || !reset || !soldier) throw new Undriven('no ElevatorMover1, Switch0 or Soldier0');
+    const s0 = c.pos(soldier); c.stand([s0[0] + 180, s0[1], s0[2]], s0); c.watched.add(soldier);
+    const exit0 = c.read(exit, 'KeyNum');
+    let closedAt = null;
+    for (let t = 0; t < 60 && closedAt === null; t++) { c.frames(30); if (c.read(exit, 'KeyNum') === 1) closedAt = t / 2; }
+    for (let t = 0; t < 20 && c.read(exit, 'bIsMoving'); t++) c.frames(30);
+    const closed = {key: c.read(exit, 'KeyNum'), y: Math.round(c.pos(exit)[1])};
+    c.watched.add(reset); await c.frob(reset, [40, 48, 60, 36]);
+    for (let t = 0; t < 20 && (c.read(exit, 'KeyNum') !== 0 || c.read(exit, 'bIsMoving')); t++) c.frames(30);
+    const reopened = {key: c.read(exit, 'KeyNum'), y: Math.round(c.pos(exit)[1])};
+    return ok((after !== before || moving) && exit0 === 0 && closed.key === 1 && reopened.key === 0 && closed.y !== reopened.y,
+      {before, after, moving, exitDoor: {start: exit0, closedAt, closed, reopened}}, after === before && !moving ? 'Switch1 did not move FirstStealthDoor' : 'the alarm and Switch0 did not slide ElevatorMover1 closed and open');
   },
   async 'alarm-chain'(c) {
     const unit = c.actor('AlarmUnit1'); if (!unit) throw new Undriven('no AlarmUnit1');
@@ -367,10 +383,26 @@ export const DRIVERS = {
       !rang ? 'AlarmUnit1.Trigger left bActive false' : 'the AlarmDispatcher chain (failure DataLink, ExitDoor) or the timeout did not follow');
   },
   async 'meet-page-final'(c) {
+    // 1. M00MeetPage. ConversationTrigger1 (conversationTag m00meetpage, BindName BobPage, CollisionRadius 96) starts it from its Touch (ConversationTrigger.Touch ->
+    //    StartConversationByName, the owner within 800 units): the player must walk INTO the cylinder. The previous driver placed the player 40 units from its centre,
+    //    already inside, so no Touch began and nothing played. Walked in from 160 units the Touch fires and the conversation (third person, Enter) plays to its end.
     const trigger = c.byTag('ConversationTrigger').find(t => c.read(t, 'conversationTag') === 'm00meetpage'); if (!trigger) throw new Undriven('no m00meetpage trigger');
-    const tp = c.pos(trigger), bob = c.byClass('BobPage')[0];
-    walkAndTalk(c, [tp[0] - 40, tp[1], tp[2] + 45], bob ? c.pos(bob) : [tp[0] + 200, tp[1], tp[2]], 60, () => c.flag('m00meetpage_played'));
-    return ok(c.flag('m00meetpage_played'), {played: c.flag('m00meetpage_played'), bobInWorld: bob ? c.read(bob, 'bInWorld') : null});
+    const tp = c.pos(trigger), bob = c.byClass('BobPage').find(b => c.read(b, 'BindName') === c.read(trigger, 'BindName'));
+    walkAndTalk(c, [tp[0], tp[1] + 160, tp[2] + 45], tp, 60, () => c.flag('m00meetpage_played'));
+    const page = {played: c.flag('m00meetpage_played'), bob: bob?.name ?? null};
+    // 2. Holo-Jaime. Switch6 (Event jaime_talks) -> FlagTrigger11 (sets JaimeAppears, then triggers 'convo': ConversationTrigger0, whose conversationTag jaimebarks
+    //    names no conversation) -> Mission00.Timer's 00_TRAININGFINAL branch EnterWorld()s the holojaime JaimeReyes -> its radius conversation JaimeBark (160 units)
+    //    plays -> JaimeBark_Played -> the Timer LeaveWorld()s it and sets MS_ReyesHidden.
+    const sw = c.actor('Switch6'), jaime = c.byClass('JaimeReyes').find(j => c.read(j, 'Tag') === 'holojaime');
+    if (!sw || !jaime) throw new Undriven('no Switch6 or holojaime JaimeReyes');
+    c.watched.add(sw); c.watched.add(jaime);
+    const hidden0 = !c.read(jaime, 'bInWorld');
+    await c.frob(sw, [40, 48, 60, 36]);
+    let entered = false;
+    for (let t = 0; t < 80 && !c.flag('ms_reyeshidden'); t++) { c.frames(30); entered ||= Boolean(c.read(jaime, 'bInWorld')); }
+    const holo = {hidden0, appears: c.flag('jaimeappears'), entered, barkPlayed: c.flag('jaimebark_played'), inWorld: Boolean(c.read(jaime, 'bInWorld')), reyesHidden: c.flag('ms_reyeshidden')};
+    return ok(page.played && hidden0 && holo.appears && entered && holo.barkPlayed && !holo.inWorld && holo.reyesHidden, {page, holo},
+      !page.played ? 'M00MeetPage did not play' : 'the holo-Jaime chain (JaimeAppears, EnterWorld, JaimeBark, LeaveWorld) did not complete');
   },
 };
 
