@@ -1467,6 +1467,16 @@ code. Each is now measured from the original:
    tag of every tick it runs). The replay sets Play's tag to the original's at the release (`liveProbe` `tickTag`), or to `--tick-tag 0|1` for an older trace.
 4. **Render stamps of the frozen phase.** The original drew the start view at the dock before the placement, which stamped `LastRenderTime` for Paul, SecurityBot0 and
    UNATCOTroop1. `--render-history` (4.1.6's option) writes them.
+5. **A held tick's window frames around its commands (2026-10-18).** The tracer holds the level between two ticks to type a command, and the window system keeps ticking
+   (`roottick`, one record per frame). The replay ran the hold's commands first and then every frame of the hold before the next tick, so a window a command created got
+   the whole hold: `cmb2`'s bark subtitle, created inside the Enter press at tick 660 after 25 of the hold's 31 frames, got 1.736 s instead of 0.464 s and was freed 11 ticks
+   early ([Stage 5 exit criteria](stage-5-exit-criteria.md#first-original-captures-island-combat-2026-10-17)). The `inputevent` and `roottick` records share one call
+   sequence, so each command's matched `InputEvent` record now splits its hold: the frames before it tick the windows before the command runs (`live-probe.mjs`), the
+   rest before the next tick. The frozen phase (`after` 0) is Play's own warm-up and is not split.
+6. **The tick a window frame is logged under.** The tracer's u counts level ticks: tick 661's records (an `addobj` with `inTick` 1, seq 8054) come before the frame
+   labelled 661 (`roottick`, seq 8075), and tick 662's after it. A window frame between level ticks k and k+1 is therefore u = k. Play ticks those frames at the start of
+   replayed tick k+1, and its object log labelled their frees k+1; it now labels them k (`live-probe.mjs` objectTrace), so a window's free is compared at the original's
+   tick (`cmb2`'s `HUDBarkDisplayItem3` at 675 in both programs).
 
 New watch options: `--player-health` (the player's six hit regions) and `--los-flag` (`Pawn.bLOSflag`, +0x318 bit 0x80000, the sight worker's
 alternating-trace bit that decides whether a far listener's `ShowSelf` check draws its `FRand`). The first was added for the combat rows. The second was

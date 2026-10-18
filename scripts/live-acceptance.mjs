@@ -755,11 +755,15 @@ async function play() {
     if (!line.includes('"fn":"roottick"') || !line.includes('"ev":"enter"')) continue;
     const r = parseTraceLine(line);
     if (!rootTicks.has(r.u)) rootTicks.set(r.u, []);
-    rootTicks.get(r.u).push(r.floats[0]);
+    rootTicks.get(r.u).push({seq: r.seq, delta: r.floats[0]});
   }
+  // A held tick's frames are split at its commands (commandsWithStream): the frames before a command's InputEvent record run before the command,
+  // the ones after the hold's last command before the next level tick. holdCuts: unfrozen tick -> the call sequence number of its last command's record.
+  const holdCuts = new Map();
   const windowDeltas = unfrozen => {
-    const list = rootTicks.get(unfrozen - 1);
-    if (!list?.length) return {};
+    const frames = rootTicks.get(unfrozen - 1);
+    if (!frames?.length) return {};
+    const cut = holdCuts.get(unfrozen - 1) ?? -Infinity, list = frames.filter(f => f.seq > cut).map(f => f.delta);
     return {windowSeconds: unfrozen === 1 ? list.slice(-1) : list};
   };
   const {pawns, extras = [], carcasses = [], generators = [], timers = []} = JSON.parse(readFileSync(watchPath, 'utf8'));
@@ -918,7 +922,7 @@ async function play() {
         const r = parseTraceLine(line), action = parseInt(r.args[2], 16);
         if (r.inTick !== 0 || (action !== 1 && action !== 3)) continue;
         if (!edges.has(r.u)) edges.set(r.u, []);
-        edges.get(r.u).push({key: parseInt(r.args[1], 16), action, rng: r.rng});
+        edges.get(r.u).push({key: parseInt(r.args[1], 16), action, rng: r.rng, seq: r.seq});
       }
       // A hold's records are taken in order. A typed console line is the console key (T), Backspaces, the characters (not press/release
       // events) and Enter: the console's KeyEvent runs the line inside Enter's InputEvent, so the line takes the next Enter press's state
@@ -927,6 +931,11 @@ async function play() {
       const KEYS = {Enter: 0x0d, PageDown: 0x22, PageUp: 0x21, Escape: 0x1b, Space: 0x20, Tab: 0x09, End: 0x23, Home: 0x24, ArrowLeft: 0x25, ArrowUp: 0x26,
         ArrowRight: 0x27, ArrowDown: 0x28, ShiftLeft: 0x10, ControlLeft: 0x11};
       const keyCode = code => KEYS[code] ?? (/^Key([A-Z])$/.exec(code)?.[1].charCodeAt(0)) ?? (/^Digit(\d)$/.exec(code) ? 0x30 + Number(code.slice(5)) : null);
+      // The window frames the original ran in the hold before that record (the `roottick` records of the hold with a smaller call sequence number) tick
+      // the windows before the command runs; the rest of the hold's frames tick them before the next level tick (windowDeltas, holdCuts). A window the
+      // command creates gets only the frames after it: cmb2's bark subtitle (HUDBarkDisplayItem, created inside the Enter press's InputEvent at tick 660,
+      // after 25 of the hold's 31 frames) got all 1.736 s of the hold in Play and was freed 11 ticks early (docs/stage-5-exit-criteria.md). The frozen
+      // phase (after 0) is Play's own warm-up and is not split.
       const cursor = new Map();
       return list.map(command => {
         const m = /^@(down|up) (\S+)$/.exec(command.text), records = edges.get(command.after) ?? [], from = cursor.get(command.after) ?? 0;
@@ -934,9 +943,13 @@ async function play() {
         const at = records.findIndex((e, i) => i >= from && e.action === action && (key === null || e.key === key));
         if (at < 0) return command;
         cursor.set(command.after, at + 1);
-        return {...command, rng: records[at].rng};
+        if (command.after < 1) return {...command, rng: records[at].rng};
+        const seq = records[at].seq, previous = holdCuts.get(command.after) ?? -Infinity;
+        holdCuts.set(command.after, seq);
+        return {...command, rng: records[at].rng, windowSeconds: (rootTicks.get(command.after) ?? []).filter(f => f.seq > previous && f.seq < seq).map(f => f.delta)};
       });
     };
+    const commands = commandsWithStream();   // before the ticks' window frames (windowDeltas reads holdCuts)
     // (--render-history: their LastRenderTime too, when the trace has it; the generators are in Play's level: a name only the original holds is not written)
     const generatorLoad = [...GENERATOR_LOAD_FIELDS, ...(flag('render-history') ? GENERATOR_FIELDS.filter(f => f[0] === 'LRT') : [])];
     const generatorWrites = Object.fromEntries(watchedGenerators.filter(name => frozen[frozen.length - 1].actors[name])
@@ -984,7 +997,7 @@ async function play() {
       // --phonemes file.json ([{n, name, letter}]; conversation-acceptance.mjs `phonemes`): the letters the original's audio update wrote into a speaker's nextPhoneme, a measured input
       ...(option('phonemes', null) ? {phonemes: JSON.parse(readFileSync(option('phonemes'), 'utf8'))} : {}),
       ...(option('can-see', null) ? {canSeeProbe: {pawn: option('can-see'), first: Number(option('can-see-ticks', '1:1').split(':')[0]), last: Number(option('can-see-ticks', '1:1').split(':')[1])}} : {}),
-      commands: commandsWithStream(), watch: [
+      commands, watch: [
       {names: ['@player'], props: playerProps}, {names: pawns, props}, ...(watchedGenerators.length ? [{names: watchedGenerators, props: GENERATOR_FIELDS.map(f => f[1])}] : []),
       // --extra-watch actors are not pawns: the fields every Actor has
       ...(extras.length ? [{names: extras, props: ['Location', 'Rotation', 'Velocity', 'Physics', 'AnimSequence', 'AnimFrame', 'AnimRate', 'TweenRate', 'LifeSpan', 'LastRenderTime', 'DistanceFromPlayer', 'TimerRate', 'TimerCounter', ...(flag('touching') ? ['Touching'] : [])]}] : []),
