@@ -45,7 +45,9 @@
  * clientTravel, play-level-end<tag>.json). The check also passes only when both ended after the same tick and the trace holds every tick up to it.
  *   die1  cmb1's pose, no weapon, HealthTorso and HealthHead lowered to 5 by console SET in the frozen phase (both programs run the same line; the original's
  *         is read back before the tracer attaches): the Terrorists' fire kills the player, the Dying state runs to the OPEN and the level ends. Watched: the
- *         eight NSF pawns within 5,000 units of the pose (the trace of every pawn for 2,000 ticks would not fit the machine), the player and its carcass. */
+ *         eight NSF pawns within 5,000 units of the pose (the trace of every pawn for 2,000 ticks would not fit the machine), the player and its carcass; the
+ *         other ScriptedPawns are traced with their load-time fields only (live-acceptance.mjs `loadPawns`), written into Play and not compared.
+ *         The stored original (2026-10-18): death at tick 652 (DeathFront), the carcass at 730, the OPEN in the render after 1930, the level's end after 1931. */
 import {spawn} from 'node:child_process';
 import {existsSync, mkdirSync, readFileSync, writeFileSync} from 'node:fs';
 import path from 'node:path';
@@ -143,7 +145,8 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
   const compare = await exec(['scripts/live-acceptance.mjs', 'compare', '--map', scene.map, '--tag', tag, ...SCENE_FLAGS], 600);
   console.log(compare.out.trim());
   const report = JSON.parse(readFileSync(path.join(dir, 'report.json'), 'utf8'));
-  const actors = Object.entries(report.actors), different = actors.filter(([, e]) => e.firstDifference !== null);
+  // (the actors Play watched: the trace's timed actors and load-field pawns are written into Play, not compared)
+  const actors = Object.entries(report.actors).filter(([, e]) => e.compared !== false && (e.compared || e.firstDifference !== null)), different = actors.filter(([, e]) => e.firstDifference !== null);
   if (different.length) problems.push(`${different.length} of ${actors.length} actors differ (${different.sort((a, b) => a[1].firstDifference - b[1].firstDifference).slice(0, 4).map(([n, e]) => `${n}@${e.firstDifference}`).join(' ')})`);
   if (report.clock?.firstDifference) problems.push(`clock differs at tick ${report.clock.firstDifference.tick}`);
   if (report.rng?.firstTickWithDifferentDrawCount) problems.push(`stream draws differ at tick ${report.rng.firstTickWithDifferentDrawCount.tick}`);

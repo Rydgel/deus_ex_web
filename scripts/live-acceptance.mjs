@@ -399,8 +399,14 @@ async function original() {
   // The two programs spell some actors' names with other case (the original's `mib1`, `Light1`; Play's `MIB1`, `light1`: the name table keeps the first
   // spelling registered, and FNames compare without case). Names are matched lowercase, and a name Play reports is watched in the original's spelling.
   const originalSpelling = new Map(wine('list', 'Actor').split('\n').map(line => /^\S+ (\S+) slot=/.exec(line)?.[1]).filter(Boolean).map(name => [name.toLowerCase(), name]));
+  // An explicit --watch list leaves the other ScriptedPawns unwatched, but their load-time fields are replay inputs all the same (PAWN_LOAD_FIELDS and
+  // LastRenderTime: a listener's SightCounter decides the tick its check runs in the player's ShowSelf, and with it that check's far-path draw; die1's
+  // first replay drew at tick 4 where the original drew at 12): traced with those fields only (watch<tag>.json `loadPawns`), written by the replay at the
+  // release, not compared (Play does not watch them, as the timed actors).
+  let loadPawns = watchOption === 'auto' ? [] : wine('list', 'ScriptedPawn').split('\n').map(line => /^\S+ (\S+) slot=/.exec(line)?.[1]).filter(name => name && !names.includes(name));
+  const LOAD_FIELDS = FIELDS.filter(f => [...PAWN_LOAD_FIELDS, 'LRT'].includes(f[0]));
   const timers = (existsSync(reference0) && !flag('no-timers') ? JSON.parse(readFileSync(reference0, 'utf8')).timers ?? [] : []).map(name => originalSpelling.get(name.toLowerCase()) ?? name)
-    .filter(name => !names.includes(name) && !generators.includes(name));
+    .filter(name => !names.includes(name) && !generators.includes(name) && !loadPawns.includes(name));
   const buildConfig = (names, generators, timers) => {
   const config = [`out ${tracePath}`, 'player JCDentonMale', `release ${option('release', 3)}`, `ticks ${option('ticks', 600)}`,
     ...(cmds.length ? [`pause-at ${[...new Set(cmds.map(c => c.after))].sort((a, b) => a - b).join(' ')}`] : []),
@@ -421,12 +427,13 @@ async function original() {
     `watch ${names.join(',')} ${FIELDS.map(spec).join(' ')}`,
     ...(carcasses.length ? [`late-watch ${carcasses.join(',')} ${CARCASS_FIELDS.map(spec).join(' ')}`] : [])];
   if (timers.length) config.push(`watch ${timers.join(',')} TRate:0x48:f TCount:0x4c:f`);
+  if (loadPawns.length) config.push(`watch ${loadPawns.join(',')} ${LOAD_FIELDS.map(spec).join(' ')}`);
   return config;
   };
   let config = buildConfig(names, generators, timers.slice());
   const configPath = path.join(dir, 'trace.cfg');
   writeFileSync(configPath, config.join('\n') + '\n');
-  writeFileSync(watchPath, JSON.stringify({map, pawns: names.filter(name => !extras.includes(name)), extras, carcasses, generators, timers, classes: classOf}, null, 1));
+  writeFileSync(watchPath, JSON.stringify({map, pawns: names.filter(name => !extras.includes(name)), extras, carcasses, generators, timers, loadPawns, classes: classOf}, null, 1));
   // The actors the original's level holds (a load removes some at random: OddsOfAppearing).
   const everything = wine('list', 'Actor').split('\n').map(line => /^\S+ (\S+) slot=(\d+) loc=\(([^)]*)\) .* odds=(\S+)/.exec(line)).filter(Boolean)
     .map(m => ({name: m[1], odds: Number(m[4]), slot: Number(m[2]), loc: m[3].split(',').map(Number)}));   // slot: the GObjObjects slot (the order a load made the actors in)
@@ -470,11 +477,11 @@ async function original() {
     if (only.length && tolerated && only.every(name => tolerated.test(name))) {
       const gone = new Set(only);
       console.log(`POPULATION tolerated: ${only.length} actors only the original holds are not watched: ${only.slice(0, 20).join(' ')}`);
-      names = names.filter(name => !gone.has(name));
+      names = names.filter(name => !gone.has(name)); loadPawns = loadPawns.filter(name => !gone.has(name));
       const keptGenerators = generators.filter(name => !gone.has(name)), keptTimers = timers.filter(name => !gone.has(name));
       config = buildConfig(names, keptGenerators, keptTimers);
       writeFileSync(configPath, config.join('\n') + '\n');
-      writeFileSync(watchPath, JSON.stringify({map, pawns: names.filter(name => !extras.includes(name)), extras, carcasses, generators: keptGenerators, timers: keptTimers, classes: classOf, notInPlay: only}, null, 1));
+      writeFileSync(watchPath, JSON.stringify({map, pawns: names.filter(name => !extras.includes(name)), extras, carcasses, generators: keptGenerators, timers: keptTimers, loadPawns, classes: classOf, notInPlay: only}, null, 1));
     } else if (only.length) { console.log(`POPULATION: the original holds ${only.length} actors Play's seed ${option('seed', 1)} load lacks: ${only.slice(0, 20).join(' ')}`); process.exitCode = 3; return; }
     else console.log('population: the original holds nothing Play lacks');
   }
@@ -788,7 +795,7 @@ async function play() {
     const cut = holdCuts.get(unfrozen - 1) ?? -Infinity, list = frames.filter(f => f.seq > cut).map(f => f.delta);
     return {windowSeconds: unfrozen === 1 ? list.slice(-1) : list};
   };
-  const {pawns, extras = [], carcasses = [], generators = [], timers = []} = JSON.parse(readFileSync(watchPath, 'utf8'));
+  const {pawns, extras = [], carcasses = [], generators = [], timers = [], loadPawns = []} = JSON.parse(readFileSync(watchPath, 'utf8'));
   // Play is placed where the original's player stood when the replay begins: the last frozen tick's exit.
   const frozen = traceRows.filter(row => row.unfrozen === 0);
   const pose = frozen[frozen.length - 1].actors['@player'];
@@ -979,7 +986,7 @@ async function play() {
         .map(([label, prop]) => [prop, frozen[frozen.length - 1].actors[name][label]]))]));
     const lastFrozen = frozen[frozen.length - 1].actors;
     // --no-pawn-load / --no-timer-load: diagnostics, a replay without the pawns' (SightCounter, TimerRate, TimerCounter) or the timed actors' load-time inputs.
-    const pawnWrites = flag('no-pawn-load') ? {} : Object.fromEntries(pawns.filter(name => lastFrozen[name] && renderHistoryFields().every(label => lastFrozen[name][label] !== undefined))
+    const pawnWrites = flag('no-pawn-load') ? {} : Object.fromEntries([...pawns, ...loadPawns].filter(name => lastFrozen[name] && renderHistoryFields().every(label => lastFrozen[name][label] !== undefined))
       .map(name => [name, Object.fromEntries(renderHistoryFields().map(label => [FIELDS.find(f => f[0] === label)[1], lastFrozen[name][label]]))]));
     const timerWrites = flag('no-timer-load') ? {} : Object.fromEntries(timers.filter(name => lastFrozen[name]?.TRate !== undefined).map(name => [name, {TimerRate: lastFrozen[name].TRate, TimerCounter: lastFrozen[name].TCount}]));
     // The original's class counters (UClass+0x488: MakeUniqueObjectName's suffix, docs/script-construction.md "Spawned names against the original")
@@ -1015,7 +1022,7 @@ async function play() {
       ...(trace[0]?.viewport?.[0] && !flag('own-viewport') ? {renderSize: trace[0].viewport} : {}),   // the original's frame size (--own-viewport: Play's page)
       ...(setupNames ? {setupProbe: {names: setupNames.split(','), first: setupFirst, last: setupLast}} : {}),
       ...(scriptPawns ? {scriptTrace: {pawns: scriptPawns.split(','), first: scriptFirst, last: scriptLast}} : {}), replay: {ticks: trace.map(({n, unfrozen, delta, rngIn, clockIn, tsIn, strobeIn, aiFirst}) => ({n, unfrozen, delta, rngIn, clockIn, tsIn, strobeIn, aiFirst, ...windowDeltas(unfrozen)})),   // not the watched fields: a long trace would not fit the page
-      release: true, hold: true, tickTag: tickTag(), drawTrace: flag('draw-trace'), drawStacks: flag('draw-stacks'), drawStackActor: option('draw-stack-actor', null),
+      release: true, hold: true, levelEnded: existsSync(`${tracePath}.ended`), tickTag: tickTag(), drawTrace: flag('draw-trace'), drawStacks: flag('draw-stacks'), drawStackActor: option('draw-stack-actor', null),
       // --phonemes file.json ([{n, name, letter}]; conversation-acceptance.mjs `phonemes`): the letters the original's audio update wrote into a speaker's nextPhoneme, a measured input
       ...(option('phonemes', null) ? {phonemes: JSON.parse(readFileSync(option('phonemes'), 'utf8'))} : {}),
       ...(option('can-see', null) ? {canSeeProbe: {pawn: option('can-see'), first: Number(option('can-see-ticks', '1:1').split(':')[0]), last: Number(option('can-see-ticks', '1:1').split(':')[1])}} : {}),
@@ -1030,14 +1037,17 @@ async function play() {
     const touch = [], rows = [], nav = [], script = [], setup = [], commandLog = [], events = [], objects = [], sounds = [];
     let stalls = 0, levelEnd = null;
     rmSync(path.join(dir, `play-level-end${suffix}.json`), {force: true});
-    while (rows.length < trace.length) {
+    // A trace that stopped at the original's level end (<trace>.ended): the replay runs on until Play's own client travel, or until it stalls.
+    const originalEnded = existsSync(`${tracePath}.ended`);
+    while (rows.length < trace.length || (originalEnded && !levelEnd)) {
       await frames(20);
       const taken = await page.evaluate(() => window.deusExViewer.liveProbe({take: true}));
       if (taken.debug?.length) { (globalThis.__debugRows ??= []).push(...taken.debug); } nav.push(...(taken.nav ?? [])); touch.push(...(taken.touch ?? [])); events.push(...(taken.events ?? [])); objects.push(...(taken.objects ?? [])); sounds.push(...(taken.sounds ?? [])); script.push(...(taken.script ?? [])); setup.push(...(taken.setup ?? [])); commandLog.push(...(taken.commands ?? [])); for (const line of taken.stackLog ?? []) console.log(line);
       if (taken.rows.length) { rows.push(...taken.rows); stalls = 0; }
       // the level's end (game.mjs clientTravel: an OPEN's URL browsed after the next tick): Play stops there; every row before it was taken above
       if (taken.levelEnd) { levelEnd = taken.levelEnd; break; }
-      if (!taken.rows.length && ++stalls > 40) throw new Error(`the replay stopped at tick ${rows.length}${errors.length ? `: ${errors.slice(0, 3).join(' | ')}` : ''}${(await page.evaluate(() => document.querySelector('#toast')?.textContent ?? '').catch(() => '')).slice(0, 600)}`);
+      if (!taken.rows.length && ++stalls > 40 && rows.length >= trace.length) break;   // every row replayed and Play's level did not end: the check says so
+      if (!taken.rows.length && stalls > 40) throw new Error(`the replay stopped at tick ${rows.length}${errors.length ? `: ${errors.slice(0, 3).join(' | ')}` : ''}${(await page.evaluate(() => document.querySelector('#toast')?.textContent ?? '').catch(() => '')).slice(0, 600)}`);
     }
     // the boundaries Play recorded instead of running during the replay (docs/visual-acceptance.md, record-only audit)
     {   // the player's FlagBase at the end of the replay (the original's: flags-end<tag>.txt from --dump-flags)
@@ -1171,6 +1181,7 @@ function compare() {
         if (entry.firstDifference === null || i + 1 < entry.firstDifference) entry.firstDifference = i + 1;
       }
       if (!o || !p) continue;
+      entry.compared = true;   // (an actor only the original's trace holds, a timed actor or a pawn traced for its load fields, is never compared)
       for (const [label, prop] of labels) {
         if (!(label in o) || !(prop in p)) continue;
         let ov = o[label], pv = p[prop];

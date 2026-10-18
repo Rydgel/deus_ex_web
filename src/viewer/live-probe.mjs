@@ -381,7 +381,10 @@ export function liveProbe(game, args = {}) {
         // so the actors drawn stamp LastRenderTime with that time (the original's frames before the
         // release did); the first tick then finds the stamps current, as the original's did.
         if (this.warm > 0) { this.warm--; return false; }
-        if (this.index >= this.ticks.length) return this.hold ? false : dt;
+        // After the last row the original paused before any command of that hold was typed, unless its level ended there (`levelEnded`: the trace
+        // stopped at the client travel, e.g. an OPEN typed in that hold): then the hold's commands run, and the client travel follows (game.mjs).
+        const typedAtEnd = args.replay.levelEnded && this.commands.length && this.commands[0].after <= this.index;
+        if (this.index >= this.ticks.length && !typedAtEnd) return this.hold ? false : dt;
         const tick = this.ticks[this.index];
         let typed = false;
         while (this.commands.length && this.commands[0].after <= this.index) {
@@ -417,7 +420,7 @@ export function liveProbe(game, args = {}) {
         }
         // The original draws frames while a command is typed and the level is held (a view change stamps the LastRenderTime of what it now
         // shows): a few frames pass here before the next tick, as in the warm-up.
-        if (typed) { this.warm = 3; return false; }
+        if (typed || this.index >= this.ticks.length) { this.warm = 3; return false; }
         if (runtime.navTrace) runtime.navTrace.tick = this.index + 1;
         if (runtime.scriptTrace) runtime.scriptTrace.tick = this.index + 1;
         if (this.preFrees?.length) while (this.preFrees.length && this.preFrees[0].u <= this.index + 1) {

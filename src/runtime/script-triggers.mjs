@@ -108,7 +108,7 @@ export function createFlagBase({ initialFlags, defaultExpiration = 0, slots = nu
   // (`slots`: the host's slot model, original-object-index.mjs; the delete order here is insertion order, the native
   // walks its hash buckets, so the order slots are given back in is the model's, not measured).
   const holders = new Map();
-  const takeSlot = (key, type = 0) => { if (slots && !holders.has(key)) { const holder = {}; slots.take(holder, FLAG_CLASSES[type], key); holders.set(key, holder); } };
+  const takeSlot = (key, type = 0) => { if (slots && !holders.has(key)) { const holder = {}; slots.take(holder, FLAG_CLASSES[type], key.split('\u0000')[0]); holders.set(key, holder); } };
   const giveBackSlot = key => { const holder = holders.get(key); if (holder) { slots.giveBack(holder); holders.delete(key); } };
   const calls = [];
   // XFlagBase::SetDefaultExpiration (native 1125, exec 0x10025dc0) writes the

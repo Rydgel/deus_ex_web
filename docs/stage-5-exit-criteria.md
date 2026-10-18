@@ -79,7 +79,7 @@ report (`--stage4-report`), so presentation proof is not repeated.
 | 5.1.5 | 01_NYC_UNATCOIsland | the player's pistol hurts and kills a standing Terrorist: damage, hit reaction, hostile response, death, carcass and its inventory | O1 | `island-shoot-npc` | cmb5 equal: its carcass's first LastRenderTime is stamped a tick late in Play (the actor mesh layer admits a spawned mesh actor asynchronously, so the first frame after the spawn tick does not draw or stamp it; the original does) | validate-stage5-live cmb7 (O1: the second pistol shot kills Terrorist0 at 360; its carcass created at the original's tick); weapon noise O1 (the NPCs' event handlers for a player's shots in the Underworld); carcass memory natives 2108/2109 (O2) | FAIL |
 | 5.1.6 | 01_NYC_UNATCOIsland | a hostile Terrorist attacks the player: it aims and fires (Tracer, physProjectile), the player's Health, armor and hit regions change, the AI keeps attacking or takes cover | O1 | `island-npc-shoots-player` | O1: live trace of the original with a visible, hostile-allied player in an NPC's view and the NPC's state, fire, projectile and the player's damage per tick | validate-island-tracer (tracer flight, P); validate-native-projectile (O2) | PASS |
 | 5.1.7 | 01_NYC_UNATCOIsland | a baton or crowbar knocks a Terrorist out: KnockedOut carcass, "Unconscious", and Mission01.Timer's aggression count | O1 | `island-melee-ko` | O1: live trace of the original (WeaponBaton drawn, Fire edge at a Terrorist) with the pawn's state, the carcass and its itemName | - | MISSING |
-| 5.1.8 | 01_NYC_UNATCOIsland | player death: lethal damage reaches Dying, the death state and view; the game does not continue the level | O1 | `island-death` | the death state to its end: DeusExPlayer.Dying's camera spiral (8 s after the player is hidden), the fade and the OPEN DXONLY about 20 s after it, where the original's level ends; cmb3 holds 37 ticks of Dying. Needs a trace that runs to the level's end (the tracer detecting the new level), a replay that records OPEN as the boundary where Play stops, and a check of that tick | validate-stage5-live cmb3 (O1: the Terrorists' fire kills the player at tick 863, HealthTorso -4, Dying and DeathFront; Play equal through Dying to tick 900) | MISSING |
+| 5.1.8 | 01_NYC_UNATCOIsland | player death: lethal damage reaches Dying, the death state and view; the game does not continue the level | O1 | `island-death` | die1 equal: its JCDentonMaleCarcass0's first LastRenderTime is stamped a tick late in Play (the actor mesh layer admits a spawned mesh actor asynchronously, so the first frame after the spawn tick does not draw or stamp it; the original does), the open item of cmb5 (5.1.5, 5.2.7). Every other watched field, the stream, the clock, the AI events, the creations and the level's end (after tick 1931 in both) are equal | validate-stage5-live cmb3 (O1: the Terrorists' fire kills the player at tick 863, HealthTorso -4, Dying and DeathFront; Play equal through Dying to tick 900); validate-console-command (OPEN: SetClientTravel stores the URL and runs PreTravel; the client travel step ends the level) | FAIL |
 | 5.1.9 | 01_NYC_UNATCOIsland AutoTurret | NSFTurret01 fires at the player when its cameras trigger libertyturret1; the player can shoot it down | O1 | `island-turret` | O1: live trace of the original with the turret active (bActive via trigger) and the player in its range | validate-island-tracer | MISSING |
 
 ### 5.2 Stealth
@@ -254,6 +254,8 @@ How the scenarios are driven (and what that means for reading the table):
    `Terrorist27` goes `seeking`/`attacking`.
 2. **The player's death ends at `OPEN DXONLY`** (`UGameEngine::Exec OPEN is not implemented`): `island-death` reaches the Dying state and a killed player (`route-front`: shot by the guards at the statue doors)
    stops there. That is the reload after death, Stage 6's neighbour; the question is where Play should stop.
+   **Taken up 2026-10-18** ([below](#the-players-death-to-the-levels-end-2026-10-18)): `OPEN` is now the original's `SetClientTravel`, and Play stops where the original leaves the level,
+   at `UGameEngine::Tick`'s client travel after the next tick; the Browse to `DXONLY` and its menu stay Stage 6 (5.7.1).
 3. **Lockpicking and hacking on Island devices never completed: the driver gave the wrong input, not Play** (`island-hack-panel`, `route-back`, `route-front`; fixed 2026-10-17).
    The driver used the right button (`game.use()` = `ParseRightClick`), which frobs the target with nothing in hand (`DoFrob(Self, None)`, `DeusExPlayer.uc` `ParseRightClick`): `HackableDevices.Frob`
    and `DeusExMover.Frob` start a hack or a pick only when handed the Multitool or Lockpick, and a Multitool or Lockpick reaches them from the LEFT button (`ParseLeftClick`:
@@ -351,8 +353,8 @@ live traces (4.1.5, 4.1.6, 4.1.7, 4.2.13, 4.3.6, 4.5.5) were rerun after these c
 pawn in stasis after 5 s besides. It now stands behind it (the effect: no reaction) and then in its view (the effect: seeking and attacking), with the pawn stamped as the
 renderer would stamp it. It plays.
 
-**Rows.** 5.2.2 passes on `cmb1` and `cmb2`, and 5.1.6 on `cmb1` to `cmb4`, `cmb6` and `cmb7`. The armor is compared through the hit regions it protects; its `Charge` is not a watched field, because the armor is a summoned actor. No scene has a Terrorist take cover; the row's "or takes cover" is the AI's choice, not something the scene asks for. 5.6.1 passes on `cmb7`. 5.1.5 and 5.2.7 name `cmb5` and fail on its one open difference ([below](#second-captures-a-body-found-the-carcasss-contents-the-medkit-2026-10-18)). 5.2.3 keeps its footsteps `need`. 5.1.8 is not proved: `cmb3` keeps the player's
-death (tick 863) and Play is equal through 37 ticks of `Dying`, but the death state's end is not captured (the row's `need`).
+**Rows.** 5.2.2 passes on `cmb1` and `cmb2`, and 5.1.6 on `cmb1` to `cmb4`, `cmb6` and `cmb7`. The armor is compared through the hit regions it protects; its `Charge` is not a watched field, because the armor is a summoned actor. No scene has a Terrorist take cover; the row's "or takes cover" is the AI's choice, not something the scene asks for. 5.6.1 passes on `cmb7`. 5.1.5 and 5.2.7 name `cmb5` and fail on its one open difference ([below](#second-captures-a-body-found-the-carcasss-contents-the-medkit-2026-10-18)). 5.2.3 keeps its footsteps `need`. 5.1.8 was not proved: `cmb3` keeps the player's
+death (tick 863) and Play is equal through 37 ticks of `Dying`, but the death state's end is not captured. `die1` (2026-10-18, [below](#the-players-death-to-the-levels-end-2026-10-18)) runs it to the level's end.
 
 **The subtitle windows' lifetime: explained and fixed (2026-10-18).** In `cmb2` and `cmb3` some objects took a different registry slot, while every creation was equal in class and tick: 50 of
 1,150 and 64 of 1,364. The first difference in `cmb2` was the bark subtitle of tick 660 (`ConAudioAIBarks_859`, 1.976 s by both programs' `GetSpeechLength`; the MP3 is 1.985 s): Play freed its
@@ -427,6 +429,41 @@ the player's three shots missed `Terrorist0`. The scene replays equal and proves
 by the death and the carcass's creation. `cmb7` is 5.6.1's whole encounter: two shots from 700 units behind `Terrorist0` (the second kills it), the others attack, the player is hurt from
 548 and the MedKit heals every region to 100 at 701. The MedKit's own state (a summoned actor) is not watched; the heal is read through the player's `Health` and hit regions.
 
+### The player's death to the level's end (2026-10-18)
+
+**What the original does.** `DeusExPlayer` state `Dying` hides the player after `FinishAnim` and spawns its carcass (`bHidden`, `SpawnCarcass`). Until then its `PlayerCalcView`
+sets `FrobTime` to `Level.TimeSeconds` at every render; afterwards the camera spirals over the carcass for 8 s and fades for 12 more, and at the first render where the fade is `-1`
+(`Level.TimeSeconds - FrobTime` at least 20) it calls `ConsoleCommand("OPEN DXONLY")` when no menu or tool window is on top. The rest is native and was read from Engine.dll:
+`UGameEngine::Exec` (0x1038a030) tests `OPEN` first and, with a client viewport, calls `SetClientTravel(Client->Viewports(0), Cmd, 0, TRAVEL_Partial)` (vtable +0x88 at 0x1038a0a9).
+`SetClientTravel` (0x1038fa10) stores `TravelURL` (+0xa0), `TravelType` (+0x9c) and `bTravelItems` (+0xac) on the viewport, then runs `ProcessEvent(PreTravel)` on every actor of
+`GLevel->Actors` whose `FindFunction(PreTravel)` finds one (0x1038fb4b..0x1038fb95, the name at 0x1047f080): `MissionScript` turns its timer off and drops its flags, `DeusExPlayer`
+sets `PlayerTraveling`, saves its skill points in two int flags (`SaveSkillPoints`, `FlagBase.SetInt`) and puts its fire out (its own timer off), `AugLight` destroys its beams. Nothing is
+browsed there. `UGameEngine::Tick` (0x1038fe90) ticks the levels (0x10390154..0x103901a3), then tests `Viewports(0)->TravelURL` (0x1039088e) and browses to it (vtable +0xa8 at
+0x10390c01: `DDeusExGameEngine::Browse`, then LoadMap), and only then has the client render (`UClient::Tick`, vtable +0x64 at 0x1039117b). So an `OPEN` typed in the render after tick N
+ends the level after tick N + 1, which still runs with the `PreTravel` changes.
+
+**The tracer.** `tools/dx-live-win.c` breaks at 0x103908bd, the first instruction of the client travel branch (a `mov`, reached only for a non-empty URL): the unfrozen ticks the level
+ran go to `<trace>.ended`, and it restores the byte and detaches before Browse (no record of the save, the unload or the next map's load). `live-acceptance.mjs original` takes a
+tracer that ends there (no `paused after`, no end dumps) and `--wait-seconds` for a long run; it also reads back a typed `set DeusEx.JCDentonMale Health<Region> N` from the live player
+before the trace (the console drops characters on a loaded host). Tried first on a 60-tick trace with `open 00_Training` typed in the hold after tick 30: `.ended` 30, and the
+`settravel` breakpoint on `SetClientTravel` shows its arguments (the viewport, the URL, 0, 1) and, inside it, `AddObject` of a `FlagBool` and two `FlagInt` (`PreTravel`'s flags).
+
+**Play.** `OPEN` runs `SetClientTravel` as recovered (`script-console-command.mjs`), and `game.mjs` `clientTravel` is the engine's travel step, called after each tick and before the
+view (`sim-session.mjs`, the census session): a stored URL ends the level there, thrown as `ClientTravelBoundary` (Browse, LoadMap and the menu are Stage 6). A live replay records the
+tick (`play-level-end<tag>.json`); a trace that ended at a hold runs that hold's commands first. `FlagBase.SetInt` (native 1102, `XFlagBase::SetInt` 0x10023e80) is `SetBool`'s body
+with type 2, a `FlagInt` object and the whole int stored; the flag store now keys a flag by name and type (`script-triggers.mjs`; `validate-flagbase-iterators` still passes).
+`validate-console-command` checks `OPEN` (the URL, the `PreTravel` flags, the next step's boundary).
+
+**`die1`.** `cmb1`'s pose (700 units in front of `Terrorist0`), no weapon, `HealthTorso` and `HealthHead` set to 5 in the frozen phase: the Terrorists' fire kills the player at tick 652
+(`DeathFront`, `HealthTorso` -5), the carcass is spawned at 730, `FrobTime` stops at 242.72316, the original's `SetClientTravel` comes in the render after tick 1930 (20.033 s later)
+and its level ends after tick 1931. Play's ends after tick 1931 too. The check passes the level's end, the clock and the stream draws for all 1,931 ticks, the 1,536 AI events and the
+1,572 creations (33 of them take another registry slot: reported, not judged). Watched: the eight NSF pawns within 5,000 units, the player and its carcass, all equal for every tick but
+one field: **`JCDentonMaleCarcass0`'s first `LastRenderTime`** (242.739822 at tick 731 in the original, -10 in Play, equal afterwards), `cmb5`'s open item (the actor mesh layer admits a
+spawned mesh asynchronously, [above](#second-captures-a-body-found-the-carcasss-contents-the-medkit-2026-10-18)). So 5.1.8 fails on that item alone, with 5.1.5 and 5.2.7. The trace is
+47 MB (155 s on the bottle). A first capture (level end after 1825) found one more difference, in the harness: with an explicit watch list the other pawns' load-time `SightCounter`
+was Play's own, and a far listener's check moved the player's `ShowSelf` draw from tick 12 to tick 4. `live-acceptance.mjs` now traces the unwatched `ScriptedPawn`s with their load
+fields only (`Sight`, `TRate`, `TCount`, `LRT`; watch<tag>.json `loadPawns`), which the replay writes and does not compare; the second capture's draws are equal throughout.
+
 ## Scoreboard (2026-10-18, after the second combat captures)
 
 `node scripts/validate-stage5-acceptance.mjs --census .work/stage5-census-2026-10-18.json --report` on a fresh census of this code (the Mac: the census 12 min, 44 plays, 0 pause,
@@ -435,22 +472,23 @@ History: the first run (master 5d7285c, with the three tightened predicates) was
 MISSING. The death, explosives and alarms task moved 5.1.2, 5.1.4, 5.1.5, 5.2.7, 5.6.2 and 5.6.5. That left 0 PASS, 4 FAIL, 43 MISSING, 3 UNDRIVEN. The first combat captures moved
 5.2.2 from FAIL to PASS and 5.1.6 from MISSING to PASS (2 PASS, 3 FAIL, 42 MISSING). The second moved 5.6.1 from MISSING to PASS, and 5.1.5 and 5.2.7 from MISSING to FAIL: their proof,
 `cmb5`, differs in one field at one tick (the carcass's first render stamp, [above](#second-captures-a-body-found-the-carcasss-contents-the-medkit-2026-10-18)).
+The death capture (`die1`, the same day, rerun with `--only` on a fresh `island-death` census) moved 5.1.8 from MISSING to FAIL on the same item, its player carcass's first stamp
+([above](#the-players-death-to-the-levels-end-2026-10-18)): 3 PASS, 6 FAIL, 38 MISSING, 3 UNDRIVEN (report `.work/stage5-gate-2026-10-18-518.json`).
 
 | Clause | PASS | FAIL | MISSING | UNDRIVEN | EXCLUDED |
 | --- | ---: | ---: | ---: | ---: | ---: |
-| 5.1 Combat | 1 | 1 | 7 | 0 | 0 |
+| 5.1 Combat | 1 | 2 | 6 | 0 | 0 |
 | 5.2 Stealth | 1 | 2 | 4 | 0 | 0 |
 | 5.3 Exploration and the character systems | 0 | 0 | 13 | 0 | 0 |
 | 5.4 Conversation | 0 | 1 | 6 | 1 | 0 |
 | 5.5 Alternate-route objectives | 0 | 1 | 6 | 0 | 0 |
 | 5.6 Systems interacting | 1 | 0 | 3 | 2 | 0 |
 | 5.7 Excluded | 0 | 0 | 0 | 0 | 5 |
-| **Total** | **3** | **5** | **39** | **3** | **5** |
+| **Total** | **3** | **6** | **38** | **3** | **5** |
 
 The three `PASS` rows have proof checks on the stored Island combat scenes ([above](#first-original-captures-island-combat-2026-10-17)): 5.2.2 on `cmb1` and `cmb2`, 5.1.6 on `cmb1` to
-`cmb4`, `cmb6` and `cmb7`, 5.6.1 on `cmb7`. Two `FAIL` rows (5.1.5, 5.2.7) have a proof check that finds one difference; the other three `FAIL` rows do not play: there is no pause, but
-`island-laser`, `meet-page-final` and `objective-kill` have no effect. The 39 `MISSING` rows play in the census and name the capture that would prove them (5.1.8 names the end of the death
-state; `cmb3` keeps the death itself). The 3 `UNDRIVEN` rows cannot be started. Stage 4's gate started at 44 of 70 because 60 checks against stored
+`cmb4`, `cmb6` and `cmb7`, 5.6.1 on `cmb7`. Three `FAIL` rows (5.1.5, 5.2.7, 5.1.8) have a proof check that finds one difference, the same one (a spawned carcass's first render stamp); the other three `FAIL` rows do not play:
+there is no pause, but `island-laser`, `meet-page-final` and `objective-kill` have no effect. The 38 `MISSING` rows play in the census and name the capture that would prove them. The 3 `UNDRIVEN` rows cannot be started. Stage 4's gate started at 44 of 70 because 60 checks against stored
 originals already existed; for gameplay they did not. The strongest existing evidence is listed per row under "Existing, partial": the Island combat scenes, the Underworld's
 weapon-noise traces for gunshots, the perception pilot, the first-person crowbar, MeetPaul's frames, and the native oracles for swimming, ladders, falling and movers.
 
@@ -471,13 +509,14 @@ bytecode in Play, plus the native oracle for the one native step Play was missin
 Nothing below was fixed by the census task; the two gap tasks closed items 1 and 3. Each item is sized for one agent; "unblocks" names the rows.
 
 1. ~~**Finish a pawn's death** (finding 1)~~ **Done by the first gap task A**: `CriticalDelete` of a `ConHistory` is recovered and a kill finishes (carcass and inventory); `island-carcass` and `island-shoot-npc` play.
-2. **Decide and implement where a player's death stops** (finding 2): `OPEN DXONLY`, the Dying state's chain up to the reload. Needs the user's call (below). Unblocks the end of 5.1.6, 5.1.8, 5.5.1.
+2. **Decide and implement where a player's death stops** (finding 2): **done for the proof 2026-10-18**: Play stops at the original's client travel (`die1`,
+   [above](#the-players-death-to-the-levels-end-2026-10-18)); the load menu after it stays Stage 6 unless the user decides otherwise (below).
 3. **Island devices that never finish** (findings 3, 4, 7): **done 2026-10-17 by the two gap tasks.** Lockpick and hack outside Training and the personal and security terminals were the
    driver's wrong input, plus two Play gaps (findings 3 and 7); the LAM, the EMP grenade, the AlarmUnit and the pistol range were driver faults (finding 4). 5.1.2, 5.1.4, 5.2.6, 5.3.9, 5.5.1, 5.5.2,
    5.6.2 and 5.6.5 now play and wait for their O1 captures; the Island laser needs a guard in `Alerting` (finding 4, item 4 below).
 4. **NPC combat against the player, compared with the original** (finding 6): **first captures done 2026-10-17, second 2026-10-18** ([above](#first-original-captures-island-combat-2026-10-17)).
    Seven scenes on Island, and `validate-stage5-live.mjs` is the proof check. 5.2.2, 5.1.6 and 5.6.1 pass. Still open, each named in the row's `need`: `cmb5`'s carcass render stamp, a tick
-   late in Play (5.1.5, 5.2.7: the actor mesh layer's asynchronous admission), footsteps (5.2.3) and the death state's end (5.1.8: `cmb3` keeps the death and 37 ticks of `Dying`).
+   late in Play (5.1.5, 5.2.7: the actor mesh layer's asynchronous admission), footsteps (5.2.3) and, for 5.1.8, the same carcass stamp on `die1` (the death runs to the level's end, equal).
 5. **Pain zones and the HazMat suit** (finding 5): the zone's `DamagePerSec` over time and the suit's absorption, against a capture of Training's pool. Unblocks 5.3.7, 5.6.x radiation.
 6. **The undriven scenarios**: the cell door and Gunther (5.4.5, 5.6.6), a lit/dark pair of poses (5.6.3), the `M00MeetPage` trigger (5.4.8), the commander from his room (5.5.5), the `ElevatorMover1` ride
    (5.3.13). Each is a driver plus whatever pause it finds; the first two are the biggest.
@@ -491,7 +530,7 @@ Nothing below was fixed by the census task; the two gap tasks closed items 1 and
   in `scripts/stage5-criteria.mjs` and in the tables above.
 * **O3 or O2 as enough for native-body rows** (ladder, crate physics, swimming, falling, movers): the doc defaults to O3 (the DLL's code on Play's inputs in the scene), which does not exist yet for any of them.
 * **Cross-map evidence for shared code**: the gunshot half of 5.2.3 now has an Island capture (`cmb2`); its footsteps half can have no live trace (a held key), so the choice is O3 on Play's footstep inputs or accepting the row without footsteps.
-* **Where a player's death stops** (item 2) and whether the load menu belongs to Stage 5 or 6.
+* **Where a player's death stops** (item 2): implemented as the original's client travel, where its level ends; whether the load menu after it belongs to Stage 5 or 6 is still open.
 * **Priority**: items 1 and 3 are done, and item 4 has its first comparisons: the NPC-versus-player scenes replay equal. The largest open groups are now item 7's captures (one per row, about 15 minutes on the bottle each, plus a replay) and item 6's undriven scenarios.
 
 ## Excluded
@@ -507,7 +546,7 @@ node scripts/census-stage5.mjs [--only slug,slug] [--json out.json]       # driv
 node scripts/validate-stage5-acceptance.mjs                               # the gate: exit 1 until every criterion passes
 node scripts/validate-stage5-acceptance.mjs --report [file]               # the scoreboard, exit 0
 node scripts/validate-stage5-acceptance.mjs --markdown [file]             # the tables of this page from a report
-node scripts/validate-stage5-live.mjs --scene cmb1                       # a proof check: the stored Island scene cmb1..cmb7 replayed in Play (SKIP without the store)
+node scripts/validate-stage5-live.mjs --scene cmb1                       # a proof check: the stored Island scene cmb1..cmb7, die1 replayed in Play (SKIP without the store)
 node scripts/validate-stage5-live.mjs --scene cmb1 --print-capture       # the original's capture command of that scene (writes its tracer config; the bottle lock first)
 node scripts/stage5-capture-rehearsal.mjs --scene cmb1                    # rehearse a scene's input list in Play, headless, before a capture (class P)
 ```
