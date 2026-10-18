@@ -53,10 +53,23 @@ export class AssetStore {
     const entry = objectAt(asset.pkg, ref);
     if (!entry) throw new Error('Null object reference');
     if (ref > 0) return { asset, index: ref, entry, key: `${asset.name}.${entry.path}` };
-    const [packageName, ...parts] = entry.path.split('.');
-    const target = await this.get(packageName);
-    const index = target.exportsByPath.get(parts.join('.').toLowerCase());
-    if (!index) throw new Error(`Missing object: ${entry.path}`);
-    return { asset: target, index, entry: target.pkg.exports[index - 1], key: `${target.name}.${target.pkg.exports[index - 1].path}` };
+    return importedObject(await this.get(entry.path.split('.')[0]), entry);
   }
+
+  /** resolve() for a synchronous caller: null while the package an import
+   * names is not loaded (loaded()). */
+  resolveLoaded(asset, ref) {
+    const entry = objectAt(asset.pkg, ref);
+    if (!entry) throw new Error('Null object reference');
+    if (ref > 0) return { asset, index: ref, entry, key: `${asset.name}.${entry.path}` };
+    const target = this.loaded(entry.path.split('.')[0]);
+    return target ? importedObject(target, entry) : null;
+  }
+}
+
+/** An import's object in its loaded package `target`. */
+function importedObject(target, entry) {
+  const index = target.exportsByPath.get(entry.path.split('.').slice(1).join('.').toLowerCase());
+  if (!index) throw new Error(`Missing object: ${entry.path}`);
+  return { asset: target, index, entry: target.pkg.exports[index - 1], key: `${target.name}.${target.pkg.exports[index - 1].path}` };
 }

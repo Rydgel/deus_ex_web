@@ -1199,9 +1199,13 @@ export async function createScriptDoors({
   // properties (RatGenerator's PawnClasses[i].PawnClass). SpawnActor and the
   // spawned actor's first PlayAnim run synchronously, so each such Actor
   // class's scripts and default Mesh are prepared here, at load, transitively.
+  // So is every other mesh its defaults or a live actor's properties name:
+  // the original loads them with the class or the level, and a script
+  // assigns one to Mesh (DeusExCarcass.InitFor's Mesh2 after DeathFront,
+  // Mesh3 in water) that DrawActorSprite draws in the next frame.
   // This is resource readiness only; no spawn happens here.
   async function prepareSpawnClosure(actors) {
-    const seen = new Set(), queue = [];
+    const seen = new Set(), queue = [], meshes = new Map();
     const addClass = ref => {
       if (!ref || ref.kind !== 'Class' || !ref.asset || !Number.isInteger(ref.index) || seen.has(ref.key)) return;
       seen.add(ref.key); queue.push(ref);
@@ -1210,6 +1214,7 @@ export async function createScriptDoors({
       if (value === null || value === undefined || depth > 4 || typeof value !== 'object') return;
       if (Array.isArray(value)) { for (const item of value) collectValue(item, depth + 1); return; }
       if (value.kind === 'Class') { addClass(value); return; }
+      if ((value.kind === 'LodMesh' || value.kind === 'Mesh') && value.asset) { meshes.set(value.key, value); return; }
       if (value.kind || value.asset) return;
       for (const item of Object.values(value)) collectValue(item, depth + 1);
     };
@@ -1250,6 +1255,9 @@ export async function createScriptDoors({
       if (mesh && ['LodMesh', 'Mesh'].includes(mesh.kind)) await runtime.prepareResource(mesh);
       collectClass(cls, field => runtime.defaultValue(cls, field));
     }
+    // A mesh that cannot be prepared fails where it is drawn (the actor mesh
+    // layer reports it), as it did before.
+    for (const mesh of meshes.values()) await runtime.prepareResource(mesh).catch(() => {});
     return seen.size;
   }
   async function prepareNpcs() {

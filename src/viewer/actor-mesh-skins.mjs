@@ -9,16 +9,32 @@ import {POLY} from '../unreal/geometry.mjs';
  * (actor-mesh-sim.mjs) and the page (actor-mesh-draw.mjs) both run this on
  * the same texture, so they keep the same groups. */
 export async function resolveMeshSkin(textures,asset,index,groupFlags) {
+  let data=await textures.get(asset,index,Boolean(groupFlags&POLY.Masked));
+  const flags=skinFlags(data,groupFlags);
+  if(remasked(data,flags))data=await textures.get(asset,index,true);
+  return {data,flags};
+}
+
+/** resolveMeshSkin for a synchronous caller (TextureStore.now): null while a
+ * package the skin needs is not loaded. */
+export function resolveMeshSkinNow(textures,asset,index,groupFlags) {
+  let data=textures.now(asset,index,Boolean(groupFlags&POLY.Masked));
+  if(!data)return null;
+  const flags=skinFlags(data,groupFlags);
+  if(remasked(data,flags)&&!(data=textures.now(asset,index,true)))return null;
+  return {data,flags};
+}
+
+function skinFlags(data,groupFlags) {
   let flags=groupFlags;
-  let data=await textures.get(asset,index,Boolean(flags&POLY.Masked));
   if(data.procedural!=='FireTexture'&&data.procedural!=='WetTexture'&&(data.procedural||data.values.AnimNext))
     throw new Error('Animated/procedural mesh skin is unsupported');
   for(const [name,flag] of Object.entries({bMasked:POLY.Masked,bTranslucent:POLY.Translucent,
     bTwoSided:POLY.TwoSided,bNoSmooth:POLY.NoSmooth,bModulated:POLY.Modulated}))
     if(data.values[name])flags|=flag;
-  if(flags&POLY.Masked&&!data.masked&&!data.fire)data=await textures.get(asset,index,true);
-  return {data,flags};
+  return flags;
 }
+const remasked=(data,flags)=>Boolean(flags&POLY.Masked&&!data.masked&&!data.fire);
 
 /** The mesh's drawn faces in face groups, keyed by skin and face flags, in
  * first-use order (DrawLodMesh's face list; PF_Invisible faces are not
