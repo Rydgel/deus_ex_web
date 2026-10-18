@@ -147,6 +147,21 @@ const HIT_REGION_FIELDS = [['HHead', 'HealthHead', 1376, 'i32'], ['HTorso', 'Hea
 if (flag('player-health')) PLAYER_FIELDS.push(...HIT_REGION_FIELDS);
 // --player-blend: the player's blend channel 0 (the mouth animation Pawn.LipSynch plays while JC speaks in a conversation): BSeq0, BFrame0, BRate0, BTween0 of FIELDS.
 if (flag('player-blend')) PLAYER_FIELDS.push(...FIELDS.filter(f => ['BSeq0', 'BFrame0', 'BRate0', 'BTween0'].includes(f[0])));
+// --inventory: what a conversation gives and takes (the Stage 5 conversation scenes, docs/stage-5-exit-criteria.md): every watched pawn's and the player's
+// Inventory chain (Actor.Inventory +0xc0, then each item's own: a ConEventTransferObject's item, a weapon given to Gunther), and the player's
+// DeusExPlayer.SkillPointsAvail (ConEventAddSkillPoints), Credits, conPlay (the ConPlay a StartConversation spawns, None again at its end), FirstGoal
+// (the head of the goal list ConEventAddGoal's AddGoal prepends to) and FirstImage (the head of the DataVault images AddImage prepends to). The
+// offsets are Play's slotOf for JCDentonMale (liveProbe offsets).
+// With it, every watched pawn's and the player's Pawn.nextPhoneme (+0x588, the letter UGalaxyAudioSubsystem::Update writes from the speech it plays) and
+// lastPhoneme (+0x57c, the letter Pawn.LipSynch last tweened), FStrings (the tracer's `str`): the measured mouth letters themselves. Read off the blend
+// channel alone, a speech that starts on X (LipSynch's first letter of a speech jumps, tweentime 0, onto the MouthClosed that the last speech's end left)
+// was invisible, and the letter after it equal to the last speech's last one then tweened in the original only (Stage 5 gP, Gunther at tick 664).
+if (flag('inventory')) {
+  FIELDS.push(['InvChain', '$inventoryChain', 192, 'chain'], ['NextPh', 'nextPhoneme', 0x588, 'str'], ['LastPh', 'lastPhoneme', 0x57c, 'str']);
+  PLAYER_FIELDS.push(['InvChain', '$inventoryChain', 192, 'chain'], ['SkillPts', 'SkillPointsAvail', 2492, 'i32'], ['Credits', 'Credits', 2496, 'i32'],
+    ['ConPlay', 'conPlay', 2548, 'obj'], ['Goal', 'FirstGoal', 2620, 'obj'], ['Image', 'FirstImage', 2636, 'obj'],
+    ['NextPh', 'nextPhoneme', 0x588, 'str'], ['LastPh', 'lastPhoneme', 0x57c, 'str']);
+}
 // Load-time random state of the PawnGenerators (PigeonGenerator, SeagullGenerator, ...): PostBeginPlay draws TryTimer
 // (0.25 + FRand()*0.75) and, with bRandomCount, PoolCount from the load's stream, which the two sides do not share
 // (the original seeds the CRT with time(NULL), docs/rng.md). A generator first spawns when its TryTimer runs out,
@@ -1183,7 +1198,8 @@ function compare() {
   const late = existsSync(watchPath) ? JSON.parse(readFileSync(watchPath, 'utf8')).carcasses ?? [] : [];
   const names = [...new Set([...Object.keys(rows[0]?.actors ?? {}), ...late])];
   const labels = [...FIELDS, ...PLAYER_FIELDS.slice(11), ...GENERATOR_LOAD_FIELDS, ...GENERATOR_FIELDS.slice(GENERATOR_LOAD_FIELDS.length).filter(f => !FIELDS.some(g => g[0] === f[0])),
-    ...CARCASS_FIELDS.filter(f => !FIELDS.some(g => g[0] === f[0]))].map(f => [f[0], f[1] === '$state' ? 'State' : f[1]]);
+    ...CARCASS_FIELDS.filter(f => !FIELDS.some(g => g[0] === f[0]))].filter((f, i, all) => all.findIndex(g => g[0] === f[0]) === i)   // (a label in two groups, compared once)
+    .map(f => [f[0], f[1] === '$state' ? 'State' : f[1]]);
   // An Inventory chain is compared by its items' classes in order: the items' numbers follow each process's creation order (runtimeNumbered)
   const stems = list => Array.isArray(list) ? list.map(name => String(name).replace(/\d+$/, '').toLowerCase()) : list;
   for (const name of names) {

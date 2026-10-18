@@ -18,6 +18,7 @@ import {AssetStore} from '../src/unreal/assets.mjs';
 import {openSession} from './census-stage5-session.mjs';
 import {viewProbe} from '../src/viewer/view-probe.mjs';
 
+const flagArg = name => process.argv.includes(`--${name}`);
 const option = (name, fallback) => { const i = process.argv.indexOf(`--${name}`); return i < 0 ? fallback : process.argv[i + 1]; };
 const scene = option('scene', null) ? SCENES[option('scene')] : null;
 if (option('scene', null) && !scene) { console.error(`--scene ${Object.keys(SCENES).join('|')}`); process.exit(2); }
@@ -34,6 +35,9 @@ const gameRoot = gameDirectory(), files = [];
 for (const directory of ['Maps', 'System', 'Textures', 'Sounds', 'Music'])
   for (const name of await readdir(`${gameRoot}/${directory}`)) files.push({path: `${directory}/${name}`, read: () => readFile(`${gameRoot}/${directory}/${name}`)});
 const {c} = await openSession(map, new AssetStore(files));
+// The capture opens the map directly, which leaves the player's FlagBase empty; Play's login adds PlayerTraveling, so the replay deletes it before the first
+// frame (live-acceptance.mjs play): the same here, or Mission01's first Timer would run FirstFrame.
+{ const base = c.read(c.player(), 'FlagBase'), call = ['PlayerTraveling', 0]; c.runtime.callFunction(c.runtime.lookup(base, 'DeleteFlag'), base, call.length, i => call[i]); }
 // The capture's frozen phase: the map is opened with bPlayersOnly set, the early lines are typed into the held level (live-acceptance.mjs original), and
 // the pawns start at the release; the frames before it are the player's alone, as here.
 const info = c.level().actors[0];
@@ -46,7 +50,31 @@ c.frames(60);
 c.runtime.writeNamed(info, 'bPlayersOnly', false);
 const p = c.player();
 console.log('placed', r(c.pos(p)), 'physics', c.read(p, 'Physics'), 'zone', c.read(p, 'Region')?.['engine.actor.pointregion.zonenumber'], 'state', c.state(p), 'view', c.read(p, 'ViewRotation'));
-const pawns = option('pawns', 'Terrorist0,ThugMale7,Terrorist10').split(',').map(name => c.actor(name)).filter(Boolean);
+const pawns = option('pawns', scene?.pawns?.join(',') ?? 'Terrorist0,ThugMale7,Terrorist10').split(',').map(name => c.actor(name)).filter(Boolean);
+// A conversation scene also prints, whenever it changes: the player's ConPlay, its state and current event (class and label, a speech's speaker and first
+// words), the choices the third-person window shows, the player's skill points and Inventory chain, the flags, and the named pawns' Alliance and Orders.
+const named = (v, n = 'name') => Array.isArray(v) ? v.map(x => typeof x === 'number' ? Math.round(x * 10) / 10 : x) : v && typeof v === 'object' ? v[n] ?? v.name : v;
+const conLine = () => {
+  const conPlay = c.read(p, 'conPlay'), base = c.read(p, 'FlagBase');
+  let con = '-';
+  if (conPlay) {
+    const event = c.read(conPlay, 'currentEvent'), cls = event ? c.runtime.instance(event).cls.record.key.split('.').pop().replace('conevent', '') : '-';
+    const speech = cls === 'speech' ? `${c.read(event, 'speakerName')}:"${String(c.read(c.read(event, 'conSpeech'), 'speech')).slice(0, 24)}"` : '';
+    const window = c.read(conPlay, 'conWinThird');
+    con = `${conPlay.name} ${String(c.read(c.read(conPlay, 'con'), 'conName'))} ${c.state(conPlay).split('.').pop()} ${cls}${c.read(event, 'label') ? `@${c.read(event, 'label')}` : ''} ${speech}${window ? ` choices=${c.read(window, 'numChoices')}` : ''}`;
+  }
+  const items = []; for (let i = c.read(p, 'Inventory'); i && items.length < 32; i = c.read(i, 'Inventory')) items.push(i.name);
+  const flags = [...(base?.entries?.values() ?? [])].map(e => `${e.name}=${e.type ? e.value : e.value ? 1 : 0}`).sort().join(' ');
+  return `con ${con} | sp${c.read(p, 'SkillPointsAvail')} cr${c.read(p, 'Credits')} inv[${items.join(',')}] goal=${c.read(p, 'FirstGoal')?.name ?? '-'} image=${c.read(p, 'FirstImage')?.name ?? '-'}`
+    + ` | ${pawns.map(a => c.gone(a) ? `${a.name}:gone` : `${a.name}:${named(c.read(a, 'Alliance'))}/${named(c.read(a, 'Orders'))}${extraProps.map(n => { try { return `/${n}=${JSON.stringify(named(c.read(a, n)))}`; } catch { return ''; } }).join('')}`).join(' ')} | flags ${flags}`;
+};
+let lastCon = '';
+// A conversation scene's pawns near the player (1,500 units) are stamped as the renderer stamps an actor in view (the census's render feedback,
+// census-stage5-session.mjs): a headless frame draws no mesh, so LastRenderTime would age past ScriptedPawn.Tick's low-priority window and no radius
+// conversation would start (the capture and the replay render). A far pawn stays unstamped: stamped, it would leave stasis (BumFemale0 got up and wandered).
+const stampNear = () => { for (const a of pawns) { if (c.gone(a)) { c.watched.delete(a); continue; } const d = Math.hypot(...c.pos(a).map((v, i) => v - c.pos(p)[i])); if (d < 1500) c.watched.add(a); else c.watched.delete(a); } };
+// --props a,b: more properties of the named pawns on the conversation line (a frob that starts nothing: bInterruptState, bCanConverse, Physics)
+const extraProps = (option('props', '') ?? '').split(',').filter(Boolean);
 const regions = ['HealthHead', 'HealthTorso', 'HealthLegLeft', 'HealthLegRight', 'HealthArmLeft', 'HealthArmRight'];
 let last = '';
 for (let tick = 1; tick <= ticks; tick++) {
@@ -54,6 +82,7 @@ for (let tick = 1; tick <= ticks; tick++) {
     const edge = /^@(down|up) (\S+)$/.exec(line);
     if (edge) { c.game.inputKey(edge[2], edge[1] === 'down'); console.log(`> ${line} after ${tick - 1}`); } else exec(line);
   }
+  if (scene?.conversation) stampNear();
   try { c.frames(1); } catch (error) { console.log(`tick ${tick}: ${error.message.split('\n')[0]}`); break; }
   // (a pawn's NumCarcasses when it has seen a body, and its SeekType while it seeks: 1 sound, 2 sight, 3 guess, 4 carcass, ScriptedPawn.ESeekType)
   const line = pawns.map(a => c.gone(a) ? `${a.name}:gone` : `${a.name}:${c.state(a).split('.').pop()}/${c.read(a, 'Enemy')?.name ?? '-'}/h${c.read(a, 'Health')}`
@@ -61,6 +90,7 @@ for (let tick = 1; tick <= ticks; tick++) {
     + ` | player h${c.read(p, 'Health')} [${regions.map(n => c.read(p, n)).join(',')}] ${c.state(p).split('.').pop()} inHand=${c.read(p, 'inHand')?.name ?? '-'}`
     + ` frob=${c.read(p, 'FrobTarget')?.name ?? '-'} tracers=${c.byClass('Tracer').length}`;
   if (line !== last || tick % 60 === 0) { console.log(tick, line); last = line; }
+  if (scene?.conversation || flagArg('con')) { const now = conLine(); if (now !== lastCon) { console.log(tick, now); lastCon = now; } }
 }
 for (const a of pawns) console.log('end', a.name, c.gone(a) ? 'gone' : r(c.pos(a)));
 console.log('carcasses', c.actors().filter(a => c.isA(a, 'deusex.deusexcarcass')).map(a => {
