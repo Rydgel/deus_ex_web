@@ -382,7 +382,8 @@ and `PickupDistributor0` (43708). Three inputs of the slot model differed, none 
 The fix is in the replay's inputs only (`live-acceptance.mjs` `registrySeed`, `live-probe.mjs` objectTrace):
 * The population step also lists the actors on the level's pending-deletion chain (`play-population.json` `pendingDeleted`; on the Island `NanoKeyRing2` and `PickupDistributor0`), and the
   seed walks that chain too, so a pending-deleted pre-placed actor takes this run's dump index (`PickupDistributor0` 43708; the dump has no row named `NanoKeyRing2`). A population file
-  written before this change lacks the list; the replay warns and the seed falls back to the old behaviour, so `population` is rerun first.
+  written before this change lacks the list: the replay warns and the seed falls back to the old behaviour, so the Stage 5 check (`validate-stage5-live.mjs`)
+  runs `population` again first (checked from the main checkout's old file: `cmb3` at 0 slots), as row 4.3.6 does on every run.
 * A pre-free whose index the seed gave an object Play holds is dropped: Play frees that object itself (`PickupDistributor0`).
 * Every other pre-free carries the original's registry event right before it in the same tick (`anchor`, from the call records) and is released right after Play's model logs that event:
   `NanoKeyRing4` after the free of 47929 (`WaterRing0`). AI event objects keep their release after the event manager's Tick, and a pre-free that is its tick's first registry event is still

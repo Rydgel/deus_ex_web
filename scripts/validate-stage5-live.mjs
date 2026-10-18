@@ -94,6 +94,14 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
   // (exit 0, as the sweep's store-dependent validators do; the Stage 5 gate counts a SKIP as not passing)
   if (absent.length) { console.log(`SKIP no stored original for ${tag}: ${absent.map(f => path.relative(root, f)).join(', ')}`); process.exit(0); }
   const problems = [];
+  // Play's population (play-population.json): the pre-placed actors, and those pending deletion, whose dump index the slot model takes. A file
+  // without the pending list (written before it existed) would leave PickupDistributor0 the map table's index: the step runs again.
+  const populationFile = path.join(dir, 'play-population.json');
+  if (!existsSync(populationFile) || !JSON.parse(readFileSync(populationFile, 'utf8')).pendingDeleted) {
+    const population = await exec(['scripts/live-acceptance.mjs', 'population', '--map', scene.map, '--seed', '1'], 600);
+    if (population.code !== 0) { console.log(population.out.trim().split('\n').slice(-6).join('\n')); console.log(`FAIL ${tag}: the population step stopped (exit ${population.code})`); process.exit(1); }
+    console.log(`population: ${population.out.trim().split('\n').slice(-1)[0]} (play-population.json written again: it had no pendingDeleted list)`);
+  }
   const play = await exec(['scripts/live-acceptance.mjs', 'play', '--map', scene.map, '--seed', '1', '--tag', tag, ...SCENE_FLAGS, ...PLAY_FLAGS, '--early-cmds', scene.early,
     '--event-trace', `1:${scene.ticks}`, '--object-trace', `1:${scene.ticks}`], 1800);
   if (play.code !== 0) { console.log(play.out.trim().split('\n').slice(-12).join('\n')); console.log(`FAIL ${tag}: the replay stopped (exit ${play.code})`); process.exit(1); }
