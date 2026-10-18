@@ -90,7 +90,7 @@ report (`--stage4-report`), so presentation proof is not repeated.
 | 5.2.2 | 01_NYC_UNATCOIsland | a visible player in the open: a patrolling Terrorist sees it (AICanSee, SightCounter, CycleCumulative), turns, calls the alert; a hidden player is not seen | O1 | `island-sight` | O1: live trace of the original (no ghost, player standing at a measured pose in a patrol's view and out of it) with the perception fields of the Perception pilot | perception pilot O1 in the Underworld (civilians flee a visible mj12-allied player); validate-pawn-perception / AICanSee x87 (O2) | PASS |
 | 5.2.3 | 01_NYC_UNATCOIsland | the player's noise reaches the guards: gunshots (WeaponFire, LoudNoise), the HandleShot/HandleLoudNoise callbacks; footsteps by speed and floor | O1 | `island-hearing` | footsteps (a held key the harness cannot post: O3 on Play's footstep inputs); the gunshot half has an Island O1 (cmb2) | validate-stage5-live cmb2 (O1 on Island: an unseen player's two pistol shots, every AI event manager call equal, the three NSF pawns woken); live-events-compare O1: 1,069 and 1,586 manager calls equal in the Underworld (pistol, assault shotgun) | MISSING |
 | 5.2.4 | 01_NYC_UNATCOIsland cameras | SecurityCamera sees the player: tracking, the alarm event, NSFCam01..03 trigger libertyturret1; UN_CamSystem01..04 (bNoAlarm) do not | O1 | `island-camera` | O1: live trace of the original with the player in a camera's cone and the camera's state, the alarm flag and the turret's state per tick | - | MISSING |
-| 5.2.5 | 01_NYC_UNATCOIsland laser trap | a LaserTrigger beam broken by the player raises the alarm (LaserTrigger.BeginAlarm: klaxon and an 'alarm' AI event; the laser has no Event) and a guard in Alerting state triggers AlarmUnit0 (SetAlarmFlag -> StatueAlarmTriggered) | O1 | `island-laser` | O1: live trace of the original with the player placed across statue_lasertrap and the beam, trigger and flag state | - | FAIL |
+| 5.2.5 | 01_NYC_UNATCOIsland laser trap | a LaserTrigger beam broken by the player raises the alarm (LaserTrigger.BeginAlarm: Klaxon2 and an 'Alarm' AI event; the laser has no Event): the guards that hear it handle it (HandleAlarm: AlarmTimer 120, seek, attack), and AlarmTimer > 0 keeps them from the alarm box (Alerting: Alert -> Done -> Attacking); AlarmUnit0 (SetAlarmFlag -> FlagTrigger3 -> StatueAlarmTriggered) is rung by a RaiseAlarm BeforeAttacking guard that takes the player as its enemy with AlarmTimer 0 (Terrorist18 seeing him) | O1 | `island-laser` | O1: live trace of the original with the player placed across statue_lasertrap (the guards' AlarmTimer and states, the klaxon) and, separately, in Terrorist18's view (its run to AlarmUnit0 and the flag) | - | MISSING |
 | 5.2.6 | 01_NYC_UNATCOIsland laser trap | hacking ControlPanel0 with a multitool switches statue_lasertrap off: hack time (skill, hackStrength), the multitool's use, the lasers' state | O1 | `island-hack-panel` | O1: live trace of the original (Multitool selected, a left-button click on the panel: ParseLeftClick, never the right button) with the hack progress, multitool charge and laser state per tick | - | MISSING |
 | 5.2.7 | 01_NYC_UNATCOIsland | a pawn reacts to a body: a killed or knocked-out Terrorist is seen (CheckCarcassPresence, HaveSeenCarcass, AddCarcass) and the finder investigates or flees | O1 | `island-carcass` | O1: live trace of the original with a carcass in a patrol's view | validate-pawn-carcass (natives 2108/2109, O2); validate-stage5-live cmb1 (O1: TerroristCarcass1 and its Carcass AI events equal, but the other Terrorists are already attacking the player and no Carcass callback is delivered) | MISSING |
 
@@ -110,7 +110,7 @@ report (`--stage4-report`), so presentation proof is not repeated.
 | 5.3.10 | 01_NYC_UNATCOIsland doors | keyed, locked, breakable and keypad doors: the satcomhatch with the UNhatchdoor NanoKey, commvan_door keypad 0451, breakable and lockpicked movers, StatueRuinDoors | O1 | `island-doors` | O1: live trace of the original at each door (key use, pick, damage) with mover and lock state per tick | validate-island-cell-door, validate-island-blowitup (mover bodies, O2); validate-native-mover-move, -interpolation, -scene (O2) | MISSING |
 | 5.3.11 | 01_NYC_UNATCOIsland inventory | pick up and use items (MedKit, food, ammo, mods, Lockpick, Multitool), skill points (SkillAwardTrigger) and the skills screen, the AugmentationCannister and installing an augmentation, goals and notes | O1 | `island-items` | O1: live trace of the original (ParseRightClick pickups, ActivateBelt, console) with inventory, health, skill and goal state | alterations census: 19 scenarios play (P); persona screens O1 (4.4.11, 4.4.12) | MISSING |
 | 5.3.12 | 01_NYC_UNATCOIsland | move objects and fall: carry or push barrels and crates, throw them (kinetic damage), fall damage from a height | O1 | `island-movables-fall` | O1: live trace of the original with a thrown or pushed decoration and a measured fall | validate-plant-push (O2); landing/falling oracles (O2) | MISSING |
-| 5.3.13 | 00_TrainingFinal and 01_NYC_UNATCOIsland movers | a switch-driven mover: 00_TrainingFinal Switch1 opens FirstStealthDoor. Not driven: ElevatorMover1 (ExitDoor) is moved by SequenceTriggers no player input reaches, Island's Switch1 -> UN_maindoor (opened by Mission01) and the fork lift (DeusExMover11, a button in the ruins) | O1 | `elevator` | O1: live trace of the original with the player on the mover | validate-native-mover-move, -interpolation, -scene (O2); validate-island-cell-door | MISSING |
+| 5.3.13 | 00_TrainingFinal and 01_NYC_UNATCOIsland movers | a switch-driven mover: 00_TrainingFinal Switch1 opens FirstStealthDoor; the exit door ElevatorMover1 (ExitDoor, a 64-unit slide, not a ride) is closed by a soldier's alarm (AlarmDispatcher -> CloseDoor, SequenceTrigger SeqNum 1) and reopened by Switch0 (ButtonDispatcher -> OpenDoor, SeqNum 0). Not driven: Island's Switch1 -> UN_maindoor (opened by Mission01) and the fork lift (DeusExMover11, a button in the ruins) | O1 | `elevator` | O1: live trace of the original at Switch1 and of the exit door closed by the alarm and reopened by Switch0 | validate-native-mover-move, -interpolation, -scene (O2); validate-island-cell-door | MISSING |
 
 ### 5.4 Conversation
 
@@ -120,10 +120,10 @@ report (`--stage4-report`), so presentation proof is not repeated.
 | 5.4.2 | 00_TrainingCombat | the instructor takes the inventory: MunitionsTrooperTake/Frob (29 TransferObject events), MunitionsTrooperReady, Mission00.RemoveAllInventory | O1 | `instructor-take` | O1: live trace of the original through the conversation with the inventory per tick | validate-instructor-conversation (P) | MISSING |
 | 5.4.3 | 01_NYC_UNATCOIsland | MeetPaul: the three weapon choices (Minicrossbow, GEP gun, rifle) hand JC the weapon, the map image and three goals | O1 | `meet-paul` | O1: the conversation frames to the choice (4.5.5) plus the transferred object and goals per branch | 4.5.5 O1 frames; validate-island-conversation: each choice plays to the end (P) | MISSING |
 | 5.4.4 | 01_NYC_UNATCOIsland | MeetFilben (code phrase): the Choice decides FilbenGaveKey and the NanoKey; MeetFilben2 and AfterStatue follow the flags; skill points | O1 | `meet-filben` | O1: live trace of the original through each branch with the flags, inventory and skill points | - | MISSING |
-| 5.4.5 | 01_NYC_UNATCOIsland | GuntherRescued: free Gunther, five choices, the player gives him a weapon (CheckObject/TransferObject), GuntherRespectsPlayer, AddSkillPoints, the cell door | O1 | `gunther-rescued` | O1: live trace of the original through the branches with flags, inventory and Gunther's orders | - | UNDRIVEN |
+| 5.4.5 | 01_NYC_UNATCOIsland | GuntherRescued: free Gunther (the wall button DeusExMover8 triggers the cell door DeusExMover10, GuntherFreed), five choices, the player gives him a weapon (CheckObject/TransferObject), GuntherRespectsPlayer, AddSkillPoints, his alliance and orders | O1 | `gunther-rescued` | O1: live trace of the original through the branches with flags, inventory and Gunther's orders | - | MISSING |
 | 5.4.6 | 01_NYC_UNATCOIsland | MeetTerrorist with the commander: the Aggressive and Curious branches set PlayerAttackedStatueTerrorist and StatueMissionComplete; TerroristFollowup | O1 | `meet-terrorist` | O1: live trace of the original through both branches with the flags and the commander's orders | - | MISSING |
 | 5.4.7 | 01_NYC_UNATCOIsland | overheard conversations and barks: TerroristsOverheard (Amos), TopTerroristsOverheard, the NPC barks in alert states | O1 | `overheard-barks` | O1: live trace of the original with the player in range (the bark choice and the speech started) | validate-island-bark (P); validate-island-lipsync (O3) | MISSING |
-| 5.4.8 | 00_TrainingFinal | M00MeetPage and holo-Jaime: ConversationTrigger, JaimeAppears/JaimeBark_Played, EnterWorld/LeaveWorld by the Mission00 timer | O1 | `meet-page-final` | O1: live trace of the original with the flags and the holo pawns' bInWorld | - | FAIL |
+| 5.4.8 | 00_TrainingFinal | M00MeetPage and holo-Jaime: ConversationTrigger, JaimeAppears/JaimeBark_Played, EnterWorld/LeaveWorld by the Mission00 timer | O1 | `meet-page-final` | O1: live trace of the original with the flags and the holo pawns' bInWorld | - | MISSING |
 
 ### 5.5 Alternate-route objectives
 
@@ -133,7 +133,7 @@ report (`--stage4-report`), so presentation proof is not repeated.
 | 5.5.2 | 01_NYC_UNATCOIsland back entrance | the back way in (DL_BackEntrance, DeusExMover2: lockStrength 0.1, doorStrength 0.5, no key): lockpick it or break it; no hackable device guards it; the guards at the lower deck | O1 | `route-back` | O1: live trace of the original at DeusExMover2 (Lockpick in hand, left-button click, then the right button to open; the break by damage) and the patrol | - | MISSING |
 | 5.5.3 | 01_NYC_UNATCOIsland airshafts | the airshaft route around the laser trap to Gunther's cell (DL_libertyruinsairshaft x3): crouch through the shafts, the NPCs and alarms bypassed | O1 | `route-airshaft` | O1: the same state comparisons with the player placed in the shaft | - | MISSING |
 | 5.5.4 | 01_NYC_UNATCOIsland water route | the east side by water: swim to the ruins, the electric arcs (ElectricityEmitter x3, LibElectric, EMP damage drains energy), ControlPanel1 and the fork lift | O1 | `route-water` | O1: live trace of the original from the water to the arcs, the panel and the lift | - | MISSING |
-| 5.5.5 | 01_NYC_UNATCOIsland | kill the commander: TerroristCommander_Dead -> DL_LeaderKilled (InSpite after NotKilled) -> StatueMissionComplete | O1 | `objective-kill` | O1: live trace of the original from the commander's death through Mission01.Timer | - | FAIL |
+| 5.5.5 | 01_NYC_UNATCOIsland | kill the commander: TerroristCommander_Dead -> DL_LeaderKilled (InSpite after NotKilled) -> StatueMissionComplete | O1 | `objective-kill` | O1: live trace of the original from the commander's death through Mission01.Timer | - | MISSING |
 | 5.5.6 | 01_NYC_UNATCOIsland | spare the commander: MeetTerrorist (Curious) -> StatueMissionComplete; DL_LeaderNotKilled | O1 | `objective-spare` | O1: live trace of the original through the conversation and the timer | - | MISSING |
 | 5.5.7 | 01_NYC_UNATCOIsland | StatueMissionComplete changes the world (Mission01.Timer): UN_maindoor opens, doors unlock, custody and post-mission troops enter, Terrorists die, Paul teleports, turrets and lasers go, cameras silenced | O1 | `mission-complete` | O1: live trace of the original after the flag with every changed actor per tick | - | MISSING |
 
@@ -143,10 +143,10 @@ report (`--stage4-report`), so presentation proof is not repeated.
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | 5.6.1 | 01_NYC_UNATCOIsland | a shot near guards: noise, hostility, pursuit, distress to other pawns, the player hurt and healed with a MedKit | O1 | `noise-wakes-guards` | O1: live trace of the original of the whole encounter | 5.1.5, 5.1.6, 5.2.3 each partial; validate-stage5-live cmb2 (O1: the shots near the guards, their hostility, distress and the player hurt; no MedKit) | MISSING |
 | 5.6.2 | 00_TrainingFinal alarm | an AlarmUnit trips (bActive for its alarmTimeout, 10 s): AlarmDispatcher fires SoldierNeutral (AllianceTriggers), CloseDoor (ExitDoor) and failmessage (DL_FailedStealth) | O1 | `alarm-chain` | O1: live trace of the original from the alarm's trigger | - | MISSING |
-| 5.6.3 | 01_NYC_UNATCOIsland | light against sight: the same pose seen or not seen as the player lights or darkens it (AugLight, a light switch, the NPC's lighting of the player) | O1 | `light-vs-sight` | O1: live trace of the original with perception fields at two light states | validate-pawn-perception, AICanSee (O2); lighting oracles (O2) | UNDRIVEN |
+| 5.6.3 | 01_NYC_UNATCOIsland | light against sight: a pose seen or not seen by its lighting (AICanSee times AIVisibility against VisibilityThreshold). Island has no light switch, and AugLight adds a second path (its Beam AI event, CheckBeamPresence), so the census pair is the map's own lighting: two poses 500 units in front of Terrorist4 with a clear line of sight, one in shadow, one lit | O1 | `light-vs-sight` | O1: live trace of the original with Terrorist4's perception fields and the player's visibility at the two poses | validate-pawn-perception, AICanSee (O2); lighting oracles (O2) | MISSING |
 | 5.6.4 | 01_NYC_UNATCOIsland | an explosion: a barrel or CrateExplosiveSmall near a Terrorist, a breakable door and a decoration: HurtRadius, damage to each, noise, chain explosions | O1 | `explosion-world` | O1: live trace of the original with the barrel shot | validate-island-blowitup (O2); VisibleCollidingActors iterator 312 (O2) | MISSING |
 | 5.6.5 | 01_NYC_UNATCOIsland | EMP: an EMP grenade or the EMP field against a SecurityBot, the turret and the camera (disabled) and the player's energy | O1 | `emp-electronics` | O1: live trace of the original with an EMP grenade thrown at the bot | alterations census emp-grenade, hit-emp (P) | MISSING |
-| 5.6.6 | 01_NYC_UNATCOIsland | conversation flags change pawns: GuntherFreed -> AllianceTrigger and orders, FilbenGaveKey, M01PlayerAggressive, KnowsShipment | O1 | `flags-change-world` | O1: live trace of the original after each flag with the affected pawns' alliance and orders | - | UNDRIVEN |
+| 5.6.6 | 01_NYC_UNATCOIsland | conversation flags change the world: GuntherFreed (the cell door chain; on the same walk Gunther's alliance flips at AllianceTrigger0's touch, and GuntherRescued's GuntherAttacks gives his orders), FilbenGaveKey, M01PlayerAggressive, KnowsShipment | O1 | `flags-change-world` | O1: live trace of the original after each flag with the affected pawns' alliance and orders | - | MISSING |
 
 ### 5.7 Excluded
 
@@ -160,11 +160,11 @@ report (`--stage4-report`), so presentation proof is not repeated.
 
 <!-- criteria:end -->
 
-## Census: where Play stands (2026-10-17, after the combat captures)
+## Census: where Play stands (2026-10-18, after the undriven scenarios)
 
 `node scripts/census-stage5.mjs` drives the 50 scenarios in Play's own frame (headless: `createGame`, `sim-session` tick, sprite scan and HUD, the player-input fixture), one session per
 map with the original Player start between scenarios, a child per map under an RSS watchdog. Headless is the established census practice (alterations census, Stage 3 probes); the
-default worker page runs the same simulation code. **Full runs on the Linux host: 36 plays, 1 pause, 10 no-effect, 3 undriven (1,353 s, peak 4,390 MiB; a second run with the expectations stored passed in 1,448 s, peak 3,313 MiB, every outcome equal). On review three predicates were tightened to the effect their rows name (`pistol-range`: a range target registers; `island-shoot-npc`: the Terrorist is killed; `island-laser`: `StatueAlarmTriggered` is set) and those three rerun as no-effect: 33 plays, 1 pause, 13 no-effect, 3 undriven. The first gap task (A, branch of master 5625f65) fixed the pause and five no-effects (a Play gap and five driver faults, findings 1, 4 and 6): 39 plays, 0 pause, 8 no-effect, 3 undriven in 1,237 s (peak 4,282 MiB), outcomes equal to the stored expectations. The second (B, Island devices) on its own: 37 plays, 1 pause, 9 no-effect, 3 undriven. The two merged, one run: 43 plays, 0 pause, 4 no-effect, 3 undriven (1,081 s, peak 3,380 MiB). After the combat captures (`island-sight` rediagnosed, finding 6), one run on the Mac: **44 plays, 0 pause, 3 no-effect, 3 undriven** (706 s, peak 1,725 MiB), equal to the stored outcomes; the table below is that run.** The expected outcomes are stored in
+default worker page runs the same simulation code. **Full runs on the Linux host: 36 plays, 1 pause, 10 no-effect, 3 undriven (1,353 s, peak 4,390 MiB; a second run with the expectations stored passed in 1,448 s, peak 3,313 MiB, every outcome equal). On review three predicates were tightened to the effect their rows name (`pistol-range`: a range target registers; `island-shoot-npc`: the Terrorist is killed; `island-laser`: `StatueAlarmTriggered` is set) and those three rerun as no-effect: 33 plays, 1 pause, 13 no-effect, 3 undriven. The first gap task (A, branch of master 5625f65) fixed the pause and five no-effects (a Play gap and five driver faults, findings 1, 4 and 6): 39 plays, 0 pause, 8 no-effect, 3 undriven in 1,237 s (peak 4,282 MiB), outcomes equal to the stored expectations. The second (B, Island devices) on its own: 37 plays, 1 pause, 9 no-effect, 3 undriven. The two merged, one run: 43 plays, 0 pause, 4 no-effect, 3 undriven (1,081 s, peak 3,380 MiB). After the combat captures (`island-sight` rediagnosed, finding 6), one run on the Mac: 44 plays, 0 pause, 3 no-effect, 3 undriven (706 s, peak 1,725 MiB). After work item 6 (the six scenarios that did not play, findings 8 to 12, 2026-10-18), one run on the Mac: **50 plays, 0 pause, 0 no-effect, 0 undriven** (839 s, peak 1,680 MiB), equal to the stored outcomes; the table below is that run.** The expected outcomes are stored in
 the script (`EXPECTED`), so a regrown boundary fails the run and a fixed one must be recorded. The census is class P: it says what Play does, never that it equals the original.
 
 How the scenarios are driven (and what that means for reading the table):
@@ -189,27 +189,33 @@ How the scenarios are driven (and what that means for reading the table):
   key edge), because a hit Terrorist flees; `lam-wall`, `pistol-range` and the combat shots aim the same way; `lam-wall` places the LAM (walks up until `bNearWall`, the original's path near a
   Mover) and shoots it from 150 units without backing off; `pistol-range` walks onto `DataLinkTrigger2`, frobs `Switch3` and shoots the glass the target carries; `emp-electronics` throws at
   `SecurityBot0` standing at its first patrol point, where a headless frame leaves it (no mesh is drawn, `bStasis` stops its patrol; a rendered bot keeps walking and the throw would have to
-  lead it); `alarm-chain` trips the unit with a `Trigger` call and reads the chain during and after its 10 s `alarmTimeout`.
+  lead it); `alarm-chain` trips the unit with a `Trigger` call and reads the chain during and after its 10 s `alarmTimeout`. Since work item 6 (findings 8 to 12): `meet-page-final` walks into
+  `ConversationTrigger1` from 160 units and presses `Switch6` for holo-Jaime; `objective-kill` shoots from 300 units in front of the commander (outside `MeetTerrorist`'s 140) with the pawn
+  stamped; `island-laser` runs two branches, the beam and then (map reloaded) the player in Terrorist18's view; `gunther-rescued` presses the cell button `DeusExMover8` with a pistol in hand
+  and walks to Gunther, re-aimed every half second; `flags-change-world` frees Gunther unarmed, plays `MeetFilben`'s first choice, walks onto `DL_NearTop`, and makes eight Terrorist kills as
+  `TakeDamage` calls with the player as instigator (as `island-carcass` does), each part in a reloaded map; `light-vs-sight` places the player at the two measured poses in front of `Terrorist4`
+  (stamped, with `Terrorist27`) and reads `AIGetLightLevel` and the line of sight through Play's own perception services; `elevator` lets `Soldier0` see the player (placed 180 units away) and
+  then frobs `Switch0`.
 
 | Scenario | Rows | Map | Outcome | First pause, or what was observed |
 | --- | --- | --- | --- | --- |
-| `crowbar-crate` | 5.1.1 | 00_Training | plays | {delegate:validate-crowbar-crate.mjs,peakMiB:1032,last:crowbar crate: ticked hits, fragments/bounce/fade/expiry, Lockpick landing/pickup/equip, queued |
+| `crowbar-crate` | 5.1.1 | 00_Training | plays | {delegate:validate-crowbar-crate.mjs,peakMiB:889,last:crowbar crate: ticked hits, fragments/bounce/fade/expiry, Lockpick landing/pickup/equip, queued  |
 | `phase1-route` | 5.3.1 | 00_Training | plays | {route:PlayerStart -> DL_part2,ms:0} |
 | `dark-room-aug` | 5.3.2 | 00_Training | plays | {active:true,energy0:100,energy:99.50003051757812,beams:2} |
 | `bots` | 5.3.3 | 00_Training | plays | {RepairBot:true,MedicalBot:true} |
 | `obstacle-jump` | 5.3.4 | 00_Training | plays | {z0:16.735414505004883,zMax:64.16401672363281,end:[6991,-82,17],physics:1} |
-| `ladder` | 5.3.5 | 00_Training | plays | {delegate:validate-training-ladder.mjs,peakMiB:1109,last:{\floor\:-144,\top\:[6986,-3571,16],\hang\:-60,\descentZ\:-17.054441452026367,\scope\:\Traini |
+| `ladder` | 5.3.5 | 00_Training | plays | {delegate:validate-training-ladder.mjs,peakMiB:1090,last:{\floor\:-144,\top\:[6986,-3571,16],\hang\:-60,\descentZ\:-17.054441452026367,\scope\:\Traini |
 | `crate-stack` | 5.3.6 | 00_Training | plays | {crate:CrateUnbreakableSmall0,carried:true,dropped:true,at:[7262,-1493,-14]} |
 | `hazmat-swim` | 5.3.7 | 00_Training | plays | {bare:10,suited:8,swimming:true,active:true} |
 | `training-datalinks` | 5.4.1 | 00_Training | plays | {triggers:18,played:17,died:false,missing:[]} |
 | `pistol-range` | 5.1.2 | 00_TrainingCombat | plays | {intro:true,shield1:1,target:[0,-1216,-50],doorKey:1,shots:4,ammo:[18,14],glassGone:false,glass:[0,-1216,19916],shot1:true} |
 | `rifle-scope` | 5.1.3 | 00_TrainingCombat | plays | {scoped:true,ammo:4,fov:10,skill:SkillWeaponRifle} |
 | `lam-wall` | 5.1.4 | 00_TrainingCombat | plays | {near:true,placed:LAM5,stuck:true,proximity:true,shots:4,lamGone:true,wallDestroyed:true,doorStrength:0,playerHealth:77,finishWall:true} |
-| `instructor-take` | 5.4.2 | 00_TrainingCombat | plays | {delegate:validate-instructor-conversation.mjs,peakMiB:906,last:Instructor Play flow passed: both owners, Frob/Take, natural FlagTrigger, 29 transfers |
+| `instructor-take` | 5.4.2 | 00_TrainingCombat | plays | {delegate:validate-instructor-conversation.mjs,peakMiB:1067,last:Instructor Play flow passed: both owners, Frob/Take, natural FlagTrigger, 29 transfer |
 | `stealth-maze` | 5.2.1 | 00_TrainingFinal | plays | {state:deusex.scriptedpawn.patrolling,enemy:null,failed:true} |
-| `elevator` | 5.3.13 | 00_TrainingFinal | plays | {before:0,after:1,moving:false,note:ElevatorMover1 (ExitDoor) is moved by mission triggers only: not driven} |
+| `elevator` | 5.3.13 | 00_TrainingFinal | plays | {before:0,after:1,moving:false,exitDoor:{start:0,closedAt:3,closed:{key:1,y:112},reopened:{key:0,y:48}}} |
 | `alarm-chain` | 5.6.2 | 00_TrainingFinal | plays | {before:{state:deusex.scriptedpawn.startup,enemy:null,door:0},after:{state:deusex.scriptedpawn.patrolling,enemy:null,door:1,active:false},rang:true,ri |
-| `meet-page-final` | 5.4.8 | 00_TrainingFinal | no-effect | the effect did not happen |
+| `meet-page-final` | 5.4.8 | 00_TrainingFinal | plays | {page:{played:true,bob:BobPage1},holo:{hidden0:true,appears:true,entered:true,barkPlayed:true,inWorld:false,reyesHidden:true}} |
 | `island-shoot-npc` | 5.1.5 | 01_NYC_UNATCOIsland | plays | {h0:75,health:null,shots:7,ammo:[18,13],state:null,enemy:false,newCarcasses:1,playerDied:false,bearing:3.141592653589793} |
 | `island-npc-shoots-player` | 5.1.6 | 01_NYC_UNATCOIsland | plays | {enemy:true,tracers:1,minHealth:0,states:[standing,attacking],physics:1,died:false,h:0} |
 | `island-melee-ko` | 5.1.7 | 01_NYC_UNATCOIsland | plays | {gone:true,fresh:[{name:TerroristCarcass2,itemName:Unconscious}],playerDied:false} |
@@ -218,7 +224,7 @@ How the scenarios are driven (and what that means for reading the table):
 | `island-sight` | 5.2.2 | 01_NYC_UNATCOIsland | plays | {before:standing,behind:{unseen:true,out:{enemy:false,tracers:0,minHealth:100,states:[standing],physics:1},playerDied:false},inView:{out:{enemy:true,t |
 | `island-hearing` | 5.2.3 | 01_NYC_UNATCOIsland | plays | {before:standing,quietBeforeShots:true,state:dying,enemy:true,playerDied:false,note:sight and hearing cannot be told apart in the open} |
 | `island-camera` | 5.2.4 | 01_NYC_UNATCOIsland | plays | {seen:[[200,true,true],[350,true,true],[500,true,true]],alarm:true,state:active} |
-| `island-laser` | 5.2.5 | 01_NYC_UNATCOIsland | no-effect | the beam fires (LaserTrigger.BeginAlarm: klaxon and an alarm AI event, lastAlarmTime set) but no guard triggers AlarmUnit0, so StatueAlarmTriggered is never set: the three Terrorists in view attack the player, who is dead in 15 s (the laser has no Event; AlarmUnit0 is triggered from ScriptedPawn.Alerting) |
+| `island-laser` | 5.2.5 | 01_NYC_UNATCOIsland | plays | {beam:{lastAlarm:1.0666667222976685,klaxon:Klaxon2,alarmTimers:[112,112,112,112],t18:[seeking,alerting,attacking],hostile:4,unitRang:false,flag:false, |
 | `island-hack-panel` | 5.2.6 | 01_NYC_UNATCOIsland | plays | {started:true,frames:239,hackStrength:0,lasersOn:[[true,true,true,true,true],[false,false,false,false,false]],multitool:[1,0],playerDied:false} |
 | `island-carcass` | 5.2.7 | 01_NYC_UNATCOIsland | plays | {killed:true,numCarcasses:1,state:attacking,playerDied:false} |
 | `island-swim` | 5.3.8 | 01_NYC_UNATCOIsland | plays | {physics:3,swimTimer:[19.533340454101562,5.533483505249023],health:[100,100],drowned:false} |
@@ -228,21 +234,21 @@ How the scenarios are driven (and what that means for reading the table):
 | `island-movables-fall` | 5.3.12 | 01_NYC_UNATCOIsland | plays | {carried:true,item:Trashbag0,fall:8,h0:100,h:92} |
 | `meet-paul` | 5.4.3 | 01_NYC_UNATCOIsland | plays | {delegate:validate-island-conversation.mjs,peakMiB:42,last:{\ok\:true,\start\:1420,\choice\:4268,\camera\:\ConCamera0\,\letterboxFrames\:2849,\paulSpe |
 | `meet-filben` | 5.4.4 | 01_NYC_UNATCOIsland | plays | {trust:{met:true,ended:true,gaveKey:true,keys:[ruin_key],seconds:5.5},refuse:{met:true,ended:true,gaveKey:false,keys:[],seconds:7}} |
-| `gunther-rescued` | 5.4.5 | 01_NYC_UNATCOIsland | undriven | the cell door DeusExMover10 is reached by no frob approach tried (8 bearings, 3 distances, 2 heights around its Location); the walk to it is not driven |
+| `gunther-rescued` | 5.4.5 | 01_NYC_UNATCOIsland | plays | {door:{key:1,yaw:16384},freed:true,con:GuntherRescued,played:true,respects:true,weapon:WeaponPistol582,gave:true,skillPoints:[5000,5150],before:{allia |
 | `meet-terrorist` | 5.4.6 | 01_NYC_UNATCOIsland | plays | {played:false,complete:true,attacked:true,commander:conversation,at:[2887,38,2528]} |
-| `overheard-barks` | 5.4.7 | 01_NYC_UNATCOIsland | plays | {delegate:validate-island-bark.mjs,peakMiB:1096,last:island-bark: Terrorist30's bark deusexconaudioaibarks.conaudioaibarks_896 on Galaxy channel 57306 |
+| `overheard-barks` | 5.4.7 | 01_NYC_UNATCOIsland | plays | {delegate:validate-island-bark.mjs,peakMiB:1272,last:island-bark: Terrorist30's bark deusexconaudioaibarks.conaudioaibarks_896 on Galaxy channel 57306 |
 | `route-front` | 5.5.1 | 01_NYC_UNATCOIsland | plays | {authored:{breakable:[false,false,false,false],lockStrength:0.10000000149011612},bareRightClick:[locked,locked,locked,locked],picking:true,pickFrames: |
 | `route-back` | 5.5.2 | 01_NYC_UNATCOIsland | plays | {lockStrength:0.10000000149011612,bareRightClick:{locked:true,open:false},picking:true,pickFrames:245,unlocked:true,open:true,died:false,picks:0} |
 | `route-airshaft` | 5.5.3 | 01_NYC_UNATCOIsland | plays | {played:true} |
 | `route-water` | 5.5.4 | 01_NYC_UNATCOIsland | plays | {energy:[100,98],health:[100,95],died:false} |
-| `objective-kill` | 5.5.5 | 01_NYC_UNATCOIsland | no-effect | the effect did not happen |
+| `objective-kill` | 5.5.5 | 01_NYC_UNATCOIsland | plays | {h0:100,distance:300,shots:5,dead:true,health:null,complete:true,killedPlayed:true,meetTerroristPlayed:false,playerDied:false} |
 | `objective-spare` | 5.5.6 | 01_NYC_UNATCOIsland | plays | {complete:true,notKilledPlayed:false} |
 | `mission-complete` | 5.5.7 | 01_NYC_UNATCOIsland | plays | {complete:true,thugsLeft:0,unMainDoorLocked:[false,false],paul:[-4681,2640,-94]} |
 | `noise-wakes-guards` | 5.6.1 | 01_NYC_UNATCOIsland | plays | {out:{enemy:true,tracers:2,minHealth:0,states:[attacking,standing],physics:1},died:false,h:0} |
-| `light-vs-sight` | 5.6.3 | 01_NYC_UNATCOIsland | undriven | needs a measured lit/dark pair of poses in an NPC's view and the NPC's perception fields; no such pose is read from the map yet |
+| `light-vs-sight` | 5.6.3 | 01_NYC_UNATCOIsland | plays | {dark:{at:[5835,2059,-96],distance:500,physics:1,los:true,light:0.0043,visibility:0.0043,readiness:0,seenAt:null,state:firstpersonconversation,playerD |
 | `explosion-world` | 5.6.4 | 01_NYC_UNATCOIsland | plays | {gone:true,playerHealth:[100,83],died:false} |
 | `emp-electronics` | 5.6.5 | 01_NYC_UNATCOIsland | plays | {before:{state:patrolling,emp:100,health:250},attempts:[[1.57,0]],state:disabled,emp:0,health:250,grenades:1,playerDied:false} |
-| `flags-change-world` | 5.6.6 | 01_NYC_UNATCOIsland | undriven | needs GuntherFreed (see gunther-rescued) and the Filben and commander flows; only the conversation flows of meet-filben and meet-terrorist are driven |
+| `flags-change-world` | 5.6.6 | 01_NYC_UNATCOIsland | plays | {gunther:{freed:true,before:{alliance:None,orders:Standing},after:{alliance:UNATCO,orders:RunningTo,state:attacking},respects:true},filben:{gaveKey:tr |
 
 **What the census found in Play** (each is a lead for an agent, not yet a diagnosis):
 
@@ -279,10 +285,7 @@ How the scenarios are driven (and what that means for reading the table):
    `DataLinkTrigger4` plays `DL_TArgetRangeshot1`). The window of the station spans z -110 to -47 over the sill at y -656 and the settled player's eye is at z -72. The old driver
    placed the player 36 units above the floor at x 65, between the two lanes (the glass stands at x 0 and 128), and fired six shots at a target that had never moved behind a closed blast door
    (a probe that re-placed the player at that height before each shot hit the window frame at y -656 every time; settled on the floor the shots reach the blast door). `AlarmUnit1`
-   is not "the same unit" as the Island laser: **`island-laser` stays `no-effect` for another reason.** `LaserTrigger.BeginAlarm` only rings the klaxon and sends an `alarm` AI event
-   (`LaserTrigger0`'s Event is None); `AlarmUnit0` (Event `SetAlarmFlag`, then `FlagTrigger3` sets `StatueAlarmTriggered`) is triggered by a guard in `ScriptedPawn.Alerting`
-   (`TriggerAlarm`, an `AlarmUnit` within 2400). In the census run the three Terrorists in view attack the player (`attacking`) and he is dead in 15 s, before anyone alerts: that is the
-   NPC-versus-player question of item 4 of the remaining work, not a missing alarm.
+   is not "the same unit" as the Island laser: `island-laser` was `no-effect` for another reason, which turned out to be the row's own reading of the original (finding 9).
 5. **Radiation costs the player once** (`hazmat-swim`): `WaterZone0` (`DamagePerSec` 20, Radiation, `bPainZone`) took 10 health on entry and no more over 20 s; with the HazMat suit active the entry took 8. A
    debug series (a second look at the same zone) shows `PainTime` counting the breath, not a pain interval.
 6. **NPC reaction to being hurt** (`island-shoot-npc`; the kill itself is **resolved by the first gap task**, the reaction is still unverified): the 20 pistol shots that took `Terrorist0` from 75
@@ -302,12 +305,60 @@ How the scenarios are driven (and what that means for reading the table):
    are Stage 4's (4.4.13) and the Terminals-in-Play work, not driven here. A second Play gap showed with the player standing at the personal terminal beside `UNATCOTroop6` (26 units away, inside both cylinders): that pawn's own `SetLocation` call
    (its state code, from `Actor.Tick`) met the player and `CheckEncroachment` dispatched `Pawn.EncroachingOn`, a value-returning event the pawn-physics dispatch called without a result block
    ("Return-value ProcessEvent requires a caller result reference"); it now gets the block as `dispatchSpawnedEvent` gives it (why the call came some seconds after the window closed was not traced).
-8. **`M00MeetPage` does not play** (`meet-page-final`) when the player walks into `ConversationTrigger1`; `MeetTerrorist` does (the Aggressive branch with the first choice: `StatueMissionComplete` and
-   `PlayerAttackedStatueTerrorist` set, `MeetTerrorist_Played` not), and `mission-complete` then plays Mission01.Timer's world edit (Terrorists dead, `UN_maindoor` unlocked, Paul moved). Shooting the commander
-   from his room (`objective-kill`) did not hurt him.
+8. **`M00MeetPage` and the commander from his room were driver faults** (`meet-page-final`, `objective-kill`; **resolved by work item 6, 2026-10-18**). `MeetTerrorist` already played (the
+   Aggressive branch with the first choice: `StatueMissionComplete` and `PlayerAttackedStatueTerrorist` set, `MeetTerrorist_Played` not), and `mission-complete` plays Mission01.Timer's world edit
+   (Terrorists dead, `UN_maindoor` unlocked, Paul moved).
+   `meet-page-final`: `ConversationTrigger1` (`conversationTag` `m00meetpage`, `BindName` `BobPage`, `CollisionRadius` 96) starts the conversation from its `Touch`
+   (`ConversationTrigger.uc:55`, `StartConversationByName` with the owner within 800 units, `DeusExPlayer.uc:7705`), so the player has to walk *into* the cylinder. The driver placed the
+   player 40 units from its centre, already inside, and no Touch ever began. Walked in from 160 units the Touch fires on the 17th frame and `M00MeetPage` (third person) plays to its end
+   with Enter in about 6 s. The row's other half, holo-Jaime, is now driven too: `Switch6` (Event `jaime_talks`) reaches `FlagTrigger11`, which sets `JaimeAppears` and triggers `convo`
+   (`ConversationTrigger0`, whose `conversationTag` `jaimebarks` names no conversation: both JaimeReyes own only `JaimeBark`). Mission00.Timer's `00_TRAININGFINAL` branch then calls
+   `EnterWorld` on the `holojaime` JaimeReyes (`Mission00.uc:173`), its radius conversation `JaimeBark` (160 units) plays for 11.5 s, and on `JaimeBark_Played` the Timer calls `LeaveWorld`
+   (`Mission00.uc:183`) and sets `MS_ReyesHidden`. Holo-Bob's `LeaveWorld` is in the `00_TRAINING` branch only, so Bob stays on this map, as in the original source.
+   `objective-kill`: `MeetTerrorist` is the commander's radius conversation (`bInvokeRadius`, `radiusDistance` 140; `invokeRadius = Max(16, con.radiusDistance)`, `DeusExPlayer.uc:8070`). The
+   driver placed the player 45 units from him, so the conversation started on his first low-priority tick. State `Conversation` put the pistol away (`conPlay.SetInHand(InHand);
+   PutInHand(None)`, `DeusExPlayer.uc:7488`), and the clicks went to the conversation window: no shot was fired (the ammo stayed at 6). From 300 units in front of him, inside his room
+   and outside the radius, five pistol shots kill him (100, 87, 74, 61, 29, -1; he attacks, then flees). Mission01.Timer then starts `DL_LeaderKilled` (`Mission01.uc:100`), whose event sets
+   `StatueMissionComplete`, and `DL_LeaderKilled_Played` follows its end.
+9. **The laser trap's row misread the original; the laser and the alarm box both play** (`island-laser`; **resolved by work item 6**). The row said a guard in `Alerting` triggers
+   `AlarmUnit0` after the beam. The original script does not allow that for any guard that heard the beam. `LaserTrigger.BeginAlarm` rings `Klaxon2` and starts an `Alarm` AI event
+   (`LaserTrigger.uc:31`; `LaserTrigger0` has no Event). A guard that handles it (`ScriptedPawn.HandleAlarm`) sets `AlarmTimer = 120` (`ScriptedPawn.uc:5531`) before `HandleEnemy`
+   (`:5534`). `HandlingEnemy` sends a `RaiseAlarm` BeforeAttacking guard to `Alerting` (`:9694`), whose state code jumps to `Done` while `AlarmTimer > 0` (`Alert:`, `:11865`) and from there to
+   `Attacking` (`:11910`). `AlarmTimer` counts down in `Tick` (`:7225`), so for two minutes after the beam no guard who heard it rings the box. Play does exactly this, per frame: on the
+   beam, Terrorists 18, 30, 14 and 2 go `seeking` with `AlarmTimer` 120. Terrorist18 (`RaiseAlarm` 0, BeforeAttacking) is `alerting` for one frame (107) and `attacking` the next; the
+   other three (`RaiseAlarm` 1) go straight to `attacking`; `AlarmUnit0` stays silent. The box is rung by a BeforeAttacking guard that takes the player as its enemy with `AlarmTimer` 0. With the
+   map reloaded and the player 260 units in front of the seated Terrorist18 (stamped as rendered), it goes `seeking`, then `alerting` with `AlarmActor` `AlarmUnit0` (`FindTarget`, within
+   2400), runs about 6 s to the box and `TriggerAlarm`s it: `SetAlarmFlag`, `FlagTrigger3`, `StatueAlarmTriggered`. The flag is read in this map by `TopTerroristsOverheard` (its `Alarm`
+   branch) and gates `DL_lasertrigger` (which needs it false). Row 5.2.5 is restated from these lines and the driver checks both halves.
+10. **Gunther's cell opens from a wall button** (`gunther-rescued`, `flags-change-world`; **resolved by work item 6**). `DeusExMover10` (Tag `temp_celldoor`, a door turning a quarter on
+   `KeyRot[1]`) is opened by `DeusExMover8`, an unlocked button (`TriggerOpenTimed`, `KeyPos[1]` 8 units, Event `temp_celldoor`) beside the cell. A frob on the button opens it
+   (`DeusExMover.Frob`, `Trigger(Frobber, P)`, `DeusExMover.uc:657`), and at the end of its slide it triggers the cell door (`TriggerToggle`, which has no lock test). The cell door's Event
+   `guntherdoor` reaches `FlagTrigger4` (a trigger on `StatueMissionComplete` false), then `guntherfreedflag` and `FlagTrigger2`, which sets `GuntherFreed`. The census had aimed at
+   `DeusExMover10`'s `Location`, its hinge pivot 170 units above the floor (`PrePivot` -48,0,96), so no approach selected it. Walked in from the button, the player crosses `AllianceTrigger0`
+   (a touch trigger, Event `GuntherHermann`, Alliance `UNATCO`) and enters `GuntherRescued`'s radius (70; the conversation needs `GuntherFreed`). The conversation adds 150 skill points,
+   and its `CheckObject` chain looks for the assault gun, then the stealth pistol, the pistol and the knife. With the pistol in hand, the first choice runs `TransferObject` (the pistol's
+   Owner becomes Gunther), `GuntherRespectsPlayer` and the trigger `GuntherAttacks` (`OrdersTrigger0`: `RunningTo` `GuntherSpot`). `GuntherFreed` and Gunther's alliance are siblings of the same walk, not cause
+   and effect: nothing fires `AllianceTrigger0`'s Tag `GuntherFreed`, and the alliance flips on the player's touch. For 5.6.6 a scan of all 140 conversations of the map (conversation flag
+   lists, `ConEventCheckFlag`, `ConEventSetFlag`, choice flags, triggers) finds the other three flags read only by conversation branches. `FilbenGaveKey` is set by `MeetFilben`;
+   `M01PlayerAggressive` by Mission01.Timer (`count < 23`, `Mission01.uc:90`); `KnowsShipment` by `DL_NearTop`, `TerroristsOverheard` and `MoleConvos`. They are read in `FilbenSecondBark`,
+   `FilbenFinalBark` and `MeetFilben2`; `PaulCongratulations`, `MeetKaplan`, `TrooperCongratulation` and `postmissiontroopsssecure`; and `MoleConvos`. Three of those conversations fire
+   OrdersTriggers (`PaulWandering`, `HarleyStartsToWander`, `BumFemaleWanders`), so they can change pawns too; which branch carries each trigger was not traced. The driver sets each flag
+   from its source and leaves those conversations unplayed. The map holds 29 Terrorists and one placed `TerroristCarcass` with no killer, so `M01PlayerAggressive` needs eight kills, not six.
+11. **Light against sight: a measured pair of poses** (`light-vs-sight`; **resolved by work item 6**). The Island has no `LightSwitch` and no `TriggerLight`. AugLight would confound the test:
+   besides its glow (`b2`, `LightRadius` 4, brightness 220 at the player's eye, `AugLight.uc:83`), it starts a `Beam` AI event (`AugLight.uc:72`), and `CheckBeamPresence` answers any
+   player Beam in view within 1,200 units with `HandleSighting` (`ScriptedPawn.uc:1991`) whatever the player's light. So the pair is the map's own lighting. `AICanSee`
+   (`ScriptedPawn.uc:1887`) multiplies `64 (r²+h²)/dist²` by `AIVisibility` and subtracts `VisibilityThreshold` (0.01; [perception](script-pawn-perception.md)), and any positive result brings
+   `EnemyReadiness` to 1 within 4.5 s (`CheckCycle`, `:1771`). A scan of `AIGetLightLevel` (the recovered native 700; `perceptionLighting` is never set, so Play runs the recovered body) found
+   two poses 500 units in front of `Terrorist4`, 15 degrees apart, both standing on the ground with a clear `SingleLineCheck`. The dark pose is in shadow (light 0.0043, the zone ambient
+   alone: every static light's trace is blocked); the lit pose reads 0.0549. Placed in the shadow for 10 s, the player leaves `EnemyReadiness` at 0. Placed in the light (the map reloaded), the
+   player raises it by 0.24 a second: `seeking` at 3 s, `attacking` with the player as Enemy at 5 s. Row 5.6.3 now names this pair.
+12. **The exit door of the stealth course is not a ride** (the `ElevatorMover1` part of `elevator`, row 5.3.13; **resolved by work item 6**). `ElevatorMover1` (Tag `ExitDoor`) slides 64
+   units on y between two keys. `SequenceTrigger1` (Tag `CloseDoor`, SeqNum 1) and `SequenceTrigger0` (Tag `OpenDoor`, SeqNum 0) call `SetSeq`, which moves the door only when `KeyNum`
+   differs (`ElevatorMover.uc:23`). It starts at 0, so `OpenDoor` alone moves nothing. Player input does reach both: `Soldier0`, seeing the player, rings an AlarmUnit, and the
+   `AlarmDispatcher` sends `CloseDoor` (key 1 at 3 s). `Switch0` (Event `ButtonDispatcher`: `SoldierHostile`, `OpenDoor`, `SoldierPatrol`, `SpecialEventMsg`) brings the door back to key 0
+   (`MoveTime` 1 s).
 
-Unreached: `gunther-rescued` and `flags-change-world` (the cell door `DeusExMover10` is selected by no frob approach tried), `light-vs-sight` (no measured lit/dark pair of poses), and the `ElevatorMover1`
-ride (no player input reaches its SequenceTriggers).
+Unreached since work item 6: none. Every scenario is driven; what each does not cover is named in its row's `weak` or `need`.
 
 
 ## First original captures: Island combat (2026-10-17)
@@ -360,28 +411,28 @@ held at tick 660 to type the key edges, where Play's replay gives it all of that
 takes another slot at 821. Not explained. It is the window system's time while the tracer holds the level (Stage 4's interface timing), not a game-state difference, and it changes
 nothing a watched actor reads. The Stage 5 check therefore judges the creations by class and tick and reports the slots. Row 4.3.6 keeps its strict slot check.
 
-## Scoreboard (2026-10-17, after the combat captures)
+## Scoreboard (2026-10-18, after the undriven scenarios)
 
-`node scripts/validate-stage5-acceptance.mjs --census .work/stage5-census.json --report` on the census above (the Mac, 8 min for the six proof replays): **2 of 50 criteria pass;
-the gate is red** (exit 1). 55 rows, 5 excluded.
+`node scripts/validate-stage5-acceptance.mjs --census .work/census-full.json --report .work/stage5-gate.json` on the census above (the Mac, 8 min for the six proof replays): **2 of 50
+criteria pass; the gate is red** (exit 1). 55 rows, 5 excluded.
 History: the first run (master 5d7285c, with the three tightened predicates) was 0 PASS, 14 FAIL, 33 MISSING, 3 UNDRIVEN. The Island devices task moved 5.2.6, 5.3.9, 5.5.1 and 5.5.2 from FAIL to
 MISSING. The death, explosives and alarms task moved 5.1.2, 5.1.4, 5.1.5, 5.2.7, 5.6.2 and 5.6.5. That left 0 PASS, 4 FAIL, 43 MISSING, 3 UNDRIVEN. The combat captures moved
-5.2.2 from FAIL to PASS and 5.1.6 from MISSING to PASS.
+5.2.2 from FAIL to PASS and 5.1.6 from MISSING to PASS (2 PASS, 3 FAIL, 42 MISSING, 3 UNDRIVEN). Work item 6 moved 5.2.5, 5.4.8 and 5.5.5 from FAIL, and 5.4.5, 5.6.3 and 5.6.6 from
+UNDRIVEN, to MISSING.
 
 | Clause | PASS | FAIL | MISSING | UNDRIVEN | EXCLUDED |
 | --- | ---: | ---: | ---: | ---: | ---: |
 | 5.1 Combat | 1 | 0 | 8 | 0 | 0 |
-| 5.2 Stealth | 1 | 1 | 5 | 0 | 0 |
+| 5.2 Stealth | 1 | 0 | 6 | 0 | 0 |
 | 5.3 Exploration and the character systems | 0 | 0 | 13 | 0 | 0 |
-| 5.4 Conversation | 0 | 1 | 6 | 1 | 0 |
-| 5.5 Alternate-route objectives | 0 | 1 | 6 | 0 | 0 |
-| 5.6 Systems interacting | 0 | 0 | 4 | 2 | 0 |
+| 5.4 Conversation | 0 | 0 | 8 | 0 | 0 |
+| 5.5 Alternate-route objectives | 0 | 0 | 7 | 0 | 0 |
+| 5.6 Systems interacting | 0 | 0 | 6 | 0 | 0 |
 | 5.7 Excluded | 0 | 0 | 0 | 0 | 5 |
-| **Total** | **2** | **3** | **42** | **3** | **5** |
+| **Total** | **2** | **0** | **48** | **0** | **5** |
 
 The two `PASS` rows have the first proof checks: `validate-stage5-live.mjs` on the stored Island combat scenes ([above](#first-original-captures-island-combat-2026-10-17)), 5.2.2 on
-`cmb1` and `cmb2`, 5.1.6 on all four. The other 42 `MISSING` rows play in the census and name the capture that would prove them. The 3 `FAIL` rows do not play: there is no pause, but
-`island-laser`, `meet-page-final` and `objective-kill` have no effect. The 3 `UNDRIVEN` rows cannot be started. Stage 4's gate started at 44 of 70 because 60 checks against stored
+`cmb1` and `cmb2`, 5.1.6 on all four. The other 48 rows are `MISSING`: each plays in the census and names the capture that would prove it. No row fails or is undriven. Stage 4's gate started at 44 of 70 because 60 checks against stored
 originals already existed; for gameplay they did not. The strongest existing evidence is listed per row under "Existing, partial": the Island combat scenes, the Underworld's
 weapon-noise traces for gunshots, the perception pilot, the first-person crowbar, MeetPaul's frames, and the native oracles for swimming, ladders, falling and movers.
 
@@ -403,20 +454,25 @@ Nothing below was fixed by the census task; the two gap tasks closed items 1 and
    scenes on Island replay equal, and `validate-stage5-live.mjs` is the proof check. 5.2.2 passes; the rest of the clause still lacks these, each named in the row's `need`: the carcass's
    contents (5.1.5), footsteps (5.2.3), a pawn finding a body it was not already fighting over (5.2.7), the MedKit (5.6.1) and a death kept in a stored capture (5.1.8).
 5. **Pain zones and the HazMat suit** (finding 5): the zone's `DamagePerSec` over time and the suit's absorption, against a capture of Training's pool. Unblocks 5.3.7, 5.6.x radiation.
-6. **The undriven scenarios**: the cell door and Gunther (5.4.5, 5.6.6), a lit/dark pair of poses (5.6.3), the `M00MeetPage` trigger (5.4.8), the commander from his room (5.5.5), the `ElevatorMover1` ride
-   (5.3.13). Each is a driver plus whatever pause it finds; the first two are the biggest.
+6. ~~**The undriven scenarios**~~ **Done 2026-10-18** (findings 8 to 12): all six were driver faults or a misread row, none a Play gap. The cell door and Gunther (5.4.5, 5.6.6) open
+   from the wall button. The lit/dark pair (5.6.3) is two measured poses in front of `Terrorist4`. `M00MeetPage` (5.4.8) is walked into, and holo-Jaime is driven too. The commander (5.5.5) is
+   shot from outside his conversation radius. The `ElevatorMover1` "ride" (5.3.13) is the exit door, closed by the alarm and reopened by `Switch0`. The laser (5.2.5) row is restated
+   from the original's `AlarmTimer` rule. The census now plays all 50 scenarios.
 7. **Proof captures, by clause value**: conversation branches (5.4.3 to 5.4.6: choices, transfers, flags; the harness types Enter and Down as key edges), weapons and damage (5.1.1 to 5.1.3, 5.1.7), the
-   routes (5.5), Training's lessons one capture each (5.3.1 to 5.3.4), and O3 comparisons for the native-body rows (5.3.5, 5.3.6, 5.3.2). The 43 `MISSING` rows are this item; none can start before items 1 to 4
-   say Play does the scenario.
+   routes (5.5), Training's lessons one capture each (5.3.1 to 5.3.4), and O3 comparisons for the native-body rows (5.3.5, 5.3.6, 5.3.2). The 48 `MISSING` rows are this item; the census now plays every scenario, and items 2 and 5
+   still bound what the rows they name can show.
 
 ## What the user should decide
 
 * **The list itself**: 50 scenarios, Training meaning all three maps, Island with its five ways in, one row for the whole of Training's phase 1, placed approaches instead of walks. Weak choices are labelled `weak`
   in `scripts/stage5-criteria.mjs` and in the tables above.
+* **Rows restated by work item 6** (findings 9 to 12), each from original script lines. 5.2.5: the beam makes the guards who hear it attack with `AlarmTimer` 120, and `AlarmUnit0` is rung by a
+  guard who saw the player. 5.3.13: the exit door instead of a ride. 5.4.5: the wall button. 5.6.3: a measured pair under the map's lighting instead of AugLight or a light switch (the
+  Island has no switch, and AugLight adds the `Beam` path). 5.6.6 is restated (the alliance flips on a touch, not from the flag) and labelled `weak`: the conversations that read the other three flags are not played.
 * **O3 or O2 as enough for native-body rows** (ladder, crate physics, swimming, falling, movers): the doc defaults to O3 (the DLL's code on Play's inputs in the scene), which does not exist yet for any of them.
 * **Cross-map evidence for shared code**: the gunshot half of 5.2.3 now has an Island capture (`cmb2`); its footsteps half can have no live trace (a held key), so the choice is O3 on Play's footstep inputs or accepting the row without footsteps.
 * **Where a player's death stops** (item 2) and whether the load menu belongs to Stage 5 or 6.
-* **Priority**: items 1 and 3 are done, and item 4 has its first comparisons: the NPC-versus-player scenes replay equal. The largest open groups are now item 7's captures (one per row, about 15 minutes on the bottle each, plus a replay) and item 6's undriven scenarios.
+* **Priority**: items 1, 3 and 6 are done, and item 4 has its first comparisons: the NPC-versus-player scenes replay equal. The largest open group is now item 7's captures (one per row, about 15 minutes on the bottle each, plus a replay).
 
 ## Excluded
 
