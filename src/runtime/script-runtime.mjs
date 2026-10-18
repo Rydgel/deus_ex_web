@@ -1580,9 +1580,14 @@ export class ScriptRuntime {
   modelPreparedDynamicLoad(events){
     const original=this.actorLifecycle?.construction?.registry?.original;
     if(!original?.packages)return;
+    // only the exports of a package this run loaded first: an export of a package the original held at the measured start (a ConversationList the
+    // Mission01 conversations reach, capture hck1 tick 24) creates nothing there
+    this.firstLoadedPackages??=new WeakMap();
+    const loadedHere=this.firstLoadedPackages.get(original)??new Set();
+    this.firstLoadedPackages.set(original,loadedHere);
     for(const event of events??[]){
-      if(event.op==='CreateLinkerLoad')original.loadPackage(event.root?.name);
-      else if(event.op==='CreateExport'&&event.existing?.asset){
+      if(event.op==='CreateLinkerLoad'){ if(original.loadPackage(event.root?.name))loadedHere.add(String(event.root?.name).toLowerCase()); }
+      else if(event.op==='CreateExport'&&event.existing?.asset&&loadedHere.has(event.existing.asset.name.toLowerCase())){
         const object=event.existing,asset=object.asset,cls=asset.pkg.exports[object.index-1]?.className;
         if(!original.loadExport(object,cls,object.name)||cls!=='Texture')continue;
         const palette=readObject(asset.pkg,asset.bytes,object.index).values.Palette;
