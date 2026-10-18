@@ -224,9 +224,12 @@ export const captureConfig = scene => [`call-ticks 1 ${scene.ticks}`, 'call-fram
   'call 0x103814e0 inputevent 4 always', 'call 0x10382c60 aisend 5 always name0 fname 1', 'call 0x10382fe0 aistart 5 always name0 fname 1',
   'call 0x103831e0 aiend 3 always name0 fname 1', 'call 0x103832c0 aiclear 2 always name0 fname 1',
   'call 0x10384980 aievent 5 always name0 fname 1 fname 4 namearg 3 0 deref 3 5 0', 'call Extension.dll@0x1003be90 roottick 1 always',
-  ...(scene.levelEnd ? ['call 0x1038fa10 settravel 4 always'] : [])];
+  ...(scene.levelEnd ? ['call 0x1038fa10 settravel 4 always'] : []),
+  // A conversation scene also records XWindow::SetVisibility (Extension.dll 0x1004c7d0; ECX the window, the bool its new visibility): which windows the HUD
+  // shows and hides when a conversation ends (tC: Play shows HUDLogDisplay at MeetTerrorist's end, where the original first draws it at TerroristFollowup's).
+  ...(scene.conversation ? ['call Extension.dll@0x1004c7d0 setvis 1 always retname'] : [])];
 export const CAPTURE_CONFIG = captureConfig({ticks: 900});
-const configFile = scene => `.work/live-acceptance/cfg/${scene.levelEnd ? 'death' : 'combat'}-${scene.ticks}.cfg`;
+const configFile = scene => `.work/live-acceptance/cfg/${scene.levelEnd ? 'death' : scene.conversation ? 'conversation' : 'combat'}-${scene.ticks}.cfg`;
 /** The original's capture command of a scene (for the doc and a recapture). */
 export const captureCommand = tag => {
   const s = SCENES[tag];

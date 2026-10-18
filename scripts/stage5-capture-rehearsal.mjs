@@ -83,7 +83,10 @@ for (let tick = 1; tick <= ticks; tick++) {
     if (edge) { c.game.inputKey(edge[2], edge[1] === 'down'); console.log(`> ${line} after ${tick - 1}`); } else exec(line);
   }
   if (scene?.conversation) stampNear();
+  const gcTrace = (process.env.GC_TRACE ?? '').split(':').map(Number);
+  globalThis.__gcAllocLog = gcTrace.length === 2 && tick >= gcTrace[0] && tick <= gcTrace[1] ? (globalThis.__gcAllocLog ?? []) : null;
   try { c.frames(1); } catch (error) { console.log(`tick ${tick}: ${error.message.split('\n')[0]}`); break; }
+  if (globalThis.__gcAllocLog?.length) { console.log(`gc allocs at ${tick}:`); for (const {stack: s} of globalThis.__gcAllocLog) console.log('  ' + s.split('\n').slice(2, 16).map(l => l.trim().replace(/^at /, '').replace(/\(file:\S*\/(src|scripts)\//, '(')).join(' < ')); globalThis.__gcAllocLog = []; }
   // (a pawn's NumCarcasses when it has seen a body, and its SeekType while it seeks: 1 sound, 2 sight, 3 guess, 4 carcass, ScriptedPawn.ESeekType)
   const line = pawns.map(a => c.gone(a) ? `${a.name}:gone` : `${a.name}:${c.state(a).split('.').pop()}/${c.read(a, 'Enemy')?.name ?? '-'}/h${c.read(a, 'Health')}`
     + `${c.read(a, 'NumCarcasses') ? `/bodies${c.read(a, 'NumCarcasses')}` : ''}${/seeking/i.test(c.state(a)) ? `/seek${c.read(a, 'SeekType')}` : ''}`).join(' ')
