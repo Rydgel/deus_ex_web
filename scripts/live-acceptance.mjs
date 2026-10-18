@@ -144,7 +144,9 @@ if (flag('player-gear')) PLAYER_FIELDS.push(['Weapon', 'Weapon', 976, 'obj'], ['
 // UpdateEyeHeight smooths EyeHeight with OldLocation and bJustLanded; the view shake of DeusExPlayer's damage), at Play's slotOf offsets (JCDentonMale0).
 if (flag('player-view')) PLAYER_FIELDS.push(['EyeH', 'EyeHeight', 0x3f8, 'f'], ['WalkBob', 'WalkBob', 0x3e8, 'f3'], ['BobTime', 'BobTime', 0x5f8, 'f'],
   ['JustLanded', 'bJustLanded', 0x318, 'bit', 0x4], ['OldLoc', 'OldLocation', 0x12c, 'f3'], ['ShakeVert', 'ShakeVert', 0x680, 'f'], ['ShakeTimer', 'ShakeTimer', 0x678, 'f'],
-  ['ShakeMag', 'ShakeMag', 0x67c, 'i32'], ['MaxShake', 'MaxShake', 0x684, 'f'], ['VertTimer', 'VertTimer', 0x688, 'f']);
+  ['ShakeMag', 'ShakeMag', 0x67c, 'i32'], ['MaxShake', 'MaxShake', 0x684, 'f'], ['VertTimer', 'VertTimer', 0x688, 'f'],
+  // and the bioelectric energy an EMP blast drains (DeusExPlayer.TakeDamage 'EMP'; DeusExPlayer +0x9c4 Energy, +0x9c8 EnergyMax)
+  ['Energy', 'Energy', 0x9c4, 'f'], ['EnergyMax', 'EnergyMax', 0x9c8, 'f']);
 // --player-health: the player's hit regions (Pawn.HealthHead..HealthArmRight, the linked offsets of Play's class graph): where an NPC's shots land
 // (DeusExPlayer.TakeDamage/HandleDamage) in the combat scenes of the Stage 5 gate (docs/stage-5-exit-criteria.md).
 const HIT_REGION_FIELDS = [['HHead', 'HealthHead', 1376, 'i32'], ['HTorso', 'HealthTorso', 1380, 'i32'], ['HLegL', 'HealthLegLeft', 1384, 'i32'],
@@ -1075,9 +1077,29 @@ async function play() {
     const pawnWrites = flag('no-pawn-load') ? {} : Object.fromEntries([...pawns, ...loadPawns].filter(name => lastFrozen[name] && renderHistoryFields().every(label => lastFrozen[name][label] !== undefined))
       .map(name => [name, Object.fromEntries(renderHistoryFields().map(label => [FIELDS.find(f => f[0] === label)[1], lastFrozen[name][label]]))]));
     const timerWrites = flag('no-timer-load') ? {} : Object.fromEntries(timers.filter(name => lastFrozen[name]?.TRate !== undefined).map(name => [name, {TimerRate: lastFrozen[name].TRate, TimerCounter: lastFrozen[name].TCount}]));
+    // The same measured inputs for the --device-watch actors the original's level held (a pawn device is a pawn above): with --render-history the
+    // frozen phase's render stamps (cam1: NSFTurret01 and its gun drawn from the placement's view, LastRenderTime 81.96 at tick 1), and for a device
+    // whose Timer runs from the load (play-population.json `timers`) its TimerRate and TimerCounter. A device found through its owner is written
+    // through it too (liveProbe's `Owner.field` names).
+    const populationTimers = new Set((existsSync(path.join(dir, 'play-population.json')) ? JSON.parse(readFileSync(path.join(dir, 'play-population.json'), 'utf8')).timers ?? [] : [])
+      .map(name => name.toLowerCase()));
+    const deviceWrites = Object.fromEntries(devices.filter(d => !d.late && !d.pawn && lastFrozen[d.name]).map(d => [d.via ?? d.name, {
+      ...(flag('render-history') && lastFrozen[d.name].LRT !== undefined ? {LastRenderTime: lastFrozen[d.name].LRT} : {}),
+      ...(!flag('no-timer-load') && populationTimers.has(d.name.toLowerCase()) ? {TimerRate: lastFrozen[d.name].TRate, TimerCounter: lastFrozen[d.name].TCount} : {})}])
+      .filter(([, fields]) => Object.keys(fields).length));
     // The original's class counters (UClass+0x488: MakeUniqueObjectName's suffix, docs/script-construction.md "Spawned names against the original")
     // carry the capture's whole session (the maps it loaded before this one): a measured input like the stream state. A class's first traced
     // AddObject (the `addobj` call records' name and class at the return) gives its counter; --own-names keeps Play's own.
+    // AIProcess's firstProcess at its return (the `aiproc` call records, validate-stage5-live.mjs captureConfig): the receiver its budget stopped the loop
+    // before, read before CleanupEvents relinks firstProcess past receivers destroyed in the callbacks; the replay stops there exactly (aievent.rs
+    // ai_set_process_stop, mode 2). A capture without them keeps `aiFirst`, the tick exit's (mode 1).
+    const aiStops = new Map();
+    if (existsSync(`${tracePath}.calls.jsonl`))
+      for (const line of readFileSync(`${tracePath}.calls.jsonl`, 'utf8').split('\n')) {
+        if (!line.includes('"fn":"aiproc"') || !line.includes('"ecxRcv"')) continue;
+        const r = parseTraceLine(line);
+        if (r.ev === 'ret' && r.u >= 1) aiStops.set(r.u, r.ecxRcv);
+      }
     const classCounters = (() => {
       const file = `${tracePath}.calls.jsonl`;
       if (flag('own-names') || !existsSync(file)) return null;
@@ -1103,7 +1125,7 @@ async function play() {
     // state; Inventory.CalcDrawOffset places a held item with them (Stage 5 capture hck1: Multitool0's Z 4e-5 off for 102 ticks until the player was hit)
     const viewState = pose.EyeH === undefined ? {} : {EyeHeight: pose.EyeH, WalkBob: pose.WalkBob.map(Math.fround), BobTime: pose.BobTime, bJustLanded: Boolean(pose.JustLanded),
       ShakeVert: pose.ShakeVert, ShakeTimer: pose.ShakeTimer, ShakeMag: pose.ShakeMag, MaxShake: pose.MaxShake, VertTimer: pose.VertTimer};
-    const request = {...(classCounters ? {classCounters} : {}), write: {...timerWrites, ...pawnWrites, '@player': {AnimSequence: pose.Anim, AnimFrame: pose.Frame, AnimRate: pose.Rate, TweenRate: pose.Tween, ...animState, ...viewState, ...(option('player-alliance', null) ? {Alliance: option('player-alliance')} : {}),
+    const request = {...(classCounters ? {classCounters} : {}), write: {...timerWrites, ...pawnWrites, ...deviceWrites, '@player': {AnimSequence: pose.Anim, AnimFrame: pose.Frame, AnimRate: pose.Rate, TweenRate: pose.Tween, ...animState, ...viewState, ...(option('player-alliance', null) ? {Alliance: option('player-alliance')} : {}),
       // FrobTime accumulates the player's tick deltas (HighlightCenterObject runs when it reaches 0.1 s); the frozen phase's deltas are the host's, so the original's value is a measured input
       ...(flag('player-gear') && pose.FrobTime !== undefined ? {FrobTime: pose.FrobTime} : {})}, ...generatorWrites},
       ...(touchWindow ? {touchTrace: {first: touchWindow[0], last: touchWindow[1]}} : {}),
@@ -1112,7 +1134,8 @@ async function play() {
       ...(navPawns ? {navTrace: {pawns: navPawns.split(','), first: navFirst, last: navLast}} : {}),
       ...(trace[0]?.viewport?.[0] && !flag('own-viewport') ? {renderSize: trace[0].viewport} : {}),   // the original's frame size (--own-viewport: Play's page)
       ...(setupNames ? {setupProbe: {names: setupNames.split(','), first: setupFirst, last: setupLast}} : {}),
-      ...(scriptPawns ? {scriptTrace: {pawns: scriptPawns.split(','), first: scriptFirst, last: scriptLast}} : {}), replay: {ticks: trace.map(({n, unfrozen, delta, rngIn, clockIn, tsIn, strobeIn, aiFirst}) => ({n, unfrozen, delta, rngIn, clockIn, tsIn, strobeIn, aiFirst, ...windowDeltas(unfrozen)})),   // not the watched fields: a long trace would not fit the page
+      ...(scriptPawns ? {scriptTrace: {pawns: scriptPawns.split(','), first: scriptFirst, last: scriptLast}} : {}), replay: {ticks: trace.map(({n, unfrozen, delta, rngIn, clockIn, tsIn, strobeIn, aiFirst}) => ({n, unfrozen, delta, rngIn, clockIn, tsIn, strobeIn, aiFirst,
+        ...(aiStops.has(unfrozen) ? {aiStop: aiStops.get(unfrozen)} : {}), ...windowDeltas(unfrozen)})),   // not the watched fields: a long trace would not fit the page
       release: true, hold: true, levelEnded: existsSync(`${tracePath}.ended`), tickTag: tickTag(), drawTrace: flag('draw-trace'), drawStacks: flag('draw-stacks'), drawStackActor: option('draw-stack-actor', null),
       // --phonemes file.json ([{n, name, letter}]; conversation-acceptance.mjs `phonemes`): the letters the original's audio update wrote into a speaker's nextPhoneme, a measured input
       ...(option('phonemes', null) ? {phonemes: JSON.parse(readFileSync(option('phonemes'), 'utf8'))} : {}),
@@ -1127,6 +1150,16 @@ async function play() {
       ...devices.map(d => ({names: [d.name], props: [...new Set([...(d.pawn ? props : DEVICE_BASE.map(f => f[1])), ...DEVICE_FIELDS[d.cls].map(f => f[1])])],
         ...(d.late ? {late: true} : {}), ...(d.via ? {via: {[d.name]: d.via}} : {})}))]}};
     const started = await page.evaluate(r => window.deusExViewer.liveProbe(r), request);
+    // The AI event manager's process ring at the release, Play's against the original's last frozen row (tools/dx-live-win.c `aiRing`): a new
+    // receiver is linked just before firstProcess, so where a budget-stopped AIProcess (the replayed `aiFirst`) reaches depends on the ring's order.
+    const originalRing = [...frozen].reverse().find(row => row.aiRing)?.aiRing;
+    if (originalRing && started.aiRing) {
+      const norm = entry => String(entry).replace(/^JCDenton\w*?\d+\|/i, 'JCDenton|').toLowerCase();
+      let k = 0; while (k < originalRing.length && k < started.aiRing.length && norm(originalRing[k]) === norm(started.aiRing[k])) k++;
+      writeFileSync(path.join(dir, `ai-ring${suffix}.json`), JSON.stringify({original: originalRing, play: started.aiRing}));
+      console.log(`AI process ring at the release: original ${originalRing.length} receivers, Play ${started.aiRing.length}; ${k === originalRing.length && k === started.aiRing.length
+        ? 'the same order' : `first difference at ${k}: original ${originalRing[k] ?? '(end)'}, Play ${started.aiRing[k] ?? '(end)'}`}`);
+    }
     if (started.objectTrace) {
       const o = started.objectTrace;
       console.log(`object trace: the run's own indices for ${o.measured} pre-placed actors, ${o.pendingDeleted} more pending deletion and the player (${o.player}); ` +

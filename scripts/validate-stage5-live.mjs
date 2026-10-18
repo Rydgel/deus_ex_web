@@ -104,13 +104,23 @@ export const SCENES = {
   // box). Seeing the player with AlarmTimer 0, it goes Alerting, FindTarget picks AlarmUnit0, it runs there and TriggerAlarm()s it: SetAlarmFlag ->
   // FlagTrigger3 -> StatueAlarmTriggered.
   alm1: {map: '01_NYC_UNATCOIsland', ticks: 900, early: PLACE(2012, -1610, -96, 16384), cmds: '', devices: ['AlarmUnit0:AlarmUnit'], flags: ['StatueAlarmTriggered']},
+  // the alarm box, rung (row 5.2.5, its second half): hck1's hack of ControlPanel0 from (1870, -860), off Terrorist18's way north to AlarmUnit0 (in hck1
+  // the player at (1900, -895) stood in it, and Terrorist18, Alerting, never passed). The panel area is out of NSFCam01's sweep (in alm1 the camera saw a
+  // player south of Terrorist18's chair, and its alarm gave Terrorist18 AlarmTimer 120, which keeps it from the box). The hack's MegaFutz shows Terrorist18
+  // the player; with AlarmTimer 0 it goes Alerting, runs to AlarmUnit0 and TriggerAlarm()s it: SetAlarmFlag -> FlagTrigger3 -> StatueAlarmTriggered.
+  alm2: {map: '01_NYC_UNATCOIsland', ticks: 900, early: PLACE(1870, -860, -96, 0),
+    cmds: '20:summon DeusEx.Multitool|50:set DeusEx.JCDentonMale ViewRotation (Pitch=-10130,Yaw=0,Roll=0)|90:ParseRightClick|130:ActivateBelt 1'
+      + `|170:set DeusEx.JCDentonMale ViewRotation (Pitch=-3640,Yaw=42690,Roll=0)|${SHOTS([200])}`,
+    devices: ['ControlPanel0:ControlPanel', 'AlarmUnit0:AlarmUnit', 'SecurityCamera5:SecurityCamera', 'Multitool0:Multitool'], flags: ['StatueAlarmTriggered']},
   // a camera and the turret it wakes (rows 5.2.4, 5.1.9): the player placed 400 units in front of NSFCam02 (SecurityCamera3, facing yaw 16592, 300 units from
   // NSFTurret01), facing it. SecurityCamera.Tick checks the player every 0.1 s (CheckPlayerVisibility: in cameraRange 1024 and inside cameraFOV 4096 of the
   // camera's swinging Rotation), tracks him, and after triggerDelay 4 s TriggerEvent(True) sounds its klaxon and starts an 'Alarm' AI event (radius
   // 25 * (SoundRadius + 1)); AutoTurret0 (bActive false, bTrackPlayersOnly) hears it (AISetEventCallback('Alarm', 'AlarmHeard')), wakes, aims AutoTurretGun0
   // and fires at the player (fireRate 0.25, gunDamage 5).
   cam1: {map: '01_NYC_UNATCOIsland', ticks: 900, early: PLACE(250, 331, -100, 49152),
-    cmds: '', devices: ['SecurityCamera3:SecurityCamera', 'AutoTurret0:AutoTurret', 'AutoTurretGun0:AutoTurretGun@AutoTurret0.gun']},
+    // (the blood of the turret's first hit, tick 314: AutoTurret.SpawnBlood's and DeusExPlayer's drops, and the splats a drop leaves where it meets a wall)
+    cmds: '', devices: ['SecurityCamera3:SecurityCamera', 'AutoTurret0:AutoTurret', 'AutoTurretGun0:AutoTurretGun@AutoTurret0.gun',
+      ...[0, 1, 2, 3].map(i => `BloodDrop${i}:Actor`), 'BloodSplat0:Actor', 'BloodSplat1:Actor']},
   // a UNATCO camera (row 5.2.4, its bNoAlarm half): the player placed 700 units in front of SecurityCamera2 (UN_outside, Tag UN_CamSystem02, bNoAlarm), in its
   // range (cameraRange 1024) and inside its cone, facing it. SecurityCamera.Tick checks the player only `if (!bNoAlarm)`: the camera swings and never sees him.
   cam2: {map: '01_NYC_UNATCOIsland', ticks: 300, early: PLACE(-3885, 3132, -96, 52325, 5410), cmds: '', devices: ['SecurityCamera2:SecurityCamera']},
@@ -127,14 +137,15 @@ export const SCENES = {
       + `|${PLACE(2023.4, -1371.9, -96.3, 48128, -4000).split('|').slice(1).map(line => `600:${line}`).join('|')}|${SHOTS([630])}`, carcasses: ['TerroristCarcass1'], view: true},
   // an explosion near a door, a decoration and a guard (row 5.6.4): the player placed east of the breakable DeusExMover5 (doorStrength 0.6,
   // minDamageThreshold 50) facing it summons a CrateExplosiveSmall (explosionDamage 300, explosionRadius 800, HitPoints 4) 72 units ahead, between the door
-  // and TrashCan5; a WeaponPistol summoned facing away, picked up and drawn; the player placed 530 units east of the crate (the room ends there) and the
+  // and TrashCan5, and a second one turned 22 degrees left (the chain: the first's HurtRadius sets off the second); a WeaponPistol summoned facing away, picked up and drawn; the player placed 530 units east of the crate (the room ends there) and the
   // Enter edges fire at the crate: DeusExDecoration.Explode's HurtRadius reaches the door (DeusExMover.TakeDamage: doorStrength -= Damage * 0.01 above the
   // threshold, BlowItUp at 0), the trash can, the player, and Terrorist2 patrolling west of the door; the blast's noise.
   exp1: {map: '01_NYC_UNATCOIsland', ticks: 900, early: PLACE(3242, -1072, -192, 32768),
-    cmds: '20:summon DeusEx.CrateExplosiveSmall|40:set DeusEx.JCDentonMale ViewRotation (Pitch=0,Yaw=0,Roll=0)|45:summon DeusEx.WeaponPistol'
+    cmds: '20:summon DeusEx.CrateExplosiveSmall|30:set DeusEx.JCDentonMale ViewRotation (Pitch=0,Yaw=36768,Roll=0)|35:summon DeusEx.CrateExplosiveSmall'
+      + '|40:set DeusEx.JCDentonMale ViewRotation (Pitch=0,Yaw=0,Roll=0)|45:summon DeusEx.WeaponPistol'
       + '|70:set DeusEx.JCDentonMale ViewRotation (Pitch=-10130,Yaw=0,Roll=0)|110:ParseRightClick|150:ActivateBelt 1'
       + `|${PLACE(3700, -1072, -160, 32768, -1890).split('|').slice(1).map(line => `190:${line}`).join('|')}|${SHOTS([240, 280, 320, 360, 400, 440])}`,
-    devices: ['DeusExMover5:DeusExMover', 'TrashCan5:Decoration', 'CrateExplosiveSmall1:Decoration', 'Chair5:Decoration']},
+    devices: ['DeusExMover5:DeusExMover', 'TrashCan5:Decoration', 'CrateExplosiveSmall1:Decoration', 'CrateExplosiveSmall4:Decoration', 'Chair5:Decoration']},
   // an EMP grenade on a security bot (row 5.6.5): SecurityBot0 (UNATCO, Patrolling UN_botpath1) walks a straight line from (-2302, 10169) to PatrolPoint19
   // (-2057, 9673), which it reaches at tick 368 (the original's hck1 trace, where it then stands in stasis with the player far away); the player placed 550
   // units west of PatrolPoint19 facing it (east of it is water); a WeaponEMPGrenade summoned facing away, picked up and drawn; the Enter edge at 200 (the grenade idle again after its Select) throws it
@@ -143,6 +154,13 @@ export const SCENES = {
     cmds: '20:summon DeusEx.WeaponEMPGrenade|50:set DeusEx.JCDentonMale ViewRotation (Pitch=-10130,Yaw=32768,Roll=0)|90:ParseRightClick|130:ActivateBelt 1'
       + `|170:set DeusEx.JCDentonMale ViewRotation (Pitch=-2500,Yaw=64116,Roll=0)|${SHOTS([200])}`,
     devices: ['SecurityBot0:Robot', 'EMPGrenade0:Actor']},
+  // an EMP blast on the electronics and on the player (row 5.6.5, its other half): cam1's pose (400 units in front of NSFCam02, 330 from NSFTurret01);
+  // a WeaponEMPGrenade summoned, picked up and drawn, thrown at 200 toward the camera: its blast (HurtRadius 'EMP') confuses SecurityCamera3
+  // (SecurityCamera.TakeDamage: bConfused, confusionDuration) and AutoTurret0 (bConfused), and drains the player's Energy (DeusExPlayer.TakeDamage 'EMP').
+  emp2: {map: '01_NYC_UNATCOIsland', ticks: 900, early: PLACE(250, 331, -100, 49152),
+    cmds: '20:summon DeusEx.WeaponEMPGrenade|50:set DeusEx.JCDentonMale ViewRotation (Pitch=-10130,Yaw=49152,Roll=0)|90:ParseRightClick|130:ActivateBelt 1'
+      + `|170:set DeusEx.JCDentonMale ViewRotation (Pitch=-6000,Yaw=49152,Roll=0)|${SHOTS([200])}`,
+    devices: ['SecurityCamera3:SecurityCamera', 'AutoTurret0:AutoTurret', 'AutoTurretGun0:AutoTurretGun@AutoTurret0.gun', 'EMPGrenade0:Actor']},
   cmb7: {map: '01_NYC_UNATCOIsland', ticks: 900, early: PLACE(8951.3, 190.2, -84, 32768),
     cmds: '20:summon DeusEx.WeaponPistol|50:set DeusEx.JCDentonMale ViewRotation (Pitch=-10130,Yaw=32768,Roll=0)|90:ParseRightClick|100:summon DeusEx.MedKit|140:ParseRightClick'
       + `|170:ActivateBelt 1|200:set DeusEx.JCDentonMale ViewRotation (Pitch=-536,Yaw=0,Roll=0)|${SHOTS([300, 360])}|650:ActivateBelt 2|${SHOTS([700])}`},
@@ -163,6 +181,9 @@ export const captureConfig = scene => [`call-ticks 1 ${scene.ticks}`, 'call-fram
   'call 0x103814e0 inputevent 4 always', 'call 0x10382c60 aisend 5 always name0 fname 1', 'call 0x10382fe0 aistart 5 always name0 fname 1',
   'call 0x103831e0 aiend 3 always name0 fname 1', 'call 0x103832c0 aiclear 2 always name0 fname 1',
   'call 0x10384980 aievent 5 always name0 fname 1 fname 4 namearg 3 0 deref 3 5 0', 'call Extension.dll@0x1003be90 roottick 1 always',
+  // AIProcess's own firstProcess at its return (+0x38), before CleanupEvents relinks it past receivers destroyed in the callbacks: where its 2 ms budget
+  // stopped the receiver loop (the tick exit's `aiFirst` is after the relink: capture alm1, tick 361)
+  'call 0x10384080 aiproc 0 always ecxrcv 0x38',
   ...(scene.levelEnd ? ['call 0x1038fa10 settravel 4 always'] : [])];
 export const CAPTURE_CONFIG = captureConfig({ticks: 900});
 const configFile = scene => `.work/live-acceptance/cfg/${scene.levelEnd ? 'death' : 'combat'}-${scene.ticks}.cfg`;
