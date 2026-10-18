@@ -361,10 +361,12 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
   const sequence = existsSync(path.join(dir, `sound-compare-${tag}.json`)) ? JSON.parse(readFileSync(path.join(dir, `sound-compare-${tag}.json`), 'utf8')) : null;
   if (registry.code !== 0 || !sequence) problems.push(`no registry comparison (${registry.out.trim().split('\n').slice(-1)[0]})`);
   else {
+    // (a loaded Sound also by its export name: which bark or speech line was loaded, ConAudioAIBarks_896 or ConAudioMission01_558)
     const stem = cls => String(cls).replace(/\d+$/, '').toLowerCase(), {oAdds: a, pAdds: b} = sequence;
-    let i = 0; while (i < a.length && i < b.length && stem(a[i].cls) === stem(b[i].cls) && a[i].u === b[i].u) i++;
+    const same = (o, q) => stem(o.cls) === stem(q.cls) && o.u === q.u && (stem(o.cls) !== 'sound' || o.name === q.name);
+    let i = 0; while (i < a.length && i < b.length && same(a[i], b[i])) i++;
     const slots = a.filter((o, k) => b[k] && o.index !== b[k].index).length;
-    console.log(`registry: ${i} of ${a.length}/${b.length} creations equal in class and tick, in order; ${slots} take another slot`);
+    console.log(`registry: ${i} of ${a.length}/${b.length} creations equal in class and tick (a Sound in name), in order; ${slots} take another slot`);
     if (i !== a.length || i !== b.length) problems.push(`creations differ at ${i} (original ${JSON.stringify(a[i] ?? null)}, Play ${JSON.stringify(b[i] ?? null)})`);
   }
   // A conversation scene's flags: the player's FlagBase at the end hold against Play's at the end of the replay (the conversations' SetFlag events, the
