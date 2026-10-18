@@ -586,8 +586,9 @@ event, every object creation (a loaded `Sound` now also by its export name: whic
   the window time of the typed lines, which the tracer does not record (at least the capture's 2.4 s of sleeps after `ghost`, then the release's first
   window frame: 1.21 s in `tA`'s first capture, 2.39 s in `tC`'s). Play's frozen phase gives it a few frames. In `tA`'s first capture MeetTerrorist started at
   tick 14 and its Aggressive branch logs nothing, so Play still had the line waiting at the end (379) and drew the log there (four GCs), while the original
-  first drew it at 600. `tA` now places the player at the commander in a hold after tick 100, whose window frames are traced and replayed. The other scenes
-  log a line during their conversation (a transfer) or time the frozen line out before it starts (`tC`).
+  first drew it at 600. `tA` now places the player at the commander in a hold after tick 100, whose window frames are traced and replayed. In the other
+  scenes the original also draws the log at the conversation's end (`pG` 986, `pR` 976, `fT` 469, `gP` 1192: their conversations give the player something),
+  or neither program does (`tC` at 717: with the release's 2.39 s frame the line times out before MeetTerrorist in Play too).
 * A first `kA` capture (eight `Tantalus` kills, then the player left at the last kill site) had the player killed by the Terrorists there before tick 361, so TrooperCongratulation
   never started; `kB` moves the player away six ticks after the last kill.
 
