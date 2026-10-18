@@ -25,6 +25,15 @@ import { loadTraceKernel } from '../runtime/trace-kernel.mjs';
 import { lightGlobals } from '../runtime/light-globals.mjs';
 
 /** Bind decoded resources to the renderer-independent simulation. */
+/** The game left the level (UGameEngine::Tick's client travel to `url`): Browse and LoadMap are Stage 6, so Play stops here. */
+export class ClientTravelBoundary extends Error {
+  constructor(url) {
+    super(`UGameEngine::Tick client travel to ${url}: the level ends here (Browse and LoadMap of the next map are not implemented)`);
+    this.name = 'ClientTravelBoundary';
+    this.url = url;
+  }
+}
+
 export async function createGame(map, asset, assets, { randomSeed = Math.floor(Date.now()/1000) >>> 0,
   onLightingChanged = null, onDataLinkTransmission = null, onConversationSpeech = null, onAudioVoice = null, presentation = false,
   subtitles = null, musicLibrary = null } = {}) {
@@ -285,6 +294,21 @@ export async function createGame(map, asset, assets, { randomSeed = Math.floor(D
       if (Array.isArray(windowSeconds)) for (const delta of windowSeconds) hud?.tick(delta);
       else hud?.tick(seconds);
       doors.tick(seconds);
+    },
+    /** UGameEngine::Tick's client travel (body 0x1038fe90): after the levels' Ticks (0x10390154..0x103901a3) it tests
+     * Client->Viewports(0)->TravelURL (+0xa0, 0x1039088e) and, when it is not empty, browses to it (vtable +0xa8 at 0x10390c01: the
+     * DeusEx and Extension Browse overrides, then LoadMap) before the client's render (UClient::Tick, vtable +0x64 at 0x1039117b). An OPEN
+     * stores the URL (SetClientTravel, script-console-command.mjs), so the level the OPEN came from ticks once more and ends at this
+     * step. Browse and LoadMap are not modelled (the next map, DXONLY's menu after a death, is Stage 6): the step is the boundary where
+     * Play stops, thrown as ClientTravelBoundary. A live replay records the tick it happened after (live-probe.mjs levelEnd).
+     * Callers run it after each tick and before the view, as the original's order is. */
+    clientTravel() {
+      const viewport = playerScene.level.engine?.client?.viewports?.[0];
+      const url = viewport?.travelURL;
+      if (!url) return;
+      const replay = game.liveReplay;
+      if (replay && !replay.levelEnd) replay.levelEnd = { tick: replay.index, url, travelType: viewport.travelType, items: viewport.bTravelItems };
+      throw new ClientTravelBoundary(url);
     },
     /** Render.dll's auto-pan inputs (docs/texture-animation.md): the
      * LevelInfo's TimeSeconds and a zone actor's live TexUPanSpeed and

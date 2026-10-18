@@ -5,12 +5,15 @@ import { brushToWorld, rotationSineTable } from '../src/runtime/coords.mjs';
 
 const origin = { Location: [1317.25, -319.75, -77.125], PrePivot: [101, 7.5, -31] };
 // Original captures: native-coords cases 27, 28 and 52. The table hash comes
-// from all 16,384 original Core FGlobalMath float32 entries in little-endian order.
+// from all 16,384 original Core FGlobalMath float32 entries in little-endian order,
+// entry 8192 the real x87 FSIN's word 0x250d3000 (tools/x87-sintable-probe.c under
+// CrossOver; docs/fitting.md), which the host sine (0x250d3132) is not.
 test('rotation sine table reproduces every original float32 entry', () => {
   const table = rotationSineTable(), bytes = Buffer.alloc(table.length * 4);
   table.forEach((v, i) => bytes.writeFloatLE(v, i * 4));
+  assert.equal(bytes.readUInt32LE(8192 * 4), 0x250d3000);
   assert.equal(createHash('sha256').update(bytes).digest('hex'),
-    '9893d14bd21e5c4194832659571b30363ddfb08d468ed662a4b6d5ae172262dc');
+    'b8d756044134efb1bbedbe2b842138d6b8d8dc970ef1a69edd0d03cb07ece10c');
 });
 
 test('original brush rotations discard two low bits before sine lookup', () => {

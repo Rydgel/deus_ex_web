@@ -34,11 +34,16 @@ const gameRoot = gameDirectory(), files = [];
 for (const directory of ['Maps', 'System', 'Textures', 'Sounds', 'Music'])
   for (const name of await readdir(`${gameRoot}/${directory}`)) files.push({path: `${directory}/${name}`, read: () => readFile(`${gameRoot}/${directory}/${name}`)});
 const {c} = await openSession(map, new AssetStore(files));
+// The capture's frozen phase: the map is opened with bPlayersOnly set, the early lines are typed into the held level (live-acceptance.mjs original), and
+// the pawns start at the release; the frames before it are the player's alone, as here.
+const info = c.level().actors[0];
+c.runtime.writeNamed(info, 'bPlayersOnly', true);
 c.frames(30); c.runtime.writeNamed(c.player(), 'bCheatsEnabled', true);
 const r = v => v.map(x => Math.round(x * 10) / 10);
 const exec = line => { const out = c.game.hud.scoped(() => viewProbe(c.game, {exec: [line]}).output[0]); console.log(`> ${line}`, out ? JSON.stringify(out).slice(0, 120) : ''); };
 for (const line of early) exec(line);
 c.frames(60);
+c.runtime.writeNamed(info, 'bPlayersOnly', false);
 const p = c.player();
 console.log('placed', r(c.pos(p)), 'physics', c.read(p, 'Physics'), 'zone', c.read(p, 'Region')?.['engine.actor.pointregion.zonenumber'], 'state', c.state(p), 'view', c.read(p, 'ViewRotation'));
 const pawns = option('pawns', 'Terrorist0,ThugMale7,Terrorist10').split(',').map(name => c.actor(name)).filter(Boolean);
@@ -50,11 +55,16 @@ for (let tick = 1; tick <= ticks; tick++) {
     if (edge) { c.game.inputKey(edge[2], edge[1] === 'down'); console.log(`> ${line} after ${tick - 1}`); } else exec(line);
   }
   try { c.frames(1); } catch (error) { console.log(`tick ${tick}: ${error.message.split('\n')[0]}`); break; }
-  const line = pawns.map(a => c.gone(a) ? `${a.name}:gone` : `${a.name}:${c.state(a).split('.').pop()}/${c.read(a, 'Enemy')?.name ?? '-'}/h${c.read(a, 'Health')}`).join(' ')
+  // (a pawn's NumCarcasses when it has seen a body, and its SeekType while it seeks: 1 sound, 2 sight, 3 guess, 4 carcass, ScriptedPawn.ESeekType)
+  const line = pawns.map(a => c.gone(a) ? `${a.name}:gone` : `${a.name}:${c.state(a).split('.').pop()}/${c.read(a, 'Enemy')?.name ?? '-'}/h${c.read(a, 'Health')}`
+    + `${c.read(a, 'NumCarcasses') ? `/bodies${c.read(a, 'NumCarcasses')}` : ''}${/seeking/i.test(c.state(a)) ? `/seek${c.read(a, 'SeekType')}` : ''}`).join(' ')
     + ` | player h${c.read(p, 'Health')} [${regions.map(n => c.read(p, n)).join(',')}] ${c.state(p).split('.').pop()} inHand=${c.read(p, 'inHand')?.name ?? '-'}`
     + ` frob=${c.read(p, 'FrobTarget')?.name ?? '-'} tracers=${c.byClass('Tracer').length}`;
   if (line !== last || tick % 60 === 0) { console.log(tick, line); last = line; }
 }
 for (const a of pawns) console.log('end', a.name, c.gone(a) ? 'gone' : r(c.pos(a)));
-console.log('carcasses', c.actors().filter(a => c.isA(a, 'deusex.deusexcarcass')).map(a => a.name).join(' '));
+console.log('carcasses', c.actors().filter(a => c.isA(a, 'deusex.deusexcarcass')).map(a => {
+  const items = []; for (let i = c.read(a, 'Inventory'); i && items.length < 32; i = c.read(i, 'Inventory')) items.push(i.name);
+  return items.length ? `${a.name}[${items.join(',')}]` : a.name;
+}).join(' '));
 process.exit(0);

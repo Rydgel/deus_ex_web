@@ -2,9 +2,26 @@ const f = Math.fround;
 const identity = () => [[0, 0, 0], [1, 0, 0], [0, 1, 0], [0, 0, 1]];
 let sineTable;
 
-/** Core FGlobalMath 0x1014431e: double angle followed by a float32 sine store. */
+/** Core FGlobalMath 0x1014431e: `fild i; fmul qword [0x10178040]` (2 pi / 16384), the
+ * angle stored as a double, appSin's `fsin` (thunk 0x101033a0) and a float32 store.
+ * FSIN reduces its operand with a 66-bit pi, so at entry 8192 (the double nearest pi)
+ * it returns pi66 - pi = 1.2246063538223773e-16 where the correctly rounded sine is
+ * 1.2246467991473532e-16: float word 0x250d3000, not Math.sin's 0x250d3132. Measured on
+ * the real x87 through Rosetta 2 (tools/x87-sintable-probe.c under CrossOver, the
+ * constructor's sequence for all 16384 entries at precision control 53 and 64: this is
+ * the only entry that differs from Math.sin) and in the original's own play (Stage 5
+ * capture cmb5: Tantalus's momentum, Vector(ViewRotation) at Yaw 32768, gives the
+ * Terrorist a Velocity.Y that only this entry reproduces). The Unicorn oracles compute
+ * FSIN through a host double, as Math.sin does, and are patched to the measured word
+ * (native-collision-oracle.py HARDWARE_TRIG). The entry is the sine of yaw 32768..32771
+ * and the cosine of 16384..16387. */
+export const HARDWARE_SINE_WORDS = Object.freeze({ 8192: 0x250d3000 });
 export function rotationSineTable() {
-  sineTable ??= Float32Array.from({ length: 0x4000 }, (_, i) => Math.sin(i * 0.0003834951969714103));
+  if (!sineTable) {
+    sineTable = Float32Array.from({ length: 0x4000 }, (_, i) => Math.sin(i * 0.0003834951969714103));
+    const words = new Uint32Array(sineTable.buffer);
+    for (const [index, word] of Object.entries(HARDWARE_SINE_WORDS)) words[index] = word;
+  }
   return sineTable.slice();
 }
 

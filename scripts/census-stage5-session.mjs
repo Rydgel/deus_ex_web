@@ -22,6 +22,7 @@ export async function openSession(map, assets) {
   const frame = () => {
     simulatedMsAdvance(1000 / 60);
     game.tick(1 / 60);
+    game.clientTravel();   // UGameEngine::Tick's client travel: an OPEN (the Dying player's OPEN DXONLY) ends the level after the next tick
     const sprites = sim.sprites();
     const hud = sim.hud({width: 1440, height: 960, view: game.view()});
     const errors = [...sprites.errors, ...hud.errors];
@@ -88,7 +89,7 @@ export async function openSession(map, assets) {
       await c.frob(item); frames(10);
       return read(item, 'Owner') === player();
     },
-    async guard(fn) { try { await fn(); return false; } catch (error) { if (/OPEN DXONLY/.test(error.message)) return true; throw error; } },
+    async guard(fn) { try { await fn(); return false; } catch (error) { if (/OPEN DXONLY|client travel to DXONLY/i.test(error.message)) return true; throw error; } },
     /** One the console cheat summons in front of the player (the alterations census's fallback; a map pickup is reached from placements the world may not hold),
      * else the class's free pickup from the map. */
     async give(cls) {

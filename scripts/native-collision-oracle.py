@@ -15,7 +15,7 @@ import sys
 try:
     from unicorn import Uc, UC_ARCH_X86, UC_MODE_32, UC_HOOK_CODE, UC_HOOK_MEM_INVALID
     from unicorn.x86_const import (
-        UC_X86_REG_EAX, UC_X86_REG_ECX, UC_X86_REG_EIP, UC_X86_REG_ESP,
+        UC_X86_REG_EAX, UC_X86_REG_ECX, UC_X86_REG_EIP, UC_X86_REG_ESI, UC_X86_REG_ESP,
         UC_X86_REG_FPCW, UC_X86_REG_FPSW, UC_X86_REG_FPTAG,
     )
 except ImportError:
@@ -118,6 +118,22 @@ class Image:
             descriptor += 20
 
 
+# Core's FGlobalMath sine table (TrigFLOAT, GMath + 0x8c = 0x101b32a4) where the real x87 differs from a host double's
+# sine: FSIN reduces with a 66-bit pi, so the entry at the double nearest pi is pi66 - pi = 1.2246063538223773e-16
+# (word 0x250d3000), where Unicorn's softfloat FSIN and math.sin give the correctly rounded 1.2246467991473532e-16
+# (0x250d3132). Measured through Rosetta 2 (tools/x87-sintable-probe.c, the constructor's sequence for all 16384
+# entries: the only difference) and in the original's play (Stage 5 capture cmb5); coords.mjs HARDWARE_SINE_WORDS.
+# Written over the constructor's table when its sine loop ends (0x10144348, ESI = this) and over the probes' own
+# math.sin tables.
+HARDWARE_TRIG = {8192: 0x250d3000}
+TRIG_TABLE = 0x101b32a4
+
+
+def write_hardware_trig(cpu, table=TRIG_TABLE):
+    for index, word in HARDWARE_TRIG.items():
+        cpu.mem_write(table + 4 * index, struct.pack('<I', word))
+
+
 class NativeCollision:
     def __init__(self, game_root, additional_hashes=None):
         self.cpu = cpu = Uc(UC_ARCH_X86, UC_MODE_32)
@@ -161,6 +177,8 @@ class NativeCollision:
                     cpu.mem_write(address, bytes.fromhex('83 ec 08 dd 0c 24 58 5a c3'))
                     self.thunks.pop(address)
         self.code_hook = cpu.hook_add(UC_HOOK_CODE, self.on_instruction)
+        # FGlobalMath's constructor: the measured FSIN entries once its sine loop has filled TrigFLOAT (this + 0x8c)
+        cpu.hook_add(UC_HOOK_CODE, lambda cpu, address, size, data: write_hardware_trig(cpu, cpu.reg_read(UC_X86_REG_ESI) + 0x8c), begin=0x10144348, end=0x10144348)
         cpu.hook_add(UC_HOOK_MEM_INVALID, self.on_bad_memory)
         # UnitCoords, normally initialized by Core's process startup constructor.
         gmath = exports['core.dll']['?GMath@@3VFGlobalMath@@A']

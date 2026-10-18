@@ -27,8 +27,27 @@
  *         stepped into the line, and the others miss; no kill.
  *   cmb4  cmb1's pose with BallisticArmor instead of the pistol: picked up, put in hand (ActivateBelt 1) and activated by the Enter edge at 180
  *         (ParseLeftClick: an activatable inHand's Activate); 900 ticks of the Terrorists' fire on an armored player.
+ *   cmb5  a body found by a pawn that was not fighting: Terrorist16 on the statue's terrace killed at tick 20 by DeusExPlayer.Tantalus from a ledge
+ *         900 units east, out of every NSF pawn's view; 900 ticks. The stored original: TerroristCarcass1 at 98 (its Inventory chain: the pistol, its
+ *         ammo and the combat knife), the patrolling Terrorist21 meets it at 512 (CarcassTimer 120, Seeking, SeekType 4: SEEKTYPE_Carcass).
+ *   cmb6  cmb1's inputs with the carcass watched; the stored original: the Terrorists' own fire kills ThugMale7 at 395 (ThugMale2Carcass0) and the
+ *         player's three shots miss Terrorist0.
+ *   cmb7  cmb2's pose with a MedKit picked up too (belt slot 2), shots at 300 and 360, the MedKit put in hand at 650 and used by the Enter edge at
+ *         700; the stored original: the second shot kills Terrorist0, the others attack, the player is hurt from 548 and healed to 100 at 701.
+ * A scene's `carcasses` are watched from the tick they appear (--carcass-watch: the tracer's late-watch, Play's lazy lookup), with their Inventory chain.
  * cmb1's stored original: Terrorist0 and ThugMale7 seek the player from tick 41 and attack from 178; the player's first shot (420) kills Terrorist0
- * (TerroristCarcass1 at 469). */
+ * (TerroristCarcass1 at 469). cmb3's: the Terrorists' fire kills the player at 863 (Dying, DeathFront through 900).
+ *
+ * A scene with `levelEnd` runs until the original leaves the level: the Dying player's PlayerCalcView types `OPEN DXONLY` once its fade reaches -1
+ * (DeusExPlayer.uc state Dying, 20 s after FrobTime, the last render before bHidden), UGameEngine::Exec stores the URL (SetClientTravel, which also runs
+ * every actor's PreTravel) and the next engine tick browses to it after the level's tick (UGameEngine::Tick's client travel). The tracer writes the
+ * unfrozen ticks the level ran to <trace>.ended and detaches there (tools/dx-live-win.c); Play's replay stops at its own client travel (game.mjs
+ * clientTravel, play-level-end<tag>.json). The check also passes only when both ended after the same tick and the trace holds every tick up to it.
+ *   die1  cmb1's pose, no weapon, HealthTorso and HealthHead lowered to 5 by console SET in the frozen phase (both programs run the same line; the original's
+ *         is read back before the tracer attaches): the Terrorists' fire kills the player, the Dying state runs to the OPEN and the level ends. Watched: the
+ *         eight NSF pawns within 5,000 units of the pose (the trace of every pawn for 2,000 ticks would not fit the machine), the player and its carcass; the
+ *         other ScriptedPawns are traced with their load-time fields only (live-acceptance.mjs `loadPawns`), written into Play and not compared.
+ *         The stored original (2026-10-18): death at tick 652 (DeathFront), the carcass at 730, the OPEN in the render after 1930, the level's end after 1931. */
 import {spawn} from 'node:child_process';
 import {existsSync, mkdirSync, readFileSync, writeFileSync} from 'node:fs';
 import path from 'node:path';
@@ -41,7 +60,7 @@ const option = name => { const i = argv.indexOf(`--${name}`); return i < 0 ? nul
 const PISTOL = yaw => `20:summon DeusEx.WeaponPistol|50:set DeusEx.JCDentonMale ViewRotation (Pitch=-10130,Yaw=${yaw},Roll=0)|90:ParseRightClick|130:ActivateBelt 1`;
 const SHOTS = ticks => ticks.map(t => `${t}:@down Enter|${t}:@up Enter`).join('|');
 // `KillAll FlyGenerator` first: the load's chance FlyGenerators (10% per fly-making decoration) removed in both programs, as row 4.2.13 does.
-const PLACE = (x, y, z, yaw) => `KillAll FlyGenerator|ghost|set DeusEx.JCDentonMale Location (X=${x},Y=${y},Z=${z})|walk|set DeusEx.JCDentonMale ViewRotation (Pitch=0,Yaw=${yaw},Roll=0)`;
+const PLACE = (x, y, z, yaw, pitch = 0) => `KillAll FlyGenerator|ghost|set DeusEx.JCDentonMale Location (X=${x},Y=${y},Z=${z})|walk|set DeusEx.JCDentonMale ViewRotation (Pitch=${pitch},Yaw=${yaw},Roll=0)`;
 export const SCENES = {
   cmb1: {map: '01_NYC_UNATCOIsland', ticks: 900, early: PLACE(10146.3, 685.2, -88, 40960),
     cmds: `${PISTOL(40960)}|170:set DeusEx.JCDentonMale ViewRotation (Pitch=-536,Yaw=40960,Roll=0)|${SHOTS([420, 480, 540])}`},
@@ -53,6 +72,23 @@ export const SCENES = {
   cmb4: {map: '01_NYC_UNATCOIsland', ticks: 900, early: PLACE(10146.3, 685.2, -88, 40960),
     cmds: '20:summon DeusEx.BallisticArmor|50:set DeusEx.JCDentonMale ViewRotation (Pitch=-10130,Yaw=40960,Roll=0)|90:ParseRightClick|130:ActivateBelt 1'
       + `|170:set DeusEx.JCDentonMale ViewRotation (Pitch=0,Yaw=40960,Roll=0)|${SHOTS([180])}`},
+  // a body found by a pawn that was not fighting: Terrorist16 (standing on the statue's terrace at (321, -961, 512), facing yaw 28425) killed at tick 20 by
+  // DeusExPlayer.Tantalus (the cheat: every health 0 and TakeDamage from the player, no shot, so no WeaponFire or LoudNoise from the player) from the ledge
+  // 900 units east of it and 287 above, out of every NSF pawn's view; the patrolling Terrorist21 (1,032 units off: out of the death cry's and the distress's
+  // 800-unit hearing) walks its route and meets the carcass (CheckCarcassPresence). The carcass and its Inventory chain are watched from the tick it appears.
+  cmb5: {map: '01_NYC_UNATCOIsland', ticks: 900, early: PLACE(1221, -961, 799, 32768, -3632), cmds: '20:Tantalus', carcasses: ['TerroristCarcass1']},
+  // cmb1's inputs again (the pistol's first shot at 420 killed Terrorist0 in both captures of cmb1), with the carcass the kill spawns watched: its Inventory chain
+  cmb6: {map: '01_NYC_UNATCOIsland', ticks: 900, early: PLACE(10146.3, 685.2, -88, 40960),
+    cmds: `${PISTOL(40960)}|170:set DeusEx.JCDentonMale ViewRotation (Pitch=-536,Yaw=40960,Roll=0)|${SHOTS([420, 480, 540])}`, carcasses: ['TerroristCarcass1']},
+  // shots near unaware guards, then a MedKit: cmb2's pose (700 units behind Terrorist0); the pistol and a MedKit summoned and picked up facing away (the pistol in
+  // belt slot 1, the MedKit in 2), the pistol drawn and turned on Terrorist0 at 200, Enter edges at 300 and 360; at 650 the MedKit is put in hand (ActivateBelt 2)
+  // and the Enter edge at 700 uses it (ParseLeftClick: inHand.Activate, MedKit's Activated state: HealPlayer(healAmount, True), UseOnce)
+  // the player's death to the level's end (row 5.1.8): `ticks` is the tracer's cap, the trace ends where the original's level ends
+  die1: {map: '01_NYC_UNATCOIsland', ticks: 3000, levelEnd: true, early: `${PLACE(10146.3, 685.2, -88, 40960)}|set DeusEx.JCDentonMale HealthTorso 5|set DeusEx.JCDentonMale HealthHead 5`,
+    cmds: '', carcasses: ['JCDentonMaleCarcass0'], watch: ['Terrorist0', 'ThugMale7', 'Terrorist10', 'Terrorist7', 'Terrorist3', 'Terrorist4', 'Terrorist27', 'ThugMale5']},
+  cmb7: {map: '01_NYC_UNATCOIsland', ticks: 900, early: PLACE(8951.3, 190.2, -84, 32768),
+    cmds: '20:summon DeusEx.WeaponPistol|50:set DeusEx.JCDentonMale ViewRotation (Pitch=-10130,Yaw=32768,Roll=0)|90:ParseRightClick|100:summon DeusEx.MedKit|140:ParseRightClick'
+      + `|170:ActivateBelt 1|200:set DeusEx.JCDentonMale ViewRotation (Pitch=-536,Yaw=0,Roll=0)|${SHOTS([300, 360])}|650:ActivateBelt 2|${SHOTS([700])}`},
 };
 export const SCENE_FLAGS = ['--no-ghost', '--perception', '--player-gear', '--player-health', '--los-flag'];
 // The replay's measured inputs beyond the trace rows: --render-history writes each pawn's LastRenderTime at the original's last frozen tick (the frames the
@@ -61,14 +97,23 @@ const PLAY_FLAGS = ['--render-history'];
 // The tracer's breakpoints of the captures (tools/dx-live-win.c `call`, docs/object-index-captures.md): the registry (AddObject, UnhashObject), the key
 // edges' stream state (UEngine::InputEvent), the AI event manager (AISendEvent, AIStartEvent, AIEndEvent, AIClearEvent, the AIEvent callback) and the
 // window system's frame deltas (Extension RootTick).
-export const CAPTURE_CONFIG = ['call-ticks 1 900', 'call-frames', 'call 0x10157830 addobj 1 always retname', 'call 0x10157760 unhash 1 always retname',
+// A levelEnd scene also records UGameEngine::SetClientTravel (body 0x1038fa10; its four arguments: the viewport, the URL, bItems, TravelType): when the OPEN
+// was typed, between which two ticks (`u`, inTick 0: the render after tick u).
+export const captureConfig = scene => [`call-ticks 1 ${scene.ticks}`, 'call-frames', 'call 0x10157830 addobj 1 always retname', 'call 0x10157760 unhash 1 always retname',
   'call 0x103814e0 inputevent 4 always', 'call 0x10382c60 aisend 5 always name0 fname 1', 'call 0x10382fe0 aistart 5 always name0 fname 1',
   'call 0x103831e0 aiend 3 always name0 fname 1', 'call 0x103832c0 aiclear 2 always name0 fname 1',
-  'call 0x10384980 aievent 5 always name0 fname 1 fname 4 namearg 3 0 deref 3 5 0', 'call Extension.dll@0x1003be90 roottick 1 always'];
+  'call 0x10384980 aievent 5 always name0 fname 1 fname 4 namearg 3 0 deref 3 5 0', 'call Extension.dll@0x1003be90 roottick 1 always',
+  ...(scene.levelEnd ? ['call 0x1038fa10 settravel 4 always'] : [])];
+export const CAPTURE_CONFIG = captureConfig({ticks: 900});
+const configFile = scene => `.work/live-acceptance/cfg/${scene.levelEnd ? 'death' : 'combat'}-${scene.ticks}.cfg`;
 /** The original's capture command of a scene (for the doc and a recapture). */
 export const captureCommand = tag => {
   const s = SCENES[tag];
-  return `scripts/live-original.sh ${s.map} --tag ${tag} --ticks ${s.ticks} --delta 0.0166666675 ${SCENE_FLAGS.join(' ')} --registry --extra-config .work/live-acceptance/cfg/combat-900.cfg --early-cmds "${s.early}" --cmds "${s.cmds}"`;
+  // (--carcass-watch: the carcasses the scene spawns, bound by the tracer when they appear: tools/dx-live-win.c late-watch; --watch: the pawns watched, all
+  // ScriptedPawns when absent; --wait-seconds: the tracer's time, a long scene's run to the level's end)
+  return `scripts/live-original.sh ${s.map} --tag ${tag} --ticks ${s.ticks} --delta 0.0166666675 ${SCENE_FLAGS.join(' ')} --registry --extra-config ${configFile(s)}`
+    + `${s.carcasses ? ` --carcass-watch ${s.carcasses.join(',')}` : ''}${s.watch ? ` --watch ${s.watch.join(',')}` : ''}${s.levelEnd ? ` --wait-seconds ${Math.ceil(s.ticks * 0.6)}` : ''}`
+    + ` --early-cmds "${s.early}" --cmds "${s.cmds}"`;
 };
 
 const exec = (args, limitSeconds) => new Promise(resolve => {
@@ -85,22 +130,29 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
   if (!scene) { console.error(`--scene ${Object.keys(SCENES).join('|')}`); process.exit(2); }
   if (argv.includes('--print-capture')) {
     mkdirSync(path.join(root, '.work/live-acceptance/cfg'), {recursive: true});
-    writeFileSync(path.join(root, '.work/live-acceptance/cfg/combat-900.cfg'), CAPTURE_CONFIG.join('\n') + '\n');
+    writeFileSync(path.join(root, configFile(scene)), captureConfig(scene).join('\n') + '\n');
     console.log(captureCommand(tag)); process.exit(0);
   }
   const dir = path.join(root, '.work/live-acceptance', scene.map);
   const stored = ['original-trace', 'watch', 'population', 'commands'].map(base => path.join(dir, `${base}-${tag}.${base === 'original-trace' ? 'jsonl' : 'json'}`));
   const absent = stored.filter(file => !existsSync(file));
+  // A scene with a watch list replays the other pawns' load fields (live-acceptance.mjs `loadPawns`): a watch file without them is a capture from before that
+  // group, whose replay draws on Play's own SightCounters (die1's first capture: the player's ShowSelf draw at tick 4, the original's at 12).
+  if (!absent.length && scene.watch && !(JSON.parse(readFileSync(stored[1], 'utf8')).loadPawns?.length)) {
+    console.log(`FAIL ${tag}: the stored watch file has no loadPawns (a capture from before the load-field group: recapture with --print-capture)`); process.exit(1);
+  }
   // (exit 0, as the sweep's store-dependent validators do; the Stage 5 gate counts a SKIP as not passing)
   if (absent.length) { console.log(`SKIP no stored original for ${tag}: ${absent.map(f => path.relative(root, f)).join(', ')}`); process.exit(0); }
   const problems = [];
   const play = await exec(['scripts/live-acceptance.mjs', 'play', '--map', scene.map, '--seed', '1', '--tag', tag, ...SCENE_FLAGS, ...PLAY_FLAGS, '--early-cmds', scene.early,
-    '--event-trace', `1:${scene.ticks}`, '--object-trace', `1:${scene.ticks}`], 1800);
+    '--event-trace', `1:${scene.ticks}`, '--object-trace', `1:${scene.ticks}`], Math.max(1800, scene.ticks * 2));
   if (play.code !== 0) { console.log(play.out.trim().split('\n').slice(-12).join('\n')); console.log(`FAIL ${tag}: the replay stopped (exit ${play.code})`); process.exit(1); }
   const compare = await exec(['scripts/live-acceptance.mjs', 'compare', '--map', scene.map, '--tag', tag, ...SCENE_FLAGS], 600);
   console.log(compare.out.trim());
   const report = JSON.parse(readFileSync(path.join(dir, 'report.json'), 'utf8'));
-  const actors = Object.entries(report.actors), different = actors.filter(([, e]) => e.firstDifference !== null);
+  // (the actors Play watched: the trace's timed actors and load-field pawns are written into Play, not compared; a watched name Play's level lacks fails
+  // the replay before the comparison, liveProbe's `no actor`)
+  const actors = Object.entries(report.actors).filter(([, e]) => e.compared !== false && (e.compared || e.firstDifference !== null)), different = actors.filter(([, e]) => e.firstDifference !== null);
   if (different.length) problems.push(`${different.length} of ${actors.length} actors differ (${different.sort((a, b) => a[1].firstDifference - b[1].firstDifference).slice(0, 4).map(([n, e]) => `${n}@${e.firstDifference}`).join(' ')})`);
   if (report.clock?.firstDifference) problems.push(`clock differs at tick ${report.clock.firstDifference.tick}`);
   if (report.rng?.firstTickWithDifferentDrawCount) problems.push(`stream draws differ at tick ${report.rng.firstTickWithDifferentDrawCount.tick}`);
@@ -109,8 +161,9 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
   if (events.code !== 0) problems.push(`AI events differ (${/(\d+) ticks differ/.exec(events.out)?.[1] ?? '?'} ticks)`);
   // Every object the scene creates (UObject::AddObject: weapons, ammo, tracers, decals, the carcass and what it holds) in class and tick, in order: the
   // registry part of live-sound-compare.mjs (its Galaxy half is not this check's: the scenes carry no `gplay` breakpoint). The registry slot each one takes is
-  // reported, not judged: it follows the free list, and the frees of the bark subtitles' windows and of the decals come a tick apart in some scenes (open,
-  // docs/stage-5-exit-criteria.md "First original captures").
+  // reported, not judged: it follows the free list, and cmb3's tick-821 purge (ULevel::CleanupDestroyed) still releases two objects of the frozen start at
+  // another place, and a pending-deleted pre-placed actor under another run's index (open, docs/stage-5-exit-criteria.md "First original captures"; the bark
+  // subtitles' windows, the first cause, are fixed: a held tick's window frames are split at its commands).
   const registry = await exec(['scripts/live-sound-compare.mjs', '--map', scene.map, '--tag', tag], 600);
   const sequence = existsSync(path.join(dir, `sound-compare-${tag}.json`)) ? JSON.parse(readFileSync(path.join(dir, `sound-compare-${tag}.json`), 'utf8')) : null;
   if (registry.code !== 0 || !sequence) problems.push(`no registry comparison (${registry.out.trim().split('\n').slice(-1)[0]})`);
@@ -121,6 +174,21 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
     console.log(`registry: ${i} of ${a.length}/${b.length} creations equal in class and tick, in order; ${slots} take another slot`);
     if (i !== a.length || i !== b.length) problems.push(`creations differ at ${i} (original ${JSON.stringify(a[i] ?? null)}, Play ${JSON.stringify(b[i] ?? null)})`);
   }
+  // The level's end: the original's (<trace>.ended, the tracer at UGameEngine::Tick's client travel) and Play's (play-level-end<tag>.json, game.mjs clientTravel).
+  if (scene.levelEnd) {
+    const endedFile = path.join(dir, `original-trace-${tag}.jsonl.ended`), playEnd = path.join(dir, `play-level-end-${tag}.json`);
+    const ended = existsSync(endedFile) ? Number(readFileSync(endedFile, 'utf8').trim()) : null, played = existsSync(playEnd) ? JSON.parse(readFileSync(playEnd, 'utf8')) : null;
+    // when the original typed the OPEN: SetClientTravel's record (`settravel`, between ticks u and u + 1)
+    const calls = path.join(dir, `original-trace-${tag}.jsonl.calls.jsonl`);
+    const travel = existsSync(calls) ? readFileSync(calls, 'utf8').split('\n').filter(line => line.includes('"fn":"settravel"') && line.includes('"ev":"enter"')).map(line => JSON.parse(line)) : [];
+    console.log(`level end: the original's OPEN (SetClientTravel) ${travel.length ? travel.map(r => `after tick ${r.u}${r.inTick ? ' inside a tick' : ''}`).join(', ') : 'not recorded'}; its level ended after ${ended ?? '?'} ticks, Play's after ${played?.tick ?? '(none)'}${played ? ` (client travel to ${played.url})` : ''}`);
+    if (ended === null) problems.push('the stored capture did not reach the level\'s end (no <trace>.ended)');
+    else {
+      if (!played) problems.push(`Play's level did not end (the original's ended after ${ended} ticks)`);
+      else if (played.tick !== ended) problems.push(`Play's level ended after ${played.tick} ticks, the original's after ${ended}`);
+      if (report.ticks !== ended) problems.push(`the trace holds ${report.ticks} ticks, the original's level ended after ${ended}`);
+    }
+  }
   if (problems.length) { console.log(`FAIL ${tag}: ${problems.join('; ')}`); process.exit(1); }
-  console.log(`PASS ${tag}: ${actors.length} actors equal for ${report.ticks} ticks, clock, stream draws, AI events and object creations equal`);
+  console.log(`PASS ${tag}: ${actors.length} actors equal for ${report.ticks} ticks, clock, stream draws, AI events and object creations equal${scene.levelEnd ? `, the level ends after tick ${report.ticks} in both` : ''}`);
 }

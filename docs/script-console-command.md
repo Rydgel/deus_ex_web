@@ -357,8 +357,19 @@ the level boundary. See [script-player-login.md](script-player-login.md),
   * mouse deltas accumulate until UViewport::ReadInput and yield native
     `aMouseX`/`aMouseY` increments with the vertical sign;
   * `ConsoleCommand` answers FLUSH, KEYNAME, KEYBINDING and an unknown
-    command, and stops at OPEN, `obj list` and `stat fps`;
-  * F1 opens the inventory screen.
+    command, and stops at `obj list` and `stat fps`;
+  * F1 opens the inventory screen;
+  * last, OPEN: `UGameEngine::Exec`'s first keyword (0x1038a030) calls
+    `SetClientTravel(Client->Viewports(0), Cmd, 0, TRAVEL_Partial)`
+    (0x1038fa10), which stores the URL, the type and bItems on the viewport
+    and runs `PreTravel` on every actor of the level that has one
+    (0x1038fb4b..0x1038fb95; `DeusExPlayer.PreTravel` sets `PlayerTraveling`
+    and `SaveSkillPoints` two int flags, `FlagBase.SetInt`). Nothing is
+    browsed there: `UGameEngine::Tick` browses after the levels' ticks
+    (0x1039088e..0x10390c01, before the client's render), which Play models
+    as `game.clientTravel`, the boundary where it stops (Browse, LoadMap and
+    the next map are Stage 6). The check reads the stored URL, the flags and
+    the boundary of the next step ([stage 5](stage-5-exit-criteria.md#the-players-death-to-the-levels-end-2026-10-18)).
 
 `node scripts/validate-native-input-console.mjs` runs the original Engine.dll
 instruction-slice oracle and compares BUTTON/PULSE/TOGGLE, AXIS, ReadInput and

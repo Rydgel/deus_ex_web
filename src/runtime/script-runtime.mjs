@@ -3913,11 +3913,15 @@ export class ScriptRuntime {
       // execRandomBiasedRotation 0x1036dc90 evaluates (int centralYaw, float
       // yawDistribution, int centralPitch, float pitchDistribution) and calls
       // AActor::RandomBiasedRotation 0x1036d030, the same direction helper
-      // native 709 uses (aiDirection, bit-exact in validate-pawn-nav).
+      // native 709 uses (aiDirection, bit-exact in validate-pawn-nav). Its draws are
+      // appFrand's retained x87 product, never stored as a float (0x1036d0d8 call
+      // [0x10599cb8], then fadd st0,st0 on ST0; docs/rng.md), as 709's services pass
+      // it: a float32 copy here moved a strafing Terrorist's sprint direction by one
+      // sine-table step in Stage 5 captures cmb6 and cmb7.
       if(call.argumentCount!==4)throw new Error('RandomBiasedRotation requires four arguments');
       const [yaw,yawDist,pitch,pitchDist]=[0,1,2,3].map(i=>refValue(call.evaluateArgument(i)));
       if(typeof this.rng?.frand!=='function')throw new Error('RandomBiasedRotation requires the shared original RNG stream');
-      return aiDirection(()=>Math.fround(this.rng.frand()),yaw|0,Math.fround(yawDist),pitch|0,Math.fround(pitchDist));
+      return aiDirection(()=>this.rng.frand(),yaw|0,Math.fround(yawDist),pitch|0,Math.fround(pitchDist));
     }
     if(call.index===520){
       // execActorReachable 0x103bc1a0 (docs/script-pawn-nav.md): one object

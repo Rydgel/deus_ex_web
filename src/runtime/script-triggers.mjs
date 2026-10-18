@@ -77,6 +77,7 @@ export const TRIGGER_NATIVE_INDICES = Object.freeze({
   Destroy: 279,
   AllActors: 304,
   SetBool: 1100,
+  SetInt: 1102,
   GetBool: 1110,
   CheckFlag: 1120,
   DeleteFlag: 1121,
@@ -107,7 +108,7 @@ export function createFlagBase({ initialFlags, defaultExpiration = 0, slots = nu
   // (`slots`: the host's slot model, original-object-index.mjs; the delete order here is insertion order, the native
   // walks its hash buckets, so the order slots are given back in is the model's, not measured).
   const holders = new Map();
-  const takeSlot = key => { if (slots && !holders.has(key)) { const holder = {}; slots.take(holder, 'FlagBool', key); holders.set(key, holder); } };
+  const takeSlot = (key, type = 0) => { if (slots && !holders.has(key)) { const holder = {}; slots.take(holder, FLAG_CLASSES[type], key.split('\u0000')[0]); holders.set(key, holder); } };
   const giveBackSlot = key => { const holder = holders.get(key); if (holder) { slots.giveBack(holder); holders.delete(key); } };
   const calls = [];
   // XFlagBase::SetDefaultExpiration (native 1125, exec 0x10025dc0) writes the
@@ -122,20 +123,24 @@ export function createFlagBase({ initialFlags, defaultExpiration = 0, slots = nu
     const entry = value && typeof value === 'object' && !Array.isArray(value)
       ? { ...value, value: nativeBool(value.value, 'initial flag value') }
       : { value: nativeBool(value, 'initial flag value'), expiration: undefined };
-    entries.set(lower(name), { name, ...entry });
+    entries.set(lower(name), { name, type: 0, ...entry });
   }
 
-  const current = name => entries.get(lower(name));
+  // A flag is found by its name and its EFlagType (FindName 0x10024e60 compares the FName index and the type byte): a bool (type 0) is keyed
+  // by its lowercase name, a flag of another type by the name and the type, so a bool and an int of one name are two flags.
+  const keyOf = (name, type = 0) => type === 0 ? lower(name) : `${lower(name)}\u0000${type}`;
+  const current = (name, type = 0) => entries.get(keyOf(name, type));
+  const FLAG_CLASSES = ['FlagBool', 'FlagByte', 'FlagInt', 'FlagFloat', 'FlagName', 'FlagVector', 'FlagRotator'];
   // The native table order the iterators walk (docs/script-flagbase-iterators.md):
   // 64 buckets by the FName CRC (hashScriptName) & 63, each chain ascending by
   // the signed full hash (FindName 0x10024e60's JG walk; AddFlag 0x10023b20
   // links a new flag there), a new flag after equal-hash flags of other names.
   // `entries` keeps insertion order (an update keeps its node, a delete and
   // re-add appends), so a stable sort by signed hash is each chain.
-  const chainOf = bucket => [...entries.entries()]
-    .filter(([key]) => (hashScriptName(key) & 63) === bucket)
-    .sort(([a], [b]) => (hashScriptName(a) | 0) - (hashScriptName(b) | 0))
-    .map(([key]) => key);
+  const hashOf = key => hashScriptName(lower(entries.get(key).name));
+  const chainOf = bucket => [...entries.keys()]
+    .filter(key => (hashOf(key) & 63) === bucket)
+    .sort((a, b) => (hashOf(a) | 0) - (hashOf(b) | 0));
   // XFlagBase::CreateIterator 0x10024bb0 GMallocs {type, current, bucket};
   // its address is the script's int. A counter stands in for the address,
   // which scripts only pass back.
@@ -166,6 +171,7 @@ export function createFlagBase({ initialFlags, defaultExpiration = 0, slots = nu
 
       const entry = {
         name: name ?? 'None',
+        type: 0,
         value: boolValue,
         bAdd: add,
         expiration: effectiveExpiration,
@@ -178,26 +184,45 @@ export function createFlagBase({ initialFlags, defaultExpiration = 0, slots = nu
         previous: previous?.value, added: !previous });
       return true;
     },
+    /** XFlagBase::SetInt 0x10023e80 (exec 0x100251a0, the same thunk as SetBool's): SetBool's body with GetFlag's type 2, a FlagInt
+     * (operator new 0x1001a9b0, vtable 0x1005c040) for a missing flag with bAdd, and the whole int stored at +0x40 (SetBool keeps bit 0). */
+    setInt(name, value, bAdd = true, expiration = -1) {
+      const key = keyOf(name, 2);
+      const previous = entries.get(key);
+      const add = bAdd === undefined ? true : nativeBool(bAdd, 'bAdd');
+      if (!Number.isInteger(value)) throw new TypeError('FlagBase.SetInt requires an int');
+      const requestedExpiration = expiration === undefined ? -1 : expiration;
+      const effectiveExpiration = requestedExpiration === -1 ? currentDefaultExpiration : requestedExpiration;
+      // (the missing-flag, bAdd false branch is SetBool's: see setBool)
+      if (!previous && !add) {
+        calls.push({ method: 'SetInt', name: name ?? 'None', value: value | 0, bAdd: add, expiration: effectiveExpiration, requestedExpiration, previous: undefined, added: false });
+        return false;
+      }
+      const entry = { name: name ?? 'None', type: 2, value: value | 0, bAdd: add, expiration: effectiveExpiration, requestedExpiration };
+      entries.set(key, entry);
+      takeSlot(key, 2);
+      calls.push({ method: 'SetInt', name: entry.name, value: entry.value, bAdd: entry.bAdd, expiration: entry.expiration, requestedExpiration,
+        previous: previous?.value, added: !previous });
+      return true;
+    },
     /** XFlagBase::CheckFlag 0x100247d0 (exec 0x10025aa0): whether GetFlag
-     * finds `name` with that EFlagType. This store only ever holds bools
-     * (type 0); the other Set natives stay unsupported, so no other type can
-     * exist in it. */
+     * finds `name` with that EFlagType. */
     checkFlag(name, type) {
       if (!Number.isInteger(type) || type < 0 || type > 255) throw new TypeError('FlagBase.CheckFlag requires a byte flag type');
-      const found = type === 0 && Boolean(current(name));
+      const found = Boolean(current(name, type));
       calls.push({ method: 'CheckFlag', name: name ?? 'None', type, found });
       return found;
     },
     /** XFlagBase::DeleteFlag 0x10024860: exact name/type lookup, then delete. */
     deleteFlag(name,type) {
       if(!Number.isInteger(type)||type<0||type>255)throw new TypeError('FlagBase.DeleteFlag requires a byte flag type');
-      const found=type===0&&entries.delete(lower(name));
-      if(found)giveBackSlot(lower(name));
+      const found=entries.delete(keyOf(name,type));
+      if(found)giveBackSlot(keyOf(name,type));
       calls.push({method:'DeleteFlag',name:name??'None',type,found});
       return found;
     },
     /** XFlagBase::DeleteExpiredFlags 0x10024ac0: zero never expires; other
-     * signed expirations <= criteria do. Live entries can only be bools. */
+     * signed expirations <= criteria do, of every type. */
     deleteExpiredFlags(criteria) {
       if(!Number.isInteger(criteria))throw new TypeError('Flag expiration criteria requires a signed int');
       criteria|=0;
@@ -207,15 +232,14 @@ export function createFlagBase({ initialFlags, defaultExpiration = 0, slots = nu
     },
     /** Extension.FlagBase.GetBool(Name). */
     getBool(name) {
-      const entry = current(name);
+      const entry = current(name, 0);
       const value = Boolean(entry?.value);
       calls.push({ method: 'GetBool', name: name ?? 'None', value });
       return value;
     },
     setExpiration(name,type,expiration) {
-      if(type!==0)throw new Error('FlagBase.SetExpiration supports only the recovered live bool store');
       if(!Number.isInteger(expiration))throw new TypeError('Flag expiration requires a signed int');
-      const entry=current(name);
+      const entry=current(name,type);
       if(entry)entry.expiration=expiration|0;
       calls.push({method:'SetExpiration',name,type,expiration:expiration|0,found:Boolean(entry)});
     },
@@ -238,12 +262,12 @@ export function createFlagBase({ initialFlags, defaultExpiration = 0, slots = nu
      * current flag's next link, else the next nonempty bucket, the first flag
      * whose type matches (an iterator type < 0 or >= 7 matches every type);
      * the iterator keeps that flag and bucket. Exhausted, or for a null
-     * iterator: false, None, type 0. This store holds only bools (type 0). */
+     * iterator: false, None, type 0. */
     getNextFlag(id) {
       const iterator = iterators.get(id);
       let found = null;
       if (iterator) {
-        const matches = () => iterator.type >= 7 || iterator.type < 0 || iterator.type === 0;
+        const matches = key => iterator.type >= 7 || iterator.type < 0 || iterator.type === entries.get(key).type;
         let bucket = iterator.bucket, chain = bucket >= 0 && bucket < 64 ? chainOf(bucket) : [], at = 0;
         if (iterator.current !== null) {
           at = chain.indexOf(iterator.current);
@@ -253,7 +277,7 @@ export function createFlagBase({ initialFlags, defaultExpiration = 0, slots = nu
           at++;
         } else at = chain.length;
         while (bucket < 64) {
-          if (at < chain.length && matches()) { found = chain[at]; break; }
+          if (at < chain.length && matches(chain[at])) { found = chain[at]; break; }
           if (at < chain.length) { at++; continue; }
           bucket++; at = 0;
           chain = bucket < 64 ? chainOf(bucket) : [];
@@ -262,7 +286,7 @@ export function createFlagBase({ initialFlags, defaultExpiration = 0, slots = nu
         iterator.current = found;
       }
       const entry = found === null ? null : entries.get(found);
-      const result = { found: Boolean(entry), name: entry ? entry.name : 'None', type: 0 };
+      const result = { found: Boolean(entry), name: entry ? entry.name : 'None', type: entry ? entry.type : 0 };
       calls.push({ method: 'GetNextFlag', iterator: id, ...result });
       return result;
     },
@@ -278,8 +302,8 @@ export function createFlagBase({ initialFlags, defaultExpiration = 0, slots = nu
       entries.clear();
       calls.push({ method: 'DeleteAllFlags' });
     },
-    getEntry(name) {
-      const entry = current(name);
+    getEntry(name, type = 0) {
+      const entry = current(name, type);
       return entry ? { ...entry } : null;
     },
   };
@@ -341,6 +365,13 @@ export function createScriptTriggers({
       const bAdd = call.argumentCount > 2 ? evaluateValue(call, 2) : true;
       const expiration = call.argumentCount > 3 ? evaluateValue(call, 3) : -1;
       return { handled: true, value: flagBase.setBool(name, value, bAdd, expiration) };
+    }
+    if (index === TRIGGER_NATIVE_INDICES.SetInt) {
+      if (call.receiver !== flagBase || typeof flagBase.setInt !== 'function') throw new Error('FlagBase.SetInt reached with an unbound receiver');
+      if (call.argumentCount < 2 || call.argumentCount > 4) throw new Error('FlagBase.SetInt argument count');
+      const bAdd = call.argumentCount > 2 ? evaluateValue(call, 2) : true;
+      const expiration = call.argumentCount > 3 ? evaluateValue(call, 3) : -1;
+      return { handled: true, value: flagBase.setInt(evaluateValue(call, 0), evaluateValue(call, 1), bAdd, expiration) };
     }
     if(index===TRIGGER_NATIVE_INDICES.SetExpiration){
       if(call.receiver!==flagBase||call.argumentCount!==3)throw new Error('FlagBase.SetExpiration receiver/arguments');

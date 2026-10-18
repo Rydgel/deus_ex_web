@@ -252,6 +252,7 @@ class PawnLatentProbe:
         table = bytes().join(struct.pack('<f', __import__('math').sin(i * 6.283185307179586 / 16384))
                              for i in range(16384))
         cpu.mem_write(SINE_TABLE, table)
+        cpu.mem_write(SINE_TABLE + 4 * 8192, struct.pack('<I', 0x250d3000))  # the measured x87 FSIN entry (native-collision-oracle.py HARDWARE_TRIG)
         # Expression evaluator stubs behind GNatives.
         self.write(GNATIVES + TOK_VECTOR * 4, 'I', self.deploy(dword_stub(3)))
         self.write(GNATIVES + TOK_FLOAT * 4, 'I', self.deploy(dword_stub(1)))

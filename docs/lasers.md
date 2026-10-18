@@ -72,7 +72,9 @@ on the x87 model at the render pass's precision control 24 (since
 and PostRender ([render-pass precision](render-pass-precision.md)).
 - Every add, multiply, divide and FSQRT rounds to 24 bits with the x87's wide
   exponent (`x87-pc24.mjs` `p24*`); loads and the float stores are unchanged.
-- Core's FRotator::Vector is `rotatorToVector` (table lookups, unaffected).
+- Core's FRotator::Vector is `rotatorToVector` (table lookups, unaffected by the
+  precision control; the table's entry 8192 is the real x87 FSIN's, not a host sine:
+  [fitting](fitting.md)).
 - UnsafeNormal is translated in place: FSQRT and the double store (exact of
   a 24-bit value).
 - `FVector::Rotation` (Core `0x10144390`) is `vectorToRotator24`: the root

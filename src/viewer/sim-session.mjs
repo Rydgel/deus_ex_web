@@ -1428,6 +1428,8 @@ export function createSimSession(game, { assets = null, events = [], exportName 
           // stream state, or holds the level (live-probe.mjs).
           const replay = game.liveReplay, delta = replay ? replay.before(dt) : dt;
           if (delta !== false) { game.tick(delta, replay?.windowSeconds ?? null); replay?.after(); }
+          // UGameEngine::Tick's client travel, after the level's tick (held or not) and before the render: an OPEN's URL ends the level here.
+          game.clientTravel();
           // Lip sync is Galaxy Update's step 12, after the HUD frame (script-audio-live.mjs).
         } catch (error) { fail(error); }
       }

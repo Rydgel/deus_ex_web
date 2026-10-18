@@ -186,7 +186,7 @@ export function liveProbe(game, args = {}) {
       const call = [name, 0];
       runtime.callFunction(runtime.lookup(base, 'DeleteFlag'), base, call.length, index => call[index]);
     }
-    out.flags = { defaultExpiration: base.defaultExpiration, entries: [...base.entries.values()].map(entry => ({ name: entry.name, value: entry.value ? 1 : 0, expiration: entry.expiration })) };
+    out.flags = { defaultExpiration: base.defaultExpiration, entries: [...base.entries.values()].map(entry => ({ name: entry.name, ...(entry.type ? { type: entry.type, value: entry.value } : { value: entry.value ? 1 : 0 }), expiration: entry.expiration })) };
   }
   if (args.population) {
     const spawned = /^(Skill|Aug|NanoKey|ColorTheme|Shadow|ParticleProxy|Laser|Flare|Cigarettes|Candybar|Weapon|Mission|GameReplicationInfo|PlayerReplicationInfo|JCDenton|Mutator|DeusExGameInfo|PickupDistributor|AutoTurretGun|BarkManager|ParticleGenerator|DataVault|Credits|Ammo|BioelectricCell|Medkit|Binoculars|Lockpick|Multitool|LAM|Liquor|Soda|Sodacan|Fruit|Vice)/;
@@ -276,7 +276,19 @@ export function liveProbe(game, args = {}) {
       args.objectTrace.pending = preFrees.map(entry => ({ ...entry }));
     }
     const objects = runtime.objectLog ??= [], sounds = runtime.soundLog ??= [];
-    const tick = () => { const replay = game.liveReplay; return replay?.current?.n ?? replay?.index ?? 0; };
+    // The tracer's u counts level ticks: a window frame (RootTick) between level ticks k and k+1 is u = k. Play ticks those frames inside replayed tick
+    // k+1 (game.tick: the windows, then the level), so an object a window frame creates or frees (a bark subtitle's windows), or a sound it plays, takes
+    // k there, as the original's records do; frames run before a held command (state.current unset) take the hold's own index.
+    const tick = () => { const replay = game.liveReplay; return replay?.current ? replay.current.n - (replay.windowPhase ? 1 : 0) : replay?.index ?? 0; };
+    if (game.hud && !game.hud.replayLabelled) {
+      const hudTick = game.hud.tick;
+      game.hud.tick = delta => {
+        const replay = game.liveReplay;
+        if (replay) replay.windowPhase = true;
+        try { return hudTick.call(game.hud, delta); } finally { if (replay) replay.windowPhase = false; }
+      };
+      game.hud.replayLabelled = true;
+    }
     const inRange = n => n >= args.objectTrace.first && n <= args.objectTrace.last;
     const model = registry.original;
     if (model) {
@@ -316,10 +328,14 @@ export function liveProbe(game, args = {}) {
   };
   if (args.replay) {
     const { watch = [], ticks, hold = true, warm = 3, commands = [] } = args.replay;
-    const actors = watch.map(({ names, props }) => ({ props, items: names.map(name => [name, byName(name)]) }));
-    for (const group of actors) for (const [name, actor] of group.items) if (!actor) throw new Error(`liveProbe: no actor ${name}`);
+    // A `late` group (live-acceptance.mjs --carcass-watch) names actors the scene spawns: each is looked up at every row until the level holds
+    // it, and its rows start there (the original's tracer binds the same name at the tick exit after its AddObject, tools/dx-live-win.c late-watch).
+    const actors = watch.map(({ names, props, late = false }) => ({ props, late, items: names.map(name => [name, byName(name)]) }));
+    for (const group of actors) for (const [name, actor] of group.items) if (!actor && !group.late) throw new Error(`liveProbe: no actor ${name}`);
     const state = game.liveReplay = {
       ticks, hold, warm, index: 0, rows: [], cursor: 0, current: null, preFrees: args.objectTrace?.pending ?? null,
+      // the level's end: {tick, url, ...} when UGameEngine::Tick's client travel (game.mjs clientTravel) left the level after that many replayed ticks
+      levelEnd: null,
       // console commands typed into the original between two ticks ({after, text}: after that many ticks), run here the same way through the
       // recovered console command chain (APlayerPawn::execConsoleCommand) before the next tick; their results are returned by `take` as `commands`
       commands: commands.map(command => ({ ...command })), commandLog: [], canSee: args.replay.canSeeProbe ?? null,
@@ -330,10 +346,18 @@ export function liveProbe(game, args = {}) {
       measuredSpeech: Boolean(args.replay.phonemes),
       snapshot() {
         const result = {};
-        for (const group of actors) for (const [name, actor] of group.items) {
+        for (const group of actors) for (const item of group.items) {
+          if (!item[1] && group.late) item[1] = byName(item[0]);
+          const [name, actor] = item;
+          if (!actor) continue;
           const row = {};
           for (const prop of group.props) {
-            if (prop === '$state') {
+            if (prop === '$inventoryChain') {
+              // the Inventory linked list (Actor.Inventory, then each item's own), names in order, as the tracer's `chain` field (at most 32, no repeat)
+              const chain = [];
+              for (let held = runtime.readNamed(actor, 'Inventory'); held && chain.length < 32 && !chain.includes(held.name); held = runtime.readNamed(held, 'Inventory')) chain.push(held.name);
+              row[prop] = chain;
+            } else if (prop === '$state') {
               const instance = runtime.instance(actor), node = instance?.state ? (instance.state.stateNode ?? instance.cls) : null;
               row.State = scriptGetStateName(node);
             } else if (prop.startsWith('$Al')) {
@@ -357,12 +381,18 @@ export function liveProbe(game, args = {}) {
         // so the actors drawn stamp LastRenderTime with that time (the original's frames before the
         // release did); the first tick then finds the stamps current, as the original's did.
         if (this.warm > 0) { this.warm--; return false; }
-        if (this.index >= this.ticks.length) return this.hold ? false : dt;
+        // After the last row the original paused before any command of that hold was typed, unless its level ended there (`levelEnded`: the trace
+        // stopped at the client travel, e.g. an OPEN typed in that hold): then the hold's commands run, and the client travel follows (game.mjs).
+        const typedAtEnd = args.replay.levelEnded && this.commands.length && this.commands[0].after <= this.index;
+        if (this.index >= this.ticks.length && !typedAtEnd) return this.hold ? false : dt;
         const tick = this.ticks[this.index];
         let typed = false;
         while (this.commands.length && this.commands[0].after <= this.index) {
           typed = true;
-          const command = this.commands.shift(), entry = { ...command };
+          const command = this.commands.shift(), { windowSeconds: framesBefore, ...entry } = command;
+          // The window frames the original ran in this hold before the command's InputEvent (live-acceptance.mjs commandsWithStream): a window the
+          // command creates (a bark's subtitle) gets only the frames after it, as in the original; the hold's later frames tick the windows before the next tick.
+          if (Array.isArray(framesBefore)) { for (const delta of framesBefore) game.hud?.tick(delta); entry.windowFrames = framesBefore.length; }
           // the stream state the original's command ran on (a measured input, see live-acceptance.mjs commandsWithStream)
           if (command.rng) game.random.seed(parseInt(command.rng, 16) >>> 0);
           // drawStacks: where each draw of the stream the command makes comes from (the script call stack's last frames)
@@ -390,7 +420,7 @@ export function liveProbe(game, args = {}) {
         }
         // The original draws frames while a command is typed and the level is held (a view change stamps the LastRenderTime of what it now
         // shows): a few frames pass here before the next tick, as in the warm-up.
-        if (typed) { this.warm = 3; return false; }
+        if (typed || this.index >= this.ticks.length) { this.warm = 3; return false; }
         if (runtime.navTrace) runtime.navTrace.tick = this.index + 1;
         if (runtime.scriptTrace) runtime.scriptTrace.tick = this.index + 1;
         if (this.preFrees?.length) while (this.preFrees.length && this.preFrees[0].u <= this.index + 1) {
@@ -493,6 +523,7 @@ export function liveProbe(game, args = {}) {
     if (replay.stackLog?.length) out.stackLog = replay.stackLog.splice(0);
     out.rows = replay.rows.slice(replay.cursor); replay.cursor = replay.rows.length;
     out.index = replay.index;
+    if (replay.levelEnd) out.levelEnd = replay.levelEnd;
     if (runtime.navTrace) out.nav = runtime.navTrace.events.splice(0);
     if (runtime.scriptTrace) out.script = runtime.scriptTrace.events.splice(0);
     if (runtime.touchEvents) out.touch = runtime.touchEvents.splice(0);
@@ -500,7 +531,7 @@ export function liveProbe(game, args = {}) {
     if (runtime.objectLog) out.objects = runtime.objectLog.splice(0);
     if (runtime.soundLog) out.sounds = runtime.soundLog.splice(0);
   }
-  if (args.status && replay) out.status = { index: replay.index, of: replay.ticks.length };
+  if (args.status && replay) out.status = { index: replay.index, of: replay.ticks.length, levelEnd: replay.levelEnd };
   // deferred: the boundaries Play recorded instead of running (player.unimplementedPhysicsEffects: sounds of emitters without a measured
   // object index, trigger scripts that reached an unsupported native, ...); the record-only audit's dynamic side.
   if (args.deferred) out.deferred = [...game.player.unimplementedPhysicsEffects];

@@ -18,11 +18,11 @@ test('FlagBase matches recovered SetBool/GetBool add, update, return, and expira
   assert.equal(flagBase.getBool('NoAdd'), false);
   assert.equal(flagBase.setBool('MissionFlag', true), true);
   assert.deepEqual(flagBase.getEntry('MissionFlag'), {
-    name: 'MissionFlag', value: true, bAdd: true, expiration: 0, requestedExpiration: -1,
+    name: 'MissionFlag', type: 0, value: true, bAdd: true, expiration: 0, requestedExpiration: -1,
   });
   assert.equal(flagBase.setBool('MissionFlag', false, true, 42), true);
   assert.deepEqual(flagBase.getEntry('MissionFlag'), {
-    name: 'MissionFlag', value: false, bAdd: true, expiration: 42, requestedExpiration: 42,
+    name: 'MissionFlag', type: 0, value: false, bAdd: true, expiration: 42, requestedExpiration: 42,
   });
   // The native body preserves only bit 0 of a direct integer UBOOL word.
   assert.equal(flagBase.setBool('MissionFlag', 2), true);
