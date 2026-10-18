@@ -56,8 +56,8 @@
  * expiration, and the default expiration). A `watch` list names the pawns traced per tick (the conversation's speakers and their neighbours); the others are
  * traced with their load fields only, and every AI event, object creation and stream draw of the whole level is still compared.
  *   pG pR pX  MeetPaul at the dock: the GEP gun, the sniper rifle, the mini crossbow (each with its ammunition), the Liberty Island image, three goals.
- *   fT fK fN  MeetFilben ("You can trust me.": the NanoKey and FilbenGaveKey; "I can't promise...": FilbenGaveKey false), then MeetFilben2 by frob (its branch
- *             on FilbenGaveKey; fK and fN frob in a fan of views) and Filben's HarleyStartsToWander orders.
+ *   fT fM fN  MeetFilben ("You can trust me.": the NanoKey and FilbenGaveKey; "I can't promise...": FilbenGaveKey false), then MeetFilben2 by frob (its branch
+ *             on FilbenGaveKey; fM and fN frob in a fan of views) and Filben's HarleyStartsToWander orders.
  *   gP gN     GuntherRescued after the wall button frees Gunther: a carried pistol given to him (GuntherRespectsPlayer, GuntherAttacks: RunningTo), or none
  *             ("First thing is to get you out of here.": GuntherRespectsPlayer false); Gunther's first-person GuntherTrappedBarks before.
  *   gA        AllianceTrigger0 and OrdersTrigger6 touched by a landing at the button (Gunther UNATCO, WaitingFor), the button: the freed Gunther meets Terrorist18.
@@ -150,7 +150,7 @@ export const SCENES = {
   // fT's inputs to MeetFilben's end (the original's conPlay clears at 469 in both captures of fT), then a frob fan from the end of the one-second guard
   // (529): Filben wanders off at once (HarleyStartsToWander) on a path the load's stream chooses (fT's two captures: east, still in range at 596;
   // south-east, out of the frob line at 505), so one view rarely finds him. MeetFilben2's GaveKey branch, its last speech run out.
-  fK: {map: '01_NYC_UNATCOIsland', ticks: 1250, conversation: true, early: PLACE(1496.6, -9968.3, -250, 0), pawns: ['HarleyFilben0', 'BumFemale0'], watch: FILBEN,
+  fM: {map: '01_NYC_UNATCOIsland', ticks: 1250, conversation: true, early: PLACE(1496.6, -9968.3, -250, 0), pawns: ['HarleyFilben0', 'BumFemale0'], watch: FILBEN,
     cmds: `${SHOTS([60, 100, 140, 180, 220, 260])}|${CHOOSE(300, 0)}|${SHOTS([360, 400])}|${FROB_FAN(531, 0)}|${SHOTS([620, 660, 700, 740, 780])}`},
   // fN: "I can't promise..." (second), the branch's speeches skipped, then the same fan after its end: MeetFilben2's branch without the key.
   fN: {map: '01_NYC_UNATCOIsland', ticks: 1300, conversation: true, early: PLACE(1496.6, -9968.3, -250, 0), pawns: ['HarleyFilben0', 'BumFemale0'], watch: FILBEN,
