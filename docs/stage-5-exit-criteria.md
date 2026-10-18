@@ -602,6 +602,11 @@ event, every object creation (a loaded `Sound` now also by its export name: whic
 6. **The portrait's first load** (`tC`): `HUDInfoLinkDisplay.SetSpeaker`'s `DynamicLoadObject("InfoPortraits.AlexJacobson")` creates `Package InfoPortraits`, its `LinkerLoad`, the
    `Texture` and its `Palette` at the DataLink's first speech (tick 841). The registry model of a prepared load is the routes batch's (`kil1`), applied here unchanged.
 
+**Checks rerun for the `AICanSee` fix and the portrait's registry model** (2026-10-18, the Mac): the stored Island scenes `cmb1` to `cmb7`, `die1`, `pG`, `pR`, `fT`, `gP`, `oV`,
+`gA` and `tC` pass, as do the six Stage 4 rows that replay live traces (4.1.5, 4.1.6, 4.1.7, 4.2.13, 4.3.6, 4.5.5), the unit tests (652), `validate-perception-kernel` (12,000
+cases, Rust against the JS body; a flag no longer takes a JavaScript leaf's `undefined`, which no original argument can be), `validate-pawn-perception` (356 scenes, 14
+mutations), `validate-event-manager` and `validate-gm-trench-play-anim`, and the census (50 plays, 0 pause, 0 no-effect, 0 undriven).
+
 **What stays uncaptured** (named in the rows' `weak`): three of GuntherRescued's five give choices (assault gun, stealth pistol, knife) and NothingChoice's first answer
 (GiveNothingNicely); Filben's two barks that read `FilbenGaveKey`; PaulCongratulations (`PaulWandering`). Every approach is placed and every speech skipped, as the harness cannot walk.
 
