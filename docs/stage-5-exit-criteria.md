@@ -562,7 +562,7 @@ event, every object creation (a loaded `Sound` now also by its export name: whic
 | `gN` | GuntherRescued without a weapon: "First thing is to get you out of here." | 1150 | queued |
 | `gA` | `AllianceTrigger0` and `OrdersTrigger6` touched by a landing at the button, then the button: the freed Gunther fights `Terrorist18` | 900 | PASS: 22 actors, 1,486 AI events, 1,127 creations; 3 flags (after fix 1 below) |
 | `tC` | MeetTerrorist, Curious: `DL_LeaderNotKilled`, Mission01's mission-complete pass, TerroristFollowup by frob | 1300 | PASS: 24 actors, 1,911 AI events, 1,523 creations; 7 flags (after fixes 4 and 6) |
-| `tA` | MeetTerrorist, Aggressive (the commander attacks), then MeetFilbenAfterStatue at Filben | 950 | queued |
+| `tA` | MeetTerrorist, Aggressive (the commander attacks), then MeetFilbenAfterStatue at Filben; the player waits on `cmb5`'s ledge and is placed at the commander at tick 100 | 1050 | PASS: 26 actors, 1,684 AI events, 1,404 creations; 7 flags (a first capture placed in the frozen phase: below) |
 | `oV` | TerroristsOverheard (Amos and Jackson, first person, from behind a wall) to `KnowsShipment`, then MoleConvos: its KnowsShipment branch, the 10 mm clip bought (175 credits), `BumFemaleWanders` | 1300 | PASS: 26 actors, 1,883 AI events, 1,307 creations; 7 flags (after fix 3) |
 | `oT` | TopTerroristsOverheard (Terrorist9 and Terrorist8, first person) from a hidden place | 1200 | queued (a first capture stopped at tick 1164: the wait budget) |
 | `kB` | eight Terrorists killed (`Tantalus`) until Mission01.Timer sets `M01PlayerAggressive`, then TrooperCongratulation reads it | 700 | queued |
@@ -581,6 +581,13 @@ event, every object creation (a loaded `Sound` now also by its export name: whic
   `OrdersTrigger6`, after which the freed Gunther fights `Terrorist18` and GuntherRescued never starts).
 * `Pawn.LipSynch` applies the first letter of a speech with tween time 0 (a stale `animTimer[3]`), so an `X` at a speech's start does not show on the blend channel: the mouth letters
   are measured from `nextPhoneme` itself.
+* The capture hides the HUD in the frozen phase (`ShowHud False`), so a frozen-phase `ghost` line ("You feel ethereal") waits in the hidden log, and
+  `HUDLogDisplay.Tick` times it out after the log timeout (3 s) unless a third-person conversation pauses the count. The original's frozen phase gives the log
+  the window time of the typed lines, which the tracer does not record (at least the capture's 2.4 s of sleeps after `ghost`, then the release's first
+  window frame: 1.21 s in `tA`'s first capture, 2.39 s in `tC`'s). Play's frozen phase gives it a few frames. In `tA`'s first capture MeetTerrorist started at
+  tick 14 and its Aggressive branch logs nothing, so Play still had the line waiting at the end (379) and drew the log there (four GCs), while the original
+  first drew it at 600. `tA` now places the player at the commander in a hold after tick 100, whose window frames are traced and replayed. The other scenes
+  log a line during their conversation (a transfer) or time the frozen line out before it starts (`tC`).
 * A first `kA` capture (eight `Tantalus` kills, then the player left at the last kill site) had the player killed by the Terrorists there before tick 361, so TrooperCongratulation
   never started; `kB` moves the player away six ticks after the last kill.
 
