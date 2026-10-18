@@ -385,7 +385,8 @@ export function liveProbe(game, args = {}) {
         for (const group of actors) for (const item of group.items) {
           if (!item[1] && group.late) item[1] = byName(item[0]);
           const [name, actor] = item;
-          if (!actor) continue;
+          // (a late-watched actor the scene destroyed and the purge released: no row; live-acceptance.mjs compare ends it at the original's free)
+          if (!actor || runtime.isReleased?.(actor)) continue;
           const row = {};
           for (const prop of group.props) {
             if (prop === '$inventoryChain') {

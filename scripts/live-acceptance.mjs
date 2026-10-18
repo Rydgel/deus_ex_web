@@ -145,8 +145,11 @@ if (flag('player-gear')) PLAYER_FIELDS.push(['Weapon', 'Weapon', 976, 'obj'], ['
 if (flag('player-view')) PLAYER_FIELDS.push(['EyeH', 'EyeHeight', 0x3f8, 'f'], ['WalkBob', 'WalkBob', 0x3e8, 'f3'], ['BobTime', 'BobTime', 0x5f8, 'f'],
   ['JustLanded', 'bJustLanded', 0x318, 'bit', 0x4], ['OldLoc', 'OldLocation', 0x12c, 'f3'], ['ShakeVert', 'ShakeVert', 0x680, 'f'], ['ShakeTimer', 'ShakeTimer', 0x678, 'f'],
   ['ShakeMag', 'ShakeMag', 0x67c, 'i32'], ['MaxShake', 'MaxShake', 0x684, 'f'], ['VertTimer', 'VertTimer', 0x688, 'f'],
-  // and the bioelectric energy an EMP blast drains (DeusExPlayer.TakeDamage 'EMP'; DeusExPlayer +0x9c4 Energy, +0x9c8 EnergyMax)
-  ['Energy', 'Energy', 0x9c4, 'f'], ['EnergyMax', 'EnergyMax', 0x9c8, 'f']);
+  // and the bioelectric energy an EMP blast drains (DeusExPlayer.TakeDamage 'EMP'; DeusExPlayer +0x9c4 Energy, +0x9c8 EnergyMax, +0x9cc EnergyDrain,
+  // +0x9d0 EnergyDrainTotal), applied by MaintainEnergy every 0.25 s of lastRefreshTime (+0x9f0, DeusExPlayer.MultiplayerTick, single-player too): its
+  // phase at the release is the frozen frames' own (emp2: Play's drain steps came 3 ticks after the original's), written at the release like BobTime
+  ['Energy', 'Energy', 0x9c4, 'f'], ['EnergyMax', 'EnergyMax', 0x9c8, 'f'], ['EDrain', 'EnergyDrain', 0x9cc, 'f'], ['EDrainTotal', 'EnergyDrainTotal', 0x9d0, 'f'],
+  ['RefreshT', 'lastRefreshTime', 0x9f0, 'f']);
 // --player-health: the player's hit regions (Pawn.HealthHead..HealthArmRight, the linked offsets of Play's class graph): where an NPC's shots land
 // (DeusExPlayer.TakeDamage/HandleDamage) in the combat scenes of the Stage 5 gate (docs/stage-5-exit-criteria.md).
 const HIT_REGION_FIELDS = [['HHead', 'HealthHead', 1376, 'i32'], ['HTorso', 'HealthTorso', 1380, 'i32'], ['HLegL', 'HealthLegLeft', 1384, 'i32'],
@@ -189,7 +192,7 @@ const CARCASS_FIELDS = [
 // each comment; the label is the property's name). A name the original's level does not hold when the tracer attaches (a summoned tool) is bound when it
 // appears (late-watch, as a carcass is). A ScriptedPawn named there (SecurityBot0, for its EMPHitPoints) keeps every pawn field and adds its class's.
 const DEVICE_BASE = [...FIELDS.filter(f => ['Loc', 'Rot', 'Vel', 'Acc', 'Phys', 'Anim', 'Frame', 'Rate', 'Life', 'State', 'LRT', 'Dist', 'TRate', 'TCount', 'DesRot', 'Stasis'].includes(f[0])),
-  ['bHidden', 'bHidden', 0x28, 'bit', 0x2], ['AmbientSound', 'AmbientSound', 0x1c8, 'obj'], ['Base', 'Base', 0xc4, 'obj'], ['Owner', 'Owner', 0x3c, 'obj'],
+  ['bHidden', 'bHidden', 0x28, 'bit', 0x2], ['bDeleteMe', 'bDeleteMe', 0x28, 'bit', 0x80], ['AmbientSound', 'AmbientSound', 0x1c8, 'obj'], ['Base', 'Base', 0xc4, 'obj'], ['Owner', 'Owner', 0x3c, 'obj'],
   ['Instigator', 'Instigator', 0xbc, 'obj'], ['bCollideActors', 'bCollideActors', 0x1dc, 'bit', 0x1], ['bBlockActors', 'bBlockActors', 0x1dc, 'bit', 0x4],
   ['bBlockPlayers', 'bBlockPlayers', 0x1dc, 'bit', 0x8], ['DrawType', 'DrawType', 0x164, 'u8'], ['LightType', 'LightType', 0x1e0, 'u8'], ['LightHue', 'LightHue', 0x1e3, 'u8'],
   ['SoundRadius', 'SoundRadius', 0x1c4, 'u8'], ['SoundVolume', 'SoundVolume', 0x1c5, 'u8']];   // (SecurityCamera3)
@@ -1124,7 +1127,8 @@ async function play() {
     // EyeHeight (PlayerPawn.UpdateEyeHeight, every frozen tick at the host's delta) are the original's own history, a measured input like the animation
     // state; Inventory.CalcDrawOffset places a held item with them (Stage 5 capture hck1: Multitool0's Z 4e-5 off for 102 ticks until the player was hit)
     const viewState = pose.EyeH === undefined ? {} : {EyeHeight: pose.EyeH, WalkBob: pose.WalkBob.map(Math.fround), BobTime: pose.BobTime, bJustLanded: Boolean(pose.JustLanded),
-      ShakeVert: pose.ShakeVert, ShakeTimer: pose.ShakeTimer, ShakeMag: pose.ShakeMag, MaxShake: pose.MaxShake, VertTimer: pose.VertTimer};
+      ShakeVert: pose.ShakeVert, ShakeTimer: pose.ShakeTimer, ShakeMag: pose.ShakeMag, MaxShake: pose.MaxShake, VertTimer: pose.VertTimer,
+      ...(pose.RefreshT === undefined ? {} : {lastRefreshTime: pose.RefreshT})};
     const request = {...(classCounters ? {classCounters} : {}), write: {...timerWrites, ...pawnWrites, ...deviceWrites, '@player': {AnimSequence: pose.Anim, AnimFrame: pose.Frame, AnimRate: pose.Rate, TweenRate: pose.Tween, ...animState, ...viewState, ...(option('player-alliance', null) ? {Alliance: option('player-alliance')} : {}),
       // FrobTime accumulates the player's tick deltas (HighlightCenterObject runs when it reaches 0.1 s); the frozen phase's deltas are the host's, so the original's value is a measured input
       ...(flag('player-gear') && pose.FrobTime !== undefined ? {FrobTime: pose.FrobTime} : {})}, ...generatorWrites},
@@ -1254,8 +1258,10 @@ const indexOf = new Map(FIELDS.filter(f => f[5] !== undefined).map(f => [f[0], f
 // WeaponAssaultShotgun0 and 1): the same object under another number. Map actors keep their names.
 // (LaserEmitter, AutoTurretGun: spawned at load by a placed actor, LaserTrigger.BeginPlay and AutoTurret.PreBeginPlay, so numbered by each process's
 // session history like the pawns' inventory: the original's capture session loaded the Island once, LaserEmitter0..4; Play's start loads it again at
-// the Player start, LaserEmitter5..9; live-acceptance.mjs --device-watch `@Owner.field` finds such an actor in Play)
-const runtimeNumbered = /^((?:JCDenton\w*?|Weapon\w+?|Ammo\w+?|NanoKeyRing|LaserEmitter|AutoTurretGun\w*?))\d+$/;
+// the Player start, LaserEmitter5..9; live-acceptance.mjs --device-watch `@Owner.field` finds such an actor in Play. ParticleGenerator likewise:
+// two are spawned at load (ParticleGenerator0/1 in the original's start registry), so a robot's sparkGen (Robot.Tick) is ParticleGenerator2 in the
+// original and ParticleGenerator4 in Play)
+const runtimeNumbered = /^((?:JCDenton\w*?|Weapon\w+?|Ammo\w+?|NanoKeyRing|LaserEmitter|AutoTurretGun\w*?|ParticleGenerator))\d+$/;
 function same(a, b) {
   if (a === null || a === undefined) a = 'None';
   if (b === null || b === undefined) b = 'None';
@@ -1304,6 +1310,22 @@ function compare() {
   const watchFile = existsSync(watchPath) ? JSON.parse(readFileSync(watchPath, 'utf8')) : {};
   const late = [...watchFile.carcasses ?? [], ...(watchFile.devices ?? []).filter(d => d.late).map(d => d.name)];
   const names = [...new Set([...Object.keys(rows[0]?.actors ?? {}), ...late])];
+  // An actor the scene destroys (a blood drop's splat, an exploded TrashCan5, a dead Terrorist2): the tracer goes on reading its memory after the purge
+  // frees it (another object's then: exp1's TrashCan5 reads a "Flying" drop at 353), so its rows end at its UnhashObject (the `unhash` call records'
+  // ecxName), or after the first tick either side shows bDeleteMe (that tick is still compared: a deletion one side makes later is a bDeleteMe difference).
+  const freedAt = new Map(), lowerNames = new Set(names.map(n => n.toLowerCase()));
+  if (existsSync(`${tracePath}.calls.jsonl`))
+    for (const line of readFileSync(`${tracePath}.calls.jsonl`, 'utf8').split('\n')) {
+      if (!line.includes('"fn":"unhash"') || !line.includes('"ecxName"')) continue;
+      const r = parseTraceLine(line), key = String(r.ecxName).toLowerCase();
+      if (r.ev === 'ret' && r.u >= 1 && lowerNames.has(key) && !freedAt.has(key)) freedAt.set(key, r.u);
+    }
+  const endOf = name => {
+    let end = freedAt.get(name.toLowerCase()) ?? Infinity;
+    for (let i = 0; i < rows.length && i + 1 < end; i++)
+      if (rows[i].actors[name]?.bDeleteMe === 1 || played.rows[i]?.actors?.[name]?.bDeleteMe === 1) { end = i + 2; break; }
+    return end;
+  };
   const labels = [...FIELDS, ...PLAYER_FIELDS.slice(11), ...GENERATOR_LOAD_FIELDS, ...GENERATOR_FIELDS.slice(GENERATOR_LOAD_FIELDS.length).filter(f => !FIELDS.some(g => g[0] === f[0])),
     ...CARCASS_FIELDS.filter(f => !FIELDS.some(g => g[0] === f[0])), ...DEVICE_BASE.filter(f => !FIELDS.some(g => g[0] === f[0])),
     ...Object.values(DEVICE_FIELDS).flat()].map(f => [f[0], f[1] === '$state' ? 'State' : f[1]]).filter((f, i, all) => all.findIndex(g => g[0] === f[0] && g[1] === f[1]) === i);
@@ -1311,7 +1333,9 @@ function compare() {
   const stems = list => Array.isArray(list) ? list.map(name => String(name).replace(/\d+$/, '').toLowerCase()) : list;
   for (const name of names) {
     const entry = report.actors[name] = {firstDifference: null, fields: {}};
-    for (let i = 0; i < rows.length; i++) {
+    const end = name.startsWith('@') ? Infinity : endOf(name);
+    if (end !== Infinity) entry.endsAt = end;
+    for (let i = 0; i < rows.length && i + 1 < end; i++) {
       const o = rows[i].actors[name], p = played.rows[i]?.actors[name];
       if (late.includes(name) && Boolean(o) !== Boolean(p) && played.rows[i]) {
         const field = entry.fields.Present ??= {tick: i + 1, original: Boolean(o), play: Boolean(p), count: 0};

@@ -48,9 +48,10 @@ After the substep MoveActor (`call [vtable+0x88]` at `0x103d1c9c`):
    translated, [swimming](swimming.md)).
 3. `0x103d1d08`: `Hit.Time < 1.0` (double) marks the substep blocked (local
    `-0x18 = 1`). A Decoration whose `Hit.Actor` IsA PlayerPawn then decrements
-   `numLandings` (`+0x324`, floor 0; `0x103d1d1c`–`0x103d1d7b`). This decrement
-   is **not translated** (it feeds only the read-only landing-footprint probes,
-   docs/landing.md); fragments and inventory never take it.
+   `numLandings` (`+0x324`, floor 0; `0x103d1d1c`–`0x103d1d7b`): the host's
+   `blockedBy` (`playerContactLanding`, and `js_fall_blocked` in `fall.rs`), for
+   processLanded's footprint block ([landing.md](landing.md), "The decoration
+   footprint block"); fragments and inventory never take it.
 4. `0x103d1d81`: bBounce (`+0x1ec & 0x10`, re-read here) selects the bounce branch:
    - `0x103d1d8c`–`0x103d1dcc`: `ProcessEvent(FindFunctionChecked(NAME_HitWall
      [0x10583714]), {HitNormal = Hit.Normal, Wall = Hit.Actor})` — the **direct
@@ -142,8 +143,8 @@ See [landing.md](landing.md#non-pawn-sources-and-the-bbouncevelocity-zone):
 `actorLanded(host, hit, {zone})` in `src/runtime/landing.mjs` — the bBounceVelocity
 zone branch (`0x103cef92`, every non-Pawn), then `Landed(HitNormal)` and, only
 while still PHYS_Falling, `setPhysics(PHYS_None, HitActor)` (`0x103d03a9`). The
-Decoration footprint/counter branch and the Pawn blocks are skipped. 506-case
-landing corpus, maxError 0.
+Decoration footprint/counter block and the Pawn blocks are skipped. The landing
+corpus (853 cases with the decoration footprint block, 2026-10-18) has maxError 0.
 
 ## AActor::performPhysics (0x103c9770): dispatch and tail
 

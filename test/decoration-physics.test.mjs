@@ -14,6 +14,8 @@ function scene(hitResponse, host = {}) {
   const queries = { levelInfo,
     multiLineCheck(query) { events.push({ query: { end: query.end } }); return hitResponse(query); },
     changeActor(actor, change) { events.push({ changeActor: actor === decoration }); change(); },
+    // processLanded's footprint probes (landing.mjs): the floor is under the centre.
+    lineCheck(start, end, extent, flags) { events.push({ lineCheck: flags }); return { outside: false, actor: levelInfo, time: 0 }; },
   };
   const decoration = { name: 'Plant7', flags: 15, actorFlags: 0x80000, physics: PHYS_FALLING,
     position: [0, 0, 100], velocity: [0, 0, 0], radius: 23.26, height: 43.88,

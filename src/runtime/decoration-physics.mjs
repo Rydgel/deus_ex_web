@@ -1,6 +1,6 @@
 import { falling } from './falling.mjs';
 import { bumpBaseEpoch } from './base-epoch.mjs';
-import { decorationLanded } from './landing.mjs';
+import { decorationLanded, playerContactLanding } from './landing.mjs';
 import { moveQuery } from './move-query.mjs';
 import { rolling, PHYS_NONE, PHYS_FALLING, PHYS_ROLLING } from './rolling.mjs';
 
@@ -61,6 +61,12 @@ function fallingStep(host, seconds, iterations, { queries, zone, landedEvent, on
     terminalVelocity: f(zone.ZoneTerminalVelocity ?? 2500),
     physics: host.physics ?? values.Physics ?? PHYS_NONE, justTeleported: false,
     landingCounter: host.landingCounter ?? 0,
+    // processLanded's footprint block (landing.mjs decorationFootprint).
+    radius: f(host.radius ?? values.CollisionRadius ?? 0), height: f(host.height ?? values.CollisionHeight ?? 0),
+    isCarcass: host.lineage?.includes('engine.carcass') ?? false, slidingCarcass: Boolean(values.bSlidingCarcass),
+    lineCheck: queries.lineCheck ? (start, end, extent, flags, extra) => queries.lineCheck(start, end, extent, flags, extra, host) : undefined,
+    random: host.random,
+    blockedBy(actor) { if (actor?.lineage?.includes('engine.playerpawn')) playerContactLanding(pawn); },
     move(delta) { const hit = moveDecoration(host, delta, queries); pawn.position = host.position.map(f); return hit; },
     hitWall(hit) { onHitWall(hit); },
     landedEvent(normal) { landedEvent(normal); },

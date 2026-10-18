@@ -46,11 +46,10 @@ for (let i = 0; i < 150; i++) {
     randomIntegers: [Math.floor(random() * 32768), Math.floor(random() * 32768)], farSuccess: random() < .5 });
 }
 
-// Non-Pawn decoration landings (a settled Plant2). The decoration path dispatches
-// the script Landed, then — only while still PHYS_Falling — setPhysics(PHYS_None):
-// rebase onto the floor and zero velocity/acceleration. The landing-footprint probe
-// set is read-only, so these use a spent landing counter (>=5) to skip it and
-// compare the transition exactly; footprint invariance is asserted separately below.
+// Non-Pawn decoration landings (a settled Plant2). With a spent landing counter
+// (numLandings >= 5) the footprint block is skipped: the counter is reset, the
+// script Landed runs and — only while still PHYS_Falling — setPhysics(PHYS_None)
+// rebases onto the floor and zeroes velocity/acceleration.
 for (const velocity of [[0, 0, 0], [80, -20, -120], [120, -30, 18], [-60, 45, -260], [0, 0, -950], [300, 0, -2600]]) {
   for (const base of [null, 'floor']) for (const eventPhysics of [null, 0, 2, 3]) {
     add({ decoration: true, landingCounter: 5, physics: 2, base, velocity, eventPhysics,
@@ -63,19 +62,35 @@ for (const physics of [0, 3, 7]) for (const eventPhysics of [null, 3]) {
   add({ decoration: true, landingCounter: 5, physics, eventPhysics, base: 'floor', velocity: [10, 0, 0],
     acceleration: [0, 0, 0], radius: 23.26, height: 43.88 });
 }
-// Footprint invariance: the same landing with the counter spent (>=5, probes
-// skipped) and unspent (0, probes run) must reach an identical outcome, proving the
-// read-only footprint set does not affect the landing. Only the counter=0 members
-// are excluded from the exact per-event comparison (they carry extra probe queries).
-const footprintOn = new Set(), invariancePairs = [];
-for (const velocity of [[80, -20, -120], [0, 0, -300], [120, -30, 18], [-24, 12, -60]]) {
-  const off = cases.length;
-  add({ decoration: true, landingCounter: 5, physics: 2, base: null, velocity, acceleration: [0, 0, 0],
-    position: [-804.27, 1125.16, -84.02].map(f), radius: 23.26, height: 43.88, supportTime: f(1) });
-  const on = cases.length; footprintOn.add(on);
-  add({ decoration: true, landingCounter: 0, physics: 2, base: null, velocity, acceleration: [0, 0, 0],
-    position: [-804.27, 1125.16, -84.02].map(f), radius: 23.26, height: 43.88, supportTime: f(1) });
-  invariancePairs.push([off, on]);
+// The footprint block (numLandings < 5, 0x103cf5f7): the centre probe, then four
+// corner probes whose UBOOL returns (1: clear) decide a push off the edge that
+// skips Landed and setPhysics. `lines` gives each SingleLineCheck call its
+// Hit.Actor and return value, in call order. The fall speeds cover the clamp to
+// [30, 30 + CollisionRadius] (exp1: CrateExplosiveSmall4, R 22.5, landing half
+// off another crate at -142.5 with corners (−,−) and (+,−) clear).
+const corners = n => [0, 1, 2, 3].map(i => [0, (n >> i) & 1]);
+for (const counter of [0, 4]) for (const fall of [-10, -30, -40, -142.5, -500, 0, 12]) for (let n = 0; n < 16; n++) {
+  add({ decoration: true, landingCounter: counter, physics: 2, base: null, velocity: [7, -3, fall], acceleration: [0, 0, 0],
+    position: [3174.76611, -1099.12695, -189.557312].map(f), radius: 22.5, height: 16, lines: [[0, 1], ...corners(n)] });
+}
+for (const [radius, height, position] of [[23.26, 43.88, [-804.27, 1125.16, -84.02]], [f(1.6), f(2.15), [0, 0, 0]], [40, f(17.5), [-1e-3, 3e4, 0]]]) {
+  for (const n of [0, 3, 5, 6, 9, 10, 12, 15]) for (const fall of [-31, -200]) {
+    add({ decoration: true, landingCounter: 0, physics: 2, base: null, velocity: [0, 0, fall], acceleration: [0, 0, 0],
+      position: position.map(f), radius, height, lines: [[0, 1], ...corners(n)] });
+  }
+  // A supported centre (Hit.Actor set) skips the corners.
+  add({ decoration: true, landingCounter: 0, physics: 2, base: null, velocity: [0, 0, -200], acceleration: [0, 0, 0],
+    position: position.map(f), radius, height, lines: [[1, 0]] });
+}
+// The Carcass slide (0x103d0159): a Carcass with bSlidingCarcass landing on a
+// normal whose Z is below 0.9 (double) draws appFrand, counts the landing when it
+// is below 0.2, and gets Velocity = HitNormal·120 with Z = 70. Reached after a
+// supported centre or a footprint that does not push.
+for (const slidingCarcass of [false, true]) for (const normal of [[0, 0, 1], [.43588989, 0, .9], [0, .43588992, .89999998], [.6, 0, .8], [-.71, .1, .69695067]]) {
+  for (const randomIntegers of [[0], [6553], [6554], [32767]]) for (const lines of [[[1, 0]], [[0, 1], ...corners(1)]]) {
+    add({ carcass: true, slidingCarcass, landingCounter: 0, physics: 2, base: null, normal: normal.map(f), velocity: [5, -6, -240],
+      acceleration: [0, 0, 0], position: [-804.27, 1125.16, -84.02].map(f), radius: 40, height: f(9.6), randomIntegers, lines });
+  }
 }
 
 // Non-Decoration non-Pawn landings: an Inventory (dropped Lockpick) and a
@@ -100,9 +115,9 @@ for (const zoneVelocity of [[0, 0, 0], ['-0', 0, '-0'], [30, 0, 0], ['-0', 0, 5]
   for (const bBounceVelocity of [false, true]) {
     const zone = { bBounceVelocity, velocity: zoneVelocity };
     for (const ancestry of ['inventory', 'projectile']) add({ ancestry, zone, landingCounter: 0x5a5a5a5a, velocity: [80, -20, -120], acceleration: [0, 0, 0] });
-    // A spent counter (5) skips the read-only footprint probes; the bounce path
+    // A spent counter (5) skips the footprint block; the bounce path
     // leaves it at 5 while the ordinary decoration landing resets it to 0.
-    add({ decoration: true, zone, landingCounter: 5, velocity: [80, -20, -120], acceleration: [0, 0, 0], supportTime: f(1),
+    add({ decoration: true, zone, landingCounter: 5, velocity: [80, -20, -120], acceleration: [0, 0, 0],
       radius: 23.26, height: 43.88, position: [-804.27, 1125.16, -84.02].map(f) });
     add({ bIsPawn: true, zone, remaining: f(.2), iterations: 2 });
   }
@@ -122,11 +137,15 @@ await writeFile(path.join(directory, 'original.json'), JSON.stringify(native, nu
 
 function run(input) {
   const events = [];
-  let randomIndex = 0;
+  let randomIndex = 0, lineIndex = 0;
   const pawn = { ...structuredClone(input),
     lineCheck(start, end, extent, flags, extra) {
-      events.push({ line: { start, end, extent, flags, extra } }); return { time: input.supportTime };
+      events.push({ line: { start, end, extent, flags, extra } });
+      if (!input.lines) return { time: input.supportTime };
+      const [actor, clear] = input.lines[lineIndex++];
+      return { time: input.supportTime, actor: actor ? 'floor' : null, outside: Boolean(clear) };
     },
+    isCarcass: Boolean(input.carcass), slidingCarcass: Boolean(input.slidingCarcass),
     findSpot(position, extent, ...options) { events.push({ fit: { position, extent, options } }); return input.fitPosition; },
     farMove(position, ...options) { events.push({ farMove: position, options }); if (input.farSuccess) pawn.position = position; return input.farSuccess; },
     random() {
@@ -158,7 +177,7 @@ function run(input) {
     ZoneVelocity: input.zone.velocity.map(value => (value === '-0' ? -0 : value)) };
   const hit = { normal: input.normal, actor: 'floor' };
   if (input.ancestry) actorLanded(pawn, hit, { zone });
-  else if (input.decoration) decorationLanded(pawn, hit, { zone });
+  else if (input.decoration || input.carcass) decorationLanded(pawn, hit, { zone });
   // The Pawn path never reads the zone: bIsPawn skips the bBounceVelocity branch.
   else processLanded(pawn, hit, input.remaining, input.iterations);
   return { position: pawn.position, velocity: pawn.velocity, acceleration: pawn.acceleration,
@@ -178,21 +197,12 @@ function same(actual, expected) {
 const mismatches = [];
 const comparisons = cases.map((input, index) => {
   const actual = run(input), expected = native.results[index];
-  // Footprint-on decoration cases carry read-only probe queries; their outcome is
-  // validated by the invariance assertion, not this per-event comparison.
-  if (!footprintOn.has(index) && !same(actual, expected)) mismatches.push(index);
+  if (!same(actual, expected)) mismatches.push(index);
   return { input, actual, expected };
 });
-// The read-only footprint probes do not affect the landing: counter-spent and
-// counter-unspent members of each pair must agree on the observable outcome.
-const outcome = result => ({ position: result.position, velocity: result.velocity,
-  acceleration: result.acceleration, physics: result.physics, base: result.base, landingCounter: result.landingCounter });
-const invarianceFailures = invariancePairs.filter(([off, on]) => !same(outcome(native.results[off]), outcome(native.results[on])));
 const summary = { binaryHashes: native.hashes, cases: cases.length,
-  scope: 'dry Pawn, non-Pawn decoration and non-Decoration (inventory/projectile ancestry) landing, including the bBounceVelocity zone branch, with original setPhysics and controlled world, Landed, support basing, walking and CRT random callbacks',
-  comparison: 'exact state, query parameters, callback order and arguments, including signed zero', maxError, mismatches,
-  footprintInvariancePairs: invariancePairs.length, invarianceFailures };
+  scope: 'dry Pawn, non-Pawn decoration (the footprint push and the Carcass slide) and non-Decoration (inventory/projectile ancestry) landing, including the bBounceVelocity zone branch, with original setPhysics and controlled world, Landed, support basing, walking and CRT random callbacks',
+  comparison: 'exact state, query parameters, callback order and arguments, including signed zero', maxError, mismatches};
 await writeFile(path.join(directory, 'comparison.json'), JSON.stringify({ summary, comparisons }, null, 2));
 console.log(JSON.stringify({ ...summary, mismatches: mismatches.slice(0, 15), mismatchCount: mismatches.length }, null, 2));
-assert.equal(invarianceFailures.length, 0, 'decoration landing footprint probes are read-only (outcome invariant to the landing counter)');
 assert.equal(mismatches.length, 0, 'dry Pawn and decoration landing agree with original processLanded for all sampled cases');

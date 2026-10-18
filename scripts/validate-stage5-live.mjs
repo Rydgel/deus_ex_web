@@ -118,7 +118,9 @@ export const SCENES = {
   // 25 * (SoundRadius + 1)); AutoTurret0 (bActive false, bTrackPlayersOnly) hears it (AISetEventCallback('Alarm', 'AlarmHeard')), wakes, aims AutoTurretGun0
   // and fires at the player (fireRate 0.25, gunDamage 5).
   cam1: {map: '01_NYC_UNATCOIsland', ticks: 900, early: PLACE(250, 331, -100, 49152),
-    // (the blood of the turret's first hit, tick 314: AutoTurret.SpawnBlood's and DeusExPlayer's drops, and the splats a drop leaves where it meets a wall)
+    // (Watched too: the blood of the turret's first hit, AutoTurret.SpawnBlood's and DeusExPlayer's drops, and the splats a drop leaves where it meets a wall.
+    // Shooting the turret down was rehearsed and dropped: an untrained pistol misses AutoTurretGun0 from 340 units, and the turret and SecurityBot1 kill the
+    // player first.)
     cmds: '', devices: ['SecurityCamera3:SecurityCamera', 'AutoTurret0:AutoTurret', 'AutoTurretGun0:AutoTurretGun@AutoTurret0.gun',
       ...[0, 1, 2, 3].map(i => `BloodDrop${i}:Actor`), 'BloodSplat0:Actor', 'BloodSplat1:Actor']},
   // a UNATCO camera (row 5.2.4, its bNoAlarm half): the player placed 700 units in front of SecurityCamera2 (UN_outside, Tag UN_CamSystem02, bNoAlarm), in its
@@ -138,8 +140,10 @@ export const SCENES = {
   // an explosion near a door, a decoration and a guard (row 5.6.4): the player placed east of the breakable DeusExMover5 (doorStrength 0.6,
   // minDamageThreshold 50) facing it summons a CrateExplosiveSmall (explosionDamage 300, explosionRadius 800, HitPoints 4) 72 units ahead, between the door
   // and TrashCan5, and a second one turned 22 degrees left (the chain: the first's HurtRadius sets off the second); a WeaponPistol summoned facing away, picked up and drawn; the player placed 530 units east of the crate (the room ends there) and the
-  // Enter edges fire at the crate: DeusExDecoration.Explode's HurtRadius reaches the door (DeusExMover.TakeDamage: doorStrength -= Damage * 0.01 above the
-  // threshold, BlowItUp at 0), the trash can, the player, and Terrorist2 patrolling west of the door; the blast's noise.
+  // Enter edges fire at the crate. In the original both shots miss; the second crate lands half off the first and slides off it (processLanded's footprint
+  // push, tick 45), and Terrorist2, come to open the door, crushes the first crate with it at 307 (Mover.EncroachingOn: TakeDamage 10000 'Crushed'):
+  // DeusExDecoration.Explode's HurtRadius sets off the second crate, breaks the door (doorStrength 0.6 -> 0, BlowItUp), destroys TrashCan5 and kills
+  // Terrorist2; the blast's noise.
   exp1: {map: '01_NYC_UNATCOIsland', ticks: 900, early: PLACE(3242, -1072, -192, 32768),
     cmds: '20:summon DeusEx.CrateExplosiveSmall|30:set DeusEx.JCDentonMale ViewRotation (Pitch=0,Yaw=36768,Roll=0)|35:summon DeusEx.CrateExplosiveSmall'
       + '|40:set DeusEx.JCDentonMale ViewRotation (Pitch=0,Yaw=0,Roll=0)|45:summon DeusEx.WeaponPistol'
@@ -235,7 +239,10 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
     if (population.code !== 0) { console.log(population.out.trim().split('\n').slice(-6).join('\n')); console.log(`FAIL ${tag}: the population step stopped (exit ${population.code})`); process.exit(1); }
     console.log(`population: ${population.out.trim().split('\n').slice(-1)[0]} (play-population.json written again: it had no pendingDeleted list)`);
   }
-  const play = await exec(['scripts/live-acceptance.mjs', 'play', '--map', scene.map, '--seed', '1', '--tag', tag, ...sceneFlags(scene), ...PLAY_FLAGS, '--early-cmds', scene.early,
+  // --compare-only judges the scene's stored replay again (play-rows-<tag>.json and the files beside it), after a change to the comparison alone
+  const compareOnly = argv.includes('--compare-only');
+  if (compareOnly && !existsSync(path.join(dir, `play-rows-${tag}.json`))) { console.log(`FAIL ${tag}: --compare-only without a stored replay (play-rows-${tag}.json)`); process.exit(1); }
+  const play = compareOnly ? {code: 0, out: ''} : await exec(['scripts/live-acceptance.mjs', 'play', '--map', scene.map, '--seed', '1', '--tag', tag, ...sceneFlags(scene), ...PLAY_FLAGS, '--early-cmds', scene.early,
     '--event-trace', `1:${scene.ticks}`, '--object-trace', `1:${scene.ticks}`], Math.max(1800, scene.ticks * 2));
   if (play.code !== 0) { console.log(play.out.trim().split('\n').slice(-12).join('\n')); console.log(`FAIL ${tag}: the replay stopped (exit ${play.code})`); process.exit(1); }
   // the slot model's inputs (the run's own indices, the pre-frees and where they were released)

@@ -43,6 +43,10 @@ class NativeLanding(collision.NativeCollision):
         # decoration class a null SuperField so IsA(Pawn) walks off the chain.
         self.decoration_class = 0x10578d48
         self.write(self.decoration_class + 0x28, 'I', 0)
+        # ACarcass (static class 0x10573db8, super ADecoration): the footprint
+        # block's slide test (0x103d0159) walks the class chain for it.
+        self.carcass_class = 0x10573db8
+        self.write(self.carcass_class + 0x28, 'I', self.decoration_class)
         # Non-Decoration non-Pawn ancestry: fake script classes chained to the
         # DLL's own AInventory (Lockpick -> SkilledTool -> DeusExPickup -> Pickup
         # -> AInventory) and AProjectile (WoodFragment -> DeusExFragment ->
@@ -84,6 +88,15 @@ class NativeLanding(collision.NativeCollision):
                                          'extent': list(self.read(stack + 24, '3f')), 'flags': flags,
                                          'extra': self.read(stack + 36, 'I')[0]}})
             self.write(hit + 36, 'f', case['supportTime'])
+            # The decoration footprint block (0x103cf5f7) reads Hit.Actor after the
+            # centre probe and each corner probe's UBOOL return (1: clear). A case's
+            # `lines` gives them per call, in order: [hitActor, clear].
+            lines = case.get('lines')
+            if lines is not None:
+                hit_actor, clear = lines[self.line_index]
+                self.line_index += 1
+                self.write(hit + 4, 'I', self.floor if hit_actor else 0)
+                cpu.reg_write(collision.UC_X86_REG_EAX, clear)
         elif address == self.fit_thunk:
             location = self.read(stack + 16, 'I')[0]
             self.events.append({'fit': {'position': list(self.read(location, '3f')), 'extent': list(self.read(stack + 4, '3f')),
@@ -130,12 +143,12 @@ class NativeLanding(collision.NativeCollision):
             return super().on_instruction(cpu, address, size, data)
 
     def landed(self, case):
-        self.case, self.random_index = case, 0
+        self.case, self.random_index, self.line_index = case, 0, 0
         # A Pawn (default), a non-Pawn decoration (class 0x10578d48), or an
         # inventory/projectile ancestry.
         cls = self.ancestry.get(case.get('ancestry'))
         if cls is None:
-            cls = self.decoration_class if case.get('decoration') else 0x1058c660
+            cls = self.carcass_class if case.get('carcass') else self.decoration_class if case.get('decoration') else 0x1058c660
         self.write(self.pawn + 0x24, 'I', cls)
         self.write(self.pawn + 0x28, 'I', 0x800000 if case.get('bIsPawn') else 0)
         zone = case.get('zone')
@@ -147,6 +160,8 @@ class NativeLanding(collision.NativeCollision):
             self.write(self.zone + 0x328, '3f', *signed)
             self.write(self.pawn + 0xc8, 'I', self.zone)
         self.write(self.pawn + 0x324, 'I', case.get('landingCounter', 0))
+        # Carcass +0x348 bit 2 is bSlidingCarcass (bReducedHeight 1, bDecorative 2).
+        self.write(self.pawn + 0x348, 'I', 4 if case.get('slidingCarcass') else 0)
         self.write(self.pawn + 0x30, 'B', case['physics'])
         self.write(self.pawn + 0xc4, 'I', self.floor if case['base'] else 0)
         self.write(self.pawn + 0x114, '3f', *case['position'])

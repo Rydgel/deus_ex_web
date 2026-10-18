@@ -1,5 +1,5 @@
 import {falling} from './falling.mjs';
-import {actorLanded,decorationLanded} from './landing.mjs';
+import {actorLanded,decorationLanded,playerContactLanding} from './landing.mjs';
 import {playerMove} from './player-move.mjs';
 import {setActorPhysics,findActorBase} from './script-actor-collision.mjs';
 import {processDecorationHitWall,setSupportBase} from './walking-callbacks.mjs';
@@ -46,6 +46,28 @@ export function spawnedFallingAdapter(runtime,actor) {
   // physFalling's IsA(ADecoration) && bBobbing branch (0x103d0f42, Decoration
   // +0x31c & 0x08), re-read at each integration. Other classes fail that IsA.
   if(isDecoration)Object.defineProperty(host,'bobbing',{get:()=>Boolean(get('bBobbing'))});
+  // processLanded's footprint block (landing.mjs decorationFootprint): its
+  // SingleLineCheck probes with the decoration as SourceActor, CollisionRadius
+  // and CollisionHeight (+0x1d4/+0x1d8), the Carcass test (static class
+  // 0x10573db8), bSlidingCarcass (+0x348 bit 2) and appFrand.
+  if(isDecoration){
+    let isCarcass=false;
+    for(let cls=runtime.instance(actor).cls;cls;cls=cls.base)if(cls.record.key==='engine.carcass')isCarcass=true;
+    Object.defineProperty(host,'radius',{get:()=>get('CollisionRadius')});
+    Object.defineProperty(host,'height',{get:()=>get('CollisionHeight')});
+    Object.defineProperty(host,'slidingCarcass',{get:()=>isCarcass&&Boolean(get('bSlidingCarcass'))});
+    const isPlayerPawn=target=>{
+      for(let cls=target&&runtime.instance(target)?.cls;cls;cls=cls.base)if(cls.record.key==='engine.playerpawn')return true;
+      return false;
+    };
+    Object.assign(host,{isCarcass,
+      blockedBy:target=>{if(isPlayerPawn(target))playerContactLanding(host);},
+      lineCheck:(start,end,extent,flags,extra)=>level.hash.lineCheck(start,end,extent,flags,extra,actor),
+      random:()=>{
+        if(typeof runtime.rng?.frand!=='function')throw new Error('A sliding carcass landing requires the shared original RNG stream');
+        return runtime.rng.frand();
+      }});
+  }
   // physFalling and processLanded read the actor's live Region.Zone
   // (actor+0xc8, kept by MoveActor's SetActorZone): ZoneGravity at each
   // integration, ZoneVelocity per substep, bWaterZone/ZoneFluidFriction with
