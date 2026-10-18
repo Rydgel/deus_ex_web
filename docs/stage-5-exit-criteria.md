@@ -597,6 +597,7 @@ dumped at the original's end hold (`--dump-flags`) and compared with Play's Flag
    ([GetFrame](script-lodmesh-frame.md) "A zero DrawScale"; the NaN's sign and the GPU's own rejection are the unreproduced, pixel-only part).
 8. **A destroyed actor's rows** (`exp1`). The original's tracer reads a watched actor's memory after the purge frees it (at 353 TrashCan5's reads a blood drop, Terrorist2's a
    splat). Every watched actor's rows now end at its UnhashObject (the capture's `unhash` records) or after its first `bDeleteMe` on either side; before, only late-watched actors'.
+   Pawn rows carry no `bDeleteMe`, and Play's probe keeps a released pawn's last values, so a pawn's destruction tick is compared only through its carcass's creation (the registry).
 9. **ParticleGenerator names** (`emp1`). SecurityBot0's `sparkGen` (Robot.Tick) is ParticleGenerator2 in the original and ParticleGenerator4 in Play: two generators are spawned at
    load (the original's start registry holds ParticleGenerator0/1), and Play's start loads the Island twice. Compared by stem, as finding 4 (the same **weak** judgement).
 10. **The player's energy cadence** (`emp2`). `DeusExPlayer.MultiplayerTick` runs in single-player too and calls `MaintainEnergy` every 0.25 s of `lastRefreshTime`, which applies
