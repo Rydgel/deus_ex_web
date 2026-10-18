@@ -79,6 +79,18 @@ const PISTOL = yaw => `20:summon DeusEx.WeaponPistol|50:set DeusEx.JCDentonMale 
 const SHOTS = ticks => ticks.map(t => `${t}:@down Enter|${t}:@up Enter`).join('|');
 // `KillAll FlyGenerator` first: the load's chance FlyGenerators (10% per fly-making decoration) removed in both programs, as row 4.2.13 does.
 const PLACE = (x, y, z, yaw, pitch = 0) => `KillAll FlyGenerator|ghost|set DeusEx.JCDentonMale Location (X=${x},Y=${y},Z=${z})|walk|set DeusEx.JCDentonMale ViewRotation (Pitch=${pitch},Yaw=${yaw},Roll=0)`;
+// A conversation's choice: `downs` ArrowDown edges ten ticks apart from tick t, then the Enter edge 20 ticks after the last (the focus starts on the first choice).
+const CHOOSE = (t, downs) => [...Array.from({length: downs}, (_, i) => `${t + 10 * i}:@down ArrowDown|${t + 10 * i}:@up ArrowDown`), `${t + 10 * downs + 20}:@down Enter|${t + 10 * downs + 20}:@up Enter`].join('|');
+// The pawns within about 4,000 units of MeetPaul's pose at the dock (the conversation's owner, the dock's bots and guard, the nearest Terrorist).
+const DOCK = ['PaulDenton0', 'SecurityBot0', 'UNATCOTroop1', 'MedicalBot3', 'MedicalBot1', 'MedicalBot0', 'Terrorist12'];
+// Filben's corner (the informant, the sitting BumFemale0 and the two nearest NSF).
+const FILBEN = ['HarleyFilben0', 'BumFemale0', 'Terrorist36', 'ThugMale0'];
+// Gunther's cell and the NSF within about 1,500 units of it.
+const GUNTHER = ['GuntherHermann0', 'Terrorist18', 'Terrorist30', 'Terrorist33', 'Terrorist2', 'Terrorist14'];
+// The commander's floor and the two floors below it (TopTerroristsOverheard's Terrorist8 and Terrorist9, TerroristsOverheard's ThugMale3 and Terrorist22).
+// Amos's floor (TerroristsOverheard's ThugMale3 and Terrorist22, the patrolling Terrorist20) and the floor above.
+const AMOS = ['ThugMale3', 'Terrorist22', 'Terrorist20', 'Terrorist8', 'Terrorist9', 'TerroristCommander0'];
+const COMMANDER = ['TerroristCommander0', 'Terrorist8', 'Terrorist9', 'ThugMale3', 'Terrorist22', 'Terrorist20', 'PaulDenton0', 'GuntherHermann0'];
 // The alternate routes and the mission (rows 5.5.x, 5.3.10): doors, locks, keys, the commander and Mission01.Timer's world change (Mission01.uc).
 const AIM = (n, yaw, pitch = 0) => `${n}:set DeusEx.JCDentonMale ViewRotation (Pitch=${pitch},Yaw=${yaw},Roll=0)`;
 // a placement typed in a hold of the scene: both programs run it between the same two ticks (the early placement's lines)
@@ -91,6 +103,13 @@ const MISSION_DEVICES = [...['DeusExMover16', 'DeusExMover17', 'DeusExMover12', 
 const MISSION_FLAGS = ['TerroristCommander_Dead', 'MS_DL_Played', 'DL_LeaderKilled_Played', 'StatueMissionComplete', 'MS_MissionComplete', 'MeetTerrorist_Played',
   'PlayerAttackedStatueTerrorist', 'MS_DL2_Played', 'DL_LeaderNotKilled_Played', 'M01PlayerAggressive'];
 const ROUTE_SCENES = {
+  // 5.5.1 with the key: MeetFilben's trust branch as the conversations' scene fT plays it ("You can trust me.": TransferObject of Filben's ruin_key NanoKey,
+  // FilbenGaveKey; the window closes about 11 ticks after the end event, 469 in fT's capture), then the player placed at the StatueRuinDoors (dor2's pose), the
+  // key ring put in hand (ActivateBelt 0) and used with the left button (ParseLeftClick: DoFrob(Self, inHand), DeusExMover.Frob's NanoKeyRing branch: the
+  // four like-tagged movers' bLocked toggled), then the right button opens them.
+  fK: {map: '01_NYC_UNATCOIsland', ticks: 900, conversation: true, early: PLACE(1496.6, -9968.3, -250, 0), pawns: ['HarleyFilben0', 'BumFemale0'], watch: FILBEN,
+    cmds: `${SHOTS([60, 100, 140, 180, 220, 260])}|${CHOOSE(300, 0)}|${SHOTS([360, 400])}|${MOVE(560, 530.7, 29.3, -88, 57344, 5849)}|600:ActivateBelt 0|${SHOTS([660])}|720:ParseRightClick`,
+    devices: ['DeusExMover12', 'DeusExMover6', 'DeusExMover22', 'DeusExMover23'].map(n => `${n}:DeusExMover`)},
   // 5.5.5 and 5.5.7: the commander (Health 100) killed by one GEP rocket from 300 units in front of him, outside MeetTerrorist's radius (140); a pistol's
   // three hits made him flee in the rehearsal, out of a fixed aim. Mission01.Timer then starts DL_LeaderKilled, whose event sets StatueMissionComplete,
   // and the next Timer changes the world. The rest of the pawns are traced with their load fields only (die1's rule).
@@ -142,18 +161,6 @@ const ROUTE_SCENES = {
     cmds: `${MOVE(60, 2362, -675, -8, 0)}|${MOVE(950, 3546, -1116, -129, 0)}`,
     devices: ['DataLinkTrigger19:Actor', 'DataLinkTrigger20:Actor', 'DataLinkTrigger21:Actor'], flags: ['DL_libertyruinsairshaft_Played'], wholeFlags: true, options: ['--player-talk']},
 };
-// A conversation's choice: `downs` ArrowDown edges ten ticks apart from tick t, then the Enter edge 20 ticks after the last (the focus starts on the first choice).
-const CHOOSE = (t, downs) => [...Array.from({length: downs}, (_, i) => `${t + 10 * i}:@down ArrowDown|${t + 10 * i}:@up ArrowDown`), `${t + 10 * downs + 20}:@down Enter|${t + 10 * downs + 20}:@up Enter`].join('|');
-// The pawns within about 4,000 units of MeetPaul's pose at the dock (the conversation's owner, the dock's bots and guard, the nearest Terrorist).
-const DOCK = ['PaulDenton0', 'SecurityBot0', 'UNATCOTroop1', 'MedicalBot3', 'MedicalBot1', 'MedicalBot0', 'Terrorist12'];
-// Filben's corner (the informant, the sitting BumFemale0 and the two nearest NSF).
-const FILBEN = ['HarleyFilben0', 'BumFemale0', 'Terrorist36', 'ThugMale0'];
-// Gunther's cell and the NSF within about 1,500 units of it.
-const GUNTHER = ['GuntherHermann0', 'Terrorist18', 'Terrorist30', 'Terrorist33', 'Terrorist2', 'Terrorist14'];
-// The commander's floor and the two floors below it (TopTerroristsOverheard's Terrorist8 and Terrorist9, TerroristsOverheard's ThugMale3 and Terrorist22).
-// Amos's floor (TerroristsOverheard's ThugMale3 and Terrorist22, the patrolling Terrorist20) and the floor above.
-const AMOS = ['ThugMale3', 'Terrorist22', 'Terrorist20', 'Terrorist8', 'Terrorist9', 'TerroristCommander0'];
-const COMMANDER = ['TerroristCommander0', 'Terrorist8', 'Terrorist9', 'ThugMale3', 'Terrorist22', 'Terrorist20', 'PaulDenton0', 'GuntherHermann0'];
 export const SCENES = {
   cmb1: {map: '01_NYC_UNATCOIsland', ticks: 900, early: PLACE(10146.3, 685.2, -88, 40960),
     cmds: `${PISTOL(40960)}|170:set DeusEx.JCDentonMale ViewRotation (Pitch=-536,Yaw=40960,Roll=0)|${SHOTS([420, 480, 540])}`},

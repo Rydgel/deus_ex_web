@@ -101,7 +101,8 @@ add('5.3.9', '01_NYC_UNATCOIsland terminals', 'ComputerPersonal0 login with a us
   'O1: frames of the original\'s login and screens plus the computer state after choices', {have: ['security terminal screens O1 (4.4.13)', 'Terminals in Play (P)']});
 add('5.3.10', '01_NYC_UNATCOIsland doors', 'keyed, locked, breakable and keypad doors: the satcomhatch with the UNhatchdoor NanoKey, commvan_door keypad 0451, breakable and lockpicked movers, StatueRuinDoors', 'O1', 'island-doors',
   'O1: live trace of the original at each door (key use, pick, damage) with mover and lock state per tick',
-  {have: ['validate-island-cell-door, validate-island-blowitup (mover bodies, O2)', 'validate-native-mover-move, -interpolation, -scene (O2)']});
+  {proof: live('dor1', 'dor2', 'dor3'), have: ['validate-island-cell-door, validate-island-blowitup (mover bodies, O2)', 'validate-native-mover-move, -interpolation, -scene (O2)'],
+    weak: 'Every approach is placed (a placement typed in a hold, the same lines in both programs). The breakable door is the back entrance DeusExMover2 broken by a GEP rocket; temp_celldoor (breakable, picked and keyed too) is not captured.'});
 add('5.3.11', '01_NYC_UNATCOIsland inventory', 'pick up and use items (MedKit, food, ammo, mods, Lockpick, Multitool), skill points (SkillAwardTrigger) and the skills screen, the AugmentationCannister and installing an augmentation, goals and notes', 'O1', 'island-items',
   'O1: live trace of the original (ParseRightClick pickups, ActivateBelt, console) with inventory, health, skill and goal state',
   {have: ['alterations census: 19 scenarios play (P)', 'persona screens O1 (4.4.11, 4.4.12)']});
@@ -131,13 +132,17 @@ add('5.4.8', '00_TrainingFinal', 'M00MeetPage and holo-Jaime: ConversationTrigge
 
 // 5.5 Alternate-route objectives (Liberty Island) ---------------------------------------------------------------------------------------------
 add('5.5.1', '01_NYC_UNATCOIsland front entrance', 'with the key from Filben (its first choice) the front doors (StatueRuinDoors, four movers) unlock and open; without it they stay locked and the player can pick them (lockStrength 0.1); they cannot be broken (bBreakable false)', 'O1', 'route-front',
-  'O1: live trace of the original at the doors with and without the key and with the lockpick (key ring or Lockpick in hand, left-button click, then the right button to open)', {weak: 'The approach to the doors is placed; the guards near them are not compared.'});
+  'O1: live trace of the original at the doors with and without the key and with the lockpick (key ring or Lockpick in hand, left-button click, then the right button to open)',
+  {proof: live('dor2', 'dor3', 'fK'), weak: 'The approach to the doors is placed (dor2 picks them, dor3 fires a rocket at them, fK brings Filben\'s key there after MeetFilben); every pawn is compared in dor2 and dor3, fK watches Filben\'s corner.'});
 add('5.5.2', '01_NYC_UNATCOIsland back entrance', 'the back way in (DL_BackEntrance, DeusExMover2: lockStrength 0.1, doorStrength 0.5, no key): lockpick it or break it; no hackable device guards it; the guards at the lower deck', 'O1', 'route-back',
-  'O1: live trace of the original at DeusExMover2 (Lockpick in hand, left-button click, then the right button to open; the break by damage) and the patrol', {weak: 'The census drives the lockpick only; the approach is placed.'});
+  'O1: live trace of the original at DeusExMover2 (Lockpick in hand, left-button click, then the right button to open; the break by damage) and the patrol',
+  {proof: live('dor2', 'dor3'), weak: 'The approach is placed; the census drives the lockpick only. Every pawn is compared (the MedicalBots behind the door, Terrorist10\'s deck).'});
 add('5.5.3', '01_NYC_UNATCOIsland airshafts', 'the airshaft route around the laser trap to Gunther\'s cell (DL_libertyruinsairshaft x3): crouch through the shafts, the NPCs and alarms bypassed', 'O1', 'route-airshaft',
-  'O1: the same state comparisons with the player placed in the shaft', {weak: 'The shaft geometry is not read from the BSP here; the DataLinks name the route.'});
+  'O1: the same state comparisons with the player placed in the shaft',
+  {proof: live('air1'), weak: 'The player is dropped into DataLinkTrigger19 and DataLinkTrigger20 (a placement inside a trigger touches nothing); DataLinkTrigger21 lies in a crawlspace 120 units high, where a standing player cannot be dropped, and the harness cannot hold the crouch key: not driven. Crouching through the shafts is not captured (a held key).'});
 add('5.5.4', '01_NYC_UNATCOIsland water route', 'the east side by water: swim to the ruins, the electric arcs (ElectricityEmitter x3, LibElectric, EMP damage drains energy), ControlPanel1 and the fork lift', 'O1', 'route-water',
-  'O1: live trace of the original from the water to the arcs, the panel and the lift');
+  'O1: live trace of the original from the water to the arcs, the panel and the lift',
+  {proof: live('wat1'), weak: 'The swim to the ruins is not captured (a held key: row 5.3.8 owns swimming); the scene starts in the ruins, drops the player into the arcs, hacks ControlPanel1, drops again and presses the fork lift\'s Button2.'});
 add('5.5.5', '01_NYC_UNATCOIsland', 'kill the commander: TerroristCommander_Dead -> DL_LeaderKilled (InSpite after NotKilled) -> StatueMissionComplete', 'O1', 'objective-kill',
   'O1: live trace of the original from the commander\'s death through Mission01.Timer',
   {proof: live('kil1'), weak: 'One way to kill him: a GEP rocket from 300 units (a pistol\'s hits made him flee out of a fixed aim in the rehearsal); the InSpite DataLink (killed after DL_LeaderNotKilled) is not captured.'});
