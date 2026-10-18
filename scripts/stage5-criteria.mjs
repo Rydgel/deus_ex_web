@@ -113,15 +113,24 @@ add('5.4.2', '00_TrainingCombat', 'the instructor takes the inventory: Munitions
   'O1: live trace of the original through the conversation with the inventory per tick', {have: ['validate-instructor-conversation (P)']});
 add('5.4.3', '01_NYC_UNATCOIsland', 'MeetPaul: the three weapon choices (Minicrossbow, GEP gun, rifle) hand JC the weapon, the map image and three goals', 'O1', 'meet-paul',
   'O1: the conversation frames to the choice (4.5.5) plus the transferred object and goals per branch',
-  {have: ['4.5.5 O1 frames', 'validate-island-conversation: each choice plays to the end (P)']});
+  {proof: live('pG', 'pR', 'pX'), have: ['4.5.5 O1 frames', 'validate-island-conversation: each choice plays to the end (P)'],
+    weak: 'The player is placed at the dock inside MeetPaul\'s radius and the speeches are skipped with Enter (the harness cannot walk; a skipped line ends in both programs at the key, so a line\'s full length is compared only where it runs out). What a branch gives is compared through the player\'s Inventory chain (the classes in order), FirstGoal and FirstImage, and the creations (the weapon, its ammunition, the image and the goals, in class and tick).'});
 add('5.4.4', '01_NYC_UNATCOIsland', 'MeetFilben (code phrase): the Choice decides FilbenGaveKey and the NanoKey; MeetFilben2 and AfterStatue follow the flags; skill points', 'O1', 'meet-filben',
-  'O1: live trace of the original through each branch with the flags, inventory and skill points');
+  'O1: live trace of the original through each branch with the flags, inventory and skill points',
+  {proof: live('fT', 'fM', 'fN', 'tA'),
+    weak: 'The player is placed 50 units from Filben. MeetFilben2 is started by a fan of right-button frobs: Filben wanders off at the end of MeetFilben (HarleyStartsToWander) on a path the load\'s stream chooses. AfterStatue is MeetFilbenAfterStatue in tA (Filben never met, StatueMissionComplete set by MeetTerrorist\'s Aggressive branch). FilbenSecondBark and FilbenFinalBark, which also read FilbenGaveKey, are not captured.'});
 add('5.4.5', '01_NYC_UNATCOIsland', 'GuntherRescued: free Gunther (the wall button DeusExMover8 triggers the cell door DeusExMover10, GuntherFreed), five choices, the player gives him a weapon (CheckObject/TransferObject), GuntherRespectsPlayer, AddSkillPoints, his alliance and orders', 'O1', 'gunther-rescued',
-  'O1: live trace of the original through the branches with flags, inventory and Gunther\'s orders');
+  'O1: live trace of the original through the branches with flags, inventory and Gunther\'s orders',
+  {proof: live('gP', 'gN', 'gA'),
+    weak: 'Two of the five CheckObject/Choice pairs are captured: PistolChoice\'s give (gP: TransferObject of the carried pistol, GiveSpeech, GuntherRespectsPlayer, the trigger GuntherAttacks: RunningTo) and NothingChoice\'s second answer (gN: GiveNothing, GuntherRespectsPlayer false). The assault gun, stealth pistol and knife gives run the same CheckObject, Choice and TransferObject events with another class, and NothingChoice\'s first answer (GiveNothingNicely) the same SetFlag and Trigger; none of the four is captured. The player is placed at the button (a placement touches no trigger); gA touches AllianceTrigger0 and OrdersTrigger6 with a landing, and its freed Gunther fights Terrorist18 instead of talking.'});
 add('5.4.6', '01_NYC_UNATCOIsland', 'MeetTerrorist with the commander: the Aggressive and Curious branches set PlayerAttackedStatueTerrorist and StatueMissionComplete; TerroristFollowup', 'O1', 'meet-terrorist',
-  'O1: live trace of the original through both branches with the flags and the commander\'s orders');
+  'O1: live trace of the original through both branches with the flags and the commander\'s orders',
+  {proof: live('tC', 'tA'),
+    weak: 'The player is placed inside the commander\'s radius and the speeches are skipped. tC (Curious) also runs DL_LeaderNotKilled and Mission01.Timer\'s mission-complete pass; tA (Aggressive) ends with the commander attacking and the player placed at Filben.'});
 add('5.4.7', '01_NYC_UNATCOIsland', 'overheard conversations and barks: TerroristsOverheard (Amos), TopTerroristsOverheard, the NPC barks in alert states', 'O1', 'overheard-barks',
-  'O1: live trace of the original with the player in range (the bark choice and the speech started)', {have: ['validate-island-bark (P)', 'validate-island-lipsync (O3)']});
+  'O1: live trace of the original with the player in range (the bark choice and the speech started)',
+  {proof: live('oV', 'oT', 'cmb2', 'cmb3'), have: ['validate-island-bark (P)', 'validate-island-lipsync (O3)'],
+    weak: 'The overheard conversations are first person and non-interactive; the player is placed hidden inside their radius. The barks are the alert-state barks of the combat scenes (cmb2, cmb3: the ConPlayBark, the bark line\'s Sound by name and its subtitle window at the original\'s ticks, the choice through the equal stream draws); none drives a mouth letter there.'});
 add('5.4.8', '00_TrainingFinal', 'M00MeetPage and holo-Jaime: ConversationTrigger, JaimeAppears/JaimeBark_Played, EnterWorld/LeaveWorld by the Mission00 timer', 'O1', 'meet-page-final',
   'O1: live trace of the original with the flags and the holo pawns\' bInWorld');
 
@@ -154,7 +163,8 @@ add('5.6.5', '01_NYC_UNATCOIsland', 'EMP: an EMP grenade or the EMP field agains
   'O1: live trace of the original with an EMP grenade thrown at the bot', {have: ['alterations census emp-grenade, hit-emp (P)']});
 add('5.6.6', '01_NYC_UNATCOIsland', 'conversation flags change the world: GuntherFreed (the cell door chain; on the same walk Gunther\'s alliance flips at AllianceTrigger0\'s touch, and GuntherRescued\'s GuntherAttacks gives his orders), FilbenGaveKey, M01PlayerAggressive, KnowsShipment', 'O1', 'flags-change-world',
   'O1: live trace of the original after each flag with the affected pawns\' alliance and orders',
-  {weak: 'The census sets each flag from its source and checks Gunther\'s alliance and orders. FilbenGaveKey, M01PlayerAggressive and KnowsShipment are read in this map only by conversation branches (ConEventCheckFlag), which the census does not play; three of those conversations fire OrdersTriggers (PaulCongratulations: PaulWandering, MeetFilben2: HarleyStartsToWander, MoleConvos: BumFemaleWanders), whose branches were not traced. M01PlayerAggressive\'s eight kills are TakeDamage calls with the player as instigator.'});
+  {proof: live('gP', 'gN', 'gA', 'fT', 'fM', 'fN', 'kB', 'oV'),
+    weak: 'Each flag from its source to the pawns or branches it changes: GuntherFreed (the button and the cell door: gP, gN; AllianceTrigger0\'s touch flips Gunther to UNATCO: gA; GuntherRescued\'s GuntherAttacks gives his orders: gP), FilbenGaveKey (MeetFilben sets it true in fT and fM, false in fN; MeetFilben2\'s ConEventCheckFlag reads it in fM and fN; HarleyStartsToWander fires at the end of both conversations), M01PlayerAggressive (Mission01.Timer after eight Tantalus kills, TakeDamage with the player as instigator; TrooperCongratulation\'s second ConEventCheckFlag reads it, GuntherFreed false: kB) and KnowsShipment (TerroristsOverheard sets it, MoleConvos reads it and fires BumFemaleWanders: oV). PaulCongratulations (PaulWandering) and Filben\'s two barks are not captured.'});
 
 // Excluded --------------------------------------------------------------------------------------------------------------------------------
 excluded('5.7.1', 'every map', 'Save Game, Load Game, QuickSave and the load menu after death', 'Stage 6 (roadmap section 6): native 3011/3013; Stage 3 gate tolerates 3011');
