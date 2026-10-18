@@ -214,9 +214,10 @@ export const SCENES = {
   oT: {map: '01_NYC_UNATCOIsland', ticks: 1200, conversation: true, early: PLACE(3338, 221, 2032, 32768), pawns: ['Terrorist9', 'Terrorist8', 'TerroristCommander0'], watch: COMMANDER, cmds: ''},
   // M01PlayerAggressive (row 5.6.6): eight Terrorists killed by the player, each with DeusExPlayer.Tantalus (every health 0 and TakeDamage from the player) from
   // a place 220 units off with a clear line (Terrorist16 from cmb5's ledge), so that Mission01.Timer's count (the Terrorists plus the carcasses JC did not
-  // kill, 29 + 1 at the load) falls below 23 and sets the flag; six ticks after the last kill the player is placed back at the map's start (a first capture
-  // that stayed there was killed by the Terrorists near the last kill before TrooperCongratulation could start), then by UNATCOTroop6, whose first-person
-  // TrooperCongratulation reads the flag ("Good shootin', sir", its JustTerrorists branch).
+  // kill, 29 + 1 at the load) falls below 23 and sets the flag; six ticks after the last kill the player is placed back at the map's start, then by
+  // UNATCOTroop6, whose first-person TrooperCongratulation (radius 250) reads the flag ("Good shootin', sir", its JustTerrorists branch). The stored
+  // capture (2026-10-18) does not reach it: the kill at 110 made no carcass (seven, the count stays at 23, no flag), and the placement at the trooper
+  // killed the player at once in both programs, as it had in a first capture (kA) that stayed at the last kill site. It passes as a comparison only.
   kB: {map: '01_NYC_UNATCOIsland', ticks: 700, conversation: true, early: 'KillAll FlyGenerator', pawns: ['Terrorist8', 'Terrorist9', 'UNATCOTroop6'], watch: ['UNATCOTroop6', 'Terrorist8', 'Terrorist9', 'Terrorist4', 'Terrorist27', 'Terrorist22', 'ThugMale3'],
     cmds: [[20, 1221, -961, 799, 32768, -3632], [50, 9871, 190, -87, 32768, -2104], [80, 2126, -1330, -91, 35109, -2430], [110, 3174, -271, 1093, 32768, -2104],
       [140, 3379, 105, 2037, 32768, -2104], [145, 3413, 182, 2037, 32768, -2104], [175, 6218, 2532, -91, 32768, -2104], [180, 6084, 2493, -91, 32768, -2104]]
