@@ -76,10 +76,10 @@ report (`--stage4-report`), so presentation proof is not repeated.
 | 5.1.2 | 00_TrainingCombat pistol range | take a pistol and Ammo10mm, walk in (DL_TArgetRange opens the cover over Switch3), press Switch3 (the target DeusExMover4 with BreakableGlass0 slides in; its MoverCollider passes the DirectionalTriggers that open the blast door), shoot the glass through the station window: ammo, recoil, trace hit, target and trigger state, DL_TArgetRangeshot1/2 | O1 | `pistol-range` | O1: live trace of the original firing at the range (edge-triggered Fire) with ammo, hit actor, mover and DataLink-flag state per tick | weapon noise O1 in the Underworld (pistol shots' event traffic, not the hit or the ammo) | MISSING |
 | 5.1.3 | 00_TrainingCombat rifle range | take the rifle and Ammo3006, scope on, shoot: scope FOV, accuracy, hit; DL_RifleRangeShot1 sets SkillWeaponRifle to 3 | O1 | `rifle-scope` | O1: live trace of the original (scope toggle and Fire edges) with the scope state, FOV, ammo and the skill level | - | MISSING |
 | 5.1.4 | 00_TrainingCombat demolitions | place a LAM on BreakableWall1 (WeaponLAM.Fire's Place path near a Mover; a thrown LAM bounces off), shoot it (ThrownProjectile.TakeDamage): it explodes (HurtRadius), the wall breaks (BlowItUp), DL_FinishWall follows | O1 | `lam-wall` | O1: live trace of the original (LAM selected, Fire edge) with the LAM actor, the explosion's damage to the wall and its fragments | alterations census (grenade throws play, P); validate-island-blowitup (mover BlowItUp O2) | MISSING |
-| 5.1.5 | 01_NYC_UNATCOIsland | the player's pistol hurts and kills a standing Terrorist: damage, hit reaction, hostile response, death, carcass and its inventory | O1 | `island-shoot-npc` | the carcass's contents compared with the original's (the tracer resolves watched names once, when it attaches; a carcass is spawned later): cmb1 and cmb2 cover the damage, the hit reaction, the hostile response, the death and the carcass's creation | validate-stage5-live cmb1 (O1: one pistol shot kills Terrorist0; Dying, TerroristCarcass1 created at the original's tick); validate-stage5-live cmb2 (O1: two hits, TakingHit, Fleeing); weapon noise O1 (the NPCs' event handlers for a player's shots in the Underworld); carcass memory natives 2108/2109 (O2) | MISSING |
+| 5.1.5 | 01_NYC_UNATCOIsland | the player's pistol hurts and kills a standing Terrorist: damage, hit reaction, hostile response, death, carcass and its inventory | O1 | `island-shoot-npc` | cmb5 equal: its carcass's first LastRenderTime is stamped a tick late in Play (the actor mesh layer admits a spawned mesh actor asynchronously, so the first frame after the spawn tick does not draw or stamp it; the original does) | validate-stage5-live cmb7 (O1: the second pistol shot kills Terrorist0 at 360; its carcass created at the original's tick); weapon noise O1 (the NPCs' event handlers for a player's shots in the Underworld); carcass memory natives 2108/2109 (O2) | FAIL |
 | 5.1.6 | 01_NYC_UNATCOIsland | a hostile Terrorist attacks the player: it aims and fires (Tracer, physProjectile), the player's Health, armor and hit regions change, the AI keeps attacking or takes cover | O1 | `island-npc-shoots-player` | O1: live trace of the original with a visible, hostile-allied player in an NPC's view and the NPC's state, fire, projectile and the player's damage per tick | validate-island-tracer (tracer flight, P); validate-native-projectile (O2) | PASS |
 | 5.1.7 | 01_NYC_UNATCOIsland | a baton or crowbar knocks a Terrorist out: KnockedOut carcass, "Unconscious", and Mission01.Timer's aggression count | O1 | `island-melee-ko` | O1: live trace of the original (WeaponBaton drawn, Fire edge at a Terrorist) with the pawn's state, the carcass and its itemName | - | MISSING |
-| 5.1.8 | 01_NYC_UNATCOIsland | player death: lethal damage reaches Dying, the death state and view; the game does not continue the level | O1 | `island-death` | O1: live trace of the original from lethal damage (TakeDamage via console) to the death state; Play stops at the same point of the original (the screen after it is Stage 6's load menu) | a first capture of cmb1 (2026-10-17, replaced): the Terrorists' fire killed the player at tick 791 and Play's replay was equal through Dying to tick 900; the stored scenes keep the player alive | MISSING |
+| 5.1.8 | 01_NYC_UNATCOIsland | player death: lethal damage reaches Dying, the death state and view; the game does not continue the level | O1 | `island-death` | the death state to its end: DeusExPlayer.Dying's camera spiral (8 s after the player is hidden), the fade and the OPEN DXONLY about 20 s after it, where the original's level ends; cmb3 holds 37 ticks of Dying. Needs a trace that runs to the level's end (the tracer detecting the new level), a replay that records OPEN as the boundary where Play stops, and a check of that tick | validate-stage5-live cmb3 (O1: the Terrorists' fire kills the player at tick 863, HealthTorso -4, Dying and DeathFront; Play equal through Dying to tick 900) | MISSING |
 | 5.1.9 | 01_NYC_UNATCOIsland AutoTurret | NSFTurret01 fires at the player when its cameras trigger libertyturret1; the player can shoot it down | O1 | `island-turret` | O1: live trace of the original with the turret active (bActive via trigger) and the player in its range | validate-island-tracer | MISSING |
 
 ### 5.2 Stealth
@@ -92,7 +92,7 @@ report (`--stage4-report`), so presentation proof is not repeated.
 | 5.2.4 | 01_NYC_UNATCOIsland cameras | SecurityCamera sees the player: tracking, the alarm event, NSFCam01..03 trigger libertyturret1; UN_CamSystem01..04 (bNoAlarm) do not | O1 | `island-camera` | O1: live trace of the original with the player in a camera's cone and the camera's state, the alarm flag and the turret's state per tick | - | MISSING |
 | 5.2.5 | 01_NYC_UNATCOIsland laser trap | a LaserTrigger beam broken by the player raises the alarm (LaserTrigger.BeginAlarm: klaxon and an 'alarm' AI event; the laser has no Event) and a guard in Alerting state triggers AlarmUnit0 (SetAlarmFlag -> StatueAlarmTriggered) | O1 | `island-laser` | O1: live trace of the original with the player placed across statue_lasertrap and the beam, trigger and flag state | - | FAIL |
 | 5.2.6 | 01_NYC_UNATCOIsland laser trap | hacking ControlPanel0 with a multitool switches statue_lasertrap off: hack time (skill, hackStrength), the multitool's use, the lasers' state | O1 | `island-hack-panel` | O1: live trace of the original (Multitool selected, a left-button click on the panel: ParseLeftClick, never the right button) with the hack progress, multitool charge and laser state per tick | - | MISSING |
-| 5.2.7 | 01_NYC_UNATCOIsland | a pawn reacts to a body: a killed or knocked-out Terrorist is seen (CheckCarcassPresence, HaveSeenCarcass, AddCarcass) and the finder investigates or flees | O1 | `island-carcass` | O1: live trace of the original with a carcass in a patrol's view | validate-pawn-carcass (natives 2108/2109, O2); validate-stage5-live cmb1 (O1: TerroristCarcass1 and its Carcass AI events equal, but the other Terrorists are already attacking the player and no Carcass callback is delivered) | MISSING |
+| 5.2.7 | 01_NYC_UNATCOIsland | a pawn reacts to a body: a killed or knocked-out Terrorist is seen (CheckCarcassPresence, HaveSeenCarcass, AddCarcass) and the finder investigates or flees | O1 | `island-carcass` | cmb5 equal: its carcass's first LastRenderTime is stamped a tick late in Play (see 5.1.5) | validate-pawn-carcass (natives 2108/2109, O2); validate-stage5-live cmb1 (O1: the attacking Terrorists find TerroristCarcass1, CarcassTimer 120, and stay in Attacking) | FAIL |
 
 ### 5.3 Exploration and the character systems
 
@@ -141,7 +141,7 @@ report (`--stage4-report`), so presentation proof is not repeated.
 
 | Id | Scene | Scenario | Ev. | Census | Proof that would pass it | Existing, partial | Status |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| 5.6.1 | 01_NYC_UNATCOIsland | a shot near guards: noise, hostility, pursuit, distress to other pawns, the player hurt and healed with a MedKit | O1 | `noise-wakes-guards` | O1: live trace of the original of the whole encounter | 5.1.5, 5.1.6, 5.2.3 each partial; validate-stage5-live cmb2 (O1: the shots near the guards, their hostility, distress and the player hurt; no MedKit) | MISSING |
+| 5.6.1 | 01_NYC_UNATCOIsland | a shot near guards: noise, hostility, pursuit, distress to other pawns, the player hurt and healed with a MedKit | O1 | `noise-wakes-guards` | O1: live trace of the original of the whole encounter | 5.1.5, 5.1.6, 5.2.3 each partial; validate-stage5-live cmb2 (O1: the shots near the guards, their hostility, distress and the player hurt; no MedKit) | PASS |
 | 5.6.2 | 00_TrainingFinal alarm | an AlarmUnit trips (bActive for its alarmTimeout, 10 s): AlarmDispatcher fires SoldierNeutral (AllianceTriggers), CloseDoor (ExitDoor) and failmessage (DL_FailedStealth) | O1 | `alarm-chain` | O1: live trace of the original from the alarm's trigger | - | MISSING |
 | 5.6.3 | 01_NYC_UNATCOIsland | light against sight: the same pose seen or not seen as the player lights or darkens it (AugLight, a light switch, the NPC's lighting of the player) | O1 | `light-vs-sight` | O1: live trace of the original with perception fields at two light states | validate-pawn-perception, AICanSee (O2); lighting oracles (O2) | UNDRIVEN |
 | 5.6.4 | 01_NYC_UNATCOIsland | an explosion: a barrel or CrateExplosiveSmall near a Terrorist, a breakable door and a decoration: HurtRadius, damage to each, noise, chain explosions | O1 | `explosion-world` | O1: live trace of the original with the barrel shot | validate-island-blowitup (O2); VisibleCollidingActors iterator 312 (O2) | MISSING |
@@ -405,30 +405,39 @@ the player's three shots missed `Terrorist0`. The scene replays equal and proves
 by the death and the carcass's creation. `cmb7` is 5.6.1's whole encounter: two shots from 700 units behind `Terrorist0` (the second kills it), the others attack, the player is hurt from
 548 and the MedKit heals every region to 100 at 701. The MedKit's own state (a summoned actor) is not watched; the heal is read through the player's `Health` and hit regions.
 
-## Scoreboard (2026-10-17, after the combat captures)
+## Scoreboard (2026-10-18, after the second combat captures)
 
-`node scripts/validate-stage5-acceptance.mjs --census .work/stage5-census.json --report` on the census above (the Mac, 8 min for the six proof replays): **2 of 50 criteria pass;
-the gate is red** (exit 1). 55 rows, 5 excluded.
+`node scripts/validate-stage5-acceptance.mjs --census .work/stage5-census-2026-10-18.json --report` on a fresh census of this code (the Mac: the census 12 min, 44 plays, 0 pause,
+3 no-effect, 3 undriven, equal to its `EXPECTED`; the seven proof replays, each run once, 10 min): **3 of 50 criteria pass; the gate is red** (exit 1). 55 rows, 5 excluded.
 History: the first run (master 5d7285c, with the three tightened predicates) was 0 PASS, 14 FAIL, 33 MISSING, 3 UNDRIVEN. The Island devices task moved 5.2.6, 5.3.9, 5.5.1 and 5.5.2 from FAIL to
-MISSING. The death, explosives and alarms task moved 5.1.2, 5.1.4, 5.1.5, 5.2.7, 5.6.2 and 5.6.5. That left 0 PASS, 4 FAIL, 43 MISSING, 3 UNDRIVEN. The combat captures moved
-5.2.2 from FAIL to PASS and 5.1.6 from MISSING to PASS.
+MISSING. The death, explosives and alarms task moved 5.1.2, 5.1.4, 5.1.5, 5.2.7, 5.6.2 and 5.6.5. That left 0 PASS, 4 FAIL, 43 MISSING, 3 UNDRIVEN. The first combat captures moved
+5.2.2 from FAIL to PASS and 5.1.6 from MISSING to PASS (2 PASS, 3 FAIL, 42 MISSING). The second moved 5.6.1 from MISSING to PASS, and 5.1.5 and 5.2.7 from MISSING to FAIL: their proof,
+`cmb5`, differs in one field at one tick (the carcass's first render stamp, [above](#second-captures-a-body-found-the-carcasss-contents-the-medkit-2026-10-18)).
 
 | Clause | PASS | FAIL | MISSING | UNDRIVEN | EXCLUDED |
 | --- | ---: | ---: | ---: | ---: | ---: |
-| 5.1 Combat | 1 | 0 | 8 | 0 | 0 |
-| 5.2 Stealth | 1 | 1 | 5 | 0 | 0 |
+| 5.1 Combat | 1 | 1 | 7 | 0 | 0 |
+| 5.2 Stealth | 1 | 2 | 4 | 0 | 0 |
 | 5.3 Exploration and the character systems | 0 | 0 | 13 | 0 | 0 |
 | 5.4 Conversation | 0 | 1 | 6 | 1 | 0 |
 | 5.5 Alternate-route objectives | 0 | 1 | 6 | 0 | 0 |
-| 5.6 Systems interacting | 0 | 0 | 4 | 2 | 0 |
+| 5.6 Systems interacting | 1 | 0 | 3 | 2 | 0 |
 | 5.7 Excluded | 0 | 0 | 0 | 0 | 5 |
-| **Total** | **2** | **3** | **42** | **3** | **5** |
+| **Total** | **3** | **5** | **39** | **3** | **5** |
 
-The two `PASS` rows have the first proof checks: `validate-stage5-live.mjs` on the stored Island combat scenes ([above](#first-original-captures-island-combat-2026-10-17)), 5.2.2 on
-`cmb1` and `cmb2`, 5.1.6 on all four. The other 42 `MISSING` rows play in the census and name the capture that would prove them. The 3 `FAIL` rows do not play: there is no pause, but
-`island-laser`, `meet-page-final` and `objective-kill` have no effect. The 3 `UNDRIVEN` rows cannot be started. Stage 4's gate started at 44 of 70 because 60 checks against stored
+The three `PASS` rows have proof checks on the stored Island combat scenes ([above](#first-original-captures-island-combat-2026-10-17)): 5.2.2 on `cmb1` and `cmb2`, 5.1.6 on `cmb1` to
+`cmb4`, `cmb6` and `cmb7`, 5.6.1 on `cmb7`. Two `FAIL` rows (5.1.5, 5.2.7) have a proof check that finds one difference; the other three `FAIL` rows do not play: there is no pause, but
+`island-laser`, `meet-page-final` and `objective-kill` have no effect. The 39 `MISSING` rows play in the census and name the capture that would prove them (5.1.8 names the end of the death
+state; `cmb3` keeps the death itself). The 3 `UNDRIVEN` rows cannot be started. Stage 4's gate started at 44 of 70 because 60 checks against stored
 originals already existed; for gameplay they did not. The strongest existing evidence is listed per row under "Existing, partial": the Island combat scenes, the Underworld's
 weapon-noise traces for gunshots, the perception pilot, the first-person crowbar, MeetPaul's frames, and the native oracles for swimming, ladders, falling and movers.
+
+**Checks rerun for the two Play fixes** (2026-10-18, the Mac): the 41 validators whose oracle or Play side reads Core's sine table (pawn nav and reach, falling, projectile, laser, level,
+mover push, decals, brush rays and tracker, occlusion, child frames, sprites, the trace and actor iterators, the walking surface, the window viewport and sound, the collision and hash
+natives, weapon attachment, static and mesh lighting, light animation and spatial, lodmesh frame, render visibility and mesh bounds, coords) all pass, as do the six Stage 4 rows that
+replay live traces (4.1.5, 4.1.6, 4.1.7, 4.2.13, 4.3.6, 4.5.5) and the unit tests (652, two expected values updated to the measured sine entry). `validate-brush-tracker` stalled once
+inside the sweep (both processes idle after its second case) and passes alone (20 cases, 239 steps). The three that also need the bottle (`validate-pawn-perception`,
+`validate-pawn-locomotion`, `validate-window-scene-frame`) pass under the lock. Not rerun: the stored `bench-sim` digests (Play against Play), which predate the entry.
 
 What backs the four newly playing rows is the recovered script source (`DeusExPlayer.ParseLeftClick`/`ParseRightClick`, `HackableDevices`, `DeusExMover`, `Computers`, `ConPlayBase.SetupEventTransferObject`) running as
 bytecode in Play, plus the native oracle for the one native step Play was missing (the owned zero-extent PointCheck, 32,064 original cases). No row has an original trace of the pick, hack or key sequence yet
