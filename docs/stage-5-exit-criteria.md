@@ -1,6 +1,6 @@
 # Stage 5 exit criteria: a finite definition of "Done when"
 
-Status: **draft for the user to adopt** (written 2026-10-17 from master 5d7285c; first census and scoreboard: 0 of 50 criteria pass; after the first original captures, the same evening: 2 of 50). Nothing here is a Stage 5 claim; it is the definition the claims will be
+Status: **draft for the user to adopt** (written 2026-10-17 from master 5d7285c; first census and scoreboard: 0 of 50 criteria pass; after the first original captures, the same evening: 2 of 50; with the second captures, the death capture and work item 6 merged, 2026-10-18: 3 of 50, the census playing all 50). Nothing here is a Stage 5 claim; it is the definition the claims will be
 judged against. The data is `scripts/stage5-criteria.mjs`; the measure of where Play stands is `scripts/census-stage5.mjs`; the acceptance test is
 `scripts/validate-stage5-acceptance.mjs` ([Running](#running)). Like the Stage 3 and Stage 4 gates ([Stage 3](stage-3-exit-criteria.md),
 [Stage 4](stage-4-exit-criteria.md)) it exits 1 until every criterion passes. What the original offers a player in these maps is in
@@ -160,11 +160,11 @@ report (`--stage4-report`), so presentation proof is not repeated.
 
 <!-- criteria:end -->
 
-## Census: where Play stands (2026-10-18, after the undriven scenarios)
+## Census: where Play stands (2026-10-18, the merged branches)
 
 `node scripts/census-stage5.mjs` drives the 50 scenarios in Play's own frame (headless: `createGame`, `sim-session` tick, sprite scan and HUD, the player-input fixture), one session per
 map with the original Player start between scenarios, a child per map under an RSS watchdog. Headless is the established census practice (alterations census, Stage 3 probes); the
-default worker page runs the same simulation code. **Full runs on the Linux host: 36 plays, 1 pause, 10 no-effect, 3 undriven (1,353 s, peak 4,390 MiB; a second run with the expectations stored passed in 1,448 s, peak 3,313 MiB, every outcome equal). On review three predicates were tightened to the effect their rows name (`pistol-range`: a range target registers; `island-shoot-npc`: the Terrorist is killed; `island-laser`: `StatueAlarmTriggered` is set) and those three rerun as no-effect: 33 plays, 1 pause, 13 no-effect, 3 undriven. The first gap task (A, branch of master 5625f65) fixed the pause and five no-effects (a Play gap and five driver faults, findings 1, 4 and 6): 39 plays, 0 pause, 8 no-effect, 3 undriven in 1,237 s (peak 4,282 MiB), outcomes equal to the stored expectations. The second (B, Island devices) on its own: 37 plays, 1 pause, 9 no-effect, 3 undriven. The two merged, one run: 43 plays, 0 pause, 4 no-effect, 3 undriven (1,081 s, peak 3,380 MiB). After the combat captures (`island-sight` rediagnosed, finding 6), one run on the Mac: 44 plays, 0 pause, 3 no-effect, 3 undriven (706 s, peak 1,725 MiB). After work item 6 (the six scenarios that did not play, findings 8 to 12, 2026-10-18), one run on the Mac: **50 plays, 0 pause, 0 no-effect, 0 undriven** (839 s, peak 1,680 MiB), equal to the stored outcomes; the table below is that run.** The expected outcomes are stored in
+default worker page runs the same simulation code. **Full runs on the Linux host: 36 plays, 1 pause, 10 no-effect, 3 undriven (1,353 s, peak 4,390 MiB; a second run with the expectations stored passed in 1,448 s, peak 3,313 MiB, every outcome equal). On review three predicates were tightened to the effect their rows name (`pistol-range`: a range target registers; `island-shoot-npc`: the Terrorist is killed; `island-laser`: `StatueAlarmTriggered` is set) and those three rerun as no-effect: 33 plays, 1 pause, 13 no-effect, 3 undriven. The first gap task (A, branch of master 5625f65) fixed the pause and five no-effects (a Play gap and five driver faults, findings 1, 4 and 6): 39 plays, 0 pause, 8 no-effect, 3 undriven in 1,237 s (peak 4,282 MiB), outcomes equal to the stored expectations. The second (B, Island devices) on its own: 37 plays, 1 pause, 9 no-effect, 3 undriven. The two merged, one run: 43 plays, 0 pause, 4 no-effect, 3 undriven (1,081 s, peak 3,380 MiB). After the combat captures (`island-sight` rediagnosed, finding 6), one run on the Mac: 44 plays, 0 pause, 3 no-effect, 3 undriven (706 s, peak 1,725 MiB). After work item 6 (the six scenarios that did not play, findings 8 to 12, 2026-10-18), one run on the Mac: 50 plays, 0 pause, 0 no-effect, 0 undriven (839 s, peak 1,680 MiB). With the second captures and the death capture merged (master 9b9966a), one run on the Mac: **50 plays, 0 pause, 0 no-effect, 0 undriven** (1,045 s, peak 1,506 MiB), equal to the stored outcomes; the table below is that run.** The expected outcomes are stored in
 the script (`EXPECTED`), so a regrown boundary fails the run and a fixed one must be recorded. The census is class P: it says what Play does, never that it equals the original.
 
 How the scenarios are driven (and what that means for reading the table):
@@ -199,19 +199,19 @@ How the scenarios are driven (and what that means for reading the table):
 
 | Scenario | Rows | Map | Outcome | First pause, or what was observed |
 | --- | --- | --- | --- | --- |
-| `crowbar-crate` | 5.1.1 | 00_Training | plays | {delegate:validate-crowbar-crate.mjs,peakMiB:889,last:crowbar crate: ticked hits, fragments/bounce/fade/expiry, Lockpick landing/pickup/equip, queued  |
+| `crowbar-crate` | 5.1.1 | 00_Training | plays | {delegate:validate-crowbar-crate.mjs,peakMiB:819,last:crowbar crate: ticked hits, fragments/bounce/fade/expiry, Lockpick landing/pickup/equip, queued  |
 | `phase1-route` | 5.3.1 | 00_Training | plays | {route:PlayerStart -> DL_part2,ms:0} |
 | `dark-room-aug` | 5.3.2 | 00_Training | plays | {active:true,energy0:100,energy:99.50003051757812,beams:2} |
 | `bots` | 5.3.3 | 00_Training | plays | {RepairBot:true,MedicalBot:true} |
 | `obstacle-jump` | 5.3.4 | 00_Training | plays | {z0:16.735414505004883,zMax:64.16401672363281,end:[6991,-82,17],physics:1} |
-| `ladder` | 5.3.5 | 00_Training | plays | {delegate:validate-training-ladder.mjs,peakMiB:1090,last:{\floor\:-144,\top\:[6986,-3571,16],\hang\:-60,\descentZ\:-17.054441452026367,\scope\:\Traini |
+| `ladder` | 5.3.5 | 00_Training | plays | {delegate:validate-training-ladder.mjs,peakMiB:960,last:{\floor\:-144,\top\:[6986,-3571,16],\hang\:-60,\descentZ\:-17.054441452026367,\scope\:\Trainin |
 | `crate-stack` | 5.3.6 | 00_Training | plays | {crate:CrateUnbreakableSmall0,carried:true,dropped:true,at:[7262,-1493,-14]} |
 | `hazmat-swim` | 5.3.7 | 00_Training | plays | {bare:10,suited:8,swimming:true,active:true} |
 | `training-datalinks` | 5.4.1 | 00_Training | plays | {triggers:18,played:17,died:false,missing:[]} |
 | `pistol-range` | 5.1.2 | 00_TrainingCombat | plays | {intro:true,shield1:1,target:[0,-1216,-50],doorKey:1,shots:4,ammo:[18,14],glassGone:false,glass:[0,-1216,19916],shot1:true} |
 | `rifle-scope` | 5.1.3 | 00_TrainingCombat | plays | {scoped:true,ammo:4,fov:10,skill:SkillWeaponRifle} |
 | `lam-wall` | 5.1.4 | 00_TrainingCombat | plays | {near:true,placed:LAM5,stuck:true,proximity:true,shots:4,lamGone:true,wallDestroyed:true,doorStrength:0,playerHealth:77,finishWall:true} |
-| `instructor-take` | 5.4.2 | 00_TrainingCombat | plays | {delegate:validate-instructor-conversation.mjs,peakMiB:1067,last:Instructor Play flow passed: both owners, Frob/Take, natural FlagTrigger, 29 transfer |
+| `instructor-take` | 5.4.2 | 00_TrainingCombat | plays | {delegate:validate-instructor-conversation.mjs,peakMiB:1063,last:Instructor Play flow passed: both owners, Frob/Take, natural FlagTrigger, 29 transfer |
 | `stealth-maze` | 5.2.1 | 00_TrainingFinal | plays | {state:deusex.scriptedpawn.patrolling,enemy:null,failed:true} |
 | `elevator` | 5.3.13 | 00_TrainingFinal | plays | {before:0,after:1,moving:false,exitDoor:{start:0,closedAt:3,closed:{key:1,y:112},reopened:{key:0,y:48}}} |
 | `alarm-chain` | 5.6.2 | 00_TrainingFinal | plays | {before:{state:deusex.scriptedpawn.startup,enemy:null,door:0},after:{state:deusex.scriptedpawn.patrolling,enemy:null,door:1,active:false},rang:true,ri |
@@ -236,7 +236,7 @@ How the scenarios are driven (and what that means for reading the table):
 | `meet-filben` | 5.4.4 | 01_NYC_UNATCOIsland | plays | {trust:{met:true,ended:true,gaveKey:true,keys:[ruin_key],seconds:5.5},refuse:{met:true,ended:true,gaveKey:false,keys:[],seconds:7}} |
 | `gunther-rescued` | 5.4.5 | 01_NYC_UNATCOIsland | plays | {door:{key:1,yaw:16384},freed:true,con:GuntherRescued,played:true,respects:true,weapon:WeaponPistol582,gave:true,skillPoints:[5000,5150],before:{allia |
 | `meet-terrorist` | 5.4.6 | 01_NYC_UNATCOIsland | plays | {played:false,complete:true,attacked:true,commander:conversation,at:[2887,38,2528]} |
-| `overheard-barks` | 5.4.7 | 01_NYC_UNATCOIsland | plays | {delegate:validate-island-bark.mjs,peakMiB:1272,last:island-bark: Terrorist30's bark deusexconaudioaibarks.conaudioaibarks_896 on Galaxy channel 57306 |
+| `overheard-barks` | 5.4.7 | 01_NYC_UNATCOIsland | plays | {delegate:validate-island-bark.mjs,peakMiB:812,last:island-bark: Terrorist30's bark deusexconaudioaibarks.conaudioaibarks_896 on Galaxy channel 573066 |
 | `route-front` | 5.5.1 | 01_NYC_UNATCOIsland | plays | {authored:{breakable:[false,false,false,false],lockStrength:0.10000000149011612},bareRightClick:[locked,locked,locked,locked],picking:true,pickFrames: |
 | `route-back` | 5.5.2 | 01_NYC_UNATCOIsland | plays | {lockStrength:0.10000000149011612,bareRightClick:{locked:true,open:false},picking:true,pickFrames:245,unlocked:true,open:true,died:false,picks:0} |
 | `route-airshaft` | 5.5.3 | 01_NYC_UNATCOIsland | plays | {played:true} |
@@ -531,33 +531,32 @@ spawned mesh asynchronously, [above](#second-captures-a-body-found-the-carcasss-
 was Play's own, and a far listener's check moved the player's `ShowSelf` draw from tick 12 to tick 4. `live-acceptance.mjs` now traces the unwatched `ScriptedPawn`s with their load
 fields only (`Sight`, `TRate`, `TCount`, `LRT`; watch<tag>.json `loadPawns`), which the replay writes and does not compare; the second capture's draws are equal throughout.
 
-## Scoreboard (2026-10-18, after the second combat captures)
+## Scoreboard (2026-10-18, the merged branches)
 
-`node scripts/validate-stage5-acceptance.mjs --census .work/stage5-census-2026-10-18.json --report` on a fresh census of this code (the Mac: the census 12 min, 44 plays, 0 pause,
-3 no-effect, 3 undriven, equal to its `EXPECTED`; the seven proof replays, each run once, 10 min): **3 of 50 criteria pass; the gate is red** (exit 1). 55 rows, 5 excluded.
+`node scripts/validate-stage5-acceptance.mjs --census .work/stage5-census-merged.json --report` on master 9b9966a, which merges work item 6, the second combat captures, the death
+capture, the held-tick window frames and the `cmb3` registry slots (the Mac: the census 17 min, 50 plays, 0 pause, 0 no-effect, 0 undriven, equal to its `EXPECTED`; the 14 proof replays,
+each run once, 18 min): **3 of 50 criteria pass; the gate is red** (exit 1). 55 rows, 5 excluded.
 History: the first run (master 5d7285c, with the three tightened predicates) was 0 PASS, 14 FAIL, 33 MISSING, 3 UNDRIVEN. The Island devices task moved 5.2.6, 5.3.9, 5.5.1 and 5.5.2 from FAIL to
 MISSING. The death, explosives and alarms task moved 5.1.2, 5.1.4, 5.1.5, 5.2.7, 5.6.2 and 5.6.5. That left 0 PASS, 4 FAIL, 43 MISSING, 3 UNDRIVEN. The first combat captures moved
-5.2.2 from FAIL to PASS and 5.1.6 from MISSING to PASS (2 PASS, 3 FAIL, 42 MISSING). The second moved 5.6.1 from MISSING to PASS, and 5.1.5 and 5.2.7 from MISSING to FAIL: their proof,
-`cmb5`, differs in one field at one tick (the carcass's first render stamp, [above](#second-captures-a-body-found-the-carcasss-contents-the-medkit-2026-10-18)).
-The death capture (`die1`, the same day, rerun with `--only` on a fresh `island-death` census) moved 5.1.8 from MISSING to FAIL on the same item, its player carcass's first stamp
-([above](#the-players-death-to-the-levels-end-2026-10-18)): 3 PASS, 6 FAIL, 38 MISSING, 3 UNDRIVEN (report `.work/stage5-gate-2026-10-18-518.json`). That report is the run above with
-row 5.1.8 replaced by its rerun; the other rows were not rerun on the death task's code (`OPEN`, the client travel step, the typed flag store, the load-field pawns), which `cmb7`'s
-check (still PASS) and the unit tests (652 pass) exercise.
+5.2.2 from FAIL to PASS and 5.1.6 from MISSING to PASS (2 PASS, 3 FAIL, 42 MISSING). Work item 6 moved 5.2.5, 5.4.8 and 5.5.5 from FAIL, and 5.4.5, 5.6.3 and 5.6.6 from UNDRIVEN, to
+MISSING. The second captures moved 5.6.1 from MISSING to PASS, and 5.1.5 and 5.2.7 from MISSING to FAIL: their proof, `cmb5`, differs in one field at one tick (the carcass's first
+render stamp, [above](#second-captures-a-body-found-the-carcasss-contents-the-medkit-2026-10-18)). The death capture (`die1`) moved 5.1.8 from MISSING to FAIL on the same item, its player
+carcass's first stamp ([above](#the-players-death-to-the-levels-end-2026-10-18)).
 
 | Clause | PASS | FAIL | MISSING | UNDRIVEN | EXCLUDED |
 | --- | ---: | ---: | ---: | ---: | ---: |
 | 5.1 Combat | 1 | 2 | 6 | 0 | 0 |
-| 5.2 Stealth | 1 | 2 | 4 | 0 | 0 |
+| 5.2 Stealth | 1 | 1 | 5 | 0 | 0 |
 | 5.3 Exploration and the character systems | 0 | 0 | 13 | 0 | 0 |
-| 5.4 Conversation | 0 | 1 | 6 | 1 | 0 |
-| 5.5 Alternate-route objectives | 0 | 1 | 6 | 0 | 0 |
-| 5.6 Systems interacting | 1 | 0 | 3 | 2 | 0 |
+| 5.4 Conversation | 0 | 0 | 8 | 0 | 0 |
+| 5.5 Alternate-route objectives | 0 | 0 | 7 | 0 | 0 |
+| 5.6 Systems interacting | 1 | 0 | 5 | 0 | 0 |
 | 5.7 Excluded | 0 | 0 | 0 | 0 | 5 |
-| **Total** | **3** | **6** | **38** | **3** | **5** |
+| **Total** | **3** | **3** | **44** | **0** | **5** |
 
 The three `PASS` rows have proof checks on the stored Island combat scenes ([above](#first-original-captures-island-combat-2026-10-17)): 5.2.2 on `cmb1` and `cmb2`, 5.1.6 on `cmb1` to
-`cmb4`, `cmb6` and `cmb7`, 5.6.1 on `cmb7`. Three `FAIL` rows (5.1.5, 5.2.7, 5.1.8) have a proof check that finds one difference, the same one (a spawned carcass's first render stamp); the other three `FAIL` rows do not play:
-there is no pause, but `island-laser`, `meet-page-final` and `objective-kill` have no effect. The 38 `MISSING` rows play in the census and name the capture that would prove them. The 3 `UNDRIVEN` rows cannot be started. Stage 4's gate started at 44 of 70 because 60 checks against stored
+`cmb4`, `cmb6` and `cmb7`, 5.6.1 on `cmb7`. The three `FAIL` rows (5.1.5, 5.2.7, 5.1.8) have a proof check that finds one difference, the same one in each: a spawned carcass's first render stamp.
+The 44 `MISSING` rows play in the census and name the capture that would prove them; no row is undriven. Stage 4's gate started at 44 of 70 because 60 checks against stored
 originals already existed; for gameplay they did not. The strongest existing evidence is listed per row under "Existing, partial": the Island combat scenes, the Underworld's
 weapon-noise traces for gunshots, the perception pilot, the first-person crowbar, MeetPaul's frames, and the native oracles for swimming, ladders, falling and movers.
 

@@ -1213,6 +1213,8 @@ function compare() {
     }
   }
   writeFileSync(path.join(dir, 'report.json'), JSON.stringify(report, null, 1));
+  // and under the tag (report<tag>.json): two replays of one map in different checkouts share .work, so a check reads its own scene's report
+  if (suffix) writeFileSync(path.join(dir, `report${suffix}.json`), JSON.stringify(report, null, 1));
   console.log(`${map}: ${rows.length} ticks; clock ${firstClock ? `differs from tick ${firstClock.tick}` : 'equal'}; stream draws per tick ${firstRng ? `differ at tick ${firstRng.tick} (original ${firstRng.original}, Play ${firstRng.play})` : 'equal'}`);
   if (report.strobe) console.log(`Strobe flag: original flipped ${report.strobe.originalFlips} times (last at tick ${report.strobe.originalLastChange}), Play ${report.strobe.playFlips} (last at tick ${report.strobe.playLastChange}); differs at ${report.strobe.ticksWithDifferentFlag} of ${rows.length} ticks`);
   for (const [name, entry] of Object.entries(report.actors)) {

@@ -159,7 +159,8 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
   for (const line of play.out.split('\n')) if (line.startsWith('object trace: ') && !/registry events/.test(line)) console.log(line);
   const compare = await exec(['scripts/live-acceptance.mjs', 'compare', '--map', scene.map, '--tag', tag, ...SCENE_FLAGS], 600);
   console.log(compare.out.trim());
-  const report = JSON.parse(readFileSync(path.join(dir, 'report.json'), 'utf8'));
+  // the scene's own report (report-<tag>.json): another checkout's replay of the same map writes the untagged report.json in the shared .work
+  const report = JSON.parse(readFileSync(path.join(dir, `report-${tag}.json`), 'utf8'));
   // (the actors Play watched: the trace's timed actors and load-field pawns are written into Play, not compared; a watched name Play's level lacks fails
   // the replay before the comparison, liveProbe's `no actor`)
   const actors = Object.entries(report.actors).filter(([, e]) => e.compared !== false && (e.compared || e.firstDifference !== null)), different = actors.filter(([, e]) => e.firstDifference !== null);
