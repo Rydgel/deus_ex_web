@@ -29,7 +29,7 @@ export async function createWeaponViewModel(runtime,assets,playerSource,{kernel=
         camera.coordinateSystem,camera.reversedDepth);
       const frame=sim.frame({frustum});
       if(!frame)return;
-      for(const actor of frame.drawn)actorRenderFeedback(runtime,actor)();
+      for(const actor of frame.drawn)actorRenderFeedback(runtime,actor,{canvas:true})();
       draw.prepare(frame,fromView(camera.position.toArray()));
       draw.render(renderer,camera,frame);
     },

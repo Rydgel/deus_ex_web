@@ -14,7 +14,7 @@ import { createDrawnSet } from './drawn-set.mjs';
 import { viewportFlash } from '../runtime/screen-flash.mjs';
 import { createMeshFramePack, PACK_WORDS } from './mesh-frame-pack.mjs';
 import { createDecalDraw } from '../runtime/decal-draw.mjs';
-import { OCCLUSION_DETAIL, OCCLUSION_POINTS, OCCLUSION_SPRITE_KEYS, SETUP, SETUP_OUT_WORDS } from '../runtime/bsp-occlusion.mjs';
+import { OCCLUSION_DETAIL, OCCLUSION_POINTS, OCCLUSION_SPRITE_KEYS, SETUP, SETUP_OUT_WORDS, SETUP_STATUS, meshRecordFields } from '../runtime/bsp-occlusion.mjs';
 import { packDynamics, patchDynamics, candidateWords, actorOcclusionMode, childFrameSprites, iteratorSpritesByOrder } from './dynamics-candidates.mjs';
 import { createLightNoise, lightNoiseSnapshot } from '../runtime/static-lighting.mjs';
 import { lightGlobals } from '../runtime/light-globals.mjs';
@@ -1346,12 +1346,23 @@ export function createSimSession(game, { assets = null, events = [], exportName 
           camera.coordinateSystem, camera.reversedDepth);
         // The master frame's DrawLodMesh inputs (Canvas.DrawActor draws in it).
         const lodInputs = current?.visibility?.lod && current.view?.fov !== undefined ? { ...current.visibility.lod, fov: current.view.fov } : null;
-        frame = weaponSim.frame({ frustum: weaponFrustum, pack, lodInputs, settings: actorScene?.lodSettings?.() });
+        // Canvas.DrawActor's render feedback: FDynamicSprite::Setup in the canvas frame (Canvas->Update's, the master frame), one
+        // candidate packed as SetupDynamics packs an actor (weapon-overlay-sim.mjs `admit`), after this frame's OccludeBsp has run.
+        const master = current?.visibility?.master;
+        const admit = master && occlusion?.setupSupported ? binding => {
+          const record = occlusion.meshRecord(binding.mesh.key, meshRecordFields(binding.payload));
+          const views = occlusion.setupCandidates(1);
+          binding.packSetup(views, views.at, 0, record, null, null);
+          views.u32[views.at + SETUP.FLAGS] = 0;
+          return occlusion.setupOnly(master.words, 1)[0] === SETUP_STATUS.ACCEPTED;
+        } : null;
+        frame = weaponSim.frame({ frustum: weaponFrustum, pack, lodInputs, settings: actorScene?.lodSettings?.(), admit });
         if (frame) {
           const info = runtime.levelFor(game.player.collisionActor).actors[0];
           const time = Math.fround(runtime.readNamed(info, 'TimeSeconds'));
+          // (Canvas.DrawActor stamps a hidden actor too: actor-render-feedback.mjs `canvas`; a held item is bHidden since BecomeItem)
           for (const actor of frame.drawn)
-            if (!runtime.readNamed(actor, 'bHidden') && !runtime.readNamed(actor, 'bDeleteMe'))
+            if (!runtime.readNamed(actor, 'bDeleteMe'))
               runtime.writeNamed(actor, 'LastRenderTime', time);
           if (stamped) stamped.weapon = new Set(frame.drawn.map(handleOf));
           frame = { target: frame.target, draws: frame.draws, camera: frame.camera, summary: { ...weaponSim.summary } };

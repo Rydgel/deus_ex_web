@@ -144,6 +144,11 @@ if (flag('perception')) PLAYER_FIELDS.push(['CRad', 'CollisionRadius', 0x1d4, 'f
 // pick up and fire a weapon (--cmds) are followed through these.
 if (flag('player-gear')) PLAYER_FIELDS.push(['Weapon', 'Weapon', 976, 'obj'], ['PendWeapon', 'PendingWeapon', 980, 'obj'], ['Inv', 'Inventory', 192, 'obj'], ['InHand', 'inHand', 2600, 'obj'],
   ['FrobTgt', 'FrobTarget', 2536, 'obj'], ['bFire', 'bFire', 1206, 'u8'], ['PHealth', 'Health', 1064, 'i32'], ['FrobTime', 'FrobTime', 2540, 'f']);
+// --player-view: what places the player's eye and the first-person item (Inventory.CalcDrawOffset: EyeHeight on Z plus BobDamping * WalkBob; PlayerPawn's
+// UpdateEyeHeight smooths EyeHeight with OldLocation and bJustLanded; the view shake of DeusExPlayer's damage), at Play's slotOf offsets (JCDentonMale0).
+if (flag('player-view')) PLAYER_FIELDS.push(['EyeH', 'EyeHeight', 0x3f8, 'f'], ['WalkBob', 'WalkBob', 0x3e8, 'f3'], ['BobTime', 'BobTime', 0x5f8, 'f'],
+  ['JustLanded', 'bJustLanded', 0x318, 'bit', 0x4], ['OldLoc', 'OldLocation', 0x12c, 'f3'], ['ShakeVert', 'ShakeVert', 0x680, 'f'], ['ShakeTimer', 'ShakeTimer', 0x678, 'f'],
+  ['ShakeMag', 'ShakeMag', 0x67c, 'i32'], ['MaxShake', 'MaxShake', 0x684, 'f'], ['VertTimer', 'VertTimer', 0x688, 'f']);
 // --player-health: the player's hit regions (Pawn.HealthHead..HealthArmRight, the linked offsets of Play's class graph): where an NPC's shots land
 // (DeusExPlayer.TakeDamage/HandleDamage) in the combat scenes of the Stage 5 gate (docs/stage-5-exit-criteria.md).
 const HIT_REGION_FIELDS = [['HHead', 'HealthHead', 1376, 'i32'], ['HTorso', 'HealthTorso', 1380, 'i32'], ['HLegL', 'HealthLegLeft', 1384, 'i32'],
@@ -226,6 +231,7 @@ const DEVICE_FIELDS = {
   DeusExMover: [['doorStrength', 'doorStrength', 0x544, 'f'], ['bDestroyed', 'bDestroyed', 0x574, 'bit', 0x1], ['bLocked', 'bLocked', 0x534, 'bit', 0x2], ['lockStrength', 'lockStrength', 0x538, 'f'],
     ['KeyNum', 'KeyNum', 0x377, 'u8'], ['PrevKeyNum', 'PrevKeyNum', 0x378, 'u8'], ['bInterpolating', 'bInterpolating', 0x1ec, 'bit', 0x80], ['bPicking', 'bPicking', 0x54c, 'bit', 0x4],
     ['curPick', 'curPick', 0x56c, 'obj'], ['PhysAlpha', 'PhysAlpha', 0x214, 'f'], ['PhysRate', 'PhysRate', 0x218, 'f'], ['bOpening', 'bOpening', 0x4ec, 'bit', 0x1], ['bDelaying', 'bDelaying', 0x4ec, 'bit', 0x2]],   // DeusExMover5
+  Actor: [],   // DEVICE_BASE alone (a thrown grenade)
   Robot: [['EMPHitPoints', 'EMPHitPoints', 0xa2c, 'i32'], ['crazedTimer', 'crazedTimer', 0xa34, 'f'], ['sparkGen', 'sparkGen', 0xa30, 'obj'], ['HealthTorso', 'HealthTorso', 0x564, 'i32'],
     ['HealthHead', 'HealthHead', 0x560, 'i32']],   // SecurityBot0
 };
@@ -248,12 +254,15 @@ Object.assign(DEVICE_FIELDS, {
   Weapon: [['currentAccuracy', 'currentAccuracy', 0x5f8, 'f'], ['standingTimer', 'standingTimer', 0x5f4, 'f'], ['LockMode', 'LockMode', 0x560, 'u8'],
     ['LockTarget', 'LockTarget', 0x558, 'obj'], ['Target', 'Target', 0x55c, 'obj'], ['LockTimer', 'LockTimer', 0x550, 'f'], ['MaintainLockTimer', 'MaintainLockTimer', 0x554, 'f'],
     ['TargetRange', 'TargetRange', 0x570, 'f'], ['ClipCount', 'ClipCount', 0x50c, 'i32'], ['bReadyToFire', 'bReadyToFire', 0x504, 'bit', 0x1], ['ShakeTimer', 'ShakeTimer', 0x5d8, 'f']],   // WeaponGEPGun0
-  Lockpick: DEVICE_FIELDS.Multitool, Actor: []});
-/** --device-watch "Name:Class,..." -> [{name, cls}] (a class DEVICE_FIELDS lacks stops the run). */
+  Lockpick: DEVICE_FIELDS.Multitool});
+/** --device-watch "Name:Class[@Owner.field],..." -> [{name, cls, via}] (a class DEVICE_FIELDS lacks stops the run). `@Owner.field`: Play finds the actor through
+ * its owner's object field, not by name: an actor a placed actor spawns at load (AutoTurret.PreBeginPlay's gun) is numbered by each process's session
+ * history (MakeUniqueObjectName's class counter carries every load: the original's capture session loaded the Island once, Play's start loads it again
+ * at the Player start), so the original's AutoTurretGun0 is Play's AutoTurretGun2. */
 const deviceWatchOption = () => (option('device-watch', '') ?? '').split(',').filter(Boolean).map(entry => {
-  const [name, cls] = entry.split(':');
+  const [name, rest] = entry.split(':'), [cls, via] = rest.split('@');
   if (!DEVICE_FIELDS[cls]) throw new Error(`--device-watch ${entry}: no DEVICE_FIELDS for ${cls} (${Object.keys(DEVICE_FIELDS).join(' ')})`);
-  return {name, cls};
+  return {name, cls, ...(via ? {via} : {})};
 });
 
 const spec = ([label, , off, type, mask]) => `${label}:0x${off.toString(16)}:${type}${mask ? `:0x${mask.toString(16)}` : ''}`;
@@ -1117,7 +1126,12 @@ async function play() {
     // the rest of the animation state when the trace has it (PLAYER_FIELDS: captures from 2026-10-17 on)
     const animState = pose.ALast === undefined ? {} : {AnimLast: pose.ALast, AnimMinRate: pose.AMin, OldAnimRate: pose.AOld,
       bAnimFinished: Boolean(pose.AnimFin), bAnimLoop: Boolean(pose.AnimLoop), bAnimNotify: Boolean(pose.AnimNote)};
-    const request = {...(classCounters ? {classCounters} : {}), write: {...timerWrites, ...pawnWrites, '@player': {AnimSequence: pose.Anim, AnimFrame: pose.Frame, AnimRate: pose.Rate, TweenRate: pose.Tween, ...animState, ...(option('player-alliance', null) ? {Alliance: option('player-alliance')} : {}),
+    // --player-view: the player's eye and bob at the release (a capture with them): the frozen phase's landing after the placement and its smoothing of
+    // EyeHeight (PlayerPawn.UpdateEyeHeight, every frozen tick at the host's delta) are the original's own history, a measured input like the animation
+    // state; Inventory.CalcDrawOffset places a held item with them (Stage 5 capture hck1: Multitool0's Z 4e-5 off for 102 ticks until the player was hit)
+    const viewState = pose.EyeH === undefined ? {} : {EyeHeight: pose.EyeH, WalkBob: pose.WalkBob.map(Math.fround), BobTime: pose.BobTime, bJustLanded: Boolean(pose.JustLanded),
+      ShakeVert: pose.ShakeVert, ShakeTimer: pose.ShakeTimer, ShakeMag: pose.ShakeMag, MaxShake: pose.MaxShake, VertTimer: pose.VertTimer};
+    const request = {...(classCounters ? {classCounters} : {}), write: {...timerWrites, ...pawnWrites, '@player': {AnimSequence: pose.Anim, AnimFrame: pose.Frame, AnimRate: pose.Rate, TweenRate: pose.Tween, ...animState, ...viewState, ...(option('player-alliance', null) ? {Alliance: option('player-alliance')} : {}),
       // FrobTime accumulates the player's tick deltas (HighlightCenterObject runs when it reaches 0.1 s); the frozen phase's deltas are the host's, so the original's value is a measured input
       ...(flag('player-gear') && pose.FrobTime !== undefined ? {FrobTime: pose.FrobTime} : {})}, ...generatorWrites},
       ...(touchWindow ? {touchTrace: {first: touchWindow[0], last: touchWindow[1]}} : {}),
@@ -1138,7 +1152,8 @@ async function play() {
       // --carcass-watch (the original's run): resolved by name from the tick the actor is in Play's level, as the tracer's late-watch
       ...(carcasses.length ? [{names: carcasses, props: CARCASS_FIELDS.map(f => f[1]), late: true}] : []),
       // --device-watch (the original's run): a device with DEVICE_BASE and its class's fields, a pawn device with the pawn props and its class's, a late one lazily
-      ...devices.map(d => ({names: [d.name], props: [...new Set([...(d.pawn ? props : DEVICE_BASE.map(f => f[1])), ...DEVICE_FIELDS[d.cls].map(f => f[1])])], ...(d.late ? {late: true} : {})}))]}};
+      ...devices.map(d => ({names: [d.name], props: [...new Set([...(d.pawn ? props : DEVICE_BASE.map(f => f[1])), ...DEVICE_FIELDS[d.cls].map(f => f[1])])],
+        ...(d.late ? {late: true} : {}), ...(d.via ? {via: {[d.name]: d.via}} : {})}))]}};
     const started = await page.evaluate(r => window.deusExViewer.liveProbe(r), request);
     if (started.objectTrace) {
       const o = started.objectTrace;

@@ -1,7 +1,7 @@
 import {refValue} from '../runtime/script-vm.mjs';
 import {inRenderPass} from '../runtime/render-precision.mjs';
 import {TextureStore} from '../unreal/textures.mjs';
-import {createMeshBinding} from './actor-mesh-sim.mjs';
+import {createMeshBinding,createMeshBindingNow} from './actor-mesh-sim.mjs';
 import {lodFrame} from './actor-mesh-lod.mjs';
 
 /** The simulation side of the player's view model (docs/sim-worker.md step
@@ -44,7 +44,15 @@ export async function createWeaponOverlaySim(runtime,assets,playerSource,{kernel
     if(entry?.mesh===mesh)return entry;
     if(entry)retire(actor,entry);
     if(pending.has(actor))return null;
-    const task=createMeshBinding(runtime,actor,{id:nextId++,originalObjectIndex:index++,kernel,drawActor:true,lighting,layout,textures,lod})
+    const options={id:nextId++,originalObjectIndex:index++,kernel,drawActor:true,lighting,layout,textures,lod};
+    // Canvas.DrawActor draws (and DrawActorSprite stamps, 0x10b25150) the item the player put in hand in the first render after that tick: the
+    // binding is made in this frame when its mesh and skins are resident (createMeshBindingNow, as the actor mesh layer admits a spawned actor),
+    // else they load first and the item is drawn from a later frame (the original's held Multitool0 is stamped from the render after its
+    // ActivateBelt, Stage 5 capture hck1).
+    let now=null;
+    try{now=createMeshBindingNow(runtime,actor,options);}catch(cause){error=cause;return null;}
+    if(now){const made={mesh,binding:now};entries.set(actor,made);onCreate(now.creation);return made;}
+    const task=createMeshBinding(runtime,actor,options)
       .then(binding=>{
         if(disposed||runtime.isReleased(actor)||read(actor,'Mesh')!==mesh||read(actor,'bDeleteMe')){binding.dispose();return;}
         entries.set(actor,{mesh,binding});onCreate(binding.creation);
@@ -99,10 +107,12 @@ export async function createWeaponOverlaySim(runtime,assets,playerSource,{kernel
      * DrawActor submission with its binding's frame record and main-frustum
      * decision, the lighting frame's coordinates for the GPU passes, and the
      * actors the frame draws (render feedback). A submission whose binding is
-     * still being prepared is skipped. `lodInputs` {coords, fx, fov} is the
+     * still being prepared is skipped. `admit(binding)`: whether the canvas
+     * frame's FDynamicSprite::Setup accepts the submission (render feedback;
+     * absent: the drawn groups decide). `lodInputs` {coords, fx, fov} is the
      * master frame's DrawLodMesh inputs (sim-session.mjs), with URender's
      * `settings`; without them the weapon draws at full detail. */
-    frame({frustum,pack=null,lodInputs=null,settings}){
+    frame({frustum,pack=null,lodInputs=null,settings,admit=null}){
       if(disposed)return null;
       if(error)throw error;
       // A reload's collection releases the old generation's weapons.
@@ -123,7 +133,12 @@ export async function createWeaponOverlaySim(runtime,assets,playerSource,{kernel
           // posed bounds; the GPU path's group decisions).
           const decision=binding.passVisibility(frustum);
           draws.push({id:binding.id,wireframe:command.wireframe,clearZ:command.clearZ,record,decision});
-          if(binding.drawnIn(frustum,decision))drawn.push(command.actor);
+          // Render feedback: Canvas.DrawActor -> URender::DrawActor (0x10b262c0) stamps through DrawActorSprite whatever
+          // FDynamicSprite::Setup (0x10b23910) accepts in the canvas frame (the master frame): `admit` runs that Setup (the
+          // caller's occlusion kernel, setup.rs), a whole-mesh bound, where the drawn groups' frustum test is tighter (a held
+          // item rising into view from below the screen: the original's Multitool0 is stamped from its first frame, Stage 5
+          // capture hck1). Without it, the groups three.js draws.
+          if(admit?admit(binding):binding.drawnIn(frustum,decision))drawn.push(command.actor);
           summary.draws++;
         }
       }
