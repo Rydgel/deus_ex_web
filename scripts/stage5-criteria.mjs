@@ -147,10 +147,11 @@ add('5.5.5', '01_NYC_UNATCOIsland', 'kill the commander: TerroristCommander_Dead
   'O1: live trace of the original from the commander\'s death through Mission01.Timer',
   {proof: live('kil1'), weak: 'One way to kill him: a GEP rocket from 300 units (a pistol\'s hits made him flee out of a fixed aim in the rehearsal); the InSpite DataLink (killed after DL_LeaderNotKilled) is not captured.'});
 add('5.5.6', '01_NYC_UNATCOIsland', 'spare the commander: MeetTerrorist (Curious) -> StatueMissionComplete; DL_LeaderNotKilled', 'O1', 'objective-spare',
-  'O1: live trace of the original through the conversation and the timer');
+  'O1: live trace of the original through the conversation and the timer',
+  {proof: live('tC'), weak: 'The conversations batch\'s scene tC (MeetTerrorist\'s Curious choice, then TerroristFollowup): StatueMissionComplete, DL_LeaderNotKilled (MS_DL2_Played) and Mission01\'s pass; the player is placed in the radius.'});
 add('5.5.7', '01_NYC_UNATCOIsland', 'StatueMissionComplete changes the world (Mission01.Timer): UN_maindoor opens, doors unlock, custody and post-mission troops enter, Terrorists die, Paul teleports, turrets and lasers go, cameras silenced', 'O1', 'mission-complete',
   'O1: live trace of the original after the flag with every changed actor per tick',
-  {proof: live('kil1'), weak: 'The pass after the kill only (kil1: the flag at 481, the world change at 541); the conversation route\'s pass (tC) is the conversations batch\'s scene. Watched: 13 pawns (the commander\'s floors, the custody and post-mission troops, Gunther, a SecurityBot3, Paul, two far ones), the seven doors, both turrets, the five lasers and four cameras; every other Terrorist\'s death is compared through its carcass\'s creation.'});
+  {proof: live('kil1', 'tC'), weak: 'Both routes to the flag: the kill (kil1: the flag at 481, the world change at 541) and the Curious conversation (tC, the conversations batch\'s scene). Watched: 13 pawns (the commander\'s floors, the custody and post-mission troops, Gunther, a SecurityBot3, Paul, two far ones), the seven doors, both turrets, the five lasers and four cameras; every other Terrorist\'s death is compared through its carcass\'s creation.'});
 
 // 5.6 Systems interacting ---------------------------------------------------------------------------------------------------------------------
 add('5.6.1', '01_NYC_UNATCOIsland', 'a shot near guards: noise, hostility, pursuit, distress to other pawns, the player hurt and healed with a MedKit', 'O1', 'noise-wakes-guards',
