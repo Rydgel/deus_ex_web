@@ -1215,7 +1215,7 @@ function compare() {
   // name and index) the tracer reads freed memory at its address (Stage 5 tC: ThugMale3's StateNode name blank two ticks after Mission01's Destroy, Gunther's
   // state frame reused as another actor's Dead), while Play reads the object it released. Its release is compared instead: the same index freed at the same u
   // in Play's object log (objects-play<tag>.json, --object-trace), and its rows after that tick are not compared. Without both logs nothing changes.
-  // (the actor is an object of its name at the frozen start: its index in registry-start<tag>.txt, `slot N index N ptr P Class.Name`)
+  // (an actor of the frozen start is matched by its index in registry-start<tag>.txt, `slot N index N ptr P Class.Name`; a later one by its name)
   const callsFile = `${tracePath}.calls.jsonl`, objectsFile = path.join(dir, `objects-play${suffix}.json`), registryFile = path.join(dir, `registry-start${suffix}.txt`);
   const releasedOriginal = new Map(), releasedPlay = new Map();
   if (existsSync(callsFile) && existsSync(objectsFile) && existsSync(registryFile)) {
@@ -1227,17 +1227,30 @@ function compare() {
     for (const line of readFileSync(callsFile, 'utf8').split('\n')) {
       if (!line.includes('"fn":"unhash"') || !line.includes('"ev":"ret"')) continue;
       const record = JSON.parse(line), key = record.ecxName?.toLowerCase();
-      if (key && indexOfName.get(key)?.includes(record.ecxIndex) && !releasedOriginal.has(key)) releasedOriginal.set(key, {u: record.u, index: record.ecxIndex});
+      if (!key || releasedOriginal.has(key)) continue;
+      // an object of the frozen start by its registry index; one spawned later (the GEP's Rocket0 in the routes capture kil1) by its name's first release
+      const atStart = indexOfName.get(key);
+      if (!atStart || atStart.includes(record.ecxIndex)) releasedOriginal.set(key, {u: record.u, index: record.ecxIndex});
     }
-    for (const event of JSON.parse(readFileSync(objectsFile, 'utf8'))) if (event.ev === 'free' && !releasedPlay.has(event.index)) releasedPlay.set(event.index, event.u);
+    // every free of an index, in order: a slot is reused (GObjAvailable is LIFO), so the free that releases a late-bound actor (kil1's Rocket0, spawned at 300)
+    // can follow an earlier occupant's free of the same slot (tick 66)
+    for (const event of JSON.parse(readFileSync(objectsFile, 'utf8'))) if (event.ev === 'free') releasedPlay.set(event.index, [...releasedPlay.get(event.index) ?? [], event.u]);
   }
+  // Play's release of the actor the original released at `released`: the free of the same index at the same u, else the first after the actor's first row
+  const playRelease = (name, released) => {
+    const frees = releasedPlay.get(released.index) ?? [];
+    if (frees.includes(released.u)) return released.u;
+    const first = rows.findIndex(row => row.actors[name]) + 1;
+    return frees.find(u => u >= first) ?? null;
+  };
   for (const name of names) {
     const entry = report.actors[name] = {firstDifference: null, fields: {}};
     const released = releasedOriginal.get(name.toLowerCase());
     if (released) {
       entry.released = released.u;
-      if (releasedPlay.get(released.index) !== released.u) {
-        entry.fields.Released = {tick: Math.min(released.u, releasedPlay.get(released.index) ?? Infinity), original: released.u, play: releasedPlay.get(released.index) ?? null, count: 1};
+      const playU = playRelease(name, released);
+      if (playU !== released.u) {
+        entry.fields.Released = {tick: Math.min(released.u, playU ?? Infinity), original: released.u, play: playU, count: 1};
         entry.firstDifference = entry.fields.Released.tick;
       }
     }
