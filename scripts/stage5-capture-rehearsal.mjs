@@ -47,19 +47,39 @@ c.runtime.writeNamed(info, 'bPlayersOnly', false);
 const p = c.player();
 console.log('placed', r(c.pos(p)), 'physics', c.read(p, 'Physics'), 'zone', c.read(p, 'Region')?.['engine.actor.pointregion.zonenumber'], 'state', c.state(p), 'view', c.read(p, 'ViewRotation'));
 const pawns = option('pawns', 'Terrorist0,ThugMale7,Terrorist10').split(',').map(name => c.actor(name)).filter(Boolean);
+// A scene's devices (validate-stage5-live.mjs `devices`, Name:Class; --devices for an ad-hoc list): stamped every frame as the renderer's feedback would stamp
+// what the player looks at (a headless frame draws no mesh, and a stasis device would never tick), and their state printed with the pawns'. A device the level
+// does not hold yet (a summoned tool) is looked up again every tick.
+const DEVICE_SUMMARY = {SecurityCamera: ['bPlayerSeen', 'bTrackPlayer', 'bEventTriggered', 'triggerTimer'], AutoTurret: ['bActive', 'curTarget', 'HitPoints'],
+  AutoTurretGun: ['HitPoints'], LaserTrigger: ['lastAlarmTime', 'LastHitActor', 'bIsOn'], LaserEmitter: ['HitActor'], ControlPanel: ['bHacking', 'hackStrength'],
+  AlarmUnit: ['bActive', 'alarmInstigator'], Multitool: ['NumCopies', 'bBeingUsed'], Decoration: ['HitPoints'], DeusExMover: ['doorStrength', 'bDestroyed', 'KeyNum'],
+  Robot: ['EMPHitPoints', 'crazedTimer']};
+// (the routes' devices: a door's lock and pick, the arcs, a Lockpick, a button; and what --player-energy/--player-talk compare: the player's Energy and DataLink)
+Object.assign(DEVICE_SUMMARY, {DeusExMover: [...DEVICE_SUMMARY.DeusExMover, 'bLocked', 'lockStrength', 'bPicking', 'bInterpolating'], ElectricityEmitter: ['bIsOn', 'lastHitActor'],
+  DamageTrigger: ['bIsOn', 'damagee'], Projectile: ['bTracking', 'Target', 'Velocity'], Lockpick: ['NumCopies', 'bBeingUsed'], Actor: []});
+const talk = () => ` energy=${short(c.read(p, 'Energy'))} dl=${c.read(p, 'DataLinkPlay')?.name ?? '-'} con=${c.read(p, 'conPlay')?.name ?? '-'}`;
+const devices = (scene?.devices ?? option('devices', '').split(',').filter(Boolean)).map(entry => { const [name, cls] = entry.split(':'); return {name, cls}; });
+const deviceActor = d => c.actor(d.name) ?? c.actors().find(a => a.name.toLowerCase() === d.name.toLowerCase());
+const short = v => typeof v === 'number' ? Math.round(v * 100) / 100 : typeof v === 'boolean' ? Number(v) : v?.name ?? v;
 const regions = ['HealthHead', 'HealthTorso', 'HealthLegLeft', 'HealthLegRight', 'HealthArmLeft', 'HealthArmRight'];
 let last = '';
 for (let tick = 1; tick <= ticks; tick++) {
   for (const line of cmds.get(tick - 1) ?? []) {
+    if (!line) continue;
     const edge = /^@(down|up) (\S+)$/.exec(line);
     if (edge) { c.game.inputKey(edge[2], edge[1] === 'down'); console.log(`> ${line} after ${tick - 1}`); } else exec(line);
   }
+  for (const d of devices) { const a = deviceActor(d); if (a && !c.gone(a)) c.watched.add(a); }
+  // (a device the scene destroys, a spent Lockpick, leaves the stamped set: the renderer draws no destroyed actor, and a released one has no memory)
+  for (const a of c.watched) if (c.runtime.isReleased(a) || !c.level().actors.includes(a)) c.watched.delete(a);
   try { c.frames(1); } catch (error) { console.log(`tick ${tick}: ${error.message.split('\n')[0]}`); break; }
   // (a pawn's NumCarcasses when it has seen a body, and its SeekType while it seeks: 1 sound, 2 sight, 3 guess, 4 carcass, ScriptedPawn.ESeekType)
   const line = pawns.map(a => c.gone(a) ? `${a.name}:gone` : `${a.name}:${c.state(a).split('.').pop()}/${c.read(a, 'Enemy')?.name ?? '-'}/h${c.read(a, 'Health')}`
     + `${c.read(a, 'NumCarcasses') ? `/bodies${c.read(a, 'NumCarcasses')}` : ''}${/seeking/i.test(c.state(a)) ? `/seek${c.read(a, 'SeekType')}` : ''}`).join(' ')
     + ` | player h${c.read(p, 'Health')} [${regions.map(n => c.read(p, n)).join(',')}] ${c.state(p).split('.').pop()} inHand=${c.read(p, 'inHand')?.name ?? '-'}`
-    + ` frob=${c.read(p, 'FrobTarget')?.name ?? '-'} tracers=${c.byClass('Tracer').length}`;
+    + ` frob=${c.read(p, 'FrobTarget')?.name ?? '-'} tracers=${c.byClass('Tracer').length}${talk()}`
+    + (scene?.flags ?? option('flags', 'StatueAlarmTriggered').split(',')).filter(Boolean).map(f => ` ${f}=${Number(c.flag(f.toLowerCase()))}`).join('')
+    + devices.map(d => { const a = deviceActor(d); return !a ? ` ${d.name}:-` : c.gone(a) ? ` ${d.name}:gone` : ` ${d.name}:${c.state(a).split('.').pop()}/${(DEVICE_SUMMARY[d.cls] ?? []).map(n => short(c.read(a, n))).join('/')}`; }).join('');
   if (line !== last || tick % 60 === 0) { console.log(tick, line); last = line; }
 }
 for (const a of pawns) console.log('end', a.name, c.gone(a) ? 'gone' : r(c.pos(a)));

@@ -1558,7 +1558,10 @@ export class ScriptRuntime {
     if((classKey==='core.class'||classKey==='native:core.class')&&
       this.classLoader?.graph.packageAssets.has(packageName))
       object=this.loadGraphDynamicObject(request);
-    else if(this.dynamicLoadGraph?.ownsPackage(packageName))object=this.dynamicLoadGraph.load(request);
+    else if(this.dynamicLoadGraph?.ownsPackage(packageName)){
+      object=this.dynamicLoadGraph.load(request);
+      this.modelPreparedDynamicLoad(this.dynamicLoadGraph.lastEvents);
+    }
     else if(this.classLoader?.graph.packageAssets.has(packageName))object=this.loadGraphDynamicObject(request);
     else throw new DynamicLoadObjectBoundaryError(
       `DynamicLoadObject package linker is not prepared: ${request.name}`,
@@ -1567,6 +1570,31 @@ export class ScriptRuntime {
       throw new DynamicLoadObjectBoundaryError(`DynamicLoadObject class mismatch for ${request.name}`,
         'DYNAMIC_LOAD_OBJECT_CLASS_MISMATCH',{path:request.name,classRef:request.classRef});
     return object;
+  }
+  /** The registry slots a prepared route's StaticLoadObject takes in the original (original-object-index.mjs, as the speech audio's load in
+   * script-conplay-live.mjs): GetPackageLinker's first load of a package creates its UPackage (ResolveName, create) and its LinkerLoad; CreateExport
+   * creates the export the first time; EndLoad's Preload of a Texture serializes its Palette reference, whose CreateExport is one more object. The
+   * Island capture kil1 (tick 481: HUDInfoLinkDisplay.SetSpeaker's DynamicLoadObject("InfoPortraits.AlexJacobson")) records exactly
+   * Package InfoPortraits, LinkerLoad, Texture AlexJacobson, Palette Palette50. A texture's other references (DetailTexture, MacroTexture, BumpMap,
+   * AnimNext) would load the same way: none is modeled, and a portrait route that reaches one is not covered. */
+  modelPreparedDynamicLoad(events){
+    const original=this.actorLifecycle?.construction?.registry?.original;
+    if(!original?.packages)return;
+    for(const event of events??[]){
+      if(event.op==='CreateLinkerLoad')original.loadPackage(event.root?.name);
+      else if(event.op==='CreateExport'&&event.existing?.asset){
+        const object=event.existing,asset=object.asset,cls=asset.pkg.exports[object.index-1]?.className;
+        if(!original.loadExport(object,cls,object.name)||cls!=='Texture')continue;
+        const palette=readObject(asset.pkg,asset.bytes,object.index).values.Palette;
+        if(!(palette>0))continue;
+        const entry=asset.pkg.exports[palette-1],key=`${asset.name}.${entry.path}`.toLowerCase();
+        // the canonical object when it was resolved, else one stable holder per export (loadExport counts an object once)
+        this.preparedExportHolders??=new Map();
+        const holder=this.objects.objects.get(key)??this.preparedExportHolders.get(key)??{key};
+        this.preparedExportHolders.set(key,holder);
+        original.loadExport(holder,entry.className,entry.name);
+      }
+    }
   }
   /** StaticLoadObject over the shared graph: its linkers, CreateExport,
    * Preload/PostLoad and a load scope around Play's never-flushed queue.
