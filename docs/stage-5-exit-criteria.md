@@ -535,6 +535,76 @@ item (the actor mesh layer admitted a spawned mesh asynchronously, and the `Deat
 was Play's own, and a far listener's check moved the player's `ShowSelf` draw from tick 12 to tick 4. `live-acceptance.mjs` now traces the unwatched `ScriptedPawn`s with their load
 fields only (`Sight`, `TRate`, `TCount`, `LRT`; watch<tag>.json `loadPawns`), which the replay writes and does not compare; the second capture's draws are equal throughout.
 
+### Conversation captures: the Island's conversations, choices and flags (2026-10-18)
+
+Rows 5.4.3 to 5.4.7 and 5.6.6 now have O1 scenes: the original plays an Island conversation through its own keys, traced per tick, and Play replays the same inputs.
+They are `SCENES` of `scripts/validate-stage5-live.mjs` with `conversation: true`; `--print-capture` gives each capture command and `--scene <tag>` is the proof check.
+
+**Method.** The player is placed in the frozen phase inside the conversation's radius (the combat scenes' `ghost`, SET of `Location`, `walk`, SET of `ViewRotation`), or later in
+a hold. Enter during a third-person speech skips it (`ConWindowActive.VirtualKeyPressed`, then `ConPlay.PlayNextEvent`); a choice is ArrowDown edges, then Enter. A frob-only
+follow-up is `ParseRightClick` on the pawn. A conversation scene's trace adds the player's mouth channel and what a conversation gives and takes (`live-acceptance.mjs --player-blend
+--inventory`: every watched pawn's and the player's Inventory chain, the player's `SkillPointsAvail`, `Credits`, `conPlay`, `FirstGoal`, `FirstImage`, and each speaker's
+`nextPhoneme`/`lastPhoneme`, a new FString field type `str` in `tools/dx-live-win.c`). The replay feeds the speakers' measured mouth letters (`conversation-acceptance.mjs phonemes`,
+now from `nextPhoneme`). The capture dumps the player's `FlagBase` at the frozen start and the end hold (`--dump-flags`, `tools/dump-flags-win.c`), and the check needs every flag
+equal at the end: name, type, value, expiration and the default expiration. A `watch` list names the pawns traced per tick; every other pawn is traced with its load fields only. Every AI
+event, every object creation (a loaded `Sound` now also by its export name: which bark or speech line was loaded) and the stream draws of the whole level are still compared.
+`scripts/stage5-capture-rehearsal.mjs --scene <tag>` prints the conversation, its event, choices, skill points, inventory and flags whenever they change.
+
+| Scene | Conversation and branch | Ticks | Replay in Play |
+| --- | --- | ---: | --- |
+| `pG` | MeetPaul at the dock: the GEP gun (second choice) | 1150 | PASS: 23 actors, 1,678 AI events, 1,392 creations; the GEP gun and its rockets, the Liberty Island image and three goals; 1 flag |
+| `pR` | MeetPaul: the sniper rifle (first) | 1150 | PASS: 23 actors, 1,680 AI events, 1,394 creations; 1 flag |
+| `pX` | MeetPaul: the mini crossbow (third) | 1150 | queued |
+| `fT` | MeetFilben: "You can trust me." (the NanoKey, `FilbenGaveKey`, 150 skill points, the commander's image) | 1200 | PASS: 20 actors, 1,766 AI events, 1,270 creations; 4 flags |
+| `fM` | `fT`'s inputs, then MeetFilben2 by a frob fan: its GaveKey branch | 1250 | queued |
+| `fN` | MeetFilben: "I can't promise..." (`FilbenGaveKey` false), then MeetFilben2 without the key | 1300 | queued |
+| `gP` | GuntherRescued after the wall button: the carried pistol given (`GuntherRespectsPlayer`, `GuntherAttacks`) | 1350 | PASS: 22 actors, 1,938 AI events, 1,275 creations; 4 flags |
+| `gN` | GuntherRescued without a weapon: "First thing is to get you out of here." | 1150 | queued |
+| `gA` | `AllianceTrigger0` and `OrdersTrigger6` touched by a landing at the button, then the button: the freed Gunther fights `Terrorist18` | 900 | PASS: 22 actors, 1,486 AI events, 1,127 creations; 3 flags (after fix 1 below) |
+| `tC` | MeetTerrorist, Curious: `DL_LeaderNotKilled`, Mission01's mission-complete pass, TerroristFollowup by frob | 1300 | PASS: 24 actors, 1,911 AI events, 1,523 creations; 7 flags (after fixes 4 and 6) |
+| `tA` | MeetTerrorist, Aggressive (the commander attacks), then MeetFilbenAfterStatue at Filben | 950 | queued |
+| `oV` | TerroristsOverheard (Amos and Jackson, first person, from behind a wall) to `KnowsShipment`, then MoleConvos: its KnowsShipment branch, the 10 mm clip bought (175 credits), `BumFemaleWanders` | 1300 | PASS: 26 actors, 1,883 AI events, 1,307 creations; 7 flags (after fix 3) |
+| `oT` | TopTerroristsOverheard (Terrorist9 and Terrorist8, first person) from a hidden place | 1200 | queued (a first capture stopped at tick 1164: the wait budget) |
+| `kB` | eight Terrorists killed (`Tantalus`) until Mission01.Timer sets `M01PlayerAggressive`, then TrooperCongratulation reads it | 700 | queued |
+
+**What the original does that the scenes had to follow** (DeusEx.u source, each confirmed by a capture):
+
+* A speech that runs out restricts input for 0.5 s (`SpeechFinished`): an Enter there is dropped. `GetActiveConversation` refuses a conversation with the same NPC less than 1 s after
+  `LastConEndTime`, which `EndConversation` sets when the `ConPlay` terminates. A radius conversation also waits 5 s after a first-person conversation with that NPC
+  (`lastFirstPersonConvoTime`) and 10 s after a third-person one.
+* The third-person window closes about 11 ticks after the conversation's end event in the original: the tracer's real-time window frames run between the level ticks. The headless
+  rehearsal takes about 130. Every input timed after a conversation's end uses the original's figure (`pG` ends at 986, the rehearsal at 1022; `fT` at 469, the rehearsal at 589).
+* Filben wanders off at the end of MeetFilben (`HarleyStartsToWander`) on a path the load's stream chooses: east in one capture, south-east out of the frob line in another. MeetFilben2
+  is therefore started by a fan of right-button frobs from the end of the 1 s guard (`fM`, `fN`).
+* A summoned weapon that lands faster than 200 units/s is a `LoudNoise` of radius 768 (`DeusExWeapon.PlayLandingSound`): near Gunther's cell it brings `Terrorist18`, so `gP` summons
+  the pistol at the map's start. A console placement touches no trigger; a placement 64 units above the floor touches the triggers at its landing (`gA`: `AllianceTrigger0` and
+  `OrdersTrigger6`, after which the freed Gunther fights `Terrorist18` and GuntherRescued never starts).
+* `Pawn.LipSynch` applies the first letter of a speech with tween time 0 (a stale `animTimer[3]`), so an `X` at a speech's start does not show on the blend channel: the mouth letters
+  are measured from `nextPhoneme` itself.
+* A first `kA` capture (eight `Tantalus` kills, then the player left at the last kill site) had the player killed by the Terrorists there before tick 361, so TrooperCongratulation
+  never started; `kB` moves the player away six ticks after the last kill.
+
+**What the replays found in Play** (each fixed; every stored scene was rerun after the last):
+
+1. **`AICanSee` with a skipped argument** (`gA`, general). `execAICanSee` (Engine.dll 0x103c8270) pre-stores every slot before stepping its token: `Visibility` 1.0f
+   (0x3f800000), then the flags 1, 1, 0, 1. An `EX_Nothing` argument keeps the default, as an omitted tail does. Play read a skipped visibility as NaN and returned 0, so every
+   `AICanSee(x, , ...)` call failed: FindBestEnemy's `CheckEnemyParams` (`AICanSee(checkPawn, , false, false, true, true)`) never took a new enemy, and the order, beam and
+   Animal food tests never saw. In `gA` the original's Gunther ends a `MoveTo` at tick 676, finds `Terrorist30` 59 units away, closer than his enemy `Terrorist18` (Alerting,
+   201 units after the 0.75 factor), and switches to it, with one more stream draw that tick; Play kept `Terrorist18`, and now switches with the same draws. The oracle had tested the worker
+   0x103c6ab0 with explicit arguments only. Both the JS body and `percep.rs` now take the defaults; `validate-perception-kernel` and `validate-pawn-perception` pass.
+2. **`AIProcess`'s replay stop** (`gA`). The replay feeds the original's `aiFirst` at the tick's exit as a stop. A stop at the first live receiver after the start is the
+   cleanup's advance, not the budget, and the ring is visited whole (`aievent.rs`): `Terrorist30`'s `LoudNoise` had come one tick late, at 487.
+3. **The frames of a hold** (`oV`). The original renders frames while the next line of a hold is typed, so a placement's `set Location` followed by `set ViewRotation` stamps the
+   pawns in view between the two. `live-probe.mjs` now renders after each command of a hold (`HarleyFilben0`'s `LastRenderTime` at 481).
+4. **A destroyed watched actor** (`tC`). After `UnhashObject` the tracer reads freed memory (Mission01's pass destroys `ThugMale3` and Gunther), so the check compares the release tick
+   (the original's unhash of the actor's registry index against Play's free of the same index) and no row after it.
+5. **The mouth letters** (`gP`): measured from `nextPhoneme` (item above), not derived from the blend channel.
+6. **The portrait's first load** (`tC`): `HUDInfoLinkDisplay.SetSpeaker`'s `DynamicLoadObject("InfoPortraits.AlexJacobson")` creates `Package InfoPortraits`, its `LinkerLoad`, the
+   `Texture` and its `Palette` at the DataLink's first speech (tick 841). The registry model of a prepared load is the routes batch's (`kil1`), applied here unchanged.
+
+**What stays uncaptured** (named in the rows' `weak`): three of GuntherRescued's five give choices (assault gun, stealth pistol, knife) and NothingChoice's first answer
+(GiveNothingNicely); Filben's two barks that read `FilbenGaveKey`; PaulCongratulations (`PaulWandering`). Every approach is placed and every speech skipped, as the harness cannot walk.
+
 ## Scoreboard (2026-10-18, after a spawned actor's first frame)
 
 `node scripts/validate-stage5-acceptance.mjs --census .work/stage5-census-2026-10-18-mesh.json --report .work/stage5-gate-2026-10-18-mesh.json` on a fresh census of the merged code
