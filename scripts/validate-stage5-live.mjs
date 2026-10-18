@@ -100,10 +100,12 @@ const ROUTE_SCENES = {
     devices: ['DeusExMover2', 'DeusExMover12', 'DeusExMover6', 'DeusExMover22', 'DeusExMover23'].map(n => `${n}:DeusExMover`)},
   // 5.5.2 broken (and 5.3.10's breakable door): the back entrance DeusExMover2 (bBreakable, doorStrength 0.5, minDamageThreshold 50) hit by a GEP rocket from
   // 336 units (the explosion's HurtRadius: DeusExMover.TakeDamage, doorStrength to 0, BlowItUp: fragments, bDestroyed); the MedicalBots behind it watched with
-  // every pawn.
-  dor3: {map: '01_NYC_UNATCOIsland', ticks: 600, early: PLACE(7947.6, 530.4, -96, 57344),
-    cmds: `20:summon DeusEx.WeaponGEPGun|${AIM(50, 57344, -10130)}|90:ParseRightClick|130:ActivateBelt 1|${AIM(240, 24576, -837)}|${SHOTS([300])}`,
-    devices: ['DeusExMover2:DeusExMover']},
+  // every pawn. Then 5.5.1's third half: the player placed 300 units from the StatueRuinDoors and a second rocket at DeusExMover12 (bBreakable false:
+  // TakeDamage changes nothing).
+  dor3: {map: '01_NYC_UNATCOIsland', ticks: 900, early: PLACE(7947.6, 530.4, -96, 57344),
+    cmds: `20:summon DeusEx.WeaponGEPGun|${AIM(50, 57344, -10130)}|90:ParseRightClick|130:ActivateBelt 1|${AIM(240, 24576, -837)}|${SHOTS([300])}`
+      + `|${MOVE(500, 318.6, 241.4, -88, 57344)}|${SHOTS([600])}`,
+    devices: ['DeusExMover2', 'DeusExMover12', 'DeusExMover6', 'DeusExMover22', 'DeusExMover23'].map(n => `${n}:DeusExMover`)},
   // 5.5.4, the water route's east end in the ruins: ControlPanel1 (UnTriggerEvent LibElectric) hacked with a Multitool from beside the arcs; first a short
   // drop into the arcs (the three ElectricityEmitters: 'Shocked' 20 a hit; DamageTrigger1 under them: EMP 2 a touch, the player's Energy), out again, the hack
   // (HackableDevices.Timer, HackAction: UnTrigger LibElectric turns the emitters and the trigger off), the drop again (nothing), and Button2 (Event fork) raises
