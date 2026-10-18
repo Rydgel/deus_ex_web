@@ -142,8 +142,9 @@ if (flag('player-gear')) PLAYER_FIELDS.push(['Weapon', 'Weapon', 976, 'obj'], ['
   ['FrobTgt', 'FrobTarget', 2536, 'obj'], ['bFire', 'bFire', 1206, 'u8'], ['PHealth', 'Health', 1064, 'i32'], ['FrobTime', 'FrobTime', 2540, 'f']);
 // --player-health: the player's hit regions (Pawn.HealthHead..HealthArmRight, the linked offsets of Play's class graph): where an NPC's shots land
 // (DeusExPlayer.TakeDamage/HandleDamage) in the combat scenes of the Stage 5 gate (docs/stage-5-exit-criteria.md).
-if (flag('player-health')) PLAYER_FIELDS.push(['HHead', 'HealthHead', 1376, 'i32'], ['HTorso', 'HealthTorso', 1380, 'i32'], ['HLegL', 'HealthLegLeft', 1384, 'i32'],
-  ['HLegR', 'HealthLegRight', 1388, 'i32'], ['HArmL', 'HealthArmLeft', 1392, 'i32'], ['HArmR', 'HealthArmRight', 1396, 'i32']);
+const HIT_REGION_FIELDS = [['HHead', 'HealthHead', 1376, 'i32'], ['HTorso', 'HealthTorso', 1380, 'i32'], ['HLegL', 'HealthLegLeft', 1384, 'i32'],
+  ['HLegR', 'HealthLegRight', 1388, 'i32'], ['HArmL', 'HealthArmLeft', 1392, 'i32'], ['HArmR', 'HealthArmRight', 1396, 'i32']];
+if (flag('player-health')) PLAYER_FIELDS.push(...HIT_REGION_FIELDS);
 // --player-blend: the player's blend channel 0 (the mouth animation Pawn.LipSynch plays while JC speaks in a conversation): BSeq0, BFrame0, BRate0, BTween0 of FIELDS.
 if (flag('player-blend')) PLAYER_FIELDS.push(...FIELDS.filter(f => ['BSeq0', 'BFrame0', 'BRate0', 'BTween0'].includes(f[0])));
 // Load-time random state of the PawnGenerators (PigeonGenerator, SeagullGenerator, ...): PostBeginPlay draws TryTimer
@@ -329,6 +330,20 @@ async function original() {
     if (remaining) { console.log(`KillAll ${killed}: ${remaining} still in the level`); process.exitCode = 4; return; }
     console.log(`KillAll ${killed}: none left`);
   }
+  // Likewise an --early-cmds `set DeusEx.JCDentonMale Health<Region> N` (the death scene's pre-lowered HealthTorso and HealthHead): read back from the
+  // live player (dump-actor-win; the JCDentonMale whose Player is set), typed once more if the console lost it, else the run stops (exit 4).
+  for (const [, property, wanted] of earlyCommands().map(line => /^set DeusEx\.JCDentonMale (Health(?:Head|Torso|LegLeft|LegRight|ArmLeft|ArmRight)) (-?\d+)$/i.exec(line)).filter(Boolean)) {
+    const field = HIT_REGION_FIELDS.find(f => f[1].toLowerCase() === property.toLowerCase());
+    const read = () => {
+      const out = execFileSync(game.WINE, [path.join(root, 'ad/build/dump-actor-win.exe'), 'JCDentonMale', 'Player:0x5d4:u32', `V:0x${field[2].toString(16)}:u32`], {encoding: 'utf8', env: process.env});
+      const live = out.split('\n').map(line => /^JCDentonMale \S+ Player=0x([0-9a-f]+) V=(\S+)/.exec(line)).filter(m => m && m[1] !== '0');
+      return live.length === 1 ? Number(live[0][2]) | 0 : null;
+    };
+    if (read() !== Number(wanted)) post([`cmd set DeusEx.JCDentonMale ${property} ${wanted}`, 'sleep 800']);
+    const now = read();
+    if (now !== Number(wanted)) { console.log(`${property}: the live player holds ${now}, not ${wanted}`); process.exitCode = 4; return; }
+    console.log(`${property}: ${now}`);
+  }
   const generators = flag('no-generators') ? [] : wine('list', 'PawnGenerator').split('\n').map(line => /^\S+ (\S+) slot=/.exec(line)?.[1]).filter(Boolean);
   const watchOption = option('watch', 'auto');
   let names;
@@ -466,6 +481,7 @@ async function original() {
   rmSync(`${tracePath}.resume`, {force: true});
   rmSync(`${tracePath}.go`, {force: true});
   rmSync(`${tracePath}.strobe`, {force: true});
+  rmSync(`${tracePath}.ended`, {force: true});
   // --registry: the original's GObjObjects (rows, addresses and the free list GObjAvailable) at the frozen start, before the tracer
   // attaches, and again at the end while the level is held (registry-start/-end<tag>.txt; docs/object-index-captures.md "Runtime spawns").
   const registryDump = label => {
@@ -491,7 +507,9 @@ async function original() {
   const finished = new Promise(resolve => child.on('exit', resolve));
   const started = Date.now();
   const handled = new Set();
-  while (!/paused after/.test(log) && child.exitCode === null && Date.now() - started < 600000) {
+  // --wait-seconds s (default 600): how long the tracer may run (a long trace under the breakpoints is ~0.12 s a tick on the Mac, more when it is loaded).
+  // The tracer ends on its own when the game leaves the level (tools/dx-live-win.c: UGameEngine::Tick's client travel, `<trace>.ended`): no pause then.
+  while (!/paused after/.test(log) && child.exitCode === null && Date.now() - started < Number(option('wait-seconds', 600)) * 1000) {
     for (const match of log.matchAll(/^held after (\d+) unfrozen ticks/gm)) {
       const n = Number(match[1]);
       if (handled.has(n)) continue;
@@ -504,6 +522,10 @@ async function original() {
     await new Promise(r => setTimeout(r, 300));
   }
   console.log(log.trim());
+  // The level's end (the Dying player's OPEN DXONLY, browsed at the next engine tick): the tracer wrote the unfrozen ticks the level ran to
+  // <trace>.ended and detached; the game is on the next map, so there is no held level to dump or shoot.
+  const ended = /^level ended after (\d+) unfrozen ticks/m.exec(log);
+  if (ended) console.log(`the level ended after ${ended[1]} unfrozen ticks (${existsSync(`${tracePath}.ended`) ? 'stored' : 'NOT stored'}: ${path.relative(root, `${tracePath}.ended`)})`);
   if (/paused after/.test(log)) { registryDump('end'); flagsDump('end'); }
   if (option('shot', null) && /paused after/.test(log)) {
     // The level is held at the last replayed tick (the tracer returns from ULevel::Tick); the game still draws.
@@ -1006,12 +1028,16 @@ async function play() {
     const started = await page.evaluate(r => window.deusExViewer.liveProbe(r), request);
     if (started.objectTrace) console.log(`object trace: the run's own indices for ${started.objectTrace.measured} pre-placed actors and the player (${started.objectTrace.player})`);
     const touch = [], rows = [], nav = [], script = [], setup = [], commandLog = [], events = [], objects = [], sounds = [];
-    let stalls = 0;
+    let stalls = 0, levelEnd = null;
+    rmSync(path.join(dir, `play-level-end${suffix}.json`), {force: true});
     while (rows.length < trace.length) {
       await frames(20);
       const taken = await page.evaluate(() => window.deusExViewer.liveProbe({take: true}));
       if (taken.debug?.length) { (globalThis.__debugRows ??= []).push(...taken.debug); } nav.push(...(taken.nav ?? [])); touch.push(...(taken.touch ?? [])); events.push(...(taken.events ?? [])); objects.push(...(taken.objects ?? [])); sounds.push(...(taken.sounds ?? [])); script.push(...(taken.script ?? [])); setup.push(...(taken.setup ?? [])); commandLog.push(...(taken.commands ?? [])); for (const line of taken.stackLog ?? []) console.log(line);
-      if (taken.rows.length) { rows.push(...taken.rows); stalls = 0; } else if (++stalls > 40) throw new Error(`the replay stopped at tick ${rows.length}${errors.length ? `: ${errors.slice(0, 3).join(' | ')}` : ''}${(await page.evaluate(() => document.querySelector('#toast')?.textContent ?? '').catch(() => '')).slice(0, 600)}`);
+      if (taken.rows.length) { rows.push(...taken.rows); stalls = 0; }
+      // the level's end (game.mjs clientTravel: an OPEN's URL browsed after the next tick): Play stops there; every row before it was taken above
+      if (taken.levelEnd) { levelEnd = taken.levelEnd; break; }
+      if (!taken.rows.length && ++stalls > 40) throw new Error(`the replay stopped at tick ${rows.length}${errors.length ? `: ${errors.slice(0, 3).join(' | ')}` : ''}${(await page.evaluate(() => document.querySelector('#toast')?.textContent ?? '').catch(() => '')).slice(0, 600)}`);
     }
     // the boundaries Play recorded instead of running during the replay (docs/visual-acceptance.md, record-only audit)
     {   // the player's FlagBase at the end of the replay (the original's: flags-end<tag>.txt from --dump-flags)
@@ -1019,10 +1045,13 @@ async function play() {
       writeFileSync(path.join(dir, `flags-play-end${suffix}.json`), JSON.stringify(flags));
       console.log(`flags at the end: Play defaultExpiration ${flags.defaultExpiration}, ${flags.entries.length} flags${flags.entries.length ? ` (${flags.entries.map(e => e.name).join(' ')})` : ''}`);
     }
+    // (play-level-end<tag>.json: the tick Play's level ended after, or null; validate-stage5-live.mjs compares it with the original's <trace>.ended)
+    writeFileSync(path.join(dir, `play-level-end${suffix}.json`), JSON.stringify(levelEnd));
+    if (levelEnd) console.log(`the level ended after ${levelEnd.tick} replayed ticks (client travel to ${levelEnd.url}); the trace holds ${trace.length}${existsSync(`${tracePath}.ended`) ? `, the original's level ended after ${readFileSync(`${tracePath}.ended`, 'utf8').trim()}` : ''}`);
     const deferred = (await page.evaluate(() => window.deusExViewer.liveProbe({deferred: true}))).deferred ?? [];
     writeFileSync(path.join(dir, `deferred${suffix}.json`), JSON.stringify(deferred));
     console.log(`${deferred.length} recorded boundaries: ${deferred.slice(0, 12).join('; ')}`);
-    writeFileSync(playPath, JSON.stringify({map, ghost, initial: started.initial, rows, errors, commands: commandLog}));
+    writeFileSync(playPath, JSON.stringify({map, ghost, initial: started.initial, rows, errors, commands: commandLog, levelEnd}));
     for (const c of commandLog) if (c.draws) console.log(`  ${c.draws.length} draws in ${c.text}:\n    ${c.draws.join('\n    ')}`);
     for (const c of commandLog) console.log(`command after ${c.after} ticks: ${c.text} -> ${c.error ? `ERROR ${c.error}` : JSON.stringify(c.output)}`);
     if (globalThis.__debugRows) writeFileSync(path.join(dir, 'debug-play.json'), JSON.stringify(globalThis.__debugRows));

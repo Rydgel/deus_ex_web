@@ -186,7 +186,7 @@ export function liveProbe(game, args = {}) {
       const call = [name, 0];
       runtime.callFunction(runtime.lookup(base, 'DeleteFlag'), base, call.length, index => call[index]);
     }
-    out.flags = { defaultExpiration: base.defaultExpiration, entries: [...base.entries.values()].map(entry => ({ name: entry.name, value: entry.value ? 1 : 0, expiration: entry.expiration })) };
+    out.flags = { defaultExpiration: base.defaultExpiration, entries: [...base.entries.values()].map(entry => ({ name: entry.name, ...(entry.type ? { type: entry.type, value: entry.value } : { value: entry.value ? 1 : 0 }), expiration: entry.expiration })) };
   }
   if (args.population) {
     const spawned = /^(Skill|Aug|NanoKey|ColorTheme|Shadow|ParticleProxy|Laser|Flare|Cigarettes|Candybar|Weapon|Mission|GameReplicationInfo|PlayerReplicationInfo|JCDenton|Mutator|DeusExGameInfo|PickupDistributor|AutoTurretGun|BarkManager|ParticleGenerator|DataVault|Credits|Ammo|BioelectricCell|Medkit|Binoculars|Lockpick|Multitool|LAM|Liquor|Soda|Sodacan|Fruit|Vice)/;
@@ -334,6 +334,8 @@ export function liveProbe(game, args = {}) {
     for (const group of actors) for (const [name, actor] of group.items) if (!actor && !group.late) throw new Error(`liveProbe: no actor ${name}`);
     const state = game.liveReplay = {
       ticks, hold, warm, index: 0, rows: [], cursor: 0, current: null, preFrees: args.objectTrace?.pending ?? null,
+      // the level's end: {tick, url, ...} when UGameEngine::Tick's client travel (game.mjs clientTravel) left the level after that many replayed ticks
+      levelEnd: null,
       // console commands typed into the original between two ticks ({after, text}: after that many ticks), run here the same way through the
       // recovered console command chain (APlayerPawn::execConsoleCommand) before the next tick; their results are returned by `take` as `commands`
       commands: commands.map(command => ({ ...command })), commandLog: [], canSee: args.replay.canSeeProbe ?? null,
@@ -518,6 +520,7 @@ export function liveProbe(game, args = {}) {
     if (replay.stackLog?.length) out.stackLog = replay.stackLog.splice(0);
     out.rows = replay.rows.slice(replay.cursor); replay.cursor = replay.rows.length;
     out.index = replay.index;
+    if (replay.levelEnd) out.levelEnd = replay.levelEnd;
     if (runtime.navTrace) out.nav = runtime.navTrace.events.splice(0);
     if (runtime.scriptTrace) out.script = runtime.scriptTrace.events.splice(0);
     if (runtime.touchEvents) out.touch = runtime.touchEvents.splice(0);
@@ -525,7 +528,7 @@ export function liveProbe(game, args = {}) {
     if (runtime.objectLog) out.objects = runtime.objectLog.splice(0);
     if (runtime.soundLog) out.sounds = runtime.soundLog.splice(0);
   }
-  if (args.status && replay) out.status = { index: replay.index, of: replay.ticks.length };
+  if (args.status && replay) out.status = { index: replay.index, of: replay.ticks.length, levelEnd: replay.levelEnd };
   // deferred: the boundaries Play recorded instead of running (player.unimplementedPhysicsEffects: sounds of emitters without a measured
   // object index, trigger scripts that reached an unsupported native, ...); the record-only audit's dynamic side.
   if (args.deferred) out.deferred = [...game.player.unimplementedPhysicsEffects];

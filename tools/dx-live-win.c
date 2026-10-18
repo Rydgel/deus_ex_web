@@ -79,6 +79,15 @@
  *       `ticks` unfrozen ticks the level's Tick is skipped (a return from
  *       the function at its entry: the level is paused, with clock and
  *       animations held) until the `<out>.resume` file appears.
+ *       The level's end: a breakpoint in UGameEngine::Tick's client travel
+ *       (0x103908bd, the branch taken when Client->Viewports(0)->TravelURL is
+ *       not empty, after the levels' Ticks and before Browse and the client's
+ *       render) is hit when the game leaves the level (the Dying player's
+ *       `OPEN DXONLY`: UGameEngine::Exec's SetClientTravel stores the URL, the
+ *       next engine tick browses). The number of unfrozen ticks the level ran
+ *       is written to `<out>.ended`, "level ended after N unfrozen ticks" to
+ *       stderr, and the tracer detaches before Browse (no record of the save,
+ *       the unload or the next map's load).
  *       Config lines (whitespace separated; # comments):
  *         out <file>              JSON lines
  *         player <name>           the name prefix of the live PlayerPawn (JCDentonMale), whose XLevel is the level
@@ -149,6 +158,11 @@
 #define TICK_ENTRY 0x103a51a0u
 #define TICK_RET   0x103a5bafu
 #define ACTOR_TICK 0x103a1aa0u   /* AActor::Tick entry: ECX is the actor */
+/* UGameEngine::Tick (body 0x1038fe90): the levels tick at 0x10390154..0x103901a3 (GLevel, GEntry, the viewport actor's level: vtable +0x5c),
+   the client travel test reads Client(+0x44)->Viewports(0)->TravelURL (+0xa0) at 0x1039088e and skips to 0x10390d5a when it is empty
+   (appStricmp at 0x103908ac); 0x103908bd (`mov esi,[ebp-0x24]`, not a call) is the first instruction of the travel branch, which ends in
+   Browse (vtable +0xa8, 0x10390c01); the client's render (UClient::Tick, vtable +0x64) comes at 0x1039117b. */
+#define CLIENT_TRAVEL 0x103908bdu
 
 typedef LONG (NTAPI *NtQueryInformationThread_t)(HANDLE, ULONG, PVOID, ULONG, PULONG);
 typedef struct { LONG ExitStatus; PVOID TebBaseAddress; PVOID ClientIdProcess; PVOID ClientIdThread; ULONG_PTR AffinityMask; LONG Priority; LONG BasePriority; } THREAD_BASIC_INFO;
@@ -488,7 +502,7 @@ static void late_bind(void) {
 
 /* ---------------- debugger loop ---------------- */
 typedef struct { uintptr_t address; unsigned char original; } Breakpoint;
-static Breakpoint bp[3];
+static Breakpoint bp[4];   /* ULevel::Tick entry, its return, AActor::Tick (actor-trace), the client travel */
 static void bp_arm(Breakpoint *b, uintptr_t address) {
   b->address = address; read_mem(address, &b->original, 1);
   unsigned char cc = 0xCC; write_mem(address, &cc, 1); FlushInstructionCache(process, (LPCVOID)address, 1);
@@ -772,7 +786,7 @@ static int finish_call_step(void) {
  * other events continue as the game's own. Runs until the queue stays empty. */
 static void drain_and_disarm(int *disarmed) {
   if (*disarmed) return;
-  bp_disarm(&bp[0]); bp_disarm(&bp[1]); if (bp[2].address) bp_disarm(&bp[2]); *disarmed = 1;
+  bp_disarm(&bp[0]); bp_disarm(&bp[1]); if (bp[2].address) bp_disarm(&bp[2]); if (bp[3].address) bp_disarm(&bp[3]); *disarmed = 1;
   calls_set(0);
   DEBUG_EVENT ev; int quiet = 0;
   while (quiet < 3) {
@@ -783,7 +797,7 @@ static void drain_and_disarm(int *disarmed) {
       DWORD code = ev.u.Exception.ExceptionRecord.ExceptionCode;
       uintptr_t where = (uintptr_t)ev.u.Exception.ExceptionRecord.ExceptionAddress;
       HANDLE th = thread_of(ev.dwThreadId);
-      if (code == EXCEPTION_BREAKPOINT && (where == bp[0].address || where == bp[1].address || (bp[2].address && where == bp[2].address)) && th) {
+      if (code == EXCEPTION_BREAKPOINT && (where == bp[0].address || where == bp[1].address || (bp[2].address && where == bp[2].address) || (bp[3].address && where == bp[3].address)) && th) {
         CONTEXT ctx; ctx.ContextFlags = CONTEXT_CONTROL; GetThreadContext(th, &ctx); ctx.Eip = (DWORD)where; SetThreadContext(th, &ctx);
       } else if (code != EXCEPTION_BREAKPOINT && code != EXCEPTION_SINGLE_STEP) status = DBG_EXCEPTION_NOT_HANDLED;
     } else if (ev.dwDebugEventCode == CREATE_PROCESS_DEBUG_EVENT && ev.u.CreateProcessInfo.hFile) CloseHandle(ev.u.CreateProcessInfo.hFile);
@@ -819,11 +833,13 @@ static int do_trace(const char *config) {
   remove(resume_path);
   char crash_path[640]; snprintf(crash_path, sizeof(crash_path), "%s.crash.txt", out_path);
   remove(crash_path);
+  char ended_path[640]; snprintf(ended_path, sizeof(ended_path), "%s.ended", out_path);
+  remove(ended_path);
   int disarmed = 0, monitoring = 0; ULONGLONG monitor_until = 0;
 
   if (!DebugActiveProcess(pid)) { fprintf(stderr, "DebugActiveProcess failed (%lu)\n", GetLastError()); return 1; }
   DebugSetProcessKillOnExit(FALSE);
-  bp_arm(&bp[0], TICK_ENTRY); bp_arm(&bp[1], TICK_RET);
+  bp_arm(&bp[0], TICK_ENTRY); bp_arm(&bp[1], TICK_RET); bp_arm(&bp[3], CLIENT_TRAVEL);
   if (call_count && call_last >= call_first && call_last > 0) { char cp[640]; snprintf(cp, sizeof(cp), "%s.calls.jsonl", out_path); cout = fopen(cp, "w"); }
   FILE *aout = NULL; char actors_path[640];
   if (actor_trace_last >= actor_trace_first && actor_trace_last > 0) { snprintf(actors_path, sizeof(actors_path), "%s.actors.jsonl", out_path); aout = fopen(actors_path, "w"); bp_arm(&bp[2], ACTOR_TICK); }
@@ -855,6 +871,14 @@ static int do_trace(const char *config) {
         /* a traced call's entry or return */
       } else if (code == EXCEPTION_SINGLE_STEP && pending_kind >= 0 && finish_call_step()) {
         /* the instruction under a call breakpoint ran: re-armed */
+      } else if (code == EXCEPTION_BREAKPOINT && where == bp[3].address && th && !monitoring) {
+        /* UGameEngine::Tick's client travel: the game leaves the level. Its last unfrozen tick is the one this engine tick ran (the level
+           ticked before this test); the instruction is restored, not stepped over, and the tracer detaches before Browse runs. */
+        CONTEXT ctx; ctx.ContextFlags = CONTEXT_CONTROL; GetThreadContext(th, &ctx); ctx.Eip = (DWORD)where; SetThreadContext(th, &ctx);
+        bp_disarm(&bp[3]); bp[3].address = 0;
+        FILE *ef = fopen(ended_path, "w"); if (ef) { fprintf(ef, "%d\n", released ? unfrozen : 0); fclose(ef); }
+        fprintf(stderr, "level ended after %d unfrozen ticks (tick %d): client travel\n", released ? unfrozen : 0, tick);
+        detaching = 1;
       } else if (code == EXCEPTION_BREAKPOINT && (where == bp[0].address || where == bp[1].address || (aout && where == bp[2].address)) && th) {
         int is_entry = where == bp[0].address, is_actor = aout && where == bp[2].address;
         CONTEXT ctx; ctx.ContextFlags = CONTEXT_CONTROL | CONTEXT_INTEGER;

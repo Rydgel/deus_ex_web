@@ -196,8 +196,7 @@ assert.equal(commands.consoleCommand(player, 'NoSuchCommand 1'), '');
 assert.equal(commands.consoleCommand(player, 'GetCurrentRes'), '1432x1268');
 assert.throws(() => commands.consoleCommand(player, 'GetCurrentColorDepth'),
   error => error instanceof UnsupportedConsoleCommandError && error.body === 'UWindowsViewport::Exec', 'GetCurrentColorDepth');
-for (const [command, body] of [['OPEN 00_Training', 'UGameEngine::Exec'],
-  ['obj list', 'UObject::StaticExec'], ['stat fps', 'URender::Exec']])
+for (const [command, body] of [['obj list', 'UObject::StaticExec'], ['stat fps', 'URender::Exec']])
   assert.throws(() => commands.consoleCommand(player, command),
     error => error instanceof UnsupportedConsoleCommandError && error.body === body, command);
 // DeusExRootWindow.InitWindow's ConditionalBindMultiplayerKeys ran at startup:
@@ -257,8 +256,20 @@ game.resetInput({releasePhysical:true});
 assert.equal(key('Tab', true).handled, true);
 key('Tab', false);
 
+// UGameEngine::Exec OPEN (0x1038a030, its first keyword): SetClientTravel(Client->Viewports(0), Cmd, 0, TRAVEL_Partial) (0x1038fa10) stores the URL, the
+// type and bItems on the viewport and runs PreTravel on every actor that has one (0x1038fb4b..0x1038fb95: DeusExPlayer sets PlayerTraveling and saves its
+// skill points with SetInt); nothing is browsed until UGameEngine::Tick's client travel (game.clientTravel), the boundary Play stops at. Last: it ends the level.
+{
+  const viewport = runtime.readNamed(player, 'Player'), flags = runtime.readNamed(player, 'FlagBase');
+  assert.equal(commands.consoleCommand(player, 'OPEN   00_Training'), '');
+  assert.deepEqual([viewport.travelURL, viewport.travelType, viewport.bTravelItems], ['00_Training', 1, 0], 'SetClientTravel stores the URL past OPEN and its spaces');
+  assert.equal(flags.getBool('PlayerTraveling'), true, 'DeusExPlayer.PreTravel ran');
+  assert.equal(flags.getEntry('SKTemp_SkillPointsAvail', 2)?.value, runtime.readNamed(player, 'SkillPointsAvail'), 'SaveSkillPoints stored an int flag (SetInt)');
+  assert.equal(flags.getEntry('SKTemp_SkillPointsAvail'), null, 'an int flag is not a bool flag of the same name');
+  assert.throws(() => game.clientTravel(), error => error.name === 'ClientTravelBoundary' && error.url === '00_Training', 'the next client travel step ends the level');
+}
 console.log(`validate-console-command: ${Object.keys(trace).length} Exec bodies (${keywordCount} keywords) match their ` +
   `retail fall-through order; ${texts.struct.length} struct ImportText, ${texts.parseLine.length} ParseLine and ` +
   `${texts.parseToken.length} ParseToken cases match Core; in Play, Escape opens MenuMain through InputEvent, the ` +
   'ShowMainMenu binding and FLUSH, draws it, and closes it; ConsoleCommand dispatch and keyword boundaries hold; ' +
-  'ConditionalBindMultiplayerKeys SET the five free multiplayer keys and SaveConfig wrote [Extension.InputExt]');
+  'ConditionalBindMultiplayerKeys SET the five free multiplayer keys and SaveConfig wrote [Extension.InputExt]; OPEN stores the client travel and runs PreTravel');

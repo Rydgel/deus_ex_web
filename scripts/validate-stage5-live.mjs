@@ -36,7 +36,16 @@
  *         700; the stored original: the second shot kills Terrorist0, the others attack, the player is hurt from 548 and healed to 100 at 701.
  * A scene's `carcasses` are watched from the tick they appear (--carcass-watch: the tracer's late-watch, Play's lazy lookup), with their Inventory chain.
  * cmb1's stored original: Terrorist0 and ThugMale7 seek the player from tick 41 and attack from 178; the player's first shot (420) kills Terrorist0
- * (TerroristCarcass1 at 469). cmb3's: the Terrorists' fire kills the player at 863 (Dying, DeathFront through 900). */
+ * (TerroristCarcass1 at 469). cmb3's: the Terrorists' fire kills the player at 863 (Dying, DeathFront through 900).
+ *
+ * A scene with `levelEnd` runs until the original leaves the level: the Dying player's PlayerCalcView types `OPEN DXONLY` once its fade reaches -1
+ * (DeusExPlayer.uc state Dying, 20 s after FrobTime, the last render before bHidden), UGameEngine::Exec stores the URL (SetClientTravel, which also runs
+ * every actor's PreTravel) and the next engine tick browses to it after the level's tick (UGameEngine::Tick's client travel). The tracer writes the
+ * unfrozen ticks the level ran to <trace>.ended and detaches there (tools/dx-live-win.c); Play's replay stops at its own client travel (game.mjs
+ * clientTravel, play-level-end<tag>.json). The check also passes only when both ended after the same tick and the trace holds every tick up to it.
+ *   die1  cmb1's pose, no weapon, HealthTorso and HealthHead lowered to 5 by console SET in the frozen phase (both programs run the same line; the original's
+ *         is read back before the tracer attaches): the Terrorists' fire kills the player, the Dying state runs to the OPEN and the level ends. Watched: the
+ *         eight NSF pawns within 5,000 units of the pose (the trace of every pawn for 2,000 ticks would not fit the machine), the player and its carcass. */
 import {spawn} from 'node:child_process';
 import {existsSync, mkdirSync, readFileSync, writeFileSync} from 'node:fs';
 import path from 'node:path';
@@ -72,6 +81,9 @@ export const SCENES = {
   // shots near unaware guards, then a MedKit: cmb2's pose (700 units behind Terrorist0); the pistol and a MedKit summoned and picked up facing away (the pistol in
   // belt slot 1, the MedKit in 2), the pistol drawn and turned on Terrorist0 at 200, Enter edges at 300 and 360; at 650 the MedKit is put in hand (ActivateBelt 2)
   // and the Enter edge at 700 uses it (ParseLeftClick: inHand.Activate, MedKit's Activated state: HealPlayer(healAmount, True), UseOnce)
+  // the player's death to the level's end (row 5.1.8): `ticks` is the tracer's cap, the trace ends where the original's level ends
+  die1: {map: '01_NYC_UNATCOIsland', ticks: 3000, levelEnd: true, early: `${PLACE(10146.3, 685.2, -88, 40960)}|set DeusEx.JCDentonMale HealthTorso 5|set DeusEx.JCDentonMale HealthHead 5`,
+    cmds: '', carcasses: ['JCDentonMaleCarcass0'], watch: ['Terrorist0', 'ThugMale7', 'Terrorist10', 'Terrorist7', 'Terrorist3', 'Terrorist4', 'Terrorist27', 'ThugMale5']},
   cmb7: {map: '01_NYC_UNATCOIsland', ticks: 900, early: PLACE(8951.3, 190.2, -84, 32768),
     cmds: '20:summon DeusEx.WeaponPistol|50:set DeusEx.JCDentonMale ViewRotation (Pitch=-10130,Yaw=32768,Roll=0)|90:ParseRightClick|100:summon DeusEx.MedKit|140:ParseRightClick'
       + `|170:ActivateBelt 1|200:set DeusEx.JCDentonMale ViewRotation (Pitch=-536,Yaw=0,Roll=0)|${SHOTS([300, 360])}|650:ActivateBelt 2|${SHOTS([700])}`},
@@ -83,16 +95,23 @@ const PLAY_FLAGS = ['--render-history'];
 // The tracer's breakpoints of the captures (tools/dx-live-win.c `call`, docs/object-index-captures.md): the registry (AddObject, UnhashObject), the key
 // edges' stream state (UEngine::InputEvent), the AI event manager (AISendEvent, AIStartEvent, AIEndEvent, AIClearEvent, the AIEvent callback) and the
 // window system's frame deltas (Extension RootTick).
-export const CAPTURE_CONFIG = ['call-ticks 1 900', 'call-frames', 'call 0x10157830 addobj 1 always retname', 'call 0x10157760 unhash 1 always retname',
+// A levelEnd scene also records UGameEngine::SetClientTravel (body 0x1038fa10; its four arguments: the viewport, the URL, bItems, TravelType): when the OPEN
+// was typed, between which two ticks (`u`, inTick 0: the render after tick u).
+export const captureConfig = scene => [`call-ticks 1 ${scene.ticks}`, 'call-frames', 'call 0x10157830 addobj 1 always retname', 'call 0x10157760 unhash 1 always retname',
   'call 0x103814e0 inputevent 4 always', 'call 0x10382c60 aisend 5 always name0 fname 1', 'call 0x10382fe0 aistart 5 always name0 fname 1',
   'call 0x103831e0 aiend 3 always name0 fname 1', 'call 0x103832c0 aiclear 2 always name0 fname 1',
-  'call 0x10384980 aievent 5 always name0 fname 1 fname 4 namearg 3 0 deref 3 5 0', 'call Extension.dll@0x1003be90 roottick 1 always'];
+  'call 0x10384980 aievent 5 always name0 fname 1 fname 4 namearg 3 0 deref 3 5 0', 'call Extension.dll@0x1003be90 roottick 1 always',
+  ...(scene.levelEnd ? ['call 0x1038fa10 settravel 4 always'] : [])];
+export const CAPTURE_CONFIG = captureConfig({ticks: 900});
+const configFile = scene => `.work/live-acceptance/cfg/${scene.levelEnd ? 'death' : 'combat'}-${scene.ticks}.cfg`;
 /** The original's capture command of a scene (for the doc and a recapture). */
 export const captureCommand = tag => {
   const s = SCENES[tag];
-  // (--carcass-watch: the carcasses the scene spawns, bound by the tracer when they appear: tools/dx-live-win.c late-watch)
-  return `scripts/live-original.sh ${s.map} --tag ${tag} --ticks ${s.ticks} --delta 0.0166666675 ${SCENE_FLAGS.join(' ')} --registry --extra-config .work/live-acceptance/cfg/combat-900.cfg`
-    + `${s.carcasses ? ` --carcass-watch ${s.carcasses.join(',')}` : ''} --early-cmds "${s.early}" --cmds "${s.cmds}"`;
+  // (--carcass-watch: the carcasses the scene spawns, bound by the tracer when they appear: tools/dx-live-win.c late-watch; --watch: the pawns watched, all
+  // ScriptedPawns when absent; --wait-seconds: the tracer's time, a long scene's run to the level's end)
+  return `scripts/live-original.sh ${s.map} --tag ${tag} --ticks ${s.ticks} --delta 0.0166666675 ${SCENE_FLAGS.join(' ')} --registry --extra-config ${configFile(s)}`
+    + `${s.carcasses ? ` --carcass-watch ${s.carcasses.join(',')}` : ''}${s.watch ? ` --watch ${s.watch.join(',')}` : ''}${s.levelEnd ? ` --wait-seconds ${Math.ceil(s.ticks * 0.6)}` : ''}`
+    + ` --early-cmds "${s.early}" --cmds "${s.cmds}"`;
 };
 
 const exec = (args, limitSeconds) => new Promise(resolve => {
@@ -109,7 +128,7 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
   if (!scene) { console.error(`--scene ${Object.keys(SCENES).join('|')}`); process.exit(2); }
   if (argv.includes('--print-capture')) {
     mkdirSync(path.join(root, '.work/live-acceptance/cfg'), {recursive: true});
-    writeFileSync(path.join(root, '.work/live-acceptance/cfg/combat-900.cfg'), CAPTURE_CONFIG.join('\n') + '\n');
+    writeFileSync(path.join(root, configFile(scene)), captureConfig(scene).join('\n') + '\n');
     console.log(captureCommand(tag)); process.exit(0);
   }
   const dir = path.join(root, '.work/live-acceptance', scene.map);
@@ -119,7 +138,7 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
   if (absent.length) { console.log(`SKIP no stored original for ${tag}: ${absent.map(f => path.relative(root, f)).join(', ')}`); process.exit(0); }
   const problems = [];
   const play = await exec(['scripts/live-acceptance.mjs', 'play', '--map', scene.map, '--seed', '1', '--tag', tag, ...SCENE_FLAGS, ...PLAY_FLAGS, '--early-cmds', scene.early,
-    '--event-trace', `1:${scene.ticks}`, '--object-trace', `1:${scene.ticks}`], 1800);
+    '--event-trace', `1:${scene.ticks}`, '--object-trace', `1:${scene.ticks}`], Math.max(1800, scene.ticks * 2));
   if (play.code !== 0) { console.log(play.out.trim().split('\n').slice(-12).join('\n')); console.log(`FAIL ${tag}: the replay stopped (exit ${play.code})`); process.exit(1); }
   const compare = await exec(['scripts/live-acceptance.mjs', 'compare', '--map', scene.map, '--tag', tag, ...SCENE_FLAGS], 600);
   console.log(compare.out.trim());
@@ -146,6 +165,21 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
     console.log(`registry: ${i} of ${a.length}/${b.length} creations equal in class and tick, in order; ${slots} take another slot`);
     if (i !== a.length || i !== b.length) problems.push(`creations differ at ${i} (original ${JSON.stringify(a[i] ?? null)}, Play ${JSON.stringify(b[i] ?? null)})`);
   }
+  // The level's end: the original's (<trace>.ended, the tracer at UGameEngine::Tick's client travel) and Play's (play-level-end<tag>.json, game.mjs clientTravel).
+  if (scene.levelEnd) {
+    const endedFile = path.join(dir, `original-trace-${tag}.jsonl.ended`), playEnd = path.join(dir, `play-level-end-${tag}.json`);
+    const ended = existsSync(endedFile) ? Number(readFileSync(endedFile, 'utf8').trim()) : null, played = existsSync(playEnd) ? JSON.parse(readFileSync(playEnd, 'utf8')) : null;
+    // when the original typed the OPEN: SetClientTravel's record (`settravel`, between ticks u and u + 1)
+    const calls = path.join(dir, `original-trace-${tag}.jsonl.calls.jsonl`);
+    const travel = existsSync(calls) ? readFileSync(calls, 'utf8').split('\n').filter(line => line.includes('"fn":"settravel"') && line.includes('"ev":"enter"')).map(line => JSON.parse(line)) : [];
+    console.log(`level end: the original's OPEN (SetClientTravel) ${travel.length ? travel.map(r => `after tick ${r.u}${r.inTick ? ' inside a tick' : ''}`).join(', ') : 'not recorded'}; its level ended after ${ended ?? '?'} ticks, Play's after ${played?.tick ?? '(none)'}${played ? ` (client travel to ${played.url})` : ''}`);
+    if (ended === null) problems.push('the stored capture did not reach the level\'s end (no <trace>.ended)');
+    else {
+      if (!played) problems.push(`Play's level did not end (the original's ended after ${ended} ticks)`);
+      else if (played.tick !== ended) problems.push(`Play's level ended after ${played.tick} ticks, the original's after ${ended}`);
+      if (report.ticks !== ended) problems.push(`the trace holds ${report.ticks} ticks, the original's level ended after ${ended}`);
+    }
+  }
   if (problems.length) { console.log(`FAIL ${tag}: ${problems.join('; ')}`); process.exit(1); }
-  console.log(`PASS ${tag}: ${actors.length} actors equal for ${report.ticks} ticks, clock, stream draws, AI events and object creations equal`);
+  console.log(`PASS ${tag}: ${actors.length} actors equal for ${report.ticks} ticks, clock, stream draws, AI events and object creations equal${scene.levelEnd ? `, the level ends after tick ${report.ticks} in both` : ''}`);
 }

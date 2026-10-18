@@ -16,8 +16,10 @@
  *
  * Every keyword a body tests is listed in EXEC_KEYWORDS in its original
  * order (checked against the DLLs by validate-console-command.mjs). A command
- * a keyword claims, other than the handled KEYNAME, KEYBINDING and FLUSH,
- * throws UnsupportedConsoleCommandError before any of that handler's work.
+ * a keyword claims, other than the handled KEYNAME, KEYBINDING, FLUSH and
+ * OPEN (SetClientTravel; the Browse is UGameEngine::Tick's, game.mjs
+ * clientTravel), throws UnsupportedConsoleCommandError before any of that
+ * handler's work.
  */
 import {gameEngineKey} from './script-window-typed-keys.mjs';
 import {readToken, importText} from './config-text.mjs';
@@ -41,6 +43,8 @@ export class UnsupportedConsoleCommandError extends Error {
 export const DEFAULT_DISPLAY_MODES = Object.freeze([[640, 480], [800, 600], [1024, 768], [1280, 1024], [1600, 1200]]
   .flatMap(([width, height]) => [16, 32].map(bits => Object.freeze({width, height, bits}))));
 export const IST_PRESS = 1, IST_HOLD = 2, IST_RELEASE = 3, IST_AXIS = 4;
+// ETravelType (UnURL.h): TRAVEL_Absolute 0, TRAVEL_Partial 1, TRAVEL_Relative 2.
+export const TRAVEL_PARTIAL = 1;
 
 // Each body's ParseCommand keywords, in the order its fall-through path tests
 // them. Keywords a body tests only after another keyword matched are not
@@ -526,10 +530,35 @@ export function createConsoleCommands({runtime, input, services}) {
     return engineExec(level, read(actor, 'Level'), cmd, ar);
   }
 
+  /** UGameEngine::SetClientTravel 0x1038fa10 (thunk 0x10303f2b): CastChecked<UViewport>(Player), then the viewport's TravelURL (+0xa0) = NextURL,
+   * TravelType (+0x9c) and bTravelItems (+0xac) (0x1038faf2..0x1038fb3d). Then every slot of GLevel->Actors (Num re-read each pass, 0x1038fb4b)
+   * that holds an actor whose FindFunction(PreTravel, 0) finds one (0x1038fb7b; the name at 0x1047f080) gets ProcessEvent(PreTravel, NULL)
+   * (vtable +0x10, 0x1038fb95): MissionScript turns its timer off and drops its flags, DeusExPlayer sets PlayerTraveling, saves its skill points,
+   * aborts a DataLink and puts its fire out, AugLight destroys its beams. The URL is browsed by UGameEngine::Tick's client travel (game.mjs
+   * clientTravel), not here. */
+  function setClientTravel(url, items, type) {
+    const viewport = services.viewport(), actor = read(viewport, 'Actor');
+    if (!actor) throw new Error('SetClientTravel requires the viewport Actor');
+    viewport.travelURL = url; viewport.travelType = type; viewport.bTravelItems = items;
+    // GLevel: the viewport actor's level (Play's session holds one level)
+    const actors = runtime.levelFor(actor).actors;
+    for (let index = 0; index < actors.length; index++) {
+      const target = actors[index];
+      if (!target) continue;
+      const record = runtime.lookup(target, 'PreTravel');
+      if (record?.function) runtime.processEvent(target, 'PreTravel', [], null, record);
+    }
+  }
+
   /** DDeusExGameEngine::Exec 0x1000ed70 -> UGameEngine::Exec 0x1038a030 ->
    * UEngine::Exec 0x10380ee0. */
   function engineExec(level, levelInfo, cmd, ar) {
     claims('DDeusExGameEngine::Exec', cmd);
+    // UGameEngine::Exec's first keyword, OPEN (0x1038a061, the text at 0x1047eaa4): with a client viewport (Client +0x44, Viewports.Num +0x30)
+    // SetClientTravel(Client->Viewports(0), Cmd, 0, TRAVEL_Partial) (vtable +0x88, 0x1038a0a9), Cmd past the keyword and its spaces; without one
+    // it browses at once (0x1038a0d3), which Play's one-viewport session never takes. Either way it returns 1.
+    const openUrl = parseCommand(cmd, 'OPEN');
+    if (openUrl !== null) { setClientTravel(openUrl, 0, TRAVEL_PARTIAL); return true; }
     claims('UGameEngine::Exec', cmd);
     if (levelExec(level, cmd)) return true;
     const game = read(levelInfo, 'Game');
