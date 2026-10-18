@@ -97,6 +97,8 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
   const play = await exec(['scripts/live-acceptance.mjs', 'play', '--map', scene.map, '--seed', '1', '--tag', tag, ...SCENE_FLAGS, ...PLAY_FLAGS, '--early-cmds', scene.early,
     '--event-trace', `1:${scene.ticks}`, '--object-trace', `1:${scene.ticks}`], 1800);
   if (play.code !== 0) { console.log(play.out.trim().split('\n').slice(-12).join('\n')); console.log(`FAIL ${tag}: the replay stopped (exit ${play.code})`); process.exit(1); }
+  // the slot model's inputs (the run's own indices, the pre-frees and where they were released)
+  for (const line of play.out.split('\n')) if (line.startsWith('object trace: ') && !/registry events/.test(line)) console.log(line);
   const compare = await exec(['scripts/live-acceptance.mjs', 'compare', '--map', scene.map, '--tag', tag, ...SCENE_FLAGS], 600);
   console.log(compare.out.trim());
   const report = JSON.parse(readFileSync(path.join(dir, 'report.json'), 'utf8'));

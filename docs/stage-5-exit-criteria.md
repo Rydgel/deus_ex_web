@@ -369,18 +369,33 @@ the hold before it tick the windows before the command runs, `live-probe.mjs`), 
 frame, not the next one). Rerun on the stored scenes: `cmb2` frees `HUDBarkDisplayItem3` at 675 as the original does, and 0 of its 1,150 creations take another slot; `cmb1` 0 of 1,291, `cmb4` 0 of 1,284; `cmb3`'s tick-43 bark is
 freed at 50 as in the original; every actor, the clock, the draws, the AI events and the creations stay equal in all four scenes.
 
-**Open: `cmb3`'s registry slots after tick 821 (bounded, not the subtitles).** 64 of `cmb3`'s 1,364 creations still take another slot, from `BloodSplat46` at tick 821 on (`sound-compare-cmb3.json` `oAdds[1277]`:
-the original appends slot 48490, Play reuses 43708). Tick 821 is a `ULevel::CleanupDestroyed` purge in both programs (the same 126 frees in the same order). Three inputs of the slot model differ, none of
-them game state:
-1. The original's purge ends with two objects that existed at the frozen start, `NanoKeyRing4` (47461) and `PickupDistributor0` (43708), after `BloodSplat46` is created. The replay's `preFrees`
-   release such objects before the tick they are freed in, so Play's free list held both at tick 821's spawn.
-2. Play holds its own pending-deleted `PickupDistributor0` (it destroys itself at load) and its purge releases it under 36046, the index Play's map table gives export 4739
-   (`map-object-indices.mjs`, built from an earlier capture of the map); in this run's dump `PickupDistributor0` is 43708 and 36046 is `ConEventEnd.ConEventEnd4793`. The objectTrace
-   seed gives the dump's indices only to actors in `level.actors` whose name Play's population lists, so a pending-deleted pre-placed actor keeps the table's index. That is a
-   general gap of the seed, not specific to this scene (found with a one-off stack trace of the release: `cleanupLevelDestroyed`, `script-level-collection.mjs` `release`).
-3. The pre-free of `PickupDistributor0` is then counted twice: once by the replay and once by Play's own purge.
-A fix needs the dump's index for pending-deleted pre-placed actors, no pre-free for an object Play itself frees, and the remaining pre-frees released at their place in the purge. Nothing a watched
-actor reads depends on it. Until then the Stage 5 check judges the creations by class and tick and reports the slots. Row 4.3.6 keeps its strict slot check.
+**`cmb3`'s registry slots after tick 821: explained and fixed (2026-10-18).** 64 of `cmb3`'s 1,364 creations took another slot, from `BloodSplat46` at tick 821 on (`sound-compare-cmb3.json`
+`oAdds[1277]`: the original appends slot 48490, Play reused 43708). Tick 821 is a `ULevel::CleanupDestroyed` purge in both programs. In the original's call records (seq 10424..10680) `BloodSplat46`
+is created first, then 128 objects are freed: the 126 Play frees too, in the same order, and at the end two that existed at the frozen start, `NanoKeyRing4` (47461, after `WaterRing0` at seq 10676)
+and `PickupDistributor0` (43708). Three inputs of the slot model differed, none of them game state:
+1. The replay's `preFrees` released both objects before the tick, so Play's free list held them at tick 821's spawn.
+2. Play holds its own `PickupDistributor0`, destroyed at load and pending deletion until the purge, and released it under 36046, the index `map-object-indices.mjs` gives export 4739 from an
+   earlier capture of the map (in this run's dump 36046 is `ConEventEnd.ConEventEnd4793`). The objectTrace seed gave the dump's indices only to actors in `level.actors`, so a pending-deleted
+   pre-placed actor kept the table's index: a general gap of the seed (found with a one-off stack trace of the release: `cleanupLevelDestroyed`, `script-level-collection.mjs` `release`).
+3. `PickupDistributor0` was therefore freed twice, once by the pre-free and once by Play's purge.
+
+The fix is in the replay's inputs only (`live-acceptance.mjs` `registrySeed`, `live-probe.mjs` objectTrace):
+* The population step also lists the actors on the level's pending-deletion chain (`play-population.json` `pendingDeleted`; on the Island `NanoKeyRing2` and `PickupDistributor0`), and the
+  seed walks that chain too, so a pending-deleted pre-placed actor takes this run's dump index (`PickupDistributor0` 43708; the dump has no row named `NanoKeyRing2`). A population file
+  written before this change lacks the list; the replay warns and the seed falls back to the old behaviour, so `population` is rerun first.
+* A pre-free whose index the seed gave an object Play holds is dropped: Play frees that object itself (`PickupDistributor0`).
+* Every other pre-free carries the original's registry event right before it in the same tick (`anchor`, from the call records) and is released right after Play's model logs that event:
+  `NanoKeyRing4` after the free of 47929 (`WaterRing0`). AI event objects keep their release after the event manager's Tick, and a pre-free that is its tick's first registry event is still
+  released before the tick. A pre-free whose anchor never comes would be released one tick late and counted.
+
+Play's u = 821 now holds the original's 129 registry events in order and slot (the add of 48490, then 128 frees ending 47929, 47461, 43708). The replay prints the slot model's inputs. In
+`cmb3`, 1 pre-free is released at its anchor, with 0 late, 0 refused and 0 never reached. The model releases 2 slots it cannot name, and a one-off log of them named the counterparts of the
+two pre-frees: Play's own landing sender event at tick 16 (created before the seed; the original's `AISenderEvent5`), and `NanoKeyRing2` at tick 821. `NanoKeyRing2` is the keyring of the
+player the Player start replaced: Play's live player holds `NanoKeyRing3`, the original's `NanoKeyRing5`. The original's counterpart is `NanoKeyRing4`, renamed because the original's
+session spawned more keyrings (inferred from the pending chain, not traced). `cmb1`, `cmb2` and `cmb4` count 1 such release each, by their counts the sender event (not logged by name
+there). Rerun on the stored scenes: 0 of `cmb3`'s 1,364 creations take another slot, and `cmb1` (1,291), `cmb2` (1,150) and `cmb4` (1,284) stay at 0. Every actor (88 for 900 ticks),
+the clock, the draws, the AI events and the creations stay equal in all four. Row 4.3.6 (strict slots, `sndm5`, its population rerun with the new list: `pendingDeleted` there is `NanoKeyRing2` alone) still passes: 103 of 103 calls and 557 of 557 registry takes equal. The Stage 5 check still judges the creations by class and tick and reports the slots: judging them
+strictly is the user's decision.
 
 ## Scoreboard (2026-10-17, after the combat captures)
 

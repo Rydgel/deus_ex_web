@@ -207,8 +207,11 @@ call Extension.dll@0x1003be90 roottick 1 always
 replay takes four measured inputs from the capture besides the deltas and the stream: the key edges' stream state (`inputevent`), the
 receiver AIProcess's 2 ms rdtsc budget left `firstProcess` at each tick (the trace rows' `aiFirst`,
 [AI event manager](ai-event-manager.md) "The time budget"), the window system's wall-clock deltas (`roottick`,
-[interface frames](interface-frames.md) 2b) and the pre-scene objects the original frees (`preFrees`, the AI ones at the end of the
-manager's Tick). The captures stay in `.work/` (outside Git).
+[interface frames](interface-frames.md) 2b) and the pre-scene objects the original frees (`preFrees`: the AI ones at the end of the
+manager's Tick, the others right after the original's registry event before them in the same tick, their place in a purge; none for an object
+Play holds under the dump's index, which Play frees itself). The seed gives the dump's index to the pre-placed actors of Play's population and
+to the ones destroyed at load and not yet purged (`play-population.json` `pendingDeleted`, such as `PickupDistributor0`). The captures stay in
+`.work/` (outside Git).
 
 **Row 4.3.6 on `sndm5` (2026-10-16).** Every registry take and free of the 400 ticks is the original's (557 of 557 takes, class and
 slot), so every runtime-spawned emitter has the original's id: the summoned pistol, the glass fragment, the three shell casings, the
