@@ -142,7 +142,10 @@ const ROUTE_SCENES = {
   dor3: {map: '01_NYC_UNATCOIsland', ticks: 900, early: PLACE(7947.6, 530.4, -96, 57344),
     cmds: `20:summon DeusEx.WeaponGEPGun|${AIM(50, 57344, -10130)}|90:ParseRightClick|130:ActivateBelt 1|${AIM(240, 24576, -837)}|${SHOTS([300])}`
       + `|${MOVE(500, 318.6, 241.4, -88, 57344)}|${SHOTS([600])}`,
-    devices: ['DeusExMover2', 'DeusExMover12', 'DeusExMover6', 'DeusExMover22', 'DeusExMover23'].map(n => `${n}:DeusExMover`)},
+    // (the rocket and the 51 Rockchips its explosion spawns at 319, DeusExProjectile.SpawnEffects: Damage/5 tries, FRand() < 0.8, watched from their spawn:
+    // which of them hit the door during their first tick, a Fragment.HitWall and its LoudNoise)
+    devices: [...['DeusExMover2', 'DeusExMover12', 'DeusExMover6', 'DeusExMover22', 'DeusExMover23'].map(n => `${n}:DeusExMover`), 'Rocket0:Projectile',
+      ...Array.from({length: 51}, (_, i) => `Rockchip${i}:Actor`)]},
   // 5.5.4, the water route's east end in the ruins: ControlPanel1 (UnTriggerEvent LibElectric) hacked with a Multitool from beside the arcs; first a short
   // drop into the arcs (the three ElectricityEmitters: 'Shocked' 20 a hit; DamageTrigger1 under them: EMP 2 a touch, the player's Energy), out again, the hack
   // (HackableDevices.Timer, HackAction: UnTrigger LibElectric turns the emitters and the trigger off), the drop again (nothing), and Button2 (Event fork) raises

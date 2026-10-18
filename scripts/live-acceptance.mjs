@@ -150,7 +150,11 @@ if (flag('player-view')) PLAYER_FIELDS.push(['EyeH', 'EyeHeight', 0x3f8, 'f'], [
   ['JustLanded', 'bJustLanded', 0x318, 'bit', 0x4], ['OldLoc', 'OldLocation', 0x12c, 'f3'], ['ShakeVert', 'ShakeVert', 0x680, 'f'], ['ShakeTimer', 'ShakeTimer', 0x678, 'f'],
   ['ShakeMag', 'ShakeMag', 0x67c, 'i32'], ['MaxShake', 'MaxShake', 0x684, 'f'], ['VertTimer', 'VertTimer', 0x688, 'f'],
   // and the bioelectric energy an EMP blast drains (DeusExPlayer.TakeDamage 'EMP'; DeusExPlayer +0x9c4 Energy, +0x9c8 EnergyMax)
-  ['Energy', 'Energy', 0x9c4, 'f'], ['EnergyMax', 'EnergyMax', 0x9c8, 'f']);
+  ['Energy', 'Energy', 0x9c4, 'f'], ['EnergyMax', 'EnergyMax', 0x9c8, 'f'],
+  // the drain it accrues (+0x9cc EnergyDrain, +0x9d0 EnergyDrainTotal) and lastRefreshTime (+0x9f0): DeusExPlayer.MultiplayerTick (it runs in single player too) sums the tick deltas and runs
+  // MaintainEnergy (the drain, 0.5 a step for a 2-point EMP) each time it passes 0.25 s, so its phase at the release is the frozen phase's (capture wat1: the
+  // drain at 251 in the original, 257 in Play's own phase)
+  ['EnergyDrain', 'EnergyDrain', 0x9cc, 'f'], ['DrainTotal', 'EnergyDrainTotal', 0x9d0, 'f'], ['RefreshT', 'lastRefreshTime', 0x9f0, 'f']);
 // --player-health: the player's hit regions (Pawn.HealthHead..HealthArmRight, the linked offsets of Play's class graph): where an NPC's shots land
 // (DeusExPlayer.TakeDamage/HandleDamage) in the combat scenes of the Stage 5 gate (docs/stage-5-exit-criteria.md).
 const HIT_REGION_FIELDS = [['HHead', 'HealthHead', 1376, 'i32'], ['HTorso', 'HealthTorso', 1380, 'i32'], ['HLegL', 'HealthLegLeft', 1384, 'i32'],
@@ -1165,7 +1169,9 @@ async function play() {
     // EyeHeight (PlayerPawn.UpdateEyeHeight, every frozen tick at the host's delta) are the original's own history, a measured input like the animation
     // state; Inventory.CalcDrawOffset places a held item with them (Stage 5 capture hck1: Multitool0's Z 4e-5 off for 102 ticks until the player was hit)
     const viewState = pose.EyeH === undefined ? {} : {EyeHeight: pose.EyeH, WalkBob: pose.WalkBob.map(Math.fround), BobTime: pose.BobTime, bJustLanded: Boolean(pose.JustLanded),
-      ShakeVert: pose.ShakeVert, ShakeTimer: pose.ShakeTimer, ShakeMag: pose.ShakeMag, MaxShake: pose.MaxShake, VertTimer: pose.VertTimer};
+      ShakeVert: pose.ShakeVert, ShakeTimer: pose.ShakeTimer, ShakeMag: pose.ShakeMag, MaxShake: pose.MaxShake, VertTimer: pose.VertTimer,
+      // (MultiplayerTick's lastRefreshTime: the frozen phase's sum of the host's deltas since its last 0.25 s step, a measured input like FrobTime)
+      ...(pose.RefreshT !== undefined ? {lastRefreshTime: pose.RefreshT} : {})};
     const request = {...(classCounters ? {classCounters} : {}), write: {...timerWrites, ...pawnWrites, ...deviceWrites, '@player': {AnimSequence: pose.Anim, AnimFrame: pose.Frame, AnimRate: pose.Rate, TweenRate: pose.Tween, ...animState, ...viewState, ...(option('player-alliance', null) ? {Alliance: option('player-alliance')} : {}),
       // FrobTime accumulates the player's tick deltas (HighlightCenterObject runs when it reaches 0.1 s); the frozen phase's deltas are the host's, so the original's value is a measured input
       ...(flag('player-gear') && pose.FrobTime !== undefined ? {FrobTime: pose.FrobTime} : {})}, ...generatorWrites},
