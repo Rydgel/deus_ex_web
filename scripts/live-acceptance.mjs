@@ -1372,15 +1372,25 @@ function compare() {
       const record = JSON.parse(line);
       if (record.ecxName && !releasedOriginal.has(record.ecxName.toLowerCase())) releasedOriginal.set(record.ecxName.toLowerCase(), {u: record.u, index: record.ecxIndex});
     }
-    for (const event of JSON.parse(readFileSync(objectsFile, 'utf8'))) if (event.ev === 'free' && !releasedPlay.has(event.index)) releasedPlay.set(event.index, event.u);
+    // every free of an index, in order: a slot is reused (GObjAvailable is LIFO), so the free that releases a late-bound actor (the GEP's Rocket0, spawned at 300 in
+    // capture kil1) can follow an earlier occupant's free of the same slot (tick 66)
+    for (const event of JSON.parse(readFileSync(objectsFile, 'utf8'))) if (event.ev === 'free') releasedPlay.set(event.index, [...releasedPlay.get(event.index) ?? [], event.u]);
   }
+  // Play's release of the actor the original released at `released`: the free of the same index at the same u, else the first after the actor's first row
+  const playRelease = (name, released) => {
+    const frees = releasedPlay.get(released.index) ?? [];
+    if (frees.includes(released.u)) return released.u;
+    const first = rows.findIndex(row => row.actors[name]) + 1;
+    return frees.find(u => u >= first) ?? null;
+  };
   for (const name of names) {
     const entry = report.actors[name] = {firstDifference: null, fields: {}};
     const released = releasedOriginal.get(name.toLowerCase());
     if (released) {
       entry.released = released.u;
-      if (releasedPlay.get(released.index) !== released.u) {
-        entry.fields.Released = {tick: Math.min(released.u, releasedPlay.get(released.index) ?? Infinity), original: released.u, play: releasedPlay.get(released.index) ?? null, count: 1};
+      const playU = playRelease(name, released);
+      if (playU !== released.u) {
+        entry.fields.Released = {tick: Math.min(released.u, playU ?? Infinity), original: released.u, play: playU, count: 1};
         entry.firstDifference = entry.fields.Released.tick;
       }
     }
