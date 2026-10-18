@@ -119,6 +119,8 @@
  *                                 not found when the tracer attaches is bound at the first tick exit after an object of that name, spawned
  *                                 into the traced level, appears (offered at a `retname` call's return at UObject::AddObject, and by the
  *                                 GObjObjects slots that changed since the last tick); the actor's rows start at that tick
+ *                                 (every `retname` return offers its object, an UnhashObject's too: a name freed before its
+ *                                 first tick exit could bind to the dying object, whose XLevel is still set)
  *       Types: f f3 i3 u8 u16 u32 bit(mask) name obj state, chain[:max] (a linked list through the field's offset, Actor.Inventory
  *       +0xc0 the owner's first item and each item's next: the names in order, at most max, default 32).
  *       Offsets are the linked UProperty offsets (see dump-actor-win.c).
