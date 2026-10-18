@@ -669,9 +669,10 @@ async function snap() {
 // population: which OddsOfAppearing < 1 actors Play's seeded load keeps (compared with the original's before a trace).
 async function population() {
   await withPlay(async ({page}) => {
-    const {actors} = await page.evaluate(() => window.deusExViewer.liveProbe({actors: 'engine.actor'}));
-    // locations: where each actor of the seeded load stands (a chance FlyGenerator's name says nothing about which decoration made it)
-    writeFileSync(path.join(dir, 'play-population.json'), JSON.stringify({seed: Number(option('seed', 1)), names: actors.map(a => a.name), timers: actors.filter(a => a.timer).map(a => a.name),
+    const {actors, pendingDeleted} = await page.evaluate(() => window.deusExViewer.liveProbe({actors: 'engine.actor'}));
+    // locations: where each actor of the seeded load stands (a chance FlyGenerator's name says nothing about which decoration made it);
+    // pendingDeleted: the actors destroyed at load and not yet purged, still registered (registrySeed gives them the dump's index)
+    writeFileSync(path.join(dir, 'play-population.json'), JSON.stringify({seed: Number(option('seed', 1)), names: actors.map(a => a.name), timers: actors.filter(a => a.timer).map(a => a.name), pendingDeleted,
       locations: Object.fromEntries(actors.map(a => [a.name, a.location]))}));
     console.log(map, `seed ${option('seed', 1)}:`, actors.length, 'actors');
   });
@@ -902,9 +903,11 @@ async function play() {
       const text = readFileSync(file, 'utf8').replace(/\r/g, '');
       const count = Number(/objects=(\d+)/.exec(text.split('\n', 1)[0])?.[1]), free = /^available=\d+:(.*)$/m.exec(text)?.[1].trim();
       // The pre-placed actors' indices in THIS run (a process's registry depends on everything it loaded: another session's table is
-      // off by thousands): the unique Class.Name rows of the dump whose name Play's population holds, and the live player (the
-      // JCDentonMale created last).
-      const names = new Set((existsSync(path.join(dir, 'play-population.json')) ? JSON.parse(readFileSync(path.join(dir, 'play-population.json'), 'utf8')).names : []));
+      // off by thousands): the unique Class.Name rows of the dump whose name Play's population holds (the level's actors, and those
+      // destroyed at load and not yet purged), and the live player (the JCDentonMale created last).
+      const population = existsSync(path.join(dir, 'play-population.json')) ? JSON.parse(readFileSync(path.join(dir, 'play-population.json'), 'utf8')) : {};
+      if (population.names && !population.pendingDeleted) console.warn('play-population.json predates its pendingDeleted list: rerun `population` (the pending-deleted actors keep the map table\'s index)');
+      const names = new Set([...(population.names ?? []), ...(population.pendingDeleted ?? [])]);
       const rowsByKey = new Map();
       let player = null;
       const packages = [];   // the Package objects the original holds at the start
@@ -918,16 +921,22 @@ async function play() {
       }
       // Objects that existed at the frozen start and that the original frees during the replay (the sender event the player's landing left
       // in the manager, ...): Play does not hold them, and their slots come back in the order the original freed them, so the free list
-      // would differ. They are replayed as a measured input (UnhashObject at the tick, `preFrees`), as the CRT state and the clocks are.
+      // would differ. They are replayed as a measured input (UnhashObject at the tick, `preFrees`), as the CRT state and the clocks are. Each
+      // carries its place: the original's registry event right before it in the same tick (`anchor`, {ev, index}; null when it is the tick's
+      // first), so a free inside ULevel::CleanupDestroyed's purge (the first player's NanoKeyRing, after the actors the purge frees before it)
+      // comes back after the same slots (live-probe.mjs objectTrace). The page leaves out the ones Play frees itself.
       const callsFile = `${tracePath}.calls.jsonl`, preFrees = [];
       if (existsSync(callsFile)) {
         const born = new Set();
+        let last = null;
         for (const line of readFileSync(callsFile, 'utf8').split('\n')) {
           if (!line.includes('"ev":"ret"') || !(line.includes('"fn":"addobj"') || line.includes('"fn":"unhash"'))) continue;
           const r = parseTraceLine(line);
           if (r.fn === 'addobj') born.add(r.ecxIndex);
           else if (born.has(r.ecxIndex)) born.delete(r.ecxIndex);
-          else preFrees.push({u: r.u, index: r.ecxIndex, cls: r.ecxClass, name: r.ecxName});
+          else preFrees.push({u: r.u, index: r.ecxIndex, cls: r.ecxClass, name: r.ecxName,
+            anchor: last?.u === r.u ? {ev: last.fn === 'addobj' ? 'add' : 'free', index: last.ecxIndex} : null});
+          last = r;
         }
       }
       return {count, freeIndices: free ? free.split(/\s+/).map(Number) : [], preFrees, packages,
@@ -1033,16 +1042,20 @@ async function play() {
       // --carcass-watch (the original's run): resolved by name from the tick the actor is in Play's level, as the tracer's late-watch
       ...(carcasses.length ? [{names: carcasses, props: CARCASS_FIELDS.map(f => f[1]), late: true}] : [])]}};
     const started = await page.evaluate(r => window.deusExViewer.liveProbe(r), request);
-    if (started.objectTrace) console.log(`object trace: the run's own indices for ${started.objectTrace.measured} pre-placed actors and the player (${started.objectTrace.player})`);
+    if (started.objectTrace) {
+      const o = started.objectTrace;
+      console.log(`object trace: the run's own indices for ${o.measured} pre-placed actors, ${o.pendingDeleted} more pending deletion and the player (${o.player}); ` +
+        `${o.preFrees} pre-frees (${o.anchored} at their anchor)${o.own.length ? `, none for ${o.own.join(' ')} (Play frees it)` : ''}`);
+    }
     const touch = [], rows = [], nav = [], script = [], setup = [], commandLog = [], events = [], objects = [], sounds = [];
-    let stalls = 0, levelEnd = null;
+    let stalls = 0, levelEnd = null, preFreeStats = null;
     rmSync(path.join(dir, `play-level-end${suffix}.json`), {force: true});
     // A trace that stopped at the original's level end (<trace>.ended): the replay runs on until Play's own client travel, or until it stalls.
     const originalEnded = existsSync(`${tracePath}.ended`);
     while (rows.length < trace.length || (originalEnded && !levelEnd)) {
       await frames(20);
       const taken = await page.evaluate(() => window.deusExViewer.liveProbe({take: true}));
-      if (taken.debug?.length) { (globalThis.__debugRows ??= []).push(...taken.debug); } nav.push(...(taken.nav ?? [])); touch.push(...(taken.touch ?? [])); events.push(...(taken.events ?? [])); objects.push(...(taken.objects ?? [])); sounds.push(...(taken.sounds ?? [])); script.push(...(taken.script ?? [])); setup.push(...(taken.setup ?? [])); commandLog.push(...(taken.commands ?? [])); for (const line of taken.stackLog ?? []) console.log(line);
+      if (taken.debug?.length) { (globalThis.__debugRows ??= []).push(...taken.debug); } nav.push(...(taken.nav ?? [])); touch.push(...(taken.touch ?? [])); events.push(...(taken.events ?? [])); objects.push(...(taken.objects ?? [])); if (taken.preFrees) preFreeStats = taken.preFrees; sounds.push(...(taken.sounds ?? [])); script.push(...(taken.script ?? [])); setup.push(...(taken.setup ?? [])); commandLog.push(...(taken.commands ?? [])); for (const line of taken.stackLog ?? []) console.log(line);
       if (taken.rows.length) { rows.push(...taken.rows); stalls = 0; }
       // the level's end (game.mjs clientTravel: an OPEN's URL browsed after the next tick): Play stops there; every row before it was taken above
       if (taken.levelEnd) { levelEnd = taken.levelEnd; break; }
@@ -1068,7 +1081,9 @@ async function play() {
     if (touchWindow) writeFileSync(path.join(dir, 'touch-play.json'), JSON.stringify(touch));
     if (eventWindow) writeFileSync(path.join(dir, `events-play${suffix}.json`), JSON.stringify(events));
     if (objectWindow) { writeFileSync(path.join(dir, `objects-play${suffix}.json`), JSON.stringify(objects)); writeFileSync(path.join(dir, `sounds-play${suffix}.json`), JSON.stringify(sounds));
-      console.log(`object trace: ${objects.length} registry events, ${sounds.length} Galaxy PlaySound calls`); }
+      console.log(`object trace: ${objects.length} registry events, ${sounds.length} Galaxy PlaySound calls`);
+      if (preFreeStats) console.log(`object trace: pre-frees ${preFreeStats.anchored} released at their anchor, ${preFreeStats.late} late, ${preFreeStats.rejected} refused, ` +
+        `${preFreeStats.waiting} never reached; the model's releases of a slot it cannot name ${preFreeStats.unattributed}, refused ${preFreeStats.modelRejected}`); }
     if (setupNames) writeFileSync(path.join(dir, 'setup-play.json'), JSON.stringify(setup));
     if (scriptPawns) writeFileSync(path.join(dir, 'script-play.json'), JSON.stringify({pawns: scriptPawns.split(','), events: script}));
     if (navPawns) writeFileSync(path.join(dir, `nav-play${suffix}.json`), JSON.stringify({pawns: navPawns.split(','), events: nav}));

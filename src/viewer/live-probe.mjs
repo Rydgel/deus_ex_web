@@ -25,6 +25,8 @@ import { setTouchTrace } from '../runtime/actor-touch.mjs';
  * the delta to tick with, or false to skip the tick (the replay is over and
  * the level is held, as the tool's Tick skip holds the original). */
 const hex = word => `0x${(word >>> 0).toString(16).padStart(8, '0')}`;
+// The event manager's objects: a pre-free of one is released after the manager's Tick (UEventManager::CleanupEvents ends it).
+const AI_EVENT_CLASS = /^AI(SenderEvent|ReceiverEvent|EventType)$/;
 const plain = value => {
   if (value === null || value === undefined) return null;
   if (typeof value === 'number') return value;
@@ -84,11 +86,14 @@ export function liveProbe(game, args = {}) {
   if (args.actors) {
     // A class list: names, class and state of the level's actors of that class (or its subclasses).
     out.actors = [];
+    const isOf = actor => { for (let cls = runtime.instance(actor).cls; cls; cls = cls.base) if (cls.record?.key === args.actors.toLowerCase()) return true; return false; };
+    // pendingDeleted: the names of the actors of that class destroyed but not yet purged (ULevel's pending-deletion chain through `Deleted`,
+    // newest first). A pre-placed actor that destroys itself at load (PickupDistributor) is out of `level.actors` but still registered, in
+    // the original as here, until the first CleanupDestroyed.
+    out.pendingDeleted = [];
+    for (let actor = level.pendingDeleted ?? null; actor; actor = runtime.readNamed(actor, 'Deleted') ?? null) if (isOf(actor)) out.pendingDeleted.push(actor.name);
     for (const actor of level.actors) {
-      if (!actor) continue;
-      let match = false;
-      for (let cls = runtime.instance(actor).cls; cls && !match; cls = cls.base) match = cls.record?.key === args.actors.toLowerCase();
-      if (!match) continue;
+      if (!actor || !isOf(actor)) continue;
       const instance = runtime.instance(actor), node = instance?.state ? (instance.state.stateNode ?? instance.cls) : null;
       const row = { name: actor.name, cls: instance.cls.record?.key ?? null, location: [...runtime.readNamed(actor, 'Location')], state: scriptGetStateName(node),
         timer: runtime.readNamed(actor, 'TimerRate') > 0 };
@@ -263,17 +268,32 @@ export function liveProbe(game, args = {}) {
     if (args.objectTrace.seed) {
       const { count, freeIndices, measured = {}, player: live = null, preFrees = [], packages = null } = args.objectTrace.seed;
       runtime.seedOriginalObjectIndex({ count, freeIndices, exact: true, packages, source: 'the original registry at the frozen start' });
-      // The run's own measured indices for the pre-placed actors and the player (a host input, like the tables of the other sessions)
-      let given = 0;
-      for (const actor of level.actors) {
-        if (!actor || actor === player) continue;
+      // The run's own measured indices for the pre-placed actors and the player (a host input, like the tables of the other sessions), the
+      // pending-deleted ones included: an actor that destroyed itself at load is released by Play's first purge under the index it holds
+      // (script-level-collection.mjs `release`), and the map table's (map-object-indices.mjs) is another capture's.
+      const held = new Set();
+      const give = actor => {
         const key = `${runtime.instance(actor).cls.record.name}.${actor.name}`;
-        if (Number.isInteger(measured[key])) { runtime.instance(actor).globalIndex = measured[key]; given++; }
-      }
-      if (live) runtime.instance(player).globalIndex = live.index;
-      out.objectTrace = { measured: given, player: live?.key ?? null, preFrees: preFrees.length };
-      // Frees of objects that existed at the frozen start (see live-acceptance.mjs registrySeed): run before the tick they happened in.
-      args.objectTrace.pending = preFrees.map(entry => ({ ...entry }));
+        if (!Number.isInteger(measured[key])) return false;
+        runtime.instance(actor).globalIndex = measured[key];
+        held.add(measured[key]);
+        return true;
+      };
+      let given = 0, givenPending = 0;
+      for (const actor of level.actors) if (actor && actor !== player && give(actor)) given++;
+      for (let actor = level.pendingDeleted ?? null; actor; actor = runtime.readNamed(actor, 'Deleted') ?? null) if (actor !== player && give(actor)) givenPending++;
+      if (live) { runtime.instance(player).globalIndex = live.index; held.add(live.index); }
+      // Frees of objects that existed at the frozen start (see live-acceptance.mjs registrySeed). An object Play holds under the same index is
+      // freed by Play itself: no pre-free for it. Of the others, one with an anchor (the original's registry event before it in the same tick)
+      // is released right after Play's model takes or gives back that slot at that tick (the log hook below): its place in a purge. The rest run
+      // before the tick they happened in, an AI event object after the event manager's Tick (the replay).
+      const own = preFrees.filter(entry => held.has(entry.index)), rest = preFrees.filter(entry => !held.has(entry.index));
+      const anchoredHere = entry => entry.anchor && !AI_EVENT_CLASS.test(entry.cls ?? '');
+      args.objectTrace.pending = rest.filter(entry => !anchoredHere(entry)).map(entry => ({ ...entry }));
+      args.objectTrace.anchored = rest.filter(anchoredHere).map(entry => ({ ...entry }));
+      args.objectTrace.stats = { anchored: 0, late: 0, rejected: 0 };
+      out.objectTrace = { measured: given, pendingDeleted: givenPending, player: live?.key ?? null, preFrees: rest.length,
+        anchored: args.objectTrace.anchored.length, own: own.map(entry => `${entry.cls}.${entry.name}`) };
     }
     const objects = runtime.objectLog ??= [], sounds = runtime.soundLog ??= [];
     // The tracer's u counts level ticks: a window frame (RootTick) between level ticks k and k+1 is u = k. Play ticks those frames inside replayed tick
@@ -294,7 +314,16 @@ export function liveProbe(game, args = {}) {
     if (model) {
       model.clock = tick;
       // the model's own log, filtered to the window of ticks the comparison covers
-      model.log = { push: entry => { if (inRange(entry.u)) objects.push(entry); } };
+      const anchored = args.objectTrace.anchored ?? [], stats = args.objectTrace.stats;
+      model.log = { push: entry => {
+        if (inRange(entry.u)) objects.push(entry);
+        // the pre-free the original made right after this registry event (its release is logged in turn: the anchor of the next one)
+        const head = anchored[0];
+        if (head && head.u === entry.u && head.anchor.ev === entry.ev && head.anchor.index === entry.index) {
+          anchored.shift();
+          if (model.release(head.index)) stats.anchored++; else stats.rejected++;
+        }
+      } };
     }
     const audio = level.engine.audio;
     if (audio && !audio.traced) {
@@ -336,6 +365,7 @@ export function liveProbe(game, args = {}) {
       ticks, hold, warm, index: 0, rows: [], cursor: 0, current: null, preFrees: args.objectTrace?.pending ?? null,
       // the level's end: {tick, url, ...} when UGameEngine::Tick's client travel (game.mjs clientTravel) left the level after that many replayed ticks
       levelEnd: null,
+      anchoredFrees: args.objectTrace?.anchored ?? null, preFreeStats: args.objectTrace?.stats ?? { anchored: 0, late: 0, rejected: 0 },
       // console commands typed into the original between two ticks ({after, text}: after that many ticks), run here the same way through the
       // recovered console command chain (APlayerPawn::execConsoleCommand) before the next tick; their results are returned by `take` as `commands`
       commands: commands.map(command => ({ ...command })), commandLog: [], canSee: args.replay.canSeeProbe ?? null,
@@ -427,16 +457,23 @@ export function liveProbe(game, args = {}) {
           const entry = this.preFrees.shift();
           // An AI event object (the sender the player's landing left in the original's manager) is freed by UEventManager::CleanupEvents,
           // at the end of the manager's Tick after the actors (ULevel::Tick 0x103a5a2b): after the objects this tick's actors create.
-          if (/^AI(SenderEvent|ReceiverEvent|EventType)$/.test(entry.cls ?? '') && runtime.scriptVm?.aiEvents) { (this.preFreesAfterAi ??= []).push(entry); continue; }
-          if (!runtime.actorLifecycle.construction.registry.original?.release(entry.index)) this.preFreesRejected = (this.preFreesRejected ?? 0) + 1;
+          if (AI_EVENT_CLASS.test(entry.cls ?? '') && runtime.scriptVm?.aiEvents) { (this.preFreesAfterAi ??= []).push(entry); continue; }
+          if (!runtime.actorLifecycle.construction.registry.original?.release(entry.index)) this.preFreeStats.rejected++;
         }
         if (this.preFreesAfterAi?.length && runtime.scriptVm?.aiEvents) {
           const manager = runtime.scriptVm.aiEvents, pending = this.preFreesAfterAi;
           manager.afterTick = () => {
             manager.afterTick = null;
             for (const entry of pending.splice(0))
-              if (!runtime.actorLifecycle.construction.registry.original?.release(entry.index)) this.preFreesRejected = (this.preFreesRejected ?? 0) + 1;
+              if (!runtime.actorLifecycle.construction.registry.original?.release(entry.index)) this.preFreeStats.rejected++;
           };
+        }
+        // An anchored pre-free whose anchor never came in its tick (Play's slots already differ there): released once that tick's window
+        // frames have run too (they run inside the next replayed tick), and counted.
+        while (this.anchoredFrees?.length && this.anchoredFrees[0].u < this.index) {
+          const entry = this.anchoredFrees.shift();
+          this.preFreeStats.late++;
+          if (!runtime.actorLifecycle.construction.registry.original?.release(entry.index)) this.preFreeStats.rejected++;
         }
         game.random.seed(parseInt(tick.rngIn, 16) >>> 0);
         // The window system's wall-clock deltas (RootTick 0x1003be90, tools/dx-live-win.c `roottick`): every frame the original ran since
@@ -529,6 +566,11 @@ export function liveProbe(game, args = {}) {
     if (runtime.touchEvents) out.touch = runtime.touchEvents.splice(0);
     if (runtime.aiEventLog) out.events = runtime.aiEventLog.splice(0);
     if (runtime.objectLog) out.objects = runtime.objectLog.splice(0);
+    // the slot model's inputs so far: pre-frees released at their anchor, late or refused, those still waiting, and the model's own
+    // releases of a slot it cannot name (`unattributed`) or could not take back (`rejected`)
+    const model = runtime.actorLifecycle?.construction?.registry?.original;
+    if (model && replay.preFreeStats) out.preFrees = { ...replay.preFreeStats, waiting: (replay.preFrees?.length ?? 0) + (replay.anchoredFrees?.length ?? 0),
+      unattributed: model.unattributed, modelRejected: model.rejected };
     if (runtime.soundLog) out.sounds = runtime.soundLog.splice(0);
   }
   if (args.status && replay) out.status = { index: replay.index, of: replay.ticks.length, levelEnd: replay.levelEnd };
