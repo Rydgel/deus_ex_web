@@ -191,9 +191,14 @@ export const SCENES = {
     cmds: `${SHOTS([60, 100, 140])}|${CHOOSE(200, 1)}|${SHOTS([280, 320, 360, 400, 440])}|900:ParseRightClick|${SHOTS([960, 1000, 1040, 1080, 1120, 1180])}`},
   // "Except send YOU back to the people..." (first, Aggressive): PlayerAttackedStatueTerrorist, the commander's last speech runs out, StatueMissionComplete, the
   // trigger TerroristCommanderAttacks. The player is then placed at Filben, never met before: MeetFilbenAfterStatue (radius 60, needs M01PlayerMetFilben false
-  // and StatueMissionComplete) starts.
-  tA: {map: '01_NYC_UNATCOIsland', ticks: 950, conversation: true, early: PLACE(2887, 38, 2539, 63000), pawns: ['TerroristCommander0', 'HarleyFilben0', 'PaulDenton0'], watch: [...COMMANDER, 'HarleyFilben0', 'BumFemale0'],
-    cmds: `${SHOTS([60, 100, 140])}|${CHOOSE(200, 0)}|${SHOTS([260])}|600:ghost|600:set DeusEx.JCDentonMale Location (X=1496.6,Y=-9968.3,Z=-250)|600:walk|600:set DeusEx.JCDentonMale ViewRotation (Pitch=0,Yaw=0,Roll=0)|${SHOTS([660, 700, 740, 780, 820, 860])}`},
+  // and StatueMissionComplete) starts. The frozen phase leaves the player on cmb5's ledge, out of every conversation's radius and every NSF pawn's view, and
+  // the placement at the commander is typed in the hold after tick 100: the frozen phase's `ghost` line ("You feel ethereal") waits in the hidden log
+  // (ShowHud False), and HUDLogDisplay.Tick times it out after the log timeout (3 s) unless a third-person conversation pauses it. The original's frozen
+  // phase gives it the window time of the typed lines (at least the capture's 2.4 s of sleeps after `ghost`, then 1.21 s at the release in the first capture),
+  // which the tracer does not record, and Play's frozen phase gives it its own few frames: with the conversation at tick 14, Play still showed the line at
+  // MeetTerrorist's end (379: HUDLogDisplay's first draw, four GCs, the original's at 600). From tick 100 on, both run the hold's traced frames.
+  tA: {map: '01_NYC_UNATCOIsland', ticks: 1050, conversation: true, early: PLACE(1221, -961, 799, 32768, -3632), pawns: ['TerroristCommander0', 'HarleyFilben0', 'PaulDenton0'], watch: [...COMMANDER, 'HarleyFilben0', 'BumFemale0'],
+    cmds: `100:ghost|100:set DeusEx.JCDentonMale Location (X=2887,Y=38,Z=2539)|100:walk|100:set DeusEx.JCDentonMale ViewRotation (Pitch=0,Yaw=63000,Roll=0)|${SHOTS([160, 200, 240])}|${CHOOSE(300, 0)}|${SHOTS([360])}|700:ghost|700:set DeusEx.JCDentonMale Location (X=1496.6,Y=-9968.3,Z=-250)|700:walk|700:set DeusEx.JCDentonMale ViewRotation (Pitch=0,Yaw=0,Roll=0)|${SHOTS([760, 800, 840, 880, 920, 960])}`},
   // TerroristsOverheard (radius 350 around ThugMale3, first person, non-interactive: Amos and Jackson, Terrorist22): the player placed 180 units from Amos behind
   // the wall that hides it from both (no line from either eye to its head or feet; at 317 units in the open they see the player and the fight interrupts it).
   // Its first two speeches run out (a first-person conversation takes no key) and the second sets KnowsShipment. At tick 480 the player is placed at the Mole

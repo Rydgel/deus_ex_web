@@ -1091,7 +1091,7 @@ async function play() {
     if (levelEnd) console.log(`the level ended after ${levelEnd.tick} replayed ticks (client travel to ${levelEnd.url}); the trace holds ${trace.length}${existsSync(`${tracePath}.ended`) ? `, the original's level ended after ${readFileSync(`${tracePath}.ended`, 'utf8').trim()}` : ''}`);
     if (option('gc-trace', null)) {
       const [first, last] = option('gc-trace').split(':').map(Number);
-      const allocs = gcAllocs.filter(a => a.tick >= first && a.tick <= last);
+      const allocs = gcAllocs.filter(a => (a.tick ?? 0) >= first && (a.tick ?? 0) <= last);   // (tick null: before the first replayed tick, the frozen phase)
       writeFileSync(path.join(dir, `gc-allocs${suffix}.json`), JSON.stringify(allocs, null, 1));
       console.log(`gc trace: ${allocs.length} GC allocations in ticks ${first}..${last}`);
     }
