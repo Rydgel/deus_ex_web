@@ -131,12 +131,49 @@ A script can change an actor's `Mesh`:
 The layer used to refuse this ("changed Mesh; rebuilding the inspection
 resource is unsupported"), which paused Play whenever a lockpick or
 multitool was put away. It now retires the old resource and admits the
-actor again like a newly visible one. The new mesh decodes asynchronously
-and appears once it is ready; that is a presentation latency, not game
-state. `validate-actor-mesh-scene.mjs` picks up Multitool0, puts it in hand
+actor again like a newly visible one (below: in the same frame when its
+resources are resident). `validate-actor-mesh-scene.mjs` picks up Multitool0, puts it in hand
 and switches away through the original belt scripts. The tool must be
 drawn with its POV mesh through `DownItem` and hidden afterwards, and the
 owner rules are checked on it.
+
+### A spawned actor's first frame — 2026-10-18
+
+**The original.** `UGameEngine::Tick` ticks the levels (`0x10390154`–`0x103901a3`) and only then
+has the client render (`UClient::Tick`, vtable `+0x64` at `0x1039117b`; [Stage 5](stage-5-exit-criteria.md)
+"The player's death to the level's end"). `DrawActorSprite` copies `Level.TimeSeconds` to the drawn
+actor's `LastRenderTime` (`0x10b25150`–`0x10b25161`). So an actor spawned in tick N is drawn and stamped
+in the render after tick N, with tick N's time. Measured twice on Island: `TerroristCarcass1`
+(spawned at tick 98, `LastRenderTime` 187.668228 at tick 99's row, `cmb5`) and `JCDentonMaleCarcass0`
+(730, 242.739822 at 731, `die1`). Nothing loads at the spawn: the class's defaults (`Mesh`, and for a
+carcass `Mesh2`, `Mesh3` and its skins) are object references serialized with the class, loaded with
+its package when the level loads. That last point is the engine loader's general behaviour, not traced
+instruction by instruction here; the measured contract is the first frame's stamp.
+
+**Play.** `admit` (`actor-mesh-sim.mjs`) makes the binding in the frame that first sees the actor,
+inside `update`'s `reconcile`, before that frame's SetupDynamics/OccludeBsp (`view.occlude`, which takes
+the layer's bindings) and the stamps (`sim-session.mjs`), when its resources are resident:
+`createMeshBindingNow` takes the mesh's prepared payload (`ScriptRuntime.meshResource`) and each face
+group's skin from `TextureStore.now`, which runs the same decode as `get` over packages already loaded
+(`AssetStore.resolveLoaded`). The binding body is one generator (`meshBindingSteps`) whose two
+resource steps `createMeshBinding` awaits and `createMeshBindingNow` takes only when resident, so both
+build the same binding, and a skin that cannot decode drops its group on both sides as before. The new
+binding's `mesh_reads` block is empty in its first frame (the pass ran before it existed): its update,
+`admitted` and `packSetup` read the fields directly, as they do without the pass. When something is not
+resident, it is disposed and the binding is made asynchronously as before, a frame or more late; after
+the layer has started such an admission is listed in `summary.late`.
+
+Residency is prepared at load. The spawn closure (`script-doors.mjs` `prepareSpawnClosure`) already
+prepared each spawnable class's default `Mesh`; it now prepares every mesh any live actor's properties
+or a spawnable class's defaults name. A probe on Island (each of the nine `CarcassType` classes spawned
+between two updates, with its `Mesh` and with `Mesh2`, as `InitFor` sets it after `DeathFront`) bound
+all 18 in their first update; without the closure change the nine `Mesh2` (`*_CarcassB`) were not
+prepared and all nine were late. The load costs no measurable time (Island boot 16.9 s and 17.0 s).
+
+The page's half (`actor-mesh-draw.mjs` `build`) still decodes the mesh and skins asynchronously, so
+the actor can appear on screen a frame after its first stamp: a presentation latency, not game state.
+The pawns' third-person weapons (`actor-weapon-sim.mjs`), the render-iterator items and the
+first-person view model (`weapon-overlay-sim.mjs`) still bind asynchronously.
 
 ### Partial-face rendering
 

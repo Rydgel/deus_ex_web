@@ -83,70 +83,113 @@ export function decodePixels(mip, format, palette, masked = false) {
   return { width, height, data: rgba };
 }
 
+/** A package an import names is not loaded yet: TextureStore.get() loads it,
+ * TextureStore.now() answers null. */
+class Unloaded extends Error {
+  constructor(asset, ref) { super('Package not loaded'); this.asset = asset; this.ref = ref; }
+}
+
 export class TextureStore {
-  constructor(assets) { this.assets = assets; this.cache = new Map(); }
+  constructor(assets) { this.assets = assets; this.cache = new Map(); this.values = new Map(); }
   async get(asset, ref, masked = false, ancestry = []) {
     const object = await this.assets.resolve(asset, ref);
     if (ancestry.includes(object.key)) throw new Error(`Cyclic procedural texture: ${object.key}`);
     const key = `${object.key}:${masked}`;
     if (!this.cache.has(key)) {
       const pending = (async () => {
-        const texture = readTexture(object.asset, object.index);
-        if (texture.className === 'FireTexture') {
-          // Procedural (docs/fire-texture.md): no stored pixels; the sparks
-          // follow the mips (a compact count of 8-byte records).
-          const palette = texture.palette ? await this.assets.resolve(object.asset, texture.palette) : null;
-          const native = texture.native;
-          let at = 0, b = native[at++], count = b & 0x3f;
-          if (b & 0x40) { let shift = 6, next; do { next = native[at++]; count |= (next & 0x7f) << shift; shift += 7; } while (next & 0x80); }
-          if (b & 0x80) count = -count;
-          if (count < 0 || at + count * 8 > native.length) throw new Error(`Invalid FireTexture sparks: ${object.key}`);
-          return { ...texture, key: object.key, asset: object.asset, masked: false, procedural: 'FireTexture',
-            fire: { sparks: native.slice(at, at + count * 8), palette: palette ? readPalette(palette.asset, palette.index) : null } };
-        }
-        if (texture.className === 'WetTexture') {
-          // Procedural (docs/fire-texture.md "Wet textures"): the drops are
-          // ADrop structs (FDrop's 8 bytes, SerializeBin order); the source
-          // is a P8 texture whose mip 0 indices the wet texture refracts.
-          const drops = new Uint8Array(2048);
-          for (const p of texture.properties) {
-            if (p.name !== 'Drops') continue;
-            if (p.struct !== 'ADrop' || p.data.length !== 8 || p.arrayIndex > 255) throw new Error(`Invalid WetTexture drop: ${object.key}`);
-            drops.set(p.data, p.arrayIndex * 8);
+        // The decode is synchronous; each object it needs from a package
+        // that is not loaded yet is resolved here, and it runs again.
+        const known = new Map();
+        for (;;) {
+          try { return this.decode(object, masked, ancestry, known); }
+          catch (error) {
+            if (!(error instanceof Unloaded)) throw error;
+            known.set(`${error.asset.name}:${error.ref}`, await this.assets.resolve(error.asset, error.ref));
           }
-          const paletteOf = async (asset, ref) => {
-            if (!ref) return null;
-            const p = await this.assets.resolve(asset, ref);
-            return readPalette(p.asset, p.index);
-          };
-          let source = null;
-          if (texture.values.SourceTexture) {
-            const s = await this.assets.resolve(object.asset, texture.values.SourceTexture);
-            const image = readTexture(s.asset, s.index);
-            if (image.format !== 0 || !image.mips[0]?.data.length) throw new Error(`WetTexture source is not a stored P8 image: ${s.key}`);
-            source = { key: s.key, uBits: Math.log2(image.mips[0].width), vBits: Math.log2(image.mips[0].height),
-              pixels: image.mips[0].data, palette: await paletteOf(s.asset, image.palette), values: image.values };
-          }
-          return { ...texture, key: object.key, asset: object.asset, masked, procedural: 'WetTexture',
-            wet: { drops, source, palette: await paletteOf(object.asset, texture.palette) } };
         }
-        if (texture.values.SourceTexture && texture.mips.every(mip => mip.data.length === 0)) {
-          const source = await this.get(object.asset, texture.values.SourceTexture, masked, [...ancestry, object.key]);
-          return { ...texture, mips: source.mips, key: object.key, asset: object.asset, masked,
-            procedural: `Static source image: ${source.key}` };
-        }
-        let palette;
-        if (texture.palette) {
-          const p = await this.assets.resolve(object.asset, texture.palette);
-          palette = readPalette(p.asset, p.index);
-        }
-        if (!texture.mips.length) throw new Error(`No stored mip data: ${object.key}`);
-        const mips = texture.mips.map(mip => decodePixels(mip, texture.format, palette, masked));
-        return { ...texture, mips, key: object.key, asset: object.asset, masked };
       })();
       this.cache.set(key, pending);
-      pending.catch(() => this.cache.delete(key));
+      pending.then(value => this.values.set(key, value), () => this.cache.delete(key));
     }
     return this.cache.get(key);
+  }
+  /** get() for a synchronous caller: the decoded texture, or null while a
+   * package it needs is not loaded (AssetStore.resolveLoaded). The same
+   * decode and cache as get(); a texture that cannot decode throws. */
+  now(asset, ref, masked = false) {
+    try { return this.resident(asset, ref, masked, [], null); }
+    catch (error) { if (error instanceof Unloaded) return null; throw error; }
+  }
+  resident(asset, ref, masked, ancestry, known) {
+    const object = this.resolveIn(asset, ref, known);
+    if (ancestry.includes(object.key)) throw new Error(`Cyclic procedural texture: ${object.key}`);
+    const key = `${object.key}:${masked}`;
+    if (this.values.has(key)) return this.values.get(key);
+    const value = this.decode(object, masked, ancestry, known);
+    this.values.set(key, value);
+    if (!this.cache.has(key)) this.cache.set(key, Promise.resolve(value));
+    return value;
+  }
+  /** The object `ref` names: one get() resolved (`known`), or a loaded
+   * package's; Unloaded otherwise. */
+  resolveIn(asset, ref, known) {
+    const object = known?.get(`${asset.name}:${ref}`) ?? this.assets.resolveLoaded?.(asset, ref);
+    if (!object) throw new Unloaded(asset, ref);
+    return object;
+  }
+  decode(object, masked, ancestry, known) {
+    const resolve = (asset, ref) => this.resolveIn(asset, ref, known);
+    const texture = readTexture(object.asset, object.index);
+    if (texture.className === 'FireTexture') {
+      // Procedural (docs/fire-texture.md): no stored pixels; the sparks
+      // follow the mips (a compact count of 8-byte records).
+      const palette = texture.palette ? resolve(object.asset, texture.palette) : null;
+      const native = texture.native;
+      let at = 0, b = native[at++], count = b & 0x3f;
+      if (b & 0x40) { let shift = 6, next; do { next = native[at++]; count |= (next & 0x7f) << shift; shift += 7; } while (next & 0x80); }
+      if (b & 0x80) count = -count;
+      if (count < 0 || at + count * 8 > native.length) throw new Error(`Invalid FireTexture sparks: ${object.key}`);
+      return { ...texture, key: object.key, asset: object.asset, masked: false, procedural: 'FireTexture',
+        fire: { sparks: native.slice(at, at + count * 8), palette: palette ? readPalette(palette.asset, palette.index) : null } };
+    }
+    if (texture.className === 'WetTexture') {
+      // Procedural (docs/fire-texture.md "Wet textures"): the drops are
+      // ADrop structs (FDrop's 8 bytes, SerializeBin order); the source
+      // is a P8 texture whose mip 0 indices the wet texture refracts.
+      const drops = new Uint8Array(2048);
+      for (const p of texture.properties) {
+        if (p.name !== 'Drops') continue;
+        if (p.struct !== 'ADrop' || p.data.length !== 8 || p.arrayIndex > 255) throw new Error(`Invalid WetTexture drop: ${object.key}`);
+        drops.set(p.data, p.arrayIndex * 8);
+      }
+      const paletteOf = (asset, ref) => {
+        if (!ref) return null;
+        const p = resolve(asset, ref);
+        return readPalette(p.asset, p.index);
+      };
+      let source = null;
+      if (texture.values.SourceTexture) {
+        const s = resolve(object.asset, texture.values.SourceTexture);
+        const image = readTexture(s.asset, s.index);
+        if (image.format !== 0 || !image.mips[0]?.data.length) throw new Error(`WetTexture source is not a stored P8 image: ${s.key}`);
+        source = { key: s.key, uBits: Math.log2(image.mips[0].width), vBits: Math.log2(image.mips[0].height),
+          pixels: image.mips[0].data, palette: paletteOf(s.asset, image.palette), values: image.values };
+      }
+      return { ...texture, key: object.key, asset: object.asset, masked, procedural: 'WetTexture',
+        wet: { drops, source, palette: paletteOf(object.asset, texture.palette) } };
+    }
+    if (texture.values.SourceTexture && texture.mips.every(mip => mip.data.length === 0)) {
+      const source = this.resident(object.asset, texture.values.SourceTexture, masked, [...ancestry, object.key], known);
+      return { ...texture, mips: source.mips, key: object.key, asset: object.asset, masked,
+        procedural: `Static source image: ${source.key}` };
+    }
+    let palette;
+    if (texture.palette) {
+      const p = resolve(object.asset, texture.palette);
+      palette = readPalette(p.asset, p.index);
+    }
+    if (!texture.mips.length) throw new Error(`No stored mip data: ${object.key}`);
+    const mips = texture.mips.map(mip => decodePixels(mip, texture.format, palette, masked));
+    return { ...texture, mips, key: object.key, asset: object.asset, masked };
   }
 }

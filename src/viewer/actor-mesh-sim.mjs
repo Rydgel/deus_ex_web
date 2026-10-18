@@ -19,7 +19,7 @@ import {RENDER_MESH,RENDER_SHIFT,renderScanMode} from '../runtime/script-vm-rend
 import {handleOf,identityOfHandle} from '../runtime/script-object-handles.mjs';
 import {fieldAccessor,fieldAccessors} from './actor-fields.mjs';
 import {keyframeBoxes,advanceChannelBox,viewBox,certifyFrustum} from './gpu-mesh-bounds.mjs';
-import {meshFaceGroups,resolveMeshSkin} from './actor-mesh-skins.mjs';
+import {meshFaceGroups,resolveMeshSkin,resolveMeshSkinNow} from './actor-mesh-skins.mjs';
 import {POLY} from '../unreal/geometry.mjs';
 import {TRAINING_NPC_IDENTITIES} from '../runtime/training-npc-identities.mjs';
 import {SETUP,setupSequence} from '../runtime/bsp-occlusion.mjs';
@@ -116,7 +116,52 @@ const plainLighting=(prepared,camera,mirror=0)=>({flags:prepared.flags,ambient:[
 /** One actor's mesh binding on the simulation side. `layout` is this side's
  * GPU mesh layout (null: the CPU path); `onRecord` is not used here, the
  * caller collects update()'s records. */
-export async function createMeshBinding(runtime,actor,{id,originalObjectIndex,kernel=null,drawActor=false,visible=null,
+export async function createMeshBinding(runtime,actor,options) {
+  const steps=meshBindingSteps(runtime,actor,options);
+  for(let step=steps.next();;) {
+    if(step.done)return step.value;
+    let value,failed=false,failure;
+    try {
+      const {mesh,skin}=step.value;
+      value=skin?await resolveMeshSkin(options.textures,skin.reference.asset,skin.reference.index,skin.flags)
+        :await runtime.prepareMeshReference(mesh);
+    } catch(error) {failed=true;failure=error;}
+    step=failed?steps.throw(failure):steps.next(value);
+  }
+}
+
+// A resource createMeshBindingNow needs is not resident: the binding is
+// disposed and the caller takes the asynchronous path.
+const NOT_RESIDENT=new Error('Mesh binding resource is not resident');
+
+/** createMeshBinding in the caller's frame: the binding, or null when the
+ * mesh's prepared resource (ScriptRuntime.meshResource) or a group's skin
+ * (TextureStore.now) is not resident yet; nothing of it is kept then. */
+export function createMeshBindingNow(runtime,actor,options) {
+  const steps=meshBindingSteps(runtime,actor,options);
+  try {
+    for(let step=steps.next();;) {
+      if(step.done)return step.value;
+      let value,failed=false,failure;
+      try{value=residentResource(runtime,options.textures,step.value);}catch(error){failed=true;failure=error;}
+      step=failed?steps.throw(failure):value===undefined?steps.throw(NOT_RESIDENT):steps.next(value);
+    }
+  } catch(error) {if(error===NOT_RESIDENT)return null;throw error;}
+}
+
+/** A binding step's resource when it is resident, else undefined: the mesh's
+ * prepared payload (prepareMeshReference's) or a group's skin. */
+function residentResource(runtime,textures,{mesh,skin}) {
+  if(skin)return resolveMeshSkinNow(textures,skin.reference.asset,skin.reference.index,skin.flags)??undefined;
+  if(!mesh||!['LodMesh','Mesh'].includes(mesh.kind))return null;
+  try{return runtime.meshResource(mesh).payload;}catch{return undefined;}
+}
+
+/** The binding's body: it yields {mesh} for the mesh's prepared payload and
+ * {skin: group} for a face group's skin (resolveMeshSkin's result, or the
+ * error that drops the group), which createMeshBinding awaits and
+ * createMeshBindingNow takes only when resident. */
+function* meshBindingSteps(runtime,actor,{id,originalObjectIndex,kernel=null,drawActor=false,visible=null,
   childVisible=null,lighting=null,layout=null,reads=false,textures,meshKey=null,lod=true,attach=null}) {
   const own=fieldAccessors(runtime,actor,['bHidden','bDeleteMe','Location','PrePivot','DrawScale','Mesh','Style',
     'ScaleGlow','bAnimByOwner','Owner','bParticles','Rotation','AnimSequence','AnimFrame','BlendAnimSequence',
@@ -130,7 +175,7 @@ export async function createMeshBinding(runtime,actor,{id,originalObjectIndex,ke
   const actorName=read(actor,'Name');
   const meshReference=attach?attach.mesh():read(actor,'Mesh');
   const meshTexture=index=>attach?runtime.getMeshTextureOf(meshReference,actor,index):runtime.getActorMeshTexture(actor,index);
-  const payload=attach?await runtime.prepareMeshReference(meshReference):await runtime.prepareMesh(actor);
+  const payload=yield {mesh:meshReference};
   // GetFrame's tween cache must survive draw submissions; it owns only this
   // binding's identity (docs/npc-mesh-preview.md).
   const cache=createLodMeshFrameCache(),coords=[0,0,0,1,0,0,0,1,0,0,0,1];
@@ -304,13 +349,14 @@ export async function createMeshBinding(runtime,actor,{id,originalObjectIndex,ke
       try {
         // The page decodes the same skin; a group whose skin it cannot draw
         // is dropped on both sides.
-        const {flags}=await resolveMeshSkin(textures,group.reference.asset,group.reference.index,group.flags);
+        const {flags}=yield {skin:group};
         const indices=[];
         for(const faceIndex of group.faces){const face=faces[faceIndex];for(const corner of [0,2,1])indices.push(face.vertices[corner]);}
         const entry={key:groupKey,reference:group.reference,flags:group.flags,drawFlags:flags,faces:group.faces,indices,
           environment:Boolean(group.flags&POLY.Environment),sphere:new THREE.Sphere(),positions:null,bounds:{}};
         groups.set(groupKey,entry);
       } catch(error) {
+        if(error===NOT_RESIDENT)throw error;
         skipped.push({texture:group.reference.key,message:error.message});
       }
     }
@@ -1034,10 +1080,12 @@ export async function createActorMeshSim(runtime,assets,asset,{kernel,player:pla
     if((own?own.bOnlyOwnerSee():read(actor,'bOnlyOwnerSee'))&&(!owned||behind))return false;
     return !(owned&&(own?own.bOwnerNoSee():read(actor,'bOwnerNoSee'))&&!behind);
   };
-  let synthetic=0x40000000,disposed=false;
+  let synthetic=0x40000000,disposed=false,started=false;
   const pending=new Map(),failed=new WeakMap();
+  // `late`: actors admitted after the layer started whose resources were not
+  // resident (createMeshBindingNow), so not drawn in their first frame.
   const summary={actors:[],errors,poseBackend:kernel?.name??'javascript',kernelError,gpu:Boolean(layout),
-    npcs:npcActors.length,props:0,skipped:[],triangles:0,
+    npcs:npcActors.length,props:0,skipped:[],triangles:0,late:[],
     shading:lighting?'original mesh lighting':'texture-only inspection',startup:'original'};
   const refreshSummary=()=>{
     summary.actors=actors.map(actor=>actor.summary);summary.props=propActors.length;summary.npcs=npcActors.length;
@@ -1060,15 +1108,30 @@ export async function createActorMeshSim(runtime,assets,asset,{kernel,player:pla
     // A map with mirrors also admits actors only its child frames draw.
     if(!drawnInWorld(actor)&&!(childFrames&&drawnInWorld(actor,null,true)))return;
     const npc=retired.get(actor)??false;retired.delete(actor);
-    const task=bind(actor,{originalObjectIndex:synthetic++,visible:drawnInWorld,
-      childVisible:childFrames?(actor,own)=>drawnInWorld(actor,own,true):null,reads:true})
+    const options={id:nextId++,kernel,lighting,layout,textures,lod,originalObjectIndex:synthetic++,visible:drawnInWorld,
+      childVisible:childFrames?(actor,own)=>drawnInWorld(actor,own,true):null,reads:true};
+    const take=binding=>{
+      bindings.set(actor,binding);actors.push(binding);(npc?npcActors:propActors).push(binding);refreshSummary();
+      // Shown from admission, before its first update (as the layer did).
+      binding.creation.visible=drawnInWorld(actor);
+      onCreate(binding.creation);
+    };
+    const fail=error=>{failed.set(actor,mesh);errors.push({actor:actor.name??'?',message:error.message});};
+    // The original's DrawActorSprite draws and stamps an actor spawned in a
+    // tick in the frame after that tick (0x10b25150): its mesh and skins are
+    // resident since the level loaded (the spawn closure prepares them,
+    // script-doors.mjs). The binding is made in this frame, before its
+    // SetupDynamics and stamps, when they are; else its resources load first
+    // and it is made later (summary.late once the layer has started).
+    let binding;
+    try{binding=createMeshBindingNow(runtime,actor,options);}catch(error){fail(error);return;}
+    if(binding){take(binding);return;}
+    if(started&&summary.late.length<64)summary.late.push({actor:actor.name??'?',mesh:mesh.key});
+    const task=createMeshBinding(runtime,actor,options)
       .then(binding=>{
         if(disposed||!level.actors.includes(actor)||read(actor,'bDeleteMe')||read(actor,'Mesh')!==mesh){binding.dispose();return;}
-        bindings.set(actor,binding);actors.push(binding);(npc?npcActors:propActors).push(binding);refreshSummary();
-        // Shown from admission, before its first update (as the layer did).
-        binding.creation.visible=drawnInWorld(actor);
-        onCreate(binding.creation);
-      }).catch(error=>{failed.set(actor,mesh);errors.push({actor:actor.name??'?',message:error.message});})
+        take(binding);
+      }).catch(fail)
       .finally(()=>pending.delete(actor));
     pending.set(actor,task);
   };
@@ -1101,8 +1164,7 @@ export async function createActorMeshSim(runtime,assets,asset,{kernel,player:pla
     for(const [actor,binding] of bindings){
       if(!live.has(actor))retire(actor,binding);
       // A script can change Mesh (Inventory.BecomeItem/BecomePickup). The new
-      // mesh is admitted like a newly visible actor; its resources decode
-      // asynchronously, so it appears once they are ready.
+      // mesh is admitted like a newly visible actor (admit).
       else if(binding.meshChanged(reads)){retired.set(actor,npcActors.includes(binding));retire(actor,binding);}
     }
     // The render scan (script-vm-render.mjs) leaves the actors with a live
@@ -1263,7 +1325,7 @@ export async function createActorMeshSim(runtime,assets,asset,{kernel,player:pla
     };
     return {views,verify:renderScanMode()==='verify'};
   };
-  reconcile();await Promise.all(pending.values());refreshSummary();
+  reconcile();await Promise.all(pending.values());refreshSummary();started=true;
   if(!actors.length&&!npcActors.length)throw new Error(errors.map(e=>`${e.actor}: ${e.message}`).join('; ')||'No mesh actors resolved');
   const all=()=>[...actors,...itemBindings(),...weapons.bindings()];
   return {actors,npcActors,propActors,summary,kernel,bindings,
