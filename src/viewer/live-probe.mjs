@@ -46,6 +46,8 @@ export function liveProbe(game, args = {}) {
     if (name === '@player') return player;
     // the player's held Weapon by reference (a spawned weapon's name can repeat a map actor's in Play: scripts/weapon-view-probe.js)
     if (name === '@weapon') return runtime.readNamed(player, 'Weapon') ?? null;
+    // `Owner.field`: the actor an owner's object field holds (a turret's gun: live-acceptance.mjs --device-watch Name:Class@Owner.field)
+    if (String(name).includes('.')) { const [owner, field] = String(name).split('.'); const actor = byName(owner); return actor ? runtime.readNamed(actor, field) ?? null : null; }
     const exact = level.actors.find(actor => actor?.name === name);
     if (exact) return exact;
     const lower = String(name).toLowerCase();
@@ -363,10 +365,11 @@ export function liveProbe(game, args = {}) {
     // spawned by AutoTurret.PreBeginPlay: its name follows each process's session history, live-acceptance.mjs --device-watch Name:Class@Owner.field)
     // (a group that watches bDeleteMe, live-acceptance.mjs --device-watch and --stop-destroyed: a destroyed actor whose object a purge released has no more
     // rows, its memory is not its own)
-    const viaOwner = spec => { const [owner, field] = spec.split('.'); const actor = byName(owner); return actor ? runtime.readNamed(actor, field) ?? null : null; };
     const actors = watch.map(({ names, props, late = false, via = {} }) => ({ props, late, released: props.includes('bDeleteMe'),
-      items: names.map(name => [name, via[name] ? viaOwner(via[name]) : byName(name)]) }));
+      items: names.map(name => [name, byName(via[name] ?? name)]) }));
     for (const group of actors) for (const [name, actor] of group.items) if (!actor && !group.late) throw new Error(`liveProbe: no actor ${name}`);
+    // the AI event manager's process ring as the replay begins (aievent.rs ai_dump), for live-acceptance.mjs to compare with the original's at its release
+    out.aiRing = runtime.scriptVm?.aiEvents?.ring?.() ?? null;
     const state = game.liveReplay = {
       ticks, hold, warm, index: 0, rows: [], cursor: 0, current: null, preFrees: args.objectTrace?.pending ?? null,
       // the level's end: {tick, url, ...} when UGameEngine::Tick's client travel (game.mjs clientTravel) left the level after that many replayed ticks
@@ -491,9 +494,10 @@ export function liveProbe(game, args = {}) {
         // number differs between the programs (JCDentonMale2 there, JCDentonMale1 here).
         const aiManager = runtime.scriptVm?.aiEvents;
         this.aiStop = null;
-        if (tick.aiFirst !== undefined && aiManager?.setProcessStop) {
-          const [who, event] = String(tick.aiFirst).split('|'), actor = who === 'None' ? null : /^JCDenton/i.test(who) ? player : byName(who);
-          aiManager.setProcessStop(actor, event);
+        // (`aiStop`, AIProcess's own firstProcess at its return, when the capture has it: the exact receiver the loop stopped before; else `aiFirst`)
+        if ((tick.aiStop ?? tick.aiFirst) !== undefined && aiManager?.setProcessStop) {
+          const raw = tick.aiStop !== undefined, [who, event] = String(raw ? tick.aiStop : tick.aiFirst).split('|'), actor = who === 'None' ? null : /^JCDenton/i.test(who) ? player : byName(who);
+          aiManager.setProcessStop(actor, event, raw);
           this.aiStop = { misses: aiManager.processStopMisses(), unresolved: who !== 'None' && !actor };
         }
         while (this.phonemes.length && this.phonemes[0].n <= this.index + 1) {
