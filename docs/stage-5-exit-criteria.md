@@ -554,18 +554,18 @@ event, every object creation (a loaded `Sound` now also by its export name: whic
 | --- | --- | ---: | --- |
 | `pG` | MeetPaul at the dock: the GEP gun (second choice) | 1150 | PASS: 23 actors, 1,678 AI events, 1,392 creations; the GEP gun and its rockets, the Liberty Island image and three goals; 1 flag |
 | `pR` | MeetPaul: the sniper rifle (first) | 1150 | PASS: 23 actors, 1,680 AI events, 1,394 creations; 1 flag |
-| `pX` | MeetPaul: the mini crossbow (third) | 1150 | queued |
+| `pX` | MeetPaul: the mini crossbow (third) | 1150 | PASS: 23 actors, 1,682 AI events, 1,396 creations; 1 flag |
 | `fT` | MeetFilben: "You can trust me." (the NanoKey, `FilbenGaveKey`, 150 skill points, the commander's image) | 1200 | PASS: 20 actors, 1,766 AI events, 1,270 creations; 4 flags |
-| `fM` | `fT`'s inputs, then MeetFilben2 by a frob fan: its GaveKey branch | 1250 | queued |
-| `fN` | MeetFilben: "I can't promise..." (`FilbenGaveKey` false), then MeetFilben2 without the key | 1300 | queued |
+| `fM` | `fT`'s inputs, then MeetFilben2 by a frob fan: its GaveKey branch | 1250 | PASS: 20 actors, 1,834 AI events, 1,424 creations; 5 flags (after fix 7 below) |
+| `fN` | MeetFilben: "I can't promise..." (`FilbenGaveKey` false), then MeetFilben2 without the key | 1300 | PASS: 20 actors, 1,892 AI events, 1,438 creations; 5 flags (after fix 7 below) |
 | `gP` | GuntherRescued after the wall button: the carried pistol given (`GuntherRespectsPlayer`, `GuntherAttacks`) | 1350 | PASS: 22 actors, 1,938 AI events, 1,275 creations; 4 flags |
-| `gN` | GuntherRescued without a weapon: "First thing is to get you out of here." | 1150 | queued |
+| `gN` | GuntherRescued without a weapon: "First thing is to get you out of here." | 1150 | PASS: 22 actors, 1,671 AI events, 1,221 creations; 4 flags |
 | `gA` | `AllianceTrigger0` and `OrdersTrigger6` touched by a landing at the button, then the button: the freed Gunther fights `Terrorist18` | 900 | PASS: 22 actors, 1,486 AI events, 1,127 creations; 3 flags (after fix 1 below) |
 | `tC` | MeetTerrorist, Curious: `DL_LeaderNotKilled`, Mission01's mission-complete pass, TerroristFollowup by frob | 1300 | PASS: 24 actors, 1,911 AI events, 1,523 creations; 7 flags (after fixes 4 and 6) |
 | `tA` | MeetTerrorist, Aggressive (the commander attacks), then MeetFilbenAfterStatue at Filben; the player waits on `cmb5`'s ledge and is placed at the commander at tick 100 | 1050 | PASS: 26 actors, 1,684 AI events, 1,404 creations; 7 flags (a first capture placed in the frozen phase: below) |
 | `oV` | TerroristsOverheard (Amos and Jackson, first person, from behind a wall) to `KnowsShipment`, then MoleConvos: its KnowsShipment branch, the 10 mm clip bought (175 credits), `BumFemaleWanders` | 1300 | PASS: 26 actors, 1,883 AI events, 1,307 creations; 7 flags (after fix 3) |
-| `oT` | TopTerroristsOverheard (Terrorist9 and Terrorist8, first person) from a hidden place | 1200 | queued (a first capture stopped at tick 1164: the wait budget) |
-| `kB` | eight Terrorists killed (`Tantalus`) until Mission01.Timer sets `M01PlayerAggressive`, then TrooperCongratulation reads it | 700 | queued |
+| `oT` | TopTerroristsOverheard (Terrorist9 and Terrorist8, first person) from a hidden place | 1200 | PASS: 24 actors, 1,701 AI events, 1,061 creations; 1 flag |
+| `kB` | eight Terrorists killed (`Tantalus`) for Mission01.Timer's `M01PlayerAggressive`, then the player placed at UNATCOTroop6 for TrooperCongratulation | 700 | PASS as a comparison: 23 actors, 884 AI events, 1,065 creations, no flag in either program. Seven victims became carcasses; `Terrorist22` stayed Dying out of view, so the count stayed at 23. The placement at (-4062, 2085, -187) killed the player at once in both (Health -1, every region intact) |
 
 **What the original does that the scenes had to follow** (DeusEx.u source, each confirmed by a capture):
 
@@ -610,13 +610,22 @@ event, every object creation (a loaded `Sound` now also by its export name: whic
 6. **The portrait's first load** (`tC`): `HUDInfoLinkDisplay.SetSpeaker`'s `DynamicLoadObject("InfoPortraits.AlexJacobson")` creates `Package InfoPortraits`, its `LinkerLoad`, the
    `Texture` and its `Palette` at the DataLink's first speech (tick 841). The registry model of a prepared load is the routes batch's (`kil1`), applied here unchanged.
 
+7. **A typed line during a conversation** (`fN`). The capture types a console line as keys (`ad/tools/dxinput.c` consoleLine: T, ten Backspaces, the
+   characters, Enter), and `XInputExt::Process` (0x1002d0b0) offers every key to the root window before any binding. During a third-person conversation
+   `ConWindowActive.VirtualKeyPressed` returns True for every key and plays the next event on Enter, so the console never opens and the line never runs: the
+   original's `InputEvent` returned all of the line's releases as handled from tick 667 to 682, while MeetFilben2 played (the frob fan's lines typed after
+   the frob that started it). Play ran every typed line through the console command chain. The replay now offers the line's T to Play's root window first
+   (`game.windowKey`); a window that takes it gets the line's Backspaces and Enter instead, and the line is not run (`live-probe.mjs`).
+
 **Checks rerun for the `AICanSee` fix and the portrait's registry model** (2026-10-18, the Mac): the stored Island scenes `cmb1` to `cmb7`, `die1`, `pG`, `pR`, `fT`, `gP`, `oV`,
 `gA` and `tC` pass, as do the six Stage 4 rows that replay live traces (4.1.5, 4.1.6, 4.1.7, 4.2.13, 4.3.6, 4.5.5), the unit tests (652), `validate-perception-kernel` (12,000
 cases, Rust against the JS body; a flag no longer takes a JavaScript leaf's `undefined`, which no original argument can be), `validate-pawn-perception` (356 scenes, 14
 mutations), `validate-event-manager` and `validate-gm-trench-play-anim`, and the census (50 plays, 0 pause, 0 no-effect, 0 undriven).
 
-**What stays uncaptured** (named in the rows' `weak`): three of GuntherRescued's five give choices (assault gun, stealth pistol, knife) and NothingChoice's first answer
-(GiveNothingNicely); Filben's two barks that read `FilbenGaveKey`; PaulCongratulations (`PaulWandering`). Every approach is placed and every speech skipped, as the harness cannot walk.
+**What stays uncaptured** (named in the rows' `weak` and `need`): `M01PlayerAggressive`'s effect, TrooperCongratulation's JustTerrorists branch (row 5.6.6's
+need: `kB` shows why, above). Also three of GuntherRescued's five give choices (assault gun, stealth pistol, knife) and NothingChoice's first answer
+(GiveNothingNicely), Filben's two barks that read `FilbenGaveKey`, and PaulCongratulations (`PaulWandering`). Every approach is placed and every speech
+skipped, as the harness cannot walk.
 
 ## Scoreboard (2026-10-18, after a spawned actor's first frame)
 
