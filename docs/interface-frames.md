@@ -234,7 +234,9 @@ tracer the original runs about 210 ms of wall clock per level tick, and the Unde
 `DeltaSeconds` to `timeDisplayed` until `timeToDisplay`) closed 5 ticks after the bark there and 82 ticks after it in Play, which gave
 the windows the level's 1/60 s. The tracer records RootTick's argument (`0x1003be90`, the f32 TickWindows passes every root;
 `call Extension.dll@0x1003be90 roottick 1 always`: Extension.dll is rebased, to `0x1950000` in the Mac bottle) and the replay ticks the
-windows with the frames the original ran since the previous level tick (`live-acceptance.mjs` `windowSeconds`). Checked by the
+windows with the frames the original ran since the previous level tick (`live-acceptance.mjs` `windowSeconds`); in a tick held to type
+commands, the frames before a command's `InputEvent` record run before the command and the rest after it (2026-10-18: a bark subtitle created
+by a held key edge otherwise got the frames that preceded it, [visual acceptance](visual-acceptance.md#a-placed-player-the-levels-tick-parity-and-the-frozen-render-stamps-2026-10-17-stage-5)). Checked by the
 Underworld capture `sndm5` (row 4.3.6): every registry take, the bark's windows freed at the original's tick included. A consequence, also the original's
 (UGameEngine::Tick ticks the levels, ULevel::Tick through vtable `+0x5c` at `0x1039015f`, before `Client->Tick` renders at `0x1039106e`):
 a window the level tick creates is painted once before its first Tick. MeetPaul's first conversation frame has the root's raw-background

@@ -109,8 +109,9 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
   if (events.code !== 0) problems.push(`AI events differ (${/(\d+) ticks differ/.exec(events.out)?.[1] ?? '?'} ticks)`);
   // Every object the scene creates (UObject::AddObject: weapons, ammo, tracers, decals, the carcass and what it holds) in class and tick, in order: the
   // registry part of live-sound-compare.mjs (its Galaxy half is not this check's: the scenes carry no `gplay` breakpoint). The registry slot each one takes is
-  // reported, not judged: it follows the free list, and the frees of the bark subtitles' windows and of the decals come a tick apart in some scenes (open,
-  // docs/stage-5-exit-criteria.md "First original captures").
+  // reported, not judged: it follows the free list, and cmb3's tick-821 purge (ULevel::CleanupDestroyed) still releases two objects of the frozen start at
+  // another place, and a pending-deleted pre-placed actor under another run's index (open, docs/stage-5-exit-criteria.md "First original captures"; the bark
+  // subtitles' windows, the first cause, are fixed: a held tick's window frames are split at its commands).
   const registry = await exec(['scripts/live-sound-compare.mjs', '--map', scene.map, '--tag', tag], 600);
   const sequence = existsSync(path.join(dir, `sound-compare-${tag}.json`)) ? JSON.parse(readFileSync(path.join(dir, `sound-compare-${tag}.json`), 'utf8')) : null;
   if (registry.code !== 0 || !sequence) problems.push(`no registry comparison (${registry.out.trim().split('\n').slice(-1)[0]})`);

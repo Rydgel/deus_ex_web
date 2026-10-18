@@ -375,7 +375,7 @@ add('4.5.4', C5, 'speech timing and audio', 'speech lookup, sound length and the
 add('4.5.5', C5, 'MeetPaul frame', 'the third-person conversation frame (letterbox, behind view, camera, subtitles) against the original\'s', 'O1',
   CONVERSATION({scene: 'meetpaul', map: '01_NYC_UNATCOIsland', tag: 'cvA', playerBlend: true,
     frames: [{name: 'cvA1', tick: 100}, {name: 'cvA2', tick: 250}, {name: 'cvA3', tick: 600}, {name: 'cvA4', tick: 750}],
-    liveAllow: {'@player': ['Frame'], SecurityBot0: ['LRT'], UNATCOTroop1: ['LRT']},   // measured: the player's AnimFrame at tick 1-5 (a tween phase), two guards' LastRenderTime at tick 1 (the render history before the release)
+    renderHistory: true,   // the start view at the dock stamped SecurityBot0's and UNATCOTroop1's LastRenderTime before the release (the frozen render stamps, docs/visual-acceptance.md)
     earlyCmds: 'set WinDrv.WindowsClient Brightness 0.666667|set DeusEx.JCDentonMale Location (X=-2385,Y=8393,Z=-256.2)|set DeusEx.JCDentonMale ViewRotation (Pitch=0,Yaw=51120,Roll=0)|walk'}));
 excluded('4.5.6', C5, 'speech audio', 'the speech samples the player hears against Galaxy\'s', 'the user\'s decision (2026-10-16): speech stays decoded by the browser\'s MP3 decoder, not a port of Galaxy\'s MPEG decoder; lip sync runs the translated analysis on those samples (docs/lip-sync.md)');
 add('4.5.7', C5, '00_Intro camera shots', 'the intro\'s CameraPoint shots against the original', 'O1',
@@ -387,9 +387,9 @@ add('4.5.8', C5, '01_NYC_UNATCOHQ MeetManderley', 'a conversation on another map
   // two loads of the original (tags mmA, mmB), each with the player's blend channel; the frames are at speeches of JC and Manderley and at two cameras. mmB1 (tick 40,
   // the first speech) is stored and not compared: the letterbox is still sliding at tick 40, the original's bars finished while it was held and Play's, driven by the
   // level's ticks, are frozen mid-slide at the hold (docs/conversation-camera.md).
-  CONVERSATION({scene: 'manderley', map: '01_NYC_UNATCOHQ', tag: 'mmA', playerBlend: true, liveAllow: {'@player': ['Frame']},
+  CONVERSATION({scene: 'manderley', map: '01_NYC_UNATCOHQ', tag: 'mmA', playerBlend: true,
     frames: [{name: 'mm2', tick: 450}, {name: 'mm3', tick: 700}], earlyCmds: MANDERLEY_START}),
-  CONVERSATION({scene: 'manderley', map: '01_NYC_UNATCOHQ', tag: 'mmB', playerBlend: true, liveAllow: {'@player': ['Frame']},
+  CONVERSATION({scene: 'manderley', map: '01_NYC_UNATCOHQ', tag: 'mmB', playerBlend: true,
     frames: [{name: 'mmB2', tick: 300}, {name: 'mmB3', tick: 580}], earlyCmds: MANDERLEY_START}));
 
 // --- runner ----------------------------------------------------------------------------------------------
@@ -910,14 +910,15 @@ async function judgeConversation(task, add, fail, result) {
   for (const frame of c.frames) {
     const args = ['scripts/live-acceptance.mjs', 'play', '--map', c.map, '--seed', '1', '--tag', c.tag, '--ticks', String(frame.tick), '--shot', frame.name,
       ...(c.playerBlend ? ['--player-blend'] : []), ...(existsSync(path.join(root, phonemes)) ? ['--phonemes', phonemes] : []),
-      ...(c.noGhost ? ['--no-ghost'] : []), ...(c.keepTraveling ? ['--keep-traveling'] : []), ...(c.earlyCmds ? ['--early-cmds', c.earlyCmds] : [])];
+      ...(c.noGhost ? ['--no-ghost'] : []), ...(c.keepTraveling ? ['--keep-traveling'] : []), ...(c.renderHistory ? ['--render-history'] : []), ...(c.earlyCmds ? ['--early-cmds', c.earlyCmds] : [])];
     const play = add(await exec(process.execPath, args, {limitSeconds: 900}));
     if (play.killed || play.code !== 0) return fail(`play ${frame.name}: ${play.killed ?? tail(play.out)}`);
     if (!existsSync(path.join(root, '.work/acceptance', c.map, `${frame.name}-play.png`))) return fail(`play ${frame.name}: no frame was written`);
   }
   // The traced actors over the longest replay (the last one): the speakers' mouths follow the measured phonemes, so Paul's and JC's blend channels,
   // the cameras' actors and every pawn of the load must equal the original's per tick, apart from the measured exceptions c.liveAllow names (actor ->
-  // fields): a host input before the release that the replay cannot reproduce (docs/conversation-camera.md, item 2).
+  // fields): a host input before the release that the replay cannot reproduce. No row names one since 2026-10-18: the player's AnimFrame (a landing's
+  // TweenToWaiting) and two guards' LastRenderTime (--render-history) are now replayed (docs/conversation-camera.md, item 2).
   const live = add(await exec(process.execPath, ['scripts/live-acceptance.mjs', 'compare', '--map', c.map, '--tag', c.tag, ...(c.playerBlend ? ['--player-blend'] : [])], {limitSeconds: 600}));
   if (live.killed || live.code !== 0) return fail(`live compare: ${live.killed ?? tail(live.out)}`);
   const liveReport = readJson(path.join(root, '.work/live-acceptance', c.map, 'report.json'));

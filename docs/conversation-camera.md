@@ -317,6 +317,8 @@ page's frame at the last one (`live-acceptance.mjs play --ticks N --shot name`),
    own analysis of the page's audio then. `Pawn.LipSynch` (script) maps the letters as in Play. With the feed every watched field of every watched actor, Paul's and JC's blend
    channels included, is equal for all 750 ticks except the player's `AnimFrame` at the first ticks (0.0985 against 0.0860 at tick 1, a tween phase; equal later) and two
    guards' `LastRenderTime` (the render history before the release, a measured input of [live scenes](visual-acceptance.md#live-scenes-2026-10-13)).
+   **Both are now replayed, not allowed (2026-10-18):** the replay reaches the original's running idle loop before it writes the pose, and the gate passes
+   `--render-history` (see [Open](#open), the `AnimFrame` item). Every watched field of the 88 actors is equal for the 750 ticks.
 3. **What remains is the polygon edge.** All four frames are within 2 of 255 everywhere except 0.07 to 0.11% of the pixels, one-pixel lines on the silhouettes and mesh
    triangle edges and the glints of the glasses (zoomed ten times: [visual acceptance](visual-acceptance.md#conversation-frames-2026-10-16)); the shading of the faces (the two `ConLight`s of
    `CreateHighlights`), the hair, the jackets, the floor, the skyline and the subtitle text equal the original's.
@@ -392,7 +394,7 @@ MeetPaul's gate row passes unchanged with it.
 ## Stored originals, the gate rows and how to repeat them (2026-10-16)
 
 The gate rows 4.5.5, 4.5.7 and 4.5.8 are `conversation` checks in `scripts/validate-stage4-acceptance.mjs` (`--only '^4\.5\.[578]$'`; about 5, 4 and 6.5 minutes): the check stages the tag's trace, lists and frames from the stores, regenerates the mouth letters from the trace
-(`conversation-acceptance.mjs phonemes`, a derived file), replays one frame at a time (`live-acceptance.mjs play --ticks N --shot name`), compares the traced actors over the longest replay (`live-acceptance.mjs compare`, the measured exceptions allowed by name), and compares each frame by region
+(`conversation-acceptance.mjs phonemes`, a derived file), replays one frame at a time (`live-acceptance.mjs play --ticks N --shot name`), compares the traced actors over the longest replay (`live-acceptance.mjs compare`; every watched field, with no exception allowed since 2026-10-18), and compares each frame by region
 (`conversation-acceptance.mjs compare`: letterbox bars, subtitle, the 3D band, and the pixels off by more than 10 away from every hard edge). The thresholds are mine ([judgement chosen in the gate](stage-4-exit-criteria.md#how-the-gate-judges)).
 
 **Stored originals** (main checkout `.work`, new names, nothing overwritten; the gate reads them from there):
@@ -424,6 +426,13 @@ The tag's mouth letters are not stored: the gate and `conversation-acceptance.mj
   restarting the loop) where the original's loop ran on. `live-acceptance.mjs` now records the player's `AnimLast`, `AnimMinRate`, `OldAnimRate` and the three
   animation bits and writes them with the pose; for a trace without them it ticks the frozen level until the player runs the pose's sequence as a loop. The gate's
   allowance can be retested on the stored conversation traces.
+  **Retested and removed 2026-10-18.** The stored `cvA`, `mmA` and `mmB` traces have no `AnimLast` (they predate it), so the replay takes the second path: on `cvA` it logs
+  `the player's animation after 22 frames: {"AnimSequence":"BreatheLight","AnimFrame":0.004116651602089405,"AnimLast":0.800000011920929,"bAnimLoop":1}`,
+  the original's running loop, before the pose is written. With the allowances gone
+  (`liveAllow` removed from 4.5.5 and 4.5.8, `--render-history` added to 4.5.5 for the guards' `LastRenderTime`) every watched field is equal: `cvA` 88 actors for 750 ticks,
+  `mmA` 22 for 700, `mmB` 22 for 580, the clock and the stream draws too. 4.5.5 passes; 4.5.8 fails only on `mmB3`'s identical-pixel share (.93931 on the Mac stores, the
+  threshold kept by the user's decision, [Stage 4 exit criteria](stage-4-exit-criteria.md#stage-4-close)). The traces have no `bTicked` either, so `ULevel::TickTag` keeps Play's
+  own parity in these replays; nothing in them showed a difference from it.
 * The choice is made through the original input path (2026-10-01): Down
   reaches `RootWindow.VirtualKeyPressed`, whose `MoveFocusDown` (native 1445,
   `XWindow::MoveFocus`; the 1442–1447 family is bound,

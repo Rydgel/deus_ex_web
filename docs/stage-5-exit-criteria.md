@@ -353,12 +353,34 @@ tracer resolves watched names when it attaches, and a carcass is spawned later),
 dies, and no `Carcass` callback is delivered), 5.6.1 (the MedKit) and 5.1.8. A first capture of `cmb1`, replaced when the new fields were added, had the Terrorists kill the player at
 tick 791, and Play was equal through `Dying` to tick 900. None of the stored scenes keeps that death.
 
-**Open: the subtitle windows' lifetime and the registry slots.** In `cmb2` and `cmb3` some objects take a different registry slot, while every creation is equal in class and tick: 50 of
-1,150 and 64 of 1,364. The first difference in `cmb2` is the bark subtitle of tick 660 (`ConAudioAIBarks_859`, 1.976 s by both programs' `GetSpeechLength`; the MP3 is 1.985 s). Play frees its
-`HUDBarkDisplayItem` windows at tick 664 and the original at 675. Counted in the original's window frames (`roottick`), that subtitle received 0.53 to 0.64 s of the 1.736 s the level was
-held at tick 660 to type the key edges, where Play's replay gives it all of that time. In `cmb3` the tick-43 bark is freed at 50 in the original and at 51 in Play, then a `BloodSplat`
-takes another slot at 821. Not explained. It is the window system's time while the tracer holds the level (Stage 4's interface timing), not a game-state difference, and it changes
-nothing a watched actor reads. The Stage 5 check therefore judges the creations by class and tick and reports the slots. Row 4.3.6 keeps its strict slot check.
+**The subtitle windows' lifetime: explained and fixed (2026-10-18).** In `cmb2` and `cmb3` some objects took a different registry slot, while every creation was equal in class and tick: 50 of
+1,150 and 64 of 1,364. The first difference in `cmb2` was the bark subtitle of tick 660 (`ConAudioAIBarks_859`, 1.976 s by both programs' `GetSpeechLength`; the MP3 is 1.985 s): Play freed its
+`HUDBarkDisplayItem` windows at tick 664, the original at 675. The cause was the replay's order inside a held tick, read from the stored trace alone (no new capture):
+
+* The level was held at tick 660 for 31 window frames (`roottick`, 1.7364 s) to type the two key edges. The Enter press's `UEngine::InputEvent` (call record seq 7969) came after 25 of them;
+  the pistol's shot ran inside it and created the bark's windows (`HUDBarkDisplayItem3` at seq 7993), and 6 frames (0.4643 s) followed before tick 661.
+* `HUDBarkDisplayItem.Tick` adds each frame's `deltaSeconds` to `timeDisplayed` and destroys the item when it passes `timeToDisplay` (DeusEx.u). Summing the original's frames after seq 7993 in
+  f32 crosses 1.976 at the frame of u = 675 (seq 8203, total 1.9895), and the original's `UnhashObject` of the item follows at seq 8224, after its ten GCs and TextWindows in the order Play frees them.
+* Play's replay ran a hold's commands first and then all of the hold's frames before the next tick, so the subtitle got the whole 1.7364 s. Window ticks with `ShowHud` or a
+  held level are not the cause: the window system ticks every frame in both programs, and only the frames after its creation can reach a window.
+
+The replay now splits a held tick's frames at its commands (`live-acceptance.mjs` `commandsWithStream`: each command's matched `InputEvent` record carries its call sequence number, and the frames of
+the hold before it tick the windows before the command runs, `live-probe.mjs`), and Play's object log labels a window frame's frees and creations with the tracer's u (the last level tick before the
+frame, not the next one). Rerun on the stored scenes: `cmb2` frees `HUDBarkDisplayItem3` at 675 as the original does, and 0 of its 1,150 creations take another slot; `cmb1` 0 of 1,291, `cmb4` 0 of 1,284; `cmb3`'s tick-43 bark is
+freed at 50 as in the original; every actor, the clock, the draws, the AI events and the creations stay equal in all four scenes.
+
+**Open: `cmb3`'s registry slots after tick 821 (bounded, not the subtitles).** 64 of `cmb3`'s 1,364 creations still take another slot, from `BloodSplat46` at tick 821 on (`sound-compare-cmb3.json` `oAdds[1277]`:
+the original appends slot 48490, Play reuses 43708). Tick 821 is a `ULevel::CleanupDestroyed` purge in both programs (the same 126 frees in the same order). Three inputs of the slot model differ, none of
+them game state:
+1. The original's purge ends with two objects that existed at the frozen start, `NanoKeyRing4` (47461) and `PickupDistributor0` (43708), after `BloodSplat46` is created. The replay's `preFrees`
+   release such objects before the tick they are freed in, so Play's free list held both at tick 821's spawn.
+2. Play holds its own pending-deleted `PickupDistributor0` (it destroys itself at load) and its purge releases it under 36046, the index Play's map table gives export 4739
+   (`map-object-indices.mjs`, built from an earlier capture of the map); in this run's dump `PickupDistributor0` is 43708 and 36046 is `ConEventEnd.ConEventEnd4793`. The objectTrace
+   seed gives the dump's indices only to actors in `level.actors` whose name Play's population lists, so a pending-deleted pre-placed actor keeps the table's index. That is a
+   general gap of the seed, not specific to this scene (found with a one-off stack trace of the release: `cleanupLevelDestroyed`, `script-level-collection.mjs` `release`).
+3. The pre-free of `PickupDistributor0` is then counted twice: once by the replay and once by Play's own purge.
+A fix needs the dump's index for pending-deleted pre-placed actors, no pre-free for an object Play itself frees, and the remaining pre-frees released at their place in the purge. Nothing a watched
+actor reads depends on it. Until then the Stage 5 check judges the creations by class and tick and reports the slots. Row 4.3.6 keeps its strict slot check.
 
 ## Scoreboard (2026-10-17, after the combat captures)
 

@@ -276,7 +276,19 @@ export function liveProbe(game, args = {}) {
       args.objectTrace.pending = preFrees.map(entry => ({ ...entry }));
     }
     const objects = runtime.objectLog ??= [], sounds = runtime.soundLog ??= [];
-    const tick = () => { const replay = game.liveReplay; return replay?.current?.n ?? replay?.index ?? 0; };
+    // The tracer's u counts level ticks: a window frame (RootTick) between level ticks k and k+1 is u = k. Play ticks those frames inside replayed tick
+    // k+1 (game.tick: the windows, then the level), so an object a window frame creates or frees (a bark subtitle's windows), or a sound it plays, takes
+    // k there, as the original's records do; frames run before a held command (state.current unset) take the hold's own index.
+    const tick = () => { const replay = game.liveReplay; return replay?.current ? replay.current.n - (replay.windowPhase ? 1 : 0) : replay?.index ?? 0; };
+    if (game.hud && !game.hud.replayLabelled) {
+      const hudTick = game.hud.tick;
+      game.hud.tick = delta => {
+        const replay = game.liveReplay;
+        if (replay) replay.windowPhase = true;
+        try { return hudTick.call(game.hud, delta); } finally { if (replay) replay.windowPhase = false; }
+      };
+      game.hud.replayLabelled = true;
+    }
     const inRange = n => n >= args.objectTrace.first && n <= args.objectTrace.last;
     const model = registry.original;
     if (model) {
@@ -362,7 +374,10 @@ export function liveProbe(game, args = {}) {
         let typed = false;
         while (this.commands.length && this.commands[0].after <= this.index) {
           typed = true;
-          const command = this.commands.shift(), entry = { ...command };
+          const command = this.commands.shift(), { windowSeconds: framesBefore, ...entry } = command;
+          // The window frames the original ran in this hold before the command's InputEvent (live-acceptance.mjs commandsWithStream): a window the
+          // command creates (a bark's subtitle) gets only the frames after it, as in the original; the hold's later frames tick the windows before the next tick.
+          if (Array.isArray(framesBefore)) { for (const delta of framesBefore) game.hud?.tick(delta); entry.windowFrames = framesBefore.length; }
           // the stream state the original's command ran on (a measured input, see live-acceptance.mjs commandsWithStream)
           if (command.rng) game.random.seed(parseInt(command.rng, 16) >>> 0);
           // drawStacks: where each draw of the stream the command makes comes from (the script call stack's last frames)
