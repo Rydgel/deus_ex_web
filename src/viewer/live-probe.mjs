@@ -359,7 +359,10 @@ export function liveProbe(game, args = {}) {
     const { watch = [], ticks, hold = true, warm = 3, commands = [] } = args.replay;
     // A `late` group (live-acceptance.mjs --carcass-watch) names actors the scene spawns: each is looked up at every row until the level holds
     // it, and its rows start there (the original's tracer binds the same name at the tick exit after its AddObject, tools/dx-live-win.c late-watch).
-    const actors = watch.map(({ names, props, late = false }) => ({ props, late, items: names.map(name => [name, byName(name)]) }));
+    // `via` {name: 'Owner.field'}: an actor watched under the original's name and found in Play through its owner's object field (a turret's gun,
+    // spawned by AutoTurret.PreBeginPlay: its name follows each process's session history, live-acceptance.mjs --device-watch Name:Class@Owner.field)
+    const viaOwner = spec => { const [owner, field] = spec.split('.'); const actor = byName(owner); return actor ? runtime.readNamed(actor, field) ?? null : null; };
+    const actors = watch.map(({ names, props, late = false, via = {} }) => ({ props, late, items: names.map(name => [name, via[name] ? viaOwner(via[name]) : byName(name)]) }));
     for (const group of actors) for (const [name, actor] of group.items) if (!actor && !group.late) throw new Error(`liveProbe: no actor ${name}`);
     const state = game.liveReplay = {
       ticks, hold, warm, index: 0, rows: [], cursor: 0, current: null, preFrees: args.objectTrace?.pending ?? null,

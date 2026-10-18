@@ -86,11 +86,71 @@ export const SCENES = {
   // the player's death to the level's end (row 5.1.8): `ticks` is the tracer's cap, the trace ends where the original's level ends
   die1: {map: '01_NYC_UNATCOIsland', ticks: 3000, levelEnd: true, early: `${PLACE(10146.3, 685.2, -88, 40960)}|set DeusEx.JCDentonMale HealthTorso 5|set DeusEx.JCDentonMale HealthHead 5`,
     cmds: '', carcasses: ['JCDentonMaleCarcass0'], watch: ['Terrorist0', 'ThugMale7', 'Terrorist10', 'Terrorist7', 'Terrorist3', 'Terrorist4', 'Terrorist27', 'ThugMale5']},
+  // hacking ControlPanel0 (row 5.2.6): the player placed in front of the panel facing away from it; a Multitool summoned, picked up (ParseRightClick) and
+  // drawn (ActivateBelt 1); turned on the panel and the Enter edge (ParseLeftClick: DoFrob(Self, inHand), HackableDevices.Frob's multitool branch); the hack
+  // runs on HackableDevices.Timer while the player looks at the panel, then HackAction UnTriggers statue_lasertrap (the five LaserTriggers' emitters off).
+  hck1: {map: '01_NYC_UNATCOIsland', ticks: 900, early: PLACE(1900, -895, -100, 0),
+    cmds: '20:summon DeusEx.Multitool|50:set DeusEx.JCDentonMale ViewRotation (Pitch=-10130,Yaw=0,Roll=0)|90:ParseRightClick|130:ActivateBelt 1'
+      + `|170:set DeusEx.JCDentonMale ViewRotation (Pitch=0,Yaw=32768,Roll=0)|${SHOTS([200])}`,
+    devices: ['ControlPanel0:ControlPanel', ...[0, 1, 2, 3, 4].map(i => `LaserTrigger${i}:LaserTrigger`), 'AlarmUnit0:AlarmUnit', 'Multitool0:Multitool'], flags: ['StatueAlarmTriggered']},
+  // the laser trap's beam (row 5.2.5, its first half): the player placed across statue_lasertrap's beams (LaserTrigger0..4 at (1841, -948.6), facing +X),
+  // facing along them. LaserTrigger.Tick sees its emitter's HitActor change to the player (TriggerType TT_PlayerProximity: IsRelevant) and BeginAlarm
+  // rings Klaxon2 and starts an 'Alarm' AI event (the laser has no Event); the guards that hear it run ScriptedPawn.HandleAlarm (AlarmTimer 120, then
+  // HandleEnemy), and AlarmTimer > 0 keeps them from the alarm box (Alerting: Alert -> Done -> Attacking).
+  las1: {map: '01_NYC_UNATCOIsland', ticks: 900, early: PLACE(1900, -948.6, -96, 0), cmds: '',
+    devices: [...[0, 1, 2, 3, 4].map(i => `LaserTrigger${i}:LaserTrigger`), 'AlarmUnit0:AlarmUnit'], flags: ['StatueAlarmTriggered']},
+  // the alarm box (row 5.2.5, its second half): the player placed in the view of Terrorist18 (RaiseAlarm BeforeAttacking), 180 units in front of Chair9
+  // where it sits (facing yaw 48128), off its way to AlarmUnit0 (in hck1 the player at the panel stood in that way, and Terrorist18 never reached the
+  // box). Seeing the player with AlarmTimer 0, it goes Alerting, FindTarget picks AlarmUnit0, it runs there and TriggerAlarm()s it: SetAlarmFlag ->
+  // FlagTrigger3 -> StatueAlarmTriggered.
+  alm1: {map: '01_NYC_UNATCOIsland', ticks: 900, early: PLACE(2012, -1610, -96, 16384), cmds: '', devices: ['AlarmUnit0:AlarmUnit'], flags: ['StatueAlarmTriggered']},
+  // a camera and the turret it wakes (rows 5.2.4, 5.1.9): the player placed 400 units in front of NSFCam02 (SecurityCamera3, facing yaw 16592, 300 units from
+  // NSFTurret01), facing it. SecurityCamera.Tick checks the player every 0.1 s (CheckPlayerVisibility: in cameraRange 1024 and inside cameraFOV 4096 of the
+  // camera's swinging Rotation), tracks him, and after triggerDelay 4 s TriggerEvent(True) sounds its klaxon and starts an 'Alarm' AI event (radius
+  // 25 * (SoundRadius + 1)); AutoTurret0 (bActive false, bTrackPlayersOnly) hears it (AISetEventCallback('Alarm', 'AlarmHeard')), wakes, aims AutoTurretGun0
+  // and fires at the player (fireRate 0.25, gunDamage 5).
+  cam1: {map: '01_NYC_UNATCOIsland', ticks: 900, early: PLACE(250, 331, -100, 49152),
+    cmds: '', devices: ['SecurityCamera3:SecurityCamera', 'AutoTurret0:AutoTurret', 'AutoTurretGun0:AutoTurretGun@AutoTurret0.gun']},
+  // a UNATCO camera (row 5.2.4, its bNoAlarm half): the player placed 700 units in front of SecurityCamera2 (UN_outside, Tag UN_CamSystem02, bNoAlarm), in its
+  // range (cameraRange 1024) and inside its cone, facing it. SecurityCamera.Tick checks the player only `if (!bNoAlarm)`: the camera swings and never sees him.
+  cam2: {map: '01_NYC_UNATCOIsland', ticks: 300, early: PLACE(-3885, 3132, -96, 52325, 5410), cmds: '', devices: ['SecurityCamera2:SecurityCamera']},
+  // a baton knock-out (row 5.1.7): a WeaponBaton summoned, picked up and drawn at cmb2's pose (700 units behind Terrorist0, where nobody notices the player; a
+  // summoned item's landing is a noise, and next to the target it wakes it); at tick 600, once Terrorist18 sits on Chair9 (2017.7, -1429.6, facing yaw 48128),
+  // the player is placed by the same console lines 58 units behind it at his rest height, facing its back; the Enter edge at 630 swings the baton
+  // (WeaponBaton.WeaponDamageType 'KnockedOut'; ScriptedPawn.TakeDamageBase: a hit from behind within 64 units does 10 times the damage). `AllSkills`
+  // (the cheat, typed in the frozen phase as `summon` is later) makes Low-Tech master: DeusExWeapon.ProcessTraceHit's `mult += -2.0 * GetWeaponSkill()`
+  // doubles the baton's 7, so the hit from behind (140) knocks the 75-health Terrorist out; untrained it does 70, and the second swing (Attack2, a slower
+  // animation) lands after Terrorist18 has left TakingHit for the alarm (rehearsed). The carcass the knocked-out pawn leaves (bNotDead, "Unconscious") is
+  // watched from the tick it appears.
+  ko1: {map: '01_NYC_UNATCOIsland', ticks: 900, early: `${PLACE(8951.3, 190.2, -84, 32768)}|AllSkills`,
+    cmds: '20:summon DeusEx.WeaponBaton|50:set DeusEx.JCDentonMale ViewRotation (Pitch=-10130,Yaw=32768,Roll=0)|90:ParseRightClick|130:ActivateBelt 1'
+      + `|${PLACE(2023.4, -1371.9, -96.3, 48128, -4000).split('|').slice(1).map(line => `600:${line}`).join('|')}|${SHOTS([630])}`, carcasses: ['TerroristCarcass1'], view: true},
+  // an explosion near a door, a decoration and a guard (row 5.6.4): the player placed east of the breakable DeusExMover5 (doorStrength 0.6,
+  // minDamageThreshold 50) facing it summons a CrateExplosiveSmall (explosionDamage 300, explosionRadius 800, HitPoints 4) 72 units ahead, between the door
+  // and TrashCan5; a WeaponPistol summoned facing away, picked up and drawn; the player placed 530 units east of the crate (the room ends there) and the
+  // Enter edges fire at the crate: DeusExDecoration.Explode's HurtRadius reaches the door (DeusExMover.TakeDamage: doorStrength -= Damage * 0.01 above the
+  // threshold, BlowItUp at 0), the trash can, the player, and Terrorist2 patrolling west of the door; the blast's noise.
+  exp1: {map: '01_NYC_UNATCOIsland', ticks: 900, early: PLACE(3242, -1072, -192, 32768),
+    cmds: '20:summon DeusEx.CrateExplosiveSmall|40:set DeusEx.JCDentonMale ViewRotation (Pitch=0,Yaw=0,Roll=0)|45:summon DeusEx.WeaponPistol'
+      + '|70:set DeusEx.JCDentonMale ViewRotation (Pitch=-10130,Yaw=0,Roll=0)|110:ParseRightClick|150:ActivateBelt 1'
+      + `|${PLACE(3700, -1072, -160, 32768, -1890).split('|').slice(1).map(line => `190:${line}`).join('|')}|${SHOTS([240, 280, 320, 360, 400, 440])}`,
+    devices: ['DeusExMover5:DeusExMover', 'TrashCan5:Decoration', 'CrateExplosiveSmall1:Decoration', 'Chair5:Decoration']},
+  // an EMP grenade on a security bot (row 5.6.5): SecurityBot0 (UNATCO, Patrolling UN_botpath1) walks a straight line from (-2302, 10169) to PatrolPoint19
+  // (-2057, 9673), which it reaches at tick 368 (the original's hck1 trace, where it then stands in stasis with the player far away); the player placed 550
+  // units west of PatrolPoint19 facing it (east of it is water); a WeaponEMPGrenade summoned facing away, picked up and drawn; the Enter edge at 200 (the grenade idle again after its Select) throws it
+  // (ThrownProjectile) toward the patrol point, where its EMP blast (HurtRadius 'EMP') meets the bot: Robot.TakeDamage takes its EMPHitPoints and disables it.
+  emp1: {map: '01_NYC_UNATCOIsland', ticks: 900, early: PLACE(-2607, 9673, -256, 32768),
+    cmds: '20:summon DeusEx.WeaponEMPGrenade|50:set DeusEx.JCDentonMale ViewRotation (Pitch=-10130,Yaw=32768,Roll=0)|90:ParseRightClick|130:ActivateBelt 1'
+      + `|170:set DeusEx.JCDentonMale ViewRotation (Pitch=-2500,Yaw=64116,Roll=0)|${SHOTS([200])}`,
+    devices: ['SecurityBot0:Robot', 'EMPGrenade0:Actor']},
   cmb7: {map: '01_NYC_UNATCOIsland', ticks: 900, early: PLACE(8951.3, 190.2, -84, 32768),
     cmds: '20:summon DeusEx.WeaponPistol|50:set DeusEx.JCDentonMale ViewRotation (Pitch=-10130,Yaw=32768,Roll=0)|90:ParseRightClick|100:summon DeusEx.MedKit|140:ParseRightClick'
       + `|170:ActivateBelt 1|200:set DeusEx.JCDentonMale ViewRotation (Pitch=-536,Yaw=0,Roll=0)|${SHOTS([300, 360])}|650:ActivateBelt 2|${SHOTS([700])}`},
 };
 export const SCENE_FLAGS = ['--no-ghost', '--perception', '--player-gear', '--player-health', '--los-flag'];
+// The device scenes add the player's eye and bob (the first-person item's placement: Inventory.RenderOverlays, CalcDrawOffset): the stored combat scenes
+// were captured without them, and their commands are kept as captured.
+const sceneFlags = scene => [...SCENE_FLAGS, ...(scene.devices || scene.view ? ['--player-view'] : [])];
 // The replay's measured inputs beyond the trace rows: --render-history writes each pawn's LastRenderTime at the original's last frozen tick (the frames the
 // original drew at the map's start pose, before the placement, stamped Paul, SecurityBot0 and UNATCOTroop1 at the dock; the stasis gate reads them).
 const PLAY_FLAGS = ['--render-history'];
@@ -110,9 +170,11 @@ const configFile = scene => `.work/live-acceptance/cfg/${scene.levelEnd ? 'death
 export const captureCommand = tag => {
   const s = SCENES[tag];
   // (--carcass-watch: the carcasses the scene spawns, bound by the tracer when they appear: tools/dx-live-win.c late-watch; --watch: the pawns watched, all
-  // ScriptedPawns when absent; --wait-seconds: the tracer's time, a long scene's run to the level's end)
-  return `scripts/live-original.sh ${s.map} --tag ${tag} --ticks ${s.ticks} --delta 0.0166666675 ${SCENE_FLAGS.join(' ')} --registry --extra-config ${configFile(s)}`
-    + `${s.carcasses ? ` --carcass-watch ${s.carcasses.join(',')}` : ''}${s.watch ? ` --watch ${s.watch.join(',')}` : ''}${s.levelEnd ? ` --wait-seconds ${Math.ceil(s.ticks * 0.6)}` : ''}`
+  // ScriptedPawns when absent; --device-watch Name:Class: the devices the scene is about, with their class's fields (live-acceptance.mjs DEVICE_FIELDS);
+  // --wait-seconds: the tracer's time, a long scene's run to the level's end)
+  return `scripts/live-original.sh ${s.map} --tag ${tag} --ticks ${s.ticks} --delta 0.0166666675 ${sceneFlags(s).join(' ')} --registry${s.flags ? ' --dump-flags' : ''} --extra-config ${configFile(s)}`
+    + `${s.carcasses ? ` --carcass-watch ${s.carcasses.join(',')}` : ''}${s.watch ? ` --watch ${s.watch.join(',')}` : ''}${s.devices ? ` --device-watch ${s.devices.join(',')}` : ''}`
+    + `${s.levelEnd ? ` --wait-seconds ${Math.ceil(s.ticks * 0.6)}` : s.ticks > 900 ? ` --wait-seconds ${Math.ceil(600 * s.ticks / 900)}` : ''}`
     + ` --early-cmds "${s.early}" --cmds "${s.cmds}"`;
 };
 
@@ -152,12 +214,12 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
     if (population.code !== 0) { console.log(population.out.trim().split('\n').slice(-6).join('\n')); console.log(`FAIL ${tag}: the population step stopped (exit ${population.code})`); process.exit(1); }
     console.log(`population: ${population.out.trim().split('\n').slice(-1)[0]} (play-population.json written again: it had no pendingDeleted list)`);
   }
-  const play = await exec(['scripts/live-acceptance.mjs', 'play', '--map', scene.map, '--seed', '1', '--tag', tag, ...SCENE_FLAGS, ...PLAY_FLAGS, '--early-cmds', scene.early,
+  const play = await exec(['scripts/live-acceptance.mjs', 'play', '--map', scene.map, '--seed', '1', '--tag', tag, ...sceneFlags(scene), ...PLAY_FLAGS, '--early-cmds', scene.early,
     '--event-trace', `1:${scene.ticks}`, '--object-trace', `1:${scene.ticks}`], Math.max(1800, scene.ticks * 2));
   if (play.code !== 0) { console.log(play.out.trim().split('\n').slice(-12).join('\n')); console.log(`FAIL ${tag}: the replay stopped (exit ${play.code})`); process.exit(1); }
   // the slot model's inputs (the run's own indices, the pre-frees and where they were released)
   for (const line of play.out.split('\n')) if (line.startsWith('object trace: ') && !/registry events/.test(line)) console.log(line);
-  const compare = await exec(['scripts/live-acceptance.mjs', 'compare', '--map', scene.map, '--tag', tag, ...SCENE_FLAGS], 600);
+  const compare = await exec(['scripts/live-acceptance.mjs', 'compare', '--map', scene.map, '--tag', tag, ...sceneFlags(scene)], 600);
   console.log(compare.out.trim());
   // the scene's own report (report-<tag>.json): another checkout's replay of the same map writes the untagged report.json in the shared .work
   const report = JSON.parse(readFileSync(path.join(dir, `report-${tag}.json`), 'utf8'));
@@ -184,6 +246,23 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
     const slots = a.filter((o, k) => b[k] && o.index !== b[k].index).length;
     console.log(`registry: ${i} of ${a.length}/${b.length} creations equal in class and tick, in order; ${slots} take another slot`);
     if (i !== a.length || i !== b.length) problems.push(`creations differ at ${i} (original ${JSON.stringify(a[i] ?? null)}, Play ${JSON.stringify(b[i] ?? null)})`);
+  }
+  // A scene's `flags`: the player's FlagBase at the end of the scene, the original's (--dump-flags: tools/dump-flags-win.c at the end hold, flags-end<tag>.txt)
+  // and Play's (flags-play-end<tag>.json), each named flag's presence, type and value.
+  if (scene.flags) {
+    const endFile = path.join(dir, `flags-end-${tag}.txt`), playFile = path.join(dir, `flags-play-end-${tag}.json`);
+    if (!existsSync(endFile) || !existsSync(playFile)) problems.push(`no end flags (${[endFile, playFile].filter(f => !existsSync(f)).map(f => path.basename(f)).join(', ')})`);
+    else {
+      const original = new Map(readFileSync(endFile, 'utf8').split('\n').map(line => /^\s+flag (\S+) type (\d+) expiration (-?\d+) value 0x([0-9a-f]+)/.exec(line))
+        .filter(Boolean).map(m => [m[1].toLowerCase(), {type: Number(m[2]), value: parseInt(m[4], 16) | 0}]));
+      const played = new Map(JSON.parse(readFileSync(playFile, 'utf8')).entries.map(e => [e.name.toLowerCase(), {type: e.type ?? 0, value: Number(e.value) | 0}]));
+      const text = f => f ? `${f.value}${f.type ? ` (type ${f.type})` : ''}` : 'absent';
+      for (const name of scene.flags) {
+        const o = original.get(name.toLowerCase()), p = played.get(name.toLowerCase());
+        console.log(`flag ${name} at the end: the original's ${text(o)}, Play's ${text(p)}`);
+        if (Boolean(o) !== Boolean(p) || (o && (o.type !== p.type || o.value !== p.value))) problems.push(`flag ${name}: the original's ${text(o)}, Play's ${text(p)}`);
+      }
+    }
   }
   // The level's end: the original's (<trace>.ended, the tracer at UGameEngine::Tick's client travel) and Play's (play-level-end<tag>.json, game.mjs clientTravel).
   if (scene.levelEnd) {
