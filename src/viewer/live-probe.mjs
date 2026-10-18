@@ -443,7 +443,18 @@ export function liveProbe(game, args = {}) {
             // `@down CODE` / `@up CODE`: a key edge (KeyboardEvent.code) through the binding path, as the original's WM_KEYDOWN/WM_KEYUP
             const edge = /^@(down|up) (\S+)$/.exec(command.text);
             if (edge) entry.output = plain(game.inputKey(edge[2], edge[1] === 'down'));
-            else {
+            // The original types a line as keys (ad/tools/dxinput.c consoleLine: T, ten Backspaces, the characters as WM_CHAR, Enter), and
+            // XInputExt::Process (0x1002d0b0) offers every key to the root window before any binding. A window that takes the keys (a third-person
+            // conversation's ConWindowActive: VirtualKeyPressed returns True for every key and plays the next event on Enter) gets T, so the
+            // console never opens and the line never runs: its Backspaces and Enter reach that window, and its characters no typing line (Stage 5
+            // fN: the frob fan's lines typed during MeetFilben2, whose releases the original's InputEvent returned as handled).
+            else if (game.windowKey('KeyT', true)) {
+              game.windowKey('KeyT', false);
+              for (let i = 0; i < 10; i++) { game.windowKey('Backspace', true); game.windowKey('Backspace', false); }
+              game.windowKey('Enter', true); game.windowKey('Enter', false);
+              entry.output = 'the keys went to the window that holds them';
+            } else {
+              game.windowKey('KeyT', false);
               const consoleCommands = game.doors.scriptRuntime.windowHost?.consoleCommands;
               if (!consoleCommands) throw new Error('no console command chain');
               entry.output = consoleCommands.consoleCommand(player, command.text);
