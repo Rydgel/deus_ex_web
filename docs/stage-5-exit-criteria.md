@@ -535,6 +535,83 @@ item (the actor mesh layer admitted a spawned mesh asynchronously, and the `Deat
 was Play's own, and a far listener's check moved the player's `ShowSelf` draw from tick 12 to tick 4. `live-acceptance.mjs` now traces the unwatched `ScriptedPawn`s with their load
 fields only (`Sight`, `TRate`, `TCount`, `LRT`; watch<tag>.json `loadPawns`), which the replay writes and does not compare; the second capture's draws are equal throughout.
 
+### Third captures: devices and weapons (2026-10-18)
+
+The Island rows on devices and weapons, each a scene captured on the Mac under the bottle lock and replayed in Play with `validate-stage5-live.mjs` (the same check as
+the combat scenes: every watched field of every watched actor per tick, the clock, the stream draws, the AI event manager's calls and callbacks, every object created by class and tick).
+The scenes were designed from the original's scripts and rehearsed in Play first (`stage5-capture-rehearsal.mjs`, class P), which now stamps and prints a scene's devices.
+
+**What the harness watches now.** `--device-watch Name:Class[@Owner.field]` (`live-acceptance.mjs`) traces a device with the Actor fields and its class's own (`DEVICE_FIELDS`: the
+linked offsets and bool masks of Play's class graph for `SecurityCamera`, `AutoTurret` and its gun, `LaserTrigger`, `ControlPanel`, `AlarmUnit`, `Multitool`, decorations, `DeusExMover`,
+`Robot`, and plain actors), late-watched when the scene spawns it; Play finds an actor a placed one spawned at load through its owner's field (`AutoTurret0.gun`). A scene's `flags` are
+dumped at the original's end hold (`--dump-flags`) and compared with Play's FlagBase. `--player-view` adds the player's eye, bob, view shake and Energy.
+
+| Scene | Pose and inputs | What the original did | Replay in Play |
+| --- | --- | --- | --- |
+| `hck1` (5.2.6) | at ControlPanel0 (1900, −895); a Multitool summoned, picked up and drawn; the Enter edge at 200 | the hack starts; HackableDevices.Timer takes hackStrength 0.1 to 0 in 0.01 steps by tick 446; HackAction UnTriggers the five LaserTriggers | **PASS**, 82 actors for 900 ticks |
+| `las1` (5.2.5) | across `statue_lasertrap` (1900, −948.6) | LaserTrigger2..4 start `alarm` at tick 2: AutoTurretSmall0's AlarmHeard, Terrorist30's and (34) Terrorist2's HandleAlarm; Terrorist18 seeks with AlarmTimer > 0 and goes Alerting → Attacking (155, 156) without the box; StatueAlarmTriggered unset | **PASS**, 80 actors |
+| `alm1` (5.2.5) | in Terrorist18's view south of its chair (2012, −1610) | SecurityCamera5 alarms at 259; Terrorist18, AlarmTimer 0, goes Alerting at 114 and rings AlarmUnit0 at 494; StatueAlarmTriggered set | **PASS**, 75 actors |
+| `alm2` (5.2.5) | `hck1`'s hack from (1870, −860), off Terrorist18's way to the box | the MegaFutz shows Terrorist18 the player: Alerting at 202, AlarmUnit0 rung at 599; StatueAlarmTriggered set | **PASS**, 78 actors |
+| `cam1` (5.2.4, 5.1.9) | 400 units in front of NSFCam02 (250, 331), facing it | SecurityCamera3 sees the player at 7 and triggers at 252 (`alarm`); AutoTurret0's AlarmHeard and Terrorist21's HandleAlarm at 252; the turret targets the player at 253 and fires 30 times from 335; SecurityBot1 fires from 310 | **FAIL**: only the blood of SecurityBot1's shots, from 310 (the open item below) |
+| `cam2` (5.2.4) | 700 units in front of SecurityCamera2 (UN_CamSystem02, bNoAlarm), in range and cone | the camera swings and never tracks the player for 300 ticks | **PASS**, 75 actors |
+| `ko1` (5.1.7) | a WeaponBaton taken at `cmb2`'s pose (`AllSkills`); placed 58 units behind the seated Terrorist18 at 600; the Enter edge at 630 | one swing from behind: Dying at 658, TerroristCarcass1 (bNotDead) at 736 | **PASS**, 75 actors |
+| `exp1` (5.6.4) | two CrateExplosiveSmall summoned by DeusExMover5, a WeaponPistol; Enter edges at 240 to 440 | the shots miss; the second crate slides off the first (45); Terrorist2 opens the door, which crushes the first crate at 307 (`Crushed`); the blast sets off the second (312), breaks the door, destroys TrashCan5 and kills Terrorist2 | **PASS**, 79 actors, 1,634 creations |
+| `emp1` (5.6.5) | 550 units west of PatrolPoint19; a WeaponEMPGrenade thrown at 200 | SecurityBot0's EMPHitPoints 100 → 69 → 34 → 0 from 418, Disabled at 423 | **PASS**, 75 actors |
+| `emp2` (5.6.5) | `cam1`'s pose; a WeaponEMPGrenade thrown at 200 toward the camera | SecurityCamera3 confused at 420, AutoTurret0 at 426; the player's Energy drains in 3.75 steps from 434 | **FAIL**: SecurityBot1's shot at 334 (the open item below) and the drain's phase (finding 10) |
+
+**What the replays found.** Each difference had an original cause, fixed in Play or in the replay's inputs:
+
+1. **A held item's render feedback** (`hck1`). The original stamps the Multitool in the player's hand with the level clock in every render from the one after
+   `ActivateBelt` (its `LastRenderTime` follows the clock while its `bHidden` is 1, set since `BecomeItem`). `Inventory.RenderOverlays` calls `Canvas.DrawActor`, which reaches
+   `URender::DrawActor` (Render.dll `0x10b262c0`): it builds an `FDynamicSprite`, runs `FDynamicSprite::Setup` (`0x10b23910`: DrawType, Mesh, the centre's camera depth, the
+   mesh's render bounds through `BoundVisible`) and, when Setup accepts, `DrawActorSprite`, which stamps (`0x10b25150..0x10b25161`). No `bHidden` test is on that path (it belongs
+   to the world pass's admission). Play's overlay filtered `bHidden`, judged the stamp by the drawn groups' frustum test (tighter than Setup's whole-mesh bound: the rising Multitool
+   was stamped 3 frames late) and bound a newly held item asynchronously. Now the overlay stamps what Setup accepts in the canvas frame (the occlusion kernel's `setup.rs` on one
+   candidate with the master frame's words) and binds a held item in its first frame when its resources are resident (`createMeshBindingNow`, as the actor mesh layer admits a spawned actor).
+2. **The player's frozen-phase bob** (`hck1`). The Multitool's `Location.Z` (`Owner.Location + CalcDrawOffset()`) was 4e-5 off for 102 ticks, until the player was hit. The
+   capture with `--player-view` showed the cause in the replay's inputs: after the frozen phase the original's player has `BobTime` 22.69 (the frozen frames' own), which
+   `WalkBob` and `CalcDrawOffset` read. The replay now writes the original's eye and bob state at the release, as it writes the animation state; the item is equal throughout.
+3. **AIProcess's budget stop** (`las1`, `alm1`). AIProcess (`0x10384080`) checks its 2 ms budget only after a receiver that did work (`[ebp-0x44]`, set at `0x103842b9` once the
+   receiver has a candidate sender; a destroyed receiver jumps past the check, `0x10384119 -> 0x10384470`) and leaves the loop before advancing (`0x1038449a` precedes `0x1038449f`);
+   CleanupEvents then relinks `firstProcess` past destroyed receivers, and the tracer read it at the tick's exit. In `las1` at tick 139 Terrorist30's six receivers, destroyed in its
+   own tick, made the record a whole lap's relink: the replay stopped after them and delivered Terrorist2's `HandleDistress` a tick late. In `alm1` at tick 361 Terrorist2's receivers
+   were destroyed by its own callback, after the loop, so only AIProcess's own `firstProcess` at its return tells a whole lap from a stop. `aievent.rs` stops only right after a receiver
+   that did work: exactly at the receiver new captures record at AIProcess's return (`tools/dx-live-win.c` `ecxrcv`, the capture's `aiproc` breakpoint), or at the first live receiver
+   after it for an older capture. The tracer also lists the AI process ring on its frozen rows, and the replay compares Play's at the release (`ai-ring<tag>.json`).
+4. **Names of actors spawned at load** (`hck1`, `cam1`). `LaserTrigger.BeginPlay` and `AutoTurret.PreBeginPlay` spawn the beams' emitters and the turrets' guns at load, so their
+   numbers follow each process's session (MakeUniqueObjectName's class counter carries every load): the original's capture session loaded the Island once (`LaserEmitter0..4`,
+   `AutoTurretGun0`), Play's start loads it again at the Player start (`LaserEmitter5..9`, `AutoTurretGun2`). The comparison takes these names by stem, as it takes the pawns'
+   inventory (`runtimeNumbered`), and Play finds the gun through `AutoTurret0.gun`. **Weak, the user's to judge**: the cause is Play's second load at the Player start; whether the
+   original's start loads the map once is not recorded here.
+5. **A device's frozen-phase render stamps** (`cam1`). The original drew NSFTurret01 and its gun from the placement's view before the release (`LastRenderTime` 81.96 at tick 1);
+   the replay writes that into the watched devices as it does for the pawns (`--render-history`), and their timer phase when their Timer runs from the load.
+6. **processLanded's decoration footprint block** (`exp1`). The second crate lands half off the first at tick 45: the original gives it Velocity (0, −210, 52.5) and leaves it
+   falling with no Base; Play based it on the first crate (and from there Terrorist2, the stream draws and the door all differed). [Landing](landing.md) "The decoration footprint
+   block" had called the block read-only; its oracle never set `Hit.Actor` or SingleLineCheck's return. Disassembled (`0x103cf5f7`–`0x103d0284`): a centre probe, four corner sweeps,
+   and with two or more clear corners across both diagonals a push off the edge (`numLandings` + 1, Velocity from the clear corners and the fall speed clamped to [30, 30 + R]) that
+   returns without Landed or setPhysics; else a `bSlidingCarcass` Carcass slides down a slope. physFalling's PlayerPawn contact lowers the counter. Translated (`landing.mjs`, the
+   hosts, `fall.rs`), and the oracle now controls each SingleLineCheck call: 853 cases, 0 mismatches; its exp1-shaped case gives the DLL's (0, −210, 52.5).
+7. **A zero DrawScale** (`exp1`). The replay paused at the first explosion: `ShockRing.Tick` makes its first frame's DrawScale 0 (Tick runs before the LifeSpan decrement), and
+   `lodMeshFrameMatrix` refused a zero scale. The original draws that frame: Core's FScale divides the origin by the scale (`fdiv` at `0x1011c39d`), every GetFrame point is the x87
+   indefinite NaN, and DrawLodMesh's sign-bit outcodes (tables at `0x10b2abbc`) flag every point on all four planes, so no face is drawn. Play now runs the same arithmetic
+   ([GetFrame](script-lodmesh-frame.md) "A zero DrawScale"; the NaN's sign and the GPU's own rejection are the unreproduced, pixel-only part).
+8. **A destroyed actor's rows** (`exp1`). The original's tracer reads a watched actor's memory after the purge frees it (at 353 TrashCan5's reads a blood drop, Terrorist2's a
+   splat). Every watched actor's rows now end at its UnhashObject (the capture's `unhash` records) or after its first `bDeleteMe` on either side; before, only late-watched actors'.
+9. **ParticleGenerator names** (`emp1`). SecurityBot0's `sparkGen` (Robot.Tick) is ParticleGenerator2 in the original and ParticleGenerator4 in Play: two generators are spawned at
+   load (the original's start registry holds ParticleGenerator0/1), and Play's start loads the Island twice. Compared by stem, as finding 4 (the same **weak** judgement).
+10. **The player's energy cadence** (`emp2`). `DeusExPlayer.MultiplayerTick` runs in single-player too and calls `MaintainEnergy` every 0.25 s of `lastRefreshTime`, which applies
+   the EMP drain: Play's steps came 3 ticks after the original's (434, 449, … against 437, 452, …). The accumulator's phase at the release is the frozen frames' own; `--player-view`
+   now traces `lastRefreshTime`, `EnergyDrain` and `EnergyDrainTotal` and writes `lastRefreshTime` at the release, as `BobTime`. `emp2` needs a recapture for it.
+
+**Open: SecurityBot1's shot and the brush tracker** (`cam1`, `emp2`). At `cam1`'s pose SecurityBot1 shoots the player from tick 310 (its `WeaponFire` event, not the turret). Every
+blood drop and splat of that hit is 0.8715 units off in Play, all by the same vector, anti-parallel to the shot line (dot −0.9999998): the hit is nearer the bot. In `emp2` the same
+shot (tick 334) changes the body part, and the player's hit animation at 341. Cause: ULevel::MultiLineCheck (`0x1039b220`) clips the actor segment at the world hit, which is
+`Level->Model`'s LineCheck, and UPrimitive::LineCheck's hit time is `entry − 0.001` of that segment. The robot's machine gun traces `FMax(1024, MaxRange)` = 9,600 units; along its line
+the static BSP's first hit is 1,801.8 units out (the original's UModel::LineCheck under Unicorn agrees on the map's BSP), and DeusExMover23's face is at 930.7. The original's
+`Level->Model` holds the brush tracker's mover fragments ([brush tracker](brush-tracker.md), "Line checks" and "Open: Collision"), so its segment ends at the mover:
+0.001 × (1,801.8 − 930.7) = 0.871. Play's FastLineCheck already reads the tracked model; its MultiLineCheck world check (`hash.rs` `model_line_check`, `multiline.mjs`) does not.
+Not changed here: every level trace would follow, and every stored scene would need rerunning; it is the work item below.
+
 ## Scoreboard (2026-10-18, after a spawned actor's first frame)
 
 `node scripts/validate-stage5-acceptance.mjs --census .work/stage5-census-2026-10-18-mesh.json --report .work/stage5-gate-2026-10-18-mesh.json` on a fresh census of the merged code
@@ -601,7 +678,12 @@ Nothing below was fixed by the census task; the two gap tasks closed items 1 and
    from the original's `AlarmTimer` rule. The census now plays all 50 scenarios.
 7. **Proof captures, by clause value**: conversation branches (5.4.3 to 5.4.6: choices, transfers, flags; the harness types Enter and Down as key edges), weapons and damage (5.1.1 to 5.1.3, 5.1.7), the
    routes (5.5), Training's lessons one capture each (5.3.1 to 5.3.4), and O3 comparisons for the native-body rows (5.3.5, 5.3.6, 5.3.2). The 44 `MISSING` rows are this item; the census now plays every scenario, and items 2 and 5
-   still bound what the rows they name can show.
+   still bound what the rows they name can show. The third captures gave 5.1.7, 5.1.9, 5.2.4, 5.2.5, 5.2.6, 5.6.4 and 5.6.5 their scenes.
+8. **Level traces over the brush tracker's model** (the third captures' open item, [above](#third-captures-devices-and-weapons-2026-10-18)): MultiLineCheck's world check, and
+   with it SingleLineCheck, Trace and the AI and decal traces, reading `Level->Model` with the tracker's fragments as FastLineCheck already does ([brush tracker](brush-tracker.md)
+   "Open: Collision"), with an oracle over a tracked model and every stored scene replayed after it. Unblocks 5.1.9 and 5.2.4 (`cam1`) and 5.6.5's `emp2`.
+9. **Recapture `emp2`** with `lastRefreshTime` in `--player-view` (finding 10 of the third captures), for the player's energy half of 5.6.5. Shooting the turret down (5.1.9's
+   second half) has no capture: an untrained pistol misses AutoTurretGun0 from 340 units.
 
 ## What the user should decide
 
@@ -613,6 +695,10 @@ Nothing below was fixed by the census task; the two gap tasks closed items 1 and
 * **O3 or O2 as enough for native-body rows** (ladder, crate physics, swimming, falling, movers): the doc defaults to O3 (the DLL's code on Play's inputs in the scene), which does not exist yet for any of them.
 * **Cross-map evidence for shared code**: the gunshot half of 5.2.3 now has an Island capture (`cmb2`); its footsteps half can have no live trace (a held key), so the choice is O3 on Play's footstep inputs or accepting the row without footsteps.
 * **Where a player's death stops** (item 2): implemented as the original's client travel, where its level ends; whether the load menu after it belongs to Stage 5 or 6 is still open.
+* **The third captures' judgements** (labelled `weak` in their rows): actors spawned at load by a placed actor (LaserEmitter, AutoTurretGun, ParticleGenerator) compared by name
+  stem, because Play's start loads the Island twice and the original's capture session once (whether the original's own start loads it once is not recorded); `ko1`'s Low-Tech skill
+  from the `AllSkills` cheat (untrained, the baton's second swing lands after the Terrorist has left); 5.6.4's explosion set off by the door Terrorist2 opens (`Crushed`), the
+  player's shots having missed; 5.1.9's and 5.2.4's restatements from the original scripts (the cameras trigger no Event: an `Alarm` AI event wakes the turret).
 * **Priority**: items 1, 3 and 6 are done, and item 4 has its comparisons: the NPC-versus-player scenes replay equal. The largest open group is now item 7's captures (one per row, about 15 minutes on the bottle each, plus a replay).
 
 ## Excluded
@@ -628,7 +714,8 @@ node scripts/census-stage5.mjs [--only slug,slug] [--json out.json]       # driv
 node scripts/validate-stage5-acceptance.mjs                               # the gate: exit 1 until every criterion passes
 node scripts/validate-stage5-acceptance.mjs --report [file]               # the scoreboard, exit 0
 node scripts/validate-stage5-acceptance.mjs --markdown [file]             # the tables of this page from a report
-node scripts/validate-stage5-live.mjs --scene cmb1                       # a proof check: the stored Island scene cmb1..cmb7, die1 replayed in Play (SKIP without the store)
+node scripts/validate-stage5-live.mjs --scene cmb1                       # a proof check: a stored Island scene (cmb1..cmb7, die1, hck1, las1, alm1, alm2, cam1, cam2, ko1, exp1, emp1, emp2) replayed in Play (SKIP without the store; waits while another checkout replays the map)
 node scripts/validate-stage5-live.mjs --scene cmb1 --print-capture       # the original's capture command of that scene (writes its tracer config; the bottle lock first)
+node scripts/validate-stage5-live.mjs --scene cmb1 --compare-only        # judge the stored replay again after a change to the comparison alone (not after a Play change)
 node scripts/stage5-capture-rehearsal.mjs --scene cmb1                    # rehearse a scene's input list in Play, headless, before a capture (class P)
 ```
