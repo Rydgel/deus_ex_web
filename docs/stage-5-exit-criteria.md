@@ -535,6 +535,66 @@ item (the actor mesh layer admitted a spawned mesh asynchronously, and the `Deat
 was Play's own, and a far listener's check moved the player's `ShowSelf` draw from tick 12 to tick 4. `live-acceptance.mjs` now traces the unwatched `ScriptedPawn`s with their load
 fields only (`Sight`, `TRate`, `TCount`, `LRT`; watch<tag>.json `loadPawns`), which the replay writes and does not compare; the second capture's draws are equal throughout.
 
+### Third captures: the routes, the doors and the mission (2026-10-18)
+
+**Watching what is not a pawn.** The routes are about doors, panels, arcs and the mission's own flags, which the combat scenes did not trace. The devices session's
+`--device-watch Name:Class` (live-acceptance.mjs `DEVICE_FIELDS`, Play's slotOf offsets and bool masks; a summoned device bound late) is the group used here, with
+the routes' classes added: `DeusExMover`'s pick in progress (`bPicking`, `pickValue`, `numPicks`, `TicksSinceLastPick`, `TicksPerPick`, `LastTickTime`, `pickPlayer`,
+`TimeSinceReset`), `ElectricityEmitter`, `DamageTrigger`, `Projectile` (a rocket in flight), `Weapon` (the GEP's accuracy and lock), `Lockpick`, and `bDeleteMe` on every
+device (the tick Mission01.Timer destroys a turret or a laser). `--player-talk` (DataLinkPlay, conPlay) adds player fields (`--player-view` already traces Energy), `--stop-destroyed`
+adds `bDeleteMe` to the pawns: an actor both programs destroyed at the same tick is compared up to that tick, because the purge then frees its object and both sides
+would read memory that is no longer its own (in `kil1` the gibbed commander's slot holds a `BloodSplat` from tick 363). A scene's named `flags` are compared at the
+end (the original's FlagBase dumped at the end hold, `tools/dump-flags-win.c`, against Play's).
+
+**Placed approaches, and how a trigger is entered.** The harness cannot hold a key, so every approach is placed; a placement typed in a hold of the scene (`MOVE`:
+`ghost`, a SET of Location, `walk`, a SET of ViewRotation) runs between the same two ticks in both programs. A player placed inside a trigger's cylinder touches
+nothing (item 6's lesson): to enter `DataLinkTrigger19`/`20` and `DamageTrigger1` the player is placed just above the cylinder and falls into it, so the landing's
+MoveActor sweeps in and Touches. The poses that select a door, a keypad, a panel or a button were found in Play (the census's approach, or a ring of placements
+whose view trace holds the target for 60 frames).
+
+| Scene | Rows | Pose and inputs | What the original did | Replay in Play |
+| --- | --- | --- | --- | --- |
+| `kil1` | 5.5.5, 5.5.7 | 300 units in front of `TerroristCommander0` (outside `MeetTerrorist`'s radius 140); a GEP gun summoned, picked up and drawn; one Enter edge at 300 | the rocket gibs the commander at 318 (`TerroristCommander_Dead`); Mission01.Timer starts `DL_LeaderKilled` at 361; its event sets `StatueMissionComplete` at 481; the next Timer (541) unlocks the StatueRuinDoors and the cell door, unlocks `UN_maindoor` (opening from 542), destroys both turrets, the five lasers, the `ThugMale2`s, `SecurityBot3` and Gunther, kills every other Terrorist, brings the custody and post-mission troops into the world, moves Paul to `PaulTeleport` and silences NSFCam01..03 (`MS_MissionComplete`); the DataLink ends at 1025 | 49 actors equal for 1,100 ticks (each destroyed one up to the tick both destroy it), clock, draws, 1,691 AI events, 1,547 creations and the 5 flags at the end |
+| `dor2` | 5.5.1, 5.5.2, 5.3.10 | at the back entrance two Lockpicks summoned and picked up facing away (NumCopies 2), drawn; at `DeusExMover2` the right button, then an Enter edge at 270, the right button at 530; placed at the StatueRuinDoors at 600: the right button, an Enter edge at 680, the right button at 950 | the bare right button leaves each door locked; the pick runs 271 to 516 on `DeusExMover2` (`lockStrength` 0.1 down by 0.01 a pick) and it slides open from 531; at the front the four like-tagged movers share the pick (681 to 926, the second copy spent) and open together from 951 | 79 actors (every ScriptedPawn and the five doors) equal for 1,150 ticks, clock, draws, 1,654 AI events and 991 creations |
+| `dor1` | 5.3.10 | looking down at `NanoKey0` (KeyID `UNhatchdoor`): the right button at 30; placed at the satcom hatch `DeusExMover7` at 90, `ActivateBelt 0` at 150 (the key ring), an Enter edge at 220, the right button at 280; placed facing `Keypad0` at 400, the right button at 460, the keys 0 4 5 1 at 520 to 580 | the key goes onto the ring (`PickupNanoKey`, `NanoKey0` destroyed at 31); the key ring's left button unlocks the hatch at 221 (`DeusExMover.Frob`'s NanoKeyRing branch), the right button opens it at 281; the keypad window opens (its twelve `HUDKeypadButton`s), the fourth key validates 0451 and `commvan_door` (`DeusExMover21`) opens at 581 | 78 actors (every ScriptedPawn and the four devices) equal for 900 ticks, clock, draws, AI events and every creation (the keypad window's included) |
+| `wat1` | 5.5.4 | in the ruins east of the arcs: a Multitool summoned, picked up, drawn; dropped from 126 units into the arcs at 200 (`DamageTrigger1`'s cylinder entered by the fall), placed back at `ControlPanel1` at 265, an Enter edge at 320; dropped into the arcs again at 650; placed at `Button2` at 750, the right button at 800 | the arcs ('Shocked' 20 a hit) take the player from 100 to 77 between 208 and 260 and the EMP floor drains Energy 0.5 every 0.25 s from 251 (`EnergyDrain`, `MultiplayerTick`'s 0.25 s step) to 98; the hack runs 321 to 566 and `UnTrigger LibElectric` turns the three emitters and the trigger off; the second drop does nothing; the fork lift rises from 801 | first replay: 80 of 81 actors, every AI event and creation equal; the player's Energy dropped 6 ticks late in Play (its 0.25 s step's phase, `lastRefreshTime`, is the frozen phase's own: now traced and written at the release, recapture below) |
+| `air1` | 5.5.3 | beside the laser trap room; placed 87 units above `DataLinkTrigger19` at 60, then 87 above `DataLinkTrigger20` in the shaft at 950 | the falling player enters the first trigger's cylinder at 64 and `DL_libertyruinsairshaft` starts (landing at 87); it ends at 890 (`DL_libertyruinsairshaft_Played`); the drop into the second trigger at 951 to 975 starts nothing (the DataLink has played); no pawn takes the player as its enemy | 77 actors (every ScriptedPawn and the three triggers) equal for 1,200 ticks, clock, draws, AI events, creations and the flag at the end |
+| `fK` | 5.5.1 | the conversations batch's `fT` inputs (50 units west of Filben: six speeches skipped, "You can trust me.", two more); placed at the StatueRuinDoors at 560, `ActivateBelt 0` at 600, an Enter edge at 660, the right button at 720 | MeetFilben from 6 to 469 (`FilbenGaveKey`, Filben's `ruin_key` on the ring); the key ring unlocks the four doors at 661 (`DeusExMover.Frob`'s NanoKeyRing branch toggles the like-tagged movers) and the right button opens them at 721 | 24 actors (Filben's corner, the four doors) equal for 900 ticks, clock, draws, AI events, creations and the 4 flags at the end |
+| `dor3` | 5.5.2, 5.3.10, 5.5.1 | 336 units from the back entrance: a GEP gun summoned, picked up, drawn; an Enter edge at 300 at `DeusExMover2` (`bBreakable`, `doorStrength` 0.5, `minDamageThreshold` 50); placed 300 units from the StatueRuinDoors at 500, an Enter edge at 600 at `DeusExMover12` (`bBreakable` false). The second capture also watches `Rocket0` and the 51 `Rockchip`s of its explosion | the rocket's staggered HurtRadius breaks the back entrance at 320 (`BlowItUp`: 15 `MetalFragment`s, moved up 20,000, non-colliding, `bDestroyed`); the second rocket leaves the front doors whole | **differs from tick 319**: the rocket stops 2.0 units shorter along its path in the original (13.86 of its 16.67-unit step, Play 15.86; the explosion's chips spawn 1 unit off the same +X normal in both), so the explosion, its chips' wall hits and noises, the draws and the AI events follow apart (below) |
+
+`tC`, the conversations batch's capture of `MeetTerrorist`'s Curious choice (then `TerroristFollowup`, `DL_LeaderNotKilled` and Mission01's pass), is row 5.5.6's proof and
+5.5.7's second route; it passes on this branch (24 actors for 1,300 ticks, 1,911 AI events, 1,523 creations, the 7 flags at the end). `fK`'s MeetFilben half is that batch's `fT`
+inputs; this scene adds the doors.
+
+**What the replays found.** Three causes, each now handled from the original's own data, and one open:
+
+1. **A DataLink speaker's portrait is a first load** (Play fix). At tick 481 of `kil1` the original creates `Package InfoPortraits`, a `LinkerLoad`, `Texture AlexJacobson` and
+   `Palette Palette50`: `HUDInfoLinkDisplay.SetSpeaker`'s `DynamicLoadObject("InfoPortraits." $ bindName)` loads the package the level had not loaded. Play's prepared route
+   (`PreparedDynamicLoadGraph.load`) never told the registry model. `script-runtime.mjs` `modelPreparedDynamicLoad` now models it as the speech audio's route does
+   (`loadPackage` at `CreateLinkerLoad`, `loadExport` at `CreateExport`, and the Texture's Palette, which its Preload creates), only for a package the run loaded first: the
+   first version also allocated `hck1`'s `ConList_Mission01`, resident in the original. Creations of `kil1` went from 1,263 of 1,557 equal to all 1,547.
+2. **A released actor's slot was reused** (harness). The conversations batch's `Released` check took the first free of each registry index; a late-bound actor (`Rocket0`,
+   spawned at 300) had an earlier occupant freed at 66. Every free per index is kept now (the conversations batch's 3c2a377 carries the same rule).
+3. **Two phases of the frozen period** (harness, measured inputs written at the release). `kil1`'s rocket started 7e-4 lower in Play: `ComputeProjectileStart` adds
+   `CalcDrawOffset`, which reads the player's `EyeHeight` and `WalkBob`, whose smoothing ran through the original's frozen phase (the devices batch's `--player-view`). `wat1`'s
+   EMP drain showed 6 ticks late: `DeusExPlayer.MultiplayerTick` (it runs in single player too) sums the tick deltas in `lastRefreshTime` and runs `MaintainEnergy` each time it
+   passes 0.25 s, so its phase at the release is the frozen phase's own; `--player-view` now traces and writes it (and `EnergyDrain`, `EnergyDrainTotal`).
+4. **Open: the rocket against the back entrance (`dor3`).** From tick 319 the original's rocket stops 2.0 units shorter along its path than Play's. Both hit a surface with the
+   +X normal (the 51 chips spawn at `HitLocation + HitNormal` and keep the same offset from the rocket in both). Checked against the DLL with the Unicorn oracle on that exact
+   segment (`native-brush-oracle.py`): `DeusExMover2`'s owned `UModel::LineCheck` answers 0.95686 of the 18.67-unit extended segment in both programs (Play's MoveActor then
+   pulls back 2 units: 15.86), and the level BSP gives no hit in either. The rocket has no extent (`CollisionRadius` and `CollisionHeight` 0), nothing moves it after a hit in
+   `DeusExProjectile`'s script, only brushes and the level block it (`IsBlockedBy`), and of the map's 1,434 brush actors only `DeusExMover2` lies on the segment (Play's
+   `traceRay` over each). Not checked: the node flags the original's `MultiLineCheck` passes for a mover (the oracle case used 0). What the original's MoveActor hit at
+   0.8497 is therefore not identified: one capture with a `call` breakpoint on `ULevel::MoveActor` gated on `Rocket0` (the `FCheckResult` argument: `Actor` at
+   +4, `Time` at +36) names it. Rows 5.5.2 (the break), 5.3.10 (the breakable door) and 5.5.1 (the unbreakable front doors, the same scene's second rocket) wait on it.
+
+**The bottle.** Three batches shared it this evening; a batch that releases the lock and re-takes it in the same instant never lets another in. The routes' queue releases it
+for 15 s between scenes.
+
+**Branches.** This branch has the devices batch merged through 7608261 (6198e64, 588f1cb) and the conversations batch merged through afe6e85 (1b25618), plus its 2ea38c3 (AICanSee's skipped
+arguments), 622696f and 3c2a377 cherry-picked; not d3074f8, whose AIProcess stop rule conflicts in `aievent.rs` with the devices batch's 7608261 (those two batches reconcile
+it). `kil1`, `dor2` and `tC` were rerun after the AICanSee fix and pass.
+
 ## Scoreboard (2026-10-18, after a spawned actor's first frame)
 
 `node scripts/validate-stage5-acceptance.mjs --census .work/stage5-census-2026-10-18-mesh.json --report .work/stage5-gate-2026-10-18-mesh.json` on a fresh census of the merged code
