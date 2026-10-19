@@ -196,6 +196,36 @@ export function liveProbe(game, args = {}) {
     }
     out.flags = { defaultExpiration: base.defaultExpiration, entries: [...base.entries.values()].map(entry => ({ name: entry.name, ...(entry.type ? { type: entry.type, value: entry.value } : { value: entry.value ? 1 : 0 }), expiration: entry.expiration })) };
   }
+  // loadFlyGenerators [{name, loc}]: the chance FlyGenerators the original's load made where Play's seeded load drew none
+  // (DeusExDecoration.PreBeginPlay: `if (bGenerateFlies && (FRand() < 0.1)) flyGen = Spawn(Class'FlyGenerator', , , Location, Rotation)`),
+  // from the original's generators-load<tag>.json: a measured host input, the load's draws. A replay whose frozen phase kills them
+  // (`KillAll FlyGenerator`) needs them: each Destroy links its actor into ULevel's Deleted chain, and CleanupDestroyed purges only when
+  // the chain holds 128 (alm2: Play two links short, no purge at the original's 895). Each is spawned as its decoration's branch spawns it
+  // (the bGenerateFlies decoration standing at the generator's Location: its Instigator and Rotation, and its flyGen written), in name
+  // order so Play's name counter gives the original's names. None is made when Play's load holds a FlyGenerator of its own (`own`): the
+  // KillAll chains that one too, and no destroy leaves the chain, so the two chains still differ (open: 04_NYC_Street's seed-1 load has
+  // ten; docs/stage-5-exit-criteria.md "The Deleted chain at the first purge" and work item 12).
+  if (args.loadFlyGenerators) {
+    const isA = (actor, key) => { for (let cls = runtime.instance(actor)?.cls; cls; cls = cls.base) if (cls.record?.key === key) return true; return false; };
+    const own = level.actors.filter(actor => actor && isA(actor, 'deusex.flygenerator')).map(actor => actor.name);
+    out.loadFlyGenerators = { own, made: [] };
+    const cls = [...runtime.linkedClasses].find(entry => entry.record?.key === 'deusex.flygenerator');
+    if (!own.length && !cls) throw new Error('liveProbe: DeusEx.FlyGenerator is not linked');
+    const decorations = own.length ? [] : level.actors.filter(actor => actor && isA(actor, 'deusex.deusexdecoration') && runtime.readNamed(actor, 'bGenerateFlies'));
+    const number = name => Number(/(\d+)$/.exec(name)?.[1] ?? NaN);
+    for (const { name, loc } of own.length ? [] : [...args.loadFlyGenerators].sort((a, b) => number(a.name) - number(b.name))) {
+      const at = loc.map(Math.fround);
+      const makers = decorations.filter(actor => runtime.readNamed(actor, 'Location').every((value, axis) => Math.abs(value - at[axis]) < 0.01));
+      if (makers.length !== 1) throw new Error(`liveProbe: ${makers.length} bGenerateFlies decorations stand at ${name}'s (${at.join(',')})`);
+      const [decoration] = makers;
+      if (runtime.readNamed(decoration, 'flyGen')) throw new Error(`liveProbe: ${decoration.name} already holds a flyGen`);
+      const actor = runtime.spawnActor({ cls: cls.record, level, name: 'None', owner: null, instigator: runtime.readNamed(decoration, 'Instigator'),
+        location: [...runtime.readNamed(decoration, 'Location')], rotation: [...runtime.readNamed(decoration, 'Rotation')] });
+      if (!actor) throw new Error(`liveProbe: SpawnActor refused ${name} at ${decoration.name}`);
+      runtime.writeNamed(decoration, 'flyGen', actor);
+      out.loadFlyGenerators.made.push({ name: actor.name, original: name, decoration: decoration.name });
+    }
+  }
   if (args.population) {
     const spawned = /^(Skill|Aug|NanoKey|ColorTheme|Shadow|ParticleProxy|Laser|Flare|Cigarettes|Candybar|Weapon|Mission|GameReplicationInfo|PlayerReplicationInfo|JCDenton|Mutator|DeusExGameInfo|PickupDistributor|AutoTurretGun|BarkManager|ParticleGenerator|DataVault|Credits|Ammo|BioelectricCell|Medkit|Binoculars|Lockpick|Multitool|LAM|Liquor|Soda|Sodacan|Fruit|Vice)/;
     // names compare as FNames do, ignoring case (see byName): destroying Play's `MIB1` because the original spells it `mib1` removed a live
@@ -274,17 +304,24 @@ export function liveProbe(game, args = {}) {
       // The run's own measured indices for the pre-placed actors and the player (a host input, like the tables of the other sessions), the
       // pending-deleted ones included: an actor that destroyed itself at load is released by Play's first purge under the index it holds
       // (script-level-collection.mjs `release`), and the map table's (map-object-indices.mjs) is another capture's.
-      const held = new Set();
-      const give = actor => {
+      // A pending-deleted actor the runtime created before the seed (a load's spawn, or the original load's chance FlyGenerators made for the
+      // frozen phase's KillAll, loadFlyGenerators above) holds a slot the seeded model did not hand out: its measured index is the slot its
+      // ~UObject appends to GObjAvailable at the purge, as a pre-placed actor's measured index is (script-level-collection.mjs `release`).
+      const held = new Set(), madePending = [];
+      const give = (actor, pending = false) => {
         const key = `${runtime.instance(actor).cls.record.name}.${actor.name}`;
         if (!Number.isInteger(measured[key])) return false;
         runtime.instance(actor).globalIndex = measured[key];
         held.add(measured[key]);
+        const object = runtime.instance(actor).nativeObject;
+        if (pending && object && Number.isInteger(object.index)) {
+          object.originalIndex = measured[key]; object.originalModel = registry.original; madePending.push(key);
+        }
         return true;
       };
       let given = 0, givenPending = 0;
       for (const actor of level.actors) if (actor && actor !== player && give(actor)) given++;
-      for (let actor = level.pendingDeleted ?? null; actor; actor = runtime.readNamed(actor, 'Deleted') ?? null) if (actor !== player && give(actor)) givenPending++;
+      for (let actor = level.pendingDeleted ?? null; actor; actor = runtime.readNamed(actor, 'Deleted') ?? null) if (actor !== player && give(actor, true)) givenPending++;
       if (live) { runtime.instance(player).globalIndex = live.index; held.add(live.index); }
       // Frees of objects that existed at the frozen start (see live-acceptance.mjs registrySeed). An object Play holds under the same index is
       // freed by Play itself: no pre-free for it. Of the others, one with an anchor (the original's registry event before it in the same tick)
@@ -295,7 +332,7 @@ export function liveProbe(game, args = {}) {
       args.objectTrace.pending = rest.filter(entry => !anchoredHere(entry)).map(entry => ({ ...entry }));
       args.objectTrace.anchored = rest.filter(anchoredHere).map(entry => ({ ...entry }));
       args.objectTrace.stats = { anchored: 0, late: 0, rejected: 0 };
-      out.objectTrace = { measured: given, pendingDeleted: givenPending, player: live?.key ?? null, preFrees: rest.length,
+      out.objectTrace = { measured: given, pendingDeleted: givenPending, madePending, player: live?.key ?? null, preFrees: rest.length,
         anchored: args.objectTrace.anchored.length, own: own.map(entry => `${entry.cls}.${entry.name}`) };
     }
     const objects = runtime.objectLog ??= [], sounds = runtime.soundLog ??= [];

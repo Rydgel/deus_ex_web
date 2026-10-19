@@ -90,7 +90,7 @@ report (`--stage4-report`), so presentation proof is not repeated.
 | 5.2.2 | 01_NYC_UNATCOIsland | a visible player in the open: a patrolling Terrorist sees it (AICanSee, SightCounter, CycleCumulative), turns, calls the alert; a hidden player is not seen | O1 | `island-sight` | O1: live trace of the original (no ghost, player standing at a measured pose in a patrol's view and out of it) with the perception fields of the Perception pilot | perception pilot O1 in the Underworld (civilians flee a visible mj12-allied player); validate-pawn-perception / AICanSee x87 (O2) | PASS |
 | 5.2.3 | 01_NYC_UNATCOIsland | the player's noise reaches the guards: gunshots (WeaponFire, LoudNoise), the HandleShot/HandleLoudNoise callbacks; footsteps by speed and floor | O1 | `island-hearing` | footsteps (a held key the harness cannot post: O3 on Play's footstep inputs); the gunshot half has an Island O1 (cmb2) | validate-stage5-live cmb2 (O1 on Island: an unseen player's two pistol shots, every AI event manager call equal, the three NSF pawns woken); live-events-compare O1: 1,069 and 1,586 manager calls equal in the Underworld (pistol, assault shotgun) | MISSING |
 | 5.2.4 | 01_NYC_UNATCOIsland cameras | SecurityCamera sees the player: CheckPlayerVisibility every 0.1 s (cameraRange 1024, cameraFOV 4096 of its swinging Rotation), it tracks him and after triggerDelay (4 s) TriggerEvent(True) sounds its own Klaxon2 and starts an 'Alarm' AI event (it triggers no Event: NSFCam01..03's libertyturret1 is their UnTriggerEvent), which wakes NSFTurret01 (AlarmHeard) and the guards that hear it (HandleAlarm); UN_CamSystem01..04 (bNoAlarm) never check the player | O1 | `island-camera` | cam1: the blood of SecurityBot1's shots at the player (from tick 310; not the turret's) lands 0.87 units nearer the bot in Play, along the shot line, and the drops and splats it leaves differ from there. Cause found: ULevel::MultiLineCheck (0x1039b220) clips the actor segment at its world hit, Level->Model's LineCheck, and the original's Level->Model holds the brush tracker's mover fragments (DeusExMover23's face 930.7 units along the line), where Play's world check (hash.rs model_line_check, multiline.mjs) reads the static BSP (its hit 1801.8 units, the original DLL agreeing on that BSP); UPrimitive::LineCheck's 0.001 time back-off then gives 0.001 x (1801.8 - 930.7) = 0.871 (measured 0.8715). Need: Play's level traces over the tracked model (docs/brush-tracker.md "Open: Collision") | validate-stage5-live cam1 (O1 2026-10-18: NSFCam02 = SecurityCamera3 sees the player 400 units in front of it at tick 7 (bTrackPlayer, bPlayerSeen), triggers after triggerDelay at 252 (bEventTriggered) and starts 'alarm': AutoTurret0's AlarmHeard and Terrorist21's HandleAlarm run at 252); validate-stage5-live cam2 (O1 2026-10-18, PASS: SecurityCamera2, UN_CamSystem02 with bNoAlarm, swings for 300 ticks with the player 700 units in front of it, inside its range and cone, and never tracks him) | FAIL |
-| 5.2.5 | 01_NYC_UNATCOIsland laser trap | a LaserTrigger beam broken by the player raises the alarm (LaserTrigger.BeginAlarm: Klaxon2 and an 'Alarm' AI event; the laser has no Event): the guards that hear it handle it (HandleAlarm: AlarmTimer 120, seek, attack), and AlarmTimer > 0 keeps them from the alarm box (Alerting: Alert -> Done -> Attacking); AlarmUnit0 (SetAlarmFlag -> FlagTrigger3 -> StatueAlarmTriggered) is rung by a RaiseAlarm BeforeAttacking guard that takes the player as its enemy with AlarmTimer 0 (Terrorist18 seeing him) | O1 | `island-laser` | O1: live trace of the original with the player placed across statue_lasertrap (the guards' AlarmTimer and states, the klaxon) and, separately, in Terrorist18's view (its run to AlarmUnit0 and the flag) | validate-stage5-live las1 (O1 2026-10-18: the player placed across the beams; LaserTrigger2..4 start 'alarm' at tick 2, AutoTurretSmall0's AlarmHeard and Terrorist30's and Terrorist2's HandleAlarm follow; Terrorist18 seeks with AlarmTimer > 0 and goes Alerting -> Attacking at 155-156 without the box; StatueAlarmTriggered stays unset); validate-stage5-live alm1 (O1: the player in Terrorist18's view south of its chair; NSFCam (SecurityCamera5) also alarms at 259; Terrorist18, AlarmTimer 0, seeks, goes Alerting at 114, rings AlarmUnit0 at 494 (its 'alarm', bActive) and StatueAlarmTriggered is set); validate-stage5-live alm2 (O1: hck1's hack from off Terrorist18's way: the MegaFutz shows it the player, it goes Alerting at 202 and rings AlarmUnit0 at 599; StatueAlarmTriggered set) | FAIL |
+| 5.2.5 | 01_NYC_UNATCOIsland laser trap | a LaserTrigger beam broken by the player raises the alarm (LaserTrigger.BeginAlarm: Klaxon2 and an 'Alarm' AI event; the laser has no Event): the guards that hear it handle it (HandleAlarm: AlarmTimer 120, seek, attack), and AlarmTimer > 0 keeps them from the alarm box (Alerting: Alert -> Done -> Attacking); AlarmUnit0 (SetAlarmFlag -> FlagTrigger3 -> StatueAlarmTriggered) is rung by a RaiseAlarm BeforeAttacking guard that takes the player as its enemy with AlarmTimer 0 (Terrorist18 seeing him) | O1 | `island-laser` | O1: live trace of the original with the player placed across statue_lasertrap (the guards' AlarmTimer and states, the klaxon) and, separately, in Terrorist18's view (its run to AlarmUnit0 and the flag) | validate-stage5-live las1 (O1 2026-10-18: the player placed across the beams; LaserTrigger2..4 start 'alarm' at tick 2, AutoTurretSmall0's AlarmHeard and Terrorist30's and Terrorist2's HandleAlarm follow; Terrorist18 seeks with AlarmTimer > 0 and goes Alerting -> Attacking at 155-156 without the box; StatueAlarmTriggered stays unset); validate-stage5-live alm1 (O1: the player in Terrorist18's view south of its chair; NSFCam (SecurityCamera5) also alarms at 259; Terrorist18, AlarmTimer 0, seeks, goes Alerting at 114, rings AlarmUnit0 at 494 (its 'alarm', bActive) and StatueAlarmTriggered is set); validate-stage5-live alm2 (O1: hck1's hack from off Terrorist18's way: the MegaFutz shows it the player, it goes Alerting at 202 and rings AlarmUnit0 at 599; StatueAlarmTriggered set) | PASS |
 | 5.2.6 | 01_NYC_UNATCOIsland laser trap | hacking ControlPanel0 with a multitool switches statue_lasertrap off: hack time (skill, hackStrength), the multitool's use, the lasers' state | O1 | `island-hack-panel` | O1: live trace of the original (Multitool selected, a left-button click on the panel: ParseLeftClick, never the right button) with the hack progress, multitool charge and laser state per tick | validate-stage5-live hck1 (O1 2026-10-18: the Multitool summoned, picked up and drawn, the Enter edge at 200 starts the hack, HackableDevices.Timer takes hackStrength 0.1 to 0 in 0.01 steps by tick 446, HackAction UnTriggers the five LaserTriggers; the panel, the lasers, AlarmUnit0, the Multitool and every pawn compared per tick) | PASS |
 | 5.2.7 | 01_NYC_UNATCOIsland | a pawn reacts to a body: a killed or knocked-out Terrorist is seen (CheckCarcassPresence, HaveSeenCarcass, AddCarcass) and the finder investigates or flees | O1 | `island-carcass` | O1: live trace of the original with a carcass in a patrol's view | validate-pawn-carcass (natives 2108/2109, O2); validate-stage5-live cmb1 (O1: the attacking Terrorists find TerroristCarcass1, CarcassTimer 120, and stay in Attacking) | PASS |
 
@@ -864,6 +864,56 @@ have no `frozen-lines` file and replay as before (`tA` and `cmb2` rerun: PASS).
 **Still unmeasured**: the original's frames between the map's load and the attach (the 40 s load wait and the generators' dump), against Play's page frames
 before its first held line. The log is empty until the first typed line, and no other window state is known to depend on that time.
 
+### The Deleted chain at the first purge: the original load's FlyGenerators (2026-10-19)
+
+**What `alm2` showed** (work item 10, [scoreboard](#scoreboard-2026-10-19-after-the-merge-of-the-island-batches)). The original's `ULevel::CleanupDestroyed`
+purges `alm2`'s Deleted chain at 895 (128 actors, `Multitool0` one of them) and Play purged nothing by 900; in `las1` Play purged at 565, the original at 561.
+
+**No destroy is left off Play's chain; Play lacked actors.** The purge contents are the original's `unhash` records at the purge tick (`"ev":"ret"`; the `enter`
+records carry a `"ret"` field too, the return address, so a filter on that word counts each free twice) against the frees of Play's `objects-play<tag>.json`.
+`las1`'s chain at 561 held 128 actors, `FlyGenerator0` among them. Play's at 565 held the same actors without `FlyGenerator0`, and with the next destroy,
+`BloodDrop57`, in its place. (The first player's keyring is the original's `NanoKeyRing4` and Play's `NanoKeyRing2`, the known substitution [above](#first-original-captures-island-combat-2026-10-17).)
+`alm2`'s chain holds two FlyGenerators, so Play's was two short at 895, and no other actor was destroyed by 900. These are the load's chance FlyGenerators:
+`DeusExDecoration.PreBeginPlay` runs `if (bGenerateFlies && (FRand() < 0.1)) flyGen = Spawn(Class'FlyGenerator', , , Location, Rotation)` (DeusEx.u). The scenes'
+frozen phase types `KillAll FlyGenerator` first, which destroys them there, and each `Destroy` links its actor into the chain (`script-destroy.mjs`,
+ULevel::DestroyActor); only the 128th link starts a purge (`script-cleanup.mjs`, ULevel::CleanupDestroyed). The original's load drew one in `las1` and two in `alm2`
+(`generators-load<tag>.json`, the capture's list taken before the KillAll). Play's seed-1 Island load draws none (`play-population.json`), so its replayed KillAll
+destroyed nothing. Play's slot model already replayed their slots as pre-frees, because Play did not hold them. Every stored Island scene with a purge fits.
+The ones with no load FlyGenerator purged on the original's tick (`cmb3` 821, `exp1` 352 and 384, `die1` 1105, `tA` 481, `tF` 421). Of those with one or two,
+`las1`, `alm2` and `emp2` (430, 576, 769 for the original's 429, 574, 765) purged late. `kil1` and `tC` purged on time, because the chain passed 128 by more than one
+link in the purge's tick (`kil1` 354: 132 frees, most of them an explosion's blood; `tC` 721: 171 actors at once).
+
+**The fix is a measured host input** (`live-acceptance.mjs play`, `live-probe.mjs loadFlyGenerators`). When the early commands hold `KillAll FlyGenerator`,
+the replay reads `generators-load<tag>.json`. Before it replays those lines, Play makes each of the original's load FlyGenerators the way the decoration's branch
+makes it: the `bGenerateFlies` decoration standing at the generator's measured Location (to 0.01) spawns it with its own Location, Rotation and Instigator, and its
+`flyGen` is written. They are made in name order, so Play's name counter gives the original's names. The replayed KillAll then chains them where the original's
+did (the purge releases them in the original's order: every free equal in `alm2` and `las1`). The objectTrace seed gives them the registry dump's indices. Because
+they were made before the seed, the model is also handed their measured slot (`madePending` in the replay's `object trace` line), so their purge frees are logged
+and given back, as a pre-placed actor's measured slot is.
+
+**Unmeasured, labelled.** Their load-time draws (PawnGenerator.PostBeginPlay's `Rand` and `FRand`) are Play's own and come before tick 1. The replay sets the stream
+per tick, and the generators are gone before it starts, so no replayed tick depends on them. Nothing compares their state before the KillAll (the original's
+frozen phase does not tick them). A decoration that made one holds a `flyGen` to a deleted actor until the purge clears it, in both programs.
+
+**Open.** A load of Play's that makes FlyGenerators of its own gets none made: 04_NYC_Street at seed 1 makes ten, against `vents5`'s eight. Its KillAll chains Play's
+own in their place, so the chains still differ there (work item 12; row 4.2.13, `vents5`, still passes). The same holds for any harness destroy of an actor only Play has,
+such as the population step's `removed` (empty in every Island scene).
+
+**Result** (the Mac, this branch; every scene with a load FlyGenerator replayed, plus `cmb3` and `exp1`):
+
+* `alm2` PASS: purge at 895 with 128, and every free over 900 ticks equal in index and order (before: no purge by 900, `Multitool0` never released).
+* `las1` PASS: purge at 561 (131 frees in that tick, as the original's), every free equal.
+* `alm1`, `air1`, `cmb7`, `fK`, `dor2`, `fN`, `cmb6`, `gU`, `gP`, `kC`, `oT`, `gS` and `gN` PASS: no purge in their window, every free equal, and 0 creations
+  in another slot.
+* `kil1`, `tC`, `cmb3` and `exp1` PASS. `emp2` (0.87 units, item 8) and `cam1` (item 8) FAIL as before, at the same first difference; `emp2` now purges at 429, 574
+  and 765 like the original, and 526 of its creations take another slot instead of 603.
+* What `kil1` (394 creations in another slot), `tC` and `exp1` (143) still differ in is one free. The original releases a Shadow at the purge (`Shadow71`, `Shadow60`
+  and `Shadow56`), but in Play that free goes unlogged. Play made the Shadow at its load, before the seed, and the seed gives it the dump's index, but only an actor
+  pending deletion is handed its measured slot (`madePending`), so the model releases it without a slot. `exp1` has no FlyGenerator, so this predates the fix
+  (work item 11).
+* Unchanged by construction: the scenes with no load FlyGenerator (their code path is the old one: no `generators-load` FlyGenerator, and no seeded pending actor of
+  Play's own has a measured row in any Island or Underworld dump), and row 4.3.6.
+
 ## Scoreboard (2026-10-19, after the merge of the Island batches)
 
 `node scripts/validate-stage5-acceptance.mjs --census .work/stage5-census-2026-10-19-final2.json --report .work/stage5-gate-2026-10-19-final2.json` on master `a786b4e`
@@ -899,6 +949,10 @@ zone 0 (`c.inWorld`, `a786b4e`), and all 50 play.
 | 5.7 Excluded | 0 | 0 | 0 | 0 | 5 |
 | **Total** | **20** | **7** | **23** | **0** | **5** |
 
+**After work item 10** (2026-10-19, this branch): 5.2.5 passes. `validate-stage5-acceptance.mjs --only '^5\.2\.5 ' --census .work/stage5-census-2026-10-19-final2.json --report .work/stage5-gate-2026-10-19-525.json` replays `las1`, `alm1` and `alm2`, and all three pass, so the gate stands at **21 PASS, 6 FAIL, 23 MISSING** (5.2 Stealth: 4, 1, 2).
+Every other scene the change reaches was replayed on its own and keeps its status ([the Deleted chain at the first purge](#the-deleted-chain-at-the-first-purge-the-original-loads-flygenerators-2026-10-19)).
+The table above is the merge's run.
+
 The twenty `PASS` rows have proof checks on stored Island scenes: 5.2.2 on `cmb1` and `cmb2`, 5.1.6 on `cmb1` to `cmb4`, `cmb6` and `cmb7`, 5.1.5 on `cmb1`, `cmb2` and `cmb5`,
 5.2.7 on `cmb5`, 5.6.1 on `cmb7`, 5.1.8 on `die1`, 5.1.7 on `ko1`, 5.2.6 on `hck1`, 5.6.4 on `exp1`; 5.4.3 on `pG`, `pR` and `pX`, 5.4.4 on `fT`, `fM`, `fN` and `tA`, 5.4.5 on
 `gP`, `gN`, `gA`, `gS`, `gU`, `gK` and `gW`, 5.4.6 on `tC` and `tA`, 5.4.7 on `oV`, `oT`, `cmb2` and `cmb3`, 5.6.6 on `gP`, `gN`, `gA`, `fT`, `fM`, `fN`, `oV` and `kC`; 5.5.3 on
@@ -916,8 +970,9 @@ waits for. Play frees none of them by tick 900, so its chain was shorter at 895.
 destroy Play does not chain. Play's object logs of the other scenes (a batch of 100 frees or more) show it is not `alm2`'s alone: Play purges with the original in
 `cmb3` (821, 128) and `exp1` (352, 131; 384, 129), but in `las1` at 565 where the original purges at 561, which the check does not see (no watched actor is released
 there). The two scenes whose purge holds FlyGenerators, killed by the frozen phase's `KillAll FlyGenerator` (one in `las1`, two in `alm2`), are the two where Play
-purges late; `cmb3` and `exp1` have none. **Unverified, open**: that Play leaves the frozen phase's destroys off its Deleted chain (Play's chain count per tick
-against the original's purges is the next measurement; Play's population, regenerated on this code, has the same `pendingDeleted`).
+purges late; `cmb3` and `exp1` have none. **Resolved (work item 10)**: Play did not leave those destroys off its chain. Its seed-1 load never made the
+FlyGenerators, so its KillAll destroyed nothing. The replay now makes the original load's FlyGenerators before the KillAll (a measured host input), and `alm2`
+passes: purge at 895, every free equal ([the Deleted chain at the first purge](#the-deleted-chain-at-the-first-purge-the-original-loads-flygenerators-2026-10-19)).
 
 The 23 `MISSING` rows play in the census and name the capture that would prove them.
 Stage 4's gate started at 44 of 70 because 60 checks against stored
@@ -983,10 +1038,15 @@ Nothing below was fixed by the census task; the two gap tasks closed items 1 and
    SecurityBot1's shot (`cam1`, `emp2`, devices). Needs an oracle over a tracked model and every stored scene near a mover replayed after it. Unblocks 5.1.9 and 5.2.4 (`cam1`), 5.6.5
    (`emp2`), 5.3.10, 5.5.1 and 5.5.2 (`dor3`).
 9. **Shooting the turret down** (5.1.9's second half) has no capture: an untrained pistol misses AutoTurretGun0 from 340 units, and the turret and SecurityBot1 kill the player first.
-10. **The Deleted chain at `alm2`'s purge** (5.2.5, [scoreboard](#scoreboard-2026-10-19-after-the-merge-of-the-island-batches)): the original's `ULevel::CleanupDestroyed`
-    purges 128 actors at 895 and Play none by 900; in `las1` Play purges at 565, the original at 561. Count Play's Deleted chain per tick against the original's
-    destroys, the frozen phase's `KillAll FlyGenerator` first (the two late scenes are the two whose purge holds FlyGenerators), and fix the destroy Play does not
-    chain. Unblocks 5.2.5.
+10. **The Deleted chain at `alm2`'s purge** (5.2.5): **done** 2026-10-19 ([the Deleted chain at the first purge](#the-deleted-chain-at-the-first-purge-the-original-loads-flygenerators-2026-10-19)).
+    No destroy was left off Play's chain. The original's load made chance FlyGenerators that Play's seed-1 load did not make, and the frozen phase's KillAll chained
+    them in the original only. The replay now makes them before the KillAll, from the capture's `generators-load<tag>.json`. `alm2` passes and `las1` purges at 561.
+11. **The measured slot of a live actor Play made before the seed** (the slot model, [above](#the-deleted-chain-at-the-first-purge-the-original-loads-flygenerators-2026-10-19)):
+    a Shadow made at Play's load gets the dump's index from the seed, but its release at a purge is not logged, so the model's free list misses that slot and the
+    creations after it take other slots (`kil1` 394, `exp1` 143). The hand-over that `madePending` gives pending actors would cover it. That change reaches every
+    scene that releases one, so it needs the stored scenes and row 4.3.6 replayed after it. Judged by nothing today (the slots are reported).
+12. **Harness destroys of actors only Play has** lengthen Play's Deleted chain and move its purges earlier: Play's own chance FlyGenerators under a KillAll
+    (04_NYC_Street at seed 1: ten, `vents5`'s original eight) and the population step's `removed`. None happens on the Island today.
 
 ## What the user should decide
 
