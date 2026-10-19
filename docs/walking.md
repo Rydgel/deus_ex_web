@@ -184,6 +184,34 @@ conversions, `fixedTurn`, the clamp, a stubbed MoveActor recording its NewRotati
 `validate-pawn-physics-kernel`: JS and Rust digests equal at every checkpoint on Training and Island (a Rust build with the
 tests removed differs: `7dbeae2a71482d86` against `240a4dc3d502f71c`).
 
+## Region.ZoneNumber 0: FellOutOfWorld (2026-10-19)
+
+Right after the surface prelude (`0x103ca574`, handled: return at `0x103cb330`), physWalking tests `Region.ZoneNumber`
+(`+0xd0`, `0x103ca584`). When it is 0 the body stops there, as physFalling's does (`0x103d0aca`, falling.mjs):
+
+- at ROLE_Authority (`+0x31 == 4`, `0x103ca58e`) it logs `"%s fell out of the world!"` (`0x10481a34`, the same string)
+  through `GLog->Logf` with the actor's name (FName::Names), a side channel Play does not model;
+- at any Role it dispatches the `FellOutOfWorld` event (`0x103ca5bd`: FindFunctionChecked of FName `0x10583608`, then
+  ProcessEvent through vtable +0x10 at `0x103ca5d4`) and returns (`ret 8`, `0x103ca5e7`). Velocity, Acceleration,
+  Location and Physics are not touched: `Pawn.FellOutOfWorld` sets Health -1 and `PHYS_None` and calls `Died('Fell')`.
+
+The FName's references in Engine.dll are this branch, physFalling's (`0x103d0b6f`), its registration (`0x103805a5`) and the
+exported `AActor::eventFellOutOfWorld` (`0x10322ab0`, through the link thunk `0x1030302b`), which nothing in Engine.dll
+calls (no call, jump or pointer to either address); no other System DLL or exe names the event, and no script calls it. walking.mjs had skipped it, so a pawn in zone 0 kept walking. Stage 5 `kB`
+([stage 5](stage-5-exit-criteria.md)) showed it: a console `set Location` inside solid leaves Region at the old zone, the
+first physFalling move from there stays put while MoveActor's SetZone writes zone 0, and `processLanded` runs physWalking
+for the remaining time, which in the original takes this branch (the oracle below); Play's rehearsal walked on (the
+capture itself died through physFalling's branch, see the Stage 5 note). walking.mjs now has the branch; the Rust
+entries hand such a pawn to it before anything runs (`pawn_phys.rs` `perform` before `walk_loop`, `WalkLoopHost.walk`'s
+`zone 0` decline), since the event dispatch is the JavaScript body's.
+
+Evidence: `scripts/native-walking-oracle.py` now sets Region.ZoneNumber and Role per case and records the Logf call (Core
+`0x1010280b`, intercepted: its formatting needs msvcrt) with a one-entry name table; `validate-native-walking` adds four
+zone-0 cases (Role 4 and 2, PlayerPawn and script pawn): the original returns after the prelude with the single
+`FellOutOfWorld` event and every field unchanged, and logs exactly in the two Role 4 cases (399 cases, 0 failures). A
+headless Island check (Class P) writes Terrorist0's ZoneNumber 0 while it stands: the Rust path hands the tick back once
+and both paths leave it Dying, Health -1, `PHYS_None`, unmoved.
+
 ## Surface-prelude boundary
 
 The original caller ALWAYS first invokes103cc450. It scans prospective wall

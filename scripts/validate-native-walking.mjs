@@ -32,6 +32,9 @@ export function walkingCases(){
  // for a PlayerPawn, for any other pawn only when |ZoneVelocity|^2 > 90000 (0x103ca697..0x103ca6f1).
  for(const scripted of [true,false])for(const dt of [.1,.2,.4])for(const velocity of [[250,0,0],[20,0,0],[190,0,0],[210,0,0]])mods.push({scripted,desiredSpeed:1,walking:false,dt,velocity,acceleration:[1000,500,0]});
  for(const scripted of [true,false])for(const zoneVelocity of [[30,-15,5],[299,0,0],[301,0,0],[400,0,0],[0,-290,80],[0,-290,90],[200,200,150]])mods.push({scripted,desiredSpeed:.296,walking:false,zoneVelocity,velocity:[250,0,0],acceleration:[1000,500,0]});
+ // The zone-0 branch (0x103ca584-0x103ca5e7): after the prelude, Region.ZoneNumber 0 dispatches FellOutOfWorld and returns with the
+ // move fields as they were; at ROLE_Authority (4) the GLog line "%s fell out of the world!" comes first (the oracle's `logs`).
+ for(const role of [4,2])for(const scripted of [false,true])mods.push({zoneNumber:0,role,scripted,acceleration:[1000,500,0]});
  // and a sweep over all of them, scripted and control, 5 ms to 0.4 s
  let rs=424242;const rnd=()=>(rs=(Math.imul(rs,1664525)+1013904223)>>>0)/2**32;
  for(let i=0;i<240;i++){
@@ -48,7 +51,7 @@ export function run(c){
  move(delta){events.push({move:delta,velocity:[...this.velocity]});const r=c.moves[mi++];if(r.justTeleported)this.justTeleported=true;if(r.physics!==undefined)this.physics=r.physics;this.position=this.position.map((v,i)=>f(v+f(delta[i]*f(r.time))));return {...r,time:f(r.time),normal:r.normal.map(f),actor:r.time<1?actor:null};},
  lineCheck(start,end,extent,flags){events.push({line:{start:[...start],end,extent,flags}});const r=c.lines[li++];return {...r,time:f(r.time),normal:r.normal.map(f),actor:r.time<1?actor:null};},
  setSupportBase(a){this.base=a;events.push({base:!!a});},setPhysics(p){this.physics=p;events.push({physics:p});},
- farMove(pos){this.position=[...pos];events.push({farMove:pos});},mayFall(){events.push({event:'MayFall'});if(c.denyFall)this.canJump=false;},fallingEvent(){events.push({event:'Falling'});if(c.fallingPhysics!==undefined)this.physics=c.fallingPhysics;},falling(dt,it){events.push({falling:dt,iterations:it});},flying(dt,it){events.push({flying:dt,iterations:it});},hitWall(h){events.push({wall:h.normal});if(c.wallPhysics!==undefined)this.physics=c.wallPhysics;}};
+ farMove(pos){this.position=[...pos];events.push({farMove:pos});},mayFall(){events.push({event:'MayFall'});if(c.denyFall)this.canJump=false;},fallingEvent(){events.push({event:'Falling'});if(c.fallingPhysics!==undefined)this.physics=c.fallingPhysics;},falling(dt,it){events.push({falling:dt,iterations:it});},fellOutOfWorld(){events.push({event:'FellOutOfWorld'});},flying(dt,it){events.push({flying:dt,iterations:it});},hitWall(h){events.push({wall:h.normal});if(c.wallPhysics!==undefined)this.physics=c.wallPhysics;}};
  walking(pawn,c.dt,c.iterations??0);return Object.fromEntries(['position','velocity','acceleration','physics','hitSlopedWall'].map(k=>[k,pawn[k]]).concat([['events',events]]));
 }
 if(process.argv[1] && new URL(import.meta.url).pathname===process.argv[1]) {
@@ -56,8 +59,11 @@ fs.mkdirSync('.cache/walking',{recursive:true});
 if(!process.argv[2])fs.writeFileSync('.cache/walking/cases.json',JSON.stringify(walkingCases()));
 const cases=JSON.parse(fs.readFileSync(process.argv[2]??'.cache/walking/cases.json'));
 if(!process.argv[3]){const r=spawnSync(process.env.NATIVE_PROBE_PYTHON??'.cache/native-probe-env/bin/python',['scripts/native-walking-oracle.py',process.env.DEUS_EX_ROOT??'Deus Ex GOTY Edition',process.argv[2]??'.cache/walking/cases.json'],{encoding:'utf8'});if(r.status)throw Error(r.stderr);fs.writeFileSync('.cache/walking/native.json',r.stdout);}
-const native=JSON.parse(fs.readFileSync(process.argv[3]??'.cache/walking/native.json')).results;
+const {results:native,logs=[]}=JSON.parse(fs.readFileSync(process.argv[3]??'.cache/walking/native.json'));
 const actual=cases.map(run),failures=[],open=[];
+// The GLog side channel (not modelled): the original logged exactly the zone-0 cases at ROLE_Authority, each once with the pawn's name.
+for(let i=0;i<cases.length;i++){const lines=logs.filter(l=>l.case===i),want=cases[i].zoneNumber===0&&(cases[i].role??4)===4;
+ if(lines.length!==(want?1:0)||(want&&(lines[0].format!=='%s fell out of the world!'||lines[0].name!=='JCDentonMale0')))failures.push({i,logs:lines,expected:want?'one fell-out-of-the-world line':'none'});}
 for(let i=0;i<cases.length;i++)if(JSON.stringify(actual[i])!==JSON.stringify(native[i]))(cases[i].open?open:failures).push({i,actual:actual[i],expected:native[i]});
 fs.writeFileSync('.cache/walking/comparison.json',JSON.stringify({cases:cases.length,failures,open},null,2));console.log(JSON.stringify({cases:cases.length,failures:failures.length,openCases:cases.filter(c=>c.open).length,openMismatches:open.length,first:failures.slice(0,2)},null,2));process.exitCode=failures.length?1:0;
 

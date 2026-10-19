@@ -7,11 +7,20 @@ class NativeWalking(b.NativeFalling):
  def __init__(self,root):
   super().__init__(root);self.script_class=self.alloc(0x40);self.write(self.script_class+0x28,'I',0x1058c660)  # a script pawn: Pawn ancestry, never APlayerPawn (calcVelocity's class tests)
   self.far_thunk=0x700fe030;self.cpu.mem_write(self.far_thunk,bytes.fromhex('c2 18 00'));self.write(self.vtable+0x8c,'I',self.far_thunk)
+  # The zone-0 branch (0x103ca584-0x103ca5e7) at ROLE_Authority logs "%s fell out of the world!" through Core's FOutputDevice::Logf
+  # (IAT 0x10599a68) with GetName's text: FName::Names (IAT 0x10599a70) gets a one-entry table for the pawn's Name index 0, and Logf
+  # itself (its varargs formatting needs msvcrt, not loaded) is a recorded side channel, not part of the compared result.
+  self.logf=self.read(0x10599a68,'I')[0];names=self.alloc(16);entry=self.alloc(64)
+  self.cpu.mem_write(entry+0xc,'JCDentonMale0'.encode('utf-16-le')+b'\0\0');self.write(names,'I',entry);self.write(self.read(0x10599a70,'I')[0],'III',names,1,1)
+  self.logs=[];self.index=None
  def on_instruction(self,cpu,address,size,data):
   if self.events is not None:
    st=cpu.reg_read(c.UC_X86_REG_ESP)
    def ret(bytes):
     cpu.reg_write(c.UC_X86_REG_EIP,self.read(st,'I')[0]);cpu.reg_write(c.UC_X86_REG_ESP,st+4+bytes)
+   if address==self.logf:
+    text=lambda a:self.cpu.mem_read(a,256).decode('utf-16-le').split('\0')[0]
+    self.logs.append({'case':self.index,'format':text(self.read(st+8,'I')[0]),'name':text(self.read(st+12,'I')[0])});ret(0);return
    if address==self.far_thunk:
     pos=list(self.read(st+8,'3f'));self.write(self.pawn+0x114,'3f',*pos);self.events.append({'farMove':pos});cpu.reg_write(c.UC_X86_REG_EAX,1);return
    if address==0x103cecc0:
@@ -31,7 +40,7 @@ class NativeWalking(b.NativeFalling):
     return
    if address==self.event_thunk:
     caller=self.read(st,'I')[0]
-    names={0x103cba19:'MayFall',0x103cc820:'WalkTexture',0x103cc57c:'WalkTexture',0x103cbbca:'Falling',0x103cb30a:'Falling'}
+    names={0x103cba19:'MayFall',0x103cc820:'WalkTexture',0x103cc57c:'WalkTexture',0x103cbbca:'Falling',0x103cb30a:'Falling',0x103ca5d7:'FellOutOfWorld'}
     if caller not in names:raise RuntimeError(f'Unsupported event {caller:x}')
     self.events.append({'event':names[caller]})
     if names[caller]=='Falling' and 'fallingPhysics' in self.case:self.write(self.pawn+0x30,'B',self.case['fallingPhysics'])
@@ -57,6 +66,7 @@ class NativeWalking(b.NativeFalling):
  def walking(self,case):
   self.case=case;self.mi=self.li=0
   self.write(self.pawn+0x30,'B',1);self.write(self.pawn+0x1ec,'I',0)
+  self.write(self.pawn+0xd0,'B',case.get('zoneNumber',1));self.write(self.pawn+0x31,'B',case.get('role',4))  # Region.ZoneNumber, Role
   self.write(self.pawn+0x24,'I',self.script_class if case.get('scripted') else 0x1058c160);self.write(self.pawn+0x36c,'f',case.get('desiredSpeed',1))
   self.write(self.pawn+0x318,'I',0x1002|(0x20 if case.get('hitSlopedWall') else 0)|(0x10 if case.get('walking') else 0))
   self.write(self.pawn+0xc4,'I',self.zone if case.get('base',True) else 0)
@@ -68,4 +78,6 @@ class NativeWalking(b.NativeFalling):
   result={key:list(self.read(self.pawn+off,'3f')) for off,key in [(0x114,'position'),(0x144,'velocity'),(0x150,'acceleration')]}
   result.update(physics=self.read(self.pawn+0x30,'B')[0],hitSlopedWall=bool(self.read(self.pawn+0x318,'I')[0]&0x20),events=self.events);self.events=None;return result
 if __name__=='__main__':
- n=NativeWalking(Path(sys.argv[1]));print(json.dumps({'results':[n.walking(x) for x in json.loads(Path(sys.argv[2]).read_text())]}))
+ n=NativeWalking(Path(sys.argv[1]));results=[]
+ for n.index,x in enumerate(json.loads(Path(sys.argv[2]).read_text())):results.append(n.walking(x))
+ print(json.dumps({'results':results,'logs':n.logs}))
