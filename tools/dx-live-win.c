@@ -119,6 +119,13 @@
  *                                 ULevel::Tick of the level: 0 for a console command or key edge typed while the level is held) and `rng` (the CRT
  *                                 rand state at the breakpoint)
  *         call-ticks <first> <last>   the unfrozen ticks whose calls are traced
+ *         frozen-wait <path>      attach at once and arm only the calls marked `frozen` (records u 0, inTick 0); read <path>, the
+ *                                 rest of the config (the watch lines), when it appears, then go on as without it (the level's
+ *                                 breakpoints, `release` counted from there). <out>.resume before that leaves (the calls removed).
+ *                                 live-acceptance.mjs --frozen-frames: the frozen phase's console lines are typed in between, so
+ *                                 their window frames (RootTick) and key edges (InputEvent) are traced
+ *                                 (docs/stage-5-exit-criteria.md "The frozen phase's window frames")
+ *                                 a call marked `frozen` is also armed in that phase (with `always`)
  *         call-pawn <name>        the actor whose gate calls arm the tracing (any when omitted)
  *         call-frames             keep the calls armed between ticks (the renders after each traced tick), until the entry of the tick after
  *                                 call-ticks' last; `namearg <i> <off>` on a call logs the object name at *(args[i]+off) (off -1: args[i]
@@ -277,13 +284,15 @@ static Watched watched[1024]; static int watched_count;
 static int in_our_tick = 0; static uintptr_t rng_ptd = 0;   /* inside a ULevel::Tick of the traced level; the msvcrt thread-data block of the rand state (+0x14) */
 #define MAXCALLS 32
 #define MAXRET 64
-typedef struct { uintptr_t address; unsigned char original; char module[40]; char label[24]; int nwords, deref_count, deref_arg[3], deref_n[3], deref_off[3], gate, always, name0, namee, retname, namearg, namearg_off, ecx_n, ecx_off, span_on, span_arg, span_off, fret, fname_count, fname_arg[2], abs_count, abs_ptr[4], abs_n[4], abs_off[4], ecxobj, ecxobj_off; unsigned abs_addr[4]; char only[48]; } CallBp;
+typedef struct { uintptr_t address; unsigned char original; char module[40]; char label[24]; int armed, frozen, nwords, deref_count, deref_arg[3], deref_n[3], deref_off[3], gate, always, name0, namee, retname, namearg, namearg_off, ecx_n, ecx_off, span_on, span_arg, span_off, fret, fname_count, fname_arg[2], abs_count, abs_ptr[4], abs_n[4], abs_off[4], ecxobj, ecxobj_off; unsigned abs_addr[4]; char only[48]; } CallBp;
 typedef struct { uintptr_t address; unsigned char original; int refs; } RetBp;
 typedef struct { int active; uintptr_t ret; unsigned esp, ecx; int call; unsigned args[16]; unsigned deref_ptr[3]; unsigned long seq; } Pending;
 static CallBp calls[MAXCALLS]; static int call_count;
 static RetBp rets[MAXRET]; static int ret_count;
 static Pending pend[MAXRET]; static int pend_count;
+/* calls_armed: 0 none, 1 every call, 2 only the `frozen` ones (the frozen phase of `frozen-wait`, before the level's breakpoints) */
 static int call_first = 0, call_last = -1, calls_armed = 0, gate_depth = 0, call_frames = 0;
+static char frozen_wait[600] = "";
 static char call_pawn[96] = "";
 static unsigned long call_seq = 0;
 static FILE *cout;
@@ -325,6 +334,7 @@ static int read_config(const char *path) {
     else if (!strcmp(tok, "kill-on-crash")) kill_on_crash = atoi(strtok(NULL, " \t\r\n"));
     else if (!strcmp(tok, "pre-watch")) pre_watch = atoi(strtok(NULL, " \t\r\n"));
     else if (!strcmp(tok, "call-frames")) call_frames = 1;
+    else if (!strcmp(tok, "frozen-wait")) { char *v = strtok(NULL, "\r\n"); while (v && *v == ' ') v++; if (v) strncpy(frozen_wait, v, sizeof(frozen_wait) - 1); }
     else if (!strcmp(tok, "call-ticks")) { call_first = atoi(strtok(NULL, " \t\r\n")); call_last = atoi(strtok(NULL, " \t\r\n")); }
     else if (!strcmp(tok, "watch-write")) watch_off = (unsigned)strtoul(strtok(NULL, " \t\r\n"), NULL, 0);
     else if (!strcmp(tok, "call-pawn")) { char *v = strtok(NULL, " \t\r\n"); if (v) strncpy(call_pawn, v, sizeof(call_pawn) - 1); }
@@ -337,7 +347,7 @@ static int read_config(const char *path) {
       char *at = strchr(a, '@'); if (at) { *at = 0; strncpy(c->module, a, sizeof(c->module) - 1); a = at + 1; }
       c->address = strtoul(a, NULL, 0); strncpy(c->label, l, sizeof(c->label) - 1); c->nwords = atoi(n); if (c->nwords > 16) c->nwords = 16;
       for (char *o; (o = strtok(NULL, " \t\r\n"));) {
-        if (!strcmp(o, "gate")) c->gate = 1; else if (!strcmp(o, "always")) c->always = 1;
+        if (!strcmp(o, "gate")) c->gate = 1; else if (!strcmp(o, "always")) c->always = 1; else if (!strcmp(o, "frozen")) c->frozen = 1;
         else if (!strcmp(o, "name0")) c->name0 = 1; else if (!strcmp(o, "namee")) c->namee = 1; else if (!strcmp(o, "retname")) c->retname = 1;
         else if (!strcmp(o, "namearg")) { c->namearg = atoi(strtok(NULL, " \t\r\n")) + 1; c->namearg_off = (int)strtol(strtok(NULL, " \t\r\n"), NULL, 0); }
         else if (!strcmp(o, "only")) { char *v = strtok(NULL, " \t\r\n"); if (v) strncpy(c->only, v, sizeof(c->only) - 1); }
@@ -612,20 +622,22 @@ static void watch_set(int on) {
   SetThreadContext(game_thread, &dc);
 }
 static void cb_write(uintptr_t address, unsigned char byte) { write_mem(address, &byte, 1); FlushInstructionCache(process, (LPCVOID)address, 1); }
-/* Arm or remove every call breakpoint (the traced ticks' span) and the pending return breakpoints. */
-static void calls_set(int on) {
-  if (on == calls_armed) return;
-  watch_set(on);
+/* Arm or remove the call breakpoints (1: every call, the traced ticks' span; 2: only the `frozen` calls, the frozen phase of
+   `frozen-wait`; 0: none, and the pending return breakpoints with them). A call keeps the byte it read when it was armed. */
+static void calls_set(int level) {
+  if (level == calls_armed) return;
+  if ((level == 1) != (calls_armed == 1)) watch_set(level == 1);
   for (int i = 0; i < call_count; i++) {
-    if (on) { read_mem(calls[i].address, &calls[i].original, 1); cb_write(calls[i].address, 0xCC); }
-    else cb_write(calls[i].address, calls[i].original);
+    int want = level == 1 || (level == 2 && calls[i].frozen);
+    if (want && !calls[i].armed) { read_mem(calls[i].address, &calls[i].original, 1); cb_write(calls[i].address, 0xCC); calls[i].armed = 1; }
+    else if (!want && calls[i].armed) { cb_write(calls[i].address, calls[i].original); calls[i].armed = 0; }
   }
-  if (!on) { for (int i = 0; i < ret_count; i++) if (rets[i].refs > 0) cb_write(rets[i].address, rets[i].original); ret_count = 0; pend_count = 0; gate_depth = 0; }
-  calls_armed = on;
+  if (!level) { for (int i = 0; i < ret_count; i++) if (rets[i].refs > 0) cb_write(rets[i].address, rets[i].original); ret_count = 0; pend_count = 0; gate_depth = 0; }
+  calls_armed = level;
 }
 static int is_call_address(uintptr_t where) {
   if (!calls_armed) return 0;
-  for (int i = 0; i < call_count; i++) if (calls[i].address == where) return 1;
+  for (int i = 0; i < call_count; i++) if (calls[i].armed && calls[i].address == where) return 1;
   for (int i = 0; i < ret_count; i++) if (rets[i].refs > 0 && rets[i].address == where) return 1;
   return 0;
 }
@@ -711,7 +723,7 @@ static int handle_call_event(HANDLE th, DWORD tid, uintptr_t where, int unfrozen
       break;
     }
   } else {
-    for (int i = 0; i < call_count; i++) if (calls[i].address == where) {
+    for (int i = 0; i < call_count; i++) if (calls[i].armed && calls[i].address == where) {
       CallBp *c = &calls[i];
       int armed = gate_depth > 0 || c->always;
       if (c->gate) {
@@ -785,7 +797,7 @@ static int watch_hit(HANDLE th, uintptr_t where, int unfrozen) {
 static int finish_call_step(void) {
   if (pending_kind < 0) return 0;
   if (calls_armed) {
-    if (pending_kind == 0) cb_write(calls[pending_index].address, 0xCC);
+    if (pending_kind == 0) { if (calls[pending_index].armed) cb_write(calls[pending_index].address, 0xCC); }
     else if (rets[pending_index].refs > 0) cb_write(rets[pending_index].address, 0xCC);
   }
   pending_kind = -1;
@@ -798,7 +810,11 @@ static int finish_call_step(void) {
  * other events continue as the game's own. Runs until the queue stays empty. */
 static void drain_and_disarm(int *disarmed) {
   if (*disarmed) return;
-  bp_disarm(&bp[0]); bp_disarm(&bp[1]); if (bp[2].address) bp_disarm(&bp[2]); if (bp[3].address) bp_disarm(&bp[3]); *disarmed = 1;
+  if (bp[0].address) bp_disarm(&bp[0]);
+  if (bp[1].address) bp_disarm(&bp[1]);
+  if (bp[2].address) bp_disarm(&bp[2]);
+  if (bp[3].address) bp_disarm(&bp[3]);
+  *disarmed = 1;
   calls_set(0);
   DEBUG_EVENT ev; int quiet = 0;
   while (quiet < 3) {
@@ -814,6 +830,49 @@ static void drain_and_disarm(int *disarmed) {
       } else if (code != EXCEPTION_BREAKPOINT && code != EXCEPTION_SINGLE_STEP) status = DBG_EXCEPTION_NOT_HANDLED;
     } else if (ev.dwDebugEventCode == CREATE_PROCESS_DEBUG_EVENT && ev.u.CreateProcessInfo.hFile) CloseHandle(ev.u.CreateProcessInfo.hFile);
     else if (ev.dwDebugEventCode == LOAD_DLL_DEBUG_EVENT && ev.u.LoadDll.hFile) CloseHandle(ev.u.LoadDll.hFile);
+    ContinueDebugEvent(ev.dwProcessId, ev.dwThreadId, status);
+  }
+}
+
+/* `frozen-wait <path>`: the frozen phase before the level's breakpoints. Attached, with only the `frozen` calls armed (the
+ * window frames, RootTick, and the key edges, InputEvent, of the console lines the capture types in the frozen phase), until
+ * <path> appears: it holds the rest of the config (the watch lines, known once the lines are typed and the population checked).
+ * The files are looked at while the game is stopped in one of our events (the whole process is, under a debugger), so the
+ * calls are removed with no thread running past a byte being written. Returns 1 when <path> appeared (the event continued:
+ * the caller resolves the watches and arms the level's breakpoints while the game runs, as a trace without the phase does
+ * before it attaches; resolving them with the game stopped held one window frame for 21 s in the first capture), 0 when
+ * <out>.resume asked to leave first (the calls removed; the caller drains and detaches), -1 when the game exited or crashed. */
+static int frozen_phase(const char *resume_path, const char *crash_path) {
+  calls_set(2);
+  int armed = 0; for (int i = 0; i < call_count; i++) armed += calls[i].armed;
+  fprintf(stderr, "frozen phase: %d calls armed; write %s to go on\n", armed, frozen_wait);
+  DEBUG_EVENT ev;
+  for (;;) {
+    if (!WaitForDebugEvent(&ev, 200)) continue;
+    DWORD status = DBG_CONTINUE;
+    int ours = 0;
+    if (ev.dwDebugEventCode == EXCEPTION_DEBUG_EVENT) {
+      DWORD code = ev.u.Exception.ExceptionRecord.ExceptionCode;
+      uintptr_t where = (uintptr_t)ev.u.Exception.ExceptionRecord.ExceptionAddress;
+      HANDLE th = thread_of(ev.dwThreadId);
+      if (code == EXCEPTION_BREAKPOINT && th && cout && handle_call_event(th, ev.dwThreadId, where, 0)) ours = 1;
+      else if (code == EXCEPTION_SINGLE_STEP && pending_kind >= 0 && finish_call_step()) ours = 1;
+      else if (code == EXCEPTION_BREAKPOINT || code == EXCEPTION_SINGLE_STEP) { /* the attach breakpoint, a stray trap flag */ }
+      else if (is_fatal_exception(code) && ev.u.Exception.dwFirstChance) {
+        report_crash(&ev, crash_path, 0);
+        if (kill_on_crash) { TerminateProcess(process, 1); ContinueDebugEvent(ev.dwProcessId, ev.dwThreadId, DBG_CONTINUE); return -1; }
+        status = DBG_EXCEPTION_NOT_HANDLED;
+      } else status = DBG_EXCEPTION_NOT_HANDLED;
+    } else if (ev.dwDebugEventCode == CREATE_PROCESS_DEBUG_EVENT) { if (ev.u.CreateProcessInfo.hFile) CloseHandle(ev.u.CreateProcessInfo.hFile); }
+    else if (ev.dwDebugEventCode == LOAD_DLL_DEBUG_EVENT) { if (ev.u.LoadDll.hFile) CloseHandle(ev.u.LoadDll.hFile); }
+    else if (ev.dwDebugEventCode == EXIT_PROCESS_DEBUG_EVENT) { ContinueDebugEvent(ev.dwProcessId, ev.dwThreadId, DBG_CONTINUE); return -1; }
+    /* (only at one of our call events with no step pending: the game thread is where it can be left) */
+    if (ours && pending_kind < 0) {
+      FILE *g = fopen(frozen_wait, "r");
+      if (g) { fclose(g); ContinueDebugEvent(ev.dwProcessId, ev.dwThreadId, status); return 1; }
+      FILE *r = fopen(resume_path, "r");
+      if (r) { fclose(r); calls_set(0); ContinueDebugEvent(ev.dwProcessId, ev.dwThreadId, status); return 0; }
+    }
     ContinueDebugEvent(ev.dwProcessId, ev.dwThreadId, status);
   }
 }
@@ -836,23 +895,50 @@ static int do_trace(const char *config) {
     fprintf(stderr, "call %s: %s at 0x%lx (preferred 0x%lx): 0x%lx\n", calls[i].label, calls[i].module, (unsigned long)base, (unsigned long)preferred, (unsigned long)calls[i].address);
   }
   names_table = read_u32(core_base + OFF_NAMES_DATA);
-  if (!resolve_actors()) return 1;
+  char resume_path[640]; snprintf(resume_path, sizeof(resume_path), "%s.resume", out_path);
+  char crash_path[640]; snprintf(crash_path, sizeof(crash_path), "%s.crash.txt", out_path);
+  char ended_path[640]; snprintf(ended_path, sizeof(ended_path), "%s.ended", out_path);
+  int attached = 0;
+  if (frozen_wait[0]) {
+    /* the frozen phase (frozen_phase above): its calls are numbered with the rest, u 0 */
+    if (!(call_count && call_last >= call_first && call_last > 0)) { fprintf(stderr, "frozen-wait needs call-ticks and calls\n"); return 1; }
+    remove(resume_path); remove(crash_path);
+    char cp[640]; snprintf(cp, sizeof(cp), "%s.calls.jsonl", out_path); cout = fopen(cp, "w");
+    if (!cout) { fprintf(stderr, "cannot write %s\n", cp); return 1; }
+    if (!DebugActiveProcess(pid)) { fprintf(stderr, "DebugActiveProcess failed (%lu)\n", GetLastError()); return 1; }
+    DebugSetProcessKillOnExit(FALSE); attached = 1;
+    int go = frozen_phase(resume_path, crash_path);
+    if (go < 0) { fclose(cout); fprintf(stderr, "the game left during the frozen phase\n"); return 1; }
+    if (go == 0) {
+      int d = 0; drain_and_disarm(&d); DebugActiveProcessStop(pid); fclose(cout); remove(resume_path);
+      fprintf(stderr, "left in the frozen phase\n"); return 0;
+    }
+    if (!read_config(frozen_wait)) { int d = 0; drain_and_disarm(&d); DebugActiveProcessStop(pid); return 1; }
+    fprintf(stderr, "frozen phase over after call seq %lu\n", call_seq);
+  }
+  if (!resolve_actors()) {
+    if (attached) { int d = 0; drain_and_disarm(&d); DebugActiveProcessStop(pid); }
+    return 1;
+  }
   late_scan();
   fprintf(stderr, "level 0x%lx info 0x%lx player 0x%lx, %d watched, %d late-watch names pending\n", (unsigned long)level_ptr, (unsigned long)level_info, (unsigned long)player_ptr, watched_count, late_count);
   FILE *out = fopen(out_path, "w");
-  if (!out) { fprintf(stderr, "cannot write %s\n", out_path); return 1; }
-  char resume_path[640]; snprintf(resume_path, sizeof(resume_path), "%s.resume", out_path);
+  if (!out) {
+    fprintf(stderr, "cannot write %s\n", out_path);
+    if (attached) { int d = 0; drain_and_disarm(&d); DebugActiveProcessStop(pid); }
+    return 1;
+  }
   remove(resume_path);
-  char crash_path[640]; snprintf(crash_path, sizeof(crash_path), "%s.crash.txt", out_path);
   remove(crash_path);
-  char ended_path[640]; snprintf(ended_path, sizeof(ended_path), "%s.ended", out_path);
   remove(ended_path);
   int disarmed = 0, monitoring = 0; ULONGLONG monitor_until = 0;
 
-  if (!DebugActiveProcess(pid)) { fprintf(stderr, "DebugActiveProcess failed (%lu)\n", GetLastError()); return 1; }
-  DebugSetProcessKillOnExit(FALSE);
+  if (!attached) {
+    if (!DebugActiveProcess(pid)) { fprintf(stderr, "DebugActiveProcess failed (%lu)\n", GetLastError()); return 1; }
+    DebugSetProcessKillOnExit(FALSE);
+  }
   bp_arm(&bp[0], TICK_ENTRY); bp_arm(&bp[1], TICK_RET); bp_arm(&bp[3], CLIENT_TRAVEL);
-  if (call_count && call_last >= call_first && call_last > 0) { char cp[640]; snprintf(cp, sizeof(cp), "%s.calls.jsonl", out_path); cout = fopen(cp, "w"); }
+  if (!cout && call_count && call_last >= call_first && call_last > 0) { char cp[640]; snprintf(cp, sizeof(cp), "%s.calls.jsonl", out_path); cout = fopen(cp, "w"); }
   FILE *aout = NULL; char actors_path[640];
   if (actor_trace_last >= actor_trace_first && actor_trace_last > 0) { snprintf(actors_path, sizeof(actors_path), "%s.actors.jsonl", out_path); aout = fopen(actors_path, "w"); bp_arm(&bp[2], ACTOR_TICK); }
 
@@ -941,13 +1027,13 @@ static int do_trace(const char *config) {
             in_our_tick = 1;
             if (released) unfrozen++;
             if (cout && released && unfrozen >= call_first && unfrozen <= call_last) calls_set(1);
-            else if (cout && call_frames && calls_armed) calls_set(0);   /* call-frames: the render after tick call_last stays armed until the next tick's entry */
+            else if (cout && call_frames && calls_armed == 1) calls_set(0);   /* call-frames: the render after tick call_last stays armed until the next tick's entry */
             if (aout && released && unfrozen >= actor_trace_first && unfrozen <= actor_trace_last) fprintf(aout, "{\"u\":%d,\"actor\":\"@entry\",\"rng\":\"0x%08x\"}\n", unfrozen, rng_in);
           }
         }
         if (!is_entry && !is_actor && mine) {
           in_our_tick = 0;
-          if (cout && calls_armed && !call_frames) calls_set(0);
+          if (cout && calls_armed == 1 && !call_frames) calls_set(0);
           if (aout && unfrozen >= actor_trace_first && unfrozen <= actor_trace_last) { fprintf(aout, "{\"u\":%d,\"actor\":\"@exit\",\"rng\":\"0x%08x\"}\n", unfrozen, rng_ptd ? read_u32(rng_ptd + 0x14) : 0); fflush(aout); }
           unsigned vp_x = 0, vp_y = 0;   /* the player's UViewport: SizeX +0x78, SizeY +0x7c (Player at +0x5d4) */
           { uintptr_t vp = player_ptr ? read_u32(player_ptr + 0x5d4) : 0; if (vp) { vp_x = read_u32(vp + 0x78); vp_y = read_u32(vp + 0x7c); } }

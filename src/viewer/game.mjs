@@ -291,8 +291,10 @@ export async function createGame(map, asset, assets, { randomSeed = Math.floor(D
       // every root with it (RootTick 0x1003be90), then runs UGameEngine::Tick (0x100266d9). So a held or slowed level (TimeDilation 0.001, a
       // menu's pause) does not slow the log's timeout, the mission text or a button's delay, the level's [0.005, 0.4] delta clamp does not
       // apply (docs/interface-frames.md "Window ticks are real time"), and a window the level creates first ticks in the next frame.
+      // (validation: `windowHold`, set by viewProbe while a live replay's frozen phase ticks the windows with the original's measured frames
+      // instead, live-acceptance.mjs --frozen-frames; the replay clears it when it arms)
       if (Array.isArray(windowSeconds)) for (const delta of windowSeconds) hud?.tick(delta);
-      else hud?.tick(seconds);
+      else if (!game.windowHold) hud?.tick(seconds);
       doors.tick(seconds);
     },
     /** UGameEngine::Tick's client travel (body 0x1038fe90): after the levels' Ticks (0x10390154..0x103901a3) it tests

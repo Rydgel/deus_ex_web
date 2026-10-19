@@ -1472,7 +1472,9 @@ code. Each is now measured from the original:
    the whole hold: `cmb2`'s bark subtitle, created inside the Enter press at tick 660 after 25 of the hold's 31 frames, got 1.736 s instead of 0.464 s and was freed 11 ticks
    early ([Stage 5 exit criteria](stage-5-exit-criteria.md#first-original-captures-island-combat-2026-10-17)). The `inputevent` and `roottick` records share one call
    sequence, so each command's matched `InputEvent` record now splits its hold: the frames before it tick the windows before the command runs (`live-probe.mjs`), the
-   rest before the next tick. The frozen phase (`after` 0) is Play's own warm-up and is not split.
+   rest before the next tick. The frozen phase (`after` 0) was Play's own warm-up; since 2026-10-19 a capture with `--frozen-frames` traces it too (the tracer attaches
+   before the typed lines), and the replay ticks Play's held windows with the frames around each line
+   ([Stage 5 exit criteria](stage-5-exit-criteria.md#the-frozen-phases-window-frames-2026-10-19)).
 6. **The tick a window frame is logged under.** The tracer's u counts level ticks: tick 661's records (an `addobj` with `inTick` 1, seq 8054) come before the frame
    labelled 661 (`roottick`, seq 8075), and tick 662's after it. A window frame between level ticks k and k+1 is therefore u = k. Play ticks those frames at the start of
    replayed tick k+1, and its object log labelled their frees k+1; it now labels them k (`live-probe.mjs` objectTrace), so a window's free is compared at the original's

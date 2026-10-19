@@ -3,6 +3,7 @@ import { scriptGetStateName } from '../runtime/script-state-queries.mjs';
 import { createNavTrace } from '../runtime/nav-trace.mjs';
 import { execAICanSee } from '../runtime/script-pawn-perception.mjs';
 import { setTouchTrace } from '../runtime/actor-touch.mjs';
+import { hudLogClock } from './view-probe.mjs';
 
 /** Validation only (scripts/live-acceptance.mjs, docs/visual-acceptance.md
  * "Live scenes"): the simulation side of the live-scene comparison. It
@@ -362,6 +363,12 @@ export function liveProbe(game, args = {}) {
     // it, and its rows start there (the original's tracer binds the same name at the tick exit after its AddObject, tools/dx-live-win.c late-watch).
     const actors = watch.map(({ names, props, late = false }) => ({ props, late, items: names.map(name => [name, byName(name)]) }));
     for (const group of actors) for (const [name, actor] of group.items) if (!actor && !group.late) throw new Error(`liveProbe: no actor ${name}`);
+    // The frozen phase's window hold (view-probe.mjs windowHold, live-acceptance.mjs --frozen-frames) ends here: the replayed ticks bring
+    // their own window frames (windowSeconds), the first one the frames the original ran after its last frozen-phase line.
+    game.windowHold = false;
+    // (a diagnostic: the HUD message log's clock as the frozen phase left it, HUDLogDisplay.lastLogMsg against its logTimeout: a line logged in the
+    // frozen phase, a `ghost`'s, is still waiting while lastLogMsg is under the timeout)
+    out.hudLog = hudLogClock(game);
     const state = game.liveReplay = {
       ticks, hold, warm, index: 0, rows: [], cursor: 0, current: null, preFrees: args.objectTrace?.pending ?? null,
       // the level's end: {tick, url, ...} when UGameEngine::Tick's client travel (game.mjs clientTravel) left the level after that many replayed ticks

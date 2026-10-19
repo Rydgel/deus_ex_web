@@ -219,14 +219,72 @@ async function original() {
   const game = await import('../ad/scripts/original-game.mjs');
   const scratch = path.join(dir, 'steps'); mkdirSync(scratch, {recursive: true});
   let step = 0;
+  // --frozen-frames: the console lines typed while the frozen-phase tracer is attached, in order (a retyped line too): frozen-lines<tag>.json
+  let frozenLines = null;
   const post = (lines, timeout) => {
     const file = path.join(scratch, `step-${String(step++).padStart(3, '0')}.txt`);
     writeFileSync(file, lines.join('\n') + '\n');
+    if (frozenLines) for (const line of lines) if (line.startsWith('cmd ')) frozenLines.push(line.slice(4));
     game.run(file, timeout);
   };
   const tool = path.join(root, 'ad/build/dx-live-win.exe');
   const wine = (...args) => execFileSync(game.WINE, [tool, ...args], {encoding: 'utf8', env: process.env, maxBuffer: 1 << 26});
   const loadWait = Number(option('load-wait', 25000));
+  const cmds = option('cmds', '').split('|').filter(Boolean).map(entry => { const i = entry.indexOf(':'); return {after: Number(entry.slice(0, i)), text: entry.slice(i + 1)}; });
+  // --frozen-frames: the tracer attaches before the frozen phase's console lines are typed (tools/dx-live-win.c `frozen-wait`), with only the
+  // config's `frozen` calls armed: the window frames (RootTick) and the key edges (InputEvent) of those lines are traced at u 0, and the replay
+  // ticks Play's windows with them around the same lines instead of its own warm-up (play, frozen-lines<tag>.json; docs/stage-5-exit-criteria.md
+  // "The frozen phase's window frames"). The watch lines follow (<trace>.watch.cfg) once the lines are typed and the population is checked.
+  // (Not with --no-open, which types no line, nor --stamps-yaws/--sweep, which trace nothing and attach their own debugger.)
+  const frozenFrames = flag('frozen-frames') && !flag('no-open') && option('stamps-yaws', null) === null && option('sweep', null) === null;
+  const frozenFile = path.join(dir, `frozen-lines${suffix}.json`), goPath = `${tracePath}.watch.cfg`;
+  rmSync(frozenFile, {force: true});   // a capture's frozen frames are its own: a stale file would split a newer trace's frames
+  let child = null, log = '', finished = null;
+  const spawnTracer = configFile => {
+    child = spawn(game.WINE, [tool, 'trace', configFile], {env: process.env, stdio: ['ignore', 'pipe', 'pipe']});
+    log = '';
+    child.stderr.on('data', chunk => { log += chunk; });
+    finished = new Promise(resolve => child.on('exit', resolve));
+  };
+  // a run that stops before the watch lines (a reload for the population, a lost KillAll): the frozen-phase tracer leaves (<trace>.resume)
+  const leaveFrozen = async () => {
+    if (!frozenFrames || !child || child.exitCode !== null) return;
+    writeFileSync(`${tracePath}.resume`, '');
+    const left = await Promise.race([finished.then(() => true), new Promise(r => setTimeout(() => r(false), 120000))]);
+    if (!left) { console.log('the frozen-phase tracer did not leave: killed'); child.kill(); }
+    rmSync(`${tracePath}.resume`, {force: true});
+    console.log(log.trim().split('\n').slice(-3).join('\n'));
+  };
+  // The tracer's config before its watch lines (watchConfig, below).
+  const headerConfig = [`out ${tracePath}`, 'player JCDentonMale', `release ${option('release', 3)}`, `ticks ${option('ticks', 600)}`,
+    ...(cmds.length ? [`pause-at ${[...new Set(cmds.map(c => c.after))].sort((a, b) => a - b).join(' ')}`] : []),
+    ...(option('delta', null) ? [`delta ${option('delta')}`] : []), ...(option('max-seconds', null) ? [`max-seconds ${option('max-seconds')}`] : []), ...(option('monitor', null) ? [`monitor ${option('monitor')}`] : []), ...(option('actor-trace', null) ? [`actor-trace ${option('actor-trace').replace(':', ' ')}`] : []),
+    // --rng-from <trace.jsonl>: the original draws the stream another capture's trace recorded: that trace's `rngIn` of unfrozen tick k is
+    // written into the CRT at the entry of this run's tick k (tools/dx-live-win.c `rng-file`), so the same pawns make the same decisions
+    // on a fresh load and `call` breakpoints can trace them (the capture to trace is not repeatable by loading again).
+    ...(option('rng-from', null) ? (() => {
+      const rows = readFileSync(option('rng-from'), 'utf8').trim().split('\n').map(line => JSON.parse(line)).filter(row => row.unfrozen >= 1 && row.rngIn);
+      const file = path.join(dir, `rng-force${suffix}.txt`);
+      writeFileSync(file, rows.map(row => String(row.rngIn).replace(/^0x/, '')).join('\n') + '\n');
+      return [`rng-file ${file}`];
+    })() : []),
+    // --extra-config <file>: more trace.cfg lines (tools/dx-live-win.c `call` breakpoints, call-ticks, call-pawn).
+    ...(option('extra-config', null) ? readFileSync(option('extra-config'), 'utf8').split('\n').filter(line => line.trim()) : [])];
+  // The frozen-phase tracer: attached before the typed lines, the level's breakpoints and the watches once <trace>.watch.cfg appears.
+  const startFrozen = async () => {
+    for (const end of ['resume', 'go', 'strobe', 'ended']) rmSync(`${tracePath}.${end}`, {force: true});
+    rmSync(goPath, {force: true});
+    const configFile = path.join(dir, 'trace.cfg');
+    writeFileSync(configFile, [...headerConfig, `frozen-wait ${goPath}`].join('\n') + '\n');
+    spawnTracer(configFile);
+    const started = Date.now();
+    while (!/^frozen phase: \d+ calls armed/m.test(log) && child.exitCode === null && Date.now() - started < 60000) await new Promise(r => setTimeout(r, 200));
+    const armed = /^frozen phase: (\d+) calls armed/m.exec(log);
+    if (!armed) throw new Error(`the frozen-phase tracer did not attach: ${log.trim().slice(-400)}`);
+    if (armed[1] === '0') console.log('frozen phase: NO call of the config is marked `frozen`: no window frame is traced before the release');
+    console.log(`frozen phase: tracer pid ${child.pid} attached, ${armed[1]} calls armed`);
+    frozenLines = [];
+  };
   if (!flag('no-open')) {
     // Leaving a map saves its travel state, and a map visited before loads from it
     // (visual-acceptance.mjs "Fresh maps"): hop to another map first when the game
@@ -261,6 +319,8 @@ async function original() {
     // Alliance (non-location, so safe in a level that then ticks): NPCs that hate NAME see the player as one of them.
     // --original-brightness b: the original's Brightness (`set WinDrv.WindowsClient Brightness b`; Shot bakes a ramp of it into the bitmap, 0.666667 makes
     // the Shot the framebuffer, visual-acceptance.mjs --brightness). Play's page keeps --brightness (0.4, its identity).
+    // --frozen-frames: the tracer attaches here, after the load (and the generators' load dump), before the first typed line.
+    if (frozenFrames) await startFrozen();
     post([...(option('original-brightness', null) ? [`cmd set WinDrv.WindowsClient Brightness ${option('original-brightness')}`, 'sleep 600'] : []),
       'cmd set DeusEx.JCDentonMale bCheatsEnabled True', 'sleep 200', ...(flag('no-ghost') ? [] : ['cmd ghost', 'sleep 200']), 'cmd ShowHud False', 'sleep 500',
       ...(option('player-alliance', null) ? [`cmd set DeusEx.JCDentonMale Alliance ${option('player-alliance')}`, 'sleep 500'] : []),
@@ -342,7 +402,7 @@ async function original() {
     const left = () => wine('list', killed).split('\n').filter(line => /^\S+ \S+ slot=/.test(line)).length;
     if (left()) { post([`cmd KillAll ${killed}`, 'sleep 800']); }
     const remaining = left();
-    if (remaining) { console.log(`KillAll ${killed}: ${remaining} still in the level`); process.exitCode = 4; return; }
+    if (remaining) { console.log(`KillAll ${killed}: ${remaining} still in the level`); process.exitCode = 4; await leaveFrozen(); return; }
     console.log(`KillAll ${killed}: none left`);
   }
   // Likewise an --early-cmds `set DeusEx.JCDentonMale Health<Region> N` (the death scene's pre-lowered HealthTorso and HealthHead): read back from the
@@ -356,7 +416,7 @@ async function original() {
     };
     if (read() !== Number(wanted)) post([`cmd set DeusEx.JCDentonMale ${property} ${wanted}`, 'sleep 800']);
     const now = read();
-    if (now !== Number(wanted)) { console.log(`${property}: the live player holds ${now}, not ${wanted}`); process.exitCode = 4; return; }
+    if (now !== Number(wanted)) { console.log(`${property}: the live player holds ${now}, not ${wanted}`); process.exitCode = 4; await leaveFrozen(); return; }
     console.log(`${property}: ${now}`);
   }
   const generators = flag('no-generators') ? [] : wine('list', 'PawnGenerator').split('\n').map(line => /^\S+ (\S+) slot=/.exec(line)?.[1]).filter(Boolean);
@@ -406,7 +466,6 @@ async function original() {
     const key = DXINPUT_KEYS[m[2]] ?? m[2].replace(/^(Key|Digit)/, '');
     return [`${m[1]} ${key}`, 'sleep 200'];
   };
-  const cmds = option('cmds', '').split('|').filter(Boolean).map(entry => { const i = entry.indexOf(':'); return {after: Number(entry.slice(0, i)), text: entry.slice(i + 1)}; });
   writeFileSync(path.join(dir, `commands${suffix}.json`), JSON.stringify(cmds));
   // Actors whose Timer runs from the load (SetTimer in PostBeginPlay, e.g. Tree: 4 + 2 * FRand()): Play's load draws another rate, so the
   // original's TimerRate/TimerCounter are read here and written into Play (docs/rng.md). The list comes from Play's population step.
@@ -422,22 +481,9 @@ async function original() {
   const LOAD_FIELDS = FIELDS.filter(f => [...PAWN_LOAD_FIELDS, 'LRT'].includes(f[0]));
   const timers = (existsSync(reference0) && !flag('no-timers') ? JSON.parse(readFileSync(reference0, 'utf8')).timers ?? [] : []).map(name => originalSpelling.get(name.toLowerCase()) ?? name)
     .filter(name => !names.includes(name) && !generators.includes(name) && !loadPawns.includes(name));
-  const buildConfig = (names, generators, timers) => {
-  const config = [`out ${tracePath}`, 'player JCDentonMale', `release ${option('release', 3)}`, `ticks ${option('ticks', 600)}`,
-    ...(cmds.length ? [`pause-at ${[...new Set(cmds.map(c => c.after))].sort((a, b) => a - b).join(' ')}`] : []),
-    ...(option('delta', null) ? [`delta ${option('delta')}`] : []), ...(option('max-seconds', null) ? [`max-seconds ${option('max-seconds')}`] : []), ...(option('monitor', null) ? [`monitor ${option('monitor')}`] : []), ...(option('actor-trace', null) ? [`actor-trace ${option('actor-trace').replace(':', ' ')}`] : []),
-    // --rng-from <trace.jsonl>: the original draws the stream another capture's trace recorded: that trace's `rngIn` of unfrozen tick k is
-    // written into the CRT at the entry of this run's tick k (tools/dx-live-win.c `rng-file`), so the same pawns make the same decisions
-    // on a fresh load and `call` breakpoints can trace them (the capture to trace is not repeatable by loading again).
-    ...(option('rng-from', null) ? (() => {
-      const rows = readFileSync(option('rng-from'), 'utf8').trim().split('\n').map(line => JSON.parse(line)).filter(row => row.unfrozen >= 1 && row.rngIn);
-      const file = path.join(dir, `rng-force${suffix}.txt`);
-      writeFileSync(file, rows.map(row => String(row.rngIn).replace(/^0x/, '')).join('\n') + '\n');
-      return [`rng-file ${file}`];
-    })() : []),
-    // --extra-config <file>: more trace.cfg lines (tools/dx-live-win.c `call` breakpoints, call-ticks, call-pawn).
-    ...(option('extra-config', null) ? readFileSync(option('extra-config'), 'utf8').split('\n').filter(line => line.trim()) : []),
-    ...(generators.length ? [`watch ${generators.join(',')} ${GENERATOR_FIELDS.map(spec).join(' ')}`] : []),
+  // (the watch lines: with --frozen-frames they go to <trace>.watch.cfg, which the frozen-phase tracer reads; else trace.cfg holds both)
+  const watchConfig = (names, generators, timers) => {
+  const config = [...(generators.length ? [`watch ${generators.join(',')} ${GENERATOR_FIELDS.map(spec).join(' ')}`] : []),
     `watch @player ${PLAYER_FIELDS.map(spec).join(' ')}`,
     `watch ${names.join(',')} ${FIELDS.map(spec).join(' ')}`,
     ...(carcasses.length ? [`late-watch ${carcasses.join(',')} ${CARCASS_FIELDS.map(spec).join(' ')}`] : [])];
@@ -445,9 +491,11 @@ async function original() {
   if (loadPawns.length) config.push(`watch ${loadPawns.join(',')} ${LOAD_FIELDS.map(spec).join(' ')}`);
   return config;
   };
+  const buildConfig = (names, generators, timers) => frozenFrames ? watchConfig(names, generators, timers) : [...headerConfig, ...watchConfig(names, generators, timers)];
   let config = buildConfig(names, generators, timers.slice());
-  const configPath = path.join(dir, 'trace.cfg');
-  writeFileSync(configPath, config.join('\n') + '\n');
+  const configPath = frozenFrames ? goPath : path.join(dir, 'trace.cfg');
+  // (a frozen-phase tracer polls for its file: it appears whole, below)
+  if (!frozenFrames) writeFileSync(configPath, config.join('\n') + '\n');
   writeFileSync(watchPath, JSON.stringify({map, pawns: names.filter(name => !extras.includes(name)), extras, carcasses, generators, timers, loadPawns, classes: classOf}, null, 1));
   // The actors the original's level holds (a load removes some at random: OddsOfAppearing).
   const everything = wine('list', 'Actor').split('\n').map(line => /^\S+ (\S+) slot=(\d+) loc=\(([^)]*)\) .* odds=(\S+)/.exec(line)).filter(Boolean)
@@ -495,9 +543,9 @@ async function original() {
       names = names.filter(name => !gone.has(name)); loadPawns = loadPawns.filter(name => !gone.has(name));
       const keptGenerators = generators.filter(name => !gone.has(name)), keptTimers = timers.filter(name => !gone.has(name));
       config = buildConfig(names, keptGenerators, keptTimers);
-      writeFileSync(configPath, config.join('\n') + '\n');
+      if (!frozenFrames) writeFileSync(configPath, config.join('\n') + '\n');
       writeFileSync(watchPath, JSON.stringify({map, pawns: names.filter(name => !extras.includes(name)), extras, carcasses, generators: keptGenerators, timers: keptTimers, loadPawns, classes: classOf, notInPlay: only}, null, 1));
-    } else if (only.length) { console.log(`POPULATION: the original holds ${only.length} actors Play's seed ${option('seed', 1)} load lacks: ${only.slice(0, 20).join(' ')}`); process.exitCode = 3; return; }
+    } else if (only.length) { console.log(`POPULATION: the original holds ${only.length} actors Play's seed ${option('seed', 1)} load lacks: ${only.slice(0, 20).join(' ')}`); process.exitCode = 3; await leaveFrozen(); return; }
     else console.log('population: the original holds nothing Play lacks');
   }
   rmSync(`${tracePath}.resume`, {force: true});
@@ -522,11 +570,18 @@ async function original() {
   };
   flagsDump('start');
   registryDump('start');
-  const child = spawn(game.WINE, [tool, 'trace', configPath], {env: process.env, stdio: ['ignore', 'pipe', 'pipe']});
-  console.log('tracer pid', child.pid, `${names.length} pawns watched`);
-  let log = '';
-  child.stderr.on('data', chunk => { log += chunk; });
-  const finished = new Promise(resolve => child.on('exit', resolve));
+  if (frozenFrames) {
+    // the frozen phase's lines are typed: the tracer gets its watch lines (written whole: it reads the file as soon as it exists)
+    if (child.exitCode !== null) throw new Error(`the frozen-phase tracer left: ${log.trim().slice(-400)}`);
+    writeFileSync(path.join(dir, `frozen-lines${suffix}.json`), JSON.stringify({lines: frozenLines}, null, 1));
+    console.log(`frozen phase: ${frozenLines.length} console lines typed with the tracer attached: ${frozenLines.join(' ; ')}`);
+    frozenLines = null;
+    writeFileSync(`${goPath}.tmp`, config.join('\n') + '\n'); renameSync(`${goPath}.tmp`, goPath);
+    console.log('tracer pid', child.pid, `${names.length} pawns watched (after its frozen phase)`);
+  } else {
+    spawnTracer(configPath);
+    console.log('tracer pid', child.pid, `${names.length} pawns watched`);
+  }
   const started = Date.now();
   const handled = new Set();
   // --wait-seconds s (default 600): how long the tracer may run (a long trace under the breakpoints is ~0.12 s a tick on the Mac, more when it is loaded).
@@ -544,6 +599,9 @@ async function original() {
     await new Promise(r => setTimeout(r, 300));
   }
   console.log(log.trim());
+  // the call sequence number the frozen phase ended at (the watch file read): its key edges and frames are the ones numbered up to it
+  const frozenOver = /^frozen phase over after call seq (\d+)/m.exec(log);
+  if (frozenFrames && frozenOver) writeFileSync(frozenFile, JSON.stringify({...JSON.parse(readFileSync(frozenFile, 'utf8')), goSeq: Number(frozenOver[1])}, null, 1));
   // The level's end (the Dying player's OPEN DXONLY, browsed at the next engine tick): the tracer wrote the unfrozen ticks the level ran to
   // <trace>.ended and detached; the game is on the next map, so there is no held level to dump or shoot.
   const ended = /^level ended after (\d+) unfrozen ticks/m.exec(log);
@@ -616,7 +674,9 @@ async function original() {
 }
 
 // --- Play -----------------------------------------------------------------
-async function withPlay(body) {
+// frozenFrames: the original's window frames around the ghost probe's two lines (play's frozenWindows.ghost): the page's own frames stop ticking
+// the windows from here to the replay (view-probe.mjs windowHold), which then tick only with the frames the original's frozen phase ran.
+async function withPlay(body, {frozenFrames = null} = {}) {
   const {chromium} = await import('@playwright/test');
   const {createServer} = await import('vite');
   let server = null, url = option('url', null);
@@ -645,7 +705,9 @@ async function withPlay(body) {
     await page.evaluate(() => window.deusExViewer.release());
     await frames(10);
     // --no-ghost: a normal, visible player standing at the map's start (the perception pilot): only the HUD is hidden, as the capture does.
-    const ghost = await page.evaluate(noGhost => window.deusExViewer.viewProbe(noGhost ? {exec: ['ShowHud False']} : {ghost: true}), flag('no-ghost'));
+    const ghost = await page.evaluate(([noGhost, frames]) => window.deusExViewer.viewProbe({...(noGhost ? {exec: ['ShowHud False']} : {ghost: true}),
+      ...(frames ? {windowHold: true, windowFrames: frames} : {})}), [flag('no-ghost'), frozenFrames]);
+    if (frozenFrames) console.log(`frozen phase: Play's windows held, ${ghost.windowFramesRun} of the original's frames ticked around ghost / ShowHud False`);
     await frames(5);
     await body({page, frames, errors, ghost});
     await page.close();
@@ -805,11 +867,61 @@ async function play() {
   // A held tick's frames are split at its commands (commandsWithStream): the frames before a command's InputEvent record run before the command,
   // the ones after the hold's last command before the next level tick. holdCuts: unfrozen tick -> the call sequence number of its last command's record.
   const holdCuts = new Map();
+  // The frozen phase's window frames (a capture with --frozen-frames: frozen-lines<tag>.json lists the console lines typed while the tracer was
+  // attached, and the trace has their key edges and frames at u 0). A line runs inside its Enter press's InputEvent (the console's KeyEvent), so
+  // the n-th Enter press at u 0 is the n-th line's, and the frames between two of them ran after the first line and before the second. Play's
+  // frozen phase runs its own lines (ghost, ShowHud False, the early lines) with its windows held and ticks them with these frames around
+  // each (frozenWindows); the frames after the last line (the dumps, the population check, the tracer's two frozen ticks) tick them before tick 1.
+  // Without the file (an older capture) the frozen phase is Play's own warm-up and tick 1 takes the last frozen frame only.
+  const frozenSplit = (() => {
+    const file = path.join(dir, `frozen-lines${suffix}.json`);
+    if (!existsSync(file) || flag('own-frozen-windows') || !existsSync(`${tracePath}.calls.jsonl`)) return null;
+    const {lines, goSeq = null} = JSON.parse(readFileSync(file, 'utf8'));
+    const enters = [];
+    for (const line of readFileSync(`${tracePath}.calls.jsonl`, 'utf8').split('\n')) {
+      if (!line.startsWith('{"u":0,') || !line.includes('"fn":"inputevent"') || !line.includes('"ev":"enter"')) continue;
+      const r = parseTraceLine(line);
+      if (r.inTick === 0 && parseInt(r.args[1], 16) === 0x0d && parseInt(r.args[2], 16) === 1 && (goSeq === null || r.seq <= goSeq)) enters.push(r.seq);
+    }
+    enters.sort((a, b) => a - b);
+    if (enters.length !== lines.length) {
+      console.log(`frozen phase: ${enters.length} Enter presses traced for ${lines.length} typed lines: its window frames are not split (Play's own warm-up)`);
+      return null;
+    }
+    const segments = Array.from({length: lines.length + 1}, () => []);
+    for (const f of [...(rootTicks.get(0) ?? [])].sort((a, b) => a.seq - b.seq)) {
+      const k = enters.findIndex(seq => f.seq < seq);
+      segments[k < 0 ? lines.length : k].push(f.delta);
+    }
+    return {lines, segments, lastEnter: enters.length ? enters[enters.length - 1] : -Infinity};
+  })();
+  // Play's frozen-phase lines matched in order to the original's typed lines (the ones Play does not type, bCheatsEnabled, which viewProbe writes,
+  // a Brightness, an Alliance, a retyped KillAll, keep their place: their frames tick before Play's next line). frozenWindows.ghost / .early: the
+  // frame lists of viewProbe's windowFrames for the ghost probe (ghost, ShowHud False) and the early lines' probe.
+  const frozenWindows = (() => {
+    if (!frozenSplit) return null;
+    const norm = text => text.trim().replace(/\s+/g, ' ').toLowerCase();
+    const early = earlyCommands(), playLines = [...(flag('no-ghost') ? [] : ['ghost']), 'ShowHud False', ...early];
+    const before = []; let at = -1;
+    for (const line of playLines) {
+      const j = frozenSplit.lines.findIndex((typed, i) => i > at && norm(typed) === norm(line));
+      if (j < 0) { console.log(`frozen phase: Play's line "${line}" is not among the original's typed lines: its window frames are not split`); return null; }
+      before.push(frozenSplit.segments.slice(at + 1, j + 1).flat()); at = j;
+    }
+    const after = frozenSplit.segments.slice(at + 1, frozenSplit.lines.length).flat(), ghostCount = playLines.length - early.length;
+    const total = frozenSplit.segments.slice(0, frozenSplit.lines.length).flat();
+    console.log(`frozen phase: ${frozenSplit.lines.length} typed lines, ${total.length} window frames (${total.reduce((a, b) => a + b, 0).toFixed(3)} s) before the last one, `
+      + `${frozenSplit.segments[frozenSplit.lines.length].length} after it (${frozenSplit.segments[frozenSplit.lines.length].reduce((a, b) => a + b, 0).toFixed(3)} s, before tick 1)`);
+    return {ghost: [...before.slice(0, ghostCount), early.length ? [] : after], early: early.length ? [...before.slice(ghostCount), after] : null};
+  })();
+  if (frozenSplit && !frozenWindows) frozenSplit.unused = true;
+  const frozenUsed = frozenSplit && !frozenSplit.unused;
+  if (frozenUsed) holdCuts.set(0, frozenSplit.lastEnter);
   const windowDeltas = unfrozen => {
     const frames = rootTicks.get(unfrozen - 1);
     if (!frames?.length) return {};
     const cut = holdCuts.get(unfrozen - 1) ?? -Infinity, list = frames.filter(f => f.seq > cut).map(f => f.delta);
-    return {windowSeconds: unfrozen === 1 ? list.slice(-1) : list};
+    return {windowSeconds: unfrozen === 1 && !frozenUsed ? list.slice(-1) : list};
   };
   const {pawns, extras = [], carcasses = [], generators = [], timers = [], loadPawns = []} = JSON.parse(readFileSync(watchPath, 'utf8'));
   // Play is placed where the original's player stood when the replay begins: the last frozen tick's exit.
@@ -824,7 +936,11 @@ async function play() {
     // --early-cmds: the console lines the original was typed in its frozen phase (a camera that follows an actor, a placement), run first through the same
     // chain, as the original ran them before its frozen frames: a placement's `walk` (PlayerPawn.StartWalk: ClientReStart, PlayWaiting) restarts the idle
     // animation, and run after the pose's write it left the player's BreatheLight 0.0125 behind the original's for 90 ticks (Stage 5 capture cmb1, 2026-10-17).
-    if (earlyCommands().length) console.log('early commands:', JSON.stringify((await page.evaluate(lines => window.deusExViewer.viewProbe({exec: lines}), earlyCommands())).output));
+    // (frozenWindows.early: the original's window frames before each of these lines and after the last, the windows still held)
+    if (earlyCommands().length) {
+      const early = await page.evaluate(([lines, frames]) => window.deusExViewer.viewProbe({exec: lines, ...(frames ? {windowFrames: frames} : {})}), [earlyCommands(), frozenWindows?.early ?? null]);
+      console.log('early commands:', JSON.stringify(early.output), ...(frozenWindows ? [`(${early.windowFramesRun} of the original's window frames around them)`] : []));
+    }
     let running = null;
     const same = () => String(running).toLowerCase() === String(pose.Anim).toLowerCase();
     for (let k = 0; k < 300 && !same(); k++) {
@@ -988,15 +1104,17 @@ async function play() {
       // the windows before the command runs; the rest of the hold's frames tick them before the next level tick (windowDeltas, holdCuts). A window the
       // command creates gets only the frames after it: cmb2's bark subtitle (HUDBarkDisplayItem, created inside the Enter press's InputEvent at tick 660,
       // after 25 of the hold's 31 frames) got all 1.736 s of the hold in Play and was freed 11 ticks early (docs/stage-5-exit-criteria.md). The frozen
-      // phase (after 0) is Play's own warm-up and is not split.
+      // phase (after 0) is Play's own warm-up and is not split, unless the capture traced it (frozenSplit): then a hold at 0 takes the key edges after
+      // the frozen phase's typed lines, and the frames after the last of them.
       const cursor = new Map();
+      if (frozenUsed) { const held = edges.get(0) ?? [], first = held.findIndex(e => e.seq > frozenSplit.lastEnter); cursor.set(0, first < 0 ? held.length : first); }
       return list.map(command => {
         const m = /^@(down|up) (\S+)$/.exec(command.text), records = edges.get(command.after) ?? [], from = cursor.get(command.after) ?? 0;
         const action = m && m[1] === 'up' ? 3 : 1, key = m ? keyCode(m[2]) : 0x0d;
         const at = records.findIndex((e, i) => i >= from && e.action === action && (key === null || e.key === key));
         if (at < 0) return command;
         cursor.set(command.after, at + 1);
-        if (command.after < 1) return {...command, rng: records[at].rng};
+        if (command.after < 1 && !frozenUsed) return {...command, rng: records[at].rng};
         const seq = records[at].seq, previous = holdCuts.get(command.after) ?? -Infinity;
         holdCuts.set(command.after, seq);
         return {...command, rng: records[at].rng, windowSeconds: (rootTicks.get(command.after) ?? []).filter(f => f.seq > previous && f.seq < seq).map(f => f.delta)};
@@ -1059,6 +1177,8 @@ async function play() {
     // --gc-trace first:last: the stacks of the GC objects UGC::PushGC allocates (script-gc-push-gc.mjs) during those ticks, to gc-allocs<tag>.json (a debugging aid)
     if (option('gc-trace', null)) request.gcTrace = true;
     const started = await page.evaluate(r => window.deusExViewer.liveProbe(r), request);
+    if (started.hudLog) console.log(`frozen phase: the HUD log's clock at the replay's start: lastLogMsg ${started.hudLog.lastLogMsg} of logTimeout ${started.hudLog.logTimeout}`
+      + `${frozenUsed ? `; tick 1 runs ${windowDeltas(1).windowSeconds?.length ?? 0} more frames of the original's frozen phase first` : ' (Play\'s own warm-up)'}`);
     if (started.objectTrace) {
       const o = started.objectTrace;
       console.log(`object trace: the run's own indices for ${o.measured} pre-placed actors, ${o.pendingDeleted} more pending deletion and the player (${o.player}); ` +
@@ -1149,7 +1269,7 @@ async function play() {
       if (option('after-out', null)) writeFileSync(option('after-out'), value); else console.log(value);
     }
     console.log(map, `${rows.length} ticks replayed`, errors.length ? `errors: ${errors.slice(0, 2).join(' | ')}` : '');
-  });
+  }, {frozenFrames: frozenWindows?.ghost ?? null});
 }
 
 // --- comparison -----------------------------------------------------------

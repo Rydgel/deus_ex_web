@@ -13,8 +13,21 @@ import { scriptGetStateName } from '../runtime/script-state-queries.mjs';
  * (UObject::GlobalSetProperty imports the text into the field; for a
  * non-brush actor nothing else follows). `exec` runs further console
  * commands the same way, after the same bCheatsEnabled write (main.mjs
- * ?cheat=, e.g. DeusExPlayer.Summon). Returns the player's state. */
-export function viewProbe(game, { playersOnly = null, timeDilation = null, ghost = false, location = null, rotation = null, region = null, exec = [], rehash = false, rngPin = undefined } = {}) {
+ * ?cheat=, e.g. DeusExPlayer.Summon). Returns the player's state.
+ *
+ * `windowHold` (live-acceptance.mjs --frozen-frames): true stops the page's own frames from ticking the windows (game.tick), which
+ * then tick only with `windowFrames`, the original's RootTick deltas traced around its frozen-phase console lines: list k ticks the
+ * windows before this call's command k, the last list after its last command (`ghost`'s two commands, then `exec`'s). */
+/** Validation: the HUD message log's clock (HUDLogDisplay.lastLogMsg against the player's logTimeout: a line logged in a capture's frozen phase,
+ * a `ghost`'s, still waits while lastLogMsg is under the timeout), or null without the HUD. */
+export function hudLogClock(game) {
+  const hud = game.hud, log = hud?.hud ? hud.read(hud.hud, 'msgLog') : null;
+  if (!log) return null;
+  return { lastLogMsg: hud.read(log, 'lastLogMsg'), logTimeout: hud.read(game.player.collisionActor, 'logTimeout') };
+}
+
+export function viewProbe(game, { playersOnly = null, timeDilation = null, ghost = false, location = null, rotation = null, region = null, exec = [], rehash = false, rngPin = undefined,
+  windowHold = null, windowFrames = null } = {}) {
   const runtime = game.doors.scriptRuntime.runtime, player = game.player.collisionActor;
   // `set LevelInfo bPlayersOnly True`, which the original capture types
   // before `open` so the new level's LevelInfo starts with it: written here
@@ -33,12 +46,16 @@ export function viewProbe(game, { playersOnly = null, timeDilation = null, ghost
   const read = name => runtime.readNamed(player, name);
   const commands = game.doors.scriptRuntime.windowHost?.consoleCommands;
   const output = [];
-  if (ghost || exec.length) {
+  if (windowHold !== null) game.windowHold = Boolean(windowHold);
+  let windowFramesRun = 0;
+  const tickWindows = k => { for (const delta of windowFrames?.[k] ?? []) if (game.hud) { game.hud.tick(delta); windowFramesRun++; } };
+  const list = [...(ghost ? ['ghost', 'ShowHud False'] : []), ...exec];
+  if (list.length) {
     if (!commands) throw new Error('viewProbe: the console command chain needs the window host');
     runtime.writeNamed(player, 'bCheatsEnabled', true);
-    for (const command of [...(ghost ? ['ghost', 'ShowHud False'] : []), ...exec])
-      output.push(commands.consoleCommand(player, command));
+    list.forEach((command, k) => { tickWindows(k); output.push(commands.consoleCommand(player, command)); });
   }
+  tickWindows(list.length);
   if (location) {
     // The harness places the player where a capture's player stood (live-acceptance.mjs play, snap): the hash entry moves with
     // it. A bare write of Location leaves the registered cells and location stale, so the player's first later move (a
@@ -68,7 +85,7 @@ export function viewProbe(game, { playersOnly = null, timeDilation = null, ghost
     region: { iLeaf: current['engine.actor.pointregion.ileaf'], zoneNumber: current['engine.actor.pointregion.zonenumber'] }, viewRotation: [...read('ViewRotation')], eyeHeight: read('EyeHeight'),
     baseEyeHeight: read('BaseEyeHeight'), physics: read('Physics'), bCollideWorld: read('bCollideWorld'),
     state: scriptGetStateName(node), playersOnly: runtime.readNamed(info, 'bPlayersOnly'),
-    timeSeconds: runtime.readNamed(info, 'TimeSeconds'), timeDilation: runtime.readNamed(info, 'TimeDilation'), output,
+    timeSeconds: runtime.readNamed(info, 'TimeSeconds'), timeDilation: runtime.readNamed(info, 'TimeDilation'), output, windowFramesRun, windowHold: Boolean(game.windowHold), hudLog: hudLogClock(game),
     // The player's own animation (its mesh's pose follows it): a capture's reflection can differ by it.
     anim: { sequence: read('AnimSequence'), frame: read('AnimFrame'), rate: read('AnimRate'), blendFrames: [...read('BlendAnimFrame')] } };
 }
