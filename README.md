@@ -4,11 +4,11 @@ The aim is to make the original Deus Ex playable in a browser using its original
 maps, assets, and game behavior. **Stage 3 is complete within its adopted scope:**
 Training passes all five runtime criteria across 95 probes, and all 83
 single-player maps reach only boundaries assigned to later stages in the startup
-census. **Stage 4 presentation is in progress**: original mesh, static, animated
-and moving lighting, BSP occlusion, mirrors, Fire.dll textures, particles,
-coronas, lasers, volumetric fog, ambient sound, Galaxy music and the conversation
-camera with lip sync already run from original evidence (see below). See the
-[completion record and coverage limits](docs/stage-3-exit-criteria.md#stage-3-beyond-training-the-all-maps-startup-census).
+census ([completion record and coverage limits](docs/stage-3-exit-criteria.md#stage-3-beyond-training-the-all-maps-startup-census)).
+**Stage 4 presentation is complete** (2026-10-17): its gate passes 70 of 70 in one
+run ([Stage 4 close](docs/stage-4-exit-criteria.md#stage-4-close)). **Stage 5
+gameplay is in progress**: its gate passes 20 of 50 criteria (2026-10-19), each on
+original captures of Liberty Island replayed tick by tick in Play (see below).
 
 The target is **100% original fidelity**. Every supported behavior needs original
 data, script, native-code or measured evidence. Unverified substitutes remain
@@ -72,11 +72,15 @@ Frame cost and the 120 fps target are tracked in
   DataCubes, the nano key ring, and item pickup into the inventory and object
   belt ([mover frob](docs/script-mover-frob.md),
   [item pickup](docs/script-item-pickup.md)).
-- Weapons: number keys run the original `ActivateBelt N`; the crowbar draws in
-  first person through `PutInHand`/`BringUp` and swings through the original
-  ticked weapon states. Two hits break a Training crate into its original
-  fragments and contents ([weapon equip](docs/script-weapon-equip.md),
-  [crate destruction](docs/script-crate-destruction.md)).
+- Weapons: number keys run the original `ActivateBelt N`; weapons draw in
+  first person through `PutInHand`/`BringUp` and fire and swing through the
+  original ticked weapon states. Two crowbar hits break a Training crate into its
+  original fragments and contents ([weapon equip](docs/script-weapon-equip.md),
+  [crate destruction](docs/script-crate-destruction.md)). On Liberty Island the
+  player's pistol hurts and kills Terrorists, hostile NPCs aim and fire back
+  (Tracers, hit regions, armor), batons and crowbars knock out, explosions run
+  `HurtRadius`, and the player's death runs to the level's end, each compared
+  with the original ([Stage 5](docs/stage-5-exit-criteria.md)).
 - DataLinks, InfoLink transmissions and first-person and third-person
   conversations run the original ConPlay scripts, with subtitles, speech and
   mission timers ([DataLink scope](docs/script-datalink-live.md),
@@ -97,10 +101,10 @@ Frame cost and the 120 fps target are tracked in
   [level queries](docs/level-queries.md)).
 
 **Current boundaries:** Stage 3 completion covers the measured runtime paths,
-not every interaction or full campaign compatibility. AI navigation, combat and
-the other gameplay systems are Stage 5; saves and map travel are Stage 6 (map
-travel stops at a labeled `ClientTravel` boundary). Remaining Stage 4 work is
-listed below. Training is the visual acceptance target; other maps expose
+not every interaction or full campaign compatibility. Stage 5 gameplay is
+proven only where its gate passes (below); the other gameplay rows play in Play
+but have no original capture yet. Saves and map travel are Stage 6 (map travel
+stops at a labeled `ClientTravel` boundary). Other maps expose
 unsupported-content diagnostics. The final original camera/motion comparison
 and actual window/tab pause acceptance deferred from Stage 2 remain open.
 
@@ -128,8 +132,11 @@ The [exit criteria and measured results](docs/stage-3-exit-criteria.md) are the
 current status. The [September 20 audit](docs/stage-3-completion-audit.md) and
 [earlier handoff](docs/stage-3-handoff.md) are historical checkpoints.
 
-## Stage 4 presentation — in progress
+## Stage 4 presentation — complete 2026-10-17
 
+The adopted gate (`scripts/validate-stage4-acceptance.mjs`) passes 70 of 70
+criteria in one run, and 26 maps match the original's own frames at matched
+cameras and level time (122 of 130 views, [visual acceptance](docs/visual-acceptance.md)).
 Each item runs in Play from translated original code, with the evidence and
 limits in the linked document. The [roadmap](docs/roadmap.md#4-restore-the-remaining-presentation)
 keeps the dated record.
@@ -179,16 +186,42 @@ keeps the dated record.
   written back (Stage 6); UI Background = Snapshot and Toggle Full-Screen are
   explicit boundaries.
 
-**Still open in Stage 4:** the LOD morph's world-space rounding
-([LOD](docs/script-lodmesh-lod.md#play)); a matched
-capture of the security cameras' views (root frames with their own mirror and sky
-frames, decals, coronas, fog, LOD and lighting since 2026-10-11,
-[viewport window](docs/script-window-viewport.md)); the
-host's depth range and float32 GPU transform under the frame projection
-([render-pass precision](docs/render-pass-precision.md)); the darkest-pixel rounding left by
-[visual acceptance](docs/visual-acceptance.md) (26 maps compared with the original's own frames
-at matched cameras and level time); and in live scenes, compared tick by tick with the original
-since 2026-10-13, two Island NPCs, the Club's sitting guests and the dancers' animation.
+**Carried past the close** (no gating row holds them): the security cameras'
+window views, a pointer focus difference, the Wine brightness gap, the gate's
+concurrency flakes (the official run is `--jobs 1`) and speech's decoded audio,
+excluded by decision ([Stage 4 close](docs/stage-4-exit-criteria.md#stage-4-close)).
+
+## Stage 5 gameplay — in progress
+
+The [Stage 5 exit criteria](docs/stage-5-exit-criteria.md) define 50 scenarios on
+the three Training maps and Liberty Island, each with the original-side evidence
+that would prove it. `scripts/census-stage5.mjs` drives them all in Play (50 play
+as of 2026-10-19), and `scripts/validate-stage5-acceptance.mjs` is the gate.
+
+**Gate: 20 of 50 pass, 7 fail, 23 await their capture** (2026-10-19). The passing
+rows are proven by live traces of the original game: `DeusEx.exe` runs under
+CrossOver with a tracer (`tools/dx-live-win.c`, `scripts/live-original.sh`) that
+records the watched actors, the random stream, the AI events and every object
+creation per tick. Play then replays the same inputs and must match them tick by
+tick (`scripts/validate-stage5-live.mjs --scene <tag>`, 45 stored Island scenes).
+Proven so far:
+
+- **Combat:** the player's pistol against a Terrorist, NPCs firing at the player,
+  knockouts, an explosion's damage and noise, the player's death to the level's end.
+- **Stealth:** a patrolling Terrorist seeing the player, a pawn finding a body,
+  hacking the laser trap's control panel, a shot waking and drawing the guards.
+- **Conversations:** MeetPaul's weapon choice, Filben's key, Gunther's rescue and the
+  weapon the player gives him, the commander's branches, overheard conversations and barks, and the
+  flags that change the world.
+- **Routes and objectives:** the airshaft and water routes, killing or sparing the
+  commander, and the mission's completion.
+
+Six of the seven failing rows wait on one item, collision and line traces over the
+moving brush tracker's level model. The seventh is a destroyed-actor purge that
+Play makes a few ticks late. Both are open in
+[remaining Stage 5 work](docs/stage-5-exit-criteria.md#remaining-stage-5-work-in-the-order-it-blocks).
+Swimming, ladders, pawn navigation, doors opened by NPCs and the intro cinematic
+also run from translated original code ([roadmap](docs/roadmap.md#5-implement-the-full-gameplay-systems)).
 
 ## Open the viewer
 
@@ -259,6 +292,19 @@ exceeds its time limit. On macOS the runner measures memory footprint,
 including compressed and swapped pages, and it admits fewer jobs under system
 memory pressure.
 
+The stage gates and the Stage 5 census:
+
+```sh
+node scripts/validate-stage4-acceptance.mjs --jobs 1
+node scripts/census-stage5.mjs --json .work/stage5-census.json
+node scripts/validate-stage5-acceptance.mjs --census .work/stage5-census.json --report .work/stage5-gate.json
+node scripts/validate-stage5-live.mjs --scene cmb1
+```
+
+They need the stored original captures under `.work/` (kept outside Git); a check
+whose capture is absent reports SKIP. New captures need the original game under
+CrossOver (`scripts/live-original.sh`, one capture at a time).
+
 Build before browser testing. One mouse-lock check opens a focused Chromium window;
 that check requires a desktop session. Browser screenshots go into `reports/browser/`.
 The tools discover `Deus Ex GOTY Edition/`, then `game/`, or use `DEUS_EX_GAME_DIR`.
@@ -290,8 +336,9 @@ static doors. The footprint overlays every height and is not a game screenshot.
   the Training gate and all 83 single-player maps' startup census; coverage limits
   are recorded above.
 - **Stage 4:** restore animated actors, visual effects, audio, and original interfaces —
-  in progress; see the Stage 4 section above.
-- **Stage 5:** complete movement, AI, combat, stealth, RPG systems, and conversations.
+  complete (2026-10-17, gate 70 of 70).
+- **Stage 5:** complete movement, AI, combat, stealth, RPG systems, and conversations —
+  in progress (gate 20 of 50, 2026-10-19).
 - **Stage 6:** persist saves and map state, then validate the full campaign.
 - **Stage 7:** meet browser compatibility, performance, and reliability targets.
 
