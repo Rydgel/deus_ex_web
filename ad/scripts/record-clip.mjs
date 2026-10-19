@@ -6,7 +6,7 @@
 //   node ad/scripts/record-clip.mjs fight --out ad/build/clips/fight.webm
 //
 // The scenes are driven through the player's own inputs (keyboard, mouse buttons) after a placement (placeProbe), as the Stage 5 census does;
-// `summon` (the original console cheat) gives the weapon. The HUD is hidden with the original console command `ShowHud False`.
+// `summon` (the original console cheat) gives the weapon. The game's HUD is shown; only the viewer's web UI is hidden.
 // Clips contain original game content: they stay out of Git (ad/.gitignore).
 import {chromium} from '@playwright/test';
 import {createServer} from 'vite';
@@ -127,6 +127,19 @@ async function take(page, cls) {
 let markStart = 0;
 const marks = [];
 const mark = what => { const t = (Date.now() - markStart) / 1000; marks.push([what, t]); console.log(`mark ${what} ${t.toFixed(2)} s`); };
+/** Put a carried item in hand with its belt key (the original ActivateBelt binding): the belt slot read from the player's Inventory chain. */
+async function draw(page, cls) {
+  let item = (await read(page, ['@player'], ['Inventory']))['@player'].Inventory, key = null;
+  for (let k = 0; k < 16 && item && !key; k++) {
+    const name = typeof item === 'string' ? item : item?.name;
+    const r = (await read(page, [name], ['beltPos', 'Inventory']))[name];
+    if (name?.startsWith(cls)) key = String(r.beltPos);
+    item = r?.Inventory;
+  }
+  if (key === null) throw new Error(`no ${cls} carried`);
+  await page.keyboard.press(key); await wait(page, 1500);
+  return key;
+}
 async function record(page, out, body) {
   mkdirSync(path.dirname(out), {recursive: true});
   const fd = openSync(out, 'w');
@@ -145,14 +158,16 @@ async function settle(page) {
   // MissionScript.FirstFrame (M1MissionStart) runs a few seconds in: the level as a player finds it
   await wait(page, 6000);
   await page.focus('#scene');
-  await exec(page, 'KillAll FlyGenerator', 'ShowHud False');
+  // the viewer's web UI is hidden (deusex.uiHidden); the game's HUD stays unless --no-hud (the original console command `ShowHud False`)
+  await exec(page, 'KillAll FlyGenerator', ...(argv.includes('--no-hud') ? ['ShowHud False'] : []));
   // the viewer's brightness (the original's Brightness setting); --brightness, default the viewer's own
   if (option('brightness', null)) await page.evaluate(value => { const el = document.getElementById('brightness'); el.value = value; el.dispatchEvent(new Event('input')); }, option('brightness'));
 }
 
 async function gunther(page, out) {
   await settle(page);
-  if (!option('unarmed', null)) await take(page, option('weapon', 'WeaponPistol'));
+  const weapon = option('weapon', 'WeaponPistol');
+  if (!argv.includes('--unarmed')) { await take(page, weapon); await draw(page, weapon); }
   // the wall button beside the cell (DeusExMover8), where row 5.4.5's capture stands: looking down at it, the cell's wall is the door
   await place(page, {location: [1952, -1796, -84.2], rotation: [wrap(-4500), 49152, 0]});
   await wait(page, 1500);
@@ -195,23 +210,14 @@ async function fight(page, out) {
   await take(page, weapon);
   for (let i = 0; i < Number(option('ammo', 2)); i++) await take(page, option('ammo-class', 'Ammo762mm'));
   if (option('god', null)) await exec(page, 'god');
-  // the weapon's belt slot: the player's Inventory chain
-  let item = (await read(page, ['@player'], ['Inventory']))['@player'].Inventory, beltKey = option('belt-key', null);
-  for (let k = 0; k < 16 && item && !beltKey; k++) {
-    const name = typeof item === 'string' ? item : item?.name;
-    const r = (await read(page, [name], ['beltPos', 'Inventory']))[name];
-    console.log('inventory', name, r?.beltPos);
-    if (name?.startsWith(weapon)) beltKey = String(r.beltPos);
-    item = r?.Inventory;
-  }
-  console.log('belt key', beltKey);
+  // the pickups' log lines fade before the scene starts
+  await draw(page, weapon); await wait(page, Number(option('pre-wait', 7000)));
   // Terrorist0 stands on open ground facing yaw 8623; the player is placed in its view, `distance` units away
   const t = (await read(page, ['Terrorist0'], ['Location', 'Rotation'])).Terrorist0;
   const distance = Number(option('distance', 450)), bearing = t.Rotation[1] / 32768 * Math.PI + Number(option('bearing', 0)) * Math.PI / 180;
   await place(page, {location: [t.Location[0] + Math.cos(bearing) * distance, t.Location[1] + Math.sin(bearing) * distance, t.Location[2] + 4]});
   await wait(page, 300);
-  await aimAt(page, 'Terrorist0', 50);
-  await page.keyboard.press(beltKey ?? '1'); await wait(page, 1500);
+  await aimAt(page, 'Terrorist0', 50); await wait(page, 300);
   // the targets: every living pawn of the census within `range` of the player, nearest first, re-chosen before each burst
   const census = (await page.evaluate(() => window.deusExViewer.liveProbe({census: true}))).census;
   const names = census.pawns.map(p => p.name).filter(n => !/^JCDenton/i.test(n));
