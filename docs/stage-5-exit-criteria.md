@@ -984,7 +984,8 @@ original's `"ev":"ret"` unhash records against `objects-play<tag>.json`'s frees.
 `node scripts/validate-stage5-acceptance.mjs --census .work/stage5-census-2026-10-19-final2.json --report .work/stage5-gate-2026-10-19-final2.json` on master `a786b4e`
 (the devices, routes, conversation, `kC` and gives, frozen-phase frames, skipped-argument audit and zone-0 branches merged; the Mac, 2026-10-19: the census 1,161 s, 50 plays,
 0 pause, 0 no-effect, 0 undriven, equal to its `EXPECTED`; the 43 proof scenes each replayed once, 12:25 to 13:19): **20 of 50 criteria pass; the gate is red** (exit 1 without
-`--report`). 7 FAIL, 23 MISSING; 55 rows, 5 excluded. Every row was rerun on this code.
+`--report`). 7 FAIL, 23 MISSING; 55 rows, 5 excluded. Every row was rerun on this code. Since work item 10 (below, merged in `79304d7`): **21 PASS, 6 FAIL,
+23 MISSING**.
 
 History: the first run (master 5d7285c, with the three tightened predicates) was 0 PASS, 14 FAIL, 33 MISSING, 3 UNDRIVEN. The Island devices task moved 5.2.6, 5.3.9, 5.5.1 and 5.5.2 from FAIL to
 MISSING. The death, explosives and alarms task moved 5.1.2, 5.1.4, 5.1.5, 5.2.7, 5.6.2 and 5.6.5. That left 0 PASS, 4 FAIL, 43 MISSING, 3 UNDRIVEN. The first combat captures moved
@@ -1014,7 +1015,7 @@ zone 0 (`c.inWorld`, `a786b4e`), and all 50 play.
 | 5.7 Excluded | 0 | 0 | 0 | 0 | 5 |
 | **Total** | **20** | **7** | **23** | **0** | **5** |
 
-**After work item 10** (2026-10-19, this branch): 5.2.5 passes. `validate-stage5-acceptance.mjs --only '^5\.2\.5 ' --census .work/stage5-census-2026-10-19-final2.json --report .work/stage5-gate-2026-10-19-525.json` replays `las1`, `alm1` and `alm2`, and all three pass, so the gate stands at **21 PASS, 6 FAIL, 23 MISSING** (5.2 Stealth: 4, 1, 2).
+**After work item 10** (2026-10-19, merged in `79304d7`): 5.2.5 passes. `validate-stage5-acceptance.mjs --only '^5\.2\.5 ' --census .work/stage5-census-2026-10-19-final2.json --report .work/stage5-gate-2026-10-19-525.json` replays `las1`, `alm1` and `alm2`, and all three pass, so the gate stands at **21 PASS, 6 FAIL, 23 MISSING** (5.2 Stealth: 4, 1, 2).
 Every other scene the change reaches was replayed on its own and keeps its status ([the Deleted chain at the first purge](#the-deleted-chain-at-the-first-purge-the-original-loads-flygenerators-2026-10-19)).
 **After work item 11** (2026-10-19): the counts stand. All 45 stored Island scenes were replayed and keep their status, and row 4.3.6 passes
 ([load-made actors](#load-made-actors-paired-by-creation-order-not-by-name-2026-10-19)).
