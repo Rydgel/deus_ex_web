@@ -60,6 +60,9 @@
  *             on FilbenGaveKey; fM and fN frob in a fan of views) and Filben's HarleyStartsToWander orders.
  *   gP gN     GuntherRescued after the wall button frees Gunther: a carried pistol given to him (GuntherRespectsPlayer, GuntherAttacks: RunningTo), or none
  *             ("First thing is to get you out of here.": GuntherRespectsPlayer false); Gunther's first-person GuntherTrappedBarks before.
+ *   gS gU gK  gP with the stealth pistol, the assault gun or the combat knife carried instead: each gives by its own choice (Gunther already holds a knife, so
+ *             gK's is destroyed, ConPlayBase.SetupEventTransferObject).
+ *   gW        gN with NothingChoice's first answer: GiveNothingNicely (GuntherRespectsPlayer, GuntherAttacks).
  *   gA        AllianceTrigger0 and OrdersTrigger6 touched by a landing at the button (Gunther UNATCO, WaitingFor), the button: the freed Gunther meets Terrorist18.
  *   tC tA     MeetTerrorist with the commander: Curious (DL_LeaderNotKilled, TerroristFollowup by frob) and Aggressive (the commander attacks, then
  *             MeetFilbenAfterStatue at Filben); both set StatueMissionComplete and run Mission01.Timer's mission-complete pass.

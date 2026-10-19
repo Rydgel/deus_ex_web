@@ -560,6 +560,10 @@ event, every object creation (a loaded `Sound` now also by its export name: whic
 | `fN` | MeetFilben: "I can't promise..." (`FilbenGaveKey` false), then MeetFilben2 without the key | 1300 | PASS: 20 actors, 1,892 AI events, 1,438 creations; 5 flags (after fix 7 below) |
 | `gP` | GuntherRescued after the wall button: the carried pistol given (`GuntherRespectsPlayer`, `GuntherAttacks`) | 1350 | PASS: 22 actors, 1,938 AI events, 1,275 creations; 4 flags |
 | `gN` | GuntherRescued without a weapon: "First thing is to get you out of here." | 1150 | PASS: 22 actors, 1,671 AI events, 1,221 creations; 4 flags |
+| `gS` | `gP` with the stealth pistol carried: "As you wish.  Take my stealth pistol." (2026-10-19) | 1350 | PASS: 22 actors, 1,945 AI events, 1,282 creations; 4 flags |
+| `gU` | `gP` with the assault gun carried: its own choice, the gun to Gunther (a new `Ammo762mm` in his chain in both programs) (2026-10-19) | 1350 | PASS: 22 actors, 1,941 AI events, 1,279 creations; 4 flags |
+| `gK` | `gP` with the combat knife carried: Gunther already holds a knife, so the player's is destroyed, not added (2026-10-19) | 1350 | PASS: 22 actors, 1,940 AI events, 1,277 creations; 4 flags |
+| `gW` | `gN` with NothingChoice's first answer, "Wish I could help, but I'm not very well armed.": GiveNothingNicely (`GuntherRespectsPlayer`, `GuntherAttacks`) (2026-10-19) | 1350 | PASS: 22 actors, 1,923 AI events, 1,258 creations; 4 flags |
 | `gA` | `AllianceTrigger0` and `OrdersTrigger6` touched by a landing at the button, then the button: the freed Gunther fights `Terrorist18` | 900 | PASS: 22 actors, 1,486 AI events, 1,127 creations; 3 flags (after fix 1 below) |
 | `tC` | MeetTerrorist, Curious: `DL_LeaderNotKilled`, Mission01's mission-complete pass, TerroristFollowup by frob | 1300 | PASS: 24 actors, 1,911 AI events, 1,523 creations; 7 flags (after fixes 4 and 6) |
 | `tA` | MeetTerrorist, Aggressive (the commander attacks), then MeetFilbenAfterStatue at Filben; the player waits on `cmb5`'s ledge and is placed at the commander at tick 100 | 1050 | PASS: 26 actors, 1,684 AI events, 1,404 creations; 7 flags (a first capture placed in the frozen phase: below) |
@@ -580,6 +584,8 @@ event, every object creation (a loaded `Sound` now also by its export name: whic
 * A summoned weapon that lands faster than 200 units/s is a `LoudNoise` of radius 768 (`DeusExWeapon.PlayLandingSound`): near Gunther's cell it brings `Terrorist18`, so `gP` summons
   the pistol at the map's start. A console placement touches no trigger; a placement 64 units above the floor touches the triggers at its landing (`gA`: `AllianceTrigger0` and
   `OrdersTrigger6`, after which the freed Gunther fights `Terrorist18` and GuntherRescued never starts).
+* `ConPlayBase.SetupEventTransferObject` gives nothing new when the recipient already holds the class: it destroys the giver's item ("Pawn cannot have
+  multiple weapons"). Gunther starts with a `WeaponCombatKnife`, so `gK`'s knife leaves the player and is destroyed in both programs.
 * `Pawn.LipSynch` applies the first letter of a speech with tween time 0 (a stale `animTimer[3]`), so an `X` at a speech's start does not show on the blend channel: the mouth letters
   are measured from `nextPhoneme` itself.
 * The capture hides the HUD in the frozen phase (`ShowHud False`), so a frozen-phase `ghost` line ("You feel ethereal") waits in the hidden log, and
@@ -645,9 +651,10 @@ mutations), `validate-event-manager` and `validate-gm-trench-play-anim`, and the
 **Checks rerun for the typed-line delivery** (fix 7, 2026-10-18, the Mac): the gate's 21 proof replays above (every stored Island scene), and the six Stage 4 rows that
 replay live traces (4.1.5, 4.1.6, 4.1.7, 4.2.13, 4.3.6, 4.5.5).
 
-**What stays uncaptured** (named in the rows' `weak` and `need`): three of GuntherRescued's five give choices (assault gun, stealth pistol, knife) and
-NothingChoice's first answer (GiveNothingNicely), Filben's two barks that read `FilbenGaveKey`, and PaulCongratulations (`PaulWandering`). `M01PlayerAggressive`
-and TrooperCongratulation's JustTerrorists branch are captured by `kC` (2026-10-19), with `Tantalus` kills, not weapon fire. Every approach is placed and
+**What stays uncaptured** (named in the rows' `weak` and `need`): the second answers of GuntherRescued's four give choices ("First thing is to get you out of
+here.", each its own speech before GiveNothing, which `gN` plays from NothingChoice), Filben's two barks that read `FilbenGaveKey`, and PaulCongratulations
+(`PaulWandering`). Captured on 2026-10-19: `M01PlayerAggressive` and TrooperCongratulation's JustTerrorists branch (`kC`, with `Tantalus` kills, not weapon
+fire), the stealth pistol, assault gun and knife gives and NothingChoice's first answer (`gS`, `gU`, `gK`, `gW`). Every approach is placed and
 every speech skipped, as the harness cannot walk.
 
 ## Scoreboard (2026-10-19, after `kC`)
@@ -656,7 +663,8 @@ every speech skipped, as the harness cannot walk.
 conversation batch's code (the Mac: the census 21 min, 50 plays, 0 pause, 0 no-effect, 0 undriven, equal to its `EXPECTED`; the 21 proof replays, each run once, 23 min):
 **11 of 50 criteria passed; the gate was red** (exit 1). 55 rows, 5 excluded. Every row was rerun on that code. On 2026-10-19 row 5.6.6 was rerun alone on `kC`'s
 code (`--only "^5\.6\.6 "` on the same census: its eight proof replays, 64 to 79 s each) and merged into that report (`.work/stage5-gate-2026-10-19-kC.json`):
-**12 of 50 criteria pass; the gate is red.** The other rows were not rerun: the one code change they could see, the replay's command order (fix 8 above), leaves
+**12 of 50 criteria pass; the gate is red.** Row 5.4.5 was rerun the same way on its seven scenes (with `gS`, `gU`, `gK`, `gW`: 56 to 77 s each) and still
+passes. The other rows were not rerun: the one code change they could see, the replay's command order (fix 8 above), leaves
 every other stored command list as it was.
 History: the first run (master 5d7285c, with the three tightened predicates) was 0 PASS, 14 FAIL, 33 MISSING, 3 UNDRIVEN. The Island devices task moved 5.2.6, 5.3.9, 5.5.1 and 5.5.2 from FAIL to
 MISSING. The death, explosives and alarms task moved 5.1.2, 5.1.4, 5.1.5, 5.2.7, 5.6.2 and 5.6.5. That left 0 PASS, 4 FAIL, 43 MISSING, 3 UNDRIVEN. The first combat captures moved
@@ -681,7 +689,7 @@ moved 5.4.3 to 5.4.7 from MISSING to PASS (11 PASS, 39 MISSING), and `kC` moved 
 
 The twelve `PASS` rows have proof checks on the stored Island scenes ([above](#first-original-captures-island-combat-2026-10-17)): 5.2.2 on `cmb1` and `cmb2`, 5.1.6 on `cmb1` to
 `cmb4`, `cmb6` and `cmb7`, 5.1.5 on `cmb1`, `cmb2` and `cmb5`, 5.2.7 on `cmb5`, 5.6.1 on `cmb7`, 5.1.8 on `die1`; 5.4.3 on `pG`, `pR` and `pX`, 5.4.4 on `fT`, `fM`, `fN` and `tA`,
-5.4.5 on `gP`, `gN` and `gA`, 5.4.6 on `tC` and `tA`, 5.4.7 on `oV`, `oT`, `cmb2` and `cmb3`, 5.6.6 on `gP`, `gN`, `gA`, `fT`, `fM`, `fN`, `oV` and `kC` (each with its
+5.4.5 on `gP`, `gN`, `gA`, `gS`, `gU`, `gK` and `gW`, 5.4.6 on `tC` and `tA`, 5.4.7 on `oV`, `oT`, `cmb2` and `cmb3`, 5.6.6 on `gP`, `gN`, `gA`, `fT`, `fM`, `fN`, `oV` and `kC` (each with its
 `weak`: placed approaches, skipped speeches, the choices not captured, `kC`'s `Tantalus` kills). No row fails. The 38 `MISSING` rows play in the census and name the capture that would prove them. Stage 4's gate started at 44 of 70 because 60 checks against stored
 originals already existed; for gameplay they did not. The strongest existing evidence is listed per row under "Existing, partial": the Island combat scenes, the Underworld's
 weapon-noise traces for gunshots, the perception pilot, the first-person crowbar, MeetPaul's frames, and the native oracles for swimming, ladders, falling and movers.
@@ -721,7 +729,7 @@ Nothing below was fixed by the census task; the two gap tasks closed items 1 and
    shot from outside his conversation radius. The `ElevatorMover1` "ride" (5.3.13) is the exit door, closed by the alarm and reopened by `Switch0`. The laser (5.2.5) row is restated
    from the original's `AlarmTimer` rule. The census now plays all 50 scenarios.
 7. **Proof captures, by clause value**: conversation branches **done 2026-10-18** for 5.4.3 to 5.4.7 ([above](#conversation-captures-the-islands-conversations-choices-and-flags-2026-10-18));
-   5.6.6's `M01PlayerAggressive` **done 2026-10-19** (`kC`), and GuntherRescued's other give choices are named in 5.4.5's `weak`. Weapons and damage (5.1.1 to 5.1.3, 5.1.7), the
+   5.6.6's `M01PlayerAggressive` **done 2026-10-19** (`kC`), and GuntherRescued's other gives and GiveNothingNicely too (`gS`, `gU`, `gK`, `gW`). Weapons and damage (5.1.1 to 5.1.3, 5.1.7), the
    routes (5.5), Training's lessons one capture each (5.3.1 to 5.3.4), and O3 comparisons for the native-body rows (5.3.5, 5.3.6, 5.3.2). The 38 `MISSING` rows are this item; the census now plays every scenario, and items 2 and 5
    still bound what the rows they name can show.
 
