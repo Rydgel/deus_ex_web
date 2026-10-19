@@ -110,6 +110,11 @@ function footWaterVelocity(pawn, old, step, gravity, acceleration, apex) {
  * counter increments, no slide move is made, and the end-of-substep velocity
  * recomputation is skipped, so Velocity is whatever the script left. The loop
  * then continues under the ordinary remaining-time/8-iteration bound.
+ *
+ * Before that, a blocked move by a Decoration whose Hit.Actor IsA PlayerPawn
+ * (0x103d1d1c-0x103d1d7b) lowers numLandings by one, floored at 0: the host's
+ * `blockedBy(actor)` (decoration hosts only), for processLanded's footprint
+ * block (landing.mjs decorationFootprint).
  */
 export function falling(pawn, seconds, iterations = 0, { nonPawn = false, bounce = false, hitWallEvent } = {}) {
   const dt = f(seconds);
@@ -227,6 +232,7 @@ export function falling(pawn, seconds, iterations = 0, { nonPawn = false, bounce
     }
     const blocked = hit.time < 1;
     if (blocked) {
+      pawn.blockedBy?.(hit.actor ?? null);
       if (bouncing()) {
         requireHitWallEvent();
         hitWallEvent([...hit.normal], hit.actor ?? null);

@@ -94,7 +94,11 @@ const vectorAt=(array,index)=>Array.from(array.subarray(index*3,index*3+3));
 export function lodMeshFrameMatrix(mesh,coords,scaleFactor,value) {
   let matrix=[0,1,2,3].map(i=>coords.slice(i*3,i*3+3).map(f));
   const scale=mesh.scale.map(v=>f(f(v)*f(scaleFactor)));
-  if(scale.some(v=>v===0||!Number.isFinite(v)))throw new LodMeshError('GetFrame zero/nonfinite scale is unsupported');
+  // A zero scale (a ShockRing's first frame) runs the original arithmetic: Core's
+  // FScale divides the origin by it (0x1011c39d), so the points are NaN and
+  // DrawLodMesh's sign-bit outcodes draw nothing (docs/script-lodmesh-frame.md
+  // "A zero DrawScale"). A nonfinite scale stays unsupported.
+  if(scale.some(v=>!Number.isFinite(v)))throw new LodMeshError(`GetFrame nonfinite scale is unsupported (${mesh.entry?.name??mesh.name??'mesh'} x ${scaleFactor})`);
   const location=value('Location'),prePivot=value('PrePivot');
   matrix[0]=matrix[0].map((v,i)=>f(f(v)-f(f(location[i])+f(prePivot[i]))));
   matrix=rotate(rotate(matrix,value('Rotation')),mesh.rotation);

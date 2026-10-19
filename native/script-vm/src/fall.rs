@@ -108,6 +108,7 @@ extern "C" {
     fn js_fall_hit_wall(depth: u32, nx: f64, ny: f64, nz: f64, actor: u32);
     fn js_fall_bounce(depth: u32, nx: f64, ny: f64, nz: f64, actor: u32);
     fn js_fall_landed(depth: u32, time: f64, nx: f64, ny: f64, nz: f64, actor: u32);
+    fn js_fall_blocked(depth: u32, actor: u32);
     fn js_fall_zone(depth: u32);
     fn js_fall_error(depth: u32, code: u32);
     fn js_fall_tail(depth: u32, dt: f64);
@@ -392,6 +393,12 @@ fn falling(p: &Faller, seconds: f64) {
         let blocked = hit.time < 1.0;
         if blocked {
             count(C_BLOCKED);
+            // 0x103d1d1c-0x103d1d7b: a Decoration blocked by a PlayerPawn
+            // lowers numLandings (falling.mjs `blockedBy`).
+            if p.decoration {
+                unsafe { js_fall_blocked(p.depth, hit.actor) };
+                p.check_image();
+            }
             if p.bouncing() {
                 count(C_BOUNCES);
                 unsafe { js_fall_bounce(p.depth, hit.normal[0], hit.normal[1], hit.normal[2], hit.actor) };

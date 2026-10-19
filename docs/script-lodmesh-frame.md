@@ -90,6 +90,38 @@ draws the actor: `publishLodMeshOps` runs an earlier call's operations
 as tweens with alpha 0, which republish the cached pose through another
 matrix (`lodMeshCameraMatrix`) without touching it.
 
+## A zero DrawScale (2026-10-18)
+
+Every explosion draws one: `ShockRing.Tick` sets
+`DrawScale = size·(Default.LifeSpan − LifeSpan)/Default.LifeSpan`, and a ring
+spawned in a tick is ticked in that tick before its LifeSpan is decremented
+(script Tick precedes the LifeSpan block, [actor tick](script-actor-tick.md)),
+so the frame that first draws it has DrawScale 0 (class default 1, LifeSpan 0.5).
+FDynamicSprite::Setup takes it (the render bound `(v − Origin)·0 ∓ 1` stays
+finite, `render-mesh-bounds.mjs`), DrawActorSprite stamps LastRenderTime and
+DrawLodMesh calls GetFrame with mesh Scale·0. GetFrame composes Core's
+`FCoords *= FScale` (`0x1011c0a0`), whose tail divides the origin by the scale
+(`fdiv` at `0x1011c39d`, `0x1011c3a5`, `0x1011c3ae`) after multiplying the axes
+by it: under the masked x87 control word the origin becomes ±inf (NaN for a zero
+component) and every published point `(v − Origin)·(axis·0)` is the x87
+indefinite (negative quiet NaN). DrawLodMesh's outcode block
+(`0x10b0efd3`–`0x10b0f073`, the main vertices `0x10b0f0f2`–`0x10b0f192`) takes
+each of the four terms' **sign bits** through the tables at
+`0x10b2abbc`–`0x10b2abc8` (4, 8, 0x10, 0x20), so every point is flagged on all
+four planes, every face's three outcodes share a bit and no face is drawn
+([mesh lighting](mesh-lighting.md) "A face whose three outcodes share a bit is
+skipped").
+
+`lodMeshFrameMatrix` used to refuse a zero scale (Play paused at the first
+explosion, Island scene `exp1`). It now runs the same arithmetic (JavaScript
+division gives the same ±inf and NaN), so the cache work of the call is the
+original's and its published points are NaN. Not reproduced bit for bit: the
+NaN's sign (JavaScript publishes the positive quiet NaN where the x87 stores the
+negative indefinite) and the draw path that consumes it: Play's GPU drops
+triangles with NaN positions where DrawLodMesh flags them out. Both draw
+nothing for that frame, and no simulation state reads the points. A nonfinite
+DrawScale is still refused.
+
 ## Original comparisons and runtime integration
 
 `scripts/native-lodmesh-frame-oracle.py` executes the complete unchanged original

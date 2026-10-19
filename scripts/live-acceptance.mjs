@@ -140,6 +140,16 @@ if (flag('perception')) PLAYER_FIELDS.push(['CRad', 'CollisionRadius', 0x1d4, 'f
 // pick up and fire a weapon (--cmds) are followed through these.
 if (flag('player-gear')) PLAYER_FIELDS.push(['Weapon', 'Weapon', 976, 'obj'], ['PendWeapon', 'PendingWeapon', 980, 'obj'], ['Inv', 'Inventory', 192, 'obj'], ['InHand', 'inHand', 2600, 'obj'],
   ['FrobTgt', 'FrobTarget', 2536, 'obj'], ['bFire', 'bFire', 1206, 'u8'], ['PHealth', 'Health', 1064, 'i32'], ['FrobTime', 'FrobTime', 2540, 'f']);
+// --player-view: what places the player's eye and the first-person item (Inventory.CalcDrawOffset: EyeHeight on Z plus BobDamping * WalkBob; PlayerPawn's
+// UpdateEyeHeight smooths EyeHeight with OldLocation and bJustLanded; the view shake of DeusExPlayer's damage), at Play's slotOf offsets (JCDentonMale0).
+if (flag('player-view')) PLAYER_FIELDS.push(['EyeH', 'EyeHeight', 0x3f8, 'f'], ['WalkBob', 'WalkBob', 0x3e8, 'f3'], ['BobTime', 'BobTime', 0x5f8, 'f'],
+  ['JustLanded', 'bJustLanded', 0x318, 'bit', 0x4], ['OldLoc', 'OldLocation', 0x12c, 'f3'], ['ShakeVert', 'ShakeVert', 0x680, 'f'], ['ShakeTimer', 'ShakeTimer', 0x678, 'f'],
+  ['ShakeMag', 'ShakeMag', 0x67c, 'i32'], ['MaxShake', 'MaxShake', 0x684, 'f'], ['VertTimer', 'VertTimer', 0x688, 'f'],
+  // and the bioelectric energy an EMP blast drains (DeusExPlayer.TakeDamage 'EMP'; DeusExPlayer +0x9c4 Energy, +0x9c8 EnergyMax, +0x9cc EnergyDrain,
+  // +0x9d0 EnergyDrainTotal), applied by MaintainEnergy every 0.25 s of lastRefreshTime (+0x9f0, DeusExPlayer.MultiplayerTick, single-player too): its
+  // phase at the release is the frozen frames' own (emp2: Play's drain steps came 3 ticks after the original's), written at the release like BobTime
+  ['Energy', 'Energy', 0x9c4, 'f'], ['EnergyMax', 'EnergyMax', 0x9c8, 'f'], ['EDrain', 'EnergyDrain', 0x9cc, 'f'], ['EDrainTotal', 'EnergyDrainTotal', 0x9d0, 'f'],
+  ['RefreshT', 'lastRefreshTime', 0x9f0, 'f']);
 // --player-health: the player's hit regions (Pawn.HealthHead..HealthArmRight, the linked offsets of Play's class graph): where an NPC's shots land
 // (DeusExPlayer.TakeDamage/HandleDamage) in the combat scenes of the Stage 5 gate (docs/stage-5-exit-criteria.md).
 const HIT_REGION_FIELDS = [['HHead', 'HealthHead', 1376, 'i32'], ['HTorso', 'HealthTorso', 1380, 'i32'], ['HLegL', 'HealthLegLeft', 1384, 'i32'],
@@ -175,6 +185,62 @@ const CARCASS_FIELDS = [
   ['CarcName', 'CarcassName', 960, 'name'], ['MaxDmg', 'MaxDamage', 964, 'i32'], ['CumDmg', 'CumulativeDamage', 844, 'i32'], ['NotDead', 'bNotDead', 968, 'bit', 1],
   ['Emit', 'bEmitCarcass', 968, 'bit', 2], ['CInit', 'bInit', 968, 'bit', 8], ['Flies', 'bGenerateFlies', 948, 'bit', 1], ['InvChain', '$inventoryChain', 192, 'chain'],
 ];
+
+// --device-watch Name:Class,..: the devices a Stage 5 scene is about (a camera, a turret and its gun, a laser trigger and its emitter, a control panel, an
+// alarm unit, a door, a decoration, the tool the player uses), watched with the Actor fields of DEVICE_BASE and their class's own (DEVICE_FIELDS: the linked
+// offsets and bool masks of Play's class graph, slotOf of each UProperty's +0x48 and UBoolProperty's +0x5c, read on the 01_NYC_UNATCOIsland actors named in
+// each comment; the label is the property's name). A name the original's level does not hold when the tracer attaches (a summoned tool) is bound when it
+// appears (late-watch, as a carcass is). A ScriptedPawn named there (SecurityBot0, for its EMPHitPoints) keeps every pawn field and adds its class's.
+const DEVICE_BASE = [...FIELDS.filter(f => ['Loc', 'Rot', 'Vel', 'Acc', 'Phys', 'Anim', 'Frame', 'Rate', 'Life', 'State', 'LRT', 'Dist', 'TRate', 'TCount', 'DesRot', 'Stasis'].includes(f[0])),
+  ['bHidden', 'bHidden', 0x28, 'bit', 0x2], ['bDeleteMe', 'bDeleteMe', 0x28, 'bit', 0x80], ['AmbientSound', 'AmbientSound', 0x1c8, 'obj'], ['Base', 'Base', 0xc4, 'obj'], ['Owner', 'Owner', 0x3c, 'obj'],
+  ['Instigator', 'Instigator', 0xbc, 'obj'], ['bCollideActors', 'bCollideActors', 0x1dc, 'bit', 0x1], ['bBlockActors', 'bBlockActors', 0x1dc, 'bit', 0x4],
+  ['bBlockPlayers', 'bBlockPlayers', 0x1dc, 'bit', 0x8], ['DrawType', 'DrawType', 0x164, 'u8'], ['LightType', 'LightType', 0x1e0, 'u8'], ['LightHue', 'LightHue', 0x1e3, 'u8'],
+  ['SoundRadius', 'SoundRadius', 0x1c4, 'u8'], ['SoundVolume', 'SoundVolume', 0x1c5, 'u8']];   // (SecurityCamera3)
+const HACKABLE_FIELDS = [['bHackable', 'bHackable', 0x3ac, 'bit', 0x1], ['hackStrength', 'hackStrength', 0x3b0, 'f'], ['bHacking', 'bHacking', 0x3c8, 'bit', 0x1],
+  ['hackValue', 'hackValue', 0x3cc, 'f'], ['hackTime', 'hackTime', 0x3d0, 'f'], ['numHacks', 'numHacks', 0x3d4, 'i32'], ['TicksSinceLastHack', 'TicksSinceLastHack', 0x3d8, 'f'],
+  ['TicksPerHack', 'TicksPerHack', 0x3dc, 'f'], ['LastTickTime', 'LastTickTime', 0x3e0, 'f'], ['hackPlayer', 'hackPlayer', 0x3e4, 'obj'], ['curTool', 'curTool', 0x3e8, 'obj'],
+  ['TimeSinceReset', 'TimeSinceReset', 0x3ec, 'f'], ['HitPoints', 'HitPoints', 0x340, 'i32']];   // HackableDevices (ControlPanel0)
+const DECORATION_FIELDS = [['HitPoints', 'HitPoints', 0x340, 'i32'], ['bExplosive', 'bExplosive', 0x36c, 'bit', 0x1], ['gradualHurtSteps', 'gradualHurtSteps', 0x380, 'i32'],
+  ['gradualHurtCounter', 'gradualHurtCounter', 0x384, 'i32'], ['NextState', 'NextState', 0x388, 'name'], ['NextLabel', 'NextLabel', 0x38c, 'name'],
+  ['bInvincible', 'bInvincible', 0x348, 'bit', 0x1], ['flyGen', 'flyGen', 0x390, 'obj']];   // DeusExDecoration (CrateExplosiveSmall10)
+const DEVICE_FIELDS = {
+  SecurityCamera: [...HACKABLE_FIELDS, ['bActive', 'bActive', 0x43c, 'bit', 0x1], ['bNoAlarm', 'bNoAlarm', 0x43c, 'bit', 0x2], ['bTrackPlayer', 'bTrackPlayer', 0x458, 'bit', 0x1],
+    ['bPlayerSeen', 'bPlayerSeen', 0x458, 'bit', 0x2], ['bEventTriggered', 'bEventTriggered', 0x458, 'bit', 0x4], ['lastSeenTimer', 'lastSeenTimer', 0x45c, 'f'],
+    ['playerCheckTimer', 'playerCheckTimer', 0x460, 'f'], ['swingTimer', 'swingTimer', 0x464, 'f'], ['triggerTimer', 'triggerTimer', 0x478, 'f'], ['bConfused', 'bConfused', 0x468, 'bit', 0x1],
+    ['confusionTimer', 'confusionTimer', 0x46c, 'f'], ['confusionDuration', 'confusionDuration', 0x470, 'f'], ['playerLocation', 'playerLocation', 0x47c, 'f3'], ['origRot', 'origRot', 0x440, 'i3']],   // SecurityCamera3
+  AutoTurret: [...DECORATION_FIELDS, ['bActive', 'bActive', 0x3bc, 'bit', 0x4], ['bDisabled', 'bDisabled', 0x404, 'bit', 0x2], ['curTarget', 'curTarget', 0x3d4, 'obj'],
+    ['prevTarget', 'prevTarget', 0x3d8, 'obj'], ['LastTarget', 'LastTarget', 0x3f0, 'obj'], ['fireTimer', 'fireTimer', 0x3e0, 'f'], ['bConfused', 'bConfused', 0x3e4, 'bit', 0x1],
+    ['confusionTimer', 'confusionTimer', 0x3e8, 'f'], ['bPreAlarmActiveState', 'bPreAlarmActiveState', 0x404, 'bit', 0x1], ['gun', 'gun', 0x3ac, 'obj'],
+    ['bComputerReset', 'bComputerReset', 0x418, 'bit', 0x1], ['bSwitching', 'bSwitching', 0x418, 'bit', 0x2], ['SwitchTime', 'SwitchTime', 0x41c, 'f'], ['beepTime', 'beepTime', 0x420, 'f'],
+    ['savedTarget', 'savedTarget', 0x424, 'obj'], ['ammoAmount', 'ammoAmount', 0x3d0, 'i32'], ['origRot', 'origRot', 0x3f8, 'i3']],   // AutoTurret0
+  AutoTurretGun: [...HACKABLE_FIELDS, ['updateTime', 'updateTime', 0x434, 'f']],   // AutoTurretGun0
+  LaserTrigger: [['bIsOn', 'bIsOn', 0x34c, 'bit', 0x1], ['bNoAlarm', 'bNoAlarm', 0x34c, 'bit', 0x2], ['LastHitActor', 'LastHitActor', 0x350, 'obj'], ['bConfused', 'bConfused', 0x354, 'bit', 0x1],
+    ['confusionTimer', 'confusionTimer', 0x358, 'f'], ['HitPoints', 'HitPoints', 0x360, 'i32'], ['lastAlarmTime', 'lastAlarmTime', 0x368, 'f'], ['alarmTimeout', 'alarmTimeout', 0x36c, 'i32'],
+    ['triggerActor', 'triggerActor', 0x370, 'obj'], ['actorLocation', 'actorLocation', 0x374, 'f3'], ['emitter', 'emitter', 0x348, 'obj']],   // LaserTrigger0
+  LaserEmitter: [['bIsOn', 'bIsOn', 0x32c, 'bit', 0x1], ['HitActor', 'HitActor', 0x330, 'obj'], ['bFrozen', 'bFrozen', 0x334, 'bit', 0x1], ['bHiddenBeam', 'bHiddenBeam', 0x334, 'bit', 0x8],
+    ['proxy', 'proxy', 0x338, 'obj']],   // LaserEmitter0
+  ControlPanel: HACKABLE_FIELDS,
+  AlarmUnit: [...HACKABLE_FIELDS, ['bActive', 'bActive', 0x440, 'bit', 0x1], ['curTime', 'curTime', 0x444, 'f'], ['alarmInstigator', 'alarmInstigator', 0x448, 'obj'],
+    ['alarmLocation', 'alarmLocation', 0x44c, 'f3'], ['associatedPawn', 'associatedPawn', 0x45c, 'obj'], ['bDisabled', 'bDisabled', 0x460, 'bit', 0x1], ['bConfused', 'bConfused', 0x460, 'bit', 0x2],
+    ['confusionTimer', 'confusionTimer', 0x464, 'f'], ['alarmTimeout', 'alarmTimeout', 0x424, 'i32']],   // AlarmUnit0
+  Multitool: [['NumCopies', 'NumCopies', 0x438, 'i32'], ['bBeingUsed', 'bBeingUsed', 0x478, 'bit', 0x1], ['bActive', 'bActive', 0x31c, 'bit', 0x4], ['beltPos', 'beltPos', 0x418, 'i32']],   // Multitool3
+  Decoration: DECORATION_FIELDS,
+  DeusExMover: [['doorStrength', 'doorStrength', 0x544, 'f'], ['bDestroyed', 'bDestroyed', 0x574, 'bit', 0x1], ['bLocked', 'bLocked', 0x534, 'bit', 0x2], ['lockStrength', 'lockStrength', 0x538, 'f'],
+    ['KeyNum', 'KeyNum', 0x377, 'u8'], ['PrevKeyNum', 'PrevKeyNum', 0x378, 'u8'], ['bInterpolating', 'bInterpolating', 0x1ec, 'bit', 0x80], ['bPicking', 'bPicking', 0x54c, 'bit', 0x4],
+    ['curPick', 'curPick', 0x56c, 'obj'], ['PhysAlpha', 'PhysAlpha', 0x214, 'f'], ['PhysRate', 'PhysRate', 0x218, 'f'], ['bOpening', 'bOpening', 0x4ec, 'bit', 0x1], ['bDelaying', 'bDelaying', 0x4ec, 'bit', 0x2]],   // DeusExMover5
+  Actor: [],   // DEVICE_BASE alone (a thrown grenade)
+  Robot: [['EMPHitPoints', 'EMPHitPoints', 0xa2c, 'i32'], ['crazedTimer', 'crazedTimer', 0xa34, 'f'], ['sparkGen', 'sparkGen', 0xa30, 'obj'], ['HealthTorso', 'HealthTorso', 0x564, 'i32'],
+    ['HealthHead', 'HealthHead', 0x560, 'i32']],   // SecurityBot0
+};
+/** --device-watch "Name:Class[@Owner.field],..." -> [{name, cls, via}] (a class DEVICE_FIELDS lacks stops the run). `@Owner.field`: Play finds the actor through
+ * its owner's object field, not by name: an actor a placed actor spawns at load (AutoTurret.PreBeginPlay's gun) is numbered by each process's session
+ * history (MakeUniqueObjectName's class counter carries every load: the original's capture session loaded the Island once, Play's start loads it again
+ * at the Player start), so the original's AutoTurretGun0 is Play's AutoTurretGun2. */
+const deviceWatchOption = () => (option('device-watch', '') ?? '').split(',').filter(Boolean).map(entry => {
+  const [name, rest] = entry.split(':'), [cls, via] = rest.split('@');
+  if (!DEVICE_FIELDS[cls]) throw new Error(`--device-watch ${entry}: no DEVICE_FIELDS for ${cls} (${Object.keys(DEVICE_FIELDS).join(' ')})`);
+  return {name, cls, ...(via ? {via} : {})};
+});
 
 const spec = ([label, , off, type, mask]) => `${label}:0x${off.toString(16)}:${type}${mask ? `:0x${mask.toString(16)}` : ''}`;
 
@@ -355,6 +421,11 @@ async function original() {
   const extras = option('extra-watch', null)?.split(',') ?? [];
   names.push(...extras);
   const carcasses = option('carcass-watch', null)?.split(',') ?? [];
+  // --device-watch: a pawn named there leaves the pawns' watch line for one of its own (the pawn fields and its class's); it stays a pawn of the watch file
+  const devices = deviceWatchOption();
+  for (const device of devices) device.pawn = names.includes(device.name) && !extras.includes(device.name);
+  const pawnNames = names.filter(name => !extras.includes(name));
+  names = names.filter(name => !devices.some(d => d.pawn && d.name === name));
   // --cmds "30:Fire|90:AltFire": console commands typed into the original at those unfrozen tick counts, between two ticks: the tracer holds the
   // level (config `pause-at`, ticks skipped as for the final pause) while the command is typed, and Play runs the same command at the same point
   // of its replay (commands<tag>.json). A command is the console line as typed (an exec function of the player, `set ...`).
@@ -403,10 +474,21 @@ async function original() {
   // LastRenderTime: a listener's SightCounter decides the tick its check runs in the player's ShowSelf, and with it that check's far-path draw; die1's
   // first replay drew at tick 4 where the original drew at 12): traced with those fields only (watch<tag>.json `loadPawns`), written by the replay at the
   // release, not compared (Play does not watch them, as the timed actors).
-  let loadPawns = watchOption === 'auto' ? [] : wine('list', 'ScriptedPawn').split('\n').map(line => /^\S+ (\S+) slot=/.exec(line)?.[1]).filter(name => name && !names.includes(name));
+  let loadPawns = watchOption === 'auto' ? [] : wine('list', 'ScriptedPawn').split('\n').map(line => /^\S+ (\S+) slot=/.exec(line)?.[1]).filter(name => name && !pawnNames.includes(name));
   const LOAD_FIELDS = FIELDS.filter(f => [...PAWN_LOAD_FIELDS, 'LRT'].includes(f[0]));
   const timers = (existsSync(reference0) && !flag('no-timers') ? JSON.parse(readFileSync(reference0, 'utf8')).timers ?? [] : []).map(name => originalSpelling.get(name.toLowerCase()) ?? name)
-    .filter(name => !names.includes(name) && !generators.includes(name) && !loadPawns.includes(name));
+    .filter(name => !names.includes(name) && !generators.includes(name) && !loadPawns.includes(name) && !devices.some(d => d.name.toLowerCase() === name.toLowerCase()));
+  // --device-watch lines: one per class and kind (a pawn's: FIELDS and its class's; a device the level holds: DEVICE_BASE and its class's; one it does not
+  // hold yet: the same, late-watch), each name in the original's spelling
+  for (const device of devices) { device.late = !device.pawn && !originalSpelling.has(device.name.toLowerCase()); device.name = originalSpelling.get(device.name.toLowerCase()) ?? device.name; }
+  const deviceLines = () => {
+    const groups = new Map();
+    for (const d of devices) { const key = `${d.pawn ? 'pawn' : d.late ? 'late' : 'actor'}:${d.cls}`; groups.set(key, [...(groups.get(key) ?? []), d.name]); }
+    return [...groups].map(([key, list]) => {
+      const [kind, cls] = key.split(':');
+      return `${kind === 'late' ? 'late-watch' : 'watch'} ${list.join(',')} ${[...(kind === 'pawn' ? FIELDS : DEVICE_BASE), ...DEVICE_FIELDS[cls]].map(spec).join(' ')}`;
+    });
+  };
   const buildConfig = (names, generators, timers) => {
   const config = [`out ${tracePath}`, 'player JCDentonMale', `release ${option('release', 3)}`, `ticks ${option('ticks', 600)}`,
     ...(cmds.length ? [`pause-at ${[...new Set(cmds.map(c => c.after))].sort((a, b) => a - b).join(' ')}`] : []),
@@ -425,7 +507,7 @@ async function original() {
     ...(generators.length ? [`watch ${generators.join(',')} ${GENERATOR_FIELDS.map(spec).join(' ')}`] : []),
     `watch @player ${PLAYER_FIELDS.map(spec).join(' ')}`,
     `watch ${names.join(',')} ${FIELDS.map(spec).join(' ')}`,
-    ...(carcasses.length ? [`late-watch ${carcasses.join(',')} ${CARCASS_FIELDS.map(spec).join(' ')}`] : [])];
+    ...(carcasses.length ? [`late-watch ${carcasses.join(',')} ${CARCASS_FIELDS.map(spec).join(' ')}`] : []), ...deviceLines()];
   if (timers.length) config.push(`watch ${timers.join(',')} TRate:0x48:f TCount:0x4c:f`);
   if (loadPawns.length) config.push(`watch ${loadPawns.join(',')} ${LOAD_FIELDS.map(spec).join(' ')}`);
   return config;
@@ -433,7 +515,7 @@ async function original() {
   let config = buildConfig(names, generators, timers.slice());
   const configPath = path.join(dir, 'trace.cfg');
   writeFileSync(configPath, config.join('\n') + '\n');
-  writeFileSync(watchPath, JSON.stringify({map, pawns: names.filter(name => !extras.includes(name)), extras, carcasses, generators, timers, loadPawns, classes: classOf}, null, 1));
+  writeFileSync(watchPath, JSON.stringify({map, pawns: pawnNames, extras, carcasses, generators, timers, loadPawns, classes: classOf, ...(devices.length ? {devices} : {})}, null, 1));
   // The actors the original's level holds (a load removes some at random: OddsOfAppearing).
   const everything = wine('list', 'Actor').split('\n').map(line => /^\S+ (\S+) slot=(\d+) loc=\(([^)]*)\) .* odds=(\S+)/.exec(line)).filter(Boolean)
     .map(m => ({name: m[1], odds: Number(m[4]), slot: Number(m[2]), loc: m[3].split(',').map(Number)}));   // slot: the GObjObjects slot (the order a load made the actors in)
@@ -481,7 +563,7 @@ async function original() {
       const keptGenerators = generators.filter(name => !gone.has(name)), keptTimers = timers.filter(name => !gone.has(name));
       config = buildConfig(names, keptGenerators, keptTimers);
       writeFileSync(configPath, config.join('\n') + '\n');
-      writeFileSync(watchPath, JSON.stringify({map, pawns: names.filter(name => !extras.includes(name)), extras, carcasses, generators: keptGenerators, timers: keptTimers, loadPawns, classes: classOf, notInPlay: only}, null, 1));
+      writeFileSync(watchPath, JSON.stringify({map, pawns: pawnNames.filter(name => !gone.has(name)), extras, carcasses, generators: keptGenerators, timers: keptTimers, loadPawns, classes: classOf, notInPlay: only, ...(devices.length ? {devices} : {})}, null, 1));
     } else if (only.length) { console.log(`POPULATION: the original holds ${only.length} actors Play's seed ${option('seed', 1)} load lacks: ${only.slice(0, 20).join(' ')}`); process.exitCode = 3; return; }
     else console.log('population: the original holds nothing Play lacks');
   }
@@ -796,7 +878,7 @@ async function play() {
     const cut = holdCuts.get(unfrozen - 1) ?? -Infinity, list = frames.filter(f => f.seq > cut).map(f => f.delta);
     return {windowSeconds: unfrozen === 1 ? list.slice(-1) : list};
   };
-  const {pawns, extras = [], carcasses = [], generators = [], timers = [], loadPawns = []} = JSON.parse(readFileSync(watchPath, 'utf8'));
+  const {pawns, extras = [], carcasses = [], generators = [], timers = [], loadPawns = [], devices = []} = JSON.parse(readFileSync(watchPath, 'utf8'));
   // Play is placed where the original's player stood when the replay begins: the last frozen tick's exit.
   const frozen = traceRows.filter(row => row.unfrozen === 0);
   const pose = frozen[frozen.length - 1].actors['@player'];
@@ -998,9 +1080,29 @@ async function play() {
     const pawnWrites = flag('no-pawn-load') ? {} : Object.fromEntries([...pawns, ...loadPawns].filter(name => lastFrozen[name] && renderHistoryFields().every(label => lastFrozen[name][label] !== undefined))
       .map(name => [name, Object.fromEntries(renderHistoryFields().map(label => [FIELDS.find(f => f[0] === label)[1], lastFrozen[name][label]]))]));
     const timerWrites = flag('no-timer-load') ? {} : Object.fromEntries(timers.filter(name => lastFrozen[name]?.TRate !== undefined).map(name => [name, {TimerRate: lastFrozen[name].TRate, TimerCounter: lastFrozen[name].TCount}]));
+    // The same measured inputs for the --device-watch actors the original's level held (a pawn device is a pawn above): with --render-history the
+    // frozen phase's render stamps (cam1: NSFTurret01 and its gun drawn from the placement's view, LastRenderTime 81.96 at tick 1), and for a device
+    // whose Timer runs from the load (play-population.json `timers`) its TimerRate and TimerCounter. A device found through its owner is written
+    // through it too (liveProbe's `Owner.field` names).
+    const populationTimers = new Set((existsSync(path.join(dir, 'play-population.json')) ? JSON.parse(readFileSync(path.join(dir, 'play-population.json'), 'utf8')).timers ?? [] : [])
+      .map(name => name.toLowerCase()));
+    const deviceWrites = Object.fromEntries(devices.filter(d => !d.late && !d.pawn && lastFrozen[d.name]).map(d => [d.via ?? d.name, {
+      ...(flag('render-history') && lastFrozen[d.name].LRT !== undefined ? {LastRenderTime: lastFrozen[d.name].LRT} : {}),
+      ...(!flag('no-timer-load') && populationTimers.has(d.name.toLowerCase()) ? {TimerRate: lastFrozen[d.name].TRate, TimerCounter: lastFrozen[d.name].TCount} : {})}])
+      .filter(([, fields]) => Object.keys(fields).length));
     // The original's class counters (UClass+0x488: MakeUniqueObjectName's suffix, docs/script-construction.md "Spawned names against the original")
     // carry the capture's whole session (the maps it loaded before this one): a measured input like the stream state. A class's first traced
     // AddObject (the `addobj` call records' name and class at the return) gives its counter; --own-names keeps Play's own.
+    // AIProcess's firstProcess at its return (the `aiproc` call records, validate-stage5-live.mjs captureConfig): the receiver its budget stopped the loop
+    // before, read before CleanupEvents relinks firstProcess past receivers destroyed in the callbacks; the replay stops there exactly (aievent.rs
+    // ai_set_process_stop, mode 2). A capture without them keeps `aiFirst`, the tick exit's (mode 1).
+    const aiStops = new Map();
+    if (existsSync(`${tracePath}.calls.jsonl`))
+      for (const line of readFileSync(`${tracePath}.calls.jsonl`, 'utf8').split('\n')) {
+        if (!line.includes('"fn":"aiproc"') || !line.includes('"ecxRcv"')) continue;
+        const r = parseTraceLine(line);
+        if (r.ev === 'ret' && r.u >= 1) aiStops.set(r.u, r.ecxRcv);
+      }
     const classCounters = (() => {
       const file = `${tracePath}.calls.jsonl`;
       if (flag('own-names') || !existsSync(file)) return null;
@@ -1021,7 +1123,13 @@ async function play() {
     // the rest of the animation state when the trace has it (PLAYER_FIELDS: captures from 2026-10-17 on)
     const animState = pose.ALast === undefined ? {} : {AnimLast: pose.ALast, AnimMinRate: pose.AMin, OldAnimRate: pose.AOld,
       bAnimFinished: Boolean(pose.AnimFin), bAnimLoop: Boolean(pose.AnimLoop), bAnimNotify: Boolean(pose.AnimNote)};
-    const request = {...(classCounters ? {classCounters} : {}), write: {...timerWrites, ...pawnWrites, '@player': {AnimSequence: pose.Anim, AnimFrame: pose.Frame, AnimRate: pose.Rate, TweenRate: pose.Tween, ...animState, ...(option('player-alliance', null) ? {Alliance: option('player-alliance')} : {}),
+    // --player-view: the player's eye and bob at the release (a capture with them): the frozen phase's landing after the placement and its smoothing of
+    // EyeHeight (PlayerPawn.UpdateEyeHeight, every frozen tick at the host's delta) are the original's own history, a measured input like the animation
+    // state; Inventory.CalcDrawOffset places a held item with them (Stage 5 capture hck1: Multitool0's Z 4e-5 off for 102 ticks until the player was hit)
+    const viewState = pose.EyeH === undefined ? {} : {EyeHeight: pose.EyeH, WalkBob: pose.WalkBob.map(Math.fround), BobTime: pose.BobTime, bJustLanded: Boolean(pose.JustLanded),
+      ShakeVert: pose.ShakeVert, ShakeTimer: pose.ShakeTimer, ShakeMag: pose.ShakeMag, MaxShake: pose.MaxShake, VertTimer: pose.VertTimer,
+      ...(pose.RefreshT === undefined ? {} : {lastRefreshTime: pose.RefreshT})};
+    const request = {...(classCounters ? {classCounters} : {}), write: {...timerWrites, ...pawnWrites, ...deviceWrites, '@player': {AnimSequence: pose.Anim, AnimFrame: pose.Frame, AnimRate: pose.Rate, TweenRate: pose.Tween, ...animState, ...viewState, ...(option('player-alliance', null) ? {Alliance: option('player-alliance')} : {}),
       // FrobTime accumulates the player's tick deltas (HighlightCenterObject runs when it reaches 0.1 s); the frozen phase's deltas are the host's, so the original's value is a measured input
       ...(flag('player-gear') && pose.FrobTime !== undefined ? {FrobTime: pose.FrobTime} : {})}, ...generatorWrites},
       ...(touchWindow ? {touchTrace: {first: touchWindow[0], last: touchWindow[1]}} : {}),
@@ -1030,18 +1138,32 @@ async function play() {
       ...(navPawns ? {navTrace: {pawns: navPawns.split(','), first: navFirst, last: navLast}} : {}),
       ...(trace[0]?.viewport?.[0] && !flag('own-viewport') ? {renderSize: trace[0].viewport} : {}),   // the original's frame size (--own-viewport: Play's page)
       ...(setupNames ? {setupProbe: {names: setupNames.split(','), first: setupFirst, last: setupLast}} : {}),
-      ...(scriptPawns ? {scriptTrace: {pawns: scriptPawns.split(','), first: scriptFirst, last: scriptLast}} : {}), replay: {ticks: trace.map(({n, unfrozen, delta, rngIn, clockIn, tsIn, strobeIn, aiFirst}) => ({n, unfrozen, delta, rngIn, clockIn, tsIn, strobeIn, aiFirst, ...windowDeltas(unfrozen)})),   // not the watched fields: a long trace would not fit the page
+      ...(scriptPawns ? {scriptTrace: {pawns: scriptPawns.split(','), first: scriptFirst, last: scriptLast}} : {}), replay: {ticks: trace.map(({n, unfrozen, delta, rngIn, clockIn, tsIn, strobeIn, aiFirst}) => ({n, unfrozen, delta, rngIn, clockIn, tsIn, strobeIn, aiFirst,
+        ...(aiStops.has(unfrozen) ? {aiStop: aiStops.get(unfrozen)} : {}), ...windowDeltas(unfrozen)})),   // not the watched fields: a long trace would not fit the page
       release: true, hold: true, levelEnded: existsSync(`${tracePath}.ended`), tickTag: tickTag(), drawTrace: flag('draw-trace'), drawStacks: flag('draw-stacks'), drawStackActor: option('draw-stack-actor', null),
       // --phonemes file.json ([{n, name, letter}]; conversation-acceptance.mjs `phonemes`): the letters the original's audio update wrote into a speaker's nextPhoneme, a measured input
       ...(option('phonemes', null) ? {phonemes: JSON.parse(readFileSync(option('phonemes'), 'utf8'))} : {}),
       ...(option('can-see', null) ? {canSeeProbe: {pawn: option('can-see'), first: Number(option('can-see-ticks', '1:1').split(':')[0]), last: Number(option('can-see-ticks', '1:1').split(':')[1])}} : {}),
       commands, watch: [
-      {names: ['@player'], props: playerProps}, {names: pawns, props}, ...(watchedGenerators.length ? [{names: watchedGenerators, props: GENERATOR_FIELDS.map(f => f[1])}] : []),
+      {names: ['@player'], props: playerProps}, {names: pawns.filter(name => !devices.some(d => d.pawn && d.name === name)), props}, ...(watchedGenerators.length ? [{names: watchedGenerators, props: GENERATOR_FIELDS.map(f => f[1])}] : []),
       // --extra-watch actors are not pawns: the fields every Actor has
       ...(extras.length ? [{names: extras, props: ['Location', 'Rotation', 'Velocity', 'Physics', 'AnimSequence', 'AnimFrame', 'AnimRate', 'TweenRate', 'LifeSpan', 'LastRenderTime', 'DistanceFromPlayer', 'TimerRate', 'TimerCounter', ...(flag('touching') ? ['Touching'] : [])]}] : []),
       // --carcass-watch (the original's run): resolved by name from the tick the actor is in Play's level, as the tracer's late-watch
-      ...(carcasses.length ? [{names: carcasses, props: CARCASS_FIELDS.map(f => f[1]), late: true}] : [])]}};
+      ...(carcasses.length ? [{names: carcasses, props: CARCASS_FIELDS.map(f => f[1]), late: true}] : []),
+      // --device-watch (the original's run): a device with DEVICE_BASE and its class's fields, a pawn device with the pawn props and its class's, a late one lazily
+      ...devices.map(d => ({names: [d.name], props: [...new Set([...(d.pawn ? props : DEVICE_BASE.map(f => f[1])), ...DEVICE_FIELDS[d.cls].map(f => f[1])])],
+        ...(d.late ? {late: true} : {}), ...(d.via ? {via: {[d.name]: d.via}} : {})}))]}};
     const started = await page.evaluate(r => window.deusExViewer.liveProbe(r), request);
+    // The AI event manager's process ring at the release, Play's against the original's last frozen row (tools/dx-live-win.c `aiRing`): a new
+    // receiver is linked just before firstProcess, so where a budget-stopped AIProcess (the replayed `aiFirst`) reaches depends on the ring's order.
+    const originalRing = [...frozen].reverse().find(row => row.aiRing)?.aiRing;
+    if (originalRing && started.aiRing) {
+      const norm = entry => String(entry).replace(/^JCDenton\w*?\d+\|/i, 'JCDenton|').toLowerCase();
+      let k = 0; while (k < originalRing.length && k < started.aiRing.length && norm(originalRing[k]) === norm(started.aiRing[k])) k++;
+      writeFileSync(path.join(dir, `ai-ring${suffix}.json`), JSON.stringify({original: originalRing, play: started.aiRing}));
+      console.log(`AI process ring at the release: original ${originalRing.length} receivers, Play ${started.aiRing.length}; ${k === originalRing.length && k === started.aiRing.length
+        ? 'the same order' : `first difference at ${k}: original ${originalRing[k] ?? '(end)'}, Play ${started.aiRing[k] ?? '(end)'}`}`);
+    }
     if (started.objectTrace) {
       const o = started.objectTrace;
       console.log(`object trace: the run's own indices for ${o.measured} pre-placed actors, ${o.pendingDeleted} more pending deletion and the player (${o.player}); ` +
@@ -1134,7 +1256,12 @@ let rotationCompare = false;
 const indexOf = new Map(FIELDS.filter(f => f[5] !== undefined).map(f => [f[0], f[5]]));
 // Objects the two programs create while running are numbered by their own creation order (JCDentonMale2 and JCDentonMale1, the NPCs' weapons
 // WeaponAssaultShotgun0 and 1): the same object under another number. Map actors keep their names.
-const runtimeNumbered = /^((?:JCDenton\w*?|Weapon\w+?|Ammo\w+?|NanoKeyRing))\d+$/;
+// (LaserEmitter, AutoTurretGun: spawned at load by a placed actor, LaserTrigger.BeginPlay and AutoTurret.PreBeginPlay, so numbered by each process's
+// session history like the pawns' inventory: the original's capture session loaded the Island once, LaserEmitter0..4; Play's start loads it again at
+// the Player start, LaserEmitter5..9; live-acceptance.mjs --device-watch `@Owner.field` finds such an actor in Play. ParticleGenerator likewise:
+// two are spawned at load (ParticleGenerator0/1 in the original's start registry), so a robot's sparkGen (Robot.Tick) is ParticleGenerator2 in the
+// original and ParticleGenerator4 in Play)
+const runtimeNumbered = /^((?:JCDenton\w*?|Weapon\w+?|Ammo\w+?|NanoKeyRing|LaserEmitter|AutoTurretGun\w*?|ParticleGenerator))\d+$/;
 function same(a, b) {
   if (a === null || a === undefined) a = 'None';
   if (b === null || b === undefined) b = 'None';
@@ -1180,15 +1307,35 @@ function compare() {
   // The actors of the first row, and the ones a scene spawns (--carcass-watch, watch<tag>.json `carcasses`): those have rows from the tick they appear,
   // and whether one is there at a tick is compared too (`Present`: the original's tracer binds it at the tick exit after its AddObject, Play's replay at
   // the end of the same tick). (The timed actors' rows are the original's only: Play writes their timers and does not watch them.)
-  const late = existsSync(watchPath) ? JSON.parse(readFileSync(watchPath, 'utf8')).carcasses ?? [] : [];
+  const watchFile = existsSync(watchPath) ? JSON.parse(readFileSync(watchPath, 'utf8')) : {};
+  const late = [...watchFile.carcasses ?? [], ...(watchFile.devices ?? []).filter(d => d.late).map(d => d.name)];
   const names = [...new Set([...Object.keys(rows[0]?.actors ?? {}), ...late])];
+  // An actor the scene destroys (a blood drop's splat, an exploded TrashCan5, a dead Terrorist2): the tracer goes on reading its memory after the purge
+  // frees it (another object's then: exp1's TrashCan5 reads a "Flying" drop at 353), so its rows end at its UnhashObject (the `unhash` call records'
+  // ecxName), or after the first tick either side shows bDeleteMe (that tick is still compared: a deletion one side makes later is a bDeleteMe difference).
+  const freedAt = new Map(), lowerNames = new Set(names.map(n => n.toLowerCase()));
+  if (existsSync(`${tracePath}.calls.jsonl`))
+    for (const line of readFileSync(`${tracePath}.calls.jsonl`, 'utf8').split('\n')) {
+      if (!line.includes('"fn":"unhash"') || !line.includes('"ecxName"')) continue;
+      const r = parseTraceLine(line), key = String(r.ecxName).toLowerCase();
+      if (r.ev === 'ret' && r.u >= 1 && lowerNames.has(key) && !freedAt.has(key)) freedAt.set(key, r.u);
+    }
+  const endOf = name => {
+    let end = freedAt.get(name.toLowerCase()) ?? Infinity;
+    for (let i = 0; i < rows.length && i + 1 < end; i++)
+      if (rows[i].actors[name]?.bDeleteMe === 1 || played.rows[i]?.actors?.[name]?.bDeleteMe === 1) { end = i + 2; break; }
+    return end;
+  };
   const labels = [...FIELDS, ...PLAYER_FIELDS.slice(11), ...GENERATOR_LOAD_FIELDS, ...GENERATOR_FIELDS.slice(GENERATOR_LOAD_FIELDS.length).filter(f => !FIELDS.some(g => g[0] === f[0])),
-    ...CARCASS_FIELDS.filter(f => !FIELDS.some(g => g[0] === f[0]))].map(f => [f[0], f[1] === '$state' ? 'State' : f[1]]);
+    ...CARCASS_FIELDS.filter(f => !FIELDS.some(g => g[0] === f[0])), ...DEVICE_BASE.filter(f => !FIELDS.some(g => g[0] === f[0])),
+    ...Object.values(DEVICE_FIELDS).flat()].map(f => [f[0], f[1] === '$state' ? 'State' : f[1]]).filter((f, i, all) => all.findIndex(g => g[0] === f[0] && g[1] === f[1]) === i);
   // An Inventory chain is compared by its items' classes in order: the items' numbers follow each process's creation order (runtimeNumbered)
   const stems = list => Array.isArray(list) ? list.map(name => String(name).replace(/\d+$/, '').toLowerCase()) : list;
   for (const name of names) {
     const entry = report.actors[name] = {firstDifference: null, fields: {}};
-    for (let i = 0; i < rows.length; i++) {
+    const end = name.startsWith('@') ? Infinity : endOf(name);
+    if (end !== Infinity) entry.endsAt = end;
+    for (let i = 0; i < rows.length && i + 1 < end; i++) {
       const o = rows[i].actors[name], p = played.rows[i]?.actors[name];
       if (late.includes(name) && Boolean(o) !== Boolean(p) && played.rows[i]) {
         const field = entry.fields.Present ??= {tick: i + 1, original: Boolean(o), play: Boolean(p), count: 0};

@@ -716,12 +716,13 @@ fn process() {
     let stop = unsafe { core::mem::replace(&mut *addr_of_mut!(PROCESS_STOP), [0; 3]) };
     let mut stopped = stop[0] == 0;
     while r != 0 {
+        let mut worked = false;
         if rcv(r).destroyed == 0 {
             if is_deleted(rcv(r).actor) {
                 safe_delete(1, r);
             }
             if rcv(r).destroyed == 0 {
-                process_receiver(r);
+                worked = process_receiver(r);
             }
         }
         visited += 1;
@@ -729,12 +730,18 @@ fn process() {
         if r == m().first_process {
             r = 0;
         }
-        if stop[0] != 0 && r != 0 && rcv(r).actor == stop[1] && rcv(r).ty != 0 && ty(rcv(r).ty).name == stop[2] {
+        // The original checks its budget only after a receiver that did work (a destroyed one jumps past the check, 0x10384119 ->
+        // 0x10384470 with [ebp-0x44] 0) and stops before advancing (0x1038449a precedes 0x1038449f): firstProcess is then the next
+        // receiver, and CleanupEvents, which ends the manager's Tick, relinks it past destroyed ones before the tracer reads it at the
+        // tick's exit. So the replayed stop is the first live receiver after one that did work; a recorded receiver reached only
+        // through destroyed ones after receivers without work is the relink of a whole lap (Stage 5 capture las1, tick 139).
+        // (mode 2, AIProcess's own firstProcess at its return: the exact receiver; mode 1, the tick exit's: after CleanupEvents' relink)
+        if stop[0] != 0 && worked && r != 0 && (if stop[0] == 2 { exact_matches(r, stop) } else { first_live_matches(r, stop) }) {
             stopped = true;
             break;
         }
     }
-    if !stopped && !(stop[1] == rcv_actor(m().first_process) && stop[2] == rcv_name(m().first_process)) {
+    if !stopped && !(if stop[0] == 2 { exact_matches(m().first_process, stop) } else { first_live_matches(m().first_process, stop) }) {
         unsafe { *addr_of_mut!(PROCESS_STOP_MISSES) += 1 };
     }
     m().current_slot = next_slot;
@@ -812,8 +819,31 @@ fn process() {
     m().ref_processing -= 1;
 }
 
+/// Whether receiver `r` is the replayed stop ([mode, actor, event name]).
+fn exact_matches(r: u32, stop: [u32; 3]) -> bool {
+    r != 0 && rcv(r).actor == stop[1] && rcv(r).ty != 0 && ty(rcv(r).ty).name == stop[2]
+}
+
+/// Whether the first receiver from `r` (in ring order, up to firstProcess) that is not being destroyed is the replayed stop
+/// ([active, actor, event name]): where CleanupEvents leaves firstProcess when the loop leaves it at `r`.
+fn first_live_matches(r: u32, stop: [u32; 3]) -> bool {
+    let first = m().first_process;
+    let mut c = r;
+    let mut guard = 0;
+    while c != 0 && rcv(c).destroyed != 0 && guard < MAX_RECEIVERS {
+        c = rcv(c).next_process;
+        if c == first || c == r {
+            return false;
+        }
+        guard += 1;
+    }
+    c != 0 && rcv(c).actor == stop[1] && rcv(c).ty != 0 && ty(rcv(c).ty).name == stop[2]
+}
+
 /// The body of AIProcess's receiver loop for one live receiver.
-fn process_receiver(r: u32) {
+/// Returns whether the receiver did work in the original's sense (`[ebp-0x44]` set at 0x103842b9: at least one candidate sender),
+/// after which AIProcess checks its time budget.
+fn process_receiver(r: u32) -> bool {
     let actor = rcv(r).actor;
     let t = rcv(r).ty;
     rcv(r).invoke = 0;
@@ -930,6 +960,7 @@ fn process_receiver(r: u32) {
     }
     rcv(r).best_score = best_hold;
     rcv(r).best_sender = best_actor;
+    count > 0
 }
 
 /// Whether the candidate with hold score `a` sorts strictly before the one with `b` that was in the list first: the comparator

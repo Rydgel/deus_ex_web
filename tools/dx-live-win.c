@@ -277,7 +277,7 @@ static Watched watched[1024]; static int watched_count;
 static int in_our_tick = 0; static uintptr_t rng_ptd = 0;   /* inside a ULevel::Tick of the traced level; the msvcrt thread-data block of the rand state (+0x14) */
 #define MAXCALLS 32
 #define MAXRET 64
-typedef struct { uintptr_t address; unsigned char original; char module[40]; char label[24]; int nwords, deref_count, deref_arg[3], deref_n[3], deref_off[3], gate, always, name0, namee, retname, namearg, namearg_off, ecx_n, ecx_off, span_on, span_arg, span_off, fret, fname_count, fname_arg[2], abs_count, abs_ptr[4], abs_n[4], abs_off[4], ecxobj, ecxobj_off; unsigned abs_addr[4]; char only[48]; } CallBp;
+typedef struct { uintptr_t address; unsigned char original; char module[40]; char label[24]; int nwords, deref_count, deref_arg[3], deref_n[3], deref_off[3], gate, always, name0, namee, retname, namearg, namearg_off, ecx_n, ecx_off, span_on, span_arg, span_off, fret, fname_count, fname_arg[2], abs_count, abs_ptr[4], abs_n[4], abs_off[4], ecxobj, ecxobj_off, ecxrcv, ecxrcv_off; unsigned abs_addr[4]; char only[48]; } CallBp;
 typedef struct { uintptr_t address; unsigned char original; int refs; } RetBp;
 typedef struct { int active; uintptr_t ret; unsigned esp, ecx; int call; unsigned args[16]; unsigned deref_ptr[3]; unsigned long seq; } Pending;
 static CallBp calls[MAXCALLS]; static int call_count;
@@ -345,6 +345,9 @@ static int read_config(const char *path) {
         else if (!strcmp(o, "fret")) c->fret = 1;
         else if (!strcmp(o, "fname") && c->fname_count < 2) c->fname_arg[c->fname_count++] = atoi(strtok(NULL, " \t\r\n"));
         else if (!strcmp(o, "ecxwords")) { c->ecx_n = atoi(strtok(NULL, " \t\r\n")); c->ecx_off = (int)strtol(strtok(NULL, " \t\r\n"), NULL, 0); if (c->ecx_n > 64) c->ecx_n = 64; }
+        /* `ecxrcv <off>`: at the return, the AI event receiver whose pointer is at ECX+off, as actor|event (a receiver's eventType +0x28 and its
+           eventName +0x28, eventActor +0x2c): AIProcess's firstProcess (+0x38) before CleanupEvents relinks it */
+        else if (!strcmp(o, "ecxrcv")) { c->ecxrcv = 1; c->ecxrcv_off = (int)strtol(strtok(NULL, " \t\r\n"), NULL, 0); }
         /* `abs <addr> <n>`: n dwords at an absolute address (a global: Render.dll's light-map grid) at the return; `absptr <addr> <n> <off>`:
            n dwords at *(addr)+off (the object a global points at); up to four. `ecxobj <off>`: the name of the object whose pointer is
            at ECX+off (ComputeFromActor's FLightInfo holds its light actor at +0). */
@@ -679,6 +682,11 @@ static int handle_call_event(HANDLE th, DWORD tid, uintptr_t where, int unfrozen
     if (c->namearg && c->namearg - 1 < c->nwords) { uintptr_t o = c->namearg_off < 0 ? now[c->namearg - 1] : (now[c->namearg - 1] ? read_u32(now[c->namearg - 1] + c->namearg_off) : 0); fprintf(cout, ",\"argName\":\"%s\"", object_name(o)); }   /* namearg at the return too: the Hit's Actor a MoveActor just wrote */
     if (c->retname) { char text[96]; strncpy(text, object_name(p->ecx), sizeof(text) - 1); text[sizeof(text) - 1] = 0; fprintf(cout, ",\"ecxName\":\"%s\"", text); fprintf(cout, ",\"ecxClass\":\"%s\"", object_name(read_u32(p->ecx + 0x24))); fprintf(cout, ",\"ecxIndex\":%u", read_u32(p->ecx + 0x04)); late_offer(p->ecx); }
     if (c->ecx_n) { unsigned w[64]; memset(w, 0, sizeof(w)); read_mem(p->ecx + c->ecx_off, w, 4 * c->ecx_n); fprintf(cout, ",\"ecxWords\":"); print_words(cout, w, c->ecx_n); fprintf(cout, ",\"ecxFloats\":"); print_floats(cout, w, c->ecx_n); }
+    if (c->ecxrcv) {
+      uintptr_t r = read_u32(p->ecx + c->ecxrcv_off), t = r ? read_u32(r + 0x28) : 0;
+      char who[96]; strncpy(who, r ? object_name(read_u32(r + 0x2c)) : "None", sizeof(who) - 1); who[sizeof(who) - 1] = 0;
+      fprintf(cout, ",\"ecxRcv\":\"%s|%s\"", who, t ? name_text(read_u32(t + 0x28)) : "None");
+    }
     if (c->ecxobj) fprintf(cout, ",\"ecxObj\":\"%s\"", object_name(read_u32(p->ecx + c->ecxobj_off)));
     if (c->abs_count) {
       fprintf(cout, ",\"abs\":[");
@@ -951,6 +959,19 @@ static int do_trace(const char *config) {
             uintptr_t ai_type = ai_first ? read_u32(ai_first + 0x28) : 0;
             char ai_who[96]; strncpy(ai_who, ai_first ? object_name(read_u32(ai_first + 0x2c)) : "None", sizeof(ai_who) - 1); ai_who[sizeof(ai_who) - 1] = 0;
             fprintf(out, "{\"aiFirst\":\"%s|%s\",", ai_who, ai_type ? name_text(read_u32(ai_type + 0x28)) : "None");
+            /* the frozen rows also list the whole process ring from firstProcess (a receiver's nextProcess +0x7c, bBeingDestroyed +0x30):
+               where a new receiver goes (just before firstProcess) and so which ones a budget-stopped AIProcess reaches depend on it, and
+               the replay compares Play's ring at the release with it ("aiRing": actor|event[|x for a destroyed one]) */
+            if (!released && ai_first) {
+              fprintf(out, "\"aiRing\":[");
+              uintptr_t r = ai_first; int k = 0;
+              do {
+                uintptr_t t = read_u32(r + 0x28);
+                fprintf(out, "%s\"%s|%s%s\"", k ? "," : "", object_name(read_u32(r + 0x2c)), t ? name_text(read_u32(t + 0x28)) : "None", read_u32(r + 0x30) ? "|x" : "");
+                r = read_u32(r + 0x7c); k++;
+              } while (r && r != ai_first && k < 8192);
+              fprintf(out, "],");
+            }
             fprintf(out, "\"n\":%d,\"unfrozen\":%d,\"viewport\":[%u,%u],\"tickType\":%d,\"delta\":%.9g,\"playersOnly\":%d,\"clockIn\":%.17g,\"tsIn\":%.9g,\"rngIn\":\"0x%08x\","
               "\"clockOut\":%.17g,\"tsOut\":%.9g,\"rngOut\":\"0x%08x\",\"inTick\":%u,\"usIn\":%lld,\"usOut\":%lld,\"strobeIn\":[%u,%.9g],\"strobeOut\":[%u,%.9g],\"actors\":{",
               tick, released ? unfrozen : 0, vp_x, vp_y, tick_type, delta_in, players_only_in, clock_in, ts_in, rng_in,

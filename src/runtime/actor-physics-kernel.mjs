@@ -236,6 +236,11 @@ export class ActorPhysicsHost {
         const c = context(depth);
         c.dispatch(c.actor, 'HitWall', [[nx, ny, nz], c.world(actorOf(actor))]);
       },
+      // A decoration's blocked move (fall.rs, falling.mjs `blockedBy`).
+      js_fall_blocked(depth, actor) {
+        const c = context(depth);
+        adapter(c).host.blockedBy(c.world(actorOf(actor)));
+      },
       js_fall_landed(depth, time, nx, ny, nz, actor) {
         const c = context(depth);
         adapter(c).host.landed({time, normal: [nx, ny, nz], actor: c.world(actorOf(actor))});

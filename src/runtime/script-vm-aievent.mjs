@@ -107,12 +107,27 @@ export class AiEventHost {
   destroyActor(actor) { this.x.ai_destroy_actor(handleOf(actor)); }
   /** A replay's measured input for the next AIProcess: the receiver (actor, event name) the original's firstProcess was left at
    * when its 2 ms rdtsc budget ran out (aievent.rs PROCESS_STOP); null clears it. */
-  setProcessStop(actor, event) {
+  setProcessStop(actor, event, raw = false) {
     if (!actor) { this.x.ai_set_process_stop(0, 0, 0); return; }
-    this.x.ai_set_process_stop(1, handleOf(actor), this.nid(event));
+    // mode 1: firstProcess at the tick's exit (after CleanupEvents' relink); 2: AIProcess's own at its return, the exact receiver
+    this.x.ai_set_process_stop(raw ? 2 : 1, handleOf(actor), this.nid(event));
   }
   /** The stops a replay named that the ring did not reach. */
   processStopMisses() { return this.x.ai_process_stop_misses(); }
+  /** Validation only (live-probe `aiRing`): the process ring from firstProcess, `actor|event` per receiver (`|x` a destroyed one), read from
+   * aievent.rs ai_dump's tail, to compare with the original's at the release (tools/dx-live-win.c `aiRing`). */
+  ring() {
+    if (!this.x || !this.pool) return null;
+    this.dumpAt ??= this.vm.arena.alloc(4 << 18);
+    const n = this.x.ai_dump(this.dumpAt, 1 << 18), words = new Uint32Array(this.vm.arena.memory.buffer, this.dumpAt, n);
+    let at = 5;
+    const types = words[at++];
+    for (let t = 0; t < types; t++) { const ns = words[at + 3], nr = words[at + 4]; at += 5 + ns * 71 + nr * 19; }
+    const count = words[at++], out = [];
+    for (let i = 0; i < count; i++, at += 3)
+      out.push(`${identityOfHandle(words[at])?.name ?? 'None'}|${this.spelling(words[at + 1])}${words[at + 2] ? '|x' : ''}`);
+    return out;
+  }
   /** UEventManager::Tick. */
   tick() {
     // AICanSee runs in Rust once the perception natives' field table is built (script-vm-perception.mjs ready(705)); until then, here.
