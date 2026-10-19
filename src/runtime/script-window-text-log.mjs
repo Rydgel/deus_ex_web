@@ -16,6 +16,7 @@ function updateText(W,win){
  W.native.askParentForReconfigure(win);
 }
 export function addLog(W,win,text,color){
+ if(globalThis.__gcAllocLog)globalThis.__gcAllocLog.push({tick:globalThis.__liveTick??null,window:'addLog',stack:`addLog ${JSON.stringify(text)}\n${new Error().stack}`});   // (live-acceptance.mjs play --gc-trace)
  const i=W.farray.add(win,0x178,1,20),at=row(W,win,i);
  // AddLog 0x10047721..2f zeroes the complete 0x14-byte record before it
  // constructs the FString. A slot after a timed-out prefix may still contain

@@ -47,7 +47,25 @@
  *         is read back before the tracer attaches): the Terrorists' fire kills the player, the Dying state runs to the OPEN and the level ends. Watched: the
  *         eight NSF pawns within 5,000 units of the pose (the trace of every pawn for 2,000 ticks would not fit the machine), the player and its carcass; the
  *         other ScriptedPawns are traced with their load-time fields only (live-acceptance.mjs `loadPawns`), written into Play and not compared.
- *         The stored original (2026-10-18): death at tick 652 (DeathFront), the carcass at 730, the OPEN in the render after 1930, the level's end after 1931. */
+ *         The stored original (2026-10-18): death at tick 652 (DeathFront), the carcass at 730, the OPEN in the render after 1930, the level's end after 1931.
+ *
+ * The conversation scenes (`conversation: true`, rows 5.4.3 to 5.4.7 and 5.6.6) drive the Island's conversations through the original's keys: Enter skips a
+ * speech, ArrowDown and Enter make a choice, ParseRightClick on a pawn starts a frob-only follow-up. Their trace adds the player's mouth channel and what a
+ * conversation gives and takes (live-acceptance.mjs --player-blend --inventory: the Inventory chains, skill points, credits, conPlay, first goal and image),
+ * the replay feeds the speakers' measured mouth letters, and the check also needs the player's FlagBase at the end hold equal (every flag, type, value and
+ * expiration, and the default expiration). A `watch` list names the pawns traced per tick (the conversation's speakers and their neighbours); the others are
+ * traced with their load fields only, and every AI event, object creation and stream draw of the whole level is still compared.
+ *   pG pR pX  MeetPaul at the dock: the GEP gun, the sniper rifle, the mini crossbow (each with its ammunition), the Liberty Island image, three goals.
+ *   fT fN     MeetFilben ("You can trust me.": the NanoKey and FilbenGaveKey; "I can't promise...": FilbenGaveKey false), then MeetFilben2 by frob (its branch
+ *             on FilbenGaveKey) and Filben's HarleyStartsToWander orders.
+ *   gP gN     GuntherRescued after the wall button frees Gunther: a carried pistol given to him (GuntherRespectsPlayer, GuntherAttacks: RunningTo), or none
+ *             ("First thing is to get you out of here.": GuntherRespectsPlayer false); Gunther's first-person GuntherTrappedBarks before.
+ *   gA        AllianceTrigger0 and OrdersTrigger6 touched by a landing at the button (Gunther UNATCO, WaitingFor), the button: the freed Gunther meets Terrorist18.
+ *   tC tA     MeetTerrorist with the commander: Curious (DL_LeaderNotKilled, TerroristFollowup by frob) and Aggressive (the commander attacks, then
+ *             MeetFilbenAfterStatue at Filben); both set StatueMissionComplete and run Mission01.Timer's mission-complete pass.
+ *   oV        TerroristsOverheard (Amos and Jackson, first person) from behind a wall to KnowsShipment, then MoleConvos: its KnowsShipment branch, a purchase
+ *             (credits, the Mole's Ammo10mm), BumFemaleWanders.
+ *   oT        TopTerroristsOverheard (Terrorist9 and Terrorist8, first person) from a hidden place, to its end. */
 import {execFileSync, spawn} from 'node:child_process';
 import {existsSync, mkdirSync, readFileSync, writeFileSync} from 'node:fs';
 import path from 'node:path';
@@ -61,6 +79,91 @@ const PISTOL = yaw => `20:summon DeusEx.WeaponPistol|50:set DeusEx.JCDentonMale 
 const SHOTS = ticks => ticks.map(t => `${t}:@down Enter|${t}:@up Enter`).join('|');
 // `KillAll FlyGenerator` first: the load's chance FlyGenerators (10% per fly-making decoration) removed in both programs, as row 4.2.13 does.
 const PLACE = (x, y, z, yaw, pitch = 0) => `KillAll FlyGenerator|ghost|set DeusEx.JCDentonMale Location (X=${x},Y=${y},Z=${z})|walk|set DeusEx.JCDentonMale ViewRotation (Pitch=${pitch},Yaw=${yaw},Roll=0)`;
+// A conversation's choice: `downs` ArrowDown edges ten ticks apart from tick t, then the Enter edge 20 ticks after the last (the focus starts on the first choice).
+const CHOOSE = (t, downs) => [...Array.from({length: downs}, (_, i) => `${t + 10 * i}:@down ArrowDown|${t + 10 * i}:@up ArrowDown`), `${t + 10 * downs + 20}:@down Enter|${t + 10 * downs + 20}:@up Enter`].join('|');
+// The pawns within about 4,000 units of MeetPaul's pose at the dock (the conversation's owner, the dock's bots and guard, the nearest Terrorist).
+const DOCK = ['PaulDenton0', 'SecurityBot0', 'UNATCOTroop1', 'MedicalBot3', 'MedicalBot1', 'MedicalBot0', 'Terrorist12'];
+// Filben's corner (the informant, the sitting BumFemale0 and the two nearest NSF).
+const FILBEN = ['HarleyFilben0', 'BumFemale0', 'Terrorist36', 'ThugMale0'];
+// Gunther's cell and the NSF within about 1,500 units of it.
+const GUNTHER = ['GuntherHermann0', 'Terrorist18', 'Terrorist30', 'Terrorist33', 'Terrorist2', 'Terrorist14'];
+// The commander's floor and the two floors below it (TopTerroristsOverheard's Terrorist8 and Terrorist9, TerroristsOverheard's ThugMale3 and Terrorist22).
+// Amos's floor (TerroristsOverheard's ThugMale3 and Terrorist22, the patrolling Terrorist20) and the floor above.
+const AMOS = ['ThugMale3', 'Terrorist22', 'Terrorist20', 'Terrorist8', 'Terrorist9', 'TerroristCommander0'];
+const COMMANDER = ['TerroristCommander0', 'Terrorist8', 'Terrorist9', 'ThugMale3', 'Terrorist22', 'Terrorist20', 'PaulDenton0', 'GuntherHermann0'];
+// The alternate routes and the mission (rows 5.5.x, 5.3.10): doors, locks, keys, the commander and Mission01.Timer's world change (Mission01.uc).
+const AIM = (n, yaw, pitch = 0) => `${n}:set DeusEx.JCDentonMale ViewRotation (Pitch=${pitch},Yaw=${yaw},Roll=0)`;
+// a placement typed in a hold of the scene: both programs run it between the same two ticks (the early placement's lines)
+const MOVE = (n, x, y, z, yaw, pitch = 0) => `${n}:ghost|${n}:set DeusEx.JCDentonMale Location (X=${x},Y=${y},Z=${z})|${n}:walk|${AIM(n, yaw, pitch)}`;
+// what Mission01.Timer changes once StatueMissionComplete is set: UN_maindoor opened, the StatueRuinDoors and temp_celldoor unlocked, NSFTurret01/02 and the
+// statue_lasertrap LaserTriggers destroyed, NSFCam01..03 silenced (SecurityCamera1, UN_CamSystem03, is a camera it leaves alone)
+const MISSION_DEVICES = [...['DeusExMover16', 'DeusExMover17', 'DeusExMover12', 'DeusExMover6', 'DeusExMover22', 'DeusExMover23', 'DeusExMover10'].map(n => `${n}:DeusExMover`),
+  'AutoTurret0:AutoTurret', 'AutoTurret2:AutoTurret', ...[0, 1, 2, 3, 4].map(i => `LaserTrigger${i}:LaserTrigger`),
+  ...['SecurityCamera5', 'SecurityCamera3', 'SecurityCamera7', 'SecurityCamera1'].map(n => `${n}:SecurityCamera`)];
+const MISSION_FLAGS = ['TerroristCommander_Dead', 'MS_DL_Played', 'DL_LeaderKilled_Played', 'StatueMissionComplete', 'MS_MissionComplete', 'MeetTerrorist_Played',
+  'PlayerAttackedStatueTerrorist', 'MS_DL2_Played', 'DL_LeaderNotKilled_Played', 'M01PlayerAggressive'];
+const ROUTE_SCENES = {
+  // 5.5.1 with the key: MeetFilben's trust branch as the conversations' scene fT plays it ("You can trust me.": TransferObject of Filben's ruin_key NanoKey,
+  // FilbenGaveKey; the window closes about 11 ticks after the end event, 469 in fT's capture), then the player placed at the StatueRuinDoors (dor2's pose), the
+  // key ring put in hand (ActivateBelt 0) and used with the left button (ParseLeftClick: DoFrob(Self, inHand), DeusExMover.Frob's NanoKeyRing branch: the
+  // four like-tagged movers' bLocked toggled), then the right button opens them.
+  fK: {map: '01_NYC_UNATCOIsland', ticks: 900, conversation: true, early: PLACE(1496.6, -9968.3, -250, 0), pawns: ['HarleyFilben0', 'BumFemale0'], watch: FILBEN,
+    cmds: `${SHOTS([60, 100, 140, 180, 220, 260])}|${CHOOSE(300, 0)}|${SHOTS([360, 400])}|${MOVE(560, 530.7, 29.3, -88, 57344, 5849)}|600:ActivateBelt 0|${SHOTS([660])}|720:ParseRightClick`,
+    devices: ['DeusExMover12', 'DeusExMover6', 'DeusExMover22', 'DeusExMover23'].map(n => `${n}:DeusExMover`)},
+  // 5.5.5 and 5.5.7: the commander (Health 100) killed by one GEP rocket from 300 units in front of him, outside MeetTerrorist's radius (140); a pistol's
+  // three hits made him flee in the rehearsal, out of a fixed aim. Mission01.Timer then starts DL_LeaderKilled, whose event sets StatueMissionComplete,
+  // and the next Timer changes the world. The rest of the pawns are traced with their load fields only (die1's rule).
+  kil1: {map: '01_NYC_UNATCOIsland', ticks: 1100, early: PLACE(2975.7, 324.2, 2547, 47600),
+    cmds: `20:summon DeusEx.WeaponGEPGun|50:set DeusEx.JCDentonMale ViewRotation (Pitch=-10130,Yaw=47600,Roll=0)|90:ParseRightClick|130:ActivateBelt 1|${AIM(240, 47600, -800)}|${SHOTS([300])}`,
+    watch: ['TerroristCommander0', 'Terrorist8', 'Terrorist9', 'ThugMale3', 'Terrorist22', 'UNATCOTroop3', 'UNATCOTroop7', 'UNATCOTroop8', 'GuntherHermann0', 'SecurityBot1',
+      'PaulDenton0', 'Terrorist0', 'ThugMale7'],
+    devices: [...MISSION_DEVICES, 'WeaponGEPGun0:Weapon', 'Rocket0:Projectile'], flags: MISSION_FLAGS, wholeFlags: true, options: ['--player-talk', '--stop-destroyed']},
+  // 5.3.10, the keyed and the keypad doors: NanoKey0 (KeyID UNhatchdoor) picked up with the right button (PickupNanoKey, the key ring); at the satcom hatch
+  // DeusExMover7 (KeyIDNeeded UNhatchdoor) the key ring is put in hand (ActivateBelt 0) and used with the left button (ParseLeftClick: DoFrob(Self, inHand),
+  // DeusExMover.Frob toggles bLocked), then the right button opens it; at Keypad0 the right button opens the keypad window and the keys 0 4 5 1
+  // (HUDKeypadWindow.VirtualKeyPressed, ValidateCode) trigger commvan_door, DeusExMover21. The poses: the census's approach (view trace selecting each target).
+  dor1: {map: '01_NYC_UNATCOIsland', ticks: 900, early: PLACE(-5640.5, 1177.4, -92, 32768, -10910),
+    cmds: `30:ParseRightClick|${MOVE(90, -6400, 1376, -128, 32768, -7246)}|150:ActivateBelt 0|${SHOTS([220])}|280:ParseRightClick`
+      + `|${MOVE(400, -6097.1, 1274.1, -92, 0, -5065)}|460:ParseRightClick|${['0', '4', '5', '1'].map((d, i) => `${520 + 20 * i}:@down Digit${d}|${520 + 20 * i}:@up Digit${d}`).join('|')}`,
+    devices: ['NanoKey0:Actor', 'DeusExMover7:DeusExMover', 'Keypad0:ControlPanel', 'DeusExMover21:DeusExMover']},
+  // 5.5.2 picked and 5.5.1 without the key (and 5.3.10's lockpicked doors): two Lockpicks summoned and picked up facing away at the back entrance (the second
+  // joins the first: NumCopies 2), put in hand (ActivateBelt 1); at DeusExMover2 (no key, lockStrength 0.1) the bare right button leaves it locked
+  // (DeusExMover.Frob: msgLocked), the left button picks it (ParseLeftClick: DoFrob(Self, inHand), DeusExMover.Timer), the right button opens it. Then at the
+  // StatueRuinDoors (four movers led by DeusExMover12, KeyIDNeeded ruin_key, lockStrength 0.1) the same three inputs: the four share the pick and open together
+  // (like-tagged movers). The front is last and short: its patrols shoot the player there (the rehearsal: from about 340 ticks after arrival).
+  dor2: {map: '01_NYC_UNATCOIsland', ticks: 1150, early: PLACE(7735.5, 742.5, -96, 57344),
+    cmds: `20:summon DeusEx.Lockpick|${AIM(50, 57344, -10130)}|90:ParseRightClick|100:summon DeusEx.Lockpick|140:ParseRightClick|170:ActivateBelt 1|${AIM(210, 24576, -7055)}`
+      + `|240:ParseRightClick|${SHOTS([270])}|530:ParseRightClick|${MOVE(600, 530.7, 29.3, -88, 57344, 5849)}|640:ParseRightClick|${SHOTS([680])}|950:ParseRightClick`,
+    devices: ['DeusExMover2', 'DeusExMover12', 'DeusExMover6', 'DeusExMover22', 'DeusExMover23'].map(n => `${n}:DeusExMover`)},
+  // 5.5.2 broken (and 5.3.10's breakable door): the back entrance DeusExMover2 (bBreakable, doorStrength 0.5, minDamageThreshold 50) hit by a GEP rocket from
+  // 336 units (the explosion's HurtRadius: DeusExMover.TakeDamage, doorStrength to 0, BlowItUp: fragments, bDestroyed); the MedicalBots behind it watched with
+  // every pawn. Then 5.5.1's third half: the player placed 300 units from the StatueRuinDoors and a second rocket at DeusExMover12 (bBreakable false:
+  // TakeDamage changes nothing).
+  dor3: {map: '01_NYC_UNATCOIsland', ticks: 900, early: PLACE(7947.6, 530.4, -96, 57344),
+    cmds: `20:summon DeusEx.WeaponGEPGun|${AIM(50, 57344, -10130)}|90:ParseRightClick|130:ActivateBelt 1|${AIM(240, 24576, -837)}|${SHOTS([300])}`
+      + `|${MOVE(500, 318.6, 241.4, -88, 57344)}|${SHOTS([600])}`,
+    // (the rocket and the 51 Rockchips its explosion spawns at 319, DeusExProjectile.SpawnEffects: Damage/5 tries, FRand() < 0.8, watched from their spawn:
+    // which of them hit the door during their first tick, a Fragment.HitWall and its LoudNoise)
+    devices: [...['DeusExMover2', 'DeusExMover12', 'DeusExMover6', 'DeusExMover22', 'DeusExMover23'].map(n => `${n}:DeusExMover`), 'Rocket0:Projectile',
+      ...Array.from({length: 51}, (_, i) => `Rockchip${i}:Actor`)]},
+  // 5.5.4, the water route's east end in the ruins: ControlPanel1 (UnTriggerEvent LibElectric) hacked with a Multitool from beside the arcs; first a short
+  // drop into the arcs (the three ElectricityEmitters: 'Shocked' 20 a hit; DamageTrigger1 under them: EMP 2 a touch, the player's Energy), out again, the hack
+  // (HackableDevices.Timer, HackAction: UnTrigger LibElectric turns the emitters and the trigger off), the drop again (nothing), and Button2 (Event fork) raises
+  // the fork lift DeusExMover11 (MoveTime 12). A drop from 126 units above the floor is the walk in: falling into the trigger's cylinder Touches it.
+  wat1: {map: '01_NYC_UNATCOIsland', ticks: 1300, early: PLACE(7056.7, -3326, -416, 0),
+    cmds: `20:summon DeusEx.Multitool|${AIM(50, 0, -10130)}|90:ParseRightClick|130:ActivateBelt 1|${MOVE(200, 6929, -3157.5, -290, -16384)}|${MOVE(265, 7056.7, -3326, -416, 32768, -3000)}`
+      + `|${SHOTS([320])}|${MOVE(650, 6929, -3157.5, -290, -16384)}|${MOVE(750, 7362.3, -3227.4, -416, 35499, -3823)}|800:ParseRightClick`,
+    devices: ['ElectricityEmitter0:ElectricityEmitter', 'ElectricityEmitter2:ElectricityEmitter', 'ElectricityEmitter5:ElectricityEmitter', 'DamageTrigger1:DamageTrigger',
+      'ControlPanel1:ControlPanel', 'Button2:Actor', 'DeusExMover11:DeusExMover']},
+  // 5.5.3, the airshafts around the laser trap: the player drops into the DataLinkTriggers of DL_libertyruinsairshaft (a drop from just above the cylinder is the
+  // walk in: a placement inside it Touches nothing), DataLinkTrigger19 in the room at the shaft and DataLinkTrigger20 in the shaft; the DataLink plays once
+  // (DataLinkTrigger.Touch: StartDataLinkTransmission; in Play's rehearsal from tick 64 to about 890, DL_libertyruinsairshaft_Played at 801), the second
+  // drop comes after its end, and every pawn is watched (the guards of the laser trap do not notice the player). DataLinkTrigger21 sits in a crawlspace 120
+  // units high: a standing player cannot be dropped into its cylinder, and the harness cannot hold the crouch key.
+  air1: {map: '01_NYC_UNATCOIsland', ticks: 1200, early: PLACE(2112, -675, -95, 0),
+    cmds: `${MOVE(60, 2362, -675, -8, 0)}|${MOVE(950, 3546, -1116, -129, 0)}`,
+    devices: ['DataLinkTrigger19:Actor', 'DataLinkTrigger20:Actor', 'DataLinkTrigger21:Actor'], flags: ['DL_libertyruinsairshaft_Played'], wholeFlags: true, options: ['--player-talk']},
+};
 export const SCENES = {
   cmb1: {map: '01_NYC_UNATCOIsland', ticks: 900, early: PLACE(10146.3, 685.2, -88, 40960),
     cmds: `${PISTOL(40960)}|170:set DeusEx.JCDentonMale ViewRotation (Pitch=-536,Yaw=40960,Roll=0)|${SHOTS([420, 480, 540])}`},
@@ -168,11 +271,104 @@ export const SCENES = {
   cmb7: {map: '01_NYC_UNATCOIsland', ticks: 900, early: PLACE(8951.3, 190.2, -84, 32768),
     cmds: '20:summon DeusEx.WeaponPistol|50:set DeusEx.JCDentonMale ViewRotation (Pitch=-10130,Yaw=32768,Roll=0)|90:ParseRightClick|100:summon DeusEx.MedKit|140:ParseRightClick'
       + `|170:ActivateBelt 1|200:set DeusEx.JCDentonMale ViewRotation (Pitch=-536,Yaw=0,Roll=0)|${SHOTS([300, 360])}|650:ActivateBelt 2|${SHOTS([700])}`},
+  // The Island conversations (rows 5.4.3 to 5.4.7, 5.6.6). A third-person conversation takes the keys through its window: Enter while only a speech shows
+  // skips it (ConWindowActive.VirtualKeyPressed: IK_Enter with numChoices 0 -> ConPlay.PlayNextEvent, which stops the speech and plays the next event), and
+  // with the choices shown ArrowDown moves the focus to the next ConChoiceWindow (RootWindow.VirtualKeyPressed, MoveFocusDown) and Enter activates the focused
+  // one (ConWindowActive.ButtonActivated). `pawns` are the rehearsal's printed pawns; `watch` the pawns traced per tick (the others with their load fields).
+  // MeetPaul (radius 180 around PaulDenton0, third person): cvA's pose, the conversation starts at the release; its eight speeches before the choice are
+  // skipped, the choice made, and the speeches after it skipped up to the last one, which runs out (Paul's "Interrogate the leader", then the trigger
+  // PaulWandering and the end). The choices: the sniper rifle (first), the GEP gun (second), the mini crossbow (third); each branch gives its weapon
+  // (ConEventTransferObject from Paul), then the Liberty Island image; the three goals come before the first speech.
+  pG: {map: '01_NYC_UNATCOIsland', ticks: 1150, conversation: true, early: PLACE(-2385, 8393, -256.2, 51120), pawns: ['PaulDenton0'], watch: DOCK,
+    cmds: `${SHOTS([60, 100, 140, 180, 220, 260, 300, 340])}|${CHOOSE(400, 1)}|${SHOTS([480, 520, 560, 600, 640, 680, 720])}`},
+  pR: {map: '01_NYC_UNATCOIsland', ticks: 1150, conversation: true, early: PLACE(-2385, 8393, -256.2, 51120), pawns: ['PaulDenton0'], watch: DOCK,
+    cmds: `${SHOTS([60, 100, 140, 180, 220, 260, 300, 340])}|${CHOOSE(400, 0)}|${SHOTS([470, 510, 550, 590, 630, 670, 710])}`},
+  pX: {map: '01_NYC_UNATCOIsland', ticks: 1150, conversation: true, early: PLACE(-2385, 8393, -256.2, 51120), pawns: ['PaulDenton0'], watch: DOCK,
+    cmds: `${SHOTS([60, 100, 140, 180, 220, 260, 300, 340])}|${CHOOSE(400, 2)}|${SHOTS([490, 530, 570, 610, 650, 690, 730])}`},
+  // MeetFilben (radius 60 around HarleyFilben0): the player placed 50 units west of him, facing him; six speeches skipped (the last hands over the image of
+  // the commander), the choice, the branch's speeches skipped but the last. Then MeetFilben2 (frob only, needs MeetFilben_Played) by the right button on
+  // Filben: its first event checks FilbenGaveKey. "You can trust me." (first): the NanoKey and FilbenGaveKey; "I can't promise..." (second): neither.
+  // The frob must come one second after the conversation's end (GetActiveConversation: Level.TimeSeconds - LastConEndTime < 1, set by EndConversation when
+  // ConPlay terminates) and before Filben, wandering from the end (HarleyStartsToWander), leaves the frob range. In the original the third-person window
+  // closes in about 11 ticks after the end event (the tracer's real-time window frames; fT's first capture: 469, the rehearsal 589, where the frob at 700
+  // found Filben gone), so the right button is pressed twice, 62 and 92 ticks after that (a press during the started conversation's first speech is the
+  // original's own input too).
+  fT: {map: '01_NYC_UNATCOIsland', ticks: 1200, conversation: true, early: PLACE(1496.6, -9968.3, -250, 0), pawns: ['HarleyFilben0', 'BumFemale0'], watch: FILBEN,
+    cmds: `${SHOTS([60, 100, 140, 180, 220, 260])}|${CHOOSE(300, 0)}|${SHOTS([360, 400])}|534:ParseRightClick|564:ParseRightClick|${SHOTS([600, 640, 680, 720, 760])}`},
+  fN: {map: '01_NYC_UNATCOIsland', ticks: 1250, conversation: true, early: PLACE(1496.6, -9968.3, -250, 0), pawns: ['HarleyFilben0', 'BumFemale0'], watch: FILBEN,
+    cmds: `${SHOTS([60, 100, 140, 180, 220, 260])}|${CHOOSE(300, 1)}|${SHOTS([370, 410, 450, 490, 530, 570])}|646:ParseRightClick|676:ParseRightClick|${SHOTS([710, 750, 790])}`},
+  // GuntherRescued (radius 70 around GuntherHermann0, needs GuntherFreed). A pistol summoned and picked up at the map's start (carried: ConEventCheckObject walks
+  // the Inventory; a summoned weapon's landing is a LoudNoise of radius 768, DeusExWeapon.PlayLandingSound, which near the cell brings Terrorist18), then the
+  // player placed on the floor at the cell's wall button DeusExMover8 (ghost, a SET of Location, walk: the harness cannot walk; a placement touches nothing,
+  // so AllianceTrigger0 and OrdersTrigger6, which a walk to the button crosses, are left to gA: with Gunther UNATCO the freed Gunther fights Terrorist18 and
+  // never becomes conversable). Gunther's first-person GuntherTrappedBarks (radius 580) plays at once. The button pressed with the right button (DeusExMover8
+  // TriggerOpenTimed -> Event temp_celldoor, the cell door DeusExMover10 -> guntherdoor -> FlagTrigger4 -> FlagTrigger2: GuntherFreed), then the player placed
+  // inside the radius; the radius conversation waits five seconds after the bark's end (DeusExPlayer.GetActiveConversation, lastFirstPersonConvoTime). The
+  // conversation: the goal, 150 skill points, four speeches skipped, the CheckObject chain (assault gun, stealth pistol, pistol: found), the choice "As you
+  // wish. Take my pistol." (first) -> TransferObject to Gunther -> his last speech runs out, GuntherRespectsPlayer, the trigger GuntherAttacks (OrdersTrigger0:
+  // RunningTo GuntherSpot).
+  gP: {map: '01_NYC_UNATCOIsland', ticks: 1350, conversation: true, early: 'KillAll FlyGenerator', pawns: ['GuntherHermann0', 'Terrorist18'], watch: GUNTHER,
+    cmds: '20:summon DeusEx.WeaponPistol|50:set DeusEx.JCDentonMale ViewRotation (Pitch=-10130,Yaw=58496,Roll=0)|90:ParseRightClick'
+      + '|130:ghost|130:set DeusEx.JCDentonMale Location (X=1952,Y=-1796,Z=-84.2)|130:walk|130:set DeusEx.JCDentonMale ViewRotation (Pitch=-10130,Yaw=49152,Roll=0)|200:ParseRightClick'
+      + `|400:ghost|400:set DeusEx.JCDentonMale Location (X=1885,Y=-2180,Z=-128)|400:walk|400:set DeusEx.JCDentonMale ViewRotation (Pitch=0,Yaw=49152,Roll=0)`
+      + `|${SHOTS([580, 620, 660, 700])}|${CHOOSE(740, 0)}|${SHOTS([800])}`},
+  // GuntherRescued unarmed: gP without the pistol; the CheckObject chain falls through to NothingChoice, and "First thing is to get you out of here." (second)
+  // jumps to GiveNothing: three speeches, skipped, and GuntherRespectsPlayer false, no GuntherAttacks.
+  gN: {map: '01_NYC_UNATCOIsland', ticks: 1150, conversation: true, early: 'KillAll FlyGenerator', pawns: ['GuntherHermann0', 'Terrorist18'], watch: GUNTHER,
+    cmds: '130:ghost|130:set DeusEx.JCDentonMale Location (X=1952,Y=-1796,Z=-84.2)|130:walk|130:set DeusEx.JCDentonMale ViewRotation (Pitch=-10130,Yaw=49152,Roll=0)|200:ParseRightClick'
+      + `|545:ghost|545:set DeusEx.JCDentonMale Location (X=1885,Y=-2180,Z=-128)|545:walk|545:set DeusEx.JCDentonMale ViewRotation (Pitch=0,Yaw=49152,Roll=0)`
+      + `|${SHOTS([590, 630, 670, 710])}|${CHOOSE(750, 1)}|${SHOTS([820, 860, 900, 1010])}`},
+  // Gunther's alliance and orders before the conversation (rows 5.4.5, 5.6.6): the player placed on the floor at the wall button, then at tick 20 placed again 64
+  // units higher, so that its landing sweeps into AllianceTrigger0 (bInitiallyActive, bTriggerOnceOnly: Gunther's Alliance UNATCO, NSF -1, Player +1) and
+  // OrdersTrigger6 (Orders WaitingFor) as a walk to the button does; the button pressed (GuntherFreed). With the door open the UNATCO Gunther meets Terrorist18.
+  gA: {map: '01_NYC_UNATCOIsland', ticks: 900, conversation: true, early: PLACE(1952, -1796, -84.2, 49152, -10130), pawns: ['GuntherHermann0', 'Terrorist18'], watch: GUNTHER,
+    cmds: '20:ghost|20:set DeusEx.JCDentonMale Location (X=1952,Y=-1796,Z=-20)|20:walk|20:set DeusEx.JCDentonMale ViewRotation (Pitch=-10130,Yaw=49152,Roll=0)|90:ParseRightClick'},
+  // MeetTerrorist (radius 140 around TerroristCommander0, third person): the player placed where the census walks in, 44 units west of him, facing him; the three
+  // goals completed, three speeches skipped, the choice, the branch's speeches skipped but the last. "Tell me about the shipment..." (second, Curious):
+  // PlayerAttackedStatueTerrorist false, StatueMissionComplete, the trigger DL_LeaderNotKilled; then TerroristFollowup (frob only, needs MeetTerrorist_Played)
+  // by the right button. StatueMissionComplete makes Mission01.Timer's mission-complete pass (MS_MissionComplete: every Terrorist but the commander killed,
+  // the ThugMale2s, SecurityBot3 and Gunther destroyed, Paul moved to PaulTeleport, the custody and post-mission troops entering the world, the NSF turrets
+  // and the statue's lasers destroyed) and its DataLink DL_LeaderNotKilled (MS_DL2_Played).
+  tC: {map: '01_NYC_UNATCOIsland', ticks: 1300, conversation: true, early: PLACE(2887, 38, 2539, 63000), pawns: ['TerroristCommander0', 'Terrorist8', 'Terrorist9', 'PaulDenton0'], watch: COMMANDER,
+    cmds: `${SHOTS([60, 100, 140])}|${CHOOSE(200, 1)}|${SHOTS([280, 320, 360, 400, 440])}|900:ParseRightClick|${SHOTS([960, 1000, 1040, 1080, 1120, 1180])}`},
+  // "Except send YOU back to the people..." (first, Aggressive): PlayerAttackedStatueTerrorist, the commander's last speech runs out, StatueMissionComplete, the
+  // trigger TerroristCommanderAttacks. The player is then placed at Filben, never met before: MeetFilbenAfterStatue (radius 60, needs M01PlayerMetFilben false
+  // and StatueMissionComplete) starts.
+  tA: {map: '01_NYC_UNATCOIsland', ticks: 950, conversation: true, early: PLACE(2887, 38, 2539, 63000), pawns: ['TerroristCommander0', 'HarleyFilben0', 'PaulDenton0'], watch: [...COMMANDER, 'HarleyFilben0', 'BumFemale0'],
+    cmds: `${SHOTS([60, 100, 140])}|${CHOOSE(200, 0)}|${SHOTS([260])}|600:ghost|600:set DeusEx.JCDentonMale Location (X=1496.6,Y=-9968.3,Z=-250)|600:walk|600:set DeusEx.JCDentonMale ViewRotation (Pitch=0,Yaw=0,Roll=0)|${SHOTS([660, 700, 740, 780, 820, 860])}`},
+  // TerroristsOverheard (radius 350 around ThugMale3, first person, non-interactive: Amos and Jackson, Terrorist22): the player placed 180 units from Amos behind
+  // the wall that hides it from both (no line from either eye to its head or feet; at 317 units in the open they see the player and the fight interrupts it).
+  // Its first two speeches run out (a first-person conversation takes no key) and the second sets KnowsShipment. At tick 480 the player is placed at the Mole
+  // (BumFemale0, Filben's companion), which ends the overheard conversation, and frobs her: MoleConvos checks KnowsShipment ("I've heard a little bit about
+  // the shipment" instead of "A ship?"), sets it, offers the ammunition the player's 500 credits can buy (ConEventCheckPersona: credits >= 300, 175, 50), and
+  // "I'll take the 10 mm clip for 175." (first) -> TransferObject of the Mole's Ammo10mm, M01MoleBought10mm, AddCredits -175, the trigger BumFemaleWanders.
+  oV: {map: '01_NYC_UNATCOIsland', ticks: 1300, conversation: true, early: PLACE(3109, -61, 1088, 32768), pawns: ['ThugMale3', 'Terrorist22', 'BumFemale0'], watch: [...AMOS, ...FILBEN],
+    cmds: '480:ghost|480:set DeusEx.JCDentonMale Location (X=1771,Y=-9838,Z=-250)|480:walk|480:set DeusEx.JCDentonMale ViewRotation (Pitch=-7500,Yaw=7416,Roll=0)|520:ParseRightClick'
+      + `|${SHOTS([560, 600, 640, 680, 720, 760])}|${CHOOSE(800, 0)}|${SHOTS([860])}`},
+  // TopTerroristsOverheard (radius 200 around Terrorist9, first person: Terrorist9 and Terrorist8 on the floor below the commander): the player placed 150 units
+  // away where neither sees it (the hiding test of oV); its six speeches run out, its two ConEventCheckFlags (StatueAlarmTriggered, GuntherFreed) both false:
+  // "The troops pulled back...".
+  oT: {map: '01_NYC_UNATCOIsland', ticks: 1200, conversation: true, early: PLACE(3338, 221, 2032, 32768), pawns: ['Terrorist9', 'Terrorist8', 'TerroristCommander0'], watch: COMMANDER, cmds: ''},
+  // M01PlayerAggressive (row 5.6.6): eight Terrorists killed by the player, each with DeusExPlayer.Tantalus (every health 0 and TakeDamage from the player) from
+  // a place 220 units off with a clear line (Terrorist16 from cmb5's ledge), so that Mission01.Timer's count (the Terrorists plus the carcasses JC did not
+  // kill, 29 + 1 at the load) falls below 23 and sets the flag; then the player is placed by UNATCOTroop6, whose first-person TrooperCongratulation reads it.
+  kA: {map: '01_NYC_UNATCOIsland', ticks: 700, conversation: true, early: 'KillAll FlyGenerator', pawns: ['Terrorist8', 'Terrorist9', 'UNATCOTroop6'], watch: ['UNATCOTroop6', 'Terrorist8', 'Terrorist9', 'Terrorist4', 'Terrorist27', 'Terrorist22', 'ThugMale3'],
+    cmds: [[20, 1221, -961, 799, 32768, -3632], [50, 9871, 190, -87, 32768, -2104], [80, 2126, -1330, -91, 35109, -2430], [110, 3174, -271, 1093, 32768, -2104],
+      [140, 3379, 105, 2037, 32768, -2104], [145, 3413, 182, 2037, 32768, -2104], [175, 6218, 2532, -91, 32768, -2104], [180, 6084, 2493, -91, 32768, -2104]]
+      .map(([t, x, y, z, yaw, pitch]) => `${t}:ghost|${t}:set DeusEx.JCDentonMale Location (X=${x},Y=${y},Z=${z})|${t}:walk|${t}:set DeusEx.JCDentonMale ViewRotation (Pitch=${pitch},Yaw=${yaw},Roll=0)|${t}:Tantalus`).join('|')
+      + '|360:ghost|360:set DeusEx.JCDentonMale Location (X=-4062,Y=2085,Z=-187)|360:walk|360:set DeusEx.JCDentonMale ViewRotation (Pitch=0,Yaw=32768,Roll=0)'},
+  ...ROUTE_SCENES,
 };
 export const SCENE_FLAGS = ['--no-ghost', '--perception', '--player-gear', '--player-health', '--los-flag'];
 // The device scenes add the player's eye and bob (the first-person item's placement: Inventory.RenderOverlays, CalcDrawOffset): the stored combat scenes
-// were captured without them, and their commands are kept as captured.
-const sceneFlags = scene => [...SCENE_FLAGS, ...(scene.devices || scene.view ? ['--player-view'] : [])];
+// were captured without them, and their commands are kept as captured. A scene's own `options` (--player-talk, --stop-destroyed) are added to
+// both runs too.
+// A conversation scene (`conversation: true`) also traces the player's mouth channel (--player-blend: JC's lines drive Pawn.LipSynch on blend channel 0) and
+// what a conversation gives and takes (--inventory: the Inventory chains, the player's skill points, credits, conPlay, first goal and image). The replay feeds
+// the speakers' measured mouth letters (conversation-acceptance.mjs phonemes, as the Stage 4 conversation rows do), and the capture dumps the player's
+// FlagBase at the frozen start and at the end hold (--dump-flags, tools/dump-flags-win.c), compared with Play's at the end of the replay.
+const sceneFlags = scene => [...SCENE_FLAGS, ...(scene.devices || scene.view ? ['--player-view'] : []), ...(scene.conversation ? ['--player-blend', '--inventory'] : []),
+  ...(scene.options ?? [])];
 // The replay's measured inputs beyond the trace rows: --render-history writes each pawn's LastRenderTime at the original's last frozen tick (the frames the
 // original drew at the map's start pose, before the placement, stamped Paul, SecurityBot0 and UNATCOTroop1 at the dock; the stasis gate reads them).
 const PLAY_FLAGS = ['--render-history'];
@@ -188,19 +384,58 @@ export const captureConfig = scene => [`call-ticks 1 ${scene.ticks}`, 'call-fram
   // AIProcess's own firstProcess at its return (+0x38), before CleanupEvents relinks it past receivers destroyed in the callbacks: where its 2 ms budget
   // stopped the receiver loop (the tick exit's `aiFirst` is after the relink: capture alm1, tick 361)
   'call 0x10384080 aiproc 0 always ecxrcv 0x38',
-  ...(scene.levelEnd ? ['call 0x1038fa10 settravel 4 always'] : [])];
+  ...(scene.levelEnd ? ['call 0x1038fa10 settravel 4 always'] : []),
+  // A conversation scene also records XWindow::SetVisibility (Extension.dll 0x1004c7d0; ECX the window, the bool its new visibility): which windows the HUD
+  // shows and hides when a conversation ends (tC: Play shows HUDLogDisplay at MeetTerrorist's end, where the original first draws it at TerroristFollowup's).
+  ...(scene.conversation ? ['call Extension.dll@0x1004c7d0 setvis 1 always retname'] : [])];
 export const CAPTURE_CONFIG = captureConfig({ticks: 900});
-const configFile = scene => `.work/live-acceptance/cfg/${scene.levelEnd ? 'death' : 'combat'}-${scene.ticks}.cfg`;
+const configFile = scene => `.work/live-acceptance/cfg/${scene.levelEnd ? 'death' : scene.conversation ? 'conversation' : 'combat'}-${scene.ticks}.cfg`;
 /** The original's capture command of a scene (for the doc and a recapture). */
 export const captureCommand = tag => {
   const s = SCENES[tag];
   // (--carcass-watch: the carcasses the scene spawns, bound by the tracer when they appear: tools/dx-live-win.c late-watch; --watch: the pawns watched, all
   // ScriptedPawns when absent; --device-watch Name:Class: the devices the scene is about, with their class's fields (live-acceptance.mjs DEVICE_FIELDS);
   // --wait-seconds: the tracer's time, a long scene's run to the level's end)
-  return `scripts/live-original.sh ${s.map} --tag ${tag} --ticks ${s.ticks} --delta 0.0166666675 ${sceneFlags(s).join(' ')} --registry${s.flags ? ' --dump-flags' : ''} --extra-config ${configFile(s)}`
+  return `scripts/live-original.sh ${s.map} --tag ${tag} --ticks ${s.ticks} --delta 0.0166666675 ${sceneFlags(s).join(' ')} --registry${s.flags || s.conversation || s.wholeFlags ? ' --dump-flags' : ''} --extra-config ${configFile(s)}`
     + `${s.carcasses ? ` --carcass-watch ${s.carcasses.join(',')}` : ''}${s.watch ? ` --watch ${s.watch.join(',')}` : ''}${s.devices ? ` --device-watch ${s.devices.join(',')}` : ''}`
     + `${s.levelEnd ? ` --wait-seconds ${Math.ceil(s.ticks * 0.6)}` : s.ticks > 900 ? ` --wait-seconds ${Math.ceil(600 * s.ticks / 900)}` : ''}`
     + ` --early-cmds "${s.early}" --cmds "${s.cmds}"`;
+};
+
+// The player's FlagBase at the end of a scene. The original's is flags-end<tag>.txt (tools/dump-flags-win.c at the end hold: a block per object named like
+// JCDentonMale that holds a FlagBase, `<class> <name> slot N: FlagBase 0x.. (FlagBase) defaultExpiration D`, then one line per XFlag, `flag NAME type T
+// expiration E value 0xV bucket B`: type 0 is FLAG_Bool, +0x40 the value); Play's is flags-play-end<tag>.json (live-acceptance.mjs, liveProbe({flags}):
+// {defaultExpiration, entries: [{name, value, expiration}]}, a non-bool entry with its type). Every flag must be in both, with the same type, value and
+// expiration, and the default expiration equal.
+export const parseFlagDump = text => {
+  const blocks = []; let block = null;
+  for (const line of text.split('\n')) {
+    const head = /^(\S+) (\S+) slot (\d+): FlagBase 0x[0-9a-f]+ \((\S+)\) defaultExpiration (-?\d+)/.exec(line);
+    if (head) { blocks.push(block = {cls: head[1], name: head[2], slot: Number(head[3]), defaultExpiration: Number(head[5]), flags: new Map()}); continue; }
+    const f = /^\s+flag (\S+) type (\d+) expiration (-?\d+) value 0x([0-9a-f]+)/.exec(line);
+    if (f && block) block.flags.set(f[1].toLowerCase(), {name: f[1], type: Number(f[2]), expiration: Number(f[3]), value: parseInt(f[4], 16)});
+  }
+  return blocks;
+};
+export const compareFlags = (blocks, play) => {
+  // (the live player: a JCDentonMale; a released player of an earlier load could still list a FlagBase, so the one with the most flags, then the last slot)
+  const players = blocks.filter(b => b.cls === 'JCDentonMale').sort((a, b) => b.flags.size - a.flags.size || b.slot - a.slot);
+  if (!players.length) return {problems: ['the original\'s flag dump holds no JCDentonMale FlagBase'], original: null};
+  const original = players[0], problems = [], f32 = value => { const view = new DataView(new ArrayBuffer(4)); view.setFloat32(0, value, true); return view.getUint32(0, true); };
+  if (original.defaultExpiration !== play.defaultExpiration) problems.push(`defaultExpiration original ${original.defaultExpiration}, Play ${play.defaultExpiration}`);
+  const played = new Map(play.entries.map(entry => [entry.name.toLowerCase(), entry]));
+  for (const [key, o] of original.flags) {
+    const p = played.get(key);
+    if (!p) { problems.push(`${o.name} only in the original (type ${o.type}, value ${o.value})`); continue; }
+    const type = p.type ?? 0;
+    if (type !== o.type) { problems.push(`${o.name} type original ${o.type}, Play ${type}`); continue; }
+    // (a FLAG_Name value is an FName index in the original and a name in Play: not compared; the vector and rotator types hold more than +0x40)
+    const value = type === 0 ? (p.value ? 1 : 0) : type === 3 ? f32(p.value) : type === 1 || type === 2 ? p.value >>> 0 : null;
+    if (value !== null && value !== o.value) problems.push(`${o.name} value original 0x${o.value.toString(16)}, Play 0x${value.toString(16)}`);
+    if (p.expiration !== o.expiration) problems.push(`${o.name} expiration original ${o.expiration}, Play ${p.expiration}`);
+  }
+  for (const [key, p] of played) if (!original.flags.has(key)) problems.push(`${p.name} only in Play (value ${JSON.stringify(p.value)})`);
+  return {problems, original, candidates: players.length};
 };
 
 const exec = (args, limitSeconds) => new Promise(resolve => {
@@ -245,8 +480,16 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
   const busy = () => { try { return execFileSync('pgrep', ['-f', `live-acceptance.mjs (play|compare) --map ${scene.map}`], {encoding: 'utf8'}).trim().length > 0; } catch { return false; } };
   for (let waited = 0; busy(); waited++) { if (!waited) console.log(`waiting: another replay of ${scene.map} is running`); await new Promise(resolve => setTimeout(resolve, 15000)); }
   if (compareOnly && !existsSync(path.join(dir, `play-rows-${tag}.json`))) { console.log(`FAIL ${tag}: --compare-only without a stored replay (play-rows-${tag}.json)`); process.exit(1); }
+  // A conversation's speakers: the mouth letters the original's audio update wrote (read back from the trace's blend channels; a measured host input,
+  // docs/lip-sync.md), regenerated from the stored trace as the Stage 4 conversation rows do.
+  const phonemes = path.join('.work/live-acceptance', scene.map, `phonemes-${tag}.json`);
+  if (scene.conversation && !compareOnly) {
+    const letters = await exec(['scripts/conversation-acceptance.mjs', 'phonemes', '--map', scene.map, '--tag', tag], 300);
+    if (letters.code !== 0) { console.log(letters.out.trim().split('\n').slice(-6).join('\n')); console.log(`FAIL ${tag}: the phonemes step stopped (exit ${letters.code})`); process.exit(1); }
+    console.log(`phonemes: ${letters.out.trim().split('\n').slice(-1)[0]}`);
+  }
   const play = compareOnly ? {code: 0, out: ''} : await exec(['scripts/live-acceptance.mjs', 'play', '--map', scene.map, '--seed', '1', '--tag', tag, ...sceneFlags(scene), ...PLAY_FLAGS, '--early-cmds', scene.early,
-    '--event-trace', `1:${scene.ticks}`, '--object-trace', `1:${scene.ticks}`], Math.max(1800, scene.ticks * 2));
+    ...(scene.conversation ? ['--phonemes', phonemes] : []), '--event-trace', `1:${scene.ticks}`, '--object-trace', `1:${scene.ticks}`], Math.max(1800, scene.ticks * 2));
   if (play.code !== 0) { console.log(play.out.trim().split('\n').slice(-12).join('\n')); console.log(`FAIL ${tag}: the replay stopped (exit ${play.code})`); process.exit(1); }
   // the slot model's inputs (the run's own indices, the pre-frees and where they were released)
   for (const line of play.out.split('\n')) if (line.startsWith('object trace: ') && !/registry events/.test(line)) console.log(line);
@@ -272,10 +515,12 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
   const sequence = existsSync(path.join(dir, `sound-compare-${tag}.json`)) ? JSON.parse(readFileSync(path.join(dir, `sound-compare-${tag}.json`), 'utf8')) : null;
   if (registry.code !== 0 || !sequence) problems.push(`no registry comparison (${registry.out.trim().split('\n').slice(-1)[0]})`);
   else {
+    // (a loaded Sound also by its export name: which bark or speech line was loaded, ConAudioAIBarks_896 or ConAudioMission01_558)
     const stem = cls => String(cls).replace(/\d+$/, '').toLowerCase(), {oAdds: a, pAdds: b} = sequence;
-    let i = 0; while (i < a.length && i < b.length && stem(a[i].cls) === stem(b[i].cls) && a[i].u === b[i].u) i++;
+    const same = (o, q) => stem(o.cls) === stem(q.cls) && o.u === q.u && (stem(o.cls) !== 'sound' || o.name === q.name);
+    let i = 0; while (i < a.length && i < b.length && same(a[i], b[i])) i++;
     const slots = a.filter((o, k) => b[k] && o.index !== b[k].index).length;
-    console.log(`registry: ${i} of ${a.length}/${b.length} creations equal in class and tick, in order; ${slots} take another slot`);
+    console.log(`registry: ${i} of ${a.length}/${b.length} creations equal in class and tick (a Sound in name), in order; ${slots} take another slot`);
     if (i !== a.length || i !== b.length) problems.push(`creations differ at ${i} (original ${JSON.stringify(a[i] ?? null)}, Play ${JSON.stringify(b[i] ?? null)})`);
   }
   // A scene's `flags`: the player's FlagBase at the end of the scene, the original's (--dump-flags: tools/dump-flags-win.c at the end hold, flags-end<tag>.txt)
@@ -295,6 +540,19 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
       }
     }
   }
+  // A conversation scene's (or a `wholeFlags` scene's) whole FlagBase: the player's FlagBase at the end hold against Play's at the end of the replay (the conversations' SetFlag events, the
+  // <Conversation>_Played flags ConPlay sets at the end, the mission script's own).
+  let flagNote = '';
+  if (scene.conversation || scene.wholeFlags) {
+    const originalFlags = path.join(dir, `flags-end-${tag}.txt`), playFlags = path.join(dir, `flags-play-end-${tag}.json`);
+    if (!existsSync(originalFlags) || !existsSync(playFlags)) problems.push(`no flag comparison (${[originalFlags, playFlags].filter(f => !existsSync(f)).map(f => path.basename(f)).join(', ')} absent)`);
+    else {
+      const {problems: differ, original, candidates} = compareFlags(parseFlagDump(readFileSync(originalFlags, 'utf8')), JSON.parse(readFileSync(playFlags, 'utf8')));
+      console.log(`flags at the end: the original's ${original ? `${original.name} ${original.flags.size} flags (${[...original.flags.values()].map(f => `${f.name}=${f.value}`).join(' ')})` : 'none'}${candidates > 1 ? ` (${candidates} players listed)` : ''}`);
+      if (differ.length) problems.push(`flags differ: ${differ.slice(0, 6).join('; ')}`);
+      else flagNote = `, the ${original.flags.size} flags at the end equal`;
+    }
+  }
   // The level's end: the original's (<trace>.ended, the tracer at UGameEngine::Tick's client travel) and Play's (play-level-end<tag>.json, game.mjs clientTravel).
   if (scene.levelEnd) {
     const endedFile = path.join(dir, `original-trace-${tag}.jsonl.ended`), playEnd = path.join(dir, `play-level-end-${tag}.json`);
@@ -311,5 +569,5 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
     }
   }
   if (problems.length) { console.log(`FAIL ${tag}: ${problems.join('; ')}`); process.exit(1); }
-  console.log(`PASS ${tag}: ${actors.length} actors equal for ${report.ticks} ticks, clock, stream draws, AI events and object creations equal${scene.levelEnd ? `, the level ends after tick ${report.ticks} in both` : ''}`);
+  console.log(`PASS ${tag}: ${actors.length} actors equal for ${report.ticks} ticks, clock, stream draws, AI events and object creations equal${flagNote}${scene.levelEnd ? `, the level ends after tick ${report.ticks} in both` : ''}`);
 }

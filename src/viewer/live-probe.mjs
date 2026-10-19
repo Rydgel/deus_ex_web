@@ -357,13 +357,17 @@ export function liveProbe(game, args = {}) {
     const call = { receiver: enemy, argumentCount: 6, evaluateArgument: i => args6[i] };
     return { enemy: enemy.name, destPoint: point.name, from: eye, to: end, value: execAICanSee(call, services), bDetectable: plain(runtime.readNamed(enemy, 'bDetectable')), hits };
   };
+  if (args.gcTrace) globalThis.__gcAllocLog = [];
   if (args.replay) {
     const { watch = [], ticks, hold = true, warm = 3, commands = [] } = args.replay;
     // A `late` group (live-acceptance.mjs --carcass-watch) names actors the scene spawns: each is looked up at every row until the level holds
     // it, and its rows start there (the original's tracer binds the same name at the tick exit after its AddObject, tools/dx-live-win.c late-watch).
     // `via` {name: 'Owner.field'}: an actor watched under the original's name and found in Play through its owner's object field (a turret's gun,
     // spawned by AutoTurret.PreBeginPlay: its name follows each process's session history, live-acceptance.mjs --device-watch Name:Class@Owner.field)
-    const actors = watch.map(({ names, props, late = false, via = {} }) => ({ props, late, items: names.map(name => [name, byName(via[name] ?? name)]) }));
+    // (a group that watches bDeleteMe, live-acceptance.mjs --device-watch and --stop-destroyed: a destroyed actor whose object a purge released has no more
+    // rows, its memory is not its own)
+    const actors = watch.map(({ names, props, late = false, via = {} }) => ({ props, late, released: props.includes('bDeleteMe'),
+      items: names.map(name => [name, byName(via[name] ?? name)]) }));
     for (const group of actors) for (const [name, actor] of group.items) if (!actor && !group.late) throw new Error(`liveProbe: no actor ${name}`);
     // the AI event manager's process ring as the replay begins (aievent.rs ai_dump), for live-acceptance.mjs to compare with the original's at its release
     out.aiRing = runtime.scriptVm?.aiEvents?.ring?.() ?? null;
@@ -424,7 +428,10 @@ export function liveProbe(game, args = {}) {
         if (this.index >= this.ticks.length && !typedAtEnd) return this.hold ? false : dt;
         const tick = this.ticks[this.index];
         let typed = false;
-        while (this.commands.length && this.commands[0].after <= this.index) {
+        // One command per call: the frames after it render before the next command of the hold runs (below), as the original drew frames while
+        // the next line was typed (a placement's `set Location` before its `set ViewRotation`: the frame between them stamped what the old view
+        // showed at the new place, Stage 5 oV's HarleyFilben0 at tick 481).
+        if (this.commands.length && this.commands[0].after <= this.index) {
           typed = true;
           const command = this.commands.shift(), { windowSeconds: framesBefore, ...entry } = command;
           // The window frames the original ran in this hold before the command's InputEvent (live-acceptance.mjs commandsWithStream): a window the
@@ -456,7 +463,7 @@ export function liveProbe(game, args = {}) {
           this.commandLog.push(entry);
         }
         // The original draws frames while a command is typed and the level is held (a view change stamps the LastRenderTime of what it now
-        // shows): a few frames pass here before the next tick, as in the warm-up.
+        // shows): a few frames pass here after each command, before the hold's next command or the next tick, as in the warm-up.
         if (typed || this.index >= this.ticks.length) { this.warm = 3; return false; }
         if (runtime.navTrace) runtime.navTrace.tick = this.index + 1;
         if (runtime.scriptTrace) runtime.scriptTrace.tick = this.index + 1;
@@ -498,6 +505,7 @@ export function liveProbe(game, args = {}) {
           aiManager.setProcessStop(actor, event, raw);
           this.aiStop = { misses: aiManager.processStopMisses(), unresolved: who !== 'None' && !actor };
         }
+        globalThis.__liveTick = this.index + 1;   // (the tick about to run: script-gc-push-gc.mjs labels a traced GC allocation with it)
         while (this.phonemes.length && this.phonemes[0].n <= this.index + 1) {
           const { name, letter } = this.phonemes.shift(), speaker = byName(name);
           if (speaker) runtime.writeNamed(speaker, 'nextPhoneme', letter);
@@ -574,6 +582,7 @@ export function liveProbe(game, args = {}) {
     if (runtime.touchEvents) out.touch = runtime.touchEvents.splice(0);
     if (runtime.aiEventLog) out.events = runtime.aiEventLog.splice(0);
     if (runtime.objectLog) out.objects = runtime.objectLog.splice(0);
+    if (globalThis.__gcAllocLog?.length) out.gcAllocs = globalThis.__gcAllocLog.splice(0);   // (live-acceptance.mjs play --gc-trace: UGC::PushGC's allocations)
     // the slot model's inputs so far: pre-frees released at their anchor, late or refused, those still waiting, and the model's own
     // releases of a slot it cannot name (`unattributed`) or could not take back (`rejected`)
     const model = runtime.actorLifecycle?.construction?.registry?.original;

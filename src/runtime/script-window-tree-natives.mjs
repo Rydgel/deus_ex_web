@@ -418,6 +418,7 @@ export function drawTree(W, win, canvas, debugTexture, frameTimer, hMultiplier, 
     if (c0(W.f32(win, O.clipW), 0) || c3(W.f32(win, O.clipW), 0)) return;
     if (c0(W.f32(win, O.clipH), 0) || c3(W.f32(win, O.clipH), 0)) return;
     W.canvasComputeRenderSize(canvas);
+    if (globalThis.__gcAllocLog) globalThis.__gcWindow = `${win?.name ?? win}`;   // (live-acceptance.mjs play --gc-trace)
     const saved = W.gc.push(gc);
     W.gc.setCanvas(gc, canvas);
     W.gc.setMultipliers(gc, hMultiplier, vMultiplier);

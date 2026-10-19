@@ -578,11 +578,15 @@ export function execAICanSee(call, services) {
   const a = args(call);
   const other = val(a[0]);
   if (!other) return 0;
-  const visibility = call.argumentCount > 1 ? Number(val(a[1])) : 1;
-  const bCheckVisibility = call.argumentCount > 2 ? Boolean(val(a[2])) : true;
-  const bCheckDir = call.argumentCount > 3 ? Boolean(val(a[3])) : true;
-  const bCheckCylinder = call.argumentCount > 4 ? Boolean(val(a[4])) : false;
-  const bCheckLOS = call.argumentCount > 5 ? Boolean(val(a[5])) : true;
+  // execAICanSee (Engine.dll 0x103c8270) pre-stores each slot before stepping its token: visibility 1.0f (0x3f800000), then the flags 1, 1, 0, 1.
+  // EX_Nothing (undefined here) leaves the slot, as an omitted tail does: FindBestEnemy's CheckEnemyParams (AICanSee(checkPawn, , false, false,
+  // true, true)), the order, beam and food tests skip the visibility and see with 1.0.
+  const opt = (i, fallback) => { const v = i < call.argumentCount ? val(a[i]) : undefined; return v === undefined ? fallback : v; };
+  const visibility = Number(opt(1, 1));
+  const bCheckVisibility = Boolean(opt(2, true));
+  const bCheckDir = Boolean(opt(3, true));
+  const bCheckCylinder = Boolean(opt(4, false));
+  const bCheckLOS = Boolean(opt(5, true));
   const viewer = call.receiver;
   const level = services.level(viewer);
   if (!(visibility > 0)) return 0;

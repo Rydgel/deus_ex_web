@@ -122,6 +122,10 @@ if (flag('perception')) FIELDS.push(...PERCEPTION_FIELDS);
 if (flag('los-flag')) FIELDS.push(['LOSflag', 'bLOSflag', 0x318, 'bit', 0x80000]);
 // --touching: Actor.Touching[0..3] (+0xe8..+0xf4) of every watched actor, the extras' included (the four slots BeginTouch/AddTouch fill and evict).
 if (flag('touching')) FIELDS.push(...[0, 1, 2, 3].map(i => [`Touch${i}`, 'Touching', 0xe8 + 4 * i, 'obj', 0, i]));
+// --stop-destroyed: Actor.bDeleteMe (+0x28 bit 0x80, tools/dx-live-win.c `list`) of every watched pawn too. A pawn both programs destroyed at the same tick is
+// compared up to that tick (compare), and Play's replay stops reading it once a purge released its object: afterwards neither program's memory is the pawn's
+// (the Island commander gibbed by a rocket in the routes' scene kil1).
+if (flag('stop-destroyed')) FIELDS.push(['bDeleteMe', 'bDeleteMe', 0x28, 'bit', 0x80]);
 // The player's pose, read back from the original (the placement of Play's replay): view rotation and Region.
 const PLAYER_FIELDS = FIELDS.slice(0, 10).concat([FIELDS[10]],
   [['VRot', 'ViewRotation', 0x3dc, 'i3'], ['RegZone', '$regionZone', 0xc8, 'obj'], ['RegLeaf', '$regionLeaf', 0xcc, 'i32'], ['RegNum', '$regionNum', 0xd0, 'u8'],
@@ -149,14 +153,33 @@ if (flag('player-view')) PLAYER_FIELDS.push(['EyeH', 'EyeHeight', 0x3f8, 'f'], [
   // +0x9d0 EnergyDrainTotal), applied by MaintainEnergy every 0.25 s of lastRefreshTime (+0x9f0, DeusExPlayer.MultiplayerTick, single-player too): its
   // phase at the release is the frozen frames' own (emp2: Play's drain steps came 3 ticks after the original's), written at the release like BobTime
   ['Energy', 'Energy', 0x9c4, 'f'], ['EnergyMax', 'EnergyMax', 0x9c8, 'f'], ['EDrain', 'EnergyDrain', 0x9cc, 'f'], ['EDrainTotal', 'EnergyDrainTotal', 0x9d0, 'f'],
-  ['RefreshT', 'lastRefreshTime', 0x9f0, 'f']);
+  ['RefreshT', 'lastRefreshTime', 0x9f0, 'f'],
+  // (the same two drain fields under the labels the routes captures were traced with, wat1: either trace compares its own)
+  ['EnergyDrain', 'EnergyDrain', 0x9cc, 'f'], ['DrainTotal', 'EnergyDrainTotal', 0x9d0, 'f']);
 // --player-health: the player's hit regions (Pawn.HealthHead..HealthArmRight, the linked offsets of Play's class graph): where an NPC's shots land
 // (DeusExPlayer.TakeDamage/HandleDamage) in the combat scenes of the Stage 5 gate (docs/stage-5-exit-criteria.md).
 const HIT_REGION_FIELDS = [['HHead', 'HealthHead', 1376, 'i32'], ['HTorso', 'HealthTorso', 1380, 'i32'], ['HLegL', 'HealthLegLeft', 1384, 'i32'],
   ['HLegR', 'HealthLegRight', 1388, 'i32'], ['HArmL', 'HealthArmLeft', 1392, 'i32'], ['HArmR', 'HealthArmRight', 1396, 'i32']];
 if (flag('player-health')) PLAYER_FIELDS.push(...HIT_REGION_FIELDS);
+// --player-talk: the player's DataLinkPlay (+0x9f8) and conPlay (+0x9f4): which DataLink or conversation plays (the routes' DataLinks, the mission's).
+if (flag('player-talk')) PLAYER_FIELDS.push(['DataLinkPlay', 'DataLinkPlay', 2552, 'obj'], ['conPlay', 'conPlay', 2548, 'obj']);
 // --player-blend: the player's blend channel 0 (the mouth animation Pawn.LipSynch plays while JC speaks in a conversation): BSeq0, BFrame0, BRate0, BTween0 of FIELDS.
 if (flag('player-blend')) PLAYER_FIELDS.push(...FIELDS.filter(f => ['BSeq0', 'BFrame0', 'BRate0', 'BTween0'].includes(f[0])));
+// --inventory: what a conversation gives and takes (the Stage 5 conversation scenes, docs/stage-5-exit-criteria.md): every watched pawn's and the player's
+// Inventory chain (Actor.Inventory +0xc0, then each item's own: a ConEventTransferObject's item, a weapon given to Gunther), and the player's
+// DeusExPlayer.SkillPointsAvail (ConEventAddSkillPoints), Credits, conPlay (the ConPlay a StartConversation spawns, None again at its end), FirstGoal
+// (the head of the goal list ConEventAddGoal's AddGoal prepends to) and FirstImage (the head of the DataVault images AddImage prepends to). The
+// offsets are Play's slotOf for JCDentonMale (liveProbe offsets).
+// With it, every watched pawn's and the player's Pawn.nextPhoneme (+0x588, the letter UGalaxyAudioSubsystem::Update writes from the speech it plays) and
+// lastPhoneme (+0x57c, the letter Pawn.LipSynch last tweened), FStrings (the tracer's `str`): the measured mouth letters themselves. Read off the blend
+// channel alone, a speech that starts on X (LipSynch's first letter of a speech jumps, tweentime 0, onto the MouthClosed that the last speech's end left)
+// was invisible, and the letter after it equal to the last speech's last one then tweened in the original only (Stage 5 gP, Gunther at tick 664).
+if (flag('inventory')) {
+  FIELDS.push(['InvChain', '$inventoryChain', 192, 'chain'], ['NextPh', 'nextPhoneme', 0x588, 'str'], ['LastPh', 'lastPhoneme', 0x57c, 'str']);
+  PLAYER_FIELDS.push(['InvChain', '$inventoryChain', 192, 'chain'], ['SkillPts', 'SkillPointsAvail', 2492, 'i32'], ['Credits', 'Credits', 2496, 'i32'],
+    ['ConPlay', 'conPlay', 2548, 'obj'], ['Goal', 'FirstGoal', 2620, 'obj'], ['Image', 'FirstImage', 2636, 'obj'],
+    ['NextPh', 'nextPhoneme', 0x588, 'str'], ['LastPh', 'lastPhoneme', 0x57c, 'str']);
+}
 // Load-time random state of the PawnGenerators (PigeonGenerator, SeagullGenerator, ...): PostBeginPlay draws TryTimer
 // (0.25 + FRand()*0.75) and, with bRandomCount, PoolCount from the load's stream, which the two sides do not share
 // (the original seeds the CRT with time(NULL), docs/rng.md). A generator first spawns when its TryTimer runs out,
@@ -232,6 +255,26 @@ const DEVICE_FIELDS = {
   Robot: [['EMPHitPoints', 'EMPHitPoints', 0xa2c, 'i32'], ['crazedTimer', 'crazedTimer', 0xa34, 'f'], ['sparkGen', 'sparkGen', 0xa30, 'obj'], ['HealthTorso', 'HealthTorso', 0x564, 'i32'],
     ['HealthHead', 'HealthHead', 0x560, 'i32']],   // SecurityBot0
 };
+// The routes' devices (rows 5.5.x, 5.3.10; offsets: Play's slotOf on 01_NYC_UNATCOIsland's DeusExMover12, ElectricityEmitter0, the player's FlagBase +0x890 by the
+// same lookup is tools/dump-flags-win.c's): bDeleteMe gives the tick a device is destroyed (Mission01.Timer's turrets and lasers); a door's pick in progress
+// (DeusExMover.Frob's Lockpick branch and Timer); the arcs; a Lockpick as the Multitool (both SkilledTool); a plain Actor (a Button) with the base fields.
+DEVICE_BASE.push(['bDeleteMe', 'bDeleteMe', 0x28, 'bit', 0x80]);
+DEVICE_FIELDS.DeusExMover.push(['bPickable', 'bPickable', 0x534, 'bit', 0x4], ['pickValue', 'pickValue', 0x550, 'f'], ['numPicks', 'numPicks', 0x558, 'i32'],
+  ['TicksSinceLastPick', 'TicksSinceLastPick', 0x55c, 'f'], ['TicksPerPick', 'TicksPerPick', 0x560, 'f'], ['LastTickTime', 'LastTickTime', 0x564, 'f'],
+  ['pickPlayer', 'pickPlayer', 0x568, 'obj'], ['TimeSinceReset', 'TimeSinceReset', 0x59c, 'f']);
+Object.assign(DEVICE_FIELDS, {
+  ElectricityEmitter: [['bIsOn', 'bIsOn', 0x32c, 'bit', 0x1], ['lastHitActor', 'lastHitActor', 0x358, 'obj'], ['lastDamageTime', 'lastDamageTime', 0x35c, 'f'],
+    ['lastFlickerTime', 'lastFlickerTime', 0x360, 'f']],   // ElectricityEmitter0
+  DamageTrigger: [['bIsOn', 'bIsOn', 0x35c, 'bit', 0x1], ['damagee', 'damagee', 0x358, 'obj']],   // DamageTrigger1 (the arcs' EMP floor, Tag LibElectric)
+  // a DeusExProjectile in flight (a late device: the GEP's Rocket0): DeusExProjectile.Tick's tracking (bTracking, Target, LastSeenLoc) and its range state
+  Projectile: [['bTracking', 'bTracking', 0x370, 'bit', 0x1], ['Target', 'Target', 0x374, 'obj'], ['LastSeenLoc', 'LastSeenLoc', 0x384, 'f3'], ['initDir', 'initDir', 0x344, 'f3'],
+    ['initLoc', 'initLoc', 0x364, 'f3'], ['time', 'time', 0x378, 'f'], ['speed', 'speed', 0x318, 'f'], ['MaxSpeed', 'MaxSpeed', 0x31c, 'f'], ['damagee', 'damagee', 0x354, 'obj'],
+    ['bStuck', 'bStuck', 0x340, 'bit', 0x10]],   // Rocket0
+  // a DeusExWeapon the player carries (a late device: the summoned WeaponGEPGun0): DeusExWeapon.Tick's accuracy and lock state, which ProjectileFire's aim reads
+  Weapon: [['currentAccuracy', 'currentAccuracy', 0x5f8, 'f'], ['standingTimer', 'standingTimer', 0x5f4, 'f'], ['LockMode', 'LockMode', 0x560, 'u8'],
+    ['LockTarget', 'LockTarget', 0x558, 'obj'], ['Target', 'Target', 0x55c, 'obj'], ['LockTimer', 'LockTimer', 0x550, 'f'], ['MaintainLockTimer', 'MaintainLockTimer', 0x554, 'f'],
+    ['TargetRange', 'TargetRange', 0x570, 'f'], ['ClipCount', 'ClipCount', 0x50c, 'i32'], ['bReadyToFire', 'bReadyToFire', 0x504, 'bit', 0x1], ['ShakeTimer', 'ShakeTimer', 0x5d8, 'f']],   // WeaponGEPGun0
+  Lockpick: DEVICE_FIELDS.Multitool});
 /** --device-watch "Name:Class[@Owner.field],..." -> [{name, cls, via}] (a class DEVICE_FIELDS lacks stops the run). `@Owner.field`: Play finds the actor through
  * its owner's object field, not by name: an actor a placed actor spawns at load (AutoTurret.PreBeginPlay's gun) is numbered by each process's session
  * history (MakeUniqueObjectName's class counter carries every load: the original's capture session loaded the Island once, Play's start loads it again
@@ -1153,6 +1196,8 @@ async function play() {
       // --device-watch (the original's run): a device with DEVICE_BASE and its class's fields, a pawn device with the pawn props and its class's, a late one lazily
       ...devices.map(d => ({names: [d.name], props: [...new Set([...(d.pawn ? props : DEVICE_BASE.map(f => f[1])), ...DEVICE_FIELDS[d.cls].map(f => f[1])])],
         ...(d.late ? {late: true} : {}), ...(d.via ? {via: {[d.name]: d.via}} : {})}))]}};
+    // --gc-trace first:last: the stacks of the GC objects UGC::PushGC allocates (script-gc-push-gc.mjs) during those ticks, to gc-allocs<tag>.json (a debugging aid)
+    if (option('gc-trace', null)) request.gcTrace = true;
     const started = await page.evaluate(r => window.deusExViewer.liveProbe(r), request);
     // The AI event manager's process ring at the release, Play's against the original's last frozen row (tools/dx-live-win.c `aiRing`): a new
     // receiver is linked just before firstProcess, so where a budget-stopped AIProcess (the replayed `aiFirst`) reaches depends on the ring's order.
@@ -1169,7 +1214,7 @@ async function play() {
       console.log(`object trace: the run's own indices for ${o.measured} pre-placed actors, ${o.pendingDeleted} more pending deletion and the player (${o.player}); ` +
         `${o.preFrees} pre-frees (${o.anchored} at their anchor)${o.own.length ? `, none for ${o.own.join(' ')} (Play frees it)` : ''}`);
     }
-    const touch = [], rows = [], nav = [], script = [], setup = [], commandLog = [], events = [], objects = [], sounds = [];
+    const touch = [], rows = [], nav = [], script = [], setup = [], commandLog = [], events = [], objects = [], sounds = [], gcAllocs = [];
     let stalls = 0, levelEnd = null, preFreeStats = null;
     rmSync(path.join(dir, `play-level-end${suffix}.json`), {force: true});
     // A trace that stopped at the original's level end (<trace>.ended): the replay runs on until Play's own client travel, or until it stalls.
@@ -1178,6 +1223,7 @@ async function play() {
       await frames(20);
       const taken = await page.evaluate(() => window.deusExViewer.liveProbe({take: true}));
       if (taken.debug?.length) { (globalThis.__debugRows ??= []).push(...taken.debug); } nav.push(...(taken.nav ?? [])); touch.push(...(taken.touch ?? [])); events.push(...(taken.events ?? [])); objects.push(...(taken.objects ?? [])); if (taken.preFrees) preFreeStats = taken.preFrees; sounds.push(...(taken.sounds ?? [])); script.push(...(taken.script ?? [])); setup.push(...(taken.setup ?? [])); commandLog.push(...(taken.commands ?? [])); for (const line of taken.stackLog ?? []) console.log(line);
+      if (taken.gcAllocs) gcAllocs.push(...taken.gcAllocs);
       if (taken.rows.length) { rows.push(...taken.rows); stalls = 0; }
       // the level's end (game.mjs clientTravel: an OPEN's URL browsed after the next tick): Play stops there; every row before it was taken above
       if (taken.levelEnd) { levelEnd = taken.levelEnd; break; }
@@ -1193,6 +1239,12 @@ async function play() {
     // (play-level-end<tag>.json: the tick Play's level ended after, or null; validate-stage5-live.mjs compares it with the original's <trace>.ended)
     writeFileSync(path.join(dir, `play-level-end${suffix}.json`), JSON.stringify(levelEnd));
     if (levelEnd) console.log(`the level ended after ${levelEnd.tick} replayed ticks (client travel to ${levelEnd.url}); the trace holds ${trace.length}${existsSync(`${tracePath}.ended`) ? `, the original's level ended after ${readFileSync(`${tracePath}.ended`, 'utf8').trim()}` : ''}`);
+    if (option('gc-trace', null)) {
+      const [first, last] = option('gc-trace').split(':').map(Number);
+      const allocs = gcAllocs.filter(a => a.tick >= first && a.tick <= last);
+      writeFileSync(path.join(dir, `gc-allocs${suffix}.json`), JSON.stringify(allocs, null, 1));
+      console.log(`gc trace: ${allocs.length} GC allocations in ticks ${first}..${last}`);
+    }
     const deferred = (await page.evaluate(() => window.deusExViewer.liveProbe({deferred: true}))).deferred ?? [];
     writeFileSync(path.join(dir, `deferred${suffix}.json`), JSON.stringify(deferred));
     console.log(`${deferred.length} recorded boundaries: ${deferred.slice(0, 12).join('; ')}`);
@@ -1328,14 +1380,57 @@ function compare() {
   };
   const labels = [...FIELDS, ...PLAYER_FIELDS.slice(11), ...GENERATOR_LOAD_FIELDS, ...GENERATOR_FIELDS.slice(GENERATOR_LOAD_FIELDS.length).filter(f => !FIELDS.some(g => g[0] === f[0])),
     ...CARCASS_FIELDS.filter(f => !FIELDS.some(g => g[0] === f[0])), ...DEVICE_BASE.filter(f => !FIELDS.some(g => g[0] === f[0])),
-    ...Object.values(DEVICE_FIELDS).flat()].map(f => [f[0], f[1] === '$state' ? 'State' : f[1]]).filter((f, i, all) => all.findIndex(g => g[0] === f[0] && g[1] === f[1]) === i);
+    ...Object.values(DEVICE_FIELDS).flat()].filter((f, i, all) => all.findIndex(g => g[0] === f[0]) === i)   // (a label in two groups, compared once)
+    .map(f => [f[0], f[1] === '$state' ? 'State' : f[1]]);
   // An Inventory chain is compared by its items' classes in order: the items' numbers follow each process's creation order (runtimeNumbered)
   const stems = list => Array.isArray(list) ? list.map(name => String(name).replace(/\d+$/, '').toLowerCase()) : list;
+  // A watched actor the scene destroys: once ULevel::CleanupDestroyed has released it (UObject::UnhashObject, the original's `unhash` call record with its
+  // name and index) the tracer reads freed memory at its address (Stage 5 tC: ThugMale3's StateNode name blank two ticks after Mission01's Destroy, Gunther's
+  // state frame reused as another actor's Dead), while Play reads the object it released. Its release is compared instead: the same index freed at the same u
+  // in Play's object log (objects-play<tag>.json, --object-trace), and its rows after that tick are not compared. Without both logs nothing changes.
+  // (an actor of the frozen start is matched by its index in registry-start<tag>.txt, `slot N index N ptr P Class.Name`; a later one by its name)
+  const callsFile = `${tracePath}.calls.jsonl`, objectsFile = path.join(dir, `objects-play${suffix}.json`), registryFile = path.join(dir, `registry-start${suffix}.txt`);
+  const releasedOriginal = new Map(), releasedPlay = new Map();
+  if (existsSync(callsFile) && existsSync(objectsFile) && existsSync(registryFile)) {
+    const indexOfName = new Map();
+    for (const line of readFileSync(registryFile, 'utf8').split(/\r?\n/)) {
+      const m = /^slot\s+\d+ index\s+(\d+) ptr \S+ [^.\s]+\.(\S+)$/.exec(line);
+      if (m) indexOfName.set(m[2].toLowerCase(), [...(indexOfName.get(m[2].toLowerCase()) ?? []), Number(m[1])]);
+    }
+    for (const line of readFileSync(callsFile, 'utf8').split('\n')) {
+      if (!line.includes('"fn":"unhash"') || !line.includes('"ev":"ret"')) continue;
+      const record = JSON.parse(line), key = record.ecxName?.toLowerCase();
+      if (!key || releasedOriginal.has(key)) continue;
+      // an object of the frozen start by its registry index; one spawned later (the GEP's Rocket0 in the routes capture kil1) by its name's first release
+      const atStart = indexOfName.get(key);
+      if (!atStart || atStart.includes(record.ecxIndex)) releasedOriginal.set(key, {u: record.u, index: record.ecxIndex});
+    }
+    // every free of an index, in order: a slot is reused (GObjAvailable is LIFO), so the free that releases a late-bound actor (kil1's Rocket0, spawned at 300)
+    // can follow an earlier occupant's free of the same slot (tick 66)
+    for (const event of JSON.parse(readFileSync(objectsFile, 'utf8'))) if (event.ev === 'free') releasedPlay.set(event.index, [...releasedPlay.get(event.index) ?? [], event.u]);
+  }
+  // Play's release of the actor the original released at `released`: the free of the same index at the same u, else the first after the actor's first row
+  const playRelease = (name, released) => {
+    const frees = releasedPlay.get(released.index) ?? [];
+    if (frees.includes(released.u)) return released.u;
+    const first = rows.findIndex(row => row.actors[name]) + 1;
+    return frees.find(u => u >= first) ?? null;
+  };
   for (const name of names) {
     const entry = report.actors[name] = {firstDifference: null, fields: {}};
     const end = name.startsWith('@') ? Infinity : endOf(name);
     if (end !== Infinity) entry.endsAt = end;
+    const released = releasedOriginal.get(name.toLowerCase());
+    if (released) {
+      entry.released = released.u;
+      const playU = playRelease(name, released);
+      if (playU !== released.u) {
+        entry.fields.Released = {tick: Math.min(released.u, playU ?? Infinity), original: released.u, play: playU, count: 1};
+        entry.firstDifference = entry.fields.Released.tick;
+      }
+    }
     for (let i = 0; i < rows.length && i + 1 < end; i++) {
+      if (released && i + 1 > released.u) break;   // (the object no longer exists in the original)
       const o = rows[i].actors[name], p = played.rows[i]?.actors[name];
       if (late.includes(name) && Boolean(o) !== Boolean(p) && played.rows[i]) {
         const field = entry.fields.Present ??= {tick: i + 1, original: Boolean(o), play: Boolean(p), count: 0};
@@ -1357,6 +1452,9 @@ function compare() {
         field.count++;
         if (entry.firstDifference === null || i + 1 < entry.firstDifference) entry.firstDifference = i + 1;
       }
+      // An actor both programs destroyed at this tick (bDeleteMe: a --device-watch device, a pawn with --stop-destroyed) is compared up to it: afterwards
+      // its memory belongs to the purge.
+      if (o.bDeleteMe === 1 && p.bDeleteMe === 1) { entry.destroyedAt = i + 1; break; }
     }
   }
   writeFileSync(path.join(dir, 'report.json'), JSON.stringify(report, null, 1));
@@ -1367,7 +1465,7 @@ function compare() {
   for (const [name, entry] of Object.entries(report.actors)) {
     const fields = Object.entries(entry.fields).sort((a, b) => a[1].tick - b[1].tick).slice(0, 4)
       .map(([label, f]) => `${label}@${f.tick}: ${fmt(f.original)} vs ${fmt(f.play)}`).join(' | ');
-    console.log(`${name.padEnd(18)} ${entry.firstDifference === null ? `equal for ${rows.length} ticks` : `first difference at tick ${entry.firstDifference}`}  ${fields}`);
+    console.log(`${name.padEnd(18)} ${entry.firstDifference === null ? `equal for ${entry.destroyedAt ? `${entry.destroyedAt} ticks (destroyed there in both)` : `${rows.length} ticks`}` : `first difference at tick ${entry.firstDifference}`}  ${fields}`);
   }
 }
 

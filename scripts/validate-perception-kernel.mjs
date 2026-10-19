@@ -373,9 +373,9 @@ function objectArgument(o) {
   wr32(LOCALS + at, o.handle);
   return {words: [K.LOCAL_OBJECT, at], value: o};
 }
-function boolArgument(allowJs = true) {
+function boolArgument(allowJs = true, jsValues = [true, false, 0, 1, '', 'x', undefined, null, NaN]) {
   if (allowJs && chance(0.25)) {
-    const v = pick([true, false, 0, 1, '', 'x', undefined, null, NaN]);
+    const v = pick(jsValues);
     return {words: [K.JS_BOOL, node(() => v)], value: v};
   }
   const v = chance(0.5);
@@ -665,7 +665,9 @@ function aiCanSeeCase() {
     if (i === 0) args.push(chance(0.03) ? {nothing: true, value: undefined} : objectArgument(chance(0.04) ? pick([null, undefined]) : other));
     else if (world.reachVisibility) args.push(i === 1 ? {words: [K.LIT_FLOAT, 0x3f800000], value: 1} : {words: [K.LIT_BOOL, i === 3 ? 0 : 1], value: i !== 3});
     else if (i === 1) args.push(floatArgument());
-    else args.push(i !== 4 && chance(0.7) ? {words: [K.LIT_BOOL, 1], value: true} : boolArgument());
+    // (A flag is never a JavaScript leaf's undefined: execAICanSee reads undefined as EX_Nothing, the exec thunk's pre-stored default, while
+    // the leaf's bool conversion makes it false; the original's argument expressions always have a value.)
+    else args.push(i !== 4 && chance(0.7) ? {words: [K.LIT_BOOL, 1], value: true} : boolArgument(true, [true, false, 0, 1, '', 'x', null, NaN]));
   }
   const {words, self} = callWords(K.AI_CAN_SEE, 705, args, viewer);
   const before = snapshot(), check = chance(0.2);
