@@ -711,10 +711,18 @@ fn process() {
     m().ref_processing += 1;
     let next_slot = (m().current_slot + 1) & 15;
     let mut r = m().first_process;
+    let start = r;
     let mut visited = 0u32;
     // The original stops once its 2 ms rdtsc budget is spent (below); a replay names where it stopped.
     let stop = unsafe { core::mem::replace(&mut *addr_of_mut!(PROCESS_STOP), [0; 3]) };
     let mut stopped = stop[0] == 0;
+    // The replay reads the original's firstProcess at the tick's exit, after CleanupEvents moved it past the receivers destroyed during the
+    // tick: when the start itself was destroyed (its callback changed its actor's state, which cleared the callback) a whole ring visited
+    // leaves firstProcess at the next live receiver. A stop at the first live receiver after the start is that case as well as a budget
+    // spent on the start alone; the ring is then visited whole (Stage 5 gA, tick 487: Terrorist30's alarm, then its LoudNoise receiver
+    // delivered in the original's tick, its HandleLoudNoise clearing the alarm callback; firstProcess Terrorist30|Distress at the exit).
+    let mut live_after_start = 0u32;
+    let mut deferred = false;
     while r != 0 {
         let mut worked = false;
         if rcv(r).destroyed == 0 {
@@ -723,6 +731,9 @@ fn process() {
             }
             if rcv(r).destroyed == 0 {
                 worked = process_receiver(r);
+                if r != start {
+                    live_after_start += 1;
+                }
             }
         }
         visited += 1;
@@ -736,12 +747,18 @@ fn process() {
         // tick's exit. So the replayed stop is the first live receiver after one that did work; a recorded receiver reached only
         // through destroyed ones after receivers without work is the relink of a whole lap (Stage 5 capture las1, tick 139).
         // (mode 2, AIProcess's own firstProcess at its return: the exact receiver; mode 1, the tick exit's: after CleanupEvents' relink)
-        if stop[0] != 0 && worked && r != 0 && (if stop[0] == 2 { exact_matches(r, stop) } else { first_live_matches(r, stop) }) {
+        // In mode 1 a match right after the start alone (no live receiver after it processed) is also the whole lap that CleanupEvents
+        // relinked past a start its own callback destroyed (above, gA tick 487): the lap goes on, and a later match is not taken.
+        if stop[0] != 0 && !deferred && worked && r != 0 && (if stop[0] == 2 { exact_matches(r, stop) } else { first_live_matches(r, stop) }) {
+            if stop[0] != 2 && live_after_start == 0 {
+                deferred = true;
+                continue;
+            }
             stopped = true;
             break;
         }
     }
-    if !stopped && !(if stop[0] == 2 { exact_matches(m().first_process, stop) } else { first_live_matches(m().first_process, stop) }) {
+    if !stopped && !deferred && !(if stop[0] == 2 { exact_matches(m().first_process, stop) } else { first_live_matches(m().first_process, stop) }) {
         unsafe { *addr_of_mut!(PROCESS_STOP_MISSES) += 1 };
     }
     m().current_slot = next_slot;

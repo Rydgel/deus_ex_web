@@ -3,6 +3,7 @@ import { scriptGetStateName } from '../runtime/script-state-queries.mjs';
 import { createNavTrace } from '../runtime/nav-trace.mjs';
 import { execAICanSee } from '../runtime/script-pawn-perception.mjs';
 import { setTouchTrace } from '../runtime/actor-touch.mjs';
+import { hudLogClock } from './view-probe.mjs';
 
 /** Validation only (scripts/live-acceptance.mjs, docs/visual-acceptance.md
  * "Live scenes"): the simulation side of the live-scene comparison. It
@@ -371,6 +372,12 @@ export function liveProbe(game, args = {}) {
     for (const group of actors) for (const [name, actor] of group.items) if (!actor && !group.late) throw new Error(`liveProbe: no actor ${name}`);
     // the AI event manager's process ring as the replay begins (aievent.rs ai_dump), for live-acceptance.mjs to compare with the original's at its release
     out.aiRing = runtime.scriptVm?.aiEvents?.ring?.() ?? null;
+    // The frozen phase's window hold (view-probe.mjs windowHold, live-acceptance.mjs --frozen-frames) ends here: the replayed ticks bring
+    // their own window frames (windowSeconds), the first one the frames the original ran after its last frozen-phase line.
+    game.windowHold = false;
+    // (a diagnostic: the HUD message log's clock as the frozen phase left it, HUDLogDisplay.lastLogMsg against its logTimeout: a line logged in the
+    // frozen phase, a `ghost`'s, is still waiting while lastLogMsg is under the timeout)
+    out.hudLog = hudLogClock(game);
     const state = game.liveReplay = {
       ticks, hold, warm, index: 0, rows: [], cursor: 0, current: null, preFrees: args.objectTrace?.pending ?? null,
       // the level's end: {tick, url, ...} when UGameEngine::Tick's client travel (game.mjs clientTravel) left the level after that many replayed ticks
@@ -453,7 +460,18 @@ export function liveProbe(game, args = {}) {
             // `@down CODE` / `@up CODE`: a key edge (KeyboardEvent.code) through the binding path, as the original's WM_KEYDOWN/WM_KEYUP
             const edge = /^@(down|up) (\S+)$/.exec(command.text);
             if (edge) entry.output = plain(game.inputKey(edge[2], edge[1] === 'down'));
-            else {
+            // The original types a line as keys (ad/tools/dxinput.c consoleLine: T, ten Backspaces, the characters as WM_CHAR, Enter), and
+            // XInputExt::Process (0x1002d0b0) offers every key to the root window before any binding. A window that takes the keys (a third-person
+            // conversation's ConWindowActive: VirtualKeyPressed returns True for every key and plays the next event on Enter) gets T, so the
+            // console never opens and the line never runs: its Backspaces and Enter reach that window, and its characters no typing line (Stage 5
+            // fN: the frob fan's lines typed during MeetFilben2, whose releases the original's InputEvent returned as handled).
+            else if (game.windowKey('KeyT', true)) {
+              game.windowKey('KeyT', false);
+              for (let i = 0; i < 10; i++) { game.windowKey('Backspace', true); game.windowKey('Backspace', false); }
+              game.windowKey('Enter', true); game.windowKey('Enter', false);
+              entry.output = 'the keys went to the window that holds them';
+            } else {
+              game.windowKey('KeyT', false);
               const consoleCommands = game.doors.scriptRuntime.windowHost?.consoleCommands;
               if (!consoleCommands) throw new Error('no console command chain');
               entry.output = consoleCommands.consoleCommand(player, command.text);

@@ -56,8 +56,8 @@
  * expiration, and the default expiration). A `watch` list names the pawns traced per tick (the conversation's speakers and their neighbours); the others are
  * traced with their load fields only, and every AI event, object creation and stream draw of the whole level is still compared.
  *   pG pR pX  MeetPaul at the dock: the GEP gun, the sniper rifle, the mini crossbow (each with its ammunition), the Liberty Island image, three goals.
- *   fT fN     MeetFilben ("You can trust me.": the NanoKey and FilbenGaveKey; "I can't promise...": FilbenGaveKey false), then MeetFilben2 by frob (its branch
- *             on FilbenGaveKey) and Filben's HarleyStartsToWander orders.
+ *   fT fM fN  MeetFilben ("You can trust me.": the NanoKey and FilbenGaveKey; "I can't promise...": FilbenGaveKey false), then MeetFilben2 by frob (its branch
+ *             on FilbenGaveKey; fM and fN frob in a fan of views) and Filben's HarleyStartsToWander orders.
  *   gP gN     GuntherRescued after the wall button frees Gunther: a carried pistol given to him (GuntherRespectsPlayer, GuntherAttacks: RunningTo), or none
  *             ("First thing is to get you out of here.": GuntherRespectsPlayer false); Gunther's first-person GuntherTrappedBarks before.
  *   gA        AllianceTrigger0 and OrdersTrigger6 touched by a landing at the button (Gunther UNATCO, WaitingFor), the button: the freed Gunther meets Terrorist18.
@@ -65,7 +65,8 @@
  *             MeetFilbenAfterStatue at Filben); both set StatueMissionComplete and run Mission01.Timer's mission-complete pass.
  *   oV        TerroristsOverheard (Amos and Jackson, first person) from behind a wall to KnowsShipment, then MoleConvos: its KnowsShipment branch, a purchase
  *             (credits, the Mole's Ammo10mm), BumFemaleWanders.
- *   oT        TopTerroristsOverheard (Terrorist9 and Terrorist8, first person) from a hidden place, to its end. */
+ *   oT        TopTerroristsOverheard (Terrorist9 and Terrorist8, first person) from a hidden place, to its end.
+ *   kB        eight Terrorists killed (Tantalus) until Mission01.Timer sets M01PlayerAggressive, then UNATCOTroop6's TrooperCongratulation reads it. */
 import {execFileSync, spawn} from 'node:child_process';
 import {existsSync, mkdirSync, readFileSync, writeFileSync} from 'node:fs';
 import path from 'node:path';
@@ -81,6 +82,9 @@ const SHOTS = ticks => ticks.map(t => `${t}:@down Enter|${t}:@up Enter`).join('|
 const PLACE = (x, y, z, yaw, pitch = 0) => `KillAll FlyGenerator|ghost|set DeusEx.JCDentonMale Location (X=${x},Y=${y},Z=${z})|walk|set DeusEx.JCDentonMale ViewRotation (Pitch=${pitch},Yaw=${yaw},Roll=0)`;
 // A conversation's choice: `downs` ArrowDown edges ten ticks apart from tick t, then the Enter edge 20 ticks after the last (the focus starts on the first choice).
 const CHOOSE = (t, downs) => [...Array.from({length: downs}, (_, i) => `${t + 10 * i}:@down ArrowDown|${t + 10 * i}:@up ArrowDown`), `${t + 10 * downs + 20}:@down Enter|${t + 10 * downs + 20}:@up Enter`].join('|');
+// A frob fan for a pawn that walks away: eight view yaws around `yaw` (0, -4500, +4500, ... units, pitch -3500 at a standing pawn's chest 30 to 100 units
+// off), each followed 7 ticks later by the right button (DeusExPlayer.HighlightCenterObject traces for the frob target every 0.1 s), from tick t.
+const FROB_FAN = (t, yaw) => [0, -4500, 4500, -9000, 9000, -13500, 13500, 0].map((d, k) => `${t + 8 * k}:set DeusEx.JCDentonMale ViewRotation (Pitch=-3500,Yaw=${(yaw + d + 65536) % 65536},Roll=0)|${t + 8 * k + 7}:ParseRightClick`).join('|');
 // The pawns within about 4,000 units of MeetPaul's pose at the dock (the conversation's owner, the dock's bots and guard, the nearest Terrorist).
 const DOCK = ['PaulDenton0', 'SecurityBot0', 'UNATCOTroop1', 'MedicalBot3', 'MedicalBot1', 'MedicalBot0', 'Terrorist12'];
 // Filben's corner (the informant, the sitting BumFemale0 and the two nearest NSF).
@@ -295,8 +299,14 @@ export const SCENES = {
   // original's own input too).
   fT: {map: '01_NYC_UNATCOIsland', ticks: 1200, conversation: true, early: PLACE(1496.6, -9968.3, -250, 0), pawns: ['HarleyFilben0', 'BumFemale0'], watch: FILBEN,
     cmds: `${SHOTS([60, 100, 140, 180, 220, 260])}|${CHOOSE(300, 0)}|${SHOTS([360, 400])}|534:ParseRightClick|564:ParseRightClick|${SHOTS([600, 640, 680, 720, 760])}`},
-  fN: {map: '01_NYC_UNATCOIsland', ticks: 1250, conversation: true, early: PLACE(1496.6, -9968.3, -250, 0), pawns: ['HarleyFilben0', 'BumFemale0'], watch: FILBEN,
-    cmds: `${SHOTS([60, 100, 140, 180, 220, 260])}|${CHOOSE(300, 1)}|${SHOTS([370, 410, 450, 490, 530, 570])}|646:ParseRightClick|676:ParseRightClick|${SHOTS([710, 750, 790])}`},
+  // fT's inputs to MeetFilben's end (the original's conPlay clears at 469 in both captures of fT), then a frob fan from the end of the one-second guard
+  // (529): Filben wanders off at once (HarleyStartsToWander) on a path the load's stream chooses (fT's two captures: east, still in range at 596;
+  // south-east, out of the frob line at 505), so one view rarely finds him. MeetFilben2's GaveKey branch, its last speech run out.
+  fM: {map: '01_NYC_UNATCOIsland', ticks: 1250, conversation: true, early: PLACE(1496.6, -9968.3, -250, 0), pawns: ['HarleyFilben0', 'BumFemale0'], watch: FILBEN,
+    cmds: `${SHOTS([60, 100, 140, 180, 220, 260])}|${CHOOSE(300, 0)}|${SHOTS([360, 400])}|${FROB_FAN(531, 0)}|${SHOTS([620, 660, 700, 740, 780])}`},
+  // fN: "I can't promise..." (second), the branch's speeches skipped, then the same fan after its end: MeetFilben2's branch without the key.
+  fN: {map: '01_NYC_UNATCOIsland', ticks: 1300, conversation: true, early: PLACE(1496.6, -9968.3, -250, 0), pawns: ['HarleyFilben0', 'BumFemale0'], watch: FILBEN,
+    cmds: `${SHOTS([60, 100, 140, 180, 220, 260])}|${CHOOSE(300, 1)}|${SHOTS([370, 410, 450, 490, 530, 570])}|${FROB_FAN(643, 0)}|${SHOTS([720, 760, 800])}`},
   // GuntherRescued (radius 70 around GuntherHermann0, needs GuntherFreed). A pistol summoned and picked up at the map's start (carried: ConEventCheckObject walks
   // the Inventory; a summoned weapon's landing is a LoudNoise of radius 768, DeusExWeapon.PlayLandingSound, which near the cell brings Terrorist18), then the
   // player placed on the floor at the cell's wall button DeusExMover8 (ghost, a SET of Location, walk: the harness cannot walk; a placement touches nothing,
@@ -329,12 +339,24 @@ export const SCENES = {
   // by the right button. StatueMissionComplete makes Mission01.Timer's mission-complete pass (MS_MissionComplete: every Terrorist but the commander killed,
   // the ThugMale2s, SecurityBot3 and Gunther destroyed, Paul moved to PaulTeleport, the custody and post-mission troops entering the world, the NSF turrets
   // and the statue's lasers destroyed) and its DataLink DL_LeaderNotKilled (MS_DL2_Played).
-  tC: {map: '01_NYC_UNATCOIsland', ticks: 1300, conversation: true, early: PLACE(2887, 38, 2539, 63000), pawns: ['TerroristCommander0', 'Terrorist8', 'Terrorist9', 'PaulDenton0'], watch: COMMANDER,
+  tC: {map: '01_NYC_UNATCOIsland', ticks: 1300, conversation: true, windowVisibility: true, early: PLACE(2887, 38, 2539, 63000), pawns: ['TerroristCommander0', 'Terrorist8', 'Terrorist9', 'PaulDenton0'], watch: COMMANDER,
     cmds: `${SHOTS([60, 100, 140])}|${CHOOSE(200, 1)}|${SHOTS([280, 320, 360, 400, 440])}|900:ParseRightClick|${SHOTS([960, 1000, 1040, 1080, 1120, 1180])}`},
   // "Except send YOU back to the people..." (first, Aggressive): PlayerAttackedStatueTerrorist, the commander's last speech runs out, StatueMissionComplete, the
   // trigger TerroristCommanderAttacks. The player is then placed at Filben, never met before: MeetFilbenAfterStatue (radius 60, needs M01PlayerMetFilben false
-  // and StatueMissionComplete) starts.
-  tA: {map: '01_NYC_UNATCOIsland', ticks: 950, conversation: true, early: PLACE(2887, 38, 2539, 63000), pawns: ['TerroristCommander0', 'HarleyFilben0', 'PaulDenton0'], watch: [...COMMANDER, 'HarleyFilben0', 'BumFemale0'],
+  // and StatueMissionComplete) starts. The frozen phase leaves the player on cmb5's ledge, out of every conversation's radius and every NSF pawn's view, and
+  // the placement at the commander is typed in the hold after tick 100: the frozen phase's `ghost` line ("You feel ethereal") waits in the hidden log
+  // (ShowHud False), and HUDLogDisplay.Tick times it out after the log timeout (3 s) unless a third-person conversation pauses it. The original's frozen
+  // phase gives it the window time of the typed lines (at least the capture's 2.4 s of sleeps after `ghost`, then 1.21 s at the release in the first capture),
+  // which the tracer did not record, and Play's frozen phase gives it its own few frames: with the conversation at tick 14, Play still showed the line at
+  // MeetTerrorist's end (379: HUDLogDisplay's first draw, four GCs, the original's at 600). From tick 100 on, both run the hold's traced frames.
+  // (Captures now trace the frozen phase's frames, --frozen-frames: tF is tA's first design, the placement in the frozen phase, for that.)
+  tA: {map: '01_NYC_UNATCOIsland', ticks: 1050, conversation: true, early: PLACE(1221, -961, 799, 32768, -3632), pawns: ['TerroristCommander0', 'HarleyFilben0', 'PaulDenton0'], watch: [...COMMANDER, 'HarleyFilben0', 'BumFemale0'],
+    cmds: `100:ghost|100:set DeusEx.JCDentonMale Location (X=2887,Y=38,Z=2539)|100:walk|100:set DeusEx.JCDentonMale ViewRotation (Pitch=0,Yaw=63000,Roll=0)|${SHOTS([160, 200, 240])}|${CHOOSE(300, 0)}|${SHOTS([360])}|700:ghost|700:set DeusEx.JCDentonMale Location (X=1496.6,Y=-9968.3,Z=-250)|700:walk|700:set DeusEx.JCDentonMale ViewRotation (Pitch=0,Yaw=0,Roll=0)|${SHOTS([760, 800, 840, 880, 920, 960])}`},
+  // tA's first design: the player placed at the commander in the frozen phase, so MeetTerrorist starts at tick 14 and its Aggressive branch logs nothing while
+  // the frozen phase's `ghost` lines wait in the hidden log. Whether HUDLogDisplay times them out before the conversation pauses it is decided by the window
+  // time of the frozen phase, which the capture traces (--frozen-frames: the frames around each typed line, frozen-lines-tF.json) and the replay ticks Play's
+  // windows with (docs/stage-5-exit-criteria.md "The frozen phase's window frames"); the first capture of this design failed on that alone (four GCs).
+  tF: {map: '01_NYC_UNATCOIsland', ticks: 950, conversation: true, early: PLACE(2887, 38, 2539, 63000), pawns: ['TerroristCommander0', 'HarleyFilben0', 'PaulDenton0'], watch: [...COMMANDER, 'HarleyFilben0', 'BumFemale0'],
     cmds: `${SHOTS([60, 100, 140])}|${CHOOSE(200, 0)}|${SHOTS([260])}|600:ghost|600:set DeusEx.JCDentonMale Location (X=1496.6,Y=-9968.3,Z=-250)|600:walk|600:set DeusEx.JCDentonMale ViewRotation (Pitch=0,Yaw=0,Roll=0)|${SHOTS([660, 700, 740, 780, 820, 860])}`},
   // TerroristsOverheard (radius 350 around ThugMale3, first person, non-interactive: Amos and Jackson, Terrorist22): the player placed 180 units from Amos behind
   // the wall that hides it from both (no line from either eye to its head or feet; at 317 units in the open they see the player and the fight interrupts it).
@@ -351,11 +373,15 @@ export const SCENES = {
   oT: {map: '01_NYC_UNATCOIsland', ticks: 1200, conversation: true, early: PLACE(3338, 221, 2032, 32768), pawns: ['Terrorist9', 'Terrorist8', 'TerroristCommander0'], watch: COMMANDER, cmds: ''},
   // M01PlayerAggressive (row 5.6.6): eight Terrorists killed by the player, each with DeusExPlayer.Tantalus (every health 0 and TakeDamage from the player) from
   // a place 220 units off with a clear line (Terrorist16 from cmb5's ledge), so that Mission01.Timer's count (the Terrorists plus the carcasses JC did not
-  // kill, 29 + 1 at the load) falls below 23 and sets the flag; then the player is placed by UNATCOTroop6, whose first-person TrooperCongratulation reads it.
-  kA: {map: '01_NYC_UNATCOIsland', ticks: 700, conversation: true, early: 'KillAll FlyGenerator', pawns: ['Terrorist8', 'Terrorist9', 'UNATCOTroop6'], watch: ['UNATCOTroop6', 'Terrorist8', 'Terrorist9', 'Terrorist4', 'Terrorist27', 'Terrorist22', 'ThugMale3'],
+  // kill, 29 + 1 at the load) falls below 23 and sets the flag; six ticks after the last kill the player is placed back at the map's start, then by
+  // UNATCOTroop6, whose first-person TrooperCongratulation (radius 250) reads the flag ("Good shootin', sir", its JustTerrorists branch). The stored
+  // capture (2026-10-18) does not reach it: the kill at 110 made no carcass (seven, the count stays at 23, no flag), and the placement at the trooper
+  // killed the player at once in both programs, as it had in a first capture (kA) that stayed at the last kill site. It passes as a comparison only.
+  kB: {map: '01_NYC_UNATCOIsland', ticks: 700, conversation: true, early: 'KillAll FlyGenerator', pawns: ['Terrorist8', 'Terrorist9', 'UNATCOTroop6'], watch: ['UNATCOTroop6', 'Terrorist8', 'Terrorist9', 'Terrorist4', 'Terrorist27', 'Terrorist22', 'ThugMale3'],
     cmds: [[20, 1221, -961, 799, 32768, -3632], [50, 9871, 190, -87, 32768, -2104], [80, 2126, -1330, -91, 35109, -2430], [110, 3174, -271, 1093, 32768, -2104],
       [140, 3379, 105, 2037, 32768, -2104], [145, 3413, 182, 2037, 32768, -2104], [175, 6218, 2532, -91, 32768, -2104], [180, 6084, 2493, -91, 32768, -2104]]
       .map(([t, x, y, z, yaw, pitch]) => `${t}:ghost|${t}:set DeusEx.JCDentonMale Location (X=${x},Y=${y},Z=${z})|${t}:walk|${t}:set DeusEx.JCDentonMale ViewRotation (Pitch=${pitch},Yaw=${yaw},Roll=0)|${t}:Tantalus`).join('|')
+      + '|186:ghost|186:set DeusEx.JCDentonMale Location (X=-4760.6,Y=10430.8,Z=-256.2)|186:walk|186:set DeusEx.JCDentonMale ViewRotation (Pitch=0,Yaw=58496,Roll=0)'
       + '|360:ghost|360:set DeusEx.JCDentonMale Location (X=-4062,Y=2085,Z=-187)|360:walk|360:set DeusEx.JCDentonMale ViewRotation (Pitch=0,Yaw=32768,Roll=0)'},
   ...ROUTE_SCENES,
 };
@@ -374,31 +400,35 @@ const sceneFlags = scene => [...SCENE_FLAGS, ...(scene.devices || scene.view ? [
 const PLAY_FLAGS = ['--render-history'];
 // The tracer's breakpoints of the captures (tools/dx-live-win.c `call`, docs/object-index-captures.md): the registry (AddObject, UnhashObject), the key
 // edges' stream state (UEngine::InputEvent), the AI event manager (AISendEvent, AIStartEvent, AIEndEvent, AIClearEvent, the AIEvent callback) and the
-// window system's frame deltas (Extension RootTick).
+// window system's frame deltas (Extension RootTick). The key edges and the frame deltas are also `frozen`: the capture's tracer attaches before the
+// frozen phase's console lines are typed (live-acceptance.mjs --frozen-frames) and traces those two from there, so the replay ticks Play's windows
+// with the frames the original ran around each line (docs/stage-5-exit-criteria.md "The frozen phase's window frames").
 // A levelEnd scene also records UGameEngine::SetClientTravel (body 0x1038fa10; its four arguments: the viewport, the URL, bItems, TravelType): when the OPEN
 // was typed, between which two ticks (`u`, inTick 0: the render after tick u).
 export const captureConfig = scene => [`call-ticks 1 ${scene.ticks}`, 'call-frames', 'call 0x10157830 addobj 1 always retname', 'call 0x10157760 unhash 1 always retname',
-  'call 0x103814e0 inputevent 4 always', 'call 0x10382c60 aisend 5 always name0 fname 1', 'call 0x10382fe0 aistart 5 always name0 fname 1',
+  'call 0x103814e0 inputevent 4 always frozen', 'call 0x10382c60 aisend 5 always name0 fname 1', 'call 0x10382fe0 aistart 5 always name0 fname 1',
   'call 0x103831e0 aiend 3 always name0 fname 1', 'call 0x103832c0 aiclear 2 always name0 fname 1',
-  'call 0x10384980 aievent 5 always name0 fname 1 fname 4 namearg 3 0 deref 3 5 0', 'call Extension.dll@0x1003be90 roottick 1 always',
+  'call 0x10384980 aievent 5 always name0 fname 1 fname 4 namearg 3 0 deref 3 5 0', 'call Extension.dll@0x1003be90 roottick 1 always frozen',
   // AIProcess's own firstProcess at its return (+0x38), before CleanupEvents relinks it past receivers destroyed in the callbacks: where its 2 ms budget
   // stopped the receiver loop (the tick exit's `aiFirst` is after the relink: capture alm1, tick 361)
   'call 0x10384080 aiproc 0 always ecxrcv 0x38',
   ...(scene.levelEnd ? ['call 0x1038fa10 settravel 4 always'] : []),
-  // A conversation scene also records XWindow::SetVisibility (Extension.dll 0x1004c7d0; ECX the window, the bool its new visibility): which windows the HUD
-  // shows and hides when a conversation ends (tC: Play shows HUDLogDisplay at MeetTerrorist's end, where the original first draws it at TerroristFollowup's).
-  ...(scene.conversation ? ['call Extension.dll@0x1004c7d0 setvis 1 always retname'] : [])];
+  // A scene with `windowVisibility` also records XWindow::SetVisibility (Extension.dll 0x1004c7d0; ECX the window, the bool its new visibility): which windows
+  // the HUD shows and hides (tC: Play shows HUDLogDisplay at MeetTerrorist's end, where the original first draws it at TerroristFollowup's). The HUD calls it
+  // for three windows every frame, which slows the traced game to about 0.5 s a tick.
+  ...(scene.windowVisibility ? ['call Extension.dll@0x1004c7d0 setvis 1 always retname'] : [])];
 export const CAPTURE_CONFIG = captureConfig({ticks: 900});
-const configFile = scene => `.work/live-acceptance/cfg/${scene.levelEnd ? 'death' : scene.conversation ? 'conversation' : 'combat'}-${scene.ticks}.cfg`;
+// (`-f`: the config with the `frozen` calls; other checkouts write the plain names)
+const configFile = scene => `.work/live-acceptance/cfg/${scene.levelEnd ? 'death' : scene.windowVisibility ? 'windows' : 'combat'}-${scene.ticks}-f.cfg`;
 /** The original's capture command of a scene (for the doc and a recapture). */
 export const captureCommand = tag => {
   const s = SCENES[tag];
   // (--carcass-watch: the carcasses the scene spawns, bound by the tracer when they appear: tools/dx-live-win.c late-watch; --watch: the pawns watched, all
   // ScriptedPawns when absent; --device-watch Name:Class: the devices the scene is about, with their class's fields (live-acceptance.mjs DEVICE_FIELDS);
   // --wait-seconds: the tracer's time, a long scene's run to the level's end)
-  return `scripts/live-original.sh ${s.map} --tag ${tag} --ticks ${s.ticks} --delta 0.0166666675 ${sceneFlags(s).join(' ')} --registry${s.flags || s.conversation || s.wholeFlags ? ' --dump-flags' : ''} --extra-config ${configFile(s)}`
+  return `scripts/live-original.sh ${s.map} --tag ${tag} --ticks ${s.ticks} --delta 0.0166666675 ${sceneFlags(s).join(' ')} --registry${s.flags || s.conversation || s.wholeFlags ? ' --dump-flags' : ''} --frozen-frames --extra-config ${configFile(s)}`
     + `${s.carcasses ? ` --carcass-watch ${s.carcasses.join(',')}` : ''}${s.watch ? ` --watch ${s.watch.join(',')}` : ''}${s.devices ? ` --device-watch ${s.devices.join(',')}` : ''}`
-    + `${s.levelEnd ? ` --wait-seconds ${Math.ceil(s.ticks * 0.6)}` : s.ticks > 900 ? ` --wait-seconds ${Math.ceil(600 * s.ticks / 900)}` : ''}`
+    + `${s.levelEnd || s.conversation ? ` --wait-seconds ${Math.ceil(s.ticks * (s.windowVisibility ? 1.2 : 0.8))}` : s.ticks > 900 ? ` --wait-seconds ${Math.ceil(600 * s.ticks / 900)}` : ''}`
     + ` --early-cmds "${s.early}" --cmds "${s.cmds}"`;
 };
 
@@ -491,8 +521,9 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
   const play = compareOnly ? {code: 0, out: ''} : await exec(['scripts/live-acceptance.mjs', 'play', '--map', scene.map, '--seed', '1', '--tag', tag, ...sceneFlags(scene), ...PLAY_FLAGS, '--early-cmds', scene.early,
     ...(scene.conversation ? ['--phonemes', phonemes] : []), '--event-trace', `1:${scene.ticks}`, '--object-trace', `1:${scene.ticks}`], Math.max(1800, scene.ticks * 2));
   if (play.code !== 0) { console.log(play.out.trim().split('\n').slice(-12).join('\n')); console.log(`FAIL ${tag}: the replay stopped (exit ${play.code})`); process.exit(1); }
-  // the slot model's inputs (the run's own indices, the pre-frees and where they were released)
-  for (const line of play.out.split('\n')) if (line.startsWith('object trace: ') && !/registry events/.test(line)) console.log(line);
+  // the slot model's inputs (the run's own indices, the pre-frees and where they were released), and the frozen phase's window frames (a capture with
+  // --frozen-frames: how many the replay ticked around the typed lines and before tick 1)
+  for (const line of play.out.split('\n')) if ((line.startsWith('object trace: ') && !/registry events/.test(line)) || line.startsWith('frozen phase: ') || /window frames around them/.test(line)) console.log(line);
   const compare = await exec(['scripts/live-acceptance.mjs', 'compare', '--map', scene.map, '--tag', tag, ...sceneFlags(scene)], 600);
   console.log(compare.out.trim());
   // the scene's own report (report-<tag>.json): another checkout's replay of the same map writes the untagged report.json in the shared .work
