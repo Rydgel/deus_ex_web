@@ -1194,7 +1194,11 @@ async function play() {
     // measured input handed to Play with that command (the n-th `@down`/`@up` of a hold takes the n-th press/release record of that hold).
     const commandsWithStream = () => {
       // (an `@ctrlshot NAME` is the original's screenshot of a held tick: it changes no state, so the replay skips it)
-      const list = (existsSync(path.join(dir, `commands${suffix}.json`)) ? JSON.parse(readFileSync(path.join(dir, `commands${suffix}.json`), 'utf8')) : []).filter(c => !/^@ctrlshot /.test(c.text));
+      // In the order the original typed them: the tracer holds at the sorted ticks (`pause-at`) and types each hold's lines in list order, while
+      // live-probe runs the list as a queue; a --cmds list written out of tick order (kC's parks at 80 and 186 after the 180 kill) left the lines
+      // behind a later tick's waiting (a stable sort keeps a hold's own order).
+      const list = (existsSync(path.join(dir, `commands${suffix}.json`)) ? JSON.parse(readFileSync(path.join(dir, `commands${suffix}.json`), 'utf8')) : [])
+        .filter(c => !/^@ctrlshot /.test(c.text)).sort((a, b) => a.after - b.after);
       const callsFile = `${tracePath}.calls.jsonl`;
       if (!existsSync(callsFile)) return list;
       const edges = new Map();
