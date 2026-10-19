@@ -66,7 +66,8 @@
  *   oV        TerroristsOverheard (Amos and Jackson, first person) from behind a wall to KnowsShipment, then MoleConvos: its KnowsShipment branch, a purchase
  *             (credits, the Mole's Ammo10mm), BumFemaleWanders.
  *   oT        TopTerroristsOverheard (Terrorist9 and Terrorist8, first person) from a hidden place, to its end.
- *   kB        eight Terrorists killed (Tantalus) until Mission01.Timer sets M01PlayerAggressive, then UNATCOTroop6's TrooperCongratulation reads it. */
+ *   kB        eight Terrorists killed (Tantalus) until Mission01.Timer sets M01PlayerAggressive, then UNATCOTroop6's TrooperCongratulation reads it.
+ *   kC        kB redesigned for its two measured causes: Terrorist18 killed at its load place before StartUp lets it move, the trooper placement inside the world. */
 import {spawn} from 'node:child_process';
 import {existsSync, mkdirSync, readFileSync, writeFileSync} from 'node:fs';
 import path from 'node:path';
@@ -176,6 +177,21 @@ export const SCENES = {
     cmds: '130:ghost|130:set DeusEx.JCDentonMale Location (X=1952,Y=-1796,Z=-84.2)|130:walk|130:set DeusEx.JCDentonMale ViewRotation (Pitch=-10130,Yaw=49152,Roll=0)|200:ParseRightClick'
       + `|545:ghost|545:set DeusEx.JCDentonMale Location (X=1885,Y=-2180,Z=-128)|545:walk|545:set DeusEx.JCDentonMale ViewRotation (Pitch=0,Yaw=49152,Roll=0)`
       + `|${SHOTS([590, 630, 670, 710])}|${CHOOSE(750, 1)}|${SHOTS([820, 860, 900, 1010])}`},
+  // GuntherRescued's other give choices (row 5.4.5): gP's inputs with the stealth pistol (gS), the assault gun (gU) or the combat knife (gK) summoned and carried
+  // instead of the pistol. The CheckObject chain (assault gun, stealth pistol, pistol, knife) offers the first one carried, "As you wish. Take my ..." (first),
+  // its TransferObject to Gunther, GiveSpeech, GuntherRespectsPlayer and GuntherAttacks.
+  ...Object.fromEntries([['gS', 'WeaponStealthPistol'], ['gU', 'WeaponAssaultGun'], ['gK', 'WeaponCombatKnife']].map(([tag, weapon]) => [tag, {map: '01_NYC_UNATCOIsland', ticks: 1350,
+    conversation: true, early: 'KillAll FlyGenerator', pawns: ['GuntherHermann0', 'Terrorist18'], watch: GUNTHER,
+    cmds: `20:summon DeusEx.${weapon}|50:set DeusEx.JCDentonMale ViewRotation (Pitch=-10130,Yaw=58496,Roll=0)|90:ParseRightClick`
+      + '|130:ghost|130:set DeusEx.JCDentonMale Location (X=1952,Y=-1796,Z=-84.2)|130:walk|130:set DeusEx.JCDentonMale ViewRotation (Pitch=-10130,Yaw=49152,Roll=0)|200:ParseRightClick'
+      + `|400:ghost|400:set DeusEx.JCDentonMale Location (X=1885,Y=-2180,Z=-128)|400:walk|400:set DeusEx.JCDentonMale ViewRotation (Pitch=0,Yaw=49152,Roll=0)`
+      + `|${SHOTS([580, 620, 660, 700])}|${CHOOSE(740, 0)}|${SHOTS([800])}`}])),
+  // NothingChoice's first answer (row 5.4.5): gN's inputs with "Wish I could help, but I'm not very well armed." (first) -> GiveNothingNicely: Gunther's one
+  // speech runs out, GuntherRespectsPlayer true and GuntherAttacks, as a give does, without a transfer.
+  gW: {map: '01_NYC_UNATCOIsland', ticks: 1350, conversation: true, early: 'KillAll FlyGenerator', pawns: ['GuntherHermann0', 'Terrorist18'], watch: GUNTHER,
+    cmds: '130:ghost|130:set DeusEx.JCDentonMale Location (X=1952,Y=-1796,Z=-84.2)|130:walk|130:set DeusEx.JCDentonMale ViewRotation (Pitch=-10130,Yaw=49152,Roll=0)|200:ParseRightClick'
+      + `|545:ghost|545:set DeusEx.JCDentonMale Location (X=1885,Y=-2180,Z=-128)|545:walk|545:set DeusEx.JCDentonMale ViewRotation (Pitch=0,Yaw=49152,Roll=0)`
+      + `|${SHOTS([590, 630, 670, 710])}|${CHOOSE(750, 0)}|${SHOTS([820])}`},
   // Gunther's alliance and orders before the conversation (rows 5.4.5, 5.6.6): the player placed on the floor at the wall button, then at tick 20 placed again 64
   // units higher, so that its landing sweeps into AllianceTrigger0 (bInitiallyActive, bTriggerOnceOnly: Gunther's Alliance UNATCO, NSF -1, Player +1) and
   // OrdersTrigger6 (Orders WaitingFor) as a walk to the button does; the button pressed (GuntherFreed). With the door open the UNATCO Gunther meets Terrorist18.
@@ -216,14 +232,33 @@ export const SCENES = {
   // a place 220 units off with a clear line (Terrorist16 from cmb5's ledge), so that Mission01.Timer's count (the Terrorists plus the carcasses JC did not
   // kill, 29 + 1 at the load) falls below 23 and sets the flag; six ticks after the last kill the player is placed back at the map's start, then by
   // UNATCOTroop6, whose first-person TrooperCongratulation (radius 250) reads the flag ("Good shootin', sir", its JustTerrorists branch). The stored
-  // capture (2026-10-18) does not reach it: the kill at 110 made no carcass (seven, the count stays at 23, no flag), and the placement at the trooper
-  // killed the player at once in both programs, as it had in a first capture (kA) that stayed at the last kill site. It passes as a comparison only.
+  // capture (2026-10-18) does not reach it: the Tantalus at 80 hit nothing (Terrorist18 was not on the line; seven carcasses, the count stays at 23, no
+  // flag), and the placement at the trooper, outside the world, killed the player at once in both programs, as it had in a first capture (kA) that made all
+  // eight carcasses and set the flag. It passes as a comparison only; kC is its redesign.
   kB: {map: '01_NYC_UNATCOIsland', ticks: 700, conversation: true, early: 'KillAll FlyGenerator', pawns: ['Terrorist8', 'Terrorist9', 'UNATCOTroop6'], watch: ['UNATCOTroop6', 'Terrorist8', 'Terrorist9', 'Terrorist4', 'Terrorist27', 'Terrorist22', 'ThugMale3'],
     cmds: [[20, 1221, -961, 799, 32768, -3632], [50, 9871, 190, -87, 32768, -2104], [80, 2126, -1330, -91, 35109, -2430], [110, 3174, -271, 1093, 32768, -2104],
       [140, 3379, 105, 2037, 32768, -2104], [145, 3413, 182, 2037, 32768, -2104], [175, 6218, 2532, -91, 32768, -2104], [180, 6084, 2493, -91, 32768, -2104]]
       .map(([t, x, y, z, yaw, pitch]) => `${t}:ghost|${t}:set DeusEx.JCDentonMale Location (X=${x},Y=${y},Z=${z})|${t}:walk|${t}:set DeusEx.JCDentonMale ViewRotation (Pitch=${pitch},Yaw=${yaw},Roll=0)|${t}:Tantalus`).join('|')
       + '|186:ghost|186:set DeusEx.JCDentonMale Location (X=-4760.6,Y=10430.8,Z=-256.2)|186:walk|186:set DeusEx.JCDentonMale ViewRotation (Pitch=0,Yaw=58496,Roll=0)'
       + '|360:ghost|360:set DeusEx.JCDentonMale Location (X=-4062,Y=2085,Z=-187)|360:walk|360:set DeusEx.JCDentonMale ViewRotation (Pitch=0,Yaw=32768,Roll=0)'},
+  // kB's two causes, measured on its stored capture and kA's: (1) the kill at tick 80 hit nothing in kB (no death cry, no Distress from Terrorist18, whose
+  // footstep LoudNoises go on at 85, 124, 162...): Terrorist18 (Sitting orders) leaves its load place for a seat once StartUp's Sleep(FRand()+0.2) ends, on a
+  // path the stream chooses, and the line aimed at kA's tick-80 place missed it; the other seven victims made their carcasses in both captures (98 to 253),
+  // the last ones after the player had left (a Dying pawn sets bStasis False). (2) kB's placement at the trooper (-4062, 2085, -187) lies outside the world
+  // (the trace's player Region: zone 0, leaf -1, at 361; Play's PointRegion agrees): Pawn.FellOutOfWorld (Health -1, PHYS_None, Died 'Fell').
+  // kC: Terrorist18 killed at tick 3 at its load place (1906.3, -1329.9, -96.3) from 220 units east, before the 0.2 s minimum of StartUp's Sleep can move
+  // it (an unrendered pawn in StartUp follows its orders only when the Sleep ends; the frozen phase leaves the player at the map start, 12,000 units off),
+  // then kB's other seven kills at kB's ticks, the player parked at the map start at 80 (in kB it went to Terrorist18's place) and at 186; at 360, after
+  // the last carcass (kB: 253) and Mission01.Timer's next count, placed on the office floor 160 units north of UNATCOTroop6's seat ((-4262.5, 1945.2,
+  // -199.9) from 359 on in kB's trace), facing it: inside TrooperCongratulation's 250 (DeusExPlayer.CheckConversationInvokeRadius: int VSize <= 250) and
+  // its height check, with the flag already set (bDisplayOnce: it plays once, so the flag must come first).
+  kC: {map: '01_NYC_UNATCOIsland', ticks: 800, conversation: true, early: 'KillAll FlyGenerator', pawns: ['Terrorist18', 'Terrorist16', 'UNATCOTroop6'],
+    watch: ['UNATCOTroop6', 'Terrorist18', 'Terrorist16', 'Terrorist8', 'Terrorist9', 'Terrorist4', 'Terrorist27', 'Terrorist22', 'Terrorist0'],
+    cmds: [[3, 2126.3, -1329.9, -91, 32768, -2120], [20, 1221, -961, 799, 32768, -3632], [50, 9871, 190, -87, 32768, -2104], [110, 3174, -271, 1093, 32768, -2104],
+      [140, 3379, 105, 2037, 32768, -2104], [145, 3413, 182, 2037, 32768, -2104], [175, 6218, 2532, -91, 32768, -2104], [180, 6084, 2493, -91, 32768, -2104]]
+      .map(([t, x, y, z, yaw, pitch]) => `${t}:ghost|${t}:set DeusEx.JCDentonMale Location (X=${x},Y=${y},Z=${z})|${t}:walk|${t}:set DeusEx.JCDentonMale ViewRotation (Pitch=${pitch},Yaw=${yaw},Roll=0)|${t}:Tantalus`).join('|')
+      + [80, 186].map(t => `|${t}:ghost|${t}:set DeusEx.JCDentonMale Location (X=-4760.6,Y=10430.8,Z=-256.2)|${t}:walk|${t}:set DeusEx.JCDentonMale ViewRotation (Pitch=0,Yaw=58496,Roll=0)`).join('')
+      + '|360:ghost|360:set DeusEx.JCDentonMale Location (X=-4262.5,Y=2105.2,Z=-191)|360:walk|360:set DeusEx.JCDentonMale ViewRotation (Pitch=0,Yaw=49152,Roll=0)'},
 };
 export const SCENE_FLAGS = ['--no-ghost', '--perception', '--player-gear', '--player-health', '--los-flag'];
 // A conversation scene (`conversation: true`) also traces the player's mouth channel (--player-blend: JC's lines drive Pawn.LipSynch on blend channel 0) and

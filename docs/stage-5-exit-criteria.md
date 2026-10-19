@@ -565,7 +565,8 @@ event, every object creation (a loaded `Sound` now also by its export name: whic
 | `tA` | MeetTerrorist, Aggressive (the commander attacks), then MeetFilbenAfterStatue at Filben; the player waits on `cmb5`'s ledge and is placed at the commander at tick 100 | 1050 | PASS: 26 actors, 1,684 AI events, 1,404 creations; 7 flags (a first capture placed in the frozen phase: below) |
 | `oV` | TerroristsOverheard (Amos and Jackson, first person, from behind a wall) to `KnowsShipment`, then MoleConvos: its KnowsShipment branch, the 10 mm clip bought (175 credits), `BumFemaleWanders` | 1300 | PASS: 26 actors, 1,883 AI events, 1,307 creations; 7 flags (after fix 3) |
 | `oT` | TopTerroristsOverheard (Terrorist9 and Terrorist8, first person) from a hidden place | 1200 | PASS: 24 actors, 1,701 AI events, 1,061 creations; 1 flag |
-| `kB` | eight Terrorists killed (`Tantalus`) for Mission01.Timer's `M01PlayerAggressive`, then the player placed at UNATCOTroop6 for TrooperCongratulation | 700 | PASS as a comparison: 23 actors, 884 AI events, 1,065 creations, no flag in either program. Seven victims became carcasses: the kill at 110 (`Terrorist22`'s spot) made none, where `kA`'s made one 19 ticks later (why is not verified; the player left after 30 ticks), so the count stayed at 23. The placement at (-4062, 2085, -187) killed the player at once in both (Health -1, every region intact) |
+| `kB` | eight Terrorists killed (`Tantalus`) for Mission01.Timer's `M01PlayerAggressive`, then the player placed at UNATCOTroop6 for TrooperCongratulation | 700 | PASS as a comparison: 23 actors, 884 AI events, 1,065 creations, no flag in either program. The `Tantalus` at 80 hit nothing: `Terrorist18` was not on its line (no death cry or `Distress` from it; its footsteps go on), so seven carcasses and the count stayed at 23. The placement at (-4062, 2085, -187) lies outside the world and killed the player at once in both (below) |
+| `kC` | `kB` redesigned (2026-10-19): `Terrorist18` killed at tick 3 at its load place, the other seven at `kB`'s ticks, the player parked at the map start, then placed at (-4262.5, 2105.2, -191), 160 units north of UNATCOTroop6's seat: TrooperCongratulation's JustTerrorists branch ("Good shootin', sir.") | 800 | PASS: 25 actors, 1,358 AI events, 1,138 creations; 2 flags (`M01PlayerAggressive`, `TrooperCongratulation_Played`). The original: eight carcasses (52 to 253), the conversation 367 to 636 (after fix 8 below) |
 
 **What the original does that the scenes had to follow** (DeusEx.u source, each confirmed by a capture):
 
@@ -589,8 +590,22 @@ event, every object creation (a loaded `Sound` now also by its export name: whic
   first drew it at 600. `tA` now places the player at the commander in a hold after tick 100, whose window frames are traced and replayed. In the other
   scenes the original also draws the log at the conversation's end (`pG` 986, `pR` 976, `fT` 469, `gP` 1192: their conversations give the player something),
   or neither program does (`tC` at 717: with the release's 2.39 s frame the line times out before MeetTerrorist in Play too).
-* A first `kA` capture (eight `Tantalus` kills, then the player left at the last kill site) had the player killed by the Terrorists there before tick 361, so TrooperCongratulation
-  never started; `kB` moves the player away six ticks after the last kill.
+* `M01PlayerAggressive` (`kA`, `kB`, `kC`, measured 2026-10-19 on the stored traces). Mission01.Timer counts every `Terrorist` actor, a Dying one too, plus the carcasses the
+  player did not kill (29 and the placed `TerroristCarcass0` at the load), so all eight victims must have become carcasses (`count < 23`). A Dying pawn sets `bStasis` False
+  and finishes its death animation unseen: carcasses came up to 67 ticks after the player had left their victim (`kB`'s `Terrorist4`: left at 186, carcass at 253). `kA` made all eight (98 to 253) and set the
+  flag. In `kB` the kill at tick 80 hit nothing: `Terrorist18` has Sitting orders, and once StartUp's `Sleep(FRand()+0.2)` ends it walks to a seat on a path the stream
+  chooses, so the line aimed where `kA` found it at tick 80 missed it (no death cry or `Distress` from it, its footstep `LoudNoise`s go on at 85, 124, 162...). The
+  placement at the trooper, (-4062, 2085, -187), is outside the world: the player's `Region` reads zone 0, leaf -1 at tick 361 in both captures (Play's `PointRegion`
+  agrees), and `Pawn.FellOutOfWorld` sets Health -1, `PHYS_None` and calls `Died('Fell')`. In `kA` the player had stood unharmed at the last kill site until that
+  placement (the earlier reading, a death by the Terrorists there, was wrong). The headless rehearsal does not reproduce this death (its placement keeps the player
+  walking; the replay's does not), so a candidate spot is checked with `PointRegion` over the player's whole cylinder.
+* `kC` follows both. A pawn in StartUp (`ScriptedPawn.uc` `auto state StartUp`) stays at its load place until `Sleep(FRand()+0.2)` ends (12 ticks at least)
+  or the player renders it (its `Tick` then calls `FollowOrders`); the frozen phase leaves the player at the map start, so `Terrorist18` is killed in the hold
+  after tick 3, from 220 units east with a clear line (Play's `FastTrace`; its death cry and `Distress` at tick 3, its carcass at 52). The trooper (Sitting
+  orders) walks to its seat from tick 68 and rests at (-4262.5, 1945.2, -199.9) from 292; the placement 160 units north is in zone 8 over the whole cylinder,
+  inside the radius (`CheckConversationInvokeRadius`: the int `VSize` against `Max(16, 250)`) and the height check, and comes after the flag
+  (TrooperCongratulation is `bDisplayOnce`: a first play before the flag would take the other branch for good). The flag's tick is not traced; the
+  rehearsal set it at 301, and the original's conversation began at 367 on the JustTerrorists line (`ConAudioMission01_382`).
 
 **What the replays found in Play** (each fixed; every stored scene was rerun after the last):
 
@@ -616,6 +631,11 @@ event, every object creation (a loaded `Sound` now also by its export name: whic
    original's `InputEvent` returned all of the line's releases as handled from tick 667 to 682, while MeetFilben2 played (the frob fan's lines typed after
    the frob that started it). Play ran every typed line through the console command chain. The replay now offers the line's T to Play's root window first
    (`game.windowKey`); a window that takes it gets the line's Backspaces and Enter instead, and the line is not run (`live-probe.mjs`).
+8. **The order of the typed lines** (`kC`, the harness). The tracer holds at the sorted ticks (`pause-at`) and types each hold's lines in list order, while
+   `live-probe.mjs` runs the command list as a queue. `kC`'s list names its parks at 80 and 186 after the kill at 180, so Play's first replay left the
+   player at `Terrorist0`'s place from tick 81 (every actor's `DistanceFromPlayer` differed there). The replay now takes the stored lines in the order
+   the original typed them (`live-acceptance.mjs` commandsWithStream: a stable sort by tick). Of the 74 stored command lists (every map), only `kC`'s
+   is out of tick order, so no other replay changes.
 
 **Checks rerun for the `AICanSee` fix and the portrait's registry model** (2026-10-18, the Mac): the stored Island scenes `cmb1` to `cmb7`, `die1`, `pG`, `pR`, `fT`, `gP`, `oV`,
 `gA` and `tC` pass, as do the six Stage 4 rows that replay live traces (4.1.5, 4.1.6, 4.1.7, 4.2.13, 4.3.6, 4.5.5), the unit tests (652), `validate-perception-kernel` (12,000
@@ -625,10 +645,10 @@ mutations), `validate-event-manager` and `validate-gm-trench-play-anim`, and the
 **Checks rerun for the typed-line delivery** (fix 7, 2026-10-18, the Mac): the gate's 21 proof replays above (every stored Island scene), and the six Stage 4 rows that
 replay live traces (4.1.5, 4.1.6, 4.1.7, 4.2.13, 4.3.6, 4.5.5).
 
-**What stays uncaptured** (named in the rows' `weak` and `need`): `M01PlayerAggressive`'s effect, TrooperCongratulation's JustTerrorists branch (row 5.6.6's
-need: `kB` shows why, above). Also three of GuntherRescued's five give choices (assault gun, stealth pistol, knife) and NothingChoice's first answer
-(GiveNothingNicely), Filben's two barks that read `FilbenGaveKey`, and PaulCongratulations (`PaulWandering`). Every approach is placed and every speech
-skipped, as the harness cannot walk.
+**What stays uncaptured** (named in the rows' `weak` and `need`): three of GuntherRescued's five give choices (assault gun, stealth pistol, knife) and
+NothingChoice's first answer (GiveNothingNicely), Filben's two barks that read `FilbenGaveKey`, and PaulCongratulations (`PaulWandering`). `M01PlayerAggressive`
+and TrooperCongratulation's JustTerrorists branch are captured by `kC` (2026-10-19), with `Tantalus` kills, not weapon fire. Every approach is placed and
+every speech skipped, as the harness cannot walk.
 
 ## Scoreboard (2026-10-18, after the conversation captures)
 
@@ -698,7 +718,7 @@ Nothing below was fixed by the census task; the two gap tasks closed items 1 and
    shot from outside his conversation radius. The `ElevatorMover1` "ride" (5.3.13) is the exit door, closed by the alarm and reopened by `Switch0`. The laser (5.2.5) row is restated
    from the original's `AlarmTimer` rule. The census now plays all 50 scenarios.
 7. **Proof captures, by clause value**: conversation branches **done 2026-10-18** for 5.4.3 to 5.4.7 ([above](#conversation-captures-the-islands-conversations-choices-and-flags-2026-10-18));
-   5.6.6 still needs `M01PlayerAggressive` (its row's `need`), and GuntherRescued's other give choices are named in 5.4.5's `weak`. Weapons and damage (5.1.1 to 5.1.3, 5.1.7), the
+   5.6.6's `M01PlayerAggressive` **done 2026-10-19** (`kC`), and GuntherRescued's other give choices are named in 5.4.5's `weak`. Weapons and damage (5.1.1 to 5.1.3, 5.1.7), the
    routes (5.5), Training's lessons one capture each (5.3.1 to 5.3.4), and O3 comparisons for the native-body rows (5.3.5, 5.3.6, 5.3.2). The 44 `MISSING` rows are this item; the census now plays every scenario, and items 2 and 5
    still bound what the rows they name can show.
 
@@ -708,7 +728,7 @@ Nothing below was fixed by the census task; the two gap tasks closed items 1 and
   in `scripts/stage5-criteria.mjs` and in the tables above.
 * **Rows restated by work item 6** (findings 9 to 12), each from original script lines. 5.2.5: the beam makes the guards who hear it attack with `AlarmTimer` 120, and `AlarmUnit0` is rung by a
   guard who saw the player. 5.3.13: the exit door instead of a ride. 5.4.5: the wall button. 5.6.3: a measured pair under the map's lighting instead of AugLight or a light switch (the
-  Island has no switch, and AugLight adds the `Beam` path). 5.6.6 is restated (the alliance flips on a touch, not from the flag) and labelled `weak`: the conversations that read the other three flags are not played.
+  Island has no switch, and AugLight adds the `Beam` path). 5.6.6 is restated (the alliance flips on a touch, not from the flag) and labelled `weak`: of the conversations that read the other three flags, MeetFilben2, MoleConvos and TrooperCongratulation are captured (`fM` `fN`, `oV`, `kC`); PaulCongratulations and Filben's two barks are not.
 * **O3 or O2 as enough for native-body rows** (ladder, crate physics, swimming, falling, movers): the doc defaults to O3 (the DLL's code on Play's inputs in the scene), which does not exist yet for any of them.
 * **Cross-map evidence for shared code**: the gunshot half of 5.2.3 now has an Island capture (`cmb2`); its footsteps half can have no live trace (a held key), so the choice is O3 on Play's footstep inputs or accepting the row without footsteps.
 * **Where a player's death stops** (item 2): implemented as the original's client travel, where its level ends; whether the load menu after it belongs to Stage 5 or 6 is still open.
@@ -727,7 +747,7 @@ node scripts/census-stage5.mjs [--only slug,slug] [--json out.json]       # driv
 node scripts/validate-stage5-acceptance.mjs                               # the gate: exit 1 until every criterion passes
 node scripts/validate-stage5-acceptance.mjs --report [file]               # the scoreboard, exit 0
 node scripts/validate-stage5-acceptance.mjs --markdown [file]             # the tables of this page from a report
-node scripts/validate-stage5-live.mjs --scene cmb1                       # a proof check: a stored Island scene (cmb1..cmb7, die1, the conversations pG..kB) replayed in Play (SKIP without the store)
+node scripts/validate-stage5-live.mjs --scene cmb1                       # a proof check: a stored Island scene (cmb1..cmb7, die1, the conversations pG..kC) replayed in Play (SKIP without the store)
 node scripts/validate-stage5-live.mjs --scene cmb1 --print-capture       # the original's capture command of that scene (writes its tracer config; the bottle lock first)
 node scripts/stage5-capture-rehearsal.mjs --scene cmb1                    # rehearse a scene's input list in Play, headless, before a capture (class P)
 ```
