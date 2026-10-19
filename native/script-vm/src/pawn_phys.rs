@@ -169,7 +169,9 @@ pub(crate) fn perform(ctx: u32, handle: u32, base: u32, dt: f64, physics: f64) -
     }
     let depth = depth as u32;
     if physics == 1.0 {
-        if walk_loop(depth, base, dt as f32, 0) == 0 {
+        // Region.ZoneNumber 0: physWalking's FellOutOfWorld branch (0x103ca584, after the
+        // prelude) is the JavaScript body's (walking.mjs), which also runs the prelude first.
+        if load8(p_at(base, P_ZONE_NUMBER)) == 0 || walk_loop(depth, base, dt as f32, 0) == 0 {
             unsafe { js_pawn_walk(depth, dt) };
         }
     } else if physics == 3.0 {

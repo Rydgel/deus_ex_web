@@ -26,6 +26,14 @@ export const flyFrom=(pawn,remaining,iterations)=>{
 export function walking(pawn,seconds,iterations=0){
  const dt=f(seconds);if(!(dt>0)||dt>f(.4))throw Error('Walking requires timestep in (0,0.4]');
  if(pawn.walkingPrelude(dt,iterations))return;
+ // 0x103ca584-0x103ca5e7: Region.ZoneNumber (+0xd0) == 0, after the prelude and before any read of the move. At ROLE_Authority
+ // (+0x31 == 4) it logs "%s fell out of the world!" (0x10481a34, physFalling's string; a GLog side channel), then dispatches the
+ // FellOutOfWorld event (ProcessEvent, FName 0x10583608, 0x103ca5d4) and returns: a pawn placed outside the world dies on its
+ // first walking tick (Pawn.FellOutOfWorld: Health -1, PHYS_None, Died('Fell')), as on its first falling one (falling.mjs).
+ if(pawn.zoneNumber===0){
+  if(typeof pawn.fellOutOfWorld!=='function')throw Error('physWalking outside the world requires the FellOutOfWorld event dispatch (0x103ca5d4)');
+  pawn.fellOutOfWorld();return;
+ }
  pawn.velocity=pawn.velocity.map(f);pawn.acceleration=pawn.acceleration.map(f);pawn.position=pawn.position.map(f);
  // Script-backed FVector reads are values. Commit native component stores
  // through the setter instead of changing only a temporary returned array.

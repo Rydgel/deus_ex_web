@@ -603,8 +603,16 @@ event, every object creation (a loaded `Sound` now also by its export name: whic
   chooses, so the line aimed where `kA` found it at tick 80 missed it (no death cry or `Distress` from it, its footstep `LoudNoise`s go on at 85, 124, 162...). The
   placement at the trooper, (-4062, 2085, -187), is outside the world: the player's `Region` reads zone 0, leaf -1 at tick 361 in both captures (Play's `PointRegion`
   agrees), and `Pawn.FellOutOfWorld` sets Health -1, `PHYS_None` and calls `Died('Fell')`. In `kA` the player had stood unharmed at the last kill site until that
-  placement (the earlier reading, a death by the Terrorists there, was wrong). The headless rehearsal does not reproduce this death (its placement keeps the player
-  walking; the replay's does not), so a candidate spot is checked with `PointRegion` over the player's whole cylinder.
+  placement (the earlier reading, a death by the Terrorists there, was wrong). The headless rehearsal first kept the player walking there; the cause, measured
+  2026-10-19 (Play against itself, the evidence is the oracle below). Both run the hold's lines through the same console chain (`consoleCommand`): the `set` writes
+  Location only (Region stays zone 3), `walk` ends in `PlayerWalking.BeginState`'s `SetPhysics(PHYS_Falling)`. In the replay `ThugMale3`, attacking the player,
+  calls `FindPathToward` on it in tick 361 before the player ticks; with the target falling, the path worker runs the target's `jumpLanding` (0x103db4ec), whose
+  test moves and FarMoveActor back recompute the player's Region (zone 0), so its physFalling takes the zone-0 branch. The rehearsal's own world (it set
+  `M01PlayerAggressive` at 301, which neither capture did) had no such call: the falling move left the player in place, MoveActor's SetZone wrote zone 0,
+  and `processLanded` ran physWalking, whose zone-0 branch (0x103ca584-0x103ca5e7: `FellOutOfWorld`, then return) Play did not have. It does now
+  ([walking](walking.md), `validate-native-walking`'s zone-0 cases against Engine.dll), and the rehearsal's player dies at 361 by that route: Dying, Health -1,
+  `PHYS_None`, unmoved at (-4062, 2085, -187), zone 0 / leaf -1, as in both captures; `kC`'s rehearsal still plays TrooperCongratulation from 367 to 636. The
+  `PointRegion` check over the player's whole cylinder still picks a spot before a capture: it names the cause, the rehearsal only shows the outcome.
 * `kC` follows both. A pawn in StartUp (`ScriptedPawn.uc` `auto state StartUp`) stays at its load place until `Sleep(FRand()+0.2)` ends (12 ticks at least)
   or the player renders it (its `Tick` then calls `FollowOrders`); the frozen phase leaves the player at the map start, so `Terrorist18` is killed in the hold
   after tick 3, from 220 units east with a clear line (Play's `FastTrace`; its death cry and `Distress` at tick 3, its carcass at 52). The trooper (Sitting

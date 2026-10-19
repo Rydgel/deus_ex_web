@@ -180,6 +180,8 @@ export class WalkLoopHost {
     if (!pawn.pawn || pawn.movingBrush || pawn.model) { declined('kind', actor?.name); return false; }
     // The kernel is the non-PlayerPawn side of calcVelocity (walk_loop.rs): a PlayerPawn runs the JavaScript body.
     if (pawn.isPlayerPawn !== false) { declined('player', actor?.name); return false; }
+    // Region.ZoneNumber 0: physWalking's FellOutOfWorld branch (0x103ca584) is the JavaScript body's (walking.mjs).
+    if (pawn.zoneNumber === 0) { declined('zone 0', actor?.name); return false; }
     const level = ops.level;
     const model = this.vm.zone.model(level);
     const view = this.vm.arena.view;
