@@ -12,7 +12,7 @@ class NativeWalking(b.NativeFalling):
   # itself (its varargs formatting needs msvcrt, not loaded) is a recorded side channel, not part of the compared result.
   self.logf=self.read(0x10599a68,'I')[0];names=self.alloc(16);entry=self.alloc(64)
   self.cpu.mem_write(entry+0xc,'JCDentonMale0'.encode('utf-16-le')+b'\0\0');self.write(names,'I',entry);self.write(self.read(0x10599a70,'I')[0],'III',names,1,1)
-  self.logs=[]
+  self.logs=[];self.index=None
  def on_instruction(self,cpu,address,size,data):
   if self.events is not None:
    st=cpu.reg_read(c.UC_X86_REG_ESP)

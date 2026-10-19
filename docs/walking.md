@@ -195,8 +195,9 @@ Right after the surface prelude (`0x103ca574`, handled: return at `0x103cb330`),
   ProcessEvent through vtable +0x10 at `0x103ca5d4`) and returns (`ret 8`, `0x103ca5e7`). Velocity, Acceleration,
   Location and Physics are not touched: `Pawn.FellOutOfWorld` sets Health -1 and `PHYS_None` and calls `Died('Fell')`.
 
-The only native callers of that event name are this branch and physFalling's (the FName's other reference, `0x103805a5`,
-is its registration). walking.mjs had skipped it, so a pawn in zone 0 kept walking. Stage 5 `kB`
+The FName's references in Engine.dll are this branch, physFalling's (`0x103d0b6f`), its registration (`0x103805a5`) and the
+exported `AActor::eventFellOutOfWorld` (`0x10322ab0`, through the link thunk `0x1030302b`), which nothing in Engine.dll
+calls (no call, jump or pointer to either address); no other System DLL or exe names the event, and no script calls it. walking.mjs had skipped it, so a pawn in zone 0 kept walking. Stage 5 `kB`
 ([stage 5](stage-5-exit-criteria.md)) showed it: a console `set Location` inside solid leaves Region at the old zone, the
 first physFalling move from there stays put while MoveActor's SetZone writes zone 0, and `processLanded` runs physWalking
 for the remaining time, which in the original takes this branch (the oracle below); Play's rehearsal walked on (the
