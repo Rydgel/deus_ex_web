@@ -559,9 +559,10 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
   const play = compareOnly ? {code: 0, out: ''} : await exec(['scripts/live-acceptance.mjs', 'play', '--map', scene.map, '--seed', '1', '--tag', tag, ...sceneFlags(scene), ...PLAY_FLAGS, '--early-cmds', scene.early,
     ...(scene.conversation ? ['--phonemes', phonemes] : []), '--event-trace', `1:${scene.ticks}`, '--object-trace', `1:${scene.ticks}`], Math.max(1800, scene.ticks * 2));
   if (play.code !== 0) { console.log(play.out.trim().split('\n').slice(-12).join('\n')); console.log(`FAIL ${tag}: the replay stopped (exit ${play.code})`); process.exit(1); }
-  // the slot model's inputs (the run's own indices, the pre-frees and where they were released), and the frozen phase's window frames (a capture with
-  // --frozen-frames: how many the replay ticked around the typed lines and before tick 1)
-  for (const line of play.out.split('\n')) if ((line.startsWith('object trace: ') && !/registry events/.test(line)) || line.startsWith('frozen phase: ') || /window frames around them/.test(line)) console.log(line);
+  // the slot model's inputs (the run's own indices, the pre-frees and where they were released), the frozen phase's window frames (a capture with
+  // --frozen-frames: how many the replay ticked around the typed lines and before tick 1), and the original load's FlyGenerators Play made before its KillAll
+  for (const line of play.out.split('\n')) if ((line.startsWith('object trace: ') && !/registry events/.test(line)) || line.startsWith('frozen phase: ') || /window frames around them/.test(line)
+    || /^the original's (\d+ )?load FlyGenerators/.test(line)) console.log(line);
   const compare = await exec(['scripts/live-acceptance.mjs', 'compare', '--map', scene.map, '--tag', tag, ...sceneFlags(scene)], 600);
   console.log(compare.out.trim());
   // the scene's own report (report-<tag>.json): another checkout's replay of the same map writes the untagged report.json in the shared .work

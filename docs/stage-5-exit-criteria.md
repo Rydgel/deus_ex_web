@@ -901,7 +901,8 @@ such as the population step's `removed` (empty in every Island scene).
 
 **Result** (the Mac, this branch; every scene with a load FlyGenerator replayed, plus `cmb3` and `exp1`):
 
-* `alm2` PASS: purge at 895 with 128, and every free over 900 ticks equal in index and order (before: no purge by 900, `Multitool0` never released).
+* `alm2` PASS: `Trashbag0` and `Trashbag5` make `FlyGenerator0` and `FlyGenerator1` (the replay prints them); purge at 895 with 128, and every free over 900
+  ticks equal in index and order (before: no purge by 900, `Multitool0` never released).
 * `las1` PASS: purge at 561 (131 frees in that tick, as the original's), every free equal.
 * `alm1`, `air1`, `cmb7`, `fK`, `dor2`, `fN`, `cmb6`, `gU`, `gP`, `kC`, `oT`, `gS` and `gN` PASS: no purge in their window, every free equal, and 0 creations
   in another slot.
