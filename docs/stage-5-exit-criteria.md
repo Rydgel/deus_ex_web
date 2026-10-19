@@ -146,7 +146,7 @@ report (`--stage4-report`), so presentation proof is not repeated.
 | 5.6.3 | 01_NYC_UNATCOIsland | light against sight: a pose seen or not seen by its lighting (AICanSee times AIVisibility against VisibilityThreshold). Island has no light switch, and AugLight adds a second path (its Beam AI event, CheckBeamPresence), so the census pair is the map's own lighting: two poses 500 units in front of Terrorist4 with a clear line of sight, one in shadow, one lit | O1 | `light-vs-sight` | O1: live trace of the original with Terrorist4's perception fields and the player's visibility at the two poses | validate-pawn-perception, AICanSee (O2); lighting oracles (O2) | MISSING |
 | 5.6.4 | 01_NYC_UNATCOIsland | an explosion: a barrel or CrateExplosiveSmall near a Terrorist, a breakable door and a decoration: HurtRadius, damage to each, noise, chain explosions | O1 | `explosion-world` | O1: live trace of the original with the barrel shot | validate-island-blowitup (O2); VisibleCollidingActors iterator 312 (O2) | MISSING |
 | 5.6.5 | 01_NYC_UNATCOIsland | EMP: an EMP grenade or the EMP field against a SecurityBot, the turret and the camera (disabled) and the player's energy | O1 | `emp-electronics` | O1: live trace of the original with an EMP grenade thrown at the bot | alterations census emp-grenade, hit-emp (P) | MISSING |
-| 5.6.6 | 01_NYC_UNATCOIsland | conversation flags change the world: GuntherFreed (the cell door chain; on the same walk Gunther's alliance flips at AllianceTrigger0's touch, and GuntherRescued's GuntherAttacks gives his orders), FilbenGaveKey, M01PlayerAggressive, KnowsShipment | O1 | `flags-change-world` | O1: M01PlayerAggressive from its source to TrooperCongratulation's JustTerrorists branch in one capture. Mission01.Timer counts a Dying Terrorist as alive, so all eight victims must become carcasses (30 - 8 = 22 < 23): in kB the kill at tick 110 (Terrorist22's spot) made no carcass, where kA's made one 19 ticks later (7 carcasses, no flag in either program; why is not verified: the player left that victim after 30 ticks, so a longer death animation out of view is the hypothesis). kB's placement at (-4062, 2085, -187) also killed the player at once in both programs (Health -1, every region intact). Needed: each victim watched until its carcass spawns, then a placement inside the trooper's 250-unit radius that does not kill the player | validate-stage5-live gP gN gA fT fM fN oV (O1, pass: GuntherFreed through the cell door and AllianceTrigger0 to Gunther's orders; FilbenGaveKey to MeetFilben2's two branches; KnowsShipment to MoleConvos and BumFemaleWanders); validate-stage5-live kB (O1, pass as a comparison: eight Tantalus kills, seven carcasses, the player's death at the trooper, no M01PlayerAggressive in either program) | MISSING |
+| 5.6.6 | 01_NYC_UNATCOIsland | conversation flags change the world: GuntherFreed (the cell door chain; on the same walk Gunther's alliance flips at AllianceTrigger0's touch, and GuntherRescued's GuntherAttacks gives his orders), FilbenGaveKey, M01PlayerAggressive, KnowsShipment | O1 | `flags-change-world` | O1: live trace of the original from each flag's source to the world it changes | validate-stage5-live kB (O1, pass as a comparison: the Tantalus at tick 80 missed Terrorist18, seven carcasses, the player placed outside the world at the trooper, no M01PlayerAggressive in either program) | PASS |
 
 ### 5.7 Excluded
 
@@ -650,11 +650,14 @@ NothingChoice's first answer (GiveNothingNicely), Filben's two barks that read `
 and TrooperCongratulation's JustTerrorists branch are captured by `kC` (2026-10-19), with `Tantalus` kills, not weapon fire. Every approach is placed and
 every speech skipped, as the harness cannot walk.
 
-## Scoreboard (2026-10-18, after the conversation captures)
+## Scoreboard (2026-10-19, after `kC`)
 
 `node scripts/validate-stage5-acceptance.mjs --census .work/stage5-census-2026-10-18-conv2.json --report .work/stage5-gate-2026-10-18-conv.json` on a fresh census of the
 conversation batch's code (the Mac: the census 21 min, 50 plays, 0 pause, 0 no-effect, 0 undriven, equal to its `EXPECTED`; the 21 proof replays, each run once, 23 min):
-**11 of 50 criteria pass; the gate is red** (exit 1). 55 rows, 5 excluded. Every row was rerun on this code.
+**11 of 50 criteria passed; the gate was red** (exit 1). 55 rows, 5 excluded. Every row was rerun on that code. On 2026-10-19 row 5.6.6 was rerun alone on `kC`'s
+code (`--only "^5\.6\.6 "` on the same census: its eight proof replays, 64 to 79 s each) and merged into that report (`.work/stage5-gate-2026-10-19-kC.json`):
+**12 of 50 criteria pass; the gate is red.** The other rows were not rerun: the one code change they could see, the replay's command order (fix 8 above), leaves
+every other stored command list as it was.
 History: the first run (master 5d7285c, with the three tightened predicates) was 0 PASS, 14 FAIL, 33 MISSING, 3 UNDRIVEN. The Island devices task moved 5.2.6, 5.3.9, 5.5.1 and 5.5.2 from FAIL to
 MISSING. The death, explosives and alarms task moved 5.1.2, 5.1.4, 5.1.5, 5.2.7, 5.6.2 and 5.6.5. That left 0 PASS, 4 FAIL, 43 MISSING, 3 UNDRIVEN. The first combat captures moved
 5.2.2 from FAIL to PASS and 5.1.6 from MISSING to PASS (2 PASS, 3 FAIL, 42 MISSING). The second moved 5.6.1 from MISSING to PASS, and 5.1.5 and 5.2.7 from MISSING to FAIL: their proof,
@@ -663,7 +666,7 @@ The death capture (`die1`) moved 5.1.8 from MISSING to FAIL on the same item, it
 3 PASS, 6 FAIL, 38 MISSING, 3 UNDRIVEN (report `.work/stage5-gate-2026-10-18-518.json`). The undriven-scenarios task (item 6 below) made every scenario play, which moves the three
 no-effect rows (5.2.5, 5.4.8, 5.5.5) and the three undriven ones (5.4.5, 5.6.3, 5.6.6) to MISSING; the mesh layer's fix moved 5.1.5, 5.2.7 and 5.1.8 from FAIL to PASS (6 PASS, 0 FAIL,
 44 MISSING, report `.work/stage5-gate-2026-10-18-mesh.json`). The conversation captures ([above](#conversation-captures-the-islands-conversations-choices-and-flags-2026-10-18))
-moved 5.4.3 to 5.4.7 from MISSING to PASS; 5.6.6 stays MISSING with its need (`M01PlayerAggressive`).
+moved 5.4.3 to 5.4.7 from MISSING to PASS (11 PASS, 39 MISSING), and `kC` moved 5.6.6 from MISSING to PASS.
 
 | Clause | PASS | FAIL | MISSING | UNDRIVEN | EXCLUDED |
 | --- | ---: | ---: | ---: | ---: | ---: |
@@ -672,14 +675,14 @@ moved 5.4.3 to 5.4.7 from MISSING to PASS; 5.6.6 stays MISSING with its need (`M
 | 5.3 Exploration and the character systems | 0 | 0 | 13 | 0 | 0 |
 | 5.4 Conversation | 5 | 0 | 3 | 0 | 0 |
 | 5.5 Alternate-route objectives | 0 | 0 | 7 | 0 | 0 |
-| 5.6 Systems interacting | 1 | 0 | 5 | 0 | 0 |
+| 5.6 Systems interacting | 2 | 0 | 4 | 0 | 0 |
 | 5.7 Excluded | 0 | 0 | 0 | 0 | 5 |
-| **Total** | **11** | **0** | **39** | **0** | **5** |
+| **Total** | **12** | **0** | **38** | **0** | **5** |
 
-The eleven `PASS` rows have proof checks on the stored Island scenes ([above](#first-original-captures-island-combat-2026-10-17)): 5.2.2 on `cmb1` and `cmb2`, 5.1.6 on `cmb1` to
+The twelve `PASS` rows have proof checks on the stored Island scenes ([above](#first-original-captures-island-combat-2026-10-17)): 5.2.2 on `cmb1` and `cmb2`, 5.1.6 on `cmb1` to
 `cmb4`, `cmb6` and `cmb7`, 5.1.5 on `cmb1`, `cmb2` and `cmb5`, 5.2.7 on `cmb5`, 5.6.1 on `cmb7`, 5.1.8 on `die1`; 5.4.3 on `pG`, `pR` and `pX`, 5.4.4 on `fT`, `fM`, `fN` and `tA`,
-5.4.5 on `gP`, `gN` and `gA`, 5.4.6 on `tC` and `tA`, 5.4.7 on `oV`, `oT`, `cmb2` and `cmb3` (each with its `weak`: placed approaches, skipped speeches, the choices not captured).
-No row fails. The 39 `MISSING` rows play in the census and name the capture that would prove them. Stage 4's gate started at 44 of 70 because 60 checks against stored
+5.4.5 on `gP`, `gN` and `gA`, 5.4.6 on `tC` and `tA`, 5.4.7 on `oV`, `oT`, `cmb2` and `cmb3`, 5.6.6 on `gP`, `gN`, `gA`, `fT`, `fM`, `fN`, `oV` and `kC` (each with its
+`weak`: placed approaches, skipped speeches, the choices not captured, `kC`'s `Tantalus` kills). No row fails. The 38 `MISSING` rows play in the census and name the capture that would prove them. Stage 4's gate started at 44 of 70 because 60 checks against stored
 originals already existed; for gameplay they did not. The strongest existing evidence is listed per row under "Existing, partial": the Island combat scenes, the Underworld's
 weapon-noise traces for gunshots, the perception pilot, the first-person crowbar, MeetPaul's frames, and the native oracles for swimming, ladders, falling and movers.
 
@@ -719,7 +722,7 @@ Nothing below was fixed by the census task; the two gap tasks closed items 1 and
    from the original's `AlarmTimer` rule. The census now plays all 50 scenarios.
 7. **Proof captures, by clause value**: conversation branches **done 2026-10-18** for 5.4.3 to 5.4.7 ([above](#conversation-captures-the-islands-conversations-choices-and-flags-2026-10-18));
    5.6.6's `M01PlayerAggressive` **done 2026-10-19** (`kC`), and GuntherRescued's other give choices are named in 5.4.5's `weak`. Weapons and damage (5.1.1 to 5.1.3, 5.1.7), the
-   routes (5.5), Training's lessons one capture each (5.3.1 to 5.3.4), and O3 comparisons for the native-body rows (5.3.5, 5.3.6, 5.3.2). The 44 `MISSING` rows are this item; the census now plays every scenario, and items 2 and 5
+   routes (5.5), Training's lessons one capture each (5.3.1 to 5.3.4), and O3 comparisons for the native-body rows (5.3.5, 5.3.6, 5.3.2). The 38 `MISSING` rows are this item; the census now plays every scenario, and items 2 and 5
    still bound what the rows they name can show.
 
 ## What the user should decide
