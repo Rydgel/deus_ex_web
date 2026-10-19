@@ -838,17 +838,24 @@ static void drain_and_disarm(int *disarmed) {
  * window frames, RootTick, and the key edges, InputEvent, of the console lines the capture types in the frozen phase), until
  * <path> appears: it holds the rest of the config (the watch lines, known once the lines are typed and the population checked).
  * The files are looked at while the game is stopped in one of our events (the whole process is, under a debugger), so the
- * calls are removed with no thread running past a byte being written. Returns 1 when <path> appeared (the event continued:
- * the caller resolves the watches and arms the level's breakpoints while the game runs, as a trace without the phase does
- * before it attaches; resolving them with the game stopped held one window frame for 21 s in the first capture), 0 when
- * <out>.resume asked to leave first (the calls removed; the caller drains and detaches), -1 when the game exited or crashed. */
+ * calls are removed with no thread running past a byte being written. Returns 1 when <path> appeared (the event continued;
+ * the caller then resolves the watches, a walk of the whole object array: the game's next RootTick waits at its breakpoint
+ * meanwhile, so one traced window frame spans it, about 20 s on the Mac, a measured frame the replay ticks like the others),
+ * 0 when <out>.resume asked to leave first (the calls removed; the caller drains and detaches), -1 when the game exited or crashed. */
 static int frozen_phase(const char *resume_path, const char *crash_path) {
   calls_set(2);
   int armed = 0; for (int i = 0; i < call_count; i++) armed += calls[i].armed;
   fprintf(stderr, "frozen phase: %d calls armed; write %s to go on\n", armed, frozen_wait);
   DEBUG_EVENT ev;
   for (;;) {
-    if (!WaitForDebugEvent(&ev, 200)) continue;
+    if (!WaitForDebugEvent(&ev, 200)) {
+      /* with no call armed (a config without `frozen` calls) no event of ours comes, and no byte of ours can be raced: look here */
+      if (!armed) {
+        FILE *g = fopen(frozen_wait, "r"); if (g) { fclose(g); return 1; }
+        FILE *r = fopen(resume_path, "r"); if (r) { fclose(r); return 0; }
+      }
+      continue;
+    }
     DWORD status = DBG_CONTINUE;
     int ours = 0;
     if (ev.dwDebugEventCode == EXCEPTION_DEBUG_EVENT) {

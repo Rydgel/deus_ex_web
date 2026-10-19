@@ -278,10 +278,12 @@ async function original() {
     writeFileSync(configFile, [...headerConfig, `frozen-wait ${goPath}`].join('\n') + '\n');
     spawnTracer(configFile);
     const started = Date.now();
-    while (!/^frozen phase: \d+ calls armed/m.test(log) && child.exitCode === null && Date.now() - started < 60000) await new Promise(r => setTimeout(r, 200));
+    // (a tracer built before `frozen-wait` ignores it: it resolves at once, `level 0x...`, and would release the level before the lines are typed)
+    while (!/^frozen phase: \d+ calls armed/m.test(log) && !/^level 0x/m.test(log) && child.exitCode === null && Date.now() - started < 60000) await new Promise(r => setTimeout(r, 200));
     const armed = /^frozen phase: (\d+) calls armed/m.exec(log);
+    if (!armed && /^level 0x/m.test(log)) { child.kill(); throw new Error(`${tool} predates frozen-wait: rebuild it from tools/dx-live-win.c`); }
     if (!armed) throw new Error(`the frozen-phase tracer did not attach: ${log.trim().slice(-400)}`);
-    if (armed[1] === '0') console.log('frozen phase: NO call of the config is marked `frozen`: no window frame is traced before the release');
+    if (armed[1] === '0') { await leaveFrozen(); throw new Error('frozen phase: no call of the config is marked `frozen` (inputevent, roottick): its window frames would not be traced'); }
     console.log(`frozen phase: tracer pid ${child.pid} attached, ${armed[1]} calls armed`);
     frozenLines = [];
   };

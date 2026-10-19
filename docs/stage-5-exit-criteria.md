@@ -563,7 +563,7 @@ event, every object creation (a loaded `Sound` now also by its export name: whic
 | `gA` | `AllianceTrigger0` and `OrdersTrigger6` touched by a landing at the button, then the button: the freed Gunther fights `Terrorist18` | 900 | PASS: 22 actors, 1,486 AI events, 1,127 creations; 3 flags (after fix 1 below) |
 | `tC` | MeetTerrorist, Curious: `DL_LeaderNotKilled`, Mission01's mission-complete pass, TerroristFollowup by frob | 1300 | PASS: 24 actors, 1,911 AI events, 1,523 creations; 7 flags (after fixes 4 and 6) |
 | `tA` | MeetTerrorist, Aggressive (the commander attacks), then MeetFilbenAfterStatue at Filben; the player waits on `cmb5`'s ledge and is placed at the commander at tick 100 | 1050 | PASS: 26 actors, 1,684 AI events, 1,404 creations; 7 flags (a first capture placed in the frozen phase: below) |
-| `tF` | `tA`'s first design: the player placed at the commander in the frozen phase (MeetTerrorist from tick 14), then MeetFilbenAfterStatue | 950 | PASS: 26 actors, 1,554 AI events, 1,364 creations; 7 flags; the frozen phase's window frames replayed from the trace ([below](#the-frozen-phases-window-frames-2026-10-19)) |
+| `tF` | `tA`'s first design: the player placed at the commander in the frozen phase (MeetTerrorist from tick 14), then MeetFilbenAfterStatue | 950 | PASS: 26 actors, 1,545 AI events, 1,357 creations; 7 flags; the frozen phase's window frames replayed from the trace, and FAIL without them ([below](#the-frozen-phases-window-frames-2026-10-19)) |
 | `oV` | TerroristsOverheard (Amos and Jackson, first person, from behind a wall) to `KnowsShipment`, then MoleConvos: its KnowsShipment branch, the 10 mm clip bought (175 credits), `BumFemaleWanders` | 1300 | PASS: 26 actors, 1,883 AI events, 1,307 creations; 7 flags (after fix 3) |
 | `oT` | TopTerroristsOverheard (Terrorist9 and Terrorist8, first person) from a hidden place | 1200 | PASS: 24 actors, 1,701 AI events, 1,061 creations; 1 flag |
 | `kB` | eight Terrorists killed (`Tantalus`) for Mission01.Timer's `M01PlayerAggressive`, then the player placed at UNATCOTroop6 for TrooperCongratulation | 700 | PASS as a comparison: 23 actors, 884 AI events, 1,065 creations, no flag in either program. Seven victims became carcasses: the kill at 110 (`Terrorist22`'s spot) made none, where `kA`'s made one 19 ticks later (why is not verified; the player left after 30 ticks), so the count stayed at 23. The placement at (-4062, 2085, -187) killed the player at once in both (Health -1, every region intact) |
@@ -646,9 +646,11 @@ starts was host time on both sides (the `tA` item above).
 **The tracer** (`tools/dx-live-win.c`). A call marked `frozen` is armed from the attach; the config line `frozen-wait <path>` attaches at once with only those
 calls armed (records u 0, `inTick` 0) and no level breakpoint, and reads the rest of the config (the watch lines) from `<path>` when it appears; then it goes on
 as before (the level's breakpoints, `release` counted from there). `<out>.resume` before that leaves (the population check's reload). The files are looked at
-only at one of its call events with no step pending (the process is stopped there), and the game is continued before the watches are resolved: resolving
-them with the game stopped held one window frame for 21 s in the first capture. Calls keep their own armed state (`calls_set` 0, 1 every call, 2 the `frozen`
-ones), so arming the rest at the release keeps the frozen ones' original bytes.
+only at one of its call events with no step pending (the process is stopped there), or, with no call armed, at a wait's timeout. Resolving the watches walks
+the whole object array while the game's next `RootTick` waits at its breakpoint, so one traced window frame spans it (21 s in the first `tF` capture): a measured
+frame like the others, ticked before tick 1. Calls keep their own armed state (`calls_set` 0, 1 every call, 2 the `frozen` ones), so arming the rest at the
+release keeps the frozen ones' original bytes. A tracer built before this ignores `frozen-wait` (it would release the level before the lines are typed):
+`live-acceptance.mjs` stops when it sees one, and a checkout that captures must rebuild `ad/build/dx-live-win.exe`.
 
 **The capture.** `--frozen-frames` (every Stage 5 capture, `validate-stage5-live.mjs captureCommand`; `UEngine::InputEvent` and `RootTick` are the `frozen`
 calls of `captureConfig`) starts the tracer after the load and the generators' load dump, before the first typed line. Every console line typed from there to
@@ -664,14 +666,16 @@ after the last line (the population check, the dumps, the tracer's two frozen ti
 frozen frame only. A hold at 0 takes the key edges and frames after the last line. The replay ends the hold when it arms. Without the file, or with a
 different count of Enter presses than lines (reported), or with `--own-frozen-windows`, the frozen phase stays Play's own warm-up.
 
-**Checked on `tF`** (`tA`'s first design, placed at the commander in the frozen phase; the bottle's capture 2026-10-19). The 7 typed lines (`bCheatsEnabled`,
-`ShowHud False`, `KillAll FlyGenerator`, `ghost`, `set Location`, `walk`, `set ViewRotation`) have their 7 Enter presses; 163 frames (15.82 s) ran before the
-last one and 3,855 (284.68 s) after it, before the release. Play's HUD log clock when the replay arms is now the original's frames' (`lastLogMsg` 3.05 s of 3:
-the `ghost` line has timed out), where its own warm-up left it at 0.42 to 0.47 s in three runs. `tF` passes: 26 actors for 950 ticks, the clock, the stream
-draws, 1,554 AI events, 1,364 creations and the 7 flags at the end. It does not tell the two apart, though: its release's first frame (u 1, the tracer's first
-unfrozen tick) lasted 3.69 s, which times the line out by tick 2 under Play's own warm-up too, so a replay with `--own-frozen-windows` also passes; in `tA`'s
-first capture that frame was 1.21 s and the line was still waiting at tick 14. The stored scenes have no `frozen-lines` file and replay as before (`tA` and
-`cmb2` rerun: PASS).
+**Checked on `tF`** (`tA`'s first design, placed at the commander in the frozen phase; two captures on the Mac bottle, 2026-10-19; the stored one is the
+second, with the tracer as committed). The 7 typed lines (`bCheatsEnabled`, `ShowHud False`, `KillAll FlyGenerator`, `ghost`, `set Location`, `walk`,
+`set ViewRotation`) have their 7 Enter presses; 291 frames (15.46 s) ran before the last one and 4,945 (126.68 s) after it, before the release (the longest,
+9.07 s, spans the watch resolve; the first capture's was 21 s). Play's HUD log clock when the replay arms is the original's frames' (`lastLogMsg` 3.01 s of 3:
+the `ghost` line has timed out); Play's own warm-up left it at 0.42 to 1.00 s in four runs. `tF` passes: 26 actors for 950 ticks, the clock, the stream draws,
+1,545 AI events, 1,357 creations and the 7 flags at the end. Replayed with Play's own warm-up (`--own-frozen-windows`) the same capture fails as `tA`'s first
+capture did: the creations part at 899 of 1,357, where Play draws the log at MeetTerrorist's end (four `GC`s at 379) and the original does not (its release
+frame, u 1, lasted 1.29 s, as `tA`'s 1.21 s). The first capture did not tell the two apart (its u 1 frame lasted 3.69 s, which times the line out by tick 2
+either way). `tF` is the frozen phase's check (`validate-stage5-live.mjs --scene tF`), not in a row's proof list (5.4.6 has `tC` and `tA`). The stored scenes
+have no `frozen-lines` file and replay as before (`tA` and `cmb2` rerun: PASS).
 
 **Still unmeasured**: the original's frames between the map's load and the attach (the 40 s load wait and the generators' dump), against Play's page frames
 before its first held line. The log is empty until the first typed line, and no other window state is known to depend on that time.
