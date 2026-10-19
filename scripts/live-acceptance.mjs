@@ -1173,7 +1173,11 @@ async function play() {
       const population = existsSync(path.join(dir, 'play-population.json')) ? JSON.parse(readFileSync(path.join(dir, 'play-population.json'), 'utf8')) : {};
       if (population.names && !population.pendingDeleted) console.warn('play-population.json predates its pendingDeleted list: rerun `population` (the pending-deleted actors keep the map table\'s index)');
       const names = new Set([...(population.names ?? []), ...(population.pendingDeleted ?? []), ...madeFlies]);
-      const rowsByKey = new Map();
+      // An actor made at run time is named by its class's session counter (MakeUniqueObjectName), which Play's boot leaves elsewhere than
+      // the original's, so its name does not name the original's object: the page pairs those by creation order within the class
+      // (live-probe.mjs objectTrace), from the dump's rows of every class whose names Play's population holds (the stem without the number).
+      const stem = name => name.replace(/\d+$/, ''), stems = new Set([...names].map(stem));
+      const rowsByKey = new Map(), classRows = {};
       let player = null;
       const packages = [];   // the Package objects the original holds at the start
       for (const line of text.split(/\r?\n/)) {
@@ -1181,6 +1185,7 @@ async function play() {
         if (!m) continue;
         const key = `${m[2]}.${m[3]}`;
         if (names.has(m[3])) rowsByKey.set(key, rowsByKey.has(key) ? null : Number(m[1]));
+        if (/\d$/.test(m[3]) && stems.has(stem(m[3]))) (classRows[m[2]] ??= []).push([m[3], Number(m[1])]);
         if (m[2] === 'JCDentonMale' && (!player || Number(m[1]) > player.index)) player = {key, index: Number(m[1])};
         if (m[2] === 'Package') packages.push(m[3]);
       }
@@ -1205,7 +1210,7 @@ async function play() {
         }
       }
       return {count, freeIndices: free ? free.split(/\s+/).map(Number) : [], preFrees, packages,
-        measured: Object.fromEntries([...rowsByKey].filter(([, index]) => index !== null)), player};
+        measured: Object.fromEntries([...rowsByKey].filter(([, index]) => index !== null)), classRows, player};
     };
     const touchWindow = option('touch-trace', null)?.split(':').map(Number);   // --touch-trace first:last: EndTouch/AddTouch/BeginTouch of those ticks (touch-play.json)
     const navPawns = option('nav-trace', null), [navFirst, navLast] = option('nav-ticks', `1:${trace.length}`).split(':').map(Number);
@@ -1361,7 +1366,9 @@ async function play() {
       const o = started.objectTrace;
       console.log(`object trace: the run's own indices for ${o.measured} pre-placed actors, ${o.pendingDeleted} more pending deletion and the player (${o.player}); ` +
         `${o.preFrees} pre-frees (${o.anchored} at their anchor)${o.own.length ? `, none for ${o.own.join(' ')} (Play frees it)` : ''}`
-        + `${o.madePending?.length ? `; the measured slot given back by ${o.madePending.join(' ')} (made before the seed)` : ''}`);
+        + `${o.paired?.length ? `; the actors made before the seed paired with the dump's by class creation order, each handed its measured slot: ${
+          o.paired.map(p => `${p.cls} ${p.count} (${p.play} = ${p.original})`).join(', ')}${o.madePending?.length ? `, pending deletion ${o.madePending.join(' ')}` : ''}` : ''}`
+        + `${o.unpaired?.length ? `; not paired (Play's count, the original's): ${o.unpaired.map(u => `${u.cls} ${u.play}/${u.original}`).join(', ')}` : ''}`);
     }
     const touch = [], rows = [], nav = [], script = [], setup = [], commandLog = [], events = [], objects = [], sounds = [], gcAllocs = [];
     let stalls = 0, levelEnd = null, preFreeStats = null;

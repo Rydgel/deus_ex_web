@@ -447,7 +447,8 @@ Play's u = 821 now holds the original's 129 registry events in order and slot (t
 `cmb3`, 1 pre-free is released at its anchor, with 0 late, 0 refused and 0 never reached. The model releases 2 slots it cannot name, and a one-off log of them named the counterparts of the
 two pre-frees: Play's own landing sender event at tick 16 (created before the seed; the original's `AISenderEvent5`), and `NanoKeyRing2` at tick 821. `NanoKeyRing2` is the keyring of the
 player the Player start replaced: Play's live player holds `NanoKeyRing3`, the original's `NanoKeyRing5`. The original's counterpart is `NanoKeyRing4`, renamed because the original's
-session spawned more keyrings (inferred from the pending chain, not traced). `cmb1`, `cmb2` and `cmb4` count 1 such release each, by their counts the sender event (not logged by name
+session spawned more keyrings (inferred from the pending chain, not traced; since work item 11 the seed pairs the two by creation order and the free is Play's own:
+[load-made actors](#load-made-actors-paired-by-creation-order-not-by-name-2026-10-19)). `cmb1`, `cmb2` and `cmb4` count 1 such release each, by their counts the sender event (not logged by name
 there). Rerun on the stored scenes: 0 of `cmb3`'s 1,364 creations take another slot, and `cmb1` (1,291), `cmb2` (1,150) and `cmb4` (1,284) stay at 0. Every actor (88 for 900 ticks),
 the clock, the draws, the AI events and the creations stay equal in all four. Row 4.3.6 (strict slots, `sndm5`, its population rerun with the new list: `pendingDeleted` there is `NanoKeyRing2` alone) still passes: 103 of 103 calls and 557 of 557 registry takes equal. The Stage 5 check still judges the creations by class and tick and reports the slots: judging them
 strictly is the user's decision.
@@ -889,7 +890,8 @@ makes it: the `bGenerateFlies` decoration standing at the generator's measured L
 `flyGen` is written. They are made in name order, so Play's name counter gives the original's names. The replayed KillAll then chains them where the original's
 did (the purge releases them in the original's order: every free equal in `alm2` and `las1`). The objectTrace seed gives them the registry dump's indices. Because
 they were made before the seed, the model is also handed their measured slot (`madePending` in the replay's `object trace` line), so their purge frees are logged
-and given back, as a pre-placed actor's measured slot is.
+and given back, as a pre-placed actor's measured slot is. (Since work item 11 the seed pairs every actor made before it with the dump's by creation order within
+its class, not by name; for these the two orders give the same pairs, `FlyGenerator0=FlyGenerator0`: [load-made actors](#load-made-actors-paired-by-creation-order-not-by-name-2026-10-19).)
 
 **Unmeasured, labelled.** Their load-time draws (PawnGenerator.PostBeginPlay's `Rand` and `FRand`) are Play's own and come before tick 1. The replay sets the stream
 per tick, and the generators are gone before it starts, so no replayed tick depends on them. Nothing compares their state before the KillAll (the original's
@@ -908,12 +910,74 @@ such as the population step's `removed` (empty in every Island scene).
   in another slot.
 * `kil1`, `tC`, `cmb3` and `exp1` PASS. `emp2` (0.87 units, item 8) and `cam1` (item 8) FAIL as before, at the same first difference; `emp2` now purges at 429, 574
   and 765 like the original, and 526 of its creations take another slot instead of 603.
-* What `kil1` (394 creations in another slot), `tC` and `exp1` (143) still differ in is one free. The original releases a Shadow at the purge (`Shadow71`, `Shadow60`
-  and `Shadow56`), but in Play that free goes unlogged. Play made the Shadow at its load, before the seed, and the seed gives it the dump's index, but only an actor
-  pending deletion is handed its measured slot (`madePending`), so the model releases it without a slot. `exp1` has no FlyGenerator, so this predates the fix
-  (work item 11).
-* Unchanged by construction: the scenes with no load FlyGenerator (their code path is the old one: no `generators-load` FlyGenerator, and no seeded pending actor of
-  Play's own has a measured row in any Island or Underworld dump), and row 4.3.6.
+* What `kil1` (394 creations in another slot), `tC` and `exp1` (143) still differed in was one free: the original releases a Shadow at the purge (`Shadow71`,
+  `Shadow60` and `Shadow56`) and Play's free of it went unlogged. `exp1` has no FlyGenerator, so this predated the fix. The cause was not the missing hand-over
+  this item first named but the seed's matching by name: **resolved by work item 11** ([load-made actors](#load-made-actors-paired-by-creation-order-not-by-name-2026-10-19)).
+* Unchanged by construction at the time: the scenes with no load FlyGenerator, and row 4.3.6. Work item 11 changed the seed for every scene and replayed them all.
+
+### Load-made actors: paired by creation order, not by name (2026-10-19)
+
+**What was missing** (work item 11). `kil1`, `tC` and `exp1` (and, the baseline shows, `die1`, `tA` and `tF`) each lacked one free at a purge: a Shadow
+(`Shadow71`, `Shadow60`, `Shadow56`, `Shadow72`) that the original releases and Play did not log. The item named a cause: Play made the Shadow at its load,
+before the objectTrace seed, so the seed gave it the dump's index but not the model's slot, which only `madePending` actors received. Handing every such actor its
+measured slot was the proposed fix. Tried on `kil1` (2026-10-19), that change made the frees worse: `Shadow71`'s free was still missing at 354, and at the 541
+collection Play freed five Shadows and a `LaserProxy` under slots the original does not free there.
+
+**A load-made actor's name does not name the original's object.** UObject::MakeUniqueObjectName names a new object with its class's counter
+(`ClassUnique`, incremented for each name it makes, the trailing digits of the class name dropped: class `ThugMale2` names `ThugMale0`). The counter lives for the
+session, so a name depends on everything the process made before. Play's boot leaves the counters elsewhere than the original's, class by class. In `kil1`'s
+dump and Play's seed-1 population (`play-population.json`), the load-made actors are:
+
+| Class | Play | the original |
+| --- | --- | --- |
+| Shadow (52 pawns' and the player's) | `Shadow53`..`Shadow105` | `Shadow20`..`Shadow72` |
+| LaserProxy | 8..15 | 1..8 |
+| LaserEmitter, LaserSpot | 5..9 | 0..4 |
+| ParticleProxy | 4..7 | 0..3 |
+| AutoTurretGun | 2..3 | 0..1 |
+| NanoKeyRing (the replaced player's, the live player's) | 2, 3 | 4, 5 |
+| the player's AugmentationManager, augmentations, skills, color themes, BarkManager, PlayerReplicationInfo | 1 each | 2 each |
+
+The seed matched actors by `Class.Name` against the dump, which is right for a map export (the same name in both programs) and wrong for these. Play's `Shadow53`
+took the slot of the original's `Shadow53`, another pawn's Shadow, and the original's `Shadow71`'s slot went to Play's `Shadow71`, which nothing destroys in
+`kil1`. The original's own frees prove the identity. At 541 it releases `ThugMale3`, `ThugMale5`, `ThugMale7`, `ThugMale9`, `GuntherHermann0` and
+`Shadow20`..`Shadow24`, and Play's destroyed Shadows there are `Shadow53`..`Shadow57`. The commander's Shadow, released at 354, is the original's `Shadow71`, the last
+pawn Shadow its load made, and Play's `Shadow104`. That is the offset of 33 throughout. The first player's keyring, which the doc
+[above](#first-original-captures-island-combat-2026-10-17) calls a substitution (Play's `NanoKeyRing2`, the original's `NanoKeyRing4`), is the same thing.
+
+**The fix: creation order within the class** (`live-probe.mjs` objectTrace, `live-acceptance.mjs` `registrySeed` `classRows`). A map export keeps its `Class.Name`
+match. An actor that Play's runtime created (a native record with a registry index), live or pending deletion, the player excepted, is paired with a row of the
+dump: the same class, a name that is no pre-placed actor's, and the same rank by trailing number. The counter orders creation within a class in both programs,
+and both run the same load code over the same map, so the k-th Shadow Play made is the k-th the original made. A class is paired only when both programs hold as
+many. Otherwise it keeps no index, and the original's frees of its slots stay pre-frees. A paired actor takes the dump's index (`globalIndex`, which also numbers
+its sounds' channel ids) and the model is handed that slot, so its purge free is Play's own, logged and given back. The replay's `object trace` line lists each
+class (`Shadow 53 (53..105 = 20..72)`) and the ones left unpaired. On the Island those are `DeusExGameInfo`, `Mutator` and `GameReplicationInfo`, 1 in Play
+against 2 in the dump: the original's Entry level holds one of each.
+
+**Unmeasured, labelled.** The pairing assumes that both loads make each class's actors in the same order. The frees then test it: a wrong pair frees the wrong slot.
+Why Play's counters stand where they do is not traced. Play's Shadows start at 53, consistent with a boot that loaded the Island once before the player start's
+reload, and the original's start at 20; neither session's history before the load is measured (work item 13). A load-made actor of a class that the two loads make
+in different numbers is left unpaired.
+
+**Result** (the Mac, 2026-10-19; all 45 stored Island scenes that `validate-stage5-live.mjs` lists, replayed one at a time, and row 4.3.6). The frees are the
+original's `"ev":"ret"` unhash records against `objects-play<tag>.json`'s frees.
+
+* Every scene keeps its status: 42 PASS; `cam1`, `emp2` and `dor3` FAIL (item 8) with the same check line as before the change, and the same first
+  free difference, and still 627, 526 and 524 creations in another slot.
+* `kil1`, `exp1` and `die1` now release `Shadow71` (354), `Shadow56` (352) and `Shadow72` (1105) as the original does: Play's `Shadow104`, `Shadow89` and `Shadow105`.
+  `kil1` keeps 0 of 1,547 creations in another slot (394 before), and `exp1` 0 of 1,634 (143 before). `exp1` and `die1` have every free equal in tick, index and order.
+  `kil1`'s two collections are equal as well: 354's 132 frees in order, the first player's keyring now among Play's own, and 541's 480 as a set. So are `tC`'s, `tA`'s and
+  `tF`'s (721: 410, 481: 407, 421: 414, `Shadow60` now among them).
+* Those four still free the same set in another order at that collection. `AIReceiverEvent15` and `AIReceiverEvent16` existed at the frozen start, and Play does not
+  hold them, so they are pre-frees. The original releases them 70th and 71st in the collection. The replay releases an AI event pre-free after the event manager's Tick,
+  which falls at Play's 237th. That predates this item (`tC`, `tA`, `tF` in the baseline) and is a harness placement, not a destroy (work item 14).
+* The other 38 scenes have every free equal in tick, index and order, as before. In every scene the only unpaired classes are the Entry level's three.
+* Row 4.3.6 (`sndm5`, strict slots) PASS: 103 of 103 Galaxy calls with every channel id equal (11 from spawned emitters), 557 of 557 registry takes in class and slot,
+  231 frees equal in order.
+* Also rerun: row 4.2.13 (`vents5`) PASS. It replays no object trace, so the seed does not reach it. Its FlyGenerator count, ten in Play against the original's
+  eight, would leave that class unpaired (work item 12). The unit tests pass (652).
+* Not rerun: the other Stage 4 rows that replay live traces (4.1.5, 4.1.6, 4.1.7, 4.5.5; they replay no object trace either), the census, the full validator sweep and the
+  `bench-sim` digests. The seed is harness code: only the replays with `--object-trace` read it.
 
 ## Scoreboard (2026-10-19, after the merge of the Island batches)
 
@@ -952,6 +1016,8 @@ zone 0 (`c.inWorld`, `a786b4e`), and all 50 play.
 
 **After work item 10** (2026-10-19, this branch): 5.2.5 passes. `validate-stage5-acceptance.mjs --only '^5\.2\.5 ' --census .work/stage5-census-2026-10-19-final2.json --report .work/stage5-gate-2026-10-19-525.json` replays `las1`, `alm1` and `alm2`, and all three pass, so the gate stands at **21 PASS, 6 FAIL, 23 MISSING** (5.2 Stealth: 4, 1, 2).
 Every other scene the change reaches was replayed on its own and keeps its status ([the Deleted chain at the first purge](#the-deleted-chain-at-the-first-purge-the-original-loads-flygenerators-2026-10-19)).
+**After work item 11** (2026-10-19): the counts stand. All 45 stored Island scenes were replayed and keep their status, and row 4.3.6 passes
+([load-made actors](#load-made-actors-paired-by-creation-order-not-by-name-2026-10-19)).
 The table above is the merge's run.
 
 The twenty `PASS` rows have proof checks on stored Island scenes: 5.2.2 on `cmb1` and `cmb2`, 5.1.6 on `cmb1` to `cmb4`, `cmb6` and `cmb7`, 5.1.5 on `cmb1`, `cmb2` and `cmb5`,
@@ -1042,12 +1108,22 @@ Nothing below was fixed by the census task; the two gap tasks closed items 1 and
 10. **The Deleted chain at `alm2`'s purge** (5.2.5): **done** 2026-10-19 ([the Deleted chain at the first purge](#the-deleted-chain-at-the-first-purge-the-original-loads-flygenerators-2026-10-19)).
     No destroy was left off Play's chain. The original's load made chance FlyGenerators that Play's seed-1 load did not make, and the frozen phase's KillAll chained
     them in the original only. The replay now makes them before the KillAll, from the capture's `generators-load<tag>.json`. `alm2` passes and `las1` purges at 561.
-11. **The measured slot of a live actor Play made before the seed** (the slot model, [above](#the-deleted-chain-at-the-first-purge-the-original-loads-flygenerators-2026-10-19)):
-    a Shadow made at Play's load gets the dump's index from the seed, but its release at a purge is not logged, so the model's free list misses that slot and the
-    creations after it take other slots (`kil1` 394, `exp1` 143). The hand-over that `madePending` gives pending actors would cover it. That change reaches every
-    scene that releases one, so it needs the stored scenes and row 4.3.6 replayed after it. Judged by nothing today (the slots are reported).
+11. **The measured slot of a live actor Play made before the seed** (the slot model): **done** 2026-10-19 ([load-made actors](#load-made-actors-paired-by-creation-order-not-by-name-2026-10-19)).
+    The hand-over alone did not cover it: a load-made actor's name is its class's session counter, which differs between the programs (Play's Shadows 53..105,
+    the original's 20..72), so the seed's name match gave Play's Shadows other Shadows' slots. The seed now pairs load-made actors with the dump's by creation order
+    within their class and hands each its measured slot. All 45 stored Island scenes keep their status (42 PASS; `cam1`, `emp2`, `dor3` FAIL on item 8 as before).
+    `kil1` and `exp1` drop to 0 creations in another slot (394 and 143 before), and the Shadow frees of `kil1`, `tC`, `exp1`, `die1`, `tA` and `tF` are now Play's own and
+    equal. Row 4.3.6 passes (103 of 103 calls, 557 of 557 takes in slot).
 12. **Harness destroys of actors only Play has** lengthen Play's Deleted chain and move its purges earlier: Play's own chance FlyGenerators under a KillAll
     (04_NYC_Street at seed 1: ten, `vents5`'s original eight) and the population step's `removed`. None happens on the Island today.
+13. **Play's session name counters at a load** ([load-made actors](#load-made-actors-paired-by-creation-order-not-by-name-2026-10-19)): Play's boot leaves each class's
+    `ClassUnique` elsewhere than the original's session does (Island: Shadow 53 against 20, LaserProxy 8 against 1, the player's objects 1 against 2), so every
+    load-made actor has another name than the original's. The replays pair them by creation order instead. The name is game state a script can read (`Object.Name`), so
+    matching the original needs its session's history before the load, which is not measured. Unblocks nothing in the gate today.
+14. **Where the replay releases an AI event pre-free** ([load-made actors](#load-made-actors-paired-by-creation-order-not-by-name-2026-10-19)): an AI event object that existed
+    at the frozen start and that Play does not hold is released after the event manager's Tick, not at its anchor. Inside a large collection the original releases
+    `AIReceiverEvent15` and `AIReceiverEvent16` 70th and 71st (`kil1` 541, `tC` 721, `tA` 481, `tF` 421), and the replay releases them 237th. The set is equal, the order
+    is not. It is reported, not judged (the slots are reported), and no later creation takes another slot because of it.
 
 ## What the user should decide
 

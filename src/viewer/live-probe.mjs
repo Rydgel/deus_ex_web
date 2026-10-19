@@ -299,30 +299,49 @@ export function liveProbe(game, args = {}) {
   if (args.objectTrace) {
     const registry = runtime.actorLifecycle.construction.registry;
     if (args.objectTrace.seed) {
-      const { count, freeIndices, measured = {}, player: live = null, preFrees = [], packages = null } = args.objectTrace.seed;
+      const { count, freeIndices, measured = {}, classRows = {}, player: live = null, preFrees = [], packages = null } = args.objectTrace.seed;
       runtime.seedOriginalObjectIndex({ count, freeIndices, exact: true, packages, source: 'the original registry at the frozen start' });
       // The run's own measured indices for the pre-placed actors and the player (a host input, like the tables of the other sessions), the
       // pending-deleted ones included: an actor that destroyed itself at load is released by Play's first purge under the index it holds
       // (script-level-collection.mjs `release`), and the map table's (map-object-indices.mjs) is another capture's.
-      // A pending-deleted actor the runtime created before the seed (a load's spawn, or the original load's chance FlyGenerators made for the
-      // frozen phase's KillAll, loadFlyGenerators above) holds a slot the seeded model did not hand out: its measured index is the slot its
-      // ~UObject appends to GObjAvailable at the purge, as a pre-placed actor's measured index is (script-level-collection.mjs `release`).
-      const held = new Set(), madePending = [];
+      const held = new Set(), exportNames = new Set(), made = new Map();
       const give = (actor, pending = false) => {
-        const key = `${runtime.instance(actor).cls.record.name}.${actor.name}`;
+        const instance = runtime.instance(actor), cls = instance.cls.record.name, object = instance.nativeObject;
+        if (object && Number.isInteger(object.index)) { (made.get(cls) ?? made.set(cls, []).get(cls)).push({ actor, pending }); return false; }
+        exportNames.add(actor.name);
+        const key = `${cls}.${actor.name}`;
         if (!Number.isInteger(measured[key])) return false;
-        runtime.instance(actor).globalIndex = measured[key];
+        instance.globalIndex = measured[key];
         held.add(measured[key]);
-        const object = runtime.instance(actor).nativeObject;
-        if (pending && object && Number.isInteger(object.index)) {
-          object.originalIndex = measured[key]; object.originalModel = registry.original; madePending.push(key);
-        }
         return true;
       };
       let given = 0, givenPending = 0;
       for (const actor of level.actors) if (actor && actor !== player && give(actor)) given++;
       for (let actor = level.pendingDeleted ?? null; actor; actor = runtime.readNamed(actor, 'Deleted') ?? null) if (actor !== player && give(actor, true)) givenPending++;
       if (live) { runtime.instance(player).globalIndex = live.index; held.add(live.index); }
+      // An actor the runtime created before the seed (a load's spawn: a pawn's Shadow, a LaserTrigger's LaserProxy, the original load's chance
+      // FlyGenerators made for the frozen phase's KillAll, loadFlyGenerators above), live or pending deletion. Its name is its class's session
+      // counter (MakeUniqueObjectName: ClassUnique++ per name made), and Play's boot leaves the counters elsewhere than the original's (Island:
+      // Play's Shadows are Shadow53..105, the original's Shadow20..72), so the name does not name the original's object. Within a class the
+      // counter orders creation in both programs, and both make the class's load actors in the same order (the same map, the same load code):
+      // the k-th of Play's is the original's k-th, among the dump's rows of that class that are not a pre-placed actor's. Paired only when
+      // both programs hold as many; a class that differs keeps no index (the original's frees of its slots are pre-frees). A paired actor
+      // holds a slot the seeded model did not hand out (the boot's model gave it one, or none): its measured index is the slot its ~UObject
+      // appends to GObjAvailable when a purge releases it, as a pre-placed actor's measured index is (script-level-collection.mjs `release`).
+      const number = name => Number(/\d+$/.exec(name)?.[0] ?? NaN), byNumber = (a, b) => a.n - b.n;
+      const paired = [], unpaired = [], madePending = [];
+      for (const [cls, list] of made) {
+        const ours = list.map(entry => ({ ...entry, n: number(entry.actor.name) })).sort(byNumber);
+        const theirs = (classRows[cls] ?? []).filter(([name]) => !exportNames.has(name)).map(([name, index]) => ({ name, index, n: number(name) })).sort(byNumber);
+        if (ours.length !== theirs.length || ours.some(entry => !Number.isInteger(entry.n))) { unpaired.push({ cls, play: ours.length, original: theirs.length }); continue; }
+        ours.forEach(({ actor, pending }, k) => {
+          const instance = runtime.instance(actor), index = theirs[k].index;
+          instance.globalIndex = index; held.add(index);
+          instance.nativeObject.originalIndex = index; instance.nativeObject.originalModel = registry.original;
+          if (pending) madePending.push(`${actor.name}=${theirs[k].name}`);
+        });
+        paired.push({ cls, count: ours.length, play: `${ours[0].n}..${ours.at(-1).n}`, original: `${theirs[0].n}..${theirs.at(-1).n}` });
+      }
       // Frees of objects that existed at the frozen start (see live-acceptance.mjs registrySeed). An object Play holds under the same index is
       // freed by Play itself: no pre-free for it. Of the others, one with an anchor (the original's registry event before it in the same tick)
       // is released right after Play's model takes or gives back that slot at that tick (the log hook below): its place in a purge. The rest run
@@ -332,7 +351,7 @@ export function liveProbe(game, args = {}) {
       args.objectTrace.pending = rest.filter(entry => !anchoredHere(entry)).map(entry => ({ ...entry }));
       args.objectTrace.anchored = rest.filter(anchoredHere).map(entry => ({ ...entry }));
       args.objectTrace.stats = { anchored: 0, late: 0, rejected: 0 };
-      out.objectTrace = { measured: given, pendingDeleted: givenPending, madePending, player: live?.key ?? null, preFrees: rest.length,
+      out.objectTrace = { measured: given, pendingDeleted: givenPending, paired, unpaired, madePending, player: live?.key ?? null, preFrees: rest.length,
         anchored: args.objectTrace.anchored.length, own: own.map(entry => `${entry.cls}.${entry.name}`) };
     }
     const objects = runtime.objectLog ??= [], sounds = runtime.soundLog ??= [];
