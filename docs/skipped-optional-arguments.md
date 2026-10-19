@@ -79,10 +79,11 @@ gives the same.
 
 ### AICanSee
 
-AICanSee is the one mismatch. Its fix, `2ea38c3`, is on `claude/wizardly-almeida-b07768`, not on master as of `4ef4a2c`. Until
-that branch merges, `execAICanSee` reads the skipped visibility as `Number(undefined)` (NaN), and the Rust path
-(`percep.rs` `ai_can_see`, whose `argc > 1` branch takes `values[1]`, the UNDEF_F64 NaN) returns 0. The pre-fix code affects all
-nine sites: `FindBestEnemy`'s `CheckEnemyParams`, the order and beam tests in ScriptedPawn, and `Animal`'s food test.
+AICanSee is the one mismatch, and it is fixed on master: `2ea38c3` (merged with the conversation scenes, `2d0261b`) keeps the exec
+thunk's defaults for a skipped argument (visibility 1.0, flags 1, 1, 0, 1). Before it, `execAICanSee` read the skipped visibility as
+`Number(undefined)` (NaN), and the Rust path (`percep.rs` `ai_can_see`, whose `argc > 1` branch took `values[1]`, the UNDEF_F64 NaN)
+returned 0. The old code affected all nine sites: `FindBestEnemy`'s `CheckEnemyParams`, the order and beam tests in ScriptedPawn,
+and `Animal`'s food test.
 
 ## Rust lowering
 
