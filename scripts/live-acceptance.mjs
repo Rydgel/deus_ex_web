@@ -45,6 +45,18 @@ mkdirSync(dir, {recursive: true});
 // --tag name keeps a run's files apart (original-trace-<name>.jsonl, play-rows-<name>.json): a short capture of another tick must not
 // overwrite the trace a frame was taken from.
 const tag = option('tag', null), suffix = tag ? `-${tag}` : '';
+// The chance FlyGenerators the original's load made (generators-load<tag>.json: name and the full-precision Location) when an --early-cmds
+// `KillAll FlyGenerator` removed them in its frozen phase: Play makes them before it replays that line, so they are on its Deleted chain as
+// on the original's (live-probe.mjs loadFlyGenerators), and the slot model gives them the original's indices (registrySeed). None without the file.
+const killedLoadFlies = () => {
+  const file = path.join(dir, `generators-load${suffix}.json`);
+  if (!earlyCommands().some(line => /^KillAll\s+FlyGenerator$/i.test(line)) || !existsSync(file)) return [];
+  return JSON.parse(readFileSync(file, 'utf8')).filter(entry => entry.cls === 'FlyGenerator').map(entry => {
+    const full = /^\(([^)]*)\)$/.exec(entry.fields?.Loc ?? '')?.[1].split(',').map(Number);
+    if (!full || full.length !== 3 || full.some(Number.isNaN)) throw new Error(`generators-load${suffix}.json: no full-precision Location for ${entry.name}`);
+    return {name: entry.name, slot: entry.slot, loc: full};
+  });
+};
 const tracePath = path.join(dir, `original-trace${suffix}.jsonl`);
 // A watched field read from memory that is no float (an --extra-watch door read with a pawn's field list) can print as -nan(ind) or inf: not JSON.
 const parseTraceLine = line => JSON.parse(line.replace(/-?nan\([a-z0-9]+\)|-?nan\b|-?inf\b/gi, 'null'));
@@ -1049,6 +1061,16 @@ async function play() {
     // chain, as the original ran them before its frozen frames: a placement's `walk` (PlayerPawn.StartWalk: ClientReStart, PlayWaiting) restarts the idle
     // animation, and run after the pose's write it left the player's BreatheLight 0.0125 behind the original's for 90 ticks (Stage 5 capture cmb1, 2026-10-17).
     // (frozenWindows.early: the original's window frames before each of these lines and after the last, the windows still held)
+    const loadFlies = killedLoadFlies();
+    let madeFlies = [];   // the ones Play made (their original names): the slot model gives them the original's indices (registrySeed)
+    if (loadFlies.length) {
+      const {own, made} = (await page.evaluate(list => window.deusExViewer.liveProbe({loadFlyGenerators: list}), loadFlies.map(({name, loc}) => ({name, loc})))).loadFlyGenerators;
+      const renamed = made.filter(entry => entry.name !== entry.original);
+      if (own.length) console.log(`the original's ${loadFlies.length} load FlyGenerators are not made: Play's load holds ${own.length} of its own, which its KillAll chains in their place (open)`);
+      madeFlies = made.filter(entry => entry.name === entry.original).map(entry => entry.name);
+      if (!own.length) console.log(`the original's load FlyGenerators made in Play before its KillAll: ${made.map(entry => `${entry.name} (${entry.decoration})`).join(' ')}`
+        + (renamed.length ? `; ${renamed.length} under another name than the original's` : ''));
+    }
     if (earlyCommands().length) {
       const early = await page.evaluate(([lines, frames]) => window.deusExViewer.viewProbe({exec: lines, ...(frames ? {windowFrames: frames} : {})}), [earlyCommands(), frozenWindows?.early ?? null]);
       console.log('early commands:', JSON.stringify(early.output), ...(frozenWindows ? [`(${early.windowFramesRun} of the original's window frames around them)`] : []));
@@ -1150,8 +1172,12 @@ async function play() {
       // destroyed at load and not yet purged), and the live player (the JCDentonMale created last).
       const population = existsSync(path.join(dir, 'play-population.json')) ? JSON.parse(readFileSync(path.join(dir, 'play-population.json'), 'utf8')) : {};
       if (population.names && !population.pendingDeleted) console.warn('play-population.json predates its pendingDeleted list: rerun `population` (the pending-deleted actors keep the map table\'s index)');
-      const names = new Set([...(population.names ?? []), ...(population.pendingDeleted ?? [])]);
-      const rowsByKey = new Map();
+      const names = new Set([...(population.names ?? []), ...(population.pendingDeleted ?? []), ...madeFlies]);
+      // An actor made at run time is named by its class's session counter (MakeUniqueObjectName), which Play's boot leaves elsewhere than
+      // the original's, so its name does not name the original's object: the page pairs those by creation order within the class
+      // (live-probe.mjs objectTrace), from the dump's rows of every class whose names Play's population holds (the stem without the number).
+      const stem = name => name.replace(/\d+$/, ''), stems = new Set([...names].map(stem));
+      const rowsByKey = new Map(), classRows = {};
       let player = null;
       const packages = [];   // the Package objects the original holds at the start
       for (const line of text.split(/\r?\n/)) {
@@ -1159,6 +1185,7 @@ async function play() {
         if (!m) continue;
         const key = `${m[2]}.${m[3]}`;
         if (names.has(m[3])) rowsByKey.set(key, rowsByKey.has(key) ? null : Number(m[1]));
+        if (/\d$/.test(m[3]) && stems.has(stem(m[3]))) (classRows[m[2]] ??= []).push([m[3], Number(m[1])]);
         if (m[2] === 'JCDentonMale' && (!player || Number(m[1]) > player.index)) player = {key, index: Number(m[1])};
         if (m[2] === 'Package') packages.push(m[3]);
       }
@@ -1183,7 +1210,7 @@ async function play() {
         }
       }
       return {count, freeIndices: free ? free.split(/\s+/).map(Number) : [], preFrees, packages,
-        measured: Object.fromEntries([...rowsByKey].filter(([, index]) => index !== null)), player};
+        measured: Object.fromEntries([...rowsByKey].filter(([, index]) => index !== null)), classRows, player};
     };
     const touchWindow = option('touch-trace', null)?.split(':').map(Number);   // --touch-trace first:last: EndTouch/AddTouch/BeginTouch of those ticks (touch-play.json)
     const navPawns = option('nav-trace', null), [navFirst, navLast] = option('nav-ticks', `1:${trace.length}`).split(':').map(Number);
@@ -1338,7 +1365,10 @@ async function play() {
     if (started.objectTrace) {
       const o = started.objectTrace;
       console.log(`object trace: the run's own indices for ${o.measured} pre-placed actors, ${o.pendingDeleted} more pending deletion and the player (${o.player}); ` +
-        `${o.preFrees} pre-frees (${o.anchored} at their anchor)${o.own.length ? `, none for ${o.own.join(' ')} (Play frees it)` : ''}`);
+        `${o.preFrees} pre-frees (${o.anchored} at their anchor)${o.own.length ? `, none for ${o.own.join(' ')} (Play frees it)` : ''}`
+        + `${o.paired?.length ? `; the actors made before the seed paired with the dump's by class creation order, each handed its measured slot: ${
+          o.paired.map(p => `${p.cls} ${p.count} (${p.play} = ${p.original})`).join(', ')}${o.madePending?.length ? `, pending deletion ${o.madePending.join(' ')}` : ''}` : ''}`
+        + `${o.unpaired?.length ? `; not paired (Play's count, the original's): ${o.unpaired.map(u => `${u.cls} ${u.play}/${u.original}`).join(', ')}` : ''}`);
     }
     const touch = [], rows = [], nav = [], script = [], setup = [], commandLog = [], events = [], objects = [], sounds = [], gcAllocs = [];
     let stalls = 0, levelEnd = null, preFreeStats = null;
