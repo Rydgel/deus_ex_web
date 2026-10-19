@@ -90,7 +90,7 @@ report (`--stage4-report`), so presentation proof is not repeated.
 | 5.2.2 | 01_NYC_UNATCOIsland | a visible player in the open: a patrolling Terrorist sees it (AICanSee, SightCounter, CycleCumulative), turns, calls the alert; a hidden player is not seen | O1 | `island-sight` | O1: live trace of the original (no ghost, player standing at a measured pose in a patrol's view and out of it) with the perception fields of the Perception pilot | perception pilot O1 in the Underworld (civilians flee a visible mj12-allied player); validate-pawn-perception / AICanSee x87 (O2) | PASS |
 | 5.2.3 | 01_NYC_UNATCOIsland | the player's noise reaches the guards: gunshots (WeaponFire, LoudNoise), the HandleShot/HandleLoudNoise callbacks; footsteps by speed and floor | O1 | `island-hearing` | footsteps (a held key the harness cannot post: O3 on Play's footstep inputs); the gunshot half has an Island O1 (cmb2) | validate-stage5-live cmb2 (O1 on Island: an unseen player's two pistol shots, every AI event manager call equal, the three NSF pawns woken); live-events-compare O1: 1,069 and 1,586 manager calls equal in the Underworld (pistol, assault shotgun) | MISSING |
 | 5.2.4 | 01_NYC_UNATCOIsland cameras | SecurityCamera sees the player: CheckPlayerVisibility every 0.1 s (cameraRange 1024, cameraFOV 4096 of its swinging Rotation), it tracks him and after triggerDelay (4 s) TriggerEvent(True) sounds its own Klaxon2 and starts an 'Alarm' AI event (it triggers no Event: NSFCam01..03's libertyturret1 is their UnTriggerEvent), which wakes NSFTurret01 (AlarmHeard) and the guards that hear it (HandleAlarm); UN_CamSystem01..04 (bNoAlarm) never check the player | O1 | `island-camera` | cam1: the blood of SecurityBot1's shots at the player (from tick 310; not the turret's) lands 0.87 units nearer the bot in Play, along the shot line, and the drops and splats it leaves differ from there. Cause found: ULevel::MultiLineCheck (0x1039b220) clips the actor segment at its world hit, Level->Model's LineCheck, and the original's Level->Model holds the brush tracker's mover fragments (DeusExMover23's face 930.7 units along the line), where Play's world check (hash.rs model_line_check, multiline.mjs) reads the static BSP (its hit 1801.8 units, the original DLL agreeing on that BSP); UPrimitive::LineCheck's 0.001 time back-off then gives 0.001 x (1801.8 - 930.7) = 0.871 (measured 0.8715). Need: Play's level traces over the tracked model (docs/brush-tracker.md "Open: Collision") | validate-stage5-live cam1 (O1 2026-10-18: NSFCam02 = SecurityCamera3 sees the player 400 units in front of it at tick 7 (bTrackPlayer, bPlayerSeen), triggers after triggerDelay at 252 (bEventTriggered) and starts 'alarm': AutoTurret0's AlarmHeard and Terrorist21's HandleAlarm run at 252); validate-stage5-live cam2 (O1 2026-10-18, PASS: SecurityCamera2, UN_CamSystem02 with bNoAlarm, swings for 300 ticks with the player 700 units in front of it, inside its range and cone, and never tracks him) | FAIL |
-| 5.2.5 | 01_NYC_UNATCOIsland laser trap | a LaserTrigger beam broken by the player raises the alarm (LaserTrigger.BeginAlarm: Klaxon2 and an 'Alarm' AI event; the laser has no Event): the guards that hear it handle it (HandleAlarm: AlarmTimer 120, seek, attack), and AlarmTimer > 0 keeps them from the alarm box (Alerting: Alert -> Done -> Attacking); AlarmUnit0 (SetAlarmFlag -> FlagTrigger3 -> StatueAlarmTriggered) is rung by a RaiseAlarm BeforeAttacking guard that takes the player as its enemy with AlarmTimer 0 (Terrorist18 seeing him) | O1 | `island-laser` | O1: live trace of the original with the player placed across statue_lasertrap (the guards' AlarmTimer and states, the klaxon) and, separately, in Terrorist18's view (its run to AlarmUnit0 and the flag) | validate-stage5-live las1 (O1 2026-10-18: the player placed across the beams; LaserTrigger2..4 start 'alarm' at tick 2, AutoTurretSmall0's AlarmHeard and Terrorist30's and Terrorist2's HandleAlarm follow; Terrorist18 seeks with AlarmTimer > 0 and goes Alerting -> Attacking at 155-156 without the box; StatueAlarmTriggered stays unset); validate-stage5-live alm1 (O1: the player in Terrorist18's view south of its chair; NSFCam (SecurityCamera5) also alarms at 259; Terrorist18, AlarmTimer 0, seeks, goes Alerting at 114, rings AlarmUnit0 at 494 (its 'alarm', bActive) and StatueAlarmTriggered is set); validate-stage5-live alm2 (O1: hck1's hack from off Terrorist18's way: the MegaFutz shows it the player, it goes Alerting at 202 and rings AlarmUnit0 at 599; StatueAlarmTriggered set) | PASS |
+| 5.2.5 | 01_NYC_UNATCOIsland laser trap | a LaserTrigger beam broken by the player raises the alarm (LaserTrigger.BeginAlarm: Klaxon2 and an 'Alarm' AI event; the laser has no Event): the guards that hear it handle it (HandleAlarm: AlarmTimer 120, seek, attack), and AlarmTimer > 0 keeps them from the alarm box (Alerting: Alert -> Done -> Attacking); AlarmUnit0 (SetAlarmFlag -> FlagTrigger3 -> StatueAlarmTriggered) is rung by a RaiseAlarm BeforeAttacking guard that takes the player as its enemy with AlarmTimer 0 (Terrorist18 seeing him) | O1 | `island-laser` | O1: live trace of the original with the player placed across statue_lasertrap (the guards' AlarmTimer and states, the klaxon) and, separately, in Terrorist18's view (its run to AlarmUnit0 and the flag) | validate-stage5-live las1 (O1 2026-10-18: the player placed across the beams; LaserTrigger2..4 start 'alarm' at tick 2, AutoTurretSmall0's AlarmHeard and Terrorist30's and Terrorist2's HandleAlarm follow; Terrorist18 seeks with AlarmTimer > 0 and goes Alerting -> Attacking at 155-156 without the box; StatueAlarmTriggered stays unset); validate-stage5-live alm1 (O1: the player in Terrorist18's view south of its chair; NSFCam (SecurityCamera5) also alarms at 259; Terrorist18, AlarmTimer 0, seeks, goes Alerting at 114, rings AlarmUnit0 at 494 (its 'alarm', bActive) and StatueAlarmTriggered is set); validate-stage5-live alm2 (O1: hck1's hack from off Terrorist18's way: the MegaFutz shows it the player, it goes Alerting at 202 and rings AlarmUnit0 at 599; StatueAlarmTriggered set) | FAIL |
 | 5.2.6 | 01_NYC_UNATCOIsland laser trap | hacking ControlPanel0 with a multitool switches statue_lasertrap off: hack time (skill, hackStrength), the multitool's use, the lasers' state | O1 | `island-hack-panel` | O1: live trace of the original (Multitool selected, a left-button click on the panel: ParseLeftClick, never the right button) with the hack progress, multitool charge and laser state per tick | validate-stage5-live hck1 (O1 2026-10-18: the Multitool summoned, picked up and drawn, the Enter edge at 200 starts the hack, HackableDevices.Timer takes hackStrength 0.1 to 0 in 0.01 steps by tick 446, HackAction UnTriggers the five LaserTriggers; the panel, the lasers, AlarmUnit0, the Multitool and every pawn compared per tick) | PASS |
 | 5.2.7 | 01_NYC_UNATCOIsland | a pawn reacts to a body: a killed or knocked-out Terrorist is seen (CheckCarcassPresence, HaveSeenCarcass, AddCarcass) and the finder investigates or flees | O1 | `island-carcass` | O1: live trace of the original with a carcass in a patrol's view | validate-pawn-carcass (natives 2108/2109, O2); validate-stage5-live cmb1 (O1: the attacking Terrorists find TerroristCarcass1, CarcassTimer 120, and stay in Attacking) | PASS |
 
@@ -864,10 +864,13 @@ have no `frozen-lines` file and replay as before (`tA` and `cmb2` rerun: PASS).
 **Still unmeasured**: the original's frames between the map's load and the attach (the 40 s load wait and the generators' dump), against Play's page frames
 before its first held line. The log is empty until the first typed line, and no other window state is known to depend on that time.
 
-## Scoreboard (2026-10-18, after the third captures)
+## Scoreboard (2026-10-19, after the merge of the Island batches)
 
-`node scripts/validate-stage5-acceptance.mjs --report .work/stage5-gate-2026-10-18-devices.json` with a fresh census of this branch (the Mac, 21:14 to 21:54: the census 50 plays, 0
-pause, 0 no-effect, 0 undriven; the 18 proof scenes each replayed once): **10 of 50 criteria pass; the gate is red** (exit 1). 55 rows, 5 excluded. Every row was rerun on this code.
+`node scripts/validate-stage5-acceptance.mjs --census .work/stage5-census-2026-10-19-final2.json --report .work/stage5-gate-2026-10-19-final2.json` on master `a786b4e`
+(the devices, routes, conversation, `kC` and gives, frozen-phase frames, skipped-argument audit and zone-0 branches merged; the Mac, 2026-10-19: the census 1,161 s, 50 plays,
+0 pause, 0 no-effect, 0 undriven, equal to its `EXPECTED`; the 43 proof scenes each replayed once, 12:25 to 13:19): **20 of 50 criteria pass; the gate is red** (exit 1 without
+`--report`). 7 FAIL, 23 MISSING; 55 rows, 5 excluded. Every row was rerun on this code.
+
 History: the first run (master 5d7285c, with the three tightened predicates) was 0 PASS, 14 FAIL, 33 MISSING, 3 UNDRIVEN. The Island devices task moved 5.2.6, 5.3.9, 5.5.1 and 5.5.2 from FAIL to
 MISSING. The death, explosives and alarms task moved 5.1.2, 5.1.4, 5.1.5, 5.2.7, 5.6.2 and 5.6.5. That left 0 PASS, 4 FAIL, 43 MISSING, 3 UNDRIVEN. The first combat captures moved
 5.2.2 from FAIL to PASS and 5.1.6 from MISSING to PASS (2 PASS, 3 FAIL, 42 MISSING). The second moved 5.6.1 from MISSING to PASS, and 5.1.5 and 5.2.7 from MISSING to FAIL: their proof,
@@ -879,24 +882,53 @@ report `.work/stage5-gate-2026-10-18-mesh.json`). The third captures ([above](#t
 and 5.1.9, 5.2.4 and 5.6.5 from MISSING to FAIL. The conversation captures
 ([above](#conversation-captures-the-islands-conversations-choices-and-flags-2026-10-18)) moved 5.4.3 to 5.4.7 from MISSING to PASS, and `kC` moved 5.6.6 from MISSING to PASS.
 
+The merge (2026-10-19) gives the union of the branches' results but one row: 5.2.5, PASS on the devices branch, fails on `alm2` (below). The routes' 5.5.3 to 5.5.7 pass and
+5.3.10, 5.5.1 and 5.5.2 fail on `dor3`, as on their branch. The merge's first census had seven scenarios undriven (pistol-range, meet-page-final, island-laser,
+gunther-rescued, route-back, noise-wakes-guards, flags-change-world): physWalking's zone-0 branch (merged `267feda`) makes a player placed outside the world fall out of it
+and die, and the census driver's approaches and standing places tried such places, so every later approach started dead. The driver now skips a place PointRegion puts in
+zone 0 (`c.inWorld`, `a786b4e`), and all 50 play.
+
 | Clause | PASS | FAIL | MISSING | UNDRIVEN | EXCLUDED |
 | --- | ---: | ---: | ---: | ---: | ---: |
 | 5.1 Combat | 4 | 1 | 4 | 0 | 0 |
-| 5.2 Stealth | 4 | 1 | 2 | 0 | 0 |
-| 5.3 Exploration and the character systems | 0 | 0 | 13 | 0 | 0 |
+| 5.2 Stealth | 3 | 2 | 2 | 0 | 0 |
+| 5.3 Exploration and the character systems | 0 | 1 | 12 | 0 | 0 |
 | 5.4 Conversation | 5 | 0 | 3 | 0 | 0 |
-| 5.5 Alternate-route objectives | 0 | 0 | 7 | 0 | 0 |
-| 5.6 Systems interacting | 2 | 1 | 3 | 0 | 0 |
+| 5.5 Alternate-route objectives | 5 | 2 | 0 | 0 | 0 |
+| 5.6 Systems interacting | 3 | 1 | 2 | 0 | 0 |
 | 5.7 Excluded | 0 | 0 | 0 | 0 | 5 |
-| **Total** | **10** | **3** | **37** | **0** | **5** |
+| **Total** | **20** | **7** | **23** | **0** | **5** |
 
-The ten `PASS` rows have proof checks on stored Island scenes: 5.2.2 on `cmb1` and `cmb2`, 5.1.6 on `cmb1` to `cmb4`, `cmb6` and `cmb7`, 5.1.5 on `cmb1`, `cmb2` and `cmb5`,
-5.2.7 on `cmb5`, 5.6.1 on `cmb7`, 5.1.8 on `die1`, 5.1.7 on `ko1`, 5.2.5 on `las1`, `alm1` and `alm2`, 5.2.6 on `hck1`, 5.6.4 on `exp1`. The three `FAIL` rows share one cause, named in
-their `need`: 5.1.9 and 5.2.4 on `cam1` (and `cam2`, which passes) and 5.6.5 on `emp2` (and `emp1`, which passes) differ only from SecurityBot1's shot at the player, whose
-hit Play places by the static BSP where the original's `Level->Model` holds the brush tracker's mover fragments (work item 8 below). The 37 `MISSING` rows play in the census and name the
-capture that would prove them. Stage 4's gate started at 44 of 70 because 60 checks against stored
+The twenty `PASS` rows have proof checks on stored Island scenes: 5.2.2 on `cmb1` and `cmb2`, 5.1.6 on `cmb1` to `cmb4`, `cmb6` and `cmb7`, 5.1.5 on `cmb1`, `cmb2` and `cmb5`,
+5.2.7 on `cmb5`, 5.6.1 on `cmb7`, 5.1.8 on `die1`, 5.1.7 on `ko1`, 5.2.6 on `hck1`, 5.6.4 on `exp1`; 5.4.3 on `pG`, `pR` and `pX`, 5.4.4 on `fT`, `fM`, `fN` and `tA`, 5.4.5 on
+`gP`, `gN`, `gA`, `gS`, `gU`, `gK` and `gW`, 5.4.6 on `tC` and `tA`, 5.4.7 on `oV`, `oT`, `cmb2` and `cmb3`, 5.6.6 on `gP`, `gN`, `gA`, `fT`, `fM`, `fN`, `oV` and `kC`; 5.5.3 on
+`air1`, 5.5.4 on `wat1`, 5.5.5 on `kil1`, 5.5.6 on `tC`, 5.5.7 on `kil1` and `tC` (each with its `weak`). Six of the seven `FAIL` rows share one cause, named in their `need`
+(work item 8 below: Play's traces read the static BSP where the original's `Level->Model` holds the brush tracker's mover fragments): 5.1.9 and 5.2.4 on `cam1` (`cam2`
+passes) and 5.6.5 on `emp2` (`emp1` passes), from SecurityBot1's shot at the player; 5.3.10, 5.5.1 and 5.5.2 on `dor3` (`dor1`, `dor2` and `fK` pass), from the rocket at the
+back entrance (routes, item 4).
+
+**5.2.5 (`alm2`), new with the merge.** `las1` and `alm1` pass; `alm2` differs in one field of one actor: `Multitool0` (summoned at 20, used up and destroyed at 446 in
+both) is released by the original at 895 and never by Play. The conversation batch's release comparison (`live-acceptance.mjs`: a destroyed actor's `unhash` record
+against Play's object log) is what sees it; the devices branch, where `alm2` passed, compared rows only up to the destruction. At 895 the original's
+`ULevel::CleanupDestroyed` purges 128 actors at once (55 BloodDrops, 22 BloodSpurts, 15 WaterRings, 14 MuzzleFlashes, 6 ConPlayBarks, 5 LaserSpots, 3 Tracers, 2
+ShellCasings, 2 FlyGenerators, a BloodSplat, `Multitool0`, a NanoKeyRing and `PickupDistributor0`): the Deleted chain reached the 128 that `cleanupLevelDestroyed`
+waits for. Play frees none of them by tick 900, so its chain was shorter at 895. Every creation and every compared field is equal, so the missing link is a
+destroy Play does not chain, or one it chained earlier and purged. The purges of `cmb3` (821), `las1` (561) and `exp1` (352) hold the NanoKeyRing,
+`PickupDistributor0` and the WaterRings too and pass; `alm2`'s own kinds are the LaserSpots, `Multitool0` and a second FlyGenerator (frozen-phase `KillAll`).
+**Unverified which one; open** (Play's Deleted chain count per tick against the original's purge is the next measurement).
+
+The 23 `MISSING` rows play in the census and name the capture that would prove them.
+Stage 4's gate started at 44 of 70 because 60 checks against stored
 originals already existed; for gameplay they did not. The strongest existing evidence is listed per row under "Existing, partial": the Island combat scenes, the Underworld's
 weapon-noise traces for gunshots, the perception pilot, the first-person crowbar, MeetPaul's frames, and the native oracles for swimming, ladders, falling and movers.
+
+**Checks rerun for the merge** (2026-10-19, the Mac, master `a786b4e`, the wasm core and `ad/build/dx-live-win.exe` rebuilt): the unit tests (652); the census
+and the gate above (43 proof scenes); the two stored scenes no row names, `tF` (the frozen phase's window frames: 26 actors, 950 ticks, the 7 flags) and `kB`
+(23 actors, 700 ticks), both PASS; the six Stage 4 rows that replay live traces (4.1.5, 4.1.6, 4.1.7, 4.2.13, 4.3.6, 4.5.5), all PASS; `cmb1` re-judged with
+`--compare-only` on the merged comparison, PASS. On their own branches before the merge: the AIProcess stop's combined model on `las1`, `gA` and `alm1` and
+`validate-event-manager` (98 scenarios), on a tree equal to master's but for comments and two unused helpers; physWalking's zone-0 branch on
+`validate-native-walking` (399 cases, four zone-0), `-native-swimming`, `-walk-loop-kernel`, `-walk-loop-branches` and `-pawn-physics-kernel`. Not rerun: the full
+validator sweep and the `bench-sim` digests.
 
 **Checks rerun for the third captures' Play changes** (2026-10-18, the Mac; the decoration footprint block, the zero-scale GetFrame, physFalling's PlayerPawn count with the
 rebuilt Rust kernel): the 18 Island scenes in the gate run above (`cmb1` to `cmb7`, `die1` and the ten new ones: all but `cam1` and `emp2` pass); `validate-native-landing` (853
@@ -949,6 +981,9 @@ Nothing below was fixed by the census task; the two gap tasks closed items 1 and
    SecurityBot1's shot (`cam1`, `emp2`, devices). Needs an oracle over a tracked model and every stored scene near a mover replayed after it. Unblocks 5.1.9 and 5.2.4 (`cam1`), 5.6.5
    (`emp2`), 5.3.10, 5.5.1 and 5.5.2 (`dor3`).
 9. **Shooting the turret down** (5.1.9's second half) has no capture: an untrained pistol misses AutoTurretGun0 from 340 units, and the turret and SecurityBot1 kill the player first.
+10. **The Deleted chain at `alm2`'s purge** (5.2.5, [scoreboard](#scoreboard-2026-10-19-after-the-merge-of-the-island-batches)): the original's `ULevel::CleanupDestroyed`
+    purges 128 actors at 895 and Play none by 900. Count Play's Deleted chain per tick against the original's destroys (`alm2`'s own kinds first: the LaserSpots,
+    `Multitool0`, the frozen phase's second FlyGenerator) and fix the destroy Play does not chain. Unblocks 5.2.5.
 
 ## What the user should decide
 
