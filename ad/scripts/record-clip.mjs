@@ -176,14 +176,30 @@ async function gunther(page, out) {
     await turnTo(page, [wrap(-10130), 49152, 0], 900); await wait(page, 500);
     await page.mouse.click(...center, {button: 'right'}); mark('button');
     await wait(page, 1600);
-    // the door has swung: Gunther in the cell; a few steps in, then the place in front of him row 5.4.5's capture uses (a cut in the edit).
-    // Freed, he leaves after some 8 s unless the conversation has started.
+    // the door has swung: Gunther in the cell, then a real walk in (the conversation starts at some 57 units). --hop places the player in front of him
+    // as row 5.4.5's capture does instead (a cut in the edit, and the walk's momentum shows in the conversation's first shot). Freed, he leaves after some 8 s unless it has started.
     await aimAt(page, 'GuntherHermann0', 900, 20); await wait(page, 400);
-    await page.keyboard.down('w'); await wait(page, 600); await page.keyboard.up('w');
-    mark('cut');
-    await place(page, {location: [1885, -2180, -128], rotation: [0, 49152, 0]});
     let con = null;
-    for (let i = 0; i < 60 && con?.conPlay?.con !== 'GuntherRescued'; i++) { await wait(page, 100); con = await conversation(page); }
+    if (!argv.includes('--hop')) {
+      // a real walk to him: forward held, the view kept on him, until the conversation starts (or he is reached)
+      await page.keyboard.down('w');
+      for (let i = 0; i < 60 && con?.conPlay?.con !== 'GuntherRescued'; i++) {
+        await wait(page, 100); con = await conversation(page);
+        const r = await read(page, ['@player', 'GuntherHermann0'], ['Location', 'Velocity']);
+        const d = Math.hypot(r['@player'].Location[0] - r.GuntherHermann0.Location[0], r['@player'].Location[1] - r.GuntherHermann0.Location[1]);
+        console.log(`walk ${i}: distance ${d.toFixed(0)} speed ${Math.hypot(...r['@player'].Velocity.slice(0, 2)).toFixed(0)} con ${con?.conPlay?.con ?? '-'}`);
+        if (d < Number(option('stop', 90))) { await page.keyboard.up('w'); }
+        else if (i % 3 === 2) await aimAt(page, 'GuntherHermann0', 80, 20);
+      }
+      await page.keyboard.up('w');
+      for (let i = 0; i < 50 && con?.conPlay?.con !== 'GuntherRescued'; i++) { await wait(page, 100); con = await conversation(page); }
+    } else {
+      await page.keyboard.down('w'); await wait(page, 600); await page.keyboard.up('w');
+      await wait(page, 350);
+      mark('cut');
+      await place(page, {location: [1885, -2180, -128], rotation: [0, 49152, 0], set: {actor: '$player', fields: {Velocity: [0, 0, 0], Acceleration: [0, 0, 0]}}});
+      for (let i = 0; i < 60 && con?.conPlay?.con !== 'GuntherRescued'; i++) { await wait(page, 100); con = await conversation(page); }
+    }
     mark('conversation');
     console.log('conversation:', con?.conPlay?.con ?? null);
     // the speeches play out at their own pace; a choice stays on screen a moment, then the first one is taken
