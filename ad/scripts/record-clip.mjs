@@ -169,11 +169,14 @@ async function gunther(page, out) {
   const weapon = option('weapon', 'WeaponPistol');
   if (!argv.includes('--unarmed')) { await take(page, weapon); await draw(page, weapon); }
   // the wall button beside the cell (DeusExMover8), where row 5.4.5's capture stands: looking down at it, the cell's wall is the door
-  await place(page, {location: [1952, -1796, -84.2], rotation: [wrap(-4500), 49152, 0]});
+  // --start x,y: where JC stands to press the button (default just inside the cell: the capture's own spot, 1952,-1796, reached with `ghost`, puts the eye in the
+  // pillar west of the walk, and the pillar appears as he steps out of it)
+  const [sx, sy] = option('start', '1950,-1815').split(',').map(Number);
+  await place(page, {location: [sx, sy, -84.2], rotation: [wrap(-4500), 49152, 0]});
   await wait(page, 1500);
   await record(page, out, async () => {
     await wait(page, 1200);
-    await turnTo(page, [wrap(-10130), 49152, 0], 900); await wait(page, 500);
+    await aimAt(page, 'DeusExMover8', 900, 6); await wait(page, 500);
     await page.mouse.click(...center, {button: 'right'}); mark('button');
     await wait(page, 1600);
     // the door has swung: Gunther in the cell, then a real walk in (the conversation starts at some 57 units). --hop places the player in front of him
@@ -181,7 +184,7 @@ async function gunther(page, out) {
     await aimAt(page, 'GuntherHermann0', 900, 20); await wait(page, 400);
     let con = null;
     if (!argv.includes('--hop')) {
-      // a real walk to him: forward held, the view kept on him, until the conversation starts (or he is reached)
+      // a real walk to him: one aim, then forward held without corrections (a re-aim mid-walk snaps the view), until the conversation starts
       await page.keyboard.down('w');
       for (let i = 0; i < 60 && con?.conPlay?.con !== 'GuntherRescued'; i++) {
         await wait(page, 100); con = await conversation(page);
@@ -189,7 +192,6 @@ async function gunther(page, out) {
         const d = Math.hypot(r['@player'].Location[0] - r.GuntherHermann0.Location[0], r['@player'].Location[1] - r.GuntherHermann0.Location[1]);
         console.log(`walk ${i}: distance ${d.toFixed(0)} speed ${Math.hypot(...r['@player'].Velocity.slice(0, 2)).toFixed(0)} con ${con?.conPlay?.con ?? '-'}`);
         if (d < Number(option('stop', 90))) { await page.keyboard.up('w'); }
-        else if (i % 3 === 2) await aimAt(page, 'GuntherHermann0', 80, 20);
       }
       await page.keyboard.up('w');
       for (let i = 0; i < 50 && con?.conPlay?.con !== 'GuntherRescued'; i++) { await wait(page, 100); con = await conversation(page); }
@@ -280,6 +282,18 @@ async function look(page, out) {
     const p = (await read(page, ['@player'], ['Location']))['@player'].Location.map(Math.round);
     await page.screenshot({path: path.join(out, `look-${k}.png`)});
     console.log(`look-${k}: asked ${[x, y, z]} stands ${p}`);
+    if (option('movers', null)) {
+      const names = option('movers').split(',');
+      const st = await page.evaluate(() => window.deusExViewer.moverProbe({points: true}));
+      for (const m of (st.movers ?? st.tracked ?? [])) if (names.includes(m.name) || names.includes('*')) {
+        const nums = []; const walk = v => { if (typeof v === 'number') nums.push(v); else if (v && typeof v === 'object') Object.values(v).forEach(walk); };
+        walk(m.points);
+        const flat = []; for (let i = 0; i + 2 < nums.length; i += 3) flat.push(nums.slice(i, i + 3));
+        const box = flat.length ? [0, 1, 2].map(i => [Math.min(...flat.map(p => p[i])), Math.max(...flat.map(p => p[i]))].map(Math.round)) : null;
+        if (box && (!names.includes('*') || (box[0][1] > 1600 && box[0][0] < 2200 && box[1][1] > -2400 && box[1][0] < -1500))) console.log(`  ${m.name}: box ${JSON.stringify(box)}`);
+      }
+      if (!names.includes('*')) console.log('  ', JSON.stringify(await read(page, names, ['Location', 'Rotation', 'PrePivot', 'KeyNum', 'MoverEncroachType', 'bBlockPlayers', 'bBlockActors', 'bCollideActors', 'InitialState'])));
+    }
     if (Number(option('frob', -1)) === k) { await page.mouse.click(...center, {button: 'right'}); await wait(page, 2500); await page.screenshot({path: path.join(out, `look-${k}-frob.png`)}); }
   }
 }
