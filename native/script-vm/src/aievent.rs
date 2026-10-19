@@ -1122,12 +1122,6 @@ pub extern "C" fn ai_set_process_stop(active: u32, actor: u32, name: u32) {
 pub extern "C" fn ai_process_stop_misses() -> u32 {
     unsafe { *addr_of_mut!(PROCESS_STOP_MISSES) }
 }
-fn rcv_actor(r: u32) -> u32 {
-    if r != 0 { rcv(r).actor } else { 0 }
-}
-fn rcv_name(r: u32) -> u32 {
-    if r != 0 && rcv(r).ty != 0 { ty(rcv(r).ty).name } else { 0 }
-}
 /// UEventManager::Tick.
 #[no_mangle]
 pub extern "C" fn ai_tick() {

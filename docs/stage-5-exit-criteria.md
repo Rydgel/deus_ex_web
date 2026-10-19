@@ -868,7 +868,7 @@ The death capture (`die1`) moved 5.1.8 from MISSING to FAIL on the same item, it
 3 PASS, 6 FAIL, 38 MISSING, 3 UNDRIVEN (report `.work/stage5-gate-2026-10-18-518.json`). The undriven-scenarios task (item 6 below) made every scenario play, which moves the three
 no-effect rows (5.2.5, 5.4.8, 5.5.5) and the three undriven ones (5.4.5, 5.6.3, 5.6.6) to MISSING; the mesh layer's fix moved 5.1.5, 5.2.7 and 5.1.8 from FAIL to PASS (6 PASS, 44 MISSING,
 report `.work/stage5-gate-2026-10-18-mesh.json`). The third captures ([above](#third-captures-devices-and-weapons-2026-10-18)) moved 5.1.7, 5.2.5, 5.2.6 and 5.6.4 from MISSING to PASS
-and 5.1.9, 5.2.4 and 5.6.5 from MISSING to FAIL The conversation captures
+and 5.1.9, 5.2.4 and 5.6.5 from MISSING to FAIL. The conversation captures
 ([above](#conversation-captures-the-islands-conversations-choices-and-flags-2026-10-18)) moved 5.4.3 to 5.4.7 from MISSING to PASS, and `kC` moved 5.6.6 from MISSING to PASS.
 
 | Clause | PASS | FAIL | MISSING | UNDRIVEN | EXCLUDED |
