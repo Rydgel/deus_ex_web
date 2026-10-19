@@ -74,16 +74,18 @@ export async function openSession(map, assets) {
         return aimed;
       });
     },
-    /** Try the approaches (lift x distance x 8 bearings) until `act` gets a view trace that selects the target. */
+    /** Try the approaches (lift x distance x 8 bearings) until `act` gets a view trace that selects the target. A place outside the world is skipped: the
+     * player's landing there runs physWalking's zone-0 branch (FellOutOfWorld: Health -1, PHYS_None), and every later approach would start dead. */
     async approach_(target, distances, act, lifts = [0, 28]) {
       let last = null;
       const at = read(target, 'Location');
       for (const lift of lifts) for (const distance of distances) for (let k = 0; k < 8; k++) {
-        const bearing = k * PI / 4;
-        try { return await act({position: [at[0] + Math.cos(bearing) * distance, at[1] + Math.sin(bearing) * distance, at[2] + lift], maxFrames: 25}); }
+        const bearing = k * PI / 4, position = [at[0] + Math.cos(bearing) * distance, at[1] + Math.sin(bearing) * distance, at[2] + lift];
+        if (!c.inWorld(position)) continue;
+        try { return await act({position, maxFrames: 25}); }
         catch (error) { if (!/View trace did not select/.test(error.message)) throw error; last = error; }
       }
-      throw new Undriven(`no approach selects ${target.name} (${String(last.message).slice(0, 90)})`);
+      throw new Undriven(`no approach selects ${target.name} (${last ? String(last.message).slice(0, 90) : 'every place is outside the world'})`);
     },
     async take(item) {
       await c.frob(item); frames(10);
@@ -105,10 +107,12 @@ export async function openSession(map, assets) {
       await game.activateBelt(read(item, 'beltPos')); frames(60);
       if (read(player(), 'inHand') !== item) throw new Undriven(`ActivateBelt ${read(item, 'beltPos')} did not select ${item.name}`);
     },
-    /** Stand `distance` from `target` at the first bearing where the player keeps walking on dry ground (physics 1, zone not 0, unhurt). */
+    /** Stand `distance` from `target` at the first bearing where the player keeps walking on dry ground (physics 1, zone not 0, unhurt). A place outside
+     * the world is skipped before the player stands there (it would fall out of the world and die: physWalking's zone-0 branch). */
     openStand(target, distance, bearings = [PI, PI * 0.75, PI * 1.25, PI / 2, -PI / 2, 0]) {
       for (const bearing of bearings) {
         const from = c.approach(target, distance, bearing), h = c.health(player());
+        if (!c.inWorld(from)) continue;
         c.stand(from, c.pos(target)); frames(8);
         const zone = read(player(), 'Region')?.['engine.actor.pointregion.zonenumber'];
         if (read(player(), 'Physics') === 1 && zone !== 0 && c.health(player()) >= h) return {bearing, from};
