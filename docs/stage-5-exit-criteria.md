@@ -913,9 +913,11 @@ against Play's object log) is what sees it; the devices branch, where `alm2` pas
 `ULevel::CleanupDestroyed` purges 128 actors at once (55 BloodDrops, 22 BloodSpurts, 15 WaterRings, 14 MuzzleFlashes, 6 ConPlayBarks, 5 LaserSpots, 3 Tracers, 2
 ShellCasings, 2 FlyGenerators, a BloodSplat, `Multitool0`, a NanoKeyRing and `PickupDistributor0`): the Deleted chain reached the 128 that `cleanupLevelDestroyed`
 waits for. Play frees none of them by tick 900, so its chain was shorter at 895. Every creation and every compared field is equal, so the missing link is a
-destroy Play does not chain, or one it chained earlier and purged. The purges of `cmb3` (821), `las1` (561) and `exp1` (352) hold the NanoKeyRing,
-`PickupDistributor0` and the WaterRings too and pass; `alm2`'s own kinds are the LaserSpots, `Multitool0` and a second FlyGenerator (frozen-phase `KillAll`).
-**Unverified which one; open** (Play's Deleted chain count per tick against the original's purge is the next measurement).
+destroy Play does not chain. Play's object logs of the other scenes (a batch of 100 frees or more) show it is not `alm2`'s alone: Play purges with the original in
+`cmb3` (821, 128) and `exp1` (352, 131; 384, 129), but in `las1` at 565 where the original purges at 561, which the check does not see (no watched actor is released
+there). The two scenes whose purge holds FlyGenerators, killed by the frozen phase's `KillAll FlyGenerator` (one in `las1`, two in `alm2`), are the two where Play
+purges late; `cmb3` and `exp1` have none. **Unverified, open**: that Play leaves the frozen phase's destroys off its Deleted chain (Play's chain count per tick
+against the original's purges is the next measurement; Play's population, regenerated on this code, has the same `pendingDeleted`).
 
 The 23 `MISSING` rows play in the census and name the capture that would prove them.
 Stage 4's gate started at 44 of 70 because 60 checks against stored
@@ -982,8 +984,9 @@ Nothing below was fixed by the census task; the two gap tasks closed items 1 and
    (`emp2`), 5.3.10, 5.5.1 and 5.5.2 (`dor3`).
 9. **Shooting the turret down** (5.1.9's second half) has no capture: an untrained pistol misses AutoTurretGun0 from 340 units, and the turret and SecurityBot1 kill the player first.
 10. **The Deleted chain at `alm2`'s purge** (5.2.5, [scoreboard](#scoreboard-2026-10-19-after-the-merge-of-the-island-batches)): the original's `ULevel::CleanupDestroyed`
-    purges 128 actors at 895 and Play none by 900. Count Play's Deleted chain per tick against the original's destroys (`alm2`'s own kinds first: the LaserSpots,
-    `Multitool0`, the frozen phase's second FlyGenerator) and fix the destroy Play does not chain. Unblocks 5.2.5.
+    purges 128 actors at 895 and Play none by 900; in `las1` Play purges at 565, the original at 561. Count Play's Deleted chain per tick against the original's
+    destroys, the frozen phase's `KillAll FlyGenerator` first (the two late scenes are the two whose purge holds FlyGenerators), and fix the destroy Play does not
+    chain. Unblocks 5.2.5.
 
 ## What the user should decide
 
