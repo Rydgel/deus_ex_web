@@ -1130,7 +1130,10 @@ async function play() {
       // player settled elsewhere is put at the original's pose, a measured input like the pose itself
       const settled = () => now?.Physics === pose.Phys && now.Velocity.every(v => v === 0);
       for (; waited < 240 && !rested(); waited += 2) { await frames(2); now = await stand(); if (settled() && !rested() && waited >= 20) break; }
-      if (settled() && !rested()) {
+      // (exactly, in float32: a rest height an ulp off the original's (med1: 19.7999992 for 19.8000011, the landing's own arithmetic after the placement's ticks) passes the 1e-3 test
+      // above and the replay then differs from tick 1 on, in the runs where the page's frames were ticks; the placement is the original's pose, a measured input)
+      const exact = () => now?.Location?.every((v, i) => Math.fround(v) === Math.fround(pose.Loc[i]));
+      if (settled() && !exact()) {
         console.log(`the player rests at ${JSON.stringify(now.Location)}, the original's at ${JSON.stringify(pose.Loc)}: placed at the original's`);
         await page.evaluate(a => window.deusExViewer.viewProbe({location: a.Loc, rotation: a.VRot, region: {zone: a.RegZone, iLeaf: a.RegLeaf, zoneNumber: a.RegNum}}), pose);
         await frames(4); now = await stand();
