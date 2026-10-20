@@ -75,8 +75,8 @@
  *   oT        TopTerroristsOverheard (Terrorist9 and Terrorist8, first person) from a hidden place, to its end.
  *   kB        eight Terrorists killed (Tantalus) until Mission01.Timer sets M01PlayerAggressive, then UNATCOTroop6's TrooperCongratulation reads it.
  *   kC        kB redesigned for its two measured causes: Terrorist18 killed at its load place before StartUp lets it move, the trooper placement inside the world. */
-import {execFileSync, spawn} from 'node:child_process';
-import {existsSync, mkdirSync, readFileSync, writeFileSync} from 'node:fs';
+import {spawn} from 'node:child_process';
+import {existsSync, mkdirSync, readFileSync, rmSync, writeFileSync} from 'node:fs';
 import path from 'node:path';
 import {fileURLToPath} from 'node:url';
 
@@ -713,8 +713,20 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
   // --compare-only judges the scene's stored replay again (play-rows-<tag>.json and the files beside it), after a change to the comparison alone
   const compareOnly = argv.includes('--compare-only');
   // Two replays of one map in different checkouts share its .work directory: this one waits while another runs (live-acceptance.mjs play or compare)
-  const busy = () => { try { return execFileSync('pgrep', ['-f', `live-acceptance.mjs (play|compare) --map ${scene.map}`], {encoding: 'utf8'}).trim().length > 0; } catch { return false; } };
-  for (let waited = 0; busy(); waited++) { if (!waited) console.log(`waiting: another replay of ${scene.map} is running`); await new Promise(resolve => setTimeout(resolve, 15000)); }
+  // One replay of a map at a time: the play and compare steps share the map's files in .work/live-acceptance/<map> (play-population.json and the like).
+  // A lock directory holds the owner's pid (mkdir is atomic; a lock whose process is gone is stale and taken over). The old check (a pgrep of a running
+  // play step) let two replays that started together both through, and hzm1 then differed at tick 1 beside a gate's cbr1 and dlk1 (2026-10-20).
+  const lockDir = path.join(root, '.work/live-acceptance', scene.map, '.replay.lock');
+  const alive = pid => { try { process.kill(pid, 0); return true; } catch { return false; } };
+  for (let waited = 0; ; waited++) {
+    try { mkdirSync(lockDir); writeFileSync(path.join(lockDir, 'pid'), String(process.pid)); break; } catch (error) { if (error.code !== 'EEXIST') throw error; }
+    const owner = Number(readFileSync(path.join(lockDir, 'pid'), {encoding: 'utf8', flag: 'a+'}) || 0);
+    if (owner && !alive(owner)) { rmSync(lockDir, {recursive: true, force: true}); continue; }
+    if (!waited) console.log(`waiting: another replay of ${scene.map} is running (pid ${owner || '?'})`);
+    await new Promise(resolve => setTimeout(resolve, 15000));
+  }
+  const unlock = () => { try { if (Number(readFileSync(path.join(lockDir, 'pid'), 'utf8')) === process.pid) rmSync(lockDir, {recursive: true, force: true}); } catch {} };
+  process.on('exit', unlock);
   if (compareOnly && !existsSync(path.join(dir, `play-rows-${tag}.json`))) { console.log(`FAIL ${tag}: --compare-only without a stored replay (play-rows-${tag}.json)`); process.exit(1); }
   // A conversation's speakers: the mouth letters the original's audio update wrote (read back from the trace's blend channels; a measured host input,
   // docs/lip-sync.md), regenerated from the stored trace as the Stage 4 conversation rows do.
