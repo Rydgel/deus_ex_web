@@ -449,6 +449,20 @@ export const SCENES = {
       .map(([t, x, y, z, yaw, pitch]) => `${t}:ghost|${t}:set DeusEx.JCDentonMale Location (X=${x},Y=${y},Z=${z})|${t}:walk|${t}:set DeusEx.JCDentonMale ViewRotation (Pitch=${pitch},Yaw=${yaw},Roll=0)|${t}:Tantalus`).join('|')
       + [80, 186].map(t => `|${t}:ghost|${t}:set DeusEx.JCDentonMale Location (X=-4760.6,Y=10430.8,Z=-256.2)|${t}:walk|${t}:set DeusEx.JCDentonMale ViewRotation (Pitch=0,Yaw=58496,Roll=0)`).join('')
       + '|360:ghost|360:set DeusEx.JCDentonMale Location (X=-4262.5,Y=2105.2,Z=-191)|360:walk|360:set DeusEx.JCDentonMale ViewRotation (Pitch=0,Yaw=49152,Roll=0)'},
+  // 00_TrainingCombat (fifth captures, rows 5.1.2 to 5.1.4 and 5.4.2). The map is opened at PlayerStart0 (-775, 4): the frozen phase types only `KillAll FlyGenerator`
+  // (nothing is placed there: a trigger the player is placed in touches nothing, and one touched in the frozen phase would start a DataLink before the tracer attaches),
+  // and the player is dropped into each trigger's cylinder after the first unfrozen tick (INTO), 30 units above the floor, so the landing's MoveActor touches it.
+  // rng1, the pistol range (row 5.1.2): dropped at the weapon counter (-8, -515), inside DataLinkTrigger2's cylinder (65, -544, radius 100): DL_TArgetRange plays for
+  // about 840 ticks and its last event opens the counter's cover DeusExMover44 (Tag BallisticStore) and the cover DeusExMover1 over Switch3 together. The pistol
+  // WeaponPistol0 and the box Ammo10mm0 are taken with the right button (looking down at them: pitch -5400 and -2800), the pistol drawn (ActivateBelt 1); placed at the
+  // station (24, -590), looking at Switch3 (pitch -8700), the right button presses it (Event guntarget1: the target DeusExMover4 with BreakableGlass0 slides in from
+  // y -3280 to -1216, its MoverCollider passes the DirectionalTriggers that open the blast door DeusExMover7); aimed at the glass, six Enter edges 60 ticks apart.
+  rng1: {map: '00_TrainingCombat', ticks: 2800, early: 'KillAll FlyGenerator', pawns: ['UNATCOTroop1', 'UNATCOTroop3'],
+    cmds: [INTO(-8, -515, -30), AIM(1, 32768, -5400), '935:ParseRightClick', AIM(960, 32768, -2800), '975:ParseRightClick', '1010:ActivateBelt 1', INTO(24, -590, -90, 1060), AIM(1060, 49152, -8700),
+      '1120:ParseRightClick', AIM(1380, 48752, -200), SHOTS([1400, 1460, 1520, 1580, 1640, 1700])].join('|'),
+    devices: ['WeaponPistol0:Weapon', 'Ammo10mm0:Actor', 'Switch3:Actor', 'DeusExMover44:DeusExMover', 'DeusExMover1:DeusExMover', 'DeusExMover4:DeusExMover', 'DeusExMover7:DeusExMover',
+      'BreakableGlass0:DeusExMover'],
+    flags: ['DL_TArgetRange_Played', 'DL_TArgetRangeShot1_Played'], options: ['--player-talk', '--inventory']},
 };
 export const SCENE_FLAGS = ['--no-ghost', '--perception', '--player-gear', '--player-health', '--los-flag'];
 // The device scenes add the player's eye and bob (the first-person item's placement: Inventory.RenderOverlays, CalcDrawOffset): the stored combat scenes

@@ -8,7 +8,7 @@
  * shot fires (the pistol's refire time swallows a press 30 ticks after the last), whether the pawns see the player. Class P: Play against itself, a rehearsal,
  * never evidence (the original's stream, deltas and frozen phase differ).
  *
- *   node scripts/stage5-capture-rehearsal.mjs --scene cmb1 [--ticks 900] [--pawns Terrorist0,ThugMale7,Terrorist10]
+ *   node scripts/stage5-capture-rehearsal.mjs --scene cmb1 [--ticks 900] [--pawns Terrorist0,ThugMale7,Terrorist10] [--classes LAM,Tracer]
  *   node scripts/stage5-capture-rehearsal.mjs --map 01_NYC_UNATCOIsland --early "..." --cmds "..." [--ticks 900] */
 import {readdir, readFile} from 'node:fs/promises';
 import {SCENES} from './validate-stage5-live.mjs';
@@ -110,12 +110,14 @@ for (let tick = 1; tick <= ticks; tick++) {
   // (a pawn's NumCarcasses when it has seen a body, and its SeekType while it seeks: 1 sound, 2 sight, 3 guess, 4 carcass, ScriptedPawn.ESeekType)
   const line = pawns.map(a => c.gone(a) ? `${a.name}:gone` : `${a.name}:${c.state(a).split('.').pop()}/${c.read(a, 'Enemy')?.name ?? '-'}/h${c.read(a, 'Health')}`
     + `${c.read(a, 'NumCarcasses') ? `/bodies${c.read(a, 'NumCarcasses')}` : ''}${/seeking/i.test(c.state(a)) ? `/seek${c.read(a, 'SeekType')}` : ''}`).join(' ')
-    + ` | player h${c.read(p, 'Health')} [${regions.map(n => c.read(p, n)).join(',')}] ${c.state(p).split('.').pop()} inHand=${c.read(p, 'inHand')?.name ?? '-'}`
+    + ` | player h${c.read(p, 'Health')} [${regions.map(n => c.read(p, n)).join(',')}] ${c.state(p).split('.').pop()} @${c.pos(p).map(Math.round)} inHand=${c.read(p, 'inHand')?.name ?? '-'}`
     + ` frob=${c.read(p, 'FrobTarget')?.name ?? '-'} tracers=${c.byClass('Tracer').length}${talk()}`
     + (scene?.flags ?? option('flags', 'StatueAlarmTriggered').split(',')).filter(Boolean).map(f => ` ${f}=${Number(c.flag(f.toLowerCase()))}`).join('')
     // --props "Name=Prop,Prop;Name2=..." (Name @weapon: the player's Weapon): more fields printed with the line
     + (option('props', '') ?? '').split(';').filter(spec => spec.includes('=')).map(spec => { const [name, list] = spec.split('='); const a = name === '@weapon' ? c.read(p, 'Weapon') : c.actor(name);
       return ` ${name}:${a ? `${c.state(a).split('.').pop()}/${list.split(',').map(n => short(c.read(a, n))).join('/')}` : '-'}`; }).join('')
+    // --classes LAM,Tracer: every actor of those classes (a placed LAM, a flying projectile): name, state and position, printed with the line
+    + (option('classes', '') ?? '').split(',').filter(Boolean).map(cls => c.byClass(cls).map(a => ` ${a.name}:${c.state(a).split('.').pop()}@${c.pos(a).map(Math.round)}`).join('')).join('')
     + devices.map(d => { const a = deviceActor(d); return !a ? ` ${d.name}:-` : c.gone(a) ? ` ${d.name}:gone` : ` ${d.name}:${c.state(a).split('.').pop()}/${(DEVICE_SUMMARY[d.cls] ?? []).map(n => short(c.read(a, n))).join('/')}`; }).join('');
   if (line !== last || tick % 60 === 0) { console.log(tick, line); last = line; }
   if (scene?.conversation || flagArg('con')) { const now = conLine(); if (now !== lastCon) { console.log(tick, now); lastCon = now; } }
