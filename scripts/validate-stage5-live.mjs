@@ -495,6 +495,12 @@ export const SCENES = {
       '1020:ParseRightClick', AIM(1300, 48752, -200), '1310:ToggleScope', SHOTS([1380, 1520])].join('|'),
     devices: ['WeaponRifle2:Rifle', 'Switch0:Actor', 'DeusExMover67:DeusExMover', 'DeusExMover29:DeusExMover', 'DeusExMover32:DeusExMover', 'DeusExMover21:DeusExMover', 'BreakableGlass2:DeusExMover',
       'SkillWeaponRifle#:Skill'], flags: ['DL_RifleRange_Played', 'DL_RifleRangeShot1_Played'], options: ['--player-talk', '--inventory', '--player-fov']},
+  // ins1, the instructor (row 5.4.2): a pistol, a MedKit and a LAM summoned and picked up at the start place, then the player dropped into the co-located FlagTrigger2
+  // (561, -79, radius 200, bWhileStandingOnly) beside UNATCOTroop3 (586, -139), which sets MunitionsTrooperReady: the radius conversations bound to the trooper
+  // (MunitionsTrooperFrob, flag false, radius 160; MunitionsTrooperTake, flag true, radius 350) and Mission00.Timer's RemoveAllInventory race for the flag.
+  ins1: {map: '00_TrainingCombat', ticks: 900, conversation: true, early: 'KillAll FlyGenerator', pawns: ['UNATCOTroop3', 'UNATCOTroop1'],
+    cmds: [AIM(1, 0, -10130), '20:summon DeusEx.WeaponPistol', '60:ParseRightClick', '80:summon DeusEx.MedKit', '120:ParseRightClick', '140:summon DeusEx.WeaponLAM', '180:ParseRightClick',
+      INTO(561, -40, 40, 245), AIM(245, 49152), INTO(800, 0, 10, 560), INTO(561, -40, 40, 600)].join('|'), flags: ['MunitionsTrooperReady']},
 };
 export const SCENE_FLAGS = ['--no-ghost', '--perception', '--player-gear', '--player-health', '--los-flag'];
 // The device scenes add the player's eye and bob (the first-person item's placement: Inventory.RenderOverlays, CalcDrawOffset): the stored combat scenes
