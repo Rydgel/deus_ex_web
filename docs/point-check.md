@@ -107,3 +107,26 @@ exactly 0, Item -1) win the `distance < nearest` test, so its Location is 1 ulp 
 MoveActor's and FindSpot's callers branch on, agrees. Not traced yet: whether the original builds that bevel at all (the axis sign test
 reads the hull plane's -5.48e-17 Y) and at which precision it compares the bevel's retained distance with the stored nearest. The validator
 lists the case as known, so a new difference still fails it.
+
+## NaN positions (work item 15, 2026-10-20)
+
+`ULevel::FindSpot` runs its point checks on a NaN candidate once AdjustSpot adjusted by a NaN Hit.Time ([fitting](fitting.md#nan-in-findspot-work-item-15-2026-10-20)).
+Engine's `UModel::PointCheck` (`0x103f1570`) answers a position with a NaN component, at any extent, as blocked with no recovery written:
+`Time` 0, `Location` the position (NaN kept), `Normal` 0 and, for a nonzero extent, `Item` -1 (the entry value); for a zero extent `Item` is
+`2 * node + side` of the leaf the walk ended in (26322 for the Island's static and tracked models, 19022 for Training's). The oracle
+(`native-tracked-linecheck-oracle.py`; `validate-native-findspot-nan.mjs` section 3) gives the same answers for all-NaN, quiet-NaN and
+single-component NaN positions at the extents zero, 6x6x0, 8x8x8 and 20x20x47.5, on both maps, static and tracked.
+
+The traversal's branches read FCOM's condition codes (`fnstsw ax; test ah, mask`; an unordered pair sets C3, C2 and C0, measured on x87 in
+`validate-x87-compare-hardware.mjs`), where JavaScript's comparisons are false for a NaN:
+
+* zero extent (`0x103f16c5`): the front test is `Dist > 0` (`test ah, 0x41; jne` skips): a NaN goes back, as the JavaScript always did;
+* nonzero extent (`FilterPoint`, `0x103f19b0`): the front child is entered unless `-PushOut >= Dist` (`fchs; fcomps Dist; test ah, 1; je skip`:
+  C0), the back child unless `Dist > PushOut` (`fcomps PushOut; test ah, 0x41; je skip`: C0 or C3). A NaN distance enters both children;
+* the hull plane loop (`0x103f1e00`-`0x103f1f1f`) records a nearest plane only for `Dist > 0` (`test ah, 0x41; jne skip`: not for a NaN),
+  and goes on while `Dist < PushOut` (`test ah, 1; je exit`: C0, so a NaN goes on). Every hull test of a NaN position therefore holds, and
+  a leaf whose region is solid and that has a collision hull is blocked.
+
+`point-check.mjs` takes these branches with `x87C0` / `x87C0C3` (`x87-nan.mjs`; equal to the old comparisons for any ordered pair) and
+returns a NaN plane distance for a position with a NaN coordinate (the exact BigInt path would otherwise read a NaN's bits as a number).
+An infinity, a NaN extent and a NaN `ownerCoords` (an owned brush) are not covered and still throw or are untested.

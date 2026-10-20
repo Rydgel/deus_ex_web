@@ -409,7 +409,8 @@ unsafe fn ray(m: &Model, s: [f64; 3], e: [f64; 3], extra: i32, owned: bool) -> i
     let mut normal = [plane[0], plane[1], plane[2]];
     if owned {
         normal = transform_vector(normal, &rows);
-    } else if -dz * normal[2] - dy * normal[1] - dx * normal[0] < 0.0 {
+    // Facing test: fcomp + `test ah, 1` is C0, which an unordered value (a NaN ray) sets too (docs/fitting.md "NaN in FindSpot").
+    } else if !(-dz * normal[2] - dy * normal[1] - dx * normal[0] >= 0.0) {
         normal = [-normal[0], -normal[1], -normal[2]];
     }
     out(f(time), normal, location, hit_node, hx == sx && hy == sy && hz == sz);

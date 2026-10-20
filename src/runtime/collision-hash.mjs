@@ -2,7 +2,12 @@
 const f32 = Math.fround;
 const TABLE_SIZE = 16384;
 
-function vector(value, label) {
+// A line query whose Start and End are both all-NaN (FindSpot's probes once AdjustSpot adjusted by a NaN Time:
+// docs/fitting.md "NaN in FindSpot"). Only this pair is supported: a single NaN vector throws as before.
+const nanVector = value => Array.isArray(value) && value.length === 3 && value[0] !== value[0] && value[1] !== value[1] && value[2] !== value[2];
+
+function vector(value, label, nan = false) {
+  if (nan && nanVector(value)) return [NaN, NaN, NaN];
   // Plain three-element arrays (every query path) take the unrolled form of
   // the general check below; other array-likes keep the general one.
   if (Array.isArray(value) && value.length === 3 && 0 in value && 1 in value && 2 in value) {
@@ -83,7 +88,10 @@ export function collisionHashBounds(bounds) {
 }
 
 export function collisionHashLineBounds({ start, end, extent = [0, 0, 0] }) {
-  start = vector(start, 'start'); end = vector(end, 'end'); extent = vector(extent, 'extent');
+  const nan = nanVector(start) && nanVector(end);
+  start = vector(start, 'start', nan); end = vector(end, 'end', nan); extent = vector(extent, 'extent');
+  // 0x10359226-0x103592f7: every bound is fistp of a NaN, the integer indefinite, which the clamps (jge / Clamp) take to 0: one cell, (0, 0, 0).
+  if (nan) { const cell = roundedCell(NaN); return { min: [cell, cell, cell], max: [cell, cell, cell] }; }
   const min = [expandedXCell(Math.min(start[0], end[0]), extent[0], -1),
     cell(f32(Math.min(start[1], end[1]) - extent[1])), cell(f32(Math.min(start[2], end[2]) - extent[2]))];
   const max = [expandedXCell(Math.max(start[0], end[0]), extent[0], 1),
@@ -229,7 +237,8 @@ export function createCollisionHash({ tables, seed, maxCells = 1000000, store = 
     actorLineCheck(query, primitiveLineCheck) {
       if (busy()) throw new Error('Nested collision hash queries are unsupported');
       if (typeof primitiveLineCheck !== 'function') throw new TypeError('An evidenced primitive callback is required');
-      const args = { start: vector(query.start, 'start'), end: vector(query.end, 'end'), extent: vector(query.extent ?? [0, 0, 0], 'extent'), extraNodeFlags: (query.extraNodeFlags ?? 0) & 255 };
+      const nan = nanVector(query.start) && nanVector(query.end);
+      const args = { start: vector(query.start, 'start', nan), end: vector(query.end, 'end', nan), extent: vector(query.extent ?? [0, 0, 0], 'extent'), extraNodeFlags: (query.extraNodeFlags ?? 0) & 255 };
       const cells = collisionHashLineBounds(args); check(cells);
       if (store) {
         const candidates = store.candidates(cells), hits = [];

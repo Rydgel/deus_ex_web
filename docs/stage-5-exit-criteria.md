@@ -640,7 +640,7 @@ whose view trace holds the target for 60 frames).
 | `wat1` | 5.5.4 | in the ruins east of the arcs: a Multitool summoned, picked up, drawn; dropped from 126 units into the arcs at 200 (`DamageTrigger1`'s cylinder entered by the fall), placed back at `ControlPanel1` at 265, an Enter edge at 320; dropped into the arcs again at 650; placed at `Button2` at 750, the right button at 800 | the arcs ('Shocked' 20 a hit) take the player from 100 to 77 between 208 and 260 and the EMP floor drains Energy 0.5 every 0.25 s from 251 (`EnergyDrain`, `MultiplayerTick`'s 0.25 s step) to 98; the hack runs 321 to 566 and `UnTrigger LibElectric` turns the three emitters and the trigger off; the second drop does nothing; the fork lift rises from 801 | the recapture (with `lastRefreshTime` traced and written at the release): every watched actor equal for 1,300 ticks, clock, draws, AI events and creations (the gate's run). The first capture's replay differed only in the player's Energy, 6 ticks late (item 3 below) |
 | `air1` | 5.5.3 | beside the laser trap room; placed 87 units above `DataLinkTrigger19` at 60, then 87 above `DataLinkTrigger20` in the shaft at 950 | the falling player enters the first trigger's cylinder at 64 and `DL_libertyruinsairshaft` starts (landing at 87); it ends at 890 (`DL_libertyruinsairshaft_Played`); the drop into the second trigger at 951 to 975 starts nothing (the DataLink has played); no pawn takes the player as its enemy | 77 actors (every ScriptedPawn and the three triggers) equal for 1,200 ticks, clock, draws, AI events, creations and the flag at the end |
 | `fK` | 5.5.1 | the conversations batch's `fT` inputs (50 units west of Filben: six speeches skipped, "You can trust me.", two more); placed at the StatueRuinDoors at 560, `ActivateBelt 0` at 600, an Enter edge at 660, the right button at 720 | MeetFilben from 6 to 469 (`FilbenGaveKey`, Filben's `ruin_key` on the ring); the key ring unlocks the four doors at 661 (`DeusExMover.Frob`'s NanoKeyRing branch toggles the like-tagged movers) and the right button opens them at 721 | 24 actors (Filben's corner, the four doors) equal for 900 ticks, clock, draws, AI events, creations and the 4 flags at the end |
-| `dor3` | 5.5.2, 5.3.10, 5.5.1 | 336 units from the back entrance: a GEP gun summoned, picked up, drawn; an Enter edge at 300 at `DeusExMover2` (`bBreakable`, `doorStrength` 0.5, `minDamageThreshold` 50); placed 300 units from the StatueRuinDoors at 500, an Enter edge at 600 at `DeusExMover12` (`bBreakable` false). The second capture also watches `Rocket0` and the 51 `Rockchip`s of its explosion | the rocket's staggered HurtRadius breaks the back entrance at 320 (`BlowItUp`: 15 `MetalFragment`s, moved up 20,000, non-colliding, `bDestroyed`); the second rocket leaves the front doors whole | **differs from tick 319**: the rocket stops 2.0 units shorter along its path in the original (13.86 of its 16.67-unit step, Play 15.86; the explosion's chips spawn 1 unit off the same +X normal in both), so the explosion, its chips' wall hits and noises, the draws and the AI events follow apart: Play's world query misses the brush tracker's fragments (item 4 below) |
+| `dor3` | 5.5.2, 5.3.10, 5.5.1 | 336 units from the back entrance: a GEP gun summoned, picked up, drawn; an Enter edge at 300 at `DeusExMover2` (`bBreakable`, `doorStrength` 0.5, `minDamageThreshold` 50); placed 300 units from the StatueRuinDoors at 500, an Enter edge at 600 at `DeusExMover12` (`bBreakable` false). The second capture also watches `Rocket0` and the 51 `Rockchip`s of its explosion | the rocket's staggered HurtRadius breaks the back entrance at 320 (`BlowItUp`: 14 `MetalFragment`s of 16 attempts, FindSpot refusing the sixth and the fourteenth, moved up 20,000, non-colliding, `bDestroyed`); the second rocket leaves the front doors whole | **equal for 900 ticks** since work items 8 and 15. Until item 8 the rocket stopped 2.0 units shorter along its path in the original (13.86 of its 16.67-unit step, Play 15.86) because Play's world query missed the brush tracker's fragments (item 4 below); until item 15 the break made 15 fragments in Play, whose AdjustSpot skipped the NaN Hit.Time of the sixth attempt |
 
 `tC`, the conversations batch's capture of `MeetTerrorist`'s Curious choice (then `TerroristFollowup`, `DL_LeaderNotKilled` and Mission01's pass), is row 5.5.6's proof and
 5.5.7's second route; it passes on this branch (24 actors for 1,300 ticks, 1,911 AI events, 1,523 creations, the 7 flags at the end). `fK`'s MeetFilben half is that batch's `fT`
@@ -1005,22 +1005,19 @@ kernel over the tracked model agrees with the JavaScript bodies on 5,280 answers
   swing pitches it down (Rotation pitch 60022, 59296), and Play does not (its LastRenderTime stays at tick 51's). The player's row and the camera's Rotation are
   equal, so the frame's visibility of the camera's mesh at the frustum edge differs. 5.6.5 failed on it. **Closed by work item 16** ([below](#the-death-cameras-rotation-work-item-16-2026-10-20)):
   not a render-visibility gap but the camera Play viewed from: the player dies at 820, and the Dying state's view starts from the body's Rotation in the original.
-* `dor3` is equal through tick 319: the rocket meets DeusExMover2's fragments and stops where the original's does. It differs from 320, in DeusExMover2's break
-  (BlowItUp: 16 fragment attempts, `Spawn` at `spawnLoc + FragmentSpread * VRand()`, refused before AddObject when FindSpot fails). Play makes 15 MetalFragments,
-  the original 14. The CRT rand state at each original AddObject (the stored trace's `addobj` entries) against Play's after each FindSpot lines the attempts up:
-  attempts 0 to 4 and 6 to 11 are equal, both refuse attempt 12, and the original's last fragment is attempt 15 (7 draws to the next AddObject, a fragment's
-  start-up alone: the last one gets no CalcVelocity) where Play's is attempt 14. The two part at attempt 5, which starts inside the door. Play's log of that FindSpot:
-  AdjustSpot's first probe (−X, flags 6) hits the door's fragments (world, time 0) and DeusExMover2 itself, and MultiLineCheck's mover recovery makes the mover hit's
-  Time and Location NaN (the world hit at time 0 shortens the actor segment to zero length, so `1 / length` is +inf and inf × 0 is NaN, in the original's x87 as in
-  Play; `validate-native-multiline` covers that case). AdjustSpot then reads `Hit.Time < 1`: the original compares with `fcomp qword [1.0]; fnstsw ax; test ah, 1;
-  je` (0x103983b3..0x103983c1), and an unordered compare sets C0, so it adjusts by `(1.05 − NaN) × Normal × Size` and the candidate becomes NaN. Play's `time < 1` is
-  false for NaN and skips the probe. Every world query of attempts 13 and 15 agrees with Engine.dll on the tracked model (and DeusExMover2's own brush misses
-  their probes). Measured: Play's NaN hit, the original's compare, the rand states, and the original's MetalFragment5 living on (3 LoudNoise HitWalls, no free in
-  900 ticks). Deduced, not measured: that the original's SingleLineCheck returns the same NaN hit first (its world and brush queries and its MultiLineCheck agree with
-  Play's bodies on such inputs) and so moves the candidate to NaN. Unexplained: the 3 draws the original makes before fragment 5's AddObject that Play makes after
-  it (FindSpot draws nothing). Settling it needs a capture of `dor3` on the Mac with breakpoints at FindSpot (0x10398480) and AdjustSpot (0x10398360) and their
-  returns at tick 320, then the NaN path through FindSpot's later probes, its point check and SpawnActor, which Play's collision bodies reject (work item 15).
-  5.3.10, 5.5.1 and 5.5.2 fail on it.
+* `dor3` is equal through tick 319: the rocket meets DeusExMover2's fragments and stops where the original's does. It differed from 320, in DeusExMover2's break
+  (BlowItUp: 16 fragment attempts, `Spawn` at `spawnLoc + FragmentSpread * VRand()`, refused before AddObject when FindSpot fails): Play made 15 MetalFragments, the original 14.
+  **Closed by work item 15 (2026-10-20): `dor3` passes** (131 actors, the clock, the stream draws, 1,707 AI events and 1,392 creations equal for 900 ticks). The CRT rand state at each original
+  AddObject (the stored trace's `addobj` entries) against Play's after each FindSpot had lined the attempts up: attempts 0 to 4 equal, then the original 3 draws ahead at its sixth
+  fragment (gaps 23 and 17 where Play's were 20 and 20), and the original's last fragment attempt 15. The sixth attempt starts inside the door: AdjustSpot's first probe (-X, flags 6) hits
+  the door's fragments (world, time 0) and DeusExMover2 itself, and MultiLineCheck's mover recovery makes the mover hit's Time and Location NaN (the world hit at time 0 shortens the actor
+  segment to zero length, so `1 / length` is +inf and inf × 0 is NaN, in the original's x87 as in Play; `validate-native-multiline` covers that case). AdjustSpot reads `Hit.Time < 1`
+  with `fcomp qword [1.0]; fnstsw ax; test ah, 1; je` (0x103983b3..0x103983c1), and an unordered compare sets C0, so the original adjusts by `(1.05 − NaN) × Normal × Size` and the
+  candidate becomes NaN; Play's `time < 1` is false for a NaN and skipped the probe. Engine's unchanged FindSpot under Unicorn on the replay's 16 inputs (the tracked Island model, the
+  map's hash) **refuses attempt 5**: the later probes, the point check and the displacement test all run on the NaN and FindSpot returns 0 (the displacement `fcompp; test ah, 1` is C0
+  for a NaN), so SpawnActor returns None before any object exists. The 3 draws are the VRand of the next attempt's location; the original's 14 fragments are attempts 0-4, 6-12, 14 and
+  15 (5 and 13 refused). Nothing is created at a NaN location, so SpawnActor and the fragment's start-up never run on a NaN. See [NaN in FindSpot](fitting.md#nan-in-findspot-work-item-15-2026-10-20).
+  5.3.10, 5.5.1 and 5.5.2 pass on it.
 
 **Also checked:** the unit tests (652), `validate-trace-kernel` (79,090 cases), `validate-brush-tracker`, `validate-tracked-linecheck`,
 `validate-fast-line-check-tracked`, and the census (below). A recapture of `dor3` under the Linux host's wine ran at about 2.4 s a tick and stopped
@@ -1028,7 +1025,7 @@ ticking at 146. The cause was the desktop, not the tracer: Hyprland tiled the ga
 re-created the D3D device over and over (the main thread's stack: WinDrv → D3DDrv → ddraw → wined3d), so `ULevel::Tick` was never reached.
 `live-original.sh` now runs the prefix in a Wine virtual desktop (`DX_DESKTOP`, [Linux host](linux-host.md#known-gaps)). The user accepts a capture
 from either machine (2026-10-20). A Linux recapture of `cam2` (`cam2lx`, 0.3 s a tick) replays in Play with all 75 actors equal for 300 ticks,
-as the Mac's capture does.
+as the Mac's capture does. (Work item 15 needed no capture: the oracle gave FindSpot's answer.)
 
 ### The death camera's rotation (work item 16, 2026-10-20)
 
@@ -1181,7 +1178,7 @@ Nothing below was fixed by the census task; the two gap tasks closed items 1 and
    5.2.4, 5.2.5, 5.2.6, 5.6.4 and 5.6.5 their scenes ([devices](#third-captures-devices-and-weapons-2026-10-18)) and captured the routes (5.5, [routes](#third-captures-the-routes-the-doors-and-the-mission-2026-10-18)).
    Left: weapons and damage (5.1.1 to 5.1.3), Training's lessons one capture each (5.3.1 to 5.3.4), and O3 comparisons for the native-body rows (5.3.5, 5.3.6, 5.3.2). The census plays every scenario, and items 2, 5 and 8
    still bound what the rows they name can show.
-8. **Done 2026-10-20** ([above](#collision-over-the-tracked-level-model-work-item-8-2026-10-20)): `cam1` passes, `emp2` and `dor3` now differ later (items 15 and 16).
+8. **Done 2026-10-20** ([above](#collision-over-the-tracked-level-model-work-item-8-2026-10-20)): `cam1` passes, `emp2` differs later (item 16) and `dor3` passes with item 15.
    **Collision and level traces over the brush tracker's `Level->Model`** ([brush tracker](brush-tracker.md#open), "Collision"): Play's MoveActor, MultiLineCheck's world check and with it
    SingleLineCheck, Trace and the AI and decal traces read the static BSP, while the original's level model holds every mover's fragments (FastLineCheck already reads them). So a trace that
    meets a mover also hits the world there, and MultiLineCheck's mover recovery moves the mover hit two units back. Proven bit-exact for `dor3`'s rocket (routes, item 4) and measured on
@@ -1207,11 +1204,15 @@ Nothing below was fixed by the census task; the two gap tasks closed items 1 and
     at the frozen start and that Play does not hold is released after the event manager's Tick, not at its anchor. Inside a large collection the original releases
     `AIReceiverEvent15` and `AIReceiverEvent16` 70th and 71st (`kil1` 541, `tC` 721, `tA` 481, `tF` 421), and the replay releases them 237th. The set is equal, the order
     is not. It is reported, not judged (the slots are reported), and no later creation takes another slot because of it.
-15. **AdjustSpot on a NaN Hit.Time, and the NaN Location after it** (`dor3`, [above](#collision-over-the-tracked-level-model-work-item-8-2026-10-20)): the
-    original adjusts on an unordered compare (`test ah, 1` after `fcomp`, 0x103983c1), which would make the candidate NaN; FindSpot's later probes, its point check
-    and SpawnActor would then run on that NaN, where Play's level queries throw on non-finite input. First a Mac capture of `dor3` with FindSpot and AdjustSpot
-    breakpoints at tick 320 (the Linux host's tracer is too slow), then the x87 comparisons of each step on NaN (MultiLineCheck's hash walk, the BSP traversals,
-    the point check) from the DLL, then the fragment's life after it. Unblocks 5.3.10, 5.5.1, 5.5.2.
+15. **Done 2026-10-20: AdjustSpot on a NaN Hit.Time, and the NaN Location after it** (`dor3`, [above](#collision-over-the-tracked-level-model-work-item-8-2026-10-20)):
+    the original adjusts on an unordered compare (`test ah, 1` after `fcomp`, 0x103983c1), the candidate becomes NaN, FindSpot's later probes and point check run on it, and
+    its displacement test (`fcompp; test ah, 1`, 0x1039896f) refuses it, so SpawnActor returns None before any object exists: the original makes 14 fragments, not 15, and
+    the 3 draws Play had after fragment 5's AddObject are the next attempt's VRand. No capture was needed: Engine.dll's own FindSpot under Unicorn
+    (`native-tracked-fitting-oracle.py`: native-level-oracle.py's hash, actors and brush transforms over the brush tracker's `Level->Model`) on Play's inputs refuses attempt 5 and agrees
+    on the other 15; the steps a NaN reaches are ported with their oracle cases (the hash's one-cell walk of a NaN line, the BSP ray's facing test, `UModel::PointCheck`'s
+    traversal and hull loop, FindSpot's two compares) and the compare forms are measured on real x87 (`validate-x87-compare-hardware.mjs`, Wine on the Linux host).
+    `validate-native-findspot-nan.mjs`; [NaN in FindSpot](fitting.md#nan-in-findspot-work-item-15-2026-10-20); `dor3` passes. Unblocks 5.3.10, 5.5.1, 5.5.2. Not ported (still
+    throws, and FindSpot never reaches it): a hash line with exactly one NaN vector, a box-extent LineCheck on a NaN, infinities.
 16. ~~**SecurityCamera3's visibility at the frustum edge**~~ **Done 2026-10-20** ([the death camera's rotation](#the-death-cameras-rotation-work-item-16-2026-10-20)):
     not a visibility gap. The player dies at 820, and `UGameEngine::Draw` starts `PlayerCalcView` from the body's `Rotation`, which the Dying view keeps. Play
     started it from `ViewRotation`. `emp2` and 5.6.5 pass.

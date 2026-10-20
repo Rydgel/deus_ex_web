@@ -1,4 +1,5 @@
 import { traceKernel, TRACE_DIFFERENTIAL, checkTraceKernel } from './trace-kernel.mjs';
+import { x87C0 } from './x87-nan.mjs';
 
 const f = Math.fround;
 const planeDistance = (p, v) => f(v[2] * p[2] + v[0] * p[0] + v[1] * p[1] - p[3]);
@@ -147,7 +148,8 @@ export function traceRayFast(model, start, end, extraNodeFlags = 0, ownerCoords 
     const plane = nodes[hitNode].plane;
     let normal = [plane[0], plane[1], plane[2]];
     if (owned) normal = transformVector(normal, owned.rows);
-    else if (-dz * normal[2] - dy * normal[1] - dx * normal[0] < 0) normal = normal.map(value => -value);
+    // The facing test is fcomp + test ah,1: C0 is set for a NaN too (unordered), so a NaN ray faces the other way (docs/fitting.md "NaN in FindSpot").
+    else if (x87C0(-dz * normal[2] - dy * normal[1] - dx * normal[0], 0)) normal = normal.map(value => -value);
     return { time: f(time), normal, location, node: hitNode, penetrating: hx === sx && hy === sy && hz === sz };
   } finally {
     if (!nested) scratchBusy = false;
@@ -221,6 +223,6 @@ function traceRayReference(model, start, end, extraNodeFlags = 0, ownerCoords = 
   const location = start.map((value, axis) => f(value + f(delta[axis] * time)));
   let normal = rawHit.normal;
   if (rows) normal = transformVector(normal, rows);
-  else if (-delta[2] * normal[2] - delta[1] * normal[1] - delta[0] * normal[0] < 0) normal = normal.map(value => -value);
+  else if (x87C0(-delta[2] * normal[2] - delta[1] * normal[1] - delta[0] * normal[0], 0)) normal = normal.map(value => -value);
   return { time: f(time), normal, location, node: rawHit.node, penetrating: rawHit.location.every((v, i) => v === start[i]) };
 }
