@@ -87,6 +87,8 @@ const option = name => { const i = argv.indexOf(`--${name}`); return i < 0 ? nul
 const PISTOL = yaw => `20:summon DeusEx.WeaponPistol|50:set DeusEx.JCDentonMale ViewRotation (Pitch=-10130,Yaw=${yaw},Roll=0)|90:ParseRightClick|130:ActivateBelt 1`;
 const SHOTS = ticks => ticks.map(t => `${t}:@down Enter|${t}:@up Enter`).join('|');
 // `KillAll FlyGenerator` first: the load's chance FlyGenerators (10% per fly-making decoration) removed in both programs, as row 4.2.13 does.
+// The player moved after the first unfrozen tick, between `ghost` and `walk` as PLACE does (a colliding actor's Location is not set by the console).
+const INTO = (x, y, z, tick = 1) => `${tick}:ghost|${tick}:set DeusEx.JCDentonMale Location (X=${x},Y=${y},Z=${z})|${tick}:walk`;
 const PLACE = (x, y, z, yaw, pitch = 0) => `KillAll FlyGenerator|ghost|set DeusEx.JCDentonMale Location (X=${x},Y=${y},Z=${z})|walk|set DeusEx.JCDentonMale ViewRotation (Pitch=${pitch},Yaw=${yaw},Roll=0)`;
 // A conversation's choice: `downs` ArrowDown edges ten ticks apart from tick t, then the Enter edge 20 ticks after the last (the focus starts on the first choice).
 const CHOOSE = (t, downs) => [...Array.from({length: downs}, (_, i) => `${t + 10 * i}:@down ArrowDown|${t + 10 * i}:@up ArrowDown`), `${t + 10 * downs + 20}:@down Enter|${t + 10 * downs + 20}:@up Enter`].join('|');
@@ -250,9 +252,18 @@ export const SCENES = {
   lgt2: {map: '01_NYC_UNATCOIsland', ticks: 900, early: PLACE(5963, 2033, -96, 15656), cmds: '', speech: true},
   // the breath under water (row 5.3.8): the player placed in WaterZone1 (the bay north of the dock: water from about Z -355 down to the floor near -900),
   // still. swm1 near the floor: PainTime runs out before he rises to the surface, and drowning damage takes him (Play's rehearsal: the first hit near 1200,
-  // dead near 2220). swm2 at the census's depth (WaterZone1's Location + 30): he surfaces with breath left, and swimTimer refills.
-  swm1: {map: '01_NYC_UNATCOIsland', ticks: 2400, early: PLACE(-2802, 6641, -850, 0), cmds: '', options: ['--player-breath']},
-  swm2: {map: '01_NYC_UNATCOIsland', ticks: 1500, early: PLACE(-2802, 6641, -450, 0), cmds: '', options: ['--player-breath']},
+  // dead near 2220). swm2 at the census's depth (WaterZone1's Location + 30): he surfaces with breath left, and swimTimer refills. The player is placed on
+  // dry ground first and moved into the water after the first unfrozen tick: placed under water in the frozen phase, the original's player tick already
+  // spawned 112 AirBubbles and a WaterRing before the trace starts (the population check's reload).
+  swm1: {map: '01_NYC_UNATCOIsland', ticks: 2400, early: PLACE(-4761, 10431, -281, 0), cmds: INTO(-2802, 6641, -850), options: ['--player-breath']},
+  swm2: {map: '01_NYC_UNATCOIsland', ticks: 1500, early: PLACE(-4761, 10431, -281, 0), cmds: INTO(-2802, 6641, -450), options: ['--player-breath']},
+  // move objects and fall (row 5.3.12): the player placed 70 units west of Trashbag0 (-3881, 10100) looking down at it; ParseRightClick frobs it (DeusExPlayer
+  // GrabDecoration: CarriedDecoration), the view levels, and DropItem (Tab) throws it (DropDecoration: Vector(ViewRotation) * 500 + (0, 0, 220) + 40 * VRand(),
+  // over Mass / 20 clamped to 1..40) to fall and land; at 420 the player is set 380 units over the ground at the census's fall place (-4761, 10431), between
+  // `ghost` and `walk` as PLACE does (a colliding actor's Location is not set by the console), and lands with fall damage.
+  mov1: {map: '01_NYC_UNATCOIsland', ticks: 900, early: PLACE(-3951, 10100, -240, 0, -7800),
+    cmds: `30:ParseRightClick|90:set DeusEx.JCDentonMale ViewRotation (Pitch=0,Yaw=0,Roll=0)|120:DropItem|${INTO(-4761, 10431, 99, 420)}`,
+    devices: ['Trashbag0:Decoration']},
   // a baton knock-out (row 5.1.7): a WeaponBaton summoned, picked up and drawn at cmb2's pose (700 units behind Terrorist0, where nobody notices the player; a
   // summoned item's landing is a noise, and next to the target it wakes it); at tick 600, once Terrorist18 sits on Chair9 (2017.7, -1429.6, facing yaw 48128),
   // the player is placed by the same console lines 58 units behind it at his rest height, facing its back; the Enter edge at 630 swings the baton
