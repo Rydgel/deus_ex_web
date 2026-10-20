@@ -11,6 +11,7 @@
  * order) and installs Play's `post` state after it, so the world's answers are the inputs and everything the body itself computes is the original's.
  * The comparison (scripts/validate-stage5-o3.mjs) is bit-exact: the native's events (k, args, pre) and its `after` against Play's. */
 import {o3Service} from '../src/runtime/o3-record.mjs';
+import {identityOf} from '../src/runtime/actor-touch.mjs';
 
 const f = Math.fround;
 const vec = v => [...v];
@@ -64,6 +65,10 @@ const SERVICES = {
   mayFall: {k: 'event', args: () => ['MayFall']},
   fallingEvent: {k: 'event', args: () => ['Falling']},
   fellOutOfWorld: {k: 'event', args: () => ['FellOutOfWorld']},
+  // physRolling's services (the script HitWall and Falling events are ProcessEvent calls in the original).
+  eventHitWall: {k: 'event', args: ([normal, wall], ids) => ['HitWall', vec(normal), ids.ref(wall)]},
+  eventFalling: {k: 'event', args: () => ['Falling']},
+  setBase: {k: 'base', args: ([actor], ids) => [ids.ref(actor)]},
   // physFalling's air-control probe: the pawn's own line check (flags 6, the pawn's extent) reduced to whether it was blocked.
   airControlBlocked: {k: 'line', args: ([delta], ids, pawn) => [vec(pawn.position), pawn.position.map((v, i) => f(v + delta[i])), [f(pawn.radius), f(pawn.radius), f(pawn.height)], 6, 0],
     res: blocked => ({time: blocked ? f(.5) : 1, normal: [0, 0, 0], actor: blocked ? 'world' : null, location: null, outside: null})},
@@ -74,6 +79,7 @@ const SERVICES = {
 
 /** The nested native bodies a body calls: its arguments, as the oracle's stub at the body's address reads them. */
 const NESTED_ARGS = {
+  rolling: ([dt]) => [f(dt), 0],
   prelude: ([dt, iterations]) => [f(dt), iterations],
   flying: ([dt, iterations]) => [f(dt), iterations],
   falling: ([dt, iterations]) => [f(dt), iterations],
@@ -82,24 +88,24 @@ const NESTED_ARGS = {
 };
 
 /** The base adapter: wraps the pawn's services named in `services` (keys of SERVICES) while the body runs. */
-function adapter(body, {config, services}) {
+function adapter(body, {config, services, holder = pawn => pawn}) {
   return {
     before(pawn, args, rec, recorder) {
       const ids = recorder.context.ids;
       return {args: NESTED_ARGS[body](args, ids), config: config(pawn, args, ids), state: trackedState(pawn, ids), kind: pawn.self ? 'pawn' : 'host'};
     },
     wrap(pawn, rec, recorder) {
-      const saved = {}, ids = recorder.context.ids;
+      const saved = {}, ids = recorder.context.ids, object = holder(pawn, rec);
       for (const name of services) {
-        if (typeof pawn[name] !== 'function') continue;
+        if (typeof object[name] !== 'function') continue;
         const spec = SERVICES[name];
-        saved[name] = pawn[name];
-        pawn[name] = o3Service(rec, recorder, saved[name], {
+        saved[name] = object[name];
+        object[name] = o3Service(rec, recorder, saved[name], {
           pre: () => trackedState(pawn, ids),
           log: (args, result, pre) => rec.events.push({k: spec.k, args: spec.args(args, ids, pawn), res: spec.res ? spec.res(result, ids) : null, pre, post: trackedState(pawn, ids)}),
         });
       }
-      return () => { for (const name of Object.keys(saved)) pawn[name] = saved[name]; };
+      return () => { for (const name of Object.keys(saved)) object[name] = saved[name]; };
     },
     after: (pawn, rec, result, recorder) => trackedState(pawn, recorder.context.ids),
     /** A nested recorded body is one event of its caller; its state and result are filled in when it has run. */
@@ -135,7 +141,48 @@ function hostFallingConfig(host, dt, iterations, options) {
     zoneNumber: host.zoneNumber, netMode: 0};
 }
 
+/** MoveActor's query prefix (move-query.mjs): the source's traits and the hits Play's MultiLineCheck returned; the native filters them, selects and does the math. */
+function moveQueryCandidate(c, source, world, ids) {
+  const actor = c.actor, identity = identityOf(actor);
+  const kind = actor === world ? 'world' : identity === identityOf(source) ? 'self' : actor.movingBrush ? 'mover' : actor.controlledPlayer ? 'player' : actor.projectile ? 'projectile' : 'actor';
+  let basedOnSource = false;
+  if (kind !== 'world' && kind !== 'self') {
+    const base = identityOf(actor.base);
+    if (base) {
+      if (base !== identityOf(source) && identityOf(base.base)) throw new Error('O3: a candidate based on the source through a chain longer than one link is not modelled');
+      basedOnSource = base === identityOf(source);
+    }
+  }
+  return {id: kind === 'world' ? 'world' : ids.ref(identity), kind, flags: actor.flags ?? 0, time: f(c.time), location: vec(c.location ?? [0, 0, 0]), normal: vec(c.normal ?? [0, 0, 0]),
+    item: c.item ?? 0, basedOnSource};
+}
+const moveQueryAdapter = {
+  standalone: true,
+  before(source, [query], rec, recorder) {
+    return {args: vec(query.delta).map(f), kind: 'move', state: {start: vec(query.start).map(f)}, config: {extent: [f(query.extent[0]), f(query.extent[2])],
+      sourceFlags: source.flags ?? 0, controlledPlayer: Boolean(source.controlledPlayer), projectile: Boolean(source.projectile), static: Boolean(source.static),
+      movable: source.movable !== false, ignorePawns: Boolean(query.ignorePawns), ignoreBases: Boolean(query.ignoreBases), hits: []}};
+  },
+  wrap(source, rec, recorder) {
+    const [query] = rec.args, ids = recorder.context.ids, original = query.multiLineCheck;
+    query.multiLineCheck = function (q) {
+      const hits = original.call(this, q);
+      rec.before.config.hits = hits.map(c => moveQueryCandidate(c, source, query.worldActor, ids));
+      rec.events.push({k: 'multiLine', args: [vec(q.end), vec(q.start), vec(q.extent), Boolean(q.checkActors), Boolean(q.worldActor), q.extra ?? 0], res: null, pre: null, post: null});
+      return hits;
+    };
+    return () => { query.multiLineCheck = original; };
+  },
+  after(source, rec, result, recorder) {
+    const ids = recorder.context.ids, hit = result.hit;
+    return {success: Boolean(result.success), delta: vec(result.delta), position: vec(result.position), time: result.time,
+      selected: hit ? (hit.item ?? 0) : null, hitActor: hit ? (hit.actor === rec.args[0].worldActor ? 'world' : ids.ref(identityOf(hit.actor))) : null};
+  },
+  nested: () => { throw new Error('O3: moveQuery calls no nested body'); },
+};
+
 export const ADAPTERS = {
+  moveQuery: moveQueryAdapter,
   flying: adapter('flying', {
     services: ['move', 'hitWall'],
     config: (pawn, [dt, iterations]) => ({dt: f(dt), iterations, ...bodyConfig(pawn), ...zoneConfig(pawn), fluidFriction: pawn.fluidFriction, collideWorld: Boolean(pawn.collideWorld)}),
@@ -165,6 +212,17 @@ export const ADAPTERS = {
       ? {remaining: f(remaining), iterations, ...bodyConfig(pawn), ...zoneConfig(pawn)}
       : {remaining: f(remaining), iterations, ancestry: 'landingCounter' in pawn ? 'decoration' : 'inventory', radius: pawn.radius, height: pawn.height,
         isCarcass: Boolean(pawn.isCarcass), slidingCarcass: Boolean(pawn.slidingCarcass), zone: {bBounceVelocity: Boolean(zone.bBounceVelocity), velocity: vec(zone.ZoneVelocity)}, netMode: 0},
+  }),
+  rolling: adapter('rolling', {
+    // The services are the members of the object physRolling is handed (its second argument).
+    holder: (host, rec) => rec.args[1],
+    services: ['move', 'eventHitWall', 'eventFalling', 'setPhysics', 'setBase'],
+    config: (host, [dt, services]) => {
+      if (host.bBounce) throw new Error('O3: a bouncing host (the script HitWall dispatch) is not modelled');
+      const zone = services.zone;
+      return {dt: f(dt), iterations: 0, ancestry: 'decoration', zone: {gravity: vec(zone.ZoneGravity ?? [0, 0, -950]), velocity: vec(zone.ZoneVelocity ?? [0, 0, 0]),
+        groundFriction: f(zone.ZoneGroundFriction ?? 8), fluidFriction: f(zone.ZoneFluidFriction ?? .02)}, netMode: 0};
+    },
   }),
   walking: adapter('walking', {
     services: ['move', 'lineCheck', 'hitWall', 'setPhysics', 'setSupportBase', 'farMove', 'mayFall', 'fallingEvent', 'fellOutOfWorld'],

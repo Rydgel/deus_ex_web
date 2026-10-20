@@ -32,15 +32,17 @@ def stand_in(native, info):
         cls = 0x1058c160
     elif info['isPawn']:
         cls = 0x1058c660
-    elif info['isDecoration']:
-        cls = native.ancestry['decoration']
     else:
-        cls = native.alloc(0x40)  # a script class with no native ancestry: every IsA(ALevelInfo/APawn/ADecoration) is false
-        native.write(cls + 0x28, 'I', 0)
+        cls = (getattr(native, 'ancestry', {}).get('decoration') or getattr(native, 'decoration_class', None)) if info['isDecoration'] else None
+        if cls is None:
+            cls = native.alloc(0x40)  # a script class with no native ancestry: every IsA(ALevelInfo/APawn/ADecoration) is false
+            native.write(cls + 0x28, 'I', 0)
     native.write(pointer + 0x24, 'I', cls)
     native.write(pointer + 0x28, 'I', 0x800000 if info['isPawn'] or info['isPlayerPawn'] else 0)  # bIsPawn
     if info.get('mass') is not None:
         native.write(pointer + 0x1f4, 'f', info['mass'])
+    if info['isDecoration']:
+        native.write(pointer + 0x31c, 'B', 1 if info['pushable'] else 0)  # Decoration.bPushable, which stepUp tests (0x103ce624)
     return pointer
 
 

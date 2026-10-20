@@ -79,7 +79,7 @@ function worldHit(start, delta, walls, floorNormal) {
 function run(input) {
   const events = [];
   const host = { position: input.position.map(f), velocity: input.velocity.map(f), acceleration: input.acceleration.map(f),
-    physics: input.physics, base: input.base ?? null, justTeleported: false };
+    physics: input.physics, base: input.base ?? null, justTeleported: false, oldLocation: [0, 0, 0] };
   const walls = input.walls ?? [], floorNormal = input.floorNormal;
   const services = {
     zone: input.zone,
@@ -100,7 +100,7 @@ function run(input) {
     setBase(actor) { host.base = actor; },
   };
   rolling(host, input.dt, services);
-  return { position: host.position, velocity: host.velocity, acceleration: host.acceleration,
+  return { position: host.position, oldLocation: host.oldLocation, velocity: host.velocity, acceleration: host.acceleration,
     physics: host.physics, base: host.base ?? 0, events };
 }
 

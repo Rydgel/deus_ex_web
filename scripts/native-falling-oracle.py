@@ -228,6 +228,8 @@ class NativeFalling(collision.NativeCollision):
         self.events = self.replay = None
         return result
 
+    O3_EVENTS = {0x103d0b89: 'FellOutOfWorld'}
+
     def o3_service(self, cpu, address):
         """The services of an O3 replay shared by the physFalling family (physFalling, physFlying): MoveActor, line queries, processHitWall, processLanded and
         the prelude as stubbed bodies; any other service the original reaches is a divergence (a call Play did not make) or runs as the original."""
@@ -281,12 +283,32 @@ class NativeFalling(collision.NativeCollision):
             leave(0)
             return True
         if address == self.event_thunk:
-            names = {0x103d0b89: 'FellOutOfWorld'}
             caller = self.read(stack, 'I')[0]
-            if caller not in names:
+            name = self.O3_EVENTS.get(caller)
+            if name is None:
                 raise o3r.Divergence(f'the native dispatched a script event from {caller:#x}, which no recorded call covers')
-            recorded = replay.take('event', [names[caller]])
+            args = [name]
+            if name == 'HitWall':  # the script event's parameters: HitNormal, Wall
+                parameters = self.read(stack + 8, 'I')[0]
+                args += [list(self.read(parameters, '3f')), replay.actor(self.read(parameters + 12, 'I')[0])]
+            recorded = replay.take('event', args)
             replay.install(recorded['post'])
+            return True
+        if address == 0x103c95f0:
+            physics, actor = self.read(stack + 4, '2I')
+            recorded = replay.take('physics', [physics, replay.actor(actor)])
+            replay.install(recorded['post'])
+            leave(8)
+            return True
+        if address == 0x103c9390:
+            recorded = replay.take('base', [replay.actor(self.read(stack + 4, 'I')[0])])
+            replay.install(recorded['post'])
+            leave(4)
+            return True
+        if address == 0x10302fef:  # the thunk of physFalling that physRolling calls
+            recorded = replay.take('falling', [self.read(stack + 4, 'f')[0], self.read(stack + 8, 'i')[0]])
+            replay.install(recorded['post'])
+            leave(8)
             return True
         return False
 

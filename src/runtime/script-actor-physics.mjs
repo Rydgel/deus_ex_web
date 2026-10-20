@@ -124,8 +124,11 @@ export function runActorRolling(runtime,actor,seconds,zone) {
   const dispatch=(target,event,args)=>runtime.dispatchSpawnedEvent(world(target),event,args);
   const host={};
   for(const [key,name] of Object.entries({position:'Location',velocity:'Velocity',acceleration:'Acceleration',
-    physics:'Physics',justTeleported:'bJustTeleported',base:'Base',bBounce:'bBounce',bDeleteMe:'bDeleteMe'}))
+    physics:'Physics',justTeleported:'bJustTeleported',base:'Base',bBounce:'bBounce',bDeleteMe:'bDeleteMe',oldLocation:'OldLocation'}))
     Object.defineProperty(host,key,{get:()=>get(name),set:value=>runtime.writeNamed(actor,name,value)});
+  // O3 recording (o3-record.mjs) reads the rest of the host's tracked state through these; nothing else changes.
+  if(o3Wants(actor)&&actor.lineage?.includes('engine.decoration'))Object.defineProperties(host,{
+    landingCounter:{get:()=>get('numLandings')},o3Base:{get:()=>get('Base')}});
   const services={
     zone,
     move:delta=>{

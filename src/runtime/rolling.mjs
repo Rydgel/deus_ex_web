@@ -77,6 +77,9 @@ export function rolling(host, seconds, { zone, move, eventHitWall, eventFalling,
   host.velocity = velocity.slice();
   const desiredMove = add(velocity, zoneVelocity);
   const oldLocation = host.position.map(f);
+  // 0x103d4d34: OldLocation (+0x12c) = Location, with the Velocity stores and before the first MoveActor (found by the O3 replay of Training's pushed
+  // crate, scripts/validate-stage5-o3.mjs: the translation kept it in a local and left the field as it was).
+  host.oldLocation = [...oldLocation];
   host.justTeleported = false;
 
   const down = scale(zoneGravity[2] > 0 ? [0, 0, 1] : [0, 0, -1], 16);

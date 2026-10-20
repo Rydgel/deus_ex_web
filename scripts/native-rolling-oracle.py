@@ -16,6 +16,7 @@ falling = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(falling)
 collision = falling.collision
 f = lambda value: struct.unpack('<f', struct.pack('<f', value))[0]
+o3r = falling.o3r
 
 # Event dispatch return addresses inside physRolling 0x103d4b80-0x103d58c5.
 ROLLING_EVENT_CALLERS = {0x103d4fd3: 'HitWall', 0x103d51e3: 'HitWall', 0x103d56b4: 'Falling'}
@@ -85,6 +86,34 @@ class NativeRolling(falling.NativeFalling):
             raise RuntimeError('physRolling reached an unexpected line query')
         super().on_instruction(cpu, address, size, data)
 
+    O3_EVENTS = ROLLING_EVENT_CALLERS
+
+    def o3(self, case):
+        """A call Play recorded (scripts/o3-adapters.mjs, docs/stage-5-exit-criteria.md "O3"): physRolling of a decoration from Play's entry state; MoveActor, the
+        script events, setPhysics, SetSupportBase and the nested physFalling are answered from the recorded events."""
+        cfg = case['config']
+        if cfg['netMode'] != 0 or cfg['ancestry'] != 'decoration':
+            raise RuntimeError('this O3 replay covers single-player decoration hosts')
+        zone = cfg['zone']
+        replay = self.replay = o3r.Replay(self, case, self.zone)
+        self.write(self.pawn + 0x24, 'I', self.ancestry['decoration'])
+        self.write(self.pawn + 0x28, 'I', 0)
+        self.write(self.pawn + 0x1ec, 'I', 0)
+        self.write(self.zone + 0x31c, '3f', *zone['gravity'])
+        self.write(self.zone + 0x328, '3f', *zone['velocity'])
+        self.write(self.zone + 0x334, 'f', zone['groundFriction'])
+        self.write(self.zone + 0x338, 'f', zone['fluidFriction'])
+        replay.install(case['before']['state'])
+        self.events = []
+        try:
+            self.call(0x103d4b80, self.pawn, struct.pack('<fi', cfg['dt'], cfg['iterations']))
+            replay.done()
+            result = {'events': replay.events, 'after': replay.snapshot()}
+        except o3r.Divergence as error:
+            result = {'diverged': str(error), 'events': replay.events}
+        self.events = self.replay = None
+        return result
+
     def rolling(self, case):
         self.world = case
         self.write(self.pawn + 0x24, 'I', 0x1058c160)  # PlayerPawn class keeps event lookup resolvable.
@@ -96,6 +125,7 @@ class NativeRolling(falling.NativeFalling):
         self.write(self.pawn + 0x144, '3f', *case['velocity'])
         self.write(self.pawn + 0x150, '3f', *case['acceleration'])
         self.write(self.pawn + 0x120, '3f', 0, 0, 0)
+        self.write(self.pawn + 0x12c, '3f', 0, 0, 0)
         self.write(self.pawn + 0xc4, 'I', case.get('base', 0) or 0)
         self.write(self.zone + 0x31c, '3f', *case['zone']['ZoneGravity'])
         self.write(self.zone + 0x328, '3f', *case['zone']['ZoneVelocity'])
@@ -105,6 +135,7 @@ class NativeRolling(falling.NativeFalling):
         self.rolling_events = []
         self.call(0x103d4b80, self.pawn, struct.pack('<fi', case['dt'], case.get('iterations', 0)))
         result = {'position': list(self.read(self.pawn + 0x114, '3f')),
+                  'oldLocation': list(self.read(self.pawn + 0x12c, '3f')),
                   'velocity': list(self.read(self.pawn + 0x144, '3f')),
                   'acceleration': list(self.read(self.pawn + 0x150, '3f')),
                   'physics': self.read(self.pawn + 0x30, 'B')[0],
@@ -115,8 +146,11 @@ class NativeRolling(falling.NativeFalling):
 
 
 if __name__ == '__main__':
-    if len(sys.argv) != 3:
-        sys.exit('Usage: native-rolling-oracle.py GAME_ROOT CASES_JSON')
+    if len(sys.argv) not in (3, 4):
+        sys.exit('Usage: native-rolling-oracle.py GAME_ROOT CASES_JSON [--o3]')
     native = NativeRolling(Path(sys.argv[1]))
     cases = json.loads(Path(sys.argv[2]).read_text())
+    if '--o3' in sys.argv:
+        print(json.dumps({'hashes': collision.HASHES, 'results': [native.o3(case) for case in cases]}))
+        sys.exit(0)
     print(json.dumps({'hashes': collision.HASHES, 'results': [native.rolling(case) for case in cases]}))

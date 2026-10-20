@@ -11,6 +11,8 @@
  *   before   the input state the adapter reads when the body is entered,
  *   events   the body's service calls in order (an adapter's wrapper pushes through `rec.event`), nested recorded bodies among them,
  *   after    the output state when the body returns (or the error it threw).
+ * An adapter marked `standalone` is a body whose caller does not see it as a call of its own (MoveActor's query inside the `move` service): it is recorded as
+ * a case and is no event of the call it ran under.
  * Wrappers log into the INNERMOST open call only, so a service a nested body calls is the nested call's event, and the outer call
  * sees the nested body as one event (the oracle stubs the nested native the same way and replays it as its own case).
  *
@@ -60,7 +62,7 @@ export function o3Body(name, target, args, body) {
   const rec = {name, depth: recorder.stack.length, index: recorder.calls.length, args: args.map(arg => arg), before: null, events: [], after: null, error: null};
   recorder.calls.push(rec);
   // The caller's event for this nested body, from its input arguments (the adapter of the parent decides its shape).
-  if (parent) recorder.adapters[parent.name].nested?.(parent, rec);
+  if (parent && !adapter.standalone) recorder.adapters[parent.name].nested?.(parent, rec);
   rec.before = adapter.before(target, args, rec, recorder);
   recorder.stack.push(rec);
   const restore = adapter.wrap?.(target, rec, recorder) ?? null;

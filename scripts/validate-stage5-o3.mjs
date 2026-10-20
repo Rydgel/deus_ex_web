@@ -42,6 +42,8 @@ const ORACLES = {
   prelude: 'native-ladder-oracle.py',
   falling: 'native-falling-oracle.py',
   landed: 'native-landing-oracle.py',
+  rolling: 'native-rolling-oracle.py',
+  moveQuery: 'native-move-query-oracle.py',
 };
 /** The tampering of the controls: body -> the path in a case of a constant the body consumes (changed by a relative 2^-12; zero by one). */
 const CONTROLS = {
@@ -50,6 +52,8 @@ const CONTROLS = {
   falling: ['config', 'gravity', 2],
   prelude: ['config', 'radius'],
   landed: ['config', 'radius'],
+  rolling: ['config', 'zone', 'groundFriction'],
+  moveQuery: ['config', 'extent', 1],
 };
 
 // --- encoding ---------------------------------------------------------------------------------------------------------------------------------------

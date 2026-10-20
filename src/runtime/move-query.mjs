@@ -1,4 +1,5 @@
 import {identityOf} from './actor-touch.mjs';
+import {o3Wants,o3Body} from './o3-record.mjs';
 const f=Math.fround;
 const flags=actor=>actor.flags??0;
 // AActor::IsBasedOn (0x1034c8d0) walks +0xc4 Base pointers from the actor
@@ -21,7 +22,10 @@ function basedOn(actor,source){
  * rejection. Scene mutation/events and nondefault move flags are not implemented here.
  * Evidence and original comparisons: docs/move-query.md.
  */
-export function moveQuery({source,worldActor,start,delta,extent,multiLineCheck,ignorePawns=false,ignoreBases=false}){
+export function moveQuery(query){
+  return o3Wants(query.source)?o3Body('moveQuery',query.source,[query],()=>moveQueryBody(query)):moveQueryBody(query);
+}
+function moveQueryBody({source,worldActor,start,delta,extent,multiLineCheck,ignorePawns=false,ignoreBases=false}){
   // MoveActor's query/selection/math is source-type independent: it keys on each
   // candidate's type and the source's block flags, never on whether the source is
   // a player. A decoration cylinder (e.g. a pushed Plant2 under physFalling)
