@@ -66,3 +66,17 @@ test('the per-map seeds come from the captures: high-water mark, holes and wheth
   assert.ok(island.freeIndices.every(index => index < island.count));
   assert.equal(mapRegistrySeed('no_such_map'), null);
 });
+
+test('the first load of a native class replaces its placeholder under the same slot, creates its members, and happens once', () => {
+  const members = [['Function', 'GetText'], ['StrProperty', 'ReturnValue']];
+  const unmeasured = new OriginalObjectIndexModel({ count: 100, freeIndices: [7] });
+  assert.equal(unmeasured.loadNativeClass('ExtString', members), false, 'without a measured set of resident packages nothing is modeled');
+  const model = new OriginalObjectIndexModel({ count: 100, freeIndices: [7, 8], packages: ['Core'], classSlots: { ExtString: 23 } });
+  model.log = [];
+  assert.equal(model.loadNativeClass('ExtString', members), true);
+  // the placeholder's slot (23) goes back and the loaded class takes it; the members take the free list's tail after it
+  assert.deepEqual(model.log.map(row => [row.ev, row.index, row.cls ?? null, row.name ?? null]),
+    [['free', 23, null, null], ['add', 23, 'Class', 'ExtString'], ['add', 8, 'Function', 'GetText'], ['add', 7, 'StrProperty', 'ReturnValue']]);
+  assert.equal(model.loadNativeClass('extstring', members), false, 'a class already loaded creates nothing again');
+  assert.equal(model.log.length, 4);
+});

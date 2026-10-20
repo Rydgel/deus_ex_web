@@ -306,8 +306,8 @@ export function liveProbe(game, args = {}) {
   if (args.objectTrace) {
     const registry = runtime.actorLifecycle.construction.registry;
     if (args.objectTrace.seed) {
-      const { count, freeIndices, measured = {}, classRows = {}, player: live = null, preFrees = [], packages = null } = args.objectTrace.seed;
-      runtime.seedOriginalObjectIndex({ count, freeIndices, exact: true, packages, source: 'the original registry at the frozen start' });
+      const { count, freeIndices, measured = {}, classRows = {}, player: live = null, preFrees = [], packages = null, classSlots = null } = args.objectTrace.seed;
+      runtime.seedOriginalObjectIndex({ count, freeIndices, exact: true, packages, classSlots, source: 'the original registry at the frozen start' });
       // The run's own measured indices for the pre-placed actors and the player (a host input, like the tables of the other sessions), the
       // pending-deleted ones included: an actor that destroyed itself at load is released by Play's first purge under the index it holds
       // (script-level-collection.mjs `release`), and the map table's (map-object-indices.mjs) is another capture's.

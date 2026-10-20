@@ -305,6 +305,10 @@ Object.assign(DEVICE_FIELDS, {
 Object.assign(DEVICE_FIELDS, {
   Rifle: [...DEVICE_FIELDS.Weapon, ['bZoomed', 'bZoomed', 0x540, 'bit', 0x1], ['bHasScope', 'bHasScope', 0x538, 'bit', 0x2], ['bLasing', 'bLasing', 0x540, 'bit', 0x10]],
   Skill: [['CurrentLevel', 'CurrentLevel', 0x354, 'i32']]});
+// A DataCube (InformationDevices, 00_Training's DataCube0): the info window the right button opens (Frob -> CreateInfoWindow) and its reader, and the text state
+// (bAddToVault, bFirstParagraph); Play's slotOf on DataCube0 (live-acceptance.mjs read --offsets: infoWindow +960, aReader +984, bAddToVault +968 mask 2, bFirstParagraph +1000 mask 1).
+DEVICE_FIELDS.DataCube = [['infoWindow', 'infoWindow', 0x3c0, 'obj'], ['aReader', 'aReader', 0x3d8, 'obj'], ['bAddToVault', 'bAddToVault', 0x3c8, 'bit', 0x2],
+  ['bFirstParagraph', 'bFirstParagraph', 0x3e8, 'bit', 0x1]];
 /** --device-watch "Name:Class[@Owner.field],..." -> [{name, cls, via}] (a class DEVICE_FIELDS lacks stops the run). `@Owner.field`: Play finds the actor through
  * its owner's object field, not by name: an actor a placed actor spawns at load (AutoTurret.PreBeginPlay's gun) is numbered by each process's session
  * history (MakeUniqueObjectName's class counter carries every load: the original's capture session loaded the Island once, Play's start loads it again
@@ -1208,7 +1212,7 @@ async function play() {
       const stem = name => name.replace(/\d+$/, ''), stems = new Set([...names].map(stem));
       const rowsByKey = new Map(), classRows = {};
       let player = null;
-      const packages = [];   // the Package objects the original holds at the start
+      const packages = [], classSlots = {};   // the Package objects the original holds at the start, the slots of its registered native classes (ExtString)
       for (const line of text.split(/\r?\n/)) {
         const m = /^slot\s+\d+\s+index\s+(\d+)\s+ptr 0x\w+\s+(\S+?)\.(\S+)$/.exec(line);
         if (!m) continue;
@@ -1217,6 +1221,8 @@ async function play() {
         if (/\d$/.test(m[3]) && stems.has(stem(m[3]))) (classRows[m[2]] ??= []).push([m[3], Number(m[1])]);
         if (m[2] === 'JCDentonMale' && (!player || Number(m[1]) > player.index)) player = {key, index: Number(m[1])};
         if (m[2] === 'Package') packages.push(m[3]);
+        // the registered placeholder of a native class (Class.ExtString): the class's script export replaces it when first loaded (original-object-index.mjs loadNativeClass)
+        if (m[2] === 'Class' && m[3] === 'ExtString') classSlots[m[3]] = Number(m[1]);
       }
       // Objects that existed at the frozen start and that the original frees during the replay (the sender event the player's landing left
       // in the manager, ...): Play does not hold them, and their slots come back in the order the original freed them, so the free list
@@ -1238,7 +1244,7 @@ async function play() {
           last = r;
         }
       }
-      return {count, freeIndices: free ? free.split(/\s+/).map(Number) : [], preFrees, packages,
+      return {count, freeIndices: free ? free.split(/\s+/).map(Number) : [], preFrees, packages, classSlots,
         measured: Object.fromEntries([...rowsByKey].filter(([, index]) => index !== null)), classRows, player,
         // the paired load-made actors take the original's names (live-probe.mjs; work item 13), unless --own-names keeps Play's own
         originalNames: !flag('own-names')};
@@ -1500,8 +1506,9 @@ const indexOf = new Map(FIELDS.filter(f => f[5] !== undefined).map(f => [f[0], f
 // session history like the pawns' inventory: the original's capture session loaded the Island once, LaserEmitter0..4; Play's start loads it again at
 // the Player start, LaserEmitter5..9; live-acceptance.mjs --device-watch `@Owner.field` finds such an actor in Play. ParticleGenerator likewise:
 // two are spawned at load (ParticleGenerator0/1 in the original's start registry), so a robot's sparkGen (Robot.Tick) is ParticleGenerator2 in the
-// original and ParticleGenerator4 in Play) SkillManager likewise: the skills of the player's SkillManager are owned by SkillManager2 in the original's rif1 capture and SkillManager1 in Play.
-const runtimeNumbered = /^((?:JCDenton\w*?|Weapon\w+?|Ammo\w+?|NanoKeyRing|SkillManager|LaserEmitter|AutoTurretGun\w*?|ParticleGenerator))\d+$/;
+// original and ParticleGenerator4 in Play) HUDInformationDisplay likewise (the HUD's info window, DataCube0's infoWindow: built by each Player start's ConstructRootWindow,
+// HUDInformationDisplay2 in the original's kpd1 capture and HUDInformationDisplay1 in Play) SkillManager likewise: the skills of the player's SkillManager are owned by SkillManager2 in the original's rif1 capture and SkillManager1 in Play.
+const runtimeNumbered = /^((?:JCDenton\w*?|Weapon\w+?|Ammo\w+?|NanoKeyRing|SkillManager|LaserEmitter|AutoTurretGun\w*?|ParticleGenerator|HUDInformationDisplay))\d+$/;
 function same(a, b) {
   if (a === null || a === undefined) a = 'None';
   if (b === null || b === undefined) b = 'None';
