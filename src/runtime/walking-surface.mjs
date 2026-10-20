@@ -5,6 +5,7 @@ import {readObject,objectAt} from '../unreal/objects.mjs';
 import {ClassDefaults} from '../unreal/classes.mjs';
 import {HASH_DIFFERENTIAL,lineResultDifference} from './collision-kernel.mjs';
 import {TRACE_DIFFERENTIAL} from './trace-kernel.mjs';
+import {o3} from './o3-record.mjs';
 const f=Math.fround;
 const CHECK_SCAN=HASH_DIFFERENTIAL||TRACE_DIFFERENTIAL;
 
@@ -90,7 +91,8 @@ export function walkingSurfacePrelude(pawn,dt,iterations=0){
  const {position,start,ends,floorEnd}=surfaceScanInputs(pawn);
  const query=(a,b)=>pawn.lineCheck(a,b,[0,0,0],6,0);
  let selected=null,selectedHit=null,floor=null;
- const scan=pawn.surfaceScan?.(start,ends,position,floorEnd);
+ // O3 recording (o3-record.mjs) takes the JavaScript scan, whose queries are the service calls the recording replays.
+ const scan=o3.on?null:pawn.surfaceScan?.(start,ends,position,floorEnd);
  if(scan){
   selectedHit=scan.selected;selected=pawn.textureForHit(selectedHit);floor=scan.floor;
   if(CHECK_SCAN)checkScan(scan,selected,scanSurface(pawn,start,ends,position,floorEnd));

@@ -3,6 +3,7 @@ import importlib.util,json,struct,sys
 from pathlib import Path
 sp=importlib.util.spec_from_file_location('fall',Path(__file__).with_name('native-falling-oracle.py'));b=importlib.util.module_from_spec(sp);sp.loader.exec_module(b)
 c=b.collision
+sp2=importlib.util.spec_from_file_location('native_o3_replay',Path(__file__).with_name('native-o3-replay.py'));o3r=importlib.util.module_from_spec(sp2);sp2.loader.exec_module(o3r)
 class NativeWalking(b.NativeFalling):
  def __init__(self,root):
   super().__init__(root);self.script_class=self.alloc(0x40);self.write(self.script_class+0x28,'I',0x1058c660)  # a script pawn: Pawn ancestry, never APlayerPawn (calcVelocity's class tests)
@@ -13,7 +14,61 @@ class NativeWalking(b.NativeFalling):
   self.logf=self.read(0x10599a68,'I')[0];names=self.alloc(16);entry=self.alloc(64)
   self.cpu.mem_write(entry+0xc,'JCDentonMale0'.encode('utf-16-le')+b'\0\0');self.write(names,'I',entry);self.write(self.read(0x10599a70,'I')[0],'III',names,1,1)
   self.logs=[];self.index=None
+ def o3(self,case):
+  """A call Play recorded (scripts/o3-adapters.mjs, docs/stage-5-exit-criteria.md "O3"): physWalking from Play's entry state; the world's answers, the nested bodies
+  and the script events come from the recorded calls (native-o3-replay.py). Returns the native's service calls and final tracked state."""
+  cfg=case['config']
+  if cfg['netMode']!=0:raise RuntimeError('a network-mode physWalking was recorded')
+  self.case={};self.mi=self.li=0
+  rp=self.replay=o3r.Replay(self,case,self.zone)
+  self.write(self.pawn+0xd0,'B',cfg['zoneNumber']);self.write(self.pawn+0x31,'B',4)  # Region.ZoneNumber, ROLE_Authority
+  self.write(self.pawn+0x24,'I',0x1058c160 if cfg['isPlayerPawn'] else self.script_class);self.write(self.pawn+0x36c,'f',cfg['desiredSpeed'])
+  self.write(self.pawn+0x318,'I',o3r.IS_PLAYER if cfg['isPlayer'] else 0)
+  for off,key in [(0x378,'groundSpeed'),(0x380,'airSpeed'),(0x384,'accelRate'),(0x38c,'maxStepHeight'),(0x1f4,'mass')]:self.write(self.pawn+off,'f',cfg[key])
+  self.write(self.pawn+0x1d4,'2f',cfg['radius'],cfg['height'])
+  self.write(self.zone+0x334,'f',cfg['friction']);self.write(self.zone+0x31c,'3f',*cfg['gravity']);self.write(self.zone+0x328,'3f',*cfg['zoneVelocity'])
+  rp.install(case['before']['state'])
+  self.events=[]
+  try:
+   self.call(0x103ca540,self.pawn,struct.pack('<fi',cfg['dt'],cfg['iterations']));rp.done()
+   result={'events':rp.events,'after':rp.snapshot()}
+  except o3r.Divergence as error:result={'diverged':str(error),'events':rp.events}
+  self.events=self.replay=None;return result
+ def o3_service(self,cpu,address):
+  """The service thunks and stubbed bodies of an O3 replay of physWalking; anything else the original reaches runs as the original."""
+  rp,st=self.replay,cpu.reg_read(c.UC_X86_REG_ESP)
+  def ret(extra):
+   cpu.reg_write(c.UC_X86_REG_EIP,self.read(st,'I')[0]);cpu.reg_write(c.UC_X86_REG_ESP,st+4+extra)
+  def hit_result(h,res,position):
+   self.write(h+4,'I',rp.pointer(res['actor']));self.write(h+8,'3f',*(res.get('location') or position));self.write(h+20,'3f',*res['normal']);self.write(h+36,'f',res['time']);self.write(h+40,'i',0)
+  if address==self.move_thunk:
+   actor,*delta=self.read(st+4,'I3f');h=self.read(st+32,'I')[0]
+   if actor!=self.pawn:raise RuntimeError('Unexpected MoveActor actor')
+   r=rp.take('move',[delta]);rp.install(r['post']);hit_result(h,r['res'],r['post']['position']);cpu.reg_write(c.UC_X86_REG_EAX,1);return True
+  if address==self.line_thunk:
+   h,actor,end,start,flags=self.read(st+4,'5I');extra=self.read(st+36,'I')[0]
+   r=rp.take('line',[list(self.read(start,'3f')),list(self.read(end,'3f')),list(self.read(st+24,'3f')),flags,extra]);rp.install(r['post']);hit_result(h,r['res'],list(self.read(end,'3f')));cpu.reg_write(c.UC_X86_REG_EAX,1);return True
+  if address==self.far_thunk:
+   pos=list(self.read(st+8,'3f'));r=rp.take('farMove',[pos,self.read(st+20,'I')[0],self.read(st+24,'I')[0]]);rp.install(r['post']);cpu.reg_write(c.UC_X86_REG_EAX,1);return True
+  if address==0x103cecc0:
+   r=rp.take('wall',[list(self.read(st+4,'3f')),rp.actor(self.read(st+16,'I')[0])]);rp.install(r['post']);ret(16);return True
+  if address==0x103cc450:
+   r=rp.take('prelude',[self.read(st+8,'f')[0],self.read(st+12,'i')[0]]);rp.install(r['post']);cpu.reg_write(c.UC_X86_REG_EAX,1 if r['res'] else 0);ret(0);return True
+  if address in (0x103d3040,0x103d0a50):
+   r=rp.take('flying' if address==0x103d3040 else 'falling',[self.read(st+4,'f')[0],self.read(st+8,'i')[0]]);rp.install(r['post']);ret(8);return True
+  if address==0x103c9390:
+   r=rp.take('base',[rp.actor(self.read(st+4,'I')[0])]);rp.install(r['post']);ret(4);return True
+  if address==0x103c95f0:
+   physics,actor=self.read(st+4,'2I');r=rp.take('physics',[physics,rp.actor(actor)]);rp.install(r['post']);ret(8);return True
+  if address==self.event_thunk:
+   caller=self.read(st,'I')[0];names={0x103cba19:'MayFall',0x103cbbca:'Falling',0x103cb30a:'Falling',0x103ca5d7:'FellOutOfWorld'}
+   if caller not in names:raise o3r.Divergence(f'the native dispatched a script event from {caller:#x}, which no recorded call covers')
+   r=rp.take('event',[names[caller]]);rp.install(r['post']);return True
+  if address==self.logf:
+   self.logs.append({'case':self.index,'format':'o3'});ret(0);return True  # the GLog side channel of the zone-0 branch (not compared)
+  return False
  def on_instruction(self,cpu,address,size,data):
+  if self.events is not None and getattr(self,'replay',None) is not None and self.o3_service(cpu,address):return
   if self.events is not None:
    st=cpu.reg_read(c.UC_X86_REG_ESP)
    def ret(bytes):
@@ -79,5 +134,8 @@ class NativeWalking(b.NativeFalling):
   result.update(physics=self.read(self.pawn+0x30,'B')[0],hitSlopedWall=bool(self.read(self.pawn+0x318,'I')[0]&0x20),events=self.events);self.events=None;return result
 if __name__=='__main__':
  n=NativeWalking(Path(sys.argv[1]));results=[]
+ if '--o3' in sys.argv:
+  for n.index,x in enumerate(json.loads(Path(sys.argv[2]).read_text())):results.append(n.o3(x))
+  print(json.dumps({'results':results}));sys.exit(0)
  for n.index,x in enumerate(json.loads(Path(sys.argv[2]).read_text())):results.append(n.walking(x))
  print(json.dumps({'results':results,'logs':n.logs}))

@@ -8,12 +8,14 @@ import {setScriptRotation} from './script-set-rotation.mjs';
 import {rolling} from './rolling.mjs';
 import {projectile} from './projectile.mjs';
 import {physPathing} from './pathing.mjs';
+import {o3Wants,o3Body} from './o3-record.mjs';
 
 /** Field-backed adapters for the recovered non-Pawn routines. Original scripts
  * mutate these same fields during HitWall/Landed, so no snapshot is copied
  * back over their writes. Evidence: docs/script-crate-destruction.md. */
 export function runSpawnedActorFalling(runtime,actor,seconds,iterations=0) {
   const {host,options}=spawnedFallingAdapter(runtime,actor);
+  if(o3Wants(actor))return o3Body('falling',host,[seconds,iterations,options],()=>falling(host,seconds,iterations,options));
   falling(host,seconds,iterations,options);
 }
 
@@ -86,6 +88,8 @@ export function spawnedFallingAdapter(runtime,actor) {
   for(const [key,name] of Object.entries({mass:'Mass',buoyancy:'Buoyancy'}))
     Object.defineProperty(host,key,{get:()=>get(name)});
   const zone={get bBounceVelocity(){return zoneField('bBounceVelocity');},get ZoneVelocity(){return zoneField('ZoneVelocity');}};
+  // O3 recording (o3-record.mjs) reads the actor's Base and Region.Zone through the host; nothing else changes.
+  if(o3Wants(actor))Object.defineProperties(host,{o3Base:{get:()=>get('Base')},o3Zone:{value:zone}});
   Object.assign(host,{
     zoneNumber:runtime.regionValue(actor).zoneNumber,
     move:delta=>{
@@ -99,7 +103,8 @@ export function spawnedFallingAdapter(runtime,actor) {
     fellOutOfWorld:()=>dispatch(actor,'FellOutOfWorld',[]),
     setPhysics:(next,base)=>setActorPhysics(actor,next,world(base),{dispatch,
       findBase:target=>findActorBase(target,{lineCheck:(...args)=>level.hash.lineCheck(...args),dispatch})}),
-    landed:hit=>isDecoration?decorationLanded(host,hit,{zone}):actorLanded(host,hit,{zone}),
+    landed:(hit,remaining,iterations)=>o3Wants(actor)?o3Body('landed',host,[hit,remaining,iterations,zone],()=>isDecoration?decorationLanded(host,hit,{zone}):actorLanded(host,hit,{zone}))
+      :isDecoration?decorationLanded(host,hit,{zone}):actorLanded(host,hit,{zone}),
   });
   return {host,options:{nonPawn:true,hitWallEvent:(normal,wall)=>dispatch(actor,'HitWall',[normal,world(wall)])}};
 }
@@ -121,7 +126,7 @@ export function runActorRolling(runtime,actor,seconds,zone) {
   for(const [key,name] of Object.entries({position:'Location',velocity:'Velocity',acceleration:'Acceleration',
     physics:'Physics',justTeleported:'bJustTeleported',base:'Base',bBounce:'bBounce',bDeleteMe:'bDeleteMe'}))
     Object.defineProperty(host,key,{get:()=>get(name),set:value=>runtime.writeNamed(actor,name,value)});
-  rolling(host,seconds,{
+  const services={
     zone,
     move:delta=>{
       const result=playerMove(actor,delta,runtime.spawnedMoveServices(actor,level));
@@ -133,7 +138,9 @@ export function runActorRolling(runtime,actor,seconds,zone) {
       findBase:target=>findActorBase(target,{lineCheck:(...args)=>level.hash.lineCheck(...args),dispatch})}),
     physFalling:(remaining,iterations)=>runSpawnedActorFalling(runtime,actor,remaining,iterations),
     setBase:target=>setSupportBase(actor,world(target),dispatch),
-  });
+  };
+  if(o3Wants(actor))o3Body('rolling',host,[seconds,services],()=>rolling(host,seconds,services));
+  else rolling(host,seconds,services);
   return get('Physics');
 }
 

@@ -12,7 +12,7 @@ class NativeSurface(b.NativeCollision):
   self.write(self.vtable+0xc0,'I',self.line);self.write(self.avtable+0x10,'I',self.event)
   self.write(self.pawn,'I',self.avtable);self.write(self.pawn+0x24,'I',0x1058c160);self.write(self.pawn+0xac,'I',self.level);self.write(self.level,'I',self.vtable);self.write(self.level+0x98,'I',self.model)
   self.write(self.model+0x58,'III',self.node,1,1);self.write(self.model+0x98,'III',self.surface,1,1);self.write(self.surface,'I',self.texture);self.write(self.zone+0x24,'I',0x1057bf00)
-  outer=self.alloc(0x40);names=self.alloc(16);entry=self.alloc(64);self.name_entry=entry;self.write(outer+0x20,'I',1);self.write(names+4,'I',entry);self.cpu.mem_write(entry+12,'Concrete\0'.encode('utf-16-le'))
+  outer=self.outer=self.alloc(0x40);names=self.alloc(16);entry=self.alloc(64);self.name_entry=entry;self.write(outer+0x20,'I',1);self.write(names+4,'I',entry);self.cpu.mem_write(entry+12,'Concrete\0'.encode('utf-16-le'))
   self.write(self.read(0x10599a70,'I')[0],'I',names);self.write(self.texture+0x18,'I',outer)
   self.write(self.texture+0x70,'f',1)
  def on_instruction(self,cpu,address,size,data):

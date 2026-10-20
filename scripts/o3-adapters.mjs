@@ -1,0 +1,179 @@
+/** The adapters of the O3 recorder (src/runtime/o3-record.mjs): for each native physics body Play runs, what it reads when entered, the service calls it
+ * makes in order, and what it leaves behind, in the case format the oracle drivers replay (scripts/native-o3-replay.py, "--o3" of the native-*-oracle.py
+ * drivers). docs/stage-5-exit-criteria.md "O3: the original's code on Play's inputs".
+ *
+ * A recorded call is {body, args, config, before, events, after}:
+ *   config   the constants the body reads that are not the pawn's tracked state (zone gravity, speeds, the collision extent),
+ *   before   the TRACKED STATE at entry, `after` at exit; an event carries it before (`pre`) and after (`post`) the service it names,
+ *   events   the body's service calls in order, each {k, args, res?, pre, post}: MoveActor and line checks answer with the `res` Play's world gave,
+ *            and a nested native body (prelude, flying, falling, landed, processHitWall) is one event the oracle stubs at its address.
+ * The oracle runs the original body from `before`+`config`, answers every service from the recorded event (checking the call it makes is the one Play made, in
+ * order) and installs Play's `post` state after it, so the world's answers are the inputs and everything the body itself computes is the original's.
+ * The comparison (scripts/validate-stage5-o3.mjs) is bit-exact: the native's events (k, args, pre) and its `after` against Play's. */
+import {o3Service} from '../src/runtime/o3-record.mjs';
+
+const f = Math.fround;
+const vec = v => [...v];
+/** The tracked state: every pawn field the physics bodies write or a service changes, in the oracle's names (native-o3-replay.py STATE). */
+export function trackedState(pawn, ids) {
+  if (!pawn.self) return hostState(pawn, ids);
+  return {
+    position: vec(pawn.position), velocity: vec(pawn.velocity), acceleration: vec(pawn.acceleration), oldLocation: vec(pawn.oldLocation),
+    physics: Number(pawn.physics), justTeleported: Boolean(pawn.justTeleported), isWalking: Boolean(pawn.isWalking),
+    hitSlopedWall: Boolean(pawn.hitSlopedWall), canJump: Boolean(pawn.canJump), moveTimer: pawn.moveTimer, base: ids.ref(pawn.base),
+  };
+}
+
+/** A serialized map actor or spawned view that has no pawn view (a decoration falling): the fields its non-Pawn physics reads and writes. */
+function hostState(host, ids) {
+  return {position: vec(host.position), velocity: vec(host.velocity), acceleration: vec(host.acceleration), oldLocation: vec(host.oldLocation),
+    physics: Number(host.physics), justTeleported: Boolean(host.justTeleported), landingCounter: host.landingCounter ?? 0, base: ids.ref(host.o3Base)};
+}
+
+/** Actor identities across a recording: null, 'world' (the level's LevelInfo) or a small integer per distinct actor, with what the original reads of it. */
+export class ActorIds {
+  constructor(world) { this.world = world; this.ids = new Map(); this.info = []; }
+  ref(actor) {
+    if (actor == null) return null;
+    if (actor === this.world || actor?.name === 'LevelInfo0') return 'world';
+    let id = this.ids.get(actor);
+    if (id === undefined) {
+      id = this.ids.size + 1;
+      this.ids.set(actor, id);
+      this.info[id] = this.describe(actor);
+    }
+    return id;
+  }
+  describe(actor) {
+    const lineage = actor.lineage ?? [];
+    return {name: actor.name, isPawn: lineage.includes('engine.pawn'), isPlayerPawn: lineage.includes('engine.playerpawn'),
+      isDecoration: lineage.includes('engine.decoration'), pushable: Boolean(actor.pushableDecoration), mass: actor.mass ?? null};
+  }
+}
+
+const hitResult = (hit, ids) => ({time: hit.time, normal: vec(hit.normal), actor: ids.ref(hit.actor)});
+const lineResult = (hit, ids) => ({...hitResult(hit, ids), location: hit.location ? vec(hit.location) : null, outside: hit.outside === undefined ? null : Boolean(hit.outside)});
+/** The services a body's pawn offers, with the event each makes: `args` from the call's arguments, `res` from its result. */
+const SERVICES = {
+  move: {k: 'move', args: ([delta]) => [vec(delta)], res: hitResult},
+  lineCheck: {k: 'line', args: ([start, end, extent, flags, extra = 0]) => [vec(start), vec(end), vec(extent), flags, extra], res: lineResult},
+  hitWall: {k: 'wall', args: ([hit], ids) => [vec(hit.normal), ids.ref(hit.actor)]},
+  setPhysics: {k: 'physics', args: ([next, support = null], ids) => [next, ids.ref(support)]},
+  setSupportBase: {k: 'base', args: ([actor], ids) => [ids.ref(actor)]},
+  farMove: {k: 'farMove', args: ([position, test = 0, noCheck = 0]) => [vec(position), test, noCheck]},
+  mayFall: {k: 'event', args: () => ['MayFall']},
+  fallingEvent: {k: 'event', args: () => ['Falling']},
+  fellOutOfWorld: {k: 'event', args: () => ['FellOutOfWorld']},
+  // physFalling's air-control probe: the pawn's own line check (flags 6, the pawn's extent) reduced to whether it was blocked.
+  airControlBlocked: {k: 'line', args: ([delta], ids, pawn) => [vec(pawn.position), pawn.position.map((v, i) => f(v + delta[i])), [f(pawn.radius), f(pawn.radius), f(pawn.height)], 6, 0],
+    res: blocked => ({time: blocked ? f(.5) : 1, normal: [0, 0, 0], actor: blocked ? 'world' : null, location: null, outside: null})},
+  findSpot: {k: 'findSpot', args: ([position, extent, checkActors, checkFirst]) => [vec(position), vec(extent), checkActors, checkFirst], res: fitted => (fitted ? vec(fitted) : null)},
+  landedEvent: {k: 'event', args: ([normal]) => ['Landed', vec(normal)]},
+  walkTexture: {k: 'walkTexture', args: ([texture, location, normal]) => [texture != null, vec(location), vec(normal)]},
+};
+
+/** The nested native bodies a body calls: its arguments, as the oracle's stub at the body's address reads them. */
+const NESTED_ARGS = {
+  prelude: ([dt, iterations]) => [f(dt), iterations],
+  flying: ([dt, iterations]) => [f(dt), iterations],
+  falling: ([dt, iterations]) => [f(dt), iterations],
+  walking: ([dt, iterations]) => [f(dt), iterations],
+  landed: ([hit, remaining, iterations], ids) => [vec(hit.normal), ids.ref(hit.actor), f(remaining), iterations],
+};
+
+/** The base adapter: wraps the pawn's services named in `services` (keys of SERVICES) while the body runs. */
+function adapter(body, {config, services}) {
+  return {
+    before(pawn, args, rec, recorder) {
+      const ids = recorder.context.ids;
+      return {args: NESTED_ARGS[body](args, ids), config: config(pawn, args, ids), state: trackedState(pawn, ids), kind: pawn.self ? 'pawn' : 'host'};
+    },
+    wrap(pawn, rec, recorder) {
+      const saved = {}, ids = recorder.context.ids;
+      for (const name of services) {
+        if (typeof pawn[name] !== 'function') continue;
+        const spec = SERVICES[name];
+        saved[name] = pawn[name];
+        pawn[name] = o3Service(rec, recorder, saved[name], {
+          pre: () => trackedState(pawn, ids),
+          log: (args, result, pre) => rec.events.push({k: spec.k, args: spec.args(args, ids, pawn), res: spec.res ? spec.res(result, ids) : null, pre, post: trackedState(pawn, ids)}),
+        });
+      }
+      return () => { for (const name of Object.keys(saved)) pawn[name] = saved[name]; };
+    },
+    after: (pawn, rec, result, recorder) => trackedState(pawn, recorder.context.ids),
+    /** A nested recorded body is one event of its caller; its state and result are filled in when it has run. */
+    nested: (parent, child) => parent.events.push({k: child.name, nested: child}),
+  };
+}
+
+const zoneConfig = pawn => ({gravity: vec(pawn.gravity), zoneVelocity: vec(pawn.zoneVelocity), zoneNumber: pawn.zoneNumber, netMode: pawn.netMode});
+const bodyConfig = pawn => ({isPlayerPawn: Boolean(pawn.isPlayerPawn), isPlayer: Boolean(pawn.isPlayer), radius: pawn.radius, height: pawn.height, mass: pawn.mass,
+  maxStepHeight: pawn.maxStepHeight, groundSpeed: pawn.groundSpeed, airSpeed: pawn.airSpeed, accelRate: pawn.accelRate, desiredSpeed: pawn.desiredSpeed});
+
+/** `textureForHit(hit)` follows the line check that produced `hit`: it joins that query's answer (the texture the original reads through the hit's BSP surface). */
+function textureWrapper(rec, recorder, pawn, saved) {
+  saved.textureForHit = pawn.textureForHit;
+  pawn.textureForHit = function (hit) {
+    const texture = saved.textureForHit.call(this, hit);
+    if (recorder.top() === rec) {
+      const last = rec.events.at(-1);
+      if (last?.k !== 'line') throw new Error('O3: textureForHit without the line check that produced its hit');
+      last.res.texture = texture ? {outerName: texture.outerName ?? null, friction: texture.friction} : null;
+    }
+    return texture;
+  };
+}
+
+/** physFalling for a non-Pawn host (a decoration): the zone and body constants its integration reads. */
+function hostFallingConfig(host, dt, iterations, options) {
+  if (!options?.nonPawn) throw new Error('O3: a host falling without the nonPawn option');
+  if (host.bBounce) throw new Error('O3: a bouncing host (the script HitWall dispatch) is not modelled');
+  if (!('landingCounter' in host)) throw new Error('O3: only decoration hosts are modelled (no fragment, projectile or inventory)');
+  return {dt: f(dt), iterations, nonPawn: true, ancestry: 'decoration', ...zoneConfig(host), terminalVelocity: host.terminalVelocity, regionWater: Boolean(host.regionWater),
+    fluidFriction: host.fluidFriction, mass: host.mass, buoyancy: host.buoyancy ?? 0, bobbing: Boolean(host.bobbing), radius: host.radius, height: host.height,
+    zoneNumber: host.zoneNumber, netMode: 0};
+}
+
+export const ADAPTERS = {
+  flying: adapter('flying', {
+    services: ['move', 'hitWall'],
+    config: (pawn, [dt, iterations]) => ({dt: f(dt), iterations, ...bodyConfig(pawn), ...zoneConfig(pawn), fluidFriction: pawn.fluidFriction, collideWorld: Boolean(pawn.collideWorld)}),
+  }),
+  prelude: (() => {
+    const base = adapter('prelude', {
+      services: ['lineCheck', 'walkTexture'],
+      config: (pawn, [dt, iterations]) => ({dt: f(dt), iterations, ...bodyConfig(pawn), rotation: vec(pawn.rotation), viewRotation: vec(pawn.viewRotation), netMode: pawn.netMode}),
+    });
+    return {...base, wrap(pawn, rec, recorder) {
+      const restore = base.wrap(pawn, rec, recorder), saved = {};
+      textureWrapper(rec, recorder, pawn, saved);
+      return () => { pawn.textureForHit = saved.textureForHit; restore(); };
+    }};
+  })(),
+  falling: adapter('falling', {
+    services: ['move', 'hitWall', 'airControlBlocked', 'fellOutOfWorld'],
+    config: (pawn, [dt, iterations, options]) => pawn.self
+      ? {dt: f(dt), iterations, ...bodyConfig(pawn), ...zoneConfig(pawn), airControl: pawn.airControl, terminalVelocity: pawn.terminalVelocity,
+        regionWater: Boolean(pawn.regionWater), footWater: Boolean(pawn.footWater), fluidFriction: pawn.fluidFriction, buoyancy: pawn.buoyancy ?? 0,
+        footFluidFriction: pawn.footWater ? pawn.footFluidFriction : 1.2, nonPawn: false}
+      : hostFallingConfig(pawn, dt, iterations, options),
+  }),
+  landed: adapter('landed', {
+    services: ['lineCheck', 'findSpot', 'farMove', 'landedEvent', 'setPhysics'],
+    config: (pawn, [hit, remaining, iterations, zone]) => pawn.self
+      ? {remaining: f(remaining), iterations, ...bodyConfig(pawn), ...zoneConfig(pawn)}
+      : {remaining: f(remaining), iterations, ancestry: 'landingCounter' in pawn ? 'decoration' : 'inventory', radius: pawn.radius, height: pawn.height,
+        isCarcass: Boolean(pawn.isCarcass), slidingCarcass: Boolean(pawn.slidingCarcass), zone: {bBounceVelocity: Boolean(zone.bBounceVelocity), velocity: vec(zone.ZoneVelocity)}, netMode: 0},
+  }),
+  walking: adapter('walking', {
+    services: ['move', 'lineCheck', 'hitWall', 'setPhysics', 'setSupportBase', 'farMove', 'mayFall', 'fallingEvent', 'fellOutOfWorld'],
+    config: (pawn, [dt, iterations]) => ({dt: f(dt), iterations, ...bodyConfig(pawn), ...zoneConfig(pawn), friction: pawn.friction}),
+  }),
+};
+
+/** A resolved case: what the oracle reads (`config`, `before`, the events with the nested bodies filled in) and what Play left (`after`). */
+export function resolveCase(rec, ids) {
+  const events = rec.events.map(e => e.nested ? {k: e.k, args: e.nested.before.args, res: e.nested.result === undefined ? null : e.nested.result, pre: e.nested.before.state, post: e.nested.after} : e);
+  return {body: rec.name, index: rec.index, depth: rec.depth, args: rec.before.args, config: rec.before.config, kind: rec.before.kind, before: {state: rec.before.state}, events, actors: Object.fromEntries(ids.info.map((info, id) => [id, info]).filter(([id, info]) => id > 0 && info)), after: rec.after, result: typeof rec.result === 'boolean' ? rec.result : null, error: rec.error};
+}

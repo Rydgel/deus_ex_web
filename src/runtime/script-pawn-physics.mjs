@@ -48,6 +48,7 @@ import { x87add, x87double, x87load, x87mul, x87store } from './script-vm.mjs';
 import { scriptVmKernel } from './script-vm-kernel.mjs';
 import { physPathing } from './pathing.mjs';
 import { interpolationVelocity } from './actor-physics.mjs';
+import { o3Wants, o3Body } from './o3-record.mjs';
 
 const f = Math.fround;
 const unsupported = name => { throw new Error(`Original pawn physics boundary not linked: ${name}`); };
@@ -275,7 +276,9 @@ export function pawnPhysicsView(actor, services) {
     return level.findSpot(extent, fitted, checkActors, checkFirst) ? fitted : null;
   };
   pawn.random = services.random;
-  pawn.walkingPrelude = (seconds, iterations) => walkingSurfacePrelude(pawn, seconds, iterations);
+  pawn.walkingPrelude = (seconds, iterations) => o3Wants(pawn)
+    ? o3Body('prelude', pawn, [seconds, iterations], () => walkingSurfacePrelude(pawn, seconds, iterations))
+    : walkingSurfacePrelude(pawn, seconds, iterations);
   pawn.airControlBlocked = delta => lineCheck(pawn.position, pawn.position.map((v, i) => f(v + delta[i])),
     [pawn.radius, pawn.radius, pawn.height], 6, 0).time < 1;
   pawn.landedEvent = normal => dispatch(actor, 'Landed', [normal]);
@@ -302,7 +305,9 @@ export function pawnPhysicsView(actor, services) {
   } });
   pawn.hitWall = hit => processPlayerHitWall(pawn, hit.normal, hit.actor,
     { isProbing: (target, name) => services.isProbing(actor, name), dispatch });
-  pawn.landed = (hit, remaining, iterations) => processLanded(pawn, hit, remaining, iterations);
+  pawn.landed = (hit, remaining, iterations) => o3Wants(pawn)
+    ? o3Body('landed', pawn, [hit, remaining, iterations], () => processLanded(pawn, hit, remaining, iterations))
+    : processLanded(pawn, hit, remaining, iterations);
   // The dry walking loop runs in Rust on the pawn's image when the
   // interpreter admits the pawn (walk-loop-kernel.mjs, docs/rust-core.md
   // B5), with MoveActor's services for the moves it makes there; otherwise,
@@ -310,13 +315,18 @@ export function pawnPhysicsView(actor, services) {
   let walkOps = null;
   const opsOfWalk = () => walkOps ??= { level, worldActor, move: moveOps(pawn, services, dispatch, decorate, false) };
   pawn.walking = (seconds, iterations = 0) => {
+    if (o3Wants(pawn)) return o3Body('walking', pawn, [seconds, iterations], () => walking(pawn, seconds, iterations));
     if (!services.walkLoop?.(pawn, seconds, iterations, opsOfWalk())) walking(pawn, seconds, iterations);
   };
   // The walk's services for performPhysics in Rust (pawn-physics-kernel.mjs).
   // Not enumerable, as `surfaceScan`.
   Object.defineProperty(pawn, 'walkOps', { value: opsOfWalk });
-  pawn.falling = (seconds, iterations) => falling(pawn, seconds, iterations);
-  pawn.flying = (seconds, iterations) => physFlying(pawn, seconds, iterations);
+  pawn.falling = (seconds, iterations) => o3Wants(pawn)
+    ? o3Body('falling', pawn, [seconds, iterations], () => falling(pawn, seconds, iterations))
+    : falling(pawn, seconds, iterations);
+  pawn.flying = (seconds, iterations) => o3Wants(pawn)
+    ? o3Body('flying', pawn, [seconds, iterations], () => physFlying(pawn, seconds, iterations))
+    : physFlying(pawn, seconds, iterations);
   pawn.swimming = (seconds, iterations) => physSwimming(pawn, seconds, iterations);
   pawn.startSwimming = (oldVelocity, timeTick, remaining, iterations) =>
     startSwimming(pawn, oldVelocity, timeTick, remaining, iterations);

@@ -14,6 +14,9 @@ import sys
 spec = importlib.util.spec_from_file_location('native_collision', Path(__file__).with_name('native-collision-oracle.py'))
 collision = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(collision)
+spec = importlib.util.spec_from_file_location('native_o3_replay', Path(__file__).with_name('native-o3-replay.py'))
+o3r = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(o3r)
 
 
 class NativeLanding(collision.NativeCollision):
@@ -75,7 +78,99 @@ class NativeLanding(collision.NativeCollision):
         self.cpu.reg_write(collision.UC_X86_REG_EIP, self.read(stack, 'I')[0])
         self.cpu.reg_write(collision.UC_X86_REG_ESP, stack + 4 + cleanup)
 
+    def o3(self, case):
+        """A call Play recorded (scripts/o3-adapters.mjs, docs/stage-5-exit-criteria.md "O3"): processLanded for a Pawn from Play's entry state; the line probe, the
+        fitting, FarMoveActor, the Landed event, setPhysics and the walking continuation are answered from the recorded events."""
+        cfg = case['config']
+        if cfg['netMode'] != 0:
+            raise RuntimeError('a network-mode processLanded was recorded')
+        self.case, self.random_index, self.line_index = {}, 0, 0
+        replay = self.replay = o3r.Replay(self, case, self.floor)
+        if case['kind'] == 'pawn':
+            self.write(self.pawn + 0x24, 'I', 0x1058c660)
+            self.write(self.pawn + 0x28, 'I', 0x800000)
+            self.write(self.pawn + 0xc8, 'I', self.floor)
+            self.write(self.pawn + 0x318, 'I', o3r.IS_PLAYER if cfg['isPlayer'] else 0)
+        else:
+            if cfg['ancestry'] != 'decoration':
+                raise RuntimeError('this O3 replay covers decoration hosts')
+            self.write(self.pawn + 0x24, 'I', self.carcass_class if cfg['isCarcass'] else self.decoration_class)
+            self.write(self.pawn + 0x28, 'I', 0)
+            self.write(self.pawn + 0x348, 'I', 4 if cfg['slidingCarcass'] else 0)
+            zone = cfg['zone']
+            self.write(self.zone + 0x388, 'I', 0x200 if zone['bBounceVelocity'] else 0)
+            self.write(self.zone + 0x328, '3f', *zone['velocity'])
+            self.write(self.pawn + 0xc8, 'I', self.zone)
+        self.write(self.pawn + 0x1d4, '2f', cfg['radius'], cfg['height'])
+        replay.install(case['before']['state'])
+        normal, actor, remaining, iterations = case['args']
+        self.events = []
+        try:
+            self.call(0x103cef60, self.pawn, struct.pack('<3fIfi', *normal, replay.pointer(actor), remaining, iterations))
+            replay.done()
+            result = {'events': replay.events, 'after': replay.snapshot()}
+        except o3r.Divergence as error:
+            result = {'diverged': str(error), 'events': replay.events}
+        self.events = self.replay = None
+        return result
+
+    def o3_service(self, cpu, address):
+        replay, stack = self.replay, cpu.reg_read(collision.UC_X86_REG_ESP)
+        if address == self.line_thunk:
+            hit, actor, end, start, flags = self.read(stack + 4, '5I')
+            recorded = replay.take('line', [list(self.read(start, '3f')), list(self.read(end, '3f')), list(self.read(stack + 24, '3f')), flags, self.read(stack + 36, 'I')[0]])
+            replay.install(recorded['post'])
+            result = recorded['res']
+            self.write(hit + 4, 'I', replay.pointer(result['actor']))
+            self.write(hit + 8, '3f', *(result.get('location') or list(self.read(end, '3f'))))
+            self.write(hit + 20, '3f', *result['normal'])
+            self.write(hit + 36, 'f', result['time'])
+            self.write(hit + 40, 'i', 0)
+            cpu.reg_write(collision.UC_X86_REG_EAX, 0 if result.get('outside') is False else 1)
+            return True
+        if address == self.fit_thunk:
+            location = self.read(stack + 16, 'I')[0]
+            recorded = replay.take('findSpot', [list(self.read(location, '3f')), list(self.read(stack + 4, '3f')), *self.read(stack + 20, '2I')])
+            replay.install(recorded['post'])
+            if recorded['res'] is not None:
+                self.write(location, '3f', *recorded['res'])
+            cpu.reg_write(collision.UC_X86_REG_EAX, int(recorded['res'] is not None))
+            return True
+        if address == self.far_thunk:
+            actor, *position = self.read(stack + 4, 'I3f')
+            if actor != self.pawn:
+                raise RuntimeError('Unexpected relocation actor')
+            recorded = replay.take('farMove', [position, *self.read(stack + 20, '2I')])
+            replay.install(recorded['post'])
+            cpu.reg_write(collision.UC_X86_REG_EAX, 1)
+            return True
+        if address == self.event_thunk:
+            caller = self.read(stack, 'I')[0]
+            if caller != 0x103d0326:
+                raise o3r.Divergence(f'the native dispatched a script event from {caller:#x}')
+            parameters = self.read(stack + 8, 'I')[0]
+            recorded = replay.take('event', ['Landed', list(self.read(parameters, '3f'))])
+            replay.install(recorded['post'])
+            return True
+        if address == self.rand_thunk:
+            raise o3r.Divergence('the native drew a random number (appFrand), which the O3 replay does not model yet')
+        if address == 0x103c95f0:
+            physics, actor = self.read(stack + 4, '2I')
+            recorded = replay.take('physics', [physics, replay.actor(actor)])
+            replay.install(recorded['post'])
+            self.skip(stack, 8)
+            return True
+        if address == 0x103ca540:
+            remaining, iterations = self.read(stack + 4, 'fi')
+            recorded = replay.take('walking', [remaining, iterations])
+            replay.install(recorded['post'])
+            self.skip(stack, 8)
+            return True
+        return False
+
     def on_instruction(self, cpu, address, size, data):
+        if self.events is not None and getattr(self, 'replay', None) is not None and self.o3_service(cpu, address):
+            return
         if self.events is None:
             return super().on_instruction(cpu, address, size, data)
         stack = cpu.reg_read(collision.UC_X86_REG_ESP)
@@ -181,8 +276,11 @@ class NativeLanding(collision.NativeCollision):
 
 
 if __name__ == '__main__':
-    if len(sys.argv) != 3:
-        sys.exit('Usage: native-landing-oracle.py GAME_ROOT CASES_JSON')
+    if len(sys.argv) not in (3, 4):
+        sys.exit('Usage: native-landing-oracle.py GAME_ROOT CASES_JSON [--o3]')
     native = NativeLanding(Path(sys.argv[1]))
     cases = json.loads(Path(sys.argv[2]).read_text())
+    if '--o3' in sys.argv:
+        print(json.dumps({'hashes': collision.HASHES, 'results': [native.o3(case) for case in cases]}))
+        sys.exit(0)
     print(json.dumps({'hashes': collision.HASHES, 'results': [native.landed(case) for case in cases]}))

@@ -30,6 +30,9 @@ spec = importlib.util.spec_from_file_location('native_collision', Path(__file__)
 collision = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(collision)
 f = lambda value: struct.unpack('<f', struct.pack('<f', value))[0]
+spec = importlib.util.spec_from_file_location('native_o3_replay', Path(__file__).with_name('native-o3-replay.py'))
+o3r = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(o3r)
 
 # physFalling 0x103d0a50 up to its SEH unwind funclets (0x103d2491), and the
 # water/bobbing/foot-water integration blocks inside it (first integration and
@@ -178,7 +181,118 @@ class NativeFalling(collision.NativeCollision):
             return
         raise RuntimeError(f'Unknown hitWallMode {mode}')
 
+    def o3(self, case):
+        """A call Play recorded (scripts/o3-adapters.mjs, docs/stage-5-exit-criteria.md "O3"): physFalling for a Pawn from Play's entry state. MoveActor, the
+        line probes, the nested prelude, processHitWall and processLanded, and script events are answered from the recorded events."""
+        cfg = case['config']
+        if cfg['netMode'] != 0:
+            raise RuntimeError('a network-mode physFalling was recorded')
+        self.case, self.last_hit, self.responses, self.move_index, self.air_blocked = {}, [0.0] * 3, [], 0, False
+        replay = self.replay = o3r.Replay(self, case, self.zone)
+        self.write(self.pawn + 0x28, 'I', 0)
+        self.write(self.pawn + 0x1ec, 'I', 0)
+        self.write(self.pawn + 0xd0, 'B', cfg['zoneNumber'])
+        self.write(self.pawn + 0x1d4, '2f', cfg['radius'], cfg['height'])
+        self.write(self.pawn + 0x1f4, 'f', cfg['mass'])
+        self.write(self.pawn + 0x1f8, 'f', cfg['buoyancy'])
+        self.write(self.zone + 0x31c, '3f', *cfg['gravity'])
+        self.write(self.zone + 0x328, '3f', *cfg['zoneVelocity'])
+        self.write(self.zone + 0x33c, 'f', cfg['terminalVelocity'])
+        self.write(self.zone + 0x338, 'f', cfg['fluidFriction'])
+        self.write(self.zone + 0x388, 'I', 1 if cfg['regionWater'] else 0)
+        self.write(self.pawn + 0x330, 'I', self.zone)
+        saved_flags = self.read(self.pawn + 0x31c, 'B')[0]
+        if cfg['nonPawn']:
+            if cfg['ancestry'] != 'decoration':
+                raise RuntimeError('this O3 replay covers decoration hosts')
+            self.write(self.pawn + 0x24, 'I', self.ancestry['decoration'])
+            self.write(self.pawn + 0x318, 'I', 0)
+            self.write(self.pawn + 0x31c, 'B', (saved_flags & ~8) | (8 if cfg['bobbing'] else 0))
+        else:
+            self.write(self.pawn + 0x24, 'I', 0x1058c160 if cfg['isPlayerPawn'] else self.ancestry['pawn'])
+            self.write(self.pawn + 0x318, 'I', o3r.IS_PLAYER if cfg['isPlayer'] else 0)
+            for offset, key in [(0x378, 'groundSpeed'), (0x384, 'accelRate'), (0x390, 'airControl')]:
+                self.write(self.pawn + offset, 'f', cfg[key])
+            # FootRegion.Zone: the same zone unless the foot is in water of its own (this replay supports the dry foot and the one-zone water case).
+            if cfg['footWater'] != cfg['regionWater']:
+                raise RuntimeError('a foot-water zone distinct from Region.Zone was recorded: extend the replay')
+        replay.install(case['before']['state'])
+        self.events = []
+        try:
+            self.call(0x103d0a50, self.pawn, struct.pack('<fi', cfg['dt'], cfg['iterations']))
+            replay.done()
+            result = {'events': replay.events, 'after': replay.snapshot()}
+        except o3r.Divergence as error:
+            result = {'diverged': str(error), 'events': replay.events}
+        self.write(self.pawn + 0x31c, 'B', saved_flags)
+        self.events = self.replay = None
+        return result
+
+    def o3_service(self, cpu, address):
+        """The services of an O3 replay shared by the physFalling family (physFalling, physFlying): MoveActor, line queries, processHitWall, processLanded and
+        the prelude as stubbed bodies; any other service the original reaches is a divergence (a call Play did not make) or runs as the original."""
+        replay, stack = self.replay, cpu.reg_read(collision.UC_X86_REG_ESP)
+
+        def leave(extra):
+            cpu.reg_write(collision.UC_X86_REG_EIP, self.read(stack, 'I')[0])
+            cpu.reg_write(collision.UC_X86_REG_ESP, stack + 4 + extra)
+
+        def answer(hit, recorded, end):
+            result = recorded['res']
+            self.write(hit + 4, 'I', replay.pointer(result['actor']))
+            self.write(hit + 8, '3f', *(result.get('location') or end))
+            self.write(hit + 20, '3f', *result['normal'])
+            self.write(hit + 36, 'f', result['time'])
+            self.write(hit + 40, 'i', 0)
+
+        if address == self.move_thunk:
+            actor, *delta = self.read(stack + 4, 'I3f')
+            hit = self.read(stack + 32, 'I')[0]
+            if actor != self.pawn:
+                raise RuntimeError('Unexpected MoveActor actor')
+            recorded = replay.take('move', [delta])
+            replay.install(recorded['post'])
+            answer(hit, recorded, recorded['post']['position'])
+            cpu.reg_write(collision.UC_X86_REG_EAX, 1)
+            return True
+        if address == self.line_thunk:
+            hit, actor, end, start, flags = self.read(stack + 4, '5I')
+            extra = self.read(stack + 36, 'I')[0]
+            recorded = replay.take('line', [list(self.read(start, '3f')), list(self.read(end, '3f')), list(self.read(stack + 24, '3f')), flags, extra])
+            replay.install(recorded['post'])
+            answer(hit, recorded, list(self.read(end, '3f')))
+            cpu.reg_write(collision.UC_X86_REG_EAX, 0 if recorded['res'].get('outside') is False else 1)
+            return True
+        if address == 0x103cecc0:
+            recorded = replay.take('wall', [list(self.read(stack + 4, '3f')), replay.actor(self.read(stack + 16, 'I')[0])])
+            replay.install(recorded['post'])
+            leave(16)
+            return True
+        if address == 0x103cef60:
+            recorded = replay.take('landed', [list(self.read(stack + 4, '3f')), replay.actor(self.read(stack + 16, 'I')[0]),
+                                             self.read(stack + 20, 'f')[0], self.read(stack + 24, 'i')[0]])
+            replay.install(recorded['post'])
+            leave(24)
+            return True
+        if address == 0x103cc450:
+            recorded = replay.take('prelude', [self.read(stack + 8, 'f')[0], self.read(stack + 12, 'i')[0]])
+            replay.install(recorded['post'])
+            cpu.reg_write(collision.UC_X86_REG_EAX, 1 if recorded['res'] else 0)
+            leave(0)
+            return True
+        if address == self.event_thunk:
+            names = {0x103d0b89: 'FellOutOfWorld'}
+            caller = self.read(stack, 'I')[0]
+            if caller not in names:
+                raise o3r.Divergence(f'the native dispatched a script event from {caller:#x}, which no recorded call covers')
+            recorded = replay.take('event', [names[caller]])
+            replay.install(recorded['post'])
+            return True
+        return False
+
     def on_instruction(self, cpu, address, size, data):
+        if self.events is not None and getattr(self, 'replay', None) is not None and self.o3_service(cpu, address):
+            return
         if self.events is not None and PHYS_FALLING[0] <= address < PHYS_FALLING[1]:
             self.covered.add(address)
         if self.events is not None and address in [0x103cecc0, 0x103cef60]:
@@ -301,8 +415,8 @@ class NativeFalling(collision.NativeCollision):
 
 
 if __name__ == '__main__':
-    if len(sys.argv) != 3:
-        sys.exit('Usage: native-falling-oracle.py GAME_ROOT CASES_JSON')
+    if len(sys.argv) not in (3, 4):
+        sys.exit('Usage: native-falling-oracle.py GAME_ROOT CASES_JSON [--o3]')
     native = NativeFalling(Path(sys.argv[1]))
     cases = json.loads(Path(sys.argv[2]).read_text())
     def nan_bits(value):
@@ -314,6 +428,9 @@ if __name__ == '__main__':
         if isinstance(value, dict):
             return {k: nan_bits(v) for k, v in value.items()}
         return value
+    if '--o3' in sys.argv:
+        print(json.dumps({'hashes': collision.HASHES, 'results': [native.o3(case) for case in cases]}))
+        sys.exit(0)
     results = [nan_bits(native.falling(case)) for case in cases]
     print(json.dumps({'hashes': collision.HASHES, 'results': results,
                       'coverage': native.uncovered({'physFalling': PHYS_FALLING, **WATER_BRANCHES})}))
