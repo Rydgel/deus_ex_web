@@ -586,6 +586,47 @@ export const SCENES = {
   // led1, an open difference (not a gate row): ins1's first capture dropped the player at (850, -20, 10), east of the corridor, where he falls 90 units onto a ledge and slides;
   // the replay differed by one float ulp in Velocity X and Y at the landing (tick 587 there: original (15.2156134, -13.3387251, -419.583191), Play (15.2156143, -13.338726, -419.583191)).
   led1: {map: '00_TrainingCombat', ticks: 700, early: 'KillAll FlyGenerator', pawns: ['UNATCOTroop3'], cmds: INTO(850, -20, 10)},
+  // 00_Training, phase 1 (row 5.3.1): one scene per interaction of the route from PlayerStart to DL_part2. The poses come from the map and the route probe
+  // (training-probe-lib.mjs): a point is checked against the BSP first (zone 0 kills the player), the aim from the real eye height (40 above the player's
+  // rest height, which is -80 on the start floor, -120 by the trainer door and -144 in the rooms at the key, datacube, keypads and multitool). The capture
+  // opens the map directly, so PlayerTraveling is not set and Mission00 never runs FirstFrame: the cadet (UNATCOTroop2, Test_Subject) is not knocked out
+  // there (cad1 kills him by the Tantalus cheat, as cmb5 does).
+  // key1, the doors and the key ring: the player 90 units west of the start door (DeusExMover16/17, Tag UN_maindoor, unlocked) opens it with the right button
+  // (DeusExMover.Frob: both panels slide), then is placed at NanoKey0 (415, 1072, -145, on its table; KeyID Train) and picks it up (the right button:
+  // DeusExPlayer.PickupNanoKey, the key ring's KeyList), then at the trainer door (DeusExMover47/48, Tag keydoor, KeyIDNeeded Train, locked, not
+  // pickable): the key ring put in hand (ActivateBelt 0), the left button (an Enter edge: ParseLeftClick, DoFrob(Self, inHand), DeusExMover.Frob's NanoKeyRing
+  // branch toggles bLocked on both panels), then the right button opens the pair.
+  key1: {map: '00_Training', ticks: 560, early: PLACE(-330, 832, -85, 0),
+    cmds: `30:ParseRightClick|${MOVE(200, 415, 1010, -144, 16384, -6000)}|240:ParseRightClick|${MOVE(300, 384, 640, -120, 49152)}|340:ActivateBelt 0|${SHOTS([400])}|460:ParseRightClick`,
+    devices: ['DeusExMover16:DeusExMover', 'DeusExMover17:DeusExMover', 'NanoKey0:Actor', 'DeusExMover47:DeusExMover', 'DeusExMover48:DeusExMover']},
+  // pik1, lockpicking the gun door (DeusExMover45/46, Tag gundoor, locked, pickable, lockStrength 0.05): the player 72 units west of it, facing it, tries the bare
+  // right button (DeusExMover.Frob: locked, msgLocked); a Lockpick summoned and picked up facing away (as dor2 does), put in hand (ActivateBelt 1), the left
+  // button on the door (DoFrob(Self, inHand): bPicking, numPicks pickValue * 100, TicksPerPick, the 0.1 s Timer lowering lockStrength by 0.01 until it is 0 and
+  // both panels unlock; the Lockpick is used up); the right button then opens it.
+  pik1: {map: '00_Training', ticks: 800, early: PLACE(1240, 144, -85, 0),
+    cmds: `10:ParseRightClick|${AIM(14, 32768, -10130)}|20:summon DeusEx.Lockpick|90:ParseRightClick|130:ActivateBelt 1|${AIM(170, 0, 0)}|${SHOTS([210])}|700:ParseRightClick`,
+    devices: ['DeusExMover45:DeusExMover', 'DeusExMover46:DeusExMover', 'Lockpick0:Lockpick']},
+  // kpd1, the datacube and keypad 0012: the player 70 units east of DataCube0 (1496, 860, -147), looking down at it; the right button opens its text window
+  // (InformationDevices.Frob -> CreateInfoWindow: the parser, the HUD info window, the DataVault note) and a second one closes it; the player is then placed
+  // at Keypad0 (1998, 940, -55, Event paddoor), the right button opens HUDKeypadWindow and the digit keys 0, 0, 1, 2 (key edges 20 ticks apart; the window takes
+  // them: HUDKeypadWindow.VirtualKeyPressed, ValidateCode against validCode) trigger the paddoor pair (DeusExMover26/18).
+  kpd1: {map: '00_Training', ticks: 520, early: PLACE(1566, 860, -144, 32768, -5746),
+    cmds: `30:ParseRightClick|90:ParseRightClick|${MOVE(150, 1950, 880, -144, 9346, 5921)}|200:ParseRightClick|${['0', '0', '1', '2'].map((d, i) => `${240 + 20 * i}:@down Digit${d}|${240 + 20 * i}:@up Digit${d}`).join('|')}`,
+    devices: ['DataCube0:DataCube', 'Keypad0:ControlPanel', 'DeusExMover26:DeusExMover', 'DeusExMover18:DeusExMover']},
+  // hkp1, the Multitool hack of Keypad2 (2558, 940, -55, Event hackdoor, hackStrength 0.05): Multitool1 (2241, 600, -147, on its table) picked up with the right
+  // button from the north (the table's south side is outside the world), put in hand (ActivateBelt 1); placed at the keypad, the left button starts the hack
+  // (HackableDevices.Frob with the Multitool: bHacking, the Timer lowers hackStrength by 0.01 every 0.1 s) and its end triggers the hackdoor pair (DeusExMover37/38).
+  hkp1: {map: '00_Training', ticks: 520, early: PLACE(2241, 670, -144, 49152, -5746),
+    cmds: `40:ParseRightClick|80:ActivateBelt 1|${MOVE(120, 2510, 880, -144, 9346, 5921)}|${SHOTS([180])}`,
+    devices: ['Multitool1:Multitool', 'Keypad2:ControlPanel', 'DeusExMover37:DeusExMover', 'DeusExMover38:DeusExMover']},
+  // cad1, the cadet's body to the table: the player in the body room 152 units west of the cadet (UNATCOTroop2 at (3652, 849), Standing) kills him with Tantalus
+  // at tick 20 (his carcass UNATCOTroopCarcass0 appears at 98, holding the NanoKey Body_Search_Room); placed 60 units from it looking down, the right button
+  // searches it (DeusExCarcass.Frob: the key goes to the key ring), a second one carries it (a POVCorpse in hand, the carcass destroyed); placed 100 units
+  // north of Trigger0 (3688, 378, -40, TT_ClassProximity, Event bodydoorsopen) facing it, a Tab edge (User.ini DropItem) drops it: the carcass spawned by
+  // the drop touches the trigger, which opens the pair DeusExMover3/25 and starts DL_bodyexit.
+  cad1: {map: '00_Training', ticks: 700, early: PLACE(3500, 849, -80, 0, -400),
+    cmds: `20:Tantalus|${MOVE(110, 3610, 849, -80, 0, -9100)}|150:ParseRightClick|190:ParseRightClick|${MOVE(250, 3688, 478, -100, 49152, -3000)}|300:@down Tab|300:@up Tab`,
+    devices: ['UNATCOTroopCarcass0:Actor', 'POVCorpse0:Actor', 'UNATCOTroopCarcass1:Actor', 'Trigger0:Actor', 'DeusExMover3:DeusExMover', 'DeusExMover25:DeusExMover']},
 };
 export const SCENE_FLAGS = ['--no-ghost', '--perception', '--player-gear', '--player-health', '--los-flag'];
 // The device scenes add the player's eye and bob (the first-person item's placement: Inventory.RenderOverlays, CalcDrawOffset): the stored combat scenes

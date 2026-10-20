@@ -57,6 +57,20 @@ export function releaseTextParserObject(object, flags, services) {
   return object;
 }
 
+/** The objects the original's registry gains when Extension:XExtString is first loaded from its package, in AddObject order, [class, name] each
+ * (Training capture kpd1, 2026-10-20, DataCube0 read at tick 30: DeusExTextParser0, then `Class ExtString` replacing the registered placeholder under
+ * its slot (223 in that session), these 21 members, then the text object `ExtString 00_Datacube01`; the text object and the parser are freed in the
+ * same tick). The order is the loader's (CreateExport of the class's children while its Link preloads them): measured, not derived; the retail
+ * Extension.u holds exactly these seven Function and the Property objects of docs/script-text-parser.md. docs/stage-5-exit-criteria.md "Captures:
+ * Training phase 1". */
+export const EXT_STRING_CLASS_MEMBERS = Object.freeze([
+  ['Function', 'GetNextTextPart'], ['Function', 'GetFirstTextPart'], ['StrProperty', 'OutText'], ['IntProperty', 'ReturnValue'],
+  ['Function', 'GetTextPart'], ['StrProperty', 'OutText'], ['IntProperty', 'ReturnValue'], ['Function', 'GetTextLength'],
+  ['IntProperty', 'startPos'], ['IntProperty', 'Count'], ['StrProperty', 'OutText'], ['IntProperty', 'ReturnValue'], ['Function', 'GetText'],
+  ['IntProperty', 'ReturnValue'], ['Function', 'AppendText'], ['StrProperty', 'ReturnValue'], ['Function', 'SetText'], ['StrProperty', 'NewText'],
+  ['IntProperty', 'speechPage'], ['StrProperty', 'NewText'], ['StrProperty', 'Text'],
+].map(row => Object.freeze(row)));
+
 /** XExtString source for OpenText: StaticLoadObject(XExtString, NULL,
  * "Package.Name", NULL, LOAD_NoWarn|LOAD_Quiet) from preloaded packages.
  * XExtString::Serialize (Extension 0x10044140) is UObject::Serialize followed
