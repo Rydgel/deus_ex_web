@@ -23,7 +23,8 @@
  *   focus                 give the game's top-level window and viewport the Wine foreground and
  *                         keyboard focus (WinDrv reads GetFocus/GetKeyState, so a key held by a
  *                         posted message only counts while the window has focus), and report
- *                         the game thread's active/focus windows
+ *                         the game thread's active/focus windows; nothing when it has them already
+ *                         (attaching to the game's input clears its key state: held keys would drop)
  *   focusinfo             report them without changing anything
  *   sdown <key> / sup <key> / shold <key> <ms>
  *                         the same keys through the Wine input queue (keybd_event), which updates
@@ -204,10 +205,18 @@ static void focusInfo(const char *what) {
   else printf("%s: GetGUIThreadInfo failed (%lu)\n", what, GetLastError());
 }
 
-/* Wine-side focus only: no compositor involved. */
+/* Wine-side focus only: no compositor involved. Nothing is done when the game already has it: attaching to the
+ * game thread's input clears that input's key state, so a key held through the input queue (sdown) would read up at
+ * the next GetKeyState, and WinDrv's UpdateInput releases it (Stage 5 hwk1: Shift held at 28 was released at 31 when
+ * the Up key's focus attached again). */
 static void takeFocus(void) {
   HWND top = GetAncestor(target, GA_ROOT);
   DWORD game = gameThread(), mine = GetCurrentThreadId();
+  GUITHREADINFO info = {sizeof info};
+  if (GetGUIThreadInfo(game, &info) && info.hwndFocus == target && info.hwndActive == top && GetForegroundWindow() == top) {
+    focusInfo("kept");
+    return;
+  }
   focusInfo("before");
   AttachThreadInput(mine, game, TRUE);
   SetForegroundWindow(top);

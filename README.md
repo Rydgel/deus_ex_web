@@ -7,7 +7,7 @@ single-player maps reach only boundaries assigned to later stages in the startup
 census ([completion record and coverage limits](docs/stage-3-exit-criteria.md#stage-3-beyond-training-the-all-maps-startup-census)).
 **Stage 4 presentation is complete** (2026-10-17): its gate passes 70 of 70 in one
 run ([Stage 4 close](docs/stage-4-exit-criteria.md#stage-4-close)). **Stage 5
-gameplay is in progress**: its gate passes 49 of 50 criteria (2026-10-20), each on
+gameplay is in progress**: its gate passes all 50 criteria (2026-10-20; the criteria are a draft for the user to adopt), each on
 original captures of Liberty Island and Training replayed tick by tick in Play (see below).
 
 The target is **100% original fidelity**. Every supported behavior needs original
@@ -198,7 +198,7 @@ the three Training maps and Liberty Island, each with the original-side evidence
 that would prove it. `scripts/census-stage5.mjs` drives them all in Play (50 play
 as of 2026-10-19), and `scripts/validate-stage5-acceptance.mjs` is the gate.
 
-**Gate: 49 of 50 pass, none fail, 1 awaits the user's decision (the footsteps of 5.2.3)** (2026-10-20). The passing
+**Gate: 50 of 50 pass, none fail** (2026-10-20). The passing
 rows are proven by live traces of the original game: `DeusEx.exe` runs under
 CrossOver (the Mac) or Wine (the Linux host) with a tracer (`tools/dx-live-win.c`, `scripts/live-original.sh`) that
 records the watched actors, the random stream, the AI events and every object
@@ -214,7 +214,8 @@ crate-stack scenes, replayed through Engine.dll on Play's recorded inputs
   the soldiers turn neutral and the exit door closes until Switch0), a patrolling
   Terrorist seeing the player, a pawn finding a body,
   a broken laser beam raising the alarm, hacking the laser trap's control panel,
-  a shot waking and drawing the guards, a security camera raising the alarm that
+  a shot waking and drawing the guards, a run's footsteps heard by a guard where a walk's
+  are not, a security camera raising the alarm that
   wakes the turret, an EMP grenade against the bot, the turret and the camera, and a
   Terrorist who sees the player in the light and not in the shadow.
 - **Conversations:** Training's M00MeetPage and holo-Jaime, MeetPaul's weapon choice, Filben's key, Gunther's rescue and the
@@ -236,8 +237,8 @@ Collision and line traces now read the moving brush tracker's level model, as th
 original's do (doors and lifts block shots, moves and spawns where they were last
 drawn; checked against Engine.dll). The dying player's camera starts from the body's
 rotation, as the engine's draw passes it, and a breakable door's fragments are placed
-as Engine.dll's FindSpot places them, NaN probes included. The one row left waits on the
-user's footsteps decision ([what the user should decide](docs/stage-5-exit-criteria.md#what-the-user-should-decide)).
+as Engine.dll's FindSpot places them, NaN probes included. The criteria themselves, with their
+`weak` judgements, are the user's to adopt ([what the user should decide](docs/stage-5-exit-criteria.md#what-the-user-should-decide)).
 Swimming, ladders, pawn navigation, doors opened by NPCs and the intro cinematic
 also run from translated original code ([roadmap](docs/roadmap.md#5-implement-the-full-gameplay-systems)).
 

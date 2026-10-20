@@ -176,7 +176,7 @@ const ROUTE_SCENES = {
   // walk in: a placement inside it Touches nothing), DataLinkTrigger19 in the room at the shaft and DataLinkTrigger20 in the shaft; the DataLink plays once
   // (DataLinkTrigger.Touch: StartDataLinkTransmission; in Play's rehearsal from tick 64 to about 890, DL_libertyruinsairshaft_Played at 801), the second
   // drop comes after its end, and every pawn is watched (the guards of the laser trap do not notice the player). DataLinkTrigger21 sits in a crawlspace 120
-  // units high: a standing player cannot be dropped into its cylinder, and the harness cannot hold the crouch key.
+  // units high: a standing player cannot be dropped into its cylinder, and the harness could not hold the crouch key when it was captured.
   air1: {map: '01_NYC_UNATCOIsland', ticks: 1200, early: PLACE(2112, -675, -95, 0),
     cmds: `${MOVE(60, 2362, -675, -8, 0)}|${MOVE(950, 3546, -1116, -129, 0)}`,
     devices: ['DataLinkTrigger19:Actor', 'DataLinkTrigger20:Actor', 'DataLinkTrigger21:Actor'], flags: ['DL_libertyruinsairshaft_Played'], wholeFlags: true, options: ['--player-talk']},
@@ -186,6 +186,12 @@ export const SCENES = {
     cmds: `${PISTOL(40960)}|170:set DeusEx.JCDentonMale ViewRotation (Pitch=-536,Yaw=40960,Roll=0)|${SHOTS([420, 480, 540])}`},
   cmb2: {map: '01_NYC_UNATCOIsland', ticks: 900, early: PLACE(8951.3, 190.2, -84, 32768),
     cmds: `${PISTOL(32768)}|170:set DeusEx.JCDentonMale ViewRotation (Pitch=0,Yaw=32768,Roll=0)|590:set DeusEx.JCDentonMale ViewRotation (Pitch=-536,Yaw=0,Roll=0)|${SHOTS([600, 630, 660])}`},
+  // footsteps (row 5.2.3's second half), keys held through the input queue (`@hold`, live-acceptance.mjs keyEdge): cmb2's pose, 700 units behind Terrorist0
+  // (9651, 190), turned toward him. hrn1 runs (Up held from 30 to 90, bAlwaysRun): DeusExPlayer.PlayFootStep's LoudNoise reaches him and he seeks, then attacks.
+  hrn1: {map: '01_NYC_UNATCOIsland', ticks: 400, early: PLACE(8951.3, 190.2, -84, 0), cmds: '30:@hold ArrowUp|90:@release ArrowUp'},
+  // hwk1 walks the same line (Shift, the Walking binding, held from 28 to 382 with Up from 30 to 380): the slower steps' LoudNoise radius does not reach him
+  // as the player passes 440, 280 and 155 units behind him (Play's rehearsal: Standing until 421, then he seeks and attacks).
+  hwk1: {map: '01_NYC_UNATCOIsland', ticks: 560, early: PLACE(8951.3, 190.2, -84, 0), cmds: '28:@hold ShiftLeft|30:@hold ArrowUp|380:@release ArrowUp|382:@release ShiftLeft'},
   cmb3: {map: '01_NYC_UNATCOIsland', ticks: 900, early: PLACE(9549, 80.5, -84, 8624),
     cmds: `${PISTOL(8624)}|170:set DeusEx.JCDentonMale ViewRotation (Pitch=0,Yaw=8624,Roll=0)|${SHOTS([300, 360, 420, 480])}`},
   // ballistic armor instead of the pistol: picked up the same way, put in hand by ActivateBelt 1 and activated by the Enter edge (ParseLeftClick: inHand.bActivatable -> Activate)
@@ -287,7 +293,7 @@ export const SCENES = {
     options: ['--inventory'], devices: ['SkillAwardTrigger1:Actor']},
   // 00_Training (rows 5.3.4, 5.3.7, 5.1.1): poses from the census scenarios.
   // jumps (row 5.3.4): the player placed at the obstacle course (6991, -55), facing -Y; two Space edges (Jump through the User.ini binding), each a
-  // PlayerPawn.DoJump into PHYS_Falling and a landing; the walk across and the crouch under the pipes are held keys the harness cannot post.
+  // PlayerPawn.DoJump into PHYS_Falling and a landing; the walk across and the crouch under the pipes are held keys, which the harness could not post when they were captured.
   jmp1: {map: '00_Training', ticks: 300, early: PLACE(6991, -55, 17, 49152), cmds: '30:@down Space|30:@up Space|150:@down Space|150:@up Space'},
   // a held key (feasibility of `@hold`/`@release`, live-acceptance.mjs keyEdge): the same spot facing +Y, MoveForward (Up) held from 30 to 150 through the input
   // queue, the run (bAlwaysRun) and its footsteps (DeusExPlayer.PlayFootStep from the Walk/Run animation notifies) compared tick by tick.
@@ -519,7 +525,7 @@ export const SCENES = {
     devices: ['DeusExMover0:DeusExMover', 'Switch1:Actor']},
   // mpg1 (row 5.4.8, M00MeetPage): ConversationTrigger1 (conversationTag m00meetpage, BindName BobPage, radius 96) starts the third-person conversation from its Touch, which
   // needs the player not Falling (DeusExPlayer.CanStartConversation): every placement leaves him falling for a few ticks, so he is set 122.5 units from the trigger (outside
-  // its 96 + his radius), lands, and is pushed toward it at 150 by a Velocity SET (a held key cannot be posted); the first move across the boundary touches it and
+  // its 96 + his radius), lands, and is pushed toward it at 150 by a Velocity SET (captured before the harness could hold a key); the first move across the boundary touches it and
   // BobPage1 and the player enter their conversation states. Five speeches (Bob, JC, Bob, JC, Bob) are skipped with the Enter edge every 40 ticks from 190 and the last
   // one ends the conversation (M00MeetPage_Played).
   mpg1: {map: '00_TrainingFinal', ticks: 520, early: 'KillAll FlyGenerator', conversation: true, pawns: ['BobPage1'],
