@@ -524,6 +524,68 @@ export const SCENES = {
   // it and sets MS_ReyesHidden.
   jmr1: {map: '00_TrainingFinal', ticks: 1000, early: 'KillAll FlyGenerator', conversation: true, pawns: ['JaimeReyes6'],
     cmds: `${MOVE(1, 7255, -4287.5, 100, 0, -1900)}|150:ParseRightClick`, devices: ['Switch6:Actor']},
+  // 00_TrainingCombat (fifth captures, rows 5.1.2 to 5.1.4 and 5.4.2). The map is opened at PlayerStart0 (-775, 4): the frozen phase types only `KillAll FlyGenerator`
+  // (nothing is placed there: a trigger the player is placed in touches nothing, and one touched in the frozen phase would start a DataLink before the tracer attaches),
+  // and the player is dropped into each trigger's cylinder after the first unfrozen tick (INTO), 30 units above the floor, so the landing's MoveActor touches it.
+  // rng1, the pistol range (row 5.1.2): dropped at the weapon counter (-8, -515), inside DataLinkTrigger2's cylinder (65, -544, radius 100): DL_TArgetRange plays for
+  // about 840 ticks and its last event opens the counter's cover DeusExMover44 (Tag BallisticStore) and the cover DeusExMover1 over Switch3 together. The pistol
+  // WeaponPistol0 and the box Ammo10mm0 are taken with the right button (looking down at them: pitch -5400 and -2800), the pistol drawn (ActivateBelt 1); placed at the
+  // station (24, -590), looking at Switch3 (pitch -8700), the right button presses it (Event guntarget1: the target DeusExMover4 with BreakableGlass0 slides in from
+  // y -3280 to -1216, its MoverCollider passes the DirectionalTriggers that open the blast door DeusExMover7); aimed at the glass, six Enter edges 60 ticks apart.
+  rng1: {map: '00_TrainingCombat', ticks: 2800, early: 'KillAll FlyGenerator', pawns: ['UNATCOTroop1', 'UNATCOTroop3'],
+    cmds: [INTO(-8, -515, -30), AIM(1, 32768, -5400), '935:ParseRightClick', AIM(960, 32768, -2800), '975:ParseRightClick', '1010:ActivateBelt 1', INTO(24, -590, -90, 1060), AIM(1060, 49152, -8700),
+      '1120:ParseRightClick', AIM(1380, 48752, -200), SHOTS([1400, 1460, 1520, 1580, 1640, 1700])].join('|'),
+    devices: ['WeaponPistol0:Weapon', 'Ammo10mm0:Actor', 'Switch3:Actor', 'DeusExMover44:DeusExMover', 'DeusExMover1:DeusExMover', 'DeusExMover4:DeusExMover', 'DeusExMover7:DeusExMover',
+      'BreakableGlass0:DeusExMover'],
+    flags: ['DL_TArgetRange_Played', 'DL_TArgetRangeShot1_Played'], options: ['--player-talk', '--inventory']},
+  // rng2, rng1 and the second lane (row 5.1.2): a second Ammo10mm box (Ammo10mm1, yaw 35000 pitch -2750) taken at 1000; the pistol's recoil lifts the view 150 units a shot, so the
+  // aim is set again 10 ticks before every Enter edge (the first capture aimed once: three hits, three misses, the glass stood at 0.02, DL_TArgetRangeShot1 never played and the
+  // second lane stayed shut). DL_TArgetRangeShot1's last event opens the cover DeusExMover28 over Switch13; the player is dropped at the second station (106, -590) at 2950 and the
+  // right button presses Switch13 (DeusExMover5 and BreakableGlass1 slide in from y -3280 to -1792, not -1216): the glass is 1,202 units off. The glass breaks and DL_TArgetRangeShot2 plays.
+  rng2: {map: '00_TrainingCombat', ticks: 4100, early: 'KillAll FlyGenerator', pawns: ['UNATCOTroop1', 'UNATCOTroop3'],
+    cmds: [INTO(-8, -515, -30), AIM(1, 32768, -5400), '935:ParseRightClick', AIM(960, 32768, -2800), '975:ParseRightClick', AIM(985, 35000, -2750), '1000:ParseRightClick', '1030:ActivateBelt 1',
+      INTO(24, -590, -90, 1060), AIM(1060, 49152, -8700), '1120:ParseRightClick',
+      ...[1390, 1450, 1510, 1570, 1630, 1690].map(t => AIM(t, 48752, -200)), SHOTS([1400, 1460, 1520, 1580, 1640, 1700]),
+      INTO(106, -590, -90, 2950), AIM(2950, 49152, -8700), '3010:ParseRightClick',
+      ...[3260, 3320, 3380, 3440, 3500, 3560, 3760, 3820, 3880, 3940, 4000, 4060].map(t => AIM(t, 49344, -104)),
+      SHOTS([3270, 3330, 3390, 3450, 3510, 3570, 3770, 3830, 3890, 3950, 4010, 4070])].join('|'),
+    devices: ['WeaponPistol0:Weapon', 'Ammo10mm0:Actor', 'Ammo10mm1:Actor', 'Switch3:Actor', 'Switch13:Actor', 'DeusExMover44:DeusExMover', 'DeusExMover1:DeusExMover', 'DeusExMover28:DeusExMover',
+      'DeusExMover4:DeusExMover', 'DeusExMover5:DeusExMover', 'DeusExMover7:DeusExMover', 'BreakableGlass0:DeusExMover', 'BreakableGlass1:DeusExMover'],
+    flags: ['DL_TArgetRange_Played', 'DL_TArgetRangeShot1_Played', 'DL_TArgetRangeShot2_Played'], options: ['--player-talk', '--inventory']},
+  // lam1, the demolition (row 5.1.4): the shelf of LAMs (2121, 1536) is in the security bots' room, so the LAM and a pistol are summoned and picked up facing away from
+  // BreakableWall1 at (3000, 1700), 136 units south of its face (the corridor x 2940 to 3070); the LAM drawn (ActivateBelt 1) and the player dropped at (3000, 1805)
+  // facing north, 32 units from the wall: WeaponLAM.Tick's NearWallCheck sets bNearWall, and the Enter edge at 260 places the LAM on the wall (WeaponLAM.Fire,
+  // the 'Place' animation) where a thrown one would bounce. Dropped 150 units south of it at 360, the pistol drawn (ActivateBelt 2), five Enter edges aimed
+  // along the LAM's line: ThrownProjectile.TakeDamage explodes it, HurtRadius breaks the wall (minDamageThreshold 75) and DL_FinishWall follows (DataLinkTrigger11).
+  lam1: {map: '00_TrainingCombat', ticks: 1700, early: 'KillAll FlyGenerator', pawns: ['UNATCOTroop1', 'SecurityBot6', 'SecurityBot0'],
+    cmds: [INTO(3000, 1700, -20), AIM(1, 49152, -10130), '20:summon DeusEx.WeaponLAM', '60:ParseRightClick', '80:summon DeusEx.WeaponPistol', '120:ParseRightClick', '160:ActivateBelt 1',
+      INTO(3000, 1805, -20, 190), AIM(190, 16384), SHOTS([260]), INTO(3000, 1655, -20, 360), AIM(360, 16384), '400:ActivateBelt 2', SHOTS([480, 540, 600, 660, 720])].join('|'),
+    devices: ['BreakableWall1:DeusExMover', 'WeaponLAM0:Weapon', 'LAM5:Actor'], flags: ['DL_FinishWall_Played'], options: ['--player-talk', '--inventory']},
+  // rif1, the rifle range (row 5.1.3): rng1's drop at the rifle counter (984, -590), inside DataLinkTrigger8's cylinder (1061, -542, radius 96): DL_RifleRange plays for
+  // about 750 ticks and opens the counter's cover DeusExMover67 and the cover DeusExMover29 over Switch0. WeaponRifle2 and Ammo0 (Ammo3006) are taken with the right
+  // button (pitch -5000 at the rifle, yaw 35500 pitch -4500 at the box), the rifle drawn (ActivateBelt 1); at the station (1016, -590) the right button presses Switch0
+  // (rifletarget1: DeusExMover32 and BreakableGlass2 slide in from y -3280 to -1216); aimed at the glass, ToggleScope (a typed exec function: the key `[` is not one of
+  // dxinput's names) zooms to ScopeFOV 10 (DesiredFOV, FOVAngle tweening), and two Enter edges 140 ticks apart. The glass breaks, DL_RifleRangeShot1 plays and
+  // Mission00.Timer sets SkillWeaponRifle to level 3 once its played flag is set.
+  rif1: {map: '00_TrainingCombat', ticks: 2150, early: 'KillAll FlyGenerator', pawns: ['UNATCOTroop1', 'UNATCOTroop3'],
+    cmds: [INTO(984, -590, -30), AIM(1, 32768, -5000), '850:ParseRightClick', AIM(880, 35500, -4500), '900:ParseRightClick', '930:ActivateBelt 1', INTO(1016, -590, -90, 960), AIM(960, 49152, -8700),
+      '1020:ParseRightClick', AIM(1300, 48752, -200), '1310:ToggleScope', SHOTS([1380, 1520])].join('|'),
+    devices: ['WeaponRifle2:Rifle', 'Switch0:Actor', 'DeusExMover67:DeusExMover', 'DeusExMover29:DeusExMover', 'DeusExMover32:DeusExMover', 'DeusExMover21:DeusExMover', 'BreakableGlass2:DeusExMover',
+      'SkillWeaponRifle#:Skill'], flags: ['DL_RifleRange_Played', 'DL_RifleRangeShot1_Played'], options: ['--player-talk', '--inventory', '--player-fov']},
+  // ins1, the instructor (row 5.4.2): a pistol, a MedKit and a LAM summoned and picked up at the start place, then the player dropped into the co-located FlagTrigger2
+  // (561, -79, radius 200, bWhileStandingOnly) beside UNATCOTroop3 (586, -139), which sets MunitionsTrooperReady: the radius conversations bound to the trooper
+  // (MunitionsTrooperFrob, flag false, radius 160; MunitionsTrooperTake, flag true, radius 350) and Mission00.Timer's RemoveAllInventory race for the flag.
+  ins1: {map: '00_TrainingCombat', ticks: 900, conversation: true, early: 'KillAll FlyGenerator', pawns: ['UNATCOTroop3', 'UNATCOTroop1'],
+    cmds: [AIM(1, 0, -10130), '20:summon DeusEx.WeaponPistol', '60:ParseRightClick', '80:summon DeusEx.MedKit', '120:ParseRightClick', '140:summon DeusEx.WeaponLAM', '180:ParseRightClick',
+      INTO(561, -40, 40, 245), AIM(245, 49152), INTO(800, 0, 10, 560), INTO(561, -40, 40, 600)].join('|'), flags: ['MunitionsTrooperReady']},
+  // ins2, ins1 without the second drop (row 5.4.2): the player stays inside the trooper's radius with MunitionsTrooperReady cleared by the Take, so the radius greeting
+  // MunitionsTrooperFrob (flag false, radius 160) plays after the 10 s gate on the Take's last play (about 823).
+  ins2: {map: '00_TrainingCombat', ticks: 1000, conversation: true, early: 'KillAll FlyGenerator', pawns: ['UNATCOTroop3', 'UNATCOTroop1'],
+    cmds: [AIM(1, 0, -10130), '20:summon DeusEx.WeaponPistol', '60:ParseRightClick', '80:summon DeusEx.MedKit', '120:ParseRightClick', '140:summon DeusEx.WeaponLAM', '180:ParseRightClick',
+      INTO(561, -40, 40, 245), AIM(245, 49152)].join('|'), flags: ['MunitionsTrooperReady']},
+  // led1, an open difference (not a gate row): ins1's first capture dropped the player at (850, -20, 10), east of the corridor, where he falls 90 units onto a ledge and slides;
+  // the replay differed by one float ulp in Velocity X and Y at the landing (tick 587 there: original (15.2156134, -13.3387251, -419.583191), Play (15.2156143, -13.338726, -419.583191)).
+  led1: {map: '00_TrainingCombat', ticks: 700, early: 'KillAll FlyGenerator', pawns: ['UNATCOTroop3'], cmds: INTO(850, -20, 10)},
 };
 export const SCENE_FLAGS = ['--no-ghost', '--perception', '--player-gear', '--player-health', '--los-flag'];
 // The device scenes add the player's eye and bob (the first-person item's placement: Inventory.RenderOverlays, CalcDrawOffset): the stored combat scenes

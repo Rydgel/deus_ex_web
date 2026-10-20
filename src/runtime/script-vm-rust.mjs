@@ -925,7 +925,8 @@ export class RustScriptVm {
     this.own(id, new Run(this, compiled, lowered, frame.instance, frame.services, frame));
     this.depth = id + 1;
     try {
-      while (frame.cursor !== null && (!frame.latent || frame.iterators.length) && !frame.returned) {
+      // (ProcessState tests bDeleteMe before each opcode, 0x103e5c16: a Destroy() ends the run)
+      while (frame.cursor !== null && (!frame.latent || frame.iterators.length) && !frame.returned && !frame.services.isPendingKill?.(frame.instance)) {
         if (!budget--) throw new Error(`Script resume exceeded the host hang guard in ${compiled.displayName} (the original would not return)`);
         const index = lowered.indexOf.get(frame.cursor);
         if (index === undefined) throw new Error('VM instruction pointer outside script');

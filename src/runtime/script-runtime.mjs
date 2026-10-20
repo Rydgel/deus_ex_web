@@ -554,6 +554,7 @@ export class ScriptRuntime {
       warning:message=>this.warning?.(message),
       newObject:request=>this.newObject(request),
       dispatchStateEvent:(receiver,name)=>this.processEvent(receiver,name),
+      isPendingKill:receiver=>this.instance(receiver).pendingKill,
       gotoLabel:(receiver,name)=>this.instance(receiver).state.gotoLabel(name),
       pollLatent:call=>{
         if(call.index===384)return pollActorSleep(this.latentFloat(call.receiver),call.state,call.seconds);
@@ -4379,9 +4380,12 @@ export class ScriptRuntime {
       walkLoop:(pawn,seconds,iterations,ops)=>this.scriptVm?.walkLoop?.walk(pawn,seconds,iterations,ops)??false,
       // Validation (nav-trace.mjs): a traced pawn's physics moves are logged; undefined (no cost) otherwise.
       get moveTrace(){return that.navTrace?.physicsMove(receiver);},
+      // appFrand's x87 result, not stored as a float32: processLanded (0x103cf52d) multiplies, subtracts and adds on ST0 and stores once into Velocity
+      // (landing.mjs). The product of the 15-bit integer and the float32 1/32767 is exact in binary64, and so are the steps after it; rounding it here
+      // moved a landing's random velocity by one float32 ulp (Stage 5 led1: the original's Velocity.X -15.166173 against Play's -15.1661739).
       random:()=>{
         if(typeof this.rng?.frand!=='function')throw new Error('Pawn physics requires the shared original RNG stream');
-        return Math.fround(this.rng.frand());
+        return this.rng.frand();
       },
     };
   }

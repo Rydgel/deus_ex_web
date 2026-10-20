@@ -8,7 +8,7 @@
  * shot fires (the pistol's refire time swallows a press 30 ticks after the last), whether the pawns see the player. Class P: Play against itself, a rehearsal,
  * never evidence (the original's stream, deltas and frozen phase differ).
  *
- *   node scripts/stage5-capture-rehearsal.mjs --scene cmb1 [--ticks 900] [--pawns Terrorist0,ThugMale7,Terrorist10]
+ *   node scripts/stage5-capture-rehearsal.mjs --scene cmb1 [--ticks 900] [--pawns Terrorist0,ThugMale7,Terrorist10] [--classes LAM,Tracer]
  *   node scripts/stage5-capture-rehearsal.mjs --map 01_NYC_UNATCOIsland --early "..." --cmds "..." [--ticks 900] */
 import {readdir, readFile} from 'node:fs/promises';
 import {SCENES} from './validate-stage5-live.mjs';
@@ -116,6 +116,8 @@ for (let tick = 1; tick <= ticks; tick++) {
     // --props "Name=Prop,Prop;Name2=..." (Name @weapon: the player's Weapon; @player: the player): more fields printed with the line
     + (option('props', '') ?? '').split(';').filter(spec => spec.includes('=')).map(spec => { const [name, list] = spec.split('='); const a = name === '@weapon' ? c.read(p, 'Weapon') : name === '@player' ? p : c.actor(name);
       return ` ${name}:${a ? `${c.state(a).split('.').pop()}/${list.split(',').map(n => short(c.read(a, n))).join('/')}` : '-'}`; }).join('')
+    // --classes LAM,Tracer: every actor of those classes (a placed LAM, a flying projectile): name, state and position, printed with the line
+    + (option('classes', '') ?? '').split(',').filter(Boolean).map(cls => c.byClass(cls).map(a => ` ${a.name}:${c.state(a).split('.').pop()}@${c.pos(a).map(Math.round)}`).join('')).join('')
     + devices.map(d => { const a = deviceActor(d); return !a ? ` ${d.name}:-` : c.gone(a) ? ` ${d.name}:gone` : ` ${d.name}:${c.state(a).split('.').pop()}/${(DEVICE_SUMMARY[d.cls] ?? []).map(n => short(c.read(a, n))).join('/')}`; }).join('');
   if (line !== last || tick % 60 === 0) { console.log(tick, line); last = line; }
   if (scene?.conversation || flagArg('con')) { const now = conLine(); if (now !== lastCon) { console.log(tick, now); lastCon = now; } }

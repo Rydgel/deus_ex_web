@@ -109,10 +109,14 @@ export class ScriptState {
   }
   /** Poll a pre-existing latent action before running statements. A native call
    * may install another latent action and must suspend until the next phase. */
+  /** AActor::IsPendingKill (virtual +0x2c, body 0x1030df80): the actor's bDeleteMe; false for any other object. */
+  destroyed() { return this.services.isPendingKill?.(this.instance)===true; }
   process(seconds) {
     // Engine 0x103e5b93-0x103e5b96 returns on null frame.Code before
     // inspecting LatentAction (+0x24), which InitExecution leaves untouched.
     if (!this.execution || this.execution.cursor === null) return;
+    // 0x103e5bb3-0x103e5bb8: a destroyed actor's ProcessState returns here, before it polls its latent action.
+    if(this.destroyed())return;
     if(this.latent===undefined)throw new Error('Original state latent slot is uninitialized before state entry');
     if(this.latent){
       if(!this.services.pollLatent)throw new Error(`Latent action ${this.latent} is not linked`);
@@ -120,7 +124,9 @@ export class ScriptState {
       if(this.latent)return;
     }
     let changes=0;
-    while(this.execution && this.execution.cursor!==null && !this.latent){
+    // 0x103e5c16-0x103e5c1a: bDeleteMe (Actor+0x28 bit 0x80) is tested before each opcode, so the statements after a Destroy() do not run (the VM loops
+    // test it between statements of a state frame, script-vm.mjs resumeCompiled).
+    while(this.execution && this.execution.cursor!==null && !this.latent && !this.destroyed()){
       if(++changes>64)throw new Error('VM state transition budget exceeded');
       const execution=this.execution;
       execution.resume();

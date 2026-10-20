@@ -177,6 +177,9 @@ if (flag('player-health')) PLAYER_FIELDS.push(...HIT_REGION_FIELDS);
 // is its reload while HeadRegion is a water zone) and DeusExPlayer's swimTimer (+0xadc) and swimDuration (+0xad8), at Play's slotOf offsets (JCDentonMale0).
 if (flag('player-breath')) PLAYER_FIELDS.push(['PainT', 'PainTime', 0x324, 'f'], ['UWTime', 'UnderWaterTime', 0x450, 'f'], ['SwimT', 'swimTimer', 0xadc, 'f'],
   ['SwimDur', 'swimDuration', 0xad8, 'f']);
+// --player-fov: the scope's field of view (row 5.1.3): DeusExScopeView.ActivateView writes PlayerPawn.DesiredFOV (+0x668) and the view's FOVAngle (+0x410) follows it
+// a step a tick; DefaultFOV (+0x66c) is what ScopeOff returns to (Play's slotOf for JCDentonMale0).
+if (flag('player-fov')) PLAYER_FIELDS.push(['DesFOV', 'DesiredFOV', 0x668, 'f'], ['FOVAngle', 'FOVAngle', 0x410, 'f'], ['DefFOV', 'DefaultFOV', 0x66c, 'f']);
 // --player-talk: the player's DataLinkPlay (+0x9f8) and conPlay (+0x9f4): which DataLink or conversation plays (the routes' DataLinks, the mission's).
 if (flag('player-talk')) PLAYER_FIELDS.push(['DataLinkPlay', 'DataLinkPlay', 2552, 'obj'], ['conPlay', 'conPlay', 2548, 'obj']);
 // --player-blend: the player's blend channel 0 (the mouth animation Pawn.LipSynch plays while JC speaks in a conversation): BSeq0, BFrame0, BRate0, BTween0 of FIELDS.
@@ -297,6 +300,11 @@ Object.assign(DEVICE_FIELDS, {
     ['LockTarget', 'LockTarget', 0x558, 'obj'], ['Target', 'Target', 0x55c, 'obj'], ['LockTimer', 'LockTimer', 0x550, 'f'], ['MaintainLockTimer', 'MaintainLockTimer', 0x554, 'f'],
     ['TargetRange', 'TargetRange', 0x570, 'f'], ['ClipCount', 'ClipCount', 0x50c, 'i32'], ['bReadyToFire', 'bReadyToFire', 0x504, 'bit', 0x1], ['ShakeTimer', 'ShakeTimer', 0x5d8, 'f']],   // WeaponGEPGun0
   Lockpick: DEVICE_FIELDS.Multitool});
+// a scoped rifle (the training range's WeaponRifle2: Weapon's fields and DeusExWeapon.bZoomed, bHasScope, bLasing) and a Skill (SkillWeaponRifle0: Skill.CurrentLevel, which
+// Mission00.Timer sets to 3 once DL_RifleRangeShot1 has played); Play's slotOf on 00_TrainingCombat
+Object.assign(DEVICE_FIELDS, {
+  Rifle: [...DEVICE_FIELDS.Weapon, ['bZoomed', 'bZoomed', 0x540, 'bit', 0x1], ['bHasScope', 'bHasScope', 0x538, 'bit', 0x2], ['bLasing', 'bLasing', 0x540, 'bit', 0x10]],
+  Skill: [['CurrentLevel', 'CurrentLevel', 0x354, 'i32']]});
 /** --device-watch "Name:Class[@Owner.field],..." -> [{name, cls, via}] (a class DEVICE_FIELDS lacks stops the run). `@Owner.field`: Play finds the actor through
  * its owner's object field, not by name: an actor a placed actor spawns at load (AutoTurret.PreBeginPlay's gun) is numbered by each process's session
  * history (MakeUniqueObjectName's class counter carries every load: the original's capture session loaded the Island once, Play's start loads it again
@@ -304,6 +312,9 @@ Object.assign(DEVICE_FIELDS, {
 const deviceWatchOption = () => (option('device-watch', '') ?? '').split(',').filter(Boolean).map(entry => {
   const [name, rest] = entry.split(':'), [cls, via] = rest.split('@');
   if (!DEVICE_FIELDS[cls]) throw new Error(`--device-watch ${entry}: no DEVICE_FIELDS for ${cls} (${Object.keys(DEVICE_FIELDS).join(' ')})`);
+  // `Stem#:Class`: the one actor named Stem and digits (original() resolves it to the original's name and Play finds the last such actor, `~Stem`): an actor
+  // whose number follows each process's session history, the skills of the player's SkillManager (SkillWeaponRifle2 in the capture, SkillWeaponRifle0 in Play)
+  if (name.endsWith('#')) return {name, cls, stem: name.slice(0, -1), via: `~${name.slice(0, -1)}`};
   return {name, cls, ...(via ? {via} : {})};
 });
 
@@ -606,7 +617,14 @@ async function original() {
     .filter(name => !names.includes(name) && !generators.includes(name) && !loadPawns.includes(name) && !devices.some(d => d.name.toLowerCase() === name.toLowerCase()));
   // --device-watch lines: one per class and kind (a pawn's: FIELDS and its class's; a device the level holds: DEVICE_BASE and its class's; one it does not
   // hold yet: the same, late-watch), each name in the original's spelling
-  for (const device of devices) { device.late = !device.pawn && !originalSpelling.has(device.name.toLowerCase()); device.name = originalSpelling.get(device.name.toLowerCase()) ?? device.name; }
+  for (const device of devices) {
+    if (device.stem) {
+      const found = [...originalSpelling].filter(([key]) => new RegExp(`^${device.stem.toLowerCase()}\\d+$`).test(key)).map(([, spelling]) => spelling);
+      if (found.length !== 1) throw new Error(`--device-watch ${device.name}: ${found.length} actors named ${device.stem} and digits in the original (${found.join(' ')})`);
+      device.name = found[0];
+    }
+    device.late = !device.pawn && !originalSpelling.has(device.name.toLowerCase()); device.name = originalSpelling.get(device.name.toLowerCase()) ?? device.name;
+  }
   const deviceLines = () => {
     const groups = new Map();
     for (const d of devices) { const key = `${d.pawn ? 'pawn' : d.late ? 'late' : 'actor'}:${d.cls}`; groups.set(key, [...(groups.get(key) ?? []), d.name]); }
@@ -1482,8 +1500,8 @@ const indexOf = new Map(FIELDS.filter(f => f[5] !== undefined).map(f => [f[0], f
 // session history like the pawns' inventory: the original's capture session loaded the Island once, LaserEmitter0..4; Play's start loads it again at
 // the Player start, LaserEmitter5..9; live-acceptance.mjs --device-watch `@Owner.field` finds such an actor in Play. ParticleGenerator likewise:
 // two are spawned at load (ParticleGenerator0/1 in the original's start registry), so a robot's sparkGen (Robot.Tick) is ParticleGenerator2 in the
-// original and ParticleGenerator4 in Play)
-const runtimeNumbered = /^((?:JCDenton\w*?|Weapon\w+?|Ammo\w+?|NanoKeyRing|LaserEmitter|AutoTurretGun\w*?|ParticleGenerator))\d+$/;
+// original and ParticleGenerator4 in Play) SkillManager likewise: the skills of the player's SkillManager are owned by SkillManager2 in the original's rif1 capture and SkillManager1 in Play.
+const runtimeNumbered = /^((?:JCDenton\w*?|Weapon\w+?|Ammo\w+?|NanoKeyRing|SkillManager|LaserEmitter|AutoTurretGun\w*?|ParticleGenerator))\d+$/;
 function same(a, b) {
   if (a === null || a === undefined) a = 'None';
   if (b === null || b === undefined) b = 'None';

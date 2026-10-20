@@ -105,3 +105,18 @@ test('a bBounceVelocity zone bounces a non-Pawn instead of landing it', () => {
   actorLanded(still.state, hit, { zone: { bBounceVelocity: true, ZoneVelocity: [-0, 0, -0] } });
   assert.equal(still.events.length, 2); // -0 components compare equal to zero
 });
+
+// processLanded (Engine.dll 0x103cf52d) takes appFrand's x87 result unrounded: Stage 5 led1's original Velocity.X -15.166173 is f32(8101 * f32(1/32767) * 60 - 30);
+// the pawn physics service had rounded the product to float32 first (-15.1661739).
+import {ScriptRuntime} from '../src/runtime/script-runtime.mjs';
+import {createNativeRng} from '../src/runtime/rng.mjs';
+test('the pawn physics random service does not round appFrand to float32', () => {
+  const runtime = new ScriptRuntime({});
+  runtime.levelFor = () => ({hash: {}});
+  runtime.rng = createNativeRng(0x33d53323 - 1 >>> 0);
+  const seed = runtime.rng.state;
+  const probe = createNativeRng(seed), expected = probe.frand();
+  const value = runtime.pawnPhysicsServices({}).random();
+  assert.equal(value, expected);
+  assert.notEqual(value, Math.fround(value));
+});

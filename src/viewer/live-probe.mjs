@@ -48,6 +48,12 @@ export function liveProbe(game, args = {}) {
     if (name === '@player') return player;
     // the player's held Weapon by reference (a spawned weapon's name can repeat a map actor's in Play: scripts/weapon-view-probe.js)
     if (name === '@weapon') return runtime.readNamed(player, 'Weapon') ?? null;
+    // `~Stem`: the live actor named Stem and digits, the last of them (an actor whose number follows each process's session history, Skill's
+    // SkillWeaponRifle2 in the original and SkillWeaponRifle0 in Play: live-acceptance.mjs --device-watch Stem#:Class)
+    if (String(name).startsWith('~')) {
+      const stem = new RegExp(`^${String(name).slice(1)}\\d+$`, 'i');
+      return level.actors.filter(actor => actor && stem.test(actor.name)).at(-1) ?? null;
+    }
     // `Owner.field`: the actor an owner's object field holds (a turret's gun: live-acceptance.mjs --device-watch Name:Class@Owner.field)
     if (String(name).includes('.')) { const [owner, field] = String(name).split('.'); const actor = byName(owner); return actor ? runtime.readNamed(actor, field) ?? null : null; }
     const exact = level.actors.find(actor => actor?.name === name);
