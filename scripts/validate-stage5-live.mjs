@@ -494,6 +494,9 @@ export const SCENES = {
   ins2: {map: '00_TrainingCombat', ticks: 1000, conversation: true, early: 'KillAll FlyGenerator', pawns: ['UNATCOTroop3', 'UNATCOTroop1'],
     cmds: [AIM(1, 0, -10130), '20:summon DeusEx.WeaponPistol', '60:ParseRightClick', '80:summon DeusEx.MedKit', '120:ParseRightClick', '140:summon DeusEx.WeaponLAM', '180:ParseRightClick',
       INTO(561, -40, 40, 245), AIM(245, 49152)].join('|'), flags: ['MunitionsTrooperReady']},
+  // led1, an open difference (not a gate row): ins1's first capture dropped the player at (850, -20, 10), east of the corridor, where he falls 90 units onto a ledge and slides;
+  // the replay differed by one float ulp in Velocity X and Y at the landing (tick 587 there: original (15.2156134, -13.3387251, -419.583191), Play (15.2156143, -13.338726, -419.583191)).
+  led1: {map: '00_TrainingCombat', ticks: 700, early: 'KillAll FlyGenerator', pawns: ['UNATCOTroop3'], cmds: INTO(850, -20, 10)},
 };
 export const SCENE_FLAGS = ['--no-ghost', '--perception', '--player-gear', '--player-health', '--los-flag'];
 // The device scenes add the player's eye and bob (the first-person item's placement: Inventory.RenderOverlays, CalcDrawOffset): the stored combat scenes
