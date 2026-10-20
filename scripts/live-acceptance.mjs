@@ -173,6 +173,8 @@ if (flag('player-view')) PLAYER_FIELDS.push(['EyeH', 'EyeHeight', 0x3f8, 'f'], [
 const HIT_REGION_FIELDS = [['HHead', 'HealthHead', 1376, 'i32'], ['HTorso', 'HealthTorso', 1380, 'i32'], ['HLegL', 'HealthLegLeft', 1384, 'i32'],
   ['HLegR', 'HealthLegRight', 1388, 'i32'], ['HArmL', 'HealthArmLeft', 1392, 'i32'], ['HArmR', 'HealthArmRight', 1396, 'i32']];
 if (flag('player-health')) PLAYER_FIELDS.push(...HIT_REGION_FIELDS);
+// --player-credits: what an ATM pays out (DeusExPlayer.Credits, +0x9c0, Play's slotOf on JCDentonMale0). (The energy a repair bot recharges is --player-view's.)
+if (flag('player-credits')) PLAYER_FIELDS.push(['Credits', 'Credits', 0x9c0, 'i32']);
 // --player-breath: the breath under water (row 5.3.8): Pawn.PainTime (+0x324, the native timer whose PainTimer event drowns: Pawn.UnderWaterTime, +0x450,
 // is its reload while HeadRegion is a water zone) and DeusExPlayer's swimTimer (+0xadc) and swimDuration (+0xad8), at Play's slotOf offsets (JCDentonMale0).
 if (flag('player-breath')) PLAYER_FIELDS.push(['PainT', 'PainTime', 0x324, 'f'], ['UWTime', 'UnderWaterTime', 0x450, 'f'], ['SwimT', 'swimTimer', 0xadc, 'f'],
@@ -297,6 +299,17 @@ Object.assign(DEVICE_FIELDS, {
     ['LockTarget', 'LockTarget', 0x558, 'obj'], ['Target', 'Target', 0x55c, 'obj'], ['LockTimer', 'LockTimer', 0x550, 'f'], ['MaintainLockTimer', 'MaintainLockTimer', 0x554, 'f'],
     ['TargetRange', 'TargetRange', 0x570, 'f'], ['ClipCount', 'ClipCount', 0x50c, 'i32'], ['bReadyToFire', 'bReadyToFire', 0x504, 'bit', 0x1], ['ShakeTimer', 'ShakeTimer', 0x5d8, 'f']],   // WeaponGEPGun0
   Lockpick: DEVICE_FIELDS.Multitool});
+// The window-driven devices (rows 5.3.3 and 5.3.9: the bots' windows and the terminals; offsets: Play's slotOf on 00_Training's RepairBot0 and MedicalBot0 and on the Island's
+// ATM0 and ComputerPersonal0 / ComputerSecurity1, liveProbe offsets with offsetMasks). The bots are ScriptedPawns (every pawn field, and these). An ATM's balance is
+// userList[0].balance: the array of sUserInfo (accountNumber, PIN: two FStrings of 12 bytes; balance: 4) starts at +0x3b0, so the first balance is +0x3c8 (`$atmBalance0`).
+// A computer's `bOn` and `bLockedOut` share +0x474 with `bAnimating` (masks 1, 4 and 2): the Activate/Deactivate animation Computers.Frob waits out.
+Object.assign(DEVICE_FIELDS, {
+  RepairBot: [['chargeAmount', 'chargeAmount', 0xa3c, 'i32'], ['chargeRefreshTime', 'chargeRefreshTime', 0xa40, 'i32'], ['lastChargeTime', 'lastChargeTime', 0xa4c, 'f']],
+  MedicalBot: [['healAmount', 'healAmount', 0xa3c, 'i32'], ['healRefreshTime', 'healRefreshTime', 0xa40, 'i32'], ['lastHealTime', 'lastHealTime', 0xa48, 'f']],
+  ATM: [['bLockedOut', 'bLockedOut', 0x490, 'bit', 0x1], ['lockoutTime', 'lockoutTime', 0x498, 'f'], ['lastHackTime', 'lastHackTime', 0x49c, 'f'],
+    ['bSuckedDry', 'bSuckedDryByHack', 0x4ac, 'bit', 0x1], ['balance0', '$atmBalance0', 0x3c8, 'i32']],
+  Computers: [['bOn', 'bOn', 0x474, 'bit', 0x1], ['bAnimating', 'bAnimating', 0x474, 'bit', 0x2], ['bLockedOut', 'bLockedOut', 0x474, 'bit', 0x4],
+    ['lockoutTime', 'lockoutTime', 0x47c, 'f'], ['lastHackTime', 'lastHackTime', 0x480, 'f']]});
 /** --device-watch "Name:Class[@Owner.field],..." -> [{name, cls, via}] (a class DEVICE_FIELDS lacks stops the run). `@Owner.field`: Play finds the actor through
  * its owner's object field, not by name: an actor a placed actor spawns at load (AutoTurret.PreBeginPlay's gun) is numbered by each process's session
  * history (MakeUniqueObjectName's class counter carries every load: the original's capture session loaded the Island once, Play's start loads it again
@@ -560,7 +573,7 @@ async function original() {
   // it as a WM_KEYDOWN/WM_KEYUP (dxinput), Play through game.inputKey, so the User.ini binding runs (`Enter=ParseLeftClick|Fire`, `PageDown=LookDown`);
   // a typed `Fire` is not the binding: the alias runs through UInput::Exec only (docs/script-console-command.md "Aliases").
   const DXINPUT_KEYS = {PageDown: 'PGDN', PageUp: 'PGUP', Enter: 'ENTER', Escape: 'ESC', Space: 'SPACE', End: 'END', Home: 'HOME', Tab: 'TAB',
-    ArrowUp: 'UP', ArrowDown: 'DOWN', ArrowLeft: 'LEFT', ArrowRight: 'RIGHT', ShiftLeft: 'SHIFT', ControlLeft: 'CTRL'};
+    ArrowUp: 'UP', ArrowDown: 'DOWN', ArrowLeft: 'LEFT', ArrowRight: 'RIGHT', ShiftLeft: 'SHIFT', ControlLeft: 'CTRL', AltLeft: 'ALT', Backspace: 'BACK'};
   // --cmds "N:@ctrlshot NAME": a frame of the held level while a conversation window grabs every key (ConWindowActive.VirtualKeyPressed swallows Print
   // and the numpad `*` and answers only its own hard-coded Ctrl+F9, ConsoleCommand("SHOT")). Ctrl goes through the Wine input queue (IsKeyDown reads the
   // thread's key state), F9 likewise. The Shot bitmap becomes .work/acceptance/<map>/NAME-original.png and NAME-time.txt holds the level time it was
@@ -583,7 +596,12 @@ async function original() {
     if (live.length === 1) writeFileSync(path.join(acceptanceDir(), `${name}-time.txt`), `${live[0][2]}\n`);
     console.log(`@ctrlshot ${name}: ${size.width}x${size.height}, level time ${live.length === 1 ? live[0][2] : '?'}`);
   };
+  // `@type TEXT`: the characters as WM_CHAR messages (dxinput `type`), no key edge: a text field takes the characters of its WM_CHAR. A key edge of a printable key reaches the game
+  // as TranslateMessage translates it under the host's keyboard layout (the Linux prefix's is French: the unshifted digit keys type `a`/`&`...), so text is typed this way
+  // (docs/stage-5-exit-criteria.md "Captures: windows, the bots and the terminals"). Play types the same units through game.inputChar.
   const keyEdge = text => {
+    const typed = /^@type (.+)$/.exec(text);
+    if (typed) return [`type ${typed[1]}`, 'sleep 400'];
     const m = /^@(down|up) (\S+)$/.exec(text);
     if (!m) return null;
     const key = DXINPUT_KEYS[m[2]] ?? m[2].replace(/^(Key|Digit)/, '');
@@ -1254,7 +1272,7 @@ async function play() {
       // (2026-10-17: a summon typed in a hold drew the summoned pawn's spawn-time FRand from another state, docs/weapon-attachment.md). A key
       // edge takes the next record of its key and action (EInputKey: the virtual-key codes of the keys --cmds names; any key if unknown).
       const KEYS = {Enter: 0x0d, PageDown: 0x22, PageUp: 0x21, Escape: 0x1b, Space: 0x20, Tab: 0x09, End: 0x23, Home: 0x24, ArrowLeft: 0x25, ArrowUp: 0x26,
-        ArrowRight: 0x27, ArrowDown: 0x28, ShiftLeft: 0x10, ControlLeft: 0x11};
+        ArrowRight: 0x27, ArrowDown: 0x28, ShiftLeft: 0x10, ControlLeft: 0x11, AltLeft: 0x12, Backspace: 0x08};
       const keyCode = code => KEYS[code] ?? (/^Key([A-Z])$/.exec(code)?.[1].charCodeAt(0)) ?? (/^Digit(\d)$/.exec(code) ? 0x30 + Number(code.slice(5)) : null);
       // The window frames the original ran in the hold before that record (the `roottick` records of the hold with a smaller call sequence number) tick
       // the windows before the command runs; the rest of the hold's frames tick them before the next level tick (windowDeltas, holdCuts). A window the
@@ -1265,6 +1283,7 @@ async function play() {
       const cursor = new Map();
       if (frozenUsed) { const held = edges.get(0) ?? [], first = held.findIndex(e => e.seq > frozenSplit.lastEnter); cursor.set(0, first < 0 ? held.length : first); }
       return list.map(command => {
+        if (/^@type /.test(command.text)) return command;   // WM_CHAR units: no InputEvent, so no record of the hold's
         const m = /^@(down|up) (\S+)$/.exec(command.text), records = edges.get(command.after) ?? [], from = cursor.get(command.after) ?? 0;
         const action = m && m[1] === 'up' ? 3 : 1, key = m ? keyCode(m[2]) : 0x0d;
         const at = records.findIndex((e, i) => i >= from && e.action === action && (key === null || e.key === key));
@@ -1347,7 +1366,7 @@ async function play() {
       ...(setupNames ? {setupProbe: {names: setupNames.split(','), first: setupFirst, last: setupLast}} : {}),
       ...(scriptPawns ? {scriptTrace: {pawns: scriptPawns.split(','), first: scriptFirst, last: scriptLast}} : {}), replay: {ticks: trace.map(({n, unfrozen, delta, rngIn, clockIn, tsIn, strobeIn, aiFirst}) => ({n, unfrozen, delta, rngIn, clockIn, tsIn, strobeIn, aiFirst,
         ...(aiStops.has(unfrozen) ? {aiStop: aiStops.get(unfrozen)} : {}), ...windowDeltas(unfrozen)})),   // not the watched fields: a long trace would not fit the page
-      release: true, hold: true, levelEnded: existsSync(`${tracePath}.ended`), tickTag: tickTag(), drawTrace: flag('draw-trace'), drawStacks: flag('draw-stacks'), drawStackActor: option('draw-stack-actor', null),
+      release: true, hold: true, levelEnded: existsSync(`${tracePath}.ended`), typedChars: flag('typed-chars'), tickTag: tickTag(), drawTrace: flag('draw-trace'), drawStacks: flag('draw-stacks'), drawStackActor: option('draw-stack-actor', null),
       // --phonemes file.json ([{n, name, letter}]; conversation-acceptance.mjs `phonemes`): the letters the original's audio update wrote into a speaker's nextPhoneme, a measured input
       ...(option('phonemes', null) ? {phonemes: JSON.parse(readFileSync(option('phonemes'), 'utf8'))} : {}),
       ...(option('can-see', null) ? {canSeeProbe: {pawn: option('can-see'), first: Number(option('can-see-ticks', '1:1').split(':')[0]), last: Number(option('can-see-ticks', '1:1').split(':')[1])}} : {}),

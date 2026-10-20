@@ -5,6 +5,8 @@ import { execAICanSee } from '../runtime/script-pawn-perception.mjs';
 import { setTouchTrace } from '../runtime/actor-touch.mjs';
 import { hudLogClock } from './view-probe.mjs';
 import { renameRegisteredObjects } from '../runtime/script-object-construction.mjs';
+import { typedCharacters, keyOfCode } from './typed-characters.mjs';
+
 
 /** Validation only (scripts/live-acceptance.mjs, docs/visual-acceptance.md
  * "Live scenes"): the simulation side of the live-scene comparison. It
@@ -481,6 +483,10 @@ export function liveProbe(game, args = {}) {
             } else if (prop === '$state') {
               const instance = runtime.instance(actor), node = instance?.state ? (instance.state.stateNode ?? instance.cls) : null;
               row.State = scriptGetStateName(node);
+            } else if (prop.startsWith('$atmBalance')) {
+              // an ATM's userList[n].balance ($atmBalance0, ...): the sUserInfo struct's last field
+              const entry = runtime.readNamed(actor, 'userList')[Number(prop.slice('$atmBalance'.length))];
+              row[prop] = plain(Object.entries(entry).find(([k]) => k.split('.').pop() === 'balance')?.[1]);
             } else if (prop.startsWith('$Al')) {
               // an AlliancesEx entry's name / AllianceLevel / AgitationLevel ($AlName0, $AlLvl0, $AlAgit0, ...)
               const [, part, index] = /^\$Al(Name|Lvl|Agit)(\d)$/.exec(prop);
@@ -501,6 +507,7 @@ export function liveProbe(game, args = {}) {
         // Warm-up: the level's clock stands at the trace's start while the page draws a few frames,
         // so the actors drawn stamp LastRenderTime with that time (the original's frames before the
         // release did); the first tick then finds the stamps current, as the original's did.
+        this.noPaint = false;
         if (this.warm > 0) { this.warm--; return false; }
         // After the last row the original paused before any command of that hold was typed, unless its level ended there (`levelEnded`: the trace
         // stopped at the client travel, e.g. an OPEN typed in that hold): then the hold's commands run, and the client travel follows (game.mjs).
@@ -531,8 +538,15 @@ export function liveProbe(game, args = {}) {
           }
           try {
             // `@down CODE` / `@up CODE`: a key edge (KeyboardEvent.code) through the binding path, as the original's WM_KEYDOWN/WM_KEYUP
-            const edge = /^@(down|up) (\S+)$/.exec(command.text);
-            if (edge) entry.output = plain(game.inputKey(edge[2], edge[1] === 'down'));
+            const edge = /^@(down|up) (\S+)$/.exec(command.text), typed = /^@type (.+)$/.exec(command.text);
+            // `@type TEXT`: WM_CHAR units without key edges (live-acceptance.mjs keyEdge), each through the window system's typed-character route (Client->Engine->Key)
+            if (typed) { entry.output = []; for (const char of typed[1]) entry.output.push(plain(game.inputChar(char.charCodeAt(0)))); }
+            else if (edge) {
+              entry.output = plain(game.inputKey(edge[2], edge[1] === 'down'));
+              // --typed-chars: TranslateMessage's WM_CHAR after the WM_KEYDOWN of the keys it translates (Tab 0x09, Escape 0x1b, Enter 0x0d (WinDrv drops it), Space, a letter)
+              const key = args.replay.typedChars && edge[1] === 'down' ? keyOfCode(edge[2]) : null;
+              if (key !== null) for (const unit of typedCharacters({ key })) game.inputChar(unit);
+            }
             // The original types a line as keys (ad/tools/dxinput.c consoleLine: T, ten Backspaces, the characters as WM_CHAR, Enter), and
             // XInputExt::Process (0x1002d0b0) offers every key to the root window before any binding. A window that takes the keys (a third-person
             // conversation's ConWindowActive: VirtualKeyPressed returns True for every key and plays the next event on Enter) gets T, so the
@@ -555,7 +569,21 @@ export function liveProbe(game, args = {}) {
         }
         // The original draws frames while a command is typed and the level is held (a view change stamps the LastRenderTime of what it now
         // shows): a few frames pass here after each command, before the hold's next command or the next tick, as in the warm-up.
-        if (typed || this.index >= this.ticks.length) { this.warm = 3; return false; }
+        if (typed || this.index >= this.ticks.length) {
+          this.warm = 3;
+          // --typed-chars (a window scene): a frame paints only if the original's did. The original's frame is the input pump (the command's InputEvent), the window tick
+          // (`roottick`) and, when the level is held, the draw; the frame that finds the tracer released runs the level tick and draws after it. The roottick frames after a command
+          // before the next command (or the next level tick) therefore hold `frames - 1` complete frames when the last of them runs the tick, else all of them: a key edge pair
+          // typed within one frame (med1's Enter, 0.441 s long: press, release, one roottick, then tick 201) has no held frame, and the 43 GCs of the Health screen's new region
+          // windows (the layout of a window that was just created, UGC creation per DrawWindow-time QueryPreferredSize) come after tick 201's AI process, not in the hold.
+          // A console line's hold (med1's ParseRightClick at 60: roottick 0.592, the 144 GCs, roottick 0.275, tick 61) has a held frame and paints, as Play's warm frames do.
+          if (typed && args.replay.typedChars) {
+            const next = this.commands[0], pending = next && next.after <= this.index;
+            const frames = pending ? (Array.isArray(next.windowSeconds) ? next.windowSeconds.length : null) : (Array.isArray(tick.windowSeconds) ? tick.windowSeconds.length - 1 : null);
+            if (frames === 0) { this.warm = 0; this.noPaint = true; }
+          }
+          return false;
+        }
         if (runtime.navTrace) runtime.navTrace.tick = this.index + 1;
         if (runtime.scriptTrace) runtime.scriptTrace.tick = this.index + 1;
         if (this.preFrees?.length) while (this.preFrees.length && this.preFrees[0].u <= this.index + 1) {

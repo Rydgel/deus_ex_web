@@ -41,3 +41,10 @@ export function typedCharacters({key, ctrlKey = false, altKey = false, metaKey =
   }
   return Array.from({length: key.length}, (_, i) => key.charCodeAt(i));
 }
+
+// The `key` a harness key edge (a KeyboardEvent.code of a posted WM_KEYDOWN, scripts/live-acceptance.mjs `@down CODE`) gives TranslateMessage: the layout-independent
+// keys only. A letter is its lower-case letter (a posted message carries no Shift, and the thread key state TranslateMessage reads is not the posted Alt's: Alt+D arrives as
+// WM_CHAR 'd', which WinDrv hands to Client->Engine->Key as it does WM_SYSCHAR); a digit key is not translated (the host's layout decides what it types: the Linux prefix's
+// is French, whose unshifted digit keys type accented letters and symbols).
+const TRANSLATED_KEYS = {Tab: 'Tab', Escape: 'Escape', Enter: 'Enter', Backspace: 'Backspace', Space: ' '};
+export const keyOfCode = code => TRANSLATED_KEYS[code] ?? (/^Key([A-Z])$/.exec(code)?.[1].toLowerCase() ?? null);

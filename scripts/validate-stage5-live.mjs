@@ -86,6 +86,9 @@ const option = name => { const i = argv.indexOf(`--${name}`); return i < 0 ? nul
 
 const PISTOL = yaw => `20:summon DeusEx.WeaponPistol|50:set DeusEx.JCDentonMale ViewRotation (Pitch=-10130,Yaw=${yaw},Roll=0)|90:ParseRightClick|130:ActivateBelt 1`;
 const SHOTS = ticks => ticks.map(t => `${t}:@down Enter|${t}:@up Enter`).join('|');
+// a key edge pair at tick t, and Alt plus a letter (an accelerator: the root's keyDownMap holds Alt while the letter's character arrives, XModalWindow::KeyPressed)
+const KEY = (t, code) => `${t}:@down ${code}|${t}:@up ${code}`;
+const ALT = (t, letter) => `${t}:@down AltLeft|${t}:@down Key${letter}|${t}:@up Key${letter}|${t}:@up AltLeft`;
 // `KillAll FlyGenerator` first: the load's chance FlyGenerators (10% per fly-making decoration) removed in both programs, as row 4.2.13 does.
 // The player moved after the first unfrozen tick, between `ghost` and `walk` as PLACE does (a colliding actor's Location is not set by the console).
 const INTO = (x, y, z, tick = 1) => `${tick}:ghost|${tick}:set DeusEx.JCDentonMale Location (X=${x},Y=${y},Z=${z})|${tick}:walk`;
@@ -517,6 +520,54 @@ export const SCENES = {
   // it and sets MS_ReyesHidden.
   jmr1: {map: '00_TrainingFinal', ticks: 1000, early: 'KillAll FlyGenerator', conversation: true, pawns: ['JaimeReyes6'],
     cmds: `${MOVE(1, 7255, -4287.5, 100, 0, -1900)}|150:ParseRightClick`, devices: ['Switch6:Actor']},
+  // Windows by key edges (rows 5.3.3 and 5.3.9; docs/stage-5-exit-criteria.md "Captures: windows, the bots and the terminals"). The harness posts no mouse: a button is
+  // pressed by the focus the window system gives it and an Enter edge (ButtonWindow.VirtualKeyPressed: Enter or Space presses the focused button), the focus moves by the
+  // arrow keys and Tab (RootWindow.VirtualKeyPressed: MoveFocusLeft/Right/Up/Down, MoveTabGroupNext), text is typed as WM_CHAR units (`@type`), a button's accelerator is
+  // Alt and its letter (`@down AltLeft|@down KeyD|@up KeyD|@up AltLeft`). `--typed-chars` makes the replay deliver TranslateMessage's characters of the Tab, Escape, Enter and
+  // letter edges, as the original's message loop does.
+  // The repair bot (HUDRechargeWindow, MFocus_Enter: the focus is not the mouse's, the root cursor stays at (0, 0)): the player placed 68 units in front of RepairBot0 (5078, 362,
+  // facing +Y), looking down at its chest; Energy set to 20; the right button opens the window. The first focus is the Recharge button when it is enabled (the window's
+  // CheckFocusWindow: MoveFocus(1, 1)): an Enter edge recharges (RepairBot.ChargePlayer: Min(EnergyMax - Int(Energy), chargeAmount 75), lastChargeTime), the button is disabled
+  // by the cooldown (chargeRefreshTime 60) and the focus moves to Close; a second Enter closes the window (DestroyWindow: the bot's Stop animation and FollowOrders). The
+  // right button again opens it with Recharge disabled (CanCharge false): the first focus is Close, and an Enter closes it without charging.
+  rpr1: {map: '00_Training', ticks: 520, early: PLACE(5078, 430, -110, 49152, -5000), view: true, options: ['--typed-chars'],
+    cmds: `20:set DeusEx.JCDentonMale Energy 20|60:ParseRightClick|${SHOTS([140])}|${SHOTS([220])}|290:ParseRightClick|${SHOTS([370])}`,
+    devices: ['RepairBot0:RepairBot']},
+  // the medical bot (HUDMedBotHealthScreen, mouse focus mode Click: the first focus is the Augmentations tab): the player 70 units in front of MedicalBot0 (5105, -4170, facing +Y);
+  // the head, torso and left leg damaged by the cheat's DamagePart (the screen's maximum is the class default, so `set` of a region would not show as damage); the right
+  // button opens the Health screen; Right moves the focus to the Exit tab and Up to Heal All (the position-ordered focus table), Enter presses it (MedicalBot.HealPlayer:
+  // healAmount 300 to every region, lastHealTime). Escape then closes the screen (the screen's VirtualKeyPressed); the torso damaged again and the screen opened again (the
+  // cooldown disables Heal All, healRefreshTime 60), Alt+E (the button's accelerator, "H|&eal All") presses nothing, Escape closes it.
+  med1: {map: '00_Training', ticks: 560, early: PLACE(5105, -4100, 30, 49152, -6000), view: true, options: ['--typed-chars'],
+    cmds: `20:DamagePart 1 60|21:DamagePart 0 30|22:DamagePart 4 50|60:ParseRightClick|${SHOTS([140]).replace(/Enter/g, 'ArrowRight')}|${SHOTS([170]).replace(/Enter/g, 'ArrowUp')}|${SHOTS([200])}|${SHOTS([260]).replace(/Enter/g, 'Escape')}`
+      + `|300:DamagePart 1 40|320:ParseRightClick|400:@down AltLeft|400:@down KeyE|400:@up KeyE|400:@up AltLeft|${SHOTS([470]).replace(/Enter/g, 'Escape')}`,
+    devices: ['MedicalBot0:MedicalBot']},
+  // The Island's terminals (row 5.3.9). The player is placed in front of each (the pose of the rehearsal: the view trace selects it; a placement below the floor is zone 0) and
+  // the right button opens it: the terminal runs its Activate animation (Computers.Frob, state On: TryInvoke), then InvokeComputerScreen opens the NetworkTerminal on its login
+  // screen with the focus on the user name (ComputerScreenLogin.SetCompOwner), Tab moves to the password, Enter is EditActivated (ProcessLogin: a wrong pair clears both and
+  // refocuses the user name), a right login opens the first screen (the e-mail list with its first row selected, or the security screen with the focus on its first choice).
+  // trm1, ComputerPersonal0 (UNATCO, users GUEST/GUEST and KLloyd/squishy; the e-mails are DeusExText `01_EmailMenu_<user>`): a wrong password, KLloyd (two e-mails: ArrowDown on
+  // the list selects the second), Escape (logout: back to the login screen), GUEST (`No Email Today!`), Escape twice (the second closes the terminal, which turns off).
+  trm1: {map: '01_NYC_UNATCOIsland', ticks: 720, early: PLACE(-4335, 2010, -170, 49152, -7500), options: ['--typed-chars'], devices: ['ComputerPersonal0:Computers'],
+    cmds: `100:ParseRightClick|200:@type KLloyd|${KEY(220, 'Tab')}|240:@type wrongpw|${KEY(260, 'Enter')}|300:@type KLloyd|${KEY(320, 'Tab')}|340:@type squishy|${KEY(360, 'Enter')}`
+      + `|${KEY(420, 'ArrowDown')}|${KEY(480, 'Escape')}|520:@type GUEST|${KEY(540, 'Tab')}|560:@type GUEST|${KEY(580, 'Enter')}|${KEY(640, 'Escape')}|${KEY(680, 'Escape')}`},
+  // atm1, ATM0 (account 230023, PIN 4558, balance 200; no animation): a wrong PIN ("LOGIN ERROR": both fields cleared), the right one (the withdraw screen: the amount field has the
+  // focus), 50 and Enter (ComputerScreenATMWithdraw: DeusExPlayer.Credits 500 to 550, the ATM's balance 200 to 150), Escape (the login screen) and Escape (closes it).
+  atm1: {map: '01_NYC_UNATCOIsland', ticks: 600, early: PLACE(2105, 1024, -100, 16384, -1000), options: ['--typed-chars', '--player-credits'], devices: ['ATM0:ATM'],
+    cmds: `100:ParseRightClick|200:@type 230023|${KEY(220, 'Tab')}|240:@type 1111|${KEY(260, 'Enter')}|300:@type 230023|${KEY(320, 'Tab')}|340:@type 4558|${KEY(360, 'Enter')}`
+      + `|420:@type 50|${KEY(440, 'Enter')}|${KEY(500, 'Escape')}|${KEY(540, 'Escape')}`},
+  // sec1, ComputerSecurity1 (NSF, NSF001/smashthestate; view 1 "Temp Holding Cell": camera NSFCam01 = SecurityCamera5, door temp_celldoor = DeusExMover10 (locked), turret celldoor
+  // = AutoTurretSmall0 (bTrackPlayersOnly, inactive)): the first focus is the Camera Status choice (Enter presses it), the other choices have no tab stop that an arrow reaches (the
+  // screen's VirtualKeyPressed takes the arrows to pan the camera), so they are pressed by their accelerators, Alt and the letter of the label ("Door |&Access", "|&Door Status",
+  // "|&Turret Status"): Alt+A toggles the door's lock (ToggleDoorLock: every DeusExMover of the tag), Alt+D triggers it (TriggerDoor: it opens), ArrowLeft and ArrowUp pan the
+  // camera (PanCamera: DesiredRotation), and Alt+T three times cycles the turret (Attack Allies -> Attack Enemies -> Attack Everything -> Disabled: SetTurretState and
+  // SetTurretTrackMode). Escape logs out, Escape closes the terminal.
+  // (The terminal stands in Terrorist18's room: it sees the player, goes Alerting and attacks him from tick 600 in the rehearsal, so the player is set to take no damage, as
+  // the camera captures do, `ReducedDamageType All`: a death would end the scene with the terminal open.)
+  sec1: {map: '01_NYC_UNATCOIsland', ticks: 760, early: `${PLACE(2018, -1589, -100, 49152, -3500)}|set DeusEx.JCDentonMale ReducedDamageType All`, options: ['--typed-chars'],
+    devices: ['ComputerSecurity1:Computers', 'SecurityCamera5:SecurityCamera', 'DeusExMover10:DeusExMover', 'AutoTurretSmall0:AutoTurret'],
+    cmds: `100:ParseRightClick|200:@type NSF001|${KEY(220, 'Tab')}|240:@type smashthestate|${KEY(260, 'Enter')}|${KEY(320, 'Enter')}|${ALT(380, 'A')}|${ALT(440, 'D')}`
+      + `|${KEY(520, 'ArrowLeft')}|${KEY(560, 'ArrowUp')}|${ALT(600, 'T')}|${ALT(620, 'T')}|${ALT(640, 'T')}|${KEY(700, 'Escape')}|${KEY(740, 'Escape')}`},
 };
 export const SCENE_FLAGS = ['--no-ghost', '--perception', '--player-gear', '--player-health', '--los-flag'];
 // The device scenes add the player's eye and bob (the first-person item's placement: Inventory.RenderOverlays, CalcDrawOffset): the stored combat scenes
