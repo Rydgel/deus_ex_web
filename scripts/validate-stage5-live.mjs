@@ -264,6 +264,15 @@ export const SCENES = {
   mov1: {map: '01_NYC_UNATCOIsland', ticks: 900, early: PLACE(-3951, 10100, -240, 0, -7800),
     cmds: `30:ParseRightClick|90:set DeusEx.JCDentonMale ViewRotation (Pitch=0,Yaw=0,Roll=0)|120:DropItem|${INTO(-4761, 10431, 99, 420)}`,
     devices: ['Trashbag0:Decoration']},
+  // items and skill points (row 5.3.11): the player placed 123 units west of SkillAwardTrigger1 (-5977, 1327), facing west (away from DeusExMover21's door,
+  // which a frob facing east reaches first); HealthTorso set to 40; a MedKit
+  // summoned, picked up (belt slot 1), put in hand and used by the Enter edge (MedKit.Activated: HealPlayer), then a Candybar the same way (slot 1 again: the used MedKit freed it); at 450
+  // the player is moved into the trigger (SkillAwardTrigger.Touch: SkillPointsAdd).
+  itm1: {map: '01_NYC_UNATCOIsland', ticks: 900, early: PLACE(-6100, 1327, -88, 32768),
+    cmds: '20:set DeusEx.JCDentonMale HealthTorso 40|30:summon DeusEx.MedKit|60:set DeusEx.JCDentonMale ViewRotation (Pitch=-10130,Yaw=32768,Roll=0)|100:ParseRightClick'
+      + `|140:ActivateBelt 1|${SHOTS([180])}|240:summon DeusEx.Candybar|280:ParseRightClick|320:ActivateBelt 1|${SHOTS([360])}`
+      + `|420:set DeusEx.JCDentonMale ViewRotation (Pitch=0,Yaw=0,Roll=0)|${INTO(-5977, 1327, -88, 450)}`,
+    options: ['--inventory'], devices: ['SkillAwardTrigger1:Actor']},
   // a baton knock-out (row 5.1.7): a WeaponBaton summoned, picked up and drawn at cmb2's pose (700 units behind Terrorist0, where nobody notices the player; a
   // summoned item's landing is a noise, and next to the target it wakes it); at tick 600, once Terrorist18 sits on Chair9 (2017.7, -1429.6, facing yaw 48128),
   // the player is placed by the same console lines 58 units behind it at his rest height, facing its back; the Enter edge at 630 swings the baton
@@ -533,8 +542,11 @@ export const compareFlags = (blocks, play) => {
   return {problems, original, candidates: players.length};
 };
 
+// A long scene's trace is large (swm1: 2,400 ticks of 74 actors, 290 MB): its play and compare steps outgrow V8's default heap (an abort, exit null),
+// so a scene over 1,500 ticks runs them with a 12 GB heap limit (a ceiling, not a reservation).
+let heapArgs = [];
 const exec = (args, limitSeconds) => new Promise(resolve => {
-  const proc = spawn(process.execPath, args, {cwd: root, stdio: ['ignore', 'pipe', 'pipe']});
+  const proc = spawn(process.execPath, [...heapArgs, ...args], {cwd: root, stdio: ['ignore', 'pipe', 'pipe']});
   let out = '';
   proc.stdout.on('data', d => { out += d; }); proc.stderr.on('data', d => { out += d; });
   const timer = setTimeout(() => proc.kill('SIGKILL'), limitSeconds * 1000);
@@ -545,6 +557,7 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
   const tag = option('scene');
   const scene = SCENES[tag];
   if (!scene) { console.error(`--scene ${Object.keys(SCENES).join('|')}`); process.exit(2); }
+  if (scene.ticks > 1500) heapArgs = ['--max-old-space-size=12288'];
   if (argv.includes('--print-capture')) {
     mkdirSync(path.join(root, '.work/live-acceptance/cfg'), {recursive: true});
     writeFileSync(path.join(root, configFile(scene)), captureConfig(scene).join('\n') + '\n');

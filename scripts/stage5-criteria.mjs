@@ -105,7 +105,11 @@ add('5.3.7', '00_Training swim', 'enter the contaminated water with and without 
   'O1: live trace of the original (HazMatSuit activated by ActivateBelt, the player placed in the water, Health and the suit\'s charge per tick)',
   {have: ['validate-native-swimming 1093 cases (O2)', 'alterations census hit-radiation, hit-drowned (P)']});
 add('5.3.8', '01_NYC_UNATCOIsland water', 'swim from the dock, dive to the ruins: breath (swimTimer, UnderWaterTime), drowning damage, surfacing', 'O1', 'island-swim',
-  'O1: live trace of the original with the player placed under water until breath runs out', {have: ['validate-native-swimming (O2)', 'validate-island-swimming (the fish, P)']});
+  'O1: live trace of the original with the player placed under water until breath runs out', {proof: live('swm1', 'swm2'),
+    have: ['validate-stage5-live swm1 (O1 2026-10-20, the Linux host, PASS: placed in WaterZone1 near the floor (Z -850) after the first unfrozen tick; PainTime 19.98 from UnderWaterTime 20, swimTimer 20 down to 0; out of breath at 1201, drowning takes 10 from the torso every 2 s (PainTime 2) until the player dies at 2162; 74 actors equal for 2,400 ticks)',
+      'validate-stage5-live swm2 (O1 2026-10-20, PASS: placed at Z -450, the player sinks to -521, rises about 13 units a second and surfaces near 850 with about 6 s of breath left; swimTimer refills to 20 and he bobs at the surface, no damage; 74 actors equal for 1,500 ticks)',
+      'validate-native-swimming (O2)', 'validate-island-swimming (the fish, P)'], need: null,
+    weak: 'the dive to the ruins is a placement (a held key the harness cannot post); breath, drowning and surfacing are the captured ones'});
 add('5.3.9', '01_NYC_UNATCOIsland terminals', 'ComputerPersonal0 login with a user list, email; ATM0; ComputerSecurity camera views and door/turret choices', 'O1', 'island-terminal',
   'O1: frames of the original\'s login and screens plus the computer state after choices', {have: ['security terminal screens O1 (4.4.13)', 'Terminals in Play (P)']});
 add('5.3.10', '01_NYC_UNATCOIsland doors', 'keyed, locked, breakable and keypad doors: the satcomhatch with the UNhatchdoor NanoKey, commvan_door keypad 0451, breakable and lockpicked movers, StatueRuinDoors', 'O1', 'island-doors',
@@ -116,7 +120,10 @@ add('5.3.11', '01_NYC_UNATCOIsland inventory', 'pick up and use items (MedKit, f
   'O1: live trace of the original (ParseRightClick pickups, ActivateBelt, console) with inventory, health, skill and goal state',
   {have: ['alterations census: 19 scenarios play (P)', 'persona screens O1 (4.4.11, 4.4.12)']});
 add('5.3.12', '01_NYC_UNATCOIsland', 'move objects and fall: carry or push barrels and crates, throw them (kinetic damage), fall damage from a height', 'O1', 'island-movables-fall',
-  'O1: live trace of the original with a thrown or pushed decoration and a measured fall', {have: ['validate-plant-push (O2)', 'landing/falling oracles (O2)']});
+  'O1: live trace of the original with a thrown or pushed decoration and a measured fall', {proof: live('mov1'),
+    have: ['validate-stage5-live mov1 (O1 2026-10-20, the Linux host, PASS: Trashbag0 frobbed at 30 (GrabDecoration: carried, Base the player), thrown by DropItem at 120 (PHYS_Falling from Z -214), lands at 151 about 143 units on; the player dropped 380 units at 421 lands at 472, the left leg 100 -> 64, the torso 100 -> 88, Health 92; 75 actors equal for 900 ticks)',
+      'validate-plant-push (O2)', 'landing/falling oracles (O2)'], need: null,
+    weak: 'no thrown decoration meets a pawn (the kinetic damage of a hit) and no barrel is pushed: the carry, the throw\'s flight and landing, and the fall damage are the captured ones'});
 add('5.3.13', '00_TrainingFinal and 01_NYC_UNATCOIsland movers', 'a switch-driven mover: 00_TrainingFinal Switch1 opens FirstStealthDoor; the exit door ElevatorMover1 (ExitDoor, a 64-unit slide, not a ride) is closed by a soldier\'s alarm (AlarmDispatcher -> CloseDoor, SequenceTrigger SeqNum 1) and reopened by Switch0 (ButtonDispatcher -> OpenDoor, SeqNum 0). Not driven: Island\'s Switch1 -> UN_maindoor (opened by Mission01) and the fork lift (DeusExMover11, a button in the ruins)', 'O1', 'elevator',
   'O1: live trace of the original at Switch1 and of the exit door closed by the alarm and reopened by Switch0', {have: ['validate-native-mover-move, -interpolation, -scene (O2)', 'validate-island-cell-door']});
 
