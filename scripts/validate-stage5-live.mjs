@@ -76,7 +76,7 @@
  *   kB        eight Terrorists killed (Tantalus) until Mission01.Timer sets M01PlayerAggressive, then UNATCOTroop6's TrooperCongratulation reads it.
  *   kC        kB redesigned for its two measured causes: Terrorist18 killed at its load place before StartUp lets it move, the trooper placement inside the world. */
 import {execFileSync, spawn} from 'node:child_process';
-import {existsSync, mkdirSync, readFileSync, realpathSync, writeFileSync} from 'node:fs';
+import {existsSync, mkdirSync, readFileSync, rmSync, writeFileSync} from 'node:fs';
 import path from 'node:path';
 import {fileURLToPath} from 'node:url';
 
@@ -306,6 +306,13 @@ export const SCENES = {
   // (ActivateAugmentation through the User.ini binding) turns AugLight on: Augmentation.Activate, its Beam spawned and moved with the player, the
   // energy drain of Augmentation.Timer (--player-view traces Energy).
   aug1: {map: '00_Training', ticks: 600, early: PLACE(4600, 700, -85, 0), cmds: '60:@down F12|60:@up F12', view: true},
+  // DataLinks (row 5.4.1): the player set clear of dl_door's DataLinkTrigger24 (-310, 841, radius 150) and slid into it by a console Velocity (a placement
+  // inside never Touches it): DataLinkTrigger.Touch -> StartDataLinkTransmission('DL_door'); 60 ticks later set clear of dl_key's DataLinkTrigger4 (385, 849,
+  // radius 200) and slid into it while DL_door plays: DL_key waits behind it (DeusExPlayer.StartDataLinkTransmission's queue) and plays when it ends;
+  // each sets its _Played flag. --player-talk traces DataLinkPlay.
+  dlk1: {map: '00_Training', ticks: 1500, early: PLACE(-488, 841, -85, 0),
+    cmds: `30:set DeusEx.JCDentonMale Velocity (X=400,Y=0,Z=0)|${INTO(150, 849, -85, 90)}|92:set DeusEx.JCDentonMale Velocity (X=400,Y=0,Z=0)`,
+    options: ['--player-talk'], flags: ['DL_door_Played', 'DL_key_Played']},
   // a baton knock-out (row 5.1.7): a WeaponBaton summoned, picked up and drawn at cmb2's pose (700 units behind Terrorist0, where nobody notices the player; a
   // summoned item's landing is a noise, and next to the target it wakes it); at tick 600, once Terrorist18 sits on Chair9 (2017.7, -1429.6, facing yaw 48128),
   // the player is placed by the same console lines 58 units behind it at his rest height, facing its back; the Enter edge at 630 swings the baton
@@ -520,6 +527,109 @@ export const SCENES = {
   // it and sets MS_ReyesHidden.
   jmr1: {map: '00_TrainingFinal', ticks: 1000, early: 'KillAll FlyGenerator', conversation: true, pawns: ['JaimeReyes6'],
     cmds: `${MOVE(1, 7255, -4287.5, 100, 0, -1900)}|150:ParseRightClick`, devices: ['Switch6:Actor']},
+  // 00_TrainingCombat (fifth captures, rows 5.1.2 to 5.1.4 and 5.4.2). The map is opened at PlayerStart0 (-775, 4): the frozen phase types only `KillAll FlyGenerator`
+  // (nothing is placed there: a trigger the player is placed in touches nothing, and one touched in the frozen phase would start a DataLink before the tracer attaches),
+  // and the player is dropped into each trigger's cylinder after the first unfrozen tick (INTO), 30 units above the floor, so the landing's MoveActor touches it.
+  // rng1, the pistol range (row 5.1.2): dropped at the weapon counter (-8, -515), inside DataLinkTrigger2's cylinder (65, -544, radius 100): DL_TArgetRange plays for
+  // about 840 ticks and its last event opens the counter's cover DeusExMover44 (Tag BallisticStore) and the cover DeusExMover1 over Switch3 together. The pistol
+  // WeaponPistol0 and the box Ammo10mm0 are taken with the right button (looking down at them: pitch -5400 and -2800), the pistol drawn (ActivateBelt 1); placed at the
+  // station (24, -590), looking at Switch3 (pitch -8700), the right button presses it (Event guntarget1: the target DeusExMover4 with BreakableGlass0 slides in from
+  // y -3280 to -1216, its MoverCollider passes the DirectionalTriggers that open the blast door DeusExMover7); aimed at the glass, six Enter edges 60 ticks apart.
+  rng1: {map: '00_TrainingCombat', ticks: 2800, early: 'KillAll FlyGenerator', pawns: ['UNATCOTroop1', 'UNATCOTroop3'],
+    cmds: [INTO(-8, -515, -30), AIM(1, 32768, -5400), '935:ParseRightClick', AIM(960, 32768, -2800), '975:ParseRightClick', '1010:ActivateBelt 1', INTO(24, -590, -90, 1060), AIM(1060, 49152, -8700),
+      '1120:ParseRightClick', AIM(1380, 48752, -200), SHOTS([1400, 1460, 1520, 1580, 1640, 1700])].join('|'),
+    devices: ['WeaponPistol0:Weapon', 'Ammo10mm0:Actor', 'Switch3:Actor', 'DeusExMover44:DeusExMover', 'DeusExMover1:DeusExMover', 'DeusExMover4:DeusExMover', 'DeusExMover7:DeusExMover',
+      'BreakableGlass0:DeusExMover'],
+    flags: ['DL_TArgetRange_Played', 'DL_TArgetRangeShot1_Played'], options: ['--player-talk', '--inventory']},
+  // rng2, rng1 and the second lane (row 5.1.2): a second Ammo10mm box (Ammo10mm1, yaw 35000 pitch -2750) taken at 1000; the pistol's recoil lifts the view 150 units a shot, so the
+  // aim is set again 10 ticks before every Enter edge (the first capture aimed once: three hits, three misses, the glass stood at 0.02, DL_TArgetRangeShot1 never played and the
+  // second lane stayed shut). DL_TArgetRangeShot1's last event opens the cover DeusExMover28 over Switch13; the player is dropped at the second station (106, -590) at 2950 and the
+  // right button presses Switch13 (DeusExMover5 and BreakableGlass1 slide in from y -3280 to -1792, not -1216): the glass is 1,202 units off. The glass breaks and DL_TArgetRangeShot2 plays.
+  rng2: {map: '00_TrainingCombat', ticks: 4100, early: 'KillAll FlyGenerator', pawns: ['UNATCOTroop1', 'UNATCOTroop3'],
+    cmds: [INTO(-8, -515, -30), AIM(1, 32768, -5400), '935:ParseRightClick', AIM(960, 32768, -2800), '975:ParseRightClick', AIM(985, 35000, -2750), '1000:ParseRightClick', '1030:ActivateBelt 1',
+      INTO(24, -590, -90, 1060), AIM(1060, 49152, -8700), '1120:ParseRightClick',
+      ...[1390, 1450, 1510, 1570, 1630, 1690].map(t => AIM(t, 48752, -200)), SHOTS([1400, 1460, 1520, 1580, 1640, 1700]),
+      INTO(106, -590, -90, 2950), AIM(2950, 49152, -8700), '3010:ParseRightClick',
+      ...[3260, 3320, 3380, 3440, 3500, 3560, 3760, 3820, 3880, 3940, 4000, 4060].map(t => AIM(t, 49344, -104)),
+      SHOTS([3270, 3330, 3390, 3450, 3510, 3570, 3770, 3830, 3890, 3950, 4010, 4070])].join('|'),
+    devices: ['WeaponPistol0:Weapon', 'Ammo10mm0:Actor', 'Ammo10mm1:Actor', 'Switch3:Actor', 'Switch13:Actor', 'DeusExMover44:DeusExMover', 'DeusExMover1:DeusExMover', 'DeusExMover28:DeusExMover',
+      'DeusExMover4:DeusExMover', 'DeusExMover5:DeusExMover', 'DeusExMover7:DeusExMover', 'BreakableGlass0:DeusExMover', 'BreakableGlass1:DeusExMover'],
+    flags: ['DL_TArgetRange_Played', 'DL_TArgetRangeShot1_Played', 'DL_TArgetRangeShot2_Played'], options: ['--player-talk', '--inventory']},
+  // lam1, the demolition (row 5.1.4): the shelf of LAMs (2121, 1536) is in the security bots' room, so the LAM and a pistol are summoned and picked up facing away from
+  // BreakableWall1 at (3000, 1700), 136 units south of its face (the corridor x 2940 to 3070); the LAM drawn (ActivateBelt 1) and the player dropped at (3000, 1805)
+  // facing north, 32 units from the wall: WeaponLAM.Tick's NearWallCheck sets bNearWall, and the Enter edge at 260 places the LAM on the wall (WeaponLAM.Fire,
+  // the 'Place' animation) where a thrown one would bounce. Dropped 150 units south of it at 360, the pistol drawn (ActivateBelt 2), five Enter edges aimed
+  // along the LAM's line: ThrownProjectile.TakeDamage explodes it, HurtRadius breaks the wall (minDamageThreshold 75) and DL_FinishWall follows (DataLinkTrigger11).
+  lam1: {map: '00_TrainingCombat', ticks: 1700, early: 'KillAll FlyGenerator', pawns: ['UNATCOTroop1', 'SecurityBot6', 'SecurityBot0'],
+    cmds: [INTO(3000, 1700, -20), AIM(1, 49152, -10130), '20:summon DeusEx.WeaponLAM', '60:ParseRightClick', '80:summon DeusEx.WeaponPistol', '120:ParseRightClick', '160:ActivateBelt 1',
+      INTO(3000, 1805, -20, 190), AIM(190, 16384), SHOTS([260]), INTO(3000, 1655, -20, 360), AIM(360, 16384), '400:ActivateBelt 2', SHOTS([480, 540, 600, 660, 720])].join('|'),
+    devices: ['BreakableWall1:DeusExMover', 'WeaponLAM0:Weapon', 'LAM5:Actor'], flags: ['DL_FinishWall_Played'], options: ['--player-talk', '--inventory']},
+  // rif1, the rifle range (row 5.1.3): rng1's drop at the rifle counter (984, -590), inside DataLinkTrigger8's cylinder (1061, -542, radius 96): DL_RifleRange plays for
+  // about 750 ticks and opens the counter's cover DeusExMover67 and the cover DeusExMover29 over Switch0. WeaponRifle2 and Ammo0 (Ammo3006) are taken with the right
+  // button (pitch -5000 at the rifle, yaw 35500 pitch -4500 at the box), the rifle drawn (ActivateBelt 1); at the station (1016, -590) the right button presses Switch0
+  // (rifletarget1: DeusExMover32 and BreakableGlass2 slide in from y -3280 to -1216); aimed at the glass, ToggleScope (a typed exec function: the key `[` is not one of
+  // dxinput's names) zooms to ScopeFOV 10 (DesiredFOV, FOVAngle tweening), and two Enter edges 140 ticks apart. The glass breaks, DL_RifleRangeShot1 plays and
+  // Mission00.Timer sets SkillWeaponRifle to level 3 once its played flag is set.
+  rif1: {map: '00_TrainingCombat', ticks: 2150, early: 'KillAll FlyGenerator', pawns: ['UNATCOTroop1', 'UNATCOTroop3'],
+    cmds: [INTO(984, -590, -30), AIM(1, 32768, -5000), '850:ParseRightClick', AIM(880, 35500, -4500), '900:ParseRightClick', '930:ActivateBelt 1', INTO(1016, -590, -90, 960), AIM(960, 49152, -8700),
+      '1020:ParseRightClick', AIM(1300, 48752, -200), '1310:ToggleScope', SHOTS([1380, 1520])].join('|'),
+    devices: ['WeaponRifle2:Rifle', 'Switch0:Actor', 'DeusExMover67:DeusExMover', 'DeusExMover29:DeusExMover', 'DeusExMover32:DeusExMover', 'DeusExMover21:DeusExMover', 'BreakableGlass2:DeusExMover',
+      'SkillWeaponRifle#:Skill'], flags: ['DL_RifleRange_Played', 'DL_RifleRangeShot1_Played'], options: ['--player-talk', '--inventory', '--player-fov']},
+  // ins1, the instructor (row 5.4.2): a pistol, a MedKit and a LAM summoned and picked up at the start place, then the player dropped into the co-located FlagTrigger2
+  // (561, -79, radius 200, bWhileStandingOnly) beside UNATCOTroop3 (586, -139), which sets MunitionsTrooperReady: the radius conversations bound to the trooper
+  // (MunitionsTrooperFrob, flag false, radius 160; MunitionsTrooperTake, flag true, radius 350) and Mission00.Timer's RemoveAllInventory race for the flag.
+  ins1: {map: '00_TrainingCombat', ticks: 900, conversation: true, early: 'KillAll FlyGenerator', pawns: ['UNATCOTroop3', 'UNATCOTroop1'],
+    cmds: [AIM(1, 0, -10130), '20:summon DeusEx.WeaponPistol', '60:ParseRightClick', '80:summon DeusEx.MedKit', '120:ParseRightClick', '140:summon DeusEx.WeaponLAM', '180:ParseRightClick',
+      INTO(561, -40, 40, 245), AIM(245, 49152), INTO(800, 0, 10, 560), INTO(561, -40, 40, 600)].join('|'), flags: ['MunitionsTrooperReady']},
+  // ins2, ins1 without the second drop (row 5.4.2): the player stays inside the trooper's radius with MunitionsTrooperReady cleared by the Take, so the radius greeting
+  // MunitionsTrooperFrob (flag false, radius 160) plays after the 10 s gate on the Take's last play (about 823).
+  ins2: {map: '00_TrainingCombat', ticks: 1000, conversation: true, early: 'KillAll FlyGenerator', pawns: ['UNATCOTroop3', 'UNATCOTroop1'],
+    cmds: [AIM(1, 0, -10130), '20:summon DeusEx.WeaponPistol', '60:ParseRightClick', '80:summon DeusEx.MedKit', '120:ParseRightClick', '140:summon DeusEx.WeaponLAM', '180:ParseRightClick',
+      INTO(561, -40, 40, 245), AIM(245, 49152)].join('|'), flags: ['MunitionsTrooperReady']},
+  // led1, an open difference (not a gate row): ins1's first capture dropped the player at (850, -20, 10), east of the corridor, where he falls 90 units onto a ledge and slides;
+  // the replay differed by one float ulp in Velocity X and Y at the landing (tick 587 there: original (15.2156134, -13.3387251, -419.583191), Play (15.2156143, -13.338726, -419.583191)).
+  led1: {map: '00_TrainingCombat', ticks: 700, early: 'KillAll FlyGenerator', pawns: ['UNATCOTroop3'], cmds: INTO(850, -20, 10)},
+  // 00_Training, phase 1 (row 5.3.1): one scene per interaction of the route from PlayerStart to DL_part2. The poses come from the map and the route probe
+  // (training-probe-lib.mjs): a point is checked against the BSP first (zone 0 kills the player), the aim from the real eye height (40 above the player's
+  // rest height, which is -80 on the start floor, -120 by the trainer door and -144 in the rooms at the key, datacube, keypads and multitool). The capture
+  // opens the map directly, so PlayerTraveling is not set and Mission00 never runs FirstFrame: the cadet (UNATCOTroop2, Test_Subject) is not knocked out
+  // there (cad1 kills him by the Tantalus cheat, as cmb5 does).
+  // key1, the doors and the key ring: the player 110 units west of the start door (DeusExMover16/17, Tag UN_maindoor, unlocked) opens it with the right button
+  // (DeusExMover.Frob: both panels slide), then is placed at NanoKey0 (415, 1072, -145, on its table; KeyID Train) and picks it up (the right button:
+  // DeusExPlayer.PickupNanoKey, the key ring's KeyList), then at the trainer door (DeusExMover47/48, Tag keydoor, KeyIDNeeded Train, locked, not
+  // pickable): the key ring put in hand (ActivateBelt 0), the left button (an Enter edge: ParseLeftClick, DoFrob(Self, inHand), DeusExMover.Frob's NanoKeyRing
+  // branch toggles bLocked on both panels), then the right button opens the pair.
+  key1: {map: '00_Training', ticks: 560, early: PLACE(-330, 832, -85, 0),
+    cmds: `30:ParseRightClick|${MOVE(200, 415, 1010, -144, 16384, -6000)}|240:ParseRightClick|${MOVE(300, 384, 640, -120, 49152)}|340:ActivateBelt 0|${SHOTS([400])}|460:ParseRightClick`,
+    devices: ['DeusExMover16:DeusExMover', 'DeusExMover17:DeusExMover', 'NanoKey0:Actor', 'DeusExMover47:DeusExMover', 'DeusExMover48:DeusExMover']},
+  // pik1, lockpicking the gun door (DeusExMover45/46, Tag gundoor, locked, pickable, lockStrength 0.05): the player 72 units west of it, facing it, tries the bare
+  // right button (DeusExMover.Frob: locked, msgLocked); a Lockpick summoned and picked up facing away (as dor2 does), put in hand (ActivateBelt 1), the left
+  // button on the door (DoFrob(Self, inHand): bPicking, numPicks pickValue * 100, TicksPerPick, the 0.1 s Timer lowering lockStrength by 0.01 until it is 0 and
+  // both panels unlock; the Lockpick is used up); the right button then opens it.
+  pik1: {map: '00_Training', ticks: 800, early: PLACE(1240, 144, -85, 0),
+    cmds: `10:ParseRightClick|${AIM(14, 32768, -10130)}|20:summon DeusEx.Lockpick|90:ParseRightClick|130:ActivateBelt 1|${AIM(170, 0, 0)}|${SHOTS([210])}|700:ParseRightClick`,
+    devices: ['DeusExMover45:DeusExMover', 'DeusExMover46:DeusExMover', 'Lockpick0:Lockpick']},
+  // kpd1, the datacube and keypad 0012: the player 70 units east of DataCube0 (1496, 860, -147), looking down at it; the right button opens its text window
+  // (InformationDevices.Frob -> CreateInfoWindow: the parser, the HUD info window, the DataVault note) and a second one closes it; the player is then placed
+  // at Keypad0 (1998, 940, -55, Event paddoor), the right button opens HUDKeypadWindow and the digit keys 0, 0, 1, 2 (key edges 20 ticks apart; the window takes
+  // them: HUDKeypadWindow.VirtualKeyPressed, ValidateCode against validCode) trigger the paddoor pair (DeusExMover26/18).
+  kpd1: {map: '00_Training', ticks: 520, early: PLACE(1566, 860, -144, 32768, -5746),
+    cmds: `30:ParseRightClick|90:ParseRightClick|${MOVE(150, 1950, 880, -144, 9346, 5921)}|200:ParseRightClick|${['0', '0', '1', '2'].map((d, i) => `${240 + 20 * i}:@down Digit${d}|${240 + 20 * i}:@up Digit${d}`).join('|')}`,
+    devices: ['DataCube0:DataCube', 'Keypad0:ControlPanel', 'DeusExMover26:DeusExMover', 'DeusExMover18:DeusExMover']},
+  // hkp1, the Multitool hack of Keypad2 (2558, 940, -55, Event hackdoor, hackStrength 0.05): Multitool1 (2241, 600, -147, on its table) picked up with the right
+  // button from the north (the table's south side is outside the world), put in hand (ActivateBelt 1); placed at the keypad, the left button starts the hack
+  // (HackableDevices.Frob with the Multitool: bHacking, the Timer lowers hackStrength by 0.01 every 0.1 s) and its end triggers the hackdoor pair (DeusExMover37/38).
+  hkp1: {map: '00_Training', ticks: 520, early: PLACE(2241, 670, -144, 49152, -5746),
+    cmds: `40:ParseRightClick|80:ActivateBelt 1|${MOVE(120, 2510, 880, -144, 9346, 5921)}|${SHOTS([180])}`,
+    devices: ['Multitool1:Multitool', 'Keypad2:ControlPanel', 'DeusExMover37:DeusExMover', 'DeusExMover38:DeusExMover']},
+  // cad1, the cadet's body to the table: the player in the body room 152 units west of the cadet (UNATCOTroop2 at (3652, 849), Standing) kills him with Tantalus
+  // at tick 20 (his carcass UNATCOTroopCarcass0 appears at 98, holding the NanoKey Body_Search_Room); placed 60 units from it looking down, the right button
+  // searches it (DeusExCarcass.Frob: the key goes to the key ring), a second one carries it (a POVCorpse in hand, the carcass destroyed); placed 100 units
+  // north of Trigger0 (3688, 378, -40, TT_ClassProximity, Event bodydoorsopen) facing it, a Tab edge (User.ini DropItem) drops it: the carcass spawned by
+  // the drop touches the trigger, which opens the pair DeusExMover3/25 and starts DL_bodyexit.
+  cad1: {map: '00_Training', ticks: 700, early: PLACE(3500, 849, -80, 0, -400),
+    cmds: `20:Tantalus|${MOVE(110, 3610, 849, -80, 0, -9100)}|150:ParseRightClick|190:ParseRightClick|${MOVE(250, 3688, 478, -100, 49152, -3000)}|300:@down Tab|300:@up Tab`,
+    devices: ['UNATCOTroopCarcass0:Actor', 'POVCorpse0:Actor', 'UNATCOTroopCarcass1:Actor', 'Trigger0:Actor', 'DeusExMover3:DeusExMover', 'DeusExMover25:DeusExMover']},
   // Windows by key edges (rows 5.3.3 and 5.3.9; docs/stage-5-exit-criteria.md "Captures: windows, the bots and the terminals"). The harness posts no mouse: a button is
   // pressed by the focus the window system gives it and an Enter edge (ButtonWindow.VirtualKeyPressed: Enter or Space presses the focused button), the focus moves by the
   // arrow keys and Tab (RootWindow.VirtualKeyPressed: MoveFocusLeft/Right/Up/Down, MoveTabGroupNext), text is typed as WM_CHAR units (`@type`), a button's accelerator is
@@ -704,6 +814,32 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
   }
   // (exit 0, as the sweep's store-dependent validators do; the Stage 5 gate counts a SKIP as not passing)
   if (absent.length) { console.log(`SKIP no stored original for ${tag}: ${absent.map(f => path.relative(root, f)).join(', ')}`); process.exit(0); }
+  const problems = [];
+  // Play's population (play-population.json): the pre-placed actors, and those pending deletion, whose dump index the slot model takes. A file
+  // without the pending list (written before it existed) would leave PickupDistributor0 the map table's index: the step runs again.
+  const populationFile = path.join(dir, 'play-population.json');
+  if (!existsSync(populationFile) || !JSON.parse(readFileSync(populationFile, 'utf8')).pendingDeleted) {
+    const population = await exec(['scripts/live-acceptance.mjs', 'population', '--map', scene.map, '--seed', '1'], 600);
+    if (population.code !== 0) { console.log(population.out.trim().split('\n').slice(-6).join('\n')); console.log(`FAIL ${tag}: the population step stopped (exit ${population.code})`); process.exit(1); }
+    console.log(`population: ${population.out.trim().split('\n').slice(-1)[0]} (play-population.json written again: it had no pendingDeleted list)`);
+  }
+  // --compare-only judges the scene's stored replay again (play-rows-<tag>.json and the files beside it), after a change to the comparison alone
+  const compareOnly = argv.includes('--compare-only');
+  // Two replays of one map in different checkouts share its .work directory: this one waits while another runs (live-acceptance.mjs play or compare)
+  // One replay of a map at a time: the play and compare steps share the map's files in .work/live-acceptance/<map> (play-population.json and the like).
+  // A lock directory holds the owner's pid (mkdir is atomic; a lock whose process is gone is stale and taken over). The old check (a pgrep of a running
+  // play step) let two replays that started together both through, and hzm1 then differed at tick 1 beside a gate's cbr1 and dlk1 (2026-10-20).
+  const lockDir = path.join(root, '.work/live-acceptance', scene.map, '.replay.lock');
+  const alive = pid => { try { process.kill(pid, 0); return true; } catch { return false; } };
+  for (let waited = 0; ; waited++) {
+    try { mkdirSync(lockDir); writeFileSync(path.join(lockDir, 'pid'), String(process.pid)); break; } catch (error) { if (error.code !== 'EEXIST') throw error; }
+    const owner = Number(readFileSync(path.join(lockDir, 'pid'), {encoding: 'utf8', flag: 'a+'}) || 0);
+    if (owner && !alive(owner)) { rmSync(lockDir, {recursive: true, force: true}); continue; }
+    if (!waited) console.log(`waiting: another replay of ${scene.map} is running (pid ${owner || '?'})`);
+    await new Promise(resolve => setTimeout(resolve, 15000));
+  }
+  const unlock = () => { try { if (Number(readFileSync(path.join(lockDir, 'pid'), 'utf8')) === process.pid) rmSync(lockDir, {recursive: true, force: true}); } catch {} };
+  process.on('exit', unlock);
   // --frames: a scene's screens against the original's (the stored `@ctrlshot` frames): one Play replay per frame, to its tick, with the same Brightness line
   if (argv.includes('--frames')) {
     const {compareFrames} = await import('./conversation-acceptance.mjs');
@@ -733,27 +869,6 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
     console.log(`PASS ${tag} frames: ${shots.length} frames of the original's screen, at most ${scene.frameLimit ?? 64} pixels over 10 of 255${scene.frameMasks ? ` (the masked boxes aside)` : ''}`);
     process.exit(0);
   }
-  const problems = [];
-  // Play's population (play-population.json): the pre-placed actors, and those pending deletion, whose dump index the slot model takes. A file
-  // without the pending list (written before it existed) would leave PickupDistributor0 the map table's index: the step runs again.
-  const populationFile = path.join(dir, 'play-population.json');
-  if (!existsSync(populationFile) || !JSON.parse(readFileSync(populationFile, 'utf8')).pendingDeleted) {
-    const population = await exec(['scripts/live-acceptance.mjs', 'population', '--map', scene.map, '--seed', '1'], 600);
-    if (population.code !== 0) { console.log(population.out.trim().split('\n').slice(-6).join('\n')); console.log(`FAIL ${tag}: the population step stopped (exit ${population.code})`); process.exit(1); }
-    console.log(`population: ${population.out.trim().split('\n').slice(-1)[0]} (play-population.json written again: it had no pendingDeleted list)`);
-  }
-  // --compare-only judges the scene's stored replay again (play-rows-<tag>.json and the files beside it), after a change to the comparison alone
-  const compareOnly = argv.includes('--compare-only');
-  // Two replays of one map in different checkouts share its .work directory: this one waits while another runs (live-acceptance.mjs play or compare)
-  // (a replay run from another checkout has its own `.work`: where /proc names a process's directory, only this checkout's replays are waited for)
-  const busy = () => {
-    try {
-      const pids = execFileSync('pgrep', ['-f', `live-acceptance.mjs (play|compare) --map ${scene.map}`], {encoding: 'utf8'}).trim().split('\n').filter(Boolean);
-      if (!existsSync('/proc/self/cwd')) return pids.length > 0;
-      return pids.some(pid => { try { return realpathSync(`/proc/${pid}/cwd`) === realpathSync(root); } catch { return false; } });
-    } catch { return false; }
-  };
-  for (let waited = 0; busy(); waited++) { if (!waited) console.log(`waiting: another replay of ${scene.map} is running`); await new Promise(resolve => setTimeout(resolve, 15000)); }
   if (compareOnly && !existsSync(path.join(dir, `play-rows-${tag}.json`))) { console.log(`FAIL ${tag}: --compare-only without a stored replay (play-rows-${tag}.json)`); process.exit(1); }
   // A conversation's speakers: the mouth letters the original's audio update wrote (read back from the trace's blend channels; a measured host input,
   // docs/lip-sync.md), regenerated from the stored trace as the Stage 4 conversation rows do.

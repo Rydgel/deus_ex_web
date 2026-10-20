@@ -1264,7 +1264,8 @@ export function compileFunction(fn) {
       if (lowered) return frame.state ? vm.resumeState(frame, compiled, lowered) : vm.resume(frame, compiled, lowered);
     }
     let budget = 200000000;
-    while (frame.cursor !== null && (!frame.latent||frame.iterators.length) && !frame.returned) {
+    // ProcessState (0x103e5c16) tests bDeleteMe before each opcode of a state frame: a Destroy() ends the code run.
+    while (frame.cursor !== null && (!frame.latent||frame.iterators.length) && !frame.returned && !(frame.state && frame.services.isPendingKill?.(frame.instance))) {
       if (!budget--) throw new Error(`Script resume exceeded the host hang guard in ${fn.name??fn.objectName??'script'} (the original would not return)`);
       const entry = statements.get(frame.cursor); if (!entry) throw new Error('VM instruction pointer outside script');
       frame.cursor = entry.next;
@@ -1447,8 +1448,8 @@ export function compileFunction(fn) {
         // original.
         let budget = 200000000;
         // A native iterator owns its body loop until Next/Pop, including when
-        // a body statement changes the actor's latent action.
-        while (frame.cursor !== null && (!frame.latent||frame.iterators.length) && !frame.returned) {
+        // a body statement changes the actor's latent action. A state frame also ends at a Destroy() (ProcessState, 0x103e5c16).
+        while (frame.cursor !== null && (!frame.latent||frame.iterators.length) && !frame.returned && !(state && services.isPendingKill?.(instance))) {
           if (!budget--) throw new Error(`Script resume exceeded the host hang guard in ${fn.name??fn.objectName??'script'} (the original would not return)`);
           const entry = statements.get(frame.cursor); if (!entry) throw new Error('VM instruction pointer outside script');
           const n = entry.node;

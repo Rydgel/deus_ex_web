@@ -19,7 +19,7 @@
  * slots of everything after them are then the model's, not measured. The id a
  * model slot yields is therefore labelled "modeled", never "measured". */
 export class OriginalObjectIndexModel {
-  constructor({count, freeIndices = [], source = 'unspecified', exact = true, packages = null} = {}) {
+  constructor({count, freeIndices = [], source = 'unspecified', exact = true, packages = null, classSlots = null} = {}) {
     if (!Number.isInteger(count) || count < 0) throw new Error('Original object index model requires the registry high-water mark');
     const seen = new Set();
     for (const index of freeIndices) {
@@ -39,6 +39,10 @@ export class OriginalObjectIndexModel {
      * rows). A first load at run time then creates a UPackage and its LinkerLoad (`loadPackage`); null: not known, not modeled. */
     this.packages = Array.isArray(packages) ? new Set(packages.map(name => String(name).toLowerCase())) : null;
     this.loaded = new WeakSet();
+    /** The slots of the registered (placeholder) native UClass objects the original holds at the start, by lower-case class name (the dump's
+     * `Class.<name>` rows; a harness). A native class is loaded from its package by replacing its placeholder (`loadNativeClass`). */
+    this.classSlots = classSlots ? new Map(Object.entries(classSlots).map(([name, index]) => [name.toLowerCase(), index])) : null;
+    this.loadedClasses = new Set();
     /** Validation only: an array that receives one {ev, index, cls, name} per allocation and give-back, with `clock()` as `u`. */
     this.log = null;
     this.clock = () => 0;
@@ -64,6 +68,22 @@ export class OriginalObjectIndexModel {
     this.packages.add(key);
     this.allocate('Package', name);
     this.allocate('LinkerLoad', null);
+    return true;
+  }
+  /** The first run-time load of an object whose class is a native class the process has not loaded from its package yet (Extension:XExtString, by
+   * DeusExTextParser.OpenText's StaticLoadObject: docs/script-text-parser.md "Registry"): CreateExport resolves the class import, the loaded UClass
+   * replaces the registered placeholder under the same slot (an UnhashObject of the placeholder, then the AddObject of the loaded class, which takes that
+   * slot back) and its Function and Property members are created in `members` order, [class, name] each. Returns whether it did. Only with a measured set
+   * of resident packages (`packages`); the placeholder's slot only with `classSlots`, else the free and the slot are left out of the model. */
+  loadNativeClass(name, members) {
+    if (!this.packages) return false;
+    const key = String(name).toLowerCase();
+    if (this.loadedClasses.has(key)) return false;
+    this.loadedClasses.add(key);
+    const slot = this.classSlots?.get(key);
+    if (Number.isInteger(slot)) this.release(slot);
+    this.allocate('Class', name);
+    for (const [cls, member] of members) this.allocate(cls, member);
     return true;
   }
   /** CreateExport of a runtime-loaded object: one AddObject the first time `object` is loaded. */

@@ -100,7 +100,7 @@ import { cleanupScriptReferences, cleanupLevelDestroyed, cleanupSites, cleanupFi
 import { OriginalObjectIndexModel } from './original-object-index.mjs';
 import { destructScriptObject, freeScriptObject, releaseScriptCameraPoint } from './script-object-release.mjs';
 import { TEXT_PARSER_NATIVE } from './script-text-parser.mjs';
-import { constructTextParserObject, dispatchTextParserNative, releaseTextParserObject } from './script-text-parser-natives.mjs';
+import { EXT_STRING_CLASS_MEMBERS, constructTextParserObject, dispatchTextParserNative, releaseTextParserObject } from './script-text-parser-natives.mjs';
 import { serializeScriptReferences } from './script-reference-serialization.mjs';
 import { serializeRuntimeActor } from './script-runtime-serialization.mjs';
 import { readScriptStructValue } from './script-struct-values.mjs';
@@ -554,6 +554,7 @@ export class ScriptRuntime {
       warning:message=>this.warning?.(message),
       newObject:request=>this.newObject(request),
       dispatchStateEvent:(receiver,name)=>this.processEvent(receiver,name),
+      isPendingKill:receiver=>this.instance(receiver).pendingKill,
       gotoLabel:(receiver,name)=>this.instance(receiver).state.gotoLabel(name),
       pollLatent:call=>{
         if(call.index===384)return pollActorSleep(this.latentFloat(call.receiver),call.state,call.seconds);
@@ -1570,6 +1571,22 @@ export class ScriptRuntime {
       throw new DynamicLoadObjectBoundaryError(`DynamicLoadObject class mismatch for ${request.name}`,
         'DYNAMIC_LOAD_OBJECT_CLASS_MISMATCH',{path:request.name,classRef:request.classRef});
     return object;
+  }
+  /** The registry slots DDeusExTextParser::OpenText's StaticLoadObject(XExtString, NULL, "Package.Name", ...) takes in the original, which Play's text source
+   * (createExtStringSource) reads without creating them (docs/script-text-parser.md "Registry"): a package the process had not loaded gets its UPackage and
+   * LinkerLoad; the first text loaded from any package loads Extension:XExtString from Extension.u (the registered placeholder UClass is replaced and its
+   * members are created); the text object is one AddObject and OpenText deletes it before returning (ResetLoaders, then the delete). Capture kpd1, tick 30:
+   * the class, its 21 members and ExtString 00_Datacube01 are created, the class's placeholder slot, the text object and the parser are freed. A text that is
+   * not found (StaticLoadObject returns NULL) creates nothing modeled here: not measured. */
+  modelExtStringLoad(path){
+    const original=this.actorLifecycle?.construction?.registry?.original;
+    if(!original?.packages)return;
+    const dot=path.indexOf('.');
+    original.loadPackage(path.slice(0,dot));
+    original.loadNativeClass('ExtString',EXT_STRING_CLASS_MEMBERS);
+    const holder={};
+    original.take(holder,'ExtString',path.slice(dot+1));
+    original.giveBack(holder);
   }
   /** The registry slots a prepared route's StaticLoadObject takes in the original (original-object-index.mjs, as the speech audio's load in
    * script-conplay-live.mjs): GetPackageLinker's first load of a package creates its UPackage (ResolveName, create) and its LinkerLoad; CreateExport
@@ -3287,7 +3304,9 @@ export class ScriptRuntime {
         loadText:path=>{
           if(typeof this.textSource?.loadText!=='function')
             throw new Error('DeusExTextParser.OpenText requires the XExtString source');
-          return this.textSource.loadText(path);
+          const text=this.textSource.loadText(path);
+          if(text!==null)this.modelExtStringLoad(path);
+          return text;
         },
         name:text=>{
           if(typeof this.nameServices?.internName!=='function')
@@ -4379,9 +4398,12 @@ export class ScriptRuntime {
       walkLoop:(pawn,seconds,iterations,ops)=>this.scriptVm?.walkLoop?.walk(pawn,seconds,iterations,ops)??false,
       // Validation (nav-trace.mjs): a traced pawn's physics moves are logged; undefined (no cost) otherwise.
       get moveTrace(){return that.navTrace?.physicsMove(receiver);},
+      // appFrand's x87 result, not stored as a float32: processLanded (0x103cf52d) multiplies, subtracts and adds on ST0 and stores once into Velocity
+      // (landing.mjs). The product of the 15-bit integer and the float32 1/32767 is exact in binary64, and so are the steps after it; rounding it here
+      // moved a landing's random velocity by one float32 ulp (Stage 5 led1: the original's Velocity.X -15.166173 against Play's -15.1661739).
       random:()=>{
         if(typeof this.rng?.frand!=='function')throw new Error('Pawn physics requires the shared original RNG stream');
-        return Math.fround(this.rng.frand());
+        return this.rng.frand();
       },
     };
   }
