@@ -463,6 +463,18 @@ export const SCENES = {
     devices: ['WeaponPistol0:Weapon', 'Ammo10mm0:Actor', 'Switch3:Actor', 'DeusExMover44:DeusExMover', 'DeusExMover1:DeusExMover', 'DeusExMover4:DeusExMover', 'DeusExMover7:DeusExMover',
       'BreakableGlass0:DeusExMover'],
     flags: ['DL_TArgetRange_Played', 'DL_TArgetRangeShot1_Played'], options: ['--player-talk', '--inventory']},
+  // rng2, rng1 and the second lane (row 5.1.2): a second Ammo10mm box (Ammo10mm1, yaw 35000 pitch -2750) taken at 1000; DL_TArgetRangeShot1's last event opens the
+  // cover DeusExMover28 over Switch13 (2692), the player is dropped at the second station (106, -590) at 2790, the right button presses Switch13 (DeusExMover5 and
+  // BreakableGlass1 slide in from y -3280 to -1792, not -1216), and the glass is 1,202 units off: the pistol's recoil lifts the view 150 units a shot, so the aim is
+  // set again 10 ticks before each of eleven Enter edges. The glass breaks and DL_TArgetRangeShot2 plays.
+  rng2: {map: '00_TrainingCombat', ticks: 3950, early: 'KillAll FlyGenerator', pawns: ['UNATCOTroop1', 'UNATCOTroop3'],
+    cmds: [INTO(-8, -515, -30), AIM(1, 32768, -5400), '935:ParseRightClick', AIM(960, 32768, -2800), '975:ParseRightClick', AIM(985, 35000, -2750), '1000:ParseRightClick', '1030:ActivateBelt 1',
+      INTO(24, -590, -90, 1060), AIM(1060, 49152, -8700), '1120:ParseRightClick', AIM(1380, 48752, -200), SHOTS([1400, 1460, 1520, 1580, 1640, 1700]),
+      INTO(106, -590, -90, 2790), AIM(2790, 49152, -8700), '2850:ParseRightClick',
+      ...[3110, 3170, 3230, 3290, 3350, 3410, 3610, 3670, 3730, 3790, 3850].map(t => AIM(t, 49344, -104)), SHOTS([3120, 3180, 3240, 3300, 3360, 3420, 3620, 3680, 3740, 3800, 3860])].join('|'),
+    devices: ['WeaponPistol0:Weapon', 'Ammo10mm0:Actor', 'Ammo10mm1:Actor', 'Switch3:Actor', 'Switch13:Actor', 'DeusExMover44:DeusExMover', 'DeusExMover1:DeusExMover', 'DeusExMover28:DeusExMover',
+      'DeusExMover4:DeusExMover', 'DeusExMover5:DeusExMover', 'DeusExMover7:DeusExMover', 'BreakableGlass0:DeusExMover', 'BreakableGlass1:DeusExMover'],
+    flags: ['DL_TArgetRange_Played', 'DL_TArgetRangeShot1_Played', 'DL_TArgetRangeShot2_Played'], options: ['--player-talk', '--inventory']},
   // lam1, the demolition (row 5.1.4): the shelf of LAMs (2121, 1536) is in the security bots' room, so the LAM and a pistol are summoned and picked up facing away from
   // BreakableWall1 at (3000, 1700), 136 units south of its face (the corridor x 2940 to 3070); the LAM drawn (ActivateBelt 1) and the player dropped at (3000, 1805)
   // facing north, 32 units from the wall: WeaponLAM.Tick's NearWallCheck sets bNearWall, and the Enter edge at 260 places the LAM on the wall (WeaponLAM.Fire,
@@ -472,6 +484,17 @@ export const SCENES = {
     cmds: [INTO(3000, 1700, -20), AIM(1, 49152, -10130), '20:summon DeusEx.WeaponLAM', '60:ParseRightClick', '80:summon DeusEx.WeaponPistol', '120:ParseRightClick', '160:ActivateBelt 1',
       INTO(3000, 1805, -20, 190), AIM(190, 16384), SHOTS([260]), INTO(3000, 1655, -20, 360), AIM(360, 16384), '400:ActivateBelt 2', SHOTS([480, 540, 600, 660, 720])].join('|'),
     devices: ['BreakableWall1:DeusExMover', 'WeaponLAM0:Weapon', 'LAM5:Actor'], flags: ['DL_FinishWall_Played'], options: ['--player-talk', '--inventory']},
+  // rif1, the rifle range (row 5.1.3): rng1's drop at the rifle counter (984, -590), inside DataLinkTrigger8's cylinder (1061, -542, radius 96): DL_RifleRange plays for
+  // about 750 ticks and opens the counter's cover DeusExMover67 and the cover DeusExMover29 over Switch0. WeaponRifle2 and Ammo0 (Ammo3006) are taken with the right
+  // button (pitch -5000 at the rifle, yaw 35500 pitch -4500 at the box), the rifle drawn (ActivateBelt 1); at the station (1016, -590) the right button presses Switch0
+  // (rifletarget1: DeusExMover32 and BreakableGlass2 slide in from y -3280 to -1216); aimed at the glass, ToggleScope (a typed exec function: the key `[` is not one of
+  // dxinput's names) zooms to ScopeFOV 10 (DesiredFOV, FOVAngle tweening), and two Enter edges 140 ticks apart. The glass breaks, DL_RifleRangeShot1 plays and
+  // Mission00.Timer sets SkillWeaponRifle to level 3 once its played flag is set.
+  rif1: {map: '00_TrainingCombat', ticks: 2150, early: 'KillAll FlyGenerator', pawns: ['UNATCOTroop1', 'UNATCOTroop3'],
+    cmds: [INTO(984, -590, -30), AIM(1, 32768, -5000), '850:ParseRightClick', AIM(880, 35500, -4500), '900:ParseRightClick', '930:ActivateBelt 1', INTO(1016, -590, -90, 960), AIM(960, 49152, -8700),
+      '1020:ParseRightClick', AIM(1300, 48752, -200), '1310:ToggleScope', SHOTS([1380, 1520])].join('|'),
+    devices: ['WeaponRifle2:Rifle', 'Switch0:Actor', 'DeusExMover67:DeusExMover', 'DeusExMover29:DeusExMover', 'DeusExMover32:DeusExMover', 'DeusExMover21:DeusExMover', 'BreakableGlass2:DeusExMover',
+      'SkillWeaponRifle#:Skill'], flags: ['DL_RifleRange_Played', 'DL_RifleRangeShot1_Played'], options: ['--player-talk', '--inventory', '--player-fov']},
 };
 export const SCENE_FLAGS = ['--no-ghost', '--perception', '--player-gear', '--player-health', '--los-flag'];
 // The device scenes add the player's eye and bob (the first-person item's placement: Inventory.RenderOverlays, CalcDrawOffset): the stored combat scenes
