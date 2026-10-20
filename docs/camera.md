@@ -180,6 +180,13 @@ fixed120Hz tick schedule has not been established as the original scheduling
 policy; preserve this within-tick ordering without calling fixed120Hz original
 frame-cadence fidelity.
 
+The event's inputs come from `UGameEngine::Draw` (Engine `0x1038f155..0x1038f1ac`):
+ViewActor = `Viewport->Actor`, CameraLocation = its `Location` (`+0x114`) and
+CameraRotation = its `Rotation` (`+0x120`), not its ViewRotation. A branch that
+does not assign CameraRotation keeps the body's rotation: `state Dying`'s death
+camera, the hidden branch's roll, and the spy drone's frozen first-person view.
+`game.view()` passes the same three values (Stage 5 work item 16, `emp2`).
+
 This follow-up changed only documentation: source/native instruction evidence
 settled the ownership contract without adding a second camera scheduler or
 reworking the already-compared555-case math adapter. Whole-game captures remain

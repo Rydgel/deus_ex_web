@@ -1,6 +1,6 @@
 # Stage 5 exit criteria: a finite definition of "Done when"
 
-Status: **draft for the user to adopt** (written 2026-10-17 from master 5d7285c; first census and scoreboard: 0 of 50 criteria pass; after the first original captures, the same evening: 2 of 50; on 2026-10-18 after the second captures and a spawned actor's first frame: 6 of 50; after the routes' captures, the same evening: 13 of 50; 21 of 50 on 2026-10-19; 23 of 50 after work item 8 on 2026-10-20). Nothing here is a Stage 5 claim; it is the definition the claims will be
+Status: **draft for the user to adopt** (written 2026-10-17 from master 5d7285c; first census and scoreboard: 0 of 50 criteria pass; after the first original captures, the same evening: 2 of 50; on 2026-10-18 after the second captures and a spawned actor's first frame: 6 of 50; after the routes' captures, the same evening: 13 of 50; 21 of 50 on 2026-10-19; 23 of 50 after work item 8 on 2026-10-20; 24 of 50 after work item 16 the same day). Nothing here is a Stage 5 claim; it is the definition the claims will be
 judged against. The data is `scripts/stage5-criteria.mjs`; the measure of where Play stands is `scripts/census-stage5.mjs`; the acceptance test is
 `scripts/validate-stage5-acceptance.mjs` ([Running](#running)). Like the Stage 3 and Stage 4 gates ([Stage 3](stage-3-exit-criteria.md),
 [Stage 4](stage-4-exit-criteria.md)) it exits 1 until every criterion passes. What the original offers a player in these maps is in
@@ -145,7 +145,7 @@ report (`--stage4-report`), so presentation proof is not repeated.
 | 5.6.2 | 00_TrainingFinal alarm | an AlarmUnit trips (bActive for its alarmTimeout, 10 s): AlarmDispatcher fires SoldierNeutral (AllianceTriggers), CloseDoor (ExitDoor) and failmessage (DL_FailedStealth) | O1 | `alarm-chain` | O1: live trace of the original from the alarm's trigger | - | MISSING |
 | 5.6.3 | 01_NYC_UNATCOIsland | light against sight: a pose seen or not seen by its lighting (AICanSee times AIVisibility against VisibilityThreshold). Island has no light switch, and AugLight adds a second path (its Beam AI event, CheckBeamPresence), so the census pair is the map's own lighting: two poses 500 units in front of Terrorist4 with a clear line of sight, one in shadow, one lit | O1 | `light-vs-sight` | O1: live trace of the original with Terrorist4's perception fields and the player's visibility at the two poses | validate-pawn-perception, AICanSee (O2); lighting oracles (O2) | MISSING |
 | 5.6.4 | 01_NYC_UNATCOIsland | an explosion: a barrel or CrateExplosiveSmall near a Terrorist, a breakable door and a decoration: HurtRadius, damage to each, noise, chain explosions | O1 | `explosion-world` | O1: live trace of the original with the barrel shot | validate-stage5-live exp1 (O1 2026-10-18: two CrateExplosiveSmall summoned by the breakable DeusExMover5; the second lands half off the first and slides off it (processLanded's footprint push, 45); Terrorist2 comes to open the door, which crushes the first crate (Mover.EncroachingOn: TakeDamage 10000 'Crushed') at 307; its blast (ExplosionLarge, ShockRings, the gradual HurtRadius) sets off the second at 312, breaks the door (doorStrength 0.6 -> 0, bDestroyed), destroys TrashCan5 and kills Terrorist2; every pawn, the door, both crates, TrashCan5, Chair5, the AI events (LoudNoise) and the 1,634 objects created equal per tick); validate-native-landing (O2, the footprint push and the Carcass slide); validate-island-blowitup (O2); VisibleCollidingActors iterator 312 (O2) | PASS |
-| 5.6.5 | 01_NYC_UNATCOIsland | EMP: an EMP grenade or the EMP field against a SecurityBot, the turret and the camera (disabled) and the player's energy | O1 | `emp-electronics` | emp2: equal through tick 820 since work item 8 (SecurityBot1's shot meets DeusExMover23's fragments as in the original); from 821 the original draws SecurityCamera3 again (LastRenderTime 204.47, every frame on) as its confused swing pitches it down (Rotation pitch 60022, then 59296), and Play does not (its LastRenderTime stays 191.64 from tick 51); the player's whole row and the camera's Rotation are equal, so the frame's visibility of the camera's mesh at the frustum edge differs (a Stage 4 render-visibility gap, open) | validate-stage5-live emp1 (O1 2026-10-18, PASS: the grenade thrown at 200 toward PatrolPoint19; its blast takes SecurityBot0's EMPHitPoints 100 -> 69 -> 34 -> 0 from tick 418 and disables it at 423); validate-stage5-live emp2 (O1, recaptured with lastRefreshTime: at cam1's pose the blast confuses SecurityCamera3 (420) and AutoTurret0 (426), and the player's Energy drains 3.75 at 435, 450, 465 and 480, all equal); alterations census emp-grenade, hit-emp (P) | FAIL |
+| 5.6.5 | 01_NYC_UNATCOIsland | EMP: an EMP grenade or the EMP field against a SecurityBot, the turret and the camera (disabled) and the player's energy | O1 | `emp-electronics` |  | validate-stage5-live emp1 (O1 2026-10-18, PASS: the grenade thrown at 200 toward PatrolPoint19; its blast takes SecurityBot0's EMPHitPoints 100 -> 69 -> 34 -> 0 from tick 418 and disables it at 423); validate-stage5-live emp2 (O1, recaptured with lastRefreshTime: at cam1's pose the blast confuses SecurityCamera3 (420) and AutoTurret0 (426), and the player's Energy drains 3.75 at 435, 450, 465 and 480, all equal); alterations census emp-grenade, hit-emp (P); validate-stage5-live emp2 equal for 900 ticks since work item 16 (2026-10-20): the player dies at 820, and the Dying state's PlayerCalcView, which leaves CameraRotation as UGameEngine::Draw passed it (the body's Rotation, Engine 0x1038f155-0x1038f1ac), views SecurityCamera3 from 821 as the original does | PASS |
 | 5.6.6 | 01_NYC_UNATCOIsland | conversation flags change the world: GuntherFreed (the cell door chain; on the same walk Gunther's alliance flips at AllianceTrigger0's touch, and GuntherRescued's GuntherAttacks gives his orders), FilbenGaveKey, M01PlayerAggressive, KnowsShipment | O1 | `flags-change-world` | O1: live trace of the original from each flag's source to the world it changes | validate-stage5-live kB (O1, pass as a comparison: the Tantalus at tick 80 missed Terrorist18, seven carcasses, the player placed outside the world at the trooper, no M01PlayerAggressive in either program) | PASS |
 
 ### 5.7 Excluded
@@ -1003,7 +1003,8 @@ kernel over the tracked model agrees with the JavaScript bodies on 5,280 answers
   `fK`, `kil1`, `dor1`, `dor2`, `wat1`, `air1`).
 * `emp2` is equal through tick 820, where it failed at 306 before. From 821 the original draws SecurityCamera3 again (LastRenderTime every frame) as its confused
   swing pitches it down (Rotation pitch 60022, 59296), and Play does not (its LastRenderTime stays at tick 51's). The player's row and the camera's Rotation are
-  equal, so the frame's visibility of the camera's mesh at the frustum edge differs: a Stage 4 render-visibility gap, not a collision one (work item 16). 5.6.5 fails on it.
+  equal, so the frame's visibility of the camera's mesh at the frustum edge differs. 5.6.5 failed on it. **Closed by work item 16** ([below](#the-death-cameras-rotation-work-item-16-2026-10-20)):
+  not a render-visibility gap but the camera Play viewed from: the player dies at 820, and the Dying state's view starts from the body's Rotation in the original.
 * `dor3` is equal through tick 319: the rocket meets DeusExMover2's fragments and stops where the original's does. It differs from 320, in DeusExMover2's break
   (BlowItUp: 16 fragment attempts, `Spawn` at `spawnLoc + FragmentSpread * VRand()`, refused before AddObject when FindSpot fails). Play makes 15 MetalFragments,
   the original 14. The CRT rand state at each original AddObject (the stored trace's `addobj` entries) against Play's after each FindSpot lines the attempts up:
@@ -1023,7 +1024,29 @@ kernel over the tracked model agrees with the JavaScript bodies on 5,280 answers
 
 **Also checked:** the unit tests (652), `validate-trace-kernel` (79,090 cases), `validate-brush-tracker`, `validate-tracked-linecheck`,
 `validate-fast-line-check-tracked`, and the census (below). A recapture of `dor3` with a FindSpot breakpoint under the Linux host's wine ran at about 2.4 s a tick
-and stalled at tick 146; captures stay on the Mac.
+and the driver's default `--wait-seconds 600` (sized for the Mac's ~0.12 s a tick) stopped it at tick 146. The user accepts a capture from either machine
+(2026-10-20), so a Linux capture runs with a longer `--wait-seconds`.
+
+### The death camera's rotation (work item 16, 2026-10-20)
+
+**Finding.** In `emp2` the player dies at tick 820 (`Dying` from that tick in both). The Setup probe (`STAGE5_PLAY_ARGS='--setup-probe SecurityCamera3 --setup-ticks
+810:830'`) has Play's FDynamicSprite::Setup reject SecurityCamera3 at every tick from 810 to 830 (status 0; its view-axis Z drops from 309.6 to 288.9 at 820, the eye
+height times the view pitch's sine). The view is the cause, not Setup. `DeusExPlayer`'s `state Dying` `PlayerCalcView` (not hidden yet) sets `FrobTime`, traces
+190 units behind the camera with extent (12, 12, 2) and sets `CameraLocation` to the hit or the end. It never sets `CameraRotation`, so the frame looks along the
+rotation the engine passed in. `UGameEngine::Draw` (Engine `0x1038f110`) builds that event's parameters at `0x1038f155..0x1038f1ac` from `Viewport->Actor`:
+`ViewActor` = the actor, `CameraLocation` = its `Location` (`+0x114`), `CameraRotation` = its **`Rotation`** (`+0x120`), not its `ViewRotation`, and calls
+`ProcessEvent` (vslot `0x10`) with `FindFunctionChecked(PlayerCalcView)`. Play's `game.view()` passed `ViewRotation` (pitch 59536, about 33 degrees down), which
+leaves SecurityCamera3, 12 degrees above the player at 400 units, outside the frame's top edge. The original's frame looks level along the body's yaw (`Rotation`
+pitch 0) and draws the camera from 821.
+
+**Change.** `game.view()` starts `PlayerCalcView` from `Location` and `Rotation`, as `UGameEngine::Draw` does. The first-person, behind-view (`CalcBehindView`),
+`ViewTarget` and `ConCamera` branches set `CameraRotation` themselves, so they are unchanged. Only the branches that leave it alone see the difference:
+`state Dying` (its hidden branch sets only pitch and yaw, so its roll is now the body's) and the spy drone's frozen first-person view (`bSpyDroneActive`).
+
+**Result.** `emp2` passes (78 actors equal for 900 ticks), and so does 5.6.5. The stored scenes where the player dies were replayed and keep their status:
+`cam1`, `die1` (to the level's end at 1931), `kB` and `cmb3` pass, and `dor3` still differs first at 320 (work item 15). Before this change, the Dying view's trace
+from `ViewRotation` hit the world at time 0 behind the player (`emp2`, normal (0, −1, 0)), so Play's camera stood at `Location`. That trace now runs along the
+body's yaw instead, as the original's does.
 
 ## Scoreboard (2026-10-19, after the merge of the Island batches)
 
@@ -1071,6 +1094,10 @@ the census plays all 50 (`.work/stage5-census-2026-10-20-item8.json`, 1,276 s, e
 (`cam1`, `cam2`) and fails 5.6.5 (`emp2` from 821, work item 16) and 5.3.10, 5.5.1, 5.5.2 (`dor3` from 320, work item 15). Every other stored scene was
 replayed and keeps PASS. The gate stands at **23 PASS, 4 FAIL, 23 MISSING** (5.1 Combat: 5, 0, 4; 5.2 Stealth: 5, 0, 2; 5.6: 3, 1, 2).
 The table above is the merge's run.
+**After work item 16** (2026-10-20, [the death camera's rotation](#the-death-cameras-rotation-work-item-16-2026-10-20)): 5.6.5 passes
+(`validate-stage5-acceptance.mjs --only '^5\.6\.5 ' --census .work/stage5-census-2026-10-20-item8.json`, report `.work/stage5-gate-2026-10-20-item16.json`, `emp1` and `emp2`).
+The gate stands at **24 PASS, 3 FAIL, 23 MISSING** (5.6: 4, 0, 2), and the three `FAIL` rows are `dor3`'s (work item 15). The tables are from the merged report
+`.work/stage5-gate-2026-10-20-merged2.json`.
 
 The twenty `PASS` rows have proof checks on stored Island scenes: 5.2.2 on `cmb1` and `cmb2`, 5.1.6 on `cmb1` to `cmb4`, `cmb6` and `cmb7`, 5.1.5 on `cmb1`, `cmb2` and `cmb5`,
 5.2.7 on `cmb5`, 5.6.1 on `cmb7`, 5.1.8 on `die1`, 5.1.7 on `ko1`, 5.2.6 on `hck1`, 5.6.4 on `exp1`; 5.4.3 on `pG`, `pR` and `pX`, 5.4.4 on `fT`, `fM`, `fN` and `tA`, 5.4.5 on
@@ -1182,9 +1209,9 @@ Nothing below was fixed by the census task; the two gap tasks closed items 1 and
     and SpawnActor would then run on that NaN, where Play's level queries throw on non-finite input. First a Mac capture of `dor3` with FindSpot and AdjustSpot
     breakpoints at tick 320 (the Linux host's tracer is too slow), then the x87 comparisons of each step on NaN (MultiLineCheck's hash walk, the BSP traversals,
     the point check) from the DLL, then the fragment's life after it. Unblocks 5.3.10, 5.5.1, 5.5.2.
-16. **SecurityCamera3's visibility at the frustum edge** (`emp2` from tick 821, [above](#collision-over-the-tracked-level-model-work-item-8-2026-10-20)): the original
-    draws the confused camera as its swing pitches it down, Play does not. A Stage 4 render-visibility comparison (the mesh's bounds, Setup, OccludeBsp) at that
-    pose. Unblocks 5.6.5.
+16. ~~**SecurityCamera3's visibility at the frustum edge**~~ **Done 2026-10-20** ([the death camera's rotation](#the-death-cameras-rotation-work-item-16-2026-10-20)):
+    not a visibility gap. The player dies at 820, and `UGameEngine::Draw` starts `PlayerCalcView` from the body's `Rotation`, which the Dying view keeps. Play
+    started it from `ViewRotation`. `emp2` and 5.6.5 pass.
 
 ## What the user should decide
 

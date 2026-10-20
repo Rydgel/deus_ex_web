@@ -375,7 +375,11 @@ export async function createGame(map, asset, assets, { randomSeed = Math.floor(D
     view() {
       // ProcessEvent copies its typed parameter block back to this array;
       // script callFunction's lvalue references are a different interface.
-      const params = [player.collisionActor, readPlayer('Location'), readPlayer('ViewRotation')];
+      // UGameEngine::Draw (Engine 0x1038f155-0x1038f1ac) starts the event
+      // from Viewport->Actor's Location (+0x114) and Rotation (+0x120), not
+      // its ViewRotation: a branch that leaves CameraRotation alone (the
+      // Dying state's death camera) views along the body's Rotation.
+      const params = [player.collisionActor, readPlayer('Location'), readPlayer('Rotation')];
       runtime.processEvent(player.collisionActor, 'PlayerCalcView', params);
       return {actor: params[0], location: params[1], rotation: params[2], fov: readPlayer('FOVAngle')};
     },

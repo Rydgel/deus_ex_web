@@ -7,7 +7,7 @@ single-player maps reach only boundaries assigned to later stages in the startup
 census ([completion record and coverage limits](docs/stage-3-exit-criteria.md#stage-3-beyond-training-the-all-maps-startup-census)).
 **Stage 4 presentation is complete** (2026-10-17): its gate passes 70 of 70 in one
 run ([Stage 4 close](docs/stage-4-exit-criteria.md#stage-4-close)). **Stage 5
-gameplay is in progress**: its gate passes 23 of 50 criteria (2026-10-20), each on
+gameplay is in progress**: its gate passes 24 of 50 criteria (2026-10-20), each on
 original captures of Liberty Island replayed tick by tick in Play (see below).
 
 The target is **100% original fidelity**. Every supported behavior needs original
@@ -198,7 +198,7 @@ the three Training maps and Liberty Island, each with the original-side evidence
 that would prove it. `scripts/census-stage5.mjs` drives them all in Play (50 play
 as of 2026-10-19), and `scripts/validate-stage5-acceptance.mjs` is the gate.
 
-**Gate: 23 of 50 pass, 4 fail, 23 await their capture** (2026-10-20). The passing
+**Gate: 24 of 50 pass, 3 fail, 23 await their capture** (2026-10-20). The passing
 rows are proven by live traces of the original game: `DeusEx.exe` runs under
 CrossOver with a tracer (`tools/dx-live-win.c`, `scripts/live-original.sh`) that
 records the watched actors, the random stream, the AI events and every object
@@ -211,7 +211,7 @@ Proven so far:
 - **Stealth:** a patrolling Terrorist seeing the player, a pawn finding a body,
   a broken laser beam raising the alarm, hacking the laser trap's control panel,
   a shot waking and drawing the guards, a security camera raising the alarm that
-  wakes the turret.
+  wakes the turret, an EMP grenade against the bot, the turret and the camera.
 - **Conversations:** MeetPaul's weapon choice, Filben's key, Gunther's rescue and the
   weapon the player gives him, the commander's branches, overheard conversations and barks, and the
   flags that change the world.
@@ -220,9 +220,9 @@ Proven so far:
 
 Collision and line traces now read the moving brush tracker's level model, as the
 original's do (doors and lifts block shots, moves and spawns where they were last
-drawn; checked against Engine.dll). Of the four failing rows, three wait on a
-breakable door's fragment placement (an AdjustSpot probe whose hit time is NaN) and
-one on a security camera's visibility at the frame's edge, both open in
+drawn; checked against Engine.dll). The dying player's camera starts from the body's
+rotation, as the engine's draw passes it. The three failing rows wait on a breakable
+door's fragment placement (an AdjustSpot probe whose hit time is NaN), open in
 [remaining Stage 5 work](docs/stage-5-exit-criteria.md#remaining-stage-5-work-in-the-order-it-blocks).
 Swimming, ladders, pawn navigation, doors opened by NPCs and the intro cinematic
 also run from translated original code ([roadmap](docs/roadmap.md#5-implement-the-full-gameplay-systems)).
