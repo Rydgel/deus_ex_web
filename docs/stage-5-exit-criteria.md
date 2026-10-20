@@ -1143,6 +1143,50 @@ animation's notify; its natives are the animation tick (the Rust actor tick has 
 **Adding a body.** An adapter in `o3-adapters.mjs` (before, services, after), its driver's `--o3` method (state install, the service thunks answered through
 `Replay.take`), an entry in `ORACLES` and `CONTROLS` of the validator, and the call site's `o3Wants`/`o3Body` hook.
 
+### Captures: 00_TrainingFinal (2026-10-20)
+
+The first captures off the Island: rows 5.2.1 (stealth maze), 5.3.13 (switch-driven movers), 5.4.8 (M00MeetPage and holo-Jaime) and 5.6.2 (the alarm chain), all on
+`00_TrainingFinal`, taken on the Linux host under Wine (`live-original.sh`) and replayed with `validate-stage5-live.mjs --scene`. Each scene was rehearsed in Play first
+(`stage5-capture-rehearsal.mjs --scene <tag>`, class P) to find the poses; all four passed their first replay, so none of them found a difference in Play.
+
+The map is opened at PlayerStart0 (-501, -499) and the frozen phase types `KillAll FlyGenerator`. stl1 places the player in the frozen phase
+(180 units from Soldier0: nothing spawns there); the others move him after the first unfrozen tick with `MOVE(tick, x, y, z, yaw, pitch)` (`ghost`, the Location SET, `walk` and the view, as `INTO`
+does). The poses:
+
+* **Switches.** A switch is a small collision cylinder (Switch1 2.6 x 2.2, Switch0 and Switch6 5.3 x 5.2), so the pose aims at its Location from the player's eye
+  (BaseEyeHeight 40 above his centre, which lands at Z 31.8 on the first corridor's floor and 79.8 in the Bob and Jaime rooms). Switch1 faces -X and is
+  hit from 50 units west of it at pitch -2712; Switch0 sits on the edge of a platform over the maze (the maze floor is 160 units under it) and is hit from 38.7 units west
+  of it, 50.7 under the eye, at pitch -9588; Switch6 from 43 units west at pitch -1900. The rehearsal showed the margin: pitch -8000 and -11000 from Switch0's pose select
+  nothing. The right button (`ParseRightClick`) is pressed once the frob target holds (HighlightCenterObject runs every 0.1 s).
+* **The ConversationTrigger needs a walking player.** `ConversationTrigger.Touch` calls `StartConversationByName`, whose `CanStartConversation` refuses a `Falling`
+  player (and `Level.bPlayersOnly`). A placement (`ghost`, SET, `walk`) leaves him Falling until he lands (the original's trace: Physics 2 from tick 2 to 15 in mpg1), and the Touch is delivered by the first move
+  that overlaps the trigger: a player placed inside or dropped into the cylinder touches it falling, the call returns false and the trigger, not re-armed, never starts
+  the conversation (the rehearsal's first tries did exactly that: dropped from Z 170 at tick 1 and at tick 100, and set at the floor). The harness cannot hold a key, so mpg1 sets him 122.5 units from the
+  trigger (its radius 96 plus his 20 is 116), outside it, lets him land (tick 15), and at 150 sets his Velocity to (0, -300, 0): the next walking move crosses the
+  boundary, the Touch finds him Walking and the conversation starts at 152 in both programs. A measured input in the sense of the O1 rows, not the player's walk.
+
+| Scene | Pose and inputs | What the original did | Replay in Play |
+| --- | --- | --- | --- |
+| `stl1` (5.2.1, 5.6.2, 5.3.13) | in the frozen phase 180 units east of Soldier0 (469.8, 383.8) on the maze floor, facing it; at 900 set on the platform west of Switch0 (pitch -9588), the right button at 960 | Soldier0 Seeking 18, Alerting 34 (Enemy the player); at 221 it trips the four AlarmUnits of Tag StealthMazeAlarmUnit (bActive; Dispatcher1 in Dispatch); both soldiers' Alliance level toward the Player goes -1 to 1 at 222 (SoldierNeutral), Soldier0 is Patrolling again at 223; ElevatorMover1 KeyNum 1 at 223, y 48 to 112 over 223 to 282; the units stop at 820; DL_FailedStealth is played. Switch0 at 961 (Dispatcher0 dispatches): level back to -1 at 962, ElevatorMover1 KeyNum 0 from 963, Soldier0 sees the player on the platform (Seeking 981, Alerting 1001) and trips the alarm again at 1122, the door KeyNum 1 at 1124. Soldier2 patrols (Patrolling from 60) and never sees him | **PASS**, 23 actors, 1,250 ticks, 1,327 AI events, 177 creations, the flag DL_FailedStealth_Played |
+| `sw1` (5.3.13) | on the first corridor's floor 50 units west of Switch1 (-195, -36), pitch -2712; the right button at 60 and at 220 | frob target Switch1 from 15; DeusExMover0 (FirstStealthDoor, TriggerToggle) KeyNum 1 at 61, interpolating to 121; the second press: KeyNum 0 at 221 to 281; Switch1 plays On, then Off | **PASS**, 17 actors, 360 ticks, 55 creations, no flags |
+| `mpg1` (5.4.8) | set 122.5 units from ConversationTrigger1 (6577, -5309), Velocity (0, -300, 0) at 150, Enter edges at 190, 230, 270, 310 and 350 | the player lands at 15; the Touch at 152 puts BobPage1 and the player in Conversation (ConPlay0, M00MeetPage); five speeches (Bob, JC, Bob, JC, Bob); both leave it at 398 and M00MeetPage_Played is set | **PASS**, 15 actors, 520 ticks, 539 AI events, 173 creations, the flag (29 mouth letters fed) |
+| `jmr1` (5.4.8) | 43 units west of Switch6 (7255, -4287.5), pitch -1900; the right button at 150 | JaimeAppears at 151 (FlagTrigger11); Mission00.Timer EnterWorld()s JaimeReyes6 at 181 (bInWorld 1, MS_ReyesUnhidden) and its radius conversation JaimeBark starts at 182 (first person, no input); it ends at 882 (JaimeBark_Played); the Timer LeaveWorld()s it at 901 (bInWorld 0, MS_ReyesHidden) | **PASS**, 16 actors, 1,000 ticks, 1,017 AI events, 84 creations, the four flags (61 mouth letters fed) |
+
+**What the original showed beyond the census.** The census trips the alarm with a `Trigger` call and presses Switch0 from a fixture pose; the captures take the original's
+own path, a soldier that sees the player. The soldiers are neutral after the alarm (Alliance level 1 toward the Player, `bNoNegativeAlliances` set at 223), so the
+player's visit to the platform at 905 is not seen; the reset (Switch0 -> ButtonDispatcher -> SoldierHostile, OpenDoor, SoldierPatrol, SpecialEventMsg) turns them
+hostile at 962 and Soldier0, on the maze floor 475 units away and 160 under him, sees him within 20 ticks (Seeking 981). The alarm chain ran twice with the same effects (the second at 1122, cut by the end of
+the scene while the units ring).
+
+**Harness.** `DEVICE_FIELDS.ElevatorMover` (KeyNum, PrevKeyNum, bInterpolating, PhysAlpha, PhysRate, `bIsMoving` and `bFollowKeyframes` at 0x534, masks 2 and 1; Play's slotOf on
+ElevatorMover1) because the exit door is an ElevatorMover, not a DeusExMover (it has no doorStrength: the rehearsal's first run read it and stopped). `wholeFlags` compares the
+player's whole FlagBase at the end of a non-conversation scene (stl1, sw1); the conversation scenes always do. The worktree needs `ad/tools/dxinput.exe` and
+`ad/build/*.exe` (ignored, built once in the main checkout): a missing dxinput stops the capture at its first typed line after the game is up (`wine: failed to open`).
+
+**What is not covered.** The player never walks (no held key): he is placed in Soldier0's view and on the platform, pushed into the Bob trigger, and set at the switches.
+SecondStealthDoor (Switch2) is the same class and path as FirstStealthDoor and is not driven; an AlarmUnit tripped by a laser, a camera or a hack (`bDisabled`) is not
+driven; the AllianceTriggers' own touch (radius 96 beside the alarm units) is not watched.
+
 ## Scoreboard (2026-10-19, after the merge of the Island batches)
 
 `node scripts/validate-stage5-acceptance.mjs --census .work/stage5-census-2026-10-19-final2.json --report .work/stage5-gate-2026-10-19-final2.json` on master `a786b4e`
