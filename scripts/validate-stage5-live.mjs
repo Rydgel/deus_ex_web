@@ -591,7 +591,7 @@ export const SCENES = {
   // rest height, which is -80 on the start floor, -120 by the trainer door and -144 in the rooms at the key, datacube, keypads and multitool). The capture
   // opens the map directly, so PlayerTraveling is not set and Mission00 never runs FirstFrame: the cadet (UNATCOTroop2, Test_Subject) is not knocked out
   // there (cad1 kills him by the Tantalus cheat, as cmb5 does).
-  // key1, the doors and the key ring: the player 90 units west of the start door (DeusExMover16/17, Tag UN_maindoor, unlocked) opens it with the right button
+  // key1, the doors and the key ring: the player 110 units west of the start door (DeusExMover16/17, Tag UN_maindoor, unlocked) opens it with the right button
   // (DeusExMover.Frob: both panels slide), then is placed at NanoKey0 (415, 1072, -145, on its table; KeyID Train) and picks it up (the right button:
   // DeusExPlayer.PickupNanoKey, the key ring's KeyList), then at the trainer door (DeusExMover47/48, Tag keydoor, KeyIDNeeded Train, locked, not
   // pickable): the key ring put in hand (ActivateBelt 0), the left button (an Enter edge: ParseLeftClick, DoFrob(Self, inHand), DeusExMover.Frob's NanoKeyRing

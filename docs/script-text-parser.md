@@ -155,8 +155,13 @@ frob, the re-read without a duplicate note, and BookOpen0 and DataCube2.
   been compared pixel for pixel with the original. Bold (`<B>`) changes no font,
   as ProcessTag ignores it.
 * `imageClass` DataVault images and `GotoLabel` are not reached in Training.
-* The transient XExtString that OpenText loads and deletes is not modelled as a
-  registry allocation; Play's host registry is not the measured GObjObjects.
+* Registry. The original's registry gains objects at an OpenText: the first text of the process loads Extension:XExtString from Extension.u (the
+  registered placeholder UClass is unhashed and the loaded class takes its slot, then its 21 Function and Property members are created), and the text
+  object `ExtString <name>` is one AddObject that OpenText frees before it returns (the parser is freed by CriticalDelete in the same tick). Measured
+  on the Training capture `kpd1` (DataCube0, tick 30; docs/stage-5-exit-criteria.md "Captures: Training phase 1"). The registry model takes them
+  (`OriginalObjectIndexModel.loadNativeClass`, `ScriptRuntime.modelExtStringLoad`, `EXT_STRING_CLASS_MEMBERS`) only when a measured start registry
+  seeds it (a harness); the member order is measured, not derived from the loader. Play's own text read still creates no objects, and a text that
+  is not found is not modelled.
 * The parser's reflected native fields keep their InitProperties values; script
   reads of them are not bound. The four shipped users (InformationDevices,
   ComputerUIWindow, QuotesWindow, CreditsScrollWindow) call only the natives;
