@@ -1051,6 +1051,75 @@ pitch 0) and draws the camera from 821.
 from `ViewRotation` hit the world at time 0 behind the player (`emp2`, normal (0, −1, 0)), so Play's camera stood at `Location`. That trace now runs along the
 body's yaw instead, as the original's does.
 
+### O3: the original's code on Play's inputs (2026-10-20)
+
+**What O3 is here.** A row of evidence class O3 claims that the native bodies a scene runs, given the inputs Play produced in that scene, compute what Engine.dll's code
+computes. The O2 oracles run those bodies on fabricated cases; this check runs them on what the scene made. `scripts/validate-stage5-o3.mjs --scene ladder|crate-stack`:
+
+1. **Record.** The census scenario of the row runs in Play, headless, with the recorder on (`src/runtime/o3-record.mjs`, off by default: a call site asks `o3.on` and,
+   only when recording, runs the same body through `o3Body`, which wraps the pawn's service functions for the one call and restores them). Each call of a native body
+   is captured with its entry state (the pawn's tracked state: Location, Velocity, Acceleration, OldLocation, Physics, bJustTeleported, bIsWalking, bHitSlopedWall,
+   bCanJump, MoveTimer, Base; a decoration's: the same without the Pawn flags, with numLandings), the constants it reads (zone gravity, speeds, collision extent...),
+   every service it called in order (MoveActor and line checks with what the world answered, WalkTexture, script events, the nested native bodies) with the tracked state
+   before and after each, and its exit state. `scripts/o3-adapters.mjs` says, per body, what that is.
+2. **Replay.** Each recorded call goes to the oracle driver of its body (`--o3` of `scripts/native-*-oracle.py`, with `scripts/native-o3-replay.py`): Unicorn runs the
+   original instructions from the recorded entry state; each service thunk the original reaches is answered from the recorded call at that point of the sequence, and Play's
+   state after that service is installed. A service the original calls that Play did not (or in another order) is a divergence, reported with both sides.
+3. **Compare.** The native's service calls (kind, arguments, the tracked state at each) and its exit state against Play's, number by number with `Object.is` (float32
+   bits, signed zeros). Scalars only: a mismatch prints the path of the first differing number.
+4. **Controls.** The same replay with an input of the first calls of each body changed (a constant by 2^-12, relatively; for processHitWall, whose recorded calls all
+   return at a gate, the gate's input) must differ from Play's outputs: the comparison sees what it claims to.
+5. **A/B.** The scene again with the recorder off and Play's own Rust kernels on: a SHA-256 over the player's and the scene's decorations' (the plants apart) Location, Velocity, Physics
+   and Acceleration at every tick must equal the recorded run's. Recording takes the JavaScript reference body where Play runs a kernel with no JavaScript service boundary
+   to observe (`ACTOR_PHYSICS=js` for the decoration falling kernel; the surface scan in walking-surface.mjs), so the A/B also shows those Rust bodies agree with the
+   reference on the scene. The player's own physics already runs in JavaScript (the pawn kernels decline a PlayerPawn).
+
+What the original's code decides is therefore replayed; what the world answers is the recording. The answers are their own rows: MoveActor's mutation tail (BumpWall,
+Bump, touches, zone changes), the line-check and MultiLineCheck results (work item 8's tracked-model oracles), the script events' bodies (UnrealScript the VM runs:
+`GrabDecoration`, `DropDecoration`, `DeusExDecoration.Bump`, `Landed`, `HitWall`, `Falling`), and the native bodies below that are stubbed in the replay:
+`SetPhysics` (0x103c95f0), `SetSupportBase` (0x103c9390) and `SetBase` (0x10369c80), whose O2 oracle covers `setWalkingPhysics` only (`validate-native-walking-callbacks`).
+
+**Result** (Linux host, 2026-10-20; the first O3 proofs; both scenes pass, every call equal, every control differs, the A/B digests equal):
+
+| Scene | Body (Engine.dll) | Where Play runs it | Oracle driver | Calls | Service calls |
+| --- | --- | --- | --- | ---: | ---: |
+| `ladder` (420 ticks) | surface prelude 0x103cc450, ordinary scan and the Ladder branch 0x103cc519..0x103cc6ca | `walkingSurfacePrelude` through the pawn view | `native-ladder-oracle.py` | 420 | 9,951 (9,357 line queries, 420 WalkTexture, 174 physFlying stubs) |
+| | `physFlying` 0x103d3040 with calcVelocity, stepUp, TwoWallAdjust | `physFlying` from the Ladder branch | `native-flying-oracle.py` | 174 | 332 (253 MoveActor, 79 processHitWall) |
+| | `physWalking` 0x103ca540 | `walking` | `native-walking-oracle.py` | 368 | 633 |
+| | `physFalling` 0x103d0a50, Pawn path | `falling` | `native-falling-oracle.py` | 52 | 106 |
+| | `processLanded` 0x103cef60, Pawn | `processLanded` | `native-landing-oracle.py` | 2 | 6 |
+| | MoveActor 0x103990e0: query, filter, math | `moveQuery` | `native-move-query-oracle.py` | 370 | 301 |
+| | `processHitWall` 0x103cecc0 | `processPlayerHitWall` | `native-walking-callbacks-oracle.py` | 79 | 0 (every call returns at a gate) |
+| `crate-stack` (485 ticks) | prelude | as above | `native-ladder-oracle.py` | 486 | 18,468 |
+| | `physWalking` (stepUp on a pushable decoration) | | `native-walking-oracle.py` | 443 | 1,817 |
+| | `physFalling`: 62 decorations, 43 the player | `falling`, `runSpawnedActorFalling` | `native-falling-oracle.py` | 105 | 186 |
+| | `processLanded`: 26 decorations (footprint block, Landed, SetPhysics), 2 the player | | `native-landing-oracle.py` | 28 | 85 |
+| | `physRolling` 0x103d4b80 of the pushed crate | `runActorRolling` | `native-rolling-oracle.py` | 312 | 516 |
+| | MoveActor query | `moveQuery` | `native-move-query-oracle.py` | 1,329 | 1,236 |
+| | `processHitWall` (the player) | | `native-walking-callbacks-oracle.py` | 161 | 0 |
+
+1,465 and 2,864 calls. The `ladder` scenario is `scripts/training-ladder-scene.mjs` (the census runs it through `validate-training-ladder.mjs`, unchanged). The
+`crate-stack` scenario grew to what the row says Play can do from the player's inputs: the crate carried and dropped as before, then the player walks into the dropped
+crate (DeusExDecoration.Bump on a settled decoration selects PHYS_Rolling and physRolling slides it from x 7252 to 7367) and runs and jumps onto it
+(processLanded, SetPhysics(PHYS_Walking, crate), physWalking with the crate as Base). The census still says `plays` (`effect`: rolled, pushedTo, climbed, standingAt).
+
+**Finding.** The replay of the pushed crate failed on the first call: the pre-state `OldLocation` of the first MoveActor differs (Play 7254.29, original 7252.22).
+The original's `physRolling` stores `OldLocation = Location` with the Velocity stores (0x103d4d34: `mov [esi+0x12c], edi`) before the first MoveActor, and
+`rolling.mjs` kept OldLocation in a local and never wrote the field. Fixed there (and in the field-backed host, `runActorRolling`); `validate-native-rolling` compares
+OldLocation now and passes its 321 cases; the O2 corpus did not read the field, which is why only the scene's replay saw it. After the fix 312 calls are equal.
+
+**What this does not establish.** The scenes' world answers (above); vertical stacking (a drop from the floor lands on the floor; not driven, so the row's "stack" is
+carry, drop, push and climb, said in its `weak`); `bBounce` decorations, fragments, inventory and projectiles (the adapters refuse them: the crate scene has none);
+fields outside the tracked state (Rotation, ViewRotation except the prelude's, the zone actors' own state); the scan's sine is read from the oracle's FGlobalMath table with its
+measured entry (`HARDWARE_TRIG`). **Row 5.2.3's footstep half is not this mechanism and is not attempted:** `PlayFootStep` is UnrealScript fired by the Walk
+animation's notify; its natives are the animation tick (the Rust actor tick has no JavaScript service boundary: it needs its own recording switch and the
+`native-animation-tick-oracle.py` driver extended to recorded cases), `Trace`/texture group for the floor, `AISendEvent` (the event manager oracle, which needs the
+`LoudNoise` events Play sends replayed with the CRT state) and `PlaySound` (Galaxy). The scene would be a held walking key through the fixture
+(`driveLegacy`), which the original-side harness cannot post, so O3 is the only possible class there.
+
+**Adding a body.** An adapter in `o3-adapters.mjs` (before, services, after), its driver's `--o3` method (state install, the service thunks answered through
+`Replay.take`), an entry in `ORACLES` and `CONTROLS` of the validator, and the call site's `o3Wants`/`o3Body` hook.
+
 ## Scoreboard (2026-10-19, after the merge of the Island batches)
 
 `node scripts/validate-stage5-acceptance.mjs --census .work/stage5-census-2026-10-19-final2.json --report .work/stage5-gate-2026-10-19-final2.json` on master `a786b4e`
@@ -1246,6 +1315,7 @@ node scripts/census-stage5.mjs [--only slug,slug] [--json out.json]       # driv
 node scripts/validate-stage5-acceptance.mjs                               # the gate: exit 1 until every criterion passes
 node scripts/validate-stage5-acceptance.mjs --report [file]               # the scoreboard, exit 0
 node scripts/validate-stage5-acceptance.mjs --markdown [file]             # the tables of this page from a report
+node scripts/validate-stage5-o3.mjs --scene ladder                       # an O3 proof (ladder, crate-stack): the scene's native physics calls replayed through Engine.dll on Play's inputs; --keep/--reuse/--no-ab ([O3](#o3-the-originals-code-on-plays-inputs-2026-10-20))
 node scripts/validate-stage5-live.mjs --scene cmb1                       # a proof check: a stored Island scene (cmb1..cmb7, die1, the devices hck1..emp2, the routes kil1..air1, the conversations pG..kC) replayed in Play (SKIP without the store)
 node scripts/validate-stage5-live.mjs --scene cmb1 --print-capture       # the original's capture command of that scene (writes its tracer config; the bottle lock first; --frozen-frames: the frozen phase's window frames)
 node scripts/validate-stage5-live.mjs --scene cmb1 --compare-only        # judge the stored replay again after a change to the comparison alone (not after a Play change)
