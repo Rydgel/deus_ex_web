@@ -665,9 +665,8 @@ export const SCENES = {
   // refocuses the user name), a right login opens the first screen (the e-mail list with its first row selected, or the security screen with the focus on its first choice).
   // trm1, ComputerPersonal0 (UNATCO, users GUEST/GUEST and KLloyd/squishy; the e-mails are DeusExText `01_EmailMenu_<user>`): a wrong password, KLloyd (two e-mails: ArrowDown on
   // the list selects the second), Escape (logout: back to the login screen), GUEST (`No Email Today!`), Escape twice (the second closes the terminal, which turns off).
-  // (`speech`: UNATCOTroop6's bark near the computer drives Pawn.LipSynch, whose mouth letters are a measured host input; `textLoads`: the registry comparison leaves out the
-  // original's lazy load of DeusExText's ExtString objects, which Play does not make: see the check's note)
-  trm1: {map: '01_NYC_UNATCOIsland', ticks: 720, early: PLACE(-4335, 2010, -170, 49152, -7500), options: ['--typed-chars'], devices: ['ComputerPersonal0:Computers'], speech: true, textLoads: true, drawTiming: true,
+  // (`speech`: UNATCOTroop6's bark near the computer drives Pawn.LipSynch, whose mouth letters are a measured host input)
+  trm1: {map: '01_NYC_UNATCOIsland', ticks: 720, early: PLACE(-4335, 2010, -170, 49152, -7500), options: ['--typed-chars'], devices: ['ComputerPersonal0:Computers'], speech: true, drawTiming: true,
     cmds: `100:ParseRightClick|200:@type KLloyd|${KEY(220, 'Tab')}|240:@type wrongpw|${KEY(260, 'Enter')}|300:@type KLloyd|${KEY(320, 'Tab')}|340:@type squishy|${KEY(360, 'Enter')}`
       + `|${KEY(420, 'ArrowDown')}|${KEY(480, 'Escape')}|520:@type GUEST|${KEY(540, 'Tab')}|560:@type GUEST|${KEY(580, 'Enter')}|${KEY(640, 'Escape')}|${KEY(680, 'Escape')}`},
   // atm1, ATM0 (account 230023, PIN 4558, balance 200; no animation): a wrong PIN ("LOGIN ERROR": both fields cleared), the right one (the withdraw screen: the amount field has the
@@ -925,21 +924,6 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
       console.log(`registry: ${oGC.length} GC creations in the original, ${pGC.length} in Play (largest difference of the running counts at a tick: ${worst}); they are not compared one by one`);
       if (oGC.length !== pGC.length || worst > 64) problems.push(`GC creations: the original's ${oGC.length}, Play's ${pGC.length}, running counts up to ${worst} apart`);
       a = a.filter(x => x.cls !== 'GC'); b = b.filter(x => x.cls !== 'GC');
-    }
-    // `textLoads`: a scene that reads DeusExText's texts through a window (the e-mail screens, ProcessDeusExText -> DeusExTextParser.OpenText). The original's OpenText is
-    // StaticLoadObject(XExtString, "DeusExText.<name>"): the first one loads the class ExtString (the Class, its Functions and their parameters: 21 objects) and every text is an
-    // ExtString object it creates, reads and deletes (`ExtString:01_EmailMenu_klloyd`, `01_Email01`, ...). Play reads the package's text without registry objects
-    // (script-text-parser-natives.mjs createExtStringSource), so those creations are the original's alone: left out of the comparison, and counted. The parsers themselves
-    // (DeusExTextParser0...) and everything else stay compared, in class and tick.
-    if (scene.textLoads) {
-      const first = a.findIndex(o => o.cls === 'Class' && o.name === 'ExtString'), skipped = [];
-      const kept = a.filter((o, i) => {
-        const inClassLoad = first >= 0 && i >= first && a.slice(first, i + 1).every(x => x.cls !== 'ExtString');
-        if (o.cls === 'ExtString' || inClassLoad) { skipped.push(o); return false; }
-        return true;
-      });
-      console.log(`registry: ${skipped.length} creations of the original's lazy load of DeusExText's ExtString (the class's ${skipped.filter(o => o.cls !== 'ExtString').length} objects and ${skipped.filter(o => o.cls === 'ExtString').length} texts: ${skipped.filter(o => o.cls === 'ExtString').map(o => o.name).join(' ')}) are not compared`);
-      a = kept;
     }
     const same = (o, q) => stem(o.cls) === stem(q.cls) && o.u === q.u && (stem(o.cls) !== 'sound' || o.name === q.name);
     let i = 0; while (i < a.length && i < b.length && same(a[i], b[i])) i++;
