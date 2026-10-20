@@ -463,18 +463,6 @@ export const SCENES = {
     devices: ['WeaponPistol0:Weapon', 'Ammo10mm0:Actor', 'Switch3:Actor', 'DeusExMover44:DeusExMover', 'DeusExMover1:DeusExMover', 'DeusExMover4:DeusExMover', 'DeusExMover7:DeusExMover',
       'BreakableGlass0:DeusExMover'],
     flags: ['DL_TArgetRange_Played', 'DL_TArgetRangeShot1_Played'], options: ['--player-talk', '--inventory']},
-  // rng2, rng1 and the second lane (row 5.1.2): a second Ammo10mm box (Ammo10mm1, yaw 35000 pitch -2750) taken at 1000; DL_TArgetRangeShot1's last event opens the
-  // cover DeusExMover28 over Switch13 (2692), the player is dropped at the second station (106, -590) at 2790, the right button presses Switch13 (DeusExMover5 and
-  // BreakableGlass1 slide in from y -3280 to -1792, not -1216), and the glass is 1,202 units off: the pistol's recoil lifts the view 150 units a shot, so the aim is
-  // set again 10 ticks before each of eleven Enter edges. The glass breaks and DL_TArgetRangeShot2 plays.
-  rng2: {map: '00_TrainingCombat', ticks: 3950, early: 'KillAll FlyGenerator', pawns: ['UNATCOTroop1', 'UNATCOTroop3'],
-    cmds: [INTO(-8, -515, -30), AIM(1, 32768, -5400), '935:ParseRightClick', AIM(960, 32768, -2800), '975:ParseRightClick', AIM(985, 35000, -2750), '1000:ParseRightClick', '1030:ActivateBelt 1',
-      INTO(24, -590, -90, 1060), AIM(1060, 49152, -8700), '1120:ParseRightClick', AIM(1380, 48752, -200), SHOTS([1400, 1460, 1520, 1580, 1640, 1700]),
-      INTO(106, -590, -90, 2790), AIM(2790, 49152, -8700), '2850:ParseRightClick',
-      ...[3110, 3170, 3230, 3290, 3350, 3410, 3610, 3670, 3730, 3790, 3850].map(t => AIM(t, 49344, -104)), SHOTS([3120, 3180, 3240, 3300, 3360, 3420, 3620, 3680, 3740, 3800, 3860])].join('|'),
-    devices: ['WeaponPistol0:Weapon', 'Ammo10mm0:Actor', 'Ammo10mm1:Actor', 'Switch3:Actor', 'Switch13:Actor', 'DeusExMover44:DeusExMover', 'DeusExMover1:DeusExMover', 'DeusExMover28:DeusExMover',
-      'DeusExMover4:DeusExMover', 'DeusExMover5:DeusExMover', 'DeusExMover7:DeusExMover', 'BreakableGlass0:DeusExMover', 'BreakableGlass1:DeusExMover'],
-    flags: ['DL_TArgetRange_Played', 'DL_TArgetRangeShot1_Played', 'DL_TArgetRangeShot2_Played'], options: ['--player-talk', '--inventory']},
   // lam1, the demolition (row 5.1.4): the shelf of LAMs (2121, 1536) is in the security bots' room, so the LAM and a pistol are summoned and picked up facing away from
   // BreakableWall1 at (3000, 1700), 136 units south of its face (the corridor x 2940 to 3070); the LAM drawn (ActivateBelt 1) and the player dropped at (3000, 1805)
   // facing north, 32 units from the wall: WeaponLAM.Tick's NearWallCheck sets bNearWall, and the Enter edge at 260 places the LAM on the wall (WeaponLAM.Fire,
@@ -501,6 +489,11 @@ export const SCENES = {
   ins1: {map: '00_TrainingCombat', ticks: 900, conversation: true, early: 'KillAll FlyGenerator', pawns: ['UNATCOTroop3', 'UNATCOTroop1'],
     cmds: [AIM(1, 0, -10130), '20:summon DeusEx.WeaponPistol', '60:ParseRightClick', '80:summon DeusEx.MedKit', '120:ParseRightClick', '140:summon DeusEx.WeaponLAM', '180:ParseRightClick',
       INTO(561, -40, 40, 245), AIM(245, 49152), INTO(800, 0, 10, 560), INTO(561, -40, 40, 600)].join('|'), flags: ['MunitionsTrooperReady']},
+  // ins2, ins1 without the second drop (row 5.4.2): the player stays inside the trooper's radius with MunitionsTrooperReady cleared by the Take, so the radius greeting
+  // MunitionsTrooperFrob (flag false, radius 160) plays after the 10 s gate on the Take's last play (about 823).
+  ins2: {map: '00_TrainingCombat', ticks: 1000, conversation: true, early: 'KillAll FlyGenerator', pawns: ['UNATCOTroop3', 'UNATCOTroop1'],
+    cmds: [AIM(1, 0, -10130), '20:summon DeusEx.WeaponPistol', '60:ParseRightClick', '80:summon DeusEx.MedKit', '120:ParseRightClick', '140:summon DeusEx.WeaponLAM', '180:ParseRightClick',
+      INTO(561, -40, 40, 245), AIM(245, 49152)].join('|'), flags: ['MunitionsTrooperReady']},
 };
 export const SCENE_FLAGS = ['--no-ghost', '--perception', '--player-gear', '--player-health', '--los-flag'];
 // The device scenes add the player's eye and bob (the first-person item's placement: Inventory.RenderOverlays, CalcDrawOffset): the stored combat scenes
