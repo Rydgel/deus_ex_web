@@ -303,6 +303,13 @@ export const SCENES = {
   // (ActivateAugmentation through the User.ini binding) turns AugLight on: Augmentation.Activate, its Beam spawned and moved with the player, the
   // energy drain of Augmentation.Timer (--player-view traces Energy).
   aug1: {map: '00_Training', ticks: 600, early: PLACE(4600, 700, -85, 0), cmds: '60:@down F12|60:@up F12', view: true},
+  // DataLinks (row 5.4.1): the player set clear of dl_door's DataLinkTrigger24 (-310, 841, radius 150) and slid into it by a console Velocity (a placement
+  // inside never Touches it): DataLinkTrigger.Touch -> StartDataLinkTransmission('DL_door'); 60 ticks later set clear of dl_key's DataLinkTrigger4 (385, 849,
+  // radius 200) and slid into it while DL_door plays: DL_key waits behind it (DeusExPlayer.StartDataLinkTransmission's queue) and plays when it ends;
+  // each sets its _Played flag. --player-talk traces DataLinkPlay.
+  dlk1: {map: '00_Training', ticks: 1500, early: PLACE(-488, 841, -85, 0),
+    cmds: `30:set DeusEx.JCDentonMale Velocity (X=400,Y=0,Z=0)|${INTO(150, 849, -85, 90)}|92:set DeusEx.JCDentonMale Velocity (X=400,Y=0,Z=0)`,
+    options: ['--player-talk'], flags: ['DL_door_Played', 'DL_key_Played']},
   // a baton knock-out (row 5.1.7): a WeaponBaton summoned, picked up and drawn at cmb2's pose (700 units behind Terrorist0, where nobody notices the player; a
   // summoned item's landing is a noise, and next to the target it wakes it); at tick 600, once Terrorist18 sits on Chair9 (2017.7, -1429.6, facing yaw 48128),
   // the player is placed by the same console lines 58 units behind it at his rest height, facing its back; the Enter edge at 630 swings the baton

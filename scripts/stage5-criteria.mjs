@@ -153,7 +153,11 @@ add('5.3.13', '00_TrainingFinal and 01_NYC_UNATCOIsland movers', 'a switch-drive
 
 // 5.4 Conversation -----------------------------------------------------------------------------------------------------------------------
 add('5.4.1', '00_Training', 'the 18 DataLinks of the course start at their triggers, queue behind a playing one, end and set DL_*_Played; DL_Lockpick starts from the Mission00 timer', 'O1', 'training-datalinks',
-  'O1: the original\'s InfoLink window frames and the Played flags per tick (the window is not yet compared)', {have: ['validate-training-datalinks, validate-training-datalink-live (P)', 'script-datalink-original.md']});
+  'O1: the original\'s InfoLink window frames and the Played flags per tick (the window is not yet compared)', {proof: live('dlk1', 'cbr1'),
+    have: ['validate-stage5-live dlk1 (O1 2026-10-20, the Linux host, PASS: the player slid by a console Velocity into dl_door\'s DataLinkTrigger24 at 32 and, while DL_door plays, into dl_key\'s DataLinkTrigger4 near 100: one DataLinkPlay from 32 to 1389, DL_door\'s InfoLink display and ConHistory at 32, DL_key\'s, queued, at 532 when DL_door ends; DL_door_Played and DL_key_Played set, equal at the end; 19 actors and every creation equal for 1,500 ticks)',
+      'validate-stage5-live cbr1 (DL_Lockpick from Mission00.Timer at 301, once one Cratepick crate is left)',
+      'validate-training-datalinks, validate-training-datalink-live (P)', 'script-datalink-original.md'], need: null,
+    weak: 'two of the 18 triggers are driven (dl_door, dl_key, with the queue) and the timer\'s DL_Lockpick: the other 16 run the same DataLinkTrigger.Touch -> StartDataLinkTransmission; the InfoLink window\'s frames are not compared, only its objects\' creation'});
 add('5.4.2', '00_TrainingCombat', 'the instructor takes the inventory: MunitionsTrooperTake/Frob (29 TransferObject events), MunitionsTrooperReady, Mission00.RemoveAllInventory', 'O1', 'instructor-take',
   'O1: live trace of the original through the conversation with the inventory per tick', {have: ['validate-instructor-conversation (P)']});
 add('5.4.3', '01_NYC_UNATCOIsland', 'MeetPaul: the three weapon choices (Minicrossbow, GEP gun, rifle) hand JC the weapon, the map image and three goals', 'O1', 'meet-paul',
