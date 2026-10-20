@@ -50,6 +50,34 @@ export class ScriptObjectRegistry {
   }
 }
 
+/** A live replay's measured names (validation only, live-probe.mjs objectTrace): the registered
+ * objects of `renames` ([{object, outerIndex, name}]) take the names the original's objects of the
+ * same class creation order hold at the frozen start (the registry dump). All leave their hash
+ * chains first, then each takes its interned name and enters the chain of (Outer ^ Name) & 0xfff
+ * at its head, as HashObject does. A name another registered object holds under the same Outer
+ * (not one of these) is not taken: that entry is returned in `kept`. */
+export function renameRegisteredObjects(registry,renames,{internName,findObject}) {
+  if(!(registry instanceof ScriptObjectRegistry)||typeof internName!=='function'||typeof findObject!=='function')
+    throw new Error('Renaming requires the registry, the name table and object lookup');
+  const moving=new Set(renames.map(entry=>entry.object)),kept=[],done=[];
+  for(const entry of renames){
+    const holder=findObject(entry.object.outer??null,entry.name);
+    if(holder&&!moving.has(holder))kept.push(entry);
+  }
+  const keptSet=new Set(kept);
+  const todo=renames.filter(entry=>!keptSet.has(entry));
+  for(const {object,outerIndex} of todo)registry.unhash(object,outerIndex);
+  for(const {object,outerIndex,name} of todo){
+    const resolved=internName(name);
+    if(!resolved||typeof resolved.name!=='string'||!Number.isInteger(resolved.index))throw new Error(`Renaming requires an interned FName for ${name}`);
+    object.name=resolved.name;object.nameIndex=resolved.index;
+    const hash=(outerIndex^object.nameIndex)&0xfff;
+    object.hashNext=registry.buckets[hash];registry.buckets[hash]=object;
+    done.push(object);
+  }
+  return {renamed:done,kept};
+}
+
 /** Seed a registry at a measured GObjObjects state so runtime spawns continue
  * the original construction order. `count` is the live high-water mark (Core.dll
  * +0x19e62c); the objects array is that long with holes for the freed slots, so

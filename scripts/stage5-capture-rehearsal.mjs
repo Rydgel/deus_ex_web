@@ -113,8 +113,8 @@ for (let tick = 1; tick <= ticks; tick++) {
     + ` | player h${c.read(p, 'Health')} [${regions.map(n => c.read(p, n)).join(',')}] ${c.state(p).split('.').pop()} inHand=${c.read(p, 'inHand')?.name ?? '-'}`
     + ` frob=${c.read(p, 'FrobTarget')?.name ?? '-'} tracers=${c.byClass('Tracer').length}${talk()}`
     + (scene?.flags ?? option('flags', 'StatueAlarmTriggered').split(',')).filter(Boolean).map(f => ` ${f}=${Number(c.flag(f.toLowerCase()))}`).join('')
-    // --props "Name=Prop,Prop;Name2=..." (Name @weapon: the player's Weapon): more fields printed with the line
-    + (option('props', '') ?? '').split(';').filter(spec => spec.includes('=')).map(spec => { const [name, list] = spec.split('='); const a = name === '@weapon' ? c.read(p, 'Weapon') : c.actor(name);
+    // --props "Name=Prop,Prop;Name2=..." (Name @weapon: the player's Weapon; @player: the player): more fields printed with the line
+    + (option('props', '') ?? '').split(';').filter(spec => spec.includes('=')).map(spec => { const [name, list] = spec.split('='); const a = name === '@weapon' ? c.read(p, 'Weapon') : name === '@player' ? p : c.actor(name);
       return ` ${name}:${a ? `${c.state(a).split('.').pop()}/${list.split(',').map(n => short(c.read(a, n))).join('/')}` : '-'}`; }).join('')
     + devices.map(d => { const a = deviceActor(d); return !a ? ` ${d.name}:-` : c.gone(a) ? ` ${d.name}:gone` : ` ${d.name}:${c.state(a).split('.').pop()}/${(DEVICE_SUMMARY[d.cls] ?? []).map(n => short(c.read(a, n))).join('/')}`; }).join('');
   if (line !== last || tick % 60 === 0) { console.log(tick, line); last = line; }

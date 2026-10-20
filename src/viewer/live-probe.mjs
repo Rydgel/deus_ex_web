@@ -4,6 +4,7 @@ import { createNavTrace } from '../runtime/nav-trace.mjs';
 import { execAICanSee } from '../runtime/script-pawn-perception.mjs';
 import { setTouchTrace } from '../runtime/actor-touch.mjs';
 import { hudLogClock } from './view-probe.mjs';
+import { renameRegisteredObjects } from '../runtime/script-object-construction.mjs';
 
 /** Validation only (scripts/live-acceptance.mjs, docs/visual-acceptance.md
  * "Live scenes"): the simulation side of the live-scene comparison. It
@@ -330,6 +331,11 @@ export function liveProbe(game, args = {}) {
       // appends to GObjAvailable when a purge releases it, as a pre-placed actor's measured index is (script-level-collection.mjs `release`).
       const number = name => Number(/\d+$/.exec(name)?.[0] ?? NaN), byNumber = (a, b) => a.n - b.n;
       const paired = [], unpaired = [], madePending = [];
+      // The names, too (Stage 5 work item 13): a load-made actor's name is its class's session counter, so Play's differ from the original's (Play's
+      // Candybar3 is the original's Candybar2), and a name made after the seed would then differ as well: MakeUniqueObjectName (Core 0x101575b0) starts
+      // at the class counter the trace measures (classCounters) and skips a name an object holds, and Play's Candybar3 held the original's next name.
+      // Each paired actor takes the dump's name of the original's actor it stands for (script-object-construction.mjs renameRegisteredObjects).
+      const originalNames = args.objectTrace.seed.originalNames !== false, renames = [];
       for (const [cls, list] of made) {
         const ours = list.map(entry => ({ ...entry, n: number(entry.actor.name) })).sort(byNumber);
         const theirs = (classRows[cls] ?? []).filter(([name]) => !exportNames.has(name)).map(([name, index]) => ({ name, index, n: number(name) })).sort(byNumber);
@@ -339,8 +345,19 @@ export function liveProbe(game, args = {}) {
           instance.globalIndex = index; held.add(index);
           instance.nativeObject.originalIndex = index; instance.nativeObject.originalModel = registry.original;
           if (pending) madePending.push(`${actor.name}=${theirs[k].name}`);
+          if (originalNames && actor.name !== theirs[k].name) renames.push({ actor, object: instance.nativeObject, name: theirs[k].name });
         });
         paired.push({ cls, count: ours.length, play: `${ours[0].n}..${ours.at(-1).n}`, original: `${theirs[0].n}..${theirs.at(-1).n}` });
+      }
+      let renamedCount = 0, keptNames = [];
+      if (renames.length) {
+        const construction = runtime.actorLifecycle.construction;
+        const outerIndexOf = object => !object.outer ? 0 : Number.isInteger(object.outer.index) ? object.outer.index : object.outer.hashIndex;
+        const { renamed, kept } = renameRegisteredObjects(registry, renames.map(entry => ({ ...entry, outerIndex: outerIndexOf(entry.object) })),
+          { internName: construction.internName, findObject: construction.findObject });
+        const done = new Set(renamed);
+        for (const entry of renames) if (done.has(entry.object)) entry.actor.name = entry.object.name;
+        renamedCount = renamed.length; keptNames = kept.map(entry => `${entry.actor.name}->${entry.name}`);
       }
       // Frees of objects that existed at the frozen start (see live-acceptance.mjs registrySeed). An object Play holds under the same index is
       // freed by Play itself: no pre-free for it. Of the others, one with an anchor (the original's registry event before it in the same tick)
@@ -351,7 +368,7 @@ export function liveProbe(game, args = {}) {
       args.objectTrace.pending = rest.filter(entry => !anchoredHere(entry)).map(entry => ({ ...entry }));
       args.objectTrace.anchored = rest.filter(anchoredHere).map(entry => ({ ...entry }));
       args.objectTrace.stats = { anchored: 0, late: 0, rejected: 0 };
-      out.objectTrace = { measured: given, pendingDeleted: givenPending, paired, unpaired, madePending, player: live?.key ?? null, preFrees: rest.length,
+      out.objectTrace = { measured: given, pendingDeleted: givenPending, paired, unpaired, madePending, renamed: renamedCount, keptNames, player: live?.key ?? null, preFrees: rest.length,
         anchored: args.objectTrace.anchored.length, own: own.map(entry => `${entry.cls}.${entry.name}`) };
     }
     const objects = runtime.objectLog ??= [], sounds = runtime.soundLog ??= [];

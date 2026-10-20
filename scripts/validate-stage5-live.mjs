@@ -273,6 +273,36 @@ export const SCENES = {
       + `|140:ActivateBelt 1|${SHOTS([180])}|240:summon DeusEx.Candybar|280:ParseRightClick|320:ActivateBelt 1|${SHOTS([360])}`
       + `|420:set DeusEx.JCDentonMale ViewRotation (Pitch=0,Yaw=0,Roll=0)|${INTO(-5977, 1327, -88, 450)}`,
     options: ['--inventory'], devices: ['SkillAwardTrigger1:Actor']},
+  // itm1's items again, and the award: set inside SkillAwardTrigger1 the player touches nothing (itm1: SkillPointsAvail 5000 throughout, in both programs):
+  // `walk`'s SetCollision finds him already overlapping it, and Touch comes only with a new overlap (and a roof covers it: a drop from above lands on that).
+  // So at 450 he is set 70 units west of its centre, clear of it, and the console sets his Velocity to 300 east: physWalking's MoveActor carries him into
+  // it (Touch, SkillAwardTrigger.Touch -> SkillPointsAdd 25) as the census's walk does.
+  itm2: {map: '01_NYC_UNATCOIsland', ticks: 900, early: PLACE(-6100, 1327, -88, 32768),
+    cmds: '20:set DeusEx.JCDentonMale HealthTorso 40|30:summon DeusEx.MedKit|60:set DeusEx.JCDentonMale ViewRotation (Pitch=-10130,Yaw=32768,Roll=0)|100:ParseRightClick'
+      + `|140:ActivateBelt 1|${SHOTS([180])}|240:summon DeusEx.Candybar|280:ParseRightClick|320:ActivateBelt 1|${SHOTS([360])}`
+      + `|420:set DeusEx.JCDentonMale ViewRotation (Pitch=0,Yaw=0,Roll=0)|${INTO(-6047, 1327, -88, 450)}|452:set DeusEx.JCDentonMale Velocity (X=300,Y=0,Z=0)`,
+    options: ['--inventory'], devices: ['SkillAwardTrigger1:Actor']},
+  // 00_Training (rows 5.3.4, 5.3.7, 5.1.1): poses from the census scenarios.
+  // jumps (row 5.3.4): the player placed at the obstacle course (6991, -55), facing -Y; two Space edges (Jump through the User.ini binding), each a
+  // PlayerPawn.DoJump into PHYS_Falling and a landing; the walk across and the crouch under the pipes are held keys the harness cannot post.
+  jmp1: {map: '00_Training', ticks: 300, early: PLACE(6991, -55, 17, 49152), cmds: '30:@down Space|30:@up Space|150:@down Space|150:@up Space'},
+  // the contaminated pool (row 5.3.7): WaterZone0 (5574, -4011) and its DamageTrigger1; hzm1 swims in it bare (moved in after the first unfrozen tick, as
+  // the Island's swim scenes are); hzm2 first picks up HazMatSuit2 (6584, -4057), puts it in hand and activates it (Enter edge: ChargedPickup.Activate),
+  // then is moved into the pool: the suit's protection and its charge per tick.
+  hzm1: {map: '00_Training', ticks: 700, early: PLACE(6538, -3980, 50, 54796), cmds: INTO(5574, -4011, -150), options: ['--player-breath']},
+  hzm2: {map: '00_Training', ticks: 900, early: PLACE(6538, -3980, 50, 54796, -800),
+    cmds: `40:ParseRightClick|80:ActivateBelt 1|${SHOTS([120])}|${INTO(5574, -4011, -150, 180)}`, options: ['--player-breath'], devices: ['HazMatSuit2:Pickup']},
+  // the crowbar and a crate (row 5.1.1): a WeaponCrowbar summoned facing away from the crates, picked up and drawn; the player turned on
+  // CrateBreakableMedGeneral1 (1022, -275, under CrateBreakableMedGeneral2) 70 units north of it; Enter edges swing it (WeaponCrowbar's melee
+  // TraceFire) until the crate breaks (DeusExDecoration.TakeDamage -> Destroyed: fragments and contents).
+  cbr1: {map: '00_Training', ticks: 900, early: PLACE(1022, -205, -85, 16384),
+    cmds: `20:summon DeusEx.WeaponCrowbar|50:set DeusEx.JCDentonMale ViewRotation (Pitch=-10130,Yaw=16384,Roll=0)|90:ParseRightClick|130:ActivateBelt 1`
+      + `|170:set DeusEx.JCDentonMale ViewRotation (Pitch=-7100,Yaw=49152,Roll=0)|${SHOTS([200, 260, 320, 380, 440, 500])}`,
+    devices: ['CrateBreakableMedGeneral1:Decoration', 'CrateBreakableMedGeneral2:Decoration']},
+  // AugLight in the dark room (row 5.3.2): the player placed inside it (between darkdoor and darkdoor2, the cratelight TriggerLights off); an F12 edge
+  // (ActivateAugmentation through the User.ini binding) turns AugLight on: Augmentation.Activate, its Beam spawned and moved with the player, the
+  // energy drain of Augmentation.Timer (--player-view traces Energy).
+  aug1: {map: '00_Training', ticks: 600, early: PLACE(4600, 700, -85, 0), cmds: '60:@down F12|60:@up F12', view: true},
   // a baton knock-out (row 5.1.7): a WeaponBaton summoned, picked up and drawn at cmb2's pose (700 units behind Terrorist0, where nobody notices the player; a
   // summoned item's landing is a noise, and next to the target it wakes it); at tick 600, once Terrorist18 sits on Chair9 (2017.7, -1429.6, facing yaw 48128),
   // the player is placed by the same console lines 58 units behind it at his rest height, facing its back; the Enter edge at 630 swings the baton

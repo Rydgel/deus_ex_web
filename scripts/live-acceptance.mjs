@@ -264,6 +264,8 @@ const DEVICE_FIELDS = {
     ['confusionTimer', 'confusionTimer', 0x464, 'f'], ['alarmTimeout', 'alarmTimeout', 0x424, 'i32']],   // AlarmUnit0
   Multitool: [['NumCopies', 'NumCopies', 0x438, 'i32'], ['bBeingUsed', 'bBeingUsed', 0x478, 'bit', 0x1], ['bActive', 'bActive', 0x31c, 'bit', 0x4], ['beltPos', 'beltPos', 0x418, 'i32']],   // Multitool3
   Decoration: DECORATION_FIELDS,
+  // a charged pickup in use (the HazMat suit of row 5.3.7): Pickup.Charge (+0x380, what ChargedPickup's Timer spends), Inventory.bActive, NumCopies (HazMatSuit2)
+  Pickup: [['Charge', 'Charge', 0x380, 'i32'], ['bActive', 'bActive', 0x31c, 'bit', 0x4], ['NumCopies', 'NumCopies', 0x438, 'i32']],
   DeusExMover: [['doorStrength', 'doorStrength', 0x544, 'f'], ['bDestroyed', 'bDestroyed', 0x574, 'bit', 0x1], ['bLocked', 'bLocked', 0x534, 'bit', 0x2], ['lockStrength', 'lockStrength', 0x538, 'f'],
     ['KeyNum', 'KeyNum', 0x377, 'u8'], ['PrevKeyNum', 'PrevKeyNum', 0x378, 'u8'], ['bInterpolating', 'bInterpolating', 0x1ec, 'bit', 0x80], ['bPicking', 'bPicking', 0x54c, 'bit', 0x4],
     ['curPick', 'curPick', 0x56c, 'obj'], ['PhysAlpha', 'PhysAlpha', 0x214, 'f'], ['PhysRate', 'PhysRate', 0x218, 'f'], ['bOpening', 'bOpening', 0x4ec, 'bit', 0x1], ['bDelaying', 'bDelaying', 0x4ec, 'bit', 0x2]],   // DeusExMover5
@@ -1215,7 +1217,9 @@ async function play() {
         }
       }
       return {count, freeIndices: free ? free.split(/\s+/).map(Number) : [], preFrees, packages,
-        measured: Object.fromEntries([...rowsByKey].filter(([, index]) => index !== null)), classRows, player};
+        measured: Object.fromEntries([...rowsByKey].filter(([, index]) => index !== null)), classRows, player,
+        // the paired load-made actors take the original's names (live-probe.mjs; work item 13), unless --own-names keeps Play's own
+        originalNames: !flag('own-names')};
     };
     const touchWindow = option('touch-trace', null)?.split(':').map(Number);   // --touch-trace first:last: EndTouch/AddTouch/BeginTouch of those ticks (touch-play.json)
     const navPawns = option('nav-trace', null), [navFirst, navLast] = option('nav-ticks', `1:${trace.length}`).split(':').map(Number);
@@ -1373,7 +1377,8 @@ async function play() {
         `${o.preFrees} pre-frees (${o.anchored} at their anchor)${o.own.length ? `, none for ${o.own.join(' ')} (Play frees it)` : ''}`
         + `${o.paired?.length ? `; the actors made before the seed paired with the dump's by class creation order, each handed its measured slot: ${
           o.paired.map(p => `${p.cls} ${p.count} (${p.play} = ${p.original})`).join(', ')}${o.madePending?.length ? `, pending deletion ${o.madePending.join(' ')}` : ''}` : ''}`
-        + `${o.unpaired?.length ? `; not paired (Play's count, the original's): ${o.unpaired.map(u => `${u.cls} ${u.play}/${u.original}`).join(', ')}` : ''}`);
+        + `${o.unpaired?.length ? `; not paired (Play's count, the original's): ${o.unpaired.map(u => `${u.cls} ${u.play}/${u.original}`).join(', ')}` : ''}`
+        + `${o.renamed ? `; ${o.renamed} renamed to the original's names` : ''}${o.keptNames?.length ? `; names held by another object, kept: ${o.keptNames.join(' ')}` : ''}`);
     }
     const touch = [], rows = [], nav = [], script = [], setup = [], commandLog = [], events = [], objects = [], sounds = [], gcAllocs = [];
     let stalls = 0, levelEnd = null, preFreeStats = null;
