@@ -7,8 +7,8 @@ single-player maps reach only boundaries assigned to later stages in the startup
 census ([completion record and coverage limits](docs/stage-3-exit-criteria.md#stage-3-beyond-training-the-all-maps-startup-census)).
 **Stage 4 presentation is complete** (2026-10-17): its gate passes 70 of 70 in one
 run ([Stage 4 close](docs/stage-4-exit-criteria.md#stage-4-close)). **Stage 5
-gameplay is in progress**: its gate passes 47 of 50 criteria (2026-10-20), each on
-original captures of Liberty Island replayed tick by tick in Play (see below).
+gameplay is in progress**: its gate passes 49 of 50 criteria (2026-10-20), each on
+original captures of Liberty Island and Training replayed tick by tick in Play (see below).
 
 The target is **100% original fidelity**. Every supported behavior needs original
 data, script, native-code or measured evidence. Unverified substitutes remain
@@ -198,12 +198,12 @@ the three Training maps and Liberty Island, each with the original-side evidence
 that would prove it. `scripts/census-stage5.mjs` drives them all in Play (50 play
 as of 2026-10-19), and `scripts/validate-stage5-acceptance.mjs` is the gate.
 
-**Gate: 47 of 50 pass, none fail, 3 await their capture or comparison** (2026-10-20). The passing
+**Gate: 49 of 50 pass, none fail, 1 awaits the user's decision (the footsteps of 5.2.3)** (2026-10-20). The passing
 rows are proven by live traces of the original game: `DeusEx.exe` runs under
 CrossOver (the Mac) or Wine (the Linux host) with a tracer (`tools/dx-live-win.c`, `scripts/live-original.sh`) that
 records the watched actors, the random stream, the AI events and every object
 creation per tick. Play then replays the same inputs and must match them tick by
-tick (`scripts/validate-stage5-live.mjs --scene <tag>`, 50 stored Island scenes). Two
+tick (`scripts/validate-stage5-live.mjs --scene <tag>`, stored scenes of the Island and the three Training maps). Two
 rows on native movement bodies are O3 comparisons instead: every call of the ladder and
 crate-stack scenes, replayed through Engine.dll on Play's recorded inputs
 (`scripts/validate-stage5-o3.mjs`). Proven so far:
@@ -222,7 +222,10 @@ crate-stack scenes, replayed through Engine.dll on Play's recorded inputs
   flags that change the world.
 - **Exploration:** breath and drowning under water, the contaminated pool with and without
   the HazMat suit, carrying and throwing a decoration, fall damage, jumping, the ladder,
-  pushing and climbing a crate, AugLight in the dark room, items and skill points.
+  pushing and climbing a crate, AugLight in the dark room, items and skill points; Training's
+  doors, key ring, lockpick, datacube, keypads and Multitool hack, the cadet's body carried to the
+  table, the repair and medical bots' windows, and the Island's personal and security terminals
+  and its ATM, driven by key edges, with the terminals' frames.
 - **Combat (Training):** the crowbar breaking the crates (and the DataLink that follows),
   the pistol and rifle ranges (the scope's FOV, the skill the Mission00 timer grants), a
   LAM on the breakable wall, the instructor taking the inventory.
@@ -233,8 +236,8 @@ Collision and line traces now read the moving brush tracker's level model, as th
 original's do (doors and lifts block shots, moves and spawns where they were last
 drawn; checked against Engine.dll). The dying player's camera starts from the body's
 rotation, as the engine's draw passes it, and a breakable door's fragments are placed
-as Engine.dll's FindSpot places them, NaN probes included. The rows left wait for their
-captures ([remaining Stage 5 work](docs/stage-5-exit-criteria.md#remaining-stage-5-work-in-the-order-it-blocks)).
+as Engine.dll's FindSpot places them, NaN probes included. The one row left waits on the
+user's footsteps decision ([what the user should decide](docs/stage-5-exit-criteria.md#what-the-user-should-decide)).
 Swimming, ladders, pawn navigation, doors opened by NPCs and the intro cinematic
 also run from translated original code ([roadmap](docs/roadmap.md#5-implement-the-full-gameplay-systems)).
 
