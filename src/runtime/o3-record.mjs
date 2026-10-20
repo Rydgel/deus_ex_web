@@ -59,11 +59,12 @@ export function o3Body(name, target, args, body) {
   const adapter = recorder?.adapters[name];
   if (!adapter) return body();
   const parent = recorder.top();
-  const rec = {name, depth: recorder.stack.length, index: recorder.calls.length, args: args.map(arg => arg), before: null, events: [], after: null, error: null};
+  const rec = {name, depth: recorder.stack.length, index: recorder.calls.length, args: args.map(arg => arg), target, before: null, events: [], after: null, error: null};
   recorder.calls.push(rec);
-  // The caller's event for this nested body, from its input arguments (the adapter of the parent decides its shape).
-  if (parent && !adapter.standalone) recorder.adapters[parent.name].nested?.(parent, rec);
   rec.before = adapter.before(target, args, rec, recorder);
+  // The caller's event for this nested body (the adapter of the caller decides its shape), completed by `nestedDone` when the body has returned.
+  const nested = parent && !adapter.standalone ? recorder.adapters[parent.name] : null;
+  nested?.nested?.(parent, rec, recorder);
   recorder.stack.push(rec);
   const restore = adapter.wrap?.(target, rec, recorder) ?? null;
   let result;
@@ -78,6 +79,7 @@ export function o3Body(name, target, args, body) {
     recorder.stack.pop();
     rec.result = result;
     rec.after = adapter.after(target, rec, result, recorder);
+    nested?.nestedDone?.(parent, rec, recorder);
   }
 }
 

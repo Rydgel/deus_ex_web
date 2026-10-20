@@ -303,8 +303,11 @@ export function pawnPhysicsView(actor, services) {
     const model = worldModel();
     return level.hash.surfaceScan?.(start, ends, position, floorEnd, pawn, model, model.surfaceTexture ?? level.surfaceTexture, worldActor);
   } });
-  pawn.hitWall = hit => processPlayerHitWall(pawn, hit.normal, hit.actor,
-    { isProbing: (target, name) => services.isProbing(actor, name), dispatch });
+  pawn.hitWall = hit => {
+    const options = { isProbing: (target, name) => services.isProbing(actor, name), dispatch };
+    return o3Wants(pawn) ? o3Body('hitWall', pawn, [hit, options], () => processPlayerHitWall(pawn, hit.normal, hit.actor, options))
+      : processPlayerHitWall(pawn, hit.normal, hit.actor, options);
+  };
   pawn.landed = (hit, remaining, iterations) => o3Wants(pawn)
     ? o3Body('landed', pawn, [hit, remaining, iterations], () => processLanded(pawn, hit, remaining, iterations))
     : processLanded(pawn, hit, remaining, iterations);

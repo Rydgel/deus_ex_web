@@ -77,8 +77,12 @@ const SERVICES = {
   walkTexture: {k: 'walkTexture', args: ([texture, location, normal]) => [texture != null, vec(location), vec(normal)]},
 };
 
+/** The kind a nested body has in its caller's events when it is not its own name. */
+const EVENT_KIND = {hitWall: 'wall'};
+
 /** The nested native bodies a body calls: its arguments, as the oracle's stub at the body's address reads them. */
 const NESTED_ARGS = {
+  hitWall: ([hit], ids) => [vec(hit.normal), ids.ref(hit.actor)],
   rolling: ([dt]) => [f(dt), 0],
   prelude: ([dt, iterations]) => [f(dt), iterations],
   flying: ([dt, iterations]) => [f(dt), iterations],
@@ -109,7 +113,14 @@ function adapter(body, {config, services, holder = pawn => pawn}) {
     },
     after: (pawn, rec, result, recorder) => trackedState(pawn, recorder.context.ids),
     /** A nested recorded body is one event of its caller; its state and result are filled in when it has run. */
-    nested: (parent, child) => parent.events.push({k: child.name, nested: child}),
+    nested(parent, child, recorder) {
+      child.event = {k: EVENT_KIND[child.name] ?? child.name, args: child.before.args, res: null, pre: trackedState(parent.target, recorder.context.ids), post: null};
+      parent.events.push(child.event);
+    },
+    nestedDone(parent, child, recorder) {
+      child.event.post = trackedState(parent.target, recorder.context.ids);
+      child.event.res = typeof child.result === 'boolean' ? child.result : null;
+    },
   };
 }
 
@@ -140,6 +151,29 @@ function hostFallingConfig(host, dt, iterations, options) {
     fluidFriction: host.fluidFriction, mass: host.mass, buoyancy: host.buoyancy ?? 0, bobbing: Boolean(host.bobbing), radius: host.radius, height: host.height,
     zoneNumber: host.zoneNumber, netMode: 0};
 }
+
+/** processHitWall (walking-callbacks.mjs processPlayerHitWall / processDecorationHitWall): the pawn's gate fields, whether the state probes HitWall, and the script event. */
+const wallState = (target, ids) => (target.self
+  ? {position: vec(target.position), acceleration: vec(target.acceleration), destination: vec(target.destination), physics: Number(target.physics), moveTimer: target.moveTimer,
+    pawnFlags: target.pawnFlags >>> 0}
+  : {});
+const hitWallAdapter = {
+  before(target, [hit, options], rec, recorder) {
+    const ids = recorder.context.ids;
+    return {args: NESTED_ARGS.hitWall([hit], ids), kind: target.self ? 'pawn' : 'host', state: wallState(target, ids),
+      config: {variant: target.self ? 'player' : 'decoration', minHitWall: target.self ? target.minHitWall : null, wallIsPawn: Boolean(hit.actor?.isPawn), netMode: 0}};
+  },
+  wrap(target, rec, recorder) {
+    const [hit, options] = rec.args, ids = recorder.context.ids, isProbing = options.isProbing, dispatch = options.dispatch;
+    options.isProbing = o3Service(rec, recorder, isProbing, {pre: () => wallState(target, ids),
+      log: (args, result, pre) => rec.events.push({k: 'probe', args: [args[1]], res: Boolean(result), pre, post: wallState(target, ids)})});
+    options.dispatch = o3Service(rec, recorder, dispatch, {pre: () => wallState(target, ids),
+      log: ([to, event, args], result, pre) => rec.events.push({k: 'event', args: [event, vec(args[0]), ids.ref(args[1])], res: null, pre, post: wallState(target, ids)})});
+    return () => { options.isProbing = isProbing; options.dispatch = dispatch; };
+  },
+  after: (target, rec, result, recorder) => wallState(target, recorder.context.ids),
+  nested: () => { throw new Error('O3: processHitWall calls no nested body'); },
+};
 
 /** MoveActor's query prefix (move-query.mjs): the source's traits and the hits Play's MultiLineCheck returned; the native filters them, selects and does the math. */
 function moveQueryCandidate(c, source, world, ids) {
@@ -183,8 +217,9 @@ const moveQueryAdapter = {
 
 export const ADAPTERS = {
   moveQuery: moveQueryAdapter,
+  hitWall: hitWallAdapter,
   flying: adapter('flying', {
-    services: ['move', 'hitWall'],
+    services: ['move'],
     config: (pawn, [dt, iterations]) => ({dt: f(dt), iterations, ...bodyConfig(pawn), ...zoneConfig(pawn), fluidFriction: pawn.fluidFriction, collideWorld: Boolean(pawn.collideWorld)}),
   }),
   prelude: (() => {
@@ -199,7 +234,7 @@ export const ADAPTERS = {
     }};
   })(),
   falling: adapter('falling', {
-    services: ['move', 'hitWall', 'airControlBlocked', 'fellOutOfWorld'],
+    services: ['move', 'airControlBlocked', 'fellOutOfWorld'],
     config: (pawn, [dt, iterations, options]) => pawn.self
       ? {dt: f(dt), iterations, ...bodyConfig(pawn), ...zoneConfig(pawn), airControl: pawn.airControl, terminalVelocity: pawn.terminalVelocity,
         regionWater: Boolean(pawn.regionWater), footWater: Boolean(pawn.footWater), fluidFriction: pawn.fluidFriction, buoyancy: pawn.buoyancy ?? 0,
@@ -225,13 +260,12 @@ export const ADAPTERS = {
     },
   }),
   walking: adapter('walking', {
-    services: ['move', 'lineCheck', 'hitWall', 'setPhysics', 'setSupportBase', 'farMove', 'mayFall', 'fallingEvent', 'fellOutOfWorld'],
+    services: ['move', 'lineCheck', 'setPhysics', 'setSupportBase', 'farMove', 'mayFall', 'fallingEvent', 'fellOutOfWorld'],
     config: (pawn, [dt, iterations]) => ({dt: f(dt), iterations, ...bodyConfig(pawn), ...zoneConfig(pawn), friction: pawn.friction}),
   }),
 };
 
 /** A resolved case: what the oracle reads (`config`, `before`, the events with the nested bodies filled in) and what Play left (`after`). */
 export function resolveCase(rec, ids) {
-  const events = rec.events.map(e => e.nested ? {k: e.k, args: e.nested.before.args, res: e.nested.result === undefined ? null : e.nested.result, pre: e.nested.before.state, post: e.nested.after} : e);
-  return {body: rec.name, index: rec.index, depth: rec.depth, args: rec.before.args, config: rec.before.config, kind: rec.before.kind, before: {state: rec.before.state}, events, actors: Object.fromEntries(ids.info.map((info, id) => [id, info]).filter(([id, info]) => id > 0 && info)), after: rec.after, result: typeof rec.result === 'boolean' ? rec.result : null, error: rec.error};
+  return {body: rec.name, index: rec.index, depth: rec.depth, args: rec.before.args, config: rec.before.config, kind: rec.before.kind, before: {state: rec.before.state}, events: rec.events, actors: Object.fromEntries(ids.info.map((info, id) => [id, info]).filter(([id, info]) => id > 0 && info)), after: rec.after, result: typeof rec.result === 'boolean' ? rec.result : null, error: rec.error};
 }

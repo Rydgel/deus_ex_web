@@ -96,8 +96,11 @@ export function spawnedFallingAdapter(runtime,actor) {
       const result=playerMove(actor,delta,runtime.spawnedMoveServices(actor,level));
       return {time:Math.fround(result.time),normal:result.hit?.normal??[0,0,0],actor:world(result.hit?.actor??null)};
     },
-    hitWall:hit=>processDecorationHitWall(actor,hit.normal,hit.actor,{
-      isProbing:(source,name)=>runtime.isProbing(source,name),dispatch}),
+    hitWall:hit=>{
+      const options={isProbing:(source,name)=>runtime.isProbing(source,name),dispatch};
+      return o3Wants(actor)?o3Body('hitWall',actor,[hit,options],()=>processDecorationHitWall(actor,hit.normal,hit.actor,options))
+        :processDecorationHitWall(actor,hit.normal,hit.actor,options);
+    },
     landedEvent:normal=>dispatch(actor,'Landed',[normal]),
     // physFalling's zone-0 branch (0x103d0b89): Actor.FellOutOfWorld.
     fellOutOfWorld:()=>dispatch(actor,'FellOutOfWorld',[]),

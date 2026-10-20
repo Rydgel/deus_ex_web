@@ -44,16 +44,28 @@ const ORACLES = {
   landed: 'native-landing-oracle.py',
   rolling: 'native-rolling-oracle.py',
   moveQuery: 'native-move-query-oracle.py',
+  hitWall: 'native-walking-callbacks-oracle.py',
 };
-/** The tampering of the controls: body -> the path in a case of a constant the body consumes (changed by a relative 2^-12; zero by one). */
+/** The tampering of the controls: body -> [what it does, a function changing a copy of a recorded case]. The path form changes one constant the body consumes by a
+ * relative 2^-12 (zero by one); a body whose recorded calls are decided before any arithmetic (processHitWall's early returns) gets a changed decision input. */
+const at = (...path) => [`${path.join('.')} x (1 + 2^-12)`, c => {
+  let holder = c;
+  for (const key of path.slice(0, -1)) holder = holder[key];
+  const value = holder[path.at(-1)];
+  holder[path.at(-1)] = value === 0 ? 1 : Math.fround(value * (1 + 2 ** -12));
+}];
 const CONTROLS = {
-  flying: ['config', 'fluidFriction'],
-  walking: ['config', 'maxStepHeight'],
-  falling: ['config', 'gravity', 2],
-  prelude: ['config', 'radius'],
-  landed: ['config', 'radius'],
-  rolling: ['config', 'zone', 'groundFriction'],
-  moveQuery: ['config', 'extent', 1],
+  flying: at('config', 'fluidFriction'),
+  walking: at('config', 'maxStepHeight'),
+  falling: at('config', 'gravity', 2),
+  prelude: at('config', 'radius'),
+  landed: at('config', 'radius'),
+  rolling: at('config', 'zone', 'groundFriction'),
+  moveQuery: at('config', 'extent', 1),
+  hitWall: ['MinHitWall raised to 2 with a nonzero Acceleration (the gate that returned now falls through to IsProbing)', c => {
+    c.config.minHitWall = 2;
+    c.before.state.acceleration = [1, 0, 0];
+  }],
 };
 
 // --- encoding ---------------------------------------------------------------------------------------------------------------------------------------
@@ -85,8 +97,6 @@ function firstDifference(a, b, at = '') {
   }
   return a === b ? null : `${at}: Play ${JSON.stringify(a)} vs native ${JSON.stringify(b)}`;
 }
-/** A visible change of an input: a relative 2^-12 (rounded to float32), a nonzero step for zero. */
-const tweak = value => (value === 0 ? 1 : Math.fround(value * (1 + 2 ** -12)));
 
 // --- record -----------------------------------------------------------------------------------------------------------------------------------------
 async function openAssets() {
@@ -207,20 +217,14 @@ for (const body of bodies) {
   if (equal !== replayable.length) failures.push(`${body}: ${replayable.length - equal} of ${replayable.length} differ; first: ${firsts[0]}`);
 
   // Control: one input of the first calls perturbed by one ulp must make the native differ from Play's recorded outputs.
-  const where = CONTROLS[body];
-  const tampered = replayable.slice(0, 8).map(c => {
-    const copy = JSON.parse(JSON.stringify(c));
-    let holder = copy;
-    for (const key of where.slice(0, -1)) holder = holder[key];
-    holder[where.at(-1)] = tweak(holder[where.at(-1)]);
-    return copy;
-  });
+  const [what, tweak] = CONTROLS[body];
+  const tampered = replayable.slice(0, 8).map(c => { const copy = JSON.parse(JSON.stringify(c)); tweak(copy); return copy; });
   if (tampered.length) {
     writeFileSync(casesFile(body, 'control'), encode(tampered));
     const controlResults = (await runOracle(ORACLES[body], casesFile(body, 'control'))).results;
     const differing = tampered.filter((c, i) => compare(c, controlResults[i])).length;
-    report.push(`          control: ${differing} of ${tampered.length} perturbed calls differ (${where.join('.')} x (1 + 2^-12))`);
-    if (differing === 0) failures.push(`${body}: the control (${where.join('.')} x (1 + 2^-12)) changed nothing: the comparison does not see that input`);
+    report.push(`          control: ${differing} of ${tampered.length} perturbed calls differ (${what})`);
+    if (differing === 0) failures.push(`${body}: the control (${what}) changed nothing: the comparison does not see that input`);
   }
 }
 console.log(report.join('\n'));
