@@ -17,6 +17,7 @@ import {gameDirectory} from './game-directory.mjs';
 import {AssetStore} from '../src/unreal/assets.mjs';
 import {openSession} from './census-stage5-session.mjs';
 import {viewProbe} from '../src/viewer/view-probe.mjs';
+import {typedCharacters, keyOfCode} from '../src/viewer/typed-characters.mjs';
 
 const flagArg = name => process.argv.includes(`--${name}`);
 const option = (name, fallback) => { const i = process.argv.indexOf(`--${name}`); return i < 0 ? fallback : process.argv[i + 1]; };
@@ -59,12 +60,14 @@ const DEVICE_SUMMARY = {SecurityCamera: ['bPlayerSeen', 'bTrackPlayer', 'bEventT
   AlarmUnit: ['bActive', 'alarmInstigator'], Multitool: ['NumCopies', 'bBeingUsed'], Decoration: ['HitPoints'], DeusExMover: ['doorStrength', 'bDestroyed', 'KeyNum'],
   Robot: ['EMPHitPoints', 'crazedTimer']};
 // (the routes' devices: a door's lock and pick, the arcs, a Lockpick, a button; and what --player-view/--player-talk compare: the player's Energy and DataLink)
+Object.assign(DEVICE_SUMMARY, {RepairBot: ['lastChargeTime'], MedicalBot: ['lastHealTime'], ATM: ['$atmBalance0', 'bLockedOut'], Computers: ['bOn', 'bAnimating']});
 Object.assign(DEVICE_SUMMARY, {DeusExMover: [...DEVICE_SUMMARY.DeusExMover, 'bLocked', 'lockStrength', 'bPicking', 'bInterpolating'], ElectricityEmitter: ['bIsOn', 'lastHitActor'],
   DamageTrigger: ['bIsOn', 'damagee'], Projectile: ['bTracking', 'Target', 'Velocity'], Lockpick: ['NumCopies', 'bBeingUsed'], Actor: []});
 const talk = () => ` energy=${short(c.read(p, 'Energy'))} dl=${c.read(p, 'DataLinkPlay')?.name ?? '-'} con=${c.read(p, 'conPlay')?.name ?? '-'}`;
 const devices = (scene?.devices ?? option('devices', '').split(',').filter(Boolean)).map(entry => { const [name, rest] = entry.split(':'), [cls, via] = rest.split('@'); return {name, cls, via}; });
 const deviceActor = d => d.via ? (owner => owner ? c.read(owner, d.via.split('.')[1]) : null)(c.actor(d.via.split('.')[0]))
   : c.actor(d.name) ?? c.actors().find(a => a.name.toLowerCase() === d.name.toLowerCase());
+const readDevice = (a, n) => n.startsWith('$atmBalance') ? Object.entries(c.read(a, 'userList')[Number(n.slice(11))]).find(([k]) => k.endsWith('.balance'))?.[1] : c.read(a, n);
 const short = v => typeof v === 'number' ? Math.round(v * 100) / 100 : typeof v === 'boolean' ? Number(v) : v?.name ?? v;
 // A conversation scene also prints, whenever it changes: the player's ConPlay, its state and current event (class and label, a speech's speaker and first
 // words), the choices the third-person window shows, the player's skill points and Inventory chain, the flags, and the named pawns' Alliance and Orders.
@@ -92,12 +95,23 @@ const stampNear = () => { for (const a of pawns) { if (c.gone(a)) { c.watched.de
 // with `=` is the device scenes' "Name=Prop,Prop;..." form, printed on the main line
 const extraProps = (option('props', '') ?? '').includes('=') ? [] : (option('props', '') ?? '').split(',').filter(Boolean);
 const regions = ['HealthHead', 'HealthTorso', 'HealthLegLeft', 'HealthLegRight', 'HealthArmLeft', 'HealthArmRight'];
+// --window: the top modal window and the root's focus window on the line (a window scene: which button holds the focus when a key edge arrives)
+const rootWindow = flagArg('window') ? c.runtime.namedReference(p, 'rootWindow').get() : null, W = flagArg('window') ? c.game.hud.host.W : null;
+const windowName = o => o ? c.runtime.instance(o).cls.record.name : '-';
+const windowLine = () => { if (!rootWindow) return ''; const f = W.ptr(rootWindow, 0x5c8), label = f ? (() => { try { return String(c.read(f, 'buttonText') ?? '').replace(/[|&\s]+/g, ' ').trim(); } catch { return ''; } })() : '';
+  return ` win=${windowName(c.topModal())}/${windowName(f)}${label ? `[${label}]` : ''}`; };
 let last = '';
 for (let tick = 1; tick <= ticks; tick++) {
   for (const line of cmds.get(tick - 1) ?? []) {
     if (!line) continue;
-    const edge = /^@(down|up) (\S+)$/.exec(line);
-    if (edge) { c.game.inputKey(edge[2], edge[1] === 'down'); console.log(`> ${line} after ${tick - 1}`); } else exec(line);
+    const edge = /^@(down|up) (\S+)$/.exec(line), typed = /^@type (.+)$/.exec(line);
+    // (`@type TEXT`: WM_CHAR units; a key edge's own WM_CHAR is TranslateMessage's, as live-probe.mjs delivers it with --typed-chars, which the rehearsal always does)
+    if (typed) { for (const char of typed[1]) c.game.inputChar(char.charCodeAt(0)); console.log(`> ${line} after ${tick - 1}`); }
+    else if (edge) {
+      c.game.inputKey(edge[2], edge[1] === 'down'); console.log(`> ${line} after ${tick - 1}`);
+      const key = edge[1] === 'down' ? keyOfCode(edge[2]) : null;
+      if (key !== null) for (const unit of typedCharacters({key})) c.game.inputChar(unit);
+    } else exec(line);
   }
   // (a destroyed device leaves the stamped set before its release: the renderer stamps nothing that is gone)
   for (const a of [...c.watched]) if (c.runtime.isReleased?.(a) || c.gone(a)) c.watched.delete(a);
@@ -111,14 +125,15 @@ for (let tick = 1; tick <= ticks; tick++) {
   const line = pawns.map(a => c.gone(a) ? `${a.name}:gone` : `${a.name}:${c.state(a).split('.').pop()}/${c.read(a, 'Enemy')?.name ?? '-'}/h${c.read(a, 'Health')}`
     + `${c.read(a, 'NumCarcasses') ? `/bodies${c.read(a, 'NumCarcasses')}` : ''}${/seeking/i.test(c.state(a)) ? `/seek${c.read(a, 'SeekType')}` : ''}`).join(' ')
     + ` | player h${c.read(p, 'Health')} [${regions.map(n => c.read(p, n)).join(',')}] ${c.state(p).split('.').pop()} @${c.pos(p).map(Math.round)} inHand=${c.read(p, 'inHand')?.name ?? '-'}`
-    + ` frob=${c.read(p, 'FrobTarget')?.name ?? '-'} tracers=${c.byClass('Tracer').length}${talk()}`
+    + ` frob=${c.read(p, 'FrobTarget')?.name ?? '-'} tracers=${c.byClass('Tracer').length}${talk()} credits=${c.read(p, 'Credits')}`
     + (scene?.flags ?? option('flags', 'StatueAlarmTriggered').split(',')).filter(Boolean).map(f => ` ${f}=${Number(c.flag(f.toLowerCase()))}`).join('')
     // --props "Name=Prop,Prop;Name2=..." (Name @weapon: the player's Weapon; @player: the player): more fields printed with the line
     + (option('props', '') ?? '').split(';').filter(spec => spec.includes('=')).map(spec => { const [name, list] = spec.split('='); const a = name === '@weapon' ? c.read(p, 'Weapon') : name === '@player' ? p : c.actor(name);
       return ` ${name}:${a ? `${c.state(a).split('.').pop()}/${list.split(',').map(n => short(c.read(a, n))).join('/')}` : '-'}`; }).join('')
+    + windowLine()
     // --classes LAM,Tracer: every actor of those classes (a placed LAM, a flying projectile): name, state and position, printed with the line
     + (option('classes', '') ?? '').split(',').filter(Boolean).map(cls => c.byClass(cls).map(a => ` ${a.name}:${c.state(a).split('.').pop()}@${c.pos(a).map(Math.round)}`).join('')).join('')
-    + devices.map(d => { const a = deviceActor(d); return !a ? ` ${d.name}:-` : c.gone(a) ? ` ${d.name}:gone` : ` ${d.name}:${c.state(a).split('.').pop()}/${(DEVICE_SUMMARY[d.cls] ?? []).map(n => short(c.read(a, n))).join('/')}`; }).join('');
+    + devices.map(d => { const a = deviceActor(d); return !a ? ` ${d.name}:-` : c.gone(a) ? ` ${d.name}:gone` : ` ${d.name}:${c.state(a).split('.').pop()}/${(DEVICE_SUMMARY[d.cls] ?? []).map(n => short(readDevice(a, n))).join('/')}`; }).join('');
   if (line !== last || tick % 60 === 0) { console.log(tick, line); last = line; }
   if (scene?.conversation || flagArg('con')) { const now = conLine(); if (now !== lastCon) { console.log(tick, now); lastCon = now; } }
 }

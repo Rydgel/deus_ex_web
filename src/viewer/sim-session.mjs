@@ -864,6 +864,8 @@ export function createSimSession(game, { assets = null, events = [], exportName 
      * accessibility. An error stops the simulation like the frame's other
      * steps. */
     hud({ width, height, view }) {
+      // (a live replay's frame after a window scene's typed command that the original's held frames did not draw after: live-probe.mjs `noPaint`)
+      if (game.liveReplay?.noPaint) return { errors: [], commands: [], infoLink: null, flash: null };
       const errors = [];
       let commands = [], infoLink = null, flash = null;
       try {

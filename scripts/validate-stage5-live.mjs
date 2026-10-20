@@ -75,7 +75,7 @@
  *   oT        TopTerroristsOverheard (Terrorist9 and Terrorist8, first person) from a hidden place, to its end.
  *   kB        eight Terrorists killed (Tantalus) until Mission01.Timer sets M01PlayerAggressive, then UNATCOTroop6's TrooperCongratulation reads it.
  *   kC        kB redesigned for its two measured causes: Terrorist18 killed at its load place before StartUp lets it move, the trooper placement inside the world. */
-import {spawn} from 'node:child_process';
+import {execFileSync, spawn} from 'node:child_process';
 import {existsSync, mkdirSync, readFileSync, rmSync, writeFileSync} from 'node:fs';
 import path from 'node:path';
 import {fileURLToPath} from 'node:url';
@@ -86,6 +86,9 @@ const option = name => { const i = argv.indexOf(`--${name}`); return i < 0 ? nul
 
 const PISTOL = yaw => `20:summon DeusEx.WeaponPistol|50:set DeusEx.JCDentonMale ViewRotation (Pitch=-10130,Yaw=${yaw},Roll=0)|90:ParseRightClick|130:ActivateBelt 1`;
 const SHOTS = ticks => ticks.map(t => `${t}:@down Enter|${t}:@up Enter`).join('|');
+// a key edge pair at tick t, and Alt plus a letter (an accelerator: the root's keyDownMap holds Alt while the letter's character arrives, XModalWindow::KeyPressed)
+const KEY = (t, code) => `${t}:@down ${code}|${t}:@up ${code}`;
+const ALT = (t, letter) => `${t}:@down AltLeft|${t}:@down Key${letter}|${t}:@up Key${letter}|${t}:@up AltLeft`;
 // `KillAll FlyGenerator` first: the load's chance FlyGenerators (10% per fly-making decoration) removed in both programs, as row 4.2.13 does.
 // The player moved after the first unfrozen tick, between `ghost` and `walk` as PLACE does (a colliding actor's Location is not set by the console).
 const INTO = (x, y, z, tick = 1) => `${tick}:ghost|${tick}:set DeusEx.JCDentonMale Location (X=${x},Y=${y},Z=${z})|${tick}:walk`;
@@ -627,7 +630,75 @@ export const SCENES = {
   cad1: {map: '00_Training', ticks: 700, early: PLACE(3500, 849, -80, 0, -400),
     cmds: `20:Tantalus|${MOVE(110, 3610, 849, -80, 0, -9100)}|150:ParseRightClick|190:ParseRightClick|${MOVE(250, 3688, 478, -100, 49152, -3000)}|300:@down Tab|300:@up Tab`,
     devices: ['UNATCOTroopCarcass0:Actor', 'POVCorpse0:Actor', 'UNATCOTroopCarcass1:Actor', 'Trigger0:Actor', 'DeusExMover3:DeusExMover', 'DeusExMover25:DeusExMover']},
+  // Windows by key edges (rows 5.3.3 and 5.3.9; docs/stage-5-exit-criteria.md "Captures: windows, the bots and the terminals"). The harness posts no mouse: a button is
+  // pressed by the focus the window system gives it and an Enter edge (ButtonWindow.VirtualKeyPressed: Enter or Space presses the focused button), the focus moves by the
+  // arrow keys and Tab (RootWindow.VirtualKeyPressed: MoveFocusLeft/Right/Up/Down, MoveTabGroupNext), text is typed as WM_CHAR units (`@type`), a button's accelerator is
+  // Alt and its letter (`@down AltLeft|@down KeyD|@up KeyD|@up AltLeft`). `--typed-chars` makes the replay deliver TranslateMessage's characters of the Tab, Escape, Enter and
+  // letter edges, as the original's message loop does.
+  // The repair bot (HUDRechargeWindow, MFocus_Enter: the focus is not the mouse's, the root cursor stays at (0, 0)): the player placed 68 units in front of RepairBot0 (5078, 362,
+  // facing +Y), looking down at its chest; Energy set to 20; the right button opens the window. The first focus is the Recharge button when it is enabled (the window's
+  // CheckFocusWindow: MoveFocus(1, 1)): an Enter edge recharges (RepairBot.ChargePlayer: Min(EnergyMax - Int(Energy), chargeAmount 75), lastChargeTime), the button is disabled
+  // by the cooldown (chargeRefreshTime 60) and the focus moves to Close; a second Enter closes the window (DestroyWindow: the bot's Stop animation and FollowOrders). The
+  // right button again opens it with Recharge disabled (CanCharge false): the first focus is Close, and an Enter closes it without charging.
+  rpr1: {map: '00_Training', ticks: 520, early: PLACE(5078, 430, -110, 49152, -5000), view: true, options: ['--typed-chars'],
+    cmds: `20:set DeusEx.JCDentonMale Energy 20|60:ParseRightClick|${SHOTS([140])}|${SHOTS([220])}|290:ParseRightClick|${SHOTS([370])}`,
+    devices: ['RepairBot0:RepairBot']},
+  // the medical bot (HUDMedBotHealthScreen, mouse focus mode Click: the first focus is the Augmentations tab): the player 70 units in front of MedicalBot0 (5105, -4170, facing +Y);
+  // the head, torso and left leg damaged by the cheat's DamagePart (the screen's maximum is the class default, so `set` of a region would not show as damage); the right
+  // button opens the Health screen; Right moves the focus to the Exit tab and Up to Heal All (the position-ordered focus table), Enter presses it (MedicalBot.HealPlayer:
+  // healAmount 300 to every region, lastHealTime). Escape then closes the screen (the screen's VirtualKeyPressed); the torso damaged again and the screen opened again (the
+  // cooldown disables Heal All, healRefreshTime 60), Alt+E (the button's accelerator, "H|&eal All") presses nothing, Escape closes it.
+  med1: {map: '00_Training', ticks: 560, early: PLACE(5105, -4100, 30, 49152, -6000), view: true, options: ['--typed-chars'],
+    cmds: `20:DamagePart 1 60|21:DamagePart 0 30|22:DamagePart 4 50|60:ParseRightClick|${SHOTS([140]).replace(/Enter/g, 'ArrowRight')}|${SHOTS([170]).replace(/Enter/g, 'ArrowUp')}|${SHOTS([200])}|${SHOTS([260]).replace(/Enter/g, 'Escape')}`
+      + `|300:DamagePart 1 40|320:ParseRightClick|400:@down AltLeft|400:@down KeyE|400:@up KeyE|400:@up AltLeft|${SHOTS([470]).replace(/Enter/g, 'Escape')}`,
+    devices: ['MedicalBot0:MedicalBot']},
+  // rpr1's cooldown to its end (row 5.3.3): the same recharge at 140 and close at 220, then 60 s of Level time (3,600 ticks): RepairBot.CanCharge is
+  // Level.TimeSeconds - int(lastChargeTime) > chargeRefreshTime (the first charge's lastChargeTime is 129.17 in the capture: ready after Level time 189, about tick 3733). The
+  // energy is set to 30 at 3760 and the right button opens the window at 3800 with Recharge enabled again: the first focus is Recharge, an Enter edge charges 70 (the amount is
+  // capped by EnergyMax: Min(100 - 30, 75)), and the second Enter (the focus has moved to Close) closes it.
+  rpr2: {map: '00_Training', ticks: 4020, early: PLACE(5078, 430, -110, 49152, -5000), view: true, options: ['--typed-chars'],
+    cmds: `20:set DeusEx.JCDentonMale Energy 20|60:ParseRightClick|${KEY(140, 'Enter')}|${KEY(220, 'Enter')}|3760:set DeusEx.JCDentonMale Energy 30|3800:ParseRightClick|${KEY(3880, 'Enter')}|${KEY(3960, 'Enter')}`,
+    devices: ['RepairBot0:RepairBot']},
+  // The Island's terminals (row 5.3.9). The player is placed in front of each (the pose of the rehearsal: the view trace selects it; a placement below the floor is zone 0) and
+  // the right button opens it: the terminal runs its Activate animation (Computers.Frob, state On: TryInvoke), then InvokeComputerScreen opens the NetworkTerminal on its login
+  // screen with the focus on the user name (ComputerScreenLogin.SetCompOwner), Tab moves to the password, Enter is EditActivated (ProcessLogin: a wrong pair clears both and
+  // refocuses the user name), a right login opens the first screen (the e-mail list with its first row selected, or the security screen with the focus on its first choice).
+  // trm1, ComputerPersonal0 (UNATCO, users GUEST/GUEST and KLloyd/squishy; the e-mails are DeusExText `01_EmailMenu_<user>`): a wrong password, KLloyd (two e-mails: ArrowDown on
+  // the list selects the second), Escape (logout: back to the login screen), GUEST (`No Email Today!`), Escape twice (the second closes the terminal, which turns off).
+  // (`speech`: UNATCOTroop6's bark near the computer drives Pawn.LipSynch, whose mouth letters are a measured host input)
+  trm1: {map: '01_NYC_UNATCOIsland', ticks: 720, early: PLACE(-4335, 2010, -170, 49152, -7500), options: ['--typed-chars'], devices: ['ComputerPersonal0:Computers'], speech: true, drawTiming: true,
+    cmds: `100:ParseRightClick|200:@type KLloyd|${KEY(220, 'Tab')}|240:@type wrongpw|${KEY(260, 'Enter')}|300:@type KLloyd|${KEY(320, 'Tab')}|340:@type squishy|${KEY(360, 'Enter')}`
+      + `|${KEY(420, 'ArrowDown')}|${KEY(480, 'Escape')}|520:@type GUEST|${KEY(540, 'Tab')}|560:@type GUEST|${KEY(580, 'Enter')}|${KEY(640, 'Escape')}|${KEY(680, 'Escape')}`},
+  // atm1, ATM0 (account 230023, PIN 4558, balance 200; no animation): a wrong PIN ("LOGIN ERROR": both fields cleared), the right one (the withdraw screen: the amount field has the
+  // focus), 50 and Enter (ComputerScreenATMWithdraw: DeusExPlayer.Credits 500 to 550, the ATM's balance 200 to 150), Escape (the login screen) and Escape (closes it).
+  atm1: {map: '01_NYC_UNATCOIsland', ticks: 600, early: PLACE(2105, 1024, -100, 16384, -1000), options: ['--typed-chars', '--player-credits'], devices: ['ATM0:ATM'],
+    cmds: `100:ParseRightClick|200:@type 230023|${KEY(220, 'Tab')}|240:@type 1111|${KEY(260, 'Enter')}|300:@type 230023|${KEY(320, 'Tab')}|340:@type 4558|${KEY(360, 'Enter')}`
+      + `|420:@type 50|${KEY(440, 'Enter')}|${KEY(500, 'Escape')}|${KEY(540, 'Escape')}`},
+  // sec1, ComputerSecurity1 (NSF, NSF001/smashthestate; view 1 "Temp Holding Cell": camera NSFCam01 = SecurityCamera5, door temp_celldoor = DeusExMover10 (locked), turret celldoor
+  // = AutoTurretSmall0 (bTrackPlayersOnly, inactive)): the first focus is the Camera Status choice (Enter presses it), the other choices have no tab stop that an arrow reaches (the
+  // screen's VirtualKeyPressed takes the arrows to pan the camera), so they are pressed by their accelerators, Alt and the letter of the label ("Door |&Access", "|&Door Status",
+  // "|&Turret Status"): Alt+A toggles the door's lock (ToggleDoorLock: every DeusExMover of the tag), Alt+D triggers it (TriggerDoor: it opens), ArrowLeft and ArrowUp pan the
+  // camera (PanCamera: DesiredRotation), and Alt+T three times cycles the turret (Attack Allies -> Attack Enemies -> Attack Everything -> Disabled: SetTurretState and
+  // SetTurretTrackMode). Escape logs out, Escape closes the terminal.
+  // (The terminal stands in Terrorist18's room: it sees the player, goes Alerting and attacks him from tick 600 in the rehearsal, so the player is set to take no damage, as
+  // the camera captures do, `ReducedDamageType All`: a death would end the scene with the terminal open.)
+  sec1: {map: '01_NYC_UNATCOIsland', ticks: 760, early: `${PLACE(2018, -1589, -100, 49152, -3500)}|set DeusEx.JCDentonMale ReducedDamageType All`, options: ['--typed-chars'], drawTiming: true,
+    devices: ['ComputerSecurity1:Computers', 'SecurityCamera5:SecurityCamera', 'DeusExMover10:DeusExMover', 'AutoTurretSmall0:AutoTurret'],
+    cmds: `100:ParseRightClick|200:@type NSF001|${KEY(220, 'Tab')}|240:@type smashthestate|${KEY(260, 'Enter')}|${KEY(320, 'Enter')}|${ALT(380, 'A')}|${ALT(440, 'D')}`
+      + `|${KEY(520, 'ArrowLeft')}|${KEY(560, 'ArrowUp')}|${ALT(600, 'T')}|${ALT(620, 'T')}|${ALT(640, 'T')}|${KEY(700, 'Escape')}|${KEY(740, 'Escape')}`},
 };
+// The terminals' screens as frames (row 5.3.9): trm1, atm1 and sec1's inputs again with the original's Shot (Ctrl+F9 under the terminal's keyboard grab, `@ctrlshot`) taken at
+// held ticks, Brightness 2/3 (the display ramp at which Shot is the framebuffer, docs/visual-acceptance.md "Security cameras"), against Play's frame at the same tick
+// (`--frames`: live-acceptance.mjs play --ticks N --shot NAME for each frame). The actor traces of these scenes are compared too (the screenshots' key events change nothing).
+const WITH_SHOTS = (scene, shots, extra = {}) => ({...scene, ...extra, early: `${scene.early}|set WinDrv.WindowsClient Brightness 0.666667`, shots,
+  cmds: `${scene.cmds}|${Object.entries(shots).map(([name, tick]) => `${tick}:@ctrlshot ${name}`).join('|')}`});
+Object.assign(SCENES, {
+  trf1: WITH_SHOTS(SCENES.trm1, {trf1a: 280, trf1b: 380, trf1c: 440, trf1d: 600}),
+  atf1: WITH_SHOTS(SCENES.atm1, {atf1a: 280, atf1b: 380, atf1c: 460}),
+  // (the security screen's views 2 and 3 have no camera: "NO SIGNAL", random static in both programs, so their boxes are masked in both frames; view 1 is the world through
+  // SecurityCamera5, 44 to 59 pixels over 10 of 255 apart, so the limit is 128)
+  sef1: WITH_SHOTS(SCENES.sec1, {sef1a: 290, sef1b: 480, sef1c: 670}, {frameMasks: [[541, 331, 205, 159], [747, 331, 207, 159]], frameLimit: 128}),
+});
 export const SCENE_FLAGS = ['--no-ghost', '--perception', '--player-gear', '--player-health', '--los-flag'];
 // The device scenes add the player's eye and bob (the first-person item's placement: Inventory.RenderOverlays, CalcDrawOffset): the stored combat scenes
 // were captured without them, and their commands are kept as captured. A scene's own `options` (--player-talk, --stop-destroyed) are added to
@@ -768,6 +839,35 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
   }
   const unlock = () => { try { if (Number(readFileSync(path.join(lockDir, 'pid'), 'utf8')) === process.pid) rmSync(lockDir, {recursive: true, force: true}); } catch {} };
   process.on('exit', unlock);
+  // --frames: a scene's screens against the original's (the stored `@ctrlshot` frames): one Play replay per frame, to its tick, with the same Brightness line
+  if (argv.includes('--frames')) {
+    const {compareFrames} = await import('./conversation-acceptance.mjs');
+    const shots = Object.entries(scene.shots ?? {}), bad = [];
+    if (!shots.length) { console.log(`FAIL ${tag}: the scene has no shots`); process.exit(1); }
+    const framesDir = path.join(root, '.work/acceptance', scene.map);
+    for (const [name, tick] of shots) {
+      const original = path.join(framesDir, `${name}-original.png`), play = path.join(framesDir, `${name}-play.png`);
+      if (!existsSync(original)) { console.log(`SKIP no stored frame of the original: ${path.relative(root, original)}`); process.exit(0); }
+      const replay = await exec(['scripts/live-acceptance.mjs', 'play', '--map', scene.map, '--seed', '1', '--tag', tag, ...sceneFlags(scene), ...PLAY_FLAGS, '--early-cmds', scene.early,
+        '--ticks', String(tick), '--shot', name], 1800);
+      if (replay.code !== 0 || !existsSync(play)) { console.log(replay.out.trim().split('\n').slice(-8).join('\n')); console.log(`FAIL ${tag}: the replay to tick ${tick} stopped (exit ${replay.code})`); process.exit(1); }
+      let [a, b] = [original, play];
+      if (scene.frameMasks?.length) {
+        const draw = scene.frameMasks.flatMap(([x, y, w, h]) => ['-draw', `rectangle ${x},${y} ${x + w - 1},${y + h - 1}`]);
+        [a, b] = [original, play].map(file => { const out = file.replace(/\.png$/, '-masked.png'); execFileSync('magick', [file, '-fill', 'black', ...draw, out]); return out; });
+      }
+      const r = compareFrames(a, b, {bars: {top: 0, bottom: 720}}), f = r.regions.frame;
+      console.log(`frame ${name} (tick ${tick}): identical ${f.identical}, over 2 ${f.over2}, over 10 ${f.over10}, max ${f.max}, MAD ${f.mad}; over 10 away from edges ${r.awayFromEdges.over10}; worst blocks ${r.worstBlocks.slice(0, 3).join(' ')}`);
+      writeFileSync(path.join(framesDir, `${name}-compare.json`), JSON.stringify(r, null, 1));
+      // (a text field's caret blinks on the host's clock, XEditWindow's timer: the original's frame can hold it where Play's does not, 20 pixels in one 3 x 10 box. Nothing else may
+      // differ: at most 64 pixels over 10 of 255; a scene's `frameMasks` boxes are painted black in both frames first, its `frameLimit` raises the limit)
+      const limit = scene.frameLimit ?? 64;
+      if (f.over10 > limit) bad.push(`${name}: ${f.over10} pixels over 10`);
+    }
+    if (bad.length) { console.log(`FAIL ${tag}: ${bad.join('; ')}`); process.exit(1); }
+    console.log(`PASS ${tag} frames: ${shots.length} frames of the original's screen, at most ${scene.frameLimit ?? 64} pixels over 10 of 255${scene.frameMasks ? ` (the masked boxes aside)` : ''}`);
+    process.exit(0);
+  }
   if (compareOnly && !existsSync(path.join(dir, `play-rows-${tag}.json`))) { console.log(`FAIL ${tag}: --compare-only without a stored replay (play-rows-${tag}.json)`); process.exit(1); }
   // A conversation's speakers: the mouth letters the original's audio update wrote (read back from the trace's blend channels; a measured host input,
   // docs/lip-sync.md), regenerated from the stored trace as the Stage 4 conversation rows do.
@@ -809,7 +909,22 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
   if (registry.code !== 0 || !sequence) problems.push(`no registry comparison (${registry.out.trim().split('\n').slice(-1)[0]})`);
   else {
     // (a loaded Sound also by its export name: which bark or speech line was loaded, ConAudioAIBarks_896 or ConAudioMission01_558)
-    const stem = cls => String(cls).replace(/\d+$/, '').toLowerCase(), {oAdds: a, pAdds: b} = sequence;
+    const stem = cls => String(cls).replace(/\d+$/, '').toLowerCase();
+    let {oAdds: a, pAdds: b} = sequence;
+    // `drawTiming`: a scene of full-screen windows (the terminals). The GCs a window creates when it lays out (QueryPreferredSize's GetGC, per window) are made by the frame that
+    // draws it, which the replay does not run as the original did: in the original the first draw after a window opens or closes lays out some of the windows and the next
+    // frames the rest, and a hold's frames draw only when the level is held at a frame's end (docs/stage-5-exit-criteria.md "Captures: windows, the bots and the terminals").
+    // The two programs make the same GCs in the same order, a tick or a few windows apart: they are compared as totals (the run's, and the largest difference of their running
+    // counts at any tick), and every other creation (the windows themselves, the parsers, the events, the sounds) in class, tick and order.
+    if (scene.drawTiming) {
+      const count = list => list.filter(o => o.cls === 'GC');
+      const oGC = count(a), pGC = count(b), ticks = [...new Set([...oGC, ...pGC].map(o => o.u))].sort((x, y) => x - y);
+      let worst = 0, o = 0, p = 0;
+      for (const t of ticks) { while (o < oGC.length && oGC[o].u <= t) o++; while (p < pGC.length && pGC[p].u <= t) p++; worst = Math.max(worst, Math.abs(o - p)); }
+      console.log(`registry: ${oGC.length} GC creations in the original, ${pGC.length} in Play (largest difference of the running counts at a tick: ${worst}); they are not compared one by one`);
+      if (oGC.length !== pGC.length || worst > 64) problems.push(`GC creations: the original's ${oGC.length}, Play's ${pGC.length}, running counts up to ${worst} apart`);
+      a = a.filter(x => x.cls !== 'GC'); b = b.filter(x => x.cls !== 'GC');
+    }
     const same = (o, q) => stem(o.cls) === stem(q.cls) && o.u === q.u && (stem(o.cls) !== 'sound' || o.name === q.name);
     let i = 0; while (i < a.length && i < b.length && same(a[i], b[i])) i++;
     const slots = a.filter((o, k) => b[k] && o.index !== b[k].index).length;
