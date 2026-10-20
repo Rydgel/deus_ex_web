@@ -273,6 +273,10 @@ const DEVICE_FIELDS = {
   Robot: [['EMPHitPoints', 'EMPHitPoints', 0xa2c, 'i32'], ['crazedTimer', 'crazedTimer', 0xa34, 'f'], ['sparkGen', 'sparkGen', 0xa30, 'obj'], ['HealthTorso', 'HealthTorso', 0x564, 'i32'],
     ['HealthHead', 'HealthHead', 0x560, 'i32']],   // SecurityBot0
 };
+// ElevatorMover (00_TrainingFinal's ExitDoor, ElevatorMover1: SequenceTrigger -> SetSeq moves it to a keyframe; not a DeusExMover): Engine.Mover's KeyNum and PrevKeyNum, the
+// interpolation flag and ElevatorMover's own bIsMoving and bFollowKeyframes (Play's slotOf on ElevatorMover1: liveProbe offsets with offsetMasks).
+DEVICE_FIELDS.ElevatorMover = [['KeyNum', 'KeyNum', 0x377, 'u8'], ['PrevKeyNum', 'PrevKeyNum', 0x378, 'u8'], ['bInterpolating', 'bInterpolating', 0x1ec, 'bit', 0x80],
+  ['PhysAlpha', 'PhysAlpha', 0x214, 'f'], ['PhysRate', 'PhysRate', 0x218, 'f'], ['bIsMoving', 'bIsMoving', 0x534, 'bit', 0x2], ['bFollowKeyframes', 'bFollowKeyframes', 0x534, 'bit', 0x1]];
 // The routes' devices (rows 5.5.x, 5.3.10; offsets: Play's slotOf on 01_NYC_UNATCOIsland's DeusExMover12, ElectricityEmitter0, the player's FlagBase +0x890 by the
 // same lookup is tools/dump-flags-win.c's): bDeleteMe gives the tick a device is destroyed (Mission01.Timer's turrets and lasers); a door's pick in progress
 // (DeusExMover.Frob's Lockpick branch and Timer); the arcs; a Lockpick as the Multitool (both SkilledTool); a plain Actor (a Button) with the base fields.
