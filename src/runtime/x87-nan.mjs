@@ -49,3 +49,20 @@ export const x87mul = (a, b) => { const r = a * b; return r === r ? r : x87nanOf
 export const x87div = (a, b) => { const r = a / b; return r === r ? r : x87nanOf(a, b); };
 export const x87add = (a, b) => { const r = a + b; return r === r ? r : x87nanOf(a, b); };
 export const x87sub = (a, b) => { const r = a - b; return r === r ? r : x87nanOf(a, b); };
+
+// ---- Comparisons ----------------------------------------------------------
+// FCOM/FCOMP/FCOMPP of st0 against a source set the condition codes C0 (st0 <
+// src), C3 (equal) and C2 (unordered); an unordered pair (a NaN) sets all
+// three. The compiled branches read them with `fnstsw ax; test ah, mask`:
+// mask 1 is C0, mask 0x41 is C0 | C3 (hardware rows: tools/x87-compare-probe.c,
+// scripts/validate-x87-compare-hardware.mjs). JavaScript's comparisons are false
+// for a NaN; these are the branches the DLL takes (the same for any ordered pair).
+/** `test ah, 1` after FCOM(P) st0 = a against b: a < b, or unordered. */
+export const x87C0 = (a, b) => a < b || a !== a || b !== b;
+/** `test ah, 0x41`: a <= b, or unordered. */
+export const x87C0C3 = (a, b) => a <= b || a !== a || b !== b;
+/** The FCOM condition codes as the status word's C3 (0x4000), C2 (0x400) and C0 (0x100) bits. */
+export const x87CompareFlags = (a, b) => {
+  if (a !== a || b !== b) return 0x4500;
+  return a < b ? 0x0100 : a === b ? 0x4000 : 0;
+};

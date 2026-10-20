@@ -1,6 +1,9 @@
 // Original UModel.PointCheck: world boolean plus world/owned recovery entry.
 // Source and direct original comparisons: docs/point-check.md.
+import { x87C0 as c0, x87C0C3 as c0c3 } from './x87-nan.mjs';
 const f = Math.fround;
+// The traversal's branches read FCOM's condition codes after `fnstsw ax` (`test ah, 1` is C0, `test ah, 0x41` C0 | C3); a NaN
+// sets them all (docs/point-check.md "NaN positions"). JavaScript's comparisons are false for a NaN; these are the native branches.
 const dot = (a,b) => a[2]*b[2] + a[1]*b[1] + a[0]*b[0];
 const xyz = (a,b) => a[0]*b[0] + a[1]*b[1] + a[2]*b[2];
 const cross = (a,b) => [f(a[1]*b[2]-a[2]*b[1]),f(a[2]*b[0]-a[0]*b[2]),f(a[0]*b[1]-a[1]*b[0])];
@@ -18,6 +21,8 @@ function rounded(a,bits=64){
 }
 function sum(a,b){const e=Math.min(a.e,b.e);return rounded({n:(a.n<<BigInt(a.e-e))+(b.n<<BigInt(b.e-e)),e});}
 function planeDistance(position,p){
+  // A NaN coordinate makes every x87 term, the sum and the stored distance a NaN (the operands are NaN-free otherwise).
+  if(position[0]!==position[0]||position[1]!==position[1]||position[2]!==position[2])return {raw:NaN,stored:NaN};
   // Core.PlaneDot10118520 retains its Z/Y/X sum and subtraction in x87.
   // Quarter-turn sine terms survive near cancellation, changing recovery choice.
   const terms=position.map((v,i)=>{const a=binary(v),b=binary(p[i]);return {n:a.n*b.n,e:a.e+b.e};});
@@ -48,10 +53,10 @@ function ownedZeroExtentPlanes(coords,position) {
     return sum(point,negate(w)).n>0n;
   };
 }
-function vector(v,label) {
-  if (!v || v.length!==3 || !v.every(Number.isFinite)) throw Error(`Invalid ${label}`);
+function vector(v,label,nan=false) {
+  if (!v || v.length!==3 || !v.every(nan?(x=>Number.isFinite(x)||x!==x):Number.isFinite)) throw Error(`Invalid ${label}`);
   const result=v.map(f);
-  if (!result.every(Number.isFinite)) throw Error(`${label} exceeds float32`);
+  if (!result.every(nan?(x=>Number.isFinite(x)||x!==x):Number.isFinite)) throw Error(`${label} exceeds float32`);
   return result;
 }
 // PointCheck and LineCheck call the same original103f6600 two-plane intersection.
@@ -75,7 +80,7 @@ export function modelPointCheck(model,position,extent=[0,0,0],ownerCoords=null,e
   return result;
 }
 function checkPoint(model,position,extent,extraNodeFlags,ownerCoords,result) {
-  position=vector(position,'position'); extent=vector(extent,'extent');
+  position=vector(position,'position',true); extent=vector(extent,'extent');
   if (extent.some(v=>v<0)) throw Error('Negative point extents are unsupported');
   if (model.rootOutside===undefined) throw Error('PointCheck requires compiled BSP root');
   const nodes=model.nodes;
@@ -95,7 +100,8 @@ function checkPoint(model,position,extent,extraNodeFlags,ownerCoords,result) {
       result.location=position.map((v,i)=>f(v+(bevel&&i===0?p[i]*factor*amount:f(f(p[i]*factor)*amount))));
       result.normal=p.slice(0,3);result.item=item;
     }
-    return distance<push;
+    // 103f1ef3-103f1f00 and 103f1e52-103f1e5f: the hull plane loop goes on while `Dist < PushOut` (C0), a NaN included.
+    return c0(distance,push);
   }
   let visits=0;
   function nodeAt(index) {
@@ -163,8 +169,10 @@ function checkPoint(model,position,extent,extraNodeFlags,ownerCoords,result) {
     const push=f(support(p,padded));
     // Original front recursion precedes back tail traversal. Recovery does not
     // mutate the position used by either branch's boolean test.
-    if (distance<=push) stack.push({index:node.back,parent:index,outside:outside&&!solid});
-    if (distance> -push) stack.push({index:node.front,parent:index,outside:outside||solid});
+    // 103f1b30-103f1b3f: the front child is entered unless `-PushOut >= Dist` (fcomps of -PushOut, test ah,1); 103f1bb9-103f1bc6:
+    // the back child unless `Dist > PushOut` (test ah,0x41). A NaN distance enters both.
+    if (c0c3(distance,push)) stack.push({index:node.back,parent:index,outside:outside&&!solid});
+    if (c0(-push,distance)) stack.push({index:node.front,parent:index,outside:outside||solid});
   }
   return clear;
 }

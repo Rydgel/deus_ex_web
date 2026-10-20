@@ -20,7 +20,9 @@ Landing supplies `(0, 0)`; SpawnActor supplies `(0, 1)` at `0x103951ae`.
   adjustment. Probe distance and adjustment size are the corresponding extent
   component (`0x1039868f`–`0x103987d9`).
 - AdjustSpot requests a zero-extent SingleLineCheck with trace flags 6, null
-  source actor, and final option 0. If Hit.Time < 1, adjust location along the hit
+  source actor, and final option 0. If Hit.Time < 1 (FCOMP + `test ah, 1`: an
+  unordered compare, a NaN Time, satisfies it, [NaN in FindSpot](#nan-in-findspot-work-item-15-2026-10-20)),
+  adjust location along the hit
   normal by `(1.05 - Hit.Time) * Size` (`0x10398365`–`0x1039842a`). The original
   float stores differ by component: X/Y round after each multiplication, while Z
   retains the intermediate products until the final addition/store.
@@ -31,7 +33,8 @@ Landing supplies `(0, 0)`; SpawnActor supplies `(0, 1)` at `0x103951ae`.
   each sign from -1 to +1. Endpoints are the current candidate plus signed extent.
   Adjustment size is float32 `sqrt(Extent.SizeSquared()) + 2`, using the original
   unrounded squared sum for the square root (`0x10398884`–`0x10398928`).
-- If float32 squared displacement exceeds 1.5 times float32 squared extent,
+- If float32 squared displacement exceeds 1.5 times float32 squared extent
+  (FCOMPP + `test ah, 1` at `0x1039896f`: a NaN displacement fails too),
   fail without changing the caller's location. Otherwise accept and write the
   candidate only if the final point check returns exactly 1
   (`0x10398928`–`0x103989f4`).
@@ -375,3 +378,79 @@ native regression are documented in `docs/extent-trace.md`. With native world
 inputs, MultiLine's factor is `0.46968314051628113`, shortened endpoint Z is
 `220.5037384033203`, and the primitive local time `0.5999542474746704` produces
 final time `0.2817884087562561`. MultiLine itself was unchanged.
+
+## NaN in FindSpot (work item 15, 2026-10-20)
+
+Found by `dor3` (Stage 5, [the exit criteria](stage-5-exit-criteria.md) item 15): `DeusExMover.BlowItUp` makes `NumFragments` (16 for
+DeusExMover2) attempts, each `Spawn(FragmentClass,,, spawnLoc + FragmentSpread * VRand())`, and SpawnActor refuses the spawn when FindSpot
+fails (`0x103951ae`). Play made 15 MetalFragments, the original 14. The CRT rand state at each original `AddObject` against Play's after
+each FindSpot (a fragment's start-up costs 7 draws, a non-last fragment's CalcVelocity another 7 or more, a VRand 3 per try) showed the
+original 3 draws ahead at its sixth fragment and 3 behind between it and the seventh (gaps 23 and 17 where Play's are 20 and 20): the
+VRand of an attempt that made no object. The sixth attempt, at (7713.687, 708.237, -126.479) with extent (6, 6, 0), starts inside the door.
+
+**The original's FindSpot refuses it.** Engine.dll's unchanged FindSpot (`0x10398480`) under Unicorn
+(`scripts/native-tracked-fitting-oracle.py`, below) on Play's inputs of all 16 attempts at tick 320 refuses attempts 5 and 12 and fits
+the other 14 where Play fitted 15 (attempt 12 was refused by both; attempts 13 and 15 are adjusted by both). The sixth attempt's chain, in
+order, with the oracle's own list of calls (an `A` marks a step a Play query reproduces):
+
+1. SinglePointCheck at the start: blocked (a recovery location 4.4 units in +X). A
+2. AdjustSpot, probe -X (flags 6): SingleLineCheck -> MultiLineCheck. The world check, `UModel::LineCheck` over the brush tracker's model
+   (the door's fragments are its nodes), hits at time 0 with the +X root-facing normal; the hash walks cell (158, 131, 128) and
+   `DeusExMover2`'s own brush also hits at time 0, with the same normal and within 2 units, so MultiLineCheck's mover recovery
+   (`0x1039b4ed`) divides by a zero-length segment: `1 / 0 = inf`, `inf * 0 =` the x87 default NaN `0xffc00000`, the mover hit's Time
+   and Location. The sort keeps the mover first (the comparator is C0 on an unordered Time, `0x1039c060`) and SingleLineCheck returns it.
+   A
+3. AdjustSpot reads `Hit.Time < 1` with `fld Time; fcomp 1.0; fnstsw ax; test ah, 1; je skip` (`0x103983b3`-`0x103983c1`). An unordered
+   compare sets C3, C2 and C0, so it does not skip: the candidate becomes `Location + (1.05 - NaN) * Normal * Size`, a NaN in all three
+   components (a NaN times a zero normal component is still a NaN). Play's `time < 1` is false for a NaN, so it skipped the adjustment:
+   the first difference. **Fixed.**
+4. The other five axis probes run on a NaN start and end. The world check returns a hit at time 0 (the ray traversal ends in its
+   solid-at-start case: Item 0, Time 0, Location the NaN start, the root plane's normal; the facing test `fcomp; test ah, 1` is C0 for
+   the unordered value, so the Island's root normal `(-1, 0, 0)` comes out as `(1, -0, -0)`); the hash walks the one cell (0, 0, 0) (every bound is `fistp` of a NaN, the integer indefinite
+   `0x80000000`, which the clamps take to 0) and finds no actor. SingleLineCheck returns the world hit at time 0, AdjustSpot adjusts a
+   NaN by a NaN again. A
+5. SinglePointCheck on the NaN candidate with extent (6, 6, 0): `UModel::PointCheck` is blocked (no recovery written: Item -1). The
+   traversal (`0x103f19b0`) enters the front child unless `-PushOut >= Dist` and the back child unless `Dist > PushOut`, so a NaN
+   distance enters both, and the hull plane loop goes on while `Dist < PushOut` (C0), so every hull test holds: blocked. A
+6. The eight corner probes run on NaN. The displacement test, `fcompp` of 1.5 * float32(SizeSquared(Extent)) against float32(SizeSquared
+   (displacement)) then `test ah, 1; je continue` (`0x1039896f`-`0x1039897c`), is C0 for a NaN: FindSpot returns 0 without a final point
+   check. The caller's location is unchanged. A
+
+So the original's SpawnActor returns None for that attempt before any object exists: no `AddObject`, no start-up, no CalcVelocity, only the
+VRand of the next attempt's location, which is the 3 draws. The fragment is never created with a NaN location, so SpawnActor and the
+fragment's start-up are not reached on a NaN (they never run on it). After the refusal the original's stream is one attempt ahead of
+Play's old one: its 14 fragments are attempts 0-4, 6-12, 14 and 15 (5 and 13 are refused), the positions Play drew at attempts 6 to 14
+before the change are the original's 7 to 15 (the old attempt 12's refusal is the original's 13), and its last fragment is attempt 15,
+the one that gets no CalcVelocity (7 draws to the next event).
+
+**Play now.** `fitting.mjs` reads `Hit.Time < 1` and the displacement test as the C0 branches (`x87-nan.mjs` `x87C0`), and keeps a NaN through
+the Z product. The queries a NaN reaches carry the native branches (each equal to its old comparison for any ordered pair):
+
+| Step | Native | Play |
+| --- | --- | --- |
+| hash line cells (`0x10359226`-`0x103592f7`) | fistp of a NaN is `0x80000000`; the clamps give 0; one cell (0,0,0) | `collisionHashLineBounds`/`actorLineCheck` accept an all-NaN Start and End only |
+| BSP ray facing test (`0x103f3d3d`-`0x103f3f59`) | `fcomp; test ah,1`: C0 on unordered flips the normal | `ray.mjs` `x87C0` and `trace.rs` (the Rust kernel, `validate-trace-kernel`: 79,090 cases, 0 mismatches) |
+| point check front/back tests (`0x103f1b30`-`0x103f1bc6`), hull plane loop (`0x103f1e52`-`0x103f1f00`) | C0 / C0 or C3 / `Dist < PushOut` all hold for a NaN | `point-check.mjs` `x87C0`, `x87C0C3`; a NaN coordinate makes the exact plane distance a NaN |
+| displacement test, AdjustSpot's Time test | C0 | `fitting.mjs` |
+
+**Unsupported (still throws).** A hash line query with exactly one NaN vector (the hash builds its bounds with `FBox::operator+=`, whose
+Min/Max compare form is not translated; the oracle answers the level query: a world hit at time 0 with a NaN location); a box-extent
+LineCheck on a NaN (not examined: an oracle run with it did not finish in two minutes); an infinity in any query; a NaN extent. FindSpot reaches none of them: once
+the candidate is NaN its Start and End are both all-NaN.
+
+**Evidence.**
+`scripts/native-tracked-fitting-oracle.py` extends `native-level-oracle.py` (the original hash, `SetActorCollision`, every collidable actor
+with its brush through `ABrush::ToWorld`, `UModel::LineCheck`/`PointCheck`) with the model's nodes replaced by raw 64-byte records (Play's
+tracker after `GNewBrushTracker`; the tick-320 block differs from it in 685 nodes' NF_PolyOccluded / NF_BoxOccluded render bits, which the
+0x21 collision mask does not read, and gives the same answers) and a call-by-call list (arguments, results and the hash cells as float
+words). `scripts/validate-native-findspot-nan.mjs` compares Play with it: dor3's 16 attempts, seeded positions through the door (half of
+them meeting a NaN Time), 26 NaN queries at the level (SingleLineCheck/SinglePointCheck with and without the hash), and 160 NaN rays and
+points over the static BSP and the tracked model of both maps (`native-tracked-linecheck-oracle.py`). Every success, position, query,
+Time, Location, Normal (with the sign of zero), Item and hash cell is equal. `scripts/validate-x87-compare-hardware.mjs` runs the three
+compare forms (`fcompl m64`, `fcomps m32`, `fcompp`) and FISTP on real x87 (this Linux host, Wine): 1,900 rows, 903 of them unordered,
+all C3|C2|C0, and the FISTP of a NaN, an infinity or an out-of-range value is `0x80000000`. `validate-stage5-live.mjs --scene dor3` passes.
+
+```sh
+NATIVE_PROBE_PYTHON=.cache/native-probe-env/bin/python node scripts/validate-native-findspot-nan.mjs
+node scripts/validate-x87-compare-hardware.mjs
+```
