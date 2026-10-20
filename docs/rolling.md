@@ -20,7 +20,10 @@ that executes those instructions.
    Both computed velocity vectors are stored to `AActor::Velocity` at
    `0x103d4c97`–`0x103d4ca8` and `0x103d4cf5`–`0x103d4d09`; callbacks later in
    the body therefore observe the final friction/fluid result.
-2. `DesiredMove = Velocity + ZoneVelocity`; `OldLocation = Location`;
+2. `DesiredMove = Velocity + ZoneVelocity`; `OldLocation = Location`
+   (stored at `0x103d4d34`: the **field**, `AActor+0x12c`, which `rolling.mjs`
+   kept only in a local until the O3 replay of Training's pushed crate found it,
+   2026-10-20; `validate-native-rolling` compares it now);
    `bJustTeleported = 0`. `Down = (ZoneGravity.Z > 0 ? +1 : -1) * 16`.
 3. Substep loop (at most 8 iterations), `timeTick = min(0.1, remaining*0.5)` when
    `remaining > 0.1` (the comparison is against the original double `0.1`, so a
@@ -102,6 +105,9 @@ residual came from rounding four x87-extended intermediates to float32 (the
 wall-slide `1 - Hit.Time`, the falling-transition divisor, `DesiredDist`, and the
 refund accumulation); each now retains the original precision (see the list above).
 `test/rolling.test.mjs` captures five original expectations.
+
+The same body on the inputs Play produced (Training's crate pushed by the player, 312 calls) is replayed through the original by
+`scripts/validate-stage5-o3.mjs --scene crate-stack` ([the O3 proof](stage-5-exit-criteria.md#o3-the-originals-code-on-plays-inputs-2026-10-20)).
 
 ## Boundaries
 

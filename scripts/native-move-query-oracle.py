@@ -35,7 +35,7 @@ class NativeMove(c.NativeCollision):
         if self.active and address==0x10399cef:
             cpu.reg_write(UC_X86_REG_EIP,0x10399f48);return
         super().on_instruction(cpu,address,size,data)
-    def capture(self,case):
+    def capture(self,case,detail=False):
         self.query=None;self.displacement=[0,0,0]
         # Source actor type: a controlled-player cylinder (default) or a plain
         # movable actor such as a pushable decoration. This toggles the class
@@ -48,7 +48,7 @@ class NativeMove(c.NativeCollision):
         self.write(self.source+0x114,'3f',*case['start']);self.write(self.source+0x120,'3i',0,0,0)
         self.write(self.source+0x1d4,'2f',*case.get('extent',[17,42]));self.write(self.source+0x1dc,'I',case.get('sourceFlags',15))
         self.write(self.hit,'44s',bytes(44));self.write(self.hit+36,'f',1)
-        actors={'world':self.world,'self':self.source};self.head=0;tail=None
+        actors={'world':self.world,'self':self.source};self.head=0;tail=None;self.pointers={self.world:'world'}
         for index,h in enumerate(case['hits']):
             kind=h.get('kind','actor')
             actor=actors.get(kind)
@@ -60,15 +60,34 @@ class NativeMove(c.NativeCollision):
                 self.write(actor+0x178,'I',1 if kind=='mover' else 0)
                 self.write(actor+0x1dc,'I',h.get('flags',15))
                 self.write(actor+0xc4,'I',self.source if h.get('basedOnSource') else 0)
-            hit=self.alloc(44);self.write(hit,'II6fIfi',0,actor,*h.get('location',[10,20,30]),*h.get('normal',[-1,0,0]),0,h['time'],index)
+            hit=self.alloc(44);self.write(hit,'II6fIfi',0,actor,*h.get('location',[10,20,30]),*h.get('normal',[-1,0,0]),0,h['time'],h.get('item',index))
+            self.pointers[actor]=h.get('id')
             if tail:self.write(tail,'I',hit)
             else:self.head=hit
             tail=hit
         self.active=True
-        success=self.call(0x103990e0,self.level,struct.pack('<I3f3iI4I',self.source,*case['delta'],0,0,0,self.hit,0,0,0,0))
+        success=self.call(0x103990e0,self.level,struct.pack('<I3f3iI4I',self.source,*case['delta'],0,0,0,self.hit,0,int(case.get('ignorePawns',0)),int(case.get('ignoreBases',0)),0))
         self.active=False
-        return {'success':bool(success),'query':self.query,'delta':self.displacement,'position':list(self.read(self.source+0x114,'3f')),
+        result={'success':bool(success),'query':self.query,'delta':self.displacement,'position':list(self.read(self.source+0x114,'3f')),
                 'time':self.read(self.hit+36,'f')[0], 'selected':self.read(self.hit+40,'i')[0] if self.read(self.hit+4,'I')[0] else None}
+        if detail:result['hitActor']=self.pointers.get(self.read(self.hit+4,'I')[0]) if self.read(self.hit+4,'I')[0] else None
+        return result
+    def o3(self,case):
+        """A call Play recorded (scripts/o3-adapters.mjs, docs/stage-5-exit-criteria.md "O3"): MoveActor's query, filter and math prefix from Play's source,
+        start and delta, with the hits Play's MultiLineCheck returned. The scene's mutation callbacks (BumpWall, Bump, touches, zones) are bypassed, as in the O2
+        oracle: this proves the selected hit, the displacement and the time."""
+        cfg=case['config']
+        if (cfg['ignorePawns'] or cfg['ignoreBases']) and cfg['hits']:raise RuntimeError('a MoveActor with bIgnorePawns/bIgnoreBases and candidate hits was recorded: extend the replay (class ancestry and the source Base chain)')
+        hits=[{'kind':h['kind'],'flags':h['flags'],'time':h['time'],'location':h['location'],'normal':h['normal'],'item':h['item'],'basedOnSource':h['basedOnSource'],'id':h['id']} for h in cfg['hits']]
+        for h in hits:
+            if h['kind']=='world':h.pop('flags')
+        native=self.capture({'start':case['before']['state']['start'],'delta':case['args'],'extent':cfg['extent'],'sourceFlags':cfg['sourceFlags'],'sourceControlledPlayer':cfg['controlledPlayer'],
+                             'sourceKind':'projectile' if cfg['projectile'] else None,'static':cfg['static'],'movable':cfg['movable'],'ignorePawns':cfg['ignorePawns'],'ignoreBases':cfg['ignoreBases'],'hits':hits},detail=True)
+        query=native['query']
+        events=[] if query is None else [{'k':'multiLine','args':[query['end'],query['start'],query['extent'],query['checkActors'],query['world'],query['extra']],'pre':None}]
+        return {'events':events,'after':{'success':native['success'],'delta':native['delta'],'position':native['position'],'time':native['time'],'selected':native['selected'],'hitActor':native['hitActor']}}
 if __name__=='__main__':
     n=NativeMove(Path(sys.argv[1]));cases=json.loads(Path(sys.argv[2]).read_text())
+    if '--o3' in sys.argv:
+        print(json.dumps({'hashes':c.HASHES,'results':[n.o3(x) for x in cases]}));sys.exit(0)
     print(json.dumps({'hashes':c.HASHES,'results':[n.capture(x) for x in cases]}))

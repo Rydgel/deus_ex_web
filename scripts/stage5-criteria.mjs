@@ -17,6 +17,7 @@ export const CLAUSES = Object.freeze({
 export const CRITERIA = [];
 const add = (id, scene, claim, ev, census, need, extra = {}) => CRITERIA.push({id, clause: Number(id.split('.')[1]), scene, claim, ev, census, proof: [], have: [], need, weak: null, excluded: null, ...extra});
 const live = (...scenes) => scenes.map(scene => ({type: 'validator', name: 'validate-stage5-live.mjs', args: ['--scene', scene]}));
+const o3 = scene => [{type: 'validator', name: 'validate-stage5-o3.mjs', args: ['--scene', scene]}];
 const excluded = (id, scene, claim, reason) => CRITERIA.push({id, clause: Number(id.split('.')[1]), scene, claim, ev: '-', census: null, proof: [], have: [], need: null, weak: null, excluded: reason});
 
 // 5.1 Combat -----------------------------------------------------------------------------------------------------------------------------
@@ -98,9 +99,13 @@ add('5.3.4', '00_Training obstacle course', 'jump across the platforms and crouc
   'O1: live trace of the original with Jump on a key edge from a measured pose (a held walking key is not capturable: the approach is placed, as the Underworld scenes do)',
   {have: ['walking, falling, landing, stance oracles (O2)', 'measure-training-physics']});
 add('5.3.5', '00_Training ladder', 'climb the ladder by view pitch and the arrow keys, and leave it at the top', 'O3', 'ladder',
-  'O3: the ladder prelude and physFlying on the inputs Play produced in this scene, against Engine.dll', {have: ['validate-native-ladder, validate-native-flying (O2)', 'validate-training-ladder (P)']});
+  'O3: the ladder prelude and physFlying on the inputs Play produced in this scene, against Engine.dll',
+  {proof: o3('ladder'), have: ['validate-stage5-o3 --scene ladder (O3 2026-10-20: the scene with the recorder on, 1,465 calls replayed through Engine.dll, bit-exact: the walking-surface prelude 420 (174 Ladder branches), physFlying 174, physWalking 368, physFalling 52, processLanded 2, MoveActor\'s query 370, processHitWall 79; a control per body; Play\'s Rust-kernel run digest-equal)', 'validate-native-ladder, validate-native-flying (O2)', 'validate-training-ladder (P)'],
+    weak: 'The world\'s answers are inputs, not replayed: MoveActor\'s mutation tail (touches, zones, Bump), the line-check results, SetPhysics and SetBase, and the script events\' bodies (docs/stage-5-exit-criteria.md "O3").'});
 add('5.3.6', '00_Training crate stack', 'pick up a metal crate, drop it, stack and climb: GrabDecoration, DropDecoration, Bump, physFalling and physRolling of the crate, the climb', 'O3', 'crate-stack',
-  'O3: the decoration\'s falling and rolling and the player\'s stepping on Play\'s inputs', {have: ['validate-plant-push, validate-decoration-settle-roll (O2)']});
+  'O3: the decoration\'s falling and rolling and the player\'s stepping on Play\'s inputs',
+  {proof: o3('crate-stack'), have: ['validate-stage5-o3 --scene crate-stack (O3 2026-10-20: the crate carried, dropped, pushed (PHYS_Rolling) and climbed, 2,864 calls replayed through Engine.dll, bit-exact: decorations\' physFalling 62, processLanded 26 and physRolling 312, the player\'s prelude 486, physWalking 443 (stepUp on a pushable decoration), physFalling 43, processLanded 2, processHitWall 161, MoveActor\'s query 1,329; controls; A/B digest. It found that physRolling stores OldLocation)', 'validate-plant-push, validate-decoration-settle-roll (O2)'],
+    weak: 'Vertical stacking is not driven (a drop from the floor lands on the floor): the row is carry, drop, push and climb. GrabDecoration, DropDecoration and DeusExDecoration.Bump are UnrealScript the VM runs, and the script events, MoveActor\'s mutation tail and SetPhysics are Play\'s recorded behaviour, not replayed.'});
 add('5.3.7', '00_Training swim', 'enter the contaminated water with and without the HazMat suit: WaterZone0 and DamageTrigger1 radiation, the suit\'s duration and armor, swimming and leaving by the ramp', 'O1', 'hazmat-swim',
   'O1: live trace of the original (HazMatSuit activated by ActivateBelt, the player placed in the water, Health and the suit\'s charge per tick)',
   {have: ['validate-native-swimming 1093 cases (O2)', 'alterations census hit-radiation, hit-drowned (P)']});

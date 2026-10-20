@@ -218,6 +218,10 @@ export const DRIVERS = {
     return ok(airborne && zMax > z0 + 10, {z0, zMax, end: c.pos(c.player()).map(Math.round), physics: c.read(c.player(), 'Physics')});
   },
   async 'crate-stack'(c) {
+    // The Training crate lesson, as far as Play's own inputs take it: GrabDecoration and DropDecoration (the right button and Tab), the dropped crate pushed by walking into it
+    // (DeusExDecoration.Bump on a settled decoration: SetPhysics(PHYS_Rolling), AActor::physRolling slides it, the player's physWalking pushes), and the crate used as a step
+    // (a jump from the floor lands on it: processLanded, SetPhysics(PHYS_Walking, crate), physWalking with the crate as its Base). Vertical stacking is not driven: a drop
+    // from the floor lands on the floor (DropDecoration places the crate at the player's feet), and the harness holds no key to carry one up.
     const crates = c.actors().filter(a => /^CrateUnbreakableSmall$/.test(a.name.replace(/\d+$/, ''))).sort((a, b) => near(c.pos(a), [7063, -1632, 8]) - near(c.pos(b), [7063, -1632, 8]));
     const crate = crates[0];
     if (!crate) throw new Undriven('no CrateUnbreakable in the map');
@@ -225,7 +229,24 @@ export const DRIVERS = {
     const carried = c.read(c.player(), 'CarriedDecoration') === crate;
     c.key('Tab'); c.frames(60);
     const dropped = !c.read(c.player(), 'CarriedDecoration');
-    return ok(carried && dropped, {crate: crate.name, carried, dropped, at: c.pos(crate).map(Math.round)});
+    const droppedAt = c.pos(crate).map(Math.round);
+    // Push: walk into the dropped crate from 90 units west of it.
+    const at = c.pos(crate);
+    c.fixture.place([at[0] - 90, at[1], at[2] + 45], {yaw: 0}); c.frames(30);
+    c.fixture.driveLegacy({forward: 1});
+    let rolled = false;
+    for (let i = 0; i < 12; i++) { c.frames(10); rolled ||= c.read(crate, 'Physics') === 7; }
+    c.fixture.driveLegacy({forward: 0}); c.frames(30);
+    const pushed = rolled && near(c.pos(crate), at) > 20;
+    // Climb: a run and a jump from 75 units west of the crate lands the player on it.
+    const rest = c.pos(crate);
+    c.fixture.place([rest[0] - 75, rest[1], rest[2] + 30], {yaw: 0}); c.frames(40);
+    c.fixture.driveLegacy({forward: 1}); c.frames(25);
+    c.key('Space', 3);
+    c.frames(80);
+    c.fixture.driveLegacy({forward: 0}); c.frames(30);
+    const climbed = c.read(c.player(), 'Base') === crate && c.read(c.player(), 'Physics') === 1;
+    return ok(carried && dropped && pushed && climbed, {crate: crate.name, carried, dropped, droppedAt, rolled, pushedTo: c.pos(crate).map(Math.round), climbed, standingAt: c.pos(c.player()).map(Math.round)});
   },
   async 'hazmat-swim'(c) {
     const water = c.actor('WaterZone0'), p = c.pos(water);
