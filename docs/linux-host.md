@@ -180,8 +180,20 @@ the GL backend.
 - `scripts/validate-gpu-mesh.mjs` runs ANGLE on GL here and on Metal on the
   Mac, so the two machines' GPU comparisons use different shader compilers
   and hardware; both are checked against the same CPU kernels.
-- `ad/scripts/original-game.mjs` hard-codes the CrossOver bottle path under
-  `~/Library`. The ad capture pipeline stays on the Mac.
+- `ad/scripts/original-game.mjs` defaults to the CrossOver bottle path under
+  `~/Library`; plain Wine takes `DX_WINE`, `DX_GAME` and `WINEPREFIX`
+  (`~/.wine-deusex`, set by `scripts/live-original.sh`).
+- **Original captures under Hyprland (2026-10-20).** A tiling compositor resizes
+  the game's window. WinDrv's window procedure then re-creates the D3D device
+  over and over, the window stays black, and the level stops ticking: a capture
+  stalls after a minute or two. `live-original.sh` sets `DX_DESKTOP=1400x860`, and
+  `original-game.mjs launch` writes winecfg's virtual desktop
+  (`HKCU\Software\Wine\Explorer` `Desktop=Default`, `Desktops\Default=1400x860`)
+  into the prefix. Every Wine program there (the game, dxinput, the tracer) then
+  runs inside one fixed-size desktop window. The setting takes effect in the next
+  Wine session (no `wineserver` running), and it stays in the prefix. With it, a
+  Stage 5 capture runs at about 0.3 s a tick (the Mac about 0.12), and Play's
+  replay of a Linux capture (`cam2lx`) passes as the Mac's does.
 - The `.work/tools` perf scripts hard-code `/Users/gcc` paths. Performance
   work stays on the Mac.
 - The validator runner reads memory pressure on macOS only. On Linux only its

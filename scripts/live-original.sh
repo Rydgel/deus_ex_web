@@ -20,6 +20,9 @@ else
   LOCK=${DX_LOCK:-/home/rydgel/projects/deus_ex_web/.work/wine-deusex.lock}
   export WINEPREFIX=${WINEPREFIX:-$HOME/.wine-deusex} DX_WINE=${DX_WINE:-/usr/bin/wine}
   export DX_GAME=${DX_GAME:-$WINEPREFIX/drive_c/Deus Ex GOTY Edition}
+  # the prefix's Wine virtual desktop (original-game.mjs launch: every Wine tool joins it, so dxinput and the tracer see the game), so that a tiling
+  # compositor cannot resize the game's window; DX_DESKTOP= leaves the prefix as it is
+  export DX_DESKTOP=${DX_DESKTOP-1400x860}
 fi
 cd "$ROOT" || exit 1
 exec 9>"$LOCK"

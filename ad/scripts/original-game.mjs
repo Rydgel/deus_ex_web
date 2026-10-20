@@ -73,8 +73,20 @@ export function shots() {
   return readdirSync(SYSTEM).filter(name => /^Shot\d{4}\.bmp$/i.test(name)).sort();
 }
 
+// DX_DESKTOP=WxH runs the prefix's programs in a Wine virtual desktop of that
+// size (winecfg's "Emulate a virtual desktop": HKCU\Software\Wine\Explorer
+// Desktop=Default, Desktops\Default=WxH), set before the launch. Under a
+// tiling Wayland compositor (the Linux host's Hyprland) the game's own window
+// is otherwise tiled to another size: WinDrv's window procedure then resizes
+// the D3D device over and over and the level stops ticking (a stalled
+// capture, 2026-10-20). Every later tool (dxinput, the tracer) joins the same
+// desktop, so it still finds the game's window.
 export function launch(map) {
   writeIni();
+  const desktop = process.env.DX_DESKTOP;
+  if (desktop) for (const args of [['HKCU\\Software\\Wine\\Explorer', '/v', 'Desktop', '/d', 'Default'],
+    ['HKCU\\Software\\Wine\\Explorer\\Desktops', '/v', 'Default', '/d', desktop]])
+    execFileSync(WINE, ['reg', 'add', ...args, '/f'], {env, stdio: 'ignore', timeout: 60000});
   const child = spawn(WINE, ['C:\\Deus Ex GOTY Edition\\System\\DeusEx.exe', map, 'INI=DeusEx-ad.ini', 'USERINI=User-ad.ini'],
     {env, detached: true, stdio: 'ignore', cwd: SYSTEM});
   child.unref();

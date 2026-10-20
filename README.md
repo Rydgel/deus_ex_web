@@ -200,7 +200,7 @@ as of 2026-10-19), and `scripts/validate-stage5-acceptance.mjs` is the gate.
 
 **Gate: 24 of 50 pass, 3 fail, 23 await their capture** (2026-10-20). The passing
 rows are proven by live traces of the original game: `DeusEx.exe` runs under
-CrossOver with a tracer (`tools/dx-live-win.c`, `scripts/live-original.sh`) that
+CrossOver (the Mac) or Wine (the Linux host) with a tracer (`tools/dx-live-win.c`, `scripts/live-original.sh`) that
 records the watched actors, the random stream, the AI events and every object
 creation per tick. Play then replays the same inputs and must match them tick by
 tick (`scripts/validate-stage5-live.mjs --scene <tag>`, 45 stored Island scenes).

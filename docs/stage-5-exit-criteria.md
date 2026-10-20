@@ -1023,9 +1023,12 @@ kernel over the tracked model agrees with the JavaScript bodies on 5,280 answers
   5.3.10, 5.5.1 and 5.5.2 fail on it.
 
 **Also checked:** the unit tests (652), `validate-trace-kernel` (79,090 cases), `validate-brush-tracker`, `validate-tracked-linecheck`,
-`validate-fast-line-check-tracked`, and the census (below). A recapture of `dor3` with a FindSpot breakpoint under the Linux host's wine ran at about 2.4 s a tick
-and the driver's default `--wait-seconds 600` (sized for the Mac's ~0.12 s a tick) stopped it at tick 146. The user accepts a capture from either machine
-(2026-10-20), so a Linux capture runs with a longer `--wait-seconds`.
+`validate-fast-line-check-tracked`, and the census (below). A recapture of `dor3` under the Linux host's wine ran at about 2.4 s a tick and stopped
+ticking at 146. The cause was the desktop, not the tracer: Hyprland tiled the game's window to another size, and WinDrv's window procedure then
+re-created the D3D device over and over (the main thread's stack: WinDrv → D3DDrv → ddraw → wined3d), so `ULevel::Tick` was never reached.
+`live-original.sh` now runs the prefix in a Wine virtual desktop (`DX_DESKTOP`, [Linux host](linux-host.md#known-gaps)). The user accepts a capture
+from either machine (2026-10-20). A Linux recapture of `cam2` (`cam2lx`, 0.3 s a tick) replays in Play with all 75 actors equal for 300 ticks,
+as the Mac's capture does.
 
 ### The death camera's rotation (work item 16, 2026-10-20)
 
