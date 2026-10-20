@@ -25,7 +25,7 @@ export async function buildMap(assets, mapName) {
       surface: n.surface, back: n.back, front: n.front, coplanar: n.coplanar, collisionBound: n.collisionBound,
       renderBound: n.renderBound, zones: n.zones, vertexCount: n.vertexCount, flags: n.flags, leaves: n.leaves })),
     verts: m.vertices.map(v => [v.point, v.side]), pointBits: m.points.map(p => p.map(bits)),
-    vectorBits: m.vectors.map(p => p.map(bits)),
+    vectorBits: m.vectors.map(p => p.map(bits)), leafHulls: m.leafHulls,
     surfs: m.surfaces.map(s => ({ texture: textureKey(s.texture), flags: s.flags >>> 0, base: s.base, normal: s.normal,
       textureU: s.textureU, textureV: s.textureV, lightMap: s.lightMap, brushPoly: s.brushPolygon, pan: s.pan })),
   };

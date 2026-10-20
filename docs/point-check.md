@@ -97,3 +97,13 @@ points on a transformed node plane and 1 and 2 float32 steps either side of it, 
 the 24-per-actor corpus (32,064 cases: 18,192 Training and 13,872 Island, 11,633 and 9,606 clear) matched with no mismatch. Native binaries and reports stay
 ignored. Not covered: a non-float32 coordinate (the engine's coordinates are float32), and the game thread's real x87 precision control (the oracle's x87
 rounds the sums to the 64-bit mantissa, as the recovered recovery arithmetic of `planeDistance` does).
+
+## Recovery tie between a hull plane and its bevel (open, 2026-10-20)
+
+Found by `validate-tracked-collision.mjs` (the static BSP state, so not a tracker matter): on 00_Training, the point (3939.0139, 910.0047, -64) with
+the extents 8×8×8 and 20×20×47.5 is inside in both programs, but the recovery outputs differ. The original keeps hull plane 5683 (normal
+(0.31, -5.48e-17, -0.95), Item 5683). Play's `modelPointCheck` lets a bevel of that hull (103f3050's edge plane: the same normal with Y
+exactly 0, Item -1) win the `distance < nearest` test, so its Location is 1 ulp off in X and 15 in Z. The outside flag, which is what
+MoveActor's and FindSpot's callers branch on, agrees. Not traced yet: whether the original builds that bevel at all (the axis sign test
+reads the hull plane's -5.48e-17 Y) and at which precision it compares the bevel's retained distance with the stored nearest. The validator
+lists the case as known, so a new difference still fails it.

@@ -458,9 +458,12 @@ export function createBspOcclusion(kernel, model, { surfaceTextureFlags, zoneAct
     /** Level->Model as UModel::LineCheck traverses it now, the tracker's
      * fragment nodes included (docs/brush-tracker.md "Collision": once
      * NF_IsNew clears they are ordinary nodes of the level model): the
-     * fields ray.mjs traceRayFast and zone.mjs pointRegion read (plane,
-     * front, back, vertexCount, NodeFlags, iZone, iLeaf) and rootOutside,
-     * read from this model's memory. A node
+     * fields ray.mjs traceRayFast, extent-trace.mjs traceExtent, point-check.mjs
+     * modelPointCheck and zone.mjs pointRegion read (plane, front, back,
+     * vertexCount, NodeFlags, iCollisionBound, iSurf, iZone, iLeaf), rootOutside
+     * and the static model's LeafHulls (AddNode gives a fragment
+     * iCollisionBound -1, 0x1037bb00, so the tracker adds no hull), read from
+     * this model's memory. A node
      * object is made at its first read; take a new view after the tracker
      * updated. */
     lineModel() {
@@ -471,13 +474,13 @@ export function createBspOcclusion(kernel, model, { surfaceTextureFlags, zoneAct
         if (!n) {
           const o = (nodes >>> 2) + 16 * i;
           n = { plane: [fl[o], fl[o + 1], fl[o + 2], fl[o + 3]], back: u[o + 8] | 0, front: u[o + 9] | 0,
-            vertexCount: b[nodes + 64 * i + 54], flags: b[nodes + 64 * i + 55],
+            vertexCount: b[nodes + 64 * i + 54], flags: b[nodes + 64 * i + 55], collisionBound: u[o + 11] | 0, surface: u[o + 7] | 0,
             zones: [b[nodes + 64 * i + 52], b[nodes + 64 * i + 53]], leaves: [u[o + 14] | 0, u[o + 15] | 0] };
           made.set(i, n);
         }
         return n;
       };
-      return { rootOutside: model.rootOutside, nodes: new Proxy([], { get(_, key) {
+      return { rootOutside: model.rootOutside, leafHulls: model.leafHulls, nodes: new Proxy([], { get(_, key) {
         if (key === 'length') return count;
         const i = typeof key === 'string' ? Number(key) : NaN;
         return Number.isInteger(i) && i >= 0 && i < count ? node(i) : undefined;
