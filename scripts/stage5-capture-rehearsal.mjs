@@ -76,7 +76,7 @@ const conLine = () => {
     const event = c.read(conPlay, 'currentEvent'), cls = event ? c.runtime.instance(event).cls.record.key.split('.').pop().replace('conevent', '') : '-';
     const speech = cls === 'speech' ? `${c.read(event, 'speakerName')}:"${String(c.read(c.read(event, 'conSpeech'), 'speech')).slice(0, 24)}"` : '';
     const window = c.read(conPlay, 'conWinThird');
-    con = `${conPlay.name} ${String(c.read(c.read(conPlay, 'con'), 'conName'))} ${c.state(conPlay).split('.').pop()} ${cls}${c.read(event, 'label') ? `@${c.read(event, 'label')}` : ''} ${speech}${window ? ` choices=${c.read(window, 'numChoices')}` : ''}`;
+    con = `${conPlay.name} ${String(c.read(c.read(conPlay, 'con'), 'conName'))} ${c.state(conPlay).split('.').pop()} ${cls}${event && c.read(event, 'label') ? `@${c.read(event, 'label')}` : ''} ${speech}${window ? ` choices=${c.read(window, 'numChoices')}` : ''}`;
   }
   const items = []; for (let i = c.read(p, 'Inventory'); i && items.length < 32; i = c.read(i, 'Inventory')) items.push(i.name);
   const flags = [...(base?.entries?.values() ?? [])].map(e => `${e.name}=${e.type ? e.value : e.value ? 1 : 0}`).sort().join(' ');
@@ -110,7 +110,7 @@ for (let tick = 1; tick <= ticks; tick++) {
   // (a pawn's NumCarcasses when it has seen a body, and its SeekType while it seeks: 1 sound, 2 sight, 3 guess, 4 carcass, ScriptedPawn.ESeekType)
   const line = pawns.map(a => c.gone(a) ? `${a.name}:gone` : `${a.name}:${c.state(a).split('.').pop()}/${c.read(a, 'Enemy')?.name ?? '-'}/h${c.read(a, 'Health')}`
     + `${c.read(a, 'NumCarcasses') ? `/bodies${c.read(a, 'NumCarcasses')}` : ''}${/seeking/i.test(c.state(a)) ? `/seek${c.read(a, 'SeekType')}` : ''}`).join(' ')
-    + ` | player h${c.read(p, 'Health')} [${regions.map(n => c.read(p, n)).join(',')}] ${c.state(p).split('.').pop()} inHand=${c.read(p, 'inHand')?.name ?? '-'}`
+    + ` | player h${c.read(p, 'Health')} [${regions.map(n => c.read(p, n)).join(',')}] ${c.state(p).split('.').pop()} @${c.pos(p).map(Math.round)} inHand=${c.read(p, 'inHand')?.name ?? '-'}`
     + ` frob=${c.read(p, 'FrobTarget')?.name ?? '-'} tracers=${c.byClass('Tracer').length}${talk()}`
     + (scene?.flags ?? option('flags', 'StatueAlarmTriggered').split(',')).filter(Boolean).map(f => ` ${f}=${Number(c.flag(f.toLowerCase()))}`).join('')
     // --props "Name=Prop,Prop;Name2=..." (Name @weapon: the player's Weapon): more fields printed with the line

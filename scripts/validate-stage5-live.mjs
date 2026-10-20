@@ -458,6 +458,35 @@ export const SCENES = {
       .map(([t, x, y, z, yaw, pitch]) => `${t}:ghost|${t}:set DeusEx.JCDentonMale Location (X=${x},Y=${y},Z=${z})|${t}:walk|${t}:set DeusEx.JCDentonMale ViewRotation (Pitch=${pitch},Yaw=${yaw},Roll=0)|${t}:Tantalus`).join('|')
       + [80, 186].map(t => `|${t}:ghost|${t}:set DeusEx.JCDentonMale Location (X=-4760.6,Y=10430.8,Z=-256.2)|${t}:walk|${t}:set DeusEx.JCDentonMale ViewRotation (Pitch=0,Yaw=58496,Roll=0)`).join('')
       + '|360:ghost|360:set DeusEx.JCDentonMale Location (X=-4262.5,Y=2105.2,Z=-191)|360:walk|360:set DeusEx.JCDentonMale ViewRotation (Pitch=0,Yaw=49152,Roll=0)'},
+  // 00_TrainingFinal (sixth captures, rows 5.2.1, 5.3.13, 5.4.8, 5.6.2). The map is opened at PlayerStart0 (-501, -499); the stealth maze's two soldiers (Soldier0 and
+  // Soldier2, Patrolling, Alliance None) are the pawns, and the alarm chain's devices are watched with their class's fields (ElevatorMover is not a DeusExMover).
+  // stl1, the maze lost and reset (rows 5.2.1, 5.6.2, 5.3.13's close and reopen): the player placed in the frozen phase 180 units east of Soldier0 (469.8, 383.8) on the
+  // maze floor, facing it. Soldier0 sees him, goes Alerting and runs to an AlarmUnit; AlarmUnit.Trigger -> UpdateGroup triggers the four of Tag StealthMazeAlarmUnit,
+  // each fires its Event AlarmDispatcher (Dispatcher1: SoldierNeutral = AllianceTrigger0 and 2, CloseDoor = SequenceTrigger1 SeqNum 1 -> ElevatorMover1.SetSeq,
+  // failmessage = DataLinkTrigger7 -> DL_FailedStealth); the units ring for alarmTimeout (10 s). Then the player is set on the platform west of Switch0 (300, 207.7;
+  // the pose is 38.7 units from the switch and 50.7 under his eye: pitch -9588) and the right button presses it (ButtonDispatcher: SoldierHostile, OpenDoor =
+  // SequenceTrigger0 SeqNum 0, SoldierPatrol, SpecialEventMsg), and ExitDoor slides back.
+  stl1: {map: '00_TrainingFinal', ticks: 1250, early: PLACE(650, 384, -128, 32768), speech: true, wholeFlags: true,
+    cmds: `${MOVE(900, 300, 207.7, 45, 0, -9588)}|960:ParseRightClick`, pawns: ['Soldier0', 'Soldier2'],
+    devices: [...[0, 1, 2, 3].map(i => `AlarmUnit${i}:AlarmUnit`), 'ElevatorMover1:ElevatorMover', 'Dispatcher1:Actor', 'Dispatcher0:Actor', 'Switch0:Actor']},
+  // sw1 (row 5.3.13, Switch1): the player set on the first corridor's floor 50 units west of Switch1 (-144.9, -36.2, 58.5; it faces -X), 13.3 under his eye (pitch -2712);
+  // the right button presses it at 60 (DeusExDecoration.Frob triggers its Event FirstStealthDoor: DeusExMover0, TriggerToggle, MoveTime 1) and again at 220 (it toggles back).
+  sw1: {map: '00_TrainingFinal', ticks: 360, early: 'KillAll FlyGenerator', wholeFlags: true, pawns: ['Soldier0', 'Soldier2'],
+    cmds: `${MOVE(1, -195, -36, 45, 0, -2712)}|60:ParseRightClick|220:ParseRightClick`,
+    devices: ['DeusExMover0:DeusExMover', 'Switch1:Actor']},
+  // mpg1 (row 5.4.8, M00MeetPage): ConversationTrigger1 (conversationTag m00meetpage, BindName BobPage, radius 96) starts the third-person conversation from its Touch, which
+  // needs the player not Falling (DeusExPlayer.CanStartConversation): every placement leaves him falling for a few ticks, so he is set 122.5 units from the trigger (outside
+  // its 96 + his radius), lands, and is pushed toward it at 150 by a Velocity SET (a held key cannot be posted); the first move across the boundary touches it and
+  // BobPage1 and the player enter their conversation states. Five speeches (Bob, JC, Bob, JC, Bob) are skipped with the Enter edge every 40 ticks from 190 and the last
+  // one ends the conversation (M00MeetPage_Played).
+  mpg1: {map: '00_TrainingFinal', ticks: 520, early: 'KillAll FlyGenerator', conversation: true, pawns: ['BobPage1'],
+    cmds: `${MOVE(1, 6577, -5309, 100, 49152)}|150:set DeusEx.JCDentonMale Velocity (X=0,Y=-300,Z=0)|${SHOTS([190, 230, 270, 310, 350])}`},
+  // jmr1 (row 5.4.8, holo-Jaime): the player set 43 units west of Switch6 (7298.4, -4287.5, 111.9; it faces -X), 7.9 under his eye (pitch -1900); the right button at 150
+  // presses it (Event jaime_talks -> FlagTrigger11 sets JaimeAppears and triggers 'convo'). Mission00.Timer's 00_TRAININGFINAL branch EnterWorld()s the holojaime
+  // JaimeReyes (JaimeReyes6, bInWorld false until then), whose radius conversation JaimeBark (first person, 160 units) plays; on JaimeBark_Played the Timer LeaveWorld()s
+  // it and sets MS_ReyesHidden.
+  jmr1: {map: '00_TrainingFinal', ticks: 1000, early: 'KillAll FlyGenerator', conversation: true, pawns: ['JaimeReyes6'],
+    cmds: `${MOVE(1, 7255, -4287.5, 100, 0, -1900)}|150:ParseRightClick`, devices: ['Switch6:Actor']},
 };
 export const SCENE_FLAGS = ['--no-ghost', '--perception', '--player-gear', '--player-health', '--los-flag'];
 // The device scenes add the player's eye and bob (the first-person item's placement: Inventory.RenderOverlays, CalcDrawOffset): the stored combat scenes
