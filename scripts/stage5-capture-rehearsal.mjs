@@ -104,7 +104,7 @@ let last = '';
 for (let tick = 1; tick <= ticks; tick++) {
   for (const line of cmds.get(tick - 1) ?? []) {
     if (!line) continue;
-    const edge = /^@(down|up) (\S+)$/.exec(line), typed = /^@type (.+)$/.exec(line);
+    const edge = /^@(down|up|hold|release) (\S+)$/.exec(line)?.map(part => part === 'hold' ? 'down' : part === 'release' ? 'up' : part), typed = /^@type (.+)$/.exec(line);
     // (`@type TEXT`: WM_CHAR units; a key edge's own WM_CHAR is TranslateMessage's, as live-probe.mjs delivers it with --typed-chars, which the rehearsal always does)
     if (typed) { for (const char of typed[1]) c.game.inputChar(char.charCodeAt(0)); console.log(`> ${line} after ${tick - 1}`); }
     else if (edge) {

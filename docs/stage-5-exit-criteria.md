@@ -1391,6 +1391,21 @@ The keypad's digits go through the window input path as `Digit0..9` key edges: `
 3. **Pick state sits on the frobbed panel.** The pick fields (`bPicking`, `pickValue`, `numPicks`, `TicksPerPick`, `curPick`, `pickPlayer`) are set on the panel the player aims at (`DeusExMover46`); `DeusExMover45` only
    receives `lockStrength` and `bLocked` from the like-tagged loop in `Timer`, so a scene watching one panel of a pair sees no pick state.
 
+### Held keys (2026-10-20)
+
+The earlier scenes could not hold a key across ticks in the original, and their rows say so (the walk and the crouch of 5.3.4, 5.5.3's crawlspace, 5.5.4's swim, 5.2.3's
+footsteps). The cause is in WinDrv, not in the tracer. `UViewport::ReadInput` (Engine `0x10374990`) calls the viewport's `UpdateInput(0)` every player tick, and
+`UWindowsViewport::UpdateInput` (WinDrv `0x11109879`-`0x111098ea`) walks the 256 keys: a key UInput holds (`Input+0xeb0+key`) whose `GetKeyState` has bit `0x8000` clear gets
+`CauseInputEvent(key, IST_Release)` (`0x111011f4`, action 3), and with `UpdateInput(1)` and the viewport focused a key the platform holds and UInput does not gets `IST_Press`.
+A posted `WM_KEYDOWN` (dxinput `down`) leaves the thread's key state up, so the key is released at the next tick. The key state is set by input that goes through the Wine input
+queue: dxinput `focus` (the game's window and viewport take the Wine foreground and keyboard focus) and `sdown`/`sup` (keybd_event), added for the security-camera frames on
+2026-10-14. `--cmds "N:@hold CODE|M:@release CODE"` types them (`live-acceptance.mjs` `keyEdge`); Play takes the same edges through `game.inputKey`, whose platform key snapshot
+is a keyboard's (`script-window-host.mjs` `updatePlatformInput`, the same reconciliation), and the replay pairs them with the original's `InputEvent` records like `@down`/`@up`.
+
+| Scene | Pose and inputs | What the original did | Replay in Play |
+| --- | --- | --- | --- |
+| `wlk1` | `jmp1`'s spot (6991, −55, 17) facing +Y; Up (MoveForward) held from 30 to 150 | the run (`bAlwaysRun`): y −55 to 525.5 by tick 150 in the `Run` animation at 320 units/s, the slide out to (6972.02, 533.11) by 180; eight footsteps from tick 41 to 158, one each 16 or 17 ticks, each `PlayFootStep`'s `FRand`, `PlaySound` and `LoudNoise`: 0.5 by 422.2 while accelerating, 0.5 by 741.7 at the full run, 0.35 by 519.2 on the next floor (`volumeMultiplier` 0.7) for five, 0.12 by 92.3 in the slide | **PASS**, 19 actors equal for 240 ticks, the stream draws, the AI events and the creations equal |
+
 ## Scoreboard (2026-10-19, after the merge of the Island batches)
 
 `node scripts/validate-stage5-acceptance.mjs --census .work/stage5-census-2026-10-19-final2.json --report .work/stage5-gate-2026-10-19-final2.json` on master `a786b4e`

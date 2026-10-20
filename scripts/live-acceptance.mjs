@@ -617,6 +617,13 @@ async function original() {
   const keyEdge = text => {
     const typed = /^@type (.+)$/.exec(text);
     if (typed) return [`type ${typed[1]}`, 'sleep 400'];
+    // `@hold CODE` / `@release CODE`: a key held across ticks. WinDrv's UWindowsViewport::UpdateInput (0x11109879-0x111098ea), which
+    // UViewport::ReadInput (0x10374990) calls each player tick, releases (IST_Release) every key UInput holds whose GetKeyState is up, and a
+    // posted WM_KEYDOWN leaves the thread's key state up: a `@down` is released at the next tick. The held key goes through the Wine input
+    // queue instead (dxinput `focus`, then keybd_event `sdown`/`sup`), which sets the key state as a keyboard does. Play takes both as
+    // game.inputKey edges: its platform key snapshot is the keyboard's (script-window-host.mjs updatePlatformInput).
+    const held = /^@(hold|release) (\S+)$/.exec(text);
+    if (held) { const key = DXINPUT_KEYS[held[2]] ?? held[2].replace(/^(Key|Digit)/, ''); return held[1] === 'hold' ? ['focus', `sdown ${key}`, 'sleep 200'] : [`sup ${key}`, 'sleep 200']; }
     const m = /^@(down|up) (\S+)$/.exec(text);
     if (!m) return null;
     const key = DXINPUT_KEYS[m[2]] ?? m[2].replace(/^(Key|Digit)/, '');
@@ -1311,8 +1318,8 @@ async function play() {
       if (frozenUsed) { const held = edges.get(0) ?? [], first = held.findIndex(e => e.seq > frozenSplit.lastEnter); cursor.set(0, first < 0 ? held.length : first); }
       return list.map(command => {
         if (/^@type /.test(command.text)) return command;   // WM_CHAR units: no InputEvent, so no record of the hold's
-        const m = /^@(down|up) (\S+)$/.exec(command.text), records = edges.get(command.after) ?? [], from = cursor.get(command.after) ?? 0;
-        const action = m && m[1] === 'up' ? 3 : 1, key = m ? keyCode(m[2]) : 0x0d;
+        const m = /^@(down|up|hold|release) (\S+)$/.exec(command.text), records = edges.get(command.after) ?? [], from = cursor.get(command.after) ?? 0;
+        const action = m && (m[1] === 'up' || m[1] === 'release') ? 3 : 1, key = m ? keyCode(m[2]) : 0x0d;
         const at = records.findIndex((e, i) => i >= from && e.action === action && (key === null || e.key === key));
         if (at < 0) return command;
         cursor.set(command.after, at + 1);

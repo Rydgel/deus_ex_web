@@ -543,8 +543,9 @@ export function liveProbe(game, args = {}) {
             restore = () => { for (const name of Object.keys(originals)) game.random[name] = originals[name]; };
           }
           try {
-            // `@down CODE` / `@up CODE`: a key edge (KeyboardEvent.code) through the binding path, as the original's WM_KEYDOWN/WM_KEYUP
-            const edge = /^@(down|up) (\S+)$/.exec(command.text), typed = /^@type (.+)$/.exec(command.text);
+            // `@down CODE` / `@up CODE`: a key edge (KeyboardEvent.code) through the binding path, as the original's WM_KEYDOWN/WM_KEYUP;
+            // `@hold CODE` / `@release CODE` the same edges of a key held across ticks (the original's through its input queue: live-acceptance.mjs keyEdge)
+            const edge = /^@(down|up|hold|release) (\S+)$/.exec(command.text)?.map(part => part === 'hold' ? 'down' : part === 'release' ? 'up' : part), typed = /^@type (.+)$/.exec(command.text);
             // `@type TEXT`: WM_CHAR units without key edges (live-acceptance.mjs keyEdge), each through the window system's typed-character route (Client->Engine->Key)
             if (typed) { entry.output = []; for (const char of typed[1]) entry.output.push(plain(game.inputChar(char.charCodeAt(0)))); }
             else if (edge) {

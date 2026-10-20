@@ -289,6 +289,9 @@ export const SCENES = {
   // jumps (row 5.3.4): the player placed at the obstacle course (6991, -55), facing -Y; two Space edges (Jump through the User.ini binding), each a
   // PlayerPawn.DoJump into PHYS_Falling and a landing; the walk across and the crouch under the pipes are held keys the harness cannot post.
   jmp1: {map: '00_Training', ticks: 300, early: PLACE(6991, -55, 17, 49152), cmds: '30:@down Space|30:@up Space|150:@down Space|150:@up Space'},
+  // a held key (feasibility of `@hold`/`@release`, live-acceptance.mjs keyEdge): the same spot facing +Y, MoveForward (Up) held from 30 to 150 through the input
+  // queue, the run (bAlwaysRun) and its footsteps (DeusExPlayer.PlayFootStep from the Walk/Run animation notifies) compared tick by tick.
+  wlk1: {map: '00_Training', ticks: 240, early: PLACE(6991, -55, 17, 16384), cmds: '30:@hold ArrowUp|150:@release ArrowUp'},
   // the contaminated pool (row 5.3.7): WaterZone0 (5574, -4011) and its DamageTrigger1; hzm1 swims in it bare (moved in after the first unfrozen tick, as
   // the Island's swim scenes are); hzm2 first picks up HazMatSuit2 (6584, -4057), puts it in hand and activates it (Enter edge: ChargedPickup.Activate),
   // then is moved into the pool: the suit's protection and its charge per tick.
