@@ -579,7 +579,7 @@ export function liveProbe(game, args = {}) {
           // A console line's hold (med1's ParseRightClick at 60: roottick 0.592, the 144 GCs, roottick 0.275, tick 61) has a held frame and paints, as Play's warm frames do.
           if (typed && args.replay.typedChars) {
             const next = this.commands[0], pending = next && next.after <= this.index;
-            const frames = pending ? (Array.isArray(next.windowSeconds) ? next.windowSeconds.length : null) : (Array.isArray(tick.windowSeconds) ? tick.windowSeconds.length - 1 : null);
+            const frames = pending ? (Array.isArray(next.windowSeconds) ? next.windowSeconds.length : null) : (Array.isArray(tick?.windowSeconds) ? tick.windowSeconds.length - 1 : null);
             if (frames === 0) { this.warm = 0; this.noPaint = true; }
           }
           return false;

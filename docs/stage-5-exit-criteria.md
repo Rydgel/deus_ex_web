@@ -1219,6 +1219,96 @@ player's whole FlagBase at the end of a non-conversation scene (stl1, sw1); the 
 SecondStealthDoor (Switch2) is the same class and path as FirstStealthDoor and is not driven; an AlarmUnit tripped by a laser, a camera or a hack (`bDisabled`) is not
 driven; the AllianceTriggers' own touch (radius 96 beside the alarm units) is not watched.
 
+### Captures: windows, the bots and the terminals (2026-10-20)
+
+Rows 5.3.3 (the repair bot and medical bot windows) and 5.3.9 (the Island's terminals), captured on the Linux host under Wine (`live-original.sh`) and replayed with
+`validate-stage5-live.mjs --scene`, each scene rehearsed in Play first (`stage5-capture-rehearsal.mjs --scene <tag> --window`, class P). The harness posts key edges and
+console lines, never a mouse position or a click, so the first job was the original's own keyboard path for a window.
+
+**How a window is driven by keys.** Read from the scripts (`.cache/research/src`) and measured in the running original (`dump-actor-win` on `DeusExRootWindow`: the focus window
+at +0x5c8, the mouse at +0x590/+0x594, the mouse window +0x5a0, the grab counts +0x5cc/+0x5d0), then reproduced in Play, whose window input chain is the recovered Extension.dll
+code (`docs/script-window-input.md`):
+
+* **The cursor never moves.** The root cursor starts at (0, 0) and only mouse events change it; none are posted, so in both programs it stays at (0, 0) with no mouse window
+  (read from the original with the bot screen up: mouse (0, 0), mouse window None, both grabs 1). A `MFocus_Enter` or `MFOCUS_Click` window (`DeusExBaseWindow`, the Persona
+  screens, `NetworkTerminal`) therefore never takes its focus from the mouse. Its first focus is the root's `CheckFocusWindow`: the top modal's preferred focus, else
+  `MoveFocus(1, 1)`, the first traversable window of its tab-group table. The original's: Recharge when it is enabled (`PersonaActionButtonWindow1`; Close when it is not),
+  the Augmentations tab on the Health screen (`PersonaNavButtonWindow0`), the user name field on a login, and after a login the first choice (`MenuUIChoiceButton0`) or the
+  e-mail list (`MenuUIListWindow0`).
+* **A button is pressed by Enter or Space.** `ButtonWindow.VirtualKeyPressed` calls `PressButton(key)` for IK_Enter and IK_Space (`HandleVirtualKeyboard`: the focus window,
+  then its parents; the root's keyboard grab consumes the key before any binding). The window's own `ButtonActivated` runs as for a click.
+* **The focus moves by the arrows and Tab.** `RootWindow.VirtualKeyPressed` (what no window handled): arrows are `MoveFocusLeft/Right/Up/Down` (natives 1442 to 1445), Tab
+  `MoveTabGroupNext` (1446). The table is ordered by position: on the Health screen Right goes from the Augmentations tab to Exit and Up from Exit to Heal All (measured in the
+  original: `PersonaNavButtonWindow0` -> `PersonaNavButtonWindow2` -> `PersonaActionButtonWindow2`), and on a login Tab cycles user name, password, the buttons.
+* **A window's own keys come first.** `ComputerScreenSecurity.VirtualKeyPressed` takes the arrows (pan the camera), `1` to `3` (the views), `=` and `-` (zoom): the arrows never
+  reach `MoveFocus`, so the choices (Door |&Access, |&Door Status, |&Turret Status) are pressed by their accelerators, Alt and the label's letter (`SetAcceleratorText`;
+  `XModalWindow::KeyPressed` with IK_Alt held finds the window in the modal's accelerator table and calls its `AcceleratorKeyPressed`). The original's: Alt+A unlocked the cell
+  door, Alt+T cycled the turret. The first choice, Camera Status, has the focus after the login and takes Enter.
+* **Text is typed as WM_CHAR, not as key edges.** A text field takes `KeyPressed(char)` from WinDrv's WM_CHAR. `dxinput`'s posted WM_KEYDOWN is translated by the game's
+  message loop (`TranslateMessage`), under the host keyboard layout: the Linux prefix's is French, whose unshifted digit keys type `à` and `&` (a Shot of the login read
+  `nsfàà&` for NSF001), while letters and Tab, Enter, Escape, Backspace are layout independent. A scene therefore types its text with `@type TEXT` (dxinput `type`: WM_CHAR
+  units, no key edge) and presses control keys and letters as edges.
+
+**Harness.** `@type TEXT`; `AltLeft` and `Backspace` edges (`ad/tools/dxinput.c` knows ALT: the main checkout's `dxinput.exe` is older than its source and has no `focus` or
+`PRINT` either, so a worktree rebuilds it with `i686-w64-mingw32-gcc`); `--typed-chars`, which makes the replay deliver `TranslateMessage`'s characters after the
+WM_KEYDOWN of Tab (0x09), Escape (0x1b), Enter (0x0d: WinDrv drops it), Space and the letters (`src/viewer/typed-characters.mjs keyOfCode`); `--player-credits`; the device
+groups `RepairBot`, `MedicalBot`, `ATM` (`$atmBalance0`: userList[0].balance, +0x3c8) and `Computers` (bOn, bAnimating, bLockedOut); `--window` in the rehearsal (the top modal
+and the root's focus window, with the focused button's label); `--frames` and `@ctrlshot` frames for the terminals. Three harness faults surfaced:
+
+1. **A rest height an ulp off.** med1 failed twice at tick 1 (the player's Z, 19.7999992 for 19.8000011, every tick) and passed five times: the settle step before the replay
+   accepted a rest height within 1e-3 of the original's, and in the runs where the page's frames were ticks the landing's own arithmetic had already moved Z by one ulp.
+   The step now compares the pose exactly in float32 and places the original's pose otherwise (`live-acceptance.mjs`, with the wait loop untouched).
+2. **Which replays `validate-stage5-live.mjs` waits for.** It waited for any `live-acceptance.mjs play|compare --map M` process, so a replay of the same map in another
+   checkout (its own `.work`) blocked this one; where `/proc` names a process's directory it now waits only for its own checkout's.
+3. **Draw frames.** See the findings.
+
+| Scene | Pose and inputs | What the original did | Replay in Play |
+| --- | --- | --- | --- |
+| `rpr1` (5.3.3) | 00_Training, 68 units in front of RepairBot0 (5078, 362, facing +Y) at pitch -5000; Energy set to 20 at 20; the right button at 60; Enter edges at 140, 220 and 370; the right button again at 290 | the bot Standing -> Idle when the window opens (StandStill, PlayAnim Start); focus on Recharge; Energy 20 -> 95 at 143 (chargeAmount 75; lastChargeTime 129.17) and the focus moves to Close; the second Enter closes the window (Standing at 223); the window reopened at 293 has Recharge disabled by the cooldown, its first focus is Close, and Enter closes it at 373 with no charge | **PASS**, 19 actors, 541 AI events, 161 creations, 520 ticks |
+| `rpr2` (5.3.3) | `rpr1`'s first visit, then 60 s of Level time: Energy set to 30 at 3760, the right button at 3800, Enter at 3880 and at 3960 | Recharge enabled again when the window opens at 3803 (the first charge's lastChargeTime 132.50; ready past Level time 192); Energy 30 -> 100 at 3883 (capped by EnergyMax: 70, not 75), lastChargeTime 194.84, 62.3 s after the first | **PASS**, 19 actors, 4,020 ticks |
+| `med1` (5.3.3) | 00_Training, 70 units in front of MedicalBot0 (5105, -4170) at pitch -6000; HealthHead 70, HealthTorso 40, HealthLegLeft 50 by `DamagePart` at 21 to 23; the right button at 60; ArrowRight at 140, ArrowUp at 170, Enter at 200, Escape at 260; the torso damaged to 60 at 300, the right button at 320, Alt+E at 400, Escape at 470 | HUDMedBotHealthScreen with the focus on the Augmentations tab; Right: Exit; Up: Heal All; Enter at 203 heals every region to 100 (healAmount 300, lastHealTime 129.01); Escape closes it (the bot Standing at 263); reopened at 323 with the cooldown on, Alt+E (the accelerator of "H\|&eal All") presses nothing and the torso stays 60 | **PASS**, 19 actors, 581 AI events, 1,178 creations, 560 ticks |
+| `trm1` (5.3.9) | Island, ComputerPersonal0 (-4335, 1953, facing +Y), the player 57 units in front at pitch -7500; the right button at 100; `@type KLloyd`, Tab, `@type wrongpw`, Enter at 200 to 260; KLloyd/squishy at 300 to 360; ArrowDown at 420; Escape at 480; GUEST/GUEST at 520 to 580; Escape at 640 and 680 | the Activate animation (bAnimating 103 to 109) and the login; the wrong password clears both fields; KLloyd opens the e-mail screen (two messages: `01_Email01` shown, ArrowDown selects `01_Email07`); Escape logs out; GUEST opens "No Email Today!"; the second Escape closes the terminal, which runs its Deactivate animation (683 to 689) and is Off | **PASS**, 75 actors, 1,112 AI events, 1,034 creations (+ 25 left out, 527 GCs in both), 720 ticks, the mouth letters of UNATCOTroop6's bark fed |
+| `atm1` (5.3.9) | Island, ATM0 (2105, 1080, facing -Y), 56 units in front; the right button at 100; 230023 with PIN 1111 at 200 to 260, with 4558 at 300 to 360; `@type 50`, Enter at 420 to 440; Escape at 500 and 540 | ATM0 has no animation: ATMWindow opens at once with the focus on the account field; the wrong PIN clears both; the right one opens the withdraw screen (balance 200); the withdrawal: DeusExPlayer.Credits 500 -> 550 and ATM0's userList[0].balance 200 -> 150 at 443; Escape logs out, Escape closes | **PASS**, 75 actors, 1,161 creations, 600 ticks |
+| `sec1` (5.3.9) | Island, ComputerSecurity1 (2018, -1645, facing +Y), 56 units in front; NSF001/smashthestate at 200 to 260; Enter at 320; Alt+A at 380; Alt+D at 440; ArrowLeft at 520, ArrowUp at 560; Alt+T at 600, 620 and 640; Escape at 700 and 740; the player takes no damage (`ReducedDamageType All`: Terrorist18, in the room, sees him (Seeking at 100, Alerting at 136) and attacks from 526) | the first focus is Camera Status (Enter changes no camera state); Alt+A unlocks DeusExMover10 (bLocked 1 -> 0 at 383), Alt+D opens it (KeyNum 1, interpolating 443 to 503), the pans move the camera's DesiredRotation, the turret AutoTurretSmall0 wakes at 526 on the camera's alarm (StatueAlarmTriggered) and the three Alt+T presses leave it Disabled (bDisabled 1 at 643) | **PASS**, 78 actors, 1,231 AI events, 1,468 creations, 760 ticks |
+| `trf1`, `atf1`, `sef1` (5.3.9) | the three scenes' inputs again, with Brightness 2/3 and the original's Shot (`@ctrlshot`, Ctrl+F9 under the terminal's keyboard grab) at held ticks: trf1 at 280 (the wrong password), 380 (the first e-mail), 440 (the second), 600 (no e-mail); atf1 at 280 (the wrong PIN), 380 (the withdraw screen), 460 (withdrawn); sef1 at 290 (the security screen), 480 (door unlocked and open), 670 (turret disabled) | the actor traces equal the first captures' (the screenshots' key events change nothing); the frames, 1280 x 720, against Play's frame at the same tick (`--frames`: one replay per frame) | traces **PASS** (75, 75, 78 actors); frames: trf1 b, c, d and atf1 a, c identical to the pixel; trf1 a and atf1 b differ by 20 pixels each, the text caret (in one the original's, in the other Play's: it blinks on the host's clock); sef1: with the two "NO SIGNAL" static windows masked, 99.8% identical, 44 to 59 pixels over 10 of 255 (max 96) in the camera 1 window, the chrome identical |
+
+**Findings.** No behavior of Play's windows, terminals or bots differed from the original in these scenes (every watched field of every watched actor is equal for every tick).
+The replays' differences were in the harness and in what the registry comparison can judge; each is a measured fact of the original:
+
+1. **The original draws no window in a held frame it does not complete.** The tracer holds a level by returning from `ULevel::Tick`; a hold is a run of frames (input pump,
+   `RootTick`, the held level, the draw). In med1's hold at tick 200 the original ran the Enter press and release, one `roottick` frame (0.441 s)
+   and then tick 201; the 43 GCs of the Health screen's new region windows (their layout: `QueryPreferredSize`'s `GetGC` per window) came after tick 201's AI process. After a
+   console line (med1's `ParseRightClick` at 60) there were two frames: `roottick` 0.592 s, the 144 GCs of the new screen, `roottick` 0.275 s, tick 61. Play's three warm frames after
+   every command drew at once, so the same GCs came one tick early. With `--typed-chars` a frame after a command paints only if a complete held frame follows it
+   (`roottick` records after the command, before the next command or tick: all of them when the next is a command, one fewer before a tick; `live-probe.mjs` `noPaint`).
+   rpr1, rpr2, med1, atm1, atf1 pass their creations strictly with it. In the terminals the first draw after a window opens or closes lays out some windows and the next
+   frames the rest, so a GC lands a tick or a few windows from where Play makes it: trm1, sec1 and sef1 (`drawTiming`) compare the GCs as totals (527 = 527, 402 = 402, running
+   counts within 1) and every other creation in class, tick and order.
+2. **The first e-mail loads the class ExtString.** `DeusExTextParser.OpenText` is `StaticLoadObject(XExtString, "DeusExText.<name>")` (docs/script-text-parser.md): the
+   original's first read creates the class ExtString (its 21 functions, parameters and properties: 22 registry objects, in the slot of a freed object) and each text is an
+   ExtString it creates, reads and deletes (`01_EmailMenu_klloyd`, `01_Email01`, `01_Email07`). Play reads the package's text without registry objects, so those 25 creations are
+   the original's alone, left out of trm1's comparison and counted. Class loads and text loads in the registry model are open: not simulation state, but later objects' slots
+   (50 to 57 "take another slot" in trm1 after tick 360) follow them.
+3. **A barking trooper's mouth.** UNATCOTroop6, 207 units from the player, barks from tick 49; Pawn.LipSynch's letters (blend channel 0) are the audio update's, a host input
+   (`speech: true` feeds the measured letters, 29 here), as in the other Island scenes.
+4. **The caret.** A focused edit field's caret blinks on the host's clock: in `trf1a` the original's frame holds it and Play's does not, in `atf1b` the reverse, 20 pixels each time.
+5. **Static.** A camera-less view shows random static in both programs: not comparable.
+
+**What is not covered.** The mouse: no click, no hover, no pointer focus (an `MFocus_Enter` window would take its focus from the pointer's position); the buttons are pressed through
+the keyboard route above, which is the same `ButtonActivated` as a click's. The augmentation screen the medical bot opens first when an AugmentationCannister is carried, the
+per-region Heal buttons, the security views' selection keys (the screen has one camera) and zoom, hacking a terminal (the hack screens), the special-options screen and the ATM's
+lockout and disabled screens are not driven. The terminals' frames are of the held tick, not of the moving windows (the camera image's static and the caret aside, their chrome is
+identical); the camera's own image is the Security cameras' frames (docs/visual-acceptance.md). A key edge's `WM_CHAR` is delivered for the keys listed above only: a digit key's
+character depends on the host's layout, and no scene presses one.
+
+```bash
+# the original (the Wine lock): each scene, then the replay; the frames' replays one per frame
+.work/capture-and-replay.sh rpr1 rpr2 med1 trm1 atm1 sec1 trf1 atf1 sef1       # captures and replays one by one, logged in .work/captures/
+node scripts/validate-stage5-live.mjs --scene sec1                             # the replay and its checks
+node scripts/validate-stage5-live.mjs --scene sef1 --frames                    # the screens' frames
+node scripts/stage5-capture-rehearsal.mjs --scene sec1 --window                # Play alone: the window and focus per tick (class P)
+```
+
 ## Scoreboard (2026-10-19, after the merge of the Island batches)
 
 `node scripts/validate-stage5-acceptance.mjs --census .work/stage5-census-2026-10-19-final2.json --report .work/stage5-gate-2026-10-19-final2.json` on master `a786b4e`
