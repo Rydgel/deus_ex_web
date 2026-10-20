@@ -69,7 +69,14 @@ export function createLevelQueries(model, actors, { pointCheck, extentCheck,
   const addActor = actor => hash.addActor(actor, bounds(actor), hashOptions(actor));
   const removeActor = actor => hash.removeActor(actor, bounds(actor), hashOptions(actor));
   for (const actor of actors) addActor(actor);
-  const points = createLevelPoints(model, hash, levelInfo);
+  // Level->Model for the world checks: the moving brush tracker's model while
+  // it lives (sim-host.mjs gives the level model `trackedCollision`,
+  // bsp-occlusion.mjs collisionModel; docs/brush-tracker.md "Collision"),
+  // else the static BSP. ULevel::MultiLineCheck and MultiPointCheck call
+  // Level->Model's LineCheck and PointCheck, and once NF_IsNew clears the
+  // tracker's fragments are ordinary nodes of it.
+  const worldModel = () => model.trackedCollision?.() ?? model;
+  const points = createLevelPoints(model, hash, levelInfo, worldModel);
   const modelLineCheck = (source, start, end, extent, extra, owner = null) => {
     const coords = owner && brushToWorldCached(owner);
     if (extent[0] === 0 && extent[1] === 0 && extent[2] === 0 && extent.length === 3 || extent.every(v => v === 0)) {
@@ -83,7 +90,7 @@ export function createLevelQueries(model, actors, { pointCheck, extentCheck,
   };
   const join = {
     hashPresent: true, isMover: actor => isA(actor, 'Mover'),
-    worldLineCheck: (end, start, extent, extra) => modelLineCheck(model, start, end, extent, extra),
+    worldLineCheck: (end, start, extent, extra) => modelLineCheck(worldModel(), start, end, extent, extra),
     actorLineCheck: (end, start, extent, extra) => hash.actorLineCheck({ start, end, extent, extraNodeFlags: extra }, (actor, query) => {
       const values = valuesOf(actor);
       if (actor.model) {
@@ -100,7 +107,7 @@ export function createLevelQueries(model, actors, { pointCheck, extentCheck,
   const filter = { isA, levelInfo, multiLineCheck: (...args) => multiLineCheck(join, ...args) };
   // The kernel's line checks need its extent trace: traceExtent's kernel entry.
   const fast = store && extentCheck === traceExtent
-    ? createKernelLineChecks({ store, model, levelInfo, valuesOf, isA, brushToWorld: brushToWorldCached }) : null;
+    ? createKernelLineChecks({ store, model, worldModel, levelInfo, valuesOf, isA, brushToWorld: brushToWorldCached }) : null;
   const checked = HASH_DIFFERENTIAL || TRACE_DIFFERENTIAL;
   const javascriptMulti = ({ end, start, extent, checkActors, worldActor, extra = 0 }) =>
     multiLineCheck(join, end, start, extent, checkActors, worldActor, extra);
@@ -127,6 +134,10 @@ export function createLevelQueries(model, actors, { pointCheck, extentCheck,
   };
   return {
     levelInfo, hash, addActor, removeActor, ...points,
+    /** The model the world checks trace now (above): a world hit's Item is a
+     * node of it, and its `surfaces` (with the tracker's) hold that node's
+     * iSurf. */
+    worldModel,
     actorEncroachmentCheck(actor, position, rotation, extra = 0) {
       return actorEncroachmentCheck(hash,actor,position,rotation,extra);
     },

@@ -17,7 +17,10 @@
  * across every mover, at its placed and its moved location, with five
  * extents (zero, the 1-unit and 8-unit boxes, a standing pawn's 20 x 47.5
  * and a crouched one's 20 x 20 box at radius 40), and point checks along
- * them. Every result must agree bit for bit (the hit's Time, Location, Normal
+ * them; and the Rust trace kernel over the level queries' tracked model
+ * (bsp-occlusion.mjs collisionModel, imported by trace.rs trace_import_bsp
+ * once per tracker generation) against the same JavaScript bodies. Every
+ * result must agree bit for bit (the hit's Time, Location, Normal
  * and Item for a line; the outside flag and the Location, Normal and Item
  * the call left for a point), and the tracker's fragments must change some line
  * and some point checks on each map.
@@ -41,6 +44,7 @@ import { loadScriptVmKernel } from '../src/runtime/script-vm-kernel.mjs';
 import { createBspOcclusion } from '../src/runtime/bsp-occlusion.mjs';
 import { traceRayFast } from '../src/runtime/ray.mjs';
 import { traceExtentJs } from '../src/runtime/extent-trace.mjs';
+import { loadTraceKernel, sameTraceResult } from '../src/runtime/trace-kernel.mjs';
 import { modelPointCheck } from '../src/runtime/point-check.mjs';
 import { buildMap, bits, position } from './brush-tracker-request.mjs';
 
@@ -53,7 +57,7 @@ for (const directory of ['Maps', 'System', 'Textures'])
   for (const name of await readdir(path.join(root, directory)))
     files.push({ path: `${directory}/${name}`, read: () => readFile(path.join(root, directory, name)) });
 const assets = new AssetStore(files);
-const kernel = (await loadScriptVmKernel()).occlusion;
+const kernel = (await loadScriptVmKernel()).occlusion, traceKernel = await loadTraceKernel();
 const f = Math.fround;
 const float = word => new Float32Array(new Uint32Array([word]).buffer)[0];
 let seed = 0x5c0a1d;
@@ -119,15 +123,34 @@ for (const mapName of MAPS) {
       return lineRow(ray ? traceRayFast(source, c.start, c.end) : traceExtentJs(source, c.start, c.end, c.extent), ray); }),
     points: points.map(p => playPoint(modelPointCheck(source, p.position, p.extent))),
   });
+  // The level queries' model (bsp-occlusion.mjs collisionModel: one object for the tracker's life) through the Rust trace
+  // kernel, which imports the node block (trace.rs trace_import_bsp) whenever the tracker's generation changed: each answer
+  // must equal the JavaScript body's over the same model.
+  let kernelChecks = 0, imports = 0;
+  const kernelAgrees = (state, collision) => {
+    const before = traceKernel?.stats.imports ?? 0;
+    for (const c of checks) {
+      const ray = c.extent.every(v => v === 0);
+      const answer = ray ? traceKernel.ray(collision, c.start, c.end, 0, null) : traceKernel.extent(collision, c.start, c.end, c.extent, null);
+      assert.notEqual(answer, undefined, `${mapName} ${state}: the trace kernel handed back ${c.label}`);
+      const js = ray ? traceRayFast(collision, c.start, c.end) : traceExtentJs(collision, c.start, c.end, c.extent);
+      assert.ok(sameTraceResult(answer, js), `${mapName} ${state}: the trace kernel over the tracked model differs at ${c.label}`);
+      kernelChecks++;
+    }
+    imports += (traceKernel?.stats.imports ?? 0) - before;
+  };
   const play = {};
   try {
     play.static = run(model);
     assert.equal(occlusion.tracker.construct({ pc64: true }), 0, 'tracker construction');
     play.tracked = run(occlusion.lineModel());
+    if (traceKernel) kernelAgrees('tracked', occlusion.collisionModel());
     const t = occlusion.tracker;
     built.actors.forEach((a, i) => t.setMover(i, moved[a.name]));
     built.actors.forEach((a, i) => { if (!(a.flags & 2)) assert.equal(t.update(i, { pc64: false }), 0, `${a.name}: tracker update`); });
     play.moved = run(occlusion.lineModel());
+    if (traceKernel) kernelAgrees('moved', occlusion.collisionModel());
+    if (traceKernel) assert.equal(imports, 2, `${mapName}: one import per tracker generation (${imports})`);
   } finally { occlusion.dispose(); }
   // The checks at the game thread's 0x037f (the word of every collision translation, native-collision-oracle.py); the tracker's
   // construction at 0x037f (Play's assumption, docs/brush-tracker.md "Precision") and the frame's Update at 0x007f (SetupDynamics, inside
@@ -148,7 +171,7 @@ for (const mapName of MAPS) {
     await writeFile(cache, JSON.stringify({ ...original, requestLength: key }));
   }
   const seconds = (Date.now() - started) / 1000;
-  const row = { map: mapName, movers: built.actors.length, lines: checks.length, points: points.length, oracleSeconds: seconds };
+  const row = { map: mapName, movers: built.actors.length, lines: checks.length, points: points.length, oracleSeconds: seconds, kernelChecks, imports };
   const mismatches = [];
   for (const [state, lineKey, hitKey, pointKey, pointHitKey] of [['static', 'static', 'staticHits', 'staticPoints', 'staticPointHits'],
     ['tracked', 'tracked', 'trackedHits', 'trackedPoints', 'trackedPointHits'], ['moved', 'moved', 'movedHits', 'movedPoints', 'movedPointHits']]) {

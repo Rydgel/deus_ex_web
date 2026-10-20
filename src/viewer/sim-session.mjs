@@ -74,7 +74,7 @@ export function createSimSession(game, { assets = null, events = [], exportName 
   // The moving brush tracker's movers ({names, actors, indices: their
   // Level.Actors slots} in its order; null with ?moverTracker=off) and the
   // rebuild Player start's LoadMap needs.
-  let trackerMovers = null, rebuildOcclusion = null;
+  let trackerMovers = null, rebuildOcclusion = null, dropOcclusion = null;
   const actorOcclusion = actorOcclusionMode() !== 'frustum';
   // OccludeFrame's child frames (mirror and sky) with their own OccludeBsp;
   // ?childFrames=off keeps the frustum-tested passes.
@@ -925,7 +925,7 @@ export function createSimSession(game, { assets = null, events = [], exportName 
         frames: plan.frames.map(({ rawItems: rows, drawnIds, ...frame }) => ({ ...frame, items: claims(rows, drawnIds) })) }));
     },
     setOcclusion(value, movers = null) { occlusion = value; trackerMovers = movers; sentRevisions = null; },
-    setOcclusionRebuild(rebuild) { rebuildOcclusion = rebuild; },
+    setOcclusionRebuild(rebuild, drop = null) { rebuildOcclusion = rebuild; dropOcclusion = drop; },
     /** Validation (strobeProbe in main.mjs, scripts/validate-strobe-child-frames-play.mjs): the Strobe lists of the
      * light-map Strobe calls. `mainOnly` scans the main frame's surfaces alone (the first version's behavior,
      * a failing baseline for the validator); `always` records the scan of frames in which a mesh or Galaxy flipped the flag first. `set` {name, LightType} writes a map light's LightType and takes the lists again (the
@@ -1407,7 +1407,9 @@ export function createSimSession(game, { assets = null, events = [], exportName 
         ? `weapon: only the simulation side ${onlySim.join(',') || '-'}; only the page ${onlyPage.join(',') || '-'}` : null;
     },
     movers,
-    reset() { game.reset(); failed = false; rebuildOcclusion?.(); },
+    // LoadMap deletes the moving brush tracker before it loads the level (docs/brush-tracker.md "Lifetime"), so the reset's
+    // actor start-up traces the static BSP; GNewBrushTracker follows the start-up (the rebuild).
+    reset() { dropOcclusion?.(); game.reset(); failed = false; rebuildOcclusion?.(); },
     /** The session's own simulation-side objects (the view model's
      * bindings); the actor mesh layer belongs to its scene wrapper. */
     /** A pack buffer back from the page, for a later frame. */

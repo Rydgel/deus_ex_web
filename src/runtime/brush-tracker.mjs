@@ -19,6 +19,12 @@ import { ClassDefaults } from '../unreal/classes.mjs';
  * BSP: drawn whole, frustum-stamped (the earlier Play behaviour). */
 export const moverTrackerMode = () => (typeof process !== 'undefined' && process.env?.MOVER_TRACKER)
   || globalThis.DEUS_EX_MOVER_TRACKER || 'on';
+/** 'off' (Node: TRACKED_COLLISION=off) keeps the level's collision queries on
+ * the static BSP while the tracker lives, for comparisons; the original's
+ * world checks read the tracked Level->Model (docs/brush-tracker.md
+ * "Collision"). */
+export const trackedCollisionMode = () => (typeof process !== 'undefined' && process.env?.TRACKED_COLLISION)
+  || globalThis.DEUS_EX_TRACKED_COLLISION || 'on';
 
 /** The constructor's movers (0x1037ace1): every actor with a Brush whose
  * class is a Brush and which is not bStatic, in map order, with its merged

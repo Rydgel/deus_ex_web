@@ -31,7 +31,8 @@ import { createMeshLightingView } from './mesh-lighting-view.mjs';
 import { createLipSyncAnalysis } from '../runtime/galaxy-lipsync-channels.mjs';
 import { loadScriptVmKernel } from '../runtime/script-vm-kernel.mjs';
 import { createBspOcclusion, texturePolyFlags } from '../runtime/bsp-occlusion.mjs';
-import { collectTrackerMovers, moverTrackerMode, trackerDecalSource, trackerMoverSpec, trackerTextureFlags } from '../runtime/brush-tracker.mjs';
+import { collectTrackerMovers, moverTrackerMode, trackedCollisionMode, trackerDecalSource, trackerMoverSpec, trackerTextureFlags, TRACKER } from '../runtime/brush-tracker.mjs';
+import { walkingSurfaceTextures } from '../runtime/walking-surface.mjs';
 import { readTexture } from '../unreal/textures.mjs';
 import { detailTable, detailTexturesOn, modelSurfaceDetails } from '../runtime/detail-pass.mjs';
 import { createDetailDraw } from '../runtime/detail-draw.mjs';
@@ -119,14 +120,34 @@ export async function createSimHost(map, asset, assets, { randomSeed, subtitles,
       await trackerTextureFlags(assets, asset, trackerMovers,
         object => texturePolyFlags(readTexture(object.asset, object.index).values), textureFlags);
     }
+    // The texture records (walkingSurfaceTextures) of every mover polygon, for
+    // the tracker's FBspSurfs (AddBrush: Texture = the polygon's), which a
+    // world hit on a fragment names: WalkTexture and TraceTexture read
+    // Model->Surfs[Node.iSurf].Texture.
+    const polygonTextures = new Map();
+    if (trackerMovers) {
+      const records = await walkingSurfaceTextures(assets, asset, { surfaces: trackerMovers.flatMap(m => m.polys.map(p => ({ texture: p.texture }))) });
+      let k = 0;
+      for (const m of trackerMovers) { polygonTextures.set(m, records.slice(k, k + m.polys.length)); k += m.polys.length; }
+    }
     // A fresh model and tracker: at load, and at each LoadMap that Player
     // start makes (the original deletes the tracker and loads the level
     // anew, then GNewBrushTracker after the actor start-up, 0x1038dfb5).
-    let current = null;
+    let current = null, builtLevel = null;
+    // Before the reset's LoadMap: the tracker goes first, so the level model's collision, line checks and decals are the
+    // static BSP's through the new level's actor start-up, until buildOcclusion's GNewBrushTracker.
+    const dropOcclusion = () => {
+      if (builtLevel) builtLevel.decalSource = null;
+      current?.dispose();
+      current = null;
+      occlusionNow = null;
+      session.setOcclusion(null);
+    };
     const buildOcclusion = () => {
       current?.dispose();
       occlusionNow = null;
       const level = runtime.levelFor(player()), index = new Map();
+      builtLevel = level;
       level.actors.forEach((actor, i) => { if (actor && !index.has(actor.name)) index.set(actor.name, i); });
       const movers = (trackerMovers ?? []).filter(m => index.has(m.name)).sort((a, b) => index.get(a.name) - index.get(b.name));
       const read = (actor, name) => runtime.readNamed(actor, name);
@@ -150,12 +171,26 @@ export async function createSimHost(map, asset, assets, { randomSeed, subtitles,
       // (fast-line-check.mjs, docs/brush-tracker.md "Line checks"). Not enumerable: the model crosses no thread with it.
       if (level.model) Object.defineProperty(level.model, 'trackedLineNodes', { configurable: true, enumerable: false, writable: true,
         value: () => (occlusionNow?.tracker?.live() ? occlusionNow.lineNodes() : null) });
+      // ULevel::MultiLineCheck's and MultiPointCheck's world checks (MoveActor, Trace, the AI and decal traces, FarMoveActor)
+      // read Level->Model too (level-queries.mjs worldModel, docs/brush-tracker.md "Collision"). The tracker's surfaces take
+      // their polygons' texture records after the level's own (`surfaceTexture`, as the level's walkingSurfaceTextures).
+      if (specs && level.model) {
+        const collision = current.collisionModel(), t = current.tracker;
+        const textures = (level.surfaceTexture ?? []).slice(0, t.header(TRACKER.SURFS_TOP));
+        for (let s = t.header(TRACKER.SURFS_TOP); s < t.header(TRACKER.SURFS_NUM); s++) {
+          const owner = t.surfOwner(s);
+          textures[s] = polygonTextures.get(movers[owner.tag - 0x40000000])?.[owner.ordinal] ?? null;
+        }
+        collision.surfaceTexture = textures;
+      }
+      if (level.model) Object.defineProperty(level.model, 'trackedCollision', { configurable: true, enumerable: false, writable: true,
+        value: trackedCollisionMode() === 'off' ? () => null : () => (occlusionNow?.tracker?.live() ? occlusionNow.collisionModel() : null) });
       session.setOcclusion(current, specs ? { names: movers.map(m => m.name), actors, indices: movers.map(m => index.get(m.name)) } : null);
       session.setDetail(createDetailDraw(kernel, current));
       occlusionNow = current;
     };
     buildOcclusion();
-    session.setOcclusionRebuild(buildOcclusion);
+    session.setOcclusionRebuild(buildOcclusion, dropOcclusion);
     // DrawFrame's decal block runs over the same frames (decal-draw.mjs).
     const decals = (await loadScriptVmKernel()).decals;
     if (decals) session.setDecalKernel(decals, () => kernel.framePtr());

@@ -125,10 +125,12 @@ export async function createGame(map, asset, assets, { randomSeed = Math.floor(D
       get Velocity(){return player.velocity;}}});
   const surfaceTextures = await walkingSurfaceTextures(assets, asset, map.model);
   player.textureForHit = hit => {
-    if (hit.actor !== collision.queries.levelInfo || hit.primitive !== map.model) return null;
-    const node = map.model.nodes[hit.item];
+    // Level->Model as the query traced it (level-queries.mjs worldModel: the moving brush tracker's while it lives).
+    const model = collision.queries.worldModel?.() ?? map.model;
+    if (hit.actor !== collision.queries.levelInfo || hit.primitive !== model) return null;
+    const node = model.nodes[hit.item];
     if (!node) throw new Error('Original world ray returned an invalid surface node');
-    return surfaceTextures[node.surface] ?? null;
+    return (model.surfaceTexture ?? surfaceTextures)[node.surface] ?? null;
   };
   player.timeDilation = [...actors.values()].find(a => a.className === 'LevelInfo')?.values.TimeDilation ?? 1;
   const eventHasRecipients = event => {

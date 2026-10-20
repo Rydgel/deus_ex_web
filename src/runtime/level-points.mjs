@@ -4,8 +4,10 @@ import {brushToWorld} from './coords.mjs';
 const f=Math.fround;
 
 /** Original level point list/join/closest recovery. Hash must be the same live
- * registration instance as line queries. See docs/level-points.md. */
-export function createLevelPoints(model,hash,levelInfo){
+ * registration instance as line queries. See docs/level-points.md.
+ * `worldModel()` is Level->Model for the world check (level-queries.mjs: the
+ * moving brush tracker's model while it lives). */
+export function createLevelPoints(model,hash,levelInfo,worldModel=()=>model){
  const actorPoint=(actor,{position,extent})=>{
   const values=actor.collisionValues??actor.values;
   const hit=actor.model?modelPointCheck(actor.model,position,extent,brushToWorld(values)):
@@ -15,7 +17,7 @@ export function createLevelPoints(model,hash,levelInfo){
  const multiPointCheck=(position,extent,flags=0,worldActor=levelInfo,checkActors=1)=>{
   position=position.map(f);extent=extent.map(f);
   const hits=checkActors&&hash?hash.actorPointCheck({position,extent},actorPoint):[];
-  if(worldActor){const hit=modelPointCheck(model,position,extent);if(!hit.outside)hits.unshift({...hit,actor:worldActor,primitive:model});}
+  if(worldActor){const world=worldModel(),hit=modelPointCheck(world,position,extent);if(!hit.outside)hits.unshift({...hit,actor:worldActor,primitive:world});}
   return hits;
  };
  const singlePointCheck=(position,extent,flags=0,worldActor=levelInfo,checkActors=1)=>{

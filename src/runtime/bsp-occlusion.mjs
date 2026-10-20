@@ -17,7 +17,7 @@
  * candidates, `useFrameCandidates`). */
 import { sceneFrameTangent } from './script-window-scene-frame.mjs';
 import { x87TanCandidates } from './x87-tan.mjs';
-import { createTrackerHost, trackerCapacities, TRACKER } from './brush-tracker.mjs';
+import { createTrackerHost, trackerCapacities, TRACKER, DSURF } from './brush-tracker.mjs';
 
 /** Engine.Texture's bools packed into the dword UTexture::PolyFlags (+0x80
  * in the retail layout, docs/object-memory.md "Texture"), bit i for the i-th
@@ -253,6 +253,8 @@ export function createBspOcclusion(kernel, model, { surfaceTextureFlags, zoneAct
   }
   const trackerHost = tracker ? createTrackerHost(kernel, model, tracker.movers,
     { at: { nodes, verts, points, surfs }, caps, block, words: () => new Uint32Array(memory.buffer) }) : null;
+  // collisionModel()'s one object.
+  let collision = null;
   const header = [nodes, nodeCount, verts, model.vertices.length, points, pointCount, surfs, model.surfaces.length,
     bounds, model.renderBounds.length, zones, model.zones.length, model.rootOutside, cache, 0, 0xfffffffe,
     dynamics, sprites, 0, detail, detail ? detailTable.length / 16 : 0];
@@ -492,6 +494,55 @@ export function createBspOcclusion(kernel, model, { surfaceTextureFlags, zoneAct
      * RootOutside. */
     lineNodes() {
       return { memory, at: nodes, count: trackerHost ? trackerHost.header(TRACKER.NODES_NUM) : nodeCount, rootOutside: model.rootOutside };
+    },
+    /** Level->Model for the level's collision queries while the tracker
+     * lives (docs/brush-tracker.md "Collision"): ULevel::MultiLineCheck's and
+     * MultiPointCheck's world checks call Level->Model's LineCheck and
+     * PointCheck, and once NF_IsNew clears the tracker's fragments are
+     * ordinary nodes of that model, where the movers were last rendered.
+     * One object for the tracker's life (level-queries.mjs keys its world
+     * model, and trace-kernel.mjs its upload, by identity): `nodes` reads
+     * each node from this model's memory at its first read in a tracker
+     * generation (lineModel's fields), `surfaces` the static surfaces then
+     * each tracker FBspSurf's PolyFlags (AddBrush: the polygon's
+     * `PolyFlags & 0x3cffffff`), `trackedSource` the node block for the
+     * trace kernel's import (its address, capacity, count and the tracker's
+     * generation, which Update bumps whenever it rebuilt a mover). Null
+     * without a tracker. */
+    collisionModel() {
+      if (!trackerHost) return null;
+      if (collision) return collision;
+      let made = new Map(), madeGeneration = -1;
+      const generation = () => trackerHost.header(TRACKER.GENERATION), count = () => trackerHost.header(TRACKER.NODES_NUM);
+      const node = i => {
+        const g = generation();
+        if (g !== madeGeneration) { made = new Map(); madeGeneration = g; }
+        let n = made.get(i);
+        if (!n) {
+          const u = words(), b = bytes(), fl = new Float32Array(memory.buffer), o = (nodes >>> 2) + 16 * i;
+          n = { plane: [fl[o], fl[o + 1], fl[o + 2], fl[o + 3]], back: u[o + 8] | 0, front: u[o + 9] | 0,
+            vertexCount: b[nodes + 64 * i + 54], flags: b[nodes + 64 * i + 55], collisionBound: u[o + 11] | 0, surface: u[o + 7] | 0,
+            zones: [b[nodes + 64 * i + 52], b[nodes + 64 * i + 53]], leaves: [u[o + 14] | 0, u[o + 15] | 0] };
+          made.set(i, n);
+        }
+        return n;
+      };
+      const top = () => trackerHost.header(TRACKER.SURFS_TOP), dsurfs = trackerHost.blocks.dsurfs;
+      const surface = i => {
+        if (i < top()) return model.surfaces[i];
+        if (i >= trackerHost.header(TRACKER.SURFS_NUM)) return undefined;
+        const u = words(), o = (dsurfs >>> 2) + DSURF.WORDS * (i - top());
+        return { texture: null, flags: u[o + DSURF.FLAGS], dynamic: true, mover: u[o + DSURF.ACTOR] - 0x40000000, ordinal: u[o + DSURF.BRUSHPOLY] };
+      };
+      const indexed = (length, read) => new Proxy([], { get(_, key) {
+        if (key === 'length') return length();
+        const i = typeof key === 'string' ? Number(key) : NaN;
+        return Number.isInteger(i) && i >= 0 && i < length() ? read(i) : undefined;
+      } });
+      collision = { rootOutside: model.rootOutside, leafHulls: model.leafHulls, zones: model.zones,
+        nodes: indexed(count, node), surfaces: indexed(() => trackerHost.header(TRACKER.SURFS_NUM), surface),
+        trackedSource: { memory, at: nodes, capacity: caps.nodes, count, generation } };
+      return collision;
     },
     blocks: { nodes, verts, points, surfs },
     /** The detail table as uploaded (`detailTable`): its address and record count, for the kernel's detail pass; null without one. */

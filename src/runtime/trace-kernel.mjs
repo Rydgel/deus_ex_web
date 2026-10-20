@@ -22,7 +22,13 @@
  *   words   the leafHulls int32 words
  * A link or hull offset the JavaScript would not index with is stored as -2.
  * Models are immutable after decoding; a model's range is uploaded on first
- * use (WeakMap) and released when the model is collected.
+ * use (WeakMap) and released when the model is collected. The one exception
+ * is Level->Model as the moving brush tracker holds it (bsp-occlusion.mjs
+ * collisionModel, docs/brush-tracker.md "Collision"): one range at the
+ * tracker's node capacity, its node block copied raw from the occlusion
+ * kernel's memory and converted in place (trace.rs trace_import_bsp)
+ * whenever the tracker's generation or node count changed since the last
+ * import.
  *
  * TRACE_KERNEL=js keeps the JavaScript path. TRACE_DIFFERENTIAL=1 runs the
  * JavaScript beside every kernel answer and throws on any difference: values
@@ -138,7 +144,9 @@ class TraceKernel {
     // No kernel call is in flight when a finalizer runs, so the range is
     // reusable at once.
     this.registry = new FinalizationRegistry(({base, size}) => { arena.release(base, size); arena.reclaim(); });
-    this.stats = {ray: 0, extent: 0, fallback: 0, models: 0, ineligible: 0};
+    this.stats = {ray: 0, extent: 0, fallback: 0, models: 0, ineligible: 0, imports: 0};
+    // Tracked models (collisionModel objects) -> {base, wordsAt, wordCount, generation, count}.
+    this.trackedModels = new WeakMap();
     this.views();
   }
   /** Re-derive the result and owner views after the memory grew. */
@@ -149,6 +157,7 @@ class TraceKernel {
   }
   /** The model's range, uploading it on first use; 0 leaves it to JavaScript. */
   base(model) {
+    if (model?.trackedSource) return this.tracked(model);
     if (model === this.lastModel) return this.lastBase;
     if (typeof model !== 'object' || model === null) return 0;
     let base = this.models.get(model);
@@ -166,6 +175,37 @@ class TraceKernel {
     this.registry.register(model, {base, size: layout.size});
     this.stats.models++;
     return base;
+  }
+  /** A tracked Level->Model's range, imported again when the tracker
+   * rebuilt a mover since the last import; 0 leaves it to JavaScript. */
+  tracked(model) {
+    const source = model.trackedSource, count = source.count(), generation = source.generation();
+    let entry = this.trackedModels.get(model);
+    if (entry === undefined) {
+      if (model.rootOutside === undefined || !(source.capacity > 0)) return this.ineligible();
+      // traceModelLayout's hull rule: words that are not all int32 are not uploaded.
+      const words = model.leafHulls;
+      let wordCount = Array.isArray(words) ? words.length : 0;
+      for (let i = 0; i < wordCount; i++) if (words[i] !== (words[i] | 0)) { wordCount = 0; break; }
+      const size = HEADER + source.capacity * NODE + wordCount * 4, base = this.arena.alloc(size);
+      this.views();
+      const wordsAt = base + HEADER + source.capacity * NODE;
+      if (wordCount) new Int32Array(this.arena.memory.buffer, wordsAt, wordCount).set(words);
+      entry = {base, wordsAt, wordCount, generation: -1, count: -1};
+      this.trackedModels.set(model, entry);
+      this.registry.register(model, {base, size});
+      this.stats.models++;
+    }
+    if (entry.generation !== generation || entry.count !== count) {
+      if (count === 0 || count > source.capacity) return 0;
+      new Uint8Array(this.arena.memory.buffer, entry.base + HEADER, count * NODE)
+        .set(new Uint8Array(source.memory.buffer, source.at, count * NODE));
+      this.x.trace_import_bsp(entry.base, count, model.rootOutside ? 1 : 0, entry.wordsAt, entry.wordCount);
+      entry.generation = generation;
+      entry.count = count;
+      this.stats.imports++;
+    }
+    return entry.base;
   }
   ineligible() {
     this.stats.ineligible++;

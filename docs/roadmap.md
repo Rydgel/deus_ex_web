@@ -1171,7 +1171,7 @@ prove it), built on [what the original offers a player there](stage-5-inventory.
 0 of 50; after the first two gap tasks 0 of 50 with 43 playing and waiting for their original captures; after the first
 original captures, Island combat, 2 of 50 with 44 playing; with the second captures, the death capture and the
 undriven scenarios merged on 2026-10-18, 3 of 50 with all 50 playing; with the Island batches (devices, routes,
-conversations, frozen-phase frames, the zone-0 walking branch) merged on 2026-10-19, 20 of 50; with the original load's chance FlyGenerators replayed, 21 of 50, 6 failing and 23 waiting for captures).
+conversations, frozen-phase frames, the zone-0 walking branch) merged on 2026-10-19, 20 of 50; with the original load's chance FlyGenerators replayed, 21 of 50; with collision over the moving brush tracker's level model on 2026-10-20, 23 of 50, 4 failing and 23 waiting for captures).
 
 ## 6. Persist progress and complete the campaign
 

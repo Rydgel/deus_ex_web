@@ -280,6 +280,34 @@ block as `bsp-occlusion.mjs` `lineNodes` reads it in place), and `fast-line-chec
 Update: the Underworld's broken BreakableGlass0 still blocks the line to its own fragments' sound in the same frame, as
 in the original (row 4.3.6's capture `sndm`).
 
+**Collision (2026-10-20).** ULevel::MultiLineCheck's world check is Level->Model's LineCheck (vtable slot 22) with the
+trace's extent, and ULevel::MultiPointCheck's is its PointCheck (slot 21), so MoveActor, SingleLineCheck, Trace and
+TraceTexture, the AI's and the decals' line checks, FindSpot (SpawnActor, FarMoveActor) and the walking surface scans all
+meet the movers' fragments where the movers were last rendered. sim-host.mjs gives the level model `trackedCollision()`
+while the tracker lives, which returns bsp-occlusion.mjs `collisionModel()`: one object for the tracker's life whose
+`nodes` read the node block in place (lineModel's fields plus iCollisionBound and iSurf, fresh objects per tracker
+generation), with the static LeafHulls (AddNode gives a fragment iCollisionBound −1, so no hull is added) and `surfaces`
+that continue the level's with each tracker FBspSurf's PolyFlags. level-queries.mjs `worldModel()` returns it, or the
+static BSP before construction and without a tracker, for the JavaScript world checks (`worldLineCheck`, level-points.mjs
+`multiPointCheck`) and the kernel's (collision-kernel.mjs `createKernelLineChecks`). The Rust trace kernel keeps one range
+per tracked model at the tracker's node capacity: when the tracker's generation (header 51, bumped by an Update that rebuilt
+a mover) or node count changed since the last import, trace-kernel.mjs copies the node block raw from the occlusion
+kernel's memory and trace.rs `trace_import_bsp` converts it in place to the trace layout, with traceModelLayout's rules. A
+world hit's Item is a node of that model: WalkTexture (script-pawn-physics.mjs `textureForHit`), the kernel's walking
+scan table (rebuilt per generation from the iSurf words) and TraceTexture resolve it there, and the tracker's surfaces
+take their mover polygons' texture records (sim-host.mjs `surfaceTexture`, as walkingSurfaceTextures makes the level's).
+`?trackedCollision=off` (Node: `TRACKED_COLLISION=off`) keeps the collision queries on the static BSP, for comparisons.
+
+Evidence: `validate-tracked-collision.mjs` runs Engine's unchanged UModel::LineCheck (box branch included, with the
+model's LeafHulls) and UModel::PointCheck under Unicorn on the tracker oracle's level model at the game thread's 0x037f,
+on the static BSP, after GNewBrushTracker and after a frame that moves every mover half way to KeyPos[1] (Update at 24
+bits), against ray.mjs traceRayFast, extent-trace.mjs traceExtentJs and point-check.mjs modelPointCheck over lineModel():
+Island 1,140 lines and 3,420 points per state, Training 1,500 and 4,500, all bit-exact (Time, Location, Normal, Item)
+but one static PointCheck recovery tie that predates the tracker ([point check](point-check.md), "Recovery tie between a
+hull plane and its bevel"). The fragments change 27 and 35 of Island's lines and 145 and 218 of its points (113, 103,
+205, 184 on Training). The same run checks the Rust kernel over `collisionModel()` against the JavaScript bodies (2,280
+and 3,000 answers, one import per generation).
+
 **Switch.** `?moverTracker=off` (Node: `MOVER_TRACKER=off`) keeps the
 earlier behaviour: movers stay out of the BSP, draw whole and are stamped
 from the frustum set.
@@ -384,13 +412,9 @@ lists is not drawn.
 
 - **Precision.** The game thread's control word at LoadMap and SaveGame is
   not measured. Construction assumes PC64.
-- **Collision.** Once NF_IsNew clears, fragments are ordinary solid nodes of
-  Level->Model, and nothing in the level traces excludes them.
-  SetupForActor's LineCheck now runs over the tracked model in Play, and
-  Engine's UModel::LineCheck under Unicorn agrees on 366 checks
-  (validate-tracked-linecheck, [mesh lighting](mesh-lighting.md) "LineCheck
-  and the brush tracker"). Play's collision, AI and decal traces still use
-  the static model (Stage 5).
+- **Collision.** Done 2026-10-20 ([above](#play), "Collision"). Not
+  measured: whether a script trace run from RenderOverlays (inside the render
+  pass's PC24) rounds differently; the evidence is at 0x037f.
 - **SaveGame** (Stage 6). SaveGame deletes the tracker, saves, resets every
   mover's SavedPos to (−1, −1, −1) and builds a new tracker. Play has no
   SaveGame yet; `buildOcclusion` in `sim-host.mjs` is the rebuild to call.

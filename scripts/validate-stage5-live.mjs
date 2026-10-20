@@ -10,6 +10,10 @@
  *   - the level clock and the stream draws per tick are equal,
  *   - every AI event manager call and delivered callback is equal in order and value (`live-events-compare.mjs`),
  *   - every object the scene creates is the original's, in class and tick, in order (`live-sound-compare.mjs`'s registry part; the slots are reported).
+ * STAGE5_PAGE_PARAMS='a=1&b=2' passes page parameters to the replay (live-acceptance.mjs --page-params: `trackedCollision=off` replays with the
+ * collision queries on the static BSP, for comparisons); STAGE5_PLAY_ARGS='--setup-probe A,B --setup-ticks 815:825' adds options to the replay's
+ * live-acceptance.mjs play (the Setup probe writes setup-play.json); DEBUG_CONSOLE=text prints the replay page's console lines that contain it.
+ *
  * The original is never started here: a scene whose stored trace is absent prints SKIP and exits 0 (the gate counts it as not passing). The validator sweep
  * leaves this check out (scripts/run-validators.mjs SWEEP_EXCLUDED): it runs as a Stage 5 proof check, with --scene.
  *
@@ -557,12 +561,13 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
     console.log(`phonemes: ${letters.out.trim().split('\n').slice(-1)[0]}`);
   }
   const play = compareOnly ? {code: 0, out: ''} : await exec(['scripts/live-acceptance.mjs', 'play', '--map', scene.map, '--seed', '1', '--tag', tag, ...sceneFlags(scene), ...PLAY_FLAGS, '--early-cmds', scene.early,
-    ...(scene.conversation ? ['--phonemes', phonemes] : []), '--event-trace', `1:${scene.ticks}`, '--object-trace', `1:${scene.ticks}`], Math.max(1800, scene.ticks * 2));
+    ...(scene.conversation ? ['--phonemes', phonemes] : []), '--event-trace', `1:${scene.ticks}`, '--object-trace', `1:${scene.ticks}`, ...(process.env.STAGE5_PAGE_PARAMS ? ['--page-params', process.env.STAGE5_PAGE_PARAMS] : []),
+    ...(process.env.STAGE5_PLAY_ARGS ? process.env.STAGE5_PLAY_ARGS.split(' ').filter(Boolean) : [])], Math.max(1800, scene.ticks * 2));
   if (play.code !== 0) { console.log(play.out.trim().split('\n').slice(-12).join('\n')); console.log(`FAIL ${tag}: the replay stopped (exit ${play.code})`); process.exit(1); }
   // the slot model's inputs (the run's own indices, the pre-frees and where they were released), the frozen phase's window frames (a capture with
   // --frozen-frames: how many the replay ticked around the typed lines and before tick 1), and the original load's FlyGenerators Play made before its KillAll
   for (const line of play.out.split('\n')) if ((line.startsWith('object trace: ') && !/registry events/.test(line)) || line.startsWith('frozen phase: ') || /window frames around them/.test(line)
-    || /^the original's (\d+ )?load FlyGenerators/.test(line)) console.log(line);
+    || /^the original's (\d+ )?load FlyGenerators/.test(line) || (process.env.DEBUG_CONSOLE && line.includes(process.env.DEBUG_CONSOLE))) console.log(line);
   const compare = await exec(['scripts/live-acceptance.mjs', 'compare', '--map', scene.map, '--tag', tag, ...sceneFlags(scene)], 600);
   console.log(compare.out.trim());
   // the scene's own report (report-<tag>.json): another checkout's replay of the same map writes the untagged report.json in the shared .work

@@ -233,7 +233,9 @@ export function createTraceTextureIterator({
       outNormal.set([...hit.normal]);
       let name = 'None', group = 'None', flags = 0;
       if (isLevelInfo(hit.actor)) {
-        const model = level.model, surfaceTexture = level.surfaceTexture;
+        // The Level->Model the trace read (level-queries.mjs worldModel): with the moving brush tracker a fragment's
+        // iSurf is the tracker's FBspSurf, with its polygon's PolyFlags and texture.
+        const model = level.hash?.worldModel?.() ?? level.model, surfaceTexture = model.surfaceTexture ?? level.surfaceTexture;
         if (!Array.isArray(model?.nodes))
           throw new TypeError('TraceTexture world hit requires the level BSP model');
         const node = model.nodes[hit.item];

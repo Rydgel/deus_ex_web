@@ -283,18 +283,23 @@ export function pawnPhysicsView(actor, services) {
   pawn.fellOutOfWorld = () => dispatch(actor, 'FellOutOfWorld', []);
   pawn.mayFall = () => dispatch(actor, 'MayFall', []);
   pawn.walkTexture = (texture, location, normal) => dispatch(actor, 'WalkTexture', [texture, location, normal]);
+  // A world hit's Item is a node of the Level->Model the query traced (level-queries.mjs worldModel: the moving brush
+  // tracker's while it lives, whose fragments' surfaces take their polygons' textures).
+  const worldModel = () => level.hash?.worldModel?.() ?? level.model;
   pawn.textureForHit = hit => {
     if (hit?.actor !== worldActor) return null;
-    const node = level.model.nodes[hit.item];
+    const model = worldModel(), node = model.nodes[hit.item];
     if (!node) throw new Error(`WalkTexture world hit item is not a valid BSP node: ${hit.item}`);
-    return level.surfaceTexture[node.surface] ?? null;
+    return (model.surfaceTexture ?? level.surfaceTexture)[node.surface] ?? null;
   };
   // walking-surface.mjs's scan in one Rust call (docs/rust-core.md R3-b):
   // the queries of `lineCheck` above and the table of `textureForHit`. Not
   // enumerable, as `decorate`: a view reachable from script properties is
   // walked by its keys (bench-sim's digest), which stay as they were.
-  Object.defineProperty(pawn, 'surfaceScan', { value: (start, ends, position, floorEnd) =>
-    level.hash.surfaceScan?.(start, ends, position, floorEnd, pawn, level.model, level.surfaceTexture, worldActor) });
+  Object.defineProperty(pawn, 'surfaceScan', { value: (start, ends, position, floorEnd) => {
+    const model = worldModel();
+    return level.hash.surfaceScan?.(start, ends, position, floorEnd, pawn, model, model.surfaceTexture ?? level.surfaceTexture, worldActor);
+  } });
   pawn.hitWall = hit => processPlayerHitWall(pawn, hit.normal, hit.actor,
     { isProbing: (target, name) => services.isProbing(actor, name), dispatch });
   pawn.landed = (hit, remaining, iterations) => processLanded(pawn, hit, remaining, iterations);

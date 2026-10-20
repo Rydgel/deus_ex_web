@@ -106,6 +106,52 @@ pub extern "C" fn trace_test_stored_support(p0: f64, p1: f64, p2: f64, e0: f64, 
     stored_support(&[p0, p1, p2], &[e0, e1, e2])
 }
 
+/// Level->Model as the moving brush tracker holds it (trace-kernel.mjs
+/// `tracked`, docs/brush-tracker.md "Collision"): the host copies the node
+/// block raw (Engine's 64-byte FBspNode records, as bsp-occlusion.mjs
+/// lineModel reads them: Plane +0, iBack +32, iFront +36, iCollisionBound
+/// +44, NumVertices +54, NodeFlags +55) to `base + HEADER_SIZE` and the
+/// LeafHulls words to `words`; this writes the header and converts each
+/// record in place to a `Node`, with traceModelLayout's rules: the float
+/// plane widened, a link -1 or in range kept (else -2), NodeFlags as an
+/// int, a hull offset -1 or below `word_count` kept (else -2), and
+/// whether the node has vertices.
+#[no_mangle]
+pub extern "C" fn trace_import_bsp(base: u32, count: u32, root_outside: u32, words: u32, word_count: u32) {
+    unsafe {
+        let h = base as usize as *mut Header;
+        (*h).count = count;
+        (*h).root_outside = (root_outside != 0) as u32;
+        (*h).words = words;
+        (*h).word_count = word_count;
+        (*h)._pad = [0; 4];
+        let link = |v: i32| if v == -1 || (v >= 0 && (v as u32) < count) { v } else { -2 };
+        for i in 0..count as usize {
+            let at = (base as usize + HEADER_SIZE + 64 * i) as *mut u8;
+            let plane = [
+                (at as *const f32).read(),
+                (at.add(4) as *const f32).read(),
+                (at.add(8) as *const f32).read(),
+                (at.add(12) as *const f32).read(),
+            ];
+            let back = (at.add(32) as *const i32).read();
+            let front = (at.add(36) as *const i32).read();
+            let bound = (at.add(44) as *const i32).read();
+            let vertices = *at.add(54);
+            let flags = *at.add(55);
+            (at as *mut Node).write(Node {
+                plane: [plane[0] as f64, plane[1] as f64, plane[2] as f64, plane[3] as f64],
+                front: link(front),
+                back: link(back),
+                flags: flags as i32,
+                bound: if bound == -1 || (bound >= 0 && (bound as u32) < word_count) { bound } else { -2 },
+                verts: (vertices > 0) as u32,
+                _pad: [0; 3],
+            });
+        }
+    }
+}
+
 #[inline(always)]
 pub(crate) fn f(x: f64) -> f64 {
     x as f32 as f64

@@ -205,9 +205,13 @@ class KernelHashStore {
    * scan (its outerName null or 'Ladder'), bit 1 when the prelude's ladder
    * test takes the branch (outerName lowercased 'ladder') or throws, where
    * the floor is not queried. Surface records never change once decoded,
-   * so the table is built once per texture list. */
+   * so the table is built once per texture list. A tracked Level->Model's
+   * nodes change with the tracker (bsp-occlusion.mjs collisionModel): its
+   * table, at the tracker's node capacity, is filled again for each
+   * generation from the node block's iSurf words. */
   surfaceTable(model, textures) {
     let entry = this.tables.get(textures);
+    if (model.trackedSource) return this.trackedSurfaceTable(model, textures, entry);
     if (entry === undefined || entry.model !== model) {
       const nodes = model.nodes, base = this.alloc(Math.max(1, nodes.length));
       const bytes = new Uint8Array(this.arena.memory.buffer, base, nodes.length);
@@ -221,10 +225,37 @@ class KernelHashStore {
     }
     return entry.base;
   }
+  trackedSurfaceTable(model, textures, entry) {
+    const source = model.trackedSource, count = source.count(), generation = source.generation();
+    if (entry === undefined || entry.model !== model) {
+      entry = {model, base: this.alloc(Math.max(1, source.capacity)), generation: -1, count: -1, bySurface: new Map()};
+      this.tables.set(textures, entry);
+    }
+    if (entry.generation !== generation || entry.count !== count) {
+      const bytes = new Uint8Array(this.arena.memory.buffer, entry.base, count);
+      const iSurf = new Int32Array(source.memory.buffer, source.at, 16 * count);
+      for (let i = 0; i < count; i++) {
+        const surface = iSurf[16 * i + 7];
+        let byte = entry.bySurface.get(surface);
+        if (byte === undefined) {
+          const texture = textures[surface] ?? null;
+          let ladder;
+          try { ladder = texture?.outerName?.toLowerCase() === 'ladder'; } catch { ladder = true; }
+          entry.bySurface.set(surface, byte = (texture && (texture.outerName === null || texture.outerName === 'Ladder') ? 1 : 0) | (ladder ? 2 : 0));
+        }
+        bytes[i] = byte;
+      }
+      entry.generation = generation;
+      entry.count = count;
+    }
+    return entry.base;
+  }
   /** The level BSP's kernel address (uploaded on first use), 0 where the
-   * trace kernel leaves the model to JavaScript. */
+   * trace kernel leaves the model to JavaScript. A tracked Level->Model
+   * (bsp-occlusion.mjs collisionModel) is asked every time: its import
+   * follows the tracker's generation. */
   world(model) {
-    if (model !== this.worldModel) {
+    if (model !== this.worldModel || model.trackedSource) {
       this.worldModel = model;
       this.worldBase = this.kernel.base(model);
     }
@@ -296,7 +327,7 @@ const three = v => Array.isArray(v) && v.length === 3 && typeof v[0] === 'number
 
 /** Line checks for createLevelQueries answered by hash.rs; `undefined`
  * where the JavaScript answers. */
-export function createKernelLineChecks({store, model, levelInfo, valuesOf, isA, brushToWorld}) {
+export function createKernelLineChecks({store, model: staticModel, worldModel = () => staticModel, levelInfo, valuesOf, isA, brushToWorld}) {
   const x = store.x;
   const context = {store, valuesOf, isA, brushToWorld, source: null, flags: 0, world: null};
   // lc_line on the kernel: its status. Only one runs at a time (see
@@ -343,8 +374,9 @@ export function createKernelLineChecks({store, model, levelInfo, valuesOf, isA, 
       location: [answer[at + 1], answer[at + 2], answer[at + 3]], normal: [answer[at + 4], answer[at + 5], answer[at + 6]]};
   }
   // The hit objects of answer records [from, count), linked, as
-  // multiLineCheck builds them (world: the query's world actor).
-  function hitObjects(answer, from, count, world) {
+  // multiLineCheck builds them (world: the query's world actor; model: the
+  // Level->Model it traced, level-queries.mjs worldModel).
+  function hitObjects(answer, from, count, world, model) {
     const hits = new Array(count - from);
     let next = null;
     for (let i = count - 1; i >= from; i--) {
@@ -368,7 +400,7 @@ export function createKernelLineChecks({store, model, levelInfo, valuesOf, isA, 
     /** level-queries.mjs lineCheck: singleLineCheck over multiLineCheck. */
     lineCheck(start_, end, extent, flags, extra, source) {
       if (!three(start_) || !three(end) || !three(extent) || typeof flags !== 'number' || typeof extra !== 'number') return undefined;
-      const worldActor = flags & 4 ? levelInfo : null;
+      const worldActor = flags & 4 ? levelInfo : null, model = worldModel();
       const world = worldActor ? store.world(model) : 0;
       if (worldActor && world === 0 || !free()) return undefined;
       start(source, flags, worldActor);
@@ -379,7 +411,7 @@ export function createKernelLineChecks({store, model, levelInfo, valuesOf, isA, 
         if (status !== ANSWERED) return undefined;
         const answer = store.answer.length ? store.answer : (store.views(), store.answer), count = answer[0];
         if (count === 0) return {time: 1, actor: null, location: [0, 0, 0], normal: [0, 0, 0], outside: true};
-        const next = count > 1 ? hitObjects(answer, 1, count, worldActor)[0] : null;
+        const next = count > 1 ? hitObjects(answer, 1, count, worldActor, model)[0] : null;
         // singleLineCheck copies the accepted hit's fields into the result.
         const id = answer[11], kind = answer[12], node = answer[9];
         const actor = id === -1 ? worldActor : store.actors[id];
@@ -400,6 +432,7 @@ export function createKernelLineChecks({store, model, levelInfo, valuesOf, isA, 
      * where the ladder branch will not ask for it), `index` the last scan
      * query run; undefined for the JavaScript scan. */
     surfaceScan(start_, ends, position, floorEnd, source, textureModel, textures, worldActor) {
+      const model = worldModel();
       if (SCAN_JS_ONLY || textureModel !== model || worldActor !== levelInfo || !levelInfo || store.ids.has(levelInfo) || !Array.isArray(textures)
         || !three(start_) || !three(position) || !three(floorEnd) || !Array.isArray(ends) || ends.length !== 4) return undefined;
       for (const end of ends) if (!Array.isArray(end) || typeof end[0] !== 'number' || typeof end[1] !== 'number') return undefined;
@@ -421,7 +454,7 @@ export function createKernelLineChecks({store, model, levelInfo, valuesOf, isA, 
     /** level-queries.mjs multiLineCheck. */
     multiLineCheck({end, start: start_, extent, checkActors, worldActor, extra = 0}) {
       if (!three(start_) || !three(end) || !three(extent) || typeof extra !== 'number') return undefined;
-      const world = worldActor ? store.world(model) : 0;
+      const model = worldModel(), world = worldActor ? store.world(model) : 0;
       if (worldActor && world === 0 || !free()) return undefined;
       start(null, 0, worldActor);
       let status = -1;
@@ -430,7 +463,7 @@ export function createKernelLineChecks({store, model, levelInfo, valuesOf, isA, 
           extent[0], extent[1], extent[2], extra, checkActors ? 1 : 0, 0);
         if (status !== ANSWERED) return undefined;
         const answer = store.answer.length ? store.answer : (store.views(), store.answer);
-        return hitObjects(answer, 0, answer[0], worldActor);
+        return hitObjects(answer, 0, answer[0], worldActor, model);
       } finally {
         finish(status);
       }
