@@ -554,6 +554,7 @@ export class ScriptRuntime {
       warning:message=>this.warning?.(message),
       newObject:request=>this.newObject(request),
       dispatchStateEvent:(receiver,name)=>this.processEvent(receiver,name),
+      isPendingKill:receiver=>this.instance(receiver).pendingKill,
       gotoLabel:(receiver,name)=>this.instance(receiver).state.gotoLabel(name),
       pollLatent:call=>{
         if(call.index===384)return pollActorSleep(this.latentFloat(call.receiver),call.state,call.seconds);

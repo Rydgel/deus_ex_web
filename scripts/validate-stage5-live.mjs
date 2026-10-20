@@ -463,6 +463,15 @@ export const SCENES = {
     devices: ['WeaponPistol0:Weapon', 'Ammo10mm0:Actor', 'Switch3:Actor', 'DeusExMover44:DeusExMover', 'DeusExMover1:DeusExMover', 'DeusExMover4:DeusExMover', 'DeusExMover7:DeusExMover',
       'BreakableGlass0:DeusExMover'],
     flags: ['DL_TArgetRange_Played', 'DL_TArgetRangeShot1_Played'], options: ['--player-talk', '--inventory']},
+  // lam1, the demolition (row 5.1.4): the shelf of LAMs (2121, 1536) is in the security bots' room, so the LAM and a pistol are summoned and picked up facing away from
+  // BreakableWall1 at (3000, 1700), 136 units south of its face (the corridor x 2940 to 3070); the LAM drawn (ActivateBelt 1) and the player dropped at (3000, 1805)
+  // facing north, 32 units from the wall: WeaponLAM.Tick's NearWallCheck sets bNearWall, and the Enter edge at 260 places the LAM on the wall (WeaponLAM.Fire,
+  // the 'Place' animation) where a thrown one would bounce. Dropped 150 units south of it at 360, the pistol drawn (ActivateBelt 2), five Enter edges aimed
+  // along the LAM's line: ThrownProjectile.TakeDamage explodes it, HurtRadius breaks the wall (minDamageThreshold 75) and DL_FinishWall follows (DataLinkTrigger11).
+  lam1: {map: '00_TrainingCombat', ticks: 1700, early: 'KillAll FlyGenerator', pawns: ['UNATCOTroop1', 'SecurityBot6', 'SecurityBot0'],
+    cmds: [INTO(3000, 1700, -20), AIM(1, 49152, -10130), '20:summon DeusEx.WeaponLAM', '60:ParseRightClick', '80:summon DeusEx.WeaponPistol', '120:ParseRightClick', '160:ActivateBelt 1',
+      INTO(3000, 1805, -20, 190), AIM(190, 16384), SHOTS([260]), INTO(3000, 1655, -20, 360), AIM(360, 16384), '400:ActivateBelt 2', SHOTS([480, 540, 600, 660, 720])].join('|'),
+    devices: ['BreakableWall1:DeusExMover', 'WeaponLAM0:Weapon', 'LAM5:Actor'], flags: ['DL_FinishWall_Played'], options: ['--player-talk', '--inventory']},
 };
 export const SCENE_FLAGS = ['--no-ghost', '--perception', '--player-gear', '--player-health', '--los-flag'];
 // The device scenes add the player's eye and bob (the first-person item's placement: Inventory.RenderOverlays, CalcDrawOffset): the stored combat scenes

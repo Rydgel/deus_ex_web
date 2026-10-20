@@ -52,3 +52,15 @@ test('Auto selects the first flagged child, then inherited states without name d
   assert.equal(runtime.gotoState(receiver,'Auto'),false);
   assert.equal(state.stateNode,null);assert.equal(state.latent,0);
 });
+
+// AActor::ProcessState (Engine.dll 0x103e5b60): IsPendingKill (virtual +0x2c) is tested before the latent poll and bDeleteMe before each opcode, so a destroyed actor's
+// state code neither polls its latent action nor runs another statement (Stage 5 lam1: WeaponLAM's NormalFire stays in NormalFire after AnimEnd's Destroy()).
+test('a destroyed actor\'s ProcessState neither polls its latent action nor runs state code',()=>{
+  const a=node('A'),polled=[];let destroyed=false;
+  const state=new ScriptState({}, {dispatchStateEvent:()=>{},isPendingKill:()=>destroyed,pollLatent:call=>{polled.push(call.index);state.latent=0;}});
+  state.transition(a,classMetadata);state.gotoLabel('Begin');state.latent=0x181;
+  destroyed=true;state.process(1/60);
+  assert.deepEqual(polled,[]);assert.equal(state.latent,0x181);assert.equal(state.execution.cursor,0);
+  destroyed=false;state.process(1/60);
+  assert.deepEqual(polled,[0x181]);assert.equal(state.execution.cursor,null);
+});
