@@ -241,6 +241,18 @@ export const SCENES = {
   // a UNATCO camera (row 5.2.4, its bNoAlarm half): the player placed 700 units in front of SecurityCamera2 (UN_outside, Tag UN_CamSystem02, bNoAlarm), in its
   // range (cameraRange 1024) and inside its cone, facing it. SecurityCamera.Tick checks the player only `if (!bNoAlarm)`: the camera swings and never sees him.
   cam2: {map: '01_NYC_UNATCOIsland', ticks: 300, early: PLACE(-3885, 3132, -96, 52325, 5410), cmds: '', devices: ['SecurityCamera2:SecurityCamera']},
+  // light against sight (row 5.6.3): the census's pair (light-vs-sight), the player placed 500 units in front of Terrorist4 (Orders Standing at (5998, 2532),
+  // facing yaw -18944) with a clear line of sight, facing it: lgt1 in shadow (Play's AIGetLightLevel 0.0043, ambient only), lgt2 15 degrees over in the light
+  // (0.0549). AICanSee's acc = 64 (r^2+h^2)/dist^2 * AIVisibility - VisibilityThreshold (0.01) is below zero in the dark and above it in the light.
+  // Placed there, the player starts Terrorist4 and Terrorist27's overheard conversation; their lines drive Pawn.LipSynch, so the replay feeds the mouth letters
+  // the original's audio update wrote (`speech`). In the dark it runs on; in the light Terrorist4 sees the player, and both leave it to attack.
+  lgt1: {map: '01_NYC_UNATCOIsland', ticks: 900, early: PLACE(5835, 2059, -96, 12924), cmds: '', speech: true},
+  lgt2: {map: '01_NYC_UNATCOIsland', ticks: 900, early: PLACE(5963, 2033, -96, 15656), cmds: '', speech: true},
+  // the breath under water (row 5.3.8): the player placed in WaterZone1 (the bay north of the dock: water from about Z -355 down to the floor near -900),
+  // still. swm1 near the floor: PainTime runs out before he rises to the surface, and drowning damage takes him (Play's rehearsal: the first hit near 1200,
+  // dead near 2220). swm2 at the census's depth (WaterZone1's Location + 30): he surfaces with breath left, and swimTimer refills.
+  swm1: {map: '01_NYC_UNATCOIsland', ticks: 2400, early: PLACE(-2802, 6641, -850, 0), cmds: '', options: ['--player-breath']},
+  swm2: {map: '01_NYC_UNATCOIsland', ticks: 1500, early: PLACE(-2802, 6641, -450, 0), cmds: '', options: ['--player-breath']},
   // a baton knock-out (row 5.1.7): a WeaponBaton summoned, picked up and drawn at cmb2's pose (700 units behind Terrorist0, where nobody notices the player; a
   // summoned item's landing is a noise, and next to the target it wakes it); at tick 600, once Terrorist18 sits on Chair9 (2017.7, -1429.6, facing yaw 48128),
   // the player is placed by the same console lines 58 units behind it at his rest height, facing its back; the Enter edge at 630 swings the baton
@@ -554,14 +566,15 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
   if (compareOnly && !existsSync(path.join(dir, `play-rows-${tag}.json`))) { console.log(`FAIL ${tag}: --compare-only without a stored replay (play-rows-${tag}.json)`); process.exit(1); }
   // A conversation's speakers: the mouth letters the original's audio update wrote (read back from the trace's blend channels; a measured host input,
   // docs/lip-sync.md), regenerated from the stored trace as the Stage 4 conversation rows do.
-  const phonemes = path.join('.work/live-acceptance', scene.map, `phonemes-${tag}.json`);
-  if (scene.conversation && !compareOnly) {
+  // (`speech: true`: a scene whose NPCs speak to each other, an overheard conversation, without the player's conversation flags: only the letters are fed)
+  const phonemes = path.join('.work/live-acceptance', scene.map, `phonemes-${tag}.json`), speech = scene.conversation || scene.speech;
+  if (speech && !compareOnly) {
     const letters = await exec(['scripts/conversation-acceptance.mjs', 'phonemes', '--map', scene.map, '--tag', tag], 300);
     if (letters.code !== 0) { console.log(letters.out.trim().split('\n').slice(-6).join('\n')); console.log(`FAIL ${tag}: the phonemes step stopped (exit ${letters.code})`); process.exit(1); }
     console.log(`phonemes: ${letters.out.trim().split('\n').slice(-1)[0]}`);
   }
   const play = compareOnly ? {code: 0, out: ''} : await exec(['scripts/live-acceptance.mjs', 'play', '--map', scene.map, '--seed', '1', '--tag', tag, ...sceneFlags(scene), ...PLAY_FLAGS, '--early-cmds', scene.early,
-    ...(scene.conversation ? ['--phonemes', phonemes] : []), '--event-trace', `1:${scene.ticks}`, '--object-trace', `1:${scene.ticks}`, ...(process.env.STAGE5_PAGE_PARAMS ? ['--page-params', process.env.STAGE5_PAGE_PARAMS] : []),
+    ...(speech ? ['--phonemes', phonemes] : []), '--event-trace', `1:${scene.ticks}`, '--object-trace', `1:${scene.ticks}`, ...(process.env.STAGE5_PAGE_PARAMS ? ['--page-params', process.env.STAGE5_PAGE_PARAMS] : []),
     ...(process.env.STAGE5_PLAY_ARGS ? process.env.STAGE5_PLAY_ARGS.split(' ').filter(Boolean) : [])], Math.max(1800, scene.ticks * 2));
   if (play.code !== 0) { console.log(play.out.trim().split('\n').slice(-12).join('\n')); console.log(`FAIL ${tag}: the replay stopped (exit ${play.code})`); process.exit(1); }
   // the slot model's inputs (the run's own indices, the pre-frees and where they were released), the frozen phase's window frames (a capture with

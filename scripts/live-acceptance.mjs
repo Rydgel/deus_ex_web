@@ -173,6 +173,10 @@ if (flag('player-view')) PLAYER_FIELDS.push(['EyeH', 'EyeHeight', 0x3f8, 'f'], [
 const HIT_REGION_FIELDS = [['HHead', 'HealthHead', 1376, 'i32'], ['HTorso', 'HealthTorso', 1380, 'i32'], ['HLegL', 'HealthLegLeft', 1384, 'i32'],
   ['HLegR', 'HealthLegRight', 1388, 'i32'], ['HArmL', 'HealthArmLeft', 1392, 'i32'], ['HArmR', 'HealthArmRight', 1396, 'i32']];
 if (flag('player-health')) PLAYER_FIELDS.push(...HIT_REGION_FIELDS);
+// --player-breath: the breath under water (row 5.3.8): Pawn.PainTime (+0x324, the native timer whose PainTimer event drowns: Pawn.UnderWaterTime, +0x450,
+// is its reload while HeadRegion is a water zone) and DeusExPlayer's swimTimer (+0xadc) and swimDuration (+0xad8), at Play's slotOf offsets (JCDentonMale0).
+if (flag('player-breath')) PLAYER_FIELDS.push(['PainT', 'PainTime', 0x324, 'f'], ['UWTime', 'UnderWaterTime', 0x450, 'f'], ['SwimT', 'swimTimer', 0xadc, 'f'],
+  ['SwimDur', 'swimDuration', 0xad8, 'f']);
 // --player-talk: the player's DataLinkPlay (+0x9f8) and conPlay (+0x9f4): which DataLink or conversation plays (the routes' DataLinks, the mission's).
 if (flag('player-talk')) PLAYER_FIELDS.push(['DataLinkPlay', 'DataLinkPlay', 2552, 'obj'], ['conPlay', 'conPlay', 2548, 'obj']);
 // --player-blend: the player's blend channel 0 (the mouth animation Pawn.LipSynch plays while JC speaks in a conversation): BSeq0, BFrame0, BRate0, BTween0 of FIELDS.
