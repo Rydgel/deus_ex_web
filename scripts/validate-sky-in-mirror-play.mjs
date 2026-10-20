@@ -65,7 +65,10 @@ try {
       frames: (v.frames ?? []).map(f => ({index: f.index, parent: f.parent, kind: f.kind, coords: f.coords, bounds: f.bounds, main: f.main ? [...f.main] : []}))};
   });
   const probe = args => page.evaluate(args => window.deusExViewer.moverProbe(args), args);
-  await page.evaluate(view => window.deusExViewer.placeProbe(view), VIEW);
+  // The spot is outside the world (zone 0, no leaf): physWalking's zone-0
+  // branch would have the player fall out of it and die, and the Dying
+  // state's PlayerCalcView would move the camera. PHYS_None keeps the view.
+  await page.evaluate(view => window.deusExViewer.placeProbe(view), {...VIEW, set: {actor: '$player', fields: {Physics: 0}}});
   await frames(40);
   let info = await frameInfo();
   const mirror = info.frames.find(f => f.kind === 'mirror' && f.parent === 0);
