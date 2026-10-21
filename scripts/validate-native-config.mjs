@@ -141,6 +141,27 @@ const is = (actual, expected, label) => { assert.deepEqual(actual, expected, lab
   // Resolution: SetRes becomes a request for the page.
   host.consoleCommands.consoleCommand(player, 'SetRes 1024x768');
   is(host.display.resolution, {width: 1024, height: 768, colorBytes: null}, 'SetRes request'); is(host.display.resolutionVersion, 1, 'versioned');
+  // Display > Toggle Full-Screen Mode: MenuChoice_FullScreen sends ConsoleCommand("TOGGLEFULLSCREEN") down the viewport's Exec chain,
+  // where UWindowsViewport::Exec ToggleFullscreen (the call Alt+Enter makes) becomes one request for the page; EndFullscreen and the
+  // other unrecovered keywords stay refused.
+  for (let guard = 0; driver.top() && guard < 8; guard++) { game.windowKey('Escape', true); game.windowKey('Escape', false); input.tick(5); }
+  open('MenuSettings', 'MenuScreenDisplay');
+  is(driver.top(), 'deusex.menuscreendisplay', 'the Display screen opens');
+  is(host.display.fullscreenToggles, 0, 'no fullscreen request yet');
+  driver.press('MenuChoice_FullScreen'); input.tick(5);
+  is([host.display.fullscreenToggles, driver.top()], [1, 'deusex.menuscreendisplay'], 'the Full-Screen choice made one request and the screen stayed');
+  is(host.consoleCommands.consoleCommand(player, 'togglefullscreen'), '', 'the Exec keyword is case-insensitive and logs nothing');
+  is(host.display.fullscreenToggles, 2, 'a second request');
+  assert.throws(() => host.consoleCommands.consoleCommand(player, 'EndFullscreen'), error => error.name === 'UnsupportedConsoleCommandError'); checks++;
+  // Display > Render Device: the choice's restart prompt; its OK saves the menu and sends RELAUNCH -changevideo (USystem::Exec),
+  // which becomes a restart request for the page carrying the arguments the new instance would get.
+  driver.press('MenuChoice_RenderDevice'); input.tick(5);
+  is(host.display.relaunches, 0, 'the prompt alone relaunches nothing');
+  const prompt = driver.top();
+  driver.pressField('btnYes'); input.tick(5);
+  is([host.display.relaunches, host.display.relaunchArguments], [1, '-changevideo'], `the prompt's OK (${prompt}) relaunched with -changevideo`);
+  host.consoleCommands.consoleCommand(player, 'RELAUNCH   -changevideo -nosound');
+  is([host.display.relaunches, host.display.relaunchArguments], [2, '-changevideo -nosound'], 'RELAUNCH keeps the arguments past the keyword and its spaces');
   // Controls: Mouse Sensitivity and Invert Mouse drive PlayerInput.
   while (!['deusex.menusettings', 'deusex.menumain'].includes(driver.top())) { game.windowKey('Escape', true); game.windowKey('Escape', false); input.tick(5); }
   if (driver.top() === 'deusex.menumain') { driver.invoke('MenuSettings'); input.tick(5); }

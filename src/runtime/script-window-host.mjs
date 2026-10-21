@@ -190,11 +190,16 @@ export async function createWindowHost({runtime, assets, player, gameConfig = nu
   // (docs/script-native-config.md). The live audio objects belong to the current level.
   const nativeConfig=createNativeConfig({gconfig:await runtime.classLoader.prepareConfig(),audio:()=>runtime.audio??null});
   /** What the render device last took from the client config on a Flush (docs/script-native-config.md). */
-  const display={brightness:nativeConfig.instance('WinDrv.WindowsClient','Brightness'),flushes:0,resolution:null,resolutionVersion:0};
+  // fullscreenToggles / relaunches count the host requests the Exec chain made (UWindowsViewport::Exec ToggleFullscreen,
+  // USystem::Exec RELAUNCH); the page performs each once (docs/host-services.md).
+  const display={brightness:nativeConfig.instance('WinDrv.WindowsClient','Brightness'),flushes:0,resolution:null,resolutionVersion:0,
+    fullscreenToggles:0,relaunches:0,relaunchArguments:null};
   const consoleCommands=createConsoleCommands({runtime,input:inputConsole,services:{
     nativeConfig:()=>nativeConfig,
     // UWindowsViewport::Exec SetRes -> RenDev->SetRes: the browser render device takes the request.
     setResolution(request){display.resolution={...request};display.resolutionVersion++;},
+    toggleFullscreen(){display.fullscreenToggles++;},
+    relaunch(args){display.relaunchArguments=args;display.relaunches++;},
     viewportSize(){
       if(!viewportSize)boundary('UViewport SizeX/SizeY are unknown before the first frame');
       return viewportSize;
@@ -1317,7 +1322,10 @@ export async function createWindowHost({runtime, assets, player, gameConfig = nu
     return processScript(win,'ToggleChanged',[button,Boolean(toggle)],{result:false})?1:0;
   }
   function changeButtonAppearance(win) { return D.changeButtonAppearance(W,win); }
-  function buttonTick(win,delta) { return D.buttonTick(W,win,delta); }
+  function buttonTick(win,delta) {
+    return Input.buttonTick(W,win,delta,{getCursorPos:Mouse.getCursorPos,isPointInWindow:Mouse.isPointInWindow,
+      activateButton:(w,key)=>W.native.activateButton(w,key),boundary});
+  }
   function textLogTick(win,delta) { return Log.textLogTick(W,win,delta); }
   function rootTickVirtual(win,delta) { return rootTickNative(W,win,delta,{...T,...F,setFocusWindow:(root,target)=>Mouse.setFocusWindow(W,root,target)}); }
   function textDraw(win,gc) { return D.textDraw(W,win,gc); }

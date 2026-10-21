@@ -148,6 +148,7 @@ import {
 } from './script-window-sensitivity.mjs';
 import { getToggleNative } from './script-window-toggle-get.mjs';
 import { setToggleNative } from './script-window-toggle-set.mjs';
+import { changeToggleNative } from './script-window-change-toggle.mjs';
 import { configureChildNative } from './script-window-configure-child.mjs';
 import { setWindowPositionNative } from './script-window-position.mjs';
 import { setWindowAlignmentsNative } from './script-window-alignments.mjs';
@@ -3464,6 +3465,13 @@ export class ScriptRuntime {
     if(call.index===1612){
       if(call.argumentCount!==0)throw new Error('ToggleWindow.GetToggle accepts no arguments');
       return getToggleNative(call.receiver,this.windowLifecycle?.toggle??{});
+    }
+    if(call.index===1610){
+      // execChangeToggle 0x10049ce0 -> XToggleWindow::ChangeToggle 0x10049910: the +0xf0 ToggleChanged walk up the parents (the
+      // receiver's vtable word is a DLL table address, so it reads as a word like the other toggle reads).
+      if(call.argumentCount!==0)throw new Error('ToggleWindow.ChangeToggle accepts no arguments');
+      const toggle=this.windowLifecycle?.toggle??{};
+      return changeToggleNative(call.receiver,{...toggle,read:toggle.read&&((object,offset,kind,details)=>toggle.read(object,offset,offset===0&&kind==='ptr'?'u32':kind,details))});
     }
     if(call.index===1611){
       if(call.argumentCount!==1)throw new Error('ToggleWindow.SetToggle requires the bNewToggle argument');

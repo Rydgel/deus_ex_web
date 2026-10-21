@@ -1080,8 +1080,20 @@ function setBrightness(value) {
 $('brightness').oninput = event => setBrightness(Number(event.target.value));
 // The render device's view of the client config (sim-session.mjs snapshot.display): a Flush re-reads
 // Brightness (D3DDrv UD3DRenderDevice::Flush) and a SetRes request fixes the drawing buffer.
-let displayFlushes = null, displayResolutionVersion = 0;
+let displayFlushes = null, displayResolutionVersion = 0, displayFullscreenToggles = 0, displayRelaunches = 0;
 function applyDisplaySettings(display) {
+  // The Exec chain's host requests (docs/host-services.md): UWindowsViewport::Exec ToggleFullscreen does what Alt+Enter does (the menu
+  // click that sent it is the user activation the browser asks for); USystem::Exec RELAUNCH restarts the game, a page reload. A listener
+  // may cancel the 'deusex-relaunch' event (the menu sweep and validators do).
+  if (display.fullscreenToggles !== displayFullscreenToggles) {
+    const requests = display.fullscreenToggles - displayFullscreenToggles; displayFullscreenToggles = display.fullscreenToggles;
+    if (requests > 0 && requests % 2 === 1) toggleFullscreen();
+  }
+  if (display.relaunches !== displayRelaunches) {
+    displayRelaunches = display.relaunches;
+    const event = new CustomEvent('deusex-relaunch', { cancelable: true, detail: { arguments: display.relaunchArguments } });
+    if (window.dispatchEvent(event)) location.reload();
+  }
   if (displayFlushes !== null && display.flushes !== displayFlushes && Number.isFinite(display.brightness)) setBrightness(display.brightness);
   displayFlushes = display.flushes;
   if (display.resolutionVersion !== displayResolutionVersion) {
@@ -1402,13 +1414,17 @@ function grabPointer(event, windowHasMouse) {
   grabButton = event.button; event.preventDefault();
   return true;
 }
+// UWindowsViewport::ToggleFullscreen (0x1110d500): fullscreen and the pointer lock leave together, and come back together.
+function toggleFullscreen() {
+  if (document.fullscreenElement) leaveFullscreen();
+  else { startedFullscreen = true; takeFullscreen(); if (mode === 'play' && game && !runtimeError) $('scene').requestPointerLock?.()?.catch?.(() => {}); }
+}
 // Alt+Enter, the original's ToggleFullscreen; the Enter press reaches no binding (Enter=ParseLeftClick|Fire).
 function toggleFullscreenKey(event) {
   if (!originalStart || event.code !== 'Enter' && event.code !== 'NumpadEnter' || !event.altKey || event.ctrlKey || event.metaKey) return false;
   event.preventDefault();
   if (event.repeat) return true;
-  if (document.fullscreenElement) leaveFullscreen();
-  else { startedFullscreen = true; takeFullscreen(); if (mode === 'play' && game && !runtimeError) $('scene').requestPointerLock?.()?.catch?.(() => {}); }
+  toggleFullscreen();
   return true;
 }
 $('scene').onpointerdown = event => {

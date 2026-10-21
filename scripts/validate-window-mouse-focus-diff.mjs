@@ -22,6 +22,7 @@ import {gameDirectory} from './game-directory.mjs';
 
 const f = Math.fround;
 const bits = value => { const view = new DataView(new ArrayBuffer(4)); view.setFloat32(0, value, true); return view.getUint32(0, true); };
+const number = value => typeof value === 'object' && value !== null ? float(value.bits) : value;
 const float = raw => { const view = new DataView(new ArrayBuffer(4)); view.setUint32(0, raw >>> 0, true); return view.getFloat32(0, true); };
 
 // A keypad-shaped tree: a root with a HUD sibling and an EnterLeave modal of buttons.
@@ -115,6 +116,34 @@ const cases = [
       {op: 'convertCoordinates', from: 'b2', x: 0.3, y: 0.7, to: 'root'},
       {op: 'convertCoordinates', from: 'root', x: 1e8, y: -3.3, to: 'b2'},
       {op: 'convertCoordinates', from: 'b3', x: 16777215, y: 0.1, to: 'label'}]},
+  {name: 'XButtonWindow::Tick auto-repeat: idle, not pressed, not repeating, countdown running, expiry in and out of the window',
+    now: 1, lastTick: 0, windows: tree({root: {mouseX: 215.3, mouseY: 115.7}, b1: {buttonFlags: 6, repeatRate: 0.1, repeatAt: 0.5, clickSound: 71, inputKey: 1},
+      b2: {buttonFlags: 2, repeatRate: 0.1, repeatAt: 0.01, clickSound: 72, inputKey: 1}}), steps: [
+      {op: 'buttonTick', win: 'b1', delta: 0.1}, {op: 'buttonTick', win: 'b1', delta: 0.4}, {op: 'buttonTick', win: 'b1', delta: 0.0},
+      {op: 'buttonTick', win: 'b1', delta: 0.01}, {op: 'buttonTick', win: 'b1', delta: 0.016},
+      {op: 'buttonTick', win: 'b2', delta: 1}, {op: 'set', win: 'b1', offset: 0x174, value: 4}, {op: 'buttonTick', win: 'b1', delta: 1},
+      {op: 'set', win: 'b1', offset: 0x174, value: 6}, {op: 'set', win: 'b1', offset: 0x19c, value: 0.001, fmt: 'f'},
+      cursor(300, 300), {op: 'buttonTick', win: 'b1', delta: 0.5}]},
+  {name: 'XButtonWindow::Tick: the right key, a long frame, NaN and signed-zero countdowns and deltas',
+    now: 1, lastTick: 0, windows: tree({root: {mouseX: 268, mouseY: 118}, b2: {buttonFlags: 6, repeatRate: 0.25, repeatAt: 0.3, clickSound: 81, inputKey: 2},
+      b1: {buttonFlags: 6, repeatRate: 0.1, repeatAt: {bits: 0x7fc00000}, clickSound: 82, inputKey: 1},
+      b3: {buttonFlags: 6, repeatRate: 0, repeatAt: {bits: 0x80000000}, clickSound: 83, inputKey: 1}}), steps: [
+      {op: 'buttonTick', win: 'b2', delta: 2}, {op: 'buttonTick', win: 'b2', delta: 0.05}, {op: 'buttonTick', win: 'b2', delta: 0.3},
+      {op: 'buttonTick', win: 'b1', delta: 0.016}, {op: 'buttonTick', win: 'b3', delta: 0}, {op: 'buttonTick', win: 'b3', delta: -0.5},
+      {op: 'buttonTick', win: 'b2', delta: {bits: 0x7fc00000}}, {op: 'buttonTick', win: 'b2', delta: 1e30},
+      {op: 'set', win: 'b2', offset: 0x180, value: -1, fmt: 'f'}, {op: 'set', win: 'b2', offset: 0x19c, value: -0.2, fmt: 'f'},
+      {op: 'buttonTick', win: 'b2', delta: 0.01}]},
+  {name: 'XButtonWindow::Tick: tiny countdowns keep the extended value across the compare; the pointer is read relative to the clip origin',
+    now: 1, lastTick: 0, windows: tree({root: {mouseX: 210.00001, mouseY: 110.00001}, b1: {buttonFlags: 6, repeatRate: 1e-9, repeatAt: 3e-8, clickSound: 91, inputKey: 1}}), steps: [
+      {op: 'buttonTick', win: 'b1', delta: 3.0000001e-8}, {op: 'buttonTick', win: 'b1', delta: 2.9e-8}, {op: 'buttonTick', win: 'b1', delta: 1e-30},
+      cursor(249.99999, 139.99999), {op: 'set', win: 'b1', offset: 0x19c, value: -1e-3, fmt: 'f'}, {op: 'buttonTick', win: 'b1', delta: 0},
+      cursor(250, 140), {op: 'set', win: 'b1', offset: 0x19c, value: -1e-3, fmt: 'f'}, {op: 'buttonTick', win: 'b1', delta: 0}]},
+  {name: 'XButtonWindow::Tick: the countdown less the delta stays extended into the repeat-rate sum (-1 - 1e-8 + 1 is below zero, a rounded -1 + 1 is not)',
+    now: 1, lastTick: 0, windows: tree({root: {mouseX: 215, mouseY: 115}, b1: {buttonFlags: 6, repeatRate: 1, repeatAt: -1, clickSound: 93, inputKey: 1}}), steps: [
+      {op: 'buttonTick', win: 'b1', delta: 1e-8}, {op: 'set', win: 'b1', offset: 0x19c, value: -1, fmt: 'f'}, {op: 'buttonTick', win: 'b1', delta: 0}]},
+  {name: 'XButtonWindow::Tick of a ToggleWindow shares the body',
+    now: 1, lastTick: 0, windows: tree({root: {mouseX: 390, mouseY: 315}, b3: {buttonFlags: 6, repeatRate: 0.2, repeatAt: -0.01, clickSound: 95, inputKey: 1}}), steps: [
+      {op: 'buttonTick', win: 'b3', delta: 0.016}]},
   {name: 'HandleButtons obeys the root mouse-input suppression bit',
     windows: tree({root:{mouseFlags:4}}),steps:[{op:'handleButtons',root:'root',key:1,action:1}]},
   {name: 'HandleButtons captures, focuses and dispatches button press/release with multi-click counts',
@@ -142,7 +171,7 @@ const cases = [
 // ---- original ------------------------------------------------------------
 // Floats travel as bits (JSON has no NaN or -0); a window-valued write names its target.
 const FLOAT_KEYS = new Set(['x', 'y', 'w', 'h', 'width', 'height', 'mouseX', 'mouseY', 'lastX', 'lastY',
-  'multiClickTime','multiClickDistance','clickDeadline','clickX','clickY','repeatDelay','repeatAt']);
+  'multiClickTime','multiClickDistance','clickDeadline','clickX','clickY','repeatDelay','repeatRate','repeatAt','delta']);
 const encode = object => Object.fromEntries(Object.entries(object).map(([key, value]) =>
   [key, FLOAT_KEYS.has(key) && typeof value === 'number' ? {bits: bits(value)}
     : ['clip', 'a', 'b'].includes(key) ? value.map(v => ({bits: bits(v)})) : value]));
@@ -237,7 +266,7 @@ function translate(c) {
     if ('tabFlags' in spec) W.setU32(win, 0x164, spec.tabFlags);
     if (family === 'modal' || family === 'root') { W.setU8(win, 0x174, spec.focusMode ?? 0); W.setPtr(win, 0x178, windows.get(spec.preferredFocus) ?? null); }
     if (family === 'button' || family === 'toggle') {
-      W.setU32(win,0x174,spec.buttonFlags??0);W.setF32(win,0x17c,spec.repeatDelay??0);W.setF32(win,0x19c,spec.repeatAt??0);
+      W.setU32(win,0x174,spec.buttonFlags??0);W.setF32(win,0x17c,spec.repeatDelay??0);W.setF32(win,0x180,number(spec.repeatRate??0));W.setF32(win,0x19c,number(spec.repeatAt??0));
       W.setPtr(win,0x190,soundFor(spec.pressSound));W.setPtr(win,0x194,soundFor(spec.clickSound));W.setU8(win,0x1a0,spec.inputKey??0);
     }
     if(family==='toggle'){W.setPtr(win,0x1ec,soundFor(spec.enableSound));W.setPtr(win,0x1f0,soundFor(spec.disableSound));}
@@ -304,7 +333,9 @@ function translate(c) {
       case 'toggleMouseReleased':result=Input.toggleMouseReleased(W,at(step.win),f(step.x),f(step.y),step.key,step.count,
         {processScript,isPointInWindow:(w,x,y)=>Mouse.isPointInWindow(W,w,x,y),setToggle});break;
       case 'togglePressButton':Input.togglePressButton(W,at(step.win),step.key,{setToggle});break;
-      case 'set': if (step.windowValue) W.setPtr(at(step.win), step.offset, at(step.windowValue)); else W.setU32(at(step.win), step.offset, step.value); break;
+      case 'buttonTick': Input.buttonTick(W,at(step.win),f(number(step.delta)),{getCursorPos:Mouse.getCursorPos,isPointInWindow:Mouse.isPointInWindow,
+        activateButton,boundary:message=>{throw new Error(message);}});break;
+      case 'set': if (step.fmt==='f') W.setF32(at(step.win), step.offset, step.value); else if (step.windowValue) W.setPtr(at(step.win), step.offset, at(step.windowValue)); else W.setU32(at(step.win), step.offset, step.value); break;
       default: throw new Error(`unknown op ${step.op}`);
     }
     return {result, events: events.slice(mark), state: snapshot()};

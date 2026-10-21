@@ -19,7 +19,10 @@
  * a keyword claims, other than the handled KEYNAME, KEYBINDING, FLUSH and
  * OPEN (SetClientTravel; the Browse is UGameEngine::Tick's, game.mjs
  * clientTravel), throws UnsupportedConsoleCommandError before any of that
- * handler's work.
+ * handler's work. TOGGLEFULLSCREEN (UWindowsViewport::Exec, the call Alt+Enter
+ * makes at WinDrv 0x1110a29b) and RELAUNCH (USystem::Exec, Core 0x1016b878) are
+ * host requests: services.toggleFullscreen and services.relaunch hand them to
+ * the page (docs/host-services.md).
  */
 import {gameEngineKey} from './script-window-typed-keys.mjs';
 import {setClientTravel as sharedSetClientTravel} from './script-travel.mjs';
@@ -443,6 +446,12 @@ export function createConsoleCommands({runtime, input, services}) {
     for (const keyword of EXEC_KEYWORDS['UWindowsViewport::Exec']) {
       if (parseCommand(cmd, keyword) === null) continue;
       if (keyword === 'SetRes') return setRes(parseCommand(cmd, 'SetRes'));
+      if (keyword === 'ToggleFullscreen' && typeof services.toggleFullscreen === 'function') {
+        // WinDrv 0x11106e07-0x11106e21: UWindowsViewport::ToggleFullscreen (0x1110105a -> 0x1110d500, the call WM_KEYDOWN makes for
+        // Alt+Enter at 0x1110a29b) on the viewport (this - 0x2c), then 1. The browser's fullscreen is the page's: a request.
+        services.toggleFullscreen();
+        return true;
+      }
       if (keyword !== 'GetCurrentRes')
         throw new UnsupportedConsoleCommandError(`UWindowsViewport::Exec ${keyword} is not implemented: ${cmd}`,
           {body: 'UWindowsViewport::Exec', keyword});
@@ -562,6 +571,11 @@ export function createConsoleCommands({runtime, input, services}) {
     if (game && scriptExec(game, cmd, null)) return true;
     // GSys, UObject::StaticExec, GCache, GExec (the launcher's FExecHook),
     // Client (UWindowsClient -> UClient), Render, Audio (Galaxy), in order.
+    // USystem::Exec RELAUNCH (Core 0x1016b878-0x1016bb6b): debugf("Relaunch: %s", Cmd) with Cmd past the keyword and its spaces, a
+    // flush of the log, then ShellExecute("open", "deusex.exe" from GetModuleFileName, Cmd) and appRequestExit(0): the game ends and a
+    // new instance starts with Cmd as its arguments (-changevideo: the video setup). The browser restarts the page.
+    const relaunchArguments = parseCommand(cmd, 'RELAUNCH');
+    if (relaunchArguments !== null && typeof services.relaunch === 'function') { services.relaunch(String(relaunchArguments)); return true; }
     claims('USystem::Exec', cmd);
     if (staticExec(cmd, ar)) return true;
     for (const body of ['FMemCache::Exec', 'FExecHook::Exec',

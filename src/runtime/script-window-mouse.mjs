@@ -186,6 +186,15 @@ export function setRootCursorPos(W, root, x, y) {
   processMouseMove(W, root);
 }
 
+/** XWindow::GetCursorPos 0x1004cbf0(&x, &y): the root's pointer (+0x590/+0x594, XRootWindow::GetRootCursorPos 0x100393e0)
+ * less this window's clip origin (+0xd4/+0xd8), each result stored as a float32 (fld, fsub, fstp). A window with no root
+ * leaves both outputs unwritten (the caller's stack): null here. */
+export function getCursorPos(W, win) {
+  const root = getRootWindow(W, win);
+  if (!root) return null;
+  return {x: fsub(W.f32(root, M.mouseX), W.f32(win, M.clip)), y: fsub(W.f32(root, M.mouseY), W.f32(win, M.clip + 4))};
+}
+
 /** XWindow::SetCursorPos 0x1004cca0(x, y), native 1453 (exec 0x10052b90). */
 export function setCursorPos(W, win, x, y) {
   const root = getRootWindow(W, win);

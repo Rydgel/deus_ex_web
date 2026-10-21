@@ -1144,7 +1144,8 @@ export function createSimSession(game, { assets = null, events = [], exportName 
       // Brightness of its last Flush and the last SetRes request.
       const display = game.hud?.host?.display;
       snapshot.display = display ? { brightness: display.brightness, flushes: display.flushes,
-        resolution: display.resolution, resolutionVersion: display.resolutionVersion } : null;
+        resolution: display.resolution, resolutionVersion: display.resolutionVersion,
+        fullscreenToggles: display.fullscreenToggles, relaunches: display.relaunches, relaunchArguments: display.relaunchArguments } : null;
       return snapshot;
     },
     /** The queued events outside a frame (map load: the first creation

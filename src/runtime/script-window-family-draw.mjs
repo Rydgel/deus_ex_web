@@ -73,7 +73,4 @@ export function changeButtonAppearance(W,win){
  if(!texture){if(toggle)texture=W.ptr(win,0x1b0);if(!texture)texture=W.ptr(win,0x1a4);}
  W.setU32(win,0x18c,text);W.setPtr(win,0x184,texture);W.setU32(win,0x188,tile);
 }
-/** 0x10008190 has no work unless both pressed and auto-repeat are set. */
-export function buttonTick(W,win){
- if((W.u32(win,0x174)&6)===6)W.boundary('XButtonWindow auto-repeat tick requires mouse-input services');
-}
+/* XButtonWindow::Tick 0x10008190 (the auto-repeat) is script-window-input.mjs buttonTick: it needs the pointer. */
