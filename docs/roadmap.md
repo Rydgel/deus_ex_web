@@ -1189,6 +1189,12 @@ can be completed through representative choices and endings without progression
 blockers. Validate each mission's conversations, events, and transitions against
 the original game; keep a per-mission compatibility checklist.
 
+Map travel, the first of these steps, is traced and measured in [travel](travel.md)
+(2026-10-21): the script and native chain from `SendPlayer` to the next level's login,
+the travel text, the `Save\Current` store that restores visited maps, the save and load
+files, the measured scenarios, the unresolved branches, and the proposed order for Play
+(Training from the DX.dx menu first).
+
 ## 7. Make the browser runtime reliable
 
 Measure loading time, frame time, memory, and audio latency throughout development.

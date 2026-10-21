@@ -634,7 +634,8 @@ unmeasured host input. The probe library now records every
 (`host.inputs`). Criterion 5 classifies each one against `HOST_INPUTS`. The
 only entry is `flag PlayerTraveling`, a Stage 6 tolerance: original
 `DeusExPlayer.PreTravel` sets it before ClientTravel, and Play boots
-00_Training directly ([mission entry](script-training-mission-entry.md)). The
+00_Training directly ([mission entry](script-training-mission-entry.md); the
+flag's whole life across maps is in [map travel](travel.md#playertraveling)). The
 gate prints it under criterion 5 as tolerated. Any other host-written flag
 fails the criterion.
 
@@ -661,7 +662,7 @@ known report race; it passes alone. Unit tests: 545/545.
 - Training past `DL_part2`: ladders, swimming, water and damage zones. This is
   Stage 5 movement, and the first slice is in [ladders and flying](ladder-flying.md).
 - Map travel, saved games and the fresh-entry marker's general travel form:
-  Stage 6.
+  Stage 6 ([map travel](travel.md)).
 - Audio mixing and presentation fidelity: Stage 4.
 - Multiplayer: deferred.
 

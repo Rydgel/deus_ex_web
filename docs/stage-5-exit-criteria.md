@@ -153,7 +153,7 @@ report (`--stage4-report`), so presentation proof is not repeated.
 | Id | Scene | Scenario | Ev. | Census | Proof that would pass it | Existing, partial | Status |
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | 5.7.1 | every map | Save Game, Load Game, QuickSave and the load menu after death | - | - | Stage 6 (roadmap section 6): native 3011/3013; Stage 3 gate tolerates 3011 | - | EXCLUDED |
-| 5.7.2 | Teleporter, MapExit, ClientTravel | Training map to map, Island to Battery Park, the HQ teleporter, the boat cinematic's end | - | - | Stage 6: map travel and PlayerTraveling (a measured host input) | - | EXCLUDED |
+| 5.7.2 | Teleporter, MapExit, ClientTravel | Training map to map, Island to Battery Park, the HQ teleporter, the boat cinematic's end | - | - | Stage 6: map travel and PlayerTraveling (a measured host input; traced and measured in [travel](travel.md)) | - | EXCLUDED |
 | 5.7.3 | flags across maps | flag expiration by mission number and persistence (M01PlayerAggressive until mission 6, DL_*_Played) | - | - | Stage 6: persistence | - | EXCLUDED |
 | 5.7.4 | DXMP maps | multiplayer: replication, GameInfo MP, bots, the DXMP maps | - | - | Multiplayer is the last priority and may stay unsupported (AGENTS.md) | - | EXCLUDED |
 | 5.7.5 | rendering of the above | how a scenario looks (weapon models, effects, windows) | - | - | Stage 4: the Stage 4 gate owns presentation | - | EXCLUDED |
@@ -520,7 +520,7 @@ before the trace (the console drops characters on a loaded host). Tried first on
 `settravel` breakpoint on `SetClientTravel` shows its arguments (the viewport, the URL, 0, 1) and, inside it, `AddObject` of a `FlagBool` and two `FlagInt` (`PreTravel`'s flags).
 
 **Play.** `OPEN` runs `SetClientTravel` as recovered (`script-console-command.mjs`), and `game.mjs` `clientTravel` is the engine's travel step, called after each tick and before the
-view (`sim-session.mjs`, the census session): a stored URL ends the level there, thrown as `ClientTravelBoundary` (Browse, LoadMap and the menu are Stage 6). A live replay records the
+view (`sim-session.mjs`, the census session): a stored URL ends the level there, thrown as `ClientTravelBoundary` (Browse, LoadMap and the menu are Stage 6: the whole chain after this step is traced in [travel](travel.md)). A live replay records the
 tick (`play-level-end<tag>.json`); a trace that ended at a hold runs that hold's commands first. `FlagBase.SetInt` (native 1102, `XFlagBase::SetInt` 0x10023e80) is `SetBool`'s body
 with type 2, a `FlagInt` object and the whole int stored; the flag store now keys a flag by name and type (`script-triggers.mjs`; `validate-flagbase-iterators` still passes).
 `validate-console-command` checks `OPEN` (the URL, the `PreTravel` flags, the next step's boundary).
