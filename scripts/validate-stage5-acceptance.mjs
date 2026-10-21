@@ -19,13 +19,14 @@
  * plays count them). The live replays are safe side by side: each writes only its own scene's files, and the map's play-population.json is written once, by
  * validate-stage5-live.mjs --prepare per map before the pool starts (docs/stage-5-exit-criteria.md "Running"). The pool takes the longest checks first (the
  * last run's time, .cache/stage5-gate-timings.json, else the scene's ticks), never two runs of one scene at once (its replay and its --frames replay share the
- * scene's files), and bounds memory by the RSS of each check's whole process tree (Chromium included, which Playwright starts in its own process group):
- * a check starts only while the pool's reservations (each check's last peak, .cache/stage5-gate-memory.json, else 2 GiB) and the census fit under
- * --mem-budget (default 16384 MiB); past the budget the newest check is stopped and queued again to run with less beside it, and a check whose tree passes
- * --mem-cap (default 8192 MiB) fails. Rows are reported in their order, and a validator several rows name runs once. Each check's whole output goes to
+ * scene's files), and bounds memory by each check's whole process tree (Chromium included, which Playwright starts in its own process group):
+ * a check starts only while the pool's reservations (each check's last peak, .cache/stage5-gate-memory.json, else its map's largest; PSS on Linux) and the
+ * census fit under --mem-budget (default 16384 MiB, at most half the RAM; an Island replay holds about 7 GB, a Training one about 4); past the budget the
+ * newest check is stopped and queued again to run with less beside it, and a check whose tree passes --mem-cap (default 12288 MiB) fails. Rows are reported in their order, and a validator several rows name runs once. Each check's whole output goes to
  * <dir>/<check>.log (--logs, default .work/stage5-gate-logs): two runs' logs compare scene by scene. */
 import {execFile, spawn} from 'node:child_process';
 import {existsSync, mkdirSync, readFileSync, writeFileSync} from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {promisify} from 'node:util';
@@ -39,12 +40,14 @@ const only = flag('only') && flag('only') !== true ? new RegExp(flag('only')) : 
 const rows = CRITERIA.filter(row => !only || only.test(`${row.id} ${row.scene} ${row.claim} ${row.census ?? ''}`));
 
 const jobs = Math.max(1, Number(flag('jobs', 1)) || 1);
-const budget = Number(flag('mem-budget', 16384)), cap = Number(flag('mem-cap', 8192));
+const budget = Number(flag('mem-budget', Math.round(Math.min(16384, os.totalmem() / 2 / 1048576)))), cap = Number(flag('mem-cap', 12288));
 const logs = path.resolve(root, typeof flag('logs') === 'string' ? flag('logs') : '.work/stage5-gate-logs');
 const env = {...process.env,
   NATIVE_PROBE_PYTHON: process.env.NATIVE_PROBE_PYTHON ?? (existsSync(path.join(root, '.cache/native-probe-env/bin/python')) ? path.join(root, '.cache/native-probe-env/bin/python') : '')};
 
 // Every child's whole process tree: `ps` pid, ppid and RSS, the descendants found by parent links (Playwright's Chromium has its own process group).
+// A process's memory is its PSS on Linux (/proc/<pid>/smaps_rollup: a replay's Chromium processes share pages, and their RSS sum counts them
+// each time, about a quarter more than the tree holds), its RSS elsewhere.
 const tree = async () => {
   const {stdout} = await promisify(execFile)('ps', ['-A', '-o', 'pid=,ppid=,rss=']);
   const children = new Map(), rss = new Map();
@@ -55,7 +58,9 @@ const tree = async () => {
     children.get(ppid).push(pid);
   }
   const descendants = pid => [pid, ...(children.get(pid) ?? []).flatMap(descendants)];
-  return {descendants, rss};
+  const pss = pid => { try { return Number(/^Pss:\s+(\d+)/m.exec(readFileSync(`/proc/${pid}/smaps_rollup`, 'utf8'))[1]) / 1024; } catch { return rss.get(pid) ?? 0; } };
+  const size = pid => descendants(pid).reduce((n, p) => n + (process.platform === 'linux' ? pss(p) : rss.get(p) ?? 0), 0);
+  return {descendants, size};
 };
 const killTree = async pid => {
   const pids = await tree().then(t => t.descendants(pid)).catch(() => [pid]);
@@ -118,8 +123,7 @@ const start = job => {
 const monitor = setInterval(async () => {
   if (!running.size && !census) return;
   try {
-    const {descendants, rss} = await tree();
-    const size = pid => descendants(pid).reduce((n, p) => n + (rss.get(p) ?? 0), 0);
+    const {size} = await tree();
     let sum = census ? (census.current = size(census.pid)) : 0;
     for (const job of running) {
       if (job.killed || job.requeued) continue;
@@ -136,9 +140,11 @@ for (const signal of ['SIGINT', 'SIGTERM', 'SIGHUP']) process.on(signal, () => s
 
 /** A check in the pool: its key (the dedup and the caches'), its scene (one run of a scene at a time) and its expected time (the longest first). */
 const exec = (command, args, {limitSeconds = 1800, key, label = key, scene = null, estimate = 60} = {}) => new Promise(resolve => {
-  const ticks = scene ? SCENES[scene]?.ticks ?? 0 : 0;
+  // (a check never run reserves the largest peak of its map's checks: an Island replay's tree holds about 7 GB, a Training one's 4)
+  const map = scene ? SCENES[scene]?.map : null;
+  const mapPeak = Math.max(0, ...Object.entries(peaks).filter(([other]) => map && SCENES[/--scene (\S+)/.exec(other)?.[1]]?.map === map).map(([, peak]) => peak));
   const job = {command, args, limitSeconds, key, label, scene, resolve, seconds: timings[key] ?? estimate,
-    predicted: Math.min(peaks[key] ?? (ticks > 1500 ? 4096 : 2048), budget)};
+    predicted: Math.min(peaks[key] ?? (mapPeak || 4096), budget)};
   total++;
   // (longest first with --jobs > 1; one at a time, the rows' order)
   const index = jobs > 1 ? queue.findIndex(other => other.seconds < job.seconds) : -1;
