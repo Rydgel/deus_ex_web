@@ -238,7 +238,7 @@ original's do (doors and lifts block shots, moves and spawns where they were las
 drawn; checked against Engine.dll). The dying player's camera starts from the body's
 rotation, as the engine's draw passes it, and a breakable door's fragments are placed
 as Engine.dll's FindSpot places them, NaN probes included. The user adopted the criteria on
-2026-10-21 ([decisions](docs/stage-5-exit-criteria.md#what-the-user-decided-2026-10-21)); the placed approaches are re-captured with held keys before Stage 5 is declared complete.
+2026-10-21 ([decisions](docs/stage-5-exit-criteria.md#what-the-user-decided-2026-10-21)); the placed approaches were re-captured with held keys on 2026-10-21 (`air2`, `obs1`, `swm3`; [held keys](docs/stage-5-exit-criteria.md#held-keys-2026-10-20)).
 Swimming, ladders, pawn navigation, doors opened by NPCs and the intro cinematic
 also run from translated original code ([roadmap](docs/roadmap.md#5-implement-the-full-gameplay-systems)).
 
