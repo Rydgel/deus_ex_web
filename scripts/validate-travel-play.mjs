@@ -47,8 +47,17 @@ try {
   const menu = await probe({ op: 'state' });
   assert.equal(menu.top, 'deusex.menumain', `Escape opens the original main menu (top window: ${menu.top})`);
   await shot('travel-2-menu');
-  // the Training button: StartTrainingMission -> SendPlayer -> ClientTravel; the travel step browses after the next tick
-  await probe({ op: 'button', index: 4 });
+  // the Training button: StartTrainingMission -> SendPlayer -> ClientTravel; the travel step browses after the next tick. A click on the
+  // button as the menu draws it (the pointer reaches the root window while the modal menu owns the mouse grab) or, with --probe, the
+  // button activated through the menu driver.
+  if (process.argv.includes('--probe')) await probe({ op: 'button', index: 4 });
+  else {
+    const box = await page.locator('#scene').boundingBox();
+    const x = box.x + box.width * 0.5, y = box.y + box.height * (299 / 641);   // MenuMain's fifth button, "Training" (travel-2-menu.png)
+    await page.mouse.move(x - 20, y - 10); await frames(2);
+    await page.mouse.move(x, y); await frames(3);
+    await page.mouse.down(); await frames(2); await page.mouse.up();
+  }
   await ready('00_Training');
   assert.equal(await page.evaluate(() => window.deusExViewer.status().runtimeError), null, 'no runtime error on arrival');
   // Mission00's first Timer (1 s) runs FirstFrame because the travel text carried PlayerTraveling

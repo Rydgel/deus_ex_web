@@ -322,11 +322,13 @@ export async function createGame(map, asset, assets, { randomSeed = Math.floor(D
       const viewport = playerScene.level.engine?.client?.viewports?.[0];
       const url = viewport?.travelURL;
       if (!url) return null;
-      // A session that travels: the travel step (travel.mjs) returns the next level's request, or throws a TravelStop that names the
-      // original body it does not implement.
-      if (travelStep) return travelStep.run();
+      // A live replay (validation: the original's trace played back, live-probe.mjs) compares Play with the original up to the level's end and
+      // stops there, whatever the session could do next: it records the tick and keeps the named stop.
       const replay = game.liveReplay;
       if (replay && !replay.levelEnd) replay.levelEnd = { tick: replay.index, url, travelType: viewport.travelType, items: viewport.bTravelItems };
+      // A session that travels: the travel step (travel.mjs) returns the next level's request, or throws a TravelStop that names the
+      // original body it does not implement.
+      if (travelStep && !replay) return travelStep.run();
       throw new ClientTravelBoundary(url);
     },
     /** Render.dll's auto-pan inputs (docs/texture-animation.md): the

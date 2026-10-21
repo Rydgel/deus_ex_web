@@ -491,7 +491,7 @@ export async function createScriptDoors({
   // The engine log as the original's GLog prints it (docs/travel.md "What each travel did"): Object.Log lines (tag ScriptLog) and the
   // native lines the travel code adds ("Log: Browse: ..."), in the order they happen.
   const engineLog=[];
-  const logLine=(tag,text)=>{engineLog.push(`${tag}: ${text}`);};
+  const logLine=(tag,text)=>{engineLog.push(`${tag}: ${text}`);if(engineLog.length>8192)engineLog.splice(0,4096);};
   const runtime = new ScriptRuntime(assets, { native: nativeCall, rng, levelFor: () => level, nativeClassLoading: true,
     conversationObjects:()=>level.actors.filter(Boolean),boundaryNatives: [264, 265],
     logDevice:event=>{scriptLog.push(event);if(scriptLog.length>512)scriptLog.shift();logLine(event.tag,event.text);} });

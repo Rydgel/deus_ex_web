@@ -23,13 +23,12 @@
  * formats them. The hash table is the native's: 64 buckets by the FName CRC & 63, each chain ascending by the signed hash.
  *
  * Unverified assumption: `UStructProperty::ExportTextItem` writes every member that differs from the default's (Port() was not
- * read in Core.dll); measured only for `AugLocs[6]=(AugCount=3)`. The FName spelling of a property named like a class follows
- * the class (`FlagName`, `FlagBase`), which is what the measured texts show. */
+ * read in Core.dll); measured only for `AugLocs[6]=(AugCount=3)`. A property is written with the spelling of its name in the
+ * package's name table (the compiler keeps the first spelling of a name, so `flagName` is `FlagName`, as the measured texts show). */
 import { exportText } from './config-text.mjs';
 import { hashScriptName } from './script-names.mjs';
 
 export const CPF_TRAVEL = 0x10000;
-/** AActor.bTravel (Actor.uc:81): the exporter skips an actor without it (+0x28 bit 0x40000). */
 const lower = value => String(value ?? '').toLowerCase();
 
 export class UnsupportedTravelPropertyError extends Error {
@@ -59,24 +58,9 @@ export async function loadFlagClasses(runtime, assets) {
 /**
  * @param runtime       the ScriptRuntime
  * @param flagClasses   loadFlagClasses()'s result
- * @param spelling      (name) => the FName's spelling in the global table; default: a class of that name gives it
  */
-export function createTravelExporter({ runtime, flagClasses, spelling = null }) {
+export function createTravelExporter({ runtime, flagClasses }) {
   const graph = runtime.classLoader.graph;
-  const classNames = new Map();
-  const nameSpelling = spelling ?? (name => {
-    const key = lower(name);
-    if (!classNames.has(key)) {
-      // FName spelling is the first registration, which a native class's name (FlagName, FlagBase) is.
-      let found = null;
-      for (const asset of runtime.classLoader?.graph?.packageAssets?.values?.() ?? []) {
-        const index = asset.exportsByPath?.get(key);
-        if (index && asset.pkg.exports[index - 1].className === 'Class') { found = asset.pkg.exports[index - 1].name; break; }
-      }
-      classNames.set(key, found);
-    }
-    return classNames.get(key) ?? name;
-  });
   const enumNamesOf = property => {
     if (graph.propertyKindOf(property) !== 'ByteProperty') return null;
     const enumeration = graph.slotOf(property, 0x5c);
@@ -132,7 +116,7 @@ export function createTravelExporter({ runtime, flagClasses, spelling = null }) 
         throw unsupported(node, entry, `has a struct member ${name} of kind ${kind.replace('Property', '')}[${dim}]`);
       const a = value[runtimeMember.key], b = defaultValue[runtimeMember.key];
       if (same(kind, a, b)) continue;
-      parts.push(`${nameSpelling(name)}=${exportText({ IntProperty: 'int', ByteProperty: 'byte', FloatProperty: 'float', BoolProperty: 'bool', NameProperty: 'name' }[kind], a, { enumNames: enumNamesOf(member) })}`);
+      parts.push(`${name}=${exportText({ IntProperty: 'int', ByteProperty: 'byte', FloatProperty: 'float', BoolProperty: 'bool', NameProperty: 'name' }[kind], a, { enumNames: enumNamesOf(member) })}`);
     }
     return parts.length ? `(${parts.join(',')})` : null;
   }
@@ -193,8 +177,8 @@ export function createTravelExporter({ runtime, flagClasses, spelling = null }) 
   }
 
   /**
-   * ExportTravel(root): `{records, text}`; `records` are the parsed lines (travel-text.mjs shape) in worklist order.
-   * `players` is not needed: the root is the Viewport's actor.
+   * ExportTravel(root): `{records}` in worklist order, in travel-text.mjs's record shape (`formatTravelText` writes the text). The root is
+   * the Viewport's actor.
    */
   function exportTravel(root) {
     const counters = { counts: new Map(), next(kind) { const n = this.counts.get(kind) ?? 0; this.counts.set(kind, n + 1); return n; } };
@@ -232,7 +216,7 @@ export function createTravelExporter({ runtime, flagClasses, spelling = null }) 
   }
 
   function exportElement(node, entry, index, reach, pointer) {
-    const label = `${nameSpelling(entry.name)}${entry.dim > 1 ? `[${index}]` : ''}`;
+    const label = `${entry.name}${entry.dim > 1 ? `[${index}]` : ''}`;
     // The value and its class default for this element
     let value, defaultValue;
     if (node.indexed?.(entry.name)) { value = node.read(entry.name, index); defaultValue = null; }

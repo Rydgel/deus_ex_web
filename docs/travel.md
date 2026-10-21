@@ -1,9 +1,10 @@
 # Map travel in the original (single-player)
 
 Research for Stage 6 ([roadmap §6](roadmap.md#6-persist-progress-and-complete-the-campaign)), 2026-10-21. This page is the source of truth for
-how the original game moves the player between maps, what it carries and what it saves. Nothing here is wired into Play yet: the
-[implementation order](#proposed-implementation-order-for-play) at the end says where to start. Play still stops where the original
-travels ([the stop](#where-play-stops-today)).
+how the original game moves the player between maps, what it carries and what it saves. Steps 0 and 1 of the
+[implementation order](#proposed-implementation-order-for-play) are in Play ([what runs, what was checked, what still stops](#play-steps-0-and-1)):
+the main menu's Training button on the logo map travels to `00_Training` with no items. Every other branch stops at a named boundary
+([where Play stops](#where-play-stops-today)).
 
 **Evidence.** Every claim names its source:
 
@@ -477,12 +478,72 @@ mission-number line, `LoadMap: 00_training?loadonly` (the map name is the level 
 The engine's own `Shot` key does not work while the menu is up (UI screens grab the keyboard); the root window's `Ctrl-F9` does (`DeusExRootWindow.uc:143`).
 
 
+## Play, steps 0 and 1
+
+2026-10-21. What the [order](#proposed-implementation-order-for-play)'s steps 0 and 1 put into Play, where it is, what was checked against the measured original, and what still stops.
+
+**The chain in Play.** The page's `?boot=1` starts DX.dx; Escape (User.ini's `Escape=ShowMainMenu`) opens `MenuMain`; the Training button (a click, or `winButtons[4]` through the menu driver)
+runs `StartTrainingMission` (`ResetSkills`, `ResetPlayer(True)`, native 3012 `DeleteSaveGameFiles`, `SendPlayer`) on the VM; `PlayerPawn.ClientTravel` is `APlayerPawn::execClientTravel` (`script-travel.mjs`: `PreClientTravel`, then
+`SetClientTravel`: the viewport's `TravelURL`/`TravelType`/`bTravelItems` and `PreTravel` on every actor). After the tick, `game.clientTravel()` runs the engine tick's travel step (`travel.mjs`): `Export travel for: <PlayerName>`,
+`ExportTravel` (`travel-export.mjs`), `LastURL` cleaned, `FURL(LastURL, TravelURL, TravelType)` (`furl.mjs`), `Browse:` and `DDeusExGameEngine::Browse`'s decision (`travel-browse.mjs`, executed there). A `LoadMap` effect becomes a request
+`{map, portal, url, options, travelInfo, lastURL}` that the simulation hands the page in its frame (`frame.travel`, `sim-session.mjs`); the level left does not tick again. The page's `loadMap(map, {travel})` builds the next session
+(`hostOptions.travel = {arrival, lastURL}`, `sim-worker.mjs` `load`), whose startup is the cold LoadMap passes and then `SpawnPlayActor` with the arrival's portal and options: `DeusExGameInfo.Login`, the player's `TravelPreAccept`,
+**the three-pass import** of the text (`travel-import.mjs`), the imported actors' `TravelPreAccept`, `AcceptInventory`, their `TravelPostAccept`, the player's, `PostLogin` (`script-player-login.mjs`).
+
+| File | Role |
+| --- | --- |
+| `src/runtime/furl.mjs` | `FURL` for `Map`, `Map#Portal` and `?option` texts; `UnsupportedFurlForm` for the rest (a `.dx` suffix, a space before `#`, paths, hosts, a portal with options) |
+| `src/runtime/travel-browse.mjs` | `DDeusExGameEngine::Browse` as a pure decision: effects `log`, `deleteSaveGameFiles`, `clearStartingNewGame`, `loadMap`, `boundary`; `GetNextMissionNumber`/`GetCurrentMissionNumber` (`test/travel-browse.test.mjs`: the branch table) |
+| `src/runtime/travel-text.mjs` | the text's parser and formatter, `normalizeTravelText` (pointers by first appearance, instance numbers), `firstTravelTextDifference`, `travelTextOfDump` for the captures (`test/travel-text.test.mjs`) |
+| `src/runtime/script-travel.mjs` | `SetClientTravel`, `ClientTravel`, native 3012 and Play's `Save\Current` store (`createSaveStore`; empty: nothing files a level yet) |
+| `src/runtime/travel-export.mjs` | `ExportTravel` over `CPF_Travel` properties read from the retail class chain (the load graph's Class/Property records), the host `FlagBase` exported as `FlagBase`/`Flag*` objects |
+| `src/runtime/travel.mjs` | the tick's travel step and Browse's execution; `TravelStop` names a branch that is not implemented |
+| `src/runtime/travel-import.mjs` | `SpawnPlayActor`'s three passes and the flag store fill |
+| `scripts/validate-travel.mjs`, `scripts/validate-travel-play.mjs` | the checks below (headless; the page in the browser) |
+
+**One session per map.** In Play a level is one runtime: `createGame` binds a map's actors to a `ScriptRuntime`, and the page's `loadMap` builds the world, the GPU meshes and the HUD for it. So LoadMap of *another* map is the page's own map change
+with the arrival's data (the same path the toolbar's map list uses), not the Stage 3 in-place reload (`game.reset()`, [LoadMap GC](script-loadmap-gc.md)), which stays what "Player start" means. What the original's LoadMap does that this does not model:
+`NotifyLevelChange` and the old player's `DestroyActor` (tried: the frame that is still being drawn then finds the player's native heap objects freed), the collection of the previous level over one shared object registry (the arrival's object indices are the map's
+open-capture seed, not the post-travel registry the original has: **unverified**, [the registry](object-index-captures.md)), the package load and unload lines, `Collecting garbage`/`Garbage:` and the brush tracker's lines. A session that does not travel
+(`createGame` without `travel`: every validator and census session) keeps `TravelBoundary` at `ClientTravel` and `ClientTravelBoundary` at the tick's step; so do live replays (`game.liveReplay`), which stop at the original's level end as before
+(Stage 5's `die1` still ends after tick 1931 in both). The page passes `travel`.
+
+**What was checked against the measured original** (`node scripts/validate-travel.mjs`; the captures stay in `.work/travel`, outside Git; the browser path `node scripts/validate-travel-play.mjs`):
+
+| Check | Result |
+| --- | --- |
+| Play's exported text for the logo-map player at the menu's Training button | **74 records equal** `s2/s5-training-menu` after normalization (pointers, instance numbers; no `AugmentationSystem`, the six flag-less lines, the skills and themes interleaved by the worklist) |
+| the same ClientTravel with the augmentations in place (`LocalTravel 00_TrainingCombat` from the logo map) | **96 records equal** `r1/dx-to-combat` (`AugmentationSystem`, `AugLocs[6]=(AugCount=3)`, 21 augmentations, the flag chains) |
+| Browse's branch and URL | `Current mission number is -2, next is 0`, `Attempting to get player`, wipe, `LoadMap: 00_Training?Name=Player?Class=DeusEx.JCDentonMale` |
+| the arrival's flags | `{PlayerTraveling}` (expiration 0) before the first timer (the `SKTemp_*` flags are consumed by `RestoreSkillPoints`; this needed native 1112 `FlagBase.GetInt`: `XFlagBase::execGetInt` 0x10025790 -> `GetInt` 0x100244e0), `{M00_TRAINING_StartupText@1, M0MissionStart@1}` after it; no host-supplied marker (`beginFreshMission` runs only for a cold open) |
+| Mission00.FirstFrame's effect | `UNATCOTroop2` is knocked out into `UNATCOTroopCarcass0` |
+| the engine log | the 17 lines Play models (`Unloading: Package DX`, `Export travel for`, `Browse:`, `Doing load, not loadgame`, `Current mission number`, `Attempting to get player`, `LoadMap:`, `Game class is`, `Bringing Level`, `InitGame`, `Base Mutator`, `Spawned new mission script`, `Spawning new actor for Viewport`, `Login: Player`, `Possessed PlayerPawn`, `All inventory ... accepted`, `InitStateMachine`) are the measured log's, in its order (the `Unloading` line comes from the script's native 3012 for the menu and from Browse's own `DeleteSaveGameFiles` for the console `LocalTravel`: both measured) |
+| the import | every line of the text is in the arrived player's own export; the arrival adds one line, `SkillWeaponPistol: CurrentLevel=1`: pass 2 writes only the lines a text has, so the imported pistol skill keeps what its `PreBeginPlay` set (`ResetSkills` had put the departing level to the class default 0, which the text omits), as the original's import does by the same rules |
+| `RestartLevel` (`?restart`) | no `Export travel`; `LoadMap: 00_training?loadonly` (the level's `MapName`), `InitGame: ?loadonly`, `Login:` (no `Name=`), the new player has **no flag** at arrival or after the first timer, the nine modelled lines are the measured restart's |
+| the page (`?boot=1`, worker mode) | a click on Training arrives in `00_Training` with "UNATCO Training Facilities / Continental United States" and the flags, carcass above; no runtime error |
+| not regressed | the Stage 5 replays `cad1` and `key1` (Training, the host marker for a cold open), `die1` (Island, the level end); the validators of the touched code (console command, loadmap, mission timer, FlagBase iterators, triggers, player log/dump, player start); 685 unit tests |
+
+**Facts found on the way.**
+
+* `DeleteSaveGameFiles` releases the level package's loaders the first time it runs in a level (`Unloading: Package <level>`); in the menu path that is the script's native 3012, in `LocalTravel`'s it is Browse's own call, so the log line is one per level.
+* `ColorThemeManager`, the themes, the skills and the augmentations are Actors (`extends Actor`, `bTravel` true), so the import spawns them; only `FlagBase` and the `Flag*` classes are non-Actors in the texts so far.
+* An imported actor is spawned with the player as its Owner, so an imported `Augmentation`'s Owner is the player, not the manager that created it. Play's cold-login verification of the augmentation graph (`script-player-startup.mjs`) therefore takes `{imported}` and checks the shape without the cold defaults.
+* The player keeps the objects `Login`'s `ResetPlayerToDefaults` made for every property the text does not carry (the menu's text has no `AugmentationSystem`, so the arrived player has a fresh one), and the replaced ones stay in the level as unreferenced actors, as in the original.
+* The text's key is the player's name; `Login` takes `Name=Player` from the URL options the arrival passes (the cold login's options are empty, so a cold Play prints `Login: ` and a travel arrival `Login: Player`, as the original does).
+* A property is written with the spelling of its name in the package's name table (`FlagName`, `FlagBase`, `flagHash`: the compiler keeps the first spelling of a name), which is what the measured texts show; no spelling table is needed.
+
+**Still a named stop** (a thrown `TravelStop`, a `TravelBoundary` in a session without `travel`, or an unsupported-property error naming the class and property):
+
+* every Browse branch but the wipe and `?restart`: travel within one mission (`PruneTravelActors`, `SaveCurrentLevel(-2)`, a filed level restored), `?loadgame=`, network URLs; a failed `LoadMap` (the retry with the old map's name);
+* `FURL` forms other than `Map`, `Map#Portal`, `?options`: `.dx` suffixes, a space before `#` (three installed `MapExit`s), paths;
+* the travel text's property kinds that were not measured: vectors, rotators, dynamic arrays, strings with newlines, class properties (`UnsupportedTravelPropertyError`, `UnsupportedTravelImportError`); flags other than bool and int; **items are not verified** (step 2): the exporter and importer are generic over `CPF_Travel`, but only the no-item texts were compared;
+* `DeleteSaveGameFiles` of a directory (save slots), `SaveGame` (native 3011), `LoadGame`, the other menu entries (New Game, Play Intro, Load Game, Credits).
+
 ## Where Play stops today
 
-* `PlayerPawn.ClientTravel` called from script (`SendPlayer`, the menus' `LoadGame`): `script-runtime.mjs:3249` throws `TravelBoundary` (`travel-boundary.mjs`) with the URL, type and `bItems`: not even `SetClientTravel`/`PreTravel` run.
-* The console `OPEN`: `script-console-command.mjs` runs `SetClientTravel` as recovered (viewport fields, `PreTravel` on every actor); `game.mjs:307..315` `clientTravel()` is the tick's travel step and throws `ClientTravelBoundary`
-  (called after each tick, `sim-session.mjs:1446`). Browse, LoadMap and everything after are not implemented ([Stage 5 death proof](stage-5-exit-criteria.md#the-players-death-to-the-levels-end-2026-10-18), [training entry](script-training-mission-entry.md)).
-* `PlayerTraveling` is a host input today: Play's login supplies the fresh-mission marker ([Stage 3 exit criteria](stage-3-exit-criteria.md)).
+* `PlayerPawn.ClientTravel` in a session without `travel` (every validator, census and live replay): `TravelBoundary` (`travel-boundary.mjs`) with the URL, type and `bItems`; with `travel` (the page): the recovered native, then the tick's step as above.
+* The console `OPEN` (`bItems` 0, `TRAVEL_Partial`): `SetClientTravel` as recovered; the tick's step throws `ClientTravelBoundary` without `travel` and with a live replay ([Stage 5 death proof](stage-5-exit-criteria.md#the-players-death-to-the-levels-end-2026-10-18)), and travels with it (`OPEN DX` and `OPEN DXONLY` are the `next == -1` wipe).
+* `PlayerTraveling`: a **host input for a cold open only** (Play's login supplies the fresh-mission marker, [Stage 3 exit criteria](stage-3-exit-criteria.md); Stage 5's replays delete it first); a map entered by travel gets it from the travel text, and a restart has none.
 
 ## Unresolved
 
@@ -490,9 +551,9 @@ Each item is **unverified** or unread; none blocks the first two steps of the [o
 
 1. **`FURL` parsing.** The travel-type branches are read (`0x103f7b60`); the installed forms were exercised, not traced: `.dx` suffix, a space before `#` (the map keeps the trailing space and still loads) and the portal split ([measured](#load-game-restart-and-url-forms)).
    Not read: how the parser trims or resolves the map for the file lookup, the default options it adds (`URL: Adding default option Name=Player`, `Class=DeusEx.JCDentonMale` from `[DefaultPlayer]`; `LoadURLConfig`/`SaveURLConfig` at `0x103f9bc0`/`0x103f9cb0` and the end of
-   `LoadMap`, `0x1038e32c..0x1038e3c1`), and which start spot a `Map#Portal` picks when two teleporters share a tag. A port can start from the measured outputs (Map, Portal, Op) for the 21 + 149 installed destinations.
+   `LoadMap`, `0x1038e32c..0x1038e3c1`), and which start spot a `Map#Portal` picks when two teleporters share a tag. A port can start from the measured outputs (Map, Portal, Op) for the 21 + 149 installed destinations. *Step 0 ported the plain forms (`furl.mjs`); the `.dx` suffix, the space before `#`, paths and hosts are refused by name until they are traced.*
 2. **ExportText / ImportText formats.** Only what the samples show is established: ints, bools, names, `FLAG_*` enum names, a struct (`AugLocs[6]=(AugCount=3)`), floats (`saveTime=67.075813`), object references (`%08x name`). Not sampled: vectors, rotators,
-   strings with newlines (the `\` rule is read, not seen), byte arrays (`invSlots[30]`), `Conversation`/`Note`/`Goal` lists, inventory with mods, a carried decoration. A played save's travel text (weapons with mods, ammo, notes, goals, images, history) is the next reference.
+   strings with newlines (the `\` rule is read, not seen), byte arrays (`invSlots[30]`), `Conversation`/`Note`/`Goal` lists, inventory with mods, a carried decoration. A played save's travel text (weapons with mods, ammo, notes, goals, images, history) is the next reference. *Step 1 implements bool, int, float, byte and enum, name, string, struct and object properties (`travel-export.mjs`/`travel-import.mjs`; the first six through `config-text.mjs`'s Core-verified bodies), matched by the two measured texts; every other kind stops by name.*
 3. **`PruneTravelActors`** destroys the managers, the flag base and the carried decoration but leaves the pawn and its inventory in the saved level (measured: the `.dxs` holds `JCDentonMale<N>` and its items). The saved pawn is then re-possessed
    on restore (measured: one pawn); which of its saved properties survive, in what order the travel text overwrites them, and why `GameInfo.Login`'s name test accepts it (`PlayerName != PlayerReplicationInfo.default.PlayerName`)
    are not traced. The effect on the restored level's actor list (a leaked pawn per visit?) was not counted.
@@ -507,17 +568,21 @@ Each item is **unverified** or unread; none blocks the first two steps of the [o
    the base of the next `FURL` (protocol, host, port; options for `TRAVEL_Partial`), so a wrong value shows only through `OPEN`'s inherited options.
 8. **`ULevel::Serialize`.** `TravelInfo` is serialized with the level (measured through a loaded game); the rest of the level's serialized native state (`Model`, `ReachSpecs`, `TextBlocks`, `TimeSeconds`, `iFirstDynamicActor`) is not read here.
 9. **Failure paths**: `LoadMap` returning null in `DDeusExGameEngine::Browse` (the old map is reloaded by name, `0x10011e38`), `AbortToEntry`, a `TravelURL` with an unknown map. Single-player content never reaches them; Play should report them and stop.
-10. **Not single-player, left unsupported**: `ServerTravel`/`ProcessServerTravel`, `PreClientTravel` for remote clients, `NM_Client` pending levels, the `?push`/`?pop`/`?peer` options and the `Game%04i.dxs` pushes in `LoadMap`, the developer `UDumpLocation` file branch of `DeusExGameInfo.Login`, `LoadMapWindow`'s `?loadonly` opens.
+10. **The object registry after a travel.** The arrival's objects take the slots of the map's open-capture seed (`mapRegistrySeed`), where the original's LoadMap collects the previous level in one registry (measured: `Garbage: objects: 35229->35017`). The registry indices of the arrival's actors, the player's sound channel ids that follow from them, and the object names' instance counters (`JCDentonMale8` against Play's `JCDentonMale0`) therefore differ from the original's: **unverified**, and not needed until a replay compares a travelled level's streams.
+11. **LoadMap's retire step across maps.** `NotifyLevelChange` and the old player's `DestroyActor` do not run (the old session is dropped with its frame still in flight); the original runs them in the old world, where their effects are the level's own. Whether anything they do reaches the next level (the audio subsystem's channels, the cache) is **unverified**.
+12. **`ExportText`'s details.** `UStructProperty::ExportTextItem`'s `Port()` filter was not read (every member that differs from the default is written, which matches `AugLocs[6]=(AugCount=3)`); a string with a newline (the `\` rule) is an assumption (it stops the export by name); the property kinds that are not in the measured texts stop the export by name.
+13. **The cold open's `Login` options.** The original's boot URL carries `?Name=Player?Class=DeusEx.JCDentonMale`, so its cold `Login` prints `Login: Player`; Play's cold open passes no options (`Login: `), which a travel arrival does not share. Changing the cold path would touch the Stage 3 gates, so it was left.
+14. **Not single-player, left unsupported**: `ServerTravel`/`ProcessServerTravel`, `PreClientTravel` for remote clients, `NM_Client` pending levels, the `?push`/`?pop`/`?peer` options and the `Game%04i.dxs` pushes in `LoadMap`, the developer `UDumpLocation` file branch of `DeusExGameInfo.Login`, `LoadMapWindow`'s `?loadonly` opens.
 
 ## Proposed implementation order for Play
 
 Smallest first; each step is a vertical slice that ends at a check against the measured original, and every branch it does not implement stays an explicit boundary (a thrown, named stop like today's `ClientTravelBoundary`), never a substitute.
 The reference scenarios are in `.work/travel/` (the travel texts, flags, listings and logs above); compare texts with the pointers (`Ptr=`, hex values) and the instance numbers of names normalized.
 
-**0. Prepare (no behavior change).** Keep the measured scenarios as fixtures outside Git (the texts of `s2/s5-training-menu` (74 records), `r1/dx-to-combat` (96), `s1/n1-island-frozen` (79), `s1/n3-hq` (103); the flag tables; the save listings; the log lines) and write the normalizer.
+**0. Prepare (no behavior change).** *Done 2026-10-21 ([Play, steps 0 and 1](#play-steps-0-and-1)): the normalizer, the pure Browse decision with its branch-table test and `FURL` for `Map`/`Map#Portal`; the measured scenarios stay outside Git and `validate-travel.mjs` reads them.* Keep the measured scenarios as fixtures outside Git (the texts of `s2/s5-training-menu` (74 records), `r1/dx-to-combat` (96), `s1/n1-island-frozen` (79), `s1/n3-hq` (103); the flag tables; the save listings; the log lines) and write the normalizer.
 Make `DDeusExGameEngine::Browse`'s decision a pure function of (`cur`, `next`, options, `bStartingNewGame`, file present) with a unit test of the cases in the [branch table](#which-branch-each-single-player-entry-takes), and port `FURL` for plain `Map` / `Map#Portal` URLs, throwing on the other forms ([Unresolved](#unresolved) 1).
 
-**1. `SendPlayer` to `00_Training` from DX.dx's menu, no items.** The slice every menu entry needs. The Training button's script (`StartTrainingMission`) already runs on Play's VM; what it reaches is:
+**1. `SendPlayer` to `00_Training` from DX.dx's menu, no items.** *Done 2026-10-21 ([Play, steps 0 and 1](#play-steps-0-and-1)), with two differences from the plan below: d. is the page's own map change (one session per map) and not an in-place generalization of the Stage 3 reset, for the reasons given there; and `?restart` is in (its `loadonly` reload is the same map change).* The slice every menu entry needs. The Training button's script (`StartTrainingMission`) already runs on Play's VM; what it reaches is:
 a. `PlayerPawn.ClientTravel` becomes the recovered native (`PreClientTravel`, then `SetClientTravel`: the viewport fields and `PreTravel` on every actor, as `OPEN` already does) instead of `TravelBoundary` (`script-runtime.mjs:3249`); `DeleteSaveGameFiles` (native 3012) empties Play's `Current` store (empty here).
 b. The tick's travel step (`game.mjs clientTravel`) stops throwing: `TravelInfo` and `ExportTravel` (generic over `CPF_Travel` from the retail class metadata, `ExportText` for the property types of the samples), `TravelInfo.Set(PlayerName, text)`, `FURL(LastURL, TravelURL, TravelType)`, `Browse`.
 c. `Browse` with the cases `cur != next` / `next == -1` / `loadonly` / `restart` (wipe, then `LoadMap`); no `Current` yet, so `PruneTravelActors`/`SaveCurrentLevel` stay a named boundary.

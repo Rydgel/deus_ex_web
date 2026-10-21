@@ -64,8 +64,8 @@ functions, states and properties) is not measured and stays out of the model. On
 with the other game folders, or read from the chosen folder) is shown at its own size in device pixels, centred over black, from the moment the
 files are known until the first map is loaded, and that map is DX.dx in Play. The play hint keeps only its stops (a runtime error, a travel,
 the pointer lock). It is opt-in for now: the page's default stays the inspection tool (the toolbar, the web crosshair and hints, `00_Training`
-loaded first), which 63 browser validators open with their own URLs. The switch (the original's start by default, the tools with `?debug=1`)
-lands with travel, so the menu's choices start a game, and in the same change every validator's URL gains `debug=1`.
+loaded first), which 63 browser validators open with their own URLs. Travel has landed for the Training button ([travel](travel.md), `?boot=1` then Escape and a click on Training arrives in `00_Training`); the switch (the original's start by default, the tools with `?debug=1`)
+lands with the other menu entries, so every choice starts a game, and in the same change every validator's URL gains `debug=1`.
 
 **The logos are not drawn yet.** DX.dx's `EidosLogo0`, `IonStormLogo0`, `DXLogo3` and the two `DXText` are classic `UMesh` meshes (DeusExDeco's
 `EidosLogo`, `IonStormLogo`, `DXText`, `DXLogo`), and Play's actor mesh layer binds only `LodMesh` ("Classic UMesh surfaces are not bound"): the

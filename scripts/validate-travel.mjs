@@ -9,11 +9,12 @@
  *   - the new session (the page's loadMap in the browser) imports the text: the player's flags are {PlayerTraveling} before the first
  *     mission timer and the measured set after it, with no host-supplied marker;
  *   - the engine log holds the original's lines in the original's order (the lines Play models: the measured log filtered to them);
- *   - the text exported again from the arrived player is a fixed point of the import (same records and values), apart from what the
- *     arrival changed (documented per scenario).
- * Mission00.FirstFrame's effect (UNATCOTroop2 knocked out into a carcass) is checked in scenario A.
+ *   - the arrived player's own export contains every line of the text (SpawnPlayActor writes only the lines a text has: a spawned actor
+ *     keeps what its startup set, which the check lists).
+ * Mission00.FirstFrame's effect (UNATCOTroop2 knocked out into a carcass) is checked in scenario A. Scenario C is `RestartLevel`: the
+ * `?restart` branch of Browse, with no travel text and no flag at all in the new level.
  *
- *   node scripts/validate-travel.mjs [--only A|B] */
+ *   node scripts/validate-travel.mjs [--only A|B|C] */
 import assert from 'node:assert/strict';
 import { readdir, readFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
@@ -146,6 +147,35 @@ if (!only || only === 'B') {
   await flow('B: LocalTravel 00_TrainingCombat', c => { c.exec('LocalTravel 00_TrainingCombat'); }, { measuredFile: 'r1/dx-to-combat.travel.txt',
     measuredLogFile: 's1/c2-training.log', occurrence: 1, browseLine: 'Log: Browse: 00_TrainingCombat?Name=Player?Class=DeusEx.JCDentonMale',
     flagsAfter: ['M0MissionStart@1'] });
+}
+
+if (!only || only === 'C') {
+  // `RestartLevel` (ResetPlayer, then ClientTravel("?restart", TRAVEL_Relative, false)): no `Export travel` (bItems 0), Browse's restart branch
+  // reloads the level by its MapName with `loadonly`, and SpawnPlayActor reads no travel text: the measured new player has no flag at all (not
+  // even PlayerTraveling), before and after the mission script's first Timer. The Browse line's base map and the `Unloading` line are not
+  // compared: the original's LastURL there was a saved level's (docs/travel.md "Unresolved" 7) and its loaders were already released.
+  console.log('--- C: RestartLevel');
+  const { c } = await openSession('00_Training', assets, { travel: {} });
+  c.frames(90);
+  c.exec('RestartLevel');
+  c.frames(2);
+  const request = c.takeTravel();
+  if (check(request, 'C: the restart made no request')) {
+    check(request.url === '00_training?loadonly' && request.map === '00_training' && request.options.join() === 'loadonly', `C: the restart URL is ${request.url}`);
+    check(!c.game.doors.scriptRuntime.engineLog.some(line => /Export travel/.test(line)), 'C: a restart exports no travel text');
+    const { c: d } = await openSession(request.map, assets, { travel: { arrival: request, lastURL: request.lastURL } });
+    const flags = () => [...(d.read(d.player(), 'FlagBase')?.entries?.keys() ?? [])];
+    check(flags().length === 0, `C: the restarted player's flags at arrival: ${flags()}`);
+    d.frames(120);
+    check(flags().length === 0, `C: the restarted player's flags after the first timer: ${flags()}`);
+    const own = [...c.game.doors.scriptRuntime.engineLog.slice(-1), ...d.game.doors.scriptRuntime.engineLog].filter(line => MODELLED.test(line)).map(normalizeLine);
+    const measuredLines = (await readFile(`${captures}s4/f2-space-portal.log`, 'utf8')).split(/\r?\n/);
+    const at = measuredLines.indexOf('Log: LoadMap: 00_training?loadonly');
+    const original = measuredLines.slice(at, at + 80).filter(line => MODELLED.test(line)).map(normalizeLine).slice(0, 9);
+    const got = own.slice(own.indexOf('Log: LoadMap: 00_training?loadonly'), own.indexOf('Log: LoadMap: 00_training?loadonly') + 9);
+    check(at >= 0 && got.join('\n') === original.join('\n'), `C: the restart's log differs:\n--- Play\n${got.join('\n')}\n--- original\n${original.join('\n')}`);
+    console.log(`restart: ${request.url}, no flags at arrival or after the first timer, ${got.length} modelled log lines${got.join('\n') === original.join('\n') ? ' in the original\'s order' : ' (DIFFER)'}`);
+  }
 }
 
 if (failures.length) { console.log(`FAIL validate-travel:\n  ${failures.join('\n  ')}`); process.exit(1); }
