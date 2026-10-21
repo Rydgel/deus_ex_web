@@ -1,4 +1,4 @@
-/** The New Game path in Play's page, in the default worker mode (docs/travel.md "Play, step 2"): `?boot=1` starts the logo map DX.dx; Escape
+/** The New Game path in Play's page, in the default worker mode (docs/travel.md "Play, step 2"): the default start opens the logo map DX.dx; Escape
  * opens the original MenuMain; real mouse clicks on New Game, on No in the "train first?" box (bAskedToTrain is False on a fresh install), on
  * Medium and on Start Game (their places come from the menu windows' own bounds: settingsProbe `center`) run the original scripts through
  * ShowIntro(True) -> SendPlayer("00_Intro"); the page loads the intro with the exported text, the intro plays; Escape (ShowMainMenu on mission 98)
@@ -36,14 +36,17 @@ try {
   const page = await browser.newPage({ viewport: { width: 1024, height: 640 } });
   const errors = []; page.on('pageerror', error => errors.push(error.message));
   page.on('console', message => { if (message.type() === 'error') errors.push(message.text()); });
-  await page.goto(`${url}/?boot=1&antialias=0`);
+  await page.goto(`${url}/?antialias=0`);
   const ready = (map, timeout = 240000) => page.waitForFunction(map => { const s = window.deusExViewer?.status(); return s?.ready && s.map === map && !s.runtimeError; }, map, { timeout });
   const frames = n => page.evaluate(async n => { for (let k = 0; k < n; k++) await new Promise(r => requestAnimationFrame(r)); }, n);
   const probe = step => page.evaluate(step => window.deusExViewer.settingsProbe(step), step);
   const live = args => page.evaluate(args => window.deusExViewer.liveProbe(args), args);
   const shot = async name => { if (shotsDir) await writeFile(`${shotsDir}/${name}.png`, await page.locator('#scene').screenshot()); };
-  /** A real mouse click on a control of the top window (settingsProbe `center`: drawing-buffer pixels -> page pixels). */
+  /** A real mouse click on a control of the top window (settingsProbe `center`: drawing-buffer pixels -> page pixels). The default
+   * start takes the pointer lock after a click (docs/boot.md "The mouse and fullscreen"), under which these absolute moves would be
+   * relative motion of the menu's cursor: the lock is released first, as a user's Escape in a window does, and the click takes it again. */
   const click = async spec => {
+    if (await page.evaluate(() => Boolean(document.pointerLockElement))) { await page.evaluate(() => document.exitPointerLock()); await frames(3); }
     const { result } = await probe({ op: 'center', ...spec });
     const buffer = await page.evaluate(() => { const canvas = document.querySelector('#scene'); return { w: canvas.width, h: canvas.height }; });
     const box = await page.locator('#scene').boundingBox();
@@ -107,4 +110,4 @@ try {
   if (errors.length) failures.push(`page errors: ${errors.slice(0, 3).join(' | ')}`);
 } finally { await browser.close(); await server.close(); }
 if (failures.length) { console.log(`FAIL validate-travel-newgame-play:\n  ${failures.join('\n  ')}`); process.exit(1); }
-console.log(`PASS validate-travel-newgame-play: ?boot=1 -> Esc -> New Game -> the intro -> ${natural ? "its own end" : 'Escape'} -> the Island with the player the travel text carried`);
+console.log(`PASS validate-travel-newgame-play: the original start -> Esc -> New Game -> the intro -> ${natural ? "its own end" : 'Escape'} -> the Island with the player the travel text carried`);

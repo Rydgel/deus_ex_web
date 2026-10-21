@@ -1379,7 +1379,6 @@ document.addEventListener('fullscreenchange', () => {
   if (!originalStart) return;
   if (!document.fullscreenElement) { navigator.keyboard?.unlock?.(); return; }
   navigator.keyboard?.lock?.(['Escape'])?.catch?.(() => {});
-  if (document.pointerLockElement !== $('scene') && mode === 'play' && game && !runtimeError) $('scene').requestPointerLock?.()?.catch?.(() => {});
 });
 function grabPointer(event, windowHasMouse) {
   const canvas = $('scene');
@@ -1435,7 +1434,12 @@ $('scene').onpointerup = event => {
 };
 $('scene').onpointercancel = () => { drag = false; simInput.reset({releasePhysical:true}); };
 $('scene').ondblclick = () => $('scene').requestPointerLock?.()?.catch?.(() => toast('Drag the view to look around.'));
+// Chromium's first pointermove under a new lock can carry the pointer's whole offset as movement (-516, -155 in a headless
+// run): it would throw the menu's cursor or the view; that one event is dropped.
+let lockMoveDropped = true;
+document.addEventListener('pointerlockchange', () => { lockMoveDropped = !document.pointerLockElement; });
 document.addEventListener('pointermove', event => {
+  if (document.pointerLockElement === $('scene') && !lockMoveDropped) { lockMoveDropped = true; return; }
   const windowHasMouse = windowPointer(event);
   // The original start shows only the game's cursor over a window that holds the mouse; the system one marks a world to click into.
   if (originalStart) $('scene').style.cursor = windowHasMouse ? 'none' : '';
