@@ -386,6 +386,11 @@ gestures stopped the game, for 3 distinct reasons**, all in the table; the three
 Device prompt now sends `RELAUNCH -changevideo`, which the sweep records as a host request (the page's `deusex-relaunch` event, cancelled
 so the walk survives; the report's `hostRequests`) instead of an error, and Customize Keys' scroll arrows tick.
 
+On merged master 0e2e995 (2026-10-21, 26 minutes, `.work/native-menu-sweep.json`), with the save directory and the host services together:
+**22 screens; 3 gestures stopped the game, for 2 reasons, both on the multiplayer menu** (`UWindowList.SetupSentinel` and the
+name-bound `GetDefaultURL`). Every single-player screen reached from MenuMain ran clean, Load Game included, and the Render Device
+prompt's OK is recorded as a cancelled `RELAUNCH` host request.
+
 | stop | where | what it is | state |
 |---|---|---|---|
 | native **3013** `DeusExPlayer.CreateGameDirectoryObject` | MenuMain, Load Game button (`MenuScreenLoadGame.GetSaveGameDirectory`) | census: excluded, stage-6; **reached from the default start** | **done**: [save directory](save-directory.md) (natives 3013, 3075, 3080-3094) |
