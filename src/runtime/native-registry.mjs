@@ -101,7 +101,7 @@ export const NATIVE_SITES = [
   {id: 'window-edit', layer: 'window-host', file: R + 'script-window-edit-natives.mjs', anchor: /export function dispatchEditWindowNative\(/,
     indices: idx('1860 1880-1892 1895-1896 1900-1902 1905-1912 1915-1917 1920-1921')},
   {id: 'window-gc', layer: 'window-host', file: R + 'script-window-gc-dispatch.mjs', anchor: /const natives\s*=\s*new Map\(/, table: true,
-    indices: idx('1200 1210-1221 1230-1231 1240-1248 1250-1262 1270-1272 1280-1287 1289')},
+    indices: idx('1200 1210-1221 1230-1231 1240-1248 1250-1262 1270-1272 1280-1289 1295')},
   {id: 'window-host-natives', layer: 'window-host', file: R + 'script-window-host-natives.mjs', anchor: /export function dispatchWindowHostNative\(/,
     indices: idx(`1420 1424 1426-1427 1429 1439 1442-1449 1450-1451 1453-1454 1462-1466 1468-1470 1474 1482-1487 1489-1492 1495
       1500 1510-1518 1521-1523 1554-1555 1558-1564 1570-1573 1590-1598 1613 1620-1653 1660-1668 1680-1681 1689 1700-1703 1820

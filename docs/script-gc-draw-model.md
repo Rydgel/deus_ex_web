@@ -252,8 +252,9 @@ helper's pixel-tracking mode, not proportional UV.
   match the GC probes at `0x007f` and `0x037f` on every validator case, but
   are not re-derived operation by operation at 24 bits (open item in
   render-pass precision).
-- **`DrawActor` (1288) is intentionally unimplemented.**  It enters the 3D
-  mesh-rendering path — `DrawActor` draws an `Actor` through the render
-  interface's mesh pipeline, not the 2D tile emitter — so it is the
-  documented 3D-renderer dependency boundary for this layer, not a
-  candidate for the DrawTile command-capture model.
+- **`DrawActor` (1288) and `ClearZ` (1295)** are not tile draws: they set an
+  actor's draw state, optionally clear Z and call `URenderBase::DrawActor` through
+  the canvas, so they are not part of the DrawTile command-capture model. They
+  are translated, oracle-validated and wired into Play in
+  [gc-draw-actor.md](gc-draw-actor.md); the HUD command stream carries them as
+  `actor` and `clearZ` commands in window order.

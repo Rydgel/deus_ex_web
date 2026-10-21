@@ -72,6 +72,34 @@ export async function createWeaponOverlaySim(runtime,assets,playerSource,{kernel
     const target=read(player,'ViewTarget')??player;
     return read(player,'ShowFlags')&8?target:null;
   };
+  // GC.DrawActor (docs/gc-draw-actor.md): the HUD paint draws actors through the same URender::DrawActor, in the master frame
+  // (Extension XGC::DrawActor sets the actor's state, then calls Canvas->Render->DrawActor(Frame, Actor)). Each actor drawn
+  // that way (the vision augmentation's heat sources, ActorDisplayWindow's tracked actors) has a binding of its own on the CPU
+  // path, the reference: the view model's GPU instance has a few slots and the pawns of a map outnumber them. The
+  // binding's face groups are resolved when it is made, so a different skin set (SetSkins' grid textures) makes a new one.
+  const hudEntries=new Map(),hudPending=new Map();
+  let hudIndex=0x58000000,hudClock=0;
+  const skinKey=actor=>[read(actor,'Skin'),...read(actor,'MultiSkins')].map(ref=>ref?.key??ref?.name??'').join('|');
+  const retireHud=(actor,entry)=>{entry.binding.dispose();hudEntries.delete(actor);onRelease(entry.binding.id);};
+  const DT_MESH=2;
+  const prepareHud=actor=>{
+    // URender::DrawActor -> FDynamicSprite::Setup also draws sprites, brushes and the other DrawTypes: only meshes are built here.
+    if(read(actor,'DrawType')!==DT_MESH)throw new Error(`GC.DrawActor of ${actor.name}: DrawType ${read(actor,'DrawType')} (not DT_Mesh) is unsupported`);
+    const mesh=read(actor,'Mesh'),skins=skinKey(actor),entry=hudEntries.get(actor);
+    if(entry?.mesh===mesh&&entry.skins===skins)return entry;
+    if(entry)retireHud(actor,entry);
+    if(hudPending.has(actor))return null;
+    const options={id:nextId++,originalObjectIndex:hudIndex++,kernel,drawActor:true,lighting,layout:null,textures,lod};
+    let now=null;
+    try{now=createMeshBindingNow(runtime,actor,options);}catch(cause){error=cause;return null;}
+    if(now){const made={mesh,skins,binding:now,used:hudClock};hudEntries.set(actor,made);onCreate(now.creation);return made;}
+    const task=createMeshBinding(runtime,actor,options)
+      .then(binding=>{
+        if(disposed||runtime.isReleased(actor)||read(actor,'Mesh')!==mesh||read(actor,'bDeleteMe')){binding.dispose();return;}
+        hudEntries.set(actor,{mesh,skins,binding,used:hudClock});onCreate(binding.creation);
+      }).catch(cause=>{error=cause;}).finally(()=>hudPending.delete(actor));
+    hudPending.set(actor,task);return null;
+  };
   const commands=target=>{
     const calls=[],previous=runtime.native,wasBoundary=runtime.boundaryNatives.has(467);
     runtime.boundaryNatives.add(467);
@@ -94,6 +122,25 @@ export async function createWeaponOverlaySim(runtime,assets,playerSource,{kernel
   return {summary,
     /** The bindings in use (validation access: lod-probe.mjs). */
     all:()=>[...entries.values()].map(entry=>entry.binding),
+    /** The HUD actor bindings in use (validation access). */
+    hudAll:()=>[...hudEntries.values()].map(entry=>entry.binding),
+    /** One GC.DrawActor draw (docs/gc-draw-actor.md), called with the actor in the state XGC::DrawActor set and the main
+     * camera's `frustum`, `lodInputs`, `settings` and `admit` as frame() takes them: the actor's binding updated in the
+     * master frame (lit as its own light sink, as Canvas.DrawActor's) with the record the page draws, whether
+     * FDynamicSprite::Setup admits it (render feedback, `admit`; absent: the groups three.js draws) and the pass decision.
+     * Null while the binding is being prepared. An actor Setup rejects is not drawn. */
+    drawHudActor(actor,{frustum,lodInputs=null,settings,admit=null}){
+      if(disposed)return null;
+      if(error)throw error;
+      const entry=prepareHud(actor);
+      if(!entry)return null;
+      entry.used=hudClock;
+      const {binding}=entry,frameLod=lod&&lodInputs?lodFrame(lodInputs,settings):null;
+      const record=binding.update({lit:true,...(frameLod?{lodFrame:frameLod}:{})});
+      const decision=binding.passVisibility(frustum);
+      const drawn=admit?admit(binding):binding.drawnIn(frustum,decision);
+      return drawn?{id:binding.id,record,decision,drawn:true}:{id:binding.id,record:null,decision:null,drawn:false};
+    },
     // The asynchronous phase only prepares bindings. It does not dispatch
     // the script event or advance an actor; frame() is the sole draw event
     // source.
@@ -118,6 +165,10 @@ export async function createWeaponOverlaySim(runtime,assets,playerSource,{kernel
       // A reload's collection releases the old generation's weapons.
       for(const [actor,entry] of entries)if(runtime.isReleased(actor)||read(actor,'bDeleteMe')||!runtime.levelFor(currentPlayer()).actors.includes(actor))
         retire(actor,entry);
+      // The HUD's actor draws likewise, and an actor not drawn for 300 frames gives its binding back.
+      hudClock++;
+      for(const [actor,entry] of hudEntries)if(runtime.isReleased(actor)||read(actor,'bDeleteMe')||hudClock-entry.used>300
+        ||!runtime.levelFor(currentPlayer()).actors.includes(actor))retireHud(actor,entry);
       summary.draws=0;summary.actor=null;summary.mesh=null;
       const target=overlayTarget(),draws=[],drawn=[];
       const frameLod=lod&&lodInputs?lodFrame(lodInputs,settings):null;
@@ -149,6 +200,7 @@ export async function createWeaponOverlaySim(runtime,assets,playerSource,{kernel
       layout?.endFrame();
       return {target:Boolean(target),draws,camera,drawn};
     },
-    dispose(){disposed=true;for(const entry of entries.values())entry.binding.dispose();entries.clear();},
+    dispose(){disposed=true;for(const entry of entries.values())entry.binding.dispose();entries.clear();
+      for(const entry of hudEntries.values())entry.binding.dispose();hudEntries.clear();},
   };
 }

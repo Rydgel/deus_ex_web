@@ -50,6 +50,9 @@ import {gcDrawPattern} from './script-gc-draw-pattern.mjs';
 import {gcDrawBox} from './script-gc-draw-box.mjs';
 import {gcDrawStretchedTexture} from './script-gc-draw-stretched-texture.mjs';
 import {gcDrawBorders} from './script-gc-draw-borders.mjs';
+import {execGcDrawActor,gcClearZ} from './script-gc-draw-actor.mjs';
+/** GC.DrawActor takes its seven arguments as one list (execGcDrawActor). */
+const gcDrawActor=(gc,...rest)=>execGcDrawActor(gc,rest.slice(0,7),rest[7]);
 const natives = new Map([[1200,gcIntersect],
 [1210,gcEnableSmoothing],
 [1211,gcIsSmoothingEnabled],
@@ -98,7 +101,9 @@ const natives = new Map([[1200,gcIntersect],
 [1285,gcDrawPattern],
 [1286,gcDrawBox],
 [1287,gcDrawStretchedTexture],
-[1289,gcDrawBorders]]);
+[1288,gcDrawActor],
+[1289,gcDrawBorders],
+[1295,gcClearZ]]);
 const pack = c=>['r','g','b','a'].reduce((n,k,i)=>n|((c?.[`core.object.color.${k}`]??0)&255)<<(8*i),0)>>>0;
 const unpack = n=>Object.fromEntries(['r','g','b','a'].map((k,i)=>[`core.object.color.${k}`,(n>>>(8*i))&255]));
 export function dispatchGcNative(heap,services,call) {
@@ -114,6 +119,14 @@ export function dispatchGcNative(heap,services,call) {
   case 1272:a[0]??=-1;break;
   case 1281:a[0]=a[0]?1:0;break;
   case 1262:a[0]??=0;a[1]??=0;break;
+ }
+ // GC.DrawActor (exec 0x1002cd80): an omitted optional argument keeps the exec's default local; the actor and the
+ // skin stay runtime objects (the render services act on the Actor, not on a heap image).
+ if(call.index===1288){
+  const bool=v=>v==null?undefined:(v?1:0),bits=v=>v==null?undefined:f32Bits(v);
+  const args=[a[0],bool(a[1]),bool(a[2]),bool(a[3]),bits(a[4]),bits(a[5]),a[6]];
+  value=fn(call.receiver,...args,services);
+  return {handled:true,value};
  }
  // execGetTextExtent (0x1002c020) passes its two out params to the method as
  // the X and Y extent pointers, in declaration order.
