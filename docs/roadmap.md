@@ -934,9 +934,11 @@ now admitted in Play's window host:
 280 of 280 oracle cases are identical, and 19 deliberate mutations are
 caught. The Conversations, Images and Logs screens open, draw and close in
 Play, and `scripts/census-ui-screens.mjs` passes 11 of 11 player screens on
-Training and Island. The Load/Save Game screens stop at the save-game
-directory (native 3013, Stage 6). See
-[ListWindow family](script-window-list-family.md).
+Training and Island. The Load Game screen opens from the default start
+with the empty save directory (natives 3013 and 3075-3094, 2026-10-21; the
+Save Game screen's directory reads are the same natives; saving and loading
+are Stage 6). See [ListWindow family](script-window-list-family.md) and
+[the save-game directory](save-directory.md).
 
 **Options menus (2026-10-08).** Esc > Settings opens the original Controls, Customize
 Keys, Game options, Display, Brightness, Sound and Adjust Colors screens in Play; each

@@ -141,6 +141,22 @@ export function createMenuDriver(game) {
       return {windows: out, menu, roles, mode: read(top, 'messageBoxMode') ?? null, parentClass: parent ? keyOf(parent) : null,
         parentMode: parent ? read(parent, 'messageBoxMode') ?? null : null};
     },
+    /** The rows of a list window field of the topmost window (MenuScreenLoadGame.lstGames): each row's text in `columns` (ListWindow.GetField, the
+     * script's own accessor), the selected rows' ids and the row ids, in list order. */
+    listRows(field, columns = [0, 1, 2, 4]) {
+      const list = runtime.readNamed(topWindow(), field);
+      if (!list) throw new Error(`${keyOf(topWindow())} has no list ${field}`);
+      const call = (name, ...args) => game.hud.scoped(() => runtime.callFunction(runtime.lookup(list, name), list, args.length, i => args[i]));
+      const rows = [], ids = [];
+      for (let i = 0, n = call('GetNumRows'); i < n; i++) { const id = call('IndexToRowId', i); ids.push(id); rows.push(columns.map(column => call('GetField', id, column))); }
+      return {rows, ids, selectedCount: call('GetNumSelectedRows'), selected: ids.indexOf(call('GetSelectedRow'))};
+    },
+    /** The text a text-bearing window field of the topmost window shows (MenuUILabelWindow, TextWindow.GetText). */
+    windowText(field) {
+      const win = runtime.readNamed(topWindow(), field);
+      if (!win) throw new Error(`${keyOf(topWindow())} has no window ${field}`);
+      return game.hud.scoped(() => runtime.callFunction(runtime.lookup(win, 'GetText'), win, 0, () => undefined));
+    },
     /** A button field of the topmost window (a message box's `btnYes`/`btnNo`/`btnOK`), activated. */
     pressField(field) {
       const button = runtime.readNamed(topWindow(), field);

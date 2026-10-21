@@ -10,6 +10,8 @@
  *   button {index}           the top menu's winButtons[index] activated, as a click on it does (MenuMain: 4 is Training)
  *   center {field, index?, row?} | {actionKey}   where a click on a control of the top window lands (drawing-buffer pixels), returned as `result`
  *   controls                 every window under the top window (class, ancestry, absolute bounds, visible/sensitive bits), returned as `result`
+ *   list {field, columns?}   the rows of a list window field of the top window (text of each column), their ids and the selection, as `result`
+ *   text {field}             the text of a label or text window field of the top window, as `result`
  *   escape                   the Escape key on the root window
  *   field {name}             a field of the top window, or a dotted path through window fields (a window as its class)
  *   state                    nothing
@@ -26,6 +28,8 @@ export function settingsProbe(game, step = {op: 'state'}) {
     case 'button': driver.pressButton(step.index); break;
     case 'center': result = driver.center(step); break;
     case 'controls': result = driver.controls(); break;
+    case 'list': result = driver.listRows(step.field, step.columns); break;
+    case 'text': result = driver.windowText(step.field); break;
     case 'press': driver.press(step.choice); break;
     case 'drag': driver.drag(step.choice, step.tick); break;
     case 'action': driver.pressAction(step.action); break;

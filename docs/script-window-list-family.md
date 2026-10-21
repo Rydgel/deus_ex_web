@@ -252,9 +252,12 @@ Complete for the persona list screens; open items below.
 
 * **Load Game / Save Game** (MenuScreenLoadGame/SaveGame, MenuUIListWindow):
   reachable headless from MenuMain's buttons
-  (`--screens MenuScreenLoadGame,MenuScreenSaveGame`); both stop at native
-  3013 `DeusExPlayer.CreateGameDirectoryObject` (GameDirectory, the save-game
-  directory) — Stage 6.
+  (`--screens MenuScreenLoadGame,MenuScreenSaveGame`). Since 2026-10-21 Load
+  Game opens (empty by default, rows from a save directory the host supplies)
+  on the GameDirectory natives of [save-directory.md](save-directory.md); the
+  list, sorting, selection and info text it shows were compared with the
+  original's. Save Game's directory reads are the same natives; its
+  `SaveGame` (3011) and snapshot are Stage 6.
 * KeyPressed (hot keys) is reachable in Play since the typed-character
   route landed ([typed characters](script-window-typed-keys.md)); the Logs
   list's hot keys are checked by `validate-window-typed-key-play.mjs`. Its

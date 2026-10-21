@@ -82,11 +82,13 @@ function scalarDescriptor(parts, metadata = parts.metadata) {
     // indexes them: Decal.SurfList (non-owning int, Core UArrayProperty's
     // CopySingleValue int path) and DumpLocation.dumpFileDirectory (owning
     // FString elements, copied/destroyed per element by the recovered
-    // UStrProperty bodies). Dynamic indexing opcodes remain unsupported.
+    // UStrProperty bodies) and GameDirectory.loadedSaveInfoPointers (non-owning
+    // object pointers, UObjectProperty's pointer copy; docs/save-directory.md).
+    // Dynamic indexing opcodes remain unsupported.
     const innerType=inner?typeOf(inner):null;
     if(!inner||(inner.arrayDim??1)!==1||
-      !(innerType==='int'&&!(inner.flags&0x400000)||innerType==='string'))
-      fail(`Dynamic array values require a linked IntProperty or StrProperty inner for ${parts.key}`,parts,type);
+      !((innerType==='int'||innerType==='object')&&!(inner.flags&0x400000)||innerType==='string'))
+      fail(`Dynamic array values require a linked IntProperty, ObjectProperty or StrProperty inner for ${parts.key}`,parts,type);
     return {key:parts.key,type,metadata,elementSize:12,inner,innerType};
   }
   if (type === 'map') {
@@ -350,6 +352,7 @@ function copyScalar(value, descriptor, operation = 'copyValue') {
     case 'object': case 'class': return copyPointer(value);
     case 'array':
       if(!Array.isArray(value))throw new TypeError(`${operation} requires an Array for ${descriptor.key}`);
+      if(descriptor.innerType==='object')return value.map(copyPointer);
       return descriptor.innerType==='string'?value.map(item=>item==null?'':String(item)):value.map(item=>Number(item)|0);
     case 'struct': {
       const key = descriptor.structKey;

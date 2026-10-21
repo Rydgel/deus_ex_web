@@ -41,6 +41,8 @@ import { prepareCrateLifecycle } from './script-crate-lifecycle.mjs';
 import { runSpawnedActorFalling, runActorRolling, runActorRotation, runActorProjectile, runActorPathing } from './script-actor-physics.mjs';
 import { createLevelCollection } from './script-level-collection.mjs';
 import { createSaveStore, installTravelNatives } from './script-travel.mjs';
+import { prepareGameDirectoryStore } from './script-game-directory.mjs';
+import { hostSaveDirectory } from './save-directory.mjs';
 import { createTravelExporter, loadFlagClasses } from './travel-export.mjs';
 import { createTravelImporter } from './travel-import.mjs';
 
@@ -438,7 +440,7 @@ function stateLabelForTarget(mover) {
  */
 export async function createScriptDoors({
   assets, asset, movers = [], playerActor, playerScene, playerController, level, callbacks = {}, rng, queries, zoneAt, onLightingChanged = null,
-  nativeHud = false, musicLibrary = null, travel = null,
+  nativeHud = false, musicLibrary = null, travel = null, saveDirectory = null,
 } = {}) {
   if (!assets?.get) throw new TypeError('createScriptDoors requires an AssetStore');
   if (!level || typeof level !== 'object') throw new TypeError('createScriptDoors requires the linked Level object');
@@ -2197,6 +2199,9 @@ export async function createScriptDoors({
   // DeusExGameInfo.Login unconditionally runs native 3015
   // CreateDumpLocationObject on the logged-in player (docs/script-player-dump.md).
   await preparePlayerDumpStore({runtime,assets});
+  // The Load Game and Save Game screens' save-game directory (natives 3013 and 3075..3094, docs/save-directory.md): Play's Save directory,
+  // empty unless the host supplies one (the page's, which outlives the maps).
+  await prepareGameDirectoryStore({runtime,assets,directory:saveDirectory??hostSaveDirectory()});
   // A session that travels (Play, the travel validators) runs ClientTravel and DeleteSaveGameFiles as recovered; others keep their named stops.
   const saveStore=travel?createSaveStore({releaseLoaders:()=>logLine('Log',`Unloading: Package ${asset.name}`)}):null;
   if(travel)installTravelNatives({runtime,store:saveStore});

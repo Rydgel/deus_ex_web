@@ -270,6 +270,9 @@ needs a viewport actor and a `DeusExLevelInfo`; `package = CreatePackage(NULL, "
 `<SavePath>\Current`, and deletes every file in it (`FindFiles("<dir>\*.*")`; the directory itself stays). `CopySaveGameFiles(src, dst)` (`0x10010000`) copies every `*.dxs` of `src` to `dst`.
 `DeleteGame(n)` (`0x10010710`) deletes slot *n*.
 
+What the Load Game and Save Game screens *read* of this directory, the `GameDirectory` natives 3080-3094 behind it and Play's save-directory interface are in [save-directory](save-directory.md)
+(2026-10-21: the directory side of step 4; the screen opens from the default start with an empty directory, as the original does with no saves).
+
 ### LoadMap
 
 `UGameEngine::LoadMap` (`0x1038c1f0`) is covered where the stages needed it ([GameInfo selection](script-loadmap-gameinfo.md), [startup scheduler](script-loadmap-startup.md),
@@ -629,7 +632,7 @@ Those three stay named stops (below).
 * The console `OPEN` (`bItems` 0, `TRAVEL_Partial`): `SetClientTravel` as recovered; the tick's step throws `ClientTravelBoundary` without `travel` and with a live replay ([Stage 5 death proof](stage-5-exit-criteria.md#the-players-death-to-the-levels-end-2026-10-18)), and travels with it (`OPEN DX` and `OPEN DXONLY` are the `next == -1` wipe).
 * `PlayerTraveling`: a **host input for a cold open only** (Play's login supplies the fresh-mission marker, [Stage 3 exit criteria](stage-3-exit-criteria.md); Stage 5's replays delete it first); a map entered by travel gets it from the travel text, and a restart has none.
 * In the page: the logo map's Training and New Game travel (`00_Training`; `00_Intro`, then the Island by Escape or the intro's end). Same-mission travel (`MapExit`, `Teleporter`: `PruneTravelActors`, `SaveCurrentLevel(-2)`, a filed level restored) throws `TravelStop` at the `Browse` branch,
-  after the text is exported; `?loadgame=`, Play Intro (`dxonly`), Credits and Load Game are the later steps; an arrival whose text holds a class the import cannot construct stops in pass 1 by name (`UnsupportedTravelImportError`).
+  after the text is exported; `?loadgame=`, Play Intro (`dxonly`) and Credits are the later steps (the Load Game *screen* opens with an empty save directory since 2026-10-21, [save-directory](save-directory.md); loading a slot is step 4); an arrival whose text holds a class the import cannot construct stops in pass 1 by name (`UnsupportedTravelImportError`).
 
 ## Unresolved
 
@@ -690,7 +693,7 @@ Play needs its own level snapshot (the object image: actors and their state, mov
 set ([Unresolved](#unresolved) 5) and on the actor census; the restored log has no begin-play lines.
 
 **4. Save and load.** `SaveGame` (`SaveInfo` object, `Current` copied to the slot, the live level with the player written into the slot), `QuickSave`/`QuickLoad` (`-1`), `LoadGame` (`?loadgame=N`: slot copied over `Current`, saved level loaded with `?load?loadonly?loadgame`, no travel import, `Login` skips
-`ResetPlayerToDefaults`), `DeleteGame`, the `GameDirectory` natives 3080-3094 and the Load/Save screens (script-window-list-family already runs them), the snapshot texture, `ConsoleCommand("SAVEGAME n")`; then export/import of a slot as a file, a format version, and the storage-failure messages.
+`ResetPlayerToDefaults`), `DeleteGame`, the `GameDirectory` natives 3080-3094 and the Load/Save screens (*done for the directory side, 2026-10-21*: [save-directory](save-directory.md); the store's `put`/`remove` are where `SaveGame` and `DeleteGame` land), the snapshot texture, `ConsoleCommand("SAVEGAME n")`; then export/import of a slot as a file, a format version, and the storage-failure messages.
 **Check:** the slot's files equal the measured listing (`SaveInfo.dxs` + the copied maps + the live level), `SaveInfo` fields equal, save -> load -> state equality, and the Stage 5 death proof's load menu.
 
 **5. The remaining entries and the campaign.** The intro and endgames (`MissionIntro`/`MissionEndgame` set `PlayerTraveling` themselves), credits and `dxonly`, death -> `DXONLY` -> menu, the Hong Kong `MapExit` pairs, the four `MapExit`s without a destination, the mission-specific `PreTravel`s (`Mission02/08/10`), and the per-mission compatibility

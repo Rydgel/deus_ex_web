@@ -80,13 +80,13 @@ the markers; the JSON report with every native, its callers and the probe outcom
 |---|---|---|---|---|---|
 | ConSys | 11 | 10 | 1 | 0 | 0 |
 | Core | 165 | 131 | 4 | 25 | 5 |
-| DeusEx | 57 | 17 | 19 | 3 | 18 |
+| DeusEx | 57 | 34 | 19 | 3 | 1 |
 | DeusExText | 12 | 12 | 0 | 0 | 0 |
 | Editor | 13 | 0 | 0 | 0 | 13 |
 | Engine | 158 | 85 | 20 | 29 | 24 |
 | Extension | 453 | 372 | 16 | 65 | 0 |
 | IpDrv | 22 | 0 | 0 | 0 | 22 |
-| **all** | **891** | **627** | **60** | **122** | **82** |
+| **all** | **891** | **644** | **60** | **122** | **65** |
 
 ### Dispatchers
 
@@ -111,16 +111,20 @@ the markers; the JSON report with every native, its callers and the probe outcom
 | triggers | play-host | 16 | src/runtime/script-triggers.mjs |
 | player-log | play-host | 1 | src/runtime/script-player-log.mjs |
 | player-dump | play-host | 2 | src/runtime/script-player-dump.mjs |
+| game-directory | play-host | 17 | src/runtime/script-game-directory.mjs |
 | travel | play-host | 1 | src/runtime/script-travel.mjs |
 | play-hud | play-host | 4 | src/runtime/script-play-hud.mjs |
 | weapon-overlay | play-host | 1 | src/viewer/weapon-overlay-sim.mjs |
 
-Handled only under a condition or for some receivers (27):
+Handled only under a condition or for some receivers (30):
 
 - 2051 ConSys.Conversation.CreateConCamera: a live ConPlay/DataLinkPlay owns the receiver; a Conversation receiver
 - 3002 DeusEx.DeusExPlayer.CreateHistoryObject: a live ConPlay/DataLinkPlay owns the receiver
 - 3003 DeusEx.DeusExPlayer.CreateHistoryEvent: a live ConPlay/DataLinkPlay owns the receiver
 - 3012 DeusEx.DeusExPlayer.DeleteSaveGameFiles: a session that travels (the save store)
+- 3080 DeusEx.GameDirectory.GetGameDirectory: the Save directory (GD_Maps, the developer's map list, stops by name)
+- 3088 DeusEx.GameDirectory.GetSaveInfo: one SaveInfo of the package loaded at a time (a second load of the export stops by name)
+- 3089 DeusEx.GameDirectory.GetSaveInfoFromDirectoryIndex: one SaveInfo of the package loaded at a time (as 3088)
 - 262 Engine.Actor.SetCollision: actors with the spawn collision view; the map actors with the native flag word are play-native's; a map actor with the native +0x1dc flag word (script-actor-collision.mjs)
 - 264 Engine.Actor.PlaySound: a live ConPlay/DataLinkPlay owns the receiver; Play declares 264 a host boundary native (script-doors.mjs boundaryNatives), so this body serves harnesses; Play's PlaySound is the play-native one; an emitter with a measured or modeled global object index plays through Galaxy; another is a recorded no-audio boundary; the speech PlaySound of ConPlay and DataLinkPlay
 - 268 Engine.Actor.SetInstantSoundVolume: a live ConPlay/DataLinkPlay owns the receiver
@@ -320,10 +324,10 @@ Handled only under a condition or for some receivers (27):
 
 ### Excluded
 
-#### Owner: stage-6 (19)
+#### Owner: stage-6 (2)
 
-- **saves and GameDirectory** (18): 3011 DeusExPlayer.SaveGame, 3013 DeusExPlayer.CreateGameDirectoryObject, 3075 DeusExSaveInfo.UpdateTimeStamp, 3080 GameDirectory.GetGameDirectory, 3081 GameDirectory.GetNewSaveFileIndex, 3082 GameDirectory.GenerateSaveFilename, 3083 GameDirectory.GenerateNewSaveFilename, 3084 GameDirectory.GetDirCount, 3085 GameDirectory.GetDirFilename, 3086 GameDirectory.SetDirType, 3087 GameDirectory.SetDirFilter, 3088 GameDirectory.GetSaveInfo, 3089 GameDirectory.GetSaveInfoFromDirectoryIndex, 3090 GameDirectory.GetTempSaveInfo, 3091 GameDirectory.DeleteSaveInfo, 3092 GameDirectory.PurgeAllSaveInfo, 3093 GameDirectory.GetSaveFreeSpace, 3094 GameDirectory.GetSaveDirectorySize
 - **core: object** (1): Object.GetConfig (by name)
+- **saves and GameDirectory** (1): 3011 DeusExPlayer.SaveGame
 
 #### Owner: multiplayer (49)
 
@@ -382,26 +386,33 @@ game, is recorded with its message, and the page is rebooted and the route repla
 menu's Training, Intro and Quit, the Yes of the message boxes MenuMain raises for them, and Start Game (their paths are
 `validate-travel-newgame-play` and [travel](travel.md)); gestures are also kept off those buttons' rectangles.
 
-One run (37 minutes, `.work/native-menu-sweep.json`): **21 screens (15 classes), 618 gestures on 782 windows (summed per screen); 10 gestures stopped the
+First run (37 minutes, `.work/native-menu-sweep.json`; **before the Load Game natives of [save-directory](save-directory.md)**): **21 screens (15 classes), 618 gestures on 782 windows (summed per screen); 10 gestures stopped the
 game, for 6 distinct reasons**: two unsupported natives (3013 and the name-bound `GetDefaultURL`) and four stops that are not
 natives. Every screen with a title window gets a title click and drag; none of them stopped (native 1472 is handled).
 
 | stop | where | what it is |
 |---|---|---|
-| native **3013** `DeusExPlayer.CreateGameDirectoryObject` | MenuMain, Load Game button (`MenuScreenLoadGame.GetSaveGameDirectory`) | census: excluded, stage-6; **reached from the default start** |
+| native **3013** `DeusExPlayer.CreateGameDirectoryObject` | MenuMain, Load Game button (`MenuScreenLoadGame.GetSaveGameDirectory`) | census: excluded, stage-6; **reached from the default start**. *Fixed 2026-10-21 (see the second run below).* |
 | name-bound native `PlayerPawn.GetDefaultURL` (native 0) | MenuMPMain button 2 (`menuchoice_class.SetInitialClass`) | census: missing-reachable, engine base; multiplayer menu |
 | script function not prepared: `UWindow.UWindowList.SetupSentinel` | MenuMPMain buttons 0 and 1 | not a native: Play prepares no UWindow class, which the multiplayer server list derives from |
 | host service: "XButtonWindow auto-repeat tick requires mouse-input services" | Customize Keys, the two `ButtonWindow`s (auto-repeat scroll arrows) | `Window.EnableAutoRepeat` (1595) is handled; its tick needs the mouse-input service (`script-window-family-draw.mjs`) |
 | engine exec command "UWindowsViewport::Exec ToggleFullscreen" | Display, the full-screen choice | the `ConsoleCommand` chain (`script-console-command.mjs`), not a script native |
 | engine exec command "USystem::Exec RELAUNCH -changevideo" | Display, the render-device message box's OK | same |
 
-Of the 25 menu window classes (not counting the choice and message-box windows) the sweep reached 13 and did **not** reach 12: Load Game (blocked at 3013: its next natives are
+Of the 25 menu window classes (not counting the choice and message-box windows) the first run reached 13 and did **not** reach 12: Load Game (blocked at 3013: its next natives are
 3080, 3086, 3084, 3088, 3089, 3091, 3093 and 3094), Save Game (the main menu's button is insensitive without a running game; its
 natives are 3011, 3075, 3090, 1524 and `Object.GetConfig`), the multiplayer Host, Join and Player Setup screens (behind the
 MenuMPMain stops above), and the colour-theme screens (`MenuScreenRGB` and Themes Load/Save are opened only by
 `DeusExPlayer.ShowRGBDialog`; no control of Adjust Colors reached it). Every other screen of the main menu's tree (Settings and its
 six screens, Brightness, Credits, New Game with its difficulty screen and message boxes, the multiplayer menu itself) ran clean
 or stopped for one of the reasons above.
+
+**Second run, 2026-10-21** (30 minutes, `.work/native-menu-sweep-after.json`, after the nine natives and the rest of the GameDirectory family): **22 screens (16 classes), 650 gestures on 810 windows; 8 gestures stopped the game,
+for 5 distinct reasons**: 3013 is gone and nothing replaced it. The Load Game screen opens from MenuMain with the empty save directory and its 28 windows take 32 gestures with no stop (its Cancel button returns to MenuMain);
+the sweep now reaches 14 of the 25 classes and not 11. What is left is the list above without its first row: `GetDefaultURL` (multiplayer menu), `UWindowList.SetupSentinel` (multiplayer menu), the auto-repeat tick's mouse-input service
+(Customize Keys), `TOGGLEFULLSCREEN` and `RELAUNCH` (Display). Behind Load Game there is nothing to reach until a save exists: with the two saves of the Wine capture its rows, selection and info text match the original's
+([save-directory](save-directory.md)); its Load Game button (`DeusExPlayer.LoadGame` -> `ConsoleCommand("LoadGame n")`) and the delete confirmation are not pressed by the sweep with an empty list and need a store with saves (travel step 4).
+Save Game opened from a running game (Training) now runs the same directory natives and stops one step later, at the name-bound `Object.GetConfig` of `GenerateNewSnapShot` (not in the main menu's tree on the logo map, where its button is insensitive).
 
 Negative control: with the FindWindow branch of `script-window-host.mjs` switched off (not committed), a one-screen run stops on
 MenuMain with the message the user met, "Unsupported original door native 1472 in menuuiwindow.mousebuttonpressed", on a plain
@@ -417,8 +428,9 @@ current boundary).
 
 Menus and the default start first, because the user meets them first; then ordinary play; the rest waits for its stage.
 
-1. **The Load Game screen from the default start** (stage 6 owns the save directory, but the screen opens from DX.dx and is the
-   one stop on that path). Nine natives: 3013 `CreateGameDirectoryObject`, 3080 `GetGameDirectory`, 3086 `SetDirType`, 3084
+1. **The Load Game screen from the default start** — *DONE 2026-10-21 ([save-directory](save-directory.md): the nine natives and the rest of the family 3081-3083, 3085, 3087, 3090, 3092 and 3075, over a save-directory interface that is empty by
+   default and compared with the original under Wine, rows and registry slots included; the second sweep shows no stop; `SaveGame` 3011, `Object.GetConfig` and 1524 remain).* (Stage 6 owns the save directory, but the screen opens from DX.dx and was the
+   one stop on that path.) Nine natives: 3013 `CreateGameDirectoryObject`, 3080 `GetGameDirectory`, 3086 `SetDirType`, 3084
    `GetDirCount`, 3088 `GetSaveInfo`, 3089 `GetSaveInfoFromDirectoryIndex`, 3091 `DeleteSaveInfo`, 3093 `GetSaveFreeSpace`, 3094
    `GetSaveDirectorySize`; an empty directory (a browser store with no saves) opens it. The rest of the family follows with
    saving: 3011 `SaveGame`, 3075 `UpdateTimeStamp`, 3090 `GetTempSaveInfo`, 3081-3083, 3085, 3087, 3092, `Object.GetConfig` and

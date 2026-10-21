@@ -23,6 +23,7 @@
  * Everything the page must apply between frames goes to the session's
  * event queue (sim-session.mjs events). */
 import { createGame } from './game.mjs';
+import { primeSaveDirectoryHost } from './save-directory-host.mjs';
 import { handleLimit, releaseHandleRange } from '../runtime/script-object-handles.mjs';
 import { createSimSession } from './sim-session.mjs';
 import { createActorMeshSim } from './actor-mesh-sim.mjs';
@@ -48,6 +49,8 @@ export async function createSimHost(map, asset, assets, { randomSeed, subtitles,
   onProgress = () => {} }) {
   const events = [], notes = [], hostIndex = hostStarts.push(handleLimit()) - 1;
   let game;
+  // GetSaveFreeSpace is synchronous: the browser's storage estimate is read here, once per session (save-directory-host.mjs)
+  await primeSaveDirectoryHost();
   try {
     game = await createGame(map, asset, assets, { presentation: true, randomSeed, subtitles, musicLibrary, travel,
       onLightingChanged: changes => events.push({ kind: 'lighting', changes }),

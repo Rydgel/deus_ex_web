@@ -178,6 +178,7 @@ import {execObjectLog} from './script-log.mjs';
 import {execVRand} from './script-vrand.mjs';
 import {execRotRand} from './script-rot-rand.mjs';
 import {parseToken} from './script-console-command.mjs';
+import {GAME_DIRECTORY} from './script-game-directory.mjs';
 // A spawned actor's +0x1ec word over its object image (actor-flag-words.mjs);
 // null for a class without linked offsets (an isolated harness), whose
 // collision view composes the same bools from their fields.
@@ -948,6 +949,10 @@ export class ScriptRuntime {
       // = DConHistory::Destroy 0x1000ca20 deleting every event from firstEvent, the three FString members, the DConObject vtable, ConditionalDestroy
       // again and ~UObject), then ??3UObject(this, 0x5c). The class member teardown only frees native storage the host does not have, which is what
       // deleteObject is (docs/script-loadmap-gc.md "ConHistory CriticalDelete"; the events own destructor 0x10014730 is the same shape).
+      this.deleteObject(target);
+    } else if (object.nativeVtable === GAME_DIRECTORY.vtable) {
+      // XGameDirectory (DeusEx vtable 0x10027e58, slot +0x0c = 0x10013260, flags 1): ~XGameDirectory 0x10012c30 (the vtable, ConditionalDestroy = XGameDirectory::Destroy
+      // 0x100170d0: PurgeAllSaveInfo and the temp SaveInfo, then UObject::Destroy; the FString and array members; ~UObject), then ??3UObject(this, 0x54).
       this.deleteObject(target);
     } else throw new Error(`CriticalDelete deleting destructor is not recovered for native vtable 0x${(object.nativeVtable >>> 0).toString(16)}`);
     return undefined;
@@ -3055,6 +3060,9 @@ export class ScriptRuntime {
   /** Reflected reference traversal only. A native class Serialize override
    * must separately route its UObject header, native members and base hook. */
   serializeReferences(receiver,archive,options={}) {
+    // A native Serialize that is not the reflective one (XGameDirectory::Serialize 0x100171c0 writes only its directory list: no object reference)
+    const native=this.instance(receiver).nativeObject?.serializeReferences;
+    if(typeof native==='function')return native(archive,options);
     return serializeScriptReferences(this.instance(receiver).cls.propertyLink,
       descriptor=>this.fieldReference(receiver,descriptor.field),archive,options);
   }
