@@ -25,6 +25,7 @@ import {TRAINING_NPC_IDENTITIES} from '../runtime/training-npc-identities.mjs';
 import {SETUP,setupSequence} from '../runtime/bsp-occlusion.mjs';
 import {createMeshLod,lodFrame} from './actor-mesh-lod.mjs';
 import {createWeaponAttachments} from './actor-weapon-sim.mjs';
+import {classicMeshBindingSteps} from './actor-umesh-sim.mjs';
 import {lodMorphScalars,RENDER_LOD_SETTINGS} from '../runtime/lodmesh-lod.mjs';
 
 // A binding's block of render.rs mesh_reads words (u32 indices).
@@ -165,7 +166,7 @@ function* meshBindingSteps(runtime,actor,{id,originalObjectIndex,kernel=null,dra
   childVisible=null,lighting=null,layout=null,reads=false,textures,meshKey=null,lod=true,attach=null}) {
   const own=fieldAccessors(runtime,actor,['bHidden','bDeleteMe','Location','PrePivot','DrawScale','Mesh','Style',
     'ScaleGlow','bAnimByOwner','Owner','bParticles','Rotation','AnimSequence','AnimFrame','BlendAnimSequence',
-    'BlendAnimFrame','Name','bOnlyOwnerSee','bOwnerNoSee','DrawType','LODBias']);
+    'BlendAnimFrame','Name','bOnlyOwnerSee','bOwnerNoSee','DrawType','LODBias','Fatness']);
   // A pawn's third-person weapon (actor-weapon-sim.mjs, docs/weapon-attachment.md): DrawActorSprite draws the
   // weapon with its ThirdPersonMesh swapped into Mesh, ThirdPersonScale into DrawScale and the pawn's Style, and
   // DrawMesh gets the hand's Coords: `attach.overrides` replace those reads, `attach.coords(frame)` is the Coords
@@ -176,6 +177,10 @@ function* meshBindingSteps(runtime,actor,{id,originalObjectIndex,kernel=null,dra
   const meshReference=attach?attach.mesh():read(actor,'Mesh');
   const meshTexture=index=>attach?runtime.getMeshTextureOf(meshReference,actor,index):runtime.getActorMeshTexture(actor,index);
   const payload=yield {mesh:meshReference};
+  // One of the game's five classic UMesh meshes: its own CPU binding (actor-umesh-sim.mjs, docs/umesh.md).
+  if(payload.payloadStatus==='decoded-mesh')
+    return yield* classicMeshBindingSteps(runtime,actor,payload,{id,originalObjectIndex,visible,childVisible,drawActor,lighting,meshKey,own,read,
+      meshReference,meshTexture,actorName,helpers:{copyPositions,setMeshBounds,SETUP},notResident:NOT_RESIDENT});
   // GetFrame's tween cache must survive draw submissions; it owns only this
   // binding's identity (docs/npc-mesh-preview.md).
   const cache=createLodMeshFrameCache(),coords=[0,0,0,1,0,0,0,1,0,0,0,1];

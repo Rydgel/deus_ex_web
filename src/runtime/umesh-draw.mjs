@@ -110,7 +110,7 @@ export function drawUMesh(mesh,points,{frame,polyFlags,setup={flags:0},fatness=0
     codes[i]=outcode(point[i*3],point[i*3+1],point[i*3+2],frame.prj);
     all&=codes[i];
   }
-  const result={visible:[],draws:[],lightCalls:[],allOutside:all!==0};
+  const result={visible:[],draws:[],lightCalls:[],allOutside:all!==0,vertexLight:lit};
   if(all)return result; // 0x10b0dad4
   // Face normals of every triangle (0x10b0db49..0x10b0dc6d).
   const normals=triangles.map(tri=>{

@@ -17,6 +17,7 @@ import {ActorMeshTextures} from './actor-mesh-textures.mjs';
 import {POLY} from '../unreal/geometry.mjs';
 import {decodeLodMeshPayload} from '../runtime/lodmesh-payload.mjs';
 import {readLodMeshSurfaces} from '../runtime/lodmesh-materials.mjs';
+import {readUMeshSurfaces} from '../runtime/umesh-surfaces.mjs';
 import {displayRampGlsl} from './light-atlas.mjs';
 import {meshVertexNormalsInto,writeMeshEnvironmentUV} from '../runtime/mesh-environment.mjs';
 import {copyMeshLightColors} from './mesh-light-colors.mjs';
@@ -33,7 +34,8 @@ function meshSource(assets,cache,mesh) {
   if(entry)return entry;
   const build=asset=>{
     const payload=decodeLodMeshPayload(asset.pkg,asset.bytes,mesh.index);
-    const faces=readLodMeshSurfaces(payload),faceWords=new Uint32Array(faces.length*4);
+    // A classic UMesh (docs/umesh.md) has its triangles for surfaces.
+    const faces=payload.payloadStatus==='decoded-mesh'?readUMeshSurfaces(payload):readLodMeshSurfaces(payload),faceWords=new Uint32Array(faces.length*4);
     faces.forEach((face,i)=>faceWords.set([...face.vertices,face.flags>>>0],i*4));
     return {payload,faces,faceWords,asset};
   };
@@ -74,7 +76,7 @@ export function createMeshDraw(assets,creation,{gpu=null,texturePool,batches=nul
   function core(){
     if(disposed)return;
     const {payload,faces,faceWords}=source;
-    if(creation.environment)faceIndices=Uint32Array.from(faces.flatMap(face=>face.vertices));
+    if(creation.environment&&!creation.classic)faceIndices=Uint32Array.from(faces.flatMap(face=>face.vertices));
     if(mode==='gpu'){
       gpuHandle=gpu.allocate(payload,faceWords,{environment:creation.environment,key:creation.mesh.key});
       bases={vbase:gpuHandle.vbase,cbase:gpuHandle.cbase};
@@ -142,7 +144,7 @@ export function createMeshDraw(assets,creation,{gpu=null,texturePool,batches=nul
       if(mode==='cpu'){group.mesh.visible=!group.lodEmpty;if(group.twin)group.twin.visible=!group.lodEmpty&&group.split;}
     }
     cameraOn.value=cameraFor===shown?1:0;
-    if(creation.environment)updateNormals(state);
+    if(creation.environment&&!creation.classic)updateNormals(state);
   };
   // The corners' U and V bytes: the LOD's packed wedge dwords, or the faces'.
   const lodUVs=(state=latest)=>{
@@ -158,6 +160,24 @@ export function createMeshDraw(assets,creation,{gpu=null,texturePool,batches=nul
           else{uv.array[at]=face.uv[corner][0]/256;uv.array[at+1]=face.uv[corner][1]/256;}
           at+=2;
         }
+      }
+      uv.needsUpdate=true;
+    }
+  };
+  /** A classic mesh's environment-mapped corners' U and V (actor-umesh-sim.mjs): the original face helper's
+   * values for each face's corners, in the group's reflected corner order (0,2,1). */
+  const applyEnvUv=envUv=>{
+    if(!envUv)return;
+    for(const group of groups){
+      if(!group.environment)continue;
+      const uv=group.geometry.getAttribute('uv'),array=uv.array;
+      let at=0;
+      for(const faceIndex of group.faces){
+        const s=faceIndex*6;
+        array[at]=envUv[s];array[at+1]=envUv[s+1];
+        array[at+2]=envUv[s+4];array[at+3]=envUv[s+5];
+        array[at+4]=envUv[s+2];array[at+5]=envUv[s+3];
+        at+=6;
       }
       uv.needsUpdate=true;
     }
@@ -232,7 +252,8 @@ export function createMeshDraw(assets,creation,{gpu=null,texturePool,batches=nul
     if(gpuHandle){gpu.release(gpuHandle);gpuHandle=null;}
   }
   const updateView=cameraPosition=>{
-    if(disposed||!ready||!root.visible||!creation.environment||!cameraPosition||mode!=='cpu'||!points)return false;
+    // A classic mesh's environment UVs come in its records (applyEnvUv), from DrawMesh's own camera-space reflection.
+    if(disposed||!ready||!root.visible||!creation.environment||creation.classic||!cameraPosition||mode!=='cpu'||!points)return false;
     const relative=[0,0,0],normal=[0,0,0];
     for(const group of groups)if(group.flags&POLY.Environment){
       const uv=group.geometry.getAttribute('uv'),indices=shown.lod?.resolved&&group.lodIndices?group.lodIndices:group.indices;
@@ -353,7 +374,7 @@ export function createMeshDraw(assets,creation,{gpu=null,texturePool,batches=nul
     if(disposed){dispose();return;}
     setSpheres(latest.spheres);
     if(mode==='cpu'){
-      if(creation.environment)updateNormals();
+      if(creation.environment&&!creation.classic)updateNormals();
       if(creation.path==='gpu')toCpuApplied();
     }
     ready=true;
@@ -372,13 +393,14 @@ export function createMeshDraw(assets,creation,{gpu=null,texturePool,batches=nul
     if(mode==='cpu'&&latest.posed)cpuPositions();
     if(mode==='gpu'&&latest.groups)groups.forEach((group,i)=>showGroup(group,Boolean(latest.groups[i])));
     if(latest.colors)applyColors(latest.colors);
+    applyEnvUv(latest.envUv);
     applyCamera(latest.cameraPoints);
     if(latest.childOnly){root.visible=false;hideBatched();}
   }
   const built=(sourceEntry.ready?Promise.resolve():sourceEntry.pending.then(asset=>{source=sourceEntry.ready;core();}))
     .then(build).catch(error=>{onError({actor:`${actorName}`,message:error.message});dispose();});
   return {id,root,built,get ready(){return ready;},get path(){return mode;},dispose,updateView,
-    get viewDependent(){return creation.environment&&mode==='cpu';},
+    get viewDependent(){return creation.environment&&mode==='cpu'&&!creation.classic;},
     /** Validation access (main.mjs meshLod): the faces this binding's
      * geometry draws under the LOD and their distinct vertices, the groups
      * the LOD empties and whether the root is shown. */
@@ -418,6 +440,7 @@ export function createMeshDraw(assets,creation,{gpu=null,texturePool,batches=nul
       if(record.spheres)latest.spheres=record.spheres;
       if(record.colors)latest.colors=record.colors;
       latest.cameraPoints=record.cameraPoints??null;
+      if(record.envUv)latest.envUv=record.envUv;
       const lodChanged=record.lod!==undefined;
       if(lodChanged)latest.lod=record.lod.resolved?record.lod:null;
       if(plan&&mode==='gpu'&&!record.toCpu){if(gpuHandle)gpu.setPose(gpuHandle,plan);else if(!source)pendingPlans.push(plan);}
@@ -446,6 +469,7 @@ export function createMeshDraw(assets,creation,{gpu=null,texturePool,batches=nul
       if(mode==='gpu'&&latest.groups)groups.forEach((group,i)=>showGroup(group,Boolean(latest.groups[i])));
       const environmentUpload=updateView(cameraPosition);
       if(record.colors)applyColors(record.colors);
+      applyEnvUv(record.envUv);
       applyCamera(latest.cameraPoints);
       // Hidden from the main pass until a child pass shows it.
       if(record.childOnly){root.visible=false;hideBatched();}
