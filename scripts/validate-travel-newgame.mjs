@@ -20,11 +20,12 @@
  * intro's own end (the conversation sets Intro_Played; MissionIntro.Timer calls PostIntro); D the defaults, then the cheat console lines (credits, skills,
  * augmentations, images, a NanoKeyInfo, a note, a goal) and the two travels; E a typed name, Realistic, a portrait and a skill, then non-default item
  * properties set on the live objects, two keys, two notes, two goals and the two travels; F three items picked up by the real frob path (the Island's soda can,
- * liquor bottle and crowbar: invPosX/Y, invSlots) and the two travels.
+ * liquor bottle and crowbar: invPosX/Y, invSlots) and the two travels; G the "train first?" box (answered No) and Escape twice on the Island; H the console's
+ * `StartNewGame` from Training Combat (the test input the first captures used). Each scenario is its own process (a scenario's level sessions are not freed).
  *
  * runner-timeout: 2400
  *
- *   node scripts/validate-travel-newgame.mjs [--only A|B|C|D|E|F|G] [--dump DIR] */
+ *   node scripts/validate-travel-newgame.mjs [--only A|B|C|D|E|F|G|H] [--dump DIR] */
 import assert from 'node:assert/strict';
 import { readdir, readFile, writeFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
@@ -44,7 +45,7 @@ if (!only) {
   const { spawnSync } = await import('node:child_process');
   const argv = process.argv.slice(2);
   let status = 0;
-  for (const id of ['A', 'B', 'C', 'D', 'E', 'F', 'G']) {
+  for (const id of ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H']) {
     const run = spawnSync(process.execPath, [process.argv[1], '--only', id, ...argv], { stdio: 'inherit' });
     if (run.status !== 0) status = run.status ?? 1;
   }
@@ -255,7 +256,7 @@ const nameAndMedicine = async ({ c, driver, scoped }) => {
   scoped(() => driver.pressField('btnUpgrade')); c.frames(5);   // Medicine
 };
 
-const CAPTURED = { A: 'nw0', B: 'nw0', C: 'nw0', D: 'nw0', E: 'nw1', F: 'nw2', G: 'nw3' };
+const CAPTURED = { A: 'nw0', B: 'nw0', C: 'nw0', D: 'nw0', E: 'nw1', F: 'nw2', G: 'nw3', H: 'nw4' };
 const wanted = id => (!only || only === id) && (existsSync(`${captureRoot}${CAPTURED[id]}/final.log`) || (console.log(`SKIP ${id}: no ${CAPTURED[id]} captures`), false));
 
 if (wanted('A')) {
@@ -319,6 +320,41 @@ if (wanted('G')) {
       island.key('Escape'); island.frames(20);
       check(driver.top() === 'deusex.menumain', `G: the second Escape on the Island opened ${driver.top()} (the original: MenuMain)`);
       console.log('Escape twice on the Island: nothing, then MenuMain'); } });
+}
+
+if (wanted('H')) {
+  // The console's `StartNewGame <map>`, the test input the first captures used (s1/n1-island-frozen came from it): from the logo map `LocalTravel 00_TrainingCombat`
+  // (the 96-record text), 8 s in Combat, then StartNewGame typed in the frozen... level; the player carries Combat's history (default expiration 1), so its Island
+  // text differs from the New Game path's in exactly those flags (compare n8 with n1b: CombatDifficulty, bIgnoreNextShowMenu, the flag expirations).
+  console.log('--- H: the console StartNewGame from Training Combat');
+  const { c } = await openSession('DX', assets, { travel: {} });
+  c.frames(120);
+  typed(c, 'LocalTravel 00_TrainingCombat'); c.frames(2);
+  const toCombat = c.takeTravel();
+  if (check(toCombat?.map === '00_TrainingCombat', `H: LocalTravel requested ${toCombat?.map}`)) {
+    const combat = await arrive('00_TrainingCombat', toCombat);
+    typed(combat, 'set LevelInfo bPlayersOnly True'); combat.frames(10);
+    const atCombat = flagsOf(combat), measuredCombat = await measuredFlags('nw4', 'n8-combat-frozen');
+    check(same(atCombat.flags, measuredCombat.flags) && atCombat.defaultExpiration === measuredCombat.defaultExpiration, `H: Combat flags at arrival ${JSON.stringify(atCombat)} (measured ${JSON.stringify(measuredCombat)})`);
+    typed(combat, 'set LevelInfo bPlayersOnly False'); combat.frames(480);
+    const liveCombat = flagsOf(combat), measuredLive = await measuredFlags('nw4', 'n8-combat-live');
+    check(same(liveCombat.flags, measuredLive.flags) && liveCombat.defaultExpiration === measuredLive.defaultExpiration, `H: Combat flags after 8 s ${JSON.stringify(liveCombat)} (measured ${JSON.stringify(measuredLive)})`);
+    typed(combat, 'StartNewGame 01_NYC_UNATCOIsland'); combat.frames(2);
+    const toIsland = combat.takeTravel();
+    if (check(toIsland?.map === '01_NYC_UNATCOIsland', `H: StartNewGame requested ${toIsland?.map}`)) {
+      await compareText('H', 'Island', 'nw4', 'n8-island-frozen', toIsland.travelInfo[0][1]);
+      // the first captures' text of this path (s1/n1-island-frozen, from a player that had also been Combat -> Training -> Combat): equal to n8 after normalization
+      if (existsSync(`${captureRoot}s1/n1-island-frozen.travel.txt`)) await compareText('H', 'Island (the first capture, s1/n1)', 's1', 'n1-island-frozen', toIsland.travelInfo[0][1]);
+      const island = await arrive('01_NYC_UNATCOIsland', toIsland);
+      typed(island, 'set LevelInfo bPlayersOnly True'); island.frames(10);
+      const atIsland = flagsOf(island), measuredIsland = await measuredFlags('nw4', 'n8-island-frozen');
+      check(same(atIsland.flags, measuredIsland.flags) && atIsland.defaultExpiration === measuredIsland.defaultExpiration, `H: Island flags at arrival ${JSON.stringify(atIsland)} (measured ${JSON.stringify(measuredIsland)})`);
+      typed(island, 'set LevelInfo bPlayersOnly False'); island.frames(480);
+      const afterIsland = flagsOf(island), measuredAfter = await measuredFlags('nw4', 'n8-island-live');
+      check(same(afterIsland.flags, measuredAfter.flags) && afterIsland.defaultExpiration === measuredAfter.defaultExpiration, `H: Island flags after the first timer ${JSON.stringify(afterIsland)} (measured ${JSON.stringify(measuredAfter)})`);
+      console.log('Island flags at arrival:', atIsland.flags.join(' '), `(default expiration ${atIsland.defaultExpiration}); after:`, afterIsland.flags.join(' '), `(default expiration ${afterIsland.defaultExpiration})`);
+    }
+  }
 }
 
 if (failures.length) { console.log(`FAIL validate-travel-newgame:\n  ${failures.join('\n  ')}`); process.exit(1); }

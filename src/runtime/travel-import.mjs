@@ -7,7 +7,10 @@
  *      class '<class>'` and the record is ignored; a PlayerPawn class stands for the new player (the one Login made); an Actor class is
  *      SpawnActor(Class, None, Owner = player, Instigator = None, player.Location, player.Rotation, bNoCollisionFail), a failure
  *      logging `Failed to spawn travelling class`; the Extension flag objects become the player's flag store (below); any other
- *      class is an explicit stop. Each object is entered in a table with its record's `Ptr`.
+ *      class is StaticConstructObject(Class, Outer = player, NAME_None, 0, NULL), which is the script's `new(Self) class'X'`
+ *      (ScriptRuntime.newObject: DeusExNote, DeusExGoal and NanoKeyInfo, the Object subclasses of a player's notes, goals and keys); a
+ *      class the runtime has no constructor for (a native one: ConHistory) is an explicit stop. Each object is entered in a table with
+ *      its record's `Ptr`.
  *   2. properties: every stored line, the property found in the object's class chain among those with CPF_Travel (a missing or
  *      non-travel property is ignored); an object property with a hex pointer is remembered for pass 3, `None` is stored; any other
  *      property is ImportText of the value.
