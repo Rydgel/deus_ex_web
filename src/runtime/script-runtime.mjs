@@ -26,6 +26,7 @@ import { destroyScriptProperty } from './script-property-destroy.mjs';
 import { createAllActorsIterator, createTraceActorsIterator, createTraceVisibleActorsIterator, createTraceTextureIterator, createRadiusActorsIterator, createVisibleActorsIterator, createVisibleCollidingActorsIterator, createBasedActorsIterator, createCycleActorsIterator } from './script-iterators.mjs';
 import { actorRadiusCheck } from './collision-hash-radius.mjs';
 import { scriptTrace, scriptFastTrace } from './script-trace.mjs';
+import { execParabolicTrace, levelParabolicServices } from './script-actor-parabolic-trace.mjs';
 import { setActorTimer, updateActorTimer } from './script-timers.mjs';
 import { sleepActor, pollActorSleep } from './script-sleep.mjs';
 import { probeNames, probeIndex } from '../unreal/probe-names.mjs';
@@ -3770,6 +3771,22 @@ export class ScriptRuntime {
       const level=this.levelFor(source),model=level?.model;
       if(!model)throw new Error('FastTrace requires the live level BSP model');
       return scriptFastTrace(model,source,end,start,level.fastLineCheck);
+    }
+    if(call.index===722){
+      // execParabolicTrace 0x1036e190 -> worker 0x1036c0a0 (docs/parabolic-trace.md): the argument defaults from the
+      // receiver, then the stepped trace over the live zone table (level.pointRegion) and ULevel::MultiLineCheck
+      // (the collision hash). The result is the float32 time; finalLocation is written through the out slot.
+      return execParabolicTrace(call,{
+        read:(actor,name)=>this.readNamed(actor,name),
+        services:actor=>{
+          const level=this.levelFor(actor);
+          const services=level?.hash&&typeof level.pointRegion==='function'
+            ?levelParabolicServices(level,(zone,name)=>this.readNamed(zone,name)):null;
+          // A validator may wrap the two level services to record their answers (validate-parabolic-trace-play).
+          return services&&typeof this.observeParabolicServices==='function'?this.observeParabolicServices(services,actor):services;
+        },
+        refValue,writeSlot,
+      });
     }
     if(call.index===721){
       // execInStasis 1036d320 consumes EndFunctionParms and directly calls
