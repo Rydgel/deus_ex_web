@@ -66,13 +66,13 @@ export function* classicMeshBindingSteps(runtime,actor,payload,ctx) {
   if(partition.error)throw new Error(`${actorName} ${partition.error}`);
   for(const [groupKey,group] of partition.groups) {
     try {
-      const {data,flags}=yield {skin:group};
+      const {data}=yield {skin:group};
       const first=data.mips[0],scale=data.values.Scale??1;
       // FTextureInfo (UTexture::Lock): the base size, UScale/VScale, and the texture's PolyFlags whose Masked bit DrawMesh adds.
-      infos.set(group.reference.key,{uSize:first.width,vSize:first.height,uScale:scale,vScale:scale,flags:flags&POLY.Masked});
+      infos.set(group.reference.key,{uSize:first.width,vSize:first.height,uScale:scale,vScale:scale,flags:data.values.bMasked?POLY.Masked:0});
       const indices=[];
       for(const faceIndex of group.faces){const face=faces[faceIndex];for(const corner of [0,2,1])indices.push(face.vertices[corner]);}
-      groups.set(groupKey,{key:groupKey,reference:group.reference,flags:group.flags,drawFlags:flags,faces:group.faces,indices,
+      groups.set(groupKey,{key:groupKey,reference:group.reference,flags:group.flags,faces:group.faces,indices,
         environment:Boolean(group.flags&POLY.Environment),sphere:new THREE.Sphere(),positions:null,bounds:{}});
     } catch(error) {
       if(error===notResident)throw error;
