@@ -158,6 +158,13 @@ const PERCEPTION = new Map([
 // October 1 small natives (natives.rs): GetStateName, LastRendered,
 // InStasis. The Actor fields LastRendered and InStasis read, with their kinds.
 const SMALL_NATIVES = new Set([284, 723, 721]);
+/** Every native index this lowering can hand to the Rust interpreter as a kind of its own (operators, increments,
+ * compound assignments, the composite operators, IsA, the short-circuit pair, the perception and small natives and the
+ * GC natives gc.rs runs). Each runs the body its JavaScript case has, so the list is src/runtime/native-registry.mjs's
+ * `rust` layer: a native outside it, or outside the JavaScript dispatchers, never reaches a Rust kind. */
+export const RUST_LOWERED_NATIVES = Object.freeze([...new Set([303, 130, 132, ...OPERATORS.keys(), ...INCREMENTS.keys(),
+  ...COMPOUNDS.keys(), ...COMPOSITE_OPERATORS.keys(), ...VCOMPOUNDS.keys(), ...PERCEPTION.keys(), ...SMALL_NATIVES,
+  ...GC_RUST_NATIVES.keys()])].sort((a, b) => a - b));
 const STASIS_FIELDS = [['engine.actor.lastrendertime', 'float'], ['engine.actor.bstasis', 'bool'], ['engine.actor.physics', 'byte'],
   ['engine.actor.bforcestasis', 'bool'], ['engine.actor.distancefromplayer', 'float']];
 // Cast tokens: [kind code, operand kind, result kind].
