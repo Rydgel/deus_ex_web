@@ -180,7 +180,8 @@ through `GetFrame`, `DrawMesh`, `Light`, the face helper's reflection and Play's
 
 Two observations from getting the frames equal. `DXLogo3`'s `Rotation` never changed in the headless runs: a rotating actor
 with `bStasis` is ticked only while its `LastRenderTime` is recent, and a classic mesh drawn by nobody never stamped it, so
-before this change the logo could not turn; the page now stamps it (`actorRenderFeedback`) and a live run turns it (the first frame
+before this change the logo could not turn (stamping the field each tick in a headless run turns `DXLogo3` to yaw 36,848 in 30
+ticks, the original's value); the page now stamps it (`actorRenderFeedback`) and a live run turns it (the first frame
 I took, `dxend-play.png`, shows another yaw). And the original's frame is a held tick: the bolt and the logo's yaw are states of it,
 which is why Play's frozen run sets the yaw.
 
