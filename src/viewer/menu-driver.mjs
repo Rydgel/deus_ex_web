@@ -99,6 +99,48 @@ export function createMenuDriver(game) {
       if (spec.row !== undefined) return {x: x + 20, y: y + (spec.row + 0.5) * W.f32(win, 0x19c)};
       return {x: x + W.f32(win, 0xe4) / 2, y: y + W.f32(win, 0xe8) / 2};
     },
+    /** Every window under the topmost modal window and the window itself, for a sweep that clicks them (scripts/census-ui-menus.mjs):
+     * script class, ancestry up to Extension.Window (class keys), absolute bounds as `center` reads them, and the visible, sensitive
+     * and selectable bits (+0x30 bits 0, 1 and 2). The first entry is the top window, depth 0. `menu` is what the menu's own tables
+     * say each button does (MenuUIMenuWindow.buttonDefaults with winButtons, MenuUIWindow.actionButtons: the action enum value, the
+     * text key, the screen class invoked, and the button's index in `windows`); `roles` maps a message box's fields (btnYes, btnNo,
+     * btnOK) to indices in `windows`; `mode` is the top window's messageBoxMode byte (EMessageBoxModes), `parentClass` and `parentMode` those of its owner (a message box's winNotify, else its parent). */
+    controls() {
+      const top = topWindow();
+      if (!top) return null;
+      const out = [], at = new Map();
+      const describe = (win, depth) => {
+        const chain = [];
+        for (let cls = runtime.instance(win).cls; cls && cls.record.key !== 'core.object'; cls = cls.base) {
+          chain.push(cls.record.key);
+          if (cls.record.key === 'extension.window') break;
+        }
+        const flags = W.u32(win, 0x30);
+        at.set(win, out.length);
+        out.push({class: chain[0], chain, depth, x: W.f32(win, 0xd4), y: W.f32(win, 0xd8), w: W.f32(win, 0xe4), h: W.f32(win, 0xe8),
+          visible: Boolean(flags & 1), sensitive: Boolean(flags & 2), selectable: Boolean(flags & 4)});
+      };
+      const walk = (win, depth) => {
+        for (let child = W.ptr(win, 0x13c); child; child = W.ptr(child, 0x148)) { describe(child, depth); walk(child, depth + 1); }
+      };
+      describe(top, 0);
+      walk(top, 1);
+      const read = (win, name) => { try { return runtime.readNamed(win, name); } catch { return undefined; } };
+      const field = (entry, suffix) => Object.entries(entry).find(([key]) => key.toLowerCase().endsWith(suffix))?.[1];
+      const buttons = read(top, 'winButtons') ?? [];
+      const menu = {
+        buttons: (read(top, 'buttonDefaults') ?? []).map((entry, i) => ({action: field(entry, '.action'), text: field(entry, '.text') ?? null,
+          invoke: field(entry, '.invoke')?.key ?? null, window: at.get(buttons[i]) ?? null})),
+        actionButtons: (read(top, 'actionButtons') ?? []).map(entry => ({action: field(entry, '.action'), key: field(entry, '.key') ?? null,
+          text: field(entry, '.text') ?? null, window: at.get(field(entry, '.btn')) ?? null})),
+      };
+      const roles = {};
+      for (const name of ['btnYes', 'btnNo', 'btnOK']) { const win = read(top, name); if (win && at.has(win)) roles[name] = at.get(win); }
+      // A message box notifies its owner window (winNotify), which holds the mode; any other window has its parent.
+      const parent = read(top, 'winNotify') ?? W.ptr(top, 0x138);
+      return {windows: out, menu, roles, mode: read(top, 'messageBoxMode') ?? null, parentClass: parent ? keyOf(parent) : null,
+        parentMode: parent ? read(parent, 'messageBoxMode') ?? null : null};
+    },
     /** A button field of the topmost window (a message box's `btnYes`/`btnNo`/`btnOK`), activated. */
     pressField(field) {
       const button = runtime.readNamed(topWindow(), field);

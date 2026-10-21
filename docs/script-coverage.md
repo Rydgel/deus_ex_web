@@ -27,21 +27,21 @@ their named/native-hook route; they cannot be treated as one shared native-zero
 implementation. The inventory does not resolve every virtual call or count its
 runtime frequency.
 
-The report counts a direct native index as supported only when the VM has a
-dispatch path for it: the primitive switch in `script-vm.mjs`, or a branch in
-one of the runtime's native dispatch sites (`ScriptRuntime.invokeNative`, its
-latent-poll and iterator routes, the installed window host, the Play host
-`nativeCall` and its trigger/ConPlay handlers, and the player-log, HUD and
-overlay native overrides). The script reads those site bodies with comments and
-string contents blanked, so it cannot count an index that only a comment or
-module metadata names. `bindings` keeps the catalogued scope for the common
-runtime, triggers, doors, decorations, sound, animation, windows and
-conversation, attaches each entry's dispatch sites, and lists routed indices
-that have no catalogued scope under `dispatched`. A catalogued entry with no
-dispatch site makes the script exit nonzero. A listed binding does not
-establish every branch of that native.
+Which natives Play handles is no longer counted from a catalogue kept in this
+script: that catalogue drifted (the script stopped running when a dispatcher
+moved). The declaration is `src/runtime/native-registry.mjs`: for each
+dispatcher of the `invokeNative` chain (the VM primitive switch, the runtime's
+branches, latent polls and iterators, the window host, the Play host
+`nativeCall`, the trigger/ConPlay handlers and the log, dump, travel, HUD and
+overlay overrides) the indices and function keys its code routes, which
+`test/native-registry.test.mjs` compares with the code on every `npm test`. This
+script reads the registry for its supported-index count; a listed index can
+still be partial or conditional (`partial`, `when`). The per-native census of
+all 891 declarations, by status, family and caller, is
+[native-census.md](native-census.md) (`scripts/census-natives.mjs`).
 
-The 2026-09-23 inventory routes **324 of the 581** direct indices (115
+
+[Superseded by the census; kept as the 2026-09-23 record.] The 2026-09-23 inventory routes **324 of the 581** direct indices (115
 primitives, 209 through dispatch sites), covering 37,975 of 39,280 decoded
 direct call sites. **257 indices (1,305 call sites) have no dispatch path.**
 Nineteen of the routed indices are this date's window-host additions, verified

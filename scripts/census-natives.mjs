@@ -10,10 +10,12 @@
  * A missing-reachable native is `single-player` when some caller is ordinary game code and `developer` when every caller is a
  * developer tool (the cheat and debug windows, which only a cheat console command opens).
  *
- *   node scripts/census-natives.mjs [--json .work/native-census.json] [--markdown .work/native-census.md] [--probe FILE]
+ *   node scripts/census-natives.mjs [--json .work/native-census.json] [--markdown .work/native-census.md] [--probe FILE] [--doc docs/native-census.md]
+ *
+ * `--doc FILE` rewrites the region of FILE between its `census:begin` and `census:end` markers with the generated numbers and lists.
  *
  * `--probe FILE` merges the outcome of scripts/probe-natives.mjs (every native sent through the live invokeNative chain). */
-import {readFile, writeFile, mkdir} from 'node:fs/promises';
+import {readFile, readdir, writeFile, mkdir} from 'node:fs/promises';
 import path from 'node:path';
 import {openSystemPackages, scriptPackageNames, scanNativeCalls, resolveCalls} from './native-reachability.mjs';
 import {handledNatives, NATIVE_SITES, RUST_NATIVES, LATENT_POLLS} from '../src/runtime/native-registry.mjs';
@@ -129,7 +131,18 @@ const registry = handledNatives();
 const rustSet = new Set([...RUST_NATIVES.lowered, ...RUST_NATIVES.aiEvents]);
 const latentPolls = new Map(Object.entries(LATENT_POLLS).map(([index, poll]) => [Number(index), poll]));
 
-const sitesByFunction = new Map();
+// Translated bodies: modules that declare `nativeIndex: N` (a recovered native body with its validator). A native with a module
+// but no dispatcher has its body written and not wired; the registry test and the probe both treat it as missing.
+const translated = new Map();
+for (const directory of ['src/runtime', 'src/viewer']) {
+  for (const file of (await readdir(directory)).filter(name => name.endsWith('.mjs'))) {
+    const text = await readFile(path.join(directory, file), 'utf8');
+    for (const match of text.matchAll(/nativeIndex:\s*(0x[0-9a-fA-F]+|\d+)/g)) {
+      const index = Number(match[1]);
+      if (index > 0 && !(translated.get(index) ?? []).includes(`${directory}/${file}`)) translated.set(index, [...(translated.get(index) ?? []), `${directory}/${file}`]);
+    }
+  }
+}
 const rows = [];
 for (const {declaration: decl, sites, via, callers} of reach.values()) {
   const key = decl.key.toLowerCase();
@@ -150,6 +163,7 @@ for (const {declaration: decl, sites, via, callers} of reach.values()) {
     callerKinds: Object.fromEntries([...kinds].map(kind => [kind, callerList.filter(caller => caller.kind === kind).length])),
     callers: callerList,
     note: NOTES.get(key) ?? null,
+    translatedBy: decl.index ? translated.get(decl.index) ?? [] : [],
     status: null, owner: null, reach: null,
   };
   if (handledBy.length) row.status = 'handled';
@@ -184,6 +198,7 @@ const summary = {
   handledNumbered: rows.filter(row => row.status === 'handled' && row.index).length,
   handledNameBound: rows.filter(row => row.status === 'handled' && !row.index).length,
   handledAndRust: rows.filter(row => row.status === 'handled' && row.rust).length,
+  missingWithTranslatedBody: rows.filter(row => row.status !== 'handled' && row.translatedBy.length).map(row => `${row.index} ${row.function}`),
   handledNeverCalled: rows.filter(row => row.status === 'handled' && !row.callSites).length,
   sharedIndices: Object.fromEntries([...rows.reduce((map, row) => row.index ? map.set(row.index, [...(map.get(row.index) ?? []), row.key]) : map, new Map())]
     .filter(([, keys]) => keys.length > 1)),
@@ -237,7 +252,7 @@ const section = (title, list) => {
   let text = `#### ${title} (${list.length})\n\n`;
   for (const [fam, members] of [...byFamily].sort((a, b) => b[1].length - a[1].length || a[0].localeCompare(b[0]))) {
     text += `**${fam}** (${members.length})\n\n| native | called from | note |\n|---|---|---|\n`;
-    for (const row of members) text += `| ${label(row)} | ${callerSummary(row)} | ${row.note ?? ''} |\n`;
+    for (const row of members) text += `| ${label(row)} | ${callerSummary(row)} | ${[row.note, row.translatedBy.length ? `translated body, not wired: ${row.translatedBy.join(', ')}` : null].filter(Boolean).join(' ')} |\n`;
     text += '\n';
   }
   return text;
@@ -281,8 +296,18 @@ const md = [
   ['stage-6', 'multiplayer', 'editor'].map(owner => compact(`Owner: ${owner}`, rows.filter(row => row.status === 'excluded' && row.owner === owner))).join(''),
   '### Missing and unreachable\n\n',
   compact('No shipped script calls them', rows.filter(row => row.status === 'missing-unreachable')),
+  `Natives with a translated body (a module declaring \`nativeIndex\`) that no dispatcher routes (${summary.missingWithTranslatedBody.length}): ${summary.missingWithTranslatedBody.join(', ')}\n\n`,
 ].join('');
 await writeFile(option('markdown', '.work/native-census.md'), md);
+// --doc FILE: replace the region between the census markers of the document with the generated numbers and lists.
+const docFile = option('doc', null);
+if (docFile) {
+  const text = await readFile(docFile, 'utf8');
+  const begin = '<!-- census:begin -->', end = '<!-- census:end -->';
+  const from = text.indexOf(begin), to = text.indexOf(end);
+  if (from < 0 || to < from) throw new Error(`${docFile} has no ${begin} ... ${end} region`);
+  await writeFile(docFile, `${text.slice(0, from + begin.length)}\n\n${md.trim()}\n\n${text.slice(to)}`);
+}
 
 console.log(JSON.stringify(summary.status), JSON.stringify({numbered: summary.numbered, nameBound: summary.nameBound}));
 console.log('missing-reachable', JSON.stringify(summary.missingReachable), 'excluded', JSON.stringify(summary.excluded));
