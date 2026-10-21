@@ -20,7 +20,7 @@
  * validate-stage5-live.mjs --prepare per map before the pool starts (docs/stage-5-exit-criteria.md "Running"). The pool takes the longest checks first (the
  * last run's time, .cache/stage5-gate-timings.json, else the scene's ticks), never two runs of one scene at once (its replay and its --frames replay share the
  * scene's files), and bounds memory by each check's whole process tree (Chromium included, which Playwright starts in its own process group):
- * a check starts only while the pool's reservations (each check's last peak, .cache/stage5-gate-memory.json, else its map's largest; PSS on Linux) and the
+ * a check starts only while the pool's reservations (each check's last peak, .cache/stage5-gate-memory.json, else its map's median; PSS on Linux) and the
  * census fit under --mem-budget (default 16384 MiB, at most half the RAM; an Island replay holds about 7 GB, a Training one about 4); past the budget the
  * newest check is stopped and queued again to run with less beside it, and a check whose tree passes --mem-cap (default 20480 MiB: swm1's, 2,400 ticks,
  * passes 12 GiB) fails. Rows are reported in their order, and a validator several rows name runs once. Each check's whole output goes to
@@ -142,11 +142,12 @@ for (const signal of ['SIGINT', 'SIGTERM', 'SIGHUP']) process.on(signal, () => s
 
 /** A check in the pool: its key (the dedup and the caches'), its scene (one run of a scene at a time) and its expected time (the longest first). */
 const exec = (command, args, {limitSeconds = 1800, key, label = key, scene = null, estimate = 60} = {}) => new Promise(resolve => {
-  // (a check never run reserves the largest peak of its map's checks: an Island replay's tree holds about 7 GB, a Training one's 4)
+  // (a check never run reserves the median peak of its map's checks, an Island replay's about 7 GB and a Training one's 4: the largest, swm1's 13 GB, would
+  // leave room for one Island replay at a time; one that grows past its reservation is caught by the measured total)
   const map = scene ? SCENES[scene]?.map : null;
-  const mapPeak = Math.max(0, ...Object.entries(peaks).filter(([other]) => map && SCENES[/--scene (\S+)/.exec(other)?.[1]]?.map === map).map(([, peak]) => peak));
+  const mapPeaks = Object.entries(peaks).filter(([other]) => map && SCENES[/--scene (\S+)/.exec(other)?.[1]]?.map === map).map(([, peak]) => peak).sort((a, b) => a - b);
   const job = {command, args, limitSeconds, key, label, scene, resolve, seconds: timings[key] ?? estimate,
-    predicted: Math.min(peaks[key] ?? (mapPeak || 4096), budget)};
+    predicted: Math.min(peaks[key] ?? mapPeaks[mapPeaks.length >> 1] ?? 4096, budget)};
   total++;
   // (longest first with --jobs > 1; one at a time, the rows' order)
   const index = jobs > 1 ? queue.findIndex(other => other.seconds < job.seconds) : -1;
