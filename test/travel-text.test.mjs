@@ -94,6 +94,20 @@ test('malformed texts are refused by name', () => {
   assert.throws(() => parseTravelText('Class=A.B Name=B0 Ptr=00000001\n{\nx=1\n'), /not closed/);
 });
 
+test('the frame-time values compare by presence when asked', () => {
+  // The original's New Game text at the Island carries `saveTime=0.006523` (its own tick delta); Play's fixed step writes another number.
+  const a = 'Class=DeusEx.JCDentonMale Name=JCDentonMale1 Ptr=00000001\n{\nsaveTime=0.006523\nLastConEndTime=413.335846\nHealth=75\n}\n';
+  const b = a.replace('0.006523', '0.016667').replace('413.335846', '133.283340');
+  assert.deepEqual(firstTravelTextDifference(a, b), { line: 3, expected: 'saveTime=0.006523', actual: 'saveTime=0.016667' });
+  assert.equal(firstTravelTextDifference(a, b, { times: true }), null);
+  assert.match(normalizeTravelText(a, { times: true }), /saveTime=<time>\nLastConEndTime=<time>\nHealth=75/);
+  // absence is a difference (a default of 0 is not written): the value is masked, the property is not
+  const absent = a.replace('saveTime=0.006523\n', '');
+  assert.equal(firstTravelTextDifference(a, absent, { times: true }).line, 3);
+  // other floats are never masked
+  assert.ok(firstTravelTextDifference(a, a.replace('Health=75', 'Health=76'), { times: true }));
+});
+
 test('the value of a measured dump is extracted', () => {
   const dump = ['Level MyLevel slot 1 at 0x1', '  URL.Map: entry.dx', '  TravelInfo: 0 pairs', 'Level MyLevel slot 2 at 0x2', '  URL.Map: 00_Training',
     '  TravelInfo: 1 pairs, hash 0x1 count 8', '  [0] key: Player', '  [0] value:', ...MEASURED.trimEnd().split('\n'), '  [0] end', ''].join('\n');

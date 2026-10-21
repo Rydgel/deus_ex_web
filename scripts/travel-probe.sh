@@ -11,6 +11,8 @@
 #     snap:<label>              save directory listing, engine log, player flags, travel text -> .work/travel/<tag>/<label>.*
 #     actors:<name>:<label>     tools/dump-actor-win.c for objects named like <name> -> .work/travel/<tag>/<label>.actors.txt
 #     shot:<name>               the game's Shot key -> .work/travel/<tag>/<name>.png
+#     key:<name> | type:<text> | click:<x y> | move:<x y>   dxinput key (ESC, ENTER ...), text, / mouse (viewport client coordinates; the viewport is 1280x720)
+#     follow:<file>             run the steps appended to <file> (one per line) until a `quit` line: an interactive session
 #   The game starts on DX.dx whatever the command line says (the logo map): a session that wants another map starts with `cmd:open <map>`.
 #   Console lines are typed through the Talk key and can lose characters on a loaded host: check each step's effect with `arrive`/`snap`.
 #   DX_KEEP_SAVE=1 leaves Save/ as the session left it (default: the files this session created in Save/ are removed at the end).
@@ -61,12 +63,29 @@ for _ in $(seq 1 60); do
 done
 PID=$(game_pids | head -1)
 sleep 5
-for step in "${STEPS[@]}"; do
+run_step() {
+  local step=$1 kind arg
   kind=${step%%:*}; arg=${step#*:}
   case $kind in
-    cmd|arrive|snap|shot) scripts/travel-step.sh "$OUT" "$kind" "$arg" ;;
+    cmd|arrive|snap|shot|key|type|click|move) scripts/travel-step.sh "$OUT" "$kind" "$arg" ;;
     actors) scripts/travel-step.sh "$OUT" actors "${arg%%:*}" "${arg#*:}" ;;
     wait) sleep "$arg" ;;
     *) echo "unknown step $step" >&2 ;;
+  esac
+}
+for step in "${STEPS[@]}"; do
+  case $step in
+    follow:*)   # steps appended to a file by hand (a session driven interactively): until a `quit` line
+      file=${step#follow:}; done_lines=0
+      while :; do
+        total=$(wc -l < "$file" 2>/dev/null || echo 0)
+        while [ "$done_lines" -lt "$total" ]; do
+          done_lines=$((done_lines + 1)); line=$(sed -n "${done_lines}p" "$file")
+          [ "$line" = quit ] && break 2
+          [ -n "$line" ] && run_step "$line"
+        done
+        sleep 1
+      done ;;
+    *) run_step "$step" ;;
   esac
 done

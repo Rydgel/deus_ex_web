@@ -95,7 +95,14 @@ export function createTravelImporter({ runtime, assets, level, exporter, log, pr
         if (!object) { log('Log', `Failed to spawn travelling class '${record.class}'`); continue; }
         entry.object = object;
       } else if (lower(cls.record.key).startsWith('extension.flag')) entry.flag = true;
-      else throw new UnsupportedTravelImportError(`SpawnPlayActor: the travelling class ${record.class} is neither a PlayerPawn, an Actor nor a flag object`, { class: record.class });
+      else {
+        // Any other class: StaticConstructObject(Class, Outer = player, NAME_None, 0, NULL, GError), which is the `new(Self) class'X'` of
+        // ScriptRuntime.newObject (DeusExNote, DeusExGoal and NanoKeyInfo are the script-only Object subclasses a player's lists hold).
+        try { entry.object = runtime.newObject({ outer: player, name: 'None', flags: 0, classRef: cls.record }); }
+        catch (error) {
+          throw new UnsupportedTravelImportError(`SpawnPlayActor: the travelling class ${record.class} is neither a PlayerPawn, an Actor, a flag object nor an Object subclass the runtime constructs (${error.message})`, { class: record.class });
+        }
+      }
       entries.push(entry);
       table.set(record.ptr, entry);
     }
