@@ -20,6 +20,7 @@ import {createServer} from 'vite';
 import {fileURLToPath} from 'node:url';
 import {writeFileSync} from 'node:fs';
 import {gameDirectory} from './game-directory.mjs';
+import { debugUrl } from './page-url.mjs';
 
 const option = (name, fallback) => { const i = process.argv.indexOf(`--${name}`); return i < 0 ? fallback : process.argv[i + 1]; };
 try { gameDirectory(); } catch { console.log('SKIP validate-mirrors-play: no installed game data'); process.exit(0); }
@@ -56,7 +57,7 @@ try {
   // --query a=1&b=2: viewer switches, e.g. simVerify=1 (docs/sim-worker.md).
   // Play's default mode: the simulation in the worker. The player is moved and hidden through deusExViewer.placeProbe
   // (decal-probe.mjs); the renderer, the world and the camera are the page's own.
-  await page.goto(`${url.replace(/\/$/, '')}/${option('query', null) ? `?${option('query', null)}` : ''}`);
+  await page.goto(debugUrl(`${url.replace(/\/$/, '')}/${option('query', null) ? `?${option('query', null)}` : ''}`));
   await page.waitForFunction(() => window.deusExViewer?.status().ready, {}, {timeout: 240000});
   const frames = n => page.evaluate(async n => { for (let k = 0; k < n; k++) await new Promise(r => requestAnimationFrame(r)); }, n);
   // The mirror's CSS-pixel screen rectangle, from its mesh bounds.

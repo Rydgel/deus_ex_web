@@ -22,6 +22,7 @@ import {existsSync, mkdirSync, readFileSync, renameSync, writeFileSync} from 'no
 import path from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {CAMERAS, ORDER, VIEWS, WAIT_CMD, baseOf} from './interface-views.mjs';
+import { debugUrl } from './page-url.mjs';
 
 const root = fileURLToPath(new URL('..', import.meta.url));
 const out = path.join(root, '.work/acceptance');
@@ -86,7 +87,7 @@ async function play() {
     // The original's frames have no multisampling and no detail pass (visual-acceptance.md "Detail textures"): Play's defaults stay, the comparison turns both off.
     const query = ['hold=1', option('antialias', 'off') === 'on' ? '' : 'antialias=0',
       option('detail', 'off') === 'on' || /detailTextures=/.test(option('query', '')) ? '' : 'detailTextures=0', option('query', '')].filter(Boolean).join('&');
-    await page.goto(`${url}/?${query}`);
+    await page.goto(debugUrl(`${url}/?${query}`));
     await page.waitForFunction(() => window.deusExViewer?.status().ready, {}, {timeout: 240000});
     if (await page.evaluate(() => window.deusExViewer.status().map) !== map) {
       await page.locator('#map').selectOption(map);

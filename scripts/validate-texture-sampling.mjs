@@ -13,6 +13,7 @@
 import assert from 'node:assert/strict';
 import {chromium} from '@playwright/test';
 import {createServer} from 'vite';
+import { debugUrl } from './page-url.mjs';
 
 const server = await createServer({configFile: false, publicDir: false, logLevel: 'error',
   server: {host: '127.0.0.1', port: 0, strictPort: false}});
@@ -25,7 +26,7 @@ try {
   page.on('console', message => { if (message.type() === 'error') errors.push(message.text()); });
   await page.route('**/__texture_sampling_fixture__', route => route.fulfill({contentType: 'text/html',
     body: '<!doctype html><script type="module">import {runTextureSamplingFixture} from "/scripts/texture-sampling-fixture.mjs"; window.samplingResult = await runTextureSamplingFixture();</script>'}));
-  await page.goto(new URL('/__texture_sampling_fixture__', server.resolvedUrls.local[0]).href);
+  await page.goto(debugUrl(new URL('/__texture_sampling_fixture__', server.resolvedUrls.local[0]).href));
   await page.waitForFunction(() => window.samplingResult, {}, {timeout: 60_000});
   const result = await page.evaluate(() => window.samplingResult);
   assert.deepEqual(errors, []);

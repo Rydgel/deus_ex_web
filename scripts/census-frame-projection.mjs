@@ -18,6 +18,7 @@ import path from 'node:path';
 import {gameDirectory} from './game-directory.mjs';
 import {AssetStore} from '../src/unreal/assets.mjs';
 import {decodeMap} from '../src/unreal/map.mjs';
+import { debugUrl } from './page-url.mjs';
 
 const option = (name, fallback) => { const i = process.argv.indexOf(`--${name}`); return i < 0 ? fallback : process.argv[i + 1]; };
 const views = Number(process.argv.slice(2).find(arg => /^\d+$/.test(arg)) ?? 6), fov = Number(option('fov', 75)), dpr = Number(option('dpr', 1));
@@ -59,7 +60,7 @@ try {
     const spots = model.actors.filter(a => a.values.Location && /PathNode|PlayerStart|PatrolPoint/.test(a.className)).map(a => a.values.Location);
     const page = await browser.newPage({viewport: {width: 1024, height: 640}, deviceScaleFactor: dpr});
     const errors = []; page.on('pageerror', error => errors.push(error.message));
-    await page.goto(url);
+    await page.goto(debugUrl(url));
     await page.waitForFunction(() => window.deusExViewer?.status().ready, {}, {timeout: 240000});
     await page.locator('#map').selectOption(map);
     await page.waitForFunction(map => { const s = window.deusExViewer?.status(); return s?.ready && s.map === map; }, map, {timeout: 240000});

@@ -41,6 +41,7 @@ import { AssetStore } from '../src/unreal/assets.mjs';
 import { MUSIC_OP, OP_ARITY, MUSIC_SLACK, encodeMusicBatch, createMusicLibraryProxy, driveMusicLibrary }
   from '../src/runtime/galaxy-music-library.mjs';
 import { readMusicExport } from '../src/unreal/music-module.mjs';
+import { debugUrl } from './page-url.mjs';
 
 const option = (name, fallback) => { const i = process.argv.indexOf(`--${name}`); return i < 0 ? fallback : process.argv[i + 1]; };
 const root = fileURLToPath(new URL('..', import.meta.url));
@@ -240,7 +241,7 @@ async function openPage(query) {
   const errors = [];
   page.on('pageerror', error => errors.push(`pageerror: ${error.message}`));
   page.on('console', message => { if (message.type() === 'error') errors.push(`console: ${message.text()}`); });
-  await page.goto(`${url}/?${query}`);
+  await page.goto(debugUrl(`${url}/?${query}`));
   await page.waitForFunction(() => window.deusExViewer?.status().ready && window.deusExViewer.status().gameplay, {}, { timeout: 240000 });
   return { page, errors };
 }

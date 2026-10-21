@@ -19,6 +19,7 @@ import { chromium } from '@playwright/test';
 import { createServer } from 'vite';
 import { fileURLToPath } from 'node:url';
 import { gameDirectory } from './game-directory.mjs';
+import { debugUrl } from './page-url.mjs';
 
 const option = (name, fallback) => { const i = process.argv.indexOf(`--${name}`); return i < 0 ? fallback : process.argv[i + 1]; };
 try { gameDirectory(); } catch { console.log('SKIP validate-render-pass-script-play: no installed game data'); process.exit(0); }
@@ -41,7 +42,7 @@ try {
   const page = await browser.newPage({ viewport: { width: 1024, height: 640 } });
   const errors = []; page.on('pageerror', error => errors.push(error.message));
   const query = option('query', '');
-  await page.goto(`${url}/${query ? `?${query}` : ''}`);
+  await page.goto(debugUrl(`${url}/${query ? `?${query}` : ''}`));
   await page.waitForFunction(() => window.deusExViewer?.status().ready, {}, { timeout: 240000 });
   await page.locator('#map').selectOption('00_Training');
   await page.waitForFunction(() => { const s = window.deusExViewer?.status(); return s?.ready && s.map === '00_Training'; }, {}, { timeout: 240000 });

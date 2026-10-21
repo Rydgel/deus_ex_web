@@ -10,6 +10,7 @@ import path from 'node:path';
 import {chromium} from '@playwright/test';
 import {createServer} from 'vite';
 import {fileURLToPath} from 'node:url';
+import { debugUrl } from './page-url.mjs';
 
 const option = (name, fallback) => { const i = process.argv.indexOf(`--${name}`); return i < 0 ? fallback : process.argv[i + 1]; };
 const root = path.resolve(option('root', fileURLToPath(new URL('..', import.meta.url))));
@@ -26,7 +27,7 @@ let result;
 try {
   const page = await browser.newPage({viewport: {width: 1024, height: 640}});
   const errors = []; page.on('pageerror', error => errors.push(error.message));
-  await page.goto(`${url}/`);
+  await page.goto(debugUrl(`${url}/`));
   await page.waitForFunction(() => window.deusExViewer?.status().ready, {}, {timeout: 240000});
   await page.locator('#map').selectOption(map);
   await page.waitForFunction(map => { const s = window.deusExViewer?.status(); return s?.ready && s.map === map; }, map, {timeout: 240000});

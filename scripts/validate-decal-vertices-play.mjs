@@ -20,6 +20,7 @@ import { chromium } from '@playwright/test';
 import { createServer } from 'vite';
 import { fileURLToPath } from 'node:url';
 import { gameDirectory } from './game-directory.mjs';
+import { debugUrl } from './page-url.mjs';
 
 try { gameDirectory(); } catch { console.log('SKIP validate-decal-vertices-play: no installed game data'); process.exit(0); }
 const dir = fileURLToPath(new URL('..', import.meta.url));
@@ -42,7 +43,7 @@ try {
     const response = await route.fetch();
     await route.fulfill({ response, body: `${await response.text()}\nwindow.__deusDecals={get decals(){return decalScene;}};\n` });
   });
-  await page.goto(url);
+  await page.goto(debugUrl(url));
   await page.waitForFunction(() => { const s = window.deusExViewer?.status(); return s?.ready && s.map === '00_Training'; }, {}, { timeout: 300000 });
   const frames = n => page.evaluate(async n => { for (let k = 0; k < n; k++) await new Promise(r => requestAnimationFrame(r)); }, n);
   const shot = () => page.locator('#scene').screenshot();

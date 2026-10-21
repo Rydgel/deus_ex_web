@@ -16,6 +16,7 @@ import {createServer} from 'vite';
 import {fileURLToPath} from 'node:url';
 import {writeFile} from 'node:fs/promises';
 import {gameDirectory} from './game-directory.mjs';
+import { debugUrl } from './page-url.mjs';
 
 const option = (name, fallback) => { const i = process.argv.indexOf(`--${name}`); return i < 0 ? fallback : process.argv[i + 1]; };
 try { gameDirectory(); } catch { console.log('SKIP validate-mesh-path-frames: no installed game data'); process.exit(0); }
@@ -52,7 +53,7 @@ async function run(browser, testCase, query) {
   await page.addInitScript(() => { try { localStorage.setItem('deusex.uiHidden', '1'); } catch { /* storage unavailable */ } });
   try {
     await page.clock.install({time: INSTALL});
-    await page.goto(`${url}/?hold=1&seed=1&sim=inline${query}`);
+    await page.goto(debugUrl(`${url}/?hold=1&seed=1&sim=inline${query}`));
     await page.waitForFunction(() => window.deusExViewer?.status().ready, {}, {timeout: 240000});
     await page.evaluate(map => { const menu = document.getElementById('map'); menu.value = map; menu.dispatchEvent(new Event('change')); }, testCase.map);
     await page.waitForFunction(map => { const s = window.deusExViewer?.status(); return s?.ready && s.map === map && s.mode === 'play'; },

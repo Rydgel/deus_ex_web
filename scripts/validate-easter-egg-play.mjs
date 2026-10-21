@@ -25,6 +25,7 @@ import {mkdir} from 'node:fs/promises';
 import {fileURLToPath} from 'node:url';
 import {gameDirectory} from './game-directory.mjs';
 import {EASTER, RYDGEL_LOOKS} from '../src/viewer/easter-config.mjs';
+import { debugUrl } from './page-url.mjs';
 
 // Rydgel's look is one setting in easter-config.mjs ('trench' or 'suit'); the checks follow it.
 const look = RYDGEL_LOOKS[EASTER.rydgel.look], modNames = [];
@@ -51,7 +52,7 @@ async function open(browser, query) {
   await page.addInitScript(() => { try { localStorage.setItem('deusex.uiHidden', '1'); } catch { /* storage unavailable */ } });
   const target = new URL(base);
   for (const [key, value] of Object.entries(query)) target.searchParams.set(key, value);
-  await page.goto(target.href);
+  await page.goto(debugUrl(target.href));
   await page.waitForFunction(() => window.deusExViewer?.status().ready, {}, {timeout: 240000});
   await page.evaluate(map => { const menu = document.getElementById('map'); menu.value = map; menu.dispatchEvent(new Event('change')); }, EASTER.map);
   await page.waitForFunction(map => { const s = window.deusExViewer?.status(); return s?.ready && s.map === map && s.mode === 'play'; }, EASTER.map, {timeout: 240000});

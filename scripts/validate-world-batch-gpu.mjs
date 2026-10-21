@@ -2,6 +2,7 @@
 import assert from 'node:assert/strict';
 import {chromium} from '@playwright/test';
 import {createServer} from 'vite';
+import { debugUrl } from './page-url.mjs';
 
 // Standalone, bounded local server: the fixture needs only source modules and
 // generated textures, so this check does not require an installed game.
@@ -16,7 +17,7 @@ try {
   page.on('console', message => {if (message.type() === 'error') errors.push(message.text());});
   await page.route('**/__world_batch_fixture__', route => route.fulfill({contentType: 'text/html',
     body: '<!doctype html><script type="module">import {runWorldBatchGpuFixture} from "/scripts/world-batch-gpu-fixture.mjs"; window.batchPixels = await runWorldBatchGpuFixture();</script>'}));
-  await page.goto(new URL('/__world_batch_fixture__', server.resolvedUrls.local[0]).href);
+  await page.goto(debugUrl(new URL('/__world_batch_fixture__', server.resolvedUrls.local[0]).href));
   await page.waitForFunction(() => window.batchPixels, {}, {timeout: 30_000});
   const result = await page.evaluate(() => window.batchPixels);
   assert.deepEqual(errors, []);

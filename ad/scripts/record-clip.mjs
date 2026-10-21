@@ -13,6 +13,7 @@ import {createServer} from 'vite';
 import {mkdirSync, openSync, writeSync, closeSync} from 'node:fs';
 import path from 'node:path';
 import {fileURLToPath} from 'node:url';
+import { debugUrl } from '../../scripts/page-url.mjs';
 
 const root = fileURLToPath(new URL('../..', import.meta.url));
 const argv = process.argv.slice(2), scene = argv[0];
@@ -65,7 +66,7 @@ async function openPlay() {
   page.on('pageerror', error => errors.push(error.message));
   await page.addInitScript(() => { try { localStorage.setItem('deusex.uiHidden', '1'); } catch { /* storage unavailable */ } });
   await page.addInitScript(audioTap);
-  await page.goto(`${url}/?seed=1`);
+  await page.goto(debugUrl(`${url}/?seed=1`));
   await page.waitForFunction(() => window.deusExViewer?.status().ready, {}, {timeout: 240000});
   await page.evaluate(map => { const menu = document.getElementById('map'); menu.value = map; menu.dispatchEvent(new Event('change')); }, MAP);
   await page.waitForFunction(map => { const s = window.deusExViewer?.status(); return s?.ready && s.map === map && s.mode === 'play'; }, MAP, {timeout: 300000});

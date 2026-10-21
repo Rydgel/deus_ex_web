@@ -20,6 +20,7 @@ import {chromium} from '@playwright/test';
 import {createServer} from 'vite';
 import {fileURLToPath} from 'node:url';
 import {gameDirectory} from './game-directory.mjs';
+import { debugUrl } from './page-url.mjs';
 
 const option = (name, fallback) => { const i = process.argv.indexOf(`--${name}`); return i < 0 ? fallback : process.argv[i + 1]; };
 try { gameDirectory(); } catch { console.log('SKIP validate-live-visibility-play: no installed game data'); process.exit(0); }
@@ -39,7 +40,7 @@ const browser = await chromium.launch({args: [`--use-angle=${process.platform ==
 try {
   const page = await browser.newPage({viewport: {width: 1280, height: 720}, deviceScaleFactor: 1});
   const errors = []; page.on('pageerror', error => errors.push(error.message));
-  await page.goto(`${url}/?hold=1&seed=1`);
+  await page.goto(debugUrl(`${url}/?hold=1&seed=1`));
   await page.waitForFunction(() => window.deusExViewer?.status().ready, {}, {timeout: 240000});
   await page.locator('#map').selectOption(map);
   await page.waitForFunction(m => { const s = window.deusExViewer?.status(); return s?.ready && s.map === m; }, map, {timeout: 300000});
