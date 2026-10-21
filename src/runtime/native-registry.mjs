@@ -190,6 +190,21 @@ export const NATIVE_DECISIONS = Object.freeze([
       'its Conversation objects serialized, ConFlagRef chains included; Play prepares each chain from the package (script-conversation-face-live.mjs) and never imports a .con file.',
     evidence: 'native-census.json callers of 2050 (one: ConSys.Conversation.AddFlagRef; callers of AddFlagRef: none); execCreateFlagRef 0x10010600 (docs/script-conversation-construction.md).',
     reopen: 'importing a conversation source file (an editor feature, out of scope).'},
+  {native: 1524, name: 'RootWindow.GenerateSnapshot', decision: 'unsupported', date: '2026-10-21',
+    reason: 'Reachable, not implemented. Its callers: DeusExRootWindow.ShowSnapshot (every UI pause, but it calls the native only when ' +
+      'DeusExPlayer.UIBackground == 1; installed User.ini and DefUser.ini set UIBackground=0, "Render 3D", and the Game options screen\'s UI Background ' +
+      'choice can set 1, "Snapshot") and MenuScreenSaveGame.GenerateNewSnapShot (GenerateSnapshot(True), the save preview; Stage 6). The native ' +
+      '(Extension XRootWindow::GenerateSnapshot 0x10039410, exec 0x1003cf30, optional bFilter) reads the viewport\'s last rendered frame back through ' +
+      'the render device (RenDev vtable +0xa0, Viewports(0) SizeX x SizeY x 4 bytes), allocates or reuses a texture of the snapshot size rounded up to ' +
+      'powers of two (SetSnapshotSize, 1523, handled: +0x738/+0x73c), and fills it from the frame with an x87 resampling loop (a box filter with ' +
+      'bFilter, 0x10039a2c-0x10039d30). The root keeps the texture in DeusExRootWindow.snapshot as the raw background (SetRawBackground, 1516, handled) ' +
+      'with rendering disabled until HideSnapshot/UnPauseGame deletes it. Play\'s frame lives in the page\'s WebGL canvas, not in the simulation ' +
+      'worker, so there is no synchronous frame readback to give the native; selecting UI Background = Snapshot and then pausing stops the game on ' +
+      '"Unsupported original native 1524".',
+    evidence: 'dump-script-function.mjs DeusEx DeusExRootWindow.ShowSnapshot, MenuScreenSaveGame.GenerateNewSnapShot; System/User.ini line 30; ' +
+      'MenuChoice_UIBackground; x86 0x10039410-0x10039d30 (ReadPixels call at 0x100394bc); docs/settings-menus.md.',
+    reopen: 'a page-to-simulation frame readback (the frame before the pause, full size) and a bit-exact translation of the resampling loop against the ' +
+      'original with a stubbed ReadPixels; it belongs with the Save Game screen (docs/travel.md) and the UI Background choice.'},
 ]);
 
 /** Everything the registry handles, as sorted unique indices and function keys, with the entries that handle each. */
