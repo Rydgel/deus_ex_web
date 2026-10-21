@@ -188,14 +188,17 @@ time is the per-face work, not `GetFrame` and not the transfer: a lit actor's re
 pose, environment UVs; 67 to 153 KB) costs 0.02 to 0.04 ms in `structuredClone` (Node), and the page's total frame
 work stays 1.6 to 1.9 ms with or without the logos.
 
-**After** (the Rust kernel below, same host and page, interleaved A/B, 3 pairs of 42-second runs against merge fbf4930
-served from a second tree, medians of the per-second samples, ms per drawn frame):
+**After** (the Rust kernel below, same host and page, interleaved A/B, 7 pairs of 42-second runs against merge fbf4930
+served from a second tree (3 pairs, then 4 after the last edits; the two batches agree within 0.1 ms), medians of the
+per-second samples, ms per drawn frame; the host had other agents' work running):
 
 | Segment (samples per arm) | `actors` phase before / after | worker total before / after |
 | --- | ---: | ---: |
-| flight, Eidos logo in view (21) | 1.56 / 0.68 | 4.34 / 3.27 |
-| flight, Ion Storm logo in view (12) | 1.86 / 0.70 | 4.36 / 3.06 |
-| end pose and menu (57) | 1.97 / 1.33 | 4.84 / 4.14 |
+| flight, Eidos logo in view (49) | 1.52 / 0.72 | 4.37 / 3.29 |
+| flight, Ion Storm logo in view (28) | 1.79 / 0.70 | 4.23 / 3.06 |
+| end pose and menu (133) | 1.93 / 1.30 | 4.94 / 4.10 |
+
+The page's own frame work (main thread) is 1.6 to 2.0 ms in both arms.
 
 The classic bindings' own time after the port (the stats probe below, per drawn frame): 0.46 to 0.55 ms with the Eidos
 or Ion Storm logo lit, 0.43 ms at the end pose (setup 0.07, camera publication 0.075, DrawMesh 0.155 for three relights,
@@ -215,7 +218,7 @@ control flow, and the JavaScript translation stays as the reference and the fall
 
 | What | Where | Status |
 | --- | --- | --- |
-| `GetFrame`'s vertex loops (tween fill, interpolation, publication through a matrix) | the LodMesh kernel's `pose`, reached from `umesh-frame.mjs` (`services.kernel`, `publishUMeshOps`' `kernel`) | the unchanged original in the oracle: `validate-umesh-frame --wasm`, 79 calls, equal |
+| `GetFrame`'s vertex loops (tween fill, interpolation, publication through a matrix) | the LodMesh kernel's `pose`, reached from `umesh-frame.mjs` (`services.kernel`, `publishUMeshOps`' `kernel`) | the unchanged original in the oracle: `validate-umesh-frame` (each of its 79 calls also through the kernel), equal |
 | `DrawMesh`'s classic body to the face helper's per-corner results, `FLightManager::Light` and the packing of the colours and environment UVs | `native/lodmesh-kernel/src/umesh.rs` (`upload_umesh`, `umesh_draw`, `umesh_layout`), `src/runtime/umesh-wasm.mjs` | the JavaScript reference word for word: `validate-umesh-wasm`, which sits on the oracle through `drawUMesh` |
 | `SetupForActor`, the texture and environment-map lookups, the coordinate matrix, the cache control flow (sequence, tween, leases), the record | JavaScript (`actor-umesh-sim.mjs`, `umesh-frame.mjs`) | unchanged; SetupForActor's light choice is already Rust (`meshlight.rs`) |
 
@@ -257,7 +260,15 @@ once per triangle: the same values (nothing writes them in a DrawMesh), 8 % of t
   differ (expected words from `r24sum`, which the oracle covers).
 * `UMESH=verify validate-umesh-play`: Play's own calls (DX.dx's flight and the Island's flies), the kernel and the reference
   side by side, every colour, environment UV and point equal.
-* `test/umesh-wasm.test.mjs` (synthetic grids; ABI, the refused topology, memory growth) and the `umesh.rs` unit tests.
+* `test/umesh-wasm.test.mjs` (synthetic grids; ABI, the refused topology, memory growth, the shared upload's release) and the
+  `umesh.rs` unit tests.
+* The frames of "Frame against the original" below, taken again through the kernel: `dx-end-shot`'s `dxend2`, `eidos` and
+  `ion` frames are **pixel-identical** (0 of 921,600 differ) to the frames Play drew through the JavaScript path, so they keep
+  the recorded differences from the original (`visual-acceptance compare dxend2`: means 6.30, 7.04, 7.93 against 6.30, 7.05,
+  7.98, ratio 0.997, mean absolute difference 0.02, edge recall 0.982, precision 0.999, no outlier block; Eidos 3 pixels by 1;
+  Ion Storm 627 pixels, largest 60). The `DXText` frame with the logo yaw set, taken with the kernel and with
+  `?meshBackend=javascript` (the reference, in the same tree), differs in 0 pixels; against the original it is 2,654 pixels,
+  largest 87 on 13 pixels (the bolt and the logo's edge, as the table below).
 
 **Unverified or not covered.** The kernel is equal to the reference, and the reference to the oracle on the cases above;
 the oracle's `Light` is a stub, so the kernel's real `light_vertex` is the LodMesh kernel's (validated there) and is

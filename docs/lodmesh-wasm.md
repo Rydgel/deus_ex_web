@@ -221,8 +221,8 @@ is blocked. Rust formatting and Clippy with warnings denied also pass.
 ## Classic UMesh (2026-10-21)
 
 The game's five classic `UMesh` meshes (the boot logos and the Fly; [classic UMesh](umesh.md)) use this kernel too: their
-`GetFrame` is the `pose` loops above (`umesh-frame.mjs` passes `services.kernel`; `validate-umesh-frame --wasm` runs the
-79 oracle calls through it), and Render.dll's classic `DrawMesh` with `Light` and the colour and environment-UV packing is
+`GetFrame` is the `pose` loops above (`umesh-frame.mjs` passes `services.kernel`; `validate-umesh-frame` runs the
+79 oracle calls through it as well as through the JavaScript translation), and Render.dll's classic `DrawMesh` with `Light` and the colour and environment-UV packing is
 `umesh_draw` in `native/lodmesh-kernel/src/umesh.rs` (`upload_umesh` uploads a mesh's triangles and `VertLinks` once;
 `umesh_layout` gives the scratch regions; `src/runtime/umesh-wasm.mjs` is the facade, `kernel.umesh`). Its reference is
 `drawUMesh` with `packUMeshDraw` in `umesh-draw.mjs` (`validate-umesh-wasm` compares every word; `UMESH=js|verify` in a Node

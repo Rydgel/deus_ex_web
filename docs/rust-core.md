@@ -841,8 +841,9 @@ What moved, following the LodMesh kernel (a bulk Rust call over typed scratch, t
 JavaScript body kept as the reference and the fallback):
 
 * `GetFrame`'s vertex loops and the camera publication run in the LodMesh kernel's `pose` (`services.kernel` in
-  `umesh-frame.mjs`; the Fly's tween and blends included). `validate-umesh-frame --wasm`: the unchanged original in
-  the oracle, 79 calls, every output byte and cache byte equal.
+  `umesh-frame.mjs`; the Fly's tween and blends included). `validate-umesh-frame` (each call through the
+  JavaScript translation and through the kernel): the unchanged original in the oracle, 79 calls, every output byte and
+  cache byte equal.
 * `DrawMesh`'s classic body, `Light` (the LodMesh kernel's `light_vertex`) and the packing of per-corner colours and
   environment UVs are one call, `umesh_draw` (`native/lodmesh-kernel/src/umesh.rs`; the topology uploads once per mesh,
   the JavaScript side is `umesh-wasm.mjs`). `validate-umesh-wasm` compares it with the JavaScript translation, which is
@@ -852,9 +853,9 @@ JavaScript body kept as the reference and the fallback):
   reads (once per call, in a table by `TextureIndex`), the coordinate matrix, GetFrame's cache control flow and the
   record. `?meshBackend=javascript` (or `UMESH=js`) selects the reference for all of it.
 
-Interleaved A/B against the merge (`fbf4930`, 3 pairs, the default page, medians of per-second samples, ms per drawn
-frame): the worker's `actors` phase 1.56 → 0.68 (Eidos in view), 1.86 → 0.70 (Ion Storm), 1.97 → 1.33 (the end pose and
-the menu); the worker's total 4.34 → 3.27, 4.36 → 3.06, 4.84 → 4.14. Node, five lit per update: 4.2 to 4.6 → 1.0 to
+Interleaved A/B against the merge (`fbf4930`, 7 pairs, the default page, medians of per-second samples, ms per drawn
+frame): the worker's `actors` phase 1.52 → 0.72 (Eidos in view), 1.79 → 0.70 (Ion Storm), 1.93 → 1.30 (the end pose and
+the menu); the worker's total 4.37 → 3.29, 4.23 → 3.06, 4.94 → 4.10. Node, five lit per update: 4.2 to 4.6 → 1.0 to
 1.1 ms. The classic bindings' own time is left at 0.43 to 0.55 ms per frame.
 
 No GPU path: the classic faces differ from the LodMesh passes in the face epsilon (a double), the cull and outcode
