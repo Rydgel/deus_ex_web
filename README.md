@@ -257,8 +257,12 @@ npm run dev
 ```
 
 Open `http://127.0.0.1:5173`. The page starts as the original does: the splash, then
-the logo map with its camera flight; a click or Escape opens the main menu, whose
-Training button travels to training (docs/boot.md, docs/travel.md). With the extracted
+the logo map with its camera flight, in the original's 4:3 shape; Escape opens the main menu,
+whose Training button travels to training (docs/boot.md, docs/travel.md). The first click takes
+fullscreen and the mouse, as the original starts fullscreen with the mouse captured: in Chrome or
+Edge, Escape then reaches the game and keeps the mouse (hold Escape to leave fullscreen); Alt+Enter,
+the original's fullscreen toggle, gives back the mouse and the screen and takes them again. In a
+window, or in Firefox and Safari, Escape also releases the mouse and the next click takes it back. With the extracted
 `Deus Ex GOTY Edition/` directory present this happens at once; otherwise choose the game
 folder containing Maps, Textures, System and Help. The local production preview always uses
 this folder picker. `http://127.0.0.1:5173/?debug=1` is the debugging page described below:

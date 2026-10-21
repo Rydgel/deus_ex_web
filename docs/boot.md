@@ -68,6 +68,34 @@ first), which every tool and validator opens: the 65 scripts that open the page 
 menu's Training button travels ([travel](travel.md), steps 0 and 1: Escape and a click on Training arrive in `00_Training`); New Game and Load
 Game stop by name until travel's steps 2 and 4.
 
+**The screen's shape is the original's 4:3 (2026-10-21).** The original starts fullscreen at `DeusEx.ini` `[WinDrv.WindowsClient]`
+`FullscreenViewportX=640`, `FullscreenViewportY=480` (`StartupFullscreen=True`), and every mode its Display menu offers is 4:3 or 5:4 (the page's
+display modes, `DEFAULT_DISPLAY_MODES`). Its projection keeps the horizontal field of view, so a wider screen shows less above and below: the
+original's own frame of the flight's end at 1280 × 720 (`.work/acceptance/DX/dxend-original.png`) has the "Deus Ex" text below its bottom edge, as
+Play's 1280 × 720 frame has. At 960 × 720 (the original after `--early-cmds "SetRes 960x720"`, `dxend43`) the text is in view in both, at the same
+place (x 175 to 780) and with the logo the same size; that capture's hold caught the spinning logo at another yaw, so its pixels are not
+compared. The default start therefore draws a 4:3 picture centred in the window at the window's own pixel density (`screenAspect` `4:3`); a
+resolution chosen in the menu (`SetRes`) fixes the buffer to that size as before, and `?debug=1` keeps its own choice (the window's shape by
+default). The page does not yet keep a chosen resolution across a reload (configuration persistence is Stage 6's).
+
+**The mouse and fullscreen (2026-10-21).** The original starts fullscreen with the mouse captured (`StartupFullscreen=True`, `CaptureMouse=True`),
+its menus draw their own cursor, and its viewport's `WM_KEYDOWN`/`WM_SYSKEYDOWN` case (WinDrv.dll `0x1110a280`) turns Enter with Alt held
+(`GetKeyState(VK_MENU) & 0x8000`) into `UWindowsViewport::ToggleFullscreen` (`0x1110a29b`) instead of an input event (`SC_MAXIMIZE` reaches it too,
+`0x1110b172`). A browser grants fullscreen and the pointer lock only on the user's input, and the user's Escape releases the lock, except in a page's
+fullscreen whose Keyboard Lock holds Escape (Chromium only; a held Escape still leaves). So on the default start (`main.mjs` `grabPointer`):
+* the first click takes fullscreen (`#app`), Escape (`navigator.keyboard.lock(['Escape'])`) and the pointer, after the click's release, so the window
+  that takes the click sees its press and release before the lock's input reset and the resize;
+* a click in the world that takes the pointer reaches no binding (no Fire): a rule of this page, not the original's;
+* while a menu holds the mouse, the pointer lock's relative motion moves the menu's own cursor, and the system cursor is hidden over it;
+* Alt+Enter leaves fullscreen and gives the pointer back, and takes both again; the Enter press reaches no binding, as in the original;
+* a travel keeps the pointer (the original's viewport keeps the mouse across a level load);
+* out of fullscreen, or in a browser without Keyboard Lock, Escape releases the pointer as the browser requires, and the next click (a menu
+  button's included) takes it back.
+
+`browser-tests/original-start-input.spec.mjs` drives this in Chromium's new headless mode (which grants the lock and fullscreen). Its Escape is a
+synthetic key, which does not go through the browser's own Escape rule, so what a real Escape does with Keyboard Lock is Chromium's documented
+behaviour, not measured here. The web crosshair is hidden on the default start.
+
 **The logos are drawn (2026-10-21).** DX.dx's `EidosLogo0`, `IonStormLogo0`, `DXLogo3` and the two `DXText` are classic `UMesh`
 meshes (DeusExDeco's `EidosLogo`, `IonStormLogo`, `DXLogo`, `DXText`), as are DeusExCharacters' `Fly`s (the flies `FlyGenerator`s
 spawn): the game's only five, and Play's actor mesh layer bound only `LodMesh`, so the flight showed the electricity's glow and nothing

@@ -29,4 +29,4 @@ footer{display:flex;align-items:center;justify-content:space-between;gap:14px;mi
 
 /* The original's start (docs/boot.md): the splash bitmap at its own size in device pixels, centred on black, and no page bars. */
 #splash{position:absolute;inset:0;z-index:5;display:grid;place-items:center;background:#000}#splash[hidden]{display:none}#splash-image{image-rendering:pixelated}
-#app.original-start>.toolbar,#app.original-start>footer,#app.original-start #show-ui{display:none}
+#app.original-start>.toolbar,#app.original-start>footer,#app.original-start #show-ui,#app.original-start #crosshair{display:none}

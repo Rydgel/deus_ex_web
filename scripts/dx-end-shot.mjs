@@ -17,13 +17,16 @@
 // `--exec "line|line"` types console lines after the flight, as the original's `--early-cmds` does (`CheatView DeusEx.IonStormLogo`
 // puts the camera behind that actor: PlayerPawn.CalcBehindView), and `--logo-yaw none` leaves the logo alone.
 //
-//   node scripts/dx-end-shot.mjs [--name dxend] [--url http://127.0.0.1:5173] [--seed 1] [--query a=b&c=d] [--logo-yaw 36848] [--hide A,B] [--exec 'l|l']
+// `--size WxH` (default 1280x720) is the frame's size, the original's window after `--early-cmds "SetRes WxH"` (960x720: the 4:3 frame).
+//
+//   node scripts/dx-end-shot.mjs [--name dxend] [--url http://127.0.0.1:5173] [--seed 1] [--query a=b&c=d] [--logo-yaw 36848] [--hide A,B] [--exec 'l|l'] [--size WxH]
 import {mkdirSync} from 'node:fs';
 import path from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {debugUrl} from './page-url.mjs';
 
 const root = fileURLToPath(new URL('..', import.meta.url));
+const [W, H] = (process.argv.includes('--size') ? process.argv[process.argv.indexOf('--size') + 1] : '1280x720').split('x').map(Number);
 const option = (name, fallback) => { const i = process.argv.indexOf(`--${name}`); return i < 0 ? fallback : process.argv[i + 1]; };
 const {chromium} = await import('@playwright/test');
 const {createServer} = await import('vite');
@@ -39,7 +42,7 @@ if (!url) {
 }
 const browser = await chromium.launch({args: [`--use-angle=${process.platform === 'darwin' ? 'metal' : 'gl'}`]});
 try {
-  const page = await browser.newPage({viewport: {width: 1280, height: 720}, deviceScaleFactor: 1});
+  const page = await browser.newPage({viewport: {width: W, height: H}, deviceScaleFactor: 1});
   const errors = [];
   page.on('pageerror', error => errors.push(error.message));
   await page.goto(debugUrl(`${url}/?seed=${option('seed', 1)}&detailTextures=0&antialias=0${option('query', '') ? `&${option('query')}` : ''}`));
@@ -49,8 +52,8 @@ try {
     await page.waitForFunction(() => { const s = window.deusExViewer?.status(); return s?.ready && s.map === 'DX'; }, {}, {timeout: 300000});
   }
   await page.addStyleTag({content: `.toolbar, footer, #toast, #play-hint, #npc-preview-label, #panel, #crosshair, #gate { display: none !important; }
-#app { height: 100vh !important; } #viewport { position: fixed !important; inset: 0 !important; width: 1280px; height: 720px; }
-#scene { position: fixed !important; left: 0 !important; top: 0 !important; margin: 0 !important; border: 0 !important; transform: none !important; width: 1280px !important; height: 720px !important; }`});
+#app { height: 100vh !important; } #viewport { position: fixed !important; inset: 0 !important; width: ${W}px; height: ${H}px; }
+#scene { position: fixed !important; left: 0 !important; top: 0 !important; margin: 0 !important; border: 0 !important; transform: none !important; width: ${W}px !important; height: ${H}px !important; }`});
   await page.evaluate(() => window.dispatchEvent(new Event('resize')));
   await page.evaluate(() => { const el = document.getElementById('brightness'); el.value = '0.4'; el.dispatchEvent(new Event('input')); });
   const yaw = option('logo-yaw', '36848');
@@ -83,6 +86,6 @@ try {
   const dir = path.join(root, '.work/acceptance/DX');
   mkdirSync(dir, {recursive: true});
   const file = path.join(dir, `${option('name', 'dxend')}-play.png`);
-  await page.screenshot({path: file, clip: {x: 0, y: 0, width: 1280, height: 720}});
+  await page.screenshot({path: file, clip: {x: 0, y: 0, width: W, height: H}});
   console.log(file, JSON.stringify(last), errors.length ? `page errors: ${errors.join('; ')}` : 'no page errors');
 } finally { await browser.close(); await server?.close(); }

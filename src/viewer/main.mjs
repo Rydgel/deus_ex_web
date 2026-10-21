@@ -770,7 +770,9 @@ async function loadMap(name, { travel = null } = {}) {
   loading = true; $('map').disabled = true; $('reset').disabled = true; $('choose').disabled = true;
   hideNpcFocus();
   $('toast').textContent = '';stopInfoLinkPresentation();
-  document.exitPointerLock?.(); keys.clear();
+  // The original start keeps the mouse through a travel, as the original's viewport does across a level load.
+  if (!originalStart || !travel) document.exitPointerLock?.();
+  keys.clear();
   busy('Loading original map', `Reading ${name}…`);
   let nextWorld, nextHost = null, nextGame = null, nextNpcPreview = null, nextGpuMesh = null, nextSim = null, nextWeaponDraw = null, nextWeaponGpu = null;
   try {
@@ -1051,10 +1053,16 @@ $('crt-compare').onclick = () => {
 };
 function setScreenAspect(value) {
   screenAspect = Object.hasOwn(SCREEN_ASPECTS, value) ? value : 'window'; $('screen-aspect').value = screenAspect; resize();
+  if (originalStart) return;
   try { localStorage.setItem('deusex.screenAspect', screenAspect); } catch { /* storage unavailable */ }
 }
 $('screen-aspect').onchange = event => setScreenAspect(event.target.value);
-try { setScreenAspect(localStorage.getItem('deusex.screenAspect') ?? 'window'); } catch { /* storage unavailable */ }
+// The original's start is 4:3: DeusEx.ini [WinDrv.WindowsClient] StartupFullscreen=True at FullscreenViewportX=640,
+// FullscreenViewportY=480, and every mode the menu offers is 4:3 or 5:4 (SetRes fixes the buffer to it). The original keeps
+// its horizontal field of view, so a wider screen shows less above and below; 4:3 shows all of the default's view.
+// The ?debug=1 page keeps its stored choice (the window's own shape by default).
+if (originalStart) setScreenAspect('4:3');
+else try { setScreenAspect(localStorage.getItem('deusex.screenAspect') ?? 'window'); } catch { /* storage unavailable */ }
 $('show-ui').onclick = () => setUiHidden(false);
 try { if (localStorage.getItem('deusex.uiHidden') === '1') setUiHidden(true); } catch { /* storage unavailable */ }
 $('close-panel').onclick = () => togglePanel(false);
@@ -1347,10 +1355,57 @@ function windowPointer(event,action=null){
   if(action!==null){const key=pointerButtonKey(event.button);if(key<0)return false;sample.key=key;sample.action=action;}
   try{return simInput.pointer(sample);}catch(error){pauseForRuntimeError(error);return true;}
 }
+// The original's start (not ?debug=1): the game owns the mouse while it plays, and its menus draw their own cursor.
+// [WinDrv.WindowsClient] StartupFullscreen=True and CaptureMouse=True: the original starts fullscreen with the mouse captured,
+// and its viewport's WM_KEYDOWN/WM_SYSKEYDOWN case (WinDrv 0x1110a280) turns Enter with Alt held (GetKeyState(VK_MENU) & 0x8000)
+// into UWindowsViewport::ToggleFullscreen (0x1110a29b) instead of an input event. A browser grants fullscreen and the pointer
+// lock only on a user's input, and its user's Escape releases the lock, except in a page's fullscreen whose Keyboard Lock holds
+// Escape (Chromium; a held Escape still leaves). So the first click takes fullscreen, Escape and the pointer; Alt+Enter leaves
+// fullscreen and gives the pointer back, and takes them again; out of fullscreen a click takes the pointer back. A click that a
+// window (a menu) takes is that window's too; a click in the world only takes the pointer and reaches no binding (this page's
+// rule, not the original's: no Fire on the click that grabs).
+let grabButton = -1, startedFullscreen = false, fullscreenOnRelease = false, grabOnRelease = false;
+function takeFullscreen() {
+  const app = $('app');
+  if (document.fullscreenElement) return;
+  app.requestFullscreen?.({ navigationUI: 'hide' })?.catch?.(() => {});
+}
+function leaveFullscreen() {
+  navigator.keyboard?.unlock?.();
+  document.exitPointerLock?.();
+  if (document.fullscreenElement) document.exitFullscreen?.()?.catch?.(() => {});
+}
+document.addEventListener('fullscreenchange', () => {
+  if (!originalStart) return;
+  if (!document.fullscreenElement) { navigator.keyboard?.unlock?.(); return; }
+  navigator.keyboard?.lock?.(['Escape'])?.catch?.(() => {});
+  if (document.pointerLockElement !== $('scene') && mode === 'play' && game && !runtimeError) $('scene').requestPointerLock?.()?.catch?.(() => {});
+});
+function grabPointer(event, windowHasMouse) {
+  const canvas = $('scene');
+  if (!originalStart || mode !== 'play' || !game || runtimeError || document.pointerLockElement === canvas) return false;
+  // The lock and fullscreen after the release: a lock taken at the press resets the input (pointerlockchange) before the
+  // window sees its release, and a resize would move a window's button between its press and its release.
+  grabOnRelease = true;
+  if (!startedFullscreen) { startedFullscreen = true; fullscreenOnRelease = true; }
+  if (windowHasMouse) return false;
+  grabButton = event.button; event.preventDefault();
+  return true;
+}
+// Alt+Enter, the original's ToggleFullscreen; the Enter press reaches no binding (Enter=ParseLeftClick|Fire).
+function toggleFullscreenKey(event) {
+  if (!originalStart || event.code !== 'Enter' && event.code !== 'NumpadEnter' || !event.altKey || event.ctrlKey || event.metaKey) return false;
+  event.preventDefault();
+  if (event.repeat) return true;
+  if (document.fullscreenElement) leaveFullscreen();
+  else { startedFullscreen = true; takeFullscreen(); if (mode === 'play' && game && !runtimeError) $('scene').requestPointerLock?.()?.catch?.(() => {}); }
+  return true;
+}
 $('scene').onpointerdown = event => {
   if (!world || loading) return;
   paused = mode === 'play' && Boolean(runtimeError); $('scene').focus();
   const windowHasMouse = windowPointer(event);
+  if (grabPointer(event, windowHasMouse)) return;
   if (mode === 'play' && game && !runtimeError) {
     const key = ['LeftMouse', 'MiddleMouse', 'RightMouse'][event.button];
     try { if (key) simInput.button(key, true); }
@@ -1364,15 +1419,29 @@ $('scene').onpointerdown = event => {
 $('scene').oncontextmenu = event => event.preventDefault();
 $('scene').onpointerup = event => {
   drag = false;
+  // The lock once the release is queued; fullscreen a few frames later, inside the click's user activation, so the simulation
+  // side has taken the release before the resize.
+  const takeScreen = () => {
+    if (grabOnRelease) { grabOnRelease = false; $('scene').requestPointerLock?.()?.catch?.(() => {}); }
+    if (fullscreenOnRelease) { fullscreenOnRelease = false; setTimeout(takeFullscreen, 250); }
+  };
+  if (event.button === grabButton) { grabButton = -1; event.preventDefault(); takeScreen(); return; }
   if (windowPointer(event)) event.preventDefault();
-  if (mode !== 'play' || !game) return;
+  if (mode !== 'play' || !game) return takeScreen();
   const key = ['LeftMouse', 'MiddleMouse', 'RightMouse'][event.button];
   try { if (key) simInput.button(key, false); }
   catch (error) { pauseForRuntimeError(error); }
+  takeScreen();
 };
 $('scene').onpointercancel = () => { drag = false; simInput.reset({releasePhysical:true}); };
 $('scene').ondblclick = () => $('scene').requestPointerLock?.()?.catch?.(() => toast('Drag the view to look around.'));
-document.addEventListener('pointermove', event => { if(windowPointer(event))return; if (document.pointerLockElement === $('scene') || drag) look(event.movementX, event.movementY); });
+document.addEventListener('pointermove', event => {
+  const windowHasMouse = windowPointer(event);
+  // The original start shows only the game's cursor over a window that holds the mouse; the system one marks a world to click into.
+  if (originalStart) $('scene').style.cursor = windowHasMouse ? 'none' : '';
+  if (windowHasMouse || loading) return;
+  if (document.pointerLockElement === $('scene') || drag) look(event.movementX, event.movementY);
+});
 // UEngine::InputEvent (docs/script-console-command.md): Console.KeyEvent, then
 // XInputExt::Process. A key the player's root window consumes (a grabbing
 // modal such as the keypad or a menu) releases every held binding and reaches
@@ -1421,6 +1490,7 @@ document.addEventListener('keydown', event => {
     crtShortcutHeld = true;
     return;
   }
+  if (toggleFullscreenKey(event)) return;
   const input = inputKey(event, true);
   if (input && !runtimeError) typeCharacters(event);
   if (input) {
