@@ -68,8 +68,12 @@ first), which every tool and validator opens: the 64 scripts that open the page 
 menu's Training button travels ([travel](travel.md), steps 0 and 1: Escape and a click on Training arrive in `00_Training`); New Game and Load
 Game stop by name until travel's steps 2 and 4.
 
-**The logos are not drawn yet.** DX.dx's `EidosLogo0`, `IonStormLogo0`, `DXLogo3` and the two `DXText` are classic `UMesh` meshes (DeusExDeco's
-`EidosLogo`, `IonStormLogo`, `DXText`, `DXLogo`), and Play's actor mesh layer binds only `LodMesh` ("Classic UMesh surfaces are not bound"): the
-flight shows the electricity's glow and nothing else. The game has five classic meshes, these four and DeusExCharacters' `Fly` (the flies
-`FlyGenerator`s spawn), so the same gap hides the flies on every map; Stage 4's criteria did not cover it. Classic `UMesh` rendering, from
-Engine's `UMesh` data and Render.dll's classic mesh path, is the boot's next piece.
+**The logos are drawn (2026-10-21).** DX.dx's `EidosLogo0`, `IonStormLogo0`, `DXLogo3` and the two `DXText` are classic `UMesh`
+meshes (DeusExDeco's `EidosLogo`, `IonStormLogo`, `DXLogo`, `DXText`), as are DeusExCharacters' `Fly`s (the flies `FlyGenerator`s
+spawn): the game's only five, and Play's actor mesh layer bound only `LodMesh`, so the flight showed the electricity's glow and nothing
+else, and the flies never drew on any map. [Classic UMesh](umesh.md) traces the path from the original: `UMesh::Serialize`, `UMesh::GetFrame`
+(`0x103a7780`) and Render's `DrawMesh` classic body (`0x10b0d235`), each translated and compared with the unchanged original in the
+Unicorn oracle, bit for bit at the render pass's precision control 24; the binding is `actor-umesh-sim.mjs`, the CPU path of the LodMesh
+one. Under `?boot=1` the Eidos logo, the Ion Storm logo and the Deus Ex logo with its text now appear during the flight;
+`validate-umesh-play` checks the five actors and a FlyGenerator's flies on the Island. The original's `Shot` of the flight's end pose
+and Play's frame equal to within one pixel by 1/255 outside the random electricity bolt ([UMesh](umesh.md) "Frame against the original").

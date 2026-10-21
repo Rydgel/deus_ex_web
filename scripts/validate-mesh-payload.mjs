@@ -14,14 +14,20 @@ for (const [packageName, index, modes, frames] of [
   ['DeusExCharacters', 669, [false, true], [0, 71, 365]],
   ['DeusExDeco', 455, [true], [0]],
   ['DeusExDeco', 399, [true], [0]],
+  // The game's five classic UMesh meshes (docs/umesh.md): UMesh::UMesh and UMesh::Serialize alone, no frames to unpack.
+  ['DeusExDeco', 397, [false, true], null],
+  ['DeusExDeco', 407, [true], null],
+  ['DeusExDeco', 408, [false, true], null],
+  ['DeusExDeco', 415, [true], null],
+  ['DeusExCharacters', 723, [false, true], null],
 ]) {
   const bytes = await readFile(`${root}/System/${packageName}.u`), pkg = parsePackage(bytes);
   const entry = pkg.exports[index - 1];
-  for (const lazy of modes) rows.push({pkg, bytes, index, lazy, frames,
+  for (const lazy of modes) rows.push({pkg, bytes, index, lazy, frames: frames ?? [],
     spec: {name: `${packageName}.${entry.name}:${lazy}`, version: pkg.version,
       start: entry.serialOffset, prefixSize: readObject(pkg, bytes, index).reader.offset,
       payload: bytes.subarray(entry.serialOffset, entry.serialOffset + entry.serialSize).toString('base64'),
-      lazy: Number(lazy), loadDeferred: lazy, frames}});
+      lazy: Number(lazy), loadDeferred: lazy, frames: frames ?? undefined, classic: !frames}});
 }
 // Loading-only remap branch: reverse each of LightSwitch's two 22-vertex frames.
 // Original serializer processes the modified payload too; this is not an
@@ -79,7 +85,8 @@ for (let i = 0; i < rows.length; i++) {
   const row = rows[i], native = output.cases[i];
   const mesh = decodeLodMeshPayload(row.pkg, row.bytes, row.index, {lazy: row.lazy});
   assert.equal(mesh.serializedEnd, mesh.entry.serialSize);
-  assert.deepEqual(mesh.sequences, decodeLodMesh(row.pkg, row.bytes, row.index).sequences);
+  assert.equal(mesh.payloadStatus, row.spec.classic ? 'decoded-mesh' : 'decoded-lodmesh');
+  if (!row.spec.classic) assert.deepEqual(mesh.sequences, decodeLodMesh(row.pkg, row.bytes, row.index).sequences);
   compare(mesh, native, row.spec.name);
   if (native.deferred) {
     for (const a of mesh.lazyArrays.values()) {
@@ -89,6 +96,7 @@ for (let i = 0; i < rows.length; i++) {
   }
   for (const frame of row.frames)
     sameBytes(readLodMeshFrame(mesh, frame), native.frames[frame], `${row.spec.name} original unpack frame ${frame}`);
+  if (row.spec.classic) continue;
   assert.throws(() => readLodMeshFrame(mesh, -1), /out of range/);
   assert.throws(() => readLodMeshFrame(mesh, mesh.frameCount), /out of range/);
 }

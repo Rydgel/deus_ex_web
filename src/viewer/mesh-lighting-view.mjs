@@ -198,7 +198,9 @@ export function createMeshLightingView(runtime, levelSource, { exportName, expor
       lastTime = seconds;
       // Level->Actors(0) is the LevelInfo (SetupForActor asserts it).
       const { byName, live } = levelMembership(level), levelInfo = level.actors[0];
-      frame = { level, model: level.model, axes, origin, mirror: 1, viewport, lights: new Map(), leafLights: new Map(),
+      // `prj`: the master frame's PrjXM..PrjYP (+0xec..+0xf8) as floats, the planes DrawMesh's outcodes read (umesh-draw.mjs).
+      const prj = master?.prj ? Array.from(new Float32Array(Uint32Array.from(master.prj).buffer)) : null;
+      frame = { level, model: level.model, axes, origin, mirror: 1, prj, viewport, lights: new Map(), leafLights: new Map(),
         levelInfo, byName, timeSeconds: read(levelInfo, 'TimeSeconds') ?? 0,
         levelBrightness: f(read(levelInfo, 'Brightness') ?? 1), ambients: new Map(), live,
         meshLight: runtime.scriptVm?.meshLight ?? null, runs: new Map() };
@@ -332,7 +334,7 @@ export function createMeshLightingView(runtime, levelSource, { exportName, expor
           flickerKey: info.light.flickerKey ?? 0, brightness: info.brightness, fade: info.tagFade, color: [...info.color],
           values: Object.fromEntries(['LightType', 'LightBrightness', 'LightHue', 'LightSaturation', 'LightPeriod', 'LightPhase',
             'LightRadius', 'LightEffect'].map(name => [name, info.light.values[name]])) })) });
-      return { setup, flags, unlit: unlitColor(v.AmbientGlow, f(v.ScaleGlow)) };
+      return { setup, flags, polyFlags, unlit: unlitColor(v.AmbientGlow, f(v.ScaleGlow)) };
     },
     /** One DrawLodMesh lighting pass. `points` are GetFrame's vertices:
      * world-space (the default, transformed here by the frame's Coords) or,
