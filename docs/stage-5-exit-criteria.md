@@ -28,8 +28,9 @@ were re-captured with held keys before this run.
 Not Stage 5 claims, carried past the close: items 9 (shooting the turret down has no capture), 12 (harness destroys of actors only Play has) and 14 (where the replay releases an
 AI event pre-free) of [the remaining work](#remaining-stage-5-work-in-the-order-it-blocks), which no row holds; what the `weak` rows leave out (`air2` walks only the shaft's last
 stretch, `obs1` does not drive the third pipe or the stairs, there is no swim to the ruins, the view turns are console sets); Play's own boot leaving each class's name counter where
-its history puts it (item 13); the excluded rows 5.7.1 to 5.7.5, which belong to Stage 6 (map travel, persistence, the load menu after a death), to Stage 4 and to multiplayer. The gate
-runs its replays one at a time: replays of one map share `.work/live-acceptance/<map>` and wait on its lock, since two concurrent replays of 00_Training differed at tick 1 (2026-10-20).
+its history puts it (item 13); the excluded rows 5.7.1 to 5.7.5, which belong to Stage 6 (map travel, persistence, the load menu after a death), to Stage 4 and to multiplayer. The
+official run took its replays one at a time, behind a per-map lock, because two concurrent replays of 00_Training had differed at tick 1 (2026-10-20). That difference was a race in
+the replay's frozen phase, not a shared file; since its fix the replays run side by side, and `--jobs 4` passes the gate 50 of 50 in 3,873 s ([Running](#running)).
 
 ## What a scenario is, and what passes it
 
@@ -1670,10 +1671,46 @@ Rows 5.7.1 to 5.7.5 above. They stay on the page so a reader sees them left out,
 node scripts/census-stage5.mjs [--only slug,slug] [--json out.json]       # drive the scenarios in Play; asserts the stored EXPECTED outcomes
 node scripts/validate-stage5-acceptance.mjs                               # the gate: exit 1 until every criterion passes
 node scripts/validate-stage5-acceptance.mjs --report [file]               # the scoreboard, exit 0
+node scripts/validate-stage5-acceptance.mjs --jobs 4 --report [file]      # the proof checks in a pool of four, beside the census (65 min on the Linux host); --mem-budget MiB
+node scripts/validate-stage5-acceptance.mjs --jobs 4 --logs dir           # each check's whole output in dir/<check>.log (default .work/stage5-gate-logs), to compare two runs
 node scripts/validate-stage5-acceptance.mjs --markdown [file]             # the tables of this page from a report
 node scripts/validate-stage5-o3.mjs --scene ladder                       # an O3 proof (ladder, crate-stack): the scene's native physics calls replayed through Engine.dll on Play's inputs; --keep/--reuse/--no-ab ([O3](#o3-the-originals-code-on-plays-inputs-2026-10-20))
 node scripts/validate-stage5-live.mjs --scene cmb1                       # a proof check: a stored Island scene (cmb1..cmb7, die1, the devices hck1..emp2, the routes kil1..air1, the conversations pG..kC) replayed in Play (SKIP without the store)
 node scripts/validate-stage5-live.mjs --scene cmb1 --print-capture       # the original's capture command of that scene (writes its tracer config; the bottle lock first; --frozen-frames: the frozen phase's window frames)
 node scripts/validate-stage5-live.mjs --scene cmb1 --compare-only        # judge the stored replay again after a change to the comparison alone (not after a Play change)
+node scripts/validate-stage5-live.mjs --scene cmb1 --prepare             # the map's play-population.json only, written once (the gate's step before its pool)
 node scripts/stage5-capture-rehearsal.mjs --scene cmb1                    # rehearse a scene's input list in Play, headless, before a capture (class P)
 ```
+
+**Replays side by side (2026-10-21).** `--jobs N` runs the proof checks N at a time, beside the census. A replay writes only files named by its scene's tag: `play-rows-<tag>.json`,
+`report-<tag>.json` and the rest, now also the debug files `setup-play-<tag>.json`, `touch-play-<tag>.json`, `script-play-<tag>.json` and `debug-play-<tag>.json`, which were
+untagged (`report.json` too, which no replay read). The one file the replays of a map share is `play-population.json`, which they only read: the gate writes it per map before its pool
+starts (`--prepare`), under the map's `.population.lock`, renamed into place whole. Two runs of one scene write the same files (5.3.9's `trf1` and `trf1 --frames`): they take turns on
+the scene's `.replay-<tag>.lock`, and the pool never starts them together. The per-map `.replay.lock` is gone. Nothing else is shared: the replays write nothing under `.cache`, each
+starts its own Vite server (port 0) and Chromium (a fresh profile), and four replays started at once on an empty Vite dependency cache pass.
+
+The 2026-10-20 difference that brought the per-map lock (`hzm1` beside a gate's `cbr1` and `dlk1`: the player's Z 4 ulps off at tick 1, 15.900527 for 15.9005232, then the swim's
+hit animation at tick 3, stream draws from tick 19, creations from 23) was no shared file: no replay reads another scene's files, and `hzm1`, `cbr1` and `dlk1` started together pass, as do
+six 00_Training replays beside twelve busy CPU loops. It was a race in the replay's frozen phase. A placement (`ghost`, a SET of Location above the floor, `walk`) leaves the player falling.
+The replay waited only for the pose's sequence, `BreatheLight`, which the falling player already runs, so it wrote the original's pose while Play's own frozen-phase landing was still to
+come. A landing before the write left the `Land` animation's AnimLast and bAnimLoop under the written sequence; one after it landed the player from the pose on a host frame's delta. The
+host's speed picked the winner. One more probe read before the write made `hzm1` fail three times in three, with the 2026-10-20 run's divergences (the tick-3 animation, stream draws at 19,
+creations at 23). `live-acceptance.mjs` now ticks the frozen level until the player is as the original's frozen phase left it before writing the pose (every stored pose: Physics 1,
+Velocity 0, `BreatheLight` looping). With 30 frozen frames added before the write, `hzm1`, `cmb1`, `dor3` and `gP` pass.
+
+Memory bounds the pool, not the cores. A replay's process tree (the validator, the play step, Chromium) peaks at about 3 to 4 GB on the Training maps and 6 to 9.6 GB on the Island
+(PSS; the renderer alone holds about 3 GB). The pool measures each tree's PSS (Linux; RSS elsewhere), starts a check only while the reservations and the census fit `--mem-budget`
+(default 16 GiB, at most half the RAM), fails a tree past `--mem-cap` (20 GiB: `swm1`, 2,400 ticks, passes 12), and keeps each check's time and peak in
+`.cache/stage5-gate-{timings,memory}.json` for the next run's order (longest first) and reservations. On the Linux host it ran two to four replays beside the census (the
+Training ones fit beside an Island one), then mostly two Island replays.
+
+**Equality.** Rows 5.1.1, 5.1.5, 5.3.3, 5.3.4, 5.3.7, 5.3.9, 5.3.10 and 5.4.1 (24 checks: 15 Island replays with the three terminal frame checks, 9 on 00_Training), one at a time
+and with `--jobs 4 --mem-budget 16384`: the same verdicts, 8 PASS, in 44 min and 22 min. 17 of the 24 outputs are byte-identical. The other 7 differ only where two serial runs
+differ too: the six Island scenes captured before the frozen-phase frames (`cmb1`, `cmb2`, `cmb5`, `dor1` to `dor3`) print the HUD log's clock at the replay's start, which Play's own
+warm-up sets (`cmb1` alone twice: 1.000 and 1.417 s, pooled 0.983; not compared, and every line after it is identical), and `sef1 --frames` counts a few pixels of the camera's static
+differently (over 10 of 255: 45/58/57 serial, 45/58/58 pooled, 46/58/58 serial again; all under the 64 of the check).
+
+The full gate with `--jobs 4 --mem-budget 18432` (2026-10-21, cadee6b): **50 PASS, 0 FAIL, 0 MISSING, 0 UNDRIVEN, 5 EXCLUDED in 3,873 s** (the official serial run:
+8,481 s). The census took 2,036 s beside the pool (about 1,440 s alone); the 89 checks the 120 dedup to ran two to four at a time, two of them stopped once for the budget
+and run again; the pool's own total stayed under 18.6 GB (the host's used memory peaked at 27.7 GB, another session's validators running beside it). Its outputs of the 24
+checks above match the serial run's as the pooled run's did (`.work/stage5-gate-jobs4.json`, `.work/gate-jobs4-logs/`; not in Git).
