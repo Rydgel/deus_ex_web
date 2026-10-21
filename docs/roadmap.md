@@ -257,7 +257,7 @@ The live listener graph is now wired (`XLevel` ULevel / `Level` LevelInfo / `Paw
 (`Super.Frob` → `PlaySound` channel id 547874 → live PawnList traversal →
 `PlayAnim('On')`). The remaining boundary is the native `ClientHearSound` audible
 playback (Stage 4); this does not yet add audible switch or plant sounds in Play.
-The [native coverage inventory](script-coverage.md) tracks engine, game, UI and
+The [native coverage inventory](script-coverage.md) and [native census](native-census.md) track engine, game, UI and
 conversation declarations separately from implemented call paths.
 Conversation binding now runs through `ConBindEvents` (native 2101/2100), which links each
 actor's mission conversations by `BindName` ↔ `conOwnerName`

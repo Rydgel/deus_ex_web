@@ -9,6 +9,7 @@
  *   cycleAll                 every value choice once
  *   button {index}           the top menu's winButtons[index] activated, as a click on it does (MenuMain: 4 is Training)
  *   center {field, index?, row?} | {actionKey}   where a click on a control of the top window lands (drawing-buffer pixels), returned as `result`
+ *   controls                 every window under the top window (class, ancestry, absolute bounds, visible/sensitive bits), returned as `result`
  *   escape                   the Escape key on the root window
  *   field {name}             a field of the top window, or a dotted path through window fields (a window as its class)
  *   state                    nothing
@@ -24,6 +25,7 @@ export function settingsProbe(game, step = {op: 'state'}) {
     case 'invoke': driver.invoke(step.screen); break;
     case 'button': driver.pressButton(step.index); break;
     case 'center': result = driver.center(step); break;
+    case 'controls': result = driver.controls(); break;
     case 'press': driver.press(step.choice); break;
     case 'drag': driver.drag(step.choice, step.tick); break;
     case 'action': driver.pressAction(step.action); break;
