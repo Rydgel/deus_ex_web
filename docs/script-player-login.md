@@ -73,7 +73,8 @@ entries and `0x10397400` jumps to `0x103977ac`; the import loops skip, but
 **AcceptInventory, the player's TravelPostAccept and PostLogin still run**.
 The cold browser path must not omit those callbacks on the grounds that
 save/travel support is deferred. Nonempty travel parsing remains a separate
-unsupported branch until translated.
+unsupported branch until translated: [map travel](travel.md#spawnplayactor-importing-the-travel-text)
+records the import (three passes, the grammar, the callbacks) and a measured text.
 
 SetPlayer itself is `0x10368c90`: an existing Viewport.Actor loses its Player
 pointer (`0x10368cde`), Viewport.Actor is cleared, then the new player's

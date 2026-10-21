@@ -2,7 +2,8 @@
 
 Original evidence for the standing-cadet report, established before wiring a
 fresh mission entry into Play. This is separate from an empty-travel-text,
-direct `SpawnPlayActor` login, which alone does not start a new mission.
+direct `SpawnPlayActor` login, which alone does not start a new mission. The whole travel chain
+(the menu's Training button included) is in [map travel](travel.md).
 
 ## Entry contract
 
