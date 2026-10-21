@@ -7,6 +7,7 @@
  *   drag {choice, tick}      a slider choice's thumb to a tick
  *   action {action}          the screen's action button (1 OK, 2 Cancel, 3 Reset)
  *   cycleAll                 every value choice once
+ *   button {index}           the top menu's winButtons[index] activated, as a click on it does (MenuMain: 4 is Training)
  *   escape                   the Escape key on the root window
  *   state                    nothing
  * The caller waits for frames between steps: the windows need their ticks. */
@@ -19,6 +20,7 @@ export function settingsProbe(game, step = {op: 'state'}) {
     case 'console': result = host.consoleCommands.consoleCommand(driver.player, step.command); break;
     case 'menu': driver.showMainMenu(); break;
     case 'invoke': driver.invoke(step.screen); break;
+    case 'button': driver.pressButton(step.index); break;
     case 'press': driver.press(step.choice); break;
     case 'drag': driver.drag(step.choice, step.tick); break;
     case 'action': driver.pressAction(step.action); break;
