@@ -1,6 +1,6 @@
 # Stage 5 exit criteria: a finite definition of "Done when"
 
-Status: **draft for the user to adopt** (written 2026-10-17 from master 5d7285c; first census and scoreboard: 0 of 50 criteria pass; after the first original captures, the same evening: 2 of 50; on 2026-10-18 after the second captures and a spawned actor's first frame: 6 of 50; after the routes' captures, the same evening: 13 of 50; 21 of 50 on 2026-10-19; 23 of 50 after work item 8 on 2026-10-20; 24 of 50 after work item 16 the same day; 27 of 50, none failing, after work item 15; 30 of 50 after the first Linux captures; 32 of 50 with the first O3 proofs; 37 of 50 with the 00_Training captures; 41 of 50 with 00_TrainingFinal's; 46 of 50 with 00_TrainingCombat's; 47 of 50 with Training phase 1's; 49 of 50 with the bots' and the terminals' windows; 50 of 50 with the held keys' footsteps). Nothing here is a Stage 5 claim; it is the definition the claims will be
+Status: **adopted by the user on 2026-10-21**, with the decisions [below](#what-the-user-decided-2026-10-21) (written 2026-10-17 from master 5d7285c; first census and scoreboard: 0 of 50 criteria pass; after the first original captures, the same evening: 2 of 50; on 2026-10-18 after the second captures and a spawned actor's first frame: 6 of 50; after the routes' captures, the same evening: 13 of 50; 21 of 50 on 2026-10-19; 23 of 50 after work item 8 on 2026-10-20; 24 of 50 after work item 16 the same day; 27 of 50, none failing, after work item 15; 30 of 50 after the first Linux captures; 32 of 50 with the first O3 proofs; 37 of 50 with the 00_Training captures; 41 of 50 with 00_TrainingFinal's; 46 of 50 with 00_TrainingCombat's; 47 of 50 with Training phase 1's; 49 of 50 with the bots' and the terminals' windows; 50 of 50 with the held keys' footsteps). Nothing here is a Stage 5 claim; it is the definition the claims will be
 judged against. The data is `scripts/stage5-criteria.mjs`; the measure of where Play stands is `scripts/census-stage5.mjs`; the acceptance test is
 `scripts/validate-stage5-acceptance.mjs` ([Running](#running)). Like the Stage 3 and Stage 4 gates ([Stage 3](stage-3-exit-criteria.md),
 [Stage 4](stage-4-exit-criteria.md)) it exits 1 until every criterion passes. What the original offers a player in these maps is in
@@ -1489,7 +1489,7 @@ registry's first XExtString load (`OriginalObjectIndexModel.loadNativeClass`). T
 `.work/stage5-gate-2026-10-20-ui.json`, on the branch merged with master `22ee79e`). The gate stood at **49 PASS, 0 FAIL, 1 MISSING**.
 **After the held keys** (2026-10-20, [held keys](#held-keys-2026-10-20)): 5.2.3 passes on `cmb2` (the gunshots) and `hrn1` and `hwk1` (the footsteps of a run and of a walk, keys
 held through the input queue) (`--only '^5\.2\.3 '`, report `.work/stage5-gate-2026-10-20-523.json`). The gate stands at **50 PASS, 0 FAIL, 0 MISSING**; the tables are from
-`.work/stage5-gate-2026-10-20-merged12.json`. The criteria are still the draft the user adopts or changes (the status line above), with their `weak` judgements.
+`.work/stage5-gate-2026-10-20-merged12.json`. The user adopted the criteria on 2026-10-21 ([decisions](#what-the-user-decided-2026-10-21)).
 
 The twenty `PASS` rows have proof checks on stored Island scenes: 5.2.2 on `cmb1` and `cmb2`, 5.1.6 on `cmb1` to `cmb4`, `cmb6` and `cmb7`, 5.1.5 on `cmb1`, `cmb2` and `cmb5`,
 5.2.7 on `cmb5`, 5.6.1 on `cmb7`, 5.1.8 on `die1`, 5.1.7 on `ko1`, 5.2.6 on `hck1`, 5.6.4 on `exp1`; 5.4.3 on `pG`, `pR` and `pX`, 5.4.4 on `fT`, `fM`, `fN` and `tA`, 5.4.5 on
@@ -1611,7 +1611,13 @@ Nothing below was fixed by the census task; the two gap tasks closed items 1 and
     not a visibility gap. The player dies at 820, and `UGameEngine::Draw` starts `PlayerCalcView` from the body's `Rotation`, which the Dying view keeps. Play
     started it from `ViewRotation`. `emp2` and 5.6.5 pass.
 
-## What the user should decide
+## What the user decided (2026-10-21)
+
+The user adopted the criteria on 2026-10-21 with the choices proposed for each question below: the list and the rows restated by work item 6 as they stand; O3 as
+enough for the native-body rows (the ladder and the crate stack have it, the others pass on O1); the `weak` judgements of the third captures accepted; the player's death
+stopping at the original's client travel, the load menu after it belonging to Stage 6 (saves and loads); and the placed approaches of 5.5.3, 5.5.4 and 5.3.4 re-captured
+with held keys before Stage 5 is declared complete. The questions as they were put:
+
 
 * **The list itself**: 50 scenarios, Training meaning all three maps, Island with its five ways in, one row for the whole of Training's phase 1, placed approaches instead of walks. Weak choices are labelled `weak`
   in `scripts/stage5-criteria.mjs` and in the tables above.

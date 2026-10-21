@@ -7,7 +7,7 @@ single-player maps reach only boundaries assigned to later stages in the startup
 census ([completion record and coverage limits](docs/stage-3-exit-criteria.md#stage-3-beyond-training-the-all-maps-startup-census)).
 **Stage 4 presentation is complete** (2026-10-17): its gate passes 70 of 70 in one
 run ([Stage 4 close](docs/stage-4-exit-criteria.md#stage-4-close)). **Stage 5
-gameplay is in progress**: its gate passes all 50 criteria (2026-10-20; the criteria are a draft for the user to adopt), each on
+gameplay is in progress**: its gate passes all 50 criteria (2026-10-20; adopted by the user 2026-10-21), each on
 original captures of Liberty Island and Training replayed tick by tick in Play (see below).
 
 The target is **100% original fidelity**. Every supported behavior needs original
@@ -237,8 +237,8 @@ Collision and line traces now read the moving brush tracker's level model, as th
 original's do (doors and lifts block shots, moves and spawns where they were last
 drawn; checked against Engine.dll). The dying player's camera starts from the body's
 rotation, as the engine's draw passes it, and a breakable door's fragments are placed
-as Engine.dll's FindSpot places them, NaN probes included. The criteria themselves, with their
-`weak` judgements, are the user's to adopt ([what the user should decide](docs/stage-5-exit-criteria.md#what-the-user-should-decide)).
+as Engine.dll's FindSpot places them, NaN probes included. The user adopted the criteria on
+2026-10-21 ([decisions](docs/stage-5-exit-criteria.md#what-the-user-decided-2026-10-21)); the placed approaches are re-captured with held keys before Stage 5 is declared complete.
 Swimming, ladders, pawn navigation, doors opened by NPCs and the intro cinematic
 also run from translated original code ([roadmap](docs/roadmap.md#5-implement-the-full-gameplay-systems)).
 

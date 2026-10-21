@@ -1171,11 +1171,14 @@ prove it), built on [what the original offers a player there](stage-5-inventory.
 0 of 50; after the first two gap tasks 0 of 50 with 43 playing and waiting for their original captures; after the first
 original captures, Island combat, 2 of 50 with 44 playing; with the second captures, the death capture and the
 undriven scenarios merged on 2026-10-18, 3 of 50 with all 50 playing; with the Island batches (devices, routes,
-conversations, frozen-phase frames, the zone-0 walking branch) merged on 2026-10-19, 20 of 50; with the original load's chance FlyGenerators replayed, 21 of 50; with collision over the moving brush tracker's level model on 2026-10-20, 23 of 50; with the death camera's rotation the same day, 24 of 50; with FindSpot's NaN branches, 27 of 50; with the first captures on the Linux host, 30 of 50; with the first O3 comparisons (Engine.dll on Play's recorded inputs), 32 of 50; with the original's object names in the replays and the 00_Training captures, 37 of 50; with 00_TrainingFinal's, 41 of 50; with 00_TrainingCombat's, 46 of 50; with Training phase 1's, 47 of 50; with the bots' and the terminals' windows, 49 of 50; with keys held across ticks (the footsteps of 5.2.3), 50 of 50, none failing; the criteria are a draft for the user to adopt).
+conversations, frozen-phase frames, the zone-0 walking branch) merged on 2026-10-19, 20 of 50; with the original load's chance FlyGenerators replayed, 21 of 50; with collision over the moving brush tracker's level model on 2026-10-20, 23 of 50; with the death camera's rotation the same day, 24 of 50; with FindSpot's NaN branches, 27 of 50; with the first captures on the Linux host, 30 of 50; with the first O3 comparisons (Engine.dll on Play's recorded inputs), 32 of 50; with the original's object names in the replays and the 00_Training captures, 37 of 50; with 00_TrainingFinal's, 41 of 50; with 00_TrainingCombat's, 46 of 50; with Training phase 1's, 47 of 50; with the bots' and the terminals' windows, 49 of 50; with keys held across ticks (the footsteps of 5.2.3), 50 of 50, none failing; the user adopted the criteria on 2026-10-21).
 
 ## 6. Persist progress and complete the campaign
 
-Implement game saves, quicksave/load, map transitions, and restoration of previously
+Make the page behave as the game does (the user, 2026-10-21): it starts as the original starts
+(`DeusEx.ini` `LocalMap=DX.dx`: the logo map and its main menu, from which New Game, Training and
+Load Game start), and the web debugging HUD is shown only with `?debug=1`. Every step of that
+sequence is traced from the original first. Implement game saves, quicksave/load, map transitions, and restoration of previously
 visited maps. Persist the player, inventory, skills/augmentations, mission flags,
 actors, and object references consistently. Store progress locally in the browser,
 with save export/import, format versioning, and clear storage failure handling.
