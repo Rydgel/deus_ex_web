@@ -330,6 +330,7 @@ The stage gates and the Stage 5 census:
 node scripts/validate-stage4-acceptance.mjs --jobs 1
 node scripts/census-stage5.mjs --json .work/stage5-census.json
 node scripts/validate-stage5-acceptance.mjs --census .work/stage5-census.json --report .work/stage5-gate.json
+node scripts/validate-stage5-acceptance.mjs --jobs 4 --report .work/stage5-gate.json   # census and replays side by side
 node scripts/validate-stage5-live.mjs --scene cmb1
 ```
 
