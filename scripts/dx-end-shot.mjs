@@ -7,7 +7,14 @@
 // .work/acceptance/DX/dxend-original.png; `node scripts/visual-acceptance.mjs compare --maps DX --view dxend:0,0,0:0,0,0`
 // compares the two.
 //
-//   node scripts/dx-end-shot.mjs [--name dxend] [--url http://127.0.0.1:5173] [--seed 1] [--query a=b&c=d]
+// The original's capture holds the level frozen (LevelInfo.bPlayersOnly) while the player flies the path, then ticks it
+// for 30 frames, in which DXLogo3 (PHYS_Rotating, 8192 units a second, 4,080 in its trace) turns from yaw 32768 to 36848: Play
+// freezes the level the same way and sets that yaw (`--logo-yaw`, default 36848; `--logo-yaw none` leaves the live logo).
+//
+// `--hide A,B` sets bHidden on those actors before the frame: `--hide DXLogo3,DXText0,DXText1,EidosLogo0,IonStormLogo0` is the frame
+// Play drew before classic meshes were bound (their meshes not drawn, the emitter's glow only).
+//
+//   node scripts/dx-end-shot.mjs [--name dxend] [--url http://127.0.0.1:5173] [--seed 1] [--query a=b&c=d] [--logo-yaw 36848] [--hide A,B]
 import {mkdirSync} from 'node:fs';
 import path from 'node:path';
 import {fileURLToPath} from 'node:url';
@@ -42,6 +49,8 @@ try {
 #scene { position: fixed !important; left: 0 !important; top: 0 !important; margin: 0 !important; border: 0 !important; transform: none !important; width: 1280px !important; height: 720px !important; }`});
   await page.evaluate(() => window.dispatchEvent(new Event('resize')));
   await page.evaluate(() => { const el = document.getElementById('brightness'); el.value = '0.4'; el.dispatchEvent(new Event('input')); });
+  const yaw = option('logo-yaw', '36848');
+  if (yaw !== 'none') await page.evaluate(() => window.deusExViewer.viewProbe({playersOnly: true, timeDilation: 1}));
   // The flight: wait until the camera has stopped near the path's end.
   let last = null, still = 0;
   const deadline = Date.now() + 240000;
@@ -53,6 +62,15 @@ try {
     last = position;
   }
   if (still < 6) throw new Error(`The flight did not end: camera at ${JSON.stringify(last)}`);
+  if (yaw !== 'none') {
+    await page.evaluate(value => window.deusExViewer.liveProbe({write: {DXLogo3: {Rotation: [0, value, 0]}}}), Number(yaw));
+    await page.waitForTimeout(1500);
+  }
+  const hide = (option('hide', '') ?? '').split(',').filter(Boolean);
+  if (hide.length) {
+    await page.evaluate(names => window.deusExViewer.liveProbe({write: Object.fromEntries(names.map(name => [name, {bHidden: true}]))}), hide);
+    await page.waitForTimeout(1500);
+  }
   const dir = path.join(root, '.work/acceptance/DX');
   mkdirSync(dir, {recursive: true});
   const file = path.join(dir, `${option('name', 'dxend')}-play.png`);

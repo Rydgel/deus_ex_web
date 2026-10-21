@@ -148,9 +148,49 @@ classic actors of DX.dx are bound, lit and shown through the flight with finite 
 FlyGenerator spawned on the Island (seed 2; the generator spawns where the player cannot see, within its
 `ActiveArea` of 700) is bound, lit and drawn.
 
+## Frame against the original: DX.dx's end pose (2026-10-21)
+
+The original's `Shot` (the framebuffer before the gamma ramp, Brightness 0.666667 so that Shot is the framebuffer) of the
+logo map at the end of the flight, and Play's frame of the same state:
+
+```sh
+scripts/live-original.sh DX --ticks 30 --delta 0.0166666675 --original-brightness 0.666667 --shot dxend2 --tag dxend2 --watch DXLogo3
+node scripts/dx-end-shot.mjs --name dxend2          # Play, 1280x720, Brightness 0.4 (identity ramp), no detail textures, no multisampling
+node scripts/visual-acceptance.mjs compare --maps DX --view dxend2:0,0,0:0,0,0
+```
+
+(No `DX_HYPRLAND` on this host: `live-original.sh` runs the game in the prefix's Wine virtual desktop, so there is no
+`deusex.exe` window for Hyprland to place.) The harness's frozen phase lets the player fly the whole path before the
+tracer attaches, then ticks the level for 30 frames; the trace at the held tick has the player at (-12.7634, 404.9157,
+-123.0662), rotation (1999, 49492, 0) and `DXLogo3` (`PHYS_Rotating`, 8192 units a second) at yaw 36,848, that is 32,768
+plus 4,080 in the 30 ticks. Play's frame freezes the level (`bPlayersOnly`) while the player flies the IntroCam path,
+which ends at (-12.7634, 404.9158, -123.0662) in 1,700 ticks, and writes that yaw into `DXLogo3`.
+
+| Frame | What it shows |
+| --- | --- |
+| before (`dxend2-before-play.png`: the five actors hidden, which is what Play drew until now) | the electricity emitter's glow and nothing else |
+| the original (`dxend2-original.png`) | the DX logo, its orb and the base spike, chrome-lit, over the emitter's glow, and a random electricity bolt above the orb |
+| Play (`dxend2-play.png`) | the same, without the bolt |
+
+`compare`: mean of the original 6.30, 7.05, 7.98 against Play's 6.30, 7.04, 7.93 (ratio 0.997), mean absolute difference
+0.02 of 255, edge recall 0.982, precision 0.999, sub-pixel shift (0, 0), no outlier block. 77 of 921,600 pixels differ at all, all of them
+the bolt (the emitter draws its bolt from the random stream, which Play's frozen frame does not replay); outside a 50 by 440
+pixel box around it **at most one pixel differs, by 1 of 255**. That frame holds the lit, environment-mapped `DXLogo`
+through `GetFrame`, `DrawMesh`, `Light`, the face helper's reflection and Play's projection and texturing.
+
+Two observations from getting the frames equal. `DXLogo3`'s `Rotation` never changed in the headless runs: a rotating actor
+with `bStasis` is ticked only while its `LastRenderTime` is recent, and a classic mesh drawn by nobody never stamped it, so
+before this change the logo could not turn; the page now stamps it (`actorRenderFeedback`) and a live run turns it (the first frame
+I took, `dxend-play.png`, shows another yaw). And the original's frame is a held tick: the bolt and the logo's yaw are states of it,
+which is why Play's frozen run sets the yaw.
+
+**Not frame-compared with the original:** `EidosLogo`, `IonStormLogo`, `DXText` and the Fly (checked through the oracles and by
+sight). The harness cannot stop the original mid-flight (the whole path runs in its frozen phase), and an `Interpolating` player
+overwrites a placed camera, so those views have no original frame yet.
+
 ## Open
 
-* The original's frame of DX.dx's end pose against Play's: see [boot](boot.md).
+* Frames of the other four meshes against the original (above).
 * A classic mesh in a mirror's child frame, `Fog` on a classic mesh, a Fatness other than the default and
   `bMeshEnviroMap` on the actor (PF_Environment for every face) are translated and compared with the
   oracle (all but the mirror frame and Fog), but none occurs in a shipped scene that was run.

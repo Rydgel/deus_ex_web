@@ -74,4 +74,5 @@ else, and the flies never drew on any map. [Classic UMesh](umesh.md) traces the 
 (`0x103a7780`) and Render's `DrawMesh` classic body (`0x10b0d235`), each translated and compared with the unchanged original in the
 Unicorn oracle, bit for bit at the render pass's precision control 24; the binding is `actor-umesh-sim.mjs`, the CPU path of the LodMesh
 one. Under `?boot=1` the Eidos logo, the Ion Storm logo and the Deus Ex logo with its text now appear during the flight;
-`validate-umesh-play` checks the five actors and a FlyGenerator's flies on the Island.
+`validate-umesh-play` checks the five actors and a FlyGenerator's flies on the Island. The original's `Shot` of the flight's end pose
+and Play's frame equal to within one pixel by 1/255 outside the random electricity bolt ([UMesh](umesh.md) "Frame against the original").
