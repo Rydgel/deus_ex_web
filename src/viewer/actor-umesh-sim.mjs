@@ -18,7 +18,6 @@ import {createUMeshFrameCache,getUMeshFrame,publishUMeshOps,umeshCameraMatrix} f
 import {drawUMesh} from '../runtime/umesh-draw.mjs';
 import {readUMeshSurfaces} from '../runtime/umesh-surfaces.mjs';
 import {lightVertex,d3dDiffuse,PF} from '../runtime/mesh-lighting.mjs';
-import {fieldAccessors} from './actor-fields.mjs';
 import {meshFaceGroups} from './actor-mesh-skins.mjs';
 import {setupSequence} from '../runtime/bsp-occlusion.mjs';
 

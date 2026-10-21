@@ -132,9 +132,10 @@ vertex projection and render feedback are the LodMesh CPU path's. The mesh light
 master frame's `PrjXM..PrjYP` for the outcodes.
 
 * **Path.** CPU only. The GPU mesh path (`gpu-mesh.md`) is built around ULodMesh's wedges and
-  LOD morph; the five meshes pose and light in a few milliseconds (the three logos together light about
-  7,000 triangles a frame, only during the boot flight) and the Fly has seven vertices, so a GPU path was
-  not made. It is open, not refused.
+  LOD morph; the five logos together light about 6,000 triangles a frame, only during the boot flight, at
+  a median of 9 ms of simulation-side time (Node, this host with other work running; 27 ms before the
+  DrawMesh port ran on flat arrays), and a Fly has seven vertices, so a GPU path was not made. It is open,
+  not refused.
 * **Frames.** The main frame lights with its own `Coords`, `Mirror` and outcode planes. A mirror
   child frame draws a classic mesh with the main frame's colours and camera points (the LodMesh path
   lights it again with that frame's); a classic mesh in a mirror is not verified.
@@ -150,6 +151,10 @@ FlyGenerator spawned on the Island (seed 2; the generator spawns where the playe
 ## Open
 
 * The original's frame of DX.dx's end pose against Play's: see [boot](boot.md).
-* A classic mesh in a mirror's child frame, `Fog` on a classic mesh, a Fatness other than the default,
-  `bMeshEnviroMap` on the actor (PF_Environment for every face) and the Player's Sprite override are
-  translated and compared with the oracle, but none occurs in a shipped scene that was run.
+* A classic mesh in a mirror's child frame, `Fog` on a classic mesh, a Fatness other than the default and
+  `bMeshEnviroMap` on the actor (PF_Environment for every face) are translated and compared with the
+  oracle (all but the mirror frame and Fog), but none occurs in a shipped scene that was run.
+* The viewing player's `Sprite` override (every mesh texture replaced) is in the translation's contract
+  and in the oracle comparison (`textureInfo` returns the Sprite's info), but the binding does not apply it:
+  the player's `Sprite` is `None` in DX.dx and Training (checked), where the editor's mesh viewer is the
+  only thing that sets it.
