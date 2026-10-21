@@ -42,6 +42,8 @@ import { stateDigest } from '../runtime/state-digest.mjs';
 import { createMusicOutput } from './galaxy-music-output.mjs';
 import { connectMusicLibraryPort, driveMusicLibrary } from '../runtime/galaxy-music-library.mjs';
 import { msvcrtWtoi } from '../runtime/script-text-parser.mjs';
+import { createFrameKeeper } from './frame-keeper.mjs';
+import { snapshotGrey } from '../runtime/script-root-snapshot.mjs';
 
 // Sound effects and ambient sounds play through Galaxy's own mixer in the
 // music worklet (docs/galaxy-audio.md "Effects through Galaxy's mixer");
@@ -232,6 +234,10 @@ renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
 // for every material; the custom output bytes are unchanged.
 renderer.outputColorSpace = THREE.LinearSRGBColorSpace; renderer.autoClear = false;
 renderer.info.autoReset=false;
+// RootWindow.GenerateSnapshot (docs/root-snapshot.md): the last drawn frame, kept while the player's UIBackground is Snapshot.
+const frameKeeper = createFrameKeeper(renderer);
+let keepingFrames = false, snapshotServed = 0;
+const snapshotKeys = [];
 const scene = new THREE.Scene();
 // The scene and the world root keep identity matrices: without auto-update
 // on them, renderer.render no longer forces every descendant's matrixWorld
@@ -1080,14 +1086,50 @@ function setBrightness(value) {
 $('brightness').oninput = event => setBrightness(Number(event.target.value));
 // The render device's view of the client config (sim-session.mjs snapshot.display): a Flush re-reads
 // Brightness (D3DDrv UD3DRenderDevice::Flush) and a SetRes request fixes the drawing buffer.
-let displayFlushes = null, displayResolutionVersion = 0;
+let displayFlushes = null, displayResolutionVersion = 0, displayFullscreenToggles = 0, displayRelaunches = 0;
 function applyDisplaySettings(display) {
+  // The Exec chain's host requests (docs/host-services.md): UWindowsViewport::Exec ToggleFullscreen does what Alt+Enter does (the menu
+  // click that sent it is the user activation the browser asks for); USystem::Exec RELAUNCH restarts the game, a page reload. A listener
+  // may cancel the 'deusex-relaunch' event (the menu sweep and validators do).
+  if (display.fullscreenToggles !== displayFullscreenToggles) {
+    const requests = display.fullscreenToggles - displayFullscreenToggles; displayFullscreenToggles = display.fullscreenToggles;
+    if (requests > 0 && requests % 2 === 1) toggleFullscreen();
+  }
+  applySnapshotRequests(display);
+  if (display.relaunches !== displayRelaunches) {
+    displayRelaunches = display.relaunches;
+    const event = new CustomEvent('deusex-relaunch', { cancelable: true, detail: { arguments: display.relaunchArguments } });
+    if (window.dispatchEvent(event)) location.reload();
+  }
   if (displayFlushes !== null && display.flushes !== displayFlushes && Number.isFinite(display.brightness)) setBrightness(display.brightness);
   displayFlushes = display.flushes;
   if (display.resolutionVersion !== displayResolutionVersion) {
     displayResolutionVersion = display.resolutionVersion;
     fixedResolution = display.resolution ? { width: display.resolution.width, height: display.resolution.height } : null;
     resize();
+  }
+}
+// RootWindow.GenerateSnapshot (docs/root-snapshot.md): each requested texture is made here, from the frame the page drew last, before
+// the HUD that names it draws. The pixels are the original's resampling (script-root-snapshot.mjs) of the kept frame; a request before
+// any frame was kept reads an empty (black) frame, as ReadPixels of a cleared surface would.
+function applySnapshotRequests(display) {
+  keepingFrames = Boolean(display.keepFrame);
+  if (!keepingFrames) frameKeeper.reset();
+  for (const request of display.snapshotRequests ?? []) {
+    if (request.serial <= snapshotServed || !hudRenderer) continue;
+    snapshotServed = request.serial;
+    const frame = frameKeeper.read() ?? { width: request.sizeX, height: request.sizeY, pixels: new Uint32Array(request.sizeX * request.sizeY) };
+    const grey = snapshotGrey(frame.pixels, frame.width, frame.height, request.snapW, request.snapH);
+    const data = new Uint8Array(grey.data.length * 4);
+    for (let i = 0; i < grey.data.length; i++) { const g = grey.data[i], at = i * 4; data[at] = data[at + 1] = data[at + 2] = g; data[at + 3] = 255; }
+    hudRenderer.setDynamicImage(request.key, { width: grey.pitch, height: grey.height, data });
+    snapshotKeys.push(request.key);
+    // The script drops its last snapshot when it makes the next; a texture older than two requests cannot be on screen.
+    while (snapshotKeys.length > 3) hudRenderer.releaseDynamicImage(snapshotKeys.shift());
+  }
+  for (const key of display.snapshotReleased ?? []) {
+    const at = snapshotKeys.indexOf(key);
+    if (at >= 0) { hudRenderer?.releaseDynamicImage(key); snapshotKeys.splice(at, 1); }
   }
 }
 function setCamera(input) {
@@ -1402,13 +1444,17 @@ function grabPointer(event, windowHasMouse) {
   grabButton = event.button; event.preventDefault();
   return true;
 }
+// UWindowsViewport::ToggleFullscreen (0x1110d500): fullscreen and the pointer lock leave together, and come back together.
+function toggleFullscreen() {
+  if (document.fullscreenElement) leaveFullscreen();
+  else { startedFullscreen = true; takeFullscreen(); if (mode === 'play' && game && !runtimeError) $('scene').requestPointerLock?.()?.catch?.(() => {}); }
+}
 // Alt+Enter, the original's ToggleFullscreen; the Enter press reaches no binding (Enter=ParseLeftClick|Fire).
 function toggleFullscreenKey(event) {
   if (!originalStart || event.code !== 'Enter' && event.code !== 'NumpadEnter' || !event.altKey || event.ctrlKey || event.metaKey) return false;
   event.preventDefault();
   if (event.repeat) return true;
-  if (document.fullscreenElement) leaveFullscreen();
-  else { startedFullscreen = true; takeFullscreen(); if (mode === 'play' && game && !runtimeError) $('scene').requestPointerLock?.()?.catch?.(() => {}); }
+  toggleFullscreen();
   return true;
 }
 $('scene').onpointerdown = event => {
@@ -2163,7 +2209,21 @@ function drawFrame(snap, time) {
   if (snap?.hud && hudRenderer) {
     viewportPassesDrawn = [];
     hudRenderer.render(renderer, renderer.domElement.width, renderer.domElement.height, snap.hud.commands,
-      { viewport: command => { try { viewportWorldPass(command); } catch (error) { pauseForRuntimeError(error); } } });
+      { viewport: command => { try { viewportWorldPass(command); } catch (error) { pauseForRuntimeError(error); } },
+        // GC.DrawActor (docs/gc-draw-actor.md): the actor's mesh in the master frame, between the tile batches, in the world's
+        // viewport rectangle; GC.ClearZ clears the depth buffer there.
+        actor: command => {
+          if (!weaponDraw || !command.draw) return;
+          if (clipped) { const box = renderViewportFor(renderRect); renderer.setViewport(...box); renderer.setScissor(...box); renderer.setScissorTest(true); }
+          useFrameProjection(playing && !runtimeError ? frame?.projection : null);
+          try { weaponDraw.hudActor(renderer, camera, command.draw, fromView(camera.position.toArray()), words); }
+          catch (error) { pauseForRuntimeError(error); }
+          finally {
+            vertexProjection.off();
+            if (clipped) { const pr = renderer.getPixelRatio(), full = [0, 0, renderer.domElement.width / pr, renderer.domElement.height / pr]; renderer.setViewport(...full); renderer.setScissor(...full); renderer.setScissorTest(false); }
+          }
+        },
+        clearZ: () => renderer.clearDepth() });
     updateInfoLinkAccessibility(snap.hud.infoLink);
   }
   // UD3DRenderDevice::EndFlash follows the PostRenderFlash event that paints the HUD windows (docs/screen-flash.md).
@@ -2176,6 +2236,7 @@ function drawFrame(snap, time) {
   else if (crtEnabled) (crtMaterialRamp ??= createDisplayRamp()).apply(renderer, 1, true, crtShader, crtCompare);
   gpuEnd();
   phase('ramp');
+  if (keepingFrames) frameKeeper.keep();
   $('crosshair').hidden=mode==='play'&&Boolean(hudRenderer);
   if ($('inspect').checked && time - lastInspect > 150) {
     lastInspect = time; raycaster.setFromCamera(new THREE.Vector2(), camera);

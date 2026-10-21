@@ -12,7 +12,7 @@
  * docs/script-window-input.md, scripts/native-window-grab-oracle.py,
  * scripts/validate-window-grab-diff.mjs.
  */
-import {x87load, x87add, x87neg, x87store} from './script-vm.mjs';
+import {x87load, x87add, x87neg, x87store, x87storeWord, x87cmp} from './script-vm.mjs';
 
 export const ROOT_INPUT = Object.freeze({mouseGrab: 0x5cc, keyboardGrab: 0x5d0, keyDown: 0x630, parent: 0x138});
 const R = ROOT_INPUT;
@@ -200,6 +200,32 @@ export function buttonMousePressed(W,win,x,y,key,count,{processScript,changeButt
     W.native.playSound(win,W.ptr(win,B.clickSound),-1,1);W.setU8(win,B.inputKey,key);activateButton(win,key&0xff);
   }else W.native.playSound(win,W.ptr(win,B.pressSound),-1,1);
   return 1;
+}
+
+/** XButtonWindow::Tick 0x10008190(deltaTime), the Button and Toggle families' tick (vtable +0x80): the auto-repeat of a
+ * held button. Only a pressed (bit 1) auto-repeating (bit 2) button works. The countdown +0x19c less the delta is stored
+ * as a float32 (fsub, fst) while the extended value stays on the register stack; a countdown that is not below zero (equal,
+ * greater) ends the tick. Below zero (or NaN), the repeat rate +0x180 is added (fadd, fst) and, if the sum is still below
+ * zero or NaN, the countdown is the repeat rate itself. Then the pointer is read (XWindow::GetCursorPos 0x1004cbf0), and
+ * when it lies in the window (IsPointInWindow 0x1004f830) the click sound +0x194 plays (-1.0, 1.0; 0x1004ffb0) and the
+ * button activates for the key byte +0x1a0 (ActivateButton 0x100077e0). Services: getCursorPos, isPointInWindow,
+ * playSound and activateButton. A window with no root has no pointer (the original leaves the outputs unwritten):
+ * a boundary. Oracle: scripts/native-window-mouse-focus-oracle.py (buttonTick), scripts/validate-window-mouse-focus-diff.mjs. */
+export function buttonTick(W,win,delta,{getCursorPos,isPointInWindow,activateButton,boundary}){
+  const flags=W.u32(win,B.buttonFlags);
+  if(!(flags&2)||!(flags&4))return;
+  const zero=x87load(0);
+  let countdown=x87add(x87load(W.f32(win,B.repeatAt)),x87neg(x87load(delta)));
+  W.setU32(win,B.repeatAt,x87storeWord(countdown));
+  if(!['lt','un'].includes(x87cmp(countdown,zero)))return;
+  countdown=x87add(countdown,x87load(W.f32(win,0x180)));
+  W.setU32(win,B.repeatAt,x87storeWord(countdown));
+  if(['lt','un'].includes(x87cmp(countdown,zero)))W.setU32(win,B.repeatAt,W.u32(win,0x180));
+  const cursor=getCursorPos(W,win);
+  if(!cursor)return boundary('XButtonWindow::Tick: the window has no root, so XWindow::GetCursorPos leaves the pointer unwritten');
+  if(!isPointInWindow(W,win,cursor.x,cursor.y))return;
+  W.native.playSound(win,W.ptr(win,B.clickSound),-1,1);
+  activateButton(win,W.u8(win,B.inputKey));
 }
 
 export function buttonMouseReleased(W,win,x,y,key,count,{processScript,changeButtonAppearance,activateButton,isPointInWindow}){

@@ -26,6 +26,7 @@ import { destroyScriptProperty } from './script-property-destroy.mjs';
 import { createAllActorsIterator, createTraceActorsIterator, createTraceVisibleActorsIterator, createTraceTextureIterator, createRadiusActorsIterator, createVisibleActorsIterator, createVisibleCollidingActorsIterator, createBasedActorsIterator, createCycleActorsIterator } from './script-iterators.mjs';
 import { actorRadiusCheck } from './collision-hash-radius.mjs';
 import { scriptTrace, scriptFastTrace } from './script-trace.mjs';
+import { execParabolicTrace, levelParabolicServices } from './script-actor-parabolic-trace.mjs';
 import { setActorTimer, updateActorTimer } from './script-timers.mjs';
 import { sleepActor, pollActorSleep } from './script-sleep.mjs';
 import { probeNames, probeIndex } from '../unreal/probe-names.mjs';
@@ -148,6 +149,8 @@ import {
 } from './script-window-sensitivity.mjs';
 import { getToggleNative } from './script-window-toggle-get.mjs';
 import { setToggleNative } from './script-window-toggle-set.mjs';
+import { changeToggleNative } from './script-window-change-toggle.mjs';
+import { findStairRotation } from './script-pawn-stair-rotation.mjs';
 import { configureChildNative } from './script-window-configure-child.mjs';
 import { setWindowPositionNative } from './script-window-position.mjs';
 import { setWindowAlignmentsNative } from './script-window-alignments.mjs';
@@ -940,10 +943,14 @@ export class ScriptRuntime {
     if (!object || !services) throw new Error('CriticalDelete requires native object and release bindings');
     const release = {...services, conditionalDestroy: item => this.conditionalDestroy(item.identity), warning: this.warning};
     if (object.nativeVtable === TEXT_PARSER_NATIVE.vtable) releaseTextParserObject(object, 1, release);
-    else if (object.nativeVtable === 0x10179dfc) {
-      // UObject's deleting destructor 0x1015dd00: ~UObject, then operator delete.
+    else if (object.nativeVtable === 0x10179dfc || object.nativeVtable === 0x100613e8) {
+      // UObject's deleting destructor 0x1015dd00: ~UObject, then operator delete. The snapshot texture (RootWindow.GenerateSnapshot,
+      // Extension vtable 0x100613e8) has its own slot-3 destructor 0x1003d100: ~UTexture (Engine), then operator delete of its 0xc0
+      // bytes; the mips and palette it frees are the page's here (docs/root-snapshot.md).
+      const snapshotTexture = object.nativeVtable === 0x100613e8;   // ~UObject resets the vtable
       destructScriptObject(object, release);
       freeScriptObject(object, release);
+      if (snapshotTexture) this.windowLifecycle?.snapshotReleased?.(target);
     } else if (object.nativeVtable === 0x10027fe8) {
       // ConHistory (DeusEx vtable 0x10027fe8, slot +0x0c = 0x100146a0, flags 1): ~DConHistory (ConSys 0x10003400: the class vtable, ConditionalDestroy
       // = DConHistory::Destroy 0x1000ca20 deleting every event from firstEvent, the three FString members, the DConObject vtable, ConditionalDestroy
@@ -3473,6 +3480,13 @@ export class ScriptRuntime {
       if(call.argumentCount!==0)throw new Error('ToggleWindow.GetToggle accepts no arguments');
       return getToggleNative(call.receiver,this.windowLifecycle?.toggle??{});
     }
+    if(call.index===1610){
+      // execChangeToggle 0x10049ce0 -> XToggleWindow::ChangeToggle 0x10049910: the +0xf0 ToggleChanged walk up the parents (the
+      // receiver's vtable word is a DLL table address, so it reads as a word like the other toggle reads).
+      if(call.argumentCount!==0)throw new Error('ToggleWindow.ChangeToggle accepts no arguments');
+      const toggle=this.windowLifecycle?.toggle??{};
+      return changeToggleNative(call.receiver,{...toggle,read:toggle.read&&((object,offset,kind,details)=>toggle.read(object,offset,offset===0&&kind==='ptr'?'u32':kind,details))});
+    }
     if(call.index===1611){
       if(call.argumentCount!==1)throw new Error('ToggleWindow.SetToggle requires the bNewToggle argument');
       const bNewToggle=refValue(call.evaluateArgument(0));
@@ -3779,6 +3793,22 @@ export class ScriptRuntime {
       if(!model)throw new Error('FastTrace requires the live level BSP model');
       return scriptFastTrace(model,source,end,start,level.fastLineCheck);
     }
+    if(call.index===722){
+      // execParabolicTrace 0x1036e190 -> worker 0x1036c0a0 (docs/parabolic-trace.md): the argument defaults from the
+      // receiver, then the stepped trace over the live zone table (level.pointRegion) and ULevel::MultiLineCheck
+      // (the collision hash). The result is the float32 time; finalLocation is written through the out slot.
+      return execParabolicTrace(call,{
+        read:(actor,name)=>this.readNamed(actor,name),
+        services:actor=>{
+          const level=this.levelFor(actor);
+          const services=level?.hash&&typeof level.pointRegion==='function'
+            ?levelParabolicServices(level,(zone,name)=>this.readNamed(zone,name)):null;
+          // A validator may wrap the two level services to record their answers (validate-parabolic-trace-play).
+          return services&&typeof this.observeParabolicServices==='function'?this.observeParabolicServices(services,actor):services;
+        },
+        refValue,writeSlot,
+      });
+    }
     if(call.index===721){
       // execInStasis 1036d320 consumes EndFunctionParms and directly calls
       // AActor::InStasis 1036bfe0; there are no script operands.
@@ -4065,6 +4095,25 @@ export class ScriptRuntime {
       return execFindPathTo(call.receiver,point.map(Math.fround),
         singleArgument===undefined?0:singleArgument|0,clearArgument===undefined?1:clearArgument|0,
         this.pawnNavServices(call.receiver));
+    }
+    if(call.index===524){
+      // execFindStairRotation 0x103bb880: the DeltaTime float, then the exec's inline body (script-pawn-stair-rotation.mjs,
+      // docs/pawn-stair-rotation.md): up to four ULevel::SingleLineCheck calls from the pawn, the pitch to ease towards, and the
+      // pitch normalisation store into ViewRotation.
+      const receiver=call.receiver,level=this.levelFor(receiver);
+      if(typeof level?.hash?.lineCheck!=='function')throw new Error('FindStairRotation requires the live level collision hash');
+      const deltaTime=call.argumentCount>0?refValue(call.evaluateArgument(0)):0;
+      const rotation=this.namedReference(receiver,'ViewRotation'),viewRotation=rotation.get();
+      const state={location:this.readNamed(receiver,'Location'),viewRotation:[...viewRotation],eyeHeight:this.readNamed(receiver,'EyeHeight'),
+        radius:this.readNamed(receiver,'CollisionRadius'),height:this.readNamed(receiver,'CollisionHeight')};
+      const times=this.observeStairRotation?[]:null;   // a validator replays the live answers through the original exec
+      const result=findStairRotation(state,deltaTime,
+        {setPitch:pitch=>rotation.set([pitch,viewRotation[1],viewRotation[2]]),
+          lineCheck:(start,end,extent,flags,extra)=>{
+            const hit=level.hash.lineCheck(start,end,extent,flags,extra,receiver);
+            times?.push(hit.time);return hit;}});
+      this.observeStairRotation?.({state,deltaTime,times,result});
+      return result;
     }
     if(call.index===523){
       // execEAdjustJump 0x103bc110: no parameters; SuggestJumpVelocity from

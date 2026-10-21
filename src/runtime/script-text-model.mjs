@@ -338,13 +338,18 @@ export function textDataOrEmpty(L) {
 // s = min_u(start, len); e = start+count (32-bit); e = (e <u s) ? s :
 // min_u(e, len); slice = e - s; ret = {0, slice?slice+1:0, same}; Realloc(2);
 // if num: appStrncpy(ret.data, srcOrEmpty + s*2, slice+1).
-export function fstringMid(L, dst, srcStr, start, count) {
-  const srcNum = L.read(srcStr + 4, 'i32');
-  const len = srcNum !== 0 ? srcNum - 1 : 0;
+// FString::Mid's unsigned bounds (Core 0x101086e0), shared by the memory model below and the dispatcher's string form of
+// TextWindow.GetTextPart: s = min_u(start, len), e = min_u(max_u(start + count, s), len), slice = e - s.
+export function midRange(len, start, count) {
   const s = Math.min(start >>> 0, len >>> 0);
   let e = (start + count) >>> 0;
   e = e < (s >>> 0) ? s : Math.min(e, len >>> 0);
-  const slice = (e - (s >>> 0)) | 0;
+  return {s, slice: (e - (s >>> 0)) | 0};
+}
+export function fstringMid(L, dst, srcStr, start, count) {
+  const srcNum = L.read(srcStr + 4, 'i32');
+  const len = srcNum !== 0 ? srcNum - 1 : 0;
+  const {s, slice} = midRange(len, start, count);
   const n = slice !== 0 ? (slice + 1) | 0 : 0;
   L.write(dst, 'u32', 0);
   L.write(dst + 4, 'i32', n);

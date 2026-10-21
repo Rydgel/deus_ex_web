@@ -8,7 +8,7 @@ import {readdirSync, readFileSync} from 'node:fs';
 import path from 'node:path';
 import {fileURLToPath} from 'node:url';
 
-import {NATIVE_SITES, NOT_DISPATCHERS, NATIVE_CONSTANTS, RUST_NATIVES, LATENT_POLLS, handledNatives, idx} from '../src/runtime/native-registry.mjs';
+import {NATIVE_SITES, NOT_DISPATCHERS, NATIVE_CONSTANTS, RUST_NATIVES, LATENT_POLLS, NATIVE_DECISIONS, handledNatives, idx} from '../src/runtime/native-registry.mjs';
 import {primitiveNativeIndices} from '../src/runtime/script-vm.mjs';
 import {moverPrimitiveIndices} from '../src/runtime/script-mover-primitives.mjs';
 import {decorationPrimitiveIndices} from '../src/runtime/script-decoration-primitives.mjs';
@@ -133,4 +133,20 @@ test('handledNatives drops what a gate forwards and the name-bound marker', () =
   assert.ok(byName.has('core.object.getenum'));
   assert.deepEqual(idx('1 3-5'), [1, 3, 4, 5]);
   assert.equal(expandRanges([[2, 4]]).size, 3);
+});
+
+test('a decided native is not also handled, and each decision names its reason, evidence and date', () => {
+  const {byIndex, byName} = handledNatives();
+  const seen = new Set();
+  for (const decision of NATIVE_DECISIONS) {
+    assert.ok(!seen.has(decision.native), `${decision.native} is decided twice`);
+    seen.add(decision.native);
+    const handled = typeof decision.native === 'number' ? byIndex.has(decision.native) : byName.has(decision.native);
+    assert.ok(!handled, `${decision.native} is decided "${decision.decision}" but a dispatcher routes it: drop or rewrite the decision`);
+    assert.ok(['not-reached', 'host-path', 'unsupported'].includes(decision.decision), `${decision.native}: decision kind`);
+    assert.ok(typeof decision.name === 'string' && decision.name, `${decision.native}: name`);
+    for (const field of ['reason', 'evidence'])
+      assert.ok(typeof decision[field] === 'string' && decision[field].length > 40, `${decision.native}: ${field}`);
+    assert.match(decision.date, /^\d{4}-\d{2}-\d{2}$/, `${decision.native}: date`);
+  }
 });

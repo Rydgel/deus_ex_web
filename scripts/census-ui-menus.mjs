@@ -81,7 +81,14 @@ const newPage = async () => {
   pageErrors = [];
   page.on('pageerror', error => pageErrors.push(error.message));
   page.on('console', message => { if (message.type() === 'error') pageErrors.push(message.text()); });
+  // USystem::Exec RELAUNCH reaches the page as a cancelable 'deusex-relaunch' event, then a reload (docs/host-services.md): the sweep
+  // records it and cancels it, so the route it is walking survives.
+  await page.addInitScript(() => {
+    window.__relaunches = [];
+    window.addEventListener('deusex-relaunch', event => { window.__relaunches.push(event.detail.arguments); event.preventDefault(); });
+  });
 };
+const relaunches = () => page.evaluate(() => window.__relaunches?.length ?? 0).catch(() => 0);
 /** Boot the logo map and open the main menu. */
 async function boot() {
   await newPage();
@@ -235,7 +242,9 @@ try {
         let nth = 0; const target = fresh.windows.find(w => w.class === action.pick.class && nth++ === action.pick.nth);
         if (target) { const spot = pointIn(target, action.kind, action.forbiddenAt); if (spot) [action.x, action.y] = spot; }
       }
+      const relaunchesBefore = await relaunches();
       await pointer(action.x, action.y, { button: action.button, clickCount: action.clickCount, drag: action.drag });
+      if ((await relaunches()) > relaunchesBefore) { entry.hostRequests = [...(entry.hostRequests ?? []), { via: action.label, request: 'RELAUNCH' }]; log(`  ${action.label} requested RELAUNCH (cancelled)`); }
       const error = await runtimeError();
       if (error) {
         const record = { screen: signature, action: action.label, ...describeError(error.message) };

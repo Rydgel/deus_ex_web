@@ -16,7 +16,8 @@ import {gcSetBaselineData} from './script-gc-set-baseline-data.mjs';
 import {gcEnableTranslucentText} from './script-gc-enable-translucent-text.mjs';
 import {convertScriptString,enableTextAsAcceleratorNative,setAcceleratorTextNative} from './script-window-text.mjs';
 import {addTimer,removeTimer} from './script-window-timers.mjs';
-import {setCursorPos,askParentToShowArea} from './script-window-mouse.mjs';
+import {setCursorPos,askParentToShowArea,convertCoordinates} from './script-window-mouse.mjs';
+import {midRange} from './script-text-model.mjs';
 import {pressButtonNative} from './script-window-press-button.mjs';
 import {isKeyDownNative} from './script-window-is-key-down.mjs';
 import {setTextColorsNative} from './script-window-set-text-colors.mjs';
@@ -99,11 +100,29 @@ export function dispatchWindowHostNative(W, call) {
     case 1490: value=addTimer(W,win,arg(0,0),arg(1,false)?1:0,arg(2,0),arg(3,'None')||'None');break;
     case 1491: removeTimer(W,win,arg(0,0));break; // execRemoveTimer 0x10054220
     case 1453: setCursorPos(W,win,arg(0,0),arg(1,0));break; // execSetCursorPos 0x10052b90 -> 0x1004cca0
+    // Window.ConvertCoordinates (exec 0x10052900, registered 0x10052a50): fromWin, fromX, fromY, toWin, then the two out floats
+    // (the exec's GPropAddr-or-local pattern), all defaulting to zero, into XWindow::ConvertCoordinates 0x1004fbe0 (a static
+    // method: the receiver is not read). A None window is dereferenced by the original (no recovered fault handling).
+    case 1449: {
+      const from=arg(0,null),x=arg(1,0),y=arg(2,0),to=arg(3,null);
+      if(!from||!to)W.boundary('Window.ConvertCoordinates with a None window dereferences null in XWindow::ConvertCoordinates');
+      const point=convertCoordinates(W,from,x,y,to);
+      out(4,point.x);out(5,point.y);break;
+    }
+    // TextWindow.GetTextPart (exec 0x10046dc0, fully inline): FString::Mid (0x101086e0) of the window's text (+0x168) into OutText, the
+    // result the copied length. The bounds are the memory model's (script-text-model.mjs midRange, validated in
+    // validate-text-get-text-part.mjs); an empty slice leaves OutText empty and the result 0.
+    case 1554: {
+      const start=arg(0,0)|0,count=arg(1,0)|0,text=W.heap.read(win,0x168,'string')??'';
+      const {s,slice}=midRange(text.length,start,count);
+      out(2,slice?text.slice(s,s+slice):'');value=slice>0?slice:0;break;
+    }
     // ButtonWindow.PressButton (exec 0x10008c90, byte default IK_Space) and
     // ActivateButton (exec 0x100085b0, byte default 0).
     case 1598: pressButtonNative(win,arg(0,0x20)&0xff,{read:vtableRead,
       buttonPressed:({object,key})=>W.v.pressButton(object,key)});break;
     case 1590: W.native.activateButton(win,arg(0,0)&0xff);break;
+    case 1591: W.setF32(win,0x178,arg(0,Math.fround(0.3)));break; // ButtonWindow.SetActivateDelay exec 0x10008620 (default 0.3f)
     // Window.IsKeyDown (exec 0x100535f0): the root's +0x630+key byte as the bool result.
     case 1470: value=Boolean(isKeyDownNative(win,arg(0,0)&0xff,{read:(object,offset,kind)=>W.heap.read(object,offset,kind)}));break;
     case 1492: value=W.tickOffset();break;
@@ -208,6 +227,8 @@ export function dispatchWindowHostNative(W, call) {
       W.setF32(win,0x204,spacing);W.native.askParentForReconfigure(win);break;
     }
     case 1842: bits(0x208,1,arg(0,true));break; // CheckboxWindow.ShowCheckboxOnRightSide exec 0x1000b110 (default TRUE)
+    case 1613: W.setPtr(win,0x1ec,arg(0,null));W.setPtr(win,0x1f0,arg(1,null));break; // ToggleWindow.SetToggleSounds 0x10049a60
+    case 1820: value=W.ptr(win,0x184);break; // RadioBoxWindow.GetEnabledToggle, inline in exec 0x10038e00
     case 1595: // ButtonWindow.EnableAutoRepeat 0x10007aa0; float defaults at 0x10059df8/0x10059dfc
       bits(0x174,4,arg(0,true));W.setF32(win,0x17c,arg(1,0.5));W.setF32(win,0x180,arg(2,Math.fround(0.1)));break;
     case 1596: bits(0x174,8,arg(0,true));break;                   // EnableRightMouseClick 0x10007ae0
@@ -254,6 +275,8 @@ export function dispatchWindowHostNative(W, call) {
     case 1450: grabMouse(W,win,{getRootWindow:T.getRootWindow});break;
     case 1451: ungrabMouse(W,win,{getRootWindow:T.getRootWindow});break;
     // RootWindow.SetSnapshotSize exec 0x1003cfb0: two floats, each stored with _ftol (truncation) at +0x738 / +0x73c.
+    // RootWindow.GenerateSnapshot exec 0x1003cf30 (bFilter, default false) -> XRootWindow::GenerateSnapshot 0x10039410 (docs/root-snapshot.md).
+    case 1524: value=W.snapshot.generate(win,arg(0,false));break;
     case 1523: W.setI32(win,0x738,floatToInt(Math.fround(arg(0,0))));W.setI32(win,0x73c,floatToInt(Math.fround(arg(1,0))));break;
     case 1660: S.managerSetButtons(W,win,arg(0,null),arg(1,null));break;                            // exec 0x100427e0 -> 0x10041b30
     case 1661: SS.managerValueField(W,win,arg(0,null));break;                                       // exec 0x10042870 -> 0x10041c70

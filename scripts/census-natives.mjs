@@ -18,7 +18,7 @@
 import {readFile, readdir, writeFile, mkdir} from 'node:fs/promises';
 import path from 'node:path';
 import {openSystemPackages, scriptPackageNames, scanNativeCalls, resolveCalls} from './native-reachability.mjs';
-import {handledNatives, NATIVE_SITES, RUST_NATIVES, LATENT_POLLS} from '../src/runtime/native-registry.mjs';
+import {handledNatives, NATIVE_SITES, RUST_NATIVES, LATENT_POLLS, NATIVE_DECISIONS} from '../src/runtime/native-registry.mjs';
 
 const option = (name, fallback) => { const i = process.argv.indexOf(`--${name}`); return i < 0 ? fallback : process.argv[i + 1]; };
 
@@ -143,6 +143,7 @@ for (const directory of ['src/runtime', 'src/viewer']) {
     }
   }
 }
+const decisions = new Map(NATIVE_DECISIONS.map(decision => [decision.native, decision]));
 const rows = [];
 for (const {declaration: decl, sites, via, callers} of reach.values()) {
   const key = decl.key.toLowerCase();
@@ -162,6 +163,7 @@ for (const {declaration: decl, sites, via, callers} of reach.values()) {
     callSites: sites, via, callerCount: callerList.length,
     callerKinds: Object.fromEntries([...kinds].map(kind => [kind, callerList.filter(caller => caller.kind === kind).length])),
     callers: callerList,
+    decision: decisions.get(decl.index || key) ?? null,
     note: NOTES.get(key) ?? null,
     translatedBy: decl.index ? translated.get(decl.index) ?? [] : [],
     status: null, owner: null, reach: null,
@@ -252,7 +254,7 @@ const section = (title, list) => {
   let text = `#### ${title} (${list.length})\n\n`;
   for (const [fam, members] of [...byFamily].sort((a, b) => b[1].length - a[1].length || a[0].localeCompare(b[0]))) {
     text += `**${fam}** (${members.length})\n\n| native | called from | note |\n|---|---|---|\n`;
-    for (const row of members) text += `| ${label(row)} | ${callerSummary(row)} | ${[row.note, row.translatedBy.length ? `translated body, not wired: ${row.translatedBy.join(', ')}` : null].filter(Boolean).join(' ')} |\n`;
+    for (const row of members) text += `| ${label(row)} | ${callerSummary(row)} | ${[row.decision ? `Decided ${row.decision.decision} (${row.decision.date}), see Decisions.` : row.note, row.translatedBy.length ? `translated body, not wired: ${row.translatedBy.join(', ')}` : null].filter(Boolean).join(' ')} |\n`;
     text += '\n';
   }
   return text;
@@ -282,6 +284,19 @@ const siteTable = () => {
   for (const site of NATIVE_SITES) text += `| ${site.id} | ${site.layer} | ${counts.get(site.id) ?? 0}${site.gates?.length ? ' (+ forwards ranges)' : ''} | ${site.file} |\n`;
   return text + '\n';
 };
+const decisionSection = () => {
+  const list = rows.filter(row => row.decision);
+  const stale = NATIVE_DECISIONS.filter(decision => !rows.some(row => row.decision === decision));
+  if (stale.length) throw new Error(`Decisions for natives no package declares: ${stale.map(decision => decision.native)}`);
+  let text = `### Decisions\n\nNatives examined and deliberately not routed (\`NATIVE_DECISIONS\` in src/runtime/native-registry.mjs; \`npm test\` fails if a decided native becomes handled). `
+    + `\`not-reached\`: the shipped single-player code cannot call it under the shipped configuration; \`host-path\`: Play does the work its body does through another path; `
+    + `\`unsupported\`: reachable and not implemented.\n\n`;
+  for (const row of list) {
+    const decision = row.decision;
+    text += `- **${label(row)}** - ${decision.decision} (${decision.date}). ${decision.reason}\n  - Evidence: ${decision.evidence}\n${decision.reopen ? `  - Reopen when: ${decision.reopen}\n` : ''}`;
+  }
+  return text + '\n';
+};
 const conditional = rows.filter(row => row.status === 'handled' && row.conditional);
 const md = [
   '### Numbers\n\n' + statusTable(),
@@ -292,6 +307,7 @@ const md = [
   section('From game code (DeusEx, Extension, ConSys)', rows.filter(row => row.status === 'missing-reachable' && row.reach === 'single-player')),
   section('Only from Engine base classes', rows.filter(row => row.status === 'missing-reachable' && row.reach === 'engine-base')),
   section('Developer tools only', rows.filter(row => row.status === 'missing-reachable' && row.reach === 'developer')),
+  decisionSection(),
   '### Excluded\n\n',
   ['stage-6', 'multiplayer', 'editor'].map(owner => compact(`Owner: ${owner}`, rows.filter(row => row.status === 'excluded' && row.owner === owner))).join(''),
   '### Missing and unreachable\n\n',

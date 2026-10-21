@@ -29,10 +29,14 @@ export const plainError = error => ({ name: error?.name ?? 'Error', message: Str
 
 /** A HUD texture reference as plain data: the page decodes it from its own
  * asset store. */
-export const plainTexture = ref => ({ key: ref.key, package: ref.asset.name, index: ref.index });
+export const plainTexture = ref => ref.dynamic ? { key: ref.key, dynamic: true, width: ref.width, height: ref.height }
+  : { key: ref.key, package: ref.asset.name, index: ref.index };
 /** The window host's GC draw commands (script-window-host.mjs callVirtual)
  * as plain data. */
-export const plainHudCommands = commands => commands.map(command => command.kind === 'viewport'
+export const plainHudCommands = commands => commands.map(command => command.kind === 'clearZ' ? { kind: 'clearZ' }
+  // GC.DrawActor's mesh draw (script-window-host.mjs, docs/gc-draw-actor.md): the planner's binding id, frame record and decision.
+  : command.kind === 'actor' ? { kind: 'actor', actor: command.actor, draw: command.draw }
+  : command.kind === 'viewport'
   // A ViewportWindow's world pass (script-window-viewport.mjs): plain already.
   ? { kind: 'viewport', x: command.x, y: command.y, width: command.width, height: command.height,
     location: [...command.location], rotation: [...command.rotation], fov: command.fov, clearZ: command.clearZ,
@@ -695,6 +699,38 @@ export function createSimSession(game, { assets = null, events = [], exportName 
     }
     return { root, frames, children };
   }
+  /** What a Canvas.DrawActor submission in the master frame needs (the view model's, and GC.DrawActor's from the HUD paint):
+   * the main camera's frustum (weaponFrustum), the master frame's DrawLodMesh inputs and Canvas.DrawActor's render feedback,
+   * FDynamicSprite::Setup in the canvas frame (Canvas->Update's, the master frame), one candidate packed as SetupDynamics
+   * packs an actor (weapon-overlay-sim.mjs `admit`), after this frame's OccludeBsp has run. */
+  function canvasDrawInputs() {
+    camera.updateMatrixWorld();
+    weaponFrustum.setFromProjectionMatrix(weaponMatrix.multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse),
+      camera.coordinateSystem, camera.reversedDepth);
+    const lodInputs = current?.visibility?.lod && current.view?.fov !== undefined ? { ...current.visibility.lod, fov: current.view.fov } : null;
+    const master = current?.visibility?.master;
+    const admit = master && occlusion?.setupSupported ? binding => {
+      const record = occlusion.meshRecord(binding.mesh.key, meshRecordFields(binding.payload));
+      const views = occlusion.setupCandidates(1);
+      binding.packSetup(views, views.at, 0, record, null, null);
+      views.u32[views.at + SETUP.FLAGS] = 0;
+      return occlusion.setupOnly(master.words, 1)[0] === SETUP_STATUS.ACCEPTED;
+    } : null;
+    return { lodInputs, admit };
+  }
+  /** GC.DrawActor from the HUD paint (docs/gc-draw-actor.md; the window host calls this inside its render service, with the
+   * actor in the state XGC::DrawActor set): the actor's binding updated in the master frame, and URender::DrawActor's render
+   * feedback (DrawActorSprite stamps LastRenderTime with the level clock, whatever the actor's bHidden) for an actor
+   * FDynamicSprite::Setup admits. The draw is null while the binding is being prepared or when Setup rejects the actor. */
+  function planHudActor(actor) {
+    if (!weaponSim || !current) return null;
+    const { lodInputs, admit } = canvasDrawInputs();
+    const result = weaponSim.drawHudActor(actor, { frustum: weaponFrustum, lodInputs, settings: actorScene?.lodSettings?.(), admit });
+    if (!result?.drawn) return null;
+    if (!runtime.readNamed(actor, 'bDeleteMe'))
+      runtime.writeNamed(actor, 'LastRenderTime', Math.fround(runtime.readNamed(runtime.levelFor(game.player.collisionActor).actors[0], 'TimeSeconds')));
+    return { id: result.id, record: result.record, decision: result.decision };
+  }
   function planViewportPass(command) {
     if (!(command.width > 0 && command.height > 0)) return null;
     viewportFrames++;
@@ -872,6 +908,7 @@ export function createSimSession(game, { assets = null, events = [], exportName 
       let commands = [], infoLink = null, flash = null;
       try {
         game.hud.host?.setViewportPlanner?.(planViewportPass);
+        game.hud.host?.setActorDrawPlanner?.(planHudActor);
         viewportFrames = 0; lastViewportPlans = [];
         commands = plainHudCommands(game.hud.commands(width, height, view));
         infoLink = infoLinkText();
@@ -1144,7 +1181,12 @@ export function createSimSession(game, { assets = null, events = [], exportName 
       // Brightness of its last Flush and the last SetRes request.
       const display = game.hud?.host?.display;
       snapshot.display = display ? { brightness: display.brightness, flushes: display.flushes,
-        resolution: display.resolution, resolutionVersion: display.resolutionVersion } : null;
+        resolution: display.resolution, resolutionVersion: display.resolutionVersion,
+        fullscreenToggles: display.fullscreenToggles, relaunches: display.relaunches, relaunchArguments: display.relaunchArguments,
+        // RootWindow.GenerateSnapshot (docs/root-snapshot.md): the page keeps its drawn frames while UIBackground is 1 (Snapshot), and
+        // fills each requested texture from the frame before the one this snapshot draws.
+        keepFrame: game.player?.collisionActor ? Number(runtime.readNamed(game.player.collisionActor, 'UIBackground')) === 1 : false,
+        snapshotRequests: display.snapshotRequests, snapshotReleased: display.snapshotReleased } : null;
       return snapshot;
     },
     /** The queued events outside a frame (map load: the first creation
@@ -1345,21 +1387,7 @@ export function createSimSession(game, { assets = null, events = [], exportName 
       const errors = [];
       let frame = null;
       try {
-        camera.updateMatrixWorld();
-        weaponFrustum.setFromProjectionMatrix(weaponMatrix.multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse),
-          camera.coordinateSystem, camera.reversedDepth);
-        // The master frame's DrawLodMesh inputs (Canvas.DrawActor draws in it).
-        const lodInputs = current?.visibility?.lod && current.view?.fov !== undefined ? { ...current.visibility.lod, fov: current.view.fov } : null;
-        // Canvas.DrawActor's render feedback: FDynamicSprite::Setup in the canvas frame (Canvas->Update's, the master frame), one
-        // candidate packed as SetupDynamics packs an actor (weapon-overlay-sim.mjs `admit`), after this frame's OccludeBsp has run.
-        const master = current?.visibility?.master;
-        const admit = master && occlusion?.setupSupported ? binding => {
-          const record = occlusion.meshRecord(binding.mesh.key, meshRecordFields(binding.payload));
-          const views = occlusion.setupCandidates(1);
-          binding.packSetup(views, views.at, 0, record, null, null);
-          views.u32[views.at + SETUP.FLAGS] = 0;
-          return occlusion.setupOnly(master.words, 1)[0] === SETUP_STATUS.ACCEPTED;
-        } : null;
+        const { lodInputs, admit } = canvasDrawInputs();
         frame = weaponSim.frame({ frustum: weaponFrustum, pack, lodInputs, settings: actorScene?.lodSettings?.(), admit });
         if (frame) {
           const info = runtime.levelFor(game.player.collisionActor).actors[0];

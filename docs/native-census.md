@@ -80,20 +80,20 @@ the markers; the JSON report with every native, its callers and the probe outcom
 |---|---|---|---|---|---|
 | ConSys | 11 | 10 | 1 | 0 | 0 |
 | Core | 165 | 131 | 4 | 25 | 5 |
-| DeusEx | 57 | 34 | 19 | 3 | 1 |
+| DeusEx | 57 | 35 | 18 | 3 | 1 |
 | DeusExText | 12 | 12 | 0 | 0 | 0 |
 | Editor | 13 | 0 | 0 | 0 | 13 |
-| Engine | 158 | 85 | 20 | 29 | 24 |
-| Extension | 453 | 372 | 16 | 65 | 0 |
+| Engine | 158 | 87 | 18 | 29 | 24 |
+| Extension | 453 | 381 | 12 | 60 | 0 |
 | IpDrv | 22 | 0 | 0 | 0 | 22 |
-| **all** | **891** | **644** | **60** | **122** | **65** |
+| **all** | **891** | **656** | **53** | **117** | **65** |
 
 ### Dispatchers
 
 | dispatcher | layer | natives routed | source |
 |---|---|---|---|
 | vm-primitives | vm | 115 | src/runtime/script-vm.mjs |
-| runtime-invoke | runtime | 149 (+ forwards ranges) | src/runtime/script-runtime.mjs |
+| runtime-invoke | runtime | 152 (+ forwards ranges) | src/runtime/script-runtime.mjs |
 | runtime-iterator | runtime | 10 | src/runtime/script-runtime.mjs |
 | pawn-alliance | runtime | 3 | src/runtime/script-pawn-alliance.mjs |
 | window-tile | runtime | 11 | src/runtime/script-window-tile.mjs |
@@ -104,12 +104,12 @@ the markers; the JSON report with every native, its callers and the probe outcom
 | console-command | window-host | 1 | src/runtime/script-input-console.mjs |
 | window-list | window-host | 69 | src/runtime/script-window-list.mjs |
 | window-edit | window-host | 32 | src/runtime/script-window-edit-natives.mjs |
-| window-gc | window-host | 49 | src/runtime/script-window-gc-dispatch.mjs |
-| window-host-natives | window-host | 133 | src/runtime/script-window-host-natives.mjs |
+| window-gc | window-host | 51 | src/runtime/script-window-gc-dispatch.mjs |
+| window-host-natives | window-host | 139 | src/runtime/script-window-host-natives.mjs |
 | play-native | play-host | 14 | src/runtime/script-doors.mjs |
 | conplay | play-host | 7 | src/runtime/script-conplay-live.mjs |
 | triggers | play-host | 16 | src/runtime/script-triggers.mjs |
-| player-log | play-host | 1 | src/runtime/script-player-log.mjs |
+| player-log | play-host | 2 | src/runtime/script-player-log.mjs |
 | player-dump | play-host | 2 | src/runtime/script-player-dump.mjs |
 | game-directory | play-host | 17 | src/runtime/script-game-directory.mjs |
 | travel | play-host | 1 | src/runtime/script-travel.mjs |
@@ -151,35 +151,26 @@ Handled only under a condition or for some receivers (30):
 
 ### Missing and reachable
 
-#### From game code (DeusEx, Extension, ConSys) (11)
+#### From game code (DeusEx, Extension, ConSys) (5)
 
-**window: root and player** (3)
-
-| native | called from | note |
-|---|---|---|
-| 1050 Extension.PlayerPawnExt.PreRenderWindows | Extension.PlayerPawnExt (PreRender) | Called by the PreRender event; Play paints the windows from its own render path (src/runtime/script-play-hud.mjs), so the script event is not dispatched. |
-| 1051 Extension.PlayerPawnExt.PostRenderWindows | Extension.PlayerPawnExt (PostRenderFlash) | Called by the PostRenderFlash event; same as PreRenderWindows. |
-| 1524 Extension.RootWindow.GenerateSnapshot | DeusExRootWindow (ShowSnapshot); MenuScreenSaveGame (GenerateNewSnapShot) | DeusExRootWindow.ShowSnapshot, which UIPauseGame calls whenever the UI pauses the game; the save screen calls it for its preview. |
-
-**actor** (2)
+**window: root and player** (2)
 
 | native | called from | note |
 |---|---|---|
-| 722 Engine.Actor.ParabolicTrace | ScriptedPawn (AISafeToThrow, GetProjectileList) | ScriptedPawn.AISafeToThrow and GetProjectileList: an NPC deciding to throw a grenade or avoid a projectile. |
-| by name Engine.Actor.PlayOwnedSound | DeusExWeapon (PlaySimSound, SpawnEffectSounds); Engine.PlayerPawn (DoJump, Dodge) | DeusExWeapon.PlaySimSound (called by Fire, ClientFire and PlayFiringSound) and SpawnEffectSounds: a fired weapon, not a rare path. |
+| 1050 Extension.PlayerPawnExt.PreRenderWindows | Extension.PlayerPawnExt (PreRender) | Decided host-path (2026-10-21), see Decisions. |
+| 1051 Extension.PlayerPawnExt.PostRenderWindows | Extension.PlayerPawnExt (PostRenderFlash) | Decided host-path (2026-10-21), see Decisions. |
 
-**window: graphics context** (2)
+**actor** (1)
 
 | native | called from | note |
 |---|---|---|
-| 1288 Extension.GC.DrawActor | ActorDisplayWindow (DrawWindow); AugmentationDisplayWindow (DrawVisionAugmentation) | The vision augmentation (AugmentationDisplayWindow) and the actor display window. |
-| 1295 Extension.GC.ClearZ | ActorDisplayWindow (DrawWindow) |  |
+| by name Engine.Actor.PlayOwnedSound | DeusExWeapon (PlaySimSound, SpawnEffectSounds); Engine.PlayerPawn (DoJump, Dodge) | Decided not-reached (2026-10-21), see Decisions. |
 
 **conversation** (1)
 
 | native | called from | note |
 |---|---|---|
-| 2050 ConSys.Conversation.CreateFlagRef | ConSys.Conversation (AddFlagRef) | Only Conversation.AddFlagRef calls it, and no script calls AddFlagRef: the conversation import does (Play loads conversations through script-native-conversation-list.mjs). |
+| 2050 ConSys.Conversation.CreateFlagRef | ConSys.Conversation (AddFlagRef) | Decided not-reached (2026-10-21), see Decisions. |
 
 **developer: DumpLocation** (1)
 
@@ -187,19 +178,7 @@ Handled only under a condition or for some receivers (30):
 |---|---|---|
 | 3038 DeusEx.DumpLocation.LoadLocation | DeusExGameInfo (Login); DumpLocationListLocationsWindow (ViewDumpLocation) | DeusExGameInfo.Login calls it only when HasLocationBeenSaved (3039, handled) is true (docs/travel.md); the DumpLocation windows call it too. |
 
-**player (DeusExPlayer)** (1)
-
-| native | called from | note |
-|---|---|---|
-| 3014 DeusEx.DeusExPlayer.CreateDataVaultImageNoteObject | PersonaImageWindow (MouseButtonReleased) |  |
-
-**window** (1)
-
-| native | called from | note |
-|---|---|---|
-| 1449 Extension.Window.ConvertCoordinates | HUDObjectSlot (MouseMoved); PersonaInventoryItemButton (MouseMoved); PersonaScreenInventory (UpdateDragMouse) | Inventory drag and drop (the item buttons and the belt slots). |
-
-#### Only from Engine base classes (18)
+#### Only from Engine base classes (17)
 
 **canvas** (4)
 
@@ -257,12 +236,6 @@ Handled only under a condition or for some receivers (30):
 | native | called from | note |
 |---|---|---|
 | by name Engine.LevelInfo.GetAddressURL | Engine.GameInfo (GetServerPort); IpDrv.UdpBeacon (BroadcastBeacon); UBrowser.UBrowserIRCSystemPage (CheckAway) | GameInfo.GetServerPort, the UdpBeacon and the UT browser. |
-
-**pawn** (1)
-
-| native | called from | note |
-|---|---|---|
-| 524 Engine.Pawn.FindStairRotation | Engine.PlayerPawn (PlayerMove) | PlayerPawn.PlayerWalking.PlayerMove, the base state function that DeusExPlayer.PlayerWalking inherits (it overrides only ProcessMove, PlayerTick and ZoneChange). |
 
 #### Developer tools only (31)
 
@@ -322,6 +295,23 @@ Handled only under a condition or for some receivers (30):
 |---|---|---|
 | by name Engine.Actor.ConsoleCommand | ShowClassWindow (SaveSettings); UBrowser.UBrowserMainWindow (OpenURL); UBrowser.UBrowserBrowserButton (Click); +5 more classes | Reached only through context calls whose receiver class this reading cannot type; the player's ConsoleCommand is PlayerPawn.ConsoleCommand (handled by name). |
 
+### Decisions
+
+Natives examined and deliberately not routed (`NATIVE_DECISIONS` in src/runtime/native-registry.mjs; `npm test` fails if a decided native becomes handled). `not-reached`: the shipped single-player code cannot call it under the shipped configuration; `host-path`: Play does the work its body does through another path; `unsupported`: reachable and not implemented.
+
+- **2050 ConSys.Conversation.CreateFlagRef** - not-reached (2026-10-21). Only Conversation.AddFlagRef calls it, and no shipped script calls AddFlagRef: the conversation import (the editor's .con importer) does. A shipped map carries its Conversation objects serialized, ConFlagRef chains included; Play prepares each chain from the package (script-conversation-face-live.mjs) and never imports a .con file.
+  - Evidence: native-census.json callers of 2050 (one: ConSys.Conversation.AddFlagRef; callers of AddFlagRef: none); execCreateFlagRef 0x10010600 (docs/script-conversation-construction.md).
+  - Reopen when: importing a conversation source file (an editor feature, out of scope).
+- **by name Engine.Actor.PlayOwnedSound** - not-reached (2026-10-21). Every caller sits behind a multiplayer or non-default condition. DeusExWeapon.PlaySimSound tests Level.NetMode == NM_Standalone and then calls Owner.PlaySound (264, handled); only the else branch calls PlayOwnedSound. SpawnEffectSounds is called only by DeusExWeapon.SelectiveSpawnEffects, whose first test returns for NM_Standalone. PlayerPawn.DoJump is overridden by DeusExPlayer.DoJump, which has no Super call and plays through PlaySound (264). PlayerPawn.PlayerWalking.Dodge runs only for a double-tap dodge, and both installed User.ini and DefUser.ini set DodgeClickTime=0, which PlayerMove tests (DodgeClickTime > 0) before it reads a dodge. Play runs standalone (NetMode 0, no net driver).
+  - Evidence: dump-script-function.mjs: DeusExWeapon.PlaySimSound (@11 NetMode == 0 -> native 264, @71 PlayOwnedSound), DeusExWeapon.SelectiveSpawnEffects (@0 NetMode == 0 -> SpawnEffects, return), DeusExPlayer.DoJump (native 264 at @90, no Super call); System/User.ini line 249; Engine.dll execPlayOwnedSound 0x103e29d0: in NM_Standalone it only forwards ClientHearSound to the player pawns (no local sound of its own).
+  - Reopen when: a networked NetMode, or DodgeClickTime > 0 (an edited User.ini; Play has no typed console and does not persist the ini).
+- **1050 Extension.PlayerPawnExt.PreRenderWindows** - host-path (2026-10-21). The native is the Draw-time window work of the PreRender script event (Extension exec 0x10038480 calls the pawn's vtable slot +0xb4 with the Canvas). Play never dispatches the PreRender, PostRender or PostRenderFlash events (Engine.PlayerPawn.PreRender only forwards to myHUD); it runs the windows directly: RootWindow rendering rectangle and PreRender frame (script-root-render-viewport.mjs, validate-root-render-viewport against 0x1003a7dd..0x1003a8cb) in HudPlay.renderViewport, and the paint in HudPlay.commands (src/runtime/script-play-hud.mjs), both inside the render pass at x87 precision control 24 (render-precision.mjs).
+  - Evidence: dump-script-function.mjs Extension PlayerPawnExt.PreRender (Super.PreRender, native 1050); x86 0x10038480-0x100384c6; docs/conversation-camera.md.
+  - Reopen when: a script that overrides PreRender or PostRenderFlash on a shipped PlayerPawn subclass (none: DeusExPlayer declares neither).
+- **1051 Extension.PlayerPawnExt.PostRenderWindows** - host-path (2026-10-21). As PreRenderWindows: exec 0x100384f0 calls the pawn's vtable slot +0xb8 with the Canvas, the PostRenderFlash event's paint of the root window (XRootWindow::PaintWindows), which HudPlay.commands performs every frame.
+  - Evidence: dump-script-function.mjs Extension PlayerPawnExt.PostRenderFlash (native 1051, then Super.PostRenderFlash, which is empty in Engine.PlayerPawn); x86 0x100384f0-0x10038536.
+  - Reopen when: as PreRenderWindows.
+
 ### Excluded
 
 #### Owner: stage-6 (2)
@@ -347,10 +337,10 @@ Handled only under a condition or for some receivers (30):
 
 ### Missing and unreachable
 
-#### No shipped script calls them (122)
+#### No shipped script calls them (117)
 
-- **window** (28): 1435 Window.ResetSize, 1436 Window.ResetWidth, 1437 Window.ResetHeight, 1441 Window.GetFocusWindow, 1452 Window.GetCursorPos, 1471 Window.IsPointInWindow, 1478 Window.SetFonts, 1479 Window.SetNormalFont, 1480 Window.SetBoldFont, 1481 Window.EnableSpecialText, 1496 Window.SetVisibilitySounds, 1531 BorderWindow.SetBorderMargins, 1533 BorderWindow.EnableResizing, 1534 BorderWindow.SetMoveCursors, 1554 TextWindow.GetTextPart, 1591 ButtonWindow.SetActivateDelay, 1610 ToggleWindow.ChangeToggle, 1613 ToggleWindow.SetToggleSounds, 1682 ClipWindow.SetUnitSize, 1683 ClipWindow.SetUnitWidth, 1684 ClipWindow.SetUnitHeight, 1685 ClipWindow.ResetUnitSize, 1686 ClipWindow.ResetUnitWidth, 1687 ClipWindow.ResetUnitHeight, 1688 ClipWindow.GetUnitSize, 1690 ClipWindow.EnableSnapToUnits, 1691 ClipWindow.GetChild, 1820 RadioBoxWindow.GetEnabledToggle
 - **window: computer terminal** (24): 1970 ComputerWindow.SetBackgroundTextures, 1972 ComputerWindow.SetTextWindowPosition, 1974 ComputerWindow.SetFontColor, 1977 ComputerWindow.SetCursorTexture, 1979 ComputerWindow.SetCursorBlinkSpeed, 1981 ComputerWindow.SetTextSound, 1982 ComputerWindow.SetTypingSound, 1983 ComputerWindow.SetComputerSoundVolume, 1984 ComputerWindow.SetTypingSoundVolume, 1986 ComputerWindow.ClearLine, 1988 ComputerWindow.PrintLn, 1989 ComputerWindow.GetInput, 1990 ComputerWindow.GetChar, 1991 ComputerWindow.PrintGraphic, 1992 ComputerWindow.PlaySoundLater, 1993 ComputerWindow.SetTextPosition, 1994 ComputerWindow.IsBufferFlushed, 1995 ComputerWindow.Pause, 1996 ComputerWindow.Resume, 1997 ComputerWindow.IsPaused, 1998 ComputerWindow.SetThrottle, 1999 ComputerWindow.GetThrottle, 2000 ComputerWindow.ResetThrottle, 2002 ComputerWindow.FadeOutText
+- **window** (23): 1435 Window.ResetSize, 1436 Window.ResetWidth, 1437 Window.ResetHeight, 1441 Window.GetFocusWindow, 1452 Window.GetCursorPos, 1471 Window.IsPointInWindow, 1478 Window.SetFonts, 1479 Window.SetNormalFont, 1480 Window.SetBoldFont, 1481 Window.EnableSpecialText, 1496 Window.SetVisibilitySounds, 1531 BorderWindow.SetBorderMargins, 1533 BorderWindow.EnableResizing, 1534 BorderWindow.SetMoveCursors, 1682 ClipWindow.SetUnitSize, 1683 ClipWindow.SetUnitWidth, 1684 ClipWindow.SetUnitHeight, 1685 ClipWindow.ResetUnitSize, 1686 ClipWindow.ResetUnitWidth, 1687 ClipWindow.ResetUnitHeight, 1688 ClipWindow.GetUnitSize, 1690 ClipWindow.EnableSnapToUnits, 1691 ClipWindow.GetChild
 - **core: object** (14): 191 Object.Exp, 192 Object.Loge, 227 Object.Invert, 230 Object.GetUnAxes, 232 Object.Warn, 247 Object.Lerp, 1001 Object.AllObjects, 1005 Object.clock, 1006 Object.unclock, 1007 Object.CyclesToSeconds, Object.Normalize (by name), Object.OrthoRotation (by name), Object.ResetConfig (by name), Object.StaticSaveConfig (by name)
 - **actor** (12): 233 Actor.Error, 263 Actor.HasAnim, 305 Actor.ChildActors, 307 Actor.TouchingActors, 539 Actor.GetMapName, 549 Actor.Subtract_ColorColor, 550 Actor.Multiply_FloatColor, 551 Actor.Add_ColorColor, 552 Actor.Multiply_ColorFloat, Actor.DemoPlaySound (by name), Actor.GetNextInt (by name), Actor.GetSoundDuration (by name)
 - **core: operators** (9): 133 Object.MultiplyEqual_ByteByte, 134 Object.DivideEqual_ByteByte, 136 Object.SubtractEqual_ByteByte, 137 Object.AddAdd_PreByte, 170 Object.MultiplyMultiply_FloatFloat, 220 Object.Cross_VectorVector, 289 Object.Divide_RotatorFloat, 290 Object.MultiplyEqual_RotatorFloat, 291 Object.DivideEqual_RotatorFloat
@@ -365,7 +355,7 @@ Handled only under a condition or for some receivers (30):
 - **levelinfo** (1): LevelInfo.GetLocalURL (by name)
 - **player (DeusExPlayer)** (1): 3001 DeusExPlayer.SetBoolFlagFromString
 
-Natives with a translated body (a module declaring `nativeIndex`) that no dispatcher routes (5): 1554 GetTextPart, 1591 SetActivateDelay, 1610 ChangeToggle, 1613 SetToggleSounds, 1820 GetEnabledToggle
+Natives with a translated body (a module declaring `nativeIndex`) that no dispatcher routes (0):
 
 <!-- census:end -->
 
@@ -386,22 +376,28 @@ game, is recorded with its message, and the page is rebooted and the route repla
 menu's Training, Intro and Quit, the Yes of the message boxes MenuMain raises for them, and Start Game (their paths are
 `validate-travel-newgame-play` and [travel](travel.md)); gestures are also kept off those buttons' rectangles.
 
-First run (37 minutes, `.work/native-menu-sweep.json`; **before the Load Game natives of [save-directory](save-directory.md)**): **21 screens (15 classes), 618 gestures on 782 windows (summed per screen); 10 gestures stopped the
-game, for 6 distinct reasons**: two unsupported natives (3013 and the name-bound `GetDefaultURL`) and four stops that are not
-natives. Every screen with a title window gets a title click and drag; none of them stopped (native 1472 is handled).
+First run (37 minutes): 21 screens (15 classes), 618 gestures on 782 windows (summed per screen); 10 gestures stopped the game, for 6 distinct
+reasons: two unsupported natives (3013 and the name-bound `GetDefaultURL`) and four stops that are not natives (the table's last three
+rows below, in their first form, and `SetupSentinel`). Every screen with a title window gets a title click and drag; none of them stopped
+(native 1472 is handled).
 
-| stop | where | what it is |
-|---|---|---|
-| native **3013** `DeusExPlayer.CreateGameDirectoryObject` | MenuMain, Load Game button (`MenuScreenLoadGame.GetSaveGameDirectory`) | census: excluded, stage-6; **reached from the default start**. *Fixed 2026-10-21 (see the second run below).* |
-| name-bound native `PlayerPawn.GetDefaultURL` (native 0) | MenuMPMain button 2 (`menuchoice_class.SetInitialClass`) | census: missing-reachable, engine base; multiplayer menu |
-| script function not prepared: `UWindow.UWindowList.SetupSentinel` | MenuMPMain buttons 0 and 1 | not a native: Play prepares no UWindow class, which the multiplayer server list derives from |
-| host service: "XButtonWindow auto-repeat tick requires mouse-input services" | Customize Keys, the two `ButtonWindow`s (auto-repeat scroll arrows) | `Window.EnableAutoRepeat` (1595) is handled; its tick needs the mouse-input service (`script-window-family-draw.mjs`) |
-| engine exec command "UWindowsViewport::Exec ToggleFullscreen" | Display, the full-screen choice | the `ConsoleCommand` chain (`script-console-command.mjs`), not a script native |
-| engine exec command "USystem::Exec RELAUNCH -changevideo" | Display, the render-device message box's OK | same |
+After the host services (2026-10-21, 25 minutes, `.work/native-menu-sweep.json`): the same **21 screens, 618 gestures on 782 windows; 5
+gestures stopped the game, for 3 distinct reasons**, all in the table; the three host-service stops are gone. The Display screen's Render
+Device prompt now sends `RELAUNCH -changevideo`, which the sweep records as a host request (the page's `deusex-relaunch` event, cancelled
+so the walk survives; the report's `hostRequests`) instead of an error, and Customize Keys' scroll arrows tick.
+
+| stop | where | what it is | state |
+|---|---|---|---|
+| native **3013** `DeusExPlayer.CreateGameDirectoryObject` | MenuMain, Load Game button (`MenuScreenLoadGame.GetSaveGameDirectory`) | census: excluded, stage-6; **reached from the default start** | **done**: [save directory](save-directory.md) (natives 3013, 3075, 3080-3094) |
+| name-bound native `PlayerPawn.GetDefaultURL` (native 0) | MenuMPMain button 2 (`menuchoice_class.SetInitialClass`) | census: missing-reachable, engine base; multiplayer menu | open (multiplayer) |
+| script function not prepared: `UWindow.UWindowList.SetupSentinel` | MenuMPMain buttons 0 and 1 | not a native: Play prepares no UWindow class, which the multiplayer server list derives from | open (multiplayer) |
+| host service: "XButtonWindow auto-repeat tick requires mouse-input services" | Customize Keys, the two `ButtonWindow`s (auto-repeat scroll arrows) | `XButtonWindow::Tick` (`0x10008190`) reads the pointer and activates the button | **done**: [host services](host-services.md) |
+| engine exec command "UWindowsViewport::Exec ToggleFullscreen" | Display, the full-screen choice | the `ConsoleCommand` chain (`script-console-command.mjs`), not a script native | **done**: a request for the page |
+| engine exec command "USystem::Exec RELAUNCH -changevideo" | Display, the render-device message box's OK | same | **done**: a request for the page (a restart) |
 
 Of the 25 menu window classes (not counting the choice and message-box windows) the first run reached 13 and did **not** reach 12: Load Game (blocked at 3013: its next natives are
 3080, 3086, 3084, 3088, 3089, 3091, 3093 and 3094), Save Game (the main menu's button is insensitive without a running game; its
-natives are 3011, 3075, 3090, 1524 and `Object.GetConfig`), the multiplayer Host, Join and Player Setup screens (behind the
+natives are 3011, 3075, 3090 and `Object.GetConfig`; its preview calls 1524, which is implemented), the multiplayer Host, Join and Player Setup screens (behind the
 MenuMPMain stops above), and the colour-theme screens (`MenuScreenRGB` and Themes Load/Save are opened only by
 `DeusExPlayer.ShowRGBDialog`; no control of Adjust Colors reached it). Every other screen of the main menu's tree (Settings and its
 six screens, Brightness, Credits, New Game with its difficulty screen and message boxes, the multiplayer menu itself) ran clean
@@ -433,17 +429,27 @@ Menus and the default start first, because the user meets them first; then ordin
    one stop on that path.) Nine natives: 3013 `CreateGameDirectoryObject`, 3080 `GetGameDirectory`, 3086 `SetDirType`, 3084
    `GetDirCount`, 3088 `GetSaveInfo`, 3089 `GetSaveInfoFromDirectoryIndex`, 3091 `DeleteSaveInfo`, 3093 `GetSaveFreeSpace`, 3094
    `GetSaveDirectorySize`; an empty directory (a browser store with no saves) opens it. The rest of the family follows with
-   saving: 3011 `SaveGame`, 3075 `UpdateTimeStamp`, 3090 `GetTempSaveInfo`, 3081-3083, 3085, 3087, 3092, `Object.GetConfig` and
-   1524 `RootWindow.GenerateSnapshot` (also called whenever the UI pauses the game: `DeusExRootWindow.UIPauseGame` ->
-   `ShowSnapshot`).
-2. **Ordinary play**, the natives game code calls that nothing routes: `Actor.PlayOwnedSound` (name-bound; `DeusExWeapon.PlaySimSound`,
-   which `Fire` and `PlayFiringSound` call), 722 `ParabolicTrace` (an NPC deciding to throw a grenade), 1449
-   `Window.ConvertCoordinates` (inventory drag and drop), 1288 `GC.DrawActor` and 1295 `GC.ClearZ` (the vision augmentation), 3014
-   `CreateDataVaultImageNoteObject` (the images screen), 524 `Pawn.FindStairRotation` (if the base `PlayerWalking.PlayerMove` runs).
-   Decide, with a note in the registry, for 1050/1051 (`PreRenderWindows`/`PostRenderWindows`: Play paints the windows itself) and
-   2050 (`CreateFlagRef`: only the conversation import reaches it).
-3. **Host services the menus ask for**, which are not script natives: the mouse-input service for button auto-repeat (Customize Keys),
-   `TOGGLEFULLSCREEN` and `RELAUNCH` for the Display screen. Run the sweep again after 1 and 3.
+   saving: 3011 `SaveGame`, 3075 `UpdateTimeStamp`, 3090 `GetTempSaveInfo`, 3081-3083, 3085, 3087, 3092 and `Object.GetConfig`.
+   (1524 `RootWindow.GenerateSnapshot`, which the save screen also calls for its preview as `GenerateSnapshot(True)`, is done: step 2.)
+2. **Ordinary play** (done 2026-10-21): every native game code calls that nothing routed is either handled or has a decision.
+   * Implemented against the original: 722 `ParabolicTrace` ([parabolic trace](parabolic-trace.md): Unicorn oracle, 1,905 cases; an NPC
+     near a falling grenade or deciding to throw one); 1288 `GC.DrawActor` and 1295 `GC.ClearZ` ([GC.DrawActor](gc-draw-actor.md): the
+     vision augmentation and the actor display window); 524 `Pawn.FindStairRotation` ([stair rotation](pawn-stair-rotation.md): Unicorn
+     oracle, 6,198 cases, and 240 live calls of the base `PlayerWalking.PlayerMove` replayed; reached only when `bLookUpStairs` is set,
+     which the installed ini does not); 1524 `RootWindow.GenerateSnapshot` ([root snapshot](root-snapshot.md): UI Background =
+     Snapshot, the resampling checked against the original on 131 frames, the picture from the page's last frame).
+   * Routed and checked in Play (`scripts/validate-ui-natives-play.mjs`): 1449 `Window.ConvertCoordinates` (an inventory item dragged onto a
+     belt slot) and 3014 `CreateDataVaultImageNoteObject` (a note added on the images screen; the same allocation as `CreateLogObject`, with
+     the oracle for both).
+   * The five translated modules nothing routed: 1591, 1613 and 1820 are in the exec-diff harness (identical to the original), 1610
+     `ChangeToggle` runs through the control-window oracle's translation, and 1554 `GetTextPart` is the dispatcher's string form over the memory
+     model's validated `FString::Mid` bounds, checked against the original's results (`validate-text-get-text-part-route.mjs`). No shipped
+     script calls any of the five.
+   * Decisions in the registry (`NATIVE_DECISIONS`, "Decisions" above): `Actor.PlayOwnedSound` (every caller is behind a multiplayer branch
+     or `DodgeClickTime > 0`), 1050/1051 (Play paints the windows itself), 2050 (only the conversation importer calls it).
+3. **Host services the menus ask for** (done 2026-10-21; [host services](host-services.md)): the mouse-input service of the button
+   auto-repeat tick (Customize Keys), `TOGGLEFULLSCREEN` and `RELAUNCH -changevideo` for the Display screen, with a Chromium check on the
+   default start. The sweep was run again (below).
 4. **Multiplayer menus**: only if multiplayer is taken up. Until then the MenuMPMain buttons stop on a UWindow function that is
    not prepared, and `GetDefaultURL`, `UpdateURL`, `GetEntryLevel`, `GetPropertyText` and the IpDrv natives are the family behind it.
 5. **Engine base-class natives** (18) when a script `Console` object or the spectator and waiting states exist; **developer tools**

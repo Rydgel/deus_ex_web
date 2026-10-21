@@ -21,8 +21,8 @@ takes input and closes:
 | MenuSettings | the six screens below | opens, closes to MenuMain |
 | Controls | Always Run, Toggle Crouch, Invert Mouse, Mouse Sensitivity | cycle / reset / OK pass |
 | Customize Keys | the key list | Down + Enter waits for a key (GrabMouse, LockMouse, ShowCursor), a key is taken, OK rebinds it through `set Input`: G moved from ShowGoalsWindow to the second row's action |
-| Game options (`MenuScreenOptions`) | Object Names, Weapon Auto-Reload, Gore Level, Subtitles, Crosshairs, HUD Augmentation Display, UI Background, Player Bob, Log Timeout | pass, except **UI/Menu Background = Snapshot** followed by OK: `ShowSnapshot` calls `RootWindow.GenerateSnapshot` (native 1524), a render-to-texture of the 3D view: unsupported. Reset to Render 3D and the rest pass. |
-| Display | Adjust Brightness..., Toggle Full-Screen Mode, Render Device, Screen Resolution, Texture Color Depth, World/Object Texture Detail, Detail Textures, Decals | pass, except **Toggle Full-Screen Mode**: `UWindowsViewport::Exec ToggleFullscreen`. Render Device opens its restart prompt (a message box) and closes. |
+| Game options (`MenuScreenOptions`) | Object Names, Weapon Auto-Reload, Gore Level, Subtitles, Crosshairs, HUD Augmentation Display, UI Background, Player Bob, Log Timeout | pass. UI/Menu Background = Snapshot: `ShowSnapshot` calls `RootWindow.GenerateSnapshot` (native 1524), the page's last frame as a grey picture behind the menus ([root snapshot](root-snapshot.md)). |
+| Display | Adjust Brightness..., Toggle Full-Screen Mode, Render Device, Screen Resolution, Texture Color Depth, World/Object Texture Detail, Detail Textures, Decals | pass. Toggle Full-Screen Mode (`UWindowsViewport::Exec ToggleFullscreen`) and the Render Device prompt's `RELAUNCH -changevideo` are host requests ([host services](host-services.md)). |
 | Adjust Brightness | Brightness slider | pass |
 | Sound | Music, Sound Effects, Speech volume, Effects Channels, Sample Rate, Sound Quality, Reverse Stereo, Dolby Surround, Hardware 3D | pass |
 | Adjust Colors | Menu / HUD translucency, colour schemes, HUD borders | pass. `MenuScreenRGB` and the theme load/save screens are reached only from `DeusExPlayer.ShowRGBDialog`, which returns unless cheats are enabled: not a player menu. |
@@ -65,8 +65,8 @@ first one when the browser's buffer is none of them.
 * **Persistence.** The INI files are not written back (Stage 6): `SaveConfig` updates the
   in-memory GConfig, which each map load rebuilds from the installed files; only the page's own
   Brightness control and fixed resolution survive map loads.
-* UI Background = Snapshot (native 1524), Toggle Full-Screen Mode (`ToggleFullscreen`),
-  `GetCurrentColorDepth`, `EndFullscreen`, `Preferences` are explicit errors.
+* `GetCurrentColorDepth`, `EndFullscreen`, `Preferences` are explicit errors. Toggle
+  Full-Screen Mode and the Render Device restart are host requests ([host services](host-services.md)).
 * Live effect of the other client and render-device properties (texture detail, `NoLighting`,
   `CurvedSurfaces`, `ScreenFlashes`, `DetailTextures`, ...) is not modelled; the values are stored,
   exported and saved.

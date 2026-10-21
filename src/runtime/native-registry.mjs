@@ -66,8 +66,8 @@ export const NATIVE_SITES = [
 
   {id: 'runtime-invoke', layer: 'runtime', file: R + 'script-runtime.mjs', anchor: /\n {2}invokeNative\(call\) \{/,
     indices: idx(`113 117-118 167 195 231 252 256 258-262 264 266-267 272 277-284 293-294 298-299 303 320 500 502 504 506 508 510
-      512 514 517-518 520-521 523 527 529-534 536 548 650 700-701 705 708-711 713-718 721 723 751 1010 1012-1013 1024 1099 1409-1419
-      1421-1423 1425 1428 1430-1434 1438 1440 1455-1461 1467 1475-1477 1488 1493 1550-1551 1556-1557 1611-1612 1971 1973 1975-1976
+      512 514 517-518 520-521 523-524 527 529-534 536 548 650 700-701 705 708-711 713-718 721-723 751 1010 1012-1013 1024 1099 1409-1419
+      1421-1423 1425 1428 1430-1434 1438 1440 1455-1461 1467 1475-1477 1488 1493 1550-1551 1556-1557 1610-1612 1971 1973 1975-1976
       1978 1980 1985 1987 2001 2052-2056 2060-2062 2100-2102 2108-2109 3016-3017 3970`),
     names: ['engine.pawn.stopwaiting', 'engine.decal.attachdecal', 'engine.playerpawn.clienttravel', 'engine.decal.detachdecal',
       'core.object.dynamicloadobject', 'core.object.getenum'],
@@ -101,11 +101,11 @@ export const NATIVE_SITES = [
   {id: 'window-edit', layer: 'window-host', file: R + 'script-window-edit-natives.mjs', anchor: /export function dispatchEditWindowNative\(/,
     indices: idx('1860 1880-1892 1895-1896 1900-1902 1905-1912 1915-1917 1920-1921')},
   {id: 'window-gc', layer: 'window-host', file: R + 'script-window-gc-dispatch.mjs', anchor: /const natives\s*=\s*new Map\(/, table: true,
-    indices: idx('1200 1210-1221 1230-1231 1240-1248 1250-1262 1270-1272 1280-1287 1289')},
+    indices: idx('1200 1210-1221 1230-1231 1240-1248 1250-1262 1270-1272 1280-1289 1295')},
   {id: 'window-host-natives', layer: 'window-host', file: R + 'script-window-host-natives.mjs', anchor: /export function dispatchWindowHostNative\(/,
-    indices: idx(`1420 1424 1426-1427 1429 1439 1442-1448 1450-1451 1453-1454 1462-1466 1468-1470 1474 1482-1487 1489-1492 1495
-      1500 1510-1518 1521-1523 1555 1558-1564 1570-1573 1590 1592-1598 1620-1653 1660-1668 1680-1681 1689 1700-1703 1840-1844
-      1945-1948 1950-1951 1955-1956`)},
+    indices: idx(`1420 1424 1426-1427 1429 1439 1442-1449 1450-1451 1453-1454 1462-1466 1468-1470 1474 1482-1487 1489-1492 1495
+      1500 1510-1518 1521-1524 1554-1555 1558-1564 1570-1573 1590-1598 1613 1620-1653 1660-1668 1680-1681 1689 1700-1703 1820
+      1840-1844 1945-1948 1950-1951 1955-1956`)},
 
   {id: 'play-native', layer: 'play-host', file: R + 'script-doors.mjs', anchor: /function nativeCall\(call\) \{/,
     indices: idx('262 264-265 283 301-302 544 713-716 724 1052 3970-3971'),
@@ -123,7 +123,7 @@ export const NATIVE_SITES = [
     indices: idx('123 720 1100 1102 1110 1112 1120-1122 1124-1130'),
     partial: idx('1100 1102 1110 1112 1120-1122 1124-1130').map(index => [index, 'the player\'s FlagBase (the receiver must be the bound store)'])},
   {id: 'player-log', layer: 'play-host', file: R + 'script-player-log.mjs', anchor: /runtime\.native=call=>\{/,
-    indices: idx('3010')},
+    indices: idx('3010 3014')},
   {id: 'player-dump', layer: 'play-host', file: R + 'script-player-dump.mjs', anchor: /runtime\.native=call=>\{/,
     indices: idx('3015 3039')},
   {id: 'game-directory', layer: 'play-host', file: R + 'script-game-directory.mjs', anchor: /runtime\.native = call => \{/,
@@ -158,6 +158,44 @@ export const NOT_DISPATCHERS = Object.freeze({
   'src/runtime/script-vm-perception.mjs': 'the Rust perception handback of 705 (lowered, RUST_NATIVES)',
 });
 
+
+/** Natives the project has examined and decided not to route, each with the reason and the evidence (docs/native-census.md,
+ * "Decisions"). A decision is not a handler: it records why the census keeps listing the native as missing, and the test
+ * (test/native-registry.test.mjs) fails when a decided native becomes handled, so a stale decision cannot outlive the code.
+ * Fields: `native` (the index, or the lower-case function key `package.class.function` of a native bound by name), `name`,
+ * `decision` ('not-reached': the shipped single-player code cannot call it under the shipped configuration; 'host-path':
+ * Play does the work the native's body does through another path; 'unsupported': reachable, not implemented), `reason`,
+ * `evidence`, `date`, `reopen` (what would make it reachable). */
+export const NATIVE_DECISIONS = Object.freeze([
+  {native: 'engine.actor.playownedsound', name: 'Actor.PlayOwnedSound', decision: 'not-reached', date: '2026-10-21',
+    reason: 'Every caller sits behind a multiplayer or non-default condition. DeusExWeapon.PlaySimSound tests Level.NetMode == NM_Standalone and then calls ' +
+      'Owner.PlaySound (264, handled); only the else branch calls PlayOwnedSound. SpawnEffectSounds is called only by DeusExWeapon.SelectiveSpawnEffects, ' +
+      'whose first test returns for NM_Standalone. PlayerPawn.DoJump is overridden by DeusExPlayer.DoJump, which has no Super call and plays through ' +
+      'PlaySound (264). PlayerPawn.PlayerWalking.Dodge runs only for a double-tap dodge, and both installed User.ini and DefUser.ini set DodgeClickTime=0, ' +
+      'which PlayerMove tests (DodgeClickTime > 0) before it reads a dodge. Play runs standalone (NetMode 0, no net driver).',
+    evidence: 'dump-script-function.mjs: DeusExWeapon.PlaySimSound (@11 NetMode == 0 -> native 264, @71 PlayOwnedSound), DeusExWeapon.SelectiveSpawnEffects ' +
+      '(@0 NetMode == 0 -> SpawnEffects, return), DeusExPlayer.DoJump (native 264 at @90, no Super call); System/User.ini line 249; Engine.dll execPlayOwnedSound ' +
+      '0x103e29d0: in NM_Standalone it only forwards ClientHearSound to the player pawns (no local sound of its own).',
+    reopen: 'a networked NetMode, or DodgeClickTime > 0 (an edited User.ini; Play has no typed console and does not persist the ini).'},
+  {native: 1050, name: 'PlayerPawnExt.PreRenderWindows', decision: 'host-path', date: '2026-10-21',
+    reason: 'The native is the Draw-time window work of the PreRender script event (Extension exec 0x10038480 calls the pawn\'s vtable slot +0xb4 with the Canvas). ' +
+      'Play never dispatches the PreRender, PostRender or PostRenderFlash events (Engine.PlayerPawn.PreRender only forwards to myHUD); it runs the windows ' +
+      'directly: RootWindow rendering rectangle and PreRender frame (script-root-render-viewport.mjs, validate-root-render-viewport against ' +
+      '0x1003a7dd..0x1003a8cb) in HudPlay.renderViewport, and the paint in HudPlay.commands (src/runtime/script-play-hud.mjs), both inside the render ' +
+      'pass at x87 precision control 24 (render-precision.mjs).',
+    evidence: 'dump-script-function.mjs Extension PlayerPawnExt.PreRender (Super.PreRender, native 1050); x86 0x10038480-0x100384c6; docs/conversation-camera.md.',
+    reopen: 'a script that overrides PreRender or PostRenderFlash on a shipped PlayerPawn subclass (none: DeusExPlayer declares neither).'},
+  {native: 1051, name: 'PlayerPawnExt.PostRenderWindows', decision: 'host-path', date: '2026-10-21',
+    reason: 'As PreRenderWindows: exec 0x100384f0 calls the pawn\'s vtable slot +0xb8 with the Canvas, the PostRenderFlash event\'s paint of the root window ' +
+      '(XRootWindow::PaintWindows), which HudPlay.commands performs every frame.',
+    evidence: 'dump-script-function.mjs Extension PlayerPawnExt.PostRenderFlash (native 1051, then Super.PostRenderFlash, which is empty in Engine.PlayerPawn); x86 0x100384f0-0x10038536.',
+    reopen: 'as PreRenderWindows.'},
+  {native: 2050, name: 'Conversation.CreateFlagRef', decision: 'not-reached', date: '2026-10-21',
+    reason: 'Only Conversation.AddFlagRef calls it, and no shipped script calls AddFlagRef: the conversation import (the editor\'s .con importer) does. A shipped map carries ' +
+      'its Conversation objects serialized, ConFlagRef chains included; Play prepares each chain from the package (script-conversation-face-live.mjs) and never imports a .con file.',
+    evidence: 'native-census.json callers of 2050 (one: ConSys.Conversation.AddFlagRef; callers of AddFlagRef: none); execCreateFlagRef 0x10010600 (docs/script-conversation-construction.md).',
+    reopen: 'importing a conversation source file (an editor feature, out of scope).'},
+]);
 
 /** Everything the registry handles, as sorted unique indices and function keys, with the entries that handle each. */
 export function handledNatives({layers = null} = {}) {

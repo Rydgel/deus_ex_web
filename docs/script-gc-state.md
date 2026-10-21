@@ -18,11 +18,11 @@ Note: `src/runtime/script-gc.mjs` / `script-gc-bridge.mjs` are the Core
 
 This note records drawing **state** only. The draw and measure natives
 (1280 GetTextExtent, 1281 GetFontHeight, 1282-1289 Draw*) need a render
-surface and font glyph data and are out of scope here. 1295 `ClearZ` is
-also out of scope: its body `0x1002ae40` reads `this+0x28` (canvas), then
-`canvas+0x78` (viewport) `+0x64` (render device) and calls virtual slot
-`0x90` of the device with `canvas+0x7c` as the argument — it reaches
-`URenderDevice`, so it is not state and is not implemented.
+surface and font glyph data and have their own notes. 1295 `ClearZ`'s body
+`0x1002ae40` reads `this+0x28` (canvas), then `canvas+0x78` (viewport) `+0x64`
+(render device) and calls virtual slot `0x90` of the device with `canvas+0x7c`
+as the argument: it reaches `URenderDevice`, so it is not state; with 1288
+`DrawActor` it is translated in [gc-draw-actor.md](gc-draw-actor.md).
 
 ## Native table
 
@@ -72,7 +72,7 @@ access with no method call.
 | 1270 | 2092 | `CopyGC(GC Copy)` | `0x10027760` | `0x1002bef0` |
 | 1271 | 2094 | `PushGC() : int` | `0x100278d0` | `0x1002bf60` |
 | 1272 | 2096 | `PopGC(optional int gcNum = -1)` | `-1 -> 0x100279f0`, else `0x10027a80(gcNum)` | `0x1002bfa0` |
-| 1295 | 2171 | `ClearZ()` | `0x1002ae40` reaches the render device | out of scope |
+| 1295 | 2171 | `ClearZ()` | `0x1002ae40` reaches the render device | [gc-draw-actor.md](gc-draw-actor.md) |
 
 All functions have `functionFlags 0x401`. The optional-parameter defaults
 are the immediates the exec bodies preload into the argument slots before

@@ -103,6 +103,8 @@ import {textWindowGetText} from './script-text-get-text.mjs';
 import {textWindowGetTextLength} from './script-text-get-text-length.mjs';
 import {releaseHandle} from './script-object-handles.mjs';
 import {createWindowFArray} from './script-window-farray.mjs';
+import {potCeiling} from './script-root-snapshot.mjs';
+import {constructNativeObject} from './script-player-log.mjs';
 
 const f = Math.fround;
 const lower = value => String(value).toLowerCase();
@@ -190,11 +192,18 @@ export async function createWindowHost({runtime, assets, player, gameConfig = nu
   // (docs/script-native-config.md). The live audio objects belong to the current level.
   const nativeConfig=createNativeConfig({gconfig:await runtime.classLoader.prepareConfig(),audio:()=>runtime.audio??null});
   /** What the render device last took from the client config on a Flush (docs/script-native-config.md). */
-  const display={brightness:nativeConfig.instance('WinDrv.WindowsClient','Brightness'),flushes:0,resolution:null,resolutionVersion:0};
+  // fullscreenToggles / relaunches count the host requests the Exec chain made (UWindowsViewport::Exec ToggleFullscreen,
+  // USystem::Exec RELAUNCH); the page performs each once (docs/host-services.md).
+  const display={brightness:nativeConfig.instance('WinDrv.WindowsClient','Brightness'),flushes:0,resolution:null,resolutionVersion:0,
+    fullscreenToggles:0,relaunches:0,relaunchArguments:null,
+    // RootWindow.GenerateSnapshot's requests to the page (docs/root-snapshot.md): the frame the page last drew is the texture's source.
+    snapshotRequests:[],snapshotSerial:0,snapshotReleased:[]};
   const consoleCommands=createConsoleCommands({runtime,input:inputConsole,services:{
     nativeConfig:()=>nativeConfig,
     // UWindowsViewport::Exec SetRes -> RenDev->SetRes: the browser render device takes the request.
     setResolution(request){display.resolution={...request};display.resolutionVersion++;},
+    toggleFullscreen(){display.fullscreenToggles++;},
+    relaunch(args){display.relaunchArguments=args;display.relaunches++;},
     viewportSize(){
       if(!viewportSize)boundary('UViewport SizeX/SizeY are unknown before the first frame');
       return viewportSize;
@@ -273,6 +282,9 @@ export async function createWindowHost({runtime, assets, player, gameConfig = nu
     if (deusEx.pkg.exports[index - 1].className !== 'Class') continue;
     classes.set(`deusex.${path}`, await runtime.loadClass(deusEx, index));
   }
+  // RootWindow.GenerateSnapshot returns an Engine.Texture (the exec's UTexture subclass, vtable 0x100613e8).
+  const snapshotTextureClass = await loadClass(packages.get('Engine'), 'texture');
+  for (const field of snapshotTextureClass.propertyLink ?? []) await runtime.field(field);
   const gcClass = classes.get('extension.gc');
   for(const path of ['augmentation.gethotkey','augmentation.isactive','augmentationmanager.refreshaugdisplay','deusexplayer.clearaugmentationdisplay','deusexplayer.addaugmentationdisplay','deusexplayer.updateaugmentationdisplaystatus'])await runtime.prepareFunction(deusEx,deusEx.exportsByPath.get(path));
   // These globalconfig fields are consumed by original HUD Init/UpdateSettings.
@@ -359,7 +371,20 @@ export async function createWindowHost({runtime, assets, player, gameConfig = nu
     resourceImages.set(font, {kind: 'font', ref});
     return font;
   }
+  // The snapshot textures GenerateSnapshot made (docs/root-snapshot.md): script object -> {key, width, height, address}. The page holds
+  // their pixels (it made them from its own frame); the native image here only carries the size and the reference the HUD commands name.
+  const snapshotTextures = new WeakMap();
+  function snapshotTextureImage(info) {
+    const address = heap.allocRaw(0x60);
+    heap.mem.write(address, 'u32', textureVtable);
+    heap.mem.write(address + 0x34, 'i32', info.width);
+    heap.mem.write(address + 0x38, 'i32', info.height);
+    resourceImages.set(address, {kind: 'texture', ref: {key: info.key, dynamic: true, width: info.width, height: info.height}, width: info.width, height: info.height});
+    return address;
+  }
   function materialize(value) {
+    const snapshot = value && typeof value === 'object' ? snapshotTextures.get(value) : undefined;
+    if (snapshot) return snapshot.address;
     if (value && typeof value === 'object' && value.asset && Number.isInteger(value.index)) {
       if (value.kind === 'Font') return fontImage(value);
       if (typeof value.kind === 'string' && value.kind.endsWith('Texture')) return textureImage(value.asset, value.index, value);
@@ -972,6 +997,39 @@ export async function createWindowHost({runtime, assets, player, gameConfig = nu
   const inheritedShowArea=V.childRequestedShowArea;
   V.childRequestedShowArea=(win,...args)=>is(win,'extension.clipwindow')?clipShowArea(W,win,...args):inheritedShowArea(win,...args);
   W.v = V;
+  /** XRootWindow::GenerateSnapshot 0x10039410 as the exec 0x1003cf30 calls it (docs/root-snapshot.md): a new Texture of the root's snapshot
+   * size rounded up to powers of two (SetSnapshotSize, +0x738/+0x73c), filled from the viewport's last frame. The frame is the page's
+   * (the simulation has none): the request goes out in the frame snapshot and the page fills the texture before it draws the HUD
+   * that names it. The returned object is a UTexture subclass of the transient package (vtable 0x100613e8), USize/VSize the powers of two. */
+  W.snapshot = {
+    generate(root, bFilter) {
+      if (!viewportSize) boundary('RootWindow.GenerateSnapshot reads the viewport frame, whose size is unknown before the first frame');
+      const snapW = W.i32(root, 0x738), snapH = W.i32(root, 0x73c), pitch = potCeiling(snapW), height = potCeiling(snapH);
+      if (!pitch || !height) boundary(`RootWindow.GenerateSnapshot with a ${snapW} x ${snapH} snapshot size (Init of an empty texture is not recovered)`);
+      const base = runtime.actorLifecycle?.construction, outer = base?.transientPackage;
+      if (!outer) boundary('RootWindow.GenerateSnapshot requires the transient package Outer');
+      const object = runtime.allocateObject(snapshotTextureClass, {outer, name: 'None', flags: 0, template: null}, {...base,
+        validate: args => args.cls === snapshotTextureClass && args.outer === outer && args.template === null && args.flags === 0 && args.name === 'None',
+        initNativeProperties: () => {}});
+      const native = runtime.instance(object).nativeObject;
+      native.nativeVtable = 0x10179dfc;          // UObject::UObject, then the Extension subclass' vtable
+      constructNativeObject(native, 0x100613e8, 'Snapshot texture', {destroyObjectBase: receiver => runtime.destroyObjectBase(receiver)});
+      runtime.writeNamed(object, 'USize', pitch);
+      runtime.writeNamed(object, 'VSize', height);
+      const serial = ++display.snapshotSerial, info = {key: `snapshot:${serial}`, width: pitch, height};
+      info.address = snapshotTextureImage(info);
+      snapshotTextures.set(object, info);
+      display.snapshotRequests.push({serial, key: info.key, sizeX: viewportSize.sizeX, sizeY: viewportSize.sizeY, snapW, snapH, bFilter: Boolean(bFilter)});
+      if (display.snapshotRequests.length > 8) display.snapshotRequests.splice(0, display.snapshotRequests.length - 8);
+      return object;
+    },
+    release(object) {
+      const info = snapshotTextures.get(object);
+      if (!info) return;
+      display.snapshotReleased.push(info.key);
+      if (display.snapshotReleased.length > 16) display.snapshotReleased.splice(0, display.snapshotReleased.length - 16);
+    },
+  };
 
   // ------------------------------------------------------------------
   // Window-level natives shared by several bodies.
@@ -1317,7 +1375,10 @@ export async function createWindowHost({runtime, assets, player, gameConfig = nu
     return processScript(win,'ToggleChanged',[button,Boolean(toggle)],{result:false})?1:0;
   }
   function changeButtonAppearance(win) { return D.changeButtonAppearance(W,win); }
-  function buttonTick(win,delta) { return D.buttonTick(W,win,delta); }
+  function buttonTick(win,delta) {
+    return Input.buttonTick(W,win,delta,{getCursorPos:Mouse.getCursorPos,isPointInWindow:Mouse.isPointInWindow,
+      activateButton:(w,key)=>W.native.activateButton(w,key),boundary});
+  }
   function textLogTick(win,delta) { return Log.textLogTick(W,win,delta); }
   function rootTickVirtual(win,delta) { return rootTickNative(W,win,delta,{...T,...F,setFocusWindow:(root,target)=>Mouse.setFocusWindow(W,root,target)}); }
   function textDraw(win,gc) { return D.textDraw(W,win,gc); }
@@ -1574,6 +1635,8 @@ export async function createWindowHost({runtime, assets, player, gameConfig = nu
     text: {...rawServices, realloc: (address, size) => heap.realloc(address, size), makeAcceleratorTableDirty: ({object})=>T.makeAcceleratorTableDirty(W,object)},
     // TextWindow.SetText/AppendText virtual overrides (vtable +0x11c/+0x120).
     textVirtual: (object, method, text) => textVirtual(object, method, text),
+    // CriticalDelete of a snapshot texture (script-runtime.mjs criticalDelete): the page drops its pixels.
+    snapshotReleased: object => W.snapshot.release(object),
     toggle: {...rawServices,
       read:(object,offset,kind)=>heap.read(object,offset,kind==='ptr'&&([0x188,0x18c].includes(offset)||(offset>=0x1a4&&offset<0x1ec&&(offset-0x1a4)%12!==0))?'u32':kind),
       toggleChanged:({object,source,toggle})=>V.toggleChanged(object,source,toggle)},
@@ -1612,12 +1675,45 @@ export async function createWindowHost({runtime, assets, player, gameConfig = nu
     constructUObject: ()=>{},
   };
   const drawCommands=[];
-  const canvas={name:'PlayHUDCanvas'};heap.allocate(canvas,0x80);
+  // GC.DrawActor / GC.ClearZ (script-gc-draw-actor.mjs, docs/gc-draw-actor.md). The XGC body runs on the HUD canvas' render graph
+  // and the Actor's own fields; its three leaves are these services. ClearZ and DrawActor queue ordered 'clearZ' and 'actor'
+  // commands among the tile commands. An actor command carries the planner's draw (sim-session.mjs planHudActor: the mesh
+  // binding's frame record for the actor in the state the body set), null without a planner (headless paints record the call).
+  // bConstrain's FSceneNode::ComputeRenderSize of the HUD frame is not recovered here: unsupported, raised, never guessed.
+  let actorPlanner=null;
+  const readName=(actor,name)=>runtime.readNamed(actor,name);
+  gcServices.actor={
+    read:actor=>({hidden:readName(actor,'bHidden')?1:0,unlit:readName(actor,'bUnlit')?1:0,style:readName(actor,'Style'),
+      drawScale:f32BitsOf(readName(actor,'DrawScale')),scaleGlow:f32BitsOf(readName(actor,'ScaleGlow')),
+      skins:[...readName(actor,'MultiSkins'),readName(actor,'Skin')]}),
+    write:(actor,fields)=>{
+      if('hidden' in fields)runtime.writeNamed(actor,'bHidden',Boolean(fields.hidden));
+      if('unlit' in fields)runtime.writeNamed(actor,'bUnlit',Boolean(fields.unlit));
+      if('style' in fields)runtime.writeNamed(actor,'Style',fields.style);
+      if('drawScale' in fields)runtime.writeNamed(actor,'DrawScale',bitsToF32(fields.drawScale));
+      if('scaleGlow' in fields)runtime.writeNamed(actor,'ScaleGlow',bitsToF32(fields.scaleGlow));
+      if('skins' in fields){runtime.writeNamed(actor,'MultiSkins',fields.skins.slice(0,8));runtime.writeNamed(actor,'Skin',fields.skins[8]);}
+    },
+  };
+  gcServices.render={
+    clearZ:()=>{drawCommands.push({kind:'clearZ'});},
+    drawActor:(_render,frame,actor)=>{
+      const command={kind:'actor',actor:actor.name,draw:null};
+      if(actorPlanner)command.draw=actorPlanner(actor,{x:W.i32(frame,0xb0),y:W.i32(frame,0xb4),width:W.i32(frame,0xa8),height:W.i32(frame,0xac)});
+      drawCommands.push(command);
+    },
+    computeRenderSize:()=>boundary('GC.DrawActor bConstrain resizes the HUD frame (FSceneNode::ComputeRenderSize) and draws in the clip box: not modelled (no shipped script passes bConstrain)'),
+  };
+  const canvas={name:'PlayHUDCanvas'};heap.allocate(canvas,0x88);
   const sceneFrame={name:'HUDSceneFrame'};heap.allocate(sceneFrame,0x300);
   const viewport=heap.allocRaw(0xc0),node=heap.addressOf(sceneFrame),renderInterface=heap.allocRaw(4),renderTable=heap.allocRaw(0x100),canvasTable=heap.allocRaw(0x60);
+  const renderBase=heap.allocRaw(4);
   const put=(at,off,value,kind='u32')=>heap.mem.write(at+off,kind,value);
   W.setU32(canvas,0,canvasTable);put(canvasTable,0x5c,4);
   W.setU32(canvas,0x78,viewport);W.setU32(canvas,0x7c,node);put(node,0,viewport);
+  // UCanvas.Render (+0x80): the URenderBase GC.DrawActor draws through (script-gc-draw-actor.mjs); only its identity
+  // is held here, the draw is the actor planner's (setActorDrawPlanner).
+  W.setU32(canvas,0x80,renderBase);
   put(viewport,0x64,renderInterface);put(renderInterface,0,renderTable);put(renderTable,0x7c,3);
   gcServices.texCache={records:Array.from({length:5},()=>heap.allocRaw(0x84)),static:heap.allocRaw(0x84),head:0,count:0};
   gcServices.callVirtual=(slot,object,command)=>{
@@ -1703,6 +1799,8 @@ export async function createWindowHost({runtime, assets, player, gameConfig = nu
     families: win => families.get(win) ?? null,
     /** The world frame of each ViewportWindow DrawWorld (sim-session.mjs). */
     setViewportPlanner(planner){viewportPlanner=planner;},
+    /** GC.DrawActor's mesh draw (sim-session.mjs planHudActor): called with the actor in the state the XGC body set. */
+    setActorDrawPlanner(planner){actorPlanner=planner;},
     isDestroyed: win => destroyed.has(win),
     processScript, constructRootWindow, configureChild, askParentForReconfigure, setVisibility,
     canvas,node,

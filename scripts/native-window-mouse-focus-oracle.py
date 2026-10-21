@@ -5,8 +5,10 @@ SetRootCursorPos (0x10039d80, with the original ClampMousePosition),
 ProcessMouseMove (0x1003af50), GetMouseWindow (0x1003b0d0), XWindow::
 FindWindowByPoint (0x1004f740), FindWindow (0x1004f650), IsPointInWindow (0x1004f830), SetFocusWindow
 (0x1004f0e0), AskParentToShowArea (0x1004e230), XClipRect::Intersect
-(0x10002b10), ConvertCoordinates (0x1004fbe0), and the ToggleWindow mouse and
-PressButton overrides (0x10049a80/0x10049b30/0x10049c30) over window images whose
+(0x10002b10), ConvertCoordinates (0x1004fbe0), the ToggleWindow mouse and
+PressButton overrides (0x10049a80/0x10049b30/0x10049c30) and XButtonWindow::Tick
+(0x10008190, the auto-repeat with XWindow::GetCursorPos 0x1004cbf0 and
+ActivateButton 0x100077e0) over window images whose
 vtables are the real rebased XWindow / XButtonWindow / XToggleWindow /
 XModalWindow / XRootWindow tables, so every virtual (QueryPointInWindow,
 Mouse*/Focus* events, ChildRequestedShowArea) runs its original body.
@@ -42,7 +44,7 @@ BODY = {name: rebase(address) for name, address in {
     'setFocusWindow': 0x1004f0e0, 'askParentToShowArea': 0x1004e230, 'intersect': 0x10002b10,
     'convertCoordinates': 0x1004fbe0, 'moveFocus': 0x1004ef30, 'checkFocusWindow': 0x10050b80,
     'handleButtons': 0x1003b960, 'toggleMousePressed': 0x10049a80,
-    'toggleMouseReleased': 0x10049b30, 'togglePressButton': 0x10049c30}.items()}
+    'toggleMouseReleased': 0x10049b30, 'togglePressButton': 0x10049c30, 'buttonTick': 0x10008190}.items()}
 PROCESS_SCRIPT = rebase(0x1004ded0)
 CHANGE_BUTTON_APPEARANCE = rebase(0x10008380)
 PLAY_SOUND = rebase(0x1004ffb0)
@@ -168,7 +170,7 @@ class FocusOracle(_TIMER.TimerOracle):
                 self.write(win + 0x178, 'I', self.windows.get(spec.get('preferredFocus'), 0))
             if family in ('button', 'toggle'):
                 self.write(win + 0x174, 'I', spec.get('buttonFlags', 0))
-                for offset, key in [(0x17c, 'repeatDelay'), (0x19c, 'repeatAt')]:
+                for offset, key in [(0x17c, 'repeatDelay'), (0x180, 'repeatRate'), (0x19c, 'repeatAt')]:
                     self.write(win + offset, 'f', F(spec.get(key, 0)))
                 for offset, key in [(0x190, 'pressSound'), (0x194, 'clickSound')]:
                     self.write(win + offset, 'I', spec.get(key, 0))
@@ -277,6 +279,9 @@ class FocusOracle(_TIMER.TimerOracle):
             return self.call(BODY[op], W[step['win']], struct.pack('<ffII', F(step['x']), F(step['y']), step['key'], step['count']))
         if op == 'togglePressButton':
             self.call(BODY[op], W[step['win']], struct.pack('<I', step.get('key', 0x20)))
+            return None
+        if op == 'buttonTick':
+            self.call(BODY[op], W[step['win']], struct.pack('<f', F(step['delta'])))
             return None
         if op == 'set':
             self.write(W[step['win']] + step['offset'], step.get('fmt', 'I'), step['value'])

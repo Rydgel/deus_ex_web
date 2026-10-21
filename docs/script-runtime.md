@@ -68,6 +68,9 @@ flag-6 collision queries. Natives 700/701 dispatch through the same functions;
 AIVisibility uses reflected LevelInfo.TimeSeconds, whose synchronization and
 Region initialization remain part of full-world startup/tick integration.
 See [AI lighting](script-ai-visibility.md) and [tick visibility](script-pawn-tick-visibility.md).
+Native 722 `ParabolicTrace`, the NPC's grenade path prediction (`GetProjectileList`, `AISafeToThrow`), runs the original
+stepped worker over x87 words: 1,905 original-DLL comparisons and a Liberty Island run of both callers
+(see [parabolic trace](parabolic-trace.md)).
 See [animation tick](script-animation-tick.md). Animation control calls share the original linked booleans and SimAnim
 Plane; 37 original exec comparisons establish their frame/tween, continuation
 and replication-field writes (see [animation controls](script-animation-controls.md)).

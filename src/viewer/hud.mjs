@@ -1,5 +1,7 @@
 /** Original HUD tiles composited after the world, in original logical pixels.
  * Uses the existing renderer so DSTY_Translucent blends with the actual world.
+ * A 'viewport', 'actor' (GC.DrawActor) or 'clearZ' (GC.ClearZ) command splits the stream
+ * in window order: the tiles before it are submitted, then the caller's handler runs.
  * The commands are the simulation's plain GC commands (sim-session.mjs hud);
  * their textures decode here from the page's own asset store.
  */
@@ -102,21 +104,32 @@ export async function createHudRenderer({assets,preload=[]}){
    * splits it: the GC draws before it are submitted, `viewport(command)`
    * draws that world frame into its rectangle, and the later draws go over
    * it. */
-  function render(renderer,width,height,commands,{viewport=null}={}){
+  function render(renderer,width,height,commands,{viewport=null,actor=null,clearZ=null}={}){
     if(pendingError)throw pendingError;
     camera.right=width;camera.bottom=height;camera.updateProjectionMatrix();
+    // GC.DrawActor's mesh draws are depth tested against the buffer as the overlay pass left it (ClearZ'd by
+    // DrawWorld, the view model's depth): a frame with actor draws does not clear depth after its tile batches.
+    const keepDepth=commands.some(command=>command.kind==='actor'||command.kind==='clearZ');
     let start=0;
     for(let end=0;end<=commands.length;end++){
-      if(end<commands.length&&commands[end].kind!=='viewport')continue;
-      submit(renderer,commands,start,end);
-      if(end<commands.length)viewport?.(commands[end]);
+      if(end<commands.length&&!['viewport','actor','clearZ'].includes(commands[end].kind))continue;
+      submit(renderer,commands,start,end,keepDepth);
+      if(end<commands.length){
+        const command=commands[end];
+        if(command.kind==='viewport')viewport?.(command);
+        else if(command.kind==='actor')actor?.(command);
+        else clearZ?.(command);
+      }
       start=end+1;
     }
   }
-  function submit(renderer,commands,start,end){
+  function submit(renderer,commands,start,end,keepDepth=false){
     count=0;current=null;
     for(let at=start;at<end;at++){
       const command=commands[at],image=images.get(command.texture.key);
+      // A snapshot texture (RootWindow.GenerateSnapshot, docs/root-snapshot.md) is made by the page from its own frame; one the page has
+      // not made (or has released) draws nothing.
+      if(!image&&command.texture.dynamic)continue;
       if(!image){void imageFor(command.texture).catch(error=>{pendingError=error;});continue;}
       draw({...command,image});
     }
@@ -129,9 +142,21 @@ export async function createHudRenderer({assets,preload=[]}){
       }
     }
     for(let i=count;i<batches.length;i++)batches[i].mesh.visible=false;
-    renderer.clearDepth();renderer.render(scene,camera);
+    if(!keepDepth)renderer.clearDepth();
+    renderer.render(scene,camera);
   }
-  return {render,draw,
+  /** A texture the page made at run time: `image` is {width, height, data} (RGBA bytes, top row first). The previous texture of that key,
+   * and its materials, are dropped. */
+  function setDynamicImage(key,image){
+    images.set(key,{key,...image});
+    textures.get(key)?.dispose();textures.delete(key);
+    for(const [name,material] of [...materials])if(name.startsWith(`${key}:`)){material.dispose();materials.delete(name);}
+  }
+  function releaseDynamicImage(key){
+    images.delete(key);textures.get(key)?.dispose();textures.delete(key);
+    for(const [name,material] of [...materials])if(name.startsWith(`${key}:`)){material.dispose();materials.delete(name);}
+  }
+  return {render,draw,setDynamicImage,releaseDynamicImage,
     dispose(){for(const b of batches)b.mesh.geometry.dispose();for(const m of materials.values())m.dispose();for(const [key,t] of textures)if(!images.get(key)?.gpu)t.dispose();},
   };
 }

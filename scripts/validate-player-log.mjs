@@ -7,7 +7,7 @@ import {AssetStore} from '../src/unreal/assets.mjs';
 import {decodeMap} from '../src/unreal/map.mjs';
 import {createGame} from '../src/viewer/game.mjs';
 import {gameDirectory} from './game-directory.mjs';
-import {constructPlayerLog,preparePlayerLogStore} from '../src/runtime/script-player-log.mjs';
+import {constructPlayerLog,constructDataVaultImageNote,preparePlayerLogStore} from '../src/runtime/script-player-log.mjs';
 const root=gameDirectory();
 const original=JSON.parse(execFileSync(process.env.NATIVE_PROBE_PYTHON||path.resolve('.cache/native-probe-env/bin/python'),
   [path.resolve('scripts/native-player-log-oracle.py'),root],{encoding:'utf8'}));
@@ -22,6 +22,17 @@ for(const [i,c] of original.cases.entries()){
   assert.deepEqual(c.events,[['fname',0],['outer'],['allocate',0,0,null]]);
 }
 assert.deepEqual(original.cases[1].stores,[]);
+// CreateDataVaultImageNoteObject (3014): the same exec shape over DataVaultImageNote (size 0x44, its class cell, vtable 0x10027b24).
+const noteWrites=[],noteObject={text:'template',next:null};
+Object.defineProperty(noteObject,'nativeVtable',{set:value=>noteWrites.push(value)});
+constructDataVaultImageNote(noteObject,{destroyObjectBase:()=>{}});
+assert.deepEqual(noteWrites,original.imageNoteCases[0].stores);
+for(const [i,c] of original.imageNoteCases.entries()){
+  assert.equal(c.null,!!i);assert.equal(c.code,0x22110001);
+  assert.deepEqual(c.members,[0x55555555,0x55555555,0x55555555,0x55555555]);
+  assert.deepEqual(c.events,[['fname',0],['outer'],['allocate',0,0,null]]);
+}
+assert.deepEqual(original.imageNoteCases[1].stores,[]);
 const files=[];
 for(const dir of ['Maps','System','Textures','Sounds','Music'])for(const name of await readdir(`${root}/${dir}`))
   files.push({path:`${dir}/${name}`,read:()=>readFile(`${root}/${dir}/${name}`)});
@@ -42,7 +53,16 @@ for(const object of [a,b]){
   assert.notEqual(native.outer,runtime.playerNativeObject(player));
   assert.equal(runtime.instance(object).cls.record.key,'deusex.deusexlog');
 }
+// The images screen's native: Player.CreateDataVaultImageNoteObject() through the script call path, then the fields the screen sets.
+const note=runtime.callFunction(runtime.lookup(player,'CreateDataVaultImageNoteObject'),player,0);
+assert.equal(runtime.instance(note).cls.record.key,'deusex.datavaultimagenote');
+assert.equal(runtime.instance(note).nativeObject.nativeVtable,0x10027b24);
+assert.equal(runtime.instance(note).nativeObject.outer,runtime.playerNativeObject(player).outer);
+assert.notEqual(note,store.createImageNote(player));
+runtime.namedReference(note,'posX').set(12);runtime.namedReference(note,'posY').set(34);runtime.namedReference(note,'noteText').set('Ocean Lab');
+assert.deepEqual([get(note,'posX'),get(note,'posY'),get(note,'noteText'),get(note,'nextNote'),get(note,'bExpanded')],[12,34,'Ocean Lab',null,false]);
+assert.throws(()=>store.createImageNote({}),/bound only to the live player/);
 // The retired player's FirstLog/LastLog are nulled by ADeusExPlayer::Destroy,
 // not by a host reset; the reload's collection then releases the detached
 // logs (test/script-player-destroy.test.mjs, scripts/validate-loadmap-gc.mjs).
-console.log('Player log passed: two original native branches, vtable/member writes, original AddLog linked list and package Outer');
+console.log('Player log passed: two original native branches each for CreateLogObject and CreateDataVaultImageNoteObject, vtable/member writes, original AddLog linked list and package Outer');
