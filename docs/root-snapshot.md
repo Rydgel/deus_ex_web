@@ -59,9 +59,9 @@ script's `snapshot` variable until it is replaced or `CriticalDelete`d (Extensio
   `ReadPixels`, `GMalloc`, the texture's `Init` and storage, `CreateColorRange`) against `snapshotGrey` on 131 synthetic frames (noise,
   small values, near-white, flat, black, white, gradients; frame and snapshot sizes from 1 x 1 up to 160 x 100, integer and fractional
   ratios, steps of 1.1 to 1.4 where the float32 accumulators land near whole pixels, up- and down-scaling, a zero snapshot size): the
-  P8 bytes, the grey palette, `Init(U, V)` and `MaxColor` are identical (about three minutes in Unicorn). Of nine planted mutations seven
-  are killed (the channel total, the third, the loop bound, both accumulators' float32 stores, the stored float32 sum, the `fistp`
-  semantics included); the survivors are equivalent: blue's extended path and green/red's float32 path give the same byte for every
+  P8 bytes, the grey palette, `Init(U, V)` and `MaxColor` are identical (about three minutes in Unicorn). Of eight planted mutations five
+  are killed (the integer third, the float32 store of green and red's total, the box bound, both float32 accumulators); the three
+  survivors are equivalent: blue's extended path and green/red's float32 path give the same byte for every
   pair (sum, n) with n up to 16 (computed exhaustively), so swapping the channels or rounding blue's `1 / n` changes nothing, and
   `Math.round` against round-to-nearest-even differs only at a tie, which `(float32 - 0.5)` reaches only at the clamped ends.
 * `scripts/validate-root-snapshot-play.mjs` (Node, 00_Training): with `UIBackground` 1 the main menu's pause calls the native, whose texture the

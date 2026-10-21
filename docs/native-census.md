@@ -372,22 +372,28 @@ game, is recorded with its message, and the page is rebooted and the route repla
 menu's Training, Intro and Quit, the Yes of the message boxes MenuMain raises for them, and Start Game (their paths are
 `validate-travel-newgame-play` and [travel](travel.md)); gestures are also kept off those buttons' rectangles.
 
-One run (37 minutes, `.work/native-menu-sweep.json`): **21 screens (15 classes), 618 gestures on 782 windows (summed per screen); 10 gestures stopped the
-game, for 6 distinct reasons**: two unsupported natives (3013 and the name-bound `GetDefaultURL`) and four stops that are not
-natives. Every screen with a title window gets a title click and drag; none of them stopped (native 1472 is handled).
+First run (37 minutes): 21 screens (15 classes), 618 gestures on 782 windows (summed per screen); 10 gestures stopped the game, for 6 distinct
+reasons: two unsupported natives (3013 and the name-bound `GetDefaultURL`) and four stops that are not natives (the table's last three
+rows below, in their first form, and `SetupSentinel`). Every screen with a title window gets a title click and drag; none of them stopped
+(native 1472 is handled).
 
-| stop | where | what it is |
-|---|---|---|
-| native **3013** `DeusExPlayer.CreateGameDirectoryObject` | MenuMain, Load Game button (`MenuScreenLoadGame.GetSaveGameDirectory`) | census: excluded, stage-6; **reached from the default start** |
-| name-bound native `PlayerPawn.GetDefaultURL` (native 0) | MenuMPMain button 2 (`menuchoice_class.SetInitialClass`) | census: missing-reachable, engine base; multiplayer menu |
-| script function not prepared: `UWindow.UWindowList.SetupSentinel` | MenuMPMain buttons 0 and 1 | not a native: Play prepares no UWindow class, which the multiplayer server list derives from |
-| host service: "XButtonWindow auto-repeat tick requires mouse-input services" | Customize Keys, the two `ButtonWindow`s (auto-repeat scroll arrows) | `Window.EnableAutoRepeat` (1595) is handled; its tick needs the mouse-input service (`script-window-family-draw.mjs`) |
-| engine exec command "UWindowsViewport::Exec ToggleFullscreen" | Display, the full-screen choice | the `ConsoleCommand` chain (`script-console-command.mjs`), not a script native |
-| engine exec command "USystem::Exec RELAUNCH -changevideo" | Display, the render-device message box's OK | same |
+After the host services (2026-10-21, 25 minutes, `.work/native-menu-sweep.json`): the same **21 screens, 618 gestures on 782 windows; 5
+gestures stopped the game, for 3 distinct reasons**, all in the table; the three host-service stops are gone. The Display screen's Render
+Device prompt now sends `RELAUNCH -changevideo`, which the sweep records as a host request (the page's `deusex-relaunch` event, cancelled
+so the walk survives; the report's `hostRequests`) instead of an error, and Customize Keys' scroll arrows tick.
+
+| stop | where | what it is | state |
+|---|---|---|---|
+| native **3013** `DeusExPlayer.CreateGameDirectoryObject` | MenuMain, Load Game button (`MenuScreenLoadGame.GetSaveGameDirectory`) | census: excluded, stage-6; **reached from the default start** | open (the Load Game screen's work) |
+| name-bound native `PlayerPawn.GetDefaultURL` (native 0) | MenuMPMain button 2 (`menuchoice_class.SetInitialClass`) | census: missing-reachable, engine base; multiplayer menu | open (multiplayer) |
+| script function not prepared: `UWindow.UWindowList.SetupSentinel` | MenuMPMain buttons 0 and 1 | not a native: Play prepares no UWindow class, which the multiplayer server list derives from | open (multiplayer) |
+| host service: "XButtonWindow auto-repeat tick requires mouse-input services" | Customize Keys, the two `ButtonWindow`s (auto-repeat scroll arrows) | `XButtonWindow::Tick` (`0x10008190`) reads the pointer and activates the button | **done**: [host services](host-services.md) |
+| engine exec command "UWindowsViewport::Exec ToggleFullscreen" | Display, the full-screen choice | the `ConsoleCommand` chain (`script-console-command.mjs`), not a script native | **done**: a request for the page |
+| engine exec command "USystem::Exec RELAUNCH -changevideo" | Display, the render-device message box's OK | same | **done**: a request for the page (a restart) |
 
 Of the 25 menu window classes (not counting the choice and message-box windows) the sweep reached 13 and did **not** reach 12: Load Game (blocked at 3013: its next natives are
 3080, 3086, 3084, 3088, 3089, 3091, 3093 and 3094), Save Game (the main menu's button is insensitive without a running game; its
-natives are 3011, 3075, 3090, 1524 and `Object.GetConfig`), the multiplayer Host, Join and Player Setup screens (behind the
+natives are 3011, 3075, 3090 and `Object.GetConfig`; its preview calls 1524, which is implemented), the multiplayer Host, Join and Player Setup screens (behind the
 MenuMPMain stops above), and the colour-theme screens (`MenuScreenRGB` and Themes Load/Save are opened only by
 `DeusExPlayer.ShowRGBDialog`; no control of Adjust Colors reached it). Every other screen of the main menu's tree (Settings and its
 six screens, Brightness, Credits, New Game with its difficulty screen and message boxes, the multiplayer menu itself) ran clean
@@ -411,17 +417,27 @@ Menus and the default start first, because the user meets them first; then ordin
    one stop on that path). Nine natives: 3013 `CreateGameDirectoryObject`, 3080 `GetGameDirectory`, 3086 `SetDirType`, 3084
    `GetDirCount`, 3088 `GetSaveInfo`, 3089 `GetSaveInfoFromDirectoryIndex`, 3091 `DeleteSaveInfo`, 3093 `GetSaveFreeSpace`, 3094
    `GetSaveDirectorySize`; an empty directory (a browser store with no saves) opens it. The rest of the family follows with
-   saving: 3011 `SaveGame`, 3075 `UpdateTimeStamp`, 3090 `GetTempSaveInfo`, 3081-3083, 3085, 3087, 3092, `Object.GetConfig` and
-   1524 `RootWindow.GenerateSnapshot` (also called whenever the UI pauses the game: `DeusExRootWindow.UIPauseGame` ->
-   `ShowSnapshot`).
-2. **Ordinary play**, the natives game code calls that nothing routes: `Actor.PlayOwnedSound` (name-bound; `DeusExWeapon.PlaySimSound`,
-   which `Fire` and `PlayFiringSound` call), 722 `ParabolicTrace` (an NPC deciding to throw a grenade), 1449
-   `Window.ConvertCoordinates` (inventory drag and drop), 1288 `GC.DrawActor` and 1295 `GC.ClearZ` (the vision augmentation), 3014
-   `CreateDataVaultImageNoteObject` (the images screen), 524 `Pawn.FindStairRotation` (if the base `PlayerWalking.PlayerMove` runs).
-   Decide, with a note in the registry, for 1050/1051 (`PreRenderWindows`/`PostRenderWindows`: Play paints the windows itself) and
-   2050 (`CreateFlagRef`: only the conversation import reaches it).
-3. **Host services the menus ask for**, which are not script natives: the mouse-input service for button auto-repeat (Customize Keys),
-   `TOGGLEFULLSCREEN` and `RELAUNCH` for the Display screen. Run the sweep again after 1 and 3.
+   saving: 3011 `SaveGame`, 3075 `UpdateTimeStamp`, 3090 `GetTempSaveInfo`, 3081-3083, 3085, 3087, 3092 and `Object.GetConfig`.
+   (1524 `RootWindow.GenerateSnapshot`, which the save screen also calls for its preview as `GenerateSnapshot(True)`, is done: step 2.)
+2. **Ordinary play** (done 2026-10-21): every native game code calls that nothing routed is either handled or has a decision.
+   * Implemented against the original: 722 `ParabolicTrace` ([parabolic trace](parabolic-trace.md): Unicorn oracle, 1,905 cases; an NPC
+     near a falling grenade or deciding to throw one); 1288 `GC.DrawActor` and 1295 `GC.ClearZ` ([GC.DrawActor](gc-draw-actor.md): the
+     vision augmentation and the actor display window); 524 `Pawn.FindStairRotation` ([stair rotation](pawn-stair-rotation.md): Unicorn
+     oracle, 6,198 cases, and 240 live calls of the base `PlayerWalking.PlayerMove` replayed; reached only when `bLookUpStairs` is set,
+     which the installed ini does not); 1524 `RootWindow.GenerateSnapshot` ([root snapshot](root-snapshot.md): UI Background =
+     Snapshot, the resampling checked against the original on 131 frames, the picture from the page's last frame).
+   * Routed and checked in Play (`scripts/validate-ui-natives-play.mjs`): 1449 `Window.ConvertCoordinates` (an inventory item dragged onto a
+     belt slot) and 3014 `CreateDataVaultImageNoteObject` (a note added on the images screen; the same allocation as `CreateLogObject`, with
+     the oracle for both).
+   * The five translated modules nothing routed: 1591, 1613 and 1820 are in the exec-diff harness (identical to the original), 1610
+     `ChangeToggle` runs through the control-window oracle's translation, and 1554 `GetTextPart` is the dispatcher's string form over the memory
+     model's validated `FString::Mid` bounds, checked against the original's results (`validate-text-get-text-part-route.mjs`). No shipped
+     script calls any of the five.
+   * Decisions in the registry (`NATIVE_DECISIONS`, "Decisions" above): `Actor.PlayOwnedSound` (every caller is behind a multiplayer branch
+     or `DodgeClickTime > 0`), 1050/1051 (Play paints the windows itself), 2050 (only the conversation importer calls it).
+3. **Host services the menus ask for** (done 2026-10-21; [host services](host-services.md)): the mouse-input service of the button
+   auto-repeat tick (Customize Keys), `TOGGLEFULLSCREEN` and `RELAUNCH -changevideo` for the Display screen, with a Chromium check on the
+   default start. The sweep was run again (below).
 4. **Multiplayer menus**: only if multiplayer is taken up. Until then the MenuMPMain buttons stop on a UWindow function that is
    not prepared, and `GetDefaultURL`, `UpdateURL`, `GetEntryLevel`, `GetPropertyText` and the IpDrv natives are the family behind it.
 5. **Engine base-class natives** (18) when a script `Console` object or the spectator and waiting states exist; **developer tools**

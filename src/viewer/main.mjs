@@ -1116,9 +1116,8 @@ function applySnapshotRequests(display) {
   keepingFrames = Boolean(display.keepFrame);
   if (!keepingFrames) frameKeeper.reset();
   for (const request of display.snapshotRequests ?? []) {
-    if (request.serial <= snapshotServed) continue;
+    if (request.serial <= snapshotServed || !hudRenderer) continue;
     snapshotServed = request.serial;
-    if (!hudRenderer) continue;
     const frame = frameKeeper.read() ?? { width: request.sizeX, height: request.sizeY, pixels: new Uint32Array(request.sizeX * request.sizeY) };
     const grey = snapshotGrey(frame.pixels, frame.width, frame.height, request.snapW, request.snapH);
     const data = new Uint8Array(grey.data.length * 4);
