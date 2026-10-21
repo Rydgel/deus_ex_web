@@ -103,8 +103,8 @@ Frame cost and the 120 fps target are tracked in
 **Current boundaries:** Stage 3 completion covers the measured runtime paths,
 not every interaction or full campaign compatibility. Stage 5 gameplay is
 proven only where its gate passes (below); the other gameplay rows play in Play
-but have no original capture yet. Saves and map travel are Stage 6 (map travel
-stops at a labeled `ClientTravel` boundary; the original's chain is in [travel](docs/travel.md)). Other maps expose
+but have no original capture yet. Saves and map travel are Stage 6 (the main menu's Training button on the logo map
+travels to `00_Training` in Play with the player the original carries, [travel](docs/travel.md); every other branch stops at a labeled boundary). Other maps expose
 unsupported-content diagnostics. The final original camera/motion comparison
 and actual window/tab pause acceptance deferred from Stage 2 remain open.
 

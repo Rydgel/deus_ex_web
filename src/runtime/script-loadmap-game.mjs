@@ -48,8 +48,8 @@ export async function prepareLoadMapGame({runtime, assets, level, levelInfo, pre
       write(levelInfo,'bBegunPlay',false);write(levelInfo,'bStartup',false);
       const actor=this.spawn();write(levelInfo,'Game',actor);return actor;
     },
-    init(){
-      const args=['',''];
+    init(options=''){
+      const args=[options,''];
       track(()=>runtime.processEvent(game,'InitGame',args));
       initialized=true;
       return args[1];

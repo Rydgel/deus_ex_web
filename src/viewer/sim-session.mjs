@@ -48,6 +48,8 @@ export const plainHudCommands = commands => commands.map(command => command.kind
 export function createSimSession(game, { assets = null, events = [], exportName = null } = {}) {
   const runtime = game.doors.scriptRuntime.runtime;
   let failed = false, panZones = [], lastViewLocation = null, current = null;
+  // The travel step's request (travel.mjs) for the next level, handed to the page once; the level it left does not tick again.
+  let travelled = false;
   // Inspect's free camera, from the page's plain camera state.
   const inspectCamera = createPlayCamera();
   // Play's camera, pointed as the page points its own (play-camera.mjs); the
@@ -1411,7 +1413,7 @@ export function createSimSession(game, { assets = null, events = [], exportName 
     movers,
     // LoadMap deletes the moving brush tracker before it loads the level (docs/brush-tracker.md "Lifetime"), so the reset's
     // actor start-up traces the static BSP; GNewBrushTracker follows the start-up (the rebuild).
-    reset() { dropOcclusion?.(); game.reset(); failed = false; rebuildOcclusion?.(); },
+    reset() { dropOcclusion?.(); game.reset(); failed = false; travelled = false; rebuildOcclusion?.(); },
     /** The session's own simulation-side objects (the view model's
      * bindings); the actor mesh layer belongs to its scene wrapper. */
     /** A pack buffer back from the page, for a later frame. */
@@ -1437,19 +1439,22 @@ export function createSimSession(game, { assets = null, events = [], exportName 
       size = [width, height];
       const errors = [], stopped = () => halted || failed;
       const fail = error => { failed = true; errors.push(plainError(error)); };
-      if (run && !stopped()) {
+      let travel = null;
+      if (run && !stopped() && !travelled) {
         try {
           // Validation: liveProbe's replay of an original trace sets this tick's delta and
           // stream state, or holds the level (live-probe.mjs).
           const replay = game.liveReplay, delta = replay ? replay.before(dt) : dt;
           if (delta !== false) { game.tick(delta, replay?.windowSeconds ?? null); replay?.after(); }
           // UGameEngine::Tick's client travel, after the level's tick (held or not) and before the render: an OPEN's URL ends the level here.
-          game.clientTravel();
+          // (a session that travels returns the request for the next level, which the page loads; this level does not tick again)
+          travel = game.clientTravel();
+          if (travel) travelled = true;
           // Lip sync is Galaxy Update's step 12, after the HUD frame (script-audio-live.mjs).
         } catch (error) { fail(error); }
       }
       const frame = { errors, movers: movers(), view: null, renderRect: null, lights: null, light: null, sky: null, target: null, pan: null,
-        visibility: null };
+        visibility: null, travel };
       live.lights = null;
       try { frame.view = plainView(game.view()); lastViewLocation = frame.view.location; } catch (error) { fail(error); }
       if (!stopped()) {
