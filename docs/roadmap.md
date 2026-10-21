@@ -1178,7 +1178,7 @@ conversations, frozen-phase frames, the zone-0 walking branch) merged on 2026-10
 Make the page behave as the game does (the user, 2026-10-21): it starts as the original starts
 (`DeusEx.ini` `LocalMap=DX.dx`: the logo map and its main menu, from which New Game, Training and
 Load Game start), and the web debugging HUD is shown only with `?debug=1`. Every step of that
-sequence is traced from the original first. Implement game saves, quicksave/load, map transitions, and restoration of previously
+sequence is traced from the original first ([the original's start](boot.md)). Implement game saves, quicksave/load, map transitions, and restoration of previously
 visited maps. Persist the player, inventory, skills/augmentations, mission flags,
 actors, and object references consistently. Store progress locally in the browser,
 with save export/import, format versioning, and clear storage failure handling.

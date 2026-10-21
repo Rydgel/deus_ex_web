@@ -180,6 +180,12 @@ const ROUTE_SCENES = {
   air1: {map: '01_NYC_UNATCOIsland', ticks: 1200, early: PLACE(2112, -675, -95, 0),
     cmds: `${MOVE(60, 2362, -675, -8, 0)}|${MOVE(950, 3546, -1116, -129, 0)}`,
     devices: ['DataLinkTrigger19:Actor', 'DataLinkTrigger20:Actor', 'DataLinkTrigger21:Actor'], flags: ['DL_libertyruinsairshaft_Played'], wholeFlags: true, options: ['--player-talk']},
+  // Stage 6, the boot (docs/roadmap.md §6): DX.dx, the logo map DeusEx.ini's LocalMap names (DeusExLevelInfo missionNumber -2). DeusExPlayer.TravelPostAccept's
+  // mission -2 branch puts the player on the IntroCam InterpolationPoints (PHYS_Interpolating, collision off, the HUD hidden) past EidosLogo0, IonStormLogo0 and
+  // DXLogo3; the path's end (InterpolationPoint13, bEndOfPath) has no NextMap. dxb1 records the flight with no input; dxb2 presses Escape on the logo
+  // (Escape=ShowMainMenu: DeusExRootWindow.InvokeMenu(MenuMain)).
+  dxb1: {map: 'DX', ticks: 1700, early: '', cmds: ''},
+  dxb2: {map: 'DX', ticks: 1700, early: '', cmds: '1600:@down Escape|1600:@up Escape'},
 };
 export const SCENES = {
   cmb1: {map: '01_NYC_UNATCOIsland', ticks: 900, early: PLACE(10146.3, 685.2, -88, 40960),

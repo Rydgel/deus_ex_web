@@ -1618,6 +1618,31 @@ export class ScriptRuntime {
       }
     }
   }
+  /** The registry slots the shared graph's StaticLoadObject takes in the original, as modelPreparedDynamicLoad does for the prepared routes: a package
+   * the process had not loaded gets its UPackage and LinkerLoad (GetPackageLinker's first load), then each object of that package is created once, in
+   * the order EndLoad preloads them: GObjLoaded's, which is their creation order (CreateExport appends to it; a Font's Serialize creates its page
+   * Textures, a Texture's its Palette). Capture dxb2 (DX.dx, tick 1600, MenuMain's buttons' DynamicLoadObject("DXFonts.MainMenuTrueType")): Package
+   * DXFonts, LinkerLoad, Font MainMenuTrueType, Texture Texture0, Texture Texture1, Palette Palette1, the order Play's events give. A class's first load
+   * from such a package (its functions, states and properties) is not measured and stays out of the model. */
+  modelGraphDynamicLoad(events){
+    const original=this.actorLifecycle?.construction?.registry?.original;
+    if(!original?.packages)return;
+    this.firstLoadedPackages??=new WeakMap();
+    const loadedHere=this.firstLoadedPackages.get(original)??new Set();
+    this.firstLoadedPackages.set(original,loadedHere);
+    const structural=/^(Class|Function|State|Enum|Struct|Const|TextBuffer|\w*Property)$/;
+    for(const event of events??[]){
+      if(event.op==='CreateLinkerLoad'){ if(original.loadPackage(event.root?.name))loadedHere.add(lower(event.root.name)); continue; }
+      if(event.op!=='CreateExport'&&event.op!=='Preload')continue;
+      const object=event.op==='Preload'?event.object:event.existing;
+      if(!object)continue;
+      const identity=this.classLoader.identity(object),asset=identity?.asset;
+      if(!asset||!loadedHere.has(lower(asset.name)))continue;
+      const cls=asset.pkg.exports[identity.index-1]?.className;
+      if(!cls||structural.test(cls))continue;
+      original.loadExport(object,cls,identity.name);
+    }
+  }
   /** StaticLoadObject over the shared graph: its linkers, CreateExport,
    * Preload/PostLoad and a load scope around Play's never-flushed queue.
    * See docs/script-font-load.md ("DynamicLoadObject route"). */
@@ -1634,6 +1659,7 @@ export class ScriptRuntime {
       throw error;
     }
     restore();
+    this.modelGraphDynamicLoad(result.events);
     for(const event of result.events)this.warning?.({type:'DynamicLoadObject',...event});
     return result.object===null?null:loader.identity(result.object);
   }
