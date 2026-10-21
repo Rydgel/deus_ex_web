@@ -78,6 +78,16 @@ level's dilated delta). Original 3D mesh lighting also remains separate from
 this HUD work. Window audio requests are recorded at their native call boundary
 until a playback backend is connected.
 
+## Actor draws in the HUD
+
+The vision augmentation and the developer ActorDisplayWindow draw meshes from
+`DrawWindow` through `GC.DrawActor` (1288) and clear depth with `GC.ClearZ`
+(1295). The host queues `actor` and `clearZ` commands among the tile commands,
+in window order; the page draws the actor between the tile batches in the
+master frame. Evidence, the oracle and what is unsupported (bConstrain,
+non-mesh DrawTypes, no original-frame comparison):
+[gc-draw-actor.md](gc-draw-actor.md).
+
 ## Compositor batching boundary
 
 The recovered native GC and Window traversal determine the ordered tile/glyph

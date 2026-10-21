@@ -267,6 +267,12 @@ Chromium, worker mode) checks the page: the heat sources are drawn on every
 frame without a runtime error, the frame differs from the same frame with the
 draws switched off, and ClearZ commands reach the page.
 
+Cost (headless Chromium on the Linux host, software GL, Training with four heat
+sources in range, 180 frames each, `framePhases`): the worker's frame 7.8 ->
+10.1 ms and the page's HUD phase 0.44 -> 1.29 ms with the vision pass on, about
+0.55 ms of simulation and 11 draw calls per drawn actor. That is the CPU mesh
+path; a GPU instance sized for a map's pawns is the step that would cut it.
+
 ### Unsupported or unverified
 
 - **No comparison against an original frame.** The translation, the order of
