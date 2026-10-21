@@ -21,6 +21,7 @@
 import {mkdirSync} from 'node:fs';
 import path from 'node:path';
 import {fileURLToPath} from 'node:url';
+import {debugUrl} from './page-url.mjs';
 
 const root = fileURLToPath(new URL('..', import.meta.url));
 const option = (name, fallback) => { const i = process.argv.indexOf(`--${name}`); return i < 0 ? fallback : process.argv[i + 1]; };
@@ -41,7 +42,7 @@ try {
   const page = await browser.newPage({viewport: {width: 1280, height: 720}, deviceScaleFactor: 1});
   const errors = [];
   page.on('pageerror', error => errors.push(error.message));
-  await page.goto(`${url}/?seed=${option('seed', 1)}&detailTextures=0&antialias=0${option('query', '') ? `&${option('query')}` : ''}`);
+  await page.goto(debugUrl(`${url}/?seed=${option('seed', 1)}&detailTextures=0&antialias=0${option('query', '') ? `&${option('query')}` : ''}`));
   await page.waitForFunction(() => window.deusExViewer?.status().ready, {}, {timeout: 240000});
   if (await page.evaluate(() => window.deusExViewer.status().map) !== 'DX') {
     await page.locator('#map').selectOption('DX');

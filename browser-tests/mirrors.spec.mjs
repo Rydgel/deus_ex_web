@@ -18,7 +18,7 @@ test('Training floor matches the native reflection and clips geometry behind the
       'if(window.__disableMirrorClip){renderClip.normal.set(0,0,0);renderClip.constant=1;}else renderClip.copy(group.plane);renderer.clippingPlanes = clippingPlanes;') });
   });
   await page.setViewportSize({ width: 926, height: 719 });
-  await page.goto('http://127.0.0.1:5173');
+  await page.goto('http://127.0.0.1:5173/?debug=1');
   await page.waitForFunction(() => window.deusExViewer?.status().ready && Boolean(window.__mirrorProbe));
   await page.getByRole('combobox', { name: 'Movement mode' }).selectOption('inspect');
   const canvas = page.locator('#scene'), box = await canvas.boundingBox();

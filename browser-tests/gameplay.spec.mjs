@@ -8,7 +8,7 @@ const settled = page => page.waitForFunction(() => window.deusExViewer?.status()
 
 test('training plays with gravity, stances, blocked doors, linked use, stairs and a reproducible reload', async ({ page }) => {
   const errors = []; page.on('pageerror', e => errors.push(e.message));
-  await page.goto('http://127.0.0.1:5173'); await settled(page);
+  await page.goto('http://127.0.0.1:5173/?debug=1'); await settled(page);
   await mkdir('reports/movement/browser', { recursive: true });
   const initial = await player(page);
   expect(await status(page)).toMatchObject({ mode: 'play', renderErrors: [],
@@ -64,7 +64,7 @@ test('training plays with gravity, stances, blocked doors, linked use, stairs an
 });
 
 test('Liberty Island has a valid playable spawn and the inspection camera leaves player state intact', async ({ page }) => {
-  await page.goto('http://127.0.0.1:5173'); await settled(page);
+  await page.goto('http://127.0.0.1:5173/?debug=1'); await settled(page);
   await page.getByRole('combobox', { name: 'Map', exact: true }).selectOption('01_NYC_UNATCOIsland'); await settled(page);
   expect(await status(page)).toMatchObject({ mode: 'play', map: '01_NYC_UNATCOIsland' });
   const initial = await player(page);

@@ -4,7 +4,7 @@ import {mkdir} from 'node:fs/promises';
 test('original health HUD, compass and InfoLink remain live across turning and reset',async({page})=>{
   const errors=[];page.on('pageerror',e=>errors.push(e.message));
   const status=()=>page.evaluate(()=>window.deusExViewer.status());
-  await page.goto('http://127.0.0.1:5173');
+  await page.goto('http://127.0.0.1:5173/?debug=1');
   await page.waitForFunction(()=>window.deusExViewer?.status().gameplay?.hud?.health.head.displayedHealth===100);
   const initial=await status();
   expect(initial.gameplay.hud).toMatchObject({energy:100,health:{head:{color:[0,255,0]}}});

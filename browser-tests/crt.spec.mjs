@@ -63,7 +63,7 @@ test('CRT button and Alt+C work in Play, preserve input, and remember the prefer
   const failures = errors(page);
   const ready = () => page.waitForFunction(() => window.deusExViewer?.status().ready);
   const toggle = page.locator('#crt');
-  await page.goto('http://127.0.0.1:5173'); await ready();
+  await page.goto('http://127.0.0.1:5173/?debug=1'); await ready();
   await expect(toggle).toHaveAttribute('aria-pressed', 'false');
   await expect(toggle).toHaveAttribute('aria-keyshortcuts', 'Alt+C');
   await page.locator('#display-options').click();

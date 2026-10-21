@@ -10,7 +10,7 @@ test.use({ browserName:'firefox',viewport:{width:960,height:640} });
 // pauses, Firefox keeps rendering, and Player start still resets the scene.
 test('player bump pushes the training plant without pausing, and Player start resets', async ({page}) => {
   const errors=[];page.on('pageerror',error=>errors.push(error.message));
-  await page.goto('http://127.0.0.1:5173');
+  await page.goto('http://127.0.0.1:5173/?debug=1');
   await page.waitForFunction(()=>window.deusExViewer?.status().gameplay?.player.grounded);
   const initial=await page.evaluate(()=>window.deusExViewer.status().gameplay.player.position);
   await page.locator('#scene').click();
@@ -47,7 +47,7 @@ test('player bump pushes the training plant without pausing, and Player start re
 // docs/script-world-destroy.md, scripts/validate-world-destroy.mjs.
 test('the training route past the first door destroys its one-shot trigger and keeps Play responsive', async ({page}) => {
   const errors=[];page.on('pageerror',error=>errors.push(error.message));
-  await page.goto('http://127.0.0.1:5173');
+  await page.goto('http://127.0.0.1:5173/?debug=1');
   await page.waitForFunction(()=>window.deusExViewer?.status().gameplay?.player.grounded);
   const status=()=>page.evaluate(()=>window.deusExViewer.status());
   await page.locator('#scene').click({position:{x:500,y:350}});

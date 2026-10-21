@@ -64,7 +64,7 @@ The page (by default since the travel of steps 0 and 1; `?boot=1` before) starts
 with the other game folders, or read from the chosen folder) is shown at its own size in device pixels, centred over black, from the moment the
 files are known until the first map is loaded, and that map is DX.dx in Play. The play hint keeps only its stops (a runtime error, a travel,
 the pointer lock). `?debug=1` is the debugging page (the toolbar, the web crosshair and hints, Inspect, the map list, `00_Training` loaded
-first), which every tool and validator opens: the 64 scripts that open the page pass their URL through `scripts/page-url.mjs` `debugUrl`. The
+first), which every tool and validator opens: the 65 scripts that open the page pass their URL through `scripts/page-url.mjs` `debugUrl`. The
 menu's Training button travels ([travel](travel.md), steps 0 and 1: Escape and a click on Training arrive in `00_Training`); New Game and Load
 Game stop by name until travel's steps 2 and 4.
 
@@ -74,6 +74,6 @@ spawn): the game's only five, and Play's actor mesh layer bound only `LodMesh`, 
 else, and the flies never drew on any map. [Classic UMesh](umesh.md) traces the path from the original: `UMesh::Serialize`, `UMesh::GetFrame`
 (`0x103a7780`) and Render's `DrawMesh` classic body (`0x10b0d235`), each translated and compared with the unchanged original in the
 Unicorn oracle, bit for bit at the render pass's precision control 24; the binding is `actor-umesh-sim.mjs`, the CPU path of the LodMesh
-one. Under `?boot=1` the Eidos logo, the Ion Storm logo and the Deus Ex logo with its text now appear during the flight;
+one. On the default start the Eidos logo, the Ion Storm logo and the Deus Ex logo with its text now appear during the flight;
 `validate-umesh-play` checks the five actors and a FlyGenerator's flies on the Island. The original's `Shot` of the flight's end pose
 and Play's frame equal to within one pixel by 1/255 outside the random electricity bolt ([UMesh](umesh.md) "Frame against the original").

@@ -1,7 +1,7 @@
 import { test, expect } from '@playwright/test';
 
 test('Chromium reconstructs the original sine table and brush coordinate capture exactly', async ({ page }) => {
-  await page.goto('http://127.0.0.1:5173');
+  await page.goto('http://127.0.0.1:5173/?debug=1');
   const result = await page.evaluate(async () => {
     const { rotationSineTable, brushToWorld } = await import('/src/runtime/coords.mjs');
     const table = rotationSineTable(), bytes = new ArrayBuffer(table.length * 4), view = new DataView(bytes);

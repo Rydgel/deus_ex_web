@@ -10,7 +10,7 @@ const errors = page => { const list = []; page.on('pageerror', e => list.push(e.
 
 test('original training map renders with textures and interactive inspection controls', async ({ page }) => {
   const failures = errors(page);
-  await page.goto('http://127.0.0.1:5173'); await ready(page);
+  await page.goto('http://127.0.0.1:5173/?debug=1'); await ready(page);
   await page.getByRole('combobox', { name: 'Movement mode' }).selectOption('inspect');
   await page.locator('#tools-options').click();
   await page.getByRole('button', { name: 'Player start', exact: true }).click();
@@ -50,7 +50,7 @@ test('original training map renders with textures and interactive inspection con
 test('production opens local File objects, reports missing packages, and sends no game data', async ({ page }) => {
   const failures = errors(page), requests = [];
   page.on('request', r => requests.push({ method: r.method(), url: r.url() }));
-  await page.goto('http://127.0.0.1:5174');
+  await page.goto('http://127.0.0.1:5174/?debug=1');
   await expect(page.getByRole('heading', { name: 'Open your Deus Ex installation' })).toBeVisible();
   await page.setViewportSize({ width: 820, height: 900 });
   await expect(page.locator('#gate-choose')).toBeVisible();
@@ -86,7 +86,7 @@ test('optional browser tool handlers validate inputs and reflect visible map sta
     window.registeredTools = {};
     Object.defineProperty(document, 'modelContext', { configurable: true, value: { registerTool: tool => { window.registeredTools[tool.name] = tool; } } });
   });
-  await page.goto('http://127.0.0.1:5173'); await ready(page);
+  await page.goto('http://127.0.0.1:5173/?debug=1'); await ready(page);
   await page.waitForFunction(() => Object.keys(window.registeredTools).length === 4);
   expect(await page.evaluate(() => window.registeredTools.read_map_status.execute({}))).toMatchObject({ ready: true, map: '00_Training' });
   for (const [name, input] of [['read_map_status', { extra: 1 }], ['open_local_map', {}], ['open_local_map', { name: 'missing' }], ['reset_inspection_camera', []], ['set_inspection_camera', { position: [0, 0], rotation: [0, 0, 0] }]]) {
