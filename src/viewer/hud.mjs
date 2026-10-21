@@ -127,6 +127,9 @@ export async function createHudRenderer({assets,preload=[]}){
     count=0;current=null;
     for(let at=start;at<end;at++){
       const command=commands[at],image=images.get(command.texture.key);
+      // A snapshot texture (RootWindow.GenerateSnapshot, docs/root-snapshot.md) is made by the page from its own frame; one the page has
+      // not made (or has released) draws nothing.
+      if(!image&&command.texture.dynamic)continue;
       if(!image){void imageFor(command.texture).catch(error=>{pendingError=error;});continue;}
       draw({...command,image});
     }
@@ -142,7 +145,18 @@ export async function createHudRenderer({assets,preload=[]}){
     if(!keepDepth)renderer.clearDepth();
     renderer.render(scene,camera);
   }
-  return {render,draw,
+  /** A texture the page made at run time: `image` is {width, height, data} (RGBA bytes, top row first). The previous texture of that key,
+   * and its materials, are dropped. */
+  function setDynamicImage(key,image){
+    images.set(key,{key,...image});
+    textures.get(key)?.dispose();textures.delete(key);
+    for(const [name,material] of [...materials])if(name.startsWith(`${key}:`)){material.dispose();materials.delete(name);}
+  }
+  function releaseDynamicImage(key){
+    images.delete(key);textures.get(key)?.dispose();textures.delete(key);
+    for(const [name,material] of [...materials])if(name.startsWith(`${key}:`)){material.dispose();materials.delete(name);}
+  }
+  return {render,draw,setDynamicImage,releaseDynamicImage,
     dispose(){for(const b of batches)b.mesh.geometry.dispose();for(const m of materials.values())m.dispose();for(const [key,t] of textures)if(!images.get(key)?.gpu)t.dispose();},
   };
 }

@@ -275,6 +275,8 @@ export function dispatchWindowHostNative(W, call) {
     case 1450: grabMouse(W,win,{getRootWindow:T.getRootWindow});break;
     case 1451: ungrabMouse(W,win,{getRootWindow:T.getRootWindow});break;
     // RootWindow.SetSnapshotSize exec 0x1003cfb0: two floats, each stored with _ftol (truncation) at +0x738 / +0x73c.
+    // RootWindow.GenerateSnapshot exec 0x1003cf30 (bFilter, default false) -> XRootWindow::GenerateSnapshot 0x10039410 (docs/root-snapshot.md).
+    case 1524: value=W.snapshot.generate(win,arg(0,false));break;
     case 1523: W.setI32(win,0x738,floatToInt(Math.fround(arg(0,0))));W.setI32(win,0x73c,floatToInt(Math.fround(arg(1,0))));break;
     case 1660: S.managerSetButtons(W,win,arg(0,null),arg(1,null));break;                            // exec 0x100427e0 -> 0x10041b30
     case 1661: SS.managerValueField(W,win,arg(0,null));break;                                       // exec 0x10042870 -> 0x10041c70

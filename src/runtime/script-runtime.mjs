@@ -942,10 +942,14 @@ export class ScriptRuntime {
     if (!object || !services) throw new Error('CriticalDelete requires native object and release bindings');
     const release = {...services, conditionalDestroy: item => this.conditionalDestroy(item.identity), warning: this.warning};
     if (object.nativeVtable === TEXT_PARSER_NATIVE.vtable) releaseTextParserObject(object, 1, release);
-    else if (object.nativeVtable === 0x10179dfc) {
-      // UObject's deleting destructor 0x1015dd00: ~UObject, then operator delete.
+    else if (object.nativeVtable === 0x10179dfc || object.nativeVtable === 0x100613e8) {
+      // UObject's deleting destructor 0x1015dd00: ~UObject, then operator delete. The snapshot texture (RootWindow.GenerateSnapshot,
+      // Extension vtable 0x100613e8) has its own slot-3 destructor 0x1003d100: ~UTexture (Engine), then operator delete of its 0xc0
+      // bytes; the mips and palette it frees are the page's here (docs/root-snapshot.md).
+      const snapshotTexture = object.nativeVtable === 0x100613e8;   // ~UObject resets the vtable
       destructScriptObject(object, release);
       freeScriptObject(object, release);
+      if (snapshotTexture) this.windowLifecycle?.snapshotReleased?.(target);
     } else if (object.nativeVtable === 0x10027fe8) {
       // ConHistory (DeusEx vtable 0x10027fe8, slot +0x0c = 0x100146a0, flags 1): ~DConHistory (ConSys 0x10003400: the class vtable, ConditionalDestroy
       // = DConHistory::Destroy 0x1000ca20 deleting every event from firstEvent, the three FString members, the DConObject vtable, ConditionalDestroy

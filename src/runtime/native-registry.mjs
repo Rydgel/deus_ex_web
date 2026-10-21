@@ -104,7 +104,7 @@ export const NATIVE_SITES = [
     indices: idx('1200 1210-1221 1230-1231 1240-1248 1250-1262 1270-1272 1280-1289 1295')},
   {id: 'window-host-natives', layer: 'window-host', file: R + 'script-window-host-natives.mjs', anchor: /export function dispatchWindowHostNative\(/,
     indices: idx(`1420 1424 1426-1427 1429 1439 1442-1449 1450-1451 1453-1454 1462-1466 1468-1470 1474 1482-1487 1489-1492 1495
-      1500 1510-1518 1521-1523 1554-1555 1558-1564 1570-1573 1590-1598 1613 1620-1653 1660-1668 1680-1681 1689 1700-1703 1820
+      1500 1510-1518 1521-1524 1554-1555 1558-1564 1570-1573 1590-1598 1613 1620-1653 1660-1668 1680-1681 1689 1700-1703 1820
       1840-1844 1945-1948 1950-1951 1955-1956`)},
 
   {id: 'play-native', layer: 'play-host', file: R + 'script-doors.mjs', anchor: /function nativeCall\(call\) \{/,
@@ -190,21 +190,6 @@ export const NATIVE_DECISIONS = Object.freeze([
       'its Conversation objects serialized, ConFlagRef chains included; Play prepares each chain from the package (script-conversation-face-live.mjs) and never imports a .con file.',
     evidence: 'native-census.json callers of 2050 (one: ConSys.Conversation.AddFlagRef; callers of AddFlagRef: none); execCreateFlagRef 0x10010600 (docs/script-conversation-construction.md).',
     reopen: 'importing a conversation source file (an editor feature, out of scope).'},
-  {native: 1524, name: 'RootWindow.GenerateSnapshot', decision: 'unsupported', date: '2026-10-21',
-    reason: 'Reachable, not implemented. Its callers: DeusExRootWindow.ShowSnapshot (every UI pause, but it calls the native only when ' +
-      'DeusExPlayer.UIBackground == 1; installed User.ini and DefUser.ini set UIBackground=0, "Render 3D", and the Game options screen\'s UI Background ' +
-      'choice can set 1, "Snapshot") and MenuScreenSaveGame.GenerateNewSnapShot (GenerateSnapshot(True), the save preview; Stage 6). The native ' +
-      '(Extension XRootWindow::GenerateSnapshot 0x10039410, exec 0x1003cf30, optional bFilter) reads the viewport\'s last rendered frame back through ' +
-      'the render device (RenDev vtable +0xa0, Viewports(0) SizeX x SizeY x 4 bytes), allocates or reuses a texture of the snapshot size rounded up to ' +
-      'powers of two (SetSnapshotSize, 1523, handled: +0x738/+0x73c), and fills it from the frame with an x87 resampling loop (a box filter with ' +
-      'bFilter, 0x10039a2c-0x10039d30). The root keeps the texture in DeusExRootWindow.snapshot as the raw background (SetRawBackground, 1516, handled) ' +
-      'with rendering disabled until HideSnapshot/UnPauseGame deletes it. Play\'s frame lives in the page\'s WebGL canvas, not in the simulation ' +
-      'worker, so there is no synchronous frame readback to give the native; selecting UI Background = Snapshot and then pausing stops the game on ' +
-      '"Unsupported original native 1524".',
-    evidence: 'dump-script-function.mjs DeusEx DeusExRootWindow.ShowSnapshot, MenuScreenSaveGame.GenerateNewSnapShot; System/User.ini line 30; ' +
-      'MenuChoice_UIBackground; x86 0x10039410-0x10039d30 (ReadPixels call at 0x100394bc); docs/settings-menus.md.',
-    reopen: 'a page-to-simulation frame readback (the frame before the pause, full size) and a bit-exact translation of the resampling loop against the ' +
-      'original with a stubbed ReadPixels; it belongs with the Save Game screen (docs/travel.md) and the UI Background choice.'},
 ]);
 
 /** Everything the registry handles, as sorted unique indices and function keys, with the entries that handle each. */

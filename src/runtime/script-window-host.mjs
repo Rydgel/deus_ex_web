@@ -103,6 +103,8 @@ import {textWindowGetText} from './script-text-get-text.mjs';
 import {textWindowGetTextLength} from './script-text-get-text-length.mjs';
 import {releaseHandle} from './script-object-handles.mjs';
 import {createWindowFArray} from './script-window-farray.mjs';
+import {potCeiling} from './script-root-snapshot.mjs';
+import {constructNativeObject} from './script-player-log.mjs';
 
 const f = Math.fround;
 const lower = value => String(value).toLowerCase();
@@ -193,7 +195,9 @@ export async function createWindowHost({runtime, assets, player, gameConfig = nu
   // fullscreenToggles / relaunches count the host requests the Exec chain made (UWindowsViewport::Exec ToggleFullscreen,
   // USystem::Exec RELAUNCH); the page performs each once (docs/host-services.md).
   const display={brightness:nativeConfig.instance('WinDrv.WindowsClient','Brightness'),flushes:0,resolution:null,resolutionVersion:0,
-    fullscreenToggles:0,relaunches:0,relaunchArguments:null};
+    fullscreenToggles:0,relaunches:0,relaunchArguments:null,
+    // RootWindow.GenerateSnapshot's requests to the page (docs/root-snapshot.md): the frame the page last drew is the texture's source.
+    snapshotRequests:[],snapshotSerial:0,snapshotReleased:[]};
   const consoleCommands=createConsoleCommands({runtime,input:inputConsole,services:{
     nativeConfig:()=>nativeConfig,
     // UWindowsViewport::Exec SetRes -> RenDev->SetRes: the browser render device takes the request.
@@ -278,6 +282,9 @@ export async function createWindowHost({runtime, assets, player, gameConfig = nu
     if (deusEx.pkg.exports[index - 1].className !== 'Class') continue;
     classes.set(`deusex.${path}`, await runtime.loadClass(deusEx, index));
   }
+  // RootWindow.GenerateSnapshot returns an Engine.Texture (the exec's UTexture subclass, vtable 0x100613e8).
+  const snapshotTextureClass = await loadClass(packages.get('Engine'), 'texture');
+  for (const field of snapshotTextureClass.propertyLink ?? []) await runtime.field(field);
   const gcClass = classes.get('extension.gc');
   for(const path of ['augmentation.gethotkey','augmentation.isactive','augmentationmanager.refreshaugdisplay','deusexplayer.clearaugmentationdisplay','deusexplayer.addaugmentationdisplay','deusexplayer.updateaugmentationdisplaystatus'])await runtime.prepareFunction(deusEx,deusEx.exportsByPath.get(path));
   // These globalconfig fields are consumed by original HUD Init/UpdateSettings.
@@ -364,7 +371,20 @@ export async function createWindowHost({runtime, assets, player, gameConfig = nu
     resourceImages.set(font, {kind: 'font', ref});
     return font;
   }
+  // The snapshot textures GenerateSnapshot made (docs/root-snapshot.md): script object -> {key, width, height, address}. The page holds
+  // their pixels (it made them from its own frame); the native image here only carries the size and the reference the HUD commands name.
+  const snapshotTextures = new WeakMap();
+  function snapshotTextureImage(info) {
+    const address = heap.allocRaw(0x60);
+    heap.mem.write(address, 'u32', textureVtable);
+    heap.mem.write(address + 0x34, 'i32', info.width);
+    heap.mem.write(address + 0x38, 'i32', info.height);
+    resourceImages.set(address, {kind: 'texture', ref: {key: info.key, dynamic: true, width: info.width, height: info.height}, width: info.width, height: info.height});
+    return address;
+  }
   function materialize(value) {
+    const snapshot = value && typeof value === 'object' ? snapshotTextures.get(value) : undefined;
+    if (snapshot) return snapshot.address;
     if (value && typeof value === 'object' && value.asset && Number.isInteger(value.index)) {
       if (value.kind === 'Font') return fontImage(value);
       if (typeof value.kind === 'string' && value.kind.endsWith('Texture')) return textureImage(value.asset, value.index, value);
@@ -977,6 +997,39 @@ export async function createWindowHost({runtime, assets, player, gameConfig = nu
   const inheritedShowArea=V.childRequestedShowArea;
   V.childRequestedShowArea=(win,...args)=>is(win,'extension.clipwindow')?clipShowArea(W,win,...args):inheritedShowArea(win,...args);
   W.v = V;
+  /** XRootWindow::GenerateSnapshot 0x10039410 as the exec 0x1003cf30 calls it (docs/root-snapshot.md): a new Texture of the root's snapshot
+   * size rounded up to powers of two (SetSnapshotSize, +0x738/+0x73c), filled from the viewport's last frame. The frame is the page's
+   * (the simulation has none): the request goes out in the frame snapshot and the page fills the texture before it draws the HUD
+   * that names it. The returned object is a UTexture subclass of the transient package (vtable 0x100613e8), USize/VSize the powers of two. */
+  W.snapshot = {
+    generate(root, bFilter) {
+      if (!viewportSize) boundary('RootWindow.GenerateSnapshot reads the viewport frame, whose size is unknown before the first frame');
+      const snapW = W.i32(root, 0x738), snapH = W.i32(root, 0x73c), pitch = potCeiling(snapW), height = potCeiling(snapH);
+      if (!pitch || !height) boundary(`RootWindow.GenerateSnapshot with a ${snapW} x ${snapH} snapshot size (Init of an empty texture is not recovered)`);
+      const base = runtime.actorLifecycle?.construction, outer = base?.transientPackage;
+      if (!outer) boundary('RootWindow.GenerateSnapshot requires the transient package Outer');
+      const object = runtime.allocateObject(snapshotTextureClass, {outer, name: 'None', flags: 0, template: null}, {...base,
+        validate: args => args.cls === snapshotTextureClass && args.outer === outer && args.template === null && args.flags === 0 && args.name === 'None',
+        initNativeProperties: () => {}});
+      const native = runtime.instance(object).nativeObject;
+      native.nativeVtable = 0x10179dfc;          // UObject::UObject, then the Extension subclass' vtable
+      constructNativeObject(native, 0x100613e8, 'Snapshot texture', {destroyObjectBase: receiver => runtime.destroyObjectBase(receiver)});
+      runtime.writeNamed(object, 'USize', pitch);
+      runtime.writeNamed(object, 'VSize', height);
+      const serial = ++display.snapshotSerial, info = {key: `snapshot:${serial}`, width: pitch, height};
+      info.address = snapshotTextureImage(info);
+      snapshotTextures.set(object, info);
+      display.snapshotRequests.push({serial, key: info.key, sizeX: viewportSize.sizeX, sizeY: viewportSize.sizeY, snapW, snapH, bFilter: Boolean(bFilter)});
+      if (display.snapshotRequests.length > 8) display.snapshotRequests.splice(0, display.snapshotRequests.length - 8);
+      return object;
+    },
+    release(object) {
+      const info = snapshotTextures.get(object);
+      if (!info) return;
+      display.snapshotReleased.push(info.key);
+      if (display.snapshotReleased.length > 16) display.snapshotReleased.splice(0, display.snapshotReleased.length - 16);
+    },
+  };
 
   // ------------------------------------------------------------------
   // Window-level natives shared by several bodies.
@@ -1582,6 +1635,8 @@ export async function createWindowHost({runtime, assets, player, gameConfig = nu
     text: {...rawServices, realloc: (address, size) => heap.realloc(address, size), makeAcceleratorTableDirty: ({object})=>T.makeAcceleratorTableDirty(W,object)},
     // TextWindow.SetText/AppendText virtual overrides (vtable +0x11c/+0x120).
     textVirtual: (object, method, text) => textVirtual(object, method, text),
+    // CriticalDelete of a snapshot texture (script-runtime.mjs criticalDelete): the page drops its pixels.
+    snapshotReleased: object => W.snapshot.release(object),
     toggle: {...rawServices,
       read:(object,offset,kind)=>heap.read(object,offset,kind==='ptr'&&([0x188,0x18c].includes(offset)||(offset>=0x1a4&&offset<0x1ec&&(offset-0x1a4)%12!==0))?'u32':kind),
       toggleChanged:({object,source,toggle})=>V.toggleChanged(object,source,toggle)},

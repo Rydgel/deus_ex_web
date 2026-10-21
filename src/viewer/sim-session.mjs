@@ -29,7 +29,8 @@ export const plainError = error => ({ name: error?.name ?? 'Error', message: Str
 
 /** A HUD texture reference as plain data: the page decodes it from its own
  * asset store. */
-export const plainTexture = ref => ({ key: ref.key, package: ref.asset.name, index: ref.index });
+export const plainTexture = ref => ref.dynamic ? { key: ref.key, dynamic: true, width: ref.width, height: ref.height }
+  : { key: ref.key, package: ref.asset.name, index: ref.index };
 /** The window host's GC draw commands (script-window-host.mjs callVirtual)
  * as plain data. */
 export const plainHudCommands = commands => commands.map(command => command.kind === 'clearZ' ? { kind: 'clearZ' }
@@ -1181,7 +1182,11 @@ export function createSimSession(game, { assets = null, events = [], exportName 
       const display = game.hud?.host?.display;
       snapshot.display = display ? { brightness: display.brightness, flushes: display.flushes,
         resolution: display.resolution, resolutionVersion: display.resolutionVersion,
-        fullscreenToggles: display.fullscreenToggles, relaunches: display.relaunches, relaunchArguments: display.relaunchArguments } : null;
+        fullscreenToggles: display.fullscreenToggles, relaunches: display.relaunches, relaunchArguments: display.relaunchArguments,
+        // RootWindow.GenerateSnapshot (docs/root-snapshot.md): the page keeps its drawn frames while UIBackground is 1 (Snapshot), and
+        // fills each requested texture from the frame before the one this snapshot draws.
+        keepFrame: game.player?.collisionActor ? Number(runtime.readNamed(game.player.collisionActor, 'UIBackground')) === 1 : false,
+        snapshotRequests: display.snapshotRequests, snapshotReleased: display.snapshotReleased } : null;
       return snapshot;
     },
     /** The queued events outside a frame (map load: the first creation

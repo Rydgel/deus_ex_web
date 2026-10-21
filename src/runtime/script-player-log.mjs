@@ -5,7 +5,7 @@
  * cell 0x100391b8 against the log's 0x38 and 0x1003a5d8), whose constructor 0x1000df40
  * is UObject's then vtable 0x10027b24 (the log's 0x10027ad0 differs only in slot +0xc, the
  * deleting destructor). The installed AddNote bytecode owns the image's note list. */
-function constructNativeObject(object,vtable,label,{destroyObjectBase}={}){
+export function constructNativeObject(object,vtable,label,{destroyObjectBase}={}){
   if(typeof destroyObjectBase!=='function')throw new Error(`${label} construction requires UObject::Destroy`);
   object.nativeVtable=vtable;
   // Slot +0x24 of both vtables is the UObject::Destroy thunk 0x1001aec0.
