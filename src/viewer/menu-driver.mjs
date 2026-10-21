@@ -81,6 +81,37 @@ export function createMenuDriver(game) {
       walk(topWindow());
       return cycled;
     },
+    /** Where a click on a control of the topmost window lands, in the HUD's drawing-buffer pixels (a browser check clicks there with the real
+     * mouse): the centre of its absolute bounds (+0xd4 absX, +0xd8 absY, +0xe4 clipped width, +0xe8 clipped height, docs/script-window-bounds-update.md).
+     * `spec`: {field, index?} (a window field, or an element of an array field such as `winButtons`), {actionKey} (the screen's AB_Other button),
+     * or {field, row} (row `row` of a list window: the first column, a line at +0x19c). */
+    center(spec) {
+      let win;
+      if (spec.actionKey !== undefined) {
+        const entry = runtime.readNamed(topWindow(), 'actionButtons').find(candidate => Object.entries(candidate).find(([name]) => name.endsWith('.key'))?.[1] === spec.actionKey);
+        win = entry && Object.entries(entry).find(([name]) => name.endsWith('.btn'))[1];
+      } else {
+        win = runtime.readNamed(topWindow(), spec.field);
+        if (spec.index !== undefined) win = win?.[spec.index];
+      }
+      if (!win) throw new Error(`${keyOf(topWindow())} has no control ${JSON.stringify(spec)}`);
+      const x = W.f32(win, 0xd4), y = W.f32(win, 0xd8);
+      if (spec.row !== undefined) return {x: x + 20, y: y + (spec.row + 0.5) * W.f32(win, 0x19c)};
+      return {x: x + W.f32(win, 0xe4) / 2, y: y + W.f32(win, 0xe8) / 2};
+    },
+    /** A button field of the topmost window (a message box's `btnYes`/`btnNo`/`btnOK`), activated. */
+    pressField(field) {
+      const button = runtime.readNamed(topWindow(), field);
+      if (!button) throw new Error(`${keyOf(topWindow())} has no ${field}`);
+      activate(button);
+    },
+    /** The screen's AB_Other action button with the text key `key` ("START" on MenuScreenNewGame), activated. */
+    pressActionKey(key) {
+      const screen = topWindow(), entry = runtime.readNamed(screen, 'actionButtons')
+        .find(candidate => Object.entries(candidate).find(([name]) => name.endsWith('.key'))?.[1] === key);
+      if (!entry) throw new Error(`${keyOf(screen)} has no action button "${key}"`);
+      activate(Object.entries(entry).find(([name]) => name.endsWith('.btn'))[1]);
+    },
     /** The screen's action button with `action` (1 OK, 2 Cancel, 3 Reset to defaults), activated. */
     pressAction(action) {
       const screen = topWindow(), entry = runtime.readNamed(screen, 'actionButtons')

@@ -8,6 +8,7 @@
  *   action {action}          the screen's action button (1 OK, 2 Cancel, 3 Reset)
  *   cycleAll                 every value choice once
  *   button {index}           the top menu's winButtons[index] activated, as a click on it does (MenuMain: 4 is Training)
+ *   center {field, index?, row?} | {actionKey}   where a click on a control of the top window lands (drawing-buffer pixels), returned as `result`
  *   escape                   the Escape key on the root window
  *   state                    nothing
  * The caller waits for frames between steps: the windows need their ticks. */
@@ -21,6 +22,7 @@ export function settingsProbe(game, step = {op: 'state'}) {
     case 'menu': driver.showMainMenu(); break;
     case 'invoke': driver.invoke(step.screen); break;
     case 'button': driver.pressButton(step.index); break;
+    case 'center': result = driver.center(step); break;
     case 'press': driver.press(step.choice); break;
     case 'drag': driver.drag(step.choice, step.tick); break;
     case 'action': driver.pressAction(step.action); break;

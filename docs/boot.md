@@ -65,8 +65,8 @@ with the other game folders, or read from the chosen folder) is shown at its own
 files are known until the first map is loaded, and that map is DX.dx in Play. The play hint keeps only its stops (a runtime error, a travel,
 the pointer lock). `?debug=1` is the debugging page (the toolbar, the web crosshair and hints, Inspect, the map list, `00_Training` loaded
 first), which every tool and validator opens: the 65 scripts that open the page pass their URL through `scripts/page-url.mjs` `debugUrl`. The
-menu's Training button travels ([travel](travel.md), steps 0 and 1: Escape and a click on Training arrive in `00_Training`); New Game and Load
-Game stop by name until travel's steps 2 and 4.
+menu's Training and New Game buttons travel ([travel](travel.md)): Escape and a click on Training arrive in `00_Training` (steps 0 and 1); New Game
+runs the difficulty and New Game screens, the intro and the Island (step 2). Load Game, Play Intro and Credits stop by name until their steps.
 
 **The screen's shape is the original's 4:3 (2026-10-21).** The original starts fullscreen at `DeusEx.ini` `[WinDrv.WindowsClient]`
 `FullscreenViewportX=640`, `FullscreenViewportY=480` (`StartupFullscreen=True`), and every mode its Display menu offers is 4:3 or 5:4 (the page's

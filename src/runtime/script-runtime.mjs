@@ -2522,6 +2522,13 @@ export class ScriptRuntime {
         const parsed=importText('bool',rest);
         if(parsed){args[index]=parsed.value;at=text.length-parsed.rest.length;}
         else imported=false;
+      }else if(field.metadata.type==='name'&&(field.metadata.arrayDim??1)<=1){
+        // UNameProperty::ImportText 0x101674d0 (config-text.mjs 'name', the same body `set` uses): ReadToken(0x400) then
+        // FName(FNAME_Add); an empty token is None, and a NULL ReadToken ends the parse. (`GiveNanoKey TestKeyA "Test key A"`:
+        // the Name takes the first token, the String the whole remaining text, quotes included, as the measured travel text shows.)
+        const parsed=importText('name',rest);
+        if(parsed){args[index]=lower(parsed.value)==='none'?'None':parsed.value;at=text.length-parsed.rest.length;}
+        else imported=false;
       }else if(field.metadata.type==='string'&&(field.metadata.arrayDim??1)<=1){
         // UStrProperty::ImportText 0x10167980: port flags 1 lack
         // PPF_Delimited (2), so the FString takes the whole remaining text

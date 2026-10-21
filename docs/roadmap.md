@@ -1196,7 +1196,7 @@ Map travel, the first of these steps, is traced and measured in [travel](travel.
 (2026-10-21): the script and native chain from `SendPlayer` to the next level's login,
 the travel text, the `Save\Current` store that restores visited maps, the save and load
 files, the measured scenarios, the unresolved branches, and the proposed order for Play
-(Training from the DX.dx menu first). Steps 0 and 1 are in Play (2026-10-21): the menu's Training button on the logo map travels to `00_Training`, the exported text, the arrival's flags and the log order checked against the original; items, visited-map restoration, saves and the other menu entries are the steps after.
+(Training from the DX.dx menu first). Steps 0 to 2 are in Play (2026-10-21): the menu's Training button on the logo map travels to `00_Training`, and New Game runs the real menu screens, the intro, `PostIntro` and `StartNewGame` to the Island, with the player's items, notes, goals, keys, images, pickups and conversation history carried; the exported texts, the arrival's flags and the log order are checked against captures of the original (the second text of a pair is the import's own export). Visited-map restoration (step 3), saves (step 4) and the remaining menu entries are the steps after.
 
 ## 7. Make the browser runtime reliable
 

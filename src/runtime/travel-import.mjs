@@ -7,7 +7,11 @@
  *      class '<class>'` and the record is ignored; a PlayerPawn class stands for the new player (the one Login made); an Actor class is
  *      SpawnActor(Class, None, Owner = player, Instigator = None, player.Location, player.Rotation, bNoCollisionFail), a failure
  *      logging `Failed to spawn travelling class`; the Extension flag objects become the player's flag store (below); any other
- *      class is an explicit stop. Each object is entered in a table with its record's `Ptr`.
+ *      class is StaticConstructObject(Class, Outer = player, NAME_None, 0, NULL), which is the script's `new(Self) class'X'`
+ *      (ScriptRuntime.newObject: DeusExNote, DeusExGoal and NanoKeyInfo, the Object subclasses of a player's notes, goals and keys; the native
+ *      ConSys.ConHistory and ConHistoryEvent through script-conplay-live.mjs constructHistoryObject); a class the runtime has no constructor
+ *      for is an explicit stop. Each object is entered in a table with
+ *      its record's `Ptr`.
  *   2. properties: every stored line, the property found in the object's class chain among those with CPF_Travel (a missing or
  *      non-travel property is ignored); an object property with a hex pointer is remembered for pass 3, `None` is stored; any other
  *      property is ImportText of the value.
@@ -25,6 +29,7 @@ import { importText } from './config-text.mjs';
 import { hashScriptName } from './script-names.mjs';
 import { parseTravelText, parsePropertyLine, parseObjectValue, TravelTextError } from './travel-text.mjs';
 import { isHostFlagBase } from './travel-export.mjs';
+import { constructHistoryObject } from './script-conplay-live.mjs';
 
 const lower = value => String(value ?? '').toLowerCase();
 export class UnsupportedTravelImportError extends Error {
@@ -95,7 +100,19 @@ export function createTravelImporter({ runtime, assets, level, exporter, log, pr
         if (!object) { log('Log', `Failed to spawn travelling class '${record.class}'`); continue; }
         entry.object = object;
       } else if (lower(cls.record.key).startsWith('extension.flag')) entry.flag = true;
-      else throw new UnsupportedTravelImportError(`SpawnPlayActor: the travelling class ${record.class} is neither a PlayerPawn, an Actor nor a flag object`, { class: record.class });
+      else {
+        // Any other class: StaticConstructObject(Class, Outer = player, NAME_None, 0, NULL, GError), which is the `new(Self) class'X'` of
+        // ScriptRuntime.newObject (DeusExNote, DeusExGoal and NanoKeyInfo are the script-only Object subclasses a player's lists hold).
+        // The conversation history's two classes are native (ConSys): built as the CreateHistoryObject/CreateHistoryEvent natives build them, Outer = player.
+        const historyKey = cls.record.key;
+        try {
+          if (historyKey === 'consys.conhistory' || historyKey === 'consys.conhistoryevent')
+            entry.object = constructHistoryObject(runtime, level, cls, historyKey === 'consys.conhistoryevent', { outer: runtime.playerNativeObject(player) });
+          else entry.object = runtime.newObject({ outer: player, name: 'None', flags: 0, classRef: cls.record });
+        } catch (error) {
+          throw new UnsupportedTravelImportError(`SpawnPlayActor: the travelling class ${record.class} is neither a PlayerPawn, an Actor, a flag object nor an Object subclass the runtime constructs (${error.message})`, { class: record.class });
+        }
+      }
       entries.push(entry);
       table.set(record.ptr, entry);
     }

@@ -56,9 +56,16 @@ export function parseObjectValue(value) {
 
 const stripInstance = name => name.replace(/\d+$/, '#');
 
+/** Properties that hold a frame-time sum of the run that exported the text: `saveTime` accumulates the player's tick deltas
+ * (the original's measured 0.006523 and 0.007809 at its frame rates, against Play's fixed 1/60) and `LastConEndTime` is the level
+ * time at which the last conversation ended. Their *presence* is the behavior (a default of 0 is not written); the value is the
+ * run's own, so `{times: true}` compares presence only. */
+export const TIME_PROPERTIES = ['saveTime', 'LastConEndTime'];
+
 /** The text with pointers renamed `@n` by order of first appearance and instance numbers (`FlagBool36`) replaced by `#`. Records,
- * properties and values keep their order. The same state in two sessions (or in the original and in Play) normalizes equal. */
-export function normalizeTravelText(textOrRecords) {
+ * properties and values keep their order. The same state in two sessions (or in the original and in Play) normalizes equal.
+ * `{times: true}` masks the values of {@link TIME_PROPERTIES} (`saveTime=<time>`). */
+export function normalizeTravelText(textOrRecords, { times = false } = {}) {
   const records = typeof textOrRecords === 'string' ? parseTravelText(textOrRecords) : textOrRecords;
   const pointers = new Map();
   const pointer = ptr => {
@@ -73,6 +80,7 @@ export function normalizeTravelText(textOrRecords) {
       const object = property ? parseObjectValue(property.value) : null;
       if (property && object && object.ptr !== null)
         out.push(`${property.name}${property.indexed ? `[${property.index}]` : ''}=${pointer(object.ptr)} ${stripInstance(object.name)}`);
+      else if (times && property && TIME_PROPERTIES.includes(property.name)) out.push(`${property.name}=<time>`);
       else out.push(line);
     }
     out.push('}');
@@ -80,9 +88,10 @@ export function normalizeTravelText(textOrRecords) {
   return out.join('\n');
 }
 
-/** The first line at which two normalized texts differ (`{line, expected, actual}`), or null when they are equal. */
-export function firstTravelTextDifference(expected, actual) {
-  const a = normalizeTravelText(expected).split('\n'), b = normalizeTravelText(actual).split('\n');
+/** The first line at which two normalized texts differ (`{line, expected, actual}`), or null when they are equal. `options` are
+ * {@link normalizeTravelText}'s. */
+export function firstTravelTextDifference(expected, actual, options) {
+  const a = normalizeTravelText(expected, options).split('\n'), b = normalizeTravelText(actual, options).split('\n');
   for (let i = 0; i < Math.max(a.length, b.length); i++)
     if (a[i] !== b[i]) return { line: i + 1, expected: a[i] ?? null, actual: b[i] ?? null };
   return null;

@@ -7,7 +7,7 @@
 #   scripts/travel-step.sh <out dir> snap <label>           save directory listing, log copy, player flags, travel text -> <out dir>/<label>.*
 #   scripts/travel-step.sh <out dir> actors <name> <label>  tools/dump-actor-win.c for objects named like <name> -> <out dir>/<label>.actors.txt
 #   scripts/travel-step.sh <out dir> shot <name>            the game's Shot key -> <out dir>/<name>.png
-#   scripts/travel-step.sh <out dir> key <name> | click <x> <y> | move <x> <y>   dxinput key / mouse (viewport client coordinates)
+#   scripts/travel-step.sh <out dir> key <name> | type <text> | click <x> <y> | move <x> <y>   dxinput key (names as dxinput.c: ESC, ENTER, F9 ...), text, mouse (viewport client coordinates)
 set -u
 OUT=${1:?usage: travel-step.sh <out dir> <verb> ...}; VERB=${2:?}; shift 2
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
@@ -21,7 +21,7 @@ clean() { grep -a -v 'MESA\|pci id' | tr -d '\r'; }
 case $VERB in
   cmd) printf 'cmd %s\n' "$*" > "$OUT/step.txt"; node ad/scripts/original-game.mjs run "$OUT/step.txt" >/dev/null 2>&1
        echo "$(date +%T) cmd $*" >> "$OUT/steps.txt" ;;
-  key|click|move) printf '%s %s\nsleep 1500\n' "$VERB" "$*" > "$OUT/step.txt"; node ad/scripts/original-game.mjs run "$OUT/step.txt" >/dev/null 2>&1
+  key|click|move|type) printf '%s %s\nsleep 1500\n' "$VERB" "$*" > "$OUT/step.txt"; node ad/scripts/original-game.mjs run "$OUT/step.txt" >/dev/null 2>&1
        echo "$(date +%T) $VERB $*" >> "$OUT/steps.txt" ;;
   arrive) ok=
           for _ in $(seq 1 30); do
