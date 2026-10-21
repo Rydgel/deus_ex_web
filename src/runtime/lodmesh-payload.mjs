@@ -1,7 +1,7 @@
 /** GOTY v68 LodMesh resource view. Original contract: docs/script-mesh-payload.md. */
 import {readObject, nameAt, objectAt} from '../unreal/objects.mjs';
 import {LodMeshError} from './lodmesh.mjs';
-import {constructLodMesh, serializeLodMesh, loadMeshLazyArray, reallocateMeshArray}
+import {constructMesh, constructLodMesh, serializeMesh, serializeLodMesh, loadMeshLazyArray, reallocateMeshArray}
   from './script-mesh-load.mjs';
 
 const empty = new Uint8Array();
@@ -65,12 +65,15 @@ export function meshPayloadView(object, services, {entry, archive, classic = fal
   };
 }
 
-/** Detached package inspection uses the exact shared native serializer. */
+/** Detached package inspection uses the exact shared native serializer. A
+ * `Mesh` export is a classic UMesh (the game has five: docs/umesh.md), which
+ * UMesh::Serialize reads alone; a `LodMesh` continues with ULodMesh's arrays. */
 export function decodeLodMeshPayload(pkg, bytes, exportIndex, {lazy = true} = {}) {
   if (pkg.version !== 68) throw new LodMeshError(`Full LodMesh payload version ${pkg.version} is unsupported`);
   const stored = readObject(pkg, bytes, exportIndex), {entry, reader: r} = stored;
-  if (entry.className !== 'LodMesh' || stored.stack)
-    throw new LodMeshError('Expected a version 68 LodMesh without a saved execution stack');
+  const classic = entry.className === 'Mesh';
+  if ((entry.className !== 'LodMesh' && !classic) || stored.stack)
+    throw new LodMeshError('Expected a version 68 LodMesh or Mesh without a saved execution stack');
   const prefix = r.offset, object = {values: new Map()};
   // Native registration supplies zero defaults; constructor writes follow.
   for (let offset = 0x28; offset < 0x1b0; offset += 4) object.values.set(offset, 0);
@@ -93,10 +96,10 @@ export function decodeLodMeshPayload(pkg, bytes, exportIndex, {lazy = true} = {}
     attach: (ar, loader) => { loader.archive = ar; loader.savedPosition = ar.tell(); },
     getLazyLoad: () => Number(lazy), referenceToken: ref => ref >>> 0,
   };
-  constructLodMesh(object, services);
-  serializeLodMesh(object, archive, services);
+  (classic ? constructMesh : constructLodMesh)(object, services);
+  (classic ? serializeMesh : serializeLodMesh)(object, archive, services);
   if (r.offset !== r.bytes.length) throw new LodMeshError(`LodMesh payload has ${r.bytes.length - r.offset} unconsumed bytes`);
-  return meshPayloadView(object, services, {entry, archive});
+  return meshPayloadView(object, services, {entry, archive, classic});
 }
 
 /** Original signed-word vertex unpack only: no animation tween or transform. */

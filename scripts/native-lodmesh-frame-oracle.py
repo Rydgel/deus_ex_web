@@ -1,7 +1,10 @@
-"""Complete original ULodMesh::GetFrame, with native loading and Core math.
+"""Complete original ULodMesh::GetFrame (or, for a `classic` mesh case, UMesh::GetFrame
+0x103a7780), with native loading and Core math.
 
 FMemCache Create/Flush are allocation leaves. Original inlined lookups, locks,
 all vertex/transform/blend instructions and GetAnimSeq execute unchanged.
+UMesh::GetFrame takes no requested count (the case's `count` is ignored, its
+output is FrameVerts vectors) and its cache items have a 12-byte header.
 """
 import base64
 import hashlib
@@ -107,6 +110,7 @@ class Probe(mesh.Probe):
             self.write(actor + 4, 'I', 1001 + i)
             self.fields(actor, {'DrawScale': 1})
         count = self.read(self.object + 0xf0, 'I')[0]
+        classic = bool(sample['mesh'].get('classic'))
         results = []
         for step in sample['steps']:
             self.cache_events = []
@@ -123,15 +127,18 @@ class Probe(mesh.Probe):
             # The output block's prior contents (DrawLodMesh's uninitialized GMem): 0x55 unless the step gives bytes.
             self.cpu.mem_write(self.output, base64.b64decode(step['pattern']) if 'pattern' in step else b'\x55' * (count * stride))
             self.write(self.count_cell, 'i', step.get('count', count))
-            args = struct.pack('<II12fII', self.output, stride, *step.get('coords', IDENTITY),
-                               self.actors['actor'], self.count_cell)
+            if classic:
+                args = struct.pack('<II12fI', self.output, stride, *step.get('coords', IDENTITY), self.actors['actor'])
+            else:
+                args = struct.pack('<II12fII', self.output, stride, *step.get('coords', IDENTITY),
+                                   self.actors['actor'], self.count_cell)
             before = {name: bytes(self.cpu.mem_read(a, 0x700)).hex() for name, a in self.actors.items()}
             # GetFrame's only caller is DrawLodMesh (Render 0x10b0ee0f), inside
             # the render pass: its x87 control word is render_control_word
             # (0x007f, precision control 24, unless argv[2] or ORACLE_CW says
             # otherwise); the mesh load above stays at the game thread's.
             loading, self.control_word = self.control_word, self.render_control_word
-            self.call(0x10355360, self.object, args)
+            self.call(0x103a7780 if classic else 0x10355360, self.object, args)
             self.control_word = loading
             after = {name: bytes(self.cpu.mem_read(a, 0x700)).hex() for name, a in self.actors.items()}
             assert before == after, 'GetFrame unexpectedly changed actor storage'
