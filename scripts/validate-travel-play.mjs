@@ -1,4 +1,4 @@
-/** Map travel in Play's page, in the default worker mode (docs/travel.md "Proposed implementation order", step 1): `?boot=1` starts the
+/** Map travel in Play's page, in the default worker mode (docs/travel.md "Proposed implementation order", step 1): the page's default start (no `debug=1`) starts the
  * logo map DX.dx; Escape opens the original MenuMain; the Training button (winButtons[4]) runs DeusExPlayer.StartTrainingMission ->
  * SendPlayer -> ClientTravel; the simulation side's travel step exports the player, browses and hands the page the next level, which
  * the page loads with the travel text its Login imports.
@@ -32,7 +32,7 @@ try {
   const page = await browser.newPage({ viewport: { width: 1024, height: 640 } });
   const errors = []; page.on('pageerror', error => errors.push(error.message));
   page.on('console', message => { if (message.type() === 'error') errors.push(message.text()); });
-  await page.goto(`${url}/?boot=1&antialias=0`);
+  await page.goto(`${url}/?antialias=0`);
   const ready = map => page.waitForFunction(map => { const s = window.deusExViewer?.status(); return s?.ready && s.map === map && !s.runtimeError; }, map, { timeout: 240000 });
   const frames = n => page.evaluate(async n => { for (let k = 0; k < n; k++) await new Promise(r => requestAnimationFrame(r)); }, n);
   const probe = step => page.evaluate(step => window.deusExViewer.settingsProbe(step), step);
@@ -74,4 +74,4 @@ try {
   if (errors.length) failures.push(`page errors: ${errors.slice(0, 3).join(' | ')}`);
 } finally { await browser.close(); await server.close(); }
 if (failures.length) { console.log(`FAIL validate-travel-play:\n  ${failures.join('\n  ')}`); process.exit(1); }
-console.log('PASS validate-travel-play: ?boot=1 -> Escape -> Training button arrives in 00_Training with the player the travel text carried');
+console.log('PASS validate-travel-play: the original start -> Escape -> Training button arrives in 00_Training with the player the travel text carried');

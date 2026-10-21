@@ -60,12 +60,13 @@ functions, states and properties) is not measured and stays out of the model. On
 
 ## The page
 
-`?boot=1` (2026-10-21) starts as the original does: the page bars are gone (`#app.original-start`), `Help/Logo.bmp` (served by the dev server
+The page (by default since the travel of steps 0 and 1; `?boot=1` before) starts as the original does: the page bars are gone (`#app.original-start`), `Help/Logo.bmp` (served by the dev server
 with the other game folders, or read from the chosen folder) is shown at its own size in device pixels, centred over black, from the moment the
 files are known until the first map is loaded, and that map is DX.dx in Play. The play hint keeps only its stops (a runtime error, a travel,
-the pointer lock). It is opt-in for now: the page's default stays the inspection tool (the toolbar, the web crosshair and hints, `00_Training`
-loaded first), which 63 browser validators open with their own URLs. Travel has landed for the Training button ([travel](travel.md), `?boot=1` then Escape and a click on Training arrives in `00_Training`); the switch (the original's start by default, the tools with `?debug=1`)
-lands with the other menu entries, so every choice starts a game, and in the same change every validator's URL gains `debug=1`.
+the pointer lock). `?debug=1` is the debugging page (the toolbar, the web crosshair and hints, Inspect, the map list, `00_Training` loaded
+first), which every tool and validator opens: the 64 scripts that open the page pass their URL through `scripts/page-url.mjs` `debugUrl`. The
+menu's Training button travels ([travel](travel.md), steps 0 and 1: Escape and a click on Training arrive in `00_Training`); New Game and Load
+Game stop by name until travel's steps 2 and 4.
 
 **The logos are not drawn yet.** DX.dx's `EidosLogo0`, `IonStormLogo0`, `DXLogo3` and the two `DXText` are classic `UMesh` meshes (DeusExDeco's
 `EidosLogo`, `IonStormLogo`, `DXText`, `DXLogo`), and Play's actor mesh layer binds only `LodMesh` ("Classic UMesh surfaces are not bound"): the

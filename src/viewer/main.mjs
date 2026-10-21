@@ -199,9 +199,9 @@ function applySimEvents(events,{world:target,actors,weapon}){
 }
 
 const $ = id => document.getElementById(id);
-// ?boot=1: the original's start (docs/boot.md): the splash while the files load, then DeusEx.ini's LocalMap DX.dx in Play with no page bars.
-// Opt-in until travel lets the main menu start a game; then it becomes the default and ?debug=1 brings back the tools.
-const originalStart = new URLSearchParams(location.search).get('boot') === '1';
+// The page starts as the original does (docs/boot.md): the splash while the files load, then DeusEx.ini's LocalMap DX.dx in Play with no page
+// bars. ?debug=1 is the debugging page: the toolbar, Inspect, the map list and 00_Training first (every tool and validator opens it, scripts/page-url.mjs).
+const originalStart = new URLSearchParams(location.search).get('debug') !== '1';
 if (originalStart) $('app').classList.add('original-start');
 /** The original's splash: Launch's InitSplash("..\\Help\\Logo.bmp") shows the bitmap at its own size centred on the screen, in a dialog of
  * its own thread, until ExitSplash after the engine's Init has browsed to the first map (UnEngineWin.h; DeusEx.exe 0x1090909e). Here: its size

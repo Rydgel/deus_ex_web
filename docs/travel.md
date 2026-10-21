@@ -482,7 +482,7 @@ The engine's own `Shot` key does not work while the menu is up (UI screens grab 
 
 2026-10-21. What the [order](#proposed-implementation-order-for-play)'s steps 0 and 1 put into Play, where it is, what was checked against the measured original, and what still stops.
 
-**The chain in Play.** The page's `?boot=1` starts DX.dx; Escape (User.ini's `Escape=ShowMainMenu`) opens `MenuMain`; the Training button (a click, or `winButtons[4]` through the menu driver)
+**The chain in Play.** The page's default start (no `debug=1`) starts DX.dx; Escape (User.ini's `Escape=ShowMainMenu`) opens `MenuMain`; the Training button (a click, or `winButtons[4]` through the menu driver)
 runs `StartTrainingMission` (`ResetSkills`, `ResetPlayer(True)`, native 3012 `DeleteSaveGameFiles`, `SendPlayer`) on the VM; `PlayerPawn.ClientTravel` is `APlayerPawn::execClientTravel` (`script-travel.mjs`: `PreClientTravel`, then
 `SetClientTravel`: the viewport's `TravelURL`/`TravelType`/`bTravelItems` and `PreTravel` on every actor). After the tick, `game.clientTravel()` runs the engine tick's travel step (`travel.mjs`): `Export travel for: <PlayerName>`,
 `ExportTravel` (`travel-export.mjs`), `LastURL` cleaned, `FURL(LastURL, TravelURL, TravelType)` (`furl.mjs`), `Browse:` and `DDeusExGameEngine::Browse`'s decision (`travel-browse.mjs`, executed there). A `LoadMap` effect becomes a request
@@ -520,7 +520,7 @@ open-capture seed, not the post-travel registry the original has: **unverified**
 | the engine log | the 17 lines Play models (`Unloading: Package DX`, `Export travel for`, `Browse:`, `Doing load, not loadgame`, `Current mission number`, `Attempting to get player`, `LoadMap:`, `Game class is`, `Bringing Level`, `InitGame`, `Base Mutator`, `Spawned new mission script`, `Spawning new actor for Viewport`, `Login: Player`, `Possessed PlayerPawn`, `All inventory ... accepted`, `InitStateMachine`) are the measured log's, in its order (the `Unloading` line comes from the script's native 3012 for the menu and from Browse's own `DeleteSaveGameFiles` for the console `LocalTravel`: both measured) |
 | the import | every line of the text is in the arrived player's own export; the arrival adds one line, `SkillWeaponPistol: CurrentLevel=1`: pass 2 writes only the lines a text has, so the imported pistol skill keeps what its `PreBeginPlay` set (`ResetSkills` had put the departing level to the class default 0, which the text omits), as the original's import does by the same rules |
 | `RestartLevel` (`?restart`) | no `Export travel`; `LoadMap: 00_training?loadonly` (the level's `MapName`), `InitGame: ?loadonly`, `Login:` (no `Name=`), the new player has **no flag** at arrival or after the first timer, the nine modelled lines are the measured restart's |
-| the page (`?boot=1`, worker mode) | a click on Training arrives in `00_Training` with "UNATCO Training Facilities / Continental United States" and the flags, carcass above; no runtime error |
+| the page (its default start, worker mode) | a click on Training arrives in `00_Training` with "UNATCO Training Facilities / Continental United States" and the flags, carcass above; no runtime error |
 | not regressed | the Stage 5 replays `cad1` and `key1` (Training, the host marker for a cold open), `die1` (Island, the level end); the validators of the touched code (console command, loadmap, mission timer, FlagBase iterators, triggers, player log/dump, player start); 685 unit tests |
 
 **Facts found on the way.**
