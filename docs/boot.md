@@ -58,10 +58,17 @@ nothing, while the prepared routes (portraits, speech) did (`modelPreparedDynami
 Textures its `Serialize` created, then the Palette the first Texture's created, as the original did. A class's first load from such a package (its
 functions, states and properties) is not measured and stays out of the model. On the other maps `DXFonts` is resident before the seed (the HUD).
 
-## The page (not yet changed)
+## The page
 
-The page today is the inspection tool: the toolbar (map, Play/Inspect, Display, Tools, diagnostics), the
-web crosshair and hints, and `00_Training` loaded first. 63 browser validators open it with their own URLs
-and many rely on that. The switch to the original's start (the splash while the files load, DX.dx in Play
-with no page bars, the debugging HUD only with `?debug=1`) lands with travel, so the menu's choices start a
-game, and in the same change every validator's URL gains `debug=1`.
+`?boot=1` (2026-10-21) starts as the original does: the page bars are gone (`#app.original-start`), `Help/Logo.bmp` (served by the dev server
+with the other game folders, or read from the chosen folder) is shown at its own size in device pixels, centred over black, from the moment the
+files are known until the first map is loaded, and that map is DX.dx in Play. The play hint keeps only its stops (a runtime error, a travel,
+the pointer lock). It is opt-in for now: the page's default stays the inspection tool (the toolbar, the web crosshair and hints, `00_Training`
+loaded first), which 63 browser validators open with their own URLs. The switch (the original's start by default, the tools with `?debug=1`)
+lands with travel, so the menu's choices start a game, and in the same change every validator's URL gains `debug=1`.
+
+**The logos are not drawn yet.** DX.dx's `EidosLogo0`, `IonStormLogo0`, `DXLogo3` and the two `DXText` are classic `UMesh` meshes (DeusExDeco's
+`EidosLogo`, `IonStormLogo`, `DXText`, `DXLogo`), and Play's actor mesh layer binds only `LodMesh` ("Classic UMesh surfaces are not bound"): the
+flight shows the electricity's glow and nothing else. The game has five classic meshes, these four and DeusExCharacters' `Fly` (the flies
+`FlyGenerator`s spawn), so the same gap hides the flies on every map; Stage 4's criteria did not cover it. Classic `UMesh` rendering, from
+Engine's `UMesh` data and Render.dll's classic mesh path, is the boot's next piece.

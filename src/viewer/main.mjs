@@ -199,6 +199,25 @@ function applySimEvents(events,{world:target,actors,weapon}){
 }
 
 const $ = id => document.getElementById(id);
+// ?boot=1: the original's start (docs/boot.md): the splash while the files load, then DeusEx.ini's LocalMap DX.dx in Play with no page bars.
+// Opt-in until travel lets the main menu start a game; then it becomes the default and ?debug=1 brings back the tools.
+const originalStart = new URLSearchParams(location.search).get('boot') === '1';
+if (originalStart) $('app').classList.add('original-start');
+/** The original's splash: Launch's InitSplash("..\\Help\\Logo.bmp") shows the bitmap at its own size centred on the screen, in a dialog of
+ * its own thread, until ExitSplash after the engine's Init has browsed to the first map (UnEngineWin.h; DeusEx.exe 0x1090909e). Here: its size
+ * in device pixels, centred over black, until that map is loaded. False without the bitmap in the chosen files. */
+async function showSplash(files) {
+  const entry = files.find(file => /(^|\/)help\/logo\.bmp$/i.test(file.path));
+  if (!entry) return false;
+  const bitmap = await createImageBitmap(new Blob([await entry.read()], { type: 'image/bmp' }));
+  const canvas = $('splash-image');
+  canvas.width = bitmap.width; canvas.height = bitmap.height;
+  canvas.getContext('2d').drawImage(bitmap, 0, 0);
+  bitmap.close();
+  canvas.style.width = `${canvas.width / devicePixelRatio}px`; canvas.style.height = `${canvas.height / devicePixelRatio}px`;
+  $('splash').hidden = false;
+  return true;
+}
 // The canvas is multisampled; ?antialias=0 turns that off: the original's Direct3D 7 device has no multisampling, so its frames have none
 // (docs/visual-acceptance.md "Security cameras"). The pixel validators (validate-sim-split, validate-decals-play, validate-mesh-path-frames) add preserveDrawingBuffer by patching the first occurrence of the call's closing antialias text, so that text must not appear above it.
 const rendererOptions = options => new URLSearchParams(location.search).get('antialias') === '0' ? { ...options, antialias: false } : options;
@@ -918,6 +937,7 @@ async function loadMap(name) {
   return status();
 }
 async function setFiles(files) {
+  if (originalStart) await showSplash(files).catch(error => toast(`Splash: ${error.message}`));
   const next = new AssetStore(files);
   if (simMode === 'worker') {
     // The worker reads the same files (File objects or the dev server's
@@ -938,7 +958,9 @@ async function setFiles(files) {
   subtitlePreference = await readGlobalConfigBool(files, 'DeusEx.DeusExPlayer', 'bSubtitles', false);
   const subtitleToggle = $('subtitles'); if (subtitleToggle) subtitleToggle.checked = subtitlePreference;
   $('map').replaceChildren(...names.map(name => { const option = document.createElement('option'); option.value = name; option.textContent = name; return option; }));
-  await loadMap(names.find(n => n.toLowerCase() === '00_training') ?? names[0]);
+  // (the original's start browses to DeusEx.ini's [URL] LocalMap=DX.dx: docs/boot.md)
+  try { await loadMap(names.find(n => n.toLowerCase() === (originalStart ? 'dx' : '00_training')) ?? names[0]); }
+  finally { $('splash').hidden = true; }
 }
 const fail = error => { toast(error.message); if (!world) busy('Could not open game files', error.message); };
 $('choose').onclick = $('gate-choose').onclick = () => $('folder').click();

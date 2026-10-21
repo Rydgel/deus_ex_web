@@ -26,3 +26,7 @@ footer{display:flex;align-items:center;justify-content:space-between;gap:14px;mi
 #crt[aria-pressed=true]{border-color:#e6b974;color:#e6b974;background:#263126}
 #crt-compare[aria-pressed=true]{border-color:#e6b974;color:#e6b974}
 #crt-comparison{position:absolute;pointer-events:none;z-index:1}#crt-comparison::after{content:"";position:absolute;left:50%;top:0;height:100%;border-left:1px solid #e6b97499}#crt-comparison span{position:absolute;top:12px;left:25%;transform:translateX(-50%);max-width:45%;padding:5px 10px;background:#091420df;border:1px solid #345069;border-radius:3px;color:#e5eef6;font:12px monospace;white-space:nowrap}#crt-comparison span+span{left:75%;color:#e6b974}
+
+/* The original's start (docs/boot.md): the splash bitmap at its own size in device pixels, centred on black, and no page bars. */
+#splash{position:absolute;inset:0;z-index:5;display:grid;place-items:center;background:#000}#splash[hidden]{display:none}#splash-image{image-rendering:pixelated}
+#app.original-start>.toolbar,#app.original-start>footer,#app.original-start #show-ui{display:none}
