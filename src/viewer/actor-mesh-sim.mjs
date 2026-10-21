@@ -179,7 +179,7 @@ function* meshBindingSteps(runtime,actor,{id,originalObjectIndex,kernel=null,dra
   const payload=yield {mesh:meshReference};
   // One of the game's five classic UMesh meshes: its own CPU binding (actor-umesh-sim.mjs, docs/umesh.md).
   if(payload.payloadStatus==='decoded-mesh')
-    return yield* classicMeshBindingSteps(runtime,actor,payload,{id,originalObjectIndex,visible,childVisible,drawActor,lighting,meshKey,own,read,
+    return yield* classicMeshBindingSteps(runtime,actor,payload,{id,originalObjectIndex,kernel,visible,childVisible,drawActor,lighting,meshKey,own,read,
       meshReference,meshTexture,actorName,helpers:{copyPositions,setMeshBounds,SETUP},notResident:NOT_RESIDENT});
   // GetFrame's tween cache must survive draw submissions; it owns only this
   // binding's identity (docs/npc-mesh-preview.md).

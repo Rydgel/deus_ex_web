@@ -82,7 +82,8 @@ export function getUMeshFrame(mesh,actor,coords,services,{stride=12,output=new U
   const vertices=mesh.arrays.get(0x60).load(); // The virtual Load of the four lazy arrays comes first.
   mesh.arrays.get(0x78).load();mesh.arrays.get(0x9c).load();mesh.arrays.get(0xcc).load();
   const source=new DataView(vertices.data.buffer,vertices.data.byteOffset,vertices.data.byteLength);
-  const cache=services.cache;
+  const cache=services.cache,kernel=services.kernel??null;
+  const sourceBytes=kernel?new Uint8Array(vertices.data.buffer,vertices.data.byteOffset,vertices.data.byteLength):null;
   if(!cache)throw new LodMeshError('UMesh GetFrame requires the persistent native cache service');
   const count=mesh.frameVertexCount;
   const owner=read(services,actor,'bAnimByOwner')?read(services,actor,'Owner'):null;
@@ -130,6 +131,13 @@ export function getUMeshFrame(mesh,actor,coords,services,{stride=12,output=new U
   /** One decided operation's vertex loop; `publish` writes the output. */
   function execute(op,publish) {
     const {entry,alpha,blend}=op;
+    // The Rust kernel's pose loops (native/lodmesh-kernel, the LodMesh GetFrame's) are these loops over packed vertices; the
+    // JavaScript below stays the reference (`kernel` null: services.kernel absent, ?meshBackend=javascript).
+    if(kernel) {
+      kernel.run({source:sourceBytes,frameVertexCount:count,output,stride,matrix,
+        origin:mesh.origin,count,entry,...(op.tween?{second:op.second,alpha,tween:true}:{first:op.first,second:op.second,alpha}),blend});
+      return;
+    }
     for(let i=0;i<count;i++) {
       const cached=entry.vertices;
       if(op.tween) {
@@ -170,8 +178,15 @@ function publishVertex(entry,i,matrix,blend,out,output,stride,frameVertex,mesh) 
 /** The pose DrawMesh gets for any Coords: the cached poses of an earlier call's
  * `ops` published through `matrix` (umeshCameraMatrix), main pose first and the
  * additive blends after it, as the call did. The cache is read, never changed. */
-export function publishUMeshOps(mesh,ops,matrix,{output,stride=12}) {
+export function publishUMeshOps(mesh,ops,matrix,{output,stride=12,kernel=null}) {
   const vertices=mesh.arrays.get(0x60).load();
+  if(kernel) {
+    // Each operation republishes its cached pose as a tween of alpha 0 does (the pose loops of the Rust kernel).
+    const source=new Uint8Array(vertices.data.buffer,vertices.data.byteOffset,vertices.data.byteLength);
+    for(const op of ops)kernel.run({source,frameVertexCount:mesh.frameVertexCount,output,stride,matrix,origin:mesh.origin,count:mesh.frameVertexCount,
+      entry:op.entry,tween:true,alpha:0,second:0,blend:op.blend});
+    return output;
+  }
   const source=new DataView(vertices.data.buffer,vertices.data.byteOffset,vertices.data.byteLength);
   const frameVertex=(frame,i)=>{
     const at=(frame*mesh.frameVertexCount+i)*8;

@@ -5,16 +5,19 @@
  * mesh built from the Fly's payload (umesh-fixture.mjs) that reaches what the real ones, which have a
  * single frame, cannot: sequence wrap and interpolation, tweens, a mesh change and four additive
  * blends. Every output byte (including strided padding), every cache byte, lock and
- * Create/Flush request must match. ORACLE_CW=0x007f is the render pass's precision control. */
+ * Create/Flush request must match. ORACLE_CW=0x007f is the render pass's precision control.
+ *
+ * `--wasm` runs the same calls through the Rust pose kernel (services.kernel, native/lodmesh-kernel). */
 import {execFileSync} from 'node:child_process';
 import {auditAssert,auditControlWord} from './precision-audit.mjs';
 const assert=auditAssert(),controlWord=auditControlWord();
 import {decodeLodMeshPayload} from '../src/runtime/lodmesh-payload.mjs';
 import {createUMeshFrameCache,getUMeshFrame} from '../src/runtime/umesh-frame.mjs';
+import {loadLodMeshKernel} from '../src/runtime/lodmesh-wasm.mjs';
 import {gameDirectory} from './game-directory.mjs';
 import {classicMeshCase,syntheticMeshCase,nameTable} from './umesh-fixture.mjs';
 
-const root=gameDirectory(),rows=[];
+const root=gameDirectory(),rows=[],kernel=process.argv.includes('--wasm')?await loadLodMeshKernel():null;
 const stepper=()=>{
   const steps=[],add=(name,actors={},extra={})=>steps.push({name,actors,...extra});
   const pose=(sequence,frame,fields={})=>({actor:{AnimSequence:sequence,AnimFrame:frame,...fields}});
@@ -129,7 +132,7 @@ for(const [rowIndex,row] of rows.entries()) {
     const stride=step.stride??20,output=new Uint8Array(mesh.frameVertexCount*stride).fill(0x55);
     events.length=0;
     const result=getUMeshFrame(mesh,actors.actor,step.coords??[0,0,0,1,0,0,0,1,0,0,0,1],
-      {cache,read:(a,n)=>a[n],objectIndex:a=>a.index},{stride,output});
+      {cache,kernel,read:(a,n)=>a[n],objectIndex:a=>a.index},{stride,output});
     calls++;
     bytesEqual(result.output,original.output,label);
     // The original's cache items are keyed by 64-bit ids; here they are strings. The calls and sizes must match in order.
@@ -149,5 +152,5 @@ for(const [rowIndex,row] of rows.entries()) {
     assert.equal(mesh.archivePosition,original.archivePosition,label);
   }
 }
-if(assert.enabled)assert.report('validate-umesh-frame');
-else console.log(`PASS ${calls} complete original UMesh::GetFrame calls: the classic meshes (EidosLogo, DXText, Fly) and an eight-frame synthetic one: output/padding, all cache bytes, sequence wrap/interpolation, tweens, owner/particles, camera-space Frame->Coords (large offsets, mirror-reflected) and four additive blends.`);
+if(assert.enabled)assert.report(kernel?'validate-umesh-frame --wasm':'validate-umesh-frame');
+else console.log(`PASS${kernel?' (Rust kernel)':''} ${calls} complete original UMesh::GetFrame calls: the classic meshes (EidosLogo, DXText, Fly) and an eight-frame synthetic one: output/padding, all cache bytes, sequence wrap/interpolation, tweens, owner/particles, camera-space Frame->Coords (large offsets, mirror-reflected) and four additive blends.`);

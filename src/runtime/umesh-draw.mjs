@@ -35,7 +35,7 @@
  *      each corner's U and V from the reflection of its direction about its
  *      normal, taken to world space through the frame's Uncoords, and
  *      PF_Unlit overwrites each corner's Light with the unlit colour. */
-import {tableRsqrt,fatnessScale} from './mesh-lighting.mjs';
+import {tableRsqrt,fatnessScale,d3dDiffuse,PF} from './mesh-lighting.mjs';
 import {r24sum} from './x87-r24.mjs';
 const f=Math.fround;
 const bits=new DataView(new ArrayBuffer(4));
@@ -64,7 +64,9 @@ export function umeshTopology(mesh) {
   // The same triangles flat, for the per-frame loops.
   const flat=new Uint16Array(triangles.length*3);
   triangles.forEach((tri,i)=>flat.set(tri.vertices,i*3));
-  topology={triangles,links:vertexLinks,flat};
+  // The texture table DrawMesh needs: one entry per TextureIndex the triangles name (the Rust kernel's call takes the table).
+  const textureCount=triangles.reduce((count,tri)=>Math.max(count,tri.texture+1),0);
+  topology={triangles,links:vertexLinks,flat,textureCount};
   topologies.set(mesh,topology);
   return topology;
 }
@@ -191,11 +193,40 @@ export function drawUMesh(mesh,points,{frame,polyFlags,setup={flags:0},fatness=0
       const sum=f(f(f(A*point[p0+1])+f(B*point[p0+2]))+f(C*point[p0]));
       if(!(sum>0)){const swap=pts[0];pts[0]=pts[2];pts[2]=swap;}
     }
-    const draw={tri:index,flags:drawFlags,environment:info===environment,texture:own?tri.texture:null,uFactor,vFactor,vertices:pts};
+    // `lights`: each corner's Light as the helper hands it to the device, by corner of `vertices` (a later face's PF_Unlit overwrite
+    // of a shared vertex record must not reach this face's colours: lit[vertex] is replaced, never changed in place).
+    const draw={tri:index,flags:drawFlags,environment:info===environment,texture:own?tri.texture:null,uFactor,vFactor,vertices:pts,lights:pts.map(vertex=>lit[vertex])};
     // The corners' U and V as the helper left them (texel units), for an environment-mapped face; `snapshots` also keeps every record the device is handed (validation).
     if(drawFlags&0x10)draw.uv=pts.map(vertex=>[u[vertex],v[vertex]]);
     if(snapshots)draw.pts=pts.map(snapshot);
     result.draws.push(draw);
   }
   return result;
+}
+
+/** What the actor mesh layer takes from a DrawMesh result (docs/umesh.md "In Play"): the colours the device would draw each triangle's
+ * corners with (D3D's diffuse bytes over 255, white for a modulated face and for a corner never drawn) in mesh-triangle order, and,
+ * when the mesh has environment-mapped faces, their corners' U and V from the face helper's reflection divided by USize·UScale. The
+ * reference of the Rust kernel's `umesh_draw` outputs (native/lodmesh-kernel/src/umesh.rs), which writes the same words. */
+export function packUMeshDraw(result,triangles,hasEnvironment) {
+  const colors=new Float32Array(triangles.length*9).fill(1),envUv=hasEnvironment?new Float32Array(triangles.length*6):null;
+  for(const draw of result.draws) {
+    const tri=triangles[draw.tri];
+    tri.vertices.forEach((vertex,corner)=>{
+      const light=draw.lights[draw.vertices.indexOf(vertex)];
+      const at=draw.tri*9+corner*3;
+      if(draw.flags&PF.Modulated||!light)return;
+      const packed=d3dDiffuse(light);
+      colors[at]=((packed>>>16)&255)/255;colors[at+1]=((packed>>>8)&255)/255;colors[at+2]=(packed&255)/255;
+    });
+    if(draw.flags&PF.Environment&&envUv) {
+      const uNorm=draw.uFactor*256,vNorm=draw.vFactor*256;
+      draw.vertices.forEach((vertex,k)=>{
+        const corner=tri.vertices.indexOf(vertex);
+        if(corner<0)return;
+        envUv[draw.tri*6+corner*2]=draw.uv[k][0]/uNorm;envUv[draw.tri*6+corner*2+1]=draw.uv[k][1]/vNorm;
+      });
+    }
+  }
+  return {colors,envUv};
 }

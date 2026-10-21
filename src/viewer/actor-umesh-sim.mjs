@@ -15,23 +15,42 @@ import * as THREE from 'three';
 import {POLY} from '../unreal/geometry.mjs';
 import {handleOf} from '../runtime/script-object-handles.mjs';
 import {createUMeshFrameCache,getUMeshFrame,publishUMeshOps,umeshCameraMatrix} from '../runtime/umesh-frame.mjs';
-import {drawUMesh} from '../runtime/umesh-draw.mjs';
+import {drawUMesh,packUMeshDraw,umeshTopology} from '../runtime/umesh-draw.mjs';
+import {UMESH_STATUS} from '../runtime/umesh-wasm.mjs';
 import {readUMeshSurfaces} from '../runtime/umesh-surfaces.mjs';
-import {lightVertex,d3dDiffuse,PF} from '../runtime/mesh-lighting.mjs';
+import {lightVertex,PF} from '../runtime/mesh-lighting.mjs';
 import {meshFaceGroups} from './actor-mesh-skins.mjs';
 import {setupSequence} from '../runtime/bsp-occlusion.mjs';
 
 const IDENTITY=[0,0,0,1,0,0,0,1,0,0,0,1];
+/** UMESH=js keeps the JavaScript DrawMesh translation (the reference) in a Node run; UMESH=verify runs it beside the Rust kernel and
+ * throws on any output word that differs. In the browser ?meshBackend=javascript removes the kernel altogether. */
+const umeshMode=()=>(typeof process!=='undefined'&&process.env?.UMESH)||'rust';
+/** Measurement only (lod-probe.mjs `umeshStats`, off until a probe turns it on): wall milliseconds of the classic bindings' updates
+ * by section, and the number of updates and relights, since the last reset. */
+export const classicStats={on:false,updates:0,relights:0,update:0,pose:0,setup:0,camera:0,draw:0};
+export const resetClassicStats=on=>{for(const key of Object.keys(classicStats))classicStats[key]=0;classicStats.on=Boolean(on);};
+const clock=()=>classicStats.on?performance.now():0;
+const bitsView=new DataView(new ArrayBuffer(4));
+const wordOf=value=>{bitsView.setFloat32(0,value,true);return bitsView.getUint32(0,true);};
+/** True when the two float arrays hold the same words, else the first index that differs. */
+function sameWords(a,b) {
+  if(!a||!b)return a===b;
+  if(a.length!==b.length)return -1;
+  for(let i=0;i<a.length;i++)if(wordOf(a[i])!==wordOf(b[i]))return i;
+  return true;
+}
 const plainRef=reference=>({key:reference.key,package:reference.asset?.name,index:reference.index});
 
 /** The binding steps (see actor-mesh-sim.mjs meshBindingSteps): yields {skin: group} for each face
  * group's skin and returns the binding. `ctx` carries what the LodMesh steps had computed by then. */
 export function* classicMeshBindingSteps(runtime,actor,payload,ctx) {
   const {id,visible,childVisible,drawActor,lighting,meshKey,own,read,meshReference,meshTexture,actorName,helpers,notResident}=ctx;
+  const kernel=ctx.kernel??null,umesh=kernel?.umesh&&umeshMode()!=='js'&&kernel.umesh.acquire(payload)?kernel.umesh:null;
   const {copyPositions,setMeshBounds}=helpers;
   const key=meshKey??meshReference.key;
   const faces=readUMeshSurfaces(payload);
-  const cache=createUMeshFrameCache(),services={cache,read,objectIndex:object=>{
+  const cache=createUMeshFrameCache(),services={cache,read,kernel,objectIndex:object=>{
     if(object!==actor)throw new Error('Owner-driven mesh inspection requires a captured owner identity');
     return ctx.originalObjectIndex;
   }};
@@ -47,7 +66,7 @@ export function* classicMeshBindingSteps(runtime,actor,payload,ctx) {
   };
   const groups=new Map(),skipped=[],infos=new Map();
   let disposed=false;
-  const dispose=()=>{if(disposed)return;disposed=true;cache.entries.clear();};
+  const dispose=()=>{if(disposed)return;disposed=true;cache.entries.clear();umesh?.release(payload);};
   // The mesh's culling radius (host bound only): the farthest vertex of every frame, in mesh units, scaled.
   const cullRadius=(()=>{
     const data=payload.arrays.get(0x60).load().data;
@@ -117,37 +136,48 @@ export function* classicMeshBindingSteps(runtime,actor,payload,ctx) {
   const summary={actor:actorName,mesh:meshReference.key,skipped,triangles:faces.length,textures:[...new Set([...groups.values()].map(g=>g.reference.key))],
     animation:read(actor,'AnimSequence'),frame:read(actor,'AnimFrame'),shading:lighting?'original mesh lighting':'texture-only inspection',startup:'original',
     path:'cpu',gpuFallback:null,classic:true};
-  /** DrawMesh in the lighting frame: the camera-space pose, the corners' Light and the environment UVs. */
+  /** DrawMesh in the lighting frame: the camera-space pose, the corners' Light and the environment UVs. The Rust kernel (umesh.rs)
+   * does it when it accepted the mesh; `drawReference` is the JavaScript translation, whose results the kernel's equal word for word. */
+  const textureCount=umeshTopology(payload).textureCount;
+  function drawReference(points,prepared,frame,uncoords,textures,environment) {
+    const result=drawUMesh(payload,points,{frame:{mirror:frame.mirror,prj:frame.prj??null,uncoords},polyFlags:(prepared.polyFlags|PF.Flat)>>>0,
+      setup:prepared.setup,fatness:own.Fatness(),unlit:prepared.unlit,textureInfo:index=>textures[index]??null,environment,
+      light:(index,point,plane,flags)=>[...lightVertex(prepared.setup,point,plane,flags),0]});
+    return {...packUMeshDraw(result,faces,hasEnvironment),points:result.points??points};
+  }
+  function drawKernel(points,prepared,frame,uncoords,textures,environment) {
+    const result=umesh.draw(payload,points,{frame:{mirror:frame.mirror,prj:frame.prj??null,uncoords},polyFlags:(prepared.polyFlags|PF.Flat)>>>0,
+      setupFlags:prepared.setup.flags,fatness:own.Fatness(),unlit:prepared.unlit,ambient:prepared.setup.ambient,scaleGlow:prepared.setup.scaleGlow,
+      lights:prepared.setup.lights,textures,environment,envOutput:hasEnvironment});
+    if(result.status===UMESH_STATUS.noEnvironment)throw new Error('DrawMesh has no environment map to draw with');
+    return result;
+  }
   function relight(prepared,frame){
+    let t=clock();
     const camera=[...frame.origin,...frame.axes[0],...frame.axes[1],...frame.axes[2]];
     const out=new Uint8Array(payload.frameVertexCount*12);
-    publishUMeshOps(payload,lastOps,umeshCameraMatrix(payload,actor,camera,services),{output:out});
+    publishUMeshOps(payload,lastOps,umeshCameraMatrix(payload,actor,camera,services),{output:out,kernel});
     const points=new Float32Array(out.buffer);
     const uncoords=[0,1,2].map(j=>[frame.axes[0][j],frame.axes[1][j],frame.axes[2][j]]);
-    const environment=environmentInfo();
-    const result=drawUMesh(payload,points,{frame:{mirror:frame.mirror,prj:frame.prj??null,uncoords},polyFlags:(prepared.polyFlags|PF.Flat)>>>0,
-      setup:prepared.setup,fatness:own.Fatness(),unlit:prepared.unlit,textureInfo,environment,
-      light:(index,point,plane,flags)=>[...lightVertex(prepared.setup,point,plane,flags),0]});
-    const colors=new Float32Array(faces.length*9).fill(1),envUv=hasEnvironment?new Float32Array(faces.length*6):null;
-    for(const draw of result.draws){
-      const tri=faces[draw.tri];
-      tri.vertices.forEach((vertex,corner)=>{
-        const light=result.vertexLight[vertex];
-        const at=draw.tri*9+corner*3;
-        if(draw.flags&PF.Modulated||!light)return;
-        const packed=d3dDiffuse(light);
-        colors[at]=((packed>>>16)&255)/255;colors[at+1]=((packed>>>8)&255)/255;colors[at+2]=(packed&255)/255;
-      });
-      if(draw.flags&PF.Environment&&envUv) {
-        const uNorm=draw.uFactor*256,vNorm=draw.vFactor*256;
-        draw.vertices.forEach((vertex,k)=>{
-          const corner=tri.vertices.indexOf(vertex);
-          if(corner<0)return;
-          envUv[draw.tri*6+corner*2]=draw.uv[k][0]/uNorm;envUv[draw.tri*6+corner*2+1]=draw.uv[k][1]/vNorm;
-        });
+    if(classicStats.on){classicStats.camera+=clock()-t;t=clock();}
+    // The texture infos DrawMesh Locks (a table by TextureIndex, read once for the call) and the environment map's.
+    const environment=environmentInfo(),textures=Array.from({length:textureCount},(_,index)=>textureInfo(index));
+    let result=null;
+    if(umesh&&umeshMode()!=='verify') {
+      result=drawKernel(points,prepared,frame,uncoords,textures,environment);
+      // (a refused call, which the kernel only makes for an uninitialised scratch: the reference answers it)
+      if(result.status!==UMESH_STATUS.ok)result=drawReference(points,prepared,frame,uncoords,textures,environment);
+    } else if(umesh) {
+      // Both, and any word that differs is an error (UMESH=verify).
+      result=drawKernel(points,prepared,frame,uncoords,textures,environment);
+      const reference=drawReference(points,prepared,frame,uncoords,textures,environment);
+      for(const name of ['colors','envUv','points']) {
+        const same=sameWords(result[name],reference[name]);
+        if(same!==true)throw new Error(`UMESH=verify: ${actorName} ${name} differ at ${same} (kernel ${result[name]?.[same]}, reference ${reference[name]?.[same]})`);
       }
-    }
-    return {colors,cameraPoints:result.points??points,envUv,summary:{lights:prepared.setup.lights.length,flags:prepared.flags}};
+    } else result=drawReference(points,prepared,frame,uncoords,textures,environment);
+    if(classicStats.on){classicStats.draw+=clock()-t;classicStats.relights++;}
+    return {colors:result.colors,cameraPoints:result.points??points,envUv:result.envUv,summary:{lights:prepared.setup.lights.length,flags:prepared.flags}};
   }
   const meshHandle=meshReference?handleOf(meshReference):0;
   const binding={id,actor,creation,dispose,mesh:meshReference,payload,get block(){return 0;},path:'cpu',viewDependent:false,
@@ -212,12 +242,13 @@ export function* classicMeshBindingSteps(runtime,actor,payload,ctx) {
       const current=pose();
       const changed=!current.every((value,index)=>Object.is(value,lastPose[index]));
       lastPose=current;
-      if(changed){poseWorld();record.posed=posedCopy();}
+      if(changed){const t=clock();poseWorld();record.posed=posedCopy();if(classicStats.on)classicStats.pose+=clock()-t;}
       // One SetupForActor and DrawMesh pass in the main frame (the frame whose Frame->Sprite holds the actor).
       if(lighting&&view.lit&&lighting.frame&&!childOnly) {
         const inView=!view.frustum||[...groups.values()].some(group=>view.frustum.intersectsSphere(group.bounds.boundingSphere));
         if(inView) {
-          const prepared=lighting.setupMesh(actor,null,null);
+          const t=clock(),prepared=lighting.setupMesh(actor,null,null);
+          if(classicStats.on)classicStats.setup+=clock()-t;
           if(prepared) {
             const lit=relight(prepared,lighting.frame);
             record.colors=lit.colors;record.cameraPoints=lit.cameraPoints;
@@ -230,5 +261,12 @@ export function* classicMeshBindingSteps(runtime,actor,payload,ctx) {
       record.changed=changed;
       return record;
     },summary};
+  // (measurement: the whole update, off unless a probe turned it on)
+  const updateBody=binding.update;
+  binding.update=function(view){
+    if(!classicStats.on)return updateBody.call(this,view);
+    const t=performance.now();
+    try{return updateBody.call(this,view);}finally{classicStats.update+=performance.now()-t;classicStats.updates++;}
+  };
   return binding;
 }
