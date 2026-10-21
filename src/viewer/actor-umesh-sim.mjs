@@ -148,7 +148,8 @@ export function* classicMeshBindingSteps(runtime,actor,payload,ctx) {
         }
       }
     }
-    return {colors,cameraPoints:points,envUv,summary:{lights:prepared.setup.lights.length,flags:prepared.flags}};
+    // The points the face helper projects: DrawMesh's own, Fatness applied.
+    return {colors,cameraPoints:result.points??points,envUv,summary:{lights:prepared.setup.lights.length,flags:prepared.flags}};
   }
   const meshHandle=meshReference?handleOf(meshReference):0;
   const binding={id,actor,creation,dispose,mesh:meshReference,payload,get block(){return 0;},path:'cpu',viewDependent:false,
