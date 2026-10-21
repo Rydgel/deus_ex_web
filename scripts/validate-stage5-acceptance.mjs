@@ -22,14 +22,14 @@
  * scene's files), and bounds memory by each check's whole process tree (Chromium included, which Playwright starts in its own process group):
  * a check starts only while the pool's reservations (each check's last peak, .cache/stage5-gate-memory.json, else its map's largest; PSS on Linux) and the
  * census fit under --mem-budget (default 16384 MiB, at most half the RAM; an Island replay holds about 7 GB, a Training one about 4); past the budget the
- * newest check is stopped and queued again to run with less beside it, and a check whose tree passes --mem-cap (default 12288 MiB) fails. Rows are reported in their order, and a validator several rows name runs once. Each check's whole output goes to
+ * newest check is stopped and queued again to run with less beside it, and a check whose tree passes --mem-cap (default 20480 MiB: swm1's, 2,400 ticks,
+ * passes 12 GiB) fails. Rows are reported in their order, and a validator several rows name runs once. Each check's whole output goes to
  * <dir>/<check>.log (--logs, default .work/stage5-gate-logs): two runs' logs compare scene by scene. */
-import {execFile, spawn} from 'node:child_process';
+import {execFileSync, spawn} from 'node:child_process';
 import {existsSync, mkdirSync, readFileSync, writeFileSync} from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import {fileURLToPath} from 'node:url';
-import {promisify} from 'node:util';
 import {CLAUSES, CRITERIA, injectTables, renderTables} from './stage5-criteria.mjs';
 import {SCENES} from './validate-stage5-live.mjs';
 
@@ -40,7 +40,7 @@ const only = flag('only') && flag('only') !== true ? new RegExp(flag('only')) : 
 const rows = CRITERIA.filter(row => !only || only.test(`${row.id} ${row.scene} ${row.claim} ${row.census ?? ''}`));
 
 const jobs = Math.max(1, Number(flag('jobs', 1)) || 1);
-const budget = Number(flag('mem-budget', Math.round(Math.min(16384, os.totalmem() / 2 / 1048576)))), cap = Number(flag('mem-cap', 12288));
+const budget = Number(flag('mem-budget', Math.round(Math.min(16384, os.totalmem() / 2 / 1048576)))), cap = Number(flag('mem-cap', 20480));
 const logs = path.resolve(root, typeof flag('logs') === 'string' ? flag('logs') : '.work/stage5-gate-logs');
 const env = {...process.env,
   NATIVE_PROBE_PYTHON: process.env.NATIVE_PROBE_PYTHON ?? (existsSync(path.join(root, '.cache/native-probe-env/bin/python')) ? path.join(root, '.cache/native-probe-env/bin/python') : '')};
@@ -48,8 +48,8 @@ const env = {...process.env,
 // Every child's whole process tree: `ps` pid, ppid and RSS, the descendants found by parent links (Playwright's Chromium has its own process group).
 // A process's memory is its PSS on Linux (/proc/<pid>/smaps_rollup: a replay's Chromium processes share pages, and their RSS sum counts them
 // each time, about a quarter more than the tree holds), its RSS elsewhere.
-const tree = async () => {
-  const {stdout} = await promisify(execFile)('ps', ['-A', '-o', 'pid=,ppid=,rss=']);
+const tree = () => {
+  const stdout = execFileSync('ps', ['-A', '-o', 'pid=,ppid=,rss='], {encoding: 'utf8'});
   const children = new Map(), rss = new Map();
   for (const line of stdout.trim().split('\n')) {
     const [pid, ppid, kib] = line.trim().split(/\s+/).map(Number);
@@ -62,8 +62,10 @@ const tree = async () => {
   const size = pid => descendants(pid).reduce((n, p) => n + (process.platform === 'linux' ? pss(p) : rss.get(p) ?? 0), 0);
   return {descendants, size};
 };
-const killTree = async pid => {
-  const pids = await tree().then(t => t.descendants(pid)).catch(() => [pid]);
+// (synchronous: the signal handler exits right after it)
+const killTree = pid => {
+  let pids = [pid];
+  try { pids = tree().descendants(pid); } catch { /* ps failed: the root alone */ }
   for (const p of pids.reverse()) try { process.kill(p, 'SIGKILL'); } catch { /* gone */ }
 };
 
@@ -120,10 +122,10 @@ const start = job => {
     pump();
   });
 };
-const monitor = setInterval(async () => {
+const monitor = setInterval(() => {
   if (!running.size && !census) return;
   try {
-    const {size} = await tree();
+    const {size} = tree();
     let sum = census ? (census.current = size(census.pid)) : 0;
     for (const job of running) {
       if (job.killed || job.requeued) continue;
