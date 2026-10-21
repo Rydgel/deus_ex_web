@@ -180,6 +180,14 @@ const ROUTE_SCENES = {
   air1: {map: '01_NYC_UNATCOIsland', ticks: 1200, early: PLACE(2112, -675, -95, 0),
     cmds: `${MOVE(60, 2362, -675, -8, 0)}|${MOVE(950, 3546, -1116, -129, 0)}`,
     devices: ['DataLinkTrigger19:Actor', 'DataLinkTrigger20:Actor', 'DataLinkTrigger21:Actor'], flags: ['DL_libertyruinsairshaft_Played'], wholeFlags: true, options: ['--player-talk']},
+  // 5.5.3's crawlspace on foot (held keys, 2026-10-21): the player placed in the room of DataLinkTrigger20 at its mouth (3660, -1150), facing -Y, 119 units from the
+  // trigger (its cylinder, radius 96, and the player's 20 are 116 apart: not touched), then X (Duck) held from 20 and Up (MoveForward) held from 40: the crouched player
+  // (CollisionHeight 16) crawls the shaft's 50-unit-high tunnel south along x 3660 (floor -245, ceiling -195; a standing player, 87 units, does not fit), the
+  // view is turned west at 300 as the tunnel opens, and he walks into the cylinder of DataLinkTrigger21 (3452, -1579, -200, radius 96, height 40), the first
+  // trigger of the DataLink this time; Up is released at 430 inside it, X at 440 (he stands up in the high room west of x 3465). The DataLink plays from the touch.
+  air2: {map: '01_NYC_UNATCOIsland', ticks: 1200, early: PLACE(3660, -1150, -215, 49152),
+    cmds: '20:@hold KeyX|40:@hold ArrowUp|300:set DeusEx.JCDentonMale ViewRotation (Pitch=0,Yaw=34500,Roll=0)|430:@release ArrowUp|440:@release KeyX',
+    devices: ['DataLinkTrigger19:Actor', 'DataLinkTrigger20:Actor', 'DataLinkTrigger21:Actor'], flags: ['DL_libertyruinsairshaft_Played'], wholeFlags: true, options: ['--player-talk']},
 };
 export const SCENES = {
   cmb1: {map: '01_NYC_UNATCOIsland', ticks: 900, early: PLACE(10146.3, 685.2, -88, 40960),
@@ -266,6 +274,12 @@ export const SCENES = {
   // spawned 112 AirBubbles and a WaterRing before the trace starts (the population check's reload).
   swm1: {map: '01_NYC_UNATCOIsland', ticks: 2400, early: PLACE(-4761, 10431, -281, 0), cmds: INTO(-2802, 6641, -850), options: ['--player-breath']},
   swm2: {map: '01_NYC_UNATCOIsland', ticks: 1500, early: PLACE(-4761, 10431, -281, 0), cmds: INTO(-2802, 6641, -450), options: ['--player-breath']},
+  // the dive on foot (rows 5.3.8, 5.5.4, held keys, 2026-10-21): the player moved after the first unfrozen tick to 50 units above the bay off the dock's end
+  // (-2800, 6900, -320: air, zone 3; the surface is near Z -350), facing +Y with the view 25 degrees down (Pitch -4500), and falls in. Up (MoveForward) held from 40 to
+  // 400 swims him forward and down along the view in PHYS_Swimming (about 85 units/s, 30 down); at 260 the view is set 55 degrees up and he rises through the water to
+  // the surface, where the head leaves the water (swimTimer refills to its full UnderWaterTime) and he bobs. Rehearsed in Play: the first breach near 380, the refill near 490.
+  swm3: {map: '01_NYC_UNATCOIsland', ticks: 600, early: PLACE(-4761, 10431, -281, 16384, -4500),
+    cmds: `${INTO(-2800, 6900, -320)}|40:@hold ArrowUp|260:set DeusEx.JCDentonMale ViewRotation (Pitch=10000,Yaw=16384,Roll=0)|400:@release ArrowUp`, options: ['--player-breath']},
   // move objects and fall (row 5.3.12): the player placed 70 units west of Trashbag0 (-3881, 10100) looking down at it; ParseRightClick frobs it (DeusExPlayer
   // GrabDecoration: CarriedDecoration), the view levels, and DropItem (Tab) throws it (DropDecoration: Vector(ViewRotation) * 500 + (0, 0, 220) + 40 * VRand(),
   // over Mass / 20 clamped to 1..40) to fall and land; at 420 the player is set 380 units over the ground at the census's fall place (-4761, 10431), between
@@ -298,6 +312,14 @@ export const SCENES = {
   // a held key (feasibility of `@hold`/`@release`, live-acceptance.mjs keyEdge): the same spot facing +Y, MoveForward (Up) held from 30 to 150 through the input
   // queue, the run (bAlwaysRun) and its footsteps (DeusExPlayer.PlayFootStep from the Walk/Run animation notifies) compared tick by tick.
   wlk1: {map: '00_Training', ticks: 240, early: PLACE(6991, -55, 17, 16384), cmds: '30:@hold ArrowUp|150:@release ArrowUp'},
+  // the obstacle course on foot (row 5.3.4, held keys, 2026-10-21): jmp1's spot facing -Y, Up held from 30 to 350. The course is three platforms (floors down to
+  // y -292, from -412 to -865 and from -985 on) with a pipe across each (BSP, z 16 to 48: a standing player, head at 60, stops at y -80; a crouched one, head at 5, passes) and a gap
+  // of 120 units between them. X (Duck) held 20 to 115 takes the crouched player under the first pipe (y -97 to -152) at 96 units/s; he stands up and runs (bAlwaysRun)
+  // to the first gap and jumps it (Space edge at 133, takes off near y -250, lands 208 units on at 172); X again from 186 to 290 under the second pipe (y -630 to -680);
+  // the second jump at 317 (takes off near y -815) lands on the third platform at 358 and slides to its pipe (Up released at 350, in the air). Rehearsed in Play;
+  // the third pipe is not driven.
+  obs1: {map: '00_Training', ticks: 420, early: PLACE(6991, -55, 17, 49152),
+    cmds: '20:@hold KeyX|30:@hold ArrowUp|115:@release KeyX|133:@down Space|133:@up Space|186:@hold KeyX|290:@release KeyX|317:@down Space|317:@up Space|350:@release ArrowUp'},
   // the contaminated pool (row 5.3.7): WaterZone0 (5574, -4011) and its DamageTrigger1; hzm1 swims in it bare (moved in after the first unfrozen tick, as
   // the Island's swim scenes are); hzm2 first picks up HazMatSuit2 (6584, -4057), puts it in hand and activates it (Enter edge: ChargedPickup.Activate),
   // then is moved into the pool: the suit's protection and its charge per tick.
