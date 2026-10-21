@@ -20,6 +20,13 @@ spec.loader.exec_module(texture)
 
 
 class Probe(texture.Probe):
+    # The class under test: ULodMesh by default (constructor 0x1034a760,
+    # Serialize 0x10354ab0). A `classic` case (run) takes the classic UMesh
+    # (0x103a6130, 0x103a63b0, which ends at +0xe4) through the same code.
+    CONSTRUCTOR, SERIALIZE, OBJECT_SIZE = 0x1034a760, 0x10354ab0, 0x1b0
+    ARRAYS = [0x60, 0x78, 0x84, 0x9c, 0xa8, 0xb4, 0xcc, 0xd8, 0xe4,
+              0x12c, 0x138, 0x144, 0x150, 0x15c, 0x168, 0x174, 0x1a0]
+
     def __init__(self, root):
         super().__init__(root)
         vt = self.read(self.archive, 'I')[0]
@@ -61,8 +68,7 @@ class Probe(texture.Probe):
 
     def snapshot(self):
         result = {}
-        for offset in [0x60, 0x78, 0x84, 0x9c, 0xa8, 0xb4, 0xcc, 0xd8, 0xe4,
-                       0x12c, 0x138, 0x144, 0x150, 0x15c, 0x168, 0x174, 0x1a0]:
+        for offset in self.ARRAYS:
             at = self.object + offset
             ptr, num, maximum = self.array(at)
             size = self.array_info.get(at)
@@ -80,16 +86,24 @@ class Probe(texture.Probe):
                 'sha256': hashlib.sha256(blob).hexdigest(), 'head': blob[:64].hex(),
                 'data': base64.b64encode(blob).decode(), 'notifies': notifies}
         return {'arrays': result,
-            'object': bytes(self.cpu.mem_read(self.object, 0x1b0)).hex(),
+            'object': bytes(self.cpu.mem_read(self.object, self.OBJECT_SIZE)).hex(),
             'lazy': {hex(offset): {'savedPosition': self.read(self.object + offset + 8, 'i')[0],
                 'attached': self.read(self.object + offset + 4, 'I')[0] == self.archive}
                      for offset in [0x54, 0x6c, 0x90, 0xc0]}}
 
     def initialize_object(self, config):
         self.cpu.mem_write(self.object, b'\0' * 0x600)
-        self.call(0x1034a760, self.object, b'')
+        self.call(self.CONSTRUCTOR, self.object, b'')
 
     def run(self, config):
+        # `classic`: the Mesh class itself (UMesh::UMesh 0x103a6130, UMesh::Serialize
+        # 0x103a63b0, 0x12c bytes), the five classic meshes of the game.
+        if config.get('classic'):
+            self.CONSTRUCTOR, self.SERIALIZE, self.OBJECT_SIZE = 0x103a6130, 0x103a63b0, 0x12c
+            self.ARRAYS = [0x60, 0x78, 0x84, 0x9c, 0xa8, 0xb4, 0xcc, 0xd8, 0xe4]
+        else:
+            self.CONSTRUCTOR, self.SERIALIZE, self.OBJECT_SIZE = Probe.CONSTRUCTOR, Probe.SERIALIZE, Probe.OBJECT_SIZE
+            self.ARRAYS = Probe.ARRAYS
         self.write(self.archive + 0x434, '3I', 0, 0, 0)
         self.write(self.archive + 4, 'I', config.get('version', 68))
         self.write(self.archive + 0xc, 'I', 1)
@@ -101,10 +115,10 @@ class Probe(texture.Probe):
         self.events, self.transfers, self.array_info = [], [], {}
         self.write(self.read(0x10599cc0, 'I')[0], 'I', config.get('lazy', 0))
         self.initialize_object(config)
-        constructor = bytes(self.cpu.mem_read(self.object, 0x1b0)).hex()
+        constructor = bytes(self.cpu.mem_read(self.object, self.OBJECT_SIZE)).hex()
         constructor_events = list(self.events)
         self.events, self.transfers = [], []
-        self.call(0x10354ab0, self.object, struct.pack('<I', self.archive))
+        self.call(self.SERIALIZE, self.object, struct.pack('<I', self.archive))
         result = {'name': config.get('name'), 'constructor': constructor, 'constructorEvents': constructor_events,
                   'position': self.position - self.start, **self.snapshot(),
                   'events': list(self.events), 'transfers': list(self.transfers),

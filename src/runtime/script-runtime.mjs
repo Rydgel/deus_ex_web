@@ -9,7 +9,7 @@ import { readFieldLinks, readFunctionMetadata, readPropertyMetadata, readStateMe
 import { ScriptObjects } from './script-objects.mjs';
 import { ScriptClassLoader } from './script-class-loader.mjs';
 import { compileFunction, refValue } from './script-vm.mjs';
-import { TravelBoundary } from './travel-boundary.mjs';
+import { clientTravelNative } from './script-travel.mjs';
 import { ScriptState, stateChanged } from './script-state.mjs';
 import {execAttachDecal,execDetachDecal,DecalBoundaryError,attachDecalSurfaces,detachDecalSurfaces} from './script-decal.mjs';
 import {
@@ -53,6 +53,8 @@ import { animationView, animationTickView } from './script-anim.mjs';
 import { tickActorAnimation } from './animation-tick.mjs';
 import { createLodMeshFrameCache, getLodMeshFrame } from './lodmesh-frame.mjs';
 import { getActorSkin, getMeshTexture, execGetMeshTexture, readLodMeshSurfaces } from './lodmesh-materials.mjs';
+import { createUMeshFrameCache, getUMeshFrame } from './umesh-frame.mjs';
+import { readUMeshSurfaces } from './umesh-surfaces.mjs';
 import { tickStandaloneActor, actorInStasis } from './actor-tick.mjs';
 import { scriptedPawnTick } from './scripted-pawn-tick.mjs';
 import { bumpBaseEpoch,bumpActorsEpoch } from './base-epoch.mjs';
@@ -360,7 +362,7 @@ const scriptVmSetting=()=>{
 const scriptVmRust=()=>scriptVmSetting()==='rust';
 const SCRIPT_VM_CHECK=typeof process!=='undefined'&&process.env?.SCRIPT_VM_CHECK==='1';
 // Mesh payloads the script-side mesh consumers (anim sequences, textures)
-// accept: ULodMesh, and a classic UMesh whose frames are not decoded.
+// accept: ULodMesh and a classic UMesh (docs/umesh.md).
 const MESH_PAYLOADS=new Set(['decoded-lodmesh','decoded-mesh']);
 // soundField names served from the level container or native graph.
 // Native function bodies Core ProcessEvent reaches through UFunction::Func
@@ -1806,8 +1808,14 @@ export class ScriptRuntime {
    * This pose boundary does not select triangles, materials or lighting. */
   getActorMeshFrame(receiver,coords,options={}) {
     const mesh=this.meshPayload(receiver);
-    if(!mesh)throw new Error('Original GetFrame requires a prepared LodMesh');
-    if(mesh.payloadStatus!=='decoded-lodmesh')throw new Error('Classic UMesh GetFrame is not bound (Stage 4 rendering)');
+    if(!mesh)throw new Error('Original GetFrame requires a prepared mesh');
+    const services={
+      read:(actor,name)=>this.readNamed(actor,name),
+      objectIndex:actor=>this.soundField(actor,'ObjectIndex'),
+    };
+    // A classic UMesh: UMesh::GetFrame, which has no requested count (umesh-frame.mjs).
+    if(mesh.payloadStatus==='decoded-mesh')
+      return getUMeshFrame(mesh,receiver,coords,{...services,cache:this.umeshFrameCache??=createUMeshFrameCache()},options);
     return getLodMeshFrame(mesh,receiver,coords,{
       cache:this.meshFrameCache??=createLodMeshFrameCache(),
       read:(actor,name)=>this.readNamed(actor,name),
@@ -1844,8 +1852,8 @@ export class ScriptRuntime {
   /** readLodMeshSurfaces of a prepared mesh the caller names. */
   getMeshSurfaces(reference,options={}) {
     const mesh=this.meshResource(reference)?.payload??null;
-    if(!mesh)throw new Error('Original surface decoding requires a prepared LodMesh');
-    if(mesh.payloadStatus!=='decoded-lodmesh')throw new Error('Classic UMesh surfaces are not bound (Stage 4 rendering)');
+    if(!mesh)throw new Error('Original surface decoding requires a prepared mesh');
+    if(mesh.payloadStatus==='decoded-mesh')return readUMeshSurfaces(mesh);
     return readLodMeshSurfaces(mesh,options);
   }
   /** Native PlaySound264 services per docs/script-sound.md: reflected fields,
@@ -3273,11 +3281,9 @@ export class ScriptRuntime {
       }),
     });
     if(call.record?.key==='engine.playerpawn.clienttravel'){
-      // PlayerPawn.ClientTravel(URL, TravelType, bItems): map travel is the
-      // Stage 6 boundary (travel-boundary.mjs).
-      if(call.argumentCount!==3)throw new Error('ClientTravel requires URL, TravelType and bItems');
-      throw new TravelBoundary({url:String(refValue(call.evaluateArgument(0))),
-        travelType:refValue(call.evaluateArgument(1))|0,bItems:Boolean(refValue(call.evaluateArgument(2)))});
+      // PlayerPawn.ClientTravel(URL, TravelType, bItems): APlayerPawn::execClientTravel (script-travel.mjs) in a session that
+      // travels (runtime.travelServices), else the named stop of travel-boundary.mjs.
+      return clientTravelNative(this,call,refValue);
     }
     if(call.record?.key==='engine.decal.detachdecal')return execDetachDecal(call,{
       read:(actor,name)=>this.readNamed(actor,name),

@@ -5,24 +5,28 @@ import {Undriven, near, PI, simulatedMsAdvance} from './census-stage5-drivers.mj
 
 import {actorRenderFeedback} from '../src/viewer/actor-render-feedback.mjs';
 
-export async function openSession(map, assets) {
+export async function openSession(map, assets, {travel = null} = {}) {
   const {decodeMap} = await import('../src/unreal/map.mjs');
   const {createGame} = await import('../src/viewer/game.mjs');
   const {createSimSession} = await import('../src/viewer/sim-session.mjs');
   const {createPlayerInputFixture} = await import('./player-input-fixture.mjs');
   const asset = await assets.get(map);
-  const game = await createGame(decodeMap(asset.bytes), asset, assets, {randomSeed: 1, presentation: true});
+  const game = await createGame(decodeMap(asset.bytes), asset, assets, {randomSeed: 1, presentation: true, ...(travel ? {travel} : {})});
   const sim = createSimSession(game, {assets});
   const runtime = game.doors.scriptRuntime.runtime;
   const player = () => game.player.collisionActor;
   const level = () => runtime.levelFor(player());
   const fixture = createPlayerInputFixture(game, {});
   const watched = new Set();
+  let travelRequest = null;
   const read = (object, name) => runtime.readNamed(object, name);
   const frame = () => {
     simulatedMsAdvance(1000 / 60);
     game.tick(1 / 60);
-    game.clientTravel();   // UGameEngine::Tick's client travel: an OPEN (the Dying player's OPEN DXONLY) ends the level after the next tick
+    // UGameEngine::Tick's client travel: an OPEN (the Dying player's OPEN DXONLY) ends the level after the next tick; a session opened with
+    // `travel` browses instead and the request for the next level waits in c.takeTravel()
+    const request = game.clientTravel();
+    if (request) travelRequest = request;
     const sprites = sim.sprites();
     const hud = sim.hud({width: 1440, height: 960, view: game.view()});
     const errors = [...sprites.errors, ...hud.errors];
@@ -36,6 +40,7 @@ export async function openSession(map, assets) {
   const frames = n => { for (let i = 0; i < n; i++) frame(); };
   const c = {
     game, runtime, fixture, read, frames, player, level, watched,
+    takeTravel() { const request = travelRequest; travelRequest = null; return request; },
     exec: command => game.hud.scoped(() => runtime.scriptConsoleExec(player(), command)),
     actors: () => level().actors.filter(Boolean),
     actor: name => level().actors.find(a => a?.name === name),

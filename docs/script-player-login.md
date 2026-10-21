@@ -173,7 +173,10 @@ text/imported actors. The host must supply a prepared Viewport prefix and a
 completed LoadMap, and must connect pawn collision/movement/zone services
 before calling login. The adapter does not attach a pre-existing scene player
 or skip player startup. Nonempty options, travel text and remote/network
-connections require extending the recovered input pipeline first. Native
+connections require extending the recovered input pipeline first. *(2026-10-21: a map entered by travel passes the travel step's `arrival`, the
+URL's portal and options and the TravelInfo text, to `preparePlayerLogin`; `login()` then imports the text between the player's
+`TravelPreAccept` and `AcceptInventory`, as the native does, and a `loadonly` option skips the import. The cold input above is unchanged.
+See [map travel](travel.md#play-steps-0-and-1).)* Native
 error logging, platform viewport/input setup and full StaticLoadClass path
 syntax are not reproduced by this module.
 

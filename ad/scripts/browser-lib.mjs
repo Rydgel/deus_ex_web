@@ -3,6 +3,7 @@
 // captured frame advances Play by an exact step regardless of how fast
 // headless WebGL renders: footage is smooth even at a few real fps.
 import {chromium} from 'playwright';
+import { debugUrl } from '../../scripts/page-url.mjs';
 
 export const URL = process.env.DX_VIEWER_URL || 'http://127.0.0.1:5173/';
 
@@ -59,7 +60,7 @@ export async function openViewer({width = 1920, height = 1080, args = [], onlyMa
     manifest.files = manifest.files.filter(keep);
     await route.fulfill({response, json: manifest});
   });
-  await page.goto(URL);
+  await page.goto(debugUrl(URL));
   await page.addStyleTag({content: chromeCss});
   await page.waitForFunction(() => window.deusExViewer?.status().ready, null, {timeout: 240000});
   return {browser, context, page, errors};

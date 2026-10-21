@@ -12,6 +12,7 @@ import {chromium} from '@playwright/test';
 import {createServer} from 'vite';
 import {fileURLToPath} from 'node:url';
 import {gameDirectory} from './game-directory.mjs';
+import { debugUrl } from './page-url.mjs';
 
 const option = (name, fallback) => { const i = process.argv.indexOf(`--${name}`); return i < 0 ? fallback : process.argv[i + 1]; };
 try { gameDirectory(); } catch { console.log('SKIP validate-fire-texture-play: no installed game data'); process.exit(0); }
@@ -38,7 +39,7 @@ try {
     await route.fulfill({response, body: (await response.text()) + hook});
   });
   // Play's default mode: the simulation in the worker. The checks read the page's actor mesh layer and world.
-  await page.goto(`${url.replace(/\/$/, '')}/`);
+  await page.goto(debugUrl(`${url.replace(/\/$/, '')}/`));
   await page.waitForFunction(() => window.deusExViewer?.status().ready, {}, {timeout: 240000});
   if (map !== '00_Training') {
     await page.locator('#map').selectOption(map);

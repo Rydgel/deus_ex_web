@@ -45,6 +45,7 @@ import {execFileSync, spawn} from 'node:child_process';
 import {existsSync, mkdirSync, readFileSync, writeFileSync, renameSync} from 'node:fs';
 import path from 'node:path';
 import {fileURLToPath} from 'node:url';
+import { debugUrl } from './page-url.mjs';
 
 const root = fileURLToPath(new URL('..', import.meta.url));
 const out = path.join(root, '.work/acceptance');
@@ -198,7 +199,7 @@ async function play() {
       // (?detailTextures=0) unless --detail on, for a comparison with a capture of the original taken with the pass poked in.
       const query = [freeze ? 'hold=1' : '', option('detail', 'off') === 'on' || /detailTextures=/.test(option('query', '')) ? '' : 'detailTextures=0',
         option('query', '')].filter(Boolean).join('&');
-      await page.goto(`${url}/${query ? `?${query}` : ''}`);
+      await page.goto(debugUrl(`${url}/${query ? `?${query}` : ''}`));
       await page.waitForFunction(() => window.deusExViewer?.status().ready, {}, {timeout: 240000});
       if (await page.evaluate(() => window.deusExViewer.status().map) !== map) {
         await page.locator('#map').selectOption(map);

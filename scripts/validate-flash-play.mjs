@@ -14,6 +14,7 @@ import {chromium} from '@playwright/test';
 import {createServer} from 'vite';
 import {fileURLToPath} from 'node:url';
 import {gameDirectory} from './game-directory.mjs';
+import { debugUrl } from './page-url.mjs';
 
 const option = (name, fallback) => { const i = process.argv.indexOf(`--${name}`); return i < 0 ? fallback : process.argv[i + 1]; };
 try { gameDirectory(); } catch { console.log('SKIP validate-flash-play: no installed game data'); process.exit(0); }
@@ -37,7 +38,7 @@ try {
     const text = (await response.text()).replace('antialias: true })', 'antialias: true, preserveDrawingBuffer: true })');
     await route.fulfill({response, body: text + '\nwindow.__deusFlash={get renderer(){return renderer;}};\n'});
   });
-  await page.goto(`${url}/${option('query', '') ? `?${option('query', '')}` : ''}`);
+  await page.goto(debugUrl(`${url}/${option('query', '') ? `?${option('query', '')}` : ''}`));
   await page.waitForFunction(() => { const s = window.deusExViewer?.status(); return s?.ready && s.map === '00_Training'; }, {}, {timeout: 240000});
   const frames = n => page.evaluate(async n => { for (let k = 0; k < n; k++) await new Promise(r => requestAnimationFrame(r)); }, n);
   const means = () => page.evaluate(() => {

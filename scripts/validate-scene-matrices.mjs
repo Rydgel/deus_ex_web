@@ -28,6 +28,7 @@ import {gameDirectory} from './game-directory.mjs';
 import {AssetStore} from '../src/unreal/assets.mjs';
 import {decodeMap} from '../src/unreal/map.mjs';
 import {createWorld} from '../src/viewer/world.mjs';
+import { debugUrl } from './page-url.mjs';
 
 const option = (name, fallback) => { const i = process.argv.indexOf(`--${name}`); return i < 0 ? fallback : process.argv[i + 1]; };
 try { gameDirectory(); } catch { console.log('SKIP validate-scene-matrices: no installed game data'); process.exit(0); }
@@ -90,7 +91,7 @@ try {
     const errors = [];
     page.on('pageerror', error => errors.push(error.message));
     // Reads the runtime through main.mjs: the page's own simulation (?sim=inline).
-    await page.goto(`${url.replace(/\/$/, '')}/?sim=inline`);
+    await page.goto(debugUrl(`${url.replace(/\/$/, '')}/?sim=inline`));
     await page.waitForFunction(() => window.deusExViewer?.status().ready, {}, {timeout: 180000});
     await page.locator('#map').selectOption(map);
     await page.waitForFunction(map => { const s = window.deusExViewer?.status(); return s?.ready && s.map === map; }, map, {timeout: 180000});

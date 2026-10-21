@@ -17,6 +17,7 @@
  */
 import {chromium} from '@playwright/test';
 import {mkdir, writeFile} from 'node:fs/promises';
+import { debugUrl } from './page-url.mjs';
 
 const option = (name, fallback) => { const i = process.argv.indexOf(`--${name}`); return i < 0 ? fallback : process.argv[i + 1]; };
 const url = option('url', 'http://127.0.0.1:5173'), map = option('map', '01_NYC_UNATCOIsland'), pairs = Number(option('pairs', 5));
@@ -35,7 +36,7 @@ async function measure(browser, query) {
     const target = new URL(url);
     for (const [key, value] of new URLSearchParams(option('query', ''))) target.searchParams.set(key, value);
     for (const [key, value] of new URLSearchParams(query)) target.searchParams.set(key, value);
-    await page.goto(target.href);
+    await page.goto(debugUrl(target.href));
     await page.waitForFunction(() => window.deusExViewer?.status().ready, {}, {timeout: 180000});
     await page.locator('#map').selectOption(map);
     await page.waitForFunction(map => { const s = window.deusExViewer?.status(); return s?.ready && s.map === map; }, map, {timeout: 180000});

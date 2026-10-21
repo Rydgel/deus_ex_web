@@ -30,6 +30,7 @@
 import {chromium} from '@playwright/test';
 import {mkdir,writeFile} from 'node:fs/promises';
 import {BYPASS_PATCHES} from './bench-sim-hooks.mjs';
+import { debugUrl } from './page-url.mjs';
 
 const option=(name,fallback)=>{const i=process.argv.indexOf(`--${name}`);return i<0?fallback:process.argv[i+1];};
 const url=option('url','http://127.0.0.1:5173'),frames=Number(option('frames',300)),tag=option('tag','play');
@@ -88,7 +89,7 @@ try {
   const target=new URL(url);if(gpu)target.searchParams.set('gpuTimer','1');
   // --query gpuMesh=1: extra viewer switches (A/B of a render path).
   for(const [key,value] of new URLSearchParams(option('query','')))target.searchParams.set(key,value);
-  await page.goto(target.href);
+  await page.goto(debugUrl(target.href));
   await page.waitForFunction(()=>window.deusExViewer?.status().ready,{}, {timeout:180000});
   if(map){await page.locator('#map').selectOption(map);
     await page.waitForFunction(map=>{const s=window.deusExViewer?.status();return s?.ready&&s.map===map;},map,{timeout:180000});}

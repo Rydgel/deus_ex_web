@@ -15,6 +15,7 @@ import {chromium} from '@playwright/test';
 import {createServer} from 'vite';
 import {fileURLToPath} from 'node:url';
 import {gameDirectory} from './game-directory.mjs';
+import { debugUrl } from './page-url.mjs';
 
 const option = (name, fallback) => { const i = process.argv.indexOf(`--${name}`); return i < 0 ? fallback : process.argv[i + 1]; };
 try { gameDirectory(); } catch { console.log('SKIP validate-texture-animation-play: no installed game data'); process.exit(0); }
@@ -45,7 +46,7 @@ try {
     if (!body.includes(PAN_INPUTS)) throw new Error('main.mjs no longer builds the frame pan inputs as expected');
     await route.fulfill({response, body: body.replace(PAN_INPUTS, `${PAN_INPUTS} window.__deusPan = pan;`) + hook});
   });
-  await page.goto(`${url.replace(/\/$/, '')}/${query ? `?${query}` : ''}`);
+  await page.goto(debugUrl(`${url.replace(/\/$/, '')}/${query ? `?${query}` : ''}`));
   await page.waitForFunction(() => window.deusExViewer?.status().ready, {}, {timeout: 240000});
   if (map !== '00_Training') {
     await page.locator('#map').selectOption(map);

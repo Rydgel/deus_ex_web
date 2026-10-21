@@ -2,7 +2,7 @@ import {test,expect} from '@playwright/test';
 
 test('unavailable Wasm keeps the existing JavaScript pose path playable and reports the fallback',async({page})=>{
   await page.route('**/*.wasm',route=>route.abort());
-  await page.goto('http://127.0.0.1:5173');
+  await page.goto('http://127.0.0.1:5173/?debug=1');
   await page.waitForFunction(()=>window.deusExViewer?.status().ready);
   await page.locator('#scene').click({position:{x:500,y:350}});
   const initial=await page.evaluate(()=>window.deusExViewer.status());

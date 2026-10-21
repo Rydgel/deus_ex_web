@@ -164,6 +164,8 @@ export function serializeMesh(object, archive, s) {
   raw(0xa8); raw(0xb4);
   for (let offset = 0xf0; offset <= 0x128; offset += 4) write(object, offset, archive.readU32(), s);
   raw(0xe4);
+  // A classic UMesh ends here; ULodMesh::Serialize continues and moves this to its own end.
+  object.meshSerializedEnd = archive.tell();
 }
 
 export function serializeLodMesh(object, archive, s) {

@@ -21,6 +21,7 @@ import {chromium} from '@playwright/test';
 import {createServer} from 'vite';
 import {fileURLToPath} from 'node:url';
 import {gameDirectory} from './game-directory.mjs';
+import { debugUrl } from './page-url.mjs';
 
 const option = (name, fallback) => { const i = process.argv.indexOf(`--${name}`); return i < 0 ? fallback : process.argv[i + 1]; };
 try { gameDirectory(); } catch { console.log('SKIP validate-sky-in-mirror-play: no installed game data'); process.exit(0); }
@@ -52,7 +53,7 @@ try {
     await route.fulfill({response, body: (await response.text()) +
       '\nwindow.__deusSky={get visible(){return lastVisibility;},get npc(){return npcPreview;},renderer,scene};\n'});
   });
-  await page.goto(`${url.replace(/\/$/, '')}/${query ? `?${query}` : ''}`);
+  await page.goto(debugUrl(`${url.replace(/\/$/, '')}/${query ? `?${query}` : ''}`));
   await page.waitForFunction(() => window.deusExViewer?.status().ready, {}, {timeout: 240000});
   await page.locator('#map').selectOption(map);
   await page.waitForFunction(map => { const s = window.deusExViewer?.status(); return s?.ready && s.map === map; }, map, {timeout: 240000});

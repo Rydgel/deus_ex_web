@@ -33,6 +33,7 @@ import {execFileSync, spawn} from 'node:child_process';
 import {existsSync, mkdirSync, readFileSync, writeFileSync, renameSync, rmSync} from 'node:fs';
 import path from 'node:path';
 import {fileURLToPath} from 'node:url';
+import { debugUrl } from './page-url.mjs';
 
 const root = fileURLToPath(new URL('..', import.meta.url));
 const option = (name, fallback) => { const i = process.argv.indexOf(`--${name}`); return i < 0 ? fallback : process.argv[i + 1]; };
@@ -875,7 +876,7 @@ async function withPlay(body, {frozenFrames = null} = {}) {
     const page = await browser.newPage({viewport: {width: 1280, height: 720}, deviceScaleFactor: 1});
     const errors = []; page.on('pageerror', error => errors.push(error.message));
     if (process.env.DEBUG_CONSOLE) page.on('console', m => { if (m.text().includes(process.env.DEBUG_CONSOLE)) console.error(m.text()); });
-    await page.goto(`${url}/?hold=1&seed=${option('seed', 1)}${option('detail', 'off') === 'on' || /detailTextures=/.test(option('page-params', '') ?? '') ? '' : '&detailTextures=0'}${option('script-vm', null) ? `&scriptVm=${option('script-vm')}` : ''}${option('page-params', null) ? `&${option('page-params')}` : ''}`);   // --page-params 'pawnPhysics=js&walkLoopKernel=js&movePawnKernel=js': the JavaScript twins (the walk trace)
+    await page.goto(debugUrl(`${url}/?hold=1&seed=${option('seed', 1)}${option('detail', 'off') === 'on' || /detailTextures=/.test(option('page-params', '') ?? '') ? '' : '&detailTextures=0'}${option('script-vm', null) ? `&scriptVm=${option('script-vm')}` : ''}${option('page-params', null) ? `&${option('page-params')}` : ''}`));   // --page-params 'pawnPhysics=js&walkLoopKernel=js&movePawnKernel=js': the JavaScript twins (the walk trace)
     await page.waitForFunction(() => window.deusExViewer?.status().ready, {}, {timeout: 240000});
     if (await page.evaluate(() => window.deusExViewer.status().map) !== map) {
       await page.locator('#map').selectOption(map);
@@ -958,7 +959,7 @@ async function screen() {
       const page = await browser.newPage({viewport: {width: 1280, height: 720}, deviceScaleFactor: 1});
       const errors = []; page.on('pageerror', error => errors.push(error.message));
       try {
-        await page.goto(`${url}/?seed=1`);
+        await page.goto(debugUrl(`${url}/?seed=1`));
         await page.waitForFunction(() => window.deusExViewer?.status().ready, {}, {timeout: 240000});
         if (await page.evaluate(() => window.deusExViewer.status().map) !== name) {
           await page.locator('#map').selectOption(name);

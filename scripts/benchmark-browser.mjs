@@ -1,6 +1,7 @@
 /** Rendered Play timing. Run against npm run dev; hardware backend is reported. */
 import {chromium} from '@playwright/test';
 import {writeFile} from 'node:fs/promises';
+import { debugUrl } from './page-url.mjs';
 const arg=name=>{const i=process.argv.indexOf(name);return i<0?null:process.argv[i+1];};
 const url=new URL(arg('--url')??'http://127.0.0.1:5173');
 if(process.argv.includes('--javascript'))url.searchParams.set('meshBackend','javascript');
@@ -8,7 +9,7 @@ const browser=await chromium.launch({args:process.argv.includes('--metal')?['--u
 try {
   const page=await browser.newPage({viewport:{width:1440,height:960}}),errors=[];
   page.on('pageerror',error=>errors.push(error.message));
-  await page.goto(url.href);
+  await page.goto(debugUrl(url.href));
   await page.waitForFunction(()=>window.deusExViewer?.status().ready,null,{timeout:120000});
   await page.locator('#scene').click({position:{x:500,y:350}});
   await page.evaluate(async()=>{for(let i=0;i<60;i++)await new Promise(requestAnimationFrame);});

@@ -21,6 +21,7 @@ import {AssetStore} from '../src/unreal/assets.mjs';
 import {loadScriptVmKernel} from '../src/runtime/script-vm-kernel.mjs';
 import {createBspOcclusion} from '../src/runtime/bsp-occlusion.mjs';
 import {surfaceTextureFlags} from './occlusion-request.mjs';
+import { debugUrl } from './page-url.mjs';
 
 const option = (name, fallback) => { const i = process.argv.indexOf(`--${name}`); return i < 0 ? fallback : process.argv[i + 1]; };
 let root;
@@ -42,7 +43,7 @@ let snapshots = [];
 try {
   const page = await browser.newPage({viewport: {width: 1024, height: 640}});
   const errors = []; page.on('pageerror', error => errors.push(error.message));
-  await page.goto(`${url}/${option('query', '') ? `?${option('query', '')}` : ''}`);
+  await page.goto(debugUrl(`${url}/${option('query', '') ? `?${option('query', '')}` : ''}`));
   await page.waitForFunction(() => window.deusExViewer?.status().ready, {}, {timeout: 240000});
   await page.locator('#map').selectOption(map);
   await page.waitForFunction(map => { const s = window.deusExViewer?.status(); return s?.ready && s.map === map; }, map, {timeout: 240000});

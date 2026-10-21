@@ -27,6 +27,7 @@ import { AssetStore } from '../src/unreal/assets.mjs';
 import { decodeMap } from '../src/unreal/map.mjs';
 import { depthConstants } from '../src/runtime/frame-projection.mjs';
 import { spriteVertices } from '../src/runtime/sprite-tile.mjs';
+import { debugUrl } from './page-url.mjs';
 
 const option = (name, fallback) => { const i = process.argv.indexOf(`--${name}`); return i < 0 ? fallback : process.argv[i + 1]; };
 try { gameDirectory(); } catch { console.log('SKIP validate-sprite-tiles-mirror-play: no installed game data'); process.exit(0); }
@@ -76,7 +77,7 @@ try {
     const response = await route.fetch();
     await route.fulfill({ response, body: `${await response.text()}\nwindow.__deusSprites={get scene(){return spriteScene;},get mainRect(){return mainRect;}};\n` });
   });
-  await page.goto(url);
+  await page.goto(debugUrl(url));
   await page.waitForFunction(() => window.deusExViewer?.status().ready, {}, { timeout: 300000 });
   await page.locator('#map').selectOption(map);
   await page.waitForFunction(m => { const s = window.deusExViewer?.status(); return s?.ready && s.map === m; }, map, { timeout: 300000 });

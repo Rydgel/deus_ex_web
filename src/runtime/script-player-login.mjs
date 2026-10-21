@@ -1,9 +1,11 @@
-/** Cold standalone ULevel::SpawnPlayActor (Engine.dll 0x10396bd0).
- * Only direct entry with empty URL.Op/Portal and no travel data is supported.
+/** Standalone ULevel::SpawnPlayActor (Engine.dll 0x10396bd0).
+ * A cold direct entry has empty URL.Op/Portal and no travel data. A map entered by travel passes the `arrival` of the
+ * travel step (travel.mjs: the URL's portal and options, TravelInfo), and `importer` (travel-import.mjs) applies the
+ * travel text between the player's TravelPreAccept and AcceptInventory, as the native does (docs/travel.md).
  * The scene supplies pawn services before Login can Spawn; this module never
  * constructs a replacement player. Evidence: docs/script-player-login.md.
  */
-export async function preparePlayerLogin({runtime,assets,level,levelInfo,viewport,prepareClass}) {
+export async function preparePlayerLogin({runtime,assets,level,levelInfo,viewport,prepareClass,arrival=null,importer=null,log=null}) {
   if(typeof prepareClass!=='function')throw new TypeError('Player login requires class preparation');
   const read=(actor,name)=>runtime.readNamed(actor,name);
   const write=(actor,name,value)=>runtime.writeNamed(actor,name,value);
@@ -27,9 +29,15 @@ export async function preparePlayerLogin({runtime,assets,level,levelInfo,viewpor
   await prepareClass(spawnClass);
   const pri=runtime.defaultValue(spawnClass,runtime.lookupMember(spawnClass,'fields','PlayerReplicationInfoClass'));
   if(pri)await prepareClass(await runtime.loadClass(pri.asset,pri.index));
+  // A `loadonly` option skips the import (0x103971f7): the level is entered with no travel text read.
+  const importing=Boolean(arrival&&importer&&!arrival.options.some(option=>option.toLowerCase()==='loadonly'));
+  const prepared=importing?await importer.prepare(arrival):null;
+  const portal=arrival?.portal??'',options=arrival?.optionsText??'';
   let error='';
   return {
-    class:spawnClass,options:'',portal:'',remoteRole:2,
+    class:spawnClass,options,portal,remoteRole:2,
+    /** Whether a travel text was imported (the player's subsystems are the travelling ones). */
+    get imported(){return Boolean(prepared?.records.length);},
     get error(){return error;},
     login(){
       if(Number(read(levelInfo,'NetMode'))!==0||level.netDriver)
@@ -42,10 +50,12 @@ export async function preparePlayerLogin({runtime,assets,level,levelInfo,viewpor
       error='';
       let player=null;
       const result={reference:true,get:()=>player,set:value=>{player=value;}};
-      const args=['','',error,spawnClass.record];
+      const args=[portal,options,error,spawnClass.record];
+      log?.('Log',`Spawning new actor for Viewport ${viewport.name??'WindowsViewport0'}`);
       runtime.processEvent(game,'Login',args,result);
       error=args[2];
       if(!player)return null;
+      log?.('Log',`Possessed PlayerPawn: ${runtime.instance(player).cls.record.name} ${runtime.instance(player).nativeObject?.outer?.name??'Level'}.${player.name}`);
       // APlayerPawn::SetPlayer, including its synchronous Possess callback.
       const old=read(viewport,'Actor');
       if(old){write(old,'Player',null);write(viewport,'Actor',null);}
@@ -57,9 +67,12 @@ export async function preparePlayerLogin({runtime,assets,level,levelInfo,viewpor
       // command-line parsing is needed for the supported standalone input.
       write(player,'bAdmin',true);
       runtime.processEvent(player,'TravelPreAccept');
-      // Explicit cold input: no travel text/imported actors. Their loops are
-      // empty, while these three callbacks are still unconditional.
+      // Without travel text the import loops are empty, while these callbacks are still unconditional. With it: the three passes,
+      // then the imported actors' TravelPreAccept (last first) before AcceptInventory and their TravelPostAccept after it.
+      const imported=prepared?importer.apply(prepared,player):null;
+      imported?.preAccept();
       runtime.processEvent(game,'AcceptInventory',[player]);
+      imported?.postAccept();
       runtime.processEvent(player,'TravelPostAccept');
       runtime.processEvent(game,'PostLogin',[player]);
       return player;

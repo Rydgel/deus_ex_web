@@ -46,6 +46,7 @@ import {chromium} from '@playwright/test';
 import {createServer} from 'vite';
 import {fileURLToPath} from 'node:url';
 import {gameDirectory} from './game-directory.mjs';
+import { debugUrl } from './page-url.mjs';
 
 const option=(name,fallback)=>{const i=process.argv.indexOf(`--${name}`);return i<0?fallback:process.argv[i+1];};
 const device=option('device','gpu');
@@ -531,7 +532,7 @@ try {
       await route.fulfill({response,body:(await response.text())+hook});
     });
     // Reads the runtime through main.mjs: the page's own simulation (?sim=inline).
-    await page.goto(`${url}/?gpuMesh=1&sim=inline`);
+    await page.goto(debugUrl(`${url}/?gpuMesh=1&sim=inline`));
     await page.waitForFunction(()=>window.deusExViewer?.status().ready,{}, {timeout:240000});
     if(map!=='00_Training'){
       await page.locator('#map').selectOption(map);
@@ -592,7 +593,7 @@ if(option('attached','on')!=='off')try {
         const response=await route.fetch();
         await route.fulfill({response,body:(await response.text())+hook});
       });
-      await page.goto(`${url}/?gpuMesh=1&sim=inline&antialias=0`);
+      await page.goto(debugUrl(`${url}/?gpuMesh=1&sim=inline&antialias=0`));
       await page.waitForFunction(()=>window.deusExViewer?.status().ready,{}, {timeout:240000});
       await page.locator('#map').selectOption(scene.map);
       await page.waitForFunction(map=>{const s=window.deusExViewer?.status();return s?.ready&&s.map===map;},scene.map,{timeout:240000});

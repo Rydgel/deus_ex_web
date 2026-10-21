@@ -28,6 +28,7 @@ import {fileURLToPath} from 'node:url';
 import {existsSync} from 'node:fs';
 import {gameDirectory} from './game-directory.mjs';
 import {meshOracleSpec} from './lodmesh-lod-cases.mjs';
+import { debugUrl } from './page-url.mjs';
 
 const option = (name, fallback) => {
   const joined = process.argv.find(arg => arg.startsWith(`--${name}=`));
@@ -56,7 +57,7 @@ try {
   const errors = []; page.on('pageerror', error => errors.push(error.message));
   if (process.env.TERMINAL_DEBUG) { page.on('console', message => log('console', message.type(), message.text().slice(0, 300)));
     page.on('worker', worker => { log('worker', worker.url()); worker.on?.('console', message => log('worker console', message.text().slice(0, 300))); }); }
-  await page.goto(`${url}/${option('query', '') ? `?${option('query', '')}` : ''}`);
+  await page.goto(debugUrl(`${url}/${option('query', '') ? `?${option('query', '')}` : ''}`));
   await page.waitForFunction(() => window.deusExViewer?.status().ready, {}, {timeout: 240000});
   log('viewer ready'); await page.locator('#map').selectOption(map);
   await page.waitForFunction(map => { const s = window.deusExViewer?.status(); return s?.ready && s.map === map; }, map, {timeout: 240000});

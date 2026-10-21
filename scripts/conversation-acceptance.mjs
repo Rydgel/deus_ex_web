@@ -9,6 +9,7 @@ import {execFileSync} from 'node:child_process';
 import {mkdirSync, readFileSync, writeFileSync} from 'node:fs';
 import path from 'node:path';
 import {fileURLToPath} from 'node:url';
+import { debugUrl } from './page-url.mjs';
 
 export const root = fileURLToPath(new URL('..', import.meta.url));
 const flag = name => process.argv.includes(`--${name}`);
@@ -54,7 +55,7 @@ async function withPlay(body) {
       }
       await route.fulfill({response, body});
     });
-    await page.goto(`${url}/?hold=1&seed=1&antialias=0&detailTextures=0`);
+    await page.goto(debugUrl(`${url}/?hold=1&seed=1&antialias=0&detailTextures=0`));
     await page.waitForFunction(() => window.deusExViewer?.status().ready, {}, {timeout: 240000});
     return await body({page, errors, scene: SCENES[option('scene', 'meetpaul')]});
   } finally { await browser.close(); await server.close(); }

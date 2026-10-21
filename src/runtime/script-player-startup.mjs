@@ -190,7 +190,10 @@ function verifyLocationDefaults(runtime, managerClass) {
   return slots;
 }
 
-function verifyAugmentationState(runtime, manager, augmentations) {
+/** `imported`: the graph was replaced by a travel text's (travel-import.mjs). An imported actor is spawned with the player as its Owner
+ * (SpawnPlayActor's SpawnActor), so an imported augmentation's Owner is the player and not the manager, and the ownership and
+ * activation state is the one the text carried, not the cold defaults. */
+function verifyAugmentationState(runtime, manager, augmentations, { imported = false } = {}) {
   const first = runtime.readNamed(manager, 'FirstAug');
   if (first !== augmentations[0]) throw new Error('AugmentationManager.FirstAug does not point to AugSpeed1');
   const seen = new Set(), chain = [];
@@ -205,11 +208,13 @@ function verifyAugmentationState(runtime, manager, augmentations) {
   for (const [index, augmentation] of augmentations.entries()) {
     const owner = runtime.readNamed(augmentation, 'Owner');
     const player = runtime.readNamed(augmentation, 'Player');
-    if (owner !== manager) throw new Error(`Augmentation ${PLAYER_AUGMENTATION_STARTUP.classes[index]} has the wrong Owner`);
+    if (owner !== manager && !(imported && owner === runtime.readNamed(manager, 'Player')))
+      throw new Error(`Augmentation ${PLAYER_AUGMENTATION_STARTUP.classes[index]} has the wrong Owner`);
     if (player !== runtime.readNamed(manager, 'Player'))
       throw new Error(`Augmentation ${PLAYER_AUGMENTATION_STARTUP.classes[index]} has the wrong Player`);
   }
   const byClass = new Map(augmentations.map(item => [classKey(runtime.instance(item).cls), item]));
+  if (imported) return { chain, byClass };
   for (const key of PLAYER_AUGMENTATION_STARTUP.classes) {
     const augmentation = byClass.get(key);
     const owned = Boolean(runtime.readNamed(augmentation, 'bHasIt'));
@@ -344,7 +349,7 @@ export async function createPlayerAugmentationStartup({runtime, assets, deusEx, 
     player = actualPlayer;
     return player;
   };
-  const complete = (actualPlayer = player) => {
+  const complete = (actualPlayer = player, { imported = false } = {}) => {
     bindPlayer(actualPlayer);
     for (const [field, expected] of [['BarkManager', 'deusex.barkmanager'],
       ['ThemeManager', 'deusex.colorthememanager'], ['SkillSystem', 'deusex.skillmanager']]) {
@@ -369,7 +374,7 @@ export async function createPlayerAugmentationStartup({runtime, assets, deusEx, 
       if (seen.has(current)) throw new Error('AugmentationManager augmentation chain is cyclic');
       seen.add(current); augmentations.push(current);
     }
-    verifyAugmentationState(runtime, manager, augmentations);
+    verifyAugmentationState(runtime, manager, augmentations, { imported });
     const keyRing = runtime.readNamed(player, 'KeyRing');
     if (!keyRing || classKey(runtime.instance(keyRing).cls) !== 'deusex.nanokeyring')
       throw new Error('CreateKeyRing did not spawn the player NanoKeyRing');

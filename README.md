@@ -105,8 +105,8 @@ Frame cost and the 120 fps target are tracked in
 **Current boundaries:** Stage 3 completion covers the measured runtime paths,
 not every interaction or full campaign compatibility. Stage 5 gameplay is
 proven only where its gate passes (below); the other gameplay rows play in Play
-but have no original capture yet. Saves and map travel are Stage 6 (map travel
-stops at a labeled `ClientTravel` boundary; the original's chain is in [travel](docs/travel.md)). Other maps expose
+but have no original capture yet. Saves and map travel are Stage 6 (the main menu's Training button on the logo map
+travels to `00_Training` in Play with the player the original carries, [travel](docs/travel.md); every other branch stops at a labeled boundary). Other maps expose
 unsupported-content diagnostics. The final original camera/motion comparison
 and actual window/tab pause acceptance deferred from Stage 2 remain open.
 
@@ -256,9 +256,13 @@ rustup target add wasm32-unknown-unknown
 npm run dev
 ```
 
-Open `http://127.0.0.1:5173`. With the extracted `Deus Ex GOTY Edition/` directory
-present, training loads automatically. Otherwise choose the game folder containing
-Maps, Textures, and System. The local production preview always uses this folder picker.
+Open `http://127.0.0.1:5173`. The page starts as the original does: the splash, then
+the logo map with its camera flight; a click or Escape opens the main menu, whose
+Training button travels to training (docs/boot.md, docs/travel.md). With the extracted
+`Deus Ex GOTY Edition/` directory present this happens at once; otherwise choose the game
+folder containing Maps, Textures, System and Help. The local production preview always uses
+this folder picker. `http://127.0.0.1:5173/?debug=1` is the debugging page described below:
+the toolbar, Play/Inspect, the map list (training loads first) and the diagnostics.
 Original data is kept outside source control and outside the website build.
 
 `npm run dev`, `npm run build` and `npm test` first compile the three Rust
@@ -266,7 +270,7 @@ crates under `native/` to WebAssembly (`npm run build:wasm`): `script-vm` (the
 simulation core and render kernels), `lodmesh-kernel` (mesh posing) and
 `galaxy-kernel` (music). Rebuild after changing Rust code.
 
-In **Play**, the installed key bindings apply: WASD moves, Space jumps, X
+On the debugging page (`?debug=1`): in **Play**, the installed key bindings apply: WASD moves, Space jumps, X
 crouches, Shift walks, left click fires, right click uses, number keys select
 belt items and Escape opens the main menu. Double-click locks the mouse. In
 **Inspect**, WASD/arrow keys fly, Q/E move down/up, and Shift increases speed.

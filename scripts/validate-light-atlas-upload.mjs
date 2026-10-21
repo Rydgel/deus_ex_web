@@ -21,6 +21,7 @@ import {fileURLToPath} from 'node:url';
 import {chromium,firefox} from '@playwright/test';
 import {createServer} from 'vite';
 import {gameDirectory} from './game-directory.mjs';
+import { debugUrl } from './page-url.mjs';
 
 const option=(name,fallback)=>{const i=process.argv.indexOf(`--${name}`);return i<0?fallback:process.argv[i+1];};
 const map=option('map','00_Training'),engine=option('browser','chromium');
@@ -50,7 +51,7 @@ try{
     await route.fulfill({response,body:body.replace(from,
       'flushLighting(renderer) { lightAtlas.flush(renderer); globalThis.__atlasProbe?.(lightAtlas, renderer); },')});
   });
-  await page.goto(url);
+  await page.goto(debugUrl(url));
   await page.waitForFunction(()=>window.deusExViewer?.status().ready,{}, {timeout:180000});
 
   // 1. Sampling equivalence on this GPU.

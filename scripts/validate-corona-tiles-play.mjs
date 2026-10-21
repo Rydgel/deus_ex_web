@@ -23,6 +23,7 @@ import { writeFile } from 'node:fs/promises';
 import { gameDirectory } from './game-directory.mjs';
 import { depthConstants } from '../src/runtime/frame-projection.mjs';
 import { iconVertices } from '../src/runtime/sprite-tile.mjs';
+import { debugUrl } from './page-url.mjs';
 
 const option = (name, fallback) => { const i = process.argv.indexOf(`--${name}`); return i < 0 ? fallback : process.argv[i + 1]; };
 try { gameDirectory(); } catch { console.log('SKIP validate-corona-tiles-play: no installed game data'); process.exit(0); }
@@ -46,7 +47,7 @@ try {
     const response = await route.fetch();
     await route.fulfill({ response, body: `${await response.text()}\nwindow.__deusCoronas={get pass(){return coronaPass;},get mainRect(){return mainRect;}};\n` });
   });
-  await page.goto(url);
+  await page.goto(debugUrl(url));
   await page.waitForFunction(() => window.deusExViewer?.status().ready, {}, { timeout: 300000 });
   await page.locator('#map').selectOption(map);
   await page.waitForFunction(map => { const s = window.deusExViewer?.status(); return s?.ready && s.map === map; }, map, { timeout: 300000 });

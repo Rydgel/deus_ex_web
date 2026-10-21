@@ -18,6 +18,7 @@ import {createServer} from 'vite';
 import {fileURLToPath} from 'node:url';
 import {gameDirectory} from './game-directory.mjs';
 import {levelTickTime} from '../src/runtime/level-tick.mjs';
+import { debugUrl } from './page-url.mjs';
 
 const option = (name, fallback) => { const i = process.argv.indexOf(`--${name}`); return i < 0 ? fallback : process.argv[i + 1]; };
 try { gameDirectory(); } catch { console.log('SKIP validate-anim-dilation-play: no installed game data'); process.exit(0); }
@@ -38,7 +39,7 @@ try {
   const errors = []; page.on('pageerror', error => errors.push(error.message));
   await page.addInitScript(() => { try { localStorage.setItem('deusex.uiHidden', '1'); } catch { /* storage unavailable */ } });
   await page.clock.install({time: INSTALL});
-  await page.goto(`${url}/?hold=1&seed=1`);   // the default simulation: the worker
+  await page.goto(debugUrl(`${url}/?hold=1&seed=1`));   // the default simulation: the worker
   await page.waitForFunction(() => window.deusExViewer?.status().ready, {}, {timeout: 240000});
   assert.ok(!await page.evaluate(() => new URLSearchParams(location.search).has('sim')), 'worker mode is the default');
   const probe = args => page.evaluate(args => window.deusExViewer.viewProbe(args), args);

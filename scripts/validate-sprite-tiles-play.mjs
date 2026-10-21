@@ -28,6 +28,7 @@ import { writeFile } from 'node:fs/promises';
 import { gameDirectory } from './game-directory.mjs';
 import { depthConstants } from '../src/runtime/frame-projection.mjs';
 import { spriteVertices } from '../src/runtime/sprite-tile.mjs';
+import { debugUrl } from './page-url.mjs';
 
 try { gameDirectory(); } catch { console.log('SKIP validate-sprite-tiles-play: no installed game data'); process.exit(0); }
 const dir = fileURLToPath(new URL('..', import.meta.url));
@@ -56,7 +57,7 @@ try {
     const response = await route.fetch();
     await route.fulfill({ response, body: (await response.text()).replace('vMapUv.y = 1.0 - vMapUv.y;', '') });
   });
-  await page.goto(url);
+  await page.goto(debugUrl(url));
   await page.waitForFunction(() => window.deusExViewer?.status().ready, {}, { timeout: 300000 });
   await page.locator('#map').selectOption(map);
   await page.waitForFunction(map => { const s = window.deusExViewer?.status(); return s?.ready && s.map === map; }, map, { timeout: 300000 });

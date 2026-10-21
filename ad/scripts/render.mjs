@@ -11,6 +11,7 @@ import {createReadStream, existsSync, mkdirSync, statSync} from 'node:fs';
 import path from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {chromium} from 'playwright';
+import { debugUrl } from '../../scripts/page-url.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const repo = path.resolve(here, '../..');
@@ -37,7 +38,7 @@ const page = await browser.newPage({viewport: {width: 1920, height: 1080}, devic
 const errors = [];
 page.on('pageerror', error => errors.push(error.message));
 page.on('console', message => { if (message.type() === 'error') errors.push(message.text()); });
-await page.goto(`${base}/ad/src/index.html`);
+await page.goto(debugUrl(`${base}/ad/src/index.html`));
 const info = await page.evaluate(() => window.__video.ready);
 console.log('ready', JSON.stringify(info));
 const frameAt = async t => {

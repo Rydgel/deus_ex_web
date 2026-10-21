@@ -23,6 +23,7 @@ import path from 'node:path';
 import { gameDirectory } from './game-directory.mjs';
 import { AssetStore } from '../src/unreal/assets.mjs';
 import { decodeMap } from '../src/unreal/map.mjs';
+import { debugUrl } from './page-url.mjs';
 
 const option = (name, fallback) => { const i = process.argv.indexOf(`--${name}`); return i < 0 ? fallback : process.argv[i + 1]; };
 let root;
@@ -76,7 +77,7 @@ try {
     const page = await browser.newPage({ viewport: { width: 1024, height: 640 }, deviceScaleFactor: dpr });
     const errors = []; page.on('pageerror', error => errors.push(error.message));
     page.on('console', message => { if (message.type() === 'error') errors.push(message.text()); });
-    await page.goto(url);
+    await page.goto(debugUrl(url));
     await page.waitForFunction(() => window.deusExViewer?.status().ready, {}, { timeout: 240000 });
     await page.locator('#map').selectOption(map);
     await page.waitForFunction(map => { const s = window.deusExViewer?.status(); return s?.ready && s.map === map; }, map, { timeout: 240000 });
