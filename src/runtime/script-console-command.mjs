@@ -294,7 +294,9 @@ export function stringOutputDevice() {
  */
 export function createConsoleCommands({runtime, input, services}) {
   const read = (object, name) => runtime.readNamed(object, name);
-  const state = {action: 0, delta: 0, inAlias: false, held: new Uint8Array(255), flushes: 0, lines: 0};
+  // `commandLog`: the lines the bindings ran (UInput::Exec's per-line dispatch; presses and releases), newest last, bounded; validation reads it
+  // (view probe input-probe.mjs, docs/input-bindings.md) to show a key reached its exec function or alias.
+  const state = {action: 0, delta: 0, inAlias: false, held: new Uint8Array(255), flushes: 0, lines: 0, commandLog: []};
 
   function claims(body, cmd) {
     for (const keyword of EXEC_KEYWORDS[body])
@@ -418,6 +420,10 @@ export function createConsoleCommands({runtime, input, services}) {
       const next = parseLine(stream, 256, false);
       if (!next.ok) return;
       stream = next.rest;
+      if (state.action === IST_PRESS || state.action === IST_RELEASE) {   // a held key and an axis repeat every tick
+        if (state.commandLog.length >= 256) state.commandLog.shift();
+        state.commandLog.push({line: next.line, action: state.action});
+      }
       if (state.action === IST_PRESS) viewportExec(next.line, ar);
       else {
         const rest = state.action === IST_RELEASE ? parseCommand(next.line, 'OnRelease') : null;

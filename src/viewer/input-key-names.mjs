@@ -11,7 +11,7 @@ const NAMED = Object.freeze({
   ShiftLeft: 'Shift', ShiftRight: 'Shift', ControlLeft: 'Ctrl', ControlRight: 'Ctrl', AltLeft: 'Alt', AltRight: 'Alt',
   ArrowUp: 'Up', ArrowDown: 'Down', ArrowLeft: 'Left', ArrowRight: 'Right',
   Insert: 'Insert', Delete: 'Delete', Home: 'Home', End: 'End', PageUp: 'PageUp', PageDown: 'PageDown',
-  Pause: 'Pause', CapsLock: 'CapsLock', NumLock: 'NumLock', ScrollLock: 'ScrollLock',
+  Pause: 'Pause', CapsLock: 'CapsLock', NumLock: 'NumLock', ScrollLock: 'ScrollLock', PrintScreen: 'PrintScrn',
   Semicolon: 'Semicolon', Equal: 'Equals', Comma: 'Comma', Minus: 'Minus', Period: 'Period', Slash: 'Slash',
   Backquote: 'Tilde', BracketLeft: 'LeftBracket', Backslash: 'Backslash', BracketRight: 'RightBracket', Quote: 'SingleQuote',
   NumpadMultiply: 'GreyStar', NumpadAdd: 'GreyPlus', NumpadSubtract: 'GreyMinus', NumpadDecimal: 'NumPadPeriod', NumpadDivide: 'GreySlash',
@@ -26,6 +26,16 @@ export function inputKeyNameForCode(code) {
   if ((match = /^F([1-9]|1[0-9]|2[0-4])$/.exec(code))) return `IK_F${match[1]}`;
   return NAMED[code] ? `IK_${NAMED[code]}` : null;
 }
+
+/** Every KeyboardEvent.code that maps to an original key: the codes the page takes from the browser (preventDefault) and, in
+ * fullscreen, asks Keyboard Lock to deliver instead of handling them as browser shortcuts (docs/input-bindings.md). */
+export const GAME_KEY_CODES = Object.freeze([
+  ...Array.from({ length: 10 }, (_, k) => `Digit${k}`),
+  ...Array.from({ length: 26 }, (_, k) => `Key${String.fromCharCode(65 + k)}`),
+  ...Array.from({ length: 10 }, (_, k) => `Numpad${k}`),
+  ...Array.from({ length: 24 }, (_, k) => `F${k + 1}`),
+  ...Object.keys(NAMED),
+]);
 
 /** EInputKey value for a KeyboardEvent.code from the original name table. */
 export function inputKeyForCode(names, code) {

@@ -13,7 +13,7 @@ test('the original start takes fullscreen and the pointer, keeps them through Es
   const state = () => page.evaluate(async () => ({ menu: (await window.deusExViewer.settingsProbe({ op: 'state' }))?.top ?? null,
     lock: document.pointerLockElement?.id ?? null, fullscreen: document.fullscreenElement?.id ?? null, map: window.deusExViewer.status().map }));
   const map = name => page.waitForFunction(name => { const s = window.deusExViewer?.status(); return s?.ready && s.map === name && !s.runtimeError; }, name, { timeout: 240_000 });
-  await page.goto('http://127.0.0.1:5173/');
+  await page.goto(`${process.env.DX_BASE_URL ?? 'http://127.0.0.1:5173'}/`);
   await map('DX');
   let box = await page.locator('#scene').boundingBox();
   await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2);
