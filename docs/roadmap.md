@@ -1028,6 +1028,9 @@ and accelerators. See [typed characters](script-window-typed-keys.md).
 
 ## 5. Implement the full gameplay systems
 
+**Complete (2026-10-21).** The adopted gate passes 50 of 50 on master; see
+[Stage 5 close](stage-5-exit-criteria.md#stage-5-close).
+
 Expand movement and world simulation to swimming, ladders, water/damage zones,
 movable objects, moving doors and elevators, and their collision/trigger behavior.
 Implement AI navigation, sight/hearing, stealth, alert states, factions, and security
@@ -1163,7 +1166,7 @@ exploration, conversation, and alternate-route objectives, with the systems
 interacting correctly. Extend the same compatibility checks as later missions
 exercise additional behavior; a single successful route does not cover a mission.
 
-The finite definition of this criterion is drafted in [Stage 5 exit criteria](stage-5-exit-criteria.md)
+The finite definition of this criterion is [Stage 5 exit criteria](stage-5-exit-criteria.md)
 (50 scenarios on the three Training maps and Liberty Island, each with the original-side evidence that would
 prove it), built on [what the original offers a player there](stage-5-inventory.md). Its measure is
 `scripts/census-stage5.mjs` (what Play does when the scenarios are driven) and its test is
@@ -1171,7 +1174,7 @@ prove it), built on [what the original offers a player there](stage-5-inventory.
 0 of 50; after the first two gap tasks 0 of 50 with 43 playing and waiting for their original captures; after the first
 original captures, Island combat, 2 of 50 with 44 playing; with the second captures, the death capture and the
 undriven scenarios merged on 2026-10-18, 3 of 50 with all 50 playing; with the Island batches (devices, routes,
-conversations, frozen-phase frames, the zone-0 walking branch) merged on 2026-10-19, 20 of 50; with the original load's chance FlyGenerators replayed, 21 of 50; with collision over the moving brush tracker's level model on 2026-10-20, 23 of 50; with the death camera's rotation the same day, 24 of 50; with FindSpot's NaN branches, 27 of 50; with the first captures on the Linux host, 30 of 50; with the first O3 comparisons (Engine.dll on Play's recorded inputs), 32 of 50; with the original's object names in the replays and the 00_Training captures, 37 of 50; with 00_TrainingFinal's, 41 of 50; with 00_TrainingCombat's, 46 of 50; with Training phase 1's, 47 of 50; with the bots' and the terminals' windows, 49 of 50; with keys held across ticks (the footsteps of 5.2.3), 50 of 50, none failing; the user adopted the criteria on 2026-10-21).
+conversations, frozen-phase frames, the zone-0 walking branch) merged on 2026-10-19, 20 of 50; with the original load's chance FlyGenerators replayed, 21 of 50; with collision over the moving brush tracker's level model on 2026-10-20, 23 of 50; with the death camera's rotation the same day, 24 of 50; with FindSpot's NaN branches, 27 of 50; with the first captures on the Linux host, 30 of 50; with the first O3 comparisons (Engine.dll on Play's recorded inputs), 32 of 50; with the original's object names in the replays and the 00_Training captures, 37 of 50; with 00_TrainingFinal's, 41 of 50; with 00_TrainingCombat's, 46 of 50; with Training phase 1's, 47 of 50; with the bots' and the terminals' windows, 49 of 50; with keys held across ticks (the footsteps of 5.2.3), 50 of 50, none failing; the user adopted the criteria on 2026-10-21, and the official run on master passed 50 of 50 the same day).
 
 ## 6. Persist progress and complete the campaign
 

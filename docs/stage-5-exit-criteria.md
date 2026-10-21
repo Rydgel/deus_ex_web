@@ -1,6 +1,6 @@
 # Stage 5 exit criteria: a finite definition of "Done when"
 
-Status: **adopted by the user on 2026-10-21**, with the decisions [below](#what-the-user-decided-2026-10-21) (written 2026-10-17 from master 5d7285c; first census and scoreboard: 0 of 50 criteria pass; after the first original captures, the same evening: 2 of 50; on 2026-10-18 after the second captures and a spawned actor's first frame: 6 of 50; after the routes' captures, the same evening: 13 of 50; 21 of 50 on 2026-10-19; 23 of 50 after work item 8 on 2026-10-20; 24 of 50 after work item 16 the same day; 27 of 50, none failing, after work item 15; 30 of 50 after the first Linux captures; 32 of 50 with the first O3 proofs; 37 of 50 with the 00_Training captures; 41 of 50 with 00_TrainingFinal's; 46 of 50 with 00_TrainingCombat's; 47 of 50 with Training phase 1's; 49 of 50 with the bots' and the terminals' windows; 50 of 50 with the held keys' footsteps). Nothing here is a Stage 5 claim; it is the definition the claims will be
+Status: **adopted by the user on 2026-10-21**, with the decisions [below](#what-the-user-decided-2026-10-21) (written 2026-10-17 from master 5d7285c; first census and scoreboard: 0 of 50 criteria pass; after the first original captures, the same evening: 2 of 50; on 2026-10-18 after the second captures and a spawned actor's first frame: 6 of 50; after the routes' captures, the same evening: 13 of 50; 21 of 50 on 2026-10-19; 23 of 50 after work item 8 on 2026-10-20; 24 of 50 after work item 16 the same day; 27 of 50, none failing, after work item 15; 30 of 50 after the first Linux captures; 32 of 50 with the first O3 proofs; 37 of 50 with the 00_Training captures; 41 of 50 with 00_TrainingFinal's; 46 of 50 with 00_TrainingCombat's; 47 of 50 with Training phase 1's; 49 of 50 with the bots' and the terminals' windows; 50 of 50 with the held keys' footsteps). **Stage 5 is complete: the adopted gate passes 50 of 50 on master** ([Stage 5 close](#stage-5-close)). The rows below are the definition the claims were
 judged against. The data is `scripts/stage5-criteria.mjs`; the measure of where Play stands is `scripts/census-stage5.mjs`; the acceptance test is
 `scripts/validate-stage5-acceptance.mjs` ([Running](#running)). Like the Stage 3 and Stage 4 gates ([Stage 3](stage-3-exit-criteria.md),
 [Stage 4](stage-4-exit-criteria.md)) it exits 1 until every criterion passes. What the original offers a player in these maps is in
@@ -11,6 +11,25 @@ stealth, exploration, conversation, and alternate-route objectives, with the sys
 Section 5 listed systems but no scenes, so "representative" and "interacting correctly" have meant whatever the last agent drove. This note fixes both: a list of
 scenarios per clause on Training and Liberty Island, the criterion of each, the evidence that would prove it against the original, or the word `MISSING`. Where the
 choice is mine and the reason is weak, the row says so; the user adopts or changes the list.
+
+## Stage 5 close
+
+The official run, 2026-10-21, master 3230773 (the adopted criteria, the held-key re-captures of `air2`, `obs1` and `swm3` merged), the Linux host (AMD, 30 GB, 16 cores),
+`node scripts/validate-stage5-acceptance.mjs --report`: the census drives all 50 scenarios in Play, then 120 proof checks run one at a time (118 live replays of stored original
+traces, `validate-stage5-live.mjs`, and the two O3 comparisons, `validate-stage5-o3.mjs`), in 8,481 s (2 h 21 min). **49 PASS, 1 FAIL, 0 MISSING, 0 UNDRIVEN, 5 EXCLUDED.**
+The one failure was not Play's: 5.3.9's three frame checks (`trf1a`, `atf1a`, `sef1a`) found no stored frame of the original in `.work/acceptance/01_NYC_UNATCOIsland`. Those frames
+were captured in the `ui-rows` worktree and moved to `.work/worktree-archive/ui-rows` when it was removed, never into the main store. With them copied back (the original's
+BMPs and PNGs as captured, nothing recaptured), row 5.3.9 was run again on the same commit, `--only '^5\.3\.9 '`: its 9 checks pass (1,278 s). **50 PASS, 0 FAIL, 0 MISSING,
+0 UNDRIVEN, 5 EXCLUDED** (`.work/stage5-gate-final.json`: the full run with 5.3.9's row from the second run; `.work/stage5-close/`; not in Git).
+
+What the user decided before the close ([below](#what-the-user-decided-2026-10-21)) holds: the `weak` judgements are accepted as labelled in their rows, and the placed approaches
+were re-captured with held keys before this run.
+
+Not Stage 5 claims, carried past the close: items 9 (shooting the turret down has no capture), 12 (harness destroys of actors only Play has) and 14 (where the replay releases an
+AI event pre-free) of [the remaining work](#remaining-stage-5-work-in-the-order-it-blocks), which no row holds; what the `weak` rows leave out (`air2` walks only the shaft's last
+stretch, `obs1` does not drive the third pipe or the stairs, there is no swim to the ruins, the view turns are console sets); Play's own boot leaving each class's name counter where
+its history puts it (item 13); the excluded rows 5.7.1 to 5.7.5, which belong to Stage 6 (map travel, persistence, the load menu after a death), to Stage 4 and to multiplayer. The gate
+runs its replays one at a time: replays of one map share `.work/live-acceptance/<map>` and wait on its lock, since two concurrent replays of 00_Training differed at tick 1 (2026-10-20).
 
 ## What a scenario is, and what passes it
 
@@ -1631,13 +1650,13 @@ with held keys before Stage 5 is declared complete. The questions as they were p
   Island has no switch, and AugLight adds the `Beam` path). 5.6.6 is restated (the alliance flips on a touch, not from the flag) and labelled `weak`: of the conversations that read the other three flags, MeetFilben2, MoleConvos and TrooperCongratulation are captured (`fM` `fN`, `oV`, `kC`); PaulCongratulations and Filben's two barks are not.
 * **O3 or O2 as enough for native-body rows** (ladder, crate physics, swimming, falling, movers): the doc defaults to O3 (the DLL's code on Play's inputs in the scene), which the ladder and the crate stack have (5.3.5, 5.3.6, [O3](#o3-the-originals-code-on-plays-inputs-2026-10-20)); the other native-body rows pass on O1 captures.
 * **Cross-map evidence for shared code**: both halves of 5.2.3 now have Island captures, the gunshots (`cmb2`) and, with keys held through the input queue, the footsteps (`hrn1`, `hwk1`, [held keys](#held-keys-2026-10-20)); the choice this bullet asked for (O3 on Play's footstep inputs, or the row without footsteps) is no longer needed.
-* **Where a player's death stops** (item 2): implemented as the original's client travel, where its level ends; whether the load menu after it belongs to Stage 5 or 6 is still open.
+* **Where a player's death stops** (item 2): implemented as the original's client travel, where its level ends; the load menu after it belongs to Stage 6 (the user's choice, above).
 * **The third captures' judgements** (labelled `weak` in their rows): actors spawned at load by a placed actor (LaserEmitter, AutoTurretGun, ParticleGenerator) compared by name
   stem, because Play's start loads the Island twice and the original's capture session once (whether the original's own start loads it once is not recorded); `ko1`'s Low-Tech skill
   from the `AllSkills` cheat (untrained, the baton's second swing lands after the Terrorist has left); 5.6.4's explosion set off by the door Terrorist2 opens (`Crushed`), the
   player's shots having missed; 5.1.9's and 5.2.4's restatements from the original scripts (the cameras trigger no Event: an `Alarm` AI event wakes the turret).
 * **The routes' placed approaches** (5.5.3, 5.5.4, and 5.3.4, 5.3.8): the airshaft row passed without its third trigger (a crawlspace a standing player cannot be dropped into) and the water row without the swim (a held key); both were labelled `weak`. The user chose to require them (2026-10-21, above); the crawl to `DataLinkTrigger21` (`air2`), the obstacle course's walk, crouches and jumps (`obs1`) and a dive in the bay (`swm3`) are now O1 captures with held keys ([re-captured](#held-keys-2026-10-20)), and the notes in the rows say what each still leaves out.
-* **Priority**: every row passes. What is left is the user's: adopting the list and its `weak` judgements (above). Items 9, 12 and 14 of the remaining work stay open and block no row.
+* **Priority**: every row passes, and the user adopted the list and its `weak` judgements (above); the gate passed 50 of 50 on master ([Stage 5 close](#stage-5-close)). Items 9, 12 and 14 of the remaining work stay open and block no row.
 
 ## Excluded
 

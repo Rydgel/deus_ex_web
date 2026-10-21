@@ -7,8 +7,10 @@ single-player maps reach only boundaries assigned to later stages in the startup
 census ([completion record and coverage limits](docs/stage-3-exit-criteria.md#stage-3-beyond-training-the-all-maps-startup-census)).
 **Stage 4 presentation is complete** (2026-10-17): its gate passes 70 of 70 in one
 run ([Stage 4 close](docs/stage-4-exit-criteria.md#stage-4-close)). **Stage 5
-gameplay is in progress**: its gate passes all 50 criteria (2026-10-20; adopted by the user 2026-10-21), each on
+gameplay is complete** (2026-10-21): its adopted gate passes 50 of 50 on master
+([Stage 5 close](docs/stage-5-exit-criteria.md#stage-5-close)), each criterion on
 original captures of Liberty Island and Training replayed tick by tick in Play (see below).
+**Stage 6** (saves, travel, the campaign) is in progress.
 
 The target is **100% original fidelity**. Every supported behavior needs original
 data, script, native-code or measured evidence. Unverified substitutes remain
@@ -191,14 +193,15 @@ window views, a pointer focus difference, the Wine brightness gap, the gate's
 concurrency flakes (the official run is `--jobs 1`) and speech's decoded audio,
 excluded by decision ([Stage 4 close](docs/stage-4-exit-criteria.md#stage-4-close)).
 
-## Stage 5 gameplay — in progress
+## Stage 5 gameplay — complete 2026-10-21
 
 The [Stage 5 exit criteria](docs/stage-5-exit-criteria.md) define 50 scenarios on
 the three Training maps and Liberty Island, each with the original-side evidence
 that would prove it. `scripts/census-stage5.mjs` drives them all in Play (50 play
 as of 2026-10-19), and `scripts/validate-stage5-acceptance.mjs` is the gate.
 
-**Gate: 50 of 50 pass, none fail** (2026-10-20). The passing
+**Gate: 50 of 50 pass, none fail** (the official run on master 3230773, 2026-10-21:
+[Stage 5 close](docs/stage-5-exit-criteria.md#stage-5-close)). The passing
 rows are proven by live traces of the original game: `DeusEx.exe` runs under
 CrossOver (the Mac) or Wine (the Linux host) with a tracer (`tools/dx-live-win.c`, `scripts/live-original.sh`) that
 records the watched actors, the random stream, the AI events and every object
@@ -357,8 +360,8 @@ static doors. The footprint overlays every height and is not a game screenshot.
 - **Stage 4:** restore animated actors, visual effects, audio, and original interfaces —
   complete (2026-10-17, gate 70 of 70).
 - **Stage 5:** complete movement, AI, combat, stealth, RPG systems, and conversations —
-  in progress (gate 21 of 50, 2026-10-19).
-- **Stage 6:** persist saves and map state, then validate the full campaign.
+  complete (2026-10-21, gate 50 of 50).
+- **Stage 6:** persist saves and map state, then validate the full campaign — in progress.
 - **Stage 7:** meet browser compatibility, performance, and reliability targets.
 
 The numbered stages and acceptance criteria are in [the roadmap](docs/roadmap.md).
