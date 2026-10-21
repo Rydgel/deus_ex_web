@@ -61,6 +61,22 @@ export function createWeaponOverlayDraw(assets,{gpu=null,displayGamma,feedback=(
       }
       return count;
     },
+    /** One GC.DrawActor mesh draw from the HUD paint (docs/gc-draw-actor.md), in window order between the tile batches: the
+     * submission's record and pass decision applied now (the actor's state is the one XGC::DrawActor set when the simulation
+     * side planned it), then drawn in the master camera over the depth buffer the overlay pass left. Returns whether it drew. */
+    hudActor(renderer,camera,plan,cameraPosition,words=null){
+      const draw=plan?draws.get(plan.id):null;
+      if(!draw?.ready||!plan.record)return 0;
+      if(gpu&&cameraPosition)gpu.setViewCamera(cameraPosition);
+      draw.apply(plan.record,cameraPosition,words);
+      if(plan.decision)draw.applyPass(plan.decision);
+      for(const other of draws.values())other.root.visible=false;
+      draw.root.visible=plan.record.visible!==false;
+      for(const mesh of draw.root.children)if(mesh.material)mesh.material.wireframe=false;
+      renderer.render(scene,camera);
+      draw.root.visible=false;
+      return 1;
+    },
     async ready(){await Promise.all([...draws.values()].map(draw=>draw.built));},
     dispose(){for(const draw of draws.values())draw.dispose();draws.clear();texturePool.dispose();},
   };

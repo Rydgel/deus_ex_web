@@ -1612,12 +1612,45 @@ export async function createWindowHost({runtime, assets, player, gameConfig = nu
     constructUObject: ()=>{},
   };
   const drawCommands=[];
-  const canvas={name:'PlayHUDCanvas'};heap.allocate(canvas,0x80);
+  // GC.DrawActor / GC.ClearZ (script-gc-draw-actor.mjs, docs/gc-draw-actor.md). The XGC body runs on the HUD canvas' render graph
+  // and the Actor's own fields; its three leaves are these services. ClearZ and DrawActor queue ordered 'clearZ' and 'actor'
+  // commands among the tile commands. An actor command carries the planner's draw (sim-session.mjs planHudActor: the mesh
+  // binding's frame record for the actor in the state the body set), null without a planner (headless paints record the call).
+  // bConstrain's FSceneNode::ComputeRenderSize of the HUD frame is not recovered here: unsupported, raised, never guessed.
+  let actorPlanner=null;
+  const readName=(actor,name)=>runtime.readNamed(actor,name);
+  gcServices.actor={
+    read:actor=>({hidden:readName(actor,'bHidden')?1:0,unlit:readName(actor,'bUnlit')?1:0,style:readName(actor,'Style'),
+      drawScale:f32BitsOf(readName(actor,'DrawScale')),scaleGlow:f32BitsOf(readName(actor,'ScaleGlow')),
+      skins:[...readName(actor,'MultiSkins'),readName(actor,'Skin')]}),
+    write:(actor,fields)=>{
+      if('hidden' in fields)runtime.writeNamed(actor,'bHidden',Boolean(fields.hidden));
+      if('unlit' in fields)runtime.writeNamed(actor,'bUnlit',Boolean(fields.unlit));
+      if('style' in fields)runtime.writeNamed(actor,'Style',fields.style);
+      if('drawScale' in fields)runtime.writeNamed(actor,'DrawScale',bitsToF32(fields.drawScale));
+      if('scaleGlow' in fields)runtime.writeNamed(actor,'ScaleGlow',bitsToF32(fields.scaleGlow));
+      if('skins' in fields){runtime.writeNamed(actor,'MultiSkins',fields.skins.slice(0,8));runtime.writeNamed(actor,'Skin',fields.skins[8]);}
+    },
+  };
+  gcServices.render={
+    clearZ:()=>{drawCommands.push({kind:'clearZ'});},
+    drawActor:(_render,frame,actor)=>{
+      const command={kind:'actor',actor:actor.name,draw:null};
+      if(actorPlanner)command.draw=actorPlanner(actor,{x:W.i32(frame,0xb0),y:W.i32(frame,0xb4),width:W.i32(frame,0xa8),height:W.i32(frame,0xac)});
+      drawCommands.push(command);
+    },
+    computeRenderSize:()=>boundary('GC.DrawActor bConstrain resizes the HUD frame (FSceneNode::ComputeRenderSize) and draws in the clip box: not modelled (no shipped script passes bConstrain)'),
+  };
+  const canvas={name:'PlayHUDCanvas'};heap.allocate(canvas,0x88);
   const sceneFrame={name:'HUDSceneFrame'};heap.allocate(sceneFrame,0x300);
   const viewport=heap.allocRaw(0xc0),node=heap.addressOf(sceneFrame),renderInterface=heap.allocRaw(4),renderTable=heap.allocRaw(0x100),canvasTable=heap.allocRaw(0x60);
+  const renderBase=heap.allocRaw(4);
   const put=(at,off,value,kind='u32')=>heap.mem.write(at+off,kind,value);
   W.setU32(canvas,0,canvasTable);put(canvasTable,0x5c,4);
   W.setU32(canvas,0x78,viewport);W.setU32(canvas,0x7c,node);put(node,0,viewport);
+  // UCanvas.Render (+0x80): the URenderBase GC.DrawActor draws through (script-gc-draw-actor.mjs); only its identity
+  // is held here, the draw is the actor planner's (setActorDrawPlanner).
+  W.setU32(canvas,0x80,renderBase);
   put(viewport,0x64,renderInterface);put(renderInterface,0,renderTable);put(renderTable,0x7c,3);
   gcServices.texCache={records:Array.from({length:5},()=>heap.allocRaw(0x84)),static:heap.allocRaw(0x84),head:0,count:0};
   gcServices.callVirtual=(slot,object,command)=>{
@@ -1703,6 +1736,8 @@ export async function createWindowHost({runtime, assets, player, gameConfig = nu
     families: win => families.get(win) ?? null,
     /** The world frame of each ViewportWindow DrawWorld (sim-session.mjs). */
     setViewportPlanner(planner){viewportPlanner=planner;},
+    /** GC.DrawActor's mesh draw (sim-session.mjs planHudActor): called with the actor in the state the XGC body set. */
+    setActorDrawPlanner(planner){actorPlanner=planner;},
     isDestroyed: win => destroyed.has(win),
     processScript, constructRootWindow, configureChild, askParentForReconfigure, setVisibility,
     canvas,node,

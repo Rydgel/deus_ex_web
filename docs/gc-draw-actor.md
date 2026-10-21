@@ -184,18 +184,125 @@ script error raised inside the render call does not restore the actor.
 
 `scripts/native-gc-draw-actor-oracle.py` runs the real exec and method bodies
 (and ClearZ's) under Unicorn at the render pass's control word `0x007f`, with
-the real MSVCRT `_ftol`; the render-device ClearZ, `URenderBase::DrawActor`
-and `ComputeRenderSize` are recording stubs that snapshot the actor and frame
-fields at the call. `scripts/validate-gc-draw-actor.mjs` replays the same
-cases through `src/runtime/script-gc-draw-actor.mjs` and compares every event
-and the final byte image (actor, frame, GC). See the results section below.
+the real MSVCRT `_ftol`. The render-device ClearZ, `URenderBase::DrawActor`
+and `FSceneNode::ComputeRenderSize` are recording stubs that snapshot the
+actor and the frame at the call. It runs 212 cases: the vision call
+(`A, false, false, true, 1, 2, None`) in exec and method mode, every optional
+argument omitted (the exec's defaults), ActorDisplayWindow's call, bClearZ,
+the dword and bit-0 uses of the bool arguments, a skin over empty and full
+`MultiSkins`, bHidden set and clear, the style from the GC, DrawScale
+products and NaN, each gate (drawing off, no canvas, no actor), twenty-odd
+bConstrain boxes (offset frames, clip left of and wider than the frame,
+empty, negative, fractional, NaN and infinite clip values, 2^24 and larger
+frame integers, `_ftol` beyond 2^63, the four multipliers), ClearZ's own
+five, and 160 seeded random cases.
+
+`scripts/validate-gc-draw-actor.mjs` replays every case through
+`src/runtime/script-gc-draw-actor.mjs` and compares the ordered events
+(ClearZ, DrawActor with the actor and frame as they were at the call,
+ComputeRenderSize), the exec's Code advance (8 and 1) and the final byte
+images of the GC, the actor (pointer slots by label) and the scene frame.
+Result: **212/212 identical**, and 18 of 18 mutations of the translation (the
+three gates, each clip comparison's direction and NaN branch, the origin
+multipliers, XB as an absolute value, `_ftol` rounding, the bit-0 mask, the
+style, ScaleGlow and DrawScale sources, the skin, bHidden and frame restores,
+the ClearZ gate, the second ComputeRenderSize) are detected. The same
+validator against an oracle at control word `0x037f` fails on the constrain
+cases, so the cases do see the precision control. Two details the cases pin
+down: the clip's right and bottom edges, and the height, are 24-bit register
+values that never pass through a store, and `_ftol` has no `+0.1` bias here.
 
 ## Play
 
-The window host's HUD canvas gains the render graph the original canvas has
-(Viewport, RenDev, Render); GC.DrawActor and GC.ClearZ append ordered
-`actor` and `clearZ` commands to the HUD command stream, in window order with
-the tile commands (the way a ViewportWindow's `viewport` command does). The
-page draws an `actor` command's mesh in the master camera between the tile
-batches. The details and what is left unsupported are in the
-[Play wiring](#play-wiring) section.
+Evidence for what the page draws: the render call is `URenderBase::DrawActor`,
+the same virtual `UCanvas::execDrawActor` calls for `Canvas.DrawActor` (the
+first-person weapon, [script-weapon-rendering.md](script-weapon-rendering.md)),
+so the actor's mesh is drawn by Render.dll's `URender::DrawActor` ->
+`FDynamicSprite::Setup` -> `DrawActorSprite` in the canvas's frame, which for
+the HUD paint is the master frame (`PostRenderWindows` runs after `DrawWorld`
+in `UGameEngine::Draw`). That path is already translated for the view model,
+and GC.DrawActor reuses it.
+
+1. **The XGC body runs on the HUD canvas.** `script-window-host.mjs` gives the
+   HUD canvas the render graph the body reads (`UCanvas.Viewport` +0x78,
+   `.Frame` +0x7c, `.Render` +0x80, `UViewport.RenDev` +0x64) and the two
+   services it needs: `actor` (the Actor's bHidden, bUnlit, Style, DrawScale,
+   ScaleGlow and skins through the runtime's named fields) and `render`
+   (ClearZ, DrawActor, ComputeRenderSize). Natives 1288 and 1295 are routed
+   by `script-window-gc-dispatch.mjs` (registry entry `window-gc`).
+2. **Window order.** ClearZ queues `{kind:'clearZ'}` and DrawActor queues
+   `{kind:'actor', actor, draw}` in the HUD command stream between the tile
+   commands, so the vision pass's red tint tiles come before the actors and
+   the LightAmp box's translucent green after them, as the script orders them.
+3. **The mesh draw** (`sim-session.mjs planHudActor`, called by the render
+   service while the actor holds the state the body set). It uses a binding
+   per actor in `weapon-overlay-sim.mjs` (`drawHudActor`): the same code the
+   view model's `Canvas.DrawActor` runs (`createMeshBinding`, `binding.update`
+   lit as its own light sink in the master frame, DrawLodMesh's distance LOD
+   from the master frame's inputs), on the CPU path, which is the reference
+   path, because the view model's GPU instance has 64 slots and 8,192
+   vertices and a map's pawns outnumber them. The face groups and skins of a
+   binding are resolved when it is made, so a different skin set (the script's
+   `SetSkins`) makes a new binding. `FDynamicSprite::Setup`'s acceptance
+   (the occlusion kernel's `setupOnly`, as for the weapon) decides the draw and
+   the render feedback: an accepted actor gets `LastRenderTime` = the level's
+   `TimeSeconds` at the call, which ActorDisplayWindow saves and restores
+   around its own call.
+4. **The page** (`hud.mjs`, `weapon-overlay-draw.mjs hudActor`, `main.mjs`):
+   a `viewport`, `actor` or `clearZ` command splits the tile stream; an
+   actor command applies the plan's record and draws that mesh with the world's
+   camera and frame projection, in the render rectangle, over the depth buffer
+   as the overlay pass left it; `clearZ` clears depth. The tile batches before
+   an actor draw no longer clear depth when the frame has actor or clearZ
+   commands.
+
+`scripts/validate-gc-draw-actor-host.mjs` (headless, 18 s) checks the script
+to native to services chain on the live Training level with the vision
+augmentation: the planner sees each actor in the state the body set (bHidden
+clear, bUnlit, Style 3 from the GC, ScaleGlow 2, DrawScale times 1, the grid
+skins), every actor's fields are restored after the paint (442 actors), the
+four draws are consecutive and between the tile groups, and `ShowMesh`'s
+ClearZ is queued. `scripts/validate-gc-draw-actor-play.mjs` (headless
+Chromium, worker mode) checks the page: the heat sources are drawn on every
+frame without a runtime error, the frame differs from the same frame with the
+draws switched off, and ClearZ commands reach the page.
+
+### Unsupported or unverified
+
+- **No comparison against an original frame.** The translation, the order of
+  the calls and the state the actor is in are verified against the binary; the
+  pixels of the vision pass have not been captured from the original and
+  compared. Mesh lighting of an actor drawn by `Canvas.DrawActor` is the
+  already documented path ([mesh-lighting.md](mesh-lighting.md)); the bUnlit and
+  ScaleGlow 2 handling is the same Render.dll code the world draw uses.
+- **bConstrain.** The body's arithmetic is translated and oracle-checked, but
+  Play raises an explicit boundary error when it reaches the frame resize: the
+  HUD scene frame is not the full `FSceneNode` (only the fields the
+  projection reads are modelled, [script-window-scene-frame.md](script-window-scene-frame.md)),
+  a constrained frame would need `ComputeRenderSize` of the whole node and a
+  sub-rectangle camera, and no shipped script passes bConstrain.
+- **A skin argument other than None** is translated and oracle-checked; no
+  shipped script passes one, and Play has not drawn one.
+- **DrawType other than DT_Mesh.** `URender::DrawActor` also draws sprites,
+  brushes and the rest; `drawHudActor` raises an explicit error for them (the
+  developer tool ActorDisplayWindow with ShowMesh over lights, movers or
+  decorations without meshes would reach it).
+- **Depth.** The page's tile materials neither test nor write depth, and the
+  actor draw tests against the buffer the overlay pass left (cleared by
+  `DrawWorld`'s ClearZ before RenderOverlays, then the view model). Whether
+  D3DDrv's `DrawTile` writes depth was not recovered, so a tile drawn before an
+  actor could in principle change what the actor is tested against.
+- **GPU path.** HUD actor draws use the CPU mesh path (above); moving them to
+  a GPU instance with enough slots is a performance step, not a behavior
+  change.
+- **ActorDisplayWindow.ShowMesh over actors** stops earlier than GC.DrawActor:
+  its `GetGridTexture` reads `tex.USize` and `tex.VSize`, and a Texture object
+  is not attached to the script runtime ("Object is not attached to script
+  runtime"). The vision augmentation's `GetGridTexture` does not read texture
+  fields. That is a script runtime limit of its own, outside these natives.
+- **Same-frame shared state.** The world's binding and the HUD binding of one
+  actor are separate objects. The mesh light selection is keyed by the actor's
+  handle (`mesh-lighting-view.mjs`), so the two share it and the world pass
+  comes first, as in the original's frame; whether the original shares more
+  per-actor render state between the world draw and the HUD draw was not
+  checked.

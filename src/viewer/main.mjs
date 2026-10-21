@@ -2163,7 +2163,21 @@ function drawFrame(snap, time) {
   if (snap?.hud && hudRenderer) {
     viewportPassesDrawn = [];
     hudRenderer.render(renderer, renderer.domElement.width, renderer.domElement.height, snap.hud.commands,
-      { viewport: command => { try { viewportWorldPass(command); } catch (error) { pauseForRuntimeError(error); } } });
+      { viewport: command => { try { viewportWorldPass(command); } catch (error) { pauseForRuntimeError(error); } },
+        // GC.DrawActor (docs/gc-draw-actor.md): the actor's mesh in the master frame, between the tile batches, in the world's
+        // viewport rectangle; GC.ClearZ clears the depth buffer there.
+        actor: command => {
+          if (!weaponDraw || !command.draw) return;
+          if (clipped) { const box = renderViewportFor(renderRect); renderer.setViewport(...box); renderer.setScissor(...box); renderer.setScissorTest(true); }
+          useFrameProjection(playing && !runtimeError ? frame?.projection : null);
+          try { weaponDraw.hudActor(renderer, camera, command.draw, fromView(camera.position.toArray()), words); }
+          catch (error) { pauseForRuntimeError(error); }
+          finally {
+            vertexProjection.off();
+            if (clipped) { const pr = renderer.getPixelRatio(), full = [0, 0, renderer.domElement.width / pr, renderer.domElement.height / pr]; renderer.setViewport(...full); renderer.setScissor(...full); renderer.setScissorTest(false); }
+          }
+        },
+        clearZ: () => renderer.clearDepth() });
     updateInfoLinkAccessibility(snap.hud.infoLink);
   }
   // UD3DRenderDevice::EndFlash follows the PostRenderFlash event that paints the HUD windows (docs/screen-flash.md).
