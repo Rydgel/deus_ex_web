@@ -10,6 +10,7 @@
  *   button {index}           the top menu's winButtons[index] activated, as a click on it does (MenuMain: 4 is Training)
  *   center {field, index?, row?} | {actionKey}   where a click on a control of the top window lands (drawing-buffer pixels), returned as `result`
  *   escape                   the Escape key on the root window
+ *   field {name}             a field of the top window, or a dotted path through window fields (a window as its class)
  *   state                    nothing
  * The caller waits for frames between steps: the windows need their ticks. */
 import { createMenuDriver } from './menu-driver.mjs';
@@ -28,6 +29,11 @@ export function settingsProbe(game, step = {op: 'state'}) {
     case 'action': driver.pressAction(step.action); break;
     case 'cycleAll': result = driver.cycleAll(); break;
     case 'escape': game.windowKey('Escape', true); game.windowKey('Escape', false); break;
+    case 'field': {
+      const value = step.name.split('.').reduce((object, name) => object && runtime.readNamed(object, name), driver.topWindow());
+      result = value && typeof value === 'object' ? (runtime.instance(value)?.cls?.record?.key ?? 'object') : value;
+      break;
+    }
     case 'state': break;
     default: throw new Error(`Unknown settings probe step ${step.op}`);
   }

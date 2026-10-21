@@ -94,6 +94,11 @@ key-down bytes and both counts exactly.
   (`+0x140`/`+0x144`), skipping type ≥ 2 and passing child-local f32
   coordinates. `IsPointInWindow` (`0x1004f830`) needs 0 ≤ x < width and
   0 ≤ y < height, then asks `QueryPointInWindow` (`+0x60`, XWindow returns 1).
+* `FindWindow` (`0x1004f650`, script `Window.FindWindow`, native 1472, `execFindWindow` `0x10053700`): from the root, the topmost
+  visible child of type 2 or more (`GetTopChild(1)`, then `GetLowerSibling(1)` while the type byte `+0x28` is below 2), else the root;
+  the point is converted from the calling window into it (`ConvertCoordinates`) and that window's `FindWindowByPoint` answers. The
+  out coordinates are written only on a hit; no root, no window. `MenuUIWindow` and `ComputerUIWindow.MouseButtonPressed` use it
+  to start dragging a window by its title bar (`validate-window-mouse-focus-diff`, case "FindWindow").
 * `SetFocusWindow` (`0x1004f0e0`) is the existing `script-window-focus.mjs`
   translation. Its leaves are now bound to IsTraversable, window PlaySound
   (`0x1004ffb0`), the focus virtuals and `AskParentToShowArea` (`0x1004e230`).

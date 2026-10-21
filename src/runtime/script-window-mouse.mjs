@@ -124,6 +124,17 @@ function topModal(W, root) {
   return modal ?? root;
 }
 
+/** XWindow::FindWindow 0x1004f650(x, y) -> {win, x, y} or null (Window.FindWindow, native 1472): from the root's topmost
+ * visible child of type 2 or more (GetTopChild(1), GetLowerSibling(1) while the byte at +0x28 is below 2), else the root, the
+ * point converted from this window into it (ConvertCoordinates 0x1004fbe0), then its FindWindowByPoint; no root, no window. */
+export function findWindow(W, win, x, y) {
+  const root = getRootWindow(W, win);
+  if (!root) return null;
+  const top = topModal(W, root);
+  const point = convertCoordinates(W, win, x, y, top);
+  return findWindowByPoint(W, top, point.x, point.y);
+}
+
 /** XRootWindow::GetMouseWindow 0x1003b0d0(modal) -> {win, x, y}. */
 export function getMouseWindow(W, root, modal = null) {
   modal ??= topModal(W, root);

@@ -3,7 +3,7 @@
 Runs the unchanged XWindow::SetCursorPos (0x1004cca0), XRootWindow::
 SetRootCursorPos (0x10039d80, with the original ClampMousePosition),
 ProcessMouseMove (0x1003af50), GetMouseWindow (0x1003b0d0), XWindow::
-FindWindowByPoint (0x1004f740), IsPointInWindow (0x1004f830), SetFocusWindow
+FindWindowByPoint (0x1004f740), FindWindow (0x1004f650), IsPointInWindow (0x1004f830), SetFocusWindow
 (0x1004f0e0), AskParentToShowArea (0x1004e230), XClipRect::Intersect
 (0x10002b10), ConvertCoordinates (0x1004fbe0), and the ToggleWindow mouse and
 PressButton overrides (0x10049a80/0x10049b30/0x10049c30) over window images whose
@@ -38,7 +38,7 @@ rebase = _TIMER.rebase
 
 BODY = {name: rebase(address) for name, address in {
     'setCursorPos': 0x1004cca0, 'setRootCursorPos': 0x10039d80, 'processMouseMove': 0x1003af50,
-    'getMouseWindow': 0x1003b0d0, 'findWindowByPoint': 0x1004f740, 'isPointInWindow': 0x1004f830,
+    'getMouseWindow': 0x1003b0d0, 'findWindowByPoint': 0x1004f740, 'findWindow': 0x1004f650, 'isPointInWindow': 0x1004f830,
     'setFocusWindow': 0x1004f0e0, 'askParentToShowArea': 0x1004e230, 'intersect': 0x10002b10,
     'convertCoordinates': 0x1004fbe0, 'moveFocus': 0x1004ef30, 'checkFocusWindow': 0x10050b80,
     'handleButtons': 0x1003b960, 'toggleMousePressed': 0x10049a80,
@@ -241,6 +241,9 @@ class FocusOracle(_TIMER.TimerOracle):
         if op == 'convertCoordinates':
             self.call(BODY[op], 0, struct.pack('<IffIII', W[step['from']], F(step['x']), F(step['y']), W[step['to']], out, out + 4))
             return list(self.read(out, '2I'))
+        if op == 'findWindow':
+            result = self.call(BODY[op], W[step['win']], struct.pack('<ffII', F(step['x']), F(step['y']), out, out + 4))
+            return [self.ref(result), *self.read(out, '2I')]
         if op == 'findWindowByPoint':
             result = self.call(BODY[op], W[step['win']], struct.pack('<ffII', F(step['x']), F(step['y']), out, out + 4))
             return [self.ref(result), *self.read(out, '2I')]

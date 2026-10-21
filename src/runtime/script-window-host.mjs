@@ -53,7 +53,7 @@ import {updatePolyFlagsFromFlags, gcMemory, GC} from './script-gc-state-model.mj
 import {decodeFontExport, writeFontImage, UFONT, FONT_PAGE} from './script-font-model.mjs';
 import {readObject} from '../unreal/objects.mjs';
 import {readTexture} from '../unreal/textures.mjs';
-import {refValue} from './script-vm.mjs';
+import {refValue, assign} from './script-vm.mjs';
 import {dispatchWindowHostNative} from './script-window-host-natives.mjs';
 import {dispatchGcNative} from './script-window-gc-dispatch.mjs';
 import {gcPushGC} from './script-gc-push-gc.mjs';
@@ -1512,6 +1512,16 @@ export async function createWindowHost({runtime, assets, player, gameConfig = nu
     isScriptable: () => true,
     handleNative: call => {
       const sound=dispatchWindowSoundNative(W,call);if(sound.handled)return sound;
+      if(call.index===1472){
+        // XWindow::execFindWindow 0x10053700: P_GET_FLOAT pointX, pointY, P_GET_FLOAT_REF relativeX, relativeY (a local when the
+        // argument is no variable), then FindWindow 0x1004f650, which writes them only on a hit; the window is the result.
+        if(call.argumentCount!==4)throw new Error('Window.FindWindow requires pointX, pointY, relativeX and relativeY');
+        const x=Math.fround(refValue(call.evaluateArgument(0))),y=Math.fround(refValue(call.evaluateArgument(1)));
+        const relativeX=call.evaluateArgument(2),relativeY=call.evaluateArgument(3);
+        const hit=Mouse.findWindow(W,call.receiver,x,y);
+        if(hit){if(relativeX?.reference)assign(relativeX,hit.x);if(relativeY?.reference)assign(relativeY,hit.y);}
+        return {handled:true,value:hit?.win??null};
+      }
       const reference=actorRefs(call);if(reference.handled)return reference;
       const command=inputConsole.playerConsoleCommand(call,consoleCommands);if(command.handled)return command;
       // ViewportWindow 1940-1943 (the bodies that reach actor references and

@@ -2,7 +2,7 @@
  *
  * scripts/native-window-mouse-focus-oracle.py runs the unchanged SetCursorPos,
  * SetRootCursorPos (with ClampMousePosition), ProcessMouseMove, GetMouseWindow,
- * FindWindowByPoint, IsPointInWindow, SetFocusWindow, AskParentToShowArea,
+ * FindWindowByPoint, FindWindow (Window.FindWindow, native 1472), IsPointInWindow, SetFocusWindow, AskParentToShowArea,
  * XClipRect::Intersect, ConvertCoordinates and the ToggleWindow button
  * overrides over window images with their
  * real vtables. The same cases run through src/runtime/script-window-mouse.mjs
@@ -86,6 +86,14 @@ const cases = [
       {op: 'isPointInWindow', win: 'b1', x: 40, y: 0}, {op: 'isPointInWindow', win: 'b1', x: 39.999, y: 29.999},
       {op: 'isPointInWindow', win: 'b1', x: -1e-30, y: 5}, {op: 'isPointInWindow', win: 'b1', x: NaN, y: 5},
       {op: 'set', win: 'b1', offset: 0x30, value: 1}, {op: 'findWindowByPoint', win: 'keypad', x: 15, y: 15}]},
+  {name: 'FindWindow: the topmost modal (type 2 or more) from any window, a miss, no modal, a hidden modal',
+    windows: tree(), steps: [
+      {op: 'findWindow', win: 'b1', x: 5, y: 5}, {op: 'findWindow', win: 'hud', x: 215, y: 115},
+      {op: 'findWindow', win: 'root', x: 399.5, y: 339.5}, {op: 'findWindow', win: 'label', x: 0.25, y: 0.75},
+      {op: 'findWindow', win: 'keypad', x: -1, y: 5}, {op: 'findWindow', win: 'b2', x: 0.1, y: 29.9},
+      {op: 'set', win: 'keypad', offset: 0x30, value: 6}, {op: 'findWindow', win: 'b1', x: 5, y: 5},
+      {op: 'set', win: 'keypad', offset: 0x30, value: 7}, {op: 'set', win: 'keypad', offset: 0x28, value: 0},
+      {op: 'findWindow', win: 'b1', x: 5, y: 5}, {op: 'findWindow', win: 'hud', x: 600, y: 400}]},
   {name: 'MoveFocus walks the row and column tables with and without wrap',
     windows: tabbed(), steps: [focus('b1'), {op: 'moveFocus', win: 'b1', direction: 1}, {op: 'moveFocus', win: 'root', direction: 1},
       {op: 'moveFocus', win: 'root', direction: 1, wrap: 1}, {op: 'moveFocus', win: 'root', direction: 0},
@@ -277,6 +285,7 @@ function translate(c) {
     switch (step.op) {
       case 'intersect': { const a = Mouse.clipRectIntersect(toRect(rect(step.a)), toRect(rect(step.b))); result = [a.ox, a.oy, a.cx, a.cy, a.cw, a.ch].map(bits); break; }
       case 'convertCoordinates': { const r = Mouse.convertCoordinates(W, at(step.from), f(step.x), f(step.y), at(step.to)); result = [bits(r.x), bits(r.y)]; break; }
+      case 'findWindow': { const r = Mouse.findWindow(W, at(step.win), f(step.x), f(step.y)); result = r ? [ref(r.win), bits(r.x), bits(r.y)] : [null, 0, 0]; break; }
       case 'findWindowByPoint': { const r = Mouse.findWindowByPoint(W, at(step.win), f(step.x), f(step.y)); result = r ? [ref(r.win), bits(r.x), bits(r.y)] : [null, 0, 0]; break; }
       case 'getMouseWindow': { const r = Mouse.getMouseWindow(W, at(step.root), at(step.modal) ?? null); result = [ref(r.win), bits(r.x), bits(r.y)]; break; }
       case 'isPointInWindow': result = Mouse.isPointInWindow(W, at(step.win), f(step.x), f(step.y)); break;
