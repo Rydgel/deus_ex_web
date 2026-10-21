@@ -218,6 +218,16 @@ reset, Liberty Island movement and mode switching, loading the production build
 from local files with the Wasm asset, and moving in Play after the Wasm request
 is blocked. Rust formatting and Clippy with warnings denied also pass.
 
+## Classic UMesh (2026-10-21)
+
+The game's five classic `UMesh` meshes (the boot logos and the Fly; [classic UMesh](umesh.md)) use this kernel too: their
+`GetFrame` is the `pose` loops above (`umesh-frame.mjs` passes `services.kernel`; `validate-umesh-frame` runs the
+79 oracle calls through it as well as through the JavaScript translation), and Render.dll's classic `DrawMesh` with `Light` and the colour and environment-UV packing is
+`umesh_draw` in `native/lodmesh-kernel/src/umesh.rs` (`upload_umesh` uploads a mesh's triangles and `VertLinks` once;
+`umesh_layout` gives the scratch regions; `src/runtime/umesh-wasm.mjs` is the facade, `kernel.umesh`). Its reference is
+`drawUMesh` with `packUMeshDraw` in `umesh-draw.mjs` (`validate-umesh-wasm` compares every word; `UMESH=js|verify` in a Node
+run, `?meshBackend=javascript` in the page).
+
 ## Build and reproduce
 
 Install a Rust toolchain and `rustup target add wasm32-unknown-unknown` once.

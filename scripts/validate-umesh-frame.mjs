@@ -5,16 +5,21 @@
  * mesh built from the Fly's payload (umesh-fixture.mjs) that reaches what the real ones, which have a
  * single frame, cannot: sequence wrap and interpolation, tweens, a mesh change and four additive
  * blends. Every output byte (including strided padding), every cache byte, lock and
- * Create/Flush request must match. ORACLE_CW=0x007f is the render pass's precision control. */
+ * Create/Flush request must match. ORACLE_CW=0x007f is the render pass's precision control.
+ *
+ * Each call runs twice, through the JavaScript translation and through the Rust pose kernel (services.kernel,
+ * native/lodmesh-kernel); `--js` and `--wasm` pick one. */
 import {execFileSync} from 'node:child_process';
 import {auditAssert,auditControlWord} from './precision-audit.mjs';
 const assert=auditAssert(),controlWord=auditControlWord();
 import {decodeLodMeshPayload} from '../src/runtime/lodmesh-payload.mjs';
 import {createUMeshFrameCache,getUMeshFrame} from '../src/runtime/umesh-frame.mjs';
+import {loadLodMeshKernel} from '../src/runtime/lodmesh-wasm.mjs';
 import {gameDirectory} from './game-directory.mjs';
 import {classicMeshCase,syntheticMeshCase,nameTable} from './umesh-fixture.mjs';
 
-const root=gameDirectory(),rows=[];
+const root=gameDirectory(),rows=[],rust=await loadLodMeshKernel();
+const kernels=process.argv.includes('--wasm')?[rust]:process.argv.includes('--js')?[null]:[null,rust];
 const stepper=()=>{
   const steps=[],add=(name,actors={},extra={})=>steps.push({name,actors,...extra});
   const pose=(sequence,frame,fields={})=>({actor:{AnimSequence:sequence,AnimFrame:frame,...fields}});
@@ -110,7 +115,7 @@ const bytesEqual=(actual,expected,label)=>{
   }
 };
 let calls=0;
-for(const [rowIndex,row] of rows.entries()) {
+for(const kernel of kernels)for(const [rowIndex,row] of rows.entries()) {
   const mesh=decodeLodMeshPayload(row.pkg,row.bytes,row.index),referenceRow=reference.cases[rowIndex];
   const actors=Object.fromEntries(['actor','owner'].map((id,i)=>[id,{id,index:1001+i,AnimSequence:'None',AnimFrame:0,DrawScale:1,
     Location:[0,0,0],PrePivot:[0,0,0],Rotation:[0,0,0],bAnimByOwner:false,bParticles:false,Owner:null,
@@ -119,7 +124,7 @@ for(const [rowIndex,row] of rows.entries()) {
   cache.create=(key,count)=>{events.push({op:'create',key,size:12*count+12});return create(key,count);};
   cache.flush=key=>{events.push({op:'flush',key});return flush(key);};
   for(const [stepIndex,step] of row.sample.steps.entries()) {
-    const original=referenceRow.steps[stepIndex],label=`${row.spec.name} ${step.name}`;
+    const original=referenceRow.steps[stepIndex],label=`${row.spec.name} ${step.name}${kernel?' (Rust)':''}`;
     for(const [id,fields] of Object.entries(step.actors))for(const [name,value] of Object.entries(fields))
       actors[id][name]=name==='Owner'?actors[value]??null:Array.isArray(value)?value.map(v=>typeof v==='number'?Math.fround(v):v):typeof value==='number'?Math.fround(value):value;
     if(step.invalidate)for(const entry of cache.entries.values())entry.mesh=null;
@@ -129,7 +134,7 @@ for(const [rowIndex,row] of rows.entries()) {
     const stride=step.stride??20,output=new Uint8Array(mesh.frameVertexCount*stride).fill(0x55);
     events.length=0;
     const result=getUMeshFrame(mesh,actors.actor,step.coords??[0,0,0,1,0,0,0,1,0,0,0,1],
-      {cache,read:(a,n)=>a[n],objectIndex:a=>a.index},{stride,output});
+      {cache,kernel,read:(a,n)=>a[n],objectIndex:a=>a.index},{stride,output});
     calls++;
     bytesEqual(result.output,original.output,label);
     // The original's cache items are keyed by 64-bit ids; here they are strings. The calls and sizes must match in order.
@@ -150,4 +155,4 @@ for(const [rowIndex,row] of rows.entries()) {
   }
 }
 if(assert.enabled)assert.report('validate-umesh-frame');
-else console.log(`PASS ${calls} complete original UMesh::GetFrame calls: the classic meshes (EidosLogo, DXText, Fly) and an eight-frame synthetic one: output/padding, all cache bytes, sequence wrap/interpolation, tweens, owner/particles, camera-space Frame->Coords (large offsets, mirror-reflected) and four additive blends.`);
+else console.log(`PASS ${calls} complete original UMesh::GetFrame calls (each through the JavaScript translation and the Rust kernel): the classic meshes (EidosLogo, DXText, Fly) and an eight-frame synthetic one: output/padding, all cache bytes, sequence wrap/interpolation, tweens, owner/particles, camera-space Frame->Coords (large offsets, mirror-reflected) and four additive blends.`);

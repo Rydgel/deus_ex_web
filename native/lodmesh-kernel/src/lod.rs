@@ -50,7 +50,7 @@ fn r24_split(s: f64, e: f64) -> f64 {
 }
 
 /// The exact sum of two doubles rounded once to 24 bits (TwoSum).
-fn r24_sum(a: f64, b: f64) -> f64 {
+pub(crate) fn r24_sum(a: f64, b: f64) -> f64 {
     let s = a + b;
     let t = s - a;
     let e = (a - (s - t)) + (b - t);

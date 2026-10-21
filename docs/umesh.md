@@ -124,18 +124,19 @@ translation's contract and not drawn, as for LodMesh actors' CPU path).
 `UMesh::GetFrame` for the actor's pose (one cache per binding, the key a stable identity as for props),
 publishes the cached pose through identity `Coords` (world space, the page's geometry and bounds) and
 through the lighting frame's own `Coords` (the camera-space buffer `DrawMesh` receives), runs
-`SetupForActor` and the translated `DrawMesh` with `lightVertex` as its `Light`, and sends the page
+`SetupForActor` and the translated `DrawMesh` with `Light` (the Rust kernel's `umesh_draw`; the JavaScript
+`drawUMesh` with `lightVertex` is the reference), and sends the page
 `posed`, `cameraPoints`, per-corner `colors` (D3D's diffuse bytes, white for a modulated face) and, for
 environment faces, `envUv`: the original's reflection UVs, which `actor-mesh-draw.mjs` applies in place
 of the camera-relative environment mapping it computes for a LodMesh. Materials, skins, sampling, the
 vertex projection and render feedback are the LodMesh CPU path's. The mesh lighting frame carries the
 master frame's `PrjXM..PrjYP` for the outcodes.
 
-* **Path.** CPU only. The GPU mesh path (`gpu-mesh.md`) is built around ULodMesh's wedges and
-  LOD morph; the five logos together light about 6,000 triangles a frame, only during the boot flight, at
-  a median of 9 ms of simulation-side time (Node, this host with other work running; 27 ms before the
-  DrawMesh port ran on flat arrays), and a Fly has seven vertices, so a GPU path was not made. It is open,
-  not refused.
+* **Path.** CPU, the Rust kernel's ([below](#the-rust-kernel-2026-10-21)); the JavaScript translation is the
+  reference and the fallback (`?meshBackend=javascript`, or `UMESH=js` in Node). No GPU path: it is possible and
+  was not made, with the evidence in ["GPU path"](#gpu-path-decided-2026-10-21) below. The classic path
+  cost about 1.3 ms of the sim worker's frame on the boot flight when a logo is in view, and about 0.45 ms
+  after the port ([the numbers](#where-the-time-went-and-what-the-port-saved-2026-10-21)).
 * **Frames.** The main frame lights with its own `Coords`, `Mirror` and outcode planes. A mirror
   child frame draws a classic mesh with the main frame's colours and camera points (the LodMesh path
   lights it again with that frame's); a classic mesh in a mirror is not verified.
@@ -146,7 +147,166 @@ master frame's `PrjXM..PrjYP` for the outcodes.
 `validate-umesh-play` runs DX.dx and the Island headlessly through the actor mesh layer: the five
 classic actors of DX.dx are bound, lit and shown through the flight with finite records, and a Fly a
 FlyGenerator spawned on the Island (seed 2; the generator spawns where the player cannot see, within its
-`ActiveArea` of 700) is bound, lit and drawn.
+`ActiveArea` of 700) is bound, lit and drawn. `UMESH=verify` makes every relight run the kernel and the reference and
+fail on any differing word.
+
+## Where the time went, and what the port saved (2026-10-21)
+
+The page opens on DX.dx, so this path runs on every load, and the merge reported a median of 9 ms of simulation-side
+time for the five logos. That figure is the Node headless one, which lights **all five actors every update** (no
+frustum): the page lights only what the frustum shows. Both were measured before any change (the browser rows below are
+single seconds of one run each, taken while the host was quieter than during the A/B).
+
+**Before** (JavaScript only, merge fbf4930). Node, the actor mesh layer over DX.dx's flight with `lit: true`, 100 updates
+of 15 ticks, per update, median of `scene.sim.update` with per-section timers (this host with other agents' work running,
+so the whole is 6.3 to 7.7 ms by run; 4.2 to 4.6 ms in the interleaved A/B below, when the host was quieter):
+
+| Section | ms | Share |
+| --- | ---: | ---: |
+| `SetupForActor` (`setupMesh`) | 0.42 | 5 % |
+| camera-space publication (`publishUMeshOps`) | 0.85 | 11 % |
+| `drawUMesh`: outcodes, face normals, cull | 0.10 + 0.20 + 0.21 | 7 % |
+| `drawUMesh`: per-vertex normal and `Light` | 1.05 | 14 % |
+| `drawUMesh`: the polygon loop (texture info, environment UV, records) | 3.14 | 41 % |
+| packing the colours and environment UVs for the record (`d3dDiffuse`, UV divisions) | 1.65 | 22 % |
+
+`GetFrame` is not in the table: the logos have one frame and, in that run, do not move (the pose is recomputed only when it
+changes); the CPU profile attributes the 774 ms of 100 updates (profiling overhead included) 86 % to `relight`, 57 % to
+`drawUMesh` (of which 8 % to `textureInfo`, a script-runtime read for **every triangle**, 8 % to `environmentUV`, 5 % to
+`Light`), 6 % to the publication, 6 % to `SetupForActor`. In the page (headless Chromium, `--use-angle=gl`, 1280x720,
+worker mode, the worker's own `framePhases`), per drawn frame, with a logo in view:
+
+| Frame | setup | camera | DrawMesh | packing | pose | classic total | worker `actors` phase |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| the Eidos logo in view (flight, x about 2600) | 0.08 | 0.15 | 0.83 | 0.31 | 0 | 1.36 | 1.4 to 1.7 |
+| the Ion Storm logo in view (x about 1300) | 0.04 | 0.14 | 0.93 | 0.20 | 0 | 1.3 | 1.5 to 1.6 |
+| the end pose (DXLogo, two DXText) and the menu | 0.06 | 0.08 | 0.38 | 0.10 | 0.12 | 0.75 | 1.4 to 1.7 |
+
+So the realistic cost in the page was 0.75 to 1.4 ms of a frame whose worker side is 3.5 to 4.5 ms, not 9: the frustum keeps all
+but one logo out of every frame, and the Ion Storm logo's 3,256 triangles (1,330 of them kept) are the largest. The
+time is the per-face work, not `GetFrame` and not the transfer: a lit actor's record (colours, camera points, world
+pose, environment UVs; 67 to 153 KB) costs 0.02 to 0.04 ms in `structuredClone` (Node), and the page's total frame
+work stays 1.6 to 1.9 ms with or without the logos.
+
+**After** (the Rust kernel below, same host and page, interleaved A/B, 7 pairs of 42-second runs against merge fbf4930
+served from a second tree (3 pairs, then 4 after the last edits; the two batches agree within 0.1 ms), medians of the
+per-second samples, ms per drawn frame; the host had other agents' work running):
+
+| Segment (samples per arm) | `actors` phase before / after | worker total before / after |
+| --- | ---: | ---: |
+| flight, Eidos logo in view (49) | 1.52 / 0.72 | 4.37 / 3.29 |
+| flight, Ion Storm logo in view (28) | 1.79 / 0.70 | 4.23 / 3.06 |
+| end pose and menu (133) | 1.93 / 1.30 | 4.94 / 4.10 |
+
+The page's own frame work (main thread) is 1.6 to 2.0 ms in both arms.
+
+The classic bindings' own time after the port (the stats probe below, per drawn frame): 0.46 to 0.55 ms with the Eidos
+or Ion Storm logo lit, 0.43 ms at the end pose (setup 0.07, camera publication 0.075, DrawMesh 0.155 for three relights,
+pose 0.08, the rest the five bindings' per-frame reads). The rest of the end pose's `actors` phase is not this path. Node,
+all five lit per update: 4.2 to 4.6 ms before, 1.0 to 1.1 ms after (`UMESH=js` in the same tree, which has the texture
+table of the change: 3.1 to 4.3 ms). The reference against the kernel per DrawMesh call, with the marshalling, at 900 to
+3,000 units from the camera and six lights (a scratch bench, medians of 300): EidosLogo 0.89 / 0.15 ms, IonStormLogo
+0.61 / 0.16, DXLogo 0.38 / 0.07, Fly 0.010 / 0.002.
+
+(`lod-probe.mjs` `list: 'umeshStats'`, with `mode` `'on'`, `'take'` and `'off'`, reads the section timers the classic
+binding keeps while on, through `deusExViewer.lodProbe`; off, the cost is one boolean test per section.)
+
+## The Rust kernel (2026-10-21)
+
+Following [the LodMesh kernel](lodmesh-wasm.md): the bulk loops are Rust over a typed scratch, JavaScript keeps the
+control flow, and the JavaScript translation stays as the reference and the fallback.
+
+| What | Where | Status |
+| --- | --- | --- |
+| `GetFrame`'s vertex loops (tween fill, interpolation, publication through a matrix) | the LodMesh kernel's `pose`, reached from `umesh-frame.mjs` (`services.kernel`, `publishUMeshOps`' `kernel`) | the unchanged original in the oracle: `validate-umesh-frame` (each of its 79 calls also through the kernel), equal |
+| `DrawMesh`'s classic body to the face helper's per-corner results, `FLightManager::Light` and the packing of the colours and environment UVs | `native/lodmesh-kernel/src/umesh.rs` (`upload_umesh`, `umesh_draw`, `umesh_layout`), `src/runtime/umesh-wasm.mjs` | the JavaScript reference word for word: `validate-umesh-wasm`, which sits on the oracle through `drawUMesh` |
+| `SetupForActor`, the texture and environment-map lookups, the coordinate matrix, the cache control flow (sequence, tween, leases), the record | JavaScript (`actor-umesh-sim.mjs`, `umesh-frame.mjs`) | unchanged; SetupForActor's light choice is already Rust (`meshlight.rs`) |
+
+The kernel does, in the original's order and in binary32 (`f32`; the render pass runs at precision control 24): every
+vertex's outcode, every triangle's face normal (the epsilon is the **double** `0.001`: `r24_sum`, the exact sum rounded
+once, as `lod.rs` has it), the kept triangles in mesh order, each vertex of a kept triangle once (the normal summed over
+its `VertLinks` run, the normal plane, Fatness, `light_vertex`, the LodMesh kernel's), and each kept triangle: the
+texture info (mesh texture, or the environment map for PF_Environment and a missing texture; no environment map at all
+is `STATUS_NO_ENVIRONMENT`, which the binding raises as the reference's error), the PF_Unlit overwrite of its corners'
+records (in draw order: a later face sees an earlier face's overwrite), the helper's outcode skip, the environment
+corner's reflection (memoized per vertex: it depends on the vertex alone), D3D's diffuse bytes (memoized per vertex, as
+the LodMesh kernel's). It leaves out what no output depends on: the plain U and V of the shared vertex records (the page
+takes plain UVs from the triangles' bytes), the mirrored frame's swap of Pts[0] and Pts[2] and the two-sided face's
+reordering (they permute the corners the helper hands the device; every output is per vertex or per mesh corner), the
+helper's clipping and `Fog` (not translated, above).
+
+**One correction to the reference.** The first relight read each vertex's `Light` at the end of the draw, so a PF_Unlit
+face's overwrite of a vertex it shares with a lit face would have recoloured the lit face, which the device (it reads the
+record when it is handed the polygon) does not do. `drawUMesh` now keeps each draw's corner lights (`draw.lights`) and
+`packUMeshDraw` packs from them; none of the shipped scenes mixes PF_Unlit with lit faces (the oracle compares the
+snapshots, which were always right), so no frame changes.
+
+**Also changed.** The reference now looks the mesh's texture infos up once per call (a table by `TextureIndex`) and not
+once per triangle: the same values (nothing writes them in a DrawMesh), 8 % of the old profile.
+
+**Evidence.**
+
+* `validate-umesh-wasm`: the 22 oracle cases of `validate-umesh-draw` (shared now in `scripts/umesh-draw-cases.mjs`, the
+  numbers there unchanged: 22 calls, 5,785 Light calls, 6,445 polygons, 31,442 checks) at 0, 3 and 8 real lights, and 600
+  seeded random calls on the five meshes (cameras, mirror, outcode planes, PF_Unlit, PF_Modulated, PF_Environment,
+  two-sided, SetupForActor's flag bits, Fatness, texture sizes, scales and masks, missing textures, no environment map; one
+  call in five is tiny so the face normals fall to the size of the epsilon): 666 calls, 11.3 million word comparisons of the
+  colours, environment UVs, points, normal planes, Light and the counts, all equal; 554 calls drew 374,120 triangles (215,606
+  environment-mapped), 127 had PF_Unlit, 57 PF_Modulated, 141 Fatness, 149 a mirror, 37 the missing-environment error.
+  Two deliberate mutations of the kernel were tried: the vertex normal's summed squares reordered fails it (planes, points
+  and Light differ); the face normal's epsilon as a float instead of the double did **not** fail it, because `tableRsqrt`
+  indexes by the top ten mantissa bits and the two sums differ in the last: the Rust test
+  `face_length_adds_the_double_epsilon_once` pins the sum itself on ten squared lengths where the double and the float
+  differ (expected words from `r24sum`, which the oracle covers).
+* `UMESH=verify validate-umesh-play`: Play's own calls (DX.dx's flight and the Island's flies), the kernel and the reference
+  side by side, every colour, environment UV and point equal.
+* `test/umesh-wasm.test.mjs` (synthetic grids; ABI, the refused topology, memory growth, the shared upload's release) and the
+  `umesh.rs` unit tests.
+* The frames of "Frame against the original" below, taken again through the kernel: `dx-end-shot`'s `dxend2`, `eidos` and
+  `ion` frames are **pixel-identical** (0 of 921,600 differ) to the frames Play drew through the JavaScript path, so they keep
+  the recorded differences from the original (`visual-acceptance compare dxend2`: means 6.30, 7.04, 7.93 against 6.30, 7.05,
+  7.98, ratio 0.997, mean absolute difference 0.02, edge recall 0.982, precision 0.999, no outlier block; Eidos 3 pixels by 1;
+  Ion Storm 627 pixels, largest 60). The `DXText` frame with the logo yaw set, taken with the kernel and with
+  `?meshBackend=javascript` (the reference, in the same tree), differs in 0 pixels; against the original it is 2,654 pixels,
+  largest 87 on 13 pixels (the bolt and the logo's edge, as the table below).
+
+**Unverified or not covered.** The kernel is equal to the reference, and the reference to the oracle on the cases above;
+the oracle's `Light` is a stub, so the kernel's real `light_vertex` is the LodMesh kernel's (validated there) and is
+compared here against the reference's `lightVertex`. The page's rasteriser residuals ([below](#the-other-three-meshes-cheatview-frames))
+are unchanged and unexplained. The Fly has not been compared with an original frame. NaN payloads (a degenerate vertex
+whose summed normals cancel to zero gives `0 * inf`) are Rust's, not V8's canonical NaN, and the oracle's x87 NaN is a third:
+no shipped mesh reaches one in these cases.
+
+## GPU path (decided 2026-10-21)
+
+[The GPU mesh path](gpu-mesh.md) was read against this path for what it could share. **Not made**, for these reasons, from
+the code and the measurements.
+
+* **What shares.** The pose pass: the logos have one frame, one channel, no special vertices and no LOD, which the pose
+  and camera-pose passes already handle (the control flow would need a `planUMeshFrame` as `planLodMeshFrame` is). The
+  light function is `Light` as the vertex pass has it. `VertLinks` is ascending face order and holds exactly the faces
+  of each vertex in all five meshes (checked), so the LodMesh adjacency order is the classic one.
+* **What does not, and would need new shader code in the shared passes** (every LodMesh actor on every map runs through
+  them): the face pass's epsilon is a double rounded once (`ffAddF` could carry it, but the `0.001` has 53 bits, a pair
+  holds 48); the cull is DrawMesh's (`(flags & 0x4101) == 0x4000`, and the three outcodes against the frame's four planes)
+  and the vertex pass's sums are in another order (`(z² + y²) + x²`, no epsilon, `W` in another order); Fatness moves a point
+  after `W` and redoes the outcode; the environment UV is computed per vertex from `UnsafeNormal`, a **correctly rounded**
+  square root and reciprocal in the original, where the GPU path has a correctly rounded quotient (`divRN`) and no correctly
+  rounded root (the browser's is up to 2 ulp off, [GPU arithmetic](gpu-mesh.md#gpu-arithmetic-on-the-target-measured));
+  the draw materials would need the per-vertex UV with the frame's Uncoords where they now compute the camera-relative
+  one; the corner colours need the per-face PolyFlags join and the face helper's outcode skip.
+* **It can be done bit-exact in principle** (a float-float Newton root with an exact final check, as `divRN`'s, probed over
+  all floats like its division), at the cost of variants of the face, vertex and corner passes and of the draw
+  materials, and a third mesh kind in the arena, each compared bit for bit with the CPU kernel the way
+  `validate-gpu-mesh` compares the LodMesh passes.
+* **What it would save.** After the Rust port the classic path is 0.43 to 0.55 ms of a 3 to 4 ms worker frame, only on the
+  boot flight and the menu; SetupForActor (0.07), the pose planning and the record would stay on the CPU. The GPU path could
+  remove the kernel's DrawMesh (0.05 to 0.16 ms per relit logo) and the camera publication (0.025), about 0.1 to 0.2 ms
+  of a frame that is 3 to 4 ms against the 8.3 ms target; a Fly has seven vertices. That does not pay for changing passes
+  every NPC on every map shares.
+
+It stays open, with the Rust CPU path as the implementation; a later reason to move it (a scene with many classic
+meshes, which the shipped game does not have) is the trigger.
 
 ## Frame against the original: DX.dx's end pose (2026-10-21)
 
@@ -216,6 +376,8 @@ original-side harness cannot arrange mid-flight, and the DX frames do not contai
 
 ## Open
 
+* **A GPU path** for the classic meshes ([decided against for now](#gpu-path-decided-2026-10-21)): possible bit-exact, 0.1 to
+  0.2 ms of the sim worker's frame on the boot screens at most.
 * The Fly against an original frame (above); the edge-pixel residuals of the Ion Storm and viewport-clipped frames, if they
   are ever to be zero, need the D3D pretransformed-vertex rasteriser rules (interpolation and clip) measured, as a pass
   common to every mesh and not to this path.

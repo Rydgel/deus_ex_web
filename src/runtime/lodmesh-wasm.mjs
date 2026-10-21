@@ -2,6 +2,7 @@
 import {LodMeshError} from './lodmesh.mjs';
 import {squareRootTable} from './dynamic-lighting.mjs';
 import {rsqrtTables} from './mesh-lighting.mjs';
+import {createUMeshFacade} from './umesh-wasm.mjs';
 
 let pending;
 export function loadLodMeshKernel() {
@@ -118,6 +119,8 @@ export function createLodMeshKernel(instance) {
     const mesh=lightingMeshes.get(faces);
     if(mesh){releaseLightMesh(mesh.handle);lightingMeshes.delete(faces);}
   }};
+  // The classic UMesh DrawMesh (umesh.rs), with the pose loops above for its GetFrame.
+  if(instance.exports.umesh_draw)kernel.umesh=createUMeshFacade({work,current,exports:instance.exports});
   if(lodSelect)kernel.lod=createLodFacade({work,current,lodSelect,uploadLodMesh,releaseLodMesh,lodMorph,lodCorners});
   return kernel;
 }

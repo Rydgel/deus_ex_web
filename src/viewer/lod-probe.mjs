@@ -5,6 +5,7 @@
  * (detail bits, requested count, flags), GetFrame's returned count, the
  * final flags and morph start, and the admitted faces and their distinct
  * vertices. Floats are returned with their bit patterns. */
+import {classicStats,resetClassicStats} from './actor-umesh-sim.mjs';
 const bits=value=>{const v=new DataView(new ArrayBuffer(4));v.setFloat32(0,value,true);return v.getUint32(0,true);};
 
 export function lodProbe(actorSim,{all=false,list=false,settings=null,reset=false,mode=null,colors=false}={},weaponSim=null){
@@ -14,6 +15,14 @@ export function lodProbe(actorSim,{all=false,list=false,settings=null,reset=fals
   if(settings===false)actorSim.resetLodSettings();
   else if(settings)actorSim.setLodSettings(settings);
   // `list`: every binding's actor, mesh and Location (to aim views).
+  // `umeshStats` (measurement, docs/umesh.md): the classic bindings' section times since the last reset. `mode` 'on' clears them and starts
+  // the timing, 'take' returns them and clears (timing stays on), 'off' returns them and stops, none just reads.
+  if(list==='umeshStats'){
+    const stats={...classicStats};
+    if(mode==='on'||mode==='take')resetClassicStats(true);
+    else if(mode==='off')resetClassicStats(false);
+    return stats;
+  }
   if(list==='weapons')return actorSim.weaponStates(Boolean(colors));
   // `setupLog` (validate-weapon-order.mjs): `mode` 'on' keeps every SetupForActor call, 'take' returns and clears them, 'off' stops.
   if(list==='setupLog')return actorSim.setupLog(mode);
