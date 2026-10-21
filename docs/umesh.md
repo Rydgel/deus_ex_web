@@ -185,13 +185,40 @@ ticks, the original's value); the page now stamps it (`actorRenderFeedback`) and
 I took, `dxend-play.png`, shows another yaw). And the original's frame is a held tick: the bolt and the logo's yaw are states of it,
 which is why Play's frozen run sets the yaw.
 
-**Not frame-compared with the original:** `EidosLogo`, `IonStormLogo`, `DXText` and the Fly (checked through the oracles and by
-sight). The harness cannot stop the original mid-flight (the whole path runs in its frozen phase), and an `Interpolating` player
-overwrites a placed camera, so those views have no original frame yet.
+### The other three meshes (CheatView frames)
+
+The same harness aims the camera at each actor with the console command `CheatView DeusEx.<Class>` (PlayerPawn's behind view;
+`DeusExDeco.<Class>` is not a linked class name, `DeusEx.` is). The original takes it with `--early-cmds`, Play with
+`scripts/dx-end-shot.mjs --exec "CheatView DeusEx.<Class>"`, both at the tick-30 hold (the level frozen, so the actors are at
+the same state); the diffs are of the 8-bit frames:
+
+| Frame | Pixels that differ (of 921,600) | Largest | What they are |
+| --- | --- | --- | --- |
+| `EidosLogo0` | 3 | 1 of 255 | nothing but rounding |
+| `IonStormLogo0` | 627 | 60 on one pixel (197 by 1, 174 by 2 to 4, 180 by 5 to 16, 76 above) | one or two pixel columns (x = 584 to 585 and 635) along the right-hand edge of narrow bevel faces, where the shade of the last face pixel differs (63 against 85 at x = 585, y = 62); the green glow, the lit faces and every other pixel are equal |
+| `DXText0` (below the logo) | 107 | 1 | the letters, their blue glow and the emitter behind are equal |
+| `DXText1`, the glyph cut by the right viewport edge (x >= 1250) | 2,014 | 7 | the viewport-clipped, obliquely seen face (see below) |
+| `DXLogo3`, `DXText` frame with the logo yaw set to 36,848 | 533 in the top band | 87 on 13 pixels | the electricity bolt and the logo's edge pixels |
+
+(Without `--logo-yaw` the logo in the `CheatView DeusEx.DXText` frame is at the yaw it has after a live flight, not the held
+tick's, and the logo's 141,478 differing pixels are that; `dx-end-shot.mjs` sets the yaw by default for that reason.)
+
+The classic meshes' bodies therefore equal the original's frame: positions, the frame's tween, lighting, environment
+mapping and texturing, with edge-pixel residuals. **The residuals are not explained by an experiment.** Both kinds sit on a polygon boundary (the near-edge-on bevel
+slivers, the viewport clip). The likely cause, untested: Play hands the GPU the original's camera-space points and per-face
+colours and three.js rasterises and interpolates them (perspective-correct varyings, no D3D pretransformed-vertex rules, the GPU's
+clip rather than the face helper's), the way the LodMesh actors already draw; a measurement of that rasteriser against
+Wine's would settle it and would apply to every mesh, not to this path. Whether the largest, 87, is the bolt alone was not checked pixel by pixel.
+
+**Not frame-compared with the original:** the Fly (checked through the oracles, and a spawned Fly was bound, lit and drawn
+in Play). FlyGenerator spawns it only while the player is within 700 units and cannot see the spawn point, which the
+original-side harness cannot arrange mid-flight, and the DX frames do not contain one.
 
 ## Open
 
-* Frames of the other four meshes against the original (above).
+* The Fly against an original frame (above); the edge-pixel residuals of the Ion Storm and viewport-clipped frames, if they
+  are ever to be zero, need the D3D pretransformed-vertex rasteriser rules (interpolation and clip) measured, as a pass
+  common to every mesh and not to this path.
 * A classic mesh in a mirror's child frame, `Fog` on a classic mesh, a Fatness other than the default and
   `bMeshEnviroMap` on the actor (PF_Environment for every face) are translated and compared with the
   oracle (all but the mirror frame and Fog), but none occurs in a shipped scene that was run.

@@ -14,7 +14,10 @@
 // `--hide A,B` sets bHidden on those actors before the frame: `--hide DXLogo3,DXText0,DXText1,EidosLogo0,IonStormLogo0` is the frame
 // Play drew before classic meshes were bound (their meshes not drawn, the emitter's glow only).
 //
-//   node scripts/dx-end-shot.mjs [--name dxend] [--url http://127.0.0.1:5173] [--seed 1] [--query a=b&c=d] [--logo-yaw 36848] [--hide A,B]
+// `--exec "line|line"` types console lines after the flight, as the original's `--early-cmds` does (`CheatView DeusEx.IonStormLogo`
+// puts the camera behind that actor: PlayerPawn.CalcBehindView), and `--logo-yaw none` leaves the logo alone.
+//
+//   node scripts/dx-end-shot.mjs [--name dxend] [--url http://127.0.0.1:5173] [--seed 1] [--query a=b&c=d] [--logo-yaw 36848] [--hide A,B] [--exec 'l|l']
 import {mkdirSync} from 'node:fs';
 import path from 'node:path';
 import {fileURLToPath} from 'node:url';
@@ -64,6 +67,11 @@ try {
   if (still < 6) throw new Error(`The flight did not end: camera at ${JSON.stringify(last)}`);
   if (yaw !== 'none') {
     await page.evaluate(value => window.deusExViewer.liveProbe({write: {DXLogo3: {Rotation: [0, value, 0]}}}), Number(yaw));
+    await page.waitForTimeout(1500);
+  }
+  const lines = (option('exec', '') ?? '').split('|').map(line => line.trim()).filter(Boolean);
+  if (lines.length) {
+    await page.evaluate(lines => window.deusExViewer.viewProbe({exec: lines}), lines);
     await page.waitForTimeout(1500);
   }
   const hide = (option('hide', '') ?? '').split(',').filter(Boolean);
