@@ -150,6 +150,7 @@ import {
 import { getToggleNative } from './script-window-toggle-get.mjs';
 import { setToggleNative } from './script-window-toggle-set.mjs';
 import { changeToggleNative } from './script-window-change-toggle.mjs';
+import { findStairRotation } from './script-pawn-stair-rotation.mjs';
 import { configureChildNative } from './script-window-configure-child.mjs';
 import { setWindowPositionNative } from './script-window-position.mjs';
 import { setWindowAlignmentsNative } from './script-window-alignments.mjs';
@@ -4082,6 +4083,25 @@ export class ScriptRuntime {
       return execFindPathTo(call.receiver,point.map(Math.fround),
         singleArgument===undefined?0:singleArgument|0,clearArgument===undefined?1:clearArgument|0,
         this.pawnNavServices(call.receiver));
+    }
+    if(call.index===524){
+      // execFindStairRotation 0x103bb880: the DeltaTime float, then the exec's inline body (script-pawn-stair-rotation.mjs,
+      // docs/pawn-stair-rotation.md): up to four ULevel::SingleLineCheck calls from the pawn, the pitch to ease towards, and the
+      // pitch normalisation store into ViewRotation.
+      const receiver=call.receiver,level=this.levelFor(receiver);
+      if(typeof level?.hash?.lineCheck!=='function')throw new Error('FindStairRotation requires the live level collision hash');
+      const deltaTime=call.argumentCount>0?refValue(call.evaluateArgument(0)):0;
+      const rotation=this.namedReference(receiver,'ViewRotation'),viewRotation=rotation.get();
+      const state={location:this.readNamed(receiver,'Location'),viewRotation:[...viewRotation],eyeHeight:this.readNamed(receiver,'EyeHeight'),
+        radius:this.readNamed(receiver,'CollisionRadius'),height:this.readNamed(receiver,'CollisionHeight')};
+      const times=this.observeStairRotation?[]:null;   // a validator replays the live answers through the original exec
+      const result=findStairRotation(state,deltaTime,
+        {setPitch:pitch=>rotation.set([pitch,viewRotation[1],viewRotation[2]]),
+          lineCheck:(start,end,extent,flags,extra)=>{
+            const hit=level.hash.lineCheck(start,end,extent,flags,extra,receiver);
+            times?.push(hit.time);return hit;}});
+      this.observeStairRotation?.({state,deltaTime,times,result});
+      return result;
     }
     if(call.index===523){
       // execEAdjustJump 0x103bc110: no parameters; SuggestJumpVelocity from
