@@ -140,15 +140,14 @@ export function* classicMeshBindingSteps(runtime,actor,payload,ctx) {
         colors[at]=((packed>>>16)&255)/255;colors[at+1]=((packed>>>8)&255)/255;colors[at+2]=(packed&255)/255;
       });
       if(draw.flags&PF.Environment&&envUv) {
-        const norm=draw.uFactor*256;
-        for(const pt of draw.pts){
-          const corner=tri.vertices.indexOf(pt.index);
-          if(corner<0)continue;
-          envUv[draw.tri*6+corner*2]=pt.u/norm;envUv[draw.tri*6+corner*2+1]=pt.v/(draw.vFactor*256);
-        }
+        const uNorm=draw.uFactor*256,vNorm=draw.vFactor*256;
+        draw.vertices.forEach((vertex,k)=>{
+          const corner=tri.vertices.indexOf(vertex);
+          if(corner<0)return;
+          envUv[draw.tri*6+corner*2]=draw.uv[k][0]/uNorm;envUv[draw.tri*6+corner*2+1]=draw.uv[k][1]/vNorm;
+        });
       }
     }
-    // The points the face helper projects: DrawMesh's own, Fatness applied.
     return {colors,cameraPoints:result.points??points,envUv,summary:{lights:prepared.setup.lights.length,flags:prepared.flags}};
   }
   const meshHandle=meshReference?handleOf(meshReference):0;

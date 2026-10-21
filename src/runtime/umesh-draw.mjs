@@ -61,7 +61,10 @@ export function umeshTopology(mesh) {
     const count=c.getInt32(i*8,true),offset=c.getInt32(i*8+4,true);
     return Array.from({length:count},(_,k)=>l.getInt32((offset+k)*4,true));
   });
-  topology={triangles,links:vertexLinks};
+  // The same triangles flat, for the per-frame loops.
+  const flat=new Uint16Array(triangles.length*3);
+  triangles.forEach((tri,i)=>flat.set(tri.vertices,i*3));
+  topology={triangles,links:vertexLinks,flat};
   topologies.set(mesh,topology);
   return topology;
 }
@@ -97,9 +100,10 @@ export function environmentUV(point,normal,uncoords,uFactor,vFactor) {
  * PF_Flat (DrawMesh sets it); `setup`: {flags} (SetupForActor's result, joined after the cull);
  * `fatness`: Actor.Fatness; `unlit`: the unlit colour; `textureInfo(i)`: the mesh texture i's
  * {uSize, vSize, uScale, vScale, flags} or null; `environment`: the environment map's info;
- * `light(index, point, plane, flags)` and `fog(...)` stand for FLightManager::Light and Fog. */
-export function drawUMesh(mesh,points,{frame,polyFlags,setup={flags:0},fatness=0x80,unlit=[0,0,0],textureInfo,environment,light,fog=null}) {
-  const topology=umeshTopology(mesh),{triangles,links}=topology,count=mesh.frameVertexCount;
+ * `light(index, point, plane, flags)` and `fog(...)` stand for FLightManager::Light and Fog; `snapshots`
+ * keeps the vertex records of every polygon (`draws[i].pts`), as the device is handed them. */
+export function drawUMesh(mesh,points,{frame,polyFlags,setup={flags:0},fatness=0x80,unlit=[0,0,0],textureInfo,environment,light,fog=null,snapshots=false}) {
+  const topology=umeshTopology(mesh),{triangles,links,flat}=topology,count=mesh.frameVertexCount;
   if(points.length<count*3)throw new Error('DrawMesh needs one camera-space point per frame vertex');
   const point=Float32Array.from(points.subarray(0,count*3));
   const codes=new Uint8Array(count),plane=new Float32Array(count*4),lit=new Array(count).fill(null),foggy=new Array(count).fill(null);
@@ -113,24 +117,25 @@ export function drawUMesh(mesh,points,{frame,polyFlags,setup={flags:0},fatness=0
   const result={visible:[],draws:[],lightCalls:[],allOutside:all!==0,vertexLight:lit,points:point};
   if(all)return result; // 0x10b0dad4
   // Face normals of every triangle (0x10b0db49..0x10b0dc6d).
-  const normals=triangles.map(tri=>{
-    const [a,b,c]=tri.vertices;
-    const ax=f(point[c*3]-point[a*3]),ay=f(point[c*3+1]-point[a*3+1]),az=f(point[c*3+2]-point[a*3+2]);
-    const bx=f(point[a*3]-point[b*3]),by=f(point[a*3+1]-point[b*3+1]),bz=f(point[a*3+2]-point[b*3+2]);
+  const normals=new Float32Array(triangles.length*3);
+  for(let index=0;index<triangles.length;index++) {
+    const a=flat[index*3]*3,b=flat[index*3+1]*3,c=flat[index*3+2]*3;
+    const ax=f(point[c]-point[a]),ay=f(point[c+1]-point[a+1]),az=f(point[c+2]-point[a+2]);
+    const bx=f(point[a]-point[b]),by=f(point[a+1]-point[b+1]),bz=f(point[a+2]-point[b+2]);
     const nx=f(f(by*az)-f(bz*ay)),ny=f(f(bz*ax)-f(az*bx)),nz=f(f(ay*bx)-f(by*ax));
     const sum=f(r24sum(f(f(f(nx*nx)+f(ny*ny))+f(nz*nz)),0.001)),scale=tableRsqrt(sum);
-    return [f(scale*nx),f(scale*ny),f(scale*nz)];
-  });
+    normals[index*3]=scale*nx;normals[index*3+1]=scale*ny;normals[index*3+2]=scale*nz;
+  }
   // The kept triangles (0x10b0dc81..0x10b0dd8e), flags as the cull sees them: the triangle's with the caller's.
-  triangles.forEach((tri,index)=>{
-    const [a,b,c]=tri.vertices,flags=(tri.flags|polyFlags)>>>0;
-    if(codes[a]&codes[b]&codes[c])return;
+  for(let index=0;index<triangles.length;index++) {
+    const va=flat[index*3],vb=flat[index*3+1],vc=flat[index*3+2],flags=(triangles[index].flags|polyFlags)>>>0;
+    if(codes[va]&codes[vb]&codes[vc])continue;
     if((flags&0x4101)===0x4000) {
-      const n=normals[index],dot=f(f(f(n[2]*point[a*3+2])+f(n[1]*point[a*3+1]))+f(point[a*3]*n[0]));
-      if(!(f(dot*frame.mirror)<0))return;
+      const a=va*3,dot=f(f(f(normals[index*3+2]*point[a+2])+f(normals[index*3+1]*point[a+1]))+f(point[a]*normals[index*3]));
+      if(!(f(dot*frame.mirror)<0))continue;
     }
     result.visible.push(index);
-  });
+  }
   if(!result.visible.length)return result;
   // The final flags (SetupForActor's bits joined, 0x10b0dffc).
   const flags=(polyFlags|setup.flags)>>>0;
@@ -140,25 +145,25 @@ export function drawUMesh(mesh,points,{frame,polyFlags,setup={flags:0},fatness=0
     if(!marked[vertex])continue;
     marked[vertex]=0;
     let sx=0,sy=0,sz=0;
-    for(const t of links[vertex]) {sx=f(sx+normals[t][0]);sy=f(sy+normals[t][1]);sz=f(sz+normals[t][2]);}
+    for(const t of links[vertex]) {sx=f(sx+normals[t*3]);sy=f(sy+normals[t*3+1]);sz=f(sz+normals[t*3+2]);}
     // The squared length `(z² + y²) + x²` has no epsilon here, unlike the face normal's.
     const scale=tableRsqrt(f(f(f(sz*sz)+f(sy*sy))+f(sx*sx)));
     const nz=f(sz*scale),ny=f(sy*scale),nx=f(sx*scale);
     const px=point[vertex*3],py=point[vertex*3+1],pz=point[vertex*3+2];
     const w=f(f(f(py*ny)+f(pz*nz))+f(px*nx));
-    plane.set([nx,ny,nz,w],vertex*4);
+    plane[vertex*4]=nx;plane[vertex*4+1]=ny;plane[vertex*4+2]=nz;plane[vertex*4+3]=w;
     if(fat!==null) {
       point[vertex*3]=f(f(fat*nx)+px);point[vertex*3+1]=f(f(fat*ny)+py);point[vertex*3+2]=f(f(fat*nz)+pz);
       codes[vertex]=outcode(point[vertex*3],point[vertex*3+1],point[vertex*3+2],frame.prj);
     }
-    const here=Array.from(point.subarray(vertex*3,vertex*3+3));
-    result.lightCalls.push({vertex,point:here,plane:[nx,ny,nz,w],flags});
-    lit[vertex]=Array.from(light(vertex,here,[nx,ny,nz,w],flags));
-    foggy[vertex]=fog?Array.from(fog(vertex,here,[nx,ny,nz,w],flags)):[0,0,0,0];
+    const here=[point[vertex*3],point[vertex*3+1],point[vertex*3+2]],planeNow=[nx,ny,nz,w];
+    if(snapshots)result.lightCalls.push({vertex,point:here,plane:planeNow,flags});
+    lit[vertex]=light(vertex,here,planeNow,flags);
+    foggy[vertex]=fog?fog(vertex,here,planeNow,flags):null;
   }
   // The draw loop (0x10b0e312..0x10b0e41f).
-  const snapshot=index=>({index,point:Array.from(point.subarray(index*3,index*3+3)),outcode:codes[index],normal:Array.from(plane.subarray(index*4,index*4+4)),
-    light:lit[index]?[...lit[index]]:null,fog:foggy[index]?[...foggy[index]]:null,u:u[index],v:v[index]});
+  const snapshot=index=>({index,point:[point[index*3],point[index*3+1],point[index*3+2]],outcode:codes[index],normal:[plane[index*4],plane[index*4+1],plane[index*4+2],plane[index*4+3]],
+    light:lit[index]?[...lit[index]]:null,fog:foggy[index]?[...foggy[index]]:[0,0,0,0],u:u[index],v:v[index]});
   for(const index of result.visible) {
     const tri=triangles[index];
     let drawFlags=(tri.flags|flags)>>>0;
@@ -172,7 +177,7 @@ export function drawUMesh(mesh,points,{frame,polyFlags,setup={flags:0},fatness=0
     if(Object.is(frame.mirror,-1)){const swap=pts[0];pts[0]=pts[2];pts[2]=swap;}
     // The face helper 0x10b0bab0's two preparations.
     if(drawFlags&0x10)for(const vertex of pts) {
-      const uv=environmentUV(Array.from(point.subarray(vertex*3,vertex*3+3)),plane.subarray(vertex*4,vertex*4+3),frame.uncoords,uFactor,vFactor);
+      const uv=environmentUV([point[vertex*3],point[vertex*3+1],point[vertex*3+2]],[plane[vertex*4],plane[vertex*4+1],plane[vertex*4+2]],frame.uncoords,uFactor,vFactor);
       u[vertex]=uv[0];v[vertex]=uv[1];
     }
     if(drawFlags&0x400000)for(const vertex of pts)lit[vertex]=[unlit[0],unlit[1],unlit[2],0];
@@ -181,12 +186,16 @@ export function drawUMesh(mesh,points,{frame,polyFlags,setup={flags:0},fatness=0
     // `(A·y0 + B·z0) + C·x0 > 0`, with A, B, C the cross terms of corners 2 and 1.
     if(codes[pts[0]]&codes[pts[1]]&codes[pts[2]])continue;
     if(drawFlags&0x100) {
-      const [p0,p1,p2]=pts.map(vertex=>point.subarray(vertex*3,vertex*3+3));
-      const A=f(f(p2[0]*p1[2])-f(p1[0]*p2[2])),B=f(f(p1[0]*p2[1])-f(p2[0]*p1[1])),C=f(f(p2[2]*p1[1])-f(p2[1]*p1[2]));
-      const sum=f(f(f(A*p0[1])+f(B*p0[2]))+f(C*p0[0]));
+      const p0=pts[0]*3,p1=pts[1]*3,p2=pts[2]*3;
+      const A=f(f(point[p2]*point[p1+2])-f(point[p1]*point[p2+2])),B=f(f(point[p1]*point[p2+1])-f(point[p2]*point[p1+1])),C=f(f(point[p2+2]*point[p1+1])-f(point[p2+1]*point[p1+2]));
+      const sum=f(f(f(A*point[p0+1])+f(B*point[p0+2]))+f(C*point[p0]));
       if(!(sum>0)){const swap=pts[0];pts[0]=pts[2];pts[2]=swap;}
     }
-    result.draws.push({tri:index,flags:drawFlags,environment:info===environment,texture:own?tri.texture:null,uFactor,vFactor,pts:pts.map(snapshot)});
+    const draw={tri:index,flags:drawFlags,environment:info===environment,texture:own?tri.texture:null,uFactor,vFactor,vertices:pts};
+    // The corners' U and V as the helper left them (texel units), for an environment-mapped face; `snapshots` also keeps every record the device is handed (validation).
+    if(drawFlags&0x10)draw.uv=pts.map(vertex=>[u[vertex],v[vertex]]);
+    if(snapshots)draw.pts=pts.map(snapshot);
+    result.draws.push(draw);
   }
   return result;
 }

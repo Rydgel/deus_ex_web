@@ -97,7 +97,7 @@ for(const [caseIndex,c] of cases.entries()) {
   assert.deepEqual(words(unlit),original.unlit,`${label} unlit colour`);
   const result=drawUMesh(c.mesh,Float32Array.from(c.spec.points.flat()),{frame:{mirror:c.mirror,prj:c.prj,uncoords},polyFlags:(c.polyFlags|0x4000)>>>0,
     setup:{flags:c.setupFlags},fatness:c.fatness,unlit,textureInfo:sprite?()=>sprite:index=>info(c.textureList[index]),environment,
-    light:index=>lightOf(index).map(f),fog:index=>fogOf(index).map(f)});
+    light:index=>lightOf(index).map(f),fog:index=>fogOf(index).map(f),snapshots:true});
   // Light calls: vertex, point, plane, flags.
   assert.equal(result.lightCalls.length,original.light.length,`${label} light call count`);
   result.lightCalls.forEach((call,i)=>{
