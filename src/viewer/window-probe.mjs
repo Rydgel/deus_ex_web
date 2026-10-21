@@ -4,7 +4,7 @@
  * the page with ?sim=inline). Reads only: the topmost modal's class, the
  * focus window's class and, for a text window, its text (+0x168), the
  * keyboard grab count, the Console's state and TypedStr, and the player's
- * DeusExNote texts. */
+ * DeusExNote texts, the object belt and the item in hand. */
 export function windowProbe(game) {
   const runtime = game.doors.scriptRuntime.runtime, player = game.player.collisionActor;
   const host = game.doors.scriptRuntime.windowHost, W = host.W;
@@ -29,7 +29,10 @@ export function windowProbe(game) {
       voice: c.voice, radius: c.radius, volume: c.volume}))} : null;
   // The original's slot model (original-object-index.mjs), seeded when the boot was over.
   const slotModel = runtime.actorLifecycle?.construction?.registry?.original;
-  return {top: cls(top), focus: cls(focus), family, text, keyboardGrab: root ? W.i32(root, 0x5d0) : null,
+  // The object belt's slot items and the item in hand (the wheel's NextBeltItem/PrevBeltItem, docs/input-bindings.md).
+  const inHand = runtime.readNamed(player, 'inHand');
+  const belt = game.hud ? game.hud.snapshot().belt : null;
+  return {top: cls(top), focus: cls(focus), family, text, belt, inHand: inHand?.name ?? null, keyboardGrab: root ? W.i32(root, 0x5d0) : null,
     console: {state: runtime.instance(console_).state?.stateNode?.record.name ?? null, typed: runtime.readNamed(console_, 'TypedStr')}, notes,
     sounds, galaxy, slotModel: slotModel ? {count: slotModel.count, source: slotModel.source, allocated: slotModel.allocated, rejected: slotModel.rejected, unattributed: slotModel.unattributed} : null};
 }

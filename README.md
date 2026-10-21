@@ -262,7 +262,9 @@ whose Training button travels to training (docs/boot.md, docs/travel.md). The fi
 fullscreen and the mouse, as the original starts fullscreen with the mouse captured: in Chrome or
 Edge, Escape then reaches the game and keeps the mouse (hold Escape to leave fullscreen); Alt+Enter,
 the original's fullscreen toggle, gives back the mouse and the screen and takes them again. In a
-window, or in Firefox and Safari, Escape also releases the mouse and the next click takes it back. With the extracted
+window, or in Firefox and Safari, Escape also releases the mouse and the next click takes it back. Every binding of the
+original's User.ini reaches the game: the keys, the three mouse buttons and the wheel (weapon and item switching), and in
+fullscreen in Chrome or Edge the keys a browser reserves for itself (F1 to F12, Tab…) (docs/input-bindings.md). With the extracted
 `Deus Ex GOTY Edition/` directory present this happens at once; otherwise choose the game
 folder containing Maps, Textures, System and Help. The local production preview always uses
 this folder picker. `http://127.0.0.1:5173/?debug=1` is the debugging page described below:

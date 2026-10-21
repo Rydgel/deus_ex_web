@@ -20,6 +20,7 @@ import { createNativeRng } from '../runtime/rng.mjs';
 import { mapActorArray, mapExportAdmitted } from '../runtime/script-map-properties.mjs';
 import { createPlayHud } from '../runtime/script-play-hud.mjs';
 import { inputKeyForCode } from './input-key-names.mjs';
+import { wheelMessage } from './wheel-input.mjs';
 import { isMovingLightCandidate } from '../runtime/dynamic-lighting.mjs';
 import { loadTraceKernel } from '../runtime/trace-kernel.mjs';
 import { lightGlobals } from '../runtime/light-globals.mjs';
@@ -443,6 +444,9 @@ export async function createGame(map, asset, assets, { randomSeed = Math.floor(D
     inputAxis(name, delta) { return namedInput(name, 4, delta); },
     mouseMotion(dx, dy) { return inputHost.mouseMotion(dx, dy); },
     inputButton(name, pressed) { return namedInput(name, pressed ? 1 : 3); },
+    // One WM_MOUSEWHEEL (WinDrv ViewportWndProc 0x1110b29e, docs/input-bindings.md): IK_MouseW's axis with the raw delta, then
+    // the press and release of IK_MouseWheelUp/Down; `delta` is the message's HIWORD(wParam), +-120 per notch.
+    inputWheel(delta) { for (const event of wheelMessage(delta)) namedInput(event.name, event.action, event.delta); },
     resetInput(options) { inputHost.resetInput(options); },
     // The browser supplies drawing-buffer coordinates (or scaled relative
     // motion under pointer lock). The root accepts them only while a modal

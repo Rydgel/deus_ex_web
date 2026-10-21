@@ -23,7 +23,7 @@
  *   go to the worklet and its reports come back on the port, never through
  *   the page.
  * - `call` {id, method, args}: `view`, `reset` (Player start: reset, then the
- *   movers and PlayerCalcView), `stateDigest`, `decalProbe`, `particleProbe`, `liveProbe` (the live-scene replay), `placeProbe`, `laserProbe`, `meshLightProbe`, `lodProbe` and `renderPassProbe` (validation), `musicStatus` (the library
+ *   movers and PlayerCalcView), `stateDigest`, `decalProbe`, `particleProbe`, `liveProbe` (the live-scene replay), `placeProbe`, `laserProbe`, `meshLightProbe`, `lodProbe`, `inputProbe` and `renderPassProbe` (validation), `musicStatus` (the library
  *   service's counters), `musicDrive` (galaxy-music-library.mjs
  *   driveMusicLibrary, validation only).
  *
@@ -64,6 +64,7 @@ function command(game, entry, errors) {
       case 'key': keyAnswers[entry.code] = game.inputKey(entry.code, entry.pressed) ?? { handled: false }; break;
       case 'char': game.inputChar(entry.char); break;
       case 'button': game.inputButton(entry.name, entry.pressed); break;
+      case 'wheel': game.inputWheel(entry.delta); break;
       case 'motion': game.mouseMotion(entry.dx, entry.dy); break;
       case 'pointer': pointerGrab = game.windowPointer(entry.sample); break;
       case 'resetInput': game.resetInput(entry.options); break;
@@ -172,6 +173,7 @@ async function handle(data) {
         else if (data.method === 'laserProbe') value = laserProbe(game, host.actorSim);
         else if (data.method === 'lodProbe') value = (await import('./lod-probe.mjs')).lodProbe(host.actorSim, data.args ?? {}, host.weaponSim);
         else if (data.method === 'windowProbe') value = (await import('./window-probe.mjs')).windowProbe(game);
+        else if (data.method === 'inputProbe') value = (await import('./input-probe.mjs')).inputProbe(game, data.args ?? {});
         else if (data.method === 'conversationProbe') value = (await import('./conversation-probe.mjs')).conversationProbe(game, data.args ?? {});
         else if (data.method === 'settingsProbe') value = (await import('./settings-probe.mjs')).settingsProbe(game, ...data.args);
         else if (data.method === 'meshLightProbe') value = meshLightProbe(host.meshLighting, game, data.args ?? {});

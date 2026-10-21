@@ -92,6 +92,8 @@ fullscreen whose Keyboard Lock holds Escape (Chromium only; a held Escape still 
 * out of fullscreen, or in a browser without Keyboard Lock, Escape releases the pointer as the browser requires, and the next click (a menu
   button's included) takes it back.
 
+The keys and the wheel the first click makes the game's, and the Keyboard Lock list, are in [input bindings](input-bindings.md).
+
 `browser-tests/original-start-input.spec.mjs` drives this in Chromium's new headless mode (which grants the lock and fullscreen). Its Escape is a
 synthetic key, which does not go through the browser's own Escape rule, so what a real Escape does with Keyboard Lock is Chromium's documented
 behaviour, not measured here. The web crosshair is hidden on the default start.

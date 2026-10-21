@@ -456,7 +456,8 @@ GRANTED, closed keypad, restored HUD, open doorway, no browser errors.
   outside the attached script prefix; see the viewport contract above.
 * The browser pointer adapter reproduces the recovered window-side contract,
   but exact WinDrv cursor sampling and platform capture behavior have not been
-  measured. Browser wheel edges are not mapped yet.
+  measured. The wheel is mapped: WinDrv's `WM_MOUSEWHEEL` case, the page's conversion and the root's consumption of `IK_MouseWheelUp`/`Down`
+  in a window are in [input bindings](input-bindings.md).
 * Play's input is a JavaScript key-to-action map, not the User.ini bindings that
   `XInputExt::Process` executes. The consumed-key rule maps to clearing Play's
   held keys.

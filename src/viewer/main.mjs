@@ -32,6 +32,8 @@ import { createWeaponOverlayDraw } from './weapon-overlay-draw.mjs';
 import { packViews } from './mesh-frame-pack.mjs';
 import {pointerButtonKey,windowPointerSample} from './window-pointer.mjs';
 import { typedCharacters } from './typed-characters.mjs';
+import { GAME_KEY_CODES } from './input-key-names.mjs';
+import { createWheelAccumulator, wheelUnits } from './wheel-input.mjs';
 import {pcm16} from '../runtime/galaxy-lipsync-channels.mjs';
 import { setDisplayRampPerFragment } from './light-atlas.mjs';
 import { createDisplayRamp, brightnessGamma } from './display-ramp.mjs';
@@ -683,7 +685,7 @@ function resetCamera() {
     if (simClient) reply = simClient.call('reset').then(result => { if (result && world) { world.syncMovers(result.movers); applyPlayerView(result.view); } })
       .then(applyStartCheats);
     else { sim.reset(); world.syncMovers(sim.movers()); applyStartCheats(); }
-    runtimeError=null;paused=false;keys.clear();$('toast').textContent='';stopInfoLinkPresentation();showStats();
+    runtimeError=null;paused=false;keys.clear();$('toast').textContent='';stopInfoLinkPresentation();showStats();lockGameKeys(true);
   }
   const start = map.summary.playerStarts.find(p => p.location);
   const position = start?.location ?? map.model.points[0] ?? [0, 0, 0];
@@ -732,7 +734,7 @@ function travelTo(request) {
 }
 function pauseForRuntimeError(error) {
   runtimeError={message:error.message,stack:error.stack,travel:error.travel??null};paused=true;
-  keys.clear();drag=false;document.exitPointerLock?.();
+  keys.clear();drag=false;document.exitPointerLock?.();lockGameKeys(false);
   showStats();
   // The map ended by travelling (Stage 6): a stop, not a failure.
   $('toast').textContent=error.travel
@@ -904,7 +906,7 @@ async function loadMap(name, { travel = null } = {}) {
     $('npc-status').textContent=npcPreview?`${npcPreview.summary.npcs??npcPreview.actors.length} NPCs · ${npcPreview.summary.props??0} props · live`:'';
     if (world) { scene.remove(world.root); world.dispose(); }
     world = nextWorld; map = nextMap; currentMap = name; scene.add(world.root); revision++;
-    game = nextGame;sim = nextSim;runtimeError=null; $('mode').options[0].disabled = !game; const viewReply = setMode(game ? mode : 'inspect'); paused = false;
+    game = nextGame;sim = nextSim;runtimeError=null;lockGameKeys(true); $('mode').options[0].disabled = !game; const viewReply = setMode(game ? mode : 'inspect'); paused = false;
     // The previews drive the runtime directly: on the page only.
     const training = Boolean(game) && name === '00_Training' && !simClient;
     setPreviewsAvailable({light: training, 'dark-door': training, npc: Boolean(npcPreview?.npcActors?.length),
@@ -1331,6 +1333,8 @@ const simInput = {
   char(char) { if (simClient) simClient.queue({ op: 'char', char }); else game.inputChar(char); },
   button(name, pressed) { if (simClient) simClient.queue({ op: 'button', name, pressed }); else game.inputButton(name, pressed); },
   motion(dx, dy) { if (simClient) simClient.queue({ op: 'motion', dx, dy }); else game.mouseMotion(dx, dy); },
+  // One WM_MOUSEWHEEL (docs/input-bindings.md); in the queue with the keys and buttons, so their order is kept.
+  wheel(delta) { if (simClient) simClient.queue({ op: 'wheel', delta }); else game.inputWheel(delta); },
   pointer(sample) {
     if (!simClient) return game.windowPointer(sample);
     simClient.queue({ op: 'pointer', sample });
@@ -1365,6 +1369,13 @@ function windowPointer(event,action=null){
 // window (a menu) takes is that window's too; a click in the world only takes the pointer and reaches no binding (this page's
 // rule, not the original's: no Fire on the click that grabs).
 let grabButton = -1, startedFullscreen = false, fullscreenOnRelease = false, grabOnRelease = false;
+// Keyboard Lock (Chromium; a page's fullscreen only) hands the page the keys the browser would take for itself (F1 help, F3
+// find, F5 reload, F6, F7 caret browsing, F11, F12, Tab, Ctrl+W and the like): every key the original can bind, with Escape
+// held to leave. A runtime error keeps only Escape, so F5 reloads. Nothing locks outside fullscreen or in other browsers.
+function lockGameKeys(all) {
+  if (!originalStart || !document.fullscreenElement) return;
+  navigator.keyboard?.lock?.(all ? GAME_KEY_CODES : ['Escape'])?.catch?.(() => {});
+}
 function takeFullscreen() {
   const app = $('app');
   if (document.fullscreenElement) return;
@@ -1378,7 +1389,7 @@ function leaveFullscreen() {
 document.addEventListener('fullscreenchange', () => {
   if (!originalStart) return;
   if (!document.fullscreenElement) { navigator.keyboard?.unlock?.(); return; }
-  navigator.keyboard?.lock?.(['Escape'])?.catch?.(() => {});
+  lockGameKeys(!runtimeError);
 });
 function grabPointer(event, windowHasMouse) {
   const canvas = $('scene');
@@ -1416,6 +1427,10 @@ $('scene').onpointerdown = event => {
   }
 };
 $('scene').oncontextmenu = event => event.preventDefault();
+// WinDrv delivers the left, right and middle buttons only (WM_LBUTTON*, WM_RBUTTON*, WM_MBUTTON*; the XBUTTON messages 0x20b-0x20d
+// take its default case): a middle press must not start the browser's autoscroll, nor the back and forward buttons navigate.
+$('scene').onmousedown = event => { if (event.button === 1) event.preventDefault(); };
+for (const type of ['mouseup', 'auxclick']) $('scene').addEventListener(type, event => { if (event.button >= 1) event.preventDefault(); });
 $('scene').onpointerup = event => {
   drag = false;
   // The lock once the release is queued; fullscreen a few frames later, inside the click's user activation, so the simulation
@@ -1465,6 +1480,15 @@ function inputKey(event, pressed) {
     return {handled: true, consumed: true};
   }
 }
+// WinDrv's window procedure answers every key message itself (no DefWindowProc): the browser's own action for a key the original
+// can bind (Tab's focus move, F1's help, F3's find, F5's reload, F6, F7's caret browsing, F12's devtools, the quick find of / and ',
+// Space and the arrows scrolling, an Alt release focusing the menu bar) must not run, whether or not the key has a binding. Not
+// for Ctrl or Meta chords outside fullscreen (reload, devtools, find, save stay the browser's); in fullscreen the Keyboard Lock
+// delivers them (lockGameKeys). Keys no page can take are in docs/input-bindings.md.
+const GAME_KEYS = new Set(GAME_KEY_CODES);
+function gameTakesKey(event) {
+  return GAME_KEYS.has(event.code) && !((event.ctrlKey || event.metaKey) && !document.fullscreenElement);
+}
 // TranslateMessage posts a key's WM_CHAR/WM_SYSCHAR units after its
 // WM_KEYDOWN; WinDrv hands them to Client->Engine->Key
 // (docs/script-window-typed-keys.md).
@@ -1498,6 +1522,7 @@ document.addEventListener('keydown', event => {
   const input = inputKey(event, true);
   if (input && !runtimeError) typeCharacters(event);
   if (input) {
+    if (gameTakesKey(event)) event.preventDefault();
     if (input.consumed) { keys.clear(); event.preventDefault(); return; }
     if (input.handled) {
       event.preventDefault(); paused = false;
@@ -1514,10 +1539,22 @@ document.addEventListener('keydown', event => {
   }
 });
 document.addEventListener('pointerlockchange', () => { drag = false; keys.clear(); simInput.reset(); });
+// The mouse wheel is WinDrv's WM_MOUSEWHEEL (docs/input-bindings.md): one message per notch, and the world's NextBeltItem and
+// PrevBeltItem or a window's scroll area answer it. The wheel of the canvas (or of the locked pointer) belongs to the game; the
+// debugging page's panels keep theirs. A non-passive listener, so that Ctrl+wheel does not zoom the page.
+const wheelNotches = createWheelAccumulator();
+document.addEventListener('wheel', event => {
+  const scene = $('scene');
+  if (event.target !== scene && document.pointerLockElement !== scene) return;
+  if (mode !== 'play' || !game || runtimeError || !world || loading) return;
+  event.preventDefault();
+  try { for (const notch of wheelNotches.push(wheelUnits(event), event.timeStamp)) simInput.wheel(notch); }
+  catch (error) { pauseForRuntimeError(error); }
+}, { passive: false });
 document.addEventListener('keyup', event => {
   if (event.code === 'KeyC' && crtShortcutHeld) { crtShortcutHeld = false; event.preventDefault(); return; }
   const input = inputKey(event, false);
-  if (input?.consumed || (input?.handled && !input.host)) event.preventDefault();
+  if (input?.consumed || (input?.handled && !input.host) || (input && gameTakesKey(event))) event.preventDefault();
   keys.delete(event.code);
 });
 window.addEventListener('blur', () => { keys.clear(); crtShortcutHeld = false; drag = false; paused = true; simInput.reset({releasePhysical:true}); });
@@ -1607,6 +1644,12 @@ async settingsProbe(step) {
 async windowProbe() {
   if (simClient) return simClient.call('windowProbe');
   return game ? (await import('./window-probe.mjs')).windowProbe(game) : null;
+},
+/** Validation only: input-probe.mjs (the player's input flags, view, hand, weapon, belt, augmentations, windows and the binding lines run) on
+ * the simulation side. */
+async inputProbe(args) {
+  if (simClient) return simClient.call('inputProbe', args);
+  return game ? (await import('./input-probe.mjs')).inputProbe(game, args) : null;
 },
 /** Validation only: conversation-probe.mjs (ConPlay's state and event, the conversation camera and letterbox) on the
  * simulation side. */
