@@ -12,12 +12,17 @@
  *   - every object the scene creates is the original's, in class and tick, in order (`live-sound-compare.mjs`'s registry part; the slots are reported).
  * STAGE5_PAGE_PARAMS='a=1&b=2' passes page parameters to the replay (live-acceptance.mjs --page-params: `trackedCollision=off` replays with the
  * collision queries on the static BSP, for comparisons); STAGE5_PLAY_ARGS='--setup-probe A,B --setup-ticks 815:825' adds options to the replay's
- * live-acceptance.mjs play (the Setup probe writes setup-play.json); DEBUG_CONSOLE=text prints the replay page's console lines that contain it.
+ * live-acceptance.mjs play (the Setup probe writes setup-play<tag>.json); DEBUG_CONSOLE=text prints the replay page's console lines that contain it.
  *
  * The original is never started here: a scene whose stored trace is absent prints SKIP and exits 0 (the gate counts it as not passing). The validator sweep
  * leaves this check out (scripts/run-validators.mjs SWEEP_EXCLUDED): it runs as a Stage 5 proof check, with --scene.
  *
- *   node scripts/validate-stage5-live.mjs --scene cmb1
+ * Replays run side by side (validate-stage5-acceptance.mjs --jobs). A replay writes only files named by its scene's tag, so two scenes of one map share no
+ * file but the map's play-population.json, which the population step below writes once (under the map's .population.lock) and every replay then reads.
+ * Two runs of one scene (its replay and its --frames replay, or two checkouts) write the same files and take turns on the scene's .replay-<tag>.lock.
+ * --prepare runs the population step alone (the gate's, before its pool starts).
+ *
+ *   node scripts/validate-stage5-live.mjs --scene cmb1 [--frames] [--compare-only] [--prepare]
  *
  * Scenes (01_NYC_UNATCOIsland, Terrorist0 standing on open ground at (9651, 190) facing yaw 8624; the player placed in the original's frozen
  * phase (after `KillAll FlyGenerator`) by `ghost`, a SET of Location while out of the collision hash, `walk` (PlayerPawn.StartWalk re-adds it), and a SET of ViewRotation):
@@ -851,31 +856,42 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
   // (exit 0, as the sweep's store-dependent validators do; the Stage 5 gate counts a SKIP as not passing)
   if (absent.length) { console.log(`SKIP no stored original for ${tag}: ${absent.map(f => path.relative(root, f)).join(', ')}`); process.exit(0); }
   const problems = [];
+  // A lock directory holds its owner's pid (mkdir is atomic; a lock whose process is gone is stale and taken over); it is released when its owner exits.
+  const alive = pid => { try { process.kill(pid, 0); return true; } catch { return false; } };
+  const lock = async (lockDir, waiting, pollMs) => {
+    for (let waited = 0; ; waited++) {
+      try { mkdirSync(lockDir); writeFileSync(path.join(lockDir, 'pid'), String(process.pid)); break; } catch (error) { if (error.code !== 'EEXIST') throw error; }
+      const owner = Number(readFileSync(path.join(lockDir, 'pid'), {encoding: 'utf8', flag: 'a+'}) || 0);
+      if (owner && !alive(owner)) { rmSync(lockDir, {recursive: true, force: true}); continue; }
+      if (!waited) console.log(`waiting: ${waiting} (pid ${owner || '?'})`);
+      await new Promise(resolve => setTimeout(resolve, pollMs));
+    }
+    const unlock = () => { try { if (Number(readFileSync(path.join(lockDir, 'pid'), 'utf8')) === process.pid) rmSync(lockDir, {recursive: true, force: true}); } catch {} };
+    process.on('exit', unlock);
+    return unlock;
+  };
   // Play's population (play-population.json): the pre-placed actors, and those pending deletion, whose dump index the slot model takes. A file
-  // without the pending list (written before it existed) would leave PickupDistributor0 the map table's index: the step runs again.
+  // without the pending list (written before it existed) would leave PickupDistributor0 the map table's index: the step runs again. It is the one file
+  // every replay of the map reads, so it is written once, under the map's population lock (live-acceptance.mjs renames it into place whole).
   const populationFile = path.join(dir, 'play-population.json');
-  if (!existsSync(populationFile) || !JSON.parse(readFileSync(populationFile, 'utf8')).pendingDeleted) {
-    const population = await exec(['scripts/live-acceptance.mjs', 'population', '--map', scene.map, '--seed', '1'], 600);
-    if (population.code !== 0) { console.log(population.out.trim().split('\n').slice(-6).join('\n')); console.log(`FAIL ${tag}: the population step stopped (exit ${population.code})`); process.exit(1); }
-    console.log(`population: ${population.out.trim().split('\n').slice(-1)[0]} (play-population.json written again: it had no pendingDeleted list)`);
+  const populationReady = () => existsSync(populationFile) && Boolean(JSON.parse(readFileSync(populationFile, 'utf8')).pendingDeleted);
+  if (!populationReady()) {
+    const unlock = await lock(path.join(dir, '.population.lock'), `another run writes ${scene.map}'s play-population.json`, 2000);
+    if (!populationReady()) {
+      const population = await exec(['scripts/live-acceptance.mjs', 'population', '--map', scene.map, '--seed', '1'], 600);
+      if (population.code !== 0) { console.log(population.out.trim().split('\n').slice(-6).join('\n')); console.log(`FAIL ${tag}: the population step stopped (exit ${population.code})`); process.exit(1); }
+      console.log(`population: ${population.out.trim().split('\n').slice(-1)[0]} (play-population.json written: it was absent or had no pendingDeleted list)`);
+    }
+    unlock();
   }
+  if (argv.includes('--prepare')) { console.log(`prepared ${scene.map}: play-population.json holds the pending-deleted list`); process.exit(0); }
   // --compare-only judges the scene's stored replay again (play-rows-<tag>.json and the files beside it), after a change to the comparison alone
   const compareOnly = argv.includes('--compare-only');
-  // Two replays of one map in different checkouts share its .work directory: this one waits while another runs (live-acceptance.mjs play or compare)
-  // One replay of a map at a time: the play and compare steps share the map's files in .work/live-acceptance/<map> (play-population.json and the like).
-  // A lock directory holds the owner's pid (mkdir is atomic; a lock whose process is gone is stale and taken over). The old check (a pgrep of a running
-  // play step) let two replays that started together both through, and hzm1 then differed at tick 1 beside a gate's cbr1 and dlk1 (2026-10-20).
-  const lockDir = path.join(root, '.work/live-acceptance', scene.map, '.replay.lock');
-  const alive = pid => { try { process.kill(pid, 0); return true; } catch { return false; } };
-  for (let waited = 0; ; waited++) {
-    try { mkdirSync(lockDir); writeFileSync(path.join(lockDir, 'pid'), String(process.pid)); break; } catch (error) { if (error.code !== 'EEXIST') throw error; }
-    const owner = Number(readFileSync(path.join(lockDir, 'pid'), {encoding: 'utf8', flag: 'a+'}) || 0);
-    if (owner && !alive(owner)) { rmSync(lockDir, {recursive: true, force: true}); continue; }
-    if (!waited) console.log(`waiting: another replay of ${scene.map} is running (pid ${owner || '?'})`);
-    await new Promise(resolve => setTimeout(resolve, 15000));
-  }
-  const unlock = () => { try { if (Number(readFileSync(path.join(lockDir, 'pid'), 'utf8')) === process.pid) rmSync(lockDir, {recursive: true, force: true}); } catch {} };
-  process.on('exit', unlock);
+  // Two runs of one scene write the same files (play-rows-<tag>.json, report-<tag>.json and the rest): its replay and its --frames replay in one gate, or two
+  // checkouts sharing .work. They take turns on the scene's lock. Other scenes of the map run beside it: they share no file but play-population.json above.
+  // (The per-map lock this replaces was taken for hzm1's tick-1 difference beside cbr1 and dlk1, 2026-10-20: not a shared file but the frozen phase's race
+  // between the pose write and Play's own landing, which the host's load decided; live-acceptance.mjs now waits for the original's settled state.)
+  await lock(path.join(dir, `.replay-${tag}.lock`), `another run of ${tag} is replaying it`, 5000);
   // --frames: a scene's screens against the original's (the stored `@ctrlshot` frames): one Play replay per frame, to its tick, with the same Brightness line
   if (argv.includes('--frames')) {
     const {compareFrames} = await import('./conversation-acceptance.mjs');
@@ -925,7 +941,7 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
     || /^the original's (\d+ )?load FlyGenerators/.test(line) || (process.env.DEBUG_CONSOLE && line.includes(process.env.DEBUG_CONSOLE))) console.log(line);
   const compare = await exec(['scripts/live-acceptance.mjs', 'compare', '--map', scene.map, '--tag', tag, ...sceneFlags(scene)], 600);
   console.log(compare.out.trim());
-  // the scene's own report (report-<tag>.json): another checkout's replay of the same map writes the untagged report.json in the shared .work
+  // the scene's own report (report-<tag>.json)
   const report = JSON.parse(readFileSync(path.join(dir, `report-${tag}.json`), 'utf8'));
   // (the actors Play watched: the trace's timed actors and load-field pawns are written into Play, not compared; a watched name Play's level lacks fails
   // the replay before the comparison, liveProbe's `no actor`)

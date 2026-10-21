@@ -932,8 +932,11 @@ async function population() {
     const {actors, pendingDeleted} = await page.evaluate(() => window.deusExViewer.liveProbe({actors: 'engine.actor'}));
     // locations: where each actor of the seeded load stands (a chance FlyGenerator's name says nothing about which decoration made it);
     // pendingDeleted: the actors destroyed at load and not yet purged, still registered (registrySeed gives them the dump's index)
-    writeFileSync(path.join(dir, 'play-population.json'), JSON.stringify({seed: Number(option('seed', 1)), names: actors.map(a => a.name), timers: actors.filter(a => a.timer).map(a => a.name), pendingDeleted,
+    // (written whole and renamed into place: every replay of the map reads it, and none may see a half-written file)
+    const file = path.join(dir, 'play-population.json'), partial = `${file}.${process.pid}.partial`;
+    writeFileSync(partial, JSON.stringify({seed: Number(option('seed', 1)), names: actors.map(a => a.name), timers: actors.filter(a => a.timer).map(a => a.name), pendingDeleted,
       locations: Object.fromEntries(actors.map(a => [a.name, a.location]))}));
+    renameSync(partial, file);
     console.log(map, `seed ${option('seed', 1)}:`, actors.length, 'actors');
   });
 }
@@ -1134,13 +1137,26 @@ async function play() {
       const early = await page.evaluate(([lines, frames]) => window.deusExViewer.viewProbe({exec: lines, ...(frames ? {windowFrames: frames} : {})}), [earlyCommands(), frozenWindows?.early ?? null]);
       console.log('early commands:', JSON.stringify(early.output), ...(frozenWindows ? [`(${early.windowFramesRun} of the original's window frames around them)`] : []));
     }
+    // Wait for the state the original's frozen phase ended in, not for its sequence alone. A placement (`ghost`, a SET of Location above the floor,
+    // `walk`) leaves the player falling, and the original's then stood for tens of seconds: landed, at rest, back in its waiting loop (every stored
+    // Stage 5 pose: Physics 1, Velocity 0, BreatheLight looping). The falling player still runs BreatheLight, so a wait on the name ended before the
+    // landing, and the pose written then raced Play's own frozen-phase landing: a landing before the write left the Land animation's AnimLast and
+    // bAnimLoop under the written sequence; one after it landed the player from the pose on a host frame's delta (Z ulps off). The host's speed picked
+    // the winner: hzm1 failed beside two other replays of its map (2026-10-20: Z 4 ulps off at tick 1, the swim's hit animation at tick 3) and passed
+    // alone; one more probe read before the write made it fail every time. The frozen level is ticked until the player is in the pose's Physics, at rest
+    // when the pose is, and runs the pose's sequence, a loop when the pose's is one (a trace with the loop bits).
     let running = null;
-    const same = () => String(running).toLowerCase() === String(pose.Anim).toLowerCase();
-    for (let k = 0; k < 300 && !same(); k++) {
-      running = (await page.evaluate(() => window.deusExViewer.liveProbe({read: {names: ['@player'], props: ['AnimSequence']}}))).read?.['@player']?.AnimSequence ?? null;
-      if (!same()) await frames(2);
+    const same = () => String(running?.AnimSequence).toLowerCase() === String(pose.Anim).toLowerCase();
+    const steady = () => same() && (pose.Phys === undefined || running.Physics === pose.Phys)
+      && (!pose.Vel?.every(v => v === 0) || running.Velocity.every(v => v === 0))
+      && (pose.AnimLoop === undefined || Boolean(running.bAnimLoop) === Boolean(pose.AnimLoop))
+      && (pose.ALast === undefined || (running.AnimLast > 0) === (pose.ALast > 0));
+    for (let k = 0; k < 300 && !steady(); k++) {
+      running = (await page.evaluate(() => window.deusExViewer.liveProbe({read: {names: ['@player'], props: ['AnimSequence', 'Physics', 'Velocity', 'bAnimLoop', 'AnimLast']}}))).read?.['@player'] ?? null;
+      if (!steady()) await frames(2);
     }
-    if (!same()) console.log(`the player's animation is ${running}, the original's ${pose.Anim}: its flags are the former's`);
+    if (!same()) console.log(`the player's animation is ${running?.AnimSequence}, the original's ${pose.Anim}: its flags are the former's`);
+    else if (!steady()) console.log(`the player did not settle as the original's had before the pose was written: ${JSON.stringify(running)}`);
     // The original's pose, exactly (the frozen-phase history of the ghost differs: its landing, its Tread loop).
     await page.evaluate(a => window.deusExViewer.viewProbe({location: a.Loc, rotation: a.VRot, rehash: a.rehash,
       region: {zone: a.RegZone, iLeaf: a.RegLeaf, zoneNumber: a.RegNum}}), {...pose, rehash: flag('ghost-in-hash')});
@@ -1218,7 +1234,7 @@ async function play() {
     const props = [...new Set([...FIELDS.map(f => f[1]), ...(option('extra-props', '') ?? '').split(',').filter(Boolean)])], playerProps = [...new Set([...PLAYER_FIELDS.map(f => f[1]), ...(option('extra-props', '') ?? '').split(',').filter(Boolean)])];
     // the player's animation too, in the call that arms the replay: no frozen tick runs between (a looping ghost
     // animation reaching its end can call script that draws)
-    const setupNames = option('setup-probe', null), [setupFirst, setupLast] = option('setup-ticks', `1:${trace.length}`).split(':').map(Number);   // Setup's result for those actors (setup-play.json)
+    const setupNames = option('setup-probe', null), [setupFirst, setupLast] = option('setup-ticks', `1:${trace.length}`).split(':').map(Number);   // Setup's result for those actors (setup-play<tag>.json)
     const scriptPawns = option('script-trace', null), [scriptFirst, scriptLast] = option('script-ticks', `1:${trace.length}`).split(':').map(Number);
     const eventWindow = option('event-trace', null)?.split(':').map(Number);   // --event-trace first:last: every AI event manager call and delivered callback of those ticks (events-play<tag>.json)
     // --object-trace first:last: the slot model started from the original's registry at the frozen start (registry-start<tag>.txt, `original --registry`)
@@ -1278,7 +1294,7 @@ async function play() {
         // the paired load-made actors take the original's names (live-probe.mjs; work item 13), unless --own-names keeps Play's own
         originalNames: !flag('own-names')};
     };
-    const touchWindow = option('touch-trace', null)?.split(':').map(Number);   // --touch-trace first:last: EndTouch/AddTouch/BeginTouch of those ticks (touch-play.json)
+    const touchWindow = option('touch-trace', null)?.split(':').map(Number);   // --touch-trace first:last: EndTouch/AddTouch/BeginTouch of those ticks (touch-play<tag>.json)
     const navPawns = option('nav-trace', null), [navFirst, navLast] = option('nav-ticks', `1:${trace.length}`).split(':').map(Number);
     // The generators' load-time draws (GENERATOR_FIELDS), as the original's frozen phase left them.
     // The commands typed between two ticks run on a stream state the replay cannot derive (the level is held while the game draws frames, 256 draws
@@ -1475,15 +1491,16 @@ async function play() {
     writeFileSync(playPath, JSON.stringify({map, ghost, initial: started.initial, rows, errors, commands: commandLog, levelEnd}));
     for (const c of commandLog) if (c.draws) console.log(`  ${c.draws.length} draws in ${c.text}:\n    ${c.draws.join('\n    ')}`);
     for (const c of commandLog) console.log(`command after ${c.after} ticks: ${c.text} -> ${c.error ? `ERROR ${c.error}` : JSON.stringify(c.output)}`);
-    if (globalThis.__debugRows) writeFileSync(path.join(dir, 'debug-play.json'), JSON.stringify(globalThis.__debugRows));
-    if (touchWindow) writeFileSync(path.join(dir, 'touch-play.json'), JSON.stringify(touch));
+    // (every file a replay writes carries its tag: replays of one map run side by side, validate-stage5-acceptance.mjs --jobs)
+    if (globalThis.__debugRows) writeFileSync(path.join(dir, `debug-play${suffix}.json`), JSON.stringify(globalThis.__debugRows));
+    if (touchWindow) writeFileSync(path.join(dir, `touch-play${suffix}.json`), JSON.stringify(touch));
     if (eventWindow) writeFileSync(path.join(dir, `events-play${suffix}.json`), JSON.stringify(events));
     if (objectWindow) { writeFileSync(path.join(dir, `objects-play${suffix}.json`), JSON.stringify(objects)); writeFileSync(path.join(dir, `sounds-play${suffix}.json`), JSON.stringify(sounds));
       console.log(`object trace: ${objects.length} registry events, ${sounds.length} Galaxy PlaySound calls`);
       if (preFreeStats) console.log(`object trace: pre-frees ${preFreeStats.anchored} released at their anchor, ${preFreeStats.late} late, ${preFreeStats.rejected} refused, ` +
         `${preFreeStats.waiting} never reached; the model's releases of a slot it cannot name ${preFreeStats.unattributed}, refused ${preFreeStats.modelRejected}`); }
-    if (setupNames) writeFileSync(path.join(dir, 'setup-play.json'), JSON.stringify(setup));
-    if (scriptPawns) writeFileSync(path.join(dir, 'script-play.json'), JSON.stringify({pawns: scriptPawns.split(','), events: script}));
+    if (setupNames) writeFileSync(path.join(dir, `setup-play${suffix}.json`), JSON.stringify(setup));
+    if (scriptPawns) writeFileSync(path.join(dir, `script-play${suffix}.json`), JSON.stringify({pawns: scriptPawns.split(','), events: script}));
     if (navPawns) writeFileSync(path.join(dir, `nav-play${suffix}.json`), JSON.stringify({pawns: navPawns.split(','), events: nav}));
     if (option('shot', null)) {
       // The replay holds the level at its last tick; Play draws on: the frame at the brightness whose display ramp is the identity.
@@ -1682,9 +1699,8 @@ function compare() {
       if (o.bDeleteMe === 1 && p.bDeleteMe === 1) { entry.destroyedAt = i + 1; break; }
     }
   }
-  writeFileSync(path.join(dir, 'report.json'), JSON.stringify(report, null, 1));
-  // and under the tag (report<tag>.json): two replays of one map in different checkouts share .work, so a check reads its own scene's report
-  if (suffix) writeFileSync(path.join(dir, `report${suffix}.json`), JSON.stringify(report, null, 1));
+  // report<tag>.json (report.json without a tag): replays of one map run side by side and share .work, so each reads its own scene's report
+  writeFileSync(path.join(dir, `report${suffix}.json`), JSON.stringify(report, null, 1));
   console.log(`${map}: ${rows.length} ticks; clock ${firstClock ? `differs from tick ${firstClock.tick}` : 'equal'}; stream draws per tick ${firstRng ? `differ at tick ${firstRng.tick} (original ${firstRng.original}, Play ${firstRng.play})` : 'equal'}`);
   if (report.strobe) console.log(`Strobe flag: original flipped ${report.strobe.originalFlips} times (last at tick ${report.strobe.originalLastChange}), Play ${report.strobe.playFlips} (last at tick ${report.strobe.playLastChange}); differs at ${report.strobe.ticksWithDifferentFlag} of ${rows.length} ticks`);
   for (const [name, entry] of Object.entries(report.actors)) {

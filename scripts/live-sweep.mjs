@@ -92,7 +92,7 @@ async function stateAt(tracePath, wanted) { // wanted: Map(tick -> Set(actor))
 
 async function summarise(map) {
   const dir = mapDir(map);
-  const report = JSON.parse(readFileSync(path.join(dir, 'report.json'), 'utf8'));
+  const report = JSON.parse(readFileSync(path.join(dir, `report-${tag}.json`), 'utf8'));
   const watch = JSON.parse(readFileSync(path.join(dir, 'watch.json'), 'utf8'));
   const tracePath = path.join(dir, `original-trace-${tag}.jsonl`);
   const labelsOrder = ['Loc', 'Rot', 'Vel', 'Acc', 'Phys', 'State', 'Anim', 'Frame', 'Rate', 'Tween', 'Dest', 'MoveT', 'MoveTgt', 'Order'];
