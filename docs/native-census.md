@@ -403,6 +403,11 @@ MenuMPMain stops above), and the colour-theme screens (`MenuScreenRGB` and Theme
 six screens, Brightness, Credits, New Game with its difficulty screen and message boxes, the multiplayer menu itself) ran clean
 or stopped for one of the reasons above.
 
+Negative control: with the FindWindow branch of `script-window-host.mjs` switched off (not committed), a one-screen run stops on
+MenuMain with the message the user met, "Unsupported original door native 1472 in menuuiwindow.mousebuttonpressed", on a plain
+click at the window's top-left corner, on the title bar, on the client area and on three of the buttons, so the sweep does find
+the class of stop the user hit.
+
 A stop hides what is behind it, so the sweep is repeated when one is fixed (`node scripts/census-ui-menus.mjs`; `--reuse FILE`
 re-sorts an earlier report against the current census). The exec commands the menus send through `ConsoleCommand` are a second
 finite list worth a census of their own (the `UnsupportedConsoleCommandError` branches of `script-console-command.mjs` are its
