@@ -25,6 +25,35 @@ export function registerLoadedPackage(runtime,asset){
   return record;
 }
 
+/** A ConSys.ConHistory (`isEvent` false) or ConHistoryEvent object as the original's CreateHistoryObject/CreateHistoryEvent natives (3002, 3003) and the
+ * travel import's StaticConstructObject leave it: allocated in `outer` (default: the loaded level's package, where a preplaced player lives), its links
+ * None, the DeusEx class vtable (ConHistory 0x10027fe8, ConHistoryEvent 0x1002803c) and the Destroy it names. ConHistory's Destroy is DConHistory::Destroy
+ * 0x1000ca20: it deletes each event from firstEvent through its deleting destructor (reading next first), then UObject::Destroy. */
+export function constructHistoryObject(runtime,level,cls,isEvent,{outer=level.nativeObject.outer}={}){
+  const get=(o,k)=>runtime.readNamed(o,k),set=(o,k,v)=>runtime.writeNamed(o,k,v);
+  const object=runtime.allocateObject(cls,{outer,name:'None',flags:0,template:null},{
+    ...runtime.actorLifecycle.construction,validate:args=>args.cls===cls&&args.outer===outer&&args.template===null,
+    initNativeProperties:()=>{},
+  });
+  const native=runtime.instance(object).nativeObject;
+  native.nativeVtable=0x10179dfc;
+  native.nativeVtable=isEvent?0x100135bc:0x10013568;
+  for(const field of isEvent?['next']:['firstEvent','lastEvent','next'])set(object,field,null);
+  native.nativeVtable=isEvent?0x1002803c:0x10027fe8;
+  // ConHistoryEvent 0x1002803c slot +0x24 is UObject::Destroy (thunk 0x1001aec0). ConHistory 0x10027fe8 slot +0x24 imports ConSys DConHistory::Destroy
+  // 0x1000ca20: it deletes each event from firstEvent (+0x50) through its scalar deleting destructor, reading next (+0x44) first, leaves firstEvent set
+  // and then runs UObject::Destroy.
+  native.destroy=isEvent?receiver=>runtime.destroyObjectBase(receiver):receiver=>{
+    for(let event=get(receiver,'firstEvent');event;){
+      const next=get(event,'next');
+      runtime.deleteObject(event);
+      event=next;
+    }
+    runtime.destroyObjectBase(receiver);
+  };
+  return object;
+}
+
 export async function createLiveConPlayRuntime({runtime,assets,level,player,shell,conversations,dataLinkConversations=[],onSpeech,prepareClass}){
   const get=(o,k)=>runtime.readNamed(o,k);
   const set=(o,k,v)=>runtime.writeNamed(o,k,v);
@@ -211,32 +240,8 @@ export async function createLiveConPlayRuntime({runtime,assets,level,player,shel
       if(!(data.array.data instanceof Uint8Array))throw new Error('Speech bytes are not prepared');
     },log:message=>{throw new Error(message);}}};
   function history(isEvent){
-    const cls=isEvent?historyEventClass:historyClass;
     // Preplaced player belongs to the loaded level's package, as in the map.
-    const outer=level.nativeObject.outer;
-    const object=runtime.allocateObject(cls,{outer,name:'None',flags:0,template:null},{
-      ...runtime.actorLifecycle.construction,validate:args=>args.cls===cls&&args.outer===outer&&args.template===null,
-      initNativeProperties:()=>{},
-    });
-    const native=runtime.instance(object).nativeObject;
-    native.nativeVtable=0x10179dfc;
-    native.nativeVtable=isEvent?0x100135bc:0x10013568;
-    for(const field of isEvent?['next']:['firstEvent','lastEvent','next'])set(object,field,null);
-    native.nativeVtable=isEvent?0x1002803c:0x10027fe8;
-    // ConHistoryEvent 0x1002803c slot +0x24 is UObject::Destroy (thunk
-    // 0x1001aec0). ConHistory 0x10027fe8 slot +0x24 imports ConSys
-    // DConHistory::Destroy 0x1000ca20: it deletes each event from firstEvent
-    // (+0x50) through its scalar deleting destructor, reading next (+0x44)
-    // first, leaves firstEvent set and then runs UObject::Destroy.
-    native.destroy=isEvent?receiver=>runtime.destroyObjectBase(receiver):receiver=>{
-      for(let event=get(receiver,'firstEvent');event;){
-        const next=get(event,'next');
-        runtime.deleteObject(event);
-        event=next;
-      }
-      runtime.destroyObjectBase(receiver);
-    };
-    return object;
+    return constructHistoryObject(runtime,level,isEvent?historyEventClass:historyClass,isEvent);
   }
   // ConSys execCreateConCamera 0x100106f0 (docs/conversation-camera.md): P_FINISH,
   // CreatePackage(NULL,"DeusEx"), then DConCamera's operator new 0x10003d10 =

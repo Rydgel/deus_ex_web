@@ -21,11 +21,12 @@
  * augmentations, images, a NanoKeyInfo, a note, a goal) and the two travels; E a typed name, Realistic, a portrait and a skill, then non-default item
  * properties set on the live objects, two keys, two notes, two goals and the two travels; F three items picked up by the real frob path (the Island's soda can,
  * liquor bottle and crowbar: invPosX/Y, invSlots) and the two travels; G the "train first?" box (answered No) and Escape twice on the Island; H the console's
- * `StartNewGame` from Training Combat (the test input the first captures used). Each scenario is its own process (a scenario's level sessions are not freed).
+ * `StartNewGame` from Training Combat (the test input the first captures used); I the Island's first conversation (MeetPaul played with Enter: the player's
+ * ConSys.ConHistory with 16 ConHistoryEvents, goals, an image and the weapon it transfers) and the two travels. Each scenario is its own process (a scenario's level sessions are not freed).
  *
  * runner-timeout: 2400
  *
- *   node scripts/validate-travel-newgame.mjs [--only A|B|C|D|E|F|G|H] [--dump DIR] */
+ *   node scripts/validate-travel-newgame.mjs [--only A|B|C|D|E|F|G|H|I] [--dump DIR] */
 import assert from 'node:assert/strict';
 import { readdir, readFile, writeFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
@@ -45,7 +46,7 @@ if (!only) {
   const { spawnSync } = await import('node:child_process');
   const argv = process.argv.slice(2);
   let status = 0;
-  for (const id of ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H']) {
+  for (const id of ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I']) {
     const run = spawnSync(process.execPath, [process.argv[1], '--only', id, ...argv], { stdio: 'inherit' });
     if (run.status !== 0) status = run.status ?? 1;
   }
@@ -256,7 +257,7 @@ const nameAndMedicine = async ({ c, driver, scoped }) => {
   scoped(() => driver.pressField('btnUpgrade')); c.frames(5);   // Medicine
 };
 
-const CAPTURED = { A: 'nw0', B: 'nw0', C: 'nw0', D: 'nw0', E: 'nw1', F: 'nw2', G: 'nw3', H: 'nw4' };
+const CAPTURED = { A: 'nw0', B: 'nw0', C: 'nw0', D: 'nw0', E: 'nw1', F: 'nw2', G: 'nw3', H: 'nw4', I: 'nw5' };
 const wanted = id => (!only || only === id) && (existsSync(`${captureRoot}${CAPTURED[id]}/final.log`) || (console.log(`SKIP ${id}: no ${CAPTURED[id]} captures`), false));
 
 if (wanted('A')) {
@@ -320,6 +321,22 @@ if (wanted('G')) {
       island.key('Escape'); island.frames(20);
       check(driver.top() === 'deusex.menumain', `G: the second Escape on the Island opened ${driver.top()} (the original: MenuMain)`);
       console.log('Escape twice on the Island: nothing, then MenuMain'); } });
+}
+
+if (wanted('I')) {
+  // The Island's first conversation, MeetPaul (radius-invoked, 16 history events, three goals, an image, the sniper rifle chosen with Enter): the player placed 100
+  // units in front of Paul by the live scenes' ghost, `set Location`, `walk`, `set ViewRotation` (cheats on first), Enter pressed every 4.5 s for three minutes,
+  // then `LocalTravel 02_NYC_Street`. The text carries ConSys.ConHistory and ConHistoryEvent (native classes); the Airfield's is what the import of that text
+  // leaves, after Mission02.FirstFrame reset the history and the secondary goals.
+  await scenario('I: MeetPaul with Enter (conversation history, goals, an image, a chosen weapon), two travels', { dir: 'nw5', difficulty: 1, leave: 'escape', capture: 'n9', logNth: 1,
+    expect: { islandText: 'n9-island-frozen', frozenIsland: true, islandFrozenFlags: 'n9-island-frozen', islandLiveFlags: '../nw0/n1b-island-live' },
+    after: ({ island }) => { island.frames(420);
+      return twoHops('I', island, { dir: 'nw5', capture: 'n9', run: c => {
+        typed(c, 'set DeusEx.JCDentonMale bCheatsEnabled True'); c.frames(30);
+        c.watched.add(c.actor('PaulDenton0'));   // a headless frame draws no mesh: the renderer's feedback stamps what the player looks at (census-stage5-session.mjs)
+        typed(c, 'ghost'); typed(c, 'set JCDentonMale Location (X=-2385,Y=8393,Z=-256.2)'); typed(c, 'walk'); typed(c, 'set JCDentonMale ViewRotation (Pitch=0,Yaw=51105,Roll=0)');
+        c.frames(180);
+        for (let i = 0; i < 40; i++) { c.game.windowKey('Enter', true); c.game.windowKey('Enter', false); c.frames(270); } } }); } });
 }
 
 if (wanted('H')) {
