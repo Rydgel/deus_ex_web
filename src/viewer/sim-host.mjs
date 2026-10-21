@@ -12,6 +12,8 @@
  * - `meshBackend`: 'javascript' keeps the JavaScript GetFrame kernel;
  * - `meshLod`: 'off' draws every mesh at full detail (no DrawLodMesh
  *   distance LOD, docs/script-lodmesh-lod.md);
+ * - `travel`: `{arrival, lastURL}` (docs/travel.md): the session runs map travel as recovered; `arrival` is the request of the travel that
+ *   brought the player here (travel.mjs), null for a map opened directly;
  * - `musicLibrary`: Galaxy's music library service (galaxy-music-library.mjs
  *   connectMusicLibraryPort, the worklet's port), or null for the headless
  *   mirror. It outlives the map: `disposeAudio()` (also run by `dispose()`)
@@ -42,12 +44,12 @@ import { createDetailDraw } from '../runtime/detail-draw.mjs';
 const hostStarts = [];
 
 export async function createSimHost(map, asset, assets, { randomSeed, subtitles, stampScene, panZones, childFrames,
-  gpu = null, weaponGpu = null, meshBackend = null, meshLod = null, weapons = null, weaponMirrors = null, weaponOrder = null, musicLibrary = null, onConversationSpeech = null, onAudioVoice = null,
+  gpu = null, weaponGpu = null, meshBackend = null, meshLod = null, weapons = null, weaponMirrors = null, weaponOrder = null, musicLibrary = null, travel = null, onConversationSpeech = null, onAudioVoice = null,
   onProgress = () => {} }) {
   const events = [], notes = [], hostIndex = hostStarts.push(handleLimit()) - 1;
   let game;
   try {
-    game = await createGame(map, asset, assets, { presentation: true, randomSeed, subtitles, musicLibrary,
+    game = await createGame(map, asset, assets, { presentation: true, randomSeed, subtitles, musicLibrary, travel,
       onLightingChanged: changes => events.push({ kind: 'lighting', changes }),
       onConversationSpeech: event => onConversationSpeech?.(event), onAudioVoice: event => onAudioVoice?.(event) });
   } catch (error) { notes.push(`Play mode unavailable: ${error.message}`); return { game: null, notes, events }; }

@@ -40,6 +40,9 @@ import { performActorPhysics, linkedActorPhysics } from './actor-physics.mjs';
 import { prepareCrateLifecycle } from './script-crate-lifecycle.mjs';
 import { runSpawnedActorFalling, runActorRolling, runActorRotation, runActorProjectile, runActorPathing } from './script-actor-physics.mjs';
 import { createLevelCollection } from './script-level-collection.mjs';
+import { createSaveStore, installTravelNatives } from './script-travel.mjs';
+import { createTravelExporter, loadFlagClasses } from './travel-export.mjs';
+import { createTravelImporter } from './travel-import.mjs';
 
 const f = Math.fround;
 const lower = value => String(value ?? '').toLowerCase();
@@ -435,7 +438,7 @@ function stateLabelForTarget(mover) {
  */
 export async function createScriptDoors({
   assets, asset, movers = [], playerActor, playerScene, playerController, level, callbacks = {}, rng, queries, zoneAt, onLightingChanged = null,
-  nativeHud = false, musicLibrary = null,
+  nativeHud = false, musicLibrary = null, travel = null,
 } = {}) {
   if (!assets?.get) throw new TypeError('createScriptDoors requires an AssetStore');
   if (!level || typeof level !== 'object') throw new TypeError('createScriptDoors requires the linked Level object');
@@ -461,28 +464,37 @@ export async function createScriptDoors({
   let liveMission=null;
   let levelCollection=null,lastCollection=null;
   let loadMapGame=null;
-  let playerLogin=null, preparedPlayerStartup=null, loggingIn=false;
+  let playerLogin=null, preparedPlayerStartup=null, loggingIn=false, travelExporter=null;
+  // The travel that brought the player here (travel.mjs request): the URL's portal and options for Login and InitGame, the travel text for
+  // SpawnPlayActor's import. Null for a cold open.
+  const arrival=travel?.arrival?{...travel.arrival,optionsText:travel.arrival.options.map(option=>`?${option}`).join('')}:null;
   // ULevel::SpawnPlayActor -> DeusExGameInfo.Login (docs/script-player-login.md).
   function loginPlayer(){
     loggingIn=true;
     try{if(!playerLogin.login())throw new Error(`Original Login failed: ${playerLogin.error}`);}
     finally{loggingIn=false;}
-    playerStartup=preparedPlayerStartup.complete(playerActor);
+    playerStartup=preparedPlayerStartup.complete(playerActor,{imported:playerLogin.imported});
     // The player's global UObject index as measured in this map's open
     // capture (build-map-object-indices.mjs): the channel ids of its sounds.
     const playerIndex=mapPlayerIndex(asset?.name);
     if(Number.isInteger(playerIndex)&&runtime.instance(playerActor).cls?.record.key==='deusex.jcdentonmale')
       runtime.registerGlobalObjectIndex(playerActor,playerIndex);
-    liveMission.beginFreshMission(playerActor);
+    // A map entered by travel gets PlayerTraveling from the travel text (PreTravel set it in the level left: travel-import.mjs);
+    // only a cold open, which has no incoming travel state, is given the marker (docs/script-training-mission-entry.md).
+    if(!arrival)liveMission.beginFreshMission(playerActor);
   }
   // GLog output device: Object.Log (native 231) is a synchronous side channel
   // with no gameplay effect. MissionScript.InitStateMachine logs its startup
   // line, so supply the host sink the original always has, recording a bounded
   // ring for diagnostics rather than leaving it an explicit boundary throw.
   const scriptLog=[];
+  // The engine log as the original's GLog prints it (docs/travel.md "What each travel did"): Object.Log lines (tag ScriptLog) and the
+  // native lines the travel code adds ("Log: Browse: ..."), in the order they happen.
+  const engineLog=[];
+  const logLine=(tag,text)=>{engineLog.push(`${tag}: ${text}`);};
   const runtime = new ScriptRuntime(assets, { native: nativeCall, rng, levelFor: () => level, nativeClassLoading: true,
     conversationObjects:()=>level.actors.filter(Boolean),boundaryNatives: [264, 265],
-    logDevice:event=>{scriptLog.push(event);if(scriptLog.length>512)scriptLog.shift();} });
+    logDevice:event=>{scriptLog.push(event);if(scriptLog.length>512)scriptLog.shift();logLine(event.tag,event.text);} });
   // LoadMap startup (Mover.BeginPlay's Move/SetRotation) and Login already
   // move actors and cross zones. Bind the scene's event, rider, map-rotation
   // and pawn-move entries to the original runtime as soon as it exists, so no
@@ -1820,7 +1832,10 @@ export async function createScriptDoors({
     startupField(levelInfo, 'bStartup').set(true);
     startupField(levelInfo, 'TimeSeconds').set(0);
     // Original InitGame executes here, creating BaseMutator itself.
-    loadMapGame.init();
+    // LoadMap's native log lines before the game is initialised (docs/travel.md "What each travel did"); the "(0)" is the measured constant.
+    logLine('Log',`Game class is '${loadMapGame.class.record.name}'`);
+    logLine('Log',`Bringing Level ${asset.name}.MyLevel up for play (0)...`);
+    loadMapGame.init(arrival?arrival.optionsText:'');
     runStartupEvent('PreBeginPlay');
     runStartupEvent('BeginPlay');
     setStartupActorZones();
@@ -2170,11 +2185,21 @@ export async function createScriptDoors({
   const extension=await assets.get('Extension');
   await runtime.loadClass(extension,extension.exportsByPath.get('flagbase'));
   preparedPlayerStartup=await createPlayerAugmentationStartup({runtime,assets,deusEx,level,player:playerActor});
+  let travelImporter=null;
+  if(travel){
+    const flagClasses=await loadFlagClasses(runtime,assets);
+    travelExporter=createTravelExporter({runtime,flagClasses});
+    travelImporter=createTravelImporter({runtime,assets,level,exporter:travelExporter,log:logLine,prepareClass:prepareNpcClass,
+      flagBaseOf:player=>runtime.readNamed(player,'FlagBase')});
+  }
   playerLogin=await preparePlayerLogin({runtime,assets,level,levelInfo,
-    viewport:level.engine.client.viewports[0],prepareClass:prepareNpcClass});
+    viewport:level.engine.client.viewports[0],prepareClass:prepareNpcClass,arrival,importer:travelImporter,log:logLine});
   // DeusExGameInfo.Login unconditionally runs native 3015
   // CreateDumpLocationObject on the logged-in player (docs/script-player-dump.md).
   await preparePlayerDumpStore({runtime,assets});
+  // A session that travels (Play, the travel validators) runs ClientTravel and DeleteSaveGameFiles as recovered; others keep their named stops.
+  const saveStore=travel?createSaveStore({releaseLoaders:()=>logLine('Log',`Unloading: Package ${asset.name}`)}):null;
+  if(travel)installTravelNatives({runtime,store:saveStore});
   runtime.actorLifecycle.bindCollisionView=(actor,cls,lineage)=>{
     if(!loggingIn||!lineage.includes('engine.playerpawn'))return false;
     const fields=classFields(cls).filter(field=>!field.key.startsWith('core.object.')),snapshot=new Map(fields.map(field=>[field.key,runtime.fieldReference(actor,field).get()]));
@@ -2282,7 +2307,7 @@ export async function createScriptDoors({
     npcPawns, npcFailures, scriptPreparationFailures, loadMapStartupExclusions,
     get lastTickDelta(){return lastTickDelta;},
     infoLinkShell,get playerStartup(){return playerStartup;},windowHost,playerLogs,dataLinkPresentation:liveDataLink.presentation,dataLinkActive:liveDataLink.active,
-    dataLinkReceivedItems:liveDataLink.receivedItems,faceConversations,liveConPlay,liveMission };
+    dataLinkReceivedItems:liveDataLink.receivedItems,faceConversations,liveConPlay,liveMission,engineLog,logLine,saveStore,arrival,get travelExporter(){return travelExporter;} };
 }
 
 export default createScriptDoors;

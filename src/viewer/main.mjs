@@ -726,13 +726,19 @@ function setMode(next) {
   $('scene').setAttribute('aria-label', mode === 'play' ? 'Game view. W A S D to move, Space to jump, X to crouch, right mouse to use, F to center view.' : 'Map inspection camera. W A S D to fly, Q E down and up.');
   return reply;
 }
+function travelTo(request) {
+  // (the level left has stopped ticking: sim-session.mjs `travelled`)
+  loadMap(request.map, { travel: request }).catch(error => { toast(error.message); pauseForRuntimeError(error); });
+}
 function pauseForRuntimeError(error) {
   runtimeError={message:error.message,stack:error.stack,travel:error.travel??null};paused=true;
   keys.clear();drag=false;document.exitPointerLock?.();
   showStats();
   // The map ended by travelling (Stage 6): a stop, not a failure.
   $('toast').textContent=error.travel
-    ?`The map ended: it travels to “${error.travel.url}”. Map travel is not implemented yet (Stage 6). Choose Player start to replay.`
+    ?(error.name==='TravelStop'
+      ?`The map ended: it travels to “${error.travel.url}”, which stops at ${error.message}. Choose Player start to replay.`
+      :`The map ended: it travels to “${error.travel.url}”. Map travel is not implemented in this session (Stage 6). Choose Player start to replay.`)
     :`Play paused: ${error.message}. Choose Player start to reset.`;
 }
 function showStats() {
@@ -756,7 +762,9 @@ function remoteHost(loaded) {
     actorSim: summary ? { summary, actors: [], npcActors: [] } : null, lit: loaded.lit, meshLighting: null,
     notes: loaded.notes, events: loaded.events, hudTextures: loaded.hudTextures, dispose() {} };
 }
-async function loadMap(name) {
+/** `travel`: the request of the travel step that leads here (travel.mjs; docs/travel.md), null for a map opened directly. The simulation
+ * side's Login imports the travel text it carries. */
+async function loadMap(name, { travel = null } = {}) {
   if (!assets || !assets.files.has(name.toLowerCase())) throw new Error(`Map is not available: ${name}`);
   if (loading) throw new Error('A map is already loading');
   loading = true; $('map').disabled = true; $('reset').disabled = true; $('choose').disabled = true;
@@ -786,7 +794,7 @@ async function loadMap(name) {
     }
     // The simulation side (sim-host.mjs): the game, the frame session, the
     // mesh layers' simulation halves and lip sync.
-    const hostOptions = { randomSeed, subtitles: subtitlePreference,
+    const hostOptions = { randomSeed, subtitles: subtitlePreference, travel: { arrival: travel, lastURL: travel?.lastURL ?? null },
       stampScene: nextWorld.stampScene(), panZones: nextWorld.panZoneNames(),
       // Actors only a child frame draws are admitted where one may exist: a map with mirrors, or with security
       // cameras (a ViewportWindow's frame draws the player, whom Draw's bBehindView stops excluding).
@@ -1831,6 +1839,8 @@ function drawFrame(snap, time) {
     for (const message of snap.toasts ?? []) toast(message);
     if (snap.status) { simStatus = snap.status; if (npcPreview && snap.status.summary) npcPreview.summary = snap.status.summary; }
     for (const error of snap.errors) pauseForRuntimeError(error);
+    // UGameEngine::Tick's travel step browsed to another level (sim-session.mjs): load it with the travel text
+    if (snap.begin?.travel && !loading) travelTo(snap.begin.travel);
     // The worker's step times are its own thread's (`worker`); on the page
     // they belong to the frame's phases.
     for (const [name, ms] of Object.entries(snap.timings)) {
@@ -1862,7 +1872,7 @@ function drawFrame(snap, time) {
     if (x || z || keys.has('Space') || keys.has('ControlLeft') || keys.has('ControlRight')) cameraMoved = true;
     // Host status only: the frob target's name and highlight are the
     // original HUD's FrobDisplayWindow.
-    if (mode === 'play') $('play-hint').textContent = runtimeError?.travel ? `Map ended · travel to ${runtimeError.travel.url} is Stage 6 · Player start replays`
+    if (mode === 'play') $('play-hint').textContent = runtimeError?.travel ? `Map ended · travel to ${runtimeError.travel.url} stops here (Stage 6) · Player start replays`
     : runtimeError ? 'Play paused · Player start resets the scene' : paused ? 'Click the view to resume' : '';
   }
   phase('tick');

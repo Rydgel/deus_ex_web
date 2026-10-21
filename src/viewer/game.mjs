@@ -23,6 +23,8 @@ import { inputKeyForCode } from './input-key-names.mjs';
 import { isMovingLightCandidate } from '../runtime/dynamic-lighting.mjs';
 import { loadTraceKernel } from '../runtime/trace-kernel.mjs';
 import { lightGlobals } from '../runtime/light-globals.mjs';
+import { createTravelStep } from '../runtime/travel.mjs';
+import { Furl, DEFAULT_PLAYER_OPTIONS } from '../runtime/furl.mjs';
 
 /** Bind decoded resources to the renderer-independent simulation. */
 /** The game left the level (UGameEngine::Tick's client travel to `url`): Browse and LoadMap are Stage 6, so Play stops here. */
@@ -36,7 +38,7 @@ export class ClientTravelBoundary extends Error {
 
 export async function createGame(map, asset, assets, { randomSeed = Math.floor(Date.now()/1000) >>> 0,
   onLightingChanged = null, onDataLinkTransmission = null, onConversationSpeech = null, onAudioVoice = null, presentation = false,
-  subtitles = null, musicLibrary = null } = {}) {
+  subtitles = null, musicLibrary = null, travel = null } = {}) {
   if(onDataLinkTransmission!=null&&typeof onDataLinkTransmission!=='function')
     throw new TypeError('createGame onDataLinkTransmission must be a function');
   const defaults = new ClassDefaults(assets), collision = new CollisionWorld(map.model), notes = [];
@@ -169,7 +171,7 @@ export async function createGame(map, asset, assets, { randomSeed = Math.floor(D
   doors.scriptRuntime=await createScriptDoors({assets,asset,movers:collision.movers,
     playerActor:player.collisionActor,playerScene,playerController:player,level:playerScene.level,callbacks:collision.doorCallbacks,rng:random,
     nativeHud:presentation,queries:collision.queries, zoneAt: p => zones[pointZone(map.model, p)] ?? zoneDefault, onLightingChanged,
-    musicLibrary});
+    musicLibrary,travel});
   const levelTime=doors.scriptRuntime.runtime.namedReference(playerScene.level.actors[0],'TimeSeconds');
   // Flicker's host key for every GlobalLighting caller (light-globals.mjs):
   // a map-placed actor's export index, else its Level.Actors slot (low byte).
@@ -278,6 +280,15 @@ export async function createGame(map, asset, assets, { randomSeed = Math.floor(D
       source: `${asset.name} open capture (${seed.holes} holes)`});
   }
   let zoneNames = null;
+  // Map travel (docs/travel.md): a session created with `travel` runs ClientTravel as recovered and the tick's travel step browses to the
+  // next level; one without keeps the named stop (ClientTravelBoundary). `travel.arrival` is the travel that brought the player here,
+  // `travel.lastURL` the engine's LastURL (docs/travel.md "Unresolved" 7).
+  playerScene.level.travelInfo = new Map(travel?.arrival?.travelInfo ?? []);
+  const travelStep = travel ? createTravelStep({ runtime: doors.scriptRuntime.runtime, level: playerScene.level,
+    viewport: () => playerScene.level.engine.client.viewports[0], exporter: doors.scriptRuntime.travelExporter,
+    store: doors.scriptRuntime.saveStore, log: doors.scriptRuntime.logLine,
+    lastURL: new Furl(travel.lastURL ?? { map: asset.name, op: DEFAULT_PLAYER_OPTIONS.map(([name, value]) => `${name}=${value}`) }),
+    levelUrlMap: () => travel.arrival?.map ?? asset.name }) : null;
   const game = {
     takeAudioMs() { const ms = audioMs; audioMs = 0; return ms; },
     player, doors, collision, notes, start, interaction, random, hud,
@@ -305,11 +316,15 @@ export async function createGame(map, asset, assets, { randomSeed = Math.floor(D
      * stores the URL (SetClientTravel, script-console-command.mjs), so the level the OPEN came from ticks once more and ends at this
      * step. Browse and LoadMap are not modelled (the next map, DXONLY's menu after a death, is Stage 6): the step is the boundary where
      * Play stops, thrown as ClientTravelBoundary. A live replay records the tick it happened after (live-probe.mjs levelEnd).
+     * A session created with `travel` browses instead (travel.mjs) and returns the request for the next level.
      * Callers run it after each tick and before the view, as the original's order is. */
     clientTravel() {
       const viewport = playerScene.level.engine?.client?.viewports?.[0];
       const url = viewport?.travelURL;
-      if (!url) return;
+      if (!url) return null;
+      // A session that travels: the travel step (travel.mjs) returns the next level's request, or throws a TravelStop that names the
+      // original body it does not implement.
+      if (travelStep) return travelStep.run();
       const replay = game.liveReplay;
       if (replay && !replay.levelEnd) replay.levelEnd = { tick: replay.index, url, travelType: viewport.travelType, items: viewport.bTravelItems };
       throw new ClientTravelBoundary(url);

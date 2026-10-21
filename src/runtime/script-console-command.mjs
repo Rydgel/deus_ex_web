@@ -22,6 +22,7 @@
  * handler's work.
  */
 import {gameEngineKey} from './script-window-typed-keys.mjs';
+import {setClientTravel as sharedSetClientTravel} from './script-travel.mjs';
 import {readToken, importText} from './config-text.mjs';
 import {msvcrtWtoi} from './script-text-parser.mjs';
 import {scriptStringComplementEqual, scriptStringText} from './script-string-operations.mjs';
@@ -537,17 +538,7 @@ export function createConsoleCommands({runtime, input, services}) {
    * aborts a DataLink and puts its fire out, AugLight destroys its beams. The URL is browsed by UGameEngine::Tick's client travel (game.mjs
    * clientTravel), not here. */
   function setClientTravel(url, items, type) {
-    const viewport = services.viewport(), actor = read(viewport, 'Actor');
-    if (!actor) throw new Error('SetClientTravel requires the viewport Actor');
-    viewport.travelURL = url; viewport.travelType = type; viewport.bTravelItems = items;
-    // GLevel: the viewport actor's level (Play's session holds one level)
-    const actors = runtime.levelFor(actor).actors;
-    for (let index = 0; index < actors.length; index++) {
-      const target = actors[index];
-      if (!target) continue;
-      const record = runtime.lookup(target, 'PreTravel');
-      if (record?.function) runtime.processEvent(target, 'PreTravel', [], null, record);
-    }
+    sharedSetClientTravel(runtime, services.viewport(), url, items, type);
   }
 
   /** DDeusExGameEngine::Exec 0x1000ed70 -> UGameEngine::Exec 0x1038a030 ->

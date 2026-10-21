@@ -33,6 +33,12 @@ export function createMenuDriver(game) {
     runtime, W, player, topWindow, findDescendant, top: () => keyOf(topWindow()),
     /** ShowMainMenu (the Escape key's menu). */
     showMainMenu() { game.hud.scoped(() => runtime.scriptConsoleExec(player, 'ShowMainMenu')); },
+    /** winButtons[index] of the topmost menu window, activated (what a click on that button does). */
+    pressButton(index) {
+      const buttons = runtime.readNamed(topWindow(), 'winButtons');
+      if (!buttons?.[index]) throw new Error(`${keyOf(topWindow())} has no button ${index}`);
+      activate(buttons[index]);
+    },
     /** The button of the topmost menu window whose buttonDefaults invoke `screenClass`, activated. */
     invoke(screenClass) {
       const menu = topWindow(), defaults = runtime.readNamed(menu, 'buttonDefaults'), buttons = runtime.readNamed(menu, 'winButtons');

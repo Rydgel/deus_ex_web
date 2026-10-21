@@ -79,6 +79,7 @@ export const TRIGGER_NATIVE_INDICES = Object.freeze({
   SetBool: 1100,
   SetInt: 1102,
   GetBool: 1110,
+  GetInt: 1112,
   CheckFlag: 1120,
   DeleteFlag: 1121,
   SetExpiration: 1122,
@@ -229,6 +230,14 @@ export function createFlagBase({ initialFlags, defaultExpiration = 0, slots = nu
       for(const [key,entry] of entries)
         if((entry.expiration|0)!==0&&(entry.expiration|0)<=criteria){entries.delete(key);giveBackSlot(key);}
       calls.push({method:'DeleteExpiredFlags',criteria});
+    },
+    /** Extension.FlagBase.GetInt(Name): XFlagBase::execGetInt 0x10025790 -> GetInt 0x100244e0 (GetFlag type 2, the int at +0x40); a missing
+     * flag leaves the result 0. */
+    getInt(name) {
+      const entry = current(name, 2);
+      const value = entry ? entry.value | 0 : 0;
+      calls.push({ method: 'GetInt', name: name ?? 'None', value, found: Boolean(entry) });
+      return value;
     },
     /** Extension.FlagBase.GetBool(Name). */
     getBool(name) {
@@ -427,6 +436,11 @@ export function createScriptTriggers({
       if (call.receiver !== flagBase || call.argumentCount !== 0) throw new Error('FlagBase.DeleteAllFlags receiver/arguments');
       flagBase.deleteAllFlags();
       return { handled: true, value: undefined };
+    }
+    if (index === TRIGGER_NATIVE_INDICES.GetInt) {
+      if (call.receiver !== flagBase || typeof flagBase.getInt !== 'function') throw new Error('FlagBase.GetInt reached with an unbound receiver');
+      if (call.argumentCount !== 1) throw new Error('FlagBase.GetInt argument count');
+      return { handled: true, value: flagBase.getInt(evaluateValue(call, 0)) };
     }
     if (index === TRIGGER_NATIVE_INDICES.GetBool) {
       if (call.receiver !== flagBase) throw new Error('FlagBase.GetBool reached with an unbound receiver');
