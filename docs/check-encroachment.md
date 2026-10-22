@@ -156,3 +156,7 @@ end.
 A blocking non-Brush hit is pushed whatever its class: the native has no Pawn
 test before `moveSmooth` (0x1039a577). Pawns, decorations, carcasses, pickups
 and spawned actors are covered in [mover-push](mover-push.md).
+
+A mover that is no longer colliding (`DeusExMover.BlowItUp`'s `SetCollision(False,...)`; a saved level's destroyed fan) goes through this same route at
+`0x1039a39a` and still pushes what its blades meet; its MoveActor skips only the hash remove/add. Proven for the spinning fans with
+`validate-native-rotating-brush` ([rotating-brushes](rotating-brushes.md)).

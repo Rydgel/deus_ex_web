@@ -67,12 +67,16 @@ export async function createGame(map, asset, assets, { randomSeed = Math.floor(D
     const v = actor.values;
     actor.owner = actors.get(v.Owner) ?? null;
     if (!v.Location) continue;
-    if (!v.bCollideActors) {
+    // A mover whose bCollideActors is clear (a saved level's destroyed door or
+    // fan: DeusExMover.BlowItUp's SetCollision(False,...)) is still a moving
+    // brush: its MoveActor takes the brush route (docs/rotating-brushes.md),
+    // only the hash registration is skipped.
+    const clearMover = !v.bCollideActors && v.bIsMover && v.Brush > 0;
+    if (!v.bCollideActors && !clearMover) {
       // Every AActor has the +0x1dc collision word; bCollideActors only
       // decides hash registration. A non-colliding export (a hidden pawn or
       // button a script later reveals with SetCollision) gets the same native
-      // host surface, outside the hash. Brushes keep the mover route.
-      if (v.bIsMover && v.Brush > 0) continue;
+      // host surface, outside the hash.
       actor.lineage = await defaults.lineage(asset, asset.pkg.exports[actor.index - 1].classIndex);
       actor.actorFlags = (v.bStatic ? 1 : 0) | (v.bDeleteMe ? 0x80 : 0) |
         (v.bCollideWhenPlacing ? 0x20000 : 0) | (v.bMovable ? 0x80000 : 0);
@@ -84,7 +88,7 @@ export async function createGame(map, asset, assets, { randomSeed = Math.floor(D
       continue;
     }
     actor.lineage = await defaults.lineage(asset, asset.pkg.exports[actor.index - 1].classIndex);
-    actor.collisionBits = 1 | (v.bBlockActors ? 4 : 0) | (v.bBlockPlayers ? 8 : 0) | (v.bProjTarget ? 16 : 0);
+    actor.collisionBits = (clearMover ? 0 : 1) | (v.bBlockActors ? 4 : 0) | (v.bBlockPlayers ? 8 : 0) | (v.bProjTarget ? 16 : 0);
     actor.flags = actor.collisionBits | (v.bCollideWorld ? 2 : 0);
     actor.actorFlags = (v.bStatic ? 1 : 0) | (v.bDeleteMe ? 0x80 : 0) |
       (v.bCollideWhenPlacing ? 0x20000 : 0) | (v.bMovable ? 0x80000 : 0);
@@ -92,7 +96,7 @@ export async function createGame(map, asset, assets, { randomSeed = Math.floor(D
     actor.projectile = actor.lineage.includes('engine.projectile');
     actor.base = actors.get(v.Base) ?? null; bumpBaseEpoch();
     actor.blocking = Boolean(v.bBlockPlayers);
-    collidable.push(actor);
+    (clearMover ? nonColliding : collidable).push(actor);
     if (v.bIsMover && v.Brush > 0) {
       const matrix = brushMatrix(v), normal = new Matrix3().getNormalMatrix(matrix);
       const transform = p => fromView(new Vector3(...toView(p)).applyMatrix4(matrix).toArray());

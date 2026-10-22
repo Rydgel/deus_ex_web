@@ -180,6 +180,9 @@ Tail (all Physics values), `src/runtime/actor-rotation.mjs` `performPhysicsTail`
    that clears the field would make the original dereference NULL; the
    translation throws there.
 
+The tail turns **any** actor with a RotationRate, whatever its Physics: the AC fans of `09_NYC_ShipFan` are Mover brushes in `PHYS_MovingBrush`
+(`AMover` does not override `performPhysics`), and their `MoveActor` is the brush route with its own tail ([rotating-brushes](rotating-brushes.md)).
+
 ## AActor::physicsRotation (0x103ca1e0) and fixedTurn (0x103c9dc0)
 
 `physicsRotation(actor, deltaTime, {moveActor, isProbing, endedRotation})`:

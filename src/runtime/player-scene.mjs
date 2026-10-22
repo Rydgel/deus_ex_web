@@ -1,6 +1,6 @@
 import { playerMove } from './player-move.mjs';
 import { moveSmooth } from './move-smooth.mjs';
-import { moveTranslatingMover } from './mover-move.mjs';
+import { moveTranslatingMover, moverMoveTail } from './mover-move.mjs';
 import { playerBlockedBy, checkPlayerEncroachment, checkMoverEncroachment } from './check-encroachment.mjs';
 import { beginTouch, endTouch, isOverlapping } from './actor-touch.mjs';
 import { farMoveActor } from './relocation.mjs';
@@ -163,11 +163,8 @@ export function bindPlayerScene(player,collision,{model,actors,nonColliding=[],z
       moveRiders:(riderDelta,riderRotation)=>moveActorRiders(mover,riderDelta,riderRotation,ridersFor(mover)),
       encroachmentCheck:moverEncroachmentCheck,moveSmooth:pushedMoveSmooth,
       dispatch,removeActor:a=>collision.queries.removeActor(a),addActor:a=>collision.queries.addActor(a),
+      afterCommit:m=>moverMoveTail(m,{isOverlapping,endTouch:untouch,setActorZone:updateZone}),
     });
-    if(result&&!delta.every(v=>Math.abs(f(v))<.0001)){
-      for(let i=0;i<4;i++){const other=mover.touching[i];if(other&&!isOverlapping(mover,other))untouch(mover,other,false);}
-      updateZone(mover,false,false);
-    }
     mover.collider.offset=mover.position.map((v,i)=>f(v-mover.values.Location[i]));
     return result;
   };
