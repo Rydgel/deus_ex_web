@@ -39,8 +39,8 @@ export class UnsupportedTravelPropertyError extends Error {
   }
 }
 
-const FLAG_CLASSES = ['FlagBool', 'FlagByte', 'FlagInt', 'FlagFloat', 'FlagName', 'FlagVector', 'FlagRotator'];
-const FLAG_VALUE_PROPERTY = { FlagBool: 'bValue', FlagByte: 'byteValue', FlagInt: 'intValue', FlagFloat: 'floatValue', FlagName: 'nameValue',
+export const FLAG_CLASSES = ['FlagBool', 'FlagByte', 'FlagInt', 'FlagFloat', 'FlagName', 'FlagVector', 'FlagRotator'];
+export const FLAG_VALUE_PROPERTY = { FlagBool: 'bValue', FlagByte: 'byteValue', FlagInt: 'intValue', FlagFloat: 'floatValue', FlagName: 'nameValue',
   FlagVector: 'vectorValue', FlagRotator: 'rotatorValue' };
 
 /** Whether `value` is Play's host FlagBase (script-triggers.mjs createFlagBase). */

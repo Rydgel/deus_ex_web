@@ -9,7 +9,9 @@
  *   (Engine/PlayerPawn.uc:224, empty) and calls Engine->SetClientTravel(Player, URL, bItems, TravelType). An empty URL is passed as "".
  * - DeusExPlayer.DeleteSaveGameFiles (native 3012, DDeusExGameEngine::DeleteSaveGameFiles 0x10010360) releases the level package's
  *   loaders (the engine log's `Unloading: Package <level package>`), takes "" as `<SavePath>\\Current`, and deletes every file in it
- *   (the directory stays). Another directory is a save slot (docs/travel.md order step 4): an explicit stop.
+ *   (the directory stays). Another directory is a save slot: game-save.mjs `deleteSaveGameFiles`.
+ * - DeusExPlayer.SaveGame (native 3011, ADeusExPlayer::execSaveGame 0x10014830) is DDeusExGameEngine::SaveGame: game-save.mjs `saveGame`, installed as
+ *   `runtime.travelServices.saveGame` by the session that saves.
  *
  * Play's `Save\Current` is an in-memory store of the files `SaveCurrentLevel(-2)` would write. Visited-map restoration is not
  * implemented (order step 3), so the store only ever empties here; it exists so DeleteSaveGameFiles has the directory to empty and
@@ -76,13 +78,25 @@ export function installTravelNatives({ runtime, store }) {
   };
   runtime.travelServices = services;
   const previous = runtime.native;
+  runtime.boundaryNatives.add(3011);
   runtime.boundaryNatives.add(3012);
   runtime.native = call => {
+    // DeusExPlayer.SaveGame(int saveIndex, optional string saveDesc), execSaveGame 0x10014830: GetLevel()->Engine->SaveGame(saveIndex, saveDesc) (game-save.mjs)
+    if (call.index === 3011) {
+      if (call.argumentCount < 1 || call.argumentCount > 2) throw new Error('SaveGame requires an index and an optional description');
+      const index = refValue(call.evaluateArgument(0)) | 0, description = call.argumentCount === 2 ? String(refValue(call.evaluateArgument(1)) ?? '') : '';
+      if (!services.saveGame) throw new UnsupportedTravelNativeError('SaveGame: this session has no game saver (docs/travel.md order step 4)', { native: 3011, index });
+      services.saveGame(index, description);
+      return undefined;
+    }
     if (call.index !== 3012) return previous(call);
     if (call.argumentCount > 1) throw new Error('DeleteSaveGameFiles accepts one optional directory');
     const directory = call.argumentCount === 1 ? String(refValue(call.evaluateArgument(0)) ?? '') : '';
-    if (directory !== '')
-      throw new UnsupportedTravelNativeError(`DeleteSaveGameFiles("${directory}"): deleting a save slot is not implemented (docs/travel.md order step 4)`, { native: 3012, directory });
+    if (directory !== '') {
+      if (!services.deleteSaveGameFiles) throw new UnsupportedTravelNativeError(`DeleteSaveGameFiles("${directory}"): deleting a save slot is not available in this session`, { native: 3012, directory });
+      services.deleteSaveGameFiles(directory);
+      return undefined;
+    }
     store.deleteCurrent();
     return undefined;
   };

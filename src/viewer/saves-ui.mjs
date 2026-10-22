@@ -13,7 +13,7 @@ export function describeSaves(status) {
   } else if (status.source === 'browser') line = `Saves are kept in this browser (${count(status.slots)}).`;
   else line = `Saves last only until this page closes (${count(status.slots)}).`;
   if (status.served) line += ' The installed game\'s Save folder is also listed, read-only.';
-  const note = status.error?.message ?? status.message ?? null;
+  const note = status.saveError ? `The last save was not kept: ${status.saveError.message}` : status.error?.message ?? status.message ?? null;
   return { line, note };
 }
 

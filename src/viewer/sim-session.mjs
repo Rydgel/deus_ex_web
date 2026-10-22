@@ -1185,7 +1185,10 @@ export function createSimSession(game, { assets = null, events = [], exportName 
         fullscreenToggles: display.fullscreenToggles, relaunches: display.relaunches, relaunchArguments: display.relaunchArguments,
         // RootWindow.GenerateSnapshot (docs/root-snapshot.md): the page keeps its drawn frames while UIBackground is 1 (Snapshot), and
         // fills each requested texture from the frame before the one this snapshot draws.
-        keepFrame: game.player?.collisionActor ? Number(runtime.readNamed(game.player.collisionActor, 'UIBackground')) === 1 : false,
+        // Also kept while a window holds the mouse (the Save Game screen's preview is a GenerateSnapshot of the frame behind it, whatever UIBackground says)
+        // and while a save waits for its picture (game-save.mjs: the picture is made from the next frame drawn).
+        keepFrame: (game.player?.collisionActor ? Number(runtime.readNamed(game.player.collisionActor, 'UIBackground')) === 1 : false)
+          || game.pendingSaveSnapshots() > 0 || game.windowMouseGrabbed(),
         snapshotRequests: display.snapshotRequests, snapshotReleased: display.snapshotReleased,
         // Textures the simulation made from bytes it holds (a save's snapshot, docs/save-storage.md): each goes to the page once.
         images: display.images.splice(0) } : null;

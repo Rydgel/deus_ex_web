@@ -47,6 +47,7 @@ import { createTravelExporter, loadFlagClasses } from './travel-export.mjs';
 import { createTravelImporter } from './travel-import.mjs';
 import { decodeAiEvents } from './ai-events-payload.mjs';
 import { createLevelSaver } from './travel-save.mjs';
+import { createGameSaver } from './game-save.mjs';
 import { handleOf } from './script-object-handles.mjs';
 
 const f = Math.fround;
@@ -2285,9 +2286,10 @@ export async function createScriptDoors({
   const extension=await assets.get('Extension');
   await runtime.loadClass(extension,extension.exportsByPath.get('flagbase'));
   preparedPlayerStartup=await createPlayerAugmentationStartup({runtime,assets,deusEx,level,player:playerActor});
-  let travelImporter=null;
+  let travelImporter=null,saveFlagClasses=null;
   if(travel){
     const flagClasses=await loadFlagClasses(runtime,assets);
+    saveFlagClasses=flagClasses;
     travelExporter=createTravelExporter({runtime,flagClasses});
     travelImporter=createTravelImporter({runtime,assets,level,exporter:travelExporter,log:logLine,prepareClass:prepareNpcClass,
       flagBaseOf:player=>runtime.readNamed(player,'FlagBase')});
@@ -2305,7 +2307,17 @@ export async function createScriptDoors({
   if(travel)installTravelNatives({runtime,store:saveStore});
   // PruneTravelActors and SaveCurrentLevel(-2) for the tick's travel step (travel-save.mjs).
   const levelSaver=travel?createLevelSaver({runtime,level,asset,store:saveStore,log:logLine,viewport:()=>level.engine.client.viewports[0],
-    modelIndex,arrival,restoredObjects}):null;
+    modelIndex,arrival,restoredObjects,flagClasses:saveFlagClasses}):null;
+  // SaveGame (native 3011), the console's SAVEGAME and DELETEGAME, DeleteSaveGameFiles of a slot (game-save.mjs)
+  const gameSaver=travel?createGameSaver({runtime,level,directory:saveDirectory??hostSaveDirectory(),store:saveStore,levelSaver,log:logLine,
+    viewport:()=>level.engine.client.viewports[0],config:runtime.classLoader?.graph?.config,windowHost:()=>windowHost,
+    textureClass:await runtime.loadClass(await assets.get('Engine'),(await assets.get('Engine')).exportsByPath.get('texture')),
+    snapshotSource:travel.snapshotSource??null,
+    onMessage:(kind,error)=>logLine('Warning',`SaveGame: the save could not be kept: ${error?.message??error}`)}):null;
+  if(gameSaver){
+    runtime.travelServices.saveGame=(index,description)=>gameSaver.saveGame(index,description);
+    runtime.travelServices.deleteSaveGameFiles=path=>gameSaver.deleteSaveGameFiles(path);
+  }
   runtime.actorLifecycle.bindCollisionView=(actor,cls,lineage)=>{
     if(!loggingIn||!lineage.includes('engine.playerpawn'))return false;
     const fields=classFields(cls).filter(field=>!field.key.startsWith('core.object.')),snapshot=new Map(fields.map(field=>[field.key,runtime.fieldReference(actor,field).get()]));
@@ -2371,6 +2383,7 @@ export async function createScriptDoors({
   const {createWindowHost}=await import('./script-window-host.mjs');
   windowHost=await createWindowHost({runtime,assets,player:playerActor});
   windowHost.install();
+  if(gameSaver){windowHost.gameEngineHooks.saveGame=index=>{gameSaver.saveGame(index,'');};windowHost.gameEngineHooks.deleteGame=index=>{gameSaver.deleteGame(index);};}
   // LoadMap's collection of the unloaded level, run by every reload
   // (docs/script-loadmap-gc.md). A released object leaves the host's maps.
   // DeusEx.u's package object, found by Conversation.CreateConCamera.
@@ -2416,7 +2429,7 @@ export async function createScriptDoors({
     npcPawns, npcFailures, scriptPreparationFailures, loadMapStartupExclusions,
     get lastTickDelta(){return lastTickDelta;},
     infoLinkShell,get playerStartup(){return playerStartup;},windowHost,playerLogs,dataLinkPresentation:liveDataLink.presentation,dataLinkActive:liveDataLink.active,
-    dataLinkReceivedItems:liveDataLink.receivedItems,faceConversations,liveConPlay,liveMission,engineLog,logLine,saveStore,levelSaver,arrival,get travelExporter(){return travelExporter;} };
+    dataLinkReceivedItems:liveDataLink.receivedItems,faceConversations,liveConPlay,liveMission,engineLog,logLine,saveStore,levelSaver,gameSaver,arrival,get travelExporter(){return travelExporter;} };
 }
 
 export default createScriptDoors;
