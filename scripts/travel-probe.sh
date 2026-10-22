@@ -13,7 +13,8 @@
 #     actors:<name>:<label>     tools/dump-actor-win.c for objects named like <name> -> .work/travel/<tag>/<label>.actors.txt
 #     putcurrent:<file>:<name>  copy a host file over Save\Current\<name> (a file of Play's, to see the original load it)
 #     savecopy:<label>          a copy of Save\Current -> .work/travel/<tag>/<label>.Current/ (the .dxs files and their times)
-#     putslot:<host dir>:<name>  copy a host directory (a slot captured earlier) to Save\<name> before a load (scripts/save-probe.sh puts the folder back)
+#     putslot:<host dir>:<slot> a save slot Play wrote (a host directory of .dxs files) as Save\<slot> (Save0010, QuickSave; replaced whole), to see the original load it
+#     slotcopy:<slot>:<label>   a copy of Save\<slot> -> .work/travel/<tag>/<label>.<slot>/ (the files the original wrote for a SaveGame, with their times)
 #     savedir:<label>:<dir>     a copy of Save\<dir> (a slot the session made, QuickSave) -> .work/travel/<tag>/<label>.<dir>/ (the probe removes what it created at the end)
 #     gobjects:<label>          every object of GObjObjects (index, name, class; tools/dump-gobjects-win.c --available) -> <label>.gobjects.txt
 #     props:<name>:<label>:<field:offset:type>[,...]   tools/dump-actor-win.c with explicit fields -> <label>.props.txt
@@ -24,6 +25,8 @@
 #   The game starts on DX.dx whatever the command line says (the logo map): a session that wants another map starts with `cmd:open <map>`.
 #   Console lines are typed through the Talk key and can lose characters on a loaded host: check each step's effect with `arrive`/`snap`.
 #   DX_KEEP_SAVE=1 leaves Save/ as the session left it (default: the files this session created in Save/ are removed at the end).
+#   DX_SAVE_BACKUP=<dir>: Save/ is copied to <dir> under the lock before the game starts and put back whole after it quit (a session that overwrites QuickSave, or
+#   SaveGame/DeleteGame on the player's own slots, leaves the prefix as it found it; the files created and removed above do not matter then).
 #   e.g. scripts/travel-probe.sh t1 'cmd:set LevelInfo bPlayersOnly True' 'cmd:LocalTravel 00_TrainingCombat' 'arrive:00_trainingcombat$' snap:combat
 set -u
 TAG=${1:?usage: travel-probe.sh <tag> <step>...}; shift
@@ -47,6 +50,7 @@ for _ in $(seq 1 360); do [ -n "$(game_pids)" ] || break; sleep 5; done
 [ -z "$(game_pids)" ] || { echo "a DeusEx.exe is still running; not starting" >&2; exit 9; }
 SAVE="$DX_GAME/Save"
 BEFORE=$(cd "$SAVE" 2>/dev/null && find . -type f -printf '%P\n' | sort)
+if [ -n "${DX_SAVE_BACKUP:-}" ]; then rm -rf "$DX_SAVE_BACKUP"; cp -a "$SAVE" "$DX_SAVE_BACKUP" || { echo "cannot back up $SAVE" >&2; exit 1; }; fi
 node ad/scripts/original-game.mjs launch DX.dx || exit 1
 PID=
 quit_game() {
@@ -55,7 +59,9 @@ quit_game() {
   for _ in $(seq 1 20); do [ -n "$(game_pids)" ] || break; sleep 1; done
   if [ -n "$(game_pids)" ] && [ -n "$PID" ]; then kill "$PID" 2>/dev/null; fi   # the one this script started (the lock keeps others out)
   cp "$DX_GAME/System/DeusEx.log" "$OUT/final.log" 2>/dev/null
-  if [ -z "${DX_KEEP_SAVE:-}" ]; then   # leave Save/ as it was found: remove what this session created
+  if [ -n "${DX_SAVE_BACKUP:-}" ] && [ -d "$DX_SAVE_BACKUP" ] && [ -z "$(game_pids)" ]; then   # the game is gone: Save/ goes back as it was found (the lock is still held)
+    rm -rf "$SAVE" && cp -a "$DX_SAVE_BACKUP" "$SAVE" && echo "Save restored from $DX_SAVE_BACKUP" >&2
+  elif [ -z "${DX_KEEP_SAVE:-}" ]; then   # leave Save/ as it was found: remove what this session created
     AFTER=$(cd "$SAVE" 2>/dev/null && find . -type f -printf '%P\n' | sort)
     comm -13 <(echo "$BEFORE") <(echo "$AFTER") | while IFS= read -r f; do [ -n "$f" ] && rm -f "$SAVE/$f"; done
     find "$SAVE" -mindepth 1 -type d -empty ! -name Current ! -name QuickSave ! -name Save0001 -delete 2>/dev/null
@@ -83,9 +89,11 @@ run_step() {
     putcurrent)   # <host file>:<name>: a file into Save\Current (cp over the one the session wrote; the name has no path)
       IFS=: read -r psrc pname <<< "$arg"
       case $pname in ''|*/*|*\\*) echo "putcurrent: bad name $pname" >&2 ;; *) cp -f "$psrc" "$SAVE/Current/$pname" && echo "putcurrent $pname ($(stat -c %s "$SAVE/Current/$pname") bytes)" ;; esac ;;
-    putslot)   # <host dir>:<name>: a slot directory into Save\<name>
-      IFS=: read -r psrc pname <<< "$arg"
-      case $pname in ''|*/*|*\\*) echo "putslot: bad name $pname" >&2 ;; *) rm -rf "${SAVE:?}/$pname"; cp -a "$psrc" "$SAVE/$pname" && echo "putslot $pname ($(ls "$SAVE/$pname" | wc -l) files)" ;; esac ;;
+    putslot)   # <host dir>:<slot>: Play's files for a slot, whole (the slot's directory is replaced)
+      IFS=: read -r psrc pslot <<< "$arg"
+      case $pslot in ''|*/*|*\\*|Current) echo "putslot: bad slot $pslot" >&2 ;; *) rm -rf "${SAVE:?}/$pslot"; mkdir -p "$SAVE/$pslot" && cp -f "$psrc"/* "$SAVE/$pslot/" && echo "putslot $pslot ($(ls "$SAVE/$pslot" | wc -l) files)" ;; esac ;;
+    slotcopy)  # <slot>:<label>
+      IFS=: read -r pslot plabel <<< "$arg"; rm -rf "$OUT/$plabel.$pslot"; cp -a "$SAVE/$pslot" "$OUT/$plabel.$pslot" 2>/dev/null ;;
     wait) sleep "$arg" ;;
     *) echo "unknown step $step" >&2 ;;
   esac

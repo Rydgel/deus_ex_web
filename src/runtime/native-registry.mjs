@@ -70,7 +70,7 @@ export const NATIVE_SITES = [
       1421-1423 1425 1428 1430-1434 1438 1440 1455-1461 1467 1475-1477 1488 1493 1550-1551 1556-1557 1610-1612 1971 1973 1975-1976
       1978 1980 1985 1987 2001 2052-2056 2060-2062 2100-2102 2108-2109 3016-3017 3970`),
     names: ['engine.pawn.stopwaiting', 'engine.decal.attachdecal', 'engine.playerpawn.clienttravel', 'engine.decal.detachdecal',
-      'core.object.dynamicloadobject', 'core.object.getenum'],
+      'core.object.dynamicloadobject', 'core.object.getenum', 'core.object.getconfig'],
     gates: [[1535, 1545, 'window-tile'], [2105, 2107, 'pawn-alliance'], [2210, 2221, 'text-parser']],
     notRoutes: [[0, 'the marker of a native bound by name: its branch tests the record key']],
     dynamic: ['this.boundaryNatives.has(index)', 'names[index]'],
@@ -132,7 +132,7 @@ export const NATIVE_SITES = [
       [3088, 'one SaveInfo of the package loaded at a time (a second load of the export stops by name)'],
       [3089, 'one SaveInfo of the package loaded at a time (as 3088)']]},
   {id: 'travel', layer: 'play-host', file: R + 'script-travel.mjs', anchor: /runtime\.native = call => \{/,
-    indices: idx('3012'), when: 'a session that travels (the save store)'},
+    indices: idx('3011 3012'), when: 'a session that travels (the save store; 3011 needs the game saver, game-save.mjs)'},
   {id: 'play-hud', layer: 'play-host', file: R + 'script-play-hud.mjs', anchor: /runtime\.native=call=>\{/,
     indices: idx('1212 1230 1284 1289'), when: 'only while the HUD paints (the draw natives of the HUD background)'},
   {id: 'weapon-overlay', layer: 'play-host', file: V + 'weapon-overlay-sim.mjs', anchor: /runtime\.native=call=>\{/,

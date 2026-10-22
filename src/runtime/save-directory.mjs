@@ -104,7 +104,7 @@ export function createSaveDirectory({saves = [], freeSpaceBytes = null} = {}) {
     /** Add or replace a slot (a future SaveGame, a test). */
     put({directory: name, files = [], info = null}) {
       const slot = {files: new Map(), info};
-      for (const file of files) slot.files.set(key(file.name), {name: file.name, size: file.bytes ? file.bytes.length : file.size, bytes: file.bytes ?? null});
+      for (const file of files) slot.files.set(key(file.name), {name: file.name, size: file.bytes ? file.bytes.length : file.size, bytes: file.bytes ?? null, modified: file.modified ?? null});
       slots.set(name, slot);
       return directory;
     },
@@ -113,8 +113,8 @@ export function createSaveDirectory({saves = [], freeSpaceBytes = null} = {}) {
     /** Replace every slot: the page's listing of its storage reaching the simulation (src/viewer/save-persistence.mjs; the simulation worker has no
      * storage of its own, the page sends the directory at startup and again whenever a folder, an import or a write changes it). */
     replace(list) {
-      // `Current` is the simulation's own scratch directory (the levels a mission has left, a loaded slot's copy): the page's listing of its storage replaces
-      // the slots, not it, unless the listing names it.
+      // `Current` is the simulation's own working directory (the levels it filed since the game started: travel.md "The save directory"); the page's storage
+      // never lists it, so a listing that arrives mid-game (a write, a folder picked) leaves it as it is.
       const current = slots.get('Current');
       slots.clear();
       for (const save of list) directory.put(save);
@@ -133,11 +133,13 @@ export function createSaveDirectory({saves = [], freeSpaceBytes = null} = {}) {
     /** Whether `<SavePath>\<dir>\<name>` exists (GFileManager->FindFiles on its path finds one entry). */
     hasFile: (name, file) => Boolean(slotOf(name)?.files.has(key(file))),
     /** Write (create or replace) a file; the directory is made when absent. `bytes` is copied. */
-    writeFile(name, file, bytes) {
+    writeFile(name, file, bytes, {modified = Date.now()} = {}) {
       const copy = new Uint8Array(bytes);
-      slotOf(name, true).files.set(key(file), {name: file, size: copy.length, bytes: copy});
+      slotOf(name, true).files.set(key(file), {name: file, size: copy.length, bytes: copy, modified});
       return directory;
     },
+    /** The modification time (ms) of one file, or null (a file listed without one): what CopySaveGameFiles keeps and what a slot's files report. */
+    modifiedOf: (name, file) => slotOf(name)?.files.get(key(file))?.modified ?? null,
     /** Delete one file; true when it existed. */
     removeFile: (name, file) => slotOf(name)?.files.delete(key(file)) ?? false,
     /** DeleteSaveGameFiles(dir): every file goes, the directory stays; returns the names deleted. */
@@ -155,7 +157,7 @@ export function createSaveDirectory({saves = [], freeSpaceBytes = null} = {}) {
       const copied = [];
       for (const file of from.files.values()) {
         if (!wildcardMatch(pattern, file.name)) continue;
-        slotOf(target, true).files.set(key(file.name), {name: file.name, size: file.size, bytes: file.bytes ? new Uint8Array(file.bytes) : null});
+        slotOf(target, true).files.set(key(file.name), {name: file.name, size: file.size, bytes: file.bytes ? new Uint8Array(file.bytes) : null, modified: file.modified ?? null});
         copied.push(file.name);
       }
       return copied;

@@ -10,12 +10,13 @@
  * SavedPos goes to (-1,-1,-1); the tracker is recreated (log); LevelAction = 0. Without a DeusExLevelInfo it logs `WARNING!  DeusExLevelInfo MISSING!`
  * and saves nothing. The log lines are the measured ones (docs/travel.md "What each travel did"); `Save=` is the elapsed time in milliseconds. */
 import { serializeLevel } from './level-save.mjs';
+import { saveSlotDirectory } from './save-directory.mjs';
 
 const lower = value => String(value ?? '').toLowerCase();
 
-export function createLevelSaver({ runtime, level, asset, store, log, viewport, modelIndex, arrival, restoredObjects, now = () => performance.now() }) {
+export function createLevelSaver({ runtime, level, asset, store, log, viewport, modelIndex, arrival, restoredObjects, flagClasses = null, now = () => performance.now() }) {
   const read = (object, name) => runtime.readNamed(object, name);
-  const write = (object, name, value) => runtime.writeNamed(object, name, value);
+  const write_ = (object, name, value) => runtime.writeNamed(object, name, value);
   const destroy = actor => runtime.destroyActor(actor, false);
   const levelInfo = () => level.actors[0];
   const deusExLevelInfo = () => level.actors.find(actor => actor && runtime.attachedInstance(actor)?.cls.record.key === 'deusex.deusexlevelinfo') ?? null;
@@ -28,21 +29,25 @@ export function createLevelSaver({ runtime, level, asset, store, log, viewport, 
       for (let item = read(manager, head), next; item; item = next) { next = read(item, link); destroy(item); }
     };
     const augmentations = read(player, 'AugmentationSystem');
-    if (augmentations) { chain(augmentations, 'FirstAug', 'next'); destroy(augmentations); write(player, 'AugmentationSystem', null); }
+    if (augmentations) { chain(augmentations, 'FirstAug', 'next'); destroy(augmentations); write_(player, 'AugmentationSystem', null); }
     const skills = read(player, 'SkillSystem');
-    if (skills) { chain(skills, 'FirstSkill', 'next'); destroy(skills); write(player, 'SkillSystem', null); }
+    if (skills) { chain(skills, 'FirstSkill', 'next'); destroy(skills); write_(player, 'SkillSystem', null); }
     const flags = read(player, 'FlagBase');
-    if (flags) { flags.deleteAllFlags(); write(player, 'FlagBase', null); }
+    if (flags) { flags.deleteAllFlags(); write_(player, 'FlagBase', null); }
     const carried = read(player, 'carriedDecoration');
-    if (carried) { destroy(carried); write(player, 'carriedDecoration', null); }
+    if (carried) { destroy(carried); write_(player, 'carriedDecoration', null); }
   }
 
-  /** SaveCurrentLevel(position): only -2 (Save\Current) is part of a level change. */
-  function saveCurrentLevel(position) {
-    if (position !== -2) throw new Error(`SaveCurrentLevel(${position}): only Save\\Current is implemented here (slots are travel step 4)`);
+  /** SaveCurrentLevel(position, bSavePlayer) (0x1000fac0). -2 is `Save\Current` (a level change: the caller pruned the player's managers and flag base first), -1
+   * `Save\QuickSave`, any other index `Save\Save%04d` (SaveGame: the level goes into the slot with the player and the FlagBase in it, nothing pruned).
+   * `write(mapName, bytes)` receives the file; without it Current is written through the store (a slot needs the caller's, which holds the files until the
+   * SaveInfo is complete). */
+  function saveCurrentLevel(position, { write = null } = {}) {
+    const directoryName = position === -2 ? 'Current' : saveSlotDirectory(position);
+    if (position !== -2 && !write) throw new Error(`SaveCurrentLevel(${position}) writes into a save slot: the caller supplies the file's destination`);
     const info = deusExLevelInfo();
     const packageName = asset.name;
-    const setAction = value => { try { write(levelInfo(), 'LevelAction', value); } catch { /* an unlinked property */ } };
+    const setAction = value => { try { write_(levelInfo(), 'LevelAction', value); } catch { /* an unlinked property */ } };
     setAction(2);
     log('Init', `Shut down moving brush tracker for Level ${packageName}.MyLevel`);
     runtime.cleanupDestroyed(level, true);
@@ -54,18 +59,19 @@ export function createLevelSaver({ runtime, level, asset, store, log, viewport, 
     const saved = serializeLevel({ runtime, level, asset, modelIndex, restoredObjects,
       levelUrl: { map: arrival?.map ?? asset.name, portal: arrival?.portal ?? '', options: arrival?.options ?? [] },
       ai: events?.active ? { words: events.snapshot(), spelling: id => events.spelling(id) } : null,
+      flags: flagClasses ? { classes: flagClasses, owner: () => read(viewport(), 'Actor') } : null,
       guid: globalThis.crypto.getRandomValues(new Uint8Array(16)) });
     log('Log', `Save=${(now() - started).toFixed(6)}`);
-    log('Log', `Moving '..\\Save\\Current\\Save.tmp' to '..\\Save\\Current\\${mapName}.dxs'`);
-    store.write(`${mapName}.dxs`, saved.bytes);
+    log('Log', `Moving '..\\Save\\${directoryName}\\Save.tmp' to '..\\Save\\${directoryName}\\${mapName}.dxs'`);
+    if (write) write(`${mapName}.dxs`, saved.bytes); else store.write(`${mapName}.dxs`, saved.bytes);
     for (const actor of level.actors) {
       if (!actor) continue;
       const instance = runtime.attachedInstance(actor);
-      if (instance && instance.cls && classIsMover(instance.cls)) { try { write(actor, 'SavedPos', [-1, -1, -1]); } catch { /* a mover without the property */ } }
+      if (instance && instance.cls && classIsMover(instance.cls)) { try { write_(actor, 'SavedPos', [-1, -1, -1]); } catch { /* a mover without the property */ } }
     }
     log('Init', `Initialized moving brush tracker for Level ${packageName}.MyLevel`);
     setAction(0);
-    return saved;
+    return { ...saved, mapName };
   }
   const classIsMover = cls => { for (let c = cls; c; c = c.base) if (c.record.key === 'engine.mover') return true; return false; };
   void lower;

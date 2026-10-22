@@ -161,3 +161,58 @@ test('a SaveInfo that is not a package lists the directory without info, as the 
   assert.deepEqual(persistence.simSaves().map(s => [s.directory, s.info === null]), [['Save0001', true], ['Save0002', false]]);
   assert.equal(persistence.status().slots, 1, 'one save is listed as loadable');
 });
+
+test('a save the simulation finished is kept whole; a slot deleted goes with its files; the listing for the simulation follows each', async () => {
+  const fake = createFakeIndexedDB();
+  const changes = [];
+  const persistence = await open(fake, { onChange: status => changes.push([status.slots, status.saveError?.kind ?? null]) });
+  await persistence.commitSlot('Save0001', [{ name: '00_Training.dxs', bytes: bytes(1, 2, 3), modified: 10 }, { name: 'SaveInfo.dxs', bytes: bytes(4), modified: 20 }]);
+  assert.deepEqual(changes.at(-1), [1, null]);
+  const [slot] = persistence.simSaves();
+  assert.deepEqual([slot.directory, slot.files.map(f => `${f.name}:${f.size}`).sort(), slot.info.properties.saveCount], ['Save0001', ['00_Training.dxs:3', 'SaveInfo.dxs:1'], 4]);
+  assert.deepEqual([...await persistence.directory.read('Save0001', '00_Training.dxs')], [1, 2, 3]);
+  // the same slot saved again replaces its files (a QuickSave over a QuickSave)
+  await persistence.commitSlot('Save0001', [{ name: '01_Island.dxs', bytes: bytes(7), modified: 30 }, { name: 'SaveInfo.dxs', bytes: bytes(5), modified: 40 }]);
+  assert.deepEqual(persistence.simSaves()[0].files.map(f => f.name).sort(), ['01_Island.dxs', 'SaveInfo.dxs']);
+  const again = await open(fake);
+  assert.deepEqual(again.simSaves()[0].files.map(f => f.name).sort(), ['01_Island.dxs', 'SaveInfo.dxs'], 'a new page finds the slot as saved');
+  await persistence.removeSlot('Save0001');
+  assert.deepEqual(persistence.simSaves(), []);
+  assert.deepEqual((await open(fake)).simSaves(), [], 'DeleteGame removed it from the storage');
+});
+
+test('a save the storage refuses is reported by name, leaves the old slot, and the next one that is kept clears it', async () => {
+  const fake = createFakeIndexedDB();
+  const changes = [];
+  const persistence = await open(fake, { onChange: status => changes.push(status.saveError) });
+  await persistence.commitSlot('QuickSave', [{ name: 'SaveInfo.dxs', bytes: bytes(1) }]);
+  fake.failNext('put', domException('QuotaExceededError'), 'savedata');
+  await assert.rejects(persistence.commitSlot('QuickSave', [{ name: 'SaveInfo.dxs', bytes: bytes(2) }, { name: '00_Training.dxs', bytes: bytes(3, 3) }]), { kind: 'quota' });
+  const failed = persistence.status().saveError;
+  assert.deepEqual([failed.kind, failed.slot], ['quota', 'QuickSave']);
+  assert.match(describeSaves(persistence.status()).note, /^The last save was not kept: /);
+  assert.deepEqual(persistence.simSaves()[0].files.map(f => f.name), ['SaveInfo.dxs'], 'the slot the simulation reads is the old one');
+  assert.equal(persistence.simSaves()[0].info.properties.saveCount, 1);
+  assert.deepEqual(changes.map(error => error?.kind ?? null), [null, 'quota'], 'the change is reported');
+  await persistence.commitSlot('QuickSave', [{ name: 'SaveInfo.dxs', bytes: bytes(2) }]);
+  assert.equal(persistence.status().saveError, null);
+  assert.equal(persistence.simSaves()[0].info.properties.saveCount, 2);
+});
+
+test('the browser is asked once, after the first kept save, not to evict the page storage; a refusal is said in the Saves window', async () => {
+  const asked = [];
+  const refusing = await open(createFakeIndexedDB(), { requestPersist: async () => { asked.push('refused'); return false; } });
+  assert.equal(refusing.status().persisted, null, 'nothing is asked before a save');
+  await refusing.commitSlot('Save0001', [{ name: 'SaveInfo.dxs', bytes: bytes(1) }]);
+  await refusing.commitSlot('Save0002', [{ name: 'SaveInfo.dxs', bytes: bytes(2) }]);
+  assert.deepEqual(asked, ['refused'], 'once');
+  assert.equal(refusing.status().persisted, false);
+  assert.match(describeSaves(refusing.status()).note, /Export saves/);
+  const granting = await open(createFakeIndexedDB(), { requestPersist: async () => true });
+  await granting.commitSlot('Save0001', [{ name: 'SaveInfo.dxs', bytes: bytes(1) }]);
+  assert.equal(granting.status().persisted, true);
+  assert.equal(describeSaves(granting.status()).note, null);
+  const none = await open(createFakeIndexedDB(), { requestPersist: () => null });
+  await none.commitSlot('Save0001', [{ name: 'SaveInfo.dxs', bytes: bytes(1) }]);
+  assert.equal(none.status().persisted, null, 'a browser without persist() says nothing');
+});

@@ -21,6 +21,8 @@ import { writeTaggedProperties } from './tagged-write.mjs';
 import { transcodeModel, transcodePolys, transcodeProperties } from './model-transcode.mjs';
 import { parseAiWords, encodeAiEvents } from './ai-events-payload.mjs';
 import { identityOfHandle } from './script-object-handles.mjs';
+import { isHostFlagBase, FLAG_CLASSES, FLAG_VALUE_PROPERTY } from './travel-export.mjs';
+import { hashScriptName } from './script-names.mjs';
 
 const ACTOR_FLAGS = 0x2070001, OBJECT_FLAGS = 0x70000;
 const NATIVE_SOURCE = new Set(['Model', 'Polys', 'LevelSummary']);
@@ -45,8 +47,11 @@ export function classFields(cls) {
  * @param ai              {words: ai_snapshot words, spelling(id)} or null
  * @param guid            16 bytes
  * @param restoredObjects the non-actor objects a restore made (identities with the source `index`)
+ * @param flags           {classes, owner()} when the player's FlagBase is part of the file (SaveGame; a level left by travel has none, PruneTravelActors
+ *                        destroyed it): the loaded Extension flag classes (travel-export.mjs loadFlagClasses) and the actor the FlagBase is the Outer-owned
+ *                        object of. The host FlagBase (script-triggers.mjs createFlagBase) is written as the `FlagBase` and `Flag*` objects the original holds.
  */
-export function serializeLevel({ runtime, level, asset, modelIndex, levelUrl, ai = null, guid, restoredObjects = [] }) {
+export function serializeLevel({ runtime, level, asset, modelIndex, levelUrl, ai = null, guid, restoredObjects = [], flags = null }) {
   const source = asset.pkg, sourceBytes = asset.bytes;
   const tables = new PackageTables({ sourcePkg: source });
   const plan = [];                       // export descriptors, in export order
@@ -110,10 +115,36 @@ export function serializeLevel({ runtime, level, asset, modelIndex, levelUrl, ai
     }
     return null;
   };
+  // --- the player's FlagBase: a host store, written as the objects the original keeps (FlagBase, one Flag* per flag; Outer: the player / the FlagBase) ---
+  let flagWork = null;
+  function flagBaseExport(store) {
+    if (!flags) return 0;
+    if (flagWork) return flagWork.store === store ? flagWork.position : 0;
+    const buckets = Array.from({ length: 64 }, () => []);
+    for (const [key, entry] of store.entries) buckets[hashScriptName(String(entry.name).toLowerCase()) & 63].push({ key, entry });
+    const hash = item => hashScriptName(String(item.entry.name).toLowerCase()) | 0;
+    const owner = flags.owner() ? exportOf.get(flags.owner()) ?? 0 : 0;
+    const position = add(store, { kind: 'flagbase', name: 'FlagBase0', flags: OBJECT_FLAGS, sourceIndex: null, outerExport: owner, cls: flags.classes.FlagBase });
+    flagWork = { store, position, buckets, tokens: new Map(), counts: new Map() };
+    for (const chain of buckets) {
+      chain.sort((a, b) => hash(a) - hash(b));      // a stable sort: a flag added later follows an equal hash (createFlagBase chainOf)
+      chain.forEach((item, at) => {
+        const className = FLAG_CLASSES[item.entry.type];
+        if (!flags.classes[className]) throw new UnsupportedSaveObject(`flag ${item.entry.name} has the unsupported type ${item.entry.type}`);
+        const token = { flag: item, chain, at, className };
+        const count = flagWork.counts.get(className) ?? 0;
+        flagWork.counts.set(className, count + 1);
+        flagWork.tokens.set(item.key, token);
+        add(token, { kind: 'flag', name: `${className}${count}`, flags: OBJECT_FLAGS, sourceIndex: null, outerExport: position, cls: flags.classes[className] });
+      });
+    }
+    return position;
+  }
   const objectRef = value => {
     if (value === null || value === undefined) return 0;
     const position = exportOf.get(value);
     if (position) return position;
+    if (isHostFlagBase(value)) return flagBaseExport(value);
     if (value.asset === asset && Number.isInteger(value.index) && value.index > 0) {
       // an export of the source package that is not an actor: the brush's Model, the Summary, the EventManager
       const found = sourceExport.get(value.index);
@@ -177,6 +208,37 @@ export function serializeLevel({ runtime, level, asset, modelIndex, levelUrl, ai
     const cls = runtime.instance(object).cls;
     writeTaggedProperties(w, classFields(cls), field => runtime.fieldReference(object, field).get(), field => runtime.defaultValue(cls, field), context);
   }
+  /** FlagBase: hashTable[i] the first flag of each bucket, defaultFlagExpiration; a Flag: its value, flagName, flagHash, flagBase, nextFlag, flagType,
+   * expiration (the class chain's order; a value equal to the default is not stored). */
+  function writeFlagObject(w, entry) {
+    const cls = entry.cls, fields = classFields(cls), work = flagWork;
+    const tokenOf = item => item ? work.tokens.get(item.key) ?? null : null;
+    let read;
+    if (entry.kind === 'flagbase') {
+      read = field => {
+        const name = field.name.toLowerCase();
+        if (name === 'hashtable') return work.buckets.map(chain => tokenOf(chain[0]));
+        if (name === 'defaultflagexpiration') return work.store.defaultExpiration | 0;
+        throw new UnsupportedSaveObject(`FlagBase.${field.name} is not modelled`);
+      };
+    } else {
+      const { flag: item, chain, at, className } = entry.identity, flagEntry = item.entry, valueName = FLAG_VALUE_PROPERTY[className].toLowerCase();
+      read = field => {
+        const name = field.name.toLowerCase();
+        if (name === valueName) return flagEntry.value;
+        switch (name) {
+          case 'flagname': return flagEntry.name;
+          case 'flaghash': return hashScriptName(String(flagEntry.name).toLowerCase()) | 0;
+          case 'flagbase': return work.store;
+          case 'nextflag': return tokenOf(chain[at + 1]);
+          case 'flagtype': return flagEntry.type;
+          case 'expiration': return flagEntry.expiration | 0;
+          default: throw new UnsupportedSaveObject(`${className}.${field.name} is not modelled`);
+        }
+      };
+    }
+    writeTaggedProperties(w, fields, read, field => runtime.defaultValue(cls, field), context);
+  }
   function writeLevel(w) {
     w.compact(nameIndex('None'));
     const count = level.actors.length;
@@ -213,6 +275,7 @@ export function serializeLevel({ runtime, level, asset, modelIndex, levelUrl, ai
     switch (entry.kind) {
       case 'actor': writeActor(w, entry.identity); break;
       case 'object': writeObject(w, entry.identity); break;
+      case 'flagbase': case 'flag': writeFlagObject(w, entry); break;
       case 'level': writeLevel(w); break;
       case 'events': aiWriter(entry.identity)(w); break;
       case 'native': {
@@ -238,6 +301,7 @@ export function serializeLevel({ runtime, level, asset, modelIndex, levelUrl, ai
         if (!key) classCache.set(cls, key = resourceKey(cls.record));
         return key;
       }
+      case 'flagbase': case 'flag': return resourceKey(entry.cls.record);
       case 'level': case 'native': return importKeyOfSource(-source.exports[entry.sourceIndex - 1].classIndex - 1);
       default: return tables.importEntry({ classPackage: 'Core', className: 'Class', outerKey: tables.packageKey({ name: 'Engine' }), name: entry.className });
     }

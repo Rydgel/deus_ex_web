@@ -7,7 +7,8 @@
  *     (ai-events-payload.mjs decodeAiEvents), parsed (`parseAiWords`) and encoded (`encodeAiEvents`) with the identity references;
  *   - a package built by package-write.mjs from a saved level's tables reads back to the same names, imports and exports.
  *
- * The captures are outside Git (.work/travel/dxs, .work/travel/rt1/*.Current); the validator skips when none is there.
+ * The captures are outside Git (.work/travel/dxs, .work/travel/rt1/*.Current), and so are the real desktop save slots downloaded from the internet
+ * (the Save directories under .work/internet-saves/<source>/files, SOURCES.md there: 41 slots, every mission); the validator skips when none is there.
  *
  *   node scripts/validate-level-save.mjs */
 import { readdir, readFile } from 'node:fs/promises';
@@ -18,8 +19,16 @@ import { decodeAiEvents, parseAiWords, encodeAiEvents } from '../src/runtime/ai-
 import { PackageTables, buildPackage } from '../src/runtime/package-write.mjs';
 import { ByteWriter } from '../src/runtime/byte-writer.mjs';
 
-const captures = new URL('../.work/travel/', import.meta.url).pathname;
+const work = new URL('../.work/', import.meta.url).pathname;
+const captures = `${work}travel/`;
 const candidates = [];
+const walk = async dir => {
+  for (const entry of await readdir(dir, { withFileTypes: true })) {
+    const path = `${dir}/${entry.name}`;
+    if (entry.isDirectory()) await walk(path);
+    else if (/\.dxs$/i.test(entry.name) && !/SaveInfo/i.test(entry.name)) candidates.push(path);
+  }
+};
 for (const dir of ['dxs', 'rt1']) {
   if (!existsSync(`${captures}${dir}`)) continue;
   for (const name of await readdir(`${captures}${dir}`)) {
@@ -28,7 +37,8 @@ for (const dir of ['dxs', 'rt1']) {
     else if (/\.Current$/.test(name)) for (const inner of await readdir(path)) if (/\.dxs$/i.test(inner)) candidates.push(`${path}/${inner}`);
   }
 }
-if (!candidates.length) { console.log('SKIP validate-level-save: no measured saved level in .work/travel (outside Git)'); process.exit(0); }
+if (existsSync(`${work}internet-saves`)) for (const source of await readdir(`${work}internet-saves`)) if (existsSync(`${work}internet-saves/${source}/files`)) await walk(`${work}internet-saves/${source}/files`);
+if (!candidates.length) { console.log('SKIP validate-level-save: no saved level in .work/travel or .work/internet-saves (outside Git)'); process.exit(0); }
 
 const failures = [];
 const check = (ok, message) => { if (!ok) failures.push(message); return ok; };
@@ -41,7 +51,7 @@ for (const path of candidates) {
   try { pkg = parsePackage(bytes); } catch (error) { failures.push(`${path}: ${error.message}`); continue; }
   if (!pkg.exports.some(entry => entry.className === 'Level')) continue;   // not a level file
   files++;
-  const label = path.slice(captures.length);
+  const label = path.slice(work.length);
   const nameIndex = text => { const i = pkg.names.findIndex(entry => entry.name.toLowerCase() === String(text).toLowerCase()); if (i < 0) throw new Error(`no name ${text}`); return i; };
   const translate = { objectRef: v => v, nameIndex };
   const data = entry => bytes.subarray(entry.serialOffset, entry.serialOffset + entry.serialSize);

@@ -6,8 +6,9 @@
  * next post. `onFrame(snapshot)` takes each snapshot as it arrives instead
  * (lockstep drawing); `onProgress(message)` sees the load's progress and
  * `onFailure(error)` a message the worker could not handle, and `onConfig({leaf, bytes, base})` a config file the game wrote
- * (docs/config-persistence.md). */
-export function createSimClient({ onProgress = () => {}, onFrame = null, onFailure = () => {}, onConfig = () => {} } = {}) {
+ * (docs/config-persistence.md); `onSave({op: 'commit', dir, files} | {op: 'remove', dir})` a save slot the game finished or deleted, for the page's storage
+ * (docs/save-storage.md "Writing a save"). */
+export function createSimClient({ onProgress = () => {}, onFrame = null, onFailure = () => {}, onConfig = () => {}, onSave = () => {} } = {}) {
   const worker = new Worker(new URL('./sim-worker.mjs', import.meta.url), { type: 'module' });
   const pending = new Map(), commands = [], settledWaiters = [];
   // `activeLoad`: the last map load's request id; a snapshot of an earlier
@@ -28,6 +29,7 @@ export function createSimClient({ onProgress = () => {}, onFrame = null, onFailu
       case 'ready': ready?.resolve(); break;
       case 'progress': onProgress(data.message); break;
       case 'config': onConfig({ leaf: data.leaf, bytes: data.bytes, base: data.base }); break;
+      case 'save': onSave(data); break;
       case 'loaded': case 'result': {
         const entry = pending.get(data.id); pending.delete(data.id);
         entry?.resolve(data.type === 'result' ? data.value : data);
@@ -62,6 +64,8 @@ export function createSimClient({ onProgress = () => {}, onFrame = null, onFailu
     },
     /** The Save directory changed (a folder picked, saves imported): the worker's directory is replaced; the Load Game screen reads it when it opens. */
     setSaves(saves) { worker.postMessage({ type: 'saves', saves }); },
+    /** The picture the page made for a save's snapshot request (game-save.mjs): `data` the P8 indices of the grey 160 x 120 in the next power of two. */
+    snapshotPixels(job, pitch, height, data) { worker.postMessage({ type: 'snapshot', job, pitch, height, data }, [data.buffer]); },
     /** Build a map's simulation side (sim-host.mjs options, plain). */
     load: (map, options, currentFiles = null) => request({ type: 'load', map, options, currentFiles }),
     /** `view`, `reset`, `stateDigest`, `musicStatus` or `musicDrive`, after
