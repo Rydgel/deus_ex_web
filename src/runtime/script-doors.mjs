@@ -29,7 +29,7 @@ import { pawnPhysicsView } from './script-pawn-physics.mjs';
 import { forEachLiveActor, partitionActorArray } from './script-loadmap-startup.mjs';
 import { prepareShadowStartup, resetLevelDecals } from './script-decal.mjs';
 import { prepareConversationBinding } from './script-conversation-startup.mjs';
-import { createLiveConPlayRuntime, registerLoadedPackage } from './script-conplay-live.mjs';
+import { createLiveConPlayRuntime, registerLoadedPackage, adoptHistoryObject } from './script-conplay-live.mjs';
 import { createLiveAudio } from './script-audio-live.mjs';
 import { execActorPlaySound, execActorStopSound } from './script-sound.mjs';
 import { mapPlayerIndex } from './map-object-indices.mjs';
@@ -519,6 +519,17 @@ export async function createScriptDoors({
   const moversByObject = new WeakMap();
   const actorByIndex = new Map((level.actors ?? []).filter(actor => Number.isInteger(actor?.index))
     .map(actor => [actor.index, actor]));
+  // A saved level's non-actor objects (the player's conversation history, notes, logs ...) are exports an actor's properties point at: their
+  // identities exist before any property resolves; `restoreScriptObjects` gives them their class storage and properties once the registry exists.
+  const restoredObjects = [];
+  if (restore) {
+    const handled = new Set(['Level', 'Model', 'Polys', 'LevelSummary', 'EventManager', 'AIEventType', 'AISenderEvent', 'AIReceiverEvent']);
+    asset.pkg.exports.forEach((entry, i) => {
+      if (!entry.serialSize || actorByIndex.has(i + 1) || handled.has(entry.className)) return;
+      const identity = { index: i + 1, name: entry.name, className: entry.className, restoredObject: true };
+      restoredObjects.push(identity); actorByIndex.set(i + 1, identity);
+    });
+  }
   // Publish host identities before a class/function/default can resolve a
   // pointer to a map export. Metadata and bytecode then share those objects.
   for (const actor of actorByIndex.values()) await runtime.objects.bindIdentity(asset, actor.index, actor);
@@ -1328,7 +1339,9 @@ export async function createScriptDoors({
         // Class<Ammo> cast) — now, at load: the VM advances a state cursor
         // before dispatch, so a prepare-on-demand failure would permanently
         // skip an already-consumed statement.
-        const initialInventory = runtime.namedReference(actor, 'InitialInventory')?.get?.() ?? [];
+        // (a Pawn that is not a ScriptedPawn, such as a saved level's GeneratorScout, has no InitialInventory)
+        const initialInventory = runtime.lookupMember(identities.get(actor).cls, 'fields', 'InitialInventory')
+          ? runtime.namedReference(actor, 'InitialInventory')?.get?.() ?? [] : [];
         for (const slot of initialInventory) {
           for (const [key, value] of Object.entries(slot ?? {})) {
             if (!key.toLowerCase().endsWith('.inventory') || !value) continue;
@@ -1887,6 +1900,25 @@ export async function createScriptDoors({
     }
     savedStates.clear();
   }
+  /** Give each saved non-actor object its class storage, native record and saved properties (after the registry and the spawn world exist). */
+  async function restoreScriptObjects() {
+    for (const identity of restoredObjects) {
+      const entry = asset.pkg.exports[identity.index - 1];
+      if (/^extension\.flag/.test(lower(`${entry.className}`.startsWith('Flag') ? `extension.${entry.className}` : entry.className)))
+        throw new Error(`A saved level holds ${entry.className} ${entry.name}: restoring a saved game's flag store is travel step 4 (docs/travel.md)`);
+      const cls = await runtime.loadClass(asset, entry.classIndex);
+      await prepareNpcClass(cls);
+      runtime.attach(identity, cls);
+      runtime.instance(identity).state = null;   // an Object (not an Actor) has no StateFrame
+      const properties = readObject(asset.pkg, asset.bytes, identity.index).properties;
+      identity.properties = properties.map(({ data, ...property }) => ({ ...property, byteLength: data.length, data }));
+      for (const field of classFields(cls)) await runtime.field(field);
+      runtime.applyInitialProperties(identity, await prepareMapProperties(runtime, asset, identity, cls, actorByIndex));
+      if (cls.record.key === 'consys.conhistory' || cls.record.key === 'consys.conhistoryevent')
+        adoptHistoryObject(runtime, level, identity, cls, cls.record.key === 'consys.conhistoryevent', entry);
+      else throw new Error(`Restoring a saved ${entry.className} (${entry.name}) is not implemented: only the conversation history objects are`);
+    }
+  }
   function restoreAiEvents() {
     const managerIndex = asset.pkg.exports.findIndex(entry => entry.className === 'EventManager') + 1;
     if (!managerIndex) return;
@@ -2312,7 +2344,7 @@ export async function createScriptDoors({
   await prepareSpawnClosure(level.actors);
   for(const record of records)resetMover(record);
   lights.reset();
-  if(restore){await prepareSavedStates();warmLoadMap();}
+  if(restore){await restoreScriptObjects();await prepareSavedStates();warmLoadMap();}
   else resetNpcs();
   // The native window system exists before SpawnPlayActor: Login's
   // SetPlayer -> PlayerPawnExt.Possess calls InitRootWindow (native 1052),

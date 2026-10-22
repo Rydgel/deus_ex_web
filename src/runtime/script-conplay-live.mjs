@@ -29,6 +29,27 @@ export function registerLoadedPackage(runtime,asset){
  * travel import's StaticConstructObject leave it: allocated in `outer` (default: the loaded level's package, where a preplaced player lives), its links
  * None, the DeusEx class vtable (ConHistory 0x10027fe8, ConHistoryEvent 0x1002803c) and the Destroy it names. ConHistory's Destroy is DConHistory::Destroy
  * 0x1000ca20: it deletes each event from firstEvent through its deleting destructor (reading next first), then UObject::Destroy. */
+/** The native tail of constructHistoryObject for a history object whose identity already exists and is attached (a saved level's: its
+ * exports are identities before the registry exists): a registered native record, the ConSys vtable and its destroy chain. */
+export function adoptHistoryObject(runtime,level,identity,cls,isEvent,entry){
+  const construction=runtime.actorLifecycle.construction,fname=construction.internName(entry.name);
+  const native={identity,index:-1,hashNext:null,stateFrame:runtime.instance(identity).state??null,linker:null,linkerIndex:-1,
+    outer:level.nativeObject.outer,flags:0,name:fname.name,nameIndex:fname.index,objectClass:cls};
+  construction.registry.add(native);
+  runtime.bindNativeObject(identity,native);
+  native.nativeVtable=isEvent?0x1002803c:0x10027fe8;
+  const get=(o,k)=>runtime.readNamed(o,k);
+  native.destroy=isEvent?receiver=>runtime.destroyObjectBase(receiver):receiver=>{
+    for(let event=get(receiver,'firstEvent');event;){
+      const next=get(event,'next');
+      runtime.deleteObject(event);
+      event=next;
+    }
+    runtime.destroyObjectBase(receiver);
+  };
+  return native;
+}
+
 export function constructHistoryObject(runtime,level,cls,isEvent,{outer=level.nativeObject.outer}={}){
   const get=(o,k)=>runtime.readNamed(o,k),set=(o,k,v)=>runtime.writeNamed(o,k,v);
   const object=runtime.allocateObject(cls,{outer,name:'None',flags:0,template:null},{
