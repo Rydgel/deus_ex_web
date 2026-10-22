@@ -11,8 +11,10 @@
  *   - the restored level has its markers: no troop, the summoned item, the mover where it was, the clock past the saved one, the NPCs in the states
  *     they were saved in, exactly one player pawn (the saved one, re-possessed), and nothing a begin-play pass would add.
  * Scenario I is the Island <-> HQ pair of mission 1 against the new capture rt1 (the same checks, the original's listing and log).
+ * Scenario P walks through the Teleporters of that pair (`Map#Portal`), X triggers MapExits (direct, and with bPlayTransition) and A is the AI event
+ * manager's snapshot/load round trip on a level that has run (the best sender).
  *
- *   node scripts/validate-travel-restore.mjs [--only T|I|P] */
+ *   node scripts/validate-travel-restore.mjs [--only T|I|P|A|X] */
 import assert from 'node:assert/strict';
 import { readdir, readFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
@@ -21,6 +23,7 @@ import { gameDirectory } from './game-directory.mjs';
 import { AssetStore } from '../src/unreal/assets.mjs';
 import { openSession } from './census-stage5-session.mjs';
 import { createSaveDirectory } from '../src/runtime/save-directory.mjs';
+import { parseAiWords } from '../src/runtime/ai-events-payload.mjs';
 
 const option = (name, fallback) => { const i = process.argv.indexOf(`--${name}`); return i < 0 ? fallback : process.argv[i + 1]; };
 const only = option('only', null);
@@ -179,10 +182,80 @@ async function portalScenario() {
   e.frames(60);
 }
 
+/** MapExit (DeusEx/MapExit.uc), the other way into the same chain: triggered, it runs LoadMap -> Level.Game.SendPlayer(Player, DestMap), or with
+ * bPlayTransition the camera path (the player's Interpolating state along the InterpolationPoints) and, at InterpolateEnd, SendPlayer(Self, NextMap).
+ *   X1: 02_NYC_Street's exit to 02_NYC_Warehouse#ToRoofTop and the Warehouse's way back, 02_NYC_Street#FromRoofTop (the Street restored);
+ *   X2: 03_NYC_UNATCOIsland's transition to 03_NYC_BatteryPark (mission 3 both: the Island is filed). */
+async function mapExitScenario() {
+  console.log('--- X: MapExit (direct, and with bPlayTransition)');
+  const exitOf = (session, name) => session.actor(name);
+  const fire = (session, exit, frames) => {
+    session.game.hud.scoped(() => session.runtime.processEvent(exit, 'Trigger', [session.player(), session.player()]));
+    for (let n = 0; n < frames; n += 10) { session.frames(10); const request = session.takeTravel(); if (request) return request; }
+    return null;
+  };
+  {
+    const directory = createSaveDirectory();
+    const { c } = await openSession('02_NYC_Street', assets, { travel: {}, saveDirectory: directory });
+    c.frames(60);
+    const r1 = fire(c, exitOf(c, 'MapExit0'), 100);
+    check(r1 && r1.map === '02_NYC_Warehouse' && r1.portal === 'ToRoofTop' && !r1.restore, `X1: the request ${JSON.stringify(r1 && { map: r1.map, portal: r1.portal, restore: r1.restore })}`);
+    check(JSON.stringify(directory.files('Current').map(f => f.name)) === JSON.stringify(['02_NYC_Street.dxs']), `X1: Current holds ${directory.files('Current').map(f => f.name)}`);
+    if (!r1) return;
+    const { c: d } = await openSession(r1.map, assets, { travel: { arrival: r1, lastURL: r1.lastURL }, saveDirectory: directory });
+    d.frames(60);
+    const r2 = fire(d, exitOf(d, 'MapExit1'), 100);
+    check(r2 && r2.map === '02_NYC_Street' && r2.portal === 'FromRoofTop' && r2.restore, `X1: the way back ${JSON.stringify(r2 && { map: r2.map, portal: r2.portal, restore: r2.restore })}`);
+    if (!r2) return;
+    const { c: e } = await openSession(r2.map, assets, { travel: { arrival: r2, lastURL: r2.lastURL }, saveDirectory: directory });
+    const portal = e.byTag('FromRoofTop').find(a => e.isA(a, 'engine.teleporter'));
+    const at = e.pos(e.player());
+    console.log(`Street (restored): arrived at ${at.map(Math.round)}, FromRoofTop at ${portal && e.pos(portal).map(Math.round)}`);
+    check(portal && Math.hypot(at[0] - e.pos(portal)[0], at[1] - e.pos(portal)[1]) < 80, 'X1: the restored Street did not place the player at FromRoofTop');
+    check(!e.game.doors.scriptRuntime.engineLog.some(line => BEGIN_PLAY.test(line)), 'X1: the restored Street ran a begin-play line');
+    e.frames(60);
+  }
+  {
+    const directory = createSaveDirectory();
+    const { c } = await openSession('03_NYC_UNATCOIsland', assets, { travel: {}, saveDirectory: directory });
+    c.frames(60);
+    const exit = exitOf(c, 'MapExit0');
+    const r = fire(c, exit, 3000);
+    check(r && r.map === '03_NYC_BatteryPark' && !r.restore, `X2: the request ${JSON.stringify(r && { map: r.map, portal: r.portal, restore: r.restore })}`);
+    check(JSON.stringify(directory.files('Current').map(f => f.name)) === JSON.stringify(['03_NYC_UNATCOIsland.dxs']), `X2: Current holds ${directory.files('Current').map(f => f.name)}`);
+    if (r) {
+      const { c: d } = await openSession(r.map, assets, { travel: { arrival: r, lastURL: r.lastURL }, saveDirectory: directory });
+      d.frames(60);
+      check(d.state(d.player()) === 'deusex.deusexplayer.playerwalking', `X2: the arrived player is in ${d.state(d.player())}`);
+      console.log(`BatteryPark: arrived in ${d.state(d.player())} after the transition path`);
+    }
+  }
+}
+
+/** The AI event manager through ai_snapshot and ai_load on a level that has run: the words a snapshot gives load back into a manager whose snapshot
+ * is the same words. The Street holds receivers with a best sender (an actor handle: AIProcess stores the sender's Actor) after a few seconds,
+ * which no measured file does (every receiver of the saved Island has none), so the round trip is the check on that field. */
+async function aiScenario() {
+  console.log('--- A: the AI event manager round trip (02_NYC_Street)');
+  const { c } = await openSession('02_NYC_Street', assets, { travel: {}, saveDirectory: createSaveDirectory() });
+  c.frames(180);
+  const ai = c.runtime.scriptVm.aiEvents, info = c.level().actors[0];
+  const first = ai.snapshot();
+  const { receivers } = parseAiWords(first);
+  const withBest = receivers.filter(r => r.bestSender !== 0).length;
+  console.log(`snapshot: ${first.length} words, ${receivers.length} receivers, ${withBest} with a best sender`);
+  check(withBest > 0, 'A: no receiver holds a best sender after 3 s (the round trip does not cover the field)');
+  ai.load(info, first);
+  const second = ai.snapshot();
+  check(second.length === first.length && first.every((word, i) => word === second[i]), `A: ai_load(ai_snapshot()) changed the words (${first.length} -> ${second.length})`);
+}
+
 if (!only || only === 'T') await pairScenario({ id: 'T', title: 'Training <-> Training Combat (mission 0)', first: '00_Training', second: '00_TrainingCombat', other: '01_NYC_UNATCOIsland',
   firstFile: '00_training.dxs', secondFile: '00_TrainingCombat.dxs', troop: 'UNATCOTroop', settle: 90 });
 if (!only || only === 'I') await pairScenario({ id: 'I', title: 'Liberty Island <-> UNATCO HQ (mission 1)', first: '01_NYC_UNATCOIsland', second: '01_NYC_UNATCOHQ', other: '02_NYC_Street',
   firstFile: '01_NYC_UNATCOIsland.dxs', secondFile: '01_NYC_UNATCOHQ.dxs', troop: 'UNATCOTroop', settle: 90 });
 if (!only || only === 'P') await portalScenario();
+if (!only || only === 'A') await aiScenario();
+if (!only || only === 'X') await mapExitScenario();
 if (failures.length) { console.log(`FAIL validate-travel-restore:\n  ${failures.join('\n  ')}`); process.exit(1); }
 console.log('PASS validate-travel-restore: the listing, the markers, the log and the re-possession match the measured original');

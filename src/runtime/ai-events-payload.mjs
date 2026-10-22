@@ -14,7 +14,8 @@
  *                                           nextProcess (object, +0x7c), prevProcess (object, +0x80); the XAIParams block is not serialized
  *
  * (An object is a compact export/import index, a name a compact index into the package's name table.) The Rust manager (aievent.rs) holds the
- * same data in tables; `ai_load` and `ai_snapshot` exchange it as u32 words, with events named by ordinal. This module converts between the
+ * same data in tables; `ai_load` and `ai_snapshot` exchange it as u32 words, with events named by ordinal (the best sender is the actor's handle word:
+ * AIProcess stores the sender's Actor, so the file's `bestSender` object is an actor export). This module converts between the
  * two. Every layout above was recovered from the instructions and confirmed against the 296 + 54 + 9 event objects of a saved Island. */
 import { Reader } from '../unreal/package.mjs';
 
@@ -45,7 +46,7 @@ export function decodeAiEvents(pkg, bytes, managerIndex, { nameId, actorWord }) 
   const table = Array.from({ length: 256 }, () => m.compact());
   // types in bucket order, their senders and receivers, numbered as encountered
   const types = [], senders = [], receivers = [];
-  const senderOrdinal = new Map(), receiverOrdinal = new Map();
+  const receiverOrdinal = new Map();
   for (let bucket = 0; bucket < 256; bucket++) {
     for (let t = table[bucket]; t; ) {
       const { r } = reader(t);
@@ -58,7 +59,7 @@ export function decodeAiEvents(pkg, bytes, managerIndex, { nameId, actorWord }) 
         sender.next = sr.compact();
         for (let i = 0; i < SETTINGS_WORDS; i++) sender.words.push(float(sr));
         if (sr.offset !== sr.bytes.length) throw new Error(`AISenderEvent ${s}: ${sr.bytes.length - sr.offset} unread bytes`);
-        senders.push(sender); senderOrdinal.set(s, senders.length); type.senderList.push(sender);
+        senders.push(sender); type.senderList.push(sender);
         s = sender.next;
       }
       for (let rc = type.receivers; rc; ) {
@@ -85,7 +86,7 @@ export function decodeAiEvents(pkg, bytes, managerIndex, { nameId, actorWord }) 
     for (const s of type.senderList) words.push(actorWord(s.actor), s.destroyed, ...s.words.slice(0, 64), ...s.words.slice(64, 68));
     for (const r of type.receiverList)
       words.push(actorWord(r.actor), r.destroyed, nameId(r.callback), nameId(r.scoreCallback), r.invoke, r.state, ...r.checks, r.on, r.bestScore,
-        ordinal(senderOrdinal, r.bestSender), r.nextSlot, ordinal(receiverOrdinal, r.nextProcess), ordinal(receiverOrdinal, r.prevProcess));
+        r.bestSender ? actorWord(r.bestSender) : 0, r.nextSlot, ordinal(receiverOrdinal, r.nextProcess), ordinal(receiverOrdinal, r.prevProcess));
   }
   return { words: Uint32Array.from(words.map(word => word >>> 0)), types, senders, receivers };
 }
@@ -163,7 +164,7 @@ export function encodeAiEvents(parsed, positions, levelPosition, { nameIndex, sp
       w.compact(nameIndex(spelling(receiver.callback))); w.compact(nameIndex(spelling(receiver.scoreCallback)));
       w.i32(receiver.invoke); w.u8(receiver.state);
       for (const check of receiver.checks) w.i32(check);
-      w.i32(receiver.on); w.u32(receiver.bestScore); w.compact(ord('senders', receiver.bestSender)); w.i32(receiver.nextSlot);
+      w.i32(receiver.on); w.u32(receiver.bestScore); w.compact(receiver.bestSender ? actorRef(receiver.bestSender) : 0); w.i32(receiver.nextSlot);
       w.compact(ord('receivers', receiver.nextProcess)); w.compact(ord('receivers', receiver.prevProcess));
     }),
   };

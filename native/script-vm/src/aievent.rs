@@ -1238,8 +1238,9 @@ pub extern "C" fn ai_dump(out: u32, capacity: u32) -> u32 {
 //     per sender: actor, destroyed, 64 slot words, 4 current words (holdScore is not serialized)
 //     per receiver: actor, destroyed, callback, score callback, invoke, state, 4 checks, on, best score, best sender,
 //                   next slot, next process, prev process
-// `first_process`, `best_sender`, `next_process` and `prev_process` name an event by its ordinal + 1 (0: none) in the order the words
-// list them (senders and receivers numbered separately); the XAIParams block is transient and loads as zero.
+// `first_process`, `next_process` and `prev_process` name a receiver by its ordinal + 1 (0: none) in the order the words list them;
+// `best_sender` is the best sender's actor handle word, as AIProcess stores it (`snd(candidate).actor`: an Actor, which the file holds as the
+// actor's object reference); the XAIParams block is transient and loads as zero.
 const SENDER_WORDS: usize = 2 + 64 + 4;
 const RECEIVER_WORDS: usize = 16;
 
@@ -1262,10 +1263,9 @@ pub extern "C" fn ai_load(words: u32, count: u32) -> u32 {
     let types = w[4] as usize;
     let mut at = 5usize;
     // First pass: allocate and fill in file order; the links that name an event by ordinal are resolved after.
-    let mut senders: [u32; MAX_SENDERS] = [0; MAX_SENDERS];
     let mut receivers: [u32; MAX_RECEIVERS] = [0; MAX_RECEIVERS];
     let (mut ns, mut nr) = (0usize, 0usize);
-    let mut links: [(u32, u32, u32); MAX_RECEIVERS] = [(0, 0, 0); MAX_RECEIVERS];
+    let mut links: [(u32, u32); MAX_RECEIVERS] = [(0, 0); MAX_RECEIVERS];
     let mut tails: [u32; 256] = [0; 256];
     for _ in 0..types {
         if at + 5 > w.len() {
@@ -1312,7 +1312,6 @@ pub extern "C" fn ai_load(words: u32, count: u32) -> u32 {
                 snd(prev).next = s;
             }
             prev = s;
-            senders[ns] = s;
             ns += 1;
             at += SENDER_WORDS;
         }
@@ -1338,8 +1337,10 @@ pub extern "C" fn ai_load(words: u32, count: u32) -> u32 {
             }
             receiver.on = w[at + 10];
             receiver.best_score = w[at + 11];
+            // the best sender is the sender's Actor (AIProcess stores `snd(candidate).actor`), not an event: it is the actor's handle word
+            receiver.best_sender = w[at + 12];
             receiver.next_slot = w[at + 13];
-            links[nr] = (w[at + 12], w[at + 14], w[at + 15]);
+            links[nr] = (w[at + 14], w[at + 15]);
             *rcv(r) = receiver;
             if prev == 0 {
                 ty(t).receivers = r;
@@ -1356,10 +1357,9 @@ pub extern "C" fn ai_load(words: u32, count: u32) -> u32 {
         return 1;
     }
     for i in 0..nr {
-        let (best, next, prev) = links[i];
+        let (next, prev) = links[i];
         let r = receivers[i];
         let pick = |ordinal: u32, table: &[u32], n: usize| if ordinal == 0 || ordinal as usize > n { 0 } else { table[ordinal as usize - 1] };
-        rcv(r).best_sender = pick(best, &senders, ns);
         rcv(r).next_process = pick(next, &receivers, nr);
         rcv(r).prev_process = pick(prev, &receivers, nr);
     }
@@ -1381,20 +1381,13 @@ pub extern "C" fn ai_snapshot(out: u32, capacity: u32) -> u32 {
             ok = false;
         }
     };
-    // ordinals: senders and receivers numbered in the order they are listed
-    let mut sender_ordinal: [u32; MAX_SENDERS + 1] = [0; MAX_SENDERS + 1];
+    // ordinals: receivers numbered in the order they are listed
     let mut receiver_ordinal: [u32; MAX_RECEIVERS + 1] = [0; MAX_RECEIVERS + 1];
-    let (mut ns, mut nr, mut types) = (0u32, 0u32, 0u32);
+    let (mut nr, mut types) = (0u32, 0u32);
     for bucket in 0..256usize {
         let mut t = m().table[bucket];
         while t != 0 {
             types += 1;
-            let mut s = ty(t).senders;
-            while s != 0 {
-                ns += 1;
-                sender_ordinal[s as usize] = ns;
-                s = snd(s).next;
-            }
             let mut r = ty(t).receivers;
             while r != 0 {
                 nr += 1;
@@ -1447,7 +1440,7 @@ pub extern "C" fn ai_snapshot(out: u32, capacity: u32) -> u32 {
             while r != 0 {
                 let e = *rcv(r);
                 for word in [e.actor, e.destroyed, e.callback, e.score_callback, e.invoke, e.state, e.checks[0], e.checks[1], e.checks[2], e.checks[3], e.on,
-                    e.best_score, if e.best_sender != 0 { sender_ordinal[e.best_sender as usize] } else { 0 }, e.next_slot,
+                    e.best_score, e.best_sender, e.next_slot,
                     if e.next_process != 0 { receiver_ordinal[e.next_process as usize] } else { 0 },
                     if e.prev_process != 0 { receiver_ordinal[e.prev_process as usize] } else { 0 }] {
                     put(word);
