@@ -562,6 +562,15 @@ export function createConsoleCommands({runtime, input, services}) {
   /** DDeusExGameEngine::Exec 0x1000ed70 -> UGameEngine::Exec 0x1038a030 ->
    * UEngine::Exec 0x10380ee0. */
   function engineExec(level, levelInfo, cmd, ar) {
+    // DDeusExGameEngine::Exec 0x1000ed70 tests SAVEGAME, then DELETEGAME (the text at 0x100344b4, 0x1003449c): the keyword matched, a digit next runs
+    // SaveGame(appAtoi(Cmd), "") / DeleteGame(appAtoi(Cmd)); a keyword with no digit does nothing; either way the command is claimed (returns 1, 0x1000ee60).
+    const gameEngine = services.gameEngine;
+    if (gameEngine?.saveGame) {
+      const saveRest = parseCommand(cmd, 'SAVEGAME');
+      if (saveRest !== null) { if (/^[0-9]/.test(saveRest)) gameEngine.saveGame(msvcrtWtoi(saveRest)); return true; }
+      const deleteRest = parseCommand(cmd, 'DELETEGAME');
+      if (deleteRest !== null) { if (/^[0-9]/.test(deleteRest)) gameEngine.deleteGame(msvcrtWtoi(deleteRest)); return true; }
+    }
     claims('DDeusExGameEngine::Exec', cmd);
     // UGameEngine::Exec's first keyword, OPEN (0x1038a061, the text at 0x1047eaa4): with a client viewport (Client +0x44, Viewports.Num +0x30)
     // SetClientTravel(Client->Viewports(0), Cmd, 0, TRAVEL_Partial) (vtable +0x88, 0x1038a0a9), Cmd past the keyword and its spaces; without one

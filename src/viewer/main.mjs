@@ -9,6 +9,7 @@ import { openConfigPersistence, persistenceMode } from '../runtime/config-persis
 import { openSavePersistence, saveMode, devServedSaves } from './save-persistence.mjs';
 import { createSavesUi } from './saves-ui.mjs';
 import { hostSaveDirectory } from '../runtime/save-directory.mjs';
+import { setSaveSink } from '../runtime/save-sink.mjs';
 import { chosenResolution } from '../runtime/display-config.mjs';
 import { decodeMap } from '../unreal/map.mjs';
 import { toView, fromView } from '../unreal/geometry.mjs';
@@ -429,6 +430,16 @@ function pushSaves() {
   const listing = savePersistence?.simSaves();
   if (!listing) return;
   if (simClient) simClient.setSaves(listing); else hostSaveDirectory().replace(listing);
+}
+/** A save slot the simulation finished (`commit`: the slot whole, SaveInfo.dxs last) or deleted (`remove`): the page's storage keeps it. A refusal (quota, a folder
+ * that went away) leaves the slot as it was, is said here and in the Saves window, and the listing the simulation reads is sent again by the persistence's change. */
+async function keepSimSave(message) {
+  const persistence = await savesReady;
+  if (!persistence) return;
+  try {
+    if (message.op === 'commit') await persistence.commitSlot(message.dir, message.files);
+    else await persistence.removeSlot(message.dir);
+  } catch (error) { toast(`The game could not be saved: ${error?.message ?? error}`, 12000); throw error; }
 }
 const savesReady = openSavePersistence({ mode: saveMode(location.search, originalStart), served: import.meta.env.DEV ? devServedSaves() : null,
   onChange: () => { pushSaves(); savesUi.update(); } })
@@ -895,6 +906,8 @@ async function loadMap(name, { travel = null } = {}) {
       musicLibrary: pageMusicLibrary,
       onAudioVoice: event => { void galaxyVoice(event); },
       onProgress: message => { $('gate-message').textContent = message; } });
+    // the new session's snapshot requests number from 1 again (script-window-host.mjs display.snapshotSerial)
+    snapshotServed = 0; saveDeliveries.length = 0;
     nextWorld.notes.push(...nextHost.notes);
     nextGame = nextHost.game; nextSim = nextHost.game ? nextHost.session : null;
     if(nextGame&&simVerify&&!simClient){
@@ -1038,11 +1051,17 @@ async function setFiles(files) {
       onFrame: lockstep ? snapshot => drawLockstep(snapshot) : null,
       onFailure: error => pauseForRuntimeError(error),
       // a config file the game wrote: the page keeps it (config-store.mjs accept -> the storage)
-      onConfig: record => configStore?.accept(record.leaf, record) });
+      onConfig: record => configStore?.accept(record.leaf, record),
+      // a save the game finished or deleted: the storage keeps it (docs/save-storage.md "Writing a save")
+      onSave: message => { keepSimSave(message).catch(() => {}); } });   // (a refusal is said by keepSimSave itself)
     const flags = Object.fromEntries(Object.keys(globalThis).filter(key => key.startsWith('DEUS_EX_')).map(key => [key, globalThis[key]]));
     await simClient.init(flags, files.map(file => ({ path: file.path, ...(file.file ? { file: file.file } : {}), ...(file.url ? { url: file.url } : {}) })),
       configStore ? configStore.snapshot() : null, (await savesReady) ? savePersistence.simSaves() : null);
-  } else if (await savesReady) pushSaves();
+  } else if (await savesReady) {
+    pushSaves();
+    // the simulation runs on the page: its saves reach the storage directly
+    if (savePersistence) setSaveSink({ commitSlot: ({ dir, files }) => keepSimSave({ op: 'commit', dir, files }), removeSlot: ({ dir }) => keepSimSave({ op: 'remove', dir }) });
+  }
   await connectMusic(next.configFiles);
   const names = [...next.files.values()].filter(f => /\.(dx|unr)$/i.test(f.path)).map(f => f.name).sort();
   if (!names.length) throw new Error('No maps found. Choose the game folder containing Maps, Textures, and System.');
@@ -1197,6 +1216,21 @@ function applyDisplaySettings(display) {
 // RootWindow.GenerateSnapshot (docs/root-snapshot.md): each requested texture is made here, from the frame the page drew last, before
 // the HUD that names it draws. The pixels are the original's resampling (script-root-snapshot.mjs) of the kept frame; a request before
 // any frame was kept reads an empty (black) frame, as ReadPixels of a cleared surface would.
+/** The snapshot requests of saves waiting for a kept frame, and the answer: RootWindow.GenerateSnapshot's pixel work on the kept frame, as the P8 indices of the
+ * texture (the 160 x 120 picture in the next power of two), sent to the simulation by the save's job number. A frame kept while the save waited is the one the
+ * player last saw; with none yet, the next one drawn answers (serveSaveSnapshots runs after each kept frame). */
+const saveDeliveries = [];
+function serveSaveSnapshots() {
+  if (!saveDeliveries.length || !frameKeeper.hasFrame) return;
+  const frame = frameKeeper.read();
+  if (!frame) return;
+  for (const request of saveDeliveries.splice(0)) {
+    const grey = snapshotGrey(frame.pixels, frame.width, frame.height, request.snapW, request.snapH);
+    const data = Uint8Array.from(grey.data);
+    if (simClient) simClient.snapshotPixels(request.jobId, grey.pitch, grey.height, data);
+    else void import('../runtime/game-save.mjs').then(save => save.deliverSaveSnapshot(request.jobId, { data }));
+  }
+}
 function applySnapshotRequests(display) {
   // textures the simulation made from bytes it holds (a save's snapshot picture): the HUD draws them by key once they are here
   for (const image of display.images ?? []) hudRenderer?.setDynamicImage(image.key, { width: image.width, height: image.height, data: image.data });
@@ -1205,6 +1239,8 @@ function applySnapshotRequests(display) {
   for (const request of display.snapshotRequests ?? []) {
     if (request.serial <= snapshotServed || !hudRenderer) continue;
     snapshotServed = request.serial;
+    // a save's snapshot (game-save.mjs): not a texture the HUD draws; the picture goes back to the simulation, made from a kept frame
+    if (request.deliver) { saveDeliveries.push(request); continue; }
     const frame = frameKeeper.read() ?? { width: request.sizeX, height: request.sizeY, pixels: new Uint32Array(request.sizeX * request.sizeY) };
     const grey = snapshotGrey(frame.pixels, frame.width, frame.height, request.snapW, request.snapH);
     const data = new Uint8Array(grey.data.length * 4);
@@ -1214,6 +1250,7 @@ function applySnapshotRequests(display) {
     // The script drops its last snapshot when it makes the next; a texture older than two requests cannot be on screen.
     while (snapshotKeys.length > 3) hudRenderer.releaseDynamicImage(snapshotKeys.shift());
   }
+  serveSaveSnapshots();
   for (const key of display.snapshotReleased ?? []) {
     const at = snapshotKeys.indexOf(key);
     if (at >= 0) { hudRenderer?.releaseDynamicImage(key); snapshotKeys.splice(at, 1); }
@@ -1724,7 +1761,10 @@ function status() {
 // A small read-only diagnostic hook also makes browser regressions reproducible.
 window.deusExViewer = { status,
 /** The page's save persistence (save-persistence.mjs) for the specs: its status, the listing read again, the Saves window. */
-saves: { status: () => savePersistence?.status() ?? null, refresh: () => savePersistence?.refresh() ?? Promise.resolve(false), open: () => savesUi.open(), ready: () => savesReady.then(() => true) },
+saves: { status: () => savePersistence?.status() ?? null, refresh: () => savePersistence?.refresh() ?? Promise.resolve(false), open: () => savesUi.open(), ready: () => savesReady.then(() => true),
+  /** The stored directories and their files ({dir, files: [{name, size}]}) and one file's bytes (an array): what the specs read back of a save. */
+  list: () => savePersistence ? savePersistence.directory.directories().map(dir => ({ dir, files: savePersistence.directory.files(dir) })) : [],
+  read: async (dir, name) => { const bytes = await savePersistence?.directory.read(dir, name); return bytes ? Array.from(bytes) : null; } },
 /** The page's procedural textures held at the original's state (procedural-textures.mjs `hold`): {kind, pixels: {name: hex}} or null. */
 proceduralHold(spec) { return sharedProceduralTextures().hold(spec); },
 /** The page's procedural textures: key, kind, size, GlobalPhase and a pixel checksum each. */
@@ -2337,7 +2377,7 @@ function drawFrame(snap, time) {
   else if (crtEnabled) (crtMaterialRamp ??= createDisplayRamp()).apply(renderer, 1, true, crtShader, crtCompare);
   gpuEnd();
   phase('ramp');
-  if (keepingFrames) frameKeeper.keep();
+  if (keepingFrames) { frameKeeper.keep(); serveSaveSnapshots(); }
   $('crosshair').hidden=mode==='play'&&Boolean(hudRenderer);
   placePageButtons();
   if ($('inspect').checked && time - lastInspect > 150) {

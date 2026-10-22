@@ -3358,6 +3358,16 @@ export class ScriptRuntime {
       const names=this.enumNames(object);
       return index<names.length?names[index]:'None';
     }
+    // Core UObject::execGetConfig 0x1013e4e0 (`// DEUS_EX CAC`): two string parameters, then GConfig->GetString(Section, Key, &Value, NULL) (the vtable +0xc call at
+    // 0x1013e597; no file name: the system ini) with the result copied out; a missing key leaves the empty string. MenuScreenSaveGame.GenerateNewSnapShot asks for
+    // Engine.Engine GameRenderDevice.
+    if(call.index===0&&call.record?.key==='core.object.getconfig'){
+      if(call.argumentCount!==2)throw new Error('GetConfig requires a section and a key');
+      const section=String(refValue(call.evaluateArgument(0))??''),key=String(refValue(call.evaluateArgument(1))??'');
+      const config=this.classLoader?.graph?.config;
+      if(!config)throw new Error('GetConfig requires GConfig (the native class loader and installed .ini files)');
+      return config.getString(section,key,null)??'';
+    }
     // DeusEx ParticleIterator.UpdateParticles (docs/particles.md).
     if(call.index===3017){
       if(typeof this.rng?.frand!=='function')throw new Error('UpdateParticles requires the shared original RNG stream');

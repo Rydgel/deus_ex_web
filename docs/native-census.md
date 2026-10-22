@@ -414,6 +414,7 @@ the sweep now reaches 14 of the 25 classes and not 11. What is left is the list 
 (Customize Keys), `TOGGLEFULLSCREEN` and `RELAUNCH` (Display). Behind Load Game there is nothing to reach until a save exists: with the two saves of the Wine capture its rows, selection and info text match the original's
 ([save-directory](save-directory.md)); its Load Game button (`DeusExPlayer.LoadGame` -> `ConsoleCommand("LoadGame n")`) and the delete confirmation are not pressed by the sweep with an empty list and need a store with saves (travel step 4).
 Save Game opened from a running game (Training) now runs the same directory natives and stops one step later, at the name-bound `Object.GetConfig` of `GenerateNewSnapShot` (not in the main menu's tree on the logo map, where its button is insensitive).
+*(2026-10-22: `Object.GetConfig` and 3011 `SaveGame` are handled; the screen saves: [travel](travel.md#savegame-in-full).)*
 
 Negative control: with the FindWindow branch of `script-window-host.mjs` switched off (not committed), a one-screen run stops on
 MenuMain with the message the user met, "Unsupported original door native 1472 in menuuiwindow.mousebuttonpressed", on a plain

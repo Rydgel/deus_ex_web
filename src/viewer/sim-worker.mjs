@@ -12,6 +12,8 @@
  *   message for the page to keep.
  * - `saves` {saves}: the page's storage changed (a folder picked, saves
  *   imported): the Save directory the GameDirectory natives read is replaced.
+ *   The worker answers a save the game finished with a `save` {op: 'commit', dir, files} message (a deleted one: {op: 'remove', dir}) for the page to keep.
+ * - `snapshot` {job, pitch, height, data}: the page's picture for a save's snapshot request (game-save.mjs); the save is committed with it.
  * - `load` {id, map, options}: decode the map and build the simulation side;
  *   replies `loaded` with the first events, the HUD's textures, the notes
  *   and the actor layer's summary.
@@ -112,7 +114,17 @@ async function handle(data) {
       // The player's kept config files (docs/config-persistence.md): the page loaded them from its storage; each file the game writes goes
       // back to the page, which keeps it. Null: persistence is off and the config files are the installed ones.
       // The Save directory the GameDirectory natives read (docs/save-storage.md): the page owns the storage and sends the listing.
-      if (data.saves) (await import('../runtime/save-directory.mjs')).hostSaveDirectory().replace(data.saves);
+      if (data.saves) {
+        (await import('../runtime/save-directory.mjs')).hostSaveDirectory().replace(data.saves);
+        // A save the game finishes goes to the page, which owns the storage (docs/save-storage.md "Writing a save"); the bytes cross as copies.
+        (await import('../runtime/save-sink.mjs')).setSaveSink({
+          commitSlot({ dir, files }) {
+            const copies = files.map(file => ({ name: file.name, bytes: file.bytes.slice(), modified: file.modified }));
+            send({ type: 'save', op: 'commit', dir, files: copies }, copies.map(file => file.bytes.buffer));
+          },
+          removeSlot({ dir }) { send({ type: 'save', op: 'remove', dir }); },
+        });
+      }
       const configStore = data.saved ? createConfigStore({ saved: data.saved, persist: (leaf, record) => send({ type: 'config', leaf, bytes: record.bytes, base: record.base }) }) : null;
       assets = new AssetStore(data.files.map(file => ({ path: file.path, read: file.file ? () => file.file.arrayBuffer()
         : file.url ? async () => { const response = await fetch(file.url); if (!response.ok) throw new Error(`Cannot read ${file.path}`); return response.arrayBuffer(); }
@@ -121,6 +133,7 @@ async function handle(data) {
       return;
     }
     case 'saves': (await import('../runtime/save-directory.mjs')).hostSaveDirectory().replace(data.saves); return;
+    case 'snapshot': (await import('../runtime/game-save.mjs')).deliverSaveSnapshot(data.job, { data: data.data }); return;
     case 'music': musicLibrary = music.connectMusicLibraryPort(data.port, { effects: true }); return;
     case 'load': {
       // The old map's audio unregisters its music first (sim-host.mjs

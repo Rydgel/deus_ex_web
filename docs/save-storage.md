@@ -5,8 +5,8 @@ Where Play's saves live, the layer that keeps them, how the page gets them into 
 original's format, can sit in the file system outside the browser, and that real desktop saves can be imported. The ini settings use the same database but stay in the browser:
 [configuration persistence](config-persistence.md). Nothing here writes into the player's game folder except through a folder the player picked for saves.
 
-State: the storage layer, the page's folder flow, the wiring into the simulation worker and the snapshot picture are built and checked (below). **Loading a slot and writing a save are not**
-([travel](travel.md) step 4): the Load Game screen lists and previews saves; its Load Game button stops by name.
+State: the storage layer, the page's folder flow, the wiring into the simulation worker, the snapshot picture and (2026-10-22, [travel](travel.md) step 4's save side) **writing a save** are built and
+checked (below: "Writing a save"). Loading a slot is the other half of step 4: the Load Game screen lists and previews saves; its Load Game button is the load side's.
 
 ## The contract
 
@@ -105,19 +105,46 @@ Every failure is a `StorageError` with a `kind` (`browser-storage.mjs`; the fold
 | situation | what happens | what the player sees / does |
 | --- | --- | --- |
 | No IndexedDB, blocked site data, a private window that refuses it | the `memory` backend: saves last as long as the page | the message; export is the way to keep them |
-| Quota exceeded on a write | the single transaction aborts: the previous file stays, nothing half-written | "no room": delete a slot or export; the Load Game screen's free space already shows what the browser says |
-| The browser evicts the origin's data, or Safari clears it after seven days | rows are gone; the next listing finds nothing | `navigator.storage.persist()` is to be asked once the first save exists (a prompt in Firefox, a grant by engagement in Chromium) and an export reminder; unverified, not built |
+| Quota exceeded on a write | the single transaction aborts: the previous file stays, nothing half-written. A save writes its slot whole in **one** transaction (`replaceDir`), so a refused save leaves the old slot exactly as it was | the toast "The game could not be saved: ..." and the Saves window's note "The last save was not kept: ..." (`status().saveError`, cleared by the next save that is kept); the game goes on, the Load Game screen's listing is the old one |
+| The browser evicts the origin's data, or Safari clears it after seven days | rows are gone; the next listing finds nothing | `navigator.storage.persist()` is asked once, after the first save the browser's storage keeps (`status().persisted`; a prompt in Firefox, a grant by engagement in Chromium); a refusal is said in the Saves window with the export reminder. The answer of a real browser was not observed here (headless Chromium answers false/true without a prompt); **unverified** |
 | Another tab upgrades or clears the database | `closed` on the next operation | reload the page |
 | A database from a newer build | `newer`: opened by nothing, left alone | the page runs without it |
 | Folder permission not granted on a later visit | `queryPermission` says `prompt`; the browser's storage is in charge | the message, and "Reconnect folder" (a click) in the Saves window |
 | The folder moved, renamed, or on a drive not connected | `missing` (`NotFoundError`): the folder is `unusable`, the browser's storage is in charge | the message; pick it again, or "Stop using the folder" |
 | The folder is read-only, or the desktop game holds a file | `NoModificationAllowedError` / `InvalidStateError` map to `denied` / `missing` | the write fails whole: `createWritable` writes to a swap file and commits on `close()`, so a file is never half-written |
-| A crash between the files of one save | a save is several files and the folder has no cross-file transaction | the Load Game screen shows a directory whose `SaveInfo.dxs` is missing as a row labelled `SaveInfoMissing_Label` (row id -2, `PopulateGames`), which cannot be loaded; the writer (step 4) should write the level files first and `SaveInfo.dxs` last (the original's order is not measured) |
+| A crash between the files of one save | IndexedDB: none (one transaction). A picked folder has no cross-file transaction: the writer puts the level files first and `SaveInfo.dxs` last, then removes the files the new slot lacks | the Load Game screen shows a directory whose `SaveInfo.dxs` is missing as a row labelled `SaveInfoMissing_Label` (row id -2, `PopulateGames`), which cannot be loaded; an interrupted overwrite in a folder can leave a slot with some new level files and the old SaveInfo (**not atomic**, said here) |
 | Two tabs, or the desktop game running on the same folder | no locking; the last writer wins, a slot number may collide | the listing is read again on return to the page and before a write |
 | Names | NTFS is case-insensitive, IndexedDB keys are not | the game writes canonical names (`Save0001`); the directory sorts case-insensitively as NTFS lists; an import keeps the player's spelling |
 | The folder picker is dismissed | `cancelled` | nothing changes |
 | A SaveInfo that is not a package | no info for that slot | the screen's "save info missing" row; the other slots list |
 | A snapshot texture in a form the reader does not decode | the info has the export names and no picture | the row lists and its info text shows, the picture area stays empty |
+
+## Writing a save
+
+`SaveGame` (native 3011, the Save Game screen, the Quick Save key, the console's `SAVEGAME n`) and `DeleteGame` are [travel](travel.md#savegame-in-full) step 4's save side; this is where their files go.
+
+* The simulation builds the slot in `src/runtime/game-save.mjs`: `SaveInfo.dxs` (`save-info-write.mjs`, byte-exact to the original's layout), the copies of its `Save\Current` files with their times, and the level the player is in
+  (`travel-save.mjs` `saveCurrentLevel(index)`: the player, its inventory and its FlagBase in the file). The slot is then **committed whole**: the worker's replica directory takes it (`put`), and the realm's SINK
+  (`src/runtime/save-sink.mjs`) is told: `commitSlot({dir, files})` with the level files first and `SaveInfo.dxs` last, or `removeSlot({dir})` for `DeleteGame`.
+* In the worker the sink posts a `save` message to the page (`{op: 'commit', dir, files}` with copies of the bytes, transferred; `{op: 'remove', dir}`); with the simulation inline the sink is the page's own. The page's
+  `keepSimSave` (`main.mjs`) hands it to `savePersistence.commitSlot(dir, files)` / `removeSlot(dir)`, which run one at a time with the other storage actions, write through the stored directory's `replaceDir`
+  (IndexedDB: one transaction that deletes the slot's old rows and puts the new; memory the same; a folder file by file in the order given, then removes the stale ones; the dev server's served base is read-only and the layered
+  backend writes to the page's own, whose directory then hides the served slot of the same name) and report the change (`onChange`), which sends the simulation the new listing (`pushSaves`), so the replica always ends equal to the
+  storage, whether the save was kept or refused. `Save\Current` is the simulation's own working directory (the levels left in this mission): the page never stores it, and a listing that arrives mid-game leaves it
+  (`createSaveDirectory().replace` keeps `Current`).
+* **The picture.** The simulation has no frame. The SaveInfo is built at once with a black picture in its texture and the slot waits for the page's: the request goes out in the frame snapshot (`display.snapshotRequests`, flagged
+  `deliver`, with the save's job number), the page keeps the frame it draws (the frame keeper: while a window holds the mouse, so the Save Game screen's preview has the scene behind it whatever `UIBackground` says, and
+  while a save is waiting), makes the grey 160 x 120 picture from it with the original's pixel work (`snapshotGrey`, [root snapshot](root-snapshot.md)) and answers (`snapshot` message, the P8 indices in the 256 x 128 texture);
+  the indices are written into the SaveInfo at the texture's offset (nothing else in the package depends on them) and the slot is committed. The frame is the one on screen when the save was asked for if the page was
+  keeping frames (a window was open), else the first drawn after the request (one frame later); with no answer in 4 s (a hidden page) the slot is committed with the black picture. A session without a page (a validator)
+  takes `travel.snapshotSource`, a synchronous provider. With the OpenGL render device the original saves no Snapshot at all; Play's config names the D3D device, so the picture is always taken.
+* **What is not the original's**: the picture's source is the page's 8-bit canvas after the display ramp (the CRT effect included when it is on), not `ReadPixels` of the 16-bit surface (unmeasured, as for UIBackground 1); the
+  texture and palette numbers come from the Texture class's name counter (`Texture0`/`Palette0` in the first save of a process, as measured) and the SaveInfo/Texture/Palette objects are not in the registry model; the order of
+  the object names at the end of the name table and of the Texture and Palette in the export table are the original process's history (41 saves show both orders) and Play uses the first save's; the time stamp is the browser's local
+  clock and `InternalTime` its monotonic clock; a flag object's Outer is the FlagBase (the desktop game's 2026-09 save has that; 96% of the internet saves' flags have the player, the ones a travel text imported);
+  the progress bar `SaveCurrentLevel` shows (`BeginSlowTask`, `PaintProgress`) is not drawn.
+* Cost: a frame is kept (one framebuffer copy a frame) only while a window holds the mouse or a save waits; gameplay frames are untouched. The copy was **not measured** (headless Chromium has a software GL).
+  The bytes cross the worker boundary as copies (about 8 MB for the Island), once per save.
 
 ## The snapshot
 
@@ -177,14 +204,19 @@ Both captures give the same level for each of the 97 palette indices the two pic
   3. the dev endpoints' limits.
   Also: `browser-tests/original-start-load-game.spec.mjs` (now with `?saves=off`, the empty directory), `browser-tests/config-persistence.spec.mjs`, `validate-travel-play`, `validate-travel-newgame-play`.
 
+* Saves (2026-10-22, step 4): `test/save-info-write.test.mjs` (the layout and the byte-for-byte reproduction of the Wine session's Save0077), `scripts/validate-save-info-corpus.mjs` (all 41 internet SaveInfo.dxs
+  and the two desktop ones, byte for byte, given the process-history orders), `test/save-store.test.mjs` (`replaceDir` in every backend; a quota failure leaves the slot as it was) and
+  `test/save-persistence.test.mjs` (`commitSlot`, `removeSlot`, the refusal in the status and the note, `persist()` once), `scripts/validate-save-game.mjs` (the flag store of five real saves, the slot, the Save Game
+  screen's boxes, the measured SaveGame 77 listing; scenario W: SaveInfo.dxs against the original's own for the same moment, `wa5`; scenario C: **the original under Wine loads Play's slots** (Training, Island with the cheats on, Quick Save, HQ with the Island copy) with the saved player, items, flags and log, `wc1`/`wc2`, [travel](travel.md#play-step-4-saving)), `browser-tests/save-game.spec.mjs` (Esc -> Save Game, a named save, saving over a slot, the Load Game list, the Quick Save key, Delete Game, a refused write).
+
 ## Open
 
 * **Not run in a real browser with a real picker.** The headless Chromium of the specs has no picker and **closes the page when it reads a stored directory handle back out of IndexedDB** (observed here: the first read
   of a handle crashes the renderer; writing one works). So the later-visit path (stored handle, `queryPermission`, "Reconnect folder") runs against fakes only, and the picked-folder path runs with an origin-private-file-system
   handle, which is a real File System Access handle but not a folder on the player's disk. A headed Chromium with a real folder, Firefox and Safari were not run.
 * **The program-files block** of Chromium's picker is from memory of its source, not tested here.
-* **Writing** (`SaveGame`, `DeleteGame`, `?loadgame=`, the quick save and autosave, the snapshot that `GenerateSnapshot` makes for a new save) is [travel](travel.md) step 4. With saves listed, the screen's Delete Game
-  button is reachable: it sends the console command `DeleteGame n`, which `DDeusExGameEngine::Exec` claims (a named stop; not exercised by the specs).
-* `navigator.storage.persist()` and the export reminder are not built.
+* **Loading** (`?loadgame=`, QuickLoad) is the load side of [travel](travel.md) step 4. Writing, `DeleteGame` (the Load Game screen's Delete button) and the snapshot of a new save are built and checked
+  (`browser-tests/save-game.spec.mjs`), and the original under Wine loads the slots Play writes (files of headless Play sessions put into the prefix by hand). Not run: a folder written to by the page itself and read by the desktop game, a quota failure on a real disk and a save made with two tabs open.
+* `navigator.storage.persist()` is asked after the first save; a real browser's answer (a prompt in Firefox) was not observed.
 * The free space is the browser's estimate for every backend; a folder's volume is not asked.
 * The same-name export replacement above, and the registry effects of many loads of same-named exports, are unmeasured.

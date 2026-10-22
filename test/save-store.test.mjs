@@ -42,6 +42,20 @@ async function exercise(make, label) {
   assert.equal(await directory.removeDir('Save0001'), 1, `${label}: DeleteSaveGame removes the directory and its files`);
   assert.deepEqual(directory.directories(), ['QuickSave', 'Save0002']);
   assert.equal(directory.info('Save0001'), null);
+  // a save slot written whole (SaveGame): the directory holds exactly the files given, the files it held before and the list lacks go, SaveInfo.dxs is parsed
+  await directory.write('Save0003', 'old.dxs', bytes(1, 1));
+  await directory.write('Save0003', 'SaveInfo.dxs', bytes(5));
+  await directory.replaceDir('Save0003', [{ name: '00_Training.dxs', bytes: bytes(2, 2, 2), modified: 1000 }, { name: 'SaveInfo.dxs', bytes: bytes(6), modified: 2000 }]);
+  assert.deepEqual(directory.files('Save0003').sort((a, b) => a.name < b.name ? -1 : 1), [{ name: '00_Training.dxs', size: 3 }, { name: 'SaveInfo.dxs', size: 1 }], `${label}: the old file is gone`);
+  assert.equal(directory.info('Save0003').properties.saveCount, 6);
+  assert.deepEqual([...await directory.read('Save0003', '00_Training.dxs')], [2, 2, 2]);
+  assert.equal(await directory.read('Save0003', 'old.dxs'), null);
+  assert.equal(directory.modifiedOf('Save0003', 'SaveInfo.dxs'), 2000, `${label}: the time the save gave`);
+  const fresh = await createStoredSaveDirectory({ backend, parseInfo });
+  assert.deepEqual(fresh.files('Save0003').map(file => file.name).sort(), ['00_Training.dxs', 'SaveInfo.dxs']);
+  await directory.replaceDir('Save0004', [{ name: 'SaveInfo.dxs', bytes: bytes(1) }]);      // a slot that did not exist
+  assert.deepEqual(directory.directories(), ['QuickSave', 'Save0002', 'Save0003', 'Save0004']);
+  await directory.removeDir('Save0003'); await directory.removeDir('Save0004');
   return { backend, directory };
 }
 
@@ -75,6 +89,20 @@ test('the IndexedDB backend survives a reload and a quota failure leaves the fil
   assert.deepEqual(second.directories(), ['Save0001']);
   assert.deepEqual([...await second.read('Save0001', 'a.dxs')], [1, 2, 3]);
   assert.equal(await createIndexedDbSaveBackend(await openBrowserStorage({ indexedDB: fake })).read('Save0002', 'b.dxs'), null, 'the aborted transaction wrote nothing');
+});
+
+test('a save slot written whole is one transaction: a quota failure leaves the slot as it was, files and rows', async () => {
+  const fake = createFakeIndexedDB();
+  const directory = await createStoredSaveDirectory({ backend: createIndexedDbSaveBackend(await openBrowserStorage({ indexedDB: fake })), parseInfo });
+  await directory.replaceDir('Save0001', [{ name: 'a.dxs', bytes: bytes(1, 2, 3) }, { name: 'SaveInfo.dxs', bytes: bytes(7) }]);
+  fake.failNext('put', domException('QuotaExceededError'), 'savedata');
+  await assert.rejects(directory.replaceDir('Save0001', [{ name: 'b.dxs', bytes: bytes(9, 9) }, { name: 'SaveInfo.dxs', bytes: bytes(8) }]), { kind: 'quota' });
+  assert.deepEqual(directory.files('Save0001').map(file => file.name).sort(), ['SaveInfo.dxs', 'a.dxs'], 'the index is as it was');
+  assert.equal(directory.info('Save0001').properties.saveCount, 7);
+  const again = await createStoredSaveDirectory({ backend: createIndexedDbSaveBackend(await openBrowserStorage({ indexedDB: fake })), parseInfo });
+  assert.deepEqual(again.files('Save0001').map(file => file.name).sort(), ['SaveInfo.dxs', 'a.dxs'], 'the stored slot is as it was');
+  assert.deepEqual([...await again.read('Save0001', 'a.dxs')], [1, 2, 3]);
+  assert.equal(await again.read('Save0001', 'b.dxs'), null);
 });
 
 test('the IndexedDB backend reports what is left of the quota as the free space', async () => {

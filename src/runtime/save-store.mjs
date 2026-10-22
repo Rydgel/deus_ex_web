@@ -40,6 +40,15 @@ export function saveFilePath(path) {
   return parts.length >= 2 ? { dir: parts.at(-2), name: parts.at(-1) } : null;
 }
 
+/** A slot replaced through a backend's own calls, for a backend with no transaction of its own: the files written one by one in the order given (the level
+ * files first, `SaveInfo.dxs` last), then the files the slot held that the list lacks removed. Not atomic: an interruption leaves the slot with some new files. */
+async function replaceDirByParts(backend, dir, files) {
+  const wanted = new Set(files.map(file => lower(file.name)));
+  const held = (await backend.list()).filter(file => file.dir === dir);
+  for (const file of files) await backend.write(dir, file.name, file.bytes, { modified: file.modified });
+  for (const file of held) if (!wanted.has(lower(file.name))) await backend.remove(dir, file.name);
+}
+
 // ---- the backends ---------------------------------------------------------------------------------------------------------------------
 
 /** A backend that keeps its files in memory. */
@@ -53,6 +62,11 @@ export function createMemorySaveBackend({ freeBytes = null } = {}) {
     async write(dir, name, data, { modified = Date.now() } = {}) { files.set(keyOf(dir, name), { dir, name, bytes: new Uint8Array(data), modified }); },
     async remove(dir, name) { return files.delete(keyOf(dir, name)); },
     async removeDir(dir) { let n = 0; for (const [key, file] of files) if (file.dir === dir) { files.delete(key); n++; } return n; },
+    /** A save slot written whole (SaveGame): the directory's files become exactly `list`. */
+    async replaceDir(dir, list) {
+      for (const [key, file] of files) if (file.dir === dir) files.delete(key);
+      for (const file of list) files.set(keyOf(dir, file.name), { dir, name: file.name, bytes: new Uint8Array(file.bytes), modified: file.modified ?? Date.now() });
+    },
     async freeSpace() { return typeof freeBytes === 'function' ? freeBytes() : freeBytes; },
     close() {},
   };
@@ -81,6 +95,18 @@ export function createIndexedDbSaveBackend(storage) {
       const rows = await storage.getAllByIndex('saves', 'dir', dir);
       await storage.run(['saves', 'savedata'], 'readwrite', stores => { for (const { name } of rows) { stores.saves.delete([dir, name]); stores.savedata.delete([dir, name]); } });
       return rows.length;
+    },
+    /** A save slot written whole, in ONE transaction: the old files go and the new come, or (a quota failure aborts it) the old slot stays exactly as it was. */
+    async replaceDir(dir, list) {
+      const rows = await storage.getAllByIndex('saves', 'dir', dir);
+      await storage.run(['saves', 'savedata'], 'readwrite', stores => {
+        for (const { name } of rows) { stores.saves.delete([dir, name]); stores.savedata.delete([dir, name]); }
+        for (const file of list) {
+          const bytes = new Uint8Array(file.bytes);
+          stores.saves.put({ dir, name: file.name, size: bytes.length, modified: file.modified ?? Date.now() });
+          stores.savedata.put({ dir, name: file.name, bytes });
+        }
+      });
     },
     /** What the browser says is left of this origin's quota (StorageManager.estimate()). */
     async freeSpace() { const estimate = await storage.estimate(); return estimate?.quota != null && estimate.usage != null ? Math.max(0, estimate.quota - estimate.usage) : null; },
@@ -180,6 +206,8 @@ export function createFolderSaveBackend(location, { freeBytes = null } = {}) {
       catch (error) { if (error?.name === 'NotFoundError') return 0; throw error; }
       return n;
     }),
+    /** A save slot written whole: file by file (the folder has no transaction), the level files first and SaveInfo.dxs last, then the files the new slot lacks removed. */
+    replaceDir(dir, list) { return replaceDirByParts(this, dir, list); },
     freeSpace: async () => typeof freeBytes === 'function' ? freeBytes() : freeBytes,
     close() {},
   };
@@ -196,7 +224,7 @@ export function createServedSaveBackend({ manifest, file }) {
     kind: 'served', readOnly: true,
     async list() { return ((await manifest())?.files ?? []).map(({ dir, name, size, modified }) => ({ dir, name, size, modified })); },
     async read(dir, name) { const bytes = await file(dir, name); return bytes ? new Uint8Array(bytes) : null; },
-    write: readOnly, remove: readOnly, removeDir: readOnly,
+    write: readOnly, remove: readOnly, removeDir: readOnly, replaceDir: readOnly,
     async freeSpace() { return null; },
     close() {},
   };
@@ -224,6 +252,8 @@ export function createLayeredSaveBackend(top, base) {
     async write(dir, name, data, options) { await top.write(dir, name, data, options); topDirs?.add(lower(dir)); },
     async remove(dir, name) { if (!(await inTop(dir))) throw baseOnly(); return top.remove(dir, name); },
     async removeDir(dir) { if (!(await inTop(dir))) throw baseOnly(); const n = await top.removeDir(dir); topDirs.delete(lower(dir)); return n; },
+    /** A slot written whole goes to `top`, which then holds the directory (a slot of the installed folder with the same name is hidden by it). */
+    async replaceDir(dir, list) { await top.replaceDir(dir, list); topDirs?.add(lower(dir)); },
     freeSpace: () => top.freeSpace(),
     close() { top.close(); base.close(); },
   };
@@ -306,6 +336,17 @@ export async function createStoredSaveDirectory({ backend, parseInfo = null, fre
       slots.get(dir).set(name, { size: bytes.length, modified: options?.modified ?? Date.now() });
       if (name === 'SaveInfo.dxs') await loadInfo(dir);
       if (typeof free === 'number') free = Math.max(0, free - bytes.length);
+    },
+    /** SaveGame's slot, written whole: `files` is [{name, bytes, modified}] (the level files first, `SaveInfo.dxs` last); the directory holds exactly them
+     * afterwards. The backend does it in one step where it can (IndexedDB: a transaction); a failure leaves the index as it was. */
+    async replaceDir(dir, files) {
+      if (typeof backend.replaceDir === 'function') await backend.replaceDir(dir, files);
+      else await replaceDirByParts(backend, dir, files);
+      const next = new Map();
+      for (const file of files) next.set(file.name, { size: file.bytes.length, modified: file.modified ?? Date.now() });
+      slots.set(dir, next);
+      await loadInfo(dir);
+      if (typeof free === 'number') free = Math.max(0, free - files.reduce((sum, file) => sum + file.bytes.length, 0));
     },
     /** The original's DeleteSaveGame: the directory and every file in it. */
     async removeDir(dir) { const n = await backend.removeDir(dir); slots.delete(dir); infos.delete(dir); return n; },

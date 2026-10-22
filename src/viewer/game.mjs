@@ -25,6 +25,7 @@ import { isMovingLightCandidate } from '../runtime/dynamic-lighting.mjs';
 import { loadTraceKernel } from '../runtime/trace-kernel.mjs';
 import { lightGlobals } from '../runtime/light-globals.mjs';
 import { createTravelStep } from '../runtime/travel.mjs';
+import { deliverSaveSnapshot, pendingSaveSnapshots } from '../runtime/game-save.mjs';
 import { Furl, DEFAULT_PLAYER_OPTIONS } from '../runtime/furl.mjs';
 
 /** Bind decoded resources to the renderer-independent simulation. */
@@ -486,6 +487,10 @@ export async function createGame(map, asset, assets, { randomSeed = Math.floor(D
     // owns the original mouse-event grab counter.
     windowPointer(sample) { return Boolean(hud?.pointer(sample)); },
     windowMouseGrabbed() { return Boolean(hud?.mouseGrabbed?.()); },
+    /** The page's picture (`{data}`, the P8 indices of the grey 160 x 120 in the next power of two) for a save's snapshot request (game-save.mjs). */
+    deliverSnapshot(jobId, picture) { return deliverSaveSnapshot(jobId, picture); },
+    /** The saves still waiting for the page's picture (any level's): the page keeps a frame to make it from. */
+    pendingSaveSnapshots() { return pendingSaveSnapshots(); },
     /** The page's 16-bit decode of a speech sound (`sound` its key) for
      * Galaxy's speech voices and lip sync (script-audio-live.mjs
      * attachDecoded; docs/galaxy-audio.md "Speech through Galaxy's voices"). */

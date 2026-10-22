@@ -202,7 +202,10 @@ export async function createWindowHost({runtime, assets, player, gameConfig = nu
     snapshotRequests:[],snapshotSerial:0,snapshotReleased:[],
     // Textures whose pixels the simulation holds (a SaveInfo's Snapshot, W.snapshot.adopt): sent to the page once each, in the next frame snapshot.
     images:[],imageSerial:0};
+  // DDeusExGameEngine::Exec's SAVEGAME n and DELETEGAME n (DeusEx 0x1000ed70): the session that saves games installs the bodies (game-save.mjs).
+  const gameEngineHooks={saveGame:null,deleteGame:null};
   const consoleCommands=createConsoleCommands({runtime,input:inputConsole,services:{
+    gameEngine:gameEngineHooks,
     nativeConfig:()=>nativeConfig,
     // UWindowsViewport::Exec SetRes -> RenDev->SetRes: the browser render device takes the request.
     setResolution(request){display.resolution={...request};display.resolutionVersion++;},
@@ -1058,6 +1061,18 @@ export async function createWindowHost({runtime, assets, player, gameConfig = nu
       display.images.push({key: info.key, width, height, data});
       return info;
     },
+    /** RootWindow.SetSnapshotSize (native 1523's stores, +0x738 / +0x73c): SaveGame calls it with 160 x 120 before its own GenerateSnapshot, and it stays. */
+    setSize(root, width, height) { W.setI32(root, 0x738, width); W.setI32(root, 0x73c, height); },
+    /** XRootWindow::GenerateSnapshot for a SaveInfo's texture (travel step 4, docs/save-storage.md "Writing a save"): the simulation keeps no script-visible texture
+     * for it. The request goes to the page like generate's, flagged `deliver`: the page answers with the grey picture's indices (`snapshot` message, by `jobId`), made
+     * from the frame it draws next, and the save is committed with it. Returns the request's serial, or null before the page has told its frame size. */
+    requestForSave(snapW, snapH, bFilter, jobId) {
+      if (!viewportSize) return null;
+      const serial = ++display.snapshotSerial;
+      display.snapshotRequests.push({serial, key: null, sizeX: viewportSize.sizeX, sizeY: viewportSize.sizeY, snapW, snapH, bFilter: Boolean(bFilter), deliver: true, jobId});
+      if (display.snapshotRequests.length > 8) display.snapshotRequests.splice(0, display.snapshotRequests.length - 8);
+      return serial;
+    },
     release(object) {
       const info = snapshotTextures.get(object);
       if (!info) return;
@@ -1842,7 +1857,7 @@ export async function createWindowHost({runtime, assets, player, gameConfig = nu
     tick(root,seconds){lastTickTime=hostNow()/1000;T.rootTick(W,root,f(seconds));},
     // XInputExt::Process 0x1002d0b0 offers each key to XRootWindow::Process first.
     key(root,key,action,delta=0){return Input.rootProcess(W,root,key,action,delta);},
-    consoleCommands,nativeConfig,display,snapshot:W.snapshot,
+    consoleCommands,nativeConfig,display,snapshot:W.snapshot,gameEngineHooks,
     /** UEngine::InputEvent for one browser key edge. The optional
      * hostBinding override remains only for isolated legacy fixtures. */
     inputEvent(key,action,{delta=0,hostBinding=()=>false,flushRenderDevice=null}={}){
