@@ -259,10 +259,10 @@ npm run dev
 Open `http://127.0.0.1:5173`. The page starts as the original does: the splash, then
 the logo map with its camera flight, in the original's 4:3 shape; Escape opens the main menu,
 whose Training button travels to training (docs/boot.md, docs/travel.md). The first click takes
-fullscreen and the mouse, as the original starts fullscreen with the mouse captured: in Chrome or
-Edge, Escape then reaches the game and keeps the mouse (hold Escape to leave fullscreen); Alt+Enter,
-the original's fullscreen toggle, gives back the mouse and the screen and takes them again. In a
-window, or in Firefox and Safari, Escape also releases the mouse and the next click takes it back. Every binding of the
+the mouse, as the original captures it; the page stays in its window. Alt+Enter, the original's
+fullscreen toggle (or the Display menu's Full-Screen choice), takes fullscreen and the mouse, and
+gives them back: in Chrome or Edge, in fullscreen, Escape reaches the game and keeps the mouse (hold
+Escape to leave fullscreen). In a window, or in Firefox and Safari, Escape also releases the mouse and the next click takes it back. Every binding of the
 original's User.ini reaches the game: the keys, the three mouse buttons and the wheel (weapon and item switching), and in
 fullscreen in Chrome or Edge the keys a browser reserves for itself (F1 to F12, Tab…) (docs/input-bindings.md). With the extracted
 `Deus Ex GOTY Edition/` directory present this happens at once; otherwise choose the game

@@ -117,6 +117,10 @@ test('the startup viewport is the one StartupFullscreen picks, and only a differ
   const chosenWindowed = SYSTEM.replace('WindowedViewportX=640', 'WindowedViewportX=800');
   assert.equal(chosenResolution(SYSTEM, chosenWindowed), null);
   assert.deepEqual(chosenResolution(null, chosen), { width: 1024, height: 768 }, 'no installed file: any kept size is a choice');
+  // the page starts windowed whatever StartupFullscreen says: its start reads the Windowed* keys
+  assert.deepEqual(startupViewport(SYSTEM, false), { fullscreen: false, width: 640, height: 480 });
+  assert.deepEqual(chosenResolution(SYSTEM, chosenWindowed, false), { width: 800, height: 480 });
+  assert.equal(chosenResolution(SYSTEM, chosen, false), null, 'a size chosen in fullscreen does not take effect at a windowed start');
 });
 
 test('only the System and User files are kept', () => {

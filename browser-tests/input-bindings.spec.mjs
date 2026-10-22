@@ -111,7 +111,10 @@ test('the original start asks Keyboard Lock for every key the original can bind 
   await page.goto(`${BASE}/`);
   await ready(page, 'DX');
   const box = await page.locator('#scene').boundingBox();
-  await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2);
+  await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2);   // takes the pointer, not fullscreen
+  await page.waitForTimeout(500);
+  expect(await page.evaluate(() => window.__locks.length)).toBe(0);         // nothing locks outside fullscreen
+  await page.keyboard.down('AltLeft'); await page.keyboard.press('Enter'); await page.keyboard.up('AltLeft');
   await expect.poll(() => page.evaluate(() => document.fullscreenElement?.id ?? null)).toBe('app');
   await expect.poll(() => page.evaluate(() => window.__locks.length)).toBeGreaterThan(0);
   const locked = await page.evaluate(() => window.__locks.at(-1));

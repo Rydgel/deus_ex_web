@@ -47,8 +47,8 @@ command is that activation. `EndFullscreen` and the other `UWindowsViewport::Exe
 (`UnsupportedConsoleCommandError`).
 
 Check: the Display screen's choice in `validate-native-config.mjs` (one request per press, the screen stays open, the keyword is
-case-insensitive and logs nothing) and, in Chromium, `validate-host-services-play.mjs`: the first click of the default start has taken
-fullscreen, the choice leaves it (pointer released too) and the next press takes both again.
+case-insensitive and logs nothing) and, in Chromium, `validate-host-services-play.mjs`: the default start is windowed (its first click takes only the
+pointer), the choice takes fullscreen and the next press leaves it (pointer released too).
 
 ## RELAUNCH -changevideo
 

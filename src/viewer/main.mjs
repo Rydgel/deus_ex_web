@@ -1089,7 +1089,8 @@ async function setFiles(files) {
   // A resolution the player chose with SetRes and the game kept (display-config.mjs): the drawing buffer is fixed to it as that SetRes did.
   if (configStore) {
     const text = async (list, leaf) => { const file = list.find(entry => String(entry.path).replaceAll('\\', '/').split('/').pop().toLowerCase() === leaf); return file ? decodeIniBytes(await file.read()) : null; };
-    fixedResolution = chosenResolution(await text(files, 'deusex.ini') ?? await text(files, 'default.ini'), await text(next.configFiles, 'deusex.ini'));
+    // the page starts windowed (fullscreen only by Alt+Enter): the start size is the Windowed* keys', as the original's windowed start reads
+    fixedResolution = chosenResolution(await text(files, 'deusex.ini') ?? await text(files, 'default.ini'), await text(next.configFiles, 'deusex.ini'), false);
   }
   const subtitleToggle = $('subtitles'); if (subtitleToggle) subtitleToggle.checked = subtitlePreference;
   $('map').replaceChildren(...names.map(name => { const option = document.createElement('option'); option.value = name; option.textContent = name; return option; }));
@@ -1549,11 +1550,12 @@ function windowPointer(event,action=null){
 // and its viewport's WM_KEYDOWN/WM_SYSKEYDOWN case (WinDrv 0x1110a280) turns Enter with Alt held (GetKeyState(VK_MENU) & 0x8000)
 // into UWindowsViewport::ToggleFullscreen (0x1110a29b) instead of an input event. A browser grants fullscreen and the pointer
 // lock only on a user's input, and its user's Escape releases the lock, except in a page's fullscreen whose Keyboard Lock holds
-// Escape (Chromium; a held Escape still leaves). So the first click takes fullscreen, Escape and the pointer; Alt+Enter leaves
-// fullscreen and gives the pointer back, and takes them again; out of fullscreen a click takes the pointer back. A click that a
-// window (a menu) takes is that window's too; a click in the world only takes the pointer and reaches no binding (this page's
-// rule, not the original's: no Fire on the click that grabs).
-let grabButton = -1, startedFullscreen = false, fullscreenOnRelease = false, grabOnRelease = false;
+// Escape (Chromium; a held Escape still leaves). The page starts windowed (the user's choice, 2026-10-22: no fullscreen on the first
+// click, so not StartupFullscreen's mode): a click takes the pointer; Alt+Enter (or Display's Toggle Full-Screen Mode, the same
+// ToggleFullscreen) takes fullscreen, Escape and the pointer, and leaves them again. A click that a window (a menu) takes is that
+// window's too; a click in the world only takes the pointer and reaches no binding (this page's rule, not the original's: no Fire
+// on the click that grabs).
+let grabButton = -1, grabOnRelease = false;
 // Keyboard Lock (Chromium; a page's fullscreen only) hands the page the keys the browser would take for itself (F1 help, F3
 // find, F5 reload, F6, F7 caret browsing, F11, F12, Tab, Ctrl+W and the like): every key the original can bind, with Escape
 // held to leave. A runtime error keeps only Escape, so F5 reloads. Nothing locks outside fullscreen or in other browsers.
@@ -1580,10 +1582,8 @@ document.addEventListener('fullscreenchange', () => {
 function grabPointer(event, windowHasMouse) {
   const canvas = $('scene');
   if (!originalStart || mode !== 'play' || !game || runtimeError || document.pointerLockElement === canvas) return false;
-  // The lock and fullscreen after the release: a lock taken at the press resets the input (pointerlockchange) before the
-  // window sees its release, and a resize would move a window's button between its press and its release.
+  // The lock after the release: a lock taken at the press resets the input (pointerlockchange) before the window sees its release.
   grabOnRelease = true;
-  if (!startedFullscreen) { startedFullscreen = true; fullscreenOnRelease = true; }
   if (windowHasMouse) return false;
   grabButton = event.button; event.preventDefault();
   return true;
@@ -1591,7 +1591,7 @@ function grabPointer(event, windowHasMouse) {
 // UWindowsViewport::ToggleFullscreen (0x1110d500): fullscreen and the pointer lock leave together, and come back together.
 function toggleFullscreen() {
   if (document.fullscreenElement) leaveFullscreen();
-  else { startedFullscreen = true; takeFullscreen(); if (mode === 'play' && game && !runtimeError) $('scene').requestPointerLock?.()?.catch?.(() => {}); }
+  else { takeFullscreen(); if (mode === 'play' && game && !runtimeError) $('scene').requestPointerLock?.()?.catch?.(() => {}); }
 }
 // Alt+Enter, the original's ToggleFullscreen; the Enter press reaches no binding (Enter=ParseLeftClick|Fire).
 function toggleFullscreenKey(event) {
@@ -1623,11 +1623,9 @@ $('scene').onmousedown = event => { if (event.button === 1) event.preventDefault
 for (const type of ['mouseup', 'auxclick']) $('scene').addEventListener(type, event => { if (event.button >= 1) event.preventDefault(); });
 $('scene').onpointerup = event => {
   drag = false;
-  // The lock once the release is queued; fullscreen a few frames later, inside the click's user activation, so the simulation
-  // side has taken the release before the resize.
+  // The lock once the release is queued.
   const takeScreen = () => {
     if (grabOnRelease) { grabOnRelease = false; $('scene').requestPointerLock?.()?.catch?.(() => {}); }
-    if (fullscreenOnRelease) { fullscreenOnRelease = false; setTimeout(takeFullscreen, 250); }
   };
   if (event.button === grabButton) { grabButton = -1; event.preventDefault(); takeScreen(); return; }
   if (windowPointer(event)) event.preventDefault();

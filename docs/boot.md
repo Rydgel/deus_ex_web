@@ -77,19 +77,22 @@ place (x 175 to 780) and with the logo the same size; that capture's hold caught
 compared. The default start therefore draws a 4:3 picture centred in the window at the window's own pixel density (`screenAspect` `4:3`); a
 resolution chosen in the menu (`SetRes`) fixes the buffer to that size as before, and `?debug=1` keeps its own choice (the window's shape by
 default). A resolution chosen in the menu is kept across a reload with the other settings
-([configuration persistence](config-persistence.md)): `SetRes` writes the Fullscreen* or Windowed* viewport keys, and the next start fixes the drawing buffer to the ones `StartupFullscreen`
-picks when they differ from the installed file's.
+([configuration persistence](config-persistence.md)): `SetRes` writes the Fullscreen* or Windowed* viewport keys, and the next start fixes the drawing buffer to the ones of the mode it
+starts in when they differ from the installed file's: in the original the mode `StartupFullscreen` picks, in the page always the Windowed* keys, since the page starts windowed
+(`display-config.mjs` `chosenResolution(..., false)`; below).
 
 **The mouse and fullscreen (2026-10-21).** The original starts fullscreen with the mouse captured (`StartupFullscreen=True`, `CaptureMouse=True`),
 its menus draw their own cursor, and its viewport's `WM_KEYDOWN`/`WM_SYSKEYDOWN` case (WinDrv.dll `0x1110a280`) turns Enter with Alt held
 (`GetKeyState(VK_MENU) & 0x8000`) into `UWindowsViewport::ToggleFullscreen` (`0x1110a29b`) instead of an input event (`SC_MAXIMIZE` reaches it too,
 `0x1110b172`). A browser grants fullscreen and the pointer lock only on the user's input, and the user's Escape releases the lock, except in a page's
 fullscreen whose Keyboard Lock holds Escape (Chromium only; a held Escape still leaves). So on the default start (`main.mjs` `grabPointer`):
-* the first click takes fullscreen (`#app`), Escape (`navigator.keyboard.lock(['Escape'])`) and the pointer, after the click's release, so the window
-  that takes the click sees its press and release before the lock's input reset and the resize;
+* the first click takes the pointer, after the click's release, so the window that takes the click sees its press and release before the lock's
+  input reset. **It does not take fullscreen** (the user's choice, 2026-10-22: from 2026-10-21 the first click took fullscreen too, as
+  `StartupFullscreen=True` starts the original; now the page starts windowed and fullscreen is Alt+Enter's or the Display screen's Toggle Full-Screen Mode);
 * a click in the world that takes the pointer reaches no binding (no Fire): a rule of this page, not the original's;
 * while a menu holds the mouse, the pointer lock's relative motion moves the menu's own cursor, and the system cursor is hidden over it;
-* Alt+Enter leaves fullscreen and gives the pointer back, and takes both again; the Enter press reaches no binding, as in the original;
+* Alt+Enter takes fullscreen (`#app`), every bindable key through the Keyboard Lock ([input bindings](input-bindings.md)) and the pointer, and leaves them
+  again; the Enter press reaches no binding, as in the original;
 * a travel keeps the pointer (the original's viewport keeps the mouse across a level load);
 * out of fullscreen, or in a browser without Keyboard Lock, Escape releases the pointer as the browser requires, and the next click (a menu
   button's included) takes it back.

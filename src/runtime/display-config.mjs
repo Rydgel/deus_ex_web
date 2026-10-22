@@ -13,10 +13,11 @@ import { msvcrtWtoi } from './script-text-parser.mjs';
 const SECTION = 'WinDrv.WindowsClient';
 const bool = value => value !== undefined && /^(true|1)$/i.test(value);
 
-/** The viewport size a config text starts the game at: `{fullscreen, width, height}`, or null where the text lacks the keys. */
-export function startupViewport(text) {
+/** The viewport size a config text starts the game at: `{fullscreen, width, height}`, or null where the text lacks the keys. `startMode`
+ * (true: fullscreen, false: windowed) is the mode a host starts in when it is not StartupFullscreen's (the page starts windowed). */
+export function startupViewport(text, startMode = null) {
   if (typeof text !== 'string') return null;
-  const fullscreen = bool(parseIniValue(text, SECTION, 'StartupFullscreen'));
+  const fullscreen = typeof startMode === 'boolean' ? startMode : bool(parseIniValue(text, SECTION, 'StartupFullscreen'));
   const prefix = fullscreen ? 'Fullscreen' : 'Windowed';
   const x = parseIniValue(text, SECTION, `${prefix}ViewportX`), y = parseIniValue(text, SECTION, `${prefix}ViewportY`);
   if (x === undefined || y === undefined) return null;
@@ -27,12 +28,13 @@ export function startupViewport(text) {
 /**
  * The resolution the player chose: the kept config's startup size when it is not the installed config's. The default start draws a 4:3
  * picture at the window's own pixel density whatever the installed file's size is (docs/boot.md "The page"), so the installed size
- * means "no choice" and a different one is a SetRes the player made; it fixes the drawing buffer as that SetRes did.
+ * means "no choice" and a different one is a SetRes the player made; it fixes the drawing buffer as that SetRes did. `startMode` as for
+ * startupViewport: the page passes false (it starts windowed whatever StartupFullscreen says), so it reads the Windowed* keys.
  */
-export function chosenResolution(installedText, keptText) {
-  const kept = startupViewport(keptText);
+export function chosenResolution(installedText, keptText, startMode = null) {
+  const kept = startupViewport(keptText, startMode);
   if (!kept) return null;
-  const installed = startupViewport(installedText);
+  const installed = startupViewport(installedText, startMode);
   if (installed && installed.width === kept.width && installed.height === kept.height) return null;
   return { width: kept.width, height: kept.height };
 }

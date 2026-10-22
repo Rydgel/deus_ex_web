@@ -16,7 +16,7 @@ test('the default start opens the Load Game screen with the empty save directory
   await page.goto(`${process.env.DX_BASE_URL ?? 'http://127.0.0.1:5173'}/?saves=off`);
   await map('DX');
   let box = await page.locator('#scene').boundingBox();
-  await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2);   // takes fullscreen and the pointer
+  await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2);   // takes the pointer
   await page.waitForTimeout(500);
   await page.keyboard.press('Escape');
   await expect.poll(async () => (await state()).menu).toBe('deusex.menumain');
