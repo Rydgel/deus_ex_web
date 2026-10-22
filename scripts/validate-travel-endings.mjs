@@ -18,9 +18,12 @@
  * Not compared (named in docs/travel.md): the conversation's length in level time (Play's is 2 to 8 s longer than the captures'), the Galaxy/DevMusic
  * and window-host log lines (modelled in their own validators), ScriptWarning lines.
  *
- * runner-timeout: 1800
+ * Scenarios: P (Play Intro, Escape, DXOnly, Credits), N (the intro's own end), C (Credits to their end), E1 E2 E3 (the endings), T1 T2 T3 (the conversations' length at the capture's frame
+ * time), M1 M2 M3 (the endgame MapExits as their triggers fire them), W (the ending with bQuotesEnabled), X (Escape in the Endgame1 conversation), Q (the Quotes window).
  *
- *   node scripts/validate-travel-endings.mjs [--only P|N|C|E1|E2|E3|T1|T2|T3|M1|M2|M3|X|Q] */
+ * runner-timeout: 2400
+ *
+ *   node scripts/validate-travel-endings.mjs [--only P|N|C|E1|E2|E3|T1|T2|T3|M1|M2|M3|W|X|Q] */
 import assert from 'node:assert/strict';
 import { readdir, readFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
@@ -38,7 +41,7 @@ if (!only) {
   const { spawnSync } = await import('node:child_process');
   const argv = process.argv.slice(2);
   let status = 0;
-  for (const id of ['P', 'N', 'C', 'E1', 'E2', 'E3', 'T1', 'T2', 'T3', 'M1', 'M2', 'M3', 'X', 'Q']) {
+  for (const id of ['P', 'N', 'C', 'E1', 'E2', 'E3', 'T1', 'T2', 'T3', 'M1', 'M2', 'M3', 'W', 'X', 'Q']) {
     const run = spawnSync(process.execPath, [process.argv[1], '--only', id, ...argv], { stdio: 'inherit' });
     if (run.status !== 0) status = run.status ?? 1;
   }
@@ -47,7 +50,7 @@ if (!only) {
 let root;
 try { root = gameDirectory(); } catch { console.log('SKIP validate-travel-endings: no installed game data'); process.exit(0); }
 const captureRoot = new URL('../.work/travel/', import.meta.url).pathname;
-const CAPTURED = { P: 'ep2', N: 'ep1', C: 'ep1', E1: 'ep3', E2: 'ep4', E3: 'ep5', T1: 'ep3', T2: 'ep4', T3: 'ep5', M1: 'ep3', M2: 'ep4', M3: 'ep5', X: 'ep7', Q: 'ep5' };
+const CAPTURED = { P: 'ep2', N: 'ep1', C: 'ep1', E1: 'ep3', E2: 'ep4', E3: 'ep5', T1: 'ep3', T2: 'ep4', T3: 'ep5', M1: 'ep3', M2: 'ep4', M3: 'ep5', W: 'ep11', X: 'ep7', Q: 'ep5' };
 if (!existsSync(`${captureRoot}${CAPTURED[only]}/final.log`)) { console.log(`SKIP validate-travel-endings ${only}: the measured captures are not in .work/travel/${CAPTURED[only]} (outside Git)`); process.exit(0); }
 
 const files = [];
@@ -351,6 +354,38 @@ if (only === 'M3') {
   check(request?.map === '99_endgame3', `the killpage route requested ${request?.map}`);
   check(destroyedAt >= 5 && destroyedAt <= 8, `Page was destroyed ${destroyedAt} s after the flag (Mission15.Timer: 6 s, a one second Timer)`);
   check(!request || request.travelInfo[0][1].includes('killpage'), 'the travel text carries the killpage flag');
+}
+
+if (only === 'W') {
+  // The ending with bQuotesEnabled True (typed in the endgame level as the capture typed it on the logo map: Play's class defaults do not outlive a level session): the credits run
+  // to their end, CreditsWindow.FinishedScrolling only plays `CreditsEnd`, the window's Tick waits creditsEndSoundLength (4 s) and InvokeQuotesWindow opens QuotesWindow with
+  // SetClearStack(True) and SetLoadIntro(True); its end clears the window stack and SendPlayer(dxonly) (ep11).
+  const c = await openCold('15_Area51_Final');
+  c.frames(120);
+  typed(c, 'LocalTravel 99_Endgame2'); c.frames(5);
+  const request = c.takeTravel();
+  const endgame = await arrive(request.map, request);
+  typed(endgame, 'set DeusEx.DeusExPlayer bQuotesEnabled True');
+  const driver = createMenuDriver(endgame.game);
+  let credits = null, endedCredits = null, quotes = null, t = 0;
+  for (; t < 1500; t++) {
+    endgame.frames(60);
+    const top = driver.top();
+    if (credits === null && top === 'deusex.creditswindow') credits = t;
+    if (credits !== null && quotes === null && top === 'deusex.quoteswindow') { quotes = t; break; }
+  }
+  console.log(`W: the credits at ${credits} s, the Quotes window at ${quotes} s (${quotes - credits} s later; 410 s of scrolling at the headless root, then the 4 s of creditsEndSoundLength)`);
+  check(credits !== null && quotes !== null && Math.abs(quotes - credits - (410.1 + 4)) <= 3, `the Quotes window opened ${quotes - credits} s after the credits`);
+  const win = driver.topWindow(), read = name => endgame.runtime.readNamed(win, name);
+  check(read('bClearStack') === true && read('bLoadIntro') === true, `the Quotes window after the credits has bClearStack ${read('bClearStack')} and bLoadIntro ${read('bLoadIntro')}`);
+  let request2 = null;
+  for (let u = 0; u < 600 && !request2; u++) { endgame.frames(60); request2 = endgame.takeTravel(); if (request2) console.log(`W: the Quotes window ended after ${u + 1} s`); }
+  if (!check(request2?.map === 'dxonly', `the end of the Quotes window requested ${request2?.map}`)) finish();
+  check(driver.top() === null, `the window stack is clear at the end of the Quotes window (${driver.top()})`);
+  await compareText('dxonly (after the credits and the Quotes window)', 'ep11', 'q-dxonly', request2.travelInfo[0][1]);
+  const dx = await arrive(request2.map, request2);
+  dx.frames(120);
+  await compareFlags('dxonly arrival', 'ep11', 'q-dxonly', dx);
 }
 
 if (only === 'X') {
