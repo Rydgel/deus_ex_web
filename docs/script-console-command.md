@@ -168,6 +168,7 @@ optional host hook. This is a platform boundary, not game state.
 * Other installed bindings include Escape `ShowMainMenu`, F1
   `ShowInventoryWindow`, F2 `ShowGoalsWindow`, Tab `DropItem`, and F3–F12
   `ActivateAugmentation N`.
+* `UGameEngine::LoadMap`'s tail also calls it for every viewport once Login and the brush tracker are done ([script-input-reset](script-input-reset.md)).
 * WinDrv's focus path calls the complete `UInput::ResetInput` body
   (`0x10394910`), which clears held keys, CPF_Input byte/float properties and
   Action/Delta, then calls `UWindowsViewport::UpdateInput(1)`. The window host
