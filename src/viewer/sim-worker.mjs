@@ -148,7 +148,10 @@ async function handle(data) {
       const snapshot = host.session.frame(input);
       snapshot.errors.unshift(...errors);
       snapshot.audio = audio.splice(0);
-      snapshot.answers = { keys: { ...keyAnswers }, pointerGrab };
+      // windowGrab: whether a window holds the mouse after this frame (the page's own controls show only then).
+      let windowGrab = false;
+      try { windowGrab = host.game.windowMouseGrabbed(); } catch {}
+      snapshot.answers = { keys: { ...keyAnswers }, pointerGrab, windowGrab };
       snapshot.toasts = toasts.splice(0);
       // Inspect: the camera this frame was culled for, which draws it; the
       // page's clock at the post (seconds), which animates its textures.

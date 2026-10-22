@@ -408,6 +408,23 @@ function reportStorage(state) {
 let savePersistence = null, saveRefreshed = 0;
 const savesUi = createSavesUi({ $, toast, persistence: () => savePersistence });
 savesUi.bind();
+// The default start's page controls (the user's choice, 2026-10-22): no page shortcut during play, since every key and chord is the
+// game's (Alt is Strafe); while an original window holds the mouse (a menu, the inventory), Saves and CRT appear in the bars beside the
+// 4:3 picture, else at the picture's top-right corner. They take clicks when the system pointer is free (a menu opened by Escape in a
+// window; Alt+Enter in fullscreen); under the pointer lock the menu's own cursor stays inside the picture.
+$('page-saves').onclick = () => savesUi.open();
+$('page-crt').onclick = () => { setCrt(!crtEnabled, true); $('page-crt').setAttribute('aria-pressed', String(crtEnabled)); };
+function placePageButtons() {
+  const box = $('page-buttons');
+  const show = originalStart && mode === 'play' && Boolean(game) && !loading && !runtimeError && Boolean(simClient) && Boolean(simAnswers.windowGrab);
+  if (box.hidden !== !show) box.hidden = !show;
+  if (!show) return;
+  $('page-crt').setAttribute('aria-pressed', String(crtEnabled));
+  const canvas = $('scene'), left = parseFloat(canvas.style.marginLeft) || 0, top = parseFloat(canvas.style.marginTop) || 0;
+  const width = canvas.clientWidth, height = canvas.clientHeight, w = box.offsetWidth || 80;
+  if (left >= w + 24) Object.assign(box.style, {left: `${left + width + 12}px`, top: `${top + 12}px`, right: '', bottom: ''});
+  else Object.assign(box.style, {left: '', top: `${top + 12}px`, right: '12px', bottom: ''});
+}
 function pushSaves() {
   const listing = savePersistence?.simSaves();
   if (!listing) return;
@@ -1618,12 +1635,13 @@ document.addEventListener('keydown', event => {
   // Intercept before the original key/character paths (C is TurnRight).
   // A held shortcut consumes repeats and its release even if Alt lifts first.
   const editing = event.target.closest?.('input, textarea, select, [contenteditable]:not([contenteditable="false"])');
-  // The Saves window's keys (Tab, Enter, Escape) are the page's, never the game's; Alt+S opens it (like Alt+C, a page shortcut of the default start).
+  // The Saves window's keys (Tab, Enter, Escape) are the page's, never the game's. Alt+S and Alt+C are page shortcuts of the debugging
+  // page only: on the default start Alt is the original's Strafe, so Alt+S and Alt+C are game input (the page buttons replace them).
   if (event.target.closest?.('#saves-dialog')) return;
-  if (event.code === 'KeyS' && event.altKey && !event.ctrlKey && !event.metaKey && !event.shiftKey && !event.repeat && !event.isComposing && !editing) {
+  if (!originalStart && event.code === 'KeyS' && event.altKey && !event.ctrlKey && !event.metaKey && !event.shiftKey && !event.repeat && !event.isComposing && !editing) {
     event.preventDefault(); savesUi.open(); return;
   }
-  if (event.code === 'KeyC' && (crtShortcutHeld || (!event.repeat && event.altKey && !event.ctrlKey && !event.metaKey
+  if (event.code === 'KeyC' && (crtShortcutHeld || (!originalStart && !event.repeat && event.altKey && !event.ctrlKey && !event.metaKey
       && !event.isComposing && !editing))) {
     event.preventDefault();
     if (!event.repeat && !crtShortcutHeld) {
@@ -1669,7 +1687,7 @@ document.addEventListener('wheel', event => {
   catch (error) { pauseForRuntimeError(error); }
 }, { passive: false });
 document.addEventListener('keyup', event => {
-  if (event.target.closest?.('#saves-dialog') || (event.code === 'KeyS' && event.altKey)) return;
+  if (event.target.closest?.('#saves-dialog') || (!originalStart && event.code === 'KeyS' && event.altKey)) return;
   if (event.code === 'KeyC' && crtShortcutHeld) { crtShortcutHeld = false; event.preventDefault(); return; }
   const input = inputKey(event, false);
   if (input?.consumed || (input?.handled && !input.host) || (input && gameTakesKey(event))) event.preventDefault();
@@ -2314,6 +2332,7 @@ function drawFrame(snap, time) {
   phase('ramp');
   if (keepingFrames) frameKeeper.keep();
   $('crosshair').hidden=mode==='play'&&Boolean(hudRenderer);
+  placePageButtons();
   if ($('inspect').checked && time - lastInspect > 150) {
     lastInspect = time; raycaster.setFromCamera(new THREE.Vector2(), camera);
     const hit = raycaster.intersectObjects(world.root.children, true).find(h => h.object.isMesh);

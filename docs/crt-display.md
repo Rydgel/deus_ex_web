@@ -6,8 +6,9 @@ particular physical monitor. CRT starts disabled. The browser remembers
 both the enable switch and the selected shader.
 
 The toolbar's **Display** menu offers CRT-Aperture, CRT-EasyMode, CRT-Lottes, SatPixie and
-CRT-Royale. **Alt+C** (Option+C on Mac) toggles CRT; **Alt+Shift+C** cycles
-shaders and enables the selection. Both work in Play and Inspect, including
+CRT-Royale. On the debugging page (`?debug=1`) **Alt+C** (Option+C on Mac) toggles CRT; **Alt+Shift+C** cycles
+shaders and enables the selection. On the default start no page shortcut takes a key (Alt is the original's Strafe, so Alt+C is
+strafe right); a **CRT** page button beside the picture toggles it while an original menu is open ([save storage](save-storage.md)). Both work in Play and Inspect, including
 with the page bars hidden. The shortcut consumes repeats and its eventual
 key release, even if Alt is released first: C must not reach the original
 TurnRight binding. Editable fields retain their normal keyboard behavior.

@@ -80,8 +80,11 @@ browser spec checks the endpoint's limits (other directories, parent paths, othe
 ### Where the controls are: the Saves window, outside the original's UI
 
 The original's menus have no folder control, and the default start shows no page chrome at all (`#app.original-start` hides the toolbar and the footer), so the controls are a native `<dialog>` of the page,
-the Saves window: opened from **Alt+S** (Option+S on a Mac; a page shortcut like Alt+C, taken before the game sees the key), from a **Saves…** button on the gate (production's first screen, where the player already
-chooses the game folder) and from **Tools > Saves…** on the debugging page. It shows where the saves are, "Use a Save folder…" / "Use another folder…" (Chromium), "Reconnect folder" (a stored folder that needs
+the Saves window: opened from the **Saves** page button the default start shows while an original window holds the mouse (a menu, the
+inventory), in the bar beside the 4:3 picture (`#page-buttons`, `main.mjs` `placePageButtons`, the user's choice of 2026-10-22: on the default
+start no page shortcut takes a key, since Alt is the original's Strafe and Alt+S is game input), from a **Saves…** button on the gate (production's
+first screen, where the player already chooses the game folder) and from **Tools > Saves…** or **Alt+S** on the debugging page. The button takes
+clicks when the system pointer is free: a menu opened by Escape in a window, or after Alt+Enter in fullscreen. It shows where the saves are, "Use a Save folder…" / "Use another folder…" (Chromium), "Reconnect folder" (a stored folder that needs
 the browser's permission again), "Stop using the folder" (forgets the handle; the folder's files stay), "Import saves…" and "Export saves". The default start's look is unchanged until it is opened (checked in the
 browser spec: no toolbar, a closed dialog). While it is open the page keeps its keys (Tab, Enter, Escape) from the game.
 

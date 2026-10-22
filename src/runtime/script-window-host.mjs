@@ -1876,6 +1876,8 @@ export async function createWindowHost({runtime, assets, player, gameConfig = nu
     viewportReadInput(delta){return consoleCommands.viewportReadInput(delta);},
     // Browser/viewport adapter into the already recovered root mouse route.
     // Coordinates are drawing-buffer pixels, matching the root canvas size.
+    /** Whether a window holds the root's mouse (the grab count pointer() tests): a menu or another modal is open. */
+    mouseGrabbed(root){return Boolean(W.i32(root,Input.ROOT_INPUT.mouseGrab));},
     pointer(root,{x=0,y=0,dx=0,dy=0,relative=false,key=null,action=null}){
       if(!W.i32(root,Input.ROOT_INPUT.mouseGrab))return false;
       const px=relative?f(W.f32(root,Mouse.MOUSE.mouseX)+f(dx)):f(x);

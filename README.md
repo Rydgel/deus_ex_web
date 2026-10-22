@@ -268,7 +268,7 @@ fullscreen in Chrome or Edge the keys a browser reserves for itself (F1 to F12, 
 `Deus Ex GOTY Edition/` directory present this happens at once; otherwise choose the game
 folder containing Maps, Textures, System and Help. The local production preview always uses
 this folder picker. Your saves: the original's Load Game screen lists the saves the page keeps in the browser
-(Alt+S, Option+S on a Mac, opens the page's own Saves window; also a Saves… button on the folder screen), or in a
+(the page's own Saves window opens from a Saves button shown beside the picture while a menu is open, and from the folder screen), or in a
 `Save` folder you pick (Chromium: the desktop game's own, or the game folder), and imports a desktop `Save` folder or
 exports a zip in Firefox and Safari; the dev server also lists the game folder's `Save`, read-only (docs/save-storage.md).
 Loading a save and saving are not implemented yet (the Load Game button stops by name).

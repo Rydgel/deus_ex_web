@@ -455,6 +455,7 @@ export async function createGame(map, asset, assets, { randomSeed = Math.floor(D
     // motion under pointer lock). The root accepts them only while a modal
     // owns the original mouse-event grab counter.
     windowPointer(sample) { return Boolean(hud?.pointer(sample)); },
+    windowMouseGrabbed() { return Boolean(hud?.mouseGrabbed?.()); },
     /** The page's 16-bit decode of a speech sound (`sound` its key) for
      * Galaxy's speech voices and lip sync (script-audio-live.mjs
      * attachDecoded; docs/galaxy-audio.md "Speech through Galaxy's voices"). */

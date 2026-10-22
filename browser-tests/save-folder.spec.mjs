@@ -71,7 +71,10 @@ async function clickWindow(page, field, index, actionKey) {
   const target = (await probe(page, { op: 'center', ...(actionKey ? { actionKey } : { field, ...(index === undefined ? {} : { index }) }) })).result;
   let at = { x: box.x + box.width / 2, y: box.y + box.height / 2 };
   const go = async (x, y, steps = 20) => { await page.mouse.move(x, y, { steps }); at = { x, y }; await page.waitForTimeout(150); };
-  for (let k = 0; k < 4; k++) { await go(at.x - box.width / 2, at.y - box.height / 2); await go(at.x + 0.001, at.y + 0.001, 1); }
+  // A free pointer reaches the menu at its own position; a locked one moves the menu's cursor by relative motion (parked in the corner first).
+  if (await page.evaluate(() => Boolean(document.pointerLockElement)))
+    for (let k = 0; k < 4; k++) { await go(at.x - box.width / 2, at.y - box.height / 2); await go(at.x + 0.001, at.y + 0.001, 1); }
+  else at = { x: box.x, y: box.y };
   await go(at.x + box.width * target.x / buffer.w, at.y + box.height * target.y / buffer.h);
   await page.mouse.down(); await page.waitForTimeout(100); await page.mouse.up();
 }
@@ -166,8 +169,16 @@ test('a folder the player picks is the save directory: the default start lists i
   expect(await page.locator('.toolbar').isVisible()).toBe(false);
   expect(await page.locator('#saves-dialog').evaluate(dialog => dialog.open)).toBe(false);
   expect(await savesStatus(page)).toMatchObject({ source: 'browser', slots: 0, canPickFolder: true });
-  // Alt+S opens the Saves window; "Use a Save folder" is the player's pick of the game folder: its Save folder is the save directory
+  // The page's own controls appear only while an original menu holds the mouse (no shortcut: on the default start Alt is the game's
+  // Strafe). The Saves button opens the Saves window; "Use a Save folder" is the player's pick of the game folder: its Save folder is the
+  // save directory.
+  await expect(page.locator('#page-buttons')).toBeHidden();
   await page.keyboard.press('Alt+s');
+  expect(await page.locator('#saves-dialog').evaluate(dialog => dialog.open)).toBe(false);
+  await page.keyboard.press('Escape');
+  await expect.poll(async () => (await state(page)).menu).toBe('deusex.menumain');
+  await expect(page.locator('#page-buttons')).toBeVisible();
+  await page.locator('#page-saves').click();
   await expect(page.locator('#saves-dialog')).toBeVisible();
   // (the dev server adds that it also lists the installed game's own Save folder, read-only)
   await expect(page.locator('#saves-status')).toHaveText(/^Saves are kept in this browser \(0 saves\)\./);
@@ -179,7 +190,11 @@ test('a folder the player picks is the save directory: the default start lists i
   await page.locator('#saves-close').click();
   await expect(page.locator('#saves-dialog')).not.toBeVisible();
 
-  await openLoadGame(page);
+  // MenuMain is still open: its third button, Load Game
+  await clickWindow(page, 'winButtons', 2);
+  await expect.poll(async () => (await state(page)).menu, { timeout: 30_000 }).toBe('deusex.menuscreenloadgame');
+  await page.waitForTimeout(500);
+  expect((await state(page)).error).toBeNull();
   await expectRealSaves(page, 'folder');
 
   // Load Game is not implemented (docs/travel.md order step 4): its button reaches LoadGame -> ClientTravel("?loadgame=1"), and the page stops there by name
@@ -195,7 +210,10 @@ test('saves imported into the browser are listed by the default start and export
   const errors = []; page.on('pageerror', error => errors.push(error.message));
   await page.goto(`${base}/`);
   await ready(page, 'DX');
-  await page.keyboard.press('Alt+s');
+  // the Saves window from the page button an original menu shows (Escape opens MenuMain)
+  await page.keyboard.press('Escape');
+  await expect.poll(async () => (await state(page)).menu).toBe('deusex.menumain');
+  await page.locator('#page-saves').click();
   await expect(page.locator('#saves-dialog')).toBeVisible();
   await expect(page.locator('#saves-export')).toBeDisabled();
   // the player chooses the desktop game's Save folder (a webkitdirectory input): its files come in under their own directory names
@@ -225,7 +243,11 @@ test('saves imported into the browser are listed by the default start and export
   }
   await page.locator('#saves-close').click();
 
-  await openLoadGame(page);
+  // MenuMain is still open: its third button, Load Game
+  await clickWindow(page, 'winButtons', 2);
+  await expect.poll(async () => (await state(page)).menu, { timeout: 30_000 }).toBe('deusex.menuscreenloadgame');
+  await page.waitForTimeout(500);
+  expect((await state(page)).error).toBeNull();
   await expectRealSaves(page, 'browser');
   expect(errors).toEqual([]);
 });

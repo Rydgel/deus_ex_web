@@ -70,6 +70,7 @@ export async function createPlayHud({runtime,assets,player,shell,host}){
     key(key,action){return scoped(()=>host.key(root,key,action));},
     inputEvent(key,action,options){return scoped(()=>host.inputEvent(key,action,options));},
     pointer(sample){return scoped(()=>host.pointer(root,sample));},
+    mouseGrabbed(){return scoped(()=>host.mouseGrabbed(root));},
     reset(){scoped(()=>invoke(read(read(hud,'msgLog'),'winLog'),'ClearLog'));},
   };
 }

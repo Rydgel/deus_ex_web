@@ -35,3 +35,9 @@ footer{display:flex;align-items:center;justify-content:space-between;gap:14px;mi
 #saves-dialog{width:340px;max-width:calc(100vw - 32px);padding:18px;background:#0b1926;color:#e5eef6;border:1px solid #345069;border-radius:5px;box-shadow:0 12px 40px #0009}#saves-dialog::backdrop{background:#0008}
 #saves-dialog h2{font-size:14px;font-weight:600;margin:0 0 12px;color:#e4bd7c}#saves-dialog p{margin:0 0 10px;font-size:13px;line-height:1.5;color:#becedb}#saves-dialog .saves-note{color:#e4bd7c}
 #saves-dialog .saves-actions{display:grid;gap:6px;margin:14px 0}#saves-dialog button{text-align:left}#saves-dialog button[hidden]{display:none}#saves-dialog form{margin:12px 0 0;text-align:right}#saves-dialog .shortcut-hint{font-size:11px;color:#8299aa}
+
+/* The default start's page controls: shown only while an original window holds the mouse, in the bars beside the 4:3 picture
+   (main.mjs placePageButtons); every key stays the game's. */
+#page-buttons{position:absolute;z-index:4;display:flex;flex-direction:column;gap:6px}
+#page-buttons button{min-height:28px;padding:4px 10px;font-size:12px;background:#000c;border-color:#2c4458;color:#a9c3d6}
+#page-buttons button[aria-pressed=true]{border-color:#e6b974;color:#e6b974}
