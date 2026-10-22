@@ -97,7 +97,8 @@ Nothing else changed: the same bodies run for any mover with a RotationRate and 
 * `node --test test/mover-move.test.mjs` (3 new tests for the tail), the existing mover oracles unchanged: `validate-native-mover-move` 37/37 (its harness
   gained only the `run_tail` switch, off by default), `validate-mover-frob`, `validate-island-blowitup`, `validate-mover-push-play` (Paris grill part A, Training door part B),
   `validate-npc-door-encroach` (5494 ticks).
-* **Save0021 in Play** (`node scripts/validate-load-saves.mjs --slot <copy of Save0021>`): loads, ticks two seconds and travels to `09_NYC_Dockyard`. Over ten
+* **Save0021 in Play** (`node scripts/validate-load-saves.mjs --slot <copy of Save0021>`): loads, ticks two seconds and travels to `09_NYC_Dockyard`; the whole walk of the 41 real slots
+  (`node scripts/validate-load-saves.mjs`, 2026-10-22, after the tail change) is **41 of 41 loaded, 0 stops by name**; `census-map-startup` on 8 maps (Training, Island, HQ, ShipFan, Paris club, Hong Kong market, 747, Vandenberg command): 8 clean, 0 boot failures. Over ten
   seconds the fan turns -333 per 1/60 tick (`_ftol(-20000 * dt)`), Pitch and Roll stay 32768/-32768, Location stays; `DeusExMover2/3` turn their pitch.
 * **The same round trip with Play's own files** (`scripts/validate-rotating-brush-save.mjs`, no third-party data): `DeusExMover1` of the stock level is destroyed through its
   original `TakeDamage` -> `BlowItUp`, keeps spinning, `SaveGame 4` writes it, `LoadGame 4` restores it. The restored fan is non-colliding at z + 20000 and a tracked
