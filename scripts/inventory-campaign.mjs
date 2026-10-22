@@ -7,7 +7,9 @@
  *   node scripts/inventory-campaign.mjs scripts         the MissionNN.uc sources (.cache/research/src/DeusEx): functions, flag operations, travel calls
  *   node scripts/inventory-campaign.mjs flags           the flag cross-reference (needs the three steps above): setters, readers, lifetimes
  *   node scripts/inventory-campaign.mjs slots           the real desktop save slots (SaveInfo.dxs and the saved FlagBase; needs `flags`)
- *   node scripts/inventory-campaign.mjs all             the five steps in order
+ *   node scripts/inventory-campaign.mjs report          the markdown fragments of docs/stage-6-inventory.md under .work/campaign-inventory/md (needs the five steps above)
+ *   node scripts/inventory-campaign.mjs all             the six steps in order
+ *   node scripts/inventory-campaign.mjs chain <map> <tag> [depth]   the upstream of an event tag in a map, as an AND/OR tree (needs conversations, maps, scripts, flags)
  *
  * The conversation sources are the compiled ConversationLists (`ConList_MissionNN` in DeusExConText.u, read with the repository's package and
  * object readers); the maps are `decodeMap` plus the class defaults (`ClassDefaults.forActor`); the scripts are the extracted `.uc` files, which are
@@ -467,6 +469,8 @@ function edgesOf(mapsData) {
 }
 
 const kindOf = c => c.datalink ? 'DL' : (c.firstPerson && c.nonInteractive) ? 'ovh' : 'talk';
+/** A cell: the items joined, cut after about `max` characters with the count of what was left out. */
+const cap = (items, max = 220) => { const out = []; let n = 0; for (const it of items) { if (n + it.length > max && out.length) break; out.push(it); n += it.length + 2; } return out.join(', ') + (out.length < items.length ? ` (+${items.length - out.length} more)` : ''); };
 const flagText = f => `${f.value === false ? '!' : ''}${f.flag}`;
 
 async function report() {
@@ -493,6 +497,8 @@ async function report() {
   for (const m of Object.values(mapsData)) for (const p of [...m.pawns.map(x => x.bind), ...m.boundActors.map(x => x.bind)]) if (p) {
     const k = String(p).toLowerCase(); if (!bindIndex.has(k)) bindIndex.set(k, new Set()); bindIndex.get(k).add(m.map);
   }
+  const realMap = lower => Object.values(mapsData).find(m => m.map.toLowerCase() === lower)?.map ?? lower;
+  const missionOfMapAll = new Map(Object.values(mapsData).map(m => [m.map.toLowerCase(), m.level?.missionNumber ?? null]));
   const short = map => map.replace(/^\d\d_/, '');
   const carriedFlags = flagRows.filter(r => r.crossMission && !/_(Dead|Unconscious)$/.test(r.flag) && r.lasting.some(l => !new Set(r.setters.map(x => x.mission)).has(l.read.mission))).map(r => r.flag);
   await emit('carried-flags.json', JSON.stringify(carriedFlags));
@@ -500,35 +506,77 @@ async function report() {
     const list = conv[id]; if (!list) continue;
     const mission = list.missionNumber;
     const mm = id === '98' ? [mapsData['00_Intro']] : id === '99' ? ['99_Endgame1', '99_Endgame2', '99_Endgame3', '99_Endgame4'].map(n => mapsData[n]) : missionMaps(id);
+    // the script's calls, by kind (generated from the parsed source, with the line of the first occurrence)
+    const scr = Object.values(scriptsData).find(x => x.mission === mission);
+    if (scr) {
+      const ops = scr.functions.flatMap(f => f.ops.map(o => ({ ...o, fn: f.name })));
+      const uniq = (kind, fmt = o => '\`' + o.arg + '\`') => { const seen = new Map(); for (const o of ops.filter(o => o.kind === kind)) if (!seen.has(o.arg)) seen.set(o.arg, o); return [...seen.values()].map(o => fmt(o) + ' (:' + o.line + ')'); };
+      const sets = uniq('flag-set', o => '\`' + o.arg + '\`' + (o.expiration !== null ? ' e' + o.expiration : ''));
+      const reads = [...new Set(ops.filter(o => o.kind === 'flag-get').map(o => o.arg))];
+      let sf = `Generated from the script's calls (\`inventory-campaign.mjs scripts\`; \`:N\` is the first line):\n\n`;
+      sf += `* **Flags set** (${sets.length}; \`eN\` = explicit expiration N, otherwise the default): ${sets.join(', ') || 'none'}.\n`;
+      sf += `* **Flags read** (${reads.length}): ${reads.map(r => '\`' + r + '\`').join(', ') || 'none'}.\n`;
+      const dls = uniq('datalink'), cons = uniq('conversation'), goalsDone = uniq('goal-complete'), travel = ops.filter(o => o.kind === 'travel').map(o => '\`:' + o.line + ' ' + o.arg.replace(/\`/g, "'") + '\`');
+      sf += `* **InfoLinks it starts**: ${dls.join(', ') || 'none'}. **Conversations it starts by name**: ${cons.join(', ') || 'none'}. **Goals it completes**: ${goalsDone.join(', ') || 'none'}.\n`;
+      sf += `* **Spawns**: ${uniq('spawn').join(', ') || 'none'}. **Destroy calls**: ${ops.filter(o => o.kind === 'destroy').length}; **EnterWorld/LeaveWorld calls**: ${ops.filter(o => o.kind === 'hide').length}. **Travel calls**: ${travel.join('; ') || 'none'}.\n`;
+      await emit(`${id}-scriptflags.md`, sf);
+    }
     // maps
     let t = '| Map | Actors | Level info (`MapName`; `MissionLocation`) | Startup text | Script | Arrives from | Leaves to |\n| --- | --- | --- | --- | --- | --- | --- |\n';
     for (const m of mm) {
-      const inbound = edges.filter(e => e.dest === m.map.toLowerCase()).map(e => `${e.from}${e.portal ? '#' + e.portal : ''} (${e.actor})`);
-      const outbound = edges.filter(e => e.from === m.map).map(e => `${e.dest}${e.portal ? '#' + e.portal : ''} (${e.actor}${e.transition ? ', path ' + e.camera : ''})`);
+      const groupEdges = (list, other) => { const by = new Map(); for (const e of list) { const k = other(e); if (!by.has(k)) by.set(k, { n: 0, portals: new Set(), path: new Set() }); const g = by.get(k); g.n++; if (e.portal) g.portals.add(e.portal); if (e.transition) g.path.add(e.camera); } return [...by].map(([k, g]) => `${k}${g.portals.size && g.portals.size <= 2 ? '#' + [...g.portals].join('/') : ''}${g.n > 1 ? ' x' + g.n : ''}${g.path.size ? ' (path ' + [...g.path].join('/') + ')' : ''}`); };
+      const inbound = groupEdges(edges.filter(e => e.dest === m.map.toLowerCase()), e => e.from);
+      const outbound = groupEdges(edges.filter(e => e.from === m.map), e => realMap(e.dest));
       t += `| \`${m.map}\` | ${m.actors} | ${esc(m.level?.mapName ?? '-')}; ${esc(m.level?.location ?? '-')} | ${esc((m.level?.startup ?? []).join(' / ') || '-')} | ${m.level?.scriptClass ?? '(none)'} | ${inbound.length ? esc(inbound.join('; ')) : '-'} | ${outbound.length ? esc(outbound.join('; ')) : '-'} |\n`;
     }
     await emit(`${id}-maps.md`, t);
     // conversations
     const own = list.conversations.filter(c => !common.has(c.name));
     const boundIn = c => { const maps = bindIndex.get(String(c.owner).toLowerCase()); return maps ? [...maps].filter(m => mm.some(x => x?.map === m)).map(short) : null; };
-    const live = f => (readers.get(f.flag.toLowerCase()) ?? []).some(r => !(r.kind.startsWith('conversation') && r.where === f.__where));
+    const isAmbient = c => !c.datalink && c.firstPerson && c.nonInteractive;
+    const effects = c => c.choices.length || c.setFlags.length || c.goals.length || c.transfers.length || c.checks.length || c.triggers.length || c.skillPoints || c.credits || c.notes.length;
     let rows = '';
-    for (const c of own.filter(c => !c.bark)) {
-      const hasEffect = c.choices.length || c.goals.length || c.transfers.length || c.triggers.length || c.checks.length || c.skillPoints || c.credits || c.notes.length || c.setFlags.some(f => (readers.get(f.flag.toLowerCase()) ?? []).some(r => r.where !== c.name));
-      if (!hasEffect) continue;
+    const gated = [], plain = { DL: [], talk: [], ovh: [] };
+    for (const c of own) {
+      if (!effects(c)) {
+        if (c.required.length || c.checkFlags.length) gated.push(`\`${c.name}\` (${cap([...new Set([...c.required.map(flagText), ...c.checkFlags.map(f => '? ' + flagText(f))])], isAmbient(c) ? 36 : 90)})`);
+        else plain[kindOf(c)].push(c);
+        continue;
+      }
       const bound = boundIn(c);
       const cells = [];
       cells.push(`\`${c.name}\``);
       cells.push(esc(c.owner || '-') + (c.owner && c.owner !== 'JCDenton' ? (bound === null ? ' (no actor)' : bound.length ? ` (${bound.slice(0, 3).join(', ')}${bound.length > 3 ? ', ...' : ''})` : ' (other missions)') : ''));
       cells.push(`${kindOf(c)}${c.invoke.length && !c.datalink ? ' ' + c.invoke.join('/') : ''}${c.once ? ' once' : ''}`);
       cells.push(c.choices.length ? String(c.choices.length) : '');
-      cells.push(esc([...new Map(c.setFlags.map(f => [`${f.flag}${f.value ? '' : '=0'}${f.branch !== '(main)' ? '@' + f.branch : ''}`, 1])).keys()].join(', ')));
-      cells.push(esc([...c.required.map(f => 'req ' + flagText(f)), ...c.checkFlags.map(f => '? ' + flagText(f))].join(', ')));
-      cells.push(esc([...c.goals.map(g => `${g.completed ? 'done' : g.primary ? '+P' : '+S'} ${g.name}`), ...c.notes.map(() => '+note')].join(', ')));
-      cells.push(esc([...c.triggers.map(x => 'trig ' + x.tag), ...c.transfers.map(x => `${x.to === 'JCDenton' ? 'give' : x.from === 'JCDenton' ? 'take' : 'move'} ${x.object}${x.count > 1 ? '*' + x.count : ''}`), ...c.checks.map(x => 'has? ' + x.object), c.skillPoints ? `sp ${c.skillPoints}` : '', c.credits ? `cr ${c.credits}` : ''].filter(Boolean).join(', ')));
+      cells.push(esc(cap([...new Map(c.setFlags.map(f => [`${f.flag}${f.value ? '' : '=0'}${f.branch !== '(main)' ? '@' + f.branch : ''}`, 1])).keys()])));
+      cells.push(esc(cap([...new Set([...c.required.map(f => 'req ' + flagText(f)), ...c.checkFlags.map(f => '? ' + flagText(f))])])));
+      cells.push(esc(cap([...new Set([...c.goals.map(g => `${g.completed ? 'done' : g.primary ? '+P' : '+S'} ${g.name}`), ...c.notes.map(() => '+note')])])));
+      cells.push(esc(cap([...new Set([...c.triggers.map(x => 'trig ' + x.tag), ...c.transfers.map(x => `${x.to === 'JCDenton' ? 'give' : x.from === 'JCDenton' ? 'take' : 'move'} ${x.object}${x.count > 1 ? '*' + x.count : ''}`), ...c.checks.map(x => 'has? ' + x.object), c.skillPoints ? `sp ${c.skillPoints}` : '', c.credits ? `cr ${c.credits}` : ''].filter(Boolean))])));
       rows += `| ${cells.join(' | ')} |\n`;
     }
     await emit(`${id}-conversations.md`, `| Conversation | Owner (BindName; maps with that actor) | Kind | Choices | Sets | Needs | Goals | Other |\n| --- | --- | --- | --- | --- | --- | --- | --- |\n${rows}`);
+    const group = list2 => { const by = new Map(); for (const c of list2) { const k = c.owner || '-'; if (!by.has(k)) by.set(k, []); by.get(k).push(c.name); } return [...by].map(([k, v]) => `${k}: ${v.join(' ')}`).join('; '); };
+    await emit(`${id}-conversations-rest.md`, [
+      `Conversations that only wait for a flag or check one, and change no state (${gated.length}; \`?\` = a \`CheckFlag\` event): ${gated.join(', ') || 'none'}.`,
+      `Plain InfoLinks, no flag and no event: ${plain.DL.length} (listed with their starters in the InfoLink table).`,
+      `Plain conversations with an actor (${plain.talk.length}): ${group(plain.talk) || 'none'}.`,
+      `Plain overheard conversations (${plain.ovh.length}): ${group(plain.ovh) || 'none'}.`].join('\n\n') + '\n');
+    // InfoLinks and what starts them
+    let dt = '| InfoLink | Started by | Needs | Sets / does |\n| --- | --- | --- | --- |\n';
+    for (const c of own.filter(c => c.datalink)) {
+      const key = c.name.toLowerCase(), starters = [];
+      for (const m of mm) {
+        for (const t of m.dataLinkTriggers) if (String(t.datalink).toLowerCase() === key) starters.push(`${short(m.map)}/${t.name} (${(t.at ?? []).slice(0, 2).join(',')})${t.checkFlag ? ` needs ${t.checkFalse ? '!' : ''}${t.checkFlag}` : ''}`);
+        for (const t of m.conversationTriggers) if (String(t.conversation).toLowerCase() === key) starters.push(`ConversationTrigger ${short(m.map)}/${t.name}`);
+      }
+      for (const [name, lines] of Object.entries(scriptText)) if (MISSION_OF_SCRIPT[name] === mission) lines.forEach((l, i) => { if (!l.trim().startsWith('//') && l.toLowerCase().includes('"' + key + '"')) starters.push(`${name}.uc:${i + 1}`); });
+      for (const o of list.conversations) if (!common.has(o.name)) for (const j of o.jumps) if (j.con && j.con.toLowerCase() === key && o.name !== c.name) { starters.push(`jump from ${o.name}`); break; }
+      const needs = [...c.required.map(f => flagText(f)), ...c.checkFlags.map(f => flagText(f))];
+      const does = [...c.setFlags.map(f => `set ${f.flag}${f.value ? '' : '=0'}`), ...c.goals.map(g => `${g.completed ? 'done' : '+goal'} ${g.name}`), ...c.triggers.map(x => 'trig ' + x.tag), ...c.transfers.map(x => `${x.to === 'JCDenton' ? 'give' : 'take'} ${x.object}`), c.skillPoints ? 'sp ' + c.skillPoints : ''].filter(Boolean);
+      dt += `| \`${c.name}\` | ${esc(cap([...new Set(starters)], 160) || '(none found)')} | ${esc(cap([...new Set(needs)], 120))} | ${esc(cap([...new Set(does)], 160))} |\n`;
+    }
+    await emit(`${id}-datalinks.md`, dt);
     // choices: each choice, the block its speech jumps to, and what that block (and the blocks it jumps to) does
     let ct = '| Conversation | Owner | Choice | Effects of the branch |\n| --- | --- | --- | --- |\n';
     for (const c of own.filter(c => c.choices.length)) {
@@ -544,18 +592,22 @@ async function report() {
         };
         visit(start); return [...new Set(eff)];
       };
+      let quiet = 0;
       for (const ch of c.choices) {
         const jump = c.jumps.find(j => j.branch.toLowerCase() === ch.label.toLowerCase());
         const eff = jump ? effectsOf(jump.label) : [];
-        ct += `| \`${c.name}\` | ${esc(c.owner)} | ${esc(ch.text.slice(0, 90))}${ch.skill ? ` [needs ${ch.skill} ${ch.skillLevel}]` : ''}${ch.flag ? ` [needs ${ch.flag.map(flagText).join(', ')}]` : ''} | ${esc(jump ? `-> ${jump.label}: ` + (eff.join(', ') || 'no state change') : '(no jump found)')} |\n`;
+        if (jump && !eff.length) { quiet++; continue; }
+        ct += `| \`${c.name}\` | ${esc(c.owner)} | ${esc(ch.text.slice(0, 70))}${ch.skill ? ` [needs ${ch.skill} ${ch.skillLevel}]` : ''}${ch.flag ? ` [needs ${ch.flag.map(flagText).join(', ')}]` : ''} | ${esc(jump ? `-> ${jump.label}: ` + (eff.join(', ') || 'no state change') : '(no jump found)')} |\n`;
       }
+      if (quiet) ct += `| \`${c.name}\` | ${esc(c.owner)} | (${quiet} further choice${quiet > 1 ? 's' : ''} that change no state: refusals, "never mind", unaffordable offers) | - |\n`;
     }
     await emit(`${id}-choices.md`, ct);
     // counts
     const dl = own.filter(c => c.datalink), talk = own.filter(c => !c.datalink && !(c.firstPerson && c.nonInteractive)), ovh = own.filter(c => !c.datalink && c.firstPerson && c.nonInteractive);
     const counts = { total: own.length, datalinks: dl.length, talk: talk.length, overheard: ovh.length, withChoices: own.filter(c => c.choices.length).length, setFlags: own.filter(c => c.setFlags.length).length,
       requireFlags: own.filter(c => c.required.length).length, goalConvs: own.filter(c => c.goals.length).length, transfers: own.filter(c => c.transfers.length || c.checks.length).length, triggers: own.filter(c => c.triggers.length).length, barkNamed: own.filter(c => c.bark).length };
-    await emit(`${id}-counts.json`, JSON.stringify(counts));
+    counts.maps = mm.filter(Boolean).length;
+    counts.choiceRows = own.reduce((n, c) => n + c.choices.length, 0);
     // goals
     const goals = new Map();
     for (const c of own) for (const g of c.goals) {
@@ -575,7 +627,7 @@ async function report() {
     // exits
     let et = '| Map | Actor | At | Leads to | Fired by (events targeting its tag) |\n| --- | --- | --- | --- | --- |\n';
     for (const m of mm) {
-      const items = [...m.exits.map(e => ({ ...e, dest: e.dest })), ...m.teleporters.filter(t => t.url).map(t => ({ ...t, dest: t.url }))];
+      const items = [...m.exits.map(e => ({ ...e, dest: e.dest })), ...m.teleporters.filter(t => t.url && missionOfMapAll.get(mapKey(t.url)) !== mission).map(t => ({ ...t, dest: t.url }))];
       for (const e of items) {
         const by = (m.eventSources ?? []).filter(x => e.tag && x.event.toLowerCase() === e.tag.toLowerCase()).map(x => `${x.class} ${x.name}`);
         if (e.tag && e.class === 'MapExit') { for (const c of convTriggersOf(id).get(e.tag.toLowerCase()) ?? []) by.push('conversation ' + c); for (const r of scriptRefs(e.tag, mission)) by.push('script ' + r); }
@@ -583,8 +635,16 @@ async function report() {
       }
     }
     await emit(`${id}-exits.md`, et);
+    let ch = '';
+    for (const m of mm) for (const e of m.exits) {
+      if (!e.dest) continue;
+      ch += `**${m.map} ${e.name} -> ${clean(e.dest)}**${e.tag ? ' (tag \`' + e.tag + '\`)' : ''}\n\n`;
+      if (!e.tag) { ch += 'Touch only: no event source in the data; what keeps the player from the actor is geometry (doors, locks) and is not read here.\n\n'; continue; }
+      ch += '```text\n' + await chainText(m.map, e.tag, 6) + '\n```\n\n';
+    }
+    await emit(`${id}-chains.md`, ch);
     // gates: movers that start locked, need a key that exists, or are fired by something other than a frob
-    let gt2 = '| Map | Tag (movers) | Lock | Opened by |\n| --- | --- | --- | --- |\n';
+    let gt2 = '| Map | Tag (movers) | Lock | Opened by |\n| --- | --- | --- | --- |\n', skippedPickable = 0; const keyDoors = new Map();
     const keyIds = new Set(Object.values(mapsData).flatMap(m => m.keys.map(k => String(k.keyId).toLowerCase())));
     for (const m of mm) {
       const groups = new Map();
@@ -593,12 +653,13 @@ async function report() {
         const sources = (m.eventSources ?? []).filter(x => doors[0].tag && x.event.toLowerCase() === doors[0].tag.toLowerCase()).map(x => `${x.class} ${x.name}`);
         if (doors[0].tag) { for (const c of convTriggersOf(id).get(doors[0].tag.toLowerCase()) ?? []) sources.push('conversation ' + c); for (const r of scriptRefs(doors[0].tag, mission)) sources.push('script ' + r); }
         const d0 = doors[0], keyed = d0.key && keyIds.has(String(d0.key).toLowerCase());
-        if (!d0.locked && !keyed && !sources.length) continue;
-        const lock = [d0.locked ? 'locked' : 'unlocked', keyed ? `key ${d0.key}` : '', d0.pickable ? `pick ${(d0.lockStrength ?? 0).toFixed(2)}` : '', d0.breakable ? `breakable ${(d0.doorStrength ?? 0).toFixed(2)}` : ''].filter(Boolean).join(', ');
-        gt2 += `| \`${m.map}\` | \`${tag}\` (${doors.length}) | ${lock} | ${esc([...new Set(sources)].slice(0, 6).join(', ') || 'frob')} |\n`;
+        if (!sources.length && keyed && d0.frobbable && d0.pickable) { keyDoors.set(d0.key, (keyDoors.get(d0.key) ?? 0) + doors.length); continue; }
+        if (!keyed && !sources.length && !(d0.locked && !d0.pickable)) { if (d0.locked) skippedPickable += doors.length; continue; }
+        const lock = [d0.locked ? 'locked' : 'unlocked', keyed ? `key ${d0.key}` : '', d0.pickable ? `pick ${(d0.lockStrength ?? 0).toFixed(2)}` : '', d0.breakable ? `breakable ${(d0.doorStrength ?? 0).toFixed(2)}` : '', d0.frobbable ? '' : 'not frobbable'].filter(Boolean).join(', ');
+        gt2 += `| \`${m.map}\` | \`${tag}\` (${doors.length}) | ${lock} | ${esc([...new Set(sources)].slice(0, 6).join(', ') || (d0.frobbable ? 'frob' : '(nothing found)'))} |\n`;
       }
     }
-    await emit(`${id}-gates.md`, gt2);
+    await emit(`${id}-gates.md`, gt2 + (keyDoors.size ? `\nKey doors (a placed \`NanoKey\` opens them, or the lock is picked; frob only): ${[...keyDoors].map(([k, n]) => `\`${k}\`${n > 1 ? ' x' + n : ''}`).join(', ')}.\n` : '') + `\n(${skippedPickable} further movers of these maps are locked with a pickable lock or breakable, take no key that exists as a placed \`NanoKey\` and are fired by no event: not listed.)\n`);
     // lasting flags: set in this mission and still alive in a later one; read here and set earlier
     const carriedRows = flagRows.filter(r => carriedFlags.includes(r.flag));
     const short2 = r => `M${r.mission} ${r.kind === 'conversation-checks' ? 'checks in' : r.kind === 'conversation-requires' ? 'needed by' : r.kind === 'choice-requires' ? 'choice in' : r.kind} ${r.where}`;
@@ -614,21 +675,69 @@ async function report() {
     }
     await emit(`${id}-lasting-set.md`, lt);
     await emit(`${id}-lasting-read.md`, rt);
+    counts.carriedSet = lt.split('\n').length - 3;
+    counts.carriedRead = rt.split('\n').length - 3;
     // slots
     const here = slotRows.filter(s => s.mission === mission);
     await emit(`${id}-slots.json`, JSON.stringify(here.map(s => `${s.source === 'nicouzouf' ? 'N' : 'R'}${s.slot.slice(4)}`)));
-    let st = '| Slot | Map | Saved as | Saves, play time | Important NPCs already dead or knocked out | Lasting-choice flags in the file | Goals still open |\n| --- | --- | --- | --- | --- | --- | --- |\n';
+    let st = '| Slot | Map | Saved as | Saves, play time | Important NPCs dead or knocked out (all) | Lasting-choice flags in the file (all) | Goals still open |\n| --- | --- | --- | --- | --- | --- | --- |\n';
     for (const sl of here) {
       const fl = new Map(sl.flags.map(f => [f.flag.toLowerCase(), f]));
-      const dead = sl.flags.filter(f => /_Dead$/.test(f.flag) && f.value).map(f => f.flag.replace(/_Dead$/, ''));
-      const ko = sl.flags.filter(f => /_Unconscious$/.test(f.flag) && f.value).map(f => f.flag.replace(/_Unconscious$/, ''));
-      const chosen = carriedFlags.filter(f => fl.get(f.toLowerCase())?.value).map(f => f);
+      const prev = null;                       // cumulative: a slot is a start point, so its whole state is listed
+      const prevFlags = new Map((prev?.flags ?? []).map(f => [f.flag.toLowerCase(), f]));
+      const isNew = f => !prevFlags.has(f.flag.toLowerCase()) || prevFlags.get(f.flag.toLowerCase()).value !== f.value;
+      const dead = sl.flags.filter(f => /_Dead$/.test(f.flag) && f.value && isNew(f)).map(f => f.flag.replace(/_Dead$/, ''));
+      const ko = sl.flags.filter(f => /_Unconscious$/.test(f.flag) && f.value && isNew(f)).map(f => f.flag.replace(/_Unconscious$/, ''));
+      const chosen = carriedFlags.filter(f => fl.has(f.toLowerCase()) && (!prev || isNew(fl.get(f.toLowerCase())))).map(f => fl.get(f.toLowerCase()).value ? f : f + '=0');
       const open = sl.goals.filter(g => !g.completed).map(g => g.name);
       const mins = Math.round(sl.saveTime / 60);
       st += `| ${sl.source === 'nicouzouf' ? 'N' : 'R'}${sl.slot.slice(4)} | \`${sl.map}\` | ${esc(sl.description)} | ${sl.saveCount}, ${mins} min | ${esc(dead.join(', ') || '-')}${ko.length ? esc('; knocked out: ' + ko.join(', ')) : ''} | ${esc(chosen.join(', ') || '-')} | ${esc(open.slice(0, 5).join(', ') || '-')}${open.length > 5 ? ', ...' : ''} |\n`;
     }
     await emit(`${id}-slots.md`, st);
+    counts.slots = here.length;
+    counts.importantPawns = new Set(mm.filter(Boolean).flatMap(m => m.pawns.filter(x => x.important && x.bind && x.bind.toLowerCase() !== 'none').map(x => x.bind.toLowerCase()))).size;
+    counts.goals = goals.size;
+    await emit(`${id}-counts.json`, JSON.stringify(counts));
   }
+  // ---- global fragments
+  const missionOfMap = new Map(Object.values(mapsData).map(m => [m.map.toLowerCase(), m.level?.missionNumber ?? null]));
+  let ov = '| Mission | Maps | Location (`MissionLocation`) | Script | Arrives from | Leaves to | Real slots |\n| --- | --- | --- | --- | --- | --- | --- |\n';
+  const groupsDef = [['00', 0], ['01', 1], ['02', 2], ['03', 3], ['04', 4], ['05', 5], ['06', 6], ['08', 8], ['09', 9], ['10', 10], ['11', 11], ['12', 12], ['14', 14], ['15', 15], ['98', 98], ['99', 99]];
+  for (const [id, n] of groupsDef) {
+    const mm = Object.values(mapsData).filter(m => m.level?.missionNumber === n && !/^(DX|DXOnly|Entry)$/i.test(m.map));
+    const inbound = [...new Set(edges.filter(e => mm.some(m => m.map.toLowerCase() === e.dest) && missionOfMap.get(e.from.toLowerCase()) !== n).map(e => `${e.from}${e.portal ? '#' + e.portal : ''}`))];
+    const real = lower => Object.values(mapsData).find(m => m.map.toLowerCase() === lower)?.map ?? lower;
+    const outbound = [...new Set(edges.filter(e => mm.some(m => m.map === e.from) && missionOfMap.get(e.dest) !== n).map(e => `${real(e.dest)}${e.portal ? '#' + e.portal : ''}`))];
+    ov += `| ${id === '00' ? '0 (Training)' : id === '98' ? '98 (Intro)' : id === '99' ? '99 (Endgames)' : Number(id)} | ${mm.map(m => short(m.map)).join(', ')} | ${esc([...new Set(mm.map(m => m.level?.location))].join('; '))} | ${[...new Set(mm.map(m => m.level?.scriptClass ?? '(none)'))].join(', ')} | ${esc(inbound.join('; ') || (id === '00' ? 'the menu: Training button' : id === '01' ? 'New Game (the intro, then StartNewGame)' : id === '98' ? 'the menu: New Game or Intro' : '-'))} | ${esc(outbound.join('; ') || '-')} | ${slotRows.filter(x => x.mission === n).length} |\n`;
+  }
+  await emit('overview.md', ov);
+  let sl = '| Slot | Mission | Map | Saved as | Saves | Play time | Level files in the slot | Flags in the file | Open goals |\n| --- | --- | --- | --- | --- | --- | --- | --- | --- |\n';
+  for (const x of slotRows) sl += `| ${x.source === 'nicouzouf' ? 'N' : 'R'}${x.slot.slice(4)} | ${x.mission} | \`${x.map}\` | ${esc(x.description)} | ${x.saveCount} | ${Math.round(x.saveTime / 60)} min | ${x.levels.length} | ${x.flags.length} | ${x.goals.filter(g => !g.completed).length} |\n`;
+  await emit('slots-all.md', sl);
+  // who can die: important pawns by BindName
+  const people = new Map();
+  for (const m of Object.values(mapsData)) for (const x of m.pawns) if (x.important && x.bind && x.bind.toLowerCase() !== 'none') {
+    const k = x.bind.toLowerCase(); if (!people.has(k)) people.set(k, { bind: x.bind, classes: new Set(), maps: new Map() });
+    const r = people.get(k); r.classes.add(x.class); const mn = m.level?.missionNumber ?? 'no level info'; if (!r.maps.has(mn)) r.maps.set(mn, new Set()); r.maps.get(mn).add(short(m.map));
+  }
+  let dt2 = '| BindName | Class | Important in (mission: maps) | Other places the flag is read |\n| --- | --- | --- | --- |\n';
+  for (const r of [...people.values()].sort((a, b) => Math.min(...[...a.maps.keys()].filter(Number.isFinite)) - Math.min(...[...b.maps.keys()].filter(Number.isFinite)) || a.bind.localeCompare(b.bind))) {
+    const row = flagRows.find(f => f.flag.toLowerCase() === (r.bind + '_Dead').toLowerCase());
+    const others = (row?.readers ?? []).filter(x => x.kind !== 'firstframe-destroy').map(x => `M${x.mission} ${x.kind.replace('conversation-', '')} ${x.where}`);
+    dt2 += `| ${r.bind} | ${[...r.classes].join('/')} | ${esc([...r.maps].sort((a, b) => (Number.isFinite(a[0]) ? a[0] : 999) - (Number.isFinite(b[0]) ? b[0] : 999)).map(([mn, ms]) => `${mn}: ${[...ms].join(', ')}`).join('; '))} | ${esc(cap([...new Set(others)], 200) || '-')} |\n`;
+  }
+  await emit('deaths.md', dt2);
+  let cr = '| Flag | Set by | Expires | Read later by |\n| --- | --- | --- | --- |\n';
+  for (const r of flagRows.filter(r => carriedFlags.includes(r.flag))) {
+    const sets = r.lasting.map(l => l.set), reads = r.lasting.filter(l => !new Set(r.setters.map(x => x.mission)).has(l.read.mission)).map(l => l.read);
+    cr += `| \`${r.flag}\` | ${esc(cap([...new Set(sets.map(x => `M${x.mission} ${x.kind} ${x.where}${x.branch && x.branch !== '(main)' ? '@' + x.branch : ''}${x.value === false ? ' (=0)' : ''}`))], 240))} | ${[...new Set(sets.map(x => x.expiration === 0 ? 'never' : 'mission ' + x.expiration))].join('; ')} | ${esc(cap([...new Set(reads.map(x => `M${x.mission} ${x.kind === 'conversation-checks' ? 'checks in' : x.kind === 'conversation-requires' ? 'needed by' : x.kind} ${x.where}`))], 300))} |\n`;
+  }
+  await emit('carried.md', cr);
+  let un = '| Flag | Read by (mission, kind, place) |\n| --- | --- |\n';
+  const unset = flagRows.filter(r => !r.setters.length && r.readers.length);
+  for (const r of unset) un += `| \`${r.flag}\` | ${esc(cap([...new Set(r.readers.map(x => `M${x.mission} ${x.kind.replace('conversation-', '').replace('-', ' ')} ${x.where}`))], 240))} |\n`;
+  await emit('unset-flags.md', un);
+  await emit('unset-flags.json', JSON.stringify(unset.map(r => r.flag)));
   console.log('fragments in', outDir);
 }
 
@@ -636,11 +745,12 @@ async function report() {
 /** `chain <map> <tag>`: what fires an event tag in a map, upstream: the actors whose Event/OutEvents name it, the conversations whose Trigger event names it (the mission's own list), the mission
  * script's literal mentions, and for each conversation how it starts (DataLinkTrigger, ConversationTrigger, the script's StartDataLinkTransmission, or its actor's invoke mode) and which flags it needs with
  * the places that set them. An AND/OR graph read off the data: the flags of one conversation are ANDed, the setters of one flag are alternatives. */
-async function chain() {
-  const [mapName, tag, depthArg] = process.argv.slice(3);
-  const conv = await read('conversations.json'), mapsData = await read('maps.json'), scriptsData = await read('scripts.json'), flagRows = await read('flags.json');
+let chainData = null;
+async function chainText(mapName, tag, depthArg) {
+  chainData ??= { conv: await read('conversations.json'), mapsData: await read('maps.json'), scriptsData: await read('scripts.json'), flagRows: await read('flags.json') };
+  const { conv, mapsData, flagRows } = chainData;
   const m = Object.values(mapsData).find(x => x.map.toLowerCase() === String(mapName).toLowerCase());
-  if (!m) { console.error('no such map'); process.exit(2); }
+  if (!m) throw new Error('no such map ' + mapName);
   const mission = m.level?.missionNumber;
   const listId = String(mission).padStart(2, '0');
   const common = new Set(conv['16'].conversations.map(c => c.name));
@@ -664,6 +774,10 @@ async function chain() {
     for (const s of (row?.setters ?? []).filter(s => s.mission === mission && s.kind === 'conversation')) {
       const c = byName.get(String(s.where).toLowerCase()); if (c) conversationLine(depth + 1, c);
     }
+    for (const st of (row?.setters ?? []).filter(x => x.mission === mission && x.kind === 'trigger')) {
+      const [tm, tn] = String(st.where).split('/'), tt = (mapsData[tm]?.flagTriggers ?? []).find(x => x.name === tn);
+      if (tt && tt.tag && !seenTags.has(tt.tag.toLowerCase())) tagLine(depth + 1, tt.tag, mapsData[tm]);
+    }
     const pm = /^(.*)_played$/i.exec(f);
     if (pm && byName.get(pm[1].toLowerCase())) conversationLine(depth + 1, byName.get(pm[1].toLowerCase()));
   };
@@ -678,31 +792,37 @@ async function chain() {
       for (const t of x.conversationTriggers) if (String(t.conversation).toLowerCase() === key) starters.push(`ConversationTrigger ${x.map}/${t.name}${t.checkFlag ? ` needs ${t.checkFalse ? '!' : ''}${t.checkFlag}` : ''}`);
     }
     scriptLines.forEach((l, i) => { if (!l.trim().startsWith('//') && (l.toLowerCase().includes(`"${key}"`) || l.toLowerCase().includes(`'${key}'`))) starters.push(`${scriptName}.uc:${i + 1}`); });
-    if (!starters.length && !c.datalink) starters.push(`its actor (${c.invoke.join('/') || 'no invoke flag'})`);
+    const jumpers = list.filter(o => o.name !== c.name && o.jumps.some(j => j.con && j.con.toLowerCase() === key));
+    for (const o of jumpers) starters.push(`jump from ${o.name}`);
+    if (!c.invoke.length && !c.datalink && !starters.length) starters.push('(no invoke flag and nothing starts it by name in the data)');
+    else if (c.invoke.length && !c.datalink) starters.push(`its actor (${c.invoke.join('/')})`);
     say(depth + 1, `starts: ${starters.join('; ') || '(no starter found in the mission data)'}`);
+    for (const o of jumpers) conversationLine(depth + 2, o);
     for (const r of c.required) flagLine(depth + 1, r.flag, r.value);
     for (const s of starters) { const mm = / needs (!?)(\w+)/.exec(s); if (mm) flagLine(depth + 1, mm[2], mm[1] ? false : true); }
   };
-  const tagLine = (depth, t) => {
+  const tagLine = (depth, t, mp = m) => {
     const key = t.toLowerCase();
     say(depth, `event ${t}${seenTags.has(key) ? ' (seen above)' : ''}`);
     if (seenTags.has(key) || depth >= maxDepth) return;
     seenTags.add(key);
-    const src = (m.eventSources ?? []).filter(x => x.event.toLowerCase() === key);
+    if (mp !== m) say(depth + 1, `(in ${mp.map})`);
+    const src = (mp.eventSources ?? []).filter(x => x.event.toLowerCase() === key);
     for (const s of src) {
       say(depth + 1, `${s.class} ${s.name} (${s.via})${s.tag ? ` tag ${s.tag}` : ''}`);
-      const fl = m.flagTriggers.find(x => x.name === s.name);
+      const fl = mp.flagTriggers.find(x => x.name === s.name);
       if (fl) say(depth + 2, `FlagTrigger flag ${fl.flag}${fl.trigger ? ' (needs ' + fl.value + ')' : ''}${fl.set ? ' (sets)' : ''}`);
-      if (s.tag) tagLine(depth + 2, s.tag);
+      if (s.tag) tagLine(depth + 2, s.tag, mp);
     }
     for (const c of list) for (const x of c.triggers) if (x.tag.toLowerCase() === key) { say(depth + 1, `conversation event Trigger "${x.tag}" in ${c.name}${x.branch !== '(main)' ? ' branch ' + x.branch : ''}`); conversationLine(depth + 2, c); }
     scriptLines.forEach((l, i) => { if (!l.trim().startsWith('//') && l.toLowerCase().includes(`'${key}'`)) say(depth + 1, `${scriptName}.uc:${i + 1}: ${l.trim()}`); });
   };
   tagLine(0, tag);
-  console.log(out.join('\n'));
+  return out.join('\n');
 }
+async function chain() { const [mapName, tag, depthArg] = process.argv.slice(3); console.log(await chainText(mapName, tag, depthArg)); }
 
 const steps = { conversations, maps, scripts, flags, slots, report };
 if (step === 'chain') { await chain(); process.exit(0); }
-if (step !== 'all' && !steps[step]) { console.error('usage: inventory-campaign.mjs conversations|maps|scripts|flags|slots|all'); process.exit(2); }
+if (step !== 'all' && !steps[step]) { console.error('usage: inventory-campaign.mjs conversations|maps|scripts|flags|slots|report|chain|all'); process.exit(2); }
 for (const name of step === 'all' ? Object.keys(steps) : [step]) await steps[name]();
