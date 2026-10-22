@@ -35,6 +35,12 @@ audio, audioRadius, smell), `currentSettings` +0x13c. A receiver event (`0x84`):
 `bestScore`, `bestSender`, `nextSlot` +0x64, `params` (an `XAIParams`: bestActor, score, visibility, volume, smell) +0x68, and the
 process ring links `nextProcess` +0x7c, `prevProcess` +0x80.
 
+A saved level holds the manager and its events as objects (`EventManager`, `AIEventType`, `AISenderEvent`, `AIReceiverEvent`: [travel](travel.md#the-dxs-a-saved-levels-package)). In the Rust manager
+`ai_load(words, count)` rebuilds it from those objects' fields (`ai-events-payload.mjs` decodes the file into the words) and `ai_snapshot(out, capacity)` is the inverse (the save); events are named by ordinal in the words,
+except `bestSender`, which is the **sender's actor handle** (AIProcess stores `snd(candidate).actor` there and compares it with the next candidate's actor; the file's `bestSender` object is therefore an actor export, not an event: no
+receiver of the measured saved Islands has one set, so its file form follows from the code, **unverified** against a file). A level that had run a few seconds (`02_NYC_Street`, 9 of 187 receivers) exposed the first reading of it as
+a sender ordinal (an out-of-range index in the snapshot); `validate-travel-restore --only A` checks `ai_load(ai_snapshot())` on it.
+
 * **Types.** `FindEvent` hashes the name with `appStrihash` (UTF-16, a-z upper-cased, Core's CRC table, low byte then high byte of
   each unit), takes the low 8 bits as the bucket and keeps each bucket's types sorted by `CompareEventNames` (equal FName: 0,
   otherwise `appStricmp` of the text). A missing type is created only when the caller passes `ppEventType` or `pppPrev`

@@ -31,6 +31,17 @@ let root;
 try { root = gameDirectory(); } catch { console.log('SKIP validate-travel-restore: no installed game data'); process.exit(0); }
 const captures = new URL('../.work/travel/', import.meta.url).pathname;
 if (!existsSync(`${captures}rt1/final.log`)) { console.log('SKIP validate-travel-restore: the measured captures are not in .work/travel (outside Git)'); process.exit(0); }
+// Each scenario opens several levels and keeps their sessions: one process per scenario keeps the heap of each bounded.
+if (!only) {
+  const { spawnSync } = await import('node:child_process');
+  let failed = 0;
+  for (const scenario of ['T', 'I', 'P', 'X', 'A']) {
+    const run = spawnSync(process.execPath, [new URL(import.meta.url).pathname, '--only', scenario], { stdio: 'inherit' });
+    if (run.status !== 0) failed++;
+  }
+  console.log(failed ? `FAIL validate-travel-restore: ${failed} of 5 scenarios failed` : 'PASS validate-travel-restore: all five scenarios');
+  process.exit(failed ? 1 : 0);
+}
 
 const files = [];
 for (const directory of ['Maps', 'System', 'Textures', 'Sounds', 'Music'])

@@ -93,6 +93,14 @@ try {
   console.log(`${first}: ${troopsBefore} troops -> ${troops}, candybars ${candyBefore} -> ${candy}`);
   check(troopsBefore > 0 && troops === 0 && candy === candyBefore + 1, `${first}: the markers did not take`);
   const itemsBefore = await rows('deusex.candybar');
+  // the tracked movers' transformed vertices (the world the page draws): the restored level must show them where the saved level had them
+  const moverPoints = async () => Object.fromEntries((await page.evaluate(() => window.deusExViewer.moverProbe({ points: true }))).movers.map(m => [m.name, JSON.stringify(m.points)]));
+  // one mover is placed 64 units up before the save (moverProbe `set`, a test placement through the collision model) so the comparison is not of movers at rest
+  const doorName = (await live({ actors: 'deusex.deusexmover' })).actors[0].name, atRest = (await moverPoints())[doorName];
+  await page.evaluate(name => window.deusExViewer.moverProbe({ set: [{ name, offset: [0, 0, 64] }] }), doorName);
+  await frames(10);
+  const moversBefore = await moverPoints();
+  check(moversBefore[doorName] !== atRest, `${first}: placing ${doorName} did not move its tracked vertices`);
   await shot('restore-1-first');
 
   await exec([`LocalTravel ${second}`]);
@@ -112,6 +120,9 @@ try {
   // play), and none of the lines of a begin-play pass in the log (the page must not run a Player start over a restored level)
   check(await rows('deusex.candybar') === itemsBefore, `${first}: the candybars changed across the restore: ${itemsBefore} -> ${await rows('deusex.candybar')}`);
   const log = (await live({ engineLog: -1 })).engineLog;
+  const moversAfter = await moverPoints(), moved = Object.keys(moversBefore).filter(name => moversAfter[name] !== moversBefore[name]);
+  console.log(`  ${Object.keys(moversBefore).length} tracked movers (${doorName} placed up), ${moved.length} not where they were saved${moved.length ? `: ${moved.slice(0, 5)}` : ''}`);
+  check(Object.keys(moversBefore).length > 0 && moved.length === 0, `${first}: movers not where they were saved: ${moved.slice(0, 8)}`);
   check(!log.some(line => /^(Log: (Game class is|Bringing Level)|ScriptLog: (InitGame|Base Mutator))/.test(line)), `${first}: the restored level ran a begin-play pass:\n${log.join('\n')}`);
   check(troopsBack === 0, `${first}: ${troopsBack} troops in the restored level (destroyed actors stay destroyed)`);
   check(candyBack === candy, `${first}: ${candyBack} candybars (saved ${candy})`);

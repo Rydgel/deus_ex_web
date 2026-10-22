@@ -10,6 +10,7 @@
 #     arrive:<regex>            wait until a Level object whose URL.Map matches the regex exists, then 3 s more (up to 150 s)
 #     snap:<label>              save directory listing, engine log, player flags, travel text -> .work/travel/<tag>/<label>.*
 #     actors:<name>:<label>     tools/dump-actor-win.c for objects named like <name> -> .work/travel/<tag>/<label>.actors.txt
+#     putcurrent:<file>:<name>  copy a host file over Save\Current\<name> (a file of Play's, to see the original load it)
 #     savecopy:<label>          a copy of Save\Current -> .work/travel/<tag>/<label>.Current/ (the .dxs files and their times)
 #     gobjects:<label>          every object of GObjObjects (index, name, class; tools/dump-gobjects-win.c --available) -> <label>.gobjects.txt
 #     props:<name>:<label>:<field:offset:type>[,...]   tools/dump-actor-win.c with explicit fields -> <label>.props.txt
@@ -73,6 +74,9 @@ run_step() {
     cmd|arrive|snap|shot|key|type|click|move|savecopy|gobjects) scripts/travel-step.sh "$OUT" "$kind" "$arg" ;;
     props) IFS=: read -r pname plabel pfields <<< "$arg"; IFS=, read -ra pf <<< "$pfields"; scripts/travel-step.sh "$OUT" props "$pname" "$plabel" "${pf[@]}" ;;
     actors) scripts/travel-step.sh "$OUT" actors "${arg%%:*}" "${arg#*:}" ;;
+    putcurrent)   # <host file>:<name>: a file into Save\Current (cp over the one the session wrote; the name has no path)
+      IFS=: read -r psrc pname <<< "$arg"
+      case $pname in ''|*/*|*\\*) echo "putcurrent: bad name $pname" >&2 ;; *) cp -f "$psrc" "$SAVE/Current/$pname" && echo "putcurrent $pname ($(stat -c %s "$SAVE/Current/$pname") bytes)" ;; esac ;;
     wait) sleep "$arg" ;;
     *) echo "unknown step $step" >&2 ;;
   esac

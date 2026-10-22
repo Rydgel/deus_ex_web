@@ -18,6 +18,8 @@ import { ByteWriter } from './byte-writer.mjs';
 const lower = value => String(value ?? '').toLowerCase();
 export const PACKAGE_VERSION = 68;
 const MAGIC = 0x9e2a83c1;
+/** RF_LoadForClient | RF_LoadForServer | RF_LoadForEdit */
+const LOAD_FLAGS = 0x70000;
 
 /** The import table and the name table being collected, and the translation of a source package's references into them. */
 export class PackageTables {
@@ -40,7 +42,11 @@ export class PackageTables {
     let entry = this.names.get(key);
     if (!entry) {
       const source = this.sourceNames.get(key);
-      entry = { text: source?.text ?? text, flags: source?.flags ?? 0x70010, first: this.sequence++, sourceIndex: source?.index ?? null };
+      // A name's flags are the FName table's, not the source package's: the original loads a name only when its flags carry the context it loads
+      // for (ULinkerLoad::LoadNameMap: RF_LoadForClient|RF_LoadForServer here) and maps the others to None, which ends a tag list at once. The
+      // editor-only names of a `.dx` (`bHidden`, 0x40010) are the game's own names in a running level, saved with every load flag (0x70010 in each
+      // name of the measured saved levels): found by the original refusing a Play-written file at an actor whose second tag was `bHidden`.
+      entry = { text: source?.text ?? text, flags: (source?.flags ?? 0x10) | LOAD_FLAGS, first: this.sequence++, sourceIndex: source?.index ?? null };
       this.names.set(key, entry);
     }
     return this.finalNames ? this.finalNames.get(key) : 0;

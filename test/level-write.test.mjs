@@ -72,3 +72,16 @@ test('the AI event words keep a receiver\'s best sender as the sender\'s actor h
   r.compact(); r.compact(); r.i32(); r.u8(); r.i32(); r.i32(); r.i32(); r.i32(); r.i32(); r.u32();   // callback .. bestScore
   assert.equal(r.compact(), 9, 'bestSender is the actor\'s export');
 });
+
+test('every written name carries the load flags: the original maps a name without the context to None (an editor-only .dx name such as bHidden, 0x40010, ended a tag list)', () => {
+  const source = { names: [{ name: 'bHidden', flags: 0x40010 }, { name: 'Physics', flags: 0x70010 }, { name: 'Native', flags: 0x4070410 }], imports: [] };
+  const tables = new PackageTables({ sourcePkg: source });
+  for (const text of ['bHidden', 'Physics', 'Native', 'NewName']) tables.name(text);
+  tables.finalize();
+  const flags = Object.fromEntries(tables.nameList.map(entry => [entry.text, entry.flags]));
+  assert.equal(flags.bHidden, 0x70010);
+  assert.equal(flags.Physics, 0x70010);
+  assert.equal(flags.Native, 0x4070410, 'the other bits are kept');
+  assert.equal(flags.NewName, 0x70010);
+  for (const value of Object.values(flags)) assert.equal(value & 0x70000, 0x70000);
+});
