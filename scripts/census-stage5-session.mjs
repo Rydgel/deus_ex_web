@@ -5,7 +5,7 @@ import {Undriven, near, PI, simulatedMsAdvance} from './census-stage5-drivers.mj
 
 import {actorRenderFeedback} from '../src/viewer/actor-render-feedback.mjs';
 
-export async function openSession(map, assets, {travel = null, saveDirectory = null} = {}) {
+export async function openSession(map, assets, {travel = null, saveDirectory = null, frameSeconds = 1 / 60} = {}) {
   const {decodeMap} = await import('../src/unreal/map.mjs');
   const {createGame} = await import('../src/viewer/game.mjs');
   const {createSimSession} = await import('../src/viewer/sim-session.mjs');
@@ -25,8 +25,8 @@ export async function openSession(map, assets, {travel = null, saveDirectory = n
   let travelRequest = null;
   const read = (object, name) => runtime.readNamed(object, name);
   const frame = () => {
-    simulatedMsAdvance(1000 / 60);
-    game.tick(1 / 60);
+    simulatedMsAdvance(1000 * frameSeconds);
+    game.tick(frameSeconds);
     // UGameEngine::Tick's client travel: an OPEN (the Dying player's OPEN DXONLY) ends the level after the next tick; a session opened with
     // `travel` browses instead and the request for the next level waits in c.takeTravel()
     const request = game.clientTravel();
