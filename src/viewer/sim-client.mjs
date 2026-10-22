@@ -63,7 +63,7 @@ export function createSimClient({ onProgress = () => {}, onFrame = null, onFailu
     /** The Save directory changed (a folder picked, saves imported): the worker's directory is replaced; the Load Game screen reads it when it opens. */
     setSaves(saves) { worker.postMessage({ type: 'saves', saves }); },
     /** Build a map's simulation side (sim-host.mjs options, plain). */
-    load: (map, options) => request({ type: 'load', map, options }),
+    load: (map, options, currentFiles = null) => request({ type: 'load', map, options, currentFiles }),
     /** `view`, `reset`, `stateDigest`, `musicStatus` or `musicDrive`, after
      * the frames posted before it. */
     call: (method, args = null) => request({ type: 'call', method, args, clock: clock() }),

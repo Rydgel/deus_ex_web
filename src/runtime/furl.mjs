@@ -105,3 +105,13 @@ export function savedLevelUrl(base, name) {
     op: base.op.filter(option => !PARTIAL_DROPPED.includes(optionKey(option))), portal: base.portal });
   return out;
 }
+
+/** The URL Browse loads a saved game with (`?loadgame=N`, DDeusExGameEngine::Browse 0x10010f4f..0x1001151e): `FURL(&URL, "<SavePath>\\Current\\<MapName>.dxs?load?loadonly?loadgame",
+ * TRAVEL_Absolute)`. TRAVEL_Absolute copies nothing, the text supplies the map and the three options, and the constructor adds the `[DefaultPlayer]`
+ * options. Measured: `LoadMap: ..\Save\Current\01_NYC_UNATCOIsland.dxs?load?loadonly?loadgame?Name=Player?Class=DeusEx.JCDentonMale` (docs/travel.md
+ * "Load game, restart and URL forms"). `mapName` is the slot's DeusExSaveInfo.MapName. */
+export function loadGameUrl(mapName, { defaults = DEFAULT_PLAYER_OPTIONS } = {}) {
+  const out = new Furl({ map: `${SAVE_PATH}\\Current\\${mapName}.${SAVE_EXTENSION}`, op: ['load', 'loadonly', 'loadgame'] });
+  for (const [name, value] of defaults) out.op.push(`${name}=${value}`);
+  return out;
+}

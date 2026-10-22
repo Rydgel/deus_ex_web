@@ -127,6 +127,11 @@ async function handle(data) {
       // disposeAudio), so that batch reaches the worklet before any of the
       // next map's.
       host?.dispose?.(); host = null; loadId = data.id; audio.length = 0; pending = null;
+      // A loaded game's slot files the page read from its storage (travel.mjs `loadgame.fetch`) go into Save\Current before the level is read from there
+      if (data.currentFiles) {
+        const saves = (await import('../runtime/save-directory.mjs')).hostSaveDirectory();
+        for (const file of data.currentFiles) saves.writeFile('Current', file.name, file.bytes);
+      }
       // A level filed in Save\Current (travel.mjs `restore`) is loaded from there, as a package of its own; else the map's .dx
       const restore = data.options?.travel?.arrival?.restore ?? null;
       const filed = restore ? (await import('./restore-asset.mjs')).restoredLevel((await import('../runtime/save-directory.mjs')).hostSaveDirectory(), restore) : null;

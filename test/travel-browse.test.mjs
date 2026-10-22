@@ -79,10 +79,31 @@ test('?restart (M): Current emptied, the level reloaded by its MapName with load
   assert.equal(bare[1].url.map, 'DX');
 });
 
-test('loadgame and network URLs are named stops, not an approximation', () => {
-  const load = browseDecision({ url: parseFurl(null, 'Index?loadgame=77', 0), lastURL: last, level: level(1) });
-  assert.deepEqual(load.map(effect => effect.op), ['boundary']);
-  assert.match(load[0].name, /loadgame/);
+test('loadgame: the measured Browse sequence (LoadGame 77): log lines, Current emptied and refilled from the slot, LoadMap of the slot\'s level (M)', () => {
+  const url = parseFurl(last, '?loadgame=77', 0);
+  assert.equal(String(url), 'Index.dx?loadgame=77?Name=Player?Class=DeusEx.JCDentonMale');
+  const asked = [];
+  const effects = browseDecision({ url, lastURL: last, level: level(1), saveInfo: index => { asked.push(index); return { mapName: '01_NYC_UNATCOIsland' }; } });
+  assert.deepEqual(asked, [77]);
+  // no `Current mission number` line, no player lookup (M)
+  assert.deepEqual(ops(effects), ['Doing loadgame, not load', 'Loading: Package saveInfo', 'deleteSaveGameFiles', 'copySaveGameFiles',
+    'loadMap ..\\Save\\Current\\01_NYC_UNATCOIsland.dxs?load?loadonly?loadgame?Name=Player?Class=DeusEx.JCDentonMale']);
+  assert.deepEqual([effects[3].from, effects[3].to], ['Save0077', 'Current']);
+  assert.equal(effects.at(-1).travelInfo, 'none');
+  assert.deepEqual(effects.at(-1).loadgame, { index: 77, dir: 'Save0077', mapName: '01_NYC_UNATCOIsland', file: '01_NYC_UNATCOIsland.dxs' });
+});
+
+test('loadgame: QuickSave is index -1, a slot with no SaveInfo returns without loading, a session with no save directory stops by name', () => {
+  const quick = browseDecision({ url: parseFurl(last, '?loadgame=-1', 0), lastURL: last, level: level(0), saveInfo: () => ({ mapName: '00_training' }) });
+  assert.equal(quick[3].from, 'QuickSave');
+  const missing = browseDecision({ url: parseFurl(last, '?loadgame=5', 0), lastURL: last, level: level(0), saveInfo: () => null });
+  assert.deepEqual(missing.map(effect => effect.op), ['log', 'loadGameFailed']);
+  const bare = browseDecision({ url: parseFurl(null, 'Index?loadgame=77', 0), lastURL: last, level: level(1) });
+  assert.deepEqual(bare.map(effect => effect.op), ['boundary']);
+  assert.match(bare[0].name, /loadgame/);
+});
+
+test('network URLs are a named stop, not an approximation', () => {
   const network = browseDecision({ url: new Furl({ host: 'example.org', map: 'DX' }), lastURL: last, level: level(1) });
   assert.match(network[0].reason, /multiplayer/);
   assert.throws(() => browseDecision({ url: 'DX', lastURL: last }), TypeError);

@@ -470,7 +470,15 @@ export function createScriptTriggers({
     return flagBase;
   }
 
-  return { get flagBase(){return flagBase;}, handleNative, bindPlayerFlagBase };
+  /** A saved game's FlagBase object (script-restore-objects.mjs adoptFlagBase) becomes the store the player's FlagBase property answers and the FlagBase natives
+   * accept as their receiver: the file's object, with its flags, replaces the empty host store the property was bound to before the level's objects were restored. */
+  function useFlagBase(store) {
+    if (!store || typeof store.getBool !== 'function' || typeof store.setBool !== 'function') throw new TypeError('A FlagBase requires getBool/setBool');
+    flagBase = store;
+    return flagBase;
+  }
+
+  return { get flagBase(){return flagBase;}, handleNative, bindPlayerFlagBase, useFlagBase };
 }
 
 /**

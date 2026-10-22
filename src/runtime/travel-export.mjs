@@ -238,8 +238,10 @@ export function createTravelExporter({ runtime, flagClasses }) {
         if (same(entry.kind, value, defaultValue)) return null;
         const text = exportText({ BoolProperty: 'bool', IntProperty: 'int', ByteProperty: 'byte', FloatProperty: 'float', NameProperty: 'name', StrProperty: 'string' }[entry.kind],
           value, { enumNames: enumNamesOf(entry.property) });
-        if (/[\r\n]/.test(text)) throw unsupported(node, entry, 'holds a multi-line string, whose `\\` encoding is not exercised');
-        return `${label}=${text}`;
+        // ExportTravel replaces every newline of a value with `\` so the value stays on one line (measured on the real notes of Save0001: a datacube's
+        // "code:    \n0012  \n..." is written `code:    \0012  \...`, docs/travel.md "Play, step 4"). A carriage return was not seen in any text: stop by name.
+        if (/\r/.test(text)) throw unsupported(node, entry, 'holds a carriage return, whose encoding is not exercised');
+        return `${label}=${text.replaceAll('\n', '\\')}`;
       }
       case 'StructProperty': {
         const struct = graph.slotOf(entry.property, 0x5c);

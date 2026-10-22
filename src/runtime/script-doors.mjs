@@ -47,6 +47,7 @@ import { createTravelExporter, loadFlagClasses } from './travel-export.mjs';
 import { createTravelImporter } from './travel-import.mjs';
 import { decodeAiEvents } from './ai-events-payload.mjs';
 import { createLevelSaver } from './travel-save.mjs';
+import { PLAIN_SAVED_OBJECTS, NATIVE_SAVED_OBJECTS, isSavedFlag, isSavedFlagBase, adoptNativeObject, adoptFlagBase, fillRestoredFlagStore } from './script-restore-objects.mjs';
 import { handleOf } from './script-object-handles.mjs';
 
 const f = Math.fround;
@@ -473,12 +474,15 @@ export async function createScriptDoors({
   // The travel that brought the player here (travel.mjs request): the URL's portal and options for Login and InitGame, the travel text for
   // SpawnPlayActor's import. Null for a cold open.
   const arrival=travel?.arrival?{...travel.arrival,optionsText:travel.arrival.options.map(option=>`?${option}`).join('')}:null;
+  // `?load?loadonly?loadgame` (travel.mjs loadGame): the saved player is already in the level with its whole object graph.
+  const loadedGame=Boolean(restore&&arrival?.options.some(option=>option.toLowerCase()==='loadgame'));
   // ULevel::SpawnPlayActor -> DeusExGameInfo.Login (docs/script-player-login.md).
   function loginPlayer(){
     loggingIn=true;
     try{if(!playerLogin.login())throw new Error(`Original Login failed: ${playerLogin.error}`);}
     finally{loggingIn=false;}
-    playerStartup=preparedPlayerStartup.complete(playerActor,{imported:playerLogin.imported});
+    // A loaded game's subsystems are the file's (no ResetPlayerToDefaults, no import): the graph is verified without the cold defaults, as an imported one is.
+    playerStartup=preparedPlayerStartup.complete(playerActor,{imported:playerLogin.imported||loadedGame});
     // The player's global UObject index as measured in this map's open
     // capture (build-map-object-indices.mjs): the channel ids of its sounds.
     const playerIndex=mapPlayerIndex(asset?.name);
@@ -1906,13 +1910,16 @@ export async function createScriptDoors({
     }
     savedStates.clear();
   }
-  /** Give each saved non-actor object its class storage, native record and saved properties (after the registry and the spawn world exist). */
+  /** Give each saved non-actor object its class storage, native record and saved properties (after the registry and the spawn world exist). A saved game's
+   * level holds the player's whole object graph (script-restore-objects.mjs): the flag store, notes, goals, keys, logs and the conversation history. */
   async function restoreScriptObjects() {
+    const flagObjects = [];
     for (const identity of restoredObjects) {
       const entry = asset.pkg.exports[identity.index - 1];
-      if (/^extension\.flag/.test(lower(`${entry.className}`.startsWith('Flag') ? `extension.${entry.className}` : entry.className)))
-        throw new Error(`A saved level holds ${entry.className} ${entry.name}: restoring a saved game's flag store is travel step 4 (docs/travel.md)`);
       const cls = await runtime.loadClass(asset, entry.classIndex);
+      const key = cls.record.key, history = key === 'consys.conhistory' || key === 'consys.conhistoryevent';
+      if (!history && !isSavedFlag(key) && !PLAIN_SAVED_OBJECTS.has(key) && !(key in NATIVE_SAVED_OBJECTS))
+        throw new Error(`Restoring a saved ${entry.className} (${entry.name}) is not implemented: only the flag store, notes, goals, keys, logs and the conversation history are`);
       await prepareNpcClass(cls);
       runtime.attach(identity, cls);
       runtime.instance(identity).state = null;   // an Object (not an Actor) has no StateFrame
@@ -1920,9 +1927,19 @@ export async function createScriptDoors({
       identity.properties = properties.map(({ data, ...property }) => ({ ...property, byteLength: data.length, data }));
       for (const field of classFields(cls)) await runtime.field(field);
       runtime.applyInitialProperties(identity, await prepareMapProperties(runtime, asset, identity, cls, actorByIndex));
-      if (cls.record.key === 'consys.conhistory' || cls.record.key === 'consys.conhistoryevent')
-        adoptHistoryObject(runtime, level, identity, cls, cls.record.key === 'consys.conhistoryevent', entry);
-      else throw new Error(`Restoring a saved ${entry.className} (${entry.name}) is not implemented: only the conversation history objects are`);
+      if (history) adoptHistoryObject(runtime, level, identity, cls, key === 'consys.conhistoryevent', entry);
+      else if (key in NATIVE_SAVED_OBJECTS) adoptNativeObject(runtime, level, identity, cls, entry, NATIVE_SAVED_OBJECTS[key]);
+      else if (isSavedFlag(key)) flagObjects.push({ identity, cls, entry, key });
+    }
+    // The flag store: the saved FlagBase is the host store, filled from the saved chains
+    const keyOfFlag = flag => runtime.instance(flag).cls.record.key;
+    const playersBase = actorByIndex.get(restore?.player?.values?.FlagBase) ?? null;
+    for (const { identity, cls, entry, key } of flagObjects) {
+      if (!isSavedFlagBase(key)) continue;
+      adoptFlagBase(runtime, level, identity, cls, entry);
+      fillRestoredFlagStore(runtime, identity, keyOfFlag);
+      // the pawn's FlagBase property was bound to the trigger natives' store before the file's objects existed: the file's object takes its place
+      if (identity === playersBase) triggerActions.useFlagBase(identity);
     }
   }
   function restoreAiEvents() {

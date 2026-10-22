@@ -11,14 +11,18 @@
  *   {op: 'pruneTravelActors'}          PruneTravelActors (DeusEx.dll 0x1000f9b0): the player's managers, flag base and carried decoration go
  *   {op: 'saveCurrentLevel', position} SaveCurrentLevel(-2) (0x1000fac0): the level left is written to `Save\Current\<MapName>.dxs`
  *   {op: 'loadMap', url, travelInfo, saved}  LoadMap(URL, NULL, TravelInfo, Error); `travelInfo` 'argument' (the Browse argument) or 'level'
- *                                      (a ?restart reuses the TravelInfo the level was loaded with, which the tick passes). `saved`, only in
+ *                                      (a ?restart reuses the TravelInfo the level was loaded with, which the tick passes), or 'none' (a loaded game: the
+ *                                      argument is NULL and the level keeps the TravelInfo its file holds; `loadgame`: {index, dir, mapName, file}). `saved`, only in
  *                                      the same-mission branch: {name, file, url}; after the save, a level filed as `file` in `Current` is loaded
  *                                      from there with `url` (FURL(&URL, path, TRAVEL_Partial), Portal copied back), else `url` is loaded fresh
+ *   {op: 'copySaveGameFiles', from, to}  CopySaveGameFiles(src, dst) (0x10010000): every `*.dxs` of the slot directory copied into `Current`
+ *   {op: 'loadGameFailed', index, reason}  `?loadgame=N` whose LoadSaveInfo(N) found no SaveInfo (0x100108a0 returned null): Browse returns 0, the level goes on
  *   {op: 'boundary', name, reason}     a branch that is not implemented; execution stops there
  *
  * The retry after a failed LoadMap (the old map's name replaces URL.Map, 0x10011e38) is not part of the decision: a failed
  * load is a boundary in the executor (docs/travel.md "Unresolved" 9). */
-import { Furl, savedLevelUrl, SAVE_EXTENSION } from './furl.mjs';
+import { Furl, savedLevelUrl, loadGameUrl, SAVE_EXTENSION } from './furl.mjs';
+import { saveSlotDirectory } from './save-directory.mjs';
 
 /** DDeusExGameEngine::GetNextMissionNumber 0x10011ef0: -1 for an empty name or when the first two characters are not both
  * digits, else atoi(Left(name, 2)). (`dx`, `dxonly`, `entry` are -1; `00_Training` is 0; `99_Endgame1` is 99.) */
@@ -41,8 +45,9 @@ const boundary = (name, reason) => ({ op: 'boundary', name, reason });
  * @param {{info: ({missionNumber:number, mapName:string}|null), urlMap: string}|null} level  GLevel: its DeusExLevelInfo
  *        (missionNumber, MapName) and URL.Map; null before the first level is loaded
  * @param {{bStartingNewGame: boolean}|null} player  Client->Viewports(0)->Actor, null-safe
+ * @param {((index:number) => ({mapName:string}|null))|null} saveInfo  LoadSaveInfo(index) (0x100108a0): the slot's SaveInfo, or null; absent: `?loadgame=` is a boundary
  */
-export function browseDecision({ url, lastURL, level = null, player = null }) {
+export function browseDecision({ url, lastURL, level = null, player = null, saveInfo = null }) {
   const effects = [];
   if (!(url instanceof Furl)) throw new TypeError('browseDecision requires a Furl');
   // 2. ?restart: the level reloaded from its file with `loadonly` (the travel text is not read back), `Current` emptied.
@@ -53,9 +58,20 @@ export function browseDecision({ url, lastURL, level = null, player = null }) {
     effects.push({ op: 'deleteSaveGameFiles' }, { op: 'loadMap', url: next, travelInfo: 'level' });
     return effects;
   }
-  // 3. ?loadgame=N: the slot copied over `Current`, the saved level loaded (Stage 6, docs/travel.md order step 4).
+  // 3. ?loadgame=N (0x10010f4f..0x1001151e): `Doing loadgame, not load`; LoadSaveInfo(N) (null: return 0); `Current` emptied, the slot copied into it (QuickSave for
+  //    DirectoryIndex -1, else Save%04d); LoadMap(FURL(&URL, "<SavePath>\\Current\\<MapName>.dxs?load?loadonly?loadgame", TRAVEL_Absolute), NULL TravelInfo).
   if (url.getOption('loadgame=') !== null) {
-    effects.push(boundary('DDeusExGameEngine::Browse loadgame', 'loading a saved game is not implemented (docs/travel.md order step 4)'));
+    if (typeof saveInfo !== 'function') {
+      effects.push(boundary('DDeusExGameEngine::Browse loadgame', 'this session has no save directory to read a slot from'));
+      return effects;
+    }
+    const index = parseInt(url.getOption('loadgame='), 10) | 0;
+    effects.push({ op: 'log', text: 'Doing loadgame, not load' });
+    const info = saveInfo(index);
+    if (!info?.mapName) { effects.push({ op: 'loadGameFailed', index, reason: info ? 'the SaveInfo names no map' : 'no SaveInfo.dxs' }); return effects; }
+    const dir = saveSlotDirectory(index);
+    effects.push({ op: 'log', text: 'Loading: Package saveInfo' }, { op: 'deleteSaveGameFiles' }, { op: 'copySaveGameFiles', from: dir, to: 'Current' });
+    effects.push({ op: 'loadMap', url: loadGameUrl(info.mapName), travelInfo: 'none', loadgame: { index, dir, mapName: info.mapName, file: `${info.mapName}.${SAVE_EXTENSION}` } });
     return effects;
   }
   // 4. A URL that is neither `load=` nor local-internal ends in ServerOpen / InvalidURL (multiplayer, unsupported).

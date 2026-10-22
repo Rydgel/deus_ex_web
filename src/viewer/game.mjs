@@ -25,6 +25,7 @@ import { isMovingLightCandidate } from '../runtime/dynamic-lighting.mjs';
 import { loadTraceKernel } from '../runtime/trace-kernel.mjs';
 import { lightGlobals } from '../runtime/light-globals.mjs';
 import { createTravelStep } from '../runtime/travel.mjs';
+import { readSavedTravelInfo } from '../runtime/level-travel-info.mjs';
 import { Furl, DEFAULT_PLAYER_OPTIONS } from '../runtime/furl.mjs';
 
 /** Bind decoded resources to the renderer-independent simulation. */
@@ -312,7 +313,8 @@ export async function createGame(map, asset, assets, { randomSeed = Math.floor(D
   // Map travel (docs/travel.md): a session created with `travel` runs ClientTravel as recovered and the tick's travel step browses to the
   // next level; one without keeps the named stop (ClientTravelBoundary). `travel.arrival` is the travel that brought the player here,
   // `travel.lastURL` the engine's LastURL (docs/travel.md "Unresolved" 7).
-  playerScene.level.travelInfo = new Map(travel?.arrival?.travelInfo ?? []);
+  // LoadMap(URL, NULL, ...) of a loaded game keeps the TravelInfo the saved level holds (docs/travel.md "Load game, restart and URL forms"); a travel passes its own.
+  playerScene.level.travelInfo = new Map(restore && travel?.arrival?.loadgame ? readSavedTravelInfo(map.pkg, map.level) : travel?.arrival?.travelInfo ?? []);
   const travelStep = travel ? createTravelStep({ runtime: doors.scriptRuntime.runtime, level: playerScene.level,
     viewport: () => playerScene.level.engine.client.viewports[0], exporter: doors.scriptRuntime.travelExporter,
     store: doors.scriptRuntime.saveStore, log: doors.scriptRuntime.logLine, levelSaver: doors.scriptRuntime.levelSaver,

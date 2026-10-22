@@ -112,7 +112,15 @@ export function createSaveDirectory({saves = [], freeSpaceBytes = null} = {}) {
     remove(name) { return slots.delete(name); },
     /** Replace every slot: the page's listing of its storage reaching the simulation (src/viewer/save-persistence.mjs; the simulation worker has no
      * storage of its own, the page sends the directory at startup and again whenever a folder, an import or a write changes it). */
-    replace(list) { slots.clear(); for (const save of list) directory.put(save); return directory; },
+    replace(list) {
+      // `Current` is the simulation's own scratch directory (the levels a mission has left, a loaded slot's copy): the page's listing of its storage replaces
+      // the slots, not it, unless the listing names it.
+      const current = slots.get('Current');
+      slots.clear();
+      for (const save of list) directory.put(save);
+      if (current && !slots.has('Current')) slots.set('Current', current);
+      return directory;
+    },
     directories: () => [...slots.keys()].sort((a, b) => a.toLowerCase() < b.toLowerCase() ? -1 : a.toLowerCase() > b.toLowerCase() ? 1 : 0),
     files: name => [...(slotOf(name)?.files.values() ?? [])].map(file => ({name: file.name, size: file.size})),
     info: name => slotOf(name)?.info ?? null,
