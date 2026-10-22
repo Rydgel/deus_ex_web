@@ -2314,7 +2314,7 @@ export async function createScriptDoors({
     const flagClasses=await loadFlagClasses(runtime,assets);
     saveFlagClasses=flagClasses;
     travelExporter=createTravelExporter({runtime,flagClasses});
-    travelImporter=createTravelImporter({runtime,assets,level,exporter:travelExporter,log:logLine,prepareClass:prepareNpcClass,
+    travelImporter=createTravelImporter({runtime,assets,level,exporter:travelExporter,log:logLine,prepareClass:prepareNpcClass,prepareItemMeshes:prepareItemViewMeshes,
       flagBaseOf:player=>runtime.readNamed(player,'FlagBase')});
   }
   playerLogin=await preparePlayerLogin({runtime,assets,level,levelInfo,

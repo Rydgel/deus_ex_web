@@ -1,0 +1,35 @@
+# Hong Kong lifts (mission 6): the Helibase <-> Market pair, then Market again; an empty SendPlayer (docs/travel.md "Play, step 5, second part").
+# Run: scripts/travel-probe.sh tr-a @scripts/travel-steps/tr-a-hongkong.steps    (a session starts on DX.dx, the logo map)
+cmd:set DeusEx.JCDentonMale bCheatsEnabled True
+cmd:set LevelInfo bPlayersOnly True
+cmd:LocalTravel 06_HongKong_Helibase
+arrive:06_hongkong_helibase$
+cmd:set LevelInfo bPlayersOnly True
+snap:a1-helibase
+props:JCDentonMale:a1-player:Location:0x114:f3,Rotation:0x120:i3,ViewRotation:0x3dc:i3,Health:0x428:u32
+savecopy:a1
+# the Helibase lift: MapExit0 DestMap 06_HongKong_WanChai_Market#cargoup (the Helibase is filed)
+cmd:LocalTravel 06_HongKong_WanChai_Market#cargoup
+arrive:06_hongkong_wanchai_market$
+cmd:set LevelInfo bPlayersOnly True
+snap:a2-market
+props:JCDentonMale:a2-player:Location:0x114:f3,Rotation:0x120:i3,ViewRotation:0x3dc:i3,Health:0x428:u32
+savecopy:a2
+# the Market lift back: MapExit3 DestMap 06_HongKong_Helibase#HeliBase (the Helibase is restored, the Market filed)
+cmd:LocalTravel 06_HongKong_Helibase#HeliBase
+arrive:06_hongkong_helibase[.]dxs$
+cmd:set LevelInfo bPlayersOnly True
+snap:a3-helibase-restored
+props:JCDentonMale:a3-player:Location:0x114:f3,Rotation:0x120:i3,ViewRotation:0x3dc:i3,Health:0x428:u32
+savecopy:a3
+# a MapExit with no DestMap (12_Vandenberg_Gas MapExit6/7, 14_Vandenberg_Sub MapExit0): SendPlayer(Player, "") -> ClientTravel("")
+cmd:LocalTravel
+wait:6
+snap:a4-empty
+savecopy:a4
+cmd:LocalTravel 06_HongKong_WanChai_Market#cargoup
+arrive:06_hongkong_wanchai_market[.]dxs$
+cmd:set LevelInfo bPlayersOnly True
+snap:a5-market-restored
+props:JCDentonMale:a5-player:Location:0x114:f3,Rotation:0x120:i3,ViewRotation:0x3dc:i3,Health:0x428:u32
+savecopy:a5

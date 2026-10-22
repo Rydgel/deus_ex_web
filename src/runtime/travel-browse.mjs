@@ -93,7 +93,8 @@ export function browseDecision({ url, lastURL, level = null, player = null, save
       // Within one mission: the level left is filed in `Current` (PruneTravelActors, SaveCurrentLevel(-2)) and a level filed for the
       // destination is restored instead of the fresh .dx (0x10011716..): which of the two happens depends on the directory after the save, so
       // the executor looks (a map may be filed under the name of the level it just left).
-      const name = String(nextMap).replace(/\.dx$/i, '');
+      // The filed level's name: `nextMap` cut at the first `.dx` (appStrstr, case-sensitive; Left(index), 0x100119d7..0x10011a3c), so `Map.dx ` names `Map`
+      const dx = String(nextMap).indexOf('.dx'), name = dx >= 0 ? String(nextMap).slice(0, dx) : String(nextMap);
       effects.push({ op: 'pruneTravelActors' }, { op: 'saveCurrentLevel', position: -2 });
       effects.push({ op: 'loadMap', url, travelInfo: 'argument', saved: { name, file: `${name}.${SAVE_EXTENSION}`, url: savedLevelUrl(url, name) } });
       return effects;

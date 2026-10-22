@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { Furl, parseFurl, UnsupportedFurlForm, TRAVEL_ABSOLUTE, TRAVEL_PARTIAL, TRAVEL_RELATIVE, DEFAULT_MAP } from '../src/runtime/furl.mjs';
+import { Furl, parseFurl, mapFileStem, UnsupportedFurlForm, TRAVEL_ABSOLUTE, TRAVEL_PARTIAL, TRAVEL_RELATIVE, DEFAULT_MAP } from '../src/runtime/furl.mjs';
 
 const last = new Furl({ map: 'DX', portal: 'stale', op: ['Name=Player', 'Class=DeusEx.JCDentonMale', 'loadonly', 'load=x', 'push'] });
 
@@ -41,8 +41,22 @@ test('options answer HasOption and GetOption as Browse reads them', () => {
 });
 
 test('the installed forms that are not ported are refused by name, not approximated', () => {
-  for (const text of ['04_NYC_UNATCOIsland.dx', '15_area51_bunker.dx #bunker_start', '14_Oceanlab_silo.dx #frontgate', '..\\Save\\Current\\Map.dxs?load',
-    'unreal://host/Map', 'Map#Portal?Name=Player', 'Two Words'])
+  for (const text of ['..\\Save\\Current\\Map.dxs?load', 'unreal://host/Map', 'Map#Portal?Name=Player', 'Two Words', 'Map.dx extra', 'Map.dxx', 'Map #Portal', 'Map#Por tal'])
     assert.throws(() => parseFurl(null, text, TRAVEL_RELATIVE), UnsupportedFurlForm, text);
   assert.throws(() => parseFurl(null, 'Map', 7), TypeError);
+});
+
+test('the pure filename heads of the installed destinations keep their extension and blank in Map (measured URL.Map) and name the file without them', () => {
+  const base = new Furl({ map: 'DX', portal: '' });
+  const cases = [['04_NYC_UNATCOIsland.dx', '04_NYC_UNATCOIsland.dx', '', '04_NYC_UNATCOIsland'],
+    ['14_Vandenberg_sub.dx#subbay', '14_Vandenberg_sub.dx', 'subbay', '14_Vandenberg_sub'],
+    ['15_area51_bunker.dx #bunker_start', '15_area51_bunker.dx ', 'bunker_start', '15_area51_bunker'],
+    ['14_OceanLab_UC.dx #UC', '14_OceanLab_UC.dx ', 'UC', '14_OceanLab_UC']];
+  for (const [text, map, portal, stem] of cases) {
+    const url = parseFurl(base, text, TRAVEL_RELATIVE);
+    assert.deepEqual([url.map, url.portal, mapFileStem(url.map)], [map, portal, stem], text);
+  }
+  // FURL::String: the map, each option behind a `?`, then `#` and the portal
+  assert.equal(parseFurl(base, '15_area51_bunker.dx #bunker_start', TRAVEL_RELATIVE).toString(), '15_area51_bunker.dx ?Name=Player?Class=DeusEx.JCDentonMale#bunker_start');
+  assert.equal(mapFileStem('00_Training'), '00_Training');
 });

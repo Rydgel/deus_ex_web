@@ -52,7 +52,7 @@ export function findTravelText(pairs, name) {
   return found[1];
 }
 
-export function createTravelImporter({ runtime, assets, level, exporter, log, prepareClass, flagBaseOf }) {
+export function createTravelImporter({ runtime, assets, level, exporter, log, prepareClass, prepareItemMeshes = null, flagBaseOf }) {
   const classes = new Map();   // lower class path -> linked class | null
   const isChildOf = (cls, key) => { for (let c = cls; c; c = c.base) if (c.record.key === key) return true; return false; };
 
@@ -77,6 +77,9 @@ export function createTravelImporter({ runtime, assets, level, exporter, log, pr
     for (const record of records) {
       const cls = await loadClassPath(record.class);
       if (cls && isChildOf(cls, 'engine.actor')) await prepareClass(cls);
+      // A carried item draws and animates over the view meshes its class names (Actor.Tick over the current Mesh, PlayAnim on selection): the decoded
+      // resources are readiness only, as the pickup path prepares them for a map item (script-doors.mjs prepareItemViewMeshes).
+      if (cls && prepareItemMeshes && isChildOf(cls, 'engine.inventory')) await prepareItemMeshes(cls);
     }
     return { records, text, key };
   }
