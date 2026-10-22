@@ -2,14 +2,15 @@
  * writes it (docs/travel.md "SaveGame: the SaveInfo", docs/save-storage.md "The snapshot"): a version-68 package of three exports with no Outer,
  * the 160 x 120 snapshot's `Texture` and `Palette` and the `DeusExSaveInfo` object.
  *
- * Measured on three files of the original (the Wine session's Save0077, the desktop saves Save0001 and QuickSave of 2026-09), all with the
- * same layout:
+ * Measured on 44 files of the original: the Wine session's Save0077, the desktop saves Save0001 and QuickSave of 2026-09, and 41 slots of other players'
+ * games from the internet (`.work/internet-saves`, scripts/validate-save-info-corpus.mjs reproduces every one byte for byte), all with the same layout:
  *   - 33 names: `None`, then the property names and class names of the three objects in the order of the original process's FName table, then
- *     the three object names in export order (`Texture0`, `Palette0`, `MyDeusExSaveInfo`: the engine's unique-name counters gave the numbers; the
- *     two older files have `Palette1`/`Texture1` and `Palette3`/`Texture3`). Names are flagged 0x70010; the ones the engine registers natively carry
- *     0x4000000 (`None`, `Class`, `Package` also 0x400). `saveInfo` is in the table without being used: the package's own name, tagged as the
- *     Outer. A name no tag uses is left out of Play's table (what the original does for the properties a default hides is **unverified**: the
- *     measured files tag every property but `bCheatsEnabled`).
+ *     the three object names (`Texture0`, `Palette0`, `MyDeusExSaveInfo`: the engine's unique-name counters gave the numbers) in an order that is the
+ *     process's history, not the export order: Texture, Palette, SaveInfo in the first save of a process (Save0077); across the 41 internet saves
+ *     Palette before Texture 23 times, Texture before Palette 18, MyDeusExSaveInfo between them 3 times and never first. Names are flagged 0x70010; the ones the
+ *     engine registers natively carry 0x4000000 (`None`, `Class`, `Package` also 0x400). `saveInfo` is in the table without being used: the package's own
+ *     name, tagged as the Outer. A name no tag uses is absent: a Hour or Second of 0 (the class default, not stored) leaves a 32-name table (4 of the 41).
+ *     `bCheatsEnabled` is the one name whose place was not measured (no file had it set).
  *   - 5 imports (Engine, Engine.Texture, DeusEx, DeusEx.DeusExSaveInfo, Engine.Palette), 3 exports with Outer 0: the Texture (flags 0x70000), the
  *     Palette (0x70000) and MyDeusExSaveInfo (0x70004). The order of the exports is that of the objects in GObjObjects: Texture before Palette in the
  *     Wine session's file, Palette before Texture in the older two.
@@ -63,12 +64,16 @@ const orderSource = () => ({
  * @param textureName, paletteName   the unique names the engine's counters gave the two objects
  * @param textureFirst  whether the Texture precedes the Palette in the export table (GObjObjects order)
  * @param internalTime  [low, high] the two ints of appSeconds()'s double
+ * @param nameTail      the order of the three object names at the end of the name table (default: the Texture's, the Palette's, MyDeusExSaveInfo): the original's is the
+ *                      order of their FName indices, which depends on the process's history (41 saved games show the Texture and Palette names in both orders and
+ *                      MyDeusExSaveInfo between or after them, never first); Play cannot reproduce it and takes the order of a first save in a process (Save0077)
  */
 export function writeSaveInfo(options) { return writeSaveInfoDetailed(options).bytes; }
 
 /** writeSaveInfo, and where the snapshot's indices lie in the file (`pixelOffset`, `pixelLength`; null without a snapshot): the picture can be
  * replaced in place later, since nothing else in the package depends on its values. */
-export function writeSaveInfoDetailed({ properties, snapshot = null, guid, textureName = 'Texture0', paletteName = 'Palette0', textureFirst = true, internalTime = [0, 0] }) {
+export function writeSaveInfoDetailed({ properties, snapshot = null, guid, textureName = 'Texture0', paletteName = 'Palette0', textureFirst = true, internalTime = [0, 0],
+  nameTail = null }) {
   if (!guid || guid.length !== 16) throw new TypeError('A package GUID is 16 bytes');
   const tables = new PackageTables({ sourcePkg: orderSource() });
   const packageKey = name => tables.importEntry({ classPackage: 'Core', className: 'Package', outerKey: '', name });
@@ -119,7 +124,9 @@ export function writeSaveInfoDetailed({ properties, snapshot = null, guid, textu
   // Pass 1 learns the names and imports the payloads use; the names of the objects follow in export order.
   for (const entry of exports) writers[entry.kind](new ByteWriter(64));
   tables.name('saveInfo');                                 // the Outer's name: tagged, in the table, used by no entry
-  for (const entry of exports) tables.name(entry.name);
+  const tail = nameTail ?? [snapshot ? textureName : null, snapshot ? paletteName : null, 'MyDeusExSaveInfo'].filter(Boolean);
+  if (tail.length !== exports.length || exports.some(entry => !tail.includes(entry.name))) throw new Error(`the name tail ${tail} is not the exports' names`);
+  for (const name of tail) tables.name(name);
   tables.finalize();
   // Pass 2 writes the bytes with the final indices. The Texture's lazy array records the file position after its bytes, so each payload is
   // placed as buildPackage places it: header (64 bytes), the name table, then the payloads in export order.

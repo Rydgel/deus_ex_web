@@ -52,9 +52,17 @@ const failureOf = error => { const result = error instanceof StorageError ? erro
  * The directory is built and listed before this resolves.
  */
 export async function openSavePersistence({ mode = 'off', openStorage = openBrowserStorage, served = null, parseInfo = parseSaveInfo,
-  showDirectoryPicker = globalThis.showDirectoryPicker?.bind(globalThis) ?? null, onChange = () => {} } = {}) {
-  let storage = null, directory = null, handle = null, signature = '';
-  const state = { source: 'memory', browser: { kind: null, message: null }, folder: null, message: null, error: null, saveError: null };
+  showDirectoryPicker = globalThis.showDirectoryPicker?.bind(globalThis) ?? null, onChange = () => {},
+  // StorageManager.persist(): asked once, after the first save the browser's storage keeps (a prompt in Firefox, a grant by engagement in Chromium); null: not asked
+  requestPersist = () => globalThis.navigator?.storage?.persist?.() ?? null } = {}) {
+  let storage = null, directory = null, handle = null, signature = '', persistAsked = false;
+  const state = { source: 'memory', browser: { kind: null, message: null }, folder: null, message: null, error: null, saveError: null, persisted: null };
+  /** After the first save kept in the browser's own storage: ask that it be exempt from eviction (the answer is only reported; a refusal changes nothing). */
+  const askPersistence = async () => {
+    if (persistAsked || state.source !== 'browser') return;
+    persistAsked = true;
+    try { const answer = await requestPersist(); state.persisted = answer === null || answer === undefined ? null : Boolean(answer); } catch { state.persisted = null; }
+  };
   const keepsServed = Boolean(served) && mode !== 'off';
   const layer = top => keepsServed ? createLayeredSaveBackend(top, createServedSaveBackend(served)) : top;
   const list = backend => createStoredSaveDirectory({ backend: layer(backend), parseInfo });
@@ -63,6 +71,8 @@ export async function openSavePersistence({ mode = 'off', openStorage = openBrow
     folder: state.folder ? { ...state.folder } : null, browser: { ...state.browser }, message: state.message, error: state.error,
     // the last save the simulation made that the storage refused (cleared by the next one it takes): {kind, message, slot}
     saveError: state.saveError ? { ...state.saveError } : null,
+    // whether the browser promised not to evict the page's storage (null: not asked, or it cannot say)
+    persisted: state.persisted,
     slots: directory ? directory.directories().filter(dir => /^(Save\d+|QuickSave)$/i.test(dir) && directory.info(dir)).length : 0,
   });
   const notify = () => onChange(status());
@@ -118,7 +128,9 @@ export async function openSavePersistence({ mode = 'off', openStorage = openBrow
     commitSlot: (dir, files) => action(async () => {
       try { await directory.replaceDir(dir, files); }
       catch (error) { const failure = failureOf(error); state.saveError = { ...failure, slot: dir }; signature = signatureOf(directory); notify(); throw folderError(error); }
-      state.saveError = null; signature = signatureOf(directory); notify();
+      state.saveError = null; signature = signatureOf(directory);
+      await askPersistence();
+      notify();
     }),
     /** DeleteGame: the slot's directory and its files. */
     removeSlot: dir => action(async () => {

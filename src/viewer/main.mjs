@@ -1053,7 +1053,7 @@ async function setFiles(files) {
       // a config file the game wrote: the page keeps it (config-store.mjs accept -> the storage)
       onConfig: record => configStore?.accept(record.leaf, record),
       // a save the game finished or deleted: the storage keeps it (docs/save-storage.md "Writing a save")
-      onSave: message => { void keepSimSave(message); } });
+      onSave: message => { keepSimSave(message).catch(() => {}); } });   // (a refusal is said by keepSimSave itself)
     const flags = Object.fromEntries(Object.keys(globalThis).filter(key => key.startsWith('DEUS_EX_')).map(key => [key, globalThis[key]]));
     await simClient.init(flags, files.map(file => ({ path: file.path, ...(file.file ? { file: file.file } : {}), ...(file.url ? { url: file.url } : {}) })),
       configStore ? configStore.snapshot() : null, (await savesReady) ? savePersistence.simSaves() : null);
@@ -1761,7 +1761,10 @@ function status() {
 // A small read-only diagnostic hook also makes browser regressions reproducible.
 window.deusExViewer = { status,
 /** The page's save persistence (save-persistence.mjs) for the specs: its status, the listing read again, the Saves window. */
-saves: { status: () => savePersistence?.status() ?? null, refresh: () => savePersistence?.refresh() ?? Promise.resolve(false), open: () => savesUi.open(), ready: () => savesReady.then(() => true) },
+saves: { status: () => savePersistence?.status() ?? null, refresh: () => savePersistence?.refresh() ?? Promise.resolve(false), open: () => savesUi.open(), ready: () => savesReady.then(() => true),
+  /** The stored directories and their files ({dir, files: [{name, size}]}) and one file's bytes (an array): what the specs read back of a save. */
+  list: () => savePersistence ? savePersistence.directory.directories().map(dir => ({ dir, files: savePersistence.directory.files(dir) })) : [],
+  read: async (dir, name) => { const bytes = await savePersistence?.directory.read(dir, name); return bytes ? Array.from(bytes) : null; } },
 /** The page's procedural textures held at the original's state (procedural-textures.mjs `hold`): {kind, pixels: {name: hex}} or null. */
 proceduralHold(spec) { return sharedProceduralTextures().hold(spec); },
 /** The page's procedural textures: key, kind, size, GlobalPhase and a pixel checksum each. */

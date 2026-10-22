@@ -55,6 +55,23 @@ test('defaults are not stored; without a snapshot the package holds only the Sav
   assert.equal(info.snapshot, null);
 });
 
+test('the order of the object names at the end of the name table is the caller\'s (process history), the rest is fixed', () => {
+  const picture_ = { pitch: 256, height: 128, data: picture() };
+  const names = nameTail => parsePackage(writeSaveInfo({ properties: PROPERTIES, snapshot: picture_, guid, nameTail })).names.map(entry => entry.name).slice(30);
+  assert.deepEqual(names(null), ['Texture0', 'Palette0', 'MyDeusExSaveInfo']);
+  assert.deepEqual(names(['Palette0', 'Texture0', 'MyDeusExSaveInfo']), ['Palette0', 'Texture0', 'MyDeusExSaveInfo']);
+  assert.deepEqual(names(['Texture0', 'MyDeusExSaveInfo', 'Palette0']), ['Texture0', 'MyDeusExSaveInfo', 'Palette0']);
+  assert.throws(() => names(['Texture0', 'Palette0']), /name tail/);
+});
+
+test('a time stamp field of 0 is not stored and its name is not in the table (32 names, as 4 of the 41 internet saves have)', () => {
+  const bytes = writeSaveInfo({ properties: { ...PROPERTIES, Hour: 0 }, snapshot: { pitch: 256, height: 128, data: picture() }, guid });
+  const pkg = parsePackage(bytes);
+  assert.equal(pkg.names.length, 32);
+  assert.equal(pkg.names.some(entry => entry.name === 'Hour'), false);
+  assert.equal(parseSaveInfo(bytes).properties.Hour, undefined);
+});
+
 const MEASURED = '../.work/travel';
 const real = new URL(`${MEASURED}/dxs/save77-SaveInfo.dxs`, import.meta.url);
 test('given the original\'s GUID, time, pixels and names, the writer reproduces the Wine session\'s Save0077 SaveInfo.dxs byte for byte', { skip: !existsSync(real) }, () => {
