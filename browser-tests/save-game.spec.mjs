@@ -16,6 +16,31 @@ const ready = (page, name) => page.waitForFunction(name => { const s = window.de
 const slots = page => page.evaluate(() => window.deusExViewer.saves.list());
 const readBytes = async (page, dir, name) => Uint8Array.from(await page.evaluate(([dir, name]) => window.deusExViewer.saves.read(dir, name), [dir, name]));
 
+/** The picture the Load Game screen shows in its snapshot window, read from the drawing buffer (browser-tests/save-folder.spec.mjs has the same). */
+async function shownPicture(page) {
+  const centre = (await probe(page, { op: 'center', field: 'winSnapshot' })).result;
+  const rect = { x: Math.round(centre.x - centre.w / 2), y: Math.round(centre.y - centre.h / 2), w: Math.round(centre.w), h: Math.round(centre.h) };
+  for (let attempt = 0; attempt < 20; attempt++) {
+    const data = await page.evaluate(rect => new Promise(resolve => requestAnimationFrame(() => {
+      const copy = document.createElement('canvas'); copy.width = rect.w; copy.height = rect.h;
+      const context = copy.getContext('2d', { willReadFrequently: true });
+      context.drawImage(document.querySelector('#scene'), rect.x, rect.y, rect.w, rect.h, 0, 0, rect.w, rect.h);
+      resolve(Array.from(context.getImageData(0, 0, rect.w, rect.h).data));
+    })), rect);
+    if (data.some(value => value !== 0)) return { image: { width: rect.w, height: rect.h, data: Uint8Array.from(data) }, rect };
+  }
+  throw new Error('the snapshot window never showed a picture');
+}
+/** The Pearson correlation of a shown picture's grey levels with a texture's top-left 160 x 120 indices. */
+function correlation(shown, texture) {
+  const xs = [], ys = [];
+  for (let y = 0; y < 120; y++) for (let x = 0; x < 160; x++) { xs.push(shown.data[(y * shown.width + x) * 4 + 1]); ys.push(texture[y * 256 + x]); }
+  const mean = list => list.reduce((a, b) => a + b, 0) / list.length, mx = mean(xs), my = mean(ys);
+  let sxy = 0, sxx = 0, syy = 0;
+  for (let i = 0; i < xs.length; i++) { sxy += (xs[i] - mx) * (ys[i] - my); sxx += (xs[i] - mx) ** 2; syy += (ys[i] - my) ** 2; }
+  return sxy / Math.sqrt(sxx * syy);
+}
+
 /** The menu cursor follows relative motion: clamp it at the root's corner, then move by the control's drawing-buffer position (original-start-load-game.spec). */
 async function cursor(page) {
   let box = await page.locator('#scene').boundingBox();
@@ -116,6 +141,13 @@ test('Esc, Save Game writes Save0001 into the browser; the Load Game screen list
   const listed = (await probe(page, { op: 'list', field: 'lstGames' })).result;
   expect(listed.rows.map(row => row[0]).sort()).toEqual(['My first name', 'UNATCO Training Course']);
   expect((await probe(page, { op: 'text', field: 'winSaveInfo' })).result).toMatch(/^Location: UNATCO Training Course\nSave Count: \d\n/);
+  // the selected row's picture is the SaveInfo's own: the snapshot window shows the texture's top-left 160 x 120 (through the display ramp: correlation, not equality)
+  const slotOf = { 'My first name': 'Save0002', 'UNATCO Training Course': 'Save0001' };
+  const shownSlot = slotOf[listed.rows[listed.selected][0]];
+  const pictures = Object.fromEntries(await Promise.all(Object.values(slotOf).map(async slot => [slot, parseSaveInfo(await readBytes(page, slot, 'SaveInfo.dxs')).snapshot.image.data])));
+  const shown = await shownPicture(page);
+  expect([shown.image.width, shown.image.height]).toEqual([160, 120]);
+  expect(correlation(shown.image, pictures[shownSlot]), `the ${shownSlot} picture`).toBeGreaterThan(0.97);
   await page.keyboard.press('Escape');
   await page.keyboard.press('Escape');
   await expect.poll(async () => (await state(page)).menu).toBeNull();

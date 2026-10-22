@@ -92,7 +92,8 @@ export function createGameSaver({ runtime, level, directory, store, levelSaver, 
     realm.pending.delete(job.id);
     if (pixels && job.info.pixelLength === pixels.length) job.info.bytes.set(pixels, job.info.pixelOffset);
     // the level files first and SaveInfo.dxs last: a slot interrupted between its files is a directory the Load Game screen shows as "save info missing"
-    const files = [...job.levelFiles, { name: 'SaveInfo.dxs', bytes: job.info.bytes, modified: job.modified }];
+    // (after a LoadGame Current holds the loaded slot's SaveInfo.dxs, which CopySaveGameFiles copied with the levels (`*.dxs`) and SavePackage then wrote over)
+    const files = [...job.levelFiles.filter(file => lower(file.name) !== 'saveinfo.dxs'), { name: 'SaveInfo.dxs', bytes: job.info.bytes, modified: job.modified }];
     directory.put({ directory: job.dir, files, info: parseSaveInfo(job.info.bytes) });
     last = { dir: job.dir, files: files.map(file => ({ name: file.name, size: file.bytes.length })), picture: Boolean(pixels) };
     const sink = saveSink();
@@ -166,8 +167,13 @@ export function createGameSaver({ runtime, level, directory, store, levelSaver, 
     }
     // SavePackage(SaveInfo): the file is complete but for the picture
     const started = performance.now();
+    // The orders the original's process history gives (FName and GObjObjects indices): a first save (N = 0) shows Texture, Palette, MyDeusExSaveInfo in the name table
+    // and the Texture first among the exports (Save0077, wa5); a later one mostly Palette, Texture, MyDeusExSaveInfo and the Palette first (wa5's 2nd and 3rd, the
+    // desktop saves, 22 and 26 of the 41 internet saves). A heuristic over those, not a rule: the original's are the free lists' and the loaded packages' name tables'.
+    const first = textureName === 'Texture0';
     const written = writeSaveInfoDetailed({ properties, snapshot, guid: globalThis.crypto.getRandomValues(new Uint8Array(16)), textureName, paletteName,
-      textureFirst: true, internalTime: internalTimeOf(appSeconds()) });
+      textureFirst: first, nameTail: first ? [textureName, paletteName, 'MyDeusExSaveInfo'] : [paletteName, textureName, 'MyDeusExSaveInfo'],
+      internalTime: internalTimeOf(appSeconds()) });
     log('Log', `Save=${(performance.now() - started).toFixed(6)}`);
     log('Log', `Moving '..\\Save\\${dir}\\Save.tmp' to '..\\Save\\${dir}\\SaveInfo.dxs'`);
     const job = { id: jobId, dir, index, levelFiles: [], info: { bytes: written.bytes, pixelOffset: written.pixelOffset, pixelLength: written.pixelLength }, modified: now(),

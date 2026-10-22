@@ -9,8 +9,9 @@
  *     process's history, not the export order: Texture, Palette, SaveInfo in the first save of a process (Save0077); across the 41 internet saves
  *     Palette before Texture 23 times, Texture before Palette 18, MyDeusExSaveInfo between them 3 times and never first. Names are flagged 0x70010; the ones the
  *     engine registers natively carry 0x4000000 (`None`, `Class`, `Package` also 0x400). `saveInfo` is in the table without being used: the package's own
- *     name, tagged as the Outer. A name no tag uses is absent: a Hour or Second of 0 (the class default, not stored) leaves a 32-name table (4 of the 41).
- *     `bCheatsEnabled` is the one name whose place was not measured (no file had it set).
+ *     name, tagged as the Outer. A name no tag uses is absent: a Hour or Second of 0 (the class default, not stored) leaves a 32-name table (4 of the 41), and
+ *     `bCheatsEnabled` (between `Snapshot` and `DirectoryIndex`, measured in a save made with the cheat flag on: Save0006 of the Wine session wa5) is there only
+ *     when the flag is set: none of the 41 internet saves has it.
  *   - 5 imports (Engine, Engine.Texture, DeusEx, DeusEx.DeusExSaveInfo, Engine.Palette), 3 exports with Outer 0: the Texture (flags 0x70000), the
  *     Palette (0x70000) and MyDeusExSaveInfo (0x70004). The order of the exports is that of the objects in GObjObjects: Texture before Palette in the
  *     Wine session's file, Palette before Texture in the older two.
@@ -32,7 +33,7 @@ import { writeTaggedElement } from './tagged-write.mjs';
 
 /** The names of the three objects in the order of the original process's name table (measured), with the flags the file carries. */
 const NAME_ORDER = [['None', 0x4070410], ['InternalTime'], ['VBits'], ['VClamp'], ['UBits'], ['UClamp'], ['Palette'], ['Description'], ['USize'], ['VSize'],
-  ['MapName'], ['saveTime'], ['Second'], ['Minute'], ['Hour'], ['Day'], ['Month'], ['Year'], ['MissionLocation'], ['Snapshot'], ['DirectoryIndex'],
+  ['MapName'], ['saveTime'], ['Second'], ['Minute'], ['Hour'], ['Day'], ['Month'], ['Year'], ['MissionLocation'], ['Snapshot'], ['bCheatsEnabled'], ['DirectoryIndex'],
   ['saveCount'], ['saveInfo'], ['DeusExSaveInfo'], ['DeusEx'], ['Texture', 0x4070010], ['Class', 0x4070410], ['Package', 0x4070410], ['Engine', 0x4070010],
   ['Core', 0x4070010]];
 const IMPORT_ORDER = [
@@ -43,8 +44,8 @@ const IMPORT_ORDER = [
   { classPackage: 'Core', className: 'Class', outer: -1, name: 'Palette' },
 ];
 
-/** The properties of DeusExSaveInfo in declaration order with their tag types. `bCheatsEnabled` is the one name whose place in the original's
- * table was not measured (every measured file had it False): it is placed after the measured names, in first-use order. */
+/** The properties of DeusExSaveInfo in declaration order with their tag types. `bCheatsEnabled` is the last tag; its name sits between `Snapshot` and
+ * `DirectoryIndex` in the table (measured: the Wine session's Save0006, saved with the cheat flag on). */
 const INFO_FIELDS = [['Year', 'int'], ['Month', 'int'], ['Day', 'int'], ['Hour', 'int'], ['Minute', 'int'], ['Second', 'int'], ['DirectoryIndex', 'int'],
   ['Description', 'string'], ['MissionLocation', 'string'], ['MapName', 'string'], ['Snapshot', 'object'], ['saveCount', 'int'], ['saveTime', 'int'],
   ['bCheatsEnabled', 'bool']];

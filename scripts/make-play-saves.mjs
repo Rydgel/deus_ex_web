@@ -4,8 +4,8 @@
  *
  * Scenarios (one process each):
  *   T  00_Training from the menu's Training button, a few seconds of walking, `SaveGame 10` (no cheats);
- *   I  the Island by the New Game path (the intro left by Escape), the cheat lines of the travel captures (credits, skills, augmentations, images, a key, a note, a
- *      goal), some play, `SaveGame 11`;
+ *   I  the Island by the New Game path (the intro left by Escape), the Quick Save key, then the cheat lines of the travel captures (credits, skills, augmentations,
+ *      images, a key, a note, a goal), some play, `SaveGame 11`;
  *   H  the Island, then `LocalTravel 01_NYC_UNATCOHQ`, play, `SaveGame 12` in HQ: the slot holds HQ (the live level) and the Island (copied from Current).
  *
  *   node scripts/make-play-saves.mjs --out DIR [--only T|I|H] */
@@ -112,12 +112,17 @@ if (only === 'T') {
   result.trainingLog = training.game.doors.scriptRuntime.engineLog.filter(line => /Save=|Moving|Unloading|Failed to load|brush tracker/.test(line)).slice(-24);
 } else if (only === 'I') {
   const island = await newGameIsland();
-  walk(island, 3); cheats(island); island.frames(120);
+  walk(island, 3);
+  // the Quick Save key (GreyPlus), before the cheats: the plain New Game player
+  // (QuickSave is refused while a DataLink plays, DeusExPlayer.uc:905: the Island's opening one is let to end)
+  for (let seconds = 0; seconds < 240 && island.read(island.player(), 'dataLinkPlay'); seconds += 2) island.frames(120);
+  const beforeQuick = facts(island, 'before the Quick Save key');
+  island.game.inputKey('NumpadAdd', true); island.frames(2); island.game.inputKey('NumpadAdd', false); island.frames(5);
+  result.islandQuick = directory.hasFile('QuickSave', 'SaveInfo.dxs') ? { before: beforeQuick, ...await dumpSlot('QuickSave', 'island-quick', {}) } : null;
+  cheats(island); island.frames(120);
   const before = facts(island, 'before SaveGame 11');
   console_(island, 'SaveGame 11'); island.frames(5);
   result.island = { before, ...await dumpSlot('Save0011', 'island', {}) };
-  island.game.inputKey('NumpadAdd', true); island.frames(2); island.game.inputKey('NumpadAdd', false); island.frames(5);   // the Quick Save key (GreyPlus)
-  result.islandQuick = directory.hasFile('QuickSave', 'SaveInfo.dxs') ? await dumpSlot('QuickSave', 'island-quick', {}) : null;
 } else if (only === 'H') {
   const island = await newGameIsland();
   walk(island, 2);

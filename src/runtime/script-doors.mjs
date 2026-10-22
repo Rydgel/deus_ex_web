@@ -2312,7 +2312,7 @@ export async function createScriptDoors({
   const gameSaver=travel?createGameSaver({runtime,level,directory:saveDirectory??hostSaveDirectory(),store:saveStore,levelSaver,log:logLine,
     viewport:()=>level.engine.client.viewports[0],config:runtime.classLoader?.graph?.config,windowHost:()=>windowHost,
     textureClass:await runtime.loadClass(await assets.get('Engine'),(await assets.get('Engine')).exportsByPath.get('texture')),
-    snapshotSource:travel.snapshotSource??null,
+    snapshotSource:travel.snapshotSource??null,clock:travel.clock,
     onMessage:(kind,error)=>logLine('Warning',`SaveGame: the save could not be kept: ${error?.message??error}`)}):null;
   if(gameSaver){
     runtime.travelServices.saveGame=(index,description)=>gameSaver.saveGame(index,description);

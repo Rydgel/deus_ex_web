@@ -121,6 +121,9 @@ export function createLevelCollection({ runtime, level, viewports = [], transien
         // and its windows, the client viewport behind Player): registered in
         // the original until the GC purges them, which the host does not.
         if (attached(identity) || viewports.includes(identity)) return true;
+        // The player's FlagBase when the host holds it as a bare store (script-triggers.mjs createFlagBase, bound to the property of a pawn that did not run
+        // ResetPlayerToDefaults: a restored one): the original's FlagBase is a registered UObject until the player is destroyed.
+        if (identity !== null && typeof identity === 'object' && identity.entries instanceof Map && typeof identity.getBool === 'function' && typeof identity.setBool === 'function') return true;
         return isResource(identity);
       },
       isPendingKill: identity => {

@@ -73,15 +73,50 @@ test('a time stamp field of 0 is not stored and its name is not in the table (32
 });
 
 const MEASURED = '../.work/travel';
-const real = new URL(`${MEASURED}/dxs/save77-SaveInfo.dxs`, import.meta.url);
-test('given the original\'s GUID, time, pixels and names, the writer reproduces the Wine session\'s Save0077 SaveInfo.dxs byte for byte', { skip: !existsSync(real) }, () => {
-  const bytes = new Uint8Array(readFileSync(real));
+/** Write what an original file holds from its own values (GUID, InternalTime, pixels, names and their process-history orders). */
+const rewrite = bytes => {
   const pkg = parsePackage(bytes), info = parseSaveInfo(bytes);
   const texture = pkg.exports.findIndex(entry => entry.className === 'Texture');
   const values = readObject(pkg, bytes, texture + 1).values;
-  const out = writeSaveInfo({ properties: info.properties, snapshot: { pitch: 256, height: 128, data: info.snapshot.image.data }, textureFirst: texture === 0,
+  return writeSaveInfo({ properties: info.properties, snapshot: { pitch: 256, height: 128, data: info.snapshot.image.data }, textureFirst: texture === 0,
     guid: Uint8Array.from(Buffer.from(pkg.guid, 'hex')), textureName: info.snapshot.texture, paletteName: info.snapshot.palette,
-    internalTime: [values.InternalTime, values['InternalTime[1]']] });
-  assert.equal(out.length, bytes.length);
-  assert.deepEqual([...out], [...bytes]);
+    internalTime: [values.InternalTime, values['InternalTime[1]']], nameTail: pkg.names.slice(pkg.names.findIndex(entry => entry.name === 'Core') + 1).map(entry => entry.name) });
+};
+for (const [label, file] of [['the Wine session\'s Save0077', 'dxs/save77-SaveInfo.dxs'], ['a SaveGame 5 of a fresh Training (wa5, cheats off)', 'wa5/wa5.Save0005/SaveInfo.dxs'],
+  ['a SaveGame 6 with the cheat flag on (wa5): bCheatsEnabled\'s tag and name', 'wa5/wa6.Save0006/SaveInfo.dxs'], ['a QuickSave (wa5)', 'wa5/waq.QuickSave/SaveInfo.dxs']]) {
+  const real = new URL(`${MEASURED}/${file}`, import.meta.url);
+  test(`given the original's GUID, time, pixels and names, the writer reproduces ${label} byte for byte`, { skip: !existsSync(real) }, () => {
+    const bytes = new Uint8Array(readFileSync(real));
+    const out = rewrite(bytes);
+    assert.equal(out.length, bytes.length);
+    assert.deepEqual([...out], [...bytes]);
+  });
+}
+
+test('bCheatsEnabled: the last tag, its name between Snapshot and DirectoryIndex, 34 names (measured in the original\'s Save0006)', () => {
+  const bytes = writeSaveInfo({ properties: { ...PROPERTIES, bCheatsEnabled: true }, snapshot: { pitch: 256, height: 128, data: picture() }, guid });
+  const pkg = parsePackage(bytes);
+  assert.equal(pkg.names.length, 34);
+  assert.deepEqual(pkg.names.slice(19, 22).map(entry => entry.name), ['Snapshot', 'bCheatsEnabled', 'DirectoryIndex']);
+  assert.equal(parseSaveInfo(bytes).properties.bCheatsEnabled, true);
+});
+
+test('the comparison with an original places every differing byte in a host input, after putting the process-history orders right (scripts/save-info-diff.mjs)', async () => {
+  const { explainSaveInfoDifferences } = await import('../scripts/save-info-diff.mjs');
+  const original = writeSaveInfo({ properties: PROPERTIES, snapshot: { pitch: 256, height: 128, data: picture() }, guid, textureName: 'Texture1', paletteName: 'Palette1', textureFirst: false,
+    nameTail: ['Palette1', 'Texture1', 'MyDeusExSaveInfo'], internalTime: [5, 6] });
+  const other = Uint8Array.from(picture(), (value, i) => (i % 256 < 160 && (i >> 8) < 120) ? 255 - value : 0);
+  const play = writeSaveInfo({ properties: { ...PROPERTIES, Second: 24, saveTime: 136 }, snapshot: { pitch: 256, height: 128, data: other }, guid: Uint8Array.from(guid, v => v ^ 255),
+    textureName: 'Texture1', paletteName: 'Palette1', textureFirst: true, nameTail: ['Texture1', 'Palette1', 'MyDeusExSaveInfo'], internalTime: [9, 10] });
+  const diff = explainSaveInfoDifferences(play, original);
+  assert.equal(diff.sameLayout, true); assert.equal(diff.reordered, true);
+  assert.deepEqual(diff.unexpected, []);
+  assert.deepEqual(diff.groups.map(group => group.label).sort(), ['DeusExSaveInfo.Second', 'DeusExSaveInfo.saveTime', 'Texture.InternalTime', 'Texture.InternalTime[1]', 'Texture: the snapshot\'s pixels', 'package GUID'].sort());
+  // a property that is not a host input is caught
+  const wrong = writeSaveInfo({ properties: { ...PROPERTIES, Description: 'Other text!' }, snapshot: { pitch: 256, height: 128, data: picture() }, guid, textureName: 'Texture1', paletteName: 'Palette1', textureFirst: false,
+    nameTail: ['Palette1', 'Texture1', 'MyDeusExSaveInfo'], internalTime: [5, 6] });
+  assert.equal(explainSaveInfoDifferences(wrong, original).sameLayout, false);
+  const same = writeSaveInfo({ properties: { ...PROPERTIES, MissionLocation: 'NYC - Liberty Islanc' }, snapshot: { pitch: 256, height: 128, data: picture() }, guid, textureName: 'Texture1', paletteName: 'Palette1', textureFirst: false,
+    nameTail: ['Palette1', 'Texture1', 'MyDeusExSaveInfo'], internalTime: [5, 6] });
+  assert.deepEqual(explainSaveInfoDifferences(same, original).unexpected.map(entry => entry.label), ['DeusExSaveInfo.MissionLocation']);
 });

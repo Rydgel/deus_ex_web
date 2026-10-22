@@ -9,7 +9,10 @@ menus. Callers:
   (1) and Black (2). With 1 the root stores the texture in `snapshot`, draws it as the raw background (`SetRawBackground(snapshot,
   colSnapshot)`, `SetRawBackgroundSize(snapshotWidth, snapshotHeight)`, `StretchRawBackground(True)`) and turns 3D rendering off
   (`EnableRendering(False)`) until `HideSnapshot`/`UnPauseGame`.
-* `MenuScreenSaveGame.GenerateNewSnapShot` (`GenerateSnapshot(True)`, the save preview; Stage 6 owns the screen).
+* `MenuScreenSaveGame.GenerateNewSnapShot` (`GenerateSnapshot(True)`, the save preview; with `UIBackground` 0 it needs the frame behind the screen, which the page keeps while any window holds the mouse: `display.keepFrame`).
+* `DDeusExGameEngine::SaveGame` (`0x1000f3c5..0x1000f44f`) calls `XRootWindow::GenerateSnapshot` itself, with its SaveInfo's own texture (the body then reuses the texture instead of making one), after
+  `SetSnapshotSize(160, 120)` on the player's root window: the picture in every `SaveInfo.dxs` ([travel](travel.md#savegame-in-full), [save storage](save-storage.md#writing-a-save)). Play makes it from the page's kept
+  frame with the same pixel work (`snapshotGrey`) and returns the P8 indices to the simulation (a request flagged `deliver`, answered by the `snapshot` message).
 
 ## What the original does
 
