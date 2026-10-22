@@ -16,6 +16,7 @@
  * the tick's decisions have the files to look for. */
 import { TravelBoundary } from './travel-boundary.mjs';
 import { refValue } from './script-vm.mjs';
+import { hostSaveDirectory } from './save-directory.mjs';
 
 export class UnsupportedTravelNativeError extends Error {
   constructor(message, details = {}) { super(message); this.name = 'UnsupportedTravelNativeError'; Object.assign(this, details); }
@@ -36,21 +37,26 @@ export function setClientTravel(runtime, viewport, url, items, type) {
   }
 }
 
-/** Play's `<SavePath>\\Current`: file name -> bytes. DeleteSaveGameFiles releases the level package's loaders first
- * (`releaseLoaders`, once per level: the engine log's `Unloading: Package <level package>`), then deletes every file. */
-export function createSaveStore({ releaseLoaders = () => {} } = {}) {
-  const current = new Map();
+/** Play's `<SavePath>\\Current`, a directory of the save directory (save-directory.mjs, which a host backs with real storage): the levels
+ * `SaveCurrentLevel(-2)` writes and `DeleteSaveGameFiles("")` empties. The directory outlives the per-map sessions (`hostSaveDirectory()` is one per
+ * JavaScript realm), as the files outlive the original's levels. DeleteSaveGameFiles releases the level package's loaders first (`releaseLoaders`,
+ * once per level: the engine log's `Unloading: Package <level package>`), then deletes every file. Names compare case-insensitively. */
+export function createSaveStore({ directory = hostSaveDirectory(), releaseLoaders = () => {} } = {}) {
+  const DIRECTORY = 'Current';
   let released = false;
   return {
-    current,
+    directory,
+    /** The files of `Current`: [{name, size}]. */
+    files: () => directory.files(DIRECTORY),
+    /** FindFiles(<SavePath>\\Current\\<name>) finds the file. */
+    has: name => directory.hasFile(DIRECTORY, name),
+    read: name => directory.readFile(DIRECTORY, name),
+    write(name, bytes) { directory.writeFile(DIRECTORY, name, bytes); },
     /** DeleteSaveGameFiles(""): returns the names removed. */
     deleteCurrent() {
       if (!released) { released = true; releaseLoaders(); }
-      const names = [...current.keys()];
-      current.clear();
-      return names;
+      return directory.clearDirectory(DIRECTORY);
     },
-    has: name => current.has(name),
   };
 }
 

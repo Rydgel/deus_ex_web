@@ -91,3 +91,17 @@ export function parseFurl(base, text, type, { defaults = DEFAULT_PLAYER_OPTIONS 
     if (!out.op.some(option => lower(option).startsWith(`${lower(name)}=`))) out.op.push(`${name}=${value}`);
   return out;
 }
+
+/** FURL::DefaultSaveExt (the `dxs` of every saved level) and `GSys->SavePath` (`DeusEx.ini` `[Core.System] SavePath`). */
+export const SAVE_EXTENSION = 'dxs';
+export const SAVE_PATH = '..\\Save';
+
+/** The URL Browse loads a filed level with (DDeusExGameEngine::Browse 0x10011716..): `FURL(&URL, "<SavePath>\\Current\\<name>.dxs", TRAVEL_Partial)`
+ * with the portal of the URL copied back. The only path form Play parses: TRAVEL_Partial keeps the base's protocol, host, port and options (but
+ * PUSH, POP, PEER and LOAD) and the text supplies the map, so the result is the base with the file as its map. Measured:
+ * `LoadMap: ..\Save\Current\01_NYC_UNATCOIsland.dxs?Name=Player?Class=DeusEx.JCDentonMale` (docs/travel.md "Restoring a level"). */
+export function savedLevelUrl(base, name) {
+  const out = new Furl({ protocol: base.protocol, host: base.host, port: base.port, map: `${SAVE_PATH}\\Current\\${name}.${SAVE_EXTENSION}`,
+    op: base.op.filter(option => !PARTIAL_DROPPED.includes(optionKey(option))), portal: base.portal });
+  return out;
+}

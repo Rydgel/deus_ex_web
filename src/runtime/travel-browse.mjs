@@ -8,13 +8,17 @@
  *   {op: 'log', text}                  Logf (the engine log: docs/travel.md "What each travel did")
  *   {op: 'deleteSaveGameFiles'}        DeleteSaveGameFiles(""): the `Current` directory is emptied
  *   {op: 'clearStartingNewGame'}       the looked-up player's bStartingNewGame (DeusExPlayer +0xaf8 bit 0) is cleared
- *   {op: 'loadMap', url, travelInfo}   LoadMap(URL, NULL, TravelInfo, Error); `travelInfo` 'argument' (the Browse argument) or 'level'
- *                                      (a ?restart reuses the TravelInfo the level was loaded with, which the tick passes)
+ *   {op: 'pruneTravelActors'}          PruneTravelActors (DeusEx.dll 0x1000f9b0): the player's managers, flag base and carried decoration go
+ *   {op: 'saveCurrentLevel', position} SaveCurrentLevel(-2) (0x1000fac0): the level left is written to `Save\Current\<MapName>.dxs`
+ *   {op: 'loadMap', url, travelInfo, saved}  LoadMap(URL, NULL, TravelInfo, Error); `travelInfo` 'argument' (the Browse argument) or 'level'
+ *                                      (a ?restart reuses the TravelInfo the level was loaded with, which the tick passes). `saved`, only in
+ *                                      the same-mission branch: {name, file, url}; after the save, a level filed as `file` in `Current` is loaded
+ *                                      from there with `url` (FURL(&URL, path, TRAVEL_Partial), Portal copied back), else `url` is loaded fresh
  *   {op: 'boundary', name, reason}     a branch that is not implemented; execution stops there
  *
  * The retry after a failed LoadMap (the old map's name replaces URL.Map, 0x10011e38) is not part of the decision: a failed
  * load is a boundary in the executor (docs/travel.md "Unresolved" 9). */
-import { Furl } from './furl.mjs';
+import { Furl, savedLevelUrl, SAVE_EXTENSION } from './furl.mjs';
 
 /** DDeusExGameEngine::GetNextMissionNumber 0x10011ef0: -1 for an empty name or when the first two characters are not both
  * digits, else atoi(Left(name, 2)). (`dx`, `dxonly`, `entry` are -1; `00_Training` is 0; `99_Endgame1` is 99.) */
@@ -37,9 +41,8 @@ const boundary = (name, reason) => ({ op: 'boundary', name, reason });
  * @param {{info: ({missionNumber:number, mapName:string}|null), urlMap: string}|null} level  GLevel: its DeusExLevelInfo
  *        (missionNumber, MapName) and URL.Map; null before the first level is loaded
  * @param {{bStartingNewGame: boolean}|null} player  Client->Viewports(0)->Actor, null-safe
- * @param {(mapName: string) => boolean} filed  whether `Save\Current\<mapName>.dxs` exists
  */
-export function browseDecision({ url, lastURL, level = null, player = null, filed = () => false }) {
+export function browseDecision({ url, lastURL, level = null, player = null }) {
   const effects = [];
   if (!(url instanceof Furl)) throw new TypeError('browseDecision requires a Furl');
   // 2. ?restart: the level reloaded from its file with `loadonly` (the travel text is not read back), `Current` emptied.
@@ -71,11 +74,12 @@ export function browseDecision({ url, lastURL, level = null, player = null, file
     effects.push({ op: 'log', text: 'Attempting to get player' });
     wipePlayer = player;
     if (next === cur && !(player && player.bStartingNewGame)) {
-      // Within one mission: the level left is filed in `Current` (PruneTravelActors, SaveCurrentLevel(-2)) and a level filed
-      // for the destination is restored instead of the fresh .dx.
+      // Within one mission: the level left is filed in `Current` (PruneTravelActors, SaveCurrentLevel(-2)) and a level filed for the
+      // destination is restored instead of the fresh .dx (0x10011716..): which of the two happens depends on the directory after the save, so
+      // the executor looks (a map may be filed under the name of the level it just left).
       const name = String(nextMap).replace(/\.dx$/i, '');
-      effects.push(boundary('PruneTravelActors / SaveCurrentLevel(-2)',
-        `travel within mission ${cur} files the level left in Save\\Current and restores ${name}${filed(name) ? ' from there' : ' (not filed)'}: visited-map restoration is not implemented (docs/travel.md order step 3)`));
+      effects.push({ op: 'pruneTravelActors' }, { op: 'saveCurrentLevel', position: -2 });
+      effects.push({ op: 'loadMap', url, travelInfo: 'argument', saved: { name, file: `${name}.${SAVE_EXTENSION}`, url: savedLevelUrl(url, name) } });
       return effects;
     }
   }

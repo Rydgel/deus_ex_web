@@ -38,10 +38,12 @@ export class TravelStop extends Error {
  * @param exporter       travel-export.mjs createTravelExporter()
  * @param store          script-travel.mjs createSaveStore()
  * @param log            (tag, text) => void  the engine log
+ * @param levelSaver     {pruneTravelActors(), saveCurrentLevel(position)} PruneTravelActors and SaveCurrentLevel (travel-save.mjs), or null: the
+ *                       same-mission branch is then a {@link TravelStop}
  * @param lastURL        the engine's LastURL (a Furl)
  * @param levelUrlMap    () => GLevel->URL.Map
  */
-export function createTravelStep({ runtime, level, viewport, exporter, store, log, lastURL, levelUrlMap }) {
+export function createTravelStep({ runtime, level, viewport, exporter, store, log, lastURL, levelUrlMap, levelSaver = null }) {
   const read = (object, name) => runtime.readNamed(object, name);
   const levelInfo = () => {
     const actor = level.actors.find(a => a && runtime.attachedInstance(a)?.cls.record.key === 'deusex.deusexlevelinfo');
@@ -51,18 +53,33 @@ export function createTravelStep({ runtime, level, viewport, exporter, store, lo
     log('Log', `Browse: ${url}`);
     const player = read(viewport(), 'Actor');
     const effects = browseDecision({ url, lastURL, level: { info: levelInfo(), urlMap: levelUrlMap() },
-      player: player ? { bStartingNewGame: Boolean(read(player, 'bStartingNewGame')) } : null, filed: name => store.has(`${lower(name)}.dxs`) });
+      player: player ? { bStartingNewGame: Boolean(read(player, 'bStartingNewGame')) } : null });
     for (const effect of effects) {
       switch (effect.op) {
         case 'log': log('Log', effect.text); break;
         case 'deleteSaveGameFiles': store.deleteCurrent(); break;
         case 'clearStartingNewGame': runtime.writeNamed(read(viewport(), 'Actor'), 'bStartingNewGame', false); break;
         case 'boundary': throw new TravelStop(effect.name, effect.reason, { url: String(url) });
+        case 'pruneTravelActors':
+          if (!levelSaver) throw new TravelStop('PruneTravelActors', 'the level cannot be filed in this session (no level saver)', { url: String(url) });
+          levelSaver.pruneTravelActors();
+          break;
+        case 'saveCurrentLevel':
+          if (!levelSaver) throw new TravelStop('SaveCurrentLevel', 'the level cannot be filed in this session (no level saver)', { url: String(url) });
+          levelSaver.saveCurrentLevel(effect.position);
+          break;
         case 'loadMap': {
-          log('Log', `LoadMap: ${effect.url}`);
+          // Within one mission a level filed in `Current` for the destination (also the one just saved, when the destination is the level
+          // left) is loaded from there: FURL(&URL, path, TRAVEL_Partial) with the portal copied back (0x10011716..).
+          const restored = effect.saved && store.has(effect.saved.file) ? effect.saved : null;
+          const loadUrl = restored ? restored.url : effect.url;
+          log('Log', `LoadMap: ${loadUrl}`);
           const info = effect.travelInfo === 'level' ? level.travelInfo ?? new Map() : travelInfo;
-          return { kind: 'loadMap', map: effect.url.map, portal: effect.url.portal, url: String(effect.url), options: [...effect.url.op],
-            travelInfo: [...info], lastURL: { map: lastURL.map, portal: lastURL.portal, op: [...lastURL.op] } };
+          return { kind: 'loadMap', map: restored ? restored.name : effect.url.map, portal: loadUrl.portal, url: String(loadUrl), options: [...loadUrl.op],
+            // on success a filed level's load sets LastURL = GLevel->URL (docs/travel.md "Browse: the DeusEx override" step 5, "Unresolved" 7); a fresh load leaves it
+            travelInfo: [...info], lastURL: restored ? { map: loadUrl.map, portal: loadUrl.portal, op: [...loadUrl.op] }
+              : { map: lastURL.map, portal: lastURL.portal, op: [...lastURL.op] },
+            ...(restored ? { restore: { file: restored.file, name: restored.name } } : {}) };
         }
         default: throw new Error(`Unknown Browse effect ${effect.op}`);
       }

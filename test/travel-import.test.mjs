@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { travelKey, findTravelText } from '../src/runtime/travel-import.mjs';
 import { createSaveStore } from '../src/runtime/script-travel.mjs';
+import { createSaveDirectory } from '../src/runtime/save-directory.mjs';
 import { isHostFlagBase } from '../src/runtime/travel-export.mjs';
 import { createFlagBase } from '../src/runtime/script-triggers.mjs';
 
@@ -23,9 +24,10 @@ test('TravelInfo is searched case-insensitively and, standalone, falls back to t
 
 test('DeleteSaveGameFiles releases the level package\'s loaders once, then empties the Current directory', () => {
   const log = [];
-  const store = createSaveStore({ releaseLoaders: () => log.push('released') });
-  store.current.set('00_training.dxs', new Uint8Array(3));
+  const store = createSaveStore({ directory: createSaveDirectory(), releaseLoaders: () => log.push('released') });
+  store.write('00_training.dxs', new Uint8Array(3));
   assert.equal(store.has('00_training.dxs'), true);
+  assert.equal(store.has('00_Training.DXS'), true, 'names compare case-insensitively');
   assert.deepEqual(store.deleteCurrent(), ['00_training.dxs']);
   assert.deepEqual(store.deleteCurrent(), []);
   assert.deepEqual(log, ['released']);

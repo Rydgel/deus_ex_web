@@ -2203,7 +2203,7 @@ export async function createScriptDoors({
   // empty unless the host supplies one (the page's, which outlives the maps).
   await prepareGameDirectoryStore({runtime,assets,directory:saveDirectory??hostSaveDirectory()});
   // A session that travels (Play, the travel validators) runs ClientTravel and DeleteSaveGameFiles as recovered; others keep their named stops.
-  const saveStore=travel?createSaveStore({releaseLoaders:()=>logLine('Log',`Unloading: Package ${asset.name}`)}):null;
+  const saveStore=travel?createSaveStore({directory:saveDirectory??hostSaveDirectory(),releaseLoaders:()=>logLine('Log',`Unloading: Package ${asset.name}`)}):null;
   if(travel)installTravelNatives({runtime,store:saveStore});
   runtime.actorLifecycle.bindCollisionView=(actor,cls,lineage)=>{
     if(!loggingIn||!lineage.includes('engine.playerpawn'))return false;

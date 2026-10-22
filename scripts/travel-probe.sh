@@ -10,6 +10,9 @@
 #     arrive:<regex>            wait until a Level object whose URL.Map matches the regex exists, then 3 s more (up to 150 s)
 #     snap:<label>              save directory listing, engine log, player flags, travel text -> .work/travel/<tag>/<label>.*
 #     actors:<name>:<label>     tools/dump-actor-win.c for objects named like <name> -> .work/travel/<tag>/<label>.actors.txt
+#     savecopy:<label>          a copy of Save\Current -> .work/travel/<tag>/<label>.Current/ (the .dxs files and their times)
+#     gobjects:<label>          every object of GObjObjects (index, name, class; tools/dump-gobjects-win.c --available) -> <label>.gobjects.txt
+#     props:<name>:<label>:<field:offset:type>[,...]   tools/dump-actor-win.c with explicit fields -> <label>.props.txt
 #     shot:<name>               the game's Shot key -> .work/travel/<tag>/<name>.png
 #     key:<name> | type:<text> | click:<x y> | move:<x y>   dxinput key (ESC, ENTER ...), text, / mouse (viewport client coordinates; the viewport is 1280x720)
 #     follow:<file>             run the steps appended to <file> (one per line) until a `quit` line: an interactive session
@@ -67,7 +70,8 @@ run_step() {
   local step=$1 kind arg
   kind=${step%%:*}; arg=${step#*:}
   case $kind in
-    cmd|arrive|snap|shot|key|type|click|move) scripts/travel-step.sh "$OUT" "$kind" "$arg" ;;
+    cmd|arrive|snap|shot|key|type|click|move|savecopy|gobjects) scripts/travel-step.sh "$OUT" "$kind" "$arg" ;;
+    props) IFS=: read -r pname plabel pfields <<< "$arg"; IFS=, read -ra pf <<< "$pfields"; scripts/travel-step.sh "$OUT" props "$pname" "$plabel" "${pf[@]}" ;;
     actors) scripts/travel-step.sh "$OUT" actors "${arg%%:*}" "${arg#*:}" ;;
     wait) sleep "$arg" ;;
     *) echo "unknown step $step" >&2 ;;

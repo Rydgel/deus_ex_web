@@ -81,24 +81,72 @@ let hostDirectory = null;
  * the original's levels. A session that wants its own passes `saveDirectory` to createGame. */
 export function hostSaveDirectory() { return hostDirectory ??= createSaveDirectory({freeSpaceBytes: DEFAULT_FREE_BYTES}); }
 
-/** The in-memory Save directory. `saves` is [{directory, files: [{name, size}], info: {properties, snapshot} | null}]; none by default.
- * `freeSpaceBytes` is a number, a function, or null (the call fails). `Current` is a directory of the same shape (travel's store owns the
- * files in it; the GameDirectory natives only list the `Save*` directories and the QuickSave one, so it is not needed here). */
+/** The in-memory Save directory. `saves` is [{directory, files: [{name, size, bytes?}], info: {properties, snapshot} | null}]; none by default.
+ * `freeSpaceBytes` is a number, a function, or null (the call fails). `Current` is a directory of the same shape: travel's `SaveCurrentLevel(-2)`
+ * writes the levels it leaves there and `DeleteSaveGameFiles("")` empties it (docs/travel.md "The save directory"); the GameDirectory natives list
+ * only the `Save*` directories, so it never shows in the Load Game screen.
+ *
+ * File I/O (the part a host backs with real storage: browser storage, a folder the user picks, docs/travel.md order step 4): `readFile`,
+ * `writeFile`, `removeFile`, `clearDirectory`, `makeDirectory`, `copyFiles`. Names compare case-insensitively (the Windows file system the
+ * original ran on: `FindFiles` and `FileSize` do not care how `MapName` spells a map), and keep the spelling they were written with. A file
+ * written without bytes (a measured listing) has a size and no content. Every operation is synchronous, as the natives that call it are. */
 export function createSaveDirectory({saves = [], freeSpaceBytes = null} = {}) {
   const slots = new Map();
+  const key = name => String(name).toLowerCase();
+  const slotOf = (name, create = false) => {
+    let slot = slots.get(name);
+    if (!slot && create) slots.set(name, slot = {files: new Map(), info: null});
+    return slot ?? null;
+  };
   const directory = {
     /** Add or replace a slot (a future SaveGame, a test). */
     put({directory: name, files = [], info = null}) {
-      slots.set(name, {files: files.map(file => ({name: file.name, size: file.size})), info});
+      const slot = {files: new Map(), info};
+      for (const file of files) slot.files.set(key(file.name), {name: file.name, size: file.bytes ? file.bytes.length : file.size, bytes: file.bytes ?? null});
+      slots.set(name, slot);
       return directory;
     },
     /** Remove a slot (DeleteGame). */
     remove(name) { return slots.delete(name); },
     directories: () => [...slots.keys()].sort((a, b) => a.toLowerCase() < b.toLowerCase() ? -1 : a.toLowerCase() > b.toLowerCase() ? 1 : 0),
-    files: name => (slots.get(name)?.files ?? []).map(file => ({...file})),
-    info: name => slots.get(name)?.info ?? null,
+    files: name => [...(slotOf(name)?.files.values() ?? [])].map(file => ({name: file.name, size: file.size})),
+    info: name => slotOf(name)?.info ?? null,
     freeSpaceBytes: () => typeof freeSpaceBytes === 'function' ? freeSpaceBytes() : freeSpaceBytes,
     setFreeSpaceBytes(value) { freeSpaceBytes = value; },
+    /** GFileManager->MakeDirectory(dir, Tree=1): the directory exists (empty) afterwards. */
+    makeDirectory(name) { slotOf(name, true); return directory; },
+    /** The bytes of `<SavePath>\<dir>\<name>`, or null when there is no such file (or it was listed without content). */
+    readFile(name, file) { return slotOf(name)?.files.get(key(file))?.bytes ?? null; },
+    /** Whether `<SavePath>\<dir>\<name>` exists (GFileManager->FindFiles on its path finds one entry). */
+    hasFile: (name, file) => Boolean(slotOf(name)?.files.has(key(file))),
+    /** Write (create or replace) a file; the directory is made when absent. `bytes` is copied. */
+    writeFile(name, file, bytes) {
+      const copy = new Uint8Array(bytes);
+      slotOf(name, true).files.set(key(file), {name: file, size: copy.length, bytes: copy});
+      return directory;
+    },
+    /** Delete one file; true when it existed. */
+    removeFile: (name, file) => slotOf(name)?.files.delete(key(file)) ?? false,
+    /** DeleteSaveGameFiles(dir): every file goes, the directory stays; returns the names deleted. */
+    clearDirectory(name) {
+      const slot = slotOf(name);
+      if (!slot) return [];
+      const names = [...slot.files.values()].map(file => file.name);
+      slot.files.clear();
+      return names;
+    },
+    /** CopySaveGameFiles(src, dst): every `*.dxs` of src is copied into dst (made when absent). */
+    copyFiles(source, target, pattern = '*.dxs') {
+      const from = slotOf(source);
+      if (!from) return [];
+      const copied = [];
+      for (const file of from.files.values()) {
+        if (!wildcardMatch(pattern, file.name)) continue;
+        slotOf(target, true).files.set(key(file.name), {name: file.name, size: file.size, bytes: file.bytes ? new Uint8Array(file.bytes) : null});
+        copied.push(file.name);
+      }
+      return copied;
+    },
   };
   for (const save of saves) directory.put(save);
   return directory;
