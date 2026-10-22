@@ -29,7 +29,7 @@ import { pawnPhysicsView } from './script-pawn-physics.mjs';
 import { forEachLiveActor, partitionActorArray } from './script-loadmap-startup.mjs';
 import { prepareShadowStartup, resetLevelDecals } from './script-decal.mjs';
 import { prepareConversationBinding } from './script-conversation-startup.mjs';
-import { createLiveConPlayRuntime, registerLoadedPackage } from './script-conplay-live.mjs';
+import { createLiveConPlayRuntime, registerLoadedPackage, adoptHistoryObject } from './script-conplay-live.mjs';
 import { createLiveAudio } from './script-audio-live.mjs';
 import { execActorPlaySound, execActorStopSound } from './script-sound.mjs';
 import { mapPlayerIndex } from './map-object-indices.mjs';
@@ -45,6 +45,9 @@ import { prepareGameDirectoryStore } from './script-game-directory.mjs';
 import { hostSaveDirectory } from './save-directory.mjs';
 import { createTravelExporter, loadFlagClasses } from './travel-export.mjs';
 import { createTravelImporter } from './travel-import.mjs';
+import { decodeAiEvents } from './ai-events-payload.mjs';
+import { createLevelSaver } from './travel-save.mjs';
+import { handleOf } from './script-object-handles.mjs';
 
 const f = Math.fround;
 const lower = value => String(value ?? '').toLowerCase();
@@ -440,7 +443,7 @@ function stateLabelForTarget(mover) {
  */
 export async function createScriptDoors({
   assets, asset, movers = [], playerActor, playerScene, playerController, level, callbacks = {}, rng, queries, zoneAt, onLightingChanged = null,
-  nativeHud = false, musicLibrary = null, travel = null, saveDirectory = null,
+  nativeHud = false, musicLibrary = null, travel = null, saveDirectory = null, restore = null, modelIndex = null,
 } = {}) {
   if (!assets?.get) throw new TypeError('createScriptDoors requires an AssetStore');
   if (!level || typeof level !== 'object') throw new TypeError('createScriptDoors requires the linked Level object');
@@ -483,7 +486,9 @@ export async function createScriptDoors({
       runtime.registerGlobalObjectIndex(playerActor,playerIndex);
     // A map entered by travel gets PlayerTraveling from the travel text (PreTravel set it in the level left: travel-import.mjs);
     // only a cold open, which has no incoming travel state, is given the marker (docs/script-training-mission-entry.md).
-    if(!arrival)liveMission.beginFreshMission(playerActor);
+    if(!arrival&&!restore)liveMission.beginFreshMission(playerActor);
+    // LoadMap's last step once the player is in: the moving brush tracker of the new level (GNewBrushTracker, Engine 0x1038dfb5)
+    logLine('Init',`Initialized moving brush tracker for Level ${asset.name}.MyLevel`);
   }
   // GLog output device: Object.Log (native 231) is a synchronous side channel
   // with no gameplay effect. MissionScript.InitStateMachine logs its startup
@@ -517,6 +522,17 @@ export async function createScriptDoors({
   const moversByObject = new WeakMap();
   const actorByIndex = new Map((level.actors ?? []).filter(actor => Number.isInteger(actor?.index))
     .map(actor => [actor.index, actor]));
+  // A saved level's non-actor objects (the player's conversation history, notes, logs ...) are exports an actor's properties point at: their
+  // identities exist before any property resolves; `restoreScriptObjects` gives them their class storage and properties once the registry exists.
+  const restoredObjects = [];
+  if (restore) {
+    const handled = new Set(['Level', 'Model', 'Polys', 'LevelSummary', 'EventManager', 'AIEventType', 'AISenderEvent', 'AIReceiverEvent']);
+    asset.pkg.exports.forEach((entry, i) => {
+      if (!entry.serialSize || actorByIndex.has(i + 1) || handled.has(entry.className)) return;
+      const identity = { index: i + 1, name: entry.name, className: entry.className, restoredObject: true };
+      restoredObjects.push(identity); actorByIndex.set(i + 1, identity);
+    });
+  }
   // Publish host identities before a class/function/default can resolve a
   // pointer to a map export. Metadata and bytecode then share those objects.
   for (const actor of actorByIndex.values()) await runtime.objects.bindIdentity(asset, actor.index, actor);
@@ -1028,11 +1044,18 @@ export async function createScriptDoors({
     // record, and the export table supplies its measured Name/ObjectFlags
     // (docs/script-world-destroy.md).
     const entry = Number.isInteger(identity.index) ? asset?.pkg.exports[identity.index - 1] : null;
-    if (entry && entry.name === identity.name) runtime.bindNativeObject(identity,
-      mapActorNativeObject(identity, entry, {
+    if (entry && entry.name === identity.name) {
+      const object = mapActorNativeObject(identity, entry, {
         index: runtime.resolveOriginalObjectIndex?.(identity, runtime.instance(identity)) ?? null,
         destroy: receiver => runtime.destroyActorBase(receiver),
-      }));
+      });
+      // A saved level's pawn: no measured slot, so the registry models one when the pawn needs it (playerNativeObject).
+      if (restore && role === 'player') object.modeledIndex = true;
+      // A saved level's objects have no measured GObjObjects slot (docs/travel.md "Unresolved" 10): an object they own (an actor's render
+      // interface) hashes under a modeled one, unique per export; labelled so, not a measurement.
+      if (restore && !Number.isInteger(object.index)) object.hashIndex = 0x100000 + identity.index;
+      runtime.bindNativeObject(identity, object);
+    }
     // The selected LightSwitch Frob path reaches native PlayAnim synchronously.
     // Complete its native mesh/resource preparation before any event can run.
     for(let current=cls;current;current=current.base)if(current.record.key==='deusex.lightswitch'){
@@ -1050,6 +1073,9 @@ export async function createScriptDoors({
 
   await attach(levelInfo, levelClass, 'level');
   await attach(playerActor, playerClass, 'player');
+  // A saved level's pawn is the player (GameInfo.Login re-possesses it): the natives treat it as they treat a spawned player, through its
+  // collision view (the hook `bindCollisionView` makes that for a spawned one).
+  if (restore) { runtime.collisionViewActors.add(playerActor); Object.assign(playerActor, { pawn: true, scriptView: true }); }
   // The browser creates JCDentonMale before the script level is attached.
   // ULevel::SpawnActor would have written this inherited Actor.Level slot
   // during construction; restore that source-required identity before any
@@ -1319,7 +1345,9 @@ export async function createScriptDoors({
         // Class<Ammo> cast) — now, at load: the VM advances a state cursor
         // before dispatch, so a prepare-on-demand failure would permanently
         // skip an already-consumed statement.
-        const initialInventory = runtime.namedReference(actor, 'InitialInventory')?.get?.() ?? [];
+        // (a Pawn that is not a ScriptedPawn, such as a saved level's GeneratorScout, has no InitialInventory)
+        const initialInventory = runtime.lookupMember(identities.get(actor).cls, 'fields', 'InitialInventory')
+          ? runtime.namedReference(actor, 'InitialInventory')?.get?.() ?? [] : [];
         for (const slot of initialInventory) {
           for (const [key, value] of Object.entries(slot ?? {})) {
             if (!key.toLowerCase().endsWith('.inventory') || !value) continue;
@@ -1513,7 +1541,7 @@ export async function createScriptDoors({
   // appended during a pass are reached by it and destroyed actors drop out.
   // Every original map slot and every actor appended by a startup callback
   // participates. The player is created after LoadMap in the original.
-  const startupAdmitted = actor => actor !== playerActor && (identities.has(actor) || npcSpawned.has(actor) || loadMapGame?.actors.has(actor));
+  const startupAdmitted = actor => (restore || actor !== playerActor) && (identities.has(actor) || npcSpawned.has(actor) || loadMapGame?.actors.has(actor));
   // Native passes (Touching clear, SetActorZone, LastRenderTime, base fixup)
   // apply to every actor the original would have had in the array at LoadMap:
   // the serialized map actors and actors these same passes spawn. The player
@@ -1852,6 +1880,73 @@ export async function createScriptDoors({
     partitionStartupActors();
   }
 
+  // A saved level (docs/travel.md "Restoring a level"): LoadMap finds LevelInfo.bBegunPlay set in the file and skips the begin-play pass
+  // (Engine 0x1038d6f6 `jne 0x1038dbec`), so no InitExecution, PreBeginPlay, BeginPlay, SetInitialState or PostBeginPlay runs: every actor
+  // continues from the properties and the FStateFrame it was saved with. What it still does (0x1038dbec..): ULevel.TimeSeconds = the saved
+  // LevelInfo.TimeSeconds (the caller's clock), then the PostPostBeginPlay pass over the live array, then the static/dynamic partition.
+  const savedStates = new Map();
+  async function prepareSavedStates() {
+    const resolve = async ref => {
+      if (!ref) return null;
+      const object = await runtime.objects.resolve(asset, ref);
+      if (object.entry.className !== 'State') return null;   // the class itself: the actor has no state
+      await runtime.prepareState(object.asset, object.index);
+      return runtime.states.get(object.key) ?? null;
+    };
+    for (const actor of level.actors) {
+      if (!actor?.stack) continue;
+      const { node, state } = actor.stack;
+      savedStates.set(actor, { stateNode: await resolve(state), codeNode: await resolve(node) });
+    }
+  }
+  function applySavedStates() {
+    for (const [actor, nodes] of savedStates) {
+      const { probeMask, latentAction, offset } = actor.stack;
+      runtime.instance(actor).state.restoreFrame({ ...nodes, probeMask, latentAction, offset: offset ?? -1 });
+    }
+    savedStates.clear();
+  }
+  /** Give each saved non-actor object its class storage, native record and saved properties (after the registry and the spawn world exist). */
+  async function restoreScriptObjects() {
+    for (const identity of restoredObjects) {
+      const entry = asset.pkg.exports[identity.index - 1];
+      if (/^extension\.flag/.test(lower(`${entry.className}`.startsWith('Flag') ? `extension.${entry.className}` : entry.className)))
+        throw new Error(`A saved level holds ${entry.className} ${entry.name}: restoring a saved game's flag store is travel step 4 (docs/travel.md)`);
+      const cls = await runtime.loadClass(asset, entry.classIndex);
+      await prepareNpcClass(cls);
+      runtime.attach(identity, cls);
+      runtime.instance(identity).state = null;   // an Object (not an Actor) has no StateFrame
+      const properties = readObject(asset.pkg, asset.bytes, identity.index).properties;
+      identity.properties = properties.map(({ data, ...property }) => ({ ...property, byteLength: data.length, data }));
+      for (const field of classFields(cls)) await runtime.field(field);
+      runtime.applyInitialProperties(identity, await prepareMapProperties(runtime, asset, identity, cls, actorByIndex));
+      if (cls.record.key === 'consys.conhistory' || cls.record.key === 'consys.conhistoryevent')
+        adoptHistoryObject(runtime, level, identity, cls, cls.record.key === 'consys.conhistoryevent', entry);
+      else throw new Error(`Restoring a saved ${entry.className} (${entry.name}) is not implemented: only the conversation history objects are`);
+    }
+  }
+  function restoreAiEvents() {
+    const managerIndex = asset.pkg.exports.findIndex(entry => entry.className === 'EventManager') + 1;
+    if (!managerIndex) return;
+    const events = runtime.scriptVm.aiEvents;
+    const decoded = decodeAiEvents(asset.pkg, asset.bytes, managerIndex, { nameId: text => events.nid(text),
+      actorWord: ref => { const actor = ref ? actorByIndex.get(ref) : null; return actor ? handleOf(actor) : 0; } });
+    events.load(levelInfo, decoded.words);
+  }
+  function warmLoadMap() {
+    npcSpawned.clear(); npcSpawnedOwner.clear(); npcFailures.clear();
+    tickBoundary = null;
+    level.tickTag = 0; level.deferredHead = null; level.inTick = 0;
+    level.pendingDeleted = null;
+    bumpBaseEpoch();
+    // The movers' host interpolation state follows their saved fields (a cold load seeds it from them in resetNpcs).
+    for (const actor of level.actors) { const record = actor && identities.get(actor); if (record && isMoverRecord(record)) seedMoverInterpolation(record); }
+    applySavedStates();
+    restoreAiEvents();
+    runStartupEvent('PostPostBeginPlay');
+    partitionStartupActors();
+  }
+
   // Live TriggerLights share the LoadMap startup passes. This adapter prepares
   // their bodies and drives Trigger/Tick and renderer feedback. This is what makes a
   // LightSwitch.Frob's AllActors(Event) fanout (Actor.Trigger on each tagged light)
@@ -1891,6 +1986,9 @@ export async function createScriptDoors({
 
     mover.target = 0; mover.active = false; mover.alpha = 0;
     mover.clientUpdate = 0;
+    // A saved level's mover keeps the replication fields it was saved with, which are the class defaults unless the file holds them: the
+    // cold load derives them from Location (the begin-play pass it skips).
+    if (restore) { mover.physics = values.Physics ?? mover.physics ?? 0; return; }
     mover.realPosition = vector(values.RealPosition ?? values.Location);
     mover.realRotation = vector(values.RealRotation ?? values.Rotation, true);
     mover.simOldPosition = vector(values.SimOldPos ?? values.Location);
@@ -2129,7 +2227,7 @@ export async function createScriptDoors({
   // Platform window/input construction remains outside this projection.
   const {attachLocalViewportConsole}=await import('./script-viewport-console.mjs');
   if(level?.engine?.client?.viewports?.[0])
-    await attachLocalViewportConsole({runtime,assets,engine,viewport:level.engine.client.viewports[0],player:playerActor});
+    await attachLocalViewportConsole({runtime,assets,engine,viewport:level.engine.client.viewports[0],player:restore?null:playerActor});
   let windowHost=null,playerLogs=null;
   // Cold LoadMap owns Game creation and startup before player subsystems.
   await prepareLiveActorSpawnWorld({runtime,engine,deusEx,level,levelInfo,mapAsset:asset});
@@ -2203,8 +2301,11 @@ export async function createScriptDoors({
   // empty unless the host supplies one (the page's, which outlives the maps).
   await prepareGameDirectoryStore({runtime,assets,directory:saveDirectory??hostSaveDirectory(),windowHost:()=>windowHost});
   // A session that travels (Play, the travel validators) runs ClientTravel and DeleteSaveGameFiles as recovered; others keep their named stops.
-  const saveStore=travel?createSaveStore({releaseLoaders:()=>logLine('Log',`Unloading: Package ${asset.name}`)}):null;
+  const saveStore=travel?createSaveStore({directory:saveDirectory??hostSaveDirectory(),releaseLoaders:()=>logLine('Log',`Unloading: Package ${asset.name}`)}):null;
   if(travel)installTravelNatives({runtime,store:saveStore});
+  // PruneTravelActors and SaveCurrentLevel(-2) for the tick's travel step (travel-save.mjs).
+  const levelSaver=travel?createLevelSaver({runtime,level,asset,store:saveStore,log:logLine,viewport:()=>level.engine.client.viewports[0],
+    modelIndex,arrival,restoredObjects}):null;
   runtime.actorLifecycle.bindCollisionView=(actor,cls,lineage)=>{
     if(!loggingIn||!lineage.includes('engine.playerpawn'))return false;
     const fields=classFields(cls).filter(field=>!field.key.startsWith('core.object.')),snapshot=new Map(fields.map(field=>[field.key,runtime.fieldReference(actor,field).get()]));
@@ -2229,7 +2330,8 @@ export async function createScriptDoors({
     playerLogs?.bindPlayer(actor);windowHost?.bindPlayer(actor);
     return true;
   };
-  playerScene.detachPlayerIdentity();
+  // A saved level keeps its pawn: GameInfo.Login finds it in Level.PawnList and does not spawn another.
+  if(!restore)playerScene.detachPlayerIdentity();
   // The pre-placed actors' measured global indices, before any startup sound.
   assignMeasuredObjectIndices(runtime,level.actors);
   // Galaxy's channels over the live level (ambient sounds; docs/galaxy-audio.md).
@@ -2245,7 +2347,8 @@ export async function createScriptDoors({
     noteDestroy:actor=>runtime.audio.galaxy.noteDestroy(actor),
   };
   loadMapGame=await prepareLoadMapGame({runtime,assets,level,levelInfo,prepareClass:prepareNpcClass});
-  loadMapGame.reload();
+  // A saved level keeps the GameInfo it was saved with (LevelInfo.Game is one of its objects): LoadMap's GameInfo branch does not run.
+  if(!restore)loadMapGame.reload();
   await prepareShadowStartup(runtime,assets,level);
   await prepareConversationBinding(runtime,level);
   liveMission=await createLiveMissionRuntime({runtime,assets,level});
@@ -2255,7 +2358,8 @@ export async function createScriptDoors({
   await prepareSpawnClosure(level.actors);
   for(const record of records)resetMover(record);
   lights.reset();
-  resetNpcs();
+  if(restore){await restoreScriptObjects();await prepareSavedStates();warmLoadMap();}
+  else resetNpcs();
   // The native window system exists before SpawnPlayActor: Login's
   // SetPlayer -> PlayerPawnExt.Possess calls InitRootWindow (native 1052),
   // whose ConstructRootWindow runs HUD.InitWindow over the player's already
@@ -2312,7 +2416,7 @@ export async function createScriptDoors({
     npcPawns, npcFailures, scriptPreparationFailures, loadMapStartupExclusions,
     get lastTickDelta(){return lastTickDelta;},
     infoLinkShell,get playerStartup(){return playerStartup;},windowHost,playerLogs,dataLinkPresentation:liveDataLink.presentation,dataLinkActive:liveDataLink.active,
-    dataLinkReceivedItems:liveDataLink.receivedItems,faceConversations,liveConPlay,liveMission,engineLog,logLine,saveStore,arrival,get travelExporter(){return travelExporter;} };
+    dataLinkReceivedItems:liveDataLink.receivedItems,faceConversations,liveConPlay,liveMission,engineLog,logLine,saveStore,levelSaver,arrival,get travelExporter(){return travelExporter;} };
 }
 
 export default createScriptDoors;

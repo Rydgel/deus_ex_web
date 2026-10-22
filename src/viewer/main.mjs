@@ -744,13 +744,20 @@ function applyPlayerView(view) {
 }
 /** Player start; with ?sim=worker, returns the promise of the worker's
  * reply, which points the camera. */
-function resetCamera() {
+function resetCamera({ keepLevel = false } = {}) {
   if (!map) return;
   let reply = null;
   hideNpcFocus();
   if (mode === 'play' && game) {
+    // `keepLevel`: the load just made this level (a saved level restored by travel, docs/travel.md "Play, step 3"): no Player start, which
+    // would cold-reload the map from the file and run its begin-play pass again; only the view and the movers are read from it.
+    if (keepLevel) {
+      if (simClient) reply = simClient.call('restoreView').then(result => { if (result && world) { world.syncMovers(result.movers); applyPlayerView(result.view); } })
+        .then(applyStartCheats);
+      else { world.syncMovers(sim.movers()); applyStartCheats(); }
+    }
     // Player start; the worker resets after the frames posted before it.
-    if (simClient) reply = simClient.call('reset').then(result => { if (result && world) { world.syncMovers(result.movers); applyPlayerView(result.view); } })
+    else if (simClient) reply = simClient.call('reset').then(result => { if (result && world) { world.syncMovers(result.movers); applyPlayerView(result.view); } })
       .then(applyStartCheats);
     else { sim.reset(); world.syncMovers(sim.movers()); applyStartCheats(); }
     runtimeError=null;paused=false;keys.clear();$('toast').textContent='';stopInfoLinkPresentation();showStats();lockGameKeys(true);
@@ -987,7 +994,7 @@ async function loadMap(name, { travel = null } = {}) {
     // counts as ready (on the page they are synchronous).
     // resetCamera runs ?cheat= when it resets the player (Play mode).
     const playerReset = mode === 'play' && !!game;
-    const resetReply = resetCamera(); showStats();
+    const resetReply = resetCamera({ keepLevel: Boolean(travel?.restore) }); showStats();
     await viewReply; await resetReply;
     if (!playerReset) await applyStartCheats();
     $('wireframe').checked = false; $('actor-markers').checked = false;

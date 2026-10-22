@@ -51,3 +51,29 @@ export async function readScriptStructValue(asset,field,data,{initialValue,resol
   if(reader.offset!==data.length)throw new PackageError(`Unexpected serialized struct size: ${field.key}`,reader.offset);
   return value;
 }
+
+/** Decode one tagged ArrayProperty element (UArrayProperty::SerializeItem): the compact element count, then each element as the inner property
+ * serializes it. The runtime holds dynamic arrays whole and only for int, object and string elements (script-values.mjs), so those are the
+ * element types read here; any other inner type stops by name. */
+export async function readScriptArrayValue(asset,field,data,{resolveObject}={}) {
+  if(field.metadata?.type!=='array')throw new TypeError('Expected a linked ArrayProperty');
+  const inner=field.metadata.innerMetadata,innerType=inner?.type;
+  const reader=new Reader(data),count=reader.compact(),out=[];
+  if(count<0||count>data.length)throw new PackageError(`Invalid array count ${count}`,reader.offset);
+  for(let i=0;i<count;i++){
+    switch(innerType){
+      case 'int': out.push(reader.i32()); break;
+      case 'string': out.push(reader.string(asset.pkg.version)); break;
+      case 'object': {
+        const index=reader.compact();objectAt(asset.pkg,index);
+        if(!index){out.push(null);break;}
+        if(typeof resolveObject!=='function')throw new Error(`Array object resolution is not bound: ${field.key}`);
+        out.push(await resolveObject(asset,index));
+        break;
+      }
+      default: throw new Error(`Serialized array of ${innerType} is not supported: ${field.key}`);
+    }
+  }
+  if(reader.offset!==data.length)throw new PackageError(`Unexpected serialized array size: ${field.key}`,reader.offset);
+  return out;
+}

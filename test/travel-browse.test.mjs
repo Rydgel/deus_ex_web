@@ -37,16 +37,24 @@ test('another mission wipes (M 1 -> 2); dx, dxonly and the endgames wipe', () =>
   assert.equal(ops(go('99_Endgame1', TRAVEL_RELATIVE, { level: level(15), player: {} })).includes('deleteSaveGameFiles'), true);
 });
 
-test('within one mission the level left is filed: a named boundary that says what the original does (M 0,0 1,1 2,2)', () => {
+test('within one mission the level left is filed, then the destination is restored when filed (M 0,0 1,1 2,2)', () => {
   for (const [cur, text] of [[0, '00_TrainingCombat'], [1, '01_NYC_UNATCOHQ'], [2, '02_NYC_Bar']]) {
     const effects = go(text, TRAVEL_RELATIVE, { level: level(cur), player: { bStartingNewGame: false } });
     assert.deepEqual(ops(effects).slice(0, 3), ['Doing load, not loadgame', `Current mission number is ${cur}, next is ${cur}`, 'Attempting to get player']);
-    const stop = effects.at(-1);
-    assert.equal(stop.op, 'boundary');
-    assert.match(stop.name, /PruneTravelActors/);
-    assert.match(stop.reason, /not filed/);
+    assert.deepEqual(effects.slice(3).map(effect => effect.op), ['pruneTravelActors', 'saveCurrentLevel', 'loadMap']);
+    assert.equal(effects[4].position, -2);
+    const load = effects.at(-1);
+    assert.equal(load.travelInfo, 'argument');
+    assert.equal(load.url.map, text);
+    // the filed level: FURL(&URL, <SavePath>\Current\<name>.dxs, TRAVEL_Partial), measured `LoadMap: ..\Save\Current\<Map>.dxs?Name=Player?Class=DeusEx.JCDentonMale`
+    assert.equal(load.saved.file, `${text}.dxs`);
+    assert.equal(String(load.saved.url), `..\\Save\\Current\\${text}.dxs?Name=Player?Class=DeusEx.JCDentonMale`);
   }
-  assert.match(go('00_Training', TRAVEL_RELATIVE, { level: level(0), player: {}, filed: name => name === '00_Training' }).at(-1).reason, /from there/);
+  // a `.dx` suffix on the destination (three installed MapExits) is stripped from the file name; the portal is carried to the saved URL
+  const portal = browseDecision({ url: Object.assign(parseFurl(last, '01_NYC_UNATCOHQ', TRAVEL_RELATIVE), { portal: 'p' }), lastURL: last, level: level(1), player: {} });
+  assert.equal(String(portal.at(-1).saved.url), '..\\Save\\Current\\01_NYC_UNATCOHQ.dxs?Name=Player?Class=DeusEx.JCDentonMale#p');
+  const suffixed = browseDecision({ url: new Furl({ map: '01_NYC_UNATCOHQ.dx', op: ['Name=Player'] }), lastURL: last, level: level(1), player: {} });
+  assert.equal(suffixed.at(-1).saved.name, '01_NYC_UNATCOHQ');
 });
 
 test('bStartingNewGame (StartNewGame, the menu Training) wipes even within a mission', () => {

@@ -81,7 +81,7 @@ export async function prepareLiveActorSpawnWorld({runtime,engine,deusEx,level,le
   const names=createScriptNames({names:[none],freeIndices:[],buckets:Array(0x1000).fill(null),
     allocator:{free:()=>{}}});
   names.buckets[names.hashBucket(none.text)]=none;
-  const outer={identity:{},index:-1,name:'TrainingRuntime',outer:null,flags:0};
+  const outer={identity:{},index:-1,name:mapAsset?.name??'TrainingRuntime',outer:null,flags:0};
   const nativeLevel={identity:{},index:-1,name:'MyLevel',outer,flags:0};
   // UObject::GetTransientPackage (Core 0x10102450): the outer execNew uses
   // for a None Outer. Its index is this host registry's, not a measured one.

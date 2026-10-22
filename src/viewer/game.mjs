@@ -39,7 +39,7 @@ export class ClientTravelBoundary extends Error {
 
 export async function createGame(map, asset, assets, { randomSeed = Math.floor(Date.now()/1000) >>> 0,
   onLightingChanged = null, onDataLinkTransmission = null, onConversationSpeech = null, onAudioVoice = null, presentation = false,
-  subtitles = null, musicLibrary = null, travel = null, saveDirectory = null, fullscreen = null } = {}) {
+  subtitles = null, musicLibrary = null, travel = null, saveDirectory = null, fullscreen = null, restore = null } = {}) {
   if(onDataLinkTransmission!=null&&typeof onDataLinkTransmission!=='function')
     throw new TypeError('createGame onDataLinkTransmission must be a function');
   const defaults = new ClassDefaults(assets), collision = new CollisionWorld(map.model), notes = [];
@@ -57,7 +57,11 @@ export async function createGame(map, asset, assets, { randomSeed = Math.floor(D
       actors.set(actor.index, { ...actor, values: await defaults.forActor(asset, actor) });
   const zones = map.model.zones.map(z => actors.get(z.actor)?.values ?? zoneDefault);
   const collidable = [], nonColliding = [];
+  // A saved level (docs/travel.md "Restoring a level"): GameInfo.Login reuses the unoccupied PlayerPawn of Level.PawnList, so the saved pawn
+  // is the player and takes no part in the generic actor registration below (the Player facade registers it).
+  const savedPlayer = restore ? await findSavedPlayer(map, actors, defaults, asset) : null;
   for (const actor of actors.values()) {
+    if (actor === savedPlayer) continue;
     const v = actor.values;
     actor.owner = actors.get(v.Owner) ?? null;
     if (!v.Location) continue;
@@ -112,17 +116,26 @@ export async function createGame(map, asset, assets, { randomSeed = Math.floor(D
   collision.registerActors(collidable);
   const start = [...actors.values()].find(a => a.className === 'PlayerStart' && a.values.bSinglePlayer && a.values.bEnabled !== false && a.values.Location);
   if (!start) throw new Error('No enabled single-player start in this map');
+  // A restored level starts the player where the saved pawn stands (its saved Location and ViewRotation).
+  const playerStart = savedPlayer ?? start;
   const checkBob = compileFunction(readFunction(engine, engine.exportsByPath.get('playerpawn.checkbob')));
-  const startYaw = (start.values.Rotation?.[1] ?? 0) * Math.PI / 32768;
-  const player = new Player(collision, playerDefaults, start.values.Location, p => zones[pointZone(map.model, p)] ?? zoneDefault, checkBob, startYaw);
+  const startYaw = ((savedPlayer ? savedPlayer.values.ViewRotation : start.values.Rotation)?.[1] ?? 0) * Math.PI / 32768;
+  const player = new Player(collision, playerDefaults, playerStart.values.Location, p => zones[pointZone(map.model, p)] ?? zoneDefault, checkBob, startYaw);
+  if (savedPlayer) {
+    // The saved pawn's export is the player's identity: the movement port binds it with its saved values, and every reference in the file
+    // to the pawn resolves to it.
+    const identity = player.bindCollisionIdentity(Object.assign(Object.create(null), savedPlayer, { controlledPlayer: true }),
+      { ...savedPlayer.values, Base: null });   // the base is the level, resolved once its identity exists (below)
+    actors.set(savedPlayer.index, identity);
+  }
   // Original Core startup passes time(NULL) to srand. This scene's shared
   // stream is also injectable for native comparisons and restored by reset.
   const random = createNativeRng(randomSeed);
   player.nativeRandom = random.frand;
-  Object.assign(player.collisionActor,{id:'$player',name:'JCDentonMale',
+  Object.assign(player.collisionActor,{id:'$player',name:savedPlayer?savedPlayer.name:'JCDentonMale',
     lineage:await defaults.lineage(dx,dx.exportsByPath.get('jcdentonmale')),
     collisionBits:player.collisionActor.flags,
-    values:{...playerDefaults,get Location(){return player.position;},get CollisionRadius(){return player.radius;},get CollisionHeight(){return player.height;},
+    values:{...(savedPlayer?savedPlayer.values:playerDefaults),get Location(){return player.position;},get CollisionRadius(){return player.radius;},get CollisionHeight(){return player.height;},
       // The live pawn velocity, read by scripts such as DeusExDecoration.Bump
       // (the pushed decoration copies Other.Velocity).
       get Velocity(){return player.velocity;}}});
@@ -147,10 +160,21 @@ export async function createGame(map, asset, assets, { randomSeed = Math.floor(D
     zoneActors:map.model.zones.map(z=>actors.get(z.actor)??null),
     levelValues:[...actors.values()].find(a=>a.className==='LevelInfo')?.values??zoneDefault,timeSeconds:()=>timeSeconds});
   playerScene.reset();
+  if (savedPlayer) playerScene.bindPlayerIdentity(player.collisionActor, savedPlayer.values);
   Object.defineProperty(playerScene.level,'timeSeconds',{configurable:true,
     get:()=>timeSeconds,set:value=>{timeSeconds=value;}});
   bumpBaseEpoch();
-  playerScene.level.actors = mapActorArray(map, actors, playerScene.level.actors[0], [player.collisionActor]);
+  const savedLevelInfo = savedPlayer ? actors.get(map.level.actors[0]).values : null;
+  playerScene.level.actors = mapActorArray(map, actors, playerScene.level.actors[0], savedPlayer ? [] : [player.collisionActor]);
+  if (savedPlayer) {
+    // Level.PawnList and each Pawn.NextPawn are the file's, not the order the host registered the pawns in (docs/pawn-list.md: preserve the
+    // decoded list when restoring existing state); Login walks this chain to find the unoccupied player.
+    // An actor based on the world was saved with Base = LevelInfo: the host member is the scene's LevelInfo, which replaced the decoded entry.
+    for (const actor of actors.values()) if (actor.values?.Base !== undefined) actor.base = actors.get(actor.values.Base) ?? null;
+    bumpBaseEpoch();
+    playerScene.level.pawnList = actors.get(savedLevelInfo.PawnList) ?? null;
+    for (const actor of actors.values()) if (actor.values && 'nextPawn' in actor.values || actor.isPawn) actor.nextPawn = actors.get(actor.values?.nextPawn) ?? null;
+  }
   // ULevel ReachSpec table (+0x8c, 28-byte records): serialized start/end are
   // map-export refs; the nav natives walk them as live actors. readLevel's
   // decode order already matches the native layout (distance,start,end,
@@ -165,15 +189,17 @@ export async function createGame(map, asset, assets, { randomSeed = Math.floor(D
   // before constructing the HUD (docs/script-viewport-console.md).
   // UClient::Decals is a config bool the original defaults to True; pawn
   // startup reaches AttachDecal through SpawnShadow and reads it here.
-  playerScene.level.engine = {client:{decals:true,viewports:[{actor:player.collisionActor}]}};
+  playerScene.level.engine = {client:{decals:true,viewports:[{actor:savedPlayer?null:player.collisionActor}]}};
   collision.doorCallbacks.dataLinkTransmission=event=>onDataLinkTransmission?.(event);
   collision.doorCallbacks.conversationSpeech=event=>onConversationSpeech?.(event);
   collision.doorCallbacks.audioVoice=event=>onAudioVoice?.(event);
   doors.scriptRuntime=await createScriptDoors({assets,asset,movers:collision.movers,
     playerActor:player.collisionActor,playerScene,playerController:player,level:playerScene.level,callbacks:collision.doorCallbacks,rng:random,
     nativeHud:presentation,queries:collision.queries, zoneAt: p => zones[pointZone(map.model, p)] ?? zoneDefault, onLightingChanged,
-    musicLibrary,travel,saveDirectory});
+    musicLibrary,travel,saveDirectory,modelIndex:map.level.model,restore:savedPlayer?{...restore,player:savedPlayer}:null});
   const levelTime=doors.scriptRuntime.runtime.namedReference(playerScene.level.actors[0],'TimeSeconds');
+  // LoadMap 0x1038dc59: a saved level continues its clock, ULevel.TimeSeconds (a double) = LevelInfo.TimeSeconds (a float).
+  if (savedPlayer) timeSeconds = levelTime.get();
   // Flicker's host key for every GlobalLighting caller (light-globals.mjs):
   // a map-placed actor's export index, else its Level.Actors slot (low byte).
   {
@@ -289,7 +315,7 @@ export async function createGame(map, asset, assets, { randomSeed = Math.floor(D
   playerScene.level.travelInfo = new Map(travel?.arrival?.travelInfo ?? []);
   const travelStep = travel ? createTravelStep({ runtime: doors.scriptRuntime.runtime, level: playerScene.level,
     viewport: () => playerScene.level.engine.client.viewports[0], exporter: doors.scriptRuntime.travelExporter,
-    store: doors.scriptRuntime.saveStore, log: doors.scriptRuntime.logLine,
+    store: doors.scriptRuntime.saveStore, log: doors.scriptRuntime.logLine, levelSaver: doors.scriptRuntime.levelSaver,
     lastURL: new Furl(travel.lastURL ?? { map: asset.name, op: DEFAULT_PLAYER_OPTIONS.map(([name, value]) => `${name}=${value}`) }),
     levelUrlMap: () => travel.arrival?.map ?? asset.name }) : null;
   const game = {
@@ -404,6 +430,10 @@ export async function createGame(map, asset, assets, { randomSeed = Math.floor(D
       return {actor: params[0], location: params[1], rotation: params[2], fov: readPlayer('FOVAngle')};
     },
     reset() {
+      // Player start cold-reloads the map's exports and runs their begin-play pass again: for a level restored from its saved file that would
+      // run begin play over the saved state (docs/travel.md "Play, step 3": a named stop; the original has no such step, a saved level is only
+      // ever restored by travel or by a loaded game).
+      if (savedPlayer) throw new Error('Player start does not reload a level restored from a saved file: its begin-play pass would run over the saved state (travel step 3 stop)');
       // LoadMap's first step, in the old world: the viewport's player is
       // dissociated and destroyed before anything reloads.
       doors.scriptRuntime?.retirePlayer();
@@ -539,4 +569,26 @@ export async function createGame(map, asset, assets, { randomSeed = Math.floor(D
       blockingActors: collision.actors.filter(actor => actor.blocking).length, collidableActors: collidable.length }; },
   };
   return game;
+}
+
+/** GameInfo.Login's pick among the saved pawns (Engine/GameInfo.uc:801): the first PlayerPawn of Level.PawnList whose Player is None, with a
+ * PlayerReplicationInfo and bIsPlayer, whose PRI.PlayerName is not the PRI class default (standalone takes it without the name and password
+ * match). Walks LevelInfo.PawnList / Pawn.NextPawn as the file saved them. Returns the decoded actor entry, or throws: a saved level with no such
+ * pawn would make Login spawn a new one at the player start, which a restore does not model yet. */
+async function findSavedPlayer(map, actors, defaults, asset) {
+  const levelInfo = actors.get(map.level.actors[0]);
+  const engine = await defaults.assets.get('Engine');
+  const priDefault = await defaults.get(engine, engine.exportsByPath.get('playerreplicationinfo'));
+  const seen = new Set();
+  for (let ref = levelInfo?.values.PawnList; ref && !seen.has(ref); ) {
+    seen.add(ref);
+    const pawn = actors.get(ref);
+    if (!pawn) break;
+    const lineage = await defaults.lineage(asset, asset.pkg.exports[pawn.index - 1].classIndex);
+    const pri = pawn.values.PlayerReplicationInfo ? actors.get(pawn.values.PlayerReplicationInfo) : null;
+    if (lineage.includes('engine.playerpawn') && !pawn.values.Player && pri && pawn.values.bIsPlayer !== false
+        && (pri.values.PlayerName ?? priDefault.PlayerName) !== priDefault.PlayerName) return pawn;
+    ref = pawn.values.nextPawn;
+  }
+  throw new Error('A saved level without an unoccupied saved player is not supported: GameInfo.Login would spawn a new pawn');
 }

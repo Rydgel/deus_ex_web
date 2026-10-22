@@ -458,9 +458,12 @@ export function createScriptTriggers({
     const constructed=runtime.fieldReference(playerActor,field).get();
     if(constructed?.getBool && constructed?.setBool){flagBase=constructed;return flagBase;}
     if (!field) throw new Error('DeusExPlayer.FlagBase property is not linked');
+    // PruneTravelActors destroys the FlagBase and sets the property to None (travel-save.mjs); any other change is the native's.
+    let destroyed = false;
     runtime.bindProperty(playerActor, field, {
-      get: () => flagBase,
+      get: () => destroyed ? null : flagBase,
       set: value => {
+        if (value === null) { destroyed = true; return; }
         if (value !== flagBase) throw new Error('Changing the trigger FlagBase requires native ownership');
       },
     });

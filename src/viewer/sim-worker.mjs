@@ -127,8 +127,11 @@ async function handle(data) {
       // disposeAudio), so that batch reaches the worklet before any of the
       // next map's.
       host?.dispose?.(); host = null; loadId = data.id; audio.length = 0; pending = null;
-      const asset = await assets.get(data.map);
-      host = await createSimHost(decodeMap(asset.bytes), asset, assets, { ...data.options, musicLibrary,
+      // A level filed in Save\Current (travel.mjs `restore`) is loaded from there, as a package of its own; else the map's .dx
+      const restore = data.options?.travel?.arrival?.restore ?? null;
+      const filed = restore ? (await import('./restore-asset.mjs')).restoredLevel((await import('../runtime/save-directory.mjs')).hostSaveDirectory(), restore) : null;
+      const asset = filed ? filed.asset : await assets.get(data.map);
+      host = await createSimHost(filed ? filed.map : decodeMap(asset.bytes), asset, assets, { ...data.options, musicLibrary, restore: Boolean(filed),
         onAudioVoice: event => audio.push({ kind: 'voice', event: plainVoice(event) }),
         onProgress: message => send({ type: 'progress', message }) });
       const summary = host.actorSim?.summary;
@@ -179,6 +182,8 @@ async function handle(data) {
         if (data.clock) setHostClock(data.clock);
         if (data.method === 'view') value = host.session.view();
         else if (data.method === 'reset') { host.session.reset(); value = { movers: host.session.movers(), view: host.session.view() }; }
+        // a saved level the load restored keeps its state: the page reads its movers and view without a Player start
+        else if (data.method === 'restoreView') value = { movers: host.session.movers(), view: host.session.view() };
         else if (data.method === 'stateDigest') value = stateDigest(game.doors.scriptRuntime.runtime,
           game.doors.scriptRuntime.runtime.levelFor(game.player.collisionActor));
         else if (data.method === 'decalProbe') value = decalProbe(game, data.args ?? {});

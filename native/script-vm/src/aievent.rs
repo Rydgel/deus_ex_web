@@ -1231,3 +1231,224 @@ pub extern "C" fn ai_dump(out: u32, capacity: u32) -> u32 {
     dump[ring_at] = ring;
     n as u32
 }
+
+// The manager as UEventManager::Serialize and the three XAIEvent classes' Serialize write it (docs/travel.md "The .dxs"): u32 words,
+//   header: current_slot, ref_processing, delete_count, first_process, type count
+//   per type in bucket order: bucket, name, hash, sender count, receiver count
+//     per sender: actor, destroyed, 64 slot words, 4 current words (holdScore is not serialized)
+//     per receiver: actor, destroyed, callback, score callback, invoke, state, 4 checks, on, best score, best sender,
+//                   next slot, next process, prev process
+// `first_process`, `next_process` and `prev_process` name a receiver by its ordinal + 1 (0: none) in the order the words list them;
+// `best_sender` is the best sender's actor handle word, as AIProcess stores it (`snd(candidate).actor`: an Actor, which the file holds as the
+// actor's object reference); the XAIParams block is transient and loads as zero.
+const SENDER_WORDS: usize = 2 + 64 + 4;
+const RECEIVER_WORDS: usize = 16;
+
+/// Rebuild the manager from the words of a saved level (UEventManager::Serialize's load). Returns 0, or 1 when the words do not
+/// describe a manager, 2 when a table is full.
+#[no_mangle]
+pub extern "C" fn ai_load(words: u32, count: u32) -> u32 {
+    if unsafe { POOL.is_null() } {
+        return 1;
+    }
+    let w = unsafe { core::slice::from_raw_parts(words as usize as *const u32, count as usize) };
+    if w.len() < 5 {
+        return 1;
+    }
+    ai_reset();
+    m().current_slot = w[0];
+    m().ref_processing = w[1] as i32;
+    m().delete_count = w[2] as i32;
+    let first = w[3] as usize;
+    let types = w[4] as usize;
+    let mut at = 5usize;
+    // First pass: allocate and fill in file order; the links that name an event by ordinal are resolved after.
+    let mut receivers: [u32; MAX_RECEIVERS] = [0; MAX_RECEIVERS];
+    let (mut ns, mut nr) = (0usize, 0usize);
+    let mut links: [(u32, u32); MAX_RECEIVERS] = [(0, 0); MAX_RECEIVERS];
+    let mut tails: [u32; 256] = [0; 256];
+    for _ in 0..types {
+        if at + 5 > w.len() {
+            return 1;
+        }
+        let (bucket, name, hash, sc, rc) = (w[at] as usize & 255, w[at + 1], w[at + 2], w[at + 3] as usize, w[at + 4] as usize);
+        at += 5;
+        let t = alloc(0);
+        if t == 0 {
+            return 2;
+        }
+        *ty(t) = EType { name, hash, senders: 0, receivers: 0, next: 0 };
+        if tails[bucket] == 0 {
+            m().table[bucket] = t;
+        } else {
+            ty(tails[bucket]).next = t;
+        }
+        tails[bucket] = t;
+        let mut prev = 0u32;
+        for _ in 0..sc {
+            if at + SENDER_WORDS > w.len() || ns >= MAX_SENDERS {
+                return 1;
+            }
+            let s = alloc(1);
+            if s == 0 {
+                return 2;
+            }
+            let mut sender = SENDER0;
+            sender.ty = t;
+            sender.actor = w[at];
+            sender.destroyed = w[at + 1];
+            for slot in 0..16 {
+                for i in 0..4 {
+                    sender.slots[slot][i] = w[at + 2 + slot * 4 + i];
+                }
+            }
+            for i in 0..4 {
+                sender.current[i] = w[at + 66 + i];
+            }
+            *snd(s) = sender;
+            if prev == 0 {
+                ty(t).senders = s;
+            } else {
+                snd(prev).next = s;
+            }
+            prev = s;
+            ns += 1;
+            at += SENDER_WORDS;
+        }
+        let mut prev = 0u32;
+        for _ in 0..rc {
+            if at + RECEIVER_WORDS > w.len() || nr >= MAX_RECEIVERS {
+                return 1;
+            }
+            let r = alloc(2);
+            if r == 0 {
+                return 2;
+            }
+            let mut receiver = RECEIVER0;
+            receiver.ty = t;
+            receiver.actor = w[at];
+            receiver.destroyed = w[at + 1];
+            receiver.callback = w[at + 2];
+            receiver.score_callback = w[at + 3];
+            receiver.invoke = w[at + 4];
+            receiver.state = w[at + 5];
+            for i in 0..4 {
+                receiver.checks[i] = w[at + 6 + i];
+            }
+            receiver.on = w[at + 10];
+            receiver.best_score = w[at + 11];
+            // the best sender is the sender's Actor (AIProcess stores `snd(candidate).actor`), not an event: it is the actor's handle word
+            receiver.best_sender = w[at + 12];
+            receiver.next_slot = w[at + 13];
+            links[nr] = (w[at + 14], w[at + 15]);
+            *rcv(r) = receiver;
+            if prev == 0 {
+                ty(t).receivers = r;
+            } else {
+                rcv(prev).next = r;
+            }
+            prev = r;
+            receivers[nr] = r;
+            nr += 1;
+            at += RECEIVER_WORDS;
+        }
+    }
+    if at != w.len() {
+        return 1;
+    }
+    for i in 0..nr {
+        let (next, prev) = links[i];
+        let r = receivers[i];
+        let pick = |ordinal: u32, table: &[u32], n: usize| if ordinal == 0 || ordinal as usize > n { 0 } else { table[ordinal as usize - 1] };
+        rcv(r).next_process = pick(next, &receivers, nr);
+        rcv(r).prev_process = pick(prev, &receivers, nr);
+    }
+    m().first_process = if first == 0 || first > nr { 0 } else { receivers[first - 1] };
+    0
+}
+
+/// The manager in `ai_load`'s words; returns the count, or 0 when `capacity` is too small.
+#[no_mangle]
+pub extern "C" fn ai_snapshot(out: u32, capacity: u32) -> u32 {
+    let dump = unsafe { core::slice::from_raw_parts_mut(out as usize as *mut u32, capacity as usize) };
+    let mut n = 0usize;
+    let mut ok = true;
+    let mut put = |value: u32| {
+        if n < dump.len() {
+            dump[n] = value;
+            n += 1;
+        } else {
+            ok = false;
+        }
+    };
+    // ordinals: receivers numbered in the order they are listed
+    let mut receiver_ordinal: [u32; MAX_RECEIVERS + 1] = [0; MAX_RECEIVERS + 1];
+    let (mut nr, mut types) = (0u32, 0u32);
+    for bucket in 0..256usize {
+        let mut t = m().table[bucket];
+        while t != 0 {
+            types += 1;
+            let mut r = ty(t).receivers;
+            while r != 0 {
+                nr += 1;
+                receiver_ordinal[r as usize] = nr;
+                r = rcv(r).next;
+            }
+            t = ty(t).next;
+        }
+    }
+    let first = m().first_process;
+    put(m().current_slot);
+    put(m().ref_processing as u32);
+    put(m().delete_count as u32);
+    put(if first != 0 { receiver_ordinal[first as usize] } else { 0 });
+    put(types);
+    for bucket in 0..256u32 {
+        let mut t = m().table[bucket as usize];
+        while t != 0 {
+            let (mut sc, mut rc) = (0, 0);
+            let mut s = ty(t).senders;
+            while s != 0 {
+                sc += 1;
+                s = snd(s).next;
+            }
+            let mut r = ty(t).receivers;
+            while r != 0 {
+                rc += 1;
+                r = rcv(r).next;
+            }
+            put(bucket);
+            put(ty(t).name);
+            put(ty(t).hash);
+            put(sc);
+            put(rc);
+            let mut s = ty(t).senders;
+            while s != 0 {
+                put(snd(s).actor);
+                put(snd(s).destroyed);
+                for slot in 0..16 {
+                    for i in 0..4 {
+                        put(snd(s).slots[slot][i]);
+                    }
+                }
+                for i in 0..4 {
+                    put(snd(s).current[i]);
+                }
+                s = snd(s).next;
+            }
+            let mut r = ty(t).receivers;
+            while r != 0 {
+                let e = *rcv(r);
+                for word in [e.actor, e.destroyed, e.callback, e.score_callback, e.invoke, e.state, e.checks[0], e.checks[1], e.checks[2], e.checks[3], e.on,
+                    e.best_score, e.best_sender, e.next_slot,
+                    if e.next_process != 0 { receiver_ordinal[e.next_process as usize] } else { 0 },
+                    if e.prev_process != 0 { receiver_ordinal[e.prev_process as usize] } else { 0 }] {
+                    put(word);
+                }
+                r = e.next;
+            }
+            t = ty(t).next;
+        }
+    }
+    if ok { n as u32 } else { 0 }
+}

@@ -90,22 +90,41 @@ export class ScriptState {
         this.execution.cursor=offset;this.execution.returned=false;
       }else{
         if(this.execution)this.execution.cursor=null;
-        const execution=node.compiled.createFrame(this.instance,this.locals,this.services,{offset,state:true});
-        this.execution=execution;
-        this.codeNode=node;
-        Object.defineProperty(execution,'latent',{get:()=>this.latent,set:value=>{this.latent=value;},configurable:true});
-        let cursor=execution.cursor;
-        Object.defineProperty(execution,'cursor',{get:()=>cursor,set:value=>{
-          const was=cursor===null;
-          cursor=value;
-          if(was!==(value===null))frameChanged(this.instance);
-        },configurable:true,enumerable:true});
-        frameChanged(this.instance);
+        this.startFrame(node,offset);
       }
       return true;
     }
     if(this.execution)this.execution.cursor=null;
     return false;
+  }
+  /** A new code frame for `node` whose cursor starts at `offset` (gotoLabel's, and a restored FStateFrame's). */
+  startFrame(node,offset) {
+    const execution=node.compiled.createFrame(this.instance,this.locals,this.services,{offset,state:true});
+    this.execution=execution;
+    this.codeNode=node;
+    Object.defineProperty(execution,'latent',{get:()=>this.latent,set:value=>{this.latent=value;},configurable:true});
+    let cursor=execution.cursor;
+    Object.defineProperty(execution,'cursor',{get:()=>cursor,set:value=>{
+      const was=cursor===null;
+      cursor=value;
+      if(was!==(value===null))frameChanged(this.instance);
+    },configurable:true,enumerable:true});
+    frameChanged(this.instance);
+    return execution;
+  }
+  /** UObject::Serialize's load of the saved FStateFrame (the Node, StateNode, ProbeMask and LatentAction words, then the code offset when the
+   * node is non-null; docs/travel.md "The .dxs"): the state, its probe mask, the code frame at `offset` in `codeNode`, and the latent action
+   * the next ProcessState polls. The frame's local variables are not part of the file (the original's frame starts with its locals zeroed). */
+  restoreFrame({stateNode,codeNode,probeMask,latentAction,offset}) {
+    this.setStateNode(stateNode);
+    this.probeMask=probeMask;
+    this.latent=0;
+    if(codeNode&&offset>=0){
+      if(!codeNode.compiled.decoded.statements.has(offset))throw new Error('A saved state offset is not an instruction boundary');
+      this.startFrame(codeNode,offset);
+    }
+    this.latent=latentAction;
+    this.changedState=true;
   }
   /** Poll a pre-existing latent action before running statements. A native call
    * may install another latent action and must suspend until the next phase. */

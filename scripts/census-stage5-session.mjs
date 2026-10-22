@@ -5,13 +5,17 @@ import {Undriven, near, PI, simulatedMsAdvance} from './census-stage5-drivers.mj
 
 import {actorRenderFeedback} from '../src/viewer/actor-render-feedback.mjs';
 
-export async function openSession(map, assets, {travel = null} = {}) {
+export async function openSession(map, assets, {travel = null, saveDirectory = null} = {}) {
   const {decodeMap} = await import('../src/unreal/map.mjs');
   const {createGame} = await import('../src/viewer/game.mjs');
   const {createSimSession} = await import('../src/viewer/sim-session.mjs');
   const {createPlayerInputFixture} = await import('./player-input-fixture.mjs');
-  const asset = await assets.get(map);
-  const game = await createGame(decodeMap(asset.bytes), asset, assets, {randomSeed: 1, presentation: true, ...(travel ? {travel} : {})});
+  // A level filed in Save\Current is opened from there (travel.mjs `restore`), as the page's worker does
+  const restore = travel?.arrival?.restore ?? null;
+  const filed = restore ? (await import('../src/viewer/restore-asset.mjs')).restoredLevel(saveDirectory, restore) : null;
+  const asset = filed ? filed.asset : await assets.get(map);
+  const game = await createGame(filed ? filed.map : decodeMap(asset.bytes), asset, assets, {randomSeed: 1, presentation: true, ...(travel ? {travel} : {}),
+    ...(saveDirectory ? {saveDirectory} : {}), ...(filed ? {restore: true} : {})});
   const sim = createSimSession(game, {assets});
   const runtime = game.doors.scriptRuntime.runtime;
   const player = () => game.player.collisionActor;

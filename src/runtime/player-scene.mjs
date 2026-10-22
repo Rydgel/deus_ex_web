@@ -279,7 +279,7 @@ export function bindPlayerScene(player,collision,{model,actors,nonColliding=[],z
     for(const actor of actors)if(actor.isPawn)addPawn(level,actor);
     Object.assign(source,{worldActor,standingCount:0,touching:[null,null,null,null],isPawn:true,pawnFlags:2,
       actorFlags:(player.defaults.bStatic?1:0)|(player.defaults.bMovable?0x80000:0)|(player.defaults.bCollideWhenPlacing?0x20000:0),
-      collideWorld:Boolean(source.flags&2),collideActors:Boolean(source.flags&1),motionFlags:player.defaults.bJustTeleported?0x100:0,
+      collideWorld:Boolean(source.flags&2),collideActors:Boolean(source.flags&1),motionFlags:(source.values?.bJustTeleported??player.defaults.bJustTeleported)?0x100:0,
       mass:player.defaults.Mass,warping:false,specialGoal:null});
     collision.queries.addActor(source);player.actorRegistered=true;
     addPawn(level,source);

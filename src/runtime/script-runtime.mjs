@@ -975,6 +975,19 @@ export class ScriptRuntime {
   playerNativeObject(player) {
     const instance = this.instance(player);
     if (Number.isInteger(instance.nativeObject?.index)) return instance.nativeObject;
+    // A saved level's pawn is a map export whose GObjObjects slot nothing measured; the registry gives it the slot AddObject would
+    // (a modeled index, docs/travel.md "Unresolved" 10), as it does a spawned player's.
+    if (instance.nativeObject?.modeledIndex) {
+      const construction = this.actorLifecycle?.construction, existing = instance.nativeObject;
+      const packageOuter = this.levelFor(player)?.nativeObject?.outer;
+      if (!packageOuter || !Number.isInteger(packageOuter.index)) throw new Error('new(Self) requires the level package outer');
+      existing.outer = packageOuter;
+      const fname = construction.internName(existing.name);
+      if (!fname || !Number.isInteger(fname.index)) throw new Error('Player FName is not interned');
+      existing.index = -1; existing.nameIndex = fname.index; existing.hashNext = null; existing.objectClass = instance.cls;
+      construction.registry.add(existing);
+      return existing;
+    }
     if (instance.nativeObject) throw new Error('Player native object index is unmeasured');
     const level = this.levelFor(player);
     const packageOuter = level?.nativeObject?.outer;
