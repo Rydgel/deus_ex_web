@@ -73,11 +73,13 @@ export function createConfigStore({ saved = new Map(), persist = null } = {}) {
     /** Flush's write of a file: the text `FConfigFile::Write` built, kept as the bytes appSaveStringToFile writes. */
     write(name, text) {
       const leaf = lower(name);
+      if (!PERSISTED_INI.includes(leaf)) return null;            // GConfig's other files (Running.ini, Detected.ini) are the launcher's
       return store.accept(leaf, { bytes: encodeIniText(text), base: installedBytes.get(leaf) ?? new Uint8Array(0) });
     },
     /** Take a record (a write of the simulation worker, a record the host loaded) and hand it to the sink. */
     accept(leaf, record) {
       leaf = lower(leaf);
+      if (!PERSISTED_INI.includes(leaf)) return null;
       records.set(leaf, { bytes: record.bytes, base: record.base });
       layers.delete(leaf); rebased.delete(leaf);
       return persist?.(leaf, records.get(leaf));

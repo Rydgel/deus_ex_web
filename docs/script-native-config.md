@@ -126,11 +126,10 @@ exists to switch; this is the browser standing in for the render device, labelle
 
 ## Not covered
 
-* **Persistence.** `SaveConfig` writes GConfig and `Flush` stores the text it would have saved
-  in the cache's in-memory `written` file (config-cache.mjs). The browser has no writable System
-  directory, so nothing survives a reload; each map load builds a fresh GConfig from the
-  installed files. The page's brightness control and drawing-buffer request do persist across
-  map loads within a page. Writing the INI files back is Stage 6.
+* **Persistence (2026-10-22).** `SaveConfig` writes GConfig and `Flush` hands the file it would have saved to the config store (config-cache.mjs `onWrite`), which keeps it in the browser
+  (IndexedDB) and returns it over the installed file on the next map load and the next page start, as the original rereads the file it wrote: [configuration persistence](config-persistence.md).
+  On for the default start, off for `?debug=1`. `SetRes` writes the Fullscreen* or Windowed* viewport keys through `UWindowsViewport::ResizeViewport`'s `Client->SaveConfig()`
+  (`resizeViewport`); `saveInstance` is SaveConfig on the live object, `saveConfig` on the class defaults (GlobalSetProperty's).
 * Live effect of most client and device properties (`TextureDetail`, `SkinDetail`, `NoLighting`,
   `CurvedSurfaces`, `ScreenFlashes`, `DetailTextures`, `HighDetailActors`, ...): the value is
   stored, exported and saved, but Play does not read it. Wired: Brightness (display ramp),

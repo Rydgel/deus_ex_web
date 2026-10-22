@@ -42,7 +42,8 @@ key/value strings. Every key compare is case-insensitive.
 
 The browser cannot write the System directory. The written text is kept in
 `ConfigCache.written`, and a later `Find` reads it instead of the installed
-file. Nothing yet persists it across page loads; that is save/profile work.
+file. `onWrite(name, text)` hands each written file to the config store, which keeps it in the
+browser across map loads and page loads ([configuration persistence](config-persistence.md)).
 
 ## LoadConfig(Propagate, Class, Filename)
 

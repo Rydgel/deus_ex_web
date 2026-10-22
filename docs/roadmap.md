@@ -951,7 +951,7 @@ render device classes (the D3D device, a documented host choice), whose 66 confi
 Brightness reaches the display ramp through the render device's Flush, the volume sliders the
 Galaxy mixer through PostEditChange / SetVolumes, Decals the decal pass, and Mouse
 Sensitivity / Invert Mouse the original `PlayerInput`; a worker-mode browser check drives the
-menus' buttons and slider thumbs. INI persistence (Stage 6), UI Background = Snapshot (native
+menus' buttons and slider thumbs. INI persistence (kept in the browser since 2026-10-22, [configuration persistence](config-persistence.md)), UI Background = Snapshot (native
 1524), Toggle Full-Screen and the live effect of the remaining client and device properties
 are explicit boundaries. See [settings menus](settings-menus.md),
 [native config](script-native-config.md), [Core casts](script-core-casts.md) and
@@ -1193,6 +1193,10 @@ Done when reloads and return visits preserve expected world state, and the campa
 can be completed through representative choices and endings without progression
 blockers. Validate each mission's conversations, events, and transitions against
 the original game; keep a per-mission compatibility checklist.
+
+Settings persistence is done (2026-10-22): the original's DeusEx.ini and User.ini writes are measured under Wine and Play keeps them in the browser across map loads and
+reloads ([configuration persistence](config-persistence.md)); [save storage](save-storage.md) is the browser storage layer for saves (IndexedDB and a picked folder behind one interface, the
+failure cases, the import/export fallback), built and tested, not yet wired to the page.
 
 Map travel, the first of these steps, is traced and measured in [travel](travel.md)
 (2026-10-21): the script and native chain from `SendPlayer` to the next level's login,

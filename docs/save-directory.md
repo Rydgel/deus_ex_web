@@ -90,7 +90,7 @@ before and after, so it is the pre-existing seed's, not the natives'.
 ## Play
 
 * `src/runtime/save-directory.mjs`: the **save directory** interface the natives read (`directories()`, `files(dir)`, `info(dir)`, `freeSpaceBytes()`), an in-memory implementation (`createSaveDirectory`, **empty by default**, with `put`/`remove` for the
-  future `SaveGame`/`DeleteGame`), and the pure bodies (slot names, FindFirstFile wildcards, the KB sums, the free-space conversion, `GetNewSaveFileIndex`, `GenerateSaveFilename`). A browser store (IndexedDB) implements the same five reads; its writes are step 4.
+  future `SaveGame`/`DeleteGame`), and the pure bodies (slot names, FindFirstFile wildcards, the KB sums, the free-space conversion, `GetNewSaveFileIndex`, `GenerateSaveFilename`). A browser store (IndexedDB) or a picked folder implements them: `save-store.mjs` (`createStoredSaveDirectory` over a save backend), designed in [save storage](save-storage.md); its writes are step 4.
   `hostSaveDirectory()` is the one directory of a JavaScript realm (the page, or the sim worker), so it outlives the per-map sessions; `createGame({saveDirectory})` takes another.
 * `src/runtime/script-game-directory.mjs`: `prepareGameDirectoryStore` (called by `script-doors.mjs` next to the dump and log stores): the natives of the table, `GameDirectory` objects that take their registry slot
   from `allocateObject` like the original's `new`, `DeusExSaveInfo` objects filled from the store's `info`, the package, linker and snapshot-export slots, `Destroy`, `Serialize` and the scalar deleting destructor (`CriticalDelete`, `script-runtime.mjs`).

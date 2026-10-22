@@ -76,7 +76,9 @@ Play's 1280 × 720 frame has. At 960 × 720 (the original after `--early-cmds "S
 place (x 175 to 780) and with the logo the same size; that capture's hold caught the spinning logo at another yaw, so its pixels are not
 compared. The default start therefore draws a 4:3 picture centred in the window at the window's own pixel density (`screenAspect` `4:3`); a
 resolution chosen in the menu (`SetRes`) fixes the buffer to that size as before, and `?debug=1` keeps its own choice (the window's shape by
-default). The page does not yet keep a chosen resolution across a reload (configuration persistence is Stage 6's).
+default). A resolution chosen in the menu is kept across a reload with the other settings
+([configuration persistence](config-persistence.md)): `SetRes` writes the Fullscreen* or Windowed* viewport keys, and the next start fixes the drawing buffer to the ones `StartupFullscreen`
+picks when they differ from the installed file's.
 
 **The mouse and fullscreen (2026-10-21).** The original starts fullscreen with the mouse captured (`StartupFullscreen=True`, `CaptureMouse=True`),
 its menus draw their own cursor, and its viewport's `WM_KEYDOWN`/`WM_SYSKEYDOWN` case (WinDrv.dll `0x1110a280`) turns Enter with Alt held

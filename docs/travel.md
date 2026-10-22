@@ -621,7 +621,7 @@ Those three stay named stops (below).
 
 * the three property kinds above; weapons with mods, a carried decoration, charged pickups' state and an item with a `Charge` the scenarios did not change (the generic kinds they use are covered; the classes were not exercised);
 * every Browse branch but the wipe and `?restart`: same-mission travel and visited-map restoration are step 3, loadgame is step 4; the other menu entries (Play Intro, Load Game, Credits);
-* `bAskedToTrain` is saved by `SaveConfig` as the original does, and Play's config is not persisted across page loads yet ([script config](script-config.md): save/profile work): a reloaded page asks "train first?" again.
+* `bAskedToTrain` is saved by `SaveConfig` as the original does, and since 2026-10-22 the default start keeps it across page loads ([configuration persistence](config-persistence.md)): a reloaded page asks "train first?" once.
 
 **Verified not regressed** (2026-10-21, at the step's last commit): 691 unit tests; `validate-travel` (A, B, C) and `validate-travel-play`; the validators of the code the step touched (`--filter console`: 4, `native-config`: 2, `class-import`, `script-config`, `window-list`: 16, `window-typed`: 3, `gc-underline`, `settings`: 2); the Stage 5 live replays `cad1` and `key1` (Training) and `cmb1` and `die1`
 (Island, the level end after tick 1931 in both); and the intro's gate row 4.5.7 (`validate-stage4-acceptance.mjs --only '^4\.5\.7$'`, 214 s: the intro's CameraPoint shots and `native-find-base`).

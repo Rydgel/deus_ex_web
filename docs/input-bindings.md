@@ -294,7 +294,8 @@ real keys: Down and Enter on the second row make it wait for a key; `G` is taken
 `ShowGoalsWindow`; then `G` with an item highlighted picks it up and opens no goals screen. The wheel is a key the screen takes too (the row
 waits for any key, mouse keys included): a notch up rebinds `MouseWheelUp`, and the next notch up then runs the new binding. The key list is a
 scroll area: with the cursor over it a notch down moves the thumb one step, a notch up back, and in the inventory screen the wheel is consumed by
-the root (the belt does not move). Persisting the changed bindings across a page reload is Stage 6's configuration persistence: not built here.
+the root (the belt does not move). The changed bindings are written to `[Extension.InputExt]` of User.ini at OK (measured under Wine) and kept across a page reload on the default start
+([configuration persistence](config-persistence.md)).
 
 ## Putting the hand away
 

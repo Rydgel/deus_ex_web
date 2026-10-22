@@ -62,9 +62,8 @@ first one when the browser's buffer is none of them.
 
 ## Boundaries
 
-* **Persistence.** The INI files are not written back (Stage 6): `SaveConfig` updates the
-  in-memory GConfig, which each map load rebuilds from the installed files; only the page's own
-  Brightness control and fixed resolution survive map loads.
+* **Persistence (2026-10-22).** Each OK writes the changed file at once, as the original does (measured under Wine), and the page keeps it across map loads and reloads on the default
+  start: [configuration persistence](config-persistence.md). Open: the Display screen's Resolution choice lists the host's modes, so an untouched choice sends `SetRes 640x480` at OK.
 * `GetCurrentColorDepth`, `EndFullscreen`, `Preferences` are explicit errors. Toggle
   Full-Screen Mode and the Render Device restart are host requests ([host services](host-services.md)).
 * Live effect of the other client and render-device properties (texture detail, `NoLighting`,

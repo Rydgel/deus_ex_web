@@ -118,3 +118,13 @@ test('the startup viewport is the one StartupFullscreen picks, and only a differ
   assert.equal(chosenResolution(SYSTEM, chosenWindowed), null);
   assert.deepEqual(chosenResolution(null, chosen), { width: 1024, height: 768 }, 'no installed file: any kept size is a choice');
 });
+
+test('only the System and User files are kept', () => {
+  const sunk = [];
+  const store = createConfigStore({ persist: (leaf) => sunk.push(leaf) });
+  assert.equal(store.write('Detected.ini', '[A]\r\n'), null);
+  assert.equal(store.accept('Running.ini', { bytes: bytes('x'), base: bytes('') }), null);
+  store.write('User.ini', USER);
+  assert.deepEqual(sunk, ['user.ini']);
+  assert.deepEqual([...store.snapshot().keys()], ['user.ini']);
+});

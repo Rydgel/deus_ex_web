@@ -213,6 +213,20 @@ const second = await scenarios(SESSION_2, exact ? {'deusex.ini': wine('cfg2.star
   is(second.snapshot('user.ini'), before, 'and writes nothing');
 }
 
+// ---- The fullscreen branch of SetRes: read from WinDrv.dll 0x1110e2f6-0x1110e35d, NOT measured (the Wine viewport was windowed) -----------------------
+{
+  const s = await session({'deusex.ini': await textOf('deusex.ini'), 'user.ini': await textOf('user.ini')});
+  const keys = () => Object.fromEntries((s.snapshot('deusex.ini') ?? '').split('\r\n').filter(line => /^(Fullscreen|Windowed)(ViewportX|ViewportY|ColorBits)=/.test(line)).map(line => line.split('=')));
+  const set = command => { s.host.consoleCommands.consoleCommand(s.player, command); return keys(); };
+  is(s.host.display.fullscreen, true, 'the installed StartupFullscreen=True opens the viewport fullscreen');
+  is(set('SetRes 800x600'), {WindowedViewportX: '640', WindowedViewportY: '480', WindowedColorBits: '16', FullscreenViewportX: '800', FullscreenViewportY: '600', FullscreenColorBits: '16'},
+    'fullscreen SetRes stores the Fullscreen* keys and the viewport\'s colour depth');
+  is(set('SetRes 1024x768x32').FullscreenColorBits, '32', 'a depth in the command becomes ColorBits (bytes * 8)');
+  s.game.viewportFullscreen = false;
+  is(set('SetRes 640x480'), {WindowedViewportX: '640', WindowedViewportY: '480', WindowedColorBits: '32', FullscreenViewportX: '1024', FullscreenViewportY: '768', FullscreenColorBits: '32'},
+    'windowed SetRes stores the Windowed* keys, with the depth the viewport now holds');
+}
+
 // ---- Part 2: a new page over the kept files ---------------------------------------------------------------------------------------------
 {
   const kept = new Map([...second.store.snapshot()]);
