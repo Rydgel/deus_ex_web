@@ -172,6 +172,9 @@ const fail = (stage, error) => {
   finish();
 };
 if (!spec) { fail('plan', new Error(`no transition ${option('one')}`)); }
+if (spec.id === '00_intro|MapExit1') {   // the intro ends through MissionIntro.Timer -> PostIntro (travel step 5, first part); this exit has no DestMap and is never triggered
+  result.stage = 'deferred'; result.ok = true; result.deferred = 'the intro ends through MissionIntro/PostIntro (travel step 5, first part)'; finish();
+}
 
 try {
   const { AssetStore } = await import('../src/unreal/assets.mjs');
@@ -366,6 +369,15 @@ try {
       result.noTravelEffects = { playerTraveling: flagsAfter.includes('PlayerTraveling'), state: c.state(c.player()).split('.').pop() };
       try { c.frames(120); } catch (error) { result.stop = { stage: 'after-no-travel', name: error?.name, message: String(error?.message).split('\n')[0] }; result.ok = false; }
     }
+    finish();
+  }
+  // The entries the first part of step 5 owns (Play Intro, Credits, `dxonly`, the three endings: docs/travel.md "Play, step 5 (first part)"): the request is checked here,
+  // the arrival is that part's validators'
+  const DEFERRED = new Set(['dx', 'dxonly', '99_endgame1', '99_endgame2', '99_endgame3']);
+  if (DEFERRED.has(spec.dest)) {
+    result.stage = 'deferred'; result.ok = first.branchOk && first.missionLineOk !== false;
+    result.deferred = 'the arrival at the logo map, DXOnly or an ending belongs to travel step 5, first part';
+    if (!result.ok) result.stop = { stage: 'check', name: 'Mismatch', message: `branch ${first.branch}, expected ${first.expect?.branch}` };
     finish();
   }
   const d = await arrive(first.raw, spec, first);
