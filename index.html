@@ -48,6 +48,7 @@
           <option value="keypad" title="Reset Play in front of the Training keypad that opens paddoor">Keypad</option>
         </select>
         <button id="diagnostics" aria-expanded="false" aria-controls="panel">Diagnostics</button>
+        <button id="saves-open" title="Where the Load Game screen finds your saves (Alt+S)">Saves…</button>
       </section>
       <input id="folder" type="file" webkitdirectory multiple hidden />
     </header>
@@ -70,6 +71,7 @@
           <h1 id="gate-title">Open your Deus Ex installation</h1>
           <p id="gate-message">Choose the folder containing Maps, Textures, and System. Files are read on this device.</p>
           <button id="gate-choose">Choose game folder</button>
+          <button id="gate-saves" class="gate-link" title="Where the Load Game screen finds your saves: a Save folder on disk, or this browser">Saves…</button>
           <progress id="progress" hidden aria-label="Loading map"></progress>
         </div>
       </div>
@@ -103,6 +105,21 @@
       <span id="performance"></span>
     </footer>
   </main>
+  <dialog id="saves-dialog" aria-labelledby="saves-title">
+    <h2 id="saves-title">Saves</h2>
+    <p id="saves-status" role="status">Saves are kept in this browser.</p>
+    <p id="saves-note" class="saves-note" hidden></p>
+    <div class="saves-actions">
+      <button id="saves-folder" hidden title="Pick the Save folder of the desktop game (or the game folder): the Load Game screen lists it and the page saves there">Use a Save folder…</button>
+      <button id="saves-reconnect" hidden title="The browser asks again before this page may use the folder you picked">Reconnect folder</button>
+      <button id="saves-forget" hidden title="Go back to this browser's storage; the folder's files stay where they are">Stop using the folder</button>
+      <button id="saves-import" title="Add the saves of a Save folder (or of one SaveNNNN folder) to what this page keeps">Import saves…</button>
+      <button id="saves-export" title="Download the saves as a zip file to unpack into the game's Save folder">Export saves</button>
+    </div>
+    <p class="shortcut-hint"><kbd>Alt+S</kbd> opens this window · Option+S on a Mac</p>
+    <input id="saves-input" type="file" webkitdirectory multiple hidden />
+    <form method="dialog"><button id="saves-close">Close</button></form>
+  </dialog>
   <script type="module" src="/src/viewer/main.mjs"></script>
 </body>
 </html>

@@ -2201,7 +2201,7 @@ export async function createScriptDoors({
   await preparePlayerDumpStore({runtime,assets});
   // The Load Game and Save Game screens' save-game directory (natives 3013 and 3075..3094, docs/save-directory.md): Play's Save directory,
   // empty unless the host supplies one (the page's, which outlives the maps).
-  await prepareGameDirectoryStore({runtime,assets,directory:saveDirectory??hostSaveDirectory()});
+  await prepareGameDirectoryStore({runtime,assets,directory:saveDirectory??hostSaveDirectory(),windowHost:()=>windowHost});
   // A session that travels (Play, the travel validators) runs ClientTravel and DeleteSaveGameFiles as recovered; others keep their named stops.
   const saveStore=travel?createSaveStore({releaseLoaders:()=>logLine('Log',`Unloading: Package ${asset.name}`)}):null;
   if(travel)installTravelNatives({runtime,store:saveStore});

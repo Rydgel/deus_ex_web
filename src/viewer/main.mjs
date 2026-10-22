@@ -6,6 +6,9 @@ import { AssetStore } from '../unreal/assets.mjs';
 import { readGlobalConfigBool, parseIniValue } from '../unreal/user-config.mjs';
 import { decodeIniBytes } from '../runtime/ini-bytes.mjs';
 import { openConfigPersistence, persistenceMode } from '../runtime/config-persistence.mjs';
+import { openSavePersistence, saveMode, devServedSaves } from './save-persistence.mjs';
+import { createSavesUi } from './saves-ui.mjs';
+import { hostSaveDirectory } from '../runtime/save-directory.mjs';
 import { chosenResolution } from '../runtime/display-config.mjs';
 import { decodeMap } from '../unreal/map.mjs';
 import { toView, fromView } from '../unreal/geometry.mjs';
@@ -399,6 +402,36 @@ function reportStorage(state) {
   if (!state.message || storageToasted.has(state.kind)) return;
   storageToasted.add(state.kind); toast(state.message, 12000);
 }
+// The player's saves (docs/save-storage.md "The folder flow"): where they are kept (a folder on disk, the browser, memory), the listing the simulation's
+// Save directory is given, and the Saves window (the gate, Tools and Alt+S open it) that changes them. Opened at page start so the window works at the
+// gate, before the game files; the simulation gets the listing at init and again at every change. The dev server's own Save folder is read under it.
+let savePersistence = null, saveRefreshed = 0;
+const savesUi = createSavesUi({ $, toast, persistence: () => savePersistence });
+savesUi.bind();
+function pushSaves() {
+  const listing = savePersistence?.simSaves();
+  if (!listing) return;
+  if (simClient) simClient.setSaves(listing); else hostSaveDirectory().replace(listing);
+}
+const savesReady = openSavePersistence({ mode: saveMode(location.search, originalStart), served: import.meta.env.DEV ? devServedSaves() : null,
+  onChange: () => { pushSaves(); savesUi.update(); } })
+  .then(persistence => {
+    savePersistence = persistence; savesUi.update();
+    const message = persistence.status().message ?? persistence.status().error?.message;
+    if (message) toast(message, 12000);
+    return persistence;
+  }, error => { toast(`Saves: ${error?.message ?? error}`, 12000); return null; });
+/** The player came back to the page (the desktop game may have written a save): read a folder or the dev server's Save folder again. */
+function refreshSaves() {
+  const now = performance.now();
+  if (!savePersistence || document.hidden || now - saveRefreshed < 3000) return;
+  const status = savePersistence.status();
+  if (status.source !== 'folder' && !status.served) return;
+  saveRefreshed = now;
+  savePersistence.refresh().catch(() => {});
+}
+document.addEventListener('visibilitychange', refreshSaves);
+window.addEventListener('focus', refreshSaves);
 async function activateInfoLinkAudio(){
   const AudioContextClass=window.AudioContext||window.webkitAudioContext;
   if(!AudioContextClass)throw new Error('This browser cannot decode the original DataLink audio');
@@ -984,8 +1017,8 @@ async function setFiles(files) {
       onConfig: record => configStore?.accept(record.leaf, record) });
     const flags = Object.fromEntries(Object.keys(globalThis).filter(key => key.startsWith('DEUS_EX_')).map(key => [key, globalThis[key]]));
     await simClient.init(flags, files.map(file => ({ path: file.path, ...(file.file ? { file: file.file } : {}), ...(file.url ? { url: file.url } : {}) })),
-      configStore ? configStore.snapshot() : null);
-  }
+      configStore ? configStore.snapshot() : null, (await savesReady) ? savePersistence.simSaves() : null);
+  } else if (await savesReady) pushSaves();
   await connectMusic(next.configFiles);
   const names = [...next.files.values()].filter(f => /\.(dx|unr)$/i.test(f.path)).map(f => f.name).sort();
   if (!names.length) throw new Error('No maps found. Choose the game folder containing Maps, Textures, and System.');
@@ -1141,6 +1174,8 @@ function applyDisplaySettings(display) {
 // the HUD that names it draws. The pixels are the original's resampling (script-root-snapshot.mjs) of the kept frame; a request before
 // any frame was kept reads an empty (black) frame, as ReadPixels of a cleared surface would.
 function applySnapshotRequests(display) {
+  // textures the simulation made from bytes it holds (a save's snapshot picture): the HUD draws them by key once they are here
+  for (const image of display.images ?? []) hudRenderer?.setDynamicImage(image.key, { width: image.width, height: image.height, data: image.data });
   keepingFrames = Boolean(display.keepFrame);
   if (!keepingFrames) frameKeeper.reset();
   for (const request of display.snapshotRequests ?? []) {
@@ -1583,6 +1618,11 @@ document.addEventListener('keydown', event => {
   // Intercept before the original key/character paths (C is TurnRight).
   // A held shortcut consumes repeats and its release even if Alt lifts first.
   const editing = event.target.closest?.('input, textarea, select, [contenteditable]:not([contenteditable="false"])');
+  // The Saves window's keys (Tab, Enter, Escape) are the page's, never the game's; Alt+S opens it (like Alt+C, a page shortcut of the default start).
+  if (event.target.closest?.('#saves-dialog')) return;
+  if (event.code === 'KeyS' && event.altKey && !event.ctrlKey && !event.metaKey && !event.shiftKey && !event.repeat && !event.isComposing && !editing) {
+    event.preventDefault(); savesUi.open(); return;
+  }
   if (event.code === 'KeyC' && (crtShortcutHeld || (!event.repeat && event.altKey && !event.ctrlKey && !event.metaKey
       && !event.isComposing && !editing))) {
     event.preventDefault();
@@ -1629,6 +1669,7 @@ document.addEventListener('wheel', event => {
   catch (error) { pauseForRuntimeError(error); }
 }, { passive: false });
 document.addEventListener('keyup', event => {
+  if (event.target.closest?.('#saves-dialog') || (event.code === 'KeyS' && event.altKey)) return;
   if (event.code === 'KeyC' && crtShortcutHeld) { crtShortcutHeld = false; event.preventDefault(); return; }
   const input = inputKey(event, false);
   if (input?.consumed || (input?.handled && !input.host) || (input && gameTakesKey(event))) event.preventDefault();
@@ -1638,7 +1679,8 @@ window.addEventListener('blur', () => { keys.clear(); crtShortcutHeld = false; d
 document.addEventListener('visibilitychange', () => { keys.clear(); if (document.hidden) { paused = true; simInput.reset({releasePhysical:true}); } });
 function status() {
   return {
-    storage: configPersistence ? { ...configPersistence.status() } : null, ready: Boolean(world) && !loading, map: currentMap ?? null, revision,
+    storage: configPersistence ? { ...configPersistence.status() } : null, saves: savePersistence ? savePersistence.status() : null,
+    ready: Boolean(world) && !loading, map: currentMap ?? null, revision,
     textures: world?.textures ?? 0, renderErrors: world?.errors ?? [], triangles: world?.counts.triangles ?? 0,
     movers: world?.counts.movers ?? 0, position: fromView(camera.position.toArray()),
     mode, paused, runtimeError, gameplay: simClient ? simStatus?.gameplay ?? null : game?.status() ?? null, sim: simMode,
@@ -1656,6 +1698,8 @@ function status() {
 }
 // A small read-only diagnostic hook also makes browser regressions reproducible.
 window.deusExViewer = { status,
+/** The page's save persistence (save-persistence.mjs) for the specs: its status, the listing read again, the Saves window. */
+saves: { status: () => savePersistence?.status() ?? null, refresh: () => savePersistence?.refresh() ?? Promise.resolve(false), open: () => savesUi.open(), ready: () => savesReady.then(() => true) },
 /** The page's procedural textures held at the original's state (procedural-textures.mjs `hold`): {kind, pixels: {name: hex}} or null. */
 proceduralHold(spec) { return sharedProceduralTextures().hold(spec); },
 /** The page's procedural textures: key, kind, size, GlobalPhase and a pixel checksum each. */

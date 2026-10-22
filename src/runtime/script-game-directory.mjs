@@ -17,11 +17,18 @@
  * exports of its snapshot (once each); DeleteSaveInfo frees the LinkerLoad (ResetLoaders), then the DeusExSaveInfo; the directory's Destroy
  * purges what is still loaded and the object's own slot goes last.
  *
- * Unsupported, by name: the Maps directory (GD_Maps: the developer's LoadMapWindow), and a SaveInfo's Snapshot texture (the Snapshot property
- * of a loaded DeusExSaveInfo stays None; the Texture and Palette exports take their slots, no Texture object exists). */
+ * The Snapshot: a SaveInfo whose directory entry carries the decoded picture (`snapshot.image`, save-info.mjs) gets the Texture object the
+ * original's linker creates for it (a script object of the package `saveInfo`; the Palette its Preload creates takes the next slot), the DeusExSaveInfo's
+ * `Snapshot` points to the Texture, and the window host gives the Texture the raw image and the page the pixels (script-window-host.mjs
+ * W.snapshot.adopt), so `Window.SetBackground(saveInfo.Snapshot)` draws it as the original's Load Game screen does (the Palette only holds its
+ * registry slot: no script reads it and its `Colors` array of structs has no script value form). An entry with only the
+ * export names (no image: a form of texture the reader does not decode) takes the slots and leaves Snapshot None.
+ *
+ * Unsupported, by name: the Maps directory (GD_Maps: the developer's LoadMapWindow). */
 import {refValue} from './script-vm.mjs';
 import {msvcrtWtoi} from './script-text-parser.mjs';
 import {saveSlotDirectory, wildcardMatch, saveDirectoryKilobytes, saveFreeKilobytes, newSaveFileIndex, generateSaveFilename} from './save-directory.mjs';
+import {snapshotPixels} from './save-info.mjs';
 
 export const GAME_DIRECTORY = Object.freeze({vtable: 0x10027e58, size: 0x54});
 export const SAVE_INFO = Object.freeze({vtable: 0x10027a7c, size: 0x78, name: 'MyDeusExSaveInfo', packageName: 'saveInfo', flags: 0x70004});
@@ -40,12 +47,17 @@ export const browserClock = () => {
 
 const SAVE_INFO_PROPERTIES = ['Year', 'Month', 'Day', 'Hour', 'Minute', 'Second', 'DirectoryIndex', 'Description', 'MissionLocation', 'MapName', 'saveCount', 'saveTime', 'bCheatsEnabled'];
 
-export async function prepareGameDirectoryStore({runtime, assets, directory, clock = browserClock, atoi = msvcrtWtoi}) {
+/** The ObjectFlags of the snapshot's exports in the real saves' packages (RF_Public | RF_Standalone | RF_Transactional-class bits: 0x70000). */
+export const SNAPSHOT_EXPORT_FLAGS = 0x70000;
+
+export async function prepareGameDirectoryStore({runtime, assets, directory, clock = browserClock, atoi = msvcrtWtoi, windowHost = () => null}) {
   if (!directory) throw new Error('GameDirectory requires the save directory');
   const dx = await assets.get('DeusEx');
   const directoryClass = await runtime.loadClass(dx, dx.exportsByPath.get('gamedirectory'));
   const infoClass = await runtime.loadClass(dx, dx.exportsByPath.get('deusexsaveinfo'));
-  for (const cls of [directoryClass, infoClass]) for (const field of cls.propertyLink ?? []) await runtime.field(field);
+  const engine = await assets.get('Engine');
+  const textureClass = await runtime.loadClass(engine, engine.exportsByPath.get('texture'));
+  for (const cls of [directoryClass, infoClass, textureClass]) for (const field of cls.propertyLink ?? []) await runtime.field(field);
   for (const path of ['deusexplayer.creategamedirectoryobject', 'deusexsaveinfo.updatetimestamp',
     ...['getgamedirectory', 'getnewsavefileindex', 'generatesavefilename', 'generatenewsavefilename', 'getdircount', 'getdirfilename', 'setdirtype',
       'setdirfilter', 'getsaveinfo', 'getsaveinfofromdirectoryindex', 'gettempsaveinfo', 'deletesaveinfo', 'purgeallsaveinfo', 'getsavefreespace',
@@ -110,13 +122,54 @@ export async function prepareGameDirectoryStore({runtime, assets, directory, clo
     // the properties the file serialized; the Snapshot Texture (and the Palette its Preload creates) are objects of the package: created once
     for (const key of SAVE_INFO_PROPERTIES) if (found.properties[key] !== undefined) set(object, key, found.properties[key]);
     if (found.snapshot) {
-      for (const [cls, export_] of [['Texture', found.snapshot.texture], ['Palette', found.snapshot.palette]]) {
-        const key = `${cls}.${export_}`.toLowerCase();
-        if (saveInfoPackage.exports.has(key)) continue;
-        saveInfoPackage.exports.add(key);
-        original()?.take({kind: cls}, cls, export_);
-      }
+      const texture = snapshotExports(found.snapshot);
+      if (texture) set(object, 'Snapshot', texture);
     }
+    return object;
+  };
+  /** The exports of a SaveInfo's snapshot, in the order the measured run took their slots (Texture, then the Palette its Preload creates), each
+   * once per name for the process. With the decoded picture the Texture is a script object (adopted by the window host so it can be drawn);
+   * the Palette, and both without the picture, only take their slots (the original's objects exist; this reader cannot make their pixels
+   * or the palette's array of colour structs). Returns the Texture
+   * object, or null when there is none to give the `Snapshot` property.
+   * An export of a name the package already holds (another save written by a game session with the same unique-name counter: `Texture1`)
+   * is the object replaced in place by the original's linker (StaticAllocateObject of an existing name: the object keeps its slot; not measured
+   * here), so the one object takes the new picture. */
+  const snapshotObjects = new Map();
+  const snapshotExports = snapshot => {
+    const names = [['Texture', snapshot.texture], ['Palette', snapshot.palette]];
+    const made = [];
+    for (const [cls, name] of names) {
+      const key = `${cls}.${name}`.toLowerCase();
+      if (snapshotObjects.has(key) || saveInfoPackage.exports.has(key)) { made.push(snapshotObjects.get(key) ?? null); continue; }
+      saveInfoPackage.exports.add(key);
+      // The Palette stays a slot: its `Colors` is an array of structs, which the script value layer does not hold, and no script reads it
+      if (cls === 'Palette' || !snapshot.image || !windowHost()?.snapshot?.adopt) { original()?.take({kind: cls}, cls, name); made.push(null); continue; }
+      const object = allocateExport(textureClass, name);
+      snapshotObjects.set(key, object);
+      made.push(object);
+    }
+    const [texture] = made;
+    if (!texture || !snapshot.image) return null;
+    const image = snapshot.image;
+    if (snapshotImages.get(texture) !== image) {
+      snapshotImages.set(texture, image);
+      for (const [name, value] of [['USize', image.width], ['VSize', image.height], ['UClamp', image.width], ['VClamp', image.height],
+        ['UBits', Math.log2(image.width)], ['VBits', Math.log2(image.height)]]) set(texture, name, value);
+      windowHost().snapshot.adopt(texture, snapshotPixels(image));
+    }
+    return texture;
+  };
+  const snapshotImages = new WeakMap();
+  /** A Texture or Palette export of the package `saveInfo` (CreateExport: StaticAllocateObject in the package, flags of the file's export). The
+   * UTexture and UPalette virtual tables are not recovered: the object is a UObject with a base Destroy. */
+  const allocateExport = (cls, name) => {
+    const outer = packageRecord();
+    const object = runtime.allocateObject(cls, {outer, name, flags: SNAPSHOT_EXPORT_FLAGS, template: null}, {
+      ...construction(), initNativeProperties: () => {},
+      validate: args => args.cls === cls && args.outer === outer && args.template === null && args.flags === SNAPSHOT_EXPORT_FLAGS && args.name === name,
+    });
+    unregistered(runtime.instance(object).nativeObject, receiver => runtime.destroyObjectBase(receiver));
     return object;
   };
   const pointers = receiver => get(receiver, 'loadedSaveInfoPointers');

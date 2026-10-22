@@ -56,10 +56,12 @@ export function createSimClient({ onProgress = () => {}, onFrame = null, onFailu
   worker.onerror = event => onFailure(new Error(event.message ?? 'The simulation worker failed'));
   return {
     /** The DEUS_EX_* switches and the game files ({path, file} or {path, url}); `saved` the player's kept config files (a Map of leaf ->
-     * {bytes, base}, config-store.mjs), or null where persistence is off. */
-    init(flags, files, saved = null) {
-      return new Promise((resolve, reject) => { ready = { resolve, reject }; worker.postMessage({ type: 'init', flags, files, saved }); });
+     * {bytes, base}, config-store.mjs), or null where persistence is off; `saves` the Save directory's listing (save-persistence.mjs simSaves). */
+    init(flags, files, saved = null, saves = null) {
+      return new Promise((resolve, reject) => { ready = { resolve, reject }; worker.postMessage({ type: 'init', flags, files, saved, saves }); });
     },
+    /** The Save directory changed (a folder picked, saves imported): the worker's directory is replaced; the Load Game screen reads it when it opens. */
+    setSaves(saves) { worker.postMessage({ type: 'saves', saves }); },
     /** Build a map's simulation side (sim-host.mjs options, plain). */
     load: (map, options) => request({ type: 'load', map, options }),
     /** `view`, `reset`, `stateDigest`, `musicStatus` or `musicDrive`, after

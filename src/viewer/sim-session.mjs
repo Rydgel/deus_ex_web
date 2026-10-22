@@ -1186,7 +1186,9 @@ export function createSimSession(game, { assets = null, events = [], exportName 
         // RootWindow.GenerateSnapshot (docs/root-snapshot.md): the page keeps its drawn frames while UIBackground is 1 (Snapshot), and
         // fills each requested texture from the frame before the one this snapshot draws.
         keepFrame: game.player?.collisionActor ? Number(runtime.readNamed(game.player.collisionActor, 'UIBackground')) === 1 : false,
-        snapshotRequests: display.snapshotRequests, snapshotReleased: display.snapshotReleased } : null;
+        snapshotRequests: display.snapshotRequests, snapshotReleased: display.snapshotReleased,
+        // Textures the simulation made from bytes it holds (a save's snapshot, docs/save-storage.md): each goes to the page once.
+        images: display.images.splice(0) } : null;
       return snapshot;
     },
     /** The queued events outside a frame (map load: the first creation

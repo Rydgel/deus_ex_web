@@ -3,7 +3,7 @@
 The original's Load Game screen (`MenuScreenLoadGame`) reads the `Save\` directory through eleven natives of two classes. Until now a click on MenuMain's Load Game
 stopped Play at native 3013 `DeusExPlayer.CreateGameDirectoryObject`, the one stop of the [native census](native-census.md)'s menu sweep on the default start's path.
 This note holds what the natives do (recovered from the retail `DeusEx.dll`), what the original showed under Wine for an empty and a two-save directory, and what Play
-implements. It is the directory side only: `SaveGame` (native 3011), loading a save (`?loadgame=`) and the snapshot texture are [travel order step 4](travel.md#proposed-implementation-order-for-play).
+implements. It is the directory side only: `SaveGame` (native 3011) and loading a save (`?loadgame=`) are [travel order step 4](travel.md#proposed-implementation-order-for-play). (2026-10-22: the page now gives it real saves from a folder or the browser, and the screen draws their snapshot pictures: [save storage](save-storage.md).)
 
 Verification, in one line each (all pass at this commit): `node scripts/validate-save-directory.mjs` (DLL facts, the measured sizes, the screen's rows, texts, buttons and
 **every registry slot** of the screen opening and closing, empty and with the two measured saves, against the Wine dumps), `browser-tests/original-start-load-game.spec.mjs`
@@ -91,6 +91,7 @@ before and after, so it is the pre-existing seed's, not the natives'.
 
 * `src/runtime/save-directory.mjs`: the **save directory** interface the natives read (`directories()`, `files(dir)`, `info(dir)`, `freeSpaceBytes()`), an in-memory implementation (`createSaveDirectory`, **empty by default**, with `put`/`remove` for the
   future `SaveGame`/`DeleteGame`), and the pure bodies (slot names, FindFirstFile wildcards, the KB sums, the free-space conversion, `GetNewSaveFileIndex`, `GenerateSaveFilename`). A browser store (IndexedDB) or a picked folder implements them: `save-store.mjs` (`createStoredSaveDirectory` over a save backend), designed in [save storage](save-storage.md); its writes are step 4.
+  Since 2026-10-22 the page owns that storage and **sends the simulation the listing** (`replace(list)`: every slot's files and its `info`, `parseSaveInfo`'s `{properties, snapshot: {texture, palette, image}}`, `image` the decoded P8 picture of the snapshot, null when the texture is in a form the reader does not decode).
   `hostSaveDirectory()` is the one directory of a JavaScript realm (the page, or the sim worker), so it outlives the per-map sessions; `createGame({saveDirectory})` takes another.
 * `src/runtime/script-game-directory.mjs`: `prepareGameDirectoryStore` (called by `script-doors.mjs` next to the dump and log stores): the natives of the table, `GameDirectory` objects that take their registry slot
   from `allocateObject` like the original's `new`, `DeusExSaveInfo` objects filled from the store's `info`, the package, linker and snapshot-export slots, `Destroy`, `Serialize` and the scalar deleting destructor (`CriticalDelete`, `script-runtime.mjs`).
@@ -104,7 +105,7 @@ before and after, so it is the pre-existing seed's, not the natives'.
 ### Boundaries (stated, not implemented)
 
 * **GD_Maps** (`SetDirType(0)`, then `GetGameDirectory`): the developer map list of `LoadMapWindow`; stops by name (`UnsupportedGameDirectoryError`).
-* **The snapshot texture**: a loaded `DeusExSaveInfo`'s `Snapshot` stays `None`. The Texture and Palette exports take their registry slots (as measured) but no Texture object exists; the picture in the Load Game screen is blank until `SaveGame` decides the snapshot's representation (step 4).
+* **The snapshot texture** *(done 2026-10-22, [save storage](save-storage.md#the-snapshot))*: a SaveInfo with the decoded picture gets the Texture as a script object, `Snapshot` points to it, and the screen's snapshot window draws it as the original does (checked against the Wine captures and in the page). The Palette keeps only its slot; a texture the reader does not decode (an info without `image`) takes the slots and leaves `Snapshot` None, the picture area empty.
 * **A second `GetSaveInfo` while one is loaded** (the original's linker would answer with the loaded object): stops by name; the screens delete each SaveInfo before loading another.
 * **The order of `directories()`**: NTFS returns ascending names and the in-memory directory sorts that way; the order of the original's `FindFiles` was measured only for the two entries of the capture, and the screen sorts by date anyway.
 * **The registry slots of saves with a snapshot of a different export name or a Package `saveInfo` already resident from another path** (the model keys the exports by name, as the measured run shows for two distinct names); a collection's treatment of the resident `Package saveInfo`
@@ -116,4 +117,4 @@ before and after, so it is the pre-existing seed's, not the natives'.
 ## Next
 
 `SaveGame` (3011) fills a slot: `SaveInfo` object, `Current` copied into the slot, the live level with the player written into it ([travel](travel.md#the-save-directory)); the store's `put` is where it lands. Loading a slot (`?loadgame=N`),
-`DeleteGame` (`save.remove`), the snapshot texture and the IndexedDB backing follow with it, and the screen's `Load Game` button then reaches `LoadGame` (a `ConsoleCommand` chain that is not reached while the list is empty).
+`DeleteGame` (`save.remove`), and the snapshot `SaveGame` makes (`GenerateSnapshot`, [root snapshot](root-snapshot.md)) follow with it. The screen's `Load Game` button reaches `LoadGame` -> `ClientTravel("?loadgame=N")` today and stops there by name (`DDeusExGameEngine::Browse loadgame: loading a saved game is not implemented`, [travel](travel.md)); the browser spec drives it.

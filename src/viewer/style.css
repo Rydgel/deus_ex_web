@@ -30,3 +30,8 @@ footer{display:flex;align-items:center;justify-content:space-between;gap:14px;mi
 /* The original's start (docs/boot.md): the splash bitmap at its own size in device pixels, centred on black, and no page bars. */
 #splash{position:absolute;inset:0;z-index:5;display:grid;place-items:center;background:#000}#splash[hidden]{display:none}#splash-image{image-rendering:pixelated}
 #app.original-start>.toolbar,#app.original-start>footer,#app.original-start #show-ui,#app.original-start #crosshair{display:none}
+/* The Saves window (docs/save-storage.md "The folder flow"): page chrome outside the original's UI, opened from the gate, the Tools menu or Alt+S. */
+.gate-link{margin:12px 0 0 10px;background:transparent;color:#aebfcc;border-color:#345069}
+#saves-dialog{width:340px;max-width:calc(100vw - 32px);padding:18px;background:#0b1926;color:#e5eef6;border:1px solid #345069;border-radius:5px;box-shadow:0 12px 40px #0009}#saves-dialog::backdrop{background:#0008}
+#saves-dialog h2{font-size:14px;font-weight:600;margin:0 0 12px;color:#e4bd7c}#saves-dialog p{margin:0 0 10px;font-size:13px;line-height:1.5;color:#becedb}#saves-dialog .saves-note{color:#e4bd7c}
+#saves-dialog .saves-actions{display:grid;gap:6px;margin:14px 0}#saves-dialog button{text-align:left}#saves-dialog button[hidden]{display:none}#saves-dialog form{margin:12px 0 0;text-align:right}#saves-dialog .shortcut-hint{font-size:11px;color:#8299aa}

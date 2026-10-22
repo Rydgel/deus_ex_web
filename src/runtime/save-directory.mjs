@@ -1,8 +1,8 @@
 /** Play's `Save\` directory as the GameDirectory natives read it (docs/save-directory.md), and the pure bodies of those natives.
  *
  * The original reads the real disk through GFileManager (FindFiles, FileSize) and GetDiskFreeSpace. Play has no disk: it reads a SAVE
- * DIRECTORY, an object with the five reads below, which the page can back with browser storage later (IndexedDB; roadmap section 6,
- * docs/travel.md order step 4). The default is `createSaveDirectory()`: empty, which is what the original shows on a fresh install.
+ * DIRECTORY, an object with the five reads below, which the page backs with browser storage or a folder (docs/save-storage.md; the page sends the
+ * simulation its listing, `replace`). The default is `createSaveDirectory()`: empty, which is what the original shows on a fresh install.
  *
  *   directories()        the names of the directories directly under `<SavePath>` (`Current`, `QuickSave`, `Save0001`, ...), in the
  *                        order FindFirstFile returns them. NTFS returns ascending name order, so the in-memory directory sorts
@@ -11,7 +11,9 @@
  *   info(directory)      the SaveInfo of that slot, `{properties, snapshot}`, or null when `<directory>\SaveInfo.dxs` is absent.
  *                        `properties` holds the DeusExSaveInfo properties the file serialized (Year, Month, Day, Hour, Minute, Second,
  *                        DirectoryIndex, Description, MissionLocation, MapName, saveCount, saveTime, bCheatsEnabled); `snapshot` is
- *                        null or `{texture, palette}`: the names of the Texture and Palette exports the file holds for the Snapshot property.
+ *                        null or `{texture, palette, image?}`: the names of the Texture and Palette exports the file holds for the Snapshot
+ *                        property, and `image` the decoded picture `{width, height, format, data (P8), colors (RGBA palette)}` when the texture
+ *                        is one the reader decodes (save-info.mjs parseSaveInfo): without it the Snapshot property stays None.
  *   freeSpaceBytes()     the bytes available to the saves (GetDiskFreeSpaceEx's lpFreeBytesAvailable), or null when the call fails.
  *                        A HOST INPUT: the original asks the volume of its working directory; the page supplies what the browser can say.
  *
@@ -94,6 +96,9 @@ export function createSaveDirectory({saves = [], freeSpaceBytes = null} = {}) {
     },
     /** Remove a slot (DeleteGame). */
     remove(name) { return slots.delete(name); },
+    /** Replace every slot: the page's listing of its storage reaching the simulation (src/viewer/save-persistence.mjs; the simulation worker has no
+     * storage of its own, the page sends the directory at startup and again whenever a folder, an import or a write changes it). */
+    replace(list) { slots.clear(); for (const save of list) directory.put(save); return directory; },
     directories: () => [...slots.keys()].sort((a, b) => a.toLowerCase() < b.toLowerCase() ? -1 : a.toLowerCase() > b.toLowerCase() ? 1 : 0),
     files: name => (slots.get(name)?.files ?? []).map(file => ({...file})),
     info: name => slots.get(name)?.info ?? null,

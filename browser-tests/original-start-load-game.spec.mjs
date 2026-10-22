@@ -12,7 +12,8 @@ test('the default start opens the Load Game screen with the empty save directory
   const probe = step => page.evaluate(step => window.deusExViewer.settingsProbe(step), step);
   const state = async () => ({ menu: (await probe({ op: 'state' }))?.top ?? null, error: await page.evaluate(() => window.deusExViewer.status().runtimeError?.message ?? null) });
   const map = name => page.waitForFunction(name => { const s = window.deusExViewer?.status(); return s?.ready && s.map === name && !s.runtimeError; }, name, { timeout: 240_000 });
-  await page.goto(`${process.env.DX_BASE_URL ?? 'http://127.0.0.1:5173'}/`);
+  // `?saves=off`: the empty directory the original shows with no saves, whatever the dev server's own Save folder holds (browser-tests/save-folder.spec.mjs lists real ones)
+  await page.goto(`${process.env.DX_BASE_URL ?? 'http://127.0.0.1:5173'}/?saves=off`);
   await map('DX');
   let box = await page.locator('#scene').boundingBox();
   await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2);   // takes fullscreen and the pointer

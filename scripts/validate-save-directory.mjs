@@ -105,7 +105,9 @@ assert.equal(saveFreeKilobytes(FREE_BYTES), 92745808);
 assert.equal(Math.trunc(saveFreeKilobytes(FREE_BYTES) / 1024), 90572);
 
 // 3. Play on DX.dx --------------------------------------------------------------------------------------------------------------------------
-for (const name of ['empty', 'saves']) {
+const realSaves = process.env.DX_SAVE_DIR ?? path.join(process.env.HOME ?? '', '.wine-deusex/drive_c/Deus Ex GOTY Edition/Save');
+const haveReal = await readFile(path.join(realSaves, 'Save0001/SaveInfo.dxs')).then(() => true, () => false);
+for (const name of ['empty', 'saves', ...(haveReal ? ['real'] : [])]) {
   const child = spawnSync(process.execPath, [import.meta.filename, '--scenario', name], {encoding: 'utf8', maxBuffer: 1 << 26});
   process.stdout.write(child.stdout ?? '');
   if (child.status !== 0) { process.stderr.write(child.stderr ?? ''); throw new Error(`scenario ${name} failed (exit ${child.status}, ${child.signal ?? ''})`); }
@@ -125,8 +127,23 @@ async function scenario(name) {
   for (const dir of ['Maps', 'System', 'Textures', 'Sounds', 'Music'])
     for (const file of await readdir(`${root}/${dir}`)) files.push({path: `${dir}/${file}`, read: () => readFile(`${root}/${dir}/${file}`)});
   const assets = new AssetStore(files), asset = await assets.get('DX');
-  const withSaves = name === 'saves';
-  const saveDirectory = createSaveDirectory({saves: withSaves ? SAVES : [], freeSpaceBytes: FREE_BYTES});
+  const withSaves = name !== 'empty', real = name === 'real';
+  // `real`: the two saves of the Wine capture read from their files (src/runtime/save-info.mjs parseSaveInfo over the SaveInfo.dxs bytes):
+  // the properties, and the snapshot picture the screen draws
+  let saves = withSaves ? SAVES : [];
+  const realFiles = new Map();
+  if (real) {
+    const {parseSaveInfo} = await import('../src/runtime/save-info.mjs');
+    const dir = process.env.DX_SAVE_DIR ?? path.join(process.env.HOME ?? '', '.wine-deusex/drive_c/Deus Ex GOTY Edition/Save');
+    saves = [];
+    for (const slot of ['QuickSave', 'Save0001']) {
+      const info = parseSaveInfo(await readFile(path.join(dir, slot, 'SaveInfo.dxs')));
+      realFiles.set(slot, info);
+      saves.push({directory: slot, files: SAVES.find(save => save.directory === slot).files, info});
+    }
+    for (const save of SAVES) assert.deepEqual(realFiles.get(save.directory).properties, save.info.properties, `${save.directory}: the properties read from the file`);
+  }
+  const saveDirectory = createSaveDirectory({saves, freeSpaceBytes: FREE_BYTES});
   const game = await createGame(decodeMap(asset.bytes), asset, assets, {randomSeed: 1, presentation: true, saveDirectory});
   const runtime = game.doors.scriptRuntime.runtime;
   const paint = () => game.hud.commands(1432, 1268, {location: game.player.eye, rotation: game.player.viewRotation, fov: 75});
@@ -143,7 +160,9 @@ async function scenario(name) {
   const screenSlot = model.log.find(e => e.ev === 'add' && e.cls === 'MenuScreenLoadGame').index;
   const relative = list => list.map(i => i - screenSlot);
   const live = new Map();
-  const replay = () => { live.clear(); for (const e of model.log) { if (e.ev === 'add') live.set(e.index, `${e.cls}.${e.name ?? ''}`); else live.delete(e.index); } };
+  // (a Texture that is a script object is labelled by its own name in the model's log, `Texture3.Texture3`: the class record the label reads has
+  // no `name`; the slot is what the original's dump compares)
+  const replay = () => { live.clear(); for (const e of model.log) { if (e.ev === 'add') live.set(e.index, `${/^Texture\d+$/.test(e.cls) ? 'Texture' : e.cls}.${e.name ?? ''}`); else live.delete(e.index); } };
   const sensitivity = () => { const c = driver.controls(); return Object.fromEntries(c.menu.actionButtons.filter(b => b.window !== null).map(b => [b.key || '(cancel)', c.windows[b.window].sensitive])); };
   const freeText = () => driver.windowText('winFreeSpace');
   const expectedMB = Math.trunc(Math.trunc(FREE_BYTES / 1024) / 1024);
@@ -153,6 +172,7 @@ async function scenario(name) {
   assert.equal(freeText(), `Free Space: ${expectedMB}MB`);
   assert.equal(runtime.readNamed(driver.topWindow(), 'freeDiskSpace'), Math.trunc(FREE_BYTES / 1024));
   const expectation = measurements[withSaves ? 'saves' : 'empty'];
+  const windowHost = game.doors.scriptRuntime.windowHost;
   if (!withSaves) {
     assert.deepEqual(opened.rows, [], 'no rows without saves (the original shows no empty-list text)');
     assert.equal(opened.selectedCount, 0);
@@ -173,11 +193,40 @@ async function scenario(name) {
   assert.deepEqual(named(/^(Package|Texture|Palette)\./), after.survivors, 'the Package saveInfo and the snapshot exports stay');
   assert.deepEqual(named(/^GC\.GC27[2-5]$/), after.gc, 'the GCs created after the natives reused the freed slots in the measured order');
 
+  // The snapshot picture (docs/save-storage.md "The snapshot"): the DeusExSaveInfo's Snapshot is a Texture the window host adopted, and the screen's
+  // snapshot window draws it through its background: the tile of the Wine capture, the picture's top-left 160 x 120 of the 256 x 128 texture, unscaled
+  // (sd1/load1.png: the row of lights at x 13..160 of the texture sits at the window's own x 13..160)
+  let snapshotPixels = null, snapshotTile = null;
+  if (real) {
+    ({snapshotPixels} = await import('../src/runtime/save-info.mjs'));
+    snapshotTile = () => {
+      const tiles = paint().filter(c => c.texture?.dynamic && /^image:/.test(c.texture.key));
+      assert.equal(tiles.length, 1, 'one snapshot picture on the screen');
+      return tiles[0];
+    };
+    const sent = windowHost.display.images;
+    assert.equal(sent.length, 2, 'the page is sent each picture once: PopulateGames loaded the two SaveInfos, the first row\'s selection found the objects');
+    for (const [image, slot] of [[sent[0], 'QuickSave'], [sent[1], 'Save0001']]) {
+      const expected = snapshotPixels(realFiles.get(slot).snapshot.image);
+      assert.equal(image.width, 256); assert.equal(image.height, 128);
+      assert.ok(Buffer.from(image.data).equals(Buffer.from(expected.data)), `${slot}: the pixels the page gets are the palette applied to the file's P8 texture`);
+    }
+    const tile = snapshotTile();
+    assert.equal(tile.texture.key, sent[1].key, 'the selected first row (Save0001) draws its own snapshot');
+    assert.deepEqual([tile.u, tile.v, tile.ul, tile.vl, tile.style], [0, 0, 160, 120, 1], 'the window shows the top-left 160 x 120 of the texture, unscaled, in the normal style');
+    assert.equal(tile.width * 3, tile.height * 4, 'the 160 x 120 window (4:3)');
+    const snapshotObject = runtime.readNamed(driver.topWindow(), 'winSnapshot');
+    assert.ok(snapshotObject, 'the snapshot window');
+  }
   if (withSaves) {
     game.windowKey('ArrowDown', true); game.windowKey('ArrowDown', false); input.tick(5);
     const second = driver.listRows('lstGames');
     assert.equal(second.selected, 1, 'the second row (Quick Save) is selected');
     assert.equal(driver.windowText('winSaveInfo'), ORIGINAL.quickInfo);
+    if (real) {
+      assert.equal(snapshotTile().texture.key, windowHost.display.images[0].key, 'selecting Quick Save shows its own picture');
+      assert.equal(windowHost.display.images.length, 2, 'the selection loaded the SaveInfo again: its Texture exists, the picture is not sent again');
+    }
     assert.deepEqual(sensitivity(), {'(cancel)': true, LOAD: true, DELETE: false}, 'Quick Save cannot be deleted (DirectoryIndex < 0)');
     assert.equal(model.count - screenSlot, expectation.afterSelectQuickSave.objects);
     assert.deepEqual(relative(model.freeIndices), expectation.afterSelectQuickSave.free,

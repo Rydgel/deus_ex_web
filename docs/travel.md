@@ -271,7 +271,7 @@ needs a viewport actor and a `DeusExLevelInfo`; `package = CreatePackage(NULL, "
 `DeleteGame(n)` (`0x10010710`) deletes slot *n*.
 
 What the Load Game and Save Game screens *read* of this directory, the `GameDirectory` natives 3080-3094 behind it and Play's save-directory interface are in [save-directory](save-directory.md)
-(2026-10-21: the directory side of step 4; the screen opens from the default start with an empty directory, as the original does with no saves).
+(2026-10-21: the directory side of step 4; the screen opens from the default start with an empty directory, as the original does with no saves. 2026-10-22: the page gives that directory real saves from the browser or a picked `Save` folder, and the screen draws their snapshot pictures; Load Game still stops at `Browse loadgame`: [save storage](save-storage.md).)
 
 ### LoadMap
 

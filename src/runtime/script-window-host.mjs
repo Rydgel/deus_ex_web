@@ -199,7 +199,9 @@ export async function createWindowHost({runtime, assets, player, gameConfig = nu
   const display={brightness:nativeConfig.instance('WinDrv.WindowsClient','Brightness'),flushes:0,resolution:null,resolutionVersion:0,
     fullscreen:Boolean(nativeConfig.instance('WinDrv.WindowsClient','StartupFullscreen')),fullscreenToggles:0,relaunches:0,relaunchArguments:null,
     // RootWindow.GenerateSnapshot's requests to the page (docs/root-snapshot.md): the frame the page last drew is the texture's source.
-    snapshotRequests:[],snapshotSerial:0,snapshotReleased:[]};
+    snapshotRequests:[],snapshotSerial:0,snapshotReleased:[],
+    // Textures whose pixels the simulation holds (a SaveInfo's Snapshot, W.snapshot.adopt): sent to the page once each, in the next frame snapshot.
+    images:[],imageSerial:0};
   const consoleCommands=createConsoleCommands({runtime,input:inputConsole,services:{
     nativeConfig:()=>nativeConfig,
     // UWindowsViewport::Exec SetRes -> RenDev->SetRes: the browser render device takes the request.
@@ -1036,6 +1038,26 @@ export async function createWindowHost({runtime, assets, player, gameConfig = nu
       if (display.snapshotRequests.length > 8) display.snapshotRequests.splice(0, display.snapshotRequests.length - 8);
       return object;
     },
+    /** A script Texture whose pixels the simulation already has (a SaveInfo's Snapshot, docs/save-storage.md "The snapshot"): the object gets the
+     * raw image and the reference GenerateSnapshot's textures have (the HUD commands that draw it name `image:<serial>`), and the pixels
+     * (`data`: RGBA bytes, top row first) go to the page once, in the next frame snapshot's `display.images`. An object adopted again (a load of another file
+     * that holds an export of the same name replaces the object in place) keeps its image and key: the page takes the new pixels under that key,
+     * so a window that holds the pointer shows the new picture, as it would the object's new contents. */
+    adopt(object, {width, height, data}) {
+      let info = snapshotTextures.get(object);
+      if (info?.key.startsWith('image:')) {
+        info.width = width; info.height = height;
+        heap.mem.write(info.address + 0x34, 'i32', width);
+        heap.mem.write(info.address + 0x38, 'i32', height);
+        resourceImages.set(info.address, {kind: 'texture', ref: {key: info.key, dynamic: true, width, height}, width, height});
+      } else {
+        info = {key: `image:${++display.imageSerial}`, width, height};
+        info.address = snapshotTextureImage(info);
+        snapshotTextures.set(object, info);
+      }
+      display.images.push({key: info.key, width, height, data});
+      return info;
+    },
     release(object) {
       const info = snapshotTextures.get(object);
       if (!info) return;
@@ -1820,7 +1842,7 @@ export async function createWindowHost({runtime, assets, player, gameConfig = nu
     tick(root,seconds){lastTickTime=hostNow()/1000;T.rootTick(W,root,f(seconds));},
     // XInputExt::Process 0x1002d0b0 offers each key to XRootWindow::Process first.
     key(root,key,action,delta=0){return Input.rootProcess(W,root,key,action,delta);},
-    consoleCommands,nativeConfig,display,
+    consoleCommands,nativeConfig,display,snapshot:W.snapshot,
     /** UEngine::InputEvent for one browser key edge. The optional
      * hostBinding override remains only for isolated legacy fixtures. */
     inputEvent(key,action,{delta=0,hostBinding=()=>false,flushRenderDevice=null}={}){

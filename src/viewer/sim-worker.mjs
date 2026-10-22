@@ -3,11 +3,15 @@
  * (sim-host.mjs); the page keeps three.js, the DOM and Web Audio. Messages
  * are handled one at a time, in arrival order:
  *
- * - `init` {flags, files, saved}: the page's DEUS_EX_* switches, set before the
+ * - `init` {flags, files, saved, saves}: the page's DEUS_EX_* switches, set before the
  *   runtime's modules load, the game files (File objects or dev-server
- *   URLs) and the player's kept config files (config-store.mjs; null with
- *   persistence off). The worker answers each file the game writes with a
- *   `config` {leaf, bytes, base} message for the page to keep.
+ *   URLs), the player's kept config files (config-store.mjs; null with
+ *   persistence off) and the Save directory's listing (`saves`: [{directory,
+ *   files, info}], docs/save-storage.md; null: nothing listed). The worker
+ *   answers each file the game writes with a `config` {leaf, bytes, base}
+ *   message for the page to keep.
+ * - `saves` {saves}: the page's storage changed (a folder picked, saves
+ *   imported): the Save directory the GameDirectory natives read is replaced.
  * - `load` {id, map, options}: decode the map and build the simulation side;
  *   replies `loaded` with the first events, the HUD's textures, the notes
  *   and the actor layer's summary.
@@ -107,6 +111,8 @@ async function handle(data) {
       meshLightProbe = probe.meshLightProbe; renderPassProbe = probe.renderPassProbe;
       // The player's kept config files (docs/config-persistence.md): the page loaded them from its storage; each file the game writes goes
       // back to the page, which keeps it. Null: persistence is off and the config files are the installed ones.
+      // The Save directory the GameDirectory natives read (docs/save-storage.md): the page owns the storage and sends the listing.
+      if (data.saves) (await import('../runtime/save-directory.mjs')).hostSaveDirectory().replace(data.saves);
       const configStore = data.saved ? createConfigStore({ saved: data.saved, persist: (leaf, record) => send({ type: 'config', leaf, bytes: record.bytes, base: record.base }) }) : null;
       assets = new AssetStore(data.files.map(file => ({ path: file.path, read: file.file ? () => file.file.arrayBuffer()
         : file.url ? async () => { const response = await fetch(file.url); if (!response.ok) throw new Error(`Cannot read ${file.path}`); return response.arrayBuffer(); }
@@ -114,6 +120,7 @@ async function handle(data) {
       send({ type: 'ready' });
       return;
     }
+    case 'saves': (await import('../runtime/save-directory.mjs')).hostSaveDirectory().replace(data.saves); return;
     case 'music': musicLibrary = music.connectMusicLibraryPort(data.port, { effects: true }); return;
     case 'load': {
       // The old map's audio unregisters its music first (sim-host.mjs

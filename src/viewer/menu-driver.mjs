@@ -97,7 +97,7 @@ export function createMenuDriver(game) {
       if (!win) throw new Error(`${keyOf(topWindow())} has no control ${JSON.stringify(spec)}`);
       const x = W.f32(win, 0xd4), y = W.f32(win, 0xd8);
       if (spec.row !== undefined) return {x: x + 20, y: y + (spec.row + 0.5) * W.f32(win, 0x19c)};
-      return {x: x + W.f32(win, 0xe4) / 2, y: y + W.f32(win, 0xe8) / 2};
+      return {x: x + W.f32(win, 0xe4) / 2, y: y + W.f32(win, 0xe8) / 2, w: W.f32(win, 0xe4), h: W.f32(win, 0xe8)};
     },
     /** Every window under the topmost modal window and the window itself, for a sweep that clicks them (scripts/census-ui-menus.mjs):
      * script class, ancestry up to Extension.Window (class keys), absolute bounds as `center` reads them, and the visible, sensitive

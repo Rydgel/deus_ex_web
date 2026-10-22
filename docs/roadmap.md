@@ -1195,8 +1195,8 @@ blockers. Validate each mission's conversations, events, and transitions against
 the original game; keep a per-mission compatibility checklist.
 
 Settings persistence is done (2026-10-22): the original's DeusEx.ini and User.ini writes are measured under Wine and Play keeps them in the browser across map loads and
-reloads ([configuration persistence](config-persistence.md)); [save storage](save-storage.md) is the browser storage layer for saves (IndexedDB and a picked folder behind one interface, the
-failure cases, the import/export fallback), built and tested, not yet wired to the page.
+reloads ([configuration persistence](config-persistence.md)); [save storage](save-storage.md) keeps the saves (IndexedDB, or a Save folder the player picked in Chromium, behind one interface, the failure cases, import and zip export for Firefox and Safari)
+and gives the original's Load Game screen the real saves with their snapshot pictures (2026-10-22: the page's Saves window, the worker's save directory, the picture checked against Wine captures); writing a save and loading a slot are travel step 4.
 
 Map travel, the first of these steps, is traced and measured in [travel](travel.md)
 (2026-10-21): the script and native chain from `SendPlayer` to the next level's login,

@@ -267,7 +267,12 @@ original's User.ini reaches the game: the keys, the three mouse buttons and the 
 fullscreen in Chrome or Edge the keys a browser reserves for itself (F1 to F12, Tab…) (docs/input-bindings.md). With the extracted
 `Deus Ex GOTY Edition/` directory present this happens at once; otherwise choose the game
 folder containing Maps, Textures, System and Help. The local production preview always uses
-this folder picker. `http://127.0.0.1:5173/?debug=1` is the debugging page described below:
+this folder picker. Your saves: the original's Load Game screen lists the saves the page keeps in the browser
+(Alt+S, Option+S on a Mac, opens the page's own Saves window; also a Saves… button on the folder screen), or in a
+`Save` folder you pick (Chromium: the desktop game's own, or the game folder), and imports a desktop `Save` folder or
+exports a zip in Firefox and Safari; the dev server also lists the game folder's `Save`, read-only (docs/save-storage.md).
+Loading a save and saving are not implemented yet (the Load Game button stops by name).
+`http://127.0.0.1:5173/?debug=1` is the debugging page described below:
 the toolbar, Play/Inspect, the map list (training loads first) and the diagnostics.
 Original data is kept outside source control and outside the website build.
 
