@@ -319,7 +319,7 @@ async function flags() {
       for (const f of c.setFlags) entry(f.flag).setters.push({ kind: 'conversation', mission, where, value: f.value, expiration: 0, branch: f.branch });
       for (const f of c.required) entry(f.flag).readers.push({ kind: 'conversation-requires', mission, where, value: f.value });
       for (const f of c.checkFlags) entry(f.flag).readers.push({ kind: 'conversation-checks', mission, where, value: f.value, branch: f.branch });
-      for (const ch of c.choices) for (const f of ch.flag ?? []) entry(f.flag).readers.push({ kind: 'choice-requires', mission, where: `${c.name}: "${ch.text.slice(0, 40)}"`, value: f.value });
+      for (const ch of c.choices) for (const f of ch.flag ?? []) entry(f.flag).readers.push({ kind: 'choice-requires', mission, where: `${c.name}: choice ${ch.label}`, value: f.value });
       entry(`${c.name}_Played`).setters.push({ kind: 'played', mission, where, value: true, expiration: defaultExpiration(mission), branch: '' });
     }
   }
@@ -597,9 +597,10 @@ async function report() {
         const jump = c.jumps.find(j => j.branch.toLowerCase() === ch.label.toLowerCase());
         const eff = jump ? effectsOf(jump.label) : [];
         if (jump && !eff.length) { quiet++; continue; }
-        ct += `| \`${c.name}\` | ${esc(c.owner)} | ${esc(ch.text.slice(0, 70))}${ch.skill ? ` [needs ${ch.skill} ${ch.skillLevel}]` : ''}${ch.flag ? ` [needs ${ch.flag.map(flagText).join(', ')}]` : ''} | ${esc(jump ? `-> ${jump.label}: ` + (eff.join(', ') || 'no state change') : '(no jump found)')} |\n`;
+        // the choice is named by its branch label: the game's dialogue text stays out of the docs (AGENTS.md: extracted original text outside Git)
+        ct += `| \`${c.name}\` | ${esc(c.owner)} | \`${esc(jump?.label ?? ch.label)}\`${ch.skill ? ` [needs ${ch.skill} ${ch.skillLevel}]` : ''}${ch.flag ? ` [needs ${ch.flag.map(flagText).join(', ')}]` : ''} | ${esc(jump ? `-> ${jump.label}: ` + (eff.join(', ') || 'no state change') : '(no jump found)')} |\n`;
       }
-      if (quiet) ct += `| \`${c.name}\` | ${esc(c.owner)} | (${quiet} further choice${quiet > 1 ? 's' : ''} that change no state: refusals, "never mind", unaffordable offers) | - |\n`;
+      if (quiet) ct += `| \`${c.name}\` | ${esc(c.owner)} | (${quiet} further choice${quiet > 1 ? 's' : ''} that change no state) | - |\n`;
     }
     await emit(`${id}-choices.md`, ct);
     // counts
@@ -621,8 +622,9 @@ async function report() {
       goals.get(k).completes.push(`${s.name}.${f.name}:${op.line}`);
     }
     for (const m of mm) for (const g of m.goalTriggers ?? []) { const k = String(g.goal).toLowerCase(); if (!goals.has(k)) goals.set(k, { name: g.goal, text: '', primary: false, adds: [], completes: [] }); goals.get(k).completes.push(`${m.map}/${g.name}`); }
-    let gt = '| Goal | Kind | Text | Added by | Completed by |\n| --- | --- | --- | --- | --- |\n';
-    for (const g of [...goals.values()]) gt += `| \`${g.name}\` | ${g.adds.length ? (g.primary ? 'primary' : 'secondary') : 'carried'} | ${esc(g.text.slice(0, 150))} | ${esc([...new Set(g.adds)].join(', ') || '-')} | ${esc([...new Set(g.completes)].join(', ') || '-')} |\n`;
+    // goals by name only: the goal's text is the game's (outside Git)
+    let gt = '| Goal | Kind | Added by | Completed by |\n| --- | --- | --- | --- |\n';
+    for (const g of [...goals.values()]) gt += `| \`${g.name}\` | ${g.adds.length ? (g.primary ? 'primary' : 'secondary') : 'carried'} | ${esc([...new Set(g.adds)].join(', ') || '-')} | ${esc([...new Set(g.completes)].join(', ') || '-')} |\n`;
     await emit(`${id}-goals.md`, gt);
     // exits
     let et = '| Map | Actor | At | Leads to | Fired by (events targeting its tag) |\n| --- | --- | --- | --- | --- |\n';

@@ -393,41 +393,41 @@ Generated from the script's calls (`inventory-campaign.mjs scripts`; `:N` is the
 (`flagRefList`), 16 add or complete goals, 14 fire events. The owner column is the `BindName` the conversation binds to; the parenthesis lists the maps of this mission that hold an actor with it
 (`no actor` = none in any map: the owner is `JCDenton` for InfoLinks, which the player's own pawn answers).
 
-**Choices.** Every choice that changes state, the block its speech jumps to and what that block does (choices that change no state are counted in one row per conversation):
+**Choices.** Every choice that changes state, the block its speech jumps to and what that block does (choices that change no state are counted in one row per conversation; a choice is named by its branch label, the dialogue text stays out of the repository):
 
-| Conversation | Owner | Choice | Effects of the branch |
+| Conversation | Owner | Choice (its branch label; requirements) | Effects of the branch |
 | --- | --- | --- | --- |
-| `MeetTerrorist` | TerroristCommander | Except send YOU back to the people -- in a body bag. | -> Aggressive: set PlayerAttackedStatueTerrorist, set StatueMissionComplete, trig TerroristCommanderAttacks |
-| `MeetTerrorist` | TerroristCommander | Tell me about the shipment and I'll order the troops to pick you up as | -> Curious: set PlayerAttackedStatueTerrorist=0, set StatueMissionComplete, trig DL_LeaderNotKilled |
-| `MeetKaplan` | TechSergeantKaplan | I can't speak for command, but I'm gonna clean the place out. | -> Boss: set KaplanLikesPlayer |
-| `MeetKaplan` | TechSergeantKaplan | We're taking a minimum-force approach. We're cops, after all. | -> Pussy: set KaplanLikesPlayer=0 |
-| `MeetKaplan` | TechSergeantKaplan | I'll take the scope for 700. [needs !M01BoughtScope, M01CanBuyScope] | -> BuyScope: set M01BoughtScope, give WeaponModScope |
-| `MeetKaplan` | TechSergeantKaplan | 200 for 10 mm ammo -- sounds good. [needs !M01Bought10mm, M01CanBuy10mm] | -> Buy10mm: set M01Bought10mm, give Ammo10mm |
-| `MeetKaplan` | TechSergeantKaplan | Here's 60 for the tranquilizer darts. [needs !M01BoughtDarts, M01CanBuyDarts] | -> BuyDarts: set M01BoughtDarts, give AmmoDartPoison |
-| `MeetKaplan` | TechSergeantKaplan | (4 further choices that change no state: refusals, "never mind", unaffordable offers) | - |
-| `MeetCarter` | SamCarter | A "smart" lock pick is always handy. | -> Picks: set M01CarterDone, give Lockpick, done GetEquippedForNSFPursuit |
-| `MeetCarter` | SamCarter | Can you spare a nanotech tech-tool? | -> Tech: set M01CarterDone, give Multitool, done GetEquippedForNSFPursuit |
-| `MeetCarter` | SamCarter | Just give me ammo. | -> Ammo: set M01CarterDone, give Ammo10mm, done GetEquippedForNSFPursuit |
-| `MeetPaul` | PaulDenton | I like to pick 'em off from a distance. I'll take the rifle. | -> GiveRifle: give WeaponRifle |
-| `MeetPaul` | PaulDenton | Never know when I might come up against heavy armor. Give me the GEP g | -> GiveRocket: give WeaponGEPGun, give Image01_LibertyIsland, trig PaulWandering |
-| `MeetPaul` | PaulDenton | The crossbow. Sometimes you've got to make a silent takedown. | -> GiveCrossbow: give WeaponMinicrossbow |
-| `MoleConvos` | Mole | I'll take the 10 mm clip for 175. [needs !M01MoleBought10mm, M01MoleCanBuy10mm] | -> Buy10mm: set M01MoleBought10mm, give Ammo10mm, trig BumFemaleWanders |
-| `MoleConvos` | Mole | Here's 300. Give me the 30.06 ammo. [needs !M01MoleBought3006, M01MoleCanBuy3006] | -> Buy3006: set M01MoleBought3006, give Ammo3006 |
-| `MoleConvos` | Mole | I'll give you 50 for the darts. [needs !M01MoleBoughtDarts, M01MoleCanBuyDarts] | -> BuyDarts: set M01MoleBoughtDarts, give AmmoDart, trig BumFemaleWanders |
-| `MoleConvos` | Mole | No thanks. | -> bye: trig BumFemaleWanders |
-| `MoleConvos` | Mole | (3 further choices that change no state: refusals, "never mind", unaffordable offers) | - |
-| `MeetFilben` | HarleyFilben | You can trust me. | -> GetKeyB: set FilbenGaveKey, give NanoKey, trig HarleyStartsToWander |
-| `MeetFilben` | HarleyFilben | I can't promise. In the line of duty I may have to use force. | -> NoKeyB: set FilbenGaveKey=0, trig HarleyStartsToWander |
-| `GuntherRescued` | GuntherHermann | As you wish. Take my assault gun. | -> GiveAssault: take WeaponAssaultGun, set GuntherRespectsPlayer, trig GuntherAttacks |
-| `GuntherRescued` | GuntherHermann | First thing is to get you out of here. I'll handle the enemy. | -> GiveNothing: set GuntherRespectsPlayer=0 |
-| `GuntherRescued` | GuntherHermann | As you wish. Take my stealth pistol. | -> GiveStealth: take WeaponStealthPistol, set GuntherRespectsPlayer, trig GuntherAttacks |
-| `GuntherRescued` | GuntherHermann | First thing is to get you out of here. I'll handle the enemy. | -> GiveNothing: set GuntherRespectsPlayer=0 |
-| `GuntherRescued` | GuntherHermann | As you wish. Take my pistol. | -> GivePistol: take WeaponPistol, set GuntherRespectsPlayer, trig GuntherAttacks |
-| `GuntherRescued` | GuntherHermann | First thing is to get you out of here. I'll handle the enemy. | -> GiveNothing: set GuntherRespectsPlayer=0 |
-| `GuntherRescued` | GuntherHermann | As you wish. Take my knife. | -> GiveKnife: take WeaponCombatKnife, set GuntherRespectsPlayer, trig GuntherAttacks |
-| `GuntherRescued` | GuntherHermann | First thing is to get you out of here. I'll handle the enemy. | -> GiveNothing: set GuntherRespectsPlayer=0 |
-| `GuntherRescued` | GuntherHermann | Wish I could help, but I'm not very well armed myself. | -> GiveNothingNicely: set GuntherRespectsPlayer, trig GuntherAttacks |
-| `GuntherRescued` | GuntherHermann | First thing is to get you out of here. I'll handle the enemy. | -> GiveNothing: set GuntherRespectsPlayer=0 |
+| `MeetTerrorist` | TerroristCommander | `Aggressive` | -> Aggressive: set PlayerAttackedStatueTerrorist, set StatueMissionComplete, trig TerroristCommanderAttacks |
+| `MeetTerrorist` | TerroristCommander | `Curious` | -> Curious: set PlayerAttackedStatueTerrorist=0, set StatueMissionComplete, trig DL_LeaderNotKilled |
+| `MeetKaplan` | TechSergeantKaplan | `Boss` | -> Boss: set KaplanLikesPlayer |
+| `MeetKaplan` | TechSergeantKaplan | `Pussy` | -> Pussy: set KaplanLikesPlayer=0 |
+| `MeetKaplan` | TechSergeantKaplan | `BuyScope` [needs !M01BoughtScope, M01CanBuyScope] | -> BuyScope: set M01BoughtScope, give WeaponModScope |
+| `MeetKaplan` | TechSergeantKaplan | `Buy10mm` [needs !M01Bought10mm, M01CanBuy10mm] | -> Buy10mm: set M01Bought10mm, give Ammo10mm |
+| `MeetKaplan` | TechSergeantKaplan | `BuyDarts` [needs !M01BoughtDarts, M01CanBuyDarts] | -> BuyDarts: set M01BoughtDarts, give AmmoDartPoison |
+| `MeetKaplan` | TechSergeantKaplan | (4 further choices that change no state) | - |
+| `MeetCarter` | SamCarter | `Picks` | -> Picks: set M01CarterDone, give Lockpick, done GetEquippedForNSFPursuit |
+| `MeetCarter` | SamCarter | `Tech` | -> Tech: set M01CarterDone, give Multitool, done GetEquippedForNSFPursuit |
+| `MeetCarter` | SamCarter | `Ammo` | -> Ammo: set M01CarterDone, give Ammo10mm, done GetEquippedForNSFPursuit |
+| `MeetPaul` | PaulDenton | `GiveRifle` | -> GiveRifle: give WeaponRifle |
+| `MeetPaul` | PaulDenton | `GiveRocket` | -> GiveRocket: give WeaponGEPGun, give Image01_LibertyIsland, trig PaulWandering |
+| `MeetPaul` | PaulDenton | `GiveCrossbow` | -> GiveCrossbow: give WeaponMinicrossbow |
+| `MoleConvos` | Mole | `Buy10mm` [needs !M01MoleBought10mm, M01MoleCanBuy10mm] | -> Buy10mm: set M01MoleBought10mm, give Ammo10mm, trig BumFemaleWanders |
+| `MoleConvos` | Mole | `Buy3006` [needs !M01MoleBought3006, M01MoleCanBuy3006] | -> Buy3006: set M01MoleBought3006, give Ammo3006 |
+| `MoleConvos` | Mole | `BuyDarts` [needs !M01MoleBoughtDarts, M01MoleCanBuyDarts] | -> BuyDarts: set M01MoleBoughtDarts, give AmmoDart, trig BumFemaleWanders |
+| `MoleConvos` | Mole | `bye` | -> bye: trig BumFemaleWanders |
+| `MoleConvos` | Mole | (3 further choices that change no state) | - |
+| `MeetFilben` | HarleyFilben | `GetKeyB` | -> GetKeyB: set FilbenGaveKey, give NanoKey, trig HarleyStartsToWander |
+| `MeetFilben` | HarleyFilben | `NoKeyB` | -> NoKeyB: set FilbenGaveKey=0, trig HarleyStartsToWander |
+| `GuntherRescued` | GuntherHermann | `GiveAssault` | -> GiveAssault: take WeaponAssaultGun, set GuntherRespectsPlayer, trig GuntherAttacks |
+| `GuntherRescued` | GuntherHermann | `GiveNothing` | -> GiveNothing: set GuntherRespectsPlayer=0 |
+| `GuntherRescued` | GuntherHermann | `GiveStealth` | -> GiveStealth: take WeaponStealthPistol, set GuntherRespectsPlayer, trig GuntherAttacks |
+| `GuntherRescued` | GuntherHermann | `GiveNothing` | -> GiveNothing: set GuntherRespectsPlayer=0 |
+| `GuntherRescued` | GuntherHermann | `GivePistol` | -> GivePistol: take WeaponPistol, set GuntherRespectsPlayer, trig GuntherAttacks |
+| `GuntherRescued` | GuntherHermann | `GiveNothing` | -> GiveNothing: set GuntherRespectsPlayer=0 |
+| `GuntherRescued` | GuntherHermann | `GiveKnife` | -> GiveKnife: take WeaponCombatKnife, set GuntherRespectsPlayer, trig GuntherAttacks |
+| `GuntherRescued` | GuntherHermann | `GiveNothing` | -> GiveNothing: set GuntherRespectsPlayer=0 |
+| `GuntherRescued` | GuntherHermann | `GiveNothingNicely` | -> GiveNothingNicely: set GuntherRespectsPlayer, trig GuntherAttacks |
+| `GuntherRescued` | GuntherHermann | `GiveNothing` | -> GiveNothing: set GuntherRespectsPlayer=0 |
 
 **Conversations that change state** (choices, flags set, goals, items, events, skill points; the `Needs` column is kept on these rows):
 
@@ -515,18 +515,18 @@ sets `M01ReadyForBriefing` only after the other has set `MeetJaime_Played`/`M01C
 
 ### 01.4 Objectives
 
-| Goal | Kind | Text | Added by | Completed by |
-| --- | --- | --- | --- | --- |
-| `GetEquippedForNSFPursuit` | primary | See Sam Carter for equipment. | DL_MissedManderley, MeetManderley | MeetCarter |
-| `MedicalCheckup` | primary | See Jaime Reyes for a medical exam. | DL_MissedManderley, MeetManderley | MeetJaime |
-| `ReportToBase` | primary | Report to headquarters on the west side of the island for a debriefing. | DL_LeaderNotKilled, DL_LeaderKilledInSpite, DL_LeaderKilled | PaulCongratulations, MeetManderley, M02Briefing |
-| `DefeatNSFCommandCenter` | primary | The NSF seem to be directing the attack from the Statue. Get inside and locate the threat. | MeetPaul | DL_LeaderKilled, MeetTerrorist |
-| `RescueAgent` | secondary | One of UNATCO's top agents is being held inside the Statue. Break him out, and he'll back you up against the NSF. | MeetPaul | DL_LeaderKilled, MeetTerrorist, PaulCongratulations, GuntherRescued |
-| `MeetFilben` | secondary | Meet UNATCO informant Harley Filben at the North Docks. He has a key to the Statue doors. | MeetPaul | DL_LeaderKilled, MeetTerrorist, PaulCongratulations, MeetFilben |
-| `MeetPartner` | secondary | Go to the break room on Level 2 and check in with your partner, Agent Anna Navarre. | DL_AnnaIntro, MeetJaime | MeetAnna |
-| `Briefing` | primary | Go to Manderley's office on Level 2 for the mission briefing. | MeetCarter, MeetJaime | M02Briefing |
-| `ReportToManderley` | primary | Report to Manderley's office on Level 2. | PaulCongratulations | MeetManderley, M02Briefing |
-| `GetToDock` | primary | Go to the South Dock and take the police boat to Manhattan. | M02Briefing | GotoM02 |
+| Goal | Kind | Added by | Completed by |
+| --- | --- | --- | --- |
+| `GetEquippedForNSFPursuit` | primary | DL_MissedManderley, MeetManderley | MeetCarter |
+| `MedicalCheckup` | primary | DL_MissedManderley, MeetManderley | MeetJaime |
+| `ReportToBase` | primary | DL_LeaderNotKilled, DL_LeaderKilledInSpite, DL_LeaderKilled | PaulCongratulations, MeetManderley, M02Briefing |
+| `DefeatNSFCommandCenter` | primary | MeetPaul | DL_LeaderKilled, MeetTerrorist |
+| `RescueAgent` | secondary | MeetPaul | DL_LeaderKilled, MeetTerrorist, PaulCongratulations, GuntherRescued |
+| `MeetFilben` | secondary | MeetPaul | DL_LeaderKilled, MeetTerrorist, PaulCongratulations, MeetFilben |
+| `MeetPartner` | secondary | DL_AnnaIntro, MeetJaime | MeetAnna |
+| `Briefing` | primary | MeetCarter, MeetJaime | M02Briefing |
+| `ReportToManderley` | primary | PaulCongratulations | MeetManderley, M02Briefing |
+| `GetToDock` | primary | M02Briefing | GotoM02 |
 
 Notes added by conversations: `DL_Office`, `Prebriefing` and `MeetJanice` add a data-vault note (the UNATCO login); `SkillAwardTrigger`s: 7 on the island (115+25+50+750+250+150+50 = 1,390 points, the 750 one is the `Critical Location Bonus` at the
 Statue's top) and 4 in HQ (400 points). Carried goals: `GetToDock` is the last primary goal; goals that are neither completed nor primary are deleted by the next mission's `ResetGoals` (`DeusExPlayer.uc:8656`).
@@ -545,10 +545,10 @@ Flags set here and still alive in a later mission (the expiration model: [flags]
 | `M01PlayerMetFilben` | conversation MeetFilbenAfterStatue; conversation MeetFilben | never | M3 checks in M03MeetFilben |
 | `PlayerMetFilben` | conversation MeetFilbenAfterStatue; conversation MeetFilben | never | M4 checks in M04MeetFilben |
 
-* **The commander lives or dies** (`MeetTerrorist`: "Except send YOU back..." sets `PlayerAttackedStatueTerrorist` and `StatueMissionComplete` and fires `TerroristCommanderAttacks` (an `OrdersTrigger`: he attacks); "Tell me about the shipment..." leaves him alive,
+* **The commander lives or dies** (`MeetTerrorist`: the threatening choice (branch `Aggressive`) sets `PlayerAttackedStatueTerrorist` and `StatueMissionComplete` and fires `TerroristCommanderAttacks` (an `OrdersTrigger`: he attacks); the questioning choice (branch `Curious`) leaves him alive,
   `DL_LeaderNotKilled`). Both set `StatueMissionComplete`. `TerroristCommander_Dead` / `_Unconscious` are permanent and are read in mission 3 (see the table of who can die).
-* **Filben's key** (`MeetFilben`: "You can trust me." gives the `NanoKey` and sets `FilbenGaveKey`; "I can't promise..." sets it false): read in mission 3 by `M03MeetFilben` and `FilbenAngryBarks` (his attitude).
-* **Gunther** (`GuntherRescued`: handing over his gun/knife/pistol sets `GuntherRespectsPlayer`; refusing sets it false; "Wish I could help, but I'm not very well armed myself" sets it true) and `GuntherFreed` (expiration 12, from the island's `FlagTrigger2`): `M11MeetGunther` in Paris reads both; mission 2 and 3 barks read `GuntherRespectsPlayer`.
+* **Filben's key** (`MeetFilben`: the promising choice gives the `NanoKey` and sets `FilbenGaveKey`; the noncommittal one sets it false): read in mission 3 by `M03MeetFilben` and `FilbenAngryBarks` (his attitude).
+* **Gunther** (`GuntherRescued`: handing over his gun/knife/pistol sets `GuntherRespectsPlayer`; refusing sets it false; the apologetic refusal sets it true) and `GuntherFreed` (expiration 12, from the island's `FlagTrigger2`): `M11MeetGunther` in Paris reads both; mission 2 and 3 barks read `GuntherRespectsPlayer`.
 * **Aggression** (`M01PlayerAggressive`, expiration 6): UNATCO troop barks in missions 2 and 3 and `PaulLeaving` (mission 2).
 * Pawns that can die here and never return if they do (the table of who can die lists every mission): `PaulDenton`, `JosephManderley`, `SamCarter`, `JaimeReyes`, `JaniceReed`, `GuntherHermann`, `AnnaNavarre`, `Shannon`, `AlexJacobson`, `PrivateLloyd`, `CorporalCollins`,
   `custodytroop`, `TerroristCommander` (all `bImportant`; HQ's NPCs are `bInvincible` in the map).
@@ -693,73 +693,73 @@ Generated from the script's calls (`inventory-campaign.mjs scripts`; `:N` is the
 `Doctor1Barter`, `MeetSmuggler` (the 3-item vending), `JordanSheaConvos`, `MeetPimp`, `MeetJosh`, `MeetJock`/`JockSecondStory`, `MeetSally2`, `CounselWorker`, `MeetJoeGreen2`, `UNATCOGrenade1Meet`, `SickBum1Interrupted`, `MeetFordSchickQuestion`, `MeetSickWoman(2)`),
 46 set flags, 131 need a flag, 20 add or complete goals, 14 fire events.
 
-**Choices.** Every choice that changes state, the block its speech jumps to and what that block does (choices that change no state are counted in one row per conversation):
+**Choices.** Every choice that changes state, the block its speech jumps to and what that block does (choices that change no state are counted in one row per conversation; a choice is named by its branch label, the dialogue text stays out of the repository):
 
-| Conversation | Owner | Choice | Effects of the branch |
+| Conversation | Owner | Choice (its branch label; requirements) | Effects of the branch |
 | --- | --- | --- | --- |
-| `Doctor1Barter` | Doctor1 | I'll take a medkit. [needs CanAffordMedkit, CanAffordBots] | -> Medkit: give MedKit |
-| `Doctor1Barter` | Doctor1 | All I can afford is a medkit. [needs !CanAffordBots, CanAffordMedkit] | -> Medkit: give MedKit |
-| `Doctor1Barter` | Doctor1 | I want the full program. [needs CanAffordBots] | -> Full: set BoughtClinicPlan |
-| `Doctor1Barter` | Doctor1 | Sure. | -> Medkit: give MedKit |
-| `Doctor1Barter` | Doctor1 | (2 further choices that change no state: refusals, "never mind", unaffordable offers) | - |
-| `MeetSmuggler` | Smuggler | I'll give you 2100 for the scope. [needs !M03BoughtScope, M03CanBuyScope] | -> BuyScope: set M03BoughtScope, give WeaponModScope |
-| `MeetSmuggler` | Smuggler | How about you give me the bioelectric cell for 750? [needs !M03BoughtCell, M03CanBuyCell] | -> BuyCell: set M03BoughtCell, give BioelectricCell |
-| `MeetSmuggler` | Smuggler | Sell me the Light Amplification Goggles for 3375. [needs !M03BoughtGoggles, M03CanBuyGoggles] | -> BuyGoggles: set M03BoughtGoggles, give TechGoggles |
-| `MeetSmuggler` | Smuggler | Too expensive. Maybe I'll try to locate your friend. | -> NotInterested: trig BotToNeutral |
-| `MeetSmuggler` | Smuggler | I'll take the scope for 700. [needs !M03BoughtScope, M03CanBuyScope] | -> BuyScopeCheap: set M03BoughtScope, give WeaponModScope |
-| `MeetSmuggler` | Smuggler | 700's a bargain on that scope, but I'm low on cash. [needs !M03CanBuyScope, !M03BoughtScope] | -> NotInterested: trig BotToNeutral |
-| `MeetSmuggler` | Smuggler | Here's 250 for the bioelectric cell. [needs !M03BoughtCell, M03CanBuyCell] | -> BuyCellCheap: set M03BoughtCell, give BioelectricCell |
-| `MeetSmuggler` | Smuggler | I'd take the bioelectric cell for 250 if I had the cash. [needs !M03BoughtCell, !M03CanBuyCell] | -> NotInterested: trig BotToNeutral |
-| `MeetSmuggler` | Smuggler | 1125 for Light Amplification Goggles? Sure. [needs !M03BoughtGoggles, M03CanBuyGoggles] | -> BuyGogglesCheap: set M03BoughtGoggles, give TechGoggles |
-| `MeetSmuggler` | Smuggler | 1125 for Light Amplification Goggles sounds fair, but I don't have the [needs !M03BoughtGoggles, !M03CanBuyGoggles] | -> NotInterested: trig BotToNeutral |
-| `MeetSmuggler` | Smuggler | Not interested. | -> NotInterested: trig BotToNeutral |
-| `MeetSmuggler` | Smuggler | (3 further choices that change no state: refusals, "never mind", unaffordable offers) | - |
-| `MeetFordSchickQuestion` | FordSchick | Make a break for it. I'll protect you. | -> Go: set FordRan, trig FordExit |
-| `MeetFordSchickQuestion` | FordSchick | (1 further choice that change no state: refusals, "never mind", unaffordable offers) | - |
-| `CounselWorker` | Worker | Just curious. Thought I heard you say Ambrosia. | -> Curious: set WorkerCounseled, set WorkerChattedAboutAmbrosia, set KnowsOfJoJo |
-| `CounselWorker` | Worker | Tell me where you plan to get Ambrosia or I'll make sure you're arrest | -> Threat: set WorkerChattedAboutAmbrosia, set M02SheaAnnoyed |
-| `UNATCOGrenade1Meet` | UNATCOGrenade1 | Sure, hand'em over. | -> thanks: set GrenadeGiveDone, give WeaponGasGrenade |
-| `UNATCOGrenade1Meet` | UNATCOGrenade1 | Keep'em. Those things save lives. | -> nothanks: set GrenadeGiveDone |
-| `MeetSickWoman2` | SickWoman | (2 further choices that change no state: refusals, "never mind", unaffordable offers) | - |
-| `MeetSickWoman` | SickWoman | Here you go. | -> Compassion: set GaveSickWomanCredits |
-| `MeetSickWoman` | SickWoman | (1 further choice that change no state: refusals, "never mind", unaffordable offers) | - |
-| `SickBum1Interrupted` | SickBum1 | You should be more appreciative. By helping you, this gentleman risks  | -> Diplomat: set Doctor2_Saved, trig SickBumLeaves |
-| `SickBum1Interrupted` | SickBum1 | (1 further choice that change no state: refusals, "never mind", unaffordable offers) | - |
-| `MeetSally2` | Sally | Sure | -> GetInfo: set KnowsAboutWarehouse, set M02SallyDone, done InterviewLocals |
-| `MeetSally2` | Sally | (1 further choice that change no state: refusals, "never mind", unaffordable offers) | - |
-| `MeetPimp` | Pimp | Leave her alone or I'll have your ass picked up for pandering. | -> Copper: set ThreatenedPimpWithArrest, trig PimpAttacksPlayer |
-| `MeetPimp` | Pimp | You've got 10 seconds to beat it before I add you to the list of NSF c | -> ToughGuy: set PlayerIntimidatedSandrasPimp, set SandrasPimpDone, done HelpJaneysFriend, trig PimpStandsDown, trig SandraTalksToPlayer |
-| `MeetPimp` | Pimp | Deal. | -> Trickery2: set PaidForJaney |
-| `MeetPimp` | Pimp | (3 further choices that change no state: refusals, "never mind", unaffordable offers) | - |
-| `MeetJosh` | Josh | You don't look that bad. Tell me what you know about the NSF. | -> Stingy: set JoshFed=0, set JoshPlayed |
-| `MeetJosh` | Josh | How about some soy food? | -> GenerousSoy: take Soyfood, set JoshDone, set JoshFed |
-| `MeetJosh` | Josh | You don't look that bad. Tell me what you know about the NSF. | -> Stingy: set JoshFed=0, set JoshPlayed |
-| `MeetJosh` | Josh | All I have is a candy bar. | -> Generous: take Candybar |
-| `MeetJosh` | Josh | You don't look that bad. Tell me what you know about the NSF. | -> Stingy: set JoshFed=0, set JoshPlayed |
-| `MeetJosh` | Josh | (1 further choice that change no state: refusals, "never mind", unaffordable offers) | - |
-| `JordanSheaConvos` | JordanShea | A beer, please. | -> BuyBooze: set M02BoughtBooze1, give Liquor40oz |
-| `JordanSheaConvos` | JordanShea | I'll take a candy bar. | -> BuyCandyBar: give Candybar |
-| `JordanSheaConvos` | JordanShea | How 'bout a soda? | -> BuySoda: give Sodacan |
-| `JordanSheaConvos` | JordanShea | (4 further choices that change no state: refusals, "never mind", unaffordable offers) | - |
-| `MeetJoeGreen2` | JoeGreene | Heard anything about a secret NSF power-generator? [needs !FoundWarehouse] | -> GreenQuestioned: set M02QuestionedGreen |
-| `MeetJoeGreen2` | JoeGreene | What do you know about the NSF? [needs FoundWarehouse] | -> GreenQuestioned: set M02QuestionedGreen |
-| `MeetJoeGreen2` | JoeGreene | (1 further choice that change no state: refusals, "never mind", unaffordable offers) | - |
-| `MeetJock` | Jock | You can have this beer. | -> GiveBooze: take Liquor40oz |
-| `MeetJock` | Jock | (5 further choices that change no state: refusals, "never mind", unaffordable offers) | - |
-| `JockSecondStory` | Jock | You can have this beer. | -> GiveBooze: take Liquor40oz |
-| `JockSecondStory` | Jock | (5 further choices that change no state: refusals, "never mind", unaffordable offers) | - |
-| `Doctor2Barter` | Doctor2 | I'll take a medkit. [needs CanAffordBots] | -> Medkit: give MedKit |
-| `Doctor2Barter` | Doctor2 | All I can afford is a medkit. [needs !CanAffordBots] | -> Medkit: give MedKit |
-| `Doctor2Barter` | Doctor2 | I want the full program. [needs CanAffordBots] | -> Full: set BoughtClinicPlan |
-| `Doctor2Barter` | Doctor2 | Sure. | -> MedKit: give MedKit |
-| `Doctor2Barter` | Doctor2 | (2 further choices that change no state: refusals, "never mind", unaffordable offers) | - |
-| `JockExit` | BlackHelicopter | Let's go. | -> Go: set M01JockDone, trig ChopperExit |
-| `JockExit` | BlackHelicopter | (1 further choice that change no state: refusals, "never mind", unaffordable offers) | - |
-| `MeetBilly` | Billy | You can have this soy food. | -> GiveSoy: take Soyfood, set M02BillyDone |
-| `MeetBilly` | Billy | Want this candy bar? | -> GiveCandy: take Candybar |
-| `MeetBilly` | Billy | (2 further choices that change no state: refusals, "never mind", unaffordable offers) | - |
-| `AnnaThanks` | AnnaNavarre | You mechs might have copper-wiring to re-route your fear of pain, but  | -> Cocky: set M02MechSlur, set AnnaThanksChatDone, +goal LiberateBatteryParkSubway |
-| `AnnaThanks` | AnnaNavarre | I'm learning as I go. | -> TeamPlayer: set M02MechSlur=0, +goal LiberateBatteryParkSubway |
+| `Doctor1Barter` | Doctor1 | `Medkit` [needs CanAffordMedkit, CanAffordBots] | -> Medkit: give MedKit |
+| `Doctor1Barter` | Doctor1 | `Medkit` [needs !CanAffordBots, CanAffordMedkit] | -> Medkit: give MedKit |
+| `Doctor1Barter` | Doctor1 | `Full` [needs CanAffordBots] | -> Full: set BoughtClinicPlan |
+| `Doctor1Barter` | Doctor1 | `Medkit` | -> Medkit: give MedKit |
+| `Doctor1Barter` | Doctor1 | (2 further choices that change no state) | - |
+| `MeetSmuggler` | Smuggler | `BuyScope` [needs !M03BoughtScope, M03CanBuyScope] | -> BuyScope: set M03BoughtScope, give WeaponModScope |
+| `MeetSmuggler` | Smuggler | `BuyCell` [needs !M03BoughtCell, M03CanBuyCell] | -> BuyCell: set M03BoughtCell, give BioelectricCell |
+| `MeetSmuggler` | Smuggler | `BuyGoggles` [needs !M03BoughtGoggles, M03CanBuyGoggles] | -> BuyGoggles: set M03BoughtGoggles, give TechGoggles |
+| `MeetSmuggler` | Smuggler | `NotInterested` | -> NotInterested: trig BotToNeutral |
+| `MeetSmuggler` | Smuggler | `BuyScopeCheap` [needs !M03BoughtScope, M03CanBuyScope] | -> BuyScopeCheap: set M03BoughtScope, give WeaponModScope |
+| `MeetSmuggler` | Smuggler | `NotInterested` [needs !M03CanBuyScope, !M03BoughtScope] | -> NotInterested: trig BotToNeutral |
+| `MeetSmuggler` | Smuggler | `BuyCellCheap` [needs !M03BoughtCell, M03CanBuyCell] | -> BuyCellCheap: set M03BoughtCell, give BioelectricCell |
+| `MeetSmuggler` | Smuggler | `NotInterested` [needs !M03BoughtCell, !M03CanBuyCell] | -> NotInterested: trig BotToNeutral |
+| `MeetSmuggler` | Smuggler | `BuyGogglesCheap` [needs !M03BoughtGoggles, M03CanBuyGoggles] | -> BuyGogglesCheap: set M03BoughtGoggles, give TechGoggles |
+| `MeetSmuggler` | Smuggler | `NotInterested` [needs !M03BoughtGoggles, !M03CanBuyGoggles] | -> NotInterested: trig BotToNeutral |
+| `MeetSmuggler` | Smuggler | `NotInterested` | -> NotInterested: trig BotToNeutral |
+| `MeetSmuggler` | Smuggler | (3 further choices that change no state) | - |
+| `MeetFordSchickQuestion` | FordSchick | `Go` | -> Go: set FordRan, trig FordExit |
+| `MeetFordSchickQuestion` | FordSchick | (no jump found) | - |
+| `CounselWorker` | Worker | `Curious` | -> Curious: set WorkerCounseled, set WorkerChattedAboutAmbrosia, set KnowsOfJoJo |
+| `CounselWorker` | Worker | `Threat` | -> Threat: set WorkerChattedAboutAmbrosia, set M02SheaAnnoyed |
+| `UNATCOGrenade1Meet` | UNATCOGrenade1 | `thanks` | -> thanks: set GrenadeGiveDone, give WeaponGasGrenade |
+| `UNATCOGrenade1Meet` | UNATCOGrenade1 | `nothanks` | -> nothanks: set GrenadeGiveDone |
+| `MeetSickWoman2` | SickWoman | (2 further choices that change no state) | - |
+| `MeetSickWoman` | SickWoman | `Compassion` | -> Compassion: set GaveSickWomanCredits |
+| `MeetSickWoman` | SickWoman | (no jump found) | - |
+| `SickBum1Interrupted` | SickBum1 | `Diplomat` | -> Diplomat: set Doctor2_Saved, trig SickBumLeaves |
+| `SickBum1Interrupted` | SickBum1 | (no jump found) | - |
+| `MeetSally2` | Sally | `GetInfo` | -> GetInfo: set KnowsAboutWarehouse, set M02SallyDone, done InterviewLocals |
+| `MeetSally2` | Sally | (no jump found) | - |
+| `MeetPimp` | Pimp | `Copper` | -> Copper: set ThreatenedPimpWithArrest, trig PimpAttacksPlayer |
+| `MeetPimp` | Pimp | `ToughGuy` | -> ToughGuy: set PlayerIntimidatedSandrasPimp, set SandrasPimpDone, done HelpJaneysFriend, trig PimpStandsDown, trig SandraTalksToPlayer |
+| `MeetPimp` | Pimp | `Trickery2` | -> Trickery2: set PaidForJaney |
+| `MeetPimp` | Pimp | (3 further choices that change no state) | - |
+| `MeetJosh` | Josh | `Stingy` | -> Stingy: set JoshFed=0, set JoshPlayed |
+| `MeetJosh` | Josh | `GenerousSoy` | -> GenerousSoy: take Soyfood, set JoshDone, set JoshFed |
+| `MeetJosh` | Josh | `Stingy` | -> Stingy: set JoshFed=0, set JoshPlayed |
+| `MeetJosh` | Josh | `Generous` | -> Generous: take Candybar |
+| `MeetJosh` | Josh | `Stingy` | -> Stingy: set JoshFed=0, set JoshPlayed |
+| `MeetJosh` | Josh | (no jump found) | - |
+| `JordanSheaConvos` | JordanShea | `BuyBooze` | -> BuyBooze: set M02BoughtBooze1, give Liquor40oz |
+| `JordanSheaConvos` | JordanShea | `BuyCandyBar` | -> BuyCandyBar: give Candybar |
+| `JordanSheaConvos` | JordanShea | `BuySoda` | -> BuySoda: give Sodacan |
+| `JordanSheaConvos` | JordanShea | (4 further choices that change no state) | - |
+| `MeetJoeGreen2` | JoeGreene | `GreenQuestioned` [needs !FoundWarehouse] | -> GreenQuestioned: set M02QuestionedGreen |
+| `MeetJoeGreen2` | JoeGreene | `GreenQuestioned` [needs FoundWarehouse] | -> GreenQuestioned: set M02QuestionedGreen |
+| `MeetJoeGreen2` | JoeGreene | (no jump found) | - |
+| `MeetJock` | Jock | `GiveBooze` | -> GiveBooze: take Liquor40oz |
+| `MeetJock` | Jock | (5 further choices that change no state) | - |
+| `JockSecondStory` | Jock | `GiveBooze` | -> GiveBooze: take Liquor40oz |
+| `JockSecondStory` | Jock | (5 further choices that change no state) | - |
+| `Doctor2Barter` | Doctor2 | `Medkit` [needs CanAffordBots] | -> Medkit: give MedKit |
+| `Doctor2Barter` | Doctor2 | `Medkit` [needs !CanAffordBots] | -> Medkit: give MedKit |
+| `Doctor2Barter` | Doctor2 | `Full` [needs CanAffordBots] | -> Full: set BoughtClinicPlan |
+| `Doctor2Barter` | Doctor2 | `MedKit` | -> MedKit: give MedKit |
+| `Doctor2Barter` | Doctor2 | (2 further choices that change no state) | - |
+| `JockExit` | BlackHelicopter | `Go` | -> Go: set M01JockDone, trig ChopperExit |
+| `JockExit` | BlackHelicopter | (no jump found) | - |
+| `MeetBilly` | Billy | `GiveSoy` | -> GiveSoy: take Soyfood, set M02BillyDone |
+| `MeetBilly` | Billy | `GiveCandy` | -> GiveCandy: take Candybar |
+| `MeetBilly` | Billy | (2 further choices that change no state) | - |
+| `AnnaThanks` | AnnaNavarre | `Cocky` | -> Cocky: set M02MechSlur, set AnnaThanksChatDone, +goal LiberateBatteryParkSubway |
+| `AnnaThanks` | AnnaNavarre | `TeamPlayer` | -> TeamPlayer: set M02MechSlur=0, +goal LiberateBatteryParkSubway |
 
 **Conversations that change state** (choices, flags set, goals, items, events, skill points; the `Needs` column is kept on these rows):
 
@@ -869,19 +869,19 @@ the interviews. (They gate goals and items, not a door the data shows: `PaulBarr
 
 ### 02.4 Objectives
 
-| Goal | Kind | Text | Added by | Completed by |
-| --- | --- | --- | --- | --- |
-| `RescueFordSchick` | secondary | Rescue Smuggler's friend Ford Schick from a secret laboratory in the sewers. The sewers are accessed by the grates in the street. | MeetSmuggler | 02_NYC_Underground/GoalCompleteTrigger0 |
-| `ReportToPaul` | primary | Report to Paul in Hell's Kitchen. | DL_TenderloinSubway, DL_SubwayComplete, AnnaThanks | PaulBarricade |
-| `LiberateBatteryParkSubway` | primary | Free the hostages in the Battery Park subway station, east of Castle Clinton. | DL_ParkSubway, AnnaThanks | DL_SubwayComplete, AnnaThanks, Mission02.Timer:195, 02_NYC_BatteryPark/GoalCompleteTrigger4, 02_NYC_BatteryPark/GoalCompleteTrigger5, 02_NYC_BatteryPark/GoalCompleteTrigger1, 02_NYC_BatteryPark/GoalCompleteTrigger2 |
-| `SubdueAlleyTerrorists` | carried |  | - | DL_StreetOpened |
-| `DestroyGenerator` | primary | Find the NSF's secret generator. Paul's team will raid the warehouse when the generator is destroyed and the EMP field goes down. | PaulBarricade | DL_Pickup |
-| `InterviewLocals` | secondary | Talk to the locals in the bar or the clinic for clues to the location of the generator. | PaulBarricade | DL_Pickup, WorkerGivesInfo, MeetWindowBum, MeetSandraRenton, MeetSally2, JordanSheaConvos, MeetClinicOlderBum, 02_NYC_Bar/GoalCompleteTrigger1, 02_NYC_FreeClinic/GoalCompleteTrigger1 |
-| `RescueRenton` | secondary | Investigate the hostage situation in the 'Ton Hotel, at the southeast corner of the block. Rescue the Rentons, if they are still inside. | DL_HotelBriefing | RentonRescued |
-| `FindAmbrosia` | secondary | Locate the stolen barrel of Ambrosia in Castle Clinton. | AnnaDock | DL_AmbrosiaFound, 02_NYC_BatteryPark/GoalCompleteTrigger0 |
-| `ReportToAnna` | secondary | Report to Agent Navarre to receive your orders. | DL_AmbrosiaFound | PaulBarricade, AnnaThanks |
-| `HelpJaneysFriend` | secondary | A man named Johnny took a woman into an alley west of the Underworld Bar. Investigate the situation. | JaneyDistraught | MeetSandraRenton, MeetPimp, Mission02.Timer:317, Mission02.Timer:331 |
-| `GeneratorBlown` | carried |  | - | 02_NYC_Warehouse/GoalCompleteTrigger0 |
+| Goal | Kind | Added by | Completed by |
+| --- | --- | --- | --- |
+| `RescueFordSchick` | secondary | MeetSmuggler | 02_NYC_Underground/GoalCompleteTrigger0 |
+| `ReportToPaul` | primary | DL_TenderloinSubway, DL_SubwayComplete, AnnaThanks | PaulBarricade |
+| `LiberateBatteryParkSubway` | primary | DL_ParkSubway, AnnaThanks | DL_SubwayComplete, AnnaThanks, Mission02.Timer:195, 02_NYC_BatteryPark/GoalCompleteTrigger4, 02_NYC_BatteryPark/GoalCompleteTrigger5, 02_NYC_BatteryPark/GoalCompleteTrigger1, 02_NYC_BatteryPark/GoalCompleteTrigger2 |
+| `SubdueAlleyTerrorists` | carried | - | DL_StreetOpened |
+| `DestroyGenerator` | primary | PaulBarricade | DL_Pickup |
+| `InterviewLocals` | secondary | PaulBarricade | DL_Pickup, WorkerGivesInfo, MeetWindowBum, MeetSandraRenton, MeetSally2, JordanSheaConvos, MeetClinicOlderBum, 02_NYC_Bar/GoalCompleteTrigger1, 02_NYC_FreeClinic/GoalCompleteTrigger1 |
+| `RescueRenton` | secondary | DL_HotelBriefing | RentonRescued |
+| `FindAmbrosia` | secondary | AnnaDock | DL_AmbrosiaFound, 02_NYC_BatteryPark/GoalCompleteTrigger0 |
+| `ReportToAnna` | secondary | DL_AmbrosiaFound | PaulBarricade, AnnaThanks |
+| `HelpJaneysFriend` | secondary | JaneyDistraught | MeetSandraRenton, MeetPimp, Mission02.Timer:317, Mission02.Timer:331 |
+| `GeneratorBlown` | carried | - | 02_NYC_Warehouse/GoalCompleteTrigger0 |
 
 `SkillAwardTrigger`s: Bar 150, Battery Park 335 (6), Clinic 150, Hotel 105, Smuggler's lair 20, Street 190, Underground 100, Warehouse 890 (13, one of 500). `GoalCompleteTrigger`s complete `FindAmbrosia`, `LiberateBatteryParkSubway` (four actors),
 `InterviewLocals` (bar and clinic), `RescueFordSchick`, `GeneratorBlown`. Goals still open on entering mission 3 stay if primary, are dropped if secondary (`ResetGoals`).
@@ -1063,49 +1063,49 @@ Generated from the script's calls (`inventory-campaign.mjs scripts`; `:N` is the
 187 conversations of the list besides the shared barks: 13 InfoLinks, 53 talk-type, 121 overheard. 11 have choices (vending: `MeetSmuggler`, `Doctor1Barter`; trades:
 `MeetLenny` (a LAM for a vial of zyme), `ElReyScared`, `M03MeetJugHead` (kill the drug dealer for the Rooks), `MeetFordSchickQuestion`; and the exit's `M03JockLeave`), 33 set flags, 115 need a flag, 17 add or complete goals.
 
-**Choices.** Every choice that changes state, the block its speech jumps to and what that block does (choices that change no state are counted in one row per conversation):
+**Choices.** Every choice that changes state, the block its speech jumps to and what that block does (choices that change no state are counted in one row per conversation; a choice is named by its branch label, the dialogue text stays out of the repository):
 
-| Conversation | Owner | Choice | Effects of the branch |
+| Conversation | Owner | Choice (its branch label; requirements) | Effects of the branch |
 | --- | --- | --- | --- |
-| `MeetSmuggler` | Smuggler | I'll give you 2100 for the scope. [needs !M03BoughtScope, M03CanBuyScope] | -> BuyScope: set M03BoughtScope, give WeaponModScope |
-| `MeetSmuggler` | Smuggler | How about you give me the bioelectric cell for 750? [needs !M03BoughtCell, M03CanBuyCell] | -> BuyCell: set M03BoughtCell, give BioelectricCell |
-| `MeetSmuggler` | Smuggler | Sell me the Light Amplification Goggles for 3375. [needs !M03BoughtGoggles, M03CanBuyGoggles] | -> BuyGoggles: set M03BoughtGoggles, give TechGoggles |
-| `MeetSmuggler` | Smuggler | Too expensive. Maybe I'll try to locate your friend. | -> NotInterested: trig BotToNeutral |
-| `MeetSmuggler` | Smuggler | I'll take the scope for 700. [needs !M03BoughtScope, M03CanBuyScope] | -> BuyScopeCheap: set M03BoughtScope, give WeaponModScope |
-| `MeetSmuggler` | Smuggler | 700's a bargain on that scope, but I'm low on cash. [needs !M03CanBuyScope, !M03BoughtScope] | -> NotInterested: trig BotToNeutral |
-| `MeetSmuggler` | Smuggler | Here's 250 for the bioelectric cell. [needs !M03BoughtCell, M03CanBuyCell] | -> BuyCellCheap: set M03BoughtCell, give BioelectricCell |
-| `MeetSmuggler` | Smuggler | I'd take the bioelectric cell for 250 if I had the cash. [needs !M03BoughtCell, !M03CanBuyCell] | -> NotInterested: trig BotToNeutral |
-| `MeetSmuggler` | Smuggler | 1125 for Light Amplification Goggles? Sure. [needs !M03BoughtGoggles, M03CanBuyGoggles] | -> BuyGogglesCheap: set M03BoughtGoggles, give TechGoggles |
-| `MeetSmuggler` | Smuggler | 1125 for Light Amplification Goggles sounds fair, but I don't have the [needs !M03BoughtGoggles, !M03CanBuyGoggles] | -> NotInterested: trig BotToNeutral |
-| `MeetSmuggler` | Smuggler | Not interested. | -> NotInterested: trig BotToNeutral |
-| `MeetSmuggler` | Smuggler | (3 further choices that change no state: refusals, "never mind", unaffordable offers) | - |
-| `MeetFordSchickQuestion` | FordSchick | Make a break for it. I'll protect you. | -> Go: set FordRan, trig FordExit |
-| `MeetFordSchickQuestion` | FordSchick | (1 further choice that change no state: refusals, "never mind", unaffordable offers) | - |
-| `VeteranConvos` | Veteran | I'll take both of them for 600. [needs !M03Bought3006_1, !M03Bought3006_2, M03CanBuyBoth3006] | -> BuyBoth: set M03Bought3006_1, set M03Bought3006_2, set M03VeteranDone, give Ammo3006 |
-| `VeteranConvos` | Veteran | Here's 300 for one clip. [needs M03CanBuy3006] | -> BuyOne: set M03Bought3006_1, give Ammo3006 |
-| `VeteranConvos` | Veteran | (2 further choices that change no state: refusals, "never mind", unaffordable offers) | - |
-| `MeetLenny` | Lenny | Suppose I could part with a vial of zyme, if you'll give me the LAM. | -> Trade: set LennyDone, set LAMSkillPoints, give WeaponLAM, take VialCrack |
-| `MeetLenny` | Lenny | (1 further choice that change no state: refusals, "never mind", unaffordable offers) | - |
-| `M03MeetJugHead` | JugHead | I'll take the LAM for 750. [needs M03CanAffordLAM] | -> BuyLAM: set JugheadDone, set LAMSkillPoints, give WeaponLAM |
-| `M03MeetJugHead` | JugHead | (3 further choices that change no state: refusals, "never mind", unaffordable offers) | - |
-| `ElReyScared` | JugHead | I want more. Either your life is worth more than a LAM, or it's not wo | -> More: set ElReyScaredDone, trig ElReyAttacks |
-| `ElReyScared` | JugHead | (1 further choice that change no state: refusals, "never mind", unaffordable offers) | - |
-| `M03JockLeave` | Jock | I'm ready. Let's move out. | -> Ready: trig HelicopterPickUp |
-| `M03JockLeave` | Jock | (1 further choice that change no state: refusals, "never mind", unaffordable offers) | - |
-| `HaroldConvos` | Harold | Here's 400 for the recoil weapon mod. [needs !M03BoughtRecoil, M03CanBuyRecoil] | -> BuyRecoil: set M03BoughtRecoil, give WeaponModRecoil |
-| `HaroldConvos` | Harold | I'll take the shotgun shells for 300. [needs !M03BoughtShells, M03CanBuyShells] | -> BuyShells: set M03BoughtShells, give AmmoShell |
-| `HaroldConvos` | Harold | (3 further choices that change no state: refusals, "never mind", unaffordable offers) | - |
-| `M03MeetFilben` | HarleyFilben | Fine. 1000 for where I can find the code to the phone booth. [needs !PlayerKnowsUnderworldPassword, !M03FoundUnderground] | -> UnderworldAnswerExpensive: set PlayerKnowsUnderworldPassword, set KnowsOfMolePeople, set FilbenToldAboutCurly, set M03FilbenDoneSelling |
-| `M03MeetFilben` | HarleyFilben | (3 further choices that change no state: refusals, "never mind", unaffordable offers) | - |
-| `M03DrugDealerConvos` | DrugDealer | I'll take a vial of zyme. [needs M03Have120] | -> BuyVial: give Vialcrack |
-| `M03DrugDealerConvos` | DrugDealer | What do you know about a gang called the rooks? [needs !M03DrugDealerChat1, KnowsOfJughead] | -> Gang: set M03DrugDealerChat1, set KnowsOfJunkiesLAMs |
-| `M03DrugDealerConvos` | DrugDealer | Tell me what you've heard about the NSF. [needs !M03DrugDealerChat0, !KnowsOfMolePeople] | -> Interrogate: set M03DrugDealerChat0 |
-| `M03DrugDealerConvos` | DrugDealer | Know where I can find the mole people? [needs !M03DrugDealerChat0, KnowsOfMolePeople] | -> Interrogate: set M03DrugDealerChat0 |
-| `M03DrugDealerConvos` | DrugDealer | I'm with UNATCO. Start talking. [needs !M03DrugDealerChat2, M03DrugDealerChat0] | -> Chat2: set M03DrugDealerChat2, trig DrugDealerAttacks |
-| `M03DrugDealerConvos` | DrugDealer | (2 further choices that change no state: refusals, "never mind", unaffordable offers) | - |
-| `MeetDon` | Don | Take a vial. [needs M03GotCrack] | -> GiveCrack: set DonDone, take Vialcrack |
-| `MeetDon` | Don | I hear someone found a box of LAMs down here. [needs KnowsOfJunkiesLAMs, !DonLAMComment] | -> LAMComment: set DonLAMComment |
-| `MeetDon` | Don | Sorry. | -> Sorry: set DonSorryQuestion |
+| `MeetSmuggler` | Smuggler | `BuyScope` [needs !M03BoughtScope, M03CanBuyScope] | -> BuyScope: set M03BoughtScope, give WeaponModScope |
+| `MeetSmuggler` | Smuggler | `BuyCell` [needs !M03BoughtCell, M03CanBuyCell] | -> BuyCell: set M03BoughtCell, give BioelectricCell |
+| `MeetSmuggler` | Smuggler | `BuyGoggles` [needs !M03BoughtGoggles, M03CanBuyGoggles] | -> BuyGoggles: set M03BoughtGoggles, give TechGoggles |
+| `MeetSmuggler` | Smuggler | `NotInterested` | -> NotInterested: trig BotToNeutral |
+| `MeetSmuggler` | Smuggler | `BuyScopeCheap` [needs !M03BoughtScope, M03CanBuyScope] | -> BuyScopeCheap: set M03BoughtScope, give WeaponModScope |
+| `MeetSmuggler` | Smuggler | `NotInterested` [needs !M03CanBuyScope, !M03BoughtScope] | -> NotInterested: trig BotToNeutral |
+| `MeetSmuggler` | Smuggler | `BuyCellCheap` [needs !M03BoughtCell, M03CanBuyCell] | -> BuyCellCheap: set M03BoughtCell, give BioelectricCell |
+| `MeetSmuggler` | Smuggler | `NotInterested` [needs !M03BoughtCell, !M03CanBuyCell] | -> NotInterested: trig BotToNeutral |
+| `MeetSmuggler` | Smuggler | `BuyGogglesCheap` [needs !M03BoughtGoggles, M03CanBuyGoggles] | -> BuyGogglesCheap: set M03BoughtGoggles, give TechGoggles |
+| `MeetSmuggler` | Smuggler | `NotInterested` [needs !M03BoughtGoggles, !M03CanBuyGoggles] | -> NotInterested: trig BotToNeutral |
+| `MeetSmuggler` | Smuggler | `NotInterested` | -> NotInterested: trig BotToNeutral |
+| `MeetSmuggler` | Smuggler | (3 further choices that change no state) | - |
+| `MeetFordSchickQuestion` | FordSchick | `Go` | -> Go: set FordRan, trig FordExit |
+| `MeetFordSchickQuestion` | FordSchick | (no jump found) | - |
+| `VeteranConvos` | Veteran | `BuyBoth` [needs !M03Bought3006_1, !M03Bought3006_2, M03CanBuyBoth3006] | -> BuyBoth: set M03Bought3006_1, set M03Bought3006_2, set M03VeteranDone, give Ammo3006 |
+| `VeteranConvos` | Veteran | `BuyOne` [needs M03CanBuy3006] | -> BuyOne: set M03Bought3006_1, give Ammo3006 |
+| `VeteranConvos` | Veteran | (2 further choices that change no state) | - |
+| `MeetLenny` | Lenny | `Trade` | -> Trade: set LennyDone, set LAMSkillPoints, give WeaponLAM, take VialCrack |
+| `MeetLenny` | Lenny | (no jump found) | - |
+| `M03MeetJugHead` | JugHead | `BuyLAM` [needs M03CanAffordLAM] | -> BuyLAM: set JugheadDone, set LAMSkillPoints, give WeaponLAM |
+| `M03MeetJugHead` | JugHead | (3 further choices that change no state) | - |
+| `ElReyScared` | JugHead | `More` | -> More: set ElReyScaredDone, trig ElReyAttacks |
+| `ElReyScared` | JugHead | (no jump found) | - |
+| `M03JockLeave` | Jock | `Ready` | -> Ready: trig HelicopterPickUp |
+| `M03JockLeave` | Jock | (no jump found) | - |
+| `HaroldConvos` | Harold | `BuyRecoil` [needs !M03BoughtRecoil, M03CanBuyRecoil] | -> BuyRecoil: set M03BoughtRecoil, give WeaponModRecoil |
+| `HaroldConvos` | Harold | `BuyShells` [needs !M03BoughtShells, M03CanBuyShells] | -> BuyShells: set M03BoughtShells, give AmmoShell |
+| `HaroldConvos` | Harold | (3 further choices that change no state) | - |
+| `M03MeetFilben` | HarleyFilben | `UnderworldAnswerExpensive` [needs !PlayerKnowsUnderworldPassword, !M03FoundUnderground] | -> UnderworldAnswerExpensive: set PlayerKnowsUnderworldPassword, set KnowsOfMolePeople, set FilbenToldAboutCurly, set M03FilbenDoneSelling |
+| `M03MeetFilben` | HarleyFilben | (3 further choices that change no state) | - |
+| `M03DrugDealerConvos` | DrugDealer | `BuyVial` [needs M03Have120] | -> BuyVial: give Vialcrack |
+| `M03DrugDealerConvos` | DrugDealer | `Gang` [needs !M03DrugDealerChat1, KnowsOfJughead] | -> Gang: set M03DrugDealerChat1, set KnowsOfJunkiesLAMs |
+| `M03DrugDealerConvos` | DrugDealer | `Interrogate` [needs !M03DrugDealerChat0, !KnowsOfMolePeople] | -> Interrogate: set M03DrugDealerChat0 |
+| `M03DrugDealerConvos` | DrugDealer | `Interrogate` [needs !M03DrugDealerChat0, KnowsOfMolePeople] | -> Interrogate: set M03DrugDealerChat0 |
+| `M03DrugDealerConvos` | DrugDealer | `Chat2` [needs !M03DrugDealerChat2, M03DrugDealerChat0] | -> Chat2: set M03DrugDealerChat2, trig DrugDealerAttacks |
+| `M03DrugDealerConvos` | DrugDealer | (2 further choices that change no state) | - |
+| `MeetDon` | Don | `GiveCrack` [needs M03GotCrack] | -> GiveCrack: set DonDone, take Vialcrack |
+| `MeetDon` | Don | `LAMComment` [needs KnowsOfJunkiesLAMs, !DonLAMComment] | -> LAMComment: set DonLAMComment |
+| `MeetDon` | Don | `Sorry` | -> Sorry: set DonSorryQuestion |
 
 **Conversations that change state** (choices, flags set, goals, items, events, skill points; the `Needs` column is kept on these rows):
 
@@ -1190,26 +1190,26 @@ InfoLinks and what starts them:
 | `DL_Airfield` | NYC_AirfieldHeliBase/DataLinkTrigger0 (-297,2075) |  |  |
 
 **Required (progression) conversations**, from the exit chains: `ManderleyDebriefing02` (HQ, radius 200; adds `LocateAirfield`, `SeeCarter`): `JockBarks` fires `ChopperExit` only when `ManderleyDebriefing02_Played` is set (its `Ready` branch), so the island's
-helicopter needs the debriefing; `DL_Airfield` (heli base, `DataLinkTrigger0` at (-297,2075): sets `DL_Airfield_Played`) and `M03JockLeave` (Jock at the airfield, bump/frob/radius 240; its `Ready` choice "I'm ready. Let's move out." fires `HelicopterPickUp`, which
+helicopter needs the debriefing; `DL_Airfield` (heli base, `DataLinkTrigger0` at (-297,2075): sets `DL_Airfield_Played`) and `M03JockLeave` (Jock at the airfield, bump/frob/radius 240; its `Ready` choice fires `HelicopterPickUp`, which
 moves the helicopter and the dispatcher fires `MoveHelicopter`). `M03JockLeave` needs `DL_Airfield_Played` (a default-expiration flag: kept through the mission's maps). The assassination
 (`DL_LebedevKill`, `AnnaEntrance`/`AnnaCongrats`, `dl_gochopper`) is not on the chain.
 
 ### 03.4 Objectives
 
-| Goal | Kind | Text | Added by | Completed by |
-| --- | --- | --- | --- | --- |
-| `RescueFordSchick` | secondary | Rescue Smuggler's friend Ford Schick from a secret laboratory in the sewers. The sewers are accessed by the grates in the street. | MeetSmuggler | - |
-| `ReportToManderley` | primary | Report to Manderley. | DL_WelcomeBack | ManderleyDebriefing02 |
-| `LastBarrel747` | secondary | Gain access to the 747 hangar and locate the final barrel. | DL_TaggedTwo | DL_TaggedThree |
-| `FindAmbrosiaBarrels` | secondary | Locate the three missing barrels of Ambrosia. UNATCO will send a team to recover them. | DL_TaggedOne | DL_TaggedThree |
-| `LocateAirfield` | primary | Locate the airfield where the NSF has moved the Ambrosia. Investigate the subway system, because the terrorists may be hiding underground. | ManderleyDebriefing02 | DL_LebedevKill |
-| `AssassinateLebedev` | primary | Assassinate Juan Ivanovich Lebedev. | DL_LebedevKill | dl_gochopper, AnnaExcuse, AnnaEntrance, AnnaCongrats, Mission03.Timer:308 |
-| `GoToHelicopter` | primary | Go to the helicopter at the airfield. | dl_gochopper, AnnaExcuse, AnnaEntrance, AnnaCongrats | 03_NYC_Airfield/GoalCompleteTrigger2 |
-| `SeeCarter` | secondary | Report to Sam Carter to receive your equipment. | ManderleyDebriefing02 | CarterGreeting03 |
-| `KillDealer` | secondary | Kill the drug dealer in the Brooklyn Bridge Station for the Rooks, then inform El Rey. | M03MeetJugHead | M03MeetJugHead |
-| `TalkToCharlie` | secondary | Talk to Charlie in the Brooklyn Bridge Station for information on the mole people. | MeetCurly | MeetCharlieFann, FannSatisfied, FannFinalBarks |
-| `OpenFreshWater` | secondary | Open a fresh water supply for the homeless in Brooklyn Bridge Station. The valve is in a utility room at the north end of the train tracks that has be | MeetCharlieFann | FannSatisfied |
-| `GetToAirfield` | carried |  | - | 03_NYC_Airfield/GoalCompleteTrigger0, 03_NYC_Airfield/GoalCompleteTrigger1 |
+| Goal | Kind | Added by | Completed by |
+| --- | --- | --- | --- |
+| `RescueFordSchick` | secondary | MeetSmuggler | - |
+| `ReportToManderley` | primary | DL_WelcomeBack | ManderleyDebriefing02 |
+| `LastBarrel747` | secondary | DL_TaggedTwo | DL_TaggedThree |
+| `FindAmbrosiaBarrels` | secondary | DL_TaggedOne | DL_TaggedThree |
+| `LocateAirfield` | primary | ManderleyDebriefing02 | DL_LebedevKill |
+| `AssassinateLebedev` | primary | DL_LebedevKill | dl_gochopper, AnnaExcuse, AnnaEntrance, AnnaCongrats, Mission03.Timer:308 |
+| `GoToHelicopter` | primary | dl_gochopper, AnnaExcuse, AnnaEntrance, AnnaCongrats | 03_NYC_Airfield/GoalCompleteTrigger2 |
+| `SeeCarter` | secondary | ManderleyDebriefing02 | CarterGreeting03 |
+| `KillDealer` | secondary | M03MeetJugHead | M03MeetJugHead |
+| `TalkToCharlie` | secondary | MeetCurly | MeetCharlieFann, FannSatisfied, FannFinalBarks |
+| `OpenFreshWater` | secondary | MeetCharlieFann | FannSatisfied |
+| `GetToAirfield` | carried | - | 03_NYC_Airfield/GoalCompleteTrigger0, 03_NYC_Airfield/GoalCompleteTrigger1 |
 
 ### 03.5 Choices with lasting consequences
 
@@ -1426,45 +1426,45 @@ Generated from the script's calls (`inventory-campaign.mjs scripts`; `:N` is the
 ### 04.3 Conversations and InfoLinks
 
 136 conversations of the list besides the shared barks: 8 InfoLinks, 36 talk-type, 92 overheard. 6 have choices (the vendor/bartender conversations `M04MeetSmuggler`, `Doctor1Barter`, `M04JordanSheaConvos`,
-Carter's ammunition choice `M04MeetCarter`, Renton's gun `InterruptFamilySquabble`, and **`GuntherShowdown`**: "I surrender." / "Here comes your chance to be a hero."), 22 set flags, 82 need a flag, 11 add or complete goals.
+Carter's ammunition choice `M04MeetCarter`, Renton's gun `InterruptFamilySquabble`, and **`GuntherShowdown`**: surrender or fight), 22 set flags, 82 need a flag, 11 add or complete goals.
 
-**Choices.** Every choice that changes state, the block its speech jumps to and what that block does (choices that change no state are counted in one row per conversation):
+**Choices.** Every choice that changes state, the block its speech jumps to and what that block does (choices that change no state are counted in one row per conversation; a choice is named by its branch label, the dialogue text stays out of the repository):
 
-| Conversation | Owner | Choice | Effects of the branch |
+| Conversation | Owner | Choice (its branch label; requirements) | Effects of the branch |
 | --- | --- | --- | --- |
-| `Doctor1Barter` | Doctor1 | I'll take a medkit. [needs CanAffordMedkit, CanAffordBots] | -> Medkit: give MedKit |
-| `Doctor1Barter` | Doctor1 | All I can afford is a medkit. [needs !CanAffordBots, CanAffordMedkit] | -> Medkit: give MedKit |
-| `Doctor1Barter` | Doctor1 | I want the full program. [needs CanAffordBots] | -> Full: set BoughtClinicPlan |
-| `Doctor1Barter` | Doctor1 | Sure. | -> Medkit: give MedKit |
-| `Doctor1Barter` | Doctor1 | (2 further choices that change no state: refusals, "never mind", unaffordable offers) | - |
-| `M04MeetSmuggler` | Smuggler | I'll give you 2400 for the range mod. [needs M04CanBuyBinoculars, !M04BoughtBinoculars] | -> BuyBinoculars: set M04BoughtBinoculars, give WeaponModRange |
-| `M04MeetSmuggler` | Smuggler | How about you give me the napalm canister for 2250? [needs M04CanBuyFlame, !M04BoughtFlame] | -> BuyFlame: set M04BoughtFlame, give AmmoNapalm |
-| `M04MeetSmuggler` | Smuggler | Sell me the extended clip for 1500. [needs M04CanBuyClip, !M04BoughtClip] | -> BuyClip: set M04BoughtClip, give WeaponModClip |
-| `M04MeetSmuggler` | Smuggler | Not interested. | -> NotInterested: trig BotToNeutral |
-| `M04MeetSmuggler` | Smuggler | I'll take the range mod for 800. [needs M04CanBuyBinoculars, !M04BoughtBinoculars] | -> BuyBinocularsCheap: set M04BoughtBinoculars, give WeaponModRange |
-| `M04MeetSmuggler` | Smuggler | 800's a bargain on the range mod, but I'm low on cash. [needs !M04CanBuyBinoculars, !M04BoughtBinoculars] | -> NotInterested: trig BotToNeutral |
-| `M04MeetSmuggler` | Smuggler | Here's 750 for the napalm canister. [needs M04CanBuyFlame, !M04BoughtFlame] | -> BuyFlameCheap: set M04BoughtFlame, give AmmoNapalm |
-| `M04MeetSmuggler` | Smuggler | I'd take the napalm for 750 if I had the cash. [needs !M04CanBuyFlame, !M04BoughtFlame] | -> NotInterested: trig BotToNeutral |
-| `M04MeetSmuggler` | Smuggler | 500 for an extended clip? Sure. [needs M04CanBuyClip, !M04BoughtClip] | -> BuyClipCheap: set M04BoughtClip, give WeaponModClip |
-| `M04MeetSmuggler` | Smuggler | 500 for an extended clip sounds fair, but I don't have the money. [needs !M04CanBuyClip, !M04BoughtClip] | -> NotInterested: trig BotToNeutral |
-| `M04MeetSmuggler` | Smuggler | Not interested. | -> NotInterested: trig BotToNeutral |
-| `M04MeetSmuggler` | Smuggler | (3 further choices that change no state: refusals, "never mind", unaffordable offers) | - |
-| `M04MeetCarter` | SamCarter | I'll take tranquilizer darts for the crossbow. | -> giveassault: set M04WantDart, set M04CarterDone, give AmmoDartPoison |
-| `M04MeetCarter` | SamCarter | I've been using a shotgun. | -> giveshotgun: set M04WantShotgun, set M04CarterDone, give AmmoShell |
-| `M04MeetCarter` | SamCarter | Sniper rifle, thirty-ought-six | -> givesniper: set M04WantSniper, set M04CarterDone, give Ammo3006 |
-| `M04MeetCarter` | SamCarter | A GEP rocket. | -> givepistol: set M04WantPistol, set M04CarterDone, give AmmoRocket |
-| `M04JordanSheaConvos` | JordanShea | A bottle of booze, please. | -> BuyBooze: give Liquor40oz |
-| `M04JordanSheaConvos` | JordanShea | A can of soda, please. | -> BuySoda: give SodaCan |
-| `M04JordanSheaConvos` | JordanShea | A candy bar, please. | -> BuyCandybar: give Candybar |
-| `M04JordanSheaConvos` | JordanShea | (4 further choices that change no state: refusals, "never mind", unaffordable offers) | - |
-| `GuntherShowdown` | GuntherHermann | I surrender. | -> Surrender: trig Mission4Exit |
-| `GuntherShowdown` | GuntherHermann | Here comes your chance to be a hero. | -> Fight: trig GuntherAttacksJC |
-| `InterruptFamilySquabble` | GilbertRenton | You can have my pistol. That'll keep you safe. | -> GivePistol: take WeaponPistol, set GaveRentonGun |
-| `InterruptFamilySquabble` | GilbertRenton | You can have my stealth pistol. That'll keep you safe. | -> GiveStealth: take WeaponStealthPistol, set GaveRentonGun |
-| `InterruptFamilySquabble` | GilbertRenton | You can have my sawed-off shotgun. That'll keep you safe. | -> GiveSawedOffShotgun: take WeaponSawedOffShotgun, set GaveRentonGun |
-| `InterruptFamilySquabble` | GilbertRenton | You can have my knife. That'll keep you safe. | -> GiveKnife: take WeaponCombatKnife, set GaveRentonGun |
-| `InterruptFamilySquabble` | GilbertRenton | You can have my mini-crossbow. That'll keep you safe. | -> GiveCrossbow: take WeaponMiniCrossbow, set GaveRentonGun |
-| `InterruptFamilySquabble` | GilbertRenton | (5 further choices that change no state: refusals, "never mind", unaffordable offers) | - |
+| `Doctor1Barter` | Doctor1 | `Medkit` [needs CanAffordMedkit, CanAffordBots] | -> Medkit: give MedKit |
+| `Doctor1Barter` | Doctor1 | `Medkit` [needs !CanAffordBots, CanAffordMedkit] | -> Medkit: give MedKit |
+| `Doctor1Barter` | Doctor1 | `Full` [needs CanAffordBots] | -> Full: set BoughtClinicPlan |
+| `Doctor1Barter` | Doctor1 | `Medkit` | -> Medkit: give MedKit |
+| `Doctor1Barter` | Doctor1 | (2 further choices that change no state) | - |
+| `M04MeetSmuggler` | Smuggler | `BuyBinoculars` [needs M04CanBuyBinoculars, !M04BoughtBinoculars] | -> BuyBinoculars: set M04BoughtBinoculars, give WeaponModRange |
+| `M04MeetSmuggler` | Smuggler | `BuyFlame` [needs M04CanBuyFlame, !M04BoughtFlame] | -> BuyFlame: set M04BoughtFlame, give AmmoNapalm |
+| `M04MeetSmuggler` | Smuggler | `BuyClip` [needs M04CanBuyClip, !M04BoughtClip] | -> BuyClip: set M04BoughtClip, give WeaponModClip |
+| `M04MeetSmuggler` | Smuggler | `NotInterested` | -> NotInterested: trig BotToNeutral |
+| `M04MeetSmuggler` | Smuggler | `BuyBinocularsCheap` [needs M04CanBuyBinoculars, !M04BoughtBinoculars] | -> BuyBinocularsCheap: set M04BoughtBinoculars, give WeaponModRange |
+| `M04MeetSmuggler` | Smuggler | `NotInterested` [needs !M04CanBuyBinoculars, !M04BoughtBinoculars] | -> NotInterested: trig BotToNeutral |
+| `M04MeetSmuggler` | Smuggler | `BuyFlameCheap` [needs M04CanBuyFlame, !M04BoughtFlame] | -> BuyFlameCheap: set M04BoughtFlame, give AmmoNapalm |
+| `M04MeetSmuggler` | Smuggler | `NotInterested` [needs !M04CanBuyFlame, !M04BoughtFlame] | -> NotInterested: trig BotToNeutral |
+| `M04MeetSmuggler` | Smuggler | `BuyClipCheap` [needs M04CanBuyClip, !M04BoughtClip] | -> BuyClipCheap: set M04BoughtClip, give WeaponModClip |
+| `M04MeetSmuggler` | Smuggler | `NotInterested` [needs !M04CanBuyClip, !M04BoughtClip] | -> NotInterested: trig BotToNeutral |
+| `M04MeetSmuggler` | Smuggler | `NotInterested` | -> NotInterested: trig BotToNeutral |
+| `M04MeetSmuggler` | Smuggler | (3 further choices that change no state) | - |
+| `M04MeetCarter` | SamCarter | `giveassault` | -> giveassault: set M04WantDart, set M04CarterDone, give AmmoDartPoison |
+| `M04MeetCarter` | SamCarter | `giveshotgun` | -> giveshotgun: set M04WantShotgun, set M04CarterDone, give AmmoShell |
+| `M04MeetCarter` | SamCarter | `givesniper` | -> givesniper: set M04WantSniper, set M04CarterDone, give Ammo3006 |
+| `M04MeetCarter` | SamCarter | `givepistol` | -> givepistol: set M04WantPistol, set M04CarterDone, give AmmoRocket |
+| `M04JordanSheaConvos` | JordanShea | `BuyBooze` | -> BuyBooze: give Liquor40oz |
+| `M04JordanSheaConvos` | JordanShea | `BuySoda` | -> BuySoda: give SodaCan |
+| `M04JordanSheaConvos` | JordanShea | `BuyCandybar` | -> BuyCandybar: give Candybar |
+| `M04JordanSheaConvos` | JordanShea | (4 further choices that change no state) | - |
+| `GuntherShowdown` | GuntherHermann | `Surrender` | -> Surrender: trig Mission4Exit |
+| `GuntherShowdown` | GuntherHermann | `Fight` | -> Fight: trig GuntherAttacksJC |
+| `InterruptFamilySquabble` | GilbertRenton | `GivePistol` | -> GivePistol: take WeaponPistol, set GaveRentonGun |
+| `InterruptFamilySquabble` | GilbertRenton | `GiveStealth` | -> GiveStealth: take WeaponStealthPistol, set GaveRentonGun |
+| `InterruptFamilySquabble` | GilbertRenton | `GiveSawedOffShotgun` | -> GiveSawedOffShotgun: take WeaponSawedOffShotgun, set GaveRentonGun |
+| `InterruptFamilySquabble` | GilbertRenton | `GiveKnife` | -> GiveKnife: take WeaponCombatKnife, set GaveRentonGun |
+| `InterruptFamilySquabble` | GilbertRenton | `GiveCrossbow` | -> GiveCrossbow: take WeaponMiniCrossbow, set GaveRentonGun |
+| `InterruptFamilySquabble` | GilbertRenton | (5 further choices that change no state) | - |
 
 **Conversations that change state** (choices, flags set, goals, items, events, skill points; the `Needs` column is kept on these rows):
 
@@ -1529,21 +1529,21 @@ InfoLinks and what starts them:
 **Required (progression) conversations**, from the chains: the island's helicopter needs `ManderleyDebriefing03` (HQ, radius 160; adds `GoToHelipad`) and `JockTellsAboutPaul` (Jock, radius 250; needs `ManderleyDebriefing03_Played`, fires `TimeToGo`; a `FlagTrigger`
 on `ManderleyDebriefing03_Played` fires `ChopperExit`). At the hotel `PaulInjured` (Paul, bump/frob/radius 100) adds `InvestigateNSF` and `TalkedToPaulAfterMessage` needs `PaulInjured_Played` and `NSFSignalSent`; `NSFSignalSent` is set by
 `DL_PaulGoodJob` (needs `CanSendSignal`: all three dishes in position, each set by an NSFHQ FlagTrigger) or by `04_NYC_NSFHQ/FlagTrigger10`; `GuntherShowdown` (Gunther, `sight/radius 300`, needs `TalkedToPaulAfterMessage_Played`) fires `Mission4Exit`
-on "I surrender." (or without a choice when Anna was killed, branch `AnnaDead2`). "Here comes your chance to be a hero." fires `GuntherAttacksJC` and leaves only the death exit.
+on the surrender choice (or without a choice when Anna was killed, branch `AnnaDead2`). The fighting choice fires `GuntherAttacksJC` and leaves only the death exit.
 
 ### 04.4 Objectives
 
-| Goal | Kind | Text | Added by | Completed by |
-| --- | --- | --- | --- | --- |
-| `InvestigateNSF` | primary | Investigate the captured NSF base to the west behind the bar to see if Paul is telling the truth about UNATCO. If he is, help the rebels by sending a  | PaulInjured | DL_SimonsPissed, DL_GotUplinkCode |
-| `AssassinateLebedev` | carried |  | - | DL_SeeManderley |
-| `SeeManderley` | primary | See Manderley for a debriefing. | DL_SeeManderley | ManderleyDebriefing03 |
-| `ReturnToPaul` | primary | Meet up with Paul and help him leave New York. | DL_PaulGoodJob | TalkedToPaulAfterMessage |
-| `SendSignal` | primary | Send the NSF distress signal from the satellite transmitter on the roof of NSFHQ. | DL_GotUplinkCode | DL_PaulGoodJob |
-| `CheckOnPaul` | primary | Your brother's in trouble. Go to the apartment in Hell's Kitchen and see if he needs your help. | DL_JockParkStart | PaulInjured |
-| `EscapeToBatteryPark` | primary | Find Jock's helicopter in Battery Park, the only way out of New York not controlled by UNATCO. The code to the Hell's Kitchen subway station is 6282. | TalkedToPaulAfterMessage | Mission04.Timer:92, 04_NYC_BatteryPark/GoalCompleteTrigger0, 04_NYC_BatteryPark/GoalCompleteTrigger1, 04_NYC_BatteryPark/GoalCompleteTrigger2 |
-| `GoToHelipad` | primary | Meet Jock at the helipad to be taken to a new assignment in Hong Kong. | ManderleyDebriefing03 | JockTellsAboutPaul |
-| `TellJaime` | secondary | Tell Jaime that Walton Simons is looking for him. | M04MeetJanice | M04MeetJaime |
+| Goal | Kind | Added by | Completed by |
+| --- | --- | --- | --- |
+| `InvestigateNSF` | primary | PaulInjured | DL_SimonsPissed, DL_GotUplinkCode |
+| `AssassinateLebedev` | carried | - | DL_SeeManderley |
+| `SeeManderley` | primary | DL_SeeManderley | ManderleyDebriefing03 |
+| `ReturnToPaul` | primary | DL_PaulGoodJob | TalkedToPaulAfterMessage |
+| `SendSignal` | primary | DL_GotUplinkCode | DL_PaulGoodJob |
+| `CheckOnPaul` | primary | DL_JockParkStart | PaulInjured |
+| `EscapeToBatteryPark` | primary | TalkedToPaulAfterMessage | Mission04.Timer:92, 04_NYC_BatteryPark/GoalCompleteTrigger0, 04_NYC_BatteryPark/GoalCompleteTrigger1, 04_NYC_BatteryPark/GoalCompleteTrigger2 |
+| `GoToHelipad` | primary | ManderleyDebriefing03 | JockTellsAboutPaul |
+| `TellJaime` | secondary | M04MeetJanice | M04MeetJaime |
 
 ### 04.5 Choices with lasting consequences
 
@@ -1578,8 +1578,8 @@ Read here, set earlier:
 1. Island arrival; HQ: `ManderleyDebriefing03`; back to the island: `JockTellsAboutPaul` -> `ChopperLeave` -> `MapExit0` -> `04_NYC_Street`.
 2. Street -> hotel (`ToHotelFront`/`ToHotelBedroom`): `FlagTrigger16` sets `ApartmentEntered`; `PaulInjured` (Paul) adds `InvestigateNSF` and gives the smuggler's password (`KnowsSmugglerPassword`).
 3. Street -> `04_NYC_NSFHQ` (`ToNSFHQ`): position the three dishes (`FlagTrigger3/17/18` set `Dish1/2/3InPosition`), `CanSendSignal`, send the signal (`DL_PaulGoodJob` or `FlagTrigger10`) -> `NSFSignalSent`.
-4. At the hotel, `Mission04.Timer` runs the raid (`M04RaidTeleportDone`) and starts `TalkedToPaulAfterMessage`; goals `ReturnToPaul` done, `EscapeToBatteryPark` added ("the code to the Hell's Kitchen subway station is 6282").
-5. Battery Park (`ToBatteryPark` teleporters): `GuntherShowdown` -> "I surrender." -> `Mission4Exit` -> `MapExit0/1` -> `05_NYC_UNATCOMJ12lab`; or die after step 4 -> `SendPlayer`.
+4. At the hotel, `Mission04.Timer` runs the raid (`M04RaidTeleportDone`) and starts `TalkedToPaulAfterMessage`; goals `ReturnToPaul` done, `EscapeToBatteryPark` added (its text gives the subway station's door code).
+5. Battery Park (`ToBatteryPark` teleporters): `GuntherShowdown` -> surrender -> `Mission4Exit` -> `MapExit0/1` -> `05_NYC_UNATCOMJ12lab`; or die after step 4 -> `SendPlayer`.
 
 | Map | Tag (movers) | Lock | Opened by |
 | --- | --- | --- | --- |
@@ -1686,28 +1686,28 @@ Generated from the script's calls (`inventory-campaign.mjs scripts`; `:N` is the
 ### 05.3 Conversations and InfoLinks
 
 61 conversations of the list besides the shared barks: 13 InfoLinks, 19 talk-type, 29 overheard. 5 have choices (the vendors `SvenConvos` and `M05ShannonConvos`, Miguel's
-three `MeetMiguel` options and `ChangeMiguel`, and **`M05MeetJaime`**: "I'm going over to the resistance..." or "Stay here..."), 13 set flags, 33 need a flag, 11 add or complete goals.
+three `MeetMiguel` options and `ChangeMiguel`, and **`M05MeetJaime`**: defect or stay), 13 set flags, 33 need a flag, 11 add or complete goals.
 
-**Choices.** Every choice that changes state, the block its speech jumps to and what that block does (choices that change no state are counted in one row per conversation):
+**Choices.** Every choice that changes state, the block its speech jumps to and what that block does (choices that change no state are counted in one row per conversation; a choice is named by its branch label, the dialogue text stays out of the repository):
 
-| Conversation | Owner | Choice | Effects of the branch |
+| Conversation | Owner | Choice (its branch label; requirements) | Effects of the branch |
 | --- | --- | --- | --- |
-| `SvenConvos` | Sven | Here's 500. Tell me the security login. [needs !M03BoughtInfo, M03CanBuyInfo] | -> BuyInfo: set M03BoughtInfo |
-| `SvenConvos` | Sven | I'll take the 762 ammo for 600. [needs !M03Bought762, M03CanBuy762] | -> Buy762: set M03Bought762, give Ammo762mm |
-| `SvenConvos` | Sven | Give me the accuracy weapon mod for 750. [needs !M03BoughtAccuracy, M03CanBuyAccuracy] | -> BuyAccuracy: set M03BoughtAccuracy, give WeaponModAccuracy |
-| `SvenConvos` | Sven | (4 further choices that change no state: refusals, "never mind", unaffordable offers) | - |
-| `M05ShannonConvos` | Shannon | Give me one of the scrambler grenades for 1250. [needs !M05BoughtScrambler3, M05CanBuyOne] | -> BuyOne: set M05BoughtScrambler1, give WeaponNanoVirusGrenade |
-| `M05ShannonConvos` | Shannon | I'll take two for 2500. [needs !M05BoughtScrambler2, M05CanBuyTwo] | -> BuyTwo: set M05BoughtScrambler1, set M05BoughtScrambler2, give WeaponNanoVirusGrenade |
-| `M05ShannonConvos` | Shannon | I'll give you 3750 for all three. [needs !M05BoughtScrambler1, M05CanBuyThree] | -> BuyThree: set M05BoughtScrambler1, set M05BoughtScrambler2, set M05BoughtScrambler3, give WeaponNanoVirusGrenade |
-| `M05ShannonConvos` | Shannon | (2 further choices that change no state: refusals, "never mind", unaffordable offers) | - |
-| `MeetMiguel` | Miguel | Sure, come on. | -> GiveCommon: set MiguelFollowing, trig nsftrigger |
-| `MeetMiguel` | Miguel | I'd rather that you wait here. | -> Wander: set MiguelWandering, trig nsfwander |
-| `MeetMiguel` | Miguel | Just slip out. I'll handle the guards. | -> GiveNothing: set MiguelLeaving, trig nsfleave |
-| `ChangeMiguel` | Miguel | Stay close. | -> Follow: set MiguelFollowing, set MiguelLeaving=0, set MiguelWandering=0, trig nsftrigger |
-| `ChangeMiguel` | Miguel | Wait here. | -> Wander: set MiguelFollowing=0, set MiguelLeaving=0, set MiguelWandering, trig nsfwander |
-| `ChangeMiguel` | Miguel | Make a break for it. | -> Leave: set MiguelFollowing=0, set MiguelLeaving, set MiguelWandering=0, trig nsfleave |
-| `M05MeetJaime` | JaimeReyes | I'm going over to the resistance. Why don't you join me? We could meet | -> Recruit: set JaimeRecruited |
-| `M05MeetJaime` | JaimeReyes | Stay here. I could use an ally inside UNATCO. | -> LeaveJaime: set JaimeLeftBehind |
+| `SvenConvos` | Sven | `BuyInfo` [needs !M03BoughtInfo, M03CanBuyInfo] | -> BuyInfo: set M03BoughtInfo |
+| `SvenConvos` | Sven | `Buy762` [needs !M03Bought762, M03CanBuy762] | -> Buy762: set M03Bought762, give Ammo762mm |
+| `SvenConvos` | Sven | `BuyAccuracy` [needs !M03BoughtAccuracy, M03CanBuyAccuracy] | -> BuyAccuracy: set M03BoughtAccuracy, give WeaponModAccuracy |
+| `SvenConvos` | Sven | (4 further choices that change no state) | - |
+| `M05ShannonConvos` | Shannon | `BuyOne` [needs !M05BoughtScrambler3, M05CanBuyOne] | -> BuyOne: set M05BoughtScrambler1, give WeaponNanoVirusGrenade |
+| `M05ShannonConvos` | Shannon | `BuyTwo` [needs !M05BoughtScrambler2, M05CanBuyTwo] | -> BuyTwo: set M05BoughtScrambler1, set M05BoughtScrambler2, give WeaponNanoVirusGrenade |
+| `M05ShannonConvos` | Shannon | `BuyThree` [needs !M05BoughtScrambler1, M05CanBuyThree] | -> BuyThree: set M05BoughtScrambler1, set M05BoughtScrambler2, set M05BoughtScrambler3, give WeaponNanoVirusGrenade |
+| `M05ShannonConvos` | Shannon | (2 further choices that change no state) | - |
+| `MeetMiguel` | Miguel | `GiveCommon` | -> GiveCommon: set MiguelFollowing, trig nsftrigger |
+| `MeetMiguel` | Miguel | `Wander` | -> Wander: set MiguelWandering, trig nsfwander |
+| `MeetMiguel` | Miguel | `GiveNothing` | -> GiveNothing: set MiguelLeaving, trig nsfleave |
+| `ChangeMiguel` | Miguel | `Follow` | -> Follow: set MiguelFollowing, set MiguelLeaving=0, set MiguelWandering=0, trig nsftrigger |
+| `ChangeMiguel` | Miguel | `Wander` | -> Wander: set MiguelFollowing=0, set MiguelLeaving=0, set MiguelWandering, trig nsfwander |
+| `ChangeMiguel` | Miguel | `Leave` | -> Leave: set MiguelFollowing=0, set MiguelLeaving, set MiguelWandering=0, trig nsfleave |
+| `M05MeetJaime` | JaimeReyes | `Recruit` | -> Recruit: set JaimeRecruited |
+| `M05MeetJaime` | JaimeReyes | `LeaveJaime` | -> LeaveJaime: set JaimeLeftBehind |
 
 **Conversations that change state** (choices, flags set, goals, items, events, skill points; the `Needs` column is kept on these rows):
 
@@ -1769,17 +1769,17 @@ at (-928,320,416)): the `NanoKey` comes from `M05MeetAlexJacobson`, whose three 
 
 ### 05.4 Objectives
 
-| Goal | Kind | Text | Added by | Completed by |
-| --- | --- | --- | --- | --- |
-| `Escape` | primary | Escape from the Majestic 12 facility. | DL_PrisonCell | DL_UNATCO_Escape, M05MeetJock |
-| `GoToHelipad` | primary | Escape from UNATCO and go to the helipad. | DL_UNATCO_Escape | M05MeetJock |
-| `FindPaul` | primary | Find your brother and access information in his datavault that Tracer Tong will need to defeat the killswitch. | DL_Choice | DL_PaulDead, DL_paul |
-| `EliminateAnna` | primary | Eliminate Anna Navarre. | DL_key, M05MeetAlexJacobson | M05MeetAlexJacobson, Mission05.Timer:221 |
-| `GetKeyFromAlex` | primary | When Anna Navarre is dead, see Alex for a key to the exit. | DL_key, M05MeetAlexJacobson | M05MeetAlexJacobson |
-| `FindEquipment` | secondary | Find the equipment taken from you when you were captured by UNATCO. | DL_Choice | DL_Equipment |
-| `FindAnnasKillprhase` | secondary | Find Anna Navarre's killphrase. It is stored in two pieces on two computers, each with the login "demiurge" in the password "archon". | PaulInMedLab | AnnaExitKillphrase |
-| `EscapeToBatteryPark` | carried |  | - | Mission05.FirstFrame:26 |
-| `FindAnnasKillphrase` | carried |  | - | Mission05.Timer:213 |
+| Goal | Kind | Added by | Completed by |
+| --- | --- | --- | --- |
+| `Escape` | primary | DL_PrisonCell | DL_UNATCO_Escape, M05MeetJock |
+| `GoToHelipad` | primary | DL_UNATCO_Escape | M05MeetJock |
+| `FindPaul` | primary | DL_Choice | DL_PaulDead, DL_paul |
+| `EliminateAnna` | primary | DL_key, M05MeetAlexJacobson | M05MeetAlexJacobson, Mission05.Timer:221 |
+| `GetKeyFromAlex` | primary | DL_key, M05MeetAlexJacobson | M05MeetAlexJacobson |
+| `FindEquipment` | secondary | DL_Choice | DL_Equipment |
+| `FindAnnasKillprhase` | secondary | PaulInMedLab | AnnaExitKillphrase |
+| `EscapeToBatteryPark` | carried | - | Mission05.FirstFrame:26 |
+| `FindAnnasKillphrase` | carried | - | Mission05.Timer:213 |
 
 ### 05.5 Choices with lasting consequences
 
@@ -1991,66 +1991,66 @@ Generated from the script's calls (`inventory-campaign.mjs scripts`; `:N` is the
 15 have choices, but almost all are shops and small talk (the Canal pilot's weapon mods `Meet_Canal_Pilot`, `MarketBumSelling`, the club's admission fees, `M06MeetJunkie`); none of the story steps is a branching choice. 53 set flags, 204 need a flag,
 25 add or complete goals (20 goals below, one of them carried), 24 fire events.
 
-**Choices.** Every choice that changes state, the block its speech jumps to and what that block does (choices that change no state are counted in one row per conversation):
+**Choices.** Every choice that changes state, the block its speech jumps to and what that block does (choices that change no state are counted in one row per conversation; a choice is named by its branch label, the dialogue text stays out of the repository):
 
-| Conversation | Owner | Choice | Effects of the branch |
+| Conversation | Owner | Choice (its branch label; requirements) | Effects of the branch |
 | --- | --- | --- | --- |
-| `M06SupervisorConvos` | Supervisor01 | Sure. | -> Buy: set Supervisor_Paid |
-| `M06SupervisorConvos` | Supervisor01 | (1 further choice that change no state: refusals, "never mind", unaffordable offers) | - |
-| `MarketWaiterConvos` | MarketWaiter | Something to eat, please. [needs M06HaveEnoughMoney] | -> BuySoy: give SoyFood |
-| `MarketWaiterConvos` | MarketWaiter | I'll take a soda. [needs M06HaveEnoughMoney] | -> BuySoda: give Sodacan |
-| `MarketWaiterConvos` | MarketWaiter | What do you think of the Triads? [needs !M06WaiterQuestion1, !TriadCeremony_Played, KnowsAboutTriads] | -> Triads: set KnowsAboutNanoSword, set M06WaiterQuestion1 |
-| `MarketWaiterConvos` | MarketWaiter | What do you know about Maggie Chow? [needs M06WaiterQuestion1, !M06WaiterQuestion2, KnowsAboutMaggie] | -> MaggieChow: set M06WaiterQuestion2 |
-| `MarketWaiterConvos` | MarketWaiter | Think the truce will improve business? [needs TriadCeremony_Played, M06WaiterQuestion2, !M06WaiterQuestion3] | -> Truce: set M06WaiterQuestion3 |
-| `MarketWaiterConvos` | MarketWaiter | Think the truce will improve business? [needs TriadCeremony_Played, !M06WaiterQuestion1] | -> Truce: set M06WaiterQuestion3 |
-| `MarketWaiterConvos` | MarketWaiter | (2 further choices that change no state: refusals, "never mind", unaffordable offers) | - |
-| `MarketNewsWomanConvos2` | MarketNewsWoman | What do you think of the Triad situation? [needs !NewsB1] | -> Triads: set NewsB1 |
-| `MarketNewsWomanConvos2` | MarketNewsWoman | So it was Maggie Chow who stole the sword. [needs !NewsB2] | -> MaggieChow: set NewsB2 |
-| `MarketNewsWomanConvos2` | MarketNewsWoman | (1 further choice that change no state: refusals, "never mind", unaffordable offers) | - |
-| `MarketNewsWomanConvos1` | MarketNewsWoman | What do you think of the Luminous Path Triad? [needs !NewsA1] | -> LuminousPath: set KnowsAboutNanoSword, set NewsA1 |
-| `MarketNewsWomanConvos1` | MarketNewsWoman | What do you think of the Red Arrow Triad? [needs !NewsA2] | -> RedArrow: set NewsA2 |
-| `MarketNewsWomanConvos1` | MarketNewsWoman | Have you heard of Maggie Chow? [needs !NewsA3, KnowsAboutMaggie] | -> MaggieChow: set NewsA3 |
-| `MarketNewsWomanConvos1` | MarketNewsWoman | (1 further choice that change no state: refusals, "never mind", unaffordable offers) | - |
-| `MarketBumSelling` | MarketBum1 | Give me the VersaLife blueprints for 2000. [needs M06CanAffordVersaLife, !M06BoughtVersaLife] | -> BuyVersaLife: set M06BoughtVersaLife, give Image06_HK_Market, give Image06_HK_MJ12Helipad, give Image06_HK_MJ12Lab, give Image06_HK_VersaLife |
-| `MarketBumSelling` | MarketBum1 | I'll take the scrambler grenade for 1250. [needs !M06BoughtScrambler, M06CanAffordScrambler] | -> BuyScrambler: set M06BoughtScrambler, give WeaponNanoVirusGrenade |
-| `MarketBumSelling` | MarketBum1 | 4,000 for thermoptic camo -- deal. [needs !M06BoughtArmor, M06CanAffordArmor] | -> BuyArmor: set M06BoughtArmor, give AdaptiveArmor |
-| `MarketBumSelling` | MarketBum1 | (4 further choices that change no state: refusals, "never mind", unaffordable offers) | - |
-| `MamasanConvos` | Mamasan | Sure. [needs !M06JCHasDate, !M06DateDone] | -> BuyGirl: set M06JCHasDate |
-| `MamasanConvos` | Mamasan | Where can I find Max Chen? [needs KnowsAboutMaxChen, !MeetMaxChen_Played, !MamasanMaxComment] | -> MamaMax: set MamasanMaxComment |
-| `MamasanConvos` | Mamasan | (3 further choices that change no state: refusals, "never mind", unaffordable offers) | - |
-| `M06MeetJunkie` | M06Junkie | A forgotten virtue like honesty is worth at least twenty credits. | -> Pay: set M06PaidJunkie |
-| `M06MeetJunkie` | M06Junkie | (1 further choice that change no state: refusals, "never mind", unaffordable offers) | - |
-| `ClubMercedesConvo2` | ClubMercedes | Sorry. You'll have to fend for yourself. | -> NoPay: set ReadyForMercedes3 |
-| `ClubMercedesConvo2` | ClubMercedes | (1 further choice that change no state: refusals, "never mind", unaffordable offers) | - |
-| `ClubMercedesConvo1` | ClubMercedes | Sure. | -> Pay: set ClubMercedesConvo1_Done, trig JC_Paid_Admission01, trig JC_Paid_Admission02 |
-| `ClubMercedesConvo1` | ClubMercedes | (1 further choice that change no state: refusals, "never mind", unaffordable offers) | - |
-| `ClubDoorGirlConvos` | ClubDoorGirl | Here you go. | -> Pay: set PaidForLuckyMoney |
-| `ClubDoorGirlConvos` | ClubDoorGirl | (1 further choice that change no state: refusals, "never mind", unaffordable offers) | - |
-| `BouncerPissed` | ClubBouncer | On second thought, maybe I'll go somewhere else. | -> Refuse: set BouncerAttacking |
-| `BouncerPissed` | ClubBouncer | (1 further choice that change no state: refusals, "never mind", unaffordable offers) | - |
-| `ClubBartenderConvos` | ClubBartender | Can I ask you something? [needs !M06BartenderQuestion1] | -> One: set M06BartenderQuestion1 |
-| `ClubBartenderConvos` | ClubBartender | You said "outside influences." What does China fear? [needs M06BartenderQuestion1, !M06BartenderQuestion2] | -> Two: set M06BartenderQuestion2 |
-| `ClubBartenderConvos` | ClubBartender | The separation of powers acknowledges the petty ambitions of individua [needs M06BartenderQuestion2, !M06BartenderQuestion3] | -> Three: set M06BartenderQuestion3 |
-| `ClubBartenderConvos` | ClubBartender | I'm looking for Max Chen. [needs KnowsAboutMaxChen, !MeetMaxChen_Played, !ClubBartenderMaxQuestion] | -> Max: set ClubBartenderMaxQuestion |
-| `ClubBartenderConvos` | ClubBartender | Gimme a forty. [needs M06HaveEnoughMoney] | -> BuyLiquor: give Liquor40oz |
-| `ClubBartenderConvos` | ClubBartender | Wine, please. [needs M06HaveEnoughMoneyWine] | -> BuyWine: give WineBottle |
-| `ClubBartenderConvos` | ClubBartender | (6 further choices that change no state: refusals, "never mind", unaffordable offers) | - |
-| `Meet_Canal_Pilot` | Canal_Pilot | I'll take the accuracy mod for 750. [needs M06CanAffordAccuracy, !M06BoughtAccuracy] | -> BuyAccuracy: set M06BoughtAccuracy, give WeaponModAccuracy |
-| `Meet_Canal_Pilot` | Canal_Pilot | 600 for a reload mod -- deal. [needs !M06BoughtReload, M06CanAffordReload] | -> BuyReload: set M06BoughtReload, give WeaponModReload |
-| `Meet_Canal_Pilot` | Canal_Pilot | Here's 400 for the recoil mod. [needs !M06BoughtRecoil, M06CanAffordRecoil] | -> BuyRecoil: set M06BoughtRecoil, give WeaponModRecoil |
-| `Meet_Canal_Pilot` | Canal_Pilot | (4 further choices that change no state: refusals, "never mind", unaffordable offers) | - |
-| `Canal_Bartender_Convos` | Canal_Bartender | Something to drink. [needs M06HaveEnoughMoney] | -> BuyDrink: give Liquor40oz |
-| `Canal_Bartender_Convos` | Canal_Bartender | Whatever you've got to eat. [needs M06HaveEnoughMoney, !KnowsAboutMaggie] | -> BuyFood: give SoyFood |
-| `Canal_Bartender_Convos` | Canal_Bartender | Whatever you've got to eat. [needs KnowsAboutMaggie, CanalBarSaidMaggie] | -> BuyFood: give SoyFood |
-| `Canal_Bartender_Convos` | Canal_Bartender | Heard the name Tracer Tong? [needs !Canal_Bartender_Question1] | -> Tong: set KnowsTongPathConnection, set Canal_Bartender_Question1, set KnowsAboutTriads |
-| `Canal_Bartender_Convos` | Canal_Bartender | Is there a lot of crime in Hong Kong? [needs Canal_Bartender_Question1, !Canal_Bartender_Question2] | -> Canals: set Canal_Bartender_Question2 |
-| `Canal_Bartender_Convos` | Canal_Bartender | What sort of biotech smuggling goes on? [needs Canal_Bartender_Question2, !Canal_Bartender_Question3] | -> Biotech: set Canal_Bartender_Question3 |
-| `Canal_Bartender_Convos` | Canal_Bartender | The Second Men? [needs Canal_Bartender_Question3, !Canal_Bartender_Question4] | -> Olaf: set Canal_Bartender_Question4 |
-| `Canal_Bartender_Convos` | Canal_Bartender | Do you know of a Maggie Chow? [needs KnowsAboutMaggie, !CanalBarSaidMaggie] | -> Maggie: set CanalBarSaidMaggie |
-| `Canal_Bartender_Convos` | Canal_Bartender | (1 further choice that change no state: refusals, "never mind", unaffordable offers) | - |
-| `BarSuitMeet` | BarSuit | Great place here! [needs !SuitGeneralInfo] | -> GeneralInfo: set SuitGeneralInfo |
-| `BarSuitMeet` | BarSuit | Do you know a man named Max Chen? [needs KnowsAboutMaxChen, !SuitToldMax, !MeetMaxChen_Played] | -> MaxInfo: set SuitToldMax |
-| `BarSuitMeet` | BarSuit | (1 further choice that change no state: refusals, "never mind", unaffordable offers) | - |
+| `M06SupervisorConvos` | Supervisor01 | `Buy` | -> Buy: set Supervisor_Paid |
+| `M06SupervisorConvos` | Supervisor01 | (no jump found) | - |
+| `MarketWaiterConvos` | MarketWaiter | `BuySoy` [needs M06HaveEnoughMoney] | -> BuySoy: give SoyFood |
+| `MarketWaiterConvos` | MarketWaiter | `BuySoda` [needs M06HaveEnoughMoney] | -> BuySoda: give Sodacan |
+| `MarketWaiterConvos` | MarketWaiter | `Triads` [needs !M06WaiterQuestion1, !TriadCeremony_Played, KnowsAboutTriads] | -> Triads: set KnowsAboutNanoSword, set M06WaiterQuestion1 |
+| `MarketWaiterConvos` | MarketWaiter | `MaggieChow` [needs M06WaiterQuestion1, !M06WaiterQuestion2, KnowsAboutMaggie] | -> MaggieChow: set M06WaiterQuestion2 |
+| `MarketWaiterConvos` | MarketWaiter | `Truce` [needs TriadCeremony_Played, M06WaiterQuestion2, !M06WaiterQuestion3] | -> Truce: set M06WaiterQuestion3 |
+| `MarketWaiterConvos` | MarketWaiter | `Truce` [needs TriadCeremony_Played, !M06WaiterQuestion1] | -> Truce: set M06WaiterQuestion3 |
+| `MarketWaiterConvos` | MarketWaiter | (2 further choices that change no state) | - |
+| `MarketNewsWomanConvos2` | MarketNewsWoman | `Triads` [needs !NewsB1] | -> Triads: set NewsB1 |
+| `MarketNewsWomanConvos2` | MarketNewsWoman | `MaggieChow` [needs !NewsB2] | -> MaggieChow: set NewsB2 |
+| `MarketNewsWomanConvos2` | MarketNewsWoman | (no jump found) | - |
+| `MarketNewsWomanConvos1` | MarketNewsWoman | `LuminousPath` [needs !NewsA1] | -> LuminousPath: set KnowsAboutNanoSword, set NewsA1 |
+| `MarketNewsWomanConvos1` | MarketNewsWoman | `RedArrow` [needs !NewsA2] | -> RedArrow: set NewsA2 |
+| `MarketNewsWomanConvos1` | MarketNewsWoman | `MaggieChow` [needs !NewsA3, KnowsAboutMaggie] | -> MaggieChow: set NewsA3 |
+| `MarketNewsWomanConvos1` | MarketNewsWoman | (no jump found) | - |
+| `MarketBumSelling` | MarketBum1 | `BuyVersaLife` [needs M06CanAffordVersaLife, !M06BoughtVersaLife] | -> BuyVersaLife: set M06BoughtVersaLife, give Image06_HK_Market, give Image06_HK_MJ12Helipad, give Image06_HK_MJ12Lab, give Image06_HK_VersaLife |
+| `MarketBumSelling` | MarketBum1 | `BuyScrambler` [needs !M06BoughtScrambler, M06CanAffordScrambler] | -> BuyScrambler: set M06BoughtScrambler, give WeaponNanoVirusGrenade |
+| `MarketBumSelling` | MarketBum1 | `BuyArmor` [needs !M06BoughtArmor, M06CanAffordArmor] | -> BuyArmor: set M06BoughtArmor, give AdaptiveArmor |
+| `MarketBumSelling` | MarketBum1 | (4 further choices that change no state) | - |
+| `MamasanConvos` | Mamasan | `BuyGirl` [needs !M06JCHasDate, !M06DateDone] | -> BuyGirl: set M06JCHasDate |
+| `MamasanConvos` | Mamasan | `MamaMax` [needs KnowsAboutMaxChen, !MeetMaxChen_Played, !MamasanMaxComment] | -> MamaMax: set MamasanMaxComment |
+| `MamasanConvos` | Mamasan | (3 further choices that change no state) | - |
+| `M06MeetJunkie` | M06Junkie | `Pay` | -> Pay: set M06PaidJunkie |
+| `M06MeetJunkie` | M06Junkie | (no jump found) | - |
+| `ClubMercedesConvo2` | ClubMercedes | `NoPay` | -> NoPay: set ReadyForMercedes3 |
+| `ClubMercedesConvo2` | ClubMercedes | (no jump found) | - |
+| `ClubMercedesConvo1` | ClubMercedes | `Pay` | -> Pay: set ClubMercedesConvo1_Done, trig JC_Paid_Admission01, trig JC_Paid_Admission02 |
+| `ClubMercedesConvo1` | ClubMercedes | (no jump found) | - |
+| `ClubDoorGirlConvos` | ClubDoorGirl | `Pay` | -> Pay: set PaidForLuckyMoney |
+| `ClubDoorGirlConvos` | ClubDoorGirl | (no jump found) | - |
+| `BouncerPissed` | ClubBouncer | `Refuse` | -> Refuse: set BouncerAttacking |
+| `BouncerPissed` | ClubBouncer | (no jump found) | - |
+| `ClubBartenderConvos` | ClubBartender | `One` [needs !M06BartenderQuestion1] | -> One: set M06BartenderQuestion1 |
+| `ClubBartenderConvos` | ClubBartender | `Two` [needs M06BartenderQuestion1, !M06BartenderQuestion2] | -> Two: set M06BartenderQuestion2 |
+| `ClubBartenderConvos` | ClubBartender | `Three` [needs M06BartenderQuestion2, !M06BartenderQuestion3] | -> Three: set M06BartenderQuestion3 |
+| `ClubBartenderConvos` | ClubBartender | `Max` [needs KnowsAboutMaxChen, !MeetMaxChen_Played, !ClubBartenderMaxQuestion] | -> Max: set ClubBartenderMaxQuestion |
+| `ClubBartenderConvos` | ClubBartender | `BuyLiquor` [needs M06HaveEnoughMoney] | -> BuyLiquor: give Liquor40oz |
+| `ClubBartenderConvos` | ClubBartender | `BuyWine` [needs M06HaveEnoughMoneyWine] | -> BuyWine: give WineBottle |
+| `ClubBartenderConvos` | ClubBartender | (6 further choices that change no state) | - |
+| `Meet_Canal_Pilot` | Canal_Pilot | `BuyAccuracy` [needs M06CanAffordAccuracy, !M06BoughtAccuracy] | -> BuyAccuracy: set M06BoughtAccuracy, give WeaponModAccuracy |
+| `Meet_Canal_Pilot` | Canal_Pilot | `BuyReload` [needs !M06BoughtReload, M06CanAffordReload] | -> BuyReload: set M06BoughtReload, give WeaponModReload |
+| `Meet_Canal_Pilot` | Canal_Pilot | `BuyRecoil` [needs !M06BoughtRecoil, M06CanAffordRecoil] | -> BuyRecoil: set M06BoughtRecoil, give WeaponModRecoil |
+| `Meet_Canal_Pilot` | Canal_Pilot | (4 further choices that change no state) | - |
+| `Canal_Bartender_Convos` | Canal_Bartender | `BuyDrink` [needs M06HaveEnoughMoney] | -> BuyDrink: give Liquor40oz |
+| `Canal_Bartender_Convos` | Canal_Bartender | `BuyFood` [needs M06HaveEnoughMoney, !KnowsAboutMaggie] | -> BuyFood: give SoyFood |
+| `Canal_Bartender_Convos` | Canal_Bartender | `BuyFood` [needs KnowsAboutMaggie, CanalBarSaidMaggie] | -> BuyFood: give SoyFood |
+| `Canal_Bartender_Convos` | Canal_Bartender | `Tong` [needs !Canal_Bartender_Question1] | -> Tong: set KnowsTongPathConnection, set Canal_Bartender_Question1, set KnowsAboutTriads |
+| `Canal_Bartender_Convos` | Canal_Bartender | `Canals` [needs Canal_Bartender_Question1, !Canal_Bartender_Question2] | -> Canals: set Canal_Bartender_Question2 |
+| `Canal_Bartender_Convos` | Canal_Bartender | `Biotech` [needs Canal_Bartender_Question2, !Canal_Bartender_Question3] | -> Biotech: set Canal_Bartender_Question3 |
+| `Canal_Bartender_Convos` | Canal_Bartender | `Olaf` [needs Canal_Bartender_Question3, !Canal_Bartender_Question4] | -> Olaf: set Canal_Bartender_Question4 |
+| `Canal_Bartender_Convos` | Canal_Bartender | `Maggie` [needs KnowsAboutMaggie, !CanalBarSaidMaggie] | -> Maggie: set CanalBarSaidMaggie |
+| `Canal_Bartender_Convos` | Canal_Bartender | (no jump found) | - |
+| `BarSuitMeet` | BarSuit | `GeneralInfo` [needs !SuitGeneralInfo] | -> GeneralInfo: set SuitGeneralInfo |
+| `BarSuitMeet` | BarSuit | `MaxInfo` [needs KnowsAboutMaxChen, !SuitToldMax, !MeetMaxChen_Played] | -> MaxInfo: set SuitToldMax |
+| `BarSuitMeet` | BarSuit | (no jump found) | - |
 
 **Conversations that change state** (choices, flags set, goals, items, events, skill points; the `Needs` column is kept on these rows):
 
@@ -2187,28 +2187,28 @@ The side chains (`Gate_Guard2`, `MeetMaxChen`, `MeetMaggie`, the police vault, t
 
 ### 06.4 Objectives
 
-| Goal | Kind | Text | Added by | Completed by |
-| --- | --- | --- | --- | --- |
-| `RestoreAugmentations` | primary | Go to the center of the Operating Theater so that Tracer Tong can deactivate the killswitch and restore augmentation functionality. | MeetTracerTong | DL_TongFixesKillswitch2 |
-| `GetROM` | primary | Get the ROM-encoding for the Dragon's Tooth sword from the basement laboratories at VersaLife. | MeetTracerTong2 | DL_Tong_07, 06_HongKong_MJ12lab/GoalCompleteTrigger0 |
-| `UniteTriads` | primary | Go to the temple in Wan Chai to cement the alliance between the Triads. | DL_Tong_07, M06TongBarks2 | TriadCeremony |
-| `EscapeVersaLife` | primary | Escape the VersaLife facility through the floor of the Universal Constructor chamber. | DL_Daedalus_05 | DL_Tong_05 |
-| `ReportToTong2` | primary | Report to Tracer Tong for information on Stanton Dowd and the Illuminati. | DL_Tong_05 | M08Briefing |
-| `GetVirusSchematic` | primary | Gain access to the Level 2 labs at VersaLife and locate information on the structure of the plague virus. | M07Briefing | DL_Tong_04 |
-| `GetSword` | primary | Retrieve the Dragon's Tooth sword and await further instructions from Tracer Tong. | DL_Tong_00B | DL_Tong_00 |
-| `InvestigateMaggieChow` | primary | Find and examine the Dragon's Tooth sword as proof regarding whether or not Maggie Chow is telling the truth. | Gate_Guard2 | DL_Tong_00 |
-| `ConvinceRedArrow` | primary | Demonstrate Maggie Chow's guilt to the Red Arrow by showing Max Chen the Dragon's Tooth sword. Find Max Chen in the Lucky Money Club in the mall near  | DL_Tong_00, Gate_Guard2 | MeetMaxChen |
-| `FindTracerTong` | primary | Find Tracer Tong somewhere in Hong Kong. | DL_Jock_05, DL_Daedalus_01 | MeetTracerTong |
-| `CheckCompound` | primary | Look for clues to finding Tracer Tong at the compound that Paul used to visit, to the east of the Wan Chai market. | DL_Jock_05 | MeetTracerTong, Gate_Guard2 |
-| `DeactivateWeaponLock` | primary | Deactivate the weapon-lock on Jock's helicopter. The remote control-panel is on Flight Control Deck One. | DL_Jock_01 | DL_Jock_02 |
-| `DestroyUniversalConstructor` | primary | Destroy the Universal Constructor used for manufacturing plague virus. | DL_Daedalus_04 | DL_Daedalus_05, 06_HongKong_Storage/GoalCompleteTrigger0 |
-| `LeaveHongKong` | primary | Board Jock's helicopter in the Luminous Path compound. | M08Briefing | JockBarksLumPath, M06JockExit |
-| `ReportToTong` | primary | Report to Tracer Tong inside the Luminous Path compound to deliver the good news of the truce. | TriadCeremony | M07Briefing |
-| `VisitMaggieChow` | primary | Visit Maggie Chow, at 1313 Tonnochi Road. | MeetRed_Arrow_01 | MeetMaggie |
-| `DeliverChensResponse` | primary | Tell Gordon Quick how the Red Arrow responded to the news about Maggie Chow. He should be near the Luminous Path compound next to the Wan Chai market. | MeetMaxChen, Gate_Guard2 | Gate_Guard2 |
-| `InvestigatePolice` | secondary | Find evidence in the police station in the Wan Chai Market that will settle the Triad dispute. Bring it to Maggie Chow to earn her trust. | MeetMaggie | Gate_Guard2 |
-| `HaveDrinksWithDragonHeads` | secondary | Meet the dragon heads at the Lucky Money for drinks. | TriadCeremony | M07GordonFirstGive |
-| `ConvinceLuminousPath` | carried |  | - | Gate_Guard2 |
+| Goal | Kind | Added by | Completed by |
+| --- | --- | --- | --- |
+| `RestoreAugmentations` | primary | MeetTracerTong | DL_TongFixesKillswitch2 |
+| `GetROM` | primary | MeetTracerTong2 | DL_Tong_07, 06_HongKong_MJ12lab/GoalCompleteTrigger0 |
+| `UniteTriads` | primary | DL_Tong_07, M06TongBarks2 | TriadCeremony |
+| `EscapeVersaLife` | primary | DL_Daedalus_05 | DL_Tong_05 |
+| `ReportToTong2` | primary | DL_Tong_05 | M08Briefing |
+| `GetVirusSchematic` | primary | M07Briefing | DL_Tong_04 |
+| `GetSword` | primary | DL_Tong_00B | DL_Tong_00 |
+| `InvestigateMaggieChow` | primary | Gate_Guard2 | DL_Tong_00 |
+| `ConvinceRedArrow` | primary | DL_Tong_00, Gate_Guard2 | MeetMaxChen |
+| `FindTracerTong` | primary | DL_Jock_05, DL_Daedalus_01 | MeetTracerTong |
+| `CheckCompound` | primary | DL_Jock_05 | MeetTracerTong, Gate_Guard2 |
+| `DeactivateWeaponLock` | primary | DL_Jock_01 | DL_Jock_02 |
+| `DestroyUniversalConstructor` | primary | DL_Daedalus_04 | DL_Daedalus_05, 06_HongKong_Storage/GoalCompleteTrigger0 |
+| `LeaveHongKong` | primary | M08Briefing | JockBarksLumPath, M06JockExit |
+| `ReportToTong` | primary | TriadCeremony | M07Briefing |
+| `VisitMaggieChow` | primary | MeetRed_Arrow_01 | MeetMaggie |
+| `DeliverChensResponse` | primary | MeetMaxChen, Gate_Guard2 | Gate_Guard2 |
+| `InvestigatePolice` | secondary | MeetMaggie | Gate_Guard2 |
+| `HaveDrinksWithDragonHeads` | secondary | TriadCeremony | M07GordonFirstGive |
+| `ConvinceLuminousPath` | carried | - | Gate_Guard2 |
 
 ### 06.5 Choices with lasting consequences
 
@@ -2414,40 +2414,40 @@ Generated from the script's calls (`inventory-campaign.mjs scripts`; `:N` is the
 50 conversations of the list besides the shared barks: 9 InfoLinks, 15 talk-type, 26 overheard. 6 have choices (the smuggler's shop `M08SmugglerConvos`, `Doctor1Barter`,
 `M08JordanSheaConvos`, `M08MeetSailor`, `M08MeetJoeGreen`, `M08JockExit`), 11 set flags, 21 need a flag, 6 add or complete goals.
 
-**Choices.** Every choice that changes state, the block its speech jumps to and what that block does (choices that change no state are counted in one row per conversation):
+**Choices.** Every choice that changes state, the block its speech jumps to and what that block does (choices that change no state are counted in one row per conversation; a choice is named by its branch label, the dialogue text stays out of the repository):
 
-| Conversation | Owner | Choice | Effects of the branch |
+| Conversation | Owner | Choice (its branch label; requirements) | Effects of the branch |
 | --- | --- | --- | --- |
-| `Doctor1Barter` | Doctor1 | I'll take a medkit. [needs CanAffordMedkit, CanAffordBots] | -> Medkit: give MedKit |
-| `Doctor1Barter` | Doctor1 | All I can afford is a medkit. [needs !CanAffordBots, CanAffordMedkit] | -> Medkit: give MedKit |
-| `Doctor1Barter` | Doctor1 | I want the full program. [needs CanAffordBots] | -> Full: set BoughtClinicPlan |
-| `Doctor1Barter` | Doctor1 | Sure. | -> Medkit: give MedKit |
-| `Doctor1Barter` | Doctor1 | (2 further choices that change no state: refusals, "never mind", unaffordable offers) | - |
-| `M08SmugglerConvos` | Smuggler | I'll give you 7500 for the assault shotgun. [needs !M08BoughtShotgun, M08CanBuyShotgun] | -> BuyShotgun: set M08BoughtShotgun, give WeaponAssaultShotgun, trig BotToNeutral |
-| `M08SmugglerConvos` | Smuggler | How about some Sabot rounds for 750. [needs !M08BoughtSabot, M08CanBuySabot] | -> BuySabot: set M08BoughtSabot, give AmmoSabot, trig BotToNeutral |
-| `M08SmugglerConvos` | Smuggler | I'll take the five LAMs for 3500. [needs !M08BoughtLAMs, M08CanBuyLams] | -> BuyLAMs: set M08BoughtLAMs, give WeaponLAM, trig BotToNeutral |
-| `M08SmugglerConvos` | Smuggler | Never mind. | -> bye: trig BotToNeutral |
-| `M08SmugglerConvos` | Smuggler | I'll take the GEP ammo for 2500. [needs !M08BoughtGEP, M08CanBuyGEP] | -> BuyGEP: set M08BoughtGEP, give AmmoRocket, done GetExplosives, trig BotToNeutral |
-| `M08SmugglerConvos` | Smuggler | 2500 for GEP ammo sounds great, but I don't have that much. [needs !M08BoughtGEP, !M08CanBuyGEP] | -> PrematureOffer2: trig BotToNeutral |
-| `M08SmugglerConvos` | Smuggler | Give me the LAMs for 2400. What a deal. [needs !M08BoughtLAMs2, M08CanBuyLams2] | -> BuyLAMS2: set M08BoughtLAMs2, give WeaponLAM, done GetExplosives, trig BotToNeutral |
-| `M08SmugglerConvos` | Smuggler | Wish I had a 2400 credits. I could use a half-dozen LAMs. [needs !M08BoughtLAMs2, !M08CanBuyLams2] | -> PrematureOffer2: trig BotToNeutral |
-| `M08SmugglerConvos` | Smuggler | Give me a break. Hundreds of millions of lives are at stake. | -> AskForMoney2: trig BotToNeutral |
-| `M08SmugglerConvos` | Smuggler | Forget it. | -> bye2: trig BotToNeutral |
-| `M08SmugglerConvos` | Smuggler | Relax. No one followed me. | -> NoWarning: trig BotToNeutral |
-| `M08SmugglerConvos` | Smuggler | Actually, UNATCO's planning an operation of some kind. You might want  | -> GiveWarning: set M08WarnedSmuggler, trig BotToNeutral |
-| `M08SmugglerConvos` | Smuggler | (4 further choices that change no state: refusals, "never mind", unaffordable offers) | - |
-| `M08MeetSailor` | Sailor | I would, too. Maybe I'll check it out for you. | -> GetPass: set HelpSailor |
-| `M08MeetSailor` | Sailor | (1 further choice that change no state: refusals, "never mind", unaffordable offers) | - |
-| `M08JordanSheaConvos` | JordanShea | Give me something to drink. [needs HasEnoughMoney] | -> BuyDrink: give Liquor40oz |
-| `M08JordanSheaConvos` | JordanShea | I'll have one of those candy bars. [needs HasEnoughMoney] | -> BuyCandybar: give Candybar |
-| `M08JordanSheaConvos` | JordanShea | Heard the name Stanton Dowd? [needs !SheaKnowsAboutDowd] | -> TellAboutDowd: set SheaKnowsAboutDowd |
-| `M08JordanSheaConvos` | JordanShea | (2 further choices that change no state: refusals, "never mind", unaffordable offers) | - |
-| `M08MeetJoeGreen` | JoeGreene | Could be. Hey -- you're a reporter. Heard the name Stanton Dowd? | -> TellsAboutDowd: set GreenKnowsAboutDowd |
-| `M08MeetJoeGreen` | JoeGreene | You aren't a reporter at all. You work for UNATCO. | -> Threaten: trig JoeAttacks |
-| `M08MeetJoeGreen` | JoeGreene | (2 further choices that change no state: refusals, "never mind", unaffordable offers) | - |
-| `M08JockExit` | Jock | I'm ready. | -> Go: trig TriggerExit |
-| `M08JockExit` | Jock | I'll raid the armory at the shipyard. Let's go. | -> Go: trig TriggerExit |
-| `M08JockExit` | Jock | (2 further choices that change no state: refusals, "never mind", unaffordable offers) | - |
+| `Doctor1Barter` | Doctor1 | `Medkit` [needs CanAffordMedkit, CanAffordBots] | -> Medkit: give MedKit |
+| `Doctor1Barter` | Doctor1 | `Medkit` [needs !CanAffordBots, CanAffordMedkit] | -> Medkit: give MedKit |
+| `Doctor1Barter` | Doctor1 | `Full` [needs CanAffordBots] | -> Full: set BoughtClinicPlan |
+| `Doctor1Barter` | Doctor1 | `Medkit` | -> Medkit: give MedKit |
+| `Doctor1Barter` | Doctor1 | (2 further choices that change no state) | - |
+| `M08SmugglerConvos` | Smuggler | `BuyShotgun` [needs !M08BoughtShotgun, M08CanBuyShotgun] | -> BuyShotgun: set M08BoughtShotgun, give WeaponAssaultShotgun, trig BotToNeutral |
+| `M08SmugglerConvos` | Smuggler | `BuySabot` [needs !M08BoughtSabot, M08CanBuySabot] | -> BuySabot: set M08BoughtSabot, give AmmoSabot, trig BotToNeutral |
+| `M08SmugglerConvos` | Smuggler | `BuyLAMs` [needs !M08BoughtLAMs, M08CanBuyLams] | -> BuyLAMs: set M08BoughtLAMs, give WeaponLAM, trig BotToNeutral |
+| `M08SmugglerConvos` | Smuggler | `bye` | -> bye: trig BotToNeutral |
+| `M08SmugglerConvos` | Smuggler | `BuyGEP` [needs !M08BoughtGEP, M08CanBuyGEP] | -> BuyGEP: set M08BoughtGEP, give AmmoRocket, done GetExplosives, trig BotToNeutral |
+| `M08SmugglerConvos` | Smuggler | `PrematureOffer2` [needs !M08BoughtGEP, !M08CanBuyGEP] | -> PrematureOffer2: trig BotToNeutral |
+| `M08SmugglerConvos` | Smuggler | `BuyLAMS2` [needs !M08BoughtLAMs2, M08CanBuyLams2] | -> BuyLAMS2: set M08BoughtLAMs2, give WeaponLAM, done GetExplosives, trig BotToNeutral |
+| `M08SmugglerConvos` | Smuggler | `PrematureOffer2` [needs !M08BoughtLAMs2, !M08CanBuyLams2] | -> PrematureOffer2: trig BotToNeutral |
+| `M08SmugglerConvos` | Smuggler | `AskForMoney2` | -> AskForMoney2: trig BotToNeutral |
+| `M08SmugglerConvos` | Smuggler | `bye2` | -> bye2: trig BotToNeutral |
+| `M08SmugglerConvos` | Smuggler | `NoWarning` | -> NoWarning: trig BotToNeutral |
+| `M08SmugglerConvos` | Smuggler | `GiveWarning` | -> GiveWarning: set M08WarnedSmuggler, trig BotToNeutral |
+| `M08SmugglerConvos` | Smuggler | (4 further choices that change no state) | - |
+| `M08MeetSailor` | Sailor | `GetPass` | -> GetPass: set HelpSailor |
+| `M08MeetSailor` | Sailor | (no jump found) | - |
+| `M08JordanSheaConvos` | JordanShea | `BuyDrink` [needs HasEnoughMoney] | -> BuyDrink: give Liquor40oz |
+| `M08JordanSheaConvos` | JordanShea | `BuyCandybar` [needs HasEnoughMoney] | -> BuyCandybar: give Candybar |
+| `M08JordanSheaConvos` | JordanShea | `TellAboutDowd` [needs !SheaKnowsAboutDowd] | -> TellAboutDowd: set SheaKnowsAboutDowd |
+| `M08JordanSheaConvos` | JordanShea | (2 further choices that change no state) | - |
+| `M08MeetJoeGreen` | JoeGreene | `TellsAboutDowd` | -> TellsAboutDowd: set GreenKnowsAboutDowd |
+| `M08MeetJoeGreen` | JoeGreene | `Threaten` | -> Threaten: trig JoeAttacks |
+| `M08MeetJoeGreen` | JoeGreene | (2 further choices that change no state) | - |
+| `M08JockExit` | Jock | `Go` | -> Go: trig TriggerExit |
+| `M08JockExit` | Jock | `Go` | -> Go: trig TriggerExit |
+| `M08JockExit` | Jock | (2 further choices that change no state) | - |
 
 **Conversations that change state** (choices, flags set, goals, items, events, skill points; the `Needs` column is kept on these rows):
 
@@ -2491,22 +2491,22 @@ InfoLinks and what starts them:
 | `DL_DangerOnStreets` | NYC_Street/DataLinkTrigger2 (-509,258) |  |  |
 | `DL_DaedalusEnd` | NYC_Street/DataLinkTrigger14 (-347,196) needs DL_JockShipWarning_Played |  |  |
 
-**Required (progression) conversations**, from `inventory-campaign.mjs chain 08_NYC_Street CameraExit`: `M08JockExit` (Jock, bump/frob/radius 250; "I'm ready." or "I'll raid the armory at the shipyard. Let's go." fire `TriggerExit`) needs `StantonDowd_Played`. `StantonDowd` has no flag requirement
+**Required (progression) conversations**, from `inventory-campaign.mjs chain 08_NYC_Street CameraExit`: `M08JockExit` (Jock, bump/frob/radius 250; its two leaving choices fire `TriggerExit`) needs `StantonDowd_Played`. `StantonDowd` has no flag requirement
 but the pawn is hidden until `Mission08.Timer` sees `M08MeetHarleyFilben_Played` or `MeetThomasDieter_Played` (Thomas Dieter replaces a dead Filben); `M08MeetHarleyFilben` (the bar) has none. `DL_Exit` (needs `M08SmugglerConvos_Played`, or `PlayerHasExplosives` from `StantonDowd`)
 sets `MJ12Converging` and, with `StantonDowd_Played`, brings the helicopter in. `M08SmugglerConvos` (explosives: `GEP` ammo or LAMs complete `GetExplosives`) is not required by a flag on the exit but `DL_Exit`'s first trigger needs it.
 
 ### 08.4 Objectives
 
-| Goal | Kind | Text | Added by | Completed by |
-| --- | --- | --- | --- | --- |
-| `GetBackToRoof` | primary | Once you obtain items from Smuggler, get back to the hotel roof and take the helicopter to Brooklyn Naval Shipyard. | DL_JockShipWarning | M08JockExit |
-| `FindHarleyFilben` | primary | Get to the Underworld Tavern and meet with Harley Filben. | DL_Entry | M08MeetHarleyFilben |
-| `MeetStantonDowd` | primary | Meet Stanton Dowd at the Osgood & Son's storefront, near the tunnels leading to the warehouse district. | M08MeetHarleyFilben | StantonDowd |
-| `GetAmbrosia` | secondary | Bring Stanton Dowd some Ambrosia to counteract the Gray Death. | StantonDowd | - |
-| `GetExplosives` | secondary | See the Smuggler for explosives for scuttling the superfreighter. | StantonDowd | M08SmugglerConvos, M08JockExit |
-| `ScuttleShip` | primary | Scuttle the PCS Wall Cloud by destroying the 5 tri-hull welds with explosives and by reversing the bilge-pump flow. Pumping water into the bilges will | StantonDowd | - |
-| `KillGreene` | secondary | Kill the traitor, Joe Greene in the Free Clinic | M08MeetHarleyFilben | Mission08.Timer:80 |
-| `GetToRoof` | carried |  | - | 08_NYC_Street/GoalCompleteTrigger0 |
+| Goal | Kind | Added by | Completed by |
+| --- | --- | --- | --- |
+| `GetBackToRoof` | primary | DL_JockShipWarning | M08JockExit |
+| `FindHarleyFilben` | primary | DL_Entry | M08MeetHarleyFilben |
+| `MeetStantonDowd` | primary | M08MeetHarleyFilben | StantonDowd |
+| `GetAmbrosia` | secondary | StantonDowd | - |
+| `GetExplosives` | secondary | StantonDowd | M08SmugglerConvos, M08JockExit |
+| `ScuttleShip` | primary | StantonDowd | - |
+| `KillGreene` | secondary | M08MeetHarleyFilben | Mission08.Timer:80 |
+| `GetToRoof` | carried | - | 08_NYC_Street/GoalCompleteTrigger0 |
 
 ### 08.5 Choices with lasting consequences
 
@@ -2525,9 +2525,9 @@ Read here, set earlier:
 | `FordSchickRescued` | M2 script Mission02.PreTravel:122 | script Mission08.FirstFrame:28 |
 | `SandraWentToCalifornia` | M4 conversation SandraAttackedByJoJoThanks; M4 conversation FamilySquabbleWrapUpGilbertDead; M4 conversation FamilySquabbleWrapUp@Hop | checks in M08MeetSailor; script Mission08.FirstFrame:19 |
 
-* **Joe Greene** (`M08MeetJoeGreen`, the Free Clinic): "Heard the name Stanton Dowd?" sets `GreenKnowsAboutDowd` (read in mission 9 by `Mission09.Timer:170`); "You aren't a reporter at all..." fires `JoeAttacks`; his death (`JoeGreene_Dead`, permanent; mission 2's and 4's too) completes `KillGreene`.
-* **The sailor** (`M08MeetSailor`): "Maybe I'll check it out for you." sets `HelpSailor`, which mission 9's shipyard guards, cafeteria worker and two `FlagTrigger`s (`09_NYC_Dockyard/FlagTrigger0` fires `ChangeAlliances`, `09_NYC_Ship/FlagTrigger0` fires `Welcome`) read: the sailor's help changes how the shipyard receives the player.
-* **The smuggler** (`M08SmugglerConvos`): "UNATCO's planning an operation..." sets `M08WarnedSmuggler`, read in mission 9 by `DL_BadNews`.
+* **Joe Greene** (`M08MeetJoeGreen`, the Free Clinic): asking about Stanton Dowd sets `GreenKnowsAboutDowd` (read in mission 9 by `Mission09.Timer:170`); accusing him fires `JoeAttacks`; his death (`JoeGreene_Dead`, permanent; mission 2's and 4's too) completes `KillGreene`.
+* **The sailor** (`M08MeetSailor`): agreeing to help sets `HelpSailor`, which mission 9's shipyard guards, cafeteria worker and two `FlagTrigger`s (`09_NYC_Dockyard/FlagTrigger0` fires `ChangeAlliances`, `09_NYC_Ship/FlagTrigger0` fires `Welcome`) read: the sailor's help changes how the shipyard receives the player.
+* **The smuggler** (`M08SmugglerConvos`): warning him sets `M08WarnedSmuggler`, read in mission 9 by `DL_BadNews`.
 * Filben's and Greene's deaths from mission 4 change who is in the bar (`HarleyFilben_Dead` reads here: `Mission08.uc:175`).
 
 ### 08.6 Progression path
@@ -2628,15 +2628,15 @@ Generated from the script's calls (`inventory-campaign.mjs scripts`; `:N` is the
 
 ### 09.3 Conversations and InfoLinks
 
-58 conversations of the list besides the shared barks: 27 InfoLinks (the largest share of any list: the mission is told by the DataLink), 6 talk-type, 25 overheard. 1 has choices (`M09JockLeave`: "Let's go." / "Wait here while I look around."),
+58 conversations of the list besides the shared barks: 27 InfoLinks (the largest share of any list: the mission is told by the DataLink), 6 talk-type, 25 overheard. 1 has choices (`M09JockLeave`: leave now or look around first),
 4 set flags, 23 need a flag, 12 add or complete goals.
 
-**Choices.** Every choice that changes state, the block its speech jumps to and what that block does (choices that change no state are counted in one row per conversation):
+**Choices.** Every choice that changes state, the block its speech jumps to and what that block does (choices that change no state are counted in one row per conversation; a choice is named by its branch label, the dialogue text stays out of the repository):
 
-| Conversation | Owner | Choice | Effects of the branch |
+| Conversation | Owner | Choice (its branch label; requirements) | Effects of the branch |
 | --- | --- | --- | --- |
-| `M09JockLeave` | Jock | Let's go. | -> Go: trig ChopperExit |
-| `M09JockLeave` | Jock | (1 further choice that change no state: refusals, "never mind", unaffordable offers) | - |
+| `M09JockLeave` | Jock | `Go` | -> Go: trig ChopperExit |
+| `M09JockLeave` | Jock | (no jump found) | - |
 
 **Conversations that change state** (choices, flags set, goals, items, events, skill points; the `Needs` column is kept on these rows):
 
@@ -2709,19 +2709,19 @@ and all `ShipBreech` movers destroyed); the helicopter's own `Event` `ToGraveyar
 
 ### 09.4 Objectives
 
-| Goal | Kind | Text | Added by | Completed by |
-| --- | --- | --- | --- | --- |
-| `GetOntoShip` | primary | Get onto ship | DL_VentOpening, DL_ShipView, DL_BuildingEntrySewer | DL_ShipEntry |
-| `Escape` | primary | Meet Jock on the roof. At the west end of the dock is a maintenance store to the air conditioning system. Use the ladder inside to get into the ventil | DL_ShipExit | 09_NYC_Dockyard/GoalCompleteTrigger0 |
-| `GetBelowDecks` | primary | Find a way to the lower decks. | DL_ShipEntry | 09_NYC_ShipBelow/GoalCompleteTrigger0 |
-| `EliminateField` | primary | Disable the EM disruption field that is preventing Jock from landing. The source seems to be a small building just inside the cemetery gate. | DL_Problem | DL_ComingIn |
-| `GetToDockyard` | carried |  | - | DL_Insertion |
-| `GetIntoSubPen` | primary | Enter Main building on north side of Dockyard. There may be more than one entry point. | DL_Insertion | 09_NYC_Ship/GoalCompleteTrigger3, 09_NYC_Ship/GoalCompleteTrigger4, 09_NYC_Ship/GoalCompleteTrigger5, 09_NYC_Ship/GoalCompleteTrigger6 |
-| `GetAmmo` | secondary | Find Ammo Storage warehouse and raid ammo bunkers for more LAMs or Rockets. | DL_Insertion | 09_NYC_Dockyard/GoalCompleteTrigger7 |
-| `TalkToDowd` | primary | Meet Stanton Dowd at his family crypt inside the graveyard. | DL_Entry | M09MeetStantonDowd |
-| `ScuttleShip` | carried |  | - | DL_AllDone |
-| `FindSilhouette` | primary | Take the helicopter to Paris. Make contact with Silhouette in the Paris catacombs. | M09MeetStantonDowd | - |
-| `CutPower` | secondary | Cut the power to the transformers that are shorting out and electrifying the overhead walkway. Two control panels must be shut down, one of them under | MeetElectrician | 09_NYC_ShipBelow/GoalCompleteTrigger1 |
+| Goal | Kind | Added by | Completed by |
+| --- | --- | --- | --- |
+| `GetOntoShip` | primary | DL_VentOpening, DL_ShipView, DL_BuildingEntrySewer | DL_ShipEntry |
+| `Escape` | primary | DL_ShipExit | 09_NYC_Dockyard/GoalCompleteTrigger0 |
+| `GetBelowDecks` | primary | DL_ShipEntry | 09_NYC_ShipBelow/GoalCompleteTrigger0 |
+| `EliminateField` | primary | DL_Problem | DL_ComingIn |
+| `GetToDockyard` | carried | - | DL_Insertion |
+| `GetIntoSubPen` | primary | DL_Insertion | 09_NYC_Ship/GoalCompleteTrigger3, 09_NYC_Ship/GoalCompleteTrigger4, 09_NYC_Ship/GoalCompleteTrigger5, 09_NYC_Ship/GoalCompleteTrigger6 |
+| `GetAmmo` | secondary | DL_Insertion | 09_NYC_Dockyard/GoalCompleteTrigger7 |
+| `TalkToDowd` | primary | DL_Entry | M09MeetStantonDowd |
+| `ScuttleShip` | carried | - | DL_AllDone |
+| `FindSilhouette` | primary | M09MeetStantonDowd | - |
+| `CutPower` | secondary | MeetElectrician | 09_NYC_ShipBelow/GoalCompleteTrigger1 |
 
 ### 09.5 Choices with lasting consequences
 
@@ -2874,64 +2874,64 @@ Generated from the script's calls (`inventory-campaign.mjs scripts`; `:N` is the
 174 conversations of the list besides the shared barks: 51 InfoLinks (the largest count of any mission), 36 talk-type, 87 overheard. 14 have choices (shops: the bakery, `MeetRenault`;
 `M10MeetJaime`, Nicolette's, Chad's and the club's conversations), 33 set flags, 95 need a flag, 20 add or complete goals.
 
-**Choices.** Every choice that changes state, the block its speech jumps to and what that block does (choices that change no state are counted in one row per conversation):
+**Choices.** Every choice that changes state, the block its speech jumps to and what that block does (choices that change no state are counted in one row per conversation; a choice is named by its branch label, the dialogue text stays out of the repository):
 
-| Conversation | Owner | Choice | Effects of the branch |
+| Conversation | Owner | Choice (its branch label; requirements) | Effects of the branch |
 | --- | --- | --- | --- |
-| `RenaultPays` | Renault | I'll make the trade. [needs HaveCrack, M10EnteredBakery] | -> Sell: set RenaultPaid |
-| `RenaultPays` | Renault | I don't deal in zyme. [needs !RenaultOffered65] | -> NoDeal: set RenaultOffered65 |
-| `RenaultPays` | Renault | I don't like your business. Period. [needs RenaultOffered65] | -> NoDeal2: set RenaultAttacked, trig GuyAttacks, trig RenaultAttacks |
-| `RenaultPays` | Renault | (3 further choices that change no state: refusals, "never mind", unaffordable offers) | - |
-| `NicoletteOutside` | NicoletteDuClare | Let's go. | -> Go: set NicoletteReadyToLeave, trig NicoletteFollows |
-| `NicoletteOutside` | NicoletteDuClare | How does Everett threaten Bob Page? [needs !M10EverettQuestion] | -> Everett: set M10EverettQuestion |
-| `NicoletteOutside` | NicoletteDuClare | (1 further choice that change no state: refusals, "never mind", unaffordable offers) | - |
-| `MichelleConvos` | Michelle | A bottle of wine. [needs M10CanAffordWine] | -> BuyWine: give WineBottle |
-| `MichelleConvos` | Michelle | A snack. [needs M10CanAfford] | -> BuySnack: give CandyBar |
-| `MichelleConvos` | Michelle | Know the name Nicolette DuClare? [needs !NicoletteQuestionDone, !MeetNicolette_Played] | -> Nicolette: set NicoletteQuestionDone |
-| `MichelleConvos` | Michelle | What do you think of Silhouette? [needs NicoletteQuestionDone, !SilhouetteQuestionDone] | -> Silhouette: set SilhouetteQuestionDone |
-| `MichelleConvos` | Michelle | (2 further choices that change no state: refusals, "never mind", unaffordable offers) | - |
-| `LouisConvosSneak` | Louis | Please accept my apology. Here you are. | -> Pay: set M10PaidForClub, give Nanokey |
-| `LouisConvosSneak` | Louis | (1 further choice that change no state: refusals, "never mind", unaffordable offers) | - |
-| `LouisConvos` | Louis | Here you go. | -> Pay: set M10PaidForClub, give Nanokey |
-| `LouisConvos` | Louis | (1 further choice that change no state: refusals, "never mind", unaffordable offers) | - |
-| `KristiConvos` | Kristi | A soda, please. [needs M10CanAfford] | -> BuyWine: give SodaCan |
-| `KristiConvos` | Kristi | Have anything to eat? [needs M10CanAfford] | -> BuySnack: give SoyFood |
-| `KristiConvos` | Kristi | At least one cafe stayed open during the crackdown. [needs !CafeQuestionDone] | -> CafeQuestion: set CafeQuestionDone |
-| `KristiConvos` | Kristi | I'm looking for a friend, Nicolette DuClare. [needs !CafeQuestion2Done, !MeetNicolette_Played, CafeQuestionDone] | -> Nicolette: set CafeQuestion2Done |
-| `KristiConvos` | Kristi | The police are just pawns of Majestic 12. [needs MeetNicolette_Played, !CafeQuestion2Done, CafeQuestionDone] | -> Majestic12: set CafeQuestion2Done, set CafeMJ12QuestionDone |
-| `KristiConvos` | Kristi | This crackdown is the work of Majestic 12. [needs CafeQuestion2Done, !CafeMJ12QuestionDone] | -> Majestic12: set CafeQuestion2Done, set CafeMJ12QuestionDone |
-| `KristiConvos` | Kristi | Sorry, I'm broke. [needs !M10CanAfford] | -> Broke: set CafeBrokeComment |
-| `KristiConvos` | Kristi | (1 further choice that change no state: refusals, "never mind", unaffordable offers) | - |
-| `JocquesSellInfo` | Jocques | Okay. | -> BuyInfo: set JocquesDoneSelling |
-| `JocquesSellInfo` | Jocques | (1 further choice that change no state: refusals, "never mind", unaffordable offers) | - |
-| `JeanConvos` | Jean | The best wine you've got for 120. [needs M10CanAffordWine] | -> BuyWine: give WineBottle |
-| `JeanConvos` | Jean | Ten credits' worth of food. [needs M10CanAfford] | -> BuySnack: give CandyBar |
-| `JeanConvos` | Jean | Thin crowd. Has martial law hurt business? [needs !MartialLawQuestionDone] | -> MartialLaw: set MartialLawQuestionDone |
-| `JeanConvos` | Jean | Gestapo? [needs !GestapoQuestionDone, MartialLawQuestionDone] | -> Gestapo: set GestapoQuestionDone |
-| `JeanConvos` | Jean | (2 further choices that change no state: refusals, "never mind", unaffordable offers) | - |
-| `HotelBartenderConvos` | HotelBartender | A bottle of wine. [needs M10CanAfford] | -> BuyWine: give WineBottle |
-| `HotelBartenderConvos` | HotelBartender | A snack. [needs M10CanAfford] | -> BuySnack: set BoughtCandyFromHotelBartender, give CandyBar |
-| `HotelBartenderConvos` | HotelBartender | Heard of Nicolette DuClare? [needs !HotelNicoletteQuestionDone] | -> Nicolette: set HotelNicoletteQuestionDone |
-| `HotelBartenderConvos` | HotelBartender | No revolutionaries? You must not mind martial law. [needs HotelNicoletteQuestionDone, !HotelRevolutionariesQuestionDone] | -> Revolutionaries: set HotelRevolutionariesQuestionDone |
-| `HotelBartenderConvos` | HotelBartender | The conspiracy is real. [needs !HotelMJ12QuestionDone, HotelRevolutionariesQuestionDone] | -> MJ12: set HotelMJ12QuestionDone |
-| `HotelBartenderConvos` | HotelBartender | (2 further choices that change no state: refusals, "never mind", unaffordable offers) | - |
-| `DefoeConvos` | Defoe | 1750 for the rockets. Sounds good. [needs M10CanBuyRockets, !M10BoughtRockets] | -> BuyRockets: give AmmoRocket, set M10BoughtRockets |
-| `DefoeConvos` | Defoe | How about the recoil suppressor for 400. [needs M10CanBuyMod, !M10BoughtMod] | -> BuyMod: give WeaponModRecoil, set M10BoughtMod |
-| `DefoeConvos` | Defoe | I'll take the three LAMs for 2250. [needs M10CanBuyLams, !M10BoughtLAMs] | -> BuyLAMs: give WeaponLAM, set M10BoughtLAMs |
-| `DefoeConvos` | Defoe | 5250 for the rockets. Sounds good. [needs M10CanBuyRockets, !M10BoughtRockets] | -> BuyRockets: give AmmoRocket, set M10BoughtRockets |
-| `DefoeConvos` | Defoe | How about the recoil suppressor for 1200. [needs M10CanBuyMod, !M10BoughtMod] | -> BuyMod: give WeaponModRecoil, set M10BoughtMod |
-| `DefoeConvos` | Defoe | I'll take the three LAMs for 6750. [needs M10CanBuyLams, !M10BoughtLAMs] | -> BuyLAMs: give WeaponLAM, set M10BoughtLAMs |
-| `DefoeConvos` | Defoe | (8 further choices that change no state: refusals, "never mind", unaffordable offers) | - |
-| `MeetCassandra` | Cassandra | Sure. [needs !GaveCassandraMoney, !ClubVaultEntered] | -> Give: set GaveCassandraMoney |
-| `MeetCassandra` | Cassandra | What about Nicolette DuClare? Know her? [needs !CassandraNicoQuestion, !MeetNicolette_Played] | -> NicoQuestion: set CassandraNicoQuestion |
-| `MeetCassandra` | Cassandra | Already been there. [needs !GaveCassandraMoney, ClubVaultEntered] | -> BeenThere: set GaveCassandraMoney |
-| `MeetCassandra` | Cassandra | (3 further choices that change no state: refusals, "never mind", unaffordable offers) | - |
-| `CamilleConvos` | Camille | (4 further choices that change no state: refusals, "never mind", unaffordable offers) | - |
-| `BumsConvos` | Bums | I'll take a medkit for 600. [needs M10CanAffordMedKit, !BoughtMedkit3] | -> BuyMedkit: set BoughtMedkit3, give Medkit |
-| `BumsConvos` | Bums | I'll take the darts for 200. [needs M10CanAffordDarts, !M10BoughtDarts] | -> BuyDarts: give AmmoDartPoison |
-| `BumsConvos` | Bums | (1 further choice that change no state: refusals, "never mind", unaffordable offers) | - |
-| `AntoineConvos` | Antoine | I'll take one. | -> Buy: set BoughtAntoine4, give BioelectricCell |
-| `AntoineConvos` | Antoine | (1 further choice that change no state: refusals, "never mind", unaffordable offers) | - |
+| `RenaultPays` | Renault | `Sell` [needs HaveCrack, M10EnteredBakery] | -> Sell: set RenaultPaid |
+| `RenaultPays` | Renault | `NoDeal` [needs !RenaultOffered65] | -> NoDeal: set RenaultOffered65 |
+| `RenaultPays` | Renault | `NoDeal2` [needs RenaultOffered65] | -> NoDeal2: set RenaultAttacked, trig GuyAttacks, trig RenaultAttacks |
+| `RenaultPays` | Renault | (3 further choices that change no state) | - |
+| `NicoletteOutside` | NicoletteDuClare | `Go` | -> Go: set NicoletteReadyToLeave, trig NicoletteFollows |
+| `NicoletteOutside` | NicoletteDuClare | `Everett` [needs !M10EverettQuestion] | -> Everett: set M10EverettQuestion |
+| `NicoletteOutside` | NicoletteDuClare | (no jump found) | - |
+| `MichelleConvos` | Michelle | `BuyWine` [needs M10CanAffordWine] | -> BuyWine: give WineBottle |
+| `MichelleConvos` | Michelle | `BuySnack` [needs M10CanAfford] | -> BuySnack: give CandyBar |
+| `MichelleConvos` | Michelle | `Nicolette` [needs !NicoletteQuestionDone, !MeetNicolette_Played] | -> Nicolette: set NicoletteQuestionDone |
+| `MichelleConvos` | Michelle | `Silhouette` [needs NicoletteQuestionDone, !SilhouetteQuestionDone] | -> Silhouette: set SilhouetteQuestionDone |
+| `MichelleConvos` | Michelle | (2 further choices that change no state) | - |
+| `LouisConvosSneak` | Louis | `Pay` | -> Pay: set M10PaidForClub, give Nanokey |
+| `LouisConvosSneak` | Louis | (no jump found) | - |
+| `LouisConvos` | Louis | `Pay` | -> Pay: set M10PaidForClub, give Nanokey |
+| `LouisConvos` | Louis | (no jump found) | - |
+| `KristiConvos` | Kristi | `BuyWine` [needs M10CanAfford] | -> BuyWine: give SodaCan |
+| `KristiConvos` | Kristi | `BuySnack` [needs M10CanAfford] | -> BuySnack: give SoyFood |
+| `KristiConvos` | Kristi | `CafeQuestion` [needs !CafeQuestionDone] | -> CafeQuestion: set CafeQuestionDone |
+| `KristiConvos` | Kristi | `Nicolette` [needs !CafeQuestion2Done, !MeetNicolette_Played, CafeQuestionDone] | -> Nicolette: set CafeQuestion2Done |
+| `KristiConvos` | Kristi | `Majestic12` [needs MeetNicolette_Played, !CafeQuestion2Done, CafeQuestionDone] | -> Majestic12: set CafeQuestion2Done, set CafeMJ12QuestionDone |
+| `KristiConvos` | Kristi | `Majestic12` [needs CafeQuestion2Done, !CafeMJ12QuestionDone] | -> Majestic12: set CafeQuestion2Done, set CafeMJ12QuestionDone |
+| `KristiConvos` | Kristi | `Broke` [needs !M10CanAfford] | -> Broke: set CafeBrokeComment |
+| `KristiConvos` | Kristi | (no jump found) | - |
+| `JocquesSellInfo` | Jocques | `BuyInfo` | -> BuyInfo: set JocquesDoneSelling |
+| `JocquesSellInfo` | Jocques | (no jump found) | - |
+| `JeanConvos` | Jean | `BuyWine` [needs M10CanAffordWine] | -> BuyWine: give WineBottle |
+| `JeanConvos` | Jean | `BuySnack` [needs M10CanAfford] | -> BuySnack: give CandyBar |
+| `JeanConvos` | Jean | `MartialLaw` [needs !MartialLawQuestionDone] | -> MartialLaw: set MartialLawQuestionDone |
+| `JeanConvos` | Jean | `Gestapo` [needs !GestapoQuestionDone, MartialLawQuestionDone] | -> Gestapo: set GestapoQuestionDone |
+| `JeanConvos` | Jean | (2 further choices that change no state) | - |
+| `HotelBartenderConvos` | HotelBartender | `BuyWine` [needs M10CanAfford] | -> BuyWine: give WineBottle |
+| `HotelBartenderConvos` | HotelBartender | `BuySnack` [needs M10CanAfford] | -> BuySnack: set BoughtCandyFromHotelBartender, give CandyBar |
+| `HotelBartenderConvos` | HotelBartender | `Nicolette` [needs !HotelNicoletteQuestionDone] | -> Nicolette: set HotelNicoletteQuestionDone |
+| `HotelBartenderConvos` | HotelBartender | `Revolutionaries` [needs HotelNicoletteQuestionDone, !HotelRevolutionariesQuestionDone] | -> Revolutionaries: set HotelRevolutionariesQuestionDone |
+| `HotelBartenderConvos` | HotelBartender | `MJ12` [needs !HotelMJ12QuestionDone, HotelRevolutionariesQuestionDone] | -> MJ12: set HotelMJ12QuestionDone |
+| `HotelBartenderConvos` | HotelBartender | (2 further choices that change no state) | - |
+| `DefoeConvos` | Defoe | `BuyRockets` [needs M10CanBuyRockets, !M10BoughtRockets] | -> BuyRockets: give AmmoRocket, set M10BoughtRockets |
+| `DefoeConvos` | Defoe | `BuyMod` [needs M10CanBuyMod, !M10BoughtMod] | -> BuyMod: give WeaponModRecoil, set M10BoughtMod |
+| `DefoeConvos` | Defoe | `BuyLAMs` [needs M10CanBuyLams, !M10BoughtLAMs] | -> BuyLAMs: give WeaponLAM, set M10BoughtLAMs |
+| `DefoeConvos` | Defoe | `BuyRockets` [needs M10CanBuyRockets, !M10BoughtRockets] | -> BuyRockets: give AmmoRocket, set M10BoughtRockets |
+| `DefoeConvos` | Defoe | `BuyMod` [needs M10CanBuyMod, !M10BoughtMod] | -> BuyMod: give WeaponModRecoil, set M10BoughtMod |
+| `DefoeConvos` | Defoe | `BuyLAMs` [needs M10CanBuyLams, !M10BoughtLAMs] | -> BuyLAMs: give WeaponLAM, set M10BoughtLAMs |
+| `DefoeConvos` | Defoe | (8 further choices that change no state) | - |
+| `MeetCassandra` | Cassandra | `Give` [needs !GaveCassandraMoney, !ClubVaultEntered] | -> Give: set GaveCassandraMoney |
+| `MeetCassandra` | Cassandra | `NicoQuestion` [needs !CassandraNicoQuestion, !MeetNicolette_Played] | -> NicoQuestion: set CassandraNicoQuestion |
+| `MeetCassandra` | Cassandra | `BeenThere` [needs !GaveCassandraMoney, ClubVaultEntered] | -> BeenThere: set GaveCassandraMoney |
+| `MeetCassandra` | Cassandra | (3 further choices that change no state) | - |
+| `CamilleConvos` | Camille | (4 further choices that change no state) | - |
+| `BumsConvos` | Bums | `BuyMedkit` [needs M10CanAffordMedKit, !BoughtMedkit3] | -> BuyMedkit: set BoughtMedkit3, give Medkit |
+| `BumsConvos` | Bums | `BuyDarts` [needs M10CanAffordDarts, !M10BoughtDarts] | -> BuyDarts: give AmmoDartPoison |
+| `BumsConvos` | Bums | (no jump found) | - |
+| `AntoineConvos` | Antoine | `Buy` | -> Buy: set BoughtAntoine4, give BioelectricCell |
+| `AntoineConvos` | Antoine | (no jump found) | - |
 
 **Conversations that change state** (choices, flags set, goals, items, events, skill points; the `Needs` column is kept on these rows):
 
@@ -3060,24 +3060,24 @@ are what stop the player, not a conversation flag (not proven to be the only rou
 
 ### 10.4 Objectives
 
-| Goal | Kind | Text | Added by | Completed by |
-| --- | --- | --- | --- | --- |
-| `FindNicolette` | primary | Find Nicolette DuClare. She is known to frequent Club La Porte de l'Enfer. | DL_tunnels_down, ChadThankful | NicoletteOutside |
-| `FindDuClareComputer` | primary | Find Beth DuClare's secret computer room, which should contain clues to the whereabouts of Morgan Everett. | NicoletteAtChateau | DL_reached_computer |
-| `ContactIlluminati` | primary | Make contact with the Illuminati in Paris, where the former Illuminati leader, Morgan Everett, is rumored to be in hiding. | DL_paris_10_start | - |
-| `FindSilhouette` | primary | Find Silhouette's hideout in the catacombs and talk to their leader. | DL_paris_10_start | MeetChad |
-| `FreeHostages` | secondary | Free the members of Silhouette being held in Bunker 03. | MeetChad | DL_metrosewer, 10_Paris_Catacombs_Tunnels/GoalCompleteTrigger0 |
-| `EscortHostages` | secondary | Protect the hostages as they try to make it back to Silhouette's bunker. | MeetChad | DL_metrosewer, Mission10.Timer:139, 10_Paris_Catacombs_Tunnels/GoalCompleteTrigger2 |
-| `ReportToChad` | secondary | After the rescue attempt, inform Chad of the hostages' fate. | MeetChad | DL_metrosewer, ChadThankful |
-| `MeetJaime` | secondary | Meet Jaime at a cafe in building 19. | DL_metrosewer | M10MeetJaime |
-| `GoToCrypt` | primary | Go to the family crypt in the maze behind the chateau and await instructions from Morgan Everett. | NicoletteAfterEverett | DL_EverettMaze |
-| `AccessTemplarComputer` | primary | Access the Templar computer system so that Morgan Everett can complete work on a cure for the Gray Death. | DL_EverettMaze | - |
-| `FindEverett` | primary | Search the DuClare chateau for evidence of Morgan Everett's relationship with Beth DuClare. | NicoletteOutside | DL_EverettContact |
-| `GetKeyToCrypt` | primary | Find Nicolette and get the key to the family crypt. | DL_EverettContact | DL_entered_sewer, NicoletteAfterEverett |
-| `GetCrack` | secondary | Get the zyme from the bakery and sell it to Renault. | MeetRenault | RenaultPays |
-| `MeetNicolette` | primary | Meet Nicolette behind Club La Porte de l'Enfer. | MeetNicolette | NicoletteOutside |
-| `ClearMall` | secondary | Kill the three MJ12 soldiers in the metro station next to the underground mall. Report back to Defoe. | MeetDefoe | DefoeConvos |
-| `KillGreasels` | secondary | Kill the four greasels in the sewers, then inform the frightened woman who lives in the apartment ruins. | MeetAimee | GreazelsDead |
+| Goal | Kind | Added by | Completed by |
+| --- | --- | --- | --- |
+| `FindNicolette` | primary | DL_tunnels_down, ChadThankful | NicoletteOutside |
+| `FindDuClareComputer` | primary | NicoletteAtChateau | DL_reached_computer |
+| `ContactIlluminati` | primary | DL_paris_10_start | - |
+| `FindSilhouette` | primary | DL_paris_10_start | MeetChad |
+| `FreeHostages` | secondary | MeetChad | DL_metrosewer, 10_Paris_Catacombs_Tunnels/GoalCompleteTrigger0 |
+| `EscortHostages` | secondary | MeetChad | DL_metrosewer, Mission10.Timer:139, 10_Paris_Catacombs_Tunnels/GoalCompleteTrigger2 |
+| `ReportToChad` | secondary | MeetChad | DL_metrosewer, ChadThankful |
+| `MeetJaime` | secondary | DL_metrosewer | M10MeetJaime |
+| `GoToCrypt` | primary | NicoletteAfterEverett | DL_EverettMaze |
+| `AccessTemplarComputer` | primary | DL_EverettMaze | - |
+| `FindEverett` | primary | NicoletteOutside | DL_EverettContact |
+| `GetKeyToCrypt` | primary | DL_EverettContact | DL_entered_sewer, NicoletteAfterEverett |
+| `GetCrack` | secondary | MeetRenault | RenaultPays |
+| `MeetNicolette` | primary | MeetNicolette | NicoletteOutside |
+| `ClearMall` | secondary | MeetDefoe | DefoeConvos |
+| `KillGreasels` | secondary | MeetAimee | GreazelsDead |
 
 ### 10.5 Choices with lasting consequences
 
@@ -3196,23 +3196,23 @@ Generated from the script's calls (`inventory-campaign.mjs scripts`; `:N` is the
 72 conversations of the list besides the shared barks: 24 InfoLinks, 25 talk-type, 23 overheard. 5 have choices (`MetroTechnicianConvos` (a shop and a revenge branch), `TellLucius`, `MeetTobyAtanwe`,
 **`M11MeetGunther`**, `TakeOff`), 11 set flags, 53 need a flag, 14 add or complete goals.
 
-**Choices.** Every choice that changes state, the block its speech jumps to and what that block does (choices that change no state are counted in one row per conversation):
+**Choices.** Every choice that changes state, the block its speech jumps to and what that block does (choices that change no state are counted in one row per conversation; a choice is named by its branch label, the dialogue text stays out of the repository):
 
-| Conversation | Owner | Choice | Effects of the branch |
+| Conversation | Owner | Choice (its branch label; requirements) | Effects of the branch |
 | --- | --- | --- | --- |
-| `MeetTobyAtanwe` | TobyAtanwe | (2 further choices that change no state: refusals, "never mind", unaffordable offers) | - |
-| `MetroTechnicianConvos` | MetroTechnician | Here's 750 for the accuracy weapon mod. [needs !M11BoughtAccuracy, M11CanBuyAccuracy] | -> BuyAccuracy: set M11BoughtAccuracy, give WeaponModAccuracy |
-| `MetroTechnicianConvos` | MetroTechnician | A range weapon mod for 800 -- deal. [needs !M11BoughtRange, M11CanBuyRange] | -> BuyRange: set M11BoughtRange, give WeaponModRange |
-| `MetroTechnicianConvos` | MetroTechnician | I'll take the thermoptic camo for 5000. [needs !M11BoughtArmor, M11CanBuyArmor] | -> BuyArmor: set M11BoughtArmor, give AdaptiveArmor |
-| `MetroTechnicianConvos` | MetroTechnician | I turned you in. Maybe you should've given me that discount. | -> Confront: set MetroTechnicianFleeing, trig MetroTechnicianFlees |
-| `MetroTechnicianConvos` | MetroTechnician | I'm willing to pay full price. Let's see the hardware. | -> FullPrice: set M11CanBuyAccuracy=0, set M11CanBuyArmor=0, set M11CanBuyRange=0 |
-| `MetroTechnicianConvos` | MetroTechnician | (4 further choices that change no state: refusals, "never mind", unaffordable offers) | - |
-| `TellLucius` | LuciusDeBeers | Everett has no intention of reviving you. | -> Truth: set LuciusKnowsTruth, done TellLucius |
-| `TellLucius` | LuciusDeBeers | Everett will be here as soon as he can. | -> Lie: done TellLucius |
-| `M11MeetGunther` | GuntherHermann | I know your UNATCO killphrase: Laputan machine. | -> Kill: set KillGunther, trig GuntherKillSwitch |
-| `M11MeetGunther` | GuntherHermann | I know you hate being a tool for a bunch of bureaucrats as much as I d | -> Gentleman: trig CathedralGuntherAttacks |
-| `TakeOff` | BlackHelicopter | Let's go. | -> Go: +goal MeetJock, trig ChopperExit |
-| `TakeOff` | BlackHelicopter | (1 further choice that change no state: refusals, "never mind", unaffordable offers) | - |
+| `MeetTobyAtanwe` | TobyAtanwe | (2 further choices that change no state) | - |
+| `MetroTechnicianConvos` | MetroTechnician | `BuyAccuracy` [needs !M11BoughtAccuracy, M11CanBuyAccuracy] | -> BuyAccuracy: set M11BoughtAccuracy, give WeaponModAccuracy |
+| `MetroTechnicianConvos` | MetroTechnician | `BuyRange` [needs !M11BoughtRange, M11CanBuyRange] | -> BuyRange: set M11BoughtRange, give WeaponModRange |
+| `MetroTechnicianConvos` | MetroTechnician | `BuyArmor` [needs !M11BoughtArmor, M11CanBuyArmor] | -> BuyArmor: set M11BoughtArmor, give AdaptiveArmor |
+| `MetroTechnicianConvos` | MetroTechnician | `Confront` | -> Confront: set MetroTechnicianFleeing, trig MetroTechnicianFlees |
+| `MetroTechnicianConvos` | MetroTechnician | `FullPrice` | -> FullPrice: set M11CanBuyAccuracy=0, set M11CanBuyArmor=0, set M11CanBuyRange=0 |
+| `MetroTechnicianConvos` | MetroTechnician | (4 further choices that change no state) | - |
+| `TellLucius` | LuciusDeBeers | `Truth` | -> Truth: set LuciusKnowsTruth, done TellLucius |
+| `TellLucius` | LuciusDeBeers | `Lie` | -> Lie: done TellLucius |
+| `M11MeetGunther` | GuntherHermann | `Kill` | -> Kill: set KillGunther, trig GuntherKillSwitch |
+| `M11MeetGunther` | GuntherHermann | `Gentleman` | -> Gentleman: trig CathedralGuntherAttacks |
+| `TakeOff` | BlackHelicopter | `Go` | -> Go: +goal MeetJock, trig ChopperExit |
+| `TakeOff` | BlackHelicopter | (no jump found) | - |
 
 **Conversations that change state** (choices, flags set, goals, items, events, skill points; the `Needs` column is kept on these rows):
 
@@ -3282,21 +3282,21 @@ InfoLinks and what starts them:
 
 **Required (progression) conversations.** Chain: `TakeOff` (the helicopter's conversation, bump/frob/radius 350, no flag requirement; "Let's go." fires `ChopperExit`) needs the helicopter to be in the world: `MeetEverett_Played` (Everett's `MeetEverett`, radius 100, or his `FlagTrigger1`);
 Everett's map is reached only by the script travel after `MeetTobyAtanwe` (Toby, radius 160), who appears when `templar_upload` is set (the Cathedral's `FlagTrigger2`; `DL_morgan_uplink` completes `AccessTemplarComputer` and adds `GoToMetroStation`; `DL_metroentrance_after` adds `MeetTobyAtanwe`).
-`M11MeetGunther` is **not required**: both choices ("I know your UNATCO killphrase: Laputan machine" -> `KillGunther`; "How 'bout we make a deal?" -> `CathedralGuntherAttacks`) leave the chain intact; `DL_gold_found`/`RecoverGold` is a side goal.
+`M11MeetGunther` is **not required**: both choices (the killphrase -> `KillGunther`; offering a deal -> `CathedralGuntherAttacks`) leave the chain intact; `DL_gold_found`/`RecoverGold` is a side goal.
 
 ### 11.4 Objectives
 
-| Goal | Kind | Text | Added by | Completed by |
-| --- | --- | --- | --- | --- |
-| `GoToMetroStation` | primary | Go to the metro station and await further instructions. | DL_morgan_uplink | DL_tobywaiting, DL_metroentrance_after |
-| `KillMechanic` | secondary | Kill the phony mechanic who infiltrated Everett's estate. | MeetEverett2 | DL_morganraythanks, MeetEverett2, TakeOff, Mission11.Timer:90, 11_Paris_Everett/GoalCompleteTrigger0 |
-| `MeetJock` | primary | Meet Jock at the helipad. Leave for Vandenberg Airforce Base. | MeetEverett, TakeOff | DL_morganhelipad |
-| `AccessTemplarComputer` | carried |  | - | DL_morgan_uplink, 11_Paris_Cathedral/GoalCompleteTrigger0 |
-| `MeetTobyAtanwe` | primary | Meet Toby Atanwe, Everett's associate, in the metro station. | DL_metroentrance_after | MeetTobyAtanwe |
-| `RecoverGold` | secondary | Recover the gold from the Templars' cathedral, now occupied by MJ12. | DL_intro_cathedral | DL_gold_found, 11_Paris_Cathedral/GoalCompleteTrigger1 |
-| `ContactIlluminati` | carried |  | - | MeetEverett |
-| `TellEverett` | secondary | Tell Everett that Lucius DeBeers is cold. | MeetLuciusDeBeers | MeetEverett, LuciusDies |
-| `TellLucius` | secondary | Tell Lucius that Everett does not intend to revive him? | MeetEverett | TellLucius |
+| Goal | Kind | Added by | Completed by |
+| --- | --- | --- | --- |
+| `GoToMetroStation` | primary | DL_morgan_uplink | DL_tobywaiting, DL_metroentrance_after |
+| `KillMechanic` | secondary | MeetEverett2 | DL_morganraythanks, MeetEverett2, TakeOff, Mission11.Timer:90, 11_Paris_Everett/GoalCompleteTrigger0 |
+| `MeetJock` | primary | MeetEverett, TakeOff | DL_morganhelipad |
+| `AccessTemplarComputer` | carried | - | DL_morgan_uplink, 11_Paris_Cathedral/GoalCompleteTrigger0 |
+| `MeetTobyAtanwe` | primary | DL_metroentrance_after | MeetTobyAtanwe |
+| `RecoverGold` | secondary | DL_intro_cathedral | DL_gold_found, 11_Paris_Cathedral/GoalCompleteTrigger1 |
+| `ContactIlluminati` | carried | - | MeetEverett |
+| `TellEverett` | secondary | MeetLuciusDeBeers | MeetEverett, LuciusDies |
+| `TellLucius` | secondary | MeetEverett | TellLucius |
 
 ### 11.5 Choices with lasting consequences
 
@@ -3319,12 +3319,12 @@ Read here, set earlier:
   (mission 1; false = "the player refused to arm Gunther"). The killphrase path ends with `KillGunther` and the script's permanent `GuntherHermann_Dead`; the fight path leaves Gunther attacking.
 * **The mechanic** (`MeetEverett2`): `EverettMechanicComment` (permanent) is read in mission 12 by `TongSick`, in mission 14 by `JockArea51` and in mission 15 by `M15MeetEverett`; `Ray_Dead` (permanent) is read through mission 15.
 * **Walton** (`M11WaltonHolo`, needs `templar_upload`, `MS_M11WaltAppeared` and `GuntherHermann_Dead`): sets `M11MetWalton`, read in mission 14 by `WaltonShowdown`. (So the hologram conversation only plays after Gunther is dead.)
-* **Lucius DeBeers** (`TellLucius`: "Everett has no intention of reviving you." sets `LuciusKnowsTruth`; the lie leaves nothing): no reader outside the mission.
+* **Lucius DeBeers** (`TellLucius`: telling him the truth sets `LuciusKnowsTruth`; the lie leaves nothing): no reader outside the mission.
 
 ### 11.6 Progression path
 
 1. Cathedral, arrival at the `cathedralstart` portal. Take the cathedral (optional: gold, Gunther). Reach the Templar computer (`FlagTrigger2` sets `templar_upload`; `DL_morgan_uplink`).
-2. `DL_metroentrance_after` -> `Teleporter0` to the Underground (metro station): Toby appears; `MeetTobyAtanwe` ("Do what you must." / "Forget it. I will find Everett on my own." both continue; the script's `SendPlayer` needs only `MeetTobyAtanwe_Played`).
+2. `DL_metroentrance_after` -> `Teleporter0` to the Underground (metro station): Toby appears; `MeetTobyAtanwe` (both choices continue; the script's `SendPlayer` needs only `MeetTobyAtanwe_Played`).
 3. Everett's estate: `MeetEverett` (`FlagTrigger1` sets `MeetEverett_Played`; the helicopter enters; `MeetJock` added); `MeetEverett2`, the mechanic Ray (`KillMechanic`), Alex, Toby are optional.
 4. `TakeOff` -> `ChopperExit` -> `CalledByDispatcher` -> `MapExit1` -> `12_Vandenberg_cmd`.
 
@@ -3477,16 +3477,16 @@ Generated from the script's calls (`inventory-campaign.mjs scripts`; `:N` is the
 66 conversations of the list besides the shared barks: 22 InfoLinks, 21 talk-type, 23 overheard. 2 have choices (`MeetTiffanySavage` and the vendor `MeetBum_M`),
 7 set flags, 38 need a flag, 16 add or complete goals.
 
-**Choices.** Every choice that changes state, the block its speech jumps to and what that block does (choices that change no state are counted in one row per conversation):
+**Choices.** Every choice that changes state, the block its speech jumps to and what that block does (choices that change no state are counted in one row per conversation; a choice is named by its branch label, the dialogue text stays out of the repository):
 
-| Conversation | Owner | Choice | Effects of the branch |
+| Conversation | Owner | Choice (its branch label; requirements) | Effects of the branch |
 | --- | --- | --- | --- |
-| `MeetTiffanySavage` | TiffanySavage | Make a break for the helicopter; it's in the junkyard. | -> Go: set TiffanyRunning, trig TiffanyGo |
-| `MeetTiffanySavage` | TiffanySavage | (1 further choice that change no state: refusals, "never mind", unaffordable offers) | - |
-| `MeetBum_M` | Bum_M | Give me the accuracy weapon mod for 750. [needs !M12BoughtAccuracy, M12CanBuyAccuracy] | -> BuyAccuracy: set M12BoughtAccuracy, give WeaponModAccuracy |
-| `MeetBum_M` | Bum_M | Here's 400 for the recoil weapon mod. [needs !M12BoughtRecoil, M12CanBuyRecoil] | -> BuyRecoil: set M12BoughtRecoil, give WeaponModRecoil |
-| `MeetBum_M` | Bum_M | I'll take the rebreather for 1500. [needs !M12BoughtRebreather, M12CanBuyRebreather] | -> BuyRebreather: set M12BoughtRebreather, give Rebreather |
-| `MeetBum_M` | Bum_M | (4 further choices that change no state: refusals, "never mind", unaffordable offers) | - |
+| `MeetTiffanySavage` | TiffanySavage | `Go` | -> Go: set TiffanyRunning, trig TiffanyGo |
+| `MeetTiffanySavage` | TiffanySavage | (no jump found) | - |
+| `MeetBum_M` | Bum_M | `BuyAccuracy` [needs !M12BoughtAccuracy, M12CanBuyAccuracy] | -> BuyAccuracy: set M12BoughtAccuracy, give WeaponModAccuracy |
+| `MeetBum_M` | Bum_M | `BuyRecoil` [needs !M12BoughtRecoil, M12CanBuyRecoil] | -> BuyRecoil: set M12BoughtRecoil, give WeaponModRecoil |
+| `MeetBum_M` | Bum_M | `BuyRebreather` [needs !M12BoughtRebreather, M12CanBuyRebreather] | -> BuyRebreather: set M12BoughtRebreather, give Rebreather |
+| `MeetBum_M` | Bum_M | (4 further choices that change no state) | - |
 
 **Conversations that change state** (choices, flags set, goals, items, events, skill points; the `Needs` column is kept on these rows):
 
@@ -3559,19 +3559,19 @@ Before that the goals chain: `DestroyBots` (`DL_no_carla`/`MeetCarlaBrown`; `DL_
 
 ### 12.4 Objectives
 
-| Goal | Kind | Text | Added by | Completed by |
-| --- | --- | --- | --- | --- |
-| `RescueTiffany` | primary | Rescue Gary Savage's daughter, Tiffany, from the gas station where Majestic 12 is holding her. | GaryHostageBriefing | DL_TiffanyDead, MeetTiffanySavage |
-| `ReturnToHelicopter` | primary | Return to the helicopter. | DL_TiffanyDead, DL_JockTiffanyDead, MeetTiffanySavage | M12JockFinal2 |
-| `ActivatePower` | secondary | Activate backup power for the X-51 scientists' bot security system. | DL_no_carla, MeetCarlaBrown | DL_override_activated, 12_Vandenberg_Cmd/GoalCompleteTrigger0 |
-| `DestroyBots` | primary | Destroy the 2 MJ12 military bots and 2 MJ12 security bots. Base will remain under lockdown until the bots are destroyed. | DL_no_carla, MeetCarlaBrown | DL_command_bots_destroyed |
-| `UplinkDaedalus` | primary | Uplink Daedalus to the military computers near the control room on the second floor of the command building. | DL_JockLeaving | DL_HeliosBorn |
-| `FindJock` | primary | Meet Jock at the front entrance to Vandenberg, northeast of the base. | DL_JockBack | TongSick |
-| `FixComputer` | primary | Bring up the Vandenberg computer system, needed to operate the UC and to allow Everett to defend Daedalus. | GaryComputerBriefing | DL_HeliosBorn |
-| `ListenToPage` | primary | Go to the control room to receive a communication from Bob Page. | DL_HeliosBorn | PageHostageBriefing |
-| `GoToCommunicationsCenter` | primary | Go to the communications center to gain access to Gary Savage. | DL_command_bots_destroyed | MeetTonyMares |
-| `FindGarySavage` | primary | Find Gary Savage, believed to be in the control room. | MeetTonyMares | GaryComputerBriefing |
-| `GetSchematic` | primary | From the recently damaged MJ12 Ocean Lab, recover the schematic Gary Savage needs to complete a Universal Constructor. | M12JockFinal2 | - |
+| Goal | Kind | Added by | Completed by |
+| --- | --- | --- | --- |
+| `RescueTiffany` | primary | GaryHostageBriefing | DL_TiffanyDead, MeetTiffanySavage |
+| `ReturnToHelicopter` | primary | DL_TiffanyDead, DL_JockTiffanyDead, MeetTiffanySavage | M12JockFinal2 |
+| `ActivatePower` | secondary | DL_no_carla, MeetCarlaBrown | DL_override_activated, 12_Vandenberg_Cmd/GoalCompleteTrigger0 |
+| `DestroyBots` | primary | DL_no_carla, MeetCarlaBrown | DL_command_bots_destroyed |
+| `UplinkDaedalus` | primary | DL_JockLeaving | DL_HeliosBorn |
+| `FindJock` | primary | DL_JockBack | TongSick |
+| `FixComputer` | primary | GaryComputerBriefing | DL_HeliosBorn |
+| `ListenToPage` | primary | DL_HeliosBorn | PageHostageBriefing |
+| `GoToCommunicationsCenter` | primary | DL_command_bots_destroyed | MeetTonyMares |
+| `FindGarySavage` | primary | MeetTonyMares | GaryComputerBriefing |
+| `GetSchematic` | primary | M12JockFinal2 | - |
 
 ### 12.5 Choices with lasting consequences
 
@@ -3582,7 +3582,7 @@ Set here, alive in a later mission: **none** (everything the script and the Flag
 | `EverettMechanicComment` | M11 conversation MeetEverett2@RayComment; M11 conversation MeetEverett2@deadset | checks in TongSick |
 | `SandraWentToCalifornia` | M4 conversation SandraAttackedByJoJoThanks; M4 conversation FamilySquabbleWrapUpGilbertDead; M4 conversation FamilySquabbleWrapUp@Hop | checks in MeetBum_M; checks in BumsOverheard2; checks in BumsOverheard; script Mission12.FirstFrame:37 |
 
-* **Tiffany** (`MeetTiffanySavage`: "Make a break for the helicopter" sets `TiffanyRunning`; "Wait here..." does not): `TiffanySavage_Dead` (permanent) is read in this mission and in mission 14 (the table of who can die).
+* **Tiffany** (`MeetTiffanySavage`: telling her to run sets `TiffanyRunning`; telling her to wait does not): `TiffanySavage_Dead` (permanent) is read in this mission and in mission 14 (the table of who can die).
 * **Sandra** (`SandraWentToCalifornia`, mission 4): she is in the Gas map and the bums' conversations (`MeetBum_M`, `BumsOverheard`, `BumsOverheard2`) read the flag.
 * **The mechanic** (`EverettMechanicComment`, mission 11) is read by `TongSick`: with `Ray_Dead` false or the flag unset the `Rattle` branch plays, otherwise `Hop`; both fire `Map_Exit`.
 * `GarySavage_Dead` (read in 12, 14, 15), `TracerTong_Dead` (12, 15), `SamCarter_Dead`, `BobPage_Dead`, `SandraRenton_Dead` appear in the table of who can die.
@@ -3819,15 +3819,15 @@ via `DL_Downloaded`) is required, and the Lab's `schematic_downloaded` (`14_Ocea
 
 ### 14.4 Objectives
 
-| Goal | Kind | Text | Added by | Completed by |
-| --- | --- | --- | --- | --- |
-| `StealSub` | primary | Steal a mini-sub from the URV module submerged just offshore, then take it to the ocean lab. | DL_Start | DL_subnotready, DL_Sealed, DL_Intro, Mission14.FirstFrame:18 |
-| `AbortLaunch` | primary | Abort the launch of the nuclear missile. | DL_FrontGate | DL_Savage3, DL_Savage2 |
-| `ReprogramMissile` | primary | Reprogram the missile to strike Area 51. | DL_Savage2 | DL_Savage3 |
-| `PreventSabotage` | primary | Go to the launch tube and make sure MJ12 does not sabotage the missile launch. | DL_Savage3 | DL_Dead |
-| `GetSchematic` | carried |  | - | DL_Downloaded |
-| `MeetSavage` | primary | Meet Gary Savage and Jock on top of the sub base's command module, just onshore. | DL_Downloaded | GaryWaitingForSchematics |
-| `MeetJock` | primary | Meet Jock outside the silo. | DL_Dead | JockArea51 |
+| Goal | Kind | Added by | Completed by |
+| --- | --- | --- | --- |
+| `StealSub` | primary | DL_Start | DL_subnotready, DL_Sealed, DL_Intro, Mission14.FirstFrame:18 |
+| `AbortLaunch` | primary | DL_FrontGate | DL_Savage3, DL_Savage2 |
+| `ReprogramMissile` | primary | DL_Savage2 | DL_Savage3 |
+| `PreventSabotage` | primary | DL_Savage3 | DL_Dead |
+| `GetSchematic` | carried | - | DL_Downloaded |
+| `MeetSavage` | primary | DL_Downloaded | GaryWaitingForSchematics |
+| `MeetJock` | primary | DL_Dead | JockArea51 |
 
 ### 14.5 Choices with lasting consequences
 
@@ -3897,7 +3897,7 @@ Five slots: sub base (N0031), Ocean Lab (N0032, N0034), UC (N0033), Silo (N0035)
 ## Mission 15: Area 51
 
 Four maps and three endings. The player arrives at the Area 51 bunker with Jock (when the mechanic Ray is not dead, Jock's helicopter is sabotaged and blown up on the helipad within seconds of arrival), fights down through the bunker and the sectors, and at the end chooses one of three
-exits by what he does at the reactors, at Helios' hub and at Bob Page's bunker. The choice is not a conversation choice (**no conversation of the list has a choice**) but the ending the player reaches: `99_Endgame1` (destroy the generator: "New Dark Age", Tracer Tong),
+exits by what he does at the reactors, at Helios' hub and at Bob Page's bunker. The choice is not a conversation choice (**no conversation of the list has a choice**) but the ending the player reaches: `99_Endgame1` (destroy the generator: Tracer Tong's ending),
 `99_Endgame2` (merge with Helios) or `99_Endgame3` (join the Illuminati and kill Page).
 
 ### 15.1 Maps and arrival
@@ -4088,20 +4088,20 @@ InfoLinks and what starts them:
 
 ### 15.4 Objectives
 
-| Goal | Kind | Text | Added by | Completed by |
-| --- | --- | --- | --- | --- |
-| `ActivateReactors` | secondary | Go to the reactor control room. Activate the three ion injectors, then initiate the antimatter-matter reaction. Run. | DL_tong7 | - |
-| `ReturnToReactorLab` | secondary | (New Dark Age) Return to the reactor lab in Sector 3 to initiate a meltdown and destroy Area 51's global communications hub. | DL_tong3 | DL_tong4 |
-| `EnterBlastDoors` | primary | Get past the blast doors north of the helipad. | DL_tong1 | DL_Bunker_blastdoor |
-| `PenetrateBunker` | primary | Get access to the Area 51 Bunker. | DL_tong1 | DL_tong_reached_bunker |
-| `PowerElevator` | secondary | Bring up the power to the elevator system in order to access Page's bunker below. | DL_Bunker_blastdoor | DL_tong_reached_bunker, DL_Bunker_Power |
-| `TalkToMorgan` | secondary | Gain Sector 2 access by talking to Morgan Everett at the Station 5 holographic communicator. | DL_Morgan_Talk | M15MeetEverett |
-| `KillPage` | secondary | (Join Illuminati) Kill Bob Page and clear the way for the former Illuminati leaders to restore an age-old secret government. Rule the world with compa | DL_Morgan_Missed_Convo, M15MeetEverett | - |
-| `SeeHelios` | primary | Talk to Helios at the Aquinas Hub to gain access to Sector 4. | DL_Helios_Intro | MeetHelios |
-| `OverloadForceField` | secondary | (Join Illuminati) Bring down the four blue-fusion reactors in Page's bunker then go to the infusion control room on the upper level to cut all power t | DL_Final_Morgan | - |
-| `DeactivateLocks` | secondary | (Merge with Helios AI) Deactivate the uplink locks on the Aquinas Router at the east end of Sector 4, thus allowing Helios to exchange information wit | MeetHelios | DL_Final_Helios06_5 |
-| `MergeWithHelios` | secondary | (Merge with Helios AI) Return to the Sector 3 Aquinas Hub to merge with Helios and rule earth with benevolence, wisdom, and absolute power. | DL_Final_Helios06_5 | - |
-| `DestroyArea51` | secondary | (New Dark Age) First go to the coolant control room at the northwest corner of Sector 4 and cut off coolant to the reactors, then return to the reacto | M15MeetTong | - |
+| Goal | Kind | Added by | Completed by |
+| --- | --- | --- | --- |
+| `ActivateReactors` | secondary | DL_tong7 | - |
+| `ReturnToReactorLab` | secondary | DL_tong3 | DL_tong4 |
+| `EnterBlastDoors` | primary | DL_tong1 | DL_Bunker_blastdoor |
+| `PenetrateBunker` | primary | DL_tong1 | DL_tong_reached_bunker |
+| `PowerElevator` | secondary | DL_Bunker_blastdoor | DL_tong_reached_bunker, DL_Bunker_Power |
+| `TalkToMorgan` | secondary | DL_Morgan_Talk | M15MeetEverett |
+| `KillPage` | secondary | DL_Morgan_Missed_Convo, M15MeetEverett | - |
+| `SeeHelios` | primary | DL_Helios_Intro | MeetHelios |
+| `OverloadForceField` | secondary | DL_Final_Morgan | - |
+| `DeactivateLocks` | secondary | MeetHelios | DL_Final_Helios06_5 |
+| `MergeWithHelios` | secondary | DL_Final_Helios06_5 | - |
+| `DestroyArea51` | secondary | M15MeetTong | - |
 
 ### 15.5 Choices with lasting consequences
 
@@ -4304,7 +4304,7 @@ the **carried flags** (set by an event in mission *S*, still alive in a later mi
 
 What each is, in the player's terms. **Dialogue-only** flags change a line or a branch of a later conversation; the others change who is in a map or what a script does:
 
-* **Mission 1**: *the commander's fate* is not a carried flag but `TerroristCommander_Dead`/`_Unconscious` (permanent), read in mission 1 by `PaulCongratulations`, `M02Briefing`, `MeetCarter`, `MeetManderley` and others and in mission 3 by Filben's `M03MeetFilben`, `FilbenNormalBarks` and `FilbenAngryBarks`; `FilbenGaveKey` ("You can trust me.") and `M01PlayerMetFilben`/`PlayerMetFilben` -> Filben's mission 3 and 4 conversations (dialogue only);
+* **Mission 1**: *the commander's fate* is not a carried flag but `TerroristCommander_Dead`/`_Unconscious` (permanent), read in mission 1 by `PaulCongratulations`, `M02Briefing`, `MeetCarter`, `MeetManderley` and others and in mission 3 by Filben's `M03MeetFilben`, `FilbenNormalBarks` and `FilbenAngryBarks`; `FilbenGaveKey` (the promising choice) and `M01PlayerMetFilben`/`PlayerMetFilben` -> Filben's mission 3 and 4 conversations (dialogue only);
   `GuntherFreed` (expiration 12) and `GuntherRespectsPlayer` (armed him or not) -> mission 11's `M11MeetGunther` (it picks the branches `NotRescued`/`PlayerRefusedToArmGunther`); `M01PlayerAggressive` (8 or more lethal kills, expiration 6) -> UNATCO troop barks in missions 2 and 3 and `PaulLeaving` (dialogue only).
 * **Mission 2**: `AmbrosiaTagged`, `SubTerroristsDead`, `EscapeSuccessful`, `BatteryParkSlaughter`, `TenderloinSlaughter`, `M02ViolenceInBar`, `HeardGrenadeTalk`, `KnowsOfJoJo`, `M02QuestionedGreen`, `MeetJoeGreen_Played`, `M02MechSlur` -> the mission 3 UNATCO debriefing (`ManderleyDebriefing02`), Carter's, Anna's and the troops' lines, mission 4's Joe Green
   (dialogue only). `FordSchickRescued`/`FordSchickRescueDone` are meant to reach missions 3, 4 and 8 (the smuggler's thanks, Ford in his lair) but the data cannot deliver them: see [mission 2](#mission-02-battery-park-and-hells-kitchen-nyc).
