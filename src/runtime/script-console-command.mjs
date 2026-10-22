@@ -500,7 +500,10 @@ export function createConsoleCommands({runtime, input, services}) {
     if (width && height) {
       if (typeof services.setResolution !== 'function')
         throw new UnsupportedConsoleCommandError('UWindowsViewport::Exec SetRes has no render device to resize', {body: 'UWindowsViewport::Exec', keyword: 'SetRes'});
-      services.setResolution({width, height, colorBytes: depth ? Math.trunc(depth / 8) : null});
+      const colorBytes = depth ? Math.trunc(depth / 8) : null;
+      // RenDev->SetRes ends in UWindowsViewport::ResizeViewport, which stores the size in the client and saves it (docs/config-persistence.md).
+      services.nativeConfig?.().resizeViewport({fullscreen: Boolean(services.viewportFullscreen?.()), width, height, colorBytes});
+      services.setResolution({width, height, colorBytes});
     }
     return true;
   }

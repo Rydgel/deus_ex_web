@@ -10,8 +10,12 @@
  *
  * The browser has no writable System directory. FConfigFile::Write stores the
  * file text it would have saved in `written`, and Find re-reads that text in
- * place of the installed file, as a re-read from disk would.
+ * place of the installed file, as a re-read from disk would. `onWrite(name, text)`
+ * also sees each file Flush wrote, so a host can keep it: the browser's config store
+ * (config-store.mjs, docs/config-persistence.md) does, and every later cache reads
+ * the kept file where the original reads the file it wrote.
  */
+import { decodeIniBytes } from './ini-bytes.mjs';
 
 const lower = value => String(value ?? '').toLowerCase();
 
@@ -88,8 +92,9 @@ export class ConfigFile {
 
 export class ConfigCache {
   /** `files`: Map of lowercase file name -> installed text (the System dir). */
-  constructor({ files = new Map(), systemIni = 'DeusEx.ini', userIni = 'User.ini' } = {}) {
+  constructor({ files = new Map(), systemIni = 'DeusEx.ini', userIni = 'User.ini', onWrite = null } = {}) {
     this.installed = files;
+    this.onWrite = onWrite;
     this.written = new Map();
     this.systemIni = systemIni;
     this.userIni = userIni;
@@ -151,26 +156,20 @@ export class ConfigCache {
     for (const { name, file } of this.files) {
       if (filename !== null && lower(name) !== lower(filename)) continue;
       const text = file.write();
-      if (text !== null) this.written.set(lower(name), text);
+      if (text !== null) { this.written.set(lower(name), text); this.onWrite?.(name, text); }
     }
     if (read) this.files = filename === null ? [] : this.files.filter(entry => lower(entry.name) !== lower(filename));
   }
 }
 
 /** Build the cache from the installed System/*.ini files (AssetStore
- * `configFiles`). */
-export async function loadConfigCache(configFiles = []) {
+ * `configFiles`; with a config store they read the player's kept files over the installed ones). */
+export async function loadConfigCache(configFiles = [], { onWrite = null } = {}) {
   const files = new Map();
   for (const file of configFiles) {
     const leaf = String(file.path).replaceAll('\\', '/').split('/').pop();
-    const data = await file.read();
-    const bytes = data instanceof Uint8Array ? data : new Uint8Array(data);
-    // appLoadFileToString: a UTF-16LE file starts with FF FE; otherwise each
-    // byte is one TCHAR.
-    const text = bytes[0] === 0xff && bytes[1] === 0xfe
-      ? new TextDecoder('utf-16le').decode(bytes.subarray(2))
-      : new TextDecoder('latin1').decode(bytes);
-    files.set(leaf.toLowerCase(), text);
+    // appLoadFileToString: a UTF-16LE file starts with FF FE; otherwise each byte is one TCHAR.
+    files.set(leaf.toLowerCase(), decodeIniBytes(await file.read()));
   }
-  return new ConfigCache({ files });
+  return new ConfigCache({ files, onWrite });
 }

@@ -217,13 +217,13 @@ export function createNativeConfig({gconfig, audio = () => null, onChange = () =
   const getText = (cls, field) =>
     exportText(field.property.kind, defaultValue(cls, field.property), {enumNames: field.property.enumNames});
 
-  /** UObject::SaveConfig(CPF_Config) 0x10151540 of the class defaults, then the reload of every
-   * loaded class under the topmost CLASS_Config ancestor (DECLARE_ABSTRACT_CLASS(..., CLASS_Config)
-   * for UClient, UAudioSubsystem and URenderDevice in the SDK headers). */
-  function saveConfig(cls) {
-    const values = defaults.get(lower(cls.path));
+  /** UObject::SaveConfig(CPF_Config) 0x10151540: every config property of `cls` (own, then supers) that `valueOf` knows into
+   * `[<class path>]` of the System file, Flush(0), then the reload of every loaded class under the topmost CLASS_Config ancestor
+   * (DECLARE_ABSTRACT_CLASS(..., CLASS_Config) for UClient, UAudioSubsystem and URenderDevice in the SDK headers). SaveConfig's
+   * `this` decides the values: the class defaults for GlobalSetProperty's call, the live object for `Client->SaveConfig()`. */
+  function saveConfigOf(cls, valueOf) {
     for (const {property} of fields(cls)) {
-      const value = values.get(lower(property.name));
+      const value = valueOf(property);
       if (value === undefined) continue;                     // never read or written: nothing to export
       gconfig.setString(cls.path, property.name, exportText(property.kind, value, {enumNames: property.enumNames}), 'System');
     }
@@ -231,6 +231,37 @@ export function createNativeConfig({gconfig, audio = () => null, onChange = () =
     const root = chain(cls).at(-1);
     for (const [key, loadedValues] of defaults)
       if (chain(classes.get(key)).includes(root)) loadConfig(classes.get(key), loadedValues);
+  }
+  /** SaveConfig on the class default object (GlobalSetProperty 0x101523a0 ends with it). */
+  const saveConfig = cls => saveConfigOf(cls, property => defaults.get(lower(cls.path)).get(lower(property.name)));
+  /** SaveConfig on the live object of an instantiated class: its values, clamps included (`set ... Brightness 7` leaves the object
+   * at the clamped 1 but the defaults at 7). */
+  const saveInstance = cls => saveConfigOf(cls, property => instanceValue(cls, property.name).get());
+
+  // The colour depth the viewport holds (UViewport +0x80, in bytes): the client's ColorBits of the mode it opened in, then what
+  // each ResizeViewport stored.
+  let viewportColorBytes = null;
+  /**
+   * UWindowsViewport::ResizeViewport's save (WinDrv.dll 0x1110e2f6-0x1110e35d), reached by every SetRes through the render device:
+   * with a render device and outside the editor, a fullscreen viewport stores FullscreenViewportX/Y/ColorBits in the client and a
+   * windowed one WindowedViewportX/Y/ColorBits (X = width, Y = height: measured, 1280x960 changed WindowedViewportY only),
+   * ColorBits = ColorBytes * 8, and then `Client->SaveConfig(CPF_Config)` writes the file at once (measured under Wine: the ini was
+   * rewritten before the next input). A size with a zero side stores nothing but still saves.
+   */
+  function resizeViewport({fullscreen, width, height, colorBytes = null}) {
+    const cls = classes.get('windrv.windowsclient');
+    if (!cls || !instances.has(lower(cls.path))) return false;
+    const read = name => instanceValue(cls, name).get(), write = (name, value) => instanceValue(cls, name).set(value);
+    // (2 when the client holds none: UWindowsViewport::Exec's GetCurrentRes reads ColorBytes +0x80 as 2 when 0)
+    viewportColorBytes ??= ((Number(read(read('StartupFullscreen') ? 'FullscreenColorBits' : 'WindowedColorBits')) | 0) / 8 | 0) || 2;
+    const bytes = colorBytes ?? viewportColorBytes;
+    viewportColorBytes = bytes;
+    if (width && height) {
+      const prefix = fullscreen ? 'Fullscreen' : 'Windowed';
+      write(`${prefix}ViewportX`, width | 0); write(`${prefix}ViewportY`, height | 0); write(`${prefix}ColorBits`, bytes * 8);
+    }
+    saveInstance(cls);
+    return true;
   }
 
   /** UObject::GlobalSetProperty 0x101523a0 (bNotify = 1): every live object that IsA the class gets
@@ -258,5 +289,6 @@ export function createNativeConfig({gconfig, audio = () => null, onChange = () =
       return cls && instances.has(lower(path)) && findIn(cls, name) ? instanceValue(cls, name).get() : undefined;
     },
     defaultsOf: path => defaults.get(lower(path)),
+    resizeViewport,
   };
 }

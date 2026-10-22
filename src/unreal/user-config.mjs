@@ -7,15 +7,16 @@
  * installed preference without changing any compiled class default. It is a
  * targeted read of one shipped value, not a general config subsystem. */
 
+import { decodeIniBytes } from '../runtime/ini-bytes.mjs';
+
 function findConfigFile(files, leaf) {
   const target = leaf.toLowerCase();
   return files.find(file => String(file.path).replaceAll('\\', '/').split('/').pop().toLowerCase() === target) ?? null;
 }
 
 async function readText(file) {
-  const data = await file.read();
-  const bytes = data instanceof Uint8Array ? data : new Uint8Array(data);
-  return new TextDecoder('latin1').decode(bytes);
+  // appLoadFileToString: Latin-1, or UTF-16LE after FF FE (a kept file with a character of 0x100 or more is written that way).
+  return decodeIniBytes(await file.read());
 }
 
 /** Parse `[section] key=value` (case-insensitive) from ini text. Returns the

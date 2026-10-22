@@ -4,6 +4,9 @@ import './style.css';
 import { closeToolbarMenus } from './toolbar.mjs';
 import { AssetStore } from '../unreal/assets.mjs';
 import { readGlobalConfigBool, parseIniValue } from '../unreal/user-config.mjs';
+import { decodeIniBytes } from '../runtime/ini-bytes.mjs';
+import { openConfigPersistence, persistenceMode } from '../runtime/config-persistence.mjs';
+import { chosenResolution } from '../runtime/display-config.mjs';
 import { decodeMap } from '../unreal/map.mjs';
 import { toView, fromView } from '../unreal/geometry.mjs';
 import { createWorld } from './world.mjs';
@@ -386,7 +389,16 @@ const busy = (title, message) => {
   $('gate').hidden = false; $('gate-title').textContent = title; $('gate-message').textContent = message;
   $('gate-choose').hidden = loading; $('progress').hidden = !loading;
 };
-function toast(message) { $('toast').textContent = message; setTimeout(() => { if ($('toast').textContent === message) $('toast').textContent = ''; }, 4000); }
+function toast(message, ms = 4000) { $('toast').textContent = message; setTimeout(() => { if ($('toast').textContent === message) $('toast').textContent = ''; }, ms); }
+// The player's kept settings (docs/config-persistence.md): the store the asset stores read the config files through, and the storage
+// behind it. Null while persistence is off (the ?debug=1 page). A storage failure is said once per kind; the page runs on the installed
+// files, and what the game writes lasts as long as the page.
+let configPersistence = null, configStore = null;
+const storageToasted = new Set();
+function reportStorage(state) {
+  if (!state.message || storageToasted.has(state.kind)) return;
+  storageToasted.add(state.kind); toast(state.message, 12000);
+}
 async function activateInfoLinkAudio(){
   const AudioContextClass=window.AudioContext||window.webkitAudioContext;
   if(!AudioContextClass)throw new Error('This browser cannot decode the original DataLink audio');
@@ -408,7 +420,7 @@ if(musicOutput)for(const type of ['pointerdown','keydown'])
 async function readGalaxyOutputConfig(files){
   const file=files.find(entry=>String(entry.path).replaceAll('\\','/').split('/').pop().toLowerCase()==='deusex.ini');
   if(!file)throw new Error('DeusEx.ini is not among the game files');
-  const data=await file.read(),text=new TextDecoder('latin1').decode(data instanceof Uint8Array?data:new Uint8Array(data));
+  const text=decodeIniBytes(await file.read());
   const value=parseIniValue(text,'Galaxy.GalaxyAudioSubsystem','EffectsChannels');
   if(value===undefined)throw new Error('Galaxy EffectsChannels is not in DeusEx.ini');
   // Latency as script-audio-live.mjs reads it (0x10605ad0's clamp to 10..250).
@@ -804,7 +816,8 @@ async function loadMap(name, { travel = null } = {}) {
     }
     // The simulation side (sim-host.mjs): the game, the frame session, the
     // mesh layers' simulation halves and lip sync.
-    const hostOptions = { randomSeed, subtitles: subtitlePreference, travel: { arrival: travel, lastURL: travel?.lastURL ?? null },
+    // With the kept config the player's bSubtitles is the class default every Login reads, the Game Options menu's own: no page override.
+    const hostOptions = { randomSeed, subtitles: configStore ? null : subtitlePreference, fullscreen: Boolean(document.fullscreenElement), travel: { arrival: travel, lastURL: travel?.lastURL ?? null },
       stampScene: nextWorld.stampScene(), panZones: nextWorld.panZoneNames(),
       // Actors only a child frame draws are admitted where one may exist: a map with mirrors, or with security
       // cameras (a ViewportWindow's frame draws the player, whom Draw's bBehindView stops excluding).
@@ -956,29 +969,43 @@ async function loadMap(name, { travel = null } = {}) {
 }
 async function setFiles(files) {
   if (originalStart) await showSplash(files).catch(error => toast(`Splash: ${error.message}`));
-  const next = new AssetStore(files);
+  configPersistence?.close?.();
+  configPersistence = await openConfigPersistence({ mode: persistenceMode(location.search, originalStart), onStatus: reportStorage });
+  configStore = configPersistence.store;
+  const next = new AssetStore(files, { configStore });
   if (simMode === 'worker') {
     // The worker reads the same files (File objects or the dev server's
     // URLs), with the page's DEUS_EX_* switches set before its runtime loads.
     simClient?.terminate();
     simClient = createSimClient({ onProgress: message => { $('gate-message').textContent = message; },
       onFrame: lockstep ? snapshot => drawLockstep(snapshot) : null,
-      onFailure: error => pauseForRuntimeError(error) });
+      onFailure: error => pauseForRuntimeError(error),
+      // a config file the game wrote: the page keeps it (config-store.mjs accept -> the storage)
+      onConfig: record => configStore?.accept(record.leaf, record) });
     const flags = Object.fromEntries(Object.keys(globalThis).filter(key => key.startsWith('DEUS_EX_')).map(key => [key, globalThis[key]]));
-    await simClient.init(flags, files.map(file => ({ path: file.path, ...(file.file ? { file: file.file } : {}), ...(file.url ? { url: file.url } : {}) })));
+    await simClient.init(flags, files.map(file => ({ path: file.path, ...(file.file ? { file: file.file } : {}), ...(file.url ? { url: file.url } : {}) })),
+      configStore ? configStore.snapshot() : null);
   }
-  await connectMusic(files);
+  await connectMusic(next.configFiles);
   const names = [...next.files.values()].filter(f => /\.(dx|unr)$/i.test(f.path)).map(f => f.name).sort();
   if (!names.length) throw new Error('No maps found. Choose the game folder containing Maps, Textures, and System.');
   assets = next;
   // Honor the installed DeusExPlayer.bSubtitles globalconfig (shipped True) as
   // the initial conversation-subtitle preference; the diagnostics toggle flips it.
-  subtitlePreference = await readGlobalConfigBool(files, 'DeusEx.DeusExPlayer', 'bSubtitles', false);
+  subtitlePreference = await readGlobalConfigBool(next.configFiles, 'DeusEx.DeusExPlayer', 'bSubtitles', false);
+  // A resolution the player chose with SetRes and the game kept (display-config.mjs): the drawing buffer is fixed to it as that SetRes did.
+  if (configStore) {
+    const text = async (list, leaf) => { const file = list.find(entry => String(entry.path).replaceAll('\\', '/').split('/').pop().toLowerCase() === leaf); return file ? decodeIniBytes(await file.read()) : null; };
+    fixedResolution = chosenResolution(await text(files, 'deusex.ini') ?? await text(files, 'default.ini'), await text(next.configFiles, 'deusex.ini'));
+  }
   const subtitleToggle = $('subtitles'); if (subtitleToggle) subtitleToggle.checked = subtitlePreference;
   $('map').replaceChildren(...names.map(name => { const option = document.createElement('option'); option.value = name; option.textContent = name; return option; }));
   // (the original's start browses to DeusEx.ini's [URL] LocalMap=DX.dx: docs/boot.md)
   try { await loadMap(names.find(n => n.toLowerCase() === (originalStart ? 'dx' : '00_training')) ?? names[0]); }
   finally { $('splash').hidden = true; }
+  // the storage message again, now that the game is on screen (the first one came while the files loaded)
+  const kept = configPersistence?.status();
+  if (kept?.message) toast(kept.message, 12000);
 }
 const fail = error => { toast(error.message); if (!world) busy('Could not open game files', error.message); };
 $('choose').onclick = $('gate-choose').onclick = () => $('folder').click();
@@ -1101,7 +1128,8 @@ function applyDisplaySettings(display) {
     const event = new CustomEvent('deusex-relaunch', { cancelable: true, detail: { arguments: display.relaunchArguments } });
     if (window.dispatchEvent(event)) location.reload();
   }
-  if (displayFlushes !== null && display.flushes !== displayFlushes && Number.isFinite(display.brightness)) setBrightness(display.brightness);
+  // The first frame of a load takes the client's Brightness as the render device's Init does (the kept config's, when the player set one)
+  if ((displayFlushes === null ? Boolean(configStore) : display.flushes !== displayFlushes) && Number.isFinite(display.brightness)) setBrightness(display.brightness);
   displayFlushes = display.flushes;
   if (display.resolutionVersion !== displayResolutionVersion) {
     displayResolutionVersion = display.resolutionVersion;
@@ -1384,6 +1412,8 @@ const simInput = {
   },
   reset(options) { if (!game) return; if (simClient) simClient.queue({ op: 'resetInput', options }); else game.resetInput(options); },
   subtitles(value) { if (!game) return; if (simClient) simClient.queue({ op: 'subtitles', value }); else game.subtitles = value; },
+  // Whether the page is fullscreen: SetRes saves the Fullscreen* or the Windowed* viewport keys by it.
+  fullscreen(value) { if (!game) return; if (simClient) simClient.queue({ op: 'fullscreen', value }); else game.viewportFullscreen = value; },
 };
 function look(dx, dy) {
   if (mode === 'play' && game) {
@@ -1429,6 +1459,7 @@ function leaveFullscreen() {
   if (document.fullscreenElement) document.exitFullscreen?.()?.catch?.(() => {});
 }
 document.addEventListener('fullscreenchange', () => {
+  simInput.fullscreen(Boolean(document.fullscreenElement));
   if (!originalStart) return;
   if (!document.fullscreenElement) { navigator.keyboard?.unlock?.(); return; }
   lockGameKeys(!runtimeError);
@@ -1606,7 +1637,8 @@ document.addEventListener('keyup', event => {
 window.addEventListener('blur', () => { keys.clear(); crtShortcutHeld = false; drag = false; paused = true; simInput.reset({releasePhysical:true}); });
 document.addEventListener('visibilitychange', () => { keys.clear(); if (document.hidden) { paused = true; simInput.reset({releasePhysical:true}); } });
 function status() {
-  return { ready: Boolean(world) && !loading, map: currentMap ?? null, revision,
+  return {
+    storage: configPersistence ? { ...configPersistence.status() } : null, ready: Boolean(world) && !loading, map: currentMap ?? null, revision,
     textures: world?.textures ?? 0, renderErrors: world?.errors ?? [], triangles: world?.counts.triangles ?? 0,
     movers: world?.counts.movers ?? 0, position: fromView(camera.position.toArray()),
     mode, paused, runtimeError, gameplay: simClient ? simStatus?.gameplay ?? null : game?.status() ?? null, sim: simMode,

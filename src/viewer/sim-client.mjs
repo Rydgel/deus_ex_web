@@ -5,8 +5,9 @@
  * takes them, each exactly once. Input commands queue here and go with the
  * next post. `onFrame(snapshot)` takes each snapshot as it arrives instead
  * (lockstep drawing); `onProgress(message)` sees the load's progress and
- * `onFailure(error)` a message the worker could not handle. */
-export function createSimClient({ onProgress = () => {}, onFrame = null, onFailure = () => {} } = {}) {
+ * `onFailure(error)` a message the worker could not handle, and `onConfig({leaf, bytes, base})` a config file the game wrote
+ * (docs/config-persistence.md). */
+export function createSimClient({ onProgress = () => {}, onFrame = null, onFailure = () => {}, onConfig = () => {} } = {}) {
   const worker = new Worker(new URL('./sim-worker.mjs', import.meta.url), { type: 'module' });
   const pending = new Map(), commands = [], settledWaiters = [];
   // `activeLoad`: the last map load's request id; a snapshot of an earlier
@@ -26,6 +27,7 @@ export function createSimClient({ onProgress = () => {}, onFrame = null, onFailu
     switch (data.type) {
       case 'ready': ready?.resolve(); break;
       case 'progress': onProgress(data.message); break;
+      case 'config': onConfig({ leaf: data.leaf, bytes: data.bytes, base: data.base }); break;
       case 'loaded': case 'result': {
         const entry = pending.get(data.id); pending.delete(data.id);
         entry?.resolve(data.type === 'result' ? data.value : data);
@@ -53,9 +55,10 @@ export function createSimClient({ onProgress = () => {}, onFrame = null, onFailu
   };
   worker.onerror = event => onFailure(new Error(event.message ?? 'The simulation worker failed'));
   return {
-    /** The DEUS_EX_* switches and the game files ({path, file} or {path, url}). */
-    init(flags, files) {
-      return new Promise((resolve, reject) => { ready = { resolve, reject }; worker.postMessage({ type: 'init', flags, files }); });
+    /** The DEUS_EX_* switches and the game files ({path, file} or {path, url}); `saved` the player's kept config files (a Map of leaf ->
+     * {bytes, base}, config-store.mjs), or null where persistence is off. */
+    init(flags, files, saved = null) {
+      return new Promise((resolve, reject) => { ready = { resolve, reject }; worker.postMessage({ type: 'init', flags, files, saved }); });
     },
     /** Build a map's simulation side (sim-host.mjs options, plain). */
     load: (map, options) => request({ type: 'load', map, options }),

@@ -11,6 +11,14 @@ export function inputKeyName(names,index){
   return name.length>3?name.slice(3):'';
 }
 
+/** The name UInput::StaticInitInput 0x103930c0 gives an EInputKey's UStrProperty: the enum name past "IK_" (the FName built at 0x1039329e).
+ * IK_None's is "None", which is NAME_None, so its property takes the unique name its class numbers: StrProperty0 (the key the original's
+ * User.ini holds for it, measured: docs/config-persistence.md). */
+export function configKeyName(enumName){
+  const key=enumName.slice(3);
+  return key.toLowerCase()==='none'?'StrProperty0':key;
+}
+
 /** UInput::FindKeyName 0x10394c40: find-only FName("IK_%s"), then enum scan. */
 export function findInputKeyName(names,key){
   const name='IK_'+scriptStringText(key);
@@ -73,7 +81,7 @@ function loadInputConfig(target,names,gconfig,warn,bindingRead=null){
     readInputAliases(read,warn,target.aliases);
     for(let index=0;index<names.length;index++){
       if(names[index]==='None')continue;
-      const key=names[index].slice(3);
+      const key=configKeyName(names[index]);
       const text=bindingRead&&section===INPUT_EXT_CLASS.superPath?bindingRead(key)??null:read(key);
       if(text!==null)target.bindings[index]=text;
     }
@@ -121,7 +129,7 @@ export async function createInputConsole(runtime,assets,{config}={}){
   // creates Aliases, then one string per named key ascending, and
   // UStruct::AddCppProperty 0x10125fd0 prepends each, so the keys come
   // first in descending order and Aliases last.
-  const keyProperties=names.map((name,index)=>({name:name.slice(3),index})).filter((_,index)=>names[index]!=='None').reverse();
+  const keyProperties=names.map((name,index)=>({name:configKeyName(name),index})).filter((_,index)=>names[index]!=='None').reverse();
   /** FindField 0x101011db over InputExt: FName compare, case-insensitive. */
   function findField(name){
     const wanted=scriptStringText(name);

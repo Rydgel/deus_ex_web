@@ -3,9 +3,11 @@
  * (sim-host.mjs); the page keeps three.js, the DOM and Web Audio. Messages
  * are handled one at a time, in arrival order:
  *
- * - `init` {flags, files}: the page's DEUS_EX_* switches, set before the
- *   runtime's modules load, and the game files (File objects or dev-server
- *   URLs).
+ * - `init` {flags, files, saved}: the page's DEUS_EX_* switches, set before the
+ *   runtime's modules load, the game files (File objects or dev-server
+ *   URLs) and the player's kept config files (config-store.mjs; null with
+ *   persistence off). The worker answers each file the game writes with a
+ *   `config` {leaf, bytes, base} message for the page to keep.
  * - `load` {id, map, options}: decode the map and build the simulation side;
  *   replies `loaded` with the first events, the HUD's textures, the notes
  *   and the actor layer's summary.
@@ -69,6 +71,8 @@ function command(game, entry, errors) {
       case 'pointer': pointerGrab = game.windowPointer(entry.sample); break;
       case 'resetInput': game.resetInput(entry.options); break;
       case 'subtitles': game.subtitles = entry.value; break;
+      // The page's fullscreen state (SetRes saves the Fullscreen* or Windowed* viewport keys by it).
+      case 'fullscreen': game.viewportFullscreen = entry.value; break;
       // The page's decode of a speech sound (main.mjs decodeSpeech).
       case 'speech-pcm': game.attachSpeech(entry.sound, entry.pcm); break;
       default: throw new Error(`Unknown simulation command ${entry.op}`);
@@ -94,16 +98,19 @@ async function handle(data) {
     case 'init': {
       for (const [name, value] of Object.entries(data.flags)) globalThis[name] = value;
       if (globalThis.DEUS_EX_HITCHLOG) { hitchWasm = await import('./hitch-wasm.mjs'); hitchWasm.watchWasm(); }
-      const [{ AssetStore }, map, simHost, clock, session, digest, library, probe] = await Promise.all([import('../unreal/assets.mjs'),
+      const [{ AssetStore }, map, simHost, clock, session, digest, library, probe, { createConfigStore }] = await Promise.all([import('../unreal/assets.mjs'),
         import('../unreal/map.mjs'), import('./sim-host.mjs'), import('../runtime/host-clock.mjs'), import('./sim-session.mjs'),
-        import('../runtime/state-digest.mjs'), import('../runtime/galaxy-music-library.mjs'), import('./decal-probe.mjs')]);
+        import('../runtime/state-digest.mjs'), import('../runtime/galaxy-music-library.mjs'), import('./decal-probe.mjs'), import('../runtime/config-store.mjs')]);
       decodeMap = map.decodeMap; createSimHost = simHost.createSimHost; setHostClock = clock.setHostClock; music = library;
       plainError = session.plainError; stateDigest = digest.stateDigest; decalProbe = probe.decalProbe; particleProbe = probe.particleProbe;
       placeProbe = probe.placeProbe; laserProbe = probe.laserProbe;
       meshLightProbe = probe.meshLightProbe; renderPassProbe = probe.renderPassProbe;
+      // The player's kept config files (docs/config-persistence.md): the page loaded them from its storage; each file the game writes goes
+      // back to the page, which keeps it. Null: persistence is off and the config files are the installed ones.
+      const configStore = data.saved ? createConfigStore({ saved: data.saved, persist: (leaf, record) => send({ type: 'config', leaf, bytes: record.bytes, base: record.base }) }) : null;
       assets = new AssetStore(data.files.map(file => ({ path: file.path, read: file.file ? () => file.file.arrayBuffer()
         : file.url ? async () => { const response = await fetch(file.url); if (!response.ok) throw new Error(`Cannot read ${file.path}`); return response.arrayBuffer(); }
-        : async () => { throw new Error(`Native library bytes are not served: ${file.path}`); } })));
+        : async () => { throw new Error(`Native library bytes are not served: ${file.path}`); } })), { configStore });
       send({ type: 'ready' });
       return;
     }

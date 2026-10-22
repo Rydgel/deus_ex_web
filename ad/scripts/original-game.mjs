@@ -62,6 +62,12 @@ export function writeIni({soft = process.env.DX_SOFT === '1'} = {}) {
   let user = readFileSync(path.join(SYSTEM, 'User.ini'), 'latin1');
   const bindings = {NumPad8: 'set LevelInfo bPlayersOnly True', NumPad9: 'exec adcam.txt'};
   user = setKeys(setKeys(user, 'Engine.Input', bindings), 'Extension.InputExt', bindings);
+  // DX_USER_SET='Section.Key=Value;...': further keys of the User.ini copy (docs/config-persistence.md: bAskedToTrain=False).
+  for (const item of (process.env.DX_USER_SET || '').split(';').filter(Boolean)) {
+    const eq = item.indexOf('='), dot = item.lastIndexOf('.', eq);
+    if (eq < 0 || dot < 0) throw new Error(`DX_USER_SET ${item}: expected Section.Key=Value`);
+    user = setKeys(user, item.slice(0, dot), {[item.slice(dot + 1, eq)]: item.slice(eq + 1)});
+  }
   writeFileSync(path.join(SYSTEM, 'User-ad.ini'), user, 'latin1');
 }
 

@@ -4,6 +4,7 @@
  *   console {command}        PlayerPawn.ConsoleCommand through the viewport Exec chain
  *   menu {screens}           ShowMainMenu, then the button invoking each screen class in turn
  *   press {choice}           a choice's action button (cycle a value, open an action choice's screen)
+ *   pressField {field}       a button field of the top window (a message box's btnYes / btnNo / btnOK), activated
  *   drag {choice, tick}      a slider choice's thumb to a tick
  *   action {action}          the screen's action button (1 OK, 2 Cancel, 3 Reset)
  *   cycleAll                 every value choice once
@@ -31,6 +32,7 @@ export function settingsProbe(game, step = {op: 'state'}) {
     case 'list': result = driver.listRows(step.field, step.columns); break;
     case 'text': result = driver.windowText(step.field); break;
     case 'press': driver.press(step.choice); break;
+    case 'pressField': driver.pressField(step.field); break;
     case 'drag': driver.drag(step.choice, step.tick); break;
     case 'action': driver.pressAction(step.action); break;
     case 'cycleAll': result = driver.cycleAll(); break;
@@ -48,7 +50,10 @@ export function settingsProbe(game, step = {op: 'state'}) {
     result, top: driver.top(),
     display: {...host.display},
     audio: live ? {...live} : null,
-    player: {mouseSensitivity: runtime.readNamed(driver.player, 'MouseSensitivity'), invertMouse: runtime.readNamed(driver.player, 'bInvertMouse')},
+    player: {mouseSensitivity: runtime.readNamed(driver.player, 'MouseSensitivity'), invertMouse: runtime.readNamed(driver.player, 'bInvertMouse'),
+      // the saved options of docs/config-persistence.md
+      askedToTrain: runtime.readNamed(driver.player, 'bAskedToTrain'), uiBackground: runtime.readNamed(driver.player, 'UIBackground'),
+      subtitles: runtime.readNamed(driver.player, 'bSubtitles')},
     client: {brightness: host.nativeConfig.instance('WinDrv.WindowsClient', 'Brightness')},
   };
 }

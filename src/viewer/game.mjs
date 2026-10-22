@@ -39,7 +39,7 @@ export class ClientTravelBoundary extends Error {
 
 export async function createGame(map, asset, assets, { randomSeed = Math.floor(Date.now()/1000) >>> 0,
   onLightingChanged = null, onDataLinkTransmission = null, onConversationSpeech = null, onAudioVoice = null, presentation = false,
-  subtitles = null, musicLibrary = null, travel = null, saveDirectory = null } = {}) {
+  subtitles = null, musicLibrary = null, travel = null, saveDirectory = null, fullscreen = null } = {}) {
   if(onDataLinkTransmission!=null&&typeof onDataLinkTransmission!=='function')
     throw new TypeError('createGame onDataLinkTransmission must be a function');
   const defaults = new ClassDefaults(assets), collision = new CollisionWorld(map.model), notes = [];
@@ -211,6 +211,8 @@ export async function createGame(map, asset, assets, { randomSeed = Math.floor(D
   player.scriptRuntime = runtime;
   const readPlayer = name => runtime.readNamed(player.collisionActor, name);
   const inputHost = doors.scriptRuntime.windowHost;
+  // Whether the page is fullscreen: SetRes saves the Fullscreen* or the Windowed* viewport keys by it (docs/config-persistence.md).
+  if (typeof fullscreen === 'boolean') inputHost.display.fullscreen = fullscreen;
   // Rendering observes the original trace's cache; it cannot inject a target.
   const interaction = Object.freeze({
     get position() { return readPlayer('Location'); },
@@ -421,6 +423,7 @@ export async function createGame(map, asset, assets, { randomSeed = Math.floor(D
     },
     get subtitles(){ return Boolean(subtitlesRef.get()); },
     set subtitles(value){ subtitlePreference=Boolean(value); applySubtitles(); },
+    set viewportFullscreen(value){ inputHost.display.fullscreen = Boolean(value); },
     target() { return isHighlighted(interaction,interaction.frobTarget) ? describeTarget(interaction.frobTarget) : null; },
     // XInputExt::Process 0x1002d0b0 offers every key to the player's root window
     // (XRootWindow::Process) before any binding; true means the root consumed it.

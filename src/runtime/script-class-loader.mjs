@@ -26,7 +26,9 @@ export class ScriptClassLoader {
    * before the first synchronous class load (UClass::Serialize reaches
    * LoadConfig). An install without .ini files yields an empty cache. */
   prepareConfig() {
-    return this.configReady ??= loadConfigCache(this.assets?.configFiles ?? [])
+    // Flush's writes go to the asset store's config store, where there is one: the player's kept files (docs/config-persistence.md).
+    const store = this.assets?.configStore;
+    return this.configReady ??= loadConfigCache(this.assets?.configFiles ?? [], { onWrite: store ? (name, text) => store.write(name, text) : null })
       .then(cache => { this.graph.setConfig(cache); return cache; });
   }
 

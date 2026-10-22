@@ -1,0 +1,337 @@
+{
+  "measured": "2026-10-22, DeusEx.exe 1.112fm under Wine 11.17 on the Linux host (~/.wine-deusex, the shared Wine lock), driven by scripts/travel-probe.sh with the ini: step (scripts/travel-step.sh) over ad/scripts/original-game.mjs, which launches the game on INI=DeusEx-ad.ini USERINI=User-ad.ini (copies of the prefix's files: StartupFullscreen=False, WindowedViewportX/Y 1280x720, WindowedColorBits=32, CaptureMouse=False, the three Galaxy volumes 0, NumPad8/9 bindings) so the prefix's own DeusEx.ini and User.ini stay untouched. Menus were clicked with the mouse (dxinput click) in the 1280x720 viewport; each click was followed by 1.5 s before the files were copied. The captures are .work/config-persistence/wine/ (not in Git).",
+  "facts": [
+    "A settings screen writes nothing until its OK: the ini files were byte-identical to the screen's start in all seven snapshots taken with its choices changed and OK not yet clicked (Sound, Display, Resolution only, Keyboard/Mouse, Controls, Game Options, Colors).",
+    "OK rewrites the file within the 1.5 s that followed it (SaveConfig -> Flush(0)); nothing is written at exit: DeusEx-ad.ini and User-ad.ini were byte-identical before and after `cmd exit` in both sessions.",
+    "A file is written whole, its sections and keys in the order they were read; a value changed in place keeps its slot, a key the file lacked is appended at the end of its section.",
+    "A file with no changed value is not rewritten: User-ad.ini kept its modification time through the Sound screen's OK, whose player.SaveConfig() changed nothing.",
+    "SetRes on its own (resolution choice only, OK) rewrites DeusEx.ini at once: UWindowsViewport::ResizeViewport ends in Client->SaveConfig() (WinDrv.dll 0x1110e35d).",
+    "At launch the game rewrote DeusEx-ad.ini once, WindowPositions WizardDialog only (the launcher's own window placement); User-ad.ini was not rewritten."
+  ],
+  "baseline": {
+    "DeusEx.ini": "the prefix's DeusEx.ini with the launcher's changes above",
+    "User.ini": "the prefix's User.ini; session 2 with bAskedToTrain=False (DX_USER_SET)",
+    "launcherChanges": {
+      "file": "DeusEx.ini",
+      "note": "what ad/scripts/original-game.mjs writeIni changed in its copy of the prefix's DeusEx.ini before the launch (the validator applies them to the installed file)",
+      "keys": [
+        ["WinDrv.WindowsClient", "StartupFullscreen", "False"], ["WinDrv.WindowsClient", "WindowedViewportX", "1280"], ["WinDrv.WindowsClient", "WindowedViewportY", "720"],
+        ["WinDrv.WindowsClient", "WindowedColorBits", "32"], ["WinDrv.WindowsClient", "CaptureMouse", "False"],
+        ["Galaxy.GalaxyAudioSubsystem", "MusicVolume", "0"], ["Galaxy.GalaxyAudioSubsystem", "SoundVolume", "0"], ["Galaxy.GalaxyAudioSubsystem", "SpeechVolume", "0"]
+      ]
+    }
+  },
+  "firstSaveAppended": {
+    "note": "The keys, in order, that the original's earlier saves had added to the Wine prefix's User.ini (written 2026-09-09 by real play) and that the installed User.ini of this checkout lacks: the end of [DeusEx.DeusExPlayer], the end of [Engine.PlayerPawn], and [Engine.Pawn] after it. A first player.SaveConfig() appends them to a file that lacks them.",
+    "keys": [
+      [
+        "DeusEx.DeusExPlayer",
+        "bHelpMessages"
+      ],
+      [
+        "DeusEx.DeusExPlayer",
+        "bShowAmmoDescriptions"
+      ],
+      [
+        "DeusEx.DeusExPlayer",
+        "bConfirmSaveDeletes"
+      ],
+      [
+        "DeusEx.DeusExPlayer",
+        "bConfirmNoteDeletes"
+      ],
+      [
+        "DeusEx.DeusExPlayer",
+        "bAskedToTrain"
+      ],
+      [
+        "DeusEx.DeusExPlayer",
+        "AugPrefs[0]"
+      ],
+      [
+        "DeusEx.DeusExPlayer",
+        "AugPrefs[1]"
+      ],
+      [
+        "DeusEx.DeusExPlayer",
+        "AugPrefs[2]"
+      ],
+      [
+        "DeusEx.DeusExPlayer",
+        "AugPrefs[3]"
+      ],
+      [
+        "DeusEx.DeusExPlayer",
+        "AugPrefs[4]"
+      ],
+      [
+        "DeusEx.DeusExPlayer",
+        "AugPrefs[5]"
+      ],
+      [
+        "DeusEx.DeusExPlayer",
+        "AugPrefs[6]"
+      ],
+      [
+        "DeusEx.DeusExPlayer",
+        "AugPrefs[7]"
+      ],
+      [
+        "DeusEx.DeusExPlayer",
+        "AugPrefs[8]"
+      ],
+      [
+        "DeusEx.DeusExPlayer",
+        "bQuotesEnabled"
+      ],
+      [
+        "Engine.PlayerPawn",
+        "bNeverAutoSwitch"
+      ],
+      [
+        "Engine.PlayerPawn",
+        "MaxTimeMargin"
+      ],
+      [
+        "Engine.PlayerPawn",
+        "ngSecretSet"
+      ],
+      [
+        "Engine.Pawn",
+        "bNeverSwitchOnPickup"
+      ]
+    ]
+  },
+  "scenarios": [
+    {
+      "name": "sound",
+      "session": 1,
+      "menu": "Settings > Sound: Sound Effects Volume slider clicked at its middle, Reverse Stereo clicked once, OK",
+      "file": "DeusEx.ini",
+      "changes": [
+        {
+          "section": "Galaxy.GalaxyAudioSubsystem",
+          "key": "ReverseStereo",
+          "from": "False",
+          "to": "True"
+        },
+        {
+          "section": "Galaxy.GalaxyAudioSubsystem",
+          "key": "SoundVolume",
+          "from": "0",
+          "to": "127"
+        }
+      ],
+      "userIniWritten": false
+    },
+    {
+      "name": "display",
+      "session": 1,
+      "menu": "Settings > Display: Screen Resolution clicked once (1280x720 to 1280x768), Decals clicked once (Off), OK",
+      "file": "DeusEx.ini",
+      "changes": [
+        {
+          "section": "WinDrv.WindowsClient",
+          "key": "WindowedViewportY",
+          "from": "720",
+          "to": "768"
+        },
+        {
+          "section": "WinDrv.WindowsClient",
+          "key": "Decals",
+          "from": "True",
+          "to": "False"
+        }
+      ]
+    },
+    {
+      "name": "resolution",
+      "session": 1,
+      "menu": "Settings > Display: Screen Resolution clicked once (1280x768 to 1280x960), OK",
+      "file": "DeusEx.ini",
+      "console": "SetRes 1280x960",
+      "changes": [
+        {
+          "section": "WinDrv.WindowsClient",
+          "key": "WindowedViewportY",
+          "from": "768",
+          "to": "960"
+        }
+      ]
+    },
+    {
+      "name": "askedToTrain",
+      "session": 2,
+      "menu": "Main menu > New Game with bAskedToTrain=False: the Training Mission prompt (the same click again went straight to the difficulty screen)",
+      "file": "User.ini",
+      "changes": [
+        {
+          "section": "DeusEx.DeusExPlayer",
+          "key": "bAskedToTrain",
+          "from": "False",
+          "to": "True"
+        }
+      ]
+    },
+    {
+      "name": "keys",
+      "session": 2,
+      "menu": "Settings > Keyboard/Mouse: second row (Use object in world), Enter, G, OK",
+      "file": "User.ini",
+      "command": "SET InputExt G ParseRightClick",
+      "changes": [
+        {
+          "section": "Extension.InputExt",
+          "key": "G",
+          "from": "ShowGoalsWindow",
+          "to": "ParseRightClick"
+        }
+      ]
+    },
+    {
+      "name": "controls",
+      "session": 2,
+      "menu": "Settings > Controls: Invert Mouse clicked once, Mouse Sensitivity slider clicked (3 to 7), OK",
+      "file": "User.ini",
+      "changes": [
+        {
+          "section": "Engine.PlayerPawn",
+          "key": "bInvertMouse",
+          "from": "False",
+          "to": "True"
+        },
+        {
+          "section": "Engine.PlayerPawn",
+          "key": "MouseSensitivity",
+          "from": "3.000000",
+          "to": "7.000000"
+        }
+      ]
+    },
+    {
+      "name": "options",
+      "session": 2,
+      "menu": "Settings > Game Options: Gore Level, Subtitles and UI/Menu Background clicked once each, OK",
+      "file": "User.ini and DeusEx.ini",
+      "changes": [
+        {
+          "section": "DeusEx.DeusExPlayer",
+          "key": "bSubtitles",
+          "from": "True",
+          "to": "False",
+          "file": "User.ini"
+        },
+        {
+          "section": "DeusEx.DeusExPlayer",
+          "key": "UIBackground",
+          "from": "0",
+          "to": "1",
+          "file": "User.ini"
+        },
+        {
+          "section": "Engine.GameInfo",
+          "key": "bLowGore",
+          "from": "False",
+          "to": "True",
+          "file": "DeusEx.ini"
+        }
+      ],
+      "appended": {
+        "file": "DeusEx.ini",
+        "section": "Engine.GameInfo",
+        "note": "Level.Game.SaveConfig() (MenuChoice_GoreLevel) exported every config property of the game class: the baseline's section held bLowGore only, and these followed it in this order",
+        "keys": [
+          [
+            "bMuteSpectators",
+            "True"
+          ],
+          [
+            "bNoCheating",
+            "True"
+          ],
+          [
+            "bAllowFOV",
+            "False"
+          ],
+          [
+            "AutoAim",
+            "1.000000"
+          ],
+          [
+            "GameSpeed",
+            "1.000000"
+          ],
+          [
+            "MaxSpectators",
+            "2"
+          ],
+          [
+            "AdminPassword",
+            ""
+          ],
+          [
+            "GamePassword",
+            ""
+          ],
+          [
+            "MaxPlayers",
+            "16"
+          ],
+          [
+            "IPPolicies[0]",
+            "ACCEPT,*"
+          ],
+          [
+            "IPPolicies[1..49]",
+            ""
+          ],
+          [
+            "ServerLogName",
+            "server.log"
+          ],
+          [
+            "bLocalLog",
+            "True"
+          ],
+          [
+            "bWorldLog",
+            "True"
+          ],
+          [
+            "bBatchLocal",
+            "False"
+          ],
+          [
+            "DemoBuild",
+            "0"
+          ],
+          [
+            "DemoHasTuts",
+            "0"
+          ]
+        ]
+      },
+      "userIniWritten": true
+    },
+    {
+      "name": "colors",
+      "session": 2,
+      "menu": "Settings > Colors: Menu Color Scheme and HUD Color Scheme clicked once each, OK",
+      "file": "User.ini",
+      "changes": [
+        {
+          "section": "DeusEx.DeusExPlayer",
+          "key": "MenuThemeName",
+          "from": "Default",
+          "to": "Blue & Gold"
+        },
+        {
+          "section": "DeusEx.DeusExPlayer",
+          "key": "HUDThemeName",
+          "from": "Default",
+          "to": "Amber"
+        }
+      ]
+    }
+  ]
+}

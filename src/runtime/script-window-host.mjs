@@ -194,14 +194,17 @@ export async function createWindowHost({runtime, assets, player, gameConfig = nu
   /** What the render device last took from the client config on a Flush (docs/script-native-config.md). */
   // fullscreenToggles / relaunches count the host requests the Exec chain made (UWindowsViewport::Exec ToggleFullscreen,
   // USystem::Exec RELAUNCH); the page performs each once (docs/host-services.md).
+  // `fullscreen`: whether the viewport is fullscreen (the BLIT_Fullscreen flag SetRes passes as IsFullscreen()): the client's
+  // StartupFullscreen until the page says (the browser's fullscreen is the page's; main.mjs reports it).
   const display={brightness:nativeConfig.instance('WinDrv.WindowsClient','Brightness'),flushes:0,resolution:null,resolutionVersion:0,
-    fullscreenToggles:0,relaunches:0,relaunchArguments:null,
+    fullscreen:Boolean(nativeConfig.instance('WinDrv.WindowsClient','StartupFullscreen')),fullscreenToggles:0,relaunches:0,relaunchArguments:null,
     // RootWindow.GenerateSnapshot's requests to the page (docs/root-snapshot.md): the frame the page last drew is the texture's source.
     snapshotRequests:[],snapshotSerial:0,snapshotReleased:[]};
   const consoleCommands=createConsoleCommands({runtime,input:inputConsole,services:{
     nativeConfig:()=>nativeConfig,
     // UWindowsViewport::Exec SetRes -> RenDev->SetRes: the browser render device takes the request.
     setResolution(request){display.resolution={...request};display.resolutionVersion++;},
+    viewportFullscreen:()=>display.fullscreen,
     toggleFullscreen(){display.fullscreenToggles++;},
     relaunch(args){display.relaunchArguments=args;display.relaunches++;},
     viewportSize(){

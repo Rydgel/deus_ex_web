@@ -8,6 +8,7 @@
 #     cmd:<console line>        type a line into the console (dxinput `cmd`: T, the line, Enter)
 #     wait:<seconds>
 #     arrive:<regex>            wait until a Level object whose URL.Map matches the regex exists, then 3 s more (up to 150 s)
+#     ini:<label>               the session's ini files and their modification times -> .work/travel/<tag>/<label>.* (docs/config-persistence.md)
 #     snap:<label>              save directory listing, engine log, player flags, travel text -> .work/travel/<tag>/<label>.*
 #     actors:<name>:<label>     tools/dump-actor-win.c for objects named like <name> -> .work/travel/<tag>/<label>.actors.txt
 #     shot:<name>               the game's Shot key -> .work/travel/<tag>/<name>.png
@@ -67,7 +68,7 @@ run_step() {
   local step=$1 kind arg
   kind=${step%%:*}; arg=${step#*:}
   case $kind in
-    cmd|arrive|snap|shot|key|type|click|move) scripts/travel-step.sh "$OUT" "$kind" "$arg" ;;
+    cmd|arrive|snap|shot|key|type|click|move|ini) scripts/travel-step.sh "$OUT" "$kind" "$arg" ;;
     actors) scripts/travel-step.sh "$OUT" actors "${arg%%:*}" "${arg#*:}" ;;
     wait) sleep "$arg" ;;
     *) echo "unknown step $step" >&2 ;;

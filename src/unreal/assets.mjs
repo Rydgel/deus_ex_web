@@ -1,9 +1,13 @@
 import { parsePackage } from './package.mjs';
 import { objectAt } from './objects.mjs';
+import { layerConfigFiles } from '../runtime/config-store.mjs';
 
 /** Lazy package loading shared by browser File objects and local Node tools. */
 export class AssetStore {
-  constructor(files) {
+  /** `configStore` (config-store.mjs): the player's kept DeusEx.ini and User.ini, read over the installed ones and written back by
+   * GConfig's Flush (docs/config-persistence.md). Without one the config files are the installed ones. */
+  constructor(files, { configStore = null } = {}) {
+    this.configStore = configStore;
     // Preserve the supplied filesystem catalog for native file-enumeration
     // services. Package lookup alone discards non-package files such as DMP.
     this.sourceFiles = [];
@@ -12,13 +16,14 @@ export class AssetStore {
     // Packages whose load has finished, for synchronous callers (loaded()).
     this.ready = new Map();
     this.configFiles = [];
+    const iniFiles = [];
     // Installed native libraries by lowercase leaf name (System/*.dll), for
     // UPackage::BindPackage's appGetDllHandle. Only names are needed.
     this.libraries = new Set();
     for (const file of files) {
       this.sourceFiles.push(file);
       const leaf = file.path.replaceAll('\\', '/').split('/').pop();
-      if (/\.ini$/i.test(leaf)) this.configFiles.push(file);
+      if (/\.ini$/i.test(leaf)) iniFiles.push(file);
       if (/\.dll$/i.test(leaf)) this.libraries.add(leaf.toLowerCase());
       if (!/\.(u|utx|dx|unr|uax|umx)$/i.test(leaf)) continue;
       const name = leaf.replace(/\.[^.]+$/, '');
@@ -26,6 +31,8 @@ export class AssetStore {
       if (this.files.has(key)) throw new Error(`Ambiguous package name: ${name}`);
       this.files.set(key, { ...file, name });
     }
+    // The config files as the original reads them: the first-run copy of a missing file, the player's kept file over the installed one.
+    this.configFiles = layerConfigFiles(iniFiles, configStore);
   }
 
   async get(name) {
