@@ -51,7 +51,18 @@ const SCENARIOS = {
   G: { title: 'retromaggedon Save0035 (GOTY Area 51 Final), loaded from Training Combat', capture: 'w1', label: 'w-retro35', slotDir: `${INTERNET}/retromaggedon/files/Save0035`, index: 203,
     from: '00_TrainingCombat', leave: '00_TrainingCombat', freezeBefore: true },
 };
-const wanted = only ? [only] : Object.keys(SCENARIOS);
+// Each scenario opens two level sessions: one process per scenario keeps the heap of each bounded.
+if (!only) {
+  const { spawnSync } = await import('node:child_process');
+  let failed = 0;
+  for (const id of Object.keys(SCENARIOS)) {
+    const run = spawnSync(process.execPath, [new URL(import.meta.url).pathname, '--only', id], { stdio: 'inherit' });
+    if (run.status !== 0) failed++;
+  }
+  console.log(failed ? `FAIL validate-load-game: ${failed} of ${Object.keys(SCENARIOS).length} scenarios failed` : 'PASS validate-load-game: every scenario');
+  process.exit(failed ? 1 : 0);
+}
+const wanted = [only];
 const files = [];
 for (const directory of ['Maps', 'System', 'Textures', 'Sounds', 'Music'])
   for (const name of await readdir(`${root}/${directory}`)) files.push({ path: `${directory}/${name}`, read: () => readFile(`${root}/${directory}/${name}`) });
@@ -126,6 +137,8 @@ async function scenario(id) {
   console.log(`log: ${gotLog.length} modelled lines${gotLog.join('\n') === wantLog.join('\n') ? ' in the original\'s order' : ' (DIFFER)'}`);
   check(!log.some(line => /^Log: (Game class is|Bringing Level)|InitGame|Base Mutator/.test(line)), `${id}: the loaded level ran a begin-play line`);
   check(d.actors().filter(a => d.isA(a, 'engine.playerpawn')).length === 1, `${id}: not exactly one player pawn in the loaded level`);
+  // `bCheatsEnabled` is not a saved property (the save branch measured the original's file): a loaded player has the cheats off, whatever the SaveInfo says
+  check(!d.read(p, 'bCheatsEnabled'), `${id}: the loaded player has bCheatsEnabled on`);
   // 2. flags
   const flags = [...(d.read(p, 'FlagBase')?.entries?.values() ?? [])].map(e => `${e.name}|${e.type}|${e.expiration}|${e.value | 0}`).sort();
   const wantFlags = originalFlags(await readFile(`${cap}${spec.label}-loaded.flags.txt`, 'utf8'));
