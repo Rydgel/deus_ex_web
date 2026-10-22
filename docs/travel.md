@@ -278,6 +278,8 @@ What the Load Game and Save Game screens *read* of this directory, the `GameDire
 #### The `.dxs`: a saved level's package
 
 Decoded 2026-10-22 from the files of `.work/travel/dxs` (`00_training`, `00_TrainingCombat`, `island-left`) and `rt1/*.Current` (the Island and HQ, saved with play behind them: 8 files in all), and read again by `scripts/validate-level-save.mjs`.
+The same validator reads the 120 level files of 41 real desktop save slots downloaded from the internet (`.work/internet-saves`, outside Git, sources in its `SOURCES.md`: one 2002-03 playthrough of
+every mission from Liberty Island to Area 51, and two GOTY 1.112fm slots): their `Model`, `Polys`, `LevelSummary` and AI event payloads write back to their own bytes too (2026-10-22, 128 files in all).
 A file is a normal version-68 package (`parsePackage`; magic `0x9e2a83c1`, 64-byte header: counts and offsets of the name, export and import tables, the GUID, one generation `{exports, names}`).
 
 * **Actors**: one export per entry of `Level.Actors` (the `Level`'s actor array holds each export's index), flags `0x2070001` (`RF_HasStack`): `[FStateFrame header][tagged properties]`. The header is `Node`, `StateNode` (compact object references), `ProbeMask` (two words),
