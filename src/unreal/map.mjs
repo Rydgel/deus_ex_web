@@ -14,6 +14,8 @@ export function decodeMap(bytes) {
       index: ref, name: object.entry.name, className: object.entry.className,
       properties: object.properties.map(({ data, ...property }) => ({ ...property, byteLength: data.length })),
       values: object.values, nativeBytes: object.reader.bytes.length - object.reader.offset,
+      // The saved FStateFrame (RF_HasStack exports): Node, StateNode, ProbeMask, LatentAction and the code offset (a saved level).
+      stack: object.stack,
     };
   });
   const triangles = triangulateModel(model);

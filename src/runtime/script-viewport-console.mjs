@@ -35,7 +35,10 @@ export async function attachLocalViewportConsole({runtime,assets,engine,viewport
     if(graph.slotOf(field.loadRecord,0x48)!==offset)throw new Error(`Console field offset changed: ${name}`);
     set(console,name,value);
   }
-  set(viewport,'Actor',player);
-  set(player,'Player',viewport);
+  // A saved level's pawn is not linked to the viewport until Login re-possesses it (SetPlayer): its Player is None, as it loads.
+  if(player){
+    set(viewport,'Actor',player);
+    set(player,'Player',viewport);
+  }
   return console;
 }

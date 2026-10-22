@@ -87,6 +87,22 @@ export class AiEventHost {
     this.levelInfo = levelInfo;
     this.active = true;
   }
+  /** A saved level's manager (ai-events-payload.mjs decodeAiEvents): `ai_load` of the decoded words, live for `levelInfo` from then on. */
+  load(levelInfo, words) {
+    this.init(levelInfo);
+    const at = this.vm.arena.alloc(words.length * 4);
+    new Uint32Array(this.vm.arena.memory.buffer, at, words.length).set(words);
+    const status = this.x.ai_load(at, words.length);
+    if (status) throw new Error(`The saved AI event manager does not load (status ${status})`);
+  }
+  /** The manager in `ai_load`'s words (UEventManager::Serialize's save), or null when it is not live. */
+  snapshot() {
+    if (!this.active) return null;
+    this.snapshotAt ??= this.vm.arena.alloc(4 << 20);
+    const n = this.x.ai_snapshot(this.snapshotAt, 1 << 20);
+    if (!n) throw new Error('The AI event manager is too large to snapshot');
+    return Uint32Array.from(new Uint32Array(this.vm.arena.memory.buffer, this.snapshotAt, n));
+  }
   /** Whether `actor` belongs to the level whose manager this is. */
   owns(actor) {
     return this.active && this.runtime.levelFor(actor)?.actors?.[0] === this.levelInfo;
