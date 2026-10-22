@@ -196,7 +196,7 @@ export async function createGame(map, asset, assets, { randomSeed = Math.floor(D
   doors.scriptRuntime=await createScriptDoors({assets,asset,movers:collision.movers,
     playerActor:player.collisionActor,playerScene,playerController:player,level:playerScene.level,callbacks:collision.doorCallbacks,rng:random,
     nativeHud:presentation,queries:collision.queries, zoneAt: p => zones[pointZone(map.model, p)] ?? zoneDefault, onLightingChanged,
-    musicLibrary,travel,saveDirectory,restore:savedPlayer?{...restore,player:savedPlayer}:null});
+    musicLibrary,travel,saveDirectory,modelIndex:map.level.model,restore:savedPlayer?{...restore,player:savedPlayer}:null});
   const levelTime=doors.scriptRuntime.runtime.namedReference(playerScene.level.actors[0],'TimeSeconds');
   // LoadMap 0x1038dc59: a saved level continues its clock, ULevel.TimeSeconds (a double) = LevelInfo.TimeSeconds (a float).
   if (savedPlayer) timeSeconds = levelTime.get();
@@ -313,7 +313,7 @@ export async function createGame(map, asset, assets, { randomSeed = Math.floor(D
   playerScene.level.travelInfo = new Map(travel?.arrival?.travelInfo ?? []);
   const travelStep = travel ? createTravelStep({ runtime: doors.scriptRuntime.runtime, level: playerScene.level,
     viewport: () => playerScene.level.engine.client.viewports[0], exporter: doors.scriptRuntime.travelExporter,
-    store: doors.scriptRuntime.saveStore, log: doors.scriptRuntime.logLine,
+    store: doors.scriptRuntime.saveStore, log: doors.scriptRuntime.logLine, levelSaver: doors.scriptRuntime.levelSaver,
     lastURL: new Furl(travel.lastURL ?? { map: asset.name, op: DEFAULT_PLAYER_OPTIONS.map(([name, value]) => `${name}=${value}`) }),
     levelUrlMap: () => travel.arrival?.map ?? asset.name }) : null;
   const game = {

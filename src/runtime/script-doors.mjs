@@ -46,6 +46,7 @@ import { hostSaveDirectory } from './save-directory.mjs';
 import { createTravelExporter, loadFlagClasses } from './travel-export.mjs';
 import { createTravelImporter } from './travel-import.mjs';
 import { decodeAiEvents } from './ai-events-payload.mjs';
+import { createLevelSaver } from './travel-save.mjs';
 import { handleOf } from './script-object-handles.mjs';
 
 const f = Math.fround;
@@ -442,7 +443,7 @@ function stateLabelForTarget(mover) {
  */
 export async function createScriptDoors({
   assets, asset, movers = [], playerActor, playerScene, playerController, level, callbacks = {}, rng, queries, zoneAt, onLightingChanged = null,
-  nativeHud = false, musicLibrary = null, travel = null, saveDirectory = null, restore = null,
+  nativeHud = false, musicLibrary = null, travel = null, saveDirectory = null, restore = null, modelIndex = null,
 } = {}) {
   if (!assets?.get) throw new TypeError('createScriptDoors requires an AssetStore');
   if (!level || typeof level !== 'object') throw new TypeError('createScriptDoors requires the linked Level object');
@@ -1933,6 +1934,8 @@ export async function createScriptDoors({
     level.tickTag = 0; level.deferredHead = null; level.inTick = 0;
     level.pendingDeleted = null;
     bumpBaseEpoch();
+    // The movers' host interpolation state follows their saved fields (a cold load seeds it from them in resetNpcs).
+    for (const actor of level.actors) { const record = actor && identities.get(actor); if (record && isMoverRecord(record)) seedMoverInterpolation(record); }
     applySavedStates();
     restoreAiEvents();
     runStartupEvent('PostPostBeginPlay');
@@ -1978,6 +1981,9 @@ export async function createScriptDoors({
 
     mover.target = 0; mover.active = false; mover.alpha = 0;
     mover.clientUpdate = 0;
+    // A saved level's mover keeps the replication fields it was saved with, which are the class defaults unless the file holds them: the
+    // cold load derives them from Location (the begin-play pass it skips).
+    if (restore) { mover.physics = values.Physics ?? mover.physics ?? 0; return; }
     mover.realPosition = vector(values.RealPosition ?? values.Location);
     mover.realRotation = vector(values.RealRotation ?? values.Rotation, true);
     mover.simOldPosition = vector(values.SimOldPos ?? values.Location);
@@ -2292,6 +2298,9 @@ export async function createScriptDoors({
   // A session that travels (Play, the travel validators) runs ClientTravel and DeleteSaveGameFiles as recovered; others keep their named stops.
   const saveStore=travel?createSaveStore({directory:saveDirectory??hostSaveDirectory(),releaseLoaders:()=>logLine('Log',`Unloading: Package ${asset.name}`)}):null;
   if(travel)installTravelNatives({runtime,store:saveStore});
+  // PruneTravelActors and SaveCurrentLevel(-2) for the tick's travel step (travel-save.mjs).
+  const levelSaver=travel?createLevelSaver({runtime,level,asset,store:saveStore,log:logLine,viewport:()=>level.engine.client.viewports[0],
+    modelIndex,arrival,restoredObjects}):null;
   runtime.actorLifecycle.bindCollisionView=(actor,cls,lineage)=>{
     if(!loggingIn||!lineage.includes('engine.playerpawn'))return false;
     const fields=classFields(cls).filter(field=>!field.key.startsWith('core.object.')),snapshot=new Map(fields.map(field=>[field.key,runtime.fieldReference(actor,field).get()]));
@@ -2402,7 +2411,7 @@ export async function createScriptDoors({
     npcPawns, npcFailures, scriptPreparationFailures, loadMapStartupExclusions,
     get lastTickDelta(){return lastTickDelta;},
     infoLinkShell,get playerStartup(){return playerStartup;},windowHost,playerLogs,dataLinkPresentation:liveDataLink.presentation,dataLinkActive:liveDataLink.active,
-    dataLinkReceivedItems:liveDataLink.receivedItems,faceConversations,liveConPlay,liveMission,engineLog,logLine,saveStore,arrival,get travelExporter(){return travelExporter;} };
+    dataLinkReceivedItems:liveDataLink.receivedItems,faceConversations,liveConPlay,liveMission,engineLog,logLine,saveStore,levelSaver,arrival,get travelExporter(){return travelExporter;} };
 }
 
 export default createScriptDoors;

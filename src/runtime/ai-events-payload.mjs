@@ -89,3 +89,82 @@ export function decodeAiEvents(pkg, bytes, managerIndex, { nameId, actorWord }) 
   }
   return { words: Uint32Array.from(words.map(word => word >>> 0)), types, senders, receivers };
 }
+
+/** `ai_snapshot`'s words as a structure: types in bucket order with their senders and receivers, events named by ordinal. */
+export function parseAiWords(words) {
+  let at = 0;
+  const next = () => words[at++];
+  const manager = { currentSlot: next(), refProcessing: next() | 0, deleteCount: next() | 0, first: next(), types: [] };
+  const typeCount = next();
+  const senders = [], receivers = [];
+  for (let t = 0; t < typeCount; t++) {
+    const type = { bucket: next(), name: next(), hash: next(), senders: [], receivers: [] };
+    const nSenders = next(), nReceivers = next();
+    for (let s = 0; s < nSenders; s++) {
+      const sender = { type, actor: next(), destroyed: next() | 0, settings: [] };
+      for (let i = 0; i < SETTINGS_WORDS; i++) sender.settings.push(next());
+      type.senders.push(sender); senders.push(sender);
+    }
+    for (let r = 0; r < nReceivers; r++) {
+      const receiver = { type, actor: next(), destroyed: next() | 0, callback: next(), scoreCallback: next(), invoke: next() | 0, state: next() & 255,
+        checks: [next() | 0, next() | 0, next() | 0, next() | 0], on: next() | 0, bestScore: next(), bestSender: next(), nextSlot: next() | 0,
+        nextProcess: next(), prevProcess: next() };
+      type.receivers.push(receiver); receivers.push(receiver);
+    }
+    manager.types.push(type);
+  }
+  if (at !== words.length) throw new Error(`The AI event snapshot has ${words.length - at} unread words`);
+  return { manager, senders, receivers };
+}
+
+/**
+ * The payloads of the manager and its events (the write side of decodeAiEvents).
+ * @param parsed        parseAiWords()
+ * @param positions     {manager, types: [..], senders: [..], receivers: [..]}: each object's export position
+ * @param levelPosition the Level export's position
+ * @param context       {nameIndex(text), spelling(id)}
+ * @param actorRef      (handle word) => export position of the actor, 0 for none
+ * @returns {{manager: (w)=>void, types: [(w)=>void], senders: [...], receivers: [...]}}
+ */
+export function encodeAiEvents(parsed, positions, levelPosition, { nameIndex, spelling, actorRef }) {
+  const { manager, senders, receivers } = parsed;
+  const typeOf = new Map(manager.types.map((type, i) => [type, i]));
+  const none = w => w.compact(nameIndex('None'));
+  const senderIndex = new Map(senders.map((s, i) => [s, i])), receiverIndex = new Map(receivers.map((r, i) => [r, i]));
+  const bucketHeads = new Array(256).fill(0), nextType = new Map();
+  const lastOfBucket = new Map();
+  manager.types.forEach((type, i) => {
+    if (!lastOfBucket.has(type.bucket)) bucketHeads[type.bucket] = positions.types[i]; else nextType.set(lastOfBucket.get(type.bucket), positions.types[i]);
+    lastOfBucket.set(type.bucket, i);
+  });
+  const ord = (list, ordinal) => ordinal ? positions[list][ordinal - 1] : 0;
+  return {
+    manager: w => {
+      none(w); w.compact(levelPosition); w.i32(manager.refProcessing); w.i32(manager.deleteCount); w.u32(manager.currentSlot);
+      w.compact(ord('receivers', manager.first));
+      for (const head of bucketHeads) w.compact(head);
+    },
+    types: manager.types.map((type, i) => w => {
+      none(w); w.compact(nameIndex(spelling(type.name))); w.u32(type.hash);
+      w.compact(type.senders.length ? positions.senders[senderIndex.get(type.senders[0])] : 0);
+      w.compact(type.receivers.length ? positions.receivers[receiverIndex.get(type.receivers[0])] : 0);
+      w.compact(nextType.get(i) ?? 0);
+    }),
+    senders: senders.map(sender => w => {
+      none(w); w.compact(positions.types[typeOf.get(sender.type)]); w.compact(actorRef(sender.actor)); w.i32(sender.destroyed);
+      const list = sender.type.senders, at = list.indexOf(sender);
+      w.compact(at + 1 < list.length ? positions.senders[senderIndex.get(list[at + 1])] : 0);
+      for (const word of sender.settings) w.u32(word);
+    }),
+    receivers: receivers.map(receiver => w => {
+      none(w); w.compact(positions.types[typeOf.get(receiver.type)]); w.compact(actorRef(receiver.actor)); w.i32(receiver.destroyed);
+      const list = receiver.type.receivers, at = list.indexOf(receiver);
+      w.compact(at + 1 < list.length ? positions.receivers[receiverIndex.get(list[at + 1])] : 0);
+      w.compact(nameIndex(spelling(receiver.callback))); w.compact(nameIndex(spelling(receiver.scoreCallback)));
+      w.i32(receiver.invoke); w.u8(receiver.state);
+      for (const check of receiver.checks) w.i32(check);
+      w.i32(receiver.on); w.u32(receiver.bestScore); w.compact(ord('senders', receiver.bestSender)); w.i32(receiver.nextSlot);
+      w.compact(ord('receivers', receiver.nextProcess)); w.compact(ord('receivers', receiver.prevProcess));
+    }),
+  };
+}

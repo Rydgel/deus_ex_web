@@ -52,9 +52,11 @@ export function createSaveStore({ directory = hostSaveDirectory(), releaseLoader
     has: name => directory.hasFile(DIRECTORY, name),
     read: name => directory.readFile(DIRECTORY, name),
     write(name, bytes) { directory.writeFile(DIRECTORY, name, bytes); },
+    /** The level package's loaders are released the first time the level's files are written or deleted (`Unloading: Package <level>`). */
+    releaseLoaders() { if (!released) { released = true; releaseLoaders(); } },
     /** DeleteSaveGameFiles(""): returns the names removed. */
     deleteCurrent() {
-      if (!released) { released = true; releaseLoaders(); }
+      this.releaseLoaders();
       return directory.clearDirectory(DIRECTORY);
     },
   };
