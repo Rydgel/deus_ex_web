@@ -169,6 +169,8 @@ export function createTravelImporter({ runtime, assets, level, exporter, log, pr
   function importValue(entry, property, text) {
     const kind = { BoolProperty: 'bool', IntProperty: 'int', ByteProperty: 'byte', FloatProperty: 'float', NameProperty: 'name', StrProperty: 'string' }[property.kind];
     if (kind) {
+      // pass 2 turns every `\` of the stored value back into a newline before ImportText (the exporter's replacement; docs/travel.md "Play, step 4")
+      if (kind === 'string') text = text.replaceAll('\\', '\n');
       const result = importText(kind, text, { enumNames: exporter.enumNamesOf(property.property) });
       if (!result || result.value === undefined) throw new TravelTextError(`SpawnPlayActor: ${property.name}=${JSON.stringify(text)} is not a ${kind}`);
       return result.value;

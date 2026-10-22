@@ -42,7 +42,7 @@ test('a rebound key, a resolution and the options survive a reload, and New Game
   await step(page, { op: 'action', action: 1 });
   expect((await probe(page, { op: 'console', command: 'KEYBINDING G' })).result).toBe('ParseRightClick');
 
-  // a resolution: SetRes fixes the drawing buffer and saves the viewport the page is in (fullscreen after the click)
+  // a resolution: SetRes fixes the drawing buffer and saves the viewport the page is in (windowed: the click takes only the pointer)
   const before = await buffer(page);
   await step(page, { op: 'console', command: 'SetRes 800x600' });
   await frames(page, 12);
@@ -85,7 +85,7 @@ test('a rebound key, a resolution and the options survive a reload, and New Game
   await page.reload();
   await ready(page, 'DX');
   expect(await storage(page)).toMatchObject({ state: 'on' });
-  expect(await buffer(page)).toEqual([800, 600]);                         // the saved FullscreenViewportX/Y, at the first frame
+  expect(await buffer(page)).toEqual([800, 600]);                         // the saved WindowedViewportX/Y (the page starts windowed), at the first frame
   const box = await page.locator('#scene').boundingBox();
   await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2);
   await page.waitForTimeout(500);

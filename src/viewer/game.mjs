@@ -25,6 +25,7 @@ import { isMovingLightCandidate } from '../runtime/dynamic-lighting.mjs';
 import { loadTraceKernel } from '../runtime/trace-kernel.mjs';
 import { lightGlobals } from '../runtime/light-globals.mjs';
 import { createTravelStep } from '../runtime/travel.mjs';
+import { readSavedTravelInfo } from '../runtime/level-travel-info.mjs';
 import { deliverSaveSnapshot, pendingSaveSnapshots } from '../runtime/game-save.mjs';
 import { Furl, DEFAULT_PLAYER_OPTIONS } from '../runtime/furl.mjs';
 
@@ -66,12 +67,16 @@ export async function createGame(map, asset, assets, { randomSeed = Math.floor(D
     const v = actor.values;
     actor.owner = actors.get(v.Owner) ?? null;
     if (!v.Location) continue;
-    if (!v.bCollideActors) {
+    // A mover whose bCollideActors is clear (a saved level's destroyed door or
+    // fan: DeusExMover.BlowItUp's SetCollision(False,...)) is still a moving
+    // brush: its MoveActor takes the brush route (docs/rotating-brushes.md),
+    // only the hash registration is skipped.
+    const clearMover = !v.bCollideActors && v.bIsMover && v.Brush > 0;
+    if (!v.bCollideActors && !clearMover) {
       // Every AActor has the +0x1dc collision word; bCollideActors only
       // decides hash registration. A non-colliding export (a hidden pawn or
       // button a script later reveals with SetCollision) gets the same native
-      // host surface, outside the hash. Brushes keep the mover route.
-      if (v.bIsMover && v.Brush > 0) continue;
+      // host surface, outside the hash.
       actor.lineage = await defaults.lineage(asset, asset.pkg.exports[actor.index - 1].classIndex);
       actor.actorFlags = (v.bStatic ? 1 : 0) | (v.bDeleteMe ? 0x80 : 0) |
         (v.bCollideWhenPlacing ? 0x20000 : 0) | (v.bMovable ? 0x80000 : 0);
@@ -83,7 +88,7 @@ export async function createGame(map, asset, assets, { randomSeed = Math.floor(D
       continue;
     }
     actor.lineage = await defaults.lineage(asset, asset.pkg.exports[actor.index - 1].classIndex);
-    actor.collisionBits = 1 | (v.bBlockActors ? 4 : 0) | (v.bBlockPlayers ? 8 : 0) | (v.bProjTarget ? 16 : 0);
+    actor.collisionBits = (clearMover ? 0 : 1) | (v.bBlockActors ? 4 : 0) | (v.bBlockPlayers ? 8 : 0) | (v.bProjTarget ? 16 : 0);
     actor.flags = actor.collisionBits | (v.bCollideWorld ? 2 : 0);
     actor.actorFlags = (v.bStatic ? 1 : 0) | (v.bDeleteMe ? 0x80 : 0) |
       (v.bCollideWhenPlacing ? 0x20000 : 0) | (v.bMovable ? 0x80000 : 0);
@@ -91,7 +96,7 @@ export async function createGame(map, asset, assets, { randomSeed = Math.floor(D
     actor.projectile = actor.lineage.includes('engine.projectile');
     actor.base = actors.get(v.Base) ?? null; bumpBaseEpoch();
     actor.blocking = Boolean(v.bBlockPlayers);
-    collidable.push(actor);
+    (clearMover ? nonColliding : collidable).push(actor);
     if (v.bIsMover && v.Brush > 0) {
       const matrix = brushMatrix(v), normal = new Matrix3().getNormalMatrix(matrix);
       const transform = p => fromView(new Vector3(...toView(p)).applyMatrix4(matrix).toArray());
@@ -121,7 +126,7 @@ export async function createGame(map, asset, assets, { randomSeed = Math.floor(D
   const playerStart = savedPlayer ?? start;
   const checkBob = compileFunction(readFunction(engine, engine.exportsByPath.get('playerpawn.checkbob')));
   const startYaw = ((savedPlayer ? savedPlayer.values.ViewRotation : start.values.Rotation)?.[1] ?? 0) * Math.PI / 32768;
-  const player = new Player(collision, playerDefaults, playerStart.values.Location, p => zones[pointZone(map.model, p)] ?? zoneDefault, checkBob, startYaw);
+  const player = new Player(collision, playerDefaults, playerStart.values.Location, p => zones[pointZone(map.model, p)] ?? zoneDefault, checkBob, startYaw, Boolean(savedPlayer));
   if (savedPlayer) {
     // The saved pawn's export is the player's identity: the movement port binds it with its saved values, and every reference in the file
     // to the pawn resolves to it.
@@ -313,12 +318,18 @@ export async function createGame(map, asset, assets, { randomSeed = Math.floor(D
   // Map travel (docs/travel.md): a session created with `travel` runs ClientTravel as recovered and the tick's travel step browses to the
   // next level; one without keeps the named stop (ClientTravelBoundary). `travel.arrival` is the travel that brought the player here,
   // `travel.lastURL` the engine's LastURL (docs/travel.md "Unresolved" 7).
-  playerScene.level.travelInfo = new Map(travel?.arrival?.travelInfo ?? []);
+  // LoadMap(URL, NULL, ...) of a loaded game keeps the TravelInfo the saved level holds (docs/travel.md "Load game, restart and URL forms"); a travel passes its own.
+  playerScene.level.travelInfo = new Map(restore && travel?.arrival?.loadgame ? readSavedTravelInfo(map.pkg, map.level) : travel?.arrival?.travelInfo ?? []);
   const travelStep = travel ? createTravelStep({ runtime: doors.scriptRuntime.runtime, level: playerScene.level,
     viewport: () => playerScene.level.engine.client.viewports[0], exporter: doors.scriptRuntime.travelExporter,
     store: doors.scriptRuntime.saveStore, log: doors.scriptRuntime.logLine, levelSaver: doors.scriptRuntime.levelSaver,
-    lastURL: new Furl(travel.lastURL ?? { map: asset.name, op: DEFAULT_PLAYER_OPTIONS.map(([name, value]) => `${name}=${value}`) }),
-    levelUrlMap: () => travel.arrival?.map ?? asset.name }) : null;
+    // A loaded game's LastURL is GLevel->URL, and a `load` option keeps the URL the file holds (measured: URL.Map 01_NYC_UNATCOIsland, Op Name=, Class=), not the
+    // LoadMap path with `loadonly` and `loadgame`: a later OPEN (the death's `OPEN DXONLY`) inherits the file's options. The file's protocol and port are the
+    // game's own (`deusex`, 7790), which Play's Furl defaults stand for.
+    lastURL: new Furl(restore && travel.arrival?.loadgame
+      ? { map: map.level.url.map, portal: map.level.url.portal, op: map.level.url.options }
+      : travel.lastURL ?? { map: asset.name, op: DEFAULT_PLAYER_OPTIONS.map(([name, value]) => `${name}=${value}`) }),
+    levelUrlMap: () => travel.arrival?.map ?? asset.name, packageName: () => asset.name }) : null;
   const game = {
     takeAudioMs() { const ms = audioMs; audioMs = 0; return ms; },
     player, doors, collision, notes, start, interaction, random, hud,

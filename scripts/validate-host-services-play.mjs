@@ -6,8 +6,8 @@
  *
  * 1. Holding the scroll-down arrow (an XButtonWindow with auto-repeat: its tick reads the pointer and activates the button again every
  *    repeat) scrolls the key list by several steps over 2 seconds, where a quick click scrolls it by one.
- * 2. The Full-Screen choice takes the page out of fullscreen (the first click of the default start took it in) and the next press back in,
- *    as Alt+Enter does; the pointer lock follows.
+ * 2. The Full-Screen choice takes the page into fullscreen (the default start is windowed: its first click takes only the pointer) and the
+ *    next press out again, as Alt+Enter does; the pointer lock follows.
  * 3. The Render Device choice raises its prompt; its Yes sends RELAUNCH -changevideo, which the page announces as a cancelable
  *    'deusex-relaunch' event (the first time the check cancels it); left alone, the event is followed by a reload of the page.
  * No runtime error may occur. Needs the installed game and Chromium (Playwright). */
@@ -114,15 +114,15 @@ try {
     return win;
   };
   const before = await state();
-  assert.equal(before.fullscreen, 'app', 'the first click of the default start took fullscreen');
-  await click(...center(await choice('fullscreen')));
-  await page.waitForFunction(() => !document.fullscreenElement, null, { timeout: 5000 });
-  await frames(10);
-  assert.deepEqual(await state(), { fullscreen: null, lock: null }, 'Toggle Full-Screen Mode leaves fullscreen and gives the pointer back');
+  assert.equal(before.fullscreen, null, 'the default start is windowed: its first click took only the pointer');
   await click(...center(await choice('fullscreen')));
   await page.waitForFunction(() => document.fullscreenElement?.id === 'app', null, { timeout: 5000 });
   await frames(10);
-  assert.equal((await state()).fullscreen, 'app', 'and the next press takes it again');
+  assert.equal((await state()).fullscreen, 'app', 'Toggle Full-Screen Mode takes fullscreen');
+  await click(...center(await choice('fullscreen')));
+  await page.waitForFunction(() => !document.fullscreenElement, null, { timeout: 5000 });
+  await frames(10);
+  assert.deepEqual(await state(), { fullscreen: null, lock: null }, 'and the next press leaves it and gives the pointer back');
   await noError('toggle fullscreen');
 
   assert.deepEqual(await page.evaluate(() => window.__relaunches), [], 'no relaunch yet');

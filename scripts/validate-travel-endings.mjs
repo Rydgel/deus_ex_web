@@ -19,11 +19,11 @@
  * and window-host log lines (modelled in their own validators), ScriptWarning lines.
  *
  * Scenarios: P (Play Intro, Escape, DXOnly, Credits), N (the intro's own end), C (Credits to their end), E1 E2 E3 (the endings), T1 T2 T3 (the conversations' length at the capture's frame
- * time), M1 M2 M3 (the endgame MapExits as their triggers fire them), W (the ending with bQuotesEnabled), X (Escape in the Endgame1 conversation), Q (the Quotes window).
+ * time), M1 M2 M3 (the endgame MapExits as their triggers fire them), W (the ending with bQuotesEnabled), L (the ending from the played slot Save0040 loaded in Play), X (Escape in the Endgame1 conversation), Q (the Quotes window).
  *
  * runner-timeout: 2400
  *
- *   node scripts/validate-travel-endings.mjs [--only P|N|C|E1|E2|E3|T1|T2|T3|M1|M2|M3|W|X|Q] */
+ *   node scripts/validate-travel-endings.mjs [--only P|N|C|E1|E2|E3|T1|T2|T3|M1|M2|M3|W|L|X|Q] */
 import assert from 'node:assert/strict';
 import { readdir, readFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
@@ -34,6 +34,8 @@ import { openSession } from './census-stage5-session.mjs';
 import { createMenuDriver } from '../src/viewer/menu-driver.mjs';
 import { viewProbe } from '../src/viewer/view-probe.mjs';
 import { travelTextOfDump, firstTravelTextDifference, parseTravelText } from '../src/runtime/travel-text.mjs';
+import { createSaveDirectory } from '../src/runtime/save-directory.mjs';
+import { parseSaveInfo } from '../src/runtime/save-info.mjs';
 
 const option = (name, fallback) => { const i = process.argv.indexOf(`--${name}`); return i < 0 ? fallback : process.argv[i + 1]; };
 const only = option('only', null);
@@ -41,7 +43,7 @@ if (!only) {
   const { spawnSync } = await import('node:child_process');
   const argv = process.argv.slice(2);
   let status = 0;
-  for (const id of ['P', 'N', 'C', 'E1', 'E2', 'E3', 'T1', 'T2', 'T3', 'M1', 'M2', 'M3', 'W', 'X', 'Q']) {
+  for (const id of ['P', 'N', 'C', 'E1', 'E2', 'E3', 'T1', 'T2', 'T3', 'M1', 'M2', 'M3', 'W', 'L', 'X', 'Q']) {
     const run = spawnSync(process.execPath, [process.argv[1], '--only', id, ...argv], { stdio: 'inherit' });
     if (run.status !== 0) status = run.status ?? 1;
   }
@@ -50,7 +52,7 @@ if (!only) {
 let root;
 try { root = gameDirectory(); } catch { console.log('SKIP validate-travel-endings: no installed game data'); process.exit(0); }
 const captureRoot = new URL('../.work/travel/', import.meta.url).pathname;
-const CAPTURED = { P: 'ep2', N: 'ep1', C: 'ep1', E1: 'ep3', E2: 'ep4', E3: 'ep5', T1: 'ep3', T2: 'ep4', T3: 'ep5', M1: 'ep3', M2: 'ep4', M3: 'ep5', W: 'ep11', X: 'ep7', Q: 'ep5' };
+const CAPTURED = { P: 'ep2', N: 'ep1', C: 'ep1', E1: 'ep3', E2: 'ep4', E3: 'ep5', T1: 'ep3', T2: 'ep4', T3: 'ep5', M1: 'ep3', M2: 'ep4', M3: 'ep5', W: 'ep11', L: 'ep10', X: 'ep7', Q: 'ep5' };
 if (!existsSync(`${captureRoot}${CAPTURED[only]}/final.log`)) { console.log(`SKIP validate-travel-endings ${only}: the measured captures are not in .work/travel/${CAPTURED[only]} (outside Git)`); process.exit(0); }
 
 const files = [];
@@ -317,7 +319,7 @@ if (only === 'T3') await timing({ id: 'T3', from: '15_Area51_Page', target: '99_
 /** The endgame MapExits fired as their triggers fire them: `Actor.Trigger(Other, Instigator)` on the `MapExit` (the Dispatcher of the reactor sequence, the FlagTrigger on
  * HeliosFree and Mission15.Timer's `A.Trigger(Self, None)` all call it): MapExit.Trigger -> LoadMap -> ClearWindowStack, SendPlayer(Player, DestMap) with DestMap spelled
  * as the map has it ('99_Endgame1', '99_Endgame2', '99_endgame3'). The text is the one `LocalTravel` exported (the same ClientTravel). The original was not driven
- * through these triggers (docs/travel.md Unresolved 19). */
+ * through these triggers (docs/travel.md Unresolved 23). */
 async function mapExit({ id, from, destMap, dir, arrivalText }) {
   const c = await openCold(from);
   c.frames(120);
@@ -386,6 +388,45 @@ if (only === 'W') {
   const dx = await arrive(request2.map, request2);
   dx.frames(120);
   await compareFlags('dxonly arrival', 'ep11', 'q-dxonly', dx);
+}
+
+if (only === 'L') {
+  // The ending from a played game: the internet slot nicouzouf Save0040 (15_Area51_final, 285 flags, a full inventory) loaded in Play (travel step 4: LoadGame 40 from the logo
+  // map, as ep10 typed it), `LocalTravel 99_Endgame1`, the credits, a click, DXOnly. The texts (719 classes for the endgame, 355 for DXOnly), the flags and the log are ep10's.
+  const slotDir = [process.env.DX_INTERNET_SAVES ?? '/home/rydgel/projects/deus_ex_web/.work/internet-saves', new URL('../.work/slots', import.meta.url).pathname]
+    .map(dir => [`${dir}/nicouzouf/files/Deus Ex/Save0040`, `${dir}/Save0040`]).flat().find(dir => existsSync(`${dir}/SaveInfo.dxs`));
+  if (!slotDir) { console.log('SKIP validate-travel-endings L: the slot nicouzouf Save0040 is not here (.work/internet-saves, outside Git)'); process.exit(0); }
+  const entries = [];
+  for (const file of await readdir(slotDir)) entries.push({ name: file, bytes: new Uint8Array(await readFile(`${slotDir}/${file}`)) });
+  const info = entries.find(entry => entry.name === 'SaveInfo.dxs');
+  const directory = createSaveDirectory({ saves: [{ directory: 'Save0040', files: entries, info: parseSaveInfo(info.bytes) }] });
+  const { c } = await openSession('DX', assets, { travel: {}, saveDirectory: directory });
+  c.frames(60);
+  c.exec('LoadGame 40'); c.frames(2);
+  const load = c.takeTravel();
+  if (!check(load?.url?.endsWith('.dxs?load?loadonly?loadgame?Name=Player?Class=DeusEx.JCDentonMale'), `LoadGame 40 requested ${load?.url}`)) finish();
+  const final = (await openSession(load.map, assets, { travel: { arrival: load, lastURL: load.lastURL }, saveDirectory: directory })).c;
+  final.frames(120);
+  check(Boolean(final.read(final.player(), 'FlagBase')?.getBool('MS_TongAppeared')), 'the loaded player carries the slot\'s flags');
+  typed(final, 'LocalTravel 99_Endgame1'); final.frames(5);
+  const request = final.takeTravel();
+  if (!check(request?.map === '99_Endgame1', `LocalTravel requested ${request?.map}`)) finish();
+  await compareText('99_Endgame1 (from the loaded Save0040)', 'ep10', 's1-a', request.travelInfo[0][1]);
+  const endgame = (await openSession(request.map, assets, { travel: { arrival: request, lastURL: request.lastURL }, saveDirectory: directory })).c;
+  const driver = createMenuDriver(endgame.game);
+  let credits = null;
+  for (let t = 0; t < 240 && credits === null; t++) { endgame.frames(60); if (driver.top() === 'deusex.creditswindow') credits = t; }
+  check(credits !== null, 'the credits never opened');
+  endgame.frames(60 * 8);
+  click(endgame); endgame.frames(5);
+  const request2 = endgame.takeTravel();
+  if (!check(request2?.map === 'dxonly', `the click on the credits requested ${request2?.map}`)) finish();
+  await compareText('dxonly (after the loaded game\'s ending)', 'ep10', 's1-dxonly', request2.travelInfo[0][1]);
+  const dx = await arrive(request2.map, request2);
+  dx.frames(120);
+  await compareFlags('dxonly arrival', 'ep10', 's1-dxonly', dx);
+  const log = playLog(final.game.doors.scriptRuntime.engineLog, [endgame.game.doors.scriptRuntime.engineLog, dx.game.doors.scriptRuntime.engineLog], /Initialized moving brush tracker for Level dxonly\.MyLevel/);
+  compareLog('the loaded game\'s ending from the Export travel to the dxonly arrival', log, await measuredLog('ep10', /^Log: Browse: 99_Endgame1/i, /Initialized moving brush tracker for Level dxonly\.MyLevel/));
 }
 
 if (only === 'X') {

@@ -64,7 +64,7 @@ test('Esc, Save Game writes Save0001 into the browser; the Load Game screen list
   await page.goto(`${base}/`);
   await ready(page, 'DX');
   let box = await page.locator('#scene').boundingBox();
-  await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2);        // takes fullscreen and the pointer
+  await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2);        // takes the pointer
   await page.waitForTimeout(500);
   await page.keyboard.press('Escape');
   await expect.poll(async () => (await state(page)).menu).toBe('deusex.menumain');

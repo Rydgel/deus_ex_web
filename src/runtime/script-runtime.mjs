@@ -940,7 +940,7 @@ export class ScriptRuntime {
     const target = refValue(call.evaluateArgument(0));
     if (target === null || target === undefined) return undefined;
     const object = this.instance(target).nativeObject, services = this.actorLifecycle?.objectRelease;
-    if (!object || !services) throw new Error('CriticalDelete requires native object and release bindings');
+    if (!object || !services) throw new Error(`CriticalDelete requires native object and release bindings (${target?.name ?? '?'}, ${this.instance(target).cls?.record?.name ?? '?'})`);
     const release = {...services, conditionalDestroy: item => this.conditionalDestroy(item.identity), warning: this.warning};
     if (object.nativeVtable === TEXT_PARSER_NATIVE.vtable) releaseTextParserObject(object, 1, release);
     else if (object.nativeVtable === 0x10179dfc || object.nativeVtable === 0x100613e8) {
@@ -956,6 +956,11 @@ export class ScriptRuntime {
       // = DConHistory::Destroy 0x1000ca20 deleting every event from firstEvent, the three FString members, the DConObject vtable, ConditionalDestroy
       // again and ~UObject), then ??3UObject(this, 0x5c). The class member teardown only frees native storage the host does not have, which is what
       // deleteObject is (docs/script-loadmap-gc.md "ConHistory CriticalDelete"; the events own destructor 0x10014730 is the same shape).
+      this.deleteObject(target);
+    } else if (object.nativeVtable === 0x10027ad0 || object.nativeVtable === 0x10027b24) {
+      // DeusExLog (vtable 0x10027ad0, slot +0x0c = 0x1000dda0) and DataVaultImageNote (0x10027b24, 0x1000e0e0), flags 1: ~UDeusExLog 0x1000db40 / ~UDataVaultImageNote
+      // 0x1000de40 (the class vtable, ConditionalDestroy, the FString member's TArray<TCHAR> emptied and its storage freed, ~UObject), then ??3UObject(this, 0x38 / 0x44).
+      // The same shape as the history event's destructor above: the member teardown frees native storage the host does not have, which is what deleteObject is.
       this.deleteObject(target);
     } else if (object.nativeVtable === GAME_DIRECTORY.vtable) {
       // XGameDirectory (DeusEx vtable 0x10027e58, slot +0x0c = 0x10013260, flags 1): ~XGameDirectory 0x10012c30 (the vtable, ConditionalDestroy = XGameDirectory::Destroy
@@ -2787,7 +2792,7 @@ export class ScriptRuntime {
    * move its hash cylinder is made to follow Location. Pawns, brushes and
    * map exports without a collision surface keep the explicit boundary. */
   mapMoveLevel(actor,what) {
-    if(!isMapMoveHost(actor))throw new Error(`${what} for a pawn, brush or non-colliding map actor is not linked`);
+    if(!isMapMoveHost(actor))throw new Error(`${what} for a pawn, brush or non-colliding map actor is not linked (${actor?.name??'an actor'})`);
     const level=this.levelFor(actor);
     if(!level?.hash)throw new Error(`Map actor ${what} requires the level collision hash`);
     linkLiveCollision(level.hash,actor);

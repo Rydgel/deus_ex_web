@@ -5,14 +5,15 @@ import path from 'node:path';
 
 // The Load Game screen with the player's real saves (docs/save-storage.md "The folder flow"): copies of the two real saves of the Wine capture
 // (docs/save-directory.md) reach the default start by the page's own controls, and its Load Game screen lists them with the info and the snapshot picture the
-// original showed; Load Game stays a named stop.
+// original showed, and Load Game loads a slot from the picked folder (docs/travel.md "Play, step 4").
 //  1. a folder the player picks: here the origin private file system, a real FileSystemDirectoryHandle, handed to the page by the browser's picker call;
 //  2. an import of a Save folder into the browser's storage, and an export of it as a zip.
 // Chromium's new headless mode, the default worker mode. The saves are read from DX_SAVE_DIR (default the Wine prefix's Save folder) and never changed.
 test.use({ channel: 'chromium', headless: true, viewport: { width: 1280, height: 800 } });
 
 const base = process.env.DX_BASE_URL ?? 'http://127.0.0.1:5173';
-const SAVES = process.env.DX_SAVE_DIR ?? path.join(process.env.HOME ?? '', '.wine-deusex/drive_c/Deus Ex GOTY Edition/Save');
+// (the copy of the Wine prefix's two desktop slots kept in .work/real-saves: the prefix's own Save folder is rewritten by the capture sessions)
+const SAVES = process.env.DX_SAVE_DIR ?? new URL('../.work/real-saves', import.meta.url).pathname;
 const SLOTS = ['QuickSave', 'Save0001'];
 const files = [];
 for (const dir of SLOTS) for (const name of await readdir(path.join(SAVES, dir)).catch(() => [])) files.push({ path: `${dir}/${name}`, bytes: await readFile(path.join(SAVES, dir, name)) });
@@ -160,7 +161,7 @@ async function expectRealSaves(page, label) {
   await page.keyboard.press('ArrowUp'); await frames(page, 4);
 }
 
-test('a folder the player picks is the save directory: the default start lists its real saves with their pictures, and Load Game is a named stop', async ({ page }) => {
+test('a folder the player picks is the save directory: the default start lists its real saves with their pictures, and Load Game loads the slot from it', async ({ page }) => {
   const errors = []; page.on('pageerror', error => errors.push(error.message));
   await seedFolder(page);
   await page.goto(`${base}/`);
@@ -197,10 +198,11 @@ test('a folder the player picks is the save directory: the default start lists i
   expect((await state(page)).error).toBeNull();
   await expectRealSaves(page, 'folder');
 
-  // Load Game is not implemented (docs/travel.md order step 4): its button reaches LoadGame -> ClientTravel("?loadgame=1"), and the page stops there by name
+  // Load Game (docs/travel.md "Play, step 4"): its button reaches LoadGame -> ClientTravel("?loadgame=1"); the page reads the slot's files from the picked folder
+  // and the first row, Save0001 (UNATCO Training Course), loads: the saved level with the saved player
   await clickWindow(page, undefined, undefined, 'LOAD');
-  await expect.poll(async () => (await state(page)).error, { timeout: 15_000 }).toMatch(/loading a saved game is not implemented \(docs\/travel\.md order step 4\)/);
-  await expect(page.locator('#toast')).toContainText('?loadgame=1');
+  await ready(page, '00_training');
+  expect((await state(page)).error).toBeNull();
   // nothing was written to the player's folder
   expect(await folderSizes(page)).toEqual(Object.fromEntries(files.map(file => [file.path, file.bytes.length])));
   expect(errors).toEqual([]);

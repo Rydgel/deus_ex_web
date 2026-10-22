@@ -6,7 +6,7 @@ original's format, can sit in the file system outside the browser, and that real
 [configuration persistence](config-persistence.md). Nothing here writes into the player's game folder except through a folder the player picked for saves.
 
 State: the storage layer, the page's folder flow, the wiring into the simulation worker, the snapshot picture and (2026-10-22, [travel](travel.md) step 4's save side) **writing a save** are built and
-checked (below: "Writing a save"). Loading a slot is the other half of step 4: the Load Game screen lists and previews saves; its Load Game button is the load side's.
+checked (below: "Writing a save"). Loading a slot is the other half of step 4 and is built and checked ([travel](travel.md#play-step-4-loading-a-saved-game)): the Load Game screen lists and previews saves, and its Load Game button, the QuickLoad key and the menu after a death load them; the page reads the slot's files from this storage (`read()`, awaited) and hands them to the worker with the level's load.
 
 ## The contract
 
@@ -198,8 +198,8 @@ Both captures give the same level for each of the 97 palette indices the two pic
 * `browser-tests/save-folder.spec.mjs` (Chromium new headless, worker mode, the default start; `DX_BASE_URL` names the dev server, `DX_SAVE_DIR` the real saves, default the Wine prefix's Save folder, read and never changed):
   1. a folder picked through the Saves window (a real `FileSystemDirectoryHandle` from the origin private file system, answered by the picker call) with copies of the real saves in a `Deus Ex/System` + `Deus Ex/Save`
      tree: the status is `folder`, installed, 2 saves; the Load Game screen lists the two rows of the Wine capture, the info text of each, the Load/Delete sensitivity, and **each snapshot window read from the drawing buffer is the
-     real file's texture** (correlation above 0.97 with its own, below 0.9 with the other; every pixel one function of the palette index, as the Wine capture; the display ramp does not reverse); the Load Game button stops
-     by name (`DDeusExGameEngine::Browse loadgame: loading a saved game is not implemented (docs/travel.md order step 4)`, the toast names `?loadgame=1`); the folder's files are unchanged;
+     real file's texture** (correlation above 0.97 with its own, below 0.9 with the other; every pixel one function of the palette index, as the Wine capture; the display ramp does not reverse); the Load Game button loads the
+     first row, `Save0001`, read from the folder (the page reaches `00_training` with the saved player, no runtime error); the folder's files are unchanged;
   2. the same screen from saves imported (`webkitdirectory`) into the browser's storage, and the export's zip: every file at `Save/<slot>/<file>`, the bytes and CRC-32 of the files that went in;
   3. the dev endpoints' limits.
   Also: `browser-tests/original-start-load-game.spec.mjs` (now with `?saves=off`, the empty directory), `browser-tests/config-persistence.spec.mjs`, `validate-travel-play`, `validate-travel-newgame-play`.
@@ -215,7 +215,7 @@ Both captures give the same level for each of the 97 palette indices the two pic
   of a handle crashes the renderer; writing one works). So the later-visit path (stored handle, `queryPermission`, "Reconnect folder") runs against fakes only, and the picked-folder path runs with an origin-private-file-system
   handle, which is a real File System Access handle but not a folder on the player's disk. A headed Chromium with a real folder, Firefox and Safari were not run.
 * **The program-files block** of Chromium's picker is from memory of its source, not tested here.
-* **Loading** (`?loadgame=`, QuickLoad) is the load side of [travel](travel.md) step 4. Writing, `DeleteGame` (the Load Game screen's Delete button) and the snapshot of a new save are built and checked
+* **Loading** (`?loadgame=`, QuickLoad, the Load Game screen, the menu after a death) is in ([travel](travel.md#play-step-4-loading-a-saved-game); `browser-tests/load-game.spec.mjs` imports the real slots into the browser's storage and loads them; an unreadable file stops by name with the page's toast). Writing, `DeleteGame` (the Load Game screen's Delete button) and the snapshot of a new save are built and checked
   (`browser-tests/save-game.spec.mjs`), and the original under Wine loads the slots Play writes (files of headless Play sessions put into the prefix by hand). Not run: a folder written to by the page itself and read by the desktop game, a quota failure on a real disk and a save made with two tabs open.
 * `navigator.storage.persist()` is asked after the first save; a real browser's answer (a prompt in Firefox) was not observed.
 * The free space is the browser's estimate for every backend; a folder's volume is not asked.
