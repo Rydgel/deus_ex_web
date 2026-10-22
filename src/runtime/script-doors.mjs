@@ -1929,6 +1929,8 @@ export async function createScriptDoors({
       runtime.applyInitialProperties(identity, await prepareMapProperties(runtime, asset, identity, cls, actorByIndex));
       if (history) adoptHistoryObject(runtime, level, identity, cls, key === 'consys.conhistoryevent', entry);
       else if (key in NATIVE_SAVED_OBJECTS) adoptNativeObject(runtime, level, identity, cls, entry, NATIVE_SAVED_OBJECTS[key]);
+      // a script-only Object is a plain UObject (`new`, vtable 0x10179dfc: CriticalDelete runs ~UObject on it)
+      else if (PLAIN_SAVED_OBJECTS.has(key)) adoptNativeObject(runtime, level, identity, cls, entry, 0x10179dfc);
       else if (isSavedFlag(key)) flagObjects.push({ identity, cls, entry, key });
     }
     // The flag store: the saved FlagBase is the host store, filled from the saved chains

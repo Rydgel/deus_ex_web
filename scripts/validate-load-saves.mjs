@@ -42,12 +42,12 @@ if (!process.argv.includes('--slot')) {
   const timeout = Number(option('timeout', 600)) * 1000;
   const report = [];
   for (const source of wanted) for (const slot of await slotsOf(source)) {
-    const started = Date.now();
+    const started = process.hrtime.bigint();
     const run = spawnSync(process.execPath, ['--max-old-space-size=7168', new URL(import.meta.url).pathname, '--slot', slot], { encoding: 'utf8', timeout, maxBuffer: 1 << 26 });
     const last = (run.stdout ?? '').trim().split('\n').filter(line => line.startsWith('{')).at(-1);
     let result;
     try { result = JSON.parse(last); } catch { result = { slot: path.basename(slot), stage: 'process', ok: false, error: run.error ? String(run.error.message) : `exit ${run.status}: ${(run.stderr ?? '').trim().split('\n').slice(-3).join(' | ').slice(0, 300)}` }; }
-    Object.assign(result, { source, seconds: Math.round((Date.now() - started) / 1000) });
+    Object.assign(result, { source, seconds: Math.round(Number(process.hrtime.bigint() - started) / 1e9) });
     report.push(result);
     console.log(`${result.ok ? 'PASS' : 'STOP'} ${source}/${path.basename(slot)} ${result.map ?? ''} [${result.stage}] ${result.ok ? `${result.seconds}s` : result.error}`);
     await writeFile(new URL('../.work/load-saves.json', import.meta.url), JSON.stringify(report, null, 1));
@@ -119,9 +119,24 @@ try {
   result.stage = 'tick';
   d.frames(120);
   result.stage = 'ticked';
+  // 5. a slot that carries other levels of its mission (the visited maps the original filed in Save\\Current): the loaded player leaves for one of them
+  // (PruneTravelActors, SaveCurrentLevel(-2) of the loaded level, the filed level restored from the original's file, the travel text imported)
+  const others = current.filter(name => name !== 'SaveInfo.dxs' && name.toLowerCase() !== request.restore.file.toLowerCase());
+  if (others.length) {
+    result.stage = 'travel';
+    const stem = others[0].replace(/\.dxs$/i, '');
+    d.exec(`LocalTravel ${stem}`); d.frames(2);
+    const leave = d.takeTravel();
+    if (!leave) throw new Error(`LocalTravel ${stem} made no request`);
+    if (!leave.restore) throw new Error(`LocalTravel ${stem} did not restore the filed level: ${leave.url}`);
+    const { c: e } = await openSession(leave.map, assets, { travel: { arrival: leave, lastURL: leave.lastURL }, saveDirectory: directory });
+    e.frames(120);
+    result.travelled = stem;
+    result.stage = 'travelled';
+  }
   result.ok = true;
 } catch (error) {
   result.error = String(error?.message ?? error).split('\n')[0].slice(0, 400);
-  result.where = String(error?.stack ?? '').split('\n').slice(1, 4).map(line => line.trim().replace(/^at /, '').replace(/\(?file:\/\/.*\/(src\/[^)]*|scripts\/[^)]*)\)?/, '$1'));
+  result.where = String(error?.stack ?? '').split('\n').slice(1, 14).map(line => line.trim().replace(/^at /, '').replace(/\(?file:\/\/.*\/(src\/[^)]*|scripts\/[^)]*)\)?/, '$1'));
 }
 done();

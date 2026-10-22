@@ -34,7 +34,8 @@ let root;
 try { root = gameDirectory(); } catch { console.log('SKIP validate-load-game: no installed game data'); process.exit(0); }
 const captures = new URL('../.work/travel/', import.meta.url).pathname;
 const INTERNET = process.env.DX_INTERNET_SAVES ?? '/home/rydgel/projects/deus_ex_web/.work/internet-saves';
-const PREFIX_SAVES = path.join(process.env.HOME ?? '', '.wine-deusex/drive_c/Deus Ex GOTY Edition/Save');
+// the desktop slots of the Wine capture: the copy kept in .work/real-saves (the prefix's own Save folder is rewritten by other sessions)
+const PREFIX_SAVES = process.env.DX_SAVE_DIR ?? new URL('../.work/real-saves', import.meta.url).pathname;
 
 const SCENARIOS = {
   I: { title: 'the Island slot the original wrote (SaveGame 77), loaded from HQ', capture: 'o1e', label: 'b', slotDir: `${captures}o1e/b-slot.Save0077`, index: 77,

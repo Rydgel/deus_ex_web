@@ -43,8 +43,9 @@ export class TravelStop extends Error {
  *                       same-mission branch is then a {@link TravelStop}
  * @param lastURL        the engine's LastURL (a Furl)
  * @param levelUrlMap    () => GLevel->URL.Map
+ * @param packageName    () => the name of the level's package (the loaded level takes a live package's spelling: `loadGame`)
  */
-export function createTravelStep({ runtime, level, viewport, exporter, store, log, lastURL, levelUrlMap, levelSaver = null }) {
+export function createTravelStep({ runtime, level, viewport, exporter, store, log, lastURL, levelUrlMap, levelSaver = null, packageName = null }) {
   const read = (object, name) => runtime.readNamed(object, name);
   const levelInfo = () => {
     const actor = level.actors.find(a => a && runtime.attachedInstance(a)?.cls.record.key === 'deusex.deusexlevelinfo');
@@ -119,7 +120,11 @@ export function createTravelStep({ runtime, level, viewport, exporter, store, lo
     log('Log', `LoadMap: ${loadUrl}`);
     return { kind: 'loadMap', map: loadgame.mapName, portal: '', url: String(loadUrl), options: [...loadUrl.op], travelInfo: [],
       lastURL: { map: loadUrl.map, portal: '', op: [...loadUrl.op] },
-      restore: { file: file.name, name: loadgame.mapName },
+      // The package takes the name of a live package of the same name (case-insensitive) rather than the file's spelling: measured, a QuickLoad of `00_training.dxs`
+      // in the level `00_Training` printed `Level 00_Training.MyLevel` and `Possessed PlayerPawn: ... 00_Training.JCDentonMale1`, while the same load from DXOnly
+      // (no live package of that name) printed `00_training`. (docs/travel.md "Play, step 4")
+      restore: { file: file.name, name: loadgame.mapName,
+        ...(packageName && lower(packageName()) === lower(file.name.replace(/\.dxs$/i, '')) ? { package: packageName() } : {}) },
       loadgame: { index: loadgame.index, dir: copied?.dir ?? saveSlotDirectory(loadgame.index), fetch: copied?.fetch ?? [] } };
   }
 

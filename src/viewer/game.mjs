@@ -121,7 +121,7 @@ export async function createGame(map, asset, assets, { randomSeed = Math.floor(D
   const playerStart = savedPlayer ?? start;
   const checkBob = compileFunction(readFunction(engine, engine.exportsByPath.get('playerpawn.checkbob')));
   const startYaw = ((savedPlayer ? savedPlayer.values.ViewRotation : start.values.Rotation)?.[1] ?? 0) * Math.PI / 32768;
-  const player = new Player(collision, playerDefaults, playerStart.values.Location, p => zones[pointZone(map.model, p)] ?? zoneDefault, checkBob, startYaw);
+  const player = new Player(collision, playerDefaults, playerStart.values.Location, p => zones[pointZone(map.model, p)] ?? zoneDefault, checkBob, startYaw, Boolean(savedPlayer));
   if (savedPlayer) {
     // The saved pawn's export is the player's identity: the movement port binds it with its saved values, and every reference in the file
     // to the pawn resolves to it.
@@ -318,8 +318,13 @@ export async function createGame(map, asset, assets, { randomSeed = Math.floor(D
   const travelStep = travel ? createTravelStep({ runtime: doors.scriptRuntime.runtime, level: playerScene.level,
     viewport: () => playerScene.level.engine.client.viewports[0], exporter: doors.scriptRuntime.travelExporter,
     store: doors.scriptRuntime.saveStore, log: doors.scriptRuntime.logLine, levelSaver: doors.scriptRuntime.levelSaver,
-    lastURL: new Furl(travel.lastURL ?? { map: asset.name, op: DEFAULT_PLAYER_OPTIONS.map(([name, value]) => `${name}=${value}`) }),
-    levelUrlMap: () => travel.arrival?.map ?? asset.name }) : null;
+    // A loaded game's LastURL is GLevel->URL, and a `load` option keeps the URL the file holds (measured: URL.Map 01_NYC_UNATCOIsland, Op Name=, Class=), not the
+    // LoadMap path with `loadonly` and `loadgame`: a later OPEN (the death's `OPEN DXONLY`) inherits the file's options. The file's protocol and port are the
+    // game's own (`deusex`, 7790), which Play's Furl defaults stand for.
+    lastURL: new Furl(restore && travel.arrival?.loadgame
+      ? { map: map.level.url.map, portal: map.level.url.portal, op: map.level.url.options }
+      : travel.lastURL ?? { map: asset.name, op: DEFAULT_PLAYER_OPTIONS.map(([name, value]) => `${name}=${value}`) }),
+    levelUrlMap: () => travel.arrival?.map ?? asset.name, packageName: () => asset.name }) : null;
   const game = {
     takeAudioMs() { const ms = audioMs; audioMs = 0; return ms; },
     player, doors, collision, notes, start, interaction, random, hud,
