@@ -12,7 +12,7 @@
  *     they were saved in, exactly one player pawn (the saved one, re-possessed), and nothing a begin-play pass would add.
  * Scenario I is the Island <-> HQ pair of mission 1 against the new capture rt1 (the same checks, the original's listing and log).
  *
- *   node scripts/validate-travel-restore.mjs [--only T|I] */
+ *   node scripts/validate-travel-restore.mjs [--only T|I|P] */
 import assert from 'node:assert/strict';
 import { readdir, readFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
@@ -136,9 +136,53 @@ async function pairScenario({ id, title, first, second, other, firstFile, second
   console.log(a.join('\n'));
 }
 
+/** Teleporter portals (`Map#Portal`: Teleporter.Touch -> Level.Game.SendPlayer), the route of the game itself: Liberty Island's Teleporter3
+ * leads to HQ's `Inside_UN_HQ` and HQ's Teleporter2 back to the Island's `tunnel_drop_nyc`. The player stands on the teleporter and the
+ * ticks run; the request carries the portal; the arrival is at the destination teleporter, in the fresh HQ and in the restored Island. */
+async function portalScenario() {
+  console.log('--- P: Teleporter portals (Liberty Island <-> UNATCO HQ)');
+  const directory = createSaveDirectory();
+  const { c } = await openSession('01_NYC_UNATCOIsland', assets, { travel: {}, saveDirectory: directory });
+  c.frames(90);
+  const near = (a, b) => Math.hypot(a[0] - b[0], a[1] - b[1]) < 80 && Math.abs(a[2] - b[2]) < 120;
+  /** The player walks into the teleporter from 150 units away (a placement alone raises no Touch: a touch comes from a move into the cylinder). */
+  const step = (session, teleporter) => {
+    const at = session.pos(session.actor(teleporter));
+    let from = null, yaw = 0;
+    for (let k = 0; k < 8 && !from; k++) {
+      const bearing = k * Math.PI / 4, p = [at[0] + Math.cos(bearing) * 150, at[1] + Math.sin(bearing) * 150, at[2] + 10];
+      if (session.inWorld(p)) { from = p; yaw = bearing + Math.PI; }
+    }
+    session.fixture.place(from, { yaw });
+    session.fixture.drive({ keys: { ArrowUp: true } });
+    let request = null;
+    for (let k = 0; k < 20 && !request; k++) { session.frames(5); request = session.takeTravel(); }
+    session.fixture.releaseAll();
+    return request;
+  };
+  const r1 = step(c, 'Teleporter3');
+  check(r1 && r1.map === '01_NYC_UNATCOHQ' && r1.portal === 'Inside_UN_HQ' && !r1.restore, `P1: the request ${JSON.stringify(r1 && { map: r1.map, portal: r1.portal, restore: r1.restore })}`);
+  if (!r1) return;
+  const { c: d } = await openSession(r1.map, assets, { travel: { arrival: r1, lastURL: r1.lastURL }, saveDirectory: directory });
+  const start1 = d.pos(d.actor('Teleporter1')), at1 = d.pos(d.player());
+  console.log(`HQ: arrived at ${at1.map(Math.round)}, the Inside_UN_HQ teleporter at ${start1.map(Math.round)}`);
+  check(near(at1, start1), `P1: the player arrived at ${at1.map(Math.round)}, not at Inside_UN_HQ ${start1.map(Math.round)}`);
+  d.frames(60);
+  const r2 = step(d, 'Teleporter2');
+  check(r2 && r2.map === '01_NYC_UNATCOIsland' && r2.portal === 'tunnel_drop_nyc' && r2.restore, `P2: the request ${JSON.stringify(r2 && { map: r2.map, portal: r2.portal, restore: r2.restore })}`);
+  if (!r2) return;
+  const { c: e } = await openSession(r2.map, assets, { travel: { arrival: r2, lastURL: r2.lastURL }, saveDirectory: directory });
+  const start2 = e.pos(e.actor('Teleporter4')), at2 = e.pos(e.player());
+  console.log(`Island (restored): arrived at ${at2.map(Math.round)}, the tunnel_drop_nyc teleporter at ${start2.map(Math.round)}`);
+  check(near(at2, start2), `P2: the restored player arrived at ${at2.map(Math.round)}, not at tunnel_drop_nyc ${start2.map(Math.round)}`);
+  check(!e.game.doors.scriptRuntime.engineLog.some(line => BEGIN_PLAY.test(line)), 'P2: the restored level ran a begin-play line');
+  e.frames(60);
+}
+
 if (!only || only === 'T') await pairScenario({ id: 'T', title: 'Training <-> Training Combat (mission 0)', first: '00_Training', second: '00_TrainingCombat', other: '01_NYC_UNATCOIsland',
   firstFile: '00_training.dxs', secondFile: '00_TrainingCombat.dxs', troop: 'UNATCOTroop', settle: 90 });
 if (!only || only === 'I') await pairScenario({ id: 'I', title: 'Liberty Island <-> UNATCO HQ (mission 1)', first: '01_NYC_UNATCOIsland', second: '01_NYC_UNATCOHQ', other: '02_NYC_Street',
   firstFile: '01_NYC_UNATCOIsland.dxs', secondFile: '01_NYC_UNATCOHQ.dxs', troop: 'UNATCOTroop', settle: 90 });
+if (!only || only === 'P') await portalScenario();
 if (failures.length) { console.log(`FAIL validate-travel-restore:\n  ${failures.join('\n  ')}`); process.exit(1); }
 console.log('PASS validate-travel-restore: the listing, the markers, the log and the re-possession match the measured original');

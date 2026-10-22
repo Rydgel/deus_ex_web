@@ -95,6 +95,8 @@ export function liveProbe(game, args = {}) {
     const region = level.pointRegion(args.pointRegion);
     out.pointRegion = { zone: region.zone?.name ?? null, iLeaf: region.leaf, zoneNumber: region.zoneNumber };
   }
+  // engineLog N: the last N lines of the engine log (the original's Log: / ScriptLog: lines Play models), from the whole log with `engineLog: -1`
+  if (args.engineLog) { const log = game.doors.scriptRuntime.engineLog; out.engineLog = args.engineLog < 0 ? [...log] : log.slice(-args.engineLog); }
   if (args.actors) {
     // A class list: names, class and state of the level's actors of that class (or its subclasses).
     out.actors = [];

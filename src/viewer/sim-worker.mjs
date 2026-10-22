@@ -165,6 +165,8 @@ async function handle(data) {
         if (data.clock) setHostClock(data.clock);
         if (data.method === 'view') value = host.session.view();
         else if (data.method === 'reset') { host.session.reset(); value = { movers: host.session.movers(), view: host.session.view() }; }
+        // a saved level the load restored keeps its state: the page reads its movers and view without a Player start
+        else if (data.method === 'restoreView') value = { movers: host.session.movers(), view: host.session.view() };
         else if (data.method === 'stateDigest') value = stateDigest(game.doors.scriptRuntime.runtime,
           game.doors.scriptRuntime.runtime.levelFor(game.player.collisionActor));
         else if (data.method === 'decalProbe') value = decalProbe(game, data.args ?? {});

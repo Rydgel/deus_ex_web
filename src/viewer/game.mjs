@@ -428,6 +428,10 @@ export async function createGame(map, asset, assets, { randomSeed = Math.floor(D
       return {actor: params[0], location: params[1], rotation: params[2], fov: readPlayer('FOVAngle')};
     },
     reset() {
+      // Player start cold-reloads the map's exports and runs their begin-play pass again: for a level restored from its saved file that would
+      // run begin play over the saved state (docs/travel.md "Play, step 3": a named stop; the original has no such step, a saved level is only
+      // ever restored by travel or by a loaded game).
+      if (savedPlayer) throw new Error('Player start does not reload a level restored from a saved file: its begin-play pass would run over the saved state (travel step 3 stop)');
       // LoadMap's first step, in the old world: the viewport's player is
       // dissociated and destroyed before anything reloads.
       doors.scriptRuntime?.retirePlayer();
