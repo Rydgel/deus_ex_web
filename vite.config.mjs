@@ -5,6 +5,10 @@ import { gameDirectory } from './scripts/game-directory.mjs';
 
 export default defineConfig({
   publicDir: false,
+  // The dependency-optimizer cache, relative to each server's root: inside its own checkout. Worktrees that symlink
+  // node_modules to the main checkout's would otherwise share node_modules/.vite, whose config hash includes the root:
+  // a server from another checkout deletes and rebuilds it, and pages loading meanwhile get 504 Outdated Optimize Dep.
+  cacheDir: '.vite-cache',
   server: { host: '127.0.0.1', port: 5173, strictPort: true,
     // .work/ (git-ignored scratch worktrees and logs) and .claude/worktrees/
     // hold whole repository copies: watching them keeps vite busy.
