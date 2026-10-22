@@ -281,7 +281,7 @@ How the scenarios are driven (and what that means for reading the table):
 2. **The player's death ends at `OPEN DXONLY`** (`UGameEngine::Exec OPEN is not implemented`): `island-death` reaches the Dying state and a killed player (`route-front`: shot by the guards at the statue doors)
    stops there. That is the reload after death, Stage 6's neighbour; the question is where Play should stop.
    **Taken up 2026-10-18** ([below](#the-players-death-to-the-levels-end-2026-10-18)): `OPEN` is now the original's `SetClientTravel`, and Play stops where the original leaves the level,
-   at `UGameEngine::Tick`'s client travel after the next tick; the Browse to `DXONLY` and its menu stay Stage 6 (5.7.1).
+   at `UGameEngine::Tick`'s client travel after the next tick; the Browse to `DXONLY` and its menu stay Stage 6 (5.7.1). (Done 2026-10-22: the death's `OPEN DXONLY`, the logo level, its menu and Load Game from there run and equal the original's log, [travel](travel.md#play-step-4-loading-a-saved-game).)
 3. **Lockpicking and hacking on Island devices never completed: the driver gave the wrong input, not Play** (`island-hack-panel`, `route-back`, `route-front`; fixed 2026-10-17).
    The driver used the right button (`game.use()` = `ParseRightClick`), which frobs the target with nothing in hand (`DoFrob(Self, None)`, `DeusExPlayer.uc` `ParseRightClick`): `HackableDevices.Frob`
    and `DeusExMover.Frob` start a hack or a pick only when handed the Multitool or Lockpick, and a Multitool or Lockpick reaches them from the LEFT button (`ParseLeftClick`:

@@ -25,6 +25,7 @@ import { isMovingLightCandidate } from '../runtime/dynamic-lighting.mjs';
 import { loadTraceKernel } from '../runtime/trace-kernel.mjs';
 import { lightGlobals } from '../runtime/light-globals.mjs';
 import { createTravelStep } from '../runtime/travel.mjs';
+import { readSavedTravelInfo } from '../runtime/level-travel-info.mjs';
 import { deliverSaveSnapshot, pendingSaveSnapshots } from '../runtime/game-save.mjs';
 import { Furl, DEFAULT_PLAYER_OPTIONS } from '../runtime/furl.mjs';
 
@@ -121,7 +122,7 @@ export async function createGame(map, asset, assets, { randomSeed = Math.floor(D
   const playerStart = savedPlayer ?? start;
   const checkBob = compileFunction(readFunction(engine, engine.exportsByPath.get('playerpawn.checkbob')));
   const startYaw = ((savedPlayer ? savedPlayer.values.ViewRotation : start.values.Rotation)?.[1] ?? 0) * Math.PI / 32768;
-  const player = new Player(collision, playerDefaults, playerStart.values.Location, p => zones[pointZone(map.model, p)] ?? zoneDefault, checkBob, startYaw);
+  const player = new Player(collision, playerDefaults, playerStart.values.Location, p => zones[pointZone(map.model, p)] ?? zoneDefault, checkBob, startYaw, Boolean(savedPlayer));
   if (savedPlayer) {
     // The saved pawn's export is the player's identity: the movement port binds it with its saved values, and every reference in the file
     // to the pawn resolves to it.
@@ -313,12 +314,18 @@ export async function createGame(map, asset, assets, { randomSeed = Math.floor(D
   // Map travel (docs/travel.md): a session created with `travel` runs ClientTravel as recovered and the tick's travel step browses to the
   // next level; one without keeps the named stop (ClientTravelBoundary). `travel.arrival` is the travel that brought the player here,
   // `travel.lastURL` the engine's LastURL (docs/travel.md "Unresolved" 7).
-  playerScene.level.travelInfo = new Map(travel?.arrival?.travelInfo ?? []);
+  // LoadMap(URL, NULL, ...) of a loaded game keeps the TravelInfo the saved level holds (docs/travel.md "Load game, restart and URL forms"); a travel passes its own.
+  playerScene.level.travelInfo = new Map(restore && travel?.arrival?.loadgame ? readSavedTravelInfo(map.pkg, map.level) : travel?.arrival?.travelInfo ?? []);
   const travelStep = travel ? createTravelStep({ runtime: doors.scriptRuntime.runtime, level: playerScene.level,
     viewport: () => playerScene.level.engine.client.viewports[0], exporter: doors.scriptRuntime.travelExporter,
     store: doors.scriptRuntime.saveStore, log: doors.scriptRuntime.logLine, levelSaver: doors.scriptRuntime.levelSaver,
-    lastURL: new Furl(travel.lastURL ?? { map: asset.name, op: DEFAULT_PLAYER_OPTIONS.map(([name, value]) => `${name}=${value}`) }),
-    levelUrlMap: () => travel.arrival?.map ?? asset.name }) : null;
+    // A loaded game's LastURL is GLevel->URL, and a `load` option keeps the URL the file holds (measured: URL.Map 01_NYC_UNATCOIsland, Op Name=, Class=), not the
+    // LoadMap path with `loadonly` and `loadgame`: a later OPEN (the death's `OPEN DXONLY`) inherits the file's options. The file's protocol and port are the
+    // game's own (`deusex`, 7790), which Play's Furl defaults stand for.
+    lastURL: new Furl(restore && travel.arrival?.loadgame
+      ? { map: map.level.url.map, portal: map.level.url.portal, op: map.level.url.options }
+      : travel.lastURL ?? { map: asset.name, op: DEFAULT_PLAYER_OPTIONS.map(([name, value]) => `${name}=${value}`) }),
+    levelUrlMap: () => travel.arrival?.map ?? asset.name, packageName: () => asset.name }) : null;
   const game = {
     takeAudioMs() { const ms = audioMs; audioMs = 0; return ms; },
     player, doors, collision, notes, start, interaction, random, hud,

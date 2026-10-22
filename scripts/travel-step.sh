@@ -9,8 +9,10 @@
 #   scripts/travel-step.sh <out dir> shot <name>            the game's Shot key -> <out dir>/<name>.png
 #   scripts/travel-step.sh <out dir> ini <label>            the session's ini files (DeusEx-ad.ini, User-ad.ini) and their modification times -> <out dir>/<label>.DeusEx.ini, .User.ini, .ini-times.txt (docs/config-persistence.md)
 #   scripts/travel-step.sh <out dir> savecopy <label>       a copy of Save\Current (the .dxs files, with their times) -> <out dir>/<label>.Current/
+#   scripts/travel-step.sh <out dir> savedir <label> <dir>  a copy of Save\<dir> (Save0077, QuickSave: the files with their times) -> <out dir>/<label>.<dir>/
 #   scripts/travel-step.sh <out dir> gobjects <label>       tools/dump-gobjects-win.c: every object of GObjObjects (index, name, class) -> <out dir>/<label>.gobjects.txt
 #   scripts/travel-step.sh <out dir> props <name> <label> <field:offset:type>...   tools/dump-actor-win.c with the given fields -> <out dir>/<label>.props.txt
+#   scripts/travel-step.sh <out dir> hold <key> <ms>        dxinput: the key held down for that long (a walk, a turn), then released
 #   scripts/travel-step.sh <out dir> key <name> | type <text> | click <x> <y> | move <x> <y>   dxinput key (names as dxinput.c: ESC, ENTER, F9 ...), text, mouse (viewport client coordinates)
 set -u
 OUT=${1:?usage: travel-step.sh <out dir> <verb> ...}; VERB=${2:?}; shift 2
@@ -25,6 +27,8 @@ clean() { grep -a -v 'MESA\|pci id' | tr -d '\r'; }
 case $VERB in
   cmd) printf 'cmd %s\n' "$*" > "$OUT/step.txt"; node ad/scripts/original-game.mjs run "$OUT/step.txt" >/dev/null 2>&1
        echo "$(date +%T) cmd $*" >> "$OUT/steps.txt" ;;
+  hold) printf 'focus\nshold %s %s\nsleep 500\n' "$1" "$2" > "$OUT/step.txt"; node ad/scripts/original-game.mjs run "$OUT/step.txt" >/dev/null 2>&1
+       echo "$(date +%T) hold $1 $2" >> "$OUT/steps.txt" ;;
   key|click|move|type) printf '%s %s\nsleep 1500\n' "$VERB" "$*" > "$OUT/step.txt"; node ad/scripts/original-game.mjs run "$OUT/step.txt" >/dev/null 2>&1
        echo "$(date +%T) $VERB $*" >> "$OUT/steps.txt" ;;
   arrive) ok=
@@ -43,6 +47,8 @@ case $VERB in
        echo "$(date +%T) ini $1" >> "$OUT/steps.txt" ;;
   savecopy) rm -rf "$OUT/$1.Current"; cp -a "$SAVE/Current" "$OUT/$1.Current" 2>/dev/null
         echo "$(date +%T) savecopy $1" >> "$OUT/steps.txt" ;;
+  savedir) rm -rf "$OUT/$1.$2"; cp -a "$SAVE/$2" "$OUT/$1.$2" 2>/dev/null
+        echo "$(date +%T) savedir $1 $2" >> "$OUT/steps.txt" ;;
   gobjects) "$DX_WINE" ad/build/dump-gobjects-win.exe --available 2>/dev/null | clean > "$OUT/$1.gobjects.txt"
         echo "$(date +%T) gobjects $1" >> "$OUT/steps.txt" ;;
   props) name=$1; label=$2; shift 2; "$DX_WINE" ad/build/dump-actor-win.exe "$name" "$@" 2>/dev/null | clean > "$OUT/$label.props.txt" ;;

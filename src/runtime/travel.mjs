@@ -17,6 +17,7 @@
 import { Furl, parseFurl, UnsupportedFurlForm, TRAVEL_RELATIVE } from './furl.mjs';
 import { browseDecision } from './travel-browse.mjs';
 import { formatTravelText } from './travel-text.mjs';
+import { saveSlotDirectory } from './save-directory.mjs';
 
 const lower = value => String(value ?? '').toLowerCase();
 
@@ -42,18 +43,26 @@ export class TravelStop extends Error {
  *                       same-mission branch is then a {@link TravelStop}
  * @param lastURL        the engine's LastURL (a Furl)
  * @param levelUrlMap    () => GLevel->URL.Map
+ * @param packageName    () => the name of the level's package (the loaded level takes a live package's spelling: `loadGame`)
  */
-export function createTravelStep({ runtime, level, viewport, exporter, store, log, lastURL, levelUrlMap, levelSaver = null }) {
+export function createTravelStep({ runtime, level, viewport, exporter, store, log, lastURL, levelUrlMap, levelSaver = null, packageName = null }) {
   const read = (object, name) => runtime.readNamed(object, name);
   const levelInfo = () => {
     const actor = level.actors.find(a => a && runtime.attachedInstance(a)?.cls.record.key === 'deusex.deusexlevelinfo');
     return actor ? { missionNumber: read(actor, 'missionNumber'), mapName: String(read(actor, 'MapName')) } : null;
   };
+  /** LoadSaveInfo(index) (DeusEx.dll 0x100108a0): the slot's parsed SaveInfo.dxs from the save directory, or null (no file, not a package). */
+  const slotInfo = index => {
+    const info = store.directory.info(saveSlotDirectory(index));
+    return info ? { mapName: String(info.properties?.MapName ?? '') } : null;
+  };
   function browse(url, travelInfo) {
     log('Log', `Browse: ${url}`);
     const player = read(viewport(), 'Actor');
     const effects = browseDecision({ url, lastURL, level: { info: levelInfo(), urlMap: levelUrlMap() },
-      player: player ? { bStartingNewGame: Boolean(read(player, 'bStartingNewGame')) } : null });
+      player: player ? { bStartingNewGame: Boolean(read(player, 'bStartingNewGame')) } : null,
+      saveInfo: typeof store.directory?.info === 'function' ? slotInfo : null });
+    let copied = null;
     for (const effect of effects) {
       switch (effect.op) {
         case 'log': log('Log', effect.text); break;
@@ -68,7 +77,20 @@ export function createTravelStep({ runtime, level, viewport, exporter, store, lo
           if (!levelSaver) throw new TravelStop('SaveCurrentLevel', 'the level cannot be filed in this session (no level saver)', { url: String(url) });
           levelSaver.saveCurrentLevel(effect.position);
           break;
+        case 'copySaveGameFiles': {
+          // CopySaveGameFiles (0x10010000): every `*.dxs` of the slot, in Current. The directory the simulation holds lists a slot without its bytes (the page keeps them in
+          // its storage): the request names the files the page still has to read and hand over before the level loads.
+          const names = store.directory.copyFiles(effect.from, effect.to);
+          copied = { dir: effect.from, names, fetch: names.filter(name => !store.directory.readFile(effect.to, name)) };
+          break;
+        }
+        case 'loadGameFailed':
+          // Browse returned 0 (LoadSaveInfo found no SaveInfo): the tick does not test the result, the level goes on. The line is Play's (the original's
+          // message for the failed StaticLoadObject was not measured).
+          log('Warning', `Browse loadgame=${effect.index}: ${effect.reason} (${saveSlotDirectory(effect.index)}); the saved game is not loaded`);
+          return null;
         case 'loadMap': {
+          if (effect.loadgame) return loadGame(effect, copied);
           // Within one mission a level filed in `Current` for the destination (also the one just saved, when the destination is the level
           // left) is loaded from there: FURL(&URL, path, TRAVEL_Partial) with the portal copied back (0x10011716..).
           const restored = effect.saved && store.has(effect.saved.file) ? effect.saved : null;
@@ -86,6 +108,24 @@ export function createTravelStep({ runtime, level, viewport, exporter, store, lo
       }
     }
     throw new Error('Browse ended without a LoadMap or a boundary');
+  }
+
+  /** `?loadgame=N`'s LoadMap(FURL(&URL, "<Current>\\<MapName>.dxs?load?loadonly?loadgame", TRAVEL_Absolute), NULL, NULL): the slot's level, saved with the player in it, is
+   * loaded from `Current` with no travel text; on success LastURL = GLevel->URL (0x10010f4f..0x1001151e). The level keeps the TravelInfo its file holds. */
+  function loadGame(effect, copied) {
+    const { loadgame, url: loadUrl } = effect;
+    const file = store.files().find(entry => lower(entry.name) === lower(loadgame.file));
+    // LoadMap fails on a slot without the level its SaveInfo names: Play stops by name (the original's failed-load path is Unresolved 9).
+    if (!file) throw new TravelStop('DDeusExGameEngine::Browse loadgame', `${saveSlotDirectory(loadgame.index)} holds no ${loadgame.file}`, { url: String(loadUrl) });
+    log('Log', `LoadMap: ${loadUrl}`);
+    return { kind: 'loadMap', map: loadgame.mapName, portal: '', url: String(loadUrl), options: [...loadUrl.op], travelInfo: [],
+      lastURL: { map: loadUrl.map, portal: '', op: [...loadUrl.op] },
+      // The package takes the name of a live package of the same name (case-insensitive) rather than the file's spelling: measured, a QuickLoad of `00_training.dxs`
+      // in the level `00_Training` printed `Level 00_Training.MyLevel` and `Possessed PlayerPawn: ... 00_Training.JCDentonMale1`, while the same load from DXOnly
+      // (no live package of that name) printed `00_training`. (docs/travel.md "Play, step 4")
+      restore: { file: file.name, name: loadgame.mapName,
+        ...(packageName && lower(packageName()) === lower(file.name.replace(/\.dxs$/i, '')) ? { package: packageName() } : {}) },
+      loadgame: { index: loadgame.index, dir: copied?.dir ?? saveSlotDirectory(loadgame.index), fetch: copied?.fetch ?? [] } };
   }
 
   return {

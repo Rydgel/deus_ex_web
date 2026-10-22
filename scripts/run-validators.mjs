@@ -95,7 +95,9 @@ const saveCaches = () => {
   writeFileSync(memoryPath, JSON.stringify(peaks, null, 2) + '\n');
 };
 
-const SWEEP_EXCLUDED = new Set(['validate-stage4-acceptance.mjs', 'validate-stage5-acceptance.mjs', 'validate-stage5-live.mjs', 'validate-stage5-o3.mjs']);
+const SWEEP_EXCLUDED = new Set(['validate-stage4-acceptance.mjs', 'validate-stage5-acceptance.mjs', 'validate-stage5-live.mjs', 'validate-stage5-o3.mjs',
+  // one process per real save slot (41 slots, about an hour): run by hand, `node scripts/validate-load-saves.mjs` (docs/travel.md "Play, step 4: loading a saved game")
+  'validate-load-saves.mjs']);
 const all = (await readdir(path.join(root, 'scripts')))
   .filter(name => name.startsWith('validate-') && name.endsWith('.mjs'))
   .filter(name => !filter || name.includes(filter))

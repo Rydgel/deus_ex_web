@@ -25,7 +25,10 @@ export const MAX_FRAME_TIME = .4;
 /** A bounded first-person physics implementation. Script-derived single-player
  * stance/speed rules are kept explicit until the general VM executes them. */
 export class Player {
-  constructor(collision, defaults, start, zoneAt, checkBob = null, startYaw = 0) {
+  /** `restored`: the start is a saved pawn's own place (a loaded game, docs/travel.md "Play, step 4"): the pawn is where the file left it, whatever its stance, and no
+   * placement search moves it (a spawned pawn is placed by SpawnActor's collision check; the saved one is not spawned). */
+  constructor(collision, defaults, start, zoneAt, checkBob = null, startYaw = 0, restored = false) {
+    this.restored = restored;
     this.collision = collision; this.defaults = defaults; this.start = [...start]; this.zoneAt = zoneAt;
     this.checkBob = checkBob;
     this.startYaw = startYaw;
@@ -129,7 +132,7 @@ export class Player {
     this.prePivot = (this.defaults.PrePivot ?? [0,0,0]).slice();
     this.justLanded = false; this.joltMagnitude = 0; this.shakeVert = 0;
     this.bobState = { bobtime: 0, WalkBob: [0, 0, 0], Bob: this.defaults.Bob ?? 0, AppliedBob: 0, LandBob: 0, GroundSpeed: this.defaults.GroundSpeed };
-    const spawn = this.collision.findSpot(this.position, this.extent);
+    const spawn = this.restored ? [...this.position] : this.collision.findSpot(this.position, this.extent);
     if (!spawn) throw new Error('No valid collision placement near player start');
     this.position = spawn;
     this.spawnOldLocation = spawn.slice();

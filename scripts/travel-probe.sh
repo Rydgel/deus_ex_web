@@ -15,9 +15,11 @@
 #     savecopy:<label>          a copy of Save\Current -> .work/travel/<tag>/<label>.Current/ (the .dxs files and their times)
 #     putslot:<host dir>:<slot> a save slot Play wrote (a host directory of .dxs files) as Save\<slot> (Save0010, QuickSave; replaced whole), to see the original load it
 #     slotcopy:<slot>:<label>   a copy of Save\<slot> -> .work/travel/<tag>/<label>.<slot>/ (the files the original wrote for a SaveGame, with their times)
+#     savedir:<label>:<dir>     a copy of Save\<dir> (a slot the session made, QuickSave) -> .work/travel/<tag>/<label>.<dir>/ (the probe removes what it created at the end)
 #     gobjects:<label>          every object of GObjObjects (index, name, class; tools/dump-gobjects-win.c --available) -> <label>.gobjects.txt
 #     props:<name>:<label>:<field:offset:type>[,...]   tools/dump-actor-win.c with explicit fields -> <label>.props.txt
 #     shot:<name>               the game's Shot key -> .work/travel/<tag>/<name>.png
+#     hold:<key>:<ms>           dxinput: a key held down for that long (the player walks), then released
 #     key:<name> | type:<text> | click:<x y> | move:<x y>   dxinput key (ESC, ENTER ...), text, / mouse (viewport client coordinates; the viewport is 1280x720)
 #     follow:<file>             run the steps appended to <file> (one per line) until a `quit` line: an interactive session
 #   The game starts on DX.dx whatever the command line says (the logo map): a session that wants another map starts with `cmd:open <map>`.
@@ -82,6 +84,8 @@ run_step() {
     cmd|arrive|snap|shot|key|type|click|move|ini|savecopy|gobjects) scripts/travel-step.sh "$OUT" "$kind" "$arg" ;;
     props) IFS=: read -r pname plabel pfields <<< "$arg"; IFS=, read -ra pf <<< "$pfields"; scripts/travel-step.sh "$OUT" props "$pname" "$plabel" "${pf[@]}" ;;
     actors) scripts/travel-step.sh "$OUT" actors "${arg%%:*}" "${arg#*:}" ;;
+    savedir) scripts/travel-step.sh "$OUT" savedir "${arg%%:*}" "${arg#*:}" ;;
+    hold) scripts/travel-step.sh "$OUT" hold "${arg%%:*}" "${arg#*:}" ;;
     putcurrent)   # <host file>:<name>: a file into Save\Current (cp over the one the session wrote; the name has no path)
       IFS=: read -r psrc pname <<< "$arg"
       case $pname in ''|*/*|*\\*) echo "putcurrent: bad name $pname" >&2 ;; *) cp -f "$psrc" "$SAVE/Current/$pname" && echo "putcurrent $pname ($(stat -c %s "$SAVE/Current/$pname") bytes)" ;; esac ;;

@@ -816,7 +816,24 @@ function setMode(next) {
 }
 function travelTo(request) {
   // (the level left has stopped ticking: sim-session.mjs `travelled`)
-  loadMap(request.map, { travel: request }).catch(error => { toast(error.message); pauseForRuntimeError(error); });
+  loadSavedFiles(request).then(currentFiles => loadMap(request.map, { travel: request, currentFiles }))
+    .catch(error => { toast(error.message); pauseForRuntimeError(error); });
+}
+/** A loaded game (`?loadgame=N`, docs/travel.md order step 4): the simulation's Save directory lists the slot without its bytes, which the page keeps in its storage
+ * (the browser's, or the picked folder): the files Browse copied into `Current` are read here, awaited, and travel with the level's load. */
+async function loadSavedFiles(request) {
+  const wanted = request.loadgame?.fetch ?? [];
+  if (!wanted.length) return null;
+  const directory = savePersistence?.directory;
+  if (!directory) throw new Error(`Saved game ${request.loadgame.dir} cannot be read: the page has no save storage`);
+  const files = [];
+  for (const name of wanted) {
+    let bytes = null;
+    try { bytes = await directory.read(request.loadgame.dir, name); } catch (error) { throw new Error(`Saved game ${request.loadgame.dir}\\${name} cannot be read: ${error?.message ?? error}`); }
+    if (!bytes) throw new Error(`Saved game ${request.loadgame.dir}\\${name} is not in the save storage`);
+    files.push({ name, bytes, modified: directory.modifiedOf?.(request.loadgame.dir, name) ?? null });
+  }
+  return files;
 }
 function pauseForRuntimeError(error) {
   runtimeError={message:error.message,stack:error.stack,travel:error.travel??null};paused=true;
@@ -852,7 +869,7 @@ function remoteHost(loaded) {
 }
 /** `travel`: the request of the travel step that leads here (travel.mjs; docs/travel.md), null for a map opened directly. The simulation
  * side's Login imports the travel text it carries. */
-async function loadMap(name, { travel = null } = {}) {
+async function loadMap(name, { travel = null, currentFiles = null } = {}) {
   if (!assets || !assets.files.has(name.toLowerCase())) throw new Error(`Map is not available: ${name}`);
   if (loading) throw new Error('A map is already loading');
   loading = true; $('map').disabled = true; $('reset').disabled = true; $('choose').disabled = true;
@@ -902,7 +919,7 @@ async function loadMap(name, { travel = null } = {}) {
     // On the page the old map's audio unregisters its music before the next
     // map's runtime is built (the worker does the same at its load).
     if (!simClient) simHost?.disposeAudio?.();
-    nextHost = simClient ? remoteHost(await simClient.load(name, hostOptions)) : await createSimHost(nextMap, asset, assets, { ...hostOptions,
+    nextHost = simClient ? remoteHost(await simClient.load(name, hostOptions, currentFiles)) : await createSimHost(nextMap, asset, assets, { ...hostOptions,
       musicLibrary: pageMusicLibrary,
       onAudioVoice: event => { void galaxyVoice(event); },
       onProgress: message => { $('gate-message').textContent = message; } });
