@@ -487,6 +487,8 @@ export async function createScriptDoors({
     // A map entered by travel gets PlayerTraveling from the travel text (PreTravel set it in the level left: travel-import.mjs);
     // only a cold open, which has no incoming travel state, is given the marker (docs/script-training-mission-entry.md).
     if(!arrival&&!restore)liveMission.beginFreshMission(playerActor);
+    // LoadMap's last step once the player is in: the moving brush tracker of the new level (GNewBrushTracker, Engine 0x1038dfb5)
+    logLine('Init',`Initialized moving brush tracker for Level ${asset.name}.MyLevel`);
   }
   // GLog output device: Object.Log (native 231) is a synchronous side channel
   // with no gameplay effect. MissionScript.InitStateMachine logs its startup
@@ -1049,6 +1051,9 @@ export async function createScriptDoors({
       });
       // A saved level's pawn: no measured slot, so the registry models one when the pawn needs it (playerNativeObject).
       if (restore && role === 'player') object.modeledIndex = true;
+      // A saved level's objects have no measured GObjObjects slot (docs/travel.md "Unresolved" 10): an object they own (an actor's render
+      // interface) hashes under a modeled one, unique per export; labelled so, not a measurement.
+      if (restore && !Number.isInteger(object.index)) object.hashIndex = 0x100000 + identity.index;
       runtime.bindNativeObject(identity, object);
     }
     // The selected LightSwitch Frob path reaches native PlayAnim synchronously.

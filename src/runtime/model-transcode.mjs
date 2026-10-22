@@ -21,6 +21,12 @@ class Copy {
   u32() { const v = this.r.u32(); this.w.u32(v); return v; }
   object() { const v = this.r.compact(); this.w.compact(this.translate.objectRef(v)); return v; }
   name() { const v = this.r.compact(); this.w.compact(this.translate.nameIndex(this.pkg.names[v].name)); return v; }
+  /** An object saved with RF_HasStack (0x2000000) starts with its FStateFrame: Node, StateNode, ProbeMask, LatentAction and, with a Node, the
+   * code offset. A Model and a Polys loaded from a .dx carry one; a saved level's do not (the original writes them without), so it is read past. */
+  skipStack() {
+    const node = this.r.compact(); this.r.compact(); this.r.u32(); this.r.u32(); this.r.i32();
+    if (node) this.r.compact();
+  }
   /** The empty tagged property list of a native object (just the terminating None). */
   noProperties() {
     const name = this.pkg.names[this.r.compact()].name;
@@ -33,8 +39,9 @@ class Copy {
   }
 }
 
-export function transcodeModel(pkg, bytes, translate) {
+export function transcodeModel(pkg, bytes, translate, { hasStack = false } = {}) {
   const c = new Copy(pkg, bytes, translate);
+  if (hasStack) c.skipStack();
   c.noProperties();
   c.raw(25); c.raw(16);                                   // bounds box (min, max, valid), bounding sphere
   c.raw(12 * c.count());                                  // vectors
@@ -69,8 +76,9 @@ export function transcodeModel(pkg, bytes, translate) {
   return c.done();
 }
 
-export function transcodePolys(pkg, bytes, translate) {
+export function transcodePolys(pkg, bytes, translate, { hasStack = false } = {}) {
   const c = new Copy(pkg, bytes, translate);
+  if (hasStack) c.skipStack();
   c.noProperties();
   c.i32();                                                // count
   c.i32();                                                // capacity
@@ -90,8 +98,9 @@ export function transcodePolys(pkg, bytes, translate) {
 
 /** A native object that is only a tagged property list (LevelSummary): the tags copied with the name indices re-mapped. Properties whose
  * payload holds a reference (object, name, struct, array) stop by name: LevelSummary holds strings and numbers. */
-export function transcodeProperties(pkg, bytes, translate) {
+export function transcodeProperties(pkg, bytes, translate, { hasStack = false } = {}) {
   const r = new Reader(bytes), w = new ByteWriter(bytes.length + 16);
+  if (hasStack) { const node = r.compact(); r.compact(); r.u32(); r.u32(); r.i32(); if (node) r.compact(); }
   for (;;) {
     const name = pkg.names[r.compact()].name;
     w.compact(translate.nameIndex(name));

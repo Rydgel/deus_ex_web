@@ -79,7 +79,8 @@ export function createTravelStep({ runtime, level, viewport, exporter, store, lo
             // on success a filed level's load sets LastURL = GLevel->URL (docs/travel.md "Browse: the DeusEx override" step 5, "Unresolved" 7); a fresh load leaves it
             travelInfo: [...info], lastURL: restored ? { map: loadUrl.map, portal: loadUrl.portal, op: [...loadUrl.op] }
               : { map: lastURL.map, portal: lastURL.portal, op: [...lastURL.op] },
-            ...(restored ? { restore: { file: restored.file, name: restored.name } } : {}) };
+            // the file as the directory spells it (the save wrote it under DeusExLevelInfo.MapName): its stem names the loaded package
+            ...(restored ? { restore: { file: store.files().find(file => lower(file.name) === lower(restored.file)).name, name: restored.name } } : {}) };
         }
         default: throw new Error(`Unknown Browse effect ${effect.op}`);
       }

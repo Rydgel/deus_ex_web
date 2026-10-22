@@ -113,8 +113,11 @@ async function handle(data) {
       // disposeAudio), so that batch reaches the worklet before any of the
       // next map's.
       host?.dispose?.(); host = null; loadId = data.id; audio.length = 0; pending = null;
-      const asset = await assets.get(data.map);
-      host = await createSimHost(decodeMap(asset.bytes), asset, assets, { ...data.options, musicLibrary,
+      // A level filed in Save\Current (travel.mjs `restore`) is loaded from there, as a package of its own; else the map's .dx
+      const restore = data.options?.travel?.arrival?.restore ?? null;
+      const filed = restore ? (await import('./restore-asset.mjs')).restoredLevel((await import('../runtime/save-directory.mjs')).hostSaveDirectory(), restore) : null;
+      const asset = filed ? filed.asset : await assets.get(data.map);
+      host = await createSimHost(filed ? filed.map : decodeMap(asset.bytes), asset, assets, { ...data.options, musicLibrary, restore: Boolean(filed),
         onAudioVoice: event => audio.push({ kind: 'voice', event: plainVoice(event) }),
         onProgress: message => send({ type: 'progress', message }) });
       const summary = host.actorSim?.summary;

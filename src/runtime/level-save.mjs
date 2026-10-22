@@ -63,8 +63,13 @@ export function serializeLevel({ runtime, level, asset, modelIndex, levelUrl, ai
     return plan.length;
   };
 
+  // CLASS_Transient (0x8, inherited): SavePackage leaves the objects of such a class out of the package, and a reference to one saves as None
+  // (MissionScript is `transient`: Mission00 is spawned again by DeusExPlayer.TravelPostAccept, which is why the restored level logs it).
+  const transientClass = cls => { for (let node = cls; node; node = node.base) if ((node.metadata?.classFlags ?? 0) & 0x8) return true; return false; };
+  const transient = object => { try { return transientClass(runtime.instance(object).cls); } catch { return false; } };
+
   // --- the exports that are certain: the level's actors (source order first, spawned ones after), the saved script objects, the Level -----
-  const actors = level.actors.filter(Boolean);
+  const actors = level.actors.filter(actor => actor && !transient(actor));
   const sourced = actors.filter(actor => Number.isInteger(actor.index)).sort((a, b) => a.index - b.index);
   const spawned = actors.filter(actor => !Number.isInteger(actor.index));
   for (const actor of [...sourced, ...spawned]) add(actor, { kind: 'actor', name: actor.name, flags: ACTOR_FLAGS, sourceIndex: actor.index, outerExport: 0 });
@@ -97,7 +102,7 @@ export function serializeLevel({ runtime, level, asset, modelIndex, levelUrl, ai
     let instance = null;
     try { instance = runtime.attachedInstance(value); } catch { return null; }
     const native = instance?.nativeObject;
-    if (!native || (native.flags & 0x4000)) return null;
+    if (!native || (native.flags & 0x4000) || transientClass(instance.cls)) return null;
     for (let outer = native.outer; outer; outer = outer.outer) {
       if (outer === levelPackage) return { native, outerExport: 0 };
       const owner = outer.identity && exportOf.get(outer.identity);
@@ -135,7 +140,8 @@ export function serializeLevel({ runtime, level, asset, modelIndex, levelUrl, ai
   function addNative(sourceIndex) {
     const entry = source.exports[sourceIndex - 1];
     if (sourceExport.has(sourceIndex)) return sourceExport.get(sourceIndex);
-    return add({ nativeSource: sourceIndex }, { kind: 'native', name: entry.name, flags: entry.flags, sourceIndex, outerExport: 0 });
+    // (a saved level's native objects carry no FStateFrame: RF_HasStack is dropped with the header)
+    return add({ nativeSource: sourceIndex }, { kind: 'native', name: entry.name, flags: entry.flags & ~0x2000000, sourceIndex, outerExport: 0 });
   }
   const nameIndex = text => tables.name(text);
   const translate = {
@@ -175,7 +181,7 @@ export function serializeLevel({ runtime, level, asset, modelIndex, levelUrl, ai
     w.compact(nameIndex('None'));
     const count = level.actors.length;
     w.i32(count); w.i32(count);
-    for (const actor of level.actors) w.compact(actor ? objectRef(actor) : 0);
+    for (const actor of level.actors) w.compact(actor && !transient(actor) ? objectRef(actor) : 0);
     w.string('deusex'); w.string(''); w.string(levelUrl.map); w.string(levelUrl.portal ?? '');
     w.compact(levelUrl.options.length);
     for (const option of levelUrl.options) w.string(option);
@@ -213,7 +219,8 @@ export function serializeLevel({ runtime, level, asset, modelIndex, levelUrl, ai
         const src = source.exports[entry.sourceIndex - 1];
         const raw = sourceBytes.subarray(src.serialOffset, src.serialOffset + src.serialSize);
         const transcode = src.className === 'Model' ? transcodeModel : src.className === 'Polys' ? transcodePolys : transcodeProperties;
-        w.raw(transcode(source, raw, translate));
+        try { w.raw(transcode(source, raw, translate, { hasStack: Boolean(src.flags & 0x2000000) })); }
+        catch (error) { throw new UnsupportedSaveObject(`${src.className} ${src.name} (export ${entry.sourceIndex}, flags 0x${src.flags.toString(16)}) does not transcode: ${error.message}`, { export: entry.sourceIndex }); }
         break;
       }
       default: throw new Error(`Unknown export kind ${entry.kind}`);
