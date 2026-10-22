@@ -438,6 +438,10 @@ function stateLabelForTarget(mover) {
   return state.key === 0 || state.key < state.previousKey ? 'open' : 'close';
 }
 
+/** FName's case rule for level package names: the first spelling a process made of a name is the one every later spelling resolves to. */
+const levelPackageNames=new Map();
+function internLevelName(name){const key=String(name).toLowerCase();if(!levelPackageNames.has(key))levelPackageNames.set(key,String(name));return levelPackageNames.get(key);}
+
 /**
  * Prepare the original Engine/DeusEx functions used by the selected
  * TriggerToggle state. This adapter never rewrites their script bodies.
@@ -474,6 +478,10 @@ export async function createScriptDoors({
   // The travel that brought the player here (travel.mjs request): the URL's portal and options for Login and InitGame, the travel text for
   // SpawnPlayActor's import. Null for a cold open.
   const arrival=travel?.arrival?{...travel.arrival,optionsText:travel.arrival.options.map(option=>`?${option}`).join('')}:null;
+  // The level package's name in the engine log and in object names: LoadMap creates it from URL.Map, so the spelling the travel URL used
+  // ('dxonly', '99_endgame3'; the original's logs show these) unless the process has already made the name in another spelling (names compare
+  // case-insensitively and keep the first spelling: a `?restart`'s `00_training` is the package `00_Training`); the file's own name for a map opened directly.
+  const levelName=internLevelName(arrival?.map??asset.name);
   // ULevel::SpawnPlayActor -> DeusExGameInfo.Login (docs/script-player-login.md).
   function loginPlayer(){
     loggingIn=true;
@@ -489,7 +497,7 @@ export async function createScriptDoors({
     // only a cold open, which has no incoming travel state, is given the marker (docs/script-training-mission-entry.md).
     if(!arrival&&!restore)liveMission.beginFreshMission(playerActor);
     // LoadMap's last step once the player is in: the moving brush tracker of the new level (GNewBrushTracker, Engine 0x1038dfb5)
-    logLine('Init',`Initialized moving brush tracker for Level ${asset.name}.MyLevel`);
+    logLine('Init',`Initialized moving brush tracker for Level ${levelName}.MyLevel`);
   }
   // GLog output device: Object.Log (native 231) is a synchronous side channel
   // with no gameplay effect. MissionScript.InitStateMachine logs its startup
@@ -1865,7 +1873,7 @@ export async function createScriptDoors({
     // Original InitGame executes here, creating BaseMutator itself.
     // LoadMap's native log lines before the game is initialised (docs/travel.md "What each travel did"); the "(0)" is the measured constant.
     logLine('Log',`Game class is '${loadMapGame.class.record.name}'`);
-    logLine('Log',`Bringing Level ${asset.name}.MyLevel up for play (0)...`);
+    logLine('Log',`Bringing Level ${levelName}.MyLevel up for play (0)...`);
     loadMapGame.init(arrival?arrival.optionsText:'');
     runStartupEvent('PreBeginPlay');
     runStartupEvent('BeginPlay');
@@ -2231,7 +2239,7 @@ export async function createScriptDoors({
     await attachLocalViewportConsole({runtime,assets,engine,viewport:level.engine.client.viewports[0],player:restore?null:playerActor});
   let windowHost=null,playerLogs=null;
   // Cold LoadMap owns Game creation and startup before player subsystems.
-  await prepareLiveActorSpawnWorld({runtime,engine,deusEx,level,levelInfo,mapAsset:asset});
+  await prepareLiveActorSpawnWorld({runtime,engine,deusEx,level,levelInfo,mapAsset:asset,packageName:levelName});
   // Live Actor.Destroy. The DataLink spawn world above installs the spawn-side
   // actorLifecycle and the minimal no-hash level fields; merge the world
   // destruction services onto them afterwards and publish the level's real
@@ -2303,7 +2311,7 @@ export async function createScriptDoors({
   // empty unless the host supplies one (the page's, which outlives the maps).
   await prepareGameDirectoryStore({runtime,assets,directory:saveDirectory??hostSaveDirectory(),windowHost:()=>windowHost});
   // A session that travels (Play, the travel validators) runs ClientTravel and DeleteSaveGameFiles as recovered; others keep their named stops.
-  const saveStore=travel?createSaveStore({directory:saveDirectory??hostSaveDirectory(),releaseLoaders:()=>logLine('Log',`Unloading: Package ${asset.name}`)}):null;
+  const saveStore=travel?createSaveStore({directory:saveDirectory??hostSaveDirectory(),releaseLoaders:()=>logLine('Log',`Unloading: Package ${levelName}`)}):null;
   if(travel)installTravelNatives({runtime,store:saveStore});
   // PruneTravelActors and SaveCurrentLevel(-2) for the tick's travel step (travel-save.mjs).
   const levelSaver=travel?createLevelSaver({runtime,level,asset,store:saveStore,log:logLine,viewport:()=>level.engine.client.viewports[0],

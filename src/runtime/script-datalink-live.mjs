@@ -31,7 +31,7 @@ function get(runtime,object,name){return runtime.readNamed(object,name);}
 
 /** Build the exact script/native world prerequisites for DataLinkPlay Spawn
  * and the shipped DataVaultImage class the DL_Rooftops transfer event uses. */
-export async function prepareLiveActorSpawnWorld({runtime,engine,deusEx,level,levelInfo,mapAsset=null}){
+export async function prepareLiveActorSpawnWorld({runtime,engine,deusEx,level,levelInfo,mapAsset=null,packageName=null}){
   const [dataLinkClass,imageClass]=await Promise.all([
     runtime.loadClass(deusEx,requiredExport(deusEx,'DataLinkPlay')),
     runtime.loadClass(deusEx,requiredExport(deusEx,'Image02_NYC_Warehouse')),
@@ -81,7 +81,8 @@ export async function prepareLiveActorSpawnWorld({runtime,engine,deusEx,level,le
   const names=createScriptNames({names:[none],freeIndices:[],buckets:Array(0x1000).fill(null),
     allocator:{free:()=>{}}});
   names.buckets[names.hashBucket(none.text)]=none;
-  const outer={identity:{},index:-1,name:mapAsset?.name??'TrainingRuntime',outer:null,flags:0};
+  // The level's package is named as the URL spelled the map (LoadMap makes it from URL.Map: 'dxonly', '99_endgame3'), not as the file is named.
+  const outer={identity:{},index:-1,name:packageName??mapAsset?.name??'TrainingRuntime',outer:null,flags:0};
   const nativeLevel={identity:{},index:-1,name:'MyLevel',outer,flags:0};
   // UObject::GetTransientPackage (Core 0x10102450): the outer execNew uses
   // for a None Outer. Its index is this host registry's, not a measured one.

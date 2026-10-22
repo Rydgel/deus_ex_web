@@ -193,7 +193,7 @@ function verifyLocationDefaults(runtime, managerClass) {
 /** `imported`: the graph was replaced by a travel text's (travel-import.mjs). An imported actor is spawned with the player as its Owner
  * (SpawnPlayActor's SpawnActor), so an imported augmentation's Owner is the player and not the manager, and the ownership and
  * activation state is the one the text carried, not the cold defaults. */
-function verifyAugmentationState(runtime, manager, augmentations, { imported = false } = {}) {
+function verifyAugmentationState(runtime, manager, augmentations, { imported = false, owner: importedOwner = null } = {}) {
   const first = runtime.readNamed(manager, 'FirstAug');
   if (first !== augmentations[0]) throw new Error('AugmentationManager.FirstAug does not point to AugSpeed1');
   const seen = new Set(), chain = [];
@@ -208,7 +208,7 @@ function verifyAugmentationState(runtime, manager, augmentations, { imported = f
   for (const [index, augmentation] of augmentations.entries()) {
     const owner = runtime.readNamed(augmentation, 'Owner');
     const player = runtime.readNamed(augmentation, 'Player');
-    if (owner !== manager && !(imported && owner === runtime.readNamed(manager, 'Player')))
+    if (owner !== manager && !(imported && owner === (importedOwner ?? runtime.readNamed(manager, 'Player'))))
       throw new Error(`Augmentation ${PLAYER_AUGMENTATION_STARTUP.classes[index]} has the wrong Owner`);
     if (player !== runtime.readNamed(manager, 'Player'))
       throw new Error(`Augmentation ${PLAYER_AUGMENTATION_STARTUP.classes[index]} has the wrong Player`);
@@ -365,7 +365,11 @@ export async function createPlayerAugmentationStartup({runtime, assets, deusEx, 
       throw new Error('Player AugmentationSystem has the wrong class');
     if (runtime.readNamed(manager, 'Owner') !== player)
       throw new Error('AugmentationManager Owner is not JCDentonMale');
-    if (runtime.readNamed(manager, 'Player') !== player)
+    // DeusExPlayer.TravelPostAccept returns before AugmentationSystem.SetPlayer in a level whose mission number is below 0 (the DX.dx logo map, -2, and
+    // DXOnly, -1: DeusExPlayer.uc:616..644), and Player is not a travel property: an imported manager keeps Player None there.
+    const levelInfo = level.actors.find(a => a && runtime.attachedInstance(a)?.cls.record.key === 'deusex.deusexlevelinfo');
+    const setPlayerSkipped = imported && levelInfo && runtime.readNamed(levelInfo, 'missionNumber') < 0;
+    if (runtime.readNamed(manager, 'Player') !== (setPlayerSkipped ? null : player))
       throw new Error('AugmentationManager Player is not JCDentonMale');
 
     const augmentations = [], seen = new Set();
@@ -374,7 +378,7 @@ export async function createPlayerAugmentationStartup({runtime, assets, deusEx, 
       if (seen.has(current)) throw new Error('AugmentationManager augmentation chain is cyclic');
       seen.add(current); augmentations.push(current);
     }
-    verifyAugmentationState(runtime, manager, augmentations, { imported });
+    verifyAugmentationState(runtime, manager, augmentations, { imported, owner: player });
     const keyRing = runtime.readNamed(player, 'KeyRing');
     if (!keyRing || classKey(runtime.instance(keyRing).cls) !== 'deusex.nanokeyring')
       throw new Error('CreateKeyRing did not spawn the player NanoKeyRing');

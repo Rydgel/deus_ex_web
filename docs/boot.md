@@ -66,7 +66,7 @@ files are known until the first map is loaded, and that map is DX.dx in Play. Th
 the pointer lock). `?debug=1` is the debugging page (the toolbar, the web crosshair and hints, Inspect, the map list, `00_Training` loaded
 first), which every tool and validator opens: the 65 scripts that open the page pass their URL through `scripts/page-url.mjs` `debugUrl`. The
 menu's Training and New Game buttons travel ([travel](travel.md)): Escape and a click on Training arrive in `00_Training` (steps 0 and 1); New Game
-runs the difficulty and New Game screens, the intro and the Island (step 2). Load Game, Play Intro and Credits stop by name until their steps.
+runs the difficulty and New Game screens, the intro and the Island (step 2). Play Intro (the intro, then the DXOnly level: the DX logo with the player Paralyzed, a click or Escape for the menu) and Credits run the original's scripts and end at the menu (step 5, [travel](travel.md#play-step-5-first-part-play-intro-credits-dxonly-and-the-endings)); Load Game's slots are step 4's load side.
 
 **The screen's shape is the original's 4:3 (2026-10-21).** The original starts fullscreen at `DeusEx.ini` `[WinDrv.WindowsClient]`
 `FullscreenViewportX=640`, `FullscreenViewportY=480` (`StartupFullscreen=True`), and every mode its Display menu offers is 4:3 or 5:4 (the page's
