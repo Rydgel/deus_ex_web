@@ -70,7 +70,7 @@ import * as D from './script-window-family-draw.mjs';
 import * as Log from './script-window-text-log.mjs';
 import * as L from './script-window-family-layout.mjs';
 import {createInputConsole} from './script-input-console.mjs';
-import {createConsoleCommands} from './script-console-command.mjs';
+import {createConsoleCommands, DEFAULT_DISPLAY_MODES} from './script-console-command.mjs';
 import {createNativeConfig} from './script-native-config.mjs';
 import {rootTickNative,moveTabGroupNative} from './script-window-root-tick.mjs';
 import {dispatchWindowSoundNative,windowPlaySound} from './script-window-sound.mjs';
@@ -210,6 +210,16 @@ export async function createWindowHost({runtime, assets, player, gameConfig = nu
     viewportSize(){
       if(!viewportSize)boundary('UViewport SizeX/SizeY are unknown before the first frame');
       return viewportSize;
+    },
+    // The display modes UD3DRenderDevice enumerated (GetRes): a host input. On a real display the mode the game runs in is one
+    // of them, so MenuChoice_Resolution.LoadSetting finds GetCurrentRes in GetRes's list; the page's size is not one of the
+    // default modes, and without it there the choice falls back to its first mode and the Display screen's OK set 640x480.
+    // The default modes plus the viewport's own size, in ascending order.
+    displayModes(){
+      const modes=[...DEFAULT_DISPLAY_MODES];
+      if(viewportSize&&!modes.some(mode=>mode.width===viewportSize.sizeX&&mode.height===viewportSize.sizeY))
+        for(const bits of [16,32])modes.push({width:viewportSize.sizeX,height:viewportSize.sizeY,bits});
+      return modes.sort((a,b)=>a.width-b.width||a.height-b.height||a.bits-b.bits);
     },
     viewport(){
       const viewport=runtime.readNamed(player,'Player');

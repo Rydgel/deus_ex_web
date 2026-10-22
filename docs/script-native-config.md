@@ -122,7 +122,9 @@ own through `services.displayModes()`. `GetColorDepths` is not the D3D device's:
 `SetRes WxH[xD]` is `UWindowsViewport::Exec` (WinDrv.dll `0x1110715f`): the parse is translated and the
 `RenDev->SetRes(X, Y, ColorBytes, IsFullscreen())` call becomes a **request** to the page, which fixes
 its drawing buffer to that size and scales it to fit (`main.mjs` `fixedResolution`). No display mode
-exists to switch; this is the browser standing in for the render device, labelled as such.
+exists to switch; this is the browser standing in for the render device, labelled as such. The window host supplies the default modes plus the viewport's own size (`displayModes()`, 2026-10-22), because the original's
+current mode is always one of its enumerated modes and `MenuChoice_Resolution.LoadSetting` relies on finding `GetCurrentRes` in the list
+([config persistence](config-persistence.md)).
 
 ## Not covered
 

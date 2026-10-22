@@ -133,9 +133,12 @@ Rows that are not a kept file (wrong type, a leaf other than the two files) are 
 
 ## Open
 
-* **The Display screen's Resolution choice.** Its list is `GetRes`, the host's modes (`DEFAULT_DISPLAY_MODES`), and its value is whatever entry equals `GetCurrentRes`, else the first.
-  On the page the buffer is rarely one of them, so the screen's OK sends `SetRes 640x480` for the untouched choice, and now saves it. Unverified in the page; the validator avoids the screen's OK.
-  A fix needs a decision about what Play's mode list is (the original's current mode is always in its list).
+* **The Display screen's Resolution choice** *(resolved 2026-10-22)*. Its list is `GetRes`, the host's modes, and its value is whatever entry equals
+  `GetCurrentRes`, else the first. The page's buffer was rarely one of the default modes, so the screen's OK sent `SetRes 640x480` for the untouched
+  choice and saved it. The window host's `displayModes()` now lists the default modes plus the viewport's own size, in ascending order: on a real
+  display the mode the game runs in is one of the modes DirectDraw enumerates, so the original's invariant (`GetCurrentRes` among `GetRes`) holds and
+  the untouched OK sends nothing (checked in the page at 1280x800: `GetRes` `640x480 800x600 1024x768 1066x800 1280x1024 1600x1200`, OK kept 1066x800;
+  `validate-native-config` checks the invariant).
 * **The last write can be lost.** The original writes synchronously; an IndexedDB commit finishes after the page's task. A tab closed within that moment loses the last change. No `pagehide`
   flush is possible for an asynchronous commit.
 * **Two tabs.** Each holds its own copy and the last writer of a file wins, as two game instances on one directory would.

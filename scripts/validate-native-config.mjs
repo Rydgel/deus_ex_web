@@ -134,9 +134,16 @@ const is = (actual, expected, label) => { assert.deepEqual(actual, expected, lab
   is(client.decals, true, 'the installed Decals=True');
   host.consoleCommands.consoleCommand(player, 'set ini:Engine.Engine.ViewportManager Decals False');
   is([client.decals, host.consoleCommands.consoleCommand(player, 'get ini:Engine.Engine.ViewportManager Decals')], [false, 'False'], 'Decals off reaches Client.Decals');
-  // Display modes: UD3DRenderDevice::Exec GetRes lists the host's 16-bit modes once each; GetColorDepths is not the
-  // D3D device's and stays refused (UWindowsViewport::Exec).
-  is(host.consoleCommands.consoleCommand(player, 'GetRes'), '640x480 800x600 1024x768 1280x1024 1600x1200', 'GetRes');
+  // Display modes: UD3DRenderDevice::Exec GetRes lists the host's 16-bit modes once each, the default modes and the viewport's own
+  // size (the mode a real display runs the game in is one of its modes); GetColorDepths is not the D3D device's and stays refused
+  // (UWindowsViewport::Exec).
+  const {sizeX, sizeY} = host.viewportSize;
+  const modes = [[640, 480], [800, 600], [1024, 768], [1280, 1024], [1600, 1200]];
+  if (!modes.some(([w, h]) => w === sizeX && h === sizeY)) modes.push([sizeX, sizeY]);
+  modes.sort((a, b) => a[0] - b[0] || a[1] - b[1]);
+  is(host.consoleCommands.consoleCommand(player, 'GetRes'), modes.map(([w, h]) => `${w}x${h}`).join(' '), 'GetRes');
+  is(host.consoleCommands.consoleCommand(player, 'GetRes').split(' ').includes(host.consoleCommands.consoleCommand(player, 'GetCurrentRes')), true,
+    'GetCurrentRes is among GetRes (MenuChoice_Resolution.LoadSetting finds it)');
   assert.throws(() => host.consoleCommands.consoleCommand(player, 'GetColorDepths'), error => error.name === 'UnsupportedConsoleCommandError'); checks++;
   // Resolution: SetRes becomes a request for the page.
   host.consoleCommands.consoleCommand(player, 'SetRes 1024x768');
