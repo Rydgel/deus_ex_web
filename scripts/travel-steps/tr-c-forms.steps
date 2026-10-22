@@ -1,0 +1,46 @@
+# The installed URL forms with a map extension and the blank before the `#` (mission 14), whether a level filed under such a name is restored, and a
+# mission change whose portal names no Teleporter (14_OceanLab_Silo -> 15_area51_bunker.dx #bunker_start).
+# Run: scripts/travel-probe.sh tr-c @scripts/travel-steps/tr-c-forms.steps
+cmd:set DeusEx.JCDentonMale bCheatsEnabled True
+cmd:set LevelInfo bPlayersOnly True
+cmd:LocalTravel 14_OceanLab_Lab
+arrive:14_oceanlab_lab$
+cmd:set LevelInfo bPlayersOnly True
+snap:c1-lab
+props:JCDentonMale:c1-player:Location:0x114:f3,Rotation:0x120:i3,ViewRotation:0x3dc:i3,Health:0x428:u32
+cmd:LocalTravel 14_OceanLab_UC.dx #UC
+arrive:14_oceanlab_uc
+cmd:set LevelInfo bPlayersOnly True
+snap:c2-uc
+props:JCDentonMale:c2-player:Location:0x114:f3,Rotation:0x120:i3,ViewRotation:0x3dc:i3,Health:0x428:u32
+savecopy:c2
+cmd:LocalTravel 14_OceanLab_Lab.dx #Sunkentunnel
+arrive:14_oceanlab_lab
+cmd:set LevelInfo bPlayersOnly True
+snap:c3-lab-back
+props:JCDentonMale:c3-player:Location:0x114:f3,Rotation:0x120:i3,ViewRotation:0x3dc:i3,Health:0x428:u32
+savecopy:c3
+cmd:LocalTravel 14_Vandenberg_sub.dx#subbay
+arrive:14_vandenberg_sub
+cmd:set LevelInfo bPlayersOnly True
+snap:c4-sub
+props:JCDentonMale:c4-player:Location:0x114:f3,Rotation:0x120:i3,ViewRotation:0x3dc:i3,Health:0x428:u32
+savecopy:c4
+cmd:LocalTravel 14_Oceanlab_silo.dx #frontgate
+arrive:14_oceanlab_silo
+cmd:set LevelInfo bPlayersOnly True
+snap:c5-silo
+props:JCDentonMale:c5-player:Location:0x114:f3,Rotation:0x120:i3,ViewRotation:0x3dc:i3,Health:0x428:u32
+savecopy:c5
+cmd:LocalTravel 15_area51_bunker.dx #bunker_start
+arrive:15_area51_bunker
+cmd:set LevelInfo bPlayersOnly True
+snap:c6-bunker
+props:JCDentonMale:c6-player:Location:0x114:f3,Rotation:0x120:i3,ViewRotation:0x3dc:i3,Health:0x428:u32
+savecopy:c6
+cmd:LocalTravel 04_NYC_UNATCOIsland.dx
+arrive:04_nyc_unatcoisland
+cmd:set LevelInfo bPlayersOnly True
+snap:c7-island4
+props:JCDentonMale:c7-player:Location:0x114:f3,Rotation:0x120:i3,ViewRotation:0x3dc:i3,Health:0x428:u32
+savecopy:c7

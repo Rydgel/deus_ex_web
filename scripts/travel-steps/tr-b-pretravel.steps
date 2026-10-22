@@ -1,0 +1,35 @@
+# Mission02.PreTravel (leaving Battery Park early sets MS_MapLeftEarly, expiration 3) and a Teleporter/MapExit portal that names no Teleporter
+# (02_NYC_Street has no `ToStreet`: FindPlayerStart falls to a PlayerStart); then Mission08.PreTravel (the EntranceCopter of 08_NYC_Street is destroyed
+# before the level is filed). Run: scripts/travel-probe.sh tr-b @scripts/travel-steps/tr-b-pretravel.steps
+cmd:set DeusEx.JCDentonMale bCheatsEnabled True
+cmd:set LevelInfo bPlayersOnly True
+cmd:LocalTravel 02_NYC_BatteryPark
+arrive:02_nyc_batterypark$
+cmd:set LevelInfo bPlayersOnly True
+snap:b1-batterypark
+props:JCDentonMale:b1-player:Location:0x114:f3,Rotation:0x120:i3,ViewRotation:0x3dc:i3,Health:0x428:u32
+cmd:LocalTravel 02_NYC_Street#ToStreet
+arrive:02_nyc_street$
+cmd:set LevelInfo bPlayersOnly True
+snap:b2-street
+props:JCDentonMale:b2-player:Location:0x114:f3,Rotation:0x120:i3,ViewRotation:0x3dc:i3,Health:0x428:u32
+savecopy:b2
+# mission 8: the helicopter is there on arrival, gone from the filed level after a visit to the Bar
+cmd:LocalTravel 08_NYC_Street
+arrive:08_nyc_street$
+cmd:set LevelInfo bPlayersOnly True
+snap:b3-street8
+actors:BlackHelicopter:b3-copter
+props:JCDentonMale:b3-player:Location:0x114:f3,Rotation:0x120:i3,ViewRotation:0x3dc:i3,Health:0x428:u32
+cmd:LocalTravel 08_NYC_Bar#ToBarFrontEntrance
+arrive:08_nyc_bar$
+cmd:set LevelInfo bPlayersOnly True
+snap:b4-bar8
+savecopy:b4
+cmd:LocalTravel 08_NYC_Street#FromBarFrontEntrance
+arrive:08_nyc_street[.]dxs$
+cmd:set LevelInfo bPlayersOnly True
+snap:b5-street8-restored
+actors:BlackHelicopter:b5-copter
+props:JCDentonMale:b5-player:Location:0x114:f3,Rotation:0x120:i3,ViewRotation:0x3dc:i3,Health:0x428:u32
+savecopy:b5

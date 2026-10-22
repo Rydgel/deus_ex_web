@@ -8,11 +8,15 @@
  * Class=DeusEx.JCDentonMale`). The tick clears `LastURL.Portal` before it builds the URL (0x10390b3c), which is why the
  * base's portal never leaks into a relative travel.
  *
+ * A *pure filename* head (`Map.dx`, `Map.dx ` before a `#`; Engine.dll 0x103f8680..0x103f875d: the first `.` of the head is followed by
+ * the map extension `dx` (or the save extension `dxs`) and then a character that is not a letter or digit, so the host and port
+ * parsing is skipped) keeps its text as the map, the extension and the blank included: measured `URL.Map` `04_NYC_UNATCOIsland.dx` and
+ * `15_area51_bunker.dx ` (docs/travel.md "Load game, restart and URL forms"). {@link mapFileStem} is the file such a map names.
+ *
  * Not ported, and refused with {@link UnsupportedFurlForm} rather than approximated (docs/travel.md "Unresolved" 1): a
- * protocol or host (`unreal://`), a path (`..\Save\Current\X.dxs`, the `?loadgame=` / `?load` forms), a `.dx` suffix, a
- * space before the `#` (measured to load, with the space kept in `Map`), and a text with both a portal and options. The
- * order of the portal and the options in {@link Furl#toString} is the one `FURL::String` is remembered to use and is
- * **unverified**: only option-only URLs were measured.
+ * protocol or host (`unreal://`), a path (`..\Save\Current\X.dxs`, the `?loadgame=` / `?load` forms), other blanks, and a text
+ * with both a portal and options. {@link Furl#toString} follows FURL::String (0x103f9210): the map, each option behind a `?`, then
+ * `#` and the portal.
  *
  * `TRAVEL_*` are Engine/Actor.uc ETravelType (Absolute 0, Partial 1, Relative 2). */
 export const TRAVEL_ABSOLUTE = 0, TRAVEL_PARTIAL = 1, TRAVEL_RELATIVE = 2;
@@ -63,20 +67,31 @@ export class Furl {
 }
 
 /** The map and portal of the installed `Map` / `Map#Portal` strings (SendPlayer, MapExit, Teleporter): letters, digits, `_`
- * and `-` only. Everything else the installed data holds (`.dx`, a space) is a refused form. */
+ * and `-`; a head may carry the map extension (`Map.dx`) and blanks after it (`Map.dx #Portal`, three installed MapExits and five Teleporters). */
 const NAME = /^[A-Za-z0-9_-]+$/;
+const FILE_HEAD = /^[A-Za-z0-9_-]+\.dx +$|^[A-Za-z0-9_-]+\.dx$/;
+
+/** The level file a URL's map names: DDeusExGameEngine::Browse cuts the map at the first `.dx` (`appStrstr`, case-sensitive, 0x100119d7..0x10011a3c) for the
+ * name of a filed level, and the file system drops the blanks after an extension (`15_area51_bunker.dx ` opens `15_area51_bunker.dx`). */
+export function mapFileStem(map) {
+  const text = String(map ?? ''), dx = text.indexOf('.dx');
+  return (dx >= 0 ? text.slice(0, dx) : text).trimEnd();
+}
 
 /** FURL(Base, TextURL, Type). `base` is a Furl (the engine's LastURL) or null; `defaults` the `[DefaultPlayer]` options added when absent. */
 export function parseFurl(base, text, type, { defaults = DEFAULT_PLAYER_OPTIONS } = {}) {
   text = String(text ?? '');
   if (!Number.isInteger(type) || type < 0 || type > 2) throw new TypeError(`FURL travel type ${type}`);
-  if (/[\\/:\s]/.test(text.replace(/=[^?#]*/g, ''))) throw new UnsupportedFurlForm(text, 'protocol, path or space');
+  // The head ends at the first `?` or `#` (0x103f803d..0x103f8065); leading blanks are skipped (0x103f8029)
+  text = text.replace(/^ +/, '');
   const hash = text.indexOf('#'), query = text.indexOf('?');
   if (hash >= 0 && query >= 0) throw new UnsupportedFurlForm(text, 'portal together with options');
   let mapText = text, portalText = null, options = [];
   if (hash >= 0) { mapText = text.slice(0, hash); portalText = text.slice(hash + 1); }
   else if (query >= 0) { mapText = text.slice(0, query); options = text.slice(query + 1).split('?').filter(Boolean); }
-  if (mapText && !NAME.test(mapText)) throw new UnsupportedFurlForm(text, mapText.includes('.') ? 'file extension' : 'map name characters');
+  if (/[\\/:]/.test(mapText) || (/\s/.test(mapText) && !FILE_HEAD.test(mapText))) throw new UnsupportedFurlForm(text, 'protocol, path or space');
+  if (/[\\/:\s]/.test(options.join('?').replace(/=[^?#]*/g, '')) || (portalText !== null && /[\\/:\s]/.test(portalText))) throw new UnsupportedFurlForm(text, 'protocol, path or space');
+  if (mapText && !NAME.test(mapText) && !FILE_HEAD.test(mapText)) throw new UnsupportedFurlForm(text, mapText.includes('.') ? 'file extension' : 'map name characters');
   if (portalText !== null && !NAME.test(portalText)) throw new UnsupportedFurlForm(text, 'portal characters');
   const out = new Furl();
   if (type !== TRAVEL_ABSOLUTE && base) {

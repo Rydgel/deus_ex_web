@@ -55,6 +55,11 @@ test('within one mission the level left is filed, then the destination is restor
   assert.equal(String(portal.at(-1).saved.url), '..\\Save\\Current\\01_NYC_UNATCOHQ.dxs?Name=Player?Class=DeusEx.JCDentonMale#p');
   const suffixed = browseDecision({ url: new Furl({ map: '01_NYC_UNATCOHQ.dx', op: ['Name=Player'] }), lastURL: last, level: level(1), player: {} });
   assert.equal(suffixed.at(-1).saved.name, '01_NYC_UNATCOHQ');
+  // `Map.dx ` (the blank before a `#`): Left(index of the first `.dx`) drops the blank with the extension (appStrstr, case-sensitive: `.DX` would stay)
+  const spaced = browseDecision({ url: Object.assign(new Furl({ map: '14_OceanLab_UC.dx ', op: ['Name=Player'] }), { portal: 'UC' }), lastURL: last, level: level(14), player: {} });
+  assert.equal(spaced.at(-1).saved.name, '14_OceanLab_UC');
+  assert.equal(spaced.at(-1).saved.file, '14_OceanLab_UC.dxs');
+  assert.equal(browseDecision({ url: new Furl({ map: '14_OceanLab_UC.DX', op: [] }), lastURL: last, level: level(14), player: {} }).at(-1).saved.name, '14_OceanLab_UC.DX');
 });
 
 test('bStartingNewGame (StartNewGame, the menu Training) wipes even within a mission', () => {

@@ -14,7 +14,7 @@
  *
  * Unverified (docs/travel.md "Unresolved" 7): the engine's LastURL is only ever changed here (the `loadonly` removal and the portal
  * clear), the way the plain local-load path leaves it; the load-game and saved-level branches that assign it are not implemented. */
-import { Furl, parseFurl, UnsupportedFurlForm, TRAVEL_RELATIVE } from './furl.mjs';
+import { Furl, parseFurl, UnsupportedFurlForm, TRAVEL_RELATIVE, mapFileStem } from './furl.mjs';
 import { browseDecision } from './travel-browse.mjs';
 import { formatTravelText } from './travel-text.mjs';
 import { saveSlotDirectory } from './save-directory.mjs';
@@ -97,7 +97,7 @@ export function createTravelStep({ runtime, level, viewport, exporter, store, lo
           const loadUrl = restored ? restored.url : effect.url;
           log('Log', `LoadMap: ${loadUrl}`);
           const info = effect.travelInfo === 'level' ? level.travelInfo ?? new Map() : travelInfo;
-          return { kind: 'loadMap', map: restored ? restored.name : effect.url.map, portal: loadUrl.portal, url: String(loadUrl), options: [...loadUrl.op],
+          return { kind: 'loadMap', map: restored ? restored.name : mapFileStem(effect.url.map), portal: loadUrl.portal, url: String(loadUrl), options: [...loadUrl.op],
             // on success a filed level's load sets LastURL = GLevel->URL (docs/travel.md "Browse: the DeusEx override" step 5, "Unresolved" 7); a fresh load leaves it
             travelInfo: [...info], lastURL: restored ? { map: loadUrl.map, portal: loadUrl.portal, op: [...loadUrl.op] }
               : { map: lastURL.map, portal: lastURL.portal, op: [...lastURL.op] },

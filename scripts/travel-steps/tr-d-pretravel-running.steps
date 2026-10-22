@@ -1,0 +1,34 @@
+# Mission02.PreTravel and Mission08.PreTravel on levels that have run (MissionScript.InitStateMachine sets `localURL` and `flags` in the first seconds; a level
+# frozen from its load has neither, tr-b): leaving 02_NYC_BatteryPark early sets MS_MapLeftEarly (expiration 3); the EntranceCopter of 08_NYC_Street is destroyed
+# before the level is filed, so the restored Street has one helicopter less. A portal no Teleporter names (02_NYC_Street#ToStreet) is the second leg.
+# Run: scripts/travel-probe.sh tr-d @scripts/travel-steps/tr-d-pretravel-running.steps
+cmd:set DeusEx.JCDentonMale bCheatsEnabled True
+cmd:LocalTravel 02_NYC_BatteryPark
+arrive:02_nyc_batterypark$
+wait:6
+cmd:set LevelInfo bPlayersOnly True
+snap:d1-batterypark
+props:JCDentonMale:d1-player:Location:0x114:f3,Rotation:0x120:i3,ViewRotation:0x3dc:i3,Health:0x428:u32
+cmd:LocalTravel 02_NYC_Street#ToStreet
+arrive:02_nyc_street$
+snap:d2-street
+props:JCDentonMale:d2-player:Location:0x114:f3,Rotation:0x120:i3,ViewRotation:0x3dc:i3,Health:0x428:u32
+savecopy:d2
+cmd:set LevelInfo bPlayersOnly False
+cmd:LocalTravel 08_NYC_Street
+arrive:08_nyc_street$
+wait:6
+cmd:set LevelInfo bPlayersOnly True
+snap:d3-street8
+actors:BlackHelicopter:d3-copter
+props:JCDentonMale:d3-player:Location:0x114:f3,Rotation:0x120:i3,ViewRotation:0x3dc:i3,Health:0x428:u32
+cmd:LocalTravel 08_NYC_Bar#ToBarFrontEntrance
+arrive:08_nyc_bar$
+snap:d4-bar8
+savecopy:d4
+cmd:LocalTravel 08_NYC_Street#FromBarFrontEntrance
+arrive:08_nyc_street[.]dxs$
+snap:d5-street8-restored
+actors:BlackHelicopter:d5-copter
+props:JCDentonMale:d5-player:Location:0x114:f3,Rotation:0x120:i3,ViewRotation:0x3dc:i3,Health:0x428:u32
+savecopy:d5
