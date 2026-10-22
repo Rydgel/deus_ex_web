@@ -58,6 +58,10 @@ const reference = JSON.parse(stdout);
 if (process.argv.includes('--capture-only')) {
   console.log(JSON.stringify({ cases: cases.length, maps, hashes: reference.hashes }));
 } else {
+  // With the trace kernel loaded (the default; TRACE_KERNEL=js is the JavaScript reference alone) an owned brush's box is the Rust twin's
+  // (native/script-vm/src/bounds.rs, docs/rotating-brushes.md "Rust twin"): the original is compared with whichever answers.
+  const { loadTraceKernel } = await import('../src/runtime/trace-kernel.mjs');
+  const kernel = await loadTraceKernel();
   const { brushCollisionBounds, primitiveCollisionBounds } = await import('../src/runtime/brush-bounds.mjs');
   const mismatches = [];
   for (const [index, c] of cases.entries()) {
@@ -65,7 +69,7 @@ if (process.argv.includes('--capture-only')) {
     try { assert.deepEqual(actual, reference.results[index]); }
     catch { mismatches.push({ index, name: c.name, actual, expected: reference.results[index] }); }
   }
-  const summary = { cases: cases.length, maps, hashes: reference.hashes, mismatches };
+  const summary = { cases: cases.length, answeredBy: kernel ? `Rust kernel (${kernel.stats.bounds} owned boxes, ${kernel.stats.boundsFallback} handed back)` : 'JavaScript reference', maps, hashes: reference.hashes, mismatches };
   await writeFile(path.join(directory, 'comparison.json'), JSON.stringify(summary, null, 2));
   console.log(JSON.stringify({ ...summary, mismatches: mismatches.slice(0, 10), mismatchCount: mismatches.length }, null, 2));
   assert.equal(mismatches.length, 0);

@@ -863,6 +863,20 @@ planes, the order of the vertex sums, Fatness and a correctly rounded square roo
 GPU arithmetic does not have; it could be made exact, and would save 0.1 to 0.2 ms of a 3 to 4 ms worker frame on the
 boot screens ([umesh.md "GPU path"](umesh.md#gpu-path-decided-2026-10-21)).
 
+### October 22: a brush's world box in the trace kernel (implemented)
+
+Measured first ([rotating-brushes](rotating-brushes.md), "Cost"): the three spinning AC fans of `09_NYC_ShipFan` cost 1.0 to 1.4 ms of the tick in JavaScript, 41 % of it in
+`brushCollisionBounds` (the BigInt x87 emulation of the eight corners over `brushToWorld`), once per fan per tick for the encroachment query. Nothing else in the installed game turns a brush every tick.
+
+* `native/script-vm/src/bounds.rs`: `ABrush::ToWorld` (float32 stores, binary64 sums as `coords.mjs` computes them, the Core sine table uploaded from `rotationSineTable`) and the eight-corner expression on `Ext`
+  (64-bit significand, one float32 store). One call per box: 25 doubles in, six out; a case the JavaScript throws on or rounds twice on goes back to it. The host side is the trace kernel instance
+  (`trace-kernel.mjs brushBounds`); `brush-bounds.mjs brushCollisionBounds` calls it once the kernel is loaded and keeps the JavaScript body as `brushCollisionBoundsReference`.
+  `TRACE_KERNEL=js` / `BRUSH_BOUNDS=js` keep the reference, `TRACE_DIFFERENTIAL=1` compares every answer.
+* Verified: `validate-brush-bounds-kernel` (18,634 answered cases equal by `Object.is`, real brushes and seeded random records; 9,520 reference throws all handed back), against the original with the kernel
+  answering (`validate-native-bounds` 377 cases, `validate-native-encroachment` 308 cases, the 72-case fan chain), `TRACE_DIFFERENTIAL=1` through live Play (mover frob, BlowItUp, the push scenes).
+* Interleaved A/B (six process pairs, medians of 400-tick blocks, the fans on): 1.36 ms per tick in JavaScript, 1.10 ms with the kernel, -0.26 ms.
+* Left: the encroachment query's per-candidate brush `PointCheck` (a JavaScript callback from the Rust hash) and `moveTranslatingMover`'s push services, about 0.25 ms for three fans.
+
 ### Next steps, in recommended order
 
 The order changed on September 30, after the crossing calibration, the

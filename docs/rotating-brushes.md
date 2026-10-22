@@ -148,17 +148,38 @@ in a ticking level ([visual-acceptance](visual-acceptance.md), "Placement constr
 pawn by a fan was not observed there. The native part (hit list, push vector 0, `EncroachingOn` before `EncroachedBy`, the commit after) is the oracle's, the script part is the VM's
 (`Mover.EncroachingOn`, recovered earlier, [mover-push](mover-push.md)).
 
-## Cost
+## Cost, and the Rust twin of the brush box (2026-10-22)
 
-Measured in the harness (`game.tick` only, 09_NYC_ShipFan, 4 rounds of 600 ticks, fans on against `RotationRate` zeroed): **0.97 to 1.36 ms per tick for the three fans**, about 0.35 ms each
-(of the 8.3 ms budget at 120 fps), all in JavaScript. A CPU profile of 1500 ticks puts it in `moveTranslatingMover`: `checkMoverEncroachment` 66%, of which
-`brushCollisionBounds` (a BigInt x87 emulation of the eight transformed corners, once per fan per tick) is 41% of the whole and the hash query itself 26%; `moverMoveTail` is 3%.
-Only this map pays it. The Rust port that this measurement names is the mover's brush bounds (`brushToWorld` + the eight-corner box) and the encroachment query; it is
-not done here, the JavaScript body stays the reference ([rust-core](rust-core.md)).
+Measured first, in the harness (`game.tick` only, `09_NYC_ShipFan`, fans on against `RotationRate` zeroed): **0.97 to 1.36 ms per tick for the three fans**, about 0.35 ms each, all JavaScript
+(8.3 ms is the budget at 120 fps; only this map pays it). A CPU profile of 1500 ticks put it in `moveTranslatingMover`: `checkMoverEncroachment` 66 %, of which
+`brushCollisionBounds` (a BigInt x87 emulation of the eight transformed corners, once per fan per tick, over `brushToWorld`'s float32 matrix products) was 41 % of the whole
+and the hash query itself 26 %; `moverMoveTail` 3 %.
+
+**Done: the brush box in Rust** (`native/script-vm/src/bounds.rs`, called through the trace kernel instance, `trace-kernel.mjs brushBounds`; `brush-bounds.mjs` keeps the JavaScript body as
+`brushCollisionBoundsReference`). It is `ABrush::ToWorld` (`coords.mjs brushToWorld`: the same float32 stores and binary64 sums, the Core sine table uploaded from `rotationSineTable`) and the
+eight-corner `nativePoint` on the crate's x87 model `Ext` (64-bit significand, one float32 store) in one call; the host writes the pose into 25 doubles and reads six back. Cases the reference
+throws on (zero or non-finite scale, a non-finite corner) or rounds twice on (a nonzero result in the float32 subnormal range) go back to the reference (`undefined`), as do owner fields that are not
+plain numbers. `TRACE_KERNEL=js` keeps the reference alone, `BRUSH_BOUNDS=js` only this function, `TRACE_DIFFERENTIAL=1` runs the reference beside every kernel answer and throws on any
+difference. Evidence:
+
+* `scripts/validate-brush-bounds-kernel.mjs`: 18,634 answered cases equal by `Object.is` on all six numbers (3,154 real brush poses of 6 maps' movers: stored pose, KeyPos/KeyRot fractions, random
+  int32 rotations, shears, scales; 25,000 seeded random records over magnitudes 1e-3 to 1e6, any int32 Rotation, scales positive, negative, tiny, huge and zero, shear axes 0..7 around every
+  ShearSnap threshold, degenerate model boxes), and the 9,520 of them the reference throws on all handed back; no case the reference answers was handed back. Negative control: the
+  kernel's x87 precision at 24 bits fails on the first real brush.
+* **The original, with the kernel answering**: `validate-native-bounds` (377 cases, 323 owned boxes, the Training and Island movers at 0, 1/2 and 1 of their travel, shears 0..6, odd rotations) 0 mismatches
+  with the Rust twin and with `TRACE_KERNEL=js`; the whole fan chain (`validate-native-rotating-brush`, 72 cases, 714 ticks) 0 mismatches with the kernel on and with `TRACE_DIFFERENTIAL=1`.
+* `TRACE_DIFFERENTIAL=1` through live Play (mover-frob, island-blowitup, mover-push-play: Paris grill, Training door leaf): no difference.
+* Interleaved A/B (`BRUSH_BOUNDS=js` against the default, six process pairs, order flipped each pair, 5 blocks of 400 ticks after 300 warm-up, median ms per `game.tick`, all fans on):
+  JavaScript 1.347, 1.423, 1.375, 1.347, 1.371, 1.329 (median 1.36); Rust 1.158, 1.027, 1.057, 1.155, 1.055, 1.185 (median 1.10): **-0.26 ms per tick (-19 % of the tick, about half of the three
+  fans' cost)**. The profile after: `brushBounds` 54 ms of the run where `brushCollisionBounds` was 446.
+
+**Not done (stopped here, as the brief said for a large step)**: the rest of the fan's cost is the hash query, `collision-hash.mjs actorEncroachmentCheck` (332 ms of 518 ms in `moveTranslatingMover` after
+the port), whose per-candidate cylinder-against-brush test (`modelPointCheck`, `point-check.mjs`, 100 ms) is a JavaScript callback from the Rust hash, and `moveTranslatingMover`'s own JavaScript; moving the
+encroachment query and the push to Rust means a brush `PointCheck` kernel and the rider and push services, a family of its own.
 
 ## Open
 
-* The Rust twin above (measured, not started).
+* The query/PointCheck/push half of the mover's `MoveActor` in Rust (above, measured: about 0.25 ms of the tick for three fans).
 * The crush of a pawn by a stock fan against the running original (needs a placement the original does not allow); the first 0.15 s offset of the Wine samples.
 * A static Brush hit, `bRotateToDesired` on a brush, and the Test-1 (`Move` with Test) branches of the brush route are not reached by any content and stay explicit boundaries.
-* The loaded player's crouch (above).
+* The loaded player's crouch is [done](script-input-reset.md).
