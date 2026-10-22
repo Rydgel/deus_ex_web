@@ -85,3 +85,8 @@ including signed zeros emitted by the captured native outputs. Artificial
 nonfinite/overflow/subnormal-bound inputs and all possible x87 control-word
 settings are outside this corpus; the oracle uses the existing harness control
 word `0x037f`. No ToLocal implementation or claim was needed for these bounds.
+
+Update 2026-10-22: with the trace kernel loaded (Play, and any host that calls `loadTraceKernel`), an owned brush's box is computed by the Rust twin
+`native/script-vm/src/bounds.rs`; `brushCollisionBounds` falls back to this JavaScript body (`brushCollisionBoundsReference`) for the cases the twin hands back.
+The native comparison above runs with either answering (`validate-native-bounds`: 377 cases, 0 mismatches each way); [rotating-brushes](rotating-brushes.md) "Cost" has the corpus and the A/B.
+

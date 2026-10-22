@@ -5,6 +5,8 @@ import {createHash} from 'node:crypto';
 import path from 'node:path';
 import {brushCollisionBounds,primitiveCollisionBounds} from '../src/runtime/brush-bounds.mjs';
 import {gameDirectory} from './game-directory.mjs';
+import {loadTraceKernel} from '../src/runtime/trace-kernel.mjs';
+const kernel=await loadTraceKernel(); // the Rust twin of a brush's world box answers when loaded (TRACE_KERNEL=js: the reference)
 const f=Math.fround,reuse=process.argv.includes('--reuse'),captureOnly=process.argv.includes('--capture-only');
 const poses=JSON.parse(await readFile('reports/movement/native-bounds/cases.json')),summaries=[];
 for(const name of ['00_Training','01_NYC_UNATCOIsland']){

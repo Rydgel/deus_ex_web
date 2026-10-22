@@ -10,6 +10,7 @@
 #![no_std]
 
 mod aievent;
+mod bounds;
 mod hash;
 mod move_actor;
 mod move_pawn;

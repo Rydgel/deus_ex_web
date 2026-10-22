@@ -271,7 +271,7 @@ this folder picker. Your saves: the original's Load Game screen lists the saves 
 (the page's own Saves window opens from a Saves button shown beside the picture while a menu is open, and from the folder screen), or in a
 `Save` folder you pick (Chromium: the desktop game's own, or the game folder), and imports a desktop `Save` folder or
 exports a zip in Firefox and Safari; the dev server also lists the game folder's `Save`, read-only (docs/save-storage.md).
-Saving and loading work in the original's format (docs/travel.md "Play, step 4"): the Load Game screen, the QuickLoad key (numpad `/`) and the menu after a death load a slot, the desktop game's own slots included (one of 41 real slots stops by name at a running rotating mover).
+Saving and loading work in the original's format (docs/travel.md "Play, step 4"): the Load Game screen, the QuickLoad key (numpad `/`) and the menu after a death load a slot, the desktop game's own slots included (41 of 41 real slots load; the AC fans of `09_NYC_ShipFan` spin as the original's do, [docs/rotating-brushes.md](docs/rotating-brushes.md)).
 `http://127.0.0.1:5173/?debug=1` is the debugging page described below:
 the toolbar, Play/Inspect, the map list (training loads first) and the diagnostics.
 Original data is kept outside source control and outside the website build.

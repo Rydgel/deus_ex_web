@@ -5,7 +5,7 @@ s=importlib.util.spec_from_file_location('level',Path(__file__).with_name('nativ
 from unicorn.x86_const import UC_X86_REG_ESP,UC_X86_REG_ECX,UC_X86_REG_EAX,UC_X86_REG_EIP,UC_X86_REG_EBX
 class Native(m.NativeLevel):
  def __init__(self,root,scene):
-  self.mover_trace=None
+  self.mover_trace=None;self.run_tail=False   # run_tail: MoveActor runs on past the commit (native-rotating-brush-oracle.py)
   super().__init__(root,scene)
   self.write(0x1058bb58+0x28,'I',0x10582a28);self.write(0x10582a28+0x28,'I',0x1057cdf0)
   self.encroach_address=self.read(self.read(self.hash,'I')[0]+0x1c,'I')[0];self.calls=[]
@@ -45,7 +45,7 @@ class Native(m.NativeLevel):
     token,params,_=self.read(sp+4,'III');name=self.names.get(token,str(token));self.mover_trace.append({'event':name,'actor':self.actor_ids.get(cpu.reg_read(UC_X86_REG_ECX))})
     if name=='EncroachingOn':self.write(params+4,'I',self.encroach_reject)
     return
-   if address==0x10399d17 and cpu.reg_read(UC_X86_REG_EBX)==self.moving:
+   if address==0x10399d17 and cpu.reg_read(UC_X86_REG_EBX)==self.moving and not self.run_tail:
     self.mover_trace.append({'boundary':'after pose/hash commit; before Bump/touch/zone'});cpu.reg_write(UC_X86_REG_EAX,1);cpu.reg_write(UC_X86_REG_EIP,self.done);return
   return super().on_instruction(cpu,address,size,data)
  def capture(self,c):

@@ -1,6 +1,9 @@
 import { brushToWorld } from './coords.mjs';
+import { traceKernel, TRACE_DIFFERENTIAL } from './trace-kernel.mjs';
 
 const f = Math.fround;
+// BRUSH_BOUNDS=js keeps the reference alone for a benchmark A/B that leaves the other kernels in place (TRACE_KERNEL=js drops them all).
+const REFERENCE_ONLY = typeof process !== 'undefined' && process.env?.BRUSH_BOUNDS === 'js';
 // This native corner expression retains 64-bit x87 significands. A quarter-turn
 // sine can move an exact float32 midpoint by less than a JS double ULP. Keep
 // binary significands here instead of silently rounding that term away.
@@ -44,9 +47,35 @@ const copyBounds = model => ({ min: model.bounds.min.slice(), max: model.bounds.
 /** Original UModel.GetCollisionBoundingBox (Engine 0x103f0e70).
  * Source validity is ignored with an owner; native visits all eight corners.
  * Evidence and native comparisons: docs/brush-bounds.md.
+ *
+ * With an owner the Rust twin answers (native/script-vm/src/bounds.rs, through
+ * the trace kernel instance) once the kernel is loaded: the same bits as the
+ * reference below on everything it accepts, and `undefined` hands the cases the
+ * reference throws on or rounds twice on (non-finite or zero scale, float32
+ * subnormal results) back to it. TRACE_KERNEL=js keeps the reference alone;
+ * TRACE_DIFFERENTIAL=1 runs it beside every kernel answer and throws on any
+ * difference (docs/rotating-brushes.md "Rust twin").
  */
 export function brushCollisionBounds(model, owner = null) {
   if (owner == null) return copyBounds(model);
+  const kernel = REFERENCE_ONLY ? null : traceKernel;
+  if (kernel) {
+    const result = kernel.brushBounds(model, owner);
+    if (result !== undefined) {
+      if (TRACE_DIFFERENTIAL) {
+        const expected = brushCollisionBoundsReference(model, owner);
+        const same = (a, b) => a.every((v, i) => Object.is(v, b[i]));
+        if (!same(result.min, expected.min) || !same(result.max, expected.max) || result.valid !== expected.valid)
+          throw new Error(`brush bounds kernel differential mismatch: ${JSON.stringify({ model: model.bounds, owner, kernel: result, javascript: expected })}`);
+      }
+      return result;
+    }
+  }
+  return brushCollisionBoundsReference(model, owner);
+}
+
+/** The JavaScript body: the reference the kernel is held to. */
+export function brushCollisionBoundsReference(model, owner) {
   const coords = brushToWorld(owner), bounds = model.bounds;
   let min, max;
   for (let x = 0; x < 2; x++) for (let y = 0; y < 2; y++) for (let z = 0; z < 2; z++) {

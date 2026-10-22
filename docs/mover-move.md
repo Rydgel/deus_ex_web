@@ -85,3 +85,8 @@ integration complete; substituting moveQuery once for moveSmooth is insufficient
 Update: the pushed actor's `moveSmooth` is no longer limited to Pawns; any
 blocking non-Brush hit is pushed through its own MoveActor
 ([mover-push](mover-push.md)).
+
+Update 2026-10-22: the commit is followed by the rest of MoveActor (`moverMoveTail`, 0x10399d17..0x10399f5f): the EndTouch pass over the four Touching
+slots (every held touch ends, IsOverlapping is false for a Brush) and `SetActorZone(mover, 0, 0)`, after every commit, a rotation-only one included; Play had run
+them only for a Delta >= 0.0001. A mover without bCollideActors (a destroyed fan or door in a saved level) skips the hash remove/add and goes on through the same
+route. Proven on a spinning mover with the whole `performPhysics` chain: [rotating-brushes](rotating-brushes.md).

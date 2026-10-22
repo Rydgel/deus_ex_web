@@ -494,6 +494,10 @@ export async function createScriptDoors({
     if(!arrival&&!restore)liveMission.beginFreshMission(playerActor);
     // LoadMap's last step once the player is in: the moving brush tracker of the new level (GNewBrushTracker, Engine 0x1038dfb5)
     logLine('Init',`Initialized moving brush tracker for Level ${asset.name}.MyLevel`);
+    // ...and, right after it, `Client->Viewports(i)->Input->ResetInput()` for every viewport (0x1038dfe0..0x1038dff3, the viewport's Actor being the player Login
+    // just gave it): the held-key table, every CPF_Input byte and float of the player (a saved bDuck 1 included) and Action/Delta are zeroed, then UpdateInput(1)
+    // replays the physical keys. docs/script-input-reset.md.
+    windowHost.resetInput();
   }
   // GLog output device: Object.Log (native 231) is a synchronous side channel
   // with no gameplay effect. MissionScript.InitStateMachine logs its startup

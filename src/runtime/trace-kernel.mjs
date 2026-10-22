@@ -35,6 +35,7 @@
  * by Object.is, and the result's key order. */
 import {compileScriptVm} from './script-vm-kernel.mjs';
 import {ObjectArena, RESERVED} from './script-object-arena.mjs';
+import {rotationSineTable} from './coords.mjs';
 
 const env = typeof process !== 'undefined' ? process.env : undefined;
 const JS_ONLY = env?.TRACE_KERNEL === 'js';
@@ -80,12 +81,34 @@ async function load() {
   const kernel = new TraceKernel(instance.exports, arena);
   if (TRACE_DIFFERENTIAL) process.on('exit', () => {
     const s = kernel.stats;
-    console.error(`trace kernel differential: ${s.ray} rays, ${s.extent} extents compared; ${s.fallback} handed back; ${s.models} models uploaded, ${s.ineligible} left to JavaScript`);
+    console.error(`trace kernel differential: ${s.ray} rays, ${s.extent} extents compared; ${s.fallback} handed back; ${s.models} models uploaded, ${s.ineligible} left to JavaScript; ${s.bounds} brush boxes compared (brush-bounds.mjs), ${s.boundsFallback} handed back`);
   });
   return kernel;
 }
 
 const numeric = v => v === undefined || typeof v === 'number';
+const ZERO3 = [0, 0, 0];
+/** Three plain numbers (int32 when `integer`) into `into[at..at+3]`. */
+function triple(v, into, at, integer) {
+  if (!Array.isArray(v) || v.length !== 3) return false;
+  for (let k = 0; k < 3; k++) {
+    const x = v[k];
+    if (typeof x !== 'number' || (integer && (!Number.isInteger(x) || x < -0x80000000 || x > 0x7fffffff))) return false;
+    into[at + k] = x;
+  }
+  return true;
+}
+/** A brush scale record (`{scale, shearRate, shearAxis}`, every field optional) into `into[at..at+5]`. */
+function scaleFields(value, into, at) {
+  if (value === undefined) value = {};
+  if (typeof value !== 'object' || value === null) return false;
+  const rate = value.shearRate ?? 0, axis = value.shearAxis ?? 0;
+  if (typeof rate !== 'number' || typeof axis !== 'number') return false;
+  if (!triple(value.scale ?? ONE3, into, at, false)) return false;
+  into[at + 3] = rate; into[at + 4] = axis;
+  return true;
+}
+const ONE3 = [1, 1, 1];
 const finite3 = v => !!v && v.length === 3 && Number.isFinite(v[0]) && Number.isFinite(v[1]) && Number.isFinite(v[2]);
 
 /** trace.rs's model layout for `model` (header, 64-byte nodes, leaf-hull
@@ -144,16 +167,37 @@ class TraceKernel {
     // No kernel call is in flight when a finalizer runs, so the range is
     // reusable at once.
     this.registry = new FinalizationRegistry(({base, size}) => { arena.release(base, size); arena.reclaim(); });
-    this.stats = {ray: 0, extent: 0, fallback: 0, models: 0, ineligible: 0, imports: 0};
+    this.stats = {ray: 0, extent: 0, fallback: 0, models: 0, ineligible: 0, imports: 0, bounds: 0, boundsFallback: 0};
     // Tracked models (collisionModel objects) -> {base, wordsAt, wordCount, generation, count}.
     this.trackedModels = new WeakMap();
     this.views();
+    // Core FGlobalMath's float32 sine table (coords.mjs), for bounds.rs's ToWorld.
+    new Uint32Array(this.arena.memory.buffer, exports.sine_ptr(), 0x4000).set(new Uint32Array(rotationSineTable().buffer));
   }
   /** Re-derive the result and owner views after the memory grew. */
   views() {
     const buffer = this.arena.memory.buffer;
     this.out = new Float64Array(buffer, this.x.trace_out_ptr(), 9);
     this.owner = new Float64Array(buffer, this.x.trace_owner_ptr(), 12);
+    this.boundsIn = new Float64Array(buffer, this.x.bounds_in_ptr(), 25);
+    this.boundsOut = new Float64Array(buffer, this.x.bounds_out_ptr(), 6);
+  }
+  /** UModel::GetCollisionBoundingBox of an owned brush (brush-bounds.mjs): the
+   * world box of `model` at the pose `owner` holds, or undefined for the
+   * JavaScript reference to answer (an owner field that is not the plain numbers
+   * the reference reads, or a case bounds.rs hands back). */
+  brushBounds(model, owner) {
+    const bounds = model?.bounds;
+    if (!bounds) return undefined;
+    const i = this.boundsIn;
+    if (!triple(bounds.min, i, 19, false) || !triple(bounds.max, i, 22, false)) return undefined;
+    if (!triple(owner.Location ?? ZERO3, i, 0, false) || !triple(owner.Rotation ?? ZERO3, i, 3, true) ||
+      !triple(owner.PrePivot ?? ZERO3, i, 16, false)) return undefined;
+    if (!scaleFields(owner.PostScale, i, 6) || !scaleFields(owner.MainScale, i, 11)) return undefined;
+    if (this.x.brush_bounds() !== 1) { this.stats.boundsFallback++; return undefined; }
+    this.stats.bounds++;
+    const o = this.boundsOut;
+    return {min: [o[0], o[1], o[2]], max: [o[3], o[4], o[5]], valid: true};
   }
   /** The model's range, uploading it on first use; 0 leaves it to JavaScript. */
   base(model) {
