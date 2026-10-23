@@ -7,6 +7,8 @@
  *
  * - `stampScene`, `panZones`, `childFrames`: world.stampScene(),
  *   world.panZoneNames() and whether the map has mirror planes;
+ * - `scene`: a promise of those five (`stampScene`, `panZones`, `childFrames`, `gpu`, `weaponGpu`) when the page builds its world while this
+ *   load runs (sim-client.mjs loadOverlapped); awaited after createGame, which reads none of them. Null: they are among the options.
  * - `gpu`, `weaponGpu`: the capacities of the page's GPU mesh instances
  *   (gpu-mesh.mjs), or null where the page has none (the CPU path);
  * - `meshBackend`: 'javascript' keeps the JavaScript GetFrame kernel;
@@ -44,7 +46,7 @@ import { createDetailDraw } from '../runtime/detail-draw.mjs';
 // host's identities are the handles from its start to the next host's.
 const hostStarts = [];
 
-export async function createSimHost(map, asset, assets, { randomSeed, subtitles, fullscreen = null, stampScene, panZones, childFrames,
+export async function createSimHost(map, asset, assets, { randomSeed, subtitles, fullscreen = null, scene = null, stampScene, panZones, childFrames,
   gpu = null, weaponGpu = null, meshBackend = null, meshLod = null, weapons = null, weaponMirrors = null, weaponOrder = null, musicLibrary = null, travel = null, restore = false, onConversationSpeech = null, onAudioVoice = null,
   onProgress = () => {} }) {
   const events = [], notes = [], hostIndex = hostStarts.push(handleLimit()) - 1;
@@ -56,6 +58,11 @@ export async function createSimHost(map, asset, assets, { randomSeed, subtitles,
       onLightingChanged: changes => events.push({ kind: 'lighting', changes }),
       onConversationSpeech: event => onConversationSpeech?.(event), onAudioVoice: event => onAudioVoice?.(event) });
   } catch (error) { notes.push(`Play mode unavailable: ${error.message}`); return { game: null, notes, events }; }
+  if (scene) {
+    const part = await scene;
+    if (!part) throw new Error('The page did not build the world for this load');
+    ({ stampScene, panZones, childFrames, gpu, weaponGpu } = part);
+  }
   const runtime = game.doors.scriptRuntime.runtime, player = () => game.player.collisionActor;
   const exportName = ref => asset.pkg.exports[ref - 1]?.name;
   let meshLighting = null, actorSim = null;

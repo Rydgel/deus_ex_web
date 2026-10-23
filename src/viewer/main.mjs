@@ -880,7 +880,7 @@ async function loadMap(name, { travel = null, currentFiles = null } = {}) {
   if (!originalStart || !travel) document.exitPointerLock?.();
   keys.clear();
   busy('Loading original map', `Reading ${name}…`);
-  let nextWorld, nextHost = null, nextGame = null, nextNpcPreview = null, nextGpuMesh = null, nextSim = null, nextWeaponDraw = null, nextWeaponGpu = null;
+  let nextWorld, nextHost = null, nextGame = null, nextNpcPreview = null, nextGpuMesh = null, nextSim = null, nextWeaponDraw = null, nextWeaponGpu = null, overlapped = null;
   try {
     // A level filed in Save\Current (travel.mjs `restore`: a loaded game's, or one travel left) is drawn from that file, the package the simulation
     // loads (sim-worker.mjs), not from the map's .dx: the two number their objects differently, and the simulation's lighting changes name lights
@@ -892,6 +892,20 @@ async function loadMap(name, { travel = null, currentFiles = null } = {}) {
     const asset = filed?.asset ?? await assets.get(name);
     await new Promise(resolve => setTimeout(resolve, 0));
     const nextMap = filed?.map ?? decodeMap(asset.bytes);
+    // The simulation side's options that do not come from the page's world. With the worker the load starts now and runs while the page builds
+    // its world (sim-client.mjs loadOverlapped): the level's startup in the worker reads none of the world's part, sent below once it is built.
+    const params = new URLSearchParams(location.search);
+    // With the kept config the player's bSubtitles is the class default every Login reads, the Game Options menu's own: no page override.
+    const baseOptions = { randomSeed, subtitles: configStore ? null : subtitlePreference, fullscreen: Boolean(document.fullscreenElement), travel: { arrival: travel, lastURL: travel?.lastURL ?? null },
+      meshBackend: params.get('meshBackend'), meshLod: params.get('meshLod'),
+      // ?weapons=off: no pawn's third-person weapon is drawn (docs/weapon-attachment.md), for A/B captures; ?weapons=cpu: they take the
+      // CPU path (the reference) instead of the GPU mesh path
+      weapons: params.get('weapons'),
+      // ?weaponMirrors=0: no weapon in mirror child frames (on by default: compared with the original, docs/weapon-attachment.md "Mirrors")
+      weaponMirrors: params.get('weaponMirrors'),
+      // ?weaponOrder=late: each weapon is lit after all of its pawn's frames (the order before the interleaving; docs/weapon-attachment.md)
+      weaponOrder: params.get('weaponOrder') };
+    if (simClient) { overlapped = simClient.loadOverlapped(name, baseOptions, currentFiles); overlapped.reply.catch(() => {}); }
     nextWorld = await createWorld(nextMap, asset, assets, (message, done, total) => {
       $('gate-message').textContent = message; $('progress').max = total; $('progress').value = done;
     });
@@ -908,26 +922,18 @@ async function loadMap(name, { travel = null, currentFiles = null } = {}) {
       }
     }
     // The simulation side (sim-host.mjs): the game, the frame session, the
-    // mesh layers' simulation halves and lip sync.
-    // With the kept config the player's bSubtitles is the class default every Login reads, the Game Options menu's own: no page override.
-    const hostOptions = { randomSeed, subtitles: configStore ? null : subtitlePreference, fullscreen: Boolean(document.fullscreenElement), travel: { arrival: travel, lastURL: travel?.lastURL ?? null },
-      stampScene: nextWorld.stampScene(), panZones: nextWorld.panZoneNames(),
+    // mesh layers' simulation halves and lip sync. The world's part of its options:
+    const scenePart = { stampScene: nextWorld.stampScene(), panZones: nextWorld.panZoneNames(),
       // Actors only a child frame draws are admitted where one may exist: a map with mirrors, or with security
       // cameras (a ViewportWindow's frame draws the player, whom Draw's bBehindView stops excluding).
       childFrames: nextWorld.mirrors.stats.planes > 0 || nextMap.actors.some(actor => actor.className === 'SecurityCamera' || actor.className === 'ComputerSecurity'),
-      gpu: nextGpuMesh?.capacities ?? null, weaponGpu: nextWeaponGpu?.capacities ?? null,
-      meshBackend: new URLSearchParams(location.search).get('meshBackend'), meshLod: new URLSearchParams(location.search).get('meshLod'),
-      // ?weapons=off: no pawn's third-person weapon is drawn (docs/weapon-attachment.md), for A/B captures; ?weapons=cpu: they take the
-      // CPU path (the reference) instead of the GPU mesh path
-      weapons: new URLSearchParams(location.search).get('weapons'),
-      // ?weaponMirrors=0: no weapon in mirror child frames (on by default: compared with the original, docs/weapon-attachment.md "Mirrors")
-      weaponMirrors: new URLSearchParams(location.search).get('weaponMirrors'),
-      // ?weaponOrder=late: each weapon is lit after all of its pawn's frames (the order before the interleaving; docs/weapon-attachment.md)
-      weaponOrder: new URLSearchParams(location.search).get('weaponOrder') };
+      gpu: nextGpuMesh?.capacities ?? null, weaponGpu: nextWeaponGpu?.capacities ?? null };
+    const hostOptions = { ...baseOptions, ...scenePart };
     // On the page the old map's audio unregisters its music before the next
     // map's runtime is built (the worker does the same at its load).
     if (!simClient) simHost?.disposeAudio?.();
-    nextHost = simClient ? remoteHost(await simClient.load(name, hostOptions, currentFiles)) : await createSimHost(nextMap, asset, assets, { ...hostOptions,
+    if (overlapped) { overlapped.scene(scenePart); overlapped.scene = null; }
+    nextHost = simClient ? remoteHost(await overlapped.reply) : await createSimHost(nextMap, asset, assets, { ...hostOptions,
       musicLibrary: pageMusicLibrary,
       onAudioVoice: event => { void galaxyVoice(event); },
       onProgress: message => { $('gate-message').textContent = message; } });
@@ -1047,6 +1053,8 @@ async function loadMap(name, { travel = null, currentFiles = null } = {}) {
       precompileMs = performance.now() - mark;
     }
   } catch (error) {
+    // a load the worker started waits for the world's part: none comes
+    overlapped?.scene?.(null);
     if(nextHost&&nextHost!==simHost)nextHost.dispose?.();
     if(nextWeaponDraw&&nextWeaponDraw!==weaponDraw)nextWeaponDraw.dispose();
     if(nextWeaponGpu&&nextWeaponGpu!==weaponGpu)nextWeaponGpu.dispose();

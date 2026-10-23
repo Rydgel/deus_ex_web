@@ -68,6 +68,13 @@ export function createSimClient({ onProgress = () => {}, onFrame = null, onFailu
     snapshotPixels(job, pitch, height, data) { worker.postMessage({ type: 'snapshot', job, pitch, height, data }, [data.buffer]); },
     /** Build a map's simulation side (sim-host.mjs options, plain). */
     load: (map, options, currentFiles = null) => request({ type: 'load', map, options, currentFiles }),
+    /** The same build started before the page's world exists: `options` leave out the world's part (sim-host.mjs `scene`: `stampScene`,
+     * `panZones`, `childFrames`, `gpu`, `weaponGpu`), which `scene(part)` sends once the page has built it (null: the page's build failed).
+     * The worker starts the level meanwhile and waits for the part only where createSimHost first reads it, after createGame. */
+    loadOverlapped(map, options, currentFiles = null) {
+      const id = nextId, reply = request({ type: 'load', map, options: { ...options, sceneLater: true }, currentFiles });
+      return { reply, scene: part => worker.postMessage({ type: 'scene', id, part }) };
+    },
     /** `view`, `reset`, `stateDigest`, `musicStatus` or `musicDrive`, after
      * the frames posted before it. */
     call: (method, args = null) => request({ type: 'call', method, args, clock: clock() }),

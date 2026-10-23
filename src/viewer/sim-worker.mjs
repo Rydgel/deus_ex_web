@@ -149,7 +149,8 @@ async function handle(data) {
       const restore = data.options?.travel?.arrival?.restore ?? null;
       const filed = restore ? (await import('./restore-asset.mjs')).restoredLevel((await import('../runtime/save-directory.mjs')).hostSaveDirectory(), restore) : null;
       const asset = filed ? filed.asset : await assets.get(data.map);
-      host = await createSimHost(filed ? filed.map : decodeMap(asset.bytes), asset, assets, { ...data.options, musicLibrary, restore: Boolean(filed),
+      const scene = data.options?.sceneLater ? sceneFor(data.id).promise.finally(() => scenes.delete(data.id)) : null;
+      host = await createSimHost(filed ? filed.map : decodeMap(asset.bytes), asset, assets, { ...data.options, scene, musicLibrary, restore: Boolean(filed),
         onAudioVoice: event => audio.push({ kind: 'voice', event: plainVoice(event) }),
         onProgress: message => send({ type: 'progress', message }) });
       const summary = host.actorSim?.summary;
@@ -246,6 +247,9 @@ function mergeFrame(data) {
     status: pending.status || data.status, posts: pending.posts + 1 };
 }
 let chain = Promise.resolve();
+// The page's world-derived load options (sim-client.mjs loadOverlapped), by load id: they arrive while the load runs, outside the chain.
+const scenes = new Map();
+const sceneFor = id => { let entry = scenes.get(id); if (!entry) { let resolve; const promise = new Promise(r => { resolve = r; }); scenes.set(id, entry = { promise, resolve }); } return entry; };
 const enqueue = (data, run) => {
   chain = chain.then(run).catch(error =>
     send({ type: 'failure', id: data.id ?? null, request: data.type, posts: error?.posts ?? 0, error: errorOf(error) }));
@@ -275,6 +279,7 @@ function keepBusy() {
 }
 self.onmessage = ({ data }) => {
   keepBusy();
+  if (data.type === 'scene') { sceneFor(data.id).resolve(data.part); return; }
   if (data.type !== 'frame') { enqueue(data, () => handle(data)); return; }
   mergeFrame(data);
   if (runScheduled) return;
