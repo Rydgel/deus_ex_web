@@ -1,0 +1,109 @@
+# The MapExits with bPlayTransition (20 in the campaign), fired as their owners fire them: `CauseEvent <tag>` is `A.Trigger(Self, Self)` on every actor with that tag
+# (Engine/PlayerPawn.uc:1286, cheats on). The player rides the camera path in the Interpolating state (Physics 8) and InterpolateEnd sends it to the next map.
+# The ride is sampled in slow motion (`set LevelInfo TimeDilation 0.1`: a sample costs a few seconds of wall time, a tenth of that in level time): f1..f40 are the player's place
+# and LevelTime while the Island's path runs, g1..g40 the same for 04_NYC_BatteryPark, whose two MapExits share the tag Mission4Exit (both fire on one CauseEvent).
+# Run: scripts/travel-probe.sh tr-f @scripts/travel-steps/tr-f-camera-paths.steps
+cmd:set DeusEx.JCDentonMale bCheatsEnabled True
+cmd:set LevelInfo bPlayersOnly True
+cmd:LocalTravel 01_NYC_UNATCOIsland
+arrive:01_nyc_unatcoisland$
+cmd:set LevelInfo bPlayersOnly True
+props:JCDentonMale:f0:Location:0x114:f3,Physics:0x30:u8,LevelTime:0xa8:pf:0x478
+cmd:set LevelInfo TimeDilation 0.1
+cmd:CauseEvent Dock_boat
+props:JCDentonMale:f1:Location:0x114:f3,Physics:0x30:u8,LevelTime:0xa8:pf:0x478
+props:JCDentonMale:f2:Location:0x114:f3,Physics:0x30:u8,LevelTime:0xa8:pf:0x478
+props:JCDentonMale:f3:Location:0x114:f3,Physics:0x30:u8,LevelTime:0xa8:pf:0x478
+props:JCDentonMale:f4:Location:0x114:f3,Physics:0x30:u8,LevelTime:0xa8:pf:0x478
+props:JCDentonMale:f5:Location:0x114:f3,Physics:0x30:u8,LevelTime:0xa8:pf:0x478
+props:JCDentonMale:f6:Location:0x114:f3,Physics:0x30:u8,LevelTime:0xa8:pf:0x478
+props:JCDentonMale:f7:Location:0x114:f3,Physics:0x30:u8,LevelTime:0xa8:pf:0x478
+props:JCDentonMale:f8:Location:0x114:f3,Physics:0x30:u8,LevelTime:0xa8:pf:0x478
+props:JCDentonMale:f9:Location:0x114:f3,Physics:0x30:u8,LevelTime:0xa8:pf:0x478
+props:JCDentonMale:f10:Location:0x114:f3,Physics:0x30:u8,LevelTime:0xa8:pf:0x478
+props:JCDentonMale:f11:Location:0x114:f3,Physics:0x30:u8,LevelTime:0xa8:pf:0x478
+props:JCDentonMale:f12:Location:0x114:f3,Physics:0x30:u8,LevelTime:0xa8:pf:0x478
+props:JCDentonMale:f13:Location:0x114:f3,Physics:0x30:u8,LevelTime:0xa8:pf:0x478
+props:JCDentonMale:f14:Location:0x114:f3,Physics:0x30:u8,LevelTime:0xa8:pf:0x478
+props:JCDentonMale:f15:Location:0x114:f3,Physics:0x30:u8,LevelTime:0xa8:pf:0x478
+props:JCDentonMale:f16:Location:0x114:f3,Physics:0x30:u8,LevelTime:0xa8:pf:0x478
+props:JCDentonMale:f17:Location:0x114:f3,Physics:0x30:u8,LevelTime:0xa8:pf:0x478
+props:JCDentonMale:f18:Location:0x114:f3,Physics:0x30:u8,LevelTime:0xa8:pf:0x478
+props:JCDentonMale:f19:Location:0x114:f3,Physics:0x30:u8,LevelTime:0xa8:pf:0x478
+props:JCDentonMale:f20:Location:0x114:f3,Physics:0x30:u8,LevelTime:0xa8:pf:0x478
+props:JCDentonMale:f21:Location:0x114:f3,Physics:0x30:u8,LevelTime:0xa8:pf:0x478
+props:JCDentonMale:f22:Location:0x114:f3,Physics:0x30:u8,LevelTime:0xa8:pf:0x478
+props:JCDentonMale:f23:Location:0x114:f3,Physics:0x30:u8,LevelTime:0xa8:pf:0x478
+props:JCDentonMale:f24:Location:0x114:f3,Physics:0x30:u8,LevelTime:0xa8:pf:0x478
+props:JCDentonMale:f25:Location:0x114:f3,Physics:0x30:u8,LevelTime:0xa8:pf:0x478
+props:JCDentonMale:f26:Location:0x114:f3,Physics:0x30:u8,LevelTime:0xa8:pf:0x478
+props:JCDentonMale:f27:Location:0x114:f3,Physics:0x30:u8,LevelTime:0xa8:pf:0x478
+props:JCDentonMale:f28:Location:0x114:f3,Physics:0x30:u8,LevelTime:0xa8:pf:0x478
+props:JCDentonMale:f29:Location:0x114:f3,Physics:0x30:u8,LevelTime:0xa8:pf:0x478
+props:JCDentonMale:f30:Location:0x114:f3,Physics:0x30:u8,LevelTime:0xa8:pf:0x478
+props:JCDentonMale:f31:Location:0x114:f3,Physics:0x30:u8,LevelTime:0xa8:pf:0x478
+props:JCDentonMale:f32:Location:0x114:f3,Physics:0x30:u8,LevelTime:0xa8:pf:0x478
+props:JCDentonMale:f33:Location:0x114:f3,Physics:0x30:u8,LevelTime:0xa8:pf:0x478
+props:JCDentonMale:f34:Location:0x114:f3,Physics:0x30:u8,LevelTime:0xa8:pf:0x478
+props:JCDentonMale:f35:Location:0x114:f3,Physics:0x30:u8,LevelTime:0xa8:pf:0x478
+props:JCDentonMale:f36:Location:0x114:f3,Physics:0x30:u8,LevelTime:0xa8:pf:0x478
+props:JCDentonMale:f37:Location:0x114:f3,Physics:0x30:u8,LevelTime:0xa8:pf:0x478
+props:JCDentonMale:f38:Location:0x114:f3,Physics:0x30:u8,LevelTime:0xa8:pf:0x478
+props:JCDentonMale:f39:Location:0x114:f3,Physics:0x30:u8,LevelTime:0xa8:pf:0x478
+props:JCDentonMale:f40:Location:0x114:f3,Physics:0x30:u8,LevelTime:0xa8:pf:0x478
+cmd:set LevelInfo TimeDilation 1.0
+arrive:02_nyc_batterypark$
+cmd:set LevelInfo TimeDilation 1.0
+snap:f99-batterypark
+props:JCDentonMale:f99-player:Location:0x114:f3,Rotation:0x120:i3,ViewRotation:0x3dc:i3,Health:0x428:u32
+cmd:LocalTravel 04_NYC_BatteryPark
+arrive:04_nyc_batterypark$
+cmd:set LevelInfo bPlayersOnly True
+props:JCDentonMale:g0:Location:0x114:f3,Physics:0x30:u8,LevelTime:0xa8:pf:0x478
+cmd:set LevelInfo TimeDilation 0.1
+cmd:CauseEvent Mission4Exit
+props:JCDentonMale:g1:Location:0x114:f3,Physics:0x30:u8,LevelTime:0xa8:pf:0x478
+props:JCDentonMale:g2:Location:0x114:f3,Physics:0x30:u8,LevelTime:0xa8:pf:0x478
+props:JCDentonMale:g3:Location:0x114:f3,Physics:0x30:u8,LevelTime:0xa8:pf:0x478
+props:JCDentonMale:g4:Location:0x114:f3,Physics:0x30:u8,LevelTime:0xa8:pf:0x478
+props:JCDentonMale:g5:Location:0x114:f3,Physics:0x30:u8,LevelTime:0xa8:pf:0x478
+props:JCDentonMale:g6:Location:0x114:f3,Physics:0x30:u8,LevelTime:0xa8:pf:0x478
+props:JCDentonMale:g7:Location:0x114:f3,Physics:0x30:u8,LevelTime:0xa8:pf:0x478
+props:JCDentonMale:g8:Location:0x114:f3,Physics:0x30:u8,LevelTime:0xa8:pf:0x478
+props:JCDentonMale:g9:Location:0x114:f3,Physics:0x30:u8,LevelTime:0xa8:pf:0x478
+props:JCDentonMale:g10:Location:0x114:f3,Physics:0x30:u8,LevelTime:0xa8:pf:0x478
+props:JCDentonMale:g11:Location:0x114:f3,Physics:0x30:u8,LevelTime:0xa8:pf:0x478
+props:JCDentonMale:g12:Location:0x114:f3,Physics:0x30:u8,LevelTime:0xa8:pf:0x478
+props:JCDentonMale:g13:Location:0x114:f3,Physics:0x30:u8,LevelTime:0xa8:pf:0x478
+props:JCDentonMale:g14:Location:0x114:f3,Physics:0x30:u8,LevelTime:0xa8:pf:0x478
+props:JCDentonMale:g15:Location:0x114:f3,Physics:0x30:u8,LevelTime:0xa8:pf:0x478
+props:JCDentonMale:g16:Location:0x114:f3,Physics:0x30:u8,LevelTime:0xa8:pf:0x478
+props:JCDentonMale:g17:Location:0x114:f3,Physics:0x30:u8,LevelTime:0xa8:pf:0x478
+props:JCDentonMale:g18:Location:0x114:f3,Physics:0x30:u8,LevelTime:0xa8:pf:0x478
+props:JCDentonMale:g19:Location:0x114:f3,Physics:0x30:u8,LevelTime:0xa8:pf:0x478
+props:JCDentonMale:g20:Location:0x114:f3,Physics:0x30:u8,LevelTime:0xa8:pf:0x478
+props:JCDentonMale:g21:Location:0x114:f3,Physics:0x30:u8,LevelTime:0xa8:pf:0x478
+props:JCDentonMale:g22:Location:0x114:f3,Physics:0x30:u8,LevelTime:0xa8:pf:0x478
+props:JCDentonMale:g23:Location:0x114:f3,Physics:0x30:u8,LevelTime:0xa8:pf:0x478
+props:JCDentonMale:g24:Location:0x114:f3,Physics:0x30:u8,LevelTime:0xa8:pf:0x478
+props:JCDentonMale:g25:Location:0x114:f3,Physics:0x30:u8,LevelTime:0xa8:pf:0x478
+props:JCDentonMale:g26:Location:0x114:f3,Physics:0x30:u8,LevelTime:0xa8:pf:0x478
+props:JCDentonMale:g27:Location:0x114:f3,Physics:0x30:u8,LevelTime:0xa8:pf:0x478
+props:JCDentonMale:g28:Location:0x114:f3,Physics:0x30:u8,LevelTime:0xa8:pf:0x478
+props:JCDentonMale:g29:Location:0x114:f3,Physics:0x30:u8,LevelTime:0xa8:pf:0x478
+props:JCDentonMale:g30:Location:0x114:f3,Physics:0x30:u8,LevelTime:0xa8:pf:0x478
+props:JCDentonMale:g31:Location:0x114:f3,Physics:0x30:u8,LevelTime:0xa8:pf:0x478
+props:JCDentonMale:g32:Location:0x114:f3,Physics:0x30:u8,LevelTime:0xa8:pf:0x478
+props:JCDentonMale:g33:Location:0x114:f3,Physics:0x30:u8,LevelTime:0xa8:pf:0x478
+props:JCDentonMale:g34:Location:0x114:f3,Physics:0x30:u8,LevelTime:0xa8:pf:0x478
+props:JCDentonMale:g35:Location:0x114:f3,Physics:0x30:u8,LevelTime:0xa8:pf:0x478
+props:JCDentonMale:g36:Location:0x114:f3,Physics:0x30:u8,LevelTime:0xa8:pf:0x478
+props:JCDentonMale:g37:Location:0x114:f3,Physics:0x30:u8,LevelTime:0xa8:pf:0x478
+props:JCDentonMale:g38:Location:0x114:f3,Physics:0x30:u8,LevelTime:0xa8:pf:0x478
+props:JCDentonMale:g39:Location:0x114:f3,Physics:0x30:u8,LevelTime:0xa8:pf:0x478
+props:JCDentonMale:g40:Location:0x114:f3,Physics:0x30:u8,LevelTime:0xa8:pf:0x478
+cmd:set LevelInfo TimeDilation 1.0
+arrive:05_nyc_unatcomj12lab$
+cmd:set LevelInfo TimeDilation 1.0
+snap:g99-mj12lab
+props:JCDentonMale:g99-player:Location:0x114:f3,Rotation:0x120:i3,ViewRotation:0x3dc:i3,Health:0x428:u32

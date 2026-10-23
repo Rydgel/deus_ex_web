@@ -135,12 +135,12 @@ and drives the transition back when the arrival leads to the source map (so the 
 Check artifacts, corrected in the census and not in Play: the arrival read after a second of ticks (the 1600-unit fall of `06_HongKong_WanChai_Garage` `Teleporter0` -> `Storage#BackDoor` had left the start spot, and the original's player falls into the water and swims at
 the surface too, measured `tr-e`), and the states a mission start can be in (`AnnaDock` starts by radius three seconds into `02_NYC_BatteryPark`; the Island's exit, Everett's and Toby's arrivals start in conversations).
 
-**What the census does not establish.** The arrival is ticked for five seconds, not played; a conversation's chain to a triggered exit is not played; the camera paths' timing and the exits' physical reach from the arrival are not measured; the
+**What the census does not establish.** The arrival is ticked for five seconds, not played; a conversation's chain to a triggered exit is not played; the exits' physical reach from the arrival is not measured; the
 original was measured for the samples below, not for every transition.
 
 ## Measured against the original
 
-Five Wine sessions (`scripts/travel-probe.sh`, step files in `scripts/travel-steps/`; the captures are in `.work/travel/tr-a..tr-e`) replayed by `node scripts/validate-travel-transitions.mjs [--only A|B|C|D|E]`, which compares per leg the engine log
+Six Wine sessions (`scripts/travel-probe.sh`, step files in `scripts/travel-steps/`; the captures are in `.work/travel/tr-a..tr-f`) replayed by `node scripts/validate-travel-transitions.mjs [--only A|B|C|D|E|F]`, which compares per leg the engine log
 (the lines Play models, in order), the exported travel text, the arrived player's flags, location and `Current` listing:
 
 | | Session | Result |
@@ -150,6 +150,7 @@ Five Wine sessions (`scripts/travel-probe.sh`, step files in `scripts/travel-ste
 | C | the `.dx` and `.dx #Portal` forms of mission 14 (filed and restored), `15_area51_bunker.dx #bunker_start` (a mission change with a `#portal`), `04_NYC_UNATCOIsland.dx` | all equal |
 | D | Mission02/08 `PreTravel` on levels that ran | `MS_MapLeftEarly@3` in the arrival's flags; the filed `08_NYC_Street` holds `BlackHelicopter0` only (the `EntranceCopter` destroyed): equal; texts and flag sets after the first leg are not compared (the captured levels ran for an unmeasured time) |
 | E | a start spot 1600 units above water: `06_HongKong_WanChai_Garage` -> `Storage#BackDoor` | the player falls and swims at the surface (Physics 3), z within 8 units of the original's bobbing |
+| F | the camera paths of the `bPlayTransition` exits, fired by their tag (`CauseEvent Dock_boat` on the Island, `CauseEvent Mission4Exit` in `04_NYC_BatteryPark`, whose two exits share the tag and both fire) | a sample of the original's ride lies within 2.3 and 0.3 units of Play's path, reached no later than the capture allows; one request each (the second exit adds none); the arrival's log, text, flags and place equal |
 
 Differences kept, with their reasons: a fresh arrival that falls to the floor rests up to 0.2 units apart (the frame times of the fall); `Warning: skipping N bytes of type 10` counts the size of a struct in the restored file (Play's writer orders the name
 table differently from the original's, [travel.md](travel.md#unresolved) 4); the level package's spelling follows the URL text in the original (`14_Oceanlab_silo.JCDentonMale4`) and the file in Play (travel.md 19; step 5's first part has the rule).
@@ -157,8 +158,9 @@ The yaw of the player in `02_NYC_BatteryPark` after seconds of running differs b
 
 ## Unresolved in this part
 
-1. **The camera paths of the `bPlayTransition` exits** (19): the exit rides the real `Interpolating` state and `InterpolateEnd` to the request in Play; the path's timing and the player's state during it are not measured in the original
-   ([travel.md](travel.md#unresolved) 18).
+1. **The camera paths' timing.** The position along a path is `AActor::physPathing`, proven bit-exact by `validate-native-pathing.mjs`; the ride's duration in the original is bounded, not measured: a process start under Wine costs seconds of wall time
+   and a ride lasts 6 to 12 s, so the capture `tr-f` holds one sample of each ride (it lies on Play's path and Play reaches it 6.7 s and 5.0 s into the ride, within the 8.7 s the capture allows); `set LevelInfo TimeDilation` does not slow the original
+   (`GameInfo.SetGameSpeed` owns it). Play's rides last 11.8 s (Island) and 6.0 s (`04_NYC_BatteryPark`) to the request. A continuous trace of the original's player (the live-replay tooling) would settle it ([travel.md](travel.md#unresolved) 18).
 2. **`FURL` with a base that holds options.** `TRAVEL_Relative` copies the base's options except `PUSH`, `POP`, `PEER` and `LOAD` (`0x103f7edb`, shared with `TRAVEL_Partial`), where `furl.mjs` starts from none and appends the `[DefaultPlayer]` options. Equal while the engine's `LastURL` holds
    `Name=Player?Class=...` (every flow measured); after `RestartLevel` the original's next `Browse:` line carried no defaults (capture `s4`), Play's does. Not changed: `LastURL` after a restart is not traced (travel.md 7).
 3. **The scripted `SendPlayer`s were not measured in the original**: the conditions are script and the `ClientTravel` is the measured one; the flags that start them need a played game (`EditFlags` is a window).
