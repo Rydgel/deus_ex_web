@@ -15,11 +15,16 @@ import { setTimeout as sleep } from 'node:timers/promises';
 import { placeLines, placementNear, flagsOfDump, loadChain, captureDirectory, STATE_FIELDS } from './chain-lib.mjs';
 
 const ROOT = new URL('..', import.meta.url).pathname.replace(/\/$/, '');
-const env = { ...process.env, WINEPREFIX: process.env.WINEPREFIX ?? `${process.env.HOME}/.wine-deusex`, DX_WINE: process.env.DX_WINE ?? '/usr/bin/wine', DX_DESKTOP: process.env.DX_DESKTOP ?? '1400x860' };
-env.DX_GAME = process.env.DX_GAME ?? `${env.WINEPREFIX}/drive_c/Deus Ex GOTY Edition`;
+// the Mac runs the CrossOver bottle "DeusEx" (scripts/travel-probe.sh's Darwin branch), where a dump tool under Rosetta can take a minute on a loaded host
+const MAC = process.platform === 'darwin', BOTTLE = process.env.CX_BOTTLE ?? 'DeusEx';
+const env = MAC
+  ? { ...process.env, CX_BOTTLE: BOTTLE, DX_WINE: process.env.DX_WINE ?? '/Applications/CrossOver.app/Contents/SharedSupport/CrossOver/bin/wine',
+    DX_GAME: process.env.DX_GAME ?? `${process.env.HOME}/Library/Application Support/CrossOver/Bottles/${BOTTLE}/drive_c/Deus Ex GOTY Edition` }
+  : { ...process.env, WINEPREFIX: process.env.WINEPREFIX ?? `${process.env.HOME}/.wine-deusex`, DX_WINE: process.env.DX_WINE ?? '/usr/bin/wine', DX_DESKTOP: process.env.DX_DESKTOP ?? '1400x860' };
+env.DX_GAME ??= process.env.DX_GAME ?? `${env.WINEPREFIX}/drive_c/Deus Ex GOTY Edition`;
 const clean = text => String(text).split('\n').filter(line => !/MESA|pci id/.test(line)).join('\n').replace(/\r/g, '');
 const tool = (name, ...args) => {
-  try { return clean(execFileSync(env.DX_WINE, [`ad/build/${name}.exe`, ...args], { env, cwd: ROOT, encoding: 'utf8', timeout: 30000, stdio: ['ignore', 'pipe', 'ignore'], maxBuffer: 1 << 27 })); }
+  try { return clean(execFileSync(env.DX_WINE, [`ad/build/${name}.exe`, ...args], { env, cwd: ROOT, encoding: 'utf8', timeout: MAC ? 90000 : 30000, stdio: ['ignore', 'pipe', 'ignore'], maxBuffer: 1 << 27 })); }
   catch (error) { return ''; }
 };
 const argv = process.argv.slice(2);

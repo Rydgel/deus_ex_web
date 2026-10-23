@@ -30,26 +30,34 @@
 #   e.g. scripts/travel-probe.sh t1 'cmd:set LevelInfo bPlayersOnly True' 'cmd:LocalTravel 00_TrainingCombat' 'arrive:00_trainingcombat$' snap:combat
 set -u
 TAG=${1:?usage: travel-probe.sh <tag> <step>...}; shift
-if [ "${1:-}" != "${1#@}" ]; then   # steps from a file
-  mapfile -t STEPS < <(grep -v '^[[:space:]]*#' "${1#@}" | grep -v '^[[:space:]]*$')
+if [ "${1:-}" != "${1#@}" ]; then   # steps from a file (a read loop: the Mac's bash 3.2 has no mapfile)
+  STEPS=()
+  while IFS= read -r line; do STEPS+=("$line"); done < <(grep -v '^[[:space:]]*#' "${1#@}" | grep -v '^[[:space:]]*$')
 else
   STEPS=("$@")
 fi
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
-LOCK=${DX_LOCK:-/home/rydgel/projects/deus_ex_web/.work/wine-deusex.lock}
-export WINEPREFIX=${WINEPREFIX:-$HOME/.wine-deusex} DX_WINE=${DX_WINE:-/usr/bin/wine}
-export DX_GAME=${DX_GAME:-$WINEPREFIX/drive_c/Deus Ex GOTY Edition}
-export DX_DESKTOP=${DX_DESKTOP-1400x860}
+if [ "$(uname)" = Darwin ]; then
+  # the Mac: the CrossOver bottle "DeusEx" (scripts/live-original.sh's branch); no flock there, so the lock is advisory only
+  LOCK=${DX_LOCK:-$ROOT/.work/wine-deusex.lock}
+  export CX_BOTTLE=${CX_BOTTLE:-DeusEx} DX_WINE=${DX_WINE:-/Applications/CrossOver.app/Contents/SharedSupport/CrossOver/bin/wine}
+  export DX_GAME=${DX_GAME:-$HOME/Library/Application Support/CrossOver/Bottles/$CX_BOTTLE/drive_c/Deus Ex GOTY Edition}
+else
+  LOCK=${DX_LOCK:-/home/rydgel/projects/deus_ex_web/.work/wine-deusex.lock}
+  export WINEPREFIX=${WINEPREFIX:-$HOME/.wine-deusex} DX_WINE=${DX_WINE:-/usr/bin/wine}
+  export DX_GAME=${DX_GAME:-$WINEPREFIX/drive_c/Deus Ex GOTY Edition}
+  export DX_DESKTOP=${DX_DESKTOP-1400x860}
+fi
 OUT=$ROOT/.work/travel/$TAG
 mkdir -p "$OUT"
 cd "$ROOT" || exit 1
 exec 9>"$LOCK"
-command -v flock >/dev/null && flock 9
+if command -v flock >/dev/null; then flock 9; else echo "no flock: $LOCK is not taken" >&2; fi
 game_pids() { ps -e -o pid=,comm= | awk '/DeusEx\.exe$/ {print $1}'; }
 for _ in $(seq 1 360); do [ -n "$(game_pids)" ] || break; sleep 5; done
 [ -z "$(game_pids)" ] || { echo "a DeusEx.exe is still running; not starting" >&2; exit 9; }
 SAVE="$DX_GAME/Save"
-BEFORE=$(cd "$SAVE" 2>/dev/null && find . -type f -printf '%P\n' | sort)
+BEFORE=$(cd "$SAVE" 2>/dev/null && find . -type f | sed 's|^\./||' | sort)
 if [ -n "${DX_SAVE_BACKUP:-}" ]; then rm -rf "$DX_SAVE_BACKUP"; cp -a "$SAVE" "$DX_SAVE_BACKUP" || { echo "cannot back up $SAVE" >&2; exit 1; }; fi
 node ad/scripts/original-game.mjs launch DX.dx || exit 1
 PID=
@@ -62,7 +70,7 @@ quit_game() {
   if [ -n "${DX_SAVE_BACKUP:-}" ] && [ -d "$DX_SAVE_BACKUP" ] && [ -z "$(game_pids)" ]; then   # the game is gone: Save/ goes back as it was found (the lock is still held)
     rm -rf "$SAVE" && cp -a "$DX_SAVE_BACKUP" "$SAVE" && echo "Save restored from $DX_SAVE_BACKUP" >&2
   elif [ -z "${DX_KEEP_SAVE:-}" ]; then   # leave Save/ as it was found: remove what this session created
-    AFTER=$(cd "$SAVE" 2>/dev/null && find . -type f -printf '%P\n' | sort)
+    AFTER=$(cd "$SAVE" 2>/dev/null && find . -type f | sed 's|^\./||' | sort)
     comm -13 <(echo "$BEFORE") <(echo "$AFTER") | while IFS= read -r f; do [ -n "$f" ] && rm -f "$SAVE/$f"; done
     find "$SAVE" -mindepth 1 -type d -empty ! -name Current ! -name QuickSave ! -name Save0001 -delete 2>/dev/null
   fi
@@ -88,7 +96,7 @@ run_step() {
     hold) scripts/travel-step.sh "$OUT" hold "${arg%%:*}" "${arg#*:}" ;;
     putcurrent)   # <host file>:<name>: a file into Save\Current (cp over the one the session wrote; the name has no path)
       IFS=: read -r psrc pname <<< "$arg"
-      case $pname in ''|*/*|*\\*) echo "putcurrent: bad name $pname" >&2 ;; *) cp -f "$psrc" "$SAVE/Current/$pname" && echo "putcurrent $pname ($(stat -c %s "$SAVE/Current/$pname") bytes)" ;; esac ;;
+      case $pname in ''|*/*|*\\*) echo "putcurrent: bad name $pname" >&2 ;; *) cp -f "$psrc" "$SAVE/Current/$pname" && echo "putcurrent $pname ($(wc -c < "$SAVE/Current/$pname" | tr -d ' ') bytes)" ;; esac ;;
     putslot)   # <host dir>:<slot>: Play's files for a slot, whole (the slot's directory is replaced)
       IFS=: read -r psrc pslot <<< "$arg"
       case $pslot in ''|*/*|*\\*|Current) echo "putslot: bad slot $pslot" >&2 ;; *) rm -rf "${SAVE:?}/$pslot"; mkdir -p "$SAVE/$pslot" && cp -f "$psrc"/* "$SAVE/$pslot/" && echo "putslot $pslot ($(ls "$SAVE/$pslot" | wc -l) files)" ;; esac ;;

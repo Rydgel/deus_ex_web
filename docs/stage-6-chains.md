@@ -46,6 +46,11 @@ node scripts/validate-stage6-chain.mjs --mission 00 --capture   # capture first
 node scripts/chain-plan.mjs stand 01_NYC_UNATCOHQ SamCarter0 --distances 70 --lift 15
 ```
 
+On the Mac (2026-10-23) `scripts/travel-probe.sh`, `travel-step.sh` and `chain-original.mjs` run the CrossOver bottle `DeusEx` (the Darwin branch of
+`scripts/live-original.sh`: CrossOver's wine, no `flock`, the save listing and file times through Perl and BSD `stat` where GNU `find -printf` and `stat -c`
+are missing, no `mapfile` in bash 3.2). The captures a machine takes stay in its own `.work/` (the Linux host's and the Mac's differ): a validator whose
+capture is not there SKIPs. A console line typed while a menu is open is the menu's (its Enter activates the focused button): close the menus first.
+
 ## What is compared
 
 At every `snap` the flags (equal as sets of `name|type|expiration|value`, and the default expiration), and for every map change the **travel text** the leg exported, after the

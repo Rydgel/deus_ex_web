@@ -17,13 +17,26 @@
 set -u
 OUT=${1:?usage: travel-step.sh <out dir> <verb> ...}; VERB=${2:?}; shift 2
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
-export WINEPREFIX=${WINEPREFIX:-$HOME/.wine-deusex} DX_WINE=${DX_WINE:-/usr/bin/wine}
-export DX_GAME=${DX_GAME:-$WINEPREFIX/drive_c/Deus Ex GOTY Edition}
-export DX_DESKTOP=${DX_DESKTOP-1400x860}
+if [ "$(uname)" = Darwin ]; then   # the Mac's CrossOver bottle (scripts/travel-probe.sh)
+  export CX_BOTTLE=${CX_BOTTLE:-DeusEx} DX_WINE=${DX_WINE:-/Applications/CrossOver.app/Contents/SharedSupport/CrossOver/bin/wine}
+  export DX_GAME=${DX_GAME:-$HOME/Library/Application Support/CrossOver/Bottles/$CX_BOTTLE/drive_c/Deus Ex GOTY Edition}
+else
+  export WINEPREFIX=${WINEPREFIX:-$HOME/.wine-deusex} DX_WINE=${DX_WINE:-/usr/bin/wine}
+  export DX_GAME=${DX_GAME:-$WINEPREFIX/drive_c/Deus Ex GOTY Edition}
+  export DX_DESKTOP=${DX_DESKTOP-1400x860}
+fi
 mkdir -p "$OUT"
 cd "$ROOT" || exit 1
 SAVE="$DX_GAME/Save"
 clean() { grep -a -v 'MESA\|pci id' | tr -d '\r'; }
+# a listing of the directory (GNU find's `%y %P\t%s\t%TY-%Tm-%Td %TH:%TM:%TS`): the Mac's find has no -printf, so Perl prints the same fields there
+listing() {
+  if find /dev/null -printf '' 2>/dev/null; then find . -mindepth 1 -printf '%y %P\t%s\t%TY-%Tm-%Td %TH:%TM:%TS\n'
+  else perl -MFile::Find -MPOSIX=strftime -MTime::HiRes=stat -e 'find({no_chdir => 1, wanted => sub { return if $_ eq "."; my @s = stat($_); (my $p = $_) =~ s{^\./}{};
+    my $t = $s[9]; printf "%s %s\t%d\t%s%013.10f\n", (-d $_ ? "d" : "f"), $p, $s[7], strftime("%Y-%m-%d %H:%M:", localtime int $t), $t - 60 * int($t / 60) }}, ".")'; fi
+}
+# a file's name, size and modification time (GNU stat's `%n %s %y`)
+file_times() { if stat -c '' /dev/null 2>/dev/null; then stat -c '%n %s %y' "$@"; else stat -f '%N %z %Sm' -t '%Y-%m-%d %H:%M:%S %z' "$@"; fi; }
 case $VERB in
   cmd) printf 'cmd %s\n' "$*" > "$OUT/step.txt"; node ad/scripts/original-game.mjs run "$OUT/step.txt" >/dev/null 2>&1
        echo "$(date +%T) cmd $*" >> "$OUT/steps.txt" ;;
@@ -37,13 +50,13 @@ case $VERB in
             sleep 2
           done
           result=${ok:+ok}; echo "$(date +%T) arrive $1 ${result:-TIMEOUT}" >> "$OUT/steps.txt"; sleep 3 ;;
-  snap) ( cd "$SAVE" 2>/dev/null && find . -mindepth 1 -printf '%y %P\t%s\t%TY-%Tm-%Td %TH:%TM:%TS\n' | sort -k2 ) > "$OUT/$1.save.txt"
+  snap) ( cd "$SAVE" 2>/dev/null && listing | sort -k2 ) > "$OUT/$1.save.txt"
         cp "$DX_GAME/System/DeusEx.log" "$OUT/$1.log" 2>/dev/null
         "$DX_WINE" ad/build/dump-flags-win.exe JCDentonMale 2>/dev/null | clean > "$OUT/$1.flags.txt"
         "$DX_WINE" ad/build/dump-travel-win.exe 2>/dev/null | clean > "$OUT/$1.travel.txt"
         echo "$(date +%T) snap $1" >> "$OUT/steps.txt" ;;
   ini) cp "$DX_GAME/System/DeusEx-ad.ini" "$OUT/$1.DeusEx.ini"; cp "$DX_GAME/System/User-ad.ini" "$OUT/$1.User.ini"
-       stat -c '%n %s %y' "$DX_GAME/System/DeusEx-ad.ini" "$DX_GAME/System/User-ad.ini" > "$OUT/$1.ini-times.txt"
+       file_times "$DX_GAME/System/DeusEx-ad.ini" "$DX_GAME/System/User-ad.ini" > "$OUT/$1.ini-times.txt"
        echo "$(date +%T) ini $1" >> "$OUT/steps.txt" ;;
   savecopy) rm -rf "$OUT/$1.Current"; cp -a "$SAVE/Current" "$OUT/$1.Current" 2>/dev/null
         echo "$(date +%T) savecopy $1" >> "$OUT/steps.txt" ;;
