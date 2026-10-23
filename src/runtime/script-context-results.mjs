@@ -243,12 +243,23 @@ async function nativeNode(runtime, script, node, targetDescriptor) {
   for (let cls = target.loaded; cls; cls = cls.base) {
     for (const record of cls.methods?.values?.() ?? []) {
       if (record?.kind !== 'Function' || !record.asset || !Number.isInteger(record.index)) continue;
-      let metadata;
-      try { metadata = readFunctionMetadata(record.asset, record.index); } catch { continue; }
-      if (metadata.hasNativeIndex && metadata.nativeIndex === node.index) return functionReturn(runtime, script, record);
+      if (functionNativeIndex(record.asset, record.index) === node.index) return functionReturn(runtime, script, record);
     }
   }
   return null;
+}
+
+/** A function export's iNative (null when not FUNC_Native, or unreadable), read once per package: the package bytes do not change, and reading
+ * the header walks the whole bytecode (every map load asked again for every method of every Context class: about 6 s of a 747 load). */
+const nativeIndexes = new WeakMap();
+function functionNativeIndex(asset, index) {
+  let cache = nativeIndexes.get(asset);
+  if (!cache) nativeIndexes.set(asset, cache = new Map());
+  if (cache.has(index)) return cache.get(index);
+  let value = null;
+  try { const metadata = readFunctionMetadata(asset, index); if (metadata.hasNativeIndex) value = metadata.nativeIndex; } catch {}
+  cache.set(index, value);
+  return value;
 }
 
 async function expressionNode(runtime, script, node, seen = new Set()) {

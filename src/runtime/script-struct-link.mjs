@@ -126,7 +126,7 @@ function readScriptBytes(owner, offset, count, services) {
   return bytes;
 }
 
-function linkCondition(record, property, endCursors, services, operations) {
+function linkCondition(record, property, endCursors, services, operations, priors) {
   write(property, 0x58, property, services);
   const archive = baseArchive();
   const start = integer(slot(property, 0x44, services), 'RepOffset word', 0xffff);
@@ -136,7 +136,10 @@ function linkCondition(record, property, endCursors, services, operations) {
   const end = integer(cursor.value, 'expression end cursor');
   if (end < start) throw new RangeError('Replication expression moved its cursor backwards');
   endCursors.set(identity(property), end);
-  for (const prior of properties(record, SCRIPT_STRUCT_LINK.propertyClass, services)) {
+  // `priors`: the properties the caller's walk of the same chain yielded before this one. Nothing between that walk and this one writes the
+  // Class, SuperField, Children or Next words (+0x24, +0x28, +0x38, +0x2c), so the native body's second walk visits the same fields; walking
+  // again for every replicated property cost seconds per map load (quadratic in a class's properties).
+  for (const prior of priors ?? properties(record, SCRIPT_STRUCT_LINK.propertyClass, services)) {
     if (same(prior, property)) break;
     if ((integer(slot(prior, 0x3c, services), 'PropertyFlags', 0xffffffff) & 0x20) === 0) continue;
     const priorEnd = endCursors.get(identity(prior));
@@ -216,13 +219,13 @@ export function linkScriptStruct(record, {archive, secondArgument = 0, services 
   }
 
   let allTail = [record, 0x60], configTail = [record, 0x64], destroyTail = [record, 0x68];
-  const endCursors = new Map();
+  const endCursors = new Map(), priors = [];
   for (const property of properties(record, SCRIPT_STRUCT_LINK.propertyClass, services)) {
     let flags = integer(slot(property, 0x3c, services), 'PropertyFlags', 0xffffffff);
     if (flags & 0x20) {
       const gate = required(services.readGlobal, 'live replication-link global')(SCRIPT_STRUCT_LINK.linkGate);
       integer(gate, 'global link gate', 0xffffffff);
-      if (gate === 0) linkCondition(record, property, endCursors, services, operations);
+      if (gate === 0) linkCondition(record, property, endCursors, services, operations, priors);
     }
     flags = integer(slot(property, 0x3c, services), 'PropertyFlags', 0xffffffff);
     if (flags & 0x400000) {
@@ -236,6 +239,7 @@ export function linkScriptStruct(record, {archive, secondArgument = 0, services 
     }
     write(...allTail, property, services);
     allTail = [property, 0x4c];
+    priors.push(property);
   }
   write(...allTail, null, services);
   write(...configTail, null, services);
