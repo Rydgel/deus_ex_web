@@ -45,6 +45,8 @@ export async function createGame(map, asset, assets, { randomSeed = Math.floor(D
   if(onDataLinkTransmission!=null&&typeof onDataLinkTransmission!=='function')
     throw new TypeError('createGame onDataLinkTransmission must be a function');
   const defaults = new ClassDefaults(assets), collision = new CollisionWorld(map.model), notes = [];
+  // A level begins: its map's names are the ones a later package's Name values meet first (name-spelling.mjs); a map parsed earlier and kept (a restored level) enters again here
+  assets.nameSpelling?.beginLevel(asset.pkg);
   const engine = await assets.get('Engine'), dx = await assets.get('DeusEx');
   const playerDefaults = await defaults.get(dx, dx.exportsByPath.get('jcdentonmale'));
   const zoneDefault = await defaults.get(engine, engine.exportsByPath.get('zoneinfo'));

@@ -208,8 +208,8 @@ export async function createLiveAudio({runtime, level, player, onVoice = null, l
   const index = actor => runtime.soundObjectIndex(actor)?.index ?? null;
   // Sounds played with a modeled index, by class: reported, not hidden.
   const modeledIds = new Map();
-  const noteModeledId = actor => {
-    const name = runtime.instance(actor).cls?.record?.name ?? '?';
+  const noteModeledId = (actor, source = 'modeled') => {
+    const name = `${runtime.instance(actor).cls?.record?.name ?? '?'}${source === 'restored' ? ' (restored-level model)' : ''}`;
     modeledIds.set(name, (modeledIds.get(name) ?? 0) + 1);
   };
   // An actor with no measured or modeled global index cannot form its

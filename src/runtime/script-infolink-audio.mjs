@@ -46,8 +46,9 @@ export async function loadInfoLinkPreviewAudio(assets){
   if(conversationEntry?.name!==reference.conversationObject)
     throw new Error('InfoLink audio Conversation57 identity changed');
   const conversation=readObject(context.pkg,context.bytes,reference.conversationExport).values;
-  if(conversation.conName!==reference.conversationName||
-    conversation.audioPackageName!==reference.audioPackageName)
+  // (Name values carry the first spelling a package entered them with, unreal/name-spelling.mjs: compared without case)
+  if(String(conversation.conName).toLowerCase()!==reference.conversationName.toLowerCase()||
+    String(conversation.audioPackageName).toLowerCase()!==reference.audioPackageName.toLowerCase())
     throw new Error('InfoLink audio DL_Start authored metadata changed');
   const eventRef=integerReference(conversation.eventList,'DL_Start eventList');
   if(eventRef!==reference.eventExport)throw new Error('InfoLink audio DL_Start first event changed');

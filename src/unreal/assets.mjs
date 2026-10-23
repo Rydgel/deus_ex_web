@@ -1,6 +1,7 @@
 import { parsePackage } from './package.mjs';
 import { objectAt } from './objects.mjs';
 import { layerConfigFiles } from '../runtime/config-store.mjs';
+import { NameSpelling, BOOT_SCRIPT_PACKAGES } from './name-spelling.mjs';
 
 /** Lazy package loading shared by browser File objects and local Node tools. */
 export class AssetStore {
@@ -8,6 +9,9 @@ export class AssetStore {
    * GConfig's Flush (docs/config-persistence.md). Without one the config files are the installed ones. */
   constructor(files, { configStore = null } = {}) {
     this.configStore = configStore;
+    // The first spelling of a Name across packages (name-spelling.mjs): the boot script packages' names and the current map's, read by objects.mjs readObject.
+    this.nameSpelling = new NameSpelling();
+    this.bootNames = null;
     // Preserve the supplied filesystem catalog for native file-enumeration
     // services. Package lookup alone discards non-package files such as DMP.
     this.sourceFiles = [];
@@ -35,7 +39,18 @@ export class AssetStore {
     this.configFiles = layerConfigFiles(iniFiles, configStore);
   }
 
+  /** The script packages the original's startup loads first, parsed (and their names entered) before any other package: a name they spell wins over a map's. */
+  #boot() {
+    this.bootNames ??= (async () => { for (const name of BOOT_SCRIPT_PACKAGES) if (this.files.has(name.toLowerCase())) await this.#load(name); })();
+    return this.bootNames;
+  }
+
   async get(name) {
+    if (!BOOT_SCRIPT_PACKAGES.some(boot => boot.toLowerCase() === name.toLowerCase())) await this.#boot();
+    return this.#load(name);
+  }
+
+  #load(name) {
     const key = name.toLowerCase();
     if (!this.packages.has(key)) {
       const file = this.files.get(key);
@@ -44,6 +59,9 @@ export class AssetStore {
         const input = await file.read();
         const bytes = input instanceof Uint8Array ? input : new Uint8Array(input);
         const pkg = parsePackage(bytes);
+        pkg.nameSpelling = this.nameSpelling;
+        if (BOOT_SCRIPT_PACKAGES.some(boot => boot.toLowerCase() === key)) this.nameSpelling.addBoot(pkg);
+        else if (/\.(dx|unr)$/i.test(file.path)) this.nameSpelling.beginLevel(pkg);   // a map parsed: the level it begins
         const exportsByPath = new Map(pkg.exports.map((e, i) => [e.path.toLowerCase(), i + 1]));
         return { name: file.name, path: file.path, bytes, pkg, exportsByPath };
       })();

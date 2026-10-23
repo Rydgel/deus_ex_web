@@ -39,18 +39,18 @@ Starts: a mission row starts from a real desktop save of that mission where one 
 12, 14 and 15; the inventory's slot tables say what each one has already chosen), else from the previous mission's exit, else (Training, mission 11) from the
 menu or a cold open of the mission's first map. The same start is loaded in Play and in the original.
 
-## The scoreboard (2026-10-23, after the conversation census)
+## The scoreboard (2026-10-23, after the conversation census and the first two chains)
 
 | Clause | PASS | PARTIAL | UNDRIVEN | MISSING | EXCLUDED |
 | --- | ---: | ---: | ---: | ---: | ---: |
 | 6.1 The start and the menus | 5 | 0 | 0 | 1 | 0 |
 | 6.2 Persistence | 5 | 0 | 0 | 1 | 0 |
 | 6.3 Transitions | 2 | 0 | 0 | 0 | 0 |
-| 6.4 The missions | 2 | 12 | 0 | 22 | 0 |
+| 6.4 The missions | 4 | 12 | 0 | 20 | 0 |
 | 6.5 The endings | 0 | 0 | 0 | 3 | 0 |
 | 6.6 The campaign in one run | 0 | 0 | 0 | 1 | 0 |
 | 6.7 Excluded | 0 | 0 | 0 | 0 | 3 |
-| **Total** | 14 | 12 | 0 | 28 | 3 |
+| **Total** | 16 | 12 | 0 | 26 | 3 |
 
 ## The rows
 
@@ -87,9 +87,9 @@ menu or a cold open of the mission's first map. The same start is loaded in Play
 
 | Row | Criterion | Evidence | Proof | Needed / weak / pending | Status |
 | --- | --- | --- | --- | --- | --- |
-| 6.4.00.1 | mission 0: the required chain (docs/stage-6-inventory.md "Progression path"), each step placed, runs from the arrival to the exit; the flags, goals, notes and travel text at the exit equal the original's | O1 | - | a placed-chain scene of the mission in Play and under Wine from the same start (a real slot of the mission, else the previous mission's exit), compared at the exit; weak: the player is placed at each step, as Stage 5's placed approaches: the walk and the fights between the steps are not part of the row (the user's decision) | MISSING |
+| 6.4.00.1 | mission 0: the required chain (docs/stage-6-inventory.md "Progression path"), each step placed, runs from the arrival to the exit; the flags, goals, notes and travel text at the exit equal the original's | O1 | validate-stage6-chain.mjs --mission 00 | weak: the first and last maps' gates and the two InfoLinks are the chain; the course (jump, ladder, crate stack, swim) and the dark doors are not driven (a door the original closes again by itself has no stable state to compare); the Final map's Soldiers are made harmless (God mode) because the player is placed in their view and the original's real seconds are longer than Play's; the LAMs are defused with the level held (their countdown is shorter than a console line takes); the player is placed at each step, as Stage 5's placed approaches: the walk and the fights between the steps are not part of the row (the user's decision) | PASS |
 | 6.4.00.3 | mission 0: every conversation and InfoLink of its list starts and runs to its end in Play without a stop; those on the required chain are compared with the original by 6.4.00.1 | P | validate-conversations-census.mjs --missions 00 | weak: Play against itself: a cold open of each owner's map; the named boundaries (what the original's own code or data refuses) are listed in scripts/census-conversations-boundaries.mjs | PASS |
-| 6.4.01.1 | mission 1: the required chain (docs/stage-6-inventory.md "Progression path"), each step placed, runs from the arrival to the exit; the flags, goals, notes and travel text at the exit equal the original's | O1 | - | a placed-chain scene of the mission in Play and under Wine from the same start (a real slot of the mission, else the previous mission's exit), compared at the exit; weak: the player is placed at each step, as Stage 5's placed approaches: the walk and the fights between the steps are not part of the row (the user's decision) | MISSING |
+| 6.4.01.1 | mission 1: the required chain (docs/stage-6-inventory.md "Progression path"), each step placed, runs from the arrival to the exit; the flags, goals, notes and travel text at the exit equal the original's | O1 | validate-stage6-chain.mjs --mission 01 | weak: one branch of the commander (the aggressive branch, and the kill, are 6.4.01.2's); the Statue's gates (Filben's key, the ruins' doors, the lasers) are walked past by the placement; God mode on the Island (29 Terrorists patrol it); the boat is frobbed from the dock's edge because its blocking cylinder keeps a walking player outside the conversation's radius (measured in the original: the walk stops at x -4786.4 in both programs); a conversation's random-label speech may differ between two runs (the game's random stream is not shared) and is accepted as that conversation's alternative; the player is placed at each step, as Stage 5's placed approaches: the walk and the fights between the steps are not part of the row (the user's decision) | PASS |
 | 6.4.01.2 | mission 1: both sides of each of its 7 carried flags, checked where the later mission reads them (the conversation branch, the pawn present or absent, the script's effect), equal to the original | O1 | - | per carried flag: the two branches set in the mission (or a slot holding each), the reader's observable in the later mission, in Play and under Wine | MISSING |
 | 6.4.01.3 | mission 1: every conversation and InfoLink of its list starts and runs to its end in Play without a stop; those on the required chain are compared with the original by 6.4.01.1 | P | validate-conversations-census.mjs --missions 01 | weak: Play against itself: a cold open of each owner's map; the named boundaries (what the original's own code or data refuses) are listed in scripts/census-conversations-boundaries.mjs; pending: the second pass from the mission's real slots (`validate-conversations-census.mjs --slots`): started 2026-10-23, not finished; its stops so far are the restored-level PlaySound object index of the placed-chain worker (missions 1 and 3) | PARTIAL |
 | 6.4.02.1 | mission 2: the required chain (docs/stage-6-inventory.md "Progression path"), each step placed, runs from the arrival to the exit; the flags, goals, notes and travel text at the exit equal the original's | O1 | - | a placed-chain scene of the mission in Play and under Wine from the same start (a real slot of the mission, else the previous mission's exit), compared at the exit; weak: the player is placed at each step, as Stage 5's placed approaches: the walk and the fights between the steps are not part of the row (the user's decision) | MISSING |
@@ -152,7 +152,7 @@ menu or a cold open of the mission's first map. The same start is loaded in Play
 2. **6.4.\*.3, the conversation census**: every own conversation of each list started in Play as its owner or trigger starts it (Play only; cheap; it finds the
    conversation-side blockers before any capture is spent).
 3. **6.4.\*.1, the placed chains**, mission by mission in the campaign's order (Training and mission 1 first: Stage 5's captures and scenes cover much of their
-   maps), each with its Wine capture from the same start.
+   maps), each with its Wine capture from the same start. Missions 0 and 1 pass ([the harness and what it found](stage-6-chains.md)); the next mission needs its chain file and its capture.
 4. **6.4.\*.2, the lasting choices**: the pairs of the carried table, the second branch captured where no slot holds it.
 5. **6.2.2** (save in Play, load in Play), **6.1.6** (each menu entry against the original; what Exit does), **6.5** (the endings from their triggers).
 6. **6.6.1, the unbroken run**, chaining the 6.4.\*.1 steps from New Game, then the gate.

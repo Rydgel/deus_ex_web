@@ -57,7 +57,7 @@ export async function loadInfoLinkPreviewContent(assets){
   requireValue(context.pkg.exports[reference.conversationExport-1]?.path===reference.conversationObject,
     'DL_Start conversation export identity changed');
   const conversation=readObject(context.pkg,context.bytes,reference.conversationExport).values;
-  requireValue(conversation.conName===reference.conversationName&&conversation.eventList===reference.eventExport,
+  requireValue(String(conversation.conName).toLowerCase()===reference.conversationName.toLowerCase()&&conversation.eventList===reference.eventExport,
     'DL_Start conversation metadata changed');
   const eventEntry=context.pkg.exports[reference.eventExport-1];
   requireValue(eventEntry?.path===reference.eventObject&&eventEntry.className==='ConEventSpeech',

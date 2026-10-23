@@ -383,7 +383,7 @@ export class ScriptRuntime {
   constructor(assets,{native,warning,levelFor,actorLifecycle,rng,nameServices,conversationObjects,conversationLifecycle,windowLifecycle,logDevice,relocation,nativeClassLoading=false,boundaryNatives=[],boundaryFunctions=[]}={}) {
     this.instanceKey=Symbol('ScriptRuntime instance');this.classIsACache=new WeakMap();this.arena=new ObjectArena();
     this.lastLinkedReceiver=null;this.lastLinkedInstance=undefined;
-    this.objects=new ScriptObjects(assets);this.classes=new Map();this.functions=new Map();
+    this.nameSpelling=assets?.nameSpelling??null;this.objects=new ScriptObjects(assets);this.classes=new Map();this.functions=new Map();
     // GLazyLoad for a client launch (docs/script-font-load.md). The mesh
     // archive keeps Play's separately documented deferred policy below.
     this.lazyLoad=CLIENT_LAZY_LOAD;this.loadLifecycle=[];
@@ -2383,15 +2383,21 @@ export class ScriptRuntime {
    * from: `{index, source: 'measured'}` (the live capture: pre-placed actors,
    * the player), `{index, source: 'modeled'}` (the slot AddObject gives a
    * runtime spawn, continued from a measured registry state;
-   * docs/object-index-captures.md "Runtime spawns"), or null when the original
-   * index is not known: the sound then stays the recorded boundary. */
+   * docs/object-index-captures.md "Runtime spawns"), `{index, source: 'restored'}`
+   * (the model of an object of a restored or loaded level, 0x100000 + export
+   * index: unverified), or null when the original index is not known: the sound
+   * then stays the recorded boundary. */
   soundObjectIndex(receiver) {
     const measured=this.measuredObjectIndex(receiver);
     if(measured!==null)return {index:measured,source:'measured'};
     let instance;
     try{instance=this.instance(receiver);}catch{return null;}
     const modeled=instance.nativeObject?.originalIndex;
-    return Number.isInteger(modeled)?{index:modeled,source:'modeled'}:null;
+    if(Number.isInteger(modeled))return {index:modeled,source:'modeled'};
+    // An object of a restored or loaded level has no measured slot: its registry index is modeled as 0x100000 + its export index
+    // (script-doors.mjs, docs/travel.md "Unresolved" 10: labelled and unverified, the one model of a restored level).
+    const restored=instance.nativeObject?.hashIndex;
+    return Number.isInteger(restored)?{index:restored,source:'restored'}:null;
   }
   /** soundServices for execPlaySound: ObjectIndex is the measured or modeled
    * original index, never the host registry slot. */
@@ -3404,7 +3410,9 @@ export class ScriptRuntime {
     }
     if(call.index===1024){
       if(call.argumentCount!==1)throw new Error('StringToName requires one string argument');
-      const name=extensionStringToName(refValue(call.evaluateArgument(0)),this.nameServices);
+      // The first spelling of a name wins (unreal/name-spelling.mjs): StringToName(con.conName $ "_Played") finds the startup package's `M00MeetPage_Played`
+      const spell=this.nameSpelling,services=spell&&this.nameServices?{...this.nameServices,internName:(text,mode)=>this.nameServices.internName(spell.spell(text),mode)}:this.nameServices;
+      const name=extensionStringToName(refValue(call.evaluateArgument(0)),services);
       if(typeof name!=='string'||name.includes('\0'))
         throw new Error('The shared FName service must return a resolved name spelling');
       return name;
