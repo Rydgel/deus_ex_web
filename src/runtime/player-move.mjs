@@ -23,8 +23,10 @@ export function playerMove(source,delta,{worldActor,multiLineCheck,removeActor,a
  // on a player carrying inventory has Delta=0 but must run the rider/commit
  // tail. Two original DLL cases are in docs/script-set-rotation.md.
  if(tiny&&(sameRotation||!source.standingCount)){source.rotation=rotation;return {...query,hitUntouched:true};}
- if(tiny&&requested.some(v=>v!==0))
-  throw Error('MoveActor changed rotation with riders and nonzero sub-threshold Delta is not linked');
+ // A tiny but nonzero Delta with a changed rotation and riders is not the short return above (0x103991c8..0x10399240 needs an unchanged rotation or no riders): the
+ // rider pass and the commit run, and FinalDelta is the requested Delta itself (no line check ran for it, Time 1: the DLL moves the source by exactly that Delta, float32
+ // rounded; scripts/validate-native-set-rotation-riders.mjs "tiny-nonzero-delta" case). moveQuery's tiny gate gives zero, which is right for the short returns only.
+ if(tiny&&requested.some(v=>v!==0))query.delta=[...requested];
  const eligibleScanned=!!(source.flags&14)&&hits.some(h=>!basedOn(h.actor,source));
  // 0x103998a0-0x10399bb0: nonzero StandingCount walks Level.Actors and
  // recursively moves every based rider before this actor commits. bTest

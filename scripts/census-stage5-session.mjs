@@ -5,7 +5,7 @@ import {Undriven, near, PI, simulatedMsAdvance} from './census-stage5-drivers.mj
 
 import {actorRenderFeedback} from '../src/viewer/actor-render-feedback.mjs';
 
-export async function openSession(map, assets, {travel = null, saveDirectory = null, frameSeconds = 1 / 60} = {}) {
+export async function openSession(map, assets, {travel = null, saveDirectory = null, frameSeconds = 1 / 60, paintEvery = 1} = {}) {
   const {decodeMap} = await import('../src/unreal/map.mjs');
   const {createGame} = await import('../src/viewer/game.mjs');
   const {createSimSession} = await import('../src/viewer/sim-session.mjs');
@@ -22,7 +22,7 @@ export async function openSession(map, assets, {travel = null, saveDirectory = n
   const level = () => runtime.levelFor(player());
   const fixture = createPlayerInputFixture(game, {});
   const watched = new Set();
-  let travelRequest = null;
+  let travelRequest = null, painted = 0;
   const read = (object, name) => runtime.readNamed(object, name);
   const frame = () => {
     simulatedMsAdvance(1000 * frameSeconds);
@@ -31,10 +31,13 @@ export async function openSession(map, assets, {travel = null, saveDirectory = n
     // `travel` browses instead and the request for the next level waits in c.takeTravel()
     const request = game.clientTravel();
     if (request) travelRequest = request;
-    const sprites = sim.sprites();
-    const hud = sim.hud({width: 1440, height: 960, view: game.view()});
-    const errors = [...sprites.errors, ...hud.errors];
-    if (errors.length) throw new Error(errors.map(e => e.message).join('; '));
+    // `paintEvery` N draws the sprites and the HUD on every Nth frame only (the conversation census: the paint code is checked, not every frame)
+    if (paintEvery <= 1 || ++painted % paintEvery === 0) {
+      const sprites = sim.sprites();
+      const hud = sim.hud({width: 1440, height: 960, view: game.view()});
+      const errors = [...sprites.errors, ...hud.errors];
+      if (errors.length) throw new Error(errors.map(e => e.message).join('; '));
+    }
     // A headless frame draws no actor meshes, so LastRenderTime stays at the LoadMap value and a stasis device (a keypad, a panel, a door) never runs its Timer; the
     // renderer's own feedback stamps what the player is working on, as the Stage 3 route does (docs/script-training-route.md).
     for (const target of watched) actorRenderFeedback(runtime, target)();

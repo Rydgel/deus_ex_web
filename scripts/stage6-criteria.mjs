@@ -19,6 +19,9 @@ export const MISSIONS = Object.freeze(['00', '01', '02', '03', '04', '05', '06',
 /** The missions that set one of the 36 carried flags (docs/stage-6-inventory.md "The choices with lasting consequences across missions"). */
 export const CHOICE_MISSIONS = Object.freeze({'01': 7, '02': 13, '03': 5, '04': 3, '05': 3, '08': 3, '10': 1, '11': 2});
 
+/** The missions with a real desktop save slot (`.work/internet-saves`: the 41 slots cover missions 1 to 6, 8 to 10, 12, 14 and 15). */
+const SLOT_MISSIONS = new Set(['01', '02', '03', '04', '05', '06', '08', '09', '10', '12', '14', '15']);
+
 export const CRITERIA = [];
 const clauseOf = id => Number(id.split('.')[1]);
 const add = (id, claim, ev, extra = {}) => CRITERIA.push({id, clause: clauseOf(id), claim, ev, proof: [], have: [], need: null, weak: null, excluded: null, pending: null, ...extra});
@@ -71,7 +74,9 @@ for (const m of MISSIONS) {
   if (CHOICE_MISSIONS[m]) add(`6.4.${m}.2`, `mission ${Number(m)}: both sides of each of its ${CHOICE_MISSIONS[m]} carried flags, checked where the later mission reads them (the conversation branch, the pawn present or absent, the script's effect), equal to the original`, 'O1',
     {need: 'per carried flag: the two branches set in the mission (or a slot holding each), the reader\'s observable in the later mission, in Play and under Wine'});
   add(`6.4.${m}.3`, `mission ${Number(m)}: every conversation and InfoLink of its list starts and runs to its end in Play without a stop; those on the required chain are compared with the original by 6.4.${m}.1`, 'P',
-    {need: 'a conversation census over the mission\'s own conversations (docs/stage-6-inventory.md), each started as its owner or trigger starts it'});
+    {proof: [v('validate-conversations-census.mjs', '--missions', m)], have: ['scripts/census-conversations.mjs (docs/census-conversations.md)'],
+      weak: 'Play against itself: a cold open of each owner\'s map; the named boundaries (what the original\'s own code or data refuses) are listed in scripts/census-conversations-boundaries.mjs',
+      pending: SLOT_MISSIONS.has(m) ? 'the second pass from the mission\'s real slots (`validate-conversations-census.mjs --slots`): started 2026-10-23, not finished; its stops so far are the restored-level PlaySound object index of the placed-chain worker (missions 1 and 3)' : null});
 }
 
 // 6.5 The endings -----------------------------------------------------------------------------------------------------------------------

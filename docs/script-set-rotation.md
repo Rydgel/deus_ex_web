@@ -84,6 +84,10 @@ scene work and is not covered here.
 
 ## Zero-Delta changed rotation with a based rider
 
+(A changed rotation with riders and a nonzero Delta under 0.0001 on every axis, which a turning pawn's rider pass produces, is the case `tiny-nonzero-delta-changed-rotation-with-rider`
+of the same validator: the DLL runs the rider pass and moves the source by exactly that Delta, no line check ran, and `playerMove` takes the requested Delta as FinalDelta there;
+docs/census-conversations.md.)
+
 `scripts/validate-native-set-rotation-riders.mjs` adds two focused original
 cases for changed rotation with `StandingCount != 0`. It uses the Training
 map's real world model and existing native MoveActor/hash harness, with one

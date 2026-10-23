@@ -152,7 +152,7 @@ async function maps() {
       return lineageCache.get(key);
     };
     const record = { map: mapName, actors: map.actors.length, level: null, exits: [], teleporters: [], flagTriggers: [], dataLinkTriggers: [], conversationTriggers: [],
-      skillAwards: [], eventSources: [], logic: [], pawns: [], keys: [], doors: [], keypads: [], computers: [], boundActors: [], playerStarts: [], dataCubes: [], goalTriggers: [], classes: {} };
+      skillAwards: [], eventSources: [], logic: [], pawns: [], keys: [], doors: [], keypads: [], computers: [], boundActors: [], defaultBound: [], playerStarts: [], dataCubes: [], goalTriggers: [], classes: {} };
     for (const a of map.actors) {
       record.classes[a.className] = (record.classes[a.className] ?? 0) + 1;
       const lineage = await lineageOf(a);
@@ -213,12 +213,14 @@ async function maps() {
       }
       if (is('deusex.scriptedpawn')) {
         const m = await merged();
-        record.pawns.push({ ...await base(), bind: m.bindname ?? '', important: !!m.bimportant, alliance: nameOf(m.alliance) || '', orders: nameOf(m.orders) || '', ordersTag: nameOf(m.orderTag) || nameOf(m.ordertag) || '',
+        record.pawns.push({ ...await base(), bind: m.bindname ?? '', barkBind: m.barkbindname ?? '', important: !!m.bimportant, alliance: nameOf(m.alliance) || '', orders: nameOf(m.orders) || '', ordersTag: nameOf(m.orderTag) || nameOf(m.ordertag) || '',
           tag: tagOf(m), familiar: m.familiarname ?? '', hidden: !!m.bhidden, invincible: !!m.binvincible, event: nameOf(m.event) || '' });
       } else if (!is('deusex.scriptedpawn')) {
         // anything else that is bound to a conversation by name (decorations, computers, switches) or fires/receives events
         const bn = a.values.BindName ?? a.values.bindName;
         if (bn) record.boundActors.push({ ...await base(), bind: bn });
+        // every other actor whose BindName comes from its class default (the conversation census binds by the merged value, as the engine does)
+        else if (is('engine.actor') && !is('engine.pawn')) { const m = await merged(); if (m.bindname) record.defaultBound.push({ ...await base(), bind: m.bindname }); }
         if (/Trigger$|^(Dispatcher|SpecialEvent|AlarmUnit|OrdersTrigger|AllianceTrigger|SequenceTrigger|SpawnPoint|Switch1|Switch2|Button1|ControlPanel|ElevatorMover|LogicTrigger|Counter|Teleporter|MapExit)$/.test(a.className) || is('engine.triggers')) {
           if (!record.logic.some(x => x.name === a.name)) {
             const m = await merged();
