@@ -1,0 +1,18 @@
+# Stage 6 row 6.2.2: the original loads the slot Play saved (scripts/validate-save-load-play.mjs writes .work/play-saves-622/Save0013), as the desktop slots of
+# scripts/validate-load-game.mjs are loaded: from Training Combat, frozen, `LoadGame 13`; then the loaded player leaves by LocalTravel (its export text).
+#   DX_SAVE_BACKUP=.work/save-backup-sl1 scripts/travel-probe.sh sl1 @scripts/travel-steps/sl1-play-slot.steps
+wait:8
+putslot:.work/play-saves-622/Save0013:Save0013
+cmd:open 00_TrainingCombat
+arrive:00_trainingcombat$
+wait:3
+cmd:set LevelInfo bPlayersOnly True
+cmd:LoadGame 13
+arrive:unatcoisland
+wait:3
+snap:p-loaded
+props:JCDentonMale:p-loaded-player:Location:0x114:f3,Rotation:0x120:i3,ViewRotation:0x3dc:i3,Health:0x428:u32,Physics:0x30:u8
+gobjects:p-loaded
+cmd:LocalTravel 01_NYC_UNATCOHQ
+arrive:unatcohq
+snap:p-export

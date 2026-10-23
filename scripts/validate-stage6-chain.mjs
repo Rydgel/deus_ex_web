@@ -41,7 +41,7 @@ const original = JSON.parse(stored);
 const { runChainInPlay } = await import('./chain-play.mjs');
 const chain = await loadChain(mission, option('file', null));
 const play = await runChainInPlay(chain, { log: line => { if (process.argv.includes('--verbose')) console.log(`  play: ${line}`); } });
-if (option('json', null)) await writeFile(option('json'), JSON.stringify({ ...play, session: undefined }, null, 1));
+if (option('json', null)) await writeFile(option('json'), JSON.stringify({ ...play, session: undefined, saveDirectory: undefined }, null, 1));
 
 /** A map's name as the comparison reads it: the filed level's URL (..\\Save\\Current\\<map>.dxs) and the .dx extension are the same map. */
 const mapName = name => String(name ?? '').replace(/^.*[\\/]/, '').replace(/\.dxs?$/i, '').toLowerCase();

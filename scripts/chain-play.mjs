@@ -61,7 +61,8 @@ export function conversationOf(c) {
     choices: c.read(conPlay, 'conWinThird') ? c.read(c.read(conPlay, 'conWinThird'), 'numChoices') : null };
 }
 
-export async function runChainInPlay(chain, { assets = null, log = () => {}, until = null, onStep = null } = {}) {
+/** `sessionTravel`: more travel options for every level session the run opens (a save's `snapshotSource`, scripts/validate-save-load-play.mjs). */
+export async function runChainInPlay(chain, { assets = null, log = () => {}, until = null, onStep = null, sessionTravel = {} } = {}) {
   assets ??= await loadAssets();
   const directory = createSaveDirectory();
   const result = { mission: chain.mission, snaps: {}, legs: [], steps: [], conversations: [] };
@@ -80,7 +81,7 @@ export async function runChainInPlay(chain, { assets = null, log = () => {}, unt
   const arrive = async (request, label) => {
     result.legs.push({ label, from: map, to: request.map, text: request.travelInfo[0][1], restore: Boolean(request.restore), portal: request.portal ?? null, url: request.url });
     note(`leg ${label}: ${map} -> ${request.map}${request.portal ? `#${request.portal}` : ''}${request.restore ? ' (restored)' : ''}, ${request.travelInfo[0][1].length} bytes`);
-    ({ c } = await openSession(request.map, assets, { travel: { arrival: request, lastURL: request.lastURL }, saveDirectory: directory }));
+    ({ c } = await openSession(request.map, assets, { travel: { ...sessionTravel, arrival: request, lastURL: request.lastURL }, saveDirectory: directory }));
     map = request.map;
     pending = null;
   };
@@ -88,7 +89,7 @@ export async function runChainInPlay(chain, { assets = null, log = () => {}, unt
 
   const ops = {
     async start(step) {
-      ({ c } = await openSession('DX', assets, { travel: {}, saveDirectory: directory }));
+      ({ c } = await openSession('DX', assets, { travel: { ...sessionTravel }, saveDirectory: directory }));
       map = 'DX';
       c.frames(120);
       if (step.kind === 'menu-training') {
@@ -251,6 +252,7 @@ export async function runChainInPlay(chain, { assets = null, log = () => {}, unt
   // the leg a last request left pending (a chain ends at the exit: its text is the last thing compared)
   if (pending) { result.legs.push({ label: 'exit', from: map, to: pending.map, text: pending.travelInfo[0][1], restore: Boolean(pending.restore), portal: pending.portal ?? null, url: pending.url }); note(`exit request ${map} -> ${pending.map}`); }
   result.session = c;
+  result.saveDirectory = directory;
   return result;
 }
 
@@ -258,7 +260,7 @@ if (import.meta.url === `file://${process.argv[1]}`) {
   const option = (name, fallback) => { const i = process.argv.indexOf(`--${name}`); return i < 0 ? fallback : process.argv[i + 1]; };
   const chain = await loadChain(option('mission', '00'), option('file', null));
   const result = await runChainInPlay(chain, { log: line => console.log(line), until: option('until', null) });
-  delete result.session;
+  delete result.session; delete result.saveDirectory;
   if (option('json', null)) await writeFile(option('json'), JSON.stringify(result, null, 1));
   console.log(`done: ${result.legs.length} legs, ${Object.keys(result.snaps).length} snaps`);
   process.exit(0);
