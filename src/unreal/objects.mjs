@@ -64,7 +64,7 @@ export function readProperties(pkg, reader) {
       case 3: value = Boolean(info & 128); break;
       case 4: value = r.f32(); break;
       case 5: case 8: value = r.compact(); objectAt(pkg, value); break;
-      case 6: value = nameAt(pkg, r.compact()); break;
+      case 6: value = nameAt(pkg, r.compact()); if (pkg.nameSpelling) value = pkg.nameSpelling.spell(value); break;   // the first package to enter a name fixes its spelling (name-spelling.mjs)
       case 10:
         if (struct === 'Vector') value = vector(r);
         else if (struct === 'Rotator') value = [r.i32(), r.i32(), r.i32()];

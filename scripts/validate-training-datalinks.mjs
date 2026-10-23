@@ -165,12 +165,13 @@ for (const route of catalog.routes) {
   assert.ok(want, `unexpected authored Training DataLink ${tag}`);
   assert.equal(route.dataLinkTag, tag);
   assert.equal(route.trigger.name, want.trigger);
-  assert.equal(route.conversation.name, want.conversation);
+  // (a Name value carries the first spelling a package entered it with: the Training map spells a tag `dl_start` before DeusExConText spells the conversation `DL_Start`, unreal/name-spelling.mjs)
+  assert.equal(route.conversation.name.toLowerCase(), want.conversation.toLowerCase());
   assert.equal(route.conversation.ownerName, 'JCDenton');
   assert.equal(route.conversation.bDataLinkCon, true);
   assert.equal(route.conversation.bDisplayOnce, true);
   assert.equal(route.conversation.audioPackageName, 'Mission00');
-  assert.equal(route.trigger.playedFlag, `${want.conversation}_Played`);
+  assert.equal(route.trigger.playedFlag.toLowerCase(), `${want.conversation}_Played`.toLowerCase());   // (the flag's spelling is the first spelling the name had: unreal/name-spelling.mjs)
   assert.equal(route.trigger.flags.TriggerType, 0);
   assert.equal(route.trigger.flags.bInitiallyActive, true);
   assert.equal(route.trigger.flags.bTriggerOnceOnly, true);

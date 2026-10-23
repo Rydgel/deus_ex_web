@@ -190,7 +190,7 @@ export async function runChainInPlay(chain, { assets = null, log = () => {}, unt
       const trace = [];
       for (; n < limit; n += 15) {
         const state = conversationOf(c);
-        if (state && !started) { started = state; if (step.name && state.name !== step.name) throw new Error(`conversation ${state.name} started, expected ${step.name}`); }
+        if (state && !started) { started = state; if (step.name && String(state.name).toLowerCase() !== step.name.toLowerCase()) throw new Error(`conversation ${state.name} started, expected ${step.name}`); }
         if (!state) { if (started) break; frames(15, false); continue; }
         if (trace.at(-1) !== `${state.event}@${state.label}`) trace.push(`${state.event}@${state.label}`);
         if (state.event === 'choice' || state.state === 'WaitForInput' && state.choices) {

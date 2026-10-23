@@ -8,6 +8,10 @@ export default {
     { op: 'wait', seconds: 3 },
     { op: 'snap', label: 'b1-island' },
     { op: 'gobjects', label: 'b1' },
+    // 29 Terrorists patrol the Island and the run places the player at the Statue (the walk and the fights between the steps are not part of the row): God mode, so that what the
+    // player is shot for in the original's longer real seconds is not compared
+    { op: 'line', text: 'set DeusEx.JCDentonMale bCheatsEnabled True', harness: true },
+    { op: 'line', text: 'God', harness: true },
 
     // DL_StartGame fires PaulRunningToPlayer when the player has walked a little; MeetPaul starts when Paul reaches him (radius 180, third person)
     { op: 'walk', seconds: 1.5 },
@@ -34,6 +38,8 @@ export default {
     { op: 'travel', to: '01_NYC_UNATCOHQ', label: 'leg1' },
     { op: 'wait', seconds: 5 },
     { op: 'snap', label: 'b4-hq' },
+    // Paul (PaulDenton0, out of the world until Mission01.Timer's HQ pass lets him in once M01ReadyForBriefing is set) barks PaulFinalBark at a player within 70 units: rendered in the original's frames
+    { op: 'watch', actors: ['PaulDenton0'] },
 
     // HQ: MeetCarter (SamCarter0, radius 160; one of its three offers, then it ends), MeetJaime (JaimeReyes0, radius 100; sets M01ReadyForBriefing now that the
     // Carter conversation is done), M02Briefing (JosephManderley0, sight and radius 240, needs M01ReadyForBriefing)
@@ -47,6 +53,8 @@ export default {
     { op: 'snap', label: 'b6-jaime' },
     { op: 'place', at: [369, -170, 289], view: [-6389, 32830], harness: true, note: '70 units east of JosephManderley0 at his place (299,-170,288)' },
     { op: 'conv', name: 'M02Briefing', watch: ['JosephManderley0'], timeout: 240 },
+    // Paul, let into the HQ, wanders to the player and barks PaulFinalBark (a first-person conversation, radius 70, once; needs M02Briefing_Played): how long he takes is each run's own
+    { op: 'wait', flag: 'PaulFinalBark_Played', timeout: 240 },
     { op: 'wait', seconds: 15 },
     { op: 'snap', label: 'b7-briefed' },
 

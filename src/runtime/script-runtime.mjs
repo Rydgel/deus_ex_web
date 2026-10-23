@@ -383,7 +383,7 @@ export class ScriptRuntime {
   constructor(assets,{native,warning,levelFor,actorLifecycle,rng,nameServices,conversationObjects,conversationLifecycle,windowLifecycle,logDevice,relocation,nativeClassLoading=false,boundaryNatives=[],boundaryFunctions=[]}={}) {
     this.instanceKey=Symbol('ScriptRuntime instance');this.classIsACache=new WeakMap();this.arena=new ObjectArena();
     this.lastLinkedReceiver=null;this.lastLinkedInstance=undefined;
-    this.objects=new ScriptObjects(assets);this.classes=new Map();this.functions=new Map();
+    this.nameSpelling=assets?.nameSpelling??null;this.objects=new ScriptObjects(assets);this.classes=new Map();this.functions=new Map();
     // GLazyLoad for a client launch (docs/script-font-load.md). The mesh
     // archive keeps Play's separately documented deferred policy below.
     this.lazyLoad=CLIENT_LAZY_LOAD;this.loadLifecycle=[];
@@ -3410,7 +3410,9 @@ export class ScriptRuntime {
     }
     if(call.index===1024){
       if(call.argumentCount!==1)throw new Error('StringToName requires one string argument');
-      const name=extensionStringToName(refValue(call.evaluateArgument(0)),this.nameServices);
+      // The first spelling of a name wins (unreal/name-spelling.mjs): StringToName(con.conName $ "_Played") finds the startup package's `M00MeetPage_Played`
+      const spell=this.nameSpelling,services=spell&&this.nameServices?{...this.nameServices,internName:(text,mode)=>this.nameServices.internName(spell.spell(text),mode)}:this.nameServices;
+      const name=extensionStringToName(refValue(call.evaluateArgument(0)),services);
       if(typeof name!=='string'||name.includes('\0'))
         throw new Error('The shared FName service must return a resolved name spelling');
       return name;
