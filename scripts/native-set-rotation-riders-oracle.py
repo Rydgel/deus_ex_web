@@ -44,8 +44,9 @@ class Native(player_move.Native):
         hit = self.alloc(44)
         self.write(hit + 4, 'I', 0)
         self.write(hit + 36, 'fi', 1, -1)
+        # Delta defaults to zero; a case may give a sub-threshold nonzero one (a rider's RotMotion of a hundredth of a unit)
         result = self.call(0x103990e0, self.level, struct.pack('<I3f3iI4I', p,
-            0.0, 0.0, 0.0, *case['newRotation'], hit, 0, 0, 0, 0))
+            *case.get('delta', [0.0, 0.0, 0.0]), *case['newRotation'], hit, 0, 0, 0, 0))
         self.player_active = False
         self.rotation_active = False
         return {

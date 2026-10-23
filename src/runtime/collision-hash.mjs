@@ -174,7 +174,7 @@ export function createCollisionHash({ tables, seed, maxCells = 1000000, store = 
       if (busy()) throw new Error('Hash mutation during primitive queries is unsupported');
       if (!collideActors) throw new Error('Original AddActor requires bCollideActors');
       if (actorFlags & 0x80) return null;
-      if (registrations.has(actor)) throw new Error('Actor is already registered');
+      if (registrations.has(actor)) throw new Error(`Actor is already registered${actor?.name ? ` (${actor.name})` : ''}`);
       const cells = collisionHashBounds(bounds); check(cells);
       const hashLocation = vector(location, 'location');
       if (store) store.add(actor, cells);
