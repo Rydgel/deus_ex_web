@@ -17,7 +17,32 @@ export function familyOf(message) {
     .replace(/\b[A-Za-z]+#+\b/g, m => m.replace(/#+/g, '#')).slice(0, 140);
 }
 
-export async function runChild({ map, only, frameSeconds, buildPlan }) {
+/** Load a real desktop save slot the way the Load Game screen does (docs/travel.md "Play, step 4"; scripts/validate-load-saves.mjs): the slot is the only one in the
+ * save directory; a session on the logo map opens the screen, Load runs LoadGame -> ClientTravel("?loadgame=N"), and a new session restores the slot's level with the
+ * saved player (no begin-play pass). Returns the restored session and the map the slot holds. */
+async function loadSlot(slotPath, assets, frameSeconds) {
+  const { openSession } = await import('./census-stage5-session.mjs');
+  const { createSaveDirectory } = await import('../src/runtime/save-directory.mjs');
+  const { parseSaveInfo } = await import('../src/runtime/save-info.mjs');
+  const { createMenuDriver } = await import('../src/viewer/menu-driver.mjs');
+  const index = Number(/Save(\d+)$/.exec(slotPath)[1]);
+  const entries = [];
+  for (const name of await readdir(slotPath)) entries.push({ name, bytes: new Uint8Array(await readFile(`${slotPath}/${name}`)) });
+  const info = parseSaveInfo(entries.find(entry => entry.name === 'SaveInfo.dxs').bytes);
+  const directory = createSaveDirectory({ saves: [{ directory: `Save${String(index).padStart(4, '0')}`, files: entries, info }] });
+  const { c } = await openSession('DX', assets, { travel: {}, saveDirectory: directory });
+  c.frames(60);
+  const driver = createMenuDriver(c.game);
+  c.key('Escape'); c.frames(20);
+  driver.invoke('MenuScreenLoadGame'); c.frames(10);
+  c.game.hud.scoped(() => driver.pressActionKey('LOAD')); c.frames(4);
+  const request = c.takeTravel();
+  if (!request?.restore) throw new Error(`the Load button made no restore request for ${slotPath}`);
+  const session = await openSession(request.map, assets, { travel: { arrival: request, lastURL: request.lastURL }, saveDirectory: directory, frameSeconds, paintEvery: 10 });
+  return { session, map: request.map, saved: info.properties.MapName };
+}
+
+export async function runChild({ map, only, frameSeconds, buildPlan, slot = null }) {
   const root = gameDirectory();
   const { AssetStore } = await import('../src/unreal/assets.mjs');
   const files = [];
@@ -28,14 +53,16 @@ export async function runChild({ map, only, frameSeconds, buildPlan }) {
 
   const everything = await buildPlan();
   const meta = new Map(everything.map(t => [lower(t.name), t]));
-  let targets = everything.filter(t => t.map === map && (!only || only.includes(lower(t.name))));
-  // InfoLinks first (any time), then the conversations by owner in the owner's list order
-  const rank = t => (t.kind === 'DL' ? 0 : 1);
-  targets.sort((a, b) => rank(a) - rank(b) || lower(a.owner).localeCompare(lower(b.owner)) || a.listIndex - b.listIndex);
+  // a slot start: the map is the slot's, whatever the plan's spelling of its name
+  let slotMap = null;
+  let targets = [];
 
   let session = null, c = null, H = null;
   const open = async () => {
-    session = await openSession(map, assets, { frameSeconds, paintEvery: 10 });
+    if (slot) {
+      const loaded = await loadSlot(slot, assets, frameSeconds);
+      session = loaded.session; slotMap = loaded.map;
+    } else session = await openSession(map, assets, { frameSeconds, paintEvery: 10, travel: {} });   // a travel host: a map exit the conversation fires is a request, not an error
     c = session.c;
     c.frames(30);
     H = harness(c, frameSeconds, meta);
@@ -43,15 +70,22 @@ export async function runChild({ map, only, frameSeconds, buildPlan }) {
   };
   const t0 = wallNow();
   await open();
-  console.error(`[${map}] opened in ${Math.round((wallNow() - t0) / 1000)} s, ${targets.length} conversations`);
+  const wanted = lower(slot ? slotMap : map);
+  targets = everything.filter(t => lower(t.map) === wanted && (!only || only.includes(lower(t.name))));
+  targets.sort((a, b) => (a.kind === 'DL' ? 0 : 1) - (b.kind === 'DL' ? 0 : 1) || lower(a.owner).localeCompare(lower(b.owner)) || a.listIndex - b.listIndex);
+  const startLabel = slot ? `slot ${slot.split('/').slice(-3).join('/')}` : 'cold open';
+  console.error(`[${map}] ${startLabel} opened in ${Math.round((wallNow() - t0) / 1000)} s, ${targets.length} conversations`);
 
   const results = new Map();        // name -> result (a direct run, or an incidental one that upgrades an earlier refusal)
   const restartSession = async () => {
+    if (slot) { await open(); return; }       // the saved level, not the map's first state
     try { c.restart(); H = harness(c, frameSeconds, meta); H.godMode(); if (H.playerDead()) await open(); }
     catch { await open(); }
   };
-  const attempt = async t => {
+  const attempt = async (t, retry = false) => {
     const result = base(t);
+    result.start = startLabel;
+    result.retry = retry;
     const w0 = wallNow();
     try {
       await H.runTarget(t, result);
@@ -59,6 +93,7 @@ export async function runChild({ map, only, frameSeconds, buildPlan }) {
       result.stop = { family: error instanceof Undriven ? `undriven: ${familyOf(error.message)}` : familyOf(error.message), message: String(error.message).split('\n')[0].slice(0, 300),
         where: String(error.stack ?? '').split('\n').slice(1, 6).map(l => l.trim().replace(/^at /, '').replace(/\(?file:\/\/.*\/(src\/[^)]*|scripts\/[^)]*)\)?/, '$1')) };
       result.error = true;
+      result.warnings = (c.runtime.__census?.warnings ?? []).slice(-6).map(w => JSON.stringify(w, (k, v) => typeof v === 'object' && v && !Array.isArray(v) && typeof v.name === 'string' && v.index !== undefined ? `#${v.name}` : v).slice(0, 300));
     }
     result.wallMs = wallNow() - w0;
     result.outcome = outcomeOf(result);
@@ -72,29 +107,31 @@ export async function runChild({ map, only, frameSeconds, buildPlan }) {
     if (retryable(result)) {
       const first = result.stop.family;
       await restartSession();
-      result = await attempt(t);
+      result = await attempt(t, true);
       result.notes.unshift(`second attempt after restarting the level (the first: ${first})`);
     }
     results.set(lower(t.name), result);
     for (const other of H.incidentals()) {
       const m = meta.get(lower(other.name));
       if (!m || m.map !== map || results.get(lower(other.name))?.outcome === 'ran') continue;
-      const r = { ...base(m), via: `incidental while starting ${t.name}`, started: true, ended: other.ended, events: other.events, seconds: other.seconds, eventKinds: other.eventKinds };
+      const r = { ...base(m), start: startLabel, via: `incidental while starting ${t.name}`, started: true, ended: other.ended, events: other.events, seconds: other.seconds, eventKinds: other.eventKinds };
       r.outcome = outcomeOf(r); results.set(lower(other.name), r);
     }
     // a stop, a death or a travel request: the original Player start again; the player and the actors are new objects
     if (result.error || H.needsRestart()) await restartSession();
   }
-  for (const t of targets) emit(results.get(lower(t.name)) ?? { ...base(t), outcome: 'unstarted', stop: { family: 'not reached', message: 'the child did not reach this conversation' } });
+  for (const t of targets) emit(results.get(lower(t.name)) ?? { ...base(t), start: startLabel, outcome: 'unstarted', stop: { family: 'not reached', message: 'the child did not reach this conversation' } });
   console.error(`[${map}] finished in ${Math.round((wallNow() - t0) / 1000)} s`);
   process.exit(0);
 }
 
 const emit = result => console.log(JSON.stringify({ census: result }));
-const base = t => ({ mission: t.mission, map: t.map, name: t.name, kind: t.kind, owner: t.owner, bark: t.bark, via: null, started: false, ended: false, events: 0, eventKinds: {},
+const base = t => ({ start: 'cold open', mission: t.mission, map: t.map, name: t.name, kind: t.kind, owner: t.owner, bark: t.bark, via: null, started: false, ended: false, events: 0, eventKinds: {},
   seconds: 0, choices: [], stop: null, notes: [], predicted: t.predicted });
 
 function outcomeOf(r) {
+  if (r.travel && r.started && !r.ended) return 'travel';        // the map was left (a MapExit its events fire, the mission script's travel for a dying player) before the end
+  if (r.error) return 'stopped';         // an exception out of the session (a script error, an unsupported native): a stop of Play, whatever the step
   if (r.stop) return r.started ? 'stopped' : 'unstarted';
   if (r.started && r.ended) return 'ran';
   return r.started ? 'stopped' : 'unstarted';
@@ -109,7 +146,7 @@ function harness(c, frameSeconds, meta) {
   const runs = [];            // every conversation seen playing: {name, kind, start, end, events:Set, kinds, last}
   const live = new Map();     // name -> run
   const choiceVisits = new Map();
-  let travel = null;
+  let travel = null, staleSeen = false;
   const seconds = frames => Math.round(frames * frameSeconds * 10) / 10;
   const className = a => { try { return c.runtime.instance(a).cls.record.name; } catch { return '?'; } };
 
@@ -130,7 +167,9 @@ function harness(c, frameSeconds, meta) {
       const ev = read(play, 'currentEvent');
       if (ev && !run.events.has(ev)) { run.events.add(ev); const k = className(ev).replace(/^ConEvent/, ''); run.kinds[k] = (run.kinds[k] ?? 0) + 1; run.last = frame; }
     }
-    for (const [name, run] of live) if (!now.has(name)) { run.end = frame; live.delete(name); }
+    // a conversation whose last events hand the player to a cinematic (Jock's helicopter, the Endgame cameras: state Interpolating) ends without TerminateConversation's
+    // _Played flag; the cinematic is its end
+    for (const [name, run] of live) if (!now.has(name)) { run.end = frame; run.cinematic = H_state(p).endsWith('.interpolating'); live.delete(name); }
     if (process.env.CC_TRACE2 && frame % 30 === 0) console.error(`  OBS f${frame} live=[${[...live.keys()]}] conPlay=${Boolean(read(p, 'conPlay'))} dlp=${Boolean(read(p, 'dataLinkPlay'))}`);
   }
   const step = (n = 1) => {
@@ -139,12 +178,23 @@ function harness(c, frameSeconds, meta) {
       const request = c.takeTravel();
       if (request) travel = request;
       observe();
+      if (process.env.CC_HASHCHECK === '2' && !staleSeen) {
+        const q = c.game.collision.queries;
+        try { if (q.removeActor(player())) q.addActor(player()); }
+        catch (error) { staleSeen = true; console.error(`  STALE player first at f${frame} live=[${[...live.keys()]}] loc=${JSON.stringify(c.pos(player()))} state=${stateName(read(player(), 'conPlay') ?? player())}`); }
+      }
     }
   };
   // The script calls counted for the whole session: a StartConversation that returned true but ended at once (DeusExPlayer.AbortConversation: ConPlay's
   // StartConversation refused, CheckActors/CheckActorDistances) and the conversations ConPlay refused. CC_TRACE=1 CC_TRACE_FLAGS=A,B also prints
   // every GetActiveConversation / StartConversation the script makes, with the frame and those flags, on stderr.
-  const counters = c.runtime.__census ??= { aborts: 0, refused: 0 };
+  const counters = c.runtime.__census ??= { aborts: 0, refused: 0, warnings: [] };
+  if (!c.runtime.__warnWrapped) {
+    c.runtime.__warnWrapped = true;
+    const previous = c.runtime.warning;
+    // the runtime's own warnings (Accessed None with the script and offset, DynamicLoadObject events): the last few ride with a stop
+    c.runtime.warning = message => { counters.warnings.push(message); if (counters.warnings.length > 12) counters.warnings.shift(); return previous?.(message); };
+  }
   if (!c.runtime.__wrapped) {
     c.runtime.__wrapped = true;
     const orig = c.runtime.callFunction.bind(c.runtime), watchFlags = (process.env.CC_TRACE_FLAGS ?? '').split(',').filter(Boolean);
@@ -161,6 +211,14 @@ function harness(c, frameSeconds, meta) {
       return r;
     };
   }
+  /** The actors whose collision-hash registration no longer matches their Location (a RemoveActor of them throws): CC_HASHCHECK=1 prints them after each target. */
+  const staleActors = () => {
+    const q = c.game.collision.queries, stale = [];
+    for (const a of c.actors()) {
+      try { if (q.removeActor(a)) q.addActor(a); } catch (error) { stale.push(`${a.name}: ${String(error.message).slice(0, 60)}`); }
+    }
+    return stale;
+  };
   const idle = () => live.size === 0;
   const playsActive = () => Boolean(read(player(), 'conPlay') || read(player(), 'dataLinkPlay'));
   const stateName = a => { try { return c.runtime.instance(a)?.state?.stateNode?.record?.name ?? null; } catch { return null; } };
@@ -240,10 +298,15 @@ function harness(c, frameSeconds, meta) {
     }
     return false;
   };
-  const runStarted = name => runs.some(r => lower(r.name) === lower(name));
+  // A conversation counts as started while it is on the screen, or once it ended with its _Played flag: TerminateConversation sets the flag at a conversation's end,
+  // but DeusExPlayer.AbortConversation(True) (ConPlay.StartConversation refused, the player walked out of the radius, an actor died) ends it without. An aborted
+  // start is a run of one or two frames that never played.
+  const completed = r => r.cinematic || [...r.played].some(n => getFlag(`${n}_Played`));
+  const runStarted = name => runs.some(r => lower(r.name) === lower(name) && (!r.end || completed(r)));
 
-  async function runTarget(t, result) {
-    runs.length = 0; live.clear(); travel = null; counters.aborts = 0; counters.refused = 0;
+  async function runTarget(t, result, round = 0) {
+    if (process.env.CC_HASHCHECK) console.error(`  STALE before ${t.name}: ${JSON.stringify(staleActors())}`);
+    runs.length = 0; live.clear(); travel = null; counters.aborts = 0; counters.refused = 0; counters.warnings.length = 0;
     if (process.env.CC_CLEARCALLS) flagBase().calls.length = 0;
     // let whatever plays finish first (a started InfoLink of an earlier step, a bark)
     if (playsActive()) drive(() => !playsActive(), { max: 400 });
@@ -261,14 +324,18 @@ function harness(c, frameSeconds, meta) {
     noteChoices = (n, k) => { result.choices.push({ options: n, took: k }); };
     const ended = drive(() => !runStarted(t.name) ? false : !live.has(t.name) && idle(), { max: press ? 900 : 900, press, watch: t.name });
     noteChoices = null;
-    const run = runs.find(r => lower(r.name) === lower(t.name));
+    const run = runs.filter(r => lower(r.name) === lower(t.name) && (!r.end || completed(r))).at(-1) ?? runs.filter(r => lower(r.name) === lower(t.name)).at(-1);
     if (run) {
       result.events = run.events.size; result.eventKinds = run.kinds; result.seconds = seconds((run.end ?? frame) - run.start);
-      result.ended = Boolean(run.end);
+      result.ended = Boolean(run.end) && completed(run);
+      if (run.cinematic) { result.cinematic = true; result.notes.push('ended in a cinematic: the player is Interpolating (the conversation\'s last events hand it to a camera path)'); }
       // TerminateConversation sets <con>_Played for the conversation playing at the end: after a jump that is the one jumped to
       result.playedFlag = [...run.played].some(n => getFlag(`${n}_Played`));
       if (run.played.size > 1) result.jumpedTo = [...run.played].filter(n => lower(n) !== lower(t.name));
-      if (!result.playedFlag) result.notes.push('ended without its _Played flag (interrupted or terminated early)');
+      if (!result.playedFlag && !run.cinematic) {
+        result.notes.push('ended without its _Played flag (DeusExPlayer.AbortConversation: refused at the start, or the player left the radius)');
+        if (run.end && !result.stop) result.stop = { family: 'aborted: ended without its _Played flag', message: `${seconds(run.end - run.start)} s, ${run.events.size} events; aborts ${counters.aborts}, refused by ConPlay ${counters.refused}` };
+      }
     }
     if (travel) { result.notes.push(`travel requested: ${travel.url ?? JSON.stringify(travel).slice(0, 80)}`); result.travel = true; }
     if (!ended && !result.stop) {
@@ -276,13 +343,22 @@ function harness(c, frameSeconds, meta) {
       result.stop = { family: playerDead() ? 'player died' : travel ? 'travel' : 'did not end', message: `${playerDead() ? 'the player died' : travel ? 'a travel request' : `no end in ${seconds(frame - (run?.start ?? 0))} s`}; state ${play ? stateName(play) : 'none'}; events ${run?.events.size ?? 0}` };
       if (travel || playerDead()) result.stop = null;
     }
+    // a conversation cut short (an InfoLink aborted by a third-person conversation that started on the way, the player out of the radius) is started again, twice at most
+    if (result.stop?.family === 'aborted: ended without its _Played flag' && round < 2 && !travel && !playerDead()) {
+      result.notes.push(`aborted after ${result.seconds} s: started again (round ${round + 2})`);
+      Object.assign(result, { stop: null, started: false, ended: false, events: 0, eventKinds: {}, seconds: 0, playedFlag: undefined });
+      if (playsActive()) drive(() => !playsActive(), { max: 600 });
+      step(Math.round(3 / frameSeconds));
+      return runTarget(t, result, round + 1);
+    }
     // what else ran while this did (incidental)
     result.also = runs.filter(r => lower(r.name) !== lower(t.name)).map(r => r.name);
     // let a short tail pass so the end's effects (a Trigger, a flag, a pawn leaving) happen
     if (!travel && !playerDead()) step(Math.round(1 / frameSeconds));
+    if (process.env.CC_HASHCHECK) console.error(`  STALE after ${t.name}: stale ${JSON.stringify(staleActors())}`);
   }
 
-  const incidentals = () => runs.filter(r => r.end).map(r => ({ name: r.name, ended: true, events: r.events.size, seconds: seconds(r.end - r.start), eventKinds: r.kinds }));
+  const incidentals = () => runs.filter(r => r.end && completed(r)).map(r => ({ name: r.name, ended: true, events: r.events.size, seconds: seconds(r.end - r.start), eventKinds: r.kinds }));
 
   async function startDL(t, result) {
     const s = t.starter ?? { type: 'none' };
@@ -306,15 +382,28 @@ function harness(c, frameSeconds, meta) {
         result.notes.push(`${spec.name} (${spec.at?.join(',')}) did not start it`);
       } else result.notes.push(`no ${s.actors.map(a => a.name).join('/')} in the map`);
     }
+    // what played on the way in (a neighbouring trigger's InfoLink) is let finish and may have changed the flags this one needs (DL_Tong_08 clears Have_ROM)
+    if (playsActive()) drive(() => !playsActive(), { max: 600 });
+    for (const f of t.required) setFlag(f.flag, f.value);
+    setFlag(`${tag}_Played`, false);
     const ok = c.game.hud.scoped(() => call(player(), 'StartDataLinkTransmission', tag));
     step(2);
     result.via = s.type === 'script' ? `script call (${s.script})` : s.type === 'none' ? 'direct call (no starter in the data)' : 'direct call (trigger start failed)';
-    if (!ok && !runStarted(tag)) result.notes.push('StartDataLinkTransmission returned false');
+    if (!ok && !runStarted(tag)) {
+      result.notes.push('StartDataLinkTransmission returned false');
+      // why: GetActiveDataLink (the name found in the player's list, its once flag and flagRefList) and the DataLinkPlay already playing or queueing
+      const d = { required: t.required.map(f => `${f.flag}=${getFlag(f.flag)}/${f.value}`), played: getFlag(`${tag}_Played`) };
+      try { const con = call(player(), 'GetActiveDataLink', tag); d.active = con ? String(nm(read(con, 'conName'))) : null; } catch (error) { d.active = `ERR ${error.message}`; }
+      const dlp = read(player(), 'dataLinkPlay');
+      d.dataLinkPlay = dlp ? { con: nm(read(read(dlp, 'con') ?? {}, 'conName')) } : null;
+      try { d.chain = chainOf(player()).filter(n => lower(n) === lower(tag)).length; } catch { /* none */ }
+      result.diag = d;
+    }
     return runStarted(tag);
   }
 
   async function startTalk(t, result) {
-    const owners = actorsWithBind(t.owner).filter(a => chainOf(a).some(n => lower(n) === lower(t.name)));
+    const owners = (lower(t.owner) === 'jcdenton' ? [player()] : actorsWithBind(t.owner)).filter(a => chainOf(a).some(n => lower(n) === lower(t.name)));
     if (!owners.length) {
       const anyOwner = actorsWithBind(t.owner);
       result.notes.push(anyOwner.length ? `${anyOwner.length} actor(s) carry BindName ${t.owner} but none has ${t.name} in its chain (${chainOf(anyOwner[0]).length} entries)` : `no actor carries BindName ${t.owner}`);
@@ -322,8 +411,10 @@ function harness(c, frameSeconds, meta) {
       return false;
     }
     const owner = owners.find(aliveOwner) ?? owners[0];
-    c.watched.add(owner);
+    if (owner !== player()) c.watched.add(owner);
     result.ownerActor = owner.name;
+    bringIn(owner, result, 'owner');
+    release(owner, result);
     if (t.bark) return startBark(t, owner, result);
     const method = t.frob ? 'frob' : t.radius !== null ? 'radius' : 'named';
     setFlag(`${t.name}_Played`, false);
@@ -423,6 +514,32 @@ function harness(c, frameSeconds, meta) {
     return cond();
   }
 
+  /** A pawn the map authors out of the world (bInWorld false, parked 20000 units up by LeaveWorld) is brought in by the mission script's EnterWorld() call when its
+   * moment comes (Sandra Renton in the bar, the helicopters, the MIBs); the census makes that call itself (a harness step, named in the result). */
+  function bringIn(actor, result, what) {
+    let inWorld;
+    try { inWorld = read(actor, 'bInWorld'); } catch { return false; }
+    if (inWorld !== false) return false;
+    call(actor, 'EnterWorld');
+    step(Math.round(2 / frameSeconds));
+    result.notes.push(`${what} ${actor.name} was out of the world (bInWorld false): EnterWorld() called, as the mission script does`);
+    return true;
+  }
+
+  /** A pawn authored with Orders=Idle sits in state Idle (bCanConverse false, bump and frob ignored) until a trigger of the map gives it orders (Renault in the
+   * Metro, the hostages): the OrdersTrigger actors whose Event is the pawn's Tag are fired as Trigger calls, the way the map's own events fire them. */
+  function release(actor, result) {
+    if (!/\.?idle$/i.test(String(stateName(actor) ?? c.state(actor)))) return false;
+    const tag = String(read(actor, 'Tag') ?? '');
+    const triggers = c.byClass('OrdersTrigger').filter(x => String(read(x, 'Event') ?? '').toLowerCase() === tag.toLowerCase());
+    for (const trig of triggers) {
+      c.game.hud.scoped(() => c.runtime.processEvent(trig, 'Trigger', [player(), player()]));
+      step(Math.round(1 / frameSeconds));
+      if (!/\.?idle$/i.test(String(stateName(actor) ?? c.state(actor)))) { result.notes.push(`${actor.name} was in state Idle: ${trig.name} (Orders ${read(trig, 'Orders')}, Event ${tag}) fired as a Trigger call, as the map's own events fire it`); return true; }
+    }
+    return false;
+  }
+
   /** A conversation's speakers must all be bound and within 300 units of each other (Conversation.CheckActors and CheckActorDistances, which
    * ConPlayBase.StartConversation applies): the NPCs of a two-person conversation meet on their patrols or by orders another event gives. When the original's
    * check refused, the other speakers are set down near the owner (a harness step like the player's placement: the check itself and everything after it are
@@ -431,25 +548,32 @@ function harness(c, frameSeconds, meta) {
     let con = null;
     try { for (let it = read(owner, 'conListItems'); it && !con; it = read(it, 'next')) { const x = read(it, 'con'); if (lower(String(nm(read(x, 'conName')))) === lower(t.name)) con = x; } } catch { /* none */ }
     if (!con) return;
-    const others = new Set(), absent = new Set(), p = player();
+    // the speakers by their BindNames, as ConEventSpeech names them (the event's own actor fields are bound only while a conversation runs)
+    const names = new Set(), absent = new Set(), others = [];
     for (let ev = read(con, 'eventList'), n = 0; ev && n < 3000; ev = read(ev, 'nextEvent'), n++) {
       if (className(ev) !== 'ConEventSpeech') continue;
-      for (const [actorField, nameField] of [['speaker', 'speakerName'], ['speakingTo', 'speakingToName']]) {
-        const a = read(ev, actorField);
-        if (!a) absent.add(String(read(ev, nameField))); else if (a !== p && a !== owner) others.add(a);
-      }
+      for (const field of ['speakerName', 'speakingToName']) { const name = String(read(ev, field) ?? ''); if (name && lower(name) !== 'jcdenton') names.add(name); }
     }
-    if (absent.size) result.notes.push(`speakers without an actor: ${[...absent].join(', ')}`);
+    const ownNames = new Set([t.owner, ...['BindName', 'BarkBindName'].map(f => { try { return read(owner, f); } catch { return ''; } })].map(lower));
+    for (const name of names) {
+      if (ownNames.has(lower(name))) continue;
+      const candidates = actorsWithBind(name).filter(a => a !== owner);
+      if (!candidates.length) { absent.add(name); continue; }
+      others.push(candidates.find(aliveOwner) ?? candidates[0]);
+    }
+    if (absent.size) { result.notes.push(`speakers without an actor: ${[...absent].join(', ')}`); result.absentSpeakers = [...absent]; }
     const at = c.pos(owner);
     let k = 0;
     for (const a of others) {
+      bringIn(a, result, 'speaker');
+      release(a, result);
       for (let tries = 0; tries < 12; tries++, k++) {
         const angle = (k * 2.399) % (2 * PI), spot = [at[0] + Math.cos(angle) * 90, at[1] + Math.sin(angle) * 90, at[2]];
         if (!c.inWorld(spot)) continue;
         call(a, 'SetLocation', spot); break;
       }
     }
-    result.gathered = [...others].map(a => a.name);
+    result.gathered = others.map(a => a.name);
     result.notes.push(`placed ${result.gathered.join(', ') || 'nobody'} within 90 units of the owner (the original's CheckActorDistances had refused: speakers more than 300 apart)`);
     counters.refused = 0; counters.aborts = 0;
     step(Math.round(1.5 / frameSeconds));
@@ -462,6 +586,8 @@ function harness(c, frameSeconds, meta) {
   function classifyUnstarted(result) {
     const d = result.diag;
     const message = `${result.notes.join('; ')}${d ? ` | ${JSON.stringify(d)}` : ''}`.slice(0, 900);
+    if ((result.refusedByConPlay || result.aborts) && result.absentSpeakers?.length)
+      return { family: 'refused by the original: a speaker has no actor in the map (Conversation.CheckActors: the speaker is bound to nothing)', message: `${message} | absent ${result.absentSpeakers.join(', ')}` };
     if (result.refusedByConPlay || result.aborts) return { family: 'refused by the original: StartConversation started it and ConPlay.StartConversation refused (CheckActors / CheckActorDistances: the speakers are not all present and together)', message: `${message} | aborts ${result.aborts}, refused ${result.refusedByConPlay}` };
     if (!d) return { family: 'not started', message };
     if (d.canConverse === false) return { family: `refused by the original: the owner cannot converse (state ${String(d.state).split('.').pop()})`, message };
@@ -538,8 +664,15 @@ function harness(c, frameSeconds, meta) {
     const mode = BARK_MODES.indexOf(suffix);
     result.notes.push(`bark mode ${suffix} (${mode})`);
     if (mode < 0) return startNamed(t, owner, result, `named (bark suffix ${suffix} is no EBarkModes name)`);
-    const near = c.approach(owner, 120);
-    try { c.stand(c.inWorld(near) ? near : c.pos(owner), c.pos(owner)); step(8); } catch { /* where it stands */ }
+    // nothing else on the screen and the owner out of any conversation state first (StartConversation refuses a player or pawn in one); standing near the owner
+    // may start its radius conversation, which is played out before the bark
+    if (result.retry) standDry(owner, result);
+    else for (let quiet = 0; quiet < 4; quiet++) {
+      standDry(owner, result);
+      if (playsActive()) drive(() => !playsActive(), { max: 600 });
+      step(Math.round(3 / frameSeconds));
+      if (!playsActive()) break;
+    }
     let ok;
     if (suffix === 'Futz') {
       // PlayFutzSound is StartConversationByName(BuildBarkName(self, BM_Futz), self, !bInterruptState): a ConPlay conversation, not a BarkManager slot
@@ -568,6 +701,17 @@ function harness(c, frameSeconds, meta) {
     return false;
   }
 
+  /** Set the player down beside the owner on dry ground (a player standing in water is in PlayerSwimming, where CanStartConversation refuses: the boats of the Island's
+   * dock); the distances are tried from close to the 800 units StartConversationByName allows. */
+  function standDry(owner, result) {
+    for (const distance of [100, 200, 350, 500, 700]) {
+      try { c.openStand(owner, distance); observe(); return distance; } catch { /* the next distance */ }
+    }
+    try { const near = c.approach(owner, 100); c.stand(c.inWorld(near) ? near : c.pos(owner), c.pos(owner)); } catch { /* where it stands */ }
+    result.notes.push(`no dry place beside ${owner.name} up to 700 units: set down 100 units off`);
+    return null;
+  }
+
   function startNamed(t, owner, result, label) {
     // a ConversationTrigger of the map first
     const s = t.starter;
@@ -580,19 +724,26 @@ function harness(c, frameSeconds, meta) {
         if (drive(() => runStarted(t.name), { max: 3 })) { result.via = `ConversationTrigger ${spec.name} (walked into)`; return runStarted(t.name); }
       }
     }
-    const near = c.approach(owner, 100);
-    try { c.stand(c.inWorld(near) ? near : c.pos(owner), c.pos(owner)); step(8); } catch { /* where it stands */ }
+    // On the second attempt (the level as authored again) the player is set down beside the owner and the call is made at once: a pawn that has not yet seen the
+    // player is not yet Alerting, Attacking or Fleeing (the states in which ScriptedPawn.CanConverse refuses).
+    if (owner !== player()) standDry(owner, result);
+    // a conversation that started on the way in (the owner's radius one) is played out first: StartConversation refuses a player in one
+    for (let quiet = 0; quiet < 4 && playsActive(); quiet++) { drive(() => !playsActive(), { max: 600 }); step(Math.round(2 / frameSeconds)); }
     const ok = call(player(), 'StartConversationByName', t.name, owner);
     step(4);
     result.via = label;
-    if (!ok && !runStarted(t.name)) result.notes.push('StartConversationByName returned false');
+    if (!ok && !runStarted(t.name)) { result.notes.push('StartConversationByName returned false'); if (owner !== player()) result.diag = diagnose(owner, t); }
     return runStarted(t.name);
   }
 
   return {
-    runTarget, godMode,
+    runTarget, godMode, staleActors,
     incidentals,
-    needsRestart: () => Boolean(travel) || playerDead(),
+    // a conversation that ended in a cinematic transition (Jock's helicopter: the player is in state Interpolating on the way out of the level) is not a place to
+    // run the next conversation from; PHYS_Interpolating also moves the player without the collision hash noticing (docs/census-conversations.md)
+    // (and a player without collision, a ghost: the fixture's placement registers it in the collision hash, and the next SetCollision(true) fails "Actor is already
+    // registered" - src/viewer/view-probe.mjs)
+    needsRestart: () => Boolean(travel) || playerDead() || H_state(player()).endsWith('.interpolating') || (() => { try { return !read(player(), 'bCollideActors'); } catch { return false; } })(),
     playerDead,
   };
 }

@@ -62,9 +62,17 @@ export async function buildPlan({ missions = MISSIONS } = {}) {
     const mission = Number(id);
     const mm = Object.values(maps).filter(m => (m.level?.missionNumber ?? -9) === mission && !/^(DX|DXOnly|Entry)$/i.test(m.map)).sort((a, b) => a.map.localeCompare(b.map));
     const scriptName = `Mission${id}`;
-    const binds = new Map(mm.map(m => [m.map, new Set([...m.pawns.map(p => lower(p.bind)), ...m.boundActors.map(p => lower(p.bind))].filter(Boolean))]));
+    const binds = new Map(mm.map(m => [m.map, new Set([...m.pawns.map(p => lower(p.bind)), ...m.pawns.map(p => lower(p.barkBind)), ...m.boundActors.map(p => lower(p.bind)), ...(m.defaultBound ?? []).map(p => lower(p.bind))].filter(Boolean))]));
     const scriptOps = (scripts[scriptName]?.functions ?? []).flatMap(f => f.ops.filter(o => o.kind === 'datalink' || o.kind === 'conversation').map(o => ({ ...o, fn: f.name })));
     const own = list.conversations.filter(c => !common.has(c.name));
+    // DConversationList::BindConversations (ConSys.dll 10010b70, docs/script-native-conversation-list.md) binds a conversation to an actor when
+    //   BarkBindName == conOwnerName and conName contains "_Bark" (case-sensitive), or
+    //   BindName == conOwnerName and (BarkBindName is empty or conName does not contain "_Bark").
+    const gate = (m, conName, owner) => {
+      const bark = conName.includes('_Bark');
+      const hit = (bind, barkBind) => (lower(barkBind) === owner && bark) || (lower(bind) === owner && (!barkBind || !bark));
+      return m.pawns.some(p => hit(p.bind, p.barkBind)) || [...m.boundActors, ...(m.defaultBound ?? [])].some(p => hit(p.bind, ''));
+    };
     for (const [position, c] of own.entries()) {
       const radius = Number((c.invoke.find(x => x.startsWith('radius')) ?? '').split(' ')[1] ?? 0);
       const item = {
@@ -101,12 +109,15 @@ export async function buildPlan({ missions = MISSIONS } = {}) {
       } else {
         // a conversation with an owner: the first map holding the owner and every speaker
         const owner = lower(c.owner);
-        const needed = [owner, ...item.speakers.map(lower)];
-        const holders = mm.filter(m => binds.get(m.map).has(owner));
-        const complete = holders.find(m => needed.every(n => binds.get(m.map).has(n)));
+        // a conversation the player owns (JCDenton) is bound to the player pawn, which every map has
+        const needed = [owner, ...item.speakers.map(lower)].filter(n => !(owner === 'jcdenton' && n === owner));
+        const holders = owner === 'jcdenton' ? mm : mm.filter(m => gate(m, c.name, owner));
+        const named = mm.filter(m => binds.get(m.map).has(owner));
+        const complete = holders.find(m => needed.every(n => binds.get(m.map).has(n) || n === 'jcdenton'));
         const chosen = complete ?? holders[0] ?? null;
         item.map = chosen?.map ?? null;
-        if (!chosen) item.predicted.push('no actor carries the owner BindName in any map of the mission');
+        if (!chosen && named.length) item.predicted.push(`the native bind gate excludes it: every actor named ${c.owner} in the mission's maps has a BarkBindName and the conversation name contains _Bark (ConSys BindConversations 10010b70)`);
+        else if (!chosen) item.predicted.push('no actor carries the owner BindName in any map of the mission');
         else if (!complete) item.predicted.push(`speaker(s) without an actor in the owner's maps: ${needed.filter(n => !binds.get(chosen.map).has(n)).join(', ')}`);
         // the starter by name: a ConversationTrigger whose conversationTag is this conversation
         const t = mm.flatMap(m => m.conversationTriggers.filter(t => lower(t.conversation) === lname).map(t => ({ map: m.map, ...t })));
@@ -124,17 +135,52 @@ export async function buildPlan({ missions = MISSIONS } = {}) {
 // =================================================================================================================================================
 // the parent: one child per map
 // =================================================================================================================================================
+/** The real desktop save slots (the main checkout's .work/internet-saves, SOURCES.md there; third-party files, read only): [{path, index, map}], the latest slot of each
+ * map unless --all-slots (a map can hold several, one playthrough's states). */
+async function listSlots() {
+  const base = process.env.DX_INTERNET_SAVES ?? '/home/rydgel/projects/deus_ex_web/.work/internet-saves';
+  const roots = [path.join(base, 'nicouzouf/files/Deus Ex'), path.join(base, 'retromaggedon/files')];
+  const { parseSaveInfo } = await import('../src/runtime/save-info.mjs');
+  const found = [];
+  const walk = async dir => {
+    if (!existsSync(dir)) return;
+    for (const entry of await readdir(dir, { withFileTypes: true })) {
+      const full = path.join(dir, entry.name);
+      if (!entry.isDirectory()) continue;
+      if (/^Save\d+$/.test(entry.name)) {
+        const info = parseSaveInfo(new Uint8Array(await readFile(path.join(full, 'SaveInfo.dxs'))));
+        found.push({ path: full, index: Number(entry.name.slice(4)), map: String(info.properties.MapName), source: full.includes('retromaggedon') ? 'retromaggedon' : 'nicouzouf' });
+      } else await walk(full);
+    }
+  };
+  for (const root of roots) await walk(root);
+  found.sort((a, b) => a.path.localeCompare(b.path));
+  if (flag('all-slots')) return found;
+  const latest = new Map();
+  for (const slot of found) latest.set(`${slot.source}/${lower(slot.map)}`, slot);
+  return [...latest.values()];
+}
+
 async function parent() {
   const wantedMissions = option('missions', null)?.split(',') ?? MISSIONS;
   const wantedMaps = option('maps', null)?.split(',').map(lower);
-  const only = option('only', null)?.split(',').map(lower);
+  let only = option('only', null)?.split(',').map(lower);
+  // --rerun <result file>: only the conversations that did not run there (a fix, then the same census over what was left)
+  if (option('rerun', null)) {
+    const before = JSON.parse(await readFile(path.resolve(REPO, option('rerun')), 'utf8')).results;
+    only = [...new Set(before.filter(r => r.outcome !== 'ran' && r.outcome !== 'unbound').map(r => lower(r.name)))];
+  }
   const frame = option('frame', '0.0333');
   const jobs = Number(option('jobs', 2));
   const plan = (await buildPlan({ missions: wantedMissions })).filter(t => !only || only.includes(lower(t.name)));
   const byMap = new Map();
   const unassigned = [];
   for (const t of plan) { if (!t.map) { unassigned.push(t); continue; } if (!byMap.has(t.map)) byMap.set(t.map, []); byMap.get(t.map).push(t); }
-  const maps = [...byMap.keys()].filter(m => !wantedMaps || wantedMaps.includes(lower(m))).sort();
+  let maps = [...byMap.keys()].filter(m => !wantedMaps || wantedMaps.includes(lower(m))).sort();
+  // --slots: the second pass, from the real slots, over the conversations whose map the slot holds
+  const slotJobs = flag('slots') ? (await listSlots()).filter(sl => (!wantedMaps || wantedMaps.includes(lower(sl.map))) && [...byMap.keys()].some(m => lower(m) === lower(sl.map))) : null;
+  const jobList = slotJobs ? slotJobs.map(sl => ({ label: `${sl.map}@Save${sl.index}`, map: sl.map, args: ['--slot', sl.path] })) : maps.map(m => ({ label: m, map: m, args: [] }));
+  const targetsOf = map => [...byMap].filter(([m]) => lower(m) === lower(map)).flatMap(([, list]) => list);
   if (flag('list')) {
     for (const m of maps) console.log(`${m}\t${byMap.get(m).length}\t${byMap.get(m).map(t => t.kind).join(',').slice(0, 80)}`);
     console.log(`${plan.length} conversations, ${maps.length} maps, ${unassigned.length} without a map`);
@@ -142,17 +188,17 @@ async function parent() {
   }
   const out = path.resolve(REPO, option('out', '.work/census-conversations.json'));
   await mkdir(path.dirname(out), { recursive: true });
-  const results = unassigned.map(t => ({ ...brief(t), map: null, outcome: 'unbound', stop: { family: 'unbound', message: t.predicted.join('; ') } }));
+  const results = slotJobs ? [] : unassigned.map(t => ({ ...brief(t), map: null, outcome: 'unbound', stop: { family: 'unbound', message: t.predicted.join('; ') } }));
   const timeout = Number(option('timeout', 5400)) * 1000;
   let next = 0, running = 0;
   const save = async () => writeFile(out, JSON.stringify({ at: new Date().toISOString(), frame: Number(frame), results }, null, 1));
   await new Promise(resolve => {
     const launch = () => {
-      while (running < jobs && next < maps.length) {
-        const map = maps[next++];
+      while (running < jobs && next < jobList.length) {
+        const job = jobList[next++], map = job.map;
         running++;
         const started = Date.now();
-        const args = ['--max-old-space-size=7168', fileURLToPath(import.meta.url), '--child', map, '--frame', frame];
+        const args = ['--max-old-space-size=7168', fileURLToPath(import.meta.url), '--child', map, '--frame', frame, ...job.args];
         if (only) args.push('--only', only.join(','));
         const child = spawn(process.execPath, args, { cwd: REPO, stdio: ['ignore', 'pipe', 'pipe'] });
         let buffer = '', errors = '';
@@ -163,23 +209,23 @@ async function parent() {
           let i;
           while ((i = buffer.indexOf('\n')) >= 0) {
             const line = buffer.slice(0, i); buffer = buffer.slice(i + 1);
-            if (line.startsWith('{"census"')) { const r = JSON.parse(line).census; lines.push(r); console.log(`${r.outcome.padEnd(9)} ${map} ${r.name} ${r.stop ? `[${r.stop.family}] ${String(r.stop.message).slice(0, 110)}` : `${r.seconds}s ${r.events} events`}`); }
+            if (line.startsWith('{"census"')) { const r = JSON.parse(line).census; lines.push(r); console.log(`${r.outcome.padEnd(9)} ${job.label} ${r.name} ${r.stop ? `[${r.stop.family}] ${String(r.stop.message).slice(0, 110)}` : `${r.seconds}s ${r.events} events`}`); }
           }
         });
         child.stderr.on('data', d => { errors += d; if (errors.length > 4000) errors = errors.slice(-4000); });
         child.on('exit', async (code, signal) => {
           clearTimeout(timer);
           const have = new Set(lines.map(r => r.name));
-          for (const t of byMap.get(map)) if (!have.has(t.name)) lines.push({ ...brief(t), map, outcome: 'process', stop: { family: 'process', message: `the child of ${map} ended (${signal ?? code}) before this conversation: ${errors.trim().split('\n').slice(-2).join(' | ').slice(0, 200)}` } });
+          for (const t of targetsOf(map)) if (!have.has(t.name)) lines.push({ ...brief(t), map, start: job.label, outcome: 'process', stop: { family: 'process', message: `the child of ${map} ended (${signal ?? code}) before this conversation: ${errors.trim().split('\n').slice(-2).join(' | ').slice(0, 200)}` } });
           results.push(...lines);
           running--;
-          console.log(`-- ${map} done in ${Math.round((Date.now() - started) / 1000)} s (${lines.length} conversations)`);
+          console.log(`-- ${job.label} done in ${Math.round((Date.now() - started) / 1000)} s (${lines.length} conversations)`);
           await save();
           launch();
-          if (!running && next >= maps.length) resolve();
+          if (!running && next >= jobList.length) resolve();
         });
       }
-      if (!running && next >= maps.length) resolve();
+      if (!running && next >= jobList.length) resolve();
     };
     launch();
   });
@@ -207,6 +253,57 @@ export function summarize(results) {
   return out.join('\n');
 }
 
+/** One row per conversation from several result files (a pass, then the reruns of what it left): a run beats a stop, a later file beats an earlier one. */
+export function mergeResults(files) {
+  const merged = new Map();
+  for (const results of files) for (const r of results) {
+    const key = `${r.mission}/${r.name}`;
+    const previous = merged.get(key);
+    if (!previous || previous.outcome !== 'ran' || r.outcome === 'ran') merged.set(key, r);
+  }
+  return [...merged.values()];
+}
+
+/** A stable key for a stop's family (the boundaries table and the validator speak in these). */
+export function familyKey(result) {
+  if (result.outcome === 'ran') return 'ran';
+  const f = String(result.stop?.family ?? result.outcome);
+  if (result.outcome === 'travel') return 'travel: the map was left before the conversation\'s end';
+  if (result.outcome === 'unbound') return /bind gate/.test(result.stop?.message ?? '') ? 'unbound: the native bind gate excludes it' : 'unbound: no actor carries the owner name';
+  if (/speaker has no actor/.test(f)) return 'refused: a speaker has no actor in the map';
+  if (/StartConversation started it and ConPlay/.test(f)) return 'refused: speakers not together (CheckActorDistances)';
+  if (/state Idle/.test(f)) return 'refused: owner authored with Orders Idle';
+  if (/the owner cannot converse \(state /.test(f)) return 'refused: owner in an AI state that cannot converse';
+  if (/the player cannot start a conversation/.test(f)) return 'refused: the player cannot start a conversation';
+  if (/no conversation of the owner's chain is valid/.test(f)) return 'refused: no conversation of the owner is valid';
+  return f.replace(/:.*$/, '').slice(0, 60);
+}
+
+/** --boundaries <result json>: the BOUNDARIES literal of scripts/census-conversations-boundaries.mjs for what did not run (names only; no dialogue text). */
+if (option('boundaries', null)) {
+  const results = JSON.parse(await readFile(path.resolve(REPO, option('boundaries')), 'utf8')).results.filter(r => r.outcome !== 'ran');
+  const table = {};
+  for (const r of results) ((table[r.mission] ??= {})[familyKey(r)] ??= []).push(r.name);
+  const lines = ['export const BOUNDARIES = {'];
+  for (const mission of Object.keys(table).sort()) {
+    lines.push(`  '${mission}': {`);
+    for (const [family, names] of Object.entries(table[mission]).sort()) lines.push(`    ${JSON.stringify(family)}: ${JSON.stringify([...new Set(names)].sort())},`);
+    lines.push('  },');
+  }
+  lines.push('};');
+  console.log(lines.join('\n'));
+  process.exit(0);
+}
+
+if (option('merge', null)) {
+  const files = await Promise.all(option('merge').split(',').map(async f => JSON.parse(await readFile(path.resolve(REPO, f), 'utf8')).results));
+  const merged = mergeResults(files);
+  const outFile = path.resolve(REPO, option('out', '.work/census-conversations-merged.json'));
+  await writeFile(outFile, JSON.stringify({ at: new Date().toISOString(), results: merged }, null, 1));
+  summarize(merged);
+  process.exit(0);
+}
+
 if (flag('summarize')) { const data = JSON.parse(await readFile(path.resolve(REPO, option('summarize', '.work/census-conversations.json')), 'utf8')); summarize(data.results); process.exit(0); }
 
 if (!process.argv.includes('--child')) { if (import.meta.url === `file://${process.argv[1]}`) await parent(); else { /* imported for buildPlan */ } }
@@ -217,5 +314,5 @@ else await childMain();
 // =================================================================================================================================================
 async function childMain() {
   const { runChild } = await import('./census-conversations-child.mjs');
-  await runChild({ map: option('child'), only: option('only', null)?.split(',').map(lower), frameSeconds: Number(option('frame', '0.0333')), buildPlan });
+  await runChild({ map: option('child'), only: option('only', null)?.split(',').map(lower), frameSeconds: Number(option('frame', '0.0333')), buildPlan, slot: option('slot', null) });
 }
