@@ -81,7 +81,7 @@ export function flagDifferences(play, original) {
 
 /** The fields a `state` step reads from an actor, with their linked offsets (dump-actor-win's `field:offset:type[:mask]`; scripts/chain-offsets.mjs prints them from Play's loader): a DeusExMover's. */
 export const STATE_FIELDS = Object.freeze({
-  KeyNum: ['0x377', 'u8'], bLocked: ['0x534', 'bit', '2'], bHidden: ['0x28', 'bit', '2'],
+  KeyNum: ['0x377', 'u8'], PrevKeyNum: ['0x378', 'u8'], bLocked: ['0x534', 'bit', '2'], bHidden: ['0x28', 'bit', '2'],
 });
 
 export async function loadChain(mission, file = null) {

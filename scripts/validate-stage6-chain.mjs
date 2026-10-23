@@ -19,14 +19,14 @@ try { gameDirectory(); } catch { console.log(`SKIP validate-stage6-chain ${missi
 const dir = captureDirectory(mission);
 if (process.argv.includes('--capture')) {
   const { runChainInOriginal } = await import('./chain-original.mjs');
-  await runChainInOriginal(await loadChain(mission));
+  await runChainInOriginal(await loadChain(mission, option('file', null)));
 }
 const stored = await readIfExists(`${dir}result.json`);
 if (!stored) { console.log(`SKIP validate-stage6-chain ${mission}: no original capture in .work/chains/m${mission} (outside Git; node scripts/chain-original.mjs --mission ${mission})`); process.exit(0); }
 const original = JSON.parse(stored);
 
 const { runChainInPlay } = await import('./chain-play.mjs');
-const chain = await loadChain(mission);
+const chain = await loadChain(mission, option('file', null));
 const play = await runChainInPlay(chain, { log: line => { if (process.argv.includes('--verbose')) console.log(`  play: ${line}`); } });
 if (option('json', null)) await writeFile(option('json'), JSON.stringify({ ...play, session: undefined }, null, 1));
 

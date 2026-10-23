@@ -100,6 +100,28 @@ export default {
     { op: 'wait', seconds: 5 },
     { op: 'snap', label: 'a5-final' },
 
+    // the stealth maze's doors and the bridge: the wall buttons Switch1 and Switch2 (Switch1 actors tagged Switch1; events FirstStealthDoor and SecondStealthDoor) pressed with the
+    // right button, and Keypad1 (code 0089, event bridge)
+    { op: 'place', at: [-180, -1, 33], view: [-2731, 57325], harness: true, note: '35 units west of Switch1 (-145,-36,58), aimed at it' },
+    { op: 'frob', target: 'Switch1' },
+    { op: 'wait', seconds: 5 },
+    { op: 'state', label: 'stealth-door-1', actor: 'DeusExMover0', fields: ['KeyNum', 'bLocked'] },
+    { op: 'place', at: [107, 335, 33], view: [-3324, 32764], harness: true, note: '40 units east of Switch2 (67,335,58), aimed at it' },
+    { op: 'frob', target: 'Switch2' },
+    { op: 'wait', seconds: 5 },
+    { op: 'state', label: 'stealth-door-2', actor: 'DeusExMover2', fields: ['KeyNum', 'bLocked'] },
+    { op: 'place', at: [6032, -1459, -123], view: [-7072, 32883], harness: true, note: '40 units from Keypad1 (5992,-1459,-116), aimed at it' },
+    { op: 'frob', target: 'Keypad1', watch: ['Keypad1'] },
+    { op: 'key', names: ['0', '0', '8', '9'], gap: 0.5 },
+    { op: 'wait', seconds: 6 },
+    { op: 'state', label: 'bridge', actor: 'DeusExMover31', fields: ['KeyNum', 'bLocked'] },
+    // the holo room: ConversationTrigger1 (6577,-5432, radius 96) starts M00MeetPage (Bob Page, five speeches) when a walking player touches it: placed outside its radius, landed, then walked in
+    { op: 'place', at: [6577, -5282, 82], view: [0, 49152], harness: true, note: '150 units north of ConversationTrigger1, facing it' },
+    { op: 'walk', seconds: 1.5 },
+    { op: 'conv', name: 'M00MeetPage', watch: ['BobPage1'], timeout: 240 },
+    { op: 'wait', seconds: 5 },
+    { op: 'snap', label: 'a5b-final-gates' },
+
     // 00_TrainingFinal's exit: MapExit0 (6580,-5924,88; radius 150) to DX; the held key ends with the map
     { op: 'place', at: [6467, -5811, 88], view: [0, 57344], harness: true, note: 'in the holo room, 160 units from MapExit0, facing it' },
     { op: 'walk', seconds: 3 },
