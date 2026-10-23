@@ -15,22 +15,26 @@ test('training plays with gravity, stances, blocked doors, linked use, stairs an
     npcPreview:{poseBackend:'rust-wasm',kernelError:null},gameplay: { hulls: 3183, blockingActors: 55 } });
   expect(initial).toMatchObject({ radius: 20, height: 43, grounded: true });
   await page.locator('#scene').click({ position: { x: 500, y: 350 } });
-  await page.keyboard.down('Control');
+  await page.keyboard.down('KeyX');   // DefUser.ini: X=Duck (Ctrl is unbound)
   await expect.poll(async () => (await player(page)).height).toBe(16);
   const crouched = await player(page);
   expect(crouched.position[2] - crouched.height).toBeCloseTo(initial.position[2] - initial.height, 2);
-  await page.keyboard.up('Control'); await expect.poll(async () => (await player(page)).height).toBe(43);
+  await page.keyboard.up('KeyX'); await expect.poll(async () => (await player(page)).height).toBe(43);
+  await expect.poll(async () => (await player(page)).crouched).toBe(false);
+  // Jump is a press (exec Jump sets bPressedJump once) and the original drops one pressed while the player still crouches: let the stand end
+  await page.waitForTimeout(300);
   await page.keyboard.down('Space');
   await expect.poll(async () => (await player(page)).position[2]).toBeGreaterThan(initial.position[2] + 20);
   await page.keyboard.up('Space'); await settled(page);
-  expect((await player(page)).jumps).toBe(1);
+  // the rise above is the jump: the original's DoJump runs in script (the status `jumps` counter belonged to the retired JavaScript movement)
   await page.keyboard.down('KeyW');
   await expect.poll(async () => (await player(page)).position[0], { timeout: 20000 }).toBeGreaterThan(-242.5);
   await page.waitForTimeout(350); await page.keyboard.up('KeyW');
   const stopped = await player(page); expect(stopped.position[0]).toBeLessThan(-242);
-  await expect(page.locator('#play-hint')).toContainText('Open door');
+  // (the page's old 'Open door' hint is gone: the original HUD names the frob target in the picture; the door opening below is the check)
   await page.screenshot({ path: 'reports/movement/browser/door-closed.png' });
-  await page.keyboard.press('KeyF');
+  // DefUser.ini: RightMouse=ParseRightClick, the use (F is CenterView)
+  await page.locator('#scene').click({ position: { x: 500, y: 350 }, button: 'right' });
   await expect.poll(async () => (await status(page)).gameplay.doors.movers.find(m => m.name === 'DeusExMover16').alpha, { timeout: 5000 }).toBe(1);
   const panels = (await status(page)).gameplay.doors.movers.filter(m => m.tag === 'UN_maindoor');
   expect(panels.map(m => m.offset[1])).toEqual([-56, 56]);
