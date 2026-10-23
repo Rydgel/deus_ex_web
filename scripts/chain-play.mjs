@@ -10,7 +10,7 @@ import { AssetStore } from '../src/unreal/assets.mjs';
 import { openSession } from './census-stage5-session.mjs';
 import { createMenuDriver } from '../src/viewer/menu-driver.mjs';
 import { createSaveDirectory } from '../src/runtime/save-directory.mjs';
-import { PLAY_KEY, placeLines, flagsOfPlay, loadChain } from './chain-lib.mjs';
+import { PLAY_KEY, placeLines, placementNear, flagsOfPlay, loadChain } from './chain-lib.mjs';
 
 export async function loadAssets() {
   const root = gameDirectory(), files = [];
@@ -69,6 +69,8 @@ export async function runChainInPlay(chain, { assets = null, log = () => {}, unt
   const note = text => { result.steps.push(text); log(text); };
   const frames = (n, stopOnTravel = true) => {
     for (let i = 0; i < n; i++) {
+      // an actor the run destroyed (a used Lockpick) is no longer stamped: its feedback would read a released object
+      for (const a of [...c.watched]) { let gone = false; try { gone = c.gone(a); } catch { gone = true; } if (gone) c.watched.delete(a); }
       c.frames(1);
       const request = c.takeTravel();
       if (request) { pending = request; if (stopOnTravel) return; }
@@ -144,12 +146,29 @@ export async function runChainInPlay(chain, { assets = null, log = () => {}, unt
       const at = c.pos(c.player());
       note(`place ${step.at.join(',')} (${step.harness ? 'harness' : 'player'}): the player is at ${at.map(v => Math.round(v * 10) / 10)}`);
     },
+    async placeNear(step) {
+      const target = step.actor ? c.actor(step.actor) : c.byClass(step.class).find(a => !c.read(a, 'Owner') && !c.gone(a));
+      if (!target) throw new Error(`placeNear: no ${step.actor ?? step.class}`);
+      const { at, view } = placementNear(c.pos(target), step.distance, step.bearing);
+      c.watched.add(target);
+      for (const line of ['set DeusEx.JCDentonMale bCheatsEnabled True', ...placeLines({ at, view })]) { typeLine(c, line); frames(20); }
+      frames(Math.round((step.settle ?? 1) / FRAME));
+      note(`placeNear ${target.name} at ${c.pos(target).map(Math.round)}: the player is at ${c.pos(c.player()).map(v => Math.round(v * 10) / 10)}, frob target ${c.game.interaction.frobTarget?.name ?? 'none'}`);
+    },
     async frob(step) {
       stamp(step.watch);
       typeLine(c, 'ParseRightClick'); frames(step.settle ?? 30);
       note(`frob ${step.target ?? ''}`.trim());
     },
-    async click(step) { pressKey(c, 'ENTER'); frames(step.settle ?? 30); note('click'); },
+    /** The left button (Enter): once, or, with `until: { flag }`, repeated every `gap` seconds up to `max` times until the flag is set (a weapon's swings: how many break a crate is the run's own). */
+    async click(step) {
+      stamp(step.watch);
+      let n = 0;
+      do { pressKey(c, 'ENTER'); n++; frames(Math.round((step.gap ?? 0.5) / FRAME)); } while (step.until && !flag(step.until.flag) && n < (step.max ?? 8));
+      if (step.until && !flag(step.until.flag)) throw new Error(`click: ${step.until.flag} is not set after ${n} clicks`);
+      frames(step.settle ?? 30);
+      note(`click${n > 1 || step.until ? ` x${n}` : ''}`);
+    },
     /** A held key (the forward key by default): the player walks, as in the original's held-key captures; a travel the walk causes ends it. */
     async walk(step) {
       const code = PLAY_KEY[step.key ?? 'UP'];
@@ -162,7 +181,7 @@ export async function runChainInPlay(chain, { assets = null, log = () => {}, unt
       note(`walk ${step.key ?? 'UP'} ${step.seconds}s: ${Math.round(Math.hypot(after[0] - before[0], after[1] - before[1]))} units${pending ? `, travel to ${pending.map}` : ''}`);
     },
     async belt(step) { typeLine(c, `ActivateBelt ${step.n}`); frames(step.settle ?? 60); note(`belt ${step.n}`); },
-    async key(step) { for (const name of step.names) { pressKey(c, name); frames(step.gap ?? 30); } note(`key ${step.names.join(' ')}`); },
+    async key(step) { for (const name of step.names) { pressKey(c, name); frames(Math.round((step.gap ?? 0.5) / FRAME)); } note(`key ${step.names.join(' ')}`); },
     async conv(step) {
       stamp(step.watch);
       const choices = [...(step.choose ?? [])];
@@ -202,6 +221,14 @@ export async function runChainInPlay(chain, { assets = null, log = () => {}, unt
     /** A headless frame draws no actor mesh, so a pawn is never 'rendered' and its radius conversation or low-priority tick never runs: the named actors are stamped as the renderer
      * stamps an actor in view (the Stage 5 census's feedback), for the rest of the map. The original's frames render them (a harness stand-in for the page's drawing). */
     async watch(step) { stamp(step.actors); note(`watch ${step.actors.join(' ')}`); },
+    async state(step) {
+      const a = c.actor(step.actor);
+      if (!a) throw new Error(`state ${step.label}: no actor ${step.actor}`);
+      const row = {};
+      for (const f of step.fields) { const v = c.read(a, f); row[f] = typeof v === 'boolean' ? Number(v) : v; }
+      (result.states ??= {})[step.label] = { actor: step.actor, ...row };
+      note(`state ${step.label}: ${step.actor} ${JSON.stringify(row)}`);
+    },
     async report(step) {
       result.reports ??= {};
       result.reports[step.label] = { map, location: c.pos(c.player()).map(v => Math.round(v * 10) / 10) };

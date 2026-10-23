@@ -9,7 +9,8 @@ import { writeFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { gameDirectory } from './game-directory.mjs';
 import { loadChain, captureDirectory, readIfExists, flagDifferences } from './chain-lib.mjs';
-import { firstTravelTextDifference, parseTravelText } from '../src/runtime/travel-text.mjs';
+import { firstTravelTextDifference, normalizeTravelText, parseTravelText } from '../src/runtime/travel-text.mjs';
+import { randomAlternatives } from './chain-conversations.mjs';
 
 const option = (name, fallback) => { const i = process.argv.indexOf(`--${name}`); return i < 0 ? fallback : process.argv[i + 1]; };
 const mission = option('mission', null);
@@ -31,6 +32,19 @@ if (option('json', null)) await writeFile(option('json'), JSON.stringify({ ...pl
 
 /** A map's name as the comparison reads it: the filed level's URL (..\\Save\\Current\\<map>.dxs) and the .dx extension are the same map. */
 const mapName = name => String(name ?? '').replace(/^.*[\\/]/, '').replace(/\.dxs?$/i, '').toLowerCase();
+/** The first difference of two travel texts (normalized, the two time properties masked), except that a conversation's random-label speech may differ: a history event whose
+ * Speech and soundID differ from the original's is accepted when both speeches are alternatives of one conversation (the game's random stream is not shared by the two runs). */
+async function compareTexts(expected, actual) {
+  const a = normalizeTravelText(expected, { times: true }).split('\n'), b = normalizeTravelText(actual, { times: true }).split('\n');
+  let excused = 0;
+  for (let i = 0; i < Math.max(a.length, b.length); i++) {
+    if (a[i] === b[i]) continue;
+    if (a[i]?.startsWith('Speech=') && b[i]?.startsWith('Speech=') && a[i + 1]?.startsWith('soundID=') && b[i + 1]?.startsWith('soundID=')
+      && await randomAlternatives(a[i].slice(7), b[i].slice(7))) { excused++; i++; continue; }
+    return { difference: { line: i + 1, expected: a[i] ?? null, actual: b[i] ?? null }, excused };
+  }
+  return { difference: null, excused };
+}
 const failures = [];
 const check = (ok, message) => { if (!ok) failures.push(message); return ok; };
 console.log(`chain ${mission}: ${chain.steps.length} steps; Play ${play.legs.length} legs, ${Object.keys(play.snaps).length} snapshots; the original ${original.legs.length} legs, ${Object.keys(original.snaps).length} snapshots`);
@@ -46,14 +60,22 @@ for (const [label, want] of Object.entries(original.snaps)) {
   check(got.defaultExpiration === want.defaultExpiration, `snapshot ${label}: default expiration Play ${got.defaultExpiration}, the original ${want.defaultExpiration}`);
   console.log(`snapshot ${label}: ${got.flags.length} flags${same ? ' equal' : ' (DIFFER)'}, default expiration ${got.defaultExpiration}${got.defaultExpiration === want.defaultExpiration ? '' : ` (original ${want.defaultExpiration})`}`);
 }
+// 1b. the states read at the steps (doors: KeyNum, bLocked)
+for (const [label, want] of Object.entries(original.states ?? {})) {
+  const got = play.states?.[label];
+  if (!check(got, `state ${label}: Play has none`)) continue;
+  const same = JSON.stringify(got) === JSON.stringify(want);
+  check(same, `state ${label}: Play ${JSON.stringify(got)}, the original ${JSON.stringify(want)}`);
+  console.log(`state ${label}: ${JSON.stringify(got)}${same ? ' equal' : ' (DIFFER)'}`);
+}
 // 2. the travel text of each map change
 for (const want of original.legs) {
   const got = play.legs.find(leg => leg.label === want.label);
   if (!check(got, `leg ${want.label}: Play made no such map change`)) continue;
   if (!check(want.text, `leg ${want.label}: the capture holds no text`)) continue;
-  const difference = firstTravelTextDifference(want.text, got.text, { times: true });
+  const { difference, excused } = await compareTexts(want.text, got.text);
   check(difference === null, `leg ${want.label}: the exported text differs at line ${difference?.line}: the original ${JSON.stringify(difference?.expected)}, Play ${JSON.stringify(difference?.actual)}`);
-  console.log(`leg ${want.label}: ${got.from} -> ${got.to}, ${parseTravelText(got.text).length} records${difference ? ' (DIFFER)' : ' equal'}`);
+  console.log(`leg ${want.label}: ${got.from} -> ${got.to}, ${parseTravelText(got.text).length} records${difference ? ' (DIFFER)' : ' equal'}${excused ? `, ${excused} random-label speech(es) the two runs drew differently` : ''}`);
 }
 for (const got of play.legs) if (!original.legs.some(leg => leg.label === got.label)) check(false, `leg ${got.label}: the original made no such map change`);
 if (failures.length) { console.log(`FAIL validate-stage6-chain ${mission}:\n  ${failures.join('\n  ')}`); process.exit(1); }

@@ -12,7 +12,7 @@
 import { spawn, execFileSync } from 'node:child_process';
 import { appendFileSync, mkdirSync, openSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { setTimeout as sleep } from 'node:timers/promises';
-import { placeLines, flagsOfDump, loadChain, captureDirectory } from './chain-lib.mjs';
+import { placeLines, placementNear, flagsOfDump, loadChain, captureDirectory, STATE_FIELDS } from './chain-lib.mjs';
 
 const ROOT = new URL('..', import.meta.url).pathname.replace(/\/$/, '');
 const env = { ...process.env, WINEPREFIX: process.env.WINEPREFIX ?? `${process.env.HOME}/.wine-deusex`, DX_WINE: process.env.DX_WINE ?? '/usr/bin/wine', DX_DESKTOP: process.env.DX_DESKTOP ?? '1400x860' };
@@ -154,8 +154,36 @@ export async function runChainInOriginal(chain, { log = console.log, until = nul
       }
       throw new Error(`place ${s.at}: the player never arrived`);
     },
+    async placeNear(s) {
+      const name = s.actor ?? s.class;
+      let target = null;
+      for (const line of tool('dump-actor-win', name, 'Location:0x114:f3', 'Owner:0x3c:obj').split('\n')) {
+        const m = new RegExp(`^(\\S+) (${s.actor ?? `${s.class}\\d+`}) Location=\\(([^,]+),([^,]+),([^)]+)\\) Owner=(\\S+)`).exec(line);
+        if (m && m[1] !== 'Class' && (s.actor || m[6] === 'None')) { target = [Number(m[3]), Number(m[4]), Number(m[5])].map(Math.fround); break; }
+      }
+      if (!target) throw new Error(`placeNear: the original has no ${name}`);
+      const { at, view } = placementNear(target, s.distance, s.bearing);
+      for (let attempt = 0; attempt < 3; attempt++) {
+        for (const line of ['set DeusEx.JCDentonMale bCheatsEnabled True', ...placeLines({ at, view })]) await type(line, 500);
+        await sleep((s.settle ?? 1) * 1000 + 800);
+        const here = locationOf();
+        if (here && Math.hypot(here.at[0] - at[0], here.at[1] - at[1]) < 25) { note(`placeNear ${name} at ${target.map(v => Math.round(v))}: the player is at ${here.at.map(v => Math.round(v * 10) / 10)}`); return; }
+      }
+      throw new Error(`placeNear ${name}: the player never arrived`);
+    },
     async frob() { await type('ParseRightClick', 900); await sleep(600); note('frob'); },
-    async click() { await press('ENTER'); note('click'); },
+    async click(s) {
+      let n = 0;
+      for (;;) {
+        await press('ENTER'); n++;
+        if (!s.until) break;
+        await sleep((s.gap ?? 0.5) * 1000);
+        const f = flagsNow();
+        if (f && hasFlag(f, s.until.flag)) break;
+        if (n >= (s.max ?? 8)) throw new Error(`click: ${s.until.flag} is not set after ${n} clicks`);
+      }
+      note(`click${n > 1 || s.until ? ` x${n}` : ''}`);
+    },
     async belt(s) { await type(`ActivateBelt ${s.n}`, 900); await sleep(1000); note(`belt ${s.n}`); },
     async key(s) { for (const name of s.names) { await press(name); } note(`key ${s.names.join(' ')}`); },
     async walk(s) { step('hold', s.key ?? 'UP', String(Math.round(s.seconds * 1000))); note(`walk ${s.key ?? 'UP'} ${s.seconds}s`); },
@@ -211,6 +239,15 @@ export async function runChainInOriginal(chain, { log = console.log, until = nul
       note(`gobjects ${s.label}`);
     },
     async watch(s) { note(`watch ${s.actors.join(' ')} (Play's stand-in for the original's rendering)`); },
+    async state(s) {
+      const specs = s.fields.map(f => { const [off, type, mask] = STATE_FIELDS[f] ?? (() => { throw new Error(`state: no offset for ${f}`); })(); return `${f}:${off}:${type}${mask ? `:${mask}` : ''}`; });
+      const line = tool('dump-actor-win', s.actor, ...specs).split('\n').find(row => new RegExp(`^\\S+ ${s.actor} `).test(row));
+      if (!line) throw new Error(`state ${s.label}: the original has no ${s.actor}`);
+      const row = {};
+      for (const f of s.fields) { const m = new RegExp(`${f}=(\\S+)`).exec(line); row[f] = m ? (m[1].startsWith('0x') ? parseInt(m[1], 16) : Number(m[1])) : null; }
+      (result.states ??= {})[s.label] = { actor: s.actor, ...row };
+      note(`state ${s.label}: ${s.actor} ${JSON.stringify(row)}`);
+    },
     async report(s) {
       const here = locationOf();
       result.reports ??= {};

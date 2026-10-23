@@ -5,7 +5,7 @@
  *                                                                                                  the bearings from which a held forward key reaches it
  *   node scripts/chain-plan.mjs drop <map> <actor> [--lifts 50,70] [--yaw N]                       placements above the cylinder: the fall enters it (a placement inside raises no Touch)
  *   node scripts/chain-plan.mjs stand <map> <actor> [--distances 60,90] [--lift L] [--settle F]                  places at a distance from the actor with a clear line to it, aimed at it
- *   node scripts/chain-plan.mjs face <map> <actor> [--distances 60,90] [--lift L] [--freeze] [--all]  the places from which the view trace selects the actor (frob)
+ *   node scripts/chain-plan.mjs face <map> <actor> [--distances 60,90] [--lift L] [--freeze] [--all] [--aim x,y,z] [--accept A,B]  the places from which the view trace selects the actor (frob)
  */
 import { fileURLToPath } from 'node:url';
 import { loadAssets, typeLine } from './chain-play.mjs';
@@ -20,7 +20,9 @@ const { c, run } = await openSession(map, assets, { travel: {} });
 c.frames(Number(args.includes('--settle') ? args[args.indexOf('--settle') + 1] : (mode === 'stand' ? 900 : 60)));   // a pawn with Sitting or Wandering orders walks to its place first
 const target = c.actor(actorName);
 if (!target) throw new Error(`no actor ${actorName} in ${map}`);
-const at = c.pos(target);
+const aimOption = args.includes('--aim') ? args[args.indexOf('--aim') + 1].split(',').map(Number) : null;
+const accept = new Set((args.includes('--accept') ? args[args.indexOf('--accept') + 1].split(',') : [actorName]));
+const at = aimOption ?? c.pos(target);   // --aim x,y,z: aim and stand around this point instead of the actor's origin (a mover's origin is not where its face is)
 const distance = option('distance', 200), lift = option('lift', 40), seconds = option('seconds', 2);
 const yawUnits = bearing => Math.round(((bearing * 32768 / Math.PI) % 65536 + 65536) % 65536) % 65536;
 const out = [];
@@ -102,8 +104,9 @@ if (mode === 'face') {
     c.frames(60);
     const landed = c.pos(c.player()).map(v => Math.round(v * 10) / 10);
     const picked = c.game.interaction.frobTarget;
-    out.push({ d, k, from, view, landed, target: picked?.name ?? null, hit: picked === target });
-    if (picked === target && !args.includes('--all')) break;
+    const hit = picked ? accept.has(picked.name) : false;
+    out.push({ d, k, from, view, landed, target: picked?.name ?? null, hit });
+    if (hit && !args.includes('--all')) break;
   }
 }
 for (const row of out) console.log(JSON.stringify(row));

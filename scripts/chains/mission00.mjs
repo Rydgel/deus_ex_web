@@ -15,6 +15,63 @@ export default {
     { op: 'wait', seconds: 5 },
     { op: 'snap', label: 'a1-training' },
 
+    // the key and the key door: the Train key on the desk (NanoKey0, 415,1072,-145), picked up with the right button; the key ring taken in hand (belt 0) and used
+    // on the door with the left button (ParseLeftClick: DoFrob(Self, inHand)) unlocks it, the right button opens it
+    { op: 'place', at: [455, 1072, -99], view: [-11796, 32705], harness: true, note: '40 units from NanoKey0, aimed at it' },
+    { op: 'frob', target: 'NanoKey0' },
+    { op: 'belt', n: 0 },
+    { op: 'place', at: [384, 636, -111], view: [6393, 49152], harness: true, note: 'in front of the keydoor pair (DeusExMover47/48 at 352..416,576), key room side' },
+    { op: 'click' },
+    { op: 'frob', target: 'keydoor' },
+    { op: 'wait', seconds: 4 },
+    { op: 'state', label: 'keydoor-47', actor: 'DeusExMover47', fields: ['KeyNum', 'bLocked'] },
+    { op: 'state', label: 'keydoor-48', actor: 'DeusExMover48', fields: ['KeyNum', 'bLocked'] },
+
+    // the crowbar and the crates: the crowbar (WeaponCrowbar1) taken, drawn and swung at the upper crate (Cratepick1) until Mission00.Timer sees a crate gone (MS_CratesBroken,
+    // DL_Lockpick); the Lockpick the crate drops lies where this run's physics put it: the player is placed by it; the lockpick is used on the gundoor pair (strength 0.05)
+    { op: 'place', at: [1166, 375, -47], view: [-9083, 32699], harness: true, note: '60 units from WeaponCrowbar1 (1106,375,-79), aimed at it' },
+    { op: 'frob', target: 'WeaponCrowbar1' },
+    { op: 'belt', n: 1 },
+    { op: 'place', at: [1023, -204, -79], view: [-2221, 49171], harness: true, note: '70 units north of the Cratepick crates (1023,-274)' },
+    { op: 'click', until: { flag: 'MS_CratesBroken' }, max: 10, gap: 2 },
+    { op: 'wait', flag: 'DL_Lockpick_Played', timeout: 240 },
+    { op: 'placeNear', class: 'Lockpick', distance: 40, bearing: 1.5707963267948966, harness: true, note: '40 units north of the dropped Lockpick, aimed at it' },
+    { op: 'frob', target: 'Lockpick' },
+    { op: 'belt', n: 2 },
+    { op: 'place', at: [1252, 144, -79], view: [1756, 0], harness: true, note: '60 units west of the gundoor pair (DeusExMover45/46 at 1312,112..176), aimed at it' },
+    { op: 'click', settle: 60 },
+    { op: 'wait', seconds: 20 },
+    { op: 'state', label: 'gundoor-picked-45', actor: 'DeusExMover45', fields: ['KeyNum', 'bLocked'] },
+    { op: 'state', label: 'gundoor-picked-46', actor: 'DeusExMover46', fields: ['KeyNum', 'bLocked'] },
+    { op: 'frob', target: 'gundoor' },
+    { op: 'wait', seconds: 4 },
+    { op: 'state', label: 'gundoor-open-45', actor: 'DeusExMover45', fields: ['KeyNum', 'bLocked'] },
+    { op: 'state', label: 'gundoor-open-46', actor: 'DeusExMover46', fields: ['KeyNum', 'bLocked'] },
+
+    // the data cube and the keypad: DataCube0 read (a note is added; a second frob closes it), Keypad0 opened with the code it names, 0012: the paddoor pair opens
+    // (an event, not an unlock: bLocked stays)
+    { op: 'place', at: [1536, 860, -143], view: [-8455, 32885], harness: true, note: '40 units from DataCube0 (1496,860,-147), aimed at it' },
+    { op: 'frob', target: 'DataCube0' },
+    { op: 'wait', seconds: 2 },
+    { op: 'frob', target: 'DataCube0', note: 'closes the reading window' },
+    { op: 'place', at: [1998, 1000, -145], view: [7391, 49214], harness: true, note: '60 units from Keypad0 (1998,940,-55), aimed at it' },
+    { op: 'frob', target: 'Keypad0', watch: ['Keypad0'] },
+    { op: 'key', names: ['0', '0', '1', '2'], gap: 0.5 },
+    { op: 'wait', seconds: 6 },
+    { op: 'state', label: 'paddoor-26', actor: 'DeusExMover26', fields: ['KeyNum', 'bLocked'] },
+    { op: 'state', label: 'paddoor-18', actor: 'DeusExMover18', fields: ['KeyNum', 'bLocked'] },
+
+    // the multitool and Keypad2: the multitool (Multitool0) taken, drawn and used on Keypad2: the hack opens the hackdoor pair
+    { op: 'place', at: [2271, 599, -99], view: [-11911, 32679], harness: true, note: '40 units from Multitool0 (2231,599,-147), aimed at it' },
+    { op: 'frob', target: 'Multitool0' },
+    { op: 'belt', n: 2 },
+    { op: 'place', at: [2558, 1000, -145], view: [7391, 49214], harness: true, note: '60 units from Keypad2 (2558,940,-55), aimed at it' },
+    { op: 'click', settle: 60, watch: ['Keypad2'] },
+    { op: 'wait', seconds: 12 },
+    { op: 'state', label: 'hackdoor-37', actor: 'DeusExMover37', fields: ['KeyNum', 'bLocked'] },
+    { op: 'state', label: 'hackdoor-38', actor: 'DeusExMover38', fields: ['KeyNum', 'bLocked'] },
+    { op: 'snap', label: 'a1b-gates' },
+
     // 00_Training to 00_TrainingCombat: Teleporter0
     { op: 'place', at: [4801, -4858, 125], view: [0, 49152], harness: true, drop: true, note: 'dropped onto Teleporter0 (4801,-4858,8; radius 100, height 40): the fall enters its cylinder' },
     { op: 'travel', to: '00_TrainingCombat', label: 'leg1' },

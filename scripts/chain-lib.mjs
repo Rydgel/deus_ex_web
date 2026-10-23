@@ -21,6 +21,7 @@
  *   travel   { to, via }                                    the map change a step caused (the arrival is awaited and the leg's travel text recorded)
  *   snap     { label }                                      the flags (and the map) at this point
  *   watch    { actors }                                     Play only: the named actors count as rendered for the rest of the map (a headless frame draws no mesh)
+ *   state    { label, actor, fields }                       fields of an actor (a mover's KeyNum, bLocked, a bHidden) read in both programs and compared
  *   report   { label }                                      the player's place, kept for a reading of the run (not compared)
  */
 import { readFile } from 'node:fs/promises';
@@ -36,6 +37,16 @@ export function placeLines({ at, view, drop = false }) {
   const location = `set DeusEx.JCDentonMale Location (X=${at[0]},Y=${at[1]},Z=${at[2]})`, rotation = `set DeusEx.JCDentonMale ViewRotation (Pitch=${view[0]},Yaw=${view[1]},Roll=0)`;
   // a `drop` (the fall into a Teleporter's or an exit's cylinder ends the level) turns the view first and makes `walk`, which starts the fall, the last line
   return drop ? ['ghost', rotation, location, 'walk'] : ['ghost', location, 'walk', rotation];
+}
+
+/** A placement from a target's position: `distance` units from it along `bearing` (radians), one unit above the target's height (an item lies on the floor the player's
+ * centre stands over: the landed place is the target's z), aimed from the eye (EyeHeight above the centre) at the target. The same numbers in both programs. */
+export function placementNear(target, distance, bearing, eyeHeight = 40) {
+  const at = [Math.round(target[0] + Math.cos(bearing) * distance), Math.round(target[1] + Math.sin(bearing) * distance), Math.round(target[2] + 1)];
+  const dx = target[0] - at[0], dy = target[1] - at[1], dz = target[2] - (at[2] + eyeHeight), unit = 32768 / Math.PI;
+  const units = radians => Math.round(((radians * unit) % 65536 + 65536) % 65536) % 65536;
+  const pitch = Math.round(Math.atan2(dz, Math.hypot(dx, dy)) * unit);
+  return { at, view: [pitch, units(Math.atan2(dy, dx))] };
 }
 
 /** `name|type|expiration|value` of a flag, as the transitions validator compares them. */
@@ -67,6 +78,11 @@ export function flagDifferences(play, original) {
   const a = new Set(play), b = new Set(original);
   return { onlyPlay: play.filter(f => !b.has(f)), onlyOriginal: original.filter(f => !a.has(f)) };
 }
+
+/** The fields a `state` step reads from an actor, with their linked offsets (dump-actor-win's `field:offset:type[:mask]`; scripts/chain-offsets.mjs prints them from Play's loader): a DeusExMover's. */
+export const STATE_FIELDS = Object.freeze({
+  KeyNum: ['0x377', 'u8'], bLocked: ['0x534', 'bit', '2'], bHidden: ['0x28', 'bit', '2'],
+});
 
 export async function loadChain(mission, file = null) {
   const module = await import(file ? new URL(file, `file://${process.cwd()}/`).href : new URL(`./chains/mission${mission}.mjs`, import.meta.url).href);
