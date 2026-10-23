@@ -178,7 +178,8 @@ if (!option('one')) {
   for (const r of stops) { const key = family(r); if (!families.has(key)) families.set(key, []); families.get(key).push(r.id); }
   console.log(`\n${records.length - stops.length} of ${records.length} transitions arrive; ${stops.length} stop in ${families.size} families`);
   for (const [key, ids] of [...families].sort((a, b) => b[1].length - a[1].length)) console.log(`  ${ids.length}x ${key}\n      ${ids.slice(0, 6).join(', ')}${ids.length > 6 ? ', ...' : ''}`);
-  process.exit(0);
+  // Stage 6 row 6.3.1's proof (docs/stage-6-exit-criteria.md): a stop fails it
+  process.exit(stops.length ? 1 : 0);
 }
 
 // ---- one transition (the child) ----------------------------------------------------------------------------------------------------------
