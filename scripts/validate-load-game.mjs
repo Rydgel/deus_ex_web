@@ -52,9 +52,9 @@ const SCENARIOS = {
   G: { title: 'retromaggedon Save0035 (GOTY Area 51 Final), loaded from Training Combat', capture: 'w1', label: 'w-retro35', slotDir: `${INTERNET}/retromaggedon/files/Save0035`, index: 203,
     from: '00_TrainingCombat', leave: '00_TrainingCombat', freezeBefore: true },
   // Stage 6 row 6.2.2: the slot Play saved (scripts/validate-save-load-play.mjs: mission 1's chain to the commander, every augmentation, skill and image), the
-  // capture taken on the Mac's bottle by scripts/travel-steps/sl1-play-slot.steps
+  // capture taken on the Mac's bottle by scripts/travel-steps/sl1-play-slot.steps, which keeps the files the original loaded (p.Save0013: the validator rewrites its own)
   P: { title: 'the slot Play saved (Save0013: the Island after the commander), loaded from Training Combat', capture: 'sl1', label: 'p',
-    slotDir: new URL('../.work/play-saves-622/Save0013', import.meta.url).pathname, index: 13, from: '00_TrainingCombat', leave: '01_NYC_UNATCOHQ', freezeBefore: true },
+    slotDir: `${captures}sl1/p.Save0013`, index: 13, from: '00_TrainingCombat', leave: '01_NYC_UNATCOHQ', freezeBefore: true },
 };
 // Each scenario opens two level sessions: one process per scenario keeps the heap of each bounded.
 if (!only) {

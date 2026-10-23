@@ -87,8 +87,11 @@ Play: `script-console-command.mjs` `engineExec` claims `EXIT` and `QUIT` before 
 calls `services.requestExit()`; the window host logs `Log: appRequestExit(0)` into the engine log and counts the request (`display.exitRequests`),
 the snapshot carries it, and the page dispatches a cancelable `deusex-exit` event on `window`. A page cannot close itself, so when the event is
 left alone the page ends the game in its place: the simulation worker is terminated, the sound stops, the view is hidden and the page says that
-the game has exited and that a reload starts it again (`main.mjs` `endGame`). The engine's shutdown lines after `appRequestExit(0)` are the
-original's own teardown and are not modeled.
+the game has exited and that a reload starts it again (`main.mjs` `endGame`): that presentation is the page's choice, not a measurement. The
+engine's shutdown lines after `appRequestExit(0)` are the original's own teardown and are not modeled. `exit` typed at the console takes the same
+route (its line is run with a string output device). A key bound to `Exit` does not: the input path hands the Exec chain the console's output
+device, which Play has not linked, so `Closing by request` stops by name (`UnsupportedConsoleCommandError`), as any command that writes to the
+console does from a binding (read from the code, not run; the default bindings bind no key to it).
 
 Check: `scripts/validate-menu-main.mjs` (row 6.1.6: every MenuMain entry's window stack against the original's, and Exit's Yes: the engine log takes
 `appRequestExit(0)`, one exit request, the window stack cleared).

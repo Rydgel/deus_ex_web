@@ -3,6 +3,8 @@
 #   DX_SAVE_BACKUP=.work/save-backup-sl1 scripts/travel-probe.sh sl1 @scripts/travel-steps/sl1-play-slot.steps
 wait:8
 putslot:.work/play-saves-622/Save0013:Save0013
+# the files the original loads, kept with the capture (validate-load-game.mjs P reads them; the next validate-save-load-play run rewrites its own)
+slotcopy:Save0013:p
 cmd:open 00_TrainingCombat
 arrive:00_trainingcombat$
 wait:3

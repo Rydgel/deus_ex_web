@@ -898,11 +898,14 @@ dying camera ends at `OPEN DXONLY`, the logo level's menu loads `Save0001` again
 
 * **Play's own saves are loaded by Play** (the save branch's `Save0010..0012`: Training, the Island with cheats, HQ with the Island filed; `make-play-saves.mjs`): load and tick, and the HQ slot's travel to the filed Island, were run; the state was
   not compared with the original's load of the same files beyond what the save branch recorded (its `wc1`, `wc2` loaded them live, unfrozen). *Since 2026-10-23 (Stage 6 row 6.2.2) one played slot is:*
-  `scripts/validate-save-load-play.mjs` plays mission 1's chain to the commander, adds every augmentation, skill and image and a key, freezes the level and saves `Save0013`; loaded in Play
+  `scripts/validate-save-load-play.mjs` plays mission 1's chain to the commander, adds every augmentation, skill and image and a key, freezes the level (the Exec chain's `set`) and saves `Save0013`; loaded in Play
   (from Training Combat, frozen, `LoadGame 13`) its flags (10), place, health, physics, actor census (2,564) and the 185-record export equal the saved game's, the view rotation the saved
   pawn's Rotation (the saved view looked down, pitch 57987; `ClientSetRotation` levels it, as measured above). The original loaded the same files under the Mac's CrossOver bottle (capture
   `sl1`, `scripts/travel-steps/sl1-play-slot.steps`) and `validate-load-game.mjs --only P` finds Play's load equal to it: 13 modelled log lines, the flags, the place with the levelled view
-  `(0,114,0)`, the census, the 185 records. Still not compared: a slot with filed levels from a played run (HQ with the Island filed is the save branch's, not this row's).
+  `(0,114,0)`, the census, the 185 records (the capture keeps the files the original loaded, `sl1/p.Save0013`). Still not compared: a slot with filed levels from a played run (HQ with the Island
+  filed is the save branch's, not this row's). **validate-load-game's Play side is not frozen**: its `c.exec('set LevelInfo bPlayersOnly True')` is `scriptConsoleExec`, which runs a script
+  `exec function` and finds none named `set` (it returns false; `bPlayersOnly` stays off, checked 2026-10-23); the comparisons read two frames after the arrival, where no difference showed. A
+  fix is the Exec chain (`consoleCommands.consoleCommand`), as validate-save-load-play does; not changed here.
 * **A `.dx` level's package name** is the URL's text in the original (`OPEN DXONLY` printed `Level DXONLY.MyLevel`, `Possessed PlayerPawn: ... DXONLY.JCDentonMale2`) and the file's in Play (`DXOnly`): cosmetic, compared
   case-insensitively in `validate-load-ui` (Unresolved 19).
 * Every class and native the 41 slots reach is supported or never reached (the rotating fan of `Save0021` is [done](rotating-brushes.md)).
