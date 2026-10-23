@@ -194,7 +194,9 @@ async function handle(data) {
       await runPending();
       const game = host?.game;
       let value = null;
-      if (data.method === 'musicStatus') value = musicLibrary?.status() ?? null;
+      // the bytes of a level filed in Save\Current (travel.mjs `restore`): the page builds its world from the level the load reads (main.mjs loadMap)
+      if (data.method === 'filedLevel') value = (await import('../runtime/save-directory.mjs')).hostSaveDirectory().readFile('Current', data.args.file)?.slice() ?? null;
+      else if (data.method === 'musicStatus') value = musicLibrary?.status() ?? null;
       else if (data.method === 'musicDrive') value = await music.driveMusicLibrary(musicLibrary, assets, data.args ?? {});
       else if (game) {
         if (data.clock) setHostClock(data.clock);

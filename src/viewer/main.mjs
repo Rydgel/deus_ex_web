@@ -12,6 +12,7 @@ import { hostSaveDirectory } from '../runtime/save-directory.mjs';
 import { setSaveSink } from '../runtime/save-sink.mjs';
 import { chosenResolution } from '../runtime/display-config.mjs';
 import { decodeMap } from '../unreal/map.mjs';
+import { filedLevel } from './restore-asset.mjs';
 import { toView, fromView } from '../unreal/geometry.mjs';
 import { createWorld } from './world.mjs';
 import { createSimHost } from './sim-host.mjs';
@@ -881,9 +882,16 @@ async function loadMap(name, { travel = null, currentFiles = null } = {}) {
   busy('Loading original map', `Reading ${name}…`);
   let nextWorld, nextHost = null, nextGame = null, nextNpcPreview = null, nextGpuMesh = null, nextSim = null, nextWeaponDraw = null, nextWeaponGpu = null;
   try {
-    const asset = await assets.get(name);
+    // A level filed in Save\Current (travel.mjs `restore`: a loaded game's, or one travel left) is drawn from that file, the package the simulation
+    // loads (sim-worker.mjs), not from the map's .dx: the two number their objects differently, and the simulation's lighting changes name lights
+    // by their object reference in the level it runs (a loaded 03_NYC_747 had 29 of its 36 lights at other references: the plane drew dark).
+    const restore = simClient ? travel?.restore ?? null : null;
+    const filedBytes = restore ? currentFiles?.find(file => file.name.toLowerCase() === restore.file.toLowerCase())?.bytes?.slice()
+      ?? await simClient.call('filedLevel', { file: restore.file }) : null;
+    const filed = filedBytes ? filedLevel(filedBytes, restore) : null;
+    const asset = filed?.asset ?? await assets.get(name);
     await new Promise(resolve => setTimeout(resolve, 0));
-    const nextMap = decodeMap(asset.bytes);
+    const nextMap = filed?.map ?? decodeMap(asset.bytes);
     nextWorld = await createWorld(nextMap, asset, assets, (message, done, total) => {
       $('gate-message').textContent = message; $('progress').max = total; $('progress').value = done;
     });

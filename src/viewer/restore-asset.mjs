@@ -7,6 +7,11 @@ import { decodeMap } from '../unreal/map.mjs';
 export function restoredLevel(directory, restore) {
   const bytes = directory.readFile('Current', restore.file);
   if (!bytes) throw new Error(`Save\\Current\\${restore.file} is not in the save directory`);
+  return filedLevel(bytes, restore);
+}
+
+/** The same asset from the file's bytes (the page's copy, main.mjs loadMap). */
+export function filedLevel(bytes, restore) {
   const pkg = parsePackage(bytes);
   const stem = restore.package ?? restore.file.replace(/\.dxs$/i, '');   // a live package of the same name keeps its spelling (travel.mjs loadGame)
   const asset = { name: stem, path: `Save/Current/${restore.file}`, bytes, pkg, exportsByPath: new Map(pkg.exports.map((entry, i) => [entry.path.toLowerCase(), i + 1])) };
