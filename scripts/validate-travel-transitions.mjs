@@ -12,9 +12,11 @@
  *   A  the Hong Kong lifts: Helibase -> Market#cargoup -> Helibase#HeliBase (restored) -> an empty SendPlayer -> Market (restored)
  *   B  Mission02.PreTravel (MS_MapLeftEarly), a portal no Teleporter names (02_NYC_Street#ToStreet), Mission08.PreTravel (the EntranceCopter)
  *   D  the same PreTravels on levels that have run (MS_MapLeftEarly set, the EntranceCopter destroyed in the filed level)
+ *   F  the camera paths of the bPlayTransition MapExits (the ride's place against level time, the arrival), fired by their tag: Island -> Battery Park, 04_NYC_BatteryPark's two exits
+ *   E  a start spot far above the water: the original's player falls to the surface and swims (Physics 3), Play's too
  *   C  the `.dx` and `.dx #Portal` URL forms of mission 14 (filed and restored), and a mission change to 15_area51_bunker.dx #bunker_start
  *
- *   node scripts/validate-travel-transitions.mjs [--only A|B|C|D] */
+ *   node scripts/validate-travel-transitions.mjs [--only A|B|C|D|E|F] */
 import { readdir, readFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import './census-stage5-drivers.mjs';
@@ -53,6 +55,17 @@ const SCENARIOS = {
     { cmd: 'LocalTravel 08_NYC_Street', snap: 'd3-street8', run: 360, loose: true, helicopters: 2, ...props('d3-player') },
     { cmd: 'LocalTravel 08_NYC_Bar#ToBarFrontEntrance', snap: 'd4-bar8', loose: true },
     { cmd: 'LocalTravel 08_NYC_Street#FromBarFrontEntrance', snap: 'd5-street8-restored', loose: true, helicopters: 1, ...props('d5-player') }] },
+  // E: a start spot 1600 units above the water: the original's player falls and swims at the surface (Physics 3), as Play's does
+  E: { tag: 'tr-e', title: 'a Teleporter start spot far above the water (Garage -> Storage#BackDoor)', noLog: true, legs: [
+    { cmd: 'LocalTravel 06_HongKong_WanChai_Garage', snap: 'e4-storage', run: 240, loose: true, noCurrent: true },
+    { cmd: 'LocalTravel 06_HongKong_Storage#BackDoor', snap: 'e4-storage', run: 600, loose: true, swim: true, ...props('e4-player') }] },
+  // F: the camera paths of the bPlayTransition MapExits, fired by their tag (CauseEvent = Trigger on every actor with it): the ride's place against level time, then the arrival;
+  // 04_NYC_BatteryPark's two exits share the tag Mission4Exit
+  F: { tag: 'tr-f', title: 'bPlayTransition MapExits: the camera path and the arrival', legs: [
+    { cmd: 'LocalTravel 01_NYC_UNATCOIsland', noSnap: true },
+    { cmd: 'CauseEvent Dock_boat', cause: true, before: 'f0', path: Array.from({ length: 40 }, (_, i) => `f${i + 1}`), snap: 'f99-batterypark', ...props('f99-player') },
+    { cmd: 'LocalTravel 04_NYC_BatteryPark', noSnap: true },
+    { cmd: 'CauseEvent Mission4Exit', cause: true, before: 'g0', path: Array.from({ length: 40 }, (_, i) => `g${i + 1}`), snap: 'g99-mj12lab', ...props('g99-player') }] },
   C: { tag: 'tr-c', title: 'the .dx URL forms of mission 14 and the mission change to Area 51', legs: [
     { cmd: 'LocalTravel 14_OceanLab_Lab', snap: 'c1-lab', ...props('c1-player') },
     { cmd: 'LocalTravel 14_OceanLab_UC.dx #UC', snap: 'c2-uc', ...props('c2-player') },
@@ -108,7 +121,9 @@ function originalPlayer(text) {
   const line = text.split(/\r?\n/).find(row => /^JCDentonMale JCDentonMale\d+ /.test(row));
   if (!line) return null;
   const triple = name => new RegExp(`${name}=\\(([^)]*)\\)`).exec(line)[1].split(',').map(Number);
-  return { location: triple('Location').map(Math.fround), rotation: triple('Rotation'), viewRotation: triple('ViewRotation'), health: parseInt(/Health=0x([0-9a-f]+)/.exec(line)[1], 16) };
+  const physics = /Physics=(\d+)/.exec(line);
+  const viewRotation = /ViewRotation=/.test(line) ? triple('ViewRotation') : null;
+  return { location: triple('Location').map(Math.fround), rotation: triple('Rotation'), ...(viewRotation ? { viewRotation } : {}), ...(physics ? { physics: Number(physics[1]) } : {}), health: parseInt(/Health=0x([0-9a-f]+)/.exec(line)[1], 16) };
 }
 /** `f Current/<name>` rows of the save listing. */
 const currentNames = text => text.split(/\r?\n/).map(line => /^f Current\/([^\t]+)\t/.exec(line)?.[1]).filter(Boolean).sort();
@@ -129,10 +144,20 @@ async function scenario(id) {
   const logs = [logo.game.doors.scriptRuntime.engineLog];   // each session's engine log (the arrays keep growing), in order
   let legIndex = 0;
   for (const leg of spec.legs) {
-    const label = `${id}${leg.snap.slice(1, 2)}`;
+    const label = `${id}${spec.legs.indexOf(leg) + 1}`;
     const readCap = async ext => (await readFile(`${cap}${leg.snap}.${ext}`, 'utf8'));
-    typed(session, leg.cmd); session.frames(leg.none ? 360 : 2);
-    const request = session.takeTravel();
+    typed(session, leg.cmd);
+    let request = null, trace = null;
+    if (leg.cause) {
+      // the ride: one frame at a time (the level left does not tick again once the tick's travel step has made its request)
+      trace = [];
+      const info = session.level().actors[0];
+      for (let n = 0; n < 20000 && !request; n++) {
+        session.frames(1);
+        trace.push({ t: session.read(info, 'TimeSeconds'), loc: session.pos(session.player()), phys: session.read(session.player(), 'Physics') });
+        request = session.takeTravel();
+      }
+    } else { session.frames(leg.none ? 360 : 2); request = session.takeTravel(); }
     if (leg.none) {
       check(!request, `${label}: an empty SendPlayer made a request (${request?.url})`);
       const flags = [...(session.read(session.player(), 'FlagBase')?.entries?.values() ?? [])].map(e => `${e.name}|${e.type}|${e.expiration}|${e.value | 0}`).sort();
@@ -147,6 +172,45 @@ async function scenario(id) {
     // the captured sessions freeze the arrival from its load (the class default carried) or, with `run`, let it run for that long and freeze it then
     if (leg.run) { next.frames(leg.run); typed(next, 'set LevelInfo bPlayersOnly True'); next.frames(60); }
     else { typed(next, 'set LevelInfo bPlayersOnly True'); next.frames(180); }
+    if (leg.noSnap) {
+      logs.push(next.game.doors.scriptRuntime.engineLog);
+      console.log(`${label}: ${leg.cmd.trim()} -> ${request.map}${request.portal ? `#${request.portal}` : ''} (no snapshot of this arrival; the log is compared)`);
+      session = next;
+      continue;
+    }
+    // 0. the ride along a camera path: the place of the player against level time (Physics 8, PHYS_Interpolating)
+    let rideNote = '';
+    if (leg.cause) {
+      const samples = [];
+      for (const label2 of leg.path) {
+        const line = (await readFile(`${cap}${label2}.props.txt`, 'utf8').catch(() => '')).split(/\r?\n/).find(row => /^JCDentonMale JCDentonMale\d+ /.test(row));
+        if (!line) continue;
+        const loc = /Location=\(([^)]*)\)/.exec(line)[1].split(',').map(Number), phys = Number(/Physics=(\d+)/.exec(line)[1]), t = Number(/LevelTime=([-\d.e+]+)/.exec(line)[1]);
+        samples.push({ t, loc, phys });
+      }
+      const ride = samples.filter(sample => sample.phys === 8);
+      // The wall-clock cost of a sample in the capture (a process start under Wine, seconds) is far above a camera path's length in level time, so a capture holds one or two samples of
+      // the ride: each lies on Play's path, and the first is no later than the level time the capture had spent since the sample taken before the event
+      const before = leg.before ? await readFile(`${cap}${leg.before}.props.txt`, 'utf8').then(text => /LevelTime=([-\d.e+]+)/.exec(text.split(/\r?\n/).find(row => /^JCDentonMale JCDentonMale\d+ /.test(row)) ?? '')?.[1], () => null) : null;
+      if (check(ride.length >= 1, `${label}: the capture holds no sample of the ride`)) {
+        const at = ride.map(sample => { let best = -1, distance = Infinity; trace.forEach((point, i) => { if (point.phys !== 8) return; const d = Math.hypot(point.loc[0] - sample.loc[0], point.loc[1] - sample.loc[1], point.loc[2] - sample.loc[2]); if (d < distance) { distance = d; best = i; } }); return { i: best, d: distance }; });
+        const worst = Math.max(...at.map(a => a.d));
+        check(worst < 8, `${label}: a sample of the ride lies ${worst.toFixed(1)} units from Play's path`);
+        const first = trace.findIndex(point => point.phys === 8);
+        const elapsedPlay = trace[at[0].i].t - trace[first].t;
+        if (before !== null && before !== undefined) {
+          const bound = ride[0].t - Number(before);
+          check(elapsedPlay <= bound + 0.1, `${label}: Play's player needs ${elapsedPlay.toFixed(2)} s of level time to reach the first sample, the capture had ${bound.toFixed(2)} s`);
+        }
+        let drift = 0;
+        for (let k = 1; k < ride.length; k++) {
+          const play = trace[at[k].i].t - trace[at[k - 1].i].t, original = ride[k].t - ride[k - 1].t;
+          drift = Math.max(drift, Math.abs(play - original));
+          check(Math.abs(play - original) < 0.12 + 0.01 * original, `${label}: between samples ${k} and ${k + 1} Play's player took ${play.toFixed(2)} s of level time, the original's ${original.toFixed(2)} s`);
+        }
+        rideNote = `, ${ride.length} ride sample(s) within ${worst.toFixed(1)} units of Play's path (reached ${elapsedPlay.toFixed(1)} s into the ride, the capture's bound ${before != null ? (ride[0].t - Number(before)).toFixed(1) : '-'} s), ${(trace.length / 60).toFixed(1)} s of ride to the request`;
+      }
+    }
     // 1. the travel text this leg exported
     const exported = travelTextOfDump(await readCap('travel.txt'));
     const difference = leg.loose ? null : firstTravelTextDifference(exported.text, text, { times: true });
@@ -165,12 +229,14 @@ async function scenario(id) {
     let playerNote = '';
     if (leg.props) {
       const want = originalPlayer(await readCap('props.txt').catch(() => readFile(`${cap}${leg.props}.props.txt`, 'utf8')));
-      const got = { location: next.pos(p).map(Math.fround), rotation: next.read(p, 'Rotation'), viewRotation: next.read(p, 'ViewRotation'), health: next.read(p, 'Health') };
+      const got = { location: next.pos(p).map(Math.fround), rotation: next.read(p, 'Rotation'), viewRotation: next.read(p, 'ViewRotation'), physics: next.read(p, 'Physics'), health: next.read(p, 'Health') };
       if (check(want, `${label}: the capture has no player row`))
         for (const key of Object.keys(want)) {
           // a fresh arrival drops from the start spot to the floor and rests at a height that depends on the frame times of the fall (Play 1/60 s, the original's own):
           // the height is compared within 0.25, the rest exactly
           if (leg.run && (key === 'rotation' || key === 'viewRotation')) continue;   // a level that ran for an unmeasured time turned the player (docs/travel-transitions.md, open)
+          if (key === 'rotation' && leg.swim) continue;                 // the swimmer's yaw follows nothing the capture holds
+          if (key === 'location' && leg.swim) { check(got.location.every((v, i) => Math.abs(v - want.location[i]) < (i === 2 ? 8 : 1e-3)), `${label}: the swimmer at ${got.location} (the original: ${want.location}; the surface bobs by a few units)`); continue; }
           const same = key === 'location' && !request.restore ? got.location.every((v, i) => Math.abs(v - want.location[i]) < (i === 2 ? 0.25 : 1e-3)) : JSON.stringify(got[key]) === JSON.stringify(want[key]);
           check(same, `${label}: player ${key} ${JSON.stringify(got[key])} (the original: ${JSON.stringify(want[key])})`);
         }
@@ -179,9 +245,9 @@ async function scenario(id) {
     // 4. Save\Current
     const names = directory.files('Current').map(file => file.name).sort();
     const wantNames = currentNames(await readCap('save.txt'));
-    check(JSON.stringify(names) === JSON.stringify(wantNames), `${label}: Current holds ${names} (the original: ${wantNames})`);
+    check(leg.noCurrent || JSON.stringify(names) === JSON.stringify(wantNames), `${label}: Current holds ${names} (the original: ${wantNames})`);
     logs.push(next.game.doors.scriptRuntime.engineLog);
-    console.log(`${label}: ${leg.cmd.trim()} -> ${request.map}${request.portal ? `#${request.portal}` : ''}${request.restore ? ' (restored)' : ''}; ${parseTravelText(text).length} records${leg.loose ? '' : difference ? ' (DIFFER)' : ' equal'}, ${flags.length} flags${leg.loose ? '' : JSON.stringify(flags) === JSON.stringify(wantFlags) ? ' equal' : ' (DIFFER)'}${playerNote}; Current ${names.join(', ')}`);
+    console.log(`${label}: ${leg.cmd.trim()} -> ${request.map}${request.portal ? `#${request.portal}` : ''}${request.restore ? ' (restored)' : ''}; ${parseTravelText(text).length} records${leg.loose ? '' : difference ? ' (DIFFER)' : ' equal'}, ${flags.length} flags${leg.loose ? '' : JSON.stringify(flags) === JSON.stringify(wantFlags) ? ' equal' : ' (DIFFER)'}${playerNote}${rideNote}; Current ${names.join(', ')}`);
     session = next;
     legIndex++;
   }

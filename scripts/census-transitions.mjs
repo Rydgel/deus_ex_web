@@ -13,7 +13,7 @@
  * the leg, and a stop by stage and name. The report groups the stops by family. Nothing in a slot is executed: the files are only parsed (docs/travel.md
  * "Play, step 4: loading a saved game").
  *
- *   node scripts/census-transitions.mjs [--plan] [--only <regex on the id>] [--reuse] [--timeout 900] [--report]
+ *   node scripts/census-transitions.mjs [--plan] [--only <regex on the id>] [--reuse] [--timeout 900] [--report] [--out <file>] [--reverse] [--also <file>] [--frames 60]
  *   node scripts/census-transitions.mjs --one <id>          (the child: one transition, one JSON line)
  *
  * Output: `.work/census-transitions.json` (outside Git), one record per transition, written as the walk goes. */
@@ -29,7 +29,7 @@ const option = (name, fallback = null) => { const i = argv.indexOf(`--${name}`);
 const here = new URL('.', import.meta.url).pathname;
 const WORK = path.resolve(here, '../.work');
 const PLAN_FILE = path.join(WORK, 'census-transitions-plan.json');
-const OUT_FILE = path.join(WORK, 'census-transitions.json');
+const OUT_FILE = path.resolve(option('out', path.join(WORK, 'census-transitions.json')));
 const INTERNET = process.env.DX_INTERNET_SAVES ?? '/home/rydgel/projects/deus_ex_web/.work/internet-saves';
 const SLOT_ROOTS = [path.join(INTERNET, 'nicouzouf/files/Deus Ex'), path.join(INTERNET, 'retromaggedon/files')];
 
@@ -134,11 +134,14 @@ if (!option('one')) {
   const timeout = Number(option('timeout', 900)) * 1000;
   const records = existsSync(OUT_FILE) && argv.includes('--reuse') ? JSON.parse(readFileSync(OUT_FILE, 'utf8')) : [];
   const have = new Set(records.map(r => r.id));
+  // a second worker (`--reverse`) walks the plan from the end and skips what another worker's file (`--also`) already holds
+  const alsoIds = () => { try { return new Set(JSON.parse(readFileSync(path.resolve(option('also', '/nonexistent')), 'utf8')).map(r => r.id)); } catch { return new Set(); } };
   if (!argv.includes('--report')) {
-    for (const t of plan.transitions) {
-      if ((only && !only.test(t.id)) || have.has(t.id)) continue;
+    const order = argv.includes('--reverse') ? [...plan.transitions].reverse() : plan.transitions;
+    for (const t of order) {
+      if ((only && !only.test(t.id)) || have.has(t.id) || alsoIds().has(t.id)) continue;
       const started = process.hrtime.bigint();   // (census-stage5-drivers replaces Date.now with the simulated clock)
-      const run = spawnSync(process.execPath, ['--max-old-space-size=7168', new URL(import.meta.url).pathname, '--one', t.id], { encoding: 'utf8', timeout, maxBuffer: 1 << 26 });
+      const run = spawnSync(process.execPath, ['--max-old-space-size=7168', new URL(import.meta.url).pathname, '--one', t.id, ...(option('frames') ? ['--frames', option('frames')] : [])], { encoding: 'utf8', timeout, maxBuffer: 1 << 26 });
       const last = (run.stdout ?? '').trim().split('\n').filter(line => line.startsWith('{')).at(-1);
       let result;
       try { result = JSON.parse(last); } catch { result = { id: t.id, kind: t.kind, stage: 'process', ok: false, stop: { stage: 'process', message: run.error ? String(run.error.message) : `exit ${run.status}: ${(run.stderr ?? '').trim().split('\n').slice(-3).join(' | ').slice(0, 300)}` } }; }
@@ -149,6 +152,25 @@ if (!option('one')) {
       await writeFile(OUT_FILE, JSON.stringify(records, null, 1));
     }
   }
+  // --merge a.json,b.json: the records of several workers into this run's file (a later file wins per id)
+  if (option('merge')) {
+    const byId = new Map(records.map(r => [r.id, r]));
+    for (const file of option('merge').split(',')) for (const r of JSON.parse(readFileSync(path.resolve(file), 'utf8'))) byId.set(r.id, r);
+    records.length = 0; records.push(...plan.transitions.map(t => byId.get(t.id)).filter(Boolean));
+    await writeFile(OUT_FILE, JSON.stringify(records, null, 1));
+  }
+  // who fires a triggered exit: the Stage 6 inventory's exit tables ("tag `T`: conversation X / Dispatcher Y"), read from docs/stage-6-inventory.md
+  const inventory = path.resolve(here, '../docs/stage-6-inventory.md');
+  const firedBy = new Map();
+  if (existsSync(inventory)) for (const line of readFileSync(inventory, 'utf8').split('\n')) {
+    const m = /^\| `([^`]+)` \| MapExit `([^`]+)` \| [^|]* \| [^|]* \| (tag `[^|]*|touch[^|]*)\|/.exec(line);
+    if (m) firedBy.set(`${m[1].toLowerCase()}|${m[2]}`, m[3].trim());
+  }
+  for (const r of records) if (firedBy.has(r.id)) r.firedBy = firedBy.get(r.id);
+  if (records.length) await writeFile(OUT_FILE, JSON.stringify(records, null, 1));
+  const tally = {};
+  for (const r of records) { const t = plan.transitions.find(x => x.id === r.id); const k = `${r.kind}/${r.sourceLevel ?? '-'}/${r.forward?.driven ?? r.deferred ? (r.forward?.driven ?? 'deferred') : '-'}`; tally[k] = (tally[k] ?? 0) + 1; }
+  console.log('driven:', JSON.stringify(tally));
   // the report: the stops by family
   const stops = records.filter(r => !r.ok);
   const family = r => `${r.stop?.stage ?? r.stage}: ${String(r.stop?.name ?? '')} ${String(r.stop?.message ?? '').replace(/\d+(\.\d+)?/g, 'N').replace(/\b[A-Za-z]+N\b/g, 'X#').slice(0, 110)}`;
@@ -156,12 +178,14 @@ if (!option('one')) {
   for (const r of stops) { const key = family(r); if (!families.has(key)) families.set(key, []); families.get(key).push(r.id); }
   console.log(`\n${records.length - stops.length} of ${records.length} transitions arrive; ${stops.length} stop in ${families.size} families`);
   for (const [key, ids] of [...families].sort((a, b) => b[1].length - a[1].length)) console.log(`  ${ids.length}x ${key}\n      ${ids.slice(0, 6).join(', ')}${ids.length > 6 ? ', ...' : ''}`);
-  process.exit(0);
+  // Stage 6 row 6.3.1's proof (docs/stage-6-exit-criteria.md): a stop fails it
+  process.exit(stops.length ? 1 : 0);
 }
 
 // ---- one transition (the child) ----------------------------------------------------------------------------------------------------------
 const plan = await loadPlan();
 const spec = plan.transitions.find(t => t.id === option('one'));
+const ARRIVAL_FRAMES = Number(option('frames', 60));
 const result = { id: spec?.id ?? option('one'), kind: spec?.kind, source: spec?.source, stage: 'start', ok: false };
 let peakRss = 0;
 const sample = () => { peakRss = Math.max(peakRss, process.memoryUsage().rss); };
@@ -172,12 +196,16 @@ const fail = (stage, error) => {
   finish();
 };
 if (!spec) { fail('plan', new Error(`no transition ${option('one')}`)); }
+if (spec.id === '00_intro|MapExit1') {   // the intro ends through MissionIntro.Timer -> PostIntro (travel step 5, first part); this exit has no DestMap and is never triggered
+  result.stage = 'deferred'; result.ok = true; result.deferred = 'the intro ends through MissionIntro/PostIntro (travel step 5, first part)'; finish();
+}
 
 try {
   const { AssetStore } = await import('../src/unreal/assets.mjs');
   const { openSession } = await import('./census-stage5-session.mjs');
   const { createSaveDirectory } = await import('../src/runtime/save-directory.mjs');
   const { parseSaveInfo } = await import('../src/runtime/save-info.mjs');
+  const { parseTravelText } = await import('../src/runtime/travel-text.mjs');
   const files = [];
   for (const directory of ['Maps', 'System', 'Textures', 'Sounds', 'Music'])
     for (const name of await readdir(`${root}/${directory}`)) files.push({ path: `${directory}/${name}`, read: () => readFile(`${root}/${directory}/${name}`) });
@@ -227,15 +255,17 @@ try {
     if (!from) return null;
     session.fixture.place(from, { yaw });
     session.fixture.drive({ keys: { ArrowUp: true } });
-    let request = null;
-    for (let k = 0; k < 40 && !request; k++) { session.frames(5); request = session.takeTravel(); }
+    const request = advance(session, 200);
     session.fixture.releaseAll();
     return request;
   };
-  const waitRequest = (session, frames) => {
-    for (let n = 0; n < frames; n += 20) { session.frames(20); const request = session.takeTravel(); if (request) return request; }
+  /** Tick one frame at a time and take the request the moment the tick's travel step makes it: the level left does not tick again (the page's simulation sets `travelled`,
+   * sim-session.mjs), so a player still standing in the Teleporter must not touch it a second time and make a second request over the first (its flag base is pruned by then). */
+  const advance = (session, frames) => {
+    for (let n = 0; n < frames; n++) { session.frames(1); const request = session.takeTravel(); if (request) return request; }
     return null;
   };
+  const waitRequest = (session, frames) => advance(session, frames);
   /** Fire transition `t` in `session`; returns {request, driven, noTravel}. A stop inside the frames is the caller's catch. */
   const fire = async (session, t) => {
     const actor = t.actor ? session.actor(t.actor) : null;
@@ -299,8 +329,17 @@ try {
     if (matches.length) return { kind: 'teleporter', candidates: matches.map(m => ({ name: m.name, at: m.location })) };
     return { kind: 'PlayerStart', candidates: dest.starts.filter(s => s.enabled && s.single).map(s => ({ name: s.name, at: s.location })) };
   };
+  /** The classes of the player's inventory chain (Inventory.Inventory links). */
+  const inventoryOf = session => {
+    const names = [];
+    for (let item = session.read(session.player(), 'Inventory'); item && names.length < 400; item = session.read(item, 'Inventory')) names.push(session.runtime.instance(item).cls.record.name);
+    return names;
+  };
   const leg = async (session, t, label) => {
     const out = { label, transition: t.id };
+    const invBefore = inventoryOf(session);
+    out.flagsBefore = [...(session.read(session.player(), 'FlagBase')?.entries?.values() ?? [])].length;
+    Object.defineProperty(out, 'invBefore', { value: invBefore, enumerable: false });
     const log = session.game.doors.scriptRuntime.engineLog;
     const logStart = log.length;
     const before = directory.files('Current').map(f => f.name).sort();
@@ -317,6 +356,9 @@ try {
     }
     Object.defineProperty(out, 'raw', { value: request, enumerable: false });
     out.request = { map: request.map, portal: request.portal, url: request.url, restore: request.restore ? request.restore.file : null, travelBytes: request.travelInfo?.[0]?.[1]?.length ?? 0 };
+    // the records of the exported text: the flag objects are what the mission scripts' memory is made of
+    const exportedRecords = parseTravelText(request.travelInfo?.[0]?.[1] ?? '');
+    out.request.records = exportedRecords.length; out.request.flagRecords = exportedRecords.filter(r => /^Extension\.Flag/.test(r.class) || /\.Flag(Bool|Int|Float|Name|Vector|String|Rotator|Base)?$/i.test(r.class)).length;
     const to = destEntry(t.dest);
     const expect = to ? expectLeg(plan.maps[t.map] ?? sourceMap, to, before) : { cur: sourceMap.mission, next: nextMission(t.dest), branch: nextMission(t.dest) === -1 ? 'wipe' : 'unknown' };
     out.expect = expect;
@@ -334,20 +376,31 @@ try {
     let d;
     try { ({ c: d } = await openSession(request.map, assets, { travel: { arrival: request, lastURL: request.lastURL }, saveDirectory: directory })); }
     catch (error) { out.stop = { stage: 'arrival-open', name: error?.name, message: String(error?.message).split('\n')[0].slice(0, 300), where: String(error?.stack ?? '').split('\n').slice(1, 7).map(l => l.trim().replace(/^at /, '').replace(/\(?file:\/\/.*\/(src\/[^)]*|scripts\/[^)]*)\)?/, '$1')) }; return null; }
-    try { d.frames(60); }
+    const at0 = d.pos(d.player());   // where the login put the player, before any tick: a start spot high above the floor drops the player (950 u/s^2) within the 60 frames
+    try { d.frames(ARRIVAL_FRAMES); }
     catch (error) { out.stop = { stage: 'arrival-ticks', name: error?.name, message: String(error?.message).split('\n')[0].slice(0, 300), where: String(error?.stack ?? '').split('\n').slice(1, 7).map(l => l.trim().replace(/^at /, '').replace(/\(?file:\/\/.*\/(src\/[^)]*|scripts\/[^)]*)\)?/, '$1')) }; return d; }
     const p = d.player();
     const at = d.pos(p);
     const dest = destEntry(t.dest);
     const start = dest ? portalStart(dest, request.portal, d) : null;
     out.arrival = { state: d.state(p).split('.').pop(), at: round(at), health: d.read(p, 'Health'), start: start && { kind: start.kind, candidates: start.candidates.slice(0, 3).map(s => ({ name: s.name, at: round(s.at) })) },
-      atStart: start ? start.candidates.some(s => s.at && near(at, s.at)) : null, restored: Boolean(request.restore) };
+      at0: round(at0), atStart: start ? start.candidates.some(s => s.at && (near(at0, s.at) || near(at, s.at))) : null, restored: Boolean(request.restore) };
     const log = d.game.doors.scriptRuntime.engineLog;
     out.arrival.beginPlayLines = log.filter(l => /^(Log: (Game class is|Bringing Level)|ScriptLog: (InitGame|Base Mutator))/.test(l)).length;
     out.arrival.pawns = d.actors().filter(a => d.isA(a, 'engine.playerpawn')).length;
     const flagNames = [...(d.read(p, 'FlagBase')?.entries?.values() ?? [])].map(e => `${e.name}${e.expiration ? `@${e.expiration}` : ''}`).sort();
     out.arrival.flagCount = flagNames.length;
     out.arrival.flagsOfNote = flagNames.filter(n => /^(PlayerTraveling|MS_|M\d+MissionStart|Nicolette|FordSchick)/.test(n));
+    out.arrival.frames = ARRIVAL_FRAMES;
+    // what the travel import and the mission scripts did with the carried items; a loss is a note (Mission05.FirstFrame takes the inventory into a room), the import's own complaints are failures
+    if (out.invBefore) {
+      const after = inventoryOf(d), count = list => list.reduce((m, n) => (m.set(n, (m.get(n) ?? 0) + 1), m), new Map());
+      const a = count(out.invBefore), b = count(after);
+      const lost = [...a].flatMap(([n, k]) => Array(Math.max(0, k - (b.get(n) ?? 0))).fill(n)), gained = [...b].flatMap(([n, k]) => Array(Math.max(0, k - (a.get(n) ?? 0))).fill(n));
+      out.inventory = { before: out.invBefore.length, after: after.length, ...(lost.length ? { lost: lost.slice(0, 12) } : {}), ...(gained.length ? { gained: gained.slice(0, 12) } : {}) };
+    }
+    const problems = log.filter(l => /Cannot accept travelling class|Failed to spawn travelling class|Accessed None|Script call stack|ScriptWarning/i.test(l));
+    if (problems.length) out.arrival.problems = problems.slice(0, 4);
     out.arrival.level = d.read(d.actors().find(a => d.isA(a, 'deusex.deusexlevelinfo')), 'MapName');
     return d;
   };
@@ -368,6 +421,15 @@ try {
     }
     finish();
   }
+  // The entries the first part of step 5 owns (Play Intro, Credits, `dxonly`, the three endings: docs/travel.md "Play, step 5 (first part)"): the request is checked here,
+  // the arrival is that part's validators'
+  const DEFERRED = new Set(['dx', 'dxonly', '99_endgame1', '99_endgame2', '99_endgame3']);
+  if (DEFERRED.has(spec.dest)) {
+    result.stage = 'deferred'; result.ok = first.branchOk && first.missionLineOk !== false;
+    result.deferred = 'the arrival at the logo map, DXOnly or an ending belongs to travel step 5, first part';
+    if (!result.ok) result.stop = { stage: 'check', name: 'Mismatch', message: `branch ${first.branch}, expected ${first.expect?.branch}` };
+    finish();
+  }
   const d = await arrive(first.raw, spec, first);
   if (first.stop) { result.stage = first.stop.stage; result.stop = first.stop; finish(); }
   const bad = [];
@@ -376,7 +438,10 @@ try {
   if (first.arrival.atStart === false) bad.push(`the player stands at ${first.arrival.at}, not at the ${first.arrival.start?.kind} ${first.arrival.start?.candidates.map(s => `${s.name}@${s.at}`).join(' | ')}`);
   if (first.arrival.restored && first.arrival.beginPlayLines) bad.push('the restored level ran a begin-play line');
   if (first.arrival.pawns !== 1) bad.push(`${first.arrival.pawns} player pawns`);
-  if (first.arrival.state !== 'playerwalking' && !/interpolating|dying|paralyzed/.test(first.arrival.state)) bad.push(`the arrived player is in ${first.arrival.state}`);
+  if (first.arrival.problems) bad.push(`the arrival log holds ${first.arrival.problems[0]}`);
+  // within a mission the flags travel with the player: an arrival that holds fewer than the player had (less the one FirstFrame deletes) lost them in the text
+  if (first.expect.next === first.expect.cur && first.arrival.flagCount < first.flagsBefore - 2) bad.push(`the flags: ${first.flagsBefore} before, ${first.arrival.flagCount} at the arrival`);
+  if (first.arrival.state !== 'playerwalking' && !/conversation|swimming|falling|interpolating|dying|paralyzed/.test(first.arrival.state)) bad.push(`the arrived player is in ${first.arrival.state}`);
   // 4. the way back, when the arrival level leads to the source map: the source is filed and is restored
   const back = plan.transitions.find(t => t.map === first.raw.map.toLowerCase().replace(/\.dx$/, '') && t.dest === spec.map && t.kind !== 'scripted' && !t.noDestination && (t.kind !== 'teleporter' || t.enabled));
   if (back && d) {
@@ -392,6 +457,7 @@ try {
       if (second.arrival.atStart === false) bad.push(`the way back: the player stands at ${second.arrival.at}, not at the ${second.arrival.start?.kind} ${second.arrival.start?.candidates.map(s => `${s.name}@${s.at}`).join(' | ')}`);
       if (second.arrival.restored && second.arrival.beginPlayLines) bad.push('the way back: the restored level ran a begin-play line');
       if (second.arrival.pawns !== 1) bad.push(`the way back: ${second.arrival.pawns} player pawns`);
+      if (second.expect.next === second.expect.cur && second.arrival.flagCount < second.flagsBefore - 2) bad.push(`the way back: the flags: ${second.flagsBefore} before, ${second.arrival.flagCount} at the arrival`);
     }
   }
   result.stage = 'done';

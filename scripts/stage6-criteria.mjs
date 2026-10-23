@@ -56,10 +56,12 @@ add('6.2.6', 'saves are kept in the browser or a folder the player picked, can b
 
 // 6.3 Transitions -----------------------------------------------------------------------------------------------------------------------
 add('6.3.1', 'every MapExit, Teleporter and scripted travel of the single-player maps arrives (198 transitions), from a real save of its mission where one exists', 'P',
-  {pending: 'scripts/census-transitions.mjs (travel step 5, second part: running)', need: 'the census with every transition arriving, or each stop an explicit named boundary'});
+  {proof: [v('census-transitions.mjs')], have: ['docs/travel-transitions.md (2026-10-23: 198 of 198 arrive; 104 from real slots, 93 cold; 161 restores on the way back)', spec('browser-tests/transitions.spec.mjs').name],
+    weak: 'the 22 triggered exits get their Trigger call, not the conversation or dispatcher chain that fires them in the original; 5 s of arrival ticks; the arrivals at dx, DXOnly and the endings are 6.1.4/6.5\'s'});
 add('6.3.2', 'a sample of every family of transition equals the original: the log lines, the travel text, the flags, the arrival place and the Save\\Current listing', 'O1',
-  {proof: [v('validate-travel-transitions.mjs'), v('validate-travel.mjs')], pending: 'the census names the families; one Wine capture per family not yet sampled',
-    have: ['validate-travel-transitions A-D (the Hong Kong lifts, the Mission02/08 PreTravels, a portal no Teleporter names, the mission-14 URL forms)']});
+  {proof: [v('validate-travel-transitions.mjs'), v('validate-travel.mjs')],
+    have: ['validate-travel-transitions A-F (the Hong Kong lifts and an empty SendPlayer, the Mission02/08 PreTravels, a portal no Teleporter names, a mission change with a #portal, the .dx URL forms, a start spot above water, two camera-path exits)'],
+    weak: 'one sample per family; the camera-path rides are bounded by one sample each; the two scripted SendPlayers (Mission04, Mission11) are not measured in the original'});
 
 // 6.4 The missions ----------------------------------------------------------------------------------------------------------------------
 for (const m of MISSIONS) {

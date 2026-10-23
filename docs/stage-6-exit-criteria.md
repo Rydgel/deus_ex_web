@@ -39,18 +39,18 @@ Starts: a mission row starts from a real desktop save of that mission where one 
 12, 14 and 15; the inventory's slot tables say what each one has already chosen), else from the previous mission's exit, else (Training, mission 11) from the
 menu or a cold open of the mission's first map. The same start is loaded in Play and in the original.
 
-## The scoreboard (2026-10-23)
+## The scoreboard (2026-10-23, after the transition census)
 
 | Clause | PASS | PARTIAL | UNDRIVEN | MISSING | EXCLUDED |
 | --- | ---: | ---: | ---: | ---: | ---: |
 | 6.1 The start and the menus | 5 | 0 | 0 | 1 | 0 |
 | 6.2 Persistence | 5 | 0 | 0 | 1 | 0 |
-| 6.3 Transitions | 0 | 1 | 1 | 0 | 0 |
+| 6.3 Transitions | 2 | 0 | 0 | 0 | 0 |
 | 6.4 The missions | 0 | 0 | 0 | 36 | 0 |
 | 6.5 The endings | 0 | 0 | 0 | 3 | 0 |
 | 6.6 The campaign in one run | 0 | 0 | 0 | 1 | 0 |
 | 6.7 Excluded | 0 | 0 | 0 | 0 | 3 |
-| **Total** | 10 | 1 | 1 | 42 | 3 |
+| **Total** | 12 | 0 | 0 | 42 | 3 |
 
 ## The rows
 
@@ -80,8 +80,8 @@ menu or a cold open of the mission's first map. The same start is loaded in Play
 
 | Row | Criterion | Evidence | Proof | Needed / weak / pending | Status |
 | --- | --- | --- | --- | --- | --- |
-| 6.3.1 | every MapExit, Teleporter and scripted travel of the single-player maps arrives (198 transitions), from a real save of its mission where one exists | P | - | the census with every transition arriving, or each stop an explicit named boundary; pending: scripts/census-transitions.mjs (travel step 5, second part: running) | UNDRIVEN |
-| 6.3.2 | a sample of every family of transition equals the original: the log lines, the travel text, the flags, the arrival place and the Save\Current listing | O1 | validate-travel-transitions.mjs, validate-travel.mjs | pending: the census names the families; one Wine capture per family not yet sampled | PARTIAL |
+| 6.3.1 | every MapExit, Teleporter and scripted travel of the single-player maps arrives (198 transitions), from a real save of its mission where one exists | P | census-transitions.mjs | weak: the 22 triggered exits get their Trigger call, not the conversation or dispatcher chain that fires them in the original; 5 s of arrival ticks; the arrivals at dx, DXOnly and the endings are 6.1.4/6.5's | PASS |
+| 6.3.2 | a sample of every family of transition equals the original: the log lines, the travel text, the flags, the arrival place and the Save\Current listing | O1 | validate-travel-transitions.mjs, validate-travel.mjs | weak: one sample per family; the camera-path rides are bounded by one sample each; the two scripted SendPlayers (Mission04, Mission11) are not measured in the original | PASS |
 
 ### 6.4 The missions
 
@@ -148,7 +148,7 @@ menu or a cold open of the mission's first map. The same start is loaded in Play
 
 ## The order of the remaining work
 
-1. **6.3.1, the transition census** (running: travel step 5's second part). It names the families of stop that every mission row would meet.
+1. **6.3.1, the transition census**: done 2026-10-23 (198 of 198 arrive, [travel transitions](travel-transitions.md)); its two families of stop were fixed.
 2. **6.4.\*.3, the conversation census**: every own conversation of each list started in Play as its owner or trigger starts it (Play only; cheap; it finds the
    conversation-side blockers before any capture is spent).
 3. **6.4.\*.1, the placed chains**, mission by mission in the campaign's order (Training and mission 1 first: Stage 5's captures and scenes cover much of their
