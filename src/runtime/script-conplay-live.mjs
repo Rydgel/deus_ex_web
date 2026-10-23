@@ -172,7 +172,9 @@ export async function createLiveConPlayRuntime({runtime,assets,level,player,shel
   const dataLinkClass=await load(deus,'datalinkplay');
   await prepareSound(runtime.defaultValue(dataLinkClass,runtime.lookupMember(dataLinkClass,'fields','startSound')));
   const transferNames=new Set();
-  for(const {conversation} of conversations)for(let event=get(conversation,'eventList');event;event=get(event,'nextEvent')){
+  // The InfoLinks' TransferObject events too (DL_Rooftops gives Image02_NYC_Warehouse): ConEventTransferObject.BindActor's StaticLoadObject of the item
+  // class needs its package prepared before the synchronous native frame, whichever conversation list the event is on.
+  for(const {conversation} of [...conversations,...dataLinkConversations])for(let event=get(conversation,'eventList');event;event=get(event,'nextEvent')){
     const key=runtime.instance(event).cls.record.key;
     if(key==='consys.coneventtransferobject'||key==='consys.coneventcheckobject')transferNames.add(get(event,'objectName'));
   }

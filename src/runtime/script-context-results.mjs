@@ -11,6 +11,7 @@ const CLASS_CONTEXT_OP = 0x12;
 const CONTEXT_OPS = new Set([CLASS_CONTEXT_OP, CONTEXT_OP]);
 const STRUCT_MEMBER_OP = 0x36;
 const BOOL_VARIABLE_OP = 0x2d;
+const DYNAMIC_CAST_OP = 0x2e;
 const PROPERTY_TYPES = Object.freeze({
   ByteProperty: 'byte', IntProperty: 'int', BoolProperty: 'bool',
   FloatProperty: 'float', NameProperty: 'name', StrProperty: 'string',
@@ -157,6 +158,13 @@ function methodFromClass(runtime, cls, name) {
  */
 async function staticObjectClass(runtime, descriptor) {
   if (!descriptor || descriptor.type !== 'object') return null;
+  // A DynamicCast receiver (`cast<Pawn>(x).FindInventoryType(...)`): the compiler resolved the call through the cast's class
+  if (descriptor.source === 'cast') {
+    const classRecord = descriptor.classRecord;
+    if (!classRecord || classRecord.kind !== 'Class' || !classRecord.entry?.serialSize) return null;
+    if (typeof runtime?.loadClass !== 'function') return null;
+    try { return { record: classRecord, loaded: await runtime.loadClass(classRecord.asset, classRecord.index) }; } catch { return null; }
+  }
   const metadata = descriptor.metadata, record = descriptor.field;
   const classRef = metadata?.propertyClassRef;
   if (!Number.isInteger(classRef) || classRef === 0) return null;
@@ -249,6 +257,10 @@ async function expressionNode(runtime, script, node, seen = new Set()) {
   try {
     if (PROPERTY_OPS.has(node.op)) return propertyNode(runtime, script, node);
     if (node.op === STRUCT_MEMBER_OP) return memberNode(runtime, script, node);
+    if (node.op === DYNAMIC_CAST_OP) {
+      const classRecord = await objectReference(runtime, script, node.fieldIndex);
+      return classRecord ? { source: 'cast', type: 'object', classRecord } : null;
+    }
     if (node.op === BOOL_VARIABLE_OP) {
       const descriptor = await expressionNode(runtime, script, node.value, seen);
       return descriptor?.type === 'bool' ? descriptor : null;
