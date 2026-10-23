@@ -10,6 +10,8 @@
  *    next press out again, as Alt+Enter does; the pointer lock follows.
  * 3. The Render Device choice raises its prompt; its Yes sends RELAUNCH -changevideo, which the page announces as a cancelable
  *    'deusex-relaunch' event (the first time the check cancels it); left alone, the event is followed by a reload of the page.
+ * 4. In the reloaded page, MenuMain's Exit raises its box and the box's Yes sends EXIT (USystem::Exec): the page announces a cancelable
+ *    'deusex-exit' event and, left alone, ends the game: the view is hidden and the page says the game has exited (docs/host-services.md "Exit").
  * No runtime error may occur. Needs the installed game and Chromium (Playwright). */
 import assert from 'node:assert/strict';
 import { chromium } from '@playwright/test';
@@ -31,7 +33,8 @@ const page = await browser.newPage({ viewport: { width: 1024, height: 640 } });
 const pageErrors = [];
 page.on('pageerror', error => pageErrors.push(error.message));
 await page.addInitScript(() => {
-  window.__relaunches = [];
+  window.__relaunches = []; window.__exits = 0;
+  window.addEventListener('deusex-exit', () => { window.__exits++; });
   window.addEventListener('deusex-relaunch', event => {
     window.__relaunches.push(event.detail.arguments);
     if (window.__cancelRelaunch !== false) event.preventDefault();
@@ -144,7 +147,27 @@ try {
   await navigation;
   await page.waitForFunction(() => window.deusExViewer?.status().ready, null, { timeout: 240000 });
   assert.equal(await page.evaluate(() => window.__marker ?? null), null, 'the page restarted');
-  console.log(JSON.stringify({ fullscreenToggles: 2, relaunches: ['-changevideo'], autoRepeat: true }));
+
+  // ---- Exit: MenuMain's last button (MA_Quit), its box, Yes ---------------------------------------------------------------
+  await page.waitForFunction(() => { const s = window.deusExViewer?.status(); return s?.ready && s.map === 'DX' && !s.runtimeError; }, null, { timeout: 240000 });
+  await frames(120);
+  await page.keyboard.press('Escape'); await frames(30);
+  c = await controls();
+  assert.equal(c.windows[0].class, 'deusex.menumain', 'Escape opens MenuMain after the restart');
+  const exitButton = c.menu.buttons.find(button => button.action === 6);
+  assert.ok(exitButton?.window != null, 'MenuMain has its Exit button');
+  await click(...center(c.windows[exitButton.window]));
+  c = await controls();
+  assert.equal(c.windows[0].class, 'deusex.menuuimessageboxwindow', 'Exit raises its box');
+  assert.equal(await page.evaluate(() => window.__exits), 0, 'the box alone exits nothing');
+  await click(...center(c.windows[c.roles.btnYes]));
+  await frames(10);
+  assert.equal(await page.evaluate(() => window.__exits), 1, 'Yes sends EXIT once');
+  const ended = await page.evaluate(() => ({ toast: document.querySelector('#toast').textContent, view: getComputedStyle(document.querySelector('#scene')).visibility }));
+  assert.match(ended.toast, /exited/, 'the page says the game has exited');
+  assert.equal(ended.view, 'hidden', 'the view is hidden');
+  assert.deepEqual(pageErrors, [], 'exit: page errors');
+  console.log(JSON.stringify({ fullscreenToggles: 2, relaunches: ['-changevideo'], autoRepeat: true, exits: 1 }));
   console.log('host services passed');
 } finally {
   await browser.close(); await server.close();

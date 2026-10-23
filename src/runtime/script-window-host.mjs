@@ -171,7 +171,7 @@ const HUD_CLASS_PATHS = Object.freeze([
     'colorthememanager', 'colortheme']],
 ]);
 
-export async function createWindowHost({runtime, assets, player, gameConfig = null}) {
+export async function createWindowHost({runtime, assets, player, gameConfig = null, log = null}) {
   if (!runtime?.attach || !assets?.get) throw new TypeError('Window host requires ScriptRuntime and AssetStore');
   const inputConsole=await createInputConsole(runtime,assets);
   // UEngine::InputEvent -> XInputExt::Process -> bindings -> the viewport's
@@ -192,12 +192,12 @@ export async function createWindowHost({runtime, assets, player, gameConfig = nu
   // (docs/script-native-config.md). The live audio objects belong to the current level.
   const nativeConfig=createNativeConfig({gconfig:await runtime.classLoader.prepareConfig(),audio:()=>runtime.audio??null});
   /** What the render device last took from the client config on a Flush (docs/script-native-config.md). */
-  // fullscreenToggles / relaunches count the host requests the Exec chain made (UWindowsViewport::Exec ToggleFullscreen,
-  // USystem::Exec RELAUNCH); the page performs each once (docs/host-services.md).
+  // fullscreenToggles / relaunches / exitRequests count the host requests the Exec chain made (UWindowsViewport::Exec ToggleFullscreen,
+  // USystem::Exec RELAUNCH and EXIT/QUIT); the page performs each once (docs/host-services.md).
   // `fullscreen`: whether the viewport is fullscreen (the BLIT_Fullscreen flag SetRes passes as IsFullscreen()): the client's
   // StartupFullscreen until the page says (the browser's fullscreen is the page's; main.mjs reports it).
   const display={brightness:nativeConfig.instance('WinDrv.WindowsClient','Brightness'),flushes:0,resolution:null,resolutionVersion:0,
-    fullscreen:Boolean(nativeConfig.instance('WinDrv.WindowsClient','StartupFullscreen')),fullscreenToggles:0,relaunches:0,relaunchArguments:null,
+    fullscreen:Boolean(nativeConfig.instance('WinDrv.WindowsClient','StartupFullscreen')),fullscreenToggles:0,relaunches:0,relaunchArguments:null,exitRequests:0,
     // RootWindow.GenerateSnapshot's requests to the page (docs/root-snapshot.md): the frame the page last drew is the texture's source.
     snapshotRequests:[],snapshotSerial:0,snapshotReleased:[],
     // Textures whose pixels the simulation holds (a SaveInfo's Snapshot, W.snapshot.adopt): sent to the page once each, in the next frame snapshot.
@@ -212,6 +212,8 @@ export async function createWindowHost({runtime, assets, player, gameConfig = nu
     viewportFullscreen:()=>display.fullscreen,
     toggleFullscreen(){display.fullscreenToggles++;},
     relaunch(args){display.relaunchArguments=args;display.relaunches++;},
+    // appRequestExit(0) (Core 0x1016b2f0): its GLog line, then GIsRequestingExit for the host
+    requestExit(){log?.('Log','appRequestExit(0)');display.exitRequests++;},
     viewportSize(){
       if(!viewportSize)boundary('UViewport SizeX/SizeY are unknown before the first frame');
       return viewportSize;

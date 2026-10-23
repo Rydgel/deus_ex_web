@@ -2413,7 +2413,7 @@ export async function createScriptDoors({
   runtime.textSource=createExtStringSource([await assets.get('DeusExText')],{readObject});
   await prepareNpcClass(playerClass);
   const {createWindowHost}=await import('./script-window-host.mjs');
-  windowHost=await createWindowHost({runtime,assets,player:playerActor});
+  windowHost=await createWindowHost({runtime,assets,player:playerActor,log:logLine});
   windowHost.install();
   if(gameSaver){windowHost.gameEngineHooks.saveGame=index=>{gameSaver.saveGame(index,'');};windowHost.gameEngineHooks.deleteGame=index=>{gameSaver.deleteGame(index);};}
   // LoadMap's collection of the unloaded level, run by every reload

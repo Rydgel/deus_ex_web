@@ -1033,7 +1033,7 @@ async function loadMap(name, { travel = null, currentFiles = null } = {}) {
       instructor: training, weapon: training, datacube: training, keypad: training});
     $('infolink-shell').hidden = true;
     world.displayGamma.value = brightnessGamma(Number($('brightness').value));
-    displayFlushes = null; displayResolutionVersion = 0;
+    displayFlushes = null; displayResolutionVersion = 0; displayExitRequests = 0;
     // The worker's PlayerCalcView replies point the camera before the map
     // counts as ready (on the page they are synchronous).
     // resetCamera runs ?cheat= when it resets the player (Play mode).
@@ -1223,11 +1223,21 @@ function setBrightness(value) {
 $('brightness').oninput = event => setBrightness(Number(event.target.value));
 // The render device's view of the client config (sim-session.mjs snapshot.display): a Flush re-reads
 // Brightness (D3DDrv UD3DRenderDevice::Flush) and a SetRes request fixes the drawing buffer.
-let displayFlushes = null, displayResolutionVersion = 0, displayFullscreenToggles = 0, displayRelaunches = 0;
+let displayFlushes = null, displayResolutionVersion = 0, displayFullscreenToggles = 0, displayRelaunches = 0, displayExitRequests = 0, exited = false;
+/** USystem::Exec EXIT/QUIT (MenuMain's Exit and the box's Yes; docs/host-services.md "Exit"): the original's main loop ends after the tick and
+ * the process shuts down. A page cannot close itself: the simulation ends, the sound stops, the view goes blank and the page says so. */
+function endGame() {
+  exited = true; paused = true;
+  keys.clear(); drag = false; document.exitPointerLock?.(); lockGameKeys(false);
+  stopInfoLinkPresentation(); infoLinkAudioContext?.suspend?.().catch(() => {});
+  simClient?.terminate(); simClient = null;
+  $('scene').style.visibility = 'hidden';
+  $('toast').textContent = 'Deus Ex has exited. Reload the page to start again.';
+}
 function applyDisplaySettings(display) {
   // The Exec chain's host requests (docs/host-services.md): UWindowsViewport::Exec ToggleFullscreen does what Alt+Enter does (the menu
-  // click that sent it is the user activation the browser asks for); USystem::Exec RELAUNCH restarts the game, a page reload. A listener
-  // may cancel the 'deusex-relaunch' event (the menu sweep and validators do).
+  // click that sent it is the user activation the browser asks for); USystem::Exec RELAUNCH restarts the game, a page reload; EXIT/QUIT ends
+  // it. A listener may cancel the 'deusex-relaunch' and 'deusex-exit' events (the menu sweep and validators do).
   if (display.fullscreenToggles !== displayFullscreenToggles) {
     const requests = display.fullscreenToggles - displayFullscreenToggles; displayFullscreenToggles = display.fullscreenToggles;
     if (requests > 0 && requests % 2 === 1) toggleFullscreen();
@@ -1237,6 +1247,10 @@ function applyDisplaySettings(display) {
     displayRelaunches = display.relaunches;
     const event = new CustomEvent('deusex-relaunch', { cancelable: true, detail: { arguments: display.relaunchArguments } });
     if (window.dispatchEvent(event)) location.reload();
+  }
+  if ((display.exitRequests ?? 0) !== displayExitRequests) {
+    displayExitRequests = display.exitRequests;
+    if (window.dispatchEvent(new CustomEvent('deusex-exit', { cancelable: true }))) endGame();
   }
   // The first frame of a load takes the client's Brightness as the render device's Init does (the kept config's, when the player set one)
   if ((displayFlushes === null ? Boolean(configStore) : display.flushes !== displayFlushes) && Number.isFinite(display.brightness)) setBrightness(display.brightness);
@@ -2103,6 +2117,7 @@ function simFrame(input) {
 }
 function animate(time) {
   requestAnimationFrame(animate);
+  if (exited) return;
   if (held === 'releasing') { held = false; lastTime = simLastPost = time - 1000 / 60; }
   if (held) { lastTime = time; return; }
   const dt = Math.max(0, (time - lastTime) / 1000); lastTime = time;

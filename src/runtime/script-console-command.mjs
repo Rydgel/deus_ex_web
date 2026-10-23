@@ -20,9 +20,10 @@
  * OPEN (SetClientTravel; the Browse is UGameEngine::Tick's, game.mjs
  * clientTravel), throws UnsupportedConsoleCommandError before any of that
  * handler's work. TOGGLEFULLSCREEN (UWindowsViewport::Exec, the call Alt+Enter
- * makes at WinDrv 0x1110a29b) and RELAUNCH (USystem::Exec, Core 0x1016b878) are
- * host requests: services.toggleFullscreen and services.relaunch hand them to
- * the page (docs/host-services.md).
+ * makes at WinDrv 0x1110a29b), RELAUNCH (USystem::Exec, Core 0x1016b878) and
+ * EXIT/QUIT (USystem::Exec, 0x1016bb43) are host requests: services.toggleFullscreen,
+ * services.relaunch and services.requestExit hand them to the page
+ * (docs/host-services.md).
  */
 import {gameEngineKey} from './script-window-typed-keys.mjs';
 import {setClientTravel as sharedSetClientTravel} from './script-travel.mjs';
@@ -586,6 +587,12 @@ export function createConsoleCommands({runtime, input, services}) {
     // USystem::Exec RELAUNCH (Core 0x1016b878-0x1016bb6b): debugf("Relaunch: %s", Cmd) with Cmd past the keyword and its spaces, a
     // flush of the log, then ShellExecute("open", "deusex.exe" from GetModuleFileName, Cmd) and appRequestExit(0): the game ends and a
     // new instance starts with Cmd as its arguments (-changevideo: the video setup). The browser restarts the page.
+    // USystem::Exec EXIT and QUIT (0x1016b846-0x1016b872, both -> 0x1016bb43): Ar.Log("Closing by request"), appRequestExit(0) and 1. appRequestExit
+    // (0x1016b2f0) logs "appRequestExit(%i)", posts WM_QUIT (PostQuitMessage(0)) and sets GIsRequestingExit: the main loop ends after this tick and the
+    // process shuts down. The page ends the game (docs/host-services.md "Exit").
+    if ((parseCommand(cmd, 'EXIT') !== null || parseCommand(cmd, 'QUIT') !== null) && typeof services.requestExit === 'function') {
+      ar.log('Closing by request'); services.requestExit(); return true;
+    }
     const relaunchArguments = parseCommand(cmd, 'RELAUNCH');
     if (relaunchArguments !== null && typeof services.relaunch === 'function') { services.relaunch(String(relaunchArguments)); return true; }
     claims('USystem::Exec', cmd);

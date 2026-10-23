@@ -169,6 +169,12 @@ const is = (actual, expected, label) => { assert.deepEqual(actual, expected, lab
   is([host.display.relaunches, host.display.relaunchArguments], [1, '-changevideo'], `the prompt's OK (${prompt}) relaunched with -changevideo`);
   host.consoleCommands.consoleCommand(player, 'RELAUNCH   -changevideo -nosound');
   is([host.display.relaunches, host.display.relaunchArguments], [2, '-changevideo -nosound'], 'RELAUNCH keeps the arguments past the keyword and its spaces');
+  // EXIT and QUIT (USystem::Exec 0x1016bb43): "Closing by request" to the caller, appRequestExit(0) in the log, one exit request for the page each
+  const engineLog = game.doors.scriptRuntime.engineLog, logAt = engineLog.length;
+  is(host.consoleCommands.consoleCommand(player, 'Exit'), 'Closing by request', 'EXIT answers "Closing by request"');
+  is([host.display.exitRequests, engineLog.slice(logAt)], [1, ['Log: appRequestExit(0)']], 'EXIT requests the exit and logs appRequestExit(0)');
+  is(host.consoleCommands.consoleCommand(player, 'quit'), 'Closing by request', 'QUIT is the same command, the keyword case-insensitive');
+  is(host.display.exitRequests, 2, 'a second exit request');
   // Controls: Mouse Sensitivity and Invert Mouse drive PlayerInput.
   while (!['deusex.menusettings', 'deusex.menumain'].includes(driver.top())) { game.windowKey('Escape', true); game.windowKey('Escape', false); input.tick(5); }
   if (driver.top() === 'deusex.menumain') { driver.invoke('MenuSettings'); input.tick(5); }

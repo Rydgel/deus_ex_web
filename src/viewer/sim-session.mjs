@@ -1182,7 +1182,7 @@ export function createSimSession(game, { assets = null, events = [], exportName 
       const display = game.hud?.host?.display;
       snapshot.display = display ? { brightness: display.brightness, flushes: display.flushes,
         resolution: display.resolution, resolutionVersion: display.resolutionVersion,
-        fullscreenToggles: display.fullscreenToggles, relaunches: display.relaunches, relaunchArguments: display.relaunchArguments,
+        fullscreenToggles: display.fullscreenToggles, relaunches: display.relaunches, relaunchArguments: display.relaunchArguments, exitRequests: display.exitRequests,
         // RootWindow.GenerateSnapshot (docs/root-snapshot.md): the page keeps its drawn frames while UIBackground is 1 (Snapshot), and
         // fills each requested texture from the frame before the one this snapshot draws.
         // Also kept while a window holds the mouse (the Save Game screen's preview is a GenerateSnapshot of the frame behind it, whatever UIBackground says)

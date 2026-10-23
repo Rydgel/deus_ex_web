@@ -66,3 +66,29 @@ yet (Stage 6), the settings changed before the restart are lost, which the origi
 
 Check: `validate-native-config.mjs` (the prompt alone relaunches nothing; its Yes records `-changevideo`; spacing after the keyword is
 dropped) and `validate-host-services-play.mjs` (the event, cancelled once, then the reload with the event left alone).
+
+## Exit
+
+MenuMain's last button (`buttonDefaults[9]`, action `MA_Quit`) raises `MenuUIWindow`'s message box in mode `MB_Exit`; Escape or No closes it
+(`MenuUIMessageBoxWindow.VirtualKeyPressed`: Escape posts result 1), Enter, Space, Y or Yes posts 0 and `BoxOptionSelected` calls
+`DeusExRootWindow.ExitGame`: `ClearWindowStack()`, then `ConsoleCommand("Exit")`. The Exec chain reaches `USystem::Exec` (Core), which tests
+`EXIT` (`0x1016b849`) and `QUIT` (`0x1016b862`) and for either jumps to `0x1016bb43`: `Ar.Log("Closing by request")` (the line goes to the caller's
+output device, here the string `ConsoleCommand` returns, not the log), `appRequestExit(0)` and `return 1`. `appRequestExit` (`0x1016b2f0`) logs
+`appRequestExit(%i)`; with 0 it posts `PostQuitMessage(0)` and sets `GIsRequestingExit` (a nonzero argument would call `ExitProcess(1)`). The main
+loop ends after the tick and the engine shuts down.
+
+Measured under CrossOver (2026-10-23, capture `mm1` of `scripts/validate-menu-main.mjs --capture`): the box, its Escape back to MenuMain, then in a
+running game Exit and Enter: the log's last level lines are followed by `Log: appRequestExit(0)`, `Exit: Preparing to exit.`, the unbinding and
+unloading lines, `Exit: Exiting.` and the memory report, and the process is gone. Neither `DeusEx-ad.ini` nor `User-ad.ini` was rewritten by the
+exit (their times are those of the launch's copies): the settings are written by each screen's OK ([config persistence](config-persistence.md)),
+not at the exit.
+
+Play: `script-console-command.mjs` `engineExec` claims `EXIT` and `QUIT` before `RELAUNCH`, writes `Closing by request` to the caller's output and
+calls `services.requestExit()`; the window host logs `Log: appRequestExit(0)` into the engine log and counts the request (`display.exitRequests`),
+the snapshot carries it, and the page dispatches a cancelable `deusex-exit` event on `window`. A page cannot close itself, so when the event is
+left alone the page ends the game in its place: the simulation worker is terminated, the sound stops, the view is hidden and the page says that
+the game has exited and that a reload starts it again (`main.mjs` `endGame`). The engine's shutdown lines after `appRequestExit(0)` are the
+original's own teardown and are not modeled.
+
+Check: `scripts/validate-menu-main.mjs` (row 6.1.6: every MenuMain entry's window stack against the original's, and Exit's Yes: the engine log takes
+`appRequestExit(0)`, one exit request, the window stack cleared).
