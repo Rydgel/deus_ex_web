@@ -1194,6 +1194,10 @@ can be completed through representative choices and endings without progression
 blockers. Validate each mission's conversations, events, and transitions against
 the original game; keep a per-mission compatibility checklist.
 
+The finite definition of that criterion is [the Stage 6 exit criteria](stage-6-exit-criteria.md) (adopted 2026-10-23: placed chains per mission against
+the original, both sides of the 36 lasting choices, every conversation run, one unbroken run from New Game to an ending), built from
+[the Stage 6 inventory](stage-6-inventory.md); `node scripts/stage6-criteria.mjs` prints its scoreboard.
+
 Settings persistence is done (2026-10-22): the original's DeusEx.ini and User.ini writes are measured under Wine and Play keeps them in the browser across map loads and
 reloads ([configuration persistence](config-persistence.md)); [save storage](save-storage.md) keeps the saves (IndexedDB, or a Save folder the player picked in Chromium, behind one interface, the failure cases, import and zip export for Firefox and Safari)
 and gives the original's Load Game screen the real saves with their snapshot pictures (2026-10-22: the page's Saves window, the worker's save directory, the picture checked against Wine captures); writing a save is in too (2026-10-22: the Save Game screen, the Quick Save key, `SAVEGAME`/`DELETEGAME`; a slot in the original's format that the page's storage keeps whole, `SaveInfo.dxs` byte-exact to every original file measured (41 other players' slots and the Wine sessions' own), the original under Wine loads Play's Training, Island, Quick Save and HQ slots with the saved player; [travel](travel.md#play-step-4-saving)); loading a slot is the other half of travel step 4.
