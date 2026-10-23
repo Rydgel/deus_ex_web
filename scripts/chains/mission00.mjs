@@ -70,6 +70,19 @@ export default {
     { op: 'wait', seconds: 12 },
     { op: 'state', label: 'hackdoor-37', actor: 'DeusExMover37', fields: ['KeyNum', 'bLocked'] },
     { op: 'state', label: 'hackdoor-38', actor: 'DeusExMover38', fields: ['KeyNum', 'bLocked'] },
+
+    // the body room: the cadet Mission00.FirstFrame knocked out (UNATCOTroop2 became a carcass holding NanoKey1, Body_Search_Room): the multitool put away (the hand must be empty for
+    // the body to be carried), the body searched (its key goes to the ring), carried to the table, and dropped on the proximity Trigger0 (3688,378: a Carcass-class trigger):
+    // the bodydoorsopen pair opens
+    { op: 'belt', n: 2 },
+    { op: 'placeNear', class: 'UNATCOTroopCarcass', distance: 50, bearing: -1.5707963267948966, harness: true, note: '50 units south of the carcass, aimed at it' },
+    { op: 'frob', target: 'UNATCOTroopCarcass', note: 'searches the body' },
+    { op: 'frob', target: 'UNATCOTroopCarcass', note: 'carries it' },
+    { op: 'place', at: [3688, 448, -39], view: [-5527, 49152], harness: true, note: '70 units north of Trigger0 (the table), facing it' },
+    { op: 'line', text: 'DropItem' },
+    { op: 'wait', seconds: 8 },
+    { op: 'state', label: 'bodydoors-3', actor: 'DeusExMover3', fields: ['KeyNum'] },
+    { op: 'state', label: 'bodydoors-25', actor: 'DeusExMover25', fields: ['KeyNum'] },
     { op: 'snap', label: 'a1b-gates' },
 
     // 00_Training to 00_TrainingCombat: Teleporter0
@@ -99,6 +112,11 @@ export default {
     { op: 'travel', to: '00_TrainingFinal', label: 'leg2' },
     { op: 'wait', seconds: 5 },
     { op: 'snap', label: 'a5-final' },
+
+    // the Soldiers of the maze shoot a player they see; the run places him at the switches (the walk and the fights between the steps are not part of the row), and the original's real
+    // seconds are longer than Play's: God mode (ReducedDamageType All) in both, so that what the player is shot for is not compared
+    { op: 'line', text: 'set DeusEx.JCDentonMale bCheatsEnabled True', harness: true },
+    { op: 'line', text: 'God', harness: true },
 
     // the stealth maze's doors and the bridge: the wall buttons Switch1 and Switch2 (Switch1 actors tagged Switch1; events FirstStealthDoor and SecondStealthDoor) pressed with the
     // right button, and Keypad1 (code 0089, event bridge)

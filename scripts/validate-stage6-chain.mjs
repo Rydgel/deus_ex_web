@@ -4,7 +4,11 @@
  * normalization of the travel step (pointers, instance numbers, the two frame-time properties' values): the flags with their expirations, the goals, the notes,
  * the inventory, the skills, the conversation history, everything the original carries into the next map.
  *
- *   node scripts/validate-stage6-chain.mjs --mission 00|01 [--capture]   --capture runs the original first (the Wine lock; minutes)  */
+ * Without --mission it runs every mission that has a chain (00 and 01), one process each; it SKIPs a mission whose capture is not in .work/chains.
+ *
+ * runner-timeout: 1800
+ *
+ *   node scripts/validate-stage6-chain.mjs [--mission 00|01] [--capture]   --capture runs the original first (the Wine lock; minutes)  */
 import { writeFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { gameDirectory } from './game-directory.mjs';
@@ -14,7 +18,16 @@ import { randomAlternatives } from './chain-conversations.mjs';
 
 const option = (name, fallback) => { const i = process.argv.indexOf(`--${name}`); return i < 0 ? fallback : process.argv[i + 1]; };
 const mission = option('mission', null);
-if (!mission) { console.log('usage: validate-stage6-chain.mjs --mission 00|01 [--capture]'); process.exit(2); }
+if (!mission) {
+  const { spawnSync } = await import('node:child_process');
+  let failed = 0;
+  for (const id of ['00', '01']) {
+    const run = spawnSync(process.execPath, ['--max-old-space-size=7168', new URL(import.meta.url).pathname, '--mission', id, ...process.argv.slice(2)], { stdio: 'inherit' });
+    if (run.status !== 0) failed++;
+  }
+  console.log(failed ? `FAIL validate-stage6-chain: ${failed} mission(s) failed` : 'PASS validate-stage6-chain: every mission');
+  process.exit(failed ? 1 : 0);
+}
 try { gameDirectory(); } catch { console.log(`SKIP validate-stage6-chain ${mission}: no installed game data`); process.exit(0); }
 const dir = captureDirectory(mission);
 if (process.argv.includes('--capture')) {

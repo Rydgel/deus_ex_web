@@ -34,7 +34,7 @@ export function typeLine(c, line) {
   game.windowKey('KeyT', false);
   const commands = game.doors.scriptRuntime.windowHost?.consoleCommands;
   if (!commands) throw new Error('no console command chain');
-  if (/^(ghost|summon|set DeusEx|ActivateBelt|ParseRightClick)/i.test(line)) c.runtime.writeNamed(c.player(), 'bCheatsEnabled', true);
+  if (/^(ghost|god|summon|set DeusEx|ActivateBelt|ParseRightClick)/i.test(line)) c.runtime.writeNamed(c.player(), 'bCheatsEnabled', true);
   return game.hud.scoped(() => commands.consoleCommand(c.player(), line));
 }
 

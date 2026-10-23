@@ -22,6 +22,11 @@ export default {
     { op: 'wait', flag: 'StatueMissionComplete', timeout: 60 },
     { op: 'wait', flag: 'MS_MissionComplete', timeout: 60 },
     { op: 'wait', flag: 'DL_LeaderNotKilled_Played', timeout: 240 },
+    // what Mission01.Timer's mission-complete pass opens: UN_maindoor (the HQ's door, unlocked and triggered) and the Statue ruins' doors (unlocked)
+    { op: 'wait', seconds: 5 },
+    { op: 'state', label: 'un-maindoor-16', actor: 'DeusExMover16', fields: ['bLocked', 'KeyNum'] },
+    { op: 'state', label: 'un-maindoor-17', actor: 'DeusExMover17', fields: ['bLocked', 'KeyNum'] },
+    ...['DeusExMover12', 'DeusExMover6', 'DeusExMover22', 'DeusExMover23', 'DeusExMover10'].map(actor => ({ op: 'state', label: `ruins-${actor}`, actor, fields: ['bLocked'] })),
     { op: 'snap', label: 'b3-commander' },
 
     // Island to HQ: Teleporter3 (-3375,704,-536; radius 80, height 40), the same mission, so the level is filed in Save\Current
