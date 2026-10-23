@@ -746,7 +746,7 @@ export async function createScriptDoors({
       const soundIndex = runtime.soundObjectIndex(call.receiver);
       if (soundIndex !== null) {
         const result = execActorPlaySound(call, runtime.playSoundServices(call));
-        if (soundIndex.source === 'modeled') runtime.audio.noteModeledId(call.receiver);
+        if (soundIndex.source !== 'measured') runtime.audio.noteModeledId(call.receiver, soundIndex.source);
         return result.resultWritten ? result.result : undefined;
       }
       if (decoration) { decorationEffect(call, path.endsWith('.bump') ? 'PushSound' : 'LandedSound'); return 0; }

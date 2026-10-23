@@ -198,6 +198,7 @@ export async function runChainInPlay(chain, { assets = null, log = () => {}, unt
       await arrive(pending, step.label ?? `to-${step.to}`);
       frames(step.settle ?? 120, false);
     },
+    async gobjects(step) { note(`gobjects ${step.label} (the original's capture only)`); },
     async report(step) {
       result.reports ??= {};
       result.reports[step.label] = { map, location: c.pos(c.player()).map(v => Math.round(v * 10) / 10) };

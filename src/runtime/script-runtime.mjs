@@ -2383,15 +2383,21 @@ export class ScriptRuntime {
    * from: `{index, source: 'measured'}` (the live capture: pre-placed actors,
    * the player), `{index, source: 'modeled'}` (the slot AddObject gives a
    * runtime spawn, continued from a measured registry state;
-   * docs/object-index-captures.md "Runtime spawns"), or null when the original
-   * index is not known: the sound then stays the recorded boundary. */
+   * docs/object-index-captures.md "Runtime spawns"), `{index, source: 'restored'}`
+   * (the model of an object of a restored or loaded level, 0x100000 + export
+   * index: unverified), or null when the original index is not known: the sound
+   * then stays the recorded boundary. */
   soundObjectIndex(receiver) {
     const measured=this.measuredObjectIndex(receiver);
     if(measured!==null)return {index:measured,source:'measured'};
     let instance;
     try{instance=this.instance(receiver);}catch{return null;}
     const modeled=instance.nativeObject?.originalIndex;
-    return Number.isInteger(modeled)?{index:modeled,source:'modeled'}:null;
+    if(Number.isInteger(modeled))return {index:modeled,source:'modeled'};
+    // An object of a restored or loaded level has no measured slot: its registry index is modeled as 0x100000 + its export index
+    // (script-doors.mjs, docs/travel.md "Unresolved" 10: labelled and unverified, the one model of a restored level).
+    const restored=instance.nativeObject?.hashIndex;
+    return Number.isInteger(restored)?{index:restored,source:'restored'}:null;
   }
   /** soundServices for execPlaySound: ObjectIndex is the measured or modeled
    * original index, never the host registry slot. */

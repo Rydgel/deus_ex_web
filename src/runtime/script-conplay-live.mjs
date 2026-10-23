@@ -324,7 +324,7 @@ export async function createLiveConPlayRuntime({runtime,assets,level,player,shel
       ?runtime.soundObjectIndex(call.receiver):null;
     if(soundIndex){
       const services=runtime.playSoundServices(call);
-      if(soundIndex.source==='modeled')runtime.audio?.noteModeledId(call.receiver);
+      if(soundIndex.source!=='measured')runtime.audio?.noteModeledId(call.receiver,soundIndex.source);
       const result=execActorPlaySound(call,{...services,processNativeEvent:(receiver,name,args)=>{
         if(name==='ClientHearSound'&&receiver===player){
           const [emitter,id,sound,location,parameters]=args;

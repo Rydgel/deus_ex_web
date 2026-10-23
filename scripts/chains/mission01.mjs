@@ -7,6 +7,7 @@ export default {
     { op: 'start', kind: 'new-game', difficulty: 1 },
     { op: 'wait', seconds: 3 },
     { op: 'snap', label: 'b1-island' },
+    { op: 'gobjects', label: 'b1' },
 
     // DL_StartGame fires PaulRunningToPlayer when the player has walked a little; MeetPaul starts when Paul reaches him (radius 180, third person)
     { op: 'walk', seconds: 1.5 },
@@ -49,6 +50,7 @@ export default {
     { op: 'travel', to: '01_NYC_UNATCOIsland', label: 'leg2' },
     { op: 'wait', seconds: 5 },
     { op: 'snap', label: 'b8-island-again' },
+    { op: 'gobjects', label: 'b8' },
 
     // the police boat: GotoM02 (first person, needs M02Briefing_Played) starts when the player frobs the boat from the dock's edge (the boat's blocking cylinder, radius 314,
     // keeps the player 20 units outside it, so the radius of 240 is out of reach); its Trigger event fires MapExit0 (tag Dock_boat), which plays the camera path
