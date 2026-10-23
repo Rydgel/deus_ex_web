@@ -16,7 +16,8 @@ import {createServer} from 'vite';
 import { debugUrl } from './page-url.mjs';
 
 const server = await createServer({configFile: false, publicDir: false, logLevel: 'error',
-  server: {host: '127.0.0.1', port: 0, strictPort: false}});
+  // its own dependency cache: its config differs from vite.config.mjs's, so .vite-cache/deps would be rebuilt (vite.config.mjs)
+  cacheDir: '.vite-cache/standalone', server: {host: '127.0.0.1', port: 0, strictPort: false}});
 let browser;
 try {
   await server.listen();

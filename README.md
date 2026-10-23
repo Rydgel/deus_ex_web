@@ -281,6 +281,12 @@ crates under `native/` to WebAssembly (`npm run build:wasm`): `script-vm` (the
 simulation core and render kernels), `lodmesh-kernel` (mesh posing) and
 `galaxy-kernel` (music). Rebuild after changing Rust code.
 
+Each Vite server keeps its pre-bundled dependencies (three.js) in `.vite-cache/` under the
+root it serves (`cacheDir` in `vite.config.mjs`; ignored), not in `node_modules/.vite`.
+Worktrees often symlink `node_modules` to the main checkout's; with one shared cache, a
+server started from another checkout deleted and rebuilt it (Vite's cache key includes the
+root), and a page loading meanwhile got `504 (Outdated Optimize Dep)` for three.js.
+
 On the debugging page (`?debug=1`): in **Play**, the installed key bindings apply: WASD moves, Space jumps, X
 crouches, Shift walks, left click fires, right click uses, number keys select
 belt items and Escape opens the main menu. Double-click locks the mouse. In
