@@ -12,9 +12,10 @@
  *   A  the Hong Kong lifts: Helibase -> Market#cargoup -> Helibase#HeliBase (restored) -> an empty SendPlayer -> Market (restored)
  *   B  Mission02.PreTravel (MS_MapLeftEarly), a portal no Teleporter names (02_NYC_Street#ToStreet), Mission08.PreTravel (the EntranceCopter)
  *   D  the same PreTravels on levels that have run (MS_MapLeftEarly set, the EntranceCopter destroyed in the filed level)
+ *   E  a start spot far above the water: the original's player falls to the surface and swims (Physics 3), Play's too
  *   C  the `.dx` and `.dx #Portal` URL forms of mission 14 (filed and restored), and a mission change to 15_area51_bunker.dx #bunker_start
  *
- *   node scripts/validate-travel-transitions.mjs [--only A|B|C|D] */
+ *   node scripts/validate-travel-transitions.mjs [--only A|B|C|D|E] */
 import { readdir, readFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import './census-stage5-drivers.mjs';
@@ -53,6 +54,10 @@ const SCENARIOS = {
     { cmd: 'LocalTravel 08_NYC_Street', snap: 'd3-street8', run: 360, loose: true, helicopters: 2, ...props('d3-player') },
     { cmd: 'LocalTravel 08_NYC_Bar#ToBarFrontEntrance', snap: 'd4-bar8', loose: true },
     { cmd: 'LocalTravel 08_NYC_Street#FromBarFrontEntrance', snap: 'd5-street8-restored', loose: true, helicopters: 1, ...props('d5-player') }] },
+  // E: a start spot 1600 units above the water: the original's player falls and swims at the surface (Physics 3), as Play's does
+  E: { tag: 'tr-e', title: 'a Teleporter start spot far above the water (Garage -> Storage#BackDoor)', noLog: true, legs: [
+    { cmd: 'LocalTravel 06_HongKong_WanChai_Garage', snap: 'e4-storage', run: 240, loose: true, noCurrent: true },
+    { cmd: 'LocalTravel 06_HongKong_Storage#BackDoor', snap: 'e4-storage', run: 600, loose: true, swim: true, ...props('e4-player') }] },
   C: { tag: 'tr-c', title: 'the .dx URL forms of mission 14 and the mission change to Area 51', legs: [
     { cmd: 'LocalTravel 14_OceanLab_Lab', snap: 'c1-lab', ...props('c1-player') },
     { cmd: 'LocalTravel 14_OceanLab_UC.dx #UC', snap: 'c2-uc', ...props('c2-player') },
@@ -108,7 +113,9 @@ function originalPlayer(text) {
   const line = text.split(/\r?\n/).find(row => /^JCDentonMale JCDentonMale\d+ /.test(row));
   if (!line) return null;
   const triple = name => new RegExp(`${name}=\\(([^)]*)\\)`).exec(line)[1].split(',').map(Number);
-  return { location: triple('Location').map(Math.fround), rotation: triple('Rotation'), viewRotation: triple('ViewRotation'), health: parseInt(/Health=0x([0-9a-f]+)/.exec(line)[1], 16) };
+  const physics = /Physics=(\d+)/.exec(line);
+  const viewRotation = /ViewRotation=/.test(line) ? triple('ViewRotation') : null;
+  return { location: triple('Location').map(Math.fround), rotation: triple('Rotation'), ...(viewRotation ? { viewRotation } : {}), ...(physics ? { physics: Number(physics[1]) } : {}), health: parseInt(/Health=0x([0-9a-f]+)/.exec(line)[1], 16) };
 }
 /** `f Current/<name>` rows of the save listing. */
 const currentNames = text => text.split(/\r?\n/).map(line => /^f Current\/([^\t]+)\t/.exec(line)?.[1]).filter(Boolean).sort();
@@ -129,7 +136,7 @@ async function scenario(id) {
   const logs = [logo.game.doors.scriptRuntime.engineLog];   // each session's engine log (the arrays keep growing), in order
   let legIndex = 0;
   for (const leg of spec.legs) {
-    const label = `${id}${leg.snap.slice(1, 2)}`;
+    const label = `${id}${spec.legs.indexOf(leg) + 1}`;
     const readCap = async ext => (await readFile(`${cap}${leg.snap}.${ext}`, 'utf8'));
     typed(session, leg.cmd); session.frames(leg.none ? 360 : 2);
     const request = session.takeTravel();
@@ -165,12 +172,14 @@ async function scenario(id) {
     let playerNote = '';
     if (leg.props) {
       const want = originalPlayer(await readCap('props.txt').catch(() => readFile(`${cap}${leg.props}.props.txt`, 'utf8')));
-      const got = { location: next.pos(p).map(Math.fround), rotation: next.read(p, 'Rotation'), viewRotation: next.read(p, 'ViewRotation'), health: next.read(p, 'Health') };
+      const got = { location: next.pos(p).map(Math.fround), rotation: next.read(p, 'Rotation'), viewRotation: next.read(p, 'ViewRotation'), physics: next.read(p, 'Physics'), health: next.read(p, 'Health') };
       if (check(want, `${label}: the capture has no player row`))
         for (const key of Object.keys(want)) {
           // a fresh arrival drops from the start spot to the floor and rests at a height that depends on the frame times of the fall (Play 1/60 s, the original's own):
           // the height is compared within 0.25, the rest exactly
           if (leg.run && (key === 'rotation' || key === 'viewRotation')) continue;   // a level that ran for an unmeasured time turned the player (docs/travel-transitions.md, open)
+          if (key === 'rotation' && leg.swim) continue;                 // the swimmer's yaw follows nothing the capture holds
+          if (key === 'location' && leg.swim) { check(got.location.every((v, i) => Math.abs(v - want.location[i]) < (i === 2 ? 8 : 1e-3)), `${label}: the swimmer at ${got.location} (the original: ${want.location}; the surface bobs by a few units)`); continue; }
           const same = key === 'location' && !request.restore ? got.location.every((v, i) => Math.abs(v - want.location[i]) < (i === 2 ? 0.25 : 1e-3)) : JSON.stringify(got[key]) === JSON.stringify(want[key]);
           check(same, `${label}: player ${key} ${JSON.stringify(got[key])} (the original: ${JSON.stringify(want[key])})`);
         }
@@ -179,7 +188,7 @@ async function scenario(id) {
     // 4. Save\Current
     const names = directory.files('Current').map(file => file.name).sort();
     const wantNames = currentNames(await readCap('save.txt'));
-    check(JSON.stringify(names) === JSON.stringify(wantNames), `${label}: Current holds ${names} (the original: ${wantNames})`);
+    check(leg.noCurrent || JSON.stringify(names) === JSON.stringify(wantNames), `${label}: Current holds ${names} (the original: ${wantNames})`);
     logs.push(next.game.doors.scriptRuntime.engineLog);
     console.log(`${label}: ${leg.cmd.trim()} -> ${request.map}${request.portal ? `#${request.portal}` : ''}${request.restore ? ' (restored)' : ''}; ${parseTravelText(text).length} records${leg.loose ? '' : difference ? ' (DIFFER)' : ' equal'}, ${flags.length} flags${leg.loose ? '' : JSON.stringify(flags) === JSON.stringify(wantFlags) ? ' equal' : ' (DIFFER)'}${playerNote}; Current ${names.join(', ')}`);
     session = next;

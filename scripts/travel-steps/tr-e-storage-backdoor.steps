@@ -1,0 +1,17 @@
+# A Teleporter whose start spot lies far above the floor: 06_HongKong_WanChai_Garage Teleporter0 -> 06_HongKong_Storage#BackDoor (the BackDoor teleporter is at z 2346; the census
+# arrival is swimming at z 757 after five seconds). Where the original's player comes to rest, and in which physics.
+# Run: scripts/travel-probe.sh tr-e @scripts/travel-steps/tr-e-storage-backdoor.steps
+cmd:set DeusEx.JCDentonMale bCheatsEnabled True
+cmd:LocalTravel 06_HongKong_WanChai_Garage
+arrive:06_hongkong_wanchai_garage$
+wait:3
+cmd:LocalTravel 06_HongKong_Storage#BackDoor
+arrive:06_hongkong_storage$
+wait:2
+props:JCDentonMale:e1-player:Location:0x114:f3,Rotation:0x120:i3,Physics:0x30:u8,Health:0x428:u32
+wait:2
+props:JCDentonMale:e2-player:Location:0x114:f3,Rotation:0x120:i3,Physics:0x30:u8,Health:0x428:u32
+wait:4
+props:JCDentonMale:e3-player:Location:0x114:f3,Rotation:0x120:i3,Physics:0x30:u8,Health:0x428:u32
+snap:e4-storage
+props:JCDentonMale:e4-player:Location:0x114:f3,Rotation:0x120:i3,Physics:0x30:u8,Health:0x428:u32
