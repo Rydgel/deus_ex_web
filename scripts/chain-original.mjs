@@ -210,6 +210,7 @@ export async function runChainInOriginal(chain, { log = console.log, until = nul
       writeFileSync(`${outDir}${s.label}.gobjects.txt`, readFileSync(from));
       note(`gobjects ${s.label}`);
     },
+    async watch(s) { note(`watch ${s.actors.join(' ')} (Play's stand-in for the original's rendering)`); },
     async report(s) {
       const here = locationOf();
       result.reports ??= {};

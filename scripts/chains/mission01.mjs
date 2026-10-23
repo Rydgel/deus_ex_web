@@ -12,7 +12,7 @@ export default {
     // DL_StartGame fires PaulRunningToPlayer when the player has walked a little; MeetPaul starts when Paul reaches him (radius 180, third person)
     { op: 'walk', seconds: 1.5 },
     { op: 'conv', name: 'MeetPaul', choose: [{ index: 0, label: 'GiveRifle' }], watch: ['PaulDenton0'], timeout: 240 },
-    { op: 'wait', seconds: 3 },
+    { op: 'wait', seconds: 15 },
     { op: 'snap', label: 'b2-meetpaul' },
 
     // the Statue's top: the commander's radius conversation (140); the questioning branch leaves him alive and sets StatueMissionComplete; Mission01.Timer's
@@ -34,15 +34,15 @@ export default {
     // Carter conversation is done), M02Briefing (JosephManderley0, sight and radius 240, needs M01ReadyForBriefing)
     { op: 'place', at: [949, -932, -15], view: [-5406, 32766], harness: true, note: '70 units east of SamCarter0 (879,-932,-16), facing him' },
     { op: 'conv', name: 'MeetCarter', choose: [{ index: 0, label: 'Picks' }], watch: ['SamCarter0'], timeout: 240 },
-    { op: 'wait', seconds: 3 },
+    { op: 'wait', seconds: 15 },
     { op: 'snap', label: 'b5-carter' },
     { op: 'place', at: [1136, 1056, -15], view: [-6234, 32786], harness: true, note: '70 units east of JaimeReyes0 at his seat (1066,1056,-24)' },
     { op: 'conv', name: 'MeetJaime', watch: ['JaimeReyes0'], timeout: 240 },
-    { op: 'wait', seconds: 3 },
+    { op: 'wait', seconds: 15 },
     { op: 'snap', label: 'b6-jaime' },
     { op: 'place', at: [369, -170, 289], view: [-6389, 32830], harness: true, note: '70 units east of JosephManderley0 at his place (299,-170,288)' },
     { op: 'conv', name: 'M02Briefing', watch: ['JosephManderley0'], timeout: 240 },
-    { op: 'wait', seconds: 3 },
+    { op: 'wait', seconds: 15 },
     { op: 'snap', label: 'b7-briefed' },
 
     // HQ to the Island again: Teleporter2 (-2344,1791,582) to tunnel_drop_nyc; the Island is restored from Save\Current
@@ -59,7 +59,11 @@ export default {
     { op: 'frob', target: 'NYPoliceBoat0' },
     { op: 'conv', name: 'GotoM02', timeout: 60 },
     { op: 'travel', to: '02_NYC_BatteryPark', label: 'exit', timeout: 240 },
-    { op: 'wait', seconds: 3 },
+    { op: 'watch', actors: ['AnnaNavarre0'] },
+    // AnnaDock (Anna's radius conversation, which she walks to the player for) and her run to the castle: set by the map's own events, in either program's time
+    { op: 'wait', flag: 'AnnaDock_Played', timeout: 240 },
+    { op: 'wait', flag: 'AnnaReachedCastle', timeout: 240 },
+    { op: 'wait', seconds: 15 },
     { op: 'snap', label: 'b9-batterypark' },
   ],
 };

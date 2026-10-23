@@ -20,6 +20,7 @@
  *   conv     { name, choose: [{ label, index }] }           a conversation started by the owner or its trigger, played with Enter, the listed choices picked by their order
  *   travel   { to, via }                                    the map change a step caused (the arrival is awaited and the leg's travel text recorded)
  *   snap     { label }                                      the flags (and the map) at this point
+ *   watch    { actors }                                     Play only: the named actors count as rendered for the rest of the map (a headless frame draws no mesh)
  *   report   { label }                                      the player's place, kept for a reading of the run (not compared)
  */
 import { readFile } from 'node:fs/promises';

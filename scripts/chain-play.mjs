@@ -199,6 +199,9 @@ export async function runChainInPlay(chain, { assets = null, log = () => {}, unt
       frames(step.settle ?? 120, false);
     },
     async gobjects(step) { note(`gobjects ${step.label} (the original's capture only)`); },
+    /** A headless frame draws no actor mesh, so a pawn is never 'rendered' and its radius conversation or low-priority tick never runs: the named actors are stamped as the renderer
+     * stamps an actor in view (the Stage 5 census's feedback), for the rest of the map. The original's frames render them (a harness stand-in for the page's drawing). */
+    async watch(step) { stamp(step.actors); note(`watch ${step.actors.join(' ')}`); },
     async report(step) {
       result.reports ??= {};
       result.reports[step.label] = { map, location: c.pos(c.player()).map(v => Math.round(v * 10) / 10) };

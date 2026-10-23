@@ -29,6 +29,8 @@ const chain = await loadChain(mission);
 const play = await runChainInPlay(chain, { log: line => { if (process.argv.includes('--verbose')) console.log(`  play: ${line}`); } });
 if (option('json', null)) await writeFile(option('json'), JSON.stringify({ ...play, session: undefined }, null, 1));
 
+/** A map's name as the comparison reads it: the filed level's URL (..\\Save\\Current\\<map>.dxs) and the .dx extension are the same map. */
+const mapName = name => String(name ?? '').replace(/^.*[\\/]/, '').replace(/\.dxs?$/i, '').toLowerCase();
 const failures = [];
 const check = (ok, message) => { if (!ok) failures.push(message); return ok; };
 console.log(`chain ${mission}: ${chain.steps.length} steps; Play ${play.legs.length} legs, ${Object.keys(play.snaps).length} snapshots; the original ${original.legs.length} legs, ${Object.keys(original.snaps).length} snapshots`);
@@ -37,7 +39,7 @@ console.log(`chain ${mission}: ${chain.steps.length} steps; Play ${play.legs.len
 for (const [label, want] of Object.entries(original.snaps)) {
   const got = play.snaps[label];
   if (!check(got, `snapshot ${label}: Play has none`)) continue;
-  check(got.map?.toLowerCase().replace(/\.dx$/, '') === want.map?.toLowerCase().replace(/\.dx$/, ''), `snapshot ${label}: Play is in ${got.map}, the original in ${want.map}`);
+  check(mapName(got.map) === mapName(want.map), `snapshot ${label}: Play is in ${got.map}, the original in ${want.map}`);
   const d = flagDifferences(got.flags, want.flags);
   const same = !d.onlyPlay.length && !d.onlyOriginal.length;
   check(same, `snapshot ${label}: flags differ: only Play ${JSON.stringify(d.onlyPlay)}; only the original ${JSON.stringify(d.onlyOriginal)}`);
