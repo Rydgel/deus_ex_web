@@ -20,6 +20,7 @@
  *   conv     { name, choose: [{ label, index }] }           a conversation started by the owner or its trigger, played with Enter, the listed choices picked by their order
  *   travel   { to, via }                                    the map change a step caused (the arrival is awaited and the leg's travel text recorded)
  *   snap     { label }                                      the flags (and the map) at this point
+ *   report   { label }                                      the player's place, kept for a reading of the run (not compared)
  */
 import { readFile } from 'node:fs/promises';
 
@@ -66,8 +67,8 @@ export function flagDifferences(play, original) {
   return { onlyPlay: play.filter(f => !b.has(f)), onlyOriginal: original.filter(f => !a.has(f)) };
 }
 
-export async function loadChain(mission) {
-  const module = await import(new URL(`./chains/mission${mission}.mjs`, import.meta.url).href);
+export async function loadChain(mission, file = null) {
+  const module = await import(file ? new URL(file, `file://${process.cwd()}/`).href : new URL(`./chains/mission${mission}.mjs`, import.meta.url).href);
   return module.default;
 }
 

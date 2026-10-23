@@ -108,6 +108,12 @@ export async function runChainInOriginal(chain, { log = console.log, until = nul
         result.legs.push({ label: 'start', from: first.map, to: arrived.map, text: arrived.text });
         current = arrived;
         note(`start menu-training: in ${arrived.map}`);
+      } else if (s.kind === 'open') {
+        await type(`LocalTravel ${s.map}`, 700);
+        const arrived = await waitArrival(first);
+        result.legs.push({ label: 'start', from: first.map, to: arrived.map, text: arrived.text });
+        current = arrived;
+        note(`start open ${s.map}: in ${arrived.map}`);
       } else throw new Error(`start ${s.kind} (not written yet)`);
     },
     async wait(s) {
@@ -146,6 +152,12 @@ export async function runChainInOriginal(chain, { log = console.log, until = nul
       current = arrived;
       await sleep((s.settle ?? 2) * 1000);
     },
+    async report(s) {
+      const here = locationOf();
+      result.reports ??= {};
+      result.reports[s.label] = { map: current?.map, location: here?.at.map(v => Math.round(v * 10) / 10) ?? null };
+      note(`report ${s.label}: ${current?.map} at ${result.reports[s.label].location}`);
+    },
     async snap(s) {
       const f = flagsNow();
       if (!f) throw new Error('snap: no controlled player');
@@ -176,8 +188,8 @@ export async function runChainInOriginal(chain, { log = console.log, until = nul
 function openLog(path) { return openSync(path, 'a'); }
 
 if (import.meta.url === `file://${process.argv[1]}`) {
-  const chain = await loadChain(option('mission', '00'));
-  const result = await runChainInOriginal(chain, { until: option('until', null) });
+  const chain = await loadChain(option('mission', '00'), option('file', null));
+  const result = await runChainInOriginal(chain, { until: option('until', null), tag: option('tag', undefined), outDir: option('out', undefined) });
   console.log(`done: ${result.legs.length} legs, ${Object.keys(result.snaps).length} snaps`);
   process.exit(0);
 }

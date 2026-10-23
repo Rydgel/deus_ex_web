@@ -113,6 +113,11 @@ export async function runChainInPlay(chain, { assets = null, log = () => {}, unt
         frames(600);
         if (!pending) throw new Error('Escape on the intro made no request');
         await arrive(pending, 'newgame-island');
+      } else if (step.kind === 'open') {
+        // the console's LocalTravel from the logo map (the travel captures' way into a map: a player with no mission state)
+        typeLine(c, `LocalTravel ${step.map}`); frames(3);
+        if (!pending) throw new Error(`LocalTravel ${step.map} made no request`);
+        await arrive(pending, 'start');
       } else throw new Error(`start ${step.kind}`);
       note(`start ${step.kind}: in ${map}`);
     },
@@ -193,6 +198,11 @@ export async function runChainInPlay(chain, { assets = null, log = () => {}, unt
       await arrive(pending, step.label ?? `to-${step.to}`);
       frames(step.settle ?? 120, false);
     },
+    async report(step) {
+      result.reports ??= {};
+      result.reports[step.label] = { map, location: c.pos(c.player()).map(v => Math.round(v * 10) / 10) };
+      note(`report ${step.label}: ${map} at ${result.reports[step.label].location}`);
+    },
     async snap(step) {
       const { flags, defaultExpiration } = flagsOfPlay(c);
       result.snaps[step.label] = { map, flags, defaultExpiration };
@@ -215,7 +225,7 @@ export async function runChainInPlay(chain, { assets = null, log = () => {}, unt
 
 if (import.meta.url === `file://${process.argv[1]}`) {
   const option = (name, fallback) => { const i = process.argv.indexOf(`--${name}`); return i < 0 ? fallback : process.argv[i + 1]; };
-  const chain = await loadChain(option('mission', '00'));
+  const chain = await loadChain(option('mission', '00'), option('file', null));
   const result = await runChainInPlay(chain, { log: line => console.log(line), until: option('until', null) });
   delete result.session;
   if (option('json', null)) await writeFile(option('json'), JSON.stringify(result, null, 1));

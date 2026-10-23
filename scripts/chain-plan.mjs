@@ -4,7 +4,7 @@
  *   node scripts/chain-plan.mjs approach <map> <actor> [--distance D] [--seconds S] [--lift L]    walk into an actor's cylinder (a Teleporter, a MapExit, a trigger):
  *                                                                                                  the bearings from which a held forward key reaches it
  *   node scripts/chain-plan.mjs drop <map> <actor> [--lifts 50,70] [--yaw N]                       placements above the cylinder: the fall enters it (a placement inside raises no Touch)
- *   node scripts/chain-plan.mjs stand <map> <actor> [--distances 60,90] [--lift L]                  places at a distance from the actor with a clear line to it, aimed at it
+ *   node scripts/chain-plan.mjs stand <map> <actor> [--distances 60,90] [--lift L] [--settle F]                  places at a distance from the actor with a clear line to it, aimed at it
  *   node scripts/chain-plan.mjs face <map> <actor> [--distances 60,90] [--lift L] [--freeze] [--all]  the places from which the view trace selects the actor (frob)
  */
 import { fileURLToPath } from 'node:url';
@@ -17,7 +17,7 @@ const option = (name, fallback) => { const i = args.indexOf(`--${name}`); return
 const [mode, map, actorName] = args;
 const assets = await loadAssets();
 const { c, run } = await openSession(map, assets, { travel: {} });
-c.frames(60);
+c.frames(Number(args.includes('--settle') ? args[args.indexOf('--settle') + 1] : (mode === 'stand' ? 900 : 60)));   // a pawn with Sitting or Wandering orders walks to its place first
 const target = c.actor(actorName);
 if (!target) throw new Error(`no actor ${actorName} in ${map}`);
 const at = c.pos(target);
@@ -37,7 +37,7 @@ if (mode === 'approach') {
     let request = null;
     for (let n = 0; n < seconds * 60 && !request; n += 5) { c.frames(5); request = c.takeTravel(); }
     c.game.inputKey('ArrowUp', false);
-    out.push({ k, from, view, landed, walked: c.pos(c.player()).map(Math.round), request: request ? `${request.map}${request.portal ? `#${request.portal}` : ''}` : null });
+    out.push({ k, from, view, landed, walked: c.pos(c.player()).map(Math.round), request: request ? `${request.map}${request.portal ? `#${request.portal}` : ''}` : null, conPlay: c.read(c.player(), 'conPlay')?.name ?? null });
   }
 }
 if (mode === 'drop') {
