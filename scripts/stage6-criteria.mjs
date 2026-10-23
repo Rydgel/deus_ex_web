@@ -38,16 +38,18 @@ add('6.1.4', 'Play Intro and Credits from the menu, to their ends and back to th
   {proof: [v('validate-travel-endings.mjs'), spec('browser-tests/original-start-intro-credits.spec.mjs')]});
 add('6.1.5', 'the settings the menus write are kept across map loads and reloads, as the original writes DeusEx.ini and User.ini', 'O1',
   {proof: [v('validate-config-persistence.mjs'), spec('browser-tests/config-persistence.spec.mjs')]});
-add('6.1.6', 'every MenuMain entry reaches its screen or action (Multiplayer excluded)', 'P',
-  {have: ['scripts/census-ui-menus.mjs (22 screens, only multiplayer stops: docs/native-census.md)'],
-    need: 'a check of each entry\'s screen against the original (the census is Play-only), and Exit: what the original does and what the page does instead (unmeasured)'});
+add('6.1.6', 'every MenuMain entry reaches its screen or action (Multiplayer excluded)', 'O1',
+  {proof: [v('validate-menu-main.mjs')],
+    have: ['scripts/census-ui-menus.mjs (22 screens, only multiplayer stops: docs/native-census.md)', 'docs/host-services.md "Exit" (USystem::Exec EXIT, appRequestExit; the page ends the game)'],
+    weak: 'the window stack after each entry is compared (New Game, Load Game, Settings, Credits and the Exit box on the logo map; Save Game, the Training and Intro boxes, Back to Game and Exit in a running game; the insensitive Save Game and Back to Game on the logo map), not the screens\' controls (docs/settings-menus.md, Play only) nor the entries that leave the menu (rows 6.1.2 to 6.1.4); Exit\'s Yes: the original\'s log and process end against Play\'s appRequestExit line and exit request, and the page ends the game in place of the process (a page cannot close itself: the user\'s choice to confirm); the capture is the Mac bottle\'s (.work/travel/mm1)'});
 
 // 6.2 Persistence ----------------------------------------------------------------------------------------------------------------------
 add('6.2.1', 'a return visit within a mission restores the level as it was left (destroyed actors, items, movers, the level time; no begin-play pass)', 'O1',
   {proof: [v('validate-travel-restore.mjs'), v('validate-travel-restore-play.mjs'), v('validate-travel-restore-play.mjs', '--island')]});
 add('6.2.2', 'a game saved in Play and loaded in Play is the saved game: flags, inventory, player, augmentations and skills, notes, goals, history, the actor census', 'O1',
-  {have: ['validate-save-game.mjs (the slot\'s files and SaveInfo against the original\'s; the original loads Play\'s slots)', 'validate-load-game.mjs (Play loads the original\'s slots)'],
-    need: 'a validator that saves in Play at a played state and loads the slot in Play, comparing the loaded state with the saved one, and with the original\'s state after loading the same slot'});
+  {proof: [v('validate-save-load-play.mjs'), v('validate-load-game.mjs', '--only', 'P')],
+    have: ['validate-save-game.mjs (the slot\'s files and SaveInfo against the original\'s; the original loads Play\'s slots)', 'validate-load-game.mjs (Play loads the original\'s slots)'],
+    weak: 'one played state: mission 1\'s chain to the commander (MeetPaul and MeetTerrorist with their history, goals and notes, the rifle) and the cheat lines\' augmentations, skills, images and key; a slot of one level (the Island, the campaign\'s first map: no other level filed in Current); the level frozen while it saves and loads, as the captures freeze it; the capture is the Mac bottle\'s (.work/travel/sl1)'});
 add('6.2.3', 'real desktop saves load in Play with the state the original loads from them', 'O1',
   {proof: [v('validate-load-game.mjs'), v('validate-load-saves.mjs')], weak: 'the state comparison against the original covers 6 slots; the other 35 are checked for loading and running only'});
 add('6.2.4', 'a slot Play writes loads in the original with the saved player, items and flags', 'O1', {proof: [v('validate-save-game.mjs'), v('validate-save-info-corpus.mjs')]});
@@ -89,10 +91,17 @@ for (const m of MISSIONS) {
 }
 
 // 6.5 The endings -----------------------------------------------------------------------------------------------------------------------
+// What each ending's last trigger waits for (the maps' own actors, read 2026-10-23): every one needs state made in 15_Area51_Page, so a row needs a mission 15
+// slot that holds it (N0038, N0040, N0042 of .work/internet-saves) or mission 15's placed chain across Final and Page (row 6.4.15.1's harness)
+const ENDING_CHAINS = {
+  1: 'Final\'s Switch4 (event destroy_generator -> Dispatcher7 -> map_exit_generator) sits behind the Generator_panel mover, which FlagTrigger5 opens on ReactorReady (set by DL_tong7, which needs CoolantCut, set by Page\'s FlagTrigger0 `coolant`, and ReactorSwitch1/2, set by the reactor switches through LogicTrigger1/2 once coolant_cut), and Generator_overload, which FlagTrigger9 opens on ReactorButton3',
+  2: 'Final\'s FlagTrigger3 (touched, HeliosFree) fires Merge_helios_exit; HeliosFree is set by Page\'s FlagTrigger1 `Set_flag_helios` after the two uplink locks (UplinkLock1/2, Page\'s FlagTrigger2/3)',
+  3: 'Page\'s Switch4 (event kill_page -> Dispatcher1, start_endgame its sixth event) sits behind the Page_button mover, which DL_Blue4 opens after the four nodes (Node1..4_Frobbed, Mission15.Timer\'s DL_Blue1..4); no data sets the flag killpage that Mission15.Timer also reads',
+};
 for (const [n, how] of [[1, 'the reactor switches (Tong\'s ending)'], [2, 'Helios\' hub'], [3, 'Page\'s bunker (killpage)']])
   add(`6.5.${n}`, `ending ${n} from its in-world trigger, ${how}: the endgame, the credits and the menu, equal to the original`, 'O1',
     {have: [`validate-travel-endings.mjs E${n} (from a LocalTravel into 99_Endgame${n}, O1) and M1-M3 (the triggers in Play only)`, spec('browser-tests/ending.spec.mjs').name],
-      need: 'the original driven through the same trigger (Final\'s MapExit0 sits in solid space: the trigger, not the exit actor, is the way)'});
+      need: `the original driven through the same trigger (Final's MapExit0 sits in solid space: the trigger, not the exit actor, is the way): ${ENDING_CHAINS[n]}`});
 
 // 6.6 The campaign in one run -----------------------------------------------------------------------------------------------------------
 add('6.6.1', 'one run in Play from New Game to an ending, each mission entered from the previous mission\'s exit (no save loaded), every required step placed; the travel text at each mission change equals the original\'s for the same run', 'O1',
