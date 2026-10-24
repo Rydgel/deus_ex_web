@@ -26,7 +26,7 @@ export default {
     { op: 'wait', seconds: 3 },
     { op: 'snap', label: 'd2-hq' },
     { op: 'watch', actors: ['JosephManderley0'] },
-    { op: 'place', at: [369, -165, 289], view: [-7114, 32747], harness: true, note: '60 units east of JosephManderley0 at his place, facing him' },
+    { op: 'place', at: [369, -165, 289], view: [-7114, 32747], harness: true, turnFirst: true, note: '60 units east of JosephManderley0 at his place, facing him' },
     { op: 'conv', name: 'ManderleyDebriefing02', watch: ['JosephManderley0'], timeout: 300 },
     { op: 'wait', seconds: 15 },
     { op: 'snap', label: 'd3-debriefed' },
@@ -39,7 +39,7 @@ export default {
     // Jock's helicopter on the island: JockBarks (overheard, radius 300) starts from the helicopter's own Tick (DeusExDecoration.Tick: StartConversation(Self,
     // IM_Radius)) once the player stands inside the radius; the helicopter is watched from the conversation step on (a watch before the placement starts it during
     // the placement, and a frob within a second of its end starts nothing: GetActiveConversation's LastConEndTime gate)
-    { op: 'place', at: [-5997, 2510, -79], view: [944, 32799], harness: true, note: '60 units east of BlackHelicopter0 (-6057,2510,-35; BindName Jock), aimed at it' },
+    { op: 'place', at: [-5997, 2510, -79], view: [944, 32799], harness: true, turnFirst: true, note: '60 units east of BlackHelicopter0 (-6057,2510,-35; BindName Jock), aimed at it' },
     { op: 'conv', name: 'JockBarks', watch: ['BlackHelicopter0'], timeout: 120 },
     { op: 'travel', to: '03_NYC_BatteryPark', label: 'leg3', timeout: 240 },
     ...cheats,
@@ -75,7 +75,7 @@ export default {
     { op: 'snap', label: 'd8-airfield' },
 
     // the hangar and the 747: Teleporter2 (in a doorway: walked into), the hangar's Teleporter10 to the 747's cargo hold, MeetLebedev, Anna's entrance
-    { op: 'place', at: [3391, 2553, 334], view: [0, 49152], harness: true, note: '200 units north of Teleporter2 (3391,2353,294, radius 64), facing it: the walk enters it' },
+    { op: 'place', at: [3391, 2553, 334], view: [0, 49152], harness: true, turnFirst: true, note: '200 units north of Teleporter2 (3391,2353,294, radius 64), facing it: the walk enters it' },
     { op: 'walk', seconds: 2 },
     { op: 'travel', to: '03_NYC_Hangar', label: 'leg8' },
     ...cheats,
@@ -85,7 +85,7 @@ export default {
     ...cheats,
     { op: 'wait', seconds: 3 },
     { op: 'snap', label: 'd9-747' },
-    { op: 'place', at: [-249, -725, 355], view: [-6146, 32803], harness: true, note: '60 units east of JuanLebedev0 (-309,-725,354), facing him' },
+    { op: 'place', at: [-249, -725, 355], view: [-6146, 32803], harness: true, turnFirst: true, note: '60 units east of JuanLebedev0 (-309,-725,354), facing him' },
     { op: 'conv', name: 'MeetLebedev', watch: ['JuanLebedev0'], timeout: 300 },
     { op: 'wait', seconds: 15 },
     { op: 'snap', label: 'd10-lebedev' },
@@ -94,12 +94,12 @@ export default {
     { op: 'snap', label: 'd11-anna' },
 
     // back to the airfield: the 747's Teleporter13 and the hangar's Teleporter2 (doorways: walked into)
-    { op: 'place', at: [1521, -52, 386], view: [0, 49152], harness: true, note: '200 units north of Teleporter13 (1521,-252,346, radius 50), facing it: the walk enters it' },
+    { op: 'place', at: [1521, -52, 386], view: [0, 49152], harness: true, turnFirst: true, note: '200 units north of Teleporter13 (1521,-252,346, radius 50), facing it: the walk enters it' },
     { op: 'walk', seconds: 2 },
     { op: 'travel', to: '03_NYC_Hangar', label: 'leg10' },
     ...cheats,
     { op: 'wait', seconds: 3 },
-    { op: 'place', at: [3217, 1201, 278], view: [0, 16384], harness: true, note: '200 units south of Teleporter2 (3217,1401,238, radius 64), facing it: the walk enters it' },
+    { op: 'place', at: [3217, 1201, 278], view: [0, 16384], harness: true, turnFirst: true, note: '200 units south of Teleporter2 (3217,1401,238, radius 64), facing it: the walk enters it' },
     { op: 'walk', seconds: 2 },
     { op: 'travel', to: '03_NYC_Airfield', label: 'leg11' },
     ...cheats,
@@ -109,7 +109,7 @@ export default {
 
     // the exit: M03JockLeave (Jock, the airfield's BlackHelicopter0, radius 240), its Ready branch fires HelicopterPickUp: the helicopter moves, Dispatcher0
     // fires MoveHelicopter, MapExit0 and its camera path to 04_NYC_UNATCOIsland
-    { op: 'place', at: [3455, -2690, 200], view: [0, 32768], harness: true, note: '120 units east of BlackHelicopter0 (3335,-2690,155 once in the world), facing it; the player lands' },
+    { op: 'place', at: [3455, -2690, 200], view: [0, 32768], harness: true, turnFirst: true, note: '120 units east of BlackHelicopter0 (3335,-2690,155 once in the world), facing it; the player lands' },
     { op: 'conv', name: 'M03JockLeave', choose: [{ index: 0, label: 'Ready' }], watch: ['BlackHelicopter0'], timeout: 180 },
     { op: 'travel', to: '04_NYC_UNATCOIsland', label: 'exit', timeout: 240 },
     ...cheats,

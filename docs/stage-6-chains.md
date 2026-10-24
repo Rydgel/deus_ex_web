@@ -79,9 +79,16 @@ capture is not there SKIPs. A console line typed while a menu is open is the men
 
 ### Rules a chain follows (learned on missions 2 to 8, 2026-10-24)
 
-* God mode is set as a value, `set DeusEx.JCDentonMale ReducedDamageType All`, not with the `God` toggle: after an arrival in a restored level Play's player still
-  has the God mode of the previous visit (the original's drops it, ending 1's capture), and the toggle switched it off (mission 8's player died). That Play
-  difference is a defect under repair (the restored level's saved player: see "What the chains found").
+* God mode is set as a value, `set DeusEx.JCDentonMale ReducedDamageType All`, not with the `God` toggle: an arrival in a restored level re-possesses the pawn
+  filed there (`DeusExGameInfo.Login`; the original's log: "Possessed PlayerPawn: JCDentonMale 15_Area51_final.JCDentonMale2"), with the `ReducedDamageType` it
+  was filed with (it is not a travel property and ResetPlayerToDefaults leaves it), so a level left in God mode is re-entered in God mode, and the toggle
+  switched it off (mission 8's player died). Ending 1's original lost God mode because its Final had been filed by the slot's player, without it.
+  (`validate-travel-restore-objects.mjs` checks both: dropped on a cold arrival, kept as filed on a restored one; one Wine capture of a level filed with God
+  and re-entered would settle it beyond the source and the re-possession log.)
+* **Placements before a conversation turn first** (`place` with `turnFirst: true`: ghost, the view, the location, walk last): while ghosted no conversation
+  starts (CanStartConversation refuses CheatFlying), so a conversation the placement brings in range starts after the last typed line. With the view set last,
+  an owner already in view started its radius conversation mid-placement and the remaining keys were the conversation's: mission 2's first capture had
+  JockExit begin and end inside the placement's lines in the original (no travel), while Play's frames happened to pick Go.
 * A radius conversation's owner is watched from the `conv` step (its own `watch`), after the placement: a watch before the placement starts the conversation
   during it, the step then waits for something already over, and a frob within a second of a conversation's end starts nothing (GetActiveConversation's
   `LastConEndTime` gate). Mission 3's JockBarks.

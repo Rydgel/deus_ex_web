@@ -15,7 +15,7 @@ export default {
     { op: 'line', text: 'set DeusEx.JCDentonMale ReducedDamageType All', harness: true },
 
     // the subway: the panel opens the three TrainDoors (their event HostageActivation), the fall into Teleporter1 in the train goes to the Street
-    { op: 'place', at: [-5358, 2989, -322], view: [-4090, 32733], harness: true, note: '40 units east of SubwayControlPanel4 (-5398,2989,-299), aimed at it' },
+    { op: 'place', at: [-5358, 2989, -322], view: [-4090, 32733], harness: true, turnFirst: true, note: '40 units east of SubwayControlPanel4 (-5398,2989,-299), aimed at it' },
     { op: 'frob', target: 'SubwayControlPanel4', watch: ['SubwayControlPanel4'] },
     { op: 'wait', seconds: 5 },
     { op: 'state', label: 'train-door', actor: 'DeusExMover26', fields: ['KeyNum', 'bLocked'] },
@@ -27,7 +27,7 @@ export default {
     { op: 'wait', seconds: 3 },
     { op: 'snap', label: 'c2-street' },
 
-    { op: 'place', at: [439, 4533, -749], view: [-10926, 49109], harness: true, note: '40 units north of Button3 (439,4493,-778; event ToWarehouse), aimed at it' },
+    { op: 'place', at: [439, 4533, -749], view: [-10926, 49109], harness: true, turnFirst: true, note: '40 units north of Button3 (439,4493,-778; event ToWarehouse), aimed at it' },
     { op: 'frob', target: 'Button3', watch: ['Button3'] },
     { op: 'travel', to: '02_NYC_Warehouse', label: 'leg2' },
     { op: 'line', text: 'set DeusEx.JCDentonMale bCheatsEnabled True', harness: true },
@@ -36,7 +36,7 @@ export default {
     { op: 'snap', label: 'c3-warehouse' },
 
     // the generator: the crate beside the wall, shot with the pistol until the wall is down (each shot's spread is the run's own)
-    { op: 'place', at: [469, -404, 65], view: [-6290, 49204], harness: true, note: '100 units north of CrateExplosiveSmall0 (469,-504,35; tag BlowGenerator), aimed at it' },
+    { op: 'place', at: [469, -404, 65], view: [-6290, 49204], harness: true, turnFirst: true, note: '100 units north of CrateExplosiveSmall0 (469,-504,35; tag BlowGenerator), aimed at it' },
     { op: 'belt', n: 1 },
     { op: 'click', until: { flag: 'GeneratorBlown' }, gap: 1.5, max: 10 },
     { op: 'snap', label: 'c4-generator' },
@@ -44,10 +44,8 @@ export default {
     { op: 'snap', label: 'c5-pickup' },
 
     // the roof: JockExit, the helicopter's conversation (radius 240), its Go branch: ChopperExit, Dispatcher0, MapExit0's camera path
-    { op: 'watch', actors: ['BlackHelicopter1'] },
-    { op: 'place', at: [-22, -295, 1040], view: [0, 32768], harness: true, note: 'on the roof 200 units east of BlackHelicopter1 (-222,-295,1133 in the world), facing it' },
-    { op: 'frob', target: 'BlackHelicopter1' },
-    { op: 'conv', name: 'JockExit', timeout: 120 },
+    { op: 'place', at: [-22, -295, 1040], view: [0, 32768], harness: true, turnFirst: true, note: 'on the roof 200 units east of BlackHelicopter1 (-222,-295,1133 in the world), facing it: inside the radius (240), the helicopter\'s Tick starts JockExit' },
+    { op: 'conv', name: 'JockExit', choose: [{ index: 0, label: 'Go' }], watch: ['BlackHelicopter1'], timeout: 120 },
     { op: 'travel', to: '03_NYC_UNATCOIsland', label: 'exit', timeout: 240 },
     { op: 'line', text: 'set DeusEx.JCDentonMale bCheatsEnabled True', harness: true },
     { op: 'line', text: 'set DeusEx.JCDentonMale ReducedDamageType All', harness: true },

@@ -32,7 +32,7 @@ export default {
     // a computer loads in state Off at its Begin code's FinishAnim (bAnimating): Frob does nothing until the animation ends, which needs it drawn (the
     // headless stand-in from the placement on, then 2 s; docs/stage-6-chains.md, ending 2)
     { op: 'watch', actors: ['ComputerPersonal0'] },
-    { op: 'place', at: [330, -97, 337], view: [-10997, 32865], harness: true, note: '45 units east of ComputerPersonal0 (285,-97,297), aimed at it' },
+    { op: 'place', at: [330, -97, 337], view: [-10997, 32865], harness: true, turnFirst: true, note: '45 units east of ComputerPersonal0 (285,-97,297), aimed at it' },
     { op: 'wait', seconds: 2 },
     { op: 'frob', target: 'ComputerPersonal0', watch: ['ComputerPersonal0'] },
     { op: 'wait', seconds: 2 },
@@ -47,7 +47,7 @@ export default {
     // a computer loads in state Off at its Begin code's FinishAnim (bAnimating): Frob does nothing until the animation ends, which needs it drawn (the
     // headless stand-in from the placement on, then 2 s; docs/stage-6-chains.md, ending 2)
     { op: 'watch', actors: ['ComputerPersonal3'] },
-    { op: 'place', at: [-317, -1105, 31], view: [-11011, 32834], harness: true, note: '45 units east of ComputerPersonal3 (-362,-1105,-9), aimed at it' },
+    { op: 'place', at: [-317, -1105, 31], view: [-11011, 32834], harness: true, turnFirst: true, note: '45 units east of ComputerPersonal3 (-362,-1105,-9), aimed at it' },
     { op: 'wait', seconds: 2 },
     { op: 'frob', target: 'ComputerPersonal3', watch: ['ComputerPersonal3'] },
     { op: 'wait', seconds: 2 },
@@ -62,20 +62,20 @@ export default {
     { op: 'snap', label: 'f4-killphrase' },
 
     // Anna at the exit: AnnaExitKillphrase by its radius (475)
-    { op: 'place', at: [-589, 450, 470], view: [0, 32768], harness: true, note: '200 units east of AnnaNavarre0 (-789,450,464), facing her' },
+    { op: 'place', at: [-589, 450, 470], view: [0, 32768], harness: true, turnFirst: true, note: '200 units east of AnnaNavarre0 (-789,450,464), facing her' },
     { op: 'conv', name: 'AnnaExitKillphrase', watch: ['AnnaNavarre0'], timeout: 180 },
     { op: 'wait', flag: 'AnnaNavarre_Dead', timeout: 60 },
     { op: 'snap', label: 'f5-anna' },
 
     // Alex: the NanoKey of levelone, then the door
-    { op: 'place', at: [2061, -801, -15], view: [-6167, 32779], harness: true, note: '60 units east of AlexJacobson0 (2002,-801,-16), facing him' },
+    { op: 'place', at: [2061, -801, -15], view: [-6167, 32779], harness: true, turnFirst: true, note: '60 units east of AlexJacobson0 (2002,-801,-16), facing him' },
     { op: 'frob', target: 'AlexJacobson0' },
     { op: 'conv', name: 'M05MeetAlexJacobson', watch: ['AlexJacobson0'], timeout: 180 },
     { op: 'wait', seconds: 5 },
     { op: 'snap', label: 'f6-alex' },
     // the key ring in hand (belt 0) used on the door with the left button unlocks it (DeusExMover.Frob with a NanoKeyRing holding KeyIDNeeded toggles bLocked),
     // the right button (nothing in use) opens it, as mission 0's key door
-    { op: 'place', at: [-868, 320, 457], view: [-9672, 32768], harness: true, note: '60 units east of DeusExMover29 (levelone, -928,320,416), aimed at it' },
+    { op: 'place', at: [-868, 320, 457], view: [-9672, 32768], harness: true, turnFirst: true, note: '60 units east of DeusExMover29 (levelone, -928,320,416), aimed at it' },
     { op: 'belt', n: 0 },
     { op: 'click' },
     { op: 'frob', target: 'DeusExMover29' },
@@ -87,7 +87,7 @@ export default {
     { op: 'wait', seconds: 3 },
 
     // Jock: M05MeetJock by its radius, its continue branch
-    { op: 'place', at: [-5971, 2520, -79], view: [1510, 32807], harness: true, note: '90 units east of BlackHelicopter0 (-6061,2520,-27; BindName Jock), aimed at it' },
+    { op: 'place', at: [-5971, 2520, -79], view: [1510, 32807], harness: true, turnFirst: true, note: '90 units east of BlackHelicopter0 (-6061,2520,-27; BindName Jock), aimed at it' },
     { op: 'conv', name: 'M05MeetJock', watch: ['BlackHelicopter0'], timeout: 180 },
     { op: 'travel', to: '06_HongKong_Helibase', label: 'exit', timeout: 240 },
     ...cheats,

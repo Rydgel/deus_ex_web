@@ -40,10 +40,12 @@ export const PLAY_KEY = Object.freeze({
 });
 
 /** The console lines of a `place` step: what the original's capture types (docs/stage-5-exit-criteria.md "Conversation captures": ghost, a SET of Location, walk, a SET of ViewRotation). */
-export function placeLines({ at, view, drop = false }) {
+export function placeLines({ at, view, drop = false, turnFirst = false }) {
   const location = `set DeusEx.JCDentonMale Location (X=${at[0]},Y=${at[1]},Z=${at[2]})`, rotation = `set DeusEx.JCDentonMale ViewRotation (Pitch=${view[0]},Yaw=${view[1]},Roll=0)`;
-  // a `drop` (the fall into a Teleporter's or an exit's cylinder ends the level) turns the view first and makes `walk`, which starts the fall, the last line
-  return drop ? ['ghost', rotation, location, 'walk'] : ['ghost', location, 'walk', rotation];
+  // a `drop` (the fall into a Teleporter's or an exit's cylinder ends the level) turns the view first and makes `walk`, which starts the fall, the last line;
+  // `turnFirst` does the same for a placement by a conversation's owner: while ghosted no conversation starts (DeusExPlayer.CanStartConversation refuses
+  // CheatFlying), so one the place starts (a radius, an owner in view) starts after the last line, never with keys still to type (they would be the conversation's)
+  return drop || turnFirst ? ['ghost', rotation, location, 'walk'] : ['ghost', location, 'walk', rotation];
 }
 
 /** A placement from a target's position: `distance` units from it along `bearing` (radians), one unit above the target's height (an item lies on the floor the player's
