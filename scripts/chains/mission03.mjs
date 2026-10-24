@@ -7,7 +7,7 @@
  * Placements from scripts/chain-plan.mjs (`drop`, `stand`, `face`) in Play's world. */
 const cheats = [
   { op: 'line', text: 'set DeusEx.JCDentonMale bCheatsEnabled True', harness: true },
-  { op: 'line', text: 'God', harness: true },
+  { op: 'line', text: 'set DeusEx.JCDentonMale ReducedDamageType All', harness: true },
 ];
 export default {
   mission: '03',

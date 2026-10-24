@@ -12,7 +12,7 @@ export default {
     { op: 'wait', seconds: 3 },
     { op: 'snap', label: 'c1-loaded' },
     { op: 'line', text: 'set DeusEx.JCDentonMale bCheatsEnabled True', harness: true },
-    { op: 'line', text: 'God', harness: true },
+    { op: 'line', text: 'set DeusEx.JCDentonMale ReducedDamageType All', harness: true },
 
     // the subway: the panel opens the three TrainDoors (their event HostageActivation), the fall into Teleporter1 in the train goes to the Street
     { op: 'place', at: [-5358, 2989, -322], view: [-4090, 32733], harness: true, note: '40 units east of SubwayControlPanel4 (-5398,2989,-299), aimed at it' },
@@ -23,7 +23,7 @@ export default {
     { op: 'travel', to: '02_NYC_Street', label: 'leg1' },
     // God mode and the cheats flag are not travel properties (docs/stage-6-chains.md "Rules")
     { op: 'line', text: 'set DeusEx.JCDentonMale bCheatsEnabled True', harness: true },
-    { op: 'line', text: 'God', harness: true },
+    { op: 'line', text: 'set DeusEx.JCDentonMale ReducedDamageType All', harness: true },
     { op: 'wait', seconds: 3 },
     { op: 'snap', label: 'c2-street' },
 
@@ -31,7 +31,7 @@ export default {
     { op: 'frob', target: 'Button3', watch: ['Button3'] },
     { op: 'travel', to: '02_NYC_Warehouse', label: 'leg2' },
     { op: 'line', text: 'set DeusEx.JCDentonMale bCheatsEnabled True', harness: true },
-    { op: 'line', text: 'God', harness: true },
+    { op: 'line', text: 'set DeusEx.JCDentonMale ReducedDamageType All', harness: true },
     { op: 'wait', seconds: 3 },
     { op: 'snap', label: 'c3-warehouse' },
 
@@ -50,7 +50,7 @@ export default {
     { op: 'conv', name: 'JockExit', timeout: 120 },
     { op: 'travel', to: '03_NYC_UNATCOIsland', label: 'exit', timeout: 240 },
     { op: 'line', text: 'set DeusEx.JCDentonMale bCheatsEnabled True', harness: true },
-    { op: 'line', text: 'God', harness: true },
+    { op: 'line', text: 'set DeusEx.JCDentonMale ReducedDamageType All', harness: true },
     { op: 'wait', seconds: 15 },
     { op: 'snap', label: 'c6-island' },
     // mission 3's chain starts here, in both programs (docs/stage-6-chains.md "Starts")

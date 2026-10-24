@@ -6,7 +6,7 @@
  * MapExit1 and the camera path) to the exit to 06_HongKong_Helibase. Placements from scripts/chain-plan.mjs (`drop`, `approach`, `stand`, `face`, `terminal`). */
 const cheats = [
   { op: 'line', text: 'set DeusEx.JCDentonMale bCheatsEnabled True', harness: true },
-  { op: 'line', text: 'God', harness: true },
+  { op: 'line', text: 'set DeusEx.JCDentonMale ReducedDamageType All', harness: true },
 ];
 export default {
   mission: '05',

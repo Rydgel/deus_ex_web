@@ -245,7 +245,20 @@ export async function runChainInPlay(chain, { assets = null, log = () => {}, unt
         if (trace.at(-1) !== `${state.event}@${state.label}`) trace.push(`${state.event}@${state.label}`);
         if (state.event === 'choice' || state.state === 'WaitForInput' && state.choices) {
           const pick = choices.shift();
-          if (!pick) throw new Error(`conversation ${state.name} reached a choice with none to pick (trace ${trace.join(' ')})`);
+          // the buttons the window shows (ConWindowActive.DisplayChoice: each button's userObject is its ConChoice), by the label each jumps to
+          // (a choice's own label is a ChoiceSpeechLabel_N: its speech, then the Jump to the branch the chain names; the label shown is that branch)
+          const conPlay = c.read(c.player(), 'conPlay'), win = c.read(conPlay, 'conWinThird'), con = c.read(conPlay, 'con');
+          const branch = label => {
+            let event = c.read(con, 'eventList');
+            while (event && String(c.read(event, 'label') ?? '').toLowerCase() !== String(label).toLowerCase()) event = c.read(event, 'nextEvent');
+            for (let n = 0; event && n < 8; n++, event = c.read(event, 'nextEvent'))
+              if (c.runtime.instance(event).cls.record.key.endsWith('coneventjump')) return String(c.read(event, 'jumpLabel'));
+            return String(label);
+          };
+          const shown = (c.read(win, 'conChoices') ?? []).slice(0, c.read(win, 'numChoices')).map(b => { const choice = b ? c.read(b, 'userObject') : null; return choice ? branch(c.read(choice, 'choiceLabel')) : null; });
+          if (!pick) throw new Error(`conversation ${state.name} reached a choice with none to pick: ${JSON.stringify(shown)} (trace ${trace.join(' ')})`);
+          if (pick.label && shown[pick.index]?.toLowerCase() !== pick.label.toLowerCase())
+            throw new Error(`conversation ${state.name}: choice ${pick.index} jumps to ${shown[pick.index]}, not ${pick.label}: ${JSON.stringify(shown)}`);
           for (let i = 0; i < pick.index; i++) { pressKey(c, 'DOWN'); frames(3); }
           pressKey(c, 'ENTER'); frames(30);
           trace.push(`pick#${pick.index}${pick.label ? `(${pick.label})` : ''}`);

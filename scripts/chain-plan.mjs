@@ -7,6 +7,7 @@
  *   node scripts/chain-plan.mjs stand <map> <actor> [--distances 60,90] [--lift L] [--settle F]                  places at a distance from the actor with a clear line to it, aimed at it
  *   node scripts/chain-plan.mjs face <map> <actor> [--distances 60,90] [--lift L] [--freeze] [--all] [--aim x,y,z] [--accept A,B]  the places from which the view trace selects the actor (frob)
  *       [--before "CauseEvent a; CauseEvent b"]   console lines run (cheats on) after each restart, 4 s of ticks after each, before the trial: movers the chain opens first
+ *   any mode: [--flags a,b]   flags set after the start and each restart (4 s of ticks): the scene a chain's flags stage (a pawn a script brings in)
  *   node scripts/chain-plan.mjs face-chain <mission> <step> <actor>...   the face placements in the level a chain reaches: the chain (scripts/chains/mission<mission>.mjs) runs in
  *                                                                        Play to its step <step> (0-based, not run; a slot's level differs from the cold map), then each place
  *                                                                        around each actor is tried in that state (no restart: the trials follow each other)
@@ -92,6 +93,12 @@ if (mode === 'terminal') {
 }
 const assets = await loadAssets();
 const { c, run } = await openSession(map, assets, { travel: {} });
+// --flags a,b: flags set (planning only, not a chain step) after the start and each restart, with 4 s of ticks, so the level's script stages the scene a chain reaches
+// (a pawn a mission script brings into the world once a flag is set: Stanton Dowd after M08MeetHarleyFilben_Played)
+const sceneFlags = args.includes('--flags') ? args[args.indexOf('--flags') + 1].split(',') : [];
+const stage = () => { if (!sceneFlags.length) return; for (const name of sceneFlags) c.read(c.player(), 'FlagBase').setBool(name, true, true, 0); c.frames(240); };
+const restart = () => { c.restart(); c.frames(30); c.takeTravel(); stage(); };
+stage();
 c.frames(Number(args.includes('--settle') ? args[args.indexOf('--settle') + 1] : (mode === 'stand' ? 900 : 60)));   // a pawn with Sitting or Wandering orders walks to its place first
 const target = c.actor(actorName);
 if (!target) throw new Error(`no actor ${actorName} in ${map}`);
@@ -105,7 +112,7 @@ if (mode === 'approach') {
   for (let k = 0; k < 8; k++) {
     const bearing = k * Math.PI / 4, from = [Math.round(at[0] + Math.cos(bearing) * distance), Math.round(at[1] + Math.sin(bearing) * distance), Math.round(at[2] + lift)];
     if (!c.inWorld(from)) { out.push({ k, from, note: 'outside the world' }); continue; }
-    c.restart(); c.frames(30); c.takeTravel();
+    restart();
     const view = [0, yawUnits(bearing + Math.PI)];
     for (const line of ['set DeusEx.JCDentonMale bCheatsEnabled True', ...placeLines({ at: from, view })]) { typeLine(c, line); c.frames(20); }
     c.frames(60);
@@ -125,7 +132,7 @@ if (mode === 'drop') {
   for (const lift of lifts) {
     const from = [Math.round(at[0]), Math.round(at[1]), Math.round(at[2] + height + lift)];
     if (!c.inWorld(from)) { out.push({ lift, from, note: 'outside the world' }); continue; }
-    c.restart(); c.frames(30); c.takeTravel();
+    restart();
     const before = c.read(c.player(), 'DataLinkPlay');
     for (const line of ['set DeusEx.JCDentonMale bCheatsEnabled True', ...placeLines({ at: from, view, drop: true })]) { typeLine(c, line); c.frames(10); }
     let request = null;
@@ -146,7 +153,7 @@ if (mode === 'stand') {
     const from = [Math.round(at[0] + Math.cos(bearing) * d), Math.round(at[1] + Math.sin(bearing) * d), Math.round(at[2] + lift)];
     if (!c.inWorld(from)) continue;
     const aim = z => { const dx = at[0] - from[0], dy = at[1] - from[1], dz = at[2] - (z + eyeHeight), horizontal = Math.hypot(dx, dy); return [Math.round(Math.atan2(dz, horizontal) * unit), yawUnits(Math.atan2(dy, dx))]; };
-    c.restart(); c.frames(30); c.takeTravel();
+    restart();
     for (const line of ['set DeusEx.JCDentonMale bCheatsEnabled True', ...placeLines({ at: from, view: aim(from[2]) })]) { typeLine(c, line); c.frames(10); }
     c.frames(60);
     const here = c.pos(c.player()), floor = here[2];
@@ -166,13 +173,13 @@ if (mode === 'face') {
     if (!c.inWorld(from)) continue;
     const aim = z => { const dx = at[0] - from[0], dy = at[1] - from[1], dz = at[2] - (z + eyeHeight), horizontal = Math.hypot(dx, dy); return [Math.round(Math.atan2(dz, horizontal) * unit), yawUnits(Math.atan2(dy, dx))]; };
     // first pass: where the player lands (the floor under the place); the second places him there, aimed from the landed eye
-    c.restart(); c.frames(30); c.takeTravel();
+    restart();
     for (const line of ['set DeusEx.JCDentonMale bCheatsEnabled True', ...placeLines({ at: from, view: aim(from[2]) })]) { typeLine(c, line); c.frames(10); }
     c.frames(60);
     const floor = c.pos(c.player())[2];
     from[2] = Math.round(floor + 1);
     const view = aim(floor);
-    c.restart(); c.frames(30); c.takeTravel();
+    restart();
     if (args.includes('--before')) {
       typeLine(c, 'set DeusEx.JCDentonMale bCheatsEnabled True');
       for (const line of args[args.indexOf('--before') + 1].split(';')) { typeLine(c, line.trim()); c.frames(240); }
