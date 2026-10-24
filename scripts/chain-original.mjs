@@ -215,11 +215,14 @@ export async function runChainInOriginal(chain, { log = console.log, until = nul
         return { conPlay, event: /currentEvent=(\S+)/.exec(ev ?? '')?.[1] ?? null };
       };
       const deadline = Date.now() + (s.timeout ?? 180) * 1000 * 2;   // real time runs slower than the chain's Level seconds: twice the limit
-      let started = false, lastPicked = null;
+      let started = false, lastPicked = null, rounds = 0;
       const trace = [];
+      // a short conversation (a first-person bark, a radius conversation that fires a map exit) can begin and end between two reads: its _Played flag says it ran
+      const played = () => (flagsNow()?.flags ?? []).some(f => f.toLowerCase().startsWith(`${s.name.toLowerCase()}_played|`) && f.endsWith('|1'));
       while (Date.now() < deadline) {
         const state = read();
         if (!state) { await sleep(2000); continue; }
+        if (!state.conPlay && !started && ++rounds % 3 === 0 && played()) { started = true; trace.push('(played between reads)'); break; }
         if (state.conPlay) {
           started = true;
           if (state.event && trace.at(-1) !== state.event) trace.push(state.event);
