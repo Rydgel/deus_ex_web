@@ -175,9 +175,13 @@ export class PawnPhysicsHost {
     const pawn = actor._pawnPhysics ?? pawnPhysicsView(actor, runtime.pawnPhysicsServices(actor));
     if (!pawn.pawn || pawn.movingBrush || pawn.model) return decline('kind');
     const ops = pawn.walkOps();
-    // WalkLoopHost.walk's state words and contexts.
+    // WalkLoopHost.walk's state words and contexts. The level's zone model
+    // first: its first build allocates in the arena, and a grown memory
+    // replaces the buffer a view taken before it reads (script-object-arena.mjs;
+    // a restored Tong base, the second visit of mission 6's chain).
+    const model = this.vm.zone.model(ops.level);
     const view = this.vm.arena.view;
-    view.setUint32(walk.stateAt, this.vm.zone.model(ops.level), true);
+    view.setUint32(walk.stateAt, model, true);
     view.setUint32(walk.stateAt + 4, ops.worldActor ? handleOf(ops.worldActor) : 0, true);
     const depth = this.vm.movePawn.contexts.length;
     this.vm.movePawn.contexts.push({pawn, actor, ops: ops.move, hits: null, times: null});
