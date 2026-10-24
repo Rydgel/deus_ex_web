@@ -31,7 +31,8 @@ export default {
     { op: 'line', text: 'set DeusEx.JCDentonMale ReducedDamageType All', harness: true },
     // what the provisional start skips (the real arrival from 11_Paris_Everett's MapExit1): Carla's radius conversation next to PlayerStart2, which adds DestroyBots
     // and ActivatePower and gives the base's map (DL_no_carla's eleven triggers play it otherwise):
-    // { op: 'conv', name: 'MeetCarlaBrown', watch: ['ScientistFemale5'], timeout: 120, note: 'CarlaBrown (ScientistFemale5 at 846,2347,-901, radius 160, WaitingFor) is 200 units from PlayerStart2' },
+    // { op: 'place', at: [775, 2418, -895], view: [-4341, 57356], harness: true, turnFirst: true, note: '100 units north-west of CarlaBrown (ScientistFemale5 at 846,2347,-901; cold stand), facing her' },
+    // { op: 'conv', name: 'MeetCarlaBrown', watch: ['ScientistFemale5'], timeout: 120, note: 'radius 160, WaitingFor; PlayerStart2 is 200 units from her' },
 
     // the bot security system's backup power: two keypads (code 5868, MeetCarlaBrown's note); both inputs of LogicTrigger1 fire test2 (Dispatcher6: bot_power, whose
     // DataLinkTrigger0 plays DL_override_activated, which needs !M12BotsDestroyed: the power precedes the bots)
