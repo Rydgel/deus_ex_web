@@ -4,6 +4,8 @@
  *
  *   node scripts/chain-play.mjs --mission 00 [--json out.json] [--until <label>] */
 import { readdir, readFile, writeFile } from 'node:fs/promises';
+import { mkdirSync, rmSync } from 'node:fs';
+import { handleLimit } from '../src/runtime/script-object-handles.mjs';
 import './census-stage5-drivers.mjs';
 import { gameDirectory } from './game-directory.mjs';
 import { AssetStore } from '../src/unreal/assets.mjs';
@@ -74,9 +76,19 @@ export function conversationOf(c) {
 /** `sessionTravel`: more travel options for every level session the run opens (a save's `snapshotSource`, scripts/validate-save-load-play.mjs). */
 export async function runChainInPlay(chain, { assets = null, log = () => {}, until = null, onStep = null, sessionTravel = {} } = {}) {
   assets ??= await loadAssets();
+  // a save's picture: headless frames draw nothing, so a black one at once (no pending snapshot job that would wait for a frame)
+  sessionTravel = { snapshotSource: () => null, ...sessionTravel };
   const directory = createSaveDirectory();
   const result = { mission: chain.mission, snaps: {}, legs: [], steps: [], conversations: [] };
-  let c = null, pending = null, map = null, done = false;
+  let session = null, c = null, pending = null, map = null, done = false;
+  // a session that replaces another disposes of the old one once the new one is open (census-stage5-session.mjs dispose, as the page's map host does): a
+  // chain through many maps otherwise keeps every level it left (about 425 MB each for 02_NYC_Street)
+  const open = async (name, options) => {
+    const previous = session, start = handleLimit();
+    session = await openSession(name, assets, options);
+    c = session.c;
+    previous?.dispose(start);
+  };
   const note = text => { result.steps.push(text); log(text); };
   const frames = (n, stopOnTravel = true) => {
     for (let i = 0; i < n; i++) {
@@ -94,7 +106,7 @@ export async function runChainInPlay(chain, { assets = null, log = () => {}, unt
       result.legs.push({ label, from: map, to: request.map, text: request.travelInfo[0][1], restore: Boolean(request.restore), portal: request.portal ?? null, url: request.url });
       note(`leg ${label}: ${map} -> ${request.map}${request.portal ? `#${request.portal}` : ''}${request.restore ? ' (restored)' : ''}, ${request.travelInfo[0][1].length} bytes`);
     } else note(`loaded ${request.map} (${request.url})`);
-    ({ c } = await openSession(request.map, assets, { travel: { ...sessionTravel, arrival: request, lastURL: request.lastURL }, saveDirectory: directory }));
+    await open(request.map, { travel: { ...sessionTravel, arrival: request, lastURL: request.lastURL }, saveDirectory: directory });
     map = request.map;
     pending = null;
   };
@@ -102,7 +114,7 @@ export async function runChainInPlay(chain, { assets = null, log = () => {}, unt
 
   const ops = {
     async start(step) {
-      ({ c } = await openSession('DX', assets, { travel: { ...sessionTravel }, saveDirectory: directory }));
+      await open('DX', { travel: { ...sessionTravel }, saveDirectory: directory });
       map = 'DX';
       c.frames(120);
       if (step.kind === 'menu-training') {
@@ -180,8 +192,10 @@ export async function runChainInPlay(chain, { assets = null, log = () => {}, unt
     },
     async frob(step) {
       stamp(step.watch);
+      const target = c.game.interaction.frobTarget?.name ?? null;
       typeLine(c, 'ParseRightClick'); frames(step.settle ?? 30);
-      note(`frob ${step.target ?? ''}`.trim());
+      if (step.target && target !== step.target) throw new Error(`frob ${step.target}: the view selects ${target ?? 'nothing'}`);
+      note(`frob ${target ?? ''}`.trim());
     },
     /** The left button (Enter): once, or, with `until: { flag }`, repeated every `gap` seconds up to `max` times until the flag is set (a weapon's swings: how many break a crate is the run's own). */
     async click(step) {
@@ -270,6 +284,19 @@ export async function runChainInPlay(chain, { assets = null, log = () => {}, unt
       result.snaps[step.label] = { map, flags, defaultExpiration };
       note(`snap ${step.label}: ${map}, ${flags.length} flags`);
     },
+    /** The console's SaveGame: the slot the next mission's chain starts from in both programs (`--save-exit` pins it under the chain's capture directory). */
+    async save(step) {
+      // a conversation holds the keyboard (a bark that started after the last step): the save waits for it to end, then goes through the viewport's Exec chain
+      // as a harness line (the console's own path would hand its keys to the conversation)
+      for (let n = 0; conversationOf(c) && n < 3600; n += 30) frames(30, false);
+      if (conversationOf(c)) throw new Error(`save ${step.label}: conversation ${conversationOf(c).name} still playing`);
+      c.game.hud.scoped(() => c.game.hud.host.consoleCommands.consoleCommand(c.player(), `SaveGame ${step.index}`)); frames(5, false);
+      const name = slotName(step.index);
+      const files = directory.files(name).map(file => ({ name: file.name, bytes: directory.readFile(name, file.name) }));
+      if (!files.length) throw new Error(`SaveGame ${step.index} left no ${name}`);
+      (result.saves ??= {})[step.label] = { slot: name, files };
+      note(`save ${step.label}: ${name}, ${files.length} files in ${map}`);
+    },
   };
 
   for (const step of chain.steps) {
@@ -291,6 +318,15 @@ if (import.meta.url === `file://${process.argv[1]}`) {
   const chain = await loadChain(option('mission', '00'), option('file', null));
   const result = await runChainInPlay(chain, { log: line => console.log(line), until: option('until', null) });
   delete result.session; delete result.saveDirectory;
+  if (process.argv.includes('--save-exit')) {
+    for (const [label, { slot, files }] of Object.entries(result.saves ?? {})) {
+      const target = slotDirectory({ source: 'chain', chain: chain.mission, label, slot });
+      rmSync(target, { recursive: true, force: true }); mkdirSync(target, { recursive: true });
+      for (const file of files) await writeFile(`${target}/${file.name}`, file.bytes);
+      console.log(`pinned ${label}: ${target} (${files.length} files)`);
+    }
+  }
+  for (const save of Object.values(result.saves ?? {})) delete save.files;
   if (option('json', null)) await writeFile(option('json'), JSON.stringify(result, null, 1));
   console.log(`done: ${result.legs.length} legs, ${Object.keys(result.snaps).length} snaps`);
   process.exit(0);

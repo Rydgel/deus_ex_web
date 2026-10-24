@@ -254,6 +254,7 @@ export async function runChainInOriginal(chain, { log = console.log, until = nul
       note(`gobjects ${s.label}`);
     },
     async watch(s) { note(`watch ${s.actors.join(' ')} (Play's stand-in for the original's rendering)`); },
+    async save(s) { note(`save ${s.label} (Play's: the next chain's start)`); },
     async state(s) {
       const specs = s.fields.map(f => { const [off, type, mask] = STATE_FIELDS[f] ?? (() => { throw new Error(`state: no offset for ${f}`); })(); return `${f}:${off}:${type}${mask ? `:${mask}` : ''}`; });
       const line = tool('dump-actor-win', s.actor, ...specs).split('\n').find(row => new RegExp(`^\\S+ ${s.actor} `).test(row));

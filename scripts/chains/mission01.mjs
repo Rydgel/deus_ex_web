@@ -78,5 +78,7 @@ export default {
     { op: 'wait', flag: 'AnnaReachedCastle', timeout: 240 },
     { op: 'wait', seconds: 15 },
     { op: 'snap', label: 'b9-batterypark' },
+    // mission 2's chain starts here, in both programs (docs/stage-6-chains.md "Starts")
+    { op: 'save', index: 101, label: 'exit' },
   ],
 };
