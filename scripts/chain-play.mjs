@@ -189,7 +189,7 @@ export async function runChainInPlay(chain, { assets = null, log = () => {}, unt
       if (!target) throw new Error(`placeNear: no ${step.actor ?? step.class}`);
       const { at, view } = placementNear(c.pos(target), step.distance, step.bearing);
       c.watched.add(target);
-      for (const line of ['set DeusEx.JCDentonMale bCheatsEnabled True', ...placeLines({ at, view })]) { typeLine(c, line); frames(20); }
+      for (const line of ['set DeusEx.JCDentonMale bCheatsEnabled True', ...placeLines({ at, view, turnFirst: step.turnFirst })]) { typeLine(c, line); frames(20); }
       frames(Math.round((step.settle ?? 1) / FRAME));
       note(`placeNear ${target.name} at ${c.pos(target).map(Math.round)}: the player is at ${c.pos(c.player()).map(v => Math.round(v * 10) / 10)}, frob target ${c.game.interaction.frobTarget?.name ?? 'none'}`);
     },

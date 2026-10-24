@@ -177,7 +177,7 @@ export async function runChainInOriginal(chain, { log = console.log, until = nul
       if (!target) throw new Error(`placeNear: the original has no ${name}`);
       const { at, view } = placementNear(target, s.distance, s.bearing);
       for (let attempt = 0; attempt < 3; attempt++) {
-        for (const line of ['set DeusEx.JCDentonMale bCheatsEnabled True', ...placeLines({ at, view })]) await type(line, 500);
+        for (const line of ['set DeusEx.JCDentonMale bCheatsEnabled True', ...placeLines({ at, view, turnFirst: s.turnFirst })]) await type(line, 500);
         await sleep((s.settle ?? 1) * 1000 + 800);
         const here = locationOf();
         if (here && Math.hypot(here.at[0] - at[0], here.at[1] - at[1]) < 25) { note(`placeNear ${name} at ${target.map(v => Math.round(v))}: the player is at ${here.at.map(v => Math.round(v * 10) / 10)}`); return; }
@@ -195,6 +195,8 @@ export async function runChainInOriginal(chain, { log = console.log, until = nul
         if (f && hasFlag(f, s.until.flag)) break;
         if (n >= (s.max ?? 8)) throw new Error(`click: ${s.until.flag} is not set after ${n} clicks`);
       }
+      // `settle` counts Play's frames (60 a second) after the last click, as chain-play.mjs's click: a rocket still in flight when the next step places the player
+      await sleep((s.settle ?? 30) / 60 * 1000);
       note(`click${n > 1 || s.until ? ` x${n}` : ''}`);
     },
     async belt(s) { await type(`ActivateBelt ${s.n}`, 900); await sleep(1000); note(`belt ${s.n}`); },
