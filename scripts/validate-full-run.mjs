@@ -1,6 +1,8 @@
 /** Stage 6, row 6.6.1 (docs/stage-6-exit-criteria.md, docs/stage-6-chains.md): one run in Play from New Game to an ending, each mission entered from the
  * previous mission's exit with no save loaded: the mission chains (scripts/chains/missionNN.mjs) joined, mission 1's New Game start kept, every later mission's
- * slot start and every chain's exit `save` left out (the chain of mission N starts where mission N-1's ends, which is the save it pinned). Compared: the travel
+ * slot start left out (the chain of mission N starts where mission N-1's ends, which is the save it pinned). The exit `save` steps stay: saving loads nothing,
+ * and `saveCount` is a travel property (DeusExPlayer.uc:333) that each SaveGame raises, so the captures, each started from the previous chain's save, carry
+ * one more per mission (saveTime, also travel, is compared for presence only: travel-text.mjs TIME_PROPERTIES). Compared: the travel
  * text of each mission change with the original's text of the same change, the `exit` leg of that mission's capture (.work/chains/mNN/result.json; each
  * capture starts from the previous chain's exit save, whose own exit text equality is the evidence that it holds the original's state).
  *
@@ -27,12 +29,12 @@ for (const mission of missions) {
   captures[mission] = JSON.parse(stored);
 }
 
-// the joined chain: mission 1 as it is; each later mission without its start; no exit saves; snapshot and leg labels prefixed by the mission
+// the joined chain: mission 1 as it is; each later mission without its start; snapshot, state and leg labels prefixed by the mission
 const steps = [];
 for (const mission of missions) {
   const chain = await loadChain(mission);
   for (const step of chain.steps) {
-    if (step.op === 'save' || (step.op === 'start' && mission !== missions[0])) continue;
+    if (step.op === 'start' && mission !== missions[0]) continue;
     steps.push(step.op === 'snap' || step.op === 'travel' || step.op === 'state'
       ? { ...step, label: `m${mission}:${step.label ?? `to-${step.to}`}` } : step);
   }
