@@ -2,8 +2,8 @@
 
 Status: **adopted by the user on 2026-10-23** in four decisions ([below](#what-the-user-decided-2026-10-23)); written from master fe15b3cb. The data is
 `scripts/stage6-criteria.mjs` (`node scripts/stage6-criteria.mjs` prints the scoreboard, `--list` the rows, `--markdown` the tables of this note); the
-facts each mission row is built from are in [the Stage 6 inventory](stage-6-inventory.md). Rows 6.1.6 and 6.2.2 were proved on the Mac (2026-10-23): their captures are in the Mac's `.work/travel`, the other rows' in the Linux host's, and a
-validator whose capture is not on the machine SKIPs. There is no gate script yet: a row's PASS below means its proof
+facts each mission row is built from are in [the Stage 6 inventory](stage-6-inventory.md). Rows 6.1.6 and 6.2.2 were proved on the Mac (2026-10-23): their captures are in the Mac's `.work/travel`, the other rows' (the endings' of 2026-10-24 among them)
+in the Linux host's, and a validator whose capture is not on the machine SKIPs. There is no gate script yet: a row's PASS below means its proof
 checks exist and passed on their last run, not that a gate ran them together. The gate (`validate-stage6-acceptance.mjs`, on the model of
 [Stage 5's](stage-5-exit-criteria.md#running)) is written once the first mission rows have proofs.
 
@@ -40,7 +40,7 @@ Starts: a mission row starts from a real desktop save of that mission where one 
 12, 14 and 15; the inventory's slot tables say what each one has already chosen), else from the previous mission's exit, else (Training, mission 11) from the
 menu or a cold open of the mission's first map. The same start is loaded in Play and in the original.
 
-## The scoreboard (2026-10-23, after the conversation census, the first two chains and rows 6.1.6 and 6.2.2)
+## The scoreboard (2026-10-24, after rows 6.1.6 and 6.2.2 and the three endings)
 
 | Clause | PASS | PARTIAL | UNDRIVEN | MISSING | EXCLUDED |
 | --- | ---: | ---: | ---: | ---: | ---: |
@@ -48,10 +48,10 @@ menu or a cold open of the mission's first map. The same start is loaded in Play
 | 6.2 Persistence | 6 | 0 | 0 | 0 | 0 |
 | 6.3 Transitions | 2 | 0 | 0 | 0 | 0 |
 | 6.4 The missions | 4 | 12 | 0 | 20 | 0 |
-| 6.5 The endings | 0 | 0 | 0 | 3 | 0 |
+| 6.5 The endings | 3 | 0 | 0 | 0 | 0 |
 | 6.6 The campaign in one run | 0 | 0 | 0 | 1 | 0 |
 | 6.7 Excluded | 0 | 0 | 0 | 0 | 3 |
-| **Total** | 18 | 12 | 0 | 24 | 3 |
+| **Total** | 21 | 12 | 0 | 21 | 3 |
 
 ## The rows
 
@@ -129,9 +129,9 @@ menu or a cold open of the mission's first map. The same start is loaded in Play
 
 | Row | Criterion | Evidence | Proof | Needed / weak / pending | Status |
 | --- | --- | --- | --- | --- | --- |
-| 6.5.1 | ending 1 from its in-world trigger, the reactor switches (Tong's ending): the endgame, the credits and the menu, equal to the original | O1 | - | the original driven through the same trigger (Final's MapExit0 sits in solid space: the trigger, not the exit actor, is the way): Final's Switch4 (event destroy_generator -> Dispatcher7 -> map_exit_generator) sits behind the Generator_panel mover, which FlagTrigger5 opens on ReactorReady (set by DL_tong7, which needs CoolantCut, set by Page's FlagTrigger0 `coolant`, and ReactorSwitch1/2, set by the reactor switches through LogicTrigger1/2 once coolant_cut), and Generator_overload, which FlagTrigger9 opens on ReactorButton3 | MISSING |
-| 6.5.2 | ending 2 from its in-world trigger, Helios' hub: the endgame, the credits and the menu, equal to the original | O1 | - | the original driven through the same trigger (Final's MapExit0 sits in solid space: the trigger, not the exit actor, is the way): Final's FlagTrigger3 (touched, HeliosFree) fires Merge_helios_exit; HeliosFree is set by Page's FlagTrigger1 `Set_flag_helios` after the two uplink locks (UplinkLock1/2, Page's FlagTrigger2/3) | MISSING |
-| 6.5.3 | ending 3 from its in-world trigger, Page's bunker (killpage): the endgame, the credits and the menu, equal to the original | O1 | - | the original driven through the same trigger (Final's MapExit0 sits in solid space: the trigger, not the exit actor, is the way): Page's Switch4 (event kill_page -> Dispatcher1, start_endgame its sixth event) sits behind the Page_button mover, which DL_Blue4 opens after the four nodes (Node1..4_Frobbed, Mission15.Timer's DL_Blue1..4); no data sets the flag killpage that Mission15.Timer also reads | MISSING |
+| 6.5.1 | ending 1 from its in-world trigger, the reactor switches (Tong's ending): the endgame, the credits and the menu, equal to the original | O1 | validate-stage6-chain.mjs --mission 15e1 | weak: from the third-party slot nicouzouf Save0042 (one played game's state at the Page map); the chain: Page's coolant Switch0 (coolantcut), Teleporter8 to the filed Final, the generator switches Switch10/16 once Mission15.Timer swapped them and one drop into the overlapping coolant FlagTriggers 2 and 4 (LogicTrigger1/2: ReactorSwitch1/2), a DL_Tong7 trigger (DL_tong7 sets ReactorReady), FlagTrigger5 (Generator_panel), the reactor buttons Switch1, Switch2 and Switch5 in turn (ReactorButton1..3, each opening the next one's cover), FlagTrigger9 (Generator_overload), Final's Switch4 (destroy_generator -> Dispatcher7 -> MapExit0); the Mechanic's overheard PowerGuyScared1 and 2 are waited for in their windows (each program starts them at its own pace; Scared3 started in neither) and the endgame snapshot waits for Endgame1's EndgameExplosions; each step placed and God mode (Page's respawning troops and turrets, the reactor's radiation; typed again after each map change: it does not travel), as the other chains; the endgame's conversation, quote and credits are given 120 s and the credits ended by a click (their own run to the end, and the menu on dxonly, are validate-travel-endings' E and W); a mission 15 run from its arrival is row 6.4.15.1's; the captures are the Linux host's (.work/chains/m15e1) | PASS |
+| 6.5.2 | ending 2 from its in-world trigger, Helios' hub: the endgame, the credits and the menu, equal to the original | O1 | validate-stage6-chain.mjs --mission 15e2 | weak: from the third-party slot nicouzouf Save0042 (one played game's state at the Page map); the chain: the uplink buttons Button18/19 (UplinkLock1/2), ComputerPersonal0 logged in (its one user, Icarus) and its special option "Engage Primary Router" clicked (Set_flag_helios: FlagTrigger1 sets HeliosFree; the option reads no uplink flag), Teleporter8 to the filed Final, FlagTrigger3 touched (Merge_helios_exit -> MapExit1); each step placed and God mode (Page's respawning troops and turrets, the reactor's radiation; typed again after each map change: it does not travel), as the other chains; the special option is clicked at its button's point of the original's viewport (the `point` op); the endgame's conversation, quote and credits are given 120 s and the credits ended by a click (their own run to the end, and the menu on dxonly, are validate-travel-endings' E and W); a mission 15 run from its arrival is row 6.4.15.1's; the captures are the Linux host's (.work/chains/m15e2) | PASS |
+| 6.5.3 | ending 3 from its in-world trigger, Page's bunker (killpage): the endgame, the credits and the menu, equal to the original | O1 | validate-stage6-chain.mjs --mission 15e3 | weak: from the third-party slot nicouzouf Save0042 (one played game's state at the Page map); the chain: the four node keypads (7243: Node1..4_Frobbed), each waiting for its DL_Blue<n> (Mission15.Timer plays the InfoLink of the count of set flags), DL_Blue4 opening Page_button, Page's Switch4 (kill_page -> Dispatcher1, start_endgame -> MapExit0); no data sets the flag killpage that Mission15.Timer also reads; each step placed and God mode (Page's respawning troops and turrets, the reactor's radiation; typed again after each map change: it does not travel), as the other chains; the endgame's conversation, quote and credits are given 120 s and the credits ended by a click (their own run to the end, and the menu on dxonly, are validate-travel-endings' E and W); a mission 15 run from its arrival is row 6.4.15.1's; the captures are the Linux host's (.work/chains/m15e3) | PASS |
 
 ### 6.6 The campaign in one run
 
@@ -156,9 +156,9 @@ menu or a cold open of the mission's first map. The same start is loaded in Play
    maps), each with its Wine capture from the same start. Missions 0 and 1 pass ([the harness and what it found](stage-6-chains.md)); the next mission needs its chain file and its capture.
 4. **6.4.\*.2, the lasting choices**: the pairs of the carried table, the second branch captured where no slot holds it.
 5. **6.2.2** (save in Play, load in Play) and **6.1.6** (each menu entry against the original; what Exit does): done 2026-10-23 on the Mac's CrossOver bottle
-   (captures `.work/travel/sl1` and `mm1`; the probe's Darwin branch, [stage 6 chains](stage-6-chains.md#running)). **6.5** (the endings from their triggers) is
-   not a small row: every ending's last trigger waits for state made in `15_Area51_Page` (the rows' "needed" text names the chain), so each needs a mission 15
-   slot holding that state (N0038, N0040, N0042, on the Linux host) or mission 15's placed chain across Final and Page (row 6.4.15.1's harness).
+   (captures `.work/travel/sl1` and `mm1`; the probe's Darwin branch, [stage 6 chains](stage-6-chains.md#running)). **6.5** (the endings from their triggers): done
+   2026-10-24 on the Linux host, three placed chains from the real slot nicouzouf Save0042 through the Page and Final maps' own actors to each trigger, the endgame, the
+   credits and dxonly ([stage 6 chains](stage-6-chains.md#mission-15-the-three-endings-rows-651-to-653-2026-10-24)).
 6. **6.6.1, the unbroken run**, chaining the 6.4.\*.1 steps from New Game, then the gate.
 
 ## Excluded

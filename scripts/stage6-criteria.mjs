@@ -91,17 +91,19 @@ for (const m of MISSIONS) {
 }
 
 // 6.5 The endings -----------------------------------------------------------------------------------------------------------------------
-// What each ending's last trigger waits for (the maps' own actors, read 2026-10-23): every one needs state made in 15_Area51_Page, so a row needs a mission 15
-// slot that holds it (N0038, N0040, N0042 of .work/internet-saves) or mission 15's placed chain across Final and Page (row 6.4.15.1's harness)
+// Each ending is a placed chain from the real slot nicouzouf Save0042 (15_Area51_page, the other three levels filed in Current; MeetHelios played, no ending's flag set)
+// through the maps' own actors to the ending's trigger, the endgame, the credits ended by a click and dxonly (scripts/chains/mission15e<n>.mjs, docs/stage-6-chains.md
+// "Mission 15"). Every last trigger waits for state made in 15_Area51_Page: a cold open with a placement cannot reach it.
 const ENDING_CHAINS = {
-  1: 'Final\'s Switch4 (event destroy_generator -> Dispatcher7 -> map_exit_generator) sits behind the Generator_panel mover, which FlagTrigger5 opens on ReactorReady (set by DL_tong7, which needs CoolantCut, set by Page\'s FlagTrigger0 `coolant`, and ReactorSwitch1/2, set by the reactor switches through LogicTrigger1/2 once coolant_cut), and Generator_overload, which FlagTrigger9 opens on ReactorButton3',
-  2: 'Final\'s FlagTrigger3 (touched, HeliosFree) fires Merge_helios_exit; HeliosFree is set by Page\'s FlagTrigger1 `Set_flag_helios` after the two uplink locks (UplinkLock1/2, Page\'s FlagTrigger2/3)',
-  3: 'Page\'s Switch4 (event kill_page -> Dispatcher1, start_endgame its sixth event) sits behind the Page_button mover, which DL_Blue4 opens after the four nodes (Node1..4_Frobbed, Mission15.Timer\'s DL_Blue1..4); no data sets the flag killpage that Mission15.Timer also reads',
+  1: 'Page\'s coolant Switch0 (coolantcut), Teleporter8 to the filed Final, the generator switches Switch10/16 once Mission15.Timer swapped them and one drop into the overlapping coolant FlagTriggers 2 and 4 (LogicTrigger1/2: ReactorSwitch1/2), a DL_Tong7 trigger (DL_tong7 sets ReactorReady), FlagTrigger5 (Generator_panel), the reactor buttons Switch1, Switch2 and Switch5 in turn (ReactorButton1..3, each opening the next one\'s cover), FlagTrigger9 (Generator_overload), Final\'s Switch4 (destroy_generator -> Dispatcher7 -> MapExit0); the Mechanic\'s overheard PowerGuyScared1 and 2 are waited for in their windows (each program starts them at its own pace; Scared3 started in neither) and the endgame snapshot waits for Endgame1\'s EndgameExplosions',
+  2: 'the uplink buttons Button18/19 (UplinkLock1/2), ComputerPersonal0 logged in (its one user, Icarus) and its special option "Engage Primary Router" clicked (Set_flag_helios: FlagTrigger1 sets HeliosFree; the option reads no uplink flag), Teleporter8 to the filed Final, FlagTrigger3 touched (Merge_helios_exit -> MapExit1)',
+  3: 'the four node keypads (7243: Node1..4_Frobbed), each waiting for its DL_Blue<n> (Mission15.Timer plays the InfoLink of the count of set flags), DL_Blue4 opening Page_button, Page\'s Switch4 (kill_page -> Dispatcher1, start_endgame -> MapExit0); no data sets the flag killpage that Mission15.Timer also reads',
 };
 for (const [n, how] of [[1, 'the reactor switches (Tong\'s ending)'], [2, 'Helios\' hub'], [3, 'Page\'s bunker (killpage)']])
   add(`6.5.${n}`, `ending ${n} from its in-world trigger, ${how}: the endgame, the credits and the menu, equal to the original`, 'O1',
-    {have: [`validate-travel-endings.mjs E${n} (from a LocalTravel into 99_Endgame${n}, O1) and M1-M3 (the triggers in Play only)`, spec('browser-tests/ending.spec.mjs').name],
-      need: `the original driven through the same trigger (Final's MapExit0 sits in solid space: the trigger, not the exit actor, is the way): ${ENDING_CHAINS[n]}`});
+    {proof: [v('validate-stage6-chain.mjs', '--mission', `15e${n}`)],
+      have: [`validate-travel-endings.mjs E${n} (from a LocalTravel into 99_Endgame${n}, O1) and M1-M3 (the triggers in Play only)`, spec('browser-tests/ending.spec.mjs').name],
+      weak: `from the third-party slot nicouzouf Save0042 (one played game's state at the Page map); the chain: ${ENDING_CHAINS[n]}; each step placed and God mode (Page's respawning troops and turrets, the reactor's radiation; typed again after each map change: it does not travel), as the other chains${n === 2 ? '; the special option is clicked at its button\'s point of the original\'s viewport (the `point` op)' : ''}; the endgame's conversation, quote and credits are given 120 s and the credits ended by a click (their own run to the end, and the menu on dxonly, are validate-travel-endings\' E and W); a mission 15 run from its arrival is row 6.4.15.1's; the captures are the Linux host's (.work/chains/m15e${n})`});
 
 // 6.6 The campaign in one run -----------------------------------------------------------------------------------------------------------
 add('6.6.1', 'one run in Play from New Game to an ending, each mission entered from the previous mission\'s exit (no save loaded), every required step placed; the travel text at each mission change equals the original\'s for the same run', 'O1',

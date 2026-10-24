@@ -71,6 +71,30 @@ are not part of the row; the original ran in real time (a step takes the origina
 longer seconds). A conversation with a `ConEventRandomLabel` says one of its alternatives by the game's random stream, which the two runs do not share: the comparison accepts a history event whose speech differs
 from the original's only when both speeches belong to one conversation with a random label (`scripts/chain-conversations.mjs`; the Carter bark's two lines in mission 1, one event in each of two texts).
 
+## Mission 15: the three endings (rows 6.5.1 to 6.5.3, 2026-10-24)
+
+Each ending is a chain from a real desktop slot (`start: { kind: 'slot' }`: the slot's files put into the save folder, `LoadGame <index>` from the logo map; Play puts
+them into its save directory, the original's driver copies them into the prefix after the probe set the folder aside), nicouzouf `Save0042` (`15_Area51_page`: the
+Final, Entrance and Bunker filed in `Current`, MeetHelios played, no ending's flag set), then the in-world chain that the maps' own actors spell out
+([the criteria rows](stage-6-exit-criteria.md) name it), the ending's own trigger, the endgame, 120 s for the conversation, the quote and the credits to start, a click on
+the credits and the arrival at `dxonly`:
+
+| Ending | Chain (`scripts/chains/mission15e<n>.mjs`) |
+| --- | --- |
+| 3, Illuminati | the four node keypads (7243), each waiting for its `DL_Blue<n>` (Mission15.Timer plays the InfoLink of the count of set flags: four at once would play `DL_Blue4` alone), `Page_button` open, `Switch4` (`kill_page`, Dispatcher1, `start_endgame`) |
+| 2, Helios | the uplink buttons `Button18`/`Button19` (`UplinkLock1/2`), `ComputerPersonal0` logged in (`type`, Tab, `type`, Enter) and its special option clicked (`point`: the button's centre in Play's terminal moved by the difference of the root centres, (641,329) of the original's 1280x720 viewport; `HeliosFree`), Escape twice, `Teleporter8` to the filed Final, `FlagTrigger3` (`Merge_helios_exit`) |
+| 1, New Dark Age | Page's coolant `Switch0` (`coolantcut`), `Teleporter8`, the Timer's switch swap (`MS_ButtonsHidden`), `Switch10` and `Switch16` and one drop into the overlapping coolant FlagTriggers 2 and 4 (each LogicTrigger input toggles: each touched once), a walk into a `DL_Tong7` trigger (`ReactorReady`), `FlagTrigger5` (`Generator_panel`), the three reactor buttons in turn (each opens the cover of the next), `FlagTrigger9` (`Generator_overload`), Final's `Switch4` (`destroy_generator`); the Mechanic's overheard `PowerGuyScared1` (before the first button) and `2` (before the third) are waited for: the original's first capture had them and Play none, because the Mechanic, never drawn headless, kept a stale `DistanceFromPlayer` (the `watch` stand-in from the reactor room on); `PowerGuyScared3` started in neither program; the endgame's snapshot waits for `EndgameExplosions` (Endgame1 sets it at its own pace) |
+
+Two ops came with them: `type` (text into the field that holds the keyboard, with its WM_CHAR units) and `point` (a click at a point of the original's viewport over a
+centred window). The planner's `face` takes `--before "CauseEvent a; CauseEvent b"` for a target a chain uncovers first (a mover the chain opens), and `face-chain <mission> <step> <actor>...`
+plans in the level the chain reaches at a step: a slot's level is not the cold map (ending 1's spot north of Page's coolant switch lands 34 units higher in Save0042's level, in both
+programs, and the frob misses; the restored Final's spots near the generator switches differ too), so ending 1's placements from the coolant switch on are planned there. A
+slot can also hold a device mid-animation: Save0042 saved `ComputerPersonal0` in state `Off` at its `Begin` code's `FinishAnim` (`bAnimating`), and `Computers.Frob` does
+nothing until the animation ends, which needs the computer drawn: ending 2 starts the `watch` stand-in at the placement and waits 2 s before the frob. God mode
+(`ReducedDamageType`) and `bCheatsEnabled` are not travel properties: every arrival drops both, in Play as in the original, so a chain types the two lines again after each map
+change (the first ending 1 capture lost its player to the reactor's radiation in Final over the original's longer real seconds). On the Linux host a
+capture started over ssh needs the session's display (`DISPLAY=:0`, `WAYLAND_DISPLAY`, `XDG_RUNTIME_DIR`): without it the game does not come up.
+
 ## What the chains found
 
 Each was found by a difference at a snapshot or in a text, fixed from the original's own evidence, and checked by the chain again.
