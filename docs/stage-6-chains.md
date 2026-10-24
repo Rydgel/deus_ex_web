@@ -104,6 +104,21 @@ capture is not there SKIPs. A console line typed while a menu is open is the men
   Lebedev scene (Mission03.FirstFrame), which the path called optional; mission 4's `ApartmentEntered` is set on the return to Paul (FlagTrigger30, touched with
   `NSFSignalSent`, fires FlagTrigger16, which cannot be touched); mission 8's exit helicopter needs `DL_Exit_Played` (Mission08.Timer).
 
+### Rules from the first captures of missions 2 and 3 (2026-10-25)
+
+* **A snapshot never races the program's pace.** The original runs in real time and a typed console line takes it seconds, so whatever happens on its own
+  after a step (an InfoLink an arrival's trigger plays, a conversation that follows another, a helper walking up) has happened by a snapshot in the original
+  and not yet in Play: a snapshot waits on that flag, or is not taken there (mission 2's `DL_Pickup` and `DL_SubwayComplete`, mission 3's `dl_batterypark`
+  and Anna's entrance, mission 11's Carla). Skill points from an InfoLink still playing at a travel land after `PreTravel` copied them to the `SKTemp_` flags
+  (mission 2's first comparison: 5000 against 5300 in the flags, the same total in the text).
+* **An arrival that is not where the player stays.** Mission 3's hangar arrival from the 747 is on a ramp: in the original's longer seconds the player came
+  down into `dl_gochopper`'s trigger and Paul's radius; the chain now enters both itself. A step a program might take on its own is made a step of the chain.
+* **Inventory is the chain's own.** On the chain's line the player has what the chains gave him: mission 5's prison takes everything and the chain takes the
+  pistol and the armory's rockets back; mission 9 takes the dockyard's rocket packs and the map's GEP gun (belt 2), which the welds, mission 12's bots and
+  mission 14 use. A step that fires a weapon names the belt slot the chain's own inventory gives it.
+* **A blocking owner wider than its conversation's radius** (the island helicopters, 461 and 300 units; a vehicle once `PutInWorld` restores its collision):
+  the conversation starts by the right button from just outside the cylinder (the original never started JockBarks with the player placed inside).
+
 ## What is compared
 
 At every `snap` the flags (equal as sets of `name|type|expiration|value`, and the default expiration), and for every map change the **travel text** the leg exported, after the
