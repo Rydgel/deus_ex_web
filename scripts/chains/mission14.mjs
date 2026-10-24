@@ -14,7 +14,10 @@
  *     the helicopter, JockArea51's owner); the player kills Howard Strong (Health 100) with the GEP gun the start carries; JockArea51 (radius 160, needs
  *     DL_Dead_Played) and its continue branch: SiloExit, Dispatcher0, ExitPath, MapExit0 to 15_area51_bunker.
  * The missile (Switch4 abort, the launch computer, DL_Savage2/3) is not an exit condition and is left out. Placements from scripts/chain-plan.mjs in Play's world
- * (cold maps; `terminal` for the special option, `face-chain` where a mission script brought an owner in). */
+ * (cold maps; `terminal` for the special option; a ring search in the level the chain reaches where a mission script brought an owner in).
+ * Gates the placements pass: the silo's blast doors (blastdoor1..3, locked, Keypad3 pairs, code 8456) between the front gate and Howard at the bottom, and the
+ * doors between the steps of each map, not inventoried. The GEP gun is the inventory of mission 12's provisional start (nicouzouf Save0028, belt 6): a start
+ * from mission 11's chain needs a weapon that start carries. TiffanySavage_Dead (mission 12's Dead branch) picks GaryWaitingForSchematics' Dead branch. */
 export default {
   mission: '14',
   steps: [
