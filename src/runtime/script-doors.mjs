@@ -2339,7 +2339,7 @@ export async function createScriptDoors({
   if(travel)installTravelNatives({runtime,store:saveStore});
   // PruneTravelActors and SaveCurrentLevel(-2) for the tick's travel step (travel-save.mjs).
   const levelSaver=travel?createLevelSaver({runtime,level,asset,store:saveStore,log:logLine,viewport:()=>level.engine.client.viewports[0],
-    modelIndex,arrival,restoredObjects,flagClasses:saveFlagClasses}):null;
+    modelIndex,arrival,flagClasses:saveFlagClasses}):null;
   // SaveGame (native 3011), the console's SAVEGAME and DELETEGAME, DeleteSaveGameFiles of a slot (game-save.mjs)
   const gameSaver=travel?createGameSaver({runtime,level,directory:saveDirectory??hostSaveDirectory(),store:saveStore,levelSaver,log:logLine,
     viewport:()=>level.engine.client.viewports[0],config:runtime.classLoader?.graph?.config,windowHost:()=>windowHost,

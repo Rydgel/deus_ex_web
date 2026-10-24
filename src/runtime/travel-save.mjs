@@ -14,7 +14,7 @@ import { saveSlotDirectory } from './save-directory.mjs';
 
 const lower = value => String(value ?? '').toLowerCase();
 
-export function createLevelSaver({ runtime, level, asset, store, log, viewport, modelIndex, arrival, restoredObjects, flagClasses = null, now = () => performance.now() }) {
+export function createLevelSaver({ runtime, level, asset, store, log, viewport, modelIndex, arrival, flagClasses = null, now = () => performance.now() }) {
   const read = (object, name) => runtime.readNamed(object, name);
   const write_ = (object, name, value) => runtime.writeNamed(object, name, value);
   const destroy = actor => runtime.destroyActor(actor, false);
@@ -56,7 +56,7 @@ export function createLevelSaver({ runtime, level, asset, store, log, viewport, 
     const started = now();
     store.releaseLoaders();
     const events = runtime.scriptVm?.aiEvents;
-    const saved = serializeLevel({ runtime, level, asset, modelIndex, restoredObjects,
+    const saved = serializeLevel({ runtime, level, asset, modelIndex,
       levelUrl: { map: arrival?.map ?? asset.name, portal: arrival?.portal ?? '', options: arrival?.options ?? [] },
       ai: events?.active ? { words: events.snapshot(), spelling: id => events.spelling(id) } : null,
       flags: flagClasses ? { classes: flagClasses, owner: () => read(viewport(), 'Actor') } : null,

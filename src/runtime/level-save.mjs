@@ -46,12 +46,11 @@ export function classFields(cls) {
  * @param levelUrl        {map, portal, options}: the URL the level was loaded with
  * @param ai              {words: ai_snapshot words, spelling(id)} or null
  * @param guid            16 bytes
- * @param restoredObjects the non-actor objects a restore made (identities with the source `index`)
  * @param flags           {classes, owner()} when the player's FlagBase is part of the file (SaveGame; a level left by travel has none, PruneTravelActors
  *                        destroyed it): the loaded Extension flag classes (travel-export.mjs loadFlagClasses) and the actor the FlagBase is the Outer-owned
  *                        object of. The host FlagBase (script-triggers.mjs createFlagBase) is written as the `FlagBase` and `Flag*` objects the original holds.
  */
-export function serializeLevel({ runtime, level, asset, modelIndex, levelUrl, ai = null, guid, restoredObjects = [], flags = null }) {
+export function serializeLevel({ runtime, level, asset, modelIndex, levelUrl, ai = null, guid, flags = null }) {
   const source = asset.pkg, sourceBytes = asset.bytes;
   const tables = new PackageTables({ sourcePkg: source });
   const plan = [];                       // export descriptors, in export order
@@ -78,9 +77,16 @@ export function serializeLevel({ runtime, level, asset, modelIndex, levelUrl, ai
   const sourced = actors.filter(actor => Number.isInteger(actor.index)).sort((a, b) => a.index - b.index);
   const spawned = actors.filter(actor => !Number.isInteger(actor.index));
   for (const actor of [...sourced, ...spawned]) add(actor, { kind: 'actor', name: actor.name, flags: ACTOR_FLAGS, sourceIndex: actor.index, outerExport: 0 });
-  // (a restored object the level has since released, such as the conversation history ResetPlayerToDefaults deleted, is not part of the file)
-  const alive = object => { try { runtime.instance(object); return true; } catch { return false; } };
-  for (const object of restoredObjects.filter(alive)) add(object, { kind: 'object', name: object.name, flags: OBJECT_FLAGS, sourceIndex: object.index, outerExport: 0 });
+  // A restored level's non-actor objects (the file's goals, notes, conversation history, logs) are not exports by right: SavePackage(GLevel->GetOuter(),
+  // GLevel, 0, ...) (DeusEx 0x1000fe93, TopLevelFlags 0) exports what the Level reaches, so they are written only when an actor still reaches them (objectRef
+  // below), as a new(Self) object is. On a travel arrival DeusExGameInfo.Login (no `loadgame` option) runs ResetPlayerToDefaults on the re-possessed pawn
+  // (DeleteAllNotes, DeleteAllGoals, ResetConversationHistory, the keys removed) and the travel import gives it new ones, which leaves the previous visit's
+  // objects unreferenced: measured, the original's files never hold such an object (257 saved levels of .work/travel and
+  // .work/internet-saves: every DeusExGoal, DeusExNote, NanoKeyInfo, ConHistory, ConHistoryEvent, DeusExLog, DataVaultImageNote and Flag* export is referenced
+  // by another export's tagged property, 43,410 objects), and nicouzouf's 04_NYC_Street.dxs, re-possessed and filed again between Save0010 and Save0011 (the
+  // pawn JCDentonMale18 in both), holds DeusExGoal182..184 in the first and only the then current 2..7 in the second. Writing every restored object filed
+  // each visit's dead goals again and, the package being their Outer here, under bare names a later visit's goals reuse: mission 4's fourth Street entry
+  // found DeusExGoal0 twice (scripts/validate-travel-restore-objects.mjs).
   const levelSource = source.exports.findIndex(entry => entry.className === 'Level') + 1;
   if (!levelSource) throw new UnsupportedSaveObject('the source package has no Level export');
   const levelPosition = add({ levelObject: true }, { kind: 'level', name: source.exports[levelSource - 1].name, flags: source.exports[levelSource - 1].flags,
@@ -145,6 +151,12 @@ export function serializeLevel({ runtime, level, asset, modelIndex, levelUrl, ai
     const position = exportOf.get(value);
     if (position) return position;
     if (isHostFlagBase(value)) return flagBaseExport(value);
+    // a restored non-actor object (its identity is a source export too): exported as any object the actors reach, with the Outer it has here (the level
+    // package stand-in, docs/travel.md "Play, step 3"; the original's is the Outer it was loaded with, the pawn for goals, notes and keys: unresolved)
+    if (value.restoredObject) {
+      const found = exportableObject(value);
+      return found ? add(value, { kind: 'object', name: found.native.name ?? value.name, flags: OBJECT_FLAGS, sourceIndex: null, outerExport: found.outerExport }) : 0;
+    }
     if (value.asset === asset && Number.isInteger(value.index) && value.index > 0) {
       // an export of the source package that is not an actor: the brush's Model, the Summary, the EventManager
       const found = sourceExport.get(value.index);
