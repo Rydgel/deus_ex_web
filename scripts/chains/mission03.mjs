@@ -43,6 +43,8 @@ export default {
     { op: 'conv', name: 'JockBarks', watch: ['BlackHelicopter0'], timeout: 120 },
     { op: 'travel', to: '03_NYC_BatteryPark', label: 'leg3', timeout: 240 },
     ...cheats,
+    // the helipad's DataLinkTriggers (dl_batterypark) play at each program's pace after the camera path: the snapshot waits for it
+    { op: 'wait', flag: 'dl_batterypark_Played', timeout: 120 },
     { op: 'wait', seconds: 3 },
     { op: 'snap', label: 'd5-batterypark' },
 
@@ -87,8 +89,7 @@ export default {
     { op: 'snap', label: 'd9-747' },
     { op: 'place', at: [-249, -725, 355], view: [-6146, 32803], harness: true, turnFirst: true, note: '60 units east of JuanLebedev0 (-309,-725,354), facing him' },
     { op: 'conv', name: 'MeetLebedev', watch: ['JuanLebedev0'], timeout: 300 },
-    { op: 'wait', seconds: 15 },
-    { op: 'snap', label: 'd10-lebedev' },
+    // (no snapshot here: Anna's entrance follows MeetLebedev at each program's pace)
     { op: 'conv', name: 'AnnaEntrance', watch: ['AnnaNavarre0'], timeout: 300 },
     { op: 'wait', seconds: 15 },
     { op: 'snap', label: 'd11-anna' },
@@ -99,6 +100,13 @@ export default {
     { op: 'travel', to: '03_NYC_Hangar', label: 'leg10' },
     ...cheats,
     { op: 'wait', seconds: 3 },
+    // the hangar on the way back: the arrival (Teleporter14, 4854,-653,273) is on the 747's ramp, 184 units from dl_gochopper's trigger and 313 from Paul; in the
+    // original's longer real seconds the player came down into both (its first capture had dl_gochopper and M03MeetPaul, Play's run had left): both entered here
+    { op: 'place', at: [4855, -469, 191], view: [0, 0], drop: true, harness: true, note: 'above DataLinkTrigger0 (4855,-469,101, radius 96; dl_gochopper, needs AnnaEntrance_Played)' },
+    { op: 'wait', flag: 'dl_gochopper_Played', timeout: 120 },
+    { op: 'place', at: [4861, -345, 73], view: [-6138, 32795], harness: true, turnFirst: true, note: '60 units east of PaulDenton0 (4801,-345,72, Standing), facing him (chain-plan.mjs stand)' },
+    { op: 'conv', name: 'M03MeetPaul', watch: ['PaulDenton0'], timeout: 180 },
+    { op: 'wait', seconds: 5 },
     { op: 'place', at: [3217, 1201, 278], view: [0, 16384], harness: true, turnFirst: true, note: '200 units south of Teleporter2 (3217,1401,238, radius 64), facing it: the walk enters it' },
     { op: 'walk', seconds: 2 },
     { op: 'travel', to: '03_NYC_Airfield', label: 'leg11' },
