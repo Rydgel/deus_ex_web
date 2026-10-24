@@ -212,10 +212,19 @@ export async function runChainInPlay(chain, { assets = null, log = () => {}, unt
       note(`click${n > 1 || step.until ? ` x${n}` : ''}`);
     },
     /** A held key (the forward key by default): the player walks, as in the original's held-key captures; a travel the walk causes ends it. */
+    /** `untilTravel`: a walk into a teleporter or an exit, in pulses of 0.1 s with the key up between them, ending at the first pulse after which a map change
+     * is under way, so no key is down when the next map starts (the original's driver pulses alike: its wall-clock hold outlasted the travel and walked the
+     * player on in the next map, mission 3's hangar). */
     async walk(step) {
       const code = PLAY_KEY[step.key ?? 'UP'];
-      c.game.inputKey(code, true);
       const before = c.pos(c.player());
+      if (step.untilTravel) {
+        for (let held = 0; held < step.seconds && !pending; held += 0.1) { c.game.inputKey(code, true); frames(6); c.game.inputKey(code, false); frames(4); }
+        const after = c.pos(c.player());
+        note(`walk ${step.key ?? 'UP'} in pulses: ${Math.round(Math.hypot(after[0] - before[0], after[1] - before[1]))} units${pending ? `, travel to ${pending.map}` : ''}`);
+        return;
+      }
+      c.game.inputKey(code, true);
       frames(Math.round(step.seconds / FRAME));
       c.game.inputKey(code, false);
       c.frames(2);

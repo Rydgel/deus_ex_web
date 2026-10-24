@@ -78,7 +78,7 @@ export default {
 
     // the hangar and the 747: Teleporter2 (in a doorway: walked into), the hangar's Teleporter10 to the 747's cargo hold, MeetLebedev, Anna's entrance
     { op: 'place', at: [3391, 2553, 334], view: [0, 49152], harness: true, turnFirst: true, note: '200 units north of Teleporter2 (3391,2353,294, radius 64), facing it: the walk enters it' },
-    { op: 'walk', seconds: 2 },
+    { op: 'walk', untilTravel: true, seconds: 2 },
     { op: 'travel', to: '03_NYC_Hangar', label: 'leg8' },
     ...cheats,
     { op: 'wait', seconds: 3 },
@@ -96,19 +96,17 @@ export default {
 
     // back to the airfield: the 747's Teleporter13 and the hangar's Teleporter2 (doorways: walked into)
     { op: 'place', at: [1521, -52, 386], view: [0, 49152], harness: true, turnFirst: true, note: '200 units north of Teleporter13 (1521,-252,346, radius 50), facing it: the walk enters it' },
-    { op: 'walk', seconds: 2 },
+    { op: 'walk', untilTravel: true, seconds: 2 },
     { op: 'travel', to: '03_NYC_Hangar', label: 'leg10' },
     ...cheats,
     { op: 'wait', seconds: 3 },
-    // the hangar on the way back: the arrival (Teleporter14, 4854,-653,273) is on the 747's ramp, 184 units from dl_gochopper's trigger and 313 from Paul; in the
-    // original's longer real seconds the player came down into both (its first capture had dl_gochopper and M03MeetPaul, Play's run had left): both entered here
+    // the hangar on the way back: dl_gochopper's trigger (needs AnnaEntrance_Played) entered by the chain. (The original's first capture also had M03MeetPaul,
+    // cut after its first line: its wall-clock walk into the 747's teleporter held the key into the hangar and walked the player down the ramp into Paul's radius
+    // before Mission03.FirstFrame, which destroys Paul once MeetLebedev_Played is set, ran; the walks into teleporters are now pulsed and end at the travel.)
     { op: 'place', at: [4855, -469, 191], view: [0, 0], drop: true, harness: true, note: 'above DataLinkTrigger0 (4855,-469,101, radius 96; dl_gochopper, needs AnnaEntrance_Played)' },
     { op: 'wait', flag: 'dl_gochopper_Played', timeout: 120 },
-    { op: 'place', at: [4861, -345, 73], view: [-6138, 32795], harness: true, turnFirst: true, note: '60 units east of PaulDenton0 (4801,-345,72, Standing), facing him (chain-plan.mjs stand)' },
-    { op: 'conv', name: 'M03MeetPaul', watch: ['PaulDenton0'], timeout: 180 },
-    { op: 'wait', seconds: 5 },
     { op: 'place', at: [3217, 1201, 278], view: [0, 16384], harness: true, turnFirst: true, note: '200 units south of Teleporter2 (3217,1401,238, radius 64), facing it: the walk enters it' },
-    { op: 'walk', seconds: 2 },
+    { op: 'walk', untilTravel: true, seconds: 2 },
     { op: 'travel', to: '03_NYC_Airfield', label: 'leg11' },
     ...cheats,
     { op: 'wait', seconds: 3 },

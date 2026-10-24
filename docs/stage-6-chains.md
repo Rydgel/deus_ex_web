@@ -111,8 +111,10 @@ capture is not there SKIPs. A console line typed while a menu is open is the men
   and not yet in Play: a snapshot waits on that flag, or is not taken there (mission 2's `DL_Pickup` and `DL_SubwayComplete`, mission 3's `dl_batterypark`
   and Anna's entrance, mission 11's Carla). Skill points from an InfoLink still playing at a travel land after `PreTravel` copied them to the `SKTemp_` flags
   (mission 2's first comparison: 5000 against 5300 in the flags, the same total in the text).
-* **An arrival that is not where the player stays.** Mission 3's hangar arrival from the 747 is on a ramp: in the original's longer seconds the player came
-  down into `dl_gochopper`'s trigger and Paul's radius; the chain now enters both itself. A step a program might take on its own is made a step of the chain.
+* **No key is down when a map starts.** The original's `walk` was one wall-clock hold: a walk into a teleporter kept the key down through the map change and
+  walked the player on in the next map (mission 3's first capture: down the hangar's ramp into `dl_gochopper`'s trigger and into Paul's radius before
+  Mission03.FirstFrame destroyed Paul, a conversation cut after one line), while Play's walk ends at the travel. A walk into a teleporter or an exit is now
+  `untilTravel`: pulses of 0.1 s with the key up between them, in both drivers, ending once a map change is under way.
 * **Inventory is the chain's own.** On the chain's line the player has what the chains gave him: mission 5's prison takes everything and the chain takes the
   pistol and the armory's rockets back; mission 9 takes the dockyard's rocket packs and the map's GEP gun (belt 2), which the welds, mission 12's bots and
   mission 14 use. A step that fires a weapon names the belt slot the chain's own inventory gives it.

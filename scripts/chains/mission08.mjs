@@ -19,7 +19,7 @@ export default {
 
     // the bar: M08MeetHarleyFilben
     { op: 'place', at: [-703, -675, -417], view: [0, 0], harness: true, turnFirst: true, note: '200 units west of Teleporter3 (-503,-675,-457, radius 60; the bar\'s front door), facing it: the walk enters it' },
-    { op: 'walk', seconds: 2 },
+    { op: 'walk', untilTravel: true, seconds: 2 },
     { op: 'travel', to: '08_NYC_Bar', label: 'leg1' },
     ...cheats,
     { op: 'wait', seconds: 3 },
@@ -29,7 +29,7 @@ export default {
     { op: 'wait', seconds: 10 },
     { op: 'snap', label: 'h2-filben' },
     { op: 'place', at: [731, 850, 92], view: [0, 0], harness: true, turnFirst: true, note: '200 units west of Teleporter2 (931,850,52, radius 60), facing it: the walk enters it' },
-    { op: 'walk', seconds: 2 },
+    { op: 'walk', untilTravel: true, seconds: 2 },
     { op: 'travel', to: '08_NYC_Street', label: 'leg2' },
     ...cheats,
     { op: 'wait', seconds: 3 },

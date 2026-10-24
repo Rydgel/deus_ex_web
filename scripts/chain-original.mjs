@@ -210,7 +210,21 @@ export async function runChainInOriginal(chain, { log = console.log, until = nul
     async key(s) { for (const name of s.names) { await press(name); } note(`key ${s.names.join(' ')}`); },
     async type(s) { step('type', s.text); await sleep(500); note(`type ${s.text.length} characters`); },
     async point(s) { step('click', `${s.at[0]} ${s.at[1]}`); await sleep((s.settle ?? 1) * 1000); note(`point ${s.at.join(',')}`); },
-    async walk(s) { step('hold', s.key ?? 'UP', String(Math.round(s.seconds * 1000))); note(`walk ${s.key ?? 'UP'} ${s.seconds}s`); },
+    async walk(s) {
+      // `untilTravel`: pulses of 0.1 s (the key up between them) until the player's level is another or gone (a map change under way), as chain-play.mjs
+      if (s.untilTravel) {
+        const before = controlled();
+        let n = 0;
+        for (; n * 0.1 < s.seconds; n++) {
+          step('hold', s.key ?? 'UP', '100');
+          const p = controlled();
+          if (!p || (before && p.level !== before.level)) break;
+        }
+        note(`walk ${s.key ?? 'UP'} in ${n + 1} pulses`);
+        return;
+      }
+      step('hold', s.key ?? 'UP', String(Math.round(s.seconds * 1000))); note(`walk ${s.key ?? 'UP'} ${s.seconds}s`);
+    },
     /** A conversation, played as it comes (no key skips a speech: a skip races the choice that follows): wait for the player's conPlay, read its current event each round,
      * pick the listed choices (ArrowDown by their index, Enter) when the event is a ConEventChoice, and finish when the conPlay is gone. */
     async conv(s) {
