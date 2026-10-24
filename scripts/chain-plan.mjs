@@ -12,7 +12,7 @@
  *                                                                        around each actor is tried in that state (no restart: the trials follow each other)
  */
 import { fileURLToPath } from 'node:url';
-import { loadAssets, typeLine, runChainInPlay } from './chain-play.mjs';
+import { loadAssets, typeLine, typeChar, pressKey, runChainInPlay } from './chain-play.mjs';
 import { openSession } from './census-stage5-session.mjs';
 import { placeLines, loadChain } from './chain-lib.mjs';
 
@@ -41,6 +41,52 @@ if (mode === 'face-chain') {
       if (c.game.interaction.frobTarget?.name === name) { found++; console.log(JSON.stringify({ target: name, d, k, at: [p[0], p[1], p[2] + 1].map(Math.round), view })); }
     }
     if (!found) console.log(JSON.stringify({ target: name, found: 0 }));
+  }
+  process.exit(0);
+}
+if (mode === 'terminal') {
+  // node scripts/chain-plan.mjs terminal <map> <computer> <user> <password>: the computer frobbed from a place the view trace selects it from, the login typed,
+  // then the special options' buttons with their centres in Play's root and as the `point` op takes them (the original's 1280x720 viewport over a centred window)
+  const [, , , user, password] = args;
+  const assets = await loadAssets();
+  const { c } = await openSession(map, assets, { travel: {} });
+  c.frames(60);
+  const target = c.actor(actorName), at = c.pos(target), eye = c.game.player.baseEyeHeight, unit = 32768 / Math.PI;
+  c.watched.add(target);
+  let placed = null;
+  for (const d of [45, 60]) for (let k = 0; k < 8 && !placed; k++) {
+    const bearing = k * Math.PI / 4, from = [Math.round(at[0] + Math.cos(bearing) * d), Math.round(at[1] + Math.sin(bearing) * d), Math.round(at[2] + 30)];
+    if (!c.inWorld(from)) continue;
+    for (const line of ['set DeusEx.JCDentonMale bCheatsEnabled True', ...placeLines({ at: from, view: [0, 0] })]) { typeLine(c, line); c.frames(10); }
+    c.frames(40);
+    const p = c.pos(c.player()), dx = at[0] - p[0], dy = at[1] - p[1], dz = at[2] - (p[2] + eye);
+    const view = [Math.round(Math.atan2(dz, Math.hypot(dx, dy)) * unit), Math.round(((Math.atan2(dy, dx) * unit) % 65536 + 65536) % 65536)];
+    typeLine(c, `set DeusEx.JCDentonMale ViewRotation (Pitch=${view[0]},Yaw=${view[1]},Roll=0)`); c.frames(30);
+    if (c.game.interaction.frobTarget?.name === actorName) placed = { at: [p[0], p[1], p[2] + 1].map(Math.round), view };
+  }
+  if (!placed) throw new Error(`no place selects ${actorName}`);
+  console.log(JSON.stringify({ place: placed }));
+  typeLine(c, 'ParseRightClick'); c.frames(120);
+  for (const ch of user) typeChar(c, ch);
+  pressKey(c, 'TAB');
+  for (const ch of password) typeChar(c, ch);
+  pressKey(c, 'ENTER'); c.frames(120);
+  const W = c.game.doors.scriptRuntime.windowHost.W, r = c.runtime, root = c.read(c.player(), 'rootWindow');
+  const rootW = W.f32(root, 0xe4), rootH = W.f32(root, 0xe8);
+  const stack = r.readNamed(root, 'winStack').slice(0, r.readNamed(root, 'winCount'));
+  const terminal = stack.at(-1), screen = terminal ? c.read(terminal, 'winComputer') : null;
+  const screenClass = screen ? r.instance(screen).cls.record.key : null;
+  console.log(JSON.stringify({ terminal: terminal ? r.instance(terminal).cls.record.key : null, screen: screenClass, user: terminal ? c.read(terminal, 'userName') : null }));
+  if (screenClass?.endsWith('computerscreenspecialoptions')) {
+    const options = c.read(target, 'specialOptions');
+    for (const entry of c.read(screen, 'optionButtons')) {
+      const field = name => Object.entries(entry).find(([k]) => k.toLowerCase().endsWith(name.toLowerCase()))?.[1];
+      const specialIndex = field('specialIndex'), btnSpecial = field('btnSpecial');
+      if (!btnSpecial) continue;
+      const x = W.f32(btnSpecial, 0xd4) + W.f32(btnSpecial, 0x80) * .5, y = W.f32(btnSpecial, 0xd8) + W.f32(btnSpecial, 0x84) * .5;
+      const text = Object.entries(options[specialIndex]).find(([k]) => k.endsWith('.text'))?.[1];
+      console.log(JSON.stringify({ specialIndex, text, play: [x, y], point: [Math.round(x + 640 - rootW / 2), Math.round(y + 360 - rootH / 2)] }));
+    }
   }
   process.exit(0);
 }
