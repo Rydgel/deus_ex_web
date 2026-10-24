@@ -75,7 +75,7 @@ export function constructHistoryObject(runtime,level,cls,isEvent,{outer=level.na
   return object;
 }
 
-export async function createLiveConPlayRuntime({runtime,assets,level,player,shell,conversations,dataLinkConversations=[],onSpeech,prepareClass}){
+export async function createLiveConPlayRuntime({runtime,assets,level,player,shell,conversations,dataLinkConversations=[],onSpeech,prepareClass,prepareItemMeshes=null}){
   const get=(o,k)=>runtime.readNamed(o,k);
   const set=(o,k,v)=>runtime.writeNamed(o,k,v);
   const [deus,conSys,engine]=await Promise.all(['DeusEx','ConSys','Engine'].map(x=>assets.get(x)));
@@ -186,9 +186,12 @@ export async function createLiveConPlayRuntime({runtime,assets,level,player,shel
     const object=await runtime.prepareDynamicLoadObject(`DeusEx.${name}`);
     const cls=await runtime.loadClass(object.asset,object.index);
     await prepareClass(cls);
+    // the item's meshes too (Mesh, PlayerViewMesh, PickupViewMesh, ThirdPersonMesh), as a carried item's at a travel arrival: the item a choice hands over runs
+    // mesh natives in its own frames (DefoeConvos' second option in the slot Save0025 handed over a weapon mod whose deusexitems.weaponmod was not prepared)
+    await prepareItemMeshes?.(cls);
     const ammoField=runtime.lookupMember(cls,'fields','AmmoName');
     const ammo=ammoField?runtime.defaultValue(cls,ammoField):null;
-    if(ammo)await prepareClass(await runtime.loadClass(ammo.asset,ammo.index));
+    if(ammo){const ammoClass=await runtime.loadClass(ammo.asset,ammo.index);await prepareClass(ammoClass);await prepareItemMeshes?.(ammoClass);}
   }
   const coreOuter=await runtime.resources.package(await assets.get('Core'));
   const classRef=runtime.resources.nativeClass('Core.Class');

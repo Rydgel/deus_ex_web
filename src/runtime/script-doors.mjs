@@ -2450,7 +2450,7 @@ export async function createScriptDoors({
   const faceConversations=await prepareFaceConversations(runtime,{assets,level});
   liveConPlay=await createLiveConPlayRuntime({runtime,assets,level,player:playerActor,shell:nativeWindowFacade,
     conversations:faceConversations.conversations,dataLinkConversations:liveDataLink.conversations,prepareClass:prepareNpcClass,
-    onSpeech:event=>callbacks.conversationSpeech?.(event)});
+    prepareItemMeshes:prepareItemViewMeshes,onSpeech:event=>callbacks.conversationSpeech?.(event)});
 
   // Prepare the newly initialized player subsystem graph for subsequent ticks.
   await prepareNpcs();
