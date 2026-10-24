@@ -65,7 +65,9 @@ export default {
     { op: 'snap', label: 'h5-dl-exit' },
 
     // the roof: M08JockExit (Jock is BlackHelicopter0, radius 250) and its Go branch
-    { op: 'place', at: [336, 965, 720], view: [0, 32768], harness: true, turnFirst: true, note: '260 units east of BlackHelicopter0 (76,965,757 in the world, radius 225), facing it; the player lands on the roof' },
+    // the helicopter blocks the player once in the world (Vehicles.PutInWorld restores its default collision: bBlockPlayers) and its cylinder (radius 225) is
+    // nearly the conversation's radius (250): the right button from just outside it, aimed up at it from the roof
+    { op: 'place', at: [331, 965, 593], view: [4741, 32781], harness: true, turnFirst: true, note: '255 units east of BlackHelicopter0 (76,965,757 in the world, radius 225), aimed at it (a ring search in the chain\'s level)' },
     { op: 'frob', target: 'BlackHelicopter0', watch: ['BlackHelicopter0'] },
     { op: 'conv', name: 'M08JockExit', choose: [{ index: 0, label: 'Go' }], watch: ['BlackHelicopter0'], timeout: 300 },
     { op: 'travel', to: '09_NYC_Dockyard', label: 'exit', timeout: 240 },
