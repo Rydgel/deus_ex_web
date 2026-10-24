@@ -31,14 +31,8 @@ export default {
     { op: 'line', text: 'set DeusEx.JCDentonMale ReducedDamageType All', harness: true },
     // what the provisional start skips (the real arrival from 11_Paris_Everett's MapExit1): Carla's radius conversation next to PlayerStart2, which adds DestroyBots
     // and ActivatePower and gives the base's map (DL_no_carla's eleven triggers play it otherwise):
-    // Carla (ScientistFemale5) walks to the arriving player (WaitingFor); on the chain's line her MeetCarlaBrown began and ended inside the cheat lines typed at
-    // the arrival (LastConEndTime set, not played) and she now wanders: the level held, the player placed by her where she is, the level released, the right
-    // button (GetActiveConversation(IM_Frob) offers MeetCarlaBrown; the radius is gated for 10 s after a conversation with her)
-    { op: 'line', text: 'set LevelInfo bPlayersOnly True', harness: true },
-    { op: 'placeNear', actor: 'ScientistFemale5', distance: 60, bearing: 0, harness: true, turnFirst: true, note: '60 units east of Carla Brown where she stands, aimed at her' },
-    { op: 'line', text: 'set LevelInfo bPlayersOnly False', harness: true, settle: 1 },
-    { op: 'frob', target: 'ScientistFemale5' },
-    { op: 'conv', name: 'MeetCarlaBrown', watch: ['ScientistFemale5'], timeout: 120 },
+    // MeetCarlaBrown is in the start: Carla (ScientistFemale5, WaitingFor) walks to the arriving player and her conversation runs during mission 11's
+    // exit save step, which waits for no conversation to hold the keys (the start's flags have MeetCarlaBrown_Played; a frob now offers CarlaBarks)
 
     // the bot security system's backup power: two keypads (code 5868, MeetCarlaBrown's note); both inputs of LogicTrigger1 fire test2 (Dispatcher6: bot_power, whose
     // DataLinkTrigger0 plays DL_override_activated, which needs !M12BotsDestroyed: the power precedes the bots)
