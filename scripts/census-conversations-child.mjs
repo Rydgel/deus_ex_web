@@ -30,7 +30,9 @@ async function loadSlot(slotPath, assets, frameSeconds) {
   for (const name of await readdir(slotPath)) entries.push({ name, bytes: new Uint8Array(await readFile(`${slotPath}/${name}`)) });
   const info = parseSaveInfo(entries.find(entry => entry.name === 'SaveInfo.dxs').bytes);
   const directory = createSaveDirectory({ saves: [{ directory: `Save${String(index).padStart(4, '0')}`, files: entries, info }] });
-  const { c } = await openSession('DX', assets, { travel: {}, saveDirectory: directory });
+  const { handleLimit } = await import('../src/runtime/script-object-handles.mjs');
+  const logo = await openSession('DX', assets, { travel: {}, saveDirectory: directory });
+  const { c } = logo;
   c.frames(60);
   const driver = createMenuDriver(c.game);
   c.key('Escape'); c.frames(20);
@@ -38,7 +40,9 @@ async function loadSlot(slotPath, assets, frameSeconds) {
   c.game.hud.scoped(() => driver.pressActionKey('LOAD')); c.frames(4);
   const request = c.takeTravel();
   if (!request?.restore) throw new Error(`the Load button made no restore request for ${slotPath}`);
+  const levelStart = handleLimit();
   const session = await openSession(request.map, assets, { travel: { arrival: request, lastURL: request.lastURL }, saveDirectory: directory, frameSeconds, paintEvery: 10 });
+  logo.dispose(levelStart);     // the logo map's session is done (census-stage5-session.mjs dispose: the page's map host does the same, sim-host.mjs)
   return { session, map: request.map, saved: info.properties.MapName };
 }
 
@@ -58,12 +62,17 @@ export async function runChild({ map, only, frameSeconds, buildPlan, slot = null
   let targets = [];
 
   let session = null, c = null, H = null;
+  const { handleLimit } = await import('../src/runtime/script-object-handles.mjs');
   const open = async () => {
+    // a session that replaces another disposes of the old one once the new one is open (census-stage5-session.mjs dispose, as the page's map host does): the
+    // process-wide handle table is otherwise the strong reference to every earlier level, and a slot reloaded for each retry ran 02_NYC_Street@Save4 out of heap
+    const previous = session, start = handleLimit();
     if (slot) {
       const loaded = await loadSlot(slot, assets, frameSeconds);
       session = loaded.session; slotMap = loaded.map;
     } else session = await openSession(map, assets, { frameSeconds, paintEvery: 10, travel: {} });   // a travel host: a map exit the conversation fires is a request, not an error
     c = session.c;
+    previous?.dispose(start);
     c.frames(30);
     H = harness(c, frameSeconds, meta);
     H.godMode();
@@ -103,14 +112,20 @@ export async function runChild({ map, only, frameSeconds, buildPlan, slot = null
   for (const t of targets) {
     if (results.get(lower(t.name))?.outcome === 'ran') continue;
     let result = await attempt(t);
+    H.restoreRequired();
     // the level drifted (a pawn killed, turned hostile or sent away by an earlier conversation): the original Player start again, once
     if (retryable(result)) {
       const first = result.stop.family;
       await restartSession();
       result = await attempt(t, true);
+      H.restoreRequired();
       result.notes.unshift(`second attempt after restarting the level (the first: ${first})`);
     }
     results.set(lower(t.name), result);
+    // progress on stderr (the results are emitted at the end): a child that dies is found by its last line
+    console.error(`[${map}] ${t.name}: ${result.outcome}, heap ${Math.round(process.memoryUsage().heapUsed / 1048576)} MB, ${Math.round((wallNow() - t0) / 1000)} s`);
+    // a turn of the event loop: the weak references this job dereferenced (the Rust VM registry's) keep their targets until the job ends, a disposed level among them
+    await new Promise(resolve => setImmediate(resolve));
     for (const other of H.incidentals()) {
       const m = meta.get(lower(other.name));
       if (!m || m.map !== map || results.get(lower(other.name))?.outcome === 'ran') continue;
@@ -224,6 +239,24 @@ function harness(c, frameSeconds, meta) {
   const stateName = a => { try { return c.runtime.instance(a)?.state?.stateNode?.record?.name ?? null; } catch { return null; } };
   const tapKey = (code, between = 2) => { c.game.windowKey(code, true); step(between); c.game.windowKey(code, false); step(1); };
   const setFlag = (name, value) => flagBase().setBool(name, value, true, 0);
+  // The flags a conversation needs are set for its start only: each one's state before is journaled and put back after the attempt (unless the conversation itself
+  // changed it), so a requirement of one conversation does not hold for the next ones' placements (HeliosFree, set for DL_Final_Helios07, armed Final's FlagTrigger3
+  // and a later placement inside it left the map for 99_Endgame2)
+  const required = new Map();
+  const setRequired = f => {
+    const key = lower(f.flag), entry = flagBase().entries.get(key);
+    if (!required.has(key)) required.set(key, { name: f.flag, before: entry ? { ...entry } : null });
+    required.get(key).value = Boolean(f.value);
+    setFlag(f.flag, f.value);
+  };
+  function restoreRequired() {
+    const base = flagBase();
+    for (const { name, before, value } of required.values()) {
+      if (Boolean(base.getBool(name)) !== value) continue;      // the conversation set it itself: its own effect stays
+      if (before) base.setBool(before.name, before.value, true, before.expiration ?? 0); else base.deleteFlag(name, 0);
+    }
+    required.clear();
+  }
   const getFlag = name => Boolean(flagBase().getBool(name));
   const call = (obj, fn, ...args) => c.game.hud.scoped(() => c.runtime.callFunction(c.runtime.lookup(obj, fn), obj, args.length, i => args[i]));
   const aliveOwner = a => { if (c.gone(a)) return false; try { if (read(a, 'Health') <= 0) return false; } catch { /* no Health: not a pawn */ } try { return !read(a, 'bHidden'); } catch { return true; } };
@@ -311,7 +344,7 @@ function harness(c, frameSeconds, meta) {
     // let whatever plays finish first (a started InfoLink of an earlier step, a bark)
     if (playsActive()) drive(() => !playsActive(), { max: 400 });
     // harness: the conversation's own flags
-    for (const f of t.required) setFlag(f.flag, f.value);
+    for (const f of t.required) setRequired(f);
     setFlag(`${t.name}_Played`, false);
     let started;
     if (t.kind === 'DL') started = await startDL(t, result);
@@ -384,7 +417,7 @@ function harness(c, frameSeconds, meta) {
     }
     // what played on the way in (a neighbouring trigger's InfoLink) is let finish and may have changed the flags this one needs (DL_Tong_08 clears Have_ROM)
     if (playsActive()) drive(() => !playsActive(), { max: 600 });
-    for (const f of t.required) setFlag(f.flag, f.value);
+    for (const f of t.required) setRequired(f);
     setFlag(`${tag}_Played`, false);
     const ok = c.game.hud.scoped(() => call(player(), 'StartDataLinkTransmission', tag));
     step(2);
@@ -418,7 +451,7 @@ function harness(c, frameSeconds, meta) {
     if (t.bark) return startBark(t, owner, result);
     const method = t.frob ? 'frob' : t.radius !== null ? 'radius' : 'named';
     setFlag(`${t.name}_Played`, false);
-    for (const f of t.required) setFlag(f.flag, f.value);
+    for (const f of t.required) setRequired(f);
     if (method === 'named') return startNamed(t, owner, result, t.sight ? 'named (a sight-only conversation: nothing in the original invokes IM_Sight)' : 'named (no invocation flag)');
 
     /** The conversation the owner's chain would pick for this invocation, by the original's own GetActiveConversation; while it is another conversation, that one
@@ -429,7 +462,7 @@ function harness(c, frameSeconds, meta) {
       // a frob also stands inside the radius of the owner's radius conversations: those are put out of the way too, so that none starts on the way in
       for (const m of method === 'frob' ? [3, 1] : [3]) {
         for (let i = 0; i < 12; i++) {
-          for (const f of t.required) setFlag(f.flag, f.value);
+          for (const f of t.required) setRequired(f);
           setFlag(`${t.name}_Played`, false);
           const pick = pickOf(owner, m);
           if (!pick || lower(pick) === lower(t.name)) break;
@@ -737,7 +770,7 @@ function harness(c, frameSeconds, meta) {
   }
 
   return {
-    runTarget, godMode, staleActors,
+    runTarget, godMode, staleActors, restoreRequired,
     incidentals,
     // a conversation that ended in a cinematic transition (Jock's helicopter: the player is in state Interpolating on the way out of the level) is not a place to
     // run the next conversation from; PHYS_Interpolating also moves the player without the collision hash noticing (docs/census-conversations.md)

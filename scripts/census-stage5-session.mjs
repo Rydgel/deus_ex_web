@@ -7,6 +7,8 @@ import {actorRenderFeedback} from '../src/viewer/actor-render-feedback.mjs';
 
 export async function openSession(map, assets, {travel = null, saveDirectory = null, frameSeconds = 1 / 60, paintEvery = 1} = {}) {
   const {decodeMap} = await import('../src/unreal/map.mjs');
+  const {handleLimit, releaseHandleRange} = await import('../src/runtime/script-object-handles.mjs');
+  const handleStart = handleLimit();
   const {createGame} = await import('../src/viewer/game.mjs');
   const {createSimSession} = await import('../src/viewer/sim-session.mjs');
   const {createPlayerInputFixture} = await import('./player-input-fixture.mjs');
@@ -168,6 +170,15 @@ export async function openSession(map, assets, {travel = null, saveDirectory = n
   let used = false;
   return {
     c,
+    /** The session is replaced and runs no more: what the page's map host does when the next map's host replaces it (sim-host.mjs dispose), so that a process
+     * that opens many sessions keeps one: the audio and the simulation session go, its identities leave the process-wide handle table (the range from its start
+     * to `end`, the next session's start, else the current limit) and the image arena's listeners, which a process-wide FinalizationRegistry holds, are dropped.
+     * Without it every dropped session stays alive (about 425 MB each for 02_NYC_Street). */
+    dispose(end = handleLimit()) {
+      runtime.audio?.dispose?.(); sim.dispose();
+      releaseHandleRange(handleStart, end);
+      runtime.arena.listeners.length = 0;
+    },
     async run(id, driver) {
       watched.clear();
       if (used) { game.reset(); frames(2); }

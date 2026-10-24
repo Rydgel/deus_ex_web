@@ -85,9 +85,9 @@ for (const m of MISSIONS) {
   if (CHOICE_MISSIONS[m]) add(`6.4.${m}.2`, `mission ${Number(m)}: both sides of each of its ${CHOICE_MISSIONS[m]} carried flags, checked where the later mission reads them (the conversation branch, the pawn present or absent, the script's effect), equal to the original`, 'O1',
     {need: 'per carried flag: the two branches set in the mission (or a slot holding each), the reader\'s observable in the later mission, in Play and under Wine'});
   add(`6.4.${m}.3`, `mission ${Number(m)}: every conversation and InfoLink of its list starts and runs to its end in Play without a stop; those on the required chain are compared with the original by 6.4.${m}.1`, 'P',
-    {proof: [v('validate-conversations-census.mjs', '--missions', m)], have: ['scripts/census-conversations.mjs (docs/census-conversations.md)'],
-      weak: 'Play against itself: a cold open of each owner\'s map; the named boundaries (what the original\'s own code or data refuses) are listed in scripts/census-conversations-boundaries.mjs',
-      pending: SLOT_MISSIONS.has(m) ? 'the second pass from the mission\'s real slots (`validate-conversations-census.mjs --slots`): started 2026-10-23, not finished; its stops so far are the restored-level PlaySound object index of the placed-chain worker (missions 1 and 3)' : null});
+    {proof: [SLOT_MISSIONS.has(m) ? v('validate-conversations-census.mjs', '--missions', m, '--slots') : v('validate-conversations-census.mjs', '--missions', m)],
+      have: ['scripts/census-conversations.mjs (docs/census-conversations.md)'],
+      weak: `Play against itself: a cold open of each owner's map${SLOT_MISSIONS.has(m) ? ', and the latest real slot of each of the mission\'s maps that has one (a refusal by the original\'s own code in the slot\'s played state, or an owner the played game no longer has, is that state\'s answer)' : ' (the mission has no real slot)'}; a refusal in the cold pass is started once more in a fresh child (the earlier conversations of the map had moved or killed a speaker), a Play stop never; the named boundaries (what the original's own code or data refuses) are listed in scripts/census-conversations-boundaries.mjs`});
 }
 
 // 6.5 The endings -----------------------------------------------------------------------------------------------------------------------

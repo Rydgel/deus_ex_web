@@ -1,7 +1,8 @@
 # The conversation census (Stage 6, rows 6.4.\*.3)
 
-Status 2026-10-23: the cold pass is complete and clean (every own conversation of the 14 mission lists runs or is a named boundary); the second pass from the
-real desktop save slots is started and not finished. Evidence class **P**: Play against itself. The census finds the conversations that stop in Play; it does not
+Status 2026-10-24: both passes are complete and clean on the Linux host (`node scripts/validate-conversations-census.mjs --slots --jobs 4`): every own conversation
+of the 14 mission lists runs from a cold open of its map or is a named boundary, and from the latest real desktop save slot of each map that has one every conversation
+runs, or the original's own code refuses it in that played state, or its owner is no longer in that level. Evidence class **P**: Play against itself. The census finds the conversations that stop in Play; it does not
 compare their content with the original (the placed-chain rows 6.4.\*.1 do that for each mission's required chain).
 
 ## What it does
@@ -31,6 +32,12 @@ the player placed (dry ground, inside the radius); `EnterWorld()` on a pawn the 
 and calls at once, before any pawn has seen it). Third-person conversations are advanced by Enter every half second, a choice takes its first option and a choice met
 again the next one so that menus end (84 conversations have choices). First-person ones and InfoLinks play with no input. A frame is 1/30 s of Level time.
 
+**One more start for a refusal.** A conversation the original's code refused in the full pass (a refusal family: the speakers apart, the owner in a state that
+cannot converse, the player busy, the owner absent) is started once more in a fresh child holding only the refused ones: the conversations before it in the same
+session had moved, alerted or killed a speaker, a refusal of the harness's own history. A run there counts (`validate-conversations-census.mjs`; the 2026-10-23 result
+merged its full pass with a second run of the 66 conversations that had not run, `census-final-merged.json`). A Play stop or a child that died is never started again, so a rerun cannot hide one. The flags a conversation needs are set for its start
+only: each one's state before is put back after the attempt unless the conversation changed it itself.
+
 **What "ran" means.** The conversation was on the screen (`conPlay`/`dataLinkPlay` with it as `startCon`) and ended with its `<name>_Played` flag set (`TerminateConversation`;
 an `AbortConversation(True)` ends one without it, which is how a start the original refused shows), or ended in a cinematic hand-over (state Interpolating). 4,729
 events and about 9,860 s of conversation time ran in the final pass.
@@ -39,6 +46,18 @@ events and about 9,860 s of conversation time ran in the final pass.
 
 1,520 ran (all 398 InfoLinks, 374 talks, 748 first-person), 102 are named boundaries, 0 stop. By mission (ran / boundaries): 00 82/4, 01 106/4, 02 180/13, 03 166/21,
 04 125/11, 05 55/6, 06 278/18, 08 45/5, 09 52/6, 10 168/6, 11 70/1, 12 64/2, 14 51/2, 15 78/3.
+
+## Result (second pass, the real slots, 2026-10-24)
+
+The latest slot of each map (34 slots of `.work/internet-saves`, missions 1 to 6, 8 to 10, 12, 14 and 15), loaded as the Load Game screen loads it, each map's own
+conversations started as in the cold pass: 823 conversations, 777 ran, 29 refused by the original's code in the slot's state (a once conversation played, an owner hostile,
+dead or busy), 17 whose owner the played game no longer has (no actor in the level carries the BindName: the Hong Kong market brawl's fighters, Walton Simons in the
+bunker, the MiB of Area 51), 0 stops. By mission (ran / refused / owner gone): 01 52/1/0, 02 68/0/10, 03 58/3/0, 04 44/0/0, 05 51/7/0, 06 153/8/3, 08 17/1/0, 09 34/1/1,
+10 98/5/0, 12 47/0/0, 14 51/1/0, 15 104/2/3. Missions 0 and 11 have no slot. The validator judges the slot pass by itself: a run in the cold pass does not hide a stop
+from a slot.
+
+The cold pass of the same run: 1,520 ran (6 of them on the second start: two Liberty Island overheard conversations, a subway hostage, Gunther's futz bark, a heli base
+troop bark, a catacomb hostage), 102 named boundaries, 0 stops.
 
 ## Play stops the census found, and their fixes
 
@@ -54,6 +73,21 @@ events and about 9,860 s of conversation time ran in the final pass.
    `moveQuery`'s tiny gate gave zero. `playerMove` now uses the requested Delta as FinalDelta in that case; position, rotation, the rider call's arguments, the hash and zone
    order and the encroachment calls equal the DLL's. The 51 movement unit tests pass; `SpecialGuardsChatting` no longer stops (it now refuses at `CheckActorDistances`, a named boundary).
 
+4. **A conversation's item meshes** (slot pass, `DefoeConvos` from Save0025, its second option): the weapon mod a choice hands over runs a mesh native in its own frames,
+   and nothing had prepared `deusexitems.weaponmod` in that level (`Original mesh resource is not prepared`). The conversation player prepared the TransferObject classes'
+   code only; it now prepares their item meshes too (Mesh, PlayerViewMesh, PickupViewMesh, ThirdPersonMesh, as a carried item's at a travel arrival:
+   `src/runtime/script-conplay-live.mjs`, `prepareItemViewMeshes` of `script-doors.mjs`).
+5. **Harness, not Play: a requirement leaked into the next conversations.** `HeliosFree`, set so that `DL_Final_Helios07` could start, stayed set; `MeetHelios`'s approach
+   later put the player inside Final's `FlagTrigger3`, which fired `Merge_helios_exit` and left for `99_Endgame2` (cold and slot passes). The flags the harness sets
+   are put back after each conversation (`census-conversations-child.mjs` `restoreRequired`).
+6. **Harness, not Play: dropped sessions stayed alive.** A slot level is reopened for each retry (`game.reset()` refuses a restored level), and every dropped
+   session kept about 425 MB: the process-wide handle table (`script-object-handles.mjs`) is the strong reference to a runtime's objects until its range is released,
+   which only the page's map host did (`sim-host.mjs` dispose). `02_NYC_Street@Save4` and `05_NYC_UNATCOMJ12lab@Save13` ran out of the 7 GB heap. The headless session
+   now has the same `dispose(end)` (`census-stage5-session.mjs`: audio, simulation session, handle range, image arena listeners), the child disposes of a replaced
+   session and turns the event loop after each conversation (a `WeakRef` dereferenced in a job keeps its target until the job ends: the heap snapshot's retainer path
+   was `weak_refs_keep_during_job -> RustScriptVm -> ScriptRuntime`). Freed levels go a collection or two late (a FinalizationRegistry's held values wait for its
+   cleanup task), so a run of retries can still hold several; a child keeps the 7 GB cap and the census runs 4 jobs on the 30 GB host.
+
 ## Observations, not fixed
 
 * **PHYS_Interpolating leaves the player's collision-hash registration at the old Location.** After a conversation hands the player to a camera path (Jock's helicopter in
@@ -61,8 +95,8 @@ events and about 9,860 s of conversation time ran in the final pass.
   without collision, the next `SetCollision(true)` throws "Actor is already registered (JCDentonMale0)". Deterministic: `CC_HASHCHECK=2 node scripts/census-conversations.mjs
   --child 10_Paris_Metro --only JockReady` prints the first frame the player is stale (state Interpolating); the harness restarts the level after a cinematic and after a player
   without collision. Whether the original's `physPathing` MoveActor keeps the hash current for the player is not checked (the level normally ends in the cinematic).
-* **A restored level** (second pass, slots): `Unsupported original door native 264 PlaySound from conplay.playspeech` for the speaking decoration or helicopter (NYPoliceBoat0,
-  BlackHelicopter0) of a loaded save (missions 1 and 3 so far): the placed-chain worker's restored-object index fix, not repeated here.
+* **A restored level's speaking decoration** (`PlaySound 264` for NYPoliceBoat0 and BlackHelicopter0 of a loaded save, missions 1 and 3, seen on 2026-10-23) no longer
+  stops: the placed-chain work's restored-object sound index (commit 7c96b145, docs/travel.md Unresolved 10, unverified as a value) is on master.
 * `collision-hash.mjs` now names the actor in "Actor is already registered".
 
 ## The named boundaries (`scripts/census-conversations-boundaries.mjs`)
@@ -76,7 +110,7 @@ Attacking/Alerting/Fleeing/Dying/TakingHit/Paralyzed or Idle by its authored Ord
 
 ## Left open
 
-* The second pass from the slots (`--slots`, ~90 minutes on two jobs; started: Island, Battery Park 02/03, Airfield, Airfield heli base, 747, Street, Hotel done): finish it, judge
-  the stops against the cold pass, and re-run after the restored-level PlaySound fix is on master. Missions 1 to 6, 8 to 10, 12, 14, 15 stay PARTIAL until then.
-* The 5 conversations of owners authored Idle and the Attacking/Alerting ones could be released by the trigger or script the original uses (only the OrdersTrigger case is done).
-* Choices: the first option and then the next on a repeat; branches that need a skill or an item in hand are not forced.
+* The census is Play against itself (evidence class P): it finds stops, not differences; the placed chains (rows 6.4.\*.1) compare the required conversations with the
+  original. A refusal accepted in a slot's state, or on the second start, is the original's own code answering in Play; whether the original refuses the same ones in
+  the same states is not measured.
+* Only the latest slot of each map is loaded (`--all-slots` takes the 41); missions 0 and 11 have none.
