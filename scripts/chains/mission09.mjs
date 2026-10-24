@@ -10,19 +10,18 @@
  * Placements from scripts/chain-plan.mjs (`drop`, `face`, `stand`) on the cold maps, the welds and the two helicopters measured in the level the chain
  * reaches.
  *
- * PROVISIONAL START: mission 8's chain (and its exit save) does not exist yet, so the chain starts from the real slot nicouzouf Save0021 (09_NYC_Dockyard
- * near the arrival, DL_Insertion not yet played); it becomes `{ op: 'start', kind: 'slot', source: 'chain', chain: '08', slot: 'Save0108', index: 108 }`
- * once mission 8's exit save exists. Start-dependent: `belt 6` is the slot's own GEP gun (the map's WeaponGEPGun0 adds its 4 rockets to it; a player
- * without one gets the map's gun on its own belt slot), and `belt 1` the pistol. */
+ * The start is mission 8's exit save (its chain pinned it in 09_NYC_Dockyard at the arrival, PlayerStart0; that chain itself starts provisionally).
+ * Start-dependent: `belt 6` is the carried GEP gun (the map's WeaponGEPGun0 adds its 4 rockets to it; a player without one would get the map's gun on
+ * its own belt slot), and `belt 1` the pistol, as the save holds them. */
 const cheats = [
   { op: 'line', text: 'set DeusEx.JCDentonMale bCheatsEnabled True', harness: true },
-  { op: 'line', text: 'God', harness: true },
+  // God mode set, not toggled: a restored level's arrival keeps it in Play, where the `God` toggle switched it off
+  { op: 'line', text: 'set DeusEx.JCDentonMale ReducedDamageType All', harness: true },
 ];
 export default {
   mission: '09',
   steps: [
-    // provisional (see above): becomes the start from mission 8's exit save
-    { op: 'start', kind: 'slot', source: 'nicouzouf', slot: 'Save0021', index: 21 },
+    { op: 'start', kind: 'slot', source: 'chain', chain: '08', slot: 'Save0108', index: 108 },
     { op: 'wait', seconds: 3 },
     { op: 'snap', label: 'f1-loaded' },
     ...cheats,
@@ -53,7 +52,7 @@ export default {
     // the five hull welds (ShipBreech movers, minDamageThreshold 60, doorStrength 0.9): one GEP rocket each, from the inside of the hull
     { op: 'place', at: [-4263, -182, -207], view: [-8598, 57], harness: true, note: '75 units west of WeaponGEPGun0 (-4188,-182,-249; 4 rockets), aimed at it' },
     { op: 'frob', target: 'WeaponGEPGun0' },
-    { op: 'belt', n: 6, note: 'the GEP gun (the slot\'s, on belt 6: the map\'s gun added its rockets to it)' },
+    { op: 'belt', n: 6, note: 'the carried GEP gun (belt 6 in the start save: the map\'s gun added its rockets to it)' },
     { op: 'wait', seconds: 3, note: 'the selected GEP reloads first (DeusExWeapon state Reload): a click before it ends fires nothing' },
     { op: 'place', at: [832, -796, -463], view: [-871, 49152], harness: true, note: '200 units north of the weld DeusExMover40 (wall1; its CrateExplosiveSmall1 at 832,-996,-491), aimed 50 units above the crate' },
     { op: 'click', settle: 180 },
