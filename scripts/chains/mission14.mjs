@@ -126,7 +126,7 @@ export default {
     { op: 'snap', label: 'm14-10-silo' },
 
     // Howard Strong (Health 100, Standing at -52,-6768,-320 at the silo's bottom): Mission14.Timer brings the helicopter in and plays DL_Dead once none is left
-    { op: 'belt', n: 6, note: 'the GEP gun (the start\'s belt 6)' },
+    { op: 'belt', n: 2, note: 'the GEP gun mission 9 found (belt 2 on the chain\'s line)' },
     { op: 'place', at: [-352, -6768, -262], view: [-3266, 11], harness: true, note: '300 units west of HowardStrong0 (-52,-6768,-320), aimed at him (stand, a clear line)' },
     { op: 'click', until: { flag: 'HowardStrong_Dead' }, gap: 2.5, max: 8, watch: ['HowardStrong0'] },
     { op: 'wait', flag: 'DL_Dead_Played', timeout: 120 },

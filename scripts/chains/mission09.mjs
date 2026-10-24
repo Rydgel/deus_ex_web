@@ -90,7 +90,9 @@ export default {
     { op: 'travel', to: '09_NYC_Ship', label: 'leg3' },
     ...cheats,
     { op: 'wait', seconds: 3 },
-    { op: 'place', at: [2707, 163, 386], view: [0, 0], drop: true, harness: true, note: 'above DataLinkTrigger3 (2707,163,296, radius 96; DL_ShipExit, checkFlag MS_ShipBreeched)' },
+    // the breached ship's restored level: a drop above the trigger slides the player 250 units east (the first real-line run), so a walk from the east enters it
+    { op: 'place', at: [2857, 163, 336], view: [0, 32768], harness: true, turnFirst: true, note: '150 units east of DataLinkTrigger3 (2707,163,296, radius 96; DL_ShipExit, checkFlag MS_ShipBreeched), facing it: the walk enters it (a search in the chain\'s level)' },
+    { op: 'walk', seconds: 1.5 },
     { op: 'wait', flag: 'DL_ShipExit_Played', timeout: 120 },
     { op: 'snap', label: 'f8-ship-exit' },
     { op: 'place', at: [2438, -2352, -118], view: [0, 0], drop: true, harness: true, note: 'above Teleporter3 (2438,-2352,-208, radius 60; 09_NYC_Dockyard#ExitShip)' },

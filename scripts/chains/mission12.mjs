@@ -24,15 +24,15 @@
 export default {
   mission: '12',
   steps: [
-    { op: 'start', kind: 'slot', source: 'nicouzouf', slot: 'Save0028', index: 28 },
+    { op: 'start', kind: 'slot', source: 'chain', chain: '11', slot: 'Save0111', index: 111 },
     { op: 'wait', seconds: 3 },
     { op: 'snap', label: 'm12-1-start' },
     { op: 'line', text: 'set DeusEx.JCDentonMale bCheatsEnabled True', harness: true },
     { op: 'line', text: 'set DeusEx.JCDentonMale ReducedDamageType All', harness: true },
     // what the provisional start skips (the real arrival from 11_Paris_Everett's MapExit1): Carla's radius conversation next to PlayerStart2, which adds DestroyBots
     // and ActivatePower and gives the base's map (DL_no_carla's eleven triggers play it otherwise):
-    // { op: 'place', at: [775, 2418, -895], view: [-4341, 57356], harness: true, turnFirst: true, note: '100 units north-west of CarlaBrown (ScientistFemale5 at 846,2347,-901; cold stand), facing her' },
-    // { op: 'conv', name: 'MeetCarlaBrown', watch: ['ScientistFemale5'], timeout: 120, note: 'radius 160, WaitingFor; PlayerStart2 is 200 units from her' },
+    { op: 'place', at: [775, 2418, -895], view: [-4341, 57356], harness: true, turnFirst: true, note: '100 units north-west of CarlaBrown (ScientistFemale5 at 846,2347,-901; cold stand), facing her' },
+    { op: 'conv', name: 'MeetCarlaBrown', watch: ['ScientistFemale5'], timeout: 120, note: 'radius 160, WaitingFor; PlayerStart2 is 200 units from her' },
 
     // the bot security system's backup power: two keypads (code 5868, MeetCarlaBrown's note); both inputs of LogicTrigger1 fire test2 (Dispatcher6: bot_power, whose
     // DataLinkTrigger0 plays DL_override_activated, which needs !M12BotsDestroyed: the power precedes the bots)
@@ -50,7 +50,7 @@ export default {
     { op: 'snap', label: 'm12-2-power' },
 
     // the four enemy bots, each from 300 units east of its paused place (stand --aim, a clear line), the GEP gun until the Timer's InfoLink of the new count has played
-    { op: 'belt', n: 6, note: 'the GEP gun (the slot\'s belt 6)' },
+    { op: 'belt', n: 2, note: 'the GEP gun mission 9 found (belt 2 on the chain\'s line: the key ring 0, the pistol 1)' },
     { op: 'place', at: [-2000, 3489, -1999], view: [-1067, 32768], harness: true, note: '300 units east of SecurityBot0 paused at (-2300,3489,-1991), aimed at it' },
     { op: 'click', until: { flag: 'DL_bots_left_3_Played' }, gap: 2.5, max: 12, watch: ['SecurityBot0'] },
     { op: 'place', at: [676, 3436, -1999], view: [-1067, 32768], harness: true, note: '300 units east of SecurityBot2 paused at (376,3436,-1991), aimed at it' },
