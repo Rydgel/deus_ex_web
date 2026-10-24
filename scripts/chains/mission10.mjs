@@ -12,7 +12,7 @@
  * route to the computer was not checked. */
 const cheats = [
   { op: 'line', text: 'set DeusEx.JCDentonMale bCheatsEnabled True', harness: true },
-  // God mode set, not toggled: a restored level's arrival keeps it in Play, where the `God` toggle switched it off
+  // God mode set, not toggled: a restored arrival re-possesses the pawn filed there with its ReducedDamageType (the `God` toggle would switch it off)
   { op: 'line', text: 'set DeusEx.JCDentonMale ReducedDamageType All', harness: true },
 ];
 export default {
@@ -44,7 +44,7 @@ export default {
     ...cheats,
     { op: 'wait', seconds: 3 },
     { op: 'snap', label: 'g4-club' },
-    { op: 'place', at: [-549, -1393, 49], view: [-5281, 32731], harness: true, note: '80 units east of NicoletteDuClare0 (-629,-1393 after a second of the map), aimed at her' },
+    { op: 'place', at: [-549, -1393, 49], view: [-5281, 32731], harness: true, turnFirst: true, note: '80 units east of NicoletteDuClare0 (-629,-1393 after a second of the map), aimed at her' },
     { op: 'frob', target: 'NicoletteDuClare0' },
     { op: 'conv', name: 'MeetNicolette', watch: ['NicoletteDuClare0'], timeout: 300 },
     { op: 'snap', label: 'g5-met-nicolette' },
@@ -68,7 +68,7 @@ export default {
     { op: 'snap', label: 'g7-ready-to-leave' },
     // JockReady (the helicopter BlackHelicopter0, BindName Jock; radius 200 inside its 461 cylinder) by the right button: its A1 branch triggers ChopperExit,
     // MapExit1 and its camera path to the chateau
-    { op: 'place', at: [2635, 1101, 193], view: [1512, 4], harness: true, note: '500 units west of BlackHelicopter0 (3135,1101,305 in the world, radius 461), aimed at its centre (planned in the level the chain reaches)' },
+    { op: 'place', at: [2635, 1101, 193], view: [1512, 4], harness: true, turnFirst: true, note: '500 units west of BlackHelicopter0 (3135,1101,305 in the world, radius 461), aimed at its centre (planned in the level the chain reaches)' },
     { op: 'frob', target: 'BlackHelicopter0' },
     { op: 'conv', name: 'JockReady', watch: ['BlackHelicopter0'], timeout: 120 },
     { op: 'travel', to: '10_Paris_Chateau', label: 'leg5', timeout: 240 },
@@ -113,7 +113,7 @@ export default {
     // (DeusExMover16, tag cellar_door, TriggerToggle, closed: the placement went past the candelabra that opens it for 8 s; measured: 947,2659 after a
     // minute). LightSwitch2 on the bunker's side (event cellar_door) opens it; NicoletteAfterEverett (radius 100) starts when she reaches the player
     // (the crypt key, GoToCrypt, NicoletteFollows)
-    { op: 'place', at: [881, 2808, -439], view: [5851, 49166], harness: true, note: '60 units north of LightSwitch2 (881,2748,-363), aimed at it' },
+    { op: 'place', at: [881, 2808, -439], view: [5851, 49166], harness: true, turnFirst: true, note: '60 units north of LightSwitch2 (881,2748,-363), aimed at it' },
     { op: 'frob', target: 'LightSwitch2' },
     { op: 'conv', name: 'NicoletteAfterEverett', watch: ['NicoletteDuClare0'], timeout: 180 },
     { op: 'state', label: 'bunker-door', actor: 'DeusExMover16', fields: ['KeyNum', 'bLocked'] },
