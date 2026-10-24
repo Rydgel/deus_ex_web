@@ -195,9 +195,11 @@ export async function runChainInPlay(chain, { assets = null, log = () => {}, unt
     },
     async frob(step) {
       stamp(step.watch);
-      const target = c.game.interaction.frobTarget?.name ?? null;
+      const actor = c.game.interaction.frobTarget ?? null, target = actor?.name ?? null;
+      // a step names its target by name, tag or class (a carcass, a lockpick on the floor, a door pair's tag)
+      const names = actor ? [target, c.read(actor, 'Tag'), c.runtime.instance(actor).cls.record.key.split('.').pop()].map(n => String(n).toLowerCase()) : [];
       typeLine(c, 'ParseRightClick'); frames(step.settle ?? 30);
-      if (step.target && target !== step.target) throw new Error(`frob ${step.target}: the view selects ${target ?? 'nothing'}`);
+      if (step.target && !names.includes(step.target.toLowerCase())) throw new Error(`frob ${step.target}: the view selects ${target ?? 'nothing'}`);
       note(`frob ${target ?? ''}`.trim());
     },
     /** The left button (Enter): once, or, with `until: { flag }`, repeated every `gap` seconds up to `max` times until the flag is set (a weapon's swings: how many break a crate is the run's own). */

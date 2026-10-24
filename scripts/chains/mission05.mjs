@@ -11,7 +11,9 @@ const cheats = [
 export default {
   mission: '05',
   steps: [
-    { op: 'start', kind: 'slot', source: 'chain', chain: '04', slot: 'Save0104', index: 104 },
+    // PROVISIONAL: the real desktop slot nicouzouf Save0012 (the lab, at the arrival) until mission 4's chain pins its exit save; then
+    // { op: 'start', kind: 'slot', source: 'chain', chain: '04', slot: 'Save0104', index: 104 }
+    { op: 'start', kind: 'slot', source: 'nicouzouf', slot: 'Save0012', index: 12 },
     { op: 'wait', seconds: 3 },
     { op: 'snap', label: 'f1-loaded' },
     ...cheats,
@@ -71,7 +73,11 @@ export default {
     { op: 'conv', name: 'M05MeetAlexJacobson', watch: ['AlexJacobson0'], timeout: 180 },
     { op: 'wait', seconds: 5 },
     { op: 'snap', label: 'f6-alex' },
+    // the key ring in hand (belt 0) used on the door with the left button unlocks it (DeusExMover.Frob with a NanoKeyRing holding KeyIDNeeded toggles bLocked),
+    // the right button (nothing in use) opens it, as mission 0's key door
     { op: 'place', at: [-868, 320, 457], view: [-9672, 32768], harness: true, note: '60 units east of DeusExMover29 (levelone, -928,320,416), aimed at it' },
+    { op: 'belt', n: 0 },
+    { op: 'click' },
     { op: 'frob', target: 'DeusExMover29' },
     { op: 'wait', seconds: 3 },
     { op: 'state', label: 'levelone', actor: 'DeusExMover29', fields: ['KeyNum', 'bLocked'] },
