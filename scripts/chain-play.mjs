@@ -5,7 +5,6 @@
  *   node scripts/chain-play.mjs --mission 00 [--json out.json] [--until <label>] */
 import { readdir, readFile, writeFile } from 'node:fs/promises';
 import { mkdirSync, rmSync } from 'node:fs';
-import { handleLimit } from '../src/runtime/script-object-handles.mjs';
 import './census-stage5-drivers.mjs';
 import { gameDirectory } from './game-directory.mjs';
 import { AssetStore } from '../src/unreal/assets.mjs';
@@ -81,13 +80,16 @@ export async function runChainInPlay(chain, { assets = null, log = () => {}, unt
   const directory = createSaveDirectory();
   const result = { mission: chain.mission, snaps: {}, legs: [], steps: [], conversations: [] };
   let session = null, c = null, pending = null, map = null, done = false;
-  // a session that replaces another disposes of the old one once the new one is open (census-stage5-session.mjs dispose, as the page's map host does): a
-  // chain through many maps otherwise keeps every level it left (about 425 MB each for 02_NYC_Street)
+  // a session that another replaces is disposed of before the next one opens (census-stage5-session.mjs dispose, as the page's map host does): a chain through
+  // many maps otherwise keeps every level it left (about 425 MB each for 02_NYC_Street), and a level loading beside the one it replaces ran mission 3's ninth map
+  // out of heap. Two turns of the event loop follow: the weak references this job dereferenced (the Rust VM registry's) keep their targets until the job ends,
+  // and the finalization callbacks that release the level's image run as tasks of their own
   const open = async (name, options) => {
-    const previous = session, start = handleLimit();
+    session?.dispose();
+    session = null; c = null;
+    for (let i = 0; i < 2; i++) await new Promise(resolve => setImmediate(resolve));
     session = await openSession(name, assets, options);
     c = session.c;
-    previous?.dispose(start);
   };
   const note = text => { result.steps.push(text); log(text); };
   const frames = (n, stopOnTravel = true) => {
@@ -109,6 +111,7 @@ export async function runChainInPlay(chain, { assets = null, log = () => {}, unt
     await open(request.map, { travel: { ...sessionTravel, arrival: request, lastURL: request.lastURL }, saveDirectory: directory });
     map = request.map;
     pending = null;
+    if (process.env.CHAIN_HEAP) { globalThis.gc?.(); note(`heap ${Math.round(process.memoryUsage().heapUsed / 2 ** 20)} MB in ${map}; request keys ${Object.keys(request).join(',')}`); }
   };
   const stamp = names => { for (const name of names ?? []) { const a = c.actor(name); if (a) c.watched.add(a); else throw new Error(`no actor ${name} to stamp`); } };
 
