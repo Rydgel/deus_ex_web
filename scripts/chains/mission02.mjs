@@ -19,6 +19,9 @@ export default {
     { op: 'frob', target: 'SubwayControlPanel4', watch: ['SubwayControlPanel4'] },
     { op: 'wait', seconds: 5 },
     { op: 'state', label: 'train-door', actor: 'DeusExMover26', fields: ['KeyNum', 'bLocked'] },
+    // the train's doors free the hostages (HostageActivation): Mission02.Timer plays DL_SubwayComplete, whose skill points must be in before PreTravel stores them in
+    // the SKTemp flags (DeusExPlayer.SaveSkillPoints); the first capture's original had them in, Play's run still had the InfoLink playing at the drop
+    { op: 'wait', flag: 'DL_SubwayComplete_Played', timeout: 120 },
     { op: 'place', at: [-5431, 3035, -244], view: [0, 0], drop: true, harness: true, note: 'above Teleporter1 (-5431,3035,-334, radius 30) in the train' },
     { op: 'travel', to: '02_NYC_Street', label: 'leg1' },
     // God mode and the cheats flag are not travel properties (docs/stage-6-chains.md "Rules")
@@ -39,7 +42,6 @@ export default {
     { op: 'place', at: [469, -404, 65], view: [-6290, 49204], harness: true, turnFirst: true, note: '100 units north of CrateExplosiveSmall0 (469,-504,35; tag BlowGenerator), aimed at it' },
     { op: 'belt', n: 1 },
     { op: 'click', until: { flag: 'GeneratorBlown' }, gap: 1.5, max: 10 },
-    { op: 'snap', label: 'c4-generator' },
     { op: 'wait', flag: 'DL_Pickup_Played', timeout: 120 },
     { op: 'snap', label: 'c5-pickup' },
 

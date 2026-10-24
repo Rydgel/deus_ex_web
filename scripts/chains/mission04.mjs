@@ -40,7 +40,9 @@ export default {
     { op: 'wait', seconds: 3 },
 
     // Jock: JockTellsAboutPaul by its radius, the helicopter to the Street
-    { op: 'place', at: [-6011, 2501, -79], view: [306, 32713], harness: true, turnFirst: true, note: '60 units east of BlackHelicopter0 (-6071,2501,-38; BindName Jock), facing it' },
+    // the helicopter's cylinder (radius 300) blocks the player and is wider than JockTellsAboutPaul's radius (250): the right button from just outside it
+    { op: 'place', at: [-5741, 2501, -79], view: [56, 32758], harness: true, turnFirst: true, note: '330 units east of BlackHelicopter0 (-6071,2501,-38; BindName Jock, radius 300), aimed at it (chain-plan.mjs face)' },
+    { op: 'frob', target: 'BlackHelicopter0', watch: ['BlackHelicopter0'] },
     { op: 'conv', name: 'JockTellsAboutPaul', watch: ['BlackHelicopter0'], timeout: 180 },
     { op: 'travel', to: '04_NYC_Street', label: 'leg3', timeout: 240 },
     ...cheats,

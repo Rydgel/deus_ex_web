@@ -52,7 +52,7 @@ export default {
     // the five hull welds (ShipBreech movers, minDamageThreshold 60, doorStrength 0.9): one GEP rocket each, from the inside of the hull
     { op: 'place', at: [-4263, -182, -207], view: [-8598, 57], harness: true, note: '75 units west of WeaponGEPGun0 (-4188,-182,-249; 4 rockets), aimed at it' },
     { op: 'frob', target: 'WeaponGEPGun0' },
-    { op: 'belt', n: 6, note: 'the carried GEP gun (belt 6 in the start save: the map\'s gun added its rockets to it)' },
+    { op: 'belt', n: 2, note: 'the map\'s GEP gun, just taken: belt 2 (the chain\'s player carries the key ring on 0 and the pistol mission 5 took back on 1)' },
     { op: 'wait', seconds: 3, note: 'the selected GEP reloads first (DeusExWeapon state Reload): a click before it ends fires nothing' },
     { op: 'place', at: [832, -796, -463], view: [-871, 49152], harness: true, note: '200 units north of the weld DeusExMover40 (wall1; its CrateExplosiveSmall1 at 832,-996,-491), aimed 50 units above the crate' },
     { op: 'click', settle: 180 },

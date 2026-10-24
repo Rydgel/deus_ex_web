@@ -11,12 +11,17 @@ const cheats = [
 export default {
   mission: '05',
   steps: [
-    // PROVISIONAL: the real desktop slot nicouzouf Save0012 (the lab, at the arrival) until mission 4's chain pins its exit save; then
-    // { op: 'start', kind: 'slot', source: 'chain', chain: '04', slot: 'Save0104', index: 104 }
-    { op: 'start', kind: 'slot', source: 'nicouzouf', slot: 'Save0012', index: 12 },
+    { op: 'start', kind: 'slot', source: 'chain', chain: '04', slot: 'Save0104', index: 104 },
     { op: 'wait', seconds: 3 },
     { op: 'snap', label: 'f1-loaded' },
     ...cheats,
+
+    // the lab's equipment room: Mission05.FirstFrame took the player's inventory and dropped it at the SpawnPoints tagged player_inv (Mission05.uc:52-95); the
+    // pistol taken back (the chains after this one have no other gun: mission 9's EM device, mission 12's bots)
+    { op: 'place', at: [-8426, 1409, -191], view: [-1767, 32836], harness: true, turnFirst: true, note: '65 units east of the player\'s pistol on its shelf (-8491,1409,-163, by a player_inv SpawnPoint), aimed at it (a ring search in the chain\'s level: the pistol is dropped at the arrival)' },
+    { op: 'frob', target: 'WeaponPistol' },
+    { op: 'wait', seconds: 2 },
+    { op: 'snap', label: 'f1b-pistol' },
 
     // the lab: DL_Choice (AnnaExitKillphrase needs it), then Teleporter4 to the HQ's medical wing
     { op: 'place', at: [-1385, 1600, -46], view: [0, 0], drop: true, harness: true, note: 'above DataLinkTrigger2 (-1385,1600,-136, radius 96; DL_Choice)' },
@@ -87,7 +92,9 @@ export default {
     { op: 'wait', seconds: 3 },
 
     // Jock: M05MeetJock by its radius, its continue branch
-    { op: 'place', at: [-5971, 2520, -79], view: [1510, 32807], harness: true, turnFirst: true, note: '90 units east of BlackHelicopter0 (-6061,2520,-27; BindName Jock), aimed at it' },
+    // the helicopter's cylinder (radius 461) blocks the player and is wider than M05MeetJock's radius (240): the right button from just outside it
+    { op: 'place', at: [-5571, 2520, -79], view: [280, 32775], harness: true, turnFirst: true, note: '490 units east of BlackHelicopter0 (-6061,2520,-27; BindName Jock, radius 461), aimed at it (chain-plan.mjs face)' },
+    { op: 'frob', target: 'BlackHelicopter0', watch: ['BlackHelicopter0'] },
     { op: 'conv', name: 'M05MeetJock', watch: ['BlackHelicopter0'], timeout: 180 },
     { op: 'travel', to: '06_HongKong_Helibase', label: 'exit', timeout: 240 },
     ...cheats,

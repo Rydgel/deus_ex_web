@@ -65,7 +65,8 @@ export default {
     { op: 'snap', label: 'h5-dl-exit' },
 
     // the roof: M08JockExit (Jock is BlackHelicopter0, radius 250) and its Go branch
-    { op: 'place', at: [226, 965, 720], view: [0, 32768], harness: true, turnFirst: true, note: '150 units east of BlackHelicopter0 (76,965,757 in the world), facing it; the player lands on the roof' },
+    { op: 'place', at: [336, 965, 720], view: [0, 32768], harness: true, turnFirst: true, note: '260 units east of BlackHelicopter0 (76,965,757 in the world, radius 225), facing it; the player lands on the roof' },
+    { op: 'frob', target: 'BlackHelicopter0', watch: ['BlackHelicopter0'] },
     { op: 'conv', name: 'M08JockExit', choose: [{ index: 0, label: 'Go' }], watch: ['BlackHelicopter0'], timeout: 300 },
     { op: 'travel', to: '09_NYC_Dockyard', label: 'exit', timeout: 240 },
     ...cheats,

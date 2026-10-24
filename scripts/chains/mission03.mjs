@@ -36,10 +36,10 @@ export default {
     { op: 'wait', seconds: 3 },
     { op: 'snap', label: 'd4-island' },
 
-    // Jock's helicopter on the island: JockBarks (overheard, radius 300) starts from the helicopter's own Tick (DeusExDecoration.Tick: StartConversation(Self,
-    // IM_Radius)) once the player stands inside the radius; the helicopter is watched from the conversation step on (a watch before the placement starts it during
-    // the placement, and a frob within a second of its end starts nothing: GetActiveConversation's LastConEndTime gate)
-    { op: 'place', at: [-5997, 2510, -79], view: [944, 32799], harness: true, turnFirst: true, note: '60 units east of BlackHelicopter0 (-6057,2510,-35; BindName Jock), aimed at it' },
+    // Jock's helicopter on the island: its cylinder (radius 461) blocks the player and is wider than JockBarks' radius (300), so the conversation starts by the
+    // right button from just outside it (the original pushed a player placed inside: the first capture never saw JockBarks start)
+    { op: 'place', at: [-5567, 2510, -79], view: [116, 32772], harness: true, turnFirst: true, note: '490 units east of BlackHelicopter0 (-6057,2510,-35; BindName Jock, radius 461), aimed at it (chain-plan.mjs face)' },
+    { op: 'frob', target: 'BlackHelicopter0', watch: ['BlackHelicopter0'] },
     { op: 'conv', name: 'JockBarks', watch: ['BlackHelicopter0'], timeout: 120 },
     { op: 'travel', to: '03_NYC_BatteryPark', label: 'leg3', timeout: 240 },
     ...cheats,
@@ -109,7 +109,8 @@ export default {
 
     // the exit: M03JockLeave (Jock, the airfield's BlackHelicopter0, radius 240), its Ready branch fires HelicopterPickUp: the helicopter moves, Dispatcher0
     // fires MoveHelicopter, MapExit0 and its camera path to 04_NYC_UNATCOIsland
-    { op: 'place', at: [3455, -2690, 200], view: [0, 32768], harness: true, turnFirst: true, note: '120 units east of BlackHelicopter0 (3335,-2690,155 once in the world), facing it; the player lands' },
+    { op: 'place', at: [3825, -2690, 200], view: [0, 32768], harness: true, turnFirst: true, note: '490 units east of BlackHelicopter0 (3335,-2690,155 once in the world, radius 461), facing it; the player lands' },
+    { op: 'frob', target: 'BlackHelicopter0', watch: ['BlackHelicopter0'] },
     { op: 'conv', name: 'M03JockLeave', choose: [{ index: 0, label: 'Ready' }], watch: ['BlackHelicopter0'], timeout: 180 },
     { op: 'travel', to: '04_NYC_UNATCOIsland', label: 'exit', timeout: 240 },
     ...cheats,
