@@ -30,6 +30,12 @@ export default {
     { op: 'place', at: [2432, 1319, 130], view: [0, 0], drop: true, harness: true, note: 'above DataLinkTrigger0 (2432,1319,40, radius 60; DL_Insertion)' },
     { op: 'wait', flag: 'DL_Insertion_Played', timeout: 120 },
     { op: 'snap', label: 'f2-insertion' },
+    // the dockyard's two rocket packs (4 each), for the GEP gun this mission finds: on the chain's line the welds, mission 12's four bots and mission 14's
+    // Howard Strong need more than the gun's 8 and the lab armory's 4 (mission 12's fourth bot ran out)
+    { op: 'place', at: [1379, 3410, 241], view: [3997, 32803], harness: true, turnFirst: true, note: '60 units east of AmmoRocket7 (1319,3410,304), aimed at it (chain-plan.mjs face)' },
+    { op: 'frob', target: 'AmmoRocket7' },
+    { op: 'place', at: [2891, 4430, 49], view: [-9698, 32804], harness: true, turnFirst: true, note: '60 units east of AmmoRocket8 (2831,4430,8), aimed at it (chain-plan.mjs face)' },
+    { op: 'frob', target: 'AmmoRocket8' },
     { op: 'place', at: [4480, 6743, 280], view: [0, 0], drop: true, harness: true, note: 'above Teleporter6 (4480,6743,190, radius 60; 09_NYC_Ship#EnterShip)' },
     { op: 'travel', to: '09_NYC_Ship', label: 'leg1' },
     ...cheats,
