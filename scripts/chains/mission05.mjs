@@ -21,6 +21,10 @@ export default {
     { op: 'place', at: [-8426, 1409, -191], view: [-1767, 32836], harness: true, turnFirst: true, note: '65 units east of the player\'s pistol on its shelf (-8491,1409,-163, by a player_inv SpawnPoint), aimed at it (a ring search in the chain\'s level: the pistol is dropped at the arrival)' },
     { op: 'frob', target: 'WeaponPistol' },
     { op: 'wait', seconds: 2 },
+    // and the armory's rockets (AmmoRocket0, 4): mission 9's GEP gun has 8, the hull welds take 5, mission 12's bots and mission 14's Howard Strong the rest
+    { op: 'place', at: [-8191, 977, 64], view: [-9653, 32816], harness: true, turnFirst: true, note: '60 units east of AmmoRocket0 (-8251,977,24; 4 rockets), aimed at it (chain-plan.mjs face)' },
+    { op: 'frob', target: 'AmmoRocket0' },
+    { op: 'wait', seconds: 2 },
     { op: 'snap', label: 'f1b-pistol' },
 
     // the lab: DL_Choice (AnnaExitKillphrase needs it), then Teleporter4 to the HQ's medical wing
