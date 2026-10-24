@@ -88,7 +88,9 @@ export default {
     { op: 'conv', name: 'TakeOff', choose: [{ index: 0, label: 'Go' }], watch: ['BlackHelicopter0'], timeout: 180 },
     { op: 'travel', to: '12_Vandenberg_Cmd', label: 'exit', timeout: 240 },
     ...cheats,
-    { op: 'wait', seconds: 15 },
+    // Carla (WaitingFor) walks to the arriving player and MeetCarlaBrown (radius 160) runs at each program's pace: the last snapshot waits for it
+    { op: 'wait', flag: 'MeetCarlaBrown_Played', timeout: 180 },
+    { op: 'wait', seconds: 5 },
     { op: 'snap', label: 'h7-vandenberg' },
     // mission 12's chain starts here, in both programs (docs/stage-6-chains.md "Starts")
     { op: 'save', index: 111, label: 'exit' },
