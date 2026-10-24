@@ -85,15 +85,14 @@ export default {
     { op: 'wait', flag: 'DL_AllDone_Played', timeout: 180 },
     { op: 'snap', label: 'f7-breeched' },
 
-    // out: Teleporter3 to the ship, DL_ShipExit (needs MS_ShipBreeched), Teleporter3 to the dockyard
+    // out: Teleporter3 to the ship, Teleporter3 to the dockyard
     { op: 'place', at: [-1548, -325, 82], view: [0, 0], drop: true, harness: true, note: 'above Teleporter3 (-1548,-325,-8, radius 60; 09_NYC_Ship#FromBelow)' },
     { op: 'travel', to: '09_NYC_Ship', label: 'leg3' },
     ...cheats,
     { op: 'wait', seconds: 3 },
-    // the breached ship's restored level: a drop above the trigger slides the player 250 units east (the first real-line run), so a walk from the east enters it
-    { op: 'place', at: [2857, 163, 336], view: [0, 32768], harness: true, turnFirst: true, note: '150 units east of DataLinkTrigger3 (2707,163,296, radius 96; DL_ShipExit, checkFlag MS_ShipBreeched), facing it: the walk enters it (a search in the chain\'s level)' },
-    { op: 'walk', seconds: 1.5 },
-    { op: 'wait', flag: 'DL_ShipExit_Played', timeout: 120 },
+    // DL_ShipExit (DataLinkTrigger3, which adds the Escape goal) is left out: it gates nothing (the dockyard's helicopter needs MS_ShipBreeched, set below
+    // decks), and in the breached ship's restored level a placed player is carried 100 to 250 units within a second (after a drop above the trigger and after a
+    // walk from the east, the first real-line runs), so whether he enters it is that motion's, not the chain's
     { op: 'snap', label: 'f8-ship-exit' },
     { op: 'place', at: [2438, -2352, -118], view: [0, 0], drop: true, harness: true, note: 'above Teleporter3 (2438,-2352,-208, radius 60; 09_NYC_Dockyard#ExitShip)' },
     { op: 'travel', to: '09_NYC_Dockyard', label: 'leg4' },
