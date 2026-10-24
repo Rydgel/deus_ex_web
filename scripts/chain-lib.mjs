@@ -13,7 +13,7 @@
  *            slot ({ source, slot, index }: a real desktop slot of `.work/internet-saves`, or `source: 'chain'` with { chain, label } the save a `save` step of the
  *            previous mission's chain wrote; put into the save folder as Save<index> and loaded by `LoadGame <index>` from the logo map)
  *   save     { index, label }                               Play only: the console's `SaveGame <index>`; `chain-play.mjs --save-exit` writes the slot to
- *            `.work/chains/m<NN>/<label>/` (pinned: a later run of this chain does not move the next chain's start unless asked)
+ *            `.work/chains/exits/m<NN>/<label>/` (pinned: a later run of this chain does not move the next chain's start unless asked)
  *   wait     { seconds } | { flag } | { map } | { notFlag }  Level time in Play, real time under Wine, or until the condition (with `timeout`)
  *   line     { text }                                       one console line, typed as the original's console takes it (an exec function or a cheat)
  *   place    { at: [x, y, z], view: [pitch, yaw], harness, drop }  `ghost`, `set Location`, `walk`, `set ViewRotation`: the player put at the approach (`drop`: above a cylinder the fall enters, the view set first)
@@ -101,7 +101,8 @@ export const captureDirectory = mission => new URL(`../.work/chains/m${mission}/
 /** A real desktop slot of `.work/internet-saves` (third-party files, read only; DX_INTERNET_SAVES elsewhere): the directory of { source, slot }; or the save a
  * chain's `save` step pinned ({ source: 'chain', chain, label, slot }). */
 export function slotDirectory({ source, slot, chain, label = 'exit' }) {
-  if (source === 'chain') return `${captureDirectory(chain)}${label}/${slot}`;
+  // beside the captures, not in them: an original capture starts by clearing its mission's directory
+  if (source === 'chain') return new URL(`../.work/chains/exits/m${chain}/${label}/${slot}`, import.meta.url).pathname;
   const root = process.env.DX_INTERNET_SAVES ?? new URL('../.work/internet-saves', import.meta.url).pathname;
   return `${root}/${source === 'nicouzouf' ? 'nicouzouf/files/Deus Ex' : `${source}/files`}/${slot}`;
 }

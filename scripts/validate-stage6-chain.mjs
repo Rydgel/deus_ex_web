@@ -4,11 +4,11 @@
  * normalization of the travel step (pointers, instance numbers, the two frame-time properties' values): the flags with their expirations, the goals, the notes,
  * the inventory, the skills, the conversation history, everything the original carries into the next map.
  *
- * Without --mission it runs every mission that has a chain (00 and 01), one process each; it SKIPs a mission whose capture is not in .work/chains.
+ * Without --mission it runs every mission that has a chain (scripts/chains/missionNN.mjs), one process each; it SKIPs a mission whose capture is not in .work/chains.
  *
  * runner-timeout: 1800
  *
- *   node scripts/validate-stage6-chain.mjs [--mission 00|01] [--capture]   --capture runs the original first (the Wine lock; minutes)  */
+ *   node scripts/validate-stage6-chain.mjs [--mission NN] [--capture]   --capture runs the original first (the Wine lock; minutes)  */
 import { writeFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { gameDirectory } from './game-directory.mjs';
@@ -21,8 +21,11 @@ const mission = option('mission', null);
 if (!mission) {
   const { spawnSync } = await import('node:child_process');
   let failed = 0;
-  for (const id of ['00', '01']) {
-    const run = spawnSync(process.execPath, ['--max-old-space-size=7168', new URL(import.meta.url).pathname, '--mission', id, ...process.argv.slice(2)], { stdio: 'inherit' });
+  const { readdirSync } = await import('node:fs');
+  // every mission's chain (scripts/chains/missionNN.mjs; the endings, mission15e<n>, are the 6.5 rows' own runs)
+  const ids = readdirSync(new URL('./chains/', import.meta.url)).map(name => /^mission(\d\d)\.mjs$/.exec(name)?.[1]).filter(Boolean).sort();
+  for (const id of ids) {
+    const run = spawnSync(process.execPath, ['--max-old-space-size=12288', new URL(import.meta.url).pathname, '--mission', id, ...process.argv.slice(2)], { stdio: 'inherit' });
     if (run.status !== 0) failed++;
   }
   console.log(failed ? `FAIL validate-stage6-chain: ${failed} mission(s) failed` : 'PASS validate-stage6-chain: every mission');

@@ -61,6 +61,42 @@ capture is not there SKIPs. A console line typed while a menu is open is the men
 * When a capture stops at a `wait`, read the original's player first (its `Health` and state in the dumps): a dead or dying player explains most timeouts (ending 1's first
   capture: the reactor's radiation, seen by the user watching the Wine window).
 
+### Starts, exit saves and the batch (2026-10-24)
+
+* **Each mission's chain starts from the previous chain's exit.** A chain ends with a `save` step (Play only: the console's `SaveGame` through the viewport's
+  Exec chain, once no conversation holds the keys); `node scripts/chain-play.mjs --mission NN --save-exit` pins that slot to
+  `.work/chains/exits/mNN/exit/Save01NN` (beside the captures: an original capture clears `.work/chains/mNN/`), and the next chain starts from it in both
+  programs (`start: { kind: 'slot', source: 'chain', chain: 'NN', ... }`). The chains so join New Game to an ending, which row 6.6.1 needs, and every start is a
+  fresh arrival, so placements are planned on the cold maps. The exit-text equality of chain NN is the evidence that Play's save holds the original's state.
+  A chain whose previous chain does not run yet starts **provisionally** from the nearest real desktop slot (the file says so) and is moved to the chain start
+  when it exists.
+* **The batch.** `node scripts/chain-capture-all.mjs [--missions 02,03]` captures each mission under Wine in turn and runs Play against each capture
+  (`validate-stage6-chain.mjs`); a capture newer than its chain file and its start save is kept, so a batch that stops resumes. Long chains run Node with
+  `--max-old-space-size=12288` (a level is released some maps after it is left; a chain disposes of a level before loading the next, with two event-loop turns).
+* **Planner additions.** `chain-plan.mjs terminal <map> <computer> <user> <password>` logs in and prints the special options' buttons as `point` takes them
+  (one button at y 329, two at 314/344, four at 284/314/344/374, x 641: the window grows by 30 per button about its centre); `--flags a,b` stages a scene
+  (a pawn a mission script brings in once a flag is set).
+
+### Rules a chain follows (learned on missions 2 to 8, 2026-10-24)
+
+* God mode is set as a value, `set DeusEx.JCDentonMale ReducedDamageType All`, not with the `God` toggle: after an arrival in a restored level Play's player still
+  has the God mode of the previous visit (the original's drops it, ending 1's capture), and the toggle switched it off (mission 8's player died). That Play
+  difference is a defect under repair (the restored level's saved player: see "What the chains found").
+* A radius conversation's owner is watched from the `conv` step (its own `watch`), after the placement: a watch before the placement starts the conversation
+  during it, the step then waits for something already over, and a frob within a second of a conversation's end starts nothing (GetActiveConversation's
+  `LastConEndTime` gate). Mission 3's JockBarks.
+* A computer loads in state `Off` at its `Begin` code's `FinishAnim` in a fresh map too: `watch` it before the placement, wait 2 s, then frob (mission 4's NSF
+  computers refused the frob, and the typed login went to the game's keys).
+* A key-locked door: the key ring in hand (`belt 0`), the left button uses it (DeusExMover.Frob with a NanoKeyRing holding `KeyIDNeeded` toggles `bLocked`),
+  the right button opens it (mission 5's `levelone`, as mission 0's key door).
+* A conversation step names each choice by the branch it leads to; Play checks it (a choice's own label is its `ChoiceSpeechLabel_N`, followed to the Jump),
+  so a wrong index fails with the branches shown instead of taking another path (mission 8's smuggler shows four, then two).
+* `frob` fails when the view selects another actor than its target (name, tag or class); a teleporter in a doorway is entered by `approach` (a `drop` lands
+  on the ceiling); a placement can kill the player (mission 8: the spot east of Stanton Dowd crushes him even in God mode): plan it.
+* Read the owners and the script, not only the inventory's path: mission 3's airfield helicopter (M03JockLeave's owner) enters the world only after the 747's
+  Lebedev scene (Mission03.FirstFrame), which the path called optional; mission 4's `ApartmentEntered` is set on the return to Paul (FlagTrigger30, touched with
+  `NSFSignalSent`, fires FlagTrigger16, which cannot be touched); mission 8's exit helicopter needs `DL_Exit_Played` (Mission08.Timer).
+
 ## What is compared
 
 At every `snap` the flags (equal as sets of `name|type|expiration|value`, and the default expiration), and for every map change the **travel text** the leg exported, after the
