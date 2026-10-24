@@ -97,8 +97,9 @@ export async function runChainInPlay(chain, { assets = null, log = () => {}, unt
       // an actor the run destroyed (a used Lockpick) is no longer stamped: its feedback would read a released object
       for (const a of [...c.watched]) { let gone = false; try { gone = c.gone(a); } catch { gone = true; } if (gone) c.watched.delete(a); }
       c.frames(1);
+      // the first request is the travel (a player still in a teleporter's cylinder can raise another on a later tick, exported after more of the old level ran)
       const request = c.takeTravel();
-      if (request) { pending = request; if (stopOnTravel) return; }
+      if (request) { pending ??= request; if (stopOnTravel) return; }
     }
   };
   const flag = name => c.flag(name.toLowerCase());
@@ -219,7 +220,7 @@ export async function runChainInPlay(chain, { assets = null, log = () => {}, unt
       const code = PLAY_KEY[step.key ?? 'UP'];
       const before = c.pos(c.player());
       if (step.untilTravel) {
-        for (let held = 0; held < step.seconds && !pending; held += 0.1) { c.game.inputKey(code, true); frames(6); c.game.inputKey(code, false); frames(4); }
+        for (let held = 0; held < step.seconds && !pending; held += 0.1) { c.game.inputKey(code, true); frames(6); c.game.inputKey(code, false); if (!pending) frames(4); }
         const after = c.pos(c.player());
         note(`walk ${step.key ?? 'UP'} in pulses: ${Math.round(Math.hypot(after[0] - before[0], after[1] - before[1]))} units${pending ? `, travel to ${pending.map}` : ''}`);
         return;
