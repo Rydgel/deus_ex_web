@@ -5,6 +5,7 @@
 import { readdir, readFile } from 'node:fs/promises';
 import { gameDirectory } from './game-directory.mjs';
 import { AssetStore } from '../src/unreal/assets.mjs';
+import { normalizeTravelText } from '../src/runtime/travel-text.mjs';
 
 let cached = null;
 const squash = text => String(text).replace(/\s+/g, ' ').trim();
@@ -44,4 +45,18 @@ export async function randomAlternatives(a, b) {
   a = squash(a); b = squash(b);
   if (a === b) return true;
   return (await randomSpeechSets()).some(set => set.has(a) && set.has(b));
+}
+
+/** The first difference of two travel texts (normalized, the two time properties masked), except that a conversation's random-label speech may differ: a history event whose
+ * Speech and soundID differ from the original's is accepted when both speeches are alternatives of one conversation (the game's random stream is not shared by the two runs). */
+export async function compareTravelTexts(expected, actual) {
+  const a = normalizeTravelText(expected, { times: true }).split('\n'), b = normalizeTravelText(actual, { times: true }).split('\n');
+  let excused = 0;
+  for (let i = 0; i < Math.max(a.length, b.length); i++) {
+    if (a[i] === b[i]) continue;
+    if (a[i]?.startsWith('Speech=') && b[i]?.startsWith('Speech=') && a[i + 1]?.startsWith('soundID=') && b[i + 1]?.startsWith('soundID=')
+      && await randomAlternatives(a[i].slice(7), b[i].slice(7))) { excused++; i++; continue; }
+    return { difference: { line: i + 1, expected: a[i] ?? null, actual: b[i] ?? null }, excused };
+  }
+  return { difference: null, excused };
 }

@@ -13,8 +13,8 @@ import { writeFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { gameDirectory } from './game-directory.mjs';
 import { loadChain, captureDirectory, readIfExists, flagDifferences } from './chain-lib.mjs';
-import { firstTravelTextDifference, normalizeTravelText, parseTravelText } from '../src/runtime/travel-text.mjs';
-import { randomAlternatives } from './chain-conversations.mjs';
+import { parseTravelText } from '../src/runtime/travel-text.mjs';
+import { compareTravelTexts as compareTexts } from './chain-conversations.mjs';
 
 const option = (name, fallback) => { const i = process.argv.indexOf(`--${name}`); return i < 0 ? fallback : process.argv[i + 1]; };
 const mission = option('mission', null);
@@ -48,19 +48,6 @@ if (option('json', null)) await writeFile(option('json'), JSON.stringify({ ...pl
 
 /** A map's name as the comparison reads it: the filed level's URL (..\\Save\\Current\\<map>.dxs) and the .dx extension are the same map. */
 const mapName = name => String(name ?? '').replace(/^.*[\\/]/, '').replace(/\.dxs?$/i, '').toLowerCase();
-/** The first difference of two travel texts (normalized, the two time properties masked), except that a conversation's random-label speech may differ: a history event whose
- * Speech and soundID differ from the original's is accepted when both speeches are alternatives of one conversation (the game's random stream is not shared by the two runs). */
-async function compareTexts(expected, actual) {
-  const a = normalizeTravelText(expected, { times: true }).split('\n'), b = normalizeTravelText(actual, { times: true }).split('\n');
-  let excused = 0;
-  for (let i = 0; i < Math.max(a.length, b.length); i++) {
-    if (a[i] === b[i]) continue;
-    if (a[i]?.startsWith('Speech=') && b[i]?.startsWith('Speech=') && a[i + 1]?.startsWith('soundID=') && b[i + 1]?.startsWith('soundID=')
-      && await randomAlternatives(a[i].slice(7), b[i].slice(7))) { excused++; i++; continue; }
-    return { difference: { line: i + 1, expected: a[i] ?? null, actual: b[i] ?? null }, excused };
-  }
-  return { difference: null, excused };
-}
 const failures = [];
 const check = (ok, message) => { if (!ok) failures.push(message); return ok; };
 console.log(`chain ${mission}: ${chain.steps.length} steps; Play ${play.legs.length} legs, ${Object.keys(play.snaps).length} snapshots; the original ${original.legs.length} legs, ${Object.keys(original.snaps).length} snapshots`);
