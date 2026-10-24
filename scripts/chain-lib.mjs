@@ -9,7 +9,8 @@
  * A chain is a list of steps; every step has an `op` and, optionally, a `note` (why it is there) and `harness: true` when it is a labelled harness step (a
  * placement or a cheat line, not the player's own input). The ops:
  *
- *   start    { kind: 'menu-training' | 'new-game', ... }   the run's start: the menu's Training button, or New Game (the intro left by Escape)
+ *   start    { kind: 'menu-training' | 'new-game' | 'slot', ... }   the run's start: the menu's Training button, New Game (the intro left by Escape), or a real
+ *            desktop slot ({ source, slot, index }: `.work/internet-saves`, put into the save folder as Save<index> and loaded by `LoadGame <index>` from the logo map)
  *   wait     { seconds } | { flag } | { map } | { notFlag }  Level time in Play, real time under Wine, or until the condition (with `timeout`)
  *   line     { text }                                       one console line, typed as the original's console takes it (an exec function or a cheat)
  *   place    { at: [x, y, z], view: [pitch, yaw], harness, drop }  `ghost`, `set Location`, `walk`, `set ViewRotation`: the player put at the approach (`drop`: above a cylinder the fall enters, the view set first)
@@ -17,6 +18,9 @@
  *   click    {}                                             the left mouse button / Enter (ParseLeftClick|Fire): use the tool in hand, fire
  *   belt     { n }                                          ActivateBelt n
  *   key      { names: ['ENTER', ...] }                      key presses (dxinput names), each press and release
+ *   type     { text }                                       text into the window that holds the keyboard (an edit field): each character's key, its WM_CHAR unit
+ *   point    { at: [x, y] }                                  a left click at a point of the original's 1280x720 viewport, over a window centred in the root (a terminal, a
+ *                                                           menu: Play's root holds the same layout about its centre, so the point moves by the difference of the centres)
  *   conv     { name, choose: [{ label, index }] }           a conversation started by the owner or its trigger, played with Enter, the listed choices picked by their order
  *   travel   { to, via }                                    the map change a step caused (the arrival is awaited and the leg's travel text recorded)
  *   snap     { label }                                      the flags (and the map) at this point
@@ -90,5 +94,13 @@ export async function loadChain(mission, file = null) {
 }
 
 export const captureDirectory = mission => new URL(`../.work/chains/m${mission}/`, import.meta.url).pathname;
+
+/** A real desktop slot of `.work/internet-saves` (third-party files, read only; DX_INTERNET_SAVES elsewhere): the directory of { source, slot }. */
+export function slotDirectory({ source, slot }) {
+  const root = process.env.DX_INTERNET_SAVES ?? new URL('../.work/internet-saves', import.meta.url).pathname;
+  return `${root}/${source === 'nicouzouf' ? 'nicouzouf/files/Deus Ex' : `${source}/files`}/${slot}`;
+}
+/** The save folder's name of a slot index (Save0042; DDeusExGameEngine's Save%04d). */
+export const slotName = index => `Save${String(index).padStart(4, '0')}`;
 
 export async function readIfExists(path) { try { return await readFile(path, 'utf8'); } catch { return null; } }

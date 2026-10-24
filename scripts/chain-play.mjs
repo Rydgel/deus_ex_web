@@ -10,7 +10,8 @@ import { AssetStore } from '../src/unreal/assets.mjs';
 import { openSession } from './census-stage5-session.mjs';
 import { createMenuDriver } from '../src/viewer/menu-driver.mjs';
 import { createSaveDirectory } from '../src/runtime/save-directory.mjs';
-import { PLAY_KEY, placeLines, placementNear, flagsOfPlay, loadChain } from './chain-lib.mjs';
+import { PLAY_KEY, placeLines, placementNear, flagsOfPlay, loadChain, slotDirectory, slotName } from './chain-lib.mjs';
+import { parseSaveInfo } from '../src/runtime/save-info.mjs';
 
 export async function loadAssets() {
   const root = gameDirectory(), files = [];
@@ -50,6 +51,15 @@ export function pressKey(c, name) {
   return taken;
 }
 
+/** One character typed as the keyboard sends it: the key's press, its WM_CHAR unit and its release (an edit field takes the unit; validate-terminals-play.mjs). */
+export function typeChar(c, ch) {
+  const code = ch === ' ' ? 'Space' : /[0-9]/.test(ch) ? `Digit${ch}` : `Key${ch.toUpperCase()}`, shift = ch !== ch.toLowerCase();
+  if (shift) c.game.inputKey('ShiftLeft', true);
+  c.game.inputKey(code, true); c.game.inputChar(ch.charCodeAt(0)); c.game.inputKey(code, false);
+  if (shift) c.game.inputKey('ShiftLeft', false);
+  c.frames(1);
+}
+
 /** The player's conversation as Play shows it: { name, event class, event label, state } or null. */
 export function conversationOf(c) {
   const conPlay = c.read(c.player(), 'conPlay');
@@ -79,8 +89,11 @@ export async function runChainInPlay(chain, { assets = null, log = () => {}, unt
   };
   const flag = name => c.flag(name.toLowerCase());
   const arrive = async (request, label) => {
-    result.legs.push({ label, from: map, to: request.map, text: request.travelInfo[0][1], restore: Boolean(request.restore), portal: request.portal ?? null, url: request.url });
-    note(`leg ${label}: ${map} -> ${request.map}${request.portal ? `#${request.portal}` : ''}${request.restore ? ' (restored)' : ''}, ${request.travelInfo[0][1].length} bytes`);
+    // a loaded game carries no travel text (LoadGame's request: no pairs): it is not a leg
+    if (request.travelInfo.length) {
+      result.legs.push({ label, from: map, to: request.map, text: request.travelInfo[0][1], restore: Boolean(request.restore), portal: request.portal ?? null, url: request.url });
+      note(`leg ${label}: ${map} -> ${request.map}${request.portal ? `#${request.portal}` : ''}${request.restore ? ' (restored)' : ''}, ${request.travelInfo[0][1].length} bytes`);
+    } else note(`loaded ${request.map} (${request.url})`);
     ({ c } = await openSession(request.map, assets, { travel: { ...sessionTravel, arrival: request, lastURL: request.lastURL }, saveDirectory: directory }));
     map = request.map;
     pending = null;
@@ -116,6 +129,15 @@ export async function runChainInPlay(chain, { assets = null, log = () => {}, unt
         frames(600);
         if (!pending) throw new Error('Escape on the intro made no request');
         await arrive(pending, 'newgame-island');
+      } else if (step.kind === 'slot') {
+        // the slot's files in the save folder, then the console's LoadGame from the logo map (as the Load Game screen does: DeusExPlayer.LoadGame)
+        const files = [];
+        for (const name of await readdir(slotDirectory(step))) files.push({ name, bytes: new Uint8Array(await readFile(`${slotDirectory(step)}/${name}`)) });
+        const info = files.find(file => file.name === 'SaveInfo.dxs');
+        directory.put({ directory: slotName(step.index), files, info: info ? parseSaveInfo(info.bytes) : null });
+        c.exec(`LoadGame ${step.index}`); frames(3);
+        if (!pending) throw new Error(`LoadGame ${step.index} made no request`);
+        await arrive(pending, 'start');
       } else if (step.kind === 'open') {
         // the console's LocalTravel from the logo map (the travel captures' way into a map: a player with no mission state)
         typeLine(c, `LocalTravel ${step.map}`); frames(3);
@@ -183,6 +205,14 @@ export async function runChainInPlay(chain, { assets = null, log = () => {}, unt
     },
     async belt(step) { typeLine(c, `ActivateBelt ${step.n}`); frames(step.settle ?? 60); note(`belt ${step.n}`); },
     async key(step) { for (const name of step.names) { pressKey(c, name); frames(Math.round((step.gap ?? 0.5) / FRAME)); } note(`key ${step.names.join(' ')}`); },
+    async type(step) { for (const ch of step.text) typeChar(c, ch); frames(step.settle ?? 15); note(`type ${step.text.length} characters`); },
+    async point(step) {
+      const root = c.read(c.player(), 'rootWindow'), W = c.game.doors.scriptRuntime.windowHost.W;
+      const x = step.at[0] - 640 + W.f32(root, 0xe4) / 2, y = step.at[1] - 360 + W.f32(root, 0xe8) / 2;
+      for (const action of [1, 3]) { if (!c.game.windowPointer({ relative: false, x, y, key: 1, action })) throw new Error(`point ${step.at}: the root does not take the pointer`); frames(2); }
+      frames(step.settle ?? 30);
+      note(`point ${step.at.join(',')} (Play's root ${x},${y})`);
+    },
     async conv(step) {
       stamp(step.watch);
       const choices = [...(step.choose ?? [])];

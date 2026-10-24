@@ -10,9 +10,9 @@
  *
  * Needs the worktree's ad/build and ad/tools/dxinput.exe (built once in the main checkout, ignored by Git). */
 import { spawn, execFileSync } from 'node:child_process';
-import { appendFileSync, mkdirSync, openSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { appendFileSync, cpSync, mkdirSync, openSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { setTimeout as sleep } from 'node:timers/promises';
-import { placeLines, placementNear, flagsOfDump, loadChain, captureDirectory, STATE_FIELDS } from './chain-lib.mjs';
+import { placeLines, placementNear, flagsOfDump, loadChain, captureDirectory, STATE_FIELDS, slotDirectory, slotName } from './chain-lib.mjs';
 
 const ROOT = new URL('..', import.meta.url).pathname.replace(/\/$/, '');
 // the Mac runs the CrossOver bottle "DeusEx" (scripts/travel-probe.sh's Darwin branch), where a dump tool under Rosetta can take a minute on a loaded host
@@ -129,6 +129,14 @@ export async function runChainInOriginal(chain, { log = console.log, until = nul
         result.legs.push({ label: 'newgame-island', from: intro.map, to: island.map, text: island.text });
         current = island;
         note(`start new-game: in ${island.map}`);
+      } else if (s.kind === 'slot') {
+        // the slot's files into the prefix's Save folder after the probe set the folder aside (DX_SAVE_BACKUP: it is put back whole when the session ends),
+        // then the console's LoadGame from the logo map
+        cpSync(slotDirectory(s), `${env.DX_GAME}/Save/${slotName(s.index)}`, { recursive: true });
+        await type(`LoadGame ${s.index}`, 700);
+        const arrived = await waitArrival(first);
+        current = arrived;
+        note(`start slot ${s.source} ${s.slot}: in ${arrived.map}`);
       } else if (s.kind === 'open') {
         await type(`LocalTravel ${s.map}`, 700);
         const arrived = await waitArrival(first);
@@ -191,6 +199,8 @@ export async function runChainInOriginal(chain, { log = console.log, until = nul
     },
     async belt(s) { await type(`ActivateBelt ${s.n}`, 900); await sleep(1000); note(`belt ${s.n}`); },
     async key(s) { for (const name of s.names) { await press(name); } note(`key ${s.names.join(' ')}`); },
+    async type(s) { step('type', s.text); await sleep(500); note(`type ${s.text.length} characters`); },
+    async point(s) { step('click', `${s.at[0]} ${s.at[1]}`); await sleep((s.settle ?? 1) * 1000); note(`point ${s.at.join(',')}`); },
     async walk(s) { step('hold', s.key ?? 'UP', String(Math.round(s.seconds * 1000))); note(`walk ${s.key ?? 'UP'} ${s.seconds}s`); },
     /** A conversation, played as it comes (no key skips a speech: a skip races the choice that follows): wait for the player's conPlay, read its current event each round,
      * pick the listed choices (ArrowDown by their index, Enter) when the event is a ConEventChoice, and finish when the conPlay is gone. */

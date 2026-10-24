@@ -6,15 +6,44 @@
  *   node scripts/chain-plan.mjs drop <map> <actor> [--lifts 50,70] [--yaw N]                       placements above the cylinder: the fall enters it (a placement inside raises no Touch)
  *   node scripts/chain-plan.mjs stand <map> <actor> [--distances 60,90] [--lift L] [--settle F]                  places at a distance from the actor with a clear line to it, aimed at it
  *   node scripts/chain-plan.mjs face <map> <actor> [--distances 60,90] [--lift L] [--freeze] [--all] [--aim x,y,z] [--accept A,B]  the places from which the view trace selects the actor (frob)
+ *       [--before "CauseEvent a; CauseEvent b"]   console lines run (cheats on) after each restart, 4 s of ticks after each, before the trial: movers the chain opens first
+ *   node scripts/chain-plan.mjs face-chain <mission> <step> <actor>...   the face placements in the level a chain reaches: the chain (scripts/chains/mission<mission>.mjs) runs in
+ *                                                                        Play to its step <step> (0-based, not run; a slot's level differs from the cold map), then each place
+ *                                                                        around each actor is tried in that state (no restart: the trials follow each other)
  */
 import { fileURLToPath } from 'node:url';
-import { loadAssets, typeLine } from './chain-play.mjs';
+import { loadAssets, typeLine, runChainInPlay } from './chain-play.mjs';
 import { openSession } from './census-stage5-session.mjs';
-import { placeLines } from './chain-lib.mjs';
+import { placeLines, loadChain } from './chain-lib.mjs';
 
 const args = process.argv.slice(2);
 const option = (name, fallback) => { const i = args.indexOf(`--${name}`); return i < 0 ? fallback : Number(args[i + 1]); };
 const [mode, map, actorName] = args;
+if (mode === 'face-chain') {
+  const [, mission, stop, ...names] = args;
+  const chain = await loadChain(mission);
+  chain.steps = chain.steps.slice(0, Number(stop));
+  const { session: c } = await runChainInPlay(chain);
+  const eye = c.game.player.baseEyeHeight, unit = 32768 / Math.PI;
+  for (const name of names) {
+    const target = c.actor(name), at = c.pos(target);
+    c.watched.add(target);
+    let found = 0;
+    for (const d of [40, 50, 65]) for (let k = 0; k < 8 && found < 2; k++) {
+      const bearing = k * Math.PI / 4, from = [Math.round(at[0] + Math.cos(bearing) * d), Math.round(at[1] + Math.sin(bearing) * d), Math.round(at[2] + 30)];
+      if (!c.inWorld(from)) continue;
+      for (const line of placeLines({ at: from, view: [0, 0] })) { typeLine(c, line); c.frames(10); }
+      c.frames(40);
+      // aimed from where the player landed, then read back what the view trace selects
+      const p = c.pos(c.player()), dx = at[0] - p[0], dy = at[1] - p[1], dz = at[2] - (p[2] + eye);
+      const view = [Math.round(Math.atan2(dz, Math.hypot(dx, dy)) * unit), Math.round(((Math.atan2(dy, dx) * unit) % 65536 + 65536) % 65536)];
+      typeLine(c, `set DeusEx.JCDentonMale ViewRotation (Pitch=${view[0]},Yaw=${view[1]},Roll=0)`); c.frames(30);
+      if (c.game.interaction.frobTarget?.name === name) { found++; console.log(JSON.stringify({ target: name, d, k, at: [p[0], p[1], p[2] + 1].map(Math.round), view })); }
+    }
+    if (!found) console.log(JSON.stringify({ target: name, found: 0 }));
+  }
+  process.exit(0);
+}
 const assets = await loadAssets();
 const { c, run } = await openSession(map, assets, { travel: {} });
 c.frames(Number(args.includes('--settle') ? args[args.indexOf('--settle') + 1] : (mode === 'stand' ? 900 : 60)));   // a pawn with Sitting or Wandering orders walks to its place first
@@ -98,6 +127,10 @@ if (mode === 'face') {
     from[2] = Math.round(floor + 1);
     const view = aim(floor);
     c.restart(); c.frames(30); c.takeTravel();
+    if (args.includes('--before')) {
+      typeLine(c, 'set DeusEx.JCDentonMale bCheatsEnabled True');
+      for (const line of args[args.indexOf('--before') + 1].split(';')) { typeLine(c, line.trim()); c.frames(240); }
+    }
     c.watched.add(target);
     if (freeze) { typeLine(c, 'set DeusEx.JCDentonMale bCheatsEnabled True'); typeLine(c, 'set LevelInfo bPlayersOnly True'); c.frames(5); }
     for (const line of ['set DeusEx.JCDentonMale bCheatsEnabled True', ...placeLines({ at: from, view })]) { typeLine(c, line); c.frames(20); }
