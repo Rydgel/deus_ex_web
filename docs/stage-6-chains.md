@@ -51,6 +51,16 @@ On the Mac (2026-10-23) `scripts/travel-probe.sh`, `travel-step.sh` and `chain-o
 are missing, no `mapfile` in bash 3.2). The captures a machine takes stay in its own `.work/` (the Linux host's and the Mac's differ): a validator whose
 capture is not there SKIPs. A console line typed while a menu is open is the menu's (its Enter activates the focused button): close the menus first.
 
+### Rules a chain follows (learned on mission 15, 2026-10-24)
+
+* God mode (`ReducedDamageType`) and `bCheatsEnabled` are not travel properties: type both lines again after every `travel` (a level change drops them in both programs).
+* A slot's level is not the cold map: plan every placement after a slot start with `chain-plan.mjs face-chain`, in the level the chain reaches, not with `face` on the cold map.
+* A radius conversation needs its owner's `DistanceFromPlayer` current, which only drawing keeps: headless Play needs the `watch` stand-in on the owner, and when the
+  original first draws him is not derivable from the chain (a placement draws frames with the old view between `set Location` and `set ViewRotation`), so a chain waits
+  on the conversation's `_Played` flag in its window rather than on time.
+* When a capture stops at a `wait`, read the original's player first (its `Health` and state in the dumps): a dead or dying player explains most timeouts (ending 1's first
+  capture: the reactor's radiation, seen by the user watching the Wine window).
+
 ## What is compared
 
 At every `snap` the flags (equal as sets of `name|type|expiration|value`, and the default expiration), and for every map change the **travel text** the leg exported, after the
@@ -83,7 +93,7 @@ the credits and the arrival at `dxonly`:
 | --- | --- |
 | 3, Illuminati | the four node keypads (7243), each waiting for its `DL_Blue<n>` (Mission15.Timer plays the InfoLink of the count of set flags: four at once would play `DL_Blue4` alone), `Page_button` open, `Switch4` (`kill_page`, Dispatcher1, `start_endgame`) |
 | 2, Helios | the uplink buttons `Button18`/`Button19` (`UplinkLock1/2`), `ComputerPersonal0` logged in (`type`, Tab, `type`, Enter) and its special option clicked (`point`: the button's centre in Play's terminal moved by the difference of the root centres, (641,329) of the original's 1280x720 viewport; `HeliosFree`), Escape twice, `Teleporter8` to the filed Final, `FlagTrigger3` (`Merge_helios_exit`) |
-| 1, New Dark Age | Page's coolant `Switch0` (`coolantcut`), `Teleporter8`, the Timer's switch swap (`MS_ButtonsHidden`), `Switch10` and `Switch16` and one drop into the overlapping coolant FlagTriggers 2 and 4 (each LogicTrigger input toggles: each touched once), a walk into a `DL_Tong7` trigger (`ReactorReady`), `FlagTrigger5` (`Generator_panel`), the three reactor buttons in turn (each opens the cover of the next), `FlagTrigger9` (`Generator_overload`), Final's `Switch4` (`destroy_generator`); the Mechanic's overheard `PowerGuyScared1` (before the first button) and `2` (before the third) are waited for: the original's first capture had them and Play none, because the Mechanic, never drawn headless, kept a stale `DistanceFromPlayer` (the `watch` stand-in from the reactor room on); `PowerGuyScared3` started in neither program; the endgame's snapshot waits for `EndgameExplosions` (Endgame1 sets it at its own pace) |
+| 1, New Dark Age | Page's coolant `Switch0` (`coolantcut`), `Teleporter8`, the Timer's switch swap (`MS_ButtonsHidden`), `Switch10` and `Switch16` and one drop into the overlapping coolant FlagTriggers 2 and 4 (each LogicTrigger input toggles: each touched once), a walk into a `DL_Tong7` trigger (`ReactorReady`), `FlagTrigger5` (`Generator_panel`), the three reactor buttons in turn (each opens the cover of the next), `FlagTrigger9` (`Generator_overload`), Final's `Switch4` (`destroy_generator`); the Mechanic's overheard `PowerGuyScared1` (before the first button) and `2` (before the third) are waited for: the original's first capture had them and Play none, because the Mechanic, never drawn headless, kept a stale `DistanceFromPlayer` (the `watch` stand-in from the reactor room on); `PowerGuyScared3` (button 3) started in neither program (120 s waited in Play; why it does not start is unresolved); the endgame's snapshot waits for `EndgameExplosions` (Endgame1 sets it at its own pace) |
 
 Two ops came with them: `type` (text into the field that holds the keyboard, with its WM_CHAR units) and `point` (a click at a point of the original's viewport over a
 centred window). The planner's `face` takes `--before "CauseEvent a; CauseEvent b"` for a target a chain uncovers first (a mover the chain opens), and `face-chain <mission> <step> <actor>...`
