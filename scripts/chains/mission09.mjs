@@ -15,7 +15,7 @@
  * its own belt slot), and `belt 1` the pistol, as the save holds them. */
 const cheats = [
   { op: 'line', text: 'set DeusEx.JCDentonMale bCheatsEnabled True', harness: true },
-  // God mode set, not toggled: a restored level's arrival keeps it in Play, where the `God` toggle switched it off
+  // God mode set, not toggled: a restored arrival re-possesses the pawn filed there with its ReducedDamageType (the `God` toggle would switch it off)
   { op: 'line', text: 'set DeusEx.JCDentonMale ReducedDamageType All', harness: true },
 ];
 export default {
@@ -118,7 +118,8 @@ export default {
     { op: 'place', at: [375, 1941, 122], view: [0, 0], drop: true, harness: true, note: 'above DataLinkTrigger0 (375,1941,32, radius 160; DL_Entry)' },
     { op: 'wait', flag: 'DL_Entry_Played', timeout: 120 },
     // Dowd (Orders Wandering) stands still until the player is in his zone, then walks (about 70 units in the placement's two seconds, and the frob missed
-    // him): the level is held (bPlayersOnly) while the player is placed from where Dowd stands and aimed at him, and the frob follows the release at once
+    // him): the level is held (bPlayersOnly) while the player is placed from where Dowd stands and aimed at him, and the frob follows the release at once;
+    // while it is held no conversation can start (DeusExPlayer.CanStartConversation refuses under Level.bPlayersOnly), as with a `turnFirst` placement
     { op: 'line', text: 'set LevelInfo bPlayersOnly True', harness: true },
     { op: 'placeNear', actor: 'StantonDowd0', distance: 60, bearing: Math.PI, harness: true, note: '60 units west of Stanton Dowd (-1442,-37,-304 at his place), aimed at him' },
     { op: 'line', text: 'set LevelInfo bPlayersOnly False', harness: true, settle: 1 },
@@ -137,7 +138,7 @@ export default {
 
     // Jock: M09JockLeave (BlackHelicopter1, BindName Jock, radius 240 inside its 225 cylinder) by the right button; its Go branch triggers ChopperExit:
     // Dispatcher1 fires CopterTrigger (the helicopter's path) and CopterCam (MapExit0 and its camera path to 10_Paris_Catacombs)
-    { op: 'place', at: [1104, -270, 49], view: [296, 32759], harness: true, note: '265 units east of BlackHelicopter1 (839,-270,95 in the world, radius 225), aimed at its centre (planned in the level the chain reaches)' },
+    { op: 'place', at: [1104, -270, 49], view: [296, 32759], harness: true, turnFirst: true, note: '265 units east of BlackHelicopter1 (839,-270,95 in the world, radius 225), aimed at its centre (planned in the level the chain reaches)' },
     { op: 'frob', target: 'BlackHelicopter1' },
     { op: 'conv', name: 'M09JockLeave', choose: [{ index: 0, label: 'Go' }], watch: ['BlackHelicopter1'], timeout: 120 },
     { op: 'travel', to: '10_Paris_Catacombs', label: 'exit', timeout: 240 },
