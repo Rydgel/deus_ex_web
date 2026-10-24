@@ -12,9 +12,7 @@ const cheats = [
 export default {
   mission: '08',
   steps: [
-    // PROVISIONAL: the real desktop slot nicouzouf Save0020 (the Street at the arrival) until mission 6's chain pins its exit save; then
-    // { op: 'start', kind: 'slot', source: 'chain', chain: '06', slot: 'Save0106', index: 106 }
-    { op: 'start', kind: 'slot', source: 'nicouzouf', slot: 'Save0020', index: 20 },
+    { op: 'start', kind: 'slot', source: 'chain', chain: '06', slot: 'Save0106', index: 106 },
     { op: 'wait', seconds: 3 },
     { op: 'snap', label: 'h1-loaded' },
     ...cheats,
