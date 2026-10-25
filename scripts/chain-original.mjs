@@ -283,9 +283,18 @@ export async function runChainInOriginal(chain, { log = console.log, until = nul
     async save(s) { note(`save ${s.label} (Play's: the next chain's start)`); },
     async state(s) {
       const specs = s.fields.map(f => { const [off, type, mask] = STATE_FIELDS[f] ?? (() => { throw new Error(`state: no offset for ${f}`); })(); return `${f}:${off}:${type}${mask ? `:${mask}` : ''}`; });
-      const line = tool('dump-actor-win', s.actor, ...specs).split('\n').find(row => new RegExp(`^\\S+ ${s.actor} `).test(row));
+      let line;
+      if (s.presence) {
+        // `presence` (chain-lib.mjs): the object of that name in the controlled player's level with bDeleteMe clear; a Destroy()ed actor stays in GObjObjects with
+        // bDeleteMe set until the next purge, and an older level's object of the same name can still be in memory
+        const p = controlled();
+        const [off, type, mask] = STATE_FIELDS.bDeleteMe;
+        const rows = tool('dump-actor-win', s.actor, 'XLevel:0xac:u32', `bDeleteMe:${off}:${type}:${mask}`, ...specs).split('\n').filter(row => new RegExp(`^\\S+ ${s.actor} `).test(row) && !row.startsWith('Class '));
+        line = rows.find(row => p && parseInt(/XLevel=0x([0-9a-f]+)/.exec(row)?.[1] ?? '0', 16) === p.level && /bDeleteMe=0\b/.test(row));
+        if (!line) { (result.states ??= {})[s.label] = { actor: s.actor, present: 0 }; note(`state ${s.label}: ${s.actor} absent (${rows.length} object(s) of that name)`); return; }
+      } else line = tool('dump-actor-win', s.actor, ...specs).split('\n').find(row => new RegExp(`^\\S+ ${s.actor} `).test(row));
       if (!line) throw new Error(`state ${s.label}: the original has no ${s.actor}`);
-      const row = {};
+      const row = s.presence ? { present: 1 } : {};
       for (const f of s.fields) { const m = new RegExp(`${f}=(\\S+)`).exec(line); row[f] = m ? (m[1].startsWith('0x') ? parseInt(m[1], 16) : Number(m[1])) : null; }
       (result.states ??= {})[s.label] = { actor: s.actor, ...row };
       note(`state ${s.label}: ${s.actor} ${JSON.stringify(row)}`);

@@ -29,6 +29,8 @@
  *   snap     { label }                                      the flags (and the map) at this point
  *   watch    { actors }                                     Play only: the named actors count as rendered for the rest of the map (a headless frame draws no mesh)
  *   state    { label, actor, fields }                       fields of an actor (a mover's KeyNum, bLocked, a bHidden) read in both programs and compared
+ *            { ..., presence: true }                        also `present` (1, or 0 for an actor destroyed or never in the player's level: then no fields): a pawn a
+ *                                                           mission script destroys (Mission05.FirstFrame's Paul, Mission08.FirstFrame's Sandra; the flag census)
  *   report   { label }                                      the player's place, kept for a reading of the run (not compared)
  */
 import { readFile } from 'node:fs/promises';
@@ -91,6 +93,8 @@ export function flagDifferences(play, original) {
 /** The fields a `state` step reads from an actor, with their linked offsets (dump-actor-win's `field:offset:type[:mask]`; scripts/chain-offsets.mjs prints them from Play's loader): a DeusExMover's. */
 export const STATE_FIELDS = Object.freeze({
   KeyNum: ['0x377', 'u8'], PrevKeyNum: ['0x378', 'u8'], bLocked: ['0x534', 'bit', '2'], bHidden: ['0x28', 'bit', '2'],
+  // Actor.bDeleteMe and ScriptedPawn.bInWorld (chain-offsets.mjs 05_NYC_UNATCOMJ12lab PaulDenton0: 0x28 mask 128, 0x910 mask 2048), for `presence`
+  bDeleteMe: ['0x28', 'bit', '128'], bInWorld: ['0x910', 'bit', '2048'],
 });
 
 export async function loadChain(mission, file = null) {
@@ -102,9 +106,11 @@ export const captureDirectory = mission => new URL(`../.work/chains/m${mission}/
 
 /** A real desktop slot of `.work/internet-saves` (third-party files, read only; DX_INTERNET_SAVES elsewhere): the directory of { source, slot }; or the save a
  * chain's `save` step pinned ({ source: 'chain', chain, label, slot }). */
-export function slotDirectory({ source, slot, chain, label = 'exit' }) {
+export function slotDirectory({ source, slot, chain, label = 'exit', unit }) {
   // beside the captures, not in them: an original capture starts by clearing its mission's directory
   if (source === 'chain') return new URL(`../.work/chains/exits/m${chain}/${label}/${slot}`, import.meta.url).pathname;
+  // a carried-flag census unit's base save (scripts/stage6-flag-census.mjs): made in Play, loaded by both programs
+  if (source === 'census') return new URL(`../.work/chains/exits/census/${unit}/${slot}`, import.meta.url).pathname;
   const root = process.env.DX_INTERNET_SAVES ?? new URL('../.work/internet-saves', import.meta.url).pathname;
   return `${root}/${source === 'nicouzouf' ? 'nicouzouf/files/Deus Ex' : `${source}/files`}/${slot}`;
 }

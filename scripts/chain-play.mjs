@@ -296,8 +296,14 @@ export async function runChainInPlay(chain, { assets = null, log = () => {}, unt
     async watch(step) { stamp(step.actors); note(`watch ${step.actors.join(' ')}`); },
     async state(step) {
       const a = c.actor(step.actor);
+      // `presence`: a pawn a mission script destroyed (or one the level never had) is a reading, not a failure (the flag census's FirstFrame readers)
+      if (step.presence) {
+        let gone = !a;
+        try { gone ||= c.gone(a); } catch { gone = true; }
+        if (gone) { (result.states ??= {})[step.label] = { actor: step.actor, present: 0 }; note(`state ${step.label}: ${step.actor} absent`); return; }
+      }
       if (!a) throw new Error(`state ${step.label}: no actor ${step.actor}`);
-      const row = {};
+      const row = step.presence ? { present: 1 } : {};
       for (const f of step.fields) { const v = c.read(a, f); row[f] = typeof v === 'boolean' ? Number(v) : v; }
       (result.states ??= {})[step.label] = { actor: step.actor, ...row };
       note(`state ${step.label}: ${step.actor} ${JSON.stringify(row)}`);
