@@ -293,7 +293,12 @@ export async function runChainInOriginal(chain, { log = console.log, until = nul
           // a conversation that ended without the named one's _Played flag was another one (an awake owner's ambient bark first, mission 12's
           // Savage_assistant_FBarks): the step waits on for its own (chain-play.mjs conv lets it run the same way)
           // (a conversation the step picked a choice in is its own: a branch that fires a map exit ends it before its _Played flag, mission 2's JockExit)
-          if (!s.name || played() || trace.some(t => t.startsWith('pick#'))) break;
+          if (!s.name || trace.some(t => t.startsWith('pick#'))) break;
+          // its flag is read again for up to 30 s: a conversation whose end fires a map exit (mission 6's M06JockExit) has the flags unreadable while the
+          // level changes, and its _Played is in the next level's table once the player is controlled again
+          let own = false;
+          for (let i = 0; i < 15 && !own; i++) { own = played(); if (!own) await sleep(2000); }
+          if (own) break;
           note(`conv ${s.name}: another conversation played first (${trace.join(' ')})`);
           started = false; lastPicked = null; trace.length = 0;
         }
