@@ -333,6 +333,13 @@ export async function createGame(map, asset, assets, { randomSeed = Math.floor(D
       ? { map: map.level.url.map, portal: map.level.url.portal, op: map.level.url.options }
       : travel.lastURL ?? { map: asset.name, op: DEFAULT_PLAYER_OPTIONS.map(([name, value]) => `${name}=${value}`) }),
     levelUrlMap: () => travel.arrival?.map ?? asset.name, packageName: () => asset.name }) : null;
+  // The first tick of a level that a running game browsed to (a travel or a loaded game; docs/travel.md "The first tick after the load"):
+  // DeusEx.exe's main loop passes DeltaTime = f32(appSeconds() - OldTime) to Engine->Tick with no clamp and no reset across a load
+  // (0x109147da..0x109148a6), and UGameEngine::Tick browses after the levels' Ticks and returns (0x10390c01..0x10390d27). So the new
+  // level's first ULevel::Tick receives the whole loading frame: actors clamp it to 0.4 s, and TimeSeconds adds it unclamped.
+  // The page measures that gap itself (main.mjs keeps the frame time from before the load). A host without a clock (a headless
+  // session) may pass `travel.loadSeconds`, which stands for the loading frame and replaces the seconds of the first tick only.
+  let loadingFrameSeconds = travel?.arrival && Number.isFinite(travel.loadSeconds) ? travel.loadSeconds : null;
   const game = {
     takeAudioMs() { const ms = audioMs; audioMs = 0; return ms; },
     player, doors, collision, notes, start, interaction, random, hud,
@@ -340,6 +347,7 @@ export async function createGame(map, asset, assets, { randomSeed = Math.floor(D
      * original's RootTick deltas since the previous level tick, which then replace this frame's own time for the windows; older callers'
      * second argument (an input object) is ignored. */
     tick(seconds, windowSeconds = null) {
+      if (loadingFrameSeconds !== null) { seconds = loadingFrameSeconds; loadingFrameSeconds = null; }
       // Actor.Tick owns ReadInput, PlayerInput/PlayerTick, ProcessState, timers,
       // Pawn physics and UpdateEyeHeight. No host player simulation follows it.
       player.timeDilation = levelDilation.get();

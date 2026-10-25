@@ -165,31 +165,58 @@ The scripts put the arriving player exactly on the portal's `Teleporter`, and no
 
 So the first tick starts with a falling player at the teleporter's `Location`, and physFalling's MoveActor makes the touches that the placement did not.
 
-**`10_Paris_Metro#sewer`** (mission 10's leg 2; measured in Play on the Linux host, headless 60 Hz frames, from mission 9's pinned exit save, 2026-10-25). `Teleporter2` (Tag `sewer`) is at (1547.1610, -4239.0752, -272.712982); `PlayerStart1` is not used. `DataLinkTrigger13` (`DL_metrosewer`) is at (1559.7084, -4242.4507, -316.752472), CollisionHeight 1, 13.0 units away horizontally. The player has radius 20, height 43 and MaxStepHeight 25.
+#### The first tick after the load
 
-| Level time | Player z | What happens |
-| --- | --- | --- |
-| arrival (before tick 1) | -272.712982 | Exactly Teleporter2's Location, `PHYS_Falling`, state `PlayerWalking`, `Touching` empty: \|dz\| = 44.039490 is not below 43 + 1, so neither the spawn nor `SetLocation` touches the trigger. |
-| 0.0167 (tick 1) | -272.844940 | The fall's move enters the trigger's height. `DataLinkTrigger.Touch` -> `StartDataLinkTransmission("DL_metrosewer")` is true (`bStartedViaTouch`, `DataLinkPlay0`, the InfoLink window). |
-| 0.0667 (tick 4) | -274.712280 | Landed (`PHYS_Walking`, Base `LevelInfo0`). This z depends on the fall's tick lengths: here the fourth move passes the surface that a longer extent trace from above finds at -274.27. |
-| 0.0833 (tick 5) | -272.612274 | physWalking's floor rule moves it up `2.1 - distance` from distance 0, and it untouches the trigger. |
-| up to 16.75 | -272.612274 | The full-extent floor probe (MaxStepHeight + 2, flags `0x17`) accepts `DataLinkTrigger13` 0.1335 below. A general actor passes under bit `0x10` without `0x20` ([SingleLineCheck filter](fitting.md#singlelinecheck-filter-contract-before-translation)). Its hit actor differs from Base, so the probe runs `MoveActor(floorDelta)`, but the world floor (-274.3, 1.6877 below) lies inside MoveActor's two-unit extension, so the move is time 0 ([walking](walking.md)). |
-| 16.75 | -272.612274 | `DL_metrosewer` ends and `DL_metrosewer_Played` is set. `DatalinkFinished` -> `Trigger.Touch` -> `bTriggerOnceOnly` -> `SetCollision(False)`. |
-| 16.7667 and after | -272.200012 | The probe now finds the world at 1.6877 (< 1.9) and raises the player 0.412262, to 2.1 above -274.3. It stays there, since 2.1 is in [1.9, 2.4]. `DataLinkPlay0` is destroyed at 18.23 s. |
+After a load, the new level's first tick is long.
 
-Play therefore touches `DataLinkTrigger13` on the first tick and plays `DL_metrosewer`. Its -272.6 is the height while the DataLink plays, and -272.2 is the height after. A reading over the first 5 s sees neither the flag nor -272.2.
+* **Main loop.** DeusEx.exe's main loop (`0x109147b9..0x109148a6`) passes `DeltaTime = f32(appSeconds() - OldTime)` to `Engine->Tick` (vtable `+0x54`), then sets `OldTime = NewTime`. Nothing clamps the delta, and nothing resets `OldTime` across a load.
+* **Engine tick.** `UExtensionEngine::Tick` (`0x100266a0`) passes the same value to `UGameEngine::Tick` (`0x100266d9`). That function passes it unchanged to the levels' Ticks (`0x10390154..0x103901a3`), browses (`0x10390c01`), clears `TravelURL` and returns (`0x10390d27`) without ticking the new level.
+* **Result.** The new level's first `ULevel::Tick` receives the whole loading frame. Its actors clamp it to 0.4 s ([level scheduling](script-level-tick.md)), and `TimeSeconds` adds it unclamped.
+* **The engine's first map** is loaded before the main loop takes `OldTime` (`0x10914720..0x109147a9`), so it gets no long first tick.
 
-The original's capture of the same steps (`.work/travel/chain-md10`) agrees. Its engine log loads `InfoPortraits` and `DeusExConAudioMission10` right after the arrival's `InitStateMachine`: the first conversation loads after the arrival, which is consistent with the DataLink starting but does not prove it. Its three reports read -272.2, and its snapshot holds `DL_metrosewer_Played`. Both match Play after 16.75 s.
+Until 2026-10-25, Play started a level entered by travel with a 1/60 s tick. The page reset its frame clock at the host switch, and the headless harness ticks at a fixed rate. Now:
 
-The original driver reports no sooner than its arrival poll + 3 s + the travel dump + the 2 s settle + the report's own dump. In the m10 capture, the leg 2 `walk` (06:15:15) to the next typed line (06:15:43) took 28 s, including the fall and the load. Play's chain settles 2 s instead (`chain-play.mjs` travel), so its `g3-metro` snapshot (cheats + 3 s) is read before the DataLink ends. A chain that waits for `DL_metrosewer_Played` reads both programs after it.
+* **The page.** `main.mjs` `travelFrameTime` measures the first frame's dt from the last frame before a travel's load, in both the worker and inline modes. Measured in headless Chromium on the Linux host (DX.dx -> Escape -> Training):
+
+  | Mode | Load | `TimeSeconds` once 00_Training is ready |
+  | --- | --- | --- |
+  | worker, after the change | 5.30 s | 5.20 |
+  | worker, before the change | (same route) | 0.0167 |
+  | inline, after the change | 7.32 s | 7.88 |
+
+* **Headless hosts.** A host without a clock can pass `travel.loadSeconds` (`game.mjs` `loadingFrameSeconds`), which replaces the seconds of the first tick of an arrival. `chain-play.mjs`'s `sessionTravel: { loadSeconds: 0.4 }` brings it to every arrival of a chain. 0.4 s gives the actors the same delta as any load of 0.4 s or more; `TimeSeconds` then reads 0.4 where the original reads its load's wall time.
+* **The headless default stays 1/60 s.** Changing it alters every arrival's first tick, and the chains start from pinned Play exit saves.
+
+**`10_Paris_Metro#sewer`** (mission 10's leg 2; measured in Play on the Linux host from mission 9's pinned exit save, 2026-10-25).
+* `Teleporter2` (Tag `sewer`) is at (1547.1610, -4239.0752, -272.712982); `PlayerStart1` is not used.
+* `DataLinkTrigger13` (`DL_metrosewer`) is at (1559.7084, -4242.4507, -316.752472), CollisionHeight 1, 13.0 units away horizontally.
+* The player has radius 20, height 43 and MaxStepHeight 25.
+* At arrival, before tick 1: exactly Teleporter2's `Location`, `PHYS_Falling`, state `PlayerWalking`, `Touching` empty. \|dz\| = 44.039490 is not below 43 + 1, so neither the spawn nor `SetLocation` touches the trigger.
+
+Every first tick tried moves the player into the trigger's height. That Touch makes `StartDataLinkTransmission("DL_metrosewer")` true (`DataLinkPlay0` after tick 1), and `DL_metrosewer_Played` follows 16.75 s later. The height depends on the first tick's length (later ticks 1/60 s; 0.4 s was also run with 0.005 s ticks, with the same heights):
+
+| First tick | After tick 1 | While DL_metrosewer plays | After it |
+| --- | --- | --- | --- |
+| 1/60 s | falling, -272.844940 | -272.612274 | -272.200012 |
+| 0.05 s | falling, -273.900482 | -272.609222 | -272.200012 |
+| 0.1 s | landed, -272.357971 | -272.357971 | -272.357971 |
+| 0.2, 0.3, 0.39, 0.4 or 1.5 s | landed, -272.225006 | -272.225006 | -272.225006 |
+
+The original agrees with the long first tick. Its `d10-arrival2` capture (`.work/chains/md10b` on the Linux host) reads (1547.16101, -4239.0752, -272.225006) at all four reads, two before its wait for the flag and two after. -272.225006 is Play's height, to the last float bit, for any first tick of 0.2 s or more, and not for 1/60 s. The earlier `.work/travel/chain-md10` reports (-272.2 at 0.1 precision) say the same.
+
+**The 1/60 s path**, which only a short first tick takes:
+1. Ticks 1 to 4 fall, landing at -274.712280. This is 0.41 below the floor that the walking probe finds; it is measured, not traced.
+2. Tick 5's floor rule lifts the player `2.1 - distance` from distance 0, and the player untouches the trigger.
+3. Until the DataLink ends, the full-extent floor probe (MaxStepHeight + 2, flags `0x17`) accepts `DataLinkTrigger13` 0.1335 below. A general actor passes under bit `0x10` without `0x20` ([SingleLineCheck filter](fitting.md#singlelinecheck-filter-contract-before-translation)). Its hit actor differs from Base, so the probe runs `MoveActor(floorDelta)`. The world floor (-274.3, 1.6877 below) lies inside MoveActor's two-unit extension, so that move is time 0 ([walking](walking.md)).
+4. When `DL_metrosewer` ends, `DatalinkFinished` -> `Trigger.Touch` -> `bTriggerOnceOnly` -> `SetCollision(False)`. The next probe finds the world at 1.6877 and lifts the player 0.412262, to -272.200012.
+
+That 0.4-lower hold therefore needs the deep 60 Hz landing. With a long first tick the player lands at -272.225006 on tick 1 and stays there while the trigger still collides.
+
+**Snapshots.** The original's chain driver reads late. It reports no sooner than its arrival poll + 3 s + the travel dump + the 2 s settle + the report's own dump. In the m10 capture, the leg 2 `walk` (06:15:15) to the next typed line (06:15:43) took 28 s, including the fall and the load. Play's chain settles 2 s, so its `g3-metro` snapshot (cheats + 3 s) is read before `DL_metrosewer` ends. A chain that waits for `DL_metrosewer_Played` reads both programs after it.
 
 **Unverified:**
-- **The original's height while the DataLink plays, and whether its first report came before 16.75 s.** The mechanism is composed from validated parts (the SingleLineCheck filter, physWalking's floor branch, MoveActor's extension), but the composition is not measured in the original. The landing z also depends on the tick lengths.
-- **Why the 60 Hz landing ends 0.41 below the floor the walking probe finds.** This is measured, not traced: the fall's moves do not go through the flags-6 `lineCheck`.
-
-The diagnostic `.work/chains/diag/d10-arrival2.mjs` (the original only) separates the outcomes:
-- If `early-pose` reads z ≠ -272.200012 with the flag unset, and the post-flag poses read -272.200012, that is Play's mechanism.
-- If `early-pose` reads -272.200012 with the flag unset, Play deviates.
+- **The original's load wall time.** Its first-tick `TimeSeconds` was not read, so how far the headless 0.4 is from it is not known.
+- **The original's height while `DL_metrosewer` plays.** `d10-arrival2`'s reads all came after the flag was set. With a first tick of 0.2 s or more, Play predicts -272.225006 throughout.
 
 ## Native chain
 

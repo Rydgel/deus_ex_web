@@ -315,6 +315,9 @@ let meshLighting=null;
 let simClient=null,simAnswers={keys:{},pointerGrab:false},simStatus=null,simPosts=0;
 // The worker's last frame post (the page clock, ms).
 let simLastPost=null;
+// The page clock (ms) of the last frame before a travel's load. The next level's first frame measures its dt from it, so its first
+// tick receives the load, as the original's does (docs/travel.md "The first tick after the load"; game.mjs `loadingFrameSeconds`).
+let travelFrameTime=null;
 let infoLinkAudioContext=null;
 // Galaxy's music (docs/galaxy-music.md "Phase 5: Output"): an AudioWorklet
 // owns the library (galaxy-music-output.mjs); the simulation talks to it on
@@ -816,7 +819,9 @@ function setMode(next) {
   return reply;
 }
 function travelTo(request) {
-  // (the level left has stopped ticking: sim-session.mjs `travelled`)
+  // (the level left has stopped ticking: sim-session.mjs `travelled`). The loading frame starts here: the inline frame that ticked
+  // the travel, or the worker's latest post (a display frame or two after the travel's, and those posts reach a level that no longer ticks)
+  travelFrameTime = simClient ? simLastPost : lastTime;
   loadSavedFiles(request).then(currentFiles => loadMap(request.map, { travel: request, currentFiles }))
     .catch(error => { toast(error.message); pauseForRuntimeError(error); });
 }
@@ -1052,6 +1057,12 @@ async function loadMap(name, { travel = null, currentFiles = null } = {}) {
       try { await renderer.compileAsync(scene, camera); } catch (error) { console.warn('precompile failed', error); }
       precompileMs = performance.now() - mark;
     }
+    // A travel's level: its first frame's dt runs from the last frame before the load (DeusEx.exe's main loop does not reset OldTime
+    // across Browse, 0x109147da..0x109148a6), so the loading frame reaches the new level's first tick, where ULevel::Tick clamps the
+    // actors' delta to 0.4 s. A map opened directly keeps the ordinary first frame: the engine's first map is loaded before the main
+    // loop takes OldTime (0x10914720..0x109147a9).
+    if (travel && travelFrameTime !== null) { if (simClient) simLastPost = travelFrameTime; else lastTime = travelFrameTime; }
+    travelFrameTime = null;
   } catch (error) {
     // a load the worker started waits for the world's part: none comes
     overlapped?.scene?.(null);
