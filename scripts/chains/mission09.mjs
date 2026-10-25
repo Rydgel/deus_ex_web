@@ -76,6 +76,10 @@ export default {
 
     // the bilge pump: ComputerPersonal0's special option "Reverse Pump Flow" (TriggerEvent PumpTrigger: FlagTrigger1 sets Bilge), logged in as PumpControl/Flush
     // (one of its three users in the map's userList); the Timer then plays DL_AllDone and sets MS_ShipBreeched
+    // DL_Bilge (DataLinkTrigger4, radius 76, in front of the computer) by a fall into it first: the computer's placement stands 93 units from its centre, on
+    // the edge of the two cylinders' overlap, and the first capture's original touched it there while Play did not (DL_Bilge played before DL_AllDone in one)
+    { op: 'place', at: [-2496, -721, -382], view: [0, 0], drop: true, harness: true, note: 'above DataLinkTrigger4 (-2496,-721,-472, radius 76; DL_Bilge): chain-plan.mjs drop, lifted 50' },
+    { op: 'wait', flag: 'DL_Bilge_Played', timeout: 120 },
     { op: 'place', at: [-2447, -642, -415], view: [-10778, 49063], harness: true, note: '48 units north of ComputerPersonal0 (-2447,-690,-457), aimed at it' },
     { op: 'frob', target: 'ComputerPersonal0', watch: ['ComputerPersonal0'] },
     { op: 'wait', seconds: 2 },
