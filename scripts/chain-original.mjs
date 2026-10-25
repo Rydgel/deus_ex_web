@@ -310,7 +310,9 @@ export async function runChainInOriginal(chain, { log = console.log, until = nul
       } else line = tool('dump-actor-win', s.actor, ...specs).split('\n').find(row => new RegExp(`^\\S+ ${s.actor} `).test(row));
       if (!line) throw new Error(`state ${s.label}: the original has no ${s.actor}`);
       const row = s.presence ? { present: 1 } : {};
-      for (const f of s.fields) { const m = new RegExp(`${f}=(\\S+)`).exec(line); row[f] = m ? (m[1].startsWith('0x') ? parseInt(m[1], 16) : Number(m[1])) : null; }
+      // an object or a name reads as its text, a vector as its three numbers
+      const value = text => text.startsWith('0x') ? parseInt(text, 16) : text.startsWith('(') ? text.slice(1, -1).split(',').map(Number) : Number.isNaN(Number(text)) ? text : Number(text);
+      for (const f of s.fields) { const m = new RegExp(`${f}=(\\S+)`).exec(line); row[f] = m ? value(m[1]) : null; }
       (result.states ??= {})[s.label] = { actor: s.actor, ...row };
       note(`state ${s.label}: ${s.actor} ${JSON.stringify(row)}`);
     },

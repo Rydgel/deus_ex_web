@@ -97,6 +97,8 @@ export const STATE_FIELDS = Object.freeze({
   KeyNum: ['0x377', 'u8'], PrevKeyNum: ['0x378', 'u8'], bLocked: ['0x534', 'bit', '2'], bHidden: ['0x28', 'bit', '2'],
   // Actor.bDeleteMe and ScriptedPawn.bInWorld (chain-offsets.mjs 05_NYC_UNATCOMJ12lab PaulDenton0: 0x28 mask 128, 0x910 mask 2048), for `presence`
   bDeleteMe: ['0x28', 'bit', '128'], bInWorld: ['0x910', 'bit', '2048'],
+  // a pawn's course (chain-offsets.mjs 02_NYC_BatteryPark Terrorist12 and BumMale3): Pawn.Health, Pawn.Enemy, ScriptedPawn.Orders, Actor.AnimSequence, Location
+  Health: ['0x428', 'u32'], Enemy: ['0x3cc', 'obj'], Orders: ['0x674', 'name'], AnimSequence: ['0x54', 'name'], Location: ['0x114', 'f3'],
 });
 
 export async function loadChain(mission, file = null) {

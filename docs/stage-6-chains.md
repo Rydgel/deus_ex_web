@@ -94,6 +94,15 @@ capture is not there SKIPs. A console line typed while a menu is open is the men
   `LastConEndTime` gate). Mission 3's JockBarks.
 * A computer loads in state `Off` at its `Begin` code's `FinishAnim` in a fresh map too: `watch` it before the placement, wait 2 s, then frob (mission 4's NSF
   computers refused the frob, and the typed login went to the game's keys).
+* **The camera's zone is stamped every headless frame** (`census-stage5-session.mjs`): OccludeBsp's master frame writes `Zones[Frame->ZoneNumber].LastRenderTime
+  = TimeSeconds` (Render.dll 0x10b1768d, `occlude.rs`) for the zone at the camera's origin, and `AActor::InStasis` keeps every actor in a zone rendered within
+  5 s and within 1200 units of the player awake (`actor-tick.mjs`). Headless Play kept the table at zero, so only `watch`ed actors woke: mission 5's first
+  capture set `doorclosed` (the lab's alarm units, tag `AlarmUnit`; AlarmUnit8 fires `CloseDoor`, FlagTrigger1 then FlagTrigger0) during the armory pickups
+  and Play did not; with the camera zone stamped Play sets it at the same snapshot. The zones the frame's portals show are stamped by the original as well
+  and are not headless (no occlusion runs there): an actor woken only through a portal still needs `watch`. The stamp reopened mission 2: its subway's
+  standing terrorists and hostages (bForceStasis, so stasis applies though they walk) had slept in Play and now wake as the original's do, and Play's hostages
+  die where the original's ran into the train (`EscapeSuccessful`). Its first PASS rested on the sleep; `.work/chains/diag/d02-subway.mjs` reads the
+  pawns' Health, Enemy, Orders, animation and location in both programs to tell an AI difference from a perception one.
 * A key-locked door: the key ring in hand (`belt 0`), the left button uses it (DeusExMover.Frob with a NanoKeyRing holding `KeyIDNeeded` toggles `bLocked`),
   the right button opens it (mission 5's `levelone`, as mission 0's key door).
 * A conversation step names each choice by the branch it leads to; Play checks it (a choice's own label is its `ChoiceSpeechLabel_N`, followed to the Jump),

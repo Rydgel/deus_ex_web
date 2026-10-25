@@ -24,7 +24,7 @@ export async function openSession(map, assets, {travel = null, saveDirectory = n
   const level = () => runtime.levelFor(player());
   const fixture = createPlayerInputFixture(game, {});
   const watched = new Set();
-  let travelRequest = null, painted = 0;
+  let travelRequest = null, painted = 0, lastView = null;
   const read = (object, name) => runtime.readNamed(object, name);
   const frame = () => {
     simulatedMsAdvance(1000 * frameSeconds);
@@ -36,13 +36,20 @@ export async function openSession(map, assets, {travel = null, saveDirectory = n
     // `paintEvery` N draws the sprites and the HUD on every Nth frame only (the conversation census: the paint code is checked, not every frame)
     if (paintEvery <= 1 || ++painted % paintEvery === 0) {
       const sprites = sim.sprites();
-      const hud = sim.hud({width: 1440, height: 960, view: game.view()});
+      lastView = game.view();
+      const hud = sim.hud({width: 1440, height: 960, view: lastView});
       const errors = [...sprites.errors, ...hud.errors];
       if (errors.length) throw new Error(errors.map(e => e.message).join('; '));
     }
     // A headless frame draws no actor meshes, so LastRenderTime stays at the LoadMap value and a stasis device (a keypad, a panel, a door) never runs its Timer; the
     // renderer's own feedback stamps what the player is working on, as the Stage 3 route does (docs/script-training-route.md).
     for (const target of watched) actorRenderFeedback(runtime, target)();
+    // OccludeBsp's master frame stamps its own zone, the one at the camera's origin, every frame (Zones[Frame->ZoneNumber].LastRenderTime =
+    // TimeSeconds, 0x10b1768d; occlude.rs): AActor::InStasis keeps a pawn there within 1200 units of the player awake (actor-tick.mjs). The zones the
+    // frame's portals show are stamped too in the original; a headless frame runs no occlusion, so only the camera's zone is (a subset of the original's).
+    // Without it a guard beside the player slept through what the original's saw (mission 5's armory camera alarm, docs/stage-6-chains.md)
+    const times = level().zoneLastRenderTimes, zone = lastView ? level().pointRegion?.(lastView.location)?.zoneNumber : 0;
+    if (times && zone > 0) times[zone] = Math.fround(read(level().actors[0], 'TimeSeconds'));
     const failures = game.doors.scriptRuntime.npcFailures;
     if (failures?.size) throw new Error([...failures.values()][0]);
   };

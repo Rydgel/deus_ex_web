@@ -318,7 +318,8 @@ export async function runChainInPlay(chain, { assets = null, log = () => {}, unt
       }
       if (!a) throw new Error(`state ${step.label}: no actor ${step.actor}`);
       const row = step.presence ? { present: 1 } : {};
-      for (const f of step.fields) { const v = c.read(a, f); row[f] = typeof v === 'boolean' ? Number(v) : v; }
+      // an object reads as its name (the original's dump prints the name)
+      for (const f of step.fields) { const v = c.read(a, f); row[f] = typeof v === 'boolean' ? Number(v) : v && typeof v === 'object' && !Array.isArray(v) && 'name' in v ? v.name : v; }
       (result.states ??= {})[step.label] = { actor: step.actor, ...row };
       note(`state ${step.label}: ${step.actor} ${JSON.stringify(row)}`);
     },
