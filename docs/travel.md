@@ -159,8 +159,8 @@ The same order is recovered for the cold login in [Original standalone player lo
 
 The scripts put the arriving player exactly on the portal's `Teleporter`, and nothing in the placement moves it down; the touches of the arrival are made by the first tick's fall.
 
-1. `GameInfo.Login` spawns the new pawn at `StartSpot.Location` (`Engine/GameInfo.uc:847`, `:887`; `FindPlayerStart(None, InTeam, Portal)`: the teleporter whose `Tag` is the portal). `SpawnActor`'s FindSpot keeps a spot where the cylinder fits, and its CheckEncroachment touch notify sees only the actors the cylinder already overlaps there ([relocation](relocation.md), [composed FarMoveActor](far-move-scene.md)).
-2. `DeusExGameInfo.Login` (no `Loadgame` option): `ResetPlayerToDefaults`, then `SetLocation(StartSpot.Location)` (`DeusExGameInfo.uc:37`, `:57`, `:61`: FarMoveActor to the same spot, the same touch rule) and the start spot's rotation.
+1. `GameInfo.Login` spawns the new pawn at `StartSpot.Location` (`Engine/GameInfo.uc:847`, `:887`; `FindPlayerStart(None, InTeam, Portal)`: the teleporter whose `Tag` is the portal). `SpawnActor`'s FindSpot keeps a spot where the cylinder fits. Its CheckEncroachment passes no touch notify (`0x10395591..0x103955e8` passes 0, `script-spawn.mjs`).
+2. `DeusExGameInfo.Login` (no `Loadgame` option): `ResetPlayerToDefaults`, then `SetLocation(StartSpot.Location)` (`DeusExGameInfo.uc:37`, `:57`, `:61`) and the start spot's rotation. `SetLocation` is FarMoveActor to the same spot. Its CheckEncroachment carries the touch notify, which touches only the actors the standing cylinder already overlaps there ([relocation](relocation.md), [composed FarMoveActor](far-move-scene.md)).
 3. `SpawnPlayActor`'s `SetPlayer` dispatches `PlayerPawn.Possess` -> `StartWalk` (`SetPhysics(PHYS_Walking)`, `PlayerPawn.uc:2373..2380`) -> `ClientReStart` -> `GotoState(PlayerReStartState)` (`Pawn.uc:595..614`) -> `PlayerWalking.BeginState`, which sets `PHYS_Falling` unconditionally ("force us to fall when level begins", `PlayerPawn.uc:3740..3743`; `DeusExPlayer`'s `PlayerWalking` has no `BeginState`).
 
 So the first tick starts with a falling player at the teleporter's `Location`, and physFalling's MoveActor makes the touches that the placement did not.
@@ -179,7 +179,7 @@ So the first tick starts with a falling player at the teleporter's `Location`, a
 
 Play therefore touches `DataLinkTrigger13` on the first tick and plays `DL_metrosewer`. Its -272.6 is the height while the DataLink plays, and -272.2 is the height after. A reading over the first 5 s sees neither the flag nor -272.2.
 
-The original's capture of the same steps (`.work/travel/chain-md10`) agrees. Its engine log loads `InfoPortraits` and `DeusExConAudioMission10` right after the arrival's `InitStateMachine`, which is the DataLink starting. Its three reports read -272.2, and its snapshot holds `DL_metrosewer_Played`. Both match Play after 16.75 s.
+The original's capture of the same steps (`.work/travel/chain-md10`) agrees. Its engine log loads `InfoPortraits` and `DeusExConAudioMission10` right after the arrival's `InitStateMachine`: the first conversation loads after the arrival, which is consistent with the DataLink starting but does not prove it. Its three reports read -272.2, and its snapshot holds `DL_metrosewer_Played`. Both match Play after 16.75 s.
 
 The original driver reports no sooner than its arrival poll + 3 s + the travel dump + the 2 s settle + the report's own dump. In the m10 capture, the leg 2 `walk` (06:15:15) to the next typed line (06:15:43) took 28 s, including the fall and the load. Play's chain settles 2 s instead (`chain-play.mjs` travel), so its `g3-metro` snapshot (cheats + 3 s) is read before the DataLink ends. A chain that waits for `DL_metrosewer_Played` reads both programs after it.
 
