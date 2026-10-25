@@ -199,7 +199,9 @@ export async function runChainInPlay(chain, { assets = null, log = () => {}, unt
     async frobNear(step) {
       const tries = step.tries ?? 5;
       for (let attempt = 1; attempt <= tries; attempt++) {
-        await ops.placeNear({ ...step, turnFirst: true });
+        // a list of bearings is tried in turn (chain-original.mjs frobNear: the original's owner can stand elsewhere, beside a wall)
+        const bearing = Array.isArray(step.bearing) ? step.bearing[(attempt - 1) % step.bearing.length] : step.bearing;
+        await ops.placeNear({ ...step, bearing, turnFirst: true });
         if (c.game.interaction.frobTarget?.name !== step.actor) continue;
         stamp([step.actor]);
         typeLine(c, 'ParseRightClick'); frames(step.frobSettle ?? 30);

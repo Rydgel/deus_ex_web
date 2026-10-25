@@ -188,7 +188,10 @@ export async function runChainInOriginal(chain, { log = console.log, until = nul
     async frobNear(s) {
       const tries = s.tries ?? 5;
       for (let attempt = 1; attempt <= tries; attempt++) {
-        await ops.placeNear({ ...s, turnFirst: true });
+        // a list of bearings is tried in turn: the original's owner can stand elsewhere than Play's, where one side of him is a wall
+        const bearing = Array.isArray(s.bearing) ? s.bearing[(attempt - 1) % s.bearing.length] : s.bearing;
+        try { await ops.placeNear({ ...s, bearing, turnFirst: true }); }
+        catch (error) { if (!/never arrived/.test(error.message)) throw error; note(`frobNear ${s.actor}: placement ${attempt} (bearing ${bearing}) never arrived`); continue; }
         const p = controlled();
         const row = p ? tool('dump-actor-win', p.name, 'FrobTarget:0x9e8:obj').split('\n').find(line => line.startsWith(`JCDentonMale ${p.name} `)) : null;
         const target = /FrobTarget=(\S+)/.exec(row ?? '')?.[1] ?? '?';

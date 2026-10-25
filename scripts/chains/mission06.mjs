@@ -271,13 +271,15 @@ export default {
     { op: 'wait', seconds: 3 },
     { op: 'snap', label: 'g20-tongbase' },
 
-    // M08Briefing (frob, needs Versalife_Done): undrawn since M07Briefing, Tong stopped on his way to TongStation02; the player waits at that station, facing
-    // it and off his way, with Tong drawn (the headless stand-in), until he stands there for its 8 s (5 s: he arrives after about 3 s in Play)
-    { op: 'place', at: [529, 243, 47], view: [-5866, 8192], turnFirst: true, harness: true, note: '65 units south-west of PatrolPoint1 TongStation02 (575,289,15) on the floor, aimed at where Tong stands (46 high): placements around the station in the level the chain reaches' },
+    // M08Briefing (frob, needs Versalife_Done): Tong walks from TongStation01 towards TongStation02 after M07Briefing, and the original's first capture found
+    // him elsewhere than Play's (the frob selected nothing); held still where he is (GroundSpeed 0, as for M07Briefing), the player placed beside him in each
+    // program (frobNear: his own location, the next bearing while the view does not select him)
+    { op: 'line', text: 'set DeusEx.TracerTong GroundSpeed 0', harness: true },
+    { op: 'wait', seconds: 2 },
     { op: 'watch', actors: ['TracerTong0'] },
-    { op: 'wait', seconds: 5 },
-    { op: 'frob', target: 'TracerTong0' },
+    { op: 'frobNear', actor: 'TracerTong0', distance: 55, bearing: [-2.356, 0, 1.571, 3.142, -1.571], settle: 0.3, harness: true, note: 'beside Tong where he is, aimed at him' },
     { op: 'conv', name: 'M08Briefing', watch: ['TracerTong0'], timeout: 300 },
+    { op: 'line', text: 'set DeusEx.TracerTong GroundSpeed 250', harness: true },
     { op: 'snap', label: 'g21-briefing' },
     { op: 'place', at: [1241, -886, 386], view: [0, 0], drop: true, harness: true, note: 'above Teleporter0 (1241,-886,296, radius 55): chain-plan.mjs drop, lifted 50' },
     { op: 'travel', to: '06_HongKong_WanChai_Market', label: 'leg16' },
