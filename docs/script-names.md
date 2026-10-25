@@ -252,7 +252,12 @@ Not modeled, and so unverified where they would matter:
 * A level restored from a `.dxs` file carries the spellings of the process
   that saved it. A chain that starts from a slot inherits them, but mission 10
   does not depend on that: the Catacombs and the Metro hold no `DL_Everett*`
-  name.
+  name. `beginLevel` enters the `.dxs` file's names
+  (`restore-asset.mjs` parses it outside the store). `readObject` reads that
+  package's Name values with the file's own spelling, not through `spell`.
+  The two differ only for a name that the previous level entered first with
+  another spelling. Exit slots pinned by an earlier Play carry its old
+  spellings in their FlagBase until they are pinned again.
 
 ## Validation and boundaries
 
