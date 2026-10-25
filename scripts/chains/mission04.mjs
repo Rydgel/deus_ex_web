@@ -123,7 +123,11 @@ export default {
     { op: 'walk', seconds: 1 },
     { op: 'wait', flag: 'ApartmentEntered', timeout: 30 },
     { op: 'conv', name: 'TalkedToPaulAfterMessage', watch: ['PaulDenton0'], timeout: 120 },
-    { op: 'wait', seconds: 10 },
+    // Paul's barks before the raid (PaulBeforeAttack, then PaulBeforeAttack2, radius 100, which fires RaidBegin): a radius conversation with Paul waits 10 s
+    // after his third-person one (GetActiveConversation's lastThirdPersonConvoTime gate), so they come at each program's pace; the snapshot waits for both
+    { op: 'wait', flag: 'PaulBeforeAttack_Played', timeout: 90 },
+    { op: 'wait', flag: 'PaulBeforeAttack2_Played', timeout: 90 },
+    { op: 'wait', seconds: 3 },
     { op: 'snap', label: 'e9-raid' },
     { op: 'place', at: [-367, 306, 16], view: [0, 16384], harness: true, turnFirst: true, note: '120 units south of Teleporter19 (-367,426,-24, radius 80; the front door), facing it: the walk enters it' },
     { op: 'walk', untilTravel: true, seconds: 2 },
