@@ -278,6 +278,12 @@ export async function runChainInOriginal(chain, { log = console.log, until = nul
         const state = read();
         if (!state) { await sleep(2000); continue; }
         if (!state.conPlay && !started && ++rounds % 3 === 0 && played()) { started = true; trace.push('(played between reads)'); break; }
+        // a conversation whose end fires a map exit can begin and end between two reads too, and its _Played flag may never be set (the exit cuts it
+        // before SetPlayedFlag): the level changing under the step is it having run (mission 6's M06JockExit)
+        if (!state.conPlay && !started && rounds % 3 === 0) {
+          const here = where();
+          if (here?.map && startMap && here.map.toLowerCase() !== startMap.toLowerCase()) { started = true; trace.push('(ran between reads: the level changed)'); break; }
+        }
         if (state.conPlay) {
           started = true;
           if (state.event && trace.at(-1) !== state.event) trace.push(state.event);
