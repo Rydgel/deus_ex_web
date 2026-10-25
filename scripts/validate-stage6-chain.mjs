@@ -8,7 +8,8 @@
  *
  * runner-timeout: 1800
  *
- *   node scripts/validate-stage6-chain.mjs [--mission NN] [--capture]   --capture runs the original first (the Wine lock; minutes)  */
+ *   node scripts/validate-stage6-chain.mjs [--mission NN] [--capture]   --capture runs the original first (the Wine lock; minutes)
+ *   node scripts/validate-stage6-chain.mjs --file .work/chains/census/<unit>.mjs [--capture]   a carried-flag census unit (scripts/stage6-flag-census.mjs) */
 import { writeFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { gameDirectory } from './game-directory.mjs';
@@ -17,7 +18,8 @@ import { parseTravelText } from '../src/runtime/travel-text.mjs';
 import { compareTravelTexts as compareTexts } from './chain-conversations.mjs';
 
 const option = (name, fallback) => { const i = process.argv.indexOf(`--${name}`); return i < 0 ? fallback : process.argv[i + 1]; };
-const mission = option('mission', null);
+// `--file` alone (a carried-flag census unit, .work/chains/census/<unit>.mjs): the chain names its own mission, and its capture directory follows from it
+const mission = option('mission', null) ?? (option('file', null) ? (await loadChain(null, option('file'))).mission : null);
 if (!mission) {
   const { spawnSync } = await import('node:child_process');
   let failed = 0;

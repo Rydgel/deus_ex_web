@@ -194,6 +194,20 @@ export async function runChainInPlay(chain, { assets = null, log = () => {}, unt
       frames(Math.round((step.settle ?? 1) / FRAME));
       note(`placeNear ${target.name} at ${c.pos(target).map(Math.round)}: the player is at ${c.pos(c.player()).map(v => Math.round(v * 10) / 10)}, frob target ${c.game.interaction.frobTarget?.name ?? 'none'}`);
     },
+    /** `placeNear`, then the right button once the view selects the actor; while it does not, the placement is made again (up to `tries`): an owner with
+     * Wandering orders walks away from the place the view was aimed at during the placement's lines (the flag census's Filben and Alex). */
+    async frobNear(step) {
+      const tries = step.tries ?? 5;
+      for (let attempt = 1; attempt <= tries; attempt++) {
+        await ops.placeNear({ ...step, turnFirst: true });
+        if (c.game.interaction.frobTarget?.name !== step.actor) continue;
+        stamp([step.actor]);
+        typeLine(c, 'ParseRightClick'); frames(step.frobSettle ?? 30);
+        note(`frobNear ${step.actor}: the right button after ${attempt} placement(s)`);
+        return;
+      }
+      throw new Error(`frobNear ${step.actor}: the view never selected it in ${tries} placements`);
+    },
     async frob(step) {
       stamp(step.watch);
       const actor = c.game.interaction.frobTarget ?? null, target = actor?.name ?? null;
@@ -296,8 +310,14 @@ export async function runChainInPlay(chain, { assets = null, log = () => {}, unt
     async watch(step) { stamp(step.actors); note(`watch ${step.actors.join(' ')}`); },
     async state(step) {
       const a = c.actor(step.actor);
+      // `presence`: a pawn a mission script destroyed (or one the level never had) is a reading, not a failure (the flag census's FirstFrame readers)
+      if (step.presence) {
+        let gone = !a;
+        try { gone ||= c.gone(a); } catch { gone = true; }
+        if (gone) { (result.states ??= {})[step.label] = { actor: step.actor, present: 0 }; note(`state ${step.label}: ${step.actor} absent`); return; }
+      }
       if (!a) throw new Error(`state ${step.label}: no actor ${step.actor}`);
-      const row = {};
+      const row = step.presence ? { present: 1 } : {};
       for (const f of step.fields) { const v = c.read(a, f); row[f] = typeof v === 'boolean' ? Number(v) : v; }
       (result.states ??= {})[step.label] = { actor: step.actor, ...row };
       note(`state ${step.label}: ${step.actor} ${JSON.stringify(row)}`);
