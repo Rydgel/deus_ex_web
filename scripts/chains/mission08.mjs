@@ -49,7 +49,7 @@ export default {
     { op: 'wait', seconds: 3 },
     // the original's first capture found the smuggler elsewhere than Play's (-950,1493,-48; the frob selected nothing): placed beside him where he is
     { op: 'watch', actors: ['Smuggler0'] },
-    { op: 'frobNear', actor: 'Smuggler0', distance: 60, bearing: [0, 1.571, 3.142, -1.571], settle: 0.3, harness: true, note: 'beside the smuggler where he is, aimed at him' },
+    { op: 'frobNear', actor: 'Smuggler0', distance: 60, bearing: [0, 1.571, 3.142, -1.571], hold: true, settle: 0.3, harness: true, note: 'beside the smuggler where he is, held still (he walks: Play\'s third placement, the recapture\'s first missed him), aimed at him' },
     { op: 'conv', name: 'M08SmugglerConvos', choose: [{ index: 3, label: 'bye2' }, { index: 0, label: 'NoWarning' }], watch: ['Smuggler0'], timeout: 300 },
     { op: 'wait', seconds: 5 },
     { op: 'snap', label: 'h4-smuggler' },
