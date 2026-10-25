@@ -256,7 +256,7 @@ export async function runChainInOriginal(chain, { log = console.log, until = nul
       let started = false, lastPicked = null, rounds = 0;
       const trace = [];
       // a short conversation (a first-person bark, a radius conversation that fires a map exit) can begin and end between two reads: its _Played flag says it ran
-      const played = () => (flagsNow()?.flags ?? []).some(f => f.toLowerCase().startsWith(`${s.name.toLowerCase()}_played|`) && f.endsWith('|1'));
+      const played = () => Boolean(s.name) && (flagsNow()?.flags ?? []).some(f => f.toLowerCase().startsWith(`${s.name.toLowerCase()}_played|`) && f.endsWith('|1'));
       while (Date.now() < deadline) {
         const state = read();
         if (!state) { await sleep(2000); continue; }
