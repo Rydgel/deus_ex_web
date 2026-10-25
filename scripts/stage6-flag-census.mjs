@@ -66,8 +66,8 @@ async function resolve(list) {
  * radius, played as it comes (`conv`) or, for a first-person one (overheard: no key is the conversation's; the chain's Enter would fire the weapon in hand),
  * waited for by its _Played flag. */
 // the owners with Orders Wandering: the original's walked off during the placement's lines in every one of five placements (c03-FilbenGaveKey-1's first
-// capture), so frobNear holds them (GroundSpeed 0 until the right button)
-const WANDERING = new Set(['HarleyFilben0', 'AlexJacobson0', 'JaimeReyes1']);
+// capture; the smuggler in c08-smug-line's and mission 8's), so frobNear holds them (GroundSpeed 0 until the right button)
+const WANDERING = new Set(['HarleyFilben0', 'AlexJacobson0', 'JaimeReyes1', 'Smuggler0']);
 const talk = ({ owner, conv, distance = 60, bearing = 0, frob = false, firstPerson = false, choose, timeout = 240 }) => [
   // started by the right button: frobNear places again until the view selects the owner (a wandering owner walks off during the placement's lines)
   frob ? { op: 'frobNear', actor: owner, distance, bearing, settle: 0.3, harness: true, ...(WANDERING.has(owner) ? { hold: true } : {}), note: `the reader ${conv}: ${distance} units from ${owner}, the right button` }
@@ -191,7 +191,7 @@ export const FAMILIES = {
     mission: '08', note: 'mission 8\'s smuggler (the chain\'s leg3 and leg4, after Stanton Dowd): Ford Schick in the lair',
     base: { from: { chain: '06', slot: 'Save0106', index: 106 }, prefix: [span('08', 'start', { op: 'snap', label: 'h3-stanton' })] },
     body: [span('08', { op: 'place', at: [3171, -872, -1309] }, { op: 'travel', to: '08_NYC_Smug', label: 'leg3' }), ...CHEATS, { op: 'wait', seconds: 3 }, pawnState('smug-ford', 'FordSchick0'),
-      span('08', { op: 'place', at: [-890, 1493, -47] }, { op: 'travel', to: '08_NYC_Street', label: 'leg4' }), ...CHEATS, { op: 'wait', seconds: 3 }, { op: 'snap', label: 'r-street' }],
+      span('08', { op: 'frobNear', actor: 'Smuggler0' }, { op: 'travel', to: '08_NYC_Street', label: 'leg4' }), ...CHEATS, { op: 'wait', seconds: 3 }, { op: 'snap', label: 'r-street' }],
     blocks: {},
   },
   '09-dockyard': {
