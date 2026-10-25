@@ -94,6 +94,13 @@ capture is not there SKIPs. A console line typed while a menu is open is the men
   `LastConEndTime` gate). Mission 3's JockBarks.
 * A computer loads in state `Off` at its `Begin` code's `FinishAnim` in a fresh map too: `watch` it before the placement, wait 2 s, then frob (mission 4's NSF
   computers refused the frob, and the typed login went to the game's keys).
+* **What is compared, and what is not (2026-10-26, with the user).** The original is not deterministic from one run to the next, so a chain compares
+  what its own steps decide and leaves out what the original itself varies: a flag a script draws with `FRand` is compared by its presence only
+  (`RANDOM_FLAGS` in `chain-conversations.mjs`, each with its source line), as a speech drawn from one random label already was; fights the placements would
+  provoke are kept from starting (the player undetectable: missions 2 and 8) rather than compared; a door or an elevator door that closes again by itself is
+  not read (missions 2 and 6). Everything the chain's steps decide (flags, conversations and their choices, goals, notes, items, skill points, the travel
+  texts) stays exact. A difference outside these classes is a finding; if a mission kept failing on one that cannot be explained, two captures of the
+  original would measure what the original varies.
 * **A level's first tick in the chains is 1/60 s, not the load's length.** The original gives the first tick after a load the whole loading frame (actors
   clamped to 0.4 s; docs/travel.md "Arriving at a portal"), and the page now does the same; the headless chains keep 1/60 s (`travel.loadSeconds` unset), so a
   pinned exit save and every capture stay as they are. What it changes is below what the chains compare: mission 10's metro arrival rests at -272.200012 after
