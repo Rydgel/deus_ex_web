@@ -8,7 +8,7 @@
  *
  * runner-timeout: 7200
  *
- *   node --max-old-space-size=16384 scripts/validate-full-run.mjs [--missions 01,02,...] [--json out.json]
+ *   node --max-old-space-size=16384 scripts/validate-full-run.mjs [--missions 01,02,...] [--json out.json] [--play-only]
  *
  * SKIPs while a mission has no chain or no capture. Long: the whole campaign's maps in one process (about 60 levels, each disposed of before the next). */
 import { existsSync, readdirSync } from 'node:fs';
@@ -22,8 +22,10 @@ try { gameDirectory(); } catch { console.log('SKIP validate-full-run: no install
 const missions = option('missions', null)?.split(',')
   ?? readdirSync(new URL('./chains/', import.meta.url)).map(name => /^mission(\d\d)\.mjs$/.exec(name)?.[1]).filter(id => id && id !== '00').sort();
 if (missions[0] !== '01') { console.log(`SKIP validate-full-run: the run starts with mission 1's New Game (missions: ${missions.join(',')})`); process.exit(0); }
+// --play-only: the joined run in Play alone (no capture needed), reporting each mission change: that one process reaches the ending without a stop
+const playOnly = process.argv.includes('--play-only');
 const captures = {};
-for (const mission of missions) {
+for (const mission of playOnly ? [] : missions) {
   const stored = await readIfExists(`${captureDirectory(mission)}result.json`);
   if (!stored) { console.log(`SKIP validate-full-run: mission ${mission} has no original capture (scripts/chain-capture-all.mjs)`); process.exit(0); }
   captures[mission] = JSON.parse(stored);
@@ -43,6 +45,11 @@ const { runChainInPlay } = await import('./chain-play.mjs');
 const play = await runChainInPlay({ mission: 'full', steps }, { log: line => { if (process.argv.includes('--verbose')) console.log(`  play: ${line}`); } });
 if (option('json', null)) await writeFile(option('json'), JSON.stringify({ ...play, session: undefined, saveDirectory: undefined }, null, 1));
 
+if (playOnly) {
+  for (const leg of play.legs.filter(leg => leg.label.endsWith(':exit') || leg.label.includes('endgame') || leg.label.includes('dxonly'))) console.log(`${leg.label}: ${leg.from} -> ${leg.to}, ${leg.text.length} bytes`);
+  console.log(`PLAY-ONLY validate-full-run: New Game to ${play.legs.at(-1)?.to ?? '?'} in one run, ${play.legs.length} map changes, ${Object.keys(play.snaps).length} snapshots`);
+  process.exit(0);
+}
 const failures = [];
 for (const mission of missions) {
   const want = captures[mission].legs.find(leg => leg.label === 'exit');

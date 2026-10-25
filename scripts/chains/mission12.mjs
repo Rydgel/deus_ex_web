@@ -58,6 +58,10 @@ export default {
     { op: 'line', text: 'set DeusEx.JCDentonMale ReducedDamageType All', harness: true },
     { op: 'wait', seconds: 3 },
     { op: 'snap', label: 'm12-5-computer' },
+    // RepairBot0 wanders in that room: undrawn (headless) it stays in stasis on Gary's way, he bumps it, detours (ScriptedPawn.Bump's MoveTimer += 4, taken back
+    // by AlterDestination) and his MoveToward runs out 94 units short of Trigger1; the original's player sees it wander off (its diagnostic run, 2026-10-25,
+    // played PageHostageBriefing): the bot is watched from the arrival, the headless stand-in for the original's drawing (Gary from his conversation)
+    { op: 'watch', actors: ['RepairBot0'] },
 
     // Gary Savage (bump/frob): FixComputer, the Milnet login's note, control_doors1
     { op: 'place', at: [620, 2716, -2161], view: [-6112, 32762], harness: true, turnFirst: true, note: '60 units east of GarySavage0 (560,2716,-2162), aimed at him' },
