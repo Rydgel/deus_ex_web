@@ -94,6 +94,12 @@ capture is not there SKIPs. A console line typed while a menu is open is the men
   `LastConEndTime` gate). Mission 3's JockBarks.
 * A computer loads in state `Off` at its `Begin` code's `FinishAnim` in a fresh map too: `watch` it before the placement, wait 2 s, then frob (mission 4's NSF
   computers refused the frob, and the typed login went to the game's keys).
+* **A level's first tick in the chains is 1/60 s, not the load's length.** The original gives the first tick after a load the whole loading frame (actors
+  clamped to 0.4 s; docs/travel.md "Arriving at a portal"), and the page now does the same; the headless chains keep 1/60 s (`travel.loadSeconds` unset), so a
+  pinned exit save and every capture stay as they are. What it changes is below what the chains compare: mission 10's metro arrival rests at -272.200012 after
+  DL_metrosewer instead of the original's -272.2250061 (0.4 lower while the DataLink plays), the same DataLink and the same flag either way. Moving the chains
+  to `{ loadSeconds: 0.4 }` means re-pinning the exit saves from mission 1 on and capturing every chain again; it is the step to take before 6.6.1 if a
+  height or a first-tick timer turns out to matter.
 * **The camera's zone is stamped every headless frame** (`census-stage5-session.mjs`): OccludeBsp's master frame writes `Zones[Frame->ZoneNumber].LastRenderTime
   = TimeSeconds` (Render.dll 0x10b1768d, `occlude.rs`) for the zone at the camera's origin, and `AActor::InStasis` keeps every actor in a zone rendered within
   5 s and within 1200 units of the player awake (`actor-tick.mjs`). Headless Play kept the table at zero, so only `watch`ed actors woke: mission 5's first
