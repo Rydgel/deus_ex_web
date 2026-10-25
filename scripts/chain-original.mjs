@@ -271,7 +271,7 @@ export async function runChainInOriginal(chain, { log = console.log, until = nul
       };
       const deadline = Date.now() + (s.timeout ?? 180) * 1000 * 2;   // real time runs slower than the chain's Level seconds: twice the limit
       let started = false, lastPicked = null, rounds = 0;
-      const trace = [];
+      const trace = [], startMap = where()?.map ?? null;
       // a short conversation (a first-person bark, a radius conversation that fires a map exit) can begin and end between two reads: its _Played flag says it ran
       const played = () => Boolean(s.name) && (flagsNow()?.flags ?? []).some(f => f.toLowerCase().startsWith(`${s.name.toLowerCase()}_played|`) && f.endsWith('|1'));
       while (Date.now() < deadline) {
@@ -296,8 +296,14 @@ export async function runChainInOriginal(chain, { log = console.log, until = nul
           if (!s.name || trace.some(t => t.startsWith('pick#'))) break;
           // its flag is read again for up to 30 s: a conversation whose end fires a map exit (mission 6's M06JockExit) has the flags unreadable while the
           // level changes, and its _Played is in the next level's table once the player is controlled again
+          // A conversation whose end changes the level is the step's own as well: its map exit can cut it short before ConPlayBase.SetPlayedFlag
+          // (mission 12's M12JockFinal2), and an owner's bark changes no level
           let own = false;
-          for (let i = 0; i < 15 && !own; i++) { own = played(); if (!own) await sleep(2000); }
+          for (let i = 0; i < 15 && !own; i++) {
+            own = played();
+            if (!own) { const here = where(); own = Boolean(here?.map && startMap && here.map.toLowerCase() !== startMap.toLowerCase()); }
+            if (!own) await sleep(2000);
+          }
           if (own) break;
           note(`conv ${s.name}: another conversation played first (${trace.join(' ')})`);
           started = false; lastPicked = null; trace.length = 0;
