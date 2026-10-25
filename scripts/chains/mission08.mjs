@@ -65,12 +65,12 @@ export default {
     { op: 'wait', seconds: 3 },
 
     // DL_Exit: FlagTrigger8 (radius 400) touched with StantonDowd_Played fires ExitLink, DataLinkTrigger10
-    // detectable for the fall into it: Trigger.IsRelevant refuses an actor with bDetectable False (Engine/Trigger.uc:193..195, "DEUS_EX STM -- added
-    // cheat"), so FlagTrigger8 fires ExitLink only for a detectable player; undetectable again once it has (DataLinkTrigger10 is triggered by the event)
-    { op: 'line', text: 'set DeusEx.JCDentonMale bDetectable True', harness: true },
-    { op: 'place', at: [1946, -1121, -380], view: [0, 0], drop: true, harness: true, note: 'above FlagTrigger8 (1946,-1121,-470, radius 400)' },
-    { op: 'wait', seconds: 2 },
-    { op: 'line', text: 'set DeusEx.JCDentonMale bDetectable False', harness: true },
+    // ExitLink by the console's CauseEvent (Engine/PlayerPawn.uc:1286..1294: A.Trigger(Self, Self)), what FlagTrigger8's touch does (Trigger.Touch:
+    // A.Trigger(Other, Other.Instigator), the player both): the touch itself needs a detectable player (Trigger.IsRelevant refuses an undetectable actor,
+    // Engine/Trigger.uc:193..195), and two seconds of it set the MJ12 troopers firing at him for the rest of the map, the riot cops in their crossfire
+    // (the second capture's original set MS_UnhideTroop1, all Cop1 dead, after h5; Play's troopers were attacking at h5 too). FlagTrigger8's own check,
+    // StantonDowd_Played, holds here
+    { op: 'line', text: 'causeevent ExitLink', harness: true },
     { op: 'wait', flag: 'DL_Exit_Played', timeout: 180 },
     { op: 'wait', seconds: 5 },
     { op: 'state', label: 'exit-helicopter', actor: 'BlackHelicopter0', fields: ['bHidden'] },
