@@ -138,7 +138,9 @@ for (const [n, how] of [[1, 'the reactor switches (Tong\'s ending)'], [2, 'Helio
 
 // 6.6 The campaign in one run -----------------------------------------------------------------------------------------------------------
 add('6.6.1', 'one run in Play from New Game to an ending, each mission entered from the previous mission\'s exit (no save loaded), every required step placed; the travel text at each mission change equals the original\'s for the same run', 'O1',
-  {need: 'the chained run in Play, and the original\'s texts at each mission change from the same chained steps (the 6.4.*.1 captures chained)'});
+  {proof: [v('validate-full-run.mjs')],
+    have: ['docs/stage-6-chains.md: the fourteen mission chains joined from mission 1\'s New Game (each later mission\'s slot start left out, its exit save step kept) in one Play process to ending 3\'s dxonly, 86 map changes; each mission\'s exit travel text (missions 1 to 14) equal to that mission\'s capture under Wine on the Linux host (2026-10-26)'],
+    weak: 'the original\'s side is the per-mission captures, each started from the previous chain\'s exit save (whose exit text equal to the original\'s is the evidence it holds the original\'s state), not one original process; a flag name\'s case is not compared here (an FName is spelled by its first registration in the process, and one process from New Game and a fresh process from a save register in different orders; the per-mission rows compare the spelling); mission 15 ends in the endgame (rows 6.5.1 to 6.5.3 compare the endings); the steps are placed, as in clause 6.4 (the user\'s decision)'});
 
 // 6.7 Excluded --------------------------------------------------------------------------------------------------------------------------
 const excluded = (id, claim, reason) => CRITERIA.push({id, clause: 7, claim, ev: '-', proof: [], have: [], need: null, weak: null, excluded: reason, pending: null});

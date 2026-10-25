@@ -40,7 +40,7 @@ Starts: a mission row starts from a real desktop save of that mission where one 
 12, 14 and 15; the inventory's slot tables say what each one has already chosen), else from the previous mission's exit, else (Training, mission 11) from the
 menu or a cold open of the mission's first map. The same start is loaded in Play and in the original.
 
-## The scoreboard (2026-10-26, mission 1 recaptured with its final chain; every mission's chain and the flag census equal the original)
+## The scoreboard (2026-10-26: every row passes — the missions' chains, the carried-flag census and the campaign in one run equal the original)
 
 | Clause | PASS | PARTIAL | UNDRIVEN | MISSING | EXCLUDED |
 | --- | ---: | ---: | ---: | ---: | ---: |
@@ -49,9 +49,9 @@ menu or a cold open of the mission's first map. The same start is loaded in Play
 | 6.3 Transitions | 2 | 0 | 0 | 0 | 0 |
 | 6.4 The missions | 36 | 0 | 0 | 0 | 0 |
 | 6.5 The endings | 3 | 0 | 0 | 0 | 0 |
-| 6.6 The campaign in one run | 0 | 0 | 0 | 1 | 0 |
+| 6.6 The campaign in one run | 1 | 0 | 0 | 0 | 0 |
 | 6.7 Excluded | 0 | 0 | 0 | 0 | 3 |
-| **Total** | 53 | 0 | 0 | 1 | 3 |
+| **Total** | 54 | 0 | 0 | 0 | 3 |
 
 ## The rows
 
@@ -137,7 +137,7 @@ menu or a cold open of the mission's first map. The same start is loaded in Play
 
 | Row | Criterion | Evidence | Proof | Needed / weak / pending | Status |
 | --- | --- | --- | --- | --- | --- |
-| 6.6.1 | one run in Play from New Game to an ending, each mission entered from the previous mission's exit (no save loaded), every required step placed; the travel text at each mission change equals the original's for the same run | O1 | - | the chained run in Play, and the original's texts at each mission change from the same chained steps (the 6.4.*.1 captures chained) | MISSING |
+| 6.6.1 | one run in Play from New Game to an ending, each mission entered from the previous mission's exit (no save loaded), every required step placed; the travel text at each mission change equals the original's for the same run | O1 | validate-full-run.mjs | weak: the original's side is the per-mission captures, each started from the previous chain's exit save (whose exit text equal to the original's is the evidence it holds the original's state), not one original process; a flag name's case is not compared here (an FName is spelled by its first registration in the process, and one process from New Game and a fresh process from a save register in different orders; the per-mission rows compare the spelling); mission 15 ends in the endgame (rows 6.5.1 to 6.5.3 compare the endings); the steps are placed, as in clause 6.4 (the user's decision) | PASS |
 
 ### 6.7 Excluded
 
