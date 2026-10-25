@@ -53,7 +53,8 @@ export function browseDecision({ url, lastURL, level = null, player = null, save
   // 2. ?restart: the level reloaded from its file with `loadonly` (the travel text is not read back), `Current` emptied.
   if (url.hasOption('restart')) {
     const info = level?.info ?? null;
-    const next = info ? new Furl({ map: info.mapName, portal: lastURL?.portal ?? '', op: ['loadonly'], protocol: url.protocol, host: url.host, port: url.port })
+    // FURL(info->MapName) (the one-argument constructor: the [URL] defaults but the map), LastURL's portal, AddOption("loadonly") (0x10010d00..0x10010e60)
+    const next = info ? new Furl({ map: info.mapName, portal: lastURL?.portal ?? '', op: ['loadonly'] })
       : (lastURL ?? url).clone();
     effects.push({ op: 'deleteSaveGameFiles' }, { op: 'loadMap', url: next, travelInfo: 'level' });
     return effects;
@@ -71,7 +72,10 @@ export function browseDecision({ url, lastURL, level = null, player = null, save
     if (!info?.mapName) { effects.push({ op: 'loadGameFailed', index, reason: info ? 'the SaveInfo names no map' : 'no SaveInfo.dxs' }); return effects; }
     const dir = saveSlotDirectory(index);
     effects.push({ op: 'log', text: 'Loading: Package saveInfo' }, { op: 'deleteSaveGameFiles' }, { op: 'copySaveGameFiles', from: dir, to: 'Current' });
-    effects.push({ op: 'loadMap', url: loadGameUrl(info.mapName), travelInfo: 'none', loadgame: { index, dir, mapName: info.mapName, file: `${info.mapName}.${SAVE_EXTENSION}` } });
+    // FURL(&URL, ..., TRAVEL_Absolute) takes the Browse URL's player options, each logged (measured: `URL: Adding default option Name=Player` before the LoadMap line)
+    const added = [], loadUrl = loadGameUrl(info.mapName, url, { log: option => added.push(option) });
+    effects.push(...added.map(option => ({ op: 'log', text: `URL: Adding default option ${option}` })));
+    effects.push({ op: 'loadMap', url: loadUrl, travelInfo: 'none', loadgame: { index, dir, mapName: info.mapName, file: `${info.mapName}.${SAVE_EXTENSION}` } });
     return effects;
   }
   // 4. A URL that is neither `load=` nor local-internal ends in ServerOpen / InvalidURL (multiplayer, unsupported).

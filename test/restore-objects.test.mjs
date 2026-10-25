@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { createFlagBase } from '../src/runtime/script-triggers.mjs';
 import { hashScriptName } from '../src/runtime/script-names.mjs';
 import { fillRestoredFlagStore, isSavedFlag, isSavedFlagBase, PLAIN_SAVED_OBJECTS, NATIVE_SAVED_OBJECTS } from '../src/runtime/script-restore-objects.mjs';
-import { loadGameUrl } from '../src/runtime/furl.mjs';
+import { Furl, loadGameUrl } from '../src/runtime/furl.mjs';
 import { createSaveDirectory, saveSlotDirectory } from '../src/runtime/save-directory.mjs';
 
 // A saved FlagBase as the restore reads it: the FlagBase object's hashTable heads and nextFlag chains, each flag with its class, name, hash, expiration and value.
@@ -47,7 +47,9 @@ test('the classes a saved level\'s objects may have: flag objects, plain script 
 });
 
 test('the loaded game\'s LoadMap URL is the measured one, and QuickSave and slot directories are named as the original names them', () => {
-  assert.equal(String(loadGameUrl('01_NYC_UNATCOIsland')), '..\\Save\\Current\\01_NYC_UNATCOIsland.dxs?load?loadonly?loadgame?Name=Player?Class=DeusEx.JCDentonMale');
+  // the absolute FURL takes the player options of its base, the Browse URL (`Index.dx?loadgame=77?Name=Player?Class=...`)
+  const browse = new Furl({ op: ['loadgame=77', 'Name=Player', 'Class=DeusEx.JCDentonMale'] });
+  assert.equal(String(loadGameUrl('01_NYC_UNATCOIsland', browse)), '..\\Save\\Current\\01_NYC_UNATCOIsland.dxs?load?loadonly?loadgame?Name=Player?Class=DeusEx.JCDentonMale');
   assert.equal(saveSlotDirectory(-1), 'QuickSave');
   assert.equal(saveSlotDirectory(77), 'Save0077');
 });

@@ -8,13 +8,13 @@
  *   3. URL = FURL(LastURL, TravelURL, TravelType); Browse(URL, TravelInfo): `Logf("Browse: <URL>")`, then the decision's effects;
  *   4. the viewport's TravelURL is cleared once Browse returns (0x10390c07).
  *
- * A `loadMap` effect hands the page the next level: `{map, portal, url, options, travelInfo, lastURL, classDefaults, ...}` (the page's loadMap
+ * A `loadMap` effect hands the page the next level: `{map, portal, url, options, loadUrl, travelInfo, lastURL, classDefaults, ...}` (the page's loadMap
  * builds the new session, whose Login imports the text: travel-import.mjs; `classDefaults` are the class defaults the process keeps,
- * ScriptRuntime.classDefaultsForTravel). A branch that is not implemented is a thrown
- * {@link TravelStop} that names the original body; the viewport keeps its TravelURL, and a refused URL form (furl.mjs) is one too.
- *
- * Unverified (docs/travel.md "Unresolved" 7): the engine's LastURL is only ever changed here (the `loadonly` removal and the portal
- * clear), the way the plain local-load path leaves it; the load-game and saved-level branches that assign it are not implemented. */
+ * ScriptRuntime.classDefaultsForTravel). `loadUrl` is the URL LoadMap is called with, as plain fields: the next session's GLevel->URL is it or, when it
+ * has a `load` option, the URL the loaded file holds (furl.mjs levelUrlAfterLoad, game.mjs). `lastURL` is the engine's LastURL after the load: LoadMap's
+ * tail assigns `LastURL = URL` (0x1038e059..0x1038e318), and the loaded-game and filed-level branches of Browse then assign `LastURL = GLevel->URL`
+ * (0x1001138b, 0x10011c84), which the next session takes from the file it loads (game.mjs). A branch that is not implemented is a thrown
+ * {@link TravelStop} that names the original body; the viewport keeps its TravelURL, and a refused URL form (furl.mjs) is one too. */
 import { Furl, parseFurl, UnsupportedFurlForm, TRAVEL_RELATIVE, mapFileStem } from './furl.mjs';
 import { browseDecision } from './travel-browse.mjs';
 import { formatTravelText } from './travel-text.mjs';
@@ -99,9 +99,8 @@ export function createTravelStep({ runtime, level, viewport, exporter, store, lo
           log('Log', `LoadMap: ${loadUrl}`);
           const info = effect.travelInfo === 'level' ? level.travelInfo ?? new Map() : travelInfo;
           return { kind: 'loadMap', map: restored ? restored.name : mapFileStem(effect.url.map), portal: loadUrl.portal, url: String(loadUrl), options: [...loadUrl.op],
-            // on success a filed level's load sets LastURL = GLevel->URL (docs/travel.md "Browse: the DeusEx override" step 5, "Unresolved" 7); a fresh load leaves it
-            travelInfo: [...info], lastURL: restored ? { map: loadUrl.map, portal: loadUrl.portal, op: [...loadUrl.op] }
-              : { map: lastURL.map, portal: lastURL.portal, op: [...lastURL.op] },
+            // LoadMap's tail: LastURL = URL; a filed level's branch then sets LastURL = GLevel->URL (game.mjs reads it from the file)
+            loadUrl: loadUrl.toPlain(), travelInfo: [...info], lastURL: loadUrl.toPlain(),
             // the file as the directory spells it (the save wrote it under DeusExLevelInfo.MapName): its stem names the loaded package
             ...(restored ? { restore: { file: store.files().find(file => lower(file.name) === lower(restored.file)).name, name: restored.name } } : {}) };
         }
@@ -112,15 +111,16 @@ export function createTravelStep({ runtime, level, viewport, exporter, store, lo
   }
 
   /** `?loadgame=N`'s LoadMap(FURL(&URL, "<Current>\\<MapName>.dxs?load?loadonly?loadgame", TRAVEL_Absolute), NULL, NULL): the slot's level, saved with the player in it, is
-   * loaded from `Current` with no travel text; on success LastURL = GLevel->URL (0x10010f4f..0x1001151e). The level keeps the TravelInfo its file holds. */
+   * loaded from `Current` with no travel text; on success LastURL = GLevel->URL (0x10010f4f..0x1001151e), the URL the file holds (its `load` option keeps it,
+   * game.mjs). The level keeps the TravelInfo its file holds. */
   function loadGame(effect, copied) {
     const { loadgame, url: loadUrl } = effect;
     const file = store.files().find(entry => lower(entry.name) === lower(loadgame.file));
     // LoadMap fails on a slot without the level its SaveInfo names: Play stops by name (the original's failed-load path is Unresolved 9).
     if (!file) throw new TravelStop('DDeusExGameEngine::Browse loadgame', `${saveSlotDirectory(loadgame.index)} holds no ${loadgame.file}`, { url: String(loadUrl) });
     log('Log', `LoadMap: ${loadUrl}`);
-    return { kind: 'loadMap', map: loadgame.mapName, portal: '', url: String(loadUrl), options: [...loadUrl.op], travelInfo: [],
-      lastURL: { map: loadUrl.map, portal: '', op: [...loadUrl.op] },
+    return { kind: 'loadMap', map: loadgame.mapName, portal: '', url: String(loadUrl), options: [...loadUrl.op], loadUrl: loadUrl.toPlain(), travelInfo: [],
+      lastURL: loadUrl.toPlain(),
       // The package takes the name of a live package of the same name (case-insensitive) rather than the file's spelling: measured, a QuickLoad of `00_training.dxs`
       // in the level `00_Training` printed `Level 00_Training.MyLevel` and `Possessed PlayerPawn: ... 00_Training.JCDentonMale1`, while the same load from DXOnly
       // (no live package of that name) printed `00_training`. (docs/travel.md "Play, step 4")
@@ -146,7 +146,8 @@ export function createTravelStep({ runtime, level, viewport, exporter, store, lo
       lastURL.op = lastURL.op.filter(option => lower(option) !== 'loadonly');
       lastURL.portal = '';
       let url;
-      try { url = parseFurl(lastURL, travelURL, vp.travelType ?? TRAVEL_RELATIVE); }
+      // an absolute URL logs each player option it takes from LastURL (`URL: Adding default option Name=Player` before `Browse: Index.dx?loadgame=77?...`)
+      try { url = parseFurl(lastURL, travelURL, vp.travelType ?? TRAVEL_RELATIVE, { log: option => log('Log', `URL: Adding default option ${option}`) }); }
       catch (error) {
         if (error instanceof UnsupportedFurlForm) throw new TravelStop('FURL::FURL', error.message, { url: travelURL });
         throw error;

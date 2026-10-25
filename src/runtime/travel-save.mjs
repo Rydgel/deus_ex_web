@@ -14,12 +14,16 @@ import { saveSlotDirectory } from './save-directory.mjs';
 
 const lower = value => String(value ?? '').toLowerCase();
 
-export function createLevelSaver({ runtime, level, asset, store, log, viewport, modelIndex, arrival, flagClasses = null, now = () => performance.now() }) {
+export function createLevelSaver({ runtime, level, asset, store, log, viewport, modelIndex, flagClasses = null, now = () => performance.now() }) {
   const read = (object, name) => runtime.readNamed(object, name);
   const write_ = (object, name, value) => runtime.writeNamed(object, name, value);
   const destroy = actor => runtime.destroyActor(actor, false);
   const levelInfo = () => level.actors[0];
   const deusExLevelInfo = () => level.actors.find(actor => actor && runtime.attachedInstance(actor)?.cls.record.key === 'deusex.deusexlevelinfo') ?? null;
+  const levelUrl = () => {
+    if (!level.url) throw new Error('SaveCurrentLevel: the level has no URL (GLevel->URL is set where the session loads the level, game.mjs)');
+    return level.url;
+  };
 
   /** PruneTravelActors. */
   function pruneTravelActors() {
@@ -57,7 +61,8 @@ export function createLevelSaver({ runtime, level, asset, store, log, viewport, 
     store.releaseLoaders();
     const events = runtime.scriptVm?.aiEvents;
     const saved = serializeLevel({ runtime, level, asset, modelIndex,
-      levelUrl: { map: arrival?.map ?? asset.name, portal: arrival?.portal ?? '', options: arrival?.options ?? [] },
+      // ULevel::Serialize writes GLevel->URL: the URL the level was loaded with, or the one its file held when that URL had a `load` option (game.mjs)
+      levelUrl: levelUrl(),
       ai: events?.active ? { words: events.snapshot(), spelling: id => events.spelling(id) } : null,
       flags: flagClasses ? { classes: flagClasses, owner: () => read(viewport(), 'Actor') } : null,
       guid: globalThis.crypto.getRandomValues(new Uint8Array(16)) });

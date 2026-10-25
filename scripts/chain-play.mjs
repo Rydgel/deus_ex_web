@@ -349,8 +349,10 @@ export async function runChainInPlay(chain, { assets = null, log = () => {}, unt
     },
     async snap(step) {
       const { flags, defaultExpiration } = flagsOfPlay(c);
-      result.snaps[step.label] = { map, flags, defaultExpiration };
-      note(`snap ${step.label}: ${map}, ${flags.length} flags`);
+      // the level's URL.Map (GLevel->URL), what the original's harness reads: a level loaded with a `load` option keeps its file's (`Index.dx` for a map)
+      const urlMap = c.game.levelUrl.map;
+      result.snaps[step.label] = { map: urlMap, flags, defaultExpiration };
+      note(`snap ${step.label}: ${urlMap}${urlMap === map ? '' : ` (in ${map})`}, ${flags.length} flags`);
     },
     /** The console's SaveGame: the slot the next mission's chain starts from in both programs (`--save-exit` pins it under the chain's capture directory). */
     async save(step) {

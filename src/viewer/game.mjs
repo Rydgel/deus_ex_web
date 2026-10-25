@@ -27,7 +27,7 @@ import { lightGlobals } from '../runtime/light-globals.mjs';
 import { createTravelStep } from '../runtime/travel.mjs';
 import { readSavedTravelInfo } from '../runtime/level-travel-info.mjs';
 import { deliverSaveSnapshot, pendingSaveSnapshots } from '../runtime/game-save.mjs';
-import { Furl, DEFAULT_PLAYER_OPTIONS } from '../runtime/furl.mjs';
+import { Furl, DEFAULT_PLAYER_OPTIONS, levelUrlAfterLoad } from '../runtime/furl.mjs';
 
 /** Bind decoded resources to the renderer-independent simulation. */
 /** The game left the level (UGameEngine::Tick's client travel to `url`): Browse and LoadMap are Stage 6, so Play stops here. */
@@ -199,6 +199,14 @@ export async function createGame(map, asset, assets, { randomSeed = Math.floor(D
   // UClient::Decals is a config bool the original defaults to True; pawn
   // startup reaches AttachDecal through SpawnShadow and reads it here.
   playerScene.level.engine = {client:{decals:true,viewports:[{actor:savedPlayer?null:player.collisionActor}]}};
+  // GLevel->URL (ULevelBase::URL): LoadMap assigns the URL it was called with unless that URL has an option starting with `load` (`?load?loadonly?loadgame`
+  // of a loaded game, the `loadonly` of a restart, a `loadgame` a travel carried over from such a game's LastURL): then the level keeps the URL its file holds,
+  // a saved level's own or an installed map's `Index.dx` (furl.mjs levelUrlAfterLoad, 0x1038ce8b). A level's save writes it (travel-save.mjs) and Browse
+  // reads its Map (`curMap`). A cold open stands for the boot URL (`<map>?Name=Player?Class=...`); an arrival built without `loadUrl` (an older request or a
+  // probe) stands for its LoadMap URL with its map, portal and options.
+  const coldUrl = { map: asset.name, op: DEFAULT_PLAYER_OPTIONS.map(([name, value]) => `${name}=${value}`) };
+  const arrivalUrl = travel?.arrival ? travel.arrival.loadUrl ?? { map: travel.arrival.map, portal: travel.arrival.portal ?? '', op: travel.arrival.options ?? [] } : null;
+  playerScene.level.url = levelUrlAfterLoad(arrivalUrl ?? coldUrl, map.level.url, map.level.urlValid);
   collision.doorCallbacks.dataLinkTransmission=event=>onDataLinkTransmission?.(event);
   collision.doorCallbacks.conversationSpeech=event=>onConversationSpeech?.(event);
   collision.doorCallbacks.audioVoice=event=>onAudioVoice?.(event);
@@ -326,13 +334,11 @@ export async function createGame(map, asset, assets, { randomSeed = Math.floor(D
   const travelStep = travel ? createTravelStep({ runtime: doors.scriptRuntime.runtime, level: playerScene.level,
     viewport: () => playerScene.level.engine.client.viewports[0], exporter: doors.scriptRuntime.travelExporter,
     store: doors.scriptRuntime.saveStore, log: doors.scriptRuntime.logLine, levelSaver: doors.scriptRuntime.levelSaver,
-    // A loaded game's LastURL is GLevel->URL, and a `load` option keeps the URL the file holds (measured: URL.Map 01_NYC_UNATCOIsland, Op Name=, Class=), not the
-    // LoadMap path with `loadonly` and `loadgame`: a later OPEN (the death's `OPEN DXONLY`) inherits the file's options. The file's protocol and port are the
-    // game's own (`deusex`, 7790), which Play's Furl defaults stand for.
-    lastURL: new Furl(restore && travel.arrival?.loadgame
-      ? { map: map.level.url.map, portal: map.level.url.portal, op: map.level.url.options }
-      : travel.lastURL ?? { map: asset.name, op: DEFAULT_PLAYER_OPTIONS.map(([name, value]) => `${name}=${value}`) }),
-    levelUrlMap: () => travel.arrival?.map ?? asset.name, packageName: () => asset.name }) : null;
+    // LoadMap's tail sets LastURL to the URL it loaded (the request's lastURL); the loaded-game and filed-level branches of Browse then set LastURL = GLevel->URL
+    // (0x1001138b, 0x10011c84): for a loaded game the URL its file holds (measured: URL.Map 01_NYC_UNATCOIsland, Op Name=, Class=), not the LoadMap path with
+    // `loadonly` and `loadgame`, so a later OPEN (the death's `OPEN DXONLY`) or travel inherits the file's options.
+    lastURL: new Furl(travel.arrival?.restore ? playerScene.level.url : travel.lastURL ?? coldUrl),
+    levelUrlMap: () => playerScene.level.url.map, packageName: () => asset.name }) : null;
   // The first tick of a level that a running game browsed to (a travel or a loaded game; docs/travel.md "The first tick after the load"):
   // DeusEx.exe's main loop passes DeltaTime = f32(appSeconds() - OldTime) to Engine->Tick with no clamp and no reset across a load
   // (0x109147da..0x109148a6), and UGameEngine::Tick browses after the levels' Ticks and returns (0x10390c01..0x10390d27). So the new
@@ -343,6 +349,8 @@ export async function createGame(map, asset, assets, { randomSeed = Math.floor(D
   const game = {
     takeAudioMs() { const ms = audioMs; audioMs = 0; return ms; },
     player, doors, collision, notes, start, interaction, random, hud,
+    /** GLevel->URL as plain fields (a copy): what the original's harness reads as the level's URL.Map. */
+    get levelUrl() { const url = playerScene.level.url; return { ...url, op: [...url.op] }; },
     /** One engine frame's ticks: the windows, then the level. `windowSeconds`, an array (a live replay's measured input), lists the
      * original's RootTick deltas since the previous level tick, which then replace this frame's own time for the windows; older callers'
      * second argument (an input object) is ignored. */

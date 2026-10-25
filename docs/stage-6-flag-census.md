@@ -245,7 +245,9 @@ whose soundID differs is a difference; only two different speeches of one random
   clean. Loading such a base, the original's next relative travel arrives with `Index.dx` as the level's `URL.Map` (`[URL] Map=Index.dx`, the default):
   measured on the Mac and on the Linux host for `c04-island-hq-line`, against `04_NYC_UNATCOHQ` through the same teleporter from the chain line's
   travel-made save. Ten Mac captures show it (missions 4, 6, 8, 9); their observables were equal, but a mission script reading `GetURLMap()` would run its
-  wrong branch in the original. To do: Play keeps the loaded file's URL on a `load` option, the bases are made again, and those units are captured again.
+  wrong branch in the original. *2026-10-25: Play keeps the loaded file's URL on a `load` option and carries `loadgame` through the relative FURL as the
+  original does (docs/travel.md "FURL and the level's URL"; the `\t` is the length byte 9 of `loadonly\0`, not a character of the option); a base made in a
+  loaded level now holds the file's URL. Still to do: the bases are made again, and those units are captured again.*
 * **Mid-mission bases.** Most bases are Play saves taken after a prefix, with the mission's other levels filed in the save; the chains so far showed the
   original loading Play's saves only at a mission's arrival. Unverified until the first capture.
 * **Only flags are written.** A setter's goals, notes, items, credits and skill points stay as the line has them: a unit is the reader under the flag, not a

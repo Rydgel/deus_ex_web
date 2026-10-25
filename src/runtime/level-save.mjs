@@ -43,7 +43,8 @@ export function classFields(cls) {
  * @param level           the live level: actors, reachSpecs, travelInfo (Map), timeSeconds, nativeObject
  * @param asset           the package the level was loaded from ({name, pkg, bytes})
  * @param modelIndex      the source package's export index of the level's world Model
- * @param levelUrl        {map, portal, options}: the URL the level was loaded with
+ * @param levelUrl        GLevel->URL {protocol, host, port, map, portal, op, valid} (furl.mjs levelUrlAfterLoad): the URL the level was loaded with, or the
+ *                        one its file held when that URL had a `load` option
  * @param ai              {words: ai_snapshot words, spelling(id)} or null
  * @param guid            16 bytes
  * @param flags           {classes, owner()} when the player's FlagBase is part of the file (SaveGame; a level left by travel has none, PruneTravelActors
@@ -256,10 +257,11 @@ export function serializeLevel({ runtime, level, asset, modelIndex, levelUrl, ai
     const count = level.actors.length;
     w.i32(count); w.i32(count);
     for (const actor of level.actors) w.compact(actor && !transient(actor) ? objectRef(actor) : 0);
-    w.string('deusex'); w.string(''); w.string(levelUrl.map); w.string(levelUrl.portal ?? '');
-    w.compact(levelUrl.options.length);
-    for (const option of levelUrl.options) w.string(option);
-    w.i32(7790); w.u32(1);
+    // ULevelBase::URL as FURL serializes (readLevel's order): Protocol, Host, Map, Portal, Op, Port, Valid
+    w.string(levelUrl.protocol); w.string(levelUrl.host); w.string(levelUrl.map); w.string(levelUrl.portal);
+    w.compact(levelUrl.op.length);
+    for (const option of levelUrl.op) w.string(option);
+    w.i32(levelUrl.port); w.u32(levelUrl.valid);
     w.compact(translate.objectRef(modelIndex));
     w.compact(level.reachSpecs.length);
     for (const spec of level.reachSpecs) {
