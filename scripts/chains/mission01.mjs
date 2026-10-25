@@ -56,6 +56,9 @@ export default {
     // Paul, let into the HQ, wanders to the player and barks PaulFinalBark (a first-person conversation, radius 70, once; needs M02Briefing_Played): how long he takes is each run's own
     // (since the camera's zone is stamped the HQ's other pawns are awake and bark, which keeps radius conversations waiting, and Paul wandered 230 to 450
     // units off for 240 s in Play): held where he is and the player placed beside him, inside the radius, then his speed back
+    // ManderleyBarks (M02Briefing_Played) at his desk once GetActiveConversation's 10 s gate after the briefing opens: the original's player was still there
+    // (its typed lines take that long), Play's was at Paul's within frames; waited for where the player stands
+    { op: 'wait', flag: 'ManderleyBarks_Played', timeout: 60 },
     { op: 'hold', actor: 'PaulDenton0' },
     { op: 'placeNear', actor: 'PaulDenton0', distance: 50, bearing: 0, turnFirst: true, harness: true, note: '50 units from Paul where he is (PaulFinalBark: radius 70)' },
     { op: 'wait', flag: 'PaulFinalBark_Played', timeout: 240 },
