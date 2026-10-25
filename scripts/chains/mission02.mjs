@@ -22,7 +22,8 @@ export default {
     { op: 'place', at: [-5358, 2989, -322], view: [-4090, 32733], harness: true, turnFirst: true, note: '40 units east of SubwayControlPanel4 (-5398,2989,-299), aimed at it' },
     { op: 'frob', target: 'SubwayControlPanel4', watch: ['SubwayControlPanel4'] },
     { op: 'wait', seconds: 5 },
-    { op: 'state', label: 'train-door', actor: 'DeusExMover26', fields: ['KeyNum', 'bLocked'] },
+    // (no read of the train's doors: they close again by themselves, and the recapture's original read DeusExMover26 closed where the first read it
+    // open, 5 s after the panel in both; docs/stage-6-chains.md, a door with no stable state)
     // the train's doors free the hostages (HostageActivation): Mission02.Timer plays DL_SubwayComplete, whose skill points must be in before PreTravel stores them in
     // the SKTemp flags (DeusExPlayer.SaveSkillPoints); the first capture's original had them in, Play's run still had the InfoLink playing at the drop
     { op: 'wait', flag: 'DL_SubwayComplete_Played', timeout: 120 },

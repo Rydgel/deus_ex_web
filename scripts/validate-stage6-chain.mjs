@@ -67,7 +67,10 @@ for (const [label, want] of Object.entries(original.snaps)) {
   console.log(`snapshot ${label}: ${got.flags.length} flags${same ? ' equal' : ' (DIFFER)'}, default expiration ${got.defaultExpiration}${got.defaultExpiration === want.defaultExpiration ? '' : ` (original ${want.defaultExpiration})`}`);
 }
 // 1b. the states read at the steps (doors: KeyNum, bLocked)
+// (only the reads the chain still makes: a read taken out of the chain, a door that closes again by itself, leaves the capture's value unread)
+const reads = new Set(chain.steps.filter(step => step.op === 'state').map(step => step.label));
 for (const [label, want] of Object.entries(original.states ?? {})) {
+  if (!reads.has(label)) { console.log(`state ${label}: no longer read by the chain`); continue; }
   const got = play.states?.[label];
   if (!check(got, `state ${label}: Play has none`)) continue;
   const same = JSON.stringify(got) === JSON.stringify(want);
