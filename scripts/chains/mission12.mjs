@@ -1,26 +1,16 @@
-/** Mission 12, Vandenberg (docs/stage-6-inventory.md 12.6, docs/stage-6-chains.md): from the arrival in 12_Vandenberg_Cmd through the bots, the comm center,
- * the computer room's uplink and Page's hostage call, Tong's lift to the gas station and Tiffany to the exit to 14_Vandenberg_sub. Placements from
- * scripts/chain-plan.mjs in Play's world (cold maps, `--aim` at a bot's frozen place; `face-chain` where the slot's or a restored level differs).
+/** Mission 12, Vandenberg (docs/stage-6-inventory.md 12.6, docs/stage-6-chains.md): from mission 11's exit save (the arrival in 12_Vandenberg_Cmd; Carla's
+ * MeetCarlaBrown runs during mission 11's last steps) through the bot security system's backup power, the comm center, the computer room's uplink and Page's
+ * hostage call, Tong's lift to the gas station and Tiffany to the exit to 14_Vandenberg_sub. Placements from scripts/chain-plan.mjs in Play's world.
  *
  * The bots: Mission12.Timer counts the Robots tagged enemy_bot with EMPHitPoints left and plays DL_bots_left_3/2/1 and, at none, DL_command_bots_destroyed
- * (M12BotsDestroyed, comhqdoor). The map gives no EMP item (its three EMP grenades are carried by MJ12 troops). Its own means is the bot security system:
- * the backup power (Keypad0 behind its cover DeusExMover16 and Keypad1, code 5868 from Carla's note: Dispatcher7/8, LogicTrigger1, Dispatcher6 bot_power,
- * DL_override_activated, which completes ActivatePower) and the bunker switches Switch3/Switch4 (bunker_door1/2: OrdersTrigger0/1 send the salvaged X-51 bots
- * S_bot1/S_bot2 Patrolling, Bots_Salvagers against Bots_MJ12). The chain powers the system but does not release the salvaged bots: Play's run showed the
- * enemy bots pause at their first patrol point with bStasis set (ScriptedPawn state Patrolling, label Pausing, !bAlwaysPatrol) and stay there unseen, so the
- * salvaged bots fought only MilitaryBot4 (both destroyed) and 900 s passed without the rest; what the original's player sees decides that fight, which a placed
- * chain does not reproduce. The player destroys the four bots with the GEP gun the slot carries (belt 6), placed 300 units from each bot's paused place.
+ * (M12BotsDestroyed, comhqdoor). Destroying them is a fight, which the rows leave out; the chain powers the bot security system (Keypad0 behind its cover
+ * DeusExMover16 and Keypad1, code 5868 from Carla's note: Dispatcher7/8, LogicTrigger1, Dispatcher6 bot_power, DL_override_activated, which completes
+ * ActivatePower) and passes the comm center's comhqdoor by placement. The original's diagnostic run (2026-10-25) found a bot elsewhere than Play's paused place
+ * (their patrols pause with bStasis until drawn: what each program draws decides where they are).
  *
- * Gates the placements pass: the control room's door_controlroom (locked, KeyIDNeeded control_room; MeetTonyMares' note puts the key in the utility tunnels, where
- * NanoKey0 lies by a scientist's body at 727,1516,-2589 of 12_Vandenberg_Tunnels, its KeyID not read: the chain does not visit the Tunnels, so neither the key nor
- * the Tunnels' DL_JockLeaving, which adds UplinkDaedalus, is on it), the comm center's comhqdoor (opened anyway by
- * DL_command_bots_destroyed). Tiffany: the chain picks "Go" with her guards alive and takes the Dead branch the mission provides (below).
- *
- * PROVISIONAL START: mission 11's chain has no exit save yet, so the chain starts from the real desktop slot nicouzouf Save0028 (12_Vandenberg_cmd, MeetCarlaBrown
- * played, goals DestroyBots and ActivatePower open, Ray_Dead set; its inventory has the GEP gun on belt 6 with 18 rockets). It becomes `{ op: 'start', kind:
- * 'slot', source: 'chain', chain: '11', slot: 'Save0111', index: 111 }` once mission 11's exit save exists; that start is the arrival at PlayerStart2
- * (657,2502,-909) and needs the steps the slot skips (below, commented out), the bots' paused places measured again from that arrival and a weapon that
- * start carries. */
+ * Gates the placements pass: the control room's door_controlroom (locked, KeyIDNeeded control_room; MeetTonyMares' note puts the key in the utility tunnels: the
+ * chain does not visit the Tunnels, so neither the key nor the Tunnels' DL_JockLeaving, which adds UplinkDaedalus, is on it) and the comm center's comhqdoor.
+ * Tiffany: the chain picks "Go" with her guards alive and takes the Dead branch the mission provides (below). */
 export default {
   mission: '12',
   steps: [
