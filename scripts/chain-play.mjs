@@ -79,7 +79,7 @@ export async function runChainInPlay(chain, { assets = null, log = () => {}, unt
   sessionTravel = { snapshotSource: () => null, ...sessionTravel };
   const directory = createSaveDirectory();
   const result = { mission: chain.mission, snaps: {}, legs: [], steps: [], conversations: [] };
-  let session = null, c = null, pending = null, map = null, done = false;
+  let session = null, c = null, pending = null, map = null, done = false, holds = null;
   // a session that another replaces is disposed of before the next one opens (census-stage5-session.mjs dispose, as the page's map host does): a chain through
   // many maps otherwise keeps every level it left (about 425 MB each for 02_NYC_Street), and a level loading beside the one it replaces ran mission 3's ninth map
   // out of heap. Two turns of the event loop follow: the weak references this job dereferenced (the Rust VM registry's) keep their targets until the job ends,
@@ -196,6 +196,22 @@ export async function runChainInPlay(chain, { assets = null, log = () => {}, unt
     },
     /** `placeNear`, then the right button once the view selects the actor; while it does not, the placement is made again (up to `tries`): an owner with
      * Wandering orders walks away from the place the view was aimed at during the placement's lines (the flag census's Filben and Alex). */
+    /** `hold`: a wandering pawn kept where it is (its class's GroundSpeed 0, the instance's value kept for `release`), for a radius conversation the chain
+     * places the player into (chain-original.mjs hold: the original's wanderer walks off during the placement's typed lines) */
+    async hold(step) {
+      const actor = c.actor(step.actor);
+      if (!actor) throw new Error(`hold: no ${step.actor}`);
+      const cls = c.runtime.instance(actor).cls.record.key.split('.').pop(), speed = c.read(actor, 'GroundSpeed');
+      typeLine(c, `set DeusEx.${cls} GroundSpeed 0`); frames(30);
+      (holds ??= new Map()).set(step.actor, `set DeusEx.${cls} GroundSpeed ${speed}`);
+      note(`hold ${step.actor} (${cls} GroundSpeed ${speed})`);
+    },
+    async release(step) {
+      const line = holds?.get(step.actor);
+      if (!line) throw new Error(`release: ${step.actor} is not held`);
+      typeLine(c, line); frames(2); holds.delete(step.actor);
+      note(`release ${step.actor}`);
+    },
     async frobNear(step) {
       const tries = step.tries ?? 5;
       // `hold` (chain-original.mjs frobNear): the owner's class GroundSpeed is 0 from before the placement to the right button, then its own value again

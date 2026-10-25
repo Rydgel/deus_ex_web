@@ -50,6 +50,7 @@ export async function runChainInOriginal(chain, { log = console.log, until = nul
   };
   process.on('SIGINT', () => { quit().then(() => process.exit(130)); });
 
+  let holds = null;
   const result = { mission: chain.mission, snaps: {}, legs: [], steps: [], conversations: [], raw: {} };
   const note = text => { result.steps.push(text); log(text); };
   const step = (verb, ...args) => execFileSync('scripts/travel-step.sh', [probeOut, verb, ...args], { env, cwd: ROOT, encoding: 'utf8', timeout: 120000, stdio: ['ignore', 'pipe', 'pipe'] });
@@ -187,6 +188,21 @@ export async function runChainInOriginal(chain, { log = console.log, until = nul
       throw new Error(`placeNear ${name}: the player never arrived`);
     },
     /** `placeNear`, then the right button once the view selects the actor, placed again while it does not (chain-play.mjs frobNear: a wandering owner). */
+    /** `hold` (chain-play.mjs hold): the pawn's class GroundSpeed 0, the instance's value read (Pawn.GroundSpeed +0x378) and kept for `release` */
+    async hold(s) {
+      const row = tool('dump-actor-win', s.actor, 'GroundSpeed:0x378:f').split('\n').find(line => new RegExp(`^\\S+ ${s.actor} `).test(line) && !line.startsWith('Class '));
+      const cls = /^(\S+) /.exec(row ?? '')?.[1], speed = Number(/GroundSpeed=(\S+)/.exec(row ?? '')?.[1]);
+      if (!cls || !Number.isFinite(speed)) throw new Error(`hold: no GroundSpeed for ${s.actor}`);
+      await type(`set DeusEx.${cls} GroundSpeed 0`, 500); await sleep(1000);
+      (holds ??= new Map()).set(s.actor, `set DeusEx.${cls} GroundSpeed ${speed}`);
+      note(`hold ${s.actor} (${cls} GroundSpeed ${speed})`);
+    },
+    async release(s) {
+      const line = holds?.get(s.actor);
+      if (!line) throw new Error(`release: ${s.actor} is not held`);
+      await type(line, 500); holds.delete(s.actor);
+      note(`release ${s.actor}`);
+    },
     async frobNear(s) {
       const tries = s.tries ?? 5;
       // `hold`: a wandering owner walks out of the view while the placement's lines are typed (about 1.5 s here, a few frames in Play): its class's

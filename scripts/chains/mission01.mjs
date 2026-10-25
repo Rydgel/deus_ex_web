@@ -54,7 +54,12 @@ export default {
     { op: 'place', at: [369, -170, 289], view: [-6389, 32830], harness: true, note: '70 units east of JosephManderley0 at his place (299,-170,288)' },
     { op: 'conv', name: 'M02Briefing', watch: ['JosephManderley0'], timeout: 240 },
     // Paul, let into the HQ, wanders to the player and barks PaulFinalBark (a first-person conversation, radius 70, once; needs M02Briefing_Played): how long he takes is each run's own
+    // (since the camera's zone is stamped the HQ's other pawns are awake and bark, which keeps radius conversations waiting, and Paul wandered 230 to 450
+    // units off for 240 s in Play): held where he is and the player placed beside him, inside the radius, then his speed back
+    { op: 'hold', actor: 'PaulDenton0' },
+    { op: 'placeNear', actor: 'PaulDenton0', distance: 50, bearing: 0, turnFirst: true, harness: true, note: '50 units from Paul where he is (PaulFinalBark: radius 70)' },
     { op: 'wait', flag: 'PaulFinalBark_Played', timeout: 240 },
+    { op: 'release', actor: 'PaulDenton0' },
     { op: 'wait', seconds: 15 },
     { op: 'snap', label: 'b7-briefed' },
 
