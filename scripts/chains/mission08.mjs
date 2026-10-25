@@ -8,6 +8,10 @@
 const cheats = [
   { op: 'line', text: 'set DeusEx.JCDentonMale bCheatsEnabled True', harness: true },
   { op: 'line', text: 'set DeusEx.JCDentonMale ReducedDamageType All', harness: true },
+  // undetectable in Hell's Kitchen (bDetectable False: the AI's senses, the cameras and Trigger.IsRelevant skip the player; the console SET writes the class default, so each
+  // level of the chain sets it again): seen, the street's riot cops attack the never-shooting player and kill each other, and MS_UnhideTroop1/2 (all Cop1 or
+  // all Cop2 dead, Mission08.Timer) are the fight's: the first capture's original set MS_UnhideTroop2 before the exit, Play did not (mission 2's subway)
+  { op: 'line', text: 'set DeusEx.JCDentonMale bDetectable False', harness: true },
 ];
 export default {
   mission: '08',
@@ -39,7 +43,9 @@ export default {
     { op: 'place', at: [1014, 2454, -399], view: [-6127, 40974], harness: true, turnFirst: true, note: '60 units north-east of StantonDowd0 (972,2412,-399 in the world), aimed at him (chain-plan.mjs face --flags M08MeetHarleyFilben_Played; the spot due east crushes the player)' },
     { op: 'frob', target: 'StantonDowd0' },
     { op: 'conv', name: 'StantonDowd', watch: ['StantonDowd0'], timeout: 300 },
-    { op: 'wait', seconds: 10 },
+    // StantonDowdBarks (radius 200, StantonDowd_Played; the player stands 60 units off) starts once GetActiveConversation's 10 s gate after a third-person
+    // conversation opens: the first capture's original had it played by h3, Play's fixed 10 s wait read the snapshot at the gate
+    { op: 'wait', flag: 'StantonDowdBarks_Played', timeout: 120 },
     { op: 'snap', label: 'h3-stanton' },
 
     // the smuggler: M08SmugglerConvos (DL_Exit's first trigger needs it)
@@ -59,7 +65,12 @@ export default {
     { op: 'wait', seconds: 3 },
 
     // DL_Exit: FlagTrigger8 (radius 400) touched with StantonDowd_Played fires ExitLink, DataLinkTrigger10
+    // detectable for the fall into it: Trigger.IsRelevant refuses an actor with bDetectable False (Engine/Trigger.uc:193..195, "DEUS_EX STM -- added
+    // cheat"), so FlagTrigger8 fires ExitLink only for a detectable player; undetectable again once it has (DataLinkTrigger10 is triggered by the event)
+    { op: 'line', text: 'set DeusEx.JCDentonMale bDetectable True', harness: true },
     { op: 'place', at: [1946, -1121, -380], view: [0, 0], drop: true, harness: true, note: 'above FlagTrigger8 (1946,-1121,-470, radius 400)' },
+    { op: 'wait', seconds: 2 },
+    { op: 'line', text: 'set DeusEx.JCDentonMale bDetectable False', harness: true },
     { op: 'wait', flag: 'DL_Exit_Played', timeout: 180 },
     { op: 'wait', seconds: 5 },
     { op: 'state', label: 'exit-helicopter', actor: 'BlackHelicopter0', fields: ['bHidden'] },
@@ -73,6 +84,7 @@ export default {
     { op: 'conv', name: 'M08JockExit', choose: [{ index: 0, label: 'Go' }], watch: ['BlackHelicopter0'], timeout: 300 },
     { op: 'travel', to: '09_NYC_Dockyard', label: 'exit', timeout: 240 },
     ...cheats,
+    { op: 'line', text: 'set DeusEx.JCDentonMale bDetectable True', harness: true, note: 'detectable again in mission 9' },
     { op: 'wait', seconds: 15 },
     { op: 'snap', label: 'h6-dockyard' },
     // mission 9's chain starts here, in both programs (docs/stage-6-chains.md "Starts")
