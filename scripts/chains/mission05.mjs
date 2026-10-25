@@ -77,7 +77,11 @@ export default {
     { op: 'snap', label: 'f5-anna' },
 
     // Alex: the NanoKey of levelone, then the door
-    { op: 'place', at: [2061, -801, -15], view: [-6167, 32779], harness: true, turnFirst: true, note: '60 units east of AlexJacobson0 (2002,-801,-16), facing him' },
+    // Alex is not where the cold map's stand puts him in the original's run (its first capture's frob selected nothing): the level held, the player placed
+    // by Alex where he is in each program, the level released, the right button
+    { op: 'line', text: 'set LevelInfo bPlayersOnly True', harness: true },
+    { op: 'placeNear', actor: 'AlexJacobson0', distance: 60, bearing: 0, harness: true, turnFirst: true, note: '60 units east of Alex Jacobson where he stands, aimed at him' },
+    { op: 'line', text: 'set LevelInfo bPlayersOnly False', harness: true, settle: 1 },
     { op: 'frob', target: 'AlexJacobson0' },
     { op: 'conv', name: 'M05MeetAlexJacobson', watch: ['AlexJacobson0'], timeout: 180 },
     { op: 'wait', seconds: 5 },
