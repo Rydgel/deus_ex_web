@@ -239,6 +239,13 @@ whose soundID differs is a difference; only two different speeches of one random
 * **One unit is compared with the original so far** (`c03-hq-line`: PASS on its observable, above). Every unit runs in Play (63 of 66;
   the 3 others are the blocked family); each needs its Wine capture (`chain-original.mjs --file`, then `validate-flag-census.mjs`) before any row 6.4.NN.2
   moves.
+* **Bases saved in a loaded level send the original's next travel to `Index.dx` (2026-10-26, open).** A base made in the level its slot was loaded into keeps
+  Play's load options in that level's stored URL (`load`, `\tloadonly`, `\tloadgame`: `travel-save.mjs` writes the arrival's URL), where the original's
+  `LoadMap` keeps the URL stored in the loaded file for any option that starts with `load` (docs/travel.md, the restart's `Index.dx`), so its saves stay
+  clean. Loading such a base, the original's next relative travel arrives with `Index.dx` as the level's `URL.Map` (`[URL] Map=Index.dx`, the default):
+  measured on the Mac and on the Linux host for `c04-island-hq-line`, against `04_NYC_UNATCOHQ` through the same teleporter from the chain line's
+  travel-made save. Ten Mac captures show it (missions 4, 6, 8, 9); their observables were equal, but a mission script reading `GetURLMap()` would run its
+  wrong branch in the original. To do: Play keeps the loaded file's URL on a `load` option, the bases are made again, and those units are captured again.
 * **Mid-mission bases.** Most bases are Play saves taken after a prefix, with the mission's other levels filed in the save; the chains so far showed the
   original loading Play's saves only at a mission's arrival. Unverified until the first capture.
 * **Only flags are written.** A setter's goals, notes, items, credits and skill points stay as the line has them: a unit is the reader under the flag, not a
