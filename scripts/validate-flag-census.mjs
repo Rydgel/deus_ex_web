@@ -286,7 +286,16 @@ if (args.includes('--child')) {
   writeFileSync(option('out'), JSON.stringify(result, null, 1));
   process.exit(0);
 }
+// A unit's verdict entry from its own result file (validate-<unit>.json). The summary is rebuilt from those files, the latest result of each unit: runs of
+// this script that overlap (a --unit run beside a whole one) each wrote the shared summary from what it had loaded, and the last write kept only its units
+const entryOf = (r, at) => ({ status: r.status, failures: r.failures, own: r.observable.own, readers: Object.fromEntries(r.observable.readers.map(x => [x.name, x.flags])),
+  states: r.observable.states, capture: r.capture, at });
 const verdicts = existsSync(VERDICTS) ? JSON.parse(readFileSync(VERDICTS, 'utf8')) : {};
+for (const unit of UNITS) {
+  const file = `${CENSUS}/validate-${unit.id}.json`;
+  if (!existsSync(file)) continue;
+  try { verdicts[unit.id] = entryOf(JSON.parse(readFileSync(file, 'utf8')), statSync(file).mtime.toISOString()); } catch { /* a result being written */ }
+}
 if (!args.includes('--rows')) {
   try { gameDirectory(); } catch { console.log('SKIP validate-flag-census: no installed game data'); process.exit(0); }
   let units = UNITS;
@@ -301,8 +310,7 @@ if (!args.includes('--rows')) {
     const run = spawnSync(process.execPath, ['--max-old-space-size=12288', new URL(import.meta.url).pathname, '--child', unit.id, '--out', out], { stdio: ['ignore', 'inherit', 'inherit'] });
     if (run.status !== 0 || !existsSync(out)) { console.log(`FAIL ${unit.id}: the Play run stopped (exit ${run.status})`); verdicts[unit.id] = { status: 'FAIL', failures: [{ message: 'the Play run stopped', tags: ['run'] }], at: new Date().toISOString() }; failed++; continue; }
     const r = JSON.parse(readFileSync(out, 'utf8'));
-    verdicts[unit.id] = { status: r.status, failures: r.failures, own: r.observable.own, readers: Object.fromEntries(r.observable.readers.map(x => [x.name, x.flags])), states: r.observable.states,
-      capture: r.capture, at: new Date().toISOString() };
+    verdicts[unit.id] = entryOf(r, new Date().toISOString());
     console.log(`${r.status} ${unit.id}: the observable: ${r.observable.own.length} own flag(s) [${r.observable.own.join(' ')}], readers ${r.observable.readers.map(x => `${x.name} (${x.flags.length} flags, ${x.speeches} speeches${x.jumpsInto.length ? `, jumps into ${x.jumpsInto.join(' ')}` : ''})`).join(', ') || 'none (a mission script\'s)'}${r.observable.states.length ? `, states ${r.observable.states.join(' ')}` : ''}`);
     for (const c of r.compared) console.log(`  ${c}`);
     for (const f of r.failures) console.log(`  FAIL (${f.tags.join(', ')}): ${f.message}`);

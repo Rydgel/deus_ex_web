@@ -18,6 +18,11 @@ export const CLAUSES = Object.freeze({
 export const MISSIONS = Object.freeze(['00', '01', '02', '03', '04', '05', '06', '08', '09', '10', '11', '12', '14', '15']);
 /** The missions that set one of the 36 carried flags (docs/stage-6-inventory.md "The choices with lasting consequences across missions"). */
 export const CHOICE_MISSIONS = Object.freeze({'01': 7, '02': 13, '03': 5, '04': 3, '05': 3, '08': 3, '10': 1, '11': 2});
+// carried flags no later mission reads (nothing to compare: stage6-flag-census.mjs's readers)
+const CENSUS_NO_READER = Object.freeze({
+  '02': 'FordSchickRescueDone has no reader in any mission (SmugglerWaiting and SmugglerThanks, its only readers, are mission 2\'s own)',
+  '08': 'GreenKnowsAboutDowd has no reader (Mission09.Timer:170 also needs suprisePoint, set nowhere)',
+});
 
 /** The missions with a real desktop save slot (`.work/internet-saves`: the 41 slots cover missions 1 to 6, 8 to 10, 12, 14 and 15). */
 const SLOT_MISSIONS = new Set(['01', '02', '03', '04', '05', '06', '08', '09', '10', '12', '14', '15']);
@@ -107,7 +112,9 @@ for (const m of MISSIONS) {
       : {need: 'a placed-chain scene of the mission in Play and under Wine from the same start (a real slot of the mission, else the previous mission\'s exit), compared at the exit',
         weak: 'the player is placed at each step, as Stage 5\'s placed approaches: the walk and the fights between the steps are not part of the row (the user\'s decision)'});
   if (CHOICE_MISSIONS[m]) add(`6.4.${m}.2`, `mission ${Number(m)}: both sides of each of its ${CHOICE_MISSIONS[m]} carried flags, checked where the later mission reads them (the conversation branch, the pawn present or absent, the script's effect), equal to the original`, 'O1',
-    {need: 'per carried flag: the two branches set in the mission (or a slot holding each), the reader\'s observable in the later mission, in Play and under Wine'});
+    {proof: [v('validate-flag-census.mjs')],
+      have: [`docs/stage-6-flag-census.md: the census's units for the flags set in mission ${Number(m)}, a base holding each side, the reader's observable (the flags its conversations read and set, their history records, the states) equal to the original under Wine on both hosts (all 66 units PASS, 2026-10-26)`],
+      weak: `each side is a Play save of the chain line with the flag written into it: a unit is the reader under the flag, not the played route that sets it (goals, items and credits stay as the line has them); only the reader's observable is compared (ambient barks and the rest are reported outside it)${CENSUS_NO_READER[m] ? `; ${CENSUS_NO_READER[m]}` : ''}`});
   add(`6.4.${m}.3`, `mission ${Number(m)}: every conversation and InfoLink of its list starts and runs to its end in Play without a stop; those on the required chain are compared with the original by 6.4.${m}.1`, 'P',
     {proof: [SLOT_MISSIONS.has(m) ? v('validate-conversations-census.mjs', '--missions', m, '--slots') : v('validate-conversations-census.mjs', '--missions', m)],
       have: ['scripts/census-conversations.mjs (docs/census-conversations.md)'],

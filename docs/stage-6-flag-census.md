@@ -236,9 +236,10 @@ whose soundID differs is a difference; only two different speeches of one random
 
 ## Unverified and open
 
-* **One unit is compared with the original so far** (`c03-hq-line`: PASS on its observable, above). Every unit runs in Play (63 of 66;
-  the 3 others are the blocked family); each needs its Wine capture (`chain-original.mjs --file`, then `validate-flag-census.mjs`) before any row 6.4.NN.2
-  moves.
+* **All 66 units are compared with the original (2026-10-26): every one PASS on its observable.** Captured under Wine on the Mac's CrossOver bottle
+  and the Linux host, compared on the Linux host; `validate-flag-census.mjs --rows` gives every row 6.4.NN.2 all its flags with both sides PASS, except
+  the two flags no later mission reads (`FordSchickRescueDone`, `GreenKnowsAboutDowd`: nothing to compare). The summary is rebuilt from each unit's own
+  result file (overlapping runs had each written the shared summary).
 * **Bases saved in a loaded level send the original's next travel to `Index.dx` (2026-10-26, resolved).** The bases made by loading a chain slot store the
   load's options in that level's URL (`load`, `loadonly`, `loadgame`; Play kept the arrival's URL). The original's `LoadMap` keeps the URL stored in the
   file for any option that starts with `load` (Engine.dll `0x1038ce8b..0x1038ceed`, a prefix compare), a relative URL copies the base's options, and a bare

@@ -41,9 +41,14 @@ for (const mission of missions) {
       ? { ...step, label: `m${mission}:${step.label ?? `to-${step.to}`}` } : step);
   }
 }
-const { runChainInPlay } = await import('./chain-play.mjs');
-const play = await runChainInPlay({ mission: 'full', steps }, { log: line => { if (process.argv.includes('--verbose')) console.log(`  play: ${line}`); } });
-if (option('json', null)) await writeFile(option('json'), JSON.stringify({ ...play, session: undefined, saveDirectory: undefined }, null, 1));
+// --from run.json: the comparison over a stored run (a `--json` file of this script), without playing the campaign again (a new capture of one mission)
+let play;
+if (option('from', null)) play = JSON.parse(await (await import('node:fs/promises')).readFile(option('from'), 'utf8'));
+else {
+  const { runChainInPlay } = await import('./chain-play.mjs');
+  play = await runChainInPlay({ mission: 'full', steps }, { log: line => { if (process.argv.includes('--verbose')) console.log(`  play: ${line}`); } });
+  if (option('json', null)) await writeFile(option('json'), JSON.stringify({ ...play, session: undefined, saveDirectory: undefined }, null, 1));
+}
 
 if (playOnly) {
   for (const leg of play.legs.filter(leg => leg.label.endsWith(':exit') || leg.label.includes('endgame') || leg.label.includes('dxonly'))) console.log(`${leg.label}: ${leg.from} -> ${leg.to}, ${leg.text.length} bytes`);
@@ -56,7 +61,11 @@ for (const mission of missions) {
   const got = play.legs.find(leg => leg.label === `m${mission}:exit`);
   if (!want) { console.log(`mission ${mission}: its capture has no exit leg (an ending chain ends in the endgame)`); continue; }
   if (!got) { failures.push(`mission ${mission}: the run made no exit map change`); continue; }
-  const { difference } = await compareTravelTexts(want.text, got.text);
+  // A flag's FName spelling is its first registration in the process (docs/script-names.md "Spelling across levels"): this run is one process from New
+  // Game, each capture a fresh one started from the previous chain's save, so their name tables have different histories and a flag name's case is not
+  // compared here (mission 14's DL_Start_Played: the capture spelled dl_start_Played); the per-mission rows compare it, each from the same start
+  const caseless = text => text.replace(/^FlagName=(.*)$/gm, (line, name) => `FlagName=${name.toLowerCase()}`);
+  const { difference } = await compareTravelTexts(caseless(want.text), caseless(got.text));
   if (difference) failures.push(`mission ${mission}: the exit text differs from the original's: ${JSON.stringify(difference)}`);
   console.log(`mission ${mission}: ${got.from} -> ${got.to}${difference ? ' (DIFFER)' : ' equal'}`);
 }
