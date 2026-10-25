@@ -161,7 +161,10 @@ export default {
     { op: 'snap', label: 'g14-tongbase' },
     // M07Briefing (frob, needs TriadCeremony_Played): Tong patrols TongStation01..03 (pauses 10, 8, 10 s); undrawn since the last visit, he stands at
     // TongStation01 in Play
-    { op: 'placeNear', actor: 'TracerTong0', distance: 40, bearing: 0, harness: true, note: '40 units east of TracerTong0 where he is (at TongStation01 (742,-32,15) in Play), aimed at him' },
+    // (in the original's first capture Tong was walking his patrol and the frob selected nothing: the level held for the placement, released for the frob)
+    { op: 'line', text: 'set LevelInfo bPlayersOnly True', harness: true },
+    { op: 'placeNear', actor: 'TracerTong0', distance: 40, bearing: 0, harness: true, turnFirst: true, note: '40 units east of TracerTong0 where he is (at TongStation01 (742,-32,15) in Play), aimed at him' },
+    { op: 'line', text: 'set LevelInfo bPlayersOnly False', harness: true, settle: 1 },
     { op: 'frob', target: 'TracerTong0' },
     { op: 'conv', name: 'M07Briefing', watch: ['TracerTong0'], timeout: 300 },
     { op: 'snap', label: 'g15-briefing' },
