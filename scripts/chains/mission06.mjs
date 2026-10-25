@@ -289,7 +289,10 @@ export default {
 
     // Jock: the Market's FirstFrame (M08Briefing_Played) put BlackHelicopter0 in the world in the compound; M06JockExit by its radius (240): Jock_Chopper,
     // Dispatcher1's outro_trigger 0.65 s later (InterpolateTrigger1, MapExit2 and its camera path) to 08_NYC_Street
-    { op: 'place', at: [500, 657, 56], view: [-2336, 0], turnFirst: true, harness: true, note: '180 units west of BlackHelicopter0 (680,657,96 in the world), facing it: placements around it in the level the chain reaches' },
+    // the helicopter's cylinder blocks the player and is wider than the radius (240): the first capture's original pushed the player placed 180 units off out
+    // of it and never started M06JockExit (mission 3's JockBarks, docs/stage-6-chains.md); it is started by the right button from just outside the cylinder
+    { op: 'watch', actors: ['BlackHelicopter0'] },
+    { op: 'frobNear', actor: 'BlackHelicopter0', distance: 490, bearing: [3.142, 1.571, -1.571, 0], settle: 0.3, harness: true, note: '490 units from BlackHelicopter0 where it is (680,657,96 in Play), outside its cylinder, aimed at it' },
     { op: 'conv', name: 'M06JockExit', watch: ['BlackHelicopter0'], timeout: 180 },
     { op: 'travel', to: '08_NYC_Street', label: 'exit', timeout: 240 },
     ...cheats,
