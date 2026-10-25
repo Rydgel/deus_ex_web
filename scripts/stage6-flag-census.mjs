@@ -17,12 +17,15 @@
  *   node scripts/validate-stage6-chain.mjs --file .work/chains/census/<unit>.mjs
  *
  *   node scripts/stage6-flag-census.mjs --list                        the table: flag, setters, expiration, the line's side, the reader run per reading mission (or why none)
+ *   node scripts/stage6-flag-census.mjs --table                       the same as the doc's markdown table, with what Play did (play-summary.json)
  *   node scripts/stage6-flag-census.mjs --write [unit|family]         the unit files only
  *   node scripts/stage6-flag-census.mjs --bases <family> [--keep]     the base saves of a family, in Play (one prefix run), pinned
  *   node scripts/stage6-flag-census.mjs --play [unit|family] [--rebuild]   bases (when missing), unit files, then each unit in Play, one child process each (Linux host,
  *                                                                     --max-old-space-size=12288); writes .work/chains/census/play-summary.json
+ *   node scripts/stage6-flag-census.mjs --report [unit|family]        each unit's Play result against its family's line unit: the flags beyond the written ones,
+ *                                                                     the states, the conversation traces, the histories (owner, events, a hash: no game text)
  * Never run on the 16 GB Mac (AGENTS.md, the memory budget). */
-import { mkdirSync, writeFileSync, existsSync, rmSync, readFileSync, appendFileSync } from 'node:fs';
+import { mkdirSync, writeFileSync, existsSync, rmSync, readFileSync, appendFileSync, statSync, openSync, closeSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import { slotDirectory, slotName, flagsOfPlay } from './chain-lib.mjs';
 
@@ -63,8 +66,9 @@ async function resolve(list) {
  * radius, played as it comes (`conv`) or, for a first-person one (overheard: no key is the conversation's; the chain's Enter would fire the weapon in hand),
  * waited for by its _Played flag. */
 const talk = ({ owner, conv, distance = 60, bearing = 0, frob = false, firstPerson = false, choose, timeout = 240 }) => [
-  { op: 'placeNear', actor: owner, distance, bearing, turnFirst: true, harness: true, note: `the reader ${conv}: ${distance} units from ${owner}` },
-  ...(frob ? [{ op: 'frob', target: owner, watch: [owner] }] : []),
+  // started by the right button: frobNear places again until the view selects the owner (a wandering owner walks off during the placement's lines)
+  frob ? { op: 'frobNear', actor: owner, distance, bearing, settle: 0.3, harness: true, note: `the reader ${conv}: ${distance} units from ${owner}, the right button` }
+    : { op: 'placeNear', actor: owner, distance, bearing, turnFirst: true, harness: true, note: `the reader ${conv}: ${distance} units from ${owner}` },
   firstPerson ? { op: 'wait', flag: `${conv}_Played`, timeout } : { op: 'conv', name: conv, watch: [owner], timeout, ...(choose ? { choose } : {}) },
   { op: 'wait', seconds: 3 },
 ];
@@ -90,7 +94,8 @@ export const FAMILIES = {
       paul: [
         ...talk({ owner: 'PaulDenton0', conv: 'PaulBarricade', distance: 80 }),
         { op: 'wait', flag: 'PaulGaveGrenades', timeout: 30 },
-        { op: 'frob', target: 'PaulDenton0', watch: ['PaulDenton0'] },
+        // the conversation leaves the view elsewhere: placed and aimed again (PaulBarricade needs !PaulGaveGrenades: it does not start again)
+        { op: 'frobNear', actor: 'PaulDenton0', distance: 80, bearing: 0, settle: 0.3, harness: true, note: 'PaulLeaving: the right button' },
         { op: 'wait', flag: 'PaulLeaving_Played', timeout: 120 },
         { op: 'wait', seconds: 3 },
         { op: 'snap', label: 'r-paul' },
@@ -191,7 +196,8 @@ export const FAMILIES = {
     body: [span('10', { op: 'snap', label: 'g1-loaded' }, { op: 'snap', label: 'g3-metro' }), pawnState('metro-jaime', 'JaimeReyes1'), 'jaime', 'metrosewer',
       span('10', { op: 'place', at: [1195, 950, 259] }, { op: 'snap', label: 'g4-club' })],
     blocks: {
-      jaime: [...talk({ owner: 'JaimeReyes1', conv: 'M10MeetJaime', frob: true }), { op: 'snap', label: 'r-jaime' }],
+      // Jaime enters the world at the arrival (Mission10.FirstFrame) and walks to his seat (Sitting, OrderTag JaimeChair): Play's first placements chased him
+      jaime: [{ op: 'wait', seconds: 40, note: 'Jaime walks to his seat' }, ...talk({ owner: 'JaimeReyes1', conv: 'M10MeetJaime', frob: true }), { op: 'snap', label: 'r-jaime' }],
       metrosewer: [...datalink({ trigger: 'DataLinkTrigger0', at: [1705, -4236, -248], conv: 'DL_metrosewer' }), { op: 'snap', label: 'r-metrosewer' }],
     },
   },
@@ -240,7 +246,8 @@ export const FAMILIES = {
 // ---- the units ----------------------------------------------------------------------------------------------------------------------------------------------
 /** set: [name, value, expiration] written as the setter writes them (a conversation's SetFlag: expiration 0, ConPlayBase.SetFlag; a script's SetBool: its
  * fourth argument), with the flags the same setter branch sets beside the census's flag; clear: flags deleted (the side "absent"). readers: the family's
- * blocks this unit runs (all by default; a pawn a flag keeps out of the world has no conversation to run). */
+ * blocks this unit runs (all by default; a pawn a flag keeps out of the world has no conversation to run). against: the unit holding the flag's other side
+ * when it is not the family's line unit (a flag the reader only tests after another one the same setter sets: --report compares the two). */
 export const UNITS = [
   // mission 2 reads mission 1's M01PlayerAggressive (Mission01.Timer:91, expiration 6)
   { id: 'c02-street-line', family: '02-street', flag: null, side: 'line' },
@@ -262,7 +269,7 @@ export const UNITS = [
   { id: 'c03-batterypark-line', family: '03-batterypark', flag: null, side: 'line' },
   { id: 'c03-M01PlayerMetFilben-1', family: '03-batterypark', flag: 'M01PlayerMetFilben', side: '1', setter: 'MeetFilbenAfterStatue',
     set: [['M01PlayerMetFilben', true, 0], ['PlayerMetFilben', true, 0]] },
-  { id: 'c03-FilbenGaveKey-1', family: '03-batterypark', flag: 'FilbenGaveKey', side: '1', setter: 'MeetFilben@GetKeyB',
+  { id: 'c03-FilbenGaveKey-1', family: '03-batterypark', against: 'c03-M01PlayerMetFilben-1', flag: 'FilbenGaveKey', side: '1', setter: 'MeetFilben@GetKeyB',
     set: [['M01PlayerMetFilben', true, 0], ['PlayerMetFilben', true, 0], ['FilbenGaveKey', true, 0]] },
   // mission 3, the 747: AnnaEntrance (on the chain)
   { id: 'c03-M02MechSlur-1', family: '03-747', flag: 'M02MechSlur', side: '1', setter: 'AnnaThanks@Cocky', set: [['M02MechSlur', true, 0]] },
@@ -279,7 +286,7 @@ export const UNITS = [
   { id: 'c04-bar-line', family: '04-street-bar', flag: null, side: 'line' },
   { id: 'c04-MeetJoeGreen_Played-1', family: '04-street-bar', flag: 'MeetJoeGreen_Played', side: '1', setter: 'MeetJoeGreen (main)',
     set: [['PlayerKnowsJoeGreen', true, 0], ['MeetJoeGreen_Played', true, 0]] },
-  { id: 'c04-M02QuestionedGreen-1', family: '04-street-bar', flag: 'M02QuestionedGreen', side: '1', setter: 'MeetJoeGreen2@GreenQuestioned (needs MeetJoeGreen_Played)',
+  { id: 'c04-M02QuestionedGreen-1', family: '04-street-bar', against: 'c04-MeetJoeGreen_Played-1', flag: 'M02QuestionedGreen', side: '1', setter: 'MeetJoeGreen2@GreenQuestioned (needs MeetJoeGreen_Played)',
     set: [['PlayerKnowsJoeGreen', true, 0], ['MeetJoeGreen_Played', true, 0], ['M02QuestionedGreen', true, 0]] },
   { id: 'c04-PlayerMetFilben-1', family: '04-street-bar', flag: 'PlayerMetFilben', side: '1', setter: 'mission 1: MeetFilbenAfterStatue',
     set: [['M01PlayerMetFilben', true, 0], ['PlayerMetFilben', true, 0]] },
@@ -312,7 +319,7 @@ export const UNITS = [
   { id: 'c11-cathedral-line', family: '11-cathedral', flag: null, side: 'line' },
   { id: 'c11-GuntherFreed-1', family: '11-cathedral', flag: 'GuntherFreed', side: '1', setter: '01_NYC_UNATCOIsland/FlagTrigger2 (no GuntherRescued after it)',
     set: [['GuntherFreed', true, 12]] },
-  { id: 'c11-GuntherRespectsPlayer-1', family: '11-cathedral', flag: 'GuntherRespectsPlayer', side: '1', setter: 'GuntherRescued@GiveSpeech (needs GuntherFreed)',
+  { id: 'c11-GuntherRespectsPlayer-1', family: '11-cathedral', against: 'c11-GuntherFreed-1', flag: 'GuntherRespectsPlayer', side: '1', setter: 'GuntherRescued@GiveSpeech (needs GuntherFreed)',
     set: [['GuntherFreed', true, 12], ['GuntherRespectsPlayer', true, 0]] },
   { id: 'c11-KnowsGuntherKillphrase-1', family: '11-cathedral', flag: 'KnowsGuntherKillphrase', side: '1', setter: 'M10MeetJaime@Continue (its Knows branch: KnowsAboutKillphrase)',
     set: [['KnowsAboutKillphrase', true, 0], ['KnowsGuntherKillphrase', true, 0]], choose: { gunther: [{ index: 0, label: 'Kill' }] } },
@@ -322,18 +329,30 @@ export const UNITS = [
     set: [['NeedRayComment', false, 0], ['EverettMechanicComment', true, 0]] },
   { id: 'c12-SandraWentToCalifornia-1', family: '12-cmd', flag: 'SandraWentToCalifornia', side: '1', setter: 'SandraAttackedByJoJoThanks (main)',
     set: [['PlayerKnowsSandraRenton', true, 0], ['SandraWentToCalifornia', true, 0]] },
-  // mission 14 reads SimonsAssassination (mission 3; DL_Simons2), M04MetWalton and M11MetWalton (WaltonShowdown), EverettMechanicComment (JockArea51, on the chain)
+  // mission 14 reads SimonsAssassination (mission 3; DL_Simons2), M04MetWalton and M11MetWalton (WaltonShowdown), EverettMechanicComment (JockArea51, on the chain).
+  // The line of missions 14 and 15 descends from chain 12's provisional start, the real slot nicouzouf Save0028 (Save0112 pinned 2026-10-24): it has
+  // M04MetWalton, M11MetWalton (and GuntherHermann_Dead) set, so their units take the flags away; WaltonShowdown reads M11MetWalton only once !M04MetWalton jumped
   { id: 'c14-lab-line', family: '14-lab', flag: null, side: 'line' },
   { id: 'c14-SimonsAssassination-1', family: '14-lab', flag: 'SimonsAssassination', side: '1', setter: 'SimonsBarks@A4', set: [['SimonsAssassination', true, 0]] },
-  { id: 'c14-M04MetWalton-1', family: '14-lab', flag: 'M04MetWalton', side: '1', setter: 'M04MeetWalton (main)', set: [['M04MetWalton', true, 0]] },
-  { id: 'c14-M11MetWalton-1', family: '14-lab', flag: 'M11MetWalton', side: '1', setter: 'M11WaltonHolo (main; needs GuntherHermann_Dead)',
-    set: [['GuntherHermann_Dead', true, 0], ['M11MetWalton', true, 0]] },
+  { id: 'c14-M04MetWalton-absent', family: '14-lab', flag: 'M04MetWalton', side: 'absent', setter: 'M04MeetWalton not played', clear: ['M04MetWalton'] },
+  { id: 'c14-M11MetWalton-absent', family: '14-lab', against: 'c14-M04MetWalton-absent', flag: 'M11MetWalton', side: 'absent', setter: 'neither M04MeetWalton nor M11WaltonHolo played',
+    clear: ['M04MetWalton', 'M11MetWalton'] },
   { id: 'c14-EverettMechanicComment-1', family: '14-silo', flag: 'EverettMechanicComment', side: '1', setter: 'MeetEverett2@RayComment',
     set: [['NeedRayComment', false, 0], ['EverettMechanicComment', true, 0]] },
   // mission 15 reads EverettMechanicComment (M15MeetEverett)
   { id: 'c15-entrance-line', family: '15-entrance', flag: null, side: 'line' },
   { id: 'c15-EverettMechanicComment-1', family: '15-entrance', flag: 'EverettMechanicComment', side: '1', setter: 'MeetEverett2@RayComment',
     set: [['NeedRayComment', false, 0], ['EverettMechanicComment', true, 0]] },
+  // added after the first Play pass (new units go last: the indexes of pinned bases stay): ManderleyDebriefing02 checks EscapeSuccessful and the hostages
+  // before SubTerroristsDead with the same jump (Rescue), so the line's EscapeSuccessful hides the flag; the terrorists dead without the escape is a route too
+  { id: 'c03-SubTerroristsDead-1-noescape', family: '03-hq', against: 'c03-EscapeSuccessful-absent', flag: 'SubTerroristsDead', side: '1', setter: 'Mission02.Timer:196, the hostages not escaped',
+    set: [['SubTerroristsDead', true, 6]], clear: ['EscapeSuccessful'] },
+  // M15MeetEverett's one CheckFlag holds !EverettMechanicComment and !Ray_Dead (all must hold to jump): the line's Ray_Dead (the slot's) hides the flag, so a pair
+  // with Ray alive (Ray_Dead taken away at the entrance: a deviation, the Bunker's arrival had run with Ray dead) shows both sides
+  { id: 'c15-EverettMechanicComment-absent-rayalive', family: '15-entrance', flag: 'EverettMechanicComment', side: 'absent', setter: 'MeetEverett2 not played, Ray alive',
+    clear: ['Ray_Dead'] },
+  { id: 'c15-EverettMechanicComment-1-rayalive', family: '15-entrance', against: 'c15-EverettMechanicComment-absent-rayalive', flag: 'EverettMechanicComment', side: '1',
+    setter: 'MeetEverett2@RayComment, Ray alive', set: [['NeedRayComment', false, 0], ['EverettMechanicComment', true, 0]], clear: ['Ray_Dead'] },
 ];
 UNITS.forEach((unit, i) => { unit.index = FIRST_INDEX + i; unit.slot = slotName(unit.index); });
 const unitById = new Map(UNITS.map(u => [u.id, u]));
@@ -389,7 +408,8 @@ export const FLAGS = [
   { flag: 'MeetJoeGreen_Played', row: '02', setters: 'MeetJoeGreen (main) SetFlag (1, never; the _Played flag exists before ConPlayBase.SetPlayedFlag)', line: 'absent',
     reads: [{ m: '04', reader: 'M04MeetJoeGreen (? !MeetJoeGreen_Played -> FirstMeeting)', units: ['c04-MeetJoeGreen_Played-1', 'c04-bar-line'] }] },
   { flag: 'SubTerroristsDead', row: '02', setters: 'Mission02.Timer:196 (1, mission 6)', line: 'absent',
-    reads: [{ m: '03', reader: 'ManderleyDebriefing02 (? SubTerroristsDead & hostages alive -> Rescue)', units: ['c03-SubTerroristsDead-1'], notRun: 'AnnaAtUNATCO (one reader per mission)' }] },
+    reads: [{ m: '03', reader: 'ManderleyDebriefing02 (? SubTerroristsDead & hostages alive -> Rescue, after the same check of EscapeSuccessful: the line\'s EscapeSuccessful hides it)',
+      units: ['c03-SubTerroristsDead-1', 'c03-SubTerroristsDead-1-noescape', 'c03-EscapeSuccessful-absent'], notRun: 'AnnaAtUNATCO (one reader per mission)' }] },
   { flag: 'TenderloinSlaughter', row: '02', setters: 'Mission02.Timer:285 (1, mission 6)', line: 'absent',
     reads: [{ m: '03', reader: 'ManderleyDebriefing02 (resume2: ? TenderloinSlaughter -> Slaughter)', units: ['c03-TenderloinSlaughter-1'],
       notRun: 'CarterGreeting03, PrivateLloydBark (one reader per mission), TroopBarks1/2 (NeverTrue)' }] },
@@ -404,8 +424,8 @@ export const FLAGS = [
     reads: [{ m: '04', reader: 'M04MeetFilben', units: ['c04-PlayerMetFilben-1-m03', 'c04-bar-line'] }] },
   { flag: 'SimonsAssassination', row: '03', setters: 'SimonsBarks@A4 (1, never)', line: 'absent',
     reads: [{ m: '14', reader: 'DL_Simons2 (14_OceanLab_Lab/DataLinkTrigger6, needs schematic_downloaded; ? SimonsAssassination -> Assassination)', units: ['c14-SimonsAssassination-1', 'c14-lab-line'] }] },
-  { flag: 'M04MetWalton', row: '04', setters: 'M04MeetWalton (main) (1, never)', line: 'absent',
-    reads: [{ m: '14', reader: 'WaltonShowdown (? !M04MetWalton -> try2)', units: ['c14-M04MetWalton-1', 'c14-lab-line'] }] },
+  { flag: 'M04MetWalton', row: '04', setters: 'M04MeetWalton (main) (1, never)', line: 'absent on the New Game line (missions 4 to 11); 1 on the line of missions 14 and 15 (the real slot chain 12 started from)',
+    reads: [{ m: '14', reader: 'WaltonShowdown (? !M04MetWalton -> try2)', units: ['c14-M04MetWalton-absent', 'c14-lab-line'] }] },
   { flag: 'PlayerBailedOutWindow', row: '04', setters: '04_NYC_Hotel/FlagTrigger9 (1, mission 6)', line: 'absent',
     reads: [{ m: '05', reader: 'Mission05.FirstFrame:37 (05_NYC_UNATCOMJ12LAB: Paul destroyed)', units: ['c05-PlayerBailedOutWindow-1', 'c05-lab-line'] }] },
   { flag: 'SandraWentToCalifornia', row: '04', setters: 'SandraAttackedByJoJoThanks, FamilySquabbleWrapUpGilbertDead (main), FamilySquabbleWrapUp@Hop (1, never)', line: 'absent',
@@ -428,12 +448,13 @@ export const FLAGS = [
     reads: [{ m: '09', reader: 'DL_BadNews (09_NYC_Dockyard/DataLinkTrigger4; ? M08WarnedSmuggler -> Warned)', units: ['c09-M08WarnedSmuggler-1', 'c09-dockyard-line'] }] },
   { flag: 'KnowsGuntherKillphrase', row: '10', setters: 'M10MeetJaime@Continue (1, never)', line: 'absent',
     reads: [{ m: '11', reader: 'M11MeetGunther (Continue: ? !KnowsGuntherKillphrase -> NoKillswitch; else the Kill/Gentleman choice)', units: ['c11-KnowsGuntherKillphrase-1', 'c11-cathedral-line'] }] },
-  { flag: 'EverettMechanicComment', row: '11', setters: 'MeetEverett2@RayComment, @deadset (1, never)', line: 'absent',
+  { flag: 'EverettMechanicComment', row: '11', setters: 'MeetEverett2@RayComment, @deadset (1, never)', line: 'absent (with Ray_Dead set on the line of missions 14 and 15)',
     reads: [{ m: '12', reader: 'TongSick (on the chain; one CheckFlag of !Ray_Dead and !EverettMechanicComment -> Rattle)', units: ['c12-EverettMechanicComment-1'] },
       { m: '14', reader: 'JockArea51 (on the chain; the same check)', units: ['c14-EverettMechanicComment-1'] },
-      { m: '15', reader: 'M15MeetEverett (the same check -> Dead)', units: ['c15-EverettMechanicComment-1', 'c15-entrance-line'] }] },
-  { flag: 'M11MetWalton', row: '11', setters: 'M11WaltonHolo (main) (1, never; needs GuntherHermann_Dead)', line: 'absent',
-    reads: [{ m: '14', reader: 'WaltonShowdown (try2: ? !M11MetWalton -> try3)', units: ['c14-M11MetWalton-1', 'c14-lab-line'] }] },
+      { m: '15', reader: 'M15MeetEverett (the same check -> Dead; the line\'s Ray_Dead hides the flag: a pair with Ray alive)',
+        units: ['c15-EverettMechanicComment-1', 'c15-entrance-line', 'c15-EverettMechanicComment-1-rayalive', 'c15-EverettMechanicComment-absent-rayalive'] }] },
+  { flag: 'M11MetWalton', row: '11', setters: 'M11WaltonHolo (main) (1, never; needs GuntherHermann_Dead)', line: 'absent on the New Game line; 1 on the line of missions 14 and 15 (the real slot)',
+    reads: [{ m: '14', reader: 'WaltonShowdown (try2: ? !M11MetWalton -> try3; read only once !M04MetWalton jumped)', units: ['c14-M11MetWalton-absent', 'c14-M04MetWalton-absent'] }] },
 ];
 
 // ---- unit files ---------------------------------------------------------------------------------------------------------------------------------------------
@@ -469,14 +490,21 @@ async function buildBases(familyId, only = null) {
   const units = UNITS.filter(u => u.family === familyId && (!only || only.includes(u.id)));
   const { runChainInPlay } = await import('./chain-play.mjs');
   const prefix = await resolve(family.base.prefix);
+  // the prefix is the chain's own steps from its start, unchanged (three more seconds before mission 2's subway panel left the hostages unseen in stasis and
+  // DL_SubwayComplete never came); with no prefix, the cheat lines and the chains' three seconds
   const steps = [{ op: 'start', kind: 'slot', source: 'chain', chain: family.base.from.chain, slot: family.base.from.slot, index: family.base.from.index },
-    ...CHEATS, { op: 'wait', seconds: 3 }, ...prefix];
+    ...(prefix.length ? prefix : [...CHEATS, { op: 'wait', seconds: 3 }])];
   // per unit: its flags written, SaveGame at once (no frame between), its flags put back; the line's base first, a unit that deletes a flag last (put back,
   // the flag is a new entry at the end of the store's insertion order)
   const rank = u => (u.side === 'line' ? 0 : u.clear?.length ? 2 : 1);
   for (const unit of [...units].sort((a, b) => rank(a) - rank(b)))
     steps.push({ op: 'wait', seconds: 0, census: { apply: unit.id } }, { op: 'save', index: unit.index, label: unit.id }, { op: 'wait', seconds: 0, census: { undo: unit.id } });
-  const undo = new Map(), manifest = { family: familyId, made: new Date().toISOString(), units: {} };
+  // the chain save the bases come from, as it was when they were made (a chain's exit save is pinned again when its chain changes)
+  const source = slotDirectory({ source: 'chain', chain: family.base.from.chain, slot: family.base.from.slot });
+  // (file times, not Date: the Play session's clock is the simulated one)
+  const from = { ...family.base.from, pinnedAt: statSync(`${source}/SaveInfo.dxs`).mtime.toISOString() };
+  const manifestFile = `${CENSUS}/bases/${familyId}.json`;
+  const undo = new Map(), manifest = existsSync(manifestFile) ? JSON.parse(readFileSync(manifestFile, 'utf8')) : { family: familyId, units: {} };
   const onStep = (step, { c, map }) => {
     if (!step.census) return;
     const store = c.read(c.player(), 'FlagBase');
@@ -490,7 +518,7 @@ async function buildBases(familyId, only = null) {
       for (const [name, value, expiration] of unit.set ?? []) store.setBool(name, value, true, expiration);
       for (const name of unit.clear ?? []) store.deleteFlag(name, 0);
       const flags = flagsOfPlay(c);
-      manifest.units[unit.id] = { map, slot: unit.slot, flags: flags.flags, defaultExpiration: flags.defaultExpiration,
+      manifest.units[unit.id] = { map, slot: unit.slot, from, flags: flags.flags, defaultExpiration: flags.defaultExpiration,
         written: [...(unit.set ?? []).map(([n, v, x]) => `${n}=${v ? 1 : 0}/${x}`), ...(unit.clear ?? []).map(n => `-${n}`)] };
       console.log(`${unit.id}: in ${map}, ${manifest.units[unit.id].written.join(' ') || 'no flag written (the line)'}`);
     } else if (step.census.undo) {
@@ -507,10 +535,11 @@ async function buildBases(familyId, only = null) {
     rmSync(new URL('..', `file://${target}/`).pathname, { recursive: true, force: true });
     mkdirSync(target, { recursive: true });
     for (const file of save.files) writeFileSync(`${target}/${file.name}`, file.bytes);
+    manifest.units[unit.id].pinnedAt = statSync(`${target}/SaveInfo.dxs`).mtime.toISOString();
     console.log(`pinned ${unit.id}: ${target} (${save.files.length} files)`);
   }
   mkdirSync(`${CENSUS}/bases`, { recursive: true });
-  writeFileSync(`${CENSUS}/bases/${familyId}.json`, JSON.stringify(manifest, null, 1));
+  writeFileSync(manifestFile, JSON.stringify(manifest, null, 1));
 }
 
 // ---- the runner ---------------------------------------------------------------------------------------------------------------------------------------------
@@ -520,10 +549,14 @@ function select(arg) {
   const units = arg.split(',').map(id => unitById.get(id) ?? (() => { throw new Error(`no unit or family ${id}`); })());
   return units;
 }
+/** A child node process, its output streamed into `log` (readable while it runs). */
 const node = (args, log) => {
-  const run = spawnSync(process.execPath, ['--max-old-space-size=12288', ...args], { cwd: ROOT, encoding: 'utf8', maxBuffer: 1 << 28, stdio: ['ignore', 'pipe', 'pipe'] });
-  appendFileSync(log, `$ node ${args.join(' ')}\n${run.stdout}${run.stderr}\nexit ${run.status}\n`);
-  return { ok: run.status === 0, out: `${run.stdout}${run.stderr}` };
+  appendFileSync(log, `$ node ${args.join(' ')}\n`);
+  const start = statSync(log).size, fd = openSync(log, 'a');
+  const run = spawnSync(process.execPath, ['--max-old-space-size=12288', ...args], { cwd: ROOT, stdio: ['ignore', fd, fd] });
+  closeSync(fd);
+  appendFileSync(log, `exit ${run.status}\n`);
+  return { ok: run.status === 0, out: readFileSync(log).subarray(start).toString('utf8') };
 };
 const lastError = text => (text.split('\n').reverse().find(line => /Error|error:|step \d+/.test(line)) ?? '').slice(0, 400);
 
@@ -532,6 +565,7 @@ async function play(units, { rebuild = false } = {}) {
   mkdirSync(`${ROOT}/.work/chains/logs`, { recursive: true });
   const summaryFile = `${CENSUS}/play-summary.json`;
   const summary = existsSync(summaryFile) ? JSON.parse(readFileSync(summaryFile, 'utf8')) : {};
+  for (const id of Object.keys(summary)) if (!unitById.has(id)) delete summary[id];   // a unit the table no longer has
   const families = [...new Set(units.map(u => u.family))];
   for (const familyId of families) {
     const members = units.filter(u => u.family === familyId);
@@ -567,6 +601,87 @@ async function play(units, { rebuild = false } = {}) {
   return summary;
 }
 
+/** The conversation history a travel text carries (ConHistory records from the head, each with its owner and events), as owner, event count and a hash of the
+ * speeches: a reading of which branch played, with no game text printed. */
+function histories(text) {
+  const records = new Map();
+  let current = null;
+  for (const line of String(text ?? '').split(/\r?\n/)) {
+    const head = /^Class=(\S+) Name=(\S+)/.exec(line);
+    if (head) { current = { cls: head[1], name: head[2], fields: {} }; records.set(head[2], current); continue; }
+    const field = /^(\w+)=(.*)$/.exec(line);
+    if (current && field) current.fields[field[1]] = field[2];
+  }
+  const ref = value => value?.split(' ').pop();
+  const heads = [...records.values()].filter(r => r.cls === 'ConSys.ConHistory');
+  const pointed = new Set(heads.map(r => ref(r.fields.Next)));
+  const out = [];
+  for (let r = heads.find(h => !pointed.has(h.name)), guard = 0; r && guard < 500; r = records.get(ref(r.fields.Next)), guard++) {
+    const speeches = [];
+    for (let e = records.get(ref(r.fields.firstEvent)), n = 0; e && n < 200; e = records.get(ref(e.fields.Next)), n++) speeches.push(e.fields.Speech ?? '');
+    let h = 0x811c9dc5;
+    for (const ch of speeches.join('\n')) h = Math.imul(h ^ ch.charCodeAt(0), 0x01000193) >>> 0;
+    out.push(`${r.fields.conOwnerName ?? '?'}${r.fields.bInfoLink === 'True' ? ' (InfoLink)' : ''}: ${speeches.length} events #${h.toString(16)}`);
+  }
+  return out.reverse();   // the oldest first
+}
+
+/** Each unit's Play result against its family's line unit (or alone): the flags at each snapshot beyond the ones the unit wrote, the states, the
+ * conversations' event traces and the conversation histories of the last map change. */
+function report(units) {
+  const read = id => { const file = `${CENSUS}/results/${id}.play.json`; return existsSync(file) ? JSON.parse(readFileSync(file, 'utf8')) : null; };
+  const out = {};
+  for (const unit of units) {
+    const r = read(unit.id);
+    if (!r) { out[unit.id] = { run: false }; continue; }
+    const line = unit.side === 'line' ? null : unit.against ? unitById.get(unit.against) : UNITS.find(u => u.family === unit.family && u.side === 'line');
+    const ref = line ? read(line.id) : null;
+    const written = new Set([...(unit.set ?? []).map(([n]) => n.toLowerCase()), ...(unit.clear ?? []).map(n => n.toLowerCase())]);
+    const snaps = {};
+    for (const [label, snap] of Object.entries(r.snaps)) {
+      const other = ref?.snaps?.[label];
+      if (!other) { snaps[label] = `${snap.flags.length} flags`; continue; }
+      const strip = list => list.filter(f => !written.has(f.split('|')[0].toLowerCase()));
+      const a = new Set(strip(snap.flags)), b = new Set(strip(other.flags));
+      const plus = [...a].filter(f => !b.has(f)), minus = [...b].filter(f => !a.has(f));
+      if (plus.length || minus.length) snaps[label] = { onlyUnit: plus, onlyLine: minus };
+    }
+    const last = r.legs.at(-1);
+    const hist = histories(last?.text), refHist = ref ? histories(ref.legs.at(-1)?.text) : null;
+    out[unit.id] = {
+      run: true, flag: unit.flag, side: unit.side, against: line?.id ?? null, snaps, states: r.states ?? {}, refStates: ref?.states ?? null,
+      conversations: (r.conversations ?? []).map(c => `${c.name}: ${c.trace.join(' ')}`),
+      refConversations: ref ? (ref.conversations ?? []).map(c => `${c.name}: ${c.trace.join(' ')}`) : null,
+      history: refHist ? { onlyUnit: hist.filter(h => !refHist.includes(h)), onlyLine: refHist.filter(h => !hist.includes(h)) } : hist,
+      legs: r.legs.map(l => `${l.label}: ${l.from} -> ${l.to}`),
+    };
+  }
+  writeFileSync(`${CENSUS}/play-report.json`, JSON.stringify(out, null, 1));
+  for (const [id, o] of Object.entries(out)) {
+    if (!o.run) { console.log(`${id}: no Play result`); continue; }
+    console.log(`${id}${o.against ? ` (against ${o.against})` : ''}`);
+    for (const [label, d] of Object.entries(o.snaps)) console.log(`  snap ${label}: ${typeof d === 'string' ? d : `only the unit ${JSON.stringify(d.onlyUnit)}; only the line ${JSON.stringify(d.onlyLine)}`}`);
+    for (const [label, s] of Object.entries(o.states)) console.log(`  state ${label}: ${JSON.stringify(s)}${o.refStates?.[label] ? ` (line ${JSON.stringify(o.refStates[label])})` : ''}`);
+    for (const c of o.conversations) console.log(`  conv ${c}${o.refConversations && !o.refConversations.includes(c) ? '   (differs from the line)' : ''}`);
+    if (Array.isArray(o.history)) for (const h of o.history) console.log(`  history ${h}`);
+    else { for (const h of o.history.onlyUnit) console.log(`  history, only the unit: ${h}`); for (const h of o.history.onlyLine) console.log(`  history, only the line: ${h}`); }
+  }
+}
+
+/** The doc's table (docs/stage-6-flag-census.md): one row per flag and reading mission, with the units and what Play did (play-summary.json). */
+function table() {
+  const file = `${CENSUS}/play-summary.json`;
+  const summary = existsSync(file) ? JSON.parse(readFileSync(file, 'utf8')) : {};
+  const md = s => String(s).replace(/\|/g, '\\|');
+  const playOf = id => !summary[id] ? 'not run yet' : summary[id].play ? 'runs' : `stops (${md(summary[id].error ?? '').slice(0, 140)})`;
+  console.log('| Flag (row) | Setters (value, expiration) | The line | Read in | Reader run | Units (side): Play |');
+  console.log('| --- | --- | --- | --- | --- | --- |');
+  for (const f of FLAGS) for (const r of f.reads) {
+    const units = (r.units ?? []).map(id => { const u = unitById.get(id); return `\`${id}\` (${u.side}): ${playOf(id)}`; }).join('<br>');
+    console.log(`| \`${f.flag}\` (6.4.${f.row}.2) | ${md(f.setters)} | ${md(f.line)} | ${r.m} | ${md(r.reader ?? `none: ${r.notRun}`)} | ${units || '-'} |`);
+  }
+}
+
 function list() {
   const pad = (s, n) => String(s).padEnd(n);
   for (const f of FLAGS) {
@@ -586,11 +701,13 @@ if (import.meta.url === `file://${process.argv[1]}`) {
   if (args.includes('--list')) list();
   else if (args.includes('--write')) for (const u of select(option('write'))) console.log(await writeUnit(u));
   else if (args.includes('--bases')) await buildBases(option('bases'), option('only')?.split(','));
+  else if (args.includes('--report')) report(select(option('report')));
+  else if (args.includes('--table')) table();
   else if (args.includes('--play')) {
     if (process.platform === 'darwin' && !process.env.CENSUS_ALLOW_MAC) throw new Error('the census runs Play: not on the 16 GB Mac (the Linux host)');
     const summary = await play(select(option('play')), { rebuild: args.includes('--rebuild') });
     const done = Object.entries(summary);
     console.log(`\n${done.filter(([, s]) => s.play).length} of ${done.length} units run end to end in Play`);
-  } else console.log('usage: --list | --write [unit|family] | --bases <family> [--only a,b] | --play [unit|family|a,b] [--rebuild]');
+  } else console.log('usage: --list | --table | --write [unit|family] | --bases <family> [--only a,b] | --play [unit|family|a,b] [--rebuild] | --report [unit|family]');
   process.exit(0);
 }

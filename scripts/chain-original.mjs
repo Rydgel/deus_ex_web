@@ -184,6 +184,21 @@ export async function runChainInOriginal(chain, { log = console.log, until = nul
       }
       throw new Error(`placeNear ${name}: the player never arrived`);
     },
+    /** `placeNear`, then the right button once the view selects the actor, placed again while it does not (chain-play.mjs frobNear: a wandering owner). */
+    async frobNear(s) {
+      const tries = s.tries ?? 5;
+      for (let attempt = 1; attempt <= tries; attempt++) {
+        await ops.placeNear({ ...s, turnFirst: true });
+        const p = controlled();
+        const row = p ? tool('dump-actor-win', p.name, 'FrobTarget:0x9e8:obj').split('\n').find(line => line.startsWith(`JCDentonMale ${p.name} `)) : null;
+        const target = /FrobTarget=(\S+)/.exec(row ?? '')?.[1] ?? '?';
+        if (target !== s.actor) { note(`frobNear ${s.actor}: placement ${attempt} selects ${target}`); continue; }
+        await type('ParseRightClick', 900); await sleep(600);
+        note(`frobNear ${s.actor}: the right button after ${attempt} placement(s)`);
+        return;
+      }
+      throw new Error(`frobNear ${s.actor}: the view never selected it in ${tries} placements`);
+    },
     async frob(s) {
       // what the view selects, read before the press (DeusExPlayer.FrobTarget, the linked offset chain-offsets.mjs prints): a miss shows in the log
       const p = controlled();

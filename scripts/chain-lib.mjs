@@ -18,6 +18,8 @@
  *   line     { text }                                       one console line, typed as the original's console takes it (an exec function or a cheat)
  *   place    { at: [x, y, z], view: [pitch, yaw], harness, drop }  `ghost`, `set Location`, `walk`, `set ViewRotation`: the player put at the approach (`drop`: above a cylinder the fall enters, the view set first)
  *   frob     {}                                             the right mouse button (ParseRightClick): use, pick up, open
+ *   frobNear { actor, distance, bearing, tries }            placeNear (turnFirst), then the right button once the view selects the actor, placed again while it does
+ *                                                           not: an owner with Wandering orders walks off during the placement (the flag census)
  *   click    {}                                             the left mouse button / Enter (ParseLeftClick|Fire): use the tool in hand, fire
  *   belt     { n }                                          ActivateBelt n
  *   key      { names: ['ENTER', ...] }                      key presses (dxinput names), each press and release
