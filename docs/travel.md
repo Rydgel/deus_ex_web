@@ -155,6 +155,42 @@ The travel text is imported afterwards by `SpawnPlayActor` (native, below); the 
 
 The same order is recovered for the cold login in [Original standalone player login](script-player-login.md); that page covers the case with no travel text.
 
+### Arriving at a portal: where the player is first put, and the first tick's touches
+
+The scripts put the arriving player exactly on the portal's `Teleporter`, and nothing in the placement moves it down; the touches of the arrival are made by the first tick's fall.
+
+1. `GameInfo.Login` spawns the new pawn at `StartSpot.Location` (`Engine/GameInfo.uc:847`, `:887`; `FindPlayerStart(None, InTeam, Portal)`: the teleporter whose `Tag` is the portal). `SpawnActor`'s FindSpot keeps a spot where the cylinder fits, and its CheckEncroachment touch notify sees only the actors the cylinder already overlaps there ([relocation](relocation.md), [composed FarMoveActor](far-move-scene.md)).
+2. `DeusExGameInfo.Login` (no `Loadgame` option): `ResetPlayerToDefaults`, then `SetLocation(StartSpot.Location)` (`DeusExGameInfo.uc:37`, `:57`, `:61`: FarMoveActor to the same spot, the same touch rule) and the start spot's rotation.
+3. `SpawnPlayActor`'s `SetPlayer` dispatches `PlayerPawn.Possess` -> `StartWalk` (`SetPhysics(PHYS_Walking)`, `PlayerPawn.uc:2373..2380`) -> `ClientReStart` -> `GotoState(PlayerReStartState)` (`Pawn.uc:595..614`) -> `PlayerWalking.BeginState`, which sets `PHYS_Falling` unconditionally ("force us to fall when level begins", `PlayerPawn.uc:3740..3743`; `DeusExPlayer`'s `PlayerWalking` has no `BeginState`).
+
+So the first tick starts with a falling player at the teleporter's `Location`, and physFalling's MoveActor makes the touches that the placement did not.
+
+**`10_Paris_Metro#sewer`** (mission 10's leg 2; measured in Play on the Linux host, headless 60 Hz frames, from mission 9's pinned exit save, 2026-10-25). `Teleporter2` (Tag `sewer`) is at (1547.1610, -4239.0752, -272.712982); `PlayerStart1` is not used. `DataLinkTrigger13` (`DL_metrosewer`) is at (1559.7084, -4242.4507, -316.752472), CollisionHeight 1, 13.0 units away horizontally. The player has radius 20, height 43 and MaxStepHeight 25.
+
+| Level time | Player z | What happens |
+| --- | --- | --- |
+| arrival (before tick 1) | -272.712982 | Exactly Teleporter2's Location, `PHYS_Falling`, state `PlayerWalking`, `Touching` empty: \|dz\| = 44.039490 is not below 43 + 1, so neither the spawn nor `SetLocation` touches the trigger. |
+| 0.0167 (tick 1) | -272.844940 | The fall's move enters the trigger's height. `DataLinkTrigger.Touch` -> `StartDataLinkTransmission("DL_metrosewer")` is true (`bStartedViaTouch`, `DataLinkPlay0`, the InfoLink window). |
+| 0.0667 (tick 4) | -274.712280 | Landed (`PHYS_Walking`, Base `LevelInfo0`). This z depends on the fall's tick lengths: here the fourth move passes the surface that a longer extent trace from above finds at -274.27. |
+| 0.0833 (tick 5) | -272.612274 | physWalking's floor rule moves it up `2.1 - distance` from distance 0, and it untouches the trigger. |
+| up to 16.75 | -272.612274 | The full-extent floor probe (MaxStepHeight + 2, flags `0x17`) accepts `DataLinkTrigger13` 0.1335 below. A general actor passes under bit `0x10` without `0x20` ([SingleLineCheck filter](fitting.md#singlelinecheck-filter-contract-before-translation)). Its hit actor differs from Base, so the probe runs `MoveActor(floorDelta)`, but the world floor (-274.3, 1.6877 below) lies inside MoveActor's two-unit extension, so the move is time 0 ([walking](walking.md)). |
+| 16.75 | -272.612274 | `DL_metrosewer` ends and `DL_metrosewer_Played` is set. `DatalinkFinished` -> `Trigger.Touch` -> `bTriggerOnceOnly` -> `SetCollision(False)`. |
+| 16.7667 and after | -272.200012 | The probe now finds the world at 1.6877 (< 1.9) and raises the player 0.412262, to 2.1 above -274.3. It stays there, since 2.1 is in [1.9, 2.4]. `DataLinkPlay0` is destroyed at 18.23 s. |
+
+Play therefore touches `DataLinkTrigger13` on the first tick and plays `DL_metrosewer`. Its -272.6 is the height while the DataLink plays, and -272.2 is the height after. A reading over the first 5 s sees neither the flag nor -272.2.
+
+The original's capture of the same steps (`.work/travel/chain-md10`) agrees. Its engine log loads `InfoPortraits` and `DeusExConAudioMission10` right after the arrival's `InitStateMachine`, which is the DataLink starting. Its three reports read -272.2, and its snapshot holds `DL_metrosewer_Played`. Both match Play after 16.75 s.
+
+The original driver reports no sooner than its arrival poll + 3 s + the travel dump + the 2 s settle + the report's own dump. In the m10 capture, the leg 2 `walk` (06:15:15) to the next typed line (06:15:43) took 28 s, including the fall and the load. Play's chain settles 2 s instead (`chain-play.mjs` travel), so its `g3-metro` snapshot (cheats + 3 s) is read before the DataLink ends. A chain that waits for `DL_metrosewer_Played` reads both programs after it.
+
+**Unverified:**
+- **The original's height while the DataLink plays, and whether its first report came before 16.75 s.** The mechanism is composed from validated parts (the SingleLineCheck filter, physWalking's floor branch, MoveActor's extension), but the composition is not measured in the original. The landing z also depends on the tick lengths.
+- **Why the 60 Hz landing ends 0.41 below the floor the walking probe finds.** This is measured, not traced: the fall's moves do not go through the flags-6 `lineCheck`.
+
+The diagnostic `.work/chains/diag/d10-arrival2.mjs` (the original only) separates the outcomes:
+- If `early-pose` reads z ≠ -272.200012 with the flag unset, and the post-flag poses read -272.200012, that is Play's mechanism.
+- If `early-pose` reads -272.200012 with the flag unset, Play deviates.
+
 ## Native chain
 
 ### `ClientTravel` -> `SetClientTravel`
