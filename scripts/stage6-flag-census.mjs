@@ -65,9 +65,12 @@ async function resolve(list) {
  * aimed at it; turnFirst: ghosted until the last line, so the conversation starts after the placement), started by the right button (`frob`) or by its own
  * radius, played as it comes (`conv`) or, for a first-person one (overheard: no key is the conversation's; the chain's Enter would fire the weapon in hand),
  * waited for by its _Played flag. */
+// the owners with Orders Wandering: the original's walked off during the placement's lines in every one of five placements (c03-FilbenGaveKey-1's first
+// capture), so frobNear holds them (GroundSpeed 0 until the right button)
+const WANDERING = new Set(['HarleyFilben0', 'AlexJacobson0', 'JaimeReyes1']);
 const talk = ({ owner, conv, distance = 60, bearing = 0, frob = false, firstPerson = false, choose, timeout = 240 }) => [
   // started by the right button: frobNear places again until the view selects the owner (a wandering owner walks off during the placement's lines)
-  frob ? { op: 'frobNear', actor: owner, distance, bearing, settle: 0.3, harness: true, note: `the reader ${conv}: ${distance} units from ${owner}, the right button` }
+  frob ? { op: 'frobNear', actor: owner, distance, bearing, settle: 0.3, harness: true, ...(WANDERING.has(owner) ? { hold: true } : {}), note: `the reader ${conv}: ${distance} units from ${owner}, the right button` }
     : { op: 'placeNear', actor: owner, distance, bearing, turnFirst: true, harness: true, note: `the reader ${conv}: ${distance} units from ${owner}` },
   firstPerson ? { op: 'wait', flag: `${conv}_Played`, timeout } : { op: 'conv', name: conv, watch: [owner], timeout, ...(choose ? { choose } : {}) },
   { op: 'wait', seconds: 3 },

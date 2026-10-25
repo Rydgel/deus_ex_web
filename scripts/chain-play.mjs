@@ -198,6 +198,16 @@ export async function runChainInPlay(chain, { assets = null, log = () => {}, unt
      * Wandering orders walks away from the place the view was aimed at during the placement's lines (the flag census's Filben and Alex). */
     async frobNear(step) {
       const tries = step.tries ?? 5;
+      // `hold` (chain-original.mjs frobNear): the owner's class GroundSpeed is 0 from before the placement to the right button, then its own value again
+      let release = null;
+      if (step.hold) {
+        const owner = c.actor(step.actor);
+        if (!owner) throw new Error(`frobNear: no ${step.actor} to hold`);
+        const cls = c.runtime.instance(owner).cls.record.key.split('.').pop(), speed = c.read(owner, 'GroundSpeed');
+        typeLine(c, `set DeusEx.${cls} GroundSpeed 0`); frames(60);
+        release = `set DeusEx.${cls} GroundSpeed ${speed}`;
+        note(`frobNear ${step.actor}: held (${cls} GroundSpeed ${speed})`);
+      }
       for (let attempt = 1; attempt <= tries; attempt++) {
         // a list of bearings is tried in turn (chain-original.mjs frobNear: the original's owner can stand elsewhere, beside a wall)
         const bearing = Array.isArray(step.bearing) ? step.bearing[(attempt - 1) % step.bearing.length] : step.bearing;
@@ -205,6 +215,7 @@ export async function runChainInPlay(chain, { assets = null, log = () => {}, unt
         if (c.game.interaction.frobTarget?.name !== step.actor) continue;
         stamp([step.actor]);
         typeLine(c, 'ParseRightClick'); frames(step.frobSettle ?? 30);
+        if (release) typeLine(c, release);
         note(`frobNear ${step.actor}: the right button after ${attempt} placement(s)`);
         return;
       }

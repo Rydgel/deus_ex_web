@@ -187,6 +187,17 @@ export async function runChainInOriginal(chain, { log = console.log, until = nul
     /** `placeNear`, then the right button once the view selects the actor, placed again while it does not (chain-play.mjs frobNear: a wandering owner). */
     async frobNear(s) {
       const tries = s.tries ?? 5;
+      // `hold`: a wandering owner walks out of the view while the placement's lines are typed (about 1.5 s here, a few frames in Play): its class's
+      // GroundSpeed is 0 from before the placement to the right button, then the owner's own value again (Pawn.GroundSpeed +0x378, chain-offsets.mjs)
+      let release = null;
+      if (s.hold) {
+        const row = tool('dump-actor-win', s.actor, 'GroundSpeed:0x378:f').split('\n').find(line => new RegExp(`^\\S+ ${s.actor} `).test(line) && !line.startsWith('Class '));
+        const cls = /^(\S+) /.exec(row ?? '')?.[1], speed = Number(/GroundSpeed=(\S+)/.exec(row ?? '')?.[1]);
+        if (!cls || !Number.isFinite(speed)) throw new Error(`frobNear ${s.actor}: no GroundSpeed to hold`);
+        await type(`set DeusEx.${cls} GroundSpeed 0`, 500); await sleep(1000);
+        release = `set DeusEx.${cls} GroundSpeed ${speed}`;
+        note(`frobNear ${s.actor}: held (${cls} GroundSpeed ${speed})`);
+      }
       for (let attempt = 1; attempt <= tries; attempt++) {
         // a list of bearings is tried in turn: the original's owner can stand elsewhere than Play's, where one side of him is a wall
         const bearing = Array.isArray(s.bearing) ? s.bearing[(attempt - 1) % s.bearing.length] : s.bearing;
@@ -197,6 +208,7 @@ export async function runChainInOriginal(chain, { log = console.log, until = nul
         const target = /FrobTarget=(\S+)/.exec(row ?? '')?.[1] ?? '?';
         if (target !== s.actor) { note(`frobNear ${s.actor}: placement ${attempt} selects ${target}`); continue; }
         await type('ParseRightClick', 900); await sleep(600);
+        if (release) await type(release, 500);
         note(`frobNear ${s.actor}: the right button after ${attempt} placement(s)`);
         return;
       }
