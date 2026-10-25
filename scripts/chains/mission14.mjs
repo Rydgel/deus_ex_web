@@ -122,7 +122,9 @@ export default {
     { op: 'travel', to: '14_Oceanlab_silo', label: 'leg5', timeout: 240 },
     { op: 'line', text: 'set DeusEx.JCDentonMale bCheatsEnabled True', harness: true },
     { op: 'line', text: 'set DeusEx.JCDentonMale ReducedDamageType All', harness: true },
-    { op: 'wait', seconds: 3 },
+    // DL_FrontGate (DataLinkTrigger0 at the arrival): its _Played flag is set at the DataLink's end; the first capture's original read the snapshot after it,
+    // Play's 3 s in (mission 10's DL_metrosewer, docs/travel.md "Arriving at a portal")
+    { op: 'wait', flag: 'DL_FrontGate_Played', timeout: 120 },
     { op: 'snap', label: 'm14-10-silo' },
 
     // Howard Strong (Health 100, Standing at -52,-6768,-320 at the silo's bottom): Mission14.Timer brings the helicopter in and plays DL_Dead once none is left
@@ -141,6 +143,8 @@ export default {
     { op: 'line', text: 'set DeusEx.JCDentonMale bCheatsEnabled True', harness: true },
     { op: 'line', text: 'set DeusEx.JCDentonMale ReducedDamageType All', harness: true },
     { op: 'wait', seconds: 15 },
+    // DL_JockDeathTongComment, started at the arrival: its flag at its end (the first capture's original had it by this snapshot, Play not yet)
+    { op: 'wait', flag: 'DL_JockDeathTongComment_Played', timeout: 120 },
     { op: 'snap', label: 'm14-12-area51' },
     // mission 15's chain starts here, in both programs (docs/stage-6-chains.md "Starts")
     { op: 'save', index: 114, label: 'exit' },

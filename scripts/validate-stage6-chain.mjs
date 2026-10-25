@@ -49,7 +49,8 @@ const play = await runChainInPlay(chain, { log: line => { if (process.argv.inclu
 if (option('json', null)) await writeFile(option('json'), JSON.stringify({ ...play, session: undefined, saveDirectory: undefined }, null, 1));
 
 /** A map's name as the comparison reads it: the filed level's URL (..\\Save\\Current\\<map>.dxs) and the .dx extension are the same map. */
-const mapName = name => String(name ?? '').replace(/^.*[\\/]/, '').replace(/\.dxs?$/i, '').toLowerCase();
+// the original's URL.Map can carry a trailing blank or control character after the extension (mission 14's first capture: "14_OceanLab_Lab.dx ")
+const mapName = name => String(name ?? '').replace(/[\s\u0000-\u001f]+$/, '').replace(/^.*[\\/]/, '').replace(/\.dxs?$/i, '').toLowerCase();
 const failures = [];
 const check = (ok, message) => { if (!ok) failures.push(message); return ok; };
 console.log(`chain ${mission}: ${chain.steps.length} steps; Play ${play.legs.length} legs, ${Object.keys(play.snaps).length} snapshots; the original ${original.legs.length} legs, ${Object.keys(original.snaps).length} snapshots`);
