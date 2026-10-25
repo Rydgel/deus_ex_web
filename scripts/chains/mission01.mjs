@@ -75,7 +75,7 @@ export default {
     // Dock_boatpath and then sends the player to 02_NYC_BatteryPark
     { op: 'place', at: [-4780, 10139, -250], view: [0, 32768], harness: true, note: 'on the dock at the boat\'s cylinder (NYPoliceBoat0 at -5122,10139,-270), facing it' },
     { op: 'frob', target: 'NYPoliceBoat0' },
-    { op: 'conv', name: 'GotoM02', timeout: 60 },
+    { op: 'conv', name: 'GotoM02', timeout: 60, first: true },
     { op: 'travel', to: '02_NYC_BatteryPark', label: 'exit', timeout: 240 },
     { op: 'watch', actors: ['AnnaNavarre0'] },
     // AnnaDock (Anna's radius conversation, which she walks to the player for) and her run to the castle: set by the map's own events, in either program's time

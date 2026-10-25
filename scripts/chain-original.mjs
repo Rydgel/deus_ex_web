@@ -322,7 +322,9 @@ export async function runChainInOriginal(chain, { log = console.log, until = nul
           // a conversation that ended without the named one's _Played flag was another one (an awake owner's ambient bark first, mission 12's
           // Savage_assistant_FBarks): the step waits on for its own (chain-play.mjs conv lets it run the same way)
           // (a conversation the step picked a choice in is its own: a branch that fires a map exit ends it before its _Played flag, mission 2's JockExit)
-          if (!s.name || trace.some(t => t.startsWith('pick#'))) break;
+          // (`first`: the step's own frob starts its conversation and nothing else can speak first: mission 1's GotoM02, whose end starts the boat's ride,
+          // sets no _Played flag and changes the level minutes later)
+          if (!s.name || s.first || trace.some(t => t.startsWith('pick#'))) break;
           // its flag is read again for up to 90 s: a conversation whose end fires a map exit (mission 6's M06JockExit) has the flags unreadable while the
           // level changes, and its _Played is in the next level's table once the player is controlled again
           // A conversation whose end changes the level is the step's own as well: its map exit can cut it short before ConPlayBase.SetPlayedFlag
