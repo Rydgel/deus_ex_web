@@ -49,20 +49,10 @@ export default {
     { op: 'wait', flag: 'DL_override_activated_Played', timeout: 120 },
     { op: 'snap', label: 'm12-2-power' },
 
-    // the four enemy bots, each from 300 units east of its paused place (stand --aim, a clear line), the GEP gun until the Timer's InfoLink of the new count has played
-    { op: 'belt', n: 2, note: 'the GEP gun mission 9 found (belt 2 on the chain\'s line: the key ring 0, the pistol 1)' },
-    { op: 'place', at: [-2000, 3489, -1999], view: [-1067, 32768], harness: true, note: '300 units east of SecurityBot0 paused at (-2300,3489,-1991), aimed at it' },
-    { op: 'click', until: { flag: 'DL_bots_left_3_Played' }, gap: 2.5, max: 12, watch: ['SecurityBot0'] },
-    { op: 'place', at: [676, 3436, -1999], view: [-1067, 32768], harness: true, note: '300 units east of SecurityBot2 paused at (376,3436,-1991), aimed at it' },
-    { op: 'click', until: { flag: 'DL_bots_left_2_Played' }, gap: 2.5, max: 12, watch: ['SecurityBot2'] },
-    { op: 'place', at: [486, 5679, -2149], view: [-86, 32768], harness: true, note: '300 units east of MilitaryBot4 paused at (186,5679,-2112), aimed at it' },
-    { op: 'click', until: { flag: 'DL_bots_left_1_Played' }, gap: 2.5, max: 12, watch: ['MilitaryBot4'] },
-    { op: 'place', at: [-974, 6166, -2142], view: [-306, 32768], harness: true, note: '300 units east of MilitaryBot5 paused at (-1274,6166,-2112), aimed at it' },
-    { op: 'click', until: { flag: 'M12BotsDestroyed' }, gap: 2.5, max: 12, watch: ['MilitaryBot5'] },
-    { op: 'wait', flag: 'DL_command_bots_destroyed_Played', timeout: 120 },
-    { op: 'wait', seconds: 3 },
-    { op: 'state', label: 'comhqdoor', actor: 'DeusExMover5', fields: ['KeyNum', 'bLocked'] },
-    { op: 'snap', label: 'm12-3-bots' },
+    // the four enemy bots are a fight, which the rows leave out ("the walk and the fights between the steps are not part of the row"): their InfoLink
+    // DL_command_bots_destroyed only opens comhqdoor (the comm center's door, which the placement below passes) and sets M12BotsDestroyed, which no later step
+    // of the chain needs. Measured: the original's diagnostic run (2026-10-25) found the third bot elsewhere than Play's paused place (the bots' patrols depend on
+    // what each program draws and when), so a placed fight does not compare.
 
     // the comm center: Tony Mares (radius 100, WaitingFor) completes GoToCommunicationsCenter and adds FindGarySavage
     { op: 'place', at: [-1849, 5677, -2126], view: [-6443, 32786], harness: true, turnFirst: true, note: '60 units east of TonyMares (ScientistMale0 at -1909,5677,-2130), facing him' },
