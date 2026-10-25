@@ -77,13 +77,15 @@ export default {
     { op: 'snap', label: 'f5-anna' },
 
     // Alex: the NanoKey of levelone, then the door
-    // Alex is not where the cold map's stand puts him in the original's run (its first capture's frob selected nothing): the level held, the player placed
-    // by Alex where he is in each program, the level released, the right button
-    { op: 'line', text: 'set LevelInfo bPlayersOnly True', harness: true },
+    // Alex wanders (Orders Wandering: 100 units in the 2 s after the level is released, measured in Play), and the original types the release and the
+    // ParseRightClick lines over about 1.5 s (its capture's frob selected nothing): his GroundSpeed is set to 0 for the conversation (a labelled harness
+    // line, the class's value as the console's SET writes it), so he stands where he is in each program, and set back to the class's 200 after it
+    { op: 'line', text: 'set DeusEx.AlexJacobson GroundSpeed 0', harness: true },
+    { op: 'wait', seconds: 2 },
     { op: 'placeNear', actor: 'AlexJacobson0', distance: 60, bearing: 0, harness: true, turnFirst: true, note: '60 units east of Alex Jacobson where he stands, aimed at him' },
-    { op: 'line', text: 'set LevelInfo bPlayersOnly False', harness: true, settle: 1 },
     { op: 'frob', target: 'AlexJacobson0' },
     { op: 'conv', name: 'M05MeetAlexJacobson', watch: ['AlexJacobson0'], timeout: 180 },
+    { op: 'line', text: 'set DeusEx.AlexJacobson GroundSpeed 200', harness: true },
     { op: 'wait', seconds: 5 },
     { op: 'snap', label: 'f6-alex' },
     // the key ring in hand (belt 0) used on the door with the left button unlocks it (DeusExMover.Frob with a NanoKeyRing holding KeyIDNeeded toggles bLocked),
