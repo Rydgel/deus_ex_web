@@ -239,15 +239,13 @@ whose soundID differs is a difference; only two different speeches of one random
 * **One unit is compared with the original so far** (`c03-hq-line`: PASS on its observable, above). Every unit runs in Play (63 of 66;
   the 3 others are the blocked family); each needs its Wine capture (`chain-original.mjs --file`, then `validate-flag-census.mjs`) before any row 6.4.NN.2
   moves.
-* **Bases saved in a loaded level send the original's next travel to `Index.dx` (2026-10-26, open).** A base made in the level its slot was loaded into keeps
-  Play's load options in that level's stored URL (`load`, `\tloadonly`, `\tloadgame`: `travel-save.mjs` writes the arrival's URL), where the original's
-  `LoadMap` keeps the URL stored in the loaded file for any option that starts with `load` (docs/travel.md, the restart's `Index.dx`), so its saves stay
-  clean. Loading such a base, the original's next relative travel arrives with `Index.dx` as the level's `URL.Map` (`[URL] Map=Index.dx`, the default):
-  measured on the Mac and on the Linux host for `c04-island-hq-line`, against `04_NYC_UNATCOHQ` through the same teleporter from the chain line's
-  travel-made save. Ten Mac captures show it (missions 4, 6, 8, 9); their observables were equal, but a mission script reading `GetURLMap()` would run its
-  wrong branch in the original. *2026-10-25: Play keeps the loaded file's URL on a `load` option and carries `loadgame` through the relative FURL as the
-  original does (docs/travel.md "FURL and the level's URL"; the `\t` is the length byte 9 of `loadonly\0`, not a character of the option); a base made in a
-  loaded level now holds the file's URL. Still to do: the bases are made again, and those units are captured again.*
+* **Bases saved in a loaded level send the original's next travel to `Index.dx` (2026-10-26, resolved).** The bases made by loading a chain slot store the
+  load's options in that level's URL (`load`, `loadonly`, `loadgame`; Play kept the arrival's URL). The original's `LoadMap` keeps the URL stored in the
+  file for any option that starts with `load` (Engine.dll `0x1038ce8b..0x1038ceed`, a prefix compare), a relative URL copies the base's options, and a bare
+  `loadgame` is neither a loaded game nor `loadonly`: its next travel files the level, loads the next map fresh and keeps that map's stored URL
+  (`Index.dx`), which both hosts measured for `c04-island-hq-line`. Play now follows the same rule (docs/travel.md "FURL and the level's URL";
+  `validate-level-url.mjs` part C replays this base), so the bases are valid inputs as they are and their captures stand; Play's own saves after a load now
+  keep the file's URL, as the original's do.
 * **Mid-mission bases.** Most bases are Play saves taken after a prefix, with the mission's other levels filed in the save; the chains so far showed the
   original loading Play's saves only at a mission's arrival. Unverified until the first capture.
 * **Only flags are written.** A setter's goals, notes, items, credits and skill points stay as the line has them: a unit is the reader under the flag, not a
