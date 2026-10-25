@@ -217,10 +217,17 @@ export async function runChainInOriginal(chain, { log = console.log, until = nul
       throw new Error(`frobNear ${s.actor}: the view never selected it in ${tries} placements`);
     },
     async frob(s) {
-      // what the view selects, read before the press (DeusExPlayer.FrobTarget, the linked offset chain-offsets.mjs prints): a miss shows in the log
-      const p = controlled();
-      const row = p ? tool('dump-actor-win', p.name, 'FrobTarget:0x9e8:obj').split('\n').find(line => line.startsWith(`JCDentonMale ${p.name} `)) : null;
-      const target = /FrobTarget=(\S+)/.exec(row ?? '')?.[1] ?? '?';
+      // what the view selects, read before the press (DeusExPlayer.FrobTarget, the linked offset chain-offsets.mjs prints): a miss shows in the log.
+      // A named target not selected yet is read again for up to 4 s (the placement's last line can land between two of the player's highlight updates:
+      // mission 15's Keypad5 read None right after its placement, where Keypad0 and Keypad1 had been selected the same way)
+      const read = () => {
+        const p = controlled();
+        const row = p ? tool('dump-actor-win', p.name, 'FrobTarget:0x9e8:obj').split('\n').find(line => line.startsWith(`JCDentonMale ${p.name} `)) : null;
+        return /FrobTarget=(\S+)/.exec(row ?? '')?.[1] ?? '?';
+      };
+      const selects = name => s.target && name.toLowerCase().startsWith(s.target.toLowerCase());
+      let target = read();
+      for (let i = 0; i < 4 && s.target && !selects(target); i++) { await sleep(1000); target = read(); }
       await type('ParseRightClick', 900); await sleep(600);
       note(`frob ${target}${s.target && !target.toLowerCase().startsWith(s.target.toLowerCase()) ? ` (the chain names ${s.target})` : ''}`);
     },
