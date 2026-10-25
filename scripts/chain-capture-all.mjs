@@ -2,7 +2,7 @@
  * takes the Wine lock), each followed by Play's run against it (scripts/validate-stage6-chain.mjs). A mission whose capture is newer than its chain file and its
  * start save is not captured again, so a batch that stops (the Linux host drops off the network for minutes) resumes where it was.
  *
- *   node scripts/chain-capture-all.mjs [--missions 02,03] [--force] [--compare-only]
+ *   node scripts/chain-capture-all.mjs [--missions 02,03 | --census [unit prefix]] [--force] [--compare-only]
  *
  * Each mission's output goes to .work/chains/logs/capture-m<NN>.log and validate-m<NN>.log; the summary (also .work/chains/logs/capture-all.txt) lists each
  * mission's capture and comparison. Over ssh the game needs the session's display: DISPLAY, WAYLAND_DISPLAY and XDG_RUNTIME_DIR default to the desktop's. */
@@ -12,7 +12,13 @@ import { loadChain, captureDirectory, slotDirectory } from './chain-lib.mjs';
 
 const ROOT = new URL('..', import.meta.url).pathname;
 const option = (name, fallback) => { const i = process.argv.indexOf(`--${name}`); return i < 0 ? fallback : process.argv[i + 1]; };
-const missions = option('missions', null)?.split(',')
+// --census [family-or-unit prefix]: the carried-flag census's units (.work/chains/census/<unit>.mjs, scripts/stage6-flag-census.mjs) instead of the missions
+const census = process.argv.includes('--census');
+const censusDir = `${ROOT}.work/chains/census/`;
+const censusPrefix = census ? (option('census', '') ?? '') : '';
+const missions = census
+  ? readdirSync(censusDir).filter(name => name.endsWith('.mjs') && (!censusPrefix || censusPrefix.startsWith('--') || name.startsWith(censusPrefix))).map(name => `file:${censusDir}${name}`).sort()
+  : option('missions', null)?.split(',')
   ?? readdirSync(`${ROOT}scripts/chains`).map(name => /^mission(\d\d)\.mjs$/.exec(name)?.[1]).filter(Boolean).filter(id => id !== '00' && id !== '01').sort();
 const force = process.argv.includes('--force'), compareOnly = process.argv.includes('--compare-only');
 const logs = `${ROOT}.work/chains/logs/`;
@@ -31,18 +37,20 @@ const run = (args, log, minutes) => {
 };
 
 const summary = [];
-for (const mission of missions) {
-  const chain = await loadChain(mission);
+for (const entry of missions) {
+  const file = entry.startsWith('file:') ? entry.slice(5) : null;
+  const chain = await loadChain(file ? null : entry, file);
+  const mission = chain.mission, args = file ? ['--file', file] : ['--mission', mission];
   const start = chain.steps.find(step => step.op === 'start');
   const result = `${captureDirectory(mission)}result.json`;
-  const inputs = Math.max(mtime(`${ROOT}scripts/chains/mission${mission}.mjs`), start?.kind === 'slot' ? newest(slotDirectory(start)) : 0);
+  const inputs = Math.max(mtime(file ?? `${ROOT}scripts/chains/mission${mission}.mjs`), start?.kind === 'slot' ? newest(slotDirectory(start)) : 0);
   let captured = 'current';
   if (!compareOnly && (force || mtime(result) < inputs)) {
-    const status = run(['scripts/chain-original.mjs', '--mission', mission], `${logs}capture-m${mission}.log`, 120);
+    const status = run(['scripts/chain-original.mjs', ...args], `${logs}capture-m${mission}.log`, 120);
     captured = status === 0 && mtime(result) >= inputs ? 'captured' : `capture failed (${status})`;
   }
-  const compared = existsSync(result) ? (run(['scripts/validate-stage6-chain.mjs', '--mission', mission], `${logs}validate-m${mission}.log`, 60) === 0 ? 'PASS' : 'FAIL') : 'no capture';
+  const compared = existsSync(result) ? (run(['scripts/validate-stage6-chain.mjs', ...args], `${logs}validate-m${mission}.log`, 60) === 0 ? 'PASS' : 'FAIL') : 'no capture';
   summary.push(`m${mission}: ${captured}, ${compared}`);
   console.log(summary.at(-1));
-  writeFileSync(`${logs}capture-all.txt`, `${summary.join('\n')}\n`);
+  writeFileSync(`${logs}${census ? 'capture-census.txt' : 'capture-all.txt'}`, `${summary.join('\n')}\n`);
 }
