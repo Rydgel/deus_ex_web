@@ -23,8 +23,10 @@ const env = MAC
   : { ...process.env, WINEPREFIX: process.env.WINEPREFIX ?? `${process.env.HOME}/.wine-deusex`, DX_WINE: process.env.DX_WINE ?? '/usr/bin/wine', DX_DESKTOP: process.env.DX_DESKTOP ?? '1400x860' };
 env.DX_GAME ??= process.env.DX_GAME ?? `${env.WINEPREFIX}/drive_c/Deus Ex GOTY Edition`;
 const clean = text => String(text).split('\n').filter(line => !/MESA|pci id/.test(line)).join('\n').replace(/\r/g, '');
+// the dump tools print one byte per character (dump-travel-win.c print_fstring: Latin-1, the speeches' é of mission 10's "Champs-Elysées"; names through
+// WideCharToMultiByte(CP_ACP)): read as UTF-8, a byte above 0x7f became U+FFFD
 const tool = (name, ...args) => {
-  try { return clean(execFileSync(env.DX_WINE, [`ad/build/${name}.exe`, ...args], { env, cwd: ROOT, encoding: 'utf8', timeout: MAC ? 90000 : 30000, stdio: ['ignore', 'pipe', 'ignore'], maxBuffer: 1 << 27 })); }
+  try { return clean(execFileSync(env.DX_WINE, [`ad/build/${name}.exe`, ...args], { env, cwd: ROOT, encoding: 'latin1', timeout: MAC ? 90000 : 30000, stdio: ['ignore', 'pipe', 'ignore'], maxBuffer: 1 << 27 })); }
   catch (error) { return ''; }
 };
 const argv = process.argv.slice(2);
