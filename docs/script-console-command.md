@@ -137,11 +137,13 @@ then the same text into the class defaults and `SaveConfig(CPF_Config)`. For an 
 
 Play (`scriptClassSet` in `script-console-command.mjs`) imports the value into every live actor of the player's level that IsA the class,
 for int (`UIntProperty::ImportText`, appAtoi only when the text starts with `-` or a digit), float, bool, name, and the Rotator and Vector
-structs over int/float members (`importNumericStruct`, the member loop of `UStructProperty::ImportText`). Not modelled, and said so: the
-import into the class defaults and the `SaveConfig` (a later instance made from the defaults, such as the Player start's second Login,
-does not carry the value), objects that are not live actors of that level, and every other property kind (they throw
+structs over int/float members (`importNumericStruct`, the member loop of `UStructProperty::ImportText`), then imports the same text into
+the named class's own defaults (a subclass keeps its copy), so an instance made later from the defaults carries it (a `summon`, the Player
+start's second Login). The defaults outlive the level as the original's class objects do: the travel request carries them into the next
+level's runtime ([class defaults across a travel](travel.md#class-defaults-across-a-travel)). Not modelled, and said so: the `SaveConfig`,
+objects that are not live actors of that level (a class with no live actor there is not found), and every other property kind (they throw
 `UnsupportedConsoleCommandError`). `validate-console-command` covers a rotator, a partial rotator, a bool through a superclass name, an
-unknown property and an unlinked kind.
+unknown property and an unlinked kind; `validate-class-default-travel` the defaults after a travel and a loaded game.
 
 ### FLUSH
 

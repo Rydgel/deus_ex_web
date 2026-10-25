@@ -6,12 +6,16 @@ import {createScriptLoadGraph} from './script-load-graph.mjs';
 import {loadConfigCache} from './config-cache.mjs';
 
 export class ScriptClassLoader {
+  /** `carriedDefaults`: the class defaults a travel carried from the level left (Map class key -> Map field key -> [[index, value]]:
+   * ScriptRuntime.classDefaultsForTravel); each is written into its class's Defaults as the class is serialized (applyCarriedDefaults). */
   constructor({assets, objects, resources, captureEvents = false, meshLoadServices = null,
-    resourceServices = null, lifecycle = {}}) {
+    resourceServices = null, lifecycle = {}, carriedDefaults = null}) {
     this.assets = assets;
     this.objects = objects;
     this.resources = resources;
-    this.graph = createScriptLoadGraph({captureEvents, meshLoadServices, resourceServices, lifecycle});
+    this.carriedDefaults = carriedDefaults;
+    this.graph = createScriptLoadGraph({captureEvents, meshLoadServices, resourceServices, lifecycle,
+      classSerialized: carriedDefaults?.size ? record => this.applyCarriedDefaults(record) : null});
     this.identities = new WeakMap();
     this.nativeRecords = new WeakMap();
     this.linking = new Set();
@@ -238,9 +242,33 @@ export class ScriptClassLoader {
   /** Class-default writes must update the native prefix copied by a class
    * loaded later. Existing instances retain the VM's existing snapshots. */
   writeDefault(cls, field, values) {
+    this.writeDefaultCells(cls.loadRecord.defaults.data, field.loadRecord, values);
+  }
+
+  /** The original process keeps a class and its Defaults for its whole life, so a default written in one level (a console SET:
+   * UObject::GlobalSetProperty's ImportText into Class->Defaults, 0x101524b1..0x101524ca; a script's `Default.X = ...`) is the
+   * default the next level's exports and spawns are built from. Play builds a runtime per level and serializes each class again;
+   * the values the travel carried (docs/travel.md "Class defaults across a travel") are written here, into the Defaults block the
+   * class's UClass::Serialize just built, before a subclass copies it (InitClassDefaultObject) or an object is constructed from it. */
+  applyCarriedDefaults(record) {
+    const {slotOf, superOf, nameText, propertyKindOf, fullName} = this.graph;
+    const fields = this.carriedDefaults.get(fullName(record).toLowerCase());
+    if (!fields) return;
+    for (const [fieldKey, values] of fields) {
+      const dot = fieldKey.lastIndexOf('.'), owner = fieldKey.slice(0, dot), name = fieldKey.slice(dot + 1);
+      let property = null;
+      for (let c = record; c && !property; c = superOf(c)) {
+        if (fullName(c).toLowerCase() !== owner) continue;
+        for (let child = slotOf(c, 0x38); child && !property; child = slotOf(child, 0x2c))
+          if (propertyKindOf(child)?.endsWith('Property') && nameText(slotOf(child, 0x20)).toLowerCase() === name) property = child;
+      }
+      if (!property) throw new Error(`Carried class default ${fieldKey} is not a property of ${fullName(record)}`);
+      this.writeDefaultCells(record.defaults.data, property, values);
+    }
+  }
+
+  writeDefaultCells(data, property, values) {
     const {slotOf, propertyKindOf} = this.graph;
-    const property = field.loadRecord;
-    const data = cls.loadRecord.defaults.data;
     for (const [index, value] of values) {
       const offset = slotOf(property, 0x48) + slotOf(property, 0x38) * index;
       if (propertyKindOf(property) === 'BoolProperty') {

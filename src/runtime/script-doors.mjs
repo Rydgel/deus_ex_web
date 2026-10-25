@@ -517,7 +517,10 @@ export async function createScriptDoors({
   // native lines the travel code adds ("Log: Browse: ..."), in the order they happen.
   const engineLog=[];
   const logLine=(tag,text)=>{engineLog.push(`${tag}: ${text}`);if(engineLog.length>8192)engineLog.splice(0,4096);};
+  // The class defaults the process kept from the level the travel left (travel.mjs `classDefaults`; docs/travel.md "Class defaults across
+  // a travel"): every class this level serializes starts from them, before LoadMap constructs the map's exports and Login spawns the player.
   const runtime = new ScriptRuntime(assets, { native: nativeCall, rng, levelFor: () => level, nativeClassLoading: true,
+    classDefaults: travel?.arrival?.classDefaults ?? null,
     conversationObjects:()=>level.actors.filter(Boolean),boundaryNatives: [264, 265],
     logDevice:event=>{scriptLog.push(event);if(scriptLog.length>512)scriptLog.shift();logLine(event.tag,event.text);} });
   // LoadMap startup (Mover.BeginPlay's Move/SetRotation) and Login already

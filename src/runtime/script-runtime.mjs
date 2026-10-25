@@ -380,15 +380,24 @@ const SOUND_LEVEL_FIELDS=new Set(['XLevel','Level','Actors','PawnList','nextPawn
   'DemoRecDriver','Model','Engine','Client','Viewports','ServerConnection','Actor']);
 
 export class ScriptRuntime {
-  constructor(assets,{native,warning,levelFor,actorLifecycle,rng,nameServices,conversationObjects,conversationLifecycle,windowLifecycle,logDevice,relocation,nativeClassLoading=false,boundaryNatives=[],boundaryFunctions=[]}={}) {
+  constructor(assets,{native,warning,levelFor,actorLifecycle,rng,nameServices,conversationObjects,conversationLifecycle,windowLifecycle,logDevice,relocation,nativeClassLoading=false,boundaryNatives=[],boundaryFunctions=[],classDefaults=null}={}) {
     this.instanceKey=Symbol('ScriptRuntime instance');this.classIsACache=new WeakMap();this.arena=new ObjectArena();
+    // The class defaults the original process holds from the levels before this one (a travel's `classDefaults`: classDefaultsForTravel),
+    // class key -> field key -> [[index, value]], applied as each class is serialized (script-class-loader.mjs applyCarriedDefaults); and the
+    // (class, field) pairs whose default this level wrote (classDefaultReference), which the next travel carries.
+    this.carriedDefaults=new Map();
+    for(const {cls,field,values} of classDefaults??[]){
+      if(!this.carriedDefaults.has(cls))this.carriedDefaults.set(cls,new Map());
+      this.carriedDefaults.get(cls).set(field,values);
+    }
+    this.classDefaultWrites=new Map();
     this.lastLinkedReceiver=null;this.lastLinkedInstance=undefined;
     this.nameSpelling=assets?.nameSpelling??null;this.objects=new ScriptObjects(assets);this.classes=new Map();this.functions=new Map();
     // GLazyLoad for a client launch (docs/script-font-load.md). The mesh
     // archive keeps Play's separately documented deferred policy below.
     this.lazyLoad=CLIENT_LAZY_LOAD;this.loadLifecycle=[];
     this.classLoader=nativeClassLoading?new ScriptClassLoader({assets,objects:this.objects,
-      resources:()=>this.resourceRegistry(),
+      resources:()=>this.resourceRegistry(),carriedDefaults:this.carriedDefaults,
       // Retain Play's explicit deferred mesh policy on the shared archive.
       meshLoadServices:{getLazyLoad:()=>1},
       // Texture/Palette/Sound/Font constructors and serializers. The clock is
@@ -3211,10 +3220,51 @@ export class ScriptRuntime {
     return propertyReference(field,()=>this.defaultValue(cls,field),value=>{
       const values=field.metadata.arrayDim>1
         ?new Map(value.map((item,index)=>[index,item])):new Map([[0,value]]);
+      this.noteClassDefaultWrite(cls,field);
       if(cls.loadRecord)this.classLoader.writeDefault(cls,field,values);
       cls.defaults.set(field.key,values);
       classDefaultsChanged();
     });
+  }
+  /** A write to `cls`'s default of `field` (classDefaultReference: a console SET's GlobalSetProperty, a script's `Default.X = ...`).
+   * The pair travels (classDefaultsForTravel). A subclass already linked keeps its own copy of the old value, as it does here; the next
+   * level serializes it again from its super's carried Defaults, so its present value travels with it. */
+  noteClassDefaultWrite(cls,field) {
+    const note=c=>{let fields=this.classDefaultWrites.get(c);if(!fields)this.classDefaultWrites.set(c,fields=new Set());fields.add(field);};
+    note(cls);
+    for(const linked of this.linkedClasses){
+      if(linked===cls||!linked.propertyLink?.includes(field))continue;
+      for(let c=linked.base;c;c=c.base)if(c===cls){note(linked);break;}
+    }
+  }
+  /** The class defaults the original process would hold into the next level (docs/travel.md "Class defaults across a travel"): the ones
+   * this level was given, read again where their class is linked here, and every default this level wrote, as
+   * [{cls: class key, field: field key, values: [[index, value]]}] of plain values (the request crosses the worker boundary). */
+  classDefaultsForTravel() {
+    const entries=new Map(),keyOf=(cls,field)=>`${cls} ${field}`;
+    const plain=(value,where)=>{
+      if(value===null||['number','boolean','string'].includes(typeof value))return value;
+      if(Array.isArray(value))return value.map(item=>plain(item,where));
+      const proto=typeof value==='object'?Object.getPrototypeOf(value):undefined;
+      if((proto===Object.prototype||proto===null)&&!('kind' in value))return Object.fromEntries(Object.entries(value).map(([k,v])=>[k,plain(v,where)]));
+      throw new Error(`The class default ${where} holds an object reference: carrying it to the next level is not implemented`);
+    };
+    const current=(cls,field)=>{
+      const value=this.defaultValue(cls,field),where=`${cls.record.key} ${field.key}`;
+      return {cls:cls.record.key,field:field.key,values:field.metadata.arrayDim>1
+        ?value.map((item,index)=>[index,plain(item,where)]):[[0,plain(value,where)]]};
+    };
+    for(const [cls,fields] of this.carriedDefaults)for(const [field,values] of fields)entries.set(keyOf(cls,field),{cls,field,values});
+    for(const cls of this.linkedClasses){
+      const carried=this.carriedDefaults.get(cls.record.key);
+      for(const key of carried?.keys()??[]){
+        const field=cls.propertyLink.find(f=>f.key===key);
+        if(!field)throw new Error(`Carried class default ${key} is not linked to ${cls.record.key}`);
+        entries.set(keyOf(cls.record.key,key),current(cls,field));
+      }
+    }
+    for(const [cls,fields] of this.classDefaultWrites)for(const field of fields)entries.set(keyOf(cls.record.key,field.key),current(cls,field));
+    return [...entries.values()];
   }
   structReference(ref,member) {
     const value=refValue(ref),key=member.key.slice(0,member.key.lastIndexOf('.'));

@@ -8,8 +8,9 @@
  *   3. URL = FURL(LastURL, TravelURL, TravelType); Browse(URL, TravelInfo): `Logf("Browse: <URL>")`, then the decision's effects;
  *   4. the viewport's TravelURL is cleared once Browse returns (0x10390c07).
  *
- * A `loadMap` effect hands the page the next level: `{map, portal, url, options, travelInfo, lastURL, log}` (the page's loadMap
- * builds the new session, whose Login imports the text: travel-import.mjs). A branch that is not implemented is a thrown
+ * A `loadMap` effect hands the page the next level: `{map, portal, url, options, travelInfo, lastURL, classDefaults, ...}` (the page's loadMap
+ * builds the new session, whose Login imports the text: travel-import.mjs; `classDefaults` are the class defaults the process keeps,
+ * ScriptRuntime.classDefaultsForTravel). A branch that is not implemented is a thrown
  * {@link TravelStop} that names the original body; the viewport keeps its TravelURL, and a refused URL form (furl.mjs) is one too.
  *
  * Unverified (docs/travel.md "Unresolved" 7): the engine's LastURL is only ever changed here (the `loadonly` removal and the portal
@@ -152,6 +153,9 @@ export function createTravelStep({ runtime, level, viewport, exporter, store, lo
       }
       const request = browse(url, travelInfo);
       vp.travelURL = '';
+      // The process's class defaults go with every LoadMap Browse makes (a map, a level filed in Current, a loaded game): the next level's
+      // runtime builds its classes from them (docs/travel.md "Class defaults across a travel").
+      if (request) request.classDefaults = runtime.classDefaultsForTravel();
       return request;
     },
   };

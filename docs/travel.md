@@ -441,6 +441,47 @@ A file is a normal version-68 package (`parsePackage`; magic `0x9e2a83c1`, 64-by
 The player's own record is applied to the object `Login` made, so the new player gets the old one's travel properties (health, credits, skill points, `Inventory`, `FlagBase`, ...); the objects `ResetPlayerToDefaults` created before (a first `FlagBase`, `SkillSystem`, `AugmentationSystem`, `KeyRing`)
 are replaced by the imported ones through the property assignments and become garbage.
 
+### Class defaults across a travel
+
+The travel text is not the only state that crosses a `LoadMap`: the classes and their `Defaults` belong to the process, not to the level.
+
+* **What writes a class default in single-player.** The console's `SET <class> <property> <value>`: `UObject::GlobalSetProperty` (Core `0x101523a0`) imports the value into every live object of the class, then into the named class's own
+  `Defaults` (`Class+0x4d4` plus the property offset, `0x101524b1..0x101524ca`; a subclass's `Defaults` are its own copy) ([console commands](script-console-command.md#set-of-a-script-class)). And a script's `Default.X = ...`: the shipped sources hold one,
+  `DeusExWeapon.PreBeginPlay`'s `Default.mpPickupAmmoCount = Default.PickupAmmoCount` (read only in multiplayer, but a saved level compares its weapons with that default).
+* **They outlive the level.** LoadMap's collection tags only the actors inside the old level's package and collects with `RF_Native` kept ([LoadMap's collection](script-loadmap-gc.md#loadmaps-collection-0x1038d0ee0x1038d1e1)); the startup packages are never unloaded
+  ([names](script-names.md), [cleanup](script-cleanup.md)). Measured twice: the travel captures froze each next level with a `set LevelInfo bPlayersOnly True` typed before the travel ([Unresolved](#unresolved) 16), and mission 12's chain
+  (Linux host, 2026-10-25): after `set DeusEx.JCDentonMale ReducedDamageType All` in `12_Vandenberg_Cmd`, the travel to `12_vandenberg_computer` and back (`leg2`, which restores the filed `12_Vandenberg_Cmd.dxs`), the original's player is never damaged.
+* **Where they act.** LoadMap's `StaticLoadObject` of the level constructs each export from its class's `Defaults` and applies the serialized properties over them ([CreateExport](script-create-export.md)); `SpawnPlayActor`'s `Login` spawns the player from
+  `JCDentonMale`'s `Defaults`. A `.dxs` (a level filed in `Current`, a loaded game) is the same kind of package, and its writer leaves out a property equal to its class default ([the file](#the-dxs-a-saved-levels-package)): the saved pawn of `12_Vandenberg_Cmd.dxs` has no
+  `ReducedDamageType` because it equalled the written default, so the restored pawn takes the default again.
+
+**Play.** Each level runs in its own `ScriptRuntime`, which serializes every class again from its package; the process's defaults are carried by the travel request.
+
+1. The runtime records every class-default write (`ScriptRuntime.classDefaultReference`'s setter: `scriptClassSet`'s import and the VM's `Default.X`), and with a written class every subclass the level has linked, which keeps its own copy as `GlobalSetProperty` leaves it.
+   A cold `00_Training` records four, all from `DeusExWeapon.PreBeginPlay`: `mpPickupAmmoCount` of WeaponCombatKnife and WeaponCrowbar (0), WeaponAssaultGun (30) and WeaponPistol (6).
+2. The travel step (`travel.mjs` `run`) gives every request Browse returns (a map, a level filed in `Current`, a loaded game: the same `LoadMap` in the same process) `classDefaults` (`ScriptRuntime.classDefaultsForTravel`): the defaults the level was given (read again where
+   their class is linked here), then each pair this level wrote with its class's present value, as `[{cls, field, values: [[index, value]]}]` of plain values (the request goes to the page and to its worker).
+3. The next level's runtime (`createScriptDoors` passes `travel.arrival.classDefaults` to `new ScriptRuntime`) writes each carried value into its class's `Defaults` block as soon as that class's `UClass::Serialize` has built it (after `InitClassDefaultObject`, the tagged defaults,
+   `LoadConfig` and `LoadLocalized`: `script-load-graph.mjs` `serializeDispatch` -> `ScriptClassLoader.applyCarriedDefaults`). That is before a subclass's `InitClassDefaultObject` copies the block, before the VM reads its defaults from it, and so before LoadMap constructs a map
+   export of the class or `Login` spawns the player. A carried default is what the serialized properties go over; a property the map or the `.dxs` serializes keeps the file's value. A Player start stays in the same runtime and keeps them.
+
+`scripts/validate-class-default-travel.mjs`: from the logo map, `set DeusEx.JCDentonMale ReducedDamageType All`, `set Engine.PlayerStart ExtraCost 55`, `set Engine.PlayerStart visitedWeight 4321`, `set Engine.NavigationPoint ExtraCost 99`, `LocalTravel 00_Training`
+(the request passes `structuredClone`): Login's player has `All`; Training's `PlayerStart1`, which does not serialize `ExtraCost`, has 55, and keeps the 10000000 it serializes for `visitedWeight` over the carried 4321; NavigationPoint's default is 99 and PlayerStart's 55;
+a `PathNode` (never linked in the logo map) has 99; then `SaveGame 7` and `LoadGame 7`: the loaded player still has `All`. Without the carry the same run fails every one of these checks.
+
+Unverified or not modelled:
+
+* **Which classes live on.** The carry treats every written class as kept. It is measured for `LevelInfo` (the captures' freeze; a native class, registered by Engine.dll, whose class object should carry the `RF_Native` the collection keeps: that flag was not read here) and for `JCDentonMale`; whether a script class that no live object or root reaches survives `CollectGarbage(RF_Native)` with its
+  `Defaults` is not traced (a collected class would load again from its package with the package's defaults).
+* **Subclasses loaded later.** Play links classes lazily, and a subclass serialized after the write copies the written value through `InitClassDefaultObject` (in that level, as before, and in a later one); which subclasses the original had already built when the
+  write happened (a startup package's every class, or only those a level used) is not traced. The in-level SET has the same model.
+* `GlobalSetProperty`'s `SaveConfig(CPF_Config)` is still not modelled (a config property is carried as a default, not written to its `.ini`). The native config classes' and `InputExt`'s SET (`script-native-config.mjs`, `script-input-console.mjs`) are host state outside the
+  script runtime and not part of the record.
+* An object-reference default is not carried: `classDefaultsForTravel` stops the travel by name (no shipped script writes one, and SET imports no object kind).
+* Play's host projections read class defaults from the packages, not from the runtime (`ClassDefaults` in `game.mjs`'s actor setup: collision flags and sizes, zone values, the player facade; the page's world build). A carried default of such a property would leave the host's
+  initial setup on the package value; none of the harnesses' SETs (`bCheatsEnabled`, `ReducedDamageType`, `bDetectable`, `GroundSpeed`, `bPlayersOnly`) is read there.
+* A new page, or a map picked from the page's list, is a new process: nothing is carried, as in a new run of the original.
+
 ## Which branch each single-player entry takes
 
 `cur` is the *level info's* `missionNumber` of the level being left; `next` is the first two digits of the *destination's file name* (`GetNextMissionNumber`). Measured lines are marked (M).
@@ -1126,6 +1167,7 @@ Each item is **unverified** or unread; none blocks the first two steps of the [o
 14. **Not single-player, left unsupported**: `ServerTravel`/`ProcessServerTravel`, `PreClientTravel` for remote clients, `NM_Client` pending levels, the `?push`/`?pop`/`?peer` options and the `Game%04i.dxs` pushes in `LoadMap`, the developer `UDumpLocation` file branch of `DeusExGameInfo.Login`, `LoadMapWindow`'s `?loadonly` opens.
 15. **The conversation history in the travel text** *(was open at the start of step 2)*. Measured once, the Island's MeetPaul (`nw5`) and ported: Play's export and import equal the original's (scenario I). Not measured: a history after several conversations or an InfoLink's (`bInfoLink`), an event whose speech holds a newline, and the sound ids across levels (`soundID` is exported as the original wrote it).
 16. **The captures' freeze is a class default, Play's a typed line.** The captures carried `set LevelInfo bPlayersOnly True` into each new level through the class default; Play types the same line in the arrived session before its first frame (`scriptClassSet` imports into the level's live actors and into the class defaults, as `UObject::GlobalSetProperty` does). The two freeze the same actors (the intro's player stays `PlayerWalking` in both), but the equivalence of carrying a default across a `LoadMap` with typing after it is assumed, not traced.
+    *2026-10-25: Play carries the class defaults across the travel itself ([class defaults across a travel](#class-defaults-across-a-travel)), so the arrival is frozen from its load as the captures' are; the validators' typed line is now a repeat of the carried default.*
 17. **Play's `.dxs` under the original engine** *(step 3)*. Tried once, on the Island: the original loads it ([above](#play-step-3-visited-maps-restored)), after the name-flag fix its first attempt exposed. Not tried: another map, a level after more play, a `Save000N` slot with a `SaveInfo` and `LoadGame N` (a loaded game, with the player's `FlagBase` and notes in it: step 4), and a comparison of the restored levels' actors beyond the census.
 18. **A `MapExit` with `bPlayTransition`** *(step 3)* runs through the real `Interpolating` state and `InterpolateEnd` in Play (the Island of mission 3: 940 ticks to the request); the camera path's exact timing and the arrival were not measured against the original.
 19. **A level package's name.** The loaded package takes the spelling of a live package of the same name (a QuickLoad of `00_training.dxs` in `00_Training` printed `00_Training`; from `DXOnly` it printed `00_training`: modeled in `travel.mjs loadGame`, three measured loads, the rule inferred from them); a level loaded from a `.dx` is named by the URL's text in the original (`OPEN DXONLY`: `DXONLY.MyLevel`, `DXONLY.JCDentonMale2`) and by the file in Play (`DXOnly`): cosmetic, **unverified** beyond these loads and not modeled. *Step 5 models it for travel arrivals: the package is named as the URL spelled the map (`dxonly`, `99_endgame3`: the captured logs' spellings) and keeps a spelling the process made first (`internLevelName`: a `?restart`'s `00_training` is `00_Training`, as measured in `s4`); a restored or loaded level keeps `travel.mjs loadGame`'s rule above; a map opened directly (the validators', the map list's) is named by its file.*
