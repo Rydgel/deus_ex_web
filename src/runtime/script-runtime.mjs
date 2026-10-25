@@ -2211,6 +2211,9 @@ export class ScriptRuntime {
     const key=lower(`${packageName}.${path}`);
     if(this.conversationLists.has(key))return this.conversationLists.get(key);
     const asset=await this.objects.assets.get(packageName);
+    // ConBindEvents' StaticLoadObject creates the package's linker at each level's start (LoadMap's collection unloaded the previous level's): its names enter
+    // the process table before any of its objects is read (unreal/name-spelling.mjs)
+    this.nameSpelling?.enterPackage(asset.pkg);
     const index=asset.exportsByPath.get(lower(path));
     if(!index)throw new Error(`ConversationList export is unavailable: ${key}`);
     const list=await this.prepareObject(await this.objects.resolve(asset,index));
@@ -3410,8 +3413,9 @@ export class ScriptRuntime {
     }
     if(call.index===1024){
       if(call.argumentCount!==1)throw new Error('StringToName requires one string argument');
-      // The first spelling of a name wins (unreal/name-spelling.mjs): StringToName(con.conName $ "_Played") finds the startup package's `M00MeetPage_Played`
-      const spell=this.nameSpelling,services=spell&&this.nameServices?{...this.nameServices,internName:(text,mode)=>this.nameServices.internName(spell.spell(text),mode)}:this.nameServices;
+      // The first spelling of a name wins (unreal/name-spelling.mjs): StringToName(con.conName $ "_Played") finds the startup package's `M00MeetPage_Played`, and a
+      // new name is the process table's entry until the next LoadMap collection
+      const spell=this.nameSpelling,services=spell&&this.nameServices?{...this.nameServices,internName:(text,mode)=>this.nameServices.internName(mode===1?spell.intern(text):spell.spell(text),mode)}:this.nameServices;
       const name=extensionStringToName(refValue(call.evaluateArgument(0)),services);
       if(typeof name!=='string'||name.includes('\0'))
         throw new Error('The shared FName service must return a resolved name spelling');

@@ -185,10 +185,11 @@ Each was found by a difference at a snapshot or in a text, fixed from the origin
    model says 1,050,470; of 482 actors present in both captures no constant offset separates the two numberings (408 different offsets), so the model has no basis beyond being unique. It feeds only the channel id of a
    speech. Check: `validate-restored-speech.mjs` (a fresh Island keeps its measured 36115; the restored Island and a real slot, nicouzouf's Save0002, take the model and play GotoM02).
 2. **A Name value's spelling is the first one a package entered** (mission 0, `dl_bodyexit_Played` in the original, `DL_bodyexit_Played` in Play): the Training map spells a DataLinkTrigger's tag `dl_bodyexit`, DeusExConText spells
-   the conversation `DL_bodyexit`, the map loads first, so the original's FName (and `con.conName $ "_Played"`) is lowercase; `M00MeetPage_Played` stays capitalized because DeusEx.u, a startup package, has it. Play now
-   keeps two layers (`src/unreal/name-spelling.mjs`): the names of the startup script packages (DeusEx, Core, Engine, Extension, ConSys) and the names of the current map, first spelling wins, applied to Name-typed
-   property values (`readObject`) and to `StringToName`. **Unverified in general**: one measured case (`dl_bodyexit`, `M00MeetPage`); a name that stays alive across a travel keeps its first spelling in the original and
-   takes the new level's here; `dl_start_Played` (Play's spelling now) is not yet measured (a probe, `.work/chains/probe-dlstart.mjs`, is written). Three pinned spellings were relaxed to a comparison without case
+   the conversation `DL_bodyexit`, the map loads first, so the original's FName (and `con.conName $ "_Played"`) is lowercase; `M00MeetPage_Played` stays capitalized because DeusEx.u, a startup package, has it.
+   Mission 10 (`DL_EverettContact_Played` and `DL_EverettMaze_Played` in the original, `DL_everettcontact_played` and `DL_everettmaze_Played` in Play) gave the rule across levels: LoadMap enters the next map's names
+   before its collection, while the previous level's DeusExConText is still loaded, and the collection keeps the new map's names with those spellings ([script-names.md](script-names.md#spelling-across-levels): Core
+   addresses and the original's engine log). Play's `src/unreal/name-spelling.mjs` now models the process's table across levels (startup packages, LoadMap's entry and collection, DeusExConText at each level's start,
+   StringToName and the travel text's names); what it leaves out is listed there. `dl_start_Played` (Play's spelling now) is not yet measured (a probe, `.work/chains/probe-dlstart.mjs`, is written). Three pinned spellings were relaxed to a comparison without case
    (`script-infolink-content`, `script-infolink-audio`, `validate-training-datalinks`).
 
 Findings that were the harness's, not Play's: the dump tool `dump-travel-win.exe` was not built on the Linux host (the travel captures were the Mac's); a placement inside a Teleporter's or exit's cylinder raises no Touch (the fall
@@ -200,5 +201,6 @@ the boat's blocking cylinder keeps a walking player out of the conversation's ra
 
 * 6.4.00.3 and 6.4.01.3 (the conversation censuses) are the other worker's; 6.4.01.2 (both sides of the seven carried flags: the aggressive branch of MeetTerrorist, Filben's two offers, Gunther's, the kill) is a second chain per branch on this harness.
 * The course of Training (jump, ladder, crate stack, swim), the dark doors and the medical door; the Island's Statue gates (Filben's key, the ruins, the lasers) are walked past by the placement.
-* Name spellings in general, and the restored-level index model, stay unverified (above). `DL_Start`'s flag spelling needs its probe run under Wine.
+* Name spellings: the rule across levels is recovered and measured on two chains, but the parts Play does not model stay unverified (script-names.md "Spelling across levels"); the restored-level index model stays unverified
+  (above). `DL_Start`'s flag spelling needs its probe run under Wine.
 * Each later mission needs its chain; the harness is the same (`start` from the previous mission's exit or a real slot, `chain-plan.mjs` for the placements).

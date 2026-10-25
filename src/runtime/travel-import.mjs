@@ -176,6 +176,8 @@ export function createTravelImporter({ runtime, assets, level, exporter, log, pr
       if (kind === 'string') text = text.replaceAll('\\', '\n');
       const result = importText(kind, text, { enumNames: exporter.enumNamesOf(property.property) });
       if (!result || result.value === undefined) throw new TravelTextError(`SpawnPlayActor: ${property.name}=${JSON.stringify(text)} is not a ${kind}`);
+      // UNameProperty::ImportText makes FName(text, FNAME_Add): a flag's name takes the spelling the arrival's table has (the map's, DeusExConText's: name-spelling.mjs)
+      if (kind === 'name') return runtime.nameSpelling ? runtime.nameSpelling.intern(result.value) : result.value;
       return result.value;
     }
     if (property.kind === 'StructProperty') return importStruct(entry, property, text);
@@ -197,7 +199,8 @@ export function createTravelImporter({ runtime, assets, level, exporter, log, pr
       const kind = { bool: 'bool', int: 'int', byte: 'byte', float: 'float', name: 'name', string: 'string' }[member.metadata.type];
       if (!kind || member.metadata.arrayDim > 1)
         throw new UnsupportedTravelImportError(`SpawnPlayActor: struct member ${property.name}.${memberName} (${member.metadata.type}) is not a measured kind`);
-      patch[member.key] = importText(kind, value, { enumNames: null }).value;
+      const imported = importText(kind, value, { enumNames: null }).value;
+      patch[member.key] = kind === 'name' && runtime.nameSpelling ? runtime.nameSpelling.intern(imported) : imported;
     }
     return { struct: true, patch };
   }

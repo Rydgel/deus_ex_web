@@ -9,7 +9,7 @@ export class AssetStore {
    * GConfig's Flush (docs/config-persistence.md). Without one the config files are the installed ones. */
   constructor(files, { configStore = null } = {}) {
     this.configStore = configStore;
-    // The first spelling of a Name across packages (name-spelling.mjs): the boot script packages' names and the current map's, read by objects.mjs readObject.
+    // The first spelling of a Name across packages and levels (name-spelling.mjs), read by objects.mjs readObject; it lives as long as the store, as GNames does the process.
     this.nameSpelling = new NameSpelling();
     this.bootNames = null;
     // Preserve the supplied filesystem catalog for native file-enumeration
@@ -60,8 +60,9 @@ export class AssetStore {
         const bytes = input instanceof Uint8Array ? input : new Uint8Array(input);
         const pkg = parsePackage(bytes);
         pkg.nameSpelling = this.nameSpelling;
+        // a startup package's names are entered once, for the life of the store; a map's enter when its level begins (createGame: LoadMap) and DeusExConText's when a
+        // level's start loads it (prepareConversations), not when this cache first parses them (name-spelling.mjs)
         if (BOOT_SCRIPT_PACKAGES.some(boot => boot.toLowerCase() === key)) this.nameSpelling.addBoot(pkg);
-        else if (/\.(dx|unr)$/i.test(file.path)) this.nameSpelling.beginLevel(pkg);   // a map parsed: the level it begins
         const exportsByPath = new Map(pkg.exports.map((e, i) => [e.path.toLowerCase(), i + 1]));
         return { name: file.name, path: file.path, bytes, pkg, exportsByPath };
       })();
