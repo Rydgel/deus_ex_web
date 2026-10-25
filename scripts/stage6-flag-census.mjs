@@ -330,8 +330,9 @@ export const UNITS = [
   { id: 'c12-SandraWentToCalifornia-1', family: '12-cmd', flag: 'SandraWentToCalifornia', side: '1', setter: 'SandraAttackedByJoJoThanks (main)',
     set: [['PlayerKnowsSandraRenton', true, 0], ['SandraWentToCalifornia', true, 0]] },
   // mission 14 reads SimonsAssassination (mission 3; DL_Simons2), M04MetWalton and M11MetWalton (WaltonShowdown), EverettMechanicComment (JockArea51, on the chain).
-  // The line of missions 14 and 15 descends from chain 12's provisional start, the real slot nicouzouf Save0028 (Save0112 pinned 2026-10-24): it has
-  // M04MetWalton, M11MetWalton (and GuntherHermann_Dead) set, so their units take the flags away; WaltonShowdown reads M11MetWalton only once !M04MetWalton jumped
+  // The line of missions 14 and 15 changed under the census: Save0112 and Save0114 first descended from chain 12's provisional start (the real slot nicouzouf
+  // Save0028: M04MetWalton, M11MetWalton, Ray_Dead set) and were pinned again from the New Game line on 2026-10-25. So these units write both sides of each
+  // flag explicitly, whatever the line holds; WaltonShowdown reads M11MetWalton only once !M04MetWalton jumped (the M11MetWalton units clear M04MetWalton)
   { id: 'c14-lab-line', family: '14-lab', flag: null, side: 'line' },
   { id: 'c14-SimonsAssassination-1', family: '14-lab', flag: 'SimonsAssassination', side: '1', setter: 'SimonsBarks@A4', set: [['SimonsAssassination', true, 0]] },
   { id: 'c14-M04MetWalton-absent', family: '14-lab', flag: 'M04MetWalton', side: 'absent', setter: 'M04MeetWalton not played', clear: ['M04MetWalton'] },
@@ -353,6 +354,20 @@ export const UNITS = [
     clear: ['Ray_Dead'] },
   { id: 'c15-EverettMechanicComment-1-rayalive', family: '15-entrance', against: 'c15-EverettMechanicComment-absent-rayalive', flag: 'EverettMechanicComment', side: '1',
     setter: 'MeetEverett2@RayComment, Ray alive', set: [['NeedRayComment', false, 0], ['EverettMechanicComment', true, 0]], clear: ['Ray_Dead'] },
+  // both sides written explicitly for the readers of missions 14 and 15, whose line was pinned again (above)
+  { id: 'c14-M04MetWalton-1', family: '14-lab', against: 'c14-M04MetWalton-absent', flag: 'M04MetWalton', side: '1', setter: 'M04MeetWalton (main)', set: [['M04MetWalton', true, 0]] },
+  { id: 'c14-M11MetWalton-1', family: '14-lab', against: 'c14-M11MetWalton-absent', flag: 'M11MetWalton', side: '1', setter: 'M11WaltonHolo (main; needs GuntherHermann_Dead), not M04MeetWalton',
+    set: [['GuntherHermann_Dead', true, 0], ['M11MetWalton', true, 0]], clear: ['M04MetWalton'] },
+  { id: 'c14-SimonsAssassination-absent', family: '14-lab', against: 'c14-SimonsAssassination-1', flag: 'SimonsAssassination', side: 'absent', setter: 'SimonsBarks@A4 not played',
+    clear: ['SimonsAssassination'] },
+  { id: 'c14-EverettMechanicComment-absent', family: '14-silo', against: 'c14-EverettMechanicComment-1', flag: 'EverettMechanicComment', side: 'absent', setter: 'MeetEverett2 not played',
+    clear: ['EverettMechanicComment'] },
+  { id: 'c14-EverettMechanicComment-absent-rayalive', family: '14-silo', flag: 'EverettMechanicComment', side: 'absent', setter: 'MeetEverett2 not played, Ray alive',
+    clear: ['EverettMechanicComment', 'Ray_Dead'] },
+  { id: 'c14-EverettMechanicComment-1-rayalive', family: '14-silo', against: 'c14-EverettMechanicComment-absent-rayalive', flag: 'EverettMechanicComment', side: '1',
+    setter: 'MeetEverett2@RayComment, Ray alive', set: [['NeedRayComment', false, 0], ['EverettMechanicComment', true, 0]], clear: ['Ray_Dead'] },
+  { id: 'c15-EverettMechanicComment-absent', family: '15-entrance', against: 'c15-EverettMechanicComment-1', flag: 'EverettMechanicComment', side: 'absent', setter: 'MeetEverett2 not played',
+    clear: ['EverettMechanicComment'] },
 ];
 UNITS.forEach((unit, i) => { unit.index = FIRST_INDEX + i; unit.slot = slotName(unit.index); });
 const unitById = new Map(UNITS.map(u => [u.id, u]));
@@ -422,10 +437,10 @@ export const FLAGS = [
       notRun: 'M04TroopBarks, M04ScottBarks, M04MeetCarter, M04LloydBarks (run by the unit, line state), M04MeetJaime2, CokeTroopBarks, M04MeetAlex' }] },
   { flag: 'PlayerMetFilben', row: '03', setters: 'M03MeetFilben@FirstMeeting (1, never)', line: 'absent',
     reads: [{ m: '04', reader: 'M04MeetFilben', units: ['c04-PlayerMetFilben-1-m03', 'c04-bar-line'] }] },
-  { flag: 'SimonsAssassination', row: '03', setters: 'SimonsBarks@A4 (1, never)', line: 'absent',
-    reads: [{ m: '14', reader: 'DL_Simons2 (14_OceanLab_Lab/DataLinkTrigger6, needs schematic_downloaded; ? SimonsAssassination -> Assassination)', units: ['c14-SimonsAssassination-1', 'c14-lab-line'] }] },
-  { flag: 'M04MetWalton', row: '04', setters: 'M04MeetWalton (main) (1, never)', line: 'absent on the New Game line (missions 4 to 11); 1 on the line of missions 14 and 15 (the real slot chain 12 started from)',
-    reads: [{ m: '14', reader: 'WaltonShowdown (? !M04MetWalton -> try2)', units: ['c14-M04MetWalton-absent', 'c14-lab-line'] }] },
+  { flag: 'SimonsAssassination', row: '03', setters: 'SimonsBarks@A4 (1, never)', line: 'absent (both lines of mission 14)',
+    reads: [{ m: '14', reader: 'DL_Simons2 (14_OceanLab_Lab/DataLinkTrigger6, needs schematic_downloaded; ? SimonsAssassination -> Assassination)', units: ['c14-SimonsAssassination-1', 'c14-SimonsAssassination-absent', 'c14-lab-line'] }] },
+  { flag: 'M04MetWalton', row: '04', setters: 'M04MeetWalton (main) (1, never)', line: 'absent on the New Game line; 1 on the first line of missions 14 and 15 (the real slot chain 12 first started from); both sides written',
+    reads: [{ m: '14', reader: 'WaltonShowdown (? !M04MetWalton -> try2)', units: ['c14-M04MetWalton-1', 'c14-M04MetWalton-absent', 'c14-lab-line'] }] },
   { flag: 'PlayerBailedOutWindow', row: '04', setters: '04_NYC_Hotel/FlagTrigger9 (1, mission 6)', line: 'absent',
     reads: [{ m: '05', reader: 'Mission05.FirstFrame:37 (05_NYC_UNATCOMJ12LAB: Paul destroyed)', units: ['c05-PlayerBailedOutWindow-1', 'c05-lab-line'] }] },
   { flag: 'SandraWentToCalifornia', row: '04', setters: 'SandraAttackedByJoJoThanks, FamilySquabbleWrapUpGilbertDead (main), FamilySquabbleWrapUp@Hop (1, never)', line: 'absent',
@@ -448,13 +463,13 @@ export const FLAGS = [
     reads: [{ m: '09', reader: 'DL_BadNews (09_NYC_Dockyard/DataLinkTrigger4; ? M08WarnedSmuggler -> Warned)', units: ['c09-M08WarnedSmuggler-1', 'c09-dockyard-line'] }] },
   { flag: 'KnowsGuntherKillphrase', row: '10', setters: 'M10MeetJaime@Continue (1, never)', line: 'absent',
     reads: [{ m: '11', reader: 'M11MeetGunther (Continue: ? !KnowsGuntherKillphrase -> NoKillswitch; else the Kill/Gentleman choice)', units: ['c11-KnowsGuntherKillphrase-1', 'c11-cathedral-line'] }] },
-  { flag: 'EverettMechanicComment', row: '11', setters: 'MeetEverett2@RayComment, @deadset (1, never)', line: 'absent (with Ray_Dead set on the line of missions 14 and 15)',
+  { flag: 'EverettMechanicComment', row: '11', setters: 'MeetEverett2@RayComment, @deadset (1, never)', line: 'absent; Ray_Dead set on the first line of missions 14 and 15 (the real slot\'s), absent on the New Game line pinned again on 2026-10-25: the units write the flag both ways with Ray alive',
     reads: [{ m: '12', reader: 'TongSick (on the chain; one CheckFlag of !Ray_Dead and !EverettMechanicComment -> Rattle)', units: ['c12-EverettMechanicComment-1'] },
-      { m: '14', reader: 'JockArea51 (on the chain; the same check)', units: ['c14-EverettMechanicComment-1'] },
-      { m: '15', reader: 'M15MeetEverett (the same check -> Dead; the line\'s Ray_Dead hides the flag: a pair with Ray alive)',
-        units: ['c15-EverettMechanicComment-1', 'c15-entrance-line', 'c15-EverettMechanicComment-1-rayalive', 'c15-EverettMechanicComment-absent-rayalive'] }] },
-  { flag: 'M11MetWalton', row: '11', setters: 'M11WaltonHolo (main) (1, never; needs GuntherHermann_Dead)', line: 'absent on the New Game line; 1 on the line of missions 14 and 15 (the real slot)',
-    reads: [{ m: '14', reader: 'WaltonShowdown (try2: ? !M11MetWalton -> try3; read only once !M04MetWalton jumped)', units: ['c14-M11MetWalton-absent', 'c14-M04MetWalton-absent'] }] },
+      { m: '14', reader: 'JockArea51 (on the chain; the same check)', units: ['c14-EverettMechanicComment-1', 'c14-EverettMechanicComment-absent', 'c14-EverettMechanicComment-1-rayalive', 'c14-EverettMechanicComment-absent-rayalive'] },
+      { m: '15', reader: 'M15MeetEverett (the same check -> Dead; Ray dead hides the flag, so the units write Ray alive)',
+        units: ['c15-EverettMechanicComment-1', 'c15-EverettMechanicComment-absent', 'c15-entrance-line', 'c15-EverettMechanicComment-1-rayalive', 'c15-EverettMechanicComment-absent-rayalive'] }] },
+  { flag: 'M11MetWalton', row: '11', setters: 'M11WaltonHolo (main) (1, never; needs GuntherHermann_Dead)', line: 'absent on the New Game line; 1 on the first line of missions 14 and 15 (the real slot); both sides written',
+    reads: [{ m: '14', reader: 'WaltonShowdown (try2: ? !M11MetWalton -> try3; read only once !M04MetWalton jumped)', units: ['c14-M11MetWalton-1', 'c14-M11MetWalton-absent'] }] },
 ];
 
 // ---- unit files ---------------------------------------------------------------------------------------------------------------------------------------------
@@ -673,7 +688,8 @@ function table() {
   const file = `${CENSUS}/play-summary.json`;
   const summary = existsSync(file) ? JSON.parse(readFileSync(file, 'utf8')) : {};
   const md = s => String(s).replace(/\|/g, '\\|');
-  const playOf = id => !summary[id] ? 'not run yet' : summary[id].play ? 'runs' : `stops (${md(summary[id].error ?? '').slice(0, 140)})`;
+  const short = e => md(String(e ?? '').replace(/^(base: )?Error: /, '').replace(/ \(\{.*?\}\)/, '').replace(/ \(trace[^)]*\)/, '')).slice(0, 140);
+  const playOf = id => !summary[id] ? 'not run yet' : summary[id].play ? 'runs' : summary[id].base === false ? `no base (${short(summary[id].error)})` : `stops (${short(summary[id].error)})`;
   console.log('| Flag (row) | Setters (value, expiration) | The line | Read in | Reader run | Units (side): Play |');
   console.log('| --- | --- | --- | --- | --- | --- |');
   for (const f of FLAGS) for (const r of f.reads) {
