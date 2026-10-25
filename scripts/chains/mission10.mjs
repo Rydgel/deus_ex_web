@@ -35,7 +35,9 @@ export default {
     { op: 'place', at: [2478, -3789, -533], view: [0, 0], drop: true, harness: true, note: 'above Teleporter2 (2478,-3789,-623, radius 60; 10_Paris_Metro#sewer)' },
     { op: 'travel', to: '10_Paris_Metro', label: 'leg2' },
     ...cheats,
-    { op: 'wait', seconds: 3 },
+    // DL_metrosewer: the arrival's first fall touches DataLinkTrigger13 (a flat cylinder under Teleporter2), and its _Played flag is set when the DataLink
+    // ends, 16.75 s later (docs/travel.md "Arriving at a portal"); the first capture's original read g3 after it ended, Play's 3 s in
+    { op: 'wait', flag: 'DL_metrosewer_Played', timeout: 60 },
     { op: 'snap', label: 'g3-metro' },
 
     // the club: Teleporter7 (the front), MeetNicolette, then Teleporter0 (the back) to the metro: Mission10.PreTravel sets NicoletteLeftClub
