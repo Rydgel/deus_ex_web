@@ -18,6 +18,8 @@ import { readdir, readFile } from 'node:fs/promises';
 import { gameDirectory } from './game-directory.mjs';
 import { AssetStore } from '../src/unreal/assets.mjs';
 import { readObject } from '../src/unreal/objects.mjs';
+import { decodeMap } from '../src/unreal/map.mjs';
+import { prepareMapProperties } from '../src/runtime/script-map-properties.mjs';
 import { BOOT_SCRIPT_PACKAGES } from '../src/unreal/name-spelling.mjs';
 
 const root = gameDirectory();
@@ -95,6 +97,15 @@ const check = (label, actual, expected) => { assert.equal(actual, expected, labe
   const conText = await assets.get('DeusExConText');
   check('mission 12, the Computer map\'s Heliosborn', assets.nameSpelling.spell('Heliosborn'), 'HeliosBorn');
   check('mission 12, DL_HeliosBorn flag', playedFlag(assets, conText, 'DL_HeliosBorn'), 'DL_HeliosBorn_Played');
+  // The flag itself is FlagTrigger0's FlagName: the session decodes the map from its own copy of the package (decodeMap, no table), and
+  // prepareMapProperties binds the actor's authored Names through the table (the chain's FlagTrigger.SetBool writes what it gets).
+  const computer = await assets.get('12_Vandenberg_Computer'), map = decodeMap(computer.bytes);
+  const flagTrigger = map.actors.find(actor => actor.name === 'FlagTrigger0');
+  check('mission 12, FlagTrigger0.FlagName as decodeMap reads it', flagTrigger.properties.find(p => p.name === 'FlagName').value, 'Heliosborn');
+  const fields = new Map(), field = name => fields.get(name) ?? fields.set(name, { key: name, metadata: { className: 'NameProperty', arrayDim: 1 } }).get(name);
+  const bind = await prepareMapProperties({ nameSpelling: assets.nameSpelling, lookupMember: (cls, kind, name) => field(name), field: async () => {}, defaultValue: () => undefined },
+    computer, { ...flagTrigger, properties: flagTrigger.properties.filter(p => p.type === 6) }, { defaults: new Map(), record: { name: 'FlagTrigger' } }, new Map());
+  check('mission 12, FlagTrigger0.FlagName as the level binds it (the flag)', bind(field('FlagName')), 'HeliosBorn');
 }
 
 // The same Chateau in a new process (no DeusExConText before its names enter): the map spells them, Play's spelling before this model.

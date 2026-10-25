@@ -84,6 +84,10 @@ export async function prepareMapProperties(runtime, asset, actor, cls, actors) {
       value=await readScriptArrayValue(asset,field,raw.data,{resolveObject:resolveMapObject});
     } else if (!property.decoded) value = {unsupported: `Undecoded map property ${actor.name}.${property.name}`};
     else if ([5, 8].includes(property.type)) value=await resolveMapObject(asset,property.value);
+    // A Name is the map linker's NameMap entry: the process table's spelling, which the previous level's packages may have fixed before the map's names entered
+    // (12_Vandenberg_Computer's FlagTrigger0.FlagName `Heliosborn` is DeusExConText's `HeliosBorn`: unreal/name-spelling.mjs). decodeMap reads its own copy of
+    // the package, which no table spells.
+    else if (property.type === 6 && runtime.nameSpelling) value=runtime.nameSpelling.spell(value);
     if (!authored.has(field.key)) { authored.set(field.key, new Map()); authoredFields.push(field); }
     authored.get(field.key).set(property.arrayIndex, value);
   }

@@ -17,7 +17,8 @@ export async function readScriptStructValue(asset,field,data,{initialValue,resol
       case 'int': return reader.i32();
       case 'float': return reader.f32();
       case 'bool': return reader.u8()!==0;
-      case 'name': return nameAt(asset.pkg,reader.compact());
+      // the process table's spelling, as objects.mjs readObject reads a Name (unreal/name-spelling.mjs)
+      case 'name': { const text=nameAt(asset.pkg,reader.compact()); return asset.pkg.nameSpelling?asset.pkg.nameSpelling.spell(text):text; }
       case 'string': return reader.string(asset.pkg.version);
       case 'object': case 'class': {
         const index=reader.compact();objectAt(asset.pkg,index);

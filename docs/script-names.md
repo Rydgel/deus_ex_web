@@ -206,7 +206,11 @@ level. DX, mission -2, loads no ConversationList, so Training's
 log loads `12_Vandenberg_cmd` and then travels to `12_vandenberg_computer`,
 which spells `Heliosborn` and `DL_Heliosborn`. The original's flag dumps
 (m12-6 and m12-7) hold `HeliosBorn` and `DL_HeliosBorn_Played`, which are
-DeusExConText's spellings.
+DeusExConText's spellings. The `HeliosBorn` flag comes from no conversation.
+It is the map's own `FlagTrigger0.FlagName`, a Name the map authors, and its
+`SetBool` writes the Name it holds. That Name is the map linker's `NameMap`
+entry, so it too has the spelling the Cmd level's DeusExConText gave the
+entry.
 
 Play applies the rule at these places:
 
@@ -216,7 +220,7 @@ Play applies the rule at these places:
 | LoadMap: the map's names enter, then the collection | `createGame` (`src/viewer/game.mjs`): `beginLevel(map)` keeps only the startup packages' names and the map's |
 | ConBindEvents' StaticLoadObject | `ScriptRuntime.prepareConversations`: `enterPackage(DeusExConText)` before any of its objects is read |
 | `FName(text, FNAME_Add)` of a runtime string | `intern`: StringToName (native 1024, mode 1) and `UNameProperty::ImportText` of a travel text (`travel-import.mjs`: the arrival's flag names) |
-| a Name read through a linker's name map | `spell` (a lookup): `objects.mjs` `readObject`'s Name values |
+| a Name read through a linker's name map | `spell` (a lookup): `objects.mjs` `readObject`'s Name values, Name members of structs and dynamic arrays (`script-struct-values.mjs`), and a map actor's authored Name properties (`script-map-properties.mjs` `prepareMapProperties`: `decodeMap` reads its own copy of the package, which no table spells) |
 
 The cache's first parse of a map no longer begins a level, so a map read early
 (a destination looked up during a level) changes no spelling. The startup loads
@@ -234,7 +238,14 @@ in one store, then the same Chateau in a new one, then mission 0 and mission
 `DL_EverettContact_Played` and `DL_EverettMaze_Played`. Its 13 snapshots hold
 the original's flag names with the same spelling in every case. The one
 difference is that `DL_metrosewer_Played` is missing at g3, which is timing,
-not spelling.
+not spelling. A rerun with the later `mission10.mjs` and the map-property
+spelling below has no difference in any of the 13 snapshots.
+`chain-play.mjs --mission 12` first wrote `Heliosborn` from
+m12-6 on, because the FlagTrigger's Name came straight from `decodeMap`.
+With map properties spelled, all 11 of its snapshots hold the original's flag
+names with the same spelling, and its legs' travel texts carry
+`FlagName=HeliosBorn`. The validator checks that boundary too: `decodeMap`
+gives `Heliosborn`, and the level's binding gives `HeliosBorn`.
 
 Not modeled, and so unverified where they would matter:
 
@@ -253,10 +264,11 @@ Not modeled, and so unverified where they would matter:
   that saved it. A chain that starts from a slot inherits them, but mission 10
   does not depend on that: the Catacombs and the Metro hold no `DL_Everett*`
   name. `beginLevel` enters the `.dxs` file's names
-  (`restore-asset.mjs` parses it outside the store). `readObject` reads that
-  package's Name values with the file's own spelling, not through `spell`.
-  The two differ only for a name that the previous level entered first with
-  another spelling. Exit slots pinned by an earlier Play carry its old
+  (`restore-asset.mjs` parses it outside the store). Its actors' authored
+  Name properties are spelled through the table (`prepareMapProperties`).
+  Its other objects' Names, and Names inside its structs, are read with the
+  file's own spelling. The two differ only for a name that the previous level
+  entered first with another spelling. Exit slots pinned by an earlier Play carry its old
   spellings in their FlagBase until they are pinned again.
 
 ## Validation and boundaries
