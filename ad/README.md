@@ -71,21 +71,23 @@ Every number on screen is computed by `facts.mjs` or quoted from project docs:
 
 ## Soundtrack
 
-A re-thinking of the Deus Ex main theme (`Title_Music`, by Alexander Brandon and Michiel van den Bos), not a copy of it.
-`theme-score.mjs` reads the song from the local installation at build time (nothing of it is stored in this repository; the
-module's audio is never played) and sequences the orders the promo uses (`ARRANGEMENT` in `ad/src/timeline.js`) with the
-song's own speed and tempo changes. From it `music.mjs` takes two things only:
+The Deus Ex main theme (`Title_Music`, by Alexander Brandon and Michiel van den Bos) re-thought as instrumental synth metal,
+not a copy of it. `theme-score.mjs` reads the song from the local installation at build time (nothing of it is stored in this
+repository; the module's audio is never played) and sequences the orders the promo uses (`ARRANGEMENT` in
+`ad/src/timeline.js`) with the song's own speed and tempo changes. From it `music.mjs` takes:
 
 - the harmony: each bar's root and chord, read from all of the song's parts;
-- a few quoted lines: the "Deus Ex" lead melody (the groove's last bars, the bridge, the return), the build's descending
-  line, the groove's fourths stab and the later synth line, with the module's echo copies left out.
+- quoted lines: the "Deus Ex" lead melody (the groove's last bars, the breakdown, the bridge, the return), the build's
+  descending line, and in the groove the theme's bass line, arpeggio and fourths stab, the bridge's sixteenth pulse and the
+  later synth line, with the module's echo copies left out.
 
-Everything else is the promo's own and synthesized from scratch: the cinematic intro (pedals, choir, timpani, a slow horn
-foreshadowing the lead's opening motif), the string voicings, the bass figure, the marcato ostinatos and the cellos' pulse,
-the taiko, heartbeat and kit patterns, the horn hits and gongs on the section cuts, the dynamics and the closing callback;
-about −14 LUFS. The sample tunings the quotes rely on were measured, not assumed: each sample's pitch class at C-5 from a
-harmonic-product spectrum, confirmed by the consonance of the parts sounding together (the song sounds in A minor; several
-samples are tuned off their written notes).
+Everything else is the promo's own and synthesized from scratch, in the manner of synth metal (chiptune and analog synths played
+as a metal band, no vocals): the riffs (gallop, straight sixteenths, half-time, tremolo) on overdriven, double-tracked saw
+"guitars", the metal kit with double kick and tom fills, the square-wave arpeggios, the twin lead a diatonic third apart, the
+dark analog intro with a slow chip arpeggio and the lead's motif foreshadowed, the power-chord hits on the section cuts and the
+closing callback; about −13 LUFS. The sample tunings the quotes rely on were measured, not assumed: each sample's pitch class
+at C-5 from a harmonic-product spectrum, confirmed by the consonance of the parts sounding together (the song sounds in A
+minor; several samples are tuned off their written notes).
 
 `music.mjs` also writes `ad/build/score.json`, the song's bar start times, which the picture cuts on (the intro's second
 block is slower and ends on a ritardando, so bars are not all the same length). `MUSIC_DEBUG=1` prints per-section bus

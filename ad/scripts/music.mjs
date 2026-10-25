@@ -1,9 +1,9 @@
-// Soundtrack for the promo: the Deus Ex main theme (Title_Music, by Alexander Brandon and Michiel van den Bos) played by the
-// promo's own synthesizer. theme-score.mjs reads the song's notes from the local installation at build time (nothing of the
-// song is stored in this repository) and this file voices them: strings, choir, horns, marcato, a synth bass and arpeggios, a
-// synthesized kit, with taiko, timpani, gongs and horn hits on the picture's section cuts. No sample of the module's audio is
-// played. Cut sound effects sit on the picture's cues. Writes ad/build/music.wav (48 kHz, 16-bit stereo) and
-// ad/build/score.json (the song's bars, which the picture cuts on).
+// Soundtrack for the promo: the Deus Ex main theme (Title_Music, by Alexander Brandon and Michiel van den Bos) re-thought as
+// instrumental synth metal by the promo's own synthesizer. theme-score.mjs reads the song from the local installation at build
+// time (nothing of it is stored in this repository); this file takes its harmony and quotes a few of its lines, and the riffs,
+// drums, arpeggios, intro and form are its own. No sample of the module's audio is played. Cut sound effects sit on the
+// picture's cues. Writes ad/build/music.wav (48 kHz, 16-bit stereo) and ad/build/score.json (the song's bars, which the picture
+// cuts on).
 import {existsSync, mkdirSync, writeFileSync} from 'node:fs';
 import path from 'node:path';
 import {fileURLToPath} from 'node:url';
@@ -23,11 +23,11 @@ const BEAT = G.barLength(12) / 4, E8 = BEAT / 2, S16 = BEAT / 4;
 // ------------------------------------------------------------------ buses
 const mkbus = () => ({L: new Float32Array(N), R: new Float32Array(N)});
 const B = {perc: mkbus(), timp: mkbus(), low: mkbus(), strings: mkbus(), marcato: mkbus(), choir: mkbus(), horns: mkbus(),
-  synth: mkbus(), gong: mkbus(), fx: mkbus(), bass: mkbus(), kit: mkbus()};
+  synth: mkbus(), gong: mkbus(), fx: mkbus(), bass: mkbus(), kit: mkbus(), guitar: mkbus(), lead: mkbus()};
 const REV = mkbus(), HALL = mkbus(), DLY = mkbus();
 // Bus levels, applied where a voice writes, so its reverb and delay sends follow.
 const LEVELS = {perc: 0.45, timp: 0.9, low: 1.25, strings: 2.6, marcato: 4.6, choir: 1.5, horns: 6.0, synth: 1.6, gong: 0.9, fx: 0.7,
-  bass: 1.0, kit: 0.6};
+  bass: 1.0, kit: 0.34, guitar: 2.0, lead: 13};
 for (const [name, bus] of Object.entries(B)) bus.g = LEVELS[name];
 
 let seed = 0x5eed1e;
@@ -514,187 +514,203 @@ const rootMidi = (b, octave) => 12 * (octave + 1) + CHORDS[b].root;
 const tones = b => { const c = CHORDS[b]; return [0, c.third, 7, 12]; };   // root, third, fifth, octave (semitones)
 
 // the quoted lines: the song's notes of those parts in those bars, without the echo copies the module plays on other channels
-const QUOTES = {lead: [[20, 28], [28, 40], [48, 52]], lead2: [[8, 12], [48, 52]], stab: [[12, 24]], synth: [[40, 48]]};
+const QUOTES = {lead: [[20, 28], [28, 40], [48, 52]], lead2: [[8, 12], [48, 52]], stab: [[12, 24]], synth: [[40, 48]], bass: [[12, 24]],
+  arp: [[12, 24]], pulse: [[32, 40]]};
 const inBars = (t, ranges) => ranges.some(([b0, b1]) => t >= bar(b0) - 1e-6 && t < bar(b1) - 1e-6);
 const quoted = role => {
   const list = score.events.filter(e => e.role === role && e.midi != null && inBars(e.t, QUOTES[role]));
-  return list.filter(e => !list.some(o => o !== e && o.midi % 12 === e.midi % 12 && o.t < e.t && e.t - o.t < 0.45 && o.vol >= e.vol));
+  // an echo copy is quieter than the note it repeats; equal repeats (a bass line's eighths) are the line itself
+  return list.filter(e => !list.some(o => o !== e && o.midi % 12 === e.midi % 12 && o.t < e.t && e.t - o.t < 0.45 && o.vol > e.vol));
 };
-const LEAD = quoted('lead'), LEAD2 = quoted('lead2'), STAB = quoted('stab'), SYNTH = quoted('synth');
+const LEAD = quoted('lead'), LEAD2 = quoted('lead2'), STAB = quoted('stab'), SYNTH = quoted('synth'), BASSLINE = quoted('bass'),
+  ARP = quoted('arp'), PULSE = quoted('pulse');
 const barOf = t => { let b = 0; while (b + 1 < BARS && bar(b + 1) <= t) b++; return b; };
 
-// accompaniment building blocks, timed by each bar's own length (the intro's bars are longer)
-function padBar(b, {gain = 0.03, octave = 3, attack = 0.25, choirToo = 0} = {}) {
-  const [t0, t1] = span(b), r = rootMidi(b, octave);
-  const notes = [r, r + 7, r + tones(b)[1] + 12, r + 12].map(midiName);
-  strings(t0, t1 - t0 - 0.03, notes, {gain, attack, release: 0.6, cutoff: 2000});
-  if (choirToo) choir(t0, t1 - t0 - 0.03, [midiName(r), midiName(r + 7)], {gain: choirToo, vowel: 'a', attack: 0.5, release: 0.8});
-}
-function lowBar(b, {gain = 0.09, octave = 1, attack = 0.15} = {}) {
-  const [t0, t1] = span(b);
-  lowStrings(t0, t1 - t0 - 0.02, midiName(rootMidi(b, octave)), {gain, attack, release: 0.5});
-}
-// eighth-note marcato on chord tones: cells index root, third, fifth, octave
-function ostinatoBar(b, cells, {gain = 0.045, octave = 3} = {}) {
-  const [t0, t1] = span(b), e8 = (t1 - t0) / 8, r = rootMidi(b, octave), tt = tones(b);
-  cells.forEach((c, i) => { if (c !== null) marcato(t0 + i * e8, [midiName(r + tt[c])], {gain, accent: i === 0 ? 1.25 : i % 2 ? 0.8 : 1, len: e8 * 0.7}); });
-}
-// sixteenth pulse on the root (cellos and the synth bass), the bridge's drive re-scored
-function pulseBar(b, {gain = 0.05} = {}) {
-  const [t0, t1] = span(b), s16 = (t1 - t0) / 16, r = rootMidi(b, 2);
-  for (let i = 0; i < 16; i++) {
-    cello(t0 + i * s16, midiName(r + (i % 4 === 3 ? 7 : 0)), {gain: gain * (i % 4 === 0 ? 1.2 : 0.8), len: s16 * 1.3});
-    if (i % 2 === 0) synthBass(t0 + i * s16, s16 * 1.6, r - 12, {gain: 0.07});
-  }
-}
-// the promo's bass for the groove: roots and fifths in a syncopated eighth figure of its own
-function bassBar(b, {gain = 0.12} = {}) {
-  const [t0, t1] = span(b), e8 = (t1 - t0) / 8, r = rootMidi(b, 1) + 12;
-  [[0, 0, 1.5], [3, 0, 0.8], [4, 7, 1], [6, 12, 0.6], [7, 7, 0.6]].forEach(([i, iv, d]) => synthBass(t0 + i * e8, e8 * d, r + iv, {gain}));
-}
-function drumBar(b, {busy = 2, taikoGain = 0.38, snareGain = 0.14, heart = true} = {}) {
-  const [t0, t1] = span(b), e8 = (t1 - t0) / 8, s16 = e8 / 2;
-  for (let i = 0; i < 8; i++) {
-    const accent = i === 0 ? 1.2 : i === 3 || i === 6 ? 1.0 : 0.62;
-    if (busy >= 1 || i % 2 === 0) taiko(t0 + i * e8, taikoGain * accent, i === 0 ? 56 : 64 + (i % 3) * 4, i % 2 ? 0.25 : -0.2);
-  }
-  if (heart) for (let q = 0; q < 4; q++) heartbeat(t0 + q * 2 * e8, q === 0 ? 0.5 : 0.36);
-  if (busy >= 2) for (const r of [2, 6, 10, 12, 14]) snare(t0 + r * s16, snareGain * (r === 12 ? 1.2 : 0.8));
-  if (busy >= 3) for (const r of [3, 7, 11, 15]) snare(t0 + r * s16, snareGain * 0.45, 0.05);
-}
-function kitBar(b, {gain = 0.6} = {}) {   // the progress section: a straighter beat, kick and taiko, hats
-  const [t0, t1] = span(b), s16 = (t1 - t0) / 16;
-  for (const i of [0, 6, 8, 10]) { kick(t0 + i * s16, gain * (i === 0 ? 1 : 0.75)); taiko(t0 + i * s16, 0.18, 56); }
-  for (const i of [4, 12]) snare(t0 + i * s16, 0.2);
-  for (let i = 0; i < 16; i += 2) hat(t0 + i * s16, i % 4 === 2 ? 0.08 : 0.05, i === 14, rand() * 0.6 - 0.3);
-}
-// the quoted melody on horns, the octave below on the choir; `soft` for the method section
-function sing(list, {gain = 0.085, choirGain = 0.03, soft = false, octave = 0} = {}) {
-  for (const e of list) {
-    const m = e.midi + 12 * octave, dur = Math.max(0.12, Math.min(e.dur, 2.4));
-    if (soft) { choir(e.t, dur, [midiName(m)], {gain: gain * 0.6, vowel: 'u', attack: Math.min(0.15, dur * 0.4), release: 0.6}); continue; }
-    horn(e.t, dur * 0.97, midiName(m), {gain: gain * Math.max(0.6, e.vol), attack: 0.05});
-    if (choirGain) choir(e.t, dur, [midiName(m - 12)], {gain: choirGain, vowel: 'o', attack: Math.min(0.15, dur * 0.4), release: 0.5});
-  }
-}
+// ------------------------------------------------------------------ the theme as synth metal
+// The style of the arrangement is synth metal (chiptune and analog synths played as a metal band, fully instrumental): riffs
+// on overdriven, double-tracked saw "guitars", a metal kit with double kick, square-wave arpeggios, a bright synth lead in
+// twin harmony. The theme supplies the harmony and the quoted lines; the riffs, drums, intro and form are the promo's own.
 
-// open (bars 0-7): the promo's cinematic intro on the theme's A and E; the lead's opening motif foreshadowed, slow, on a horn
-boom(bar(0) + 0.02, 0.45, 4);
-lowStrings(bar(0), bar(4) - bar(0), midiName(rootMidi(0, 1)), {gain: 0.1, attack: 2.5});
-lowStrings(bar(4), bar(8) - bar(4), midiName(rootMidi(4, 1)), {gain: 0.1, attack: 1.0});
-strings(bar(1), bar(4) - bar(1), [midiName(rootMidi(1, 3)), midiName(rootMidi(1, 3) + 7)], {gain: 0.032, attack: 1.5, cutoff: 1400});
-strings(bar(4), bar(8) - bar(4), [midiName(rootMidi(4, 3)), midiName(rootMidi(4, 3) + 7), midiName(rootMidi(4, 3) + 12)], {gain: 0.034, attack: 0.8, cutoff: 1600});
-tone(B.synth, {t: bar(0) + 0.3, dur: bar(8) - bar(0) - 0.6, freq: midi(rootMidi(0, 5) + 7), type: 'square', detune: [-9, 9], attack: 3, decay: 1, sustain: 1,
-  release: 2, cutoff: 1500, q: 1.2, gain: 0.012, hall: 0.8, dly: 0.2, lfo: 0.5, lfoRate: 0.11});
-choir(bar(2), bar(8) - bar(2), [midiName(rootMidi(2, 3)), midiName(rootMidi(2, 3) + 7)], {gain: 0.045, vowel: 'u', attack: 2.2});
-taiko(bar(2), 0.45, 52); taiko(bar(4), 0.5, 52); taiko(bar(6), 0.55, 52); taiko(bar(6) + (bar(7) - bar(6)) * 0.375, 0.32, 60);
+// a power chord of detuned saws, overdriven and cabinet-filtered, double-tracked left and right; `mute` is a palm-muted chug
+function guitar(t, dur, root, {mute = false, gain = 0.1, ring = 0.25} = {}) {
+  const notes = [root, root + 7, root + 12];
+  for (const [side, cents, delay] of [[-0.75, [-7, 4], 0], [0.75, [6, -3], 0.007]]) {
+    const start = Math.floor((t + delay) * SR), len = Math.floor((dur + (mute ? 0.04 : ring)) * SR);
+    const oscs = notes.flatMap(m => cents.map(c => ({ph: rand(), inc: midi(m) * Math.pow(2, c / 1200) / SR})));
+    const hp = new SVF(), lp = new SVF(), lp2 = new SVF();
+    hp.set(95, 0.7); lp.set(mute ? 1000 : 3600, 0.9); lp2.set(mute ? 1300 : 5000, 0.7);
+    const [pl, pr] = panLR(side);
+    for (let s = 0; s < len; s++) {
+      const tt = s / SR;
+      const env = mute ? Math.exp(-tt / 0.075) : tt < dur ? 1 - 0.25 * Math.min(1, tt / 0.8) : 0.75 * Math.exp(-(tt - dur) / (ring / 3));
+      let x = 0;
+      for (const o of oscs) { o.ph += o.inc; if (o.ph >= 1) o.ph -= 1; x += 2 * o.ph - 1 - blep(o.ph, o.inc); }
+      hp.run(x / oscs.length);
+      lp.run(Math.tanh(hp.high * 10));
+      lp2.run(lp.low);
+      const v = lp2.low * env * gain;
+      write(B.guitar, start + s, v * pl, v * pr);
+      write(REV, start + s, v * pl * 0.08 * B.guitar.g, v * pr * 0.08 * B.guitar.g);
+    }
+  }
+}
+// the guitars' register: each bar's root between E2 and D#3
+const riffRoot = b => { const r = rootMidi(b, 2); return r > 51 ? r - 12 : r; };
+// a sixteenth-step riff over bar b: 'O' an open power chord (rings to the next hit), 'm' a palm-muted chug, '.' a rest;
+// the double kick follows every hit
+function riffBar(b, pattern, {gain = 0.1, kickGain = 0.42} = {}) {
+  const [t0, t1] = span(b), s16 = (t1 - t0) / 16, r = riffRoot(b);
+  [...pattern].forEach((c, i) => {
+    if (c === '.') return;
+    const t = t0 + i * s16;
+    if (c === 'O') {
+      let n = 1; while (i + n < 16 && pattern[i + n] === '.') n++;
+      guitar(t, n * s16 * 0.95, r, {gain});
+    } else guitar(t, s16 * 0.8, r, {mute: true, gain: gain * 0.85});
+    if (kickGain) kick(t, kickGain * (c === 'O' ? 1 : 0.7));
+  });
+}
+function snares(b, steps, gain = 0.22) { const [t0, t1] = span(b); for (const i of steps) snare(t0 + i * (t1 - t0) / 16, gain, 0.1); }
+function hats(b, every = 2, gain = 0.05) { const [t0, t1] = span(b); for (let i = 0; i < 16; i += every) hat(t0 + i * (t1 - t0) / 16, gain * (i % 4 === 0 ? 1.3 : 1), false, i % 4 ? 0.3 : -0.2); }
+function crashOn(b, gain = 0.14) { crash(bar(b), gain); }
+function tomFill(b, from = 8, gain = 0.32) {
+  const [t0, t1] = span(b), s16 = (t1 - t0) / 16;
+  for (let i = from; i < 16; i++) taiko(t0 + i * s16, gain * (0.7 + 0.3 * (i - from) / (16 - from)), 190 - (i - from) * 12, (i - from) / (16 - from) - 0.5);
+}
+// a square-wave arpeggio over a bar's chord tones, sixteenths: the chiptune layer
+function chipBar(b, {gain = 0.04, octave = 5, pattern = [0, 1, 2, 3, 2, 1, 0, 2]} = {}) {
+  const [t0, t1] = span(b), s16 = (t1 - t0) / 16, r = rootMidi(b, octave - 1), tt = tones(b);
+  for (let i = 0; i < 16; i++) pluck(t0 + i * s16, s16 * 0.8, r + tt[pattern[i % pattern.length]], {gain, pan: i % 2 ? 0.4 : -0.4});
+}
+// a dark analog pad: four detuned saws, slow filter
+function darkPad(t, dur, notes, {gain = 0.025, cutoff = 900} = {}) {
+  for (const m of notes) tone(B.synth, {t, dur, freq: midi(m), type: 'saw', detune: [-11, -4, 5, 12], attack: Math.min(2, dur * 0.3), decay: 1, sustain: 1,
+    release: 1.5, cutoff, q: 0.9, gain, hall: 0.5, lfo: 0.4, lfoRate: 0.12});
+}
+// the lead: a bright synth (three detuned pulse-saws, vibrato, delay); its twin a diatonic third above, in A minor
+function lead(t, dur, m, {gain = 0.06, pan = 0, glide = null, clean = false} = {}) {
+  ens(B.lead, {t, dur, freq: midi(m), n: 3, spread: 7, attack: 0.006, decay: 0.25, sustain: 0.85, release: 0.15, cutoff: clean ? 1800 : 3800,
+    env: clean ? 600 : 1800, envDecay: 0.1, q: 0.9, gain, pan, width: 0.3, hall: 0.25, dly: 0.3, vib: dur > 0.3 && !clean ? 16 : 0, vibRate: 5.8,
+    vibDelay: 0.16, glide: glide && midi(glide), glideTime: 0.04, square: 0.5});
+}
+const MINOR = [0, 2, 3, 5, 7, 8, 10];
+const thirdAbove = m => {
+  const rel = ((m - 9) % 12 + 12) % 12, k = MINOR.indexOf(rel);
+  if (k < 0) return m + 3;
+  const up = MINOR[(k + 2) % 7] + (k + 2 >= 7 ? 12 : 0);
+  return m + up - rel;
+};
+function twin(list, {gain = 0.06, octave = 1, harmony = true, clean = false} = {}) {
+  for (const e of list) {
+    const d = Math.max(0.1, Math.min(e.dur, 2)) * 0.97, m = e.midi + 12 * octave;
+    lead(e.t, d, m, {gain: gain * Math.max(0.6, e.vol), pan: harmony ? -0.25 : 0, clean});
+    if (harmony) lead(e.t, d, thirdAbove(m), {gain: gain * 0.7 * Math.max(0.6, e.vol), pan: 0.25, clean});
+  }
+}
+const powerHit = (b, gain = 0.13) => { guitar(bar(b), 1.6, riffRoot(b), {gain, ring: 1.2}); crashOn(b, 0.16); kick(bar(b), 0.6); };
+
+// open (bars 0-7): a dark analog intro under the cinematic; a slow chip arpeggio fades in; the lead's motif, slow and clean
+boom(bar(0) + 0.02, 0.4, 4);
+darkPad(bar(0), bar(4) - bar(0), [rootMidi(0, 2), rootMidi(0, 3), rootMidi(0, 3) + 7], {gain: 0.026, cutoff: 700});
+darkPad(bar(4), bar(8) - bar(4), [rootMidi(4, 2), rootMidi(4, 3), rootMidi(4, 3) + 7], {gain: 0.028, cutoff: 900});
+tone(B.bass, {t: bar(0), dur: bar(8) - bar(0), freq: midi(rootMidi(0, 1)), type: 'sine', attack: 2, sustain: 1, release: 1, gain: 0.08});
+for (let b = 2; b < 8; b++) chipBar(b, {gain: 0.012 + 0.004 * (b - 2), pattern: [0, 2, 1, 3, 2, 1, 2, 0]});
+guitar(bar(4), bar(5) - bar(4), riffRoot(4), {gain: 0.06, ring: 1.5}); guitar(bar(6), bar(7) - bar(6), riffRoot(6), {gain: 0.07, ring: 1.5});
 {
-  // the motif, stretched: its first six notes, one per beat across bars 4-5, and its turn held over bars 6-7
   const motif = LEAD.filter(e => e.t < bar(22)).slice(0, 6);
   const beats = [bar(4), ...[1, 2, 3].map(k => bar(4) + k * (bar(5) - bar(4)) / 4), bar(5), bar(5) + (bar(6) - bar(5)) / 2];
-  motif.forEach((e, k) => horn(beats[k], (k < 5 ? beats[k + 1] - beats[k] : bar(8) - beats[k] - 0.4) * 0.98, midiName(e.midi - 12),
-    {gain: 0.06, low: true, attack: 0.18, pan: -0.1}));
+  motif.forEach((e, k) => lead(beats[k], (k < 5 ? beats[k + 1] - beats[k] : bar(8) - beats[k] - 0.4) * 0.98, e.midi, {gain: 0.04, clean: true}));
 }
-timpRoll(bar(7), bar(8) - 0.02, midiName(rootMidi(8, 2)), 0.03, 0.22);
+snareRoll(bar(7.5), bar(8), 0.04, 0.2); cymbalSwell(bar(7), bar(8), 0.2);
 
-// reveal (bars 8-11): the build, on A: taiko and marcato swell; the theme's descending line quoted on the strings
+// reveal (bars 8-11): the build. Eighth-note chugs and kick rising, the chip arpeggio in sixteenths, the theme's descending line
 for (let b = 8; b < 12; b++) {
-  lowBar(b, {gain: 0.09, attack: 0.2});
-  if (b > 8) drumBar(b, {busy: b === 11 ? 1 : 0, taikoGain: 0.25 + 0.04 * (b - 8), heart: true});
-  ostinatoBar(b, [0, 0, 1, 0, 0, 0, 2, 0], {gain: 0.03 + 0.006 * (b - 8)});
+  riffBar(b, b < 10 ? 'm.m.m.m.m.m.m.m.' : 'mmmmmmmmmmmmmmmm', {gain: 0.06 + 0.012 * (b - 8), kickGain: 0.3 + 0.04 * (b - 8)});
+  chipBar(b, {gain: 0.025, pattern: [0, 1, 2, 3]});
+  if (b >= 10) hats(b, 2, 0.04);
 }
-choir(bar(8), bar(12) - bar(8), [midiName(rootMidi(8, 3)), midiName(rootMidi(8, 3) + 7), midiName(rootMidi(8, 4))], {gain: 0.04, vowel: 'a', attack: 0.4});
-for (const e of LEAD2.filter(e => e.t < bar(12)))
-  ens(B.strings, {t: e.t, dur: Math.min(e.dur, 1.6), freq: midi(e.midi), n: 6, spread: 12, attack: 0.06, decay: 0.6, sustain: 0.9, release: 0.5, cutoff: 3000, q: 0.6,
-    gain: 0.05, hall: 0.5, vib: 7, breath: 0.015});
-snareRoll(bar(11) + (bar(12) - bar(11)) / 2, bar(12), 0.05, 0.22);
+twin(LEAD2.filter(e => e.t < bar(12)), {gain: 0.05, octave: 1, harmony: false});
+snareRoll(bar(11), bar(12), 0.06, 0.26); tomFill(11, 12, 0.3);
 
-// island (bars 12-23): the groove. The theme's chords on the promo's voicings, bass figure, ostinato and drums; the fourths
-// stab quoted on short brass over the first eight bars, then the lead melody on the horns
+// island (bars 12-23): the main riff (a gallop), double kick, snare on 2 and 4; the theme's bass line, arpeggio and fourths
+// stab quoted on top; the twin lead from bar 20
 for (let b = 12; b < 24; b++) {
-  padBar(b, {gain: 0.026, attack: 0.15});
-  bassBar(b);
-  drumBar(b, {busy: 2, taikoGain: 0.3, snareGain: 0.11});
-  if (b >= 20) ostinatoBar(b, [0, 0, 2, 0, 0, 1, 0, 3], {gain: 0.04});
+  riffBar(b, 'O.mmO.mmO.mmO.mm', {gain: 0.085});
+  snares(b, [4, 12]);
+  hats(b, 2, 0.045);
+  if (b % 4 === 0) crashOn(b, 0.12);
 }
-for (const e of STAB) {
-  if (e.t >= bar(20)) continue;
-  ens(B.horns, {t: e.t, dur: Math.min(e.dur, 0.16), freq: midi(e.midi), n: 4, spread: 9, attack: 0.005, decay: 0.12, sustain: 0.3, release: 0.18,
-    cutoff: 900, env: 3600, envDecay: 0.06, q: 0.9, gain: 0.05 * Math.max(0.5, e.vol), width: 0.7, hall: 0.35, vib: 0, square: 0.3});
-  marcato(e.t, [midiName(e.midi - 12)], {gain: 0.03, len: 0.12});
-}
-sing(LEAD.filter(e => e.t >= bar(20) && e.t < bar(24)), {gain: 0.085});
+tomFill(19, 12, 0.28); tomFill(23, 12, 0.3);
+for (const e of BASSLINE) synthBass(e.t, Math.min(e.dur, 0.8), e.midi, {gain: 0.07 * Math.max(0.5, e.vol)});
+let chipSide = 1;
+for (const e of ARP) pluck(e.t, Math.min(e.dur, 0.3), e.midi + 12, {gain: 0.04 * Math.max(0.5, e.vol), pan: (chipSide = -chipSide) * 0.4});
+for (const e of STAB) if (e.t < bar(20))
+  ens(B.lead, {t: e.t, dur: Math.min(e.dur, 0.12), freq: midi(e.midi + 12), n: 3, spread: 9, attack: 0.003, decay: 0.08, sustain: 0.3, release: 0.1,
+    cutoff: 2600, env: 3000, envDecay: 0.05, q: 1, gain: 0.035 * Math.max(0.5, e.vol), width: 0.6, dly: 0.2, vib: 0, square: 0.6});
+twin(LEAD.filter(e => e.t >= bar(20) && e.t < bar(24)), {gain: 0.06});
 
-// method (bars 24-31): under the cards. Chords, heartbeat, the cellos' pulse; the lead's continuation hummed by the choir, then
-// the tense A - B-flat - D turn on a low horn
-for (let b = 24; b < 32; b++) {
-  padBar(b, {gain: 0.024, attack: 0.3});
-  lowBar(b, {gain: 0.08});
-  const [t0, t1] = span(b);
-  for (let q = 0; q < 4; q++) heartbeat(t0 + q * (t1 - t0) / 4, q === 0 ? 0.45 : 0.28);
-  for (let i = 0; i < 8; i += 2) cello(t0 + i * (t1 - t0) / 8, midiName(rootMidi(b, 2)), {gain: 0.04});
+// method (bars 24-31): the half-time breakdown. Open chords on the one and the three, kick and a half-time snare, the arpeggio
+// low; the lead's continuation on a clean lead; then tremolo-picked chugs climbing into the bridge
+for (let b = 24; b < 28; b++) {
+  riffBar(b, 'O.......O.......', {gain: 0.07, kickGain: 0.5});
+  snares(b, [8], 0.24);
+  chipBar(b, {gain: 0.018, octave: 4, pattern: [0, 2, 3, 2]});
 }
-tone(B.synth, {t: bar(24), dur: bar(32) - bar(24), freq: midi(rootMidi(26, 5)), type: 'square', detune: [-8, 8], attack: 2, decay: 1, sustain: 1, release: 2,
-  cutoff: 1600, q: 1.5, gain: 0.01, hall: 0.6, dly: 0.35, lfo: 0.6, lfoRate: 0.18});
-sing(LEAD.filter(e => e.t >= bar(24) && e.t < bar(28)), {gain: 0.07, soft: true});
-for (const e of LEAD.filter(e => e.t >= bar(28) && e.t < bar(32))) horn(e.t, Math.min(e.dur, 1.4), midiName(e.midi - 12), {gain: 0.05, low: true, attack: 0.08});
-timp(bar(28), midiName(rootMidi(28, 2)), 0.2); timp(bar(30), midiName(rootMidi(30, 2)), 0.22);
-riser(bar(30), bar(32), 0.14); snareRoll(bar(31), bar(32), 0.04, 0.22); cymbalSwell(bar(31), bar(32), 0.22);
+twin(LEAD.filter(e => e.t >= bar(24) && e.t < bar(28)), {gain: 0.04, octave: 0, harmony: false, clean: true});
+for (let b = 28; b < 32; b++) {
+  const [t0, t1] = span(b), s32 = (t1 - t0) / 32;
+  for (let i = 0; i < 32; i++) guitar(t0 + i * s32, s32 * 0.8, riffRoot(b), {mute: true, gain: 0.05 + 0.02 * (b - 28) / 3});
+  kick(t0, 0.5); snares(b, [8], 0.22);
+}
+for (const e of LEAD.filter(e => e.t >= bar(28) && e.t < bar(32))) lead(e.t, Math.min(e.dur, 1.4), e.midi, {gain: 0.045});
+riser(bar(30), bar(32), 0.14); snareRoll(bar(31), bar(32), 0.05, 0.26); tomFill(31, 8, 0.32); cymbalSwell(bar(31), bar(32), 0.2);
 
-// pairs (bars 32-39): the bridge. Full drums, the root pulse, the lead quoted strong on the horns over the choir
+// pairs (bars 32-39): the bridge at full speed. Sixteenth chugs and double kick, a crash on every bar, the theme's pulse on the
+// synth bass, the twin lead an octave up
 for (let b = 32; b < 40; b++) {
-  padBar(b, {gain: 0.026, attack: 0.12, choirToo: 0.03});
-  pulseBar(b, {gain: 0.045});
-  drumBar(b, {busy: 3, taikoGain: 0.33, snareGain: 0.12});
+  riffBar(b, 'OmmmmmmmOmmmmmmm', {gain: 0.08, kickGain: 0.36});
+  snares(b, [4, 12]);
+  crashOn(b, 0.1);
 }
-sing(LEAD.filter(e => e.t >= bar(32) && e.t < bar(40)), {gain: 0.09});
+for (const e of PULSE) synthBass(e.t, Math.min(e.dur, 0.5), e.midi, {gain: 0.065 * Math.max(0.5, e.vol)});
+twin(LEAD.filter(e => e.t >= bar(32) && e.t < bar(40)), {gain: 0.065});
+tomFill(39, 8, 0.32);
 
-// progress (bars 40-47): the theme's synth line on the promo's pluck, over A, with a straighter beat
+// progress (bars 40-47): the machine section. Eighth chugs, a straight beat, the theme's synth line as a chip arpeggio
 for (let b = 40; b < 48; b++) {
-  padBar(b, {gain: 0.022, attack: 0.2});
-  lowBar(b, {gain: 0.07});
-  kitBar(b, {gain: 0.42});
+  riffBar(b, 'O.m.m.m.O.m.m.m.', {gain: 0.07, kickGain: 0.38});
+  snares(b, [4, 12], 0.2);
+  hats(b, 1, 0.035);
+  if (b % 4 === 0) crashOn(b, 0.1);
 }
-let side = 1;
-for (const e of SYNTH) pluck(e.t, Math.min(e.dur, 0.5), e.midi, {gain: 0.05, pan: (side = -side) * 0.3});
-choir(bar(44), bar(48) - bar(44), [midiName(rootMidi(44, 3)), midiName(rootMidi(44, 3) + 7)], {gain: 0.03, vowel: 'a', attack: 1});
+for (const e of SYNTH) { pluck(e.t, Math.min(e.dur, 0.4), e.midi, {gain: 0.05, pan: (chipSide = -chipSide) * 0.3}); pluck(e.t, Math.min(e.dur, 0.3), e.midi + 12, {gain: 0.025}); }
+darkPad(bar(44), bar(48) - bar(44), [rootMidi(44, 3), rootMidi(44, 3) + 7], {gain: 0.02, cutoff: 1600});
 cymbalSwell(bar(47), bar(48), 0.16);
 
-// numbers (bars 48-51): the melody's return, strings and horns together, building to the end
+// numbers (bars 48-51): the melody's return, twin lead over the gallop, building to the last hit
 for (let b = 48; b < 52; b++) {
-  padBar(b, {gain: 0.028, attack: 0.1, choirToo: 0.03});
-  lowBar(b, {gain: 0.09});
-  drumBar(b, {busy: b < 50 ? 1 : 2, taikoGain: 0.32 + 0.03 * (b - 48), heart: false});
-  ostinatoBar(b, [0, 0, 2, 0, 1, 0, 2, 3], {gain: 0.045});
+  riffBar(b, b < 50 ? 'O.mmO.mmO.mmO.mm' : 'OmmmOmmmOmmmOmmm', {gain: 0.085});
+  snares(b, [4, 12]);
+  crashOn(b, 0.1);
 }
-sing(LEAD.filter(e => e.t >= bar(48) && e.t < bar(52)), {gain: 0.08});
-for (const e of LEAD2.filter(e => e.t >= bar(48) && e.t < bar(52)))
-  ens(B.strings, {t: e.t, dur: Math.min(e.dur, 1.2), freq: midi(e.midi + 12), n: 6, spread: 12, attack: 0.04, decay: 0.5, sustain: 0.85, release: 0.4,
-    cutoff: 3400, q: 0.6, gain: 0.035, hall: 0.5, vib: 7});
-timpRoll(bar(51), bar(52) - 0.02, midiName(rootMidi(52, 2)), 0.05, 0.28);
+twin(LEAD.filter(e => e.t >= bar(48) && e.t < bar(52)), {gain: 0.065});
+twin(LEAD2.filter(e => e.t >= bar(48) && e.t < bar(52)), {gain: 0.035, octave: 1, harmony: false});
+tomFill(51, 8, 0.34); snareRoll(bar(51.5), bar(52), 0.06, 0.26);
 
-// outro (bars 52-55): the open A-E fifth, then the motif's callback on a solo horn over the held choir
-lowStrings(bar(52), bar(56) - bar(52) + 1.5, midiName(rootMidi(52, 1)), {gain: 0.1, attack: 0.05, release: 3});
-strings(bar(52), bar(56) - bar(52) + 1.5, [midiName(rootMidi(52, 3)), midiName(rootMidi(52, 3) + 7), midiName(rootMidi(52, 4))], {gain: 0.03, attack: 0.3, release: 3});
-choir(bar(52), bar(56) - bar(52) + 1.5, [midiName(rootMidi(52, 3)), midiName(rootMidi(52, 3) + 7)], {gain: 0.04, vowel: 'a', attack: 0.5, release: 3});
+// outro (bars 52-55): the last power chord rings; the pad, and the motif's callback on the clean lead
+darkPad(bar(52), bar(56) - bar(52) + 1.5, [rootMidi(52, 2), rootMidi(52, 3), rootMidi(52, 3) + 7], {gain: 0.028, cutoff: 1100});
+tone(B.bass, {t: bar(52), dur: bar(56) - bar(52), freq: midi(rootMidi(52, 1)), type: 'sine', attack: 0.05, sustain: 1, release: 2, gain: 0.09});
 {
   const motif = LEAD.filter(e => e.t < bar(22)).slice(0, 3);
   const at = [bar(53), bar(53) + (bar(54) - bar(53)) / 2, bar(54)];
-  motif.forEach((e, k) => horn(at[k], k < 2 ? (at[k + 1] - at[k]) * 0.97 : bar(56) - at[k], midiName(e.midi - 12), {gain: 0.06, low: true, attack: 0.12}));
+  motif.forEach((e, k) => lead(at[k], k < 2 ? (at[k + 1] - at[k]) * 0.97 : bar(56) - at[k], e.midi, {gain: 0.045, clean: true}));
 }
 
-// ------------------------------------------------------------------ the promo's own accents on the section cuts
-// the chord under each cut, from the song's harmony there (A with a B-flat colour, A minor, G minor; the ending an open A-E fifth)
-const HITS = {A: ['A2', 'E3', 'A3', 'E4'], Gm: ['G2', 'D3', 'G3', 'A#3', 'D4']};
-cymbalSwell(bar(7), bar(8), 0.2);
-gong(bar(8), 0.4, 8); hornHit(bar(8), HITS.A, {gain: 0.09}); boom(bar(8), 0.5, 3.5); taiko(bar(8), 0.6, 50);
-cymbalSwell(bar(11), bar(12), 0.2);
-gong(bar(12), 0.35, 6); hornHit(bar(12), HITS.A, {gain: 0.1}); taiko(bar(12), 0.7, 50); crash(bar(12), 0.16);
-gong(bar(24), 0.25, 6);
-gong(bar(32), 0.4, 7); hornHit(bar(32), HITS.Gm, {gain: 0.09}); crash(bar(32), 0.14);
-crash(bar(40), 0.12);
-cymbalSwell(bar(47), bar(48), 0.16);
-gong(bar(52), 0.32, 7); hornHit(bar(52), HITS.A, {gain: 0.11}); boom(bar(52), 0.6, 4.5); taiko(bar(52), 0.7, 48);
+// ------------------------------------------------------------------ the hits on the section cuts
+powerHit(8); boom(bar(8), 0.45, 3);
+powerHit(12, 0.12);
+powerHit(32, 0.12);
+powerHit(52, 0.14); boom(bar(52), 0.5, 4);
 
 // ------------------------------------------------------------------ cut effects on the picture's cues (ad/src/main.js)
 typing(14, bar(0.6), bar(0.6) + 0.8);                                   // "Deus Ex, 2000."
@@ -813,7 +829,7 @@ for (let i = 0; i < N; i++) {
   mix.L[i] += shL.high * 0.42; mix.R[i] += shR.high * 0.42;
   raw = Math.max(raw, Math.abs(mix.L[i]), Math.abs(mix.R[i]));
 }
-const INPUT_GAIN = Number(process.env.MUSIC_GAIN ?? 1.3) / raw;
+const INPUT_GAIN = Number(process.env.MUSIC_GAIN ?? 1.15) / raw;
 const ceiling = 0.87, look = Math.floor(SR * 0.002), relCoef = 1 - Math.exp(-1 / (SR * 0.08));
 const absMax = new Float32Array(N);
 for (let i = 0; i < N; i++) absMax[i] = Math.max(Math.abs(mix.L[i]), Math.abs(mix.R[i])) * INPUT_GAIN;
