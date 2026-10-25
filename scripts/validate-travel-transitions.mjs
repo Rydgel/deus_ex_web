@@ -146,6 +146,9 @@ async function scenario(id) {
   for (const leg of spec.legs) {
     const label = `${id}${spec.legs.indexOf(leg) + 1}`;
     const readCap = async ext => (await readFile(`${cap}${leg.snap}.${ext}`, 'utf8'));
+    // an arrival that runs: the capture lets the level go before it leaves (tr-d's `set LevelInfo bPlayersOnly False`), since the freeze is a class default
+    // that would carry into the next level (docs/travel.md "Class defaults across a travel")
+    if (leg.run) typed(session, 'set LevelInfo bPlayersOnly False');
     typed(session, leg.cmd);
     let request = null, trace = null;
     if (leg.cause) {
@@ -169,7 +172,8 @@ async function scenario(id) {
     if (!check(request, `${label}: ${leg.cmd} made no request`)) return;
     const text = request.travelInfo[0][1];
     const { c: next } = await openSession(request.map, assets, { travel: { arrival: request, lastURL: request.lastURL }, saveDirectory: directory });
-    // the captured sessions freeze the arrival from its load (the class default carried) or, with `run`, let it run for that long and freeze it then
+    // the captured sessions freeze the arrival from its load (the class default carried, as Play's travel now carries it: the typed line repeats it) or, with `run`,
+    // let it run for that long and freeze it then
     if (leg.run) { next.frames(leg.run); typed(next, 'set LevelInfo bPlayersOnly True'); next.frames(60); }
     else { typed(next, 'set LevelInfo bPlayersOnly True'); next.frames(180); }
     if (leg.noSnap) {

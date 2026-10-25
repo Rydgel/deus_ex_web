@@ -468,6 +468,9 @@ The travel text is not the only state that crosses a `LoadMap`: the classes and 
 `scripts/validate-class-default-travel.mjs`: from the logo map, `set DeusEx.JCDentonMale ReducedDamageType All`, `set Engine.PlayerStart ExtraCost 55`, `set Engine.PlayerStart visitedWeight 4321`, `set Engine.NavigationPoint ExtraCost 99`, `LocalTravel 00_Training`
 (the request passes `structuredClone`): Login's player has `All`; Training's `PlayerStart1`, which does not serialize `ExtraCost`, has 55, and keeps the 10000000 it serializes for `visitedWeight` over the carried 4321; NavigationPoint's default is 99 and PlayerStart's 55;
 a `PathNode` (never linked in the logo map) has 99; then `SaveGame 7` and `LoadGame 7`: the loaded player still has `All`. Without the carry the same run fails every one of these checks.
+With the carry the replays of the travel captures freeze an arrival as the captures did, so `validate-travel-transitions` now also types the capture's `set LevelInfo bPlayersOnly False` before a travel whose arrival runs (`tr-d`): without it scenario D's
+`08_NYC_Street` arrived frozen, its `Mission08.PreTravel` never ran, and the restored Street kept the helicopter the original's lost. On the Linux host (2026-10-25) `validate-stage6-chain` 03 and 11, `validate-travel`, `-newgame`, `-transitions`, `-endings`, `-restore`,
+`-restore-objects`, `validate-restored-speech` and `validate-load-ui` pass, and mission 12's arrival in the restored `12_Vandenberg_Cmd` keeps `ReducedDamageType` All and Health 100 from its first frame.
 
 Unverified or not modelled:
 
