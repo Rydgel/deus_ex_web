@@ -1,42 +1,69 @@
 // Deus Ex Browser Runtime — promo renderer. window.__video.renderFrame(t)
 // draws time t (seconds) deterministically into the 1920x1080 canvas; the
 // render script steps it frame by frame and pipes the frames into ffmpeg.
+// Sections and cuts follow the soundtrack's bars: music.mjs writes them to ad/build/score.json (timeline.js).
 import {W, H, C, FONT, clamp, lerp, inv, ease, prog, hash, rgba, font, decode, typed, glowText, brackets, cover,
   roundRect, grid, number, tag, ImageCache} from './lib.js';
 import {createWire} from './wire.js';
+import {grid as barGrid, FPS} from './timeline.js';
+
+const score = await (await fetch('/ad/build/score.json')).json();
+const G = barGrid(score), {bar, span} = G, SECTIONS = G.sections, DURATION = G.duration;
 
 const canvas = document.getElementById('c');
 const ctx = canvas.getContext('2d', {alpha: false});
-const cache = new ImageCache(160);
+// stills stay loaded; footage frames rotate through their own cache (an evicted bitmap is closed)
+const cache = new ImageCache(1000), frameCache = new ImageCache(48);
 const S = {img: {}, facts: null, wire: null, frames: new Map()};
+export {DURATION, FPS};
 
-export const DURATION = 106, FPS = 30, BEAT = 0.5;
-const T = {logo: [0, 4], intro: [4, 8], montage: [8, 16], question: [16, 22], title: [22, 28], method: [28, 38],
-  oracle: [38, 48], x87: [48, 54], pairs: [54, 64], footage: [64, 80], pace: [80, 90], numbers: [90, 98], outro: [98, 106]};
-
-const STILLS = ['o-intro-1', 'o-intro-27', 'o-intro-45', 'o-intro-9', 'o-intro-70', 'o-intro-cp0000-CameraPoint0',
-  'o-intro-cp0070-CameraPoint68', 'o-intro-cp0071-CameraPoint67', 'o-intro-cp0047-CameraPoint45', 'o-l-statue-high',
-  'o-l-paul', 'o-h-anna', 'o-h-gunther', 'o-t-observers', 'o-l-harley', 'o-intro-cp0074-CameraPoint71',
-  'o-intro-cp0052-CameraPoint17', 'o-t-start', 'b-t-start', 'o-t-infolink', 'b-t-infolink', 'o-p-walton', 'b-p-walton',
-  'o-t-crates', 'b-t-crates', 'o-intro-cp0002-CameraPoint4'];
-
-// ---------------------------------------------------------------- footage
-const CLIP_ROOT = '/ad/captures/browser/clips';
+// ---------------------------------------------------------------- footage (ad/captures/play, capture-play.mjs)
+const CLIP_ROOT = '/ad/captures/play';
+const shot = (b0, b1, clip, f0, extra = {}) => ({t0: bar(b0), t1: bar(b1), clip, f0, ...extra});
 const FOOTAGE = [
-  {t0: 64.0, t1: 67.5, clip: 'walk', f0: 20, head: 'WALK · INFOLINK', sub: 'Original player physics, collision and DataLink scripts'},
-  {t0: 67.5, t1: 69.5, clip: 'walk', f0: 125, head: 'USE', sub: 'The door runs DeusExMover.Frob — the original bytecode'},
-  {t0: 69.5, t1: 72.5, clip: 'instructor', f0: 95, head: 'TALK', sub: 'Original conversation flow and subtitles'},
-  {t0: 72.5, t1: 75.5, clip: 'crowbar', f0: 40, head: 'FIGHT', sub: 'Original weapon states, crate fragments and contents'},
-  {t0: 75.5, t1: 77.5, clip: 'menu', f0: 5, head: 'MENU', sub: 'Esc opens the original MenuMain'},
-  {t0: 77.5, t1: 80.0, clip: 'observers', f0: 0, head: 'NPCs', sub: 'Character meshes posed by the original GetFrame'},
+  // the cold open: 00_Intro, running in Play, over the theme's intro (its second block is slower)
+  shot(2, 3, 'i-globe', 30, {z: [1.0, 1.05]}),
+  shot(3, 4, 'i-room', 10, {z: [1.04, 1.0]}),
+  shot(4, 5, 'i-room', 84, {z: [1.0, 1.05]}),
+  shot(5, 6, 'i-statue', 10, {z: [1.0, 1.04]}),
+  shot(6, 7, 'i-nsf', 0, {z: [1.04, 1.0]}),
+  shot(7, 8, 'i-clone', 0, {z: [1.0, 1.08], fadeAt: 48}),   // the dive into the eye, then black until the gong (the clip cuts to the NSF at 60)
+  // the reveal: the cinematic keeps playing while the frame becomes a browser window
+  shot(8, 10, 'i-page', 60, {reveal: true}),
+  shot(10, 12, 'i-logo', 60, {title: true}),
+  // gameplay, over the main groove
+  shot(12, 13.5, 'p-arrival', 10, {head: 'ARRIVE', sub: 'The original LoadMap, Login and DeusExHUD'}),
+  shot(13.5, 15, 'p-paul', 230, {head: 'TALK', sub: 'Third-person conversations: ConPlay, its camera, lip sync'}),
+  shot(15, 16.5, 'p-fight', 36, {head: 'FIGHT', sub: 'Weapon states and tracers; the NSF aim and fire back'}),
+  shot(16.5, 18, 'p-fight', 128, {head: 'HIT', sub: 'Hit regions, armor and damage, compared with the original'}),
+  shot(18, 19.5, 'p-gunther', 130, {head: 'RESCUE', sub: 'The cell’s button and door run DeusExMover’s bytecode'}),
+  shot(19.5, 21, 't-crowbar', 30, {head: 'BREAK', sub: 'Two crowbar hits: the crate’s original fragments and contents'}),
+  shot(21, 22.5, 't-keypad', 15, {head: 'HACK', sub: 'The keypad’s original window, keys and code'}),
+  shot(22.5, 24, 't-datacube', 8, {head: 'READ', sub: 'A DataCube, through the original text parser and windows'}),
 ];
 const clipUrl = (clip, frame) => `${CLIP_ROOT}/${clip}/f${String(frame).padStart(4, '0')}.jpg`;
 const footageAt = t => {
   const seg = FOOTAGE.find(s => t >= s.t0 && t < s.t1);
-  return seg ? {seg, url: clipUrl(seg.clip, seg.f0 + Math.floor((t - seg.t0) * FPS + 1e-6))} : null;
+  if (!seg) return null;
+  const frame = seg.f0 + Math.floor((t - seg.t0) * FPS + 1e-6);
+  return {seg, url: clipUrl(seg.clip, Math.min(frame, (S.clipLengths[seg.clip] ?? 1e9) - 1))};
 };
 
+// the original/Play frame pairs of the Stage 4 acceptance work (ad/build/assets/pairs, graded with the original's gamma ramp)
+const PAIRS = [
+  ['00_Intro__in2-in1', '00_Intro', 'the opening cinematic'],
+  ['00_Intro__in2-in3', '00_Intro', 'Page and Simons'],
+  ['01_NYC_UNATCOIsland__cvA4', '01_NYC_UNATCOIsland', 'a conversation camera over the bay'],
+  ['01_NYC_UNATCOHQ__mm2', '01_NYC_UNATCOHQ', 'MeetManderley, a conversation'],
+  ['02_NYC_Hotel__hotel1', '02_NYC_Hotel', 'a bathroom mirror, JC in the reflection'],
+  ['06_HongKong_WanChai_Garage__garage2', '06_HongKong_WanChai_Garage', 'the garage'],
+  ['10_Paris_Club__club1', '10_Paris_Club', 'La Porte de l’Enfer'],
+  ['15_Area51_Final__a51f', '15_Area51_Final', 'a security terminal, two live cameras'],
+];
+const STILLS = PAIRS.flatMap(([id]) => [`pairs/${id}-o`, `pairs/${id}-p`]);
+
 // ---------------------------------------------------------------- helpers
+const T = Object.fromEntries(Object.keys(SECTIONS).map(name => [name, span(name)]));
 const within = (t, [a, b], pad = 0) => t >= a - pad && t < b + pad;
 function background(ctx, t, alpha = 1) {
   ctx.fillStyle = C.bg;
@@ -48,9 +75,9 @@ function background(ctx, t, alpha = 1) {
   ctx.fillRect(0, 0, W, H);
   grid(ctx, t, 0.16 * alpha);
 }
-function header(ctx, t, t0, number, title, headline, sub) {
+function header(ctx, t, t0, num, title, headline, sub) {
   const a = prog(t, t0, t0 + 0.5);
-  tag(ctx, `${number} — ${title}`, 96, 116, a);
+  tag(ctx, `${num} — ${title}`, 96, 116, a);
   if (headline) {
     font(ctx, 72, FONT.title, 700, 1);
     ctx.fillStyle = C.text;
@@ -67,9 +94,11 @@ function header(ctx, t, t0, number, title, headline, sub) {
   }
 }
 function chip(ctx, text, x, y, color = C.gold, align = 'left') {
+  ctx.save();
+  ctx.textAlign = 'left';
   font(ctx, 16, FONT.mono, 600, 3);
   const w = ctx.measureText(text).width + 28;
-  const x0 = align === 'right' ? x - w : x;
+  const x0 = align === 'right' ? x - w : align === 'center' ? x - w / 2 : x;
   ctx.fillStyle = rgba('#03070c', 0.72);
   ctx.fillRect(x0, y - 24, w, 36);
   ctx.strokeStyle = rgba(color, 0.9);
@@ -77,6 +106,7 @@ function chip(ctx, text, x, y, color = C.gold, align = 'left') {
   ctx.strokeRect(x0 + 0.5, y - 23.5, w - 1, 35);
   ctx.fillStyle = color;
   ctx.fillText(text, x0 + 14, y);
+  ctx.restore();
 }
 function panel(ctx, x, y, w, h, alpha = 1) {
   ctx.save();
@@ -90,163 +120,158 @@ function panel(ctx, x, y, w, h, alpha = 1) {
   brackets(ctx, x - 6, y - 6, w + 12, h + 12, alpha, rgba(C.gold, 0.9), 18, 2);
 }
 const bigCount = (value, p) => number(value * ease.out3(clamp(p)));
+const cursor = (ctx, t, x, y, w, h) => { if (Math.floor(t * 2.4) % 2 === 0) { ctx.fillStyle = C.gold; ctx.fillRect(x, y, w, h); } };
 
-// ---------------------------------------------------------------- scenes
-function sLogo(ctx, t) {
+// ---------------------------------------------------------------- 1. the cold open
+function sOpen(ctx, t) {
   ctx.fillStyle = '#000';
   ctx.fillRect(0, 0, W, H);
-  // Stuttered frames of the original logo sequence before it settles.
-  const stutter = [[0.10, 0.16, 'o-intro-1'], [0.26, 0.33, 'o-intro-27'], [0.42, 0.50, 'o-intro-45']];
-  for (const [a, b, name] of stutter) if (t >= a && t < b) {
-    ctx.globalAlpha = 0.9;
-    cover(ctx, S.img[name], 0, 0, W, H, 1.05);
+  if (t < bar(2)) {
+    const x = 150, y = 560;
+    font(ctx, 96, FONT.title, 700, 1);
+    const text = typed('Deus Ex, 2000.', prog(t, bar(0.6), bar(0.6) + 0.8, ease.linear));
+    ctx.globalAlpha = 1 - prog(t, bar(2) - 0.3, bar(2));
+    ctx.fillStyle = C.text;
+    ctx.fillText(text, x, y);
+    cursor(ctx, t, x + ctx.measureText(text).width + 12, y - 78, 14, 86);
+    ctx.globalAlpha = prog(t, 0.4, 1.2) * (1 - prog(t, bar(2) - 0.3, bar(2)));
+    tag(ctx, 'ION STORM · UNREAL ENGINE 1', x + 4, y + 70);
+    ctx.globalAlpha = 1;
+    return;
   }
-  const a = prog(t, 0.55, 1.6, ease.inOut);
-  const flicker = 0.88 + 0.12 * hash(Math.floor(t * 24) + 3);
-  ctx.globalAlpha = a * flicker;
-  cover(ctx, S.img['o-intro-9'], 0, 0, W, H, lerp(1.0, 1.12, ease.inOut(inv(0.55, 4.0, t))), 0, -0.04);
-  ctx.globalAlpha = 1;
-  tag(ctx, 'ORIGINAL GAME · IN-ENGINE CAPTURE', 96, 116, prog(t, 1.1, 1.6));
-  font(ctx, 30, FONT.mono, 600, 6);
-  ctx.fillStyle = C.text;
-  ctx.fillText(typed('DEUS EX  (2000)', prog(t, 1.6, 2.2, ease.linear)), 96, H - 150);
-  font(ctx, 20, FONT.mono, 400, 2);
-  ctx.fillStyle = C.muted;
-  ctx.fillText(typed('Unreal Engine 1 · DeusEx.exe · Direct3D · 00_Intro', prog(t, 2.2, 3.0, ease.linear)), 96, H - 110);
+  cinematic(ctx, t);
 }
-
-const INTRO = [
-  [4.0, 5.0, 'o-intro-cp0000-CameraPoint0', 'CAMERAPOINT0 · SEQ 000', 1.02, 1.10, 0, 0],
-  [5.0, 6.0, 'o-intro-cp0070-CameraPoint68', 'CAMERAPOINT68 · SEQ 070', 1.0, 1.07, 0.2, -0.1],
-  [6.0, 7.0, 'o-intro-cp0071-CameraPoint67', 'CAMERAPOINT67 · SEQ 071', 1.07, 1.0, -0.2, 0],
-  [7.0, 8.0, 'o-intro-cp0047-CameraPoint45', 'CAMERAPOINT45 · SEQ 047', 1.1, 1.1, -0.6, 0.6],
-];
-function sIntro(ctx, t) {
-  ctx.fillStyle = '#000';
-  ctx.fillRect(0, 0, W, H);
-  const shot = INTRO.find(s => t >= s[0] && t < s[1]) ?? INTRO.at(-1);
-  const [a, b, name, label, z0, z1, px0, px1] = shot;
-  const p = ease.inOut(inv(a, b, t));
-  const bar = 118;
+// letterboxed footage of the intro, as the original shows it
+function cinematic(ctx, t) {
+  const f = footageAt(t);
+  if (!f) return;
+  const img = S.frames.get(f.url), {seg} = f;
+  const p = ease.inOut(inv(seg.t0, seg.t1, t));
+  const barH = 110;
   ctx.save();
-  ctx.beginPath(); ctx.rect(0, bar, W, H - 2 * bar); ctx.clip();
-  cover(ctx, S.img[name], 0, bar, W, H - 2 * bar, lerp(z0, z1, p) * 1.02, lerp(px0, px1, p), 0);
+  ctx.beginPath(); ctx.rect(0, barH, W, H - 2 * barH); ctx.clip();
+  cover(ctx, img, 0, 0, W, H, lerp(seg.z?.[0] ?? 1, seg.z?.[1] ?? 1, p));
+  if (seg.fadeAt != null) { ctx.fillStyle = `rgba(0,0,0,${clamp(((t - seg.t0) * FPS - seg.fadeAt) / 10)})`; ctx.fillRect(0, 0, W, H); }
   ctx.restore();
   font(ctx, 17, FONT.mono, 500, 3);
   ctx.fillStyle = C.muted;
-  ctx.fillText(`00_INTRO · ${label}`, 96, H - bar / 2 + 6);
-  ctx.textAlign = 'right';
-  ctx.fillText('OPENING CINEMATIC · ORIGINAL ENGINE', W - 96, bar / 2 + 6);
-  ctx.textAlign = 'left';
+  ctx.globalAlpha = prog(t, bar(2), bar(2) + 0.6);
+  ctx.fillText('00_INTRO', 96, H - barH / 2 + 6);
+  ctx.globalAlpha = 1;
 }
 
-const MONTAGE = [
-  ['o-l-statue-high', 'LIBERTY ISLAND', '01_NYC_UNATCOIsland'],
-  ['o-l-paul', 'PAUL DENTON', '01_NYC_UNATCOIsland'],
-  ['o-h-anna', 'ANNA NAVARRE', '01_NYC_UNATCOHQ'],
-  ['o-h-gunther', 'GUNTHER HERMANN', '01_NYC_UNATCOHQ'],
-  ['o-t-observers', 'THE OBSERVATION DECK', '00_Training'],
-  ['o-l-harley', 'HARLEY FILBEN', '01_NYC_UNATCOIsland'],
-  ['o-intro-cp0074-CameraPoint71', 'THE DENTON CLONE', '00_Intro'],
-  ['o-intro-cp0052-CameraPoint17', 'GREASEL', '00_Intro'],
-];
-function sMontage(ctx, t) {
-  const i = clamp(Math.floor(t - 8), 0, MONTAGE.length - 1);
-  const [name, title, map] = MONTAGE[i];
-  const p = t - 8 - i;
+// ---------------------------------------------------------------- 2. the reveal: a browser window; the title on Play's logo map
+function sReveal(ctx, t) {
+  const f = footageAt(t);
+  if (!f) return;
+  const img = S.frames.get(f.url);
+  if (f.seg.reveal) {
+    background(ctx, t, 0.7);
+    // the full-bleed frame shrinks into a browser window
+    const s = prog(t, bar(8), bar(8) + 1.2, ease.inOut3);
+    const win = {w: lerp(W, 1460, s), h: lerp(H, 900, s)};
+    win.x = (W - win.w) / 2; win.y = lerp(0, 90, s);
+    const chrome = 52 * s;
+    ctx.save();
+    roundRect(ctx, win.x, win.y, win.w, win.h, 14 * s);
+    ctx.fillStyle = '#10171f';
+    ctx.fill();
+    ctx.clip();
+    cover(ctx, img, win.x, win.y + chrome, win.w, win.h - chrome, 1.0);
+    if (s > 0.02) {
+      ctx.globalAlpha = s;
+      ctx.fillStyle = '#1a232d';
+      ctx.fillRect(win.x, win.y, win.w, chrome);
+      for (const [k, c] of ['#ff5f57', '#febc2e', '#28c840'].entries()) {
+        ctx.fillStyle = c; ctx.beginPath(); ctx.arc(win.x + 26 + k * 22, win.y + chrome / 2, 6.5, 0, Math.PI * 2); ctx.fill();
+      }
+      roundRect(ctx, win.x + win.w / 2 - 280, win.y + 11, 560, chrome - 22, 9);
+      ctx.fillStyle = '#0c1218'; ctx.fill();
+      font(ctx, 17, FONT.mono, 500, 0.5);
+      ctx.fillStyle = C.muted;
+      ctx.textAlign = 'center';
+      ctx.fillText('localhost:5173', win.x + win.w / 2, win.y + chrome / 2 + 6);
+      ctx.textAlign = 'left';
+    }
+    ctx.restore();
+    if (s > 0.5) {
+      ctx.strokeStyle = rgba(C.line, s);
+      ctx.lineWidth = 1;
+      roundRect(ctx, win.x, win.y, win.w, win.h, 14 * s);
+      ctx.stroke();
+    }
+    // the line under the window
+    const text = typed('Running in your browser.', prog(t, bar(9) + 0.1, bar(9) + 1.0, ease.linear));
+    ctx.textAlign = 'center';
+    font(ctx, 46, FONT.title, 700, 1);
+    ctx.fillStyle = C.text;
+    ctx.fillText(text, W / 2, 1050);
+    ctx.textAlign = 'left';
+    return;
+  }
+  // the title over Play's own logo map (DX.dx's camera flight, where the intro travels)
   ctx.fillStyle = '#000';
   ctx.fillRect(0, 0, W, H);
-  cover(ctx, S.img[name], 0, 0, W, H, lerp(1.06, 1.0, ease.out3(p)), i % 2 ? 0.3 : -0.3, 0);
-  const m = 60;
-  brackets(ctx, m, m, W - 2 * m, H - 2 * m, prog(p, 0, 0.25), rgba(C.gold, 0.85), 34, 2);
-  chip(ctx, 'ORIGINAL', W - m - 20, m + 52, C.gold, 'right');
-  font(ctx, 46, FONT.title, 700, 7);
-  ctx.fillStyle = C.text;
-  ctx.fillText(decode(title, prog(p, 0.02, 0.35, ease.linear), i + 3), m + 36, H - m - 70);
-  font(ctx, 20, FONT.mono, 500, 2);
-  ctx.fillStyle = C.goldHi;
-  ctx.fillText(typed(map, prog(p, 0.1, 0.45, ease.linear)), m + 38, H - m - 34);
-}
-
-function sQuestion(ctx, t) {
-  background(ctx, t);
-  ctx.globalAlpha = 0.12;
-  cover(ctx, S.img['o-t-start'], 0, 0, W, H, 1.1);
+  ctx.globalAlpha = prog(t, bar(10), bar(10) + 0.5);
+  cover(ctx, img, 0, 0, W, H, lerp(1.0, 1.04, inv(bar(10), bar(12), t)), 0, -0.25);
   ctx.globalAlpha = 1;
-  const x = 150;
-  font(ctx, 104, FONT.title, 700, 1);
-  ctx.fillStyle = C.text;
-  ctx.fillText(typed('Deus Ex, 2000.', prog(t, 16.3, 17.0, ease.linear)), x, 450);
-  font(ctx, 104, FONT.title, 700, 1);
-  ctx.fillStyle = C.gold;
-  glowText(ctx, typed('Rebuilt in the browser,', prog(t, 17.7, 18.7, ease.linear)), x, 580, C.gold, 30, 0.35);
-  font(ctx, 30, FONT.mono, 500, 1);
-  ctx.fillStyle = C.muted;
-  ctx.fillText(typed('piece by piece — from its own data, UnrealScript bytecode and x86 machine code', prog(t, 19.2, 20.8, ease.linear)), x + 4, 670);
-  // blinking cursor after the last typed line
-  if (Math.floor(t * 2) % 2 === 0 && t > 16.3) {
-    const line = t < 17.7 ? 0 : t < 19.2 ? 1 : 2;
-    const texts = ['Deus Ex, 2000.', 'Rebuilt in the browser,', 'piece by piece — from its own data, UnrealScript bytecode and x86 machine code'];
-    const starts = [16.3, 17.7, 19.2], ends = [17.0, 18.7, 20.8];
-    font(ctx, line < 2 ? 104 : 30, line < 2 ? FONT.title : FONT.mono, line < 2 ? 700 : 500, line < 2 ? 1 : 1);
-    const shown = typed(texts[line], prog(t, starts[line], ends[line], ease.linear));
-    const cx = x + (line === 2 ? 4 : 0) + ctx.measureText(shown).width + 10;
-    ctx.fillStyle = C.gold;
-    ctx.fillRect(cx, [450, 580, 670][line] - (line < 2 ? 80 : 26), line < 2 ? 16 : 8, line < 2 ? 88 : 30);
-  }
-}
-
-function wireOrbit(t, {cx = 3000, cy = -1500, cz = -100, radius = 7600, height = 4300, angle = 200, fov = 45}) {
-  const a = angle * Math.PI / 180;
-  return {eye: [cx + Math.cos(a) * radius, cy + Math.sin(a) * radius, height], target: [cx, cy, cz], fov};
-}
-function drawWire(ctx, view, alpha = 1, bloom = true) {
-  const layer = S.wire.render(view);
-  ctx.save();
-  ctx.globalAlpha = alpha;
-  if (bloom) {
-    ctx.filter = 'blur(7px)';
-    ctx.globalCompositeOperation = 'lighter';
-    ctx.globalAlpha = alpha * 0.8;
-    ctx.drawImage(layer, 0, 0);
-    ctx.filter = 'none';
-  }
-  ctx.globalAlpha = alpha;
-  ctx.globalCompositeOperation = 'lighter';
-  ctx.drawImage(layer, 0, 0);
-  ctx.restore();
-}
-
-function sTitle(ctx, t) {
-  background(ctx, t, 0.8);
-  const lt = t - 22;
-  const view = wireOrbit(t, {cx: 2600, cy: -1300, angle: 208 + lt * 4.5, radius: 5600 - lt * 150, height: 3000 - lt * 90, fov: 52});
-  drawWire(ctx, {...view, scan: lerp(-1600, 8400, ease.inOut(inv(22.0, 25.8, t))), opacity: 0.95, near: 2500, far: 13000},
-    prog(t, 22.0, 22.4));
-  // shade under the title for legibility
-  const g = ctx.createRadialGradient(W / 2, 470, 50, W / 2, 470, 900);
-  g.addColorStop(0, rgba('#03070c', 0.78));
-  g.addColorStop(1, rgba('#03070c', 0));
+  const g = ctx.createLinearGradient(0, H * 0.55, 0, H);
+  g.addColorStop(0, rgba('#000000', 0)); g.addColorStop(1, rgba('#000000', 0.85));
   ctx.fillStyle = g;
   ctx.fillRect(0, 0, W, H);
   ctx.textAlign = 'center';
-  font(ctx, 200, FONT.title, 700, 52);
-  const title = decode('DEUS EX', prog(t, 22.25, 23.3, ease.linear), 3, 0.5);
-  glowText(ctx, title, W / 2 + 26, 520, C.gold, 44, 0.45);
-  const line = 620 * prog(t, 23.0, 23.8, ease.out5);
-  ctx.fillStyle = rgba(C.gold, 0.9);
-  ctx.fillRect(W / 2 - line / 2, 575, line, 2);
-  font(ctx, 38, FONT.mono, 600, 24);
+  font(ctx, 46, FONT.mono, 600, 30);
   ctx.fillStyle = C.text;
-  ctx.fillText(decode('BROWSER RUNTIME', prog(t, 23.2, 24.0, ease.linear), 11), W / 2 + 12, 640);
+  ctx.fillText(decode('BROWSER RUNTIME', prog(t, bar(10) + 0.3, bar(10) + 1.1, ease.linear), 11), W / 2 + 15, 900);
+  const line = 680 * prog(t, bar(10) + 0.2, bar(10) + 0.9, ease.out5);
+  ctx.fillStyle = rgba(C.gold, 0.9);
+  ctx.fillRect(W / 2 - line / 2, 840, line, 2);
   font(ctx, 30, FONT.title, 500, 1);
   ctx.fillStyle = C.muted;
-  ctx.globalAlpha = prog(t, 24.5, 25.2);
-  ctx.fillText('Reverse-engineered, not emulated.', W / 2, 720);
+  ctx.globalAlpha = prog(t, bar(11), bar(11) + 0.5);
+  ctx.fillText('Reverse-engineered, not emulated.', W / 2, 968);
   ctx.globalAlpha = 1;
+  chip(ctx, 'BROWSER · DXONLY, THE LOGO MAP THE INTRO ENDS ON', W / 2, 70, C.cyan, 'center');
   ctx.textAlign = 'left';
 }
 
+// ---------------------------------------------------------------- 3. gameplay
+function sIsland(ctx, t) {
+  const f = footageAt(t);
+  if (!f) return;
+  const img = S.frames.get(f.url), {seg} = f;
+  const lt = t - seg.t0, len = seg.t1 - seg.t0;
+  ctx.fillStyle = '#000';
+  ctx.fillRect(0, 0, W, H);
+  cover(ctx, img, 0, 0, W, H, 1.0);
+  // top: the live-capture chip; bottom left (clear of the game's belt): the caption
+  const index = FOOTAGE.filter(s => s.head).indexOf(seg);
+  if (lt < 0.5) chip(ctx, 'BROWSER · PLAY · LIVE', W / 2, 54, C.cyan, 'center');
+  caption(ctx, t, seg, len, lt, index);
+}
+function caption(ctx, t, seg, len, lt, index) {
+  const a = Math.min(prog(lt, 0.05, 0.35), 1 - prog(lt, len - 0.25, len));
+  if (a <= 0) return;
+  // above the HUD's weapon box and clear of the belt (both start near y 945 at 1080p)
+  const x = 64, y = 900;
+  ctx.save();
+  ctx.globalAlpha = a;
+  const g = ctx.createRadialGradient(x + 300, y - 20, 20, x + 300, y - 20, 520);
+  g.addColorStop(0, rgba('#000000', 0.55)); g.addColorStop(1, rgba('#000000', 0));
+  ctx.fillStyle = g;
+  ctx.fillRect(0, 0, W, H);
+  ctx.fillStyle = C.gold;
+  ctx.fillRect(x, y - 64, 4, 84);
+  font(ctx, 46, FONT.title, 700, 6);
+  ctx.fillStyle = C.text;
+  ctx.fillText(decode(seg.head, prog(lt, 0.05, 0.45, ease.linear), seg.head.length + index), x + 22, y - 18);
+  font(ctx, 21, FONT.mono, 500, 0.3);
+  ctx.fillStyle = C.goldHi;
+  ctx.fillText(typed(seg.sub, prog(lt, 0.25, 1.0, ease.linear)), x + 24, y + 16);
+  ctx.restore();
+}
+
+// ---------------------------------------------------------------- 4. the method: data, bytecode, native code; the Rust core; x87
 function hexRows(bytes, perRow = 16) {
   const rows = [];
   for (let i = 0; i < bytes.length; i += perRow) rows.push(bytes.slice(i, i + perRow));
@@ -254,17 +279,23 @@ function hexRows(bytes, perRow = 16) {
 }
 function sMethod(ctx, t) {
   background(ctx, t);
-  header(ctx, t, 28.0, '01', 'THE SOURCE OF TRUTH', 'NOTHING INVENTED.',
-    'The rule: every behavior traced to original data, bytecode or native instructions.');
+  if (t < bar(27)) return sources(ctx, t);
+  if (t < bar(30)) return translation(ctx, t);
+  return precision(ctx, t);
+}
+function sources(ctx, t) {
+  const t0 = bar(24);
+  header(ctx, t, t0, '01', 'THE SOURCE OF TRUTH', 'NOTHING INVENTED.',
+    'Every behavior is traced to the game’s own data, bytecode or machine code.');
   const F = S.facts;
   const cards = [
-    {x: 96, t0: 29.2, head: 'ORIGINAL DATA', sub: `System/DeusEx.u · package v${F.pkg.version}`},
-    {x: 686, t0: 29.9, head: 'UNREALSCRIPT BYTECODE', sub: `${F.bytecode.function} · ${F.bytecode.size} bytes`},
-    {x: 1276, t0: 30.6, head: 'NATIVE x86 · ENGINE.DLL', sub: 'checkMove @ 0x103c3290'},
+    {x: 96, t0: bar(24.4), head: 'ORIGINAL DATA', sub: `System/DeusEx.u · package v${F.pkg.version}`},
+    {x: 686, t0: bar(24.9), head: 'UNREALSCRIPT BYTECODE', sub: `${F.bytecode.function} · ${F.bytecode.size} bytes`},
+    {x: 1276, t0: bar(25.4), head: 'NATIVE x86 · ENGINE.DLL', sub: 'APawn::AICanHear @ 0x103c7680'},
   ];
-  const y = 318, w = 548, h = 520;
+  const y = 318, w = 548, h = 560;
   for (const [k, card] of cards.entries()) {
-    const a = prog(t, card.t0, card.t0 + 0.45);
+    const a = prog(t, card.t0, card.t0 + 0.4);
     if (a <= 0) continue;
     const yy = y + (1 - a) * 30;
     panel(ctx, card.x, yy, w, h, a);
@@ -281,144 +312,86 @@ function sMethod(ctx, t) {
     const lt = t - card.t0;
     if (k === 0) {
       const rows = hexRows(F.pkg.header, 8);
-      const shown = Math.floor(clamp(lt / 2.2) * F.pkg.header.length);
+      const shown = Math.floor(clamp(lt / 1.2) * F.pkg.header.length);
       font(ctx, 21, FONT.mono, 500, 1);
       rows.forEach((row, r) => {
         ctx.fillStyle = C.dim;
         ctx.fillText((r * 8).toString(16).padStart(4, '0'), card.x + 28, yy + 140 + r * 34);
         row.forEach((byte, c) => {
-          const index = r * 8 + c;
-          if (index >= shown) return;
-          ctx.fillStyle = index < 4 ? C.goldHi : index < 8 ? C.ice : C.text;
+          const i = r * 8 + c;
+          if (i >= shown) return;
+          ctx.fillStyle = i < 4 ? C.goldHi : i < 8 ? C.ice : C.text;
           ctx.fillText(byte.toUpperCase(), card.x + 110 + c * 44, yy + 140 + r * 34);
         });
       });
-      ctx.globalAlpha = a * prog(t, card.t0 + 1.2, card.t0 + 1.6);
+      ctx.globalAlpha = a * prog(t, card.t0 + 0.8, card.t0 + 1.2);
       font(ctx, 18, FONT.mono, 500, 0.5);
-      ctx.fillStyle = C.goldHi; ctx.fillText('C1 83 2A 9E', card.x + 28, yy + 420);
-      ctx.fillStyle = C.muted; ctx.fillText('package signature 0x9E2A83C1', card.x + 180, yy + 420);
-      ctx.fillStyle = C.ice; ctx.fillText(`${number(F.pkg.names)} names · ${number(F.pkg.exports)} exports · ${number(F.pkg.imports)} imports`, card.x + 28, yy + 452);
-      ctx.globalAlpha = a * prog(t, card.t0 + 2.2, card.t0 + 2.7);
+      ctx.fillStyle = C.goldHi; ctx.fillText('C1 83 2A 9E', card.x + 28, yy + 430);
+      ctx.fillStyle = C.muted; ctx.fillText('package signature 0x9E2A83C1', card.x + 180, yy + 430);
+      ctx.fillStyle = C.ice; ctx.fillText(`${number(F.pkg.names)} names · ${number(F.pkg.exports)} exports · ${number(F.pkg.imports)} imports`, card.x + 28, yy + 466);
       font(ctx, 20, FONT.title, 600, 1);
       ctx.fillStyle = C.text;
-      ctx.fillText(`${F.evidence.packagesValidated}/${F.evidence.packagesValidated} packages · ${F.evidence.mapsDecoded} maps decoded`, card.x + 28, yy + 494);
+      ctx.fillText(`${F.evidence.packagesValidated}/${F.evidence.packagesValidated} packages · ${F.evidence.mapsDecoded} maps decoded`, card.x + 28, yy + 520);
     } else if (k === 1) {
       const lines = F.bytecode.statements.slice(0, 11);
-      const active = Math.floor(clamp((lt - 0.4) / 5.5) * lines.length);
+      const active = Math.floor(clamp((lt - 0.3) / 3.5) * lines.length);
       font(ctx, 18, FONT.mono, 500, 0.3);
       lines.forEach((s, i) => {
-        const la = prog(t, card.t0 + 0.3 + i * 0.12, card.t0 + 0.5 + i * 0.12);
+        const la = prog(t, card.t0 + 0.2 + i * 0.07, card.t0 + 0.4 + i * 0.07);
         if (la <= 0) return;
         const ly = yy + 138 + i * 31;
-        if (i === active) {
-          ctx.fillStyle = rgba(C.gold, 0.16);
-          ctx.fillRect(card.x + 18, ly - 21, w - 36, 29);
-        }
+        if (i === active) { ctx.fillStyle = rgba(C.gold, 0.16); ctx.fillRect(card.x + 18, ly - 21, w - 36, 29); }
         ctx.globalAlpha = a * la;
-        ctx.fillStyle = C.dim;
-        ctx.fillText(s.offset.toString(16).padStart(4, '0'), card.x + 28, ly);
-        ctx.fillStyle = C.ice;
-        ctx.fillText(s.token.toString(16).padStart(2, '0').toUpperCase(), card.x + 84, ly);
-        ctx.fillStyle = C.goldHi;
-        ctx.fillText(s.op, card.x + 122, ly);
+        ctx.fillStyle = C.dim; ctx.fillText(s.offset.toString(16).padStart(4, '0'), card.x + 28, ly);
+        ctx.fillStyle = C.ice; ctx.fillText(s.token.toString(16).padStart(2, '0').toUpperCase(), card.x + 84, ly);
+        ctx.fillStyle = C.goldHi; ctx.fillText(s.op, card.x + 122, ly);
         ctx.fillStyle = C.text;
-        const operand = s.operand.length > 22 ? s.operand.slice(0, 21) + '…' : s.operand;
-        ctx.fillText(operand, card.x + 268, ly);
+        ctx.fillText(s.operand.length > 22 ? s.operand.slice(0, 21) + '…' : s.operand, card.x + 268, ly);
       });
-      ctx.globalAlpha = a * prog(t, card.t0 + 2.2, card.t0 + 2.7);
+      ctx.globalAlpha = a * prog(t, card.t0 + 1.0, card.t0 + 1.4);
       font(ctx, 20, FONT.title, 600, 1);
       ctx.fillStyle = C.text;
-      ctx.fillText('executed by our own UnrealScript VM', card.x + 28, yy + 494);
+      ctx.fillText('run by our own UnrealScript VM', card.x + 28, yy + 520);
     } else {
       const lines = F.disassembly.slice(0, 11);
-      const active = Math.floor(clamp((lt - 0.4) / 5.5) * lines.length);
+      const active = Math.floor(clamp((lt - 0.3) / 3.0) * lines.length);
       font(ctx, 18, FONT.mono, 500, 0.3);
       lines.forEach((d, i) => {
-        const la = prog(t, card.t0 + 0.3 + i * 0.12, card.t0 + 0.5 + i * 0.12);
+        const la = prog(t, card.t0 + 0.2 + i * 0.07, card.t0 + 0.4 + i * 0.07);
         if (la <= 0) return;
         const ly = yy + 138 + i * 31;
-        if (i === active) {
-          ctx.fillStyle = rgba(C.gold, 0.16);
-          ctx.fillRect(card.x + 18, ly - 21, w - 36, 29);
-        }
+        if (i === active) { ctx.fillStyle = rgba(C.gold, 0.16); ctx.fillRect(card.x + 18, ly - 21, w - 36, 29); }
         ctx.globalAlpha = a * la;
-        ctx.fillStyle = C.dim;
-        ctx.fillText(d.address.slice(-6), card.x + 28, ly);
-        const x87 = /^f/.test(d.text);
-        ctx.fillStyle = x87 ? C.goldHi : C.text;
+        ctx.fillStyle = C.dim; ctx.fillText(d.address.slice(-6), card.x + 28, ly);
+        ctx.fillStyle = /^f/.test(d.text) ? C.goldHi : C.text;
         const text = d.text.replace('dword ptr ', '').replace(/\s+/g, ' ');
         ctx.fillText(text.length > 30 ? text.slice(0, 29) + '…' : text, card.x + 120, ly);
       });
-      ctx.globalAlpha = a * prog(t, card.t0 + 2.2, card.t0 + 2.7);
+      ctx.globalAlpha = a * prog(t, card.t0 + 1.0, card.t0 + 1.4);
       font(ctx, 20, FONT.title, 600, 1);
       ctx.fillStyle = C.text;
-      ctx.fillText('translated to JavaScript, routine by routine', card.x + 28, yy + 494);
+      ctx.fillText('can a guard hear you? the original says', card.x + 28, yy + 520);
     }
-    ctx.restore();
-  }
-  // convergence into the runtime
-  const c = prog(t, 34.6, 35.6, ease.inOut);
-  if (c > 0) {
-    const targetX = W / 2, targetY = 930;
-    ctx.save();
-    ctx.strokeStyle = rgba(C.gold, 0.7);
-    ctx.lineWidth = 2;
-    for (const card of cards) {
-      const sx = card.x + w / 2, sy = y + h + 6;
-      ctx.beginPath();
-      ctx.moveTo(sx, sy);
-      const ex = lerp(sx, targetX, c), ey = lerp(sy, targetY - 30, c);
-      ctx.bezierCurveTo(sx, sy + 50 * c, ex, ey - 30 * c, ex, ey);
-      ctx.stroke();
-      const pulse = (t * 1.3 + card.x / 600) % 1;
-      if (c >= 1) {
-        const px = lerp(sx, targetX, pulse), py = lerp(sy, targetY - 30, pulse);
-        ctx.fillStyle = C.goldHi;
-        ctx.beginPath(); ctx.arc(px, py, 4, 0, Math.PI * 2); ctx.fill();
-      }
-    }
-    ctx.restore();
-    const pa = prog(t, 35.3, 35.9);
-    ctx.save();
-    ctx.globalAlpha = pa;
-    const pw = 760, ph = 64;
-    roundRect(ctx, targetX - pw / 2, targetY - 32, pw, ph, 32);
-    ctx.fillStyle = rgba('#0c1a28', 0.95);
-    ctx.fill();
-    ctx.strokeStyle = C.gold;
-    ctx.lineWidth = 2;
-    ctx.stroke();
-    ctx.textAlign = 'center';
-    font(ctx, 26, FONT.title, 700, 6);
-    ctx.fillStyle = C.text;
-    ctx.fillText('JAVASCRIPT RUNTIME  ·  WEBGL2', targetX + 3, targetY + 10);
-    ctx.textAlign = 'left';
     ctx.restore();
   }
 }
-
-function codeColumn(ctx, lines, x, y, w, h, t, speed, color, highlightEvery, format) {
+function codeColumn(ctx, lines, x, y, w, h, t, speed, format) {
   ctx.save();
   ctx.beginPath(); ctx.rect(x, y, w, h); ctx.clip();
   const lh = 30;
   const offset = (t * speed) % (lines.length * lh);
   font(ctx, 18, FONT.mono, 500, 0.2);
-  const count = Math.ceil(h / lh) + 2;
-  const first = Math.floor(offset / lh);
-  const hl = Math.floor(t / highlightEvery);
+  const count = Math.ceil(h / lh) + 2, first = Math.floor(offset / lh);
   for (let i = 0; i < count; i++) {
     const index = (first + i) % lines.length;
     const ly = y + 26 + i * lh - (offset % lh);
     const centered = Math.abs(ly - (y + h / 2)) < lh / 2;
     if (centered) {
-      ctx.fillStyle = rgba(C.gold, 0.18);
-      ctx.fillRect(x, ly - 21, w, lh);
-      ctx.fillStyle = C.gold;
-      ctx.fillRect(x, ly - 21, 3, lh);
+      ctx.fillStyle = rgba(C.gold, 0.18); ctx.fillRect(x, ly - 21, w, lh);
+      ctx.fillStyle = C.gold; ctx.fillRect(x, ly - 21, 3, lh);
     }
-    format(ctx, lines[index], x + 18, ly, centered, hl);
+    format(ctx, lines[index], x + 18, ly, centered);
   }
-  // fade edges
   const g1 = ctx.createLinearGradient(0, y, 0, y + 90);
   g1.addColorStop(0, rgba('#07111b', 1)); g1.addColorStop(1, rgba('#07111b', 0));
   ctx.fillStyle = g1; ctx.fillRect(x, y, w, 90);
@@ -427,13 +400,13 @@ function codeColumn(ctx, lines, x, y, w, h, t, speed, color, highlightEvery, for
   ctx.fillStyle = g2; ctx.fillRect(x, y + h - 90, w, 90);
   ctx.restore();
 }
-function sOracle(ctx, t) {
-  background(ctx, t);
-  header(ctx, t, 38.0, '02', 'THE ORACLE', 'CHECKED AGAINST THE ORIGINAL.',
-    'The original DLL runs in an x86 emulator as a reference — the browser never executes it.');
+function translation(ctx, t) {
+  const t0 = bar(27);
+  header(ctx, t, t0, '02', 'THE TRANSLATION', 'RUST, COMPILED TO WEBASSEMBLY.',
+    'The original DLL runs only in the test oracle, under an x86 emulator. The browser never executes it.');
   const F = S.facts;
-  const y = 346, h = 430, lw = 800, rx = 1024;
-  const a = prog(t, 38.4, 38.9);
+  const y = 330, h = 450, lw = 800, rx = 1024;
+  const a = prog(t, t0 + 0.3, t0 + 0.8);
   panel(ctx, 96, y, lw, h, a);
   panel(ctx, rx, y, lw, h, a);
   ctx.save();
@@ -441,85 +414,48 @@ function sOracle(ctx, t) {
   font(ctx, 18, FONT.mono, 600, 3);
   ctx.fillStyle = C.gold;
   ctx.fillText('ORIGINAL · ENGINE.DLL · x86 + x87', 100, y - 22);
-  ctx.fillText('TRANSLATION · script-pawn-nav.mjs', rx + 4, y - 22);
-  codeColumn(ctx, F.disassembly, 97, y + 1, lw - 2, h - 2, t - 38, 34, C.text, 0.5, (c, d, x, ly, hot) => {
+  ctx.fillText('TRANSLATION · native/script-vm/src/aievent.rs', rx + 4, y - 22);
+  codeColumn(ctx, F.disassembly, 97, y + 1, lw - 2, h - 2, t - t0, 46, (c, d, x, ly, hot) => {
     c.fillStyle = C.dim; c.fillText(d.address, x, ly);
     c.fillStyle = /^f/.test(d.text) ? C.goldHi : hot ? C.text : rgba(C.text, 0.8);
     c.fillText(d.text.replace(/\s+/g, ' '), x + 150, ly);
   });
-  codeColumn(ctx, F.port, rx + 1, y + 1, lw - 2, h - 2, t - 38, 34, C.text, 0.5, (c, line, x, ly, hot) => {
-    const code = line.replace(/\s+\/\/.*$/, '');
-    const comment = (line.match(/\/\/.*$/) ?? [''])[0];
-    c.fillStyle = hot ? C.text : rgba(C.text, 0.8);
-    const shown = code.length > 58 ? code.slice(0, 57) + '…' : code;
-    c.fillText(shown, x, ly);
-    if (comment && shown.length < 44) {
-      c.fillStyle = C.dim;
-      c.fillText(comment.slice(0, 60 - shown.length), x + c.measureText(shown).width + 14, ly);
-    }
+  codeColumn(ctx, F.port, rx + 1, y + 1, lw - 2, h - 2, t - t0, 24, (c, line, x, ly, hot) => {
+    const comment = /^\s*\/\//.test(line);
+    c.fillStyle = comment ? C.dim : /\.store\(\)/.test(line) ? C.goldHi : hot ? C.text : rgba(C.text, 0.82);
+    c.fillText(line.length > 64 ? line.slice(0, 63) + '…' : line, x, ly);
   });
-  // comparator between the panels
-  const cy = y + h / 2;
-  const beat = (t * 2) % 1;
+  const beat = ((t - t0) / (G.barLength(27) / 4)) % 1;
   ctx.fillStyle = rgba(C.ok, 0.25 + 0.75 * (1 - beat));
   ctx.textAlign = 'center';
   font(ctx, 44, FONT.title, 700, 0);
-  ctx.fillText('≡', (96 + lw + rx) / 2, cy + 14);
+  ctx.fillText('≡', (96 + lw + rx) / 2, y + h / 2 + 14);
   ctx.textAlign = 'left';
   ctx.restore();
-  // measured totals
-  const meters = [
-    ['COLLISION RAYS', F.evidence.collisionRays, 39.4],
-    ['EXTENT TRACES', F.evidence.extentTraces, 39.9],
-    ['PLACEMENT CHAINS', F.evidence.placementChains, 40.4],
-    ['PHYSICS QUERIES', F.evidence.physicsQueries, 40.9],
-  ];
-  const mw = 404;
-  meters.forEach(([label, value, t0], i) => {
-    const ma = prog(t, t0, t0 + 0.4);
-    if (ma <= 0) return;
-    const x = 96 + i * (mw + 36), my = 850;
-    const fill = prog(t, t0 + 0.2, t0 + 2.2, ease.inOut3);
-    ctx.save();
-    ctx.globalAlpha = ma;
-    font(ctx, 16, FONT.mono, 600, 3);
-    ctx.fillStyle = C.muted;
-    ctx.fillText(label, x, my);
-    font(ctx, 54, FONT.din, 700, 1);
-    ctx.fillStyle = C.text;
-    ctx.fillText(bigCount(value, fill), x, my + 62);
-    ctx.fillStyle = rgba(C.line, 1);
-    ctx.fillRect(x, my + 80, mw, 6);
-    ctx.fillStyle = fill >= 1 ? C.ok : C.gold;
-    ctx.fillRect(x, my + 80, mw * fill, 6);
-    if (fill >= 1) {
-      font(ctx, 18, FONT.mono, 700, 2);
-      ctx.fillStyle = C.ok;
-      ctx.fillText('MATCH', x + mw - 70, my + 62);
-    }
-    ctx.restore();
-  });
-  // stamp
-  const s = prog(t, 44.8, 45.25, ease.outBack);
+  // the oracle's verdict
+  const s = prog(t, bar(28.2), bar(28.2) + 0.4, ease.outBack);
   if (s > 0) {
     ctx.save();
-    ctx.fillStyle = rgba('#03070c', 0.9 * prog(t, 44.8, 45.2));
-    ctx.fillRect(0, y - 50, W, h + 90);
-    ctx.translate(W / 2, y + h / 2);
-    ctx.scale(lerp(1.3, 1, s), lerp(1.3, 1, s));
     ctx.globalAlpha = clamp(s);
-    ctx.textAlign = 'center';
-    font(ctx, 170, FONT.din, 700, 4);
-    glowText(ctx, 'maxError 0', 0, 40, C.ok, 40, 0.5);
-    font(ctx, 26, FONT.mono, 500, 1);
+    const x = 96, yy = 850;
+    font(ctx, 16, FONT.mono, 600, 3);
+    ctx.fillStyle = C.muted;
+    ctx.fillText('validate-event-manager.mjs · the Rust port against the original body', x, yy);
+    font(ctx, 62, FONT.din, 700, 1);
+    ctx.fillStyle = C.ok;
+    glowText(ctx, '98 OF 98 SCENARIOS EQUAL', x, yy + 72, C.ok, 26, 0.35);
+    font(ctx, 20, FONT.mono, 500, 0.3);
     ctx.fillStyle = C.text;
-    ctx.fillText('decoration rolling physics vs. the original DLL · bit-exact', 0, 116);
-    ctx.textAlign = 'left';
+    ctx.fillText('18 hand-written, 80 seeded · 3,362 operations · Engine.dll under Unicorn as the reference', x + 2, yy + 112);
+    ctx.textAlign = 'right';
+    font(ctx, 20, FONT.mono, 500, 0.3);
+    ctx.fillStyle = C.muted;
+    ctx.globalAlpha = clamp(s) * prog(t, bar(28.8), bar(28.8) + 0.5);
+    ctx.fillText(`${number(F.code.rustLines)} lines of Rust · ${F.code.rustCrates.length} crates · script VM, physics, AI, audio`, W - 96, yy + 112);
     ctx.restore();
   }
 }
-
-function bitBar(ctx, x, y, cells, segments, t, seed, cell = 21.6) {
+function bitBar(ctx, x, y, segments, t, seed, cell = 21.6) {
   let index = 0;
   for (const [count, color, label] of segments) {
     font(ctx, 15, FONT.mono, 600, 2);
@@ -537,22 +473,22 @@ function bitBar(ctx, x, y, cells, segments, t, seed, cell = 21.6) {
   }
   return index;
 }
-function sX87(ctx, t) {
-  background(ctx, t);
-  header(ctx, t, 48.0, '03', 'PRECISION', 'THE x87 KEEPS 80 BITS. JAVASCRIPT, 64.',
-    'Native float math is reproduced to the bit, including where the original rounds.');
-  const a1 = prog(t, 48.6, 49.1), a2 = prog(t, 49.0, 49.5);
+function precision(ctx, t) {
+  const t0 = bar(30);
+  header(ctx, t, t0, '03', 'PRECISION', 'THE x87 KEEPS 80 BITS.',
+    'Native float math reproduced to the bit, including every place the original rounds.');
+  const a1 = prog(t, t0 + 0.4, t0 + 0.8), a2 = prog(t, t0 + 0.7, t0 + 1.1);
   ctx.save();
   ctx.globalAlpha = a1;
   font(ctx, 20, FONT.mono, 600, 3);
   ctx.fillStyle = C.text;
-  ctx.fillText('x87 EXTENDED · 80 BITS', 96, 350);
-  bitBar(ctx, 96, 400, 80, [[1, C.bad, 'S'], [15, C.ice, 'EXPONENT 15'], [64, C.gold, 'MANTISSA 64']], t, 1);
+  ctx.fillText('x87 EXTENDED · 80 BITS · Rust: Ext', 96, 350);
+  bitBar(ctx, 96, 400, [[1, C.bad, 'S'], [15, C.ice, 'EXPONENT 15'], [64, C.gold, 'MANTISSA 64']], t, 1);
   ctx.globalAlpha = a2;
-  ctx.fillStyle = C.text;
   font(ctx, 20, FONT.mono, 600, 3);
-  ctx.fillText('JAVASCRIPT NUMBER · 64 BITS', 96, 520);
-  const used = bitBar(ctx, 96, 570, 64, [[1, C.bad, 'S'], [11, C.ice, 'EXPONENT 11'], [52, C.gold, 'MANTISSA 52']], t, 2);
+  ctx.fillStyle = C.text;
+  ctx.fillText('FLOAT32 STORE · 32 BITS · Rust: .store()', 96, 520);
+  const used = bitBar(ctx, 96, 570, [[1, C.bad, 'S'], [8, C.ice, 'EXP 8'], [23, C.gold, 'MANTISSA 23']], t, 2);
   ctx.setLineDash([6, 6]);
   ctx.strokeStyle = rgba(C.muted, 0.6);
   ctx.strokeRect(96 + used * 21.6, 570, (80 - used) * 21.6, 40);
@@ -560,262 +496,303 @@ function sX87(ctx, t) {
   font(ctx, 17, FONT.mono, 600, 1);
   ctx.fillStyle = C.muted;
   ctx.textAlign = 'center';
-  ctx.fillText('16 BITS SHORT', 96 + (used + (80 - used) / 2) * 21.6, 597);
+  ctx.fillText('ROUNDED AWAY AT EVERY fstp', 96 + (used + (80 - used) / 2) * 21.6, 597);
   ctx.textAlign = 'left';
   ctx.restore();
-  // real rounding stores from checkMove
-  const stores = S.facts.disassembly.filter(d => /^fstp? /.test(d.text)).slice(0, 4);
+  // AICanHear's stores, next to the Rust lines that place them
+  const stores = S.facts.disassembly.filter(d => /^fstp? dword/.test(d.text)).slice(0, 3);
+  const rust = S.facts.port.filter(line => /\.store\(\)/.test(line)).slice(0, 3).map(line => line.trim());
   stores.forEach((d, i) => {
-    const la = prog(t, 50.0 + i * 0.35, 50.35 + i * 0.35);
+    const la = prog(t, bar(30.6) + i * 0.25, bar(30.6) + 0.3 + i * 0.25);
     if (la <= 0) return;
-    const ly = 720 + i * 44;
+    const ly = 720 + i * 50;
     ctx.save();
     ctx.globalAlpha = la;
     font(ctx, 22, FONT.mono, 500, 0.3);
-    ctx.fillStyle = C.dim;
-    ctx.fillText(d.address, 96, ly);
-    ctx.fillStyle = C.goldHi;
-    ctx.fillText(d.text.replace(/\s+/g, ' '), 290, ly);
-    ctx.fillStyle = C.muted;
-    ctx.fillText('→ rounds to float32 here', 820, ly);
+    ctx.fillStyle = C.dim; ctx.fillText(d.address, 96, ly);
+    ctx.fillStyle = C.goldHi; ctx.fillText(d.text.replace(/\s+/g, ' '), 270, ly);
+    ctx.fillStyle = C.ok; ctx.fillText('≡', 790, ly);
+    ctx.fillStyle = C.text; ctx.fillText(rust[i] ?? '', 840, ly);
     ctx.restore();
   });
-  const ca = prog(t, 51.8, 52.4);
+  const ca = prog(t, bar(31.2), bar(31.2) + 0.6);
   ctx.save();
   ctx.globalAlpha = ca;
   font(ctx, 28, FONT.title, 600, 0.5);
   ctx.fillStyle = C.text;
-  ctx.fillText('Every fst / fstp placed where the original rounds — proven against the DLL, never approximated.', 96, 960);
+  ctx.fillText('Every fst / fstp where the original rounds — proven against the DLL, never approximated.', 96, 960);
   ctx.restore();
 }
 
-const PAIRS = [
-  ['o-t-start', 'b-t-start', 'Training · PlayerStart — same eye, same rotator, same HUD layout'],
-  ['o-t-infolink', 'b-t-infolink', 'InfoLink — original DataLink script, frame textures and bitmap font'],
-  ['o-p-walton', 'b-p-walton', 'Walton Simons — original mesh and skin · mesh lighting still open'],
-  ['o-t-crates', 'b-t-crates', 'Breakable crates — original meshes, textures and placement'],
-];
-// Game captures sit in a frame so the promo's labels never cover the game's own HUD.
-const FR = {x: 176, y: 34, w: 1568, h: 882};
-function framed(ctx, t, draw) {
+// ---------------------------------------------------------------- 5. one camera, two engines
+const FR = {x: 176, y: 150, w: 1568, h: 882};
+function sPairs(ctx, t) {
   background(ctx, t, 0.6);
+  const t0 = T.pairs[0], per = (T.pairs[1] - t0) / PAIRS.length;
+  const i = clamp(Math.floor((t - t0) / per), 0, PAIRS.length - 1);
+  const p = (t - t0 - i * per) / per;
+  const [id, map, what] = PAIRS[i];
+  const orig = S.img[`pairs/${id}-o`], play = S.img[`pairs/${id}-p`];
+  const {x, y, w, h} = FR, mid = x + w / 2;
+  // the divider sweeps in from the right, rests near the middle with a slow drift, then leaves to the left
+  const split = p < 0.12 ? lerp(x + w, mid + 140, ease.out3(inv(0, 0.12, p))) : p < 0.85 ? lerp(mid + 140, mid - 140, ease.inOut(inv(0.12, 0.85, p))) :
+    lerp(mid - 140, x, ease.in3(inv(0.85, 1, p)));
   ctx.save();
-  ctx.beginPath(); ctx.rect(FR.x, FR.y, FR.w, FR.h); ctx.clip();
+  ctx.beginPath(); ctx.rect(x, y, w, h); ctx.clip();
   ctx.fillStyle = '#000';
-  ctx.fillRect(FR.x, FR.y, FR.w, FR.h);
-  draw();
+  ctx.fillRect(x, y, w, h);
+  cover(ctx, play, x, y, w, h, 1.0);
+  ctx.save();
+  ctx.beginPath(); ctx.rect(x, y, split - x, h); ctx.clip();
+  cover(ctx, orig, x, y, w, h, 1.0);
+  ctx.restore();
+  ctx.shadowColor = rgba(C.gold, 0.9);
+  ctx.shadowBlur = 16;
+  ctx.fillStyle = C.goldHi;
+  ctx.fillRect(split - 1.5, y, 3, h);
   ctx.restore();
   ctx.strokeStyle = rgba(C.line, 1);
   ctx.lineWidth = 1;
-  ctx.strokeRect(FR.x - 0.5, FR.y - 0.5, FR.w + 1, FR.h + 1);
-  brackets(ctx, FR.x - 10, FR.y - 10, FR.w + 20, FR.h + 20, 1, rgba(C.gold, 0.9), 30, 2);
-}
-function sPairs(ctx, t) {
-  const i = clamp(Math.floor((t - 54) / 2.5), 0, PAIRS.length - 1);
-  const p = t - 54 - i * 2.5;
-  const [orig, brow, caption] = PAIRS[i];
-  const {x, y, w, h} = FR;
-  const mid = x + w / 2;
-  const split = p < 0.35 ? x + w : p < 0.95 ? lerp(x + w, mid, ease.inOut3(inv(0.35, 0.95, p))) :
-    p < 2.1 ? mid + Math.sin((p - 0.95) * 1.6) * 36 : lerp(mid + Math.sin(1.15 * 1.6) * 36, x, ease.in3(inv(2.1, 2.5, p)));
-  framed(ctx, t, () => {
-    cover(ctx, S.img[brow], x, y, w, h, 1.0);
-    ctx.save();
-    ctx.beginPath(); ctx.rect(x, y, split - x, h); ctx.clip();
-    cover(ctx, S.img[orig], x, y, w, h, 1.0);
-    ctx.restore();
-    ctx.save();
-    ctx.shadowColor = rgba(C.gold, 0.9);
-    ctx.shadowBlur = 16;
-    ctx.fillStyle = C.goldHi;
-    ctx.fillRect(split - 1.5, y, 3, h);
-    ctx.restore();
-    ctx.fillStyle = C.gold;
-    ctx.beginPath(); ctx.arc(split, y + h / 2, 12, 0, Math.PI * 2); ctx.fill();
-  });
-  const by = y + h + 58;
-  chip(ctx, 'ORIGINAL · DeusEx.exe · D3D', x, by, C.gold);
-  chip(ctx, 'BROWSER · WebGL2', x + w, by, C.cyan, 'right');
-  const ca = Math.min(prog(p, 0.4, 0.8), 1 - prog(p, 2.2, 2.45));
+  ctx.strokeRect(x - 0.5, y - 0.5, w + 1, h + 1);
+  brackets(ctx, x - 10, y - 10, w + 20, h + 20, 1, rgba(C.gold, 0.9), 30, 2);
+  chip(ctx, 'ORIGINAL · DeusEx.exe', x + 18, y + 44, C.gold);
+  chip(ctx, 'BROWSER · PLAY', x + w - 18, y + 44, C.cyan, 'right');
+  // header and the map
+  tag(ctx, '04 — ONE CAMERA, TWO ENGINES', 96, 70, prog(t, t0, t0 + 0.4));
+  font(ctx, 22, FONT.mono, 500, 0.5);
+  ctx.fillStyle = C.goldHi;
+  ctx.textAlign = 'right';
+  ctx.fillText(typed(`${map} · ${what}`, prog(p, 0.05, 0.35, ease.linear)), W - 96, 72);
+  ctx.textAlign = 'left';
+  // the count, on the last pairs
+  const ca = prog(t, T.pairs[1] - 4 * per, T.pairs[1] - 3.5 * per);
   if (ca > 0) {
+    const F = S.facts;
     ctx.save();
     ctx.globalAlpha = ca;
-    font(ctx, 22, FONT.mono, 500, 0.3);
+    ctx.fillStyle = rgba('#03070c', 0.8);
+    ctx.fillRect(x + 18, y + h - 96, 1000, 78);
+    font(ctx, 34, FONT.din, 700, 1);
     ctx.fillStyle = C.text;
-    ctx.textAlign = 'center';
-    ctx.fillText(caption, mid, by + 52);
-    ctx.textAlign = 'left';
+    ctx.fillText(`${F.captures.pairs} FRAME PAIRS FROM ${F.captures.maps.length} MAPS. THE STAGE 4 GATE: 70 OF 70 ROWS.`, x + 40, y + h - 46);
     ctx.restore();
   }
 }
 
-function sFootage(ctx, t) {
-  const f = footageAt(t);
-  if (!f) return;
-  const img = S.frames.get(f.url);
-  const lt = t - f.seg.t0, len = f.seg.t1 - f.seg.t0;
-  framed(ctx, t, () => cover(ctx, img, FR.x, FR.y, FR.w, FR.h, lerp(1.0, 1.03, ease.inOut(inv(0, len, lt)))));
-  const by = FR.y + FR.h + 70;
-  chip(ctx, 'BROWSER · LIVE CAPTURE', FR.x + FR.w, by, C.cyan, 'right');
-  const a = Math.min(prog(lt, 0.05, 0.4), 1 - prog(lt, len - 0.2, len));
-  ctx.save();
-  ctx.globalAlpha = a;
-  ctx.fillStyle = C.gold;
-  ctx.fillRect(FR.x, by - 30, 4, 38);
-  font(ctx, 34, FONT.title, 700, 5);
-  ctx.fillStyle = C.text;
-  const head = decode(f.seg.head, prog(lt, 0.05, 0.5, ease.linear), f.seg.head.length);
-  ctx.fillText(head, FR.x + 22, by);
-  const hw = ctx.measureText(f.seg.head).width;
-  font(ctx, 22, FONT.mono, 500, 0.3);
-  ctx.fillStyle = C.goldHi;
-  ctx.fillText(typed(f.seg.sub, prog(lt, 0.3, 1.0, ease.linear)), FR.x + 22 + hw + 28, by - 3);
-  ctx.restore();
-}
-
-function sPace(ctx, t) {
+// ---------------------------------------------------------------- 6. the road: commits per day, milestones, the stages
+function sProgress(ctx, t) {
   background(ctx, t);
+  const t0 = T.progress[0];
+  if (t < bar(44)) return calendar(ctx, t, t0);
+  stagesCard(ctx, t, bar(44));
+}
+function calendar(ctx, t, t0) {
   const F = S.facts;
-  tag(ctx, '06 — PACE', 96, 116, prog(t, 80.0, 80.5));
-  const cp = prog(t, 80.3, 82.3, ease.out3);
-  font(ctx, 150, FONT.din, 700, 2);
+  tag(ctx, '05 — THE ROAD', 96, 116, prog(t, t0, t0 + 0.4));
+  font(ctx, 120, FONT.din, 700, 2);
   ctx.fillStyle = C.gold;
-  glowText(ctx, number(F.git.commits * cp), 96, 290, C.gold, 30, 0.35);
+  const cp = prog(t, t0 + 0.2, t0 + 1.8);
+  glowText(ctx, number(F.git.commits * cp), 96, 260, C.gold, 30, 0.35);
   const cw = ctx.measureText(number(F.git.commits)).width;
-  font(ctx, 54, FONT.title, 700, 2);
+  font(ctx, 46, FONT.title, 700, 2);
   ctx.fillStyle = C.text;
-  ctx.globalAlpha = prog(t, 80.6, 81.1);
-  ctx.fillText('commits', 96 + cw + 30, 290);
-  font(ctx, 34, FONT.title, 500, 1);
-  ctx.fillStyle = C.muted;
-  ctx.globalAlpha = prog(t, 81.2, 81.8);
-  ctx.fillText(`in ${F.git.days} days · ${number(F.git.insertions)} lines added`, 100, 352);
+  ctx.globalAlpha = prog(t, t0 + 0.4, t0 + 0.9);
+  ctx.fillText(`commits in ${F.git.days} days`, 96 + cw + 30, 260);
   ctx.globalAlpha = 1;
-  // calendar chart
   const days = F.git.calendar, max = Math.max(...days.map(d => d.commits));
-  const x0 = 110, x1 = W - 110, base = 950, top = 560;
+  const x0 = 110, x1 = W - 110, base = 960, top = 600;
   const bw = (x1 - x0) / days.length;
   ctx.fillStyle = rgba(C.line, 1);
   ctx.fillRect(x0, base + 2, x1 - x0, 2);
   days.forEach((d, i) => {
-    const g = prog(t, 81.0 + i * 0.09, 81.8 + i * 0.09, ease.out3);
+    const g = prog(t, t0 + 0.3 + i * 0.03, t0 + 0.9 + i * 0.03, ease.out3);
     const bh = (base - top) * d.commits / max * g;
-    const bx = x0 + i * bw + bw * 0.18, w = bw * 0.64;
-    const peak = d.commits === max;
-    ctx.fillStyle = peak ? C.goldHi : rgba(C.gold, 0.75);
+    const bx = x0 + i * bw + bw * 0.15, w = bw * 0.7;
+    ctx.fillStyle = d.commits === max ? C.goldHi : rgba(C.gold, 0.72);
     ctx.fillRect(bx, base - bh, w, bh);
-    font(ctx, 15, FONT.mono, 500, 1);
-    ctx.fillStyle = C.muted;
-    ctx.textAlign = 'center';
-    ctx.fillText(d.date.slice(5), bx + w / 2, base + 30);
-    if (d.commits && g > 0.9) {
-      ctx.fillStyle = peak ? C.goldHi : C.text;
-      font(ctx, 17, FONT.mono, 600, 0);
-      ctx.fillText(String(d.commits), bx + w / 2, base - bh - 10);
+    if (i % 7 === 0) {
+      font(ctx, 14, FONT.mono, 500, 1);
+      ctx.fillStyle = C.muted;
+      ctx.fillText(d.date.slice(5), bx, base + 28);
     }
-    ctx.textAlign = 'left';
   });
-  // milestones
-  const ms = [['2026-09-09', 'Training renders'], ['2026-09-13', 'Doors run original bytecode'],
-    ['2026-09-16', 'UI natives from Extension.dll'], ['2026-09-18', 'NPC navigation, bit-exact'],
-    ['2026-09-21', 'Conversations & subtitles'], ['2026-09-23', 'Crowbar, crates, original HUD'],
-    ['2026-09-25', 'Main menu, real Login']];
-  ms.forEach(([date, label], i) => {
+  // labels on the first of six rows where they clear the previous label on that row
+  const rowsEnd = Array(6).fill(-Infinity);
+  font(ctx, 17, FONT.title, 600, 0.3);
+  F.milestones.forEach(([date, label], i) => {
     const di = days.findIndex(d => d.date === date);
     if (di < 0) return;
-    const ma = prog(t, 83.4 + i * 0.55, 83.8 + i * 0.55);
+    const cx = x0 + di * bw + bw / 2, tw = ctx.measureText(label).width;
+    const lx = clamp(cx - 8, 40, W - 40 - tw);
+    let row = rowsEnd.findIndex(end => end + 24 < lx);
+    if (row < 0) row = rowsEnd.indexOf(Math.min(...rowsEnd));
+    rowsEnd[row] = lx + tw;
+    const ma = prog(t, t0 + 1.0 + i * 0.3, t0 + 1.3 + i * 0.3);
     if (ma <= 0) return;
-    const cx = x0 + di * bw + bw / 2;
-    const ly = 432 + (i % 3) * 40;
+    const ly = 330 + row * 44;
+    const done = /Stage \d complete/.test(label);
     ctx.save();
     ctx.globalAlpha = ma;
-    ctx.strokeStyle = rgba(C.ice, 0.6);
+    ctx.strokeStyle = rgba(done ? C.ok : C.ice, 0.45);
     ctx.setLineDash([3, 5]);
-    ctx.beginPath(); ctx.moveTo(cx, ly + 10); ctx.lineTo(cx, base - 8); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(cx, ly + 8); ctx.lineTo(cx, base - 8); ctx.stroke();
     ctx.setLineDash([]);
-    ctx.fillStyle = C.ice;
-    ctx.beginPath(); ctx.arc(cx, ly + 10, 5, 0, Math.PI * 2); ctx.fill();
-    font(ctx, 18, FONT.title, 600, 0.3);
+    ctx.fillStyle = done ? C.ok : C.ice;
+    ctx.beginPath(); ctx.arc(cx, ly + 8, 5, 0, Math.PI * 2); ctx.fill();
+    ctx.fillStyle = done ? C.ok : C.text;
+    ctx.fillText(label, lx, ly - 6);
+    ctx.restore();
+  });
+}
+function stagesCard(ctx, t, t0) {
+  const F = S.facts, s6 = F.stage6;
+  tag(ctx, '05 — THE ROAD', 96, 116, 1);
+  font(ctx, 64, FONT.title, 700, 1);
+  ctx.fillStyle = C.text;
+  ctx.globalAlpha = prog(t, t0, t0 + 0.5);
+  ctx.fillText(decode('STAGES 3, 4 AND 5 CLOSED. THE CAMPAIGN NEXT.', prog(t, t0, t0 + 0.8, ease.linear), 5), 96, 204);
+  ctx.globalAlpha = 1;
+  const cards = F.stages, w = 400, gap = 32, x0 = (W - (cards.length * w + (cards.length - 1) * gap)) / 2, y = 290, h = 300;
+  cards.forEach((st, i) => {
+    const a = prog(t, t0 + 0.3 + i * 0.3, t0 + 0.6 + i * 0.3);
+    if (a <= 0) return;
+    const x = x0 + i * (w + gap), done = Boolean(st.closed);
+    panel(ctx, x, y + (1 - a) * 20, w, h, a);
+    ctx.save();
+    ctx.globalAlpha = a;
+    font(ctx, 18, FONT.mono, 600, 3);
+    ctx.fillStyle = C.muted;
+    ctx.fillText(`STAGE ${st.stage}`, x + 28, y + 48);
+    font(ctx, 90, FONT.din, 700, 1);
+    ctx.fillStyle = done ? C.ok : C.gold;
+    glowText(ctx, done ? (st.gate.match(/^\d+ of \d+/) ? st.gate.replace(' of ', '/') : '✓') : `${s6.total.PASS}/${s6.rows}`, x + 26, y + 150, done ? C.ok : C.gold, 22, 0.3);
+    font(ctx, 21, FONT.title, 600, 0.3);
     ctx.fillStyle = C.text;
-    const tw = ctx.measureText(label).width;
-    const lx = clamp(cx - tw / 2, 40, W - 40 - tw);
-    ctx.fillText(label, lx, ly - 4);
+    const words = st.name.split(' '), lines = [''];
+    for (const word of words) { if (ctx.measureText(`${lines.at(-1)} ${word}`).width > w - 56) lines.push(word); else lines[lines.length - 1] = `${lines.at(-1)} ${word}`.trim(); }
+    lines.forEach((line, k) => ctx.fillText(line, x + 28, y + 196 + k * 28));
+    font(ctx, 16, FONT.mono, 500, 1);
+    ctx.fillStyle = done ? C.ok : C.goldHi;
+    ctx.fillText(done ? `CLOSED ${st.closed}` : 'IN PROGRESS · ROWS PASSING', x + 28, y + h - 24);
+    ctx.restore();
+  });
+  // Stage 6 in detail
+  const facts = [
+    [`${s6.endings} of 3`, 'endings equal the original, from their in-world triggers'],
+    [`${s6.chains.length}`, 'missions’ required chains equal the original under Wine'],
+    [number(s6.conversations), `conversations run to their end, in all ${s6.censusRows} mission lists`],
+    [`${s6.clauses.Persistence.PASS} of ${s6.clauses.Persistence.PASS}`, 'persistence rows: saves, loads, return visits'],
+  ];
+  facts.forEach(([value, label], i) => {
+    const a = prog(t, t0 + 1.6 + i * 0.35, t0 + 1.9 + i * 0.35);
+    if (a <= 0) return;
+    const x = 96 + (i % 2) * 880, yy = 700 + Math.floor(i / 2) * 120;
+    ctx.save();
+    ctx.globalAlpha = a;
+    font(ctx, 66, FONT.din, 700, 1);
+    ctx.fillStyle = C.gold;
+    ctx.fillText(value, x, yy + 56);
+    const vw = ctx.measureText(value).width;
+    font(ctx, 24, FONT.title, 500, 0.3);
+    ctx.fillStyle = C.text;
+    ctx.fillText(label, x + vw + 24, yy + 44);
     ctx.restore();
   });
 }
 
+// ---------------------------------------------------------------- 7. the numbers
 function sNumbers(ctx, t) {
   background(ctx, t);
-  const F = S.facts;
-  tag(ctx, '07 — THE EVIDENCE', 96, 116, prog(t, 90.0, 90.5));
+  const F = S.facts, t0 = T.numbers[0];
+  tag(ctx, '06 — THE EVIDENCE', 96, 116, prog(t, t0, t0 + 0.4));
   const tiles = [
-    [F.code.runtimeLines, 'lines of JavaScript source'],
+    [F.code.runtimeLines, 'lines of JavaScript: the page, glue, validators'],
+    [F.code.rustLines, 'lines of Rust, compiled to WebAssembly'],
     [F.code.validators, 'validators against original data'],
     [F.code.nativeOracles, 'native-code oracle checks'],
     [F.code.docs, 'evidence documents'],
-    [`${F.evidence.packagesValidated}/${F.evidence.packagesValidated}`, 'original packages validated'],
     [0, 'Windows binaries run in the browser'],
   ];
   const cols = 3, tw = 540, th = 300, gx = 42, gy = 50, x0 = (W - (cols * tw + (cols - 1) * gx)) / 2, y0 = 210;
   tiles.forEach(([value, label], i) => {
-    const t0 = 90.3 + i * 0.35;
-    const a = prog(t, t0, t0 + 0.45);
+    const s = t0 + 0.2 + i * 0.3;
+    const a = prog(t, s, s + 0.4);
     if (a <= 0) return;
     const x = x0 + (i % cols) * (tw + gx), y = y0 + Math.floor(i / cols) * (th + gy) + (1 - a) * 24;
     panel(ctx, x, y, tw, th, a);
     ctx.save();
     ctx.globalAlpha = a;
     font(ctx, 128, FONT.din, 700, 2);
-    const shown = typeof value === 'number' ? bigCount(value, prog(t, t0 + 0.1, t0 + 1.6, ease.linear)) : value;
-    ctx.fillStyle = i === 5 ? C.ok : C.gold;
-    glowText(ctx, shown, x + 40, y + 170, i === 5 ? C.ok : C.gold, 24, 0.3);
-    font(ctx, 26, FONT.title, 600, 0.5);
+    const shown = bigCount(value, prog(t, s + 0.1, s + 1.4, ease.linear));
+    const color = i === 5 ? C.ok : C.gold;
+    glowText(ctx, shown, x + 40, y + 170, color, 24, 0.3);
+    font(ctx, 24, FONT.title, 600, 0.3);
     ctx.fillStyle = C.text;
     ctx.fillText(label, x + 44, y + 236);
     ctx.restore();
   });
 }
 
+// ---------------------------------------------------------------- 8. the end card
+function wireOrbit({cx = 3000, cy = -1500, cz = -100, radius = 7600, height = 4300, angle = 200, fov = 45}) {
+  const a = angle * Math.PI / 180;
+  return {eye: [cx + Math.cos(a) * radius, cy + Math.sin(a) * radius, height], target: [cx, cy, cz], fov};
+}
+function drawWire(ctx, view, alpha = 1) {
+  const layer = S.wire.render(view);
+  ctx.save();
+  ctx.filter = 'blur(7px)';
+  ctx.globalCompositeOperation = 'lighter';
+  ctx.globalAlpha = alpha * 0.8;
+  ctx.drawImage(layer, 0, 0);
+  ctx.filter = 'none';
+  ctx.globalAlpha = alpha;
+  ctx.drawImage(layer, 0, 0);
+  ctx.restore();
+}
 function sOutro(ctx, t) {
   background(ctx, t, 0.7);
-  const lt = t - 98;
-  const view = wireOrbit(t, {angle: 250 + lt * 4, radius: 6800 + lt * 520, height: 3600 + lt * 380});
-  drawWire(ctx, {...view, opacity: 0.8 * (1 - prog(t, 104.2, 105.6)), near: 4000, far: 20000}, 1);
+  const t0 = T.outro[0], lt = t - t0, end = DURATION;
+  drawWire(ctx, {...wireOrbit({angle: 250 + lt * 4, radius: 7400 + lt * 420, height: 2600 + lt * 260, cz: 2600}),
+    scan: lerp(-1600, 8400, ease.inOut(inv(t0, t0 + 4, t))), opacity: 0.6 * (1 - prog(t, end - 3, end - 1)), near: 4000, far: 20000},
+    prog(t, t0, t0 + 0.3));
   const g = ctx.createRadialGradient(W / 2, 500, 50, W / 2, 500, 950);
-  g.addColorStop(0, rgba('#03070c', 0.8));
+  g.addColorStop(0, rgba('#03070c', 0.9));
   g.addColorStop(1, rgba('#03070c', 0));
   ctx.fillStyle = g;
   ctx.fillRect(0, 0, W, H);
-  const a = prog(t, 98.3, 99.0) * (1 - prog(t, 104.6, 105.6));
+  const F = S.facts;
+  const a = prog(t, t0 + 0.2, t0 + 0.8) * (1 - prog(t, end - 2.2, end - 0.8));
   ctx.save();
   ctx.globalAlpha = a;
   ctx.textAlign = 'center';
-  font(ctx, 132, FONT.title, 700, 36);
-  glowText(ctx, 'DEUS EX', W / 2 + 18, 440, C.gold, 36, 0.4);
-  font(ctx, 30, FONT.mono, 600, 20);
+  font(ctx, 150, FONT.title, 700, 40);
+  glowText(ctx, decode('DEUS EX', prog(t, t0, t0 + 0.9, ease.linear), 3, 0.5), W / 2 + 20, 450, C.gold, 40, 0.42);
+  font(ctx, 32, FONT.mono, 600, 22);
   ctx.fillStyle = C.text;
-  ctx.fillText('BROWSER RUNTIME', W / 2 + 10, 505);
-  ctx.globalAlpha = a * prog(t, 99.4, 100.0);
+  ctx.fillText('BROWSER RUNTIME', W / 2 + 11, 520);
+  ctx.globalAlpha = a * prog(t, bar(53), bar(53) + 0.6);
   font(ctx, 26, FONT.mono, 500, 1);
   ctx.fillStyle = C.muted;
-  ctx.fillText('Stage 3 · original script & native runtime — in progress', W / 2, 610);
-  ctx.globalAlpha = a * prog(t, 100.3, 101.0);
-  font(ctx, 40, FONT.title, 600, 1);
+  ctx.fillText(`Stages 3, 4 and 5 complete · Stage 6, saves and the campaign: ${F.stage6.total.PASS} of ${F.stage6.rows} rows`, W / 2, 620);
+  ctx.globalAlpha = a * prog(t, bar(54), bar(54) + 0.7);
+  font(ctx, 42, FONT.title, 600, 1);
   ctx.fillStyle = C.goldHi;
-  ctx.fillText('Built from evidence. Nothing invented.', W / 2, 690);
+  ctx.fillText('Built from evidence. Nothing invented.', W / 2, 705);
   ctx.textAlign = 'left';
   ctx.restore();
 }
 
 const SCENES = [
-  [T.logo, sLogo], [T.intro, sIntro], [T.montage, sMontage], [T.question, sQuestion], [T.title, sTitle],
-  [T.method, sMethod], [T.oracle, sOracle], [T.x87, sX87], [T.pairs, sPairs], [T.footage, sFootage],
-  [T.pace, sPace], [T.numbers, sNumbers], [T.outro, sOutro],
+  [T.open, sOpen], [T.reveal, sReveal], [T.island, sIsland], [T.method, sMethod], [T.pairs, sPairs],
+  [T.progress, sProgress], [T.numbers, sNumbers], [[T.outro[0], DURATION], sOutro],
 ];
 
 // ---------------------------------------------------------------- post
-const CUTS = [4, 8, 16, 22, 28, 38, 48, 54, 64, 80, 90, 98, 9, 10, 11, 12, 13, 14, 15, 5, 6, 7, 56.5, 59, 61.5,
-  67.5, 69.5, 72.5, 75.5, 77.5];
+const MAJOR = Object.values(SECTIONS).map(([b]) => bar(b)).filter(t => t > 0);
+const CUTS = [...MAJOR, ...FOOTAGE.map(s => s.t0), bar(27), bar(30), bar(44),
+  ...PAIRS.map((_, i) => T.pairs[0] + i * (T.pairs[1] - T.pairs[0]) / PAIRS.length)];
+const HITS = [bar(8), bar(12), bar(32), bar(52)];
 const grainCanvas = (() => {
   const c = document.createElement('canvas');
   c.width = c.height = 512;
@@ -824,7 +801,7 @@ const grainCanvas = (() => {
   let s = 12345;
   for (let i = 0; i < data.data.length; i += 4) {
     s = (Math.imul(s, 1103515245) + 12345) >>> 0;
-    const v = (s >>> 24);
+    const v = s >>> 24;
     data.data[i] = data.data[i + 1] = data.data[i + 2] = v;
     data.data[i + 3] = 255;
   }
@@ -845,12 +822,10 @@ const tctx = tmp.getContext('2d');
 
 function post(ctx, t) {
   const frame = Math.round(t * FPS);
-  // glitch around cuts
   let glitch = 0;
   for (const cut of CUTS) {
-    const d = Math.abs(t - cut);
-    const major = Number.isInteger(cut) && [4, 8, 16, 22, 28, 38, 48, 54, 64, 80, 90, 98].includes(cut);
-    if (d < (major ? 0.14 : 0.07)) glitch = Math.max(glitch, (major ? 1 : 0.5) * (1 - d / (major ? 0.14 : 0.07)));
+    const major = MAJOR.includes(cut), d = Math.abs(t - cut), r = major ? 0.13 : 0.06;
+    if (d < r) glitch = Math.max(glitch, (major ? 1 : 0.45) * (1 - d / r));
   }
   if (glitch > 0) {
     tctx.drawImage(canvas, 0, 0);
@@ -862,25 +837,23 @@ function post(ctx, t) {
     }
     ctx.save();
     ctx.globalCompositeOperation = 'lighter';
-    ctx.globalAlpha = 0.22 * glitch;
+    ctx.globalAlpha = 0.2 * glitch;
     ctx.filter = 'sepia(1) saturate(6) hue-rotate(160deg)';
     ctx.drawImage(tmp, -10 * glitch, 0);
     ctx.filter = 'sepia(1) saturate(6) hue-rotate(-30deg)';
     ctx.drawImage(tmp, 10 * glitch, 0);
     ctx.restore();
   }
-  // flash on the title hit
-  const flash = Math.max(0, 1 - Math.abs(t - 22.0) / 0.18);
-  if (flash > 0) {
-    ctx.fillStyle = rgba(C.goldHi, 0.35 * flash);
-    ctx.fillRect(0, 0, W, H);
+  // a flash on each gong
+  for (const hit of HITS) {
+    const flash = Math.max(0, 1 - Math.abs(t - hit) / 0.2);
+    if (flash > 0) { ctx.fillStyle = rgba(C.goldHi, 0.3 * flash); ctx.fillRect(0, 0, W, H); }
   }
-  // scanlines, grain, vignette
   ctx.save();
-  ctx.globalAlpha = 0.07;
+  ctx.globalAlpha = 0.06;
   ctx.fillStyle = ctx.createPattern(scanCanvas, 'repeat');
   ctx.fillRect(0, 0, W, H);
-  ctx.globalAlpha = 0.055;
+  ctx.globalAlpha = 0.05;
   ctx.globalCompositeOperation = 'overlay';
   const ox = Math.floor(hash(frame * 3) * 512), oy = Math.floor(hash(frame * 5) * 512);
   ctx.translate(-ox, -oy);
@@ -889,15 +862,11 @@ function post(ctx, t) {
   ctx.restore();
   const v = ctx.createRadialGradient(W / 2, H / 2, H * 0.35, W / 2, H / 2, H * 0.95);
   v.addColorStop(0, 'rgba(0,0,0,0)');
-  v.addColorStop(1, 'rgba(0,0,0,0.55)');
+  v.addColorStop(1, 'rgba(0,0,0,0.5)');
   ctx.fillStyle = v;
   ctx.fillRect(0, 0, W, H);
-  // fade from/to black at the very ends
-  const edge = Math.max(1 - inv(0, 0.4, t), inv(DURATION - 0.6, DURATION, t));
-  if (edge > 0) {
-    ctx.fillStyle = `rgba(0,0,0,${edge})`;
-    ctx.fillRect(0, 0, W, H);
-  }
+  const edge = Math.max(1 - inv(0, 0.4, t), inv(DURATION - 0.8, DURATION, t));
+  if (edge > 0) { ctx.fillStyle = `rgba(0,0,0,${edge})`; ctx.fillRect(0, 0, W, H); }
 }
 
 // ---------------------------------------------------------------- driver
@@ -906,16 +875,17 @@ async function init() {
     `500 30px ${FONT.mono}`, `400 30px ${FONT.mono}`, `700 100px ${FONT.din}`];
   await Promise.all(fonts.map(f => document.fonts.load(f)));
   S.facts = await (await fetch('/ad/build/facts.json')).json();
+  S.clipLengths = await (await fetch('/ad/build/clips.json')).json();
   S.wire = await createWire('/reports/00_Training/world.obj', W, H);
   await Promise.all(STILLS.map(async name => { S.img[name] = await cache.get(`/ad/build/assets/${name}.jpg`); }));
-  return {duration: DURATION, fps: FPS, edges: S.wire.edges};
+  return {duration: DURATION, fps: FPS, edges: S.wire.edges, clips: S.clipLengths};
 }
 
 async function renderFrame(t) {
   const f = footageAt(t);
   if (f && !S.frames.has(f.url)) {
     if (S.frames.size > 8) S.frames.delete(S.frames.keys().next().value);
-    S.frames.set(f.url, await cache.get(f.url));
+    S.frames.set(f.url, await frameCache.get(f.url));
   }
   ctx.save();
   ctx.fillStyle = C.bg;

@@ -39,6 +39,8 @@ const errors = [];
 page.on('pageerror', error => errors.push(error.message));
 page.on('console', message => { if (message.type() === 'error') errors.push(message.text()); });
 await page.goto(debugUrl(`${base}/ad/src/index.html`));
+// main.js loads ad/build/score.json with a top-level await before it defines window.__video
+await page.waitForFunction(() => window.__video, null, {timeout: 60000}).catch(error => { console.log('page errors:', errors.slice(0, 5)); throw error; });
 const info = await page.evaluate(() => window.__video.ready);
 console.log('ready', JSON.stringify(info));
 const frameAt = async t => {

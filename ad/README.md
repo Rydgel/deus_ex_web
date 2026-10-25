@@ -1,95 +1,95 @@
 # Promo video
 
-A 106-second motion-graphics promo for the Deus Ex browser runtime, rendered
-from code: original-game captures, browser-runtime captures, animated
-evidence from this repository, and an original synthesized soundtrack.
+A two-minute motion-graphics promo for the Deus Ex browser runtime, rendered from code: footage of Play recorded under a
+virtual clock, the original/Play frame pairs of the Stage 4 acceptance work, animated evidence from this repository, and a
+synthesized re-thinking of the game's main theme. Re-cut on 2026-10-25 (the first cut, 2026-09-27, predates Stages 3 to 6).
 
-Output: `ad/out/deus-ex-browser-runtime.mp4` (1920×1080, 30 fps, H.264 + AAC).
-Captures, renders and generated audio stay out of Git (`ad/.gitignore`); they
-contain original game content.
+Output: `ad/out/deus-ex-browser-runtime.mp4` (1920×1080, 30 fps, H.264 + AAC). Captures, renders and generated audio stay
+out of Git (`ad/.gitignore`); they contain original game content.
 
 ## Pipeline
 
 ```sh
-node ad/scripts/facts.mjs              # numbers and snippets -> ad/build/facts.json
-# original game (CrossOver bottle "DeusEx"), see below
-node ad/scripts/original-game.mjs launch 00_Training.dx
-node ad/scripts/capture-original.mjs   # Training, UNATCO HQ, Liberty Island stills
-node ad/scripts/capture-intro.mjs      # 00_Intro stills from its CameraPoints
-# browser runtime (dev server on 127.0.0.1:5173)
-node ad/scripts/capture-browser.mjs stills
-node ad/scripts/capture-browser.mjs clips
-node ad/scripts/prepare-assets.mjs     # graded stills -> ad/build/assets
-node ad/scripts/music.mjs              # soundtrack -> ad/build/music.wav
-node ad/scripts/render.mjs             # -> ad/out/deus-ex-browser-runtime.mp4
+node ad/scripts/facts.mjs                 # numbers and snippets -> ad/build/facts.json
+node ad/scripts/capture-play.mjs intro    # 00_Intro in Play, then the logo map it travels to
+node ad/scripts/capture-play.mjs island   # the dock, DL_StartGame, MeetPaul
+node ad/scripts/capture-play.mjs fight    # the assault rifle against the NSF
+node ad/scripts/capture-play.mjs gunther  # the cell button, the door, GuntherRescued
+node ad/scripts/capture-play.mjs swim     # the bay off the dock (swm3's placement; not in the cut: black underwater at night)
+node ad/scripts/capture-play.mjs training # Training: crowbar and crate, keypad, DataCube
+node ad/scripts/prepare-assets.mjs        # graded pairs -> ad/build/assets/pairs, clip manifest -> ad/build/clips.json
+node ad/scripts/music.mjs                 # soundtrack -> ad/build/music.wav, the theme's bars -> ad/build/score.json
+node ad/scripts/render.mjs                # -> ad/out/deus-ex-browser-runtime.mp4
 node ad/scripts/render.mjs --stills 12.5,45.6   # review frames -> ad/build/preview
 ```
 
-The renderer is `ad/src/` (canvas 2D + a Three.js wireframe of Training's
-original BSP from `reports/00_Training/world.obj`). `render.mjs` serves the
-repo read-only on 127.0.0.1, steps `window.__video.renderFrame(t)` in headless
-Chromium (Metal ANGLE) and pipes frames to ffmpeg.
+Run one capture at a time next to other heavy work (16 GB machine). The renderer is `ad/src/` (canvas 2D + a Three.js
+wireframe of Training's original BSP from `reports/00_Training/world.obj`); `ad/src/timeline.js` maps the theme's orders to
+the promo's sections, and the picture cuts on the bars `music.mjs` writes to `ad/build/score.json` (run it before
+rendering). `render.mjs` serves the repo read-only on 127.0.0.1, steps `window.__video.renderFrame(t)` in headless Chromium
+(Metal ANGLE) and pipes frames to ffmpeg.
 
-## Original-game captures
+## Footage of Play
 
-- The game runs in the CrossOver bottle with `INI=DeusEx-ad.ini
-  USERINI=User-ad.ini` copies (silent 1280×720 window, two extra bindings);
-  the installed `DeusEx.ini`/`User.ini` are never modified.
-- `tools/dxinput.c` posts window messages to `DeusEx.exe` inside the bottle
-  (no memory access). UE1's WinDrv reads keys from messages, but its
-  `GetKeyState` check releases posted keys at once, so held movement is
-  replaced by `set ... Location/ViewRotation/Velocity` console commands.
-- Frames are the game's own `Shot` bitmaps (numpad `*`). They hold the raw
-  framebuffer, so `prepare-assets.mjs` applies the original D3D gamma ramp
-  (Brightness 0.6 → exponent 1/1.5, docs/lighting.md). The browser captures use
-  the viewer's default brightness 0.6, which applies the same curve.
-- Ghost-camera shots use eye = Location + 40; the Training pairs line up
-  exactly with the browser's reference camera at the same eye and rotator.
-- `00_Intro` starts its conversation on the first frame and grabs the
-  keyboard. `capture-intro.mjs` sets `LevelInfo.bPlayersOnly` *before*
-  `open 00_Intro` (the class default carries into the new level), so the intro
-  loads frozen; each shot uses a CameraPoint's own location and rotation.
-  Frozen pawns never start an animation, so the stills hold every
-  `ScriptedPawn` on a `BreatheLight` frame: they are the cinematic's camera
-  placements, not frames of its animation.
-- Force-killing `DeusEx.exe` triggers the "Recovery Mode" wizard on the next
-  launch; `dxinput` action `button Run Deus Ex` dismisses it. Quit with the
-  console command `exit` instead.
+`play-lib.mjs` opens the page with `?sim=inline` (the simulation frame and the draw both run in the page's
+requestAnimationFrame) and `?music=0` (Galaxy's headless mirror library, so no original music is recorded), and replaces
+`requestAnimationFrame`/`performance.now` with a virtual clock: each 30 fps output frame is exactly two 1/60 s simulation
+steps whatever the render speed (60 frames advance `LevelInfo.TimeSeconds` by exactly 2.000 s). The scenes are driven through
+the player's own inputs (the belt keys, the fire and frob buttons, held movement keys); placements, view writes and `summon`
+are harness steps through the viewer's probes, as in the Stage 5 census and `record-clip.mjs`. The game's HUD stays; the
+viewer's web UI is hidden.
 
-## Browser-runtime captures
+`00_Intro` is paced by its speech, so its shots are mapped from the captured frames, not from a real-time scout (the level
+times differ). `record-clip.mjs` (real time, with sound, worker mode) remains for clips outside the promo.
 
-`capture-browser.mjs` drives the dev server in headless Chromium. A virtual
-clock replaces `requestAnimationFrame`/`performance.now`, so each 30 fps frame
-advances Play by exactly two 1/60 s steps whatever the render speed. Each map
-boots in a fresh page through a filtered `/__game__/manifest`.
+The first cut's original-game capture tools (`original-game.mjs`, `capture-original.mjs`, `capture-intro.mjs`,
+`shot-plan.mjs`, `tools/dxinput.c`) stay: the project's own capture scripts use them. This cut takes its original frames
+from the acceptance captures instead.
 
-Found while capturing (current working tree, not fixed here):
-- Switching maps in one page (Training → Liberty Island) raises
-  `NativeHeapError: Native heap object was freed` from `script-play-hud.mjs`
-  while the old game's HUD snapshot is read, and the load never finishes.
-- The keypad and DataCube previews do not open their windows when F is
-  pressed: the keypad preview aims above the keypad (the frob trace misses),
-  and the DataCube never becomes the frob target. Those clips are unused.
-- Play is unavailable on Liberty Island and UNATCO HQ, so their actors are not
-  posed or not shown; only original shots of those maps are used.
+## The frame pairs
+
+`.work/acceptance/<map>/<name>-{original,play}.png` are the Stage 4 acceptance frames: the original under CrossOver or Wine
+and Play from the same camera at the same held level time (docs/stage-4-exit-criteria.md, e.g. rows 4.1.1 and 4.2.1 to
+4.2.4; the gate passed 70 of 70). Both hold the raw framebuffer; `prepare-assets.mjs` applies the original D3D gamma ramp
+(Brightness 0.6 → exponent 1/1.5, docs/lighting.md) to both sides. The promo shows 8 of the 130 pairs (24 maps).
 
 ## Where the claims come from
 
-Every number on screen is computed by `facts.mjs` or quoted from project
-docs: git history (commits, days, lines added, per-day calendar), code counts
-(`src/` lines, `scripts/validate-*`, `scripts/validate-native-*`,
-`docs/*.md`), the `System/DeusEx.u` header, `DeusExMover.Frob` decoded with
-`src/unreal/bytecode.mjs`, `checkMove` (0x103c3290) disassembled with
-`tools/disasm-body.py`, its port in `src/runtime/script-pawn-nav.mjs`, and
-README.md's measured comparisons (10,980 rays, 7,320 extent traces, 402
-placement chains, 2,547 physics queries; 219/219 packages, 88 maps). The
-`maxError 0` line refers to decoration rolling physics against the original
-DLL.
+Every number on screen is computed by `facts.mjs` or quoted from project docs:
+
+- git history (commits, days, the per-day calendar) and code counts (`src/` JavaScript lines, tracked `*.rs` lines and
+  crates, `scripts/validate-*`, `scripts/validate-native-*`, `docs/*.md`);
+- `System/DeusEx.u`'s header; `DeusExMover.Frob` decoded with `src/unreal/bytecode.mjs`;
+- `APawn::AICanHear` (Engine.dll `0x103c7680`) disassembled with `tools/disasm-body.py`, and its Rust port
+  (`native/script-vm/src/aievent.rs` `can_hear`); "98 of 98 scenarios" is `validate-event-manager.mjs`'s 18 hand-written and
+  80 seeded cases against the original body under Unicorn (docs/ai-event-manager.md "Verification");
+- the Stage 3, 4 and 5 gates as README.md and docs/stage-*-exit-criteria.md record them;
+- Stage 6's scoreboard read from `scripts/stage6-criteria.mjs` (rows passing, the missions whose chain passes, the endings, the
+  conversation census rows; 1,627 conversations is the inventory's total, docs/stage-6-inventory.md);
+- the acceptance captures counted from `.work/acceptance`;
+- milestone dates checked against the first commit of each.
 
 ## Soundtrack
 
-`music.mjs` synthesizes everything (subtractive voices, drums, reverb,
-ping-pong delay, look-ahead limiter; about −14 LUFS). The piece is written in
-the spirit of the original's tracker-era score — D minor, 120 BPM, arpeggios,
-breakbeat, orchestra stabs — with its own melody; it does not reproduce the
-Deus Ex theme. Sound effects are placed on the video's cuts and typing.
+A re-thinking of the Deus Ex main theme (`Title_Music`, by Alexander Brandon and Michiel van den Bos), not a copy of it.
+`theme-score.mjs` reads the song from the local installation at build time (nothing of it is stored in this repository; the
+module's audio is never played) and sequences the orders the promo uses (`ARRANGEMENT` in `ad/src/timeline.js`) with the
+song's own speed and tempo changes. From it `music.mjs` takes two things only:
+
+- the harmony: each bar's root and chord, read from all of the song's parts;
+- a few quoted lines: the "Deus Ex" lead melody (the groove's last bars, the bridge, the return), the build's descending
+  line, the groove's fourths stab and the later synth line, with the module's echo copies left out.
+
+Everything else is the promo's own and synthesized from scratch: the cinematic intro (pedals, choir, timpani, a slow horn
+foreshadowing the lead's opening motif), the string voicings, the bass figure, the marcato ostinatos and the cellos' pulse,
+the taiko, heartbeat and kit patterns, the horn hits and gongs on the section cuts, the dynamics and the closing callback;
+about −14 LUFS. The sample tunings the quotes rely on were measured, not assumed: each sample's pitch class at C-5 from a
+harmonic-product spectrum, confirmed by the consonance of the parts sounding together (the song sounds in A minor; several
+samples are tuned off their written notes).
+
+`music.mjs` also writes `ad/build/score.json`, the song's bar start times, which the picture cuts on (the intro's second
+block is slower and ends on a ritardando, so bars are not all the same length). `MUSIC_DEBUG=1` prints per-section bus
+levels and `MUSIC_STEMS=1` writes each bus to `ad/build/stems`. Sound effects are placed on the picture's cues.
+
+The theme belongs to its composers and publisher: a published promo with this soundtrack, like the game footage in it,
+needs their permission.

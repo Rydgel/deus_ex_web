@@ -1,38 +1,52 @@
-// Original soundtrack for the promo, synthesized from scratch (no samples):
-// a 120 BPM D-minor piece in the spirit of late-90s tracker game scores —
-// ping-pong arpeggios, breakbeat drums, synth-brass lead, orchestra stabs —
-// with its own melody, plus sound effects placed on the video's cuts.
-// Writes ad/build/music.wav (48 kHz, 16-bit stereo).
-import {mkdirSync, writeFileSync} from 'node:fs';
+// Soundtrack for the promo: the Deus Ex main theme (Title_Music, by Alexander Brandon and Michiel van den Bos) played by the
+// promo's own synthesizer. theme-score.mjs reads the song's notes from the local installation at build time (nothing of the
+// song is stored in this repository) and this file voices them: strings, choir, horns, marcato, a synth bass and arpeggios, a
+// synthesized kit, with taiko, timpani, gongs and horn hits on the picture's section cuts. No sample of the module's audio is
+// played. Cut sound effects sit on the picture's cues. Writes ad/build/music.wav (48 kHz, 16-bit stereo) and
+// ad/build/score.json (the song's bars, which the picture cuts on).
+import {existsSync, mkdirSync, writeFileSync} from 'node:fs';
 import path from 'node:path';
 import {fileURLToPath} from 'node:url';
+import {ARRANGEMENT, grid} from '../src/timeline.js';
+import {themeScore} from './theme-score.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const OUT = path.resolve(here, '../build/music.wav');
-const SR = 48000, DUR = 106, N = Math.ceil(SR * DUR);
-const BEAT = 0.5, BAR = 2, S16 = BEAT / 4;
+const repo = path.resolve(here, '../..');
+const game = ['Deus Ex GOTY Edition', 'game'].map(dir => path.join(repo, dir)).find(dir => existsSync(path.join(dir, 'Music')));
+const score = await themeScore({game, arrangement: ARRANGEMENT});
+const G = grid(score), {bar} = G;
+const SR = 48000, DUR = G.duration, N = Math.ceil(SR * DUR);
 const TAU = Math.PI * 2;
+const BEAT = G.barLength(12) / 4, E8 = BEAT / 2, S16 = BEAT / 4;
 
 // ------------------------------------------------------------------ buses
 const mkbus = () => ({L: new Float32Array(N), R: new Float32Array(N)});
-const B = {drums: mkbus(), bass: mkbus(), pad: mkbus(), arp: mkbus(), lead: mkbus(), keys: mkbus(), orch: mkbus(), fx: mkbus()};
-const REV = mkbus(), DLY = mkbus();
+const B = {perc: mkbus(), timp: mkbus(), low: mkbus(), strings: mkbus(), marcato: mkbus(), choir: mkbus(), horns: mkbus(),
+  synth: mkbus(), gong: mkbus(), fx: mkbus(), bass: mkbus(), kit: mkbus()};
+const REV = mkbus(), HALL = mkbus(), DLY = mkbus();
+// Bus levels, applied where a voice writes, so its reverb and delay sends follow.
+const LEVELS = {perc: 0.45, timp: 0.9, low: 1.25, strings: 2.6, marcato: 4.6, choir: 1.5, horns: 6.0, synth: 1.6, gong: 0.9, fx: 0.7,
+  bass: 1.0, kit: 0.6};
+for (const [name, bus] of Object.entries(B)) bus.g = LEVELS[name];
 
-let seed = 0x2d5f1a;
+let seed = 0x5eed1e;
 const rand = () => { seed = (Math.imul(seed ^ (seed >>> 15), 0x2c1b3c6d) + 0x6d2b79f5) >>> 0; return seed / 4294967296; };
 const noise = () => rand() * 2 - 1;
 const midi = n => 440 * Math.pow(2, (n - 69) / 12);
 const NOTES = {C: 0, 'C#': 1, Db: 1, D: 2, 'D#': 3, Eb: 3, E: 4, F: 5, 'F#': 6, Gb: 6, G: 7, 'G#': 8, Ab: 8, A: 9, 'A#': 10, Bb: 10, B: 11};
 const note = name => { const m = /^([A-G][#b]?)(-?\d)$/.exec(name); return 12 * (Number(m[2]) + 1) + NOTES[m[1]]; };
+const hz = name => midi(note(name));
+const midiName = m => `${['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B'][((m % 12) + 12) % 12]}${Math.floor(m / 12) - 1}`;
 
-function write(bus, i, l, r) { if (i >= 0 && i < N) { bus.L[i] += l; bus.R[i] += r; } }
+function write(bus, i, l, r) { if (i >= 0 && i < N) { const g = bus.g ?? 1; bus.L[i] += l * g; bus.R[i] += r * g; } }
 const panLR = pan => [Math.cos((pan + 1) * Math.PI / 4), Math.sin((pan + 1) * Math.PI / 4)];
 
 // Topology-preserving state-variable filter.
 class SVF {
-  constructor() { this.a = 0; this.b = 0; }
+  constructor() { this.a = 0; this.b = 0; this.low = 0; this.band = 0; this.high = 0; }
   set(fc, q) {
-    const g = Math.tan(Math.PI * Math.min(fc, SR * 0.45) / SR), k = 1 / q;
+    const g = Math.tan(Math.PI * Math.min(Math.max(fc, 10), SR * 0.45) / SR), k = 1 / q;
     this.a1 = 1 / (1 + g * (g + k)); this.a2 = g * this.a1; this.a3 = g * this.a2; this.k = k;
   }
   run(x) {
@@ -47,29 +61,105 @@ const blep = (t, dt) => {
   if (t > 1 - dt) { t = (t - 1) / dt; return t * t + t + t + 1; }
   return 0;
 };
+const adsr = (tt, dur, attack, decay, sustain, release) => {
+  if (tt < attack) return tt / attack;
+  const held = sustain + (1 - sustain) * Math.exp(-(Math.min(tt, dur) - attack) / Math.max(1e-4, decay));
+  return tt < dur ? held : held * Math.exp(-(tt - dur) / Math.max(1e-4, release / 3));
+};
 
-// Generic subtractive voice.
+// Vowel formants (Hz, relative gain, Q) for the choir.
+// (broad enough not to ring on the breath noise as a held whistle)
+const VOWELS = {a: [[700, 1, 4.5], [1220, 0.5, 5], [2600, 0.18, 6]], o: [[480, 1, 4.5], [820, 0.5, 5], [2600, 0.1, 6]],
+  u: [[340, 1, 4], [720, 0.35, 5], [2500, 0.06, 6]]};
+
+// A note's volume curve ([[seconds into the note, gain]], the song's volume slides), linear between its points.
+function curveAt(curve, tt) {
+  if (!curve) return 1;
+  if (tt <= curve[0][0]) return curve[0][1];
+  for (let k = 1; k < curve.length; k++) if (tt < curve[k][0]) {
+    const [t0, g0] = curve[k - 1], [t1, g1] = curve[k];
+    return g0 + (g1 - g0) * (tt - t0) / Math.max(1e-6, t1 - t0);
+  }
+  return curve.at(-1)[1];
+}
+
+// Ensemble voice: n detuned band-limited saws, each with its own vibrato and drift, spread across the stereo field, then a
+// low-pass with an envelope (strings, horns) or a vowel formant bank (choir).
+function ens(bus, o) {
+  const {t, dur, freq, n = 6, spread = 12, attack = 0.2, decay = 0.4, sustain = 0.8, release = 0.6, cutoff = 2500, env = 0,
+    envDecay = 0.3, q = 0.7, gain = 0.1, pan = 0, width = 0.8, rev = 0, hall = 0, dly = 0, vib = 7, vibRate = 5.2, vibDelay = 0.25,
+    drift = 3, vowel = null, breath = 0, glide = null, glideTime = 0.08, square = 0, curve = null} = o;
+  const start = Math.floor(t * SR), len = Math.floor((dur + release) * SR);
+  const oscs = [...Array(n)].map((_, i) => {
+    const c = n > 1 ? spread * (i / (n - 1) * 2 - 1) + (rand() - 0.5) * 2 : 0;
+    const p = n > 1 ? (i / (n - 1) * 2 - 1) * width : 0;
+    return {ph: rand(), ratio: Math.pow(2, c / 1200), vph: rand() * TAU, vr: vibRate * (0.9 + rand() * 0.2), dph: rand() * TAU,
+      dr: 0.15 + rand() * 0.25, l: Math.cos((p + 1) * Math.PI / 4), r: Math.sin((p + 1) * Math.PI / 4), m: 1};
+  });
+  const [pl, pr] = panLR(pan);
+  const fl = new SVF(), fr = new SVF();
+  const formL = vowel ? VOWELS[vowel].map(() => new SVF()) : null, formR = vowel ? VOWELS[vowel].map(() => new SVF()) : null;
+  if (vowel) VOWELS[vowel].forEach(([f, , fq], k) => { formL[k].set(f, fq); formR[k].set(f, fq); });
+  const norm = 1 / Math.sqrt(n);
+  let cg = 1;
+  for (let s = 0; s < len; s++) {
+    const tt = s / SR;
+    const amp = adsr(tt, dur, attack, decay, sustain, release) * cg;
+    if (amp < 1e-5 && tt > dur) break;
+    if ((s & 31) === 0) {
+      cg = curveAt(curve, tt);
+      let f = freq;
+      if (glide) f = glide + (freq - glide) * (1 - Math.exp(-tt / glideTime));
+      const vd = tt > vibDelay ? Math.min(1, (tt - vibDelay) / 0.4) : 0;
+      for (const osc of oscs) osc.m = f * osc.ratio * Math.pow(2, (vib * vd * Math.sin(osc.vph + TAU * osc.vr * tt) + drift * Math.sin(osc.dph + TAU * osc.dr * tt)) / 1200) / SR;
+      if (!vowel) { const fc = cutoff + env * Math.exp(-tt / envDecay); fl.set(fc, q); fr.set(fc, q); }
+    }
+    let xl = 0, xr = 0;
+    for (const osc of oscs) {
+      const dt = osc.m;
+      osc.ph += dt; if (osc.ph >= 1) osc.ph -= 1;
+      let v = 2 * osc.ph - 1 - blep(osc.ph, dt);
+      if (square) { let sq = osc.ph < 0.5 ? 1 : -1; sq += blep(osc.ph, dt); sq -= blep((osc.ph + 0.5) % 1, dt); v = v * (1 - square) + sq * square; }
+      xl += v * osc.l; xr += v * osc.r;
+    }
+    xl *= norm; xr *= norm;
+    if (breath) { const b = noise() * breath; xl += b; xr += b; }
+    let yl, yr;
+    if (vowel) {
+      yl = 0; yr = 0;
+      VOWELS[vowel].forEach(([, g], k) => { formL[k].run(xl); formR[k].run(xr); yl += formL[k].band * g; yr += formR[k].band * g; });
+      yl *= 2.2; yr *= 2.2;
+    } else { yl = fl.run(xl); yr = fr.run(xr); }
+    const l = yl * amp * gain * pl * 1.41, r = yr * amp * gain * pr * 1.41;
+    const i = start + s;
+    write(bus, i, l, r);
+    if (rev) write(REV, i, l * rev * bus.g, r * rev * bus.g);
+    if (hall) write(HALL, i, l * hall * bus.g, r * hall * bus.g);
+    if (dly) write(DLY, i, l * dly * bus.g, r * dly * bus.g);
+  }
+}
+
+// Simple subtractive voice (synth pads, sub tones).
 function tone(bus, o) {
   const {t, dur, freq, type = 'saw', detune = [0], attack = 0.005, decay = 0.2, sustain = 0.7, release = 0.2,
-    cutoff = 4000, env = 0, envDecay = 0.2, q = 0.8, pan = 0, gain = 0.2, vib = 0, vibRate = 5.5, vibDelay = 0.25,
-    glide = null, glideTime = 0.06, rev = 0, dly = 0, sub = 0, drive = 0} = o;
+    cutoff = 4000, env = 0, envDecay = 0.2, q = 0.8, pan = 0, gain = 0.2, rev = 0, hall = 0, dly = 0, lfo = 0, lfoRate = 0.2, curve = null,
+    glide = null, glideTime = 0.06} = o;
   const start = Math.floor(t * SR), len = Math.floor((dur + release) * SR);
   const [pl, pr] = panLR(pan);
-  const oscs = detune.map(c => ({ph: rand(), ratio: Math.pow(2, c / 1200), sp: (detune.length > 1 ? (c > 0 ? 0.35 : -0.35) : 0)}));
+  const oscs = detune.map(c => ({ph: rand(), ratio: Math.pow(2, c / 1200), sp: detune.length > 1 ? (c > 0 ? 0.35 : -0.35) : 0}));
   const filt = new SVF();
-  let subPh = 0;
-  for (let n = 0; n < len; n++) {
-    const tt = n / SR;
-    let amp;
-    if (tt < attack) amp = tt / attack;
-    else if (tt < dur) amp = sustain + (1 - sustain) * Math.exp(-(tt - attack) / Math.max(1e-4, decay));
-    else amp = (sustain + (1 - sustain) * Math.exp(-(dur - attack) / Math.max(1e-4, decay))) * Math.exp(-(tt - dur) / Math.max(1e-4, release / 3));
+  const norm = 1 / Math.sqrt(oscs.length);
+  let cg = 1, f = freq;
+  for (let s = 0; s < len; s++) {
+    const tt = s / SR;
+    const amp = adsr(tt, dur, attack, decay, sustain, release) * cg;
     if (amp < 1e-5 && tt > dur) break;
-    let f = freq;
-    if (glide) f = glide + (freq - glide) * (1 - Math.exp(-tt / glideTime));
-    if (vib && tt > vibDelay) f *= Math.pow(2, vib * Math.min(1, (tt - vibDelay) / 0.3) * Math.sin(TAU * vibRate * tt) / 1200);
-    if ((n & 7) === 0) filt.set(cutoff + env * Math.exp(-tt / envDecay), q);
-    let x = 0, xl = 0, xr = 0;
+    if ((s & 7) === 0) {
+      filt.set(cutoff * (1 + lfo * Math.sin(TAU * lfoRate * tt)) + env * Math.exp(-tt / envDecay), q);
+      cg = curveAt(curve, tt);
+      f = glide ? glide + (freq - glide) * (1 - Math.exp(-tt / glideTime)) : freq;
+    }
+    let x = 0, d = 0;
     for (const osc of oscs) {
       const dt = f * osc.ratio / SR;
       osc.ph += dt; if (osc.ph >= 1) osc.ph -= 1;
@@ -78,368 +168,570 @@ function tone(bus, o) {
       else if (type === 'square') { v = osc.ph < 0.5 ? 1 : -1; v += blep(osc.ph, dt); v -= blep((osc.ph + 0.5) % 1, dt); }
       else if (type === 'tri') v = 1 - 4 * Math.abs(osc.ph - 0.5);
       else v = Math.sin(TAU * osc.ph);
-      xl += v * (0.5 - osc.sp); xr += v * (0.5 + osc.sp); x += v;
+      x += v; d += v * osc.sp;
     }
-    const norm = 1 / Math.sqrt(oscs.length);
-    if (sub) { subPh += f / 2 / SR; if (subPh >= 1) subPh -= 1; }
-    const subv = sub ? Math.sin(TAU * subPh) * sub : 0;
-    // filter the mono sum, keep a little stereo spread from the detune
-    const y = filt.run(x * norm + subv);
-    const spread = (xl - xr) * norm * 0.25;
-    let l = (y + spread) * amp * gain, r = (y - spread) * amp * gain;
-    if (drive) { l = Math.tanh(l * drive) / drive; r = Math.tanh(r * drive) / drive; }
-    const i = start + n;
-    write(bus, i, l * pl * 1.41, r * pr * 1.41);
-    if (rev) write(REV, i, l * rev, r * rev);
-    if (dly) write(DLY, i, l * dly, r * dly);
+    const y = filt.run(x * norm), spread = d * norm * 0.5;
+    const l = (y + spread) * amp * gain * pl * 1.41, r = (y - spread) * amp * gain * pr * 1.41;
+    const i = start + s;
+    write(bus, i, l, r);
+    if (rev) write(REV, i, l * rev * bus.g, r * rev * bus.g);
+    if (hall) write(HALL, i, l * hall * bus.g, r * hall * bus.g);
+    if (dly) write(DLY, i, l * dly * bus.g, r * dly * bus.g);
   }
 }
 
-// ------------------------------------------------------------------ drums
-const KICKS = [];
-function kick(t, gain = 0.9) {
-  KICKS.push(t);
-  const start = Math.floor(t * SR);
-  let ph = 0;
-  for (let n = 0; n < SR * 0.5; n++) {
-    const tt = n / SR;
-    const f = 44 + 120 * Math.exp(-tt / 0.03);
-    ph += f / SR;
-    const body = Math.sin(TAU * ph) * Math.exp(-tt / 0.28);
-    const click = n < 180 ? noise() * (1 - n / 180) * 0.35 : 0;
-    const v = Math.tanh((body + click) * 1.6) * gain;
-    write(B.drums, start + n, v, v);
+// ------------------------------------------------------------------ orchestra
+function strings(t, dur, names, {gain = 0.05, attack = 0.6, release = 1.2, cutoff = 1800, pan = 0, hall = 0.5, vib = 6} = {}) {
+  for (const [k, name] of names.entries())
+    ens(B.strings, {t, dur, freq: hz(name), n: 6, spread: 14, attack, decay: 1, sustain: 1, release, cutoff: cutoff * 1.4 + 200 * k, q: 0.6,
+      gain, pan: pan + (k / Math.max(1, names.length - 1) - 0.5) * 0.5, width: 0.9, hall, vib, vibRate: 5.4, breath: 0.015});
+}
+function lowStrings(t, dur, name, {gain = 0.09, attack = 1.2, release = 1.5} = {}) {
+  ens(B.low, {t, dur, freq: hz(name), n: 5, spread: 9, attack, decay: 1, sustain: 1, release, cutoff: 650, env: 300, envDecay: 1.5,
+    q: 0.8, gain, width: 0.5, hall: 0.3, vib: 4});
+  ens(B.low, {t, dur, freq: hz(name) * 2, n: 4, spread: 11, attack, decay: 1, sustain: 1, release, cutoff: 1100, q: 0.7, gain: gain * 0.45,
+    width: 0.8, hall: 0.35, vib: 5});
+}
+// Marcato strings: a short bowed attack with a filter bite.
+function marcato(t, names, {gain = 0.055, len = E8 * 0.7, accent = 1} = {}) {
+  for (const [k, name] of names.entries())
+    ens(B.marcato, {t, dur: len, freq: hz(name), n: 5, spread: 12, attack: 0.008, decay: 0.09, sustain: 0.45, release: 0.12,
+      cutoff: 900, env: 2600 * accent, envDecay: 0.06, q: 0.9, gain: gain * accent, pan: (k - (names.length - 1) / 2) * 0.35, width: 0.7,
+      hall: 0.25, vib: 0, breath: 0.03});
+}
+function cello(t, name, {gain = 0.06, len = S16 * 1.6} = {}) {
+  ens(B.marcato, {t, dur: len, freq: hz(name), n: 3, spread: 8, attack: 0.006, decay: 0.07, sustain: 0.3, release: 0.08,
+    cutoff: 600, env: 1800, envDecay: 0.05, q: 1, gain, pan: -0.3, width: 0.4, hall: 0.2, vib: 0, breath: 0.02});
+}
+function choir(t, dur, names, {gain = 0.06, vowel = 'a', attack = 0.8, release = 1.6, hall = 0.6} = {}) {
+  for (const [k, name] of names.entries())
+    ens(B.choir, {t, dur, freq: hz(name), n: 5, spread: 16, attack, decay: 1, sustain: 1, release, gain, vowel, pan: (k % 2 ? 0.25 : -0.25),
+      width: 0.9, hall, vib: 14, vibRate: 5.0, vibDelay: 0.35, drift: 5, breath: 0.012, square: 0.25});
+}
+// Horn: warm brass, the filter opening with the dynamic; `low` doubles an octave down.
+function horn(t, dur, name, {gain = 0.08, glide = null, low = false, pan = -0.15, attack = 0.07, hall = 0.45} = {}) {
+  const f = hz(name);
+  ens(B.horns, {t, dur, freq: f, n: 3, spread: 6, attack, decay: 0.6, sustain: 0.85, release: 0.35, cutoff: Math.min(2400, f * 3.2),
+    env: 900 + 2600 * gain, envDecay: 0.18, q: 0.75, gain, pan, width: 0.4, hall, vib: dur > 0.7 ? 9 : 0, vibRate: 4.8, vibDelay: 0.4,
+    glide, glideTime: 0.06, square: 0.2});
+  if (low) ens(B.horns, {t, dur, freq: f / 2, n: 3, spread: 5, attack: attack * 1.3, decay: 0.6, sustain: 0.85, release: 0.4,
+    cutoff: Math.min(1400, f * 2), env: 600, envDecay: 0.2, q: 0.7, gain: gain * 0.7, pan: pan + 0.3, width: 0.4, hall, vib: 0,
+    glide: glide ? glide / 2 : null, glideTime: 0.06, square: 0.3});
+}
+// Horn hit: a short, loud brass chord with a noise bite and a low thud.
+function hornHit(t, names, {gain = 0.1} = {}) {
+  for (const name of names)
+    ens(B.horns, {t, dur: 0.22, freq: hz(name), n: 4, spread: 10, attack: 0.004, decay: 0.2, sustain: 0.25, release: 0.9,
+      cutoff: 700, env: 4200, envDecay: 0.09, q: 0.9, gain, width: 0.8, hall: 0.9, vib: 0, square: 0.3});
+  const start = Math.floor(t * SR), bp = new SVF();
+  bp.set(1100, 0.8);
+  for (let s = 0; s < SR * 0.3; s++) {
+    bp.run(noise());
+    const v = bp.band * Math.exp(-s / (SR * 0.05)) * gain * 1.4;
+    write(B.horns, start + s, v, v); write(HALL, start + s, v * 0.6 * B.horns.g, v * 0.6 * B.horns.g);
   }
 }
-function snare(t, gain = 0.5, tail = 0.16) {
-  const start = Math.floor(t * SR), bp = new SVF(), hp = new SVF();
-  bp.set(1900, 0.9); hp.set(700, 0.7);
-  let ph = 0;
-  for (let n = 0; n < SR * 0.45; n++) {
-    const tt = n / SR;
-    const nz = noise();
-    bp.run(nz); hp.run(nz);
-    ph += (185 + 60 * Math.exp(-tt / 0.02)) / SR;
-    const v = ((bp.band * 0.9 + hp.high * 0.5) * Math.exp(-tt / tail) + Math.sin(TAU * ph) * 0.6 * Math.exp(-tt / 0.06)) * gain;
-    write(B.drums, start + n, v, v * 0.96);
-    write(REV, start + n, v * 0.25, v * 0.25);
+
+// ------------------------------------------------------------------ percussion
+const TAIKOS = [];
+function taiko(t, gain = 0.5, f0 = 62, pan = 0) {
+  TAIKOS.push([t, gain]);
+  const start = Math.floor(t * SR), slap = new SVF(), [pl, pr] = panLR(pan);
+  slap.set(320, 1.1);
+  let p1 = 0, p2 = 0;
+  for (let s = 0; s < SR * 1.0; s++) {
+    const tt = s / SR;
+    const f = f0 * (1 + 0.55 * Math.exp(-tt / 0.018));
+    p1 += f / SR; p2 += f * 1.59 / SR;
+    slap.run(noise());
+    const body = Math.sin(TAU * p1) * Math.exp(-tt / 0.42) + Math.sin(TAU * p2) * 0.35 * Math.exp(-tt / 0.14);
+    const v = Math.tanh((body + slap.band * 2.2 * Math.exp(-tt / 0.03)) * 1.4) * gain;
+    write(B.perc, start + s, v * pl * 1.41, v * pr * 1.41);
+    write(HALL, start + s, v * 0.22 * B.perc.g, v * 0.22 * B.perc.g);
   }
 }
-function hat(t, gain = 0.12, open = false, pan = 0.2) {
-  const start = Math.floor(t * SR), hp = new SVF();
-  hp.set(7500, 0.7);
-  const [pl, pr] = panLR(pan);
-  const d = open ? 0.22 : 0.035;
-  for (let n = 0; n < SR * (open ? 0.6 : 0.12); n++) {
-    const tt = n / SR;
-    hp.run(noise());
-    const v = hp.high * Math.exp(-tt / d) * gain;
-    write(B.drums, start + n, v * pl, v * pr);
-  }
-}
-function crash(t, gain = 0.28) {
-  const start = Math.floor(t * SR), hp = new SVF(), bp = new SVF();
-  hp.set(4200, 0.6); bp.set(9000, 0.5);
-  for (let n = 0; n < SR * 3; n++) {
-    const tt = n / SR;
-    const nz = noise();
-    hp.run(nz); bp.run(nz);
-    const v = (hp.high * 0.7 + bp.band * 0.5) * Math.exp(-tt / 0.9) * gain;
-    write(B.drums, start + n, v * (0.9 + 0.1 * Math.sin(tt * 7)), v * (0.9 + 0.1 * Math.cos(tt * 6)));
-    write(REV, start + n, v * 0.3, v * 0.3);
-  }
-}
-function boom(t, gain = 0.9, len = 2.2) {
+const TIMP = [1, 1.504, 1.742, 2.0, 2.245, 2.494], TIMPA = [1, 0.55, 0.32, 0.26, 0.15, 0.1], TIMPD = [1.6, 0.9, 0.7, 0.55, 0.42, 0.3];
+function timp(t, name, gain = 0.3, decayScale = 1) { timpF(t, hz(name), gain, decayScale); }
+function timpF(t, f0, gain = 0.3, decayScale = 1) {
   const start = Math.floor(t * SR), lp = new SVF();
   lp.set(900, 0.7);
-  let ph = 0;
-  for (let n = 0; n < SR * len; n++) {
-    const tt = n / SR;
-    ph += (30 + 60 * Math.exp(-tt / 0.25)) / SR;
+  const ph = TIMP.map(() => rand());
+  for (let s = 0; s < SR * 2.2 * decayScale; s++) {
+    const tt = s / SR, bend = 1 + 0.015 * Math.exp(-tt / 0.05);
+    let v = 0;
+    for (let k = 0; k < TIMP.length; k++) {
+      ph[k] += f0 * TIMP[k] * bend / SR;
+      v += Math.sin(TAU * ph[k]) * TIMPA[k] * Math.exp(-tt / (TIMPD[k] * decayScale));
+    }
     lp.run(noise());
-    const v = (Math.sin(TAU * ph) * 1.0 + lp.low * 0.5 * Math.exp(-tt / 0.08)) * Math.exp(-tt / (len / 3)) * gain;
-    write(B.fx, start + n, v, v);
-    write(REV, start + n, v * 0.2, v * 0.2);
+    v = (v + lp.low * 1.5 * Math.exp(-tt / 0.012)) * gain;
+    write(B.timp, start + s, v * 0.9, v);
+    write(HALL, start + s, v * 0.25 * B.timp.g, v * 0.25 * B.timp.g);
+  }
+}
+function timpRoll(t0, t1, name, g0, g1) {
+  for (let t = t0, k = 0; t < t1; t += 1 / 22, k++) {
+    const p = (t - t0) / (t1 - t0);
+    timp(t + (rand() - 0.5) * 0.006, name, (g0 + (g1 - g0) * p * p) * (k % 2 ? 0.85 : 1), 0.35);
+  }
+}
+function snare(t, gain = 0.25, tail = 0.12) {
+  const start = Math.floor(t * SR), bp = new SVF(), hp = new SVF();
+  bp.set(2400, 0.9); hp.set(900, 0.7);
+  let ph = 0;
+  for (let s = 0; s < SR * 0.4; s++) {
+    const tt = s / SR, nz = noise();
+    bp.run(nz); hp.run(nz);
+    ph += (200 + 50 * Math.exp(-tt / 0.015)) / SR;
+    const v = ((bp.band * 0.8 + hp.high * 0.55) * Math.exp(-tt / tail) + Math.sin(TAU * ph) * 0.5 * Math.exp(-tt / 0.04)) * gain;
+    write(B.perc, start + s, v * 0.92, v);
+    write(HALL, start + s, v * 0.2 * B.perc.g, v * 0.2 * B.perc.g);
+  }
+}
+function snareRoll(t0, t1, g0, g1) {
+  for (let t = t0; t < t1; t += S16 / 2) { const p = (t - t0) / (t1 - t0); snare(t, g0 + (g1 - g0) * p, 0.06); }
+}
+const BEATS = [];
+function heartbeat(t, gain = 0.5) {
+  BEATS.push(t);
+  for (const [dt, g, f] of [[0, 1, 52], [0.17, 0.6, 47]]) {
+    const start = Math.floor((t + dt) * SR);
+    let ph = 0;
+    for (let s = 0; s < SR * 0.35; s++) {
+      const tt = s / SR;
+      ph += f * (1 + 0.8 * Math.exp(-tt / 0.012)) / SR;
+      const v = Math.tanh(Math.sin(TAU * ph) * Math.exp(-tt / 0.11) * 1.8) * gain * g;
+      write(B.perc, start + s, v, v);
+    }
+  }
+}
+function gong(t, gain = 0.35, len = 7) {
+  const start = Math.floor(t * SR);
+  const parts = [...Array(46)].map(() => {
+    const f = 70 * Math.pow(40, rand());
+    return {f, ph: rand(), a: (0.4 + rand()) / Math.sqrt(f / 70), d: len * (0.25 + rand() * 0.6) * Math.pow(70 / f, 0.25),
+      bloom: 0.05 + 1.4 * Math.log(f / 70) / Math.log(40) * rand(), wob: 0.3 + rand() * 1.5};
+  });
+  const thump = new SVF(); thump.set(140, 0.8);
+  let sum = 0; for (const p of parts) sum += p.a;
+  for (let s = 0; s < SR * len; s++) {
+    const tt = s / SR;
+    let v = 0;
+    for (const p of parts) {
+      p.ph += p.f * (1 + 0.0015 * Math.sin(TAU * p.wob * tt)) / SR;
+      const env = (1 - Math.exp(-tt / p.bloom)) * Math.exp(-tt / p.d);
+      v += Math.sin(TAU * p.ph) * p.a * env;
+    }
+    thump.run(noise());
+    v = (v / sum * 3 + thump.low * 3 * Math.exp(-tt / 0.08)) * gain;
+    write(B.gong, start + s, v * (1 + 0.15 * Math.sin(tt * 1.7)), v * (1 + 0.15 * Math.cos(tt * 1.3)));
+    write(HALL, start + s, v * 0.35 * B.gong.g, v * 0.35 * B.gong.g);
+  }
+}
+function cymbalSwell(t0, t1, gain = 0.2) {
+  const start = Math.floor(t0 * SR), len = Math.floor((t1 - t0) * SR), hp = new SVF(), bp = new SVF();
+  hp.set(5000, 0.6); bp.set(9500, 0.6);
+  for (let s = 0; s < len + SR * 0.12; s++) {
+    const p = Math.min(1, s / len), nz = noise();
+    hp.run(nz); bp.run(nz);
+    const env = s < len ? Math.pow(p, 3) : Math.exp(-(s - len) / (SR * 0.03));
+    const v = (hp.high * 0.6 + bp.band * 0.6) * env * gain;
+    write(B.perc, start + s, v * 0.95, v);
+    write(HALL, start + s, v * 0.3 * B.perc.g, v * 0.3 * B.perc.g);
+  }
+}
+function crash(t, gain = 0.2) {
+  const start = Math.floor(t * SR), hp = new SVF(), bp = new SVF();
+  hp.set(4200, 0.6); bp.set(8000, 0.5);
+  for (let s = 0; s < SR * 3.5; s++) {
+    const tt = s / SR, nz = noise();
+    hp.run(nz); bp.run(nz);
+    const v = (hp.high * 0.7 + bp.band * 0.45) * Math.exp(-tt / 1.1) * gain;
+    write(B.perc, start + s, v * (0.9 + 0.1 * Math.sin(tt * 7)), v * (0.9 + 0.1 * Math.cos(tt * 6)));
+    write(HALL, start + s, v * 0.3 * B.perc.g, v * 0.3 * B.perc.g);
+  }
+}
+function boom(t, gain = 0.6, len = 3) {
+  const start = Math.floor(t * SR), lp = new SVF();
+  lp.set(700, 0.7);
+  let ph = 0;
+  for (let s = 0; s < SR * len; s++) {
+    const tt = s / SR;
+    ph += (28 + 50 * Math.exp(-tt / 0.3)) / SR;
+    lp.run(noise());
+    const v = (Math.sin(TAU * ph) + lp.low * 0.5 * Math.exp(-tt / 0.1)) * Math.exp(-tt / (len / 3)) * gain;
+    write(B.fx, start + s, v, v);
+    write(HALL, start + s, v * 0.15 * B.fx.g, v * 0.15 * B.fx.g);
   }
 }
 
-// ------------------------------------------------------------------ sfx
-function whoosh(t, dur = 0.45, gain = 0.22, up = true) {
+// ------------------------------------------------------------------ sfx (on the picture's cues)
+function whoosh(t, dur = 0.45, gain = 0.15, up = true) {
   const start = Math.floor(t * SR), bp = new SVF();
-  for (let n = 0; n < SR * dur; n++) {
-    const tt = n / SR, p = tt / dur;
-    if ((n & 7) === 0) bp.set(up ? 300 + 5000 * p * p : 5000 - 4700 * p, 1.4);
+  for (let s = 0; s < SR * dur; s++) {
+    const p = s / (SR * dur);
+    if ((s & 7) === 0) bp.set(up ? 300 + 5000 * p * p : 5000 - 4700 * p, 1.4);
     bp.run(noise());
-    const v = bp.band * Math.sin(Math.PI * p) * gain;
-    const pan = up ? -0.6 + 1.2 * p : 0.6 - 1.2 * p;
-    const [pl, pr] = panLR(pan);
-    write(B.fx, start + n, v * pl, v * pr);
-    write(REV, start + n, v * 0.3, v * 0.3);
+    const v = bp.band * Math.sin(Math.PI * p) * gain, [pl, pr] = panLR(up ? -0.6 + 1.2 * p : 0.6 - 1.2 * p);
+    write(B.fx, start + s, v * pl, v * pr);
+    write(REV, start + s, v * 0.3 * B.fx.g, v * 0.3 * B.fx.g);
   }
 }
-function riser(t0, t1, gain = 0.25) {
+function riser(t0, t1, gain = 0.2) {
   const start = Math.floor(t0 * SR), len = Math.floor((t1 - t0) * SR), bp = new SVF();
-  let ph = 0;
-  for (let n = 0; n < len; n++) {
-    const p = n / len;
-    if ((n & 7) === 0) bp.set(400 + 7000 * p * p, 2.0);
+  for (let s = 0; s < len; s++) {
+    const p = s / len;
+    if ((s & 7) === 0) bp.set(300 + 6000 * p * p, 2.0);
     bp.run(noise());
-    ph += (110 + 770 * p * p) / SR;
-    const saw = 2 * (ph % 1) - 1;
-    const v = (bp.band * 0.8 + saw * 0.12 * p) * p * p * gain;
-    write(B.fx, start + n, v, v);
-    write(REV, start + n, v * 0.35, v * 0.35);
+    const v = bp.band * p * p * gain;
+    write(B.fx, start + s, v, v);
+    write(HALL, start + s, v * 0.35 * B.fx.g, v * 0.35 * B.fx.g);
   }
 }
-function glitch(t, gain = 0.2, dur = 0.16) {
-  const start = Math.floor(t * SR);
+function glitch(t, gain = 0.12, dur = 0.12) {
+  const start = Math.floor(t * SR), f = 200 + rand() * 1400;
   let hold = 0, v = 0, ph = 0;
-  const f = 200 + rand() * 1400;
-  for (let n = 0; n < SR * dur; n++) {
+  for (let s = 0; s < SR * dur; s++) {
     if (hold-- <= 0) { hold = Math.floor(20 + rand() * 300); v = noise(); }
     ph += f / SR;
-    const sq = (ph % 1) < 0.5 ? 1 : -1;
-    const env = 1 - n / (SR * dur);
-    const s = (Math.round((v * 0.6 + sq * 0.3) * 6) / 6) * env * gain;
-    write(B.fx, start + n, s * (rand() < 0.5 ? 1 : 0.6), s * (rand() < 0.5 ? 1 : 0.6));
+    const sq = (ph % 1) < 0.5 ? 1 : -1, env = 1 - s / (SR * dur);
+    const x = (Math.round((v * 0.6 + sq * 0.3) * 6) / 6) * env * gain;
+    write(B.fx, start + s, x * (rand() < 0.5 ? 1 : 0.6), x * (rand() < 0.5 ? 1 : 0.6));
   }
 }
-function click(t, gain = 0.07) {
+function click(t, gain = 0.05) {
   const start = Math.floor(t * SR), hp = new SVF();
   hp.set(2500 + rand() * 2500, 1.2);
-  const pan = (rand() - 0.5) * 0.4, [pl, pr] = panLR(pan);
-  for (let n = 0; n < SR * 0.02; n++) {
+  const [pl, pr] = panLR((rand() - 0.5) * 0.4);
+  for (let s = 0; s < SR * 0.02; s++) {
     hp.run(noise());
-    const v = hp.band * Math.exp(-n / (SR * 0.003)) * gain;
-    write(B.fx, start + n, v * pl, v * pr);
+    const v = hp.band * Math.exp(-s / (SR * 0.003)) * gain;
+    write(B.fx, start + s, v * pl, v * pr);
   }
 }
-function blip(t, freq = 1400, gain = 0.1, dur = 0.08) {
+function blip(t, freq = 1400, gain = 0.07, dur = 0.08) {
   const start = Math.floor(t * SR);
   let ph = 0;
-  for (let n = 0; n < SR * dur; n++) {
-    const tt = n / SR;
+  for (let s = 0; s < SR * dur; s++) {
+    const tt = s / SR;
     ph += freq * (1 - 0.3 * tt / dur) / SR;
     const v = Math.sin(TAU * ph) * Math.exp(-tt / (dur / 3)) * gain;
-    write(B.fx, start + n, v, v);
-    write(DLY, start + n, v * 0.3, v * 0.3);
+    write(B.fx, start + s, v, v);
+    write(DLY, start + s, v * 0.3 * B.fx.g, v * 0.3 * B.fx.g);
   }
 }
-function chatter(t0, t1, gain = 0.05) {
-  for (let t = t0; t < t1; t += 0.028 + rand() * 0.02) blip(t, 600 + rand() * 2600, gain, 0.025);
-}
-function typing(text, t0, t1, gain = 0.06) {
-  const chars = text.length;
-  for (let i = 0; i < chars; i++) if (text[i] !== ' ') click(t0 + (t1 - t0) * (i / chars), gain);
+function typing(chars, t0, t1, gain = 0.045) {
+  for (let i = 0; i < chars; i++) click(t0 + (t1 - t0) * (i / chars), gain);
 }
 
-// ------------------------------------------------------------------ harmony
-const CHORDS = {
-  Dm: {root: 'D2', pad: ['D3', 'F3', 'A3', 'D4', 'E4'], arp: ['D5', 'A5', 'F5', 'A5', 'D6', 'A5', 'F5', 'E5']},
-  Bb: {root: 'Bb1', pad: ['Bb2', 'D3', 'F3', 'Bb3', 'C4'], arp: ['Bb4', 'F5', 'D5', 'F5', 'Bb5', 'F5', 'D5', 'C5']},
-  Gm: {root: 'G1', pad: ['G2', 'Bb2', 'D3', 'G3', 'A3'], arp: ['G4', 'D5', 'Bb4', 'D5', 'G5', 'D5', 'Bb4', 'A4']},
-  A: {root: 'A1', pad: ['A2', 'C#3', 'E3', 'A3', 'E4'], arp: ['A4', 'E5', 'C#5', 'E5', 'A5', 'E5', 'C#5', 'E5']},
-  C: {root: 'C2', pad: ['C3', 'E3', 'G3', 'C4', 'D4'], arp: ['C5', 'G5', 'E5', 'G5', 'C6', 'G5', 'E5', 'D5']},
+// ------------------------------------------------------------------ the kit and synth voices the theme needs
+const KICKS = [];
+function kick(t, gain = 0.8) {
+  KICKS.push([t, gain]);
+  const start = Math.floor(t * SR);
+  let ph = 0;
+  for (let s = 0; s < SR * 0.5; s++) {
+    const tt = s / SR;
+    ph += (46 + 120 * Math.exp(-tt / 0.03)) / SR;
+    const v = Math.tanh((Math.sin(TAU * ph) * Math.exp(-tt / 0.26) + (s < 180 ? noise() * (1 - s / 180) * 0.35 : 0)) * 1.6) * gain;
+    write(B.kit, start + s, v, v);
+  }
+}
+function hat(t, gain = 0.1, open = false, pan = 0.2) {
+  const start = Math.floor(t * SR), hp = new SVF(), [pl, pr] = panLR(pan);
+  hp.set(7500, 0.7);
+  const d = open ? 0.2 : 0.035;
+  for (let s = 0; s < SR * (open ? 0.6 : 0.12); s++) {
+    hp.run(noise());
+    const v = hp.high * Math.exp(-s / SR / d) * gain;
+    write(B.kit, start + s, v * pl, v * pr);
+  }
+}
+function ride(t, gain = 0.08) {
+  const start = Math.floor(t * SR), hp = new SVF(), ph = [rand(), rand(), rand()], fr = [3150, 4720, 6210];
+  hp.set(5200, 0.6);
+  for (let s = 0; s < SR * 0.9; s++) {
+    const tt = s / SR;
+    hp.run(noise());
+    let bell = 0;
+    for (let k = 0; k < 3; k++) { ph[k] += fr[k] / SR; bell += Math.sin(TAU * ph[k]); }
+    const v = (hp.high * 0.5 * Math.exp(-tt / 0.35) + bell * 0.08 * Math.exp(-tt / 0.5)) * gain;
+    write(B.kit, start + s, v * 0.8, v);
+    write(HALL, start + s, v * 0.15 * B.kit.g, v * 0.15 * B.kit.g);
+  }
+}
+// synth bass: two detuned saws through a resonant low-pass with a pluck envelope, and a sine an octave down
+function synthBass(t, dur, m, {gain = 0.18, glide = null, curve = null} = {}) {
+  const f = midi(m);
+  tone(B.bass, {t, dur, freq: f, type: 'saw', detune: [-7, 7], attack: 0.004, decay: 0.14, sustain: 0.5, release: 0.07, cutoff: 240,
+    env: 1600, envDecay: 0.07, q: 1.2, gain, glide: glide && midi(glide), curve});
+  tone(B.bass, {t, dur, freq: f / 2, type: 'sine', attack: 0.004, decay: 0.3, sustain: 0.8, release: 0.08, gain: gain * 0.9,
+    glide: glide && midi(glide) / 2, curve});
+}
+// arpeggio pluck: a narrow square pair with a fast filter pluck into the ping-pong delay
+function pluck(t, dur, m, {gain = 0.05, pan = 0, curve = null, glide = null} = {}) {
+  tone(B.synth, {t, dur, freq: midi(m), type: 'square', detune: [0, 7], attack: 0.002, decay: 0.11, sustain: 0.18, release: 0.1,
+    cutoff: 1300, env: 3600, envDecay: 0.06, q: 1.1, gain, pan, dly: 0.42, rev: 0.12, curve, glide: glide && midi(glide)});
+}
+// bell: a struck sine pair (1 : 2.76) with a short metallic attack
+function bell(t, m, gain = 0.05, pan = 0.2) {
+  const start = Math.floor(t * SR), f = midi(m), [pl, pr] = panLR(pan);
+  let a = rand(), b = rand();
+  for (let s = 0; s < SR * 2.2; s++) {
+    const tt = s / SR;
+    a += f / SR; b += f * 2.76 / SR;
+    const v = (Math.sin(TAU * a) * Math.exp(-tt / 0.8) + Math.sin(TAU * b) * 0.35 * Math.exp(-tt / 0.18)) * gain;
+    write(B.synth, start + s, v * pl, v * pr);
+    write(HALL, start + s, v * 0.4 * B.synth.g, v * 0.4 * B.synth.g);
+    write(DLY, start + s, v * 0.2 * B.synth.g, v * 0.2 * B.synth.g);
+  }
+}
+
+// ------------------------------------------------------------------ the theme, re-thought
+// Not a transcription: the song gives the harmony (each bar's root and chord, read from all its parts) and the lines the
+// promo quotes (the "Deus Ex" lead, the build's descending line, the groove's fourths stab, the later synth line); everything
+// else is the promo's own: the cinematic intro, the voicings, the ostinatos, the drums, the dynamics, a slow foreshadowing of
+// the lead's opening motif and its callback at the end.
+const NAMES = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B'];
+const BARS = G.bars;
+const span = b => [bar(b), bar(b + 1)];
+// each bar's chord: the root the bass parts dwell on, a major or minor third by weight, the fifth
+const CHORDS = [];
+for (let b = 0; b < BARS; b++) {
+  const [t0, t1] = span(b), w = new Array(12).fill(0), bw = new Array(12).fill(0);
+  for (const e of score.events) {
+    if (e.midi == null) continue;
+    const a0 = Math.max(t0, e.t), a1 = Math.min(t1, e.t + e.dur);
+    if (a1 <= a0) continue;
+    w[e.midi % 12] += (a1 - a0) * e.vol;
+    if (['bass', 'pulse', 'low'].includes(e.role)) bw[e.midi % 12] += (a1 - a0) * e.vol;
+  }
+  const root = (bw.some(v => v > 0) ? bw : w).reduce((best, v, i, arr) => v > arr[best] ? i : best, 0);
+  const third = w[(root + 4) % 12] > w[(root + 3) % 12] ? 4 : 3;
+  CHORDS.push({root, third, name: `${NAMES[root]}${third === 3 ? 'm' : ''}`});
+}
+const rootMidi = (b, octave) => 12 * (octave + 1) + CHORDS[b].root;
+const tones = b => { const c = CHORDS[b]; return [0, c.third, 7, 12]; };   // root, third, fifth, octave (semitones)
+
+// the quoted lines: the song's notes of those parts in those bars, without the echo copies the module plays on other channels
+const QUOTES = {lead: [[20, 28], [28, 40], [48, 52]], lead2: [[8, 12], [48, 52]], stab: [[12, 24]], synth: [[40, 48]]};
+const inBars = (t, ranges) => ranges.some(([b0, b1]) => t >= bar(b0) - 1e-6 && t < bar(b1) - 1e-6);
+const quoted = role => {
+  const list = score.events.filter(e => e.role === role && e.midi != null && inBars(e.t, QUOTES[role]));
+  return list.filter(e => !list.some(o => o !== e && o.midi % 12 === e.midi % 12 && o.t < e.t && e.t - o.t < 0.45 && o.vol >= e.vol));
 };
-const LOOP = ['Dm', 'Bb', 'Gm', 'A'];
-const barStart = b => b * BAR;              // bar index from 0
-const chordAt = b => LOOP[b % 4];
+const LEAD = quoted('lead'), LEAD2 = quoted('lead2'), STAB = quoted('stab'), SYNTH = quoted('synth');
+const barOf = t => { let b = 0; while (b + 1 < BARS && bar(b + 1) <= t) b++; return b; };
 
-function pad(b, chord, gain = 0.07, bars = 1, cutoff = 1700) {
-  for (const n of CHORDS[chord].pad)
-    tone(B.pad, {t: barStart(b), dur: bars * BAR, freq: midi(note(n)), type: 'saw', detune: [-9, -3, 4, 10], attack: 0.9,
-      decay: 1, sustain: 0.9, release: 1.6, cutoff, env: 600, envDecay: 1.2, q: 0.7, gain, pan: (rand() - 0.5) * 0.5, rev: 0.55});
+// accompaniment building blocks, timed by each bar's own length (the intro's bars are longer)
+function padBar(b, {gain = 0.03, octave = 3, attack = 0.25, choirToo = 0} = {}) {
+  const [t0, t1] = span(b), r = rootMidi(b, octave);
+  const notes = [r, r + 7, r + tones(b)[1] + 12, r + 12].map(midiName);
+  strings(t0, t1 - t0 - 0.03, notes, {gain, attack, release: 0.6, cutoff: 2000});
+  if (choirToo) choir(t0, t1 - t0 - 0.03, [midiName(r), midiName(r + 7)], {gain: choirToo, vowel: 'a', attack: 0.5, release: 0.8});
 }
-function bassBar(b, chord, pattern = 'drive', gain = 0.22) {
-  const root = note(CHORDS[chord].root);
-  if (pattern === 'long') {
-    tone(B.bass, {t: barStart(b), dur: BAR * 0.95, freq: midi(root), type: 'saw', cutoff: 380, env: 500, envDecay: 0.4, q: 1.1, gain, sub: 0.8, drive: 1.5});
-    return;
-  }
-  const steps = pattern === 'drive' ? [0, 0, 12, 0, 0, 0, 12, 0, 0, 0, 12, 0, 0, 7, 12, 10] : [0, -1, 0, -1, 12, -1, 0, -1, 0, -1, 0, -1, 12, -1, 7, -1];
-  steps.forEach((st, i) => {
-    if (st < 0) return;
-    const t = barStart(b) + i * S16 * (pattern === 'drive' ? 1 : 1);
-    tone(B.bass, {t, dur: S16 * 0.8, freq: midi(root + st), type: 'saw', attack: 0.002, decay: 0.09, sustain: 0.35, release: 0.05,
-      cutoff: 320, env: 1500, envDecay: 0.07, q: 1.3, gain, sub: 0.7, drive: 1.6});
-  });
+function lowBar(b, {gain = 0.09, octave = 1, attack = 0.15} = {}) {
+  const [t0, t1] = span(b);
+  lowStrings(t0, t1 - t0 - 0.02, midiName(rootMidi(b, octave)), {gain, attack, release: 0.5});
 }
-function arpBar(b, chord, gain = 0.045, cutoff = 2200, pan = 0) {
-  const notes = CHORDS[chord].arp;
+// eighth-note marcato on chord tones: cells index root, third, fifth, octave
+function ostinatoBar(b, cells, {gain = 0.045, octave = 3} = {}) {
+  const [t0, t1] = span(b), e8 = (t1 - t0) / 8, r = rootMidi(b, octave), tt = tones(b);
+  cells.forEach((c, i) => { if (c !== null) marcato(t0 + i * e8, [midiName(r + tt[c])], {gain, accent: i === 0 ? 1.25 : i % 2 ? 0.8 : 1, len: e8 * 0.7}); });
+}
+// sixteenth pulse on the root (cellos and the synth bass), the bridge's drive re-scored
+function pulseBar(b, {gain = 0.05} = {}) {
+  const [t0, t1] = span(b), s16 = (t1 - t0) / 16, r = rootMidi(b, 2);
   for (let i = 0; i < 16; i++) {
-    tone(B.arp, {t: barStart(b) + i * S16, dur: S16 * 0.6, freq: midi(note(notes[i % notes.length])), type: 'square',
-      detune: [0, 7], attack: 0.002, decay: 0.08, sustain: 0.15, release: 0.06, cutoff, env: 3000, envDecay: 0.05, q: 1.1,
-      gain: gain * (i % 4 === 0 ? 1.15 : 0.9), pan: i % 2 ? 0.35 + pan : -0.35 + pan, dly: 0.45, rev: 0.15});
+    cello(t0 + i * s16, midiName(r + (i % 4 === 3 ? 7 : 0)), {gain: gain * (i % 4 === 0 ? 1.2 : 0.8), len: s16 * 1.3});
+    if (i % 2 === 0) synthBass(t0 + i * s16, s16 * 1.6, r - 12, {gain: 0.07});
   }
 }
-function orch(t, chord = 'Dm', gain = 0.09) {
-  const notes = [...CHORDS[chord].pad.slice(0, 4), CHORDS[chord].arp[0], CHORDS[chord].arp[4]];
-  for (const n of notes)
-    tone(B.orch, {t, dur: 0.12, freq: midi(note(n)), type: 'saw', detune: [-12, 0, 12], attack: 0.003, decay: 0.18, sustain: 0.2,
-      release: 0.5, cutoff: 900, env: 5000, envDecay: 0.12, q: 0.9, gain, rev: 0.6});
-  const start = Math.floor(t * SR), bp = new SVF();
-  bp.set(1200, 0.8);
-  for (let n = 0; n < SR * 0.25; n++) {
-    bp.run(noise());
-    const v = bp.band * Math.exp(-n / (SR * 0.05)) * gain * 1.6;
-    write(B.orch, start + n, v, v);
-    write(REV, start + n, v * 0.5, v * 0.5);
+// the promo's bass for the groove: roots and fifths in a syncopated eighth figure of its own
+function bassBar(b, {gain = 0.12} = {}) {
+  const [t0, t1] = span(b), e8 = (t1 - t0) / 8, r = rootMidi(b, 1) + 12;
+  [[0, 0, 1.5], [3, 0, 0.8], [4, 7, 1], [6, 12, 0.6], [7, 7, 0.6]].forEach(([i, iv, d]) => synthBass(t0 + i * e8, e8 * d, r + iv, {gain}));
+}
+function drumBar(b, {busy = 2, taikoGain = 0.38, snareGain = 0.14, heart = true} = {}) {
+  const [t0, t1] = span(b), e8 = (t1 - t0) / 8, s16 = e8 / 2;
+  for (let i = 0; i < 8; i++) {
+    const accent = i === 0 ? 1.2 : i === 3 || i === 6 ? 1.0 : 0.62;
+    if (busy >= 1 || i % 2 === 0) taiko(t0 + i * e8, taikoGain * accent, i === 0 ? 56 : 64 + (i % 3) * 4, i % 2 ? 0.25 : -0.2);
   }
+  if (heart) for (let q = 0; q < 4; q++) heartbeat(t0 + q * 2 * e8, q === 0 ? 0.5 : 0.36);
+  if (busy >= 2) for (const r of [2, 6, 10, 12, 14]) snare(t0 + r * s16, snareGain * (r === 12 ? 1.2 : 0.8));
+  if (busy >= 3) for (const r of [3, 7, 11, 15]) snare(t0 + r * s16, snareGain * 0.45, 0.05);
 }
-function pluck(t, n, gain = 0.1, pan = 0) {
-  tone(B.keys, {t, dur: 0.1, freq: midi(note(n)), type: 'tri', detune: [-4, 4], attack: 0.002, decay: 0.7, sustain: 0.0,
-    release: 1.4, cutoff: 2600, env: 2000, envDecay: 0.15, q: 0.7, gain, pan, rev: 0.5, dly: 0.35});
-  tone(B.keys, {t, dur: 0.1, freq: midi(note(n) + 12), type: 'sine', attack: 0.001, decay: 0.3, sustain: 0, release: 0.8,
-    gain: gain * 0.35, pan, rev: 0.4});
+function kitBar(b, {gain = 0.6} = {}) {   // the progress section: a straighter beat, kick and taiko, hats
+  const [t0, t1] = span(b), s16 = (t1 - t0) / 16;
+  for (const i of [0, 6, 8, 10]) { kick(t0 + i * s16, gain * (i === 0 ? 1 : 0.75)); taiko(t0 + i * s16, 0.18, 56); }
+  for (const i of [4, 12]) snare(t0 + i * s16, 0.2);
+  for (let i = 0; i < 16; i += 2) hat(t0 + i * s16, i % 4 === 2 ? 0.08 : 0.05, i === 14, rand() * 0.6 - 0.3);
 }
-
-// Lead melody: [note, beats]. Original theme, D minor.
-const THEME = [
-  ['D5', 1.5], ['E5', 0.5], ['F5', 1], ['A5', 1],
-  ['G5', 2], ['F5', 1], ['D5', 1],
-  ['Bb4', 1.5], ['C5', 0.5], ['D5', 1], ['G5', 1],
-  ['E5', 2.5], ['C#5', 0.5], ['A4', 1],
-  ['D5', 1.5], ['E5', 0.5], ['F5', 1], ['A5', 1],
-  ['D6', 2], ['C6', 1], ['Bb5', 1],
-  ['A5', 1], ['G5', 1], ['F5', 1], ['E5', 1],
-  ['C#5', 1], ['E5', 1], ['D5', 2],
-];
-function lead(t0, {octave = 0, gain = 0.085, double = false} = {}) {
-  let t = t0, prev = null;
-  for (const [n, beats] of THEME) {
-    const freq = midi(note(n) + 12 * octave), dur = beats * BEAT;
-    const legato = prev && beats <= 1;
-    tone(B.lead, {t, dur: dur * 0.94, freq, glide: legato ? prev : null, type: 'saw', detune: [-6, 6], attack: 0.03, decay: 0.4,
-      sustain: 0.75, release: 0.25, cutoff: 1500, env: 2200, envDecay: 0.25, q: 0.9, gain, vib: dur > 0.6 ? 14 : 0, rev: 0.35, dly: 0.25});
-    if (double) tone(B.lead, {t, dur: dur * 0.94, freq: freq * 2, type: 'square', attack: 0.04, decay: 0.3, sustain: 0.6, release: 0.2,
-      cutoff: 2400, q: 0.7, gain: gain * 0.28, vib: dur > 0.6 ? 10 : 0, rev: 0.4, dly: 0.3, pan: 0.15});
-    prev = freq;
-    t += dur;
+// the quoted melody on horns, the octave below on the choir; `soft` for the method section
+function sing(list, {gain = 0.085, choirGain = 0.03, soft = false, octave = 0} = {}) {
+  for (const e of list) {
+    const m = e.midi + 12 * octave, dur = Math.max(0.12, Math.min(e.dur, 2.4));
+    if (soft) { choir(e.t, dur, [midiName(m)], {gain: gain * 0.6, vowel: 'u', attack: Math.min(0.15, dur * 0.4), release: 0.6}); continue; }
+    horn(e.t, dur * 0.97, midiName(m), {gain: gain * Math.max(0.6, e.vol), attack: 0.05});
+    if (choirGain) choir(e.t, dur, [midiName(m - 12)], {gain: choirGain, vowel: 'o', attack: Math.min(0.15, dur * 0.4), release: 0.5});
   }
 }
 
-// ------------------------------------------------------------------ arrangement (bars are 0-indexed; bar b starts at 2b s)
-// 0-1 logo · 2-3 intro · 4-7 montage · 8-10 question · 11-13 title · 14-18 method · 19-23 oracle
-// 24-26 x87 · 27-31 pairs · 32-39 footage · 40-44 pace · 45-48 numbers · 49-52 outro
-// logo: drone and glass
-tone(B.pad, {t: 0, dur: 4.2, freq: midi(note('D1')), type: 'saw', detune: [-5, 5], attack: 2.5, decay: 1, sustain: 1, release: 1.5, cutoff: 220, env: 180, envDecay: 3, q: 1.2, gain: 0.16, rev: 0.3});
-tone(B.pad, {t: 0.3, dur: 3.8, freq: midi(note('A5')), type: 'sine', detune: [-8, 8], attack: 2, decay: 1, sustain: 1, release: 1.2, gain: 0.03, rev: 0.8});
-tone(B.pad, {t: 0.9, dur: 3.2, freq: midi(note('D6')), type: 'sine', detune: [-6, 7], attack: 1.8, decay: 1, sustain: 1, release: 1.2, gain: 0.022, rev: 0.8});
-for (const t of [0.1, 0.26, 0.42]) glitch(t, 0.14, 0.07);
-for (let t = 0.6; t < 3.9; t += 0.07 + rand() * 0.4) if (rand() < 0.35) click(t, 0.05);
-typing('DEUS EX  (2000)', 1.6, 2.2, 0.05);
-typing('Unreal Engine 1 · DeusEx.exe · Direct3D · 00_Intro', 2.2, 3.0, 0.035);
-riser(2.6, 4.0, 0.18);
-// intro cinematic: pad and low piano on each cut
-pad(2, 'Dm', 0.06, 1, 1100); pad(3, 'Bb', 0.06, 1, 1100);
-[['D3', 4], ['A2', 5], ['F2', 6], ['Bb1', 7]].forEach(([n, t]) => { pluck(t, n, 0.14); boom(t, 0.35, 1.2); });
-tone(B.bass, {t: 4, dur: 4, freq: midi(note('D1')), type: 'sine', attack: 0.5, sustain: 1, release: 1, gain: 0.12});
-// montage: groove enters
-for (let b = 4; b <= 7; b++) {
-  const c = chordAt(b - 4);
-  pad(b, c, 0.045, 1, 1500);
-  bassBar(b, c, 'drive', 0.2);
-  arpBar(b, c, 0.038, 1200 + (b - 4) * 450);
-  for (let q = 0; q < 4; q++) { if (q % 2 === 0) kick(barStart(b) + q * BEAT, 0.8); hat(barStart(b) + q * BEAT + BEAT / 2, 0.09); }
-  snare(barStart(b) + 3 * BEAT, 0.3);
+// open (bars 0-7): the promo's cinematic intro on the theme's A and E; the lead's opening motif foreshadowed, slow, on a horn
+boom(bar(0) + 0.02, 0.45, 4);
+lowStrings(bar(0), bar(4) - bar(0), midiName(rootMidi(0, 1)), {gain: 0.1, attack: 2.5});
+lowStrings(bar(4), bar(8) - bar(4), midiName(rootMidi(4, 1)), {gain: 0.1, attack: 1.0});
+strings(bar(1), bar(4) - bar(1), [midiName(rootMidi(1, 3)), midiName(rootMidi(1, 3) + 7)], {gain: 0.032, attack: 1.5, cutoff: 1400});
+strings(bar(4), bar(8) - bar(4), [midiName(rootMidi(4, 3)), midiName(rootMidi(4, 3) + 7), midiName(rootMidi(4, 3) + 12)], {gain: 0.034, attack: 0.8, cutoff: 1600});
+tone(B.synth, {t: bar(0) + 0.3, dur: bar(8) - bar(0) - 0.6, freq: midi(rootMidi(0, 5) + 7), type: 'square', detune: [-9, 9], attack: 3, decay: 1, sustain: 1,
+  release: 2, cutoff: 1500, q: 1.2, gain: 0.012, hall: 0.8, dly: 0.2, lfo: 0.5, lfoRate: 0.11});
+choir(bar(2), bar(8) - bar(2), [midiName(rootMidi(2, 3)), midiName(rootMidi(2, 3) + 7)], {gain: 0.045, vowel: 'u', attack: 2.2});
+taiko(bar(2), 0.45, 52); taiko(bar(4), 0.5, 52); taiko(bar(6), 0.55, 52); taiko(bar(6) + (bar(7) - bar(6)) * 0.375, 0.32, 60);
+{
+  // the motif, stretched: its first six notes, one per beat across bars 4-5, and its turn held over bars 6-7
+  const motif = LEAD.filter(e => e.t < bar(22)).slice(0, 6);
+  const beats = [bar(4), ...[1, 2, 3].map(k => bar(4) + k * (bar(5) - bar(4)) / 4), bar(5), bar(5) + (bar(6) - bar(5)) / 2];
+  motif.forEach((e, k) => horn(beats[k], (k < 5 ? beats[k + 1] - beats[k] : bar(8) - beats[k] - 0.4) * 0.98, midiName(e.midi - 12),
+    {gain: 0.06, low: true, attack: 0.18, pan: -0.1}));
 }
-crash(8, 0.22);
-for (let t = 9; t <= 15; t++) whoosh(t - 0.18, 0.3, 0.12, t % 2 === 0);
-// question: breakdown with pluck motif
-pad(8, 'Dm', 0.055, 1, 1200); pad(9, 'Bb', 0.055, 1, 1200); pad(10, 'Gm', 0.055, 1, 1200);
-[['D5', 16.0], ['A4', 16.75], ['F5', 17.5], ['E5', 18.25], ['D5', 19.0], ['A4', 19.75], ['Bb4', 20.5], ['A4', 21.25]]
-  .forEach(([n, t], i) => pluck(t, n, 0.09, i % 2 ? 0.3 : -0.3));
-tone(B.bass, {t: 16, dur: 6, freq: midi(note('D1')), type: 'sine', attack: 1, sustain: 1, release: 1, gain: 0.1});
-typing('Deus Ex, 2000.', 16.3, 17.0, 0.07);
-typing('Rebuilt in the browser,', 17.7, 18.7, 0.07);
-typing('piece by piece — from its own data, UnrealScript bytecode and x86 machine code', 19.2, 20.8, 0.04);
-riser(20.0, 22.0, 0.3);
-// title hit
-kick(22, 1.0); boom(22, 1.0, 3.2); crash(22, 0.32); orch(22, 'Dm', 0.12);
-chatter(22.25, 23.3, 0.035);
-for (let b = 11; b <= 13; b++) {
-  const c = chordAt(b - 11);
-  pad(b, c, 0.06, 1, 1900);
-  bassBar(b, c, 'long', 0.2);
-  arpBar(b, c, 0.04, 2400);
-  kick(barStart(b), 0.85); snare(barStart(b) + 2 * BEAT, 0.42, 0.25);
-  for (let q = 0; q < 8; q++) hat(barStart(b) + q * BEAT / 2 + BEAT / 4, 0.06, q === 7);
+timpRoll(bar(7), bar(8) - 0.02, midiName(rootMidi(8, 2)), 0.03, 0.22);
+
+// reveal (bars 8-11): the build, on A: taiko and marcato swell; the theme's descending line quoted on the strings
+for (let b = 8; b < 12; b++) {
+  lowBar(b, {gain: 0.09, attack: 0.2});
+  if (b > 8) drumBar(b, {busy: b === 11 ? 1 : 0, taikoGain: 0.25 + 0.04 * (b - 8), heart: true});
+  ostinatoBar(b, [0, 0, 1, 0, 0, 0, 2, 0], {gain: 0.03 + 0.006 * (b - 8)});
 }
-// main groove (method, oracle, x87, pairs, footage, pace, numbers)
-function groove(b, {busy = 1, snareGain = 0.45} = {}) {
-  const t = barStart(b);
-  // breakbeat: kick 1, 2&, 3a(varied); snare 2 and 4
-  kick(t, 0.85); kick(t + BEAT * 1.5, 0.7);
-  if (b % 2) kick(t + BEAT * 2.75, 0.6); else kick(t + BEAT * 2.5, 0.65);
-  snare(t + BEAT, snareGain); snare(t + BEAT * 3, snareGain);
-  if (busy > 1 && b % 4 === 3) { snare(t + BEAT * 3.5, snareGain * 0.6); snare(t + BEAT * 3.75, snareGain * 0.7); }
-  for (let i = 0; i < 16; i++) hat(t + i * S16, (i % 4 === 2 ? 0.1 : 0.055) * (busy > 1 ? 1.1 : 1), i === 14 && b % 2 === 1, i % 2 ? 0.3 : -0.1);
+choir(bar(8), bar(12) - bar(8), [midiName(rootMidi(8, 3)), midiName(rootMidi(8, 3) + 7), midiName(rootMidi(8, 4))], {gain: 0.04, vowel: 'a', attack: 0.4});
+for (const e of LEAD2.filter(e => e.t < bar(12)))
+  ens(B.strings, {t: e.t, dur: Math.min(e.dur, 1.6), freq: midi(e.midi), n: 6, spread: 12, attack: 0.06, decay: 0.6, sustain: 0.9, release: 0.5, cutoff: 3000, q: 0.6,
+    gain: 0.05, hall: 0.5, vib: 7, breath: 0.015});
+snareRoll(bar(11) + (bar(12) - bar(11)) / 2, bar(12), 0.05, 0.22);
+
+// island (bars 12-23): the groove. The theme's chords on the promo's voicings, bass figure, ostinato and drums; the fourths
+// stab quoted on short brass over the first eight bars, then the lead melody on the horns
+for (let b = 12; b < 24; b++) {
+  padBar(b, {gain: 0.026, attack: 0.15});
+  bassBar(b);
+  drumBar(b, {busy: 2, taikoGain: 0.3, snareGain: 0.11});
+  if (b >= 20) ostinatoBar(b, [0, 0, 2, 0, 0, 1, 0, 3], {gain: 0.04});
 }
-for (let b = 14; b <= 48; b++) {
-  const c = chordAt(b - 14);
-  groove(b, {busy: b >= 32 && b <= 39 ? 2 : 1, snareGain: b >= 32 && b <= 39 ? 0.5 : 0.42});
-  bassBar(b, c, 'drive', 0.2);
-  pad(b, c, b >= 32 && b <= 39 ? 0.05 : 0.04, 1, b >= 32 ? 2200 : 1800);
-  arpBar(b, c, 0.036, b >= 40 ? 2800 : 2200);
+for (const e of STAB) {
+  if (e.t >= bar(20)) continue;
+  ens(B.horns, {t: e.t, dur: Math.min(e.dur, 0.16), freq: midi(e.midi), n: 4, spread: 9, attack: 0.005, decay: 0.12, sustain: 0.3, release: 0.18,
+    cutoff: 900, env: 3600, envDecay: 0.06, q: 0.9, gain: 0.05 * Math.max(0.5, e.vol), width: 0.7, hall: 0.35, vib: 0, square: 0.3});
+  marcato(e.t, [midiName(e.midi - 12)], {gain: 0.03, len: 0.12});
 }
-// section accents
-for (const t of [28, 38, 48, 54, 64, 80, 90]) { crash(t, 0.24); glitch(t, 0.16, 0.12); }
-for (const t of [4, 8, 16, 98]) glitch(t, 0.16, 0.12);
-lead(38, {gain: 0.08});                                   // oracle + precision: theme
-for (let b = 27; b <= 31; b++) orch(barStart(b), chordAt(b - 14), 0.075);   // pairs: stabs
-lead(64, {gain: 0.085, double: true});                    // footage: theme, doubled
-for (const b of [32, 36]) orch(barStart(b), chordAt(b - 14), 0.08);
-// method: card lines ticking, convergence
-for (let i = 0; i < 11; i++) { click(29.5 + i * 0.12, 0.04); click(30.2 + i * 0.12, 0.04); click(30.9 + i * 0.12, 0.04); }
-whoosh(34.6, 0.9, 0.14, false); blip(35.4, 880, 0.08, 0.3);
-// oracle: meters and stamp
-[39.6, 40.1, 40.6, 41.1].forEach((t, i) => blip(t, 660 + i * 110, 0.06, 0.12));
-[41.6, 42.1, 42.6, 43.1].forEach((t, i) => blip(t, 1320 + i * 90, 0.05, 0.1));
-boom(44.8, 0.5, 1.6); blip(45.0, 880, 0.09, 0.5); blip(45.08, 1320, 0.08, 0.6);
-// precision: bits chatter
-chatter(48.6, 49.6, 0.025);
-for (let i = 0; i < 4; i++) click(50.0 + i * 0.35, 0.08);
-// pairs: wipes
-for (let i = 0; i < 4; i++) { whoosh(54 + i * 2.5 + 0.3, 0.6, 0.15, true); whoosh(54 + i * 2.5 + 2.05, 0.45, 0.12, false); }
-// footage: segment cuts
-for (const t of [67.5, 69.5, 72.5, 75.5, 77.5]) glitch(t, 0.1, 0.08);
-// numbers: tile pops, then build
-for (let i = 0; i < 6; i++) blip(90.3 + i * 0.35, 990 + i * 70, 0.07, 0.12);
-for (let i = 0; i < 16; i++) snare(96 + i * S16, 0.12 + i * 0.02, 0.08);
-riser(95.0, 98.0, 0.28);
-// outro
-kick(98, 1.0); boom(98, 0.9, 4.0); crash(98, 0.3); orch(98, 'Dm', 0.11);
-pad(49, 'Dm', 0.07, 2, 1500); pad(51, 'Bb', 0.06, 1, 1300); pad(52, 'Dm', 0.06, 1.5, 1100);
-tone(B.bass, {t: 98, dur: 7, freq: midi(note('D1')), type: 'sine', attack: 0.3, sustain: 1, release: 1.5, gain: 0.14});
-[['D5', 99.0, 1.0], ['A4', 100.0, 0.5], ['F5', 100.5, 0.5], ['E5', 101.0, 1.0], ['D5', 102.0, 2.5]].forEach(([n, t, d]) =>
-  tone(B.lead, {t, dur: d, freq: midi(note(n)), type: 'saw', detune: [-6, 6], attack: 0.05, decay: 0.5, sustain: 0.7, release: 1.2,
-    cutoff: 1300, env: 1200, envDecay: 0.4, q: 0.8, gain: 0.07, vib: 12, rev: 0.6, dly: 0.35}));
-for (let i = 0; i < 12; i++) pluck(99 + i * 0.25, CHORDS.Dm.arp[i % 8], 0.035, i % 2 ? 0.4 : -0.4);
+sing(LEAD.filter(e => e.t >= bar(20) && e.t < bar(24)), {gain: 0.085});
+
+// method (bars 24-31): under the cards. Chords, heartbeat, the cellos' pulse; the lead's continuation hummed by the choir, then
+// the tense A - B-flat - D turn on a low horn
+for (let b = 24; b < 32; b++) {
+  padBar(b, {gain: 0.024, attack: 0.3});
+  lowBar(b, {gain: 0.08});
+  const [t0, t1] = span(b);
+  for (let q = 0; q < 4; q++) heartbeat(t0 + q * (t1 - t0) / 4, q === 0 ? 0.45 : 0.28);
+  for (let i = 0; i < 8; i += 2) cello(t0 + i * (t1 - t0) / 8, midiName(rootMidi(b, 2)), {gain: 0.04});
+}
+tone(B.synth, {t: bar(24), dur: bar(32) - bar(24), freq: midi(rootMidi(26, 5)), type: 'square', detune: [-8, 8], attack: 2, decay: 1, sustain: 1, release: 2,
+  cutoff: 1600, q: 1.5, gain: 0.01, hall: 0.6, dly: 0.35, lfo: 0.6, lfoRate: 0.18});
+sing(LEAD.filter(e => e.t >= bar(24) && e.t < bar(28)), {gain: 0.07, soft: true});
+for (const e of LEAD.filter(e => e.t >= bar(28) && e.t < bar(32))) horn(e.t, Math.min(e.dur, 1.4), midiName(e.midi - 12), {gain: 0.05, low: true, attack: 0.08});
+timp(bar(28), midiName(rootMidi(28, 2)), 0.2); timp(bar(30), midiName(rootMidi(30, 2)), 0.22);
+riser(bar(30), bar(32), 0.14); snareRoll(bar(31), bar(32), 0.04, 0.22); cymbalSwell(bar(31), bar(32), 0.22);
+
+// pairs (bars 32-39): the bridge. Full drums, the root pulse, the lead quoted strong on the horns over the choir
+for (let b = 32; b < 40; b++) {
+  padBar(b, {gain: 0.026, attack: 0.12, choirToo: 0.03});
+  pulseBar(b, {gain: 0.045});
+  drumBar(b, {busy: 3, taikoGain: 0.33, snareGain: 0.12});
+}
+sing(LEAD.filter(e => e.t >= bar(32) && e.t < bar(40)), {gain: 0.09});
+
+// progress (bars 40-47): the theme's synth line on the promo's pluck, over A, with a straighter beat
+for (let b = 40; b < 48; b++) {
+  padBar(b, {gain: 0.022, attack: 0.2});
+  lowBar(b, {gain: 0.07});
+  kitBar(b, {gain: 0.42});
+}
+let side = 1;
+for (const e of SYNTH) pluck(e.t, Math.min(e.dur, 0.5), e.midi, {gain: 0.05, pan: (side = -side) * 0.3});
+choir(bar(44), bar(48) - bar(44), [midiName(rootMidi(44, 3)), midiName(rootMidi(44, 3) + 7)], {gain: 0.03, vowel: 'a', attack: 1});
+cymbalSwell(bar(47), bar(48), 0.16);
+
+// numbers (bars 48-51): the melody's return, strings and horns together, building to the end
+for (let b = 48; b < 52; b++) {
+  padBar(b, {gain: 0.028, attack: 0.1, choirToo: 0.03});
+  lowBar(b, {gain: 0.09});
+  drumBar(b, {busy: b < 50 ? 1 : 2, taikoGain: 0.32 + 0.03 * (b - 48), heart: false});
+  ostinatoBar(b, [0, 0, 2, 0, 1, 0, 2, 3], {gain: 0.045});
+}
+sing(LEAD.filter(e => e.t >= bar(48) && e.t < bar(52)), {gain: 0.08});
+for (const e of LEAD2.filter(e => e.t >= bar(48) && e.t < bar(52)))
+  ens(B.strings, {t: e.t, dur: Math.min(e.dur, 1.2), freq: midi(e.midi + 12), n: 6, spread: 12, attack: 0.04, decay: 0.5, sustain: 0.85, release: 0.4,
+    cutoff: 3400, q: 0.6, gain: 0.035, hall: 0.5, vib: 7});
+timpRoll(bar(51), bar(52) - 0.02, midiName(rootMidi(52, 2)), 0.05, 0.28);
+
+// outro (bars 52-55): the open A-E fifth, then the motif's callback on a solo horn over the held choir
+lowStrings(bar(52), bar(56) - bar(52) + 1.5, midiName(rootMidi(52, 1)), {gain: 0.1, attack: 0.05, release: 3});
+strings(bar(52), bar(56) - bar(52) + 1.5, [midiName(rootMidi(52, 3)), midiName(rootMidi(52, 3) + 7), midiName(rootMidi(52, 4))], {gain: 0.03, attack: 0.3, release: 3});
+choir(bar(52), bar(56) - bar(52) + 1.5, [midiName(rootMidi(52, 3)), midiName(rootMidi(52, 3) + 7)], {gain: 0.04, vowel: 'a', attack: 0.5, release: 3});
+{
+  const motif = LEAD.filter(e => e.t < bar(22)).slice(0, 3);
+  const at = [bar(53), bar(53) + (bar(54) - bar(53)) / 2, bar(54)];
+  motif.forEach((e, k) => horn(at[k], k < 2 ? (at[k + 1] - at[k]) * 0.97 : bar(56) - at[k], midiName(e.midi - 12), {gain: 0.06, low: true, attack: 0.12}));
+}
+
+// ------------------------------------------------------------------ the promo's own accents on the section cuts
+// the chord under each cut, from the song's harmony there (A with a B-flat colour, A minor, G minor; the ending an open A-E fifth)
+const HITS = {A: ['A2', 'E3', 'A3', 'E4'], Gm: ['G2', 'D3', 'G3', 'A#3', 'D4']};
+cymbalSwell(bar(7), bar(8), 0.2);
+gong(bar(8), 0.4, 8); hornHit(bar(8), HITS.A, {gain: 0.09}); boom(bar(8), 0.5, 3.5); taiko(bar(8), 0.6, 50);
+cymbalSwell(bar(11), bar(12), 0.2);
+gong(bar(12), 0.35, 6); hornHit(bar(12), HITS.A, {gain: 0.1}); taiko(bar(12), 0.7, 50); crash(bar(12), 0.16);
+gong(bar(24), 0.25, 6);
+gong(bar(32), 0.4, 7); hornHit(bar(32), HITS.Gm, {gain: 0.09}); crash(bar(32), 0.14);
+crash(bar(40), 0.12);
+cymbalSwell(bar(47), bar(48), 0.16);
+gong(bar(52), 0.32, 7); hornHit(bar(52), HITS.A, {gain: 0.11}); boom(bar(52), 0.6, 4.5); taiko(bar(52), 0.7, 48);
+
+// ------------------------------------------------------------------ cut effects on the picture's cues (ad/src/main.js)
+typing(14, bar(0.6), bar(0.6) + 0.8);                                   // "Deus Ex, 2000."
+for (const b of [2, 3, 4, 5, 6, 7]) glitch(bar(b), 0.06, 0.08);           // the intro's shots
+typing(24, bar(9) + 0.1, bar(9) + 1.0, 0.035);                          // "Running in your browser."
+for (const b of [13.5, 15, 16.5, 18, 19.5, 21, 22.5, 24]) whoosh(bar(b) - 0.22, 0.32, 0.08, b % 3 === 0);
+for (const t0 of [bar(24.4), bar(24.9), bar(25.4)]) for (let i = 0; i < 11; i++) click(t0 + 0.2 + i * 0.07, 0.035);   // the cards' lines
+[0, 1, 2, 3].forEach(i => blip(bar(28.2) + i * BEAT, 660 + i * 110, 0.05, 0.12));                                  // the oracle's verdict
+[0, 1, 2].forEach(i => blip(bar(30.6) + i * 0.25, 880 + i * 220, 0.05, 0.25));                                     // fstp = .store()
+for (let b = 33; b < 40; b++) whoosh(bar(b) - 0.2, 0.3, 0.07, b % 2 === 0);                                       // the pairs
+for (let i = 0; i < 15; i++) blip(bar(40) + 1.0 + i * 0.3, 990 + i * 40, 0.035, 0.08);                            // the milestones
+for (let i = 0; i < 4; i++) blip(bar(44) + 0.3 + i * 0.3, 740 + i * 90, 0.05, 0.12);                              // the stage cards
+for (let i = 0; i < 6; i++) blip(bar(48) + 0.2 + i * 0.3, 1180 + i * 70, 0.05, 0.1);                              // the tiles
 
 // ------------------------------------------------------------------ effects
-function sidechain(bus, depth, release = 0.16) {
+function duck(bus, times, depth, release = 0.12) {
   const env = new Float32Array(N).fill(1);
-  for (const k of KICKS) {
-    const s = Math.floor(k * SR);
-    for (let n = 0; n < SR * release * 4 && s + n < N; n++) env[s + n] = Math.min(env[s + n], 1 - depth * Math.exp(-n / (SR * release)));
+  for (const [t, g] of times) {
+    const s0 = Math.floor(t * SR), d = depth * Math.min(1, g * 2);
+    for (let s = 0; s < SR * release * 4 && s0 + s < N; s++) env[s0 + s] = Math.min(env[s0 + s], 1 - d * Math.exp(-s / (SR * release)));
   }
   for (let i = 0; i < N; i++) { bus.L[i] *= env[i]; bus.R[i] *= env[i]; }
 }
-function pingpong(src, time = 0.375, feedback = 0.42, damp = 3500) {
-  const d = Math.floor(time * SR), outL = new Float32Array(N), outR = new Float32Array(N);
-  const lpL = new SVF(), lpR = new SVF();
+function pingpong(src, time = BEAT * 0.75, feedback = 0.4, damp = 3000) {
+  const d = Math.floor(time * SR), outL = new Float32Array(N), outR = new Float32Array(N), lpL = new SVF(), lpR = new SVF();
   lpL.set(damp, 0.6); lpR.set(damp, 0.6);
   for (let i = 0; i < N; i++) {
-    const inL = src.L[i] + src.R[i];
     const fl = i >= d ? outR[i - d] : 0, fr = i >= d ? outL[i - d] : 0;
-    outL[i] = lpL.run(inL * 0.5 + fl * feedback);
-    outR[i] = lpR.run(fr * feedback + (i >= d ? 0 : 0));
+    outL[i] = lpL.run((src.L[i] + src.R[i]) * 0.5 + fl * feedback);
+    outR[i] = lpR.run(fr * feedback);
   }
   return {L: outL, R: outR};
 }
-function reverb(src, room = 0.86, damp = 0.35, wet = 1) {
-  const combs = [1557, 1617, 1491, 1422, 1277, 1356, 1188, 1116].map(n => Math.round(n * SR / 44100));
+function reverb(src, room = 0.86, damp = 0.35, scale = 1, predelay = 0) {
+  const combs = [1557, 1617, 1491, 1422, 1277, 1356, 1188, 1116].map(n => Math.round(n * scale * SR / 44100));
   const aps = [556, 441, 341, 225].map(n => Math.round(n * SR / 44100));
+  const pre = Math.floor(predelay * SR);
   const out = {L: new Float32Array(N), R: new Float32Array(N)};
   for (const [ch, spread] of [['L', 0], ['R', 23]]) {
     const input = src[ch], acc = new Float32Array(N);
@@ -449,7 +741,7 @@ function reverb(src, room = 0.86, damp = 0.35, wet = 1) {
       for (let i = 0; i < N; i++) {
         const y = buf[idx];
         store = y * (1 - damp) + store * damp;
-        buf[idx] = input[i] * 0.015 + store * room;
+        buf[idx] = (i >= pre ? input[i - pre] : 0) * 0.015 + store * room;
         acc[i] += y;
         if (++idx >= len) idx = 0;
       }
@@ -459,52 +751,69 @@ function reverb(src, room = 0.86, damp = 0.35, wet = 1) {
       let idx = 0;
       for (let i = 0; i < N; i++) {
         const b = buf[idx], x = acc[i];
-        acc[i] = -x + b;
-        buf[idx] = x + b * 0.5;
+        acc[i] = -x + b; buf[idx] = x + b * 0.5;
         if (++idx >= len) idx = 0;
       }
     }
-    for (let i = 0; i < N; i++) out[ch][i] = acc[i] * wet;
+    out[ch] = acc;
   }
   return out;
 }
 
+const levels = Object.fromEntries(Object.keys(B).map(name => [name, 1]));
 if (process.env.MUSIC_DEBUG) {
-  const win = (a, b) => [Math.floor(a * SR), Math.floor(b * SR)];
-  for (const [label, [a, b]] of [['montage', win(8, 16)], ['groove', win(40, 48)], ['footage', win(66, 76)], ['outro', win(99, 104)]]) {
+  for (const [label, [a, b]] of Object.keys(G.sections).map(name => [name, G.span(name).map(t => Math.floor(t * SR))])) {
     const rows = Object.entries(B).map(([name, bus]) => {
       let sum = 0;
       for (let i = a; i < b; i++) sum += bus.L[i] * bus.L[i] + bus.R[i] * bus.R[i];
-      return `${name} ${(10 * Math.log10(sum / (2 * (b - a)) + 1e-12)).toFixed(1)}`;
+      return `${name} ${(10 * Math.log10(sum * levels[name] ** 2 / (2 * (b - a)) + 1e-12)).toFixed(1)}`;
     });
-    console.log(label.padEnd(8), rows.join(' | '));
+    console.log(label.padEnd(9), rows.join(' | '));
   }
 }
-sidechain(B.pad, 0.55); sidechain(B.arp, 0.35); sidechain(B.bass, 0.45); sidechain(B.lead, 0.15); sidechain(B.keys, 0.2);
-const echo = pingpong(DLY, 0.375, 0.45);
-const room = reverb(REV, 0.86, 0.3, 1.0);
+// MUSIC_STEMS=1: each bus, dry, to ad/build/stems/<bus>.wav (mixing checks)
+if (process.env.MUSIC_STEMS) {
+  const dir = path.resolve(here, '../build/stems');
+  mkdirSync(dir, {recursive: true});
+  for (const [name, bus] of Object.entries(B)) {
+    let peak = 1e-9; for (let i = 0; i < N; i++) peak = Math.max(peak, Math.abs(bus.L[i]), Math.abs(bus.R[i]));
+    const out = Buffer.alloc(44 + N * 4);
+    out.write('RIFF', 0); out.writeUInt32LE(36 + N * 4, 4); out.write('WAVE', 8); out.write('fmt ', 12); out.writeUInt32LE(16, 16); out.writeUInt16LE(1, 20);
+    out.writeUInt16LE(2, 22); out.writeUInt32LE(SR, 24); out.writeUInt32LE(SR * 4, 28); out.writeUInt16LE(4, 32); out.writeUInt16LE(16, 34); out.write('data', 36); out.writeUInt32LE(N * 4, 40);
+    for (let i = 0; i < N; i++) { out.writeInt16LE(Math.round(bus.L[i] / peak * 32000), 44 + 4 * i); out.writeInt16LE(Math.round(bus.R[i] / peak * 32000), 46 + 4 * i); }
+    writeFileSync(path.join(dir, `${name}.wav`), out);
+  }
+}
+// the heartbeat and the taiko make room in the sustained voices
+duck(B.low, BEATS.map(t => [t, 0.5]), 0.35); duck(B.strings, TAIKOS, 0.12); duck(B.choir, TAIKOS, 0.08);
+const echo = pingpong(DLY);
+const room = reverb(REV, 0.84, 0.35, 1, 0.01);
+const hall = reverb(HALL, 0.9, 0.45, 1.35, 0.03);
 const mix = {L: new Float32Array(N), R: new Float32Array(N)};
-const levels = {drums: 0.5, bass: 0.8, pad: 1.4, arp: 1.9, lead: 1.9, keys: 1.3, orch: 1.2, fx: 0.9};
 for (const [name, bus] of Object.entries(B)) {
   const g = levels[name];
   for (let i = 0; i < N; i++) { mix.L[i] += bus.L[i] * g; mix.R[i] += bus.R[i] * g; }
 }
 for (let i = 0; i < N; i++) {
-  mix.L[i] += echo.L[i] * 0.55 + room.L[i] * 0.9;
-  mix.R[i] += echo.R[i] * 0.55 + room.R[i] * 0.9;
+  mix.L[i] += echo.L[i] * 0.45 + room.L[i] * 0.7 + hall.L[i] * 1.0;
+  mix.R[i] += echo.R[i] * 0.45 + room.R[i] * 0.7 + hall.R[i] * 1.0;
 }
-// gentle high-pass on the master to keep sub rumble in check
+// high-pass the master below the timpani's and taiko's fundamentals' useful range
 const hpL = new SVF(), hpR = new SVF();
-hpL.set(28, 0.7); hpR.set(28, 0.7);
-// Look-ahead peak limiter (2 ms window, 80 ms release) into a -1 dBFS ceiling,
-// then a gentle soft clip; INPUT_GAIN sets the loudness (about -14 LUFS).
+hpL.set(34, 0.7); hpR.set(34, 0.7);
+// and a high shelf (+3 dB from about 4 kHz) for the strings' and cymbals' air
+const shL = new SVF(), shR = new SVF();
+shL.set(4000, 0.6); shR.set(4000, 0.6);
+// Look-ahead peak limiter (2 ms window, 80 ms release) into a -1 dBFS ceiling, then a gentle soft clip; MUSIC_GAIN sets the loudness.
 let raw = 0;
 for (let i = 0; i < N; i++) {
   hpL.run(mix.L[i]); hpR.run(mix.R[i]);
   mix.L[i] = hpL.high; mix.R[i] = hpR.high;
+  shL.run(mix.L[i]); shR.run(mix.R[i]);
+  mix.L[i] += shL.high * 0.42; mix.R[i] += shR.high * 0.42;
   raw = Math.max(raw, Math.abs(mix.L[i]), Math.abs(mix.R[i]));
 }
-const INPUT_GAIN = Number(process.env.MUSIC_GAIN ?? 2.05) / raw;
+const INPUT_GAIN = Number(process.env.MUSIC_GAIN ?? 1.3) / raw;
 const ceiling = 0.87, look = Math.floor(SR * 0.002), relCoef = 1 - Math.exp(-1 / (SR * 0.08));
 const absMax = new Float32Array(N);
 for (let i = 0; i < N; i++) absMax[i] = Math.max(Math.abs(mix.L[i]), Math.abs(mix.R[i])) * INPUT_GAIN;
@@ -527,7 +836,7 @@ for (let i = 0; i < N; i++) {
 }
 console.log(`raw ${raw.toFixed(2)} · max gain reduction ${reduction.toFixed(1)} dB`);
 const norm = Math.min(1, 0.891 / peak);
-const fadeIn = SR * 0.02, fadeOut = SR * 2.5;
+const fadeIn = SR * 0.02, fadeOut = SR * 3;
 const pcm = Buffer.alloc(N * 4);
 for (let i = 0; i < N; i++) {
   const edge = Math.min(1, i / fadeIn, (N - i) / fadeOut);
@@ -544,4 +853,5 @@ header.writeUInt32LE(SR, 24); header.writeUInt32LE(SR * 4, 28); header.writeUInt
 header.write('data', 36); header.writeUInt32LE(pcm.length, 40);
 mkdirSync(path.dirname(OUT), {recursive: true});
 writeFileSync(OUT, Buffer.concat([header, pcm]));
-console.log(`wrote ${OUT} · ${DUR}s · peak before normalize ${peak.toFixed(3)} · kicks ${KICKS.length}`);
+writeFileSync(path.resolve(here, '../build/score.json'), JSON.stringify({song: 'Title_Music', arrangement: ARRANGEMENT, bars: score.bars, end: score.end}));
+console.log(`wrote ${OUT} · ${DUR.toFixed(1)}s · peak before normalize ${peak.toFixed(3)} · ${LEAD.length + LEAD2.length + STAB.length + SYNTH.length} quoted notes over the theme's ${G.bars} bars`);

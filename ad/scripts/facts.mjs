@@ -56,6 +56,11 @@ const code = {
   docLines: lines(walk(path.join(repo, 'docs'), name => name.endsWith('.md'))),
   unitTests: readdirSync(path.join(repo, 'test')).filter(name => name.endsWith('.test.mjs')).length,
 };
+// the Rust core (native/*, compiled to WebAssembly): tracked sources only
+const rustFiles = sh('git', ['ls-files', '*.rs']).trim().split('\n').filter(Boolean);
+code.rustFiles = rustFiles.length;
+code.rustLines = lines(rustFiles.map(file => path.join(repo, file)));
+code.rustCrates = [...new Set(rustFiles.map(file => file.split('/').slice(0, 2).join('/')))];
 
 // --- original data: package header of DeusEx.u and the DeusExMover.Frob bytecode
 const game = ['Deus Ex GOTY Edition', 'game'].map(dir => path.join(repo, dir)).find(dir => existsSync(path.join(dir, 'System')));
@@ -125,21 +130,22 @@ const bytecode = {
   })),
 };
 
-// --- native: checkMove disassembly (capstone through the project's probe environment)
+// --- native: APawn::AICanHear (Engine.dll 0x103c7680), disassembled with capstone through the project's probe environment
 const python = ['.cache/native-probe-env/bin/python', 'python3'].map(p => p.startsWith('.') ? path.join(repo, p) : p).find(p => p === 'python3' || existsSync(p));
 let disassembly = [];
 try {
-  disassembly = sh(python, ['tools/disasm-body.py', game, 'Engine.dll', '0x103c3290-0x103c3360']).split('\n')
+  disassembly = sh(python, ['tools/disasm-body.py', game, 'Engine.dll', '0x103c76b5-0x103c7794']).split('\n')
     .filter(line => /^0x/.test(line)).map(line => {
       const [, address, bytes, text] = /^(0x[0-9a-f]+):\s+([0-9a-f]+)\s+(.*)$/.exec(line);
       return {address, bytes, text};
     });
 } catch (error) { console.warn('disassembly unavailable:', error.message.split('\n')[0]); }
 
-// --- the JavaScript translation of the same routine
-const navSource = readFileSync(path.join(repo, 'src/runtime/script-pawn-nav.mjs'), 'utf8').split('\n');
-const start = navSource.findIndex(line => line.startsWith('export function checkMove('));
-const port = navSource.slice(start, start + 34);
+// --- its Rust translation (native/script-vm/src/aievent.rs, compiled to WebAssembly); validate-event-manager.mjs compares the
+// port with the original body under Unicorn (docs/ai-event-manager.md "Verification")
+const rustSource = readFileSync(path.join(repo, 'native/script-vm/src/aievent.rs'), 'utf8').split('\n');
+const hearStart = rustSource.findIndex(line => line.startsWith('fn can_hear('));
+const port = rustSource.slice(hearStart - 1, rustSource.findIndex((line, i) => i > hearStart && line === '}') + 1);
 
 // --- measured evidence quoted from project docs (see README.md, docs/lighting.md)
 const evidence = {
@@ -149,22 +155,63 @@ const evidence = {
   npcMeshes: 18, propMeshes: 46, dataLinkRoutes: 18,
 };
 
+// --- Stage 6 (saves, travel, the campaign): the scoreboard of scripts/stage6-criteria.mjs (docs/stage-6-exit-criteria.md)
+const {CRITERIA, CLAUSES, statusOf} = await import('../../scripts/stage6-criteria.mjs');
+const stage6 = {total: {}, clauses: {}, chains: [], endings: 0, census: 0, censusRows: 0};
+for (const row of CRITERIA) {
+  const status = statusOf(row);
+  stage6.total[status] = (stage6.total[status] ?? 0) + 1;
+  const clause = stage6.clauses[CLAUSES[row.clause]] ??= {};
+  clause[status] = (clause[status] ?? 0) + 1;
+  if (/^6\.4\.\d\d\.1$/.test(row.id) && status === 'PASS') stage6.chains.push(row.id.slice(4, 6));
+  if (/^6\.4\.\d\d\.3$/.test(row.id)) { stage6.censusRows++; if (status === 'PASS') stage6.census++; }
+  if (/^6\.5\./.test(row.id) && status === 'PASS') stage6.endings++;
+}
+stage6.rows = CRITERIA.filter(row => !row.excluded).length;
+stage6.conversations = 1627;   // the mission lists' own conversations (docs/stage-6-inventory.md, the conversation table's total)
+
+// --- the original-game camera captures of the Stage 4 acceptance work (.work/acceptance, local: original content) and the Play
+// frames rendered from the same camera next to them
+const acceptance = path.join(repo, '.work/acceptance');
+const captures = {originals: 0, pairs: 0, maps: []};
+if (existsSync(acceptance)) for (const map of readdirSync(acceptance, {withFileTypes: true}).filter(e => e.isDirectory() && /^\d\d_/.test(e.name))) {
+  const names = readdirSync(path.join(acceptance, map.name));
+  const originals = names.filter(name => name.endsWith('-original.png'));
+  const pairs = originals.filter(name => names.includes(name.replace('-original.png', '-play.png')));
+  captures.originals += originals.length; captures.pairs += pairs.length;
+  if (pairs.length) captures.maps.push(map.name);
+}
+
+// --- the gates of the completed stages (README.md, docs/stage-*-exit-criteria.md)
+const stages = [
+  {stage: 3, name: 'Original script & native runtime', closed: '2026-09-27', gate: 'Training: 5 of 5 criteria over 95 probes; 83 of 83 maps start'},
+  {stage: 4, name: 'Presentation: actors, effects, audio, interfaces', closed: '2026-10-17', gate: '70 of 70'},
+  {stage: 5, name: 'Gameplay: movement, AI, combat, conversations', closed: '2026-10-21', gate: '50 of 50'},
+  {stage: 6, name: 'Saves, travel, the campaign', closed: null, gate: null},
+];
+
+// dates checked against `git log` (first commit of each)
 const milestones = [
-  ['2026-09-09', 'Training renders in the browser, original static lighting'],
-  ['2026-09-09', 'Stage 2: movement, collision, doors'],
+  ['2026-09-09', 'Training renders, original static lighting'],
   ['2026-09-13', 'Doors run the original DeusExMover.Frob bytecode'],
-  ['2026-09-16', 'UI natives bound from Extension.dll bodies'],
-  ['2026-09-18', 'NPC navigation ported, bit-exact'],
-  ['2026-09-20', 'NPCs start, tick and animate live'],
-  ['2026-09-21', 'Instructor conversation with original subtitles'],
-  ['2026-09-23', 'Crowbar, crate fragments, original DeusExHUD'],
-  ['2026-09-25', 'Main menu, console chain, real Login'],
-  ['2026-09-27', 'Original level tick and DataLinkPlay'],
+  ['2026-09-18', 'NPC navigation, bit-exact'],
+  ['2026-09-21', 'Conversations and subtitles'],
+  ['2026-09-23', 'Crowbar, crates, the original HUD'],
+  ['2026-09-25', 'Main menu and the real Login'],
+  ['2026-09-27', 'Stage 3 complete'],
+  ['2026-09-28', 'All 83 single-player maps start'],
+  ['2026-09-30', 'The Rust interpreter becomes the default'],
+  ['2026-10-01', 'GPU meshes; lip sync from Galaxy.dll'],
+  ['2026-10-02', 'The intro cinematic plays through'],
+  ['2026-10-04', 'The simulation moves to a worker'],
+  ['2026-10-17', 'Stage 4 complete: 70 of 70'],
+  ['2026-10-21', 'Stage 5 complete: 50 of 50'],
+  ['2026-10-25', 'Stage 6: missions chained against the original'],
 ];
 
 mkdirSync(path.dirname(out), {recursive: true});
 const facts = {generated: new Date().toISOString(), git: {commits: log.length, first, last, days, insertions, deletions, calendar},
-  code, pkg, bytecode, disassembly, port, evidence, milestones};
+  code, pkg, bytecode, disassembly, port, evidence, stage6, captures, stages, milestones};
 writeFileSync(out, JSON.stringify(facts, null, 1));
 console.log(JSON.stringify({commits: log.length, days, insertions, ...code, pkg: {names: pkg.names, exports: pkg.exports, imports: pkg.imports},
-  bytecode: bytecode.statements.slice(0, 8), disassembly: disassembly.length, port: port.length}, null, 1));
+  disassembly: disassembly.length, port: port.length, stage6, captures: {...captures, maps: captures.maps.length}}, null, 1));
