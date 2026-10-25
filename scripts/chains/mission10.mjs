@@ -104,13 +104,13 @@ export default {
     { op: 'point', at: [641, 329], note: 'the special option "Transmit MEverett Meeting Signal" (chain-plan.mjs terminal: one button, (361,209) of Play\'s 720x480 root)' },
     { op: 'wait', flag: 'everettsignal', timeout: 30 },
     { op: 'key', names: ['ESC', 'ESC'], note: 'the first Escape logs out to the login screen, the second closes the terminal' },
-    { op: 'wait', seconds: 3 },
+    // DL_EverettContact (it triggers NicoletteRuns): DataLinkTrigger13 (200,4202,-168, radius 260; checkFlag everettsignal), which the drop at DL_reached_computer
+    // fell through while the flag was false, re-checks it each second (DataLinkTrigger.EvaluateFlag's timer) and starts the DataLink a second after the signal;
+    // the first capture's original had it played by g9, Play 4 s of game time later (the original's tool calls take wall-clock time): it is waited for
+    { op: 'wait', flag: 'DL_EverettContact_Played', timeout: 120 },
     { op: 'state', label: 'crypt-door-1', actor: 'DeusExMover10', fields: ['KeyNum', 'bLocked'] },
     { op: 'state', label: 'crypt-door-2', actor: 'DeusExMover11', fields: ['KeyNum', 'bLocked'] },
     { op: 'snap', label: 'g9-signal' },
-    // DL_EverettContact from one of the room's DataLinkTriggers (checkFlag everettsignal); it triggers NicoletteRuns
-    { op: 'place', at: [429, 4042, -78], view: [0, 0], drop: true, harness: true, note: 'above DataLinkTrigger12 (429,4042,-168, radius 96; DL_everettcontact, checkFlag everettsignal)' },
-    { op: 'wait', flag: 'DL_EverettContact_Played', timeout: 120 },
     { op: 'snap', label: 'g10-everett-contact' },
     // NicoletteRuns (OrdersTrigger1: RunningTo, no ordersTag) sends Nicolette running to the player; she stops behind the bunker's secret door
     // (DeusExMover16, tag cellar_door, TriggerToggle, closed: the placement went past the candelabra that opens it for 8 s; measured: 947,2659 after a
@@ -126,6 +126,21 @@ export default {
     // (DL_entered_sewer) and Teleporter0 to 11_Paris_Cathedral#cathedralstart
     { op: 'place', at: [-259, -1997, 146], view: [0, 0], drop: true, harness: true, note: 'above DataLinkTrigger8 (-259,-1997,56, radius 240; DL_everettmaze)' },
     { op: 'wait', flag: 'DL_EverettMaze_Played', timeout: 120 },
+    // Nicolette (NicoletteFollows: Orders Following since NicoletteAfterEverett) follows to the maze: FlagTrigger17/18 (radius 300/320, her class) stop her at
+    // NicoStops and set NicoletteDoneFollowing (SetDoneFlag, DL_EverettContact_Played), then NicoletteFinalBarks2 (radius 200, NicoletteLeaves) plays with the
+    // player at the maze; the first capture's original had both by g12, Play neither: she is waited for, drawn (the headless stand-in)
+    // the player waits at the triggers' centre so that she follows into both cylinders (FlagTrigger18 first, its flag before FlagTrigger17's NicoStops:
+    // Standing); waiting at the maze's DataLink she stopped 204 units off, inside 18 and outside 17, and kept following (Play). Then beside her for the bark
+    { op: 'watch', actors: ['NicoletteDuClare0'] },
+    { op: 'place', at: [-264, -2140, 146], view: [0, 16384], drop: true, harness: true, note: 'above FlagTrigger18 (-264,-2140,56, radius 320, her class; SetDoneFlag), 34 units from FlagTrigger17 (NicoStops)' },
+    { op: 'wait', flag: 'NicoletteDoneFollowing', timeout: 240 },
+    { op: 'wait', seconds: 3 },
+    { op: 'placeNear', actor: 'NicoletteDuClare0', distance: 100, bearing: -1.571, turnFirst: true, harness: true, note: '100 units south of Nicolette where she stands, aimed at her (NicoletteFinalBarks2: radius 200)' },
+    { op: 'wait', flag: 'NicoletteFinalBarks2_Played', timeout: 120 },
+    // the graveyard (DataLinkTrigger15, radius 800 at ground level) lies on the way from the maze to the crypt: DL_graveyard_ambush by a fall into it (the
+    // sewer's placement stood 5 units inside DataLinkTrigger18's cylinder in one program and not the other)
+    { op: 'place', at: [-573, -3634, 146], view: [0, 0], drop: true, harness: true, note: 'above DataLinkTrigger15 (-573,-3634,56, radius 800; DL_graveyard_ambush)' },
+    { op: 'wait', flag: 'DL_graveyard_ambush_Played', timeout: 120 },
     { op: 'place', at: [-1126, -4156, -152], view: [0, 49152], harness: true, note: '150 units north of DataLinkTrigger7 (-1126,-4306,-152, radius 96; DL_entered_sewer; a low ceiling), facing south: the walk crosses it' },
     { op: 'walk', seconds: 1 },
     { op: 'wait', flag: 'DL_entered_sewer_Played', timeout: 120 },
