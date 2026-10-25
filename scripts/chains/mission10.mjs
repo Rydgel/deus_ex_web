@@ -60,11 +60,14 @@ export default {
 
     // NicoletteOutside (bump/frob): Nicolette walks from where she entered the world (3787,1859): the level is held while the player is placed from where she
     // stands, and the frob follows the release at once; its Go branch sets NicoletteReadyToLeave and triggers NicoletteFollows
-    { op: 'line', text: 'set LevelInfo bPlayersOnly True', harness: true },
-    { op: 'placeNear', actor: 'NicoletteDuClare0', distance: 60, bearing: Math.PI, harness: true, note: '60 units west of Nicolette where she stands (she walks from where she entered: 2916,651 and 3570,894 in two runs), aimed at her' },
-    { op: 'line', text: 'set LevelInfo bPlayersOnly False', harness: true, settle: 1 },
+    // the right button reaches a moving NPC only if he stands still: the original types the release of a held level and ParseRightClick over about 1.5 s
+    // (mission 5's Alex walked out of the view in that time): his GroundSpeed is 0 for the conversation, then his class's 280 again
+    { op: 'line', text: 'set DeusEx.NicoletteDuClare GroundSpeed 0', harness: true },
+    { op: 'wait', seconds: 2 },
+    { op: 'placeNear', actor: 'NicoletteDuClare0', distance: 60, bearing: Math.PI, harness: true, turnFirst: true, note: '60 units west of Nicolette where she stands (she walks from where she entered: 2916,651 and 3570,894 in two runs), aimed at her' },
     { op: 'frob', target: 'NicoletteDuClare0' },
     { op: 'conv', name: 'NicoletteOutside', choose: [{ index: 0, label: 'Go' }], watch: ['NicoletteDuClare0'], timeout: 240 },
+    { op: 'line', text: 'set DeusEx.NicoletteDuClare GroundSpeed 280', harness: true },
     { op: 'snap', label: 'g7-ready-to-leave' },
     // JockReady (the helicopter BlackHelicopter0, BindName Jock; radius 200 inside its 461 cylinder) by the right button: its A1 branch triggers ChopperExit,
     // MapExit1 and its camera path to the chateau

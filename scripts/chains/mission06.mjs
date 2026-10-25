@@ -161,12 +161,14 @@ export default {
     { op: 'snap', label: 'g14-tongbase' },
     // M07Briefing (frob, needs TriadCeremony_Played): Tong patrols TongStation01..03 (pauses 10, 8, 10 s); undrawn since the last visit, he stands at
     // TongStation01 in Play
-    // (in the original's first capture Tong was walking his patrol and the frob selected nothing: the level held for the placement, released for the frob)
-    { op: 'line', text: 'set LevelInfo bPlayersOnly True', harness: true },
+    // the right button reaches a moving NPC only if he stands still: the original types the release of a held level and ParseRightClick over about 1.5 s
+    // (mission 5's Alex walked out of the view in that time): his GroundSpeed is 0 for the conversation, then his class's 250 again
+    { op: 'line', text: 'set DeusEx.TracerTong GroundSpeed 0', harness: true },
+    { op: 'wait', seconds: 2 },
     { op: 'placeNear', actor: 'TracerTong0', distance: 40, bearing: 0, harness: true, turnFirst: true, note: '40 units east of TracerTong0 where he is (at TongStation01 (742,-32,15) in Play), aimed at him' },
-    { op: 'line', text: 'set LevelInfo bPlayersOnly False', harness: true, settle: 1 },
     { op: 'frob', target: 'TracerTong0' },
     { op: 'conv', name: 'M07Briefing', watch: ['TracerTong0'], timeout: 300 },
+    { op: 'line', text: 'set DeusEx.TracerTong GroundSpeed 250', harness: true },
     { op: 'snap', label: 'g15-briefing' },
     { op: 'place', at: [1241, -886, 386], view: [0, 0], drop: true, harness: true, note: 'above Teleporter0 (1241,-886,296, radius 55): chain-plan.mjs drop, lifted 50' },
     { op: 'travel', to: '06_HongKong_WanChai_Market', label: 'leg9' },

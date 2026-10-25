@@ -127,11 +127,14 @@ export default {
     // Dowd (Orders Wandering) stands still until the player is in his zone, then walks (about 70 units in the placement's two seconds, and the frob missed
     // him): the level is held (bPlayersOnly) while the player is placed from where Dowd stands and aimed at him, and the frob follows the release at once;
     // while it is held no conversation can start (DeusExPlayer.CanStartConversation refuses under Level.bPlayersOnly), as with a `turnFirst` placement
-    { op: 'line', text: 'set LevelInfo bPlayersOnly True', harness: true },
-    { op: 'placeNear', actor: 'StantonDowd0', distance: 60, bearing: Math.PI, harness: true, note: '60 units west of Stanton Dowd (-1442,-37,-304 at his place), aimed at him' },
-    { op: 'line', text: 'set LevelInfo bPlayersOnly False', harness: true, settle: 1 },
+    // the right button reaches a moving NPC only if he stands still: the original types the release of a held level and ParseRightClick over about 1.5 s
+    // (mission 5's Alex walked out of the view in that time): his GroundSpeed is 0 for the conversation, then his class's 180 again
+    { op: 'line', text: 'set DeusEx.StantonDowd GroundSpeed 0', harness: true },
+    { op: 'wait', seconds: 2 },
+    { op: 'placeNear', actor: 'StantonDowd0', distance: 60, bearing: Math.PI, harness: true, turnFirst: true, note: '60 units west of Stanton Dowd (-1442,-37,-304 at his place), aimed at him' },
     { op: 'frob', target: 'StantonDowd0' },
     { op: 'conv', name: 'M09MeetStantonDowd', watch: ['StantonDowd0'], timeout: 240 },
+    { op: 'line', text: 'set DeusEx.StantonDowd GroundSpeed 180', harness: true },
     { op: 'snap', label: 'f11-dowd' },
     { op: 'place', at: [-1076, -387, -13], view: [0, 0], drop: true, harness: true, note: 'above FlagTrigger1 (-1076,-387,-103, radius 96; M09MeetStantonDowd_Played: event JocksProblem, DataLinkTrigger3 DL_Problem)' },
     { op: 'wait', flag: 'DL_Problem_Played', timeout: 120 },
