@@ -84,9 +84,12 @@ const arrive = (to, label, extra = {}) => [{ op: 'travel', to, label, ...extra }
 
 // ---- the families -------------------------------------------------------------------------------------------------------------------------------------------
 /** base: the chain save it starts from and the chain's steps run before the flags are written (the prefix); body: the unit's steps after its start (the
- * reader blocks by name: a unit runs the blocks its `readers` list, all of them by default). */
+ * reader blocks by name: a unit runs the blocks its `readers` list, all of them by default). readers: the reader conversations the family's steps play (in
+ * the reading mission's ConList; `block`: played only by a unit that runs that block): their CheckFlag and SetFlag events and history are the observable
+ * scripts/validate-flag-census.mjs compares; a family with none has a mission script's reader, whose observable is its `state` reads. */
 export const FAMILIES = {
   '02-street': {
+    readers: [{ conv: 'PaulLeaving', block: 'paul' }],
     mission: '02', note: 'the Street of mission 2 from the subway (the chain\'s leg1): PaulBarricade gives PaulGaveGrenades, which PaulLeaving needs',
     base: { from: { chain: '01', slot: 'Save0101', index: 101 }, prefix: [span('02', 'start', { op: 'snap', label: 'c2-street' }, { before: true })] },
     body: ['snap:c2-street', 'paul', span('02', { op: 'place', at: [439, 4533, -749] }, { op: 'snap', label: 'c3-warehouse' })],
@@ -103,6 +106,7 @@ export const FAMILIES = {
     },
   },
   '03-hq': {
+    readers: [{ conv: 'ManderleyDebriefing02' }, { conv: 'M03ShannonBarks', block: 'shannon' }, { conv: 'CarterGreeting03', block: 'carter' }],
     mission: '03', note: 'UNATCO HQ in mission 3 (the chain\'s leg1): the debriefing as the chain plays it, then Shannon and Carter, Teleporter3 back',
     base: { from: { chain: '02', slot: 'Save0102', index: 102 }, prefix: [span('03', 'start', { op: 'snap', label: 'd2-hq' }, { before: true })] },
     body: ['snap:d2-hq', span('03', { op: 'watch', actors: ['JosephManderley0'] }, { op: 'snap', label: 'd3-debriefed' }), 'shannon', 'carter',
@@ -113,6 +117,7 @@ export const FAMILIES = {
     },
   },
   '03-batterypark': {
+    readers: [{ conv: 'M03MeetFilben', block: 'filben' }],
     mission: '03', note: 'Battery Park in mission 3 (the chain\'s leg3, Jock\'s helicopter): Filben, then the chain\'s Teleporter2 to the station',
     base: { from: { chain: '02', slot: 'Save0102', index: 102 }, prefix: [span('03', 'start', { op: 'snap', label: 'd5-batterypark' }, { before: true })] },
     body: ['snap:d5-batterypark', 'filben', span('03', { op: 'place', at: [-4015, 3265, -598] }, { op: 'travel', to: '03_NYC_BrooklynBridgeStation', label: 'leg4' }),
@@ -123,12 +128,14 @@ export const FAMILIES = {
     },
   },
   '03-747': {
+    readers: [{ conv: 'AnnaEntrance' }],
     mission: '03', note: 'the 747 in mission 3 (the chain\'s leg9): MeetLebedev and AnnaEntrance as the chain plays them, then the walk back to the hangar',
     base: { from: { chain: '02', slot: 'Save0102', index: 102 }, prefix: [span('03', 'start', { op: 'snap', label: 'd9-747' }, { before: true })] },
     body: [span('03', { op: 'snap', label: 'd9-747' }, { op: 'travel', to: '03_NYC_Hangar', label: 'leg10' }), ...CHEATS, { op: 'wait', seconds: 3 }, { op: 'snap', label: 'r-hangar' }],
     blocks: {},
   },
   '04-island-hq': {
+    readers: [{ conv: 'M04LloydBarks', block: 'lloyd' }, { conv: 'DL_SeeManderley' }, { conv: 'ManderleyDebriefing03' }, { conv: 'M04ShannonBarks', block: 'shannon' }],
     mission: '04', note: 'mission 4\'s arrival on the island (the chain\'s start): Lloyd\'s barks, DL_SeeManderley, the HQ: Shannon, ManderleyDebriefing03, Teleporter3 back',
     base: { from: { chain: '03', slot: 'Save0103', index: 103 }, prefix: [] },
     body: ['snap:e1-loaded', 'lloyd', span('04', { op: 'place', at: [-4688, 2712, -10] }, { op: 'snap', label: 'e2-hq' }), 'shannon',
@@ -140,6 +147,7 @@ export const FAMILIES = {
     },
   },
   '04-street-bar': {
+    readers: [{ conv: 'M04MeetJoeGreen', block: 'joe' }, { conv: 'M04MeetFilben', block: 'filben' }],
     mission: '04', note: 'the Street of mission 4 (the chain\'s leg3): the bar\'s front door (Teleporter3), Joe Greene and Filben, the bar\'s Teleporter2 back',
     base: { from: { chain: '03', slot: 'Save0103', index: 103 }, prefix: [span('04', 'start', { op: 'snap', label: 'e4-street' }, { before: true })] },
     body: ['snap:e4-street',
@@ -153,12 +161,14 @@ export const FAMILIES = {
     },
   },
   '04-street-gunther': {
+    readers: [],
     mission: '05', note: 'mission 4\'s Street after the raid (the chain\'s leg9): the subway, GuntherShowdown\'s Surrender and the exit; Paul in the MJ12 lab',
     base: { from: { chain: '03', slot: 'Save0103', index: 103 }, prefix: [span('04', 'start', { op: 'place', at: [1861, -686, -1128] }, { before: true })] },
     body: [span('04', { op: 'place', at: [1861, -686, -1128] }, { op: 'wait', seconds: 15 }), pawnState('lab-paul', 'PaulDenton0'), { op: 'snap', label: 'e11-lab' }],
     blocks: {},
   },
   '06-tongbase': {
+    readers: [{ conv: 'M06MeetAlexJacobson', block: 'alex' }],
     mission: '06', note: 'mission 6 from its arrival to Tong\'s base (the chain\'s leg2): Alex in the base, M06MeetAlexJacobson, the base\'s Teleporter0 to the market',
     base: { from: { chain: '05', slot: 'Save0105', index: 105 }, prefix: [] },
     body: [span('06', { op: 'snap', label: 'g1-loaded' }, { op: 'snap', label: 'g5-tongbase' }), pawnState('tongbase-alex', 'AlexJacobson0'), 'alex',
@@ -166,6 +176,7 @@ export const FAMILIES = {
     blocks: { alex: [...talk({ owner: 'AlexJacobson0', conv: 'M06MeetAlexJacobson', frob: true }), { op: 'snap', label: 'r-alex' }] },
   },
   '08-bar': {
+    readers: [],
     mission: '08', note: 'mission 8\'s arrival through the bar (the chain\'s leg1 and leg2): Sandra in the bar',
     base: { from: { chain: '06', slot: 'Save0106', index: 106 }, prefix: [] },
     body: [span('08', { op: 'snap', label: 'h1-loaded' }, { op: 'travel', to: '08_NYC_Bar', label: 'leg1' }), ...CHEATS, { op: 'wait', seconds: 3 }, pawnState('bar-sandra', 'SandraRenton0'),
@@ -173,6 +184,7 @@ export const FAMILIES = {
     blocks: {},
   },
   '08-smug': {
+    readers: [],
     mission: '08', note: 'mission 8\'s smuggler (the chain\'s leg3 and leg4, after Stanton Dowd): Ford Schick in the lair',
     base: { from: { chain: '06', slot: 'Save0106', index: 106 }, prefix: [span('08', 'start', { op: 'snap', label: 'h3-stanton' })] },
     body: [span('08', { op: 'place', at: [3171, -872, -1309] }, { op: 'travel', to: '08_NYC_Smug', label: 'leg3' }), ...CHEATS, { op: 'wait', seconds: 3 }, pawnState('smug-ford', 'FordSchick0'),
@@ -180,6 +192,7 @@ export const FAMILIES = {
     blocks: {},
   },
   '09-dockyard': {
+    readers: [{ conv: 'MeetFrontGuard', block: 'guard' }, { conv: 'DL_BadNews', block: 'badnews' }],
     mission: '09', note: 'mission 9\'s arrival in the dockyard: DL_Insertion, the front guard, DL_BadNews\'s DataLinkTrigger4, Teleporter6 into the ship',
     base: { from: { chain: '08', slot: 'Save0108', index: 108 }, prefix: [] },
     body: [span('09', { op: 'snap', label: 'f1-loaded' }, { op: 'snap', label: 'f2-insertion' }), 'guard', 'badnews',
@@ -191,6 +204,7 @@ export const FAMILIES = {
     },
   },
   '10-metro': {
+    readers: [{ conv: 'M10MeetJaime', block: 'jaime' }, { conv: 'DL_metrosewer', block: 'metrosewer' }],
     mission: '10', note: 'mission 10 to the metro (the chain\'s leg2): Jaime at the cafe, DL_metrosewer, Teleporter7 to the club',
     base: { from: { chain: '09', slot: 'Save0109', index: 109 }, prefix: [] },
     body: [span('10', { op: 'snap', label: 'g1-loaded' }, { op: 'snap', label: 'g3-metro' }), pawnState('metro-jaime', 'JaimeReyes1'), 'jaime', 'metrosewer',
@@ -202,12 +216,14 @@ export const FAMILIES = {
     },
   },
   '11-cathedral': {
+    readers: [{ conv: 'M11MeetGunther', block: 'gunther' }],
     mission: '11', note: 'mission 11\'s arrival in the cathedral: M11MeetGunther (radius 280, which the chain stays out of), then the chain to the metro (leg1)',
     base: { from: { chain: '10', slot: 'Save0110', index: 110 }, prefix: [] },
     body: ['snap:h1-loaded', 'gunther', span('11', { op: 'place', at: [3672, -1233, -303] }, { op: 'snap', label: 'h4-underground' })],
     blocks: { gunther: [...talk({ owner: 'GuntherHermann0', conv: 'M11MeetGunther', distance: 150 }), { op: 'wait', seconds: 5 }, { op: 'snap', label: 'r-gunther' }] },
   },
   '12-cmd': {
+    readers: [{ conv: 'TongSick' }],
     mission: '12', note: 'mission 12\'s return to the command centre (the chain\'s leg2): TongSick as the chain plays it, the gas station (leg3): Sandra',
     base: { from: { chain: '11', slot: 'Save0111', index: 111 }, prefix: [span('12', 'start', { op: 'snap', label: 'm12-9-cmd-again' }, { before: true })] },
     body: [span('12', { op: 'snap', label: 'm12-9-cmd-again' }, { op: 'travel', to: '12_Vandenberg_gas', label: 'leg3' }), ...CHEATS, { op: 'wait', seconds: 3 },
@@ -215,6 +231,7 @@ export const FAMILIES = {
     blocks: {},
   },
   '14-lab': {
+    readers: [{ conv: 'DL_Simons2', block: 'simons' }, { conv: 'WaltonShowdown', block: 'walton' }],
     mission: '14', note: 'mission 14\'s return to the Ocean Lab (the chain\'s leg3): Walton enters (Mission14.Timer), DL_Simons2, WaltonShowdown, Teleporter2 to the UC',
     base: { from: { chain: '12', slot: 'Save0112', index: 112 }, prefix: [span('14', 'start', { op: 'snap', label: 'm14-7-lab-again' }, { before: true })] },
     body: [{ op: 'wait', flag: 'MS_UnhideSub', timeout: 30 }, 'snap:m14-7-lab-again', 'simons', 'walton',
@@ -225,12 +242,14 @@ export const FAMILIES = {
     },
   },
   '14-silo': {
+    readers: [{ conv: 'JockArea51' }],
     mission: '14', note: 'the silo after Howard Strong (the chain\'s m14-11-howard): JockArea51 as the chain plays it, the exit to Area 51',
     base: { from: { chain: '12', slot: 'Save0112', index: 112 }, prefix: [span('14', 'start', { op: 'snap', label: 'm14-11-howard' }, { before: true })] },
     body: [span('14', { op: 'snap', label: 'm14-11-howard' }, { op: 'snap', label: 'm14-12-area51' })],
     blocks: {},
   },
   '15-entrance': {
+    readers: [{ conv: 'M15MeetEverett', block: 'everett' }],
     mission: '15', note: 'Area 51\'s entrance (the chain\'s leg1): FlagTrigger11 (EverettAppears), Mission15.Timer brings Everett in, M15MeetEverett, Teleporter0 to the Final',
     base: { from: { chain: '14', slot: 'Save0114', index: 114 }, prefix: [span('15', 'start', { op: 'snap', label: 'm15-2-entrance' }, { before: true })] },
     body: ['snap:m15-2-entrance', 'everett', span('15', { op: 'place', at: [-2101, -56, -1934] }, { op: 'snap', label: 'm15-3-final' })],
@@ -374,7 +393,7 @@ const unitById = new Map(UNITS.map(u => [u.id, u]));
 
 // ---- the carried flags --------------------------------------------------------------------------------------------------------------------------------------
 /** Per carried flag (the inventory's table): its setters (branch: value, expiration), the line's side at the reader, and per reading mission the reader run (the
- * unit) or why none, with the readers not run. "line" sides were read from the chains' captures (missions 1 to 4) and the chains' own conversation choices. */
+ * unit) or why none, with the readers not run; `chain: true` when the reader is the reading mission's chain's own step (its line side is that chain's capture). "line" sides were read from the chains' captures (missions 1 to 4) and the chains' own conversation choices. */
 export const FLAGS = [
   { flag: 'BathroomBarks_Played', row: '01', setters: 'BathroomBarks SetFlag (1, never)', line: 'absent (BathroomBarks not on the chain)',
     reads: [{ m: '03', reader: 'M03ShannonBarks (? BathroomBarks_Played -> Fresh)', units: ['c03-BathroomBarks_Played-1', 'c03-hq-line'] },
@@ -386,22 +405,22 @@ export const FLAGS = [
     reads: [{ m: '11', reader: 'M11MeetGunther (? !GuntherFreed -> NotRescued; ? GuntherFreed & !GuntherRespectsPlayer -> PlayerRefusedToArmGunther)', units: ['c11-GuntherFreed-1', 'c11-cathedral-line'] }] },
   { flag: 'GuntherRespectsPlayer', row: '01', setters: 'GuntherRescued@GiveSpeech (1), @GiveNothingNicely (1), @GiveNothing (0), all never; GuntherRescued needs GuntherFreed', line: 'absent',
     reads: [{ m: '02', reader: null, notRun: 'GuntherHermann_BarkFutz only: an AI bark (<Owner>_Bark*: the bark manager starts it, no ConHistory)' },
-      { m: '03', reader: null, notRun: 'GuntherHermann_BarkFutz (an AI bark); TroopBarks2 requires NeverTrue (set nowhere)' },
+      { m: '03', reader: null, notRun: 'GuntherHermann_BarkFutz (an AI bark); TroopBarks2 (the second TroopBarksMain after TroopBarks1 set M03TrooperBarkHack). TroopBarks1/2: reached by TroopBarksMain\'s Jump (UNATCOTroop, bump/frob/radius 160, needs !DL_Airfield_Played; a jumped-to conversation\'s own NeverTrue requirement is not checked), an ambient trooper bark the census places for no one (the original played it in c03-hq-line\'s capture)' },
       { m: '11', reader: 'M11MeetGunther', units: ['c11-GuntherRespectsPlayer-1', 'c11-cathedral-line'] }] },
   { flag: 'M01PlayerAggressive', row: '01', setters: 'Mission01.Timer:91 (1, mission 6)', line: 'absent',
     reads: [{ m: '02', reader: 'PaulLeaving (needs PaulGaveGrenades: PaulBarricade first; A1: ? M01PlayerAggressive -> aggressive)', units: ['c02-M01PlayerAggressive-1', 'c02-street-line'] },
-      { m: '03', reader: null, notRun: 'TroopBarks1 and TroopBarks2 require NeverTrue (set nowhere): no reader can start' }] },
+      { m: '03', reader: null, notRun: 'TroopBarks1/2: reached by TroopBarksMain\'s Jump (UNATCOTroop, bump/frob/radius 160, needs !DL_Airfield_Played; a jumped-to conversation\'s own NeverTrue requirement is not checked), an ambient trooper bark the census places for no one (the original played it in c03-hq-line\'s capture)' }] },
   { flag: 'M01PlayerMetFilben', row: '01', setters: 'MeetFilbenAfterStatue, MeetFilben (main) (1, never; both set PlayerMetFilben too)', line: 'absent',
     reads: [{ m: '03', reader: 'M03MeetFilben (? !M01PlayerMetFilben & !PlayerMetFilben -> FirstMeeting)', units: ['c03-M01PlayerMetFilben-1', 'c03-batterypark-line'] }] },
   { flag: 'PlayerMetFilben', row: '01', setters: 'MeetFilbenAfterStatue, MeetFilben (main) (1, never)', line: 'absent',
     reads: [{ m: '04', reader: 'M04MeetFilben (A1: ? PlayerMetFilben -> KnowsFilben)', units: ['c04-PlayerMetFilben-1', 'c04-bar-line'] }] },
   { flag: 'AmbrosiaTagged', row: '02', setters: 'DL_AmbrosiaFound (1, never); 02_NYC_BatteryPark/FlagTrigger1 (1, mission 6)', line: 'absent',
-    reads: [{ m: '03', reader: 'ManderleyDebriefing02 (? !AmbrosiaTagged -> NotTagged, NotTagged2)', units: ['c03-AmbrosiaTagged-1'], notRun: 'CarterGreeting03, AnnaManderley1, AnnaAtUNATCO (one reader per mission)' }] },
+    reads: [{ m: '03', chain: true, reader: 'ManderleyDebriefing02 (? !AmbrosiaTagged -> NotTagged, NotTagged2)', units: ['c03-AmbrosiaTagged-1'], notRun: 'CarterGreeting03, AnnaManderley1, AnnaAtUNATCO (one reader per mission)' }] },
   { flag: 'BatteryParkSlaughter', row: '02', setters: 'Mission02.Timer:178 (1, mission 6)', line: 'absent',
     reads: [{ m: '03', reader: 'CarterGreeting03 (? BatteryParkSlaughter -> Slaughter)', units: ['c03-BatteryParkSlaughter-1', 'c03-hq-line'],
-      notRun: 'CarterBarks (needs M03CarterDone), AnnaManderley1/2 (Anna\'s radius after the debriefing; not on the line), TroopBarks1/2 (NeverTrue)' }] },
+      notRun: 'CarterBarks (needs M03CarterDone), AnnaManderley1/2 (Anna\'s radius after the debriefing; not on the line), TroopBarks1/2 (through TroopBarksMain: not placed for)' }] },
   { flag: 'EscapeSuccessful', row: '02', setters: '02_NYC_BatteryPark/FlagTrigger7, FlagTrigger8 (1, mission 7)', line: '1, expiration 7 (the chain\'s subway)',
-    reads: [{ m: '03', reader: 'ManderleyDebriefing02 (? EscapeSuccessful & hostages alive -> Rescue)', units: ['c03-EscapeSuccessful-absent'], notRun: 'AnnaAtUNATCO (one reader per mission)' }] },
+    reads: [{ m: '03', chain: true, reader: 'ManderleyDebriefing02 (? EscapeSuccessful & hostages alive -> Rescue)', units: ['c03-EscapeSuccessful-absent'], notRun: 'AnnaAtUNATCO (one reader per mission)' }] },
   { flag: 'FordSchickRescued', row: '02', setters: 'Mission02.PreTravel:122 (1, mission 9; needs MS_FordFollowing, which nothing sets: the side 1 is not reachable from the data)', line: 'absent (the only side the data can give)',
     reads: [{ m: '03', reader: null, notRun: 'SmugglerThanks, MeetSmuggler, SckickThanks, FordBarks: their owners (the Smuggler, Ford) are in no map of mission 3' },
       { m: '04', reader: null, notRun: 'M04MeetSmuggler (04_NYC_Smug, off the chain, 14 choices): the side 1 cannot be set by the data' },
@@ -409,31 +428,31 @@ export const FLAGS = [
   { flag: 'FordSchickRescueDone', row: '02', setters: 'Mission02.Timer:439 (1, mission 9)', line: 'absent',
     reads: [{ m: '03', reader: null, notRun: 'SmugglerWaiting and SmugglerThanks (the only readers) belong to the Smuggler, in no map of mission 3' }] },
   { flag: 'HeardGrenadeTalk', row: '02', setters: 'UNATCOGrenade1Meet (main) (1, never)', line: 'absent',
-    reads: [{ m: '03', reader: 'ManderleyDebriefing02 (resume2: ? HeardGrenadeTalk -> Grenades)', units: ['c03-HeardGrenadeTalk-1'] }] },
+    reads: [{ m: '03', chain: true, reader: 'ManderleyDebriefing02 (resume2: ? HeardGrenadeTalk -> Grenades)', units: ['c03-HeardGrenadeTalk-1'] }] },
   { flag: 'KnowsOfJoJo', row: '02', setters: 'CounselWorker@Curious, MeetSandraRenton@CResume (1, never)', line: 'absent',
-    reads: [{ m: '03', reader: 'ManderleyDebriefing02 (ReturnFromInterrupted: ? KnowsOfJoJo -> KnowsJoJo)', units: ['c03-KnowsOfJoJo-1'] }] },
+    reads: [{ m: '03', chain: true, reader: 'ManderleyDebriefing02 (ReturnFromInterrupted: ? KnowsOfJoJo -> KnowsJoJo)', units: ['c03-KnowsOfJoJo-1'] }] },
   { flag: 'M02MechSlur', row: '02', setters: 'AnnaThanks@Cocky (1), @TeamPlayer (0), never', line: 'absent',
-    reads: [{ m: '03', reader: 'AnnaEntrance (on the chain; its ? M02MechSlur follows ? !AnnaThanks_Played -> NoComment2, and AnnaThanks_Played has the default expiration 3: deleted at mission 3\'s entry, so the branch is unreachable)', units: ['c03-M02MechSlur-1'],
-      notRun: 'AnnaAtUNATCO (the same gate), TroopBarks2 (NeverTrue)' }] },
+    reads: [{ m: '03', chain: true, reader: 'AnnaEntrance (on the chain; its ? M02MechSlur follows ? !AnnaThanks_Played -> NoComment2, and AnnaThanks_Played has the default expiration 3: deleted at mission 3\'s entry, so the branch is unreachable)', units: ['c03-M02MechSlur-1'],
+      notRun: 'AnnaAtUNATCO (the same gate), TroopBarks2 (through TroopBarksMain: not placed for)' }] },
   { flag: 'M02QuestionedGreen', row: '02', setters: 'MeetJoeGreen2@GreenQuestioned (1, never; needs MeetJoeGreen_Played)', line: 'absent',
-    reads: [{ m: '03', reader: 'ManderleyDebriefing02 (bye: ? M02QuestionedGreen -> TalkedToPress)', units: ['c03-M02QuestionedGreen-1'] },
+    reads: [{ m: '03', chain: true, reader: 'ManderleyDebriefing02 (bye: ? M02QuestionedGreen -> TalkedToPress)', units: ['c03-M02QuestionedGreen-1'] },
       { m: '04', reader: 'M04MeetJoeGreen (DeadContinue: ? M02QuestionedGreen -> GotChewedOut; after ? !MeetJoeGreen_Played -> FirstMeeting)', units: ['c04-M02QuestionedGreen-1', 'c04-bar-line'] }] },
   { flag: 'M02ViolenceInBar', row: '02', setters: 'Mission02.Timer:416 (1, mission 4)', line: 'absent',
-    reads: [{ m: '03', reader: 'ManderleyDebriefing02 (bye, TalkedToPress: ? M02ViolenceInBar -> Violence)', units: ['c03-M02ViolenceInBar-1'] }] },
+    reads: [{ m: '03', chain: true, reader: 'ManderleyDebriefing02 (bye, TalkedToPress: ? M02ViolenceInBar -> Violence)', units: ['c03-M02ViolenceInBar-1'] }] },
   { flag: 'MeetJoeGreen_Played', row: '02', setters: 'MeetJoeGreen (main) SetFlag (1, never; the _Played flag exists before ConPlayBase.SetPlayedFlag)', line: 'absent',
     reads: [{ m: '04', reader: 'M04MeetJoeGreen (? !MeetJoeGreen_Played -> FirstMeeting)', units: ['c04-MeetJoeGreen_Played-1', 'c04-bar-line'] }] },
   { flag: 'SubTerroristsDead', row: '02', setters: 'Mission02.Timer:196 (1, mission 6)', line: 'absent',
-    reads: [{ m: '03', reader: 'ManderleyDebriefing02 (? SubTerroristsDead & hostages alive -> Rescue, after the same check of EscapeSuccessful: the line\'s EscapeSuccessful hides it)',
+    reads: [{ m: '03', chain: true, reader: 'ManderleyDebriefing02 (? SubTerroristsDead & hostages alive -> Rescue, after the same check of EscapeSuccessful: the line\'s EscapeSuccessful hides it)',
       units: ['c03-SubTerroristsDead-1', 'c03-SubTerroristsDead-1-noescape', 'c03-EscapeSuccessful-absent'], notRun: 'AnnaAtUNATCO (one reader per mission)' }] },
   { flag: 'TenderloinSlaughter', row: '02', setters: 'Mission02.Timer:285 (1, mission 6)', line: 'absent',
-    reads: [{ m: '03', reader: 'ManderleyDebriefing02 (resume2: ? TenderloinSlaughter -> Slaughter)', units: ['c03-TenderloinSlaughter-1'],
-      notRun: 'CarterGreeting03, PrivateLloydBark (one reader per mission), TroopBarks1/2 (NeverTrue)' }] },
+    reads: [{ m: '03', chain: true, reader: 'ManderleyDebriefing02 (resume2: ? TenderloinSlaughter -> Slaughter)', units: ['c03-TenderloinSlaughter-1'],
+      notRun: 'CarterGreeting03, PrivateLloydBark (one reader per mission), TroopBarks1/2 (through TroopBarksMain: not placed for)' }] },
   { flag: 'AnnaKilledLebedev', row: '03', setters: 'Mission03.Timer:312 (1, mission 6; Lebedev\'s carcass killed by Anna: JuanLebedev_Dead by ScriptedPawn.Died)', line: 'absent (Lebedev lives on the chain)',
     reads: [{ m: '04', reader: 'M04LloydBarks (A1: ? AnnaKilledLebedev -> Dead)', units: ['c04-AnnaKilledLebedev-1', 'c04-island-hq-line'] }] },
   { flag: 'M03PlayerKilledAnna', row: '03', setters: 'DL_AlexShocked (1, never; started once AnnaNavarre_Dead)', line: 'absent',
-    reads: [{ m: '04', reader: 'ManderleyDebriefing03 (on the chain; ? M03PlayerKilledAnna -> KilledAnna)', units: ['c04-M03PlayerKilledAnna-1'], notRun: 'GuntherShowdown (AnnaDead2 on Surrender), CokeTroopBarks (one reader per mission)' }] },
+    reads: [{ m: '04', chain: true, reader: 'ManderleyDebriefing03 (on the chain; ? M03PlayerKilledAnna -> KilledAnna)', units: ['c04-M03PlayerKilledAnna-1'], notRun: 'GuntherShowdown (AnnaDead2 on Surrender), CokeTroopBarks (one reader per mission)' }] },
   { flag: 'PlayerKilledLebedev', row: '03', setters: 'Mission03.Timer:309, :322 (1, mission 6)', line: 'absent',
-    reads: [{ m: '04', reader: 'DL_SeeManderley and ManderleyDebriefing03 (both on the chain, in one unit)', units: ['c04-PlayerKilledLebedev-1'],
+    reads: [{ m: '04', chain: true, reader: 'DL_SeeManderley and ManderleyDebriefing03 (both on the chain, in one unit)', units: ['c04-PlayerKilledLebedev-1'],
       notRun: 'M04TroopBarks, M04ScottBarks, M04MeetCarter, M04LloydBarks (run by the unit, line state), M04MeetJaime2, CokeTroopBarks, M04MeetAlex' }] },
   { flag: 'PlayerMetFilben', row: '03', setters: 'M03MeetFilben@FirstMeeting (1, never)', line: 'absent',
     reads: [{ m: '04', reader: 'M04MeetFilben', units: ['c04-PlayerMetFilben-1-m03', 'c04-bar-line'] }] },
@@ -464,8 +483,8 @@ export const FLAGS = [
   { flag: 'KnowsGuntherKillphrase', row: '10', setters: 'M10MeetJaime@Continue (1, never)', line: 'absent',
     reads: [{ m: '11', reader: 'M11MeetGunther (Continue: ? !KnowsGuntherKillphrase -> NoKillswitch; else the Kill/Gentleman choice)', units: ['c11-KnowsGuntherKillphrase-1', 'c11-cathedral-line'] }] },
   { flag: 'EverettMechanicComment', row: '11', setters: 'MeetEverett2@RayComment, @deadset (1, never)', line: 'absent; Ray_Dead set on the first line of missions 14 and 15 (the real slot\'s), absent on the New Game line pinned again on 2026-10-25: the units write the flag both ways with Ray alive',
-    reads: [{ m: '12', reader: 'TongSick (on the chain; one CheckFlag of !Ray_Dead and !EverettMechanicComment -> Rattle)', units: ['c12-EverettMechanicComment-1'] },
-      { m: '14', reader: 'JockArea51 (on the chain; the same check)', units: ['c14-EverettMechanicComment-1', 'c14-EverettMechanicComment-absent', 'c14-EverettMechanicComment-1-rayalive', 'c14-EverettMechanicComment-absent-rayalive'] },
+    reads: [{ m: '12', chain: true, reader: 'TongSick (on the chain; one CheckFlag of !Ray_Dead and !EverettMechanicComment -> Rattle)', units: ['c12-EverettMechanicComment-1'] },
+      { m: '14', chain: true, reader: 'JockArea51 (on the chain; the same check)', units: ['c14-EverettMechanicComment-1', 'c14-EverettMechanicComment-absent', 'c14-EverettMechanicComment-1-rayalive', 'c14-EverettMechanicComment-absent-rayalive'] },
       { m: '15', reader: 'M15MeetEverett (the same check -> Dead; Ray dead hides the flag, so the units write Ray alive)',
         units: ['c15-EverettMechanicComment-1', 'c15-EverettMechanicComment-absent', 'c15-entrance-line', 'c15-EverettMechanicComment-1-rayalive', 'c15-EverettMechanicComment-absent-rayalive'] }] },
   { flag: 'M11MetWalton', row: '11', setters: 'M11WaltonHolo (main) (1, never; needs GuntherHermann_Dead)', line: 'absent on the New Game line; 1 on the first line of missions 14 and 15 (the real slot); both sides written',
@@ -617,21 +636,22 @@ async function play(units, { rebuild = false } = {}) {
 }
 
 /** The conversation history a travel text carries (ConHistory records from the head, each with its owner and events), as owner, event count and a hash of the
- * speeches: a reading of which branch played, with no game text printed. */
+ * speeches: a reading of which branch played, with no game text printed. Records are keyed and followed by pointer, not by name (after a LoadGame a session's
+ * objects can carry loaded objects' names: validate-flag-census.mjs). */
 function histories(text) {
   const records = new Map();
   let current = null;
   for (const line of String(text ?? '').split(/\r?\n/)) {
-    const head = /^Class=(\S+) Name=(\S+)/.exec(line);
-    if (head) { current = { cls: head[1], name: head[2], fields: {} }; records.set(head[2], current); continue; }
+    const head = /^Class=(\S+) Name=(\S+) Ptr=([0-9a-fA-F]+)/.exec(line);
+    if (head) { current = { cls: head[1], name: head[2], ptr: head[3].toLowerCase(), fields: {} }; records.set(current.ptr, current); continue; }
     const field = /^(\w+)=(.*)$/.exec(line);
     if (current && field) current.fields[field[1]] = field[2];
   }
-  const ref = value => value?.split(' ').pop();
+  const ref = value => value?.split(' ')[0]?.toLowerCase();
   const heads = [...records.values()].filter(r => r.cls === 'ConSys.ConHistory');
   const pointed = new Set(heads.map(r => ref(r.fields.Next)));
   const out = [];
-  for (let r = heads.find(h => !pointed.has(h.name)), guard = 0; r && guard < 500; r = records.get(ref(r.fields.Next)), guard++) {
+  for (let r = heads.find(h => !pointed.has(h.ptr)), guard = 0; r && guard < 500; r = records.get(ref(r.fields.Next)), guard++) {
     const speeches = [];
     for (let e = records.get(ref(r.fields.firstEvent)), n = 0; e && n < 200; e = records.get(ref(e.fields.Next)), n++) speeches.push(e.fields.Speech ?? '');
     let h = 0x811c9dc5;

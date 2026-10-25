@@ -4,7 +4,8 @@ Rows 6.4.NN.2 of [the exit criteria](stage-6-exit-criteria.md) (missions 1, 2, 3
 where the later mission reads them (the conversation branch, the pawn present or absent, the script's effect), equal to the original.* The 37 carried flags
 are the inventory's ([the choices with lasting consequences](stage-6-inventory.md#the-choices-with-lasting-consequences-across-missions); `PlayerMetFilben`
 counts for mission 1 and for mission 3). This note is the census's design on [the chain harness](stage-6-chains.md), its table and what Play does with it
-(2026-10-25). **Nothing here is compared with the original yet**: every unit's Wine capture is the next step, and no row changes status before it.
+(2026-10-25). **One unit is compared with the original so far** ([the census's comparison](#the-censuss-comparison-validate-flag-censusmjs)); every
+other unit's Wine capture is the next step, and no row changes status before both sides of its flags pass.
 
 ## How a flag is checked
 
@@ -33,10 +34,10 @@ counts for mission 1 and for mission 3). This note is the census's design on [th
 * **When the line's side needs a unit.** A reader on a chain has the line's capture as its other side (ManderleyDebriefing02, AnnaEntrance, DL_SeeManderley,
   ManderleyDebriefing03, TongSick, JockArea51). A reader off the chains, or a script reader whose pawn no chain step reads, has a `line` unit: the same base
   with no flag changed. Where the reader tests the flag only after another flag of the same setter, the other side is that unit (`against` in the table).
-* **What is compared** (validate-stage6-chain.mjs, as for the chains): the flags at every snapshot (one after each reader block), the travel text of the
-  map change after the reader (its conversation history: every conversation except `<Owner>_Bark*` and replays enters ConHistory,
-  `ConPlayBase.SetupHistory`, so the branch played is in it), and for a mission script's reader the `state` of the pawn it acts on (`presence`, `bHidden`,
-  `bInWorld`).
+* **What is compared** (`validate-flag-census.mjs`, [below](#the-censuss-comparison-validate-flag-censusmjs)): the reader's observable only: the flags
+  it reads and sets at every snapshot (one after each reader block), its own history record in the travel text of the map change after it (every
+  conversation except `<Owner>_Bark*` and replays enters ConHistory, `ConPlayBase.SetupHistory`, so the branch played is in it), and for a mission script's
+  reader the `state` of the pawn it acts on (`presence`, `bHidden`, `bInWorld`).
 * **Families.** Units that share a prefix and steps form a family; one Play run of the prefix saves all its bases (each unit's flags written, `SaveGame` with
   no frame between, the flags put back; the line's base first, a base that deletes a flag last). A family's steps run every reader block of the family (a
   unit drops a block whose owner its flag keeps out of the world), so a unit for one flag also runs the family's other readers with the line's state.
@@ -51,7 +52,9 @@ node scripts/stage6-flag-census.mjs --table           # the table below, with wh
 node scripts/stage6-flag-census.mjs --play [unit|family|a,b] [--rebuild]   # Linux host: bases when missing, unit files, each unit in Play (a child each)
 node scripts/stage6-flag-census.mjs --report [unit|family]   # each unit against its other side: flags, states, traces, histories (owner, events, a hash)
 node scripts/chain-original.mjs --file .work/chains/census/<unit>.mjs          # the original under Wine (the Wine lock): .work/chains/m<unit>/
-node scripts/validate-stage6-chain.mjs --file .work/chains/census/<unit>.mjs   # Play against that capture
+node scripts/validate-flag-census.mjs [--unit u | --family f]                   # Play against each capture, on the reader's observable; the rows
+node scripts/validate-flag-census.mjs --rows                                     # the rows from the stored verdicts (no Play run)
+node scripts/validate-stage6-chain.mjs --file .work/chains/census/<unit>.mjs   # the whole comparison (also ambient barks and every flag), for a reading
 ```
 
 Harness additions this needed (each separate and small): `chain-lib.mjs` `slotDirectory` takes `source: 'census'`, `STATE_FIELDS` names `bDeleteMe` (0x28
@@ -72,10 +75,10 @@ did; a unit's side `line` is the base with no flag written). 66 units in 17 fami
 | `FilbenGaveKey` (6.4.01.2) | MeetFilben@GetKeyB (1, never), @NoKeyB (0, never) | absent (MeetFilben not on the chain; absent reads as false: XFlagBase::GetBool) | 03 | M03MeetFilben (NotAggressive: ? !FilbenGaveKey -> NoKey1; only after a first meeting) | `c03-FilbenGaveKey-1` (1): runs<br>`c03-batterypark-line` (line): runs |
 | `GuntherFreed` (6.4.01.2) | 01_NYC_UNATCOIsland/FlagTrigger2 (1, mission 12) | absent | 11 | M11MeetGunther (? !GuntherFreed -> NotRescued; ? GuntherFreed & !GuntherRespectsPlayer -> PlayerRefusedToArmGunther) | `c11-GuntherFreed-1` (1): runs<br>`c11-cathedral-line` (line): runs |
 | `GuntherRespectsPlayer` (6.4.01.2) | GuntherRescued@GiveSpeech (1), @GiveNothingNicely (1), @GiveNothing (0), all never; GuntherRescued needs GuntherFreed | absent | 02 | none: GuntherHermann_BarkFutz only: an AI bark (<Owner>_Bark*: the bark manager starts it, no ConHistory) | - |
-| `GuntherRespectsPlayer` (6.4.01.2) | GuntherRescued@GiveSpeech (1), @GiveNothingNicely (1), @GiveNothing (0), all never; GuntherRescued needs GuntherFreed | absent | 03 | none: GuntherHermann_BarkFutz (an AI bark); TroopBarks2 requires NeverTrue (set nowhere) | - |
+| `GuntherRespectsPlayer` (6.4.01.2) | GuntherRescued@GiveSpeech (1), @GiveNothingNicely (1), @GiveNothing (0), all never; GuntherRescued needs GuntherFreed | absent | 03 | none: GuntherHermann_BarkFutz (an AI bark); TroopBarks2 (the second TroopBarksMain after TroopBarks1 set M03TrooperBarkHack). TroopBarks1/2: reached by TroopBarksMain's Jump (UNATCOTroop, bump/frob/radius 160, needs !DL_Airfield_Played; a jumped-to conversation's own NeverTrue requirement is not checked), an ambient trooper bark the census places for no one (the original played it in c03-hq-line's capture) | - |
 | `GuntherRespectsPlayer` (6.4.01.2) | GuntherRescued@GiveSpeech (1), @GiveNothingNicely (1), @GiveNothing (0), all never; GuntherRescued needs GuntherFreed | absent | 11 | M11MeetGunther | `c11-GuntherRespectsPlayer-1` (1): runs<br>`c11-cathedral-line` (line): runs |
 | `M01PlayerAggressive` (6.4.01.2) | Mission01.Timer:91 (1, mission 6) | absent | 02 | PaulLeaving (needs PaulGaveGrenades: PaulBarricade first; A1: ? M01PlayerAggressive -> aggressive) | `c02-M01PlayerAggressive-1` (1): runs<br>`c02-street-line` (line): runs |
-| `M01PlayerAggressive` (6.4.01.2) | Mission01.Timer:91 (1, mission 6) | absent | 03 | none: TroopBarks1 and TroopBarks2 require NeverTrue (set nowhere): no reader can start | - |
+| `M01PlayerAggressive` (6.4.01.2) | Mission01.Timer:91 (1, mission 6) | absent | 03 | none: TroopBarks1/2: reached by TroopBarksMain's Jump (UNATCOTroop, bump/frob/radius 160, needs !DL_Airfield_Played; a jumped-to conversation's own NeverTrue requirement is not checked), an ambient trooper bark the census places for no one (the original played it in c03-hq-line's capture) | - |
 | `M01PlayerMetFilben` (6.4.01.2) | MeetFilbenAfterStatue, MeetFilben (main) (1, never; both set PlayerMetFilben too) | absent | 03 | M03MeetFilben (? !M01PlayerMetFilben & !PlayerMetFilben -> FirstMeeting) | `c03-M01PlayerMetFilben-1` (1): runs<br>`c03-batterypark-line` (line): runs |
 | `PlayerMetFilben` (6.4.01.2) | MeetFilbenAfterStatue, MeetFilben (main) (1, never) | absent | 04 | M04MeetFilben (A1: ? PlayerMetFilben -> KnowsFilben) | `c04-PlayerMetFilben-1` (1): runs<br>`c04-bar-line` (line): runs |
 | `AmbrosiaTagged` (6.4.02.2) | DL_AmbrosiaFound (1, never); 02_NYC_BatteryPark/FlagTrigger1 (1, mission 6) | absent | 03 | ManderleyDebriefing02 (? !AmbrosiaTagged -> NotTagged, NotTagged2) | `c03-AmbrosiaTagged-1` (1): runs |
@@ -102,7 +105,7 @@ did; a unit's side `line` is the base with no flag written). 66 units in 17 fami
 | `M04MetWalton` (6.4.04.2) | M04MeetWalton (main) (1, never) | absent on the New Game line; 1 on the first line of missions 14 and 15 (the real slot chain 12 first started from); both sides written | 14 | WaltonShowdown (? !M04MetWalton -> try2) | `c14-M04MetWalton-1` (1): runs<br>`c14-M04MetWalton-absent` (absent): runs<br>`c14-lab-line` (line): runs |
 | `PlayerBailedOutWindow` (6.4.04.2) | 04_NYC_Hotel/FlagTrigger9 (1, mission 6) | absent | 05 | Mission05.FirstFrame:37 (05_NYC_UNATCOMJ12LAB: Paul destroyed) | `c05-PlayerBailedOutWindow-1` (1): runs<br>`c05-lab-line` (line): runs |
 | `SandraWentToCalifornia` (6.4.04.2) | SandraAttackedByJoJoThanks, FamilySquabbleWrapUpGilbertDead (main), FamilySquabbleWrapUp@Hop (1, never) | absent | 08 | Mission08.FirstFrame:19 (Sandra destroyed in every map) | `c08-SandraWentToCalifornia-1` (1): runs<br>`c08-bar-line` (line): runs |
-| `SandraWentToCalifornia` (6.4.04.2) | SandraAttackedByJoJoThanks, FamilySquabbleWrapUpGilbertDead (main), FamilySquabbleWrapUp@Hop (1, never) | absent | 12 | Mission12.FirstFrame:37 (12_VANDENBERG_GAS: Sandra enters the world) | `c12-SandraWentToCalifornia-1` (1): no base (step 65: conversation PageHostageBriefing: not over after 300s)<br>`c12-cmd-line` (line): no base (step 65: conversation PageHostageBriefing: not over after 300s) |
+| `SandraWentToCalifornia` (6.4.04.2) | SandraAttackedByJoJoThanks, FamilySquabbleWrapUpGilbertDead (main), FamilySquabbleWrapUp@Hop (1, never) | absent | 12 | Mission12.FirstFrame:37 (12_VANDENBERG_GAS: Sandra enters the world) | `c12-SandraWentToCalifornia-1` (1): runs<br>`c12-cmd-line` (line): runs |
 | `JacobsonRecruited` (6.4.05.2) | M05MeetAlexJacobson (main) (1, never) | 1 (the chain's M05MeetAlexJacobson) | 06 | Mission06.FirstFrame:86 (06_HONGKONG_TONGBASE: Alex enters the world) | `c06-JacobsonRecruited-absent` (absent): runs<br>`c06-tongbase-line` (line): runs |
 | `JaimeRecruited` (6.4.05.2) | M05MeetJaime@Recruit (1, never) | absent | 06 | M06MeetAlexJacobson (? JaimeRecruited -> Recruited) | `c06-JaimeRecruited-1` (1): runs<br>`c06-tongbase-line` (line): runs |
 | `JaimeRecruited` (6.4.05.2) | M05MeetJaime@Recruit (1, never) | absent | 10 | Mission10.FirstFrame:31 (10_PARIS_METRO: Jaime enters unless recruited) and DL_metrosewer (? !JaimeRecruited -> Jaime) | `c10-JaimeRecruited-1` (1): runs<br>`c10-metro-line` (line): runs |
@@ -111,7 +114,7 @@ did; a unit's side `line` is the base with no flag written). 66 units in 17 fami
 | `HelpSailor` (6.4.08.2) | M08MeetSailor@GetPass (1, never) | absent | 09 | MeetFrontGuard (? HelpSailor & !Sailor_Dead -> Friendly) | `c09-HelpSailor-1` (1): runs<br>`c09-dockyard-line` (line): runs |
 | `M08WarnedSmuggler` (6.4.08.2) | M08SmugglerConvos@GiveWarning (1, never) | absent (the chain picks NoWarning) | 09 | DL_BadNews (09_NYC_Dockyard/DataLinkTrigger4; ? M08WarnedSmuggler -> Warned) | `c09-M08WarnedSmuggler-1` (1): runs<br>`c09-dockyard-line` (line): runs |
 | `KnowsGuntherKillphrase` (6.4.10.2) | M10MeetJaime@Continue (1, never) | absent | 11 | M11MeetGunther (Continue: ? !KnowsGuntherKillphrase -> NoKillswitch; else the Kill/Gentleman choice) | `c11-KnowsGuntherKillphrase-1` (1): runs<br>`c11-cathedral-line` (line): runs |
-| `EverettMechanicComment` (6.4.11.2) | MeetEverett2@RayComment, @deadset (1, never) | absent; Ray_Dead set on the first line of missions 14 and 15 (the real slot's), absent on the New Game line pinned again on 2026-10-25: the units write the flag both ways with Ray alive | 12 | TongSick (on the chain; one CheckFlag of !Ray_Dead and !EverettMechanicComment -> Rattle) | `c12-EverettMechanicComment-1` (1): no base (step 65: conversation PageHostageBriefing: not over after 300s) |
+| `EverettMechanicComment` (6.4.11.2) | MeetEverett2@RayComment, @deadset (1, never) | absent; Ray_Dead set on the first line of missions 14 and 15 (the real slot's), absent on the New Game line pinned again on 2026-10-25: the units write the flag both ways with Ray alive | 12 | TongSick (on the chain; one CheckFlag of !Ray_Dead and !EverettMechanicComment -> Rattle) | `c12-EverettMechanicComment-1` (1): runs |
 | `EverettMechanicComment` (6.4.11.2) | MeetEverett2@RayComment, @deadset (1, never) | absent; Ray_Dead set on the first line of missions 14 and 15 (the real slot's), absent on the New Game line pinned again on 2026-10-25: the units write the flag both ways with Ray alive | 14 | JockArea51 (on the chain; the same check) | `c14-EverettMechanicComment-1` (1): runs<br>`c14-EverettMechanicComment-absent` (absent): runs<br>`c14-EverettMechanicComment-1-rayalive` (1): runs<br>`c14-EverettMechanicComment-absent-rayalive` (absent): runs |
 | `EverettMechanicComment` (6.4.11.2) | MeetEverett2@RayComment, @deadset (1, never) | absent; Ray_Dead set on the first line of missions 14 and 15 (the real slot's), absent on the New Game line pinned again on 2026-10-25: the units write the flag both ways with Ray alive | 15 | M15MeetEverett (the same check -> Dead; Ray dead hides the flag, so the units write Ray alive) | `c15-EverettMechanicComment-1` (1): runs<br>`c15-EverettMechanicComment-absent` (absent): runs<br>`c15-entrance-line` (line): runs<br>`c15-EverettMechanicComment-1-rayalive` (1): runs<br>`c15-EverettMechanicComment-absent-rayalive` (absent): runs |
 | `M11MetWalton` (6.4.11.2) | M11WaltonHolo (main) (1, never; needs GuntherHermann_Dead) | absent on the New Game line; 1 on the first line of missions 14 and 15 (the real slot); both sides written | 14 | WaltonShowdown (try2: ? !M11MetWalton -> try3; read only once !M04MetWalton jumped) | `c14-M11MetWalton-1` (1): runs<br>`c14-M11MetWalton-absent` (absent): runs |
@@ -123,8 +126,16 @@ for these (flag, mission) pairs, by the data:
 
 | Flag | Read in | Why no unit |
 | --- | --- | --- |
-| `GuntherRespectsPlayer` | 2, 3 | the only readers are `GuntherHermann_BarkFutz`, an AI bark (`<Owner>_Bark*`: the bark manager starts it, it enters no ConHistory), and `TroopBarks2`, which requires `NeverTrue` (set nowhere) |
-| `M01PlayerAggressive` | 3 | `TroopBarks1` and `TroopBarks2` require `NeverTrue` |
+| `GuntherRespectsPlayer` | 2 | the only reader is `GuntherHermann_BarkFutz`, an AI bark (`<Owner>_Bark*`: the bark manager starts it, it enters no ConHistory) |
+| `GuntherRespectsPlayer` | 3 | `GuntherHermann_BarkFutz` (an AI bark) and `TroopBarks2`, which is reachable but not placed for (below) |
+| `M01PlayerAggressive` | 3 | `TroopBarks1` and `TroopBarks2`: reachable, not placed for (below) |
+
+**Corrected 2026-10-25** (the first census capture): `TroopBarks1` and `TroopBarks2` require `NeverTrue`, which is set nowhere, but they are not started by their
+own requirement: `TroopBarksMain` (owner `UNATCOTroop`, first person, bump, frob or radius 160, needs `!DL_Airfield_Played`) jumps into `TroopBarks1`, or into
+`TroopBarks2` once `TroopBarks1` set `M03TrooperBarkHack`, and a Jump into another conversation does not check that conversation's own requirement. The original
+played them in `c03-hq-line` (`TroopBarksMain_Played`, `TroopBarks1_Played`, `M03TrooperBarkHack`; the troopers it drew in the HQ). So `M01PlayerAggressive`,
+`TenderloinSlaughter`, `BatteryParkSlaughter` (TroopBarks1/2), `GuntherRespectsPlayer` and `M02MechSlur` (TroopBarks2) have one more mission 3 reader, an
+ambient trooper bark in UNATCO HQ; no unit places for it yet (it is a radius bark of wandering troopers, played by whichever trooper the player passes).
 | `FordSchickRescued` | 3 | `SmugglerThanks`, `MeetSmuggler`, `SckickThanks`, `FordBarks` belong to the Smuggler and Ford, who are in no map of mission 3 |
 | `FordSchickRescued` | 4 | `M04MeetSmuggler` (04_NYC_Smug, off the chains, 14 choices) not run: the side 1 cannot come from the data (below); mission 8's script reader is run |
 | `FordSchickRescueDone` | 3 | its only readers, `SmugglerWaiting` and `SmugglerThanks`, are the Smuggler's (NYC_Smug, not a map of mission 3) |
@@ -179,10 +190,55 @@ no game text), the states and the flags beyond the written ones. These are Play'
 
 Mission 12's two readers (TongSick, Mission12.FirstFrame:37) have no Play result: their family is blocked (above).
 
+## The census's comparison (`validate-flag-census.mjs`)
+
+`validate-stage6-chain.mjs --file` compares a unit as a chain: every flag and the whole travel text. A unit's original capture then differs by what the
+original's drawn NPCs did on their own (the ambient barks of the troopers and Carter in UNATCO HQ: the original draws every NPC in view, headless Play only the
+chain's `watch` list, and a bark's moment follows each program's pace), which is not what the census asks. `scripts/validate-flag-census.mjs` runs each unit
+with a capture in Play (one child process each, as the chain validator) and compares only the unit's observable:
+
+1. **Flags**, at every snapshot of the capture: the unit's own (the census flag and every flag written into its base) and the flags its reader
+   conversations read or set, **from the conversations' data** in DeusExConText (the reading mission's `ConList`): the conversation's `flagRefList`, every
+   `CheckFlag` and `SetFlag` event's flag references, its choices' flag conditions, `<name>_Played` and `<name>_Interrupted`, and the same of any conversation
+   it jumps into. The readers are the family's `readers` in `stage6-flag-census.mjs` (the conversations its steps play, by block); compared as
+   `name|type|expiration|value` sets, and the snapshot's map.
+2. **History**, in every map change of the capture: the ConHistory records that are a reader's, found **by speech** (a record whose first event's speech is one
+   of the reader conversation's speeches), compared record by record: owner, location, InfoLink, then each event's speaker, speech and soundID in order (a
+   speech two runs drew differently from one conversation's random label is accepted, as `chain-conversations.mjs` does).
+3. **States**: the unit's `state` reads with `presence` (a mission script's reader).
+
+Everything else is printed as *outside the observable* and does not fail: flags no reader touches, the other conversations' history records, the whole
+text's first difference, a chain step's door state, a map change Play made that the capture lacks. Then, per row 6.4.NN.2, every carried flag set in mission NN:
+each unit the table names for a reading mission, and its family's line unit, sits on a side by the flag's value in its base (`bases/<family>.json`); a side
+passes when each of its units passes on that flag's part of the observable (every failure names the reader, the written flags, the states or the unit's
+course it concerns, and a unit's line side of `BathroomBarks_Played` is not failed by another reader's history); a side no census unit holds is the chain
+line's own capture where the reader is on a chain (row 6.4.RR.1's status in the exit criteria). The verdicts are kept in
+`.work/chains/census/validate-summary.json`, so `--rows` prints the rows without running Play.
+
+**The first capture, `c03-hq-line`** (the Mac's CrossOver bottle, 2026-10-25). What is compared: 22 flags (the readers ManderleyDebriefing02, 14 of its flags;
+M03ShannonBarks, 3; CarterGreeting03, 10; the line unit writes none): `AmbrosiaTagged`, `BathroomBarks_Played`, `BatteryParkSlaughter`,
+`CarterGreeting03_Played`/`_Interrupted`, `EscapeSuccessful`, `HeardGrenadeTalk`, `KnowsOfJoJo`, `M02QuestionedGreen`, `M02ViolenceInBar`, `M03CarterDone`,
+`M03GotMod`, `M03GotTool`, `M03ShannonBarks_Played`/`_Interrupted`, `M03UNATCOBriefingsDone`, `ManderleyDebriefing02_Played`/`_Interrupted`,
+`SubHostageFemale_Dead`, `SubHostageMale_Dead`, `SubTerroristsDead`, `TenderloinSlaughter`, at the five snapshots `d2-hq`, `d3-debriefed`, `r-shannon`,
+`r-carter`, `d4-island` (1, 3, 4, 8 and 8 of them present: **equal** at all five); the three readers' history records in `leg2`'s text (HQ to the island):
+ManderleyDebriefing02 (1 record, 16 events), M03ShannonBarks (1 record, 1 event) and CarterGreeting03 (1 record, 9 events): **equal**. No `state` read. **PASS.**
+Outside the observable: `TroopBarksMain_Played`, `TroopBarks1_Played`, `M03TrooperBarkHack` from `r-shannon` on and `CarterBarks_Played` from `r-carter` on
+(the original's ambient barks), their two history records (a UNATCO Trooper's, Sam Carter's), and the whole text's first difference at line 51 (that
+history). The rows: `BathroomBarks_Played`, `BatteryParkSlaughter`, `AmbrosiaTagged`, `HeardGrenadeTalk`, `KnowsOfJoJo`, `M02QuestionedGreen` (mission 3),
+`M02ViolenceInBar` and `TenderloinSlaughter` have their line side (not set) PASS and `EscapeSuccessful` its set side; each waits for the other side's
+capture (`SubTerroristsDead`'s unset side also needs `c03-EscapeSuccessful-absent`).
+
+**A lesson of the first comparison: follow pointers, not names.** The original's text of this unit holds two `ConHistory0` records and two `ConHistoryEvent0`
+(the debriefing's, made in the session, and the InfoLink's loaded from the base save: after a LoadGame the objects a session makes can carry loaded objects'
+names). A parser that keyed the records by name lost the debriefing's record and read a FAIL; the comparison now keys records by their `Ptr` and follows
+`firstEvent`/`Next` by pointer, as `normalizeTravelText` does (the `--report` of `stage6-flag-census.mjs` too). A history event whose speech is equal but
+whose soundID differs is a difference; only two different speeches of one random label are excused.
+
 ## Unverified and open
 
-* **Nothing here is compared with the original yet.** Every unit runs in Play (63 of 66; the 3 others are the blocked family); each needs its Wine
-  capture (`chain-original.mjs --file`, then `validate-stage6-chain.mjs --file`) before any row 6.4.NN.2 moves.
+* **One unit is compared with the original so far** (`c03-hq-line`: PASS on its observable, above). Every unit runs in Play (63 of 66;
+  the 3 others are the blocked family); each needs its Wine capture (`chain-original.mjs --file`, then `validate-flag-census.mjs`) before any row 6.4.NN.2
+  moves.
 * **Mid-mission bases.** Most bases are Play saves taken after a prefix, with the mission's other levels filed in the save; the chains so far showed the
   original loading Play's saves only at a mission's arrival. Unverified until the first capture.
 * **Only flags are written.** A setter's goals, notes, items, credits and skill points stay as the line has them: a unit is the reader under the flag, not a
