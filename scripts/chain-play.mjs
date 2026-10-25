@@ -274,10 +274,16 @@ export async function runChainInPlay(chain, { assets = null, log = () => {}, unt
       const choices = [...(step.choose ?? [])];
       let started = null, n = 0;
       const limit = Math.round((step.timeout ?? 180) / FRAME);
-      const trace = [];
+      const trace = [], others = [];
       for (; n < limit; n += 15) {
         const state = conversationOf(c);
-        if (state && !started) { started = state; if (step.name && String(state.name).toLowerCase() !== step.name.toLowerCase()) throw new Error(`conversation ${state.name} started, expected ${step.name}`); }
+        // another conversation playing first (an awake owner's ambient bark: mission 12's Savage_assistant_FBarks before PageHostageBriefing) is let run, as
+        // the original's driver waits for the named one's _Played flag only (chain-original.mjs conv)
+        if (state && !started && step.name && String(state.name).toLowerCase() !== step.name.toLowerCase()) {
+          if (!others.includes(state.name)) { others.push(state.name); note(`conv ${step.name}: ${state.name} plays first`); }
+          frames(15, false); continue;
+        }
+        if (state && !started) started = state;
         if (!state) { if (started) break; frames(15, false); continue; }
         if (trace.at(-1) !== `${state.event}@${state.label}`) trace.push(`${state.event}@${state.label}`);
         if (state.event === 'choice' || state.state === 'WaitForInput' && state.choices) {

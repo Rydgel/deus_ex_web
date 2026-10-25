@@ -289,7 +289,13 @@ export async function runChainInOriginal(chain, { log = console.log, until = nul
             lastPicked = state.event;
             trace.push(`pick#${pick.index}${pick.label ? `(${pick.label})` : ''}`);
           }
-        } else if (started) break;
+        } else if (started) {
+          // a conversation that ended without the named one's _Played flag was another one (an awake owner's ambient bark first, mission 12's
+          // Savage_assistant_FBarks): the step waits on for its own (chain-play.mjs conv lets it run the same way)
+          if (!s.name || played()) break;
+          note(`conv ${s.name}: another conversation played first (${trace.join(' ')})`);
+          started = false; lastPicked = null; trace.length = 0;
+        }
         await sleep(1000);
       }
       if (!started) throw new Error(`conversation ${s.name} never started`);
