@@ -147,6 +147,12 @@ export default {
     { op: 'wait', flag: 'DL_JockDeathTongComment_Played', timeout: 120 },
     { op: 'snap', label: 'm14-12-area51' },
     // mission 15's chain starts here, in both programs (docs/stage-6-chains.md "Starts")
+    // the save's player protected from its first tick: the bunker is a fight by now (MJ12Troop0 attacking from 1588 units, Play's health 100 -> 0 in 3.5 s
+    // without the cheats) and the original types mission 15's first cheat line a second or more after its LoadGame (the first capture's player died into
+    // DXONLY). The console SET writes the class default too, so the save keeps no ReducedDamageType (a save holds what differs from the default): the
+    // default goes back to None and PlayerPawn.God sets the instance's All (Engine/PlayerPawn.uc:2453..2469), which the save keeps
+    { op: 'line', text: 'set DeusEx.JCDentonMale ReducedDamageType None', harness: true },
+    { op: 'line', text: 'god', harness: true },
     { op: 'save', index: 114, label: 'exit' },
   ],
 };
