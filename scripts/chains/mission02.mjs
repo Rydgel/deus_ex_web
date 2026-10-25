@@ -14,7 +14,11 @@ export default {
     { op: 'line', text: 'set DeusEx.JCDentonMale bCheatsEnabled True', harness: true },
     { op: 'line', text: 'set DeusEx.JCDentonMale ReducedDamageType All', harness: true },
 
-    // the subway: the panel opens the three TrainDoors (their event HostageActivation), the fall into Teleporter1 in the train goes to the Street
+    // the subway: the panel opens the three TrainDoors (their event HostageActivation), the fall into Teleporter1 in the train goes to the Street.
+    // The player is undetectable there (bDetectable False: the AI's senses and the cameras skip him; only Interpolating and Paralyzed change it, and nothing
+    // sets it back) until the DataLink: seen, the subway's terrorists fight around the hostages and the outcome is the fight's, not the chain's (two
+    // captures of the original: one EscapeSuccessful, one HostagesKilled; Play's HostagesKilled since the camera's zone is stamped, docs/stage-6-chains.md)
+    { op: 'line', text: 'set DeusEx.JCDentonMale bDetectable False', harness: true },
     { op: 'place', at: [-5358, 2989, -322], view: [-4090, 32733], harness: true, turnFirst: true, note: '40 units east of SubwayControlPanel4 (-5398,2989,-299), aimed at it' },
     { op: 'frob', target: 'SubwayControlPanel4', watch: ['SubwayControlPanel4'] },
     { op: 'wait', seconds: 5 },
@@ -22,6 +26,7 @@ export default {
     // the train's doors free the hostages (HostageActivation): Mission02.Timer plays DL_SubwayComplete, whose skill points must be in before PreTravel stores them in
     // the SKTemp flags (DeusExPlayer.SaveSkillPoints); the first capture's original had them in, Play's run still had the InfoLink playing at the drop
     { op: 'wait', flag: 'DL_SubwayComplete_Played', timeout: 120 },
+    { op: 'line', text: 'set DeusEx.JCDentonMale bDetectable True', harness: true },
     { op: 'place', at: [-5431, 3035, -244], view: [0, 0], drop: true, harness: true, note: 'above Teleporter1 (-5431,3035,-334, radius 30) in the train' },
     { op: 'travel', to: '02_NYC_Street', label: 'leg1' },
     // God mode and the cheats flag are not travel properties (docs/stage-6-chains.md "Rules")
