@@ -14,6 +14,7 @@ import { writeFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { gameDirectory } from './game-directory.mjs';
 import { loadChain, captureDirectory, readIfExists, flagDifferences } from './chain-lib.mjs';
+import { RANDOM_FLAGS } from './chain-conversations.mjs';
 import { parseTravelText } from '../src/runtime/travel-text.mjs';
 import { compareTravelTexts as compareTexts } from './chain-conversations.mjs';
 
@@ -60,7 +61,9 @@ for (const [label, want] of Object.entries(original.snaps)) {
   const got = play.snaps[label];
   if (!check(got, `snapshot ${label}: Play has none`)) continue;
   check(mapName(got.map) === mapName(want.map), `snapshot ${label}: Play is in ${got.map}, the original in ${want.map}`);
-  const d = flagDifferences(got.flags, want.flags);
+  // a flag a script draws with FRand is compared by its presence only (RANDOM_FLAGS: its value and expiration are the draw's)
+  const drawn = flags => flags.map(f => { const [name, type] = f.split('|'); return RANDOM_FLAGS[name.toLowerCase()] ? `${name}|${type}|*|*` : f; });
+  const d = flagDifferences(drawn(got.flags), drawn(want.flags));
   const same = !d.onlyPlay.length && !d.onlyOriginal.length;
   check(same, `snapshot ${label}: flags differ: only Play ${JSON.stringify(d.onlyPlay)}; only the original ${JSON.stringify(d.onlyOriginal)}`);
   check(got.defaultExpiration === want.defaultExpiration, `snapshot ${label}: default expiration Play ${got.defaultExpiration}, the original ${want.defaultExpiration}`);

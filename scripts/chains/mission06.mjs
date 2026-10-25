@@ -93,8 +93,9 @@ export default {
     { op: 'place', at: [1791, -585, -60], view: [-11546, 49112], harness: true, note: '40 units north of Keypad3 (1791,-625,-100), aimed at it: chain-plan.mjs face' },
     { op: 'frob', target: 'Keypad3', watch: ['Keypad3'] },
     { op: 'key', names: ['0', '6', '2', '8', '8'], gap: 0.5, note: 'Keypad3 validCode 06288' },
+    // (the elevators' doors the keypads open are not read: they close again by themselves, and the recapture's original read all three closed 3 s after the
+    // code where Play read them open; docs/stage-6-chains.md, a door with no stable state)
     { op: 'wait', seconds: 3 },
-    { op: 'state', label: 'market-elevator', actor: 'DeusExMover4', fields: ['KeyNum', 'bLocked'] },
     { op: 'place', at: [1860, -795, -111], view: [-2158, 32851], harness: true, note: '35 units east of Button4 (1825,-795,-80), aimed at it: chain-plan.mjs face' },
     { op: 'frob', target: 'Button4' },
     { op: 'travel', to: '06_HongKong_VersaLife', label: 'leg4' },
@@ -106,7 +107,6 @@ export default {
     { op: 'frob', target: 'Keypad1', watch: ['Keypad1'] },
     { op: 'key', names: ['6', '5', '1', '2'], gap: 0.5, note: 'Keypad1 validCode 6512' },
     { op: 'wait', seconds: 3 },
-    { op: 'state', label: 'versalife-elevator', actor: 'DeusExMover2', fields: ['KeyNum', 'bLocked'] },
     { op: 'place', at: [36, 347, 465], view: [-2803, 65463], harness: true, note: '60 units west of Button8 (96,347,487), aimed at it: chain-plan.mjs face' },
     { op: 'frob', target: 'Button8' },
     { op: 'travel', to: '06_HongKong_MJ12lab', label: 'leg5' },
@@ -179,6 +179,8 @@ export default {
     { op: 'place', at: [1791, -585, -60], view: [-11546, 49112], harness: true, note: '40 units north of Keypad3 (1791,-625,-100), aimed at it: chain-plan.mjs face' },
     { op: 'frob', target: 'Keypad3', watch: ['Keypad3'] },
     { op: 'key', names: ['0', '6', '2', '8', '8'], gap: 0.5, note: 'Keypad3 validCode 06288' },
+    // (the elevators' doors the keypads open are not read: they close again by themselves, and the recapture's original read all three closed 3 s after the
+    // code where Play read them open; docs/stage-6-chains.md, a door with no stable state)
     { op: 'wait', seconds: 3 },
     { op: 'place', at: [1860, -795, -111], view: [-2158, 32851], harness: true, note: '35 units east of Button4 (1825,-795,-80), aimed at it: chain-plan.mjs face' },
     // the button the first trip pressed was filed with isPressed and its 0.5 s timer (buttonLitTime) pending; an actor in stasis (bStasis, not drawn for 5 s:
@@ -206,7 +208,6 @@ export default {
     { op: 'frob', target: 'Keypad0', watch: ['Keypad0'] },
     { op: 'key', names: ['5', '5', '6', '5', '5'], gap: 0.5, note: 'Keypad0 validCode 55655 (M07Briefing\'s note)' },
     { op: 'wait', seconds: 3 },
-    { op: 'state', label: 'lab-elevator', actor: 'DeusExMover53', fields: ['KeyNum', 'bLocked'] },
     { op: 'place', at: [-1333, 861, -79], view: [-2795, 49169], harness: true, note: '60 units north of Button44 (-1333,801,-57), aimed at it: chain-plan.mjs face' },
     { op: 'frob', target: 'Button44' },
     { op: 'travel', to: '06_HongKong_Storage', label: 'leg12' },

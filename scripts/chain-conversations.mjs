@@ -49,8 +49,30 @@ export async function randomAlternatives(a, b) {
 
 /** The first difference of two travel texts (normalized, the two time properties masked), except that a conversation's random-label speech may differ: a history event whose
  * Speech and soundID differ from the original's is accepted when both speeches are alternatives of one conversation (the game's random stream is not shared by the two runs). */
+/** Flags a mission script draws with FRand: their value and expiration are the draw's (two processes' random states differ, and a later conversation that
+ * resets them writes the default expiration), so only their presence is compared. The source of each draw is named. */
+export const RANDOM_FLAGS = Object.freeze({
+  gothatflower: 'Mission06.uc:259..280, FirstFrame places the market goth at an FRand spot',
+  gothatbutcher: 'Mission06.uc:259..280, FirstFrame places the market goth at an FRand spot',
+  gothatvase: 'Mission06.uc:259..280, FirstFrame places the market goth at an FRand spot',
+});
+/** A travel text's FlagBool blocks of RANDOM_FLAGS without their bValue and expiration lines. */
+function maskRandomFlags(lines) {
+  const out = [];
+  for (let i = 0; i < lines.length; i++) {
+    if (lines[i] !== '{') { out.push(lines[i]); continue; }
+    let end = i;
+    while (end < lines.length && lines[end] !== '}') end++;
+    const block = lines.slice(i, end + 1);
+    const named = block.find(line => line.startsWith('FlagName='))?.slice(9).toLowerCase();
+    out.push(...(named && RANDOM_FLAGS[named] ? block.filter(line => !/^(bValue|expiration)=/.test(line)) : block));
+    i = end;
+  }
+  return out;
+}
+
 export async function compareTravelTexts(expected, actual) {
-  const a = normalizeTravelText(expected, { times: true }).split('\n'), b = normalizeTravelText(actual, { times: true }).split('\n');
+  const a = maskRandomFlags(normalizeTravelText(expected, { times: true }).split('\n')), b = maskRandomFlags(normalizeTravelText(actual, { times: true }).split('\n'));
   let excused = 0;
   for (let i = 0; i < Math.max(a.length, b.length); i++) {
     if (a[i] === b[i]) continue;
