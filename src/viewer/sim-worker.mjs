@@ -140,7 +140,10 @@ async function handle(data) {
       // disposeAudio), so that batch reaches the worklet before any of the
       // next map's.
       const loadStart = performance.now();
-      host?.dispose?.(); host = null; loadId = data.id; audio.length = 0; pending = null;
+      // A travel arrival attaches to the script process of the level left (its classes and readiness are kept, as the original's process
+      // keeps them across LoadMap); any other load, or ?process=new, starts a new one (script-process.mjs, docs/class-graph-design.md).
+      const keepProcess = data.options?.travel?.arrival && data.options?.shareProcess !== false ? host?.scriptProcess ?? null : null;
+      host?.dispose?.(keepProcess); host = null; loadId = data.id; audio.length = 0; pending = null;
       // A loaded game's slot files the page read from its storage (travel.mjs `loadgame.fetch`) go into Save\Current before the level is read from there
       if (data.currentFiles) {
         const saves = (await import('../runtime/save-directory.mjs')).hostSaveDirectory();
@@ -151,7 +154,7 @@ async function handle(data) {
       const filed = restore ? (await import('./restore-asset.mjs')).restoredLevel((await import('../runtime/save-directory.mjs')).hostSaveDirectory(), restore) : null;
       const asset = filed ? filed.asset : await assets.get(data.map);
       const scene = data.options?.sceneLater ? sceneFor(data.id).promise.finally(() => scenes.delete(data.id)) : null;
-      host = await createSimHost(filed ? filed.map : decodeMap(asset.bytes), asset, assets, { ...data.options, scene, musicLibrary, restore: Boolean(filed),
+      host = await createSimHost(filed ? filed.map : decodeMap(asset.bytes), asset, assets, { ...data.options, scene, musicLibrary, restore: Boolean(filed), process: keepProcess,
         onAudioVoice: event => audio.push({ kind: 'voice', event: plainVoice(event) }),
         onProgress: message => send({ type: 'progress', message }) });
       const summary = host.actorSim?.summary;

@@ -11,6 +11,9 @@
  *
  *   node scripts/profile-map-load.mjs [--url http://127.0.0.1:5173]
  *     [--maps 01_NYC_UNATCOIsland,02_NYC_BatteryPark] [--sim worker|inline]
+ *     [--travel] (each --maps entry is reached by the console's `open <map>`, a travel: its level attaches to the script process of the
+ *       level left, src/runtime/script-process.mjs; without it each comes from the map list, a new process)
+ *     [--process new] (the page's ?process=new: a new script process for every level, travels included)
  *     [--profile] (a CPU profile of the page per load: with --sim inline it covers the simulation side too)
  *     [--tag name] [--size 1440x960] [--headed]
  *
@@ -23,7 +26,7 @@ import { debugUrl } from './page-url.mjs';
 const option=(name,fallback)=>{const i=process.argv.indexOf(`--${name}`);return i<0?fallback:process.argv[i+1];};
 const url=option('url','http://127.0.0.1:5173'),tag=option('tag','load'),sim=option('sim',null);
 const maps=(option('maps','01_NYC_UNATCOIsland')).split(',').filter(Boolean);
-const profiled=process.argv.includes('--profile');
+const profiled=process.argv.includes('--profile'),travel=process.argv.includes('--travel'),processMode=option('process',null);
 const [width,height]=option('size','1440x960').split('x').map(Number);
 const label=frame=>`${frame.functionName||'(anon)'} ${frame.url.split('/').at(-1).split('?')[0]}:${frame.lineNumber+1}`;
 
@@ -56,7 +59,7 @@ try{
       new MutationObserver(()=>window.__loadLog.push([performance.now(),node.textContent])).observe(node,{childList:true,characterData:true,subtree:true});};
     document.addEventListener('DOMContentLoaded',watch);
   });
-  const target=new URL(url);if(sim)target.searchParams.set('sim',sim);
+  const target=new URL(url);if(sim)target.searchParams.set('sim',sim);if(processMode)target.searchParams.set('process',processMode);
   const cdp=await page.context().newCDPSession(page);
   if(profiled){await cdp.send('Profiler.enable');await cdp.send('Profiler.setSamplingInterval',{interval:500});}
   const loads=[];
@@ -85,12 +88,14 @@ try{
     // a settled page before the next load
     await page.waitForTimeout(2000);
     if(profiled)await cdp.send('Profiler.start');
-    const start=await page.evaluate(name=>{const t=performance.now();const menu=document.getElementById('map');menu.value=name;
-      menu.dispatchEvent(new Event('change'));return t;},name);
+    const start=travel
+      ?await page.evaluate(async name=>{const t=performance.now();await window.deusExViewer.viewProbe({exec:[`open ${name}`]});return t;},name)
+      :await page.evaluate(name=>{const t=performance.now();const menu=document.getElementById('map');menu.value=name;
+        menu.dispatchEvent(new Event('change'));return t;},name);
     // a failed load leaves the previous map ready and says why on the loading screen: stop at that rather than the timeout
     await page.waitForFunction(name=>{const s=window.deusExViewer.status();
       return s.ready&&(s.map===name||!document.getElementById('gate').hidden);},name,{timeout:300000,polling:20});
     await finish(name,start);
   }
-  console.log(JSON.stringify({tag,url:target.href,loads,errors},null,1));
+  console.log(JSON.stringify({tag,url:target.href,travel,loads,errors},null,1));
 }finally{await browser.close();}

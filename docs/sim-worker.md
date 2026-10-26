@@ -181,6 +181,12 @@ host behavior.
   the worker with it.
 - `?sim=clone`: inline, with the snapshot passed through `structuredClone`,
   proving that it carries only plain data.
+- In every mode a travel arrival attaches to the script process of the level
+  left (`src/runtime/script-process.mjs`; [class graph
+  design](class-graph-design.md), migration step 3), so its classes and
+  readiness are kept. A load from the map list or a page load starts a new
+  process. `?process=new` starts a new one for every level, travels included,
+  which is the comparison side of the load-time measurements.
 - `?simVerify=1` (inline only): every frame, the page also reads the live
   runtime the way the drawing modules read it today and compares with the
   snapshot, and three's own culling records the set `onAfterRender` would

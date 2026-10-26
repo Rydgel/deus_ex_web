@@ -589,6 +589,8 @@ export class ScriptRuntime {
       },
     };
     shared.attach(this);
+    // A level after the first in its process: what the travel carried must be what the kept classes hold.
+    this.carriedDefaultCheck=shared.levels&&this.carriedDefaults.size?this.checkCarriedDefaults():null;
   }
   async field(record,ancestry=[]) {
     record.metadata??=readPropertyMetadata(record.asset,record.index);
@@ -3296,6 +3298,26 @@ export class ScriptRuntime {
     }
     for(const [cls,fields] of this.classDefaultWrites)for(const field of fields)entries.set(keyOf(cls.record.key,field.key),current(cls,field));
     return [...entries.values()];
+  }
+  /** The carried defaults' cross-check (docs/class-graph-design.md "Carried defaults"): a level attached to the process of the level
+   * left holds that level's classes, Defaults included, so each default the travel carried for a class linked here must equal the
+   * class's own, before this level writes any. Run at attach; {compared, mismatches: [{cls, field, carried, held}]}. */
+  checkCarriedDefaults() {
+    const byKey=new Map([...this.linkedClasses].map(cls=>[cls.record.key,cls])),mismatches=[];
+    const text=value=>JSON.stringify(value,(key,item)=>item&&typeof item==='object'&&'kind' in item?`@${item.key}`:item);
+    let compared=0;
+    for(const [key,fields] of this.carriedDefaults){
+      const cls=byKey.get(key);
+      if(!cls)continue;
+      for(const [fieldKey,values] of fields){
+        const field=cls.propertyLink.find(f=>f.key===fieldKey);
+        if(!field){mismatches.push({cls:key,field:fieldKey,carried:values,held:'(not a property)'});continue;}
+        const value=this.defaultValue(cls,field),held=field.metadata.arrayDim>1?value.map((item,index)=>[index,item]):[[0,value]];
+        compared++;
+        if(text(held)!==text(values))mismatches.push({cls:key,field:fieldKey,carried:values,held:text(held)});
+      }
+    }
+    return {compared,mismatches};
   }
   structReference(ref,member) {
     const value=refValue(ref),key=member.key.slice(0,member.key.lastIndexOf('.'));

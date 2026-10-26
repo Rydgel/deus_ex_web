@@ -161,6 +161,15 @@ export class ScriptResourceRegistry {
     this.nativeClasses = new Map();
   }
 
+  /** A new level attaches to the process (ScriptProcess.attach): the records of the level left's objects (the conversation objects it
+   * attached; their identities were the level's, script-objects.mjs exportScope) are forgotten, so the next level materializes its own
+   * and the level left is not kept alive. `owns(identity)` names the process's identities. */
+  forgetLevel(owns) {
+    const level = record => record?.object != null && typeof record.object === 'object' && !owns(record.object);
+    for (const [key, record] of this.resources) if (level(record)) { this.resources.delete(key); this.pending.delete(key); }
+    for (const [key, target] of this.imports) if (level(target)) this.imports.delete(key);
+  }
+
   /** Resolve a package export or an import reference; zero is null. */
   async resolve(assetOrName, index) {
     const asset = await this.#asset(assetOrName);

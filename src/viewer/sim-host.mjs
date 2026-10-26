@@ -26,7 +26,7 @@
  * event queue (sim-session.mjs events). */
 import { createGame } from './game.mjs';
 import { primeSaveDirectoryHost } from './save-directory-host.mjs';
-import { handleLimit, releaseHandleRange } from '../runtime/script-object-handles.mjs';
+import { handleLimit, releaseHandleRange, releaseHandlesWhere } from '../runtime/script-object-handles.mjs';
 import { createSimSession } from './sim-session.mjs';
 import { createActorMeshSim } from './actor-mesh-sim.mjs';
 import { createGpuMeshLayout } from './gpu-mesh-layout.mjs';
@@ -48,7 +48,7 @@ const hostStarts = [];
 
 export async function createSimHost(map, asset, assets, { randomSeed, subtitles, fullscreen = null, scene = null, stampScene, panZones, childFrames,
   gpu = null, weaponGpu = null, meshBackend = null, meshLod = null, weapons = null, weaponMirrors = null, weaponOrder = null, musicLibrary = null, travel = null, restore = false, onConversationSpeech = null, onAudioVoice = null,
-  onProgress = () => {} }) {
+  onProgress = () => {}, process = null }) {
   const events = [], notes = [], hostIndex = hostStarts.push(handleLimit()) - 1;
   // The load's steps on this thread's clock (performance.now()), for the page's load timeline (main.mjs loadTimings).
   const loadMarks = [['host', performance.now()]], loadMark = name => loadMarks.push([name, performance.now()]);
@@ -56,7 +56,7 @@ export async function createSimHost(map, asset, assets, { randomSeed, subtitles,
   // GetSaveFreeSpace is synchronous: the browser's storage estimate is read here, once per session (save-directory-host.mjs)
   await primeSaveDirectoryHost();
   try {
-    game = await createGame(map, asset, assets, { presentation: true, randomSeed, subtitles, fullscreen, musicLibrary, travel, restore: restore || null,
+    game = await createGame(map, asset, assets, { presentation: true, randomSeed, subtitles, fullscreen, musicLibrary, travel, restore: restore || null, process,
       onLightingChanged: changes => events.push({ kind: 'lighting', changes }),
       onConversationSpeech: event => onConversationSpeech?.(event), onAudioVoice: event => onAudioVoice?.(event) });
   } catch (error) { notes.push(`Play mode unavailable: ${error.message}`); return { game: null, notes, events, loadMarks }; }
@@ -218,14 +218,20 @@ export async function createSimHost(map, asset, assets, { randomSeed, subtitles,
   let audioDisposed = false;
   const disposeAudio = () => { if (audioDisposed) return; audioDisposed = true; runtime.audio?.dispose?.(); };
   return { game, session, actorSim, weaponSim, meshLighting, lipSync, notes, events, hudTextures, disposeAudio, loadMarks,
+    // The script process this level's runtime attached to: a travel from here hands it to the next level (sim-worker.mjs, main.mjs).
+    scriptProcess: runtime.process,
     // The current BSP occlusion (validation: scripts/validate-detail-play-sim.mjs runs a reference pass over it).
     occlusion: () => occlusionNow,
     // The next map's host replaces this one: nothing runs this runtime again,
     // so its identities leave the process-wide handle table, which would
     // otherwise keep the whole runtime alive (script-object-handles.mjs).
-    dispose() {
+    // `keepProcess`, the script process the next level attaches to (a travel
+    // arrival's: script-process.mjs), keeps its identities and their handles.
+    dispose(keepProcess = null) {
       disposeAudio(); session.dispose(); actorSim?.dispose();
-      releaseHandleRange(hostStarts[hostIndex], hostStarts[hostIndex + 1] ?? handleLimit());
+      releaseHandleRange(hostStarts[hostIndex], hostStarts[hostIndex + 1] ?? handleLimit(), keepProcess ? identity => keepProcess.owns(identity) : null);
+      // A process no level attaches to any more: the identities it kept through earlier levels go too.
+      if (keepProcess !== runtime.process) releaseHandlesWhere(identity => runtime.process.owns(identity));
       // The image arena's views of the native heap are closures over this
       // runtime; the arena itself stays reachable from the process-wide
       // FinalizationRegistry that returns image ranges (script-runtime.mjs

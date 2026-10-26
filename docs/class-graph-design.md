@@ -549,6 +549,49 @@ stay equal for single-map sessions.
    * handles of process identities exempt from range release.
 
    No behavior change.
+
+   *Done 2026-10-26* (`src/runtime/script-process.mjs`, `script-objects.mjs`).
+   * **`ScriptProcess`** holds:
+     * the package identities;
+     * the readiness tables (linked bytecode, prepared functions and states,
+       struct fields and layouts, context results);
+     * the classes and linked classes, Engine.Actor's class, the class loader
+       and the resource registry.
+
+     A runtime built without one makes its own, so a single map is
+     unchanged. The runtime's fields are the process's own Maps and Sets: no
+     accessor sits on a hot path.
+   * **The routing rule** (`exportScope`):
+     * every export of a level package (`.dx`, `.dxs`, `.unr`) is the
+       level's;
+     * so are the objects a level attaches: DeusExConText's `Con*` objects,
+       the ConAudioLists, DeusExText's ExtStrings;
+     * metadata and resources are the process's;
+     * any other kind throws.
+
+     A host's `bindIdentity` may bind only a level export. On a cold Training
+     load: 31,050 process identities, and 6,893 level ones (338 of the map,
+     6,555 conversation objects).
+   * **Readiness keyed by export.** Every readiness table is keyed by the
+     identity's `key`, `${package}.${export path}`, and lives in the process.
+     The readiness on an identity (`record.function`, `record.metadata`)
+     stays there, since process identities persist per export. Carrying it
+     to a new generation's identity belongs to step 4, which defines
+     generations.
+   * **Class images are per runtime** (`runtime.classImages`). The Rust
+     interpreter reads an image only from its own arena.
+   * **The class loader** mints a level's identities in the attached
+     runtime's table. It caches them per level (`levelIdentities`, reset by
+     `attachLevel`), and the process's for the process's life.
+   * **Handles.** `releaseHandleRange` takes a keep predicate, and
+     `releaseHandlesWhere` frees an abandoned process's handles.
+   * **Gate.** Unchanged behavior:
+     * bench-sim digests are unchanged (03_NYC_747 `0750ca718aa7c059`,
+       01_NYC_UNATCOIsland `52595f00465194dd`);
+     * the unit tests pass;
+     * so do the class loader, dynamic load, LoadMap, resource, Player start,
+       load graph, lookup and travel restore validators;
+     * `scripts/validate-script-process.mjs` checks the split.
 3. **`ScriptProcess`.**
    * The graph, loader, package identities, readiness and GConfig move into
      it, and a new runtime per level attaches to it.
@@ -559,6 +602,76 @@ stay equal for single-map sessions.
    The second map onward skips re-linking and the readiness pass. Gate:
    travel validators, the Stage 6 chains, and the carried-defaults
    cross-check.
+
+   *Done 2026-10-26.* A travel arrival attaches to the process of the level
+   left. That covers an `open`, a LocalTravel, a level restored from `.dxs`
+   and a loaded game.
+   * **Where:**
+     * the worker (`sim-worker.mjs`);
+     * the page in inline mode (`main.mjs`);
+     * the headless harness (`census-stage5-session.mjs` `openSession`).
+   * **A new process instead:** the map list, a page load, `?process=new`,
+     or `DX_SCRIPT_PROCESS=new` in the harness.
+   * **`ScriptProcess.attach(runtime)`** hands the process to the new level:
+     * the class loader mints in the level's table;
+     * the class defaults the arrival carried apply to classes loaded from
+       now on;
+     * the resource registry resolves through the new level, takes its
+       object-index provider, and forgets the level left's records
+       (`forgetLevel`: DeusExConText's objects).
+   * **Disposing a level** releases its handles except the process's.
+   * **Inline mode keeps building before it disposes.** Each host's handle
+     range starts when the host starts, so the new level's handles never fall
+     in the old range, and the level left has stopped ticking. A failed load
+     re-attaches the level left.
+   * **The carried-defaults cross-check runs at attach**
+     (`checkCarriedDefaults`): every default the travel carried for a class
+     the process kept must equal the class's own.
+   * **Measured,** headless (`validate-script-process`, one process over
+     gc2's DX → Training → Island → Training):
+     * the arrivals link 32, 72 and 0 classes (cold: 910, 967, 910);
+     * every DX class keeps its class object, Defaults and counter;
+     * the level left's identities all lose their handles;
+     * no process identity is attached as an instance;
+     * the carried defaults agree (4 and 12 compared);
+     * each level runs 120 frames.
+   * **Opening times,** two runs each, a new process per level → shared:
+     * Training: 5.1–5.8 s → 1.1–1.2 s;
+     * the Island: 6.1–7.6 s → 2.6–2.9 s;
+     * Training again: 4.0–5.5 s → 0.9–1.2 s;
+     * process RSS: 2.4 GB → 1.4 GB.
+   * **In Chromium.** `scripts/profile-map-load.mjs --travel` reaches each
+     map by the console's `open`, from 00_Training to the Island and back to
+     Training. Three interleaved runs per side in worker mode, wall time to
+     the first drawn frame, `?process=new` → shared (medians):
+     * the Island: 6.9 s → 4.1 s, the worker's `createGame` 4.9 s → 2.2 s;
+     * Training: 4.1 s → 1.5 s, `createGame` 3.3 s → 0.75 s.
+
+     Inline mode, one run per side: the Island 8.0 → 5.1 s, Training 5.3 →
+     2.5 s. No page or runtime error on either side.
+   * **Memory over six Training ↔ Island round trips** in one headless
+     process, heap after GC at each Training arrival:
+     * shared: 747 to 761 MB. Handles (8,065), classes (990), identities,
+       load edges, tracked objects and the registry's records stay constant.
+       The residue is about 2 MB per round trip; step 4's gate (ten repeats
+       of gc2's sequence, flat memory) covers it.
+     * a new process per level: 491 to 496 MB;
+     * the commit before step 1 (`db1452dc`): 467 to 473 MB.
+   * **What it changes, until step 4 collects.** The original collects a
+     level's own classes at the next LoadMap. Play now keeps every class
+     linked in the process. So:
+     * a level-only class keeps its Defaults (gc2's LightSwitch SET survives
+       the round trip; the original reverts it) and its `ClassUnique` counter;
+     * the kept ~1,000 classes now keep theirs, as in the original (before,
+       every counter restarted at 0);
+     * spawned names in a multi-map session move: Stage 5 and 6 pair actors
+       by creation rank;
+     * name lookups (1c) see the level-only classes of the levels left;
+     * DeusExConText's linker and records stay in the graph (the original
+       unloads the package at each collection that leaves no conversation
+       object). Each level still gets its own conversation identities.
+     * A resource keeps the global index the first level's object-index
+       provider gave it. Sound channel ids compare only for equality.
 4. **The collection over classes and resources** at LoadMap's point, for map
    changes and Player start.
    * Recover the remaining collector serializers.
@@ -584,6 +697,11 @@ Only the new level's 28 to 95 classes load. Estimate, not a measurement:
 the Island's 7.1 s to the first frame would fall to roughly 3 to 4 s.
 Profile each step with `scripts/profile-map-load.mjs` and interleaved A/B
 medians.
+
+*Measured after step 3* (Chromium, worker mode, a travel by `open`): the
+Island 6.9 → 4.1 s and Training 4.1 → 1.5 s to the first drawn frame
+(migration step 3 above). Player start's second startup is still in them
+(step 5).
 
 ## Open
 

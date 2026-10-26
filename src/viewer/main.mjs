@@ -891,6 +891,10 @@ async function loadMap(name, { travel = null, currentFiles = null } = {}) {
   busy('Loading original map', `Reading ${name}…`);
   loadTimeline = { map: name, sim: simMode, start: performance.now(), marks: [], simMarks: null, firstDraw: null };
   let nextWorld, nextHost = null, nextGame = null, nextNpcPreview = null, nextGpuMesh = null, nextSim = null, nextWeaponDraw = null, nextWeaponGpu = null, overlapped = null;
+  // A travel arrival attaches to the script process of the level left (script-process.mjs): inline here, in the worker there (sim-worker.mjs).
+  // ?process=new starts a new one for every level, as a load from the map list does.
+  const shareProcess = new URLSearchParams(location.search).get('process') !== 'new';
+  const keepProcess = !simClient && travel && shareProcess ? simHost?.scriptProcess ?? null : null;
   try {
     // A level filed in Save\Current (travel.mjs `restore`: a loaded game's, or one travel left) is drawn from that file, the package the simulation
     // loads (sim-worker.mjs), not from the map's .dx: the two number their objects differently, and the simulation's lighting changes name lights
@@ -915,7 +919,7 @@ async function loadMap(name, { travel = null, currentFiles = null } = {}) {
       // ?weaponMirrors=0: no weapon in mirror child frames (on by default: compared with the original, docs/weapon-attachment.md "Mirrors")
       weaponMirrors: params.get('weaponMirrors'),
       // ?weaponOrder=late: each weapon is lit after all of its pawn's frames (the order before the interleaving; docs/weapon-attachment.md)
-      weaponOrder: params.get('weaponOrder') };
+      weaponOrder: params.get('weaponOrder'), shareProcess };
     if (simClient) { overlapped = simClient.loadOverlapped(name, baseOptions, currentFiles); overlapped.reply.catch(() => {}); }
     nextWorld = await createWorld(nextMap, asset, assets, (message, done, total) => {
       $('gate-message').textContent = message; $('progress').max = total; $('progress').value = done;
@@ -946,7 +950,7 @@ async function loadMap(name, { travel = null, currentFiles = null } = {}) {
     if (!simClient) simHost?.disposeAudio?.();
     if (overlapped) { overlapped.scene(scenePart); overlapped.scene = null; }
     nextHost = simClient ? remoteHost(await overlapped.reply) : await createSimHost(nextMap, asset, assets, { ...hostOptions,
-      musicLibrary: pageMusicLibrary,
+      musicLibrary: pageMusicLibrary, process: keepProcess,
       onAudioVoice: event => { void galaxyVoice(event); },
       onProgress: message => { $('gate-message').textContent = message; } });
     loadMark('host');
@@ -1028,7 +1032,7 @@ async function loadMap(name, { travel = null, currentFiles = null } = {}) {
     detailScene=nextDetailScene;
     if(detailScene)scene.add(detailScene.root);
     hudRenderer?.dispose();hudRenderer=nextHud;
-    simHost?.dispose();simHost=nextHost;meshLighting=nextHost.meshLighting??null;weaponDraw?.dispose();weaponGpu?.dispose();simStatus=null;simAnswers={keys:{},pointerGrab:false};simLastPost=null;
+    simHost?.dispose(keepProcess);simHost=nextHost;meshLighting=nextHost.meshLighting??null;weaponDraw?.dispose();weaponGpu?.dispose();simStatus=null;simAnswers={keys:{},pointerGrab:false};simLastPost=null;
     weaponDraw=nextWeaponDraw;weaponGpu=nextWeaponGpu;weaponSummary=null;
     if(npcPreview){scene.remove(npcPreview.root);npcPreview.dispose();npcPreview=null;}
     gpuMesh?.dispose();gpuMesh=nextGpuMesh;
@@ -1079,7 +1083,10 @@ async function loadMap(name, { travel = null, currentFiles = null } = {}) {
   } catch (error) {
     // a load the worker started waits for the world's part: none comes
     overlapped?.scene?.(null);
-    if(nextHost&&nextHost!==simHost)nextHost.dispose?.();
+    if(nextHost&&nextHost!==simHost)nextHost.dispose?.(keepProcess);
+    // The level left goes on: the process it shared is its own again (the failed level's runtime may have attached to it).
+    const left=simHost?.game?.doors.scriptRuntime.runtime;
+    if(keepProcess&&left&&keepProcess.runtime!==left)keepProcess.attach(left);
     if(nextWeaponDraw&&nextWeaponDraw!==weaponDraw)nextWeaponDraw.dispose();
     if(nextWeaponGpu&&nextWeaponGpu!==weaponGpu)nextWeaponGpu.dispose();
     if(nextNpcPreview&&nextNpcPreview!==npcPreview)nextNpcPreview.dispose();

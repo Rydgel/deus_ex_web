@@ -450,6 +450,8 @@ function internLevelName(name){const key=String(name).toLowerCase();if(!levelPac
 export async function createScriptDoors({
   assets, asset, movers = [], playerActor, playerScene, playerController, level, callbacks = {}, rng, queries, zoneAt, onLightingChanged = null,
   nativeHud = false, musicLibrary = null, travel = null, saveDirectory = null, restore = null, modelIndex = null,
+  // The script process this level attaches to (script-process.mjs): a travel arrival's is the level left's; none starts a new one.
+  process = null,
 } = {}) {
   if (!assets?.get) throw new TypeError('createScriptDoors requires an AssetStore');
   if (!level || typeof level !== 'object') throw new TypeError('createScriptDoors requires the linked Level object');
@@ -519,7 +521,7 @@ export async function createScriptDoors({
   const logLine=(tag,text)=>{engineLog.push(`${tag}: ${text}`);if(engineLog.length>8192)engineLog.splice(0,4096);};
   // The class defaults the process kept from the level the travel left (travel.mjs `classDefaults`; docs/travel.md "Class defaults across
   // a travel"): every class this level serializes starts from them, before LoadMap constructs the map's exports and Login spawns the player.
-  const runtime = new ScriptRuntime(assets, { native: nativeCall, rng, levelFor: () => level, nativeClassLoading: true,
+  const runtime = new ScriptRuntime(assets, { native: nativeCall, rng, levelFor: () => level, nativeClassLoading: true, process,
     classDefaults: travel?.arrival?.classDefaults ?? null,
     conversationObjects:()=>level.actors.filter(Boolean),boundaryNatives: [264, 265],
     logDevice:event=>{scriptLog.push(event);if(scriptLog.length>512)scriptLog.shift();logLine(event.tag,event.text);} });

@@ -41,7 +41,7 @@ export class ClientTravelBoundary extends Error {
 
 export async function createGame(map, asset, assets, { randomSeed = Math.floor(Date.now()/1000) >>> 0,
   onLightingChanged = null, onDataLinkTransmission = null, onConversationSpeech = null, onAudioVoice = null, presentation = false,
-  subtitles = null, musicLibrary = null, travel = null, saveDirectory = null, fullscreen = null, restore = null } = {}) {
+  subtitles = null, musicLibrary = null, travel = null, saveDirectory = null, fullscreen = null, restore = null, process = null } = {}) {
   if(onDataLinkTransmission!=null&&typeof onDataLinkTransmission!=='function')
     throw new TypeError('createGame onDataLinkTransmission must be a function');
   const defaults = new ClassDefaults(assets), collision = new CollisionWorld(map.model), notes = [];
@@ -213,7 +213,7 @@ export async function createGame(map, asset, assets, { randomSeed = Math.floor(D
   doors.scriptRuntime=await createScriptDoors({assets,asset,movers:collision.movers,
     playerActor:player.collisionActor,playerScene,playerController:player,level:playerScene.level,callbacks:collision.doorCallbacks,rng:random,
     nativeHud:presentation,queries:collision.queries, zoneAt: p => zones[pointZone(map.model, p)] ?? zoneDefault, onLightingChanged,
-    musicLibrary,travel,saveDirectory,modelIndex:map.level.model,restore:savedPlayer?{...restore,player:savedPlayer}:null});
+    musicLibrary,travel,saveDirectory,modelIndex:map.level.model,restore:savedPlayer?{...restore,player:savedPlayer}:null,process});
   const levelTime=doors.scriptRuntime.runtime.namedReference(playerScene.level.actors[0],'TimeSeconds');
   // LoadMap 0x1038dc59: a saved level continues its clock, ULevel.TimeSeconds (a double) = LevelInfo.TimeSeconds (a float).
   if (savedPlayer) timeSeconds = levelTime.get();

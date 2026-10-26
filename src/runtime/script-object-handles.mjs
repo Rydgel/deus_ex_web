@@ -81,6 +81,23 @@ export function releaseHandleRange(first, end, keep = null) {
   return released;
 }
 
+/** End every live handle whose identity `owned(identity)` names, wherever it
+ * was allocated: a script process that no level attaches to any more
+ * (script-process.mjs) kept its identities through earlier levels' releases.
+ * Returns the number released. */
+export function releaseHandlesWhere(owned) {
+  let released = 0;
+  for (let handle = 1; handle < identities.length; handle++) {
+    const identity = identities[handle];
+    if (identity === null || !owned(identity)) continue;
+    handles.delete(identity);
+    identities[handle] = null;
+    for (const listener of releaseListeners) listener(handle);
+    released++;
+  }
+  return released;
+}
+
 /** One past the highest handle allocated so far. */
 export const handleLimit = () => identities.length;
 

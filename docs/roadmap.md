@@ -1248,7 +1248,11 @@ Its first step's measurement passes against the frozen re-capture gc2 (`validate
 load graph now tracks that set (`src/runtime/original-loaded.mjs`). Name lookups (StaticExec's SET and GET, a `class<...>`
 console parameter) see only the classes it holds, as the original's StaticFindObject does
 (`validate-original-lookups`, against the capture gc3). A SET on a class Play linked only for its own readiness now
-prints "Unrecognized class", and a SET on a loaded class with no live object writes its Defaults.
+prints "Unrecognized class", and a SET on a loaded class with no live object writes its Defaults. A travel now
+attaches the next level to the same script process (`src/runtime/script-process.mjs`): kept classes are not loaded or
+linked again, and the readiness pass is not repeated. In Chromium the Island's arrival fell from 6.9 to 4.1 s and
+Training's from 4.1 to 1.5 s. Until the LoadMap collection (the design's step 4), a level's own classes stay loaded
+after it is left, where the original collects them.
 
 Done when declared browser/performance targets pass repeatable tests, long sessions
 and repeated map changes remain stable, and failures offer useful recovery paths.

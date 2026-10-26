@@ -5,9 +5,20 @@ import {Undriven, near, PI, simulatedMsAdvance} from './census-stage5-drivers.mj
 
 import {actorRenderFeedback} from '../src/viewer/actor-render-feedback.mjs';
 
-export async function openSession(map, assets, {travel = null, saveDirectory = null, frameSeconds = 1 / 60, paintEvery = 1} = {}) {
+// The script process of the session opened last, and how many sessions of each process are open (not disposed).
+let lastProcess = null;
+const openSessions = new WeakMap();
+
+/** `process`: the script process the level attaches to (src/runtime/script-process.mjs). By default a travel arrival attaches to the
+ * process of the session opened last, as the page's map host does (sim-worker.mjs, main.mjs), and any other open starts a new one, a
+ * new run of the original; `process: null`, or DX_SCRIPT_PROCESS=new in the environment, always starts a new one. A process no session
+ * uses any more loses its identities' handles when a session opens on another. */
+export async function openSession(map, assets, {travel = null, saveDirectory = null, frameSeconds = 1 / 60, paintEvery = 1, process: given} = {}) {
   const {decodeMap} = await import('../src/unreal/map.mjs');
-  const {handleLimit, releaseHandleRange} = await import('../src/runtime/script-object-handles.mjs');
+  const {handleLimit, releaseHandleRange, releaseHandlesWhere} = await import('../src/runtime/script-object-handles.mjs');
+  const share = globalThis.process?.env?.DX_SCRIPT_PROCESS !== 'new';
+  const process = given !== undefined ? given : travel?.arrival && share ? lastProcess : null;
+  if (lastProcess && process !== lastProcess && !openSessions.get(lastProcess)) releaseHandlesWhere(identity => lastProcess.owns(identity));
   const handleStart = handleLimit();
   const {createGame} = await import('../src/viewer/game.mjs');
   const {createSimSession} = await import('../src/viewer/sim-session.mjs');
@@ -17,9 +28,11 @@ export async function openSession(map, assets, {travel = null, saveDirectory = n
   const filed = restore ? (await import('../src/viewer/restore-asset.mjs')).restoredLevel(saveDirectory, restore) : null;
   const asset = filed ? filed.asset : await assets.get(map);
   const game = await createGame(filed ? filed.map : decodeMap(asset.bytes), asset, assets, {randomSeed: 1, presentation: true, ...(travel ? {travel} : {}),
-    ...(saveDirectory ? {saveDirectory} : {}), ...(filed ? {restore: true} : {})});
+    ...(saveDirectory ? {saveDirectory} : {}), ...(filed ? {restore: true} : {}), ...(process ? {process} : {})});
   const sim = createSimSession(game, {assets});
   const runtime = game.doors.scriptRuntime.runtime;
+  lastProcess = runtime.process;
+  openSessions.set(runtime.process, (openSessions.get(runtime.process) ?? 0) + 1);
   const player = () => game.player.collisionActor;
   const level = () => runtime.levelFor(player());
   const fixture = createPlayerInputFixture(game, {});
@@ -177,13 +190,17 @@ export async function openSession(map, assets, {travel = null, saveDirectory = n
   let used = false;
   return {
     c,
+    /** The script process the level's runtime attached to: a travel arrival's session passes it on (openSession `process`). */
+    process: runtime.process,
     /** The session is replaced and runs no more: what the page's map host does when the next map's host replaces it (sim-host.mjs dispose), so that a process
      * that opens many sessions keeps one: the audio and the simulation session go, its identities leave the process-wide handle table (the range from its start
      * to `end`, the next session's start, else the current limit) and the image arena's listeners, which a process-wide FinalizationRegistry holds, are dropped.
-     * Without it every dropped session stays alive (about 425 MB each for 02_NYC_Street). */
+     * Without it every dropped session stays alive (about 425 MB each for 02_NYC_Street). The script process's identities keep their handles: a
+     * travel arrival may attach to it (openSession `process`); the next session that does not releases them. */
     dispose(end = handleLimit()) {
       runtime.audio?.dispose?.(); sim.dispose();
-      releaseHandleRange(handleStart, end);
+      releaseHandleRange(handleStart, end, identity => runtime.process.owns(identity));
+      openSessions.set(runtime.process, openSessions.get(runtime.process) - 1);
       runtime.arena.listeners.length = 0;
     },
     async run(id, driver) {

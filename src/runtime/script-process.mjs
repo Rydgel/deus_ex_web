@@ -35,8 +35,10 @@ export class ScriptProcess {
     this.actorClass = null;
     this.classLoader = null;
     this.resources = null;
-    // The level runtime attached now (attach): the level the class loader's per-level services report to.
+    // The level runtime attached now (attach): the level the class loader's per-level services report to; and how many levels attached
+    // after the first.
     this.runtime = null;
+    this.levels = 0;
   }
   /** Whether `identity` is one of this process's (it survives the level that minted it). */
   owns(identity) { return identity !== null && typeof identity === 'object' && this.identities.has(identity); }
@@ -45,8 +47,18 @@ export class ScriptProcess {
   /** `runtime` is the level now: the class loader mints its level identities in that runtime's table, the resource registry resolves
    * through it, and per-level load diagnostics go to it. */
   attach(runtime) {
+    const previous = this.runtime;
     this.runtime = runtime;
-    this.classLoader?.attachLevel(runtime.objects);
-    if (this.resources) { this.resources.objects = runtime.objects; this.resources.indexProvider = runtime.originalObjectIndex; }
+    if (this.classLoader) {
+      this.classLoader.attachLevel(runtime.objects);
+      // The class defaults the arrival carried apply to the classes this level loads for the first time (the kept ones hold them already).
+      this.classLoader.carriedDefaults = runtime.carriedDefaults;
+    }
+    if (this.resources) {
+      this.resources.objects = runtime.objects;
+      this.resources.indexProvider = runtime.originalObjectIndex;
+      if (previous && previous !== runtime) this.resources.forgetLevel(identity => this.owns(identity));
+    }
+    if (previous && previous !== runtime) this.levels++;
   }
 }

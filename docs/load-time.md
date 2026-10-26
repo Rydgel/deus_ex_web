@@ -91,6 +91,19 @@ come from the capture session's own earlier loads.
   -script-linker-lazy-loader, -script-scripted-actor-construction,
   -weapon-construction and -class-default-travel.
 
+* 2026-10-26: classes, readiness and the class loader are kept across a
+  travel (the script process, [class graph design](class-graph-design.md),
+  migration steps 2 and 3). `profile-map-load.mjs --travel` reaches each map
+  by the console's `open`. In Chromium's worker mode, three interleaved runs
+  per side, wall time to the first drawn frame, `?process=new` → shared
+  (medians):
+  * the Island: 6.9 → 4.1 s; the worker's `createGame` 4.9 → 2.2 s;
+  * Training: 4.1 → 1.5 s; `createGame` 3.3 → 0.75 s.
+
+  Inline mode: the Island 8.0 → 5.1 s, Training 5.3 → 2.5 s (one run per
+  side). A load from the map list still starts a new process, so its times
+  are those of the measurements above.
+
 ## Open
 
 * **Keep loaded classes across a map change**, as the original's process
