@@ -191,7 +191,7 @@ export class PreparedDynamicLoadGraph{
     for(let index=0;index<asset.pkg.exports.length;index++){
       const entry=asset.pkg.exports[index];
       linker.exports.push({classIndex:entry.classIndex,outerIndex:entry.outer,
-        nameIndex:this.nameIndex(entry.name),object:this.objects.objects.get(
+        nameIndex:this.nameIndex(entry.name),object:this.objects.lookup(
           `${asset.name}.${entry.path}`.toLowerCase())??null,nextHash:-1});
     }
     // FindExportIndex's recovered hash depends on the referenced class FName

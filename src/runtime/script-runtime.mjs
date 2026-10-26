@@ -98,6 +98,7 @@ import { addPawn, removePawn } from './pawn-list.mjs';
 import { importText } from './config-text.mjs';
 import { importClassText } from './script-class-import-text.mjs';
 import { UnmodelledClassLookup } from './original-loaded.mjs';
+import { ScriptProcess } from './script-process.mjs';
 import { setActorZone } from './zone.mjs';
 import { prepareContextResults, zeroContextResult } from './script-context-results.mjs';
 import { cleanupScriptReferences, cleanupLevelDestroyed, cleanupSites, cleanupFields, cleanupImageSites } from './script-cleanup.mjs';
@@ -316,8 +317,6 @@ const localReference=(locals,field)=>{
   if(!locals.has(field.key))throw new Error(`Local is outside the function: ${field.key}`);
   return propertyReference(field,()=>locals.get(field.key),value=>locals.set(field.key,value));
 };
-// Stage 1d: each class's default image, rebuilt when a class default changes.
-const classImages=new WeakMap();
 // CleanupDestroyed's reference pass over an instance's image, per class
 // cells: the pointer sites in play's visit order (script-cleanup.mjs
 // cleanupSites) and their image offsets; false where a top-level field it
@@ -381,8 +380,13 @@ const SOUND_LEVEL_FIELDS=new Set(['XLevel','Level','Actors','PawnList','nextPawn
   'DemoRecDriver','Model','Engine','Client','Viewports','ServerConnection','Actor']);
 
 export class ScriptRuntime {
-  constructor(assets,{native,warning,levelFor,actorLifecycle,rng,nameServices,conversationObjects,conversationLifecycle,windowLifecycle,logDevice,relocation,nativeClassLoading=false,boundaryNatives=[],boundaryFunctions=[],classDefaults=null}={}) {
+  constructor(assets,{native,warning,levelFor,actorLifecycle,rng,nameServices,conversationObjects,conversationLifecycle,windowLifecycle,logDevice,relocation,nativeClassLoading=false,boundaryNatives=[],boundaryFunctions=[],classDefaults=null,process=null}={}) {
     this.instanceKey=Symbol('ScriptRuntime instance');this.classIsACache=new WeakMap();this.arena=new ObjectArena();
+    // The original's process state that outlives this level (script-process.mjs): the package identities, readiness, the classes and
+    // the class loader. A runtime built without one has a process of its own.
+    const shared=this.process=process??new ScriptProcess(assets);
+    // Each runtime builds its classes' default images in its own arena: the Rust interpreter reads an image only from its arena.
+    this.classImages=new WeakMap();
     // The class defaults the original process holds from the levels before this one (a travel's `classDefaults`: classDefaultsForTravel),
     // class key -> field key -> [[index, value]], applied as each class is serialized (script-class-loader.mjs applyCarriedDefaults); and the
     // (class, field) pairs whose default this level wrote (classDefaultReference), which the next travel carries.
@@ -393,12 +397,13 @@ export class ScriptRuntime {
     }
     this.classDefaultWrites=new Map();
     this.lastLinkedReceiver=null;this.lastLinkedInstance=undefined;
-    this.nameSpelling=assets?.nameSpelling??null;this.objects=new ScriptObjects(assets);this.classes=new Map();this.functions=new Map();
+    this.nameSpelling=assets?.nameSpelling??null;this.objects=new ScriptObjects(assets,shared);this.classes=shared.classes;this.functions=shared.functions;
     // GLazyLoad for a client launch (docs/script-font-load.md). The mesh
     // archive keeps Play's separately documented deferred policy below.
     this.lazyLoad=CLIENT_LAZY_LOAD;this.loadLifecycle=[];
-    this.classLoader=nativeClassLoading?new ScriptClassLoader({assets,objects:this.objects,
-      resources:()=>this.resourceRegistry(),carriedDefaults:this.carriedDefaults,
+    // The class loader is the process's; its services reach the level attached now (ScriptProcess.attach).
+    this.classLoader=nativeClassLoading?(shared.classLoader??=new ScriptClassLoader({assets,objects:this.objects,
+      resources:()=>shared.runtime.resourceRegistry(),carriedDefaults:this.carriedDefaults,
       // Retain Play's explicit deferred mesh policy on the shared archive.
       meshLoadServices:{getLazyLoad:()=>1},
       // Texture/Palette/Sound/Font constructors and serializers. The clock is
@@ -406,17 +411,17 @@ export class ScriptRuntime {
       // TextureLODSet from the installed WindowsClient config.
       resourceServices:{
         seconds:()=>hostNow()/1000,
-        getLazyLoad:()=>this.lazyLoad,setLazyLoad:value=>{this.lazyLoad=value;},
+        getLazyLoad:()=>shared.runtime.lazyLoad,setLazyLoad:value=>{shared.runtime.lazyLoad=value;},
         mipBias:(texture,lodSet)=>{
-          const config=this.classLoader.graph.config;
+          const config=shared.classLoader.graph.config;
           if(!config)throw new Error('Texture mip bias requires the prepared GConfig');
           return clientTextureLodSet(config)[lodSet]??0;
         },
       },
       lifecycle:{logReceiver:{kind:'GWarn'},
-        logEndLoad:event=>this.loadLifecycle.push({op:'Logf',...event}),
-        reallocLoaded:event=>this.loadLifecycle.push({op:'FArrayRealloc',num:event.num,max:event.max})},
-    }):null;
+        logEndLoad:event=>shared.runtime.loadLifecycle.push({op:'Logf',...event}),
+        reallocLoaded:event=>shared.runtime.loadLifecycle.push({op:'FArrayRealloc',num:event.num,max:event.max})},
+    })):null;
     if(this.classLoader){
       const resolve=this.objects.resolve.bind(this.objects);
       this.objects.resolve=async(asset,index)=>{
@@ -429,10 +434,10 @@ export class ScriptRuntime {
           return this.classLoader.identity(record);
         }};
     }
-    // Linked classes in link order: the loaded UClass objects SaveConfig's
-    // GObjObjects walk reloads (script-config.mjs).
-    this.linkedClasses=new Set();
-    this.states=new Map();this.structs=new Map();this.structLayouts=new Map();this.instances=new WeakMap();this.native=native;this.warning=warning;this.logDevice=logDevice;
+    // The process's: the linked classes in link order (the loaded UClass objects SaveConfig's GObjObjects walk reloads, script-config.mjs),
+    // Engine.Actor's class and readiness.
+    this.linkedClasses=shared.linkedClasses;this.actorClass=shared.actorClass;
+    this.states=shared.states;this.structs=shared.structs;this.structLayouts=shared.structLayouts;this.instances=new WeakMap();this.native=native;this.warning=warning;this.logDevice=logDevice;
     this.eventsEnabled=true;
     this.conversationLists=new Map();
     // Every object each prepared ConversationList's load reaches (prepareConversations).
@@ -517,11 +522,11 @@ export class ScriptRuntime {
       const object=(receiver?.[this.instanceKey]??this.instances.get(receiver))?.nativeObject;
       return object&&Object.hasOwn(object,'xLevel')?object.xLevel:levelFor?.(receiver);
     };
-    this.actorClass=null;this.actorLifecycle=actorLifecycle;
+    this.actorLifecycle=actorLifecycle;
     this.rng=rng;
     this.nameServices=nameServices;
     this.relocation=relocation;
-    this.contextResults=new WeakMap();
+    this.contextResults=shared.contextResults;
     this.levelTickActorOptions=new WeakSet();this.levelTickActorServices=new WeakMap();
     this.services={
       invoke:call=>this.invoke(call),invokeNative:call=>this.invokeNative(call),
@@ -583,6 +588,7 @@ export class ScriptRuntime {
         return this.pollLatent(call);
       },
     };
+    shared.attach(this);
   }
   async field(record,ancestry=[]) {
     record.metadata??=readPropertyMetadata(record.asset,record.index);
@@ -693,7 +699,7 @@ export class ScriptRuntime {
         }
         if(record.key==='core.object')await this.field(this.lookupMember(cls,'fields','ObjectFlags'));
         if(record.key==='engine.actor'){
-          this.actorClass=cls;
+          this.actorClass=this.process.actorClass=cls;
           for(const name of ['Tag','TimerRate','TimerCounter','bTimerLoop'])await this.field(this.lookupMember(cls,'fields',name));
         }
         record.linkedClass=cls;
@@ -831,6 +837,7 @@ export class ScriptRuntime {
   classImage(cls) {
     const layout=this.objectCells(cls);
     if(!layout)return null;
+    const classImages=this.classImages??=new WeakMap();
     let image=classImages.get(cls);
     if(image&&sameDefaults(image.defaults,cls.defaults))return image;
     const arena=this.objectArena(),base=arena.alloc(layout.size);
@@ -855,14 +862,14 @@ export class ScriptRuntime {
    * it unchanged), else null; nothing is built. The Rust interpreter reads
    * DefaultVariable there (script-vm-rust.mjs). */
   currentClassImage(cls) {
-    const image=classImages.get(cls);
+    const image=this.classImages?.get(cls);
     return image&&sameDefaults(image.defaults,cls.defaults)?image:null;
   }
   /** The runtime's object arena (docs/rust-core.md, R0). Harnesses built with
    * Object.create(ScriptRuntime.prototype) get theirs on first use. */
   objectArena(){return this.arena??=new ObjectArena();}
-  /** Fresh storage for one object of `cls`: a copy of the class image. The
-   * class image may sit in another runtime's arena (classes are shared). */
+  /** Fresh storage for one object of `cls`: a copy of the class image, which
+   * is in this runtime's arena (classImage). */
   objectStorage(cls) {
     const source=this.classImage(cls);
     if(!source)return {cells:null,arena:null,base:0,size:0,refs:null,poison:null,source:null,complete:false};
@@ -1566,8 +1573,12 @@ export class ScriptRuntime {
     return this.resourceRegistry().materialize(reference.asset,reference.index);
   }
   resourceRegistry() {
-    return this.resources??=new ScriptResourceRegistry({assets:this.objects.assets,objects:this.objects,
+    // The process's: the resources and the package and native-class identities outlive a level (script-process.mjs).
+    const shared=this.process;
+    if(!shared)return this.resources??=new ScriptResourceRegistry({assets:this.objects.assets,objects:this.objects,
       indexProvider:this.originalObjectIndex,loader:this.classLoader});
+    return this.resources??=shared.resources??=new ScriptResourceRegistry({assets:this.objects.assets,objects:this.objects,
+      indexProvider:this.originalObjectIndex,loader:this.classLoader,process:shared});
   }
   /**
    * Finish the asynchronous package work before a synchronous original native
@@ -1656,7 +1667,7 @@ export class ScriptRuntime {
         const entry=asset.pkg.exports[palette-1],key=`${asset.name}.${entry.path}`.toLowerCase();
         // the canonical object when it was resolved, else one stable holder per export (loadExport counts an object once)
         this.preparedExportHolders??=new Map();
-        const holder=this.objects.objects.get(key)??this.preparedExportHolders.get(key)??{key};
+        const holder=this.objects.lookup(key)??this.preparedExportHolders.get(key)??{key};
         this.preparedExportHolders.set(key,holder);
         original.loadExport(holder,entry.className,entry.name);
       }

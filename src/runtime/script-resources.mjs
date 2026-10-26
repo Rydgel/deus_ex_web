@@ -144,7 +144,8 @@ function immutableCopy(value) {
  * same canonical identities for bytecode and loaded exports.
  */
 export class ScriptResourceRegistry {
-  constructor({assets, objects = null, indexProvider = null, loader = null} = {}) {
+  /** `process` (script-process.mjs): the package and native-class identities this registry mints are the process's, and outlive a level. */
+  constructor({assets, objects = null, indexProvider = null, loader = null, process = null} = {}) {
     if (!assets || typeof assets.get !== 'function' || typeof assets.resolve !== 'function') {
       throw new TypeError('ScriptResourceRegistry requires an AssetStore-like assets object');
     }
@@ -152,6 +153,7 @@ export class ScriptResourceRegistry {
     this.objects = objects ?? new ScriptObjects(assets);
     this.indexProvider = indexProvider;
     this.loader = loader;
+    this.process = process;
     this.resources = new Map();
     this.pending = new Map();
     this.packages = new Map();
@@ -305,6 +307,7 @@ export class ScriptResourceRegistry {
       unsupported: [],
     };
     this.packages.set(key, record);
+    this.process?.hold(record);
     return record;
   }
 
@@ -380,7 +383,8 @@ export class ScriptResourceRegistry {
       unsupported: spec.unsupportedReason ? [spec.unsupportedReason] : [],
     };
     this.nativeClasses.set(canonical, Object.freeze(descriptor));
-    return this.nativeClasses.get(canonical);
+    this.process?.hold(descriptor);
+    return descriptor;
   }
 
   async #classReference(asset, classIndex, allowPending) {

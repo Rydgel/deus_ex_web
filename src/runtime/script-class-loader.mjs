@@ -28,10 +28,13 @@ export class ScriptClassLoader {
     this.carriedDefaults = carriedDefaults;
     this.graph = createScriptLoadGraph({captureEvents, meshLoadServices, resourceServices, lifecycle,
       nativeFunctions: HOST_NATIVE_BINDING, recordLoadEdges: true,
-      classSerialized: carriedDefaults?.size ? record => this.applyCarriedDefaults(record) : null});
+      classSerialized: record => { if (this.carriedDefaults?.size) this.applyCarriedDefaults(record); }});
     // Which of the graph's objects the original holds loaded (original-loaded.mjs): what name lookups see, and the LoadMap collection's input.
     this.originalLoads = createOriginalLoadTracker(this.graph);
+    // Graph record -> identity: the process's (metadata, resources, packages, registered classes) for the process's life, a level's
+    // (its package's exports, the objects it attaches: ScriptObjects.tableOf) until the next level attaches (attachLevel).
     this.identities = new WeakMap();
+    this.levelIdentities = new WeakMap();
     this.nativeRecords = new WeakMap();
     this.linking = new Set();
     this.prepareQueue = Promise.resolve();
@@ -88,15 +91,24 @@ export class ScriptClassLoader {
     }
   }
 
+  /** A new level attaches (ScriptProcess.attach): identities are minted in its ScriptObjects, and the previous level's are forgotten. */
+  attachLevel(objects) {
+    if (objects === this.objects) return;
+    this.objects = objects;
+    this.levelIdentities = new WeakMap();
+  }
+
   identity(record) {
     if (record == null) return null;
-    if (this.identities.has(record)) return this.identities.get(record);
+    const known = this.identities.get(record) ?? this.levelIdentities.get(record);
+    if (known) return known;
     const {slotOf, fullName} = this.graph;
     const linker = slotOf(record, 0x10);
     const index = slotOf(record, 0x14);
-    let identity;
+    let identity, level = false;
     if (linker?.asset && Number.isInteger(index) && index >= 0) {
       identity = this.objects.exportIdentity(linker.asset, index + 1);
+      level = this.objects.process && this.objects.tableOf(linker.asset, linker.asset.pkg.exports[index]) === this.objects.objects;
     } else {
       const name = fullName(record);
       const resources = this.resources?.();
@@ -113,7 +125,7 @@ export class ScriptClassLoader {
     // Native-only resource class descriptors are immutable; the reverse map
     // binds their backing record without changing that public contract.
     if (Object.isExtensible(identity)) identity.loadRecord = record;
-    this.identities.set(record, identity);
+    (level ? this.levelIdentities : this.identities).set(record, identity);
     this.nativeRecords.set(identity, record);
     return identity;
   }

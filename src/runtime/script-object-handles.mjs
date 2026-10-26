@@ -64,12 +64,15 @@ export function releaseHandle(identity) {
  * range once the next map's host replaces it (sim-host.mjs dispose): this
  * table is the only strong reference to the identities, so without it the
  * previous map's runtime, object images and Rust VM memory stay alive for the
- * rest of the session. Returns the number released. */
-export function releaseHandleRange(first, end) {
+ * rest of the session. `keep(identity)`, when given, names the identities that
+ * outlive the level: those of the script process the next level attaches to
+ * (script-process.mjs owns), whose handles end only when their object is
+ * collected. Returns the number released. */
+export function releaseHandleRange(first, end, keep = null) {
   let released = 0;
   for (let handle = Math.max(1, first); handle < Math.min(end, identities.length); handle++) {
     const identity = identities[handle];
-    if (identity === null) continue;
+    if (identity === null || keep?.(identity)) continue;
     handles.delete(identity);
     identities[handle] = null;
     for (const listener of releaseListeners) listener(handle);
