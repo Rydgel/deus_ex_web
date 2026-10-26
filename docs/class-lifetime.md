@@ -172,6 +172,44 @@ is left, and the next level's startup loads it again. Resources (Texture,
 Palette, Sound, LodMesh) and linkers follow the same rule: Training's
 level-only texture and music packages went away on the Island.
 
+### Frozen arrivals and class defaults: `gc2`
+
+gc1 read each level while it ran, for about 45 s. gc2 repeats gc1's steps
+with `set LevelInfo bPlayersOnly True` typed on DX.dx before the first
+`open`. LevelInfo is a native class, so its default carries, and every later
+level arrives frozen: `LevelInfo0.bPlayersOnly` (`0x4f0`, mask 4) reads 1 on
+DX.dx, both Training visits and the Island. The step files are
+`.work/travel/gc2.steps`, then `gc2b`, `gc2c` and `gc2d` for the SET
+read-backs.
+
+**Class sets.** gc2's class sets equal gc1's at every stop: 984, 1,033, 1,100
+and 1,033 classes. So do its map changes:
+- DX.dx → Training: 978 kept, 6 collected, 55 loaded;
+- Training → Island: 1,005 kept, 28 collected, 95 loaded;
+- Island → Training: 1,005 kept, 95 collected, 28 loaded.
+
+Garbage counts: 33603 → 33602, 35216 → 35011, 45376 → 37756 (gc1:
+45406 → 37756), and the same unloaded packages.
+
+**Class defaults.** Each SET was typed in Training, the first visit, and read
+back with `tools/dump-actor-win.c` at the property's linked offset. None of
+these objects serializes the property in the map, so each value comes from
+the class default when the object is built.
+
+| SET | Class | In Training | On the Island | Training again |
+| --- | --- | --- | --- | --- |
+| `set Engine.PathNode ExtraCost 77` (`0x444`) | native, kept | 12 PathNodes: 77 | 1,074 PathNodes: 77 | 12: 77 |
+| `set DeusEx.Shadow ScaleGlow 0.75` (`0x18c`) | script-only, kept by reachability | 19 Shadows: 0.75 | 53 spawned Shadows: 0.75 | 19: 0.75 |
+| `set DeusEx.LightSwitch ScaleGlow 0.25` (`0x18c`) | script-only, Training's own | LightSwitch0: 0.25 | (no LightSwitch) | LightSwitch0: 1.0, the package default |
+
+A kept class keeps its defaults across map changes, and a collected class
+loads again with the package's.
+
+`dump-actor-win` prints a `u32` field in hex (`ExtraCost=0x4d`). The `gc2c`
+step only isolated a misread of that output: it confirmed that
+`set PathNode ...`, `set Engine.PathNode ...` and a SET through
+`Engine.NavigationPoint` all apply.
+
 **A static cross-check.** Follow only the super, `ClassWithin` and
 dependency links from the native classes of Core, Engine, Extension, DeusEx,
 ConSys, DeusExText, Fire, IpDrv, UWindow, UBrowser and IpServer. This reaches

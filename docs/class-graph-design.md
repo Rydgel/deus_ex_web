@@ -169,13 +169,13 @@ and building class images again in each arena.
 
 Play loads classes for two reasons, and they must be told apart.
 
-* **The original's requests.**
-  * Loading the level: each map actor's class, and the objects its
-    serialized properties reference (`prepareMapProperties`).
-  * The load natives: DynamicLoadObject, StaticLoadObject, LoadPackage.
-  * Config- and URL-driven loads: the GameInfo class, the player class from
-    `Class=`, the HUD.
-  * The boot.
+* **The original's requests.** As measured (below), they are:
+  * loading the level, which resolves every import of the level package;
+  * the class of every object the game instantiates: a spawned actor
+    (including the GameInfo and the player from `Class=`), a window, a `new`
+    object, an attached map or package object;
+  * the load natives: DynamicLoadObject, StaticLoadObject, LoadPackage;
+  * the boot.
 * **Host readiness requests.**
   * The prepare-every-body pass, with its `prepareClassOperands`.
   * `prepareSpawnClosure`, `prepareNpcs`, the mesh and conversation
@@ -203,6 +203,47 @@ How the two kinds of request behave:
   StaticExec's GET and SET, and IsA by name are examples. A SET on a class
   the original has not loaded answers as the original does
   ("Unrecognized class").
+
+**Measured (2026-10-26, step 1's first half).** `scripts/original-load-closure.mjs`
+records these requests during a cold Play load. It replays each one on a
+load graph of its own, inside the recovered BeginLoad/EndLoad. Bind's native
+pointers answer with placeholders, since a pointer creates no object. An
+object whose Serialize body is not recovered is kept created and unloaded:
+FireTexture, WetTexture, ConversationList.
+
+Against gc2's frozen dumps (`scripts/validate-original-loaded.mjs`):
+
+| Map, cold | Requests (level imports, instantiated classes, DynamicLoadObject) | Closure | The original's classes |
+| --- | --- | --- | --- |
+| DX.dx | 16, 147, 0 | 959 classes (33,301 objects) | 984 = 959 + 25 |
+| 00_Training | 133, 198, 56 | 1,011 (34,054) | 1,033 = 1,011 + 22 |
+| 01_NYC_UNATCOIsland | 293, 288, 223 | 1,078 (34,861) | 1,100 = 1,078 + 22 |
+
+* **Nothing extra, and every loaded class accounted for.** The closure
+  holds no class the original lacks. Every class only the original holds
+  carries flags `0x44084044` or `0x04084004`. Such a class is registered by
+  a DLL at startup and never loaded from its package:
+  * WinDrv's WindowsClient and WindowsViewport, Render, D3DDrv, Galaxy;
+  * IpDrv's drivers and commandlets;
+  * ConSys and Extension natives whose script exports never loaded;
+  * Core's Factory and Exporter, Engine's DemoPlayPendingLevel.
+
+  The boot's UWindow and UBrowser classes and DeusExGameEngine are in the
+  closure.
+* **A level's class set does not depend on the history before it.** The
+  original's Island set was built after DX.dx and Training, yet it equals the
+  cold Island closure. Each map change collects exactly the first level's
+  closure minus the second's, and loads the second's minus the first's:
+  * DX.dx → Training: 6 and 55;
+  * Training → Island: 28 and 95;
+  * Island → Training: 95 and 28.
+
+  On these maps, then, what the collection keeps is what the new level's
+  requests reach. That gives step 4 a gate independent of the mark it
+  implements.
+* **Play's live graph differs on both sides.** It holds more classes than
+  the original (the readiness passes link 607 to 691 per level) and fewer
+  objects (it preloads lazily and never runs EndLoad).
 
 **Long-term shape.** Once the script packages are resident in the process,
 fetching is no longer asynchronous. If nothing else in `prepareFunction` is
@@ -358,15 +399,9 @@ At each stop Play dumps its state after the startup passes and before the
 first tick, which is what a frozen original shows. Each stop is compared
 with the original:
 
-1. **The original-loaded class set** equals the original's dump. Exceptions
-   are fixed at the DX.dx stop, and each needs a reason. Today's comparison
-   on Training suggests the candidates:
-   * the boot's UWindow and UBrowser classes;
-   * natives that Play does not register (D3DDrv's, Galaxy's, WinDrv's,
-     Render's, Window's);
-   * DeusExGameEngine.
-
-   The list is set from gc2, not from these.
+1. **The original-loaded class set** equals the original's dump, except
+   classes a DLL registered and never loaded (flags without `0x70000`).
+   Step 1's measurement already holds for cold loads (above).
 2. **Each map change's kept, collected and loaded sets** are equal.
 3. **The 28 Training classes** are new generations on the return.
 4. **The spawned-name counters** match the table at the top.
@@ -374,28 +409,41 @@ with the original:
    survives two map changes, and a SET on a level-only class reverts on the
    return.
 
-The gc1 dumps were read over about 45 s of a running level each. The kept
-sets are reliable, but the loaded sets may include whatever loaded during
-the read. Before the validator is built, take **gc2**:
-* the same steps, with `set LevelInfo bPlayersOnly True` typed before each
-  `open` so that each level arrives frozen;
-* the two SETs of check 5: on JCDentonMale, and on a property of one of the
-  28 Training classes;
-* reads of both after the map changes (`get`, or `tools/dump-actor-win.c`
-  on the class object).
-
-**Step 1's gate** is the original-loaded class set of a cold DX.dx and a cold
-`open 00_Training`, compared with gc2, before anything persists.
+The reference capture is **gc2** (2026-10-26,
+[class lifetime](class-lifetime.md#frozen-arrivals-and-class-defaults-gc2)):
+* gc1's steps, with every level arriving frozen;
+* class sets equal to gc1's at every stop;
+* the measured SETs of check 5:
+  * `Engine.PathNode ExtraCost`, a native class: kept;
+  * `DeusEx.Shadow ScaleGlow`, script-only and kept by reachability;
+  * `DeusEx.LightSwitch ScaleGlow`, Training's own class: back to the
+    package default after the round trip.
 
 ## Migration
 
 Each step is verified before the next. Through step 4, bench-sim's digests
 stay equal for single-map sessions.
 
-1. **Original-loaded vs host-only.** Load requests carry their kind; original
-   requests run Begin/EndLoad; host-only records are flagged and promoted.
-   Name lookups see only original-loaded objects. No behavior change. Gate:
-   the cold-load class sets.
+1. **Original-loaded vs host-only.**
+   * *First half, done 2026-10-26.* Record the original's requests, compute
+     their EndLoad closure on a separate graph, and gate it with
+     `validate-original-loaded` (above).
+     * The only runtime change is the load graph's opt-in `skipUnrecovered`
+       hook, which is off unless a measurement passes it.
+     * bench-sim digests are unchanged (03_NYC_747 `0750ca718aa7c059`,
+       01_NYC_UNATCOIsland `52595f00465194dd`).
+   * *Second half.* The live graph knows which of its records are
+     original-loaded:
+     * the request kinds at the measured entry points;
+     * EndLoad's closure on original requests;
+     * the host-only flag and promotion;
+     * name lookups restricted to original-loaded objects.
+
+     The closure costs about 2 to 2.7 s per cold map on a separate graph,
+     and 33,000 to 35,000 objects. Whether the live graph pays that at the
+     first map, or the process keeps a shadow closure by key, is decided
+     against a profile. No behavior change. Gate: `validate-original-loaded`
+     computed from the live graph.
 2. **Identity split.**
    * the process package table and the runtime level table in
      `ScriptObjects`;

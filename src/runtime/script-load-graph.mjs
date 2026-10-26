@@ -57,7 +57,7 @@ const accessorMembers = (data, accessors) => {
 
 export function createScriptLoadGraph({packageAssets = new Map(), captureEvents = false,
   nativeFunctions = {}, lifecycle = {}, resourceServices = null,
-  meshLoadServices = resourceServices, classSerialized = null} = {}) {
+  meshLoadServices = resourceServices, classSerialized = null, skipUnrecovered = null} = {}) {
   if (resourceServices) {
     for (const name of ['seconds', 'getLazyLoad', 'setLazyLoad', 'mipBias']) {
       if (typeof resourceServices[name] !== 'function')
@@ -849,7 +849,20 @@ export function createScriptLoadGraph({packageAssets = new Map(), captureEvents 
     // Admission is a host boundary before entering the original body, which
     // clears RF_NeedLoad before virtual Serialize. Do not silently consume a
     // resource through the shorter UObject serializer and strand its flags.
-    if (slotOf(object, 0x10) && (slotOf(object, 0x1c) & 0x200)) requireSerializer(object);
+    if (slotOf(object, 0x10) && (slotOf(object, 0x1c) & 0x200)) {
+      // A measurement graph (scripts/original-load-closure.mjs) counts which objects a load creates: it may keep an object whose
+      // Serialize body is not recovered as created and unloaded (its own references are then not followed) instead of stopping.
+      if (skipUnrecovered) {
+        try { requireSerializer(object); } catch (error) {
+          const kind = fullName(classRecordOf(object));
+          if (!skipUnrecovered(object, kind)) throw error;
+          writeSlot(object, 0x1c, (slotOf(object, 0x1c) & ~0x01000200) >>> 0);
+          object.objectFlags = slotOf(object, 0x1c);
+          events.push({op: 'SkippedSerialize', object, kind});
+          return;
+        }
+      } else requireSerializer(object);
+    }
     return linkerPreload(object, {archive, linker, events}, preloadServices);
   }
 

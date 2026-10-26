@@ -1242,7 +1242,9 @@ which the original's process does once, and runs its startup twice (the cold loa
 start). `isA` and `UStruct::Link`'s walks without per-call sets took about 0.4 s off the Island
 (interleaved medians on a busy machine). Which classes the original keeps across LoadMap is traced
 in [class lifetime](class-lifetime.md): about 1,000 classes keep their identity for the whole session,
-and each map change collects only the level left's own classes.
+and each map change collects only the level left's own classes. The plan is [class graph design](class-graph-design.md).
+Its first step's measurement passes against the frozen re-capture gc2 (`validate-original-loaded`, which SKIPs where
+`.work/travel/gc2` is absent): the original's classes are the EndLoad closure of its own load requests.
 
 Done when declared browser/performance targets pass repeatable tests, long sessions
 and repeated map changes remain stable, and failures offer useful recovery paths.
