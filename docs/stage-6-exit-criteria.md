@@ -3,16 +3,30 @@
 Status: **adopted by the user on 2026-10-23** in four decisions ([below](#what-the-user-decided-2026-10-23)); written from master fe15b3cb. The data is
 `scripts/stage6-criteria.mjs` (`node scripts/stage6-criteria.mjs` prints the scoreboard, `--list` the rows, `--markdown` the tables of this note); the
 facts each mission row is built from are in [the Stage 6 inventory](stage-6-inventory.md). Rows 6.1.6 and 6.2.2 were proved on the Mac (2026-10-23): their captures are in the Mac's `.work/travel`, the other rows' (the endings' of 2026-10-24 among them)
-in the Linux host's, and a validator whose capture is not on the machine SKIPs. **All 54 rows pass on their last runs
-(2026-10-26).** There is no gate script yet: a row's PASS means its proof checks exist and passed on their last run, not that a gate ran them
-together on one commit. Several rows (the start, persistence, transitions, the endings) last ran before the Play changes of 2026-10-25/26 (the
-camera's zone stamped, FName spelling across levels, class defaults carried across travel, the level's URL after a load). The gate
-(`validate-stage6-acceptance.mjs`, on the model of [Stage 5's](stage-5-exit-criteria.md#running)) runs them together and closes the stage.
+in the Linux host's, and a validator whose capture is not on the machine SKIPs. **Stage 6 is complete: all 54 rows
+pass** ([Stage 6 close](#stage-6-close)).
 
 The roadmap's criterion for section 6 ([roadmap](roadmap.md#6-persist-progress-and-complete-the-campaign)): *done when reloads and return visits preserve
 expected world state, and the campaign can be completed through representative choices and endings without progression blockers. Validate each
 mission's conversations, events, and transitions against the original game; keep a per-mission compatibility checklist.* The rows below fix what
 "representative", "completed", "without progression blockers" and the checklist mean: clause 6.4 **is** the per-mission checklist.
+
+## Stage 6 close
+
+2026-10-26, master b7ce8017: **54 PASS, 0 PARTIAL, 0 UNDRIVEN, 0 MISSING, 3 EXCLUDED** (`node scripts/stage6-criteria.mjs`). The user closed the
+stage on the rows' last runs, without a gate script that runs every proof together on one commit (Stages 4 and 5 had one: `validate-stage5-acceptance.mjs`).
+What that leaves unchecked, written down here rather than hidden:
+
+* **Rows that last ran before the Play changes of 2026-10-25/26** (the camera's zone stamped each headless frame, FName spelling across levels and map
+  actors' Name properties, class defaults carried across travel, a loaded level keeping its file's URL, the first tick after a load in the page): the
+  start and the menus (6.1), persistence (6.2), the transitions (6.3), every mission's conversation run (6.4.NN.3) and the endings (6.5). The subagents
+  that made those changes ran the travel, save, load, restore and endings validators on them (`validate-travel-*`, `validate-load-game`,
+  `validate-save-game`, `validate-travel-endings`, `validate-level-url`, `validate-class-default-travel`, `validate-name-spelling`); the mission chains
+  (6.4.NN.1), the flag census (6.4.NN.2) and the campaign in one run (6.6.1) ran after all of them.
+* **The stores are split across two machines**: rows 6.1.6 and 6.2.2 have their captures on the Mac, the rest on the Linux host (a validator whose capture
+  is not on the machine SKIPs).
+* **The comparison leaves out what the original itself varies** ([chains](stage-6-chains.md), "What is compared, and what is not"): FRand draws by
+  presence, fights kept from starting, self-closing doors not read; 6.6.1 compares flag names without case.
 
 ## What the user decided (2026-10-23)
 

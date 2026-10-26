@@ -10,11 +10,10 @@ run ([Stage 4 close](docs/stage-4-exit-criteria.md#stage-4-close)). **Stage 5
 gameplay is complete** (2026-10-21): its adopted gate passes 50 of 50 on master
 ([Stage 5 close](docs/stage-5-exit-criteria.md#stage-5-close)), each criterion on
 original captures of Liberty Island and Training replayed tick by tick in Play (see below).
-**Stage 6** (saves, travel, the campaign): **all 54 of its rows pass on their last
-runs** (2026-10-26). Every mission's placed chain, both sides of each lasting choice and
-one Play run from New Game to an ending equal the original under Wine
-([Stage 6 below](#stage-6-campaign--rows-pass-2026-10-26)). Its closing gate, which runs
-every proof together on one commit, is still to run.
+**Stage 6 saves, travel and the campaign are complete** (2026-10-26): all 54 of its
+rows pass. Every mission's placed chain, both sides of each lasting choice and one Play
+run from New Game to an ending equal the original under Wine
+([Stage 6 below](#stage-6-campaign--complete-2026-10-26)).
 
 The target is **100% original fidelity**. Every supported behavior needs original
 data, script, native-code or measured evidence. Unverified substitutes remain
@@ -249,13 +248,13 @@ as Engine.dll's FindSpot places them, NaN probes included. The user adopted the 
 Swimming, ladders, pawn navigation, doors opened by NPCs and the intro cinematic
 also run from translated original code ([roadmap](docs/roadmap.md#5-implement-the-full-gameplay-systems)).
 
-## Stage 6 campaign — rows pass 2026-10-26
+## Stage 6 campaign — complete 2026-10-26
 
 The [Stage 6 exit criteria](docs/stage-6-exit-criteria.md) define 54 rows (3 more are
 excluded): the start and the menus, persistence (saves, loads, return visits), the
 transitions, and per mission its required chain, both sides of its lasting choices and
 every conversation, the three endings, and the campaign in one run.
-`node scripts/stage6-criteria.mjs` prints the scoreboard. **All 54 pass on their last runs.**
+`node scripts/stage6-criteria.mjs` prints the scoreboard. **All 54 pass.**
 
 - **Mission chains** (6.4.NN.1, [chains](docs/stage-6-chains.md)): each mission is a
   scripted route of placed steps (conversations and their choices, computers, keypads,
@@ -276,8 +275,10 @@ not read. Everything a chain's steps decide is compared exactly. Play fixes the 
 found: the camera's zone stamped every frame (pawns near the player stay awake), FName
 spelling across levels (map actors' Name properties included), class defaults carried
 across travel, a loaded level keeping its file's URL, and the first tick after a load
-spanning the load (the page). Still open: the gate that runs every proof together on one
-commit, as Stages 4 and 5 had before they closed.
+spanning the load (the page). The user closed the stage on 2026-10-26 on the rows' last
+runs, without a gate that runs every proof together on one commit (Stages 4 and 5 had one);
+the rows that last ran before the Play fixes above are named in
+[the exit criteria](docs/stage-6-exit-criteria.md#stage-6-close).
 
 ## Open the viewer
 
@@ -417,8 +418,8 @@ static doors. The footprint overlays every height and is not a game screenshot.
   complete (2026-10-17, gate 70 of 70).
 - **Stage 5:** complete movement, AI, combat, stealth, RPG systems, and conversations —
   complete (2026-10-21, gate 50 of 50).
-- **Stage 6:** persist saves and map state, then validate the full campaign — all 54 rows pass
-  (2026-10-26); the closing gate run remains.
+- **Stage 6:** persist saves and map state, then validate the full campaign —
+  complete (2026-10-26, 54 of 54 rows).
 - **Stage 7:** meet browser compatibility, performance, and reliability targets.
 
 The numbered stages and acceptance criteria are in [the roadmap](docs/roadmap.md).
