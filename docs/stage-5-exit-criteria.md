@@ -964,6 +964,9 @@ took the slot of the original's `Shadow53`, another pawn's Shadow, and the origi
 `Shadow20`..`Shadow24`, and Play's destroyed Shadows there are `Shadow53`..`Shadow57`. The commander's Shadow, released at 354, is the original's `Shadow71`, the last
 pawn Shadow its load made, and Play's `Shadow104`. That is the offset of 33 throughout. The first player's keyring, which the doc
 [above](#first-original-captures-island-combat-2026-10-17) calls a substitution (Play's `NanoKeyRing2`, the original's `NanoKeyRing4`), is the same thing.
+Where Play's numbers come from (found 2026-10-26, [load time](load-time.md)): Play loads a map cold and then runs LoadMap over it again for Player start. The cold
+load alone names `Shadow0`..`Shadow52` and `LaserProxy0`..`LaserProxy7`, and Player start's pass makes `Shadow53`..`Shadow105` and `LaserProxy8`..`LaserProxy15`.
+The original's numbers come from its capture session's earlier loads.
 
 **The fix: creation order within the class** (`live-probe.mjs` objectTrace, `live-acceptance.mjs` `registrySeed` `classRows`). A map export keeps its `Class.Name`
 match. An actor that Play's runtime created (a native record with a registry index), live or pending deletion, the player excepted, is paired with a row of the

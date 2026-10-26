@@ -39,6 +39,9 @@ import {loadConfig as loadObjectConfig, defaultsObject} from './script-config.mj
 import {CORE_CLASSES, ENGINE_CLASSES, DEUSEX_CLASSES, findNativeClassConstructor,
   isNativeClassRegisteredDynamic} from './script-native-class-registry.mjs';
 
+// The longest Class/SuperField chain isA follows before it calls the chain a cycle (a real chain is a few records long).
+const MAX_CHAIN = 1024;
+
 // Service objects with accessor members are dictionary-mode objects whose
 // accessors are defined on the object itself. As object literals, each graph's
 // accessors went into the transition tree of the literal's map, which belongs
@@ -195,14 +198,13 @@ export function createScriptLoadGraph({packageAssets = new Map(), captureEvents 
   const superOf = object => slotOf(object, 0x28) ?? null;
 
   function isA(object, target) {
-    // The inlined native IsA: +0x24 Class then +0x28 SuperField to null.
+    // The inlined native IsA: +0x24 Class then +0x28 SuperField to null. A class chain is a few records long; one longer than
+    // MAX_CHAIN can only be a cycle (the native loops forever there). Counting instead of a visited set: isA runs for every field of
+    // every struct walk at link time (a set per call cost about 0.3 s of each map load).
     let cls = classRecordOf(object);
-    const seen = new Set();
-    while (cls !== null && cls !== undefined) {
+    for (let steps = 0; cls !== null && cls !== undefined; steps++) {
       if (sameRecord(cls, target)) return true;
-      const key = addr(cls) ?? cls;
-      if (seen.has(key)) throw new Error('Cyclic Class ancestry in fixture IsA');
-      seen.add(key);
+      if (steps === MAX_CHAIN) throw new Error('Cyclic Class ancestry in fixture IsA');
       cls = superOf(cls);
     }
     return false;

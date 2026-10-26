@@ -871,8 +871,12 @@ function remoteHost(loaded) {
   const summary = loaded.summary;
   return { game: loaded.game ? { remote: true, notes: loaded.gameNotes, hud: loaded.hud } : null, session: loaded.game ? { remote: true } : null,
     actorSim: summary ? { summary, actors: [], npcActors: [] } : null, lit: loaded.lit, meshLighting: null,
-    notes: loaded.notes, events: loaded.events, hudTextures: loaded.hudTextures, dispose() {} };
+    notes: loaded.notes, events: loaded.events, hudTextures: loaded.hudTextures, loadMarks: loaded.loadMarks ?? null, dispose() {} };
 }
+/** The last map load's steps (Stage 7 loading time, docs/load-time.md): `marks`, the page's in ms from loadMap's start; `simMarks`, the
+ * simulation side's (in ms from the worker's receipt of the load, or from loadMap's start inline); `firstDraw`, the first frame drawn after it. */
+let loadTimeline = null;
+const loadMark = step => { if (loadTimeline) loadTimeline.marks.push([step, Math.round(performance.now() - loadTimeline.start)]); };
 /** `travel`: the request of the travel step that leads here (travel.mjs; docs/travel.md), null for a map opened directly. The simulation
  * side's Login imports the travel text it carries. */
 async function loadMap(name, { travel = null, currentFiles = null } = {}) {
@@ -885,6 +889,7 @@ async function loadMap(name, { travel = null, currentFiles = null } = {}) {
   if (!originalStart || !travel) document.exitPointerLock?.();
   keys.clear();
   busy('Loading original map', `Reading ${name}…`);
+  loadTimeline = { map: name, sim: simMode, start: performance.now(), marks: [], simMarks: null, firstDraw: null };
   let nextWorld, nextHost = null, nextGame = null, nextNpcPreview = null, nextGpuMesh = null, nextSim = null, nextWeaponDraw = null, nextWeaponGpu = null, overlapped = null;
   try {
     // A level filed in Save\Current (travel.mjs `restore`: a loaded game's, or one travel left) is drawn from that file, the package the simulation
@@ -897,6 +902,7 @@ async function loadMap(name, { travel = null, currentFiles = null } = {}) {
     const asset = filed?.asset ?? await assets.get(name);
     await new Promise(resolve => setTimeout(resolve, 0));
     const nextMap = filed?.map ?? decodeMap(asset.bytes);
+    loadMark('decoded');
     // The simulation side's options that do not come from the page's world. With the worker the load starts now and runs while the page builds
     // its world (sim-client.mjs loadOverlapped): the level's startup in the worker reads none of the world's part, sent below once it is built.
     const params = new URLSearchParams(location.search);
@@ -914,6 +920,7 @@ async function loadMap(name, { travel = null, currentFiles = null } = {}) {
     nextWorld = await createWorld(nextMap, asset, assets, (message, done, total) => {
       $('gate-message').textContent = message; $('progress').max = total; $('progress').value = done;
     });
+    loadMark('world');
     if (!nextWorld.counts.triangles) throw new Error(`No renderable surfaces found. ${nextWorld.errors[0]?.message ?? 'Check the selected map.'}`);
     // The page's GPU mesh instances (docs/gpu-mesh.md): the level's and the
     // view model's own; the simulation side keeps layouts with their
@@ -942,6 +949,8 @@ async function loadMap(name, { travel = null, currentFiles = null } = {}) {
       musicLibrary: pageMusicLibrary,
       onAudioVoice: event => { void galaxyVoice(event); },
       onProgress: message => { $('gate-message').textContent = message; } });
+    loadMark('host');
+    loadTimeline.simMarks = simClient ? nextHost.loadMarks : nextHost.loadMarks?.map(([step, at]) => [step, Math.round(at - loadTimeline.start)]) ?? null;
     // the new session's snapshot requests number from 1 again (script-window-host.mjs display.snapshotSerial)
     snapshotServed = 0; saveDeliveries.length = 0;
     nextWorld.notes.push(...nextHost.notes);
@@ -1007,6 +1016,7 @@ async function loadMap(name, { travel = null, currentFiles = null } = {}) {
     // actor meshes are built while the map loads.
     applySimEvents(crossing(nextHost.events.splice(0)),{world:nextWorld,actors:nextNpcPreview,weapon:nextWeaponDraw});
     await nextNpcPreview?.draw.ready();
+    loadMark('meshes');
     coronaPass?.dispose();coronaPass=nextCoronaPass;
     if(spriteScene){scene.remove(spriteScene.root);spriteScene.dispose();}
     spriteScene=nextSpriteScene;
@@ -1043,8 +1053,10 @@ async function loadMap(name, { travel = null, currentFiles = null } = {}) {
     // counts as ready (on the page they are synchronous).
     // resetCamera runs ?cheat= when it resets the player (Play mode).
     const playerReset = mode === 'play' && !!game;
+    loadMark('swapped');
     const resetReply = resetCamera({ keepLevel: Boolean(travel?.restore) }); showStats();
     await viewReply; await resetReply;
+    loadMark('playerStart');
     if (!playerReset) await applyStartCheats();
     $('wireframe').checked = false; $('actor-markers').checked = false;
     $('lighting').checked = true;
@@ -1063,6 +1075,7 @@ async function loadMap(name, { travel = null, currentFiles = null } = {}) {
     // loop takes OldTime (0x10914720..0x109147a9).
     if (travel && travelFrameTime !== null) { if (simClient) simLastPost = travelFrameTime; else lastTime = travelFrameTime; }
     travelFrameTime = null;
+    loadMark('ready');
   } catch (error) {
     // a load the worker started waits for the world's part: none comes
     overlapped?.scene?.(null);
@@ -1816,6 +1829,8 @@ function status() {
 }
 // A small read-only diagnostic hook also makes browser regressions reproducible.
 window.deusExViewer = { status,
+/** The last map load's steps (loadTimeline above): null before the first load. */
+loadTimings: () => loadTimeline && structuredClone(loadTimeline),
 /** The page's save persistence (save-persistence.mjs) for the specs: its status, the listing read again, the Saves window. */
 saves: { status: () => savePersistence?.status() ?? null, refresh: () => savePersistence?.refresh() ?? Promise.resolve(false), open: () => savesUi.open(), ready: () => savesReady.then(() => true),
   /** The stored directories and their files ({dir, files: [{name, size}]}) and one file's bytes (an array): what the specs read back of a save. */
@@ -2162,6 +2177,7 @@ function animate(time) {
       draw = Boolean(snap);
     } else if (sim) snap = simFrame({ ...simFrameInput(time), dt });
     if (draw) drawFrame(snap, time);
+    if (draw && loadTimeline && loadTimeline.firstDraw === null) loadTimeline.firstDraw = Math.round(performance.now() - loadTimeline.start);
   }
   framePhases.frames++; framePhases.total += performance.now() - frameStart;
   hitch?.frameEnd(time);

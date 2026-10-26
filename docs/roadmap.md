@@ -1234,6 +1234,14 @@ simulation none over 200 ms at the same 111 fps, so **Play runs the simulation i
 (`?sim=worker` keeps the worker; [sim worker](sim-worker.md)). Chrome and Safari on the Mac are not
 re-recorded since the fixes. Firefox runs in Playwright on the Linux host; Safari is untested.
 
+**Progress (2026-10-26): map loading time.** `scripts/profile-map-load.mjs` and the page's
+`deusExViewer.loadTimings()` time a load to its first drawn frame, step by step on both sides
+([load time](load-time.md)). A map change takes 6.5 to 7.1 s in Chromium's worker mode (the Island:
+5.1 s of it is the worker's `createGame`). Each level loads and links every script class again,
+which the original's process does once, and runs its startup twice (the cold load, then Player
+start). `isA` and `UStruct::Link`'s walks without per-call sets took about 0.4 s off the Island
+(interleaved medians on a busy machine).
+
 Done when declared browser/performance targets pass repeatable tests, long sessions
 and repeated map changes remain stable, and failures offer useful recovery paths.
 Retain automated format/runtime tests and fixed-camera visual comparisons throughout

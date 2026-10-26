@@ -59,8 +59,9 @@ function superOf(object, services) {
 function isA(object, target, services) {
   if (services.isA) {
     const result = services.isA(object, target);
-    if (![true, false, 0, 1].includes(result)) fail('IsA returned no native boolean');
-    return result === true || result === 1;
+    if (result === true || result === 1) return true;
+    if (result !== false && result !== 0) fail('IsA returned no native boolean');
+    return false;
   }
   const classValue = object?.objectClass;
   let cls = pointer(classValue === undefined ? slot(object, 0x24, services) : classValue);
@@ -74,18 +75,18 @@ function isA(object, target, services) {
   return false;
 }
 
+// The longest SuperField chain and Children chain a walk follows before it calls them cycles (the native loops forever there). Counting
+// instead of visited sets: these walks run for every struct link, over every inherited field (the sets cost a share of each map load).
+const MAX_SUPERS = 1024, MAX_CHILDREN = 1 << 20;
+
 /** The three native iterator bodies differ only in their ancestry target. */
 function* properties(record, target, services) {
   let structure = record;
-  const structures = new Set();
-  while (structure !== null) {
-    if (structures.has(identity(structure))) throw new Error('Cyclic native inheritance');
-    structures.add(identity(structure));
+  for (let supers = 0; structure !== null; supers++) {
+    if (supers === MAX_SUPERS) throw new Error('Cyclic native inheritance');
     let field = pointer(slot(structure, 0x38, services));
-    const fields = new Set();
-    while (field !== null) {
-      if (fields.has(identity(field))) throw new Error('Cyclic native Children chain');
-      fields.add(identity(field));
+    for (let children = 0; field !== null; children++) {
+      if (children === MAX_CHILDREN) throw new Error('Cyclic native Children chain');
       if (isA(field, target, services)) yield field;
       // Read after the caller resumes: property virtuals may update live data.
       field = pointer(slot(field, 0x2c, services));

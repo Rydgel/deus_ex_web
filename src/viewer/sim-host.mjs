@@ -50,6 +50,8 @@ export async function createSimHost(map, asset, assets, { randomSeed, subtitles,
   gpu = null, weaponGpu = null, meshBackend = null, meshLod = null, weapons = null, weaponMirrors = null, weaponOrder = null, musicLibrary = null, travel = null, restore = false, onConversationSpeech = null, onAudioVoice = null,
   onProgress = () => {} }) {
   const events = [], notes = [], hostIndex = hostStarts.push(handleLimit()) - 1;
+  // The load's steps on this thread's clock (performance.now()), for the page's load timeline (main.mjs loadTimings).
+  const loadMarks = [['host', performance.now()]], loadMark = name => loadMarks.push([name, performance.now()]);
   let game;
   // GetSaveFreeSpace is synchronous: the browser's storage estimate is read here, once per session (save-directory-host.mjs)
   await primeSaveDirectoryHost();
@@ -57,11 +59,13 @@ export async function createSimHost(map, asset, assets, { randomSeed, subtitles,
     game = await createGame(map, asset, assets, { presentation: true, randomSeed, subtitles, fullscreen, musicLibrary, travel, restore: restore || null,
       onLightingChanged: changes => events.push({ kind: 'lighting', changes }),
       onConversationSpeech: event => onConversationSpeech?.(event), onAudioVoice: event => onAudioVoice?.(event) });
-  } catch (error) { notes.push(`Play mode unavailable: ${error.message}`); return { game: null, notes, events }; }
+  } catch (error) { notes.push(`Play mode unavailable: ${error.message}`); return { game: null, notes, events, loadMarks }; }
+  loadMark('game');
   if (scene) {
     const part = await scene;
     if (!part) throw new Error('The page did not build the world for this load');
     ({ stampScene, panZones, childFrames, gpu, weaponGpu } = part);
+    loadMark('scene');
   }
   const runtime = game.doors.scriptRuntime.runtime, player = () => game.player.collisionActor;
   const exportName = ref => asset.pkg.exports[ref - 1]?.name;
@@ -85,6 +89,7 @@ export async function createSimHost(map, asset, assets, { randomSeed, subtitles,
     notes.push(`${actorSim.summary.npcs} NPC and ${actorSim.summary.props} prop meshes render live original poses and original mesh lighting in Play. ${meshLod === 'off' ? 'Distance LOD is off (?meshLod=off). ' : ''}Fatness, fog/volumetric lights and animated/procedural mesh skins remain unsupported.`);
     for (const error of actorSim.summary.errors) notes.push(`${error.actor}: ${error.message}`);
   } catch (error) { notes.push(`Actor meshes unavailable: ${error.message}`); }
+  loadMark('actors');
   const session = createSimSession(game, { assets, events, exportName });
   session.setScene(stampScene, actorSim);
   if (meshLighting) session.setMeshLighting(meshLighting);
@@ -209,9 +214,10 @@ export async function createSimHost(map, asset, assets, { randomSeed, subtitles,
     else notes.push('Decals unavailable: the script VM core predates decal.rs; run npm run build:wasm');
   } catch (error) { notes.push(`BSP occlusion unavailable: ${error.message}`); }
   session.setPanZones(panZones);
+  loadMark('occlusion');
   let audioDisposed = false;
   const disposeAudio = () => { if (audioDisposed) return; audioDisposed = true; runtime.audio?.dispose?.(); };
-  return { game, session, actorSim, weaponSim, meshLighting, lipSync, notes, events, hudTextures, disposeAudio,
+  return { game, session, actorSim, weaponSim, meshLighting, lipSync, notes, events, hudTextures, disposeAudio, loadMarks,
     // The current BSP occlusion (validation: scripts/validate-detail-play-sim.mjs runs a reference pass over it).
     occlusion: () => occlusionNow,
     // The next map's host replaces this one: nothing runs this runtime again,

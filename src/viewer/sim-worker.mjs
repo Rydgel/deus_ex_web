@@ -139,6 +139,7 @@ async function handle(data) {
       // The old map's audio unregisters its music first (sim-host.mjs
       // disposeAudio), so that batch reaches the worklet before any of the
       // next map's.
+      const loadStart = performance.now();
       host?.dispose?.(); host = null; loadId = data.id; audio.length = 0; pending = null;
       // A loaded game's slot files the page read from its storage (travel.mjs `loadgame.fetch`) go into Save\Current before the level is read from there
       if (data.currentFiles) {
@@ -156,7 +157,9 @@ async function handle(data) {
       const summary = host.actorSim?.summary;
       send({ type: 'loaded', id: data.id, game: Boolean(host.game), hud: Boolean(host.game?.hud), lit: Boolean(host.meshLighting), notes: host.notes, gameNotes: host.game?.notes ?? [],
         events: host.events.splice(0), hudTextures: host.hudTextures,
-        summary: summary ? structuredClone(summary) : null });
+        summary: summary ? structuredClone(summary) : null,
+        // the load's steps in ms from this message's receipt (the worker's clock is not the page's)
+        loadMarks: [...host.loadMarks, ['loaded', performance.now()]].map(([step, at]) => [step, Math.round(at - loadStart)]) });
       return;
     }
     case 'frame': {
