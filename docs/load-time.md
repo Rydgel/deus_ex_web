@@ -102,7 +102,8 @@ come from the capture session's own earlier loads.
   original, about 1,000 classes keep their identity for the whole session,
   and each map change collects the level left's own classes (28 to 95 here)
   and loads the next level's. Play links every class again on each map
-  change: 967 on the Island and 910 in Training.
+  change: 967 on the Island and 910 in Training. The design is in
+  [class graph design](class-graph-design.md).
 * **One LoadMap per arrival.** Dropping Player start after a cold load would
   save about 0.7 to 0.9 s. Every Stage 5 and 6 comparison so far was made
   against Play after Player start, and the names would then follow one load

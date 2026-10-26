@@ -218,7 +218,7 @@ does, and collect at LoadMap like the original. This needs:
 
 The reference cases are this probe's four class sets and its `Garbage`
 counts. A Play run over the same map sequence must keep and collect the same
-classes.
+classes. The design is in [class graph design](class-graph-design.md).
 
 ## Not yet traced
 
