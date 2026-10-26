@@ -11,6 +11,7 @@
 #   scripts/travel-step.sh <out dir> savecopy <label>       a copy of Save\Current (the .dxs files, with their times) -> <out dir>/<label>.Current/
 #   scripts/travel-step.sh <out dir> savedir <label> <dir>  a copy of Save\<dir> (Save0077, QuickSave: the files with their times) -> <out dir>/<label>.<dir>/
 #   scripts/travel-step.sh <out dir> gobjects <label>       tools/dump-gobjects-win.c: every object of GObjObjects (index, name, class) -> <out dir>/<label>.gobjects.txt
+#   scripts/travel-step.sh <out dir> gflags <label>         the same with each object's address, ObjectFlags and Outer, and the root set (--flags) -> <out dir>/<label>.gflags.txt
 #   scripts/travel-step.sh <out dir> props <name> <label> <field:offset:type>...   tools/dump-actor-win.c with the given fields -> <out dir>/<label>.props.txt
 #   scripts/travel-step.sh <out dir> hold <key> <ms>        dxinput: the key held down for that long (a walk, a turn), then released
 #   scripts/travel-step.sh <out dir> key <name> | type <text> | click <x> <y> | move <x> <y>   dxinput key (names as dxinput.c: ESC, ENTER, F9 ...), text, mouse (viewport client coordinates)
@@ -64,6 +65,8 @@ case $VERB in
         echo "$(date +%T) savedir $1 $2" >> "$OUT/steps.txt" ;;
   gobjects) "$DX_WINE" ad/build/dump-gobjects-win.exe --available 2>/dev/null | clean > "$OUT/$1.gobjects.txt"
         echo "$(date +%T) gobjects $1" >> "$OUT/steps.txt" ;;
+  gflags) "$DX_WINE" ad/build/dump-gobjects-win.exe --flags 2>/dev/null | clean > "$OUT/$1.gflags.txt"
+        echo "$(date +%T) gflags $1" >> "$OUT/steps.txt" ;;
   props) name=$1; label=$2; shift 2; "$DX_WINE" ad/build/dump-actor-win.exe "$name" "$@" 2>/dev/null | clean > "$OUT/$label.props.txt" ;;
   actors) "$DX_WINE" ad/build/dump-actor-win.exe "$1" 'Player:0x5d4:u32' 'Health:0x428:u32' 'Deleted:0x28:bit:0x80' 2>/dev/null | clean > "$OUT/$2.actors.txt" ;;
   shot) # only a Shot file that did not exist before the key is converted and removed (the older ones belong to other captures)

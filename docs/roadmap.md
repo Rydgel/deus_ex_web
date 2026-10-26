@@ -1240,7 +1240,9 @@ re-recorded since the fixes. Firefox runs in Playwright on the Linux host; Safar
 5.1 s of it is the worker's `createGame`). Each level loads and links every script class again,
 which the original's process does once, and runs its startup twice (the cold load, then Player
 start). `isA` and `UStruct::Link`'s walks without per-call sets took about 0.4 s off the Island
-(interleaved medians on a busy machine).
+(interleaved medians on a busy machine). Which classes the original keeps across LoadMap is traced
+in [class lifetime](class-lifetime.md): about 1,000 classes keep their identity for the whole session,
+and each map change collects only the level left's own classes.
 
 Done when declared browser/performance targets pass repeatable tests, long sessions
 and repeated map changes remain stable, and failures offer useful recovery paths.

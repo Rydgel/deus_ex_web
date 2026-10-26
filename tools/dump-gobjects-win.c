@@ -8,12 +8,20 @@
  *   wine dump-gobjects-win.exe LightSwitch
  *   wine dump-gobjects-win.exe --available      (also the free list, below)
  *   wine dump-gobjects-win.exe --module Galaxy.dll   (that module's load address and nothing else)
+ *   wine dump-gobjects-win.exe --flags          (also each object's ObjectFlags, address and Outer, and the root set)
  *
  * --available prints, after the rows, the free list the way the registry holds
  * it (GObjAvailable, Core +0x19e618 data, +0x19e61c count; AddObject pops the
  * last entry first, ~UObject appends), and the objects' addresses ("ptr 0x..."
  * before the name) so a tracer's call records can be matched to rows:
  *   available=<n>: <index> <index> ...      (array order; the last is reused first)
+ *
+ * --flags appends to each row the object's address, its ObjectFlags (+0x1c) and its Outer (+0x18: address and name),
+ *   ... ptr 0x<object> flags 0x<ObjectFlags> outer 0x<outer> <outer name>
+ * and prints, after the rows, the root set (GObjRoot, Core +0x19e5f8 data, +0x19e5fc count: the array AddToRoot
+ * appends to, which SerializeRootSet serializes first; docs/script-gc.md):
+ *   roots=<n>
+ *   root <i> ptr 0x<object> index <index> <class>.<name>
  *
  * Core.dll structure offsets (module-relative), recovered from the GOTY DLLs:
  *   GObjObjects data +0x19e628, count +0x19e62c
@@ -36,9 +44,13 @@
 #define OFF_GOG_COUNT  0x19E62Cu
 #define OFF_AVAIL_DATA 0x19E618u
 #define OFF_AVAIL_COUNT 0x19E61Cu
+#define OFF_ROOT_DATA  0x19E5F8u
+#define OFF_ROOT_COUNT 0x19E5FCu
 #define OFF_NAMES_DATA 0x1961F0u
 #define OFF_NAMES_COUNT 0x1961F4u
 #define OFF_OBJECT_INDEX 0x04u
+#define OFF_OBJECT_OUTER 0x18u
+#define OFF_OBJECT_FLAGS 0x1Cu
 #define OFF_OBJECT_NAME  0x20u
 #define OFF_OBJECT_CLASS 0x24u
 #define OFF_NAMEENTRY_TEXT 0x0Cu
@@ -94,11 +106,22 @@ static void read_wstr(HANDLE process, uintptr_t address, wchar_t *out, int max) 
     }
 }
 
+/* An object's FName text (empty for a null object or a name index past the table). */
+static void object_name_of(HANDLE process, uintptr_t names, unsigned name_count, uintptr_t obj, wchar_t *out, int max) {
+    out[0] = 0;
+    if (!obj || !names) return;
+    unsigned name_index = read_u32(process, obj + OFF_OBJECT_NAME);
+    if (name_index >= name_count) return;
+    uintptr_t entry = read_u32(process, names + name_index * 4);
+    if (entry) read_wstr(process, entry + OFF_NAMEENTRY_TEXT, out, max);
+}
+
 int main(int argc, char **argv) {
-    int available = 0;
+    int available = 0, flags = 0;
     const char *find = NULL, *module = NULL;
     for (int a = 1; a < argc; a++) {
         if (!strcmp(argv[a], "--available")) available = 1;
+        else if (!strcmp(argv[a], "--flags")) flags = 1;
         else if (!strcmp(argv[a], "--module") && a + 1 < argc) module = argv[++a];
         else find = argv[a];
     }
@@ -141,8 +164,28 @@ int main(int argc, char **argv) {
             WideCharToMultiByte(CP_ACP, 0, object_name, -1, ascii, sizeof(ascii), NULL, NULL);
             if (!strstr(ascii, find)) continue;
         }
-        if (available) printf("slot %6u index %6u ptr 0x%08lx %ls.%ls\n", slot, index, (unsigned long)obj, class_name, object_name);
+        if (flags) {
+            uintptr_t outer = read_u32(process, obj + OFF_OBJECT_OUTER);
+            wchar_t outer_name[256];
+            object_name_of(process, names, name_count, outer, outer_name, 256);
+            printf("slot %6u index %6u %ls.%ls ptr 0x%08lx flags 0x%08x outer 0x%08lx %ls\n", slot, index, class_name, object_name,
+                   (unsigned long)obj, read_u32(process, obj + OFF_OBJECT_FLAGS), (unsigned long)outer, outer_name);
+        }
+        else if (available) printf("slot %6u index %6u ptr 0x%08lx %ls.%ls\n", slot, index, (unsigned long)obj, class_name, object_name);
         else printf("slot %6u index %6u %ls.%ls\n", slot, index, class_name, object_name);
+    }
+    if (flags) {
+        uintptr_t roots = read_u32(process, core + OFF_ROOT_DATA);
+        unsigned n = read_u32(process, core + OFF_ROOT_COUNT);
+        printf("roots=%u\n", n);
+        for (unsigned i = 0; i < n; i++) {
+            uintptr_t obj = read_u32(process, roots + i * 4);
+            wchar_t object_name[256], class_name[256];
+            object_name_of(process, names, name_count, obj, object_name, 256);
+            object_name_of(process, names, name_count, obj ? read_u32(process, obj + OFF_OBJECT_CLASS) : 0, class_name, 256);
+            printf("root %u ptr 0x%08lx index %u %ls.%ls\n", i, (unsigned long)obj, obj ? read_u32(process, obj + OFF_OBJECT_INDEX) : 0,
+                   class_name, object_name);
+        }
     }
     if (available) {
         uintptr_t list = read_u32(process, core + OFF_AVAIL_DATA);

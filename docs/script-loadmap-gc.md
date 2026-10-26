@@ -282,8 +282,10 @@ was left half done, and the HUD snapshot then read a destroyed window.
   modeled; the window heap frees their bytes instead.
 * Native-only UObject pointers outside reflected properties are not
   serialized, except ULevel's `Actors` and the UObject header.
-* It is unmeasured whether the original collection unloads DeusExConText.
-  Play keeps it as a persistent package and restores its conversation
+* The original's collection unloads DeusExConText whenever no conversation
+  object is left, and the next level's startup loads it again (measured
+  2026-10-26, [class lifetime](class-lifetime.md#measurement-gc1)). Play
+  keeps it as a persistent package and restores its conversation
   objects (the mission list's whole loaded graph,
   [binding](script-conversation-binding.md#loaded-graph)) to their load
   baseline.

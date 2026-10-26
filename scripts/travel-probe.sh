@@ -17,6 +17,7 @@
 #     slotcopy:<slot>:<label>   a copy of Save\<slot> -> .work/travel/<tag>/<label>.<slot>/ (the files the original wrote for a SaveGame, with their times)
 #     savedir:<label>:<dir>     a copy of Save\<dir> (a slot the session made, QuickSave) -> .work/travel/<tag>/<label>.<dir>/ (the probe removes what it created at the end)
 #     gobjects:<label>          every object of GObjObjects (index, name, class; tools/dump-gobjects-win.c --available) -> <label>.gobjects.txt
+#     gflags:<label>            the same with each object's address, ObjectFlags and Outer, and the root set (dump-gobjects-win.c --flags) -> <label>.gflags.txt
 #     props:<name>:<label>:<field:offset:type>[,...]   tools/dump-actor-win.c with explicit fields -> <label>.props.txt
 #     shot:<name>               the game's Shot key -> .work/travel/<tag>/<name>.png
 #     hold:<key>:<ms>           dxinput: a key held down for that long (the player walks), then released
@@ -89,7 +90,7 @@ run_step() {
   local step=$1 kind arg
   kind=${step%%:*}; arg=${step#*:}
   case $kind in
-    cmd|arrive|snap|shot|key|type|click|move|ini|savecopy|gobjects) scripts/travel-step.sh "$OUT" "$kind" "$arg" ;;
+    cmd|arrive|snap|shot|key|type|click|move|ini|savecopy|gobjects|gflags) scripts/travel-step.sh "$OUT" "$kind" "$arg" ;;
     props) IFS=: read -r pname plabel pfields <<< "$arg"; IFS=, read -ra pf <<< "$pfields"; scripts/travel-step.sh "$OUT" props "$pname" "$plabel" "${pf[@]}" ;;
     actors) scripts/travel-step.sh "$OUT" actors "${arg%%:*}" "${arg#*:}" ;;
     savedir) scripts/travel-step.sh "$OUT" savedir "${arg%%:*}" "${arg#*:}" ;;

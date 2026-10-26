@@ -528,8 +528,9 @@ With the carry the replays of the travel captures freeze an arrival as the captu
 
 Unverified or not modelled:
 
-* **Which classes live on.** The carry treats every written class as kept. It is measured for `LevelInfo` (the captures' freeze; a native class, registered by Engine.dll, whose class object should carry the `RF_Native` the collection keeps: that flag was not read here) and for `JCDentonMale`; whether a script class that no live object or root reaches survives `CollectGarbage(RF_Native)` with its
-  `Defaults` is not traced (a collected class would load again from its package with the package's defaults).
+* **Which classes live on** (traced 2026-10-26, [class lifetime](class-lifetime.md)). Native classes are never collected. A script-only class lives while the collector reaches it, and a level's own classes (its NPCs, decorations, mission script) are collected when it is left and load
+  again with the package's defaults and a fresh name counter. About 1,000 classes alive from the start keep their identity across every map change, including the four whose defaults a cold `00_Training` records, `LevelInfo` and `JCDentonMale`. The carry treats every written class as kept, which is wrong
+  only for a collected class. Training's four are all on kept classes. Other levels' writes (`DeusExWeapon.PreBeginPlay` writes one for every weapon class a level spawns, an NPC's level-only weapon included) were not checked.
 * **Subclasses loaded later.** Play links classes lazily, and a subclass serialized after the write copies the written value through `InitClassDefaultObject` (in that level, as before, and in a later one); which subclasses the original had already built when the
   write happened (a startup package's every class, or only those a level used) is not traced. The in-level SET has the same model.
 * `GlobalSetProperty`'s `SaveConfig(CPF_Config)` is still not modelled (a config property is carried as a default, not written to its `.ini`). The native config classes' and `InputExt`'s SET (`script-native-config.mjs`, `script-input-console.mjs`) are host state outside the

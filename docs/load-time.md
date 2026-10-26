@@ -96,10 +96,13 @@ come from the capture session's own earlier loads.
 * **Keep loaded classes across a map change**, as the original's process
   does. This would save about 2.3 to 2.7 s per map change. It would also
   carry class defaults and per-class name counters the original's way, which
-  would replace the explicit default carry. Not yet traced: which script
-  classes survive LoadMap's `CollectGarbage(RF_Native)`
-  ([travel](travel.md#class-defaults-across-a-travel), "Which classes live
-  on").
+  would replace the explicit default carry. Traced 2026-10-26 in
+  [class lifetime](class-lifetime.md). Native classes are never collected,
+  and a script-only class lives while the collector reaches it. In the
+  original, about 1,000 classes keep their identity for the whole session,
+  and each map change collects the level left's own classes (28 to 95 here)
+  and loads the next level's. Play links every class again on each map
+  change: 967 on the Island and 910 in Training.
 * **One LoadMap per arrival.** Dropping Player start after a cold load would
   save about 0.7 to 0.9 s. Every Stage 5 and 6 comparison so far was made
   against Play after Player start, and the names would then follow one load
