@@ -4,6 +4,18 @@
 import {readClass} from '../unreal/classes.mjs';
 import {createScriptLoadGraph} from './script-load-graph.mjs';
 import {loadConfigCache} from './config-cache.mjs';
+import {createOriginalLoadTracker} from './original-loaded.mjs';
+
+// UFunction::Bind (EndLoad's PostLoad, script-function-bind.mjs) writes each native function's pointer at +0x7c: GNatives[iNative] for a
+// numbered native, else the package DLL's `int<Class>exec<Name>` export. Play has no DLL address space and dispatches natives itself
+// (ScriptRuntime.invokeNative), and nothing reads that slot. A numbered native's slot holds HOST_NATIVE_TOKEN + iNative (nonzero, as
+// the original's assertion requires, never dereferenced); a name-bound native's export is not looked up, so its slot stays null.
+const HOST_NATIVE_TOKEN = 0x80000000;
+const HOST_NATIVE_BINDING = Object.freeze({
+  readNative: index => (HOST_NATIVE_TOKEN | index) >>> 0,
+  getDllExport: () => null,
+  readPointer: () => 0,
+});
 
 export class ScriptClassLoader {
   /** `carriedDefaults`: the class defaults a travel carried from the level left (Map class key -> Map field key -> [[index, value]]:
@@ -15,7 +27,10 @@ export class ScriptClassLoader {
     this.resources = resources;
     this.carriedDefaults = carriedDefaults;
     this.graph = createScriptLoadGraph({captureEvents, meshLoadServices, resourceServices, lifecycle,
+      nativeFunctions: HOST_NATIVE_BINDING, recordLoadEdges: true,
       classSerialized: carriedDefaults?.size ? record => this.applyCarriedDefaults(record) : null});
+    // Which of the graph's objects the original holds loaded (original-loaded.mjs): bookkeeping for the LoadMap collection.
+    this.originalLoads = createOriginalLoadTracker(this.graph);
     this.identities = new WeakMap();
     this.nativeRecords = new WeakMap();
     this.linking = new Set();

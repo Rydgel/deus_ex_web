@@ -245,6 +245,10 @@ Against gc2's frozen dumps (`scripts/validate-original-loaded.mjs`):
   the original (the readiness passes link 607 to 691 per level) and fewer
   objects (it preloads lazily and never runs EndLoad).
 
+**What step 1 built** is a walk over the graph's recorded load edges, which
+preloads metadata only (see Migration, step 1), rather than EndLoad around
+each request. It reaches the same classes on the three measured maps.
+
 **Long-term shape.** Once the script packages are resident in the process,
 fetching is no longer asynchronous. If nothing else in `prepareFunction` is
 asynchronous, the VM could load and link a class on demand, synchronously,
@@ -348,6 +352,12 @@ consts, enums and structs, whose Outer chain leads to it):
 * Its handles are released one by one.
 * Its readiness stays.
 
+The purge also prunes the class loader graph's load edges and the
+original-loaded tracker's marks for the purged records, or the edge map
+keeps them alive. Before it marks, the collection calls the tracker's
+`flush()`, so that a request which arrived during a load (a late
+DynamicLoadObject) is walked first.
+
 **A package** whose objects are all purged is unloaded: its linker leaves
 `linkers`, and the log line is `Unloading: Package <name>`. The AssetStore
 keeps its bytes.
@@ -432,18 +442,56 @@ stay equal for single-map sessions.
        hook, which is off unless a measurement passes it.
      * bench-sim digests are unchanged (03_NYC_747 `0750ca718aa7c059`,
        01_NYC_UNATCOIsland `52595f00465194dd`).
-   * *Second half.* The live graph knows which of its records are
-     original-loaded:
-     * the request kinds at the measured entry points;
-     * EndLoad's closure on original requests;
-     * the host-only flag and promotion;
-     * name lookups restricted to original-loaded objects.
+   * *Second half, done 2026-10-26.* The live graph knows which of its
+     records the original holds loaded (`src/runtime/original-loaded.mjs`).
+     * **Load edges.** The class loader's graph records its load edges
+       (`recordLoadEdges`):
+       * every reference a Preload resolves, from the object whose
+         serialization is in progress (`linkerPreload`'s `preloadStack`,
+         including its own recursion into the class and the struct super);
+       * each new object's Class, Outer and SuperField.
 
-     The closure costs about 2 to 2.7 s per cold map on a separate graph,
-     and 33,000 to 35,000 objects. Whether the live graph pays that at the
-     first map, or the process keeps a shadow closure by key, is decided
-     against a profile. No behavior change. Gate: `validate-original-loaded`
-     computed from the live graph.
+       On a cold Training load that is about 151,000 edges from 29,600
+       records, about 7 MB.
+     * **The walk.** Starting from the original's requests (the level's
+       imports at LoadMap's collection point in `createScriptDoors`, each
+       instantiated object's class in `linkInstance`, a graph
+       StaticLoadObject/DynamicLoadObject), the tracker follows the edges.
+       * A reached metadata record that Play has not preloaded is preloaded
+         inside BeginLoad/EndLoad, as the original's EndLoad would.
+       * Other kinds are marked and deferred: `setDeferPreload` leaves their
+         flags alone, and EndLoad's post-load pass skips them. Their bulk
+         data is not needed.
+       * Level imports in a package Play has not prepared on the graph are
+         skipped, and so are dynamic loads routed outside the graph. Preparing
+         them would change a later DynamicLoadObject's route.
+     * **Measured.**
+       * On DX.dx, 00_Training and 01_NYC_UNATCOIsland the tracker reaches
+         exactly the separate closure's classes, with no failed walk
+         (`validate-original-loaded` now checks this).
+       * It marks 32,400 to 33,500 objects; heap +28 MB after a cold load.
+       * A cold Island boot is about 0.3 s slower (interleaved bench-sim
+         medians, 5,949 → 6,261 ms). Step 3 makes that a once-per-page cost
+         plus the next level's increment.
+     * **Bind.** EndLoad's PostLoad now runs UFunction::Bind in Play. A
+       numbered native's slot (`+0x7c`) holds a host token,
+       `0x80000000 | iNative`, never dereferenced. A name-bound native's DLL
+       export is not looked up, so its slot stays null. In the original it
+       holds the export's address. Nothing in Play reads that slot.
+     * **Unchanged behavior.** Nothing reads the marks yet.
+       * bench-sim digests are unchanged, and the unit tests pass.
+       * So do the load-graph, Player start, collection and dynamic-load
+         validators, and the travel, restore and load-game validators that
+         have captures on the Mac (load-game, travel-restore-objects,
+         travel-transitions, restored-speech).
+       * Chromium loads Training and the Island in worker and inline modes
+         with no runtime error.
+       * The loaded game's level, a `.dxs`, goes through `reachLevel`.
+   * *Still to do (1c, a behavior change toward fidelity):* name lookups
+     (FindObject, StaticExec's GET and SET) see only original-loaded objects,
+     with a validator run of their own. The host-only flag needs no extra
+     state: a record is host-only exactly when the tracker has not reached
+     it. Promotion is the walk.
 2. **Identity split.**
    * the process package table and the runtime level table in
      `ScriptObjects`;

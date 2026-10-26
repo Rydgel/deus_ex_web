@@ -7,6 +7,8 @@
  * load classes the original never loads.
  *
  * Checks:
+ * - per map, Play's own bookkeeping (the live graph's original-loaded tracker, src/runtime/original-loaded.mjs, which walks the graph's
+ *   load edges from the same requests during the load) reaches exactly the closure's classes, without a failed walk;
  * - per map (DX.dx, 00_Training, 01_NYC_UNATCOIsland, each loaded cold): no class of the closure is missing from the original's dump, and
  *   every class only the original holds is a class a DLL registered and never loaded from its package (flags without the 0x70000 load
  *   context bits, e.g. 0x44084044 WinDrv.WindowsClient);
@@ -43,14 +45,17 @@ if (option('one', null)) {
     for (const name of await readdir(`${root}/${dir}`)) files.push({path: `${dir}/${name}`, read: () => readFile(`${root}/${dir}/${name}`)});
   const assets = new AssetStore(files), asset = await assets.get(map);
   const recorder = closure.recordOriginalRequests(ScriptRuntime);
-  await createGame(decodeMap(asset.bytes), asset, assets, {randomSeed: 1, presentation: true});
+  const game = await createGame(decodeMap(asset.bytes), asset, assets, {randomSeed: 1, presentation: true});
   recorder.stop();
+  // Play's own bookkeeping of the same thing: the live graph's original-loaded tracker (src/runtime/original-loaded.mjs)
+  const tracker = game.doors.scriptRuntime.runtime.classLoader.originalLoads;
+  const live = {classes: [...tracker.classes()].sort(), failures: tracker.failures.slice(0, 5), marked: tracker.size};
   const level = await closure.levelImportRequests(assets, asset);
   const dynamic = (await Promise.all(recorder.dynamicNames().map(name => closure.pathRequest(assets, name, 'DynamicLoadObject')))).filter(Boolean);
   const result = await closure.originalLoadClosure(assets, [...level, ...recorder.requests(), ...dynamic]);
   writeFileSync(option('out'), JSON.stringify({map, classes: [...result.classes].sort(),
     requests: {level: level.length, instantiated: recorder.requests().length, dynamic: dynamic.length},
-    objects: result.objects.size, skipped: Object.fromEntries(result.skipped), failures: result.failures}));
+    objects: result.objects.size, skipped: Object.fromEntries(result.skipped), failures: result.failures, live}));
   process.exit(0);
 }
 
@@ -80,6 +85,12 @@ try {
     if (child.status !== 0 || !existsSync(out)) { failures.push(`${map}: the cold load or its closure failed (${String(child.stderr).trim().split('\n').pop()})`); continue; }
     const result = JSON.parse(readFileSync(out, 'utf8'));
     closures.set(stop, new Set(result.classes));
+    const live = new Set(result.live.classes);
+    const liveMissing = result.classes.filter(key => !live.has(key)), liveExtra = result.live.classes.filter(key => !closures.get(stop).has(key));
+    if (liveMissing.length || liveExtra.length)
+      failures.push(`${map}: the live tracker's classes differ from the closure: missing ${liveMissing.slice(0, 8).join(' ') || '-'}, extra ${liveExtra.slice(0, 8).join(' ') || '-'}`);
+    if (result.live.failures.length) failures.push(`${map}: the live tracker's walk failed: ${JSON.stringify(result.live.failures[0])}`);
+    notes.push(`${map}: the live tracker marks ${result.live.marked} objects, ${result.live.classes.length} classes (the closure's: ${liveMissing.length || liveExtra.length ? 'NO' : 'yes'})`);
     if (result.failures.length) failures.push(`${map}: ${result.failures.length} requests failed to replay, first ${result.failures[0].key}: ${result.failures[0].error}`);
     notes.push(`${map}: requests ${result.requests.level} level imports, ${result.requests.instantiated} instantiated classes, ${result.requests.dynamic} DynamicLoadObject; ` +
       `${result.objects} objects, ${result.classes.length} classes; unrecovered serializers skipped ${JSON.stringify(result.skipped)}`);
@@ -114,4 +125,4 @@ try {
 
 for (const note of notes) console.log(`  ${note}`);
 if (failures.length) { console.log(`FAIL ${NAME}:\n  ${failures.join('\n  ')}`); process.exit(1); }
-console.log(`PASS ${NAME}: the original's classes on DX.dx, 00_Training and 01_NYC_UNATCOIsland are the EndLoad closure of its load requests plus the classes the DLLs register, and each map change collects and loads exactly the difference of the closures`);
+console.log(`PASS ${NAME}: the original's classes on DX.dx, 00_Training and 01_NYC_UNATCOIsland are the EndLoad closure of its load requests plus the classes the DLLs register, Play's live tracker reaches exactly those, and each map change collects and loads exactly the difference of the closures`);

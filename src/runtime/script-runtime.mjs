@@ -1223,6 +1223,8 @@ export class ScriptRuntime {
    * spares the hash lookup on every property access (attachment is permanent). */
   linkInstance(receiver,instance) {
     this.instances.set(receiver,instance);
+    // An object of the class exists, so the original holds the class loaded (original-loaded.mjs).
+    if(instance.cls?.loadRecord)this.classLoader?.originalLoads.reach([instance.cls.loadRecord]);
     bumpReceiverEpoch();
     stateChanged(receiver);
     // An object the collection model never frees (it was unreachable, so the
@@ -1700,6 +1702,8 @@ export class ScriptRuntime {
       throw error;
     }
     restore();
+    // the original's load request: what it loaded is the original's (original-loaded.mjs)
+    if(result.object!==null)loader.originalLoads.reach([result.object]);
     this.modelGraphDynamicLoad(result.events);
     for(const event of result.events)this.warning?.({type:'DynamicLoadObject',...event});
     return result.object===null?null:loader.identity(result.object);

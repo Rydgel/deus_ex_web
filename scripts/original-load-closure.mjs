@@ -66,9 +66,10 @@ export async function pathRequest(assets, path, why) {
   return index ? {asset, index, key: `${asset.name}.${asset.pkg.exports[index - 1].path}`, why} : null;
 }
 
-/** Replays `requests` on a fresh load graph, each inside BeginLoad/EndLoad. Returns the constructed objects as
- * `{key, kind, record}` (key "package.path" lower-cased), the classes among them, and the requests that failed. */
-export async function originalLoadClosure(assets, requests) {
+/** A load graph that only the original's requests reach (each inside BeginLoad/EndLoad), kept across `add` calls as a process
+ * keeps its loaded objects. `add(requests)` returns the objects those requests constructed. `objects` maps every constructed object
+ * as `{key, kind, record}` (key "package.path" lower-cased); `classes()` adds the classes the DLLs register (Play's static records). */
+export async function createOriginalLoadModel(assets) {
   const packageAssets = new Map();
   const prepare = async asset => {
     const queue = [asset];
@@ -79,7 +80,6 @@ export async function originalLoadClosure(assets, requests) {
       for (const name of current.pkg.dependencies) if (!packageAssets.has(lower(name))) queue.push(await assets.get(name));
     }
   };
-  for (const request of requests) await prepare(request.asset);
   let lazyLoad = 1;
   // EndLoad's PostLoad binds every loaded UFunction (UFunction::Bind): it writes the function's native pointer and creates no object.
   // This measurement counts objects only, so Bind's lookups answer with placeholder pointers (nonzero, never dereferenced).
@@ -93,33 +93,50 @@ export async function originalLoadClosure(assets, requests) {
   // are not followed, so the closure is a lower bound there. The kinds are reported.
   const skipped = new Map();
   const skipUnrecovered = (object, kind) => { skipped.set(kind, (skipped.get(kind) ?? 0) + 1); return true; };
-  const graph = createScriptLoadGraph({packageAssets, captureEvents: true, nativeFunctions, skipUnrecovered,
+  // Every object a load constructs, in order (StaticConstructObject, a new one or an existing one reinitialized): no event log is kept.
+  const constructed = [];
+  const graph = createScriptLoadGraph({packageAssets, nativeFunctions, skipUnrecovered, onConstruct: record => constructed.push(record),
     resourceServices: {seconds: () => 0, getLazyLoad: () => lazyLoad, setLazyLoad: value => { lazyLoad = value; }, mipBias: () => 0},
     meshLoadServices: {getLazyLoad: () => 1},
     lifecycle: {logReceiver: {kind: 'GWarn'}, logEndLoad: () => {}, reallocLoaded: () => {}}});
   graph.setConfig(await loadConfigCache(assets.configFiles ?? []));
-  const failures = [];
+  const failures = [], objects = new Map();
   const debug = typeof process !== 'undefined' && process.env.CLOSURE_DEBUG;
-  for (const request of requests) {
-    if (debug) console.error('request', request.key, 'loaded before', graph.loadedObjects.length, 'nest', graph.loadState.nest);
-    graph.beginLoad();
-    try { graph.loadExport(request.asset.name, request.index); }
-    catch (error) { failures.push({key: request.key, why: request.why, error: String(error?.message ?? error).split('\n')[0]}); if (debug) throw error; }
-    try { graph.endLoad(); }
-    catch (error) { failures.push({key: request.key, why: `${request.why} (EndLoad)`, error: String(error?.message ?? error).split('\n')[0]}); if (debug) throw error; }
-  }
-  const objects = new Map();
-  for (const event of graph.events) {
-    if (event.op !== 'ConstructObject' && event.op !== 'ConstructExisting') continue;
-    const record = event.object, key = lower(graph.fullName(record));
-    const kind = graph.nameText(graph.slotOf(graph.classRecordOf(record), 0x20));
-    objects.set(key, {key, kind, record});
-  }
-  // The UClass objects the DLLs register at startup (Play's static records: Core, Engine, DeusEx) exist whatever was loaded.
-  const registered = new Set([...graph.staticRecords.keys()].map(lower));
-  const classes = new Set([...objects.values()].filter(object => object.kind === 'Class').map(object => object.key));
-  for (const key of registered) classes.add(key);
-  return {objects, classes, registered, failures, skipped, graph};
+  return {
+    graph, objects, failures, skipped,
+    async add(requests) {
+      for (const request of requests) await prepare(request.asset);
+      for (const request of requests) {
+        if (debug) console.error('request', request.key, 'loaded before', graph.loadedObjects.length, 'nest', graph.loadState.nest);
+        graph.beginLoad();
+        try { graph.loadExport(request.asset.name, request.index); }
+        catch (error) { failures.push({key: request.key, why: request.why, error: String(error?.message ?? error).split('\n')[0]}); if (debug) throw error; }
+        try { graph.endLoad(); }
+        catch (error) { failures.push({key: request.key, why: `${request.why} (EndLoad)`, error: String(error?.message ?? error).split('\n')[0]}); if (debug) throw error; }
+      }
+      const added = [];
+      for (const record of constructed.splice(0)) {
+        const key = lower(graph.fullName(record));
+        const kind = graph.nameText(graph.slotOf(graph.classRecordOf(record), 0x20));
+        if (!objects.has(key)) added.push(key);
+        objects.set(key, {key, kind, record});
+      }
+      return added;
+    },
+    classes() {
+      // The UClass objects the DLLs register at startup (Play's static records: Core, Engine, DeusEx) exist whatever was loaded.
+      const out = new Set([...objects.values()].filter(object => object.kind === 'Class').map(object => object.key));
+      for (const key of graph.staticRecords.keys()) out.add(lower(key));
+      return out;
+    },
+  };
+}
+
+/** One model, one set of requests: the closure of a cold load. */
+export async function originalLoadClosure(assets, requests) {
+  const model = await createOriginalLoadModel(assets);
+  await model.add(requests);
+  return {objects: model.objects, classes: model.classes(), failures: model.failures, skipped: model.skipped, graph: model.graph};
 }
 
 /** The class rows of a dump-gobjects-win --flags dump, as "package.class" (lower case). */

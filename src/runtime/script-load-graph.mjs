@@ -57,7 +57,8 @@ const accessorMembers = (data, accessors) => {
 
 export function createScriptLoadGraph({packageAssets = new Map(), captureEvents = false,
   nativeFunctions = {}, lifecycle = {}, resourceServices = null,
-  meshLoadServices = resourceServices, classSerialized = null, skipUnrecovered = null} = {}) {
+  meshLoadServices = resourceServices, classSerialized = null, skipUnrecovered = null, onConstruct = null,
+  recordLoadEdges = false} = {}) {
   if (resourceServices) {
     for (const name of ['seconds', 'getLazyLoad', 'setLazyLoad', 'mipBias']) {
       if (typeof resourceServices[name] !== 'function')
@@ -173,6 +174,22 @@ export function createScriptLoadGraph({packageAssets = new Map(), captureEvents 
   const assertions = [];
   const linkOrder = captureEvents ? [] : {push() {}};
   const createStack = [];       // the linker currently inside CreateExport
+  // Load edges (`recordLoadEdges`; docs/class-graph-design.md "Loaded in the original's sense"): record -> the records its load reached,
+  // so a walk can find what the original's EndLoad would have loaded from a request even through objects Play loaded earlier. A
+  // reference the object's Preload resolves (the object whose serialization is in progress is the top of `preloadStack`), and a new
+  // object's Class, Outer and SuperField.
+  const preloadStack = recordLoadEdges ? [] : null;
+  const loadEdges = recordLoadEdges ? new Map() : null;
+  const loadEdge = (from, to) => {
+    if (!loadEdges || !from || !to || from === to || typeof from !== 'object' || typeof to !== 'object') return;
+    let targets = loadEdges.get(from);
+    if (!targets) loadEdges.set(from, targets = new Set());
+    targets.add(to);
+  };
+  // `setDeferPreload(policy)`: while a policy is set, an object it returns true for is not preloaded and keeps its flags (RF_NeedLoad,
+  // RF_NeedPostLoad); EndLoad's post-load pass skips it. A later preload with no policy loads it as before.
+  let deferPreload = null;
+  const deferredPreloads = new WeakSet();
 
   const slotOf = (record, offset) => {
     const holder = record?.nativeSlots instanceof Map ? record.nativeSlots.get(offset) : undefined;
@@ -489,7 +506,9 @@ export function createScriptLoadGraph({packageAssets = new Map(), captureEvents 
   }
 
   function indexToObject(linker, ref) {
-    return linkerIndexToObject(linker, ref, importServices);
+    const object = linkerIndexToObject(linker, ref, importServices);
+    if (preloadStack?.length) loadEdge(preloadStack[preloadStack.length - 1], object);
+    return object;
   }
 
   const importState = {importCount: 0};
@@ -562,6 +581,8 @@ export function createScriptLoadGraph({packageAssets = new Map(), captureEvents 
         if (existing.resourceConstructed)
           throw new Error(`Native resource reconstruction/destruction is unsupported: ${fullName(existing)}`);
         events.push({op: 'ConstructExisting', object: existing, name: nameText(name)});
+        onConstruct?.(existing);
+        loadEdge(existing, cls); loadEdge(existing, outer);
         warnings.push({kind: 'exists', object: existing, name: nameText(name)});
         const wasClass = isA(existing, classStatic);
         const saved = wasClass ? {
@@ -617,6 +638,8 @@ export function createScriptLoadGraph({packageAssets = new Map(), captureEvents 
       initializeResource(record);
       objectHash.set(key, record);
       events.push({op: 'ConstructObject', object: record, cls: kind, name: nameText(name)});
+      onConstruct?.(record);
+      loadEdge(record, cls); loadEdge(record, outer);
       return record;
     },
     setLinker(object, linker, index) {
@@ -632,6 +655,7 @@ export function createScriptLoadGraph({packageAssets = new Map(), captureEvents 
     write(object, field, value) {
       if (field !== 'superField') throw new Error(`CreateExport write ${field} unmapped`);
       writeSlot(object, 0x28, value);
+      loadEdge(object, value);
       object.base = value;
     },
     bind(object) {
@@ -850,6 +874,8 @@ export function createScriptLoadGraph({packageAssets = new Map(), captureEvents 
     // clears RF_NeedLoad before virtual Serialize. Do not silently consume a
     // resource through the shorter UObject serializer and strand its flags.
     if (slotOf(object, 0x10) && (slotOf(object, 0x1c) & 0x200)) {
+      if (deferPreload?.(object)) { deferredPreloads.add(object); return; }
+      deferredPreloads.delete(object);
       // A measurement graph (scripts/original-load-closure.mjs) counts which objects a load creates: it may keep an object whose
       // Serialize body is not recovered as created and unloaded (its own references are then not followed) instead of stopping.
       if (skipUnrecovered) {
@@ -1019,6 +1045,7 @@ export function createScriptLoadGraph({packageAssets = new Map(), captureEvents 
   }
 
   const preloadServices = {
+    preloadStack,
     isValidLinker: linker => linker != null,
     readExport: (linker, index) => linker.exports[index],
     indexToObject,
@@ -1253,6 +1280,7 @@ export function createScriptLoadGraph({packageAssets = new Map(), captureEvents 
       throw new Error(`No recovered Bind for ${fullName(object)}`);
     },
     conditionalPostLoad(object) {
+      if (deferredPreloads.has(object)) return;
       const kind = fullName(classRecordOf(object));
       if ((slotOf(object, 0x1c) & 0x01000000) && !metadataPostLoad.has(kind))
         throw new Error(`No recovered PostLoad for ${fullName(object)} (${kind})`);
@@ -1423,7 +1451,8 @@ export function createScriptLoadGraph({packageAssets = new Map(), captureEvents 
   return {
     setConfig(cache) { configCache = cache; },
     get config() { return configCache; },
-    packageAssets, boundaries, linkers, packageRoots, staticRecords, importState,
+    packageAssets, boundaries, linkers, packageRoots, staticRecords, importState, loadEdges,
+    setDeferPreload(policy) { deferPreload = policy; },
     events, warnings, assertions, linkOrder,
     get loadedObjects() { return loadedObjects; },
     suspendLoadQueue, staticLoadServices,

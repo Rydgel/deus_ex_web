@@ -369,6 +369,16 @@ export function linkerLoadArchive({ linker, reader, linkerRoot = null, version, 
  *   failAssert(assert)                   appFailAssert 0x10102c70
  */
 export function linkerPreload(object, context = {}, services = {}) {
+  // `services.preloadStack`: a host that records what each Preload references (the load graph's load edges) needs the object whose
+  // serialization is in progress. Every Preload counts, this body's own recursion into the class and the struct super included.
+  const stack = services.preloadStack;
+  if (!stack) return linkerPreloadBody(object, context, services);
+  stack.push(object);
+  try { return linkerPreloadBody(object, context, services); }
+  finally { stack.pop(); }
+}
+
+function linkerPreloadBody(object, context = {}, services = {}) {
   const events = context.events ?? (context.events = []);
   const archive = context.archive;
   const linker = context.linker ?? archive?.linker;

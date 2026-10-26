@@ -2393,6 +2393,9 @@ export async function createScriptDoors({
     stopSoundId:id=>runtime.audio.galaxy.stopSoundId(id),
     noteDestroy:actor=>runtime.audio.galaxy.noteDestroy(actor),
   };
+  // LoadMap's StaticLoadObject of the level resolves every import of the level package: the original holds what they reach loaded
+  // (original-loaded.mjs). This is LoadMap's collection point, before the GameInfo spawn (docs/class-graph-design.md "LoadMap in Play").
+  runtime.classLoader?.originalLoads.reachLevel(assets,asset);
   loadMapGame=await prepareLoadMapGame({runtime,assets,level,levelInfo,prepareClass:prepareNpcClass});
   // A saved level keeps the GameInfo it was saved with (LevelInfo.Game is one of its objects): LoadMap's GameInfo branch does not run.
   if(!restore)loadMapGame.reload();
