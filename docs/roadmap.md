@@ -1180,6 +1180,11 @@ conversations, frozen-phase frames, the zone-0 walking branch) merged on 2026-10
 
 ## 6. Persist progress and complete the campaign
 
+**All 54 rows of the [Stage 6 exit criteria](stage-6-exit-criteria.md) pass on their last runs (2026-10-26):** every mission's placed
+chain against the original under Wine ([chains](stage-6-chains.md)), both sides of each lasting choice ([flag census](stage-6-flag-census.md)),
+the three endings, and one Play run from New Game to an ending whose every mission exit equals the original's. The stage closes when its
+gate (`validate-stage6-acceptance.mjs`, not written yet) runs every proof together on one commit, as Stages 4 and 5 did.
+
 Make the page behave as the game does (the user, 2026-10-21): it starts as the original starts
 (`DeusEx.ini` `LocalMap=DX.dx`: the logo map and its main menu, from which New Game, Training and
 Load Game start), and the web debugging HUD is shown only with `?debug=1`. Every step of that

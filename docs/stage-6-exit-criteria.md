@@ -3,9 +3,11 @@
 Status: **adopted by the user on 2026-10-23** in four decisions ([below](#what-the-user-decided-2026-10-23)); written from master fe15b3cb. The data is
 `scripts/stage6-criteria.mjs` (`node scripts/stage6-criteria.mjs` prints the scoreboard, `--list` the rows, `--markdown` the tables of this note); the
 facts each mission row is built from are in [the Stage 6 inventory](stage-6-inventory.md). Rows 6.1.6 and 6.2.2 were proved on the Mac (2026-10-23): their captures are in the Mac's `.work/travel`, the other rows' (the endings' of 2026-10-24 among them)
-in the Linux host's, and a validator whose capture is not on the machine SKIPs. There is no gate script yet: a row's PASS below means its proof
-checks exist and passed on their last run, not that a gate ran them together. The gate (`validate-stage6-acceptance.mjs`, on the model of
-[Stage 5's](stage-5-exit-criteria.md#running)) is written once the first mission rows have proofs.
+in the Linux host's, and a validator whose capture is not on the machine SKIPs. **All 54 rows pass on their last runs
+(2026-10-26).** There is no gate script yet: a row's PASS means its proof checks exist and passed on their last run, not that a gate ran them
+together on one commit. Several rows (the start, persistence, transitions, the endings) last ran before the Play changes of 2026-10-25/26 (the
+camera's zone stamped, FName spelling across levels, class defaults carried across travel, the level's URL after a load). The gate
+(`validate-stage6-acceptance.mjs`, on the model of [Stage 5's](stage-5-exit-criteria.md#running)) runs them together and closes the stage.
 
 The roadmap's criterion for section 6 ([roadmap](roadmap.md#6-persist-progress-and-complete-the-campaign)): *done when reloads and return visits preserve
 expected world state, and the campaign can be completed through representative choices and endings without progression blockers. Validate each

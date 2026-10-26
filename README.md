@@ -10,7 +10,11 @@ run ([Stage 4 close](docs/stage-4-exit-criteria.md#stage-4-close)). **Stage 5
 gameplay is complete** (2026-10-21): its adopted gate passes 50 of 50 on master
 ([Stage 5 close](docs/stage-5-exit-criteria.md#stage-5-close)), each criterion on
 original captures of Liberty Island and Training replayed tick by tick in Play (see below).
-**Stage 6** (saves, travel, the campaign) is in progress.
+**Stage 6** (saves, travel, the campaign): **all 54 of its rows pass on their last
+runs** (2026-10-26). Every mission's placed chain, both sides of each lasting choice and
+one Play run from New Game to an ending equal the original under Wine
+([Stage 6 below](#stage-6-campaign--rows-pass-2026-10-26)). Its closing gate, which runs
+every proof together on one commit, is still to run.
 
 The target is **100% original fidelity**. Every supported behavior needs original
 data, script, native-code or measured evidence. Unverified substitutes remain
@@ -105,9 +109,9 @@ Frame cost and the 120 fps target are tracked in
 **Current boundaries:** Stage 3 completion covers the measured runtime paths,
 not every interaction or full campaign compatibility. Stage 5 gameplay is
 proven only where its gate passes (below); the other gameplay rows play in Play
-but have no original capture yet. Saves and map travel are Stage 6 (the main menu's Training button on the logo map
-travels to `00_Training` in Play with the player the original carries, and New Game runs the real screens, the intro and the Island with its starting inventory, [travel](docs/travel.md); every other branch stops at a labeled boundary). Other maps expose
-unsupported-content diagnostics. The final original camera/motion comparison
+but have no original capture yet. Stage 6's campaign
+rows compare placed chains, not free play: the walk and the fights between the steps are
+not part of them (the user's decision, [Stage 6 exit criteria](docs/stage-6-exit-criteria.md)). The final original camera/motion comparison
 and actual window/tab pause acceptance deferred from Stage 2 remain open.
 
 ## Stage 3 completion — 2026-09-28
@@ -244,6 +248,36 @@ as Engine.dll's FindSpot places them, NaN probes included. The user adopted the 
 2026-10-21 ([decisions](docs/stage-5-exit-criteria.md#what-the-user-decided-2026-10-21)); the placed approaches were re-captured with held keys on 2026-10-21 (`air2`, `obs1`, `swm3`; [held keys](docs/stage-5-exit-criteria.md#held-keys-2026-10-20)).
 Swimming, ladders, pawn navigation, doors opened by NPCs and the intro cinematic
 also run from translated original code ([roadmap](docs/roadmap.md#5-implement-the-full-gameplay-systems)).
+
+## Stage 6 campaign — rows pass 2026-10-26
+
+The [Stage 6 exit criteria](docs/stage-6-exit-criteria.md) define 54 rows (3 more are
+excluded): the start and the menus, persistence (saves, loads, return visits), the
+transitions, and per mission its required chain, both sides of its lasting choices and
+every conversation, the three endings, and the campaign in one run.
+`node scripts/stage6-criteria.mjs` prints the scoreboard. **All 54 pass on their last runs.**
+
+- **Mission chains** (6.4.NN.1, [chains](docs/stage-6-chains.md)): each mission is a
+  scripted route of placed steps (conversations and their choices, computers, keypads,
+  map exits) run in Play (`scripts/chain-play.mjs`) and in the original under Wine
+  (`scripts/chain-original.mjs`) from the same save. The flags, door states and travel
+  text at every snapshot are compared (`scripts/validate-stage6-chain.mjs`).
+- **Carried choices** (6.4.NN.2, [flag census](docs/stage-6-flag-census.md)): 66 units, one
+  for each side of each lasting flag, compared on what the later mission's reader observes
+  (`scripts/validate-flag-census.mjs`).
+- **The campaign in one run** (6.6.1): one Play process from New Game through all fourteen
+  chains to ending 3 (86 map changes). Each mission's exit text equals the original's
+  (`scripts/validate-full-run.mjs`).
+
+What the original itself varies between runs is not compared: a flag a script draws with
+`FRand` is checked by presence only, fights the placements would provoke are kept from
+starting (the player is undetectable there), and doors that close again by themselves are
+not read. Everything a chain's steps decide is compared exactly. Play fixes the comparisons
+found: the camera's zone stamped every frame (pawns near the player stay awake), FName
+spelling across levels (map actors' Name properties included), class defaults carried
+across travel, a loaded level keeping its file's URL, and the first tick after a load
+spanning the load (the page). Still open: the gate that runs every proof together on one
+commit, as Stages 4 and 5 had before they closed.
 
 ## Open the viewer
 
@@ -383,7 +417,8 @@ static doors. The footprint overlays every height and is not a game screenshot.
   complete (2026-10-17, gate 70 of 70).
 - **Stage 5:** complete movement, AI, combat, stealth, RPG systems, and conversations —
   complete (2026-10-21, gate 50 of 50).
-- **Stage 6:** persist saves and map state, then validate the full campaign — in progress.
+- **Stage 6:** persist saves and map state, then validate the full campaign — all 54 rows pass
+  (2026-10-26); the closing gate run remains.
 - **Stage 7:** meet browser compatibility, performance, and reliability targets.
 
 The numbered stages and acceptance criteria are in [the roadmap](docs/roadmap.md).
