@@ -89,8 +89,11 @@ bound, as the original does.
   0x20) skipped, then GlobalSetProperty(value, class, property, offset, 1). A
   missing class or property logs "Unrecognized class %s" / "Unrecognized
   property %s" (NAME_ExecWarning) into the command's output and returns 1.
-  Only InputExt is implemented; SET of any other class is an explicit
-  UnsupportedConsoleCommandError (script-console-command.mjs staticExec).
+  Besides InputExt and the native config classes, a SET of a script class
+  finds it among the classes the original holds and writes every live
+  actor of it and its Defaults (script-console-command.mjs scriptClassSet;
+  [class lifetime](class-lifetime.md#name-lookups-gc3)). Other targets are
+  an explicit UnsupportedConsoleCommandError.
 - `GlobalSetProperty` 0x101523a0: every live object whose class chain reaches
   the class (the viewport's one InputExt) imports the text (UStrProperty: the
   whole remaining text) and runs PostEditChange (Modify, a game no-op); then

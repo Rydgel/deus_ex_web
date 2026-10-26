@@ -80,17 +80,21 @@ a thunk `0x10101190` to `0x10167110`), which calls `UObjectProperty::ImportText`
 A text that ends at the token returns a pointer **one wide character past the terminator** (`DeusEx.Female4` returns 15
 of 14 characters): a parameter that follows (ViewClass's `bQuiet`) would parse the memory after the string, which has no
 source; Play stops there with an error instead of guessing. `src/runtime/script-class-import-text.mjs` is the
-translation; `ScriptRuntime.importClassText` supplies `StaticFindObject` over the classes Play has linked (a class
-Play has not linked yet is an explicit error, not a miss, because the original's table holds every class of a loaded
-package, and two linked classes with one bare name are an error because hash order is not recovered) and the metaclass
-from the parameter (`metadata.metaClass`).
+translation. `ScriptRuntime.importClassText` supplies the metaclass from the parameter (`metadata.metaClass`) and
+`StaticFindObject` over the classes the original holds (`ScriptRuntime.originalClass`, `original-loaded.mjs` `findClass`;
+[class graph design](class-graph-design.md), step 1c). A class Play linked only for its own readiness is a miss there,
+as it is in the original. Two explicit errors remain:
+* a class the original holds that Play has not linked;
+* two held classes with one bare name, because the hash order between them is not recovered.
 
 `scripts/native-class-import-oracle.py` runs `UClassProperty::ImportText` from the unchanged Core.dll through the real
 vtable slot (`UObjectProperty::ImportText` and `ReadToken` run unchanged; `StaticFindObject` and `appStricmp` are host
 leaves that record their arguments) over a fixture of named objects; `scripts/validate-class-import-text.mjs` compares
 28 texts (the pointer, the stored value, every `StaticFindObject` argument): 12 found, 3 cleared by the metaclass check, 10
 NULL, equal. The same validator runs `CheatView` in Play (00_Training): the first actor of the class becomes `ViewTarget`
-with `bBehindView`, the next calls cycle through the class and back to None, and an unlinked class is the explicit error.
+with `bBehindView`, and the next calls cycle through the class and back to None. An unknown name, or a class Play linked
+only for its readiness (`engine.testinfo`), is a NULL import: the required parameter logs BadProperty and CheatView is
+not called.
 
 The executor rule (`0x10150978–0x101509df`) is translated. It applies only
 to the first parameter, and only when that parameter IsA `UObjectProperty`

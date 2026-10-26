@@ -1244,7 +1244,11 @@ start). `isA` and `UStruct::Link`'s walks without per-call sets took about 0.4 s
 in [class lifetime](class-lifetime.md): about 1,000 classes keep their identity for the whole session,
 and each map change collects only the level left's own classes. The plan is [class graph design](class-graph-design.md).
 Its first step's measurement passes against the frozen re-capture gc2 (`validate-original-loaded`, which SKIPs where
-`.work/travel/gc2` is absent): the original's classes are the EndLoad closure of its own load requests.
+`.work/travel/gc2` is absent): the original's classes are the EndLoad closure of its own load requests. Play's live
+load graph now tracks that set (`src/runtime/original-loaded.mjs`). Name lookups (StaticExec's SET and GET, a `class<...>`
+console parameter) see only the classes it holds, as the original's StaticFindObject does
+(`validate-original-lookups`, against the capture gc3). A SET on a class Play linked only for its own readiness now
+prints "Unrecognized class", and a SET on a loaded class with no live object writes its Defaults.
 
 Done when declared browser/performance targets pass repeatable tests, long sessions
 and repeated map changes remain stable, and failures offer useful recovery paths.

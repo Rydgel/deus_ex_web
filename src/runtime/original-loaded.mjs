@@ -13,17 +13,36 @@
  * classes are loaded, so they stay as Play's own loads leave them (`setDeferPreload` keeps their flags).
  *
  * Measured against the original's registry dumps (scripts/validate-original-loaded.mjs, capture gc2): the reached classes plus the
- * registered native classes are the original's classes on DX.dx, 00_Training and 01_NYC_UNATCOIsland. This is bookkeeping: nothing in
- * Play reads it yet (name lookups and the LoadMap collection are later steps). A walk that fails is recorded in `failures`, not thrown.
+ * registered native classes are the original's classes on DX.dx, 00_Training and 01_NYC_UNATCOIsland. Name lookups read it
+ * (`findClass`, step 1c): a class Play links only for its own readiness is not found by name, as the original does not hold it. The
+ * LoadMap collection is a later step. A walk that fails is recorded in `failures`, not thrown.
  */
 const PROPERTY_KINDS = ['Int', 'Float', 'Bool', 'Byte', 'Str', 'Name', 'Object', 'Class', 'Struct', 'Array', 'FixedArray', 'Map']
   .map(kind => `${kind}Property`);
 export const METADATA_KINDS = Object.freeze(new Set(['Class', 'Function', 'State', 'Struct', 'Enum', 'Const', 'TextBuffer', 'Package',
   ...PROPERTY_KINDS]));
 
+/** The classes the DLLs register at startup that Play's load graph has no record for (it registers Core's, Engine's and DeusEx's
+ * natives only): gc2's dump of DX.dx holds each with flags lacking the 0x70000 load-context bits (docs/class-lifetime.md). A level that
+ * loads one's script export (Training loads ConSys.ConEventComment, ConItem and ConversationList) gives the tracker its record. */
+const DLL_REGISTERED = Object.freeze(['ConSys.ConAudioList', 'ConSys.ConEventComment', 'ConSys.ConImport', 'ConSys.ConItem',
+  'ConSys.ConversationList', 'ConSys.ConversationMissionList', 'Core.Exporter', 'Core.Factory', 'D3DDrv.D3DRenderDevice',
+  'DeusExText.TextImport', 'Engine.DemoPlayPendingLevel', 'Extension.ExtString', 'Extension.GameEngineExt', 'Extension.InputExt',
+  'Fire.IceTexture', 'Fire.WaveTexture', 'Galaxy.GalaxyAudioSubsystem', 'IpDrv.MasterServerCommandlet', 'IpDrv.TcpipConnection',
+  'IpDrv.TcpNetDriver', 'IpDrv.UpdateServerCommandlet', 'Render.Render', 'Window.WindowManager', 'WinDrv.WindowsClient',
+  'WinDrv.WindowsViewport']);
+/** Top-level packages the process holds before any level request: Transient (UObject::StaticInit) and Entry (UGameEngine::Init), both in
+ * gc2's DX.dx dump. */
+const PROCESS_PACKAGES = Object.freeze(['transient', 'entry']);
+
+/** A name lookup whose answer depends on what Play does not model (the original's GObjObjects order, a class the DLLs register without
+ * a record here, a package Play cannot place): an explicit boundary, never a guessed miss. */
+export class UnmodelledClassLookup extends Error {}
+
 export function createOriginalLoadTracker(graph) {
   if (!graph?.loadEdges) throw new Error('The original-loaded tracker requires a load graph that records its load edges');
-  const loaded = new Set(), pending = [], failures = [];
+  const loaded = new Set(), pending = [], failures = [], levelPackages = new Set();
+  let packageFiles = null, index = null, indexedSize = -1, packagesChanged = true;
   const kindOf = record => graph.nameText(graph.slotOf(graph.classRecordOf(record), 0x20));
   const isMetadata = record => METADATA_KINDS.has(kindOf(record));
   const isRecord = value => value !== null && typeof value === 'object' && value.nativeSlots instanceof Map;
@@ -55,6 +74,41 @@ export function createOriginalLoadTracker(graph) {
     } finally { walking = false; }
   }
 
+  const outermost = record => {
+    let at = record;
+    for (let steps = 0; steps < 64; steps++) {
+      const outer = graph.slotOf(at, 0x18);
+      if (!outer) return graph.nameText(graph.slotOf(at, 0x20)).toLowerCase();
+      at = outer;
+    }
+    throw new Error(`The outer chain of ${graph.fullName(record)} does not end`);
+  };
+  // short class name -> [{key, record | null}] and the held top-level packages, rebuilt when the tracker has reached more objects or a
+  // level load added its package
+  function classIndex() {
+    if (index && indexedSize === loaded.size && !packagesChanged) return index;
+    const byName = new Map(), keys = new Set(), packages = new Set([...PROCESS_PACKAGES, ...levelPackages]);
+    const add = (key, record) => {
+      if (keys.has(key)) return;
+      keys.add(key);
+      const name = key.slice(key.indexOf('.') + 1);
+      if (!byName.has(name)) byName.set(name, []);
+      byName.get(name).push({key, record});
+    };
+    for (const record of loaded) {
+      packages.add(outermost(record));
+      if (kindOf(record) === 'Class') add(graph.fullName(record).toLowerCase(), record);
+    }
+    for (const record of graph.staticRecords.values()) { packages.add(outermost(record)); add(graph.fullName(record).toLowerCase(), record); }
+    for (const key of DLL_REGISTERED) { packages.add(key.split('.')[0].toLowerCase()); add(key.toLowerCase(), null); }
+    indexedSize = loaded.size; packagesChanged = false;
+    return index = {byName, packages};
+  }
+  function found(candidate, token) {
+    if (candidate.record) return candidate.record;
+    throw new UnmodelledClassLookup(`StaticFindObject(UClass, ANY_PACKAGE, ${token}) finds ${candidate.key}, a class the DLLs register that Play's load graph has no record for`);
+  }
+
   const tracker = {
     failures,
     /** The records the original's requests reach. A request that arrives inside a load (or inside this walk) waits for the next one. */
@@ -68,6 +122,9 @@ export function createOriginalLoadTracker(graph) {
     reachLevel(assets, asset) {
       const records = [];
       let skipped = 0;
+      levelPackages.add(asset.name.toLowerCase());
+      packageFiles = assets.files ?? packageFiles;
+      packagesChanged = true;
       for (let i = 0; i < asset.pkg.imports.length; i++) {
         if (asset.pkg.imports[i].className === 'Package') continue;
         let target = null;
@@ -83,6 +140,40 @@ export function createOriginalLoadTracker(graph) {
       if (!walking && graph.loadState.nest === 0 && pending.length) walk(pending.splice(0));
     },
     has: record => loaded.has(record),
+    /** StaticFindObject(UClass, ANY_PACKAGE, token, 0) (Core 0x10151de0; script-object-lookup.mjs) over the classes the original holds:
+     * the reached class records and the registered ones. Returns the class's record, or null for the original's miss. A class Play has
+     * created only for its own readiness is not found.
+     * - ResolveName (0x10154ad0) finds a dotted name's package as a top-level object; a package the process does not hold is a miss.
+     * - The class is then probed in that package's hash bucket. A miss there, or an undotted name, falls to the ANY_PACKAGE walk over
+     *   every object, which matches the name alone: `Engine.NanoKey` finds DeusEx.NanoKey.
+     * - The walk returns the first match in GObjObjects order, which Play does not keep for graph records, so two candidates are an
+     *   explicit boundary (none on the three measured maps), as are a class the DLLs register without a record here, a path below a
+     *   package, and a package component Play cannot place.
+     * An empty component is no FName, so its lookup misses. */
+    findClass(token) {
+      tracker.flush();   // a request that arrived inside a load is held by the time a lookup runs
+      const parts = String(token).split('.');
+      if (parts.some(part => part === '')) return null;
+      if (parts.length > 2)
+        throw new UnmodelledClassLookup(`StaticFindObject(UClass, ANY_PACKAGE, ${token}): ResolveName below a package is not modelled`);
+      const {byName, packages} = classIndex();
+      const candidates = byName.get(parts.at(-1).toLowerCase()) ?? [];
+      if (parts.length === 2) {
+        const pkg = parts[0].toLowerCase();
+        if (!packages.has(pkg)) {
+          // ResolveName misses unless the process holds the package; Play places a package by its records, its level and the
+          // packages it registers. A name no package file carries is not held, unless a failed load's CreatePackage made it (the
+          // graph then has a root of that name, and the answer is not modelled).
+          if (!candidates.length || (packageFiles && !packageFiles.has(pkg) && !graph.packageRoots.has(pkg))) return null;
+          throw new UnmodelledClassLookup(`StaticFindObject(UClass, ANY_PACKAGE, ${token}): whether the process holds package ${parts[0]} is not modelled`);
+        }
+        const exact = candidates.find(candidate => candidate.key === `${pkg}.${parts[1].toLowerCase()}`);
+        if (exact) return found(exact, token);
+      }
+      if (candidates.length > 1)
+        throw new UnmodelledClassLookup(`StaticFindObject(UClass, ANY_PACKAGE, ${token}) matches ${candidates.map(c => c.key).join(', ')}: the GObjObjects order between them is not modelled`);
+      return candidates.length ? found(candidates[0], token) : null;
+    },
     /** The reached classes and the classes the DLLs register (the graph's static records), as lower-case "package.class". */
     classes() {
       const out = new Set();

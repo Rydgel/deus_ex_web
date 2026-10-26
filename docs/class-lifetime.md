@@ -223,6 +223,34 @@ On DX.dx, WarpZoneMarker's script export has not loaded: its flags are
 therefore not in memory. The check overcounts by starting from every native
 class in the packages, loaded or not.
 
+### Name lookups: `gc3`
+
+StaticFindObject (Core `0x10151de0`) searches the objects in memory, so a
+lookup by name finds a class only while the original holds it. `gc3`
+(`.work/travel/gc3.steps`) types four SETs on DX.dx before the first `open`.
+Then it reads ScaleGlow (`0x18c`) back in Training, 3 s after arrival. The
+DX.dx dump holds Multitool, NanoKey and SecurityCamera, and Training keeps
+the same class objects. It does not hold LightSwitch. None of Training's
+objects of these classes serializes ScaleGlow. Each SET is followed by a
+shot of the console's message line.
+
+| SET on DX.dx | Console line (shot) | In Training |
+| --- | --- | --- |
+| `set DeusEx.LightSwitch ScaleGlow 0.25` | Unrecognized class DeusEx.LightSwitch | LightSwitch0: 1, the package default |
+| `set DeusEx.Multitool ScaleGlow 0.5` | none | Multitool0–2: 0.5 |
+| `set Engine.NanoKey ScaleGlow 0.75` | none | NanoKey0, NanoKey1: 0.75 |
+| `set NoSuchPackage.SecurityCamera ScaleGlow 0.4` | Unrecognized class NoSuchPackage.SecurityCamera | SecurityCamera0–3: 1 |
+
+* **A class that is not loaded is not found.** The original prints its
+  NAME_ExecWarning line and writes nothing.
+* **A loaded class with no live object still takes the write.** Its Defaults
+  are written, and the next level builds its objects from them.
+* **A dotted name falls back to any package.** ResolveName finds `Engine`.
+  Engine's hash bucket holds no NanoKey, so the ANY_PACKAGE walk over every
+  object matches the name alone and finds DeusEx.NanoKey.
+* **ResolveName fails on a package the process does not hold.** The lookup
+  then misses before any walk.
+
 ## What it means for Play
 
 Today each level has its own `ScriptRuntime`. It loads every class it uses

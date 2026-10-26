@@ -194,15 +194,34 @@ How the two kinds of request behave:
   host-only and sit outside GObjLoaded, the collection and the gate. They
   still go through the same graph, because the VM needs a linked class.
 * **Host-only records are promoted.** When an original request reaches a
-  host-only record, the record's state is still pristine: nothing original
-  could have touched it. It becomes original-loaded, and EndLoad's preload
+  host-only record, it becomes original-loaded, and EndLoad's preload
   closure promotes what it reaches. *Assumption, tested by the gate:* the
   loader's CreateExport recursion and the collector's edges reach the same
   classes. Promotion uses the loader's closure.
-* **Lookups by name see only original-loaded objects.** FindObject,
-  StaticExec's GET and SET, and IsA by name are examples. A SET on a class
-  the original has not loaded answers as the original does
-  ("Unrecognized class").
+  * The record's own state is pristine: nothing original could have
+    touched it.
+  * **Its inherited Defaults may not be (open).** The original builds a
+    class's Defaults when it loads it: UClass::Serialize copies the
+    super's Defaults (InitClassDefaultObject), then reads the class's own
+    tagged properties. So a default written on the super before that load
+    (a SET, a script's `Default.X =`) reaches the subclass, unless the
+    subclass serializes the property itself.
+  * Play built a host-only subclass's Defaults when it linked it, maybe
+    before the write. `noteClassDefaultWrite` keeps that copy, as it does
+    for a subclass the original had loaded.
+  * Example: a SET on ScriptedPawn on DX.dx, where Play has linked
+    AnnaNavarre only for readiness. A later AnnaNavarre spawn in that
+    level gets the old value in Play and the new one in the original.
+  * Fix: at a default write, give the new value to each host-only
+    subclass reached through host-only classes that do not serialize the
+    property. Until then this is a recorded gap, not modelled.
+* **Lookups by name see only original-loaded objects.** StaticFindObject
+  searches the objects in memory, so FindObject and StaticExec's GET and
+  SET only find classes the original holds. So does a `class<...>`
+  console parameter: ScriptConsoleExec's ImportText. A SET on a class the
+  original has not loaded answers as the original does: "Unrecognized
+  class". IsA by name walks the object's own class chain and looks
+  nothing up.
 
 **Measured (2026-10-26, step 1's first half).** `scripts/original-load-closure.mjs`
 records these requests during a cold Play load. It replays each one on a
@@ -487,11 +506,42 @@ stay equal for single-map sessions.
        * Chromium loads Training and the Island in worker and inline modes
          with no runtime error.
        * The loaded game's level, a `.dxs`, goes through `reachLevel`.
-   * *Still to do (1c, a behavior change toward fidelity):* name lookups
-     (FindObject, StaticExec's GET and SET) see only original-loaded objects,
-     with a validator run of their own. The host-only flag needs no extra
-     state: a record is host-only exactly when the tracker has not reached
-     it. Promotion is the walk.
+   * The host-only flag needs no extra state: a record is host-only
+     exactly when the tracker has not reached it. Promotion is the walk.
+   * **Done (2026-10-26, 1c, a behavior change toward fidelity): name
+     lookups see only what the original holds.**
+     * `findClass` (`original-loaded.mjs`) is StaticFindObject(UClass,
+       ANY_PACKAGE, name) over the reached class records plus the
+       registered ones. It follows ResolveName's package step, the
+       package's hash bucket, then the ANY_PACKAGE walk by name alone.
+       `ScriptRuntime.originalClass` maps the result to the linked class.
+     * Used by StaticExec's SET and GET for script classes and by the
+       `class<...>` console parameter. Before, SET found a class only
+       through a live actor of it, and the parameter searched every class
+       Play had linked.
+     * A SET on a class the original holds with no live object now writes
+       the Defaults; before, it was an explicit boundary. GET of a found
+       script class stays one: ExportText of script Defaults is not linked.
+     * Explicit boundaries, never a guessed miss:
+       * a class the DLLs register without a graph record (25 on DX.dx:
+         WinDrv, IpDrv, Render, …);
+       * an original class Play has not linked (206 to 207 per map, mostly
+         Core and Engine natives; linking is asynchronous);
+       * two classes with one short name (none on the three maps), since
+         the GObjObjects order between them is not kept;
+       * a package Play cannot place;
+       * a path below a package.
+     * Reference: capture gc3 ([class lifetime](class-lifetime.md#name-lookups-gc3)),
+       checked by `scripts/validate-original-lookups.mjs`.
+       * Of the 890 classes Play links on DX.dx, the 760 the original's
+         dump holds are found and the other 130 miss.
+       * The four SETs print the original's console lines.
+       * Training's 10 objects carry the original's ScaleGlow.
+     * `validate-class-import-text` now checks that CheatView with an
+       unknown name, or with a class linked only for readiness
+       (`engine.testinfo`), is a NULL import: BadProperty, not called.
+     * Found while doing this, open: a promoted class's inherited Defaults
+       ("Host-only records are promoted" above).
 2. **Identity split.**
    * the process package table and the runtime level table in
      `ScriptObjects`;

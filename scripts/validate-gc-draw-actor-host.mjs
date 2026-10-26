@@ -5,7 +5,9 @@
  * window host's actor planner (the one sim-session.mjs installs) is a recorder here: each GC.DrawActor reaches it with the actor in the
  * state XGC::DrawActor set (bHidden 0, bUnlit, the GC's Style, DrawScale * 1, ScaleGlow 2.0, the script's grid skins), and the
  * paint leaves every field of every actor as it was. `ShowClass`/`ShowMesh` (ActorDisplayWindow) on a class with no actors puts the
- * GC.ClearZ command in the stream. Requires the local install.
+ * GC.ClearZ command in the stream. The class is Rat: the original holds it in Training (capture gc2) and no Rat is placed there.
+ * ShowClass's `class<actor>` parameter finds only a class the original holds (ScriptRuntime.originalClass): Greasel, used here
+ * before, is not held, so the original logs BadProperty and never calls ShowClass. Requires the local install.
  *
  *   node scripts/validate-gc-draw-actor-host.mjs [--near mib1] */
 import assert from 'node:assert/strict';
@@ -72,9 +74,9 @@ const first = commands.findIndex(command => command.kind === 'actor'), last = co
 assert.ok(first > 0 && last < commands.length - 1, 'tiles before and after the actor draws');
 assert.ok(commands.slice(first, last + 1).every(command => command.kind === 'actor'), 'the actor draws are consecutive (no tile between SetSkins and ResetSkins)');
 
-// ActorDisplayWindow.DrawWindow's GC.ClearZ (ShowMesh) with a class that has no actors in the level.
+// ActorDisplayWindow.DrawWindow's GC.ClearZ (ShowMesh) with a class the original holds and that has no actors in the level.
 game.hud.host.setActorDrawPlanner(null);
-viewProbe(game, {exec: ['ShowClass Greasel', 'ShowMesh True']});
+viewProbe(game, {exec: ['ShowClass Rat', 'ShowMesh True']});
 input.tick(10);
 const showMesh = game.hud.commands(960, 600, view);
 assert.ok(showMesh.some(command => command.kind === 'clearZ'), 'GC.ClearZ reaches the command stream');

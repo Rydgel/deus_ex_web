@@ -28,6 +28,7 @@
 import {gameEngineKey} from './script-window-typed-keys.mjs';
 import {setClientTravel as sharedSetClientTravel} from './script-travel.mjs';
 import {readToken, importText} from './config-text.mjs';
+import {UnmodelledClassLookup} from './original-loaded.mjs';
 import {msvcrtWtoi} from './script-text-parser.mjs';
 import {scriptStringComplementEqual, scriptStringText} from './script-string-operations.mjs';
 import {x87load, x87double, x87mul, x87div, x87store, x87add, x87cmp} from './script-vm.mjs';
@@ -608,12 +609,13 @@ export function createConsoleCommands({runtime, input, services}) {
 
   /** UObject::StaticExec 0x10153110 in keyword order MEM, DUMPNATIVES, GET (0x101531ad), SET
    * (0x101532da), OBJ, GTIME. GET and SET reach a native config class (script-native-config.mjs:
-   * the viewport manager, audio device and render device) or, for SET, the InputExt class
-   * (script-input-console.mjs). ParseToken(256, escapes) for the class, StaticFindObject(UClass,
-   * ANY_PACKAGE) (which resolves "ini:Section.Key" through GConfig), ParseToken for the property,
-   * FindField; a missing class or property logs its NAME_ExecWarning line and still returns 1. GET
-   * then logs ExportText of the class default (port flags 1); SET skips spaces and runs
-   * GlobalSetProperty(value, class, property, offset, 1). */
+   * the viewport manager, audio device and render device), for SET the InputExt class
+   * (script-input-console.mjs), or a script class. ParseToken(256, escapes) for the class,
+   * StaticFindObject(UClass, ANY_PACKAGE) (which resolves "ini:Section.Key" through GConfig; for a
+   * script class it sees the classes the original holds, ScriptRuntime.originalClass), ParseToken
+   * for the property, FindField; a missing class or property logs its NAME_ExecWarning line and
+   * still returns 1. GET then logs ExportText of the class default (port flags 1; not linked for a
+   * script class); SET skips spaces and runs GlobalSetProperty(value, class, property, offset, 1). */
   function staticExec(cmd, ar) {
     for (const keyword of ['MEM', 'DUMPNATIVES'])
       if (parseCommand(cmd, keyword) !== null)
@@ -624,7 +626,11 @@ export function createConsoleCommands({runtime, input, services}) {
       const className = parseToken(getRest, 256, true);
       if (!className.ok) { ar.log(`Unrecognized class ${className.token}`); return true; }
       const cls = nativeClass(config, className.token, 'GET', cmd);
-      if (!cls) { ar.log(`Unrecognized class ${className.token}`); return true; }
+      if (!cls) {
+        if (!isIniName(className.token) && scriptClass(className.token, 'GET', cmd))
+          throw new UnsupportedConsoleCommandError(`UObject::StaticExec GET of script class ${className.token} is not implemented (ExportText of its Defaults): ${cmd}`, {body: 'UObject::StaticExec', keyword: 'GET'});
+        ar.log(`Unrecognized class ${className.token}`); return true;
+      }
       const propertyName = parseToken(className.rest, 256, true);
       if (!propertyName.ok) { ar.log(`Unrecognized property ${propertyName.token}`); return true; }
       const field = config.findField(cls, propertyName.token);
@@ -651,9 +657,10 @@ export function createConsoleCommands({runtime, input, services}) {
       return true;
     }
     if (className.ok && !scriptStringComplementEqual(className.token, 'InputExt')) {
-      if (isIniName(className.token)) { ar.log(`Unrecognized class ${className.token}`); return true; }
-      if (scriptClassSet(className.token, className.rest, cmd, ar)) return true;
-      throw new UnsupportedConsoleCommandError(`UObject::StaticExec SET of class ${className.token} is not implemented: ${cmd}`, {body: 'UObject::StaticExec', keyword: 'SET'});
+      const cls = isIniName(className.token) ? null : scriptClass(className.token, 'SET', cmd);
+      if (!cls) { ar.log(`Unrecognized class ${className.token}`); return true; }
+      scriptClassSet(cls, className.rest, cmd, ar);
+      return true;
     }
     if (!className.ok || typeof input.findField !== 'function') { ar.log(`Unrecognized class ${className.token}`); return true; }
     const propertyName = parseToken(className.rest, 256, true);
@@ -673,19 +680,24 @@ export function createConsoleCommands({runtime, input, services}) {
    * object spawned from the class afterwards carries it (a `summon` typed after the `set`, the Player start's second Login). The
    * SaveConfig(CPF_Config) of the class that follows (0x10152505) is not modelled: it writes the class's config properties to its INI.
    * Property kinds: int (UIntProperty::ImportText 0x10165f00), float, bool, name, and the Rotator/Vector structs over int/float members
-   * (UStructProperty::ImportText 0x101698b0); other kinds are not linked and throw. Returns false when no live actor IsA the class (the class
-   * lookup is left to the caller's unsupported report). */
-  function scriptClassSet(token, rest, cmd, ar) {
-    const viewportActor = services.viewport ? read(services.viewport(), 'Actor') : null;
-    if (!viewportActor) return false;
-    const wanted = token.toLowerCase();
-    const isA = cls => { for (let c = cls; c; c = c.base) { const key = c.record?.key?.toLowerCase(); if (key === wanted || (!wanted.includes('.') && key?.endsWith(`.${wanted}`))) return true; } return false; };
-    const targets = runtime.levelFor(viewportActor).actors.filter(actor => actor && isA(runtime.instance(actor).cls));
-    if (!targets.length) return false;
+   * (UStructProperty::ImportText 0x101698b0); other kinds are not linked and throw. `cls` is the class StaticFindObject found (scriptClass):
+   * with no live object of it, the Defaults alone are written (`set DeusEx.Multitool ScaleGlow 0.5` on DX.dx, capture gc3). A class whose
+   * objects are not actors, and a registered class whose script export has not loaded (its Defaults are not modelled), are explicit
+   * boundaries. */
+  function scriptClassSet(cls, rest, cmd, ar) {
+    // Play's copy of a registered class whose script export the original has not loaded holds fields the original's lacks: FindField differs
+    if (!runtime.classLoader.originalLoads.has(cls.loadRecord))
+      throw new UnsupportedConsoleCommandError(`UObject::StaticExec SET of ${cls.record.key}, registered by its DLL with its script export not loaded: its fields and Defaults are not modelled: ${cmd}`);
     const propertyName = parseToken(rest, 256, true);
-    let field = null;
-    if (propertyName.ok) { try { field = runtime.namedField(targets[0], propertyName.token); } catch { field = null; } }
-    if (!field) { ar.log(`Unrecognized property ${propertyName.token}`); return true; }
+    const field = propertyName.ok ? runtime.lookupMember(cls, 'fields', propertyName.token) : null;
+    if (!field) { ar.log(`Unrecognized property ${propertyName.token}`); return; }
+    const isA = (c, target) => { for (; c; c = c.base) if (c === target) return true; return false; };
+    let actorClass = cls;
+    while (actorClass && actorClass.record?.key !== 'engine.actor') actorClass = actorClass.base;
+    if (!actorClass) throw new UnsupportedConsoleCommandError(`UObject::GlobalSetProperty of ${cls.record.key}: objects other than the level's actors are not modelled: ${cmd}`);
+    const viewportActor = services.viewport ? read(services.viewport(), 'Actor') : null;
+    if (!viewportActor) throw new UnsupportedConsoleCommandError(`UObject::GlobalSetProperty without a viewport actor: the level whose actors it reaches is not modelled: ${cmd}`);
+    const targets = runtime.levelFor(viewportActor).actors.filter(actor => actor && isA(runtime.instance(actor).cls, cls));
     let value = propertyName.rest;
     while (value[0] === ' ') value = value.slice(1);
     const meta = field.metadata, kind = meta.type;
@@ -708,29 +720,36 @@ export function createConsoleCommands({runtime, input, services}) {
     };
     for (const actor of targets) runtime.writeField(actor, field, importInto(runtime.readField(actor, field)));
     // The named class's own Defaults (Class->Defaults, not its subclasses' copies).
-    let named = null;
-    for (let c = runtime.instance(targets[0]).cls; c && !named; c = c.base) {
-      const key = c.record?.key?.toLowerCase();
-      if (key === wanted || (!wanted.includes('.') && key?.endsWith(`.${wanted}`))) named = c;
-    }
-    const defaults = runtime.classDefaultReference(named, field);
+    const defaults = runtime.classDefaultReference(cls, field);
     defaults.set(importInto(defaults.get()));
-    return true;
   }
 
   const isIniName = token => /^(ini|usr):/i.test(token);
-  /** StaticFindObject(UClass, ANY_PACKAGE, token) over the modelled native classes. A name that
-   * resolves (or an ini: key that is missing) but names no modelled class is not claimed
-   * unrecognized: the original would find any loaded script class. */
+  /** StaticFindObject(UClass, ANY_PACKAGE, token) over the modelled native classes. An ini: name
+   * that resolves but names no modelled class is not claimed unrecognized; any other name is left
+   * to scriptClass. */
   function nativeClass(config, token, keyword, cmd, inputFallback = false) {
     if (!config) return null;
     const found = config.findClass(token);
     if (found) return found;
     if (isIniName(token) && config.resolveName(token) === null) return null;   // ResolveName fails: not found
     if (inputFallback && scriptStringComplementEqual(token, 'InputExt')) return null;
-    if (isIniName(token) || keyword === 'GET')
+    if (isIniName(token))
       throw new UnsupportedConsoleCommandError(`UObject::StaticExec ${keyword} of class ${token} is not implemented: ${cmd}`, {body: 'UObject::StaticExec', keyword});
     return null;
+  }
+  /** StaticFindObject(UClass, ANY_PACKAGE, token) over the classes the original holds (ScriptRuntime.originalClass): the class as
+   * Play linked it, or null for the original's miss (a class Play linked only for its own readiness included). A lookup Play does not
+   * model, and a runtime without the class graph, are explicit boundaries. */
+  function scriptClass(token, keyword, cmd) {
+    let cls;
+    try { cls = runtime.originalClass(token); } catch (error) {
+      if (!(error instanceof UnmodelledClassLookup)) throw error;
+      throw new UnsupportedConsoleCommandError(`UObject::StaticExec ${keyword}: ${error.message}: ${cmd}`, {body: 'UObject::StaticExec', keyword});
+    }
+    if (cls === undefined)
+      throw new UnsupportedConsoleCommandError(`UObject::StaticExec ${keyword} of class ${token} needs the class graph: ${cmd}`, {body: 'UObject::StaticExec', keyword});
+    return cls;
   }
 
   /** UEngine::Flush 0x10380cf0: GCache.Flush(0,0,0), then Client->Flush

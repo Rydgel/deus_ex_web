@@ -29,7 +29,7 @@ export class ScriptClassLoader {
     this.graph = createScriptLoadGraph({captureEvents, meshLoadServices, resourceServices, lifecycle,
       nativeFunctions: HOST_NATIVE_BINDING, recordLoadEdges: true,
       classSerialized: carriedDefaults?.size ? record => this.applyCarriedDefaults(record) : null});
-    // Which of the graph's objects the original holds loaded (original-loaded.mjs): bookkeeping for the LoadMap collection.
+    // Which of the graph's objects the original holds loaded (original-loaded.mjs): what name lookups see, and the LoadMap collection's input.
     this.originalLoads = createOriginalLoadTracker(this.graph);
     this.identities = new WeakMap();
     this.nativeRecords = new WeakMap();

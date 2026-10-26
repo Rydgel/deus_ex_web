@@ -97,6 +97,7 @@ import { createFlagBase } from './script-triggers.mjs';
 import { addPawn, removePawn } from './pawn-list.mjs';
 import { importText } from './config-text.mjs';
 import { importClassText } from './script-class-import-text.mjs';
+import { UnmodelledClassLookup } from './original-loaded.mjs';
 import { setActorZone } from './zone.mjs';
 import { prepareContextResults, zeroContextResult } from './script-context-results.mjs';
 import { cleanupScriptReferences, cleanupLevelDestroyed, cleanupSites, cleanupFields, cleanupImageSites } from './script-cleanup.mjs';
@@ -2481,14 +2482,17 @@ export class ScriptRuntime {
    * returns NULL. Back in UClassProperty::ImportText a found value that is not
    * a UClass or not IsChildOf(MetaClass, +0x64) is cleared to None while the
    * result stays non-NULL. Returns null for a NULL result, else the value and
-   * the characters consumed. StaticFindObject finds the classes Play has
-   * linked (the native object table holds every class of a loaded package;
-   * a class Play has not linked yet is an explicit boundary, not a miss). */
+   * the characters consumed. StaticFindObject finds the classes the original
+   * holds (originalClass): a class Play linked only for its own readiness is
+   * a miss, as it is in the original. */
   importClassText(rest,field,record) {
     const path=field.metadata.metaClass?.path;
     const metaKey=path?lower(path.includes('.')?path:`${record.key.split('.')[0]}.${path}`):null;
-    // StaticFindObject(UClass, ANY_PACKAGE, token, 0) over the linked classes.
+    // StaticFindObject(UClass, ANY_PACKAGE, token, 0).
     const find=token=>{
+      const original=this.originalClass(token);
+      if(original!==undefined)return original;
+      // No class graph (a runtime built without native class loading): the linked classes, a class not linked an explicit boundary.
       const key=lower(token),dotted=key.includes('.');
       const matches=[...this.linkedClasses].filter(cls=>dotted?cls.record.key===key:cls.record.key.split('.').pop()===key);
       if(matches.length>1)throw new Error(`ScriptConsoleExec class name ${token} matches ${matches.length} linked classes (hash order is not recovered)`);
@@ -2503,6 +2507,18 @@ export class ScriptRuntime {
       },
       quoted:()=>{throw new Error(`ScriptConsoleExec Class'Package.Object' text is not recovered: ${field.key}`);}});
     return result===null?null:{value:result.value?result.value.record:null,consumed:result.consumed};
+  }
+  /** StaticFindObject(UClass, ANY_PACKAGE, token, 0) (Core 0x10151de0) over the classes the original holds (original-loaded.mjs
+   * findClass): null for its miss, else the found class as Play linked it. Undefined without a class graph (a runtime built without
+   * native class loading). A class the original holds that Play has not linked is an explicit boundary: linking is asynchronous and
+   * the lookups that call this (console commands) are not. */
+  originalClass(token) {
+    const tracker=this.classLoader?.originalLoads;
+    if(!tracker)return undefined;
+    const record=tracker.findClass(token);
+    if(record===null)return null;
+    for(const cls of this.linkedClasses)if(cls.loadRecord===record)return cls;
+    throw new UnmodelledClassLookup(`StaticFindObject(UClass, ANY_PACKAGE, ${token}) finds ${this.classLoader.graph.fullName(record)}, which the original holds and Play has not linked`);
   }
   /** UObject::ScriptConsoleExec (Core 0x10150860, thunk 0x10101870): run an
    * exec command line such as a User.ini binding's `ActivateBelt 3` on

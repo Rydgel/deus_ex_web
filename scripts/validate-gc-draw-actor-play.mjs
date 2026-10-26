@@ -6,7 +6,8 @@
 // worker's HUD paint queues an 'actor' command per call (script-window-host.mjs), sim-session.mjs planHudActor updates the actor's mesh
 // binding in the master frame, and the page draws it between the tile batches (hud.mjs, weapon-overlay-draw.mjs hudActor). The check:
 // every frame draws the actors with no runtime error; the same frame with the draws switched off differs in a region of the picture;
-// ShowClass/ShowMesh (ActorDisplayWindow, GC.ClearZ) queues clearZ commands without an error.
+// ShowClass/ShowMesh (ActorDisplayWindow, GC.ClearZ) queues clearZ commands without an error (ShowClass Rat: a class the original holds in
+// Training with no actor placed; a class it does not hold, such as Greasel, is a NULL parameter and ShowClass is not called).
 //
 //   node scripts/validate-gc-draw-actor-play.mjs [--url http://...] [--shot frame.png] [--near mib1]
 import assert from 'node:assert/strict';
@@ -88,7 +89,7 @@ setInterval(()=>{
     if (Math.abs(withDraws[i] - withoutDraws[i]) + Math.abs(withDraws[i + 1] - withoutDraws[i + 1]) + Math.abs(withDraws[i + 2] - withoutDraws[i + 2]) > 24) changed++;
   assert.ok(changed > 2000, `the actors' draws change the picture (${changed} pixels)`);
   // ActorDisplayWindow with ShowMesh: GC.ClearZ at the start of its paint (no Greasel in the level, so no DrawActor).
-  await page.evaluate(() => window.deusExViewer.viewProbe({exec: ['ShowClass Greasel', 'ShowMesh True']}));
+  await page.evaluate(() => window.deusExViewer.viewProbe({exec: ['ShowClass Rat', 'ShowMesh True']}));
   await page.evaluate(() => { window.__deusHud.kinds = {}; });
   await frames(30);
   const kinds = await page.evaluate(() => window.__deusHud.kinds);

@@ -12,7 +12,11 @@
  * Part 2 runs it in Play (00_Training): `CheatView DeusEx.<class>` through
  * ScriptConsoleExec (PlayerPawn.CheatView's `class<actor> aClass`) sets the
  * player's ViewTarget to that class's actor and bBehindView; the same command
- * again cycles to None; a name no linked class has is an explicit error.
+ * again cycles to None. StaticFindObject sees the classes the original holds
+ * (ScriptRuntime.originalClass, docs/class-graph-design.md step 1c): a name no
+ * class has, and a class Play linked only for its own readiness, are its miss,
+ * a NULL import, so the required parameter logs BadProperty and CheatView is
+ * not called.
  *
  * The `Class'Package.Object'` spelling is an explicit boundary of the
  * translation (it throws): the cases that reach it are checked to throw, not
@@ -108,6 +112,22 @@ for (let i = 1; i < same.length; i++) {
 game.hud.scoped(() => runtime.scriptConsoleExec(player, `CheatView ${className}`));
 assert.equal(runtime.readNamed(player, 'ViewTarget'), null, 'after the last one the call returns to the own camera');
 assert.equal(runtime.readNamed(player, 'bBehindView'), false);
-assert.throws(() => game.hud.scoped(() => runtime.scriptConsoleExec(player, 'CheatView DeusEx.NoSuchClassAnywhere')), /not a linked class/);
-console.log(`In Play (00_Training): CheatView ${className} runs through ScriptConsoleExec's class import: ${same.length} actor(s) of the class cycle through ViewTarget and back to None, bBehindView follows.`);
+const warnings = [], warn = runtime.warning;
+runtime.warning = event => { warnings.push(event); warn?.(event); };
+const tracker = runtime.classLoader.originalLoads;
+const isActor = cls => { for (; cls; cls = cls.base) if (cls.record.key === 'engine.actor') return true; return false; };
+// neither reached by an original request nor registered by a DLL (Engine.WarpZoneInfo is registered, so the original finds it)
+const registered = new Set(runtime.classLoader.graph.staticRecords.values());
+const readinessOnly = [...runtime.linkedClasses].find(cls => isActor(cls) && !tracker.has(cls.loadRecord) && !registered.has(cls.loadRecord));
+assert.ok(readinessOnly, 'Play linked an actor class the original does not hold');
+for (const name of ['DeusEx.NoSuchClassAnywhere', readinessOnly.record.key]) {
+  warnings.length = 0;
+  game.hud.scoped(() => assert.equal(runtime.scriptConsoleExec(player, `CheatView ${name}`), true));
+  assert.deepEqual(warnings.map(w => `${w.kind} ${w.parameter}`), ['BadProperty engine.playerpawn.cheatview.aclass'], `CheatView ${name}: a StaticFindObject miss is a NULL import`);
+  assert.equal(runtime.readNamed(player, 'ViewTarget'), null, `CheatView ${name} is not called`);
+  assert.equal(runtime.readNamed(player, 'bBehindView'), false);
+}
+runtime.warning = warn;
+console.log(`In Play (00_Training): CheatView ${className} runs through ScriptConsoleExec's class import: ${same.length} actor(s) of the class cycle through ViewTarget and back to None, bBehindView follows; ` +
+  `an unknown name and ${readinessOnly.record.key} (linked only for Play's readiness) are StaticFindObject misses: BadProperty, not called.`);
 process.exit(0);
