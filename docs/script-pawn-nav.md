@@ -1605,3 +1605,37 @@ step of a patrol), was the same fault from the other side: a rat (`Rat1`: bBlock
 blocked the Terrorist (Hit.Time 0), physWalking stepped up 25, moved, stepped down and landed on the rat 3.81 higher in PHYS_Falling, where the original's step is one move of
 (0.031, 0.135, 0) and nothing else. The sweep's traces of the five reported pawns (Street, Warehouse, Dockyard, Mole People) reproduce their original values under the old rule
 and replay equal under the new one ([visual acceptance](visual-acceptance.md#divergences-found), Divergence 17).
+
+## The search and the scout in the Rust core (2026-10-27)
+
+A long `FindPathToward` was the largest worker stall on the Linux host: a 160 ms call (one frame of 211 ms) on the Island, every
+30 to 50 s of roaming, 129 ms of it in `navSearchBFS` and most of the rest in `navScoutA`'s node loop. Each field access went
+through `services.read`, which built a property reference per read; the search does tens of thousands.
+
+* **The services.** `read`/`write` call `readNamed`/`writeNamed`, which read and write the same storage without the reference
+  (`propertyCodec` is defined as the reference's get and set). Island headless, 300 ticks: native 517's time 82 → 65 ms, digest
+  unchanged.
+* **`navSearchBFS` in Rust** (`native/script-vm/src/nav.rs` `nav_search`, host `script-vm-nav.mjs`): the same statements over the
+  NavigationPoint fields in the object image (visitedWeight, nextOrdered, prevOrdered, previousPath, cost, bEndPoint,
+  bestPathWeight, bPlayerOnly, upstreamPaths[16]) and the level's ReachSpec table, copied once per table into the arena as
+  [radius, height, reachFlags, distance, start handle]. The head advance's `ftol(nIns * 0.5)` is the exact product truncated.
+* **`navScoutA`'s node loop in Rust** (`nav_scout`): the bClearPaths reset (ordering fields, bEndPoint, visitedWeight 10000000,
+  cost = ExtraCost) and the two 800-unit candidate lists, with `navDistSq` in the core's 80-bit model (`x87.rs`) and `navInsert`
+  on [count, items[32], keys[32]] lists. It stops before a bSpecialCost node, whose SpecialCost event runs in JavaScript in its
+  place in the loop, and before a node the image does not answer; the caller runs that node's iteration and resumes the scan.
+* **Where it runs.** The host checks, once per NavigationPointList chain and ReachSpec table, that every node is an attached
+  instance whose class resolves each field's spelling to its key and stores it in the registry's cell. `nav_search` checks the
+  chain, `start` and every spec's start for a host receiver or a bound key before it writes, and hands the whole search back
+  otherwise. A spec whose start is None, reached mid-search, is the error the JavaScript body would throw at the same read.
+* **Switches.** `NAV_SEARCH=js` (`?navSearch=js`) keeps the JavaScript bodies; `NAV_SEARCH=verify` (`?navSearch=verify`) runs
+  the Rust body, keeps its result, the written fields of every node and the lists, restores them, runs the JavaScript body and
+  throws on any difference.
+
+**Evidence.** The JavaScript bodies are the oracle-exact ones (`validate-pawn-nav`, whose fabricated services do not reach the
+Rust bodies). Under `NAV_SEARCH=verify`: bench-sim on the Island, 03_NYC_747, 00_Training and 05_NYC_UNATCOHQ (300 ticks each, the
+same digests as `NAV_SEARCH=js`), `validate-secretary-patrol` (6 FindPathToward), and 150 s of browser roaming on the Island
+(worker mode): no difference. The Island's FindPathToward costs 0.10 ms per tick headless instead of 0.24 (the search 0.01 ms);
+a 150 s browser roam had no frame over 50 ms in the path workers.
+
+The `findPathTo` worker (FindPathTo, native 518) shares both. Not ported: `navScoutA`'s anchor test, `navScoutB`–`E` (their reach
+tests run the collision workers) and `reverse`.

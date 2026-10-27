@@ -29,6 +29,7 @@ mod gc;
 mod lipsync;
 mod loco;
 mod natives;
+mod nav;
 mod percep;
 mod render;
 mod meshlight;

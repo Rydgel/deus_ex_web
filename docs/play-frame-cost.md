@@ -1,5 +1,26 @@
 # Play frame cost from first principles
 
+## October 27: hitches on the Linux host after the class graph
+
+Headless, `--use-angle=gl` (AMD 780M), 1440x960, 120 to 150 s of roaming with the hitch recorder (`.work/hitch/run.mjs`, outside
+Git; `--trace` aligns V8's GC events, `--worker-profile` records a CPU profile of the worker whose clock a 20 ms marker function
+joins to the recorder's frames, and `.work/hitch/frame-profile.mjs` lists each slow frame's functions).
+
+| | Island, Chromium worker | Everett, Chromium worker | Island, Firefox inline |
+|---|---|---|---|
+| frame | worker p50 14.6, p95 20.3, p99 27 ms | worker p50 6.8, p99 10.4 ms | page: 45 fps drawn |
+| draw gaps > 50 ms after load | 7 | 2 | about 90 |
+| largest | FindPathToward 150 to 210 ms (every 30 to 50 s); late shader programs 50 to 120 ms on the page | late shader programs | a 100 to 130 ms frame every 7 to 20 s in whatever phase runs (GC) |
+| GC | worker major 25 ms, page major 82 ms | worker 61, page 25 ms | |
+
+The worker's heap climbs from about 0.7 to 1.9-2.3 GB before a major GC on the Island; one such GC took 125 ms of a 154 ms frame.
+About 15 to 22 shader programs are built after the first 5 s of a map.
+
+**Fixed: FindPathToward** ([pawn navigation](script-pawn-nav.md#the-search-and-the-scout-in-the-rust-core-2026-10-27)): the
+open-list search and navScoutA's node loop run in the Rust core. Headless Island, 300 ticks: FindPathToward 0.24 → 0.10 ms per
+tick, the search 0.01 ms. In the slow frame the profile named, the search alone was 129 ms. A 150 s roam afterwards had no frame
+over 50 ms in the path workers; its slow frames were the load and one worker GC.
+
 ## October 14: periodic hitches (reported on the Mac only)
 
 The user sees huge frame drops lasting a few seconds, recurring, on every map

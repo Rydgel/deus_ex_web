@@ -33,6 +33,7 @@ import {LocomotionHost} from './script-vm-locomotion.mjs';
 import {ParticleHost} from './script-vm-particles.mjs';
 import {GcHost} from './script-vm-gc.mjs';
 import {RenderScanHost} from './script-vm-render.mjs';
+import {NavSearchHost} from './script-vm-nav.mjs';
 import {MeshLightHost} from './script-vm-meshlight.mjs';
 import {ActorTickHost} from './actor-tick-kernel.mjs';
 import {ZoneHost} from './zone-kernel.mjs';
@@ -278,6 +279,8 @@ export class RustScriptVm {
     this.loco = new LocomotionHost(this);
     // October 3: the viewer's render scan (render.rs).
     this.render = new RenderScanHost(this);
+    // FindPathToward's open-list search (nav.rs).
+    this.nav = new NavSearchHost(this);
     // The mesh-light selection (meshlight.rs).
     this.meshLight = new MeshLightHost(this);
     // execUpdateParticles (particles.rs).
@@ -327,6 +330,7 @@ export class RustScriptVm {
     this.aiEvents.attach(x);
     this.loco.attach(x);
     this.render.attach(x);
+    this.nav.attach(x);
     this.particles.attach(x);
     this.gc.attach(x);
     this.meshLight.attach(x);

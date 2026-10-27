@@ -1494,7 +1494,7 @@ function navScoutA(thisList, pawn, targetLoc, otherList, bClearPaths, state, ser
     }
   }
   const ploc = services.location(pawn);
-  for (let nav = services.navListHead(pawn); nav; nav = services.nextNav(nav)) {
+  const scoutNode = nav => {
     if (bClearPaths) {                                      // 0x103da2f4 reset
       wr(services, nav, 'nextOrdered', null);               // +0x430
       wr(services, nav, 'prevOrdered', null);               // +0x434
@@ -1513,6 +1513,17 @@ function navScoutA(thisList, pawn, targetLoc, otherList, bClearPaths, state, ser
       const key = navDistSq(targetLoc, services.location(nav));
       if (key < 640000) navInsert(otherList, nav, key);
     }
+  };
+  // The loop in the Rust core over the object image (nav.rs nav_scout): it returns null at the chain's end, or the node it stopped
+  // before (a bSpecialCost node's event, a node the image does not answer), whose iteration runs here; undefined runs them all here.
+  const head = services.navListHead(pawn);
+  const scan = from => services.navScout?.({head, nav: from, clear: bClearPaths, anchor: state.anchor, seeded: state.seeded, ploc, targetLoc,
+    thisList, otherList, reference: (start, stop) => { for (let nav = start; nav && nav !== stop; nav = services.nextNav(nav)) scoutNode(nav); }});
+  for (let nav = head; nav; nav = services.nextNav(nav)) {
+    const stop = scan(nav);
+    if (stop === null) break;
+    if (stop !== undefined) nav = stop;
+    scoutNode(nav);
   }
 }
 
@@ -1700,6 +1711,14 @@ function navSearchBFS(pawn, start, foundPtr, bSinglePath, mask, services) {
   const chi = x87ftol(ld(rd(services, pawn, 'CollisionHeight')));
   const f318 = rd(services, pawn, 'Flags318') >>> 0;
   const table = services.reachSpecTable(pawn);
+  // The same search in the Rust core over the object image (nav.rs), where the level's nodes answer there; this body is its reference.
+  const body = found => navSearchBody(start, found, bSinglePath, mask, services, cri, chi, f318, table);
+  const fast = services.navSearch?.({start, cri, chi, f318, single: bSinglePath, mask, specs: table,
+    head: services.navListHead(pawn), found: foundPtr, reference: body});
+  return fast !== undefined ? fast : body(foundPtr);
+}
+
+function navSearchBody(start, foundPtr, bSinglePath, mask, services, cri, chi, f318, table) {
   let head = start;                                         // ebx
   let nIns = 1;                                             // [ebp-0x14]
   let advanced = 0;                                         // [ebp-0x20]

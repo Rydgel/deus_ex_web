@@ -4663,8 +4663,8 @@ export class ScriptRuntime {
       read:(actor,name)=>name==='CollideFlag'
         ?(this.regionValue(actor).zoneNumber??0)&0xff      // pawn+0xd0 byte
         :name in flagWords?flagRead(actor,name)
-        :ref(actor,name).get(),
-      write:(actor,name,v)=>name in flagWords?flagWrite(actor,name,v):ref(actor,name).set(v),
+        :this.readNamed(actor,name),
+      write:(actor,name,v)=>name in flagWords?flagWrite(actor,name,v):this.writeNamed(actor,name,v),
       level:actor=>this.levelFor(actor),
       model:lvl=>lvl?.model,
       // ULevel nav surface: LevelInfo.NavigationPointList (+0x548), the
@@ -4680,6 +4680,10 @@ export class ScriptRuntime {
       upstreamPaths:nav=>ref(nav,'upstreamPaths').get(),
       prunedPaths:nav=>ref(nav,'PrunedPaths').get(),
       reachSpecTable:actor=>this.levelFor(actor)?.reachSpecs??[],
+      // navSearchBFS's Rust body (nav.rs, script-vm-nav.mjs): undefined where the JavaScript body runs.
+      navSearch:args=>this.scriptVm?.nav?.search(args),
+      // navScoutA's node loop in Rust (nav.rs nav_scout): the node it stopped before, null at the end, undefined where JavaScript runs.
+      navScout:args=>this.scriptVm?.nav?.scout(args),
       pointRegion:point=>navZone(level.pointRegion(point)?.zone),
       fastLineCheck:(model,first,second)=>fastLineCheck(model,first,second),
       // ULevel::SingleLineCheck (&hit, source, end, start, flags, extent,
