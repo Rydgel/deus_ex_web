@@ -1,8 +1,9 @@
 # Design: one class graph per process, collected at LoadMap
 
-Status: design, 2026-10-26. Nothing here is implemented. It builds on the
-original's behavior recorded in [class lifetime](class-lifetime.md) and on
-the costs measured in [load time](load-time.md).
+Status: design of 2026-10-26; migration steps 1 to 4 are implemented
+(2026-10-27, see Migration). It builds on the original's behavior recorded in
+[class lifetime](class-lifetime.md) and on the costs measured in
+[load time](load-time.md).
 
 ## What the original does
 
@@ -413,7 +414,9 @@ level, and each difference is labelled:
 * **The RNG seed.** Play seeds one per level (`game.mjs:142`, and again at
   Player start). The original seeds once per process.
 * **The Entry level.** The original's GEntry keeps a LevelInfo, a GameInfo,
-  a Mutator and a GameReplicationInfo. Play has none.
+  a Mutator and a GameReplicationInfo. Play has none. Since step 4b the
+  collection holds Entry.dx's import closure, as GEntry's live linker does
+  (Title_Music, its LevelInfo's song).
 * **The client viewport and console.** Play rebuilds them per level. They
   are process objects in the original.
 
@@ -798,6 +801,168 @@ stay equal for single-map sessions.
      linkers and package unloading (DeusExConText's included), and the
      resources Play marks without preloading (1,082 textures, 285 sounds,
      26 fonts on Training). Their references do not exist in Play's graph yet.
+
+   *4b, resources and packages, done 2026-10-27* (`script-process-collection.mjs`, `ScriptProcess.unloadPackages`).
+   * **The reference capture.** gc2 was re-captured on the Linux host under
+     Wine (`.work/travel/gc2.steps`). Its dumps hold the same objects as the
+     Mac's (34,208, 42,058, 47,757 and 42,058) and both class validators pass
+     against it. The Linux host's `dump-gobjects-win.exe` predated `--flags`
+     and had to be rebuilt (it read the flag as a name filter and printed no
+     rows).
+   * **What the original unloads.** At every gc2 stop, the original's
+     top-level packages are exactly the import closure of the level package
+     and of Entry.dx, plus the process's (Transient, Entry, the native DLL
+     packages) and DeusExConText while conversation objects live. This is the
+     linker rule:
+     * an object's header serializes its Linker;
+     * a linker serializes each import's SourceLinker, which VerifyImport set
+       for every import when the linker was made;
+     * the level's linker is live, and so is GEntry's for the whole process.
+
+     Title_Music is held past DX.dx because Entry.dx imports it: GEntry's
+     `LevelInfo0` has `Song` = Title_Music (probe `gc2s`, read at `+0x4f4`
+     in Training: two `LevelInfo0` objects, the Entry level's and the
+     level's). Probe `gc2m` had found no reference to it in the first
+     `0x600` bytes of the Galaxy subsystem, the viewport or the engine.
+   * **The mark over resources** follows the recovered branches
+     ([resource GC serializers](resource-gc-serializers.md)):
+     * a resource's header;
+     * once it is preloaded, its script properties, through SerializeBin;
+     * a mesh's Textures array (`+0xd8`) and a font's page textures
+       (`+0x2c`).
+
+     Play preloads only meshes. Its textures, sounds and fonts stay
+     deferred, so their own references (Palette, DetailTexture, AnimNext, a
+     font's pages) are not known. Nothing Play holds is reached only through
+     them on gc2's steps (the gate below).
+   * **The resource registry** (`script-resources.mjs`) holds the objects
+     Play reads outside the graph, a level's textures and sounds among them.
+     The collection reaches the registry's records from the marked graph
+     records, the level's seeds, the level's own objects and every record
+     that is neither a resource nor a package, then follows their Outer,
+     Class and a mesh's textures. A resource record it does not reach is
+     forgotten, and the next request materializes a new one. A registry
+     record's graph record is marked with it (a fixpoint, one round on gc2).
+   * **The purge** now covers resources and group packages too.
+     * A purged resource keeps its identity and its handle. A body
+       prepared earlier may hold it as an operand, and nothing reachable can
+       tell the generations apart.
+     * A purged class still releases its handle, as in 4a.
+   * **Demotion.** Play also creates records for its own readiness. The
+     original never loads these, so the collection neither marks from them
+     nor purges them.
+     * **The problem:** such a record can be linked long after it was
+       created, and it then reads what it references.
+     * **The case:** `validate-full-run` stopped at mission 4's exit on
+       `Duplicate native backing record: deusexitems.invisibleweapon`.
+       DeusEx.WeaponKarkianBite, created for readiness, holds the LodMesh
+       DeusExItems.InvisibleWeapon in its PlayerViewMesh default, and the
+       purge had detached that mesh.
+     * **The rule:** a resource or group package that such a record
+       references is not purged. That covers the record's load edges and,
+       for a class, its Defaults (a subclass's Defaults copy its super's,
+       which its own load never resolves). What those resources reference
+       in turn is kept too. Each kept one leaves the original-loaded set:
+       it is demoted.
+     * **Why only resources:** a demoted resource is the same object to
+       anything that can see it. Classes are not demoted, because a class
+       keeps its Defaults and ClassUnique counter in its generation. gc2's
+       OutdoorThings and ElectricityEmitter, which readiness-linked
+       subclasses name as their super, come back as new generations in the
+       original (the gate failed when classes were demoted). A purged class
+       is linked again at once, as in 4a.
+   * **Unloading** (`heldPackages`, `ScriptProcess.unloadPackages`). A
+     package is held while one of its objects is marked or a held package
+     imports it. For every other package the process knows:
+     * the identities of its exports end, handles included (no kept object
+       or linker referenced them, and a later load mints new ones);
+     * the registry forgets its records;
+     * the graph drops its linker and package root, unless one of its
+       exports is loaded (none on gc2);
+     * the asset store releases its bytes, unless the graph prepared the
+       package. A prepared package is readiness: `prefetchDynamicLoadPackage`
+       fetched it once for the process, and a later synchronous load reads it.
+   * **The asset store's released cache** (`AssetStore.release`) keeps
+     released packages' bytes up to 64 MB, oldest out first. This is host
+     policy, like an OS file cache. The original reads the file again;
+     here DeusExConText, unloaded at every collection and loaded again by the
+     next level's startup, would otherwise be parsed again each time (about
+     45 ms).
+   * **Found and fixed:** the Training DataLink catalog
+     (`script-training-datalinks.mjs`) read and decoded 00_Training's map at
+     every level's start. That held the map's package after the collection
+     released it. The catalog depends on the package bytes only, so it is now
+     made once per asset store.
+   * **Gate** (`validate-process-collection`, extended):
+     * of the resources both sides hold before each gc2 map change, Play
+       collects the original's collected ones (13, 71 and 241) and keeps the
+       others as the same records (1,594, 1,656 and 1,662);
+     * of the packages both hold, Play unloads exactly the original's:
+       * DX.dx → Training: DX;
+       * Training → Island: 00_Training, area51textures, Cmd_tunnels,
+         HK_MJ12Lab and Training_Music;
+       * Island → Training: the Island and its twelve packages.
+
+       Title_Music and Entry are compared, with no exception.
+     * Unchanged: bench-sim digests (03_NYC_747 `0750ca718aa7c059`,
+       01_NYC_UNATCOIsland `52595f00465194dd`) and the unit tests (845,
+       three of them new for the released cache, `test/asset-release.test.mjs`).
+     * The sweep (Linux host, 4 jobs): 659 passed, 3 skipped, 6 failed. The
+       six fail the same way on the commit before 4b, each run alone: five
+       page checks in headless Chromium (host-services-play,
+       world-batch-gpu, texture-sampling, lodmesh-lod-play,
+       master-frame-play) and conversations-census, whose full run exceeds
+       the runner's ten minutes.
+     * `validate-full-run` (Stage 6 row 6.6.1: New Game to `dxonly` in one
+       process, about 60 levels) passes with demotion: the 13 missions' exit
+       travel texts equal the original's.
+   * **Memory** (`scripts/validate-process-memory.mjs`, run by hand,
+     outside the sweep): ten Island ↔ Training round trips in one process.
+     * Every Training arrival holds the same process state: 994 classes,
+       about 31,300 identities, 34,547 export records, 7,176 registry records
+       and 45 to 47 packages (two runs, the second with demotion).
+     * ArrayBuffers stay at 225 MB. The heap grows 0.56 and 0.92 MB per
+       round trip in the two runs (0.8 MB before 4b; the source of that
+       residue is not found).
+   * **Distinct maps** (`--maps`, twelve maps of missions 1 to 3 after
+     DX.dx): the packages' bytes stay bounded.
+     * Before 4b, ArrayBuffers rose with every new map: 229 MB on the
+       Island, 332 MB on the twelfth map, and the registry grew from 9,979
+       to 14,359 records.
+     * After: 205 to 254 MB of held bytes, plus at most 64 MB in the
+       released cache (282 MB in all on the twelfth map). Identities stay
+       at about 31,600 and registry records at about 12,000.
+     * Before 4b the AssetStore kept every package it had read, so a whole
+       campaign would end holding nearly all 598 MB of the game's packages.
+   * **Cost.** In node, a collection takes about 140 ms on these maps, most
+     of it 4a's mark. A record's class name and full name are now read once
+     per record (they never change while it is loaded); before that, the
+     registry's reach and the native-root scan read them for every tracked
+     record at every collection (225 ms). In Chromium's worker mode, three
+     interleaved runs per side of `profile-map-load.mjs --travel` (Training,
+     the Island, Training, the Island, Training), first drawn frame,
+     medians before → after 4b:
+     * the first three arrivals are unchanged or a little faster (the Island
+       5.55 → 5.59 s, Training 1.82 → 1.77 s, the Island again 4.15 →
+       4.10 s). The DataLink catalog is no longer rebuilt at each level;
+     * the fifth load (Training a third time) took 1.76 → 1.94 s in two runs
+       of three, with the worker's `createGame` 1.16 → 1.28 s. Node does not
+       show it. A purged resource is loaded again when a level needs it, as
+       in the original, and the extra garbage plausibly moves a collection
+       into that load. Not investigated further.
+   * **Not modelled, labelled:**
+     * `Unloading: Package <name>` lines from the collection are not
+       logged. The original prints them in GObjObjects order (DeusExConText
+       first at the Island's collection), which Play does not keep for
+       linkers.
+     * The page's own asset store, in worker mode, still keeps every package
+       it reads. Its texture and mesh caches (decals, coronas, sprites, the
+       HUD, actor meshes) key on the asset, so releasing there needs those
+       caches to follow.
+     * Play loads packages for its own readiness that the original never
+       holds at gc2's stops (DXFonts, InfoPortraits, Extras, the conversation
+       audio and music packages). The collection unloads their objects; a
+       package the graph prepared keeps its bytes.
 5. **One LoadMap per arrival**, with no Player start after a cold load. This
    needs your approval. Gate: gc2's counters. Then re-run the Stage 5 and
    Stage 6 comparisons. Their load-made actors are paired by creation rank,

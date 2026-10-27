@@ -98,6 +98,19 @@ export class ScriptClassLoader {
     this.levelIdentities = new WeakMap();
   }
 
+  /** The collection unloaded these packages (lower-case names; ScriptProcess.unloadPackages, which keeps a package with a loaded export):
+   * the graph drops their linkers and package roots, and the tracker forgets them. A package the graph prepared keeps its bytes there
+   * (packageAssets), so a later load makes a new linker synchronously. */
+  unloadPackages(names) {
+    const graph = this.graph, roots = new Set();
+    for (const name of names) {
+      graph.linkers.delete(name);
+      const root = graph.packageRoots.get(name);
+      if (root) { roots.add(root); graph.packageRoots.delete(name); this.identities.delete(root); }
+    }
+    this.originalLoads.unloadPackages(names, roots);
+  }
+
   identity(record) {
     if (record == null) return null;
     const known = this.identities.get(record) ?? this.levelIdentities.get(record);

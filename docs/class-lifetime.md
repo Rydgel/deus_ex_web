@@ -223,6 +223,40 @@ On DX.dx, WarpZoneMarker's script export has not loaded: its flags are
 therefore not in memory. The check overcounts by starting from every native
 class in the packages, loaded or not.
 
+**Re-captured on the Linux host (2026-10-27).** gc2's base steps ran again
+under Wine on the Linux host (`.work/travel/gc2.steps`), for step 4b of the
+[class graph design](class-graph-design.md). The dumps hold 34,208, 42,058,
+47,757 and 42,058 objects, the same class sets, and the same unloaded
+packages in the engine log. `validate-process-collection` and
+`validate-original-loaded` pass against it.
+
+### Packages and resources across LoadMap
+
+From gc2's dumps (top-level `Package` objects and the resource classes):
+
+* **Packages.** At every stop the original's top-level packages are exactly
+  the import closure (`pkg.dependencies`, followed transitively) of the level
+  package and of Entry.dx, plus Transient, Entry, the native DLL packages
+  (D3DDrv, Galaxy, Render, WinDrv, Window) and DeusExConText while the level's
+  conversation objects live. That is the linker rule: an object's header
+  serializes its Linker, a linker serializes each import's SourceLinker
+  (VerifyImport sets it for every import), and the level's linker and
+  GEntry's are live.
+* **Title_Music** is held at every stop because Entry.dx imports it. Probe
+  `gc2s` read the `Song` word (`+0x4f4`) of each `LevelInfo0` in Training:
+  the level's holds Training_Music, the Entry level's Title_Music
+  (`0x01054650`, the DX.dx player's `Song` too, `+0x670`). Probe `gc2m` had
+  searched the Galaxy subsystem, the viewport and the engine (`+0x28` to
+  `+0x5fc`) and found neither song.
+* **Resources.** No resource is collected and loaded again within one
+  LoadMap: each one keeps its address or is gone.
+
+| Map change | Resources kept | Collected | Loaded |
+| --- | --- | --- | --- |
+| DX.dx → 00_Training | 2,449 | 21 (DeusExDeco 20, Ambient 1) | 370 |
+| 00_Training → Island | 2,583 | 236 (DeusExCharacters 77, CoreTexMisc 46, UNATCO 40, …) | 547 |
+| Island → 00_Training | 2,583 | 547 (DeusExDeco 152, UNATCO 65, DeusExCharacters 61, DeusExUI 52, …) | 236 |
+
 ### Name lookups: `gc3`
 
 StaticFindObject (Core `0x10151de0`) searches the objects in memory, so a

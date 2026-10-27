@@ -170,6 +170,22 @@ export class ScriptResourceRegistry {
     for (const [key, target] of this.imports) if (level(target)) this.imports.delete(key);
   }
 
+  /** LoadMap's collection did not reach these records (script-process-collection.mjs): the next request materializes a new one. */
+  forget(records) {
+    if (!records.length) return;
+    const gone = new Set(records);
+    for (const record of gone) { this.resources.delete(record.key); this.pending.delete(record.key); }
+    for (const [key, target] of this.imports) if (gone.has(target)) this.imports.delete(key);
+  }
+
+  /** The collection unloaded these packages (lower-case names; ScriptProcess.unloadPackages): every record of theirs goes. */
+  unloadPackages(names) {
+    const gone = record => names.has(record?.asset?.name?.toLowerCase());
+    for (const [key, record] of this.resources) if (gone(record)) { this.resources.delete(key); this.pending.delete(key); }
+    for (const key of this.packages.keys()) if (names.has(key)) this.packages.delete(key);
+    for (const [key, target] of this.imports) if (names.has(key.slice(0, key.lastIndexOf(':'))) || gone(target)) this.imports.delete(key);
+  }
+
   /** Resolve a package export or an import reference; zero is null. */
   async resolve(assetOrName, index) {
     const asset = await this.#asset(assetOrName);

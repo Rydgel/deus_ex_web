@@ -1253,8 +1253,13 @@ attaches the next level to the same script process (`src/runtime/script-process.
 linked again, and the readiness pass is not repeated. In Chromium the Island's arrival fell from 6.9 to 4.1 s and
 Training's from 4.1 to 1.5 s. LoadMap's collection now reaches the process's classes (the design's step 4a): over gc2's
 map changes in one process Play collects the original's classes (6, 28 and 95), keeps the others' generations, and a
-SET on a level's own class reverts on the return as in the original (`validate-process-collection`). Resources, linkers
-and package unloading are step 4b.
+SET on a level's own class reverts on the return as in the original (`validate-process-collection`). The collection now
+covers resources and packages too (step 4b, 2026-10-27): of what both hold at each of gc2's map changes, Play collects the
+original's resources and unloads the original's packages (the import closure of the level and of Entry.dx stays held), and the
+asset store releases an unloaded package's bytes into a 64 MB cache. Ten Island and Training round trips in one process hold the
+same state at each arrival with flat package memory (`validate-process-memory`, run by hand), and twelve distinct maps stay
+bounded where the store used to keep every package it had read. Next is step 5, one LoadMap per arrival, which the user
+approved on 2026-10-27.
 
 Done when declared browser/performance targets pass repeatable tests, long sessions
 and repeated map changes remain stable, and failures offer useful recovery paths.

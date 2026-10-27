@@ -1,3 +1,5 @@
+import { releaseHandle } from './script-object-handles.mjs';
+
 /** The script state of the original's process that outlives a level (docs/class-graph-design.md "The process and the level", migration
  * steps 2-3). One per realm (the worker, or the page when the simulation runs inline). A ScriptRuntime is one level and attaches to a
  * process; a runtime built without one gets a process of its own, so a single-map session is the same either way.
@@ -41,6 +43,31 @@ export class ScriptProcess {
     this.levels = 0;
     // The collector over the classes (script-process-collection.mjs), made at the first collection.
     this.collection = null;
+  }
+  /** LoadMap's collection unloaded these packages (lower-case names; script-process-collection.mjs heldPackages): the linkers no live
+   * object or held linker reaches (ULinkerLoad::Destroy). Every identity of their exports ends (handle included): no kept object or linker
+   * referenced them, and a later load mints new ones, the original's new objects. The registry forgets their records, the graph drops a
+   * linker none of whose exports is loaded, and the asset store releases bytes the graph has not prepared (a package the graph prepared is
+   * readiness: a later synchronous load reads it, prefetchDynamicLoadPackage). Returns the names unloaded. */
+  unloadPackages(names) {
+    const graph = this.classLoader?.graph, unloaded = [];
+    for (const name of names) {
+      const linker = graph?.linkers.get(name);
+      // a package with a loaded export is not unloaded by Play (none is expected: the mark reaches every held object's package)
+      if (linker?.exports.some(entry => entry.object)) continue;
+      unloaded.push(name);
+    }
+    if (!unloaded.length) return unloaded;
+    const gone = new Set(unloaded);
+    for (const [key, identity] of this.packageObjects) {
+      if (!gone.has(identity.asset?.name?.toLowerCase())) continue;
+      this.packageObjects.delete(key);
+      releaseHandle(identity);
+    }
+    this.resources?.unloadPackages(gone);
+    this.classLoader?.unloadPackages(gone);
+    for (const name of unloaded) if (!graph?.packageAssets.has(name)) this.assets?.release?.(name);
+    return unloaded;
   }
   /** Whether `identity` is one of this process's (it survives the level that minted it). */
   owns(identity) { return identity !== null && typeof identity === 'object' && this.identities.has(identity); }

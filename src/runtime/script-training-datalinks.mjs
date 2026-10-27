@@ -275,6 +275,21 @@ function readTrigger(mapAsset, map, actor, defaults, conversation) {
  */
 export async function loadTrainingDataLinkCatalog(assets, { mapAsset = null, map = null } = {}) {
   if (!assets?.get || !assets?.resolve) throw new TypeError('Training DataLink catalog requires AssetStore');
+  // It depends on the package bytes only, so a store's catalog is made once: each level's DataLink runtime asks for it, and reading
+  // 00_Training again would hold that map's package after LoadMap's collection unloaded it (docs/class-graph-design.md, step 4b).
+  if (!mapAsset && !map) {
+    let pending = catalogs.get(assets);
+    if (!pending) {
+      catalogs.set(assets, pending = readTrainingDataLinkCatalog(assets, {}));
+      pending.catch(() => catalogs.delete(assets));
+    }
+    return pending;
+  }
+  return readTrainingDataLinkCatalog(assets, { mapAsset, map });
+}
+const catalogs = new WeakMap();
+
+async function readTrainingDataLinkCatalog(assets, { mapAsset, map }) {
   mapAsset ??= await assets.get('00_Training');
   map ??= decodeMap(mapAsset.bytes);
   const [context, audioAsset, content] = await Promise.all([

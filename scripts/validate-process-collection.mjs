@@ -12,7 +12,12 @@
  *   record, so its Defaults and ClassUnique counter); one the original collected in between is a new generation in Play too (Training's
  *   own classes on the return);
  * - the SETs typed in Training: PathNode's ExtraCost (a native class, kept) reads 77 on the Island and in Training again, and
- *   LightSwitch0's ScaleGlow (Training's own class, collected on the Island) reads its package default 1 in Training again.
+ *   LightSwitch0's ScaleGlow (Training's own class, collected on the Island) reads its package default 1 in Training again;
+ * - resources (migration step 4b): of the resources both hold before a map change (textures, sounds, meshes, fonts, music, palettes, keyed
+ *   by package, class, group and name), the original's collected ones are new generations or gone in Play (its graph record and registry
+ *   record), and its kept ones are the same records;
+ * - packages: of the top-level packages both hold before a map change (Play: a graph linker, a registry record or an identity of the
+ *   package, or the level), Play unloads the ones the original unloads and keeps the others.
  *
  *   node scripts/validate-process-collection.mjs [--captures .work/travel/gc2] */
 import { existsSync, readFileSync } from 'node:fs';
@@ -27,6 +32,10 @@ const argv = process.argv.slice(2);
 const option = (name, fallback) => { const i = argv.indexOf(`--${name}`); return i < 0 ? fallback : argv[i + 1]; };
 const captures = option('captures', '.work/travel/gc2');
 const STOPS = ['dx', 'training', 'island', 'training2'];
+const RESOURCE_KINDS = new Set(['Texture', 'Palette', 'Sound', 'Music', 'LodMesh', 'Mesh', 'Font', 'FireTexture', 'WaterTexture', 'WaveTexture', 'WetTexture',
+  'IceTexture', 'FractalTexture', 'ScriptedTexture']);
+// Packages whose lifetime Play does not model, each with its reason: the comparison leaves them out.
+const UNMODELLED_PACKAGES = new Map();
 // a class whose object came from its package carries the load context bits (RF_LoadForClient|Server|Edit); a registered one does not
 const LOAD_CONTEXT = 0x00070000;
 
@@ -45,6 +54,25 @@ const dumpClasses = stop => {
   }
   return out;
 };
+// the original's resources and top-level packages at a stop: "package|class|group|name" -> ptr, and the set of package names
+const dumpObjects = stop => {
+  const rows = new Map();
+  for (const line of readFileSync(join(captures, `${stop}.gflags.txt`), 'utf8').split('\n')) {
+    const m = /^slot\s+\d+ index\s+\d+ (\S+?)\.(\S+) ptr (0x\w+) flags 0x\w+ outer (0x\w+)/.exec(line);
+    if (m) rows.set(m[3], { cls: m[1], name: m[2], outer: m[4] });
+  }
+  const resources = new Map(), packages = new Set();
+  for (const [ptr, row] of rows) {
+    if (row.outer === '0x00000000') { if (row.cls === 'Package') packages.add(row.name.toLowerCase()); continue; }
+    if (!RESOURCE_KINDS.has(row.cls)) continue;
+    let top = row, group = '';
+    const outer = rows.get(row.outer);
+    if (outer && outer.outer !== '0x00000000') group = outer.name;
+    for (let i = 0; i < 64 && top.outer !== '0x00000000'; i++) top = rows.get(top.outer) ?? { name: '?', outer: '0x00000000' };
+    resources.set(`${top.name}|${row.cls}|${group}|${row.name}`.toLowerCase(), ptr);
+  }
+  return { resources, packages };
+};
 
 const assets = await loadAssets();
 let session = null;
@@ -56,10 +84,44 @@ const playClasses = () => {
   for (const [key, record] of graph.staticRecords) if (!out.has(key.toLowerCase())) out.set(key.toLowerCase(), record);
   return out;
 };
+// the resources Play holds at a stop: "package|class|group|name" -> {graph, registry} (the graph's record the tracker holds, the registry's)
+const playResources = () => {
+  const loader = session.c.runtime.classLoader, graph = loader.graph, out = new Map();
+  const kindOf = record => graph.nameText(graph.slotOf(graph.classRecordOf(record), 0x20));
+  const keyOf = (pkg, kind, group, name) => `${pkg}|${kind}|${group}|${name}`.toLowerCase();
+  for (const record of loader.originalLoads.held()) {
+    const kind = kindOf(record);
+    if (!RESOURCE_KINDS.has(kind)) continue;
+    const linker = graph.slotOf(record, 0x10), entry = linker?.asset?.pkg.exports[graph.slotOf(record, 0x14)];
+    if (!entry) continue;
+    const path = entry.path.split('.');
+    const key = keyOf(linker.asset.name, kind, path.length > 1 ? path.at(-2) : '', path.at(-1));
+    out.set(key, { ...out.get(key), graph: record });
+  }
+  for (const resource of session.c.runtime.process.resources?.resources.values() ?? []) {
+    if (!RESOURCE_KINDS.has(resource.kind)) continue;
+    const path = resource.path.split('.');
+    const key = keyOf(resource.asset.name, resource.kind, path.length > 1 ? path.at(-2) : '', path.at(-1));
+    out.set(key, { ...out.get(key), registry: resource });
+  }
+  return out;
+};
+// the top-level packages Play's process holds at a stop: a graph linker with a loaded export, a registry record, an identity, or the asset
+// store's bytes (a level's texture packages: the world reads them)
+const STOP_LEVELS = { dx: 'dx', training: '00_training', island: '01_nyc_unatcoisland', training2: '00_training' };
+const playPackages = stop => {
+  const process = session.c.runtime.process, graph = process.classLoader.graph, out = new Set();
+  for (const [name, linker] of graph.linkers) if (linker.exports.some(entry => entry.object)) out.add(name);
+  for (const resource of process.resources?.resources.values() ?? []) if (resource.asset?.name) out.add(resource.asset.name.toLowerCase());
+  for (const identity of process.packageObjects.values()) if (identity.asset?.name) out.add(identity.asset.name.toLowerCase());
+  for (const name of process.assets.ready.keys()) out.add(name);
+  out.add(STOP_LEVELS[stop]);   // the level's linker is live
+  return out;
+};
 const stops = new Map();
 const takeStop = stop => {
   const play = playClasses(), original = dumpClasses(stop);
-  stops.set(stop, { play, original });
+  stops.set(stop, { play, original, resources: playResources(), packages: playPackages(stop), dump: dumpObjects(stop) });
   const extra = [...play.keys()].filter(key => !original.has(key));
   const lacking = [...original].filter(([key, value]) => !play.has(key) && (value.flags & LOAD_CONTEXT)).map(([key]) => key);
   check(!extra.length, `${stop}: ${extra.length} classes Play holds that the original does not: ${extra.slice(0, 10).join(' ')}`);
@@ -119,6 +181,30 @@ for (let i = 1; i < STOPS.length; i++) {
     `${label}: collected ${playCollected.length} in Play, ${originalCollected.length} in the original (differ: ${[...originalCollected.filter(k => !playCollected.includes(k)), ...playCollected.filter(k => !originalCollected.includes(k))].slice(0, 10).join(' ')})`);
   notes.push(`${label}: collected ${playCollected.length} (the original ${originalCollected.length})`);
 }
+// resources and packages, at each map change
+for (let i = 1; i < STOPS.length; i++) {
+  const a = stops.get(STOPS[i - 1]), b = stops.get(STOPS[i]), label = `${STOPS[i - 1]} -> ${STOPS[i]}`;
+  if (!a || !b) continue;
+  const wrong = [];
+  let kept = 0, collected = 0;
+  for (const [key, ptr] of a.dump.resources) {
+    const before = a.resources.get(key);
+    if (!before) continue;
+    const originalKept = b.dump.resources.get(key) === ptr, after = b.resources.get(key);
+    const same = Boolean(after) && ['graph', 'registry'].every(side => !before[side] || !after[side] || before[side] === after[side]) &&
+      ['graph', 'registry'].some(side => before[side] && before[side] === after[side]);
+    if (originalKept && !same) wrong.push(`${key} (kept in the original, ${after ? 'a new generation' : 'collected'} in Play)`);
+    if (!originalKept && same) wrong.push(`${key} (collected in the original, kept in Play)`);
+    if (originalKept) kept++; else collected++;
+  }
+  check(!wrong.length, `${label}: ${wrong.length} resources whose fate differs: ${wrong.slice(0, 12).join(' ')}`);
+  notes.push(`${label}: of the resources both hold, ${kept} kept and ${collected} collected, in both`);
+  const both = [...a.packages].filter(name => a.dump.packages.has(name) && !UNMODELLED_PACKAGES.has(name));
+  const differ = both.filter(name => b.dump.packages.has(name) !== b.packages.has(name));
+  check(!differ.length, `${label}: packages held differently: ${differ.map(name => `${name} (${b.dump.packages.has(name) ? 'kept' : 'unloaded'} in the original)`).join(' ')}`);
+  notes.push(`${label}: of the ${both.length} packages both hold, the original and Play unload ${both.filter(name => !b.dump.packages.has(name)).sort().join(', ') || 'none'}`);
+}
+for (const [name, reason] of UNMODELLED_PACKAGES) notes.push(`not compared: package ${name}, ${reason}`);
 // generations, over every pair of stops
 for (let i = 0; i < STOPS.length; i++) for (let j = i + 1; j < STOPS.length; j++) {
   const between = STOPS.slice(i, j + 1).map(stop => stops.get(stop));

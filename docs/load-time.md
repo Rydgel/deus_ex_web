@@ -104,19 +104,22 @@ come from the capture session's own earlier loads.
   side). A load from the map list still starts a new process, so its times
   are those of the measurements above.
 
+* 2026-10-27: LoadMap's collection also covers resources and packages
+  ([class graph design](class-graph-design.md), migration step 4b). In
+  Chromium's worker mode (three interleaved runs per side, `--travel`
+  Training → Island → Training → Island → Training), the arrivals are
+  unchanged within noise (Training 1.82 → 1.77 s, the Island again 4.15 →
+  4.10 s), except the last Training load in two of three runs (1.76 → 1.94 s).
+  The worker no longer keeps every package it has read: unloaded packages'
+  bytes wait in a 64 MB cache, and nothing was read from a file again after
+  the first arrival.
+
 ## Open
 
-* **Keep loaded classes across a map change**, as the original's process
-  does. This would save about 2.3 to 2.7 s per map change. It would also
-  carry class defaults and per-class name counters the original's way, which
-  would replace the explicit default carry. Traced 2026-10-26 in
-  [class lifetime](class-lifetime.md). Native classes are never collected,
-  and a script-only class lives while the collector reaches it. In the
-  original, about 1,000 classes keep their identity for the whole session,
-  and each map change collects the level left's own classes (28 to 95 here)
-  and loads the next level's. Play links every class again on each map
-  change: 967 on the Island and 910 in Training. The design is in
-  [class graph design](class-graph-design.md).
+* **Keep loaded classes across a map change**: done (2026-10-26/27, [class
+  graph design](class-graph-design.md) migration steps 1 to 4). A travel
+  keeps the script process; LoadMap's collection purges the level left's own
+  classes and resources and unloads its packages.
 * **One LoadMap per arrival.** Dropping Player start after a cold load would
   save about 0.7 to 0.9 s. Every Stage 5 and 6 comparison so far was made
   against Play after Player start, and the names would then follow one load

@@ -148,6 +148,12 @@ export function createOriginalLoadTracker(graph) {
       for (const record of records) loaded.delete(record);
       index = null;
     },
+    /** The collection unloaded these packages (lower-case names) and their package roots: a level package among them is no longer held. */
+    unloadPackages(names, roots) {
+      for (const name of names) levelPackages.delete(name);
+      for (const root of roots) loaded.delete(root);
+      index = null; packagesChanged = true;
+    },
     /** StaticFindObject(UClass, ANY_PACKAGE, token, 0) (Core 0x10151de0; script-object-lookup.mjs) over the classes the original holds:
      * the reached class records and the registered ones. Returns the class's record, or null for the original's miss. A class Play has
      * created only for its own readiness is not found.

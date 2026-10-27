@@ -7,8 +7,14 @@ import { NameSpelling, BOOT_SCRIPT_PACKAGES } from './name-spelling.mjs';
 export class AssetStore {
   /** `configStore` (config-store.mjs): the player's kept DeusEx.ini and User.ini, read over the installed ones and written back by
    * GConfig's Flush (docs/config-persistence.md). Without one the config files are the installed ones. */
-  constructor(files, { configStore = null } = {}) {
+  constructor(files, { configStore = null, releasedBudget = 64 << 20 } = {}) {
     this.configStore = configStore;
+    // Packages the script process unloaded (release): their bytes, kept up to `releasedBudget` bytes, the least recently released first
+    // out, so a package read again soon (DeusExConText, at every level's start) is not fetched and parsed again. Host policy: the original
+    // reads a package from its file again.
+    this.released = new Map();
+    this.releasedBytes = 0;
+    this.releasedBudget = releasedBudget;
     // The first spelling of a Name across packages and levels (name-spelling.mjs), read by objects.mjs readObject; it lives as long as the store, as GNames does the process.
     this.nameSpelling = new NameSpelling();
     this.bootNames = null;
@@ -52,6 +58,13 @@ export class AssetStore {
 
   #load(name) {
     const key = name.toLowerCase();
+    const kept = this.released.get(key);
+    if (kept && !this.packages.has(key)) {
+      this.released.delete(key);
+      this.releasedBytes -= kept.bytes.byteLength;
+      this.packages.set(key, Promise.resolve(kept));
+      this.ready.set(key, kept);
+    }
     if (!this.packages.has(key)) {
       const file = this.files.get(key);
       if (!file) throw new Error(`Missing package: ${name}`);
@@ -70,6 +83,23 @@ export class AssetStore {
       pending.then(value => this.ready.set(key, value), () => this.packages.delete(key));
     }
     return this.packages.get(key);
+  }
+
+  /** The script process no longer holds the package (LoadMap's collection unloaded it: ScriptProcess.unloadPackages): the store forgets
+   * it, and its bytes wait in the released cache. A startup script package is never released. */
+  release(name) {
+    const key = name.toLowerCase(), value = this.ready.get(key);
+    if (!value || BOOT_SCRIPT_PACKAGES.some(boot => boot.toLowerCase() === key)) return false;
+    this.packages.delete(key);
+    this.ready.delete(key);
+    this.released.set(key, value);
+    this.releasedBytes += value.bytes.byteLength;
+    for (const [oldest, entry] of this.released) {
+      if (this.releasedBytes <= this.releasedBudget) break;
+      this.released.delete(oldest);
+      this.releasedBytes -= entry.bytes.byteLength;
+    }
+    return true;
   }
 
   /** A package already loaded by get(), or undefined. */

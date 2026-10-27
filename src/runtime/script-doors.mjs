@@ -478,10 +478,10 @@ export async function createScriptDoors({
   let liveMission=null;
   let levelCollection=null,lastCollection=null,arrivalCollection=null;
   // UObject::CollectGarbage over the process's classes (script-process-collection.mjs), from the level's live objects.
-  const collectProcess=()=>{
+  const collectProcess=entry=>{
     if(!runtime.classLoader)return null;
     const collection=runtime.process.collection??=createProcessCollection(runtime.process);
-    return collection.collect(levelSeeds(runtime,level));
+    return collection.collect(levelSeeds(runtime,level),asset,entry);
   };
   let loadMapGame=null;
   let playerLogin=null, preparedPlayerStartup=null, loggingIn=false, travelExporter=null;
@@ -2409,7 +2409,8 @@ export async function createScriptDoors({
   runtime.classLoader?.originalLoads.reachLevel(assets,asset);
   // A level attached to the process of the level left (script-process.mjs): the collection purges the classes nothing reaches any more,
   // the left level's own (its objects are gone with its runtime: LoadMap's 0x400 exclusion).
-  if(runtime.process.levels){arrivalCollection=collectProcess();await relinkPurged(runtime,arrivalCollection);}
+  // The Entry level's linker is the process's (GEntry): its package's imports stay held. Play has no Entry level; its package is read for that.
+  if(runtime.process.levels){arrivalCollection=collectProcess(await assets.get('Entry').catch(()=>null));await relinkPurged(runtime,arrivalCollection);}
   loadMapGame=await prepareLoadMapGame({runtime,assets,level,levelInfo,prepareClass:prepareNpcClass});
   // A saved level keeps the GameInfo it was saved with (LevelInfo.Game is one of its objects): LoadMap's GameInfo branch does not run.
   if(!restore)loadMapGame.reload();

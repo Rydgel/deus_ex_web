@@ -3,8 +3,8 @@ import {METADATA_KINDS} from './original-loaded.mjs';
 
 // Resource objects: loaded with the package that holds them and collected like a class (docs/class-graph-design.md "The collection over
 // classes"), so they are the process's.
-const RESOURCE_KINDS = new Set(['Texture', 'Palette', 'Sound', 'Music', 'LodMesh', 'Mesh', 'Font',
-  'FireTexture', 'WaterTexture', 'WaveTexture', 'WetTexture', 'IceTexture', 'FractalTexture', 'ScriptedTexture']);
+export const RESOURCE_KINDS = Object.freeze(new Set(['Texture', 'Palette', 'Sound', 'Music', 'LodMesh', 'Mesh', 'Font',
+  'FireTexture', 'WaterTexture', 'WaveTexture', 'WetTexture', 'IceTexture', 'FractalTexture', 'ScriptedTexture']));
 // The objects a level attaches as script instances (ScriptRuntime.prepareObject): DeusExConText's conversations, the conversation audio
 // lists and DeusExText's strings. The original unloads DeusExConText at each LoadMap collection that leaves no conversation object
 // (docs/script-loadmap-gc.md), so each level holds its own.
