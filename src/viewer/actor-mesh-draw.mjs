@@ -216,18 +216,7 @@ export function createMeshDraw(assets,creation,{gpu=null,texturePool,batches=nul
   };
   const applyMaterial=({glow,style})=>{
     if(materialStateApplied&&Object.is(glow,lastGlow)&&Object.is(style,lastStyle))return;
-    for(const material of materials){
-      material.color.setRGB(glow,glow,glow);
-      const flags=material.userData.flags;
-      const translucent=style===3||Boolean(flags&POLY.Translucent);
-      const modulated=!translucent&&(style===4||Boolean(flags&POLY.Modulated));
-      material.transparent=translucent||modulated;material.depthWrite=!material.transparent;
-      material.userData.modulatedUniform.value=modulated?1:0;
-      material.blending=material.transparent?THREE.CustomBlending:THREE.NormalBlending;
-      material.blendSrc=translucent?THREE.OneFactor:THREE.DstColorFactor;
-      material.blendDst=translucent?THREE.OneMinusSrcColorFactor:THREE.SrcColorFactor;
-      material.alphaTest=(style===2||Boolean(flags&POLY.Masked)) ? 0.5 : 0;
-    }
+    for(const material of materials)applyMaterialStyle(material,glow,style);
     for(const group of groups){
       rebatch(group);
       if(!group.sided)continue;
@@ -282,47 +271,12 @@ export function createMeshDraw(assets,creation,{gpu=null,texturePool,batches=nul
       // resource is shared, synchronously, at its former allocation point.
       const textureLease=texturePool.acquire(data,flags);textureLeases.push(textureLease);
       const texture=textureLease.texture,first=data.mips[0],key=record.key;
-      // Texture sampling (the skins are display-space 8-bit values, filtered as
-      // such: original-sampling.mjs) and recovered vertex lighting are in the same
-      // display-encoded space for the main framebuffer and mirror target.
-      // D3D modulates the display-encoded texel by the vertex diffuse
-      // (docs/mesh-lighting.md), before the display gamma ramp; the world
-      // shader treats light maps the same way. Style can switch a material
-      // to PF_Modulated at run time, so the modulated display ramp
-      // (displayRampGlsl) is a uniform branch.
+      // (groupMaterial: the display-encoded sampling and lighting, and Style's modulated ramp)
       const modulatedUniform={value:!(flags&POLY.Translucent)&&flags&POLY.Modulated?1:0};
       const environmentGroup=Boolean(record.flags&POLY.Environment),gpuSlot=creation.path==='gpu';
       const makeMaterial=side=>{
-        const material=new THREE.MeshBasicMaterial({map:texture,side,alphaTest:flags&POLY.Masked?.5:0});
-        material.customProgramCacheKey=gpuSlot?()=>`deus-ex-mesh-gpu-v3:${environmentGroup?1:0}:${FRAME_PROJECTION_KEY}`
-          :()=>`deus-ex-mesh-display-color-v4:${FRAME_PROJECTION_KEY}`;
-        material.onBeforeCompile=shader=>{
-          shader.uniforms.deusDisplayGamma=displayGamma;shader.uniforms.deusModulated=modulatedUniform;
-          shader.uniforms.deusCameraOn=cameraOn;
-          if(gpuSlot){
-            Object.assign(shader.uniforms,gpu.shared,{deusGpu:gpuUniform});
-            shader.vertexShader=shader.vertexShader.replace('#include <common>',
-              `#include <common>\nattribute vec3 deusLight;\nvarying vec3 vDeusLight;\n${CPU_CAMERA_DECLARATIONS}${DRAW_VERTEX_DECLARATIONS}`)
-              .replace('#include <begin_vertex>',gpuBeginVertex(environmentGroup,true));
-          } else shader.vertexShader=shader.vertexShader.replace('#include <common>',
-            `#include <common>\nattribute vec3 deusLight;\nvarying vec3 vDeusLight;\n${CPU_CAMERA_DECLARATIONS}`)
-            .replace('#include <begin_vertex>',`#include <begin_vertex>\nvDeusLight = deusLight;\n${CPU_CAMERA_BEGIN}`);
-          shader.fragmentShader=shader.fragmentShader.replace('#include <common>',
-            '#include <common>\nuniform float deusDisplayGamma;\nuniform float deusModulated;\nvarying vec3 vDeusLight;')
-            .replace('#include <colorspace_fragment>',
-              REENCODE_GLSL+'\ngl_FragColor.rgb *= vDeusLight;\n'+
-              `if (deusModulated > 0.5) { ${displayRampGlsl('deusDisplayGamma',true)} }\n`+
-              `else { ${displayRampGlsl('deusDisplayGamma',false)} }`);
-          // The original's vertex projection (docs/frame-projection.md): both paths project the lighting
-          // frame's camera-space buffer (a GPU slot's texture, or the CPU path's attribute once it left the slot).
-          frameProjection.patch(shader,{floatFloat:!gpuSlot,camera:true});
-        };
+        const material=groupMaterial({texture,side,flags,gpuSlot,environmentGroup,gpu,displayGamma,modulatedUniform,cameraOn,gpuUniform});
         materials.push(material);
-        if(flags&(POLY.Translucent|POLY.Modulated)) {
-          material.transparent=true;material.depthWrite=false;material.blending=THREE.CustomBlending;
-          material.blendSrc=flags&POLY.Translucent?THREE.OneFactor:THREE.DstColorFactor;
-          material.blendDst=flags&POLY.Translucent?THREE.OneMinusSrcColorFactor:THREE.SrcColorFactor;
-        }
         material.userData={key,flags,width:first.width,height:first.height,mipCount:data.mips.length,modulatedUniform};
         return material;
       };
@@ -600,6 +554,93 @@ export function createActorMeshDraw(assets,{gpu=null,lit=false,displayGamma,feed
     proceduralTextures:()=>textures.procedural.records(),
     dispose(){for(const draw of bindings.values())draw.dispose();bindings.clear();batches?.dispose();textures.dispose();},
   };
+}
+
+/** A group's material (createMeshDraw's build), the shader warm-up's too (actorMeshWarmup). Texture sampling (the
+ * skins are display-space 8-bit values, filtered as such: original-sampling.mjs) and recovered vertex lighting are in
+ * the same display-encoded space for the main framebuffer and mirror target. D3D modulates the display-encoded texel
+ * by the vertex diffuse (docs/mesh-lighting.md), before the display gamma ramp; the world shader treats light maps
+ * the same way. Style can switch a material to PF_Modulated at run time, so the modulated display ramp
+ * (displayRampGlsl) is a uniform branch. */
+function groupMaterial({texture,side,flags,gpuSlot,environmentGroup,gpu,displayGamma,modulatedUniform,cameraOn,gpuUniform}){
+  const material=new THREE.MeshBasicMaterial({map:texture,side,alphaTest:flags&POLY.Masked?.5:0});
+  material.customProgramCacheKey=gpuSlot?()=>`deus-ex-mesh-gpu-v3:${environmentGroup?1:0}:${FRAME_PROJECTION_KEY}`
+    :()=>`deus-ex-mesh-display-color-v4:${FRAME_PROJECTION_KEY}`;
+  material.onBeforeCompile=shader=>{
+    shader.uniforms.deusDisplayGamma=displayGamma;shader.uniforms.deusModulated=modulatedUniform;
+    shader.uniforms.deusCameraOn=cameraOn;
+    if(gpuSlot){
+      Object.assign(shader.uniforms,gpu.shared,{deusGpu:gpuUniform});
+      shader.vertexShader=shader.vertexShader.replace('#include <common>',
+        `#include <common>\nattribute vec3 deusLight;\nvarying vec3 vDeusLight;\n${CPU_CAMERA_DECLARATIONS}${DRAW_VERTEX_DECLARATIONS}`)
+        .replace('#include <begin_vertex>',gpuBeginVertex(environmentGroup,true));
+    } else shader.vertexShader=shader.vertexShader.replace('#include <common>',
+      `#include <common>\nattribute vec3 deusLight;\nvarying vec3 vDeusLight;\n${CPU_CAMERA_DECLARATIONS}`)
+      .replace('#include <begin_vertex>',`#include <begin_vertex>\nvDeusLight = deusLight;\n${CPU_CAMERA_BEGIN}`);
+    shader.fragmentShader=shader.fragmentShader.replace('#include <common>',
+      '#include <common>\nuniform float deusDisplayGamma;\nuniform float deusModulated;\nvarying vec3 vDeusLight;')
+      .replace('#include <colorspace_fragment>',
+        REENCODE_GLSL+'\ngl_FragColor.rgb *= vDeusLight;\n'+
+        `if (deusModulated > 0.5) { ${displayRampGlsl('deusDisplayGamma',true)} }\n`+
+        `else { ${displayRampGlsl('deusDisplayGamma',false)} }`);
+    // The original's vertex projection (docs/frame-projection.md): both paths project the lighting
+    // frame's camera-space buffer (a GPU slot's texture, or the CPU path's attribute once it left the slot).
+    frameProjection.patch(shader,{floatFloat:!gpuSlot,camera:true});
+  };
+  if(flags&(POLY.Translucent|POLY.Modulated)) {
+    material.transparent=true;material.depthWrite=false;material.blending=THREE.CustomBlending;
+    material.blendSrc=flags&POLY.Translucent?THREE.OneFactor:THREE.DstColorFactor;
+    material.blendDst=flags&POLY.Translucent?THREE.OneMinusSrcColorFactor:THREE.SrcColorFactor;
+  }
+  return material;
+}
+
+/** A record's material state on one of a binding's materials (applyMaterial): ScaleGlow, and Style over the
+ * group's flags (translucent, modulated, masked). */
+function applyMaterialStyle(material,glow,style){
+  material.color.setRGB(glow,glow,glow);
+  const flags=material.userData.flags;
+  const translucent=style===3||Boolean(flags&POLY.Translucent);
+  const modulated=!translucent&&(style===4||Boolean(flags&POLY.Modulated));
+  material.transparent=translucent||modulated;material.depthWrite=!material.transparent;
+  material.userData.modulatedUniform.value=modulated?1:0;
+  material.blending=material.transparent?THREE.CustomBlending:THREE.NormalBlending;
+  material.blendSrc=translucent?THREE.OneFactor:THREE.DstColorFactor;
+  material.blendDst=translucent?THREE.OneMinusSrcColorFactor:THREE.SrcColorFactor;
+  material.alphaTest=(style===2||Boolean(flags&POLY.Masked)) ? 0.5 : 0;
+}
+
+/** The shader warm-up's objects for the actor mesh layer and the view model (shader-warmup.mjs): every program
+ * a binding's groups can draw with, from groupMaterial, applyMaterialStyle and batchMaterial. A program's key
+ * reads the material's side, alpha test and opacity (transparent or a blending other than normal), and the
+ * custom key: the GPU slot's environment flag, or the CPU path, which a binding created without a GPU slot takes
+ * beside a GPU instance too (two such programs were built at the player's death on Airfield). Per group:
+ * one-sided, its material (FrontSide); two-sided, the DoubleSide material while opaque and the back- and
+ * front-side pair while transparent (build's `sided`); Style 1 is opaque, 3 and 4 transparent, 2 or a masked
+ * group alpha-tested. An opaque GPU-path group draws in its batch (batchMaterial) when `batched`, alone when it
+ * is a pawn's weapon or the view model. With `mirrors`, a weapon's one-sided faces flip to BackSide in a
+ * mirror's frame (applyPass). */
+export function actorMeshWarmup({gpu=null,displayGamma,batched=false,mirrors=false,texture,geometry}){
+  const objects=[],add=material=>objects.push(new THREE.Mesh(geometry,material));
+  for(const gpuSlot of gpu?[true,false]:[false])for(const environmentGroup of gpuSlot?[false,true]:[false])
+    for(const masked of [0,POLY.Masked])for(const twoSided of [0,POLY.TwoSided])for(const style of [1,3]){
+      const flags=masked|twoSided,make=side=>{
+        const modulatedUniform={value:0},material=groupMaterial({texture,side,flags,gpuSlot,environmentGroup,gpu,displayGamma,
+          modulatedUniform,cameraOn:{value:0},gpuUniform:{value:gpuSlot?1:0}});
+        material.userData={flags,modulatedUniform};
+        applyMaterialStyle(material,1,style);
+        return material;
+      };
+      if(twoSided&&style===3){add(make(THREE.BackSide));add(make(THREE.FrontSide));continue;}
+      const material=make(twoSided?THREE.DoubleSide:THREE.FrontSide);
+      add(material);
+      if(!twoSided&&mirrors)add(make(THREE.BackSide));
+      if(gpuSlot&&batched&&style===1){
+        material.userData.flags|=environmentGroup?POLY.Environment:0;
+        add(batchMaterial(material,{value:null},gpu,displayGamma));
+      }
+    }
+  return objects;
 }
 
 /** The CPU path's camera-space point of a corner (applyCamera), the same two names the GPU path's begin_vertex

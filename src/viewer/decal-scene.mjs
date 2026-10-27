@@ -5,6 +5,33 @@ import { configureSampler, REENCODE_GLSL } from './original-sampling.mjs';
 import { frameProjection, FRAME_PROJECTION_KEY } from './frame-projection.mjs';
 
 
+/** A texture's decal mesh (createDecalScene), the shader warm-up's too (decalWarmup). */
+function decalMesh(map, displayGamma, geometry = new THREE.BufferGeometry()) {
+  const material = new THREE.MeshBasicMaterial({ map, transparent: true, depthWrite: false,
+    depthFunc: THREE.LessEqualDepth, side: THREE.DoubleSide, fog: false });
+  material.blending = THREE.CustomBlending;
+  material.blendSrc = THREE.DstColorFactor; material.blendDst = THREE.SrcColorFactor;
+  material.onBeforeCompile = shader => {
+    shader.uniforms.deusDisplayGamma = displayGamma;
+    shader.fragmentShader = shader.fragmentShader.replace('#include <common>', '#include <common>\nuniform float deusDisplayGamma;')
+      .replace('#include <colorspace_fragment>', `${REENCODE_GLSL}
+        ${displayRampGlsl('deusDisplayGamma', true)}`);
+    // ClipDecal's points through the original's vertex chain (docs/frame-projection.md "Decals").
+    frameProjection.patch(shader, { decal: true });
+  };
+  material.customProgramCacheKey = () => `deus-decal:${FRAME_PROJECTION_KEY}`;
+  const mesh = new THREE.Mesh(geometry, material);
+  mesh.matrixAutoUpdate = false; mesh.frustumCulled = false; mesh.visible = false;
+  // Before the translucent world surfaces, which DrawFrame's later
+  // passes draw after the occluding ones and their decals.
+  mesh.renderOrder = -1;
+  mesh.layers.set(DECAL_LAYER);
+  return mesh;
+}
+
+/** The shader warm-up's decal mesh (shader-warmup.mjs). */
+export function decalWarmup({ displayGamma, texture, geometry }) { return [decalMesh(texture, displayGamma, geometry)]; }
+
 /** Decals in Play, the page's side (docs/decals.md "Drawing"): the
  * simulation's fragments (decal-draw.mjs) drawn as D3DDrv draws PF_Modulated
  * polygons (DrawGouraudPolygon 0x100056b0 with SetBlending(0x40)):
@@ -34,26 +61,7 @@ export function createDecalScene(assets, textures, { displayGamma }) {
       gpu.generateMipmaps = !complete;
       configureSampler(gpu, false);
       gpu.needsUpdate = true;
-      const material = new THREE.MeshBasicMaterial({ map: gpu, transparent: true, depthWrite: false,
-        depthFunc: THREE.LessEqualDepth, side: THREE.DoubleSide, fog: false });
-      material.blending = THREE.CustomBlending;
-      material.blendSrc = THREE.DstColorFactor; material.blendDst = THREE.SrcColorFactor;
-      material.onBeforeCompile = shader => {
-        shader.uniforms.deusDisplayGamma = displayGamma;
-        shader.fragmentShader = shader.fragmentShader.replace('#include <common>', '#include <common>\nuniform float deusDisplayGamma;')
-          .replace('#include <colorspace_fragment>', `${REENCODE_GLSL}
-            ${displayRampGlsl('deusDisplayGamma', true)}`);
-        // ClipDecal's points through the original's vertex chain (docs/frame-projection.md "Decals").
-        frameProjection.patch(shader, { decal: true });
-      };
-      material.customProgramCacheKey = () => `deus-decal:${FRAME_PROJECTION_KEY}`;
-      const geometry = new THREE.BufferGeometry();
-      const mesh = new THREE.Mesh(geometry, material);
-      mesh.matrixAutoUpdate = false; mesh.frustumCulled = false; mesh.visible = false;
-      // Before the translucent world surfaces, which DrawFrame's later
-      // passes draw after the occluding ones and their decals.
-      mesh.renderOrder = -1;
-      mesh.layers.set(DECAL_LAYER);
+      const mesh = decalMesh(gpu, displayGamma);
       root.add(mesh);
       Object.assign(entry, { texture: gpu, mesh });
     }).catch(error => { entry.failed = error.message; notes.add(`Decal texture ${key}: ${error.message}`); });

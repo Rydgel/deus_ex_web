@@ -357,6 +357,8 @@ export function createFogPass({ lightAtlas, levelBrightness, hsv, displayGamma, 
         passTiles.push(surface);
       }
     },
+    /** The shader warm-up's fog mesh (shader-warmup.mjs): a mover polygon's draw item, made once play runs (itemMesh). */
+    warmup(geometry) { return [new THREE.Mesh(geometry, material({ value: null }))]; },
     dispose() {
       for (const { mesh } of surfaces) { mesh.geometry.dispose(); mesh.material.dispose(); }
       for (const { mesh, texture } of items) { mesh.geometry.dispose(); mesh.material.dispose(); texture?.dispose(); }
