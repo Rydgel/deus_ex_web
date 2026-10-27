@@ -80,12 +80,17 @@ Calls `UPrimitive::Serialize`, then, in order, array serializers at
 `mesh+0x64`, the AnimSeq serializer at `mesh+0x84` (helper `0x10303107` →
 `0x103a9370`), a fourth array at `mesh+0x90` (helper `0x103010a5` →
 `0x103a9920`), a second full bbox/sphere pass into `mesh+0x28..+0x50`
-(direct `Ar.Serialize` calls plus helper `0x10301b54`→`0x103a98d0`), arrays
-at `mesh+0xa8`, `mesh+0xb4` (helpers `0x103014fb`→`0x103a8cd0`,
-`0x10302ff9`→`0x103a9b20`), `mesh+0xc0`, `mesh+0xd8` (helpers
-`0x10303f8f`→`0x103a9d90`, `0x10303404`→`0x103a9f90`), and finally
-`ULodMesh::Serialize`'s tail: compact-index/string fields at
-`mesh+0x12c..+0x174` and raw dwords `mesh+0x180..+0x1ac`.
+(direct `Ar.Serialize` calls plus helper `0x10301b54`→`0x103a98d0`), then
+four arrays in this call order (`0x103a64d5..0x103a650d`): `mesh+0xc0`
+VertLinks (helper `0x10303f8f`→`0x103a9d90`), `mesh+0xd8` Textures
+(`0x10303404`→`0x103a9f90`), `mesh+0xa8` BoundingBoxes
+(`0x103014fb`→`0x103a8cd0`) and `mesh+0xb4` BoundingSpheres
+(`0x10302ff9`→`0x103a9b20`); and finally `ULodMesh::Serialize`'s tail: the
+TArrays of WORD, FMeshFace, FMeshWedge and FMeshMaterial at
+`mesh+0x12c..+0x174` and raw dwords `mesh+0x180..+0x1ac`. (Corrected
+2026-10-26 from the collector-branch recovery, [resource GC
+serializers](resource-gc-serializers.md); an earlier text gave the four
+arrays in offset order.)
 
 **Lazy arrays (version > 61):** the `TLazyArray` serializers at
 `mesh+0x54`, `+0x6c`, `+0x90`, `+0xc0` (and, with slight variants,

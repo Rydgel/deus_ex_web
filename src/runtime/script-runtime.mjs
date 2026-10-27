@@ -323,6 +323,8 @@ const localReference=(locals,field)=>{
 // reads has no cell (the reference path runs). A bound field's sites are
 // read through the binding (script-cleanup.mjs cleanupImageSites).
 const cleanupPlans=new WeakMap();
+// The runtimes' services objects so far (their cacheId).
+let servicesCount=0;
 export function cleanupPlan(instance) {
   const cells=instance.cells,fields=instance.cls.propertyLink;
   if(!cells||instance.poison)return null;
@@ -379,6 +381,32 @@ const NATIVE_EVENT_BODIES=Object.freeze({
 const SOUND_LEVEL_FIELDS=new Set(['XLevel','Level','Actors','PawnList','nextPawn','NetMode','TimeSeconds',
   'DemoRecDriver','Model','Engine','Client','Viewports','ServerConnection','Actor']);
 
+/** The script process's class loader (script-process.mjs). Its services read the level attached now through `shared.runtime`; they
+ * are made here, outside a runtime's constructor, so that their closures keep no runtime alive (a closure made in the constructor
+ * shares its scope with the ones that capture `this`). */
+function createProcessClassLoader(shared,assets,objects,carriedDefaults){
+  return new ScriptClassLoader({assets,objects,
+    resources:()=>shared.runtime.resourceRegistry(),carriedDefaults,
+    // Retain Play's explicit deferred mesh policy on the shared archive.
+    meshLoadServices:{getLazyLoad:()=>1},
+    // Texture/Palette/Sound/Font constructors and serializers. The clock is
+    // the host's appSeconds; the mip bias is UBitmap::__Client's
+    // TextureLODSet from the installed WindowsClient config.
+    resourceServices:{
+      seconds:()=>hostNow()/1000,
+      getLazyLoad:()=>shared.runtime.lazyLoad,setLazyLoad:value=>{shared.runtime.lazyLoad=value;},
+      mipBias:(texture,lodSet)=>{
+        const config=shared.classLoader.graph.config;
+        if(!config)throw new Error('Texture mip bias requires the prepared GConfig');
+        return clientTextureLodSet(config)[lodSet]??0;
+      },
+    },
+    lifecycle:{logReceiver:{kind:'GWarn'},
+      logEndLoad:event=>shared.runtime.loadLifecycle.push({op:'Logf',...event}),
+      reallocLoaded:event=>shared.runtime.loadLifecycle.push({op:'FArrayRealloc',num:event.num,max:event.max})},
+  });
+}
+
 export class ScriptRuntime {
   constructor(assets,{native,warning,levelFor,actorLifecycle,rng,nameServices,conversationObjects,conversationLifecycle,windowLifecycle,logDevice,relocation,nativeClassLoading=false,boundaryNatives=[],boundaryFunctions=[],classDefaults=null,process=null}={}) {
     this.instanceKey=Symbol('ScriptRuntime instance');this.classIsACache=new WeakMap();this.arena=new ObjectArena();
@@ -402,26 +430,7 @@ export class ScriptRuntime {
     // archive keeps Play's separately documented deferred policy below.
     this.lazyLoad=CLIENT_LAZY_LOAD;this.loadLifecycle=[];
     // The class loader is the process's; its services reach the level attached now (ScriptProcess.attach).
-    this.classLoader=nativeClassLoading?(shared.classLoader??=new ScriptClassLoader({assets,objects:this.objects,
-      resources:()=>shared.runtime.resourceRegistry(),carriedDefaults:this.carriedDefaults,
-      // Retain Play's explicit deferred mesh policy on the shared archive.
-      meshLoadServices:{getLazyLoad:()=>1},
-      // Texture/Palette/Sound/Font constructors and serializers. The clock is
-      // the host's appSeconds; the mip bias is UBitmap::__Client's
-      // TextureLODSet from the installed WindowsClient config.
-      resourceServices:{
-        seconds:()=>hostNow()/1000,
-        getLazyLoad:()=>shared.runtime.lazyLoad,setLazyLoad:value=>{shared.runtime.lazyLoad=value;},
-        mipBias:(texture,lodSet)=>{
-          const config=shared.classLoader.graph.config;
-          if(!config)throw new Error('Texture mip bias requires the prepared GConfig');
-          return clientTextureLodSet(config)[lodSet]??0;
-        },
-      },
-      lifecycle:{logReceiver:{kind:'GWarn'},
-        logEndLoad:event=>shared.runtime.loadLifecycle.push({op:'Logf',...event}),
-        reallocLoaded:event=>shared.runtime.loadLifecycle.push({op:'FArrayRealloc',num:event.num,max:event.max})},
-    })):null;
+    this.classLoader=nativeClassLoading?(shared.classLoader??=createProcessClassLoader(shared,assets,this.objects,this.carriedDefaults)):null;
     if(this.classLoader){
       const resolve=this.objects.resolve.bind(this.objects);
       this.objects.resolve=async(asset,index)=>{
@@ -529,6 +538,8 @@ export class ScriptRuntime {
     this.contextResults=shared.contextResults;
     this.levelTickActorOptions=new WeakSet();this.levelTickActorServices=new WeakMap();
     this.services={
+      // A number naming these services in caches that outlive the level (script-vm.mjs operandCache).
+      cacheId:++servicesCount,
       invoke:call=>this.invoke(call),invokeNative:call=>this.invokeNative(call),
       iterator:call=>this.createIterator(call),
       objectReference:(script,index,node)=>this.objects.operand(script,node),
@@ -1232,9 +1243,12 @@ export class ScriptRuntime {
    * non-enumerable per-runtime symbol on the receiver is a direct link that
    * spares the hash lookup on every property access (attachment is permanent). */
   linkInstance(receiver,instance) {
+    if(instance.cls?.purged)throw new Error(`An object of a collected class generation: ${instance.cls.record.key} (the collector purged it; script-process-collection.mjs)`);
     this.instances.set(receiver,instance);
-    // An object of the class exists, so the original holds the class loaded (original-loaded.mjs).
+    // An object of the class exists, so the original holds the class loaded (original-loaded.mjs), and the process collection keeps it
+    // while this level lives (script-process-collection.mjs levelSeeds).
     if(instance.cls?.loadRecord)this.classLoader?.originalLoads.reach([instance.cls.loadRecord]);
+    if(instance.cls)(this.attachedClasses??=new Set()).add(instance.cls);
     bumpReceiverEpoch();
     stateChanged(receiver);
     // An object the collection model never frees (it was unreachable, so the

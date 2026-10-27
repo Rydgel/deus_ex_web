@@ -1251,8 +1251,10 @@ console parameter) see only the classes it holds, as the original's StaticFindOb
 prints "Unrecognized class", and a SET on a loaded class with no live object writes its Defaults. A travel now
 attaches the next level to the same script process (`src/runtime/script-process.mjs`): kept classes are not loaded or
 linked again, and the readiness pass is not repeated. In Chromium the Island's arrival fell from 6.9 to 4.1 s and
-Training's from 4.1 to 1.5 s. Until the LoadMap collection (the design's step 4), a level's own classes stay loaded
-after it is left, where the original collects them.
+Training's from 4.1 to 1.5 s. LoadMap's collection now reaches the process's classes (the design's step 4a): over gc2's
+map changes in one process Play collects the original's classes (6, 28 and 95), keeps the others' generations, and a
+SET on a level's own class reverts on the return as in the original (`validate-process-collection`). Resources, linkers
+and package unloading are step 4b.
 
 Done when declared browser/performance targets pass repeatable tests, long sessions
 and repeated map changes remain stable, and failures offer useful recovery paths.

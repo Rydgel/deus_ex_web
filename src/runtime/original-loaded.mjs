@@ -140,6 +140,14 @@ export function createOriginalLoadTracker(graph) {
       if (!walking && graph.loadState.nest === 0 && pending.length) walk(pending.splice(0));
     },
     has: record => loaded.has(record),
+    /** The records the tracker holds (the original-loaded set), for the collector's purge. */
+    held: () => loaded.values(),
+    /** The collector purged these records (script-process-collection.mjs): the original no longer holds them, and the next request
+     * that reaches their exports reaches new records. */
+    forget(records) {
+      for (const record of records) loaded.delete(record);
+      index = null;
+    },
     /** StaticFindObject(UClass, ANY_PACKAGE, token, 0) (Core 0x10151de0; script-object-lookup.mjs) over the classes the original holds:
      * the reached class records and the registered ones. Returns the class's record, or null for the original's miss. A class Play has
      * created only for its own readiness is not found.

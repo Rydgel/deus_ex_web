@@ -168,6 +168,9 @@ export function createScriptLoadGraph({packageAssets = new Map(), captureEvents 
 
   let syntheticAddress = 0x70000000;
   const objectHash = new Map(); // outerAddr:nameIndex:classAddr -> record
+  // address -> record: an expanded script image holds its object operands as their records' addresses (expandScriptExpression's
+  // resolveObject); the collector reads them back (recordAtAddress).
+  const recordsByAddress = new Map();
   let loadedObjects = [];       // the GObjLoaded array (0x1029e638); see suspendLoadQueue
   const events = captureEvents ? [] : {length: 0, push() {}};
   const warnings = [];
@@ -261,6 +264,7 @@ export function createScriptLoadGraph({packageAssets = new Map(), captureEvents 
       script: null,
       defaults: null,
     };
+    recordsByAddress.set(syntheticAddress, record);
     syntheticAddress += 0x40;
     const vtable = KIND_VTABLE.get(kind);
     if (vtable !== undefined) writeSlot(record, 0x00, vtable);
@@ -313,8 +317,10 @@ export function createScriptLoadGraph({packageAssets = new Map(), captureEvents 
         flags: STATIC_FLAGS,
         kind: 'Class',
       });
+      recordsByAddress.delete(record.nativeAddress);
       record.nativeAddress = row.staticClass;
       record.address = row.staticClass;
+      recordsByAddress.set(row.staticClass, record);
       record.staticClass = row.staticClass;
       record.nativeConstructor = row.internalCtor ?? null;
       staticRecords.set(`${pkgName}.${name}`, record);
@@ -1469,6 +1475,27 @@ export function createScriptLoadGraph({packageAssets = new Map(), captureEvents 
     conditionalPostLoad: postServices.conditionalPostLoad,
     loadExport(packageName, index) {
       return preload(indexToObject(buildLinker(packageName), index));
+    },
+    /** The record an expanded script image's object word names, or null. */
+    recordAtAddress: address => recordsByAddress.get(address) ?? null,
+    /** The collector's purge of a loaded export (PurgeGarbage's deleting destructor: ~UObject unhashes it, and its linker's
+     * DetachExport nulls the export map's object, so the next request creates it again from its package). Its load edges go with it,
+     * and an import that resolved to it resolves again on its next use. */
+    detachExport(record) {
+      const linker = slotOf(record, 0x10), index = slotOf(record, 0x14);
+      if (linker?.exports?.[index]?.object === record) linker.exports[index].object = null;
+      const key = `${addr(slotOf(record, 0x18))}:${slotOf(record, 0x20)}:${addr(slotOf(record, 0x24))}`;
+      if (objectHash.get(key) === record) objectHash.delete(key);
+      recordsByAddress.delete(addr(record));
+      loadEdges?.delete(record);
+      record.detached = true;
+    },
+    /** Imports resolved to a detached record forget it (they resolve again on their next use), and so does the GObjLoaded queue Play's
+     * lazy loads leave (suspendLoadQueue): the collection runs outside a load, where the original's queue is empty. */
+    forgetDetached(detached) {
+      if (loadState.nest !== 0) throw new Error('The collector purges outside a load');
+      for (const linker of linkers.values()) for (const entry of linker.imports ?? []) if (entry.object && detached.has(entry.object)) entry.object = null;
+      loadedObjects = loadedObjects.filter(object => !detached.has(object));
     },
   };
 }

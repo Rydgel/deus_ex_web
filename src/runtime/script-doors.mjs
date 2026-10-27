@@ -40,6 +40,7 @@ import { performActorPhysics, linkedActorPhysics } from './actor-physics.mjs';
 import { prepareCrateLifecycle } from './script-crate-lifecycle.mjs';
 import { runSpawnedActorFalling, runActorRolling, runActorRotation, runActorProjectile, runActorPathing } from './script-actor-physics.mjs';
 import { createLevelCollection } from './script-level-collection.mjs';
+import { createProcessCollection, levelSeeds, relinkPurged } from './script-process-collection.mjs';
 import { createSaveStore, installTravelNatives } from './script-travel.mjs';
 import { prepareGameDirectoryStore } from './script-game-directory.mjs';
 import { hostSaveDirectory } from './save-directory.mjs';
@@ -475,7 +476,13 @@ export async function createScriptDoors({
   // opts 264 back out to exercise the real native.
   let liveConPlay=null;
   let liveMission=null;
-  let levelCollection=null,lastCollection=null;
+  let levelCollection=null,lastCollection=null,arrivalCollection=null;
+  // UObject::CollectGarbage over the process's classes (script-process-collection.mjs), from the level's live objects.
+  const collectProcess=()=>{
+    if(!runtime.classLoader)return null;
+    const collection=runtime.process.collection??=createProcessCollection(runtime.process);
+    return collection.collect(levelSeeds(runtime,level));
+  };
   let loadMapGame=null;
   let playerLogin=null, preparedPlayerStartup=null, loggingIn=false, travelExporter=null;
   // The travel that brought the player here (travel.mjs request): the URL's portal and options for Login and InitGame, the travel text for
@@ -1872,6 +1879,8 @@ export async function createScriptDoors({
     // A freshly loaded ULevel starts with an empty deferred-deletion chain;
     // what the old chain held belongs to the unloaded level.
     level.pendingDeleted = null;
+    // The process's classes are collected at an arrival (below), not by Player start's second LoadMap, which the original does not run
+    // after a level's load (docs/class-graph-design.md, migration step 5).
     if (reload) lastCollection = levelCollection.collect();
     loadMapGame.reload();
     clearStartupTouching();
@@ -2398,6 +2407,9 @@ export async function createScriptDoors({
   // LoadMap's StaticLoadObject of the level resolves every import of the level package: the original holds what they reach loaded
   // (original-loaded.mjs). This is LoadMap's collection point, before the GameInfo spawn (docs/class-graph-design.md "LoadMap in Play").
   runtime.classLoader?.originalLoads.reachLevel(assets,asset);
+  // A level attached to the process of the level left (script-process.mjs): the collection purges the classes nothing reaches any more,
+  // the left level's own (its objects are gone with its runtime: LoadMap's 0x400 exclusion).
+  if(runtime.process.levels){arrivalCollection=collectProcess();await relinkPurged(runtime,arrivalCollection);}
   loadMapGame=await prepareLoadMapGame({runtime,assets,level,levelInfo,prepareClass:prepareNpcClass});
   // A saved level keeps the GameInfo it was saved with (LevelInfo.Game is one of its objects): LoadMap's GameInfo branch does not run.
   if(!restore)loadMapGame.reload();
@@ -2465,7 +2477,7 @@ export async function createScriptDoors({
 
   finishPlayerStartup();
   const infoLinkShell=()=>Promise.resolve(liveDataLink.shell());
-  return { reset, retirePlayer, get lastCollection(){return lastCollection;}, use, frob: frobMover, tick, runtime, bumpDecoration, dispatchEvent, decorations, triggerActions,
+  return { reset, retirePlayer, get lastCollection(){return lastCollection;}, get arrivalCollection(){return arrivalCollection;}, use, frob: frobMover, tick, runtime, bumpDecoration, dispatchEvent, decorations, triggerActions,
     npcPawns, npcFailures, scriptPreparationFailures, loadMapStartupExclusions,
     get lastTickDelta(){return lastTickDelta;},
     infoLinkShell,get playerStartup(){return playerStartup;},windowHost,playerLogs,dataLinkPresentation:liveDataLink.presentation,dataLinkActive:liveDataLink.active,

@@ -125,9 +125,12 @@ export function expandScriptExpression(pkg, r, { resolveObject, resolveName } = 
  * are fixed four-byte words there, so the same token table runs with `index`
  * reads widened to a dword.  `data` is the script byte span; `offset` the
  * starting cursor.  Returns the end cursor (the recovered SerializeExpr
- * `iMem` advance).
+ * `iMem` advance).  `onIndex(isName, offset)`, when given, receives each
+ * object or name word's offset, as the compact walker's `onIndex` does: the
+ * collector's SerializeExpr visits the same words (an object word through the
+ * archive's object operator, a name word through its name operator).
  */
-export function skipExpandedScriptExpression(data, offset, { version = 68 } = {}) {
+export function skipExpandedScriptExpression(data, offset, { version = 68, onIndex = null } = {}) {
   const bytes = data instanceof Uint8Array ? data : new Uint8Array(data);
   let cursor = offset;
   let expanded = 0;
@@ -135,7 +138,7 @@ export function skipExpandedScriptExpression(data, offset, { version = 68 } = {}
   const take = n => { const s = cursor; cursor += n; expanded += n; return bytes.subarray(s, s + n); };
   const readU8 = () => { const v = bytes[cursor]; cursor += 1; expanded += 1; return v; };
   const readU16 = () => { const v = view.getUint16(cursor, true); cursor += 2; expanded += 2; return v; };
-  const index = () => { cursor += 4; expanded += 4; };
+  const index = (isName = false) => { if (onIndex) onIndex(isName, cursor); cursor += 4; expanded += 4; };
   function expression(depth = 0) {
     if (depth > 128) throw new PackageError('Invalid expanded script nesting', cursor);
     const op = readU8();
@@ -145,19 +148,19 @@ export function skipExpandedScriptExpression(data, offset, { version = 68 } = {}
     else if (op >= 0x39 && op <= 0x59) child();
     else switch (op) {
       case 0x00: case 0x01: case 0x02: case 0x20: case 0x29: index(); break;
-      case 0x21: index(); break;
+      case 0x21: index(true); break;
       case 0x04: if (version > 61) child(); break;
       case 0x05: take(1); child(); break;
       case 0x06: take(2); break;
       case 0x07: case 0x09: case 0x18: take(2); child(); break;
       case 0x0a: { const jump = readU16(); if (jump !== 65535) child(); break; }
-      case 0x0c: while (true) { index(); take(4); if (view.getUint32(cursor - 8, true) === 0) break; } break;
+      case 0x0c: while (true) { index(true); take(4); if (view.getUint32(cursor - 8, true) === 0) break; } break;
       case 0x0d: case 0x0e: case 0x2d: child(); break;
       case 0x0f: case 0x10: case 0x14: case 0x1a: child(); child(); break;
       case 0x11: child(); child(); child(); child(); break;
       case 0x12: case 0x19: child(); take(3); child(); break;
       case 0x13: case 0x2e: case 0x36: index(); child(); break;
-      case 0x1b: case 0x38: index(); argumentsList(); break;
+      case 0x1b: case 0x38: index(true); argumentsList(); break;
       case 0x1c: index(); argumentsList(); break;
       case 0x1d: case 0x1e: take(4); break;
       case 0x1f: while (readU8() !== 0) {} break;

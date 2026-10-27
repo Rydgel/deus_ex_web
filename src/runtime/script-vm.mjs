@@ -932,12 +932,16 @@ export function compileFunction(fn) {
     ? code(n) : { ev: (fr, r) => evNode(n, fr, r), rv: (fr, r) => rvNode(n, fr, r) };
   // A node's resolved operand, kept while the runtime's operand epoch and
   // services are unchanged. Resolution (and its unlinked-operand error) is
-  // the same objects.operand call the services make.
+  // the same objects.operand call the services make. The services are
+  // remembered by their `cacheId` (ScriptRuntime's services carry one): a
+  // compiled function is the script process's readiness and outlives the
+  // level that ran it last, so holding its services would keep that level's
+  // runtime alive (script-process.mjs).
   const operandCache = () => {
     let services = null, epoch = -1, value;
     return (s, node) => {
-      const current = s.operandEpoch();
-      if (s !== services || current !== epoch) { value = s.operand(fn, node); services = s; epoch = current; }
+      const current = s.operandEpoch(), id = s.cacheId ?? s;
+      if (id !== services || current !== epoch) { value = s.operand(fn, node); services = id; epoch = current; }
       return value;
     };
   };

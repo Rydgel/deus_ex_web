@@ -657,6 +657,28 @@ stay equal for single-map sessions.
        of gc2's sequence, flat memory) covers it.
      * a new process per level: 491 to 496 MB;
      * the commit before step 1 (`db1452dc`): 467 to 473 MB.
+   * **Fixed after the step 3 commit: the levels left stayed alive.**
+     Repeated round trips hid it; distinct maps showed it. Over nine
+     distinct maps in one process (the Island, UNATCO HQ, Battery Park, the
+     Street, the Bar, the Hotel, the Warehouse, the Airfield, the 747), the
+     heap grew about 125 MB per map, 576 → 1,697 MB. A new process per level
+     stayed at 480–570 MB, and every runtime left stayed alive. Two holders,
+     both readiness or process objects outliving a level:
+     * a compiled body's operand cache (`script-vm.mjs` operandCache) kept
+       the services of the runtime that ran it last. It now keeps their
+       `cacheId`;
+     * the class loader's service closures were made in the first runtime's
+       constructor, whose scope captured that runtime's `this`. They are now
+       made outside it (`createProcessClassLoader`).
+
+     After both: one runtime alive (the level's own), and the heap at 544–606
+     MB over the same maps. `validate-script-process` now checks that a GC
+     frees every level left. It fails with the old operand cache.
+   * **Open: an undisposed game keeps other levels alive.** In a node process
+     that also holds an undisposed game of another process (a cold
+     `createGame`), the shared process's left runtimes are not freed. The
+     page disposes a game before the next one runs, so this is a test
+     artifact; the path is not found.
    * **What it changes, until step 4 collects.** The original collects a
      level's own classes at the next LoadMap. Play now keeps every class
      linked in the process. So:
@@ -679,6 +701,103 @@ stay equal for single-map sessions.
 
    Gate: gc2's sets and generations, and memory over the gc2 sequence
    repeated ten times staying flat.
+
+   *4a, the classes, done 2026-10-26* (`src/runtime/script-process-collection.mjs`).
+   * **The serializers.** The remaining collector branches were recovered
+     from the hash-pinned binaries:
+     * Core ([core GC serializers](core-gc-serializers.md)): UFunction,
+       UEnum, UConst, UTextBuffer and UPackage add no object reference beyond
+       UStruct, UField and UObject. ULinker adds its LinkerRoot and each
+       import's SourceLinker, both native-only pointers.
+     * Engine's resources ([resource GC serializers](resource-gc-serializers.md)):
+       a mesh's Textures array and a font's page textures are the only native
+       references. The rest go through script properties (Palette,
+       DetailTexture, AnimNext, ...).
+
+     That note also corrected the array order in
+     [LodMesh serialization](lodmesh-serialization.md).
+   * **Roots.**
+     * The root array's GLevel: the level's live objects. Their classes
+       (`attachedClasses`) are seeds, and so are the process objects their
+       properties reference.
+     * Every RF_Native object: in every dump of gc1 and gc2 that is exactly
+       238 DLL-registered classes, recorded in
+       `src/runtime/native-class-roots.mjs` (Play's graph registers only
+       Core's, Engine's and DeusEx's).
+   * **The mark** runs over the graph's records. Each kind follows its
+     recovered branch:
+     * the header's Class and Outer;
+     * UField's SuperField and Next;
+     * UStruct's ScriptText, Children and the object words of its expanded
+       bytecode (`skipExpandedScriptExpression`'s `onIndex`, resolved by
+       `graph.recordAtAddress`);
+     * UClass's dependencies, ClassWithin and Defaults (SerializeBin: not the
+       native properties, the transient ones too);
+     * each property kind's references.
+
+     A record's fixed references are read once and cached. A class's
+     Defaults are read at every collection.
+   * **Mark-only check.** On cold loads of DX.dx, 00_Training and
+     01_NYC_UNATCOIsland, the mark reaches exactly the original-loaded
+     classes: 959, 1,011 and 1,078.
+   * **The purge.** It covers the original-loaded metadata the mark does not
+     reach, except RF_Native records and group packages. A group package is
+     its resources' Outer, and resources are 4b's.
+     * The record is detached: the export map's object is nulled, the hash
+       entry dropped, its load edges pruned, and any import that resolved to
+       it reset.
+     * It leaves Play's never-emptied GObjLoaded queue. Without that, every
+       generation stayed alive: 5,406 records over six round trips.
+     * The tracker forgets it.
+     * The class's generation ends: it leaves `classes` and `linkedClasses`,
+       its identity's handle is released, and an attach to a stale
+       generation throws.
+   * **Identities stay.** The next load makes a new record and a new class
+     (package Defaults, counter 0) behind the same identity, and readiness
+     is kept with it. This deviates from "a new identity per generation".
+     Nothing reachable held a pointer to the purged object, so nothing can
+     tell the two generations' identities apart.
+   * **When it runs:** at an arrival in a shared process, at the LoadMap
+     point (the level's imports reached, before the GameInfo spawn).
+     * Player start's second LoadMap does not collect classes. The original
+     does not run it after a level's load (step 5), and readiness could not
+     be restored synchronously there.
+     * Right after the purge, readiness links the purged classes again,
+       host-only (`relinkPurged`). Play's synchronous VM runs only linked
+       classes, and a body prepared earlier may name a purged class, or the
+       travel's import of the player's inventory may spawn one.
+     * Such a class is a new generation from its package that the original
+       does not hold. A request of the original reaches it when the original
+       loads it again. The first sweep without this failed the flag census:
+       an arrival spawned a purged class.
+
+     A shared arrival no longer applies the travel's carried defaults: a
+     kept class holds them, and a collected one must reload with the
+     package's.
+   * **Gate** (`scripts/validate-process-collection.mjs`, gc2's steps in one
+     process):
+     * at each stop Play holds the dump's classes;
+     * DX → Training collects 6, Training → the Island 28 and the Island →
+       Training 95, as the original does;
+     * 983 classes keep their generation from Training to Training again,
+       and the 28 Training classes come back as new ones, in both;
+     * PathNode's ExtraCost 77 survives and LightSwitch0 reads its package
+       default 1 on the return.
+
+     bench-sim digests and the unit tests are unchanged.
+   * **Cost:** each collection takes about 80 ms on the Island (seeds read
+     from object images, about 10 ms; the mark, about 70 ms).
+     * In Chromium, worker mode, the Island's arrival takes 4.6–4.9 s and
+       Training's 1.8 s. Step 3 measured 4.1 and 1.5 s: a class the
+       collection purged loads again when a level needs it, as the
+       original's does.
+     * Memory over six Training ↔ Island round trips: purged records stay
+       bounded (the latest generation, held by the level just left), and the
+       heap grows about 2 MB per trip, as before the collection.
+   * **Left for 4b:** resources, conversation objects, group packages,
+     linkers and package unloading (DeusExConText's included), and the
+     resources Play marks without preloading (1,082 textures, 285 sounds,
+     26 fonts on Training). Their references do not exist in Play's graph yet.
 5. **One LoadMap per arrival**, with no Player start after a cold load. This
    needs your approval. Gate: gc2's counters. Then re-run the Stage 5 and
    Stage 6 comparisons. Their load-made actors are paired by creation rank,

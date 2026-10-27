@@ -39,6 +39,8 @@ export class ScriptProcess {
     // after the first.
     this.runtime = null;
     this.levels = 0;
+    // The collector over the classes (script-process-collection.mjs), made at the first collection.
+    this.collection = null;
   }
   /** Whether `identity` is one of this process's (it survives the level that minted it). */
   owns(identity) { return identity !== null && typeof identity === 'object' && this.identities.has(identity); }
@@ -51,8 +53,10 @@ export class ScriptProcess {
     this.runtime = runtime;
     if (this.classLoader) {
       this.classLoader.attachLevel(runtime.objects);
-      // The class defaults the arrival carried apply to the classes this level loads for the first time (the kept ones hold them already).
-      this.classLoader.carriedDefaults = runtime.carriedDefaults;
+      // A process's own first level applies the class defaults its travel carried (a travel into a new process, ?process=new). A level
+      // attached to the process of the level left does not: a kept class holds its Defaults, and a collected one loads again with the
+      // package's, as in the original (ScriptRuntime.checkCarriedDefaults compares the carried values with the kept classes').
+      this.classLoader.carriedDefaults = previous && previous !== runtime ? null : runtime.carriedDefaults;
     }
     if (this.resources) {
       this.resources.objects = runtime.objects;
