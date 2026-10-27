@@ -135,12 +135,6 @@ export function liveProbe(game, args = {}) {
       out.lights.push(row);
     }
   }
-  // write: {actorName: {Property: value}}, plain host writes (the player's animation state at the trace's start).
-  if (args.write) for (const [name, fields] of Object.entries(args.write)) {
-    const actor = byName(name);
-    if (!actor) throw new Error(`liveProbe: no actor ${name}`);
-    for (const [prop, value] of Object.entries(fields)) runtime.writeNamed(actor, prop, typeof value === 'number' ? Math.fround(value) : value);
-  }
   // census: every pawn but the player, with what a rendered view changes (LastRenderTime, bStasis) and its animation: the
   // screening of which maps' start views have animating NPCs in view (scripts/live-acceptance.mjs screen).
   if (args.census) {
@@ -381,6 +375,17 @@ export function liveProbe(game, args = {}) {
       out.objectTrace = { measured: given, pendingDeleted: givenPending, paired, unpaired, madePending, renamed: renamedCount, keptNames, player: live?.key ?? null, preFrees: rest.length,
         anchored: args.objectTrace.anchored.length, own: own.map(entry => `${entry.cls}.${entry.name}`) };
     }
+  }
+  // write: {actorName: {Property: value}}, plain host writes (the player's animation state at the trace's start). After the seed: a write names
+  // the original's actor, and a load-made actor takes the original's name there (Mission1 in 00_TrainingFinal, whose capture opened the map
+  // from DX.dx, is Play's Mission0 since one LoadMap makes each arrival, docs/class-graph-design.md migration step 5).
+  if (args.write) for (const [name, fields] of Object.entries(args.write)) {
+    const actor = byName(name);
+    if (!actor) throw new Error(`liveProbe: no actor ${name}`);
+    for (const [prop, value] of Object.entries(fields)) runtime.writeNamed(actor, prop, typeof value === 'number' ? Math.fround(value) : value);
+  }
+  if (args.objectTrace) {
+    const registry = runtime.actorLifecycle.construction.registry;
     const objects = runtime.objectLog ??= [], sounds = runtime.soundLog ??= [];
     // The tracer's u counts level ticks: a window frame (RootTick) between level ticks k and k+1 is u = k. Play ticks those frames inside replayed tick
     // k+1 (game.tick: the windows, then the level), so an object a window frame creates or frees (a bark subtitle's windows), or a sound it plays, takes

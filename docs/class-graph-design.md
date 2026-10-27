@@ -987,6 +987,14 @@ stay equal for single-map sessions.
      drew its first frame at 4.59 s, Training again at 1.53 s (5.59 and
      1.77 s in the 4b medians, which still ran Player start). No page or
      runtime error.
+   * **Stage 5.** The acceptance gate passes 50 of 50 again (all 89 proof
+     checks, Linux host, `--jobs 2`). Its first run stopped `jmr1` and
+     `ins2`: the replay applied the scene's starting writes before renaming
+     Play's load-made actors to the original's names, and the original's
+     `Mission1` is Play's `Mission0` once each arrival is one LoadMap. The
+     writes now follow the renaming (`live-probe.mjs`). The replays' cached
+     Play populations were rebuilt (the Player-start ones are kept in
+     `.work/live-acceptance/populations-before-step5/`).
 6. **Retire carried defaults**, and make inline mode restore `.dxs` levels and
    loaded games (that fix may come earlier).
 

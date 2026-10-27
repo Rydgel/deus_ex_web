@@ -967,6 +967,12 @@ pawn Shadow its load made, and Play's `Shadow104`. That is the offset of 33 thro
 Where Play's numbers come from (found 2026-10-26, [load time](load-time.md)): Play loads a map cold and then runs LoadMap over it again for Player start. The cold
 load alone names `Shadow0`..`Shadow52` and `LaserProxy0`..`LaserProxy7`, and Player start's pass makes `Shadow53`..`Shadow105` and `LaserProxy8`..`LaserProxy15`.
 The original's numbers come from its capture session's earlier loads.
+Since 2026-10-27 ([class graph design](class-graph-design.md), migration step 5) Play runs no Player start after a load, so a map opened cold names
+`Shadow0`..`Shadow52`. In one script process the counters follow the original's (gc2: `Shadow20`..`Shadow72` on the Island after DX.dx and Training,
+`validate-process-collection`). The replays still pair by creation rank, below. Step 5 found one ordering gap there: the scene's starting writes
+(`live-probe.mjs` `write`: the original's timer state, poses) were applied before the seed renamed Play's load-made actors, so `jmr1` and `ins2` looked
+for `Mission1` (the capture opened 00_TrainingFinal from DX.dx) and found Play's `Mission0`; the writes now follow the renaming. The gate then passed
+50 of 50 again (2026-10-27, Linux host, `--jobs 2`, report `.work/stage5-gate-2026-10-27-step5.json`).
 
 **The fix: creation order within the class** (`live-probe.mjs` objectTrace, `live-acceptance.mjs` `registrySeed` `classRows`). A map export keeps its `Class.Name`
 match. An actor that Play's runtime created (a native record with a registry index), live or pending deletion, the player excepted, is paired with a row of the
