@@ -1261,7 +1261,9 @@ same state at each arrival with flat package memory (`validate-process-memory`, 
 bounded where the store used to keep every package it had read. Step 5 followed the same day (approved by the user): the page no
 longer runs Player start after a load, so each arrival is one LoadMap, as in the original. Its spawned-name counters follow
 gc2's (Shadow 1..19, 20..72, 73..91 over Training, the Island and Training again), and in Chromium the Island reached by
-travel draws its first frame about 1 s sooner (5.6 → 4.6 s).
+travel draws its first frame about 1 s sooner (5.6 → 4.6 s). Inline mode, Firefox's default, now restores a level the player
+returns to and a loaded game from their saved files, as the worker does; before, it loaded the map's `.dx` fresh
+(`validate-inline-restore-play`, in Firefox and Chromium).
 
 Done when declared browser/performance targets pass repeatable tests, long sessions
 and repeated map changes remain stable, and failures offer useful recovery paths.

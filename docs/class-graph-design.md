@@ -319,9 +319,9 @@ the level that nothing reaches any more is purged, as in the original.
 
 A **level restored from `.dxs`** and a **loaded game** are the same LoadMap
 with the level package taken from `Save\Current`. They have no begin-play
-passes, as today. Inline mode must restore them: today it cold-loads the
-`.dx` (`main.mjs:898` drops `restore` without a worker). That fix is a
-prerequisite.
+passes, as today. Inline mode restores them too since 2026-10-27 (migration
+step 6); before, it cold-loaded the `.dx` (`main.mjs` dropped `restore`
+without a worker).
 
 The **debug page's map list** and a **page reload** start a new process,
 which is today's meaning: a new run of the original. A `?process=keep` switch
@@ -997,6 +997,29 @@ stay equal for single-map sessions.
      `.work/live-acceptance/populations-before-step5/`).
 6. **Retire carried defaults**, and make inline mode restore `.dxs` levels and
    loaded games (that fix may come earlier).
+
+   *Inline restore done 2026-10-27* (the user asked for the Firefox fix
+   first; retiring the carried defaults is still open).
+   * **The bug.** Inline mode, the default in Firefox, dropped a travel's
+     `restore` and never wrote a loaded game's slot files into Save\Current.
+     A level the player came back to, and a loaded game, were the map's
+     `.dx` loaded fresh: killed pawns and taken items came back.
+   * **The fix** (`main.mjs` `loadMap`): one rule for both modes. Inline,
+     the simulation's Save directory is the page's (`hostSaveDirectory()`):
+     a loaded game's files go into `Current` first, as the worker does
+     (`sim-worker.mjs` `load`), and the level is read from there and loaded
+     with `restore`.
+   * **Gate** (`scripts/validate-inline-restore-play.mjs`, headless):
+     * In 00_Training, KillAll LightSwitch, then `LocalTravel
+       00_TrainingCombat` and back: LightSwitch0 stays destroyed.
+     * QuickSave, KillAll Plant2 (8 → 0), `LoadGame -1`: the 8 plants are
+       back, and LightSwitch0, destroyed before the save, stays gone.
+     * Passes in Firefox (inline), in Chromium with `?sim=inline`, and in
+       Chromium's worker mode (`--sim worker`).
+     * On the previous `main.mjs` it fails at the first check: the return
+       placed LightSwitch0 again.
+     * validate-travel-play, -travel-newgame-play and -save-load-play
+       still pass.
 
 ## Expected effect
 

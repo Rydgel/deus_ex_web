@@ -900,9 +900,17 @@ async function loadMap(name, { travel = null, currentFiles = null } = {}) {
     // A level filed in Save\Current (travel.mjs `restore`: a loaded game's, or one travel left) is drawn from that file, the package the simulation
     // loads (sim-worker.mjs), not from the map's .dx: the two number their objects differently, and the simulation's lighting changes name lights
     // by their object reference in the level it runs (a loaded 03_NYC_747 had 29 of its 36 lights at other references: the plane drew dark).
-    const restore = simClient ? travel?.restore ?? null : null;
-    const filedBytes = restore ? currentFiles?.find(file => file.name.toLowerCase() === restore.file.toLowerCase())?.bytes?.slice()
-      ?? await simClient.call('filedLevel', { file: restore.file }) : null;
+    // Inline (Firefox's default, ?sim=inline) the simulation's Save directory is this realm's: a loaded game's slot files the page read from its
+    // storage go into Save\Current first, as the worker does with them (sim-worker.mjs `load`), and the level is read from there, so the simulation
+    // restores it rather than cold-loading the map's .dx.
+    const restore = travel?.restore ?? null;
+    if (!simClient && currentFiles) {
+      const saves = hostSaveDirectory();
+      for (const file of currentFiles) saves.writeFile('Current', file.name, file.bytes, file.modified === null ? undefined : { modified: file.modified });
+    }
+    const filedBytes = !restore ? null : simClient ? currentFiles?.find(file => file.name.toLowerCase() === restore.file.toLowerCase())?.bytes?.slice()
+      ?? await simClient.call('filedLevel', { file: restore.file }) : hostSaveDirectory().readFile('Current', restore.file);
+    if (restore && !filedBytes) throw new Error(`Save\\Current\\${restore.file} is not in the save directory`);
     const filed = filedBytes ? filedLevel(filedBytes, restore) : null;
     const asset = filed?.asset ?? await assets.get(name);
     await new Promise(resolve => setTimeout(resolve, 0));
@@ -951,7 +959,7 @@ async function loadMap(name, { travel = null, currentFiles = null } = {}) {
     if (!simClient) simHost?.disposeAudio?.();
     if (overlapped) { overlapped.scene(scenePart); overlapped.scene = null; }
     nextHost = simClient ? remoteHost(await overlapped.reply) : await createSimHost(nextMap, asset, assets, { ...hostOptions,
-      musicLibrary: pageMusicLibrary, process: keepProcess,
+      musicLibrary: pageMusicLibrary, process: keepProcess, restore: Boolean(filed),
       onAudioVoice: event => { void galaxyVoice(event); },
       onProgress: message => { $('gate-message').textContent = message; } });
     loadMark('host');
