@@ -42,6 +42,16 @@ Promoted, KB per frame (two interleaved runs per side): 323 and 230 before, 121 
 3,106 and 3,176 after. The state digests are unchanged (Island, Training, 747). Left: the script frames of JavaScript-run script
 (`executeScript`, `createFrame`, frame locals: about 45 KB/frame promoted), Map sets (13), `packDynamics` and `lightRecord`.
 
+**After both (one roam each, so indicative).** Chromium worker, Island, 150 s against the 120 s baseline: worker frame p50 14.6 →
+12.2 ms, p95 20.3 → 17.8, p99 27.0 → 23.8, tick 8.6 → 6.8 ms (most likely `pawnView`, which was built per locomotion call, per
+pawn, per tick), draw gaps over 33 ms 263 → 70, draw gap p99 33.4 → 16.8 ms, worker heap peak 1.85 GB → 1.39 GB, one worker major
+GC of 26 ms in each. Firefox inline, Island, 120 s: still 45 fps drawn on this machine, page frames over 90 ms after the load 17
+→ 12, arriving in clusters of two or three about 100 ms frames every 10 to 30 s: a major GC's cost follows the live heap
+(about 7.5 M nodes on a loaded map, mostly the script object model, see "October 14, later"), which these changes do not shrink.
+The page's late shader programs (about 15 on the Island after the first 5 s of play, 50 to 120 ms each here) are the other
+remaining stall; `?precompile=1` builds only what the scene holds at load, and the late ones are variants first needed later
+(GPU mesh materials by environment pass, blend state and fog; lightmap batches by texture count; translucent sprites).
+
 ## October 14: periodic hitches (reported on the Mac only)
 
 The user sees huge frame drops lasting a few seconds, recurring, on every map
