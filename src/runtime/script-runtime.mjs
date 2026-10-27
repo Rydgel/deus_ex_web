@@ -407,6 +407,24 @@ function createProcessClassLoader(shared,assets,objects){
   });
 }
 
+/** ScriptRuntime.pawnView's view: each property reads and writes the pawn's field by name (readNamed/writeNamed) at each access. */
+class PawnView {
+  constructor(runtime,self){this.runtime=runtime;this.self=self;}
+}
+for(const [prop,name] of Object.entries({
+  physics:'Physics',location:'Location',velocity:'Velocity',acceleration:'Acceleration',
+  rotation:'Rotation',desiredRotation:'DesiredRotation',rotationRate:'RotationRate',
+  floor:'Floor',destination:'Destination',focus:'Focus',latentFloat:'LatentFloat',
+  moveTimer:'MoveTimer',desiredSpeed:'DesiredSpeed',maxDesiredSpeed:'MaxDesiredSpeed',
+  meleeRange:'MeleeRange',groundSpeed:'GroundSpeed',waterSpeed:'WaterSpeed',
+  airSpeed:'AirSpeed',accelRate:'AccelRate',avgPhysicsTime:'AvgPhysicsTime',
+  collisionRadius:'CollisionRadius',collisionHeight:'CollisionHeight',
+  moveTarget:'MoveTarget',faceTarget:'FaceTarget',
+  bCanStrafe:'bCanStrafe',bReducedSpeed:'bReducedSpeed',bCanSwim:'bCanSwim',
+  bAdvancedTactics:'bAdvancedTactics',bCanGlide:'bCanGlide',bIsPlayer:'bIsPlayer',
+}))Object.defineProperty(PawnView.prototype,prop,{get(){return this.runtime.readNamed(this.self,name);},
+  set(value){this.runtime.writeNamed(this.self,name,value);},enumerable:true});
+
 export class ScriptRuntime {
   constructor(assets,{native,warning,levelFor,actorLifecycle,rng,nameServices,conversationObjects,conversationLifecycle,windowLifecycle,logDevice,relocation,nativeClassLoading=false,boundaryNatives=[],boundaryFunctions=[],process=null}={}) {
     this.instanceKey=Symbol('ScriptRuntime instance');this.classIsACache=new WeakMap();this.arena=new ObjectArena();
@@ -1956,24 +1974,7 @@ export class ScriptRuntime {
    * [x,y,z]/[pitch,yaw,roll] arrays and flags stay booleans, matching the
    * shapes the oracle probe's fabricated memory exposes. */
   pawnView(receiver) {
-    const fields={
-      physics:'Physics',location:'Location',velocity:'Velocity',acceleration:'Acceleration',
-      rotation:'Rotation',desiredRotation:'DesiredRotation',rotationRate:'RotationRate',
-      floor:'Floor',destination:'Destination',focus:'Focus',latentFloat:'LatentFloat',
-      moveTimer:'MoveTimer',desiredSpeed:'DesiredSpeed',maxDesiredSpeed:'MaxDesiredSpeed',
-      meleeRange:'MeleeRange',groundSpeed:'GroundSpeed',waterSpeed:'WaterSpeed',
-      airSpeed:'AirSpeed',accelRate:'AccelRate',avgPhysicsTime:'AvgPhysicsTime',
-      collisionRadius:'CollisionRadius',collisionHeight:'CollisionHeight',
-      moveTarget:'MoveTarget',faceTarget:'FaceTarget',
-      bCanStrafe:'bCanStrafe',bReducedSpeed:'bReducedSpeed',bCanSwim:'bCanSwim',
-      bAdvancedTactics:'bAdvancedTactics',bCanGlide:'bCanGlide',bIsPlayer:'bIsPlayer',
-    };
-    const view={self:receiver};
-    for(const [prop,name] of Object.entries(fields)){
-      const ref=this.namedReference(receiver,name);
-      Object.defineProperty(view,prop,{get:()=>ref.get(),set:value=>ref.set(value),enumerable:true});
-    }
-    return view;
+    return new PawnView(this,receiver);
   }
   /** ZoneInfo projection the falling/swim gates consume: Region.Zone plus the
    * ZoneInfo class default's ZoneGravity.z (the be200 assert path reads

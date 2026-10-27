@@ -1777,7 +1777,7 @@ export async function createWindowHost({runtime, assets, player, gameConfig = nu
     drawCommands.push({texture:resource.ref,x:bitsToF32(command.x),y:bitsToF32(command.y),
       width:bitsToF32(command.xl),height:bitsToF32(command.yl),u:bitsToF32(command.u),v:bitsToF32(command.v),
       ul:bitsToF32(command.ul),vl:bitsToF32(command.vl),
-      color:command.color.slice(0,3).map(bits=>bitsToF32(bits)*255),
+      color:[bitsToF32(command.color[0])*255,bitsToF32(command.color[1])*255,bitsToF32(command.color[2])*255],
       style:command.polyFlags&4?3:command.polyFlags&0x40?4:command.polyFlags&2?2:1});
   };
   W.gc = {

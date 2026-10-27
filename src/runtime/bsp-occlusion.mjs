@@ -406,7 +406,7 @@ export function createBspOcclusion(kernel, model, { surfaceTextureFlags, zoneAct
       // child frames in OccludeFrame's order.
       // A view: decode copies what it keeps, and runs before the kernel is called again.
       const all = words().subarray(st[5] >>> 2, (st[5] >>> 2) + st[1]);
-      return { ...decode(all.subarray(0, st[6]), st, skipPoints, skipSpritePixels), frames: decodeFrames(all, st[6], skipPoints, st[5]),
+      return { ...decode(all.subarray(0, st[6]), st, skipPoints, skipSpritePixels), frames: decodeFrames(all, st[6], skipPoints, st[5], skipSpritePixels),
         stream: { at: st[5], words: st[6] } };
     },
     /** Validation: the child frames' Setup results for the watched candidate indices (up to 8), read after a run; `watch([])` stops it. */
@@ -564,7 +564,7 @@ export function createBspOcclusion(kernel, model, { surfaceTextureFlags, zoneAct
  * passes iSurf 0, so coplanar mirrors of different surfaces in one zone share
  * a frame, 0x10b18b4a) and its OccludeBsp output (`stream`: its address in the
  * kernel memory and word count, for the detail pass). */
-function decodeFrames(words, at, skipPoints, base = 0) {
+function decodeFrames(words, at, skipPoints, base = 0, boundsOnly = false) {
   const frames = [];
   let i = at;
   while (i < words.length) {
@@ -575,21 +575,34 @@ function decodeFrames(words, at, skipPoints, base = 0) {
     i += 81;
     const startY = words[i], endY = words[i + 1], valid = words[i + 2];
     i += 3;
-    const lines = [];
+    // `boundsOnly` (Play's caller reads a span's pixel bounds and a sprite's key alone): the span's [minX, startY, maxX, endY)
+    // instead of its lines, as sim-session.mjs spanBounds would compute them, and the sprites' rows stepped over.
+    const lines = boundsOnly ? null : [];
+    let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
     for (let y = startY | 0; y < (endY | 0); y++) {
-      const count = words[i++], line = [];
+      const count = words[i++];
+      if (boundsOnly) {
+        if (count) {
+          minX = Math.min(minX, words[i] | 0); maxX = Math.max(maxX, words[i + 2 * count - 1] | 0);
+          minY = Math.min(minY, y); maxY = Math.max(maxY, y + 1);
+        }
+        i += 2 * count;
+        continue;
+      }
+      const line = [];
       for (let k = 0; k < count; k++, i += 2) line.push([words[i] | 0, words[i + 1] | 0]);
       lines.push(line);
     }
+    const bounds = boundsOnly ? (minX < maxX && minY < maxY ? [minX, minY, maxX, maxY] : null) : undefined;
     const requestCount = words[i++], requests = Array.from(words.subarray(i, i + requestCount), node => node | 0);
     i += requestCount;
     const length = words[i++];
-    const body = decode(words.subarray(i, i + length), [], skipPoints);
+    const body = decode(words.subarray(i, i + length), [], skipPoints, boundsOnly);
     // The frame's OccludeBsp output where the kernel left it (valid until the next run), for the detail pass.
     const stream = { at: base + 4 * i, words: length };
     i += length;
     frames.push({ index, parent, kind: kind ? 'sky' : 'mirror', iNode: iNode | 0, requests, recursion, zone, mirror, nearClip,
-      fields, uncoords, span: { startY: startY | 0, endY: endY | 0, validLines: valid | 0, lines },
+      fields, uncoords, span: { startY: startY | 0, endY: endY | 0, validLines: valid | 0, lines, ...(boundsOnly ? { bounds } : {}) },
       draw: body.draw, children: body.children, sprites: body.sprites, spriteScreens: body.spriteScreens, stream });
   }
   return frames;

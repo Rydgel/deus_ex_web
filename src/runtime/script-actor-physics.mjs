@@ -20,7 +20,11 @@ export function runSpawnedActorFalling(runtime,actor,seconds,iterations=0) {
 }
 
 /** The live host and falling options of runSpawnedActorFalling. The Rust
- * body (fall.rs, actor-physics-kernel.mjs) calls the host's `landed` here. */
+ * body (fall.rs, actor-physics-kernel.mjs) calls the host's `landed` here.
+ * Kept per actor for its runtime, level and O3 recording: every member reads
+ * or writes the actor's fields at each access, except `zoneNumber`, the
+ * value at this call (host garbage: docs/play-frame-cost.md "October 27"). */
+const fallingAdapters=new WeakMap();
 export function spawnedFallingAdapter(runtime,actor) {
   // A serialized map actor already owns its collision/native surface; preserve
   // that identity and only link its hash cylinder to live Location. Spawned
@@ -28,6 +32,16 @@ export function spawnedFallingAdapter(runtime,actor) {
   const level=runtime.collisionViewActors.has(actor)?runtime.levelFor(actor)
     :runtime.mapMoveLevel(actor,'physFalling');
   if(!level?.hash)throw new Error('Falling actor requires the level collision hash');
+  const o3=o3Wants(actor),kept=fallingAdapters.get(actor);
+  if(kept&&kept.runtime===runtime&&kept.level===level&&kept.o3===o3){
+    kept.adapter.host.zoneNumber=runtime.regionValue(actor).zoneNumber;
+    return kept.adapter;
+  }
+  const adapter=buildFallingAdapter(runtime,actor,level);
+  fallingAdapters.set(actor,{runtime,level,o3,adapter});
+  return adapter;
+}
+function buildFallingAdapter(runtime,actor,level) {
   const get=name=>runtime.readNamed(actor,name);
   const world=target=>target===level.hash.levelInfo?level.actors[0]:target;
   const dispatch=(target,event,args)=>runtime.dispatchSpawnedEvent(world(target),event,args);

@@ -365,8 +365,9 @@ export function createSimSession(game, { assets = null, events = [], exportName 
     }
     return { nodes: Uint32Array.from(nodes), movers, moverItems };
   }
-  // A span's pixel bounds [minX, startY, maxX, endY) (top-down), or null.
+  // A span's pixel bounds [minX, startY, maxX, endY) (top-down), or null (decodeFrames computes them with skipSpritePixels).
   function spanBounds(span) {
+    if (span.bounds !== undefined) return span.bounds;
     let minX = Infinity, maxX = -Infinity, startY = Infinity, endY = -Infinity;
     span.lines.forEach((line, i) => {
       if (!line.length) return;

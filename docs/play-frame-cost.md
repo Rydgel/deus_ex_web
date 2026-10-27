@@ -21,6 +21,27 @@ open-list search and navScoutA's node loop run in the Rust core. Headless Island
 tick, the search 0.01 ms. In the slow frame the profile named, the search alone was 129 ms. A 150 s roam afterwards had no frame
 over 50 ms in the path workers; its slow frames were the load and one worker GC.
 
+**The worker's promoted garbage.** A major GC marks and compacts the old generation, and the Island's grew about 11 MB/s.
+The sampling heap profiler (`run.mjs --heap-sampling all|promoted`, `.work/hitch/ab-alloc.sh` for an A/B with a fresh dev
+server per run, a 40 s forward walk on the Island) puts the worker's allocation at about 3.1 MB per frame, of which 230 to 320 KB
+survive the scavenges (promoted). Most of the allocation dies young: the main frame's OccludeBsp decode (455 KB/frame) and the
+x87 model's BigInt intermediates (about 445 KB) barely reach the old generation. What did were frame-lived products:
+
+* the child frames' decode (`decodeFrames`, 40 KB/frame promoted): a sky or mirror frame's span as one array per screen line and
+  one per pair, and its sprites' rows, of which Play reads the span's pixel bounds and the sprite keys. With Play's
+  `skipSpritePixels`, decodeFrames now computes the bounds while decoding (sim-session.mjs `spanBounds` takes them) and steps
+  over the sprite rows. Validators that decode in full (validate-child-frames) are unchanged;
+* `spawnedFallingAdapter` (8 KB/frame): about thirty accessor closures built on every call, every tick for a decoration whose
+  fall is blocked. It is kept per actor, runtime, level and O3 recording; its one per-call value, `zoneNumber`, is set at each
+  call;
+* `pawnView` (part of `fieldReference`): thirty property references built for every locomotion native call. It is a class whose
+  prototype accessors read and write the pawn's fields by name (`readNamed`/`writeNamed`);
+* the HUD's glyph commands' colour: one array instead of a slice and a map.
+
+Promoted, KB per frame (two interleaved runs per side): 323 and 230 before, 121 and 141 after. Allocated: 3,266 and 3,198 before,
+3,106 and 3,176 after. The state digests are unchanged (Island, Training, 747). Left: the script frames of JavaScript-run script
+(`executeScript`, `createFrame`, frame locals: about 45 KB/frame promoted), Map sets (13), `packDynamics` and `lightRecord`.
+
 ## October 14: periodic hitches (reported on the Mac only)
 
 The user sees huge frame drops lasting a few seconds, recurring, on every map
