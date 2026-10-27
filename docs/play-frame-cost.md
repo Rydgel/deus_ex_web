@@ -42,6 +42,20 @@ Promoted, KB per frame (two interleaved runs per side): 323 and 230 before, 121 
 3,106 and 3,176 after. The state digests are unchanged (Island, Training, 747). Left: the script frames of JavaScript-run script
 (`executeScript`, `createFrame`, frame locals: about 45 KB/frame promoted), Map sets (13), `packDynamics` and `lightRecord`.
 
+**Firefox's inline GC, what the Gecko profile says** (Firefox 155, Island, 90 s roam, `MOZ_PROFILER_STARTUP`,
+`.work/hitch/ff-gc.mjs` on the content process's main thread). A major GC there marks for about 600 ms in all, sliced, over about
+3.3 s: 20 to 25 slices, every 10 to 30 s (reasons ALLOC_TRIGGER, TOO_MUCH_MALLOC, FULL_GC_TIMER). The page keeps allocating while
+it marks, the heap reaches the incremental limit (`trigger_amount` = `trigger_threshold`, about 1.1 GB) and SpiderMonkey raises
+each slice's budget, 40, 55, 76, then 100 ms: those are the clusters of 100 ms frames. The final slice also waits 50 to 77 ms for
+a background thread (`wait_background_thread`). Both levers apply: a lower allocation rate keeps the slices at their small budget,
+and a smaller live heap shortens the marking. The worker allocates about 3.1 MB per frame (V8's measure); the largest are the
+main frame's OccludeBsp decode (455 KB, records Play folds into a node list at once) and the x87 model's BigInt records (about
+445 KB, of which Galaxy audio's per-channel Update math is about 175 KB).
+
+**Firefox in worker mode with `?workerBusy=1`** (the October 14 switch that keeps the worker's queue from draining, so Gecko's 5 s
+idle GC never fires; it costs one busy core while playing), same roam, from 40 s on: one frame over 90 ms against 13 inline,
+worker frame p50 22, p99 45, max 104 ms, 44 fps drawn against 45 inline. On this machine it is the smoother Firefox mode.
+
 **After both (one roam each, so indicative).** Chromium worker, Island, 150 s against the 120 s baseline: worker frame p50 14.6 →
 12.2 ms, p95 20.3 → 17.8, p99 27.0 → 23.8, tick 8.6 → 6.8 ms (most likely `pawnView`, which was built per locomotion call, per
 pawn, per tick), draw gaps over 33 ms 263 → 70, draw gap p99 33.4 → 16.8 ms, worker heap peak 1.85 GB → 1.39 GB, one worker major
