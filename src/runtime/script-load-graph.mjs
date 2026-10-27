@@ -57,7 +57,7 @@ const accessorMembers = (data, accessors) => {
 
 export function createScriptLoadGraph({packageAssets = new Map(), captureEvents = false,
   nativeFunctions = {}, lifecycle = {}, resourceServices = null,
-  meshLoadServices = resourceServices, classSerialized = null, skipUnrecovered = null, onConstruct = null,
+  meshLoadServices = resourceServices, skipUnrecovered = null, onConstruct = null,
   recordLoadEdges = false} = {}) {
   if (resourceServices) {
     for (const name of ['seconds', 'getLazyLoad', 'setLazyLoad', 'mipBias']) {
@@ -919,11 +919,7 @@ export function createScriptLoadGraph({packageAssets = new Map(), captureEvents 
       return;
     }
     if (isA(object, classStatic)) {
-      const result = serializeLoadedClass(object, archive, preloadServices, {events});
-      // The host's process-lifetime class defaults (classSerialized: script-class-loader.mjs), once the class's Defaults are built and
-      // before a subclass's InitClassDefaultObject copies them or an object is constructed from them.
-      classSerialized?.(object);
-      return result;
+      return serializeLoadedClass(object, archive, preloadServices, {events});
     }
     if (isA(object, stateStatic)) return serializeLoadedState(object, archive, preloadServices, {events});
     if (isA(object, functionStatic)) return serializeLoadedFunction(object, archive, preloadServices, {events});

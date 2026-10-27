@@ -8,9 +8,9 @@
  *   3. URL = FURL(LastURL, TravelURL, TravelType); Browse(URL, TravelInfo): `Logf("Browse: <URL>")`, then the decision's effects;
  *   4. the viewport's TravelURL is cleared once Browse returns (0x10390c07).
  *
- * A `loadMap` effect hands the page the next level: `{map, portal, url, options, loadUrl, travelInfo, lastURL, classDefaults, ...}` (the page's loadMap
- * builds the new session, whose Login imports the text: travel-import.mjs; `classDefaults` are the class defaults the process keeps,
- * ScriptRuntime.classDefaultsForTravel). `loadUrl` is the URL LoadMap is called with, as plain fields: the next session's GLevel->URL is it or, when it
+ * A `loadMap` effect hands the page the next level: `{map, portal, url, options, loadUrl, travelInfo, lastURL, ...}` (the page's loadMap
+ * builds the new session, whose Login imports the text: travel-import.mjs; the classes and their Defaults stay in the script process the
+ * next level attaches to: script-process.mjs). `loadUrl` is the URL LoadMap is called with, as plain fields: the next session's GLevel->URL is it or, when it
  * has a `load` option, the URL the loaded file holds (furl.mjs levelUrlAfterLoad, game.mjs). `lastURL` is the engine's LastURL after the load: LoadMap's
  * tail assigns `LastURL = URL` (0x1038e059..0x1038e318), and the loaded-game and filed-level branches of Browse then assign `LastURL = GLevel->URL`
  * (0x1001138b, 0x10011c84), which the next session takes from the file it loads (game.mjs). A branch that is not implemented is a thrown
@@ -154,9 +154,6 @@ export function createTravelStep({ runtime, level, viewport, exporter, store, lo
       }
       const request = browse(url, travelInfo);
       vp.travelURL = '';
-      // The process's class defaults go with every LoadMap Browse makes (a map, a level filed in Current, a loaded game): the next level's
-      // runtime builds its classes from them (docs/travel.md "Class defaults across a travel").
-      if (request) request.classDefaults = runtime.classDefaultsForTravel();
       return request;
     },
   };

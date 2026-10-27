@@ -62,8 +62,8 @@ shows:
 per map"), so each map change serializes and links every class it uses from
 its package again. The original loads its startup packages once per process
 and never unloads them ([class defaults across a travel](travel.md#class-defaults-across-a-travel)).
-Play carries class defaults across a travel explicitly because its classes do
-not survive.
+Play carried class defaults across a travel explicitly because its classes did
+not survive (until 2026-10-27: the script process keeps them now).
 
 **The level's startup ran twice** (until 2026-10-27, migration step 5). A map opened in Play is loaded cold
 (`createGame`: the LoadMap passes and Login). Then Player start

@@ -1263,7 +1263,8 @@ longer runs Player start after a load, so each arrival is one LoadMap, as in the
 gc2's (Shadow 1..19, 20..72, 73..91 over Training, the Island and Training again), and in Chromium the Island reached by
 travel draws its first frame about 1 s sooner (5.6 → 4.6 s). Inline mode, Firefox's default, now restores a level the player
 returns to and a loaded game from their saved files, as the worker does; before, it loaded the map's `.dx` fresh
-(`validate-inline-restore-play`, in Firefox and Chromium).
+(`validate-inline-restore-play`, in Firefox and Chromium). That finished step 6: the travel no longer carries class
+defaults, because the kept classes hold them, and a collected class loads again with its package's, as in the original.
 
 Done when declared browser/performance targets pass repeatable tests, long sessions
 and repeated map changes remain stable, and failures offer useful recovery paths.

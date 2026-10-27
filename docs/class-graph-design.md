@@ -35,7 +35,9 @@ The Island's Shadow20..72 and LaserProxy1..8 are the numbers the Stage 5
 live captures hold ([Stage 5 exit criteria](stage-5-exit-criteria.md),
 "A load-made actor's name does not name the original's object").
 
-## What Play does today
+## What Play did before the migration
+
+This section is the design's starting point (2026-10-26); the migration below replaced each part.
 
 Each level is a new `ScriptRuntime` (`script-doors.mjs:522`) with its own
 load graph, class loader, identities, Rust VM and arena. A map change
@@ -401,6 +403,9 @@ become redundant. During migration they stay as a cross-check: what the
 travel would carry must equal what the kept classes hold. They are retired
 after the gate passes.
 
+*Retired 2026-10-27* (step 6): the travel request no longer carries class
+defaults, and a level's runtime neither records nor applies them.
+
 ## What stays per level, labelled
 
 The original keeps the following per process. In this design they stay per
@@ -618,7 +623,7 @@ stay equal for single-map sessions.
    * **`ScriptProcess.attach(runtime)`** hands the process to the new level:
      * the class loader mints in the level's table;
      * the class defaults the arrival carried apply to classes loaded from
-       now on;
+       now on (until step 6 retired the carry);
      * the resource registry resolves through the new level, takes its
        object-index provider, and forgets the level left's records
        (`forgetLevel`: DeusExConText's objects).
@@ -629,7 +634,8 @@ stay equal for single-map sessions.
      re-attaches the level left.
    * **The carried-defaults cross-check runs at attach**
      (`checkCarriedDefaults`): every default the travel carried for a class
-     the process kept must equal the class's own.
+     the process kept must equal the class's own. Step 6 retired it with the
+     carry.
    * **Measured,** headless (`validate-script-process`, one process over
      gc2's DX → Training → Island → Training):
      * the arrivals link 32, 72 and 0 classes (cold: 910, 967, 910);
@@ -998,8 +1004,34 @@ stay equal for single-map sessions.
 6. **Retire carried defaults**, and make inline mode restore `.dxs` levels and
    loaded games (that fix may come earlier).
 
-   *Inline restore done 2026-10-27* (the user asked for the Firefox fix
-   first; retiring the carried defaults is still open).
+   *Done 2026-10-27.* The inline restore came first (the user asked for the
+   Firefox fix first), then the carry was retired.
+
+   *Carried defaults retired.*
+   * **What went.** The travel request's `classDefaults`
+     (`ScriptRuntime.classDefaultsForTravel`, `travel.mjs`), the runtime's
+     record of its default writes (`noteClassDefaultWrite`), the class
+     loader's `applyCarriedDefaults` and the load graph's `classSerialized`
+     hook it ran from, and the cross-check at attach (`checkCarriedDefaults`).
+   * **What holds the defaults now.** The kept classes: a write goes into
+     the class's `Defaults` block, which the process keeps into every later
+     level. A class the arrival's LoadMap collects loads again with its
+     package's defaults, as in the original.
+   * **A new process** (`?process=new`, `DX_SCRIPT_PROCESS=new`, the map
+     list, a page load) is a new run of the original: its classes start
+     from their packages' defaults. Before, a travel into a new process
+     still carried them.
+   * **Evidence.** The cross-check never found a mismatch while it ran
+     (steps 3 to 5: 4 and 12 defaults compared over gc2, and every travel
+     validator and Stage 6 chain since).
+   * **Gate** (Linux host): validate-class-default-travel (now checks that
+     the arrival's JCDentonMale, PlayerStart and NavigationPoint are the
+     class objects the SETs wrote), validate-original-lookups (its capture
+     gc3 re-captured here: the Mac's four console lines and Training values
+     again; Multitool and NanoKey keep their class objects and written
+     defaults into Training), validate-script-process, -process-collection,
+     the ten travel validators, validate-restored-speech, -load-ui,
+     -inline-restore-play, Stage 6 chains 03, 11 and 12, and the unit tests.
    * **The bug.** Inline mode, the default in Firefox, dropped a travel's
      `restore` and never wrote a loaded game's slot files into Save\Current.
      A level the player came back to, and a loaded game, were the map's

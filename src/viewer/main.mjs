@@ -893,7 +893,8 @@ async function loadMap(name, { travel = null, currentFiles = null } = {}) {
   loadTimeline = { map: name, sim: simMode, start: performance.now(), marks: [], simMarks: null, firstDraw: null };
   let nextWorld, nextHost = null, nextGame = null, nextNpcPreview = null, nextGpuMesh = null, nextSim = null, nextWeaponDraw = null, nextWeaponGpu = null, overlapped = null;
   // A travel arrival attaches to the script process of the level left (script-process.mjs): inline here, in the worker there (sim-worker.mjs).
-  // ?process=new starts a new one for every level, as a load from the map list does.
+  // ?process=new starts a new one for every level, as a load from the map list does: a new run of the original, whose classes start from
+  // their packages' defaults (a default the level left wrote does not come along).
   const shareProcess = new URLSearchParams(location.search).get('process') !== 'new';
   const keepProcess = !simClient && travel && shareProcess ? simHost?.scriptProcess ?? null : null;
   try {

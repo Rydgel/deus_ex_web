@@ -11,7 +11,7 @@ const openSessions = new WeakMap();
 
 /** `process`: the script process the level attaches to (src/runtime/script-process.mjs). By default a travel arrival attaches to the
  * process of the session opened last, as the page's map host does (sim-worker.mjs, main.mjs), and any other open starts a new one, a
- * new run of the original; `process: null`, or DX_SCRIPT_PROCESS=new in the environment, always starts a new one. A process no session
+ * new run of the original (its classes start from their packages' defaults); `process: null`, or DX_SCRIPT_PROCESS=new in the environment, always starts a new one. A process no session
  * uses any more loses its identities' handles when a session opens on another. */
 export async function openSession(map, assets, {travel = null, saveDirectory = null, frameSeconds = 1 / 60, paintEvery = 1, process: given} = {}) {
   const {decodeMap} = await import('../src/unreal/map.mjs');

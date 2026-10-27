@@ -18,17 +18,13 @@ const HOST_NATIVE_BINDING = Object.freeze({
 });
 
 export class ScriptClassLoader {
-  /** `carriedDefaults`: the class defaults a travel carried from the level left (Map class key -> Map field key -> [[index, value]]:
-   * ScriptRuntime.classDefaultsForTravel); each is written into its class's Defaults as the class is serialized (applyCarriedDefaults). */
   constructor({assets, objects, resources, captureEvents = false, meshLoadServices = null,
-    resourceServices = null, lifecycle = {}, carriedDefaults = null}) {
+    resourceServices = null, lifecycle = {}}) {
     this.assets = assets;
     this.objects = objects;
     this.resources = resources;
-    this.carriedDefaults = carriedDefaults;
     this.graph = createScriptLoadGraph({captureEvents, meshLoadServices, resourceServices, lifecycle,
-      nativeFunctions: HOST_NATIVE_BINDING, recordLoadEdges: true,
-      classSerialized: record => { if (this.carriedDefaults?.size) this.applyCarriedDefaults(record); }});
+      nativeFunctions: HOST_NATIVE_BINDING, recordLoadEdges: true});
     // Which of the graph's objects the original holds loaded (original-loaded.mjs): what name lookups see, and the LoadMap collection's input.
     this.originalLoads = createOriginalLoadTracker(this.graph);
     // Graph record -> identity: the process's (metadata, resources, packages, registered classes) for the process's life, a level's
@@ -283,28 +279,6 @@ export class ScriptClassLoader {
    * loaded later. Existing instances retain the VM's existing snapshots. */
   writeDefault(cls, field, values) {
     this.writeDefaultCells(cls.loadRecord.defaults.data, field.loadRecord, values);
-  }
-
-  /** The original process keeps a class and its Defaults for its whole life, so a default written in one level (a console SET:
-   * UObject::GlobalSetProperty's ImportText into Class->Defaults, 0x101524b1..0x101524ca; a script's `Default.X = ...`) is the
-   * default the next level's exports and spawns are built from. Play builds a runtime per level and serializes each class again;
-   * the values the travel carried (docs/travel.md "Class defaults across a travel") are written here, into the Defaults block the
-   * class's UClass::Serialize just built, before a subclass copies it (InitClassDefaultObject) or an object is constructed from it. */
-  applyCarriedDefaults(record) {
-    const {slotOf, superOf, nameText, propertyKindOf, fullName} = this.graph;
-    const fields = this.carriedDefaults.get(fullName(record).toLowerCase());
-    if (!fields) return;
-    for (const [fieldKey, values] of fields) {
-      const dot = fieldKey.lastIndexOf('.'), owner = fieldKey.slice(0, dot), name = fieldKey.slice(dot + 1);
-      let property = null;
-      for (let c = record; c && !property; c = superOf(c)) {
-        if (fullName(c).toLowerCase() !== owner) continue;
-        for (let child = slotOf(c, 0x38); child && !property; child = slotOf(child, 0x2c))
-          if (propertyKindOf(child)?.endsWith('Property') && nameText(slotOf(child, 0x20)).toLowerCase() === name) property = child;
-      }
-      if (!property) throw new Error(`Carried class default ${fieldKey} is not a property of ${fullName(record)}`);
-      this.writeDefaultCells(record.defaults.data, property, values);
-    }
   }
 
   writeDefaultCells(data, property, values) {

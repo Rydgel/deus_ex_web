@@ -12,7 +12,8 @@
  * - the capture's DX.dx dump: LightSwitch is not held; Multitool, NanoKey and SecurityCamera are, and keep their class object into Training;
  * - every class Play linked on DX is found by name exactly when the original's DX.dx dump holds it (the classes Play linked only for its
  *   readiness are misses), apart from the explicit boundaries (a class the DLLs register without a graph record);
- * - each SET prints the original's console line, and the travel request carries exactly the defaults the found classes got;
+ * - each SET prints the original's console line and writes the ScaleGlow default of the found classes only, and Training attaches to DX's
+ *   process: Multitool and NanoKey are the same class objects there, with the written defaults;
  * - in Training, every object of the four classes has the original's ScaleGlow: LightSwitch and SecurityCamera keep the package default,
  *   Multitool has 0.5 (loaded, no live object: the default alone was written) and NanoKey 0.75 (`Engine.NanoKey`: Engine holds no NanoKey, so
  *   the ANY_PACKAGE walk finds DeusEx.NanoKey).
@@ -96,6 +97,10 @@ c.frames(60);
   notes.push(`DX: of ${c.runtime.linkedClasses.size} classes Play linked, ${found} are found by name, ${misses} are misses (linked only for Play's readiness; the original does not hold them), ${boundaries} explicit boundaries`);
 }
 
+// the ScaleGlow default of each of the four classes Play has linked, and the class object (the process keeps a class into the next level)
+const scaleGlowDefaults = () => new Map([...c.runtime.linkedClasses].filter(cls => EXPECTED.some(([, , name]) => cls.record.key.endsWith(`.${name.toLowerCase()}`)))
+  .map(cls => [cls.record.key, {cls, value: Math.fround(c.runtime.classDefaultReference(cls, c.runtime.lookupMember(cls, 'fields', 'ScaleGlow')).get())}]));
+const unwritten = scaleGlowDefaults();
 const outputs = EXPECTED.map(([line, message]) => {
   const output = String(typeLine(c, line) ?? '');
   c.frames(2);
@@ -110,12 +115,18 @@ for (let i = 0; i < 10 && !request; i++) { c.frames(1); request = c.takeTravel()
 if (!check(Boolean(request), 'LocalTravel 00_Training made no travel request')) {
   console.log(`FAIL ${NAME}:\n  ${failures.join('\n  ')}`); process.exit(1);
 }
-const carried = new Map((request.classDefaults ?? []).filter(entry => entry.field === 'engine.actor.scaleglow').map(entry => [entry.cls, entry.values[0][1]]));
-check(carried.size === 2 && carried.get('deusex.multitool') === Math.fround(0.5) && carried.get('deusex.nanokey') === Math.fround(0.75),
-  `the travel carries ScaleGlow defaults ${JSON.stringify([...carried])} (expected Multitool 0.5 and NanoKey 0.75 only)`);
+const written = scaleGlowDefaults();
+const changed = [...written].filter(([key, {value}]) => value !== unwritten.get(key)?.value).map(([key, {value}]) => `${key} ${value}`);
+check(changed.length === 2 && written.get('deusex.multitool')?.value === Math.fround(0.5) && written.get('deusex.nanokey')?.value === Math.fround(0.75),
+  `the SETs wrote ScaleGlow defaults ${JSON.stringify(changed)} (expected Multitool 0.5 and NanoKey 0.75 only)`);
 
 await open(request.map, { travel: { snapshotSource: () => null, arrival: request, lastURL: request.lastURL } });
 c.frames(30);
+// Training's process is DX's: Multitool and NanoKey are the classes the SETs wrote, Defaults included (the original keeps them: gc3's dumps)
+const kept = scaleGlowDefaults();
+for (const key of ['deusex.multitool', 'deusex.nanokey'])
+  check(kept.get(key)?.cls === written.get(key)?.cls && kept.get(key)?.value === written.get(key)?.value,
+    `Training's ${key} is not the class DX's SET wrote (${kept.get(key)?.value} after ${written.get(key)?.value})`);
 for (const [, , cls, label] of EXPECTED) {
   const original = readBack(label, cls), play = c.byClass(cls).map(actor => ({name: c.runtime.instance(actor).name ?? '?', value: Math.fround(c.read(actor, 'ScaleGlow'))}));
   const originalValues = [...new Set(original.map(o => o.value))], playValues = [...new Set(play.map(p => p.value))];

@@ -266,7 +266,9 @@ Then it reads ScaleGlow (`0x18c`) back in Training, 3 s after arrival. The
 DX.dx dump holds Multitool, NanoKey and SecurityCamera, and Training keeps
 the same class objects. It does not hold LightSwitch. None of Training's
 objects of these classes serializes ScaleGlow. Each SET is followed by a
-shot of the console's message line.
+shot of the console's message line. Re-captured on the Linux host
+2026-10-27 (the first capture stayed on the Mac): the same four console
+lines and the same values in Training.
 
 | SET on DX.dx | Console line (shot) | In Training |
 | --- | --- | --- |
@@ -287,7 +289,13 @@ shot of the console's message line.
 
 ## What it means for Play
 
-Today each level has its own `ScriptRuntime`. It loads every class it uses
+*Done 2026-10-27* ([class graph design](class-graph-design.md), migration
+steps 1 to 6): one script process keeps the classes, their Defaults and
+counters across map changes, LoadMap collects as the original does, and the
+travel no longer carries class defaults. The analysis below is the state it
+started from (2026-10-26).
+
+Before, each level had its own `ScriptRuntime`. It loads every class it uses
 from the packages and carries the class defaults that earlier levels wrote
 ([travel](travel.md#class-defaults-across-a-travel)). Compared with the
 original:

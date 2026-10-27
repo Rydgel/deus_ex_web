@@ -80,10 +80,6 @@ export class ScriptProcess {
     this.runtime = runtime;
     if (this.classLoader) {
       this.classLoader.attachLevel(runtime.objects);
-      // A process's own first level applies the class defaults its travel carried (a travel into a new process, ?process=new). A level
-      // attached to the process of the level left does not: a kept class holds its Defaults, and a collected one loads again with the
-      // package's, as in the original (ScriptRuntime.checkCarriedDefaults compares the carried values with the kept classes').
-      this.classLoader.carriedDefaults = previous && previous !== runtime ? null : runtime.carriedDefaults;
     }
     if (this.resources) {
       this.resources.objects = runtime.objects;

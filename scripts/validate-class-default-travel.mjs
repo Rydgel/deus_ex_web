@@ -1,20 +1,20 @@
 /** Class defaults across a travel (docs/travel.md "Class defaults across a travel"). The original keeps every class and its Defaults for the
  * process's life, so a console SET's class-default write (UObject::GlobalSetProperty, ImportText into Class->Defaults, Core 0x101524b1..0x101524ca)
  * is the default the next level is built from: LoadMap constructs the map's exports from it and applies their serialized properties over it, Login
- * spawns the player from it, and a loaded game's saved pawn (whose file omits a property equal to its default) gets it. Play builds a runtime per level,
- * so the travel request carries the written defaults (ScriptRuntime.classDefaultsForTravel) and the next runtime writes them into each class as the class
- * is serialized (ScriptClassLoader.applyCarriedDefaults).
+ * spawns the player from it, and a loaded game's saved pawn (whose file omits a property equal to its default) gets it. Play's arrival attaches to
+ * the script process of the level left (script-process.mjs, docs/class-graph-design.md step 3), whose kept classes hold the written Defaults.
  *
  * The run: the logo map DX (its player, a JCDentonMale; PlayerStart1), four SETs, `LocalTravel 00_Training`, then `SaveGame 7` and `LoadGame 7` there.
  *
  * Checks, in the arrival (a new session built from the request, as the page's worker and the chain harness build it):
- * - the request survives structuredClone (it crosses the page/worker boundary) and lists the written defaults;
+ * - the request survives structuredClone (it crosses the page/worker boundary); the arrival attaches to DX's process, and JCDentonMale,
+ *   PlayerStart and NavigationPoint are the class objects the SETs wrote;
  * - the player Login spawned has ReducedDamageType All (`set DeusEx.JCDentonMale ReducedDamageType All`; JCDentonMale is a script class);
- * - Training's PlayerStart1, which does not serialize ExtraCost, has the carried 55 (`set Engine.PlayerStart ExtraCost 55`; a native class), while
- *   PlayerStart1's serialized visitedWeight keeps the map's 10000000 over the carried default 4321 (`set Engine.PlayerStart visitedWeight 4321`):
- *   the carry is the class default exports are constructed from, not a write onto the instances;
+ * - Training's PlayerStart1, which does not serialize ExtraCost, has the written 55 (`set Engine.PlayerStart ExtraCost 55`; a native class), while
+ *   PlayerStart1's serialized visitedWeight keeps the map's 10000000 over the written default 4321 (`set Engine.PlayerStart visitedWeight 4321`):
+ *   the write is the class default exports are constructed from, not a write onto the instances;
  * - `set Engine.NavigationPoint ExtraCost 99`, typed after PlayerStart was linked: NavigationPoint's default is 99, PlayerStart keeps its own 55;
- *   a PathNode (a NavigationPoint subclass the logo map never linked) is serialized in Training from the carried NavigationPoint Defaults and has 99
+ *   a PathNode (a NavigationPoint subclass the logo map never linked) is serialized in Training from the kept NavigationPoint Defaults and has 99
  *   (Play's lazy class load; which subclasses the original had loaded before the SET is unverified: docs/travel.md);
  * - after SaveGame/LoadGame in Training, the loaded game's player (the saved pawn) still has ReducedDamageType All.
  *
@@ -71,13 +71,12 @@ typeLine(c, 'LocalTravel 00_Training');
 const toTraining = frames(10, 'LocalTravel 00_Training');
 let cloned = null;
 try { cloned = structuredClone(toTraining); } catch (error) { check(false, `the request does not survive structuredClone: ${error.message}`); }
-const carried = new Map((toTraining.classDefaults ?? []).map(entry => [`${entry.cls} ${entry.field}`, JSON.stringify(entry.values)]));
-console.log('carried', JSON.stringify([...carried]));
-check(carried.get('deusex.jcdentonmale engine.pawn.reduceddamagetype') === '[[0,"All"]]', 'the request carries JCDentonMale ReducedDamageType All');
-check(carried.get('engine.playerstart engine.navigationpoint.extracost') === '[[0,55]]', 'the request carries PlayerStart ExtraCost 55 (kept by PlayerStart when NavigationPoint was set)');
-check(carried.get('engine.navigationpoint engine.navigationpoint.extracost') === '[[0,99]]', 'the request carries NavigationPoint ExtraCost 99');
+const WRITTEN = ['deusex.jcdentonmale', 'engine.playerstart', 'engine.navigationpoint'];
+const dxProcess = session.process, dxClasses = new Map(WRITTEN.map(key => [key, linked(key)]));
 
 await arrive(cloned ?? toTraining);
+check(session.process === dxProcess, 'the arrival attaches to the process of the level left');
+for (const key of WRITTEN) check(dxClasses.get(key) && linked(key) === dxClasses.get(key), `Training's ${key} is not the class DX's SET wrote`);
 const trainingStart = c.actor('PlayerStart1');
 const pathNode = c.byClass('PathNode')[0];
 const training = {
@@ -91,20 +90,20 @@ const training = {
 console.log('00_Training arrival', JSON.stringify(training));
 check(training.player === 'All', `Login's player in 00_Training has ReducedDamageType ${training.player} (expected All)`);
 check(!training.startSerializes.some(name => name.toLowerCase() === 'extracost') && training.startExtraCost === 55,
-  `Training's PlayerStart1 (ExtraCost not serialized) has ExtraCost ${training.startExtraCost} (expected the carried 55)`);
+  `Training's PlayerStart1 (ExtraCost not serialized) has ExtraCost ${training.startExtraCost} (expected the written 55)`);
 check(training.startSerializes.includes('visitedWeight') && training.startVisitedWeight === 10000000 && training.startDefaultVisitedWeight === 4321,
-  `Training's PlayerStart1 keeps its serialized visitedWeight over the carried default: ${training.startVisitedWeight}, default ${training.startDefaultVisitedWeight}`);
+  `Training's PlayerStart1 keeps its serialized visitedWeight over the written default: ${training.startVisitedWeight}, default ${training.startDefaultVisitedWeight}`);
 check(training.navDefault === 99 && training.startDefaultExtraCost === 55, `NavigationPoint/PlayerStart ExtraCost defaults ${training.navDefault}/${training.startDefaultExtraCost} (expected 99/55)`);
-check(training.pathNodeSerializesExtraCost === false && training.pathNode === 99, `a PathNode's ExtraCost ${training.pathNode} (expected 99, inherited from the carried NavigationPoint Defaults)`);
+check(training.pathNodeSerializesExtraCost === false && training.pathNode === 99, `a PathNode's ExtraCost ${training.pathNode} (expected 99, inherited from the kept NavigationPoint Defaults)`);
 
-// a loaded game in the same process: the saved pawn's file omits ReducedDamageType (equal to its default when saved), and the class default it is loaded over is the carried All
+// a loaded game in the same process: the saved pawn's file omits ReducedDamageType (equal to its default when saved), and the class default it is loaded over is the kept All
 c.frames(120);
 c.game.hud.scoped(() => c.game.hud.host.consoleCommands.consoleCommand(c.player(), 'SaveGame 7'));
 c.frames(5);
 check(directory.files('Save0007').length > 0, 'SaveGame 7 wrote Save0007');
 c.exec('LoadGame 7');
 const loadGame = frames(10, 'LoadGame 7');
-check(Boolean(loadGame.loadgame) && Array.isArray(loadGame.classDefaults), 'LoadGame 7 is a loaded game that carries the class defaults');
+check(Boolean(loadGame.loadgame), 'LoadGame 7 is a loaded game');
 await arrive(loadGame);
 const loaded = { player: c.read(c.player(), 'ReducedDamageType'), visitedWeightDefault: classDefault('engine.playerstart', 'visitedWeight') };
 console.log('loaded game', JSON.stringify(loaded));

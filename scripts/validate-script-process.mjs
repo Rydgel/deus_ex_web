@@ -15,7 +15,6 @@
  *   only the classes the level adds are linked;
  * - the level left's identities leave the handle table and the process's keep their handles;
  * - no process identity is attached as a script instance of any level (an attached identity would pin its level's runtime);
- * - every class default the travel carried for a class the process kept is the class's own (ScriptRuntime.checkCarriedDefaults);
  * - each level runs its first 120 frames;
  * - after the last arrival a full GC frees every level left: nothing the process keeps (readiness, the class loader's services)
  *   holds a runtime (two did: a compiled body's operand cache kept the services of the runtime that ran it last, and the class
@@ -78,11 +77,9 @@ async function arrive(map, stops) {
   for (const identity of shared.packageObjects.values())
     if (Object.getOwnPropertySymbols(identity).some(symbol => symbol.description === 'ScriptRuntime instance')) attached.push(identity.key);
   check(!attached.length, `${map}: process identities attached as instances: ${attached.slice(0, 6).join(' ')}`);
-  const carried = runtime.carriedDefaultCheck;
-  check(!carried || !carried.mismatches.length, `${map}: carried defaults differ from the kept classes': ${JSON.stringify(carried?.mismatches.slice(0, 3))}`);
   // a frame that reaches a runtime error throws (census-stage5-session.mjs)
   try { session.c.frames(120); } catch (error) { check(false, `${map}: ${String(error.message).slice(0, 300)}`); }
-  stops.push(`${map}: ${ms} ms to open, ${shared.linkedClasses.size - before} classes linked (${shared.linkedClasses.size} in the process), carried defaults compared ${carried?.compared ?? 0}`);
+  stops.push(`${map}: ${ms} ms to open, ${shared.linkedClasses.size - before} classes linked (${shared.linkedClasses.size} in the process)`);
   return { map: stopsLabel(stops.slice(0, -1)), ref };
 }
 {
@@ -146,5 +143,5 @@ await (async () => {
 
 for (const note of notes) console.log(`  ${note}`);
 if (failures.length) { console.log(`FAIL ${NAME}:\n  ${failures.join('\n  ')}`); process.exit(1); }
-console.log(`PASS ${NAME}: the level's identities and the process's are apart; over DX, 00_Training, 01_NYC_UNATCOIsland and 00_Training one process keeps its classes, each level's identities are released when it is left, and the carried defaults equal the kept classes'`);
+console.log(`PASS ${NAME}: the level's identities and the process's are apart; over DX, 00_Training, 01_NYC_UNATCOIsland and 00_Training one process keeps its classes, and each level's identities are released when it is left`);
 process.exit(0);
