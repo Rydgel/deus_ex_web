@@ -1258,8 +1258,10 @@ covers resources and packages too (step 4b, 2026-10-27): of what both hold at ea
 original's resources and unloads the original's packages (the import closure of the level and of Entry.dx stays held), and the
 asset store releases an unloaded package's bytes into a 64 MB cache. Ten Island and Training round trips in one process hold the
 same state at each arrival with flat package memory (`validate-process-memory`, run by hand), and twelve distinct maps stay
-bounded where the store used to keep every package it had read. Next is step 5, one LoadMap per arrival, which the user
-approved on 2026-10-27.
+bounded where the store used to keep every package it had read. Step 5 followed the same day (approved by the user): the page no
+longer runs Player start after a load, so each arrival is one LoadMap, as in the original. Its spawned-name counters follow
+gc2's (Shadow 1..19, 20..72, 73..91 over Training, the Island and Training again), and in Chromium the Island reached by
+travel draws its first frame about 1 s sooner (5.6 → 4.6 s).
 
 Done when declared browser/performance targets pass repeatable tests, long sessions
 and repeated map changes remain stable, and failures offer useful recovery paths.

@@ -65,7 +65,7 @@ and never unloads them ([class defaults across a travel](travel.md#class-default
 Play carries class defaults across a travel explicitly because its classes do
 not survive.
 
-**The level's startup runs twice.** A map opened in Play is loaded cold
+**The level's startup ran twice** (until 2026-10-27, migration step 5). A map opened in Play is loaded cold
 (`createGame`: the LoadMap passes and Login). Then Player start
 (`main.mjs resetCamera` → `game.reset`) runs LoadMap over the same map again.
 Only a level restored from its saved file skips the second pass
@@ -114,17 +114,21 @@ come from the capture session's own earlier loads.
   bytes wait in a 64 MB cache, and nothing was read from a file again after
   the first arrival.
 
+* 2026-10-27: one LoadMap per arrival (migration step 5): the page no longer
+  runs Player start after a load. In Chromium's worker mode (one run), the
+  Island by travel 5.59 → 4.59 s to the first drawn frame, Training again
+  1.77 → 1.53 s; Player start's step after a load went from 0.2–1.1 s to
+  about 1 ms.
+
 ## Open
 
 * **Keep loaded classes across a map change**: done (2026-10-26/27, [class
   graph design](class-graph-design.md) migration steps 1 to 4). A travel
   keeps the script process; LoadMap's collection purges the level left's own
   classes and resources and unloads its packages.
-* **One LoadMap per arrival.** Dropping Player start after a cold load would
-  save about 0.7 to 0.9 s. Every Stage 5 and 6 comparison so far was made
-  against Play after Player start, and the names would then follow one load
-  instead of two. The names match the original only when they share its
-  process history, which the item above would give.
+* **One LoadMap per arrival**: done (2026-10-27, [class graph
+  design](class-graph-design.md) migration step 5). No Player start after a
+  load; the names follow one load, as the original's do.
 * **First frame.** The shader programs could compile while the page waits for
   the worker (`renderer.compileAsync`, an experiment in [hitch log](hitch-log.md)).
   The first tick is the level's own first-tick script work.

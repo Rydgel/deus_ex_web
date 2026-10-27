@@ -764,8 +764,9 @@ function resetCamera({ keepLevel = false } = {}) {
   let reply = null;
   hideNpcFocus();
   if (mode === 'play' && game) {
-    // `keepLevel`: the load just made this level (a saved level restored by travel, docs/travel.md "Play, step 3"): no Player start, which
-    // would cold-reload the map from the file and run its begin-play pass again; only the view and the movers are read from it.
+    // `keepLevel`: the load just made this level (docs/class-graph-design.md, migration step 5: one LoadMap per arrival, as the original's
+    // process runs one, a level restored by travel included, docs/travel.md "Play, step 3"): no Player start, which would load the map
+    // again and run its begin-play pass a second time; only the view and the movers are read from it. The Reset button is Player start.
     if (keepLevel) {
       if (simClient) reply = simClient.call('restoreView').then(result => { if (result && world) { world.syncMovers(result.movers); applyPlayerView(result.view); } })
         .then(applyStartCheats);
@@ -1058,7 +1059,7 @@ async function loadMap(name, { travel = null, currentFiles = null } = {}) {
     // resetCamera runs ?cheat= when it resets the player (Play mode).
     const playerReset = mode === 'play' && !!game;
     loadMark('swapped');
-    const resetReply = resetCamera({ keepLevel: Boolean(travel?.restore) }); showStats();
+    const resetReply = resetCamera({ keepLevel: true }); showStats();
     await viewReply; await resetReply;
     loadMark('playerStart');
     if (!playerReset) await applyStartCheats();

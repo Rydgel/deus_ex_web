@@ -967,6 +967,26 @@ stay equal for single-map sessions.
    needs your approval. Gate: gc2's counters. Then re-run the Stage 5 and
    Stage 6 comparisons. Their load-made actors are paired by creation rank,
    so their names should not matter.
+
+   *Approved by the user and done 2026-10-27* (`main.mjs` `loadMap`: every
+   load calls `resetCamera({keepLevel: true})`, which reads the view and
+   the movers the load made; the Reset button is still Player start).
+   * **Gate, gc2's counters.** The headless harness already ran one LoadMap
+     per arrival (`openSession`). In one process over gc2's steps it names
+     what the original names (`validate-process-collection` now checks the
+     live names against gc2's dumps):
+     * Shadow: none alive on DX.dx, then 1..19, 20..72 and 73..91;
+     * NanoKeyRing: the live one 1, 3, 5, 7 (two per level);
+     * AugmentationManager, SkillManager and BarkManager: 0, 1, 2, 3;
+     * LaserProxy: 0, none, 1..8, none.
+   * **Stage 6.** Its chains, the carried-flag census, the endings and the
+     full run drive the headless harness. They passed in the 4b sweep on
+     the same load path.
+   * **In Chromium**, worker mode, one run: Player start's step after a load
+     takes about 1 ms (it took 0.2 to 1.1 s). The Island reached by travel
+     drew its first frame at 4.59 s, Training again at 1.53 s (5.59 and
+     1.77 s in the 4b medians, which still ran Player start). No page or
+     runtime error.
 6. **Retire carried defaults**, and make inline mode restore `.dxs` levels and
    loaded games (that fix may come earlier).
 

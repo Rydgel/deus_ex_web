@@ -17,7 +17,10 @@
  *   by package, class, group and name), the original's collected ones are new generations or gone in Play (its graph record and registry
  *   record), and its kept ones are the same records;
  * - packages: of the top-level packages both hold before a map change (Play: a graph linker, a registry record or an identity of the
- *   package, or the level), Play unloads the ones the original unloads and keeps the others.
+ *   package, or the level), Play unloads the ones the original unloads and keeps the others;
+ * - spawned names (migration step 5, one LoadMap per arrival): MakeUniqueObjectName's per-class counters live with the process's classes,
+ *   so Play's live Shadow, NanoKeyRing, AugmentationManager, SkillManager, BarkManager and LaserProxy names are among the dump's (which also
+ *   lists actors destroyed and not yet collected) and the highest number is the dump's (Shadow 1..19, 20..72, 73..91).
  *
  *   node scripts/validate-process-collection.mjs [--captures .work/travel/gc2] */
 import { existsSync, readFileSync } from 'node:fs';
@@ -119,8 +122,23 @@ const playPackages = stop => {
   return out;
 };
 const stops = new Map();
+// spawned names at a stop: class -> the numbers of its objects named <Class><N>, in the dump and among Play's live actors
+const NAMED = ['Shadow', 'NanoKeyRing', 'AugmentationManager', 'SkillManager', 'BarkManager', 'LaserProxy'];
+const dumpNames = stop => {
+  const text = readFileSync(join(captures, `${stop}.gflags.txt`), 'utf8'), out = {};
+  for (const cls of NAMED) out[cls] = [...text.matchAll(new RegExp(`^slot +\\d+ index +\\d+ ${cls}\\.${cls}(\\d+) `, 'gm'))].map(m => Number(m[1]));
+  return out;
+};
+const playNames = () => Object.fromEntries(NAMED.map(cls => [cls, session.c.byClass(cls).map(actor => Number(/(\d+)$/.exec(String(actor?.name ?? ''))?.[1] ?? NaN))]));
 const takeStop = stop => {
   const play = playClasses(), original = dumpClasses(stop);
+  const names = { play: playNames(), original: dumpNames(stop) };
+  for (const cls of NAMED) {
+    const mine = names.play[cls], theirs = new Set(names.original[cls]);
+    const ok = mine.every(n => theirs.has(n)) && (!mine.length || Math.max(...mine) === Math.max(...theirs));
+    check(ok, `${stop}: ${cls} names ${JSON.stringify(mine.sort((a, b) => a - b))} in Play, the original's ${JSON.stringify([...theirs].sort((a, b) => a - b))}`);
+  }
+  notes.push(`${stop}: Shadow ${(n => n.length ? `${Math.min(...n)}..${Math.max(...n)}` : 'none alive')(names.play.Shadow)}, LaserProxy ${(n => n.length ? `${Math.min(...n)}..${Math.max(...n)}` : 'none')(names.play.LaserProxy)}, AugmentationManager ${names.play.AugmentationManager.join(',')}`);
   stops.set(stop, { play, original, resources: playResources(), packages: playPackages(stop), dump: dumpObjects(stop) });
   const extra = [...play.keys()].filter(key => !original.has(key));
   const lacking = [...original].filter(([key, value]) => !play.has(key) && (value.flags & LOAD_CONTEXT)).map(([key]) => key);
@@ -227,5 +245,5 @@ for (let i = 0; i < STOPS.length; i++) for (let j = i + 1; j < STOPS.length; j++
 
 for (const note of notes) console.log(`  ${note}`);
 if (failures.length) { console.log(`FAIL ${NAME}:\n  ${failures.join('\n  ')}`); process.exit(1); }
-console.log(`PASS ${NAME}: over gc2's DX.dx, 00_Training, 01_NYC_UNATCOIsland and 00_Training in one process, Play holds the original's classes at each stop, each map change collects the original's and keeps the original's generations, and the SETs survive or revert as the original's do`);
+console.log(`PASS ${NAME}: over gc2's DX.dx, 00_Training, 01_NYC_UNATCOIsland and 00_Training in one process, Play holds the original's classes at each stop, each map change collects the original's and keeps the original's generations, the SETs survive or revert as the original's do, and spawned objects take the original's names`);
 process.exit(0);
