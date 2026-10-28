@@ -381,6 +381,16 @@ Evidence:
   - The fan spins on its own (RotationRate, bFixedRotationDir): 36 of its 48
     light maps were built on facets; 167 were built again over 70 frames, at
     most 10 in one.
+  - 2026-10-29: the fan stage failed in about half of the runs ("header
+    Rotation did not change"). Its placement, `moverDecalProbe` 200 units out
+    from the fan's largest fragment, depends on the fan's turn when the call
+    arrives. From the first tick's turn it picked surface 950, and from there
+    the fan was out of view: no fan polygon drawn, nothing built again. From the
+    second tick's turn it picked surface 989 and passed. The check now stands
+    the player on the floor under the fan (236, −238, −464.2), where the
+    acceptance view fan2's place falls to, aimed at the fan. There 18 or 19 fan
+    polygons are drawn, 36 to 38 light maps are on facets, and about 1,100 are
+    built again over 61 frames, at most 20 in one, the same in each run.
 - `validate-dynamic-light-mover`, `validate-moving-lights-incremental`,
   `validate-auglight-lighting`, `validate-moving-light-effects`,
   `validate-light-spatial`, `validate-texel-sphere` and

@@ -573,7 +573,9 @@ result (`validate-underworld-panes-play`, `-sprite-tiles-mirror-play`, `-iterato
 runs no occlusion). Two do not pass, as without the cut: `validate-master-frame-play` times out on this host (known), and
 `validate-mover-light-maps-play` stops at 09_NYC_ShipFan, whose fan's light-map header Rotation does not change. That one fails
 the same with the cut's two files, step 8's six files or 12e292ee's script change served from before (its Rust change is comments
-only): a regression from elsewhere, not bisected (the validator came with `b7ecd2e0`).
+only): a regression from elsewhere, not bisected (the validator came with `b7ecd2e0`). Found after (2026-10-29): not a
+regression, the check's placement raced the fan's turn and left the fan out of view in about half of the runs; it now stands the
+player at a fixed place ([static lighting](static-lighting.md), the `validate-mover-light-maps-play` notes).
 
 **Two cores**, three interleaved pairs of the 120 s Island roams (`taskset -c 0,1`, both arms through `serve-variant.mjs`, the
 base arm with `4ba63772`'s bsp-occlusion.mjs and sim-session.mjs), on a quiet host (load 1 to 3.6). From the traces, per major GC

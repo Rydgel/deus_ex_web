@@ -7,8 +7,9 @@
  *   2. slid by KeyPos[1] (moverProbe set, as MoveActor leaves it), those light maps are built again on facets moved by
  *      (0, -56, 0), under the new header, at least one light map's texels change, and the frames after build nothing;
  *   3. back at the authored Location, every texel is the settled one again.
- * Then on 09_NYC_ShipFan, the fan DeusExMover1 spins on its own (RotationRate, bFixedRotationDir): its light maps' header
- * Rotation changes and its drawn polygons are built again as it turns; the rebuild's time per frame is reported
+ * Then on 09_NYC_ShipFan, the fan DeusExMover1 spins on its own (RotationRate, bFixedRotationDir), seen from the floor under
+ * it (placeProbe): its light maps' header Rotation changes and its drawn polygons are built again as it turns; the
+ * rebuild's time per frame is reported
  * (world.moverLighting). No runtime or page error.
  *
  *   node scripts/validate-mover-light-maps-play.mjs [--url http://...] [--query sim=inline] [--frames N]
@@ -98,7 +99,10 @@ try {
   // 4. The fan, spinning on its own (RotationRate, bFixedRotationDir): sampled every frame.
   await open('09_NYC_ShipFan');
   const fan = 'DeusExMover1';
-  await page.evaluate(name => window.deusExViewer.moverDecalProbe({ place: true, name, distance: 200 }), fan);
+  // A place that does not turn with the fan: the floor the player lands on from the acceptance view fan2 (236, -238, -55),
+  // aimed at the fan's Location. moverDecalProbe's place stands 200 units out from the largest fragment at the call, which
+  // depends on the fan's turn: from about half of the calls the fan was out of view and nothing was built again.
+  await page.evaluate(name => window.deusExViewer.placeProbe({ location: [236, -238, -464.2], lookAt: name }), fan);
   await frames(90);
   const start = await counters(), first = await records(fan), samples = [];
   for (let k = 0; k < turns; k++) {
