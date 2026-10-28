@@ -21,10 +21,15 @@ export const floatBits = value => { bits.setFloat32(0, value, true); return bits
 export const bitsFloat = word => { bits.setUint32(0, word >>> 0, true); return bits.getFloat32(0, true); };
 
 /** URender::Init's LOD settings (0x10b134d7..0x10b134ef): +40 the shape LOD
- * distance (console MLOD), +44 its adjustment (no writer), +48 the shape LOD
- * mode (MLMODE; bit 0 allows morphing, 0 uses the fixed scale, 3 and above
- * drop the FOV factor), +4c the fixed scale (MLFIX). No config property
- * overrides them (URender::StaticConstructor is empty). */
+ * distance (console MLOD), +44 its adjustment, +48 the shape LOD mode (MLMODE;
+ * bit 0 allows morphing, 0 uses the fixed scale, 3 and above drop the FOV
+ * factor), +4c the fixed scale (MLFIX). No config property overrides them
+ * (URender::StaticConstructor is empty). DrawWorld (0x10b1ccf4..0x10b1ce37)
+ * moves +44 by 0.1 a frame within [1.0, 1.6] from ALevelInfo.bDropDetail and
+ * bAggressiveLOD, but Deus Ex's UGameEngine::Tick stores 0 in bDropDetail and
+ * bAggressiveLOD every tick (Engine 0x103900f2..0x1039014d) and nothing sets
+ * them, so +44 stays 1.0 (docs/script-lodmesh-lod.md "+44 and the removed
+ * frame-rate LOD"). */
 export const RENDER_LOD_SETTINGS = Object.freeze({shapeLOD: 0.25, adjust: 1, mode: 1, fix: 1});
 
 const HALF_DEGREE = 0.008726646259971648; // 0x10b2ac48 (PI/360)
