@@ -226,6 +226,12 @@ Linux host under an 8-job validator sweep Firefox inline drew 35 fps against
 the worker's 45, with no stall over 200 ms against 16: a slower machine trades
 frame rate for the stalls.
 
+**With the busy queue (2026-10-28).** `?workerBusy=1` removes the idle GC, but
+a worker's allocation-triggered major GC is not incremental either: on the
+Island, one 320 to 340 ms pause about every 50 s of play, against inline's six
+to eight 100 to 133 ms frames a minute ([frame cost](play-frame-cost.md)
+"October 27"). Firefox stays inline.
+
 Tools that found it (kept out of Git, in `.work/hitch/` of the worktree):
 `run-ff.mjs` (Firefox long run with the recorder, `--via MAP`, `--profile`,
 `--worker-patch`), `ff-gc.mjs` (GC markers of a Gecko profile), `stalls.mjs`

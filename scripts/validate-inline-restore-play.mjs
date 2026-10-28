@@ -1,8 +1,8 @@
-/** A filed level and a loaded game in Play's inline mode (the simulation on the page: Firefox's default, `?sim=inline` elsewhere; docs/class-graph-design.md
+/** A filed level and a loaded game in Play's inline mode (the simulation on the page, `?sim=inline`; docs/class-graph-design.md
  * migration step 6, docs/travel.md "Play, step 3" and "step 4"). The worker restores them from Save\Current (sim-worker.mjs `load`); inline mode must do
  * the same, not load the map's .dx again.
  *
- * In headless Firefox (default) or Chromium with `?sim=inline` (`--browser chromium`), on the debugging page's first map, 00_Training:
+ * In headless Firefox (default) or Chromium (`--browser chromium`) with `?sim=inline`, on the debugging page's first map, 00_Training:
  * 1. The level is changed (the cheat KillAll LightSwitch: LightSwitch0 goes), then `LocalTravel 00_TrainingCombat` files it in Save\Current and
  *    `LocalTravel 00_Training` comes back. The arrival restores 00_Training.dxs: LightSwitch0 is still gone (a load of the .dx would place it again).
  * 2. Once no DataLink plays, QuickSave files the level in the QuickSave slot; a decoration class is killed; `LoadGame -1` (DeusExPlayer.LoadGame:
@@ -39,8 +39,9 @@ try {
   const errors = [];
   page.on('pageerror', error => errors.push(error.message));
   const target = new URL(debugUrl(`${url}/`));
-  // Firefox's page runs the simulation inline by default; `--sim worker` checks the worker's restore through the same page path
-  if (engine === 'chromium' || simMode === 'worker') target.searchParams.set('sim', simMode);
+  // The mode is named, not left to the browser's default (Firefox inline, the others the worker); `--sim worker` checks the worker's restore
+  // through the same page path
+  target.searchParams.set('sim', simMode);
   await page.goto(target.href);
   // a level restored from a file or a loaded game is named by the filed package's spelling (`00_training`)
   const ready = map => page.waitForFunction(map => { const s = window.deusExViewer?.status(); return s?.ready && (!map || s.map?.toLowerCase() === map.toLowerCase()); },

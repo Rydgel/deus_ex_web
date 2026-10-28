@@ -53,8 +53,23 @@ main frame's OccludeBsp decode (455 KB, records Play folds into a node list at o
 445 KB, of which Galaxy audio's per-channel Update math is about 175 KB).
 
 **Firefox in worker mode with `?workerBusy=1`** (the October 14 switch that keeps the worker's queue from draining, so Gecko's 5 s
-idle GC never fires; it costs one busy core while playing), same roam, from 40 s on: one frame over 90 ms against 13 inline,
-worker frame p50 22, p99 45, max 104 ms, 44 fps drawn against 45 inline. On this machine it is the smoother Firefox mode.
+idle GC never fires; it costs one busy core while playing). A first roam counted one worker frame over 90 ms against 13 inline
+page frames, but a worker frame's duration does not include a GC that runs between frames. Counted as gaps between drawn frames
+(2026-10-28, `.work/hitch/ab-ff.sh`, two interleaved pairs, 100 s Island roams, the 65 s after the first 40 s, Firefox 155):
+
+| | gaps over 50 / 90 ms | longest gap | fps drawn | CPU of the browser |
+| --- | --- | --- | --- | --- |
+| inline (default) | 26, 31 / 8, 6 | 133 ms | 43.7, 43.2 | 1.26 cores |
+| worker, `?workerBusy=1` | 10, 49 / 2, 1 | 483 ms (417, 416) | 52.9, 43.3 | 1.6 cores |
+
+The page never drew a frame over 17 ms in worker mode; the long gaps are the worker's. A Gecko profile of a third worker roam
+(`ff-gc.mjs`, thread `DOM Worker`) names them: a worker's major GC is not incremental (one slice, budget unlimited), and in play it
+comes about every 50 s (reason `EAGER_ALLOC_TRIGGER`, threshold 530 to 555 MB) and pauses 320 to 340 ms; during the load, the
+idle `DOM_WORKER` shrinking GCs also run (170 to 660 ms). So the worker trades inline's six to eight 100 to 133 ms frames a minute
+(incremental slices raised to 100 ms) for one or two 420 to 480 ms freezes, at a third more CPU. Firefox stays inline. Both modes'
+pause follows the live heap: in the worker the one slice marks it all; inline, the slices grow once allocation during marking
+reaches the incremental limit, which (from SpiderMonkey's default GC parameters, not checked here) is only 1.1 times the trigger
+for a heap past 500 MB and larger for smaller heaps.
 
 **After both (one roam each, so indicative).** Chromium worker, Island, 150 s against the 120 s baseline: worker frame p50 14.6 →
 12.2 ms, p95 20.3 → 17.8, p99 27.0 → 23.8, tick 8.6 → 6.8 ms (most likely `pawnView`, which was built per locomotion call, per
