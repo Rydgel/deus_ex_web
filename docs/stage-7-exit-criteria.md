@@ -1,0 +1,231 @@
+# Stage 7 exit criteria: a finite definition of "Done when"
+
+Status: **adopted by the user on 2026-10-28**: the six decisions as recommended
+([below](#what-the-user-decided-2026-10-28)). Written from master 598f8928. The rows that rest on a decision say which.
+
+The roadmap's criterion for section 7 ([roadmap](roadmap.md#7-make-the-browser-runtime-reliable)): *done when declared
+browser/performance targets pass repeatable tests, long sessions and repeated map changes remain stable, and failures offer
+useful recovery paths.* The section lists:
+* loading time, frame time, memory and audio latency;
+* supported desktop browsers;
+* graphics capability errors;
+* resize and fullscreen, pointer-lock loss, and pause and tab suspension;
+* audio activation, local file access and persistent storage.
+
+It asks the stage to close coverage gaps, not to postpone testing. The rows below fix what "declared", "supported", "stable"
+and "useful recovery" mean.
+
+AGENTS.md already declares one target: **120 fps in Play, 8.3 ms of host work per frame on the reference machine (Apple M2
+Pro, 1440×960)**, measured by interleaved A/B medians and browser phase timings. Fidelity takes precedence over any
+performance change. A speed change under 5% is not worth hours of work (the user, 2026-10-27).
+
+## What the user decided (2026-10-28)
+
+The user took each recommendation below. The alternatives are kept for the record.
+
+1. **D1, the browser matrix.** The recommendation:
+   * Chrome on macOS and Linux, in worker mode, Chromium's default.
+   * Firefox on macOS and Linux, in inline mode, its default ([sim worker](sim-worker.md)).
+   * Safari on macOS.
+
+   Each in its current release at the time of the gate.
+
+   Windows is not covered: neither machine runs it. Chrome's engine rows stand in for Chrome and Edge there, and that is stated,
+   not claimed (7.11.3).
+
+   The alternative is to drop Safari to "best effort" (7.1.4 excluded). It has never been run; its storage is cleared after
+   seven days without a visit, and it lacks Keyboard Lock and `showDirectoryPicker`.
+2. **D2, the frame-time gate.** The recommendation is that AGENTS.md's target is the gate:
+   * The median host work per frame is at most 8.3 ms on each map of the frame-time set, in Chrome on the reference
+     machine (7.2.1).
+   * Every supported browser keeps a floor of 60 fps: a drawn-frame interval p95 of at most 16.7 ms on the same set (7.2.2).
+
+   The alternative makes 60 fps the gate and keeps 120 fps as the tracked project target. Today the Island's worker frame
+   is 12.2 ms (p50) on the Linux host, and the reference machine has not been measured since early October. Meeting 7.2.1
+   is this stage's largest piece of work.
+3. **D3, hitches in Firefox.** The user parked Firefox's GC work on 2026-10-28 ([live heap](live-heap.md), steps 2 to 9).
+   Inline, Firefox draws six to eight frames of 100 to 133 ms a minute on the Island (incremental GC slices; see
+   [frame cost](play-frame-cost.md) "October 27").
+
+   The recommendation is to declare the bound now and leave 7.2.4 FAIL until the work is unparked: no gap over 150 ms, and
+   at most two gaps over 50 ms a minute.
+
+   The alternative is to record today's behavior as a known Firefox limit and exclude the row.
+4. **D4, loading time.** Map loading was judged good enough on 2026-10-27. The recommendation is to bound today's
+   measurements, with room for noise:
+   * A travel arrival reaches its first frame within 5 s in Chrome (the Island measured 4.6 s, Training 1.5 s), and within
+     10 s in Firefox.
+   * A Load Game reaches its first frame within 8 s.
+   * Navigation reaches the logo map's first frame within 10 s.
+
+   All of these are on the reference machine, for every single-player map (a load census), not only the Island.
+5. **D5, a long session.** The recommendation is a scripted one-hour session in Chrome and in Firefox:
+   * ten map changes;
+   * fifty minutes of the frame-time route with placed walks and a save and load every ten minutes.
+
+   It passes with no runtime error. The heap after each forced GC must stay within 10% of the first plateau, and the median
+   frame time of the last five minutes within 5% of the first five.
+6. **D6, audio latency.** The original's latency (Galaxy's mix buffer through DirectSound) has not been measured. Following
+   the fidelity rule, the recommendation is to measure it under Wine first, then hold Play to it: the time from a sound's
+   PlaySound call to its first output sample, at most the original's plus one browser render quantum.
+
+   The alternative is a host bound of 100 ms with no original reference.
+
+## What a row is, and what passes it
+
+Kinds:
+* **O**: the original defines the behavior. The proof compares with the recovered code or a capture. Example: context loss,
+  [context loss](context-loss.md).
+* **H**: a host target with no original counterpart: a number or a behavior this note declares.
+* **P**: Play against itself: no regression, the same state or pixels across modes or builds.
+
+Statuses:
+* **PASS**: the proof runs and passes on the rows' machine and browsers.
+* **PARTIAL**: a proof exists, but not for every browser or machine the row names, or not since the last change that
+  touches it.
+* **FAIL**: measured, and it misses the bound.
+* **MISSING**: no proof exists, or the bound is undecided.
+* **EXCLUDED**: out of scope, with the reason.
+
+Machines:
+* **Mac**: the reference machine for every number. It is also the only Safari.
+* **Linux**: the AMD host, for Chrome and Firefox behavior, and indicative numbers only.
+
+Headless Chromium on the Mac renders with Metal (`--use-angle=metal`), and on Linux with GL (`--use-angle=gl`). A frame-time
+row measures host work. A drawn-interval row needs a headed browser with vsync.
+
+**Frame-time set:** the ten maps of the October 2 census in [frame cost](play-frame-cost.md): Training, the Island, the Bar,
+Battery Park, the Airfield, Wan Chai, the Ship, the Chateau, Everett and the Area 51 bunker. Each runs the census route: four
+drag-look headings about 60° apart, 90 frames each, after a 5 s settle. The route's tool (`.work/tools/scan-play.mjs`) and the
+hitch recorder (`.work/hitch/`) are outside Git; moving them into `scripts/` is the first piece of work (7.2).
+
+## The scoreboard (2026-10-28)
+
+| Clause | PASS | PARTIAL | FAIL | MISSING | EXCLUDED |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| 7.1 Supported browsers | 0 | 3 | 0 | 1 | 0 |
+| 7.2 Frame time | 0 | 2 | 1 | 2 | 0 |
+| 7.3 Loading time | 0 | 1 | 0 | 2 | 0 |
+| 7.4 Memory and long sessions | 0 | 1 | 0 | 2 | 0 |
+| 7.5 Audio | 0 | 1 | 0 | 1 | 0 |
+| 7.6 Window and input | 0 | 3 | 0 | 1 | 0 |
+| 7.7 Graphics capability and failures | 1 | 1 | 0 | 1 | 0 |
+| 7.8 Files and storage | 0 | 3 | 0 | 1 | 0 |
+| 7.9 Failure recovery | 0 | 2 | 0 | 1 | 0 |
+| 7.10 Regression coverage | 0 | 0 | 1 | 2 | 0 |
+| 7.11 Excluded | 0 | 0 | 0 | 0 | 3 |
+| **Total** | 1 | 17 | 2 | 14 | 3 |
+
+## The rows
+
+### 7.1 Supported browsers (D1)
+
+A browser passes when the browser suite (7.10.2) and this stage's browser validators pass in it, and when a ten-minute session
+runs without a runtime error. The session starts from the original start, loads Training, makes a map change, saves, loads and
+plays sound.
+
+| Row | Criterion | Kind | Proof | Machine | Needed / weak | Status |
+| --- | --- | --- | --- | --- | --- | --- |
+| 7.1.1 | Chrome, macOS, worker mode | H | `npx playwright test`, the 7.x validators | Mac | weak: the suite is Chromium-only and headless; no whole-suite pass is recorded since Stage 6; the Mac has not run it since early October | PARTIAL |
+| 7.1.2 | Chrome, Linux, worker mode | H | the same | Linux | weak: as 7.1.1, on this host | PARTIAL |
+| 7.1.3 | Firefox, macOS and Linux, inline mode | H | the suite with a Firefox project; validate-inline-restore-play, validate-context-loss-play --browser firefox | Mac, Linux | needed: a Firefox project in playwright.config; only two validators run in Firefox today (Linux) | PARTIAL |
+| 7.1.4 | Safari, macOS | H | the suite under Playwright's WebKit as a stand-in, plus the session in real Safari (by hand or safaridriver) | Mac | needed: never run; Safari's storage eviction, no Keyboard Lock, no `showDirectoryPicker` | MISSING |
+
+### 7.2 Frame time (D2, D3)
+
+| Row | Criterion | Kind | Proof | Machine | Needed / weak | Status |
+| --- | --- | --- | --- | --- | --- | --- |
+| 7.2.1 | Chrome, worker: median host work per frame ≤ 8.3 ms on each map of the frame-time set (AGENTS.md) | H | profile-play-browser.mjs with the census route; interleaved medians | Mac | needed: the route in Git; a Mac measurement. Indicative: the Island's worker frame p50 12.2 ms on Linux (2026-10-27) | MISSING |
+| 7.2.2 | every supported browser: drawn-frame interval p95 ≤ 16.7 ms on the frame-time set | H | the hitch recorder, headed | Mac | needed: the recorder in Git; a headed run per browser. Indicative: Firefox inline draws 43 to 45 fps on the Island on Linux | MISSING |
+| 7.2.3 | Chrome: after a map's first 5 s, no drawn-frame gap over 100 ms in a 120 s roam | H | the hitch recorder | Mac | weak: measured on Linux only (after 2026-10-27, one roam: draw gap p99 16.8 ms, one 26 ms worker GC); not on the Mac | PARTIAL |
+| 7.2.4 | Firefox inline: no gap over 150 ms, at most two over 50 ms a minute (D3) | H | `.work/hitch/ab-ff.sh`, `ff-gaps.mjs` (to Git) | Mac, Linux | fails today: 26 to 31 gaps over 50 ms and 6 to 8 over 90 ms in 65 s, longest 133 ms (Linux, 2026-10-28); the work is the parked live-heap plan | FAIL |
+| 7.2.5 | no shader program is compiled during play after a load | P | the hitch log's program counts | Mac, Linux | weak: 0 programs measured on the Island, Airfield and UNATCO HQ (Chrome) and the Island (Firefox), on Linux, with tools outside Git; the Mac is not measured | PARTIAL |
+
+### 7.3 Loading time (D4)
+
+| Row | Criterion | Kind | Proof | Machine | Needed / weak | Status |
+| --- | --- | --- | --- | --- | --- | --- |
+| 7.3.1 | navigation to the logo map's first frame ≤ 10 s (Chrome and Firefox) | H | profile-map-load.mjs (the first map from navigation) | Mac | needed: the bound; a measurement of the original start, not of `?debug=1` Training | MISSING |
+| 7.3.2 | a travel arrival's first frame ≤ 5 s in Chrome, ≤ 10 s in Firefox, for every single-player map | H | profile-map-load.mjs --travel, as a census over the 83 maps | Mac | weak: measured for the Island (4.6 s) and Training (1.5 s) in Chrome only | PARTIAL |
+| 7.3.3 | Load Game to the first frame ≤ 8 s | H | profile-map-load.mjs over the internet save corpus's slots | Mac | needed: the measurement; no tool times a load from a save | MISSING |
+
+### 7.4 Memory and long sessions (D5)
+
+| Row | Criterion | Kind | Proof | Machine | Needed / weak | Status |
+| --- | --- | --- | --- | --- | --- | --- |
+| 7.4.1 | ten Island and Training round trips in one process: the same state at each arrival, flat package memory, a bounded heap slope | P | validate-process-memory.mjs (by hand), plus the same sequence in the page | Linux, Mac | weak: passes in Node, which has no page, worker, GPU or audio; the browser's page and worker heaps are not measured over map changes | PARTIAL |
+| 7.4.2 | each map of the frame-time set stays within a declared memory budget (page plus worker, after GC) | H | profile-live-heap.mjs, profile-firefox-memory.mjs | Mac | needed: the budget, to fit a 16 GB machine; today the Island's worker reaches 1.4 GB before a GC in Chrome | MISSING |
+| 7.4.3 | the one-hour session (D5) in Chrome and Firefox | H | a session harness | Mac | needed: the harness | MISSING |
+
+### 7.5 Audio (D6)
+
+| Row | Criterion | Kind | Proof | Machine | Needed / weak | Status |
+| --- | --- | --- | --- | --- | --- | --- |
+| 7.5.1 | sound and music start on the first gesture, and resume after a hidden tab or a suspended context, in every supported browser | H | validate-galaxy-music-play.mjs; a browser spec | Mac, Linux | weak: Chromium only; suspension and resume are not checked | PARTIAL |
+| 7.5.2 | a sound's latency from PlaySound to output ≤ the original's plus one render quantum (D6) | O | a Wine measurement of the original; `AudioContext.outputLatency` plus the worklet's queue in Play | Mac, Linux | needed: the original's measurement; Play's is not measured | MISSING |
+
+### 7.6 Window and input
+
+| Row | Criterion | Kind | Proof | Machine | Needed / weak | Status |
+| --- | --- | --- | --- | --- | --- | --- |
+| 7.6.1 | the pointer lock is taken on the first click, Escape releases it, and a lost lock or a blur pauses Play and resumes without catch-up | H | browser-tests/pointer-lock.spec.mjs | all browsers | weak: Chromium only | PARTIAL |
+| 7.6.2 | Alt+Enter toggles fullscreen; Escape and F11 behave as [input bindings](input-bindings.md) states with Keyboard Lock (Chromium) and without (Firefox, Safari) | O, H | browser-tests/original-start-input.spec.mjs | all browsers | weak: Chromium only | PARTIAL |
+| 7.6.3 | resizing the window, changing the device pixel ratio or moving to another screen keeps the 4:3 picture, the HUD, mirrors and the frame keeper correct, with no runtime error | H | a new spec: resizes during Play, pixels against a fresh load at the final size | Linux, Mac | needed: the spec; nothing tests a resize during Play | MISSING |
+| 7.6.4 | a hidden tab or system sleep pauses Play; the game resumes on a click with no catch-up and the audio follows | H | pointer-lock.spec.mjs (blur); a hidden-tab spec | all browsers | weak: blur is tested; `visibilitychange` is not | PARTIAL |
+
+### 7.7 Graphics capability and failures
+
+| Row | Criterion | Kind | Proof | Machine | Needed / weak | Status |
+| --- | --- | --- | --- | --- | --- | --- |
+| 7.7.1 | a lost WebGL context freezes Play and restores it as D3DDrv's `Lock` does; the frames after equal a run with no loss | O | validate-context-loss-play.mjs (Chromium worker and inline, Firefox) | Linux | weak: Safari, and the Mac, not run | PASS |
+| 7.7.2 | no WebGL2, a context creation error or a missing extension: the page says what is missing instead of a dead canvas, and the GPU mesh path falls back | H | a spec with WebGL disabled (`--disable-webgl`), and one with `EXT_color_buffer_float` refused | Linux | needed: a creation error is not handled (only the GPU mesh's missing extensions are) | MISSING |
+| 7.7.3 | a software renderer (SwiftShader, llvmpipe) keeps the CPU mesh path and stays playable | H | the headless default (SwiftShader) runs | Linux | weak: no validator asserts the path; "playable" has no bound on a software renderer | PARTIAL |
+
+### 7.8 Files and storage
+
+| Row | Criterion | Kind | Proof | Machine | Needed / weak | Status |
+| --- | --- | --- | --- | --- | --- | --- |
+| 7.8.1 | the game folder opens through the gate's picker in every supported browser | H | browser-tests/viewer.spec.mjs | all browsers | weak: Chromium headless only | PARTIAL |
+| 7.8.2 | saves in browser storage in every supported browser; `persist()` asked once; a refused or full store is said and the game keeps running | H | browser-tests/save-game.spec.mjs, save-folder.spec.mjs; test/save-store.test.mjs, test/save-persistence.test.mjs | all browsers | weak: Chromium only; the unit tests use a fake store | PARTIAL |
+| 7.8.3 | in Chromium, a Save folder picked on disk keeps its grant across visits and writes slots the desktop game loads | H, O | save-folder.spec.mjs headed with a real folder; validate-save-game.mjs | Mac, Linux | needed: [save storage](save-storage.md) says a headed Chromium with a real folder was not run | MISSING |
+| 7.8.4 | settings persist across reloads in every supported browser (row 6.1.5's proof) | O | browser-tests/config-persistence.spec.mjs, validate-config-persistence.mjs | all browsers | weak: Chromium only | PARTIAL |
+
+### 7.9 Failure recovery
+
+| Row | Criterion | Kind | Proof | Machine | Needed / weak | Status |
+| --- | --- | --- | --- | --- | --- | --- |
+| 7.9.1 | a runtime error pauses Play with its message, and Player start or a reload recovers | H | browser-tests/runtime-error.spec.mjs | all browsers | weak: Chromium only | PARTIAL |
+| 7.9.2 | the simulation worker fails (an exception, out of memory, a terminated worker): the page says so and offers a reload or the last save, with nothing written half | H | a spec that terminates the worker and one that throws in it | Linux | needed: `onFailure` pauses with the error, but no test exists, and what an out-of-memory worker does is unknown | MISSING |
+| 7.9.3 | a graphics device that never comes back: the page says so, and a reload recovers | H | validate-context-loss-play.mjs with no restore | Linux | weak: the toast exists ([context loss](context-loss.md)); not tested | PARTIAL |
+
+### 7.10 Regression coverage
+
+| Row | Criterion | Kind | Proof | Machine | Needed / weak | Status |
+| --- | --- | --- | --- | --- | --- | --- |
+| 7.10.1 | the validator sweep passes on the closing commit (`npm run validate -- --jobs 4`) | P | run-validators.mjs | Linux, with the Mac's stores | fails: six reds on a clean head on 2026-10-27 (host-services-play, world-batch-gpu, texture-sampling, lodmesh-lod-play, master-frame-play, conversations-census timeout) | FAIL |
+| 7.10.2 | the browser suite passes in every supported browser | P | `npx playwright test` with a project per browser | Mac, Linux | needed: projects for Firefox and WebKit; the suite's whole-run result is not recorded | MISSING |
+| 7.10.3 | the Stage 4, 5 and 6 gates pass on the closing commit | P, O | validate-stage4-acceptance.mjs, validate-stage5-acceptance.mjs, stage6-criteria.mjs | Linux, Mac | needed: a run on one commit (last runs: Stage 4 on 2026-10-17, Stage 5 on 2026-10-21, Stage 6's rows by 2026-10-26) | MISSING |
+
+### 7.11 Excluded
+
+| Row | Criterion | Kind | Proof | Machine | Needed / weak | Status |
+| --- | --- | --- | --- | --- | --- | --- |
+| 7.11.1 | multiplayer | - | - | - | the last priority (AGENTS.md) | EXCLUDED |
+| 7.11.2 | mobile and touch browsers | - | - | - | the game takes a keyboard and a mouse | EXCLUDED |
+| 7.11.3 | Windows | - | - | - | no Windows machine (D1); Chrome's engine rows stand in for Chrome and Edge there, unmeasured | EXCLUDED |
+
+## The order of the work
+
+1. **Tools into Git.** The census route, the hitch recorder and the Firefox gap tools move from `.work/` to `scripts/`. A
+   `scripts/stage7-criteria.mjs` prints this scoreboard, as Stage 6's does.
+2. **The browser matrix runs.** Playwright projects for Firefox and WebKit (7.10.2), a first Safari session (7.1.4), and the
+   Chromium-only specs extended to the other browsers (7.5.1, 7.6.x, 7.8.x, 7.9.1). These are cheap, and they find the
+   browser-specific failures before any performance work.
+3. **The small reliability gaps.** A creation-error message (7.7.2), a resize spec (7.6.3), the hidden tab (7.6.4), a
+   worker failure (7.9.2) and a device that never returns (7.9.3).
+4. **A measurement pass on the Mac.** The frame-time set, the load census and the memory budget in every browser (7.2,
+   7.3, 7.4.2) give each row its first status on the reference machine.
+5. **The performance work against 7.2.1.** Each step goes family by family, as a measurement names it, in the Rust core
+   (AGENTS.md), and only for gains over 5%.
+6. **The long session** (7.4.3) and the audio latency (7.5.2, which starts with the original's measurement).
+7. **The gate.** The sweep, the browser suite and the earlier stages' gates on one commit (7.10).

@@ -1297,6 +1297,8 @@ cannot (0x1000323f..0x10003314).
 
 Done when declared browser/performance targets pass repeatable tests, long sessions
 and repeated map changes remain stable, and failures offer useful recovery paths.
+The rows that define those targets are in [Stage 7 exit criteria](stage-7-exit-criteria.md)
+(adopted by the user on 2026-10-28).
 Retain automated format/runtime tests and fixed-camera visual comparisons throughout
 the earlier stages; this milestone closes coverage gaps rather than postponing testing.
 
