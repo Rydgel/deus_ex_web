@@ -327,8 +327,9 @@ take at most 17 ms.
 **What it says.** A loaded machine turns each major GC of the worker into a pause of a few hundred milliseconds: about one pair
 of long frames per one or two minutes of play here. The marking work follows what the worker keeps alive, 635 to 690 MB and about
 91 M references on the Island (the families above). The marking time can only fall with fewer references to trace (steps 3 to 9).
-Less garbage would make the cycles rarer, but not shorter. Each step removes 5 to 12% of the references, so getting such a pause
-under 100 ms needs most of the plan, not one step. Not measured: the Mac itself; play with fighting, conversations or explosions;
+Less garbage would make the cycles rarer, but not shorter (but see "The two-core long frame" under step 8: the worker's marking
+runs inside one or two frames). Each step removes 5 to 12% of the references, so getting such a pause under 100 ms needs most of
+the plan, not one step. Not measured: the Mac itself; play with fighting, conversations or explosions;
 Firefox under the same pinning.
 
 ### What the worker kept by accident (2026-10-28)
@@ -516,23 +517,48 @@ quiet host. Each run had one major GC of the worker.
 | 3 (1 to 2.5) | 328 / 295 ms | 2 / 1 | 217 / 317 ms | 211 / 304 ms |
 
 On the quiet host the marking per cycle fell by 10% (328 to 295 ms), in line with the 12% fewer pointer references; the loaded
-pairs fell by 19 and 26%, within their noise. The pauses did not move: each cycle still has one or two long worker frames of 200
-to 310 ms in both arms. One observation does not fit the picture of those frames as marking: in these traces, as in step 7's,
-the worker thread's GC events inside each long frame are only scavenges of a few milliseconds, and the cycle's incremental steps,
-background marking and atomic pause come 1.6 to 2.8 s after the frame (see "Open").
+pairs fell by 19 and 26%, within their noise. The longest frame did not shorten: each cycle still has one or two long worker frames
+of 200 to 310 ms in both arms. What those frames are is below.
+
+### The two-core long frame (2026-10-28)
+
+**It is the major GC's marking on the worker thread.** Three records of the same runs agree once they share a clock:
+* **The trace, in its own clock.** Each long worker frame is one `v8.callFunction` task on the worker thread. Inside it, the
+  worker runs the cycle's incremental marking steps (`V8.GC_MC_INCREMENTAL`) back to back, and the second frame of a pair ends
+  with the atomic pause (`V8.GC_MARK_COMPACTOR`). In step 8's quiet pair, the new arm's 304 ms frame holds 46 steps of 5 to 8 ms
+  each, 255 ms in all; the base arm's frames of 211 and 169 ms hold 174 and 129 ms of marking (the second: 96 ms of steps and
+  the 33 ms atomic pause). In step 8's six runs, 81 to 98% of the worker's marking per cycle (the table's column) lands in the
+  cycle's one or two long frames. Over the same windows the helper threads' background marking runs
+  0.4 to 0.9 s on the same two cores.
+* **The worker's CPU profile** (the profiled run at `d746241a`, its clock joined through `__hitchSync`): the frames of 273 and
+  255 ms hold 212 and 185 ms of `(garbage collector)`. The trace gives 212 and 190 ms of marking in the same two tasks.
+* **The frame timeline**: the drawn-frame gaps of 217 to 317 ms are those frames.
+
+In all ten two-core runs of steps 7 and 8 (13 cycles), every worker frame of 200 ms or more during play holds a cycle's
+incremental steps or its atomic pause; those frames reach 370 ms.
+
+**Why it looked otherwise.** `hitch-run.mjs` recorded each GC event's time as the page's `performance.now()` (`pageMs`). The
+hitch log's rows count from the log's own start (`meta.originMs`, 1.2 to 2.4 s into the page in these runs), so comparing the two
+put every GC event 1.2 to 2.4 s late. The ad hoc gap tool (`.work/hitch/gc-2026-10-28/gc-gaps.mjs`) made that comparison, and so
+did the analysis above until this check; its older sibling `.work/hitch/gc-align.mjs` subtracted the origin. `hitch-run.mjs` now
+also writes `logMs`, the event's time in the log's clock, and gc-gaps.mjs uses it.
+
+**What it says.** Steps 7 and 8 shortened the marking, and the worker's share of it with it: in the quiet pair, 380 ms over two
+frames became 304 ms in one. The longest frame is the part of that share that lands in one frame, so it moves only when the share
+falls well below 300 ms, or when the marking spreads over more frames. Whether less allocation per sim frame would spread it
+(V8's incremental marking takes its steps as the program allocates, and here they run back to back inside one frame) is not
+tested.
 
 ## Open
 
-* **What the two-core long frame is.** The worker's CPU profile in "Chromium on a loaded machine" put most of the long worker
-  frames in the garbage collector, but the traces of steps 7 and 8 (`hitch-run.mjs --trace`, mapped to page time through a
-  `performance.mark`) place each major GC cycle's marking 1.6 to 2.8 s after the long frame, with only scavenges inside it. Either that mapping is off by about two
-  seconds, or the long frame is something else that precedes each major GC (unchecked). Steps 7 and 8 shortened the marking by
-  about 13% and 10% without moving the long frame, so this decides whether the remaining steps can.
 * **How the pauses follow the heap.** Step 1 (above) shows that bytes and leaf objects do
   not set the marking time. In Chromium's worker on two cores, step 7 (11% of the objects,
   7.6% of the pointer references) shortened the marking per major GC by about 13%, and
   step 8 (13% of the objects, 12% of the pointer references) by about 10% more, but not
-  the pauses yet. Whether they shorten Firefox's escalated slices is not measured.
+  the longest frame yet: the worker does its share of a cycle's marking in one or two
+  frames ("The two-core long frame"). Whether the two steps shorten Firefox's escalated
+  slices is not measured, nor whether less allocation per sim frame spreads the worker's
+  marking over more frames.
   The claim that the heap's size class matters (SpiderMonkey's default incremental limit is smaller for
   heaps over 500 MB) is still unchecked: the inline heap went from 596 to 404 MB and
   the slices escalated the same.

@@ -9,7 +9,8 @@
 //     [--show-ui] (the page bars stay; by default they are hidden and the canvas is the whole --size)
 //   Modes: roam (forward, turning when stuck or at random), walk (forward), idle, scan (the census route: four headings 60 degrees
 //     apart, each held for a quarter of --seconds, set through placeProbe's ViewRotation write; the first is the authored view).
-//   Chromium: [--angle metal|gl] (default metal on macOS, gl elsewhere) [--exe PATH] [--throttle 4] [--trace] (V8 GC events in <out>.gc)
+//   Chromium: [--angle metal|gl] (default metal on macOS, gl elsewhere) [--exe PATH] [--throttle 4] [--trace] (V8 GC events in the JSON's
+//     `gc`: `pageMs` is the page's performance.now(), `logMs` the hitch log's time, the clock of its rows' `t` and `w.start`)
 //     [--heap-sampling promoted|all|live] [--heap-interval 16384] [--worker-profile] [--sample-us 500] (<out>.worker.cpuprofile, for
 //     scripts/hitch-frame-profile.mjs) [--stall MS --stall-every S] (the worker paused by the debugger) [--cdp-port 9336]
 //   Firefox: [--gclog] (javascript.options.mem.log lines) [--profile FILE] (a Gecko profile at shutdown, for scripts/gecko-gc.mjs)
@@ -191,7 +192,9 @@ if(traced){
   const trace=JSON.parse(buf);const events=trace.traceEvents??trace;const syncEvent=events.find(e=>e.name==='hitch-sync');
   const names=new Map();for(const e of events)if(e.ph==='M'&&e.name==='thread_name')names.set(`${e.pid}:${e.tid}`,e.args.name);
   gc=[];for(const e of events){if(e.ph!=='X'||!e.dur)continue;if(!/^(MajorGC|MinorGC|V8\.GC_.*)$/.test(e.name))continue;
-    gc.push({name:e.name,ts:e.ts,pageMs:syncEvent?(e.ts-syncEvent.ts)/1000+traceSyncPage:null,dur:e.dur,thread:names.get(`${e.pid}:${e.tid}`)??`${e.pid}:${e.tid}`,before:e.args?.data?.usedHeapSizeBefore??null,after:e.args?.data?.usedHeapSizeAfter??null});}
+    const pageMs=syncEvent?(e.ts-syncEvent.ts)/1000+traceSyncPage:null;
+    // logMs: the hitch log counts from its own start (meta.originMs), so a GC event lines up with the rows' t only after that shift
+    gc.push({name:e.name,ts:e.ts,pageMs,logMs:pageMs!==null&&dump?.meta?pageMs-dump.meta.originMs:null,dur:e.dur,thread:names.get(`${e.pid}:${e.tid}`)??`${e.pid}:${e.tid}`,before:e.args?.data?.usedHeapSizeBefore??null,after:e.args?.data?.usedHeapSizeAfter??null});}
 }
 if(heapSampling&&workerSession){
   const {result}=await send('HeapProfiler.stopSampling',{},workerSession);
