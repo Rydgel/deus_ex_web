@@ -325,6 +325,41 @@ Less garbage would make the cycles rarer, but not shorter. Each step removes 5 t
 under 100 ms needs most of the plan, not one step. Not measured: the Mac itself; play with fighting, conversations or explosions;
 Firefox under the same pinning.
 
+### What the worker kept by accident (2026-10-28)
+
+The worker's families at depth 4 showed two parts of the level that play does not need:
+* **The brush tracker's model as JavaScript.** `trackedModel()` (brush-tracker.mjs) builds a JavaScript copy of the tracker's
+  arrays (every node with its plane, zone mask, zones and leaves, every vertex, point and vector), and `levelDecals` uploads it into
+  the decal kernel once. The copy lived as long as the level. The handle `uploadDecalModel` returned held closures from the
+  upload's own scope. Through that scope they held the `isMover` callback, and through it the copy (about 500,000 objects). The
+  upload and the handle are now two functions (`writeDecalModel`, `decalModelHandle`), and the handle keeps only the kernel, the
+  block's address, the point capacity and the surface records' word.
+* **The BSP's triangle list.** Only the page's world build reads `map.triangles`. The worker decodes the map without it
+  (`decodeMap(bytes, {triangles: false})`, about 110,000 objects on the Island).
+
+The rest of what first appeared as "the decoded map" is the level itself (the BSP model's nodes, the actors, the decal store),
+which play reads.
+
+**Checks.** The state digests of bench-sim (300 ticks) are the same before and after on the Island (`15e3720088490242`), Training
+(`148077479825af78`) and the 747 (`ad8e591a01434df5`). The five decal validators pass (`validate-decal-attach`, `-startup`,
+`-order`, `-render`, `validate-decals-play`), and so do the 846 unit tests.
+
+**Heap**, the Island's worker after 30 s of walking and forced GCs (`profile-live-heap.mjs`):
+
+| | Objects | References | JS heap |
+| --- | ---: | ---: | ---: |
+| Before (master `cec0ee3c`) | 18.00 M | 91.4 M | 671 MB |
+| After | 16.60 M (-7.8%) | 84.9 M (-7.1%) | 639 MB |
+
+**Two cores**, the same 120 s roams. The worker's marking per major GC cycle (its incremental steps and the atomic pause) went
+from about 428 to 408 ms on the Island (two runs each side) and from 378 to 358 ms in WanChai: about 5% less, in line with the
+references removed. The pauses are within the run-to-run spread: on the Island 2 to 4 gaps over 100 ms and a longest of 250 or
+300 ms (300 and 300 before); in WanChai a longest of 283 ms (350 before), 2 gaps over 100 ms both times. The worker's median
+frame was 12.0 to 13.1 ms after against 13.2 to 14.7 before, which may be less marking competing for the two cores (indicative).
+As expected, the pauses need the larger families removed: the load graph (step 7, about 11 M references) and the bytecode trees
+(step 8, about 11 M). One more cheap candidate: `serializedOffset` and `serializedEnd` on the decoded bytecode expressions are
+376,000 boxed numbers each in V8 (about 1.5 M references).
+
 ## Open
 
 * **How the pauses follow the heap.** Step 1 (above) shows that bytes and leaf objects do

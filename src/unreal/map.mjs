@@ -2,7 +2,9 @@ import { parsePackage, PackageError } from './package.mjs';
 import { readObject } from './objects.mjs';
 import { readLevel, readModel, triangulateModel } from './model.mjs';
 
-export function decodeMap(bytes) {
+/** A map package decoded. `triangles: false` leaves out the BSP's triangle list (null), which only the page's world build reads: the
+ * simulation worker keeps the decoded map as long as the level lives, and the list is about 110,000 objects on the Island. */
+export function decodeMap(bytes, { triangles: withTriangles = true } = {}) {
   const pkg = parsePackage(bytes);
   const levelIndices = pkg.exports.flatMap((e, i) => e.className === 'Level' ? [i + 1] : []);
   if (levelIndices.length !== 1) throw new PackageError('Expected exactly one Level export', 0);
@@ -18,11 +20,11 @@ export function decodeMap(bytes) {
       stack: object.stack,
     };
   });
-  const triangles = triangulateModel(model);
+  const triangles = withTriangles ? triangulateModel(model) : null;
   const summary = {
     version: pkg.version, worldModel: model.entry.name,
     points: model.points.length, nodes: model.nodes.length, surfaces: model.surfaces.length,
-    triangles: triangles.length, actors: actors.length,
+    triangles: triangles?.length ?? null, actors: actors.length,
     playerStarts: actors.filter(a => a.className === 'PlayerStart').map(a => ({ name: a.name, location: a.values.Location ?? null, rotation: a.values.Rotation ?? null })),
     lightMaps: model.lightMaps.length, lightBitBytes: model.lightBits.length,
     unknownLevelBytes: level.trailingData.length,

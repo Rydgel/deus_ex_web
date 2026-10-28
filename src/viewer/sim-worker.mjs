@@ -151,10 +151,11 @@ async function handle(data) {
       }
       // A level filed in Save\Current (travel.mjs `restore`) is loaded from there, as a package of its own; else the map's .dx
       const restore = data.options?.travel?.arrival?.restore ?? null;
-      const filed = restore ? (await import('./restore-asset.mjs')).restoredLevel((await import('../runtime/save-directory.mjs')).hostSaveDirectory(), restore) : null;
+      // (without the BSP's triangle list: only the page's world build reads it)
+      const filed = restore ? (await import('./restore-asset.mjs')).restoredLevel((await import('../runtime/save-directory.mjs')).hostSaveDirectory(), restore, { triangles: false }) : null;
       const asset = filed ? filed.asset : await assets.get(data.map);
       const scene = data.options?.sceneLater ? sceneFor(data.id).promise.finally(() => scenes.delete(data.id)) : null;
-      host = await createSimHost(filed ? filed.map : decodeMap(asset.bytes), asset, assets, { ...data.options, scene, musicLibrary, restore: Boolean(filed), process: keepProcess,
+      host = await createSimHost(filed ? filed.map : decodeMap(asset.bytes, { triangles: false }), asset, assets, { ...data.options, scene, musicLibrary, restore: Boolean(filed), process: keepProcess,
         onAudioVoice: event => audio.push({ kind: 'voice', event: plainVoice(event) }),
         onProgress: message => send({ type: 'progress', message }) });
       const summary = host.actorSim?.summary;

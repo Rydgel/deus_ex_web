@@ -42,7 +42,15 @@ const IO_ACTOR = 0, IO_SURFLIST_COUNT = 15, IO_SURFLIST = 64, IO_RESULT = 32, IO
  * `pointCapacity` leaves room for the points a tracked model can reach
  * (the model's `sync()` then follows the tracker, decal.rs
  * `decal_model_sync`). */
-export function uploadDecalModel(kernel, model, { surfaceFlags = null, isMover = () => false, pointCapacity = 0 } = {}) {
+export function uploadDecalModel(kernel, model, options = {}) {
+  const { base, points, surfAt } = writeDecalModel(kernel, model, options);
+  return decalModelHandle(kernel, base, points, (base + surfAt) >>> 2, model.surfaces.length);
+}
+
+/** The upload. Its callbacks stay in this function's scope: closures that outlived it would keep that scope, `isMover` and through it
+ * the model it reads (a tracked model is a JavaScript copy of the tracker's arrays built for the upload alone: about 500,000 objects
+ * on the Island, which every major GC of the simulation worker marked; docs/live-heap.md). */
+function writeDecalModel(kernel, model, { surfaceFlags = null, isMover = () => false, pointCapacity = 0 } = {}) {
   const nodes = model.nodes, surfaces = model.surfaces;
   // UModel::PostLoad's Surf.Nodes, at load: a tracked model's fragments
   // (past `originalNodes`) are not in any surface's list.
@@ -76,8 +84,12 @@ export function uploadDecalModel(kernel, model, { surfaceFlags = null, isMover =
     list += surfNodes[i].length;
   });
   trace.write(kernel.memory.buffer, base + traceAt);
-  const surfWords = (base + surfAt) >>> 2;
-  return { base, surfaceCount: surfaces.length,
+  return { base, points, surfAt };
+}
+
+/** The uploaded model's handle: it holds only the kernel, the block's address, the point capacity and the surface records' word. */
+function decalModelHandle(kernel, base, points, surfWords, surfaceCount) {
+  return { base, surfaceCount,
     /** Follow the moving brush tracker's arrays (a model uploaded from
      * brush-tracker.mjs trackedModel); false when a count no longer fits. */
     sync: () => kernel.modelSync(base, points) === 0,
