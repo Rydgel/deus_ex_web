@@ -31,7 +31,7 @@
  *   go to the worklet and its reports come back on the port, never through
  *   the page.
  * - `call` {id, method, args}: `view`, `reset` (Player start: reset, then the
- *   movers and PlayerCalcView), `stateDigest`, `decalProbe`, `particleProbe`, `liveProbe` (the live-scene replay), `placeProbe`, `laserProbe`, `meshLightProbe`, `lodProbe`, `inputProbe` and `renderPassProbe` (validation), `musicStatus` (the library
+ *   movers and PlayerCalcView), `stateDigest`, `decalProbe`, `particleProbe`, `liveProbe` (the live-scene replay), `placeProbe`, `laserProbe`, `meshLightProbe`, `lodProbe`, `inputProbe` and `renderPassProbe` (validation), `loadout` (debug-loadout.mjs, the debugging page's loadout), `musicStatus` (the library
  *   service's counters), `musicDrive` (galaxy-music-library.mjs
  *   driveMusicLibrary, validation only).
  *
@@ -219,6 +219,7 @@ async function handle(data) {
         else if (data.method === 'decalProbe') value = decalProbe(game, data.args ?? {});
         else if (data.method === 'particleProbe') value = particleProbe(game, data.args ?? {});
         else if (data.method === 'viewProbe') value = (await import('./view-probe.mjs')).viewProbe(game, data.args ?? {});
+        else if (data.method === 'loadout') value = (await import('./debug-loadout.mjs')).giveLoadout(game);
         else if (data.method === 'easter') value = await (await import('./easter-sim.mjs')).easterCall(game, data.args ?? {});
         else if (data.method === 'liveProbe') value = (await import('./live-probe.mjs')).liveProbe(game, data.args ?? {});
         else if (data.method === 'placeProbe') value = placeProbe(game, data.args ?? {});

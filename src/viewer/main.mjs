@@ -222,6 +222,10 @@ const $ = id => document.getElementById(id);
 // bars. ?debug=1 is the debugging page: the toolbar, Inspect, the map list and 00_Training first (every tool and validator opens it, scripts/page-url.mjs).
 const originalStart = new URLSearchParams(location.search).get('debug') !== '1';
 if (originalStart) $('app').classList.add('original-start');
+// ?loadout=1 (the debugging page only): debug-loadout.mjs gives JC its items, augmentations, skills, ammunition and credits at each Player start and
+// each map opened from the list, not at a travel's arrival or a loaded game (the inventory travels with the player). Tools ▸ Give loadout
+// gives it once, now.
+const loadoutParam = !originalStart && new URLSearchParams(location.search).get('loadout') === '1';
 /** The original's splash: Launch's InitSplash("..\\Help\\Logo.bmp") shows the bitmap at its own size centred on the screen, in a dialog of
  * its own thread, until ExitSplash after the engine's Init has browsed to the first map (UnEngineWin.h; DeusEx.exe 0x1090909e). Here: its size
  * in device pixels, centred over black, until that map is loaded. False without the bitmap in the chosen files. */
@@ -778,7 +782,7 @@ function applyPlayerView(view) {
 }
 /** Player start; with ?sim=worker, returns the promise of the worker's
  * reply, which points the camera. */
-function resetCamera({ keepLevel = false } = {}) {
+function resetCamera({ keepLevel = false, travelled = false } = {}) {
   if (!map) return;
   let reply = null;
   hideNpcFocus();
@@ -786,15 +790,16 @@ function resetCamera({ keepLevel = false } = {}) {
     // `keepLevel`: the load just made this level (docs/class-graph-design.md, migration step 5: one LoadMap per arrival, as the original's
     // process runs one, a level restored by travel included, docs/travel.md "Play, step 3"): no Player start, which would load the map
     // again and run its begin-play pass a second time; only the view and the movers are read from it. The Reset button is Player start.
+    // `travelled`: that load is a travel's arrival or a loaded game, whose player keeps its inventory (no ?loadout=1).
     if (keepLevel) {
       if (simClient) reply = simClient.call('restoreView').then(result => { if (result && world) { world.syncMovers(result.movers); applyPlayerView(result.view); } })
-        .then(applyStartCheats);
-      else { world.syncMovers(sim.movers()); applyStartCheats(); }
+        .then(() => applyStartCheats({ loadout: !travelled }));
+      else { world.syncMovers(sim.movers()); applyStartCheats({ loadout: !travelled }); }
     }
     // Player start; the worker resets after the frames posted before it.
     else if (simClient) reply = simClient.call('reset').then(result => { if (result && world) { world.syncMovers(result.movers); applyPlayerView(result.view); } })
-      .then(applyStartCheats);
-    else { sim.reset(); world.syncMovers(sim.movers()); applyStartCheats(); }
+      .then(() => applyStartCheats({ loadout: true }));
+    else { sim.reset(); world.syncMovers(sim.movers()); applyStartCheats({ loadout: true }); }
     runtimeError=null;paused=false;keys.clear();$('toast').textContent='';stopInfoLinkPresentation();showStats();lockGameKeys(true);
   }
   const start = map.summary.playerStarts.find(p => p.location);
@@ -813,12 +818,23 @@ function applyEaster() {
   return import('./easter-page.mjs').then(({ startEaster }) => startEaster({ game, simClient, assets, mapName: currentMap }))
     .catch(error => toast(`?easter: ${error.message}`));
 }
-/** ?cheat= after a Player start; failures are shown, not thrown. */
-function applyStartCheats() {
+/** debug-loadout.mjs on the simulation side; the toast says what was given, or only what was refused when `quiet`. */
+async function giveLoadoutNow({ quiet = false } = {}) {
+  if (!game) throw new Error('No game loaded');
+  const result = simClient ? await simClient.call('loadout') : (await import('./debug-loadout.mjs')).giveLoadout(game);
+  const refused = result.refused.map(({ cls, why }) => `${cls} (${why})`).join(', ');
+  const summary = `Loadout: ${result.given.length} items, ${result.augmentations} augmentations, ${result.credits} credits`;
+  if (refused) toast(`${summary} · not given: ${refused}`, 8000);
+  else if (!quiet) toast(summary);
+  return result;
+}
+/** ?loadout=1 (`loadout`: not at a travel's arrival), then ?cheat= after a Player start; failures are shown, not thrown. */
+function applyStartCheats({ loadout = false } = {}) {
   const easter = applyEaster();
-  if (!startCheats.length || !game) return easter;
+  const given = loadout && loadoutParam && game ? giveLoadoutNow({ quiet: true }).catch(error => toast(`?loadout: ${error.message}`)) : null;
+  if (!startCheats.length || !game) return given ?? easter;
   const args = { exec: startCheats };
-  return Promise.resolve().then(() => simClient ? simClient.call('viewProbe', args) : viewProbe(game, args))
+  return Promise.resolve(given).then(() => simClient ? simClient.call('viewProbe', args) : viewProbe(game, args))
     .catch(error => toast(`?cheat: ${error.message}`));
 }
 /** With ?sim=worker, returns the promise of PlayerCalcView's reply. */
@@ -902,7 +918,7 @@ const loadMark = step => { if (loadTimeline) loadTimeline.marks.push([step, Math
 async function loadMap(name, { travel = null, currentFiles = null } = {}) {
   if (!assets || !assets.files.has(name.toLowerCase())) throw new Error(`Map is not available: ${name}`);
   if (loading) throw new Error('A map is already loading');
-  loading = true; $('map').disabled = true; $('reset').disabled = true; $('choose').disabled = true;
+  loading = true; $('map').disabled = true; $('reset').disabled = true; $('loadout').disabled = true; $('choose').disabled = true;
   hideNpcFocus();
   $('toast').textContent = '';stopInfoLinkPresentation();
   // The original start keeps the mouse through a travel, as the original's viewport does across a level load.
@@ -1091,13 +1107,13 @@ async function loadMap(name, { travel = null, currentFiles = null } = {}) {
     // resetCamera runs ?cheat= when it resets the player (Play mode).
     const playerReset = mode === 'play' && !!game;
     loadMark('swapped');
-    const resetReply = resetCamera({ keepLevel: true }); showStats();
+    const resetReply = resetCamera({ keepLevel: true, travelled: Boolean(travel) }); showStats();
     await viewReply; await resetReply;
     loadMark('playerStart');
-    if (!playerReset) await applyStartCheats();
+    if (!playerReset) await applyStartCheats({ loadout: !travel });
     $('wireframe').checked = false; $('actor-markers').checked = false;
     $('lighting').checked = true;
-    $('map').value = name; $('gate').hidden = true; $('reset').disabled = false;
+    $('map').value = name; $('gate').hidden = true; $('reset').disabled = false; $('loadout').disabled = !game;
     $('state').textContent = `${name} · ${world.textures} textures · ${world.counts.triangles.toLocaleString()} triangles`;
     if (world.errors.length) toast(`${world.errors.length} render issues — open Diagnostics for details.`);
     if (warming) {
@@ -1131,7 +1147,7 @@ async function loadMap(name, { travel = null, currentFiles = null } = {}) {
   } finally {
     loading = false; $('map').disabled = false; $('choose').disabled = false;
     $('progress').hidden = true; $('gate-choose').hidden = false;
-    $('reset').disabled = !world;
+    $('reset').disabled = !world; $('loadout').disabled = !game;
   }
   return status();
 }
@@ -1192,6 +1208,7 @@ $('folder').onchange = async event => {
 };
 $('map').onchange = event => loadMap(event.target.value).catch(fail);
 $('reset').onclick = resetCamera;
+$('loadout').onclick = () => giveLoadoutNow().catch(error => toast(`Loadout: ${error.message}`, 8000));
 $('mode').onchange = event => setMode(event.target.value);
 function togglePanel(open) { $('panel').hidden = !open; $('diagnostics').setAttribute('aria-expanded', String(open)); }
 $('diagnostics').onclick = () => togglePanel($('panel').hidden);
@@ -1969,6 +1986,8 @@ viewProbe(args) {
   if (simClient) return simClient.call('viewProbe', args);
   return game ? viewProbe(game, args) : null;
 },
+/** debug-loadout.mjs now (Tools ▸ Give loadout): {given, refused, augmentations}. */
+loadout() { return game ? giveLoadoutNow() : null; },
 /** Validation only: easter-sim.mjs (docs/easter-egg.md) on the simulation side: `{op: 'status'}` reads the ?easter=1 mod's actors;
  * `{op: 'frob', who}` does what a frob of one does. Nothing runs unless this is called. */
 async easterProbe(args) {

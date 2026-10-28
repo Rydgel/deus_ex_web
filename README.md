@@ -327,8 +327,20 @@ crouches, Shift walks, left click fires, right click uses, number keys select
 belt items and Escape opens the main menu. Double-click locks the mouse. In
 **Inspect**, WASD/arrow keys fly, Q/E move down/up, and Shift increases speed.
 **Player start** reloads the map's player start in Play, or resets the
-inspection camera in Inspect. **Diagnostics** provides wireframe, actor markers,
-surface inspection, counts, and format notes. It also offers an
+inspection camera in Inspect. **Give loadout** (Tools) gives JC the Dragon's
+Tooth sword, the stealth pistol, assault rifle, assault shotgun, sniper rifle
+and GEP gun, 10 lockpicks, 10 multitools, 5 medkits and 5 bioelectric cells,
+every augmentation at its top level, the skills, full ammunition and 100,000
+credits; `?debug=1&loadout=1` gives it at each Player start and each map opened
+from the list (not after a travel or a loaded game, whose inventory is the
+player's). It runs the original's own code through the console command chain
+(`src/viewer/debug-loadout.mjs`): each item is `summon`ed and picked up by
+`ParseRightClick`, then the cheats `AllAugs`, `AllSkills`, `AllAmmo` and
+`AllCredits` run. Two fields are written by hand: `bCheatsEnabled` first, as
+for `?cheat=`, and `FrobTarget` before each pickup, the stand-in for aiming at
+the item. Training's mission script still confiscates the inventory where the
+original does (Mission00, MunitionsTrooperReady). **Diagnostics** provides
+wireframe, actor markers, surface inspection, counts, and format notes. It also offers an
 original-lighting toggle, separate display brightness, conversation subtitles
 and exact reference-camera coordinates. Brightness follows the original D3D
 display curve: 0.60 is the default; 0.40 leaves framebuffer values unchanged
