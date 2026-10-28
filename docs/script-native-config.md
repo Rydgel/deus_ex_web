@@ -135,7 +135,10 @@ current mode is always one of its enumerated modes and `MenuChoice_Resolution.Lo
 * Live effect of most client and device properties (`TextureDetail`, `SkinDetail`, `NoLighting`,
   `CurvedSurfaces`, `ScreenFlashes`, `DetailTextures`, `HighDetailActors`, ...): the value is
   stored, exported and saved, but Play does not read it. Wired: Brightness (display ramp),
-  Decals (decal path), the Galaxy volumes and flags above.
+  Decals (decal path), the Galaxy volumes and flags above. `MinDesiredFrameRate` has no live
+  effect in the original either: no native code reads it, and `UGameEngine::Tick` stores 0 every
+  tick in `bDropDetail` and `bAggressiveLOD`, the flags LevelInfo.uc describes as frame-rate-driven
+  ([`+44` and the removed frame-rate LOD](script-lodmesh-lod.md#44-and-the-removed-frame-rate-lod)).
 * Galaxy properties the library reads at initialisation (`UseDirectSound`, `Use3dHardware`,
   `LowSoundQuality`, `OutputRate`, `Latency`, `UseCDMusic`, ...): the menus mark these restart-only.
   `EffectsChannels` is clamped and stored but the voice array keeps its size.

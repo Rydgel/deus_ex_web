@@ -34,12 +34,116 @@ transformed Location of 6 (`ORACLE_CW=0x037f node scripts/validate-lodmesh-lod.m
 console `TLOD`), `+40` = 0.25 (shape LOD distance, `MLOD`), `+44` = 1.0, `+48`
 = 1 (shape LOD mode, `MLMODE`) and `+4c` = 1.0 (fixed scale, `MLFIX`).
 `URender::Exec` (`0x10b147b0`) changes `+40` only to a positive value, `+48`
-and `+4c` only to a non-negative one. `+44` has no writer besides the copy
-constructor and assignment. `URender::StaticConstructor` (`0x10b13450`) is a
-bare `ret`, so no config property loads them; the INI files have no
-`[Render.Render]` section. The shipped game therefore always runs with
+and `+4c` only to a non-negative one. `+44` has one more writer besides the
+copy constructor and assignment: DrawWorld's frame-rate adjustment (next
+section), which never stores in the shipped game. `URender::StaticConstructor`
+(`0x10b13450`) is a bare `ret`, so no config property loads them; the INI files
+have no `[Render.Render]` section. The shipped game therefore always runs with
 0.25 / 1.0 / 1 / 1.0 unless a player types those console commands.
 `RENDER_LOD_SETTINGS` in `src/runtime/lodmesh-lod.mjs` holds them.
+
+### `+44` and the removed frame-rate LOD
+
+Corrected 2026-10-28: this page used to say `+44` had no writer. It has one,
+but Deus Ex removed what drives it, so it stays 1.0.
+
+**The reader, Render.dll `URender::DrawWorld` (`0x10b1cb90`),
+`0x10b1ccf4..0x10b1ce37`.** `this` is `[ebp-0x14]`. The level is
+`Frame->Viewport->Actor->XLevel` (`[ebx]`, `+0x30`, `+0xac`), kept in the
+Frame argument's slot `[ebp+8]`. Its LevelInfo comes from an inlined
+`GetLevelInfo()`: `Actors(0)` (`XLevel+0x2c`, then `[0]`), checked against
+`ALevelInfo::StaticClass` (`0x10b5d6a4`) by the asserts with lines `0xf1` and
+`0xf2`. The two bits are at ALevelInfo `+0x4f0` (`scripts/sdk-layouts.mjs --at
+ALevelInfo 0x4f0`): `bDropDetail` is `0x10` (tested at `0x10b1ccfc`) and
+`bAggressiveLOD` is `0x20` (tested at `0x10b1cd79`). The constants, read
+from the DLL bytes (Render.dll `607f1077…`):
+
+| Address | Type | Bytes | Value |
+|---|---|---|---|
+| `0x10b2b31c` | float | `cdcccc3d` | 0.1 (the step) |
+| `0x10b2b314` | float | `cdcccc3f` | 1.6 (the upper clamp) |
+| `0x10b2b318` | float | `6666a63f` | 1.3 (the bDropDetail-only target) |
+| `0x10b2a5b0` | float | `0000803f` | 1.0 (the lower clamp) |
+| `0x10b2a610` | double | `000000000000f03f` | 1.0 (the decay test) |
+
+The three branches end in one `FSTP m32 [this+0x44]` (`0x10b1ce34`). Here
+"clamped" means raised to 1.0 when below 1.0 (`FCOM`, C0), else lowered to 1.6
+when not below 1.6:
+
+* `bDropDetail` clear (`0x10b1cdec`): when `+44` > 1.0 (`FCOMP m64`, C0|C3
+  clear), `+44 − 0.1`, clamped, is stored. Otherwise the store is skipped
+  (jump to `0x10b1ce37`).
+* `bDropDetail` and `bAggressiveLOD` set (`0x10b1cd88`): `+44 + 0.1`, clamped.
+* `bDropDetail` set and `bAggressiveLOD` clear (`0x10b1cda8`): when `+44` > 1.3
+  (`FCOMP m32`, C0|C3 clear), `+44 − 0.1` is stored with no clamp. Otherwise
+  `+44 + 0.1` is stored, clamped (`0x10b1cdc0`).
+
+DrawWorld runs at 24-bit precision ([render pass precision](render-pass-precision.md)),
+so each `FADD`/`FSUB` of the float step rounds to the binary32 sum. Starting
+from 1.0, binary32 arithmetic gives these sequences (computed, not measured;
+the branch is unreachable, below):
+
+* `bDropDetail` only: 1.1, 1.2, 1.3000001, then 1.2 and 1.3000001 in turn.
+* With `bAggressiveLOD`: up to 1.6 in six frames.
+* After the bits clear: down by 0.1 a frame (1.5 … 1.0999999), then 1.0.
+
+`+44` multiplies the selection's denominator (step 6 below), so a larger value
+requests fewer vertices. At 1.6 the ratio is divided by 1.6.
+
+**Nothing sets the bits in the shipped game.**
+
+* Engine.dll `UGameEngine::Tick` (`0x1038fe90`), `0x1039009e..0x1039015f`: when
+  `GLevel` (`+0x68`) and `Client` (`+0x44`) are both set, it does
+  `GetLevelInfo()->bDropDetail = 0` (`0x103900f2..0x103900fb`: load, `and
+  $-0x11`, store), then `GetLevelInfo()->bAggressiveLOD = 0` (`0x1039014d`, `and
+  $-0x21`), then `GLevel->Tick(LEVELTICK_All, DeltaSeconds)` (vslot `+0x5c`).
+  The stored values are constants: no FPU code and no frame-time test.
+  LevelInfo.uc's comments, inherited from Unreal Tournament, still describe
+  the flags as frame-rate-driven ("frame rate is below DesiredFrameRate"), but
+  Deus Ex's Engine has no such test.
+* `UClient.MinDesiredFrameRate` (`+0x94`) is registered as a `Display` config
+  float in UClient's StaticConstructor (`0x103755c0..0x103755f0`). No native
+  code reads it as a float: an `llvm-objdump` sweep of Engine, Render, WinDrv,
+  D3DDrv, DeusEx, Extension, Window and DeusEx.exe finds FPU operands at `+0x94`
+  only in Extension's XWindow fields and in stack slots. The SDK's first-run
+  detail page writes it as 1 ("DEUS_EX CNN - changed from 20" and "from 28",
+  `UnEngineWin.h`, `WConfigPageDetail::OnInitDialog`).
+* All of the shipped DLLs and DeusEx.exe were disassembled. Apart from three
+  stores in a Core constructor (Core has no ALevelInfo), every store to
+  `+0x4f0` is in Engine, and none of them sets `0x10` or `0x20`:
+  * ALevelInfo's copy constructor (`0x103375b0`) and `operator=`
+    (`0x10338040`) copy all ten bits one by one.
+  * LoadMap sets or clears `bHighDetailMode` (`0x1038d6bb`, `0x1038d6e3`),
+    sets `bBegunPlay|bStartup` (`0x1038d899`, `or $0x42`) and clears
+    `bStartup` (`0x1038dbe3`).
+  * `0x1039cfd8` sets `bHighDetailMode` from an argument.
+  * The two Tick stores above.
+  * Four whole-word copies (`0x10330523`, `0x10330b3f`, `0x1034345b`,
+    `0x10343fb0`) are in classes whose layout around `+0x4f0` is not
+    ALevelInfo's.
+
+  Render only tests the two bits.
+* In the scripts and data, the name `bDropDetail` appears only in Engine.u
+  (LevelInfo's declaration) and DeusEx.u. DeusExDecal reads it there to
+  shorten decal lifetimes and never writes it. `bAggressiveLOD` appears only in
+  Engine.u. No map contains either name, so no map serializes them as set.
+
+In the original, DrawWorld therefore always takes the clear branch with `+44`
+= 1.0 and skips the store. `+44` keeps URender::Init's 1.0 on every machine at
+every frame rate, and every `Level.bDropDetail` test in script sees False.
+Only the console can set a bit (`set LevelInfo bDropDetail True`, SET of
+`UObject::StaticExec`), and the next `UGameEngine::Tick` clears it. According
+to the SDK's `MainLoop` (`UnEngineWin.h`), messages, and with them typed
+console lines, are dispatched after `Engine->Tick`, so neither Level's Tick
+nor DrawWorld would see the bit. That loop order was not traced in the retail
+binaries.
+
+**Play** never sets the bits and keeps `RENDER_LOD_SETTINGS.adjust` at 1,
+which equals the original. It models neither DrawWorld's block nor Tick's
+clear. The one observable difference is the console case: after `set
+LevelInfo bDropDetail True`, Play's LevelInfo keeps the bit, so DeusExDecal
+takes its short lifetimes, where the original clears it on the next tick.
+This is a cheat-only path and is not implemented.
 
 ## Selection `0x10b0eb52..0x10b0ed53`
 
