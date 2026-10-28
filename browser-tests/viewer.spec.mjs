@@ -3,6 +3,7 @@ import { mkdir, mkdtemp, writeFile, cp, rm, readdir } from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
 import { gameDirectory } from '../scripts/game-directory.mjs';
+import { BASE, PREVIEW } from './browsers.mjs';
 
 const state = page => page.evaluate(() => window.deusExViewer.status());
 const ready = page => page.waitForFunction(() => window.deusExViewer?.status().ready);
@@ -10,13 +11,14 @@ const errors = page => { const list = []; page.on('pageerror', e => list.push(e.
 
 test('original training map renders with textures and interactive inspection controls', async ({ page }) => {
   const failures = errors(page);
-  await page.goto('http://127.0.0.1:5173/?debug=1'); await ready(page);
+  await page.goto(`${BASE}/?debug=1`); await ready(page);
   await page.getByRole('combobox', { name: 'Movement mode' }).selectOption('inspect');
   await page.locator('#tools-options').click();
   await page.getByRole('button', { name: 'Player start', exact: true }).click();
+  // (worker mode draws again once the reset's next snapshot arrives; until then the last render's calls read 0)
+  await expect.poll(async () => (await state(page)).calls).toBeGreaterThan(0);
   const initial = await state(page);
   expect(initial).toMatchObject({ map: '00_Training', textures: 70, movers: 25, triangles: 24427, renderErrors: [], cameraMoved: false });
-  expect(initial.calls).toBeGreaterThan(0);
   await mkdir('reports/browser', { recursive: true });
   await page.screenshot({ path: 'reports/browser/training-start.png' });
   await page.locator('#tools-options').click();
@@ -31,9 +33,11 @@ test('original training map renders with textures and interactive inspection con
   await page.getByLabel('Actor positions', { exact: true }).uncheck();
   await page.getByLabel('Close diagnostics', { exact: true }).click();
   await page.locator('#scene').click({ position: { x: 450, y: 400 } });
-  await page.keyboard.down('KeyW'); await page.waitForTimeout(1300); await page.keyboard.up('KeyW');
-  const moved = await state(page);
-  expect(moved.position[0]).toBeGreaterThan(initial.position[0] + 100);
+  // (the inspection camera moves at most 0.05 s a frame, so its speed falls with the frame rate: a software renderer's few frames a
+  // second need longer than 1.3 s to cover 100 units)
+  await page.keyboard.down('KeyW');
+  try { await expect.poll(async () => (await state(page)).position[0], { timeout: 10000 }).toBeGreaterThan(initial.position[0] + 100); }
+  finally { await page.keyboard.up('KeyW'); }
   await page.mouse.move(450, 400); await page.mouse.down(); await page.mouse.move(580, 430, { steps: 8 }); await page.mouse.up();
   expect((await state(page)).rotation).not.toEqual(initial.rotation);
   await page.screenshot({ path: 'reports/browser/training-camera.png' });
@@ -50,7 +54,7 @@ test('original training map renders with textures and interactive inspection con
 test('production opens local File objects, reports missing packages, and sends no game data', async ({ page }) => {
   const failures = errors(page), requests = [];
   page.on('request', r => requests.push({ method: r.method(), url: r.url() }));
-  await page.goto('http://127.0.0.1:5174/?debug=1');
+  await page.goto(`${PREVIEW}/?debug=1`);
   await expect(page.getByRole('heading', { name: 'Open your Deus Ex installation' })).toBeVisible();
   await page.setViewportSize({ width: 820, height: 900 });
   await expect(page.locator('#gate-choose')).toBeVisible();
@@ -70,10 +74,11 @@ test('production opens local File objects, reports missing packages, and sends n
     expect(await state(page)).toMatchObject({ map: '00_Training', renderErrors: [], triangles: 24427,
       npcPreview:{poseBackend:'rust-wasm',kernelError:null} });
     await expect(page.locator('#toast')).toBeEmpty();
-    // The authored kernel is loaded lazily. Selecting original data may fetch
-    // that same-origin static asset, but must never transmit the game files.
-    expect(requests.slice(beforeFiles).every(r=>r.method==='GET'&&new URL(r.url).pathname.endsWith('.wasm'))).toBe(true);
-    expect(requests.every(r => r.method === 'GET' && new URL(r.url).origin === 'http://127.0.0.1:5174')).toBe(true);
+    // The simulation worker, the modules it loads lazily and the authored kernels
+    // are fetched once original data is chosen: same-origin GETs of the build's
+    // own assets. The game files are never transmitted.
+    expect(requests.slice(beforeFiles).every(r=>r.method==='GET'&&/^\/assets\/[^/]+\.(?:js|wasm)$/.test(new URL(r.url).pathname))).toBe(true);
+    expect(requests.every(r => r.method === 'GET' && new URL(r.url).origin === PREVIEW)).toBe(true);
     await page.screenshot({ path: 'reports/browser/production-training.png' });
     expect(failures).toEqual([]);
   } finally { await rm(tmp, { recursive: true, force: true }); }
@@ -86,7 +91,7 @@ test('optional browser tool handlers validate inputs and reflect visible map sta
     window.registeredTools = {};
     Object.defineProperty(document, 'modelContext', { configurable: true, value: { registerTool: tool => { window.registeredTools[tool.name] = tool; } } });
   });
-  await page.goto('http://127.0.0.1:5173/?debug=1'); await ready(page);
+  await page.goto(`${BASE}/?debug=1`); await ready(page);
   await page.waitForFunction(() => Object.keys(window.registeredTools).length === 4);
   expect(await page.evaluate(() => window.registeredTools.read_map_status.execute({}))).toMatchObject({ ready: true, map: '00_Training' });
   for (const [name, input] of [['read_map_status', { extra: 1 }], ['open_local_map', {}], ['open_local_map', { name: 'missing' }], ['reset_inspection_camera', []], ['set_inspection_camera', { position: [0, 0], rotation: [0, 0, 0] }]]) {
@@ -100,11 +105,11 @@ test('optional browser tool handlers validate inputs and reflect visible map sta
 
 test('dev endpoint exposes only listed packages; production output contains code only', async ({ request }) => {
   for (const suffix of ['System%2FDeusEx.exe', '..%2Fpackage.json', 'Maps%2F..%2FSystem%2FDeusEx.ini']) {
-    expect((await request.get(`http://127.0.0.1:5173/__game__/file/${suffix}`)).status()).toBe(404);
+    expect((await request.get(`${BASE}/__game__/file/${suffix}`)).status()).toBe(404);
   }
-  expect((await request.get('http://127.0.0.1:5173/__game__/manifest', { headers: { 'sec-fetch-site': 'cross-site' } })).status()).toBe(403);
-  expect((await request.post('http://127.0.0.1:5173/__game__/manifest')).status()).toBe(403);
-  expect((await request.get('http://127.0.0.1:5173/Deus%20Ex%20GOTY%20Edition/System/DeusEx.ini')).status()).toBe(403);
+  expect((await request.get(`${BASE}/__game__/manifest`, { headers: { 'sec-fetch-site': 'cross-site' } })).status()).toBe(403);
+  expect((await request.post(`${BASE}/__game__/manifest`)).status()).toBe(403);
+  expect((await request.get(`${BASE}/Deus%20Ex%20GOTY%20Edition/System/DeusEx.ini`)).status()).toBe(403);
   const files = await readdir('dist', { recursive: true });
   expect(files.some(p => /\.(dx|utx|u|uax|umx|unr|exe|dll)$/i.test(p))).toBe(false);
   expect(files).toContain('index.html');

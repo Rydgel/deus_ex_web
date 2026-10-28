@@ -1,32 +1,33 @@
 import { test, expect } from '@playwright/test';
+import { BASE } from './browsers.mjs';
 
 test.use({ viewport:{width:960,height:640} });
 
 // The training Plant7 used to pause Play at the scene adapter (Plant7.Bump was an
 // unsupported scene event). It is now implemented: a player bump runs the real
-// inherited DeusExDecoration.Bump through the VM, pushing the decoration and
-// recording its push sound as a deferred boundary (docs/script-plant-contact.md,
-// scripts/validate-plant-push.mjs). This check confirms the contact no longer
-// pauses, the browser keeps rendering (each project's: it ran in Firefox only before the browser matrix), and Player start still resets the scene.
+// inherited DeusExDecoration.Bump through the VM, which pushes the decoration
+// (docs/script-plant-contact.md, scripts/validate-plant-push.mjs); its push sound
+// plays now rather than being recorded as a deferred boundary, so the push is read
+// from Plant7's Location through the simulation's live probe. This check confirms
+// the contact does not pause, the browser keeps rendering (each project's: it ran in
+// Firefox only before the browser matrix), and Player start still resets the scene.
 test('player bump pushes the training plant without pausing, and Player start resets', async ({page}) => {
   const errors=[];page.on('pageerror',error=>errors.push(error.message));
-  await page.goto('http://127.0.0.1:5173/?debug=1');
+  await page.goto(`${BASE}/?debug=1`);
   await page.waitForFunction(()=>window.deusExViewer?.status().gameplay?.player.grounded);
   const initial=await page.evaluate(()=>window.deusExViewer.status().gameplay.player.position);
+  const plant=()=>page.evaluate(async()=>(await window.deusExViewer.liveProbe({read:{names:['Plant7'],props:['Location']}})).read.Plant7.Location);
+  const placed=await plant();
   await page.locator('#scene').click();
   await page.keyboard.down('KeyW');await page.keyboard.down('KeyD');
-  // Walk into the plant. Wait until it is pushed (its push sound is recorded) or a
-  // runtime error appears, so the wait cannot hang; the assertion below requires
-  // the push and forbids the old pause.
-  await page.waitForFunction(()=>{
-    const s=window.deusExViewer.status();
-    return Boolean(s.runtimeError)||(s.gameplay?.deferredEffects??[]).some(effect=>/Plant7\.PushSound/.test(effect));
-  },null,{timeout:20000});
+  // Walk into the plant. Wait until it moves or a runtime error appears, so the
+  // wait cannot hang; the assertions below require the push and forbid the old pause.
+  await expect.poll(async()=>(await page.evaluate(()=>window.deusExViewer.status().runtimeError))||(await plant()).some((v,i)=>v!==placed[i]),{timeout:20000}).toBeTruthy();
   await page.keyboard.up('KeyW');await page.keyboard.up('KeyD');
   const pushed=await page.evaluate(()=>window.deusExViewer.status());
   expect(pushed.runtimeError,pushed.runtimeError?.message).toBeNull();
   expect(pushed.paused).toBe(false);
-  expect(pushed.gameplay.deferredEffects.some(effect=>/Plant7\.PushSound/.test(effect))).toBe(true);
+  expect(await plant()).not.toEqual(placed);
   // The browser keeps rendering after the contact.
   await page.waitForFunction(frame=>window.deusExViewer.status().frame>frame,pushed.frame);
   // Player start resets the scene to the original spawn.
@@ -47,7 +48,7 @@ test('player bump pushes the training plant without pausing, and Player start re
 // docs/script-world-destroy.md, scripts/validate-world-destroy.mjs.
 test('the training route past the first door destroys its one-shot trigger and keeps Play responsive', async ({page}) => {
   const errors=[];page.on('pageerror',error=>errors.push(error.message));
-  await page.goto('http://127.0.0.1:5173/?debug=1');
+  await page.goto(`${BASE}/?debug=1`);
   await page.waitForFunction(()=>window.deusExViewer?.status().gameplay?.player.grounded);
   const status=()=>page.evaluate(()=>window.deusExViewer.status());
   await page.locator('#scene').click({position:{x:500,y:350}});
@@ -59,7 +60,9 @@ test('the training route past the first door destroys its one-shot trigger and k
     const s=window.deusExViewer.status();
     return Boolean(s.runtimeError)||s.gameplay.player.position[0]>-243;
   },null,{timeout:30000});
-  await page.keyboard.press('KeyF');
+  await page.locator('#scene').click({position:{x:500,y:350},button:'right'});   // DefUser.ini: RightMouse=ParseRightClick (use); F is CenterView
+  // The door's original DeusExMover.Frob opens it (gameplay.spec.mjs reads the same mover); the old page-side use counter is gone.
+  await expect.poll(async()=>(await status()).gameplay.doors.movers.find(m=>m.name==='DeusExMover16').alpha,{timeout:5000}).toBe(1);
   await page.waitForFunction(()=>{
     const s=window.deusExViewer.status();
     return Boolean(s.runtimeError)||s.gameplay.player.position[0]>300;
@@ -67,12 +70,11 @@ test('the training route past the first door destroys its one-shot trigger and k
   await page.keyboard.up('KeyW');
   const past=await status();
   expect(past.runtimeError,past.runtimeError?.message).toBeNull();
-  expect(past.gameplay.doors.uses).toBe(1);
   // Two DataLink transmissions have run by now; the door is still usable.
   await expect.poll(async()=>(await page.locator('#infolink-title').textContent()),{timeout:30000})
     .toContain('END TRANSMISSION');
   // Input still drives the session after both transmissions and the destruction:
-  // a paused runtime is exactly what made the door stop answering F.
+  // a paused runtime is exactly what made the door stop answering use.
   const parked=(await status()).gameplay.player.position[0];
   await page.keyboard.down('KeyS');
   await page.waitForFunction(start=>{
@@ -84,7 +86,7 @@ test('the training route past the first door destroys its one-shot trigger and k
   expect(after.runtimeError,after.runtimeError?.message).toBeNull();
   expect(after.paused).toBe(false);
   // Use still runs rather than being swallowed by a paused session.
-  await page.keyboard.press('KeyF');
+  await page.locator('#scene').click({position:{x:500,y:350},button:'right'});
   const used=await status();
   expect(used.runtimeError,used.runtimeError?.message).toBeNull();
   expect(errors).toEqual([]);

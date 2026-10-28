@@ -362,6 +362,10 @@ npm run test:browser
 `npx playwright install webkit`); `npm run test:browser -- --project firefox`
 runs one. The last run by browser is in
 [the Stage 7 criteria](docs/stage-7-exit-criteria.md#the-browser-suite-by-browser).
+While the checkout is being edited (a dev server reloads the page when a
+served file changes), `DX_SUITE_TREE=<worktree>` serves a frozen worktree of
+the commit under test on ports 5195 and 5196 instead; it needs its own
+`node_modules` link, game folder link, Wasm build and `dist`.
 
 For a full validator sweep, use `npm run validate` (four parallel validator
 jobs by default), or explicitly `npm run validate -- --jobs 4`. Use focused

@@ -1,9 +1,10 @@
 import {test,expect} from '@playwright/test';
+import { BASE } from './browsers.mjs';
 
 test('only submitted actor meshes refresh render time',async({page})=>{
   // Use the real WebGL submission/culling path with controlled actor fields.
   // No game assets or full renderer fidelity are required for this boundary.
-  await page.goto('http://127.0.0.1:5173/?debug=1');
+  await page.goto(`${BASE}/?debug=1`);
   const stamps=await page.evaluate(async()=>{
     const THREE=await import('/node_modules/three/build/three.module.js');
     const {actorRenderFeedback}=await import('/src/viewer/actor-render-feedback.mjs');

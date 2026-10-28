@@ -1,5 +1,6 @@
 import { test, expect } from '@playwright/test';
 import { mkdir, writeFile } from 'node:fs/promises';
+import { BASE } from './browsers.mjs';
 
 // Original saved JCDentonMale1: Location + EyeHeight, ViewRotation. Native HFOV 75.
 const cameras = [
@@ -11,7 +12,7 @@ test('static lighting, display brightness and fixed original cameras render with
   page.on('pageerror', e => errors.push(e.message));
   page.on('console', m => { if (m.type() === 'error') errors.push(m.text()); });
   await page.setViewportSize({ width: 926, height: 719 });
-  await page.goto('http://127.0.0.1:5173/?debug=1');
+  await page.goto(`${BASE}/?debug=1`);
   await page.waitForFunction(() => window.deusExViewer?.status().ready);
   // Inspect and Play have different control text heights. Select the fixed-camera
   // mode before sizing the canvas to the original capture's 926 × 603 viewport.

@@ -155,16 +155,16 @@ original's defaults, kept. Both rows below are checked in Play: `R` pitches the 
 | Pause | `Pause` | `Pause` | yes | yes | the level pauses; a second press resumes |
 | CapsLock | `ToggleWalk` | `CapsLock` | yes | yes | ToggleWalk flips bToggleWalk (0 -> 1) and bIsWalking (0 -> 1) |
 | Escape | `ShowMainMenu` | `Escape` | yes (1) | yes, locked (1) | the main menu opens (deusex.menumain) |
-| Space | `Jump` = `Jump \| Axis aUp Speed=+300.0` | `Space` | yes | yes | the player jumps (43 units up) |
-| PageDown | `LookDown` = `Axis aLookUp Speed=-100.0` | `PageDown` | yes | yes | the view looks down (pitch -5968 units) |
-| End | `CenterView` = `Button bSnapLevel` | `End` | yes | yes | bSnapLevel while held; the view pitch 8528 -> 0 |
-| Left | `StrafeLeft` = `Axis aStrafe Speed=-300.0` | `ArrowLeft` | yes | yes | the player moves left (236 units in 0.6 s) |
-| Up | `MoveForward` = `Axis aBaseY  Speed=+300.0` | `ArrowUp` | yes | yes | the player moves forward (218 units in 0.6 s) |
-| Right | `StrafeRight` = `Axis aStrafe Speed=+300.0` | `ArrowRight` | yes | yes | the player moves right (206 units in 0.6 s) |
-| Down | `MoveBackward` = `Axis aBaseY  Speed=-300.0` | `ArrowDown` | yes | yes | the player moves backward (178 units in 0.6 s) |
-| Insert | `Jump` = `Jump \| Axis aUp Speed=+300.0` | `Insert` | yes | yes | the player jumps (43 units up) |
-| Delete | `LookUp` = `Axis aLookUp Speed=+100.0` | `Delete` | yes | yes | the view looks up (pitch +5968 units) |
-| 0 | `ActivateBelt 0` | `Digit0` | yes | yes | ActivateBelt 0 puts NanoKeyRing3 in hand |
+| Space | `Jump` = `Jump \| Axis aUp Speed=+300.0` | `Space` | yes | yes | the player jumps (46 units up) |
+| PageDown | `LookDown` = `Axis aLookUp Speed=-100.0` | `PageDown` | yes | yes | the view looks down (pitch -5966 units) |
+| End | `CenterView` = `Button bSnapLevel` | `End` | yes | yes | bSnapLevel while held; the view pitch 8951 -> 0 |
+| Left | `StrafeLeft` = `Axis aStrafe Speed=-300.0` | `ArrowLeft` | yes | yes | the player moves left (215 units in 0.6 s) |
+| Up | `MoveForward` = `Axis aBaseY  Speed=+300.0` | `ArrowUp` | yes | yes | the player moves forward (206 units in 0.6 s) |
+| Right | `StrafeRight` = `Axis aStrafe Speed=+300.0` | `ArrowRight` | yes | yes | the player moves right (216 units in 0.6 s) |
+| Down | `MoveBackward` = `Axis aBaseY  Speed=-300.0` | `ArrowDown` | yes | yes | the player moves backward (140 units in 0.6 s) |
+| Insert | `Jump` = `Jump \| Axis aUp Speed=+300.0` | `Insert` | yes | yes | the player jumps (46 units up) |
+| Delete | `LookUp` = `Axis aLookUp Speed=+100.0` | `Delete` | yes | yes | the view looks up (pitch +5967 units) |
+| 0 | `ActivateBelt 0` | `Digit0` | yes | yes | ActivateBelt 0 puts NanoKeyRing1 in hand |
 | 1 | `ActivateBelt 1` | `Digit1` | yes | yes | ActivateBelt 1 puts Multitool3 in hand |
 | 2 | `ActivateBelt 2` | `Digit2` | yes | yes | ActivateBelt 2 puts MedKit0 in hand |
 | 3 | `ActivateBelt 3` | `Digit3` | yes | yes | ActivateBelt 3 puts Lockpick0 in hand |
@@ -177,27 +177,27 @@ original's defaults, kept. Both rows below are checked in Play: `R` pitches the 
 | F1 | `ShowInventoryWindow` | `F1` | yes | yes, locked | the inventory screen opens (deusex.personascreeninventory) |
 | F2 | `ShowGoalsWindow` | `F2` | yes | yes | the goals screen opens (deusex.personascreengoals) |
 | F3 | `ActivateAugmentation 0` | `F3` | yes | yes, locked | ActivateAugmentation 0 toggles deusex.augballistic (active false -> true) |
-| F4 | `ActivateAugmentation 1` | `F4` | yes | yes | ActivateAugmentation 1: no augmentation in that slot; the HUD log gets its message (1.4 s since the last -> 0.7 s), nothing toggles |
-| F5 | `ActivateAugmentation 2` | `F5` | yes | yes, locked | ActivateAugmentation 2: no augmentation in that slot; the HUD log gets its message (1.4 s since the last -> 0.7 s), nothing toggles |
-| F6 | `ActivateAugmentation 3` | `F6` | yes | yes, locked | ActivateAugmentation 3: no augmentation in that slot; the HUD log gets its message (1.4 s since the last -> 0.7 s), nothing toggles |
+| F4 | `ActivateAugmentation 1` | `F4` | yes | yes | ActivateAugmentation 1: no augmentation in that slot; the HUD log gets its message (1.3 s since the last -> 0.7 s), nothing toggles |
+| F5 | `ActivateAugmentation 2` | `F5` | yes | yes, locked | ActivateAugmentation 2: no augmentation in that slot; the HUD log gets its message (1.3 s since the last -> 0.7 s), nothing toggles |
+| F6 | `ActivateAugmentation 3` | `F6` | yes | yes, locked | ActivateAugmentation 3: no augmentation in that slot; the HUD log gets its message (1.3 s since the last -> 0.7 s), nothing toggles |
 | F7 | `ActivateAugmentation 4` | `F7` | yes | yes, locked | ActivateAugmentation 4 toggles deusex.augspeed (active false -> true) |
-| F8 | `ActivateAugmentation 5` | `F8` | yes | yes | ActivateAugmentation 5: no augmentation in that slot; the HUD log gets its message (1.4 s since the last -> 0.7 s), nothing toggles |
-| F9 | `ActivateAugmentation 6` | `F9` | yes | yes | ActivateAugmentation 6: no augmentation in that slot; the HUD log gets its message (1.5 s since the last -> 0.7 s), nothing toggles |
-| F10 | `ActivateAugmentation 7` | `F10` | yes | yes, locked | ActivateAugmentation 7: no augmentation in that slot; the HUD log gets its message (1.4 s since the last -> 0.7 s), nothing toggles |
-| F11 | `ActivateAugmentation 8` | `F11` | yes (2) | yes, locked (2) | ActivateAugmentation 8: no augmentation in that slot; the HUD log gets its message (1.4 s since the last -> 0.6 s), nothing toggles |
+| F8 | `ActivateAugmentation 5` | `F8` | yes | yes | ActivateAugmentation 5: no augmentation in that slot; the HUD log gets its message (1.3 s since the last -> 0.7 s), nothing toggles |
+| F9 | `ActivateAugmentation 6` | `F9` | yes | yes | ActivateAugmentation 6: no augmentation in that slot; the HUD log gets its message (1.3 s since the last -> 0.7 s), nothing toggles |
+| F10 | `ActivateAugmentation 7` | `F10` | yes | yes, locked | ActivateAugmentation 7: no augmentation in that slot; the HUD log gets its message (1.3 s since the last -> 0.7 s), nothing toggles |
+| F11 | `ActivateAugmentation 8` | `F11` | yes (2) | yes, locked (2) | ActivateAugmentation 8: no augmentation in that slot; the HUD log gets its message (1.2 s since the last -> 0.7 s), nothing toggles |
 | F12 | `ActivateAugmentation 9` | `F12` | yes | yes, locked | ActivateAugmentation 9 toggles deusex.auglight (active false -> true) |
 | Equals | `ShowScores` (3) | `Equal` | yes | yes | ShowScores ran; a multiplayer command, nothing opens in single player |
-| Comma | `StrafeLeft` = `Axis aStrafe Speed=-300.0` | `Comma` | yes | yes | the player moves left (233 units in 0.6 s) |
-| Period | `StrafeRight` = `Axis aStrafe Speed=+300.0` | `Period` | yes | yes | the player moves right (235 units in 0.6 s) |
+| Comma | `StrafeLeft` = `Axis aStrafe Speed=-300.0` | `Comma` | yes | yes | the player moves left (210 units in 0.6 s) |
+| Period | `StrafeRight` = `Axis aStrafe Speed=+300.0` | `Period` | yes | yes | the player moves right (216 units in 0.6 s) |
 | LeftBracket | `ToggleScope` | `BracketLeft` | yes | yes | ToggleScope turns the scope on (zoomed) |
 | RightBracket | `ToggleLaser` | `BracketRight` | yes | yes | ToggleLaser turns the laser sight on (lasing) |
-| MouseX | `Axis aMouseX Speed=6.0` | pointer motion (relative, locked) | yes | yes | relative pointer motion turns the view (yaw +1405) |
-| MouseY | `Axis aMouseY Speed=6.0` | pointer motion (relative, locked) | yes | yes | relative pointer motion pitches the view (pitch -941) |
+| MouseX | `Axis aMouseX Speed=6.0` | pointer motion (relative, locked) | yes | yes | relative pointer motion turns the view (yaw +1427) |
+| MouseY | `Axis aMouseY Speed=6.0` | pointer motion (relative, locked) | yes | yes | relative pointer motion pitches the view (pitch -955) |
 | Backspace | `PutInHand` | `Backspace` | yes | yes | PutInHand: the hand is put away: the weapon plays Down in state DownWeapon, then inHand and Weapon are None |
-| A | `StrafeLeft` = `Axis aStrafe Speed=-300.0` | `KeyA` | yes | yes | the player moves left (223 units in 0.6 s) |
+| A | `StrafeLeft` = `Axis aStrafe Speed=-300.0` | `KeyA` | yes | yes | the player moves left (215 units in 0.6 s) |
 | B | `BuySkills` (3) | `KeyB` | yes | yes | BuySkills ran; a multiplayer command, nothing opens in single player |
-| C | `TurnRight` = `Axis aBaseX  Speed=+150.0` | `KeyC` | yes | yes | the view turns right (yaw +9596 units) |
-| D | `StrafeRight` = `Axis aStrafe Speed=+300.0` | `KeyD` | yes | yes | the player moves right (217 units in 0.6 s) |
+| C | `TurnRight` = `Axis aBaseX  Speed=+150.0` | `KeyC` | yes | yes | the view turns right (yaw +8313 units) |
+| D | `StrafeRight` = `Axis aStrafe Speed=+300.0` | `KeyD` | yes | yes | the player moves right (200 units in 0.6 s) |
 | E | `LeanRight` = `Axis aExtra0 Speed=+0.05` | `KeyE` | yes | yes | the player leans right (curLeanDist 40.0, view roll 800) |
 | F | `CenterView` = `Button bSnapLevel` | `KeyF` | yes | yes | bSnapLevel while held; the view pitch 9380 -> 0 |
 | G | `ShowGoalsWindow` | `KeyG` | yes | yes | the goals screen opens (deusex.personascreengoals). In a window: rebound in MenuScreenCustomizeKeys to ParseRightClick: the key then picks up the highlighted Multitool4 and opens no goals screen |
@@ -205,24 +205,24 @@ original's defaults, kept. Both rows below are checked in Play: `R` pitches the 
 | K | `KillerProfile` (3) | `KeyK` | yes | yes | KillerProfile ran; a multiplayer command, nothing opens in single player |
 | M | `Look` = `Button bLook` | `KeyM` | yes | yes | bLook while held |
 | Q | `LeanLeft` = `Axis aExtra0 Speed=-0.05` | `KeyQ` | yes | yes | the player leans left (curLeanDist -40.0, view roll -800) |
-| R | `LookUp` = `Axis aLookUp Speed=+100.0` | `KeyR` | yes | yes | the view looks up (pitch +10235 units) |
-| S | `MoveBackward` = `Axis aBaseY  Speed=-300.0` | `KeyS` | yes | yes | the player moves backward (160 units in 0.6 s) |
+| R | `LookUp` = `Axis aLookUp Speed=+100.0` | `KeyR` | yes | yes | the view looks up (pitch +9380 units) |
+| S | `MoveBackward` = `Axis aBaseY  Speed=-300.0` | `KeyS` | yes | yes | the player moves backward (150 units in 0.6 s) |
 | T | `Talk` (3) | `KeyT` | yes | yes | the console enters its Typing state (Talk) |
-| V | `LookDown` = `Axis aLookUp Speed=-100.0` | `KeyV` | yes | yes | the view looks down (pitch -6609 units) |
-| W | `MoveForward` = `Axis aBaseY  Speed=+300.0` | `KeyW` | yes | yes | the player moves forward (251 units in 0.6 s) |
-| X | `Duck` = `Button bDuck \| Axis aUp Speed=-300.0` | `KeyX` | yes | yes | bDuck while held; the player crouches (eye 13.1) |
+| V | `LookDown` = `Axis aLookUp Speed=-100.0` | `KeyV` | yes | yes | the view looks down (pitch -6179 units) |
+| W | `MoveForward` = `Axis aBaseY  Speed=+300.0` | `KeyW` | yes | yes | the player moves forward (200 units in 0.6 s) |
+| X | `Duck` = `Button bDuck \| Axis aUp Speed=-300.0` | `KeyX` | yes | yes | bDuck while held; the player crouches (eye 13.2) |
 | Y | `TeamTalk` (3) | `KeyY` | yes | yes | TeamTalk ran; a multiplayer command, nothing opens in single player |
-| Z | `TurnLeft` = `Axis aBaseX Speed=-150.0` | `KeyZ` | yes | yes | the view turns left (yaw -9275 units) |
+| Z | `TurnLeft` = `Axis aBaseX Speed=-150.0` | `KeyZ` | yes | yes | the view turns left (yaw -7993 units) |
 | GreyStar | `Shot` | `NumpadMultiply` | yes | yes | delivered; stops at the screenshot command (UViewport::Exec SHOT is not implemented). the binding line Shot ran; the viewport command is refused with a toast and Play goes on |
-| GreyPlus | `QuickSave` | `NumpadAdd` | yes | yes | delivered; stops at the save game system (original native 3011 is not implemented; Stage 6). the binding line QuickSave ran; DeusExPlayer.QuickSave reached its native and Play paused with the runtime error |
-| NumPadPeriod | `Duck` = `Button bDuck \| Axis aUp Speed=-300.0` | `NumpadDecimal` | yes | yes | bDuck while held; the player crouches (eye 13.2) |
+| GreyPlus | `QuickSave` | `NumpadAdd` | yes | yes | the binding line QuickSave ran; DeusExPlayer.QuickSave runs with no runtime error and Play goes on (the slot it writes: save-game.spec.mjs) |
+| NumPadPeriod | `Duck` = `Button bDuck \| Axis aUp Speed=-300.0` | `NumpadDecimal` | yes | yes | bDuck while held; the player crouches (eye 13.0) |
 | GreySlash | `QuickLoad` | `NumpadDivide` | yes | yes | delivered; stops at loading a save (Stage 6's save system; only the confirmation is implemented). the original's confirmation opens (deusex.menuuimessageboxwindow); answering it would read a save |
 | Semicolon | `ReloadWeapon` | `Semicolon` | yes | yes | ReloadWeapon reloads the pistol: ClipCount 3 -> 0 (9 rounds left) |
 | SingleQuote | `SwitchAmmo` | `Quote` | yes | yes | SwitchAmmo cycles the shotgun's ammunition: deusex.ammoshell -> deusex.ammosabot |
 | MouseWheelDown | `NextBeltItem` | wheel down | yes | yes | NextBeltItem puts MedKit0 in hand. In a window: while a screen holds the mouse the root consumes the wheel keys and NextBeltItem does not run; over a scroll area (the Customize Keys list) it scrolls the list down |
 | MouseWheelUp | `PrevBeltItem` | wheel up | yes | yes | PrevBeltItem puts Multitool3 in hand. In a window: while a screen holds the mouse the root consumes the wheel keys and PrevBeltItem does not run; over a scroll area it scrolls the list up; rebound in MenuScreenCustomizeKeys (the wheel is taken as a key) to ParseRightClick, a notch up then runs it |
 
-76 bound lines (73 with an observed effect, 3 delivered and stopping at a later stage's system). Unbound lines of [Engine.Input]:
+76 bound lines (74 with an observed effect, 2 delivered and stopping at a later stage's system). Unbound lines of [Engine.Input]:
 
 | Key | Browser input | In Play |
 | --- | --- | --- |
@@ -319,11 +319,13 @@ and `inHand` and `Weapon` are `None` before thirty-six ticks (0.6 s) have passed
 ## Unsupported or not measured
 
 * **Gamepad** (`Joy1`–`Joy16`, `JoyX`…): no browser device is read.
-* **QuickSave** (`NumpadAdd`) stops Play on the original native 3011 (the save system) and **Shot** (`NumpadMultiply`) on `UViewport::Exec SHOT`;
-  **QuickLoad** (`NumpadDivide`) asks, and loading is Stage 6's.
+* **Shot** (`NumpadMultiply`) stops on `UViewport::Exec SHOT` with a toast; **QuickLoad** (`NumpadDivide`) asks, and the table does
+  not answer it. **QuickSave** (`NumpadAdd`) runs in Play since Stage 6 (DeusExPlayer.QuickSave saves unless a DataLink plays or the
+  player is dead; `save-game.spec.mjs` checks the slot); the headless validator's game, built without a travelling session, still
+  stops at SaveGame (native 3011).
 * **Numpad with NumLock off**: Windows then sends `VK_HOME`, `VK_UP`… for the numpad keys; the page always sends the NumLock-on key
   (`NumPad0`–`9`, `NumPadPeriod`), as a Mac keyboard has no NumLock to ask.
 * Keys with no virtual-key code in a browser (`IntlBackslash`, the Windows/Menu keys), and `PrintScreen`, which Windows browsers report only on keyup.
 * CapsLock on macOS reports keydown only when it turns on and keyup when it turns off, so `ToggleWalk` toggles twice per press-pair there.
-* Wheel feel on macOS trackpads and Firefox (the conversion constants), the browser-reserved chords and the real Escape under Keyboard Lock (above).
+* Wheel feel on macOS trackpads and a real wheel in Firefox (the conversion constants; Firefox's tickless `wheelDeltaY` is handled, above), the browser-reserved chords and the real Escape under Keyboard Lock (above).
 * A Wine run of the original: the original code is run in the oracle instead.

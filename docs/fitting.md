@@ -239,7 +239,8 @@ SHA-256 is now `b8d756044134efb1bbedbe2b842138d6b8d8dc970ef1a69edd0d03cb07ece10c
 Unverified: the Linux host's AMD x87 (its captures predate this entry's change).
 Node unit tests retain original coordinate captures and that table hash;
 `browser-tests/native-math.spec.mjs` verifies the same hash and a combined
-transform capture in Chromium. The Chromium check passes.
+transform capture in each browser project. It still expected the softfloat hash until
+2026-10-28; it passes in Chromium and Firefox since.
 
 ```sh
 NATIVE_PROBE_PYTHON=.cache/native-probe-env/bin/python node scripts/validate-native-coords.mjs

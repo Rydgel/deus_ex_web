@@ -1,5 +1,6 @@
 import { test, expect } from '@playwright/test';
 import { mkdir } from 'node:fs/promises';
+import { BASE } from './browsers.mjs';
 
 function errors(page) {
   const list = [];
@@ -11,7 +12,7 @@ function errors(page) {
 test('CRT leaves the recovered display ramp exact when disabled, including after resize', async ({ page }) => {
   const failures = errors(page);
   await page.route('**/__crt-fixture', route => route.fulfill({ contentType: 'text/html', body: '<canvas id="fixture"></canvas>' }));
-  await page.goto('http://127.0.0.1:5173/__crt-fixture');
+  await page.goto(`${BASE}/__crt-fixture`);
   const results = await page.evaluate(async () => {
     const THREE = await import('/node_modules/three/build/three.module.js');
     const { createDisplayRamp } = await import('/src/viewer/display-ramp.mjs');
@@ -63,7 +64,7 @@ test('CRT button and Alt+C work in Play, preserve input, and remember the prefer
   const failures = errors(page);
   const ready = () => page.waitForFunction(() => window.deusExViewer?.status().ready);
   const toggle = page.locator('#crt');
-  await page.goto('http://127.0.0.1:5173/?debug=1'); await ready();
+  await page.goto(`${BASE}/?debug=1`); await ready();
   await expect(toggle).toHaveAttribute('aria-pressed', 'false');
   await expect(toggle).toHaveAttribute('aria-keyshortcuts', 'Alt+C');
   await page.locator('#display-options').click();
@@ -135,7 +136,7 @@ test('CRT button and Alt+C work in Play, preserve input, and remember the prefer
 test('all CRT pipelines preserve the original comparison half, orientation, resize and off output', async ({ page }) => {
   const failures = errors(page);
   await page.route('**/__crt-fixture', route => route.fulfill({ contentType: 'text/html', body: '<canvas id="fixture"></canvas>' }));
-  await page.goto('http://127.0.0.1:5173/__crt-fixture');
+  await page.goto(`${BASE}/__crt-fixture`);
   const results = await page.evaluate(async () => {
     const THREE = await import('/node_modules/three/build/three.module.js');
     const { createDisplayRamp, CRT_PRESETS, prepareCrtPreset } = await import('/src/viewer/display-ramp.mjs');

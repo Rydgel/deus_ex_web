@@ -552,7 +552,8 @@ export async function runWindowCases(env, { rows }, results) {
   void rows;
 }
 
-/** The two keys whose command stops at a game system of a later stage; last, because QuickSave's stop pauses a page's Play. */
+/** Shot, whose viewport command stops with a toast, and QuickSave, which Stage 6's save system answers; last, because a save changes the
+ * Save directory. */
 export async function runBoundaryCases(env, _table, results) {
   const note = (key, info) => results.set(key, { ...results.get(key), ...info });
   const fresh = async () => { await env.state(); };
@@ -566,12 +567,21 @@ export async function runBoundaryCases(env, _table, results) {
   assert.ok(shotLog.commands.some(entry => entry.action === 1 && entry.line === 'Shot'), 'the binding line Shot ran');
   note('GreyStar', { status: 'boundary', reached: true, effect: 'the binding line Shot ran; the viewport command is refused with a toast and Play goes on',
     boundary: 'the screenshot command (UViewport::Exec SHOT is not implemented)' });
+  // DeusExPlayer.QuickSave returns without saving on the logo map, while Dying, Paralyzed or Interpolating, or while a DataLink plays
+  // (dataLinkPlay), else SaveGame(-1, QuickSaveGameTitle): whether a slot is written depends on the moment, and
+  // browser-tests/save-game.spec.mjs checks the slot. In Play the binding runs and Play goes on. `env.saves === false`: a game built
+  // without a travelling session (scripts/validate-input-bindings.mjs) has no game saver, so SaveGame (native 3011) stops there.
+  // (the page's error also carries a toast still shown, Shot's)
+  const before = await env.error();
   const save = await env.key('NumpadAdd', { hold: 60 });
   await env.wait(400);
   const saveError = save.error ?? await env.error();
-  assert.match(saveError ?? '', /quicksave|3011/i, 'QuickSave stops at an unimplemented native');
+  if (env.saves === false) assert.match(saveError ?? '', /3011/, 'QuickSave reaches SaveGame (native 3011), which needs a travelling session');
+  else assert.ok(saveError === null || saveError === before, `QuickSave runs without a runtime error (${saveError})`);
   const saveLog = await env.state();
   assert.ok(saveLog.commands.some(entry => entry.action === 1 && entry.line === 'QuickSave'), 'the binding line QuickSave ran');
-  note('GreyPlus', { status: 'boundary', reached: true, effect: 'the binding line QuickSave ran; DeusExPlayer.QuickSave reached its native and Play paused with the runtime error',
-    boundary: "the save game system (original native 3011 is not implemented; Stage 6)" });
+  note('GreyPlus', env.saves === false
+    ? { status: 'boundary', reached: true, effect: 'the binding line QuickSave ran; DeusExPlayer.QuickSave reached SaveGame',
+      boundary: 'a game without a travelling session (native 3011 needs the game saver, game-save.mjs)' }
+    : { status: 'ok', reached: true, effect: 'the binding line QuickSave ran; DeusExPlayer.QuickSave runs with no runtime error and Play goes on (the slot it writes: save-game.spec.mjs)' });
 }

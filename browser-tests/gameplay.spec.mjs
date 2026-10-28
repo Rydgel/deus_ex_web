@@ -1,14 +1,27 @@
 import { test, expect } from '@playwright/test';
 import { mkdir, writeFile } from 'node:fs/promises';
+import { BASE } from './browsers.mjs';
 test.use({ viewport: { width: 960, height: 640 } });
 
 const status = page => page.evaluate(() => window.deusExViewer.status());
 const player = async page => (await status(page)).gameplay.player;
-const settled = page => page.waitForFunction(() => window.deusExViewer?.status().ready && window.deusExViewer.status().gameplay?.player.grounded);
+// Worker mode: the first grounded status can be the spawn a tick before the walk lifts the player onto the floor (z -82.50, then
+// -80.20), and status() carries the game status of every 15th post. Settled is the simulation's own location (viewProbe), unchanged
+// over a poll, and status() showing it.
+const settled = async page => {
+  await page.waitForFunction(() => window.deusExViewer?.status().ready && window.deusExViewer.status().gameplay?.player.grounded);
+  const same = (a, b) => a.every((v, i) => Math.abs(v - b[i]) < 1e-4);
+  let last = null;
+  await expect.poll(async () => {
+    const [location, shown] = await page.evaluate(async () => [(await window.deusExViewer.viewProbe({})).location, window.deusExViewer.status().gameplay.player.position]);
+    const still = last !== null && same(location, last); last = location;
+    return still && same(shown, location);
+  }, { timeout: 20000 }).toBe(true);
+};
 
 test('training plays with gravity, stances, blocked doors, linked use, stairs and a reproducible reload', async ({ page }) => {
   const errors = []; page.on('pageerror', e => errors.push(e.message));
-  await page.goto('http://127.0.0.1:5173/?debug=1'); await settled(page);
+  await page.goto(`${BASE}/?debug=1`); await settled(page);
   await mkdir('reports/movement/browser', { recursive: true });
   const initial = await player(page);
   expect(await status(page)).toMatchObject({ mode: 'play', renderErrors: [],
@@ -68,7 +81,7 @@ test('training plays with gravity, stances, blocked doors, linked use, stairs an
 });
 
 test('Liberty Island has a valid playable spawn and the inspection camera leaves player state intact', async ({ page }) => {
-  await page.goto('http://127.0.0.1:5173/?debug=1'); await settled(page);
+  await page.goto(`${BASE}/?debug=1`); await settled(page);
   await page.getByRole('combobox', { name: 'Map', exact: true }).selectOption('01_NYC_UNATCOIsland'); await settled(page);
   expect(await status(page)).toMatchObject({ mode: 'play', map: '01_NYC_UNATCOIsland' });
   const initial = await player(page);

@@ -1,115 +1,70 @@
 import {test,expect} from '@playwright/test';
 import {mkdir} from 'node:fs/promises';
+import { BASE } from './browsers.mjs';
 
-test('ordinary use renders and plays the instructor, terminates, and survives Player start',async({page})=>{
+// The Training instructor (UNATCOTroop3) by ordinary use. The only setup is the simulation's place probe, which puts the player in
+// front of him and aims (it sets no frob target, flag, label or timer; the original HighlightCenterObject query selects him). The use is
+// the right mouse button (DefUser.ini RightMouse=ParseRightClick; F is CenterView). What the conversation does is read through the
+// simulation's probes, in either simulation mode (sim-worker.mjs `call`, or the page inline): conversationProbe for the conversation and
+// its speech, liveProbe for the frob target and the flags.
+// Before the simulation worker this spec patched main.mjs and read the page's own game; the subtitle window's tree and the speech's
+// decoded sample it read that way are checked headless by scripts/validate-instructor-conversation.mjs, not here.
+test('ordinary use plays the instructor, terminates, takes the second route after FlagTrigger, and survives Player start',async({page})=>{
  const errors=[];page.on('pageerror',e=>errors.push(e.message));
- // Test-only access for scene setup/observations. The shipped app keeps its
- // read-only diagnostics; all interaction is the real F key and simulation.
- await page.route('**/src/viewer/main.mjs*',async route=>{
-  const response=await route.fetch();
-  await route.fulfill({response,body:(await response.text()).replace('window.deusExViewer = { status };',`window.deusExViewer = { status };\nwindow.__instructorFixture={
-   // Speech plays on Galaxy's channels (docs/galaxy-audio.md "Speech through Galaxy's voices"):
-   // each SLOT_Talk channel's host-decoded sample, true once the page's decode is attached.
-   game:()=>game, audio:()=>{const a=game.doors.scriptRuntime.runtime.audio;
-    return a.galaxy.state.channels.filter(c=>(c.id&0xe)===10&&a.samples.get(c.sound)?.host).map(c=>Boolean(a.samples.get(c.sound).host.pcm));},
-   aim(){yaw=0;pitch=-.3;camera.rotation.set(pitch,yaw,0);},
-   park(){paused=true;},resume(){paused=false;},
-   subtitlesDefault:()=>subtitlePreference,
-   // Read the live original HUDConWindowFirst tree so a hidden or empty panel
-   // cannot pass as subtitle rendering. Offsets: windowFlags 48, firstChild 316,
-   // nextSibling 328, TextWindow text 360.
-   async subtitlePanel(){
-    const r=game.doors.scriptRuntime.runtime,p=game.player.collisionActor;
-    const c=r.namedReference(p,'conPlay').get();if(!c)return null;
-    const win=r.namedReference(c,'conWinFirst').get();if(!win)return null;
-    const shell=await game.doors.scriptRuntime.infoLinkShell();if(shell.isDestroyed(win))return null;
-    const tile=r.namedReference(win,'lowerConWindow').get(),texts=[];
-    for(let ch=shell.readNative(tile,316,'ptr');ch;ch=shell.readNative(ch,328,'ptr'))
-     if(r.instance(ch).cls.record.key==='extension.textwindow')texts.push(shell.readNative(ch,360,'string'));
-    return {visible:Boolean(shell.readNative(win,48,'u32')&1),texts};
-   }
-  };\n`)});
+ await page.goto(`${BASE}/?debug=1`);
+ await page.waitForFunction(()=>window.deusExViewer?.status().gameplay?.player.grounded);
+ const read=(names,props)=>page.evaluate(async([names,props])=>(await window.deusExViewer.liveProbe({read:{names,props}})).read,[names,props]);
+ const conversation=()=>page.evaluate(async()=>{
+  const {conPlay}=await window.deusExViewer.conversationProbe({});
+  return conPlay&&{con:conPlay.con,speaker:conPlay.event?.speaker??null,text:conPlay.event?.text??null};
  });
- await page.goto('http://127.0.0.1:5173/?debug=1');
- await page.waitForFunction(()=>window.__instructorFixture&&window.deusExViewer.status().gameplay?.player.grounded);
- await page.waitForTimeout(2500);
- const status=()=>page.evaluate(()=>{
-  const g=window.__instructorFixture.game(),r=g.doors.scriptRuntime.runtime,p=g.player.collisionActor;
-  const read=(o,k)=>r.namedReference(o,k).get(),c=read(p,'conPlay');
-  return {error:window.deusExViewer.status().runtimeError,active:Boolean(c),
-   name:c?read(read(c,'con'),'conName'):null,audio:window.__instructorFixture.audio(),
-   guards:window.deusExViewer.status().npcPreview.actors.filter(a=>a.actor.startsWith('UNATCO')).length,
-   failures:[...g.doors.scriptRuntime.npcFailures.values()]};
- });
- const aim=()=>page.evaluate(()=>{
-  const f=window.__instructorFixture,g=f.game(),r=g.doors.scriptRuntime.runtime,p=g.player.collisionActor;
-  const t=r.levelFor(p).actors.find(a=>a?.name==='UNATCOTroop3'),loc=r.namedReference(t,'Location').get();
-  g.collision.queries.changeActor(p,()=>{g.player.position=[loc[0]-80,loc[1],loc[2]];g.player.velocity=[0,0,0];});f.aim();
- });
- await page.locator('#tools-options').click();
- await page.getByLabel('Preview',{exact:true}).selectOption('instructor');
- await page.waitForFunction(()=>{
-  const g=window.__instructorFixture.game(),r=g.doors.scriptRuntime.runtime;
-  const t=r.levelFor(g.player.collisionActor).actors.find(a=>a?.name==='UNATCOTroop3');
-  return r.namedReference(t,'bCanConverse').get();
- });
- expect(await page.evaluate(()=>window.deusExViewer.status().mode)).toBe('play');
+ const flag=name=>page.evaluate(async name=>(await window.deusExViewer.liveProbe({flags:{}})).flags.entries.find(entry=>entry.name===name)?.value??0,name);
+ const error=()=>page.evaluate(()=>window.deusExViewer.status().runtimeError);
+ await expect.poll(async()=>(await read(['UNATCOTroop3'],['bCanConverse'])).UNATCOTroop3.bCanConverse,{timeout:20000}).toBeTruthy();   // (a bool reads as 1)
+ const troop=(await read(['UNATCOTroop3'],['Location'])).UNATCOTroop3.Location;
+ // In front of him, aimed at him, until the original's frob trace selects him.
+ const face=async offset=>{
+  await page.evaluate(([at])=>window.deusExViewer.placeProbe({location:at,lookAt:'UNATCOTroop3'}),[troop.map((v,i)=>v+offset[i])]);
+  await expect.poll(async()=>(await read(['@player'],['FrobTarget']))['@player'].FrobTarget,{timeout:5000}).toBe('UNATCOTroop3');
+ };
+ const use=()=>page.locator('#scene').click({position:{x:600,y:350},button:'right'});
  await page.locator('#scene').click({position:{x:600,y:350}});
- await page.waitForTimeout(300);await page.keyboard.press('KeyF');
- await expect.poll(async()=>(await status()).active).toBe(true);
- await expect.poll(async()=>(await status()).audio).toContain(true);
- // Subtitles default to the installed globalconfig (User.ini bSubtitles=True).
- const panel=()=>page.evaluate(()=>window.__instructorFixture.subtitlePanel());
- expect(await page.evaluate(()=>window.__instructorFixture.subtitlesDefault())).toBe(true);
- // The first-person panel shows the original speaker name and speech text.
- await expect.poll(async()=>{const s=await panel();return s&&s.visible?s.texts[0]:null;},{timeout:8000}).toBe('UNATCO Troop');
- expect((await panel()).texts.slice(1).some(t=>typeof t==='string'&&t.length>0)).toBe(true);
- await mkdir('reports/instructor',{recursive:true});await page.screenshot({path:'reports/instructor/subtitles-on.png'});
- await expect.poll(async()=>(await status()).active,{timeout:10000}).toBe(false);
- expect(await status()).toMatchObject({error:null,guards:4,failures:[]});
- // Toggle the discoverable preference off: the panel hides while speech plays.
- await page.locator('#tools-options').click();
- await page.locator('#diagnostics').click();
- await page.locator('#subtitles').uncheck();
- await page.locator('#close-panel').click();
- await page.waitForTimeout(1200); // past the original 1s repeat gate
- await aim();await page.locator('#scene').click({position:{x:600,y:350}});
- await page.waitForTimeout(300);await page.keyboard.press('KeyF');
- await expect.poll(async()=>(await status()).active).toBe(true);
- await expect.poll(async()=>(await status()).audio).toContain(true);
- let visibleSeen=false;for(let i=0;i<20;i++){const s=await panel();if(s&&s.visible)visibleSeen=true;await page.waitForTimeout(100);}
- expect(visibleSeen).toBe(false);
- await page.screenshot({path:'reports/instructor/subtitles-off.png'});
- await expect.poll(async()=>(await status()).active,{timeout:10000}).toBe(false);
- // Re-enable subtitles so the remaining flow keeps the original preference.
- await page.locator('#tools-options').click();
- await page.locator('#diagnostics').click();
- await page.locator('#subtitles').check();
- await page.locator('#close-panel').click();
- expect(await status()).toMatchObject({error:null,guards:4,failures:[]});
- // Natural movement through FlagTrigger.Touch selects the second route.
- await page.evaluate(()=>{
-  const f=window.__instructorFixture,g=f.game(),r=g.doors.scriptRuntime.runtime,p=g.player.collisionActor;
-  const t=r.levelFor(p).actors.find(a=>a?.name==='UNATCOTroop3'),v=r.namedReference(t,'Location').get();
-  g.collision.queries.changeActor(p,()=>{g.player.position=[v[0]-333,v[1]-60,v[2]+40];g.player.velocity=[0,0,0];});
- });
- await page.waitForTimeout(700);await page.keyboard.down('KeyW');
- await page.waitForFunction(()=>{
-  const g=window.__instructorFixture.game();return g.doors.scriptRuntime.runtime.namedReference(g.player.collisionActor,'flagBase').get().getBool('MunitionsTrooperReady');
- });
- await page.keyboard.up('KeyW');await aim();await page.waitForTimeout(300);await page.keyboard.press('KeyF');
- await expect.poll(async()=>(await status()).name).toBe('MunitionsTrooperTake');
- await expect.poll(async()=>(await status()).audio).toContain(true);
+ await page.waitForTimeout(2500);
+ expect(await page.evaluate(()=>window.deusExViewer.status().mode)).toBe('play');
+
+ // 1. The greeting: his speech, then the conversation ends by itself.
+ await face([-80,0,0]);await use();
+ await expect.poll(async()=>(await conversation())?.con??null).toBeTruthy();
+ await expect.poll(async()=>(await conversation())?.speaker??null,{timeout:8000}).toBe('UNATCOTroop3');
+ expect((await conversation())?.text?.length??0).toBeGreaterThan(0);
+ await mkdir('reports/instructor',{recursive:true});await page.screenshot({path:'reports/instructor/greeting.png'});
+ await expect.poll(conversation,{timeout:15000}).toBeNull();
+ expect(await error()).toBeNull();
+ expect((await page.evaluate(()=>window.deusExViewer.status().npcPreview.actors.filter(a=>a.actor.startsWith('UNATCO')).length))).toBe(4);
+
+ // 2. Natural movement through FlagTrigger.Touch sets MunitionsTrooperReady, and use then takes the second route.
+ await page.evaluate(([at])=>window.deusExViewer.placeProbe({location:at,rotation:[0,0,0]}),[troop.map((v,i)=>v+[-333,-60,40][i])]);
+ await page.waitForTimeout(700);
+ await page.keyboard.down('KeyW');
+ try{await expect.poll(()=>flag('MunitionsTrooperReady'),{timeout:20000}).toBe(1);}finally{await page.keyboard.up('KeyW');}
+ await page.waitForTimeout(1100);   // past the original 1 s repeat gate
+ await face([-80,0,0]);await use();
+ await expect.poll(async()=>(await conversation())?.con??null).toBe('MunitionsTrooperTake');
  await page.screenshot({path:'reports/instructor/surrender.png'});
- await expect.poll(async()=>(await status()).active,{timeout:15000}).toBe(false);
- await page.waitForTimeout(1100);await page.keyboard.press('KeyF');
- await expect.poll(async()=>(await status()).active).toBe(true);
+ await expect.poll(conversation,{timeout:20000}).toBeNull();
+ await page.waitForTimeout(1100);await use();
+ await expect.poll(async()=>(await conversation())?.con??null).toBeTruthy();
+
+ // 3. Player start ends the conversation and starts over; the instructor speaks again.
  await page.locator('#tools-options').click();
  await page.getByRole('button',{name:'Player start',exact:true}).click();
- expect(await status()).toMatchObject({active:false,audio:[],error:null,failures:[]});
- await page.waitForTimeout(2500);await aim();await page.locator('#scene').click({position:{x:600,y:350}});
- await page.waitForTimeout(300);await page.keyboard.press('KeyF');
- await expect.poll(async()=>(await status()).active).toBe(true);
- await expect.poll(async()=>(await status()).active,{timeout:10000}).toBe(false);
- expect(errors).toEqual([]);expect((await status()).error).toBeNull();
+ await page.waitForFunction(()=>window.deusExViewer.status().gameplay?.player.grounded);
+ await expect.poll(conversation).toBeNull();
+ expect(await error()).toBeNull();
+ await page.waitForTimeout(2500);
+ await face([-80,0,0]);await use();
+ await expect.poll(async()=>(await conversation())?.con??null).toBeTruthy();
+ await expect.poll(conversation,{timeout:15000}).toBeNull();
+ expect(await error()).toBeNull();
+ expect(errors).toEqual([]);
 });

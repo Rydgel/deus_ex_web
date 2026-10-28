@@ -62,6 +62,8 @@ const env = {
   place: async args => placeProbe(game, args),
   settings: async step => settingsProbe(game, step),
   error: async () => lastError,
+  // a game built without a travelling session: no game saver for SaveGame (native 3011)
+  saves: false,
 };
 
 const results = await runInputBindings(env, table);
