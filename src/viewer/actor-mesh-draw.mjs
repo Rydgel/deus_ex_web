@@ -353,7 +353,16 @@ export function createMeshDraw(assets,creation,{gpu=null,texturePool,batches=nul
   }
   const built=(sourceEntry.ready?Promise.resolve():sourceEntry.pending.then(asset=>{source=sourceEntry.ready;core();}))
     .then(build).catch(error=>{onError({actor:`${actorName}`,message:error.message});dispose();});
-  return {id,root,built,get ready(){return ready;},get path(){return mode;},dispose,updateView,
+  /** The simulation side's conversion after a context loss (actor-mesh-sim.mjs leaveGpu): the posed vertices and LOD
+   * state of the current pose, then the CPU path. The next frame's record shows it again. */
+  function leaveGpu(record){
+    if(disposed)return;
+    latest.posed=record.posed;
+    if(record.lod!==undefined)latest.lod=record.lod.resolved?record.lod:null;
+    toCpu();
+    if(ready&&record.lod!==undefined)lodUVs();
+  }
+  return {id,root,built,get ready(){return ready;},get path(){return mode;},dispose,updateView,leaveGpu,
     get viewDependent(){return creation.environment&&mode==='cpu'&&!creation.classic;},
     /** Validation access (main.mjs meshLod): the faces this binding's
      * geometry draws under the LOD and their distinct vertices, the groups
@@ -512,6 +521,8 @@ export function createActorMeshDraw(assets,{gpu=null,lit=false,displayGamma,feed
       return draw;
     },
     release(id){bindings.get(id)?.dispose();bindings.delete(id);},
+    /** The conversions of a context restore (actor-mesh-sim.mjs leaveGpu), in their order. */
+    leaveGpu(records){for(const record of records)bindings.get(record.id)?.leaveGpu(record);},
     /** One main frame (actor-mesh-sim.mjs update): the records in order,
      * then the GPU passes with the lighting frame's coordinates. */
     apply({records,camera},cameraPosition,words=null){

@@ -24,6 +24,8 @@ export function createWeaponOverlayDraw(assets,{gpu=null,displayGamma,feedback=(
       return draw;
     },
     release(id){draws.get(id)?.dispose();draws.delete(id);handles.delete(id);},
+    /** The conversions of a context restore (weapon-overlay-sim.mjs leaveGpu), in their order. */
+    leaveGpu(records){for(const record of records)draws.get(record.id)?.leaveGpu(record);},
     /** Whether a binding of this actor handle has its meshes (?simVerify). */
     built:handle=>[...handles].some(([id,value])=>value===handle&&draws.get(id)?.ready),
     /** A frame record's state before any draw: the records and decisions

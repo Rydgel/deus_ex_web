@@ -124,6 +124,9 @@ export async function createWeaponOverlaySim(runtime,assets,playerSource,{kernel
     all:()=>[...entries.values()].map(entry=>entry.binding),
     /** The HUD actor bindings in use (validation access). */
     hudAll:()=>[...hudEntries.values()].map(entry=>entry.binding),
+    /** A context loss took the GPU path's cache poses (docs/context-loss.md): the view model's bindings leave it, as the
+     * actors' do (actor-mesh-sim.mjs leaveGpu). */
+    leaveGpu:reason=>[...entries.values()].map(entry=>entry.binding.leaveGpu(reason)).filter(Boolean),
     /** One GC.DrawActor draw (docs/gc-draw-actor.md), called with the actor in the state XGC::DrawActor set and the main
      * camera's `frustum`, `lodInputs`, `settings` and `admit` as frame() takes them: the actor's binding updated in the
      * master frame (lit as its own light sink, as Canvas.DrawActor's) with the record the page draws, whether

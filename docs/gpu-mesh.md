@@ -683,7 +683,10 @@ pairs; actors 9.30 → 3.63, render 3.16 → 1.83); see
 * A GPU-path actor that hits an unsupported case (tween count expansion,
   more than 32 selected lights, capacity) converts to the CPU path exactly
   and stays there; `summary.gpuFallback` records why. None occurred in the
-  validated runs.
+  validated runs. A WebGL context loss takes the cache poses of every binding,
+  so after the restore all of them convert the same way, and `restore`
+  rebuilds the instance's GL objects for the actors admitted later
+  ([context loss](context-loss.md)).
 * The GPU's subnormal handling was not exercised by any compared value.
 * Actor meshes, batches and the static world's meshes have
   `matrixAutoUpdate` off (identity local transforms). A mesh added under a

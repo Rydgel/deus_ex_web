@@ -1281,6 +1281,20 @@ defaults, because the kept classes hold them, and a collected class loads again 
   change. The removed arrays were leaves; the cost is in the pointer-rich script
   object model, which steps 3 to 9 address.
 
+**Progress (2026-10-28): graphics context loss.** Play follows D3DDrv's own rule for a
+lost device ([context loss](context-loss.md)). `Lock` sleeps in 100 ms steps while the
+device is gone, rebuilds it with `SetRes`, and stops with "Failed resetting mode" if it
+cannot (0x1000323f..0x10003314).
+* While the WebGL context is lost, nothing is simulated. The first tick after the
+  restore carries the whole wait, as the original's does.
+* three.js rebuilds its own resources. The page then rebuilds the GPU mesh
+  instances' raw WebGL2 objects.
+* The actors whose cache poses only the GPU held move to the CPU path exactly, for
+  the rest of the level.
+* `validate-context-loss-play` checks this in Chromium's worker and inline modes and
+  in Firefox. The frames after a loss equal a run with no loss byte for byte, and the
+  next tick advances `Level.TimeSeconds` by the whole wait.
+
 Done when declared browser/performance targets pass repeatable tests, long sessions
 and repeated map changes remain stable, and failures offer useful recovery paths.
 Retain automated format/runtime tests and fixed-camera visual comparisons throughout

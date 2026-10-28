@@ -778,6 +778,14 @@ function* meshBindingSteps(runtime,actor,{id,originalObjectIndex,kernel=null,dra
           return lodMeshCameraMatrix(payload,actor,attach?attach.coords(frameIndex):[...at.origin,...at.axes[0],...at.axes[1],...at.axes[2]],services);
         }}),
       get location(){return [...read(actor,'Location')];},get rotation(){return [...read(actor,'Rotation')];},
+      /** Leave the GPU path after a context loss took the cache poses its
+       * state textures held (docs/context-loss.md): the conversion record
+       * for the page (gpu-mesh.mjs restore), or null on the CPU path. */
+      leaveGpu(reason){
+        if(disposed||mode!=='gpu')return null;
+        toCpu(reason);toCpuReason=null;
+        return {id,toCpu:reason,posed:posedCopy(),...(meshLod?{lod:lodRecord()}:{})};
+      },
       /** Validation access (lod-probe.mjs): the last update's LOD inputs,
        * selection, returned count, final state and drawn faces. */
       lodState:()=>lastLod?{...lastLod,frames:(lastLod.frames??[]).map(entry=>({...entry,...frameStateOf(entry.index)})),mesh:meshReference.key,meshPackage:meshReference.asset?.name??null,meshIndex:meshReference.index??null,
@@ -1483,6 +1491,9 @@ export async function createActorMeshSim(runtime,assets,asset,{kernel,player:pla
     itemSlots:()=>[...itemPools].map(([actor,pool])=>({actor:actor.name,ids:pool.map(entry=>entry.binding?.id??null),
       extras:(itemExtras.get(actor)??[]).map(entry=>entry.binding?.id??null)})),
     async ready(){await Promise.all(pending.values());},
+    /** A context loss took the GPU mesh path's cache poses (docs/context-loss.md): every binding on that path leaves it.
+     * The page applies the records in this order before any later frame's (actor-mesh-draw.mjs leaveGpu). */
+    leaveGpu(reason){return all().map(binding=>binding.leaveGpu(reason)).filter(Boolean);},
     dispose(){disposed=true;weapons.dispose();for(const binding of all())binding.dispose();itemPools.clear();itemExtras.clear();},
   };
 }

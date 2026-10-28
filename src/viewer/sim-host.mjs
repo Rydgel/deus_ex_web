@@ -222,6 +222,9 @@ export async function createSimHost(map, asset, assets, { randomSeed, subtitles,
     scriptProcess: runtime.process,
     // The current BSP occlusion (validation: scripts/validate-detail-play-sim.mjs runs a reference pass over it).
     occlusion: () => occlusionNow,
+    // The page's WebGL context was lost and restored (docs/context-loss.md): the bindings whose cache poses the GPU mesh
+    // instances held take the CPU path; the page applies these records before any later frame's.
+    leaveGpu: reason => ({ actors: actorSim?.leaveGpu(reason) ?? [], weapon: weaponSim?.leaveGpu(reason) ?? [] }),
     // The next map's host replaces this one: nothing runs this runtime again,
     // so its identities leave the process-wide handle table, which would
     // otherwise keep the whole runtime alive (script-object-handles.mjs).

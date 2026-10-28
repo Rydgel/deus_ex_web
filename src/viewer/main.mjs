@@ -289,6 +289,9 @@ function useFrameProjection(projection, mirror = 1) {
 let hudRenderer=null;
 const flashPass=createFlashPass();
 const shaderWarmup=shaderWarmupOn()?createShaderWarmup(renderer):null;
+/** A level's shader warm-up: at its load, and again after a context restore (docs/context-loss.md). */
+const levelWarmup=(level,gpu)=>shaderWarmup?.start({world:level,gpu,displayGamma:level.displayGamma,
+  mirrors:level.mirrors.stats.planes>0,detail:detailTexturesOn(),roots:[displayRamp?.scene,flashPass.scene].filter(Boolean)})??null;
 let npcPreview=null;
 let spriteScene=null,coronaPass=null,decalScene=null,detailScene=null;
 // Actor mesh animation and lighting run on the GPU (docs/gpu-mesh.md), on by
@@ -961,10 +964,7 @@ async function loadMap(name, { travel = null, currentFiles = null } = {}) {
     if (!simClient) simHost?.disposeAudio?.();
     if (overlapped) { overlapped.scene(scenePart); overlapped.scene = null; }
     // The level's shader programs build while the simulation side loads (shader-warmup.mjs).
-    try {
-      warming = shaderWarmup?.start({ world: nextWorld, gpu: nextGpuMesh, displayGamma: nextWorld.displayGamma,
-        mirrors: nextWorld.mirrors.stats.planes > 0, detail: detailTexturesOn(), roots: [displayRamp?.scene, flashPass.scene].filter(Boolean) }) ?? null;
-    } catch (error) { console.warn('shader warm-up failed', error); }
+    try { warming = levelWarmup(nextWorld, nextGpuMesh); } catch (error) { console.warn('shader warm-up failed', error); }
     nextHost = simClient ? remoteHost(await overlapped.reply) : await createSimHost(nextMap, asset, assets, { ...hostOptions,
       musicLibrary: pageMusicLibrary, process: keepProcess, restore: Boolean(filed),
       onAudioVoice: event => { void galaxyVoice(event); },
@@ -1833,6 +1833,45 @@ document.addEventListener('keyup', event => {
 });
 window.addEventListener('blur', () => { keys.clear(); crtShortcutHeld = false; drag = false; paused = true; simInput.reset({releasePhysical:true}); });
 document.addEventListener('visibilitychange', () => { keys.clear(); if (document.hidden) { paused = true; simInput.reset({releasePhysical:true}); } });
+// Graphics context loss (docs/context-loss.md). D3DDrv's Lock tests the device every frame, sleeps while it is unavailable and rebuilds it
+// with SetRes (0x1000323f..0x10003314): the game thread does nothing meanwhile, and the next tick's delta holds the whole wait. Here a lost
+// context stops the simulation (animate posts and ticks nothing, and the clocks keep the last frame's time), and once three.js has made its
+// new GL state, restoreGraphics rebuilds what three.js does not manage before the simulation runs again.
+const graphics = { lost: false, pending: false, restoring: false, losses: 0, restores: 0, converted: 0, lastRestore: null, held: [], drawnLost: 0 };
+const GRAPHICS_LOST = 'The browser lost the graphics device: the game waits for it. Reload the page if it does not come back.';
+renderer.domElement.addEventListener('webglcontextlost', () => {
+  graphics.lost = true; graphics.pending = false; graphics.losses++; graphics.drawnLost = 0; gpuTimer = null;
+  $('toast').textContent = GRAPHICS_LOST;
+});
+// (three.js's own listener, added when the renderer was made, runs first; during a load, animate starts the rebuild once it is done)
+renderer.domElement.addEventListener('webglcontextrestored', () => {
+  graphics.lost = false; graphics.pending = true;
+  if (world && !loading) void restoreGraphics();
+});
+async function restoreGraphics() {
+  graphics.pending = false; graphics.restoring = true;
+  const started = performance.now();
+  try {
+    gpuMesh?.restore(); weaponGpu?.restore();
+    frameKeeper.reset(); gpuTimer = null;
+    // A snapshot simulated before the loss that arrived after the restore is applied now, before the conversions.
+    let inFlight = 0;
+    if (simClient) { await simClient.settled(); for (let snap; (snap = graphics.held.shift() ?? simClient.take()); inFlight++) drawFrame(snap, performance.now()); }
+    // The bindings whose cache poses the GPU held take the CPU path, in the simulation side's order, before any later frame's records.
+    const reason = 'the WebGL context was lost', none = { actors: [], weapon: [] };
+    const records = !gpuMesh && !weaponGpu ? none : simClient ? await simClient.call('leaveGpu', { reason }) : simHost?.leaveGpu?.(reason) ?? none;
+    npcPreview?.draw.leaveGpu(records.actors); weaponDraw?.leaveGpu(records.weapon);
+    const converted = records.actors.length + records.weapon.length;
+    // The level's shader programs again: three.js's program cache went with the old context.
+    const warming = levelWarmup(world, gpuMesh);
+    if (warming) await warming.finish();
+    graphics.converted += converted; graphics.restores++;
+    // `drawnLost`: snapshots applied while the context was lost; `inFlight`: those applied by this restore
+    graphics.lastRestore = { converted, drawnLost: graphics.drawnLost, inFlight, ms: Math.round(performance.now() - started) };
+    if ($('toast').textContent === GRAPHICS_LOST) $('toast').textContent = '';
+  } catch (error) { pauseForRuntimeError(new Error(`The graphics device came back, but restoring it failed: ${error.message}`)); }
+  finally { graphics.restoring = false; }
+}
 function status() {
   return {
     storage: configPersistence ? { ...configPersistence.status() } : null, saves: savePersistence ? savePersistence.status() : null,
@@ -1850,6 +1889,8 @@ function status() {
     crt: crtEnabled, crtShader, crtCompare,
     rotation: [pitch, yaw], wireframe: $('wireframe').checked, actorMarkers: $('actor-markers').checked, cameraMoved,
     calls: renderer.info.render.calls, frame: renderer.info.render.frame, shaderWarmup: shaderWarmupResult,
+    graphics: { lost: graphics.lost || graphics.pending || graphics.restoring, losses: graphics.losses, restores: graphics.restores,
+      converted: graphics.converted, lastRestore: graphics.lastRestore },
   };
 }
 // A small read-only diagnostic hook also makes browser regressions reproducible.
@@ -2171,6 +2212,17 @@ function animate(time) {
   if (exited) return;
   if (held === 'releasing') { held = false; lastTime = simLastPost = time - 1000 / 60; }
   if (held) { lastTime = time; return; }
+  // A lost context (docs/context-loss.md): nothing is simulated, and lastTime and simLastPost keep the last frame's time, so the first frame
+  // after the restore carries the whole wait in its dt. A snapshot simulated before the loss is applied as it arrives (its draws reach the
+  // lost context, where they do nothing).
+  if (graphics.lost || graphics.pending || graphics.restoring) {
+    if (graphics.lost && simClient && !lockstep && world && !loading) { const snap = simClient.take(); if (snap) drawFrame(snap, time); }
+    if (graphics.pending && !loading) {
+      if (world) void restoreGraphics();
+      else { graphics.pending = false; if ($('toast').textContent === GRAPHICS_LOST) $('toast').textContent = ''; }
+    }
+    return;
+  }
   const dt = Math.max(0, (time - lastTime) / 1000); lastTime = time;
   const frameStart = phaseMark = performance.now();
   if (world && !loading) {
@@ -2215,6 +2267,7 @@ function drawFrame(snap, time) {
   // Drawn frames: the fps counter's and framePhases' `draws` (with
   // ?sim=worker a display frame without a new snapshot draws nothing).
   framePhases.draws++; frameCount++;
+  if (graphics.lost) graphics.drawnLost++;
   let playerView = null, renderRect = null;
   // A snapshot draws as the frame it was simulated for, whatever the page's
   // mode and canvas are now (with ?sim=worker it was posted a display frame
@@ -2475,7 +2528,8 @@ function drawFrame(snap, time) {
   else if (crtEnabled) (crtMaterialRamp ??= createDisplayRamp()).apply(renderer, 1, true, crtShader, crtCompare);
   gpuEnd();
   phase('ramp');
-  if (keepingFrames) { frameKeeper.keep(); serveSaveSnapshots(); }
+  // (a frame drawn into a lost context is not kept: a save's snapshot waits for one drawn after the restore)
+  if (keepingFrames && !graphics.lost) { frameKeeper.keep(); serveSaveSnapshots(); }
   $('crosshair').hidden=mode==='play'&&Boolean(hudRenderer);
   placePageButtons();
   if ($('inspect').checked && time - lastInspect > 150) {
@@ -2492,6 +2546,8 @@ function drawFrame(snap, time) {
 /** ?sim=worker in lockstep: a snapshot drawn as it arrives. */
 function drawLockstep(snapshot) {
   if (!world || loading) return;
+  // (between a context restore and its rebuild a snapshot waits for restoreGraphics)
+  if (graphics.pending || graphics.restoring) { graphics.held.push(snapshot); return; }
   const frameStart = phaseMark = performance.now();
   drawFrame(snapshot, frameStart);
   framePhases.total += performance.now() - frameStart;

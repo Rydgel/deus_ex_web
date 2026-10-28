@@ -68,8 +68,10 @@ export function createShaderWarmup(renderer) {
       // (a program three.js has deleted since, its last material disposed, has no GL program left to ask)
       const live = () => built.filter(program => program.program !== undefined);
       const parallel = renderer.extensions.has('KHR_parallel_shader_compile');
+      // (a lost context never reports a completion status: its programs are built again after the restore, docs/context-loss.md)
+      const gl = renderer.getContext();
       const linked = parallel ? (async () => {
-        for (let waiting = built; waiting.length; waiting = live().filter(program => !program.isReady()))
+        for (let waiting = built; waiting.length && !gl.isContextLost(); waiting = live().filter(program => !program.isReady()))
           await new Promise(resolve => setTimeout(resolve, 10));
         return performance.now() - start;
       })() : Promise.resolve(null);
