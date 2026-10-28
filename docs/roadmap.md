@@ -1266,6 +1266,18 @@ returns to and a loaded game from their saved files, as the worker does; before,
 (`validate-inline-restore-play`, in Firefox and Chromium). That finished step 6: the travel no longer carries class
 defaults, because the kept classes hold them, and a collected class loads again with its package's, as in the original.
 
+**Progress (2026-10-27/28): frame time and GC pauses.**
+* FindPathToward's search runs in the Rust core, and the worker's promoted garbage
+  halved. On the Island in Chromium, worker frames fell from 14.6 to 12.2 ms (p50).
+* The page builds a level's shader programs while it loads, so no frame in play
+  compiles one ([frame cost](play-frame-cost.md) "October 27").
+* Firefox stays inline. With the busy queue, its worker trades inline's several
+  100 to 133 ms frames a minute for one or two 420 to 480 ms GC freezes.
+* Both modes' pauses follow the live heap. [Live heap](live-heap.md) measures it
+  owner by owner and orders the plan to move its largest parts out of the GC heap.
+  The largest single item is the page's light-map texel points: 5.5 M objects,
+  about a third of the inline heap.
+
 Done when declared browser/performance targets pass repeatable tests, long sessions
 and repeated map changes remain stable, and failures offer useful recovery paths.
 Retain automated format/runtime tests and fixed-camera visual comparisons throughout

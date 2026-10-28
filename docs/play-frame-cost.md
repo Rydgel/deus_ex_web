@@ -69,7 +69,8 @@ idle `DOM_WORKER` shrinking GCs also run (170 to 660 ms). So the worker trades i
 (incremental slices raised to 100 ms) for one or two 420 to 480 ms freezes, at a third more CPU. Firefox stays inline. Both modes'
 pause follows the live heap: in the worker the one slice marks it all; inline, the slices grow once allocation during marking
 reaches the incremental limit, which (from SpiderMonkey's default GC parameters, not checked here) is only 1.1 times the trigger
-for a heap past 500 MB and larger for smaller heaps.
+for a heap past 500 MB and larger for smaller heaps. What the live heap holds, owner by owner, and the plan to move its largest
+parts out of the GC heap: [live heap](live-heap.md).
 
 **After both (one roam each, so indicative).** Chromium worker, Island, 150 s against the 120 s baseline: worker frame p50 14.6 →
 12.2 ms, p95 20.3 → 17.8, p99 27.0 → 23.8, tick 8.6 → 6.8 ms (most likely `pawnView`, which was built per locomotion call, per
