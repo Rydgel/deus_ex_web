@@ -169,7 +169,6 @@ export class EventHost {
     view.setUint32(slot + 24, decision.size, true);
     view.setUint32(slot + 28, decision.param, true);
     view.setUint32(slot + 32, decision.template, true);
-    view.setUint32(slot + 36, decision.probe ?? 0xffffffff, true);
   }
   /** Whether the slot holds the current key for this dispatch (verify). */
   sameKey(handle, which, slot) {
@@ -241,6 +240,7 @@ export class EventHost {
     view.setUint32(slot + 24, decision.code, true);
     view.setUint32(slot + 28, decision.size, true);
     view.setUint32(slot + 32, decision.template, true);
+    view.setUint32(slot + 36, decision.probe ?? 0xffffffff, true);
   }
   callDecision(frame, node, handle, sig) {
     const js = {kind: K_JS, code: 0, size: 0, template: 0};

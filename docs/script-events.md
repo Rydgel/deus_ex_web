@@ -269,6 +269,13 @@ the body runs exactly when the name is outside the range, the object has no Stat
 with the gate disabled. In the Rust CALL the callee's probe index travels with the call cache entry (word 9) and CALL_BLOCK (word 3); the test
 reads the state table's probe words (`natives.rs probing_name`) after the arguments, as ProcessInternal does.
 
+Until 2026-10-28 the host's `js_call_resolve` (`EventHost.callResolve`) did not write word 9: the write had gone into the event cache's
+`resolve`, whose slot ends at word 8 and whose word 9 nothing reads. Rust's `begin_call` writes only the key words, so a call slot's word 9
+stayed 0, which `probing_name` reads as a name outside the probe range: a call begun from the cache ran whatever the mask said. The
+validator's own `js_call_resolve` writes the word, so only `DISPATCH_VERIFY=1` saw the difference (a stale-slot error on the probe word).
+`callResolve` now writes it. bench-sim's state digests (300 ticks, with and without `SCRIPT_VM_CHECK`, `STATE_VERIFY`, `DISPATCH_VERIFY` and
+`RECEIVER_VERIFY`) are unchanged on the Island, Training and the 747: within those ticks the gate on cached calls changes no state there.
+
 ## Boundaries left unresolved
 
 The disassembly establishes the gate order and byte-level frame ABI, but it

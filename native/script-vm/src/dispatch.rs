@@ -366,15 +366,15 @@ pub(crate) fn dispatch_event(handle: u32, which: u32, delta: f64, has_delta: boo
 // only on the receiver's class and state node; the checks depend on the
 // function and the call site. `js_call_resolve` fills a slot with
 // beginCall's decision, the JavaScript path or a Rust run: the callee's
-// code, frame size and run template. A hit pushes the zeroed block and
-// records the run (RUNS) without an import. The epoch and verify words are
-// EVENTS'; the host also advances the epoch when a boundary function is
-// added or removed.
+// code, frame size, run template and probe index. A hit pushes the zeroed
+// block and records the run (RUNS) without an import. The epoch and verify
+// words are EVENTS'; the host also advances the epoch when a boundary
+// function is added or removed.
 
 /// CALLS = [table, slot count (a power of two), enabled].
 static mut CALLS: [u32; 3] = [0; 3];
 // A call slot: [caller code, node, class row, state row, epoch, kind,
-// callee code, frame size, template].
+// callee code, frame size, template, probe index].
 const CALL_SLOT: u32 = 48;
 
 #[no_mangle]
@@ -385,8 +385,8 @@ pub extern "C" fn vm_calls_ptr() -> *mut u32 {
 #[link(wasm_import_module = "env")]
 extern "C" {
     /// beginCall's decision for the CALL `node` of run `frame` on `handle`
-    /// into the slot at `slot` (kind, code, size, template); under verify,
-    /// compared with a filled slot first. Runs no script.
+    /// into the slot at `slot` (kind, code, size, template, probe); under
+    /// verify, compared with a filled slot first. Runs no script.
     fn js_call_resolve(frame: u32, node: u32, handle: u32, sig: u32, slot: u32);
 }
 
