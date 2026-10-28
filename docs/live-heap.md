@@ -46,7 +46,7 @@ Objects are what a major GC marks, so the plan counts objects first and bytes se
 ArrayBuffer and Wasm memory is marked as one object per buffer, not element by
 element.
 
-## The Island, 2026-10-28
+## The Island, 2026-10-28 (before step 1)
 
 Linux host, 30 s walk after a map-list load, after forced GCs.
 
@@ -98,10 +98,10 @@ the end.
 From reading the code (2026-10-28). The behavior of each reader is as found. Where a
 claim is unverified it is said so.
 
-**Light-map texel points (page).** `src/unreal/lighting.mjs` `surface()` (lines 345-346)
-builds `points` eagerly for every lit surface. It holds `transform(basis.point(x, y))`
-for each texel, with `transform` the identity or a mover's matrix. The only reader is
-`inFrustum` (`src/viewer/world.mjs:26-29`): `THREE.Sphere.setFromPoints` over them,
+**Light-map texel points (page; gone since step 1).** `src/unreal/lighting.mjs` `surface()`
+built `points` eagerly for every lit surface. They held `transform(basis.point(x, y))`
+for each texel, with `transform` the identity or a mover's matrix. The only reader was
+`inFrustum` (`src/viewer/world.mjs`): `THREE.Sphere.setFromPoints` over them,
 once per record. That happens only when a ViewportWindow's frustum culls light maps
 (`syncMovingLights`, `updateTextureAnimation`), and mover records never reach it.
 `refill`, `invalidate`, the animation kernel and the moving lights use `basis`,
@@ -182,18 +182,18 @@ these checks:
   (`.work/hitch/ab-ff.sh`, `ff-gaps.mjs`);
 * a Chromium worker frame A/B, to show no regression.
 
-Steps are in order of objects removed per unit of work.
+Step 1 is done, and its measurement re-ranks the rest. A major GC's time follows the
+pointer-rich structures, not the heap's bytes or object count (see "Step 1's
+results"). Steps 2 to 9 keep their order of work, but are judged by the references
+they remove (the edge counts in `heap-families.mjs`), and each is measured by the
+Firefox GC markers, not only by heap size.
 
-1. **Light-map texel points on demand (page).** `surface()` stops building `points`.
-   `inFrustum` computes the record's sphere on first need from `basis` and
-   `transform`: the same points, so the same sphere.
-   * Expected: −5.5 M objects on the page in both modes. In worker mode the page goes
-     from 7.9 M to about 2.4 M, and inline from 17.0 M to about 11.5 M objects.
-     Firefox's inline GC heap should drop by about 200 MB, from 596 MB to about
-     390 MB. The world build also skips 2.77 M allocations.
-   * Verify with the validators that draw a ViewportWindow (its light-map frustum).
-   * Also a calibration: the Firefox draw gaps after this step show how much of the
-     long frames goes with a third of the inline heap, which re-ranks the later steps.
+1. **Light-map texel points on demand (page): done 2026-10-28.** `surface()` no longer
+   builds `points`. `inFrustum` computes the record's sphere on first need with
+   `texelSphere` (`world.mjs`): the same points and the same box, centre and radius
+   operations as `THREE.Sphere.setFromPoints`. `validate-texel-sphere` checks that
+   both give the same doubles for every lit surface of the Island and Training, and
+   for the Island under a mover's matrix: 18,602 records, 6.6 M texels.
 2. **Copies nothing reads (both realms).**
    * Drop `metadata.serialized`.
    * Drop the per-function bytecode copy once decoded; the package bytes stay.
@@ -247,15 +247,65 @@ are large and follow the Rust core's direction. The V8-only costs (boxed doubles
 late-added properties) come after, only if Chromium ever needs them.
 
 Rough end state, an estimate to be replaced by measurement: the worker from 18 M to
-about 6 to 8 M objects, the page from 7.9 M to about 2 M in worker mode, and the inline
-page from 17 M to about 7 M.
+about 6 to 8 M objects, and the inline page from 17 M to about 7 M. After step 1 the
+page in worker mode holds 2.4 M.
+
+## Step 1's results (2026-10-28)
+
+Linux host, the Island, Firefox 155 and Chromium; before is master `d3040bad`.
+* **The test that before and after compute the same:** `validate-texel-sphere`, the
+  lighting validators that drive the frustum path (`validate-moving-lights-incremental`,
+  `-auglight-lighting`, `-moving-light-effects`, `-light-animation-rust`), and the
+  whole `-play` group (73 pass; the 3 failures are the known reds: `host-services-play`,
+  and `lodmesh-lod-play` and `master-frame-play` timing out). The change is page-only
+  (`createLighting` has no other user), so the simulation's digests cannot move.
+* **Heaps.**
+
+  | | Before | After |
+  | --- | --- | --- |
+  | Chromium page, worker mode | 7.89 M objects, 27.3 M edges, 248 MB | 2.39 M objects, 10.8 M edges, 108 MB |
+  | Firefox inline page, GC heap | 596 MB (Arrays 268 MB) + 132 MB slots and elements | 404 MB (Arrays 80 MB) + 102 MB |
+
+* **Load.** In Chromium inline, two interleaved pairs (`profile-map-load.mjs --sim
+  inline`): the world build took 992 and 993 ms against 1,204 and 1,207 ms before. The
+  first drawn frame came at 6.82 and 6.81 s against 7.09 and 7.11 s.
+* **GC, from Gecko profiles.** One 100 s inline roam per side, the page's content
+  process. The play-time major GCs marked for 303, 496, 496 and 498 ms in total, against
+  340, 511, 523 and 522 ms before: about 5% less. There were 8 major GCs in each run. In
+  both, the last slices' budgets still rise from about 30 to 100 ms.
+* **Draw gaps.** Three interleaved pairs, 100 s roams, the 65 s after the first 40 s
+  (`.work/hitch/ab-ff-code.sh` with a second server serving the old files,
+  `.work/tools/serve-variant.mjs`):
+
+  | | Gaps over 90 ms | Gaps over 50 ms | Longest gap | fps |
+  | --- | --- | --- | --- | --- |
+  | Before | 2, 6, 2 | 60, 25, 24 | 150, 134, 134 ms | 38.0, 44.0, 44.1 |
+  | After | 6, 1, 9 | 23, 16, 25 | 134, 117, 150 ms | 45.4, 48.7, 39.5 |
+
+  No change beyond the run-to-run spread.
+
+**What it says about the plan.** A third of Firefox's inline GC heap went, and the
+marking time fell by about 5%. The texel points were leaves (arrays of three doubles,
+nothing inside to trace), so marking them was cheap. The marking cost is in what
+remains: objects with many references (Objects 184 MB, Functions, Maps and closures,
+mostly the script object model). The long frames come from the incremental slices'
+budgets rising while the page keeps allocating during a mark of about 3 s. Two kinds
+of change can therefore shorten them:
+* fewer references to trace: steps 3 to 9, ranked by edges removed;
+* less growth during a mark, ALLOC_TRIGGER and TOO_MUCH_MALLOC. Both reasons appear
+  on the escalated slices; TOO_MUCH_MALLOC counts malloc'd memory such as ArrayBuffers
+  made per frame.
 
 ## Open
 
-* **How the pauses follow the heap.** That Firefox's slice escalation depends on the
-  heap's size class (its default incremental limit is smaller for heaps over 500 MB)
-  comes from SpiderMonkey's default GC parameters and was not checked here. Step 1
-  measures it.
+* **How the pauses follow the heap.** Step 1 (above) shows that bytes and leaf objects do
+  not set the marking time. Whether removing pointer-rich structures shortens the
+  escalated slices, and by how much, is open until a step from 3 to 9 is measured.
+  The claim that the heap's size class matters (SpiderMonkey's default incremental limit is smaller for
+  heaps over 500 MB) is still unchecked: the inline heap went from 596 to 404 MB and
+  the slices escalated the same.
+* **Allocation during a mark.** How much of the escalation the per-frame ArrayBuffer
+  churn drives (the TOO_MUCH_MALLOC triggers) is unmeasured.
 * **Measured on one machine.** All of it is from the Linux host. The Mac (the
   performance reference) and Safari are not measured.
 * **Approximate families.** Family sizes are first-reach attributions. A structure

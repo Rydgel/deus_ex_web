@@ -342,15 +342,15 @@ export async function createLighting(map, asset, assets, { kernel } = {}) {
       const cache = caches.get(model), key = `${surfaceIndex}:${zone}`;
       if (cache.has(key)) return cache.get(key);
       const basis = lightmapBasis(model, surface, lm), normal = normalize(transformNormal(basis.normal));
-      const points = [];
-      for (let y = 0; y < height; y++) for (let x = 0; x < width; x++) points.push(transform(basis.point(x, y)));
+      // A texel's world point is transform(basis.point(x, y)), computed where needed (world.mjs texelSphere), not kept per texel
+      // (docs/live-heap.md, step 1).
       const refs = lightReferences(model, lm), pitch = (width + 7) >> 3;
       if (refs.length && lm.dataOffset + refs.length * pitch * height > model.lightBits.length)
         throw new Error('Shadow mask outside serialized lighting data');
       const lightEntries = refs.map(ref => ({ ref }));
       stats.shadowMasks += lightEntries.length;
       const result = { width, height, pixels: new Float32Array(width * height * 3), uv: basis.uv, index: surface.lightMap, zone,
-        model, surfaceIndex, surface, points, normal, lightEntries, lightRefs: new Set(refs), transform, transformNormal,
+        model, surfaceIndex, surface, normal, lightEntries, lightRefs: new Set(refs), transform, transformNormal,
         basis, lightMap: lm, owner, staticPixels: null, moving: null };
       refill(result);
       cache.set(key, result); cacheRecords.add(result); stats.lightmaps++;

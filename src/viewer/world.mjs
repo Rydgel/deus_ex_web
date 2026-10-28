@@ -21,11 +21,27 @@ import { createWorldVisibility } from './world-visibility.mjs';
 import { configureSampler } from './original-sampling.mjs';
 import { loadScriptVmKernel } from '../runtime/script-vm-kernel.mjs';
 
-/** Whether a light map record's points meet a frustum, or any of a list of
+/** Whether a light map record's texels meet a frustum, or any of a list of
  * frustums (the main frame's and a ViewportWindow frame's). */
 function inFrustum(frustum, record) {
-  record.viewSphere ??= new THREE.Sphere().setFromPoints(record.points.map(point => new THREE.Vector3(...toView(point))));
+  record.viewSphere ??= texelSphere(record);
   return Array.isArray(frustum) ? frustum.some(each => each.intersectsSphere(record.viewSphere)) : frustum.intersectsSphere(record.viewSphere);
+}
+const texelBox = new THREE.Box3(), texelPoint = new THREE.Vector3();
+/** THREE.Sphere.setFromPoints over a record's texel points in view space (each transform(basis.point(x, y)), in the order the
+ * light map stores them), with the same box, centre and radius operations, without keeping a point per texel (docs/live-heap.md,
+ * step 1; validate-texel-sphere.mjs compares it with the points the lighting cache used to keep). */
+export function texelSphere({ width, height, basis, transform }) {
+  const sphere = new THREE.Sphere(), each = visit => {
+    for (let y = 0; y < height; y++) for (let x = 0; x < width; x++) visit(texelPoint.set(...toView(transform(basis.point(x, y)))));
+  };
+  texelBox.makeEmpty();
+  each(point => texelBox.expandByPoint(point));
+  texelBox.getCenter(sphere.center);
+  let maxRadiusSq = 0;
+  each(point => { maxRadiusSq = Math.max(maxRadiusSq, sphere.center.distanceToSquared(point)); });
+  sphere.radius = Math.sqrt(maxRadiusSq);
+  return sphere;
 }
 
 export async function createWorld(map, asset, assets, onProgress = () => {}, {batchOpaque = true, movingLightsMode} = {}) {

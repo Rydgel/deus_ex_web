@@ -1275,8 +1275,11 @@ defaults, because the kept classes hold them, and a collected class loads again 
   100 to 133 ms frames a minute for one or two 420 to 480 ms GC freezes.
 * Both modes' pauses follow the live heap. [Live heap](live-heap.md) measures it
   owner by owner and orders the plan to move its largest parts out of the GC heap.
-  The largest single item is the page's light-map texel points: 5.5 M objects,
-  about a third of the inline heap.
+* Its step 1 removed the page's light-map texel points: 5.5 M objects. Firefox's
+  inline GC heap fell from 596 to 404 MB, and the Island's world build got 18%
+  faster. Firefox's marking time fell only about 5%, and its long frames did not
+  change. The removed arrays were leaves; the cost is in the pointer-rich script
+  object model, which steps 3 to 9 address.
 
 Done when declared browser/performance targets pass repeatable tests, long sessions
 and repeated map changes remain stable, and failures offer useful recovery paths.
